@@ -1,21 +1,21 @@
-import { makeObservable, observable, action } from 'mobx';
+import { makeObservable, observable, computed, action } from 'mobx';
 
 export class Viewport {
   offsetX = 0;
   offsetY = 0;
-  scale   = 0.5; // px/mm  (scale=1 → 1:100 相当, scale=0.5 → 1:200)
+  scale   = 1; // px/mm  (scale=1 → 1:100 相当, scale=0.5 → 1:200)
 
   constructor(width, height) {
-    // 初期表示: ワールド原点をキャンバス中央に
-    this.offsetX = width  / 2;
-    this.offsetY = height / 2;
+    this.offsetX = 100;
+    this.offsetY = height - 100;
     makeObservable(this, {
-      offsetX: observable,
-      offsetY: observable,
-      scale:   observable,
-      pan:     action,
-      zoomAt:  action,
-      reset:   action,
+      offsetX:          observable,
+      offsetY:          observable,
+      scale:            observable,
+      scaleDenominator: computed,
+      pan:              action,
+      zoomAt:           action,
+      reset:            action,
     });
   }
 
@@ -50,12 +50,11 @@ export class Viewport {
   }
 
   reset(width, height) {
-    this.scale   = 0.5;
-    this.offsetX = width  / 2;
-    this.offsetY = height / 2;
+    this.scale   = 1;
+    this.offsetX = 100;
+    this.offsetY = height - 100;
   }
 
-  // project.currentScale 用のスケール分母 (例: 0.5px/mm → 200)
   get scaleDenominator() {
     return Math.round(100 / this.scale);
   }

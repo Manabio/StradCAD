@@ -452,6 +452,13 @@ const App = observer(() => {
           <Layer name="ui" />
         </Stage>
       </div>
+
+      <div style={{
+        position: 'fixed', bottom: 12, right: 16,
+        fontSize: 12, color: '#666', pointerEvents: 'none', userSelect: 'none',
+      }}>
+        1/{viewport.scaleDenominator}
+      </div>
     </>
   );
 });
