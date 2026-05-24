@@ -109,7 +109,6 @@ const App = observer(() => {
     e.evt.preventDefault();
     const factor = e.evt.deltaY < 0 ? 1.1 : 1 / 1.1;
     viewport.zoomAt(e.evt.clientX, e.evt.clientY, factor);
-    project.setScale(viewport.scaleDenominator);
     updateSnap(e.evt.clientX, e.evt.clientY);
   };
 
@@ -258,7 +257,6 @@ const App = observer(() => {
     if (pinch.current) {
       viewport.zoomAt(midX, midY, dist / pinch.current.dist);
       viewport.pan(midX - pinch.current.midX, midY - pinch.current.midY);
-      project.setScale(viewport.scaleDenominator);
     }
     pinch.current = { dist, midX, midY };
   };

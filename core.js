@@ -26,23 +26,10 @@ export const ShapeType = Object.freeze({
   WALL:       'wall',
 });
 
-export const ViewType = Object.freeze({
-  PLAN:      'plan',
-  SECTION:   'section',
-  ELEVATION: 'elevation',
-  DEVELOPED: 'developed',
-});
-
 // 図形の種別: 一般図形 / 寸法図形
 export const ShapeKind = Object.freeze({
   GENERAL:   'general',    // 一般図形 — 壁・開口・仕上げ等
   DIMENSION: 'dimension',  // 寸法図形 — 中心線・おさえ
-});
-
-// おさえの計測方向
-export const ConstraintAxis = Object.freeze({
-  X: 'X',  // X方向の距離 (水平)
-  Y: 'Y',  // Y方向の距離 (垂直)
 });
 
 // 中心線の軸種別 — 自動命名の接頭辞と整列基準を決定する
@@ -98,8 +85,6 @@ const SHAPE_DEFAULTS = Object.freeze({
   lineType:   'solid',
   color:      '#000000',
   kind:       ShapeKind.GENERAL,
-  scaleMin:   1,
-  scaleMax:   Infinity,
 });
 
 class Shape {
@@ -112,8 +97,6 @@ class Shape {
     this.lineType   = p.lineType;
     this.color      = p.color;
     this.kind       = p.kind;
-    this.scaleMin   = p.scaleMin;
-    this.scaleMax   = p.scaleMax;
     makeObservable(this, {
       discipline: observable,
       layerId:    observable,
@@ -121,17 +104,11 @@ class Shape {
       lineType:   observable,
       color:      observable,
       kind:       observable,
-      scaleMin:   observable,
-      scaleMax:   observable,
       setProps:   action,
     });
   }
 
   setProps(props) { Object.assign(this, props); }
-
-  isVisibleAtScale(denominator) {
-    return denominator >= this.scaleMin && denominator <= this.scaleMax;
-  }
 }
 
 // ----------------------------------------------------------------
@@ -293,39 +270,6 @@ export class CenterLine extends Shape {
 }
 
 // ================================================================
-// CONSTRAINT (おさえ) — 寸法図形
-// ================================================================
-
-export class Constraint extends Shape {
-  /**
-   * @param {string}         id
-   * @param {Shape}          fromShape  基準図形 (固定側)
-   * @param {Shape}          toShape    対象図形 (distance に応じて移動)
-   * @param {number}         distance   指定距離 (mm, 正値)
-   * @param {string}         axis       ConstraintAxis の値 — 計測方向
-   * @param {object}         [props]
-   */
-  constructor(id, fromShape, toShape, distance, axis, props = {}) {
-    super(id, {
-      kind:       ShapeKind.DIMENSION,
-      lineType:   'dimension',
-      lineWeight: 0.15,
-      ...props,
-    });
-    this.fromShape = fromShape;
-    this.toShape   = toShape;
-    this.distance  = distance;
-    this.axis      = axis;
-    makeObservable(this, {
-      fromShape: observable.ref,
-      toShape:   observable.ref,
-      distance:  observable,
-      axis:      observable,
-    });
-  }
-}
-
-// ================================================================
 // PLANE (平面 = XY平面 1枚 + 高さ 1つ)
 // ================================================================
 
@@ -343,7 +287,7 @@ export class Plane {
 //
 // ノード : Intersection (clVertical × clHorizontal の交点) + Point (自由位置)
 // エッジ : 一般 Shape (VerticalLine / HorizontalLine / DiagonalLine / Arc / Circle)
-// 寸法   : CenterLine / Constraint (shapeMap に格納、ngraph エッジなし)
+// 寸法   : CenterLine (shapeMap に格納、ngraph エッジなし)
 //
 // 中心線管理:
 //   addCenterLine()     — CenterLine 追加、labeled:true なら Intersection 自動生成
@@ -378,7 +322,7 @@ export class PlanGraph {
       generalShapes:       computed,
       walls:               computed,
       centerLines:         computed,
-      constraints:         computed,
+
       addCenterLine:       action,
       removeCenterLine:    action,
       demoteToAuxiliary:   action,
@@ -391,7 +335,6 @@ export class PlanGraph {
       addArc:                 action,
       addCircle:              action,
       addWall:                action,
-      addConstraint:          action,
       removeShape:            action,
       clear:                  action,
       getOrCreateIntersection:action,
@@ -456,8 +399,6 @@ export class PlanGraph {
   get generalShapes() { return [...this.shapeMap.values()].filter(s => s.kind === ShapeKind.GENERAL); }
   get walls()         { return [...this.shapeMap.values()].filter(s => s.type === ShapeType.WALL); }
   get centerLines()   { return [...this.shapeMap.values()].filter(s => s instanceof CenterLine); }
-  get constraints()   { return [...this.shapeMap.values()].filter(s => s instanceof Constraint); }
-
   // ---- 中心線操作 ----
 
   /**
@@ -575,12 +516,6 @@ export class PlanGraph {
 
   // ---- 寸法図形追加 ----
 
-  addConstraint(fromShape, toShape, distance, axis, props) {
-    const c = new Constraint(crypto.randomUUID(), fromShape, toShape, distance, axis, props);
-    this.shapeMap.set(c.id, c);
-    return c;
-  }
-
   /**
    * 壁同士の面取り処理。
    *
@@ -646,18 +581,6 @@ export class PlanGraph {
       if (s) result.push(s);
     }, false);
     return result;
-  }
-
-  getNeighborIntersections(intersection) {
-    const result = [];
-    this._graph.forEachLinkedNode(intersection.id, (linkedNode) => {
-      if (linkedNode.id !== intersection.id) result.push(linkedNode.data);
-    }, false);
-    return result;
-  }
-
-  getVisibleShapes(scaleDenominator) {
-    return [...this.shapeMap.values()].filter(s => s.isVisibleAtScale(scaleDenominator));
   }
 
   // ---- 中心線ラベル自動命名 ----
@@ -772,109 +695,8 @@ function _shapeUsesCenterLine(shape, id) {
       return shape.center instanceof Intersection
           && (shape.center.clVertical.id === id || shape.center.clHorizontal.id === id);
     case ShapeType.WALL:
-      return shape.clStart.id === id || shape.clEnd.id === id;
+      return shape.axisCL.id === id || shape.clStart.id === id || shape.clEnd.id === id;
     default: return false;
-  }
-}
-
-// ================================================================
-// CUT LINE (断面線)
-// ================================================================
-
-export class CutLine {
-  constructor(id, start, end, viewAngle, plane) {
-    this.id        = id;
-    this.start     = start;
-    this.end       = end;
-    this.viewAngle = viewAngle;
-    this.plane     = plane;
-    makeObservable(this, {
-      start:     observable.ref,
-      end:       observable.ref,
-      viewAngle: observable,
-      direction: computed,
-    });
-  }
-
-  get direction() {
-    const dx  = this.end.x - this.start.x;
-    const dy  = this.end.y - this.start.y;
-    const len = Math.hypot(dx, dy);
-    return len > 0 ? { dx: dx / len, dy: dy / len } : { dx: 1, dy: 0 };
-  }
-
-  projectOnAxis(x, y) {
-    const { dx, dy } = this.direction;
-    return (x - this.start.x) * dx + (y - this.start.y) * dy;
-  }
-}
-
-// ================================================================
-// DERIVED VIEW (立面図・断面図・展開図)
-// ================================================================
-
-export class DerivedView {
-  constructor(id, type, cutLine, sourceGraph) {
-    this.id          = id;
-    this.type        = type;
-    this.cutLine     = cutLine;
-    this.sourceGraph = sourceGraph;
-    makeObservable(this, { projectedShapes: computed });
-  }
-
-  get projectedShapes() {
-    const result = [];
-    const cl     = this.cutLine;
-    const z      = this.sourceGraph.plane.elevation;
-
-    for (const shape of this.sourceGraph.generalShapes) {
-      switch (shape.type) {
-        case ShapeType.VERTICAL:
-          result.push({
-            sourceId: shape.id, type: shape.type,
-            points: [
-              { u: cl.projectOnAxis(shape.x, shape.y1), v: z },
-              { u: cl.projectOnAxis(shape.x, shape.y2), v: z },
-            ],
-          });
-          break;
-        case ShapeType.HORIZONTAL:
-          result.push({
-            sourceId: shape.id, type: shape.type,
-            points: [
-              { u: cl.projectOnAxis(shape.x1, shape.y), v: z },
-              { u: cl.projectOnAxis(shape.x2, shape.y), v: z },
-            ],
-          });
-          break;
-        case ShapeType.DIAGONAL:
-          result.push({
-            sourceId: shape.id, type: shape.type,
-            points: [
-              { u: cl.projectOnAxis(shape.nodeA.x, shape.nodeA.y), v: z },
-              { u: cl.projectOnAxis(shape.nodeB.x, shape.nodeB.y), v: z },
-            ],
-          });
-          break;
-        case ShapeType.ARC:
-          result.push({
-            sourceId:      shape.id, type: shape.type,
-            points:        [{ u: cl.projectOnAxis(shape.center.x, shape.center.y), v: z }],
-            radius:        shape.radius,
-            startAngle:    shape.startAngle,
-            includedAngle: shape.includedAngle,
-          });
-          break;
-        case ShapeType.CIRCLE:
-          result.push({
-            sourceId: shape.id, type: shape.type,
-            points:   [{ u: cl.projectOnAxis(shape.center.x, shape.center.y), v: z }],
-            radius:   shape.radius,
-          });
-          break;
-      }
-    }
-    return result;
   }
 }
 
@@ -884,46 +706,24 @@ export class DerivedView {
 
 export class Project {
   constructor(id, name) {
-    this.id           = id;
-    this.name         = name;
-    this.currentScale = 100;  // 描画スケール分母 (例: 100 = 1:100)
+    this.id   = id;
+    this.name = name;
 
-    this.planeMap       = observable.map();
-    this.graphMap       = observable.map();
-    this.cutLineMap     = observable.map();
-    this.derivedViewMap = observable.map();
+    this.planeMap = observable.map();
+    this.graphMap = observable.map();
 
     this.activePlaneId = null;
 
     makeObservable(this, {
-      name:           observable,
-      currentScale:   observable,
-      activePlaneId:  observable,
-      sortedPlanes:   computed,
-      activePlane:    computed,
-      activeGraph:    computed,
-      visibleShapes:  computed,
-      addPlane:       action,
-      setActivePlane: action,
-      setScale:       action,
-      addCutLine:     action,
-      addDerivedView: action,
+      name:          observable,
+      activePlaneId: observable,
+      activeGraph:   computed,
+      addPlane:      action,
     });
   }
 
-  get sortedPlanes() {
-    return [...this.planeMap.values()].sort((a, b) => a.elevation - b.elevation);
-  }
-  get activePlane() {
-    return this.activePlaneId ? this.planeMap.get(this.activePlaneId) : undefined;
-  }
   get activeGraph() {
     return this.activePlaneId ? this.graphMap.get(this.activePlaneId) : undefined;
-  }
-
-  // 現在のスケールで表示すべきアクティブ平面の図形一覧
-  get visibleShapes() {
-    return this.activeGraph ? this.activeGraph.getVisibleShapes(this.currentScale) : [];
   }
 
   addPlane(elevation, name) {
@@ -935,19 +735,4 @@ export class Project {
     return { plane, graph };
   }
 
-  setActivePlane(planeId) { this.activePlaneId = planeId; }
-  setScale(denominator)   { this.currentScale = denominator; }
-
-  addCutLine(start, end, viewAngle, plane) {
-    const cl = new CutLine(crypto.randomUUID(), start, end, viewAngle, plane);
-    this.cutLineMap.set(cl.id, cl);
-    return cl;
-  }
-
-  addDerivedView(type, cutLine) {
-    const graph = this.graphMap.get(cutLine.plane.id);
-    const dv    = new DerivedView(crypto.randomUUID(), type, cutLine, graph);
-    this.derivedViewMap.set(dv.id, dv);
-    return dv;
-  }
 }
