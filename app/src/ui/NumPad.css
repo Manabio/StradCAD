@@ -1,0 +1,118 @@
+.numpad {
+  position: fixed;
+  bottom: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 400;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 14px;
+  box-shadow: 0 6px 32px rgba(0, 0, 0, 0.18);
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* 値表示行 */
+.numpad-display {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 6px 10px;
+  background: #ffffff;
+  border: 1.5px solid #2563eb;
+  border-radius: 8px;
+}
+
+.numpad-axis {
+  font-size: 13px;
+  font-weight: 700;
+  color: #2563eb;
+}
+
+.numpad-value {
+  flex: 1;
+  font-size: 22px;
+  font-weight: 600;
+  color: #0f172a;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.numpad-unit {
+  font-size: 11px;
+  color: #94a3b8;
+}
+
+/* キーグリッド: 4列 */
+.numpad-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 56px);
+  gap: 6px;
+}
+
+/* 基本キー */
+.numpad-key {
+  height: 52px;
+  border-radius: 8px;
+  border: none;
+  background: #ffffff;
+  color: #1e293b;
+  font-size: 20px;
+  font-weight: 500;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+  cursor: pointer;
+  transition: background 0.08s, transform 0.06s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.numpad-key:active {
+  background: #dbeafe;
+  transform: scale(0.93);
+}
+
+/* 2列スパン (0キー) */
+.numpad-key--span2 {
+  grid-column: span 2;
+}
+
+/* バックスペース */
+.numpad-key--back {
+  background: #fff7ed;
+  color: #c2410c;
+  font-size: 18px;
+}
+.numpad-key--back:active { background: #fed7aa; }
+
+/* 符号切替 */
+.numpad-key--sign {
+  background: #f1f5f9;
+  color: #475569;
+  font-size: 18px;
+}
+.numpad-key--sign:active { background: #e2e8f0; }
+
+/* キャンセル */
+.numpad-key--cancel {
+  background: #fff1f2;
+  color: #be123c;
+  font-size: 16px;
+}
+.numpad-key--cancel:active { background: #fecdd3; }
+
+/* 確定 */
+.numpad-key--confirm {
+  background: #2563eb;
+  color: #ffffff;
+  font-size: 20px;
+  box-shadow: 0 2px 8px rgba(37, 99, 235, 0.35);
+}
+.numpad-key--confirm:active {
+  background: #1d4ed8;
+  transform: scale(0.93);
+}
