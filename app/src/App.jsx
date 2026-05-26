@@ -5,6 +5,7 @@ import { undoManager } from './undoManager.js';
 import { serializeGraph, restoreGraph } from './graphSnapshot.js';
 import { Stage, Layer, Group } from 'react-konva';
 import { useStore } from './store.js';
+import { ERR_CL_DUPLICATE, ERR_CL_CENTER_UPGRADED, ERR_CL_STRUCT_EXISTS } from './error.js';
 import { Viewport } from './viewport.js';
 import {
   findNearestIntersection,
@@ -427,7 +428,6 @@ const App = observer(() => {
 
     // ---- 重複チェック ----
     const OVERLAP_TOL = 0.5; // mm
-    const KIND_LABEL  = { struct: '構造芯', center: '中心線', aux: '補助線' };
     const existing = graph.centerLines.find(
       cl => cl.centerLineType === clType && Math.abs(cl.value - value) < OVERLAP_TOL
     );
@@ -437,13 +437,13 @@ const App = observer(() => {
         : 'center';
 
       if (kind === existingKind) {
-        setToast({ msg: `既に同じ位置に${KIND_LABEL[kind]}があり、追加できません。`, key: Date.now() });
+        setToast({ msg: ERR_CL_DUPLICATE(kind), key: Date.now() });
         return;
       }
 
       if (kind === 'struct' && existingKind === 'center') {
         // 既存の中心線をインプレースで構造芯に昇格
-        setToast({ msg: '同位置に中心線があります。その中心線を削除して、追加する構造芯を参照するように変更します。', key: Date.now() });
+        setToast({ msg: ERR_CL_CENTER_UPGRADED, key: Date.now() });
         const existingId = existing.id;
         runInAction(() => { existing.discipline = Discipline.STRUCT; });
         undoManager.push(
@@ -456,7 +456,7 @@ const App = observer(() => {
       }
 
       if (kind === 'center' && existingKind === 'struct') {
-        setToast({ msg: '同位置に構造芯があり、追加できません。', key: Date.now() });
+        setToast({ msg: ERR_CL_STRUCT_EXISTS, key: Date.now() });
         return;
       }
     }

@@ -1,5 +1,6 @@
 import { useState, useRef } from 'react';
 import { CenterLineType } from '@core';
+import { ERR_DRAW } from '../error.js';
 
 export function useDrawMode(graph) {
   const [drawState, setDrawState] = useState(null);
@@ -40,7 +41,7 @@ export function useDrawMode(graph) {
         result = graph.addDiagonalLine(startSnap, snap);
       }
     } catch (e) {
-      console.error('Draw error:', e);
+      console.error(ERR_DRAW, e);
     }
     _set(null);
     return result;
