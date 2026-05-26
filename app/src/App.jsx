@@ -376,6 +376,7 @@ const App = observer(() => {
       const tyW   = (SNAP_THRESHOLD_PX * 2) / viewport.scaleY;
       const nearbyCLs = graph.centerLines
         .filter(cl => {
+          if (cl.labeled) return false;
           const dist = cl.centerLineType === CenterLineType.VERTICAL
             ? Math.abs(pos.x - cl.value)
             : Math.abs(pos.y - cl.value);
