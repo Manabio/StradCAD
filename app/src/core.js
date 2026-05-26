@@ -489,8 +489,26 @@ export class PlanGraph {
   removeCenterLine(id) {
     const cl = this.shapeMap.get(id);
     if (!(cl instanceof CenterLine)) return;
+    this._reparentChildCenterLines(cl);
     this._teardownCenterLine(id);
     this._removeShape(id);
+  }
+
+  // 削除される CL を直接参照している子 CL の参照を繰り上げる
+  _reparentChildCenterLines(deletedCL) {
+    const children = [...this.shapeMap.values()]
+      .filter(s => s instanceof CenterLine && s.refId === deletedCL.id);
+    for (const child of children) {
+      if (deletedCL.refId) {
+        child.refOffset = child.refOffset + deletedCL.refOffset;
+        child.refId = deletedCL.refId;
+        child._referencedCL = deletedCL._referencedCL;
+      } else {
+        child._value = child.value;
+        child.refId = null;
+        child._referencedCL = null;
+      }
+    }
   }
 
   /**
