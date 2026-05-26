@@ -56,6 +56,7 @@ const App = observer(() => {
   const [isPanning,   setIsPanning]   = useState(false);
   const [scaleInput,      setScaleInput]      = useState(null); // null=非編集, string=編集中
   const [showCalibration, setShowCalibration] = useState(false);
+  const [toast,           setToast]           = useState(null); // { msg, key }
 
   const drag          = useRef(null);
   const pinch         = useRef(null);
@@ -77,6 +78,12 @@ const App = observer(() => {
 
   useEffect(() => { snapRef.current  = snapPoint; }, [snapPoint]);
   useEffect(() => { nearCLRef.current = nearCL;   }, [nearCL]);
+
+  useEffect(() => {
+    if (!toast) return;
+    const t = setTimeout(() => setToast(null), 3500);
+    return () => clearTimeout(t);
+  }, [toast]);
 
   // ---- ガター構造芯 長押しフック ----
   const gutterLongPress = useLongPress({
@@ -417,6 +424,43 @@ const App = observer(() => {
   function handleCLDialogConfirm(value, kind, trim, refId, refOffset) {
     if (!clDialog) return;
     const clType = clDialog.type === 'vertical' ? CenterLineType.VERTICAL : CenterLineType.HORIZONTAL;
+
+    // ---- 重複チェック ----
+    const OVERLAP_TOL = 0.5; // mm
+    const KIND_LABEL  = { struct: '構造芯', center: '中心線', aux: '補助線' };
+    const existing = graph.centerLines.find(
+      cl => cl.centerLineType === clType && Math.abs(cl.value - value) < OVERLAP_TOL
+    );
+    if (existing) {
+      const existingKind = !existing.labeled ? 'aux'
+        : existing.discipline === Discipline.STRUCT ? 'struct'
+        : 'center';
+
+      if (kind === existingKind) {
+        setToast({ msg: `既に同じ位置に${KIND_LABEL[kind]}があり、追加できません。`, key: Date.now() });
+        return;
+      }
+
+      if (kind === 'struct' && existingKind === 'center') {
+        // 既存の中心線をインプレースで構造芯に昇格
+        setToast({ msg: '同位置に中心線があります。その中心線を削除して、追加する構造芯を参照するように変更します。', key: Date.now() });
+        const existingId = existing.id;
+        runInAction(() => { existing.discipline = Discipline.STRUCT; });
+        undoManager.push(
+          () => runInAction(() => { graph.shapeMap.get(existingId).discipline = Discipline.ARCH; }),
+          () => runInAction(() => { graph.shapeMap.get(existingId).discipline = Discipline.STRUCT; }),
+        );
+        setClDialog(null);
+        setClPreview(null);
+        return;
+      }
+
+      if (kind === 'center' && existingKind === 'struct') {
+        setToast({ msg: '同位置に構造芯があり、追加できません。', key: Date.now() });
+        return;
+      }
+    }
+
     // 中心線: 追加時点の全直交CLでブラケット判定し延伸範囲を確定（既存CLの長さは変えない）
     let extentProps = {};
     if (kind === 'center') {
@@ -632,6 +676,12 @@ const App = observer(() => {
           </div>
         )}
       </div>
+
+      {toast && (
+        <div key={toast.key} className="cl-toast" onClick={() => setToast(null)}>
+          {toast.msg}
+        </div>
+      )}
 
       {showCalibration && (
         <CalibrationDialog
