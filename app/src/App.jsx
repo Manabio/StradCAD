@@ -34,6 +34,7 @@ import { CLMoveInput }    from './renderer/CLMoveInput.jsx';
 import { RadialMenu }     from './ui/RadialMenu.jsx';
 import { AddCLDialog }    from './ui/AddCLDialog.jsx';
 import { WallDialog }          from './ui/WallDialog.jsx';
+import { WallRefIndicator }   from './renderer/WallRefIndicator.jsx';
 import { CalibrationDialog }  from './ui/CalibrationDialog.jsx';
 
 const SNAP_THRESHOLD_PX = 20;
@@ -369,7 +370,25 @@ const App = observer(() => {
   function handleMenuSelect(item) {
     if (item.id === 'cl-v')    { setClDialog({ type: 'vertical',   worldCoord: menu.worldPos.x, perpCoord: menu.worldPos.y }); return; }
     if (item.id === 'cl-h')    { setClDialog({ type: 'horizontal', worldCoord: menu.worldPos.y, perpCoord: menu.worldPos.x }); return; }
-    if (item.id === 'wall')    { setWallDialog({ worldPos: menu.worldPos }); return; }
+    if (item.id === 'wall') {
+      const pos   = menu.worldPos;
+      const txW   = (SNAP_THRESHOLD_PX * 2) / viewport.scaleX;
+      const tyW   = (SNAP_THRESHOLD_PX * 2) / viewport.scaleY;
+      const nearbyCLs = graph.centerLines
+        .filter(cl => {
+          const dist = cl.centerLineType === CenterLineType.VERTICAL
+            ? Math.abs(pos.x - cl.value)
+            : Math.abs(pos.y - cl.value);
+          return dist <= (cl.centerLineType === CenterLineType.VERTICAL ? txW : tyW);
+        })
+        .sort((a, b) => {
+          const da = a.centerLineType === CenterLineType.VERTICAL ? Math.abs(pos.x - a.value) : Math.abs(pos.y - a.value);
+          const db = b.centerLineType === CenterLineType.VERTICAL ? Math.abs(pos.x - b.value) : Math.abs(pos.y - b.value);
+          return da - db;
+        });
+      setWallDialog({ worldPos: pos, nearbyCLs });
+      return;
+    }
     if (item.id === 'undo')    { undoManager.undo(); return; }
     if (item.id === 'redo')    { undoManager.redo(); return; }
     if (item.id === 'cl-move') { startMove(menu.cl); return; }
@@ -572,6 +591,7 @@ const App = observer(() => {
         <WallDialog
           worldPos={wallDialog.worldPos}
           allCLs={[...graph.gridXs, ...graph.gridYs]}
+          nearbyCLs={wallDialog.nearbyCLs ?? []}
           onConfirm={handleWallConfirm}
           onCancel={() => setWallDialog(null)}
         />
@@ -649,6 +669,13 @@ const App = observer(() => {
               gutter={GUTTER}
             />
             {!menu && <SnapIndicator snap={snapPoint} viewport={viewport} />}
+            {wallDialog && wallDialog.nearbyCLs?.length > 0 && (
+              <WallRefIndicator
+                nearbyCLs={wallDialog.nearbyCLs}
+                worldPos={wallDialog.worldPos}
+                viewport={viewport}
+              />
+            )}
           </Layer>
 
           <Layer name="ui" />

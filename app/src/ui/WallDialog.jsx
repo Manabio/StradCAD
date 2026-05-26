@@ -2,17 +2,24 @@ import { useState } from 'react';
 import './AddCLDialog.css';
 import { NumPad } from './NumPad.jsx';
 
+const CIRCLE_NUMS = ['①', '②', '③', '④', '⑤', '⑥', '⑦', '⑧', '⑨', '⑩'];
+
 /**
  * 壁追加ダイアログ
  *
  * 参照中心線 + 距離（常に正）を指定する。
  * 方向（右/左/上/下）は参照CL と長押し位置の相対位置から自動決定。
  *
+ * nearbyCLs: 長押し位置に近接するCL（ラベルなし含む）。先頭に丸数字で表示。
  * onConfirm(refCL, dist) : dist は常に正の数値
  */
-export function WallDialog({ worldPos, allCLs, onConfirm, onCancel }) {
-  const nearest = allCLs.length > 0
-    ? allCLs.reduce((best, cl) => {
+export function WallDialog({ worldPos, allCLs, nearbyCLs = [], onConfirm, onCancel }) {
+  const nearbyIds  = new Set(nearbyCLs.map(cl => cl.id));
+  const otherCLs   = allCLs.filter(cl => !nearbyIds.has(cl.id));
+  const allOptions = [...nearbyCLs, ...otherCLs];
+
+  const nearest = allOptions.length > 0
+    ? allOptions.reduce((best, cl) => {
         const dc = cl.centerLineType === 'X'
           ? Math.abs(cl.value - worldPos.x)
           : Math.abs(cl.value - worldPos.y);
@@ -30,22 +37,22 @@ export function WallDialog({ worldPos, allCLs, onConfirm, onCancel }) {
     return String(Math.round(Math.abs(c - nearest.value)));
   });
 
-  const refCL  = allCLs.find(cl => cl.id === refId) ?? null;
+  const refCL  = allOptions.find(cl => cl.id === refId) ?? null;
   const isRefV = refCL?.centerLineType === 'X';
   const coord  = isRefV ? worldPos.x : worldPos.y;
   const dir    = refCL ? (coord >= refCL.value ? 1 : -1) : null;
   const dirLabel = dir == null ? null
     : isRefV ? (dir > 0 ? '右→' : '←左') : (dir > 0 ? '↓下' : '上↑');
 
-  const dist       = Math.abs(Number(distStr) || 0);
-  const wallCoord  = refCL != null ? refCL.value + dir * dist : null;
-  const sign       = isRefV ? 1 : -1;
+  const dist        = Math.abs(Number(distStr) || 0);
+  const wallCoord   = refCL != null ? refCL.value + dir * dist : null;
+  const sign        = isRefV ? 1 : -1;
   const wallDisplay = wallCoord != null ? Math.round(sign * wallCoord) : null;
 
   function handleRefChange(e) {
     const id = e.target.value;
     setRefId(id);
-    const cl = allCLs.find(c => c.id === id);
+    const cl = allOptions.find(c => c.id === id);
     if (cl) {
       const c = cl.centerLineType === 'X' ? worldPos.x : worldPos.y;
       setDistStr(String(Math.round(Math.abs(c - cl.value))));
@@ -68,17 +75,30 @@ export function WallDialog({ worldPos, allCLs, onConfirm, onCancel }) {
           <span className="cl-dialog-label">参照</span>
           <select value={refId} onChange={handleRefChange}>
             <option value="">（選択してください）</option>
-            {allCLs.map(cl => (
-              <option key={cl.id} value={cl.id}>
-                {cl.label || cl.id}　{cl.centerLineType === 'X' ? '垂直' : '水平'}
-              </option>
-            ))}
+            {nearbyCLs.length > 0 && (
+              <optgroup label="近接する中心線">
+                {nearbyCLs.map((cl, i) => (
+                  <option key={cl.id} value={cl.id}>
+                    {CIRCLE_NUMS[i] ?? `(${i + 1})`} {cl.label || '中心線'}　{cl.centerLineType === 'X' ? '垂直' : '水平'}
+                  </option>
+                ))}
+              </optgroup>
+            )}
+            {otherCLs.length > 0 && (
+              <optgroup label="グリッドCL">
+                {otherCLs.map(cl => (
+                  <option key={cl.id} value={cl.id}>
+                    {cl.label || cl.id}　{cl.centerLineType === 'X' ? '垂直' : '水平'}
+                  </option>
+                ))}
+              </optgroup>
+            )}
           </select>
         </label>
 
         <label className="cl-dialog-row">
           <span className="cl-dialog-label">
-            {refCL ? refCL.label : '距離'}
+            {refCL ? (refCL.label || '中心線') : '距離'}
           </span>
           {dirLabel && <span className="cl-dialog-dir">{dirLabel}</span>}
           <input
