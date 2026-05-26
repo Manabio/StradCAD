@@ -46,7 +46,7 @@ export function NumPad({ value, label, onChange, onConfirm, onCancel }) {
     <div className="numpad" onPointerDown={e => e.stopPropagation()}>
       {/* 値表示 */}
       <div className="numpad-display">
-        <span className="numpad-axis">{label} =</span>
+        <span className="numpad-axis">{label}</span>
         <span className="numpad-value">{value}</span>
         <span className="numpad-unit">mm</span>
       </div>

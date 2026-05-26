@@ -108,6 +108,16 @@ export const CLMoveInput = observer(function CLMoveInput({
 
   const axisLabel = isV ? 'X' : 'Y';
 
+  // 参照先ラベル ("X1から" / "Y2から" / "X =" など)
+  let fromLabel;
+  if (cl.refId) {
+    fromLabel = `${cl._referencedCL?.label ?? axisLabel}から`;
+  } else {
+    const gridCLs = isV ? (graph?.gridXs ?? []) : (graph?.gridYs ?? []);
+    const originCL = gridCLs.find(c => c.id !== cl.id);
+    fromLabel = originCL ? `${originCL.label}から` : `${axisLabel} =`;
+  }
+
   // ---- テキストフィールド入力 ----
   function handleFocus() { typingRef.current = true;  }
   function handleBlur()  { typingRef.current = false; }
@@ -133,7 +143,7 @@ export const CLMoveInput = observer(function CLMoveInput({
     <>
       {/* カーソル横の小窓 */}
       <div className="cl-move-input" style={{ left: screenX + 14, top: screenY - 28 }}>
-        <span className="cl-move-label">{axisLabel} =</span>
+        <span className="cl-move-label">{fromLabel}</span>
         <input
           className="cl-move-value"
           type="number"
@@ -149,7 +159,7 @@ export const CLMoveInput = observer(function CLMoveInput({
       {/* テンキー (画面下部固定) */}
       <NumPad
         value={inputStr}
-        label={axisLabel}
+        label={fromLabel}
         onChange={handleNumChange}
         onConfirm={handleNumConfirm}
         onCancel={onCancel}
