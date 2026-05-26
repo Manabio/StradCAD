@@ -432,9 +432,12 @@ const App = observer(() => {
       });
       const [loCL, hiCL] = findBracketingCLs(perpCLs, clDialog.perpCoord);
       extentProps = {
-        labeled:  false,
-        extentLo: loCL?.value ?? (perpCLs.length ? Math.min(...perpCLs.map(c => c.value)) : null),
-        extentHi: hiCL?.value ?? (perpCLs.length ? Math.max(...perpCLs.map(c => c.value)) : null),
+        labeled:     false,
+        extentLoRef: loCL ? { clId: loCL.id, offset: 0 } : null,
+        extentHiRef: hiCL ? { clId: hiCL.id, offset: 0 } : null,
+        // loCL/hiCL が見つからない場合のみ静的フォールバックを使う
+        extentLo:    !loCL ? (perpCLs.length ? Math.min(...perpCLs.map(c => c.value)) : null) : null,
+        extentHi:    !hiCL ? (perpCLs.length ? Math.max(...perpCLs.map(c => c.value)) : null) : null,
       };
     }
     const props = {
@@ -511,6 +514,7 @@ const App = observer(() => {
         onUpdate={updateMove}
         onCommit={commitMove}
         onCancel={cancelMove}
+        graph={graph}
       />
 
       <div style={{ width: '100%', height: '100%' }}>

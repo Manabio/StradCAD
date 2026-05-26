@@ -20,7 +20,8 @@ export function serializeGraph(graph) {
       id: cl.id, centerLineType: cl.centerLineType,
       value: cl._value, labeled: cl.labeled, trim: cl.trim,
       refId: cl.refId ?? null, refOffset: cl.refOffset ?? 0,
-      extentLo: cl.extentLo ?? null, extentHi: cl.extentHi ?? null,
+      extentLoRef: cl.extentLoRef ?? null, extentHiRef: cl.extentHiRef ?? null,
+      extentLo: cl._extentLo ?? null, extentHi: cl._extentHi ?? null,
       ...baseProps(cl),
     })),
     points: graph.points.map(p => ({
@@ -86,6 +87,7 @@ export function restoreGraph(graph, snapshot) {
       graph.addCenterLine(d.centerLineType, d.value, {
         labeled: d.labeled, trim: d.trim ?? false, discipline: d.discipline,
         lineWeight: d.lineWeight, lineType: d.lineType, color: d.color,
+        extentLoRef: d.extentLoRef ?? null, extentHiRef: d.extentHiRef ?? null,
         extentLo: d.extentLo ?? null, extentHi: d.extentHi ?? null,
         refId: d.refId ?? null, refOffset: d.refOffset ?? 0,
       }, d.id);

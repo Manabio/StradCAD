@@ -267,19 +267,31 @@ export class CenterLine extends Shape {
     this.refOffset      = props.refOffset ?? 0; // 参照先からのオフセット
     this.labeled        = props.labeled ?? true;
     this.trim           = props.trim   ?? false;
-    this.extentLo       = props.extentLo ?? null;
-    this.extentHi       = props.extentHi ?? null;
+    this._extentLo      = props.extentLo  ?? null; // 静的フォールバック（旧データ互換）
+    this._extentHi      = props.extentHi  ?? null; // 静的フォールバック（旧データ互換）
+    this.extentLoRef    = props.extentLoRef ?? null; // { clId, offset } | null
+    this.extentHiRef    = props.extentHiRef ?? null; // { clId, offset } | null
+    this._extentLoCL    = null; // 解決済み参照 CL（PlanGraph が設定）
+    this._extentHiCL    = null; // 解決済み参照 CL（PlanGraph が設定）
     this.label          = '';
     this._referencedCL  = null; // 参照先 CL の参照を保持（PlanGraph が設定）
     makeObservable(this, {
-      _value: observable,
-      refId: observable,
-      refOffset: observable,
+      _value:       observable,
+      refId:        observable,
+      refOffset:    observable,
       _referencedCL: observable,
-      value: computed,
-      labeled: observable,
-      trim: observable,
-      label: observable
+      value:        computed,
+      labeled:      observable,
+      trim:         observable,
+      label:        observable,
+      _extentLo:    observable,
+      _extentHi:    observable,
+      extentLoRef:  observable,
+      extentHiRef:  observable,
+      _extentLoCL:  observable,
+      _extentHiCL:  observable,
+      extentLo:     computed,
+      extentHi:     computed,
     });
   }
 
@@ -290,6 +302,20 @@ export class CenterLine extends Shape {
   }
   set value(v) {
     this._value = v;
+  }
+
+  get extentLo() {
+    if (this._extentLoCL && this.extentLoRef != null) {
+      return this._extentLoCL.value + (this.extentLoRef.offset ?? 0);
+    }
+    return this._extentLo;
+  }
+
+  get extentHi() {
+    if (this._extentHiCL && this.extentHiRef != null) {
+      return this._extentHiCL.value + (this.extentHiRef.offset ?? 0);
+    }
+    return this._extentHi;
   }
 }
 
@@ -440,9 +466,16 @@ export class PlanGraph {
     // refId がある場合、参照先 CL への参照を設定
     if (cl.refId) {
       const refCL = this.shapeMap.get(cl.refId);
-      if (refCL instanceof CenterLine) {
-        cl._referencedCL = refCL;
-      }
+      if (refCL instanceof CenterLine) cl._referencedCL = refCL;
+    }
+    // extentLoRef/HiRef がある場合、参照先 CL への参照を解決
+    if (cl.extentLoRef) {
+      const loCL = this.shapeMap.get(cl.extentLoRef.clId);
+      if (loCL instanceof CenterLine) cl._extentLoCL = loCL;
+    }
+    if (cl.extentHiRef) {
+      const hiCL = this.shapeMap.get(cl.extentHiRef.clId);
+      if (hiCL instanceof CenterLine) cl._extentHiCL = hiCL;
     }
     this.shapeMap.set(cl.id, cl);
     if (cl.labeled) this._createIntersections(cl);

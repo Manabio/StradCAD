@@ -4,17 +4,52 @@ import { NumPad } from '../ui/NumPad.jsx';
 import './CLMoveInput.css';
 
 export const CLMoveInput = observer(function CLMoveInput({
-  moveState, screenX, screenY, onUpdate, onCommit, onCancel,
+  moveState, screenX, screenY, onUpdate, onCommit, onCancel, graph,
 }) {
   // ── Rules of Hooks: すべて early return より前 ──────────────────
-  const cl           = moveState?.cl ?? null;
-  const isV          = cl?.centerLineType === 'X';
-  const displayValue = cl ? (isV ? cl.value : -cl.value) : 0;
+  const cl  = moveState?.cl ?? null;
+  const isV = cl?.centerLineType === 'X';
+
+  // ---- 表示値と基準値を計算 ----
+  let displayValue = 0;
+  let base = 0; // 絶対座標への変換基準 (表示値 + base → 絶対座標)
+
+  if (cl) {
+    if (cl.refId) {
+      // 参照あり: refOffset を表示
+      base = cl._referencedCL?.value ?? 0;
+      displayValue = isV ? cl.refOffset : -cl.refOffset;
+    } else {
+      // 参照なし: X1/Y1 からの距離を表示
+      const gridCLs = isV ? (graph?.gridXs ?? []) : (graph?.gridYs ?? []);
+      const originCL = gridCLs.find(c => c.id !== cl.id);
+      if (originCL) {
+        base = originCL.value;
+        displayValue = isV ? cl.value - base : -(cl.value - base);
+      } else {
+        // X1/Y1 が存在しない (自分自身が X1) → 絶対座標表示
+        base = 0;
+        displayValue = isV ? cl.value : -cl.value;
+      }
+    }
+  }
+
+  // ref に保持して useEffect 内から常に最新値を読めるようにする
+  const baseRef = useRef(0);
+  baseRef.current = base;
 
   const [inputStr, setInputStr] = useState('');
-  const typingRef    = useRef(false);
-  const inputStrRef  = useRef('');   // keydown ハンドラ用の最新値参照
-  const applyRef     = useRef(null); // keydown ハンドラが常に最新の apply を呼べるよう
+  const typingRef   = useRef(false);
+  const inputStrRef = useRef('');   // keydown ハンドラ用の最新値参照
+  const applyRef    = useRef(null); // keydown ハンドラが常に最新の apply を呼べるよう
+
+  // 新しい移動セッション開始時にタイピング状態をリセット
+  useEffect(() => {
+    if (moveState) {
+      typingRef.current = false;
+      inputStrRef.current = String(Math.round(displayValue));
+    }
+  }, [moveState]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ドラッグで値が変わったとき、テンキー未操作中のみ追従
   useEffect(() => {
@@ -23,13 +58,18 @@ export const CLMoveInput = observer(function CLMoveInput({
     }
   }, [displayValue]);
 
+  // 表示値 d → 絶対座標
+  function dispToAbs(d) {
+    return isV ? baseRef.current + d : baseRef.current - d;
+  }
+
   // applyStr の最新版を ref に保持
   function applyStr(str) {
     inputStrRef.current = str;
     setInputStr(str);
     typingRef.current = true;
     const v = Number(str);
-    if (!isNaN(v) && str.trim() !== '') onUpdate(isV ? v : -v);
+    if (!isNaN(v) && str.trim() !== '') onUpdate(dispToAbs(v));
   }
   applyRef.current = applyStr;
 
@@ -75,7 +115,7 @@ export const CLMoveInput = observer(function CLMoveInput({
   function handleKeyDown(e) {
     if (e.key === 'Enter') {
       const v = Number(inputStr);
-      if (!isNaN(v)) { onUpdate(isV ? v : -v); onCommit(); }
+      if (!isNaN(v)) { onUpdate(dispToAbs(v)); onCommit(); }
     }
     if (e.key === 'Escape') onCancel();
     e.stopPropagation();
@@ -85,7 +125,7 @@ export const CLMoveInput = observer(function CLMoveInput({
   function handleNumChange(newStr) { applyStr(newStr); }
   function handleNumConfirm() {
     const v = Number(inputStr);
-    if (!isNaN(v)) onUpdate(isV ? v : -v);
+    if (!isNaN(v)) onUpdate(dispToAbs(v));
     onCommit();
   }
 
