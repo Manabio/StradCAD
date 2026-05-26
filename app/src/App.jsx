@@ -432,7 +432,7 @@ const App = observer(() => {
       cl => cl.centerLineType === clType && Math.abs(cl.value - value) < OVERLAP_TOL
     );
     if (existing) {
-      const existingKind = !existing.labeled ? 'aux'
+      const existingKind = existing.lineType === 'dashed' ? 'aux'
         : existing.discipline === Discipline.STRUCT ? 'struct'
         : 'center';
 
@@ -442,13 +442,39 @@ const App = observer(() => {
       }
 
       if (kind === 'struct' && existingKind === 'center') {
-        // 既存の中心線をインプレースで構造芯に昇格
+        // 既存の中心線を削除して構造芯を新規追加
         setToast({ msg: ERR_CL_CENTER_UPGRADED, key: Date.now() });
-        const existingId = existing.id;
-        runInAction(() => { existing.discipline = Discipline.STRUCT; });
+        const deletedId = existing.id;
+        const deletedType = existing.centerLineType;
+        const deletedRawValue = existing._value;
+        const deletedProps = {
+          labeled: existing.labeled,
+          lineType: existing.lineType,
+          discipline: existing.discipline,
+          trim: existing.trim,
+          ...(existing.refId != null ? { refId: existing.refId, refOffset: existing.refOffset } : {}),
+          ...(existing.extentLoRef != null ? { extentLoRef: existing.extentLoRef } : {}),
+          ...(existing.extentHiRef != null ? { extentHiRef: existing.extentHiRef } : {}),
+          ...(existing._extentLo != null ? { extentLo: existing._extentLo } : {}),
+          ...(existing._extentHi != null ? { extentHi: existing._extentHi } : {}),
+        };
+        graph.removeCenterLine(deletedId);
+        const structProps = {
+          discipline: Discipline.STRUCT,
+          trim: !!trim,
+          ...(refId ? { refId, refOffset: refOffset ?? 0 } : {}),
+        };
+        const structCL = graph.addCenterLine(clType, value, structProps);
+        const structId = structCL.id;
         undoManager.push(
-          () => runInAction(() => { graph.shapeMap.get(existingId).discipline = Discipline.ARCH; }),
-          () => runInAction(() => { graph.shapeMap.get(existingId).discipline = Discipline.STRUCT; }),
+          () => {
+            graph.removeCenterLine(structId);
+            graph.addCenterLine(deletedType, deletedRawValue, deletedProps, deletedId);
+          },
+          () => {
+            graph.removeCenterLine(deletedId);
+            graph.addCenterLine(clType, value, structProps, structId);
+          },
         );
         setClDialog(null);
         setClPreview(null);
