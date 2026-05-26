@@ -2,9 +2,9 @@ import { useState, useEffect } from 'react';
 import './AddCLDialog.css';
 
 const KINDS = [
-  { id: 'center', label: '中心',   hint: '通り芯（ラベルあり）' },
-  { id: 'struct', label: '構造芯', hint: '構造通り芯（ラベルあり）' },
-  { id: 'aux',    label: '補助線', hint: 'ラベルなし補助線' },
+  { id: 'center', label: '中心',   hint: 'ラベルなし中心線' },
+  { id: 'struct', label: '構造芯', hint: '構造通り芯（ガターラベルあり）' },
+  { id: 'aux',    label: '補助線', hint: 'ラベルなし補助線（破線）' },
 ];
 
 /**
@@ -62,7 +62,7 @@ export function AddCLDialog({ type, worldCoord, gridCLs, onConfirm, onCancel, on
   }
 
   function handleKeyDown(e) {
-    if (e.key === 'Enter')  onConfirm(previewWorld, kind, trim);
+    if (e.key === 'Enter')  onConfirm(previewWorld, kind, trim, refId, dist * dir);
     if (e.key === 'Escape') onCancel();
   }
 
@@ -132,7 +132,7 @@ export function AddCLDialog({ type, worldCoord, gridCLs, onConfirm, onCancel, on
           <button className="cl-dialog-btn cl-dialog-btn--cancel" onClick={onCancel}>
             キャンセル
           </button>
-          <button className="cl-dialog-btn cl-dialog-btn--ok" onClick={() => onConfirm(previewWorld, kind, trim)}>
+          <button className="cl-dialog-btn cl-dialog-btn--ok" onClick={() => onConfirm(previewWorld, kind, trim, refId, dist * dir)}>
             追加
           </button>
         </div>

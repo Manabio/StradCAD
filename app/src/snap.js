@@ -1,54 +1,52 @@
-export function findNearestIntersection(graph, wx, wy, thresholdPx, scale) {
+// スナップ計算はすべてスクリーン空間距離 (px) で判定する。
+// threshold は px 単位で渡し、ワールド差分に scaleX/Y を掛けてスクリーン距離に換算する。
+
+export function findNearestIntersection(graph, wx, wy, thresholdPx, scaleX, scaleY) {
   if (!graph) return null;
-  const thresholdWorld = thresholdPx / scale;
   let nearest = null, minDist = Infinity;
   for (const n of graph.intersections) {
-    const dist = Math.hypot(n.x - wx, n.y - wy);
-    if (dist < thresholdWorld && dist < minDist) { minDist = dist; nearest = n; }
+    const dist = Math.hypot((n.x - wx) * scaleX, (n.y - wy) * scaleY);
+    if (dist < thresholdPx && dist < minDist) { minDist = dist; nearest = n; }
   }
   return nearest;
 }
 
 /**
  * カーソルに最も近い中心線を返す。
- * VERTICAL  → x方向距離、HORIZONTAL → y方向距離で判定。
+ * VERTICAL  → X 方向スクリーン距離
+ * HORIZONTAL → Y 方向スクリーン距離
  */
-export function findNearestCenterLine(graph, wx, wy, thresholdPx, scale) {
+export function findNearestCenterLine(graph, wx, wy, thresholdPx, scaleX, scaleY) {
   if (!graph) return null;
-  const threshold = thresholdPx / scale;
   let nearest = null, minDist = Infinity;
   for (const cl of graph.centerLines) {
-    const dist = cl.centerLineType === 'X' ? Math.abs(cl.value - wx)
-               : cl.centerLineType === 'Y' ? Math.abs(cl.value - wy)
+    const dist = cl.centerLineType === 'X' ? Math.abs(cl.value - wx) * scaleX
+               : cl.centerLineType === 'Y' ? Math.abs(cl.value - wy) * scaleY
                : Infinity;
-    if (dist < threshold && dist < minDist) { minDist = dist; nearest = cl; }
+    if (dist < thresholdPx && dist < minDist) { minDist = dist; nearest = cl; }
   }
   return nearest;
 }
 
 /**
  * 中心線移動中、同種の他中心線へのスナップ値を返す。
- * スナップしない場合は null。
  */
-export function findCLMoveSnap(graph, movingCL, wx, wy, thresholdPx, scale) {
+export function findCLMoveSnap(graph, movingCL, wx, wy, thresholdPx, scaleX, scaleY) {
   if (!graph) return null;
-  const threshold = thresholdPx / scale;
-  const isV  = movingCL.centerLineType === 'X';
+  const isV   = movingCL.centerLineType === 'X';
+  const scale = isV ? scaleX : scaleY;
   const coord = isV ? wx : wy;
   let best = null, minDist = Infinity;
   for (const cl of graph.centerLines) {
     if (cl.id === movingCL.id || cl.centerLineType !== movingCL.centerLineType) continue;
-    const dist = Math.abs(cl.value - coord);
-    if (dist < threshold && dist < minDist) { minDist = dist; best = cl.value; }
+    const dist = Math.abs(cl.value - coord) * scale;
+    if (dist < thresholdPx && dist < minDist) { minDist = dist; best = cl.value; }
   }
   return best;
 }
 
 /**
- * coord を挟む CL ペアを返す。片側しかない場合は最も近い 2 本を返す。
- * @param {CenterLine[]} cls
- * @param {number}       coord  世界座標 (cl.value と同じ軸)
- * @returns {[CenterLine|null, CenterLine|null]}
+ * coord を挟む CL ペアを返す。
  */
 export function findBracketingCLs(cls, coord) {
   let lo = null, hi = null;

@@ -13,6 +13,7 @@ import createGraph from 'ngraph.graph';
 export const Discipline = Object.freeze({
   ARCH:   'arch',    // 意匠
   STRUCT: 'struct',  // 構造
+  FUSE:   'fuse',    // 伏図
   MEP:    'mep',     // 設備
   ELEC:   'elec',    // 電気
 });
@@ -261,11 +262,34 @@ export class CenterLine extends Shape {
       ...props,
     });
     this.centerLineType = centerLineType;
-    this.value          = value;              // 自己座標
+    this._value         = value;              // 絶対座標値（参照なし時）
+    this.refId          = props.refId ?? null; // 参照先 CenterLine の id
+    this.refOffset      = props.refOffset ?? 0; // 参照先からのオフセット
     this.labeled        = props.labeled ?? true;
     this.trim           = props.trim   ?? false;
+    this.extentLo       = props.extentLo ?? null;
+    this.extentHi       = props.extentHi ?? null;
     this.label          = '';
-    makeObservable(this, { value: observable, labeled: observable, trim: observable, label: observable });
+    this._referencedCL  = null; // 参照先 CL の参照を保持（PlanGraph が設定）
+    makeObservable(this, {
+      _value: observable,
+      refId: observable,
+      refOffset: observable,
+      _referencedCL: observable,
+      value: computed,
+      labeled: observable,
+      trim: observable,
+      label: observable
+    });
+  }
+
+  get value() {
+    if (!this.refId) return this._value;
+    const refValue = this._referencedCL ? this._referencedCL.value : this._value;
+    return refValue + this.refOffset;
+  }
+  set value(v) {
+    this._value = v;
   }
 }
 
@@ -408,11 +432,18 @@ export class PlanGraph {
    * Intersection を自動生成する。
    * @param {string} centerLineType  CenterLineType の値
    * @param {number} value           x座標(VERTICAL) / y座標(HORIZONTAL) / 角度(RADIAL)
-   * @param {object} [props]
+   * @param {object} [props]  refId, refOffset を含む可能性あり
    * @returns {CenterLine}
    */
   addCenterLine(centerLineType, value, props = {}, id = crypto.randomUUID()) {
     const cl = new CenterLine(id, centerLineType, value, props);
+    // refId がある場合、参照先 CL への参照を設定
+    if (cl.refId) {
+      const refCL = this.shapeMap.get(cl.refId);
+      if (refCL instanceof CenterLine) {
+        cl._referencedCL = refCL;
+      }
+    }
     this.shapeMap.set(cl.id, cl);
     if (cl.labeled) this._createIntersections(cl);
     return cl;

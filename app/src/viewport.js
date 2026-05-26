@@ -1,38 +1,56 @@
 import { makeObservable, observable, computed, action } from 'mobx';
 
-export class Viewport {
-  offsetX = 0;
-  offsetY = 0;
-  scale   = 1; // px/mm  (scale=1 → 1:100 相当, scale=0.5 → 1:200)
+export const DEFAULT_PX_PER_MM = 96 / 25.4;
 
-  constructor(width, height) {
-    this.offsetX = 100;
-    this.offsetY = height - 100;
+function loadCalibration() {
+  try {
+    const x = parseFloat(localStorage.getItem('strad_pxPerMmX'));
+    const y = parseFloat(localStorage.getItem('strad_pxPerMmY'));
+    if (isFinite(x) && x > 0 && isFinite(y) && y > 0) return [x, y];
+    // 旧フォーマット (単一値) にフォールバック
+    const v = parseFloat(localStorage.getItem('strad_pxPerMm'));
+    if (isFinite(v) && v > 0) return [v, v];
+  } catch {}
+  return [DEFAULT_PX_PER_MM, DEFAULT_PX_PER_MM];
+}
+
+export class Viewport {
+  pxPerMmX = DEFAULT_PX_PER_MM;
+  pxPerMmY = DEFAULT_PX_PER_MM;
+  offsetX  = 0;
+  offsetY  = 0;
+  scaleX   = DEFAULT_PX_PER_MM / 100;
+  scaleY   = DEFAULT_PX_PER_MM / 100;
+
+  constructor(width, height, gutterX = 0, gutterY = 0) {
+    const [pmX, pmY] = loadCalibration();
+    this.pxPerMmX = pmX;
+    this.pxPerMmY = pmY;
+    this.scaleX   = pmX / 100;
+    this.scaleY   = pmY / 100;
+    this.offsetX  = gutterX + 100;
+    this.offsetY  = height - gutterY - 100;
     makeObservable(this, {
+      pxPerMmX:         observable,
+      pxPerMmY:         observable,
       offsetX:          observable,
       offsetY:          observable,
-      scale:            observable,
+      scaleX:           observable,
+      scaleY:           observable,
       scaleDenominator: computed,
       pan:              action,
       zoomAt:           action,
       reset:            action,
+      calibrate:        action,
     });
   }
 
-  // ワールド座標 → スクリーン座標
   worldToScreen(wx, wy) {
-    return {
-      x: wx * this.scale + this.offsetX,
-      y: wy * this.scale + this.offsetY,
-    };
+    return { x: wx * this.scaleX + this.offsetX, y: wy * this.scaleY + this.offsetY };
   }
 
-  // スクリーン座標 → ワールド座標
   screenToWorld(sx, sy) {
-    return {
-      x: (sx - this.offsetX) / this.scale,
-      y: (sy - this.offsetY) / this.scale,
-    };
+    return { x: (sx - this.offsetX) / this.scaleX, y: (sy - this.offsetY) / this.scaleY };
   }
 
   pan(dx, dy) {
@@ -40,22 +58,40 @@ export class Viewport {
     this.offsetY += dy;
   }
 
-  // スクリーン上の点 (sx, sy) を固定してズーム
+  // X スケールを基準にクランプし、縦横比 (校正比率) を維持してズーム
   zoomAt(sx, sy, factor) {
-    const wx = (sx - this.offsetX) / this.scale;
-    const wy = (sy - this.offsetY) / this.scale;
-    this.scale   = Math.max(0.02, Math.min(20, this.scale * factor));
-    this.offsetX = sx - wx * this.scale;
-    this.offsetY = sy - wy * this.scale;
+    const wx       = (sx - this.offsetX) / this.scaleX;
+    const wy       = (sy - this.offsetY) / this.scaleY;
+    const newSX    = Math.max(0.001, Math.min(20, this.scaleX * factor));
+    const actual   = newSX / this.scaleX; // クランプ後の実倍率
+    this.scaleX  = newSX;
+    this.scaleY  = this.scaleY * actual;
+    this.offsetX = sx - wx * this.scaleX;
+    this.offsetY = sy - wy * this.scaleY;
   }
 
-  reset(width, height) {
-    this.scale   = 1;
-    this.offsetX = 100;
-    this.offsetY = height - 100;
+  reset(width, height, gutterX = 0, gutterY = 0) {
+    this.scaleX  = this.pxPerMmX / 100;
+    this.scaleY  = this.pxPerMmY / 100;
+    this.offsetX = gutterX + 100;
+    this.offsetY = height - gutterY - 100;
   }
 
+  // 現在の縮尺分母を保ちつつ校正値を更新
+  calibrate(newPxPerMmX, newPxPerMmY) {
+    const denom   = this.scaleDenominator;
+    this.pxPerMmX = newPxPerMmX;
+    this.pxPerMmY = newPxPerMmY;
+    this.scaleX   = newPxPerMmX / denom;
+    this.scaleY   = newPxPerMmY / denom;
+    try {
+      localStorage.setItem('strad_pxPerMmX', String(newPxPerMmX));
+      localStorage.setItem('strad_pxPerMmY', String(newPxPerMmY));
+    } catch {}
+  }
+
+  // X 軸基準の縮尺分母 (= pxPerMmY / scaleY と等しく保たれる)
   get scaleDenominator() {
-    return Math.round(100 / this.scale);
+    return Math.round(this.pxPerMmX / this.scaleX);
   }
 }

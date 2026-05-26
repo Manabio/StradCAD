@@ -19,13 +19,10 @@ export function getMenuItems(context, nearCL = null) {
         { id: 'arc',   label: '円弧',   icon: '◜' },
         { id: 'del',   label: '削除',   icon: '✕' },
       ];
-    case CONTEXT.CENTER_LINE: {
-      const moveIcon = nearCL?.centerLineType === 'Y' ? '⇕' : '⇔';
+    case CONTEXT.CENTER_LINE:
       return [
-        { id: 'cl-move', label: '移動', icon: moveIcon },
-        { id: 'cl-del',  label: '削除', icon: '✕' },
+        { id: 'cl-del', label: '削除', icon: '✕' },
       ];
-    }
     case CONTEXT.EMPTY:
       return [
         { id: 'cl-v',  label: '垂直線',   icon: '┃' },

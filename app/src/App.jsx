@@ -21,7 +21,9 @@ import {
   CenterLinesLayer,
   IntersectionMarkers,
   CenterLineLabels,
+  GutterCLMarkers,
 } from './renderer/CenterLinesLayer.jsx';
+import { AxisRulerLayer } from './renderer/AxisRulerLayer.jsx';
 import { ShapesLayer }    from './renderer/ShapesLayer.jsx';
 import { SnapIndicator }  from './renderer/SnapIndicator.jsx';
 import { LongPressIndicator } from './renderer/LongPressIndicator.jsx';
@@ -30,12 +32,14 @@ import { CLAddPreview }   from './renderer/CLAddPreview.jsx';
 import { CLMoveInput }    from './renderer/CLMoveInput.jsx';
 import { RadialMenu }     from './ui/RadialMenu.jsx';
 import { AddCLDialog }    from './ui/AddCLDialog.jsx';
-import { WallDialog }     from './ui/WallDialog.jsx';
+import { WallDialog }          from './ui/WallDialog.jsx';
+import { CalibrationDialog }  from './ui/CalibrationDialog.jsx';
 
 const SNAP_THRESHOLD_PX = 20;
 const CL_THRESHOLD_PX   = 8;
+const GUTTER            = 48; // 通り芯表示エリアの幅 (px)
 
-const viewport = new Viewport(window.innerWidth, window.innerHeight);
+const viewport = new Viewport(window.innerWidth, window.innerHeight, GUTTER, GUTTER);
 
 const App = observer(() => {
   const project = useStore();
@@ -50,15 +54,18 @@ const App = observer(() => {
   const [clPreview,   setClPreview]   = useState(null);
   const [wallDialog,  setWallDialog]  = useState(null); // { worldPos }
   const [isPanning,   setIsPanning]   = useState(false);
+  const [scaleInput,      setScaleInput]      = useState(null); // null=非編集, string=編集中
+  const [showCalibration, setShowCalibration] = useState(false);
 
-  const drag         = useRef(null);
-  const pinch        = useRef(null);
-  const snapRef      = useRef(null);
-  const nearCLRef    = useRef(null);
-  const drawDownRef  = useRef(null);
-  const moveDownRef  = useRef(null); // CL移動: pointer-down 記録用
+  const drag          = useRef(null);
+  const pinch         = useRef(null);
+  const snapRef       = useRef(null);
+  const nearCLRef     = useRef(null);
+  const drawDownRef   = useRef(null);
+  const moveDownRef   = useRef(null); // CL移動: pointer-down 記録用
   const cancelDrawRef = useRef(null);
   const cancelMoveRef = useRef(null);
+  const gutterCLRef   = useRef(null); // ガター長押し中のCL
 
   const graph = project.activeGraph;
 
@@ -70,6 +77,18 @@ const App = observer(() => {
 
   useEffect(() => { snapRef.current  = snapPoint; }, [snapPoint]);
   useEffect(() => { nearCLRef.current = nearCL;   }, [nearCL]);
+
+  // ---- ガター構造芯 長押しフック ----
+  const gutterLongPress = useLongPress({
+    onStart:  (sx, sy) => setPressPos({ x: sx, y: sy }),
+    onFire:   (sx, sy) => {
+      setPressPos(null);
+      const cl = gutterCLRef.current;
+      if (cl) startMove(cl);
+      gutterCLRef.current = null;
+    },
+    onCancel: () => setPressPos(null),
+  });
 
   // ---- 長押しフック ----
   const longPress = useLongPress({
@@ -114,17 +133,31 @@ const App = observer(() => {
 
   // ---- ポインタ Down ----
   const handlePointerDown = (e) => {
+    const { clientX, clientY } = e.evt;
     if (e.evt.touches) return;
     if (menu) return;
     if (moveStateRef.current) {
-      moveDownRef.current = { x: e.evt.clientX, y: e.evt.clientY };
+      moveDownRef.current = { x: clientX, y: clientY };
       return;
     }
     if (drawStateRef.current) {
-      drawDownRef.current = { x: e.evt.clientX, y: e.evt.clientY };
+      drawDownRef.current = { x: clientX, y: clientY };
       return;
     }
-    longPress.begin(e.evt.clientX, e.evt.clientY);
+    const inGutter = clientX < GUTTER || clientY < GUTTER ||
+                     clientX > size.width - GUTTER || clientY > size.height - GUTTER;
+    if (inGutter) {
+      const cl = findGutterCL(clientX, clientY);
+      if (cl) {
+        gutterCLRef.current = cl;
+        gutterLongPress.begin(clientX, clientY);
+      } else {
+        drag.current = { lastX: clientX, lastY: clientY };
+        setIsPanning(true);
+      }
+      return;
+    }
+    longPress.begin(clientX, clientY);
   };
 
   // ---- ポインタ Move ----
@@ -144,12 +177,23 @@ const App = observer(() => {
       return;
     }
 
+    // ---- ガターCL 長押し待機中 ----
+    if (gutterCLRef.current) {
+      const shouldPan = gutterLongPress.move(clientX, clientY);
+      if (shouldPan) {
+        gutterCLRef.current = null;
+        drag.current = { lastX: clientX, lastY: clientY };
+        setIsPanning(true);
+      }
+      return;
+    }
+
     // ---- CL 移動モード ----
     if (moveStateRef.current) {
       const world = viewport.screenToWorld(clientX, clientY);
       const cl    = moveStateRef.current.cl;
       const isV   = cl.centerLineType === 'X';
-      const snapVal = findCLMoveSnap(graph, cl, world.x, world.y, SNAP_THRESHOLD_PX, viewport.scale);
+      const snapVal = findCLMoveSnap(graph, cl, world.x, world.y, SNAP_THRESHOLD_PX, viewport.scaleX, viewport.scaleY);
       const newVal  = snapVal ?? (isV ? world.x : world.y);
       updateMove(newVal);
       setCursorWorld(world);
@@ -190,19 +234,24 @@ const App = observer(() => {
 
   // ---- ポインタ Up ----
   const handlePointerUp = (e) => {
-    // CL移動: pointer-down があれば確定
-    if (moveStateRef.current && moveDownRef.current) {
+    if (moveStateRef.current) {
       const { cl, originalValue } = moveStateRef.current;
       const newValue = cl.value;
-      if (newValue !== originalValue) {
-        undoManager.push(
-          () => runInAction(() => { cl.value = originalValue; }),
-          () => runInAction(() => { cl.value = newValue; }),
-        );
+      // CL が実際に動いた か、明示的な再プレスがあった場合のみ確定
+      if (moveDownRef.current || newValue !== originalValue) {
+        if (newValue !== originalValue) {
+          undoManager.push(
+            () => runInAction(() => { cl.value = originalValue; }),
+            () => runInAction(() => { cl.value = newValue; }),
+          );
+        }
+        moveDownRef.current = null;
+        commitMove();
+        drag.current = null;
+        return;
       }
+      // 長押し直後の離し（移動なし）→ 移動モードを維持
       moveDownRef.current = null;
-      commitMove();
-      drag.current = null;
       return;
     }
     moveDownRef.current = null;
@@ -221,6 +270,8 @@ const App = observer(() => {
     }
     drawDownRef.current = null;
     longPress.abort();
+    gutterLongPress.abort();
+    gutterCLRef.current = null;
     drag.current = null;
     setIsPanning(false);
   };
@@ -238,6 +289,8 @@ const App = observer(() => {
     }
     drawDownRef.current = null;
     longPress.abort();
+    gutterLongPress.abort();
+    gutterCLRef.current = null;
     drag.current = null;
     setIsPanning(false);
     setSnapPoint(null);
@@ -265,12 +318,39 @@ const App = observer(() => {
     if (e.evt.touches.length < 2) pinch.current = null;
   };
 
+  // ---- ガター内の構造芯ヒット判定 ----
+  function findGutterCL(sx, sy) {
+    const HIT = 24; // px
+    const cls = graph.centerLines.filter(cl => cl.labeled);
+    if (sy < GUTTER || sy > size.height - GUTTER) {
+      for (const cl of cls) {
+        if (cl.centerLineType !== CenterLineType.VERTICAL) continue;
+        if (Math.abs(cl.value * viewport.scaleX + viewport.offsetX - sx) < HIT) return cl;
+      }
+    }
+    if (sx < GUTTER || sx > size.width - GUTTER) {
+      for (const cl of cls) {
+        if (cl.centerLineType !== CenterLineType.HORIZONTAL) continue;
+        if (Math.abs(cl.value * viewport.scaleY + viewport.offsetY - sy) < HIT) return cl;
+      }
+    }
+    return null;
+  }
+
   // ---- スナップ & 近傍CL 計算 ----
   function updateSnap(clientX, clientY) {
+    // 通り芯表示エリア内はスナップ・カーソル更新しない
+    if (clientX < GUTTER || clientY < GUTTER ||
+        clientX > size.width - GUTTER || clientY > size.height - GUTTER) {
+      setSnapPoint(null);
+      setNearCL(null);
+      setCursorWorld(null);
+      return;
+    }
     const world = viewport.screenToWorld(clientX, clientY);
-    const snap  = findNearestIntersection(graph, world.x, world.y, SNAP_THRESHOLD_PX, viewport.scale);
+    const snap  = findNearestIntersection(graph, world.x, world.y, SNAP_THRESHOLD_PX, viewport.scaleX, viewport.scaleY);
     // 交点スナップ中は CL 検出不要
-    const cl    = snap ? null : findNearestCenterLine(graph, world.x, world.y, CL_THRESHOLD_PX, viewport.scale);
+    const cl    = snap ? null : findNearestCenterLine(graph, world.x, world.y, CL_THRESHOLD_PX, viewport.scaleX, viewport.scaleY);
     setSnapPoint(snap ?? null);
     setNearCL(cl ?? null);
     setCursorWorld(world);
@@ -279,8 +359,8 @@ const App = observer(() => {
 
   // ---- メニュー選択 ----
   function handleMenuSelect(item) {
-    if (item.id === 'cl-v')    { setClDialog({ type: 'vertical',   worldCoord: menu.worldPos.x }); return; }
-    if (item.id === 'cl-h')    { setClDialog({ type: 'horizontal', worldCoord: menu.worldPos.y }); return; }
+    if (item.id === 'cl-v')    { setClDialog({ type: 'vertical',   worldCoord: menu.worldPos.x, perpCoord: menu.worldPos.y }); return; }
+    if (item.id === 'cl-h')    { setClDialog({ type: 'horizontal', worldCoord: menu.worldPos.y, perpCoord: menu.worldPos.x }); return; }
     if (item.id === 'wall')    { setWallDialog({ worldPos: menu.worldPos }); return; }
     if (item.id === 'undo')    { undoManager.undo(); return; }
     if (item.id === 'redo')    { undoManager.redo(); return; }
@@ -334,13 +414,35 @@ const App = observer(() => {
     setWallDialog(null);
   }
 
-  function handleCLDialogConfirm(value, kind, trim) {
+  function handleCLDialogConfirm(value, kind, trim, refId, refOffset) {
     if (!clDialog) return;
     const clType = clDialog.type === 'vertical' ? CenterLineType.VERTICAL : CenterLineType.HORIZONTAL;
+    // 中心線: 追加時点の全直交CLでブラケット判定し延伸範囲を確定（既存CLの長さは変えない）
+    let extentProps = {};
+    if (kind === 'center') {
+      const perpType = clType === CenterLineType.VERTICAL ? CenterLineType.HORIZONTAL : CenterLineType.VERTICAL;
+      const wc = clDialog.worldCoord;
+      const perpCLs = graph.centerLines.filter(cl => {
+        if (cl.centerLineType !== perpType) return false;
+        // 非ラベルCL: extentLo/Hi の実範囲（はね出し前）に新規CLの座標が含まれるものだけ対象
+        if (!cl.labeled && cl.extentLo != null && cl.extentHi != null) {
+          if (wc < cl.extentLo || wc > cl.extentHi) return false;
+        }
+        return true;
+      });
+      const [loCL, hiCL] = findBracketingCLs(perpCLs, clDialog.perpCoord);
+      extentProps = {
+        labeled:  false,
+        extentLo: loCL?.value ?? (perpCLs.length ? Math.min(...perpCLs.map(c => c.value)) : null),
+        extentHi: hiCL?.value ?? (perpCLs.length ? Math.max(...perpCLs.map(c => c.value)) : null),
+      };
+    }
     const props = {
+      ...extentProps,
       ...(kind === 'struct' ? { discipline: Discipline.STRUCT } : {}),
       ...(kind === 'aux'    ? { labeled: false, lineType: 'dashed' } : {}),
       trim: !!trim,
+      ...(refId ? { refId, refOffset: refOffset ?? 0 } : {}),
     };
     const cl = graph.addCenterLine(clType, value, props);
     const clId = cl.id;
@@ -353,6 +455,15 @@ const App = observer(() => {
   }
 
   const closeMenu = () => setMenu(null);
+
+  // ---- 実スケール適用 ----
+  function applyScaleInput() {
+    const d = parseInt(scaleInput, 10);
+    if (d > 0) {
+      viewport.zoomAt(size.width / 2, size.height / 2, viewport.scaleDenominator / d);
+    }
+    setScaleInput(null);
+  }
 
   const cursor = menu || clDialog ? 'default'
                : isPanning        ? 'grabbing'
@@ -416,35 +527,52 @@ const App = observer(() => {
           style={{ cursor }}
         >
           <Layer name="world">
+            {/* 描画域を通り芯表示エリアの内側にクリップ */}
             <Group
-              x={viewport.offsetX}
-              y={viewport.offsetY}
-              scaleX={viewport.scale}
-              scaleY={viewport.scale}
+              clipX={GUTTER}
+              clipY={GUTTER}
+              clipWidth={size.width  - 2 * GUTTER}
+              clipHeight={size.height - 2 * GUTTER}
             >
-              <CenterLinesLayer
-                graph={graph}
-                viewport={viewport}
-                width={size.width}
-                height={size.height}
-              />
-              <ShapesLayer graph={graph} viewport={viewport} />
-              <IntersectionMarkers graph={graph} viewport={viewport} />
-              <DrawPreview
-                drawState={drawState}
-                snapPoint={snapPoint}
-                cursorWorld={cursorWorld}
-              />
-              <CLAddPreview value={clPreview} type={clDialog?.type} />
+              <Group
+                x={viewport.offsetX}
+                y={viewport.offsetY}
+                scaleX={viewport.scaleX}
+                scaleY={viewport.scaleY}
+              >
+                <CenterLinesLayer
+                  graph={graph}
+                  viewport={viewport}
+                  width={size.width}
+                  height={size.height}
+                />
+                <ShapesLayer graph={graph} viewport={viewport} />
+                <IntersectionMarkers graph={graph} viewport={viewport} />
+                <DrawPreview
+                  drawState={drawState}
+                  snapPoint={snapPoint}
+                  cursorWorld={cursorWorld}
+                />
+                <CLAddPreview value={clPreview} type={clDialog?.type} />
+              </Group>
             </Group>
           </Layer>
 
           <Layer name="overlay">
+            <AxisRulerLayer width={size.width} height={size.height} gutter={GUTTER} />
+            <GutterCLMarkers
+              graph={graph}
+              viewport={viewport}
+              width={size.width}
+              height={size.height}
+              gutter={GUTTER}
+            />
             <CenterLineLabels
               graph={graph}
               viewport={viewport}
               width={size.width}
               height={size.height}
+              gutter={GUTTER}
             />
             {!menu && <SnapIndicator snap={snapPoint} viewport={viewport} />}
           </Layer>
@@ -454,11 +582,59 @@ const App = observer(() => {
       </div>
 
       <div style={{
-        position: 'fixed', bottom: 12, right: 16,
-        fontSize: 12, color: '#666', pointerEvents: 'none', userSelect: 'none',
+        position: 'fixed', bottom: 8, right: 12,
+        display: 'flex', alignItems: 'center', gap: 6,
       }}>
-        1/{viewport.scaleDenominator}
+        {/* 校正ボタン */}
+        <span
+          onClick={() => setShowCalibration(true)}
+          title="画面校正"
+          style={{ fontSize: 13, color: '#94a3b8', cursor: 'pointer', userSelect: 'none', lineHeight: 1 }}
+        >
+          ⚙
+        </span>
+
+        {/* 縮尺表示 / 入力 */}
+        {scaleInput === null ? (
+          <div
+            onClick={() => setScaleInput(String(viewport.scaleDenominator))}
+            title="クリックして縮尺を入力"
+            style={{ fontSize: 12, color: '#666', cursor: 'pointer', userSelect: 'none' }}
+          >
+            1/{viewport.scaleDenominator}
+          </div>
+        ) : (
+          <div style={{
+            fontSize: 12, color: '#333',
+            background: '#fff', border: '1px solid #94a3b8',
+            borderRadius: 4, padding: '2px 6px',
+            display: 'flex', alignItems: 'center', gap: 2,
+          }}>
+            1/
+            <input
+              value={scaleInput}
+              onChange={e => setScaleInput(e.target.value)}
+              onKeyDown={e => {
+                if (e.key === 'Enter')  applyScaleInput();
+                if (e.key === 'Escape') setScaleInput(null);
+              }}
+              onBlur={() => setScaleInput(null)}
+              autoFocus
+              style={{
+                width: 52, fontSize: 12, border: 'none', outline: 'none',
+                textAlign: 'right', padding: 0,
+              }}
+            />
+          </div>
+        )}
       </div>
+
+      {showCalibration && (
+        <CalibrationDialog
+          viewport={viewport}
+          onClose={() => setShowCalibration(false)}
+        />
+      )}
     </>
   );
 });

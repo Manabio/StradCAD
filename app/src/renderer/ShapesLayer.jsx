@@ -16,10 +16,10 @@ function resolveStrokeWidth(lineWeight, scale) {
   return Math.max(minWorld, lineWeight);
 }
 
-function strokeProps(shape, scale) {
+function strokeProps(shape, scaleX, scaleY) {
   return {
     stroke:      shape.color,
-    strokeWidth: resolveStrokeWidth(shape.lineWeight, scale),
+    strokeWidth: resolveStrokeWidth(shape.lineWeight, Math.min(scaleX, scaleY)),
     dash:        DASH[shape.lineType],
     listening:   false,
   };
@@ -41,10 +41,10 @@ function arcPathD(cx, cy, radius, startAngleDeg, includedAngleDeg) {
 
 export const ShapesLayer = observer(({ graph, viewport }) => {
   if (!graph) return null;
-  const scale = viewport.scale;
+  const { scaleX, scaleY } = viewport;
 
   return graph.generalShapes.map((shape) => {
-    const sp = strokeProps(shape, scale);
+    const sp = strokeProps(shape, scaleX, scaleY);
 
     switch (shape.type) {
 
