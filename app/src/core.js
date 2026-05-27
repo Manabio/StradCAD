@@ -512,12 +512,7 @@ export class PlanGraph {
         child._referencedCL = null;
       }
 
-      // debug: 出力される座標を確認
-      try {
-        console.debug('[trim] coords', v.id, 'coord1=', v.coord1, 'coord2=', v.coord2, h.id, 'coord1=', h.coord1, 'coord2=', h.coord2);
-      } catch (e) {
-        console.debug('[trim] coords error', e);
-      }
+      // (debug logging removed)
     }
   }
 
@@ -688,8 +683,7 @@ export class PlanGraph {
       // 簡易ルール: 既存の垂直壁は上側（小さい y）をトリムして下側を残す
       {
         const faceY = h.axisCL.value + h.axisOffset;
-        // debug
-        console.debug('[trim] vertical', v.id, 'faceY=', faceY, 'before startOffset=', v.startOffset, 'endOffset=', v.endOffset);
+        
         // 候補オフセットを計算して、壁が潰れてしまわないか確認してから適用する
         const MIN_LEN = 1; // mm: 最小残存長
         if (v.coord1 <= v.coord2) {
@@ -700,7 +694,7 @@ export class PlanGraph {
           if (candCoord1 + MIN_LEN < otherCoord) {
             v.startOffset = cand;
           } else {
-            console.debug('[trim] vertical skip trim to avoid collapse', v.id);
+            // skip trim to avoid collapse
           }
         } else {
           const cand = faceY - v.clEnd.value;
@@ -712,14 +706,13 @@ export class PlanGraph {
             console.debug('[trim] vertical skip trim to avoid collapse', v.id);
           }
         }
-        console.debug('[trim] vertical after', v.id, 'startOffset=', v.startOffset, 'endOffset=', v.endOffset);
+        
       }
 
       // 既存の水平壁は左側（小さい x）をトリムして右側を残す
       {
         const faceX = v.axisCL.value + v.axisOffset;
-        // debug
-        console.debug('[trim] horizontal', h.id, 'faceX=', faceX, 'before startOffset=', h.startOffset, 'endOffset=', h.endOffset);
+        
         const MIN_LEN = 1; // mm: 最小残存長
         if (h.coord1 <= h.coord2) {
           // coord1 が左側
@@ -729,7 +722,7 @@ export class PlanGraph {
           if (candCoord1 + MIN_LEN < otherCoord) {
             h.startOffset = cand;
           } else {
-            console.debug('[trim] horizontal skip trim to avoid collapse', h.id);
+            // skip trim to avoid collapse
           }
         } else {
           const cand = faceX - h.clEnd.value;
@@ -741,7 +734,7 @@ export class PlanGraph {
             console.debug('[trim] horizontal skip trim to avoid collapse', h.id);
           }
         }
-        console.debug('[trim] horizontal after', h.id, 'startOffset=', h.startOffset, 'endOffset=', h.endOffset);
+        
       }
     }
 
