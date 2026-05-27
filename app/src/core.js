@@ -647,8 +647,8 @@ export class PlanGraph {
    * 既存壁の近い端点を新規壁の face (axisCL + axisOffset) にスナップする。
    * 新規壁の端点も同様に既存壁の face にスナップする。
    *
-   * 入隅判定: v.axisOffset と h.axisOffset の積が負でない（同符号 or いずれかが 0）
-   * 出隅判定: 積が負（正負逆）→ スキップ
+   * y 軸が下向き正の座標系では axisOffset の符号の組み合わせすべてが入隅になりうるため、
+   * 幾何交差チェック（face 座標ベース）のみで判定する。
    *
    * @param {Wall} newWall  追加直後の壁
    * @returns {{ wall, clStart, startOffset, clEnd, endOffset }[]}  Undo用スナップショット
@@ -656,7 +656,6 @@ export class PlanGraph {
   trimIntersectingWalls(newWall) {
     const snapshots = [];
     const perpWalls = this.walls.filter(w => w !== newWall && w.isVertical !== newWall.isVertical);
-
     for (const existing of perpWalls) {
       const [v, h] = newWall.isVertical ? [newWall, existing] : [existing, newWall];
 
@@ -670,9 +669,6 @@ export class PlanGraph {
       // 幾何交差チェック (face 座標ベース)
       if (vx < hx1 || vx > hx2) continue;
       if (hy < vy1 || hy > vy2) continue;
-
-      // 出隅スキップ: axisOffset の符号が逆 → 出隅
-      if (v.axisOffset * h.axisOffset < 0) continue;
 
       snapshots.push({
         wall: existing,
