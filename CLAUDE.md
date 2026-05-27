@@ -26,19 +26,26 @@ app/src/
 ├── graphSnapshot.js     グラフのシリアライズ / リストア
 ├── error.js             ユーザー向けエラー・通知メッセージ定数
 ├── renderer/
-│   ├── AxisRulerLayer.jsx    通り芯表示エリア背景
-│   ├── CenterLinesLayer.jsx  中心線・交点・ガターラベル・ガター丸
-│   ├── ShapesLayer.jsx       一般図形描画
-│   ├── DrawPreview.jsx       描画中プレビュー
-│   ├── CLAddPreview.jsx      通り芯追加プレビュー
-│   ├── CLMoveInput.jsx       通り芯移動中の数値表示
-│   ├── SnapIndicator.jsx     スナップ点インジケータ
-│   └── LongPressIndicator.jsx 長押しリング
-└── interaction/
-    ├── useDrawMode.js    描画モード管理
-    ├── useCLMove.js      通り芯移動モード管理
-    ├── useLongPress.js   長押し検出フック
-    └── menuItems.js      ラジアルメニュー項目定義
+│   ├── AxisRulerLayer.jsx     通り芯表示エリア背景
+│   ├── CenterLinesLayer.jsx   中心線・交点・ガターラベル・ガター丸
+│   ├── ShapesLayer.jsx        一般図形描画
+│   ├── DrawPreview.jsx        描画中プレビュー
+│   ├── CLAddPreview.jsx       通り芯追加プレビュー
+│   ├── CLMoveInput.jsx        通り芯移動中の数値表示
+│   ├── SnapIndicator.jsx      スナップ点インジケータ
+│   ├── LongPressIndicator.jsx 長押しリング
+│   └── WallRefIndicator.jsx   壁の参照元CL表示インジケータ
+├── interaction/
+│   ├── useDrawMode.js    描画モード管理
+│   ├── useCLMove.js      通り芯移動モード管理
+│   ├── useLongPress.js   長押し検出フック
+│   └── menuItems.js      ラジアルメニュー項目定義
+└── ui/
+    ├── AddCLDialog.jsx      通り芯追加ダイアログ
+    ├── CalibrationDialog.jsx 画面校正ダイアログ
+    ├── NumPad.jsx           数値入力パッド
+    ├── RadialMenu.jsx       ラジアルメニュー
+    └── WallDialog.jsx       壁追加ダイアログ
 ```
 
 ---
