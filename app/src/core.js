@@ -219,6 +219,8 @@ export class Wall extends Shape {
     this.clEnd       = clEnd;         // 終点参照 CL
     this.endOffset   = endOffset;     // clEnd.value からの符号付きオフセット
     makeObservable(this, {
+      clStart:     observable.ref,
+      clEnd:       observable.ref,
       axisOffset:  observable,
       startOffset: observable,
       endOffset:   observable,
@@ -387,8 +389,9 @@ export class PlanGraph {
       removeShape:            action,
       clear:                  action,
       getOrCreateIntersection:action,
-      chamferWalls:           action,
-      _relabelCenterLines:    action,
+      chamferWalls:             action,
+      trimIntersectingWalls:    action,
+      _relabelCenterLines:      action,
     });
 
     // ---- 中心線ラベル自動命名 reaction ----
@@ -637,6 +640,55 @@ export class PlanGraph {
     }
   }
 
+  /**
+   * 新規壁追加時の入隅トリム処理。
+   *
+   * 追加された壁と直交する既存壁を走査し、幾何的に交差かつ入隅を形成する場合、
+   * 既存壁の近い端点を新規壁の face (axisCL + axisOffset) にスナップする。
+   * 新規壁の端点も同様に既存壁の face にスナップする。
+   *
+   * 入隅判定: v.axisOffset と h.axisOffset の積が負でない（同符号 or いずれかが 0）
+   * 出隅判定: 積が負（正負逆）→ スキップ
+   *
+   * @param {Wall} newWall  追加直後の壁
+   * @returns {{ wall, clStart, startOffset, clEnd, endOffset }[]}  Undo用スナップショット
+   */
+  trimIntersectingWalls(newWall) {
+    const snapshots = [];
+    const perpWalls = this.walls.filter(w => w !== newWall && w.isVertical !== newWall.isVertical);
+
+    for (const existing of perpWalls) {
+      const [v, h] = newWall.isVertical ? [newWall, existing] : [existing, newWall];
+
+      const vx  = v.axisValue;
+      const vy1 = Math.min(v.coord1, v.coord2);
+      const vy2 = Math.max(v.coord1, v.coord2);
+      const hy  = h.axisValue;
+      const hx1 = Math.min(h.coord1, h.coord2);
+      const hx2 = Math.max(h.coord1, h.coord2);
+
+      // 幾何交差チェック (face 座標ベース)
+      if (vx < hx1 || vx > hx2) continue;
+      if (hy < vy1 || hy > vy2) continue;
+
+      // 出隅スキップ: axisOffset の符号が逆 → 出隅
+      if (v.axisOffset * h.axisOffset < 0) continue;
+
+      snapshots.push({
+        wall: existing,
+        clStart: existing.clStart, startOffset: existing.startOffset,
+        clEnd:   existing.clEnd,   endOffset:   existing.endOffset,
+      });
+
+      // 垂直壁 v の hy 側端点を h の face にトリム
+      _trimWallEnd(v, hy, h.axisCL, h.axisOffset);
+      // 水平壁 h の vx 側端点を v の face にトリム
+      _trimWallEnd(h, vx, v.axisCL, v.axisOffset);
+    }
+
+    return snapshots;
+  }
+
   removeShape(id) { this._removeShape(id); }
 
   /** グラフを完全にクリアする（restoreGraph の前処理用）。*/
@@ -751,6 +803,18 @@ function _sortedCenterLines(shapeMap, type) {
     case CenterLineType.VERTICAL:   return all.sort((a, b) => a.value - b.value);
     case CenterLineType.HORIZONTAL: return all.sort((a, b) => b.value - a.value);
     case CenterLineType.RADIAL:     return all; // 挿入順
+  }
+}
+
+// 壁の端点トリム (_trimIntersectingWalls 用)
+// targetCoord に近い端 (coord1 or coord2) を refCL+refOffset の位置にセット
+function _trimWallEnd(wall, targetCoord, refCL, refOffset) {
+  if (Math.abs(wall.coord1 - targetCoord) <= Math.abs(wall.coord2 - targetCoord)) {
+    wall.clStart     = refCL;
+    wall.startOffset = refOffset;
+  } else {
+    wall.clEnd     = refCL;
+    wall.endOffset = refOffset;
   }
 }
 

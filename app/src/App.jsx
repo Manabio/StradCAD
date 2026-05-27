@@ -435,9 +435,22 @@ const App = observer(() => {
     if (!clA || !clB) { setWallDialog(null); return; }
 
     const w = graph.addWall(refCL, axisOffset, isRefV, clA, 0, clB, 0);
+    const affected = graph.trimIntersectingWalls(w);
+
     undoManager.push(
-      () => graph.removeShape(w.id),
-      () => graph.addWall(refCL, axisOffset, isRefV, clA, 0, clB, 0),
+      () => {
+        graph.removeShape(w.id);
+        for (const snap of affected) {
+          snap.wall.clStart    = snap.clStart;
+          snap.wall.startOffset = snap.startOffset;
+          snap.wall.clEnd      = snap.clEnd;
+          snap.wall.endOffset  = snap.endOffset;
+        }
+      },
+      () => {
+        const rw = graph.addWall(refCL, axisOffset, isRefV, clA, 0, clB, 0);
+        graph.trimIntersectingWalls(rw);
+      },
     );
     setWallDialog(null);
   }
