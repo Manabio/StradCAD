@@ -703,7 +703,7 @@ export class PlanGraph {
           if (candCoord2 - MIN_LEN > otherCoord) {
             v.endOffset = cand;
           } else {
-            console.debug('[trim] vertical skip trim to avoid collapse', v.id);
+            // skip trim to avoid collapse
           }
         }
         
@@ -731,7 +731,7 @@ export class PlanGraph {
           if (candCoord2 - MIN_LEN > otherCoord) {
             h.endOffset = cand;
           } else {
-            console.debug('[trim] horizontal skip trim to avoid collapse', h.id);
+            // skip trim to avoid collapse
           }
         }
         
