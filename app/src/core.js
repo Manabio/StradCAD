@@ -511,6 +511,13 @@ export class PlanGraph {
         child.refId = null;
         child._referencedCL = null;
       }
+
+      // debug: 出力される座標を確認
+      try {
+        console.debug('[trim] coords', v.id, 'coord1=', v.coord1, 'coord2=', v.coord2, h.id, 'coord1=', h.coord1, 'coord2=', h.coord2);
+      } catch (e) {
+        console.debug('[trim] coords error', e);
+      }
     }
   }
 
@@ -631,11 +638,13 @@ export class PlanGraph {
         if (hy < vy1 - tolerance || hy > vy2 + tolerance) continue;
 
         // CL位置基準でスナップ判定（オフセット後座標ではなくCL位置で判断）
-        if (Math.abs(vys - hy) <= tolerance) v.startOffset = hy - vys;
-        if (Math.abs(vye - hy) <= tolerance) v.endOffset   = hy - vye;
+        if (Math.min(Math.abs(vys - hy), Math.abs(vye - hy)) <= tolerance) {
+          _trimWallEnd(v, hy, h.axisCL, h.axisOffset);
+        }
 
-        if (Math.abs(hxs - vx) <= tolerance) h.startOffset = vx - hxs;
-        if (Math.abs(hxe - vx) <= tolerance) h.endOffset   = vx - hxe;
+        if (Math.min(Math.abs(hxs - vx), Math.abs(hxe - vx)) <= tolerance) {
+          _trimWallEnd(h, vx, v.axisCL, v.axisOffset);
+        }
       }
     }
   }
@@ -676,10 +685,64 @@ export class PlanGraph {
         clEnd:   existing.clEnd,   endOffset:   existing.endOffset,
       });
 
-      // 垂直壁 v の hy 側端点を h の face にトリム
-      _trimWallEnd(v, hy, h.axisCL, h.axisOffset);
-      // 水平壁 h の vx 側端点を v の face にトリム
-      _trimWallEnd(h, vx, v.axisCL, v.axisOffset);
+      // 簡易ルール: 既存の垂直壁は上側（小さい y）をトリムして下側を残す
+      {
+        const faceY = h.axisCL.value + h.axisOffset;
+        // debug
+        console.debug('[trim] vertical', v.id, 'faceY=', faceY, 'before startOffset=', v.startOffset, 'endOffset=', v.endOffset);
+        // 候補オフセットを計算して、壁が潰れてしまわないか確認してから適用する
+        const MIN_LEN = 1; // mm: 最小残存長
+        if (v.coord1 <= v.coord2) {
+          // coord1 が上側
+          const cand = faceY - v.clStart.value;
+          const candCoord1 = v.clStart.value + cand;
+          const otherCoord = v.clEnd.value + v.endOffset;
+          if (candCoord1 + MIN_LEN < otherCoord) {
+            v.startOffset = cand;
+          } else {
+            console.debug('[trim] vertical skip trim to avoid collapse', v.id);
+          }
+        } else {
+          const cand = faceY - v.clEnd.value;
+          const candCoord2 = v.clEnd.value + cand;
+          const otherCoord = v.clStart.value + v.startOffset;
+          if (candCoord2 - MIN_LEN > otherCoord) {
+            v.endOffset = cand;
+          } else {
+            console.debug('[trim] vertical skip trim to avoid collapse', v.id);
+          }
+        }
+        console.debug('[trim] vertical after', v.id, 'startOffset=', v.startOffset, 'endOffset=', v.endOffset);
+      }
+
+      // 既存の水平壁は左側（小さい x）をトリムして右側を残す
+      {
+        const faceX = v.axisCL.value + v.axisOffset;
+        // debug
+        console.debug('[trim] horizontal', h.id, 'faceX=', faceX, 'before startOffset=', h.startOffset, 'endOffset=', h.endOffset);
+        const MIN_LEN = 1; // mm: 最小残存長
+        if (h.coord1 <= h.coord2) {
+          // coord1 が左側
+          const cand = faceX - h.clStart.value;
+          const candCoord1 = h.clStart.value + cand;
+          const otherCoord = h.clEnd.value + h.endOffset;
+          if (candCoord1 + MIN_LEN < otherCoord) {
+            h.startOffset = cand;
+          } else {
+            console.debug('[trim] horizontal skip trim to avoid collapse', h.id);
+          }
+        } else {
+          const cand = faceX - h.clEnd.value;
+          const candCoord2 = h.clEnd.value + cand;
+          const otherCoord = h.clStart.value + h.startOffset;
+          if (candCoord2 - MIN_LEN > otherCoord) {
+            h.endOffset = cand;
+          } else {
+            console.debug('[trim] horizontal skip trim to avoid collapse', h.id);
+          }
+        }
+        console.debug('[trim] horizontal after', h.id, 'startOffset=', h.startOffset, 'endOffset=', h.endOffset);
+      }
     }
 
     return snapshots;
@@ -805,12 +868,11 @@ function _sortedCenterLines(shapeMap, type) {
 // 壁の端点トリム (_trimIntersectingWalls 用)
 // targetCoord に近い端 (coord1 or coord2) を refCL+refOffset の位置にセット
 function _trimWallEnd(wall, targetCoord, refCL, refOffset) {
+  const faceCoord = refCL.value + refOffset;
   if (Math.abs(wall.coord1 - targetCoord) <= Math.abs(wall.coord2 - targetCoord)) {
-    wall.clStart     = refCL;
-    wall.startOffset = refOffset;
+    wall.startOffset = faceCoord - wall.clStart.value;
   } else {
-    wall.clEnd     = refCL;
-    wall.endOffset = refOffset;
+    wall.endOffset = faceCoord - wall.clEnd.value;
   }
 }
 

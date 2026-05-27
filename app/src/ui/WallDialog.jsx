@@ -59,8 +59,13 @@ export function WallDialog({ worldPos, allCLs, nearbyCLs = [], onConfirm, onCanc
     }
   }
 
+  function handleConfirm() {
+    if (!refCL) return;
+    onConfirm(refCL, dist);
+  }
+
   function handleKeyDown(e) {
-    if (e.key === 'Enter' && refCL) onConfirm(refCL, dist);
+    if (e.key === 'Enter' && refCL) handleConfirm();
     if (e.key === 'Escape') onCancel();
     e.stopPropagation();
   }
@@ -126,7 +131,7 @@ export function WallDialog({ worldPos, allCLs, nearbyCLs = [], onConfirm, onCanc
           <button
             className="cl-dialog-btn cl-dialog-btn--ok"
             disabled={!refCL}
-            onClick={() => refCL && onConfirm(refCL, dist)}
+            onClick={handleConfirm}
           >
             追加
           </button>
@@ -137,7 +142,7 @@ export function WallDialog({ worldPos, allCLs, nearbyCLs = [], onConfirm, onCanc
         value={distStr}
         label="距離"
         onChange={setDistStr}
-        onConfirm={() => refCL && onConfirm(refCL, dist)}
+        onConfirm={handleConfirm}
         onCancel={onCancel}
       />
     </>
