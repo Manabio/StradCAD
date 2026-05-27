@@ -19,7 +19,7 @@ function clExtent(cl, graph, viewport) {
   const perpType  = isV ? CenterLineType.HORIZONTAL : CenterLineType.VERTICAL;
 
   if (cl.labeled) {
-    // 構造芯: labeled な直交CLのみ参照（中心線追加で長さが変わらないよう）
+    // 通り芯: labeled な直交CLのみ参照（中心線追加で長さが変わらないよう）
     const perpScale = isV ? viewport.scaleY : viewport.scaleX;
     const perpVals  = graph.centerLines
       .filter(p => p.centerLineType === perpType && p.labeled)
@@ -94,7 +94,7 @@ export const IntersectionMarkers = observer(({ graph, viewport }) => {
   ));
 });
 
-// ---- ガター内 構造芯マーカー丸 (ラベルの背景) ----
+// ---- ガター内 通り芯マーカー丸 (ラベルの背景) ----
 export const GutterCLMarkers = observer(({ graph, viewport, width, height, gutter }) => {
   if (!graph) return null;
   const r   = Math.round(gutter * 0.32);

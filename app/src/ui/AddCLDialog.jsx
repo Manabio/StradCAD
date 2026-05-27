@@ -3,7 +3,7 @@ import './AddCLDialog.css';
 
 const KINDS = [
   { id: 'center', label: '中心',   hint: 'ラベルなし中心線' },
-  { id: 'struct', label: '構造芯', hint: '構造通り芯（ガターラベルあり）' },
+  { id: 'struct', label: '通り芯', hint: '構造通り芯（ガターラベルあり）' },
   { id: 'aux',    label: '補助線', hint: 'ラベルなし補助線（破線）' },
 ];
 

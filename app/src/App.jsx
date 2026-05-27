@@ -87,7 +87,7 @@ const App = observer(() => {
     return () => clearTimeout(t);
   }, [toast]);
 
-  // ---- ガター構造芯 長押しフック ----
+  // ---- ガター通り芯 長押しフック ----
   const gutterLongPress = useLongPress({
     onStart:  (sx, sy) => setPressPos({ x: sx, y: sy }),
     onFire:   (sx, sy) => {
@@ -327,7 +327,7 @@ const App = observer(() => {
     if (e.evt.touches.length < 2) pinch.current = null;
   };
 
-  // ---- ガター内の構造芯ヒット判定 ----
+  // ---- ガター内の通り芯ヒット判定 ----
   function findGutterCL(sx, sy) {
     const HIT = 24; // px
     const cls = graph.centerLines.filter(cl => cl.labeled);
@@ -475,7 +475,7 @@ const App = observer(() => {
       }
 
       if (kind === 'struct' && existingKind === 'center') {
-        // 既存の中心線を削除して構造芯を新規追加
+        // 既存の中心線を削除して通り芯を新規追加
         setToast({ msg: ERR_CL_CENTER_UPGRADED, key: Date.now() });
         const deletedId = existing.id;
         const deletedType = existing.centerLineType;
