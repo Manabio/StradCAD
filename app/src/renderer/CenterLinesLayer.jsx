@@ -18,9 +18,9 @@ function viewportBounds(viewport, width, height) {
 //   BASE_DENOM ≤ denom ≤ ZERO_DENOM: (BASE_DENOM, BASE_MM) → (ZERO_DENOM, 0) の直線
 //   denom >  ZERO_DENOM         : 0
 const OVERHANG_LOW_DENOM  = 50;
-const OVERHANG_LOW_MM     = 400;
+const OVERHANG_LOW_MM     = 200;
 const OVERHANG_BASE_DENOM = 100;
-const OVERHANG_BASE_MM    = 800;
+const OVERHANG_BASE_MM    = 300;
 const OVERHANG_ZERO_DENOM = 500;
 function overhangMm(viewport, trim) {
   if (trim) return 0;
