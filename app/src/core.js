@@ -322,6 +322,168 @@ export class CenterLine extends Shape {
 }
 
 // ================================================================
+// DIMENSION (寸法線)
+//
+// 通り芯間 / 中心線間 / おさえ位置 の距離を表示する寸法図形。
+// 4 周(top/bottom/left/right)に配置可能。
+//
+//   kind === GRID:      labeled struct CL を全自動でアンカー化、ガター内表示、足長0
+//                       CL の追加・削除・移動に effectiveAnchors の computed で自動追従
+//   kind === CENTER:    補助線含む CL 間。明示的なアンカーを保持
+//   kind === CONTROL:   壁面・開口など face 位置の寸法。明示的なアンカーを保持
+//
+// 軸の表現は 'X' / 'Y'。HDimensionLine が横並び(X間距離)、VDimensionLine が縦並び(Y間距離)。
+// セグメント長は to.value - from.value を整数 mm に丸めて表示。
+// ================================================================
+
+export const DimensionKind = Object.freeze({
+  GRID:    'grid',     // 通り芯寸法
+  CENTER:  'center',   // 中心線寸法
+  CONTROL: 'control',  // おさえ寸法
+});
+
+export const DimensionSide = Object.freeze({
+  TOP:    'top',
+  BOTTOM: 'bottom',
+  LEFT:   'left',
+  RIGHT:  'right',
+});
+
+// ----------------------------------------------------------------
+// 寸法アンカー
+//   cl 参照型: CL.value に追従(live)
+//   座標固定型: coord を直接使用(凍結値)
+// ----------------------------------------------------------------
+export class DimensionAnchor {
+  constructor({ cl = null, offset = 0, coord = null }) {
+    this.cl     = cl;
+    this.offset = offset;
+    this.coord  = coord;
+    makeObservable(this, {
+      cl:     observable.ref,
+      offset: observable,
+      coord:  observable,
+      value:  computed,
+    });
+  }
+  get value() {
+    return this.cl ? this.cl.value + this.offset : this.coord;
+  }
+}
+
+// ----------------------------------------------------------------
+// 寸法線基底
+// ----------------------------------------------------------------
+class DimensionLine extends Shape {
+  constructor(id, axis, props = {}) {
+    super(id, {
+      kind:       ShapeKind.DIMENSION,
+      lineWeight: 0.15,
+      ...props,
+    });
+    this.type          = `${axis === 'X' ? 'h' : 'v'}dimension`;
+    this.axis          = axis;
+    this.dimensionKind = props.dimensionKind ?? DimensionKind.GRID;
+    this.side          = props.side          ?? (axis === 'X' ? DimensionSide.TOP : DimensionSide.LEFT);
+    this.anchors       = props.anchors       ?? [];
+    this.footLength    = props.footLength    ?? (this.dimensionKind === DimensionKind.GRID ? 0 : 200);
+    this.position      = props.position      ?? null;
+    this._planGraph    = null;   // PlanGraph が addDimensionLine 時にセット
+    makeObservable(this, {
+      dimensionKind:    observable,
+      side:             observable,
+      anchors:          observable,
+      footLength:       observable,
+      position:         observable,
+      effectiveAnchors: computed,
+      segments:         computed,
+    });
+  }
+
+  // GRID: labeled struct CL を value 昇順でアンカー化 / 他種別: 明示 anchors
+  get effectiveAnchors() {
+    if (this.dimensionKind === DimensionKind.GRID && this._planGraph) {
+      const cls = this.axis === 'X' ? this._planGraph.gridXs : this._planGraph.gridYs;
+      return [...cls]
+        .sort((a, b) => a.value - b.value)
+        .map(cl => new DimensionAnchor({ cl }));
+    }
+    return this.anchors;
+  }
+
+  // 隣接アンカー間のセグメント (length は整数 mm に丸め)
+  get segments() {
+    const a = this.effectiveAnchors;
+    return a.slice(0, -1).map((from, i) => ({
+      from,
+      to:     a[i + 1],
+      length: Math.round(a[i + 1].value - from.value),
+    }));
+  }
+}
+
+// 横並び寸法線 — X 座標差を測る (上下ガターに配置)
+export class HDimensionLine extends DimensionLine {
+  constructor(id, props) { super(id, 'X', props); }
+}
+
+// 縦並び寸法線 — Y 座標差を測る (左右ガターに配置)
+export class VDimensionLine extends DimensionLine {
+  constructor(id, props) { super(id, 'Y', props); }
+}
+
+// ================================================================
+// ROOM (仕上げモード — 部屋領域 + 仕上げ情報)
+// ================================================================
+
+export class RoomFinish {
+  constructor() {
+    this.floorMaterial     = '';
+    this.baseboardMaterial = '';
+    this.baseboardHeight   = '';
+    this.wallMaterial      = '';
+    this.dadoMaterial      = '';
+    this.dadoHeight        = '';
+    this.ceilingMaterial   = '';
+    this.ceilingHeight     = '';
+    this.cornice           = '';
+    this.note              = '';
+    makeObservable(this, {
+      floorMaterial:     observable,
+      baseboardMaterial: observable,
+      baseboardHeight:   observable,
+      wallMaterial:      observable,
+      dadoMaterial:      observable,
+      dadoHeight:        observable,
+      ceilingMaterial:   observable,
+      ceilingHeight:     observable,
+      cornice:           observable,
+      note:              observable,
+      setField:          action,
+    });
+  }
+  setField(field, value) { this[field] = value; }
+}
+
+// cells は Set<string> — cellKey(xLeftCL, yTopCL) の集合
+export class Room {
+  constructor(id, name = '', cells = new Set()) {
+    this.id     = id;
+    this.name   = name;
+    this.cells  = cells;
+    this.finish = new RoomFinish();
+    makeObservable(this, {
+      name:    observable,
+      cells:   observable,
+      setName: action,
+      addCell: action,
+    });
+  }
+  setName(name)  { this.name = name; }
+  addCell(key)   { this.cells.add(key); }
+}
+
+// ================================================================
 // PLANE (平面 = XY平面 1枚 + 高さ 1つ)
 // ================================================================
 
@@ -362,6 +524,7 @@ export class PlanGraph {
     this.intersectionMap = observable.map(); // id → Intersection
     this.shapeMap        = observable.map(); // id → Shape (CenterLine含む)
     this.pointMap        = observable.map(); // id → Point (自由位置ノード)
+    this.roomMap         = observable.map(); // id → Room
 
     this._shapeLinks = new Map(); // shapeId → ngraph.Link
 
@@ -374,6 +537,7 @@ export class PlanGraph {
       generalShapes:       computed,
       walls:               computed,
       centerLines:         computed,
+      dimensionLines:      computed,
       addCenterLine:       action,
       removeCenterLine:    action,
       demoteToAuxiliary:   action,
@@ -386,12 +550,17 @@ export class PlanGraph {
       addArc:                 action,
       addCircle:              action,
       addWall:                action,
+      addDimensionLine:       action,
+      removeDimensionLine:    action,
       removeShape:            action,
       clear:                  action,
       getOrCreateIntersection:action,
       chamferWalls:             action,
       trimIntersectingWalls:    action,
       _relabelCenterLines:      action,
+      addRoom:                  action,
+      removeRoom:               action,
+      rooms:                    computed,
     });
 
     // ---- 中心線ラベル自動命名 reaction ----
@@ -451,7 +620,16 @@ export class PlanGraph {
   get generalShapes() { return [...this.shapeMap.values()].filter(s => s.kind === ShapeKind.GENERAL); }
   get walls()         { return [...this.shapeMap.values()].filter(s => s.type === ShapeType.WALL); }
   get centerLines()   { return [...this.shapeMap.values()].filter(s => s instanceof CenterLine); }
+  get dimensionLines(){ return [...this.shapeMap.values()].filter(s => s instanceof DimensionLine); }
+  get rooms()         { return [...this.roomMap.values()]; }
 
+  addRoom(cells, name = '', id = crypto.randomUUID()) {
+    const room = new Room(id, name, cells);
+    this.roomMap.set(room.id, room);
+    return room;
+  }
+
+  removeRoom(id) { this.roomMap.delete(id); }
 
   // ---- 中心線操作 ----
 
@@ -741,6 +919,27 @@ export class PlanGraph {
     return snapshots;
   }
 
+  // ---- 寸法線操作 ----
+
+  /**
+   * 寸法線を追加する。
+   * @param {typeof HDimensionLine | typeof VDimensionLine} LineClass
+   * @param {object} props  dimensionKind / side / anchors / footLength / position
+   * @returns {DimensionLine}
+   */
+  addDimensionLine(LineClass, props = {}, id = crypto.randomUUID()) {
+    const d = new LineClass(id, props);
+    d._planGraph = this;   // GRID の effectiveAnchors が gridXs/gridYs を引くため
+    this.shapeMap.set(d.id, d);
+    return d;
+  }
+
+  removeDimensionLine(id) {
+    const d = this.shapeMap.get(id);
+    if (!(d instanceof DimensionLine)) return;
+    this.shapeMap.delete(id);
+  }
+
   removeShape(id) { this._removeShape(id); }
 
   /** グラフを完全にクリアする（restoreGraph の前処理用）。*/
@@ -750,6 +949,7 @@ export class PlanGraph {
     this.shapeMap.clear();
     this.intersectionMap.clear();
     this.pointMap.clear();
+    this.roomMap.clear();
   }
 
   /** 交点を取得または生成する（restoreGraph の内部参照解決用）。*/

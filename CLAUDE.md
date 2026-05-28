@@ -28,6 +28,7 @@ app/src/
 ├── renderer/
 │   ├── AxisRulerLayer.jsx     通り芯表示エリア背景
 │   ├── CenterLinesLayer.jsx   中心線・交点・ガターラベル・ガター丸
+│   ├── DimensionLayer.jsx     寸法線(GRID)描画 — 4周ガター
 │   ├── ShapesLayer.jsx        一般図形描画
 │   ├── DrawPreview.jsx        描画中プレビュー
 │   ├── CLAddPreview.jsx       通り芯追加プレビュー
@@ -58,10 +59,11 @@ app/src/
 Project
 └── Plane（平面 = 1フロア）
     └── PlanGraph（ngraph ラッパ）
-        ├── CenterLine[]  （shapeMap 内 — グリッドの源泉）
-        ├── Intersection[] （CL交点 — CL.value から computed）
-        ├── Point[]        （自由位置ノード — Arc/Circle 中心用）
-        └── Shape[]        （一般図形 — ngraph エッジ）
+        ├── CenterLine[]      （shapeMap 内 — グリッドの源泉）
+        ├── Intersection[]    （CL交点 — CL.value から computed）
+        ├── Point[]           （自由位置ノード — Arc/Circle 中心用）
+        ├── DimensionLine[]   （寸法線 — shapeMap 内、ngraphエッジなし）
+        └── Shape[]           （一般図形 — ngraph エッジ）
 ```
 
 ### Discipline（分野）
@@ -115,6 +117,17 @@ Project
 - `chamferWalls()` が自動実行され、垂直壁と水平壁の端点を交点位置に面取りスナップ（tolerance = 150mm）。
 - `reaction` で axisValue / clStart.value / clEnd.value を監視 → 自動面取り。
 
+### DimensionLine（寸法線）
+
+- 寸法図形（`kind: ShapeKind.DIMENSION`）。`HDimensionLine` (axis='X') / `VDimensionLine` (axis='Y') の2クラス。
+- `dimensionKind`: `grid`（通り芯寸法）／`center`（中心線寸法）／`control`（おさえ寸法）
+- `side`: `top` / `bottom` / `left` / `right` — 4周のどこに配置するか
+- `anchors[]`: `DimensionAnchor`（`cl` 参照型 or `coord` 固定型）。GRID では空、`effectiveAnchors` computed で labeled struct CL から動的に導出。
+- `segments`: 隣接アンカー間。`length = to.value - from.value` を整数 mm に丸めて表示。
+- GRID は `footLength=0`（足なし、塗りつぶし丸＋基準線のみ）。CL の追加・削除・移動に自動追従（MobX computed 経由）。
+- store.js 初期化時に 4 周分（top/bottom/left/right）の GRID 寸法線を自動生成。
+- ngraph エッジは持たず、`shapeMap` 内のみで管理（Wall と同じ扱い）。
+
 ---
 
 ## 画面レイアウト
@@ -144,7 +157,7 @@ Project
 | Layer | 内容 |
 |-------|------|
 | `"world"` | クリップGroupで内側に限定。中心線・図形・交点マーカー・描画プレビュー。ワールド座標系（viewport Groupでスケール適用）。 |
-| `"overlay"` | スクリーン座標系。AxisRulerLayer（ガター背景）、GutterCLMarkers（ガター丸）、CenterLineLabels（ラベル）、SnapIndicator。 |
+| `"overlay"` | スクリーン座標系。AxisRulerLayer（ガター背景）、GutterCLMarkers（ガター丸）、CenterLineLabels（ラベル）、DimensionLayer（寸法線）、SnapIndicator。 |
 | `"ui"` | 現在未使用。UI要素用予約。 |
 
 ---

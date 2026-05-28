@@ -17,6 +17,11 @@ import {
 import { useLongPress }  from './interaction/useLongPress.js';
 import { useDrawMode }   from './interaction/useDrawMode.js';
 import { useCLMove }     from './interaction/useCLMove.js';
+import { useFinishMode }   from './finish/useFinishMode.js';
+import { FinishModeLayer } from './finish/FinishModeLayer.jsx';
+import { RoomNameInput }   from './finish/RoomNameInput.jsx';
+import { FinishSidebar }   from './finish/FinishSidebar.jsx';
+import { FinishHalfModal } from './finish/FinishHalfModal.jsx';
 import { detectContext, getMenuItems } from './interaction/menuItems.js';
 import { CenterLineType, Discipline } from '@core';
 import {
@@ -27,6 +32,7 @@ import {
   GutterCLLines,
 } from './renderer/CenterLinesLayer.jsx';
 import { AxisRulerLayer } from './renderer/AxisRulerLayer.jsx';
+import { DimensionLayer } from './renderer/DimensionLayer.jsx';
 import { ShapesLayer }    from './renderer/ShapesLayer.jsx';
 import { SnapIndicator }  from './renderer/SnapIndicator.jsx';
 import { LongPressIndicator } from './renderer/LongPressIndicator.jsx';
@@ -41,7 +47,8 @@ import { CalibrationDialog }  from './ui/CalibrationDialog.jsx';
 
 const SNAP_THRESHOLD_PX = 20;
 const CL_THRESHOLD_PX   = 8;
-const GUTTER            = 48; // 通り芯表示エリアの幅 (px)
+const GUTTER            = 48; // 通り芯表示エリアの幅 (px) — 上・左・右
+const GUTTER_BOTTOM     = 56; // 下ガター高さ — 寸法数字を線の上に収めるため拡大
 
 const viewport = new Viewport(window.innerWidth, window.innerHeight, GUTTER, GUTTER);
 
@@ -61,6 +68,7 @@ const App = observer(() => {
   const [scaleInput,      setScaleInput]      = useState(null); // null=非編集, string=編集中
   const [showCalibration, setShowCalibration] = useState(false);
   const [toast,           setToast]           = useState(null); // { msg, key }
+  const [appMode,         setAppMode]         = useState('floorplan'); // 'floorplan' | 'finish'
 
   const drag          = useRef(null);
   const pinch         = useRef(null);
@@ -68,14 +76,16 @@ const App = observer(() => {
   const nearCLRef     = useRef(null);
   const drawDownRef   = useRef(null);
   const moveDownRef   = useRef(null); // CL移動: pointer-down 記録用
-  const cancelDrawRef = useRef(null);
-  const cancelMoveRef = useRef(null);
-  const gutterCLRef   = useRef(null); // ガター長押し中のCL
+  const cancelDrawRef   = useRef(null);
+  const cancelMoveRef   = useRef(null);
+  const gutterCLRef     = useRef(null); // ガター長押し中のCL
+  const finishDragDownRef = useRef(null); // 仕上げモード: pointerDown 座標
 
   const graph = project.activeGraph;
 
   const { drawState, drawStateRef, isDrawing, startDraw, completeDraw, cancelDraw } = useDrawMode(graph);
   const { moveState, moveStateRef, isMoving, startMove, updateMove, commitMove, cancelMove } = useCLMove();
+  const finishMode = useFinishMode(graph);
 
   cancelDrawRef.current = cancelDraw;
   cancelMoveRef.current = cancelMove;
@@ -147,6 +157,22 @@ const App = observer(() => {
     const { clientX, clientY } = e.evt;
     if (e.evt.touches) return;
     if (menu) return;
+
+    // ---- 仕上げモード ----
+    if (appMode === 'finish') {
+      const inGutter = clientX < GUTTER || clientY < GUTTER ||
+                       clientX > size.width - GUTTER || clientY > size.height - GUTTER_BOTTOM;
+      if (inGutter) {
+        drag.current = { lastX: clientX, lastY: clientY };
+        setIsPanning(true);
+      } else {
+        finishDragDownRef.current = { x: clientX, y: clientY };
+        const world = viewport.screenToWorld(clientX, clientY);
+        finishMode.startDrag(world.x, world.y);
+      }
+      return;
+    }
+
     if (moveStateRef.current) {
       moveDownRef.current = { x: clientX, y: clientY };
       return;
@@ -156,7 +182,7 @@ const App = observer(() => {
       return;
     }
     const inGutter = clientX < GUTTER || clientY < GUTTER ||
-                     clientX > size.width - GUTTER || clientY > size.height - GUTTER;
+                     clientX > size.width - GUTTER || clientY > size.height - GUTTER_BOTTOM;
     if (inGutter) {
       const cl = findGutterCL(clientX, clientY);
       if (cl) {
@@ -175,6 +201,23 @@ const App = observer(() => {
   const handlePointerMove = (e) => {
     const { clientX, clientY } = e.evt;
     if (menu) return;
+
+    // ---- 仕上げモード ----
+    if (appMode === 'finish') {
+      if (drag.current) {
+        const dx = clientX - drag.current.lastX;
+        const dy = clientY - drag.current.lastY;
+        drag.current.lastX = clientX;
+        drag.current.lastY = clientY;
+        viewport.pan(dx, dy);
+        return;
+      }
+      if (finishDragDownRef.current && finishMode.dragRef.current) {
+        const world = viewport.screenToWorld(clientX, clientY);
+        finishMode.updateDrag(world.x, world.y);
+      }
+      return;
+    }
 
     // パン中
     if (drag.current) {
@@ -245,6 +288,24 @@ const App = observer(() => {
 
   // ---- ポインタ Up ----
   const handlePointerUp = (e) => {
+    // ---- 仕上げモード ----
+    if (appMode === 'finish') {
+      if (finishDragDownRef.current && finishMode.dragRef.current) {
+        const down = finishDragDownRef.current;
+        const dx = e.evt.clientX - down.x;
+        const dy = e.evt.clientY - down.y;
+        if (Math.hypot(dx, dy) > 8) {
+          finishMode.commitDrag();
+        } else {
+          finishMode.cancelDrag();
+        }
+      }
+      finishDragDownRef.current = null;
+      drag.current = null;
+      setIsPanning(false);
+      return;
+    }
+
     if (moveStateRef.current) {
       const { cl, originalValue } = moveStateRef.current;
       const newValue = cl.value;
@@ -289,6 +350,13 @@ const App = observer(() => {
 
   // ---- ポインタ Leave (外アップ扱い) ----
   const handlePointerLeave = () => {
+    if (appMode === 'finish') {
+      finishMode.cancelDrag();
+      finishDragDownRef.current = null;
+      drag.current = null;
+      setIsPanning(false);
+      return;
+    }
     // CL移動中にキャンバス外に出たらキャンセル
     if (moveStateRef.current) {
       moveDownRef.current = null;
@@ -333,7 +401,7 @@ const App = observer(() => {
   function findGutterCL(sx, sy) {
     const HIT = 24; // px
     const cls = graph.centerLines.filter(cl => cl.labeled);
-    if (sy < GUTTER || sy > size.height - GUTTER) {
+    if (sy < GUTTER || sy > size.height - GUTTER_BOTTOM) {
       for (const cl of cls) {
         if (cl.centerLineType !== CenterLineType.VERTICAL) continue;
         if (Math.abs(cl.value * viewport.scaleX + viewport.offsetX - sx) < HIT) return cl;
@@ -352,7 +420,7 @@ const App = observer(() => {
   function updateSnap(clientX, clientY) {
     // 通り芯表示エリア内はスナップ・カーソル更新しない
     if (clientX < GUTTER || clientY < GUTTER ||
-        clientX > size.width - GUTTER || clientY > size.height - GUTTER) {
+        clientX > size.width - GUTTER || clientY > size.height - GUTTER_BOTTOM) {
       setSnapPoint(null);
       setNearCL(null);
       setCursorWorld(null);
@@ -647,16 +715,43 @@ const App = observer(() => {
     setScaleInput(null);
   }
 
+  const isLandscape = size.width > size.height;
+
   const cursor = menu || clDialog ? 'default'
                : isPanning        ? 'grabbing'
+               : appMode === 'finish' ? (finishMode.isDragging ? 'crosshair' : 'default')
                : isMoving         ? 'grab'
                : isDrawing        ? 'crosshair'
                : snapPoint        ? 'cell'
                : nearCL           ? 'pointer'
                : 'crosshair';
 
+  const floorName = project.activeGraph?.plane?.name ?? '1FL';
+
   return (
     <>
+      {/* モード切り替え — 上ガター内中央 */}
+      <div style={{
+        position: 'fixed', top: 0, left: '50%', transform: 'translateX(-50%)',
+        height: GUTTER, display: 'flex', alignItems: 'center', gap: 4, zIndex: 100,
+      }}>
+        {[['floorplan', '平面図'], ['finish', '仕上げ']].map(([mode, label]) => (
+          <button
+            key={mode}
+            onClick={() => setAppMode(mode)}
+            style={{
+              padding: '3px 14px', fontSize: 12, fontWeight: 600, borderRadius: 20,
+              border: 'none', cursor: 'pointer',
+              background: appMode === mode ? '#2563eb' : '#e2e8f0',
+              color:      appMode === mode ? '#fff'    : '#475569',
+              transition: 'background 0.15s',
+            }}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
       <LongPressIndicator pos={pressPos} />
 
       <RadialMenu
@@ -717,7 +812,7 @@ const App = observer(() => {
               clipX={GUTTER}
               clipY={GUTTER}
               clipWidth={size.width  - 2 * GUTTER}
-              clipHeight={size.height - 2 * GUTTER}
+              clipHeight={size.height - GUTTER - GUTTER_BOTTOM}
             >
               <Group
                 x={viewport.offsetX}
@@ -725,6 +820,15 @@ const App = observer(() => {
                 scaleX={viewport.scaleX}
                 scaleY={viewport.scaleY}
               >
+                {appMode === 'finish' && (
+                  <FinishModeLayer
+                    graph={graph}
+                    viewport={viewport}
+                    selectedRoomId={finishMode.selectedRoomId}
+                    onSelectRoom={finishMode.selectRoom}
+                    previewCells={finishMode.previewCells}
+                  />
+                )}
                 <CenterLinesLayer
                   graph={graph}
                   viewport={viewport}
@@ -744,7 +848,7 @@ const App = observer(() => {
           </Layer>
 
           <Layer name="overlay">
-            <AxisRulerLayer width={size.width} height={size.height} gutter={GUTTER} />
+            <AxisRulerLayer width={size.width} height={size.height} gutter={GUTTER} gutterBottom={GUTTER_BOTTOM} />
             <GutterCLLines
               graph={graph}
               viewport={viewport}
@@ -765,6 +869,14 @@ const App = observer(() => {
               width={size.width}
               height={size.height}
               gutter={GUTTER}
+            />
+            <DimensionLayer
+              graph={graph}
+              viewport={viewport}
+              width={size.width}
+              height={size.height}
+              gutter={GUTTER}
+              gutterBottom={GUTTER_BOTTOM}
             />
             {!menu && <SnapIndicator snap={snapPoint} viewport={viewport} />}
             {wallDialog && wallDialog.nearbyCLs?.length > 0 && (
@@ -834,6 +946,38 @@ const App = observer(() => {
           </div>
         )}
       </div>
+
+      {/* 仕上げモード: 部屋名入力ポップアップ */}
+      {appMode === 'finish' && finishMode.namingRoomId && (() => {
+        const room = graph.roomMap.get(finishMode.namingRoomId);
+        return room ? (
+          <RoomNameInput
+            room={room}
+            graph={graph}
+            viewport={viewport}
+            onConfirm={finishMode.finishNaming}
+            onCancel={finishMode.cancelNaming}
+          />
+        ) : null;
+      })()}
+
+      {/* 仕上げ表パネル */}
+      {appMode === 'finish' && finishMode.selectedRoomId && !finishMode.namingRoomId && (
+        isLandscape
+          ? <FinishSidebar
+              graph={graph}
+              selectedRoomId={finishMode.selectedRoomId}
+              onSelectRoom={finishMode.selectRoom}
+              floorName={floorName}
+              gutter={GUTTER}
+            />
+          : <FinishHalfModal
+              graph={graph}
+              selectedRoomId={finishMode.selectedRoomId}
+              onSelectRoom={finishMode.selectRoom}
+              floorName={floorName}
+            />
+      )}
 
       {toast && (
         <div key={toast.key} className="cl-toast" onClick={() => setToast(null)}>

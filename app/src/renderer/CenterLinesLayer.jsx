@@ -101,104 +101,144 @@ export const GutterCLLines = observer(({ graph, viewport, width, height, gutter 
 
   return graph.centerLines
     .filter(cl => cl.labeled && cl.discipline === Discipline.STRUCT)
-    .map(cl => {
+    .flatMap(cl => {
       if (cl.centerLineType === CenterLineType.VERTICAL) {
         const sx = cl.value * viewport.scaleX + viewport.offsetX;
-        if (sx < gutter || sx > width - gutter) return null;
-        return (
-          <Line key={cl.id} points={[sx, 0, sx, gutter]}
-            stroke="#3b82f6" strokeWidth={1} dash={[12, 4, 2, 4]} listening={false} />
-        );
+        if (sx < gutter || sx > width - gutter) return [];
+        return [
+          <Line key={`${cl.id}-t`} points={[sx, 0, sx, gutter]}
+            stroke="#3b82f6" strokeWidth={1} dash={[12, 4, 2, 4]} listening={false} />,
+          <Line key={`${cl.id}-b`} points={[sx, height - gutter, sx, height]}
+            stroke="#3b82f6" strokeWidth={1} dash={[12, 4, 2, 4]} listening={false} />,
+        ];
       }
       if (cl.centerLineType === CenterLineType.HORIZONTAL) {
         const sy = cl.value * viewport.scaleY + viewport.offsetY;
-        if (sy < gutter || sy > height - gutter) return null;
-        return (
-          <Line key={cl.id} points={[0, sy, gutter, sy]}
-            stroke="#3b82f6" strokeWidth={1} dash={[12, 4, 2, 4]} listening={false} />
-        );
+        if (sy < gutter || sy > height - gutter) return [];
+        return [
+          <Line key={`${cl.id}-l`} points={[0, sy, gutter, sy]}
+            stroke="#3b82f6" strokeWidth={1} dash={[12, 4, 2, 4]} listening={false} />,
+          <Line key={`${cl.id}-r`} points={[width - gutter, sy, width, sy]}
+            stroke="#3b82f6" strokeWidth={1} dash={[12, 4, 2, 4]} listening={false} />,
+        ];
       }
-      return null;
+      return [];
     });
 });
+
+// 丸・ラベルを外側方向にずらす量 (px)
+// 上ガターは上方向、下ガターは下方向、左右も同様
+const OUTWARD = 6;
 
 // ---- ガター内 通り芯マーカー丸 (ラベルの背景) ----
 export const GutterCLMarkers = observer(({ graph, viewport, width, height, gutter }) => {
   if (!graph) return null;
-  const r   = Math.round(gutter * 0.32);
+  const r   = Math.round(gutter * 0.25);
   const mid = gutter / 2;
 
   return graph.centerLines
     .filter(cl => cl.labeled && cl.discipline === Discipline.STRUCT)
-    .map(cl => {
+    .flatMap(cl => {
       if (cl.centerLineType === CenterLineType.VERTICAL) {
         const sx = cl.value * viewport.scaleX + viewport.offsetX;
-        if (sx < gutter || sx > width - gutter) return null;
-        return (
-          <Circle key={cl.id} x={sx} y={mid} radius={r}
-            fill="#dbeafe" stroke="#93c5fd" strokeWidth={1.5} listening={false} />
-        );
+        if (sx < gutter || sx > width - gutter) return [];
+        return [
+          <Circle key={`${cl.id}-t`} x={sx} y={mid - OUTWARD} radius={r}
+            fill="#dbeafe" stroke="#93c5fd" strokeWidth={1.5} listening={false} />,
+          <Circle key={`${cl.id}-b`} x={sx} y={height - mid + OUTWARD} radius={r}
+            fill="#dbeafe" stroke="#93c5fd" strokeWidth={1.5} listening={false} />,
+        ];
       }
       if (cl.centerLineType === CenterLineType.HORIZONTAL) {
         const sy = cl.value * viewport.scaleY + viewport.offsetY;
-        if (sy < gutter || sy > height - gutter) return null;
-        return (
-          <Circle key={cl.id} x={mid} y={sy} radius={r}
-            fill="#dbeafe" stroke="#93c5fd" strokeWidth={1.5} listening={false} />
-        );
+        if (sy < gutter || sy > height - gutter) return [];
+        return [
+          <Circle key={`${cl.id}-l`} x={mid - OUTWARD} y={sy} radius={r}
+            fill="#dbeafe" stroke="#93c5fd" strokeWidth={1.5} listening={false} />,
+          <Circle key={`${cl.id}-r`} x={width - mid + OUTWARD} y={sy} radius={r}
+            fill="#dbeafe" stroke="#93c5fd" strokeWidth={1.5} listening={false} />,
+        ];
       }
-      return null;
+      return [];
     });
 });
 
 // ---- ラベル (スクリーン空間 — overlay レイヤーで使う) ----
-// gutter: 通り芯表示エリアの幅 (px)。上帯に縦CL、左帯に横CLラベルを中央配置。
+// gutter: 通り芯表示エリアの幅 (px)。上下帯に縦CL、左右帯に横CLラベルを中央配置。
 export const CenterLineLabels = observer(({ graph, viewport, width, height, gutter = 24 }) => {
   if (!graph) return null;
 
   return graph.centerLines
     .filter(cl => cl.labeled && cl.discipline === Discipline.STRUCT)
-    .map(cl => {
+    .flatMap(cl => {
       if (cl.centerLineType === CenterLineType.VERTICAL) {
         const sx = cl.value * viewport.scaleX + viewport.offsetX;
-        if (sx < gutter || sx > width - gutter) return null;
-        return (
+        if (sx < gutter || sx > width - gutter) return [];
+        return [
           <Text
-            key={cl.id}
+            key={`${cl.id}-t`}
             x={sx - gutter / 2}
-            y={0}
+            y={-OUTWARD}
             width={gutter}
             height={gutter}
             align="center"
             verticalAlign="middle"
             text={cl.label}
-            fontSize={13}
+            fontSize={11}
             fontStyle="bold"
             fill="#3b82f6"
             listening={false}
-          />
-        );
+          />,
+          <Text
+            key={`${cl.id}-b`}
+            x={sx - gutter / 2}
+            y={height - gutter + OUTWARD}
+            width={gutter}
+            height={gutter}
+            align="center"
+            verticalAlign="middle"
+            text={cl.label}
+            fontSize={11}
+            fontStyle="bold"
+            fill="#3b82f6"
+            listening={false}
+          />,
+        ];
       }
       if (cl.centerLineType === CenterLineType.HORIZONTAL) {
         const sy = cl.value * viewport.scaleY + viewport.offsetY;
-        if (sy < gutter || sy > height - gutter) return null;
-        return (
+        if (sy < gutter || sy > height - gutter) return [];
+        return [
           <Text
-            key={cl.id}
-            x={0}
+            key={`${cl.id}-l`}
+            x={-OUTWARD}
             y={sy - gutter / 2}
             width={gutter}
             height={gutter}
             align="center"
             verticalAlign="middle"
             text={cl.label}
-            fontSize={13}
+            fontSize={11}
             fontStyle="bold"
             fill="#3b82f6"
             listening={false}
-          />
-        );
+          />,
+          <Text
+            key={`${cl.id}-r`}
+            x={width - gutter + OUTWARD}
+            y={sy - gutter / 2}
+            width={gutter}
+            height={gutter}
+            align="center"
+            verticalAlign="middle"
+            text={cl.label}
+            fontSize={11}
+            fontStyle="bold"
+            fill="#3b82f6"
+            listening={false}
+          />,
+        ];
       }
-      return null;
+      return [];
     });
 });

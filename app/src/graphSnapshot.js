@@ -1,5 +1,7 @@
 import { runInAction } from 'mobx';
-import { ShapeType } from '@core';
+import {
+  ShapeType, HDimensionLine, VDimensionLine, DimensionAnchor,
+} from '@core';
 
 function baseProps(s) {
   return {
@@ -55,6 +57,14 @@ export function serializeGraph(graph) {
     circles: gs.filter(s => s.type === ShapeType.CIRCLE).map(c => ({
       id: c.id, centerId: c.center.id, radius: c.radius,
       ...baseProps(c),
+    })),
+    dimensionLines: graph.dimensionLines.map(d => ({
+      id: d.id, axis: d.axis, dimensionKind: d.dimensionKind, side: d.side,
+      footLength: d.footLength, position: d.position,
+      anchors: d.anchors.map(a => ({
+        clId: a.cl?.id ?? null, offset: a.offset, coord: a.coord,
+      })),
+      ...baseProps(d),
     })),
   };
 }
@@ -163,6 +173,20 @@ export function restoreGraph(graph, snapshot) {
           { discipline: d.discipline, lineWeight: d.lineWeight, lineType: d.lineType, color: d.color },
           d.id);
       }
+    }
+
+    // 9. 寸法線 — CL 参照は shapeMap 経由で解決
+    for (const d of snapshot.dimensionLines ?? []) {
+      const anchors = (d.anchors ?? []).map(a => {
+        const cl = a.clId ? graph.shapeMap.get(a.clId) ?? null : null;
+        return new DimensionAnchor({ cl, offset: a.offset ?? 0, coord: a.coord ?? null });
+      });
+      const LineClass = d.axis === 'X' ? HDimensionLine : VDimensionLine;
+      graph.addDimensionLine(LineClass, {
+        dimensionKind: d.dimensionKind, side: d.side,
+        anchors, footLength: d.footLength, position: d.position,
+        discipline: d.discipline, lineWeight: d.lineWeight, lineType: d.lineType, color: d.color,
+      }, d.id);
     }
   });
 }
