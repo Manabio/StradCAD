@@ -517,6 +517,59 @@ const App = observer(() => {
           setToast({ msg: ERR_CL_DUPLICATE(kind), key: Date.now() });
           return;
         }
+        // 端点共有の隣接CLは1本に統合する
+        const newLoRef = extentProps.extentLoRef;
+        const newHiRef = extentProps.extentHiRef;
+        if (newLoRef && newHiRef) {
+          const adjacent = graph.centerLines.find(cl => {
+            if (cl.centerLineType !== clType || Math.abs(cl.value - value) >= OVERLAP_TOL) return false;
+            if (!cl.extentLoRef || !cl.extentHiRef) return false;
+            const ek = cl.lineType === 'dashed' ? 'aux' : cl.discipline === Discipline.STRUCT ? 'struct' : 'center';
+            return ek === kind && (cl.extentLoRef.clId === newHiRef.clId || cl.extentHiRef.clId === newLoRef.clId);
+          });
+          if (adjacent) {
+            const touchesLeft = adjacent.extentLoRef.clId === newHiRef.clId;
+            const mergedLoRef = touchesLeft ? newLoRef             : adjacent.extentLoRef;
+            const mergedHiRef = touchesLeft ? adjacent.extentHiRef : newHiRef;
+            const mergedLoCL  = graph.shapeMap.get(mergedLoRef.clId) ?? null;
+            const mergedHiCL  = graph.shapeMap.get(mergedHiRef.clId) ?? null;
+            const oldLoRef = adjacent.extentLoRef;
+            const oldHiRef = adjacent.extentHiRef;
+            const oldLoCL  = adjacent._extentLoCL;
+            const oldHiCL  = adjacent._extentHiCL;
+            const oldLo    = adjacent._extentLo;
+            const oldHi    = adjacent._extentHi;
+            runInAction(() => {
+              adjacent.extentLoRef = mergedLoRef;
+              adjacent.extentHiRef = mergedHiRef;
+              adjacent._extentLoCL  = mergedLoCL;
+              adjacent._extentHiCL  = mergedHiCL;
+              adjacent._extentLo    = null;
+              adjacent._extentHi    = null;
+            });
+            undoManager.push(
+              () => runInAction(() => {
+                adjacent.extentLoRef = oldLoRef;
+                adjacent.extentHiRef = oldHiRef;
+                adjacent._extentLoCL  = oldLoCL;
+                adjacent._extentHiCL  = oldHiCL;
+                adjacent._extentLo    = oldLo;
+                adjacent._extentHi    = oldHi;
+              }),
+              () => runInAction(() => {
+                adjacent.extentLoRef = mergedLoRef;
+                adjacent.extentHiRef = mergedHiRef;
+                adjacent._extentLoCL  = mergedLoCL;
+                adjacent._extentHiCL  = mergedHiCL;
+                adjacent._extentLo    = null;
+                adjacent._extentHi    = null;
+              }),
+            );
+            setClDialog(null);
+            setClPreview(null);
+            return;
+          }
+        }
       }
 
       if (kind === 'struct' && existingKind === 'center') {
