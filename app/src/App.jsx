@@ -12,6 +12,7 @@ import {
   findNearestCenterLine,
   findCLMoveSnap,
   findBracketingCLs,
+  findNearbyCenterLines,
 } from './snap.js';
 import { useLongPress }  from './interaction/useLongPress.js';
 import { useDrawMode }   from './interaction/useDrawMode.js';
@@ -90,7 +91,7 @@ const App = observer(() => {
   // ---- ガター通り芯 長押しフック ----
   const gutterLongPress = useLongPress({
     onStart:  (sx, sy) => setPressPos({ x: sx, y: sy }),
-    onFire:   (sx, sy) => {
+    onFire:   () => {
       setPressPos(null);
       const cl = gutterCLRef.current;
       if (cl) startMove(cl);
@@ -368,25 +369,29 @@ const App = observer(() => {
 
   // ---- メニュー選択 ----
   function handleMenuSelect(item) {
-    if (item.id === 'cl-v')    { setClDialog({ type: 'vertical',   worldCoord: menu.worldPos.x, perpCoord: menu.worldPos.y }); return; }
-    if (item.id === 'cl-h')    { setClDialog({ type: 'horizontal', worldCoord: menu.worldPos.y, perpCoord: menu.worldPos.x }); return; }
+    if (item.id === 'cl-v' || item.id === 'cl-h') {
+      const isV  = item.id === 'cl-v';
+      const pos  = menu.worldPos;
+      const clType = isV ? CenterLineType.VERTICAL : CenterLineType.HORIZONTAL;
+      const nearbyCLs = findNearbyCenterLines(
+        graph, pos.x, pos.y, SNAP_THRESHOLD_PX * 2,
+        viewport.scaleX, viewport.scaleY, clType
+      );
+      setClDialog({
+        type:       isV ? 'vertical' : 'horizontal',
+        worldCoord: isV ? pos.x : pos.y,
+        perpCoord:  isV ? pos.y : pos.x,
+        worldPos:   pos,
+        nearbyCLs,
+      });
+      return;
+    }
     if (item.id === 'wall') {
       const pos   = menu.worldPos;
-      const txW   = (SNAP_THRESHOLD_PX * 2) / viewport.scaleX;
-      const tyW   = (SNAP_THRESHOLD_PX * 2) / viewport.scaleY;
-      const nearbyCLs = graph.centerLines
-        .filter(cl => {
-          if (cl.labeled) return false;
-          const dist = cl.centerLineType === CenterLineType.VERTICAL
-            ? Math.abs(pos.x - cl.value)
-            : Math.abs(pos.y - cl.value);
-          return dist <= (cl.centerLineType === CenterLineType.VERTICAL ? txW : tyW);
-        })
-        .sort((a, b) => {
-          const da = a.centerLineType === CenterLineType.VERTICAL ? Math.abs(pos.x - a.value) : Math.abs(pos.y - a.value);
-          const db = b.centerLineType === CenterLineType.VERTICAL ? Math.abs(pos.x - b.value) : Math.abs(pos.y - b.value);
-          return da - db;
-        });
+      const nearbyCLs = findNearbyCenterLines(
+        graph, pos.x, pos.y, SNAP_THRESHOLD_PX * 2,
+        viewport.scaleX, viewport.scaleY
+      );
       setWallDialog({ worldPos: pos, nearbyCLs });
       return;
     }
@@ -595,6 +600,7 @@ const App = observer(() => {
           type={clDialog.type}
           worldCoord={clDialog.worldCoord}
           gridCLs={clDialog.type === 'vertical' ? graph.gridXs : graph.gridYs}
+          nearbyCLs={clDialog.nearbyCLs ?? []}
           onConfirm={handleCLDialogConfirm}
           onCancel={() => { setClDialog(null); setClPreview(null); }}
           onPreviewChange={setClPreview}
@@ -687,6 +693,13 @@ const App = observer(() => {
               <WallRefIndicator
                 nearbyCLs={wallDialog.nearbyCLs}
                 worldPos={wallDialog.worldPos}
+                viewport={viewport}
+              />
+            )}
+            {clDialog && clDialog.nearbyCLs?.length > 0 && (
+              <WallRefIndicator
+                nearbyCLs={clDialog.nearbyCLs}
+                worldPos={clDialog.worldPos}
                 viewport={viewport}
               />
             )}

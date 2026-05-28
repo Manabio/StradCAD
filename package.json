@@ -1,0 +1,14 @@
+{
+  "name": "strad",
+  "private": true,
+  "version": "0.0.0",
+  "workspaces": [
+    "app"
+  ],
+  "scripts": {
+    "dev": "npm --prefix app run dev",
+    "build": "npm --prefix app run build",
+    "lint": "npm --prefix app run lint",
+    "preview": "npm --prefix app run preview"
+  }
+}

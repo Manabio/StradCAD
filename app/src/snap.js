@@ -46,6 +46,34 @@ export function findCLMoveSnap(graph, movingCL, wx, wy, thresholdPx, scaleX, sca
 }
 
 /**
+ * 長押し位置に近接する中心線（ラベルなし）を参照元候補として返す。
+ * - clType を渡すと同種CLのみ（線分追加）。null なら垂直/水平両方（壁追加）。
+ * - はね出し（オーバーハング）部分は除外: 沿線座標が実範囲 [extentLo, extentHi] 内のCLのみ。
+ * - スクリーン距離が近い順にソート。
+ */
+export function findNearbyCenterLines(graph, wx, wy, thresholdPx, scaleX, scaleY, clType = null) {
+  if (!graph) return [];
+  const hits = [];
+  for (const cl of graph.centerLines) {
+    if (cl.labeled) continue;
+    const isV = cl.centerLineType === 'X';
+    const isH = cl.centerLineType === 'Y';
+    if (!isV && !isH) continue;
+    if (clType && cl.centerLineType !== clType) continue;
+    const scale = isV ? scaleX : scaleY;
+    const perp  = isV ? wx : wy;  // 線に垂直な座標
+    const along = isV ? wy : wx;  // 線に沿った座標
+    const dist  = Math.abs(cl.value - perp) * scale;
+    if (dist >= thresholdPx) continue;
+    // はね出し除外: 沿線座標が実範囲外なら候補から外す
+    if (cl.extentLo != null && cl.extentHi != null &&
+        (along < cl.extentLo || along > cl.extentHi)) continue;
+    hits.push({ cl, dist });
+  }
+  return hits.sort((a, b) => a.dist - b.dist).map(h => h.cl);
+}
+
+/**
  * coord を挟む CL ペアを返す。
  */
 export function findBracketingCLs(cls, coord) {

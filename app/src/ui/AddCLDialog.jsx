@@ -7,19 +7,25 @@ const KINDS = [
   { id: 'aux',    label: '補助線', hint: 'ラベルなし補助線（破線）' },
 ];
 
+const CIRCLE_NUMS = ['①', '②', '③', '④', '⑤', '⑥', '⑦', '⑧', '⑨', '⑩'];
+
 /**
  * 通り芯追加ダイアログ
  *
  * Y軸は上が正・下が負（表示座標 = −ワールドY）。
  * onConfirm(worldValue, kind) : kind = 'center'|'struct'|'aux'
  */
-export function AddCLDialog({ type, worldCoord, gridCLs, onConfirm, onCancel, onPreviewChange }) {
+export function AddCLDialog({ type, worldCoord, gridCLs, nearbyCLs = [], onConfirm, onCancel, onPreviewChange }) {
   const isV  = type === 'vertical';
   const sign = isV ? 1 : -1;
   const axisLabel = isV ? 'X' : 'Y';
 
-  const nearest = gridCLs.length > 0
-    ? gridCLs.reduce((best, cl) =>
+  const nearbyIds  = new Set(nearbyCLs.map(cl => cl.id));
+  const gridOnly   = gridCLs.filter(cl => !nearbyIds.has(cl.id));
+  const allOptions = [...nearbyCLs, ...gridOnly];
+
+  const nearest = allOptions.length > 0
+    ? allOptions.reduce((best, cl) =>
         Math.abs(cl.value - worldCoord) < Math.abs(best.value - worldCoord) ? cl : best
       )
     : null;
@@ -33,7 +39,7 @@ export function AddCLDialog({ type, worldCoord, gridCLs, onConfirm, onCancel, on
       : String(Math.round(sign * worldCoord))
   );
 
-  const refCL = gridCLs.find(cl => cl.id === refId) ?? null;
+  const refCL = allOptions.find(cl => cl.id === refId) ?? null;
 
   // direction from ref to target (positive = right/down in world coords)
   const dir = refCL ? (worldCoord >= refCL.value ? 1 : -1) : null;
@@ -54,7 +60,7 @@ export function AddCLDialog({ type, worldCoord, gridCLs, onConfirm, onCancel, on
   function handleRefChange(e) {
     const id = e.target.value;
     setRefId(id);
-    const cl = gridCLs.find(c => c.id === id);
+    const cl = allOptions.find(c => c.id === id);
     setDistStr(cl
       ? String(Math.round(Math.abs(worldCoord - cl.value)))
       : String(Math.round(sign * worldCoord))
@@ -92,15 +98,28 @@ export function AddCLDialog({ type, worldCoord, gridCLs, onConfirm, onCancel, on
           <span className="cl-dialog-label">参照</span>
           <select value={refId} onChange={handleRefChange}>
             <option value="">なし（絶対座標）</option>
-            {gridCLs.map(cl => (
-              <option key={cl.id} value={cl.id}>{cl.label}</option>
-            ))}
+            {nearbyCLs.length > 0 && (
+              <optgroup label="近接する中心線">
+                {nearbyCLs.map((cl, i) => (
+                  <option key={cl.id} value={cl.id}>
+                    {CIRCLE_NUMS[i] ?? `(${i + 1})`} {cl.label || '中心線'}
+                  </option>
+                ))}
+              </optgroup>
+            )}
+            {gridOnly.length > 0 && (
+              <optgroup label="グリッドCL">
+                {gridOnly.map(cl => (
+                  <option key={cl.id} value={cl.id}>{cl.label || cl.id}</option>
+                ))}
+              </optgroup>
+            )}
           </select>
         </label>
 
         <label className="cl-dialog-row">
           <span className="cl-dialog-label">
-            {refCL ? `${refCL.label}` : `${axisLabel} =`}
+            {refCL ? (refCL.label || '中心線') : `${axisLabel} =`}
           </span>
           {dirLabel && <span className="cl-dialog-dir">{dirLabel}</span>}
           <input
