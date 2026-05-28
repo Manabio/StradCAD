@@ -95,6 +95,33 @@ export const IntersectionMarkers = observer(({ graph, viewport }) => {
   ));
 });
 
+// ---- ガター内 通り芯線 (丸の下に重なる線分) ----
+export const GutterCLLines = observer(({ graph, viewport, width, height, gutter }) => {
+  if (!graph) return null;
+
+  return graph.centerLines
+    .filter(cl => cl.labeled && cl.discipline === Discipline.STRUCT)
+    .map(cl => {
+      if (cl.centerLineType === CenterLineType.VERTICAL) {
+        const sx = cl.value * viewport.scaleX + viewport.offsetX;
+        if (sx < gutter || sx > width - gutter) return null;
+        return (
+          <Line key={cl.id} points={[sx, 0, sx, gutter]}
+            stroke="#3b82f6" strokeWidth={1} dash={[12, 4, 2, 4]} listening={false} />
+        );
+      }
+      if (cl.centerLineType === CenterLineType.HORIZONTAL) {
+        const sy = cl.value * viewport.scaleY + viewport.offsetY;
+        if (sy < gutter || sy > height - gutter) return null;
+        return (
+          <Line key={cl.id} points={[0, sy, gutter, sy]}
+            stroke="#3b82f6" strokeWidth={1} dash={[12, 4, 2, 4]} listening={false} />
+        );
+      }
+      return null;
+    });
+});
+
 // ---- ガター内 通り芯マーカー丸 (ラベルの背景) ----
 export const GutterCLMarkers = observer(({ graph, viewport, width, height, gutter }) => {
   if (!graph) return null;

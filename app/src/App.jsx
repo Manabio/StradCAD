@@ -24,6 +24,7 @@ import {
   IntersectionMarkers,
   CenterLineLabels,
   GutterCLMarkers,
+  GutterCLLines,
 } from './renderer/CenterLinesLayer.jsx';
 import { AxisRulerLayer } from './renderer/AxisRulerLayer.jsx';
 import { ShapesLayer }    from './renderer/ShapesLayer.jsx';
@@ -744,6 +745,13 @@ const App = observer(() => {
 
           <Layer name="overlay">
             <AxisRulerLayer width={size.width} height={size.height} gutter={GUTTER} />
+            <GutterCLLines
+              graph={graph}
+              viewport={viewport}
+              width={size.width}
+              height={size.height}
+              gutter={GUTTER}
+            />
             <GutterCLMarkers
               graph={graph}
               viewport={viewport}
