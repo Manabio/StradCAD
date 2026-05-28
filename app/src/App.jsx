@@ -360,7 +360,7 @@ const App = observer(() => {
     const world = viewport.screenToWorld(clientX, clientY);
     const snap  = findNearestIntersection(graph, world.x, world.y, SNAP_THRESHOLD_PX, viewport.scaleX, viewport.scaleY);
     // 交点スナップ中は CL 検出不要
-    const cl    = snap ? null : findNearestCenterLine(graph, world.x, world.y, CL_THRESHOLD_PX, viewport.scaleX, viewport.scaleY);
+    const cl    = snap ? null : findNearestCenterLine(graph, world.x, world.y, CL_THRESHOLD_PX, viewport.scaleX, viewport.scaleY, viewport);
     setSnapPoint(snap ?? null);
     setNearCL(cl ?? null);
     setCursorWorld(world);
@@ -464,7 +464,34 @@ const App = observer(() => {
     if (!clDialog) return;
     const clType = clDialog.type === 'vertical' ? CenterLineType.VERTICAL : CenterLineType.HORIZONTAL;
 
-    // ---- 重複チェック ----
+    // center / aux: 追加時点の全直交CLでブラケット判定し延伸範囲を確定（既存CLの長さは変えない）
+    let extentProps = {};
+    let newExtentLo = null, newExtentHi = null;
+    if (kind === 'center' || kind === 'aux') {
+      const perpType = clType === CenterLineType.VERTICAL ? CenterLineType.HORIZONTAL : CenterLineType.VERTICAL;
+      const wc = clDialog.worldCoord;
+      const perpCLs = graph.centerLines.filter(cl => {
+        if (cl.centerLineType !== perpType) return false;
+        // 非ラベルCL: extentLo/Hi の実範囲（はね出し前）に新規CLの座標が含まれるものだけ対象
+        if (!cl.labeled && cl.extentLo != null && cl.extentHi != null) {
+          if (wc < cl.extentLo || wc > cl.extentHi) return false;
+        }
+        return true;
+      });
+      const [loCL, hiCL] = findBracketingCLs(perpCLs, clDialog.perpCoord);
+      newExtentLo = loCL ? loCL.value : (perpCLs.length ? Math.min(...perpCLs.map(c => c.value)) : null);
+      newExtentHi = hiCL ? hiCL.value : (perpCLs.length ? Math.max(...perpCLs.map(c => c.value)) : null);
+      extentProps = {
+        labeled:     false,
+        extentLoRef: loCL ? { clId: loCL.id, offset: 0 } : null,
+        extentHiRef: hiCL ? { clId: hiCL.id, offset: 0 } : null,
+        // loCL/hiCL が見つからない場合のみ静的フォールバックを使う
+        extentLo:    !loCL ? newExtentLo : null,
+        extentHi:    !hiCL ? newExtentHi : null,
+      };
+    }
+
+    // ---- 重複チェック（extent計算後に実施） ----
     const OVERLAP_TOL = 0.5; // mm
     const existing = graph.centerLines.find(
       cl => cl.centerLineType === clType && Math.abs(cl.value - value) < OVERLAP_TOL
@@ -475,8 +502,21 @@ const App = observer(() => {
         : 'center';
 
       if (kind === existingKind) {
-        setToast({ msg: ERR_CL_DUPLICATE(kind), key: Date.now() });
-        return;
+        if (kind === 'struct') {
+          setToast({ msg: ERR_CL_DUPLICATE(kind), key: Date.now() });
+          return;
+        }
+        // center / aux: extent が重ならなければ追加を許可
+        const exLo = existing.extentLo;
+        const exHi = existing.extentHi;
+        const extentsOverlap =
+          newExtentLo == null || newExtentHi == null ||
+          exLo == null || exHi == null ||
+          !(newExtentHi <= exLo || newExtentLo >= exHi);
+        if (extentsOverlap) {
+          setToast({ msg: ERR_CL_DUPLICATE(kind), key: Date.now() });
+          return;
+        }
       }
 
       if (kind === 'struct' && existingKind === 'center') {
@@ -525,29 +565,6 @@ const App = observer(() => {
       }
     }
 
-    // 中心線: 追加時点の全直交CLでブラケット判定し延伸範囲を確定（既存CLの長さは変えない）
-    let extentProps = {};
-    if (kind === 'center') {
-      const perpType = clType === CenterLineType.VERTICAL ? CenterLineType.HORIZONTAL : CenterLineType.VERTICAL;
-      const wc = clDialog.worldCoord;
-      const perpCLs = graph.centerLines.filter(cl => {
-        if (cl.centerLineType !== perpType) return false;
-        // 非ラベルCL: extentLo/Hi の実範囲（はね出し前）に新規CLの座標が含まれるものだけ対象
-        if (!cl.labeled && cl.extentLo != null && cl.extentHi != null) {
-          if (wc < cl.extentLo || wc > cl.extentHi) return false;
-        }
-        return true;
-      });
-      const [loCL, hiCL] = findBracketingCLs(perpCLs, clDialog.perpCoord);
-      extentProps = {
-        labeled:     false,
-        extentLoRef: loCL ? { clId: loCL.id, offset: 0 } : null,
-        extentHiRef: hiCL ? { clId: hiCL.id, offset: 0 } : null,
-        // loCL/hiCL が見つからない場合のみ静的フォールバックを使う
-        extentLo:    !loCL ? (perpCLs.length ? Math.min(...perpCLs.map(c => c.value)) : null) : null,
-        extentHi:    !hiCL ? (perpCLs.length ? Math.max(...perpCLs.map(c => c.value)) : null) : null,
-      };
-    }
     const props = {
       ...extentProps,
       ...(kind === 'struct' ? { discipline: Discipline.STRUCT } : {}),

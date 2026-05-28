@@ -1,6 +1,27 @@
 // スナップ計算はすべてスクリーン空間距離 (px) で判定する。
 // threshold は px 単位で渡し、ワールド差分に scaleX/Y を掛けてスクリーン距離に換算する。
 
+// 中心線の端のはね出し量 (mm)。区分線形:
+//   denom <  BASE_DENOM         : (LOW_DENOM, LOW_MM) → (BASE_DENOM, BASE_MM) の直線
+//   BASE_DENOM ≤ denom ≤ ZERO_DENOM: (BASE_DENOM, BASE_MM) → (ZERO_DENOM, 0) の直線
+//   denom >  ZERO_DENOM         : 0
+const OVERHANG_LOW_DENOM  = 50;
+const OVERHANG_LOW_MM     = 200;
+const OVERHANG_BASE_DENOM = 100;
+const OVERHANG_BASE_MM    = 300;
+const OVERHANG_ZERO_DENOM = 500;
+export function overhangMm(viewport, trim) {
+  if (trim) return 0;
+  const denom = viewport.scaleDenominator;
+  if (denom >= OVERHANG_ZERO_DENOM) return 0;
+  if (denom >= OVERHANG_BASE_DENOM) {
+    const t = (denom - OVERHANG_BASE_DENOM) / (OVERHANG_ZERO_DENOM - OVERHANG_BASE_DENOM);
+    return OVERHANG_BASE_MM * (1 - t);
+  }
+  const t = (denom - OVERHANG_LOW_DENOM) / (OVERHANG_BASE_DENOM - OVERHANG_LOW_DENOM);
+  return Math.max(0, OVERHANG_LOW_MM + (OVERHANG_BASE_MM - OVERHANG_LOW_MM) * t);
+}
+
 export function findNearestIntersection(graph, wx, wy, thresholdPx, scaleX, scaleY) {
   if (!graph) return null;
   let nearest = null, minDist = Infinity;
@@ -15,15 +36,26 @@ export function findNearestIntersection(graph, wx, wy, thresholdPx, scaleX, scal
  * カーソルに最も近い中心線を返す。
  * VERTICAL  → X 方向スクリーン距離
  * HORIZONTAL → Y 方向スクリーン距離
+ * viewport を渡すと、ラベルなしCLの描画範囲（オーバーハング込み）外を除外する。
  */
-export function findNearestCenterLine(graph, wx, wy, thresholdPx, scaleX, scaleY) {
+export function findNearestCenterLine(graph, wx, wy, thresholdPx, scaleX, scaleY, viewport = null) {
   if (!graph) return null;
   let nearest = null, minDist = Infinity;
   for (const cl of graph.centerLines) {
-    const dist = cl.centerLineType === 'X' ? Math.abs(cl.value - wx) * scaleX
-               : cl.centerLineType === 'Y' ? Math.abs(cl.value - wy) * scaleY
+    const isV  = cl.centerLineType === 'X';
+    const isH  = cl.centerLineType === 'Y';
+    const dist = isV ? Math.abs(cl.value - wx) * scaleX
+               : isH ? Math.abs(cl.value - wy) * scaleY
                : Infinity;
-    if (dist < thresholdPx && dist < minDist) { minDist = dist; nearest = cl; }
+    if (dist >= thresholdPx || dist >= minDist) continue;
+    // ラベルなしCL: extentLo/Hi が設定されていれば描画範囲（オーバーハング込み）外を除外
+    if (!cl.labeled && cl.extentLo != null && cl.extentHi != null) {
+      const along    = isV ? wy : wx;
+      const overhang = viewport ? overhangMm(viewport, cl.trim) : 0;
+      if (along < cl.extentLo - overhang || along > cl.extentHi + overhang) continue;
+    }
+    minDist = dist;
+    nearest = cl;
   }
   return nearest;
 }

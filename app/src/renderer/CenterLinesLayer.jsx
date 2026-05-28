@@ -1,6 +1,7 @@
 import { observer } from 'mobx-react-lite';
 import { Line, Circle, Text } from 'react-konva';
 import { CenterLineType, Discipline } from '@core';
+import { overhangMm } from '../snap.js';
 
 // ビューポートのワールド座標範囲 (フォールバック用)
 function viewportBounds(viewport, width, height) {
@@ -11,27 +12,6 @@ function viewportBounds(viewport, width, height) {
     yMin: (0      - viewport.offsetY) / viewport.scaleY - m,
     yMax: (height - viewport.offsetY) / viewport.scaleY + m,
   };
-}
-
-// 中心線の端のはね出し量 (mm)。区分線形:
-//   denom <  BASE_DENOM         : (LOW_DENOM, LOW_MM) → (BASE_DENOM, BASE_MM) の直線
-//   BASE_DENOM ≤ denom ≤ ZERO_DENOM: (BASE_DENOM, BASE_MM) → (ZERO_DENOM, 0) の直線
-//   denom >  ZERO_DENOM         : 0
-const OVERHANG_LOW_DENOM  = 50;
-const OVERHANG_LOW_MM     = 200;
-const OVERHANG_BASE_DENOM = 100;
-const OVERHANG_BASE_MM    = 300;
-const OVERHANG_ZERO_DENOM = 500;
-function overhangMm(viewport, trim) {
-  if (trim) return 0;
-  const denom = viewport.scaleDenominator;
-  if (denom >= OVERHANG_ZERO_DENOM) return 0;
-  if (denom >= OVERHANG_BASE_DENOM) {
-    const t = (denom - OVERHANG_BASE_DENOM) / (OVERHANG_ZERO_DENOM - OVERHANG_BASE_DENOM);
-    return OVERHANG_BASE_MM * (1 - t);
-  }
-  const t = (denom - OVERHANG_LOW_DENOM) / (OVERHANG_BASE_DENOM - OVERHANG_LOW_DENOM);
-  return Math.max(0, OVERHANG_LOW_MM + (OVERHANG_BASE_MM - OVERHANG_LOW_MM) * t);
 }
 
 // 中心線の描画延伸範囲を返す [lo, hi]
