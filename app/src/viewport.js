@@ -1,6 +1,34 @@
 import { makeObservable, observable, computed, action } from 'mobx';
+import { LINE_WEIGHT_MM } from '@core';
 
 export const DEFAULT_PX_PER_MM = 96 / 25.4;
+
+// 壁・開口の3段階LOD描画の閾値（scaleDenominator 基準）
+export const LOD_SCHEMATIC_DENOM = 90; // scaleDenominator >= 90 → 略図（1/90 を含む）
+export const LOD_DETAIL_DENOM    = 60; // scaleDenominator <= 60 → 詳細（1/60 を含む）
+export const LodLevel = { SCHEMATIC: 'schematic', STANDARD: 'standard', DETAIL: 'detail' };
+
+// lineWeight(mm) をワールド空間の strokeWidth に変換する（ズーム追従、最低1px相当を保証）。
+// 壁・開口・一般図形・構造部材（柱・梁・耐力壁・スラブ）が共通で使う。
+export function resolveStrokeWidth(lineWeight, scale) {
+  return Math.max(1 / scale, lineWeight);
+}
+
+// mm定義 + 校正値(px/mm) から、4段階が常に1px以上の差で見分けられるpxを算出する。
+// 通り芯・寸法線・敷地線など、ズームに関わらず太さを固定する注記レイヤーが使う。
+export function resolveLineWeightsPx(pxPerMm) {
+  const toPx = (mm) => Math.max(1, Math.round(mm * pxPerMm));
+  const w = {
+    thin:       toPx(LINE_WEIGHT_MM.thin),
+    medium:     toPx(LINE_WEIGHT_MM.medium),
+    thick:      toPx(LINE_WEIGHT_MM.thick),
+    ultraThick: toPx(LINE_WEIGHT_MM.ultraThick),
+  };
+  if (w.medium     <= w.thin)   w.medium     = w.thin + 1;
+  if (w.thick      <= w.medium) w.thick      = w.medium + 1;
+  if (w.ultraThick <= w.thick)  w.ultraThick = w.thick + 1;
+  return w;
+}
 
 function loadCalibration() {
   try {
@@ -10,7 +38,9 @@ function loadCalibration() {
     // 旧フォーマット (単一値) にフォールバック
     const v = parseFloat(localStorage.getItem('strad_pxPerMm'));
     if (isFinite(v) && v > 0) return [v, v];
-  } catch {}
+  } catch {
+    // localStorage 不可時はデフォルト値にフォールバック
+  }
   return [DEFAULT_PX_PER_MM, DEFAULT_PX_PER_MM];
 }
 
@@ -38,6 +68,8 @@ export class Viewport {
       scaleX:           observable,
       scaleY:           observable,
       scaleDenominator: computed,
+      lodLevel:         computed,
+      lineWeightsPx:    computed,
       pan:              action,
       zoomAt:           action,
       reset:            action,
@@ -87,11 +119,26 @@ export class Viewport {
     try {
       localStorage.setItem('strad_pxPerMmX', String(newPxPerMmX));
       localStorage.setItem('strad_pxPerMmY', String(newPxPerMmY));
-    } catch {}
+    } catch {
+      // localStorage 不可時は保存をスキップ
+    }
   }
 
   // X 軸基準の縮尺分母 (= pxPerMmY / scaleY と等しく保たれる)
   get scaleDenominator() {
     return Math.round(this.pxPerMmX / this.scaleX);
+  }
+
+  // 壁・開口の3段階LOD描画レベル（略図 / 標準 / 詳細）
+  get lodLevel() {
+    const d = this.scaleDenominator;
+    if (d >= LOD_SCHEMATIC_DENOM) return LodLevel.SCHEMATIC;
+    if (d <= LOD_DETAIL_DENOM)    return LodLevel.DETAIL;
+    return LodLevel.STANDARD;
+  }
+
+  // 校正値ベースの注記レイヤー用4段階px（ズーム非依存、校正値が変わった時のみ再計算）
+  get lineWeightsPx() {
+    return resolveLineWeightsPx((this.pxPerMmX + this.pxPerMmY) / 2);
   }
 }

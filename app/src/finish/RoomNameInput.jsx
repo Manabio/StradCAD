@@ -1,7 +1,15 @@
 import { useEffect, useRef, useState } from 'react';
+import { observer } from 'mobx-react-lite';
 import { roomBounds } from './gridCells.js';
+import { RoomKind } from '@core';
 
-export function RoomNameInput({ room, graph, viewport, onConfirm, onCancel }) {
+const KIND_OPTIONS = [
+  { value: RoomKind.INTERIOR, label: '屋内' },
+  { value: RoomKind.VOID,     label: '吹抜け' },
+  { value: RoomKind.EXTERIOR, label: '屋外' },
+];
+
+export const RoomNameInput = observer(({ room, graph, viewport, onConfirm, onCancel }) => {
   const [value, setValue] = useState(room.name || '');
   const inputRef = useRef(null);
 
@@ -54,6 +62,27 @@ export function RoomNameInput({ room, graph, viewport, onConfirm, onCancel }) {
           boxSizing: 'border-box',
         }}
       />
+      <div style={{ display: 'flex', gap: 4 }}>
+        {KIND_OPTIONS.map(opt => (
+          <button
+            key={opt.value}
+            onClick={() => room.setKind(opt.value)}
+            style={{
+              flex: 1,
+              fontSize: 12,
+              padding: '5px 0',
+              borderRadius: 6,
+              border: room.kind === opt.value ? '1px solid #2563eb' : '1px solid #cbd5e1',
+              background: room.kind === opt.value ? '#eff6ff' : '#fff',
+              color: room.kind === opt.value ? '#2563eb' : '#475569',
+              fontWeight: room.kind === opt.value ? 700 : 400,
+              cursor: 'pointer',
+            }}
+          >
+            {opt.label}
+          </button>
+        ))}
+      </div>
       <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
         <button
           onClick={() => onCancel(room.id)}
@@ -70,7 +99,7 @@ export function RoomNameInput({ room, graph, viewport, onConfirm, onCancel }) {
       </div>
     </div>
   );
-}
+});
 
 function btnStyle(bg, color) {
   return {

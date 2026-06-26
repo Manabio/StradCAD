@@ -5,8 +5,8 @@ const CIRCLE_NUMS = ['①', '②', '③', '④', '⑤', '⑥', '⑦', '⑧', '�
 export function WallRefIndicator({ nearbyCLs, worldPos, viewport }) {
   return nearbyCLs.map((cl, i) => {
     const isV = cl.centerLineType === 'X';
-    const wx  = isV ? cl.value   : worldPos.x;
-    const wy  = isV ? worldPos.y : cl.value;
+    const wx  = isV ? cl.effectiveValue : worldPos.x;
+    const wy  = isV ? worldPos.y       : cl.effectiveValue;
     const sx  = wx * viewport.scaleX + viewport.offsetX;
     const sy  = wy * viewport.scaleY + viewport.offsetY;
     return (

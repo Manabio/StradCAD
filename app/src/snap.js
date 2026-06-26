@@ -1,5 +1,7 @@
 // スナップ計算はすべてスクリーン空間距離 (px) で判定する。
 // threshold は px 単位で渡し、ワールド差分に scaleX/Y を掛けてスクリーン距離に換算する。
+import { spatialIndex } from './store.js';
+import { findHostWall } from './openings/openingGeometry.js';
 
 // 中心線の端のはね出し量 (mm)。区分線形:
 //   denom <  BASE_DENOM         : (LOW_DENOM, LOW_MM) → (BASE_DENOM, BASE_MM) の直線
@@ -24,8 +26,15 @@ export function overhangMm(viewport, trim) {
 
 export function findNearestIntersection(graph, wx, wy, thresholdPx, scaleX, scaleY) {
   if (!graph) return null;
+  // R-Tree でワールド半径の候補を絞り込む（O(log n)）
+  const worldRadius = thresholdPx / Math.min(scaleX, scaleY);
+  const { intersections: candidates } = spatialIndex.query(wx, wy, worldRadius);
+  if (candidates.length === 0) return null;
+  // スクリーン距離で最終判定（n.x/y は effectiveValue = 描画位置）
   let nearest = null, minDist = Infinity;
-  for (const n of graph.intersections) {
+  for (const e of candidates) {
+    const n = spatialIndex.getNode(e.id);
+    if (!n) continue;
     const dist = Math.hypot((n.x - wx) * scaleX, (n.y - wy) * scaleY);
     if (dist < thresholdPx && dist < minDist) { minDist = dist; nearest = n; }
   }
@@ -116,9 +125,43 @@ export function findBracketingCLs(cls, coord) {
     if (d <= 0 && -d < loDist) { loDist = -d; lo = cl; }
     if (d > 0  && d  < hiDist) { hiDist = d;  hi = cl; }
   }
-  if (lo && hi) return [lo, hi];
-  const sorted = [...cls].sort((a, b) => Math.abs(a.value - coord) - Math.abs(b.value - coord));
-  return [sorted[0] ?? null, sorted[1] ?? null];
+  return [lo, hi];
+}
+
+/**
+ * カーソルに最も近い壁を返す（開口配置の長押し検出用）。
+ * 自動生成壁（isRoomWall）のみを対象とする — 現行UIには壁の手描きツールが
+ * 存在しないため、レガシーインポートデータ由来の isRoomWall:false 壁を
+ * 開口のホスト候補から確実に除外する。
+ */
+export function findNearestWall(graph, wx, wy, thresholdPx, scaleX, scaleY) {
+  if (!graph) return null;
+  let nearest = null, minDist = Infinity;
+  for (const w of graph.walls) {
+    if (!w.isRoomWall) continue;
+    const perp = w.isVertical ? Math.abs(w.axisValue - wx) * scaleX : Math.abs(w.axisValue - wy) * scaleY;
+    if (perp >= thresholdPx || perp >= minDist) continue;
+    const along = w.isVertical ? wy : wx;
+    const lo = Math.min(w.coord1, w.coord2), hi = Math.max(w.coord1, w.coord2);
+    if (along < lo || along > hi) continue;
+    minDist = perp; nearest = w;
+  }
+  return nearest;
+}
+
+/** カーソルに最も近い既存開口を返す（編集・削除メニュー用）。 */
+export function findOpeningAt(graph, wx, wy, thresholdPx, scaleX, scaleY) {
+  if (!graph) return null;
+  for (const o of graph.openings) {
+    const host = findHostWall(o, graph);
+    if (!host) continue;
+    const perp = o.isVertical ? Math.abs(host.axisValue - wx) * scaleX : Math.abs(host.axisValue - wy) * scaleY;
+    if (perp >= thresholdPx) continue;
+    const along = o.isVertical ? wy : wx;
+    if (along < o.coord1 || along > o.coord2) continue;
+    return o;
+  }
+  return null;
 }
 
 export function snapAngle(dx, dy) {

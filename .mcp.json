@@ -1,0 +1,19 @@
+{
+  "mcpServers": {
+    "browser-vision": {
+      "command": "npx",
+      "args": ["chrome-devtools-mcp@latest"]
+    },
+  
+    "project-context": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "context-mode"
+      ],
+      "env": {
+        "NODE_ENV": "production"
+      }
+    }
+  }
+}

@@ -14,14 +14,18 @@ const RADIUS = 80; // px — 中心からアイテムまでの距離
 export function RadialMenu({ pos, items, onSelect, onClose }) {
   const [open, setOpen] = useState(false);
 
-  // pos が変わったら開閉アニメーション
+  // pos が null になったら即座に閉じる（次回表示時のアニメーションのため open をリセット）
+  const [prevPos, setPrevPos] = useState(pos);
+  if (pos !== prevPos) {
+    setPrevPos(pos);
+    if (!pos) setOpen(false);
+  }
+
+  // pos が立ったら次フレームで open=true にすることで CSS transition が効く
   useEffect(() => {
     if (pos) {
-      // 次フレームで open=true にすることで CSS transition が効く
       const id = requestAnimationFrame(() => setOpen(true));
       return () => cancelAnimationFrame(id);
-    } else {
-      setOpen(false);
     }
   }, [pos]);
 
@@ -42,7 +46,8 @@ export function RadialMenu({ pos, items, onSelect, onClose }) {
         <div className="radial-center-dot" />
 
         {items.map((item, i) => {
-          const angleDeg = -90 + angleStep * i; // 上 (-90°) から時計回り
+          // item.angle が指定されていれば固定角度、なければ均等配置 (上 -90° から時計回り)
+          const angleDeg = item.angle ?? (-90 + angleStep * i);
           const angleRad = (angleDeg * Math.PI) / 180;
           const tx = open ? Math.round(RADIUS * Math.cos(angleRad)) : 0;
           const ty = open ? Math.round(RADIUS * Math.sin(angleRad)) : 0;

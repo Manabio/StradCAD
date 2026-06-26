@@ -1,6 +1,9 @@
 import { observer } from 'mobx-react-lite';
-import { Rect, Text, Group } from 'react-konva';
+import { Rect, Text, Line, Group } from 'react-konva';
 import { getAllCells, cellBoundsFromKey, roomBounds } from './gridCells.js';
+import { computeExteriorWallSegments } from './wallGeneration.js';
+
+const EXTERIOR_WALL_WIDTH = 4; // px（ズームに依らない太線幅）
 
 const ROOM_COLORS = [
   '#bfdbfe', '#bbf7d0', '#fde68a', '#fecaca',
@@ -15,7 +18,7 @@ export const FinishModeLayer = observer(({
   viewport,
   selectedRoomId,
   onSelectRoom,
-  previewCells,
+  previewCells = [],
 }) => {
   // extent を尊重した実在セルのみ列挙してグリッド背景を描画
   const gridCells = getAllCells(graph).map(cell => (
@@ -52,11 +55,31 @@ export const FinishModeLayer = observer(({
     }
 
     if (room.name) {
-      const bounds = roomBounds(room.cells, graph);
-      if (isFinite(bounds.x1)) {
-        const cx = (bounds.x1 + bounds.x2) / 2;
-        const cy = (bounds.y1 + bounds.y2) / 2;
-        const fontSize = Math.max(80, Math.min(200, (bounds.x2 - bounds.x1) / 5));
+      let cx, cy, refWidth;
+      if (room.namePosition) {
+        cx = room.namePosition.x;
+        cy = room.namePosition.y;
+        const bounds = roomBounds(room.cells, graph);
+        refWidth = isFinite(bounds.x1) ? bounds.x2 - bounds.x1 : null;
+      } else {
+        let largest = null, maxArea = 0;
+        for (const key of room.cells) {
+          const b = cellBoundsFromKey(key, graph);
+          if (!b) continue;
+          const area = (b.x2 - b.x1) * (b.y2 - b.y1);
+          if (area > maxArea) { maxArea = area; largest = b; }
+        }
+        if (largest) {
+          cx = (largest.x1 + largest.x2) / 2;
+          cy = (largest.y1 + largest.y2) / 2;
+          refWidth = largest.x2 - largest.x1;
+        }
+      }
+
+      if (cx !== undefined) {
+        const fontSize = refWidth != null
+          ? Math.max(80, Math.min(200, refWidth / 5))
+          : 80;
         roomRects.push(
           <Text
             key={`t${room.id}`}
@@ -76,6 +99,22 @@ export const FinishModeLayer = observer(({
     }
   });
 
+  // 外壁ループ（建物外周・中庭境界）を太線表示
+  const exteriorWalls = computeExteriorWallSegments(graph).map(seg => {
+    const points = seg.isVertical
+      ? [seg.value, seg.start, seg.value, seg.end]
+      : [seg.start, seg.value, seg.end, seg.value];
+    return (
+      <Line
+        key={`ew${seg.axisCLId}:${seg.loopType}:${seg.startCLId}:${seg.endCLId}`}
+        points={points}
+        stroke="#1e293b"
+        strokeWidth={EXTERIOR_WALL_WIDTH / viewport.scaleX}
+        listening={false}
+      />
+    );
+  });
+
   // ドラッグ中プレビュー
   const previewRects = previewCells.map(cell => (
     <Rect
@@ -93,6 +132,7 @@ export const FinishModeLayer = observer(({
     <Group>
       {gridCells}
       {roomRects}
+      {exteriorWalls}
       {previewRects}
     </Group>
   );

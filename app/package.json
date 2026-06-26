@@ -10,10 +10,12 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "flatbuffers": "^25.9.23",
     "konva": "^10.3.0",
     "mobx": "^6.15.3",
     "mobx-react-lite": "^4.1.1",
     "ngraph.graph": "^20.1.2",
+    "rbush": "^4.0.1",
     "react": "^19.2.6",
     "react-dom": "^19.2.6",
     "react-konva": "^19.2.4"

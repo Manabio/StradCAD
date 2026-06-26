@@ -37,6 +37,17 @@ function collectBreaks(graph, centerLineType, lo, hi) {
   return [...values].sort((a, b) => a - b);
 }
 
+/**
+ * 区間 (lo, hi) に厳密に含まれる分割CLを value 昇順で返す（lo/hi 自身は含まない）。
+ * 部屋の外周抽出（wallGeneration.js）で、自部屋のセルには存在しない区切りCL
+ * （隣接セルが別部屋・未割当に分かれる境界）もサンプリング候補に含めるために使う。
+ */
+export function dividerCLsBetween(graph, centerLineType, lo, hi) {
+  return graph.centerLines
+    .filter(cl => cl.centerLineType === centerLineType && isDividerCL(cl) && cl.value > lo && cl.value < hi)
+    .sort((a, b) => a.value - b.value);
+}
+
 // ================================================================
 // 公開 API
 // ================================================================
@@ -124,15 +135,38 @@ export function getAllCells(graph) {
  */
 export function cellBoundsFromKey(key, graph) {
   const [leftId, topId, rightId, bottomId] = key.split(':');
-  const leftCL   = graph.shapeMap.get(leftId);
-  const topCL    = graph.shapeMap.get(topId);
-  const rightCL  = graph.shapeMap.get(rightId);
-  const bottomCL = graph.shapeMap.get(bottomId);
+  const getCL = (id) => graph.shapeMap.get(id) ?? graph._structGraph?.shapeMap.get(id) ?? null;
+  const leftCL   = getCL(leftId);
+  const topCL    = getCL(topId);
+  const rightCL  = getCL(rightId);
+  const bottomCL = getCL(bottomId);
   if (!leftCL || !topCL || !rightCL || !bottomCL) return null;
   return {
     x1: leftCL.value,  x2: rightCL.value,
     y1: topCL.value,   y2: bottomCL.value,
   };
+}
+
+/**
+ * Room の cells (Set<key>) を現在のグリッド分割に展開し直す。
+ *
+ * 部屋指定後に floorplan モードでその領域内部へ新しい区切りCL（中心線等）が
+ * 追加されると、保存済みの cellKey は古い（粗い）分割を指したままになり、
+ * worldToCell が返す現在のキーと一致しなくなる（部屋の所属判定が壊れる）。
+ * 各保存済みセルの矩形を cellBoundsFromKey で求め、その矩形内の現在のセルを
+ * getCellsInRect で再列挙することで、物理的な領域は変えずに現在のキー集合へ
+ * 正規化する（分割されていなければ実質そのまま返る）。
+ */
+export function refreshCells(cells, graph) {
+  const result = new Set();
+  for (const key of cells) {
+    const b = cellBoundsFromKey(key, graph);
+    if (!b) continue;
+    for (const cell of getCellsInRect(b.x1, b.y1, b.x2, b.y2, graph)) {
+      result.add(cell.key);
+    }
+  }
+  return result;
 }
 
 /**

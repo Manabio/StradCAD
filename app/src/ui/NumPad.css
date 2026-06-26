@@ -76,9 +76,14 @@
   transform: scale(0.93);
 }
 
-/* 2列スパン (0キー) */
+/* 2列スパン */
 .numpad-key--span2 {
   grid-column: span 2;
+}
+
+/* 3列スパン (キャンセル) */
+.numpad-key--span3 {
+  grid-column: span 3;
 }
 
 /* バックスペース */
@@ -89,13 +94,20 @@
 }
 .numpad-key--back:active { background: #fed7aa; }
 
-/* 符号切替 */
-.numpad-key--sign {
-  background: #f1f5f9;
-  color: #475569;
-  font-size: 18px;
+/* 演算子 */
+.numpad-key--op {
+  background: #eff6ff;
+  color: #1d4ed8;
+  font-size: 20px;
+  font-weight: 600;
 }
-.numpad-key--sign:active { background: #e2e8f0; }
+.numpad-key--op:active { background: #dbeafe; }
+
+/* 小数点 */
+.numpad-key--dot {
+  background: #f8fafc;
+  color: #475569;
+}
 
 /* キャンセル */
 .numpad-key--cancel {

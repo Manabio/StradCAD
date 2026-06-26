@@ -10,10 +10,11 @@ const CIRCLE_NUMS = ['①', '②', '③', '④', '⑤', '⑥', '⑦', '⑧', '�
  * 参照中心線 + 距離（常に正）を指定する。
  * 方向（右/左/上/下）は参照CL と長押し位置の相対位置から自動決定。
  *
- * nearbyCLs: 長押し位置に近接するCL（ラベルなし含む）。先頭に丸数字で表示。
+ * nearbyCLs      : 長押し位置に近接するCL（ラベルなし含む）。先頭に丸数字で表示。
+ * backingMaterials: 選択可能な WallBackingMaterial の配列（省略可）
  * onConfirm(refCL, dist) : dist は常に正の数値
  */
-export function WallDialog({ worldPos, allCLs, nearbyCLs = [], onConfirm, onCancel }) {
+export function WallDialog({ worldPos, allCLs, nearbyCLs = [], backingMaterials = [], onConfirm, onCancel }) {
   const nearbyIds  = new Set(nearbyCLs.map(cl => cl.id));
   const otherCLs   = allCLs.filter(cl => !nearbyIds.has(cl.id));
   const allOptions = [...nearbyCLs, ...otherCLs];
@@ -30,12 +31,45 @@ export function WallDialog({ worldPos, allCLs, nearbyCLs = [], onConfirm, onCanc
       })
     : null;
 
-  const [refId,   setRefId]   = useState(nearest?.id ?? '');
-  const [distStr, setDistStr] = useState(() => {
+  const [refId,       setRefId]       = useState(nearest?.id ?? '');
+  const [distStr,     setDistStr]     = useState(() => {
     if (!nearest) return '0';
     const c = nearest.centerLineType === 'X' ? worldPos.x : worldPos.y;
     return String(Math.round(Math.abs(c - nearest.value)));
   });
+  const defaultMatId = backingMaterials.length > 0 ? backingMaterials[0].id : '';
+  const [backingMatId,  setBackingMatId]  = useState(defaultMatId);
+  const [positioning,   setPositioning]   = useState('center');
+  const [finishThickStr, setFinishThickStr] = useState('12');
+
+  const selectedMat = backingMaterials.find(m => m.id === backingMatId) ?? null;
+
+  function applyBackingDistance(mat, pos, thick) {
+    if (!mat) return;
+    const thickNum = Math.abs(Number(thick) || 0);
+    if (pos === 'center') {
+      setDistStr(String(Math.round(mat.y / 2 + thickNum)));
+    }
+    // eccentric: offsetFromCL は未定のため自動入力しない
+  }
+
+  function handleBackingMatChange(e) {
+    const id  = e.target.value;
+    setBackingMatId(id);
+    const mat = backingMaterials.find(m => m.id === id) ?? null;
+    applyBackingDistance(mat, positioning, finishThickStr);
+  }
+
+  function handlePositioningChange(e) {
+    const pos = e.target.value;
+    setPositioning(pos);
+    applyBackingDistance(selectedMat, pos, finishThickStr);
+  }
+
+  function handleFinishThickChange(e) {
+    setFinishThickStr(e.target.value);
+    applyBackingDistance(selectedMat, positioning, e.target.value);
+  }
 
   const refCL  = allOptions.find(cl => cl.id === refId) ?? null;
   const isRefV = refCL?.centerLineType === 'X';
@@ -54,8 +88,12 @@ export function WallDialog({ worldPos, allCLs, nearbyCLs = [], onConfirm, onCanc
     setRefId(id);
     const cl = allOptions.find(c => c.id === id);
     if (cl) {
-      const c = cl.centerLineType === 'X' ? worldPos.x : worldPos.y;
-      setDistStr(String(Math.round(Math.abs(c - cl.value))));
+      if (selectedMat) {
+        applyBackingDistance(selectedMat, positioning, finishThickStr);
+      } else {
+        const c = cl.centerLineType === 'X' ? worldPos.x : worldPos.y;
+        setDistStr(String(Math.round(Math.abs(c - cl.value))));
+      }
     }
   }
 
@@ -84,7 +122,7 @@ export function WallDialog({ worldPos, allCLs, nearbyCLs = [], onConfirm, onCanc
               <optgroup label="近接する中心線">
                 {nearbyCLs.map((cl, i) => (
                   <option key={cl.id} value={cl.id}>
-                    {CIRCLE_NUMS[i] ?? `(${i + 1})`} {cl.label || '中心線'}　{cl.centerLineType === 'X' ? '垂直' : '水平'}
+                    {CIRCLE_NUMS[i] ?? `(${i + 1})`} {cl.label || '中心線'}{'　'}{cl.centerLineType === 'X' ? '垂直' : '水平'}
                   </option>
                 ))}
               </optgroup>
@@ -93,13 +131,56 @@ export function WallDialog({ worldPos, allCLs, nearbyCLs = [], onConfirm, onCanc
               <optgroup label="グリッドCL">
                 {otherCLs.map(cl => (
                   <option key={cl.id} value={cl.id}>
-                    {cl.label || cl.id}　{cl.centerLineType === 'X' ? '垂直' : '水平'}
+                    {cl.label || cl.id}{'　'}{cl.centerLineType === 'X' ? '垂直' : '水平'}
                   </option>
                 ))}
               </optgroup>
             )}
           </select>
         </label>
+
+        {backingMaterials.length > 0 && (
+          <>
+            <label className="cl-dialog-row">
+              <span className="cl-dialog-label">下地材</span>
+              <select value={backingMatId} onChange={handleBackingMatChange}>
+                <option value="">（なし）</option>
+                {backingMaterials.map(m => (
+                  <option key={m.id} value={m.id}>
+                    {m.name}{'　'}{m.x}×{m.y}
+                  </option>
+                ))}
+              </select>
+            </label>
+            {selectedMat && (
+              <label className="cl-dialog-row">
+                <span className="cl-dialog-label">配置</span>
+                <label style={{ marginRight: 8 }}>
+                  <input type="radio" name="positioning" value="center"    checked={positioning === 'center'}    onChange={handlePositioningChange} />
+                  {' '}中心
+                </label>
+                <label>
+                  <input type="radio" name="positioning" value="eccentric" checked={positioning === 'eccentric'} onChange={handlePositioningChange} />
+                  {' '}偏芯
+                </label>
+              </label>
+            )}
+            {selectedMat && positioning === 'center' && (
+              <label className="cl-dialog-row">
+                <span className="cl-dialog-label">仕上厚</span>
+                <input
+                  type="number"
+                  className="cl-dialog-input"
+                  value={finishThickStr}
+                  min="0"
+                  onChange={handleFinishThickChange}
+                  onKeyDown={handleKeyDown}
+                />
+                <span className="cl-dialog-unit">mm</span>
+              </label>
+            )}
+          </>
+        )}
 
         <label className="cl-dialog-row">
           <span className="cl-dialog-label">
@@ -113,7 +194,7 @@ export function WallDialog({ worldPos, allCLs, nearbyCLs = [], onConfirm, onCanc
             min="0"
             onChange={e => setDistStr(e.target.value)}
             onKeyDown={handleKeyDown}
-            autoFocus
+            autoFocus={backingMaterials.length === 0}
           />
           <span className="cl-dialog-unit">mm</span>
         </label>

@@ -1,17 +1,25 @@
 export const CONTEXT = Object.freeze({
   INTERSECTION: 'intersection',
   CENTER_LINE:  'centerLine',
+  OPENING:      'opening',
+  WALL:         'wall',
   SHAPE:        'shape',
   EMPTY:        'empty',
 });
 
-export function detectContext(snapPoint, nearCL) {
-  if (snapPoint) return CONTEXT.INTERSECTION;
-  if (nearCL)   return CONTEXT.CENTER_LINE;
+// 交点 > (CL/開口/壁のうち画面距離が最も近いもの。呼び出し側 updateSnap で
+// 排他的に解決済み) > 空。CL と壁は軸オフセットが小さく8px判定が重なるため、
+// 呼び出し側で画面距離による排他選択を行ってから渡すこと（cl と nearWall/
+// nearOpening が同時に真になることは想定しない）。
+export function detectContext(snapPoint, nearCL, nearOpening, nearWall) {
+  if (snapPoint)   return CONTEXT.INTERSECTION;
+  if (nearCL)      return CONTEXT.CENTER_LINE;
+  if (nearOpening) return CONTEXT.OPENING;
+  if (nearWall)    return CONTEXT.WALL;
   return CONTEXT.EMPTY;
 }
 
-export function getMenuItems(context, nearCL = null) {
+export function getMenuItems(context) {
   switch (context) {
     case CONTEXT.INTERSECTION:
       return [
@@ -25,11 +33,18 @@ export function getMenuItems(context, nearCL = null) {
       ];
     case CONTEXT.EMPTY:
       return [
-        { id: 'cl-v',  label: '垂直線',   icon: '┃' },
-        { id: 'cl-h',  label: '水平線',   icon: '━' },
-        { id: 'wall',  label: '壁',       icon: '▬' },
-        { id: 'undo',  label: 'もどす',   icon: '↩' },
-        { id: 'redo',  label: 'やり直し', icon: '↪' },
+        { id: 'cl-v',  label: '垂直線', icon: '┃', angle: -90 },
+        { id: 'cl-h',  label: '水平線', icon: '━', angle: 0 },
+      ];
+    case CONTEXT.WALL:
+      return [
+        { id: 'add-fitting', label: '建具', icon: '🚪' },
+        { id: 'add-window',  label: '窓',   icon: '🪟' },
+      ];
+    case CONTEXT.OPENING:
+      return [
+        { id: 'opening-edit', label: '編集', icon: '✎' },
+        { id: 'opening-del',  label: '削除', icon: '✕' },
       ];
     case CONTEXT.SHAPE:
       return [

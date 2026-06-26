@@ -10,5 +10,8 @@
     "build": "npm --prefix app run build",
     "lint": "npm --prefix app run lint",
     "preview": "npm --prefix app run preview"
+  },
+  "dependencies": {
+    "context-mode": "^1.0.162"
   }
 }

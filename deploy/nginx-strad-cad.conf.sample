@@ -1,0 +1,54 @@
+# StradCAD 公開用 nginx サーバーブロック設定例
+# 配置先: /etc/nginx/sites-available/strad-cad.com
+# 有効化: ln -s /etc/nginx/sites-available/strad-cad.com /etc/nginx/sites-enabled/
+#         nginx -t && systemctl reload nginx
+#
+# 事前に certbot 等で SSL 証明書を取得しておくこと
+# 例: certbot --nginx -d strad-cad.com -d www.strad-cad.com
+
+server {
+    listen 80;
+    listen [::]:80;
+    server_name strad-cad.com www.strad-cad.com;
+
+    # http -> https リダイレクト（certbot が自動生成する場合は不要）
+    return 301 https://www.strad-cad.com$request_uri;
+}
+
+server {
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
+    server_name www.strad-cad.com;
+
+    root /home/mana-bio/www/strad-cad/public;
+    index index.html;
+
+    ssl_certificate     /etc/letsencrypt/live/strad-cad.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/strad-cad.com/privkey.pem;
+
+    gzip on;
+    gzip_types text/css application/javascript application/json image/svg+xml font/woff2;
+
+    # Vite が出力するハッシュ付きファイル(assets/*)は長期キャッシュ
+    location /assets/ {
+        expires 1y;
+        add_header Cache-Control "public, immutable";
+    }
+
+    # SPA: 該当ファイルが無ければ index.html を返す
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+}
+
+# strad-cad.com (非www) -> www へのリダイレクト
+server {
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
+    server_name strad-cad.com;
+
+    ssl_certificate     /etc/letsencrypt/live/strad-cad.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/strad-cad.com/privkey.pem;
+
+    return 301 https://www.strad-cad.com$request_uri;
+}

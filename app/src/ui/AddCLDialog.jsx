@@ -52,10 +52,24 @@ export function AddCLDialog({ type, worldCoord, gridCLs, nearbyCLs = [], onConfi
   const previewWorld   = refCL ? refCL.value + dir * dist : sign * dist;
   const previewDisplay = sign * previewWorld;
 
+  // スパン配列モード: kind='struct' かつカンマ区切りの場合
+  const isMultiSpan = kind === 'struct' && distStr.includes(',');
+  const parsedSpans = isMultiSpan
+    ? distStr.split(',').map(s => Number(s.trim())).filter(n => n > 0 && isFinite(n))
+    : null;
+  const batchWorldValues = (isMultiSpan && parsedSpans && parsedSpans.length > 0)
+    ? (() => {
+        const base = refCL ? refCL.value : 0;
+        const d    = refCL ? (dir ?? 1) : sign;
+        let cursor = base;
+        return parsedSpans.map(span => { cursor += d * span; return cursor; });
+      })()
+    : null;
+
   useEffect(() => {
-    onPreviewChange?.(previewWorld);
+    onPreviewChange?.(isMultiSpan ? null : previewWorld);
     return () => onPreviewChange?.(null);
-  }, [previewWorld]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [previewWorld, isMultiSpan]); // eslint-disable-line react-hooks/exhaustive-deps
 
   function handleRefChange(e) {
     const id = e.target.value;
@@ -67,8 +81,16 @@ export function AddCLDialog({ type, worldCoord, gridCLs, nearbyCLs = [], onConfi
     );
   }
 
+  function handleConfirm() {
+    if (isMultiSpan && batchWorldValues) {
+      onConfirm(batchWorldValues, kind, trim, null, null);
+    } else {
+      onConfirm(previewWorld, kind, trim, refId, dist * dir);
+    }
+  }
+
   function handleKeyDown(e) {
-    if (e.key === 'Enter')  onConfirm(previewWorld, kind, trim, refId, dist * dir);
+    if (e.key === 'Enter')  handleConfirm();
     if (e.key === 'Escape') onCancel();
   }
 
@@ -123,10 +145,11 @@ export function AddCLDialog({ type, worldCoord, gridCLs, nearbyCLs = [], onConfi
           </span>
           {dirLabel && <span className="cl-dialog-dir">{dirLabel}</span>}
           <input
-            type="number"
+            type="text"
             className="cl-dialog-input"
+            style={{ width: kind === 'struct' ? 112 : 88 }}
             value={distStr}
-            min="0"
+            placeholder={kind === 'struct' ? '例: 3000,3000' : ''}
             onChange={e => setDistStr(e.target.value)}
             onKeyDown={handleKeyDown}
             autoFocus
@@ -135,7 +158,10 @@ export function AddCLDialog({ type, worldCoord, gridCLs, nearbyCLs = [], onConfi
         </label>
 
         <div className="cl-dialog-result">
-          {axisLabel} = {Math.round(previewDisplay)} mm
+          {isMultiSpan && batchWorldValues
+            ? `${batchWorldValues.length}本追加 (累計 ${Math.abs(Math.round(sign * (batchWorldValues[batchWorldValues.length - 1] - (refCL?.value ?? 0))))} mm)`
+            : `${axisLabel} = ${Math.round(previewDisplay)} mm`
+          }
         </div>
 
         <label className="cl-dialog-row cl-dialog-row--check">
@@ -151,8 +177,8 @@ export function AddCLDialog({ type, worldCoord, gridCLs, nearbyCLs = [], onConfi
           <button className="cl-dialog-btn cl-dialog-btn--cancel" onClick={onCancel}>
             キャンセル
           </button>
-          <button className="cl-dialog-btn cl-dialog-btn--ok" onClick={() => onConfirm(previewWorld, kind, trim, refId, dist * dir)}>
-            追加
+          <button className="cl-dialog-btn cl-dialog-btn--ok" onClick={handleConfirm}>
+            {isMultiSpan && batchWorldValues ? `${batchWorldValues.length}本追加` : '追加'}
           </button>
         </div>
       </div>

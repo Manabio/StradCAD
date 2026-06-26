@@ -30,7 +30,7 @@ export function useDrawMode(graph) {
     }
   }
 
-  function completeDraw(snap, worldPos) {
+  function completeDraw(snap) {
     const state = drawStateRef.current;
     if (!state) return null;
     const { mode, startSnap } = state;

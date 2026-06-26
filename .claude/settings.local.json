@@ -2,7 +2,19 @@
   "permissions": {
     "allow": [
       "Bash(npm run *)",
-      "Bash(npx vite *)"
+      "Bash(npx vite *)",
+      "mcp__browser-vision__take_snapshot",
+      "mcp__browser-vision__click",
+      "mcp__browser-vision__evaluate_script",
+      "mcp__browser-vision__take_screenshot",
+      "mcp__browser-vision__navigate_page",
+      "mcp__browser-vision__list_console_messages",
+      "mcp__browser-vision__list_pages",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" http://localhost:5173/)"
     ]
+  },
+  "autoMemoryDirectory": "./.claude/memory",
+  "plugins": {
+    "enabled": true
   }
 }
