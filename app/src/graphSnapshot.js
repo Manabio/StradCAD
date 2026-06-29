@@ -235,6 +235,7 @@ function buildStructSnapshot(structGraph, structuralInfo, tagRegistry) {
       mainStructure:      structuralInfo.mainStructure,
       otherStructures:    [...structuralInfo.otherStructures],
       foundationType:     structuralInfo.foundationType,
+      columnFaceProjection: structuralInfo.columnFaceProjection,
       designStrength:     structuralInfo.designStrength,
       concreteType:       structuralInfo.concreteType,
       mainBar:            structuralInfo.mainBar,
@@ -333,6 +334,7 @@ export function restoreStructCLs(structGraph, structuralInfo, data, tagRegistry)
       structuralInfo.setField('mainStructure',      si.mainStructure);
       structuralInfo.otherStructures.replace(si.otherStructures ?? []);
       structuralInfo.setField('foundationType',     si.foundationType);
+      structuralInfo.setField('columnFaceProjection', si.columnFaceProjection ?? 0);
       structuralInfo.setField('designStrength',     si.designStrength);
       structuralInfo.setField('concreteType',       si.concreteType);
       structuralInfo.setField('mainBar',            si.mainBar);

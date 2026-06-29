@@ -346,18 +346,20 @@ export function axisExteriorSign(exterior, graph, cl, isVertical) {
   return 0;
 }
 
-/** 柱芯（columnAxisOffsets＝通り芯から柱芯までの偏芯量）を自動生成する。構造モード突入時、
- *  autoFillStructuralGrid と同タイミングで呼ぶ。柱芯・偏芯量はともに階固有（per-floor）だが、外周柱の
- *  「外面」（偏芯量0方向＝通り芯側の面）は同位置にある最下階の柱の外面に揃える——上階ほど柱が細っても
- *  建物外周面が階で食い違わないようにする（仕様）。各階は自階の既定柱幅で外面を最下階の外面基準面に
- *  合わせるため、幅が違えば偏芯量も変わる（＝階依存を保ったまま外面が揃う）。最下階のオフセットは
- *  lowestGraph（呼び出し元が resolveLowestGraph で解決して渡す。非アクティブ階は peek 可）から読む。
- *  外側符号 s と外面基準は「最下階」を権威とする：最下階自身は自階フットプリント(exterior)で外周判定し、
- *  上階は最下階の確定オフセット offLowest から符号・外面を引き継ぐ。**上階で自階フットプリントを見ない**のは、
- *  屋根伏図(R階伏図)など自階に部屋が無い階では外周モデルが部材CL外接矩形に縮退し、L字外周の中通り(例:X2)を
- *  内部と誤判定して偏芯量が0に落ちるため（offLowest を読む前に s=0 で短絡していた不具合の修正）。
- *  ラーメン系（S造/SRC造/RC造(ラーメン)）でなければ既存の柱芯オフセットをすべて0に戻す（対象外＝通り芯と一致）。
- *  未登録のCLにのみ補完する（差分のみ補完。ユーザー上書きは保持）。 */
+/** 柱芯（columnAxisOffsets＝通り芯から柱芯までの偏芯量）を、建物由来の出幅から決定的に再構築する。
+ *  構造モード突入時・出幅編集時に autoFillStructuralGrid と同タイミングで呼ぶ。
+ *  柱芯・偏芯量は per-floor だが、**柱の外面**（偏芯量0方向＝通り芯側の面）は「建物の出幅 projection」
+ *  （通り芯から柱外面までの距離。建物に1値・全階共通）で決める——出幅が全階共通のため外面が階で
+ *  食い違わない。各階は自階の既定柱幅で外面を出幅基準面に合わせるので、幅が違えば偏芯量も変わる
+ *  （＝階依存を保ったまま外面が揃う）。導出（外周CLのみ。内部CLは0）：
+ *      柱外面 = 通り芯 + s×出幅（通り芯の内側に出幅だけ控える）、偏芯量 offset = 外面 + s×halfThis = s×(halfThis + 出幅)
+ *  柱芯は常に通り芯の内側（屋内側）に保たれ、通り芯・出幅寸法は柱芯の外側（屋外側）に位置する（出幅をいくら
+ *  大きくしても柱芯が通り芯を越えない）。出幅=0 で offset=s×halfThis（外面＝通り芯＝従来既定）。これで
+ *  「最下階オフセットを peek して引き継ぐ」処理（旧 offLowest/外面引き継ぎ）が不要になる。
+ *  外側符号 s だけは最下階フットプリント(exterior)を権威に求める（lowestGraph を peek。R階伏図など
+ *  自階に部屋が無い階で外周モデルが部材CL外接矩形へ縮退し、L字外周の中通りを内部と誤判定するのを回避。
+ *  axisExteriorSign で軸線を全交差走査）。ユーザー上書きは出幅へ一本化したため、各CLは毎回上書きする。
+ *  ラーメン系（S造/SRC造/RC造(ラーメン)）でなければ柱芯オフセットをすべて0に戻す（対象外＝通り芯と一致）。 */
 export function autoFillColumnAxisOffsets(graph, project, lowestGraph = graph, exterior = buildExteriorSide(graph)) {
   const effective = graph.structureOverride ?? project.structuralInfo.mainStructure;
   if (!isRigidFrameStructure(effective)) {
@@ -365,31 +367,14 @@ export function autoFillColumnAxisOffsets(graph, project, lowestGraph = graph, e
     return;
   }
   const halfThis   = defaultColumnWidth(effective) / 2;
-  const lowestEff  = lowestGraph.structureOverride ?? project.structuralInfo.mainStructure;
-  const halfLowest = defaultColumnWidth(lowestEff) / 2;
+  const projection = project.structuralInfo.columnFaceProjection ?? 0;
   const isLowest   = lowestGraph.plane?.id === graph.plane?.id;
+  const ex         = isLowest ? exterior : buildExteriorSide(lowestGraph); // 符号権威＝最下階フットプリント
   for (const [axisCLs, isVertical] of [[graph.gridXs, true], [graph.gridYs, false]]) {
     for (const cl of axisCLs) {
-      if (graph.columnAxisOffsets.has(cl.id)) continue; // 既存値（ユーザー上書き含む）は保持
-      // 外側符号 s と外面基準面（通り芯相対）を求める。
-      const offLowest = lowestGraph.columnAxisOffsets.get(cl.id);
-      let s, outerFace;
-      if (!isLowest && offLowest !== undefined) {
-        // 上階：最下階の確定オフセットから符号・外面を引き継ぐ（自階フットプリントは見ない＝縮退回避）。
-        // ユーザーが最下階で手動移動していればその実値（符号・外面とも）に自動追従する。
-        s = Math.sign(offLowest);
-        outerFace = offLowest - s * halfLowest;
-      } else {
-        // 最下階自身、または最下階が未計算（offLowest 無し）の縮退時のみ外周モデルで符号を求める。
-        // 外周モデル（仕上げフットプリント優先・無ければ部材CL外接矩形）から、そのCLを軸線に沿って
-        // 全交差走査して符号を取る（axisExteriorSign。L字段差の中通りも外周として拾う）。
-        // （内側＝+方向=+1／−方向=−1／内部・建物外=0）。基底ルールは外面を通り芯に合わせる。
-        const ex = isLowest ? exterior : buildExteriorSide(lowestGraph);
-        s = axisExteriorSign(ex, lowestGraph, cl, isVertical);
-        outerFace = 0; // offset=s*halfLowest → 外面=通り芯
-      }
-      // 内部芯(s=0)は偏芯0。外周芯は自階の柱幅で外面基準面に外面を合わせる偏芯量。
-      graph.setColumnAxisOffset(cl.id, s === 0 ? 0 : outerFace + s * halfThis);
+      const s = axisExteriorSign(ex, lowestGraph, cl, isVertical);
+      // 内部芯(s=0)は偏芯0。外周芯は出幅で外面を、自階の柱幅で柱芯を決める（柱芯は常に通り芯の内側）。
+      graph.setColumnAxisOffset(cl.id, s === 0 ? 0 : s * (halfThis + projection));
     }
   }
 }

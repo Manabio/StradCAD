@@ -2577,6 +2577,9 @@ export class StructuralInfo {
     this.mainStructure    = '未定';
     this.otherStructures  = observable.array([]);
     this.foundationType   = 'ベタ基礎';
+    // 出幅（mm）: 通り芯から柱外面までの距離。建物に1値（全階・X/Y共通）。ラーメン系の柱芯はこの出幅と
+    // 自階の柱幅から決定的に導出する（autoFillColumnAxisOffsets）。0＝外面が通り芯と一致（既定）。
+    this.columnFaceProjection = 0;
     this.designStrength   = 'Fc24';
     this.concreteType     = '普通コンクリート';
     this.mainBar          = 'SD345';
@@ -2588,6 +2591,7 @@ export class StructuralInfo {
     makeObservable(this, {
       mainStructure:        observable,
       foundationType:       observable,
+      columnFaceProjection: observable,
       designStrength:       observable,
       concreteType:         observable,
       mainBar:              observable,

@@ -51,11 +51,12 @@ const GS = {
 const MATERIAL_TYPE_ENC = { WOOD: 0, STEEL: 1, RC: 2 };
 const MATERIAL_TYPE_DEC = ['WOOD', 'STEEL', 'RC'];
 
-// StructuralInfo: 11 フィールド（建物全体の構造情報の既定値）
+// StructuralInfo: 12 フィールド（建物全体の構造情報の既定値）
 const SI = {
   MAIN_STRUCTURE: 0, OTHER_STRUCTURES: 1, FOUNDATION_TYPE: 2,
   DESIGN_STRENGTH: 3, CONCRETE_TYPE: 4, MAIN_BAR: 5, HOOP_BAR: 6,
   SNOW_AREA: 7, BASIC_WIND_SPEED: 8, SURFACE_ROUGHNESS: 9, SEISMIC_ZONE_FACTOR: 10,
+  COLUMN_FACE_PROJECTION: 11, // 出幅(mm)。追加フィールド＝旧ファイルは既定0で後方互換。
 };
 
 // Edge: 4 フィールド
@@ -245,7 +246,7 @@ function writeStructuralInfo(b, info) {
   const sRough   = b.createString(info.surfaceRoughness ?? '');
   const sSeismic = b.createString(info.seismicZoneFactor ?? '');
 
-  b.startObject(11);
+  b.startObject(12);
   b.addFieldOffset(SI.MAIN_STRUCTURE,      sMain,    0);
   b.addFieldOffset(SI.OTHER_STRUCTURES,    otherVec, 0);
   b.addFieldOffset(SI.FOUNDATION_TYPE,     sFound,   0);
@@ -257,6 +258,7 @@ function writeStructuralInfo(b, info) {
   b.addFieldFloat64(SI.BASIC_WIND_SPEED,   info.basicWindSpeed ?? 0, 0.0);
   b.addFieldOffset(SI.SURFACE_ROUGHNESS,   sRough,   0);
   b.addFieldOffset(SI.SEISMIC_ZONE_FACTOR, sSeismic, 0);
+  b.addFieldFloat64(SI.COLUMN_FACE_PROJECTION, info.columnFaceProjection ?? 0, 0.0);
   return b.endObject();
 }
 
@@ -820,6 +822,7 @@ function readStructuralInfo(bb, tablePos) {
     basicWindSpeed:     r.f64(SI.BASIC_WIND_SPEED)     || 34,
     surfaceRoughness:   r.str(SI.SURFACE_ROUGHNESS)    || 'III',
     seismicZoneFactor:  r.str(SI.SEISMIC_ZONE_FACTOR)  || '1.0',
+    columnFaceProjection: r.f64(SI.COLUMN_FACE_PROJECTION) || 0,
   };
 }
 

@@ -14,7 +14,7 @@ import {
   FIGURE_FRAME_BY_MAP, DEFAULT_FIGURE_FRAME,
 } from './memberCatalog.js';
 import { resolveDefaultMaterialType, alignToOuterFace, autoFillColumnSizes, autoFillColumnBaseSizes, isRigidFrameStructure,
-  autoFillBeamEccentricity, autoBeamEccentricity, faceGapForEccentricity, axisExteriorSign } from './structuralAutoFill.js';
+  autoFillBeamEccentricity, autoBeamEccentricity, faceGapForEccentricity, autoFillColumnAxisOffsets, axisExteriorSign } from './structuralAutoFill.js';
 import { buildExteriorSide } from './wallGate.js';
 import { SECTION_CATALOG, findSectionEntry, SectionShape } from './sectionCatalog.js';
 import { renumberMembers } from './memberNumbering.js';
@@ -54,12 +54,17 @@ function buildFigureCtx(entity, mapName, graph, project, isRoof = false) {
   // 柱芯（変位量）はラーメン系のみ編集可（木造・壁式は通り芯と一致＝変位の概念なし）。
   const rigid = isRigidFrameStructure(graph?.structureOverride ?? project?.structuralInfo?.mainStructure);
   if (mapName === 'columnMap' || mapName === 'footingMap') {
+    // 外側方向の符号（内側が＋方向=+1／−方向=−1／内部=0）。柱外面（出幅）寸法を「真の外側」に描くために使う。
+    // offX の符号は出幅>柱半幅で反転するため使えない——フットプリント由来の符号を権威とする。
+    const exterior = rigid ? buildExteriorSide(graph) : null;
     return {
       rigid,
       axisOffsetX: off(entity.verticalCL?.id),
       axisOffsetY: off(entity.horizontalCL?.id),
       axisClIdX: entity.verticalCL?.id,   // 変位量の編集対象CL（X系）
       axisClIdY: entity.horizontalCL?.id, // 同（Y系）
+      exteriorSignX: exterior && entity.verticalCL ? axisExteriorSign(exterior, graph, entity.verticalCL, true) : 0,
+      exteriorSignY: exterior && entity.horizontalCL ? axisExteriorSign(exterior, graph, entity.horizontalCL, false) : 0,
       eccX: entity.eccentricity?.x ?? 0,
       eccY: entity.eccentricity?.y ?? 0,
       glLabel: 'GL',
@@ -346,33 +351,14 @@ const MemberCard = observer(({ members, group, graph, composition, project, read
   //   → 柱・梁の実位置computedが追従し、描画エリアが即リドローされる（MobX）。
   // ・厚指定（厚み）等は同一タグの全部材へ伝播。構造算定サイズは read-only のためここには来ない。
   const handleEditDim = readOnly ? undefined : (dim, value) => {
-    if (dim.target === 'axisOffset') {
-      // 柱芯の変位は建物グリッド共通。柱は下階グラフから来るため、編集を下階グラフだけに書くと
-      // 表示中の階（subject graph）が描く柱芯の軸線・寸法が動かない。composition内の全階グラフへ
-      // 同じCLのオフセットを書き、軸線・部材・寸法を一致して再描画させる。
-      if (dim.clId != null) {
-        const graphs = composition?.bindings?.map(b => b.graph) ?? [graph];
-        if (group.mapName === 'columnMap') {
-          // 柱芯インセットは外周柱で同量に保つ。編集した方向(X=dim'h'→gridXs／Y=dim'v'→gridYs)の
-          // **全外周CLを各CL自身の外側符号で同量インセット**する。旧実装は「軸末尾CLへ-value」で min/max の
-          // 2本前提だったため、L字段差の中通り（例:X2）が連動対象から漏れて取り残された——全外周走査
-          // （axisExteriorSign）に統一して中通りも含める（autoFillColumnAxisOffsets と同一の外周モデル）。
-          const exterior = buildExteriorSide(graph);
-          const isVertical = dim.dir === 'h';
-          const axisCLs = isVertical ? graph.gridXs : graph.gridYs;
-          let any = false;
-          for (const cl of axisCLs) {
-            const s = axisExteriorSign(exterior, graph, cl, isVertical);
-            if (s === 0) continue; // 内部芯は偏芯0のまま
-            for (const gg of graphs) gg.setColumnAxisOffset(cl.id, s * value); // value=絶対値・符号はCLごと
-            any = true;
-          }
-          // 外周が拾えない縮退ケース（フットプリント未定義等）は編集対象CLだけ素直に設定する。
-          if (!any) for (const gg of graphs) gg.setColumnAxisOffset(dim.clId, value);
-        } else {
-          for (const gg of graphs) gg.setColumnAxisOffset(dim.clId, value);
-        }
-      }
+    if (dim.target === 'faceProjection') {
+      // 出幅（柱面⇄通り芯の距離）は建物に1値（全階・X/Y共通）。柱芯オフセットは出幅＋自階柱幅から
+      // 各階で派生するため、建物値を更新後、composition 内の全階グラフで columnAxisOffsets を再構築する
+      // （柱・梁・軸線・寸法を一致して再描画させる）。符号は subject graph のフットプリントを権威に使う。
+      project.structuralInfo.setField('columnFaceProjection', Math.abs(value));
+      const graphs = composition?.bindings?.map(b => b.graph) ?? [graph];
+      const exterior = buildExteriorSide(graph);
+      for (const gg of graphs) autoFillColumnAxisOffsets(gg, project, graph, exterior);
       return;
     }
     if (dim.target === 'eccentricity') {

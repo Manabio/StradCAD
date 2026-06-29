@@ -123,11 +123,11 @@ function sectionShapePrims(section, cx, topY, fill = STEEL_FILL) {
   }
 }
 
-// 通り芯・柱芯（縦の一点鎖線）＋変位量 [275] を作る。
-// 通り芯を x=0、柱芯を x=axisOffset に置く。offset=0（非ラーメン）なら柱芯線は出さない。
+// 通り芯・柱芯（縦の一点鎖線）＋変位量 [275] を作る。基礎梁・フーチング・柱脚の図で使う。
+// 通り芯を x=0、柱芯を x=axisOffset に置く。offset=0（非ラーメン・内部芯）なら柱芯線は出さない。
 // dimY=変位寸法線のy（断面寄り）、labelY=通り芯/柱芯ラベルのy（変位寸法の上、スペースをあけて）。
-// clId が渡れば変位量を編集可能にする（確定で graph.columnAxisOffsets を更新→描画エリア再描画）。
-function axisPrims(axisOffset, { dimY, labelY, clId }) {
+// 柱芯（通り芯⇄柱芯）は建物の出幅から派生する read-only 表示——編集は構造リスト柱の図の出幅で一本化する。
+function axisPrims(axisOffset, { dimY, labelY }) {
   const prims = [
     { type: 'axisV', x: 0 },
     { type: 'text', x: 0, y: labelY, text: '通り芯', anchor: 'middle', size: 10, fill: '#94a3b8', layoutId: 'text:axisLabel' },
@@ -135,8 +135,7 @@ function axisPrims(axisOffset, { dimY, labelY, clId }) {
   if (axisOffset && axisOffset !== 0) {
     prims.push({ type: 'axisV', x: axisOffset });
     prims.push({ type: 'text', x: axisOffset, y: labelY, text: '柱芯', anchor: 'middle', size: 10, fill: '#94a3b8', layoutId: 'text:columnAxisLabel' });
-    const opts = clId ? { editable: true, fieldKey: 'axisOffset', target: 'axisOffset', clId } : {};
-    prims.push(...eccentricityDim('h', axisOffset, dimY, opts));
+    prims.push(...eccentricityDim('h', axisOffset, dimY));
   }
   return prims;
 }
@@ -165,10 +164,11 @@ function columnFigure(col, ctx) {
   // 軸線の伸長範囲（通り芯・柱芯・断面を内包）。
   const loX = Math.min(0, offX, cx - w / 2), hiX = Math.max(0, offX, cx + w / 2);
   const loY = Math.min(0, offY, cy - h / 2), hiY = Math.max(0, offY, cy + h / 2);
-  // 偏芯量の寸法線は柱断面からしっかり離す（断面寄りに描くと断面と紛れるため）。
-  const xDimY = loY - g * 0.6, xLabelY = loY - g * 1.6;   // X変位寸法とX/柱芯ラベル（上）
-  // Y側（横の中心線）は柱芯ラベルを偏芯量の寸法値からさらに離すため、X側より大きく左へ張り出す。
-  const yDimX = loX - g * 0.6, yLabelX = loX - g * 2.0;    // Y変位寸法とY/柱芯ラベル（左）
+  // 寸法線は柱断面からしっかり離す（断面寄りに描くと断面と紛れるため）。上側（X方向）・左側（Y方向）に
+  // それぞれ2段重ねる：内（断面寄り）＝外面寸(通り芯⇄柱面=出幅, 編集可・柱面へ寸法足)、外＝偏芯量(通り芯⇄柱芯, 編集不可)。
+  const xProjDimY = loY - g * 0.6, xEccDimY = loY - g * 1.4, xLabelY = loY - g * 2.3;  // X：外面寸(内)/偏芯量(外)/ラベル（上）
+  // Y側（横の中心線）は柱芯ラベルを寸法値からさらに離すため、X側より大きく左へ張り出す。
+  const yProjDimX = loX - g * 0.6, yEccDimX = loX - g * 1.4, yLabelX = loX - g * 2.7;  // Y：外面寸(内)/偏芯量(外)/ラベル（左）
   // 線はラベルの位置から始めず、ラベルの続き（同じ軸線上）に隙間を空けてから始める
   // （ラベルが線の上に乗って重なるのを避ける。例: 縦線なら「文字／隙間／線」を上から順に配置）。
   const labelGap = g * 0.3;
@@ -189,7 +189,11 @@ function columnFigure(col, ctx) {
   prims.push({ type: 'text', x: yLabelX, y: 0, text: 'Y', anchor: 'end', baseline: 'middle', size: 10, fill: '#94a3b8' });
 
   if (ctx.rigid) {
-    // 柱芯X／柱芯Y（オフセットが非0のときだけ線・ラベルを出す。0でも変位寸法は編集可で出す）。
+    // 外側方向の符号（ctx.exteriorSignX/Y。内側＋方向=+1／−方向=−1／内部=0）。柱外面は「真の外側」に描く——
+    // offX の符号は出幅>柱半幅で反転するため faceX 算定に使えない（フットプリント由来の符号を使う）。
+    const sX = ctx.exteriorSignX ?? 0;
+    const sY = ctx.exteriorSignY ?? 0;
+    // 柱芯X／柱芯Y（オフセットが非0＝通り芯と異なるときだけ線・ラベルを出す）。
     if (offX !== 0) {
       prims.push({ type: 'line', x1: offX, y1: axTop, x2: offX, y2: axBot, dash: 'center', stroke: '#64748b' });
       prims.push({ type: 'text', x: offX, y: xLabelY, text: '柱芯', anchor: 'middle', size: 10, fill: '#64748b' });
@@ -198,9 +202,22 @@ function columnFigure(col, ctx) {
       prims.push({ type: 'line', x1: colAxisLeft, y1: offY, x2: axRight, y2: offY, dash: 'center', stroke: '#64748b' });
       prims.push({ type: 'text', x: colAxisLabelX, y: offY, text: '柱芯', anchor: 'end', baseline: 'middle', size: 10, fill: '#64748b' });
     }
-    prims.push(...eccentricityDim('h', offX, xDimY, { editable: true, target: 'axisOffset', fieldKey: 'axisOffset', clId: ctx.axisClIdX }));
-    // 偏芯量の縦寸法値は寸法線の右に空きが無いため、左側（通り芯/柱芯ラベルとの間）に置く。
-    prims.push(...eccentricityDim('v', offY, yDimX, { editable: true, target: 'axisOffset', fieldKey: 'axisOffset', clId: ctx.axisClIdY, labelSide: 'left' }));
+    // 偏芯量寸法（編集不可）：通り芯⇄柱芯の変位量。外側（断面から遠い側）。
+    // 外面寸（出幅）寸法（編集可）：柱面⇄通り芯の距離（建物に1値・X/Y共通）。外面位置＝断面中心 cx を真の外側 sX へ
+    // 柱半幅ずらした面（|faceX|＝出幅）。内側（断面寄り）に置き、柱面へ寸法足を出す（足の長さは材寸と同じ footLen）。
+    // いずれも外周柱（外側符号≠0）のみ描く。
+    const faceProjOpts = { editable: true, target: 'faceProjection', fieldKey: 'columnFaceProjection' };
+    if (sX !== 0) {
+      const faceX = cx - sX * w / 2; // 柱外面X（通り芯相対・外側 sX 側）。|faceX|＝出幅
+      prims.push(...offsetDim('h', 0, offX, xEccDimY));                                            // X偏芯量（通り芯⇄柱芯）read-only：外
+      prims.push(...offsetDim('h', 0, faceX, xProjDimY, { ...faceProjOpts, foot: hiY, footLen }));  // X出幅（通り芯⇄柱面）editable：内・柱面へ足
+    }
+    if (sY !== 0) {
+      const faceY = cy - sY * h / 2; // 柱外面Y（通り芯相対・外側 sY 側）。|faceY|＝出幅
+      // 縦寸法値は寸法線の右に空きが無いため左側に置く。
+      prims.push(...offsetDim('v', 0, offY, yEccDimX, { labelSide: 'left' }));                                       // Y偏芯量 read-only：外
+      prims.push(...offsetDim('v', 0, faceY, yProjDimX, { ...faceProjOpts, foot: hiX, footLen, labelSide: 'left' })); // Y出幅 editable：内・柱面へ足
+    }
   }
   // 断面寸法（カタログ断面のため read-only）。右に成(h)・下に幅(w)。
   if (dia) {
