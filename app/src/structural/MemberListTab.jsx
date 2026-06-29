@@ -14,7 +14,7 @@ import {
   FIGURE_FRAME_BY_MAP, DEFAULT_FIGURE_FRAME,
 } from './memberCatalog.js';
 import { resolveDefaultMaterialType, alignToOuterFace, autoFillColumnSizes, autoFillColumnBaseSizes, isRigidFrameStructure,
-  autoFillBeamEccentricity, autoBeamEccentricity, faceGapForEccentricity, autoFillColumnAxisOffsets, axisExteriorSign } from './structuralAutoFill.js';
+  autoFillBeamEccentricity, autoBeamEccentricity, faceGapForEccentricity, autoFillColumnAxisOffsets, axisExteriorSign, resolveLowestGraph } from './structuralAutoFill.js';
 import { buildExteriorSide } from './wallGate.js';
 import { SECTION_CATALOG, findSectionEntry, SectionShape } from './sectionCatalog.js';
 import { renumberMembers } from './memberNumbering.js';
@@ -350,17 +350,27 @@ const MemberCard = observer(({ members, group, graph, composition, project, read
   // ・通り芯⇄柱芯の変位量（target='axisOffset'）はCL単位の柱芯オフセットを更新する
   //   → 柱・梁の実位置computedが追従し、描画エリアが即リドローされる（MobX）。
   // ・厚指定（厚み）等は同一タグの全部材へ伝播。構造算定サイズは read-only のためここには来ない。
-  const handleEditDim = readOnly ? undefined : (dim, value) => {
+  const handleEditDim = readOnly ? undefined : async (dim, value) => {
     if (dim.target === 'faceProjection') {
-      // 出幅（柱面⇄通り芯の距離）は1構造×1通り芯。dim.axis(X/Y)で代表柱の対応CLを選び、その構造・通り芯の
-      // 出幅キーへ書く（柱芯ラベル移動と同一キー＝図とラベルで同一値を読み書き）。柱芯オフセットは出幅＋自階柱幅
-      // から各階で派生するため、更新後 composition 内の全階グラフで columnAxisOffsets を再構築する（柱・梁・軸線・
-      // 寸法を一致して再描画）。符号は subject graph のフットプリントを権威に使う。
-      const cl = dim.axis === 'Y' ? representative.horizontalCL : representative.verticalCL;
-      project.structuralInfo.setColumnFaceProjection(structure, cl, Math.abs(value));
+      // 出幅（柱面⇄通り芯の距離）は1構造×1通り芯。構造リスト柱の図は「その構造の代表断面1本」を示すため、
+      // 編集値はこのタグ群の全柱が乗る当該軸の全通り芯へ一括適用する（X編集→members の全 verticalCL、
+      // Y編集→全 horizontalCL）。代表1本のCLだけに書くと、L字外周の他通り芯（X2/X3/Y1/Y2…）の出幅が
+      // 0のまま取り残され、柱芯が初期偏芯（出幅0）から動かない不具合になる。1通り芯ごとの微調整は描画エリアの
+      // 柱芯ラベルのロングタップ（commitAxisEdit）が担う。柱芯オフセットは出幅＋自階柱幅から各階で派生するため、
+      // 更新後 composition 内の全階グラフで columnAxisOffsets を再構築する（柱・梁・軸線・寸法を一致して再描画）。
+      // 符号権威＝最下階フットプリント（resolveLowestGraph）——R階伏図など部屋の無い主題階を権威にすると
+      // 矩形縮退でL字ノッチ中通りの偏芯が0へ崩れるため、再計算と同じ単一権威に揃える。
+      const axisCLs = [...new Map(
+        members.map(m => dim.axis === 'Y' ? m.horizontalCL : m.verticalCL)
+          .filter(Boolean).map(c => [c.id, c]),
+      ).values()];
+      for (const c of axisCLs) project.structuralInfo.setColumnFaceProjection(structure, c, Math.abs(value));
       const graphs = composition?.bindings?.map(b => b.graph) ?? [graph];
-      const exterior = buildExteriorSide(graph);
-      for (const gg of graphs) autoFillColumnAxisOffsets(gg, project, graph, exterior);
+      const lowest = await resolveLowestGraph(project, graph);
+      for (const gg of graphs) {
+        autoFillColumnAxisOffsets(gg, project, lowest);
+        autoFillBeamEccentricity(gg, project); // 柱芯オフセット変更に梁の柱外面合わせを追従させる
+      }
       return;
     }
     if (dim.target === 'eccentricity') {

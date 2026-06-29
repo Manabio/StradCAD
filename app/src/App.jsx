@@ -59,8 +59,7 @@ import { CalibrationDialog }  from './ui/CalibrationDialog.jsx';
 import { SiteDialog }          from './ui/SiteDialog.jsx';
 import { BuildingInfoDialog }  from './ui/BuildingInfoDialog.jsx';
 import { StructuralPanel } from './structural/StructuralPanel.jsx';
-import { autoFillColumns, autoFillColumnAxisOffsets, autoFillColumnSizes, resolveLowestGraph, convertMembersToEffectiveMaterial, deleteClassificationOverflow } from './structural/structuralAutoFill.js';
-import { buildExteriorSide } from './structural/wallGate.js';
+import { autoFillColumns, autoFillColumnAxisOffsets, autoFillBeamEccentricity, autoFillColumnSizes, resolveLowestGraph, convertMembersToEffectiveMaterial, deleteClassificationOverflow } from './structural/structuralAutoFill.js';
 import { structureHasMemberKind, MEMBER_KIND } from './structural/structuralClassification.js';
 import { buildStructuralWallGate } from './structural/wallGate.js';
 import { renumberAllCategories } from './structural/memberNumbering.js';
@@ -1833,7 +1832,7 @@ const App = observer(() => {
   // axisEditState の出幅を 1構造×1通り芯キーへ書込み、構造伏図に映る全グラフで柱芯オフセットを
   // 再構築する（MobX連鎖で柱・梁・柱芯ラベル・寸法が即再描画）。同一構造の階は同じキーを共有するので
   // 自動で揃う（非アクティブ階は構造モード突入時再計算で反映＝既存 faceProjection 編集と同じ割り切り）。
-  function commitAxisEdit() {
+  async function commitAxisEdit() {
     const es = modeRef.current?.axisEditState;
     if (!es) return;
     const { cl, structure, projection } = es;
@@ -1843,10 +1842,16 @@ const App = observer(() => {
     const newVal = Math.abs(projection ?? 0);
     if (newVal === si.getColumnFaceProjection(structure, cl)) return; // 実効値に変化なし
 
+    // 符号権威＝最下階フットプリント（resolveLowestGraph）。R階伏図など部屋の無い主題階を権威にすると
+    // buildExteriorSide が部材CL外接矩形へ縮退し、L字ノッチ中通り（X2/Y2）の偏芯が0へ崩れる
+    // （再計算 structuralRecompute と同じ単一権威に揃える）。
+    const lowest = await resolveLowestGraph(project, graph);
     const refill = () => {
-      const graphs   = structComposition?.bindings?.map(b => b.graph) ?? [graph];
-      const exterior = buildExteriorSide(graph); // 符号権威＝主題（アクティブ）階フットプリント
-      for (const gg of graphs) autoFillColumnAxisOffsets(gg, project, graph, exterior);
+      const graphs = structComposition?.bindings?.map(b => b.graph) ?? [graph];
+      for (const gg of graphs) {
+        autoFillColumnAxisOffsets(gg, project, lowest);
+        autoFillBeamEccentricity(gg, project); // 柱芯オフセット変更に梁の柱外面合わせを追従させる
+      }
     };
     const apply = (raw) => runInAction(() => {
       if (raw === undefined) si.columnFaceProjections.delete(key);
