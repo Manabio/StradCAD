@@ -14,7 +14,7 @@ import {
   FIGURE_FRAME_BY_MAP, DEFAULT_FIGURE_FRAME,
 } from './memberCatalog.js';
 import { resolveDefaultMaterialType, alignToOuterFace, autoFillColumnSizes, autoFillColumnBaseSizes, isRigidFrameStructure,
-  autoFillBeamEccentricity, autoBeamEccentricity, faceGapForEccentricity } from './structuralAutoFill.js';
+  autoFillBeamEccentricity, autoBeamEccentricity, faceGapForEccentricity, axisExteriorSign } from './structuralAutoFill.js';
 import { buildExteriorSide } from './wallGate.js';
 import { SECTION_CATALOG, findSectionEntry, SectionShape } from './sectionCatalog.js';
 import { renumberMembers } from './memberNumbering.js';
@@ -352,16 +352,25 @@ const MemberCard = observer(({ members, group, graph, composition, project, read
       // 同じCLのオフセットを書き、軸線・部材・寸法を一致して再描画させる。
       if (dim.clId != null) {
         const graphs = composition?.bindings?.map(b => b.graph) ?? [graph];
-        for (const gg of graphs) gg.setColumnAxisOffset(dim.clId, value);
-        // 柱の偏異量を変更したら、反対側の外周CL（X方向=右端CL／Y方向=下端CL）も符号反転で同時更新し、
-        // 両端の柱芯インセットを同量に保つ（autoFillColumnAxisOffsets の「最小側+・最大側−」の慣習に従う）。
-        // 編集対象がその外周CL自身のときは二重更新を避けてスキップする。X変位=dim('h')→gridXs、Y変位=dim('v')→gridYs。
         if (group.mapName === 'columnMap') {
-          const endAxis = dim.dir === 'h' ? graph.gridXs : graph.gridYs;
-          const endCL = endAxis[endAxis.length - 1];
-          if (endCL && endCL.id !== dim.clId) {
-            for (const gg of graphs) gg.setColumnAxisOffset(endCL.id, -value);
+          // 柱芯インセットは外周柱で同量に保つ。編集した方向(X=dim'h'→gridXs／Y=dim'v'→gridYs)の
+          // **全外周CLを各CL自身の外側符号で同量インセット**する。旧実装は「軸末尾CLへ-value」で min/max の
+          // 2本前提だったため、L字段差の中通り（例:X2）が連動対象から漏れて取り残された——全外周走査
+          // （axisExteriorSign）に統一して中通りも含める（autoFillColumnAxisOffsets と同一の外周モデル）。
+          const exterior = buildExteriorSide(graph);
+          const isVertical = dim.dir === 'h';
+          const axisCLs = isVertical ? graph.gridXs : graph.gridYs;
+          let any = false;
+          for (const cl of axisCLs) {
+            const s = axisExteriorSign(exterior, graph, cl, isVertical);
+            if (s === 0) continue; // 内部芯は偏芯0のまま
+            for (const gg of graphs) gg.setColumnAxisOffset(cl.id, s * value); // value=絶対値・符号はCLごと
+            any = true;
           }
+          // 外周が拾えない縮退ケース（フットプリント未定義等）は編集対象CLだけ素直に設定する。
+          if (!any) for (const gg of graphs) gg.setColumnAxisOffset(dim.clId, value);
+        } else {
+          for (const gg of graphs) gg.setColumnAxisOffset(dim.clId, value);
         }
       }
       return;

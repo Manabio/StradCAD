@@ -330,14 +330,20 @@ function defaultColumnWidth(mainStructure) {
   return findSectionEntry(DEFAULT_COLUMN_SECTION_BY_MATERIAL[materialType])?.width ?? 200;
 }
 
-/** そのCL上で外周符号を問い合わせる代表交差座標（案ア＝per-CL代表）。
- *  そのCL上に立つ柱の直交座標を使い、柱が無ければ直交グリッドの中点で代用する。 */
-function representativeCross(graph, cl, isVertical) {
-  const col = graph.columns.find(c => (isVertical ? c.verticalCL.id : c.horizontalCL.id) === cl.id);
-  if (col) return isVertical ? col.horizontalCL.value : col.verticalCL.value;
-  const cross = isVertical ? graph.gridYs : graph.gridXs; // value 昇順
-  if (cross.length === 0) return cl.value;
-  return (cross[0].value + cross[cross.length - 1].value) / 2;
+/** あるCL（通り芯）が外周かどうかの符号を、軸線に沿って**全交差位置を走査**して求める単一ヘルパ。
+ *  直交グリッドの隣接スパン中点ごとに外周モデル（exterior）へ外側方向を問い合わせ、最初に得た非0符号を返す。
+ *  代表1点（その軸の最初の柱の座標）だけを見ると、L字段差の中通り（例:Y2）で代表が内部側スパンに当たり
+ *  s=0 に落ちる——軸の一部だけが外周の場合を取りこぼす不具合の解消（X2はたまたま代表が外周側で助かっていた）。
+ *  スパン中点で引くので軸線上（交点）の worldToCell 端境界曖昧性も避けられる。両側で符号が割れる稀な軸は
+ *  先勝ち（割り切り。凹形状でも各軸は単一外周符号という前提）。外周が無い内部軸は0。 */
+export function axisExteriorSign(exterior, graph, cl, isVertical) {
+  const cross = isVertical ? graph.gridYs : graph.gridXs; // 直交グリッド（value 昇順）
+  for (let i = 0; i < cross.length - 1; i++) {
+    const atCross = (cross[i].value + cross[i + 1].value) / 2;
+    const s = exterior.outsideSign(cl.value, isVertical, atCross);
+    if (s !== 0) return s;
+  }
+  return 0;
 }
 
 /** 柱芯（columnAxisOffsets＝通り芯から柱芯までの偏芯量）を自動生成する。構造モード突入時、
@@ -375,10 +381,11 @@ export function autoFillColumnAxisOffsets(graph, project, lowestGraph = graph, e
         outerFace = offLowest - s * halfLowest;
       } else {
         // 最下階自身、または最下階が未計算（offLowest 無し）の縮退時のみ外周モデルで符号を求める。
-        // 外周モデル（仕上げフットプリント優先・無ければ部材CL外接矩形）から、そのCLの代表交差位置で
-        // 問い合わせる（内側＝+方向=+1／−方向=−1／内部・建物外=0）。基底ルールは外面を通り芯に合わせる。
+        // 外周モデル（仕上げフットプリント優先・無ければ部材CL外接矩形）から、そのCLを軸線に沿って
+        // 全交差走査して符号を取る（axisExteriorSign。L字段差の中通りも外周として拾う）。
+        // （内側＝+方向=+1／−方向=−1／内部・建物外=0）。基底ルールは外面を通り芯に合わせる。
         const ex = isLowest ? exterior : buildExteriorSide(lowestGraph);
-        s = ex.outsideSign(cl.value, isVertical, representativeCross(lowestGraph, cl, isVertical));
+        s = axisExteriorSign(ex, lowestGraph, cl, isVertical);
         outerFace = 0; // offset=s*halfLowest → 外面=通り芯
       }
       // 内部芯(s=0)は偏芯0。外周芯は自階の柱幅で外面基準面に外面を合わせる偏芯量。
