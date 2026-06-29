@@ -73,17 +73,13 @@ reaction(
 );
 
 // ----------------------------------------------------------------
-// IndexedDB 起動時復元 + auto-save 開始
+// IndexedDB 起動時初期化 + auto-save 開始
 //
-// 新規タブ / ブラウザ起動時のみ IDB をクリアする（F5 リロードは残す）。
-// sessionStorage はタブを閉じると消えるため、この判定に適している。
+// 起動時は常に全ストア（全階のフロアデータ・通り芯・構造情報など）を削除し、
+// 完全な初期状態（白紙）から作業を開始する。F5 リロードでも保持しない。
 // ----------------------------------------------------------------
-const SESSION_KEY = 'strad-session-started';
-const isNewSession = !sessionStorage.getItem(SESSION_KEY);
-sessionStorage.setItem(SESSION_KEY, '1');
-
 (async () => {
-  if (isNewSession) await clearAllStores();
+  await clearAllStores();
   floorSwapManager.setupStructGraph(project.structGraph, project.structuralInfo, savedProjectId, project.structuralTagRegistry).catch(console.error);
   floorSwapManager.activate(plane, graph).catch(console.error);
 })();
