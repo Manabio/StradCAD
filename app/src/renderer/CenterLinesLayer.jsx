@@ -91,8 +91,9 @@ export const CenterLinesLayer = observer(({ graph, viewport, width, height, colu
     const off = graph.columnAxisOffsets.get(cl.id) ?? 0;
     if (off === 0) return [];
     const isV = cl.centerLineType === CenterLineType.VERTICAL;
-    // 寸法線の足を別途引かない代わりに、軸線自体をガター内の柱芯寸法線位置まで伸ばす
-    // （isV: TOP/BOTTOM、!isV: LEFT/RIGHT の lineCoord。片方でも欠ける場合は clExtent にフォールバック）。
+    // 寸法線の足を別途引かない代わりに、軸線自体をガター内の○「柱芯」ラベル中心まで伸ばす
+    // （通り芯が丸ラベル中心まで伸びるのと同じ。isV: TOP/BOTTOM、!isV: LEFT/RIGHT のラベル座標。
+    //  片方でも欠ける場合は clExtent にフォールバック）。
     const fallback = clExtent(cl, graph, viewport, width, height);
     const lo = (isV ? axisLineCoords?.top    : axisLineCoords?.left)  ?? fallback?.[0];
     const hi = (isV ? axisLineCoords?.bottom : axisLineCoords?.right) ?? fallback?.[1];

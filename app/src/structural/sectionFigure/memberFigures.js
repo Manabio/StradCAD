@@ -11,14 +11,25 @@
 //   glLabel / flLabel         : 基準レベル線のラベル（'GL' / '2FL' 等）。
 // ================================================================
 
-import { findSectionEntry, SectionShape } from '../sectionCatalog.js';
+import { findSectionEntry, SectionShape, diaphragmProjection } from '../sectionCatalog.js';
+import { withLayoutId } from './layoutStudy.js';
+import { shapeBounds, chooseScale } from './sectionGeometry.js';
 
 const STEEL_FILL = '#475569';
 // 偏芯量寸法線の端点マーカー（丸）の半径。縮尺に関わらずどの図でも同じ大きさに見えるようpx固定。
 const MARKER_R_PX = 1.25;
 
+// スクリーン空間注記：注記の隙間の基準量(px)。全注記オフセットは multiplier * g（mm）で表すため、
+// g = GAP_BASE_PX / scale（mm）とすれば描画時 g * scale = GAP_BASE_PX（px）で縮尺非依存に一定となる。
+// 値を小さくすると注記が密に、大きくすると疎になる（要調整時はここを変える）。
+const GAP_BASE_PX = 22;
+// スクリーン空間注記が形状の外側へ張り出す px を、縮尺見積り時に枠から各辺確保する量（FIGURE_MARGIN_PX に上乗せ）。
+const ANNOTATION_RESERVE_PX = 24;
+
 // 寸法線が断面外へ張り出す mm 量を、断面の代表寸法から決める（縮尺非依存に見えるよう比率で）。
+// scale が分かっていれば px 一定（GAP_BASE_PX）になる mm を返す（スクリーン空間注記）。未指定（Konva等）は従来比率。
 function gapFor(extent) { return Math.max(extent * 0.4, 80); }
+function resolveGap(ctx, extent) { return ctx?.scale ? GAP_BASE_PX / ctx.scale : gapFor(extent); }
 
 // dim プリミティブ生成ヘルパー。
 function dim(dir, from, to, at, label, opts = {}) {
@@ -54,10 +65,24 @@ function materialDim(dir, from, to, materialEdge, side, label, g, opts = {}) {
 // 偏芯量寸法線: 通り芯⇄柱芯（または軸オフセット）の変位量。端のチックの代わりに
 // 両端点へ小さな丸（MARKER_R_PX）を置く。dir='h'なら at はy座標、'v'なら at はx座標。
 function eccentricityDim(dir, axisOffset, at, opts = {}) {
+  return offsetDim(dir, 0, axisOffset, at, opts);
+}
+
+// 任意区間 from→to の変位量寸法線（ラベル=区間長の絶対値）。柱芯⇄材芯（梁の偏芯量）等に使う。
+function offsetDim(dir, from, to, at, opts = {}) {
   return [
-    ...endpointMarkers(dir, 0, axisOffset, at),
-    dim(dir, 0, axisOffset, at, Math.abs(axisOffset), { ...opts, noTick: true }),
+    ...endpointMarkers(dir, from, to, at),
+    dim(dir, from, to, at, Math.abs(to - from), { ...opts, noTick: true }),
   ];
+}
+
+// 鋼管（角形／丸形）柱のダイヤフラム外形（断面外面から e だけ外側へ広げた四角）。鋼管以外は null。
+// e（出寸法。diaphragmProjection）と矩形プリミティブを返す。寸法線は呼び出し側が柱断面の寸法線と一本化する。
+// cx/cy=断面中心、w/h=断面寸法(mm)。
+function diaphragmRect(section, cx, cy, w, h) {
+  const e = diaphragmProjection(section);
+  if (!e) return null;
+  return { e, rect: { type: 'rect', x: cx - w / 2 - e, y: cy - h / 2 - e, w: w + 2 * e, h: h + 2 * e, stroke: '#94a3b8' } };
 }
 
 // 断面マスター（H形鋼/角形鋼管/丸/矩形）を、水平中心 cx・上端 topY に配置するプリミティブ群を返す。
@@ -105,11 +130,11 @@ function sectionShapePrims(section, cx, topY, fill = STEEL_FILL) {
 function axisPrims(axisOffset, { dimY, labelY, clId }) {
   const prims = [
     { type: 'axisV', x: 0 },
-    { type: 'text', x: 0, y: labelY, text: '通り芯', anchor: 'middle', size: 10, fill: '#94a3b8' },
+    { type: 'text', x: 0, y: labelY, text: '通り芯', anchor: 'middle', size: 10, fill: '#94a3b8', layoutId: 'text:axisLabel' },
   ];
   if (axisOffset && axisOffset !== 0) {
     prims.push({ type: 'axisV', x: axisOffset });
-    prims.push({ type: 'text', x: axisOffset, y: labelY, text: '柱芯', anchor: 'middle', size: 10, fill: '#94a3b8' });
+    prims.push({ type: 'text', x: axisOffset, y: labelY, text: '柱芯', anchor: 'middle', size: 10, fill: '#94a3b8', layoutId: 'text:columnAxisLabel' });
     const opts = clId ? { editable: true, fieldKey: 'axisOffset', target: 'axisOffset', clId } : {};
     prims.push(...eccentricityDim('h', axisOffset, dimY, opts));
   }
@@ -130,8 +155,12 @@ function columnFigure(col, ctx) {
   const cy = offY + (ctx.eccY ?? 0);
   const secTop = cy - h / 2;
   const { prims: sp } = sectionShapePrims(section, cx, secTop);
-  // 柱は寸法線・ラベルが密集しやすいため、通常の gapFor よりさらに広めに離す。
-  const g = gapFor(Math.max(w, h)) * 1.4;
+  // 柱は寸法線・ラベルが密集しやすいため、通常より大きく離す。resolveGap は scale 指定時に
+  // GAP_BASE_PX/scale（mm）を返す＝描画px一定（図の倍率に寄らず一定間隔）。
+  const base = resolveGap(ctx, Math.max(w, h));
+  const g = base * 2.5;          // 全寸法線・ラベルを柱断面から離す距離
+  // 寸法線の足（引出線）の長さ。離れ(g)を大きくしても足は伸ばさず一定長を保ち、断面との間に空きを作る。
+  const footLen = base * 0.8;
 
   // 軸線の伸長範囲（通り芯・柱芯・断面を内包）。
   const loX = Math.min(0, offX, cx - w / 2), hiX = Math.max(0, offX, cx + w / 2);
@@ -146,12 +175,13 @@ function columnFigure(col, ctx) {
   const axTop = xLabelY + labelGap, axBot = hiY + g * 0.6;
   // 横の中心線は縦の中心線より長く見せる（右側の張り出しを縦側より大きくする）。
   const axLeft = yLabelX + labelGap, axRight = hiX + g * 1.0;
-  // 柱芯（横）のラベル・線端点だけは、柱断面中心(cx)からの距離を1.5倍にしてさらに左へ
-  // 張り出す（通り芯Y/「Y」ラベルの位置・axLeftはここでは変更しない）。
-  const colAxisLabelX = cx - (cx - yLabelX) * 1.5;
-  const colAxisLeft = colAxisLabelX + labelGap;
+  // 柱芯（横）のラベルは通り芯Y/「Y」ラベルと同じ x に揃える（右端そろえで縦に整列）。線端点も Y 線と同じ axLeft に合わせる。
+  const colAxisLabelX = yLabelX;
+  const colAxisLeft = axLeft;
 
-  const prims = [...sp];
+  // 鋼管柱はダイヤフラム外形（断面外面+e の四角）を断面の背面に重ねる。
+  const dia = diaphragmRect(section, cx, cy, w, h);
+  const prims = [...(dia ? [dia.rect] : []), ...sp];
   // 通り芯X（x=0・縦）／通り芯Y（y=0・横）
   prims.push({ type: 'line', x1: 0, y1: axTop, x2: 0, y2: axBot, dash: 'center', stroke: '#94a3b8' });
   prims.push({ type: 'line', x1: axLeft, y1: 0, x2: axRight, y2: 0, dash: 'center', stroke: '#94a3b8' });
@@ -173,9 +203,40 @@ function columnFigure(col, ctx) {
     prims.push(...eccentricityDim('v', offY, yDimX, { editable: true, target: 'axisOffset', fieldKey: 'axisOffset', clId: ctx.axisClIdY, labelSide: 'left' }));
   }
   // 断面寸法（カタログ断面のため read-only）。右に成(h)・下に幅(w)。
-  prims.push(...materialDim('v', cy - h / 2, cy + h / 2, hiX, 1, h, g));
-  prims.push(...materialDim('h', cx - w / 2, cx + w / 2, hiY, 1, w, g));
+  if (dia) {
+    // 鋼管は出寸法 e を成 h と同じ寸法線上（同一 at）へ連続させ、柱断面の寸法線と一本化する：上e｜成h（出寸法は上だけ）。
+    const e = dia.e;
+    prims.push(...materialDim('v', cy - h / 2 - e, cy - h / 2, hiX, 1, e, g, { footLen }));
+    prims.push(...materialDim('v', cy - h / 2, cy + h / 2, hiX, 1, h, g, { footLen }));
+  } else {
+    prims.push(...materialDim('v', cy - h / 2, cy + h / 2, hiX, 1, h, g, { footLen }));
+  }
+  prims.push(...materialDim('h', cx - w / 2, cx + w / 2, hiY, 1, w, g, { footLen }));
   return { primitives: prims };
+}
+
+// 梁の軸線群（柱芯・材芯）＋両者の相互距離（変更不可のテキスト寸法線）を作る。基礎伏図の梁は別経路 axisPrims のため対象外。
+// 柱芯 x=axisOffset（基準）、材芯 x=cx（断面中心＝axisOffset＋偏芯量）。外周梁（axisOffset≠0）で偏芯すると2本に分かれ、
+// その相互距離を読み取り専用の寸法線で示す（偏芯量は autoFillBeamEccentricity が外面合わせで自動算定。図上の手編集UIは持たない）。
+// 柱芯オフセットが無い内部梁（軸＝通り芯一致）では軸線を出さず断面のみ。偏芯0で両軸が一致する場合は断面中心を材芯1本だけ描く。
+// eccDimY=相互距離寸法のy、labelY=各軸ラベルのy。
+function beamAxisPrims(axisOffset, cx, { eccDimY, labelY }) {
+  if (!axisOffset || axisOffset === 0) return [];
+  // 偏芯0（材芯＝柱芯）の内部寄り梁は断面中心の材芯1本のみ。
+  if (cx === axisOffset) {
+    return [
+      { type: 'axisV', x: cx, layoutId: 'axis:materialAxis' },
+      { type: 'text', x: cx, y: labelY, text: '材芯', anchor: 'middle', size: 10, fill: '#64748b', layoutId: 'text:materialAxisLabel' },
+    ];
+  }
+  return [
+    { type: 'axisV', x: axisOffset, layoutId: 'axis:columnAxis' },
+    { type: 'text', x: axisOffset, y: labelY, text: '柱芯', anchor: 'middle', size: 10, fill: '#94a3b8', layoutId: 'text:columnAxisLabel' },
+    { type: 'axisV', x: cx, layoutId: 'axis:materialAxis' },
+    { type: 'text', x: cx, y: labelY, text: '材芯', anchor: 'middle', size: 10, fill: '#64748b', layoutId: 'text:materialAxisLabel' },
+    // 柱芯⇄材芯の相互距離。編集オプションを付けない＝変更不可の静的テキスト寸法線。
+    ...withLayoutId('dim:eccentricity', offsetDim('h', axisOffset, cx, eccDimY)),
+  ];
 }
 
 // --- 梁（S造=H形鋼／RC=矩形）。FL線付き ---------------------------------------
@@ -185,13 +246,14 @@ function beamFigure(beam, ctx) {
     const axisOffset = ctx.axisOffset ?? 0;
     const cx = axisOffset + (ctx.ecc ?? 0);
     const { prims: sp, w, h } = sectionShapePrims(section, cx, 0);
-    const g = gapFor(Math.max(w, h));
+    const g = resolveGap(ctx, Math.max(w, h));
+    // 各要素に layoutId を付け、S造梁の配置検討モード（scope='steelBeam'）で個別に移動できるようにする。
     const prims = [
-      ...axisPrims(axisOffset, { dimY: -g * 0.95, labelY: -g * 1.55, clId: ctx.axisClId }),
-      { type: 'levelLine', y: -g * 0.6, label: ctx.flLabel ?? 'FL' },
-      ...sp,
-      ...materialDim('v', 0, h, cx + w / 2, 1, section?.height ?? h, g),
-      ...materialDim('h', cx - w / 2, cx + w / 2, h, 1, section?.width ?? w, g),
+      ...beamAxisPrims(axisOffset, cx, { eccDimY: -g * 0.95, labelY: -g * 1.55 }),
+      ...withLayoutId('levelLine:FL', [{ type: 'levelLine', y: -g * 0.6, label: ctx.flLabel ?? 'FL' }]),
+      ...withLayoutId('shape:section', sp),
+      ...withLayoutId('dim:height', materialDim('v', 0, h, cx + w / 2, 1, section?.height ?? h, g)),
+      ...withLayoutId('dim:width', materialDim('h', cx - w / 2, cx + w / 2, h, 1, section?.width ?? w, g)),
     ];
     // 断面名はカードの「断面」プルダウンで示す（図中ラベルは置かない）。
     return { primitives: prims };
@@ -209,9 +271,9 @@ function rcRectBeamFigure(beam, ctx, levelLabel) {
   const D = beam.beamDepth ?? 600;
   const axisOffset = ctx.axisOffset ?? 0;
   const cx = axisOffset + (ctx.ecc ?? 0);
-  const g = gapFor(Math.max(b, D));
+  const g = resolveGap(ctx, Math.max(b, D));
   const prims = [
-    ...axisPrims(axisOffset, { dimY: -g * 0.35, labelY: -g * 0.95, clId: ctx.axisClId }),
+    ...beamAxisPrims(axisOffset, cx, { eccDimY: -g * 0.4, labelY: -g * 0.95 }),
     { type: 'levelLine', y: 0, label: levelLabel },
     { type: 'rect', x: cx - b / 2, y: 0, w: b, h: D, hatch: 'concrete' },
     // 梁成D・梁幅b は構造算定値のため read-only（手入力での大きさ変更は不可）。
@@ -221,30 +283,100 @@ function rcRectBeamFigure(beam, ctx, levelLabel) {
   return { primitives: prims };
 }
 
-// --- 基礎梁（RC矩形 ＋ GL線。フーチング合成は ctx.footing 指定時のみ） ----------------
+// 木造基礎の断面詳細の既定寸法（問題.md）。ベース600×150・張り出し0、べた基礎 厚150・天端GL+50、基礎梁の地中部250。
+// beam.foundationSection に保存された編集値があれば上書きする（未編集分はこの既定で補完）。
+const WOOD_FOUNDATION_DEFAULTS = Object.freeze({
+  embedDepth: 250, baseWidth: 600, baseThickness: 150, baseOverhang: 0, matThickness: 150, matTopAboveGL: 50,
+});
+
+// 編集可能な材寸法線（materialDim に editable/target/fieldKey を付ける）。value がラベル＝現在値。
+function editMatDim(dir, from, to, edge, side, value, g, target, fieldKey, opts = {}) {
+  return materialDim(dir, from, to, edge, side, value, g, { editable: true, target, fieldKey, ...opts });
+}
+
+// --- 基礎梁（RC矩形 ＋ GL線）。木造は基礎種別ごとにベース／べた基礎マットを合成し、問題.md の寸法を
+//     すべて編集可能フィールドとして配置する（ctx.woodFoundation）。非木造は従来どおり梁天端=GL・read-only。
 function foundationBeamFigure(beam, ctx) {
   const b = beam.beamWidth ?? 350;
   const D = beam.beamDepth ?? 600;
   const axisOffset = ctx.axisOffsetX ?? ctx.axisOffset ?? 0;
   const cx = axisOffset + (ctx.ecc ?? 0);
-  const g = gapFor(Math.max(b, D));
-  const glY = 0;          // GL を y=0
-  const beamTopY = glY;   // 基礎梁は GL から下へ
+  const wood = !!ctx.woodFoundation;
+
+  if (!wood) {
+    // 非木造：従来の read-only 断面（梁天端=GL、フーチング合成は ctx.footing 指定時のみ）。
+    const g = resolveGap(ctx, Math.max(b, D));
+    const prims = [
+      ...axisPrims(axisOffset, { dimY: -g * 0.35, labelY: -g * 0.95, clId: ctx.axisClId ?? ctx.axisClIdX }),
+      { type: 'levelLine', y: 0, label: ctx.glLabel ?? 'GL（FL）' },
+      { type: 'rect', x: cx - b / 2, y: 0, w: b, h: D, hatch: 'concrete' },
+      ...materialDim('v', 0, D, cx + b / 2, 1, D, g),
+      ...materialDim('h', cx - b / 2, cx + b / 2, D, 1, b, g),
+    ];
+    if (ctx.footing) {
+      const fw = ctx.footing.widthX ?? b * 1.7;
+      const fh = ctx.footing.height ?? 250;
+      prims.push({ type: 'rect', x: cx - fw / 2, y: D, w: fw, h: fh, hatch: 'concrete' });
+      prims.push(...materialDim('h', cx - fw / 2, cx + fw / 2, D + fh, 1, fw, g));
+    }
+    return { primitives: prims };
+  }
+
+  // ---- 木造：問題.md の基礎断面（全寸法を編集可能フィールドとして配置）----
+  const fs = { ...WOOD_FOUNDATION_DEFAULTS, ...(beam.foundationSection ?? {}) };
+  const isMat = ctx.foundationType === 'ベタ基礎';
+  const embed = Math.min(fs.embedDepth, D); // 地中部（GL下）
+  const rise  = D - embed;                  // 立ち上がり（GL上）
+  const g = resolveGap(ctx, Math.max(b, D, fs.baseWidth));
+  const glY = 0;                  // GL を y=0（基礎梁内部を通る）
+  const beamTopY = glY - rise;    // 基礎梁天端 = GL+rise
+  const beamBotY = glY + embed;   // 基礎梁下端 = GL−embed
+  const beamLeft = cx - b / 2, beamRight = cx + b / 2;
+
   const prims = [
-    ...axisPrims(axisOffset, { dimY: -g * 0.35, labelY: -g * 0.95, clId: ctx.axisClId ?? ctx.axisClIdX }),
-    { type: 'levelLine', y: glY, label: ctx.glLabel ?? 'GL（FL）' },
-    { type: 'rect', x: cx - b / 2, y: beamTopY, w: b, h: D, hatch: 'concrete' },
-    // 構造算定値のため read-only。
-    ...materialDim('v', beamTopY, beamTopY + D, cx + b / 2, 1, D, g),
-    ...materialDim('h', cx - b / 2, cx + b / 2, beamTopY + D, 1, b, g),
+    ...axisPrims(axisOffset, { dimY: beamTopY - g * 0.4, labelY: beamTopY - g * 1.15, clId: ctx.axisClId ?? ctx.axisClIdX }),
+    // GL：通り芯と同様に「線（datum）」と「ラベル」を分離し、それぞれ配置検討で独立移動できるようにする。
+    ...withLayoutId('levelLine:GL', [{ type: 'levelLine', y: glY, noLabel: true }]),
+    ...withLayoutId('text:glLabel', [{ type: 'text', x: beamLeft - g * 1.95, y: glY - 3, text: '▽ GL', anchor: 'end', size: 10, fill: '#94a3b8' }]),
+    ...withLayoutId('rect:beam', [{ type: 'rect', x: beamLeft, y: beamTopY, w: b, h: D, hatch: 'concrete' }]),
+    // 基礎梁幅 b（上・水平、編集可）。
+    ...withLayoutId('dim:beamWidth', editMatDim('h', beamLeft, beamRight, beamTopY, -1, b, g * 0.6, null, 'beamWidth')),
+    // 基礎梁成 D=立ち上がり+地中（左・外側、編集可）。
+    ...withLayoutId('dim:beamDepth', editMatDim('v', beamTopY, beamBotY, beamLeft, -1, D, g * 1.9, null, 'beamDepth')),
+    // 立ち上がり（左・内側、編集可。成Dを rise+地中 に保つ）。
+    ...withLayoutId('dim:rise', editMatDim('v', beamTopY, glY, beamLeft, -1, rise, g * 0.85, 'riseAboveGL', null)),
+    // 地中部（左・内側、編集可）。
+    ...withLayoutId('dim:embed', editMatDim('v', glY, beamBotY, beamLeft, -1, embed, g * 0.85, 'foundationSection', 'embedDepth')),
   ];
-  // フーチング合成断面（FG）: 基礎梁の下に幅広の独立フーチングを重ねる。
-  if (ctx.footing) {
-    const fw = ctx.footing.widthX ?? b * 1.7;
-    const fh = ctx.footing.height ?? 250;
-    const fY = beamTopY + D;
-    prims.push({ type: 'rect', x: cx - fw / 2, y: fY, w: fw, h: fh, hatch: 'concrete' });
-    prims.push(...materialDim('h', cx - fw / 2, cx + fw / 2, fY + fh, 1, fw, g));
+
+  if (isMat) {
+    // べた基礎：ベースなし。屋内側（右）に厚150・天端GL+50のマットスラブ。天端・厚を編集可フィールドに。
+    const matTopY = glY - fs.matTopAboveGL;
+    const matLen  = fs.baseWidth;
+    const matRight = beamRight + matLen;
+    prims.push(...withLayoutId('rect:mat', [{ type: 'rect', x: beamRight, y: matTopY, w: matLen, h: fs.matThickness, hatch: 'concrete' }]));
+    prims.push(...withLayoutId('text:matLabel', [{ type: 'text', x: beamRight + matLen / 2, y: matTopY - g * 0.5, text: 'べた基礎', anchor: 'middle', size: 10, fill: '#94a3b8' }]));
+    // 天端（GL→マット天端、垂直・編集可）。
+    prims.push(...withLayoutId('dim:matTopAboveGL', editMatDim('v', matTopY, glY, matRight, 1, fs.matTopAboveGL, g * 0.6, 'foundationSection', 'matTopAboveGL')));
+    // べた基礎厚（垂直・編集可）。
+    prims.push(...withLayoutId('dim:matThickness', editMatDim('v', matTopY, matTopY + fs.matThickness, matRight, 1, fs.matThickness, g * 1.4, 'foundationSection', 'matThickness')));
+  } else {
+    // なし／土間コン：基礎梁下にベース（幅・厚・張り出しを編集可フィールドに）。張り出しは屋外側（左）。
+    const baseLeft = beamLeft - fs.baseOverhang;
+    const baseRight = baseLeft + fs.baseWidth;
+    const baseY = beamBotY;
+    prims.push(...withLayoutId('rect:base', [{ type: 'rect', x: baseLeft, y: baseY, w: fs.baseWidth, h: fs.baseThickness, hatch: 'concrete' }]));
+    // ベース幅（下・水平、編集可）。
+    prims.push(...withLayoutId('dim:baseWidth', editMatDim('h', baseLeft, baseRight, baseY + fs.baseThickness, 1, fs.baseWidth, g, 'foundationSection', 'baseWidth')));
+    // ベース厚（右・垂直、編集可）。
+    prims.push(...withLayoutId('dim:baseThickness', editMatDim('v', baseY, baseY + fs.baseThickness, baseRight, 1, fs.baseThickness, g * 0.6, 'foundationSection', 'baseThickness')));
+    // ベース張り出し（屋外側＝左、基礎梁外面→ベース外面、水平・編集可）。
+    prims.push(...withLayoutId('dim:baseOverhang', editMatDim('h', baseLeft, beamLeft, baseY, -1, fs.baseOverhang, g * 0.5, 'foundationSection', 'baseOverhang')));
+    if (ctx.foundationType === '土間コン') {
+      // 土間コン：屋内側（右）にGLレベルの土間スラブ（模式・寸法なし）。
+      prims.push(...withLayoutId('rect:doma', [{ type: 'rect', x: beamRight, y: glY, w: fs.baseWidth, h: 120, hatch: 'concrete' }]));
+      prims.push(...withLayoutId('text:domaLabel', [{ type: 'text', x: beamRight + fs.baseWidth / 2, y: glY - g * 0.4, text: '土間コン', anchor: 'middle', size: 10, fill: '#94a3b8' }]));
+    }
   }
   return { primitives: prims };
 }
@@ -257,7 +389,7 @@ function footingFigure(footing, ctx) {
   const fh = Math.abs(top - bottom) || 250;
   const axisOffset = ctx.axisOffsetX ?? 0;
   const cx = axisOffset + (ctx.eccX ?? 0);
-  const g = gapFor(Math.max(wx, fh));
+  const g = resolveGap(ctx, Math.max(wx, fh));
   const prims = [
     ...axisPrims(axisOffset, { dimY: -g * 0.35, labelY: -g * 0.95, clId: ctx.axisClIdX }),
     { type: 'levelLine', y: 0, label: ctx.glLabel ?? 'GL' },
@@ -276,7 +408,7 @@ function columnBaseFigure(cb, ctx) {
   const depth = cb.pedestalDepth ?? 600;
   const axisOffset = ctx.axisOffsetX ?? 0;
   const cx = axisOffset + (ctx.eccX ?? 0);
-  const g = gapFor(Math.max(wx, wy, depth));
+  const g = resolveGap(ctx, Math.max(wx, wy, depth));
 
   // 平断面（上）: wx×wy の矩形。y帯を上部に確保。
   const planTopY = -(wy + g * 2.2);
@@ -299,7 +431,7 @@ function slabFigure(slab, ctx) {
   const t = slab.thickness ?? 150;
   // 表示用の代表幅は厚みに比例（過大だと厚み寸法が相対的に小さく潰れるため）。
   const width = Math.max(t * 7, 700);
-  const g = gapFor(t * 3);
+  const g = resolveGap(ctx, t * 3);
   const prims = [{ type: 'levelLine', y: 0, label: ctx.flLabel ?? 'FL' }];
   if (slab.slabKind === 'deck') {
     prims.push(...deckProfile(-width / 2, 0, width, t));
@@ -327,12 +459,12 @@ function deckProfile(x0, topY, w, t) {
 }
 
 // --- 耐力壁（RC=厚帯／S造= なし・ブレース・鋼板壁） -------------------------------
-function bearingWallFigure(wall) {
+function bearingWallFigure(wall, ctx = {}) {
   const wt = wall.wallType ?? 'rc';
   const t = wall.thickness ?? 150;
   // 縦帯の代表高さは厚みに比例（厚み寸法を相対的に大きく見せる）。
   const height = Math.max(t * 7, 700);
-  const g = gapFor(t * 3);
+  const g = resolveGap(ctx, t * 3);
   if (wt === 'none') {
     return { primitives: [
       { type: 'axisV', x: 0, label: '壁芯' },
@@ -361,7 +493,7 @@ function bearingWallFigure(wall) {
 }
 
 // --- ディスパッチャ ----------------------------------------------------------
-export function memberFigure(entity, mapName, ctx = {}) {
+function dispatchFigure(entity, mapName, ctx) {
   switch (mapName) {
     case 'columnMap':  return columnFigure(entity, ctx);
     case 'beamMap':    return entity.role === 'foundation' ? foundationBeamFigure(entity, ctx) : beamFigure(entity, ctx);
@@ -370,4 +502,17 @@ export function memberFigure(entity, mapName, ctx = {}) {
     case 'wallMap':    return bearingWallFigure(entity, ctx);
     default:           return { primitives: [] };
   }
+}
+
+// スクリーン空間注記の縮尺決定（2パス）。
+// ctx.frame（{maxWidth,maxHeight}）が渡れば、1パス目で形状だけの mm 範囲から縮尺を見積もり、
+// 2パス目に scale を渡して注記の隙間を px 一定（GAP_BASE_PX）で再生成する。決定した scale も返す
+// （描画側 AutoScaledFigure は同じ scale を使い、注記を縮尺非依存の一定間隔で描く）。
+// frame 未指定（Konva 等）や scale 確定済みは従来どおり（mm 比率 gap・scale は描画側が決める）。
+export function memberFigure(entity, mapName, ctx = {}) {
+  if (!ctx.frame || ctx.scale != null) return dispatchFigure(entity, mapName, ctx);
+  const sb = shapeBounds(dispatchFigure(entity, mapName, ctx).primitives); // 1パス目：形状範囲（注記除外）
+  const f = ctx.frame;
+  const scale = chooseScale(sb.width, sb.height, f.maxWidth - 2 * ANNOTATION_RESERVE_PX, f.maxHeight - 2 * ANNOTATION_RESERVE_PX);
+  return { ...dispatchFigure(entity, mapName, { ...ctx, scale }), scale }; // 2パス目：px 一定 gap
 }

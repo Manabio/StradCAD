@@ -35,6 +35,67 @@ function footprintProbe(graph) {
   return { probe, size };
 }
 
+/** 建物フットプリント（屋内 INTERIOR ／ 吹抜け VOID の部屋セル）のセルキー集合を返す。
+ *  べた基礎のマットスラブ（footprint を覆う床版）の cells 算定に使う。部屋未定義なら空集合。 */
+export function footprintCellKeys(graph) {
+  const cellToRoom = buildCellToRoom(graph);
+  const keys = new Set();
+  for (const [key, room] of cellToRoom) {
+    if (room && (room.kind === RoomKind.INTERIOR || room.kind === RoomKind.VOID)) keys.add(key);
+  }
+  return keys;
+}
+
+// ----------------------------------------------------------------
+// 外周モデル（side ビュー）— 柱芯オフセット・梁偏芯が共有する「外側方向」の単一ソース。
+//
+// 外壁＝フットプリント境界。その権威は仕上げモード（部屋セル）が持つ。構造トポロジーで別の外周判定を
+// 持たず、ここで一本化する：仕上げフットプリントを裏付けに位置ごとの外側方向を返し、仕上げ未定義時のみ
+// 「構造部材CLの外接矩形」を同じ probe に流す（別系統ではなく矩形フットプリントを与えた縮退ケース）。
+// side（外側方向）は主題階のフットプリント基準で sync に解ける。存在（鉛直連続AND）は makeWallGate(async)が担う。
+// ----------------------------------------------------------------
+
+/** フットプリント probe から、軸線(通り芯)上の位置 atCross における外側方向の符号を求める。
+ *  軸線を跨いで ±eps の建物内/外を見て、内側が＋方向＝+1（内側へ寄せる向き）／内側が−方向＝−1／
+ *  両側内(内部) or 両側外(建物外)＝0。符号意味は autoFillColumnAxisOffsets の慣習（最小側=+1）に一致。
+ *  仕上げフットプリント裏付けなら、凹形状(L字・中庭)の外壁辺も位置ごとに正しく判定できる。 */
+export function outsideSignFromProbe(probe, axisValue, isVertical, atCross, eps = SAMPLE_EPS) {
+  const plus  = isVertical ? probe(axisValue + eps, atCross) : probe(atCross, axisValue + eps);
+  const minus = isVertical ? probe(axisValue - eps, atCross) : probe(atCross, axisValue - eps);
+  if (plus && !minus) return 1;
+  if (minus && !plus) return -1;
+  return 0;
+}
+
+/** 仕上げフットプリント未定義時のフォールバック probe：構造部材が参照するCL値の外接矩形を「建物内」とみなす。
+ *  柱(verticalCL/horizontalCL)・梁(axisCL/clStart/clEnd)が実際に立つCLの範囲＝構造グリッドの実効外形。
+ *  labeled に依存しない（非labeledなテスト・仕上げ未経由でも外周を出せる）。部材ゼロなら常に false。 */
+export function rectFootprintProbe(graph) {
+  const xs = [];
+  const ys = [];
+  for (const c of graph.columns) { xs.push(c.verticalCL.value); ys.push(c.horizontalCL.value); }
+  for (const b of graph.beams) {
+    if (b.isVertical) { xs.push(b.axisCL.value); ys.push(b.clStart.value, b.clEnd.value); }
+    else              { ys.push(b.axisCL.value); xs.push(b.clStart.value, b.clEnd.value); }
+  }
+  if (xs.length === 0 || ys.length === 0) return () => false;
+  const minX = Math.min(...xs), maxX = Math.max(...xs);
+  const minY = Math.min(...ys), maxY = Math.max(...ys);
+  return (wx, wy) => wx >= minX && wx <= maxX && wy >= minY && wy <= maxY;
+}
+
+/** 構造外周モデル（side ビュー・sync・常に非null）を構築する。外側方向の判定にのみ使う。
+ *  権威：主題階の仕上げフットプリント（部屋セル）。部屋が無ければ構造部材CLの外接矩形をフォールバックに用いる
+ *  （同一 outsideSign に矩形フットプリントを与えた縮退ケース。labeled・仕上げ非依存）。
+ *  存在（鉛直連続AND）は別ビュー＝buildStructuralWallGate(async) が担う。side は主題階基準。 */
+export function buildExteriorSide(graph) {
+  const fp = footprintProbe(graph);
+  const probe = fp.size > 0 ? fp.probe : rectFootprintProbe(graph);
+  return {
+    outsideSign: (axisValue, isVertical, atCross) => outsideSignFromProbe(probe, axisValue, isVertical, atCross),
+  };
+}
+
 /** 複数階のフットプリント述語をANDで束ねた WallGate を作る。世界座標が「対象の全階で建物内」＝直下まで連続して
  *  建物がある位置かを判定する（鉛直連続性）。 */
 function makeWallGate(probes) {

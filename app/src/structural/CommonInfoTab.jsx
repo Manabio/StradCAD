@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { observer } from 'mobx-react-lite';
 import {
-  MAIN_STRUCTURE_OPTIONS, OTHER_STRUCTURE_OPTIONS, FOUNDATION_OPTIONS,
+  MAIN_STRUCTURE_OPTIONS, OTHER_STRUCTURE_OPTIONS, foundationOptionsFor,
   DESIGN_STRENGTH_OPTIONS, CONCRETE_TYPE_OPTIONS, MAIN_BAR_OPTIONS, HOOP_BAR_OPTIONS,
   SNOW_AREA_OPTIONS, BASIC_WIND_SPEED_OPTIONS, SURFACE_ROUGHNESS_OPTIONS, SEISMIC_ZONE_FACTOR_OPTIONS,
   SelectRow, CheckboxGroup, TranscribedField,
@@ -25,6 +25,13 @@ export const CommonInfoTab = observer(function CommonInfoTab({ project, graph, o
     onStructureChanged(() => {
       if (hasOverride) graph.setStructureOverride(v);
       else info.setField('mainStructure', v);
+      // 基礎種別の選択肢は主構造（建物全体値）で決まる。新主構造の選択肢に現在値が無ければ既定へ正規化する
+      //（木造⇄非木造の往来で「なし/土間コン」等の不整合な値が残らないように）。階別オーバーライドは
+      // 建物全体の foundationType に影響しないため、建物全体の mainStructure 変更時のみ正規化する。
+      if (!hasOverride) {
+        const opts = foundationOptionsFor(v);
+        if (!opts.includes(info.foundationType)) info.setField('foundationType', 'ベタ基礎');
+      }
     });
   }
 
@@ -54,8 +61,6 @@ export const CommonInfoTab = observer(function CommonInfoTab({ project, graph, o
         </label>
         <CheckboxGroup label="その他" options={OTHER_STRUCTURE_OPTIONS}
           selected={info.otherStructures} onToggle={name => info.toggleOtherStructure(name)} />
-        <SelectRow label="基礎種別" value={info.foundationType} options={FOUNDATION_OPTIONS}
-          onChange={v => info.setField('foundationType', v)} />
       </section>
 
       {/* 2. 標準材料グレード設定（初期値の自動継承） */}

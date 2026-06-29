@@ -80,3 +80,11 @@ export const SECTION_CATALOG = [
 export function findSectionEntry(sectionDefId) {
   return SECTION_CATALOG.find(s => s.key === sectionDefId) ?? null;
 }
+
+// CFT柱（鋼管＝角形/丸形）のダイヤフラム出寸法 e（柱外面から外側への飛び出し量, mm）。
+// スキンプレート厚 t（＝鋼管の板厚 wallThickness）に応じる（問題.md）：t<28 で 25、それ以外 30。
+// 鋼管以外は 0（ダイヤフラムを持たない）。断面図・描画域・梁端の停止位置の三者が同じ e を使う単一実装。
+export function diaphragmProjection(section) {
+  if (!section || (section.shape !== SectionShape.SQUARE_PIPE && section.shape !== SectionShape.ROUND_PIPE)) return 0;
+  return (section.wallThickness ?? 0) < 28 ? 25 : 30;
+}

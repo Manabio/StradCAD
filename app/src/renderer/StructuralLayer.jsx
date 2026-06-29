@@ -2,7 +2,7 @@ import { observer } from 'mobx-react-lite';
 import { Line, Rect, Circle, Group } from 'react-konva';
 import { StructuralMaterialType, LINE_WEIGHT_MM } from '../core.js';
 import { cellBoundsFromKey } from '../finish/gridCells.js';
-import { findSectionEntry } from '../structural/sectionCatalog.js';
+import { findSectionEntry, diaphragmProjection } from '../structural/sectionCatalog.js';
 import { LodLevel, resolveStrokeWidth } from '../viewport.js';
 import { ColumnSymbol } from './ColumnSymbol.jsx';
 import { groupPropsForStyle, dashForStyle } from '../figure/figureStyle.js';
@@ -30,8 +30,11 @@ export function columnRenderSize(column) {
 // （フーチングと同じ「常に実寸」扱い）。未設定はSCHEMATIC=単線（戻り値null）/STANDARD=仮幅/DETAIL=カタログ実寸。
 // StructuralLayer.jsx・MemberTagLayer.jsxの両方がこれだけを参照する単一の実装。
 export function beamRenderWidth(beam, lod) {
-  if (lod === LodLevel.SCHEMATIC && beam.beamWidth == null) return null;
-  return beam.beamWidth ?? (lod === LodLevel.DETAIL ? (findSectionEntry(beam.sectionDefId)?.width ?? BEAM_WIDTH_MM) : BEAM_WIDTH_MM);
+  // 見付き幅＝梁幅b。算定値 beamWidth はRC基礎梁等（断面非依存）のみ実寸に使う。鋼材は軒桁等で beamWidth が
+  // 立っていてもカタログ断面の幅b(width)を優先する（算定値は屋根スパン由来でカタログ断面と別物のため）。
+  const rcWidth = beam.materialType === 'RC' ? beam.beamWidth : null;
+  if (lod === LodLevel.SCHEMATIC && rcWidth == null) return null;
+  return rcWidth ?? (lod === LodLevel.DETAIL ? (findSectionEntry(beam.sectionDefId)?.width ?? BEAM_WIDTH_MM) : BEAM_WIDTH_MM);
 }
 
 // 耐力壁の帯（軸±thickness/2 の平行線2本）を、開口区間を除いたセグメント単位に分割する。
@@ -74,22 +77,95 @@ function bandLines(keyPrefix, isVertical, axisValue, half, segments, stroke, str
   }));
 }
 
+// 木造基礎伏図の「土台」「ベース」帯の振り分け寸法（問題.md）。通り芯・1階壁芯（＝基礎梁の軸）から
+// 土台は±75（幅150）、ベースは±300（幅600）を振り分けて描く。土台は袋とじ（交点で重ねて閉じる）、
+// ベースは角でトリム（直交する基礎梁に突き当たる端を半幅だけ控えて突合せにする）。
+const SILL_HALF = 75;   // 土台 幅150 の半分
+const BASE_HALF  = 300;  // ベース 幅600 の半分
+const BAND_COORD_TOL = 1; // 端点一致判定の許容(mm)
+
+// 基礎梁(role:'foundation')の軸に沿った帯1本のRect props（isVertical=軸がX方向）。lo/hi は span方向の座標。
+function bandRect(beam, lo, hi, half) {
+  return beam.isVertical
+    ? { x: beam.axisValue - half, y: lo, width: half * 2, height: hi - lo }
+    : { x: lo, y: beam.axisValue - half, width: hi - lo, height: half * 2 };
+}
+
+// 木造基礎伏図の土台・ベース帯を基礎梁から生成する。drawBase=false（べた基礎）ならベースは描かない。
+function woodFoundationBands(foundationBeams, drawBase, sillColor, baseColor, strokeWidth) {
+  const spanLo = b => Math.min(b.clStart.value, b.clEnd.value);
+  const spanHi = b => Math.max(b.clStart.value, b.clEnd.value);
+  // 端 coord で直交する基礎梁に突き当たるか（その直交梁のスパンが自軸を含む）。ベースのトリム判定に使う。
+  const meetsPerp = (b, coord) => foundationBeams.some(p =>
+    p.isVertical !== b.isVertical &&
+    Math.abs(p.axisValue - coord) < BAND_COORD_TOL &&
+    spanLo(p) - BAND_COORD_TOL <= b.axisValue && b.axisValue <= spanHi(p) + BAND_COORD_TOL);
+
+  const rects = [];
+  // ベース（広い・下）：端が直交基礎梁に突き当たる側を半幅控えてトリム（角で突合せ）。
+  if (drawBase) {
+    for (const b of foundationBeams) {
+      const lo = meetsPerp(b, spanLo(b)) ? spanLo(b) + BASE_HALF : spanLo(b);
+      const hi = meetsPerp(b, spanHi(b)) ? spanHi(b) - BASE_HALF : spanHi(b);
+      if (hi <= lo) continue;
+      rects.push(<Rect key={`base:${b.id}`} {...bandRect(b, lo, hi, BASE_HALF)}
+        fill={baseColor} stroke={baseColor} strokeWidth={strokeWidth} opacity={0.12} listening={false} />);
+    }
+  }
+  // 土台（狭い・上）：常に全長（交点で重なって閉じる＝袋とじ）。
+  for (const b of foundationBeams) {
+    rects.push(<Rect key={`sill:${b.id}`} {...bandRect(b, spanLo(b), spanHi(b), SILL_HALF)}
+      fill={sillColor} stroke={sillColor} strokeWidth={strokeWidth} opacity={0.3} listening={false} />);
+  }
+  return rects;
+}
+
+// 柱のダイヤフラム外形寸法(mm)。鋼管のみ（断面+e の四角）。鋼管以外・断面未登録は null。
+function columnDiaphragmSize(column) {
+  const sec = findSectionEntry(column.sectionDefId);
+  const e = diaphragmProjection(sec);
+  if (!e) return null;
+  return { w: sec.width + 2 * e, h: sec.height + 2 * e };
+}
+
 // 柱のみの描画。構造モードでは全LODで実断面形状（ColumnSymbol）を実寸表示する。
 // STANDARDだけは塗りなし（輪郭線のみ。中実断面が重なる範囲を確認しやすくするため）。
-export const ColumnsLayer = observer(({ graph, viewport }) => {
+// diaphragm=true（構造モード×詳細描画）のとき、鋼管柱は断面の外側にダイヤフラム外形（四角）を描く。
+export const ColumnsLayer = observer(({ graph, viewport, diaphragm = false }) => {
   if (!graph) return null;
   const scale   = Math.min(viewport.scaleX, viewport.scaleY);
   const outline = viewport.lodLevel === LodLevel.STANDARD;
   const outlineStrokeWidth = resolveStrokeWidth(LINE_WEIGHT_MM.medium, scale);
-  return graph.columns.map(column => (
-    <ColumnSymbol
-      key={column.id}
-      column={column}
-      color={COLOR_BY_MATERIAL[column.materialType]}
-      outline={outline}
-      outlineStrokeWidth={outlineStrokeWidth}
-    />
-  ));
+  const diaStrokeWidth = resolveStrokeWidth(LINE_WEIGHT_MM.thin, scale);
+  return graph.columns.flatMap(column => {
+    const color = COLOR_BY_MATERIAL[column.materialType];
+    const els = [];
+    // ダイヤフラム外形（断面の背面に四角の輪郭）。詳細描画かつ鋼管のみ。
+    const d = diaphragm ? columnDiaphragmSize(column) : null;
+    if (d) {
+      els.push(
+        <Rect
+          key={`dia:${column.id}`}
+          x={column.x} y={column.y}
+          width={d.w} height={d.h}
+          offsetX={d.w / 2} offsetY={d.h / 2}
+          rotation={column.rotation}
+          stroke={color} strokeWidth={diaStrokeWidth}
+          listening={false}
+        />
+      );
+    }
+    els.push(
+      <ColumnSymbol
+        key={column.id}
+        column={column}
+        color={color}
+        outline={outline}
+        outlineStrokeWidth={outlineStrokeWidth}
+      />
+    );
+    return els;
+  });
 });
 
 // 構造モード（appMode === 'structure'）専用レイヤー。
@@ -100,7 +176,7 @@ export const ColumnsLayer = observer(({ graph, viewport }) => {
 // 帰属（伏図慣習）はこのレイヤーではなく FigureDef（structuralFigure.js）が決める——レンダラは
 // 「カテゴリをどう描くか」だけを知り、「どの階のどのグラフか」は composition.graphForCategory に委ねる。
 // z-order は描画順（柱→基礎→梁→スラブ→耐力壁）で再現し、レイヤ宣言順には依存させない。
-export const StructuralLayer = observer(({ composition, viewport }) => {
+export const StructuralLayer = observer(({ composition, viewport, project }) => {
   if (!composition) return null;
   const scale  = Math.min(viewport.scaleX, viewport.scaleY);
   const lod    = viewport.lodLevel;
@@ -119,11 +195,24 @@ export const StructuralLayer = observer(({ composition, viewport }) => {
   // 梁は「その伏図に表示される柱」（構造モードでは1つ下の階の柱）の断面手前で止める。
   const displayedColumns = column?.graph?.columns ?? [];
 
+  // 木造基礎伏図の土台・ベース帯（問題.md）。基礎梁(role:'foundation')がある＝基礎伏図、かつ実効主構造が木造のときのみ。
+  // ベースの有無は基礎種別（べた基礎はベースなし＝土台のみ）。実効主構造は基礎伏図グラフ（=自階）の上書きを優先。
+  const foundationBeams = (beam?.graph?.beams ?? []).filter(b => b.role === 'foundation');
+  const effStructure = beam?.graph?.structureOverride ?? project?.structuralInfo?.mainStructure;
+  const woodFoundation = foundationBeams.length > 0 && typeof effStructure === 'string' && effStructure.startsWith('木造');
+  const drawBase = woodFoundation && project?.structuralInfo?.foundationType !== 'ベタ基礎';
+
   return (
     <>
       <Group {...groupPropsForStyle(column?.spec.style)}>
-        <ColumnsLayer graph={column?.graph} viewport={viewport} />
+        <ColumnsLayer graph={column?.graph} viewport={viewport} diaphragm={lod === LodLevel.DETAIL} />
       </Group>
+      {woodFoundation && (
+        <Group {...groupPropsForStyle(footing?.spec.style)}>
+          {woodFoundationBands(foundationBeams, drawBase,
+            COLOR_BY_MATERIAL[StructuralMaterialType.WOOD], COLOR_BY_MATERIAL[StructuralMaterialType.RC], thin)}
+        </Group>
+      )}
       <Group {...groupPropsForStyle(footing?.spec.style)}>
         {(footing?.graph?.footings ?? []).map(f => {
           // 矩形=widthX×widthY（柱・耐力壁と同じ実寸表現）、丸（sectionShape:'round'）=widthXを直径とする円。
@@ -156,7 +245,8 @@ export const StructuralLayer = observer(({ composition, viewport }) => {
       <Group {...groupPropsForStyle(beam?.spec.style)}>
         {(beam?.graph?.beams ?? []).flatMap(b => {
           const color = COLOR_BY_MATERIAL[b.materialType];
-          const { coord1, coord2 } = b.spanForColumns(displayedColumns);
+          // 詳細描画では梁を柱断面ではなくダイヤフラム端まで（鋼管柱のみ e 分だけ手前で止まる）。
+          const { coord1, coord2 } = b.spanForColumns(displayedColumns, { diaphragm: lod === LodLevel.DETAIL });
           const p1 = b.isVertical ? { x: b.axisValue, y: coord1 } : { x: coord1, y: b.axisValue };
           const p2 = b.isVertical ? { x: b.axisValue, y: coord2 } : { x: coord2, y: b.axisValue };
           const width = beamRenderWidth(b, lod);

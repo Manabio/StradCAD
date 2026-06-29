@@ -140,7 +140,7 @@ function buildSnapshot(graph) {
     beams: graph.beams.map(bm => {
       const [extraKeys, extraVals] = packExtraFields(bm,
         ['beamType', 'isCambered', 'stiffenerCount', 'topMainBars', 'bottomMainBars', 'stirrupBars', 'dimensionStatus', 'memberNoLocked',
-          'beamWidth', 'beamDepth']);
+          'beamWidth', 'beamDepth', 'faceGap', 'foundationSection']);
       return {
         id: bm.id, materialType: bm.materialType, sectionDefId: bm.sectionDefId,
         axisCLId: bm.axisCL.id, isVertical: bm.isVertical,

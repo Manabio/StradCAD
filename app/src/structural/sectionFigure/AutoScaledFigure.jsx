@@ -1,6 +1,33 @@
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { figureBounds, chooseScale, scaleLabel, makeTransform } from './sectionGeometry.js';
 import { NumPad } from '../../ui/NumPad.jsx';
+import { LABEL_ID_SUFFIX } from './layoutStudy.js';
+
+// 2つの figureBounds を内包する和（配置検討で欄外へ逃げた要素もキャンバスに収めるため）。
+function unionBounds(a, b) {
+  const minX = Math.min(a.minX, b.minX), minY = Math.min(a.minY, b.minY);
+  const maxX = Math.max(a.maxX, b.maxX), maxY = Math.max(a.maxY, b.maxY);
+  return { minX, minY, maxX, maxY, width: maxX - minX, height: maxY - minY };
+}
+
+// 選択中要素（または寸法数値ラベル ::label）の px 中心。auto-scroll で欄外要素を追いかけるのに使う。
+function selectedCenterPx(primitives, t, selectedId) {
+  if (selectedId.endsWith(LABEL_ID_SUFFIX)) {
+    const dimId = selectedId.slice(0, -LABEL_ID_SUFFIX.length);
+    const p = primitives.find(q => q.type === 'dim' && q.layoutId === dimId);
+    if (!p) return null;
+    const isH = p.dir === 'h';
+    const ldx = p.labelDX ? t.sx(p.labelDX) : 0;
+    const ldy = p.labelDY ? t.sx(p.labelDY) : 0;
+    const x = (isH ? (t.tx(p.from) + t.tx(p.to)) / 2 : t.tx(p.at) + (p.labelSide === 'left' ? -8 : 8)) + ldx;
+    const y = (isH ? t.ty(p.at) - 8 : (t.ty(p.from) + t.ty(p.to)) / 2) + ldy;
+    return { x, y };
+  }
+  const sel = primitives.filter(p => p.layoutId === selectedId);
+  if (sel.length === 0) return null;
+  const b = figureBounds(sel);
+  return { x: (t.tx(b.minX) + t.tx(b.maxX)) / 2, y: (t.ty(b.minY) + t.ty(b.maxY)) / 2 };
+}
 
 // ================================================================
 // 断面図の自動縮尺SVGレンダラ（パネルの構造リスト用）。
@@ -15,19 +42,67 @@ const TICK = 6;        // 寸法線端のチック長(px)
 const AXIS_DASH = '6 3 2 3'; // 一点鎖線（通り芯・柱芯）
 const COLOR = { stroke: '#334155', dim: '#2563eb', axis: '#94a3b8', concrete: '#cbd5e1', steel: '#475569' };
 
-export function AutoScaledFigure({ primitives, maxWidth = 320, maxHeight = 340, onEditDim }) {
-  const bounds = figureBounds(primitives);
-  const scale = chooseScale(bounds.width, bounds.height, maxWidth, maxHeight);
-  const t = makeTransform(bounds, scale);
+// study: 部材リスト配置検討モード。{ selectedId, onSelectId } を渡すと layoutId 単位でクリック選択でき、
+// 選択中の要素群を矩形でハイライトする（移動は親が矢印キーで overrides を更新）。
+// boundsPrimitives: 枠・倍率を決める基準プリミティブ（既定は primitives）。配置オフセットで枠や倍率がブレないよう
+// “オフセット適用前”のジオメトリを渡す（位置調整は枠内で要素のみ動く）。
+export function AutoScaledFigure({ primitives, boundsPrimitives, maxWidth = 320, maxHeight = 340, onEditDim, study = null, scale: scaleProp = null }) {
+  // 倍率は基準ジオメトリ（移動前）で固定。配置検討では移動後を内包する和でキャンバスを広げ、欄外要素も
+  // スクロールで追いかけられるようにする（倍率は不変・原点は和の最小＝負座標を作らない）。
+  // scaleProp 指定時はその縮尺を使う（スクリーン空間注記：生成側が形状基準で決めた縮尺をそのまま使い、
+  // 注記の隙間が px 一定になるよう仕込まれた図を、同じ縮尺で描く）。
+  const baseBounds = figureBounds(boundsPrimitives ?? primitives);
+  const scale = scaleProp ?? chooseScale(baseBounds.width, baseBounds.height, maxWidth, maxHeight);
+  const frameBounds = study ? unionBounds(baseBounds, figureBounds(primitives)) : baseBounds;
+  const t = makeTransform(frameBounds, scale);
+
+  const scrollRef = useRef(null);
 
   // onEditDim が無い（read-only）ときは図上編集オーバーレイを出さず、寸法はSVGテキストで静的表示する。
-  const interactive = !!onEditDim;
+  // 配置検討モード中は寸法編集オーバーレイ（クリックでNumPad）を出さない（クリック＝要素選択に使うため）。
+  const interactive = !!onEditDim && !study;
   const editableDims = interactive ? primitives.filter(p => p.type === 'dim' && p.editable) : [];
 
-  return (
+  // 配置検討モード：選択中 layoutId のプリミティブ群の bbox（px）をハイライト矩形にする。
+  const selPrims = study?.selectedId ? primitives.filter(p => p.layoutId === study.selectedId) : [];
+  const selBox = selPrims.length > 0 ? figureBounds(selPrims) : null;
+
+  // 選択中（または移動中）の要素が欄外なら、スクロールして中央へ寄せる＝欄外要素を追いかける。
+  useEffect(() => {
+    if (!study?.selectedId || !scrollRef.current) return;
+    const c = selectedCenterPx(primitives, t, study.selectedId);
+    if (!c) return;
+    const el = scrollRef.current;
+    const margin = 24;
+    if (c.x < el.scrollLeft + margin || c.x > el.scrollLeft + el.clientWidth - margin) {
+      el.scrollLeft = c.x - el.clientWidth / 2;
+    }
+    if (c.y < el.scrollTop + margin || c.y > el.scrollTop + el.clientHeight - margin) {
+      el.scrollTop = c.y - el.clientHeight / 2;
+    }
+  }); // 毎レンダー（選択・移動の都度）追従
+
+  const figureBody = (
     <div style={{ position: 'relative', width: t.pxWidth, height: t.pxHeight }}>
       <svg width={t.pxWidth} height={t.pxHeight} style={{ display: 'block' }}>
-        {primitives.map((p, i) => renderPrimitive(p, i, t, interactive))}
+        {primitives.map((p, i) => {
+          const el = renderPrimitive(p, i, t, interactive);
+          if (study && p.layoutId) {
+            const sel = p.layoutId === study.selectedId;
+            return (
+              <g key={i} onClick={e => { e.stopPropagation(); study.onSelectId(p.layoutId); }}
+                 style={{ cursor: 'pointer' }} opacity={sel ? 1 : 0.9}>{el}</g>
+            );
+          }
+          return el;
+        })}
+        {selBox && (
+          <rect x={t.tx(selBox.minX) - 4} y={t.ty(selBox.minY) - 4}
+            width={t.sx(selBox.width) + 8} height={t.sx(selBox.height) + 8}
+            fill="none" stroke="#2563eb" strokeWidth={1.2} strokeDasharray="4 2" pointerEvents="none" />
+        )}
+        {/* 配置検討モード：各寸法の数値ラベルを線とは独立に選択・移動できるハンドル（破線枠）。 */}
+        {study && dimLabelHandles(primitives, t, study)}
       </svg>
       {/* 縮尺ラベル */}
       <div style={{ position: 'absolute', right: 2, bottom: 0, fontSize: 10, color: '#94a3b8' }}>{scaleLabel(scale)}</div>
@@ -37,6 +112,40 @@ export function AutoScaledFigure({ primitives, maxWidth = 320, maxHeight = 340, 
       ))}
     </div>
   );
+
+  // 配置検討モードはスクロール可能な枠に収め、欄外へ逃げた要素を追いかけられるようにする。
+  if (study) {
+    return (
+      <div ref={scrollRef} style={{ maxWidth, maxHeight, overflow: 'auto' }}>
+        {figureBody}
+      </div>
+    );
+  }
+  return figureBody;
+}
+
+// 配置検討モード：各寸法の数値ラベル位置に、線とは独立に選択・移動できるハンドル（破線枠）を重ねる。
+// ラベル位置は renderDim の静的テキストと同じ算式（labelDX/labelDY 反映済み）。
+function dimLabelHandles(primitives, t, study) {
+  return primitives.filter(p => p.type === 'dim' && p.layoutId).map((p, i) => {
+    const isH = p.dir === 'h';
+    const labelLeft = p.labelSide === 'left';
+    const ldx = p.labelDX ? t.sx(p.labelDX) : 0;
+    const ldy = p.labelDY ? t.sx(p.labelDY) : 0;
+    const lx = (isH ? (t.tx(p.from) + t.tx(p.to)) / 2 : t.tx(p.at) + (labelLeft ? -8 : 8)) + ldx;
+    const ly = (isH ? t.ty(p.at) - 8 : (t.ty(p.from) + t.ty(p.to)) / 2) + ldy;
+    const id = `${p.layoutId}${LABEL_ID_SUFFIX}`;
+    const sel = study.selectedId === id;
+    const w = 30, h = 16;
+    const bx = isH ? lx - w / 2 : (labelLeft ? lx - w : lx);
+    return (
+      <rect key={`lh${i}`} x={bx} y={ly - h / 2} width={w} height={h} rx={2}
+        fill={sel ? 'rgba(37,99,235,0.18)' : 'transparent'}
+        stroke={sel ? '#2563eb' : '#cbd5e1'} strokeWidth={1} strokeDasharray="3 2"
+        style={{ cursor: 'pointer' }}
+        onClick={e => { e.stopPropagation(); study.onSelectId(id); }} />
+    );
+  });
 }
 
 function renderPrimitive(p, key, t, interactive) {
@@ -83,7 +192,8 @@ function renderPrimitive(p, key, t, interactive) {
       return (
         <g key={key}>
           <line x1={FIGURE_X0} y1={y} x2={t.pxWidth} y2={y} stroke={COLOR.axis} strokeWidth={1} />
-          <text x={FIGURE_X0} y={y - 3} fontSize={10} textAnchor="start" fill="#94a3b8">▽{p.label}</text>
+          {/* noLabel: ラベルを別の text プリミティブで持つ場合（GLを通り芯のように独立移動させる）は描かない。 */}
+          {!p.noLabel && <text x={FIGURE_X0} y={y - 3} fontSize={10} textAnchor="start" fill="#94a3b8">▽{p.label}</text>}
         </g>
       );
     }
@@ -140,19 +250,27 @@ function renderDim(p, key, t, interactive) {
   const hasFoot = p.foot != null;
   let feet = [];
   if (hasFoot) {
-    // 材に足が接すると見づらいため、材側1/3を空けて寸法線側2/3だけ引く（材から離す）。
-    const FOOT_GAP = 1 / 3;
+    // footLen(mm) 指定時は足を一定長で描く（寸法線を断面から離しても足は伸ばさず、材との間に空きを作る）。
+    // 未指定時は従来どおり「材側1/3を空けて寸法線側2/3だけ引く」比率方式。
+    const footPx = p.footLen != null ? t.sx(p.footLen) : null;
+    // 足の開始点（寸法線→材方向へ length だけ。材を越えない範囲）。
+    const start = (dimPx, matPx) => {
+      if (footPx == null) return matPx + (dimPx - matPx) * (1 / 3);
+      const dir = Math.sign(dimPx - matPx) || 1; // 材→寸法線の向き
+      const s = dimPx - dir * footPx;
+      return dir > 0 ? Math.max(s, matPx) : Math.min(s, matPx); // 材を越えない
+    };
     if (isH) {
       const footY = t.ty(p.foot);
       feet = [
-        [a.x1, footY + (a.y1 - footY) * FOOT_GAP, a.x1, a.y1],
-        [a.x2, footY + (a.y2 - footY) * FOOT_GAP, a.x2, a.y2],
+        [a.x1, start(a.y1, footY), a.x1, a.y1],
+        [a.x2, start(a.y2, footY), a.x2, a.y2],
       ];
     } else {
       const footX = t.tx(p.foot);
       feet = [
-        [footX + (a.x1 - footX) * FOOT_GAP, a.y1, a.x1, a.y1],
-        [footX + (a.x2 - footX) * FOOT_GAP, a.y2, a.x2, a.y2],
+        [start(a.x1, footX), a.y1, a.x1, a.y1],
+        [start(a.x2, footX), a.y2, a.x2, a.y2],
       ];
     }
   }
@@ -164,11 +282,12 @@ function renderDim(p, key, t, interactive) {
       <line x1={a.x1} y1={a.y1} x2={a.x2} y2={a.y2} strokeWidth={1} />
       {ticks.map((tk, i) => <line key={`t${i}`} x1={tk[0]} y1={tk[1]} x2={tk[2]} y2={tk[3]} strokeWidth={1} />)}
       {feet.map((tk, i) => <line key={`f${i}`} x1={tk[0]} y1={tk[1]} x2={tk[2]} y2={tk[3]} strokeWidth={1} />)}
-      {/* 編集オーバーレイが出るのは editable かつ interactive のときのみ。それ以外は静的テキスト。 */}
+      {/* 編集オーバーレイが出るのは editable かつ interactive のときのみ。それ以外は静的テキスト。
+          数値ラベルは labelDX/labelDY(mm) だけ線から独立に動かせる（配置検討モードの ::label オフセット）。 */}
       {!(p.editable && interactive) && (
         <text
-          x={isH ? (a.x1 + a.x2) / 2 : (labelLeft ? a.x1 - 8 : a.x1 + 8)}
-          y={isH ? a.y1 - 8 : (a.y1 + a.y2) / 2}
+          x={(isH ? (a.x1 + a.x2) / 2 : (labelLeft ? a.x1 - 8 : a.x1 + 8)) + (p.labelDX ? t.sx(p.labelDX) : 0)}
+          y={(isH ? a.y1 - 8 : (a.y1 + a.y2) / 2) + (p.labelDY ? t.sx(p.labelDY) : 0)}
           fontSize={11} textAnchor={isH ? 'middle' : (labelLeft ? 'end' : 'start')} dominantBaseline="middle" fill={COLOR.dim} stroke="none">
           {p.label}
         </text>
@@ -181,8 +300,10 @@ function renderDim(p, key, t, interactive) {
 function EditableDimLabel({ dim, t, onCommit }) {
   const isH = dim.dir === 'h';
   const labelLeft = dim.labelSide === 'left';
-  const px = isH ? t.tx((dim.from + dim.to) / 2) : t.tx(dim.at) + (labelLeft ? -6 : 6);
-  const py = isH ? t.ty(dim.at) - 19 : t.ty((dim.from + dim.to) / 2) - 8;
+  const ldx = dim.labelDX ? t.sx(dim.labelDX) : 0;
+  const ldy = dim.labelDY ? t.sx(dim.labelDY) : 0;
+  const px = (isH ? t.tx((dim.from + dim.to) / 2) : t.tx(dim.at) + (labelLeft ? -6 : 6)) + ldx;
+  const py = (isH ? t.ty(dim.at) - 19 : t.ty((dim.from + dim.to) / 2) - 8) + ldy;
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState('');
 
@@ -221,6 +342,9 @@ function EditableDimLabel({ dim, t, onCommit }) {
           onChange={setDraft}
           onConfirm={commit}
           onCancel={() => setEditing(false)}
+          keyboard
+          cancelOnOutside
+          selectOnStart
         />
       )}
     </>

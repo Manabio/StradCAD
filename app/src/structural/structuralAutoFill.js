@@ -4,6 +4,8 @@ import { findSectionEntry } from './sectionCatalog.js';
 import { isFoundationPlane } from './drawingDesignation.js';
 import { computeTributaryColumnWidth, computeColumnBaseSize, computeFoundationBeamSize, computeRoofBeamSize } from './memberSizing.js';
 import { floorSwapManager } from '../storage/FloorSwapManager.js';
+import { isRigidFrameStructure, structureHasMemberKind, memberKindOf, MEMBER_KIND } from './structuralClassification.js';
+import { buildExteriorSide, footprintCellKeys } from './wallGate.js';
 
 // 構造モード突入時に呼ばれる、構造体トポロジー（構造グリッド）から未定義の柱・梁・基礎を検出して
 // デフォルト材料・断面で自動生成する純関数群。finish/edgeClassify.js の選定・差分同期パターンを流用する。
@@ -46,14 +48,29 @@ export function resolveDefaultMaterialType(graph, project) {
   return defaultMaterialType(effectiveStructure(graph, project));
 }
 
-// 柱芯（ColumnAxis）の対象=柱・梁でラーメン躯体を構成する構造形式のみ。
-// 木造・RC造(壁式)は対象外（既存の通り芯をそのまま柱芯として使う＝偏芯量は常に0）。
-const RAME_STRUCTURE_TYPES = new Set(['S造', 'SRC造', 'RC造(ラーメン)']);
-
-/** 実効主構造の文字列表記がラーメン系（柱・梁躯体）かどうかを判定する。 */
-export function isRigidFrameStructure(mainStructure) {
-  return RAME_STRUCTURE_TYPES.has(mainStructure);
+/** 木造系（在来・2"×4"）か。基礎種別（ベタ基礎時のベース有無・マットスラブ有無）の分岐に使う。 */
+function isWoodStructure(structure) {
+  return structure === '木造（在来）' || structure === '木造（2"×4"）';
 }
+
+/** 基礎伏図で「ベース（独立フーチング）」を自動生成するか（問題.md：木造べた基礎時はベースなし）。
+ *  木造のなし／土間コンは基礎梁＋ベースの合成のためベースを生成する。非木造は従来どおり常に生成する。 */
+export function foundationGeneratesBase(structure, foundationType) {
+  if (isWoodStructure(structure)) return foundationType !== 'ベタ基礎';
+  return true;
+}
+
+/** 基礎伏図で「べた基礎（マットスラブ role:'mat_foundation'）」を自動生成するか（問題.md：木造べた基礎時のみ）。
+ *  非木造の基礎スラブは従来どおり手動配置（自動生成しない）。 */
+export function foundationGeneratesMatSlab(structure, foundationType) {
+  return isWoodStructure(structure) && foundationType === 'ベタ基礎';
+}
+
+// 柱芯（ColumnAxis）の対象＝柱・梁でラーメン躯体を構成する構造形式のみ（S造/SRC造/RC造(ラーメン)）。
+// 木造・RC造(壁式)は対象外（既存の通り芯をそのまま柱芯として使う＝偏芯量は常に0）。
+// 判定データは構造分類の単一の真実（structuralClassification.js）へ移設した。既存の import 経路
+// （MemberListTab 等が structuralAutoFill から取る）を保つため、ここで再exportする。
+export { isRigidFrameStructure };
 
 /** labeled柱芯のX×Y全交点を列挙する（柱の配置候補）。 */
 export function computeGridIntersections(graph) {
@@ -115,6 +132,44 @@ export function autoFillFootings(graph, wallGate = null) {
     created.push(graph.addFooting('independent', DEFAULT_SECTION_BY_MATERIAL[materialType], verticalCL, horizontalCL, { materialType }));
   }
   return created;
+}
+
+// べた基礎マットスラブの既定厚(mm)（問題.md：べた基礎 厚150）。レベル（GL+50・天端制約）は次フェーズ。
+const MAT_FOUNDATION_THICKNESS = 150;
+
+/** 基礎伏図（基準階）に「べた基礎」のマットスラブ（StructuralSlab role:'mat_foundation'）を自動生成・撤去する。
+ *  - 木造べた基礎（foundationGeneratesMatSlab）かつ建物フットプリントがある → 自動マットスラブが無ければ1枚生成する。
+ *    cells は屋内/吹抜けの footprint セル（footprintCellKeys）。基礎部材は常にRC造（独立フーチング・基礎梁と同じ）。
+ *  - それ以外（基礎種別がべた基礎でない等） → 自動生成分（dimensionStatus==='auto'）のマットスラブを撤去する。
+ *  非破壊規律：手動固定/検査済み（dimensionStatus!=='auto'）のマットスラブは保持する。
+ *  〔割り切り〕単一の自動マットスラブを「存在すれば生成しない」方式で管理する。ユーザーが削除しても再突入で
+ *  復活する（柱・梁の excludedXxxSlots に相当する除外記録は持たない＝レベル/除外は次フェーズ）。
+ *  更新（created/removed）したスラブidの配列を返す。 */
+export function autoFillMatFoundation(graph, project) {
+  if (!isFoundationPlane(graph.plane, project)) return { created: [], removed: [] }; // マットスラブは基礎伏図(最下階)のみ
+  const structure = effectiveStructure(graph, project);
+  const foundationType = project.structuralInfo.foundationType;
+  const existing = graph.slabs.filter(s => s.role === 'mat_foundation');
+  if (foundationGeneratesMatSlab(structure, foundationType)) {
+    if (existing.length > 0) return { created: [], removed: [] }; // 既にある＝生成しない（手動・自動問わず1枚に保つ）
+    const cells = footprintCellKeys(graph);
+    if (cells.size === 0) return { created: [], removed: [] }; // フットプリント未定義なら生成しない
+    const slab = graph.addSlab(
+      StructuralMaterialType.RC,
+      DEFAULT_SECTION_BY_MATERIAL[StructuralMaterialType.RC],
+      cells,
+      { role: 'mat_foundation', levelRef: 'top', thickness: MAT_FOUNDATION_THICKNESS },
+    );
+    return { created: [slab.id], removed: [] };
+  }
+  // べた基礎でない → 自動生成分のマットスラブを撤去（手動固定/検査済みは保持）。
+  const removed = [];
+  for (const slab of existing) {
+    if (slab.dimensionStatus !== 'auto') continue;
+    graph.removeSlab(slab.id);
+    removed.push(slab.id);
+  }
+  return { created: [], removed };
 }
 
 /** 梁が存在しないグリッド辺を検出し、デフォルト材料・断面で自動生成する（除外集合のスロットはスキップ）。
@@ -183,9 +238,16 @@ export function autoFillStructuralGrid(graph, project, belowMainStructure, wallG
   // 自階帰属の柱・梁・基礎は自階の主構造が確定するまで生成しない（autoFillColumns は自前でも同ガード）。
   // 屋根の軒桁(eaves)は下階の主構造に従うため、判定軸は belowMainStructure 側で別に行う。
   const ownSpecified = isStructureSpecified(graph, project);
-  const newColumns  = (!isRoof && ownSpecified) ? autoFillColumns(graph, project, wallGate) : [];
-  const newFootings = (foundation && ownSpecified) ? autoFillFootings(graph, wallGate) : [];
-  const newBeams     = (!isRoof && ownSpecified) ? autoFillBeams(graph, project, foundation ? 'foundation' : 'primary', wallGate) : [];
+  // 構造種別による部材の取捨（問題.md 表A＝structuralClassification）。柱・梁（地上）は構造でゲートし、
+  // 基礎梁・ベース（基礎）は常に○のため実質ゲートされない。地階＝RC固定の地中梁図も常に○。
+  const structure = effectiveStructure(graph, project);
+  const foundationType = project.structuralInfo.foundationType;
+  const newColumns  = (!isRoof && ownSpecified && structureHasMemberKind(MEMBER_KIND.COLUMN, structure)) ? autoFillColumns(graph, project, wallGate) : [];
+  // ベース（独立フーチング）は分類（表A）に加え、基礎種別でもゲートする（木造べた基礎時はベースなし。問題.md）。
+  const newFootings = (foundation && ownSpecified && structureHasMemberKind(MEMBER_KIND.INDEPENDENT_FOOTING, structure)
+    && foundationGeneratesBase(structure, foundationType)) ? autoFillFootings(graph, wallGate) : [];
+  const beamKind = foundation ? MEMBER_KIND.FOUNDATION_BEAM : MEMBER_KIND.BEAM;
+  const newBeams     = (!isRoof && ownSpecified && structureHasMemberKind(beamKind, structure)) ? autoFillBeams(graph, project, foundation ? 'foundation' : 'primary', wallGate) : [];
   const newRoofBeams = (isRoof && belowMainStructure !== UNSPECIFIED_STRUCTURE) ? autoFillRoofBeams(graph, project, belowMainStructure, wallGate) : [];
   return { newColumns, newFootings, newBeams: [...newBeams, ...newRoofBeams] };
 }
@@ -233,10 +295,49 @@ export function convertMembersToEffectiveMaterial(graph, project, belowMainStruc
   return { convertedColumns, convertedBeams, convertedFootings };
 }
 
+// 構造由来の削除対象とする map（柱・基礎・梁・スラブ・耐力壁。貫通スリーブは梁の連鎖で消す）。
+const CLASSIFICATION_MAPS = ['columnMap', 'footingMap', 'beamMap', 'slabMap', 'wallMap'];
+
+/** 主構造変更で「×」化した部材（その構造が持たない部材種別）のうち、自動生成分（dimensionStatus==='auto'）を削除する。
+ *  問題.md「構造変更の場合、×は削除、○は生成」の削除側。生成側は autoFillStructuralGrid の構造ゲートが担う。
+ *  手動固定/検査済み（dimensionStatus!=='auto'）は手動部材として保持する（フットプリント削除と同じ規律）——
+ *  残った手動部材は構造リスト側で同じ分類ゲートにより非表示になる。除外集合には記録しない
+ *  （構造を戻せば autoFill で再生成されるべきため。フットプリント削除と同様に可逆）。
+ *  構造リスト・採番より前、共有の純再計算（recomputeStructuralForGraph）内で呼ぶ。削除した部材idの配列を返す。 */
+export function deleteClassificationOverflow(graph, project) {
+  if (graph.plane?.isRoofPlane) return []; // 屋根伏図（R階伏図/小屋伏図）は Phase A の対象外（軒桁等を巻き込まない）
+  const structure = effectiveStructure(graph, project);
+  const removed = [];
+  for (const mapName of CLASSIFICATION_MAPS) {
+    for (const entity of [...graph[mapName].values()]) {
+      if (entity.dimensionStatus !== 'auto') continue; // 手動固定/検査済みは保持
+      const kind = memberKindOf(mapName, entity);
+      if (!kind || structureHasMemberKind(kind, structure)) continue; // 表外(null)＝保持／○＝残す
+      if (mapName === 'beamMap') {
+        // 梁ホストの貫通スリーブも連鎖削除する（removeBeam と同じ。ただし除外集合には記録しない）。
+        for (const s of [...graph.sleeveMap.values()]) if (s.hostBeamId === entity.id) graph.sleeveMap.delete(s.id);
+      }
+      graph[mapName].delete(entity.id);
+      removed.push(entity.id);
+    }
+  }
+  return removed;
+}
+
 /** その階の実効主構造から既定柱幅(mm)を導出する。ラーメン系の柱芯インセット量(width/2)の基準。 */
 function defaultColumnWidth(mainStructure) {
   const materialType = defaultMaterialType(mainStructure);
   return findSectionEntry(DEFAULT_COLUMN_SECTION_BY_MATERIAL[materialType])?.width ?? 200;
+}
+
+/** そのCL上で外周符号を問い合わせる代表交差座標（案ア＝per-CL代表）。
+ *  そのCL上に立つ柱の直交座標を使い、柱が無ければ直交グリッドの中点で代用する。 */
+function representativeCross(graph, cl, isVertical) {
+  const col = graph.columns.find(c => (isVertical ? c.verticalCL.id : c.horizontalCL.id) === cl.id);
+  if (col) return isVertical ? col.horizontalCL.value : col.verticalCL.value;
+  const cross = isVertical ? graph.gridYs : graph.gridXs; // value 昇順
+  if (cross.length === 0) return cl.value;
+  return (cross[0].value + cross[cross.length - 1].value) / 2;
 }
 
 /** 柱芯（columnAxisOffsets＝通り芯から柱芯までの偏芯量）を自動生成する。構造モード突入時、
@@ -245,9 +346,10 @@ function defaultColumnWidth(mainStructure) {
  *  建物外周面が階で食い違わないようにする（仕様）。各階は自階の既定柱幅で外面を最下階の外面基準面に
  *  合わせるため、幅が違えば偏芯量も変わる（＝階依存を保ったまま外面が揃う）。最下階のオフセットは
  *  lowestGraph（呼び出し元が resolveLowestGraph で解決して渡す。非アクティブ階は peek 可）から読む。
+ *  外側符号 s は梁偏芯と同一の外周モデル（exterior）から取る（柱・梁で内外定義を一致させる）。
  *  ラーメン系（S造/SRC造/RC造(ラーメン)）でなければ既存の柱芯オフセットをすべて0に戻す（対象外＝通り芯と一致）。
  *  未登録のCLにのみ補完する（差分のみ補完。ユーザー上書きは保持）。 */
-export function autoFillColumnAxisOffsets(graph, project, lowestGraph = graph) {
+export function autoFillColumnAxisOffsets(graph, project, lowestGraph = graph, exterior = buildExteriorSide(graph)) {
   const effective = graph.structureOverride ?? project.structuralInfo.mainStructure;
   if (!isRigidFrameStructure(effective)) {
     graph.columnAxisOffsets.clear();
@@ -257,20 +359,20 @@ export function autoFillColumnAxisOffsets(graph, project, lowestGraph = graph) {
   const lowestEff  = lowestGraph.structureOverride ?? project.structuralInfo.mainStructure;
   const halfLowest = defaultColumnWidth(lowestEff) / 2;
   const isLowest   = lowestGraph.plane?.id === graph.plane?.id;
-  for (const axisCLs of [graph.gridXs, graph.gridYs]) {
-    const last = axisCLs.length - 1;
-    axisCLs.forEach((cl, i) => {
-      if (graph.columnAxisOffsets.has(cl.id)) return; // 既存値（ユーザー上書き含む）は保持
-      // s = 外側方向の符号。最小側の外周CL=+1（内側＝+方向へインセット）、最大側CL=-1、内部CL=0（偏心なし）。
-      const s = i === 0 ? 1 : i === last ? -1 : 0;
-      if (s === 0) { graph.setColumnAxisOffset(cl.id, 0); return; }
+  for (const [axisCLs, isVertical] of [[graph.gridXs, true], [graph.gridYs, false]]) {
+    for (const cl of axisCLs) {
+      if (graph.columnAxisOffsets.has(cl.id)) continue; // 既存値（ユーザー上書き含む）は保持
+      // s = 外側方向の符号。外周モデル（仕上げフットプリント優先・無ければ部材CL外接矩形）から
+      // そのCLの代表交差位置で問い合わせる（内側＝+方向=+1／−方向=−1／内部・建物外=0）。
+      const s = exterior.outsideSign(cl.value, isVertical, representativeCross(graph, cl, isVertical));
+      if (s === 0) { graph.setColumnAxisOffset(cl.id, 0); continue; }
       // 最下階の柱の外面位置（通り芯相対）。最下階の偏芯量は基底ルール「外面を通り芯に合わせる」
       // （offset=s*halfLowest → 外面=通り芯）。最下階が手動で動いていればその実値に追従する。
       const offLowest = isLowest ? s * halfLowest : (lowestGraph.columnAxisOffsets.get(cl.id) ?? s * halfLowest);
       const outerFace = offLowest - s * halfLowest; // 通り芯相対の外面基準面
       // 自階の柱幅で、その外面基準面に外面を合わせる偏芯量。
       graph.setColumnAxisOffset(cl.id, outerFace + s * halfThis);
-    });
+    }
   }
 }
 
@@ -344,4 +446,74 @@ export function autoFillFoundationBeamSizes(graph, project) {
  *  sectionWidth: 実際の断面幅、referenceWidth: 基準断面幅、alignSide: 揃える面の方向(+1/-1) */
 export function alignToOuterFace(baseOffset, sectionWidth, referenceWidth, alignSide) {
   return baseOffset + alignSide * (sectionWidth - referenceWidth) / 2;
+}
+
+// ----------------------------------------------------------------
+// 梁の偏芯量（柱芯⇄材芯）— 柱外面と梁縁を一致させる自動算出
+//
+// 梁の材芯 = 通り芯 + 柱芯オフセット(columnAxisOffsets) + eccentricity。
+// 外周梁では「柱の外面」と「梁の縁」を faceGap だけ離して揃える（faceGap=0 で面一）。
+// 柱外面は autoFillColumnAxisOffsets が既定柱幅で定義した基準面に等しいため、柱芯オフセットは
+// 梁・柱で共有されて相殺し、eccentricity は s・((梁幅 − 既定柱幅)/2 + faceGap) に集約される
+// （導出: 梁縁 = 材芯 − s・梁半幅、柱外面 = 通り芯 + (柱芯オフセット − s・既定半幅)、梁縁 = 柱外面 + s・faceGap）。
+//   s        : 外周側の符号（内側が＋方向=+1／−方向=−1／内部・建物外=0）。単一の外周モデル
+//              （wallGate.buildExteriorSide＝仕上げフットプリント優先・無ければ部材CL外接矩形）から取る。
+//              梁スパン中点で問い合わせるため凹形状(L字・中庭)の外壁辺も位置ごとに正しく判定できる。
+//   既定柱幅 : その階の実効主構造の既定柱断面幅（柱外面の基準＝columnAxisOffsets と整合）
+//   faceGap  : 柱外面と梁縁のギャップ(mm)。ラベル毎に指定する値（梁に保持）。
+// ラーメン系（S造/SRC造/RC造ラーメン）以外・内部梁(s=0)は eccentricity=0。
+// exterior（外周モデル）は呼び出し側が buildExteriorSide(graph) で1回構築して渡す（未指定なら内部で都度構築）。
+// ----------------------------------------------------------------
+
+/** 梁の外周側符号を外周モデルから取る。軸線(通り芯)＝梁スパン中点で外側方向を問い合わせる（最小側=+1）。 */
+function beamPerimeterSign(exterior, beam) {
+  return exterior.outsideSign(beam.axisCL.value, beam.isVertical, (beam.clStart.value + beam.clEnd.value) / 2);
+}
+
+/** 梁の伏図見付き幅(mm)＝梁幅b（描画 beamRenderWidth と同一基準。柱外面合わせの縁はこの幅で揃える）。
+ *  RCは beamWidth(算定値)、鋼材はカタログ断面の幅b（width）。軒桁等で算定 beamWidth/beamDepth が立っても
+ *  鋼材はカタログ断面を優先する（算定値は屋根スパン由来でカタログ断面とは別物のため）。 */
+function beamSectionWidth(beam) {
+  if (beam.materialType === StructuralMaterialType.RC) return beam.beamWidth ?? 300;
+  return findSectionEntry(beam.sectionDefId)?.width ?? 300;
+}
+
+/** 梁の偏芯算出に必要な幾何（外周符号 s と base=(梁半幅 − 既定柱半幅)）。
+ *  ラーメン系でない／内部梁（s=0）なら null（＝偏芯0）。 */
+function beamEccentricityGeom(graph, project, beam, exterior) {
+  const effective = graph.structureOverride ?? project.structuralInfo.mainStructure;
+  if (!isRigidFrameStructure(effective)) return null;
+  const s = beamPerimeterSign(exterior, beam);
+  if (s === 0) return null;
+  return { s, base: (beamSectionWidth(beam) - defaultColumnWidth(effective)) / 2 };
+}
+
+/** 梁の faceGap から偏芯量（柱芯⇄材芯）を算出する。対象外（非ラーメン・内部梁）は0。
+ *  faceGap 未指定時は梁自身の値、exterior 未指定時は内部で構築する（UIからの単発呼び出し用）。 */
+export function autoBeamEccentricity(graph, project, beam, faceGap = beam.faceGap ?? 0, exterior = buildExteriorSide(graph)) {
+  const geom = beamEccentricityGeom(graph, project, beam, exterior);
+  return geom ? geom.s * (geom.base + faceGap) : 0;
+}
+
+/** 図上で指定された偏芯量（符号付き）から、保存すべき faceGap を逆算する（autoBeamEccentricity の逆変換）。
+ *  対象外（非ラーメン・内部梁）は既存 faceGap を保持。 */
+export function faceGapForEccentricity(graph, project, beam, eccSigned, exterior = buildExteriorSide(graph)) {
+  const geom = beamEccentricityGeom(graph, project, beam, exterior);
+  return geom ? geom.s * eccSigned - geom.base : (beam.faceGap ?? 0);
+}
+
+/** 全梁（大梁・小梁）の偏芯量を faceGap から再算出して整合する。構造モード突入時、autoFillColumnAxisOffsets と
+ *  同タイミングで呼ぶ。柱寸法・梁寸法（既定柱幅・梁断面幅）が変わっても faceGap を保ったまま柱外面合わせを保つ。
+ *  外周モデル exterior は未指定なら1回だけ構築して全梁で使い回す。更新した梁idの配列を返す。 */
+export function autoFillBeamEccentricity(graph, project, exterior = buildExteriorSide(graph)) {
+  const updated = [];
+  for (const beam of graph.beams) {
+    // 大梁・小梁・軒桁（屋根外周の横架材）が対象。軒桁も建物外周に乗るため柱外面合わせを行う。基礎梁は対象外。
+    if (beam.role !== 'primary' && beam.role !== 'secondary' && beam.role !== 'eaves') continue;
+    const target = autoBeamEccentricity(graph, project, beam, beam.faceGap ?? 0, exterior);
+    if (beam.eccentricity === target) continue;
+    beam.setField('eccentricity', target);
+    updated.push(beam.id);
+  }
+  return updated;
 }

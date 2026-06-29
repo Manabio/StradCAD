@@ -42,6 +42,14 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* 全選択状態（入力開始時。最初のキーで値が置換されることを示す） */
+.numpad-value--selected {
+  background: #2563eb;
+  color: #ffffff;
+  border-radius: 3px;
+  padding: 0 4px;
+}
+
 .numpad-unit {
   font-size: 11px;
   color: #94a3b8;

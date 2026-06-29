@@ -7,6 +7,18 @@ import './SiteDialog.css';
 export const MAIN_STRUCTURE_OPTIONS = ['未定', 'RC造(ラーメン)', 'RC造(壁式)', 'S造', 'SRC造', '木造（在来）', '木造（2"×4"）'];
 export const OTHER_STRUCTURE_OPTIONS = ['RC造(ラーメン)', 'RC造(壁式)', 'S造', 'SRC造', '木造（在来）', '木造（2"×4"）'];
 export const FOUNDATION_OPTIONS = ['杭基礎（既製コンクリート杭）', '独立基礎', '布基礎', 'ベタ基礎'];
+// 木造（在来・2"×4"）の基礎種別（問題.md「なし / べた基礎* / 土間コン」。'べた基礎'＝canonical表記の 'ベタ基礎'）。
+export const WOOD_FOUNDATION_OPTIONS = ['なし', 'ベタ基礎', '土間コン'];
+
+/** 木造系（在来・2"×4"）か。基礎種別の選択肢分岐・配置分岐（共通タブ⇄構造リスト）で共用する。 */
+export function isWoodStructure(structure) {
+  return structure === '木造（在来）' || structure === '木造（2"×4"）';
+}
+
+/** 主構造に応じた基礎種別の選択肢。木造系のみ「なし/ベタ基礎/土間コン」、それ以外は従来のRC系選択肢。 */
+export function foundationOptionsFor(structure) {
+  return isWoodStructure(structure) ? WOOD_FOUNDATION_OPTIONS : FOUNDATION_OPTIONS;
+}
 export const DESIGN_STRENGTH_OPTIONS = ['Fc21', 'Fc24', 'Fc27', 'Fc30'];
 export const CONCRETE_TYPE_OPTIONS = ['普通コンクリート', '軽量コンクリート'];
 export const MAIN_BAR_OPTIONS = ['SD345', 'SD390'];

@@ -58,12 +58,13 @@ import { CalibrationDialog }  from './ui/CalibrationDialog.jsx';
 import { SiteDialog }          from './ui/SiteDialog.jsx';
 import { BuildingInfoDialog }  from './ui/BuildingInfoDialog.jsx';
 import { StructuralPanel } from './structural/StructuralPanel.jsx';
-import { autoFillColumns, autoFillColumnAxisOffsets, autoFillColumnSizes, resolveLowestGraph, convertMembersToEffectiveMaterial } from './structural/structuralAutoFill.js';
+import { autoFillColumns, autoFillColumnAxisOffsets, autoFillColumnSizes, resolveLowestGraph, convertMembersToEffectiveMaterial, deleteClassificationOverflow } from './structural/structuralAutoFill.js';
+import { structureHasMemberKind, MEMBER_KIND } from './structural/structuralClassification.js';
 import { buildStructuralWallGate } from './structural/wallGate.js';
 import { renumberAllCategories } from './structural/memberNumbering.js';
 import { recomputeStructuralForGraph, analyzeStructuralOverflow, deleteOverflowMembers } from './structural/structuralRecompute.js';
 import { syncRoofPlane } from './structural/roofPlane.js';
-import { computeStructuralDesignation } from './structural/drawingDesignation.js';
+import { buildStructuralFigureSlots, designationForSlot, firstSlotKeyForPlane } from './structural/structuralFigureSlots.js';
 import { figureBindingManager } from './figure/FigureBindingManager.js';
 import { floorSwapManager } from './storage/FloorSwapManager.js';
 import { saveFloor } from './storage/db.js';
@@ -140,6 +141,9 @@ const App = observer(() => {
   const [structComposition, setStructComposition] = useState(null); // 構造モードの図面合成（自階床下材＋1つ下の階の柱）。各カテゴリの供給グラフを保持する
   // フロア切替時にモードを再ロードするためのトリガー
   const [activeFloorId,   setActiveFloorId]   = useState(project.activePlaneId);
+  // 構造モードのスライダーで選択中の図面スロット key（`slotType:planeId`）。1平面に複数スロットが
+  // 乗る（木造の基礎伏図＋1階伏図・S造のR階伏図＋小屋伏図）ため、planeId とは別に保持する。
+  const [activeStructSlotKey, setActiveStructSlotKey] = useState(null);
 
   const drag          = useRef(null);
   const fileInputRef  = useRef(null);
@@ -163,7 +167,6 @@ const App = observer(() => {
   const modeRef = useRef(null);
 
   const graph = project.activeGraph;
-  window.__graph = graph; // TEMP DEBUG - remove before commit
 
   // 構造モード・ラーメン系構造（S造/SRC造/RC造(ラーメン)）のときのみ、CENTER寸法行を柱芯（SX,SY）表示に切り替える
   // ラーメン系か否かの判定は autoFillColumnAxisOffsets（自階の実効主構造を見て書き込む唯一の場所）
@@ -716,9 +719,12 @@ const App = observer(() => {
       // belowMainStructure 引数は軒桁(eaves)専用。通常階の下階に eaves は無いため自階の実効値で十分。
       const belowBelowMainStructure = belowGraph.structureOverride ?? project.structuralInfo.mainStructure;
       if (mutate) belowBefore = serializeGraph(belowGraph);
+      const belowStructure = belowGraph.structureOverride ?? project.structuralInfo.mainStructure;
       runInAction(() => {
         convertMembersToEffectiveMaterial(belowGraph, project, belowBelowMainStructure);
-        autoFillColumns(belowGraph, project, belowGate);
+        // 主構造変更で柱が「×」化した場合は、下階の柱を生成せず既存の自動柱を削除する（問題.md「×は削除/○は生成」）。
+        if (structureHasMemberKind(MEMBER_KIND.COLUMN, belowStructure)) autoFillColumns(belowGraph, project, belowGate);
+        deleteClassificationOverflow(belowGraph, project);
         autoFillColumnAxisOffsets(belowGraph, project, belowLowestGraph);
         autoFillColumnSizes(belowGraph, project, belowGraph.plane);
         renumberAllCategories(belowGraph, project, false);
@@ -1011,10 +1017,40 @@ const App = observer(() => {
   }
 
   // ---- フロア切替（構造モード中）：構造モードを抜けずに別階の構造伏図へ移動する ----
+  // planeId のみ受ける経路（検討チップ）。移動先平面の先頭スロットを選択状態にする。
   async function handleStructuralFloorSwitch(planeId) {
-    if (planeId === project.activePlaneId) return;
+    if (planeId === project.activePlaneId) {
+      setActiveStructSlotKey(firstSlotKeyForPlane(buildStructuralFigureSlots(project), planeId));
+      return;
+    }
     await switchFloor(planeId);
     setActiveFloorId(planeId);
+    setActiveStructSlotKey(firstSlotKeyForPlane(buildStructuralFigureSlots(project), planeId));
+    setMode(null);
+    setSnapPoint(null);
+    setNearCL(null);
+    setNearWall(null);
+    setNearOpening(null);
+    setCursorWorld(null);
+    setMenu(null);
+    setClDialog(null);
+    setWallDialog(null);
+    setOpeningDialog(null);
+    await runStructuralModeSetup(project.activeGraph);
+  }
+
+  // ---- 図面スロット切替（構造モードのスライダー）：slotType:planeId 単位で選択・移動する ----
+  // 同一平面の別スロット（例：基礎伏図⇄1階伏図）は平面移動せずラベル選択のみ。別平面なら通常の階切替。
+  async function handleStructuralSlotSwitch(slotKey) {
+    const slot = buildStructuralFigureSlots(project).find(s => s.key === slotKey);
+    if (!slot) return;
+    if (slot.planeId === project.activePlaneId) {
+      setActiveStructSlotKey(slotKey); // 同一平面内のスロット選択（部材合成の細分は次フェーズ）
+      return;
+    }
+    await switchFloor(slot.planeId);
+    setActiveFloorId(slot.planeId);
+    setActiveStructSlotKey(slotKey);
     setMode(null);
     setSnapPoint(null);
     setNearCL(null);
@@ -1963,6 +1999,43 @@ const App = observer(() => {
     setWallDialog(null);
   }
 
+  // 木造（在来）の自動判定（問題.md）: 平面モードで主構造が未指定のとき、追加した通り芯が
+  // 既存グリッドと910の倍数間隔をなすなら「木造（在来）」を提案する確認ダイアログを出す。
+  // 「寸法指定を910で割った余りが0」を、隣接グリッドCLとの最小間隔で判定する（参照なし絶対座標入力にも効く）。
+  // 主構造の正式表記は StructuralInfoDialog.MAIN_STRUCTURE_OPTIONS に準拠（'未定' / '木造（在来）'＝全角括弧）。
+  function maybeSuggestWoodStructure(clType, newValues) {
+    if (appMode !== 'floorplan') return;
+    if (project.structuralInfo.mainStructure !== '未定') return; // 既に主構造が確定済みなら提案しない
+    const grid = (clType === CenterLineType.VERTICAL ? graph.gridXs : graph.gridYs).map(cl => cl.effectiveValue);
+    const isWoodModule = newValues.some(v => {
+      let nearest = Infinity;
+      for (const u of grid) {
+        const d = Math.abs(u - v);
+        if (d > 0.5 && d < nearest) nearest = d; // 自分自身（d≈0）は除外
+      }
+      return nearest !== Infinity && Math.round(nearest) % 910 === 0;
+    });
+    if (!isWoodModule) return;
+    setFloorConfirm({
+      message: '主要構造を木造（在来）としてよろしいですか？',
+      buttons: [
+        { label: 'Yes', value: 'yes', primary: true },
+        { label: 'No',  value: 'no' },
+      ],
+      onSelect: (v) => {
+        setFloorConfirm(null);
+        if (v !== 'yes') return;
+        const prev = project.structuralInfo.mainStructure;
+        const apply = () => runInAction(() => project.structuralInfo.setField('mainStructure', '木造（在来）'));
+        apply();
+        undoManager.push(
+          () => runInAction(() => project.structuralInfo.setField('mainStructure', prev)),
+          apply,
+        );
+      },
+    });
+  }
+
   function handleCLDialogConfirm(value, kind, trim, refId, refOffset) {
     if (!clDialog) return;
     const clType = clDialog.type === 'vertical' ? CenterLineType.VERTICAL : CenterLineType.HORIZONTAL;
@@ -1992,6 +2065,7 @@ const App = observer(() => {
         () => restoreStructCLs(project.structGraph, after),
       );
       setClDialog(null); setClPreview(null);
+      maybeSuggestWoodStructure(clType, newValues);
       return;
     }
 
@@ -2239,6 +2313,7 @@ const App = observer(() => {
         );
         setClDialog(null);
         setClPreview(null);
+        maybeSuggestWoodStructure(clType, [value]);
         return;
       }
 
@@ -2271,6 +2346,7 @@ const App = observer(() => {
     );
     setClDialog(null);
     setClPreview(null);
+    if (kind === 'struct') maybeSuggestWoodStructure(clType, [value]);
   }
 
   const closeMenu = () => setMenu(null);
@@ -2304,16 +2380,22 @@ const App = observer(() => {
   const floorName = project.activeGraph?.plane?.name ?? '1階';
 
   // 移動スライダー（ドラム）用の階リスト — 採用階のみ（標高昇順）。
-  // 構造モードでは図面呼称に書き換え、屋根専用平面（小屋伏／R階伏）を末尾（最上階）に加える。
-  const drumPlanes = appMode === 'structure' && project.roofPlane
-    ? [...project.planes, project.roofPlane]
-    : project.planes;
-  const drumFloors = drumPlanes.map(p => ({
-    id: p.id,
-    name: appMode === 'structure'
-      ? computeStructuralDesignation(p, p.id === project.activePlaneId ? graph : null, project)
-      : p.name,
-  }));
+  // 構造モードでは図面スロット列（buildStructuralFigureSlots）を主題とし、呼称（地中梁図・R階伏図 等）に
+  // 書き換える。それ以外のモードは採用平面の階名そのまま。
+  const structSlots = appMode === 'structure' ? buildStructuralFigureSlots(project) : null;
+  // 選択中スロット key。保存値は「アクティブ平面に属するスロット」のときだけ採用する。
+  // それ以外（モード退出→別平面で再突入したのに古い屋根スロットkeyが残存／構造変更でスロットが消えた 等）は
+  // アクティブ平面の先頭スロットへフォールバックする——key一致だけ見ると、屋根平面は再突入時も同一idで
+  // 再利用されるため古い「R階伏図」スロットにヒットし、1階突入なのにR階伏図が選択されてしまう。
+  const savedStructSlot = structSlots?.find(s => s.key === activeStructSlotKey) ?? null;
+  const activeStructSlot = structSlots
+    ? (savedStructSlot?.planeId === project.activePlaneId
+        ? savedStructSlot.key
+        : firstSlotKeyForPlane(structSlots, project.activePlaneId))
+    : null;
+  const drumFloors = structSlots
+    ? structSlots.map(slot => ({ id: slot.key, name: designationForSlot(slot, slot.key === activeStructSlot) }))
+    : project.planes.map(p => ({ id: p.id, name: p.name }));
 
   // 検討チップ用 — 現在の階の採用＋検討案。
   const chipActivePlane = project.activePlane;
@@ -2379,11 +2461,12 @@ const App = observer(() => {
         isLandscape={isLandscape}
       />
 
-      {/* 移動スライダー（ドラム）— 採用階の移動（横長=左端 / 縦長=下部） */}
+      {/* 移動スライダー（ドラム）— 採用階の移動（横長=左端 / 縦長=下部）。
+          構造モードでは図面スロット（slotType:planeId）単位で選択・移動する。 */}
       <FloorDrum
         floors={drumFloors}
-        activeFloorId={activeFloorId}
-        onSwitch={appMode === 'structure' ? handleStructuralFloorSwitch : handleFloorSwitch}
+        activeFloorId={appMode === 'structure' ? activeStructSlot : activeFloorId}
+        onSwitch={appMode === 'structure' ? handleStructuralSlotSwitch : handleFloorSwitch}
         isLandscape={isLandscape}
       />
 
@@ -2610,7 +2693,7 @@ const App = observer(() => {
                 {/* 平面モードでは自階の柱（構造モードで生成・保存済み）を表示する。構造モードの伏図と違い
                     1つ下の階ではなく自階graphの柱を描く（その階の平面に立つ柱はその階のもの）。 */}
                 {appMode === 'floorplan' && <ColumnsLayer graph={graph} viewport={viewport} />}
-                {appMode === 'structure' && <StructuralLayer composition={structComposition} viewport={viewport} />}
+                {appMode === 'structure' && <StructuralLayer composition={structComposition} viewport={viewport} project={project} />}
                 {appMode === 'structure' && (
                   <MemberTagLayer
                     composition={structComposition}

@@ -1,5 +1,6 @@
+import { useEffect, useState } from 'react';
 import './NumPad.css';
-import { applyKeyToNumpadValue } from './numpadUtils.js';
+import { applyKeyToNumpadValue, toNumpadKey } from './numpadUtils.js';
 
 const ROWS = [
   [{ k: '7' }, { k: '8' }, { k: '9' }, { k: '⌫', cls: 'back'    }],
@@ -10,25 +11,66 @@ const ROWS = [
 ];
 
 /**
- * @param {string}           value     現在の入力文字列
- * @param {string}           label     軸ラベル
- * @param {(s:string)=>void} onChange  文字列変化コールバック
- * @param {()=>void}         onConfirm 確定
- * @param {()=>void}         onCancel  キャンセル
+ * @param {string}           value             現在の入力文字列
+ * @param {string}           label             軸ラベル
+ * @param {(s:string)=>void} onChange          文字列変化コールバック
+ * @param {()=>void}         onConfirm         確定
+ * @param {()=>void}         onCancel          キャンセル
+ * @param {boolean}          [keyboard]        物理キーボード入力を購読する（Enter確定 / Escapeキャンセル / 数字・記号入力）。opt-in。
+ *                                             自前で keydown を持つ画面（SiteInfoPanel 等）は有効化しないこと（二重発火するため）。
+ * @param {boolean}          [cancelOnOutside] パッド外クリックでキャンセルする。opt-in。
+ * @param {boolean}          [selectOnStart]   開始時に全選択状態にし、最初の入力で既存値を置換する。opt-in。
  */
-export function NumPad({ value, label, onChange, onConfirm, onCancel, hideDisplay = false }) {
+export function NumPad({
+  value, label, onChange, onConfirm, onCancel,
+  hideDisplay = false,
+  keyboard = false,
+  cancelOnOutside = false,
+  selectOnStart = false,
+}) {
+  // 全選択状態。selectOnStart のときだけ true で開始し、最初の入力で解除する。
+  const [selected, setSelected] = useState(selectOnStart);
+
+  // キー1つを現在値へ適用。全選択中は現在値を空とみなして置換し、選択を解除する。
+  function applyKey(k) {
+    onChange(applyKeyToNumpadValue(selected ? '' : value, k));
+    if (selected) setSelected(false);
+  }
+
   function press(k) {
     if (k === '✓') { onConfirm(); return; }
     if (k === '✕') { onCancel();  return; }
-    onChange(applyKeyToNumpadValue(value, k));
+    applyKey(k);
   }
+
+  // 物理キーボード入力（opt-in）。
+  useEffect(() => {
+    if (!keyboard) return;
+    const onKeyDown = (e) => {
+      if (e.key === 'Enter')  { e.preventDefault(); onConfirm(); return; }
+      if (e.key === 'Escape') { e.preventDefault(); onCancel();  return; }
+      const k = toNumpadKey(e.key);
+      if (k != null) { e.preventDefault(); applyKey(k); }
+    };
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
+  }, [keyboard, value, selected, onChange, onConfirm, onCancel]); // eslint-disable-line react-hooks/exhaustive-deps -- applyKey は value/selected から再生成される
+
+  // パッド外クリックでキャンセル（opt-in）。自身の pointerdown は stopPropagation するため、
+  // document へ届く pointerdown はパッド外クリックのときだけ。
+  useEffect(() => {
+    if (!cancelOnOutside) return;
+    const onOutside = () => onCancel();
+    document.addEventListener('pointerdown', onOutside);
+    return () => document.removeEventListener('pointerdown', onOutside);
+  }, [cancelOnOutside, onCancel]);
 
   return (
     <div className="numpad" onPointerDown={e => e.stopPropagation()}>
       {!hideDisplay && (
         <div className="numpad-display">
           <span className="numpad-axis">{label}</span>
-          <span className="numpad-value">{value || '0'}</span>
+          <span className={'numpad-value' + (selected ? ' numpad-value--selected' : '')}>{value || '0'}</span>
           <span className="numpad-unit">mm</span>
         </div>
       )}

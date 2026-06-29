@@ -484,8 +484,9 @@ function buildColumnAxisAnchors(d, graph, viewport, gridBounds) {
   const points = [];
   [...gridCLs].sort((a, b) => a.value - b.value).forEach(cl => {
     const off = offsets.get(cl.id) ?? 0;
-    if (off !== 0) points.push({ id: `${cl.id}:grid`, value: cl.effectiveValue });
-    points.push({ id: `${cl.id}:axis`, value: cl.effectiveValue + off });
+    // isColumnAxis: 偏芯量≠0 の :axis 点＝通り芯と異なる実際の柱芯。○「柱芯」ラベルを付ける対象。
+    if (off !== 0) points.push({ id: `${cl.id}:grid`, value: cl.effectiveValue, isColumnAxis: false });
+    points.push({ id: `${cl.id}:axis`, value: cl.effectiveValue + off, isColumnAxis: off !== 0 });
   });
   points.sort((a, b) => a.value - b.value);
   return { boundary, lineCoord, anchors: points };
@@ -503,7 +504,8 @@ function buildColumnAxisSegments(anchors) {
 
 // 1行（TOP/BOTTOM/LEFT/RIGHT）分の柱芯Konva要素を生成する。lineCoord は
 // buildColumnAxisAnchors が算出済み（描画エリア外ならGRID基準線の内側2*push分にクランプ済み）の値を使う。
-// ○ラベル（旧 SX/SY 丸）は廃止したため、寸法線・寸法値・アンカー点（通り芯⇄柱芯の偏芯量を示す点）のみを描く。
+// 寸法線・寸法値・アンカー点（通り芯⇄柱芯の偏芯量を示す点）に加え、柱芯点（isColumnAxis）には
+// ○「柱芯」ラベルを描く（通り芯の丸ラベルと同じ labelCircle を流用。ナンバリングは持たず明示のみ）。
 function buildColumnAxisRowElements(d, boundary, lineCoord, anchors, viewport) {
   if (!d || boundary == null || anchors.length < 2) return [];
 
@@ -526,33 +528,48 @@ function buildColumnAxisRowElements(d, boundary, lineCoord, anchors, viewport) {
 
   const els = [line, ...labels];
 
+  // ○「柱芯」ラベルは柱芯寸法線の外側（ガター側）へ push 分離す。push=labelCircleRadius+OUTWARD は
+  // 通り芯の丸ラベルが自分の寸法線から離れる量と同じ（columnAxisPush）——両者の離隔を揃える。
+  const isNear     = d.side === DimensionSide.TOP || d.side === DimensionSide.LEFT;
+  const push       = columnAxisPush(d.axis, viewport);
+  const labelCoord = isNear ? lineCoord - push : lineCoord + push;
+
   anchors.forEach(a => {
     const [dx, dy] = d.axis === 'X' ? [a.value, lineCoord] : [lineCoord, a.value];
     els.push(
       <Circle key={`${keyBase}-dot-${a.id}`} x={dx} y={dy} radius={dotR} fill={LINE_COLOR} listening={false} />
     );
+    // 柱芯点（偏芯量≠0）には○「柱芯」ラベル。寸法線の外側 push 分の位置に置き、番号は付けない。
+    if (a.isColumnAxis) {
+      const [lx, ly] = d.axis === 'X' ? [a.value, labelCoord] : [labelCoord, a.value];
+      els.push(...labelCircle(`${keyBase}-axislabel-${a.id}`, lx, ly, '柱芯', viewport));
+    }
   });
   return els;
 }
 
-// 柱芯寸法線の位置（lineCoord、ガター逃げ時はGRID基準線の内側にクランプ済み）を4辺分まとめて返す。
-// CenterLinesLayer が建物内の柱芯（一点鎖線）の端点をこの位置まで伸ばすために使う——○ラベル廃止後は
-// 寸法線側に足を引かず、軸線自体を自分の柱芯寸法線まで届かせることで足無しの見た目を保つ。
-function columnAxisLineCoords(graph, viewport, width, height) {
+// 柱芯（一点鎖線）の端点を伸ばす先＝○「柱芯」ラベルの中心座標を4辺分まとめて返す。
+// ラベルは柱芯寸法線（lineCoord）の外側 push 分（buildColumnAxisRowElements と同じ）に置くため、
+// その push 分を足した位置を返す。通り芯が丸ラベル中心（gutterEdgeCoord）まで伸びるのと同じ見た目になり、
+// かつ寸法線側に足を引かずに軸線自体をラベルへ届かせる（足無しの見た目を保つ）。
+function columnAxisLabelCoords(graph, viewport, width, height) {
   const gridBounds = gridLineBounds(viewport, width, height);
   const rows   = graph.dimensionLines.filter(d => d.dimensionKind === DimensionKind.CENTER);
   const find   = side => rows.find(d => d.side === side);
-  const lineCoordFor = side => {
+  const labelCoordFor = side => {
     const d = find(side);
     if (!d) return null;
     const { lineCoord } = buildColumnAxisAnchors(d, graph, viewport, gridBounds);
-    return lineCoord;
+    if (lineCoord == null) return null;
+    const isNear = side === DimensionSide.TOP || side === DimensionSide.LEFT;
+    const push   = columnAxisPush(d.axis, viewport);
+    return isNear ? lineCoord - push : lineCoord + push;
   };
   return {
-    top:    lineCoordFor(DimensionSide.TOP),
-    bottom: lineCoordFor(DimensionSide.BOTTOM),
-    left:   lineCoordFor(DimensionSide.LEFT),
-    right:  lineCoordFor(DimensionSide.RIGHT),
+    top:    labelCoordFor(DimensionSide.TOP),
+    bottom: labelCoordFor(DimensionSide.BOTTOM),
+    left:   labelCoordFor(DimensionSide.LEFT),
+    right:  labelCoordFor(DimensionSide.RIGHT),
   };
 }
 
@@ -605,7 +622,7 @@ const CenterDimensions = observer(({ graph, viewport, width, height, columnAxisM
 export const GutterLayer = observer(({ graph, viewport, width, height, columnAxisMode = false }) => {
   if (!graph) return null;
   const axisLineCoords = columnAxisMode
-    ? columnAxisLineCoords(graph, viewport, width, height)
+    ? columnAxisLabelCoords(graph, viewport, width, height)
     : null;
   return (
     <>

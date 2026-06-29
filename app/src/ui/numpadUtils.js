@@ -1,3 +1,15 @@
+// 物理キーボードの key を NumPad キー記号へ変換する（数字・記号・Backspace のみ。該当なしは null）
+export function toNumpadKey(key) {
+  if (/^[0-9]$/.test(key)) return key;
+  if (key === 'Backspace') return '⌫';
+  if (key === '.')  return '.';
+  if (key === '+')  return '+';
+  if (key === '-')  return '-';
+  if (key === '*')  return '×';
+  if (key === '/')  return '÷';
+  return null;
+}
+
 // NumPad キー 1 つを現在値に適用して新しい値を返す（キーボード入力との共有用）
 export function applyKeyToNumpadValue(value, k) {
   function canAppendOp(v) {

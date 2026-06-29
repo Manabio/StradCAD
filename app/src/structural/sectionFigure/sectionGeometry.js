@@ -23,6 +23,8 @@
 //                                                               editable+fieldKey で図上直接編集の対象になる。
 //                                                               foot: 材側の座標（atと同じ軸）。指定時は端のチックの
 //                                                               代わりに「寸法線⇄材」の引出線を描く（材と反対側へは出さない）。
+//                                                               footLen: 引出線（足）の長さ(mm)。指定時は寸法線を材から離しても足は一定長で描き、
+//                                                               材との間に空きを作る（未指定は材⇄寸法線の2/3を引く比率方式）。
 //                                                               noTick: true で端のチックを出さない（foot指定時は常にチック無し）。
 //                                                               labelSide:'left' で dir='v' の寸法値を寸法線の左側に表示する。
 // ================================================================
@@ -76,6 +78,14 @@ export function figureBounds(primitives) {
   }
   if (minX === Infinity) return { minX: 0, minY: 0, maxX: 0, maxY: 0, width: 0, height: 0 };
   return { minX, minY, maxX, maxY, width: maxX - minX, height: maxY - minY };
+}
+
+// 形状（部材断面そのもの）だけの mm 範囲。注記（dim/text/基準線/px固定マーカー・軸線）を除いて求める。
+// スクリーン空間注記では縮尺を「形状」基準で決める（注記の張り出しは px 一定で別途確保するため、
+// 注記を範囲に含めると縮尺が注記量に引きずられて形状が小さくなりすぎる）。
+const SHAPE_TYPES = new Set(['rect', 'hSection', 'polyline', 'circle']);
+export function shapeBounds(primitives) {
+  return figureBounds(primitives.filter(p => SHAPE_TYPES.has(p.type) && !(p.type === 'circle' && p.rPx != null)));
 }
 
 // 幾何の mm サイズと描画可能 px 枠から、枠を埋める最大の建築標準スケール(px/mm)を選ぶ。

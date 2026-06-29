@@ -4,7 +4,7 @@ import { SiteLineKind } from '@core';
 import { getSiteLineRedBlue } from '../renderer/SiteLinesLayer.jsx';
 import { isSanshaKind, computeLineTriNums } from '../site/lineClassification.js';
 import { NumPad } from './NumPad.jsx';
-import { applyKeyToNumpadValue } from './numpadUtils.js';
+import { applyKeyToNumpadValue, toNumpadKey } from './numpadUtils.js';
 import { ModePanel } from './ModePanel.jsx';
 import { BottomSheet } from './BottomSheet.jsx';
 
@@ -48,17 +48,6 @@ function evalExpr(s) {
     const v = Function(`"use strict"; return (${expr})`)();
     return typeof v === 'number' && isFinite(v) && v > 0 ? v : NaN;
   } catch { return NaN; }
-}
-
-function toNumpadKey(key) {
-  if (/^[0-9]$/.test(key)) return key;
-  if (key === 'Backspace') return '⌫';
-  if (key === '.')  return '.';
-  if (key === '+')  return '+';
-  if (key === '-')  return '-';
-  if (key === '*')  return '×';
-  if (key === '/')  return '÷';
-  return null;
 }
 
 const TH_BASE = {

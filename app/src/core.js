@@ -6,7 +6,7 @@
 import { makeObservable, observable, computed, action, reaction } from 'mobx';
 import createGraph from 'ngraph.graph';
 import { INTERIOR_MASTERS } from './finish/materials/interiorMasters.js';
-import { findSectionEntry } from './structural/sectionCatalog.js';
+import { findSectionEntry, diaphragmProjection } from './structural/sectionCatalog.js';
 
 // ================================================================
 // CONSTANTS
@@ -909,7 +909,10 @@ export class StructuralBeam extends StructuralEntity {
     this.isVertical      = isVertical;
     this.clStart         = clStart;   // 始端の直交CL
     this.clEnd           = clEnd;     // 終端の直交CL
-    this.eccentricity    = props.eccentricity ?? 0; // 柱芯からの個別偏心量(mm)
+    this.eccentricity    = props.eccentricity ?? 0; // 柱芯からの個別偏心量(mm。材芯=柱芯+eccentricity)
+    // 柱外面と梁縁のギャップ(mm。0=面一)。eccentricity の自動算出の基準（ラベル毎に共有する指定値）。
+    // eccentricity は派生値: s*((梁幅-既定柱幅)/2 + faceGap)。s=外周側符号。structuralAutoFill.autoBeamEccentricity 参照。
+    this.faceGap         = props.faceGap ?? 0;
     this.jointCondition  = props.jointCondition ?? { start: 'RIGID', end: 'RIGID' }; // 剛接合=ラーメン既定
     // 小梁・基礎梁・軒桁・母屋・垂木はサブクラスを増やさず role + 既定値の組み合わせで表現する。
     this.role             = props.role             ?? 'primary'; // primary/secondary/foundation/eaves/roof
@@ -920,11 +923,18 @@ export class StructuralBeam extends StructuralEntity {
     // sectionDefId（カタログ断面）には連動しない参考値（columnのtributaryWidthと同じ位置づけ）。
     this.beamWidth = props.beamWidth ?? null;
     this.beamDepth = props.beamDepth ?? null;
+    // 木造基礎梁（role:'foundation'）の断面詳細寸法（問題.md）。基礎種別ごとのベース／べた基礎の合成断面を
+    // 編集可能フィールドとして保持する。非基礎梁は null（断面図がデフォルト値で補完するため未編集分は持たない）。
+    //   embedDepth    : 基礎梁の地中部（GL下。立ち上がり = beamDepth − embedDepth）
+    //   baseWidth/baseThickness/baseOverhang : ベース幅・厚・屋外側張り出し（なし／土間コン）
+    //   matThickness/matTopAboveGL           : べた基礎の厚・天端（GL+）
+    this.foundationSection = props.foundationSection ?? null;
     this._planGraph        = null; // PlanGraph が addBeam/convertBeamMaterial 時にセット（columnAxisOffsets参照用）
     makeObservable(this, {
       clStart:          observable.ref,
       clEnd:            observable.ref,
       eccentricity:     observable,
+      faceGap:          observable,
       jointCondition:   observable,
       role:             observable,
       levelOffset:      observable,
@@ -932,6 +942,7 @@ export class StructuralBeam extends StructuralEntity {
       endLevelOffset:   observable,
       beamWidth:        observable,
       beamDepth:        observable,
+      foundationSection: observable,
       axisValue: computed,
       coord1:    computed,
       coord2:    computed,
@@ -954,7 +965,7 @@ export class StructuralBeam extends StructuralEntity {
   }
   // 端部の中心座標と、柱断面の梁方向半幅（柱が無い端部は中心=CL位置+柱芯オフセット、半幅=0）。
   // 柱がある端部は柱の実位置（個別偏心込み）を中心とし、断面寸法を柱の回転角で投影した半幅だけ手前で止める。
-  _endCenterAndHalfWidth(perpCL, columns) {
+  _endCenterAndHalfWidth(perpCL, columns, diaphragm = false) {
     const column = this._columnAtEnd(perpCL, columns);
     if (!column) {
       const off = this._planGraph?.columnAxisOffsets.get(perpCL.id) ?? 0;
@@ -964,16 +975,20 @@ export class StructuralBeam extends StructuralEntity {
     const sec = findSectionEntry(column.sectionDefId);
     if (!sec) return { center, half: 0 };
     const rad = (column.rotation ?? 0) * Math.PI / 180;
+    // 詳細描画では梁をダイヤフラム（断面+e の四角）まで止める。e は鋼管のみ非0。
+    const e = diaphragm ? diaphragmProjection(sec) : 0;
+    const w = sec.width + 2 * e, h = sec.height + 2 * e;
     const extent = this.isVertical
-      ? Math.abs(sec.width * Math.sin(rad)) + Math.abs(sec.height * Math.cos(rad))
-      : Math.abs(sec.width * Math.cos(rad)) + Math.abs(sec.height * Math.sin(rad));
+      ? Math.abs(w * Math.sin(rad)) + Math.abs(h * Math.cos(rad))
+      : Math.abs(w * Math.cos(rad)) + Math.abs(h * Math.sin(rad));
     return { center, half: extent / 2 };
   }
   // 表示する柱集合 columns に対し、両端を柱断面手前で止めた始終端座標を返す。
   // 伏図で別階の柱を表示する場合はレンダラが表示中の柱集合を渡す（StructuralLayer.jsx）。
-  spanForColumns(columns) {
-    const a = this._endCenterAndHalfWidth(this.clStart, columns);
-    const b = this._endCenterAndHalfWidth(this.clEnd, columns);
+  // opts.diaphragm=true（詳細描画）なら鋼管柱はダイヤフラム端で止める（梁はダイヤフラムまで）。
+  spanForColumns(columns, { diaphragm = false } = {}) {
+    const a = this._endCenterAndHalfWidth(this.clStart, columns, diaphragm);
+    const b = this._endCenterAndHalfWidth(this.clEnd, columns, diaphragm);
     const dir = Math.sign(b.center - a.center) || 1;
     return { coord1: a.center + dir * a.half, coord2: b.center - dir * b.half };
   }

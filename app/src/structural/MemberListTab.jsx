@@ -13,7 +13,9 @@ import {
   DEFAULT_SECTION_BY_MATERIAL, DEFAULT_COLUMN_SECTION_BY_MATERIAL, DEFAULT_BEAM_SECTION_BY_MATERIAL,
   FIGURE_FRAME_BY_MAP, DEFAULT_FIGURE_FRAME,
 } from './memberCatalog.js';
-import { resolveDefaultMaterialType, alignToOuterFace, autoFillColumnSizes, autoFillColumnBaseSizes, isRigidFrameStructure } from './structuralAutoFill.js';
+import { resolveDefaultMaterialType, alignToOuterFace, autoFillColumnSizes, autoFillColumnBaseSizes, isRigidFrameStructure,
+  autoFillBeamEccentricity, autoBeamEccentricity, faceGapForEccentricity } from './structuralAutoFill.js';
+import { buildExteriorSide } from './wallGate.js';
 import { SECTION_CATALOG, findSectionEntry, SectionShape } from './sectionCatalog.js';
 import { renumberMembers } from './memberNumbering.js';
 import { serializeGraph, restoreGraph } from '../graphSnapshot.js';
@@ -21,14 +23,32 @@ import { undoManager } from '../undoManager.js';
 import { LayerRole } from '../figure/figureTypes.js';
 import { AutoScaledFigure } from './sectionFigure/AutoScaledFigure.jsx';
 import { memberFigure } from './sectionFigure/memberFigures.js';
-import { structureShowsMap } from './structureMemberMatrix.js';
+import { MemberLayoutStudy } from './sectionFigure/MemberLayoutStudy.jsx';
+import { isStudyEnabled, layoutScopeFor, getLayoutOverrides, applyLayoutOverrides } from './sectionFigure/layoutStudy.js';
+import { isFoundationPlane } from './drawingDesignation.js';
+import { structureHasMemberKind, memberKindOf, MEMBER_KIND, FIGURE_TYPE } from './structuralClassification.js';
+import { foundationOptionsFor, isWoodStructure } from '../ui/StructuralInfoDialog.jsx';
+
+// この map グループが、その階・主構造で構造リストに出し得る部材種別（空グループの表示可否判定用）。
+// 梁グループだけは自階が基礎面か否かで「基礎梁」⇄「梁」に分かれる（自階＝床下材の供給グラフで判定）。
+function groupMemberKinds(mapName, graph, project) {
+  switch (mapName) {
+    case 'columnMap':  return [MEMBER_KIND.COLUMN];
+    case 'footingMap': return [MEMBER_KIND.INDEPENDENT_FOOTING, MEMBER_KIND.COLUMN_BASE];
+    case 'beamMap':    return [isFoundationPlane(graph.plane, project) ? MEMBER_KIND.FOUNDATION_BEAM : MEMBER_KIND.BEAM];
+    case 'slabMap':    return [MEMBER_KIND.SLAB];
+    case 'wallMap':    return [MEMBER_KIND.WALL];
+    default:           return [];
+  }
+}
 
 // 図上で直接編集する寸法のフィールドキー（断面図の editable dim が担う）。
 // これらはカード下部のフォームからは除外し、重複入力を避ける（断面=sectionDefId はカタログ選択のため対象外）。
 const FIGURE_DIM_KEYS = new Set(['beamWidth', 'beamDepth', 'thickness', 'widthX', 'widthY', 'pedestalDepth']);
 
 // entity と map から、断面図ジェネレータへ渡す ctx（柱芯オフセット・偏芯・レベルラベル）を組む。
-function buildFigureCtx(entity, mapName, graph, project) {
+// isRoof=R階伏図（屋根伏図）か。梁の図に限り FL を RFL に切り替える（他カテゴリ・他階は FL のまま）。
+function buildFigureCtx(entity, mapName, graph, project, isRoof = false) {
   const offsets = graph?.columnAxisOffsets;
   const off = id => (id != null ? (offsets?.get(id) ?? 0) : 0);
   // 柱芯（変位量）はラーメン系のみ編集可（木造・壁式は通り芯と一致＝変位の概念なし）。
@@ -46,18 +66,25 @@ function buildFigureCtx(entity, mapName, graph, project) {
     };
   }
   if (mapName === 'beamMap') {
+    const structure = graph?.structureOverride ?? project?.structuralInfo?.mainStructure;
     return {
+      rigid, // ラーメン系のみ柱芯⇄材芯の偏芯量を編集可（木造・壁式は通り芯と一致＝偏芯の概念なし）
       axisOffset: off(entity.axisCL?.id),
       axisClId: entity.axisCL?.id,
       ecc: typeof entity.eccentricity === 'number' ? entity.eccentricity : 0,
-      flLabel: 'FL',
+      flLabel: isRoof ? 'RFL' : 'FL', // R階伏図の梁の図のみ RFL（他階は FL）
       glLabel: 'GL（FL）',
+      // 木造基礎梁の断面図は基礎種別ごとのベース／べた基礎の合成を反映する（問題.md）。
+      // foundationType は 'ベタ基礎' が木造・RC共通表記のため、woodFoundation（木造の基礎梁か）と併用して分岐する。
+      foundationType: project?.structuralInfo?.foundationType,
+      woodFoundation: entity.role === 'foundation' && typeof structure === 'string' && structure.startsWith('木造'),
     };
   }
   if (mapName === 'wallMap') {
     return { axisOffset: off(entity.axisCL?.id), axisClId: entity.axisCL?.id };
   }
-  return { flLabel: 'FL' };
+  // スラブ（既定分岐）。R階伏図ではスラブの図も FL→RFL（梁と揃える）。
+  return { flLabel: isRoof ? 'RFL' : 'FL' };
 }
 
 // グラフ全体のスナップショットでUndoを記録する（CL削除等の既存パターンと同じ手法）。
@@ -131,6 +158,10 @@ export const MemberListTab = observer(({ composition, project, focusRequest }) =
   // 柱＝1つ下の階・床下材＝自階の帰属は FigureDef が決め、ここは委ねるだけ（StructuralLayer.jsx と同一の解決）。
   // 該当レイヤが無い（基礎伏図の柱など）ときは null＝そのグループを出さない。
   const graphForMap = mapName => composition?.graphForCategory(mapName) ?? null;
+  // R階伏図（屋根スラブ伏図）は全部材をR階ルールで取捨する（柱・梁・スラブのみ表示、壁・基礎系はカテゴリ非表示）。
+  // 平面が単一図面種別に属するため、所属図面ルール（GOVERNING_FIGURE）を figureType=ROOF で上書きする。
+  const isRoofFigure = composition?.subjectPlane?.isRoofPlane ?? false;
+  const figureType = isRoofFigure ? FIGURE_TYPE.ROOF : null;
 
   // 描画エリアの部材タグクリック（focusRequest）が来たら、該当部材のカードを開く。
   useEffect(() => {
@@ -144,10 +175,11 @@ export const MemberListTab = observer(({ composition, project, focusRequest }) =
       {MEMBER_GROUPS.map(group => {
         const g = graphForMap(group.mapName);
         if (!g) return null; // 下階が無い（基礎伏図）場合は柱グループを非表示
-        // 構造種別が持たない部材分類は隠す（問題.md「構造と部材有無リスト」＝structureMemberMatrix）。
-        // ただし既存データがある場合は隠さない（データ消失の誤解を避ける。空グループのみ抑制）。
+        // 構造種別が持たない部材分類はカテゴリごと隠す（問題.md「×はカテゴリ自体表示しない」＝structuralClassification）。
+        // 構造変更で「×」化した自動部材は recomputeStructuralForGraph が削除済みのため、空グループ＝非表示で齟齬は出ない。
+        // R階伏図は figureType=ROOF で取捨（壁・基礎系はカテゴリ非表示。柱・梁・スラブのみ）。
         const effectiveStructure = g.structureOverride ?? project.structuralInfo?.mainStructure;
-        if (!structureShowsMap(effectiveStructure, group.mapName) && g[group.mapName].size === 0) return null;
+        if (effectiveStructure != null && !groupMemberKinds(group.mapName, g, project).some(k => structureHasMemberKind(k, effectiveStructure, figureType))) return null;
         // 参照のみ（REFERENCE）レイヤの部材は閲覧可・編集不可。現定義は primary/secondaryEdit のみ＝常に false。
         const readOnly = composition.roleForCategory(group.mapName) === LayerRole.REFERENCE;
         return (
@@ -157,6 +189,8 @@ export const MemberListTab = observer(({ composition, project, focusRequest }) =
             graph={g}
             composition={composition}
             project={project}
+            structure={effectiveStructure}
+            figureType={figureType}
             readOnly={readOnly}
             expandedKey={expandedKey}
             onToggle={key => setExpandedKey(key === expandedKey ? null : key)}
@@ -188,11 +222,33 @@ export const MemberListTab = observer(({ composition, project, focusRequest }) =
   );
 });
 
+// 梁グループ見出しに置く基礎種別セレクト（木造系のみ）。値は建物全体設定で、共通タブの基礎種別と同一実体。
+// 階別構造オーバーライドが木造でも建物 foundationType が非木造値のまま残り得るため、選択肢に無い現在値も
+// 暫定オプションとして残す（select が空表示になるのを防ぐ）。
+const FoundationTypeSelect = observer(({ project, structure }) => {
+  const info = project.structuralInfo;
+  const options = foundationOptionsFor(structure);
+  return (
+    <select
+      value={info.foundationType ?? ''}
+      onChange={e => info.setField('foundationType', e.target.value)}
+      style={{ ...selectStyle, cursor: 'pointer' }}
+    >
+      {!options.includes(info.foundationType) && <option value={info.foundationType ?? ''}>{info.foundationType ?? '未設定'}</option>}
+      {options.map(opt => <option key={opt} value={opt}>{opt}</option>)}
+    </select>
+  );
+});
+
 // 1分類分のグループ（外部タブの GroupedExteriorTable と同じ「部位ごとの小テーブル」の発想）。
 // 同一形状＝同一タグ（部材番号）であるため、リストはタグ（ラベル）単位で1行のみ表示する
 // （同じラベルの部材は複数あっても重複表示しない。件数はカード見出しに表示）。
-const MemberGroupSection = observer(({ group, graph, composition, project, readOnly, expandedKey, onToggle, onRequestDelete, focusRequest }) => {
-  const entities = [...graph[group.mapName].values()];
+const MemberGroupSection = observer(({ group, graph, composition, project, structure, figureType, readOnly, expandedKey, onToggle, onRequestDelete, focusRequest }) => {
+  // 構造種別が持たない部材種別（×）の個体は一覧から除外する（footing→ベース/柱脚、beam→梁/基礎梁を role で割る）。
+  // structure=null（主構造未設定）は素通し。memberKindOf が null を返す表外部材（軒桁・杭）は structureHasMemberKind=true で残る。
+  // R階伏図は figureType=ROOF で個体も取捨する（軒桁＝null は表外で残るが、梁グループ自体が梁ルールで取捨される）。
+  const allEntities = [...graph[group.mapName].values()];
+  const entities = structure == null ? allEntities : allEntities.filter(e => structureHasMemberKind(memberKindOf(group.mapName, e), structure, figureType));
   const byTag = new Map();
   for (const e of entities) {
     const tag = e.memberNo ?? '(未採番)';
@@ -201,13 +257,26 @@ const MemberGroupSection = observer(({ group, graph, composition, project, readO
   }
   const tagGroups = [...byTag.entries()].sort((a, b) => a[0].localeCompare(b[0]));
 
+  // 木造系の基礎伏図の梁＝土台基礎。見出しを「土台基礎」に改め、基礎種別（なし/ベタ基礎/土間コン）を右横に置く。
+  // 基礎種別は基礎梁の断面に効く建物全体設定（project.structuralInfo.foundationType）を直接編集する。
+  const isWoodFoundationBeamGroup = group.mapName === 'beamMap'
+    && isWoodStructure(structure) && isFoundationPlane(graph.plane, project);
+  const groupLabel = isWoodFoundationBeamGroup ? '土台基礎' : group.label;
+
   return (
     <div style={{ marginBottom: 16 }}>
       <div style={{
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8,
         fontSize: 13, fontWeight: 700, color: '#374151',
         padding: '6px 10px', background: '#f1f5f9',
       }}>
-        {group.label}（{tagGroups.length}）
+        <span>{groupLabel}（{tagGroups.length}）</span>
+        {isWoodFoundationBeamGroup && (
+          <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontWeight: 400 }}>
+            <span style={{ fontSize: 12, color: '#64748b' }}>基礎種別</span>
+            <FoundationTypeSelect project={project} structure={structure} />
+          </label>
+        )}
       </div>
       {tagGroups.length === 0 && (
         <div style={{ textAlign: 'center', color: '#94a3b8', padding: 12, fontSize: 12 }}>
@@ -232,7 +301,7 @@ const MemberGroupSection = observer(({ group, graph, composition, project, readO
           />
         );
       })}
-      {!readOnly && <NewMemberSelector group={group} graph={graph} project={project} />}
+      {!readOnly && <NewMemberSelector group={group} graph={graph} project={project} structure={structure} />}
     </div>
   );
 });
@@ -240,19 +309,38 @@ const MemberGroupSection = observer(({ group, graph, composition, project, readO
 // タグ（ラベル）1件分のアコーディオンカード（finish/FinishTable.jsx の RoomCard と同型）。
 // members は同一タグを共有する全部材（同一形状のため、フィールド編集は全員に伝播する）。
 const MemberCard = observer(({ members, group, graph, composition, project, readOnly, isExpanded, onToggle, onDelete, focusRequest }) => {
-  const representative = members[0];
+  // 梁は同一ラベルに内部梁・両外周梁が混在する。図には偏芯量を編集できる外周梁（柱芯オフセット≠0）を
+  // 代表に選ぶ（無ければ先頭）。同一形状＝同一断面のため、断面・材質・番号の表示はどの代表でも一致する。
+  const representative = (group.mapName === 'beamMap'
+    ? members.find(m => (graph.columnAxisOffsets.get(m.axisCL?.id) ?? 0) !== 0)
+    : null) ?? members[0];
   // 図上で編集する寸法フィールドはフォームから除外（断面図の editable dim と二重入力になるため）。
   const allFields = (FIELD_DEFS_BY_CATEGORY[group.category] ?? [])
     .filter(f => f.key in representative && !FIGURE_DIM_KEYS.has(f.key));
+  // 木造の基礎梁は断面が構造算定（b×D・常にRC）で決まり、断面マスター選択は意味を持たないため「断面」を隠す（問題.md）。
+  const structure = graph?.structureOverride ?? project?.structuralInfo?.mainStructure;
+  const isWoodFoundationBeam = group.mapName === 'beamMap' && representative.role === 'foundation'
+    && typeof structure === 'string' && structure.startsWith('木造');
   // 「断面」は部材番号の直下（図の上）に置く。残りは図の下に並べる。
-  const sectionField = allFields.find(f => f.kind === 'section');
+  const sectionField = isWoodFoundationBeam ? null : allFields.find(f => f.kind === 'section');
   const fields = allFields.filter(f => f.kind !== 'section');
   const isFocusTarget = isExpanded && focusRequest?.mapName === group.mapName && focusRequest?.tag === representative.memberNo;
 
   // 断面図ジオメトリ（observableを読むので、フィールド変更時にこのobserverが再render→再描画される）。
+  // frame を渡すと memberFigure が形状基準で縮尺を決め、注記の隙間を px 一定にした図＋その縮尺を返す
+  //（スクリーン空間注記。縮尺は下の AutoScaledFigure へそのまま渡す）。
+  const figureFrame = FIGURE_FRAME_BY_MAP[group.mapName] ?? DEFAULT_FIGURE_FRAME;
+  const isRoof = composition?.subjectPlane?.isRoofPlane ?? false; // R階伏図なら梁の図の FL を RFL にする
   const figure = isExpanded
-    ? memberFigure(representative, group.mapName, buildFigureCtx(representative, group.mapName, graph, project))
+    ? memberFigure(representative, group.mapName, { ...buildFigureCtx(representative, group.mapName, graph, project, isRoof), frame: figureFrame })
     : null;
+  // 図の各要素の配置オフセット（layoutStudy）を本番図へ適用する。getLayoutOverrides を読むことで、
+  // 配置検討UIの移動・MEMBER_LAYOUT_OVERRIDES の編集が即この図へ反映される。
+  const layoutScope = layoutScopeFor(group.mapName, representative);
+  const displayPrimitives = figure
+    ? applyLayoutOverrides(figure.primitives, layoutScope ? getLayoutOverrides(layoutScope) : {})
+    : null;
+  const [studyOpen, setStudyOpen] = useState(false);
   // 図上の寸法確定。
   // ・通り芯⇄柱芯の変位量（target='axisOffset'）はCL単位の柱芯オフセットを更新する
   //   → 柱・梁の実位置computedが追従し、描画エリアが即リドローされる（MobX）。
@@ -275,6 +363,33 @@ const MemberCard = observer(({ members, group, graph, composition, project, read
             for (const gg of graphs) gg.setColumnAxisOffset(endCL.id, -value);
           }
         }
+      }
+      return;
+    }
+    if (dim.target === 'eccentricity') {
+      // 図の偏芯量寸法は絶対値表示。代表梁の現在の向き（無ければ柱外面合わせ＝面一の既定向き）を保って符号付けし、
+      // faceGap（柱外面と梁縁のギャップ）を逆算して同一ラベルの全梁に保存する。eccentricity 自体は faceGap から
+      // 再算出するため、外周の向きに応じて符号が自動付与され（対辺は逆符号・内部は0）、柱寸法・梁寸法変更にも追従する。
+      const exterior = buildExteriorSide(graph); // 外周モデルを1回構築し、以下の偏芯算出すべてで共有
+      const def = autoBeamEccentricity(graph, project, representative, 0, exterior); // faceGap=0（面一）の既定偏芯
+      const sign = representative.eccentricity !== 0 ? Math.sign(representative.eccentricity) : (def !== 0 ? Math.sign(def) : 1);
+      const faceGap = faceGapForEccentricity(graph, project, representative, sign * Math.abs(value), exterior);
+      for (const m of members) m.setField('faceGap', faceGap);
+      autoFillBeamEccentricity(graph, project, exterior);
+      return;
+    }
+    if (dim.target === 'foundationSection') {
+      // 木造基礎の断面詳細寸法（ベース・べた基礎・地中部）。foundationSection オブジェクトの該当キーを差し替える
+      //（MobX再描画のためオブジェクトごと置換）。同一ラベルの全基礎梁へ伝播。
+      for (const m of members) m.setField('foundationSection', { ...(m.foundationSection ?? {}), [dim.fieldKey]: value });
+      return;
+    }
+    if (dim.target === 'riseAboveGL') {
+      // 立ち上がり（GL上）の編集は 成D を rise+地中 に保つ（地中部は維持）。
+      for (const m of members) {
+        const embed = (m.foundationSection ?? {}).embedDepth ?? 250;
+        m.setField('beamDepth', value + embed);
+        m.setDimensionStatus('locked');
       }
       return;
     }
@@ -335,7 +450,7 @@ const MemberCard = observer(({ members, group, graph, composition, project, read
                 <span style={cardLabelStyle}>{sectionField.label}：</span>
                 <div style={cardInputWrapStyle}>
                   <MemberFieldInput
-                    members={members} fieldDef={sectionField} graph={graph} group={group}
+                    members={members} fieldDef={sectionField} graph={graph} group={group} project={project}
                     readOnly={readOnly}
                   />
                 </div>
@@ -345,13 +460,34 @@ const MemberCard = observer(({ members, group, graph, composition, project, read
           {/* 断面形状表示（寸法線付き・パネル幅に自動縮尺）。図上の[寸法]クリックで直接編集。
               表示枠は部材分類ごとに異なる（FIGURE_FRAME_BY_MAP、柱は密集するため広め）。 */}
           {figure && (
-            <div style={{ display: 'flex', justifyContent: 'center', padding: '8px 0', overflowX: 'auto' }}>
+            <div style={{ display: 'flex', justifyContent: 'center', padding: '8px 0', overflowX: 'auto', position: 'relative' }}>
               <AutoScaledFigure
-                primitives={figure.primitives}
-                {...(FIGURE_FRAME_BY_MAP[group.mapName] ?? DEFAULT_FIGURE_FRAME)}
+                primitives={displayPrimitives}
+                boundsPrimitives={figure.primitives}
+                {...figureFrame}
+                scale={figure.scale}
                 onEditDim={handleEditDim}
               />
+              {isStudyEnabled(layoutScope) && (
+                <button
+                  type="button"
+                  onClick={() => setStudyOpen(true)}
+                  title="部材リスト配置検討モード"
+                  style={{ position: 'absolute', top: 4, right: 4, fontSize: 11, padding: '2px 8px',
+                           border: '1px solid #93c5fd', borderRadius: 4, background: '#eff6ff', color: '#2563eb', cursor: 'pointer' }}
+                >
+                  配置検討
+                </button>
+              )}
             </div>
+          )}
+          {studyOpen && figure && layoutScope && (
+            <MemberLayoutStudy
+              primitives={figure.primitives}
+              scope={layoutScope}
+              title={`${representative.memberNo ?? group.label}`}
+              onClose={() => setStudyOpen(false)}
+            />
           )}
           {fields.map(fieldDef => (
             <div key={fieldDef.key} style={cardRowStyle}>
@@ -359,7 +495,7 @@ const MemberCard = observer(({ members, group, graph, composition, project, read
                 <span style={cardLabelStyle}>{fieldDef.label}：</span>
                 <div style={cardInputWrapStyle}>
                   <MemberFieldInput
-                    members={members} fieldDef={fieldDef} graph={graph} group={group}
+                    members={members} fieldDef={fieldDef} graph={graph} group={group} project={project}
                     readOnly={readOnly}
                     autoFocus={isFocusTarget && focusRequest?.fieldKey === fieldDef.key}
                     focusToken={focusRequest}
@@ -379,7 +515,7 @@ const MemberCard = observer(({ members, group, graph, composition, project, read
   );
 });
 
-const MemberFieldInput = observer(({ members, fieldDef, graph, group, readOnly, autoFocus, focusToken }) => {
+const MemberFieldInput = observer(({ members, fieldDef, graph, group, project, readOnly, autoFocus, focusToken }) => {
   const value = members[0][fieldDef.key];
   const inputRef = useRef(null);
   // 描画エリアの部材タグクリック（focusRequest）でこのフィールドが対象になったらフォーカス・全選択する。
@@ -402,18 +538,21 @@ const MemberFieldInput = observer(({ members, fieldDef, graph, group, readOnly, 
     const options = SECTION_CATALOG.filter(s => s.materialType === members[0].materialType);
     // 断面変更時、柱芯オフセットが入っている軸については「外側面で揃える」よう個別偏心量を補正する
     // （alignToOuterFace。基準幅=その材料の既定断面幅、補正方向=既存オフセットの符号）。
+    // 梁は断面幅が変わるため、faceGap（柱外面と梁縁のギャップ）を保ったまま偏芯量を再算出する。
     function handleSectionChange(newId) {
       const defaultMap = group.mapName === 'columnMap' ? DEFAULT_COLUMN_SECTION_BY_MATERIAL : DEFAULT_BEAM_SECTION_BY_MATERIAL;
       const refWidth = findSectionEntry(defaultMap[members[0].materialType])?.width ?? 0;
       const newWidth = findSectionEntry(newId)?.width ?? refWidth;
+      const exterior = group.mapName === 'beamMap' ? buildExteriorSide(graph) : null; // 梁のみ外周モデルを1回構築
       for (const m of members) {
         m.setField('sectionDefId', newId);
         m.setDimensionStatus('locked');
-        if (!refWidth || newWidth === refWidth) continue;
         if (group.mapName === 'beamMap') {
-          const off = graph.columnAxisOffsets.get(m.axisCL.id) ?? 0;
-          if (off !== 0) m.setField('eccentricity', alignToOuterFace(m.eccentricity, newWidth, refWidth, Math.sign(off)));
-        } else if (group.mapName === 'columnMap') {
+          m.setField('eccentricity', autoBeamEccentricity(graph, project, m, m.faceGap ?? 0, exterior)); // 新断面幅 × faceGap で再算出
+          continue;
+        }
+        if (!refWidth || newWidth === refWidth) continue;
+        if (group.mapName === 'columnMap') {
           const offX = graph.columnAxisOffsets.get(m.verticalCL.id) ?? 0;
           const offY = graph.columnAxisOffsets.get(m.horizontalCL.id) ?? 0;
           m.setField('eccentricity', {
@@ -466,9 +605,9 @@ const MemberFieldInput = observer(({ members, fieldDef, graph, group, readOnly, 
 });
 
 // 新規追加UI（柱・基礎=交点選択／梁・耐力壁=軸+始端+終端選択）。スラブはセル選択UIが必要なため Phase 1 では見送り。
-const NewMemberSelector = observer(({ group, graph, project }) => {
+const NewMemberSelector = observer(({ group, graph, project, structure }) => {
   if (group.mapName === 'columnMap' || group.mapName === 'footingMap') {
-    return <NewIntersectionMemberSelector group={group} graph={graph} project={project} />;
+    return <NewIntersectionMemberSelector group={group} graph={graph} project={project} structure={structure} />;
   }
   if (group.mapName === 'beamMap' || group.mapName === 'wallMap') {
     return <NewSpanMemberSelector group={group} graph={graph} project={project} />;
@@ -482,10 +621,12 @@ const addButtonStyle = {
 };
 const selectStyle = { fontSize: 12, padding: '2px 4px' };
 
-const NewIntersectionMemberSelector = observer(({ group, graph, project }) => {
+const NewIntersectionMemberSelector = observer(({ group, graph, project, structure }) => {
   const [vId, setVId] = useState('');
   const [hId, setHId] = useState('');
   const [footingKind, setFootingKind] = useState('independent'); // 'independent'=独立基礎 | 'base'=柱脚
+  // 柱脚が「×」の構造では追加候補から外す（問題.md「×はカテゴリ自体表示しない」）。
+  const allowColumnBase = structureHasMemberKind(MEMBER_KIND.COLUMN_BASE, structure);
 
   async function handleAdd() {
     const vCL = graph.gridXs.find(cl => cl.id === vId);
@@ -513,7 +654,7 @@ const NewIntersectionMemberSelector = observer(({ group, graph, project }) => {
       {group.mapName === 'footingMap' && (
         <select value={footingKind} onChange={e => setFootingKind(e.target.value)} style={selectStyle}>
           <option value="independent">独立基礎</option>
-          <option value="base">柱脚</option>
+          {allowColumnBase && <option value="base">柱脚</option>}
         </select>
       )}
       <select value={vId} onChange={e => setVId(e.target.value)} style={selectStyle}>
@@ -552,6 +693,7 @@ const NewSpanMemberSelector = observer(({ group, graph, project }) => {
     const materialType = resolveDefaultMaterialType(graph, project);
     if (group.mapName === 'beamMap') {
       graph.addBeam(materialType, DEFAULT_BEAM_SECTION_BY_MATERIAL[materialType], axisCL, isVertical, clStart, clEnd, {});
+      autoFillBeamEccentricity(graph, project, buildExteriorSide(graph)); // 外周梁なら柱外面合わせの偏芯量を初期算出（faceGap=0＝面一）
     } else {
       graph.addBearingWall(materialType, DEFAULT_SECTION_BY_MATERIAL[materialType], axisCL, isVertical, clStart, clEnd, {});
     }

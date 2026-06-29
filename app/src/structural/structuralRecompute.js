@@ -1,15 +1,18 @@
 import { runInAction } from 'mobx';
 import { serializeGraph } from '../graphSnapshot.js';
-import { buildStructuralWallGate } from './wallGate.js';
+import { buildStructuralWallGate, buildExteriorSide } from './wallGate.js';
 import {
   autoFillStructuralGrid,
   autoFillColumnAxisOffsets,
+  autoFillBeamEccentricity,
   resolveLowestGraph,
   convertMembersToEffectiveMaterial,
   autoFillColumnSizes,
   autoFillColumnBaseSizes,
   autoFillFoundationBeamSizes,
   autoFillRoofBeamSizes,
+  autoFillMatFoundation,
+  deleteClassificationOverflow,
 } from './structuralAutoFill.js';
 import { renumberAllCategories } from './memberNumbering.js';
 
@@ -39,12 +42,21 @@ export async function recomputeStructuralForGraph(targetGraph, project, mainStru
   // 構造体トポロジーから未定義の柱・梁・基礎（基礎伏図のみ）を検出し、自動補完する。
   // ユーザーが明示削除した箇所は除外集合（excludedColumnSlots 等）により復活しない。
   const { newColumns, newFootings, newBeams } = runInAction(() => autoFillStructuralGrid(targetGraph, project, mainStructure, wallGate));
+  // べた基礎（木造）のマットスラブを基礎伏図に生成・撤去する（基礎種別で取捨。問題.md）。基礎伏図以外では no-op。
+  const matFoundation = runInAction(() => autoFillMatFoundation(targetGraph, project));
+  // 外周モデル（side ビュー）を1回構築し、柱芯オフセットと梁偏芯の両方に渡す——柱・梁で外側方向（内外定義）を一致させる。
+  // 自動補完の後に作るので、矩形フォールバック（仕上げ未定義時）は生成済み部材CLの外接矩形を見る。主題階基準で sync。
+  const exterior = buildExteriorSide(targetGraph);
   // 柱芯（ColumnAxis）を自動生成・整合する（ラーメン系以外は0にリセット。差分のみ補完）。
   // 外面合わせの基準となる最下階graphを解決してから適用する（非アクティブ階は peek）。
   const lowestGraph = await resolveLowestGraph(project, targetGraph);
-  runInAction(() => autoFillColumnAxisOffsets(targetGraph, project, lowestGraph));
+  runInAction(() => autoFillColumnAxisOffsets(targetGraph, project, lowestGraph, exterior));
+  // 梁の偏芯量（柱芯⇄材芯）を faceGap から再算出し、柱外面と梁縁の一致（柱寸法・梁寸法変更に追従）を保つ。
+  const updatedBeamEcc = runInAction(() => autoFillBeamEccentricity(targetGraph, project, exterior));
   // 別フロアにいる間に主要構造が変更された等で取りこぼした柱・梁を、実効主構造に合わせて変換する。
   const { convertedColumns, convertedBeams, convertedFootings } = runInAction(() => convertMembersToEffectiveMaterial(targetGraph, project, mainStructure));
+  // 構造変更で「×」化した部材の自動生成分を削除する（問題.md「×は削除」。生成側は autoFillStructuralGrid の構造ゲート）。
+  const removedByClass = runInAction(() => deleteClassificationOverflow(targetGraph, project));
   // 柱の負担床面積から柱幅・柱脚サイズを再算定する（dimensionStatus==='auto'の部材のみ。ロック済みは保持）。
   // 柱は自階graphに属するため、支える階数(N)も自階（targetGraph.plane）基準で算定する。
   const updatedColumnSizes = runInAction(() => autoFillColumnSizes(targetGraph, project, targetGraph.plane));
@@ -57,9 +69,11 @@ export async function recomputeStructuralForGraph(targetGraph, project, mainStru
   runInAction(() => renumberAllCategories(targetGraph, project));
 
   const changed = newColumns.length > 0 || newFootings.length > 0 || newBeams.length > 0
+    || matFoundation.created.length > 0 || matFoundation.removed.length > 0
     || convertedColumns.length > 0 || convertedBeams.length > 0 || convertedFootings.length > 0
+    || removedByClass.length > 0
     || updatedColumnSizes.length > 0 || updatedFootingSizes.length > 0 || updatedBeamSizes.length > 0
-    || updatedRoofBeamSizes.length > 0;
+    || updatedRoofBeamSizes.length > 0 || updatedBeamEcc.length > 0;
   const after = changed ? serializeGraph(targetGraph) : before;
   return { changed, before, after };
 }
