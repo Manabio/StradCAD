@@ -1963,12 +1963,12 @@ const App = observer(() => {
       const isStruct = cl.discipline === Discipline.STRUCT && cl.labeled;
       if (isStruct) {
         // 通り芯の削除 — structGraph をスナップショット経由で Undo
-        const before = serializeStructCLs(project.structGraph);
+        const before = serializeStructCLs(project.structGraph, project.structuralInfo, project.structuralTagRegistry);
         project.structGraph.removeCenterLine(cl.id);
-        const after = serializeStructCLs(project.structGraph);
+        const after = serializeStructCLs(project.structGraph, project.structuralInfo, project.structuralTagRegistry);
         undoManager.push(
-          () => restoreStructCLs(project.structGraph, before),
-          () => restoreStructCLs(project.structGraph, after),
+          () => restoreStructCLs(project.structGraph, project.structuralInfo, before, project.structuralTagRegistry),
+          () => restoreStructCLs(project.structGraph, project.structuralInfo, after, project.structuralTagRegistry),
         );
       } else {
         const before = serializeGraph(graph);
@@ -2135,7 +2135,7 @@ const App = observer(() => {
         setClDialog(null); setClPreview(null);
         return;
       }
-      const before = serializeStructCLs(project.structGraph);
+      const before = serializeStructCLs(project.structGraph, project.structuralInfo, project.structuralTagRegistry);
       newValues.forEach(v =>
         project.structGraph.addCenterLine(clType, v, {
           discipline: Discipline.STRUCT,
@@ -2143,10 +2143,10 @@ const App = observer(() => {
           trim:       !!trim,
         })
       );
-      const after = serializeStructCLs(project.structGraph);
+      const after = serializeStructCLs(project.structGraph, project.structuralInfo, project.structuralTagRegistry);
       undoManager.push(
-        () => restoreStructCLs(project.structGraph, before),
-        () => restoreStructCLs(project.structGraph, after),
+        () => restoreStructCLs(project.structGraph, project.structuralInfo, before, project.structuralTagRegistry),
+        () => restoreStructCLs(project.structGraph, project.structuralInfo, after, project.structuralTagRegistry),
       );
       setClDialog(null); setClPreview(null);
       maybeSuggestWoodStructure(clType, newValues);

@@ -324,8 +324,8 @@ export class Opening extends Shape {
   }
   // 壁の「長さ方向」の座標のみ自己完結で計算できる（軸直交方向の座標はホスト壁から得る）
   get centerCoord() { return this.refCL.effectiveValue + this.refOffset; }
-  get coord1()       { return this.centerCoord - this.width / 2; }
-  get coord2()       { return this.centerCoord + this.width / 2; }
+  get coord1()       { return _coordLo(this.centerCoord, this.width); }
+  get coord2()       { return _coordHi(this.centerCoord, this.width); }
 }
 
 // ================================================================
@@ -848,14 +848,8 @@ export class StructuralColumn extends StructuralEntity {
     });
   }
   // x/y = 通り芯 + 柱芯オフセット（columnAxisOffsets。ラーメン系のみ非0） + 個別偏心量
-  get x() {
-    const off = this._planGraph?.columnAxisOffsets.get(this.verticalCL.id) ?? 0;
-    return this.verticalCL.effectiveValue + off + this.eccentricity.x;
-  }
-  get y() {
-    const off = this._planGraph?.columnAxisOffsets.get(this.horizontalCL.id) ?? 0;
-    return this.horizontalCL.effectiveValue + off + this.eccentricity.y;
-  }
+  get x() { return _gridX(this); }
+  get y() { return _gridY(this); }
 }
 
 export class WoodColumn extends StructuralColumn {
@@ -942,8 +936,7 @@ export class StructuralBeam extends StructuralEntity {
   }
   // axisValue = 通り芯 + 柱芯オフセット（columnAxisOffsets。ラーメン系のみ非0） + 個別偏心量
   get axisValue() {
-    const off = this._planGraph?.columnAxisOffsets.get(this.axisCL.id) ?? 0;
-    return this.axisCL.effectiveValue + off + this.eccentricity;
+    return this.axisCL.effectiveValue + _axisOffset(this._planGraph, this.axisCL.id) + this.eccentricity;
   }
   // 端部の直交CLに立つ柱を columns から探す（垂直梁はaxisCLが垂直CL・perpCLが水平CL、水平梁はその逆）。
   // columns は「その伏図に表示される柱集合」——構造モードでは1つ下の階の柱。梁はその表示中の柱の断面手前で
@@ -960,8 +953,7 @@ export class StructuralBeam extends StructuralEntity {
   _endCenterAndHalfWidth(perpCL, columns, diaphragm = false) {
     const column = this._columnAtEnd(perpCL, columns);
     if (!column) {
-      const off = this._planGraph?.columnAxisOffsets.get(perpCL.id) ?? 0;
-      return { center: perpCL.effectiveValue + off, half: 0 };
+      return { center: perpCL.effectiveValue + _axisOffset(this._planGraph, perpCL.id), half: 0 };
     }
     const center = this.isVertical ? column.y : column.x;
     const sec = findSectionEntry(column.sectionDefId);
@@ -1064,14 +1056,8 @@ class StructuralFooting extends StructuralEntity {
     });
   }
   // x/y = 通り芯 + 柱芯オフセット（直上の柱・杭と同じ基準で揃える） + 個別偏心量
-  get x() {
-    const off = this._planGraph?.columnAxisOffsets.get(this.verticalCL.id) ?? 0;
-    return this.verticalCL.effectiveValue + off + this.eccentricity.x;
-  }
-  get y() {
-    const off = this._planGraph?.columnAxisOffsets.get(this.horizontalCL.id) ?? 0;
-    return this.horizontalCL.effectiveValue + off + this.eccentricity.y;
-  }
+  get x() { return _gridX(this); }
+  get y() { return _gridY(this); }
 }
 
 // 独立フーチング（基礎） — 柱・杭の直下に置かれる、最も広がった箱
@@ -1202,8 +1188,8 @@ export class RcWallOpening {
     });
   }
   get centerCoord() { return this.wall.clStart.effectiveValue + this.offset; }
-  get coord1()       { return this.centerCoord - this.width / 2; }
-  get coord2()       { return this.centerCoord + this.width / 2; }
+  get coord1()       { return _coordLo(this.centerCoord, this.width); }
+  get coord2()       { return _coordHi(this.centerCoord, this.width); }
 }
 
 // ----------------------------------------------------------------
@@ -1494,7 +1480,7 @@ export class PlanGraph {
 
     reaction(
       () => [...this.shapeMap.values()]
-        .filter(s => s instanceof CenterLine && s.centerLineType === CenterLineType.VERTICAL && s.labeled && s.discipline === Discipline.STRUCT)
+        .filter(s => _isLabeledStructCL(s, CenterLineType.VERTICAL))
         .map(cl => cl.value),
       () => this._relabelCenterLines(CenterLineType.VERTICAL),
       { fireImmediately: true },
@@ -1502,7 +1488,7 @@ export class PlanGraph {
 
     reaction(
       () => [...this.shapeMap.values()]
-        .filter(s => s instanceof CenterLine && s.centerLineType === CenterLineType.HORIZONTAL && s.labeled && s.discipline === Discipline.STRUCT)
+        .filter(s => _isLabeledStructCL(s, CenterLineType.HORIZONTAL))
         .map(cl => cl.value),
       () => this._relabelCenterLines(CenterLineType.HORIZONTAL),
       { fireImmediately: true },
@@ -1510,7 +1496,7 @@ export class PlanGraph {
 
     reaction(
       () => [...this.shapeMap.values()]
-        .filter(s => s instanceof CenterLine && s.centerLineType === CenterLineType.RADIAL && s.labeled && s.discipline === Discipline.STRUCT)
+        .filter(s => _isLabeledStructCL(s, CenterLineType.RADIAL))
         .length,
       () => this._relabelCenterLines(CenterLineType.RADIAL),
       { fireImmediately: true },
@@ -1532,22 +1518,18 @@ export class PlanGraph {
   // グリッド軸として機能する labeled:true VERTICAL CenterLine (= 旧 GridX 相当)
   // _structGraph がある場合は通り芯（全階共通）も含める
   get gridXs() {
-    const own = [...this.shapeMap.values()]
-      .filter(s => s instanceof CenterLine && s.centerLineType === CenterLineType.VERTICAL && s.labeled);
+    const own = _labeledCLs(this.shapeMap, CenterLineType.VERTICAL);
     const struct = this._structGraph
-      ? [...this._structGraph.shapeMap.values()]
-          .filter(s => s instanceof CenterLine && s.centerLineType === CenterLineType.VERTICAL && s.labeled)
+      ? _labeledCLs(this._structGraph.shapeMap, CenterLineType.VERTICAL)
       : [];
     return [...struct, ...own].sort((a, b) => a.value - b.value);
   }
 
   // グリッド軸として機能する labeled:true HORIZONTAL CenterLine (= 旧 GridY 相当)
   get gridYs() {
-    const own = [...this.shapeMap.values()]
-      .filter(s => s instanceof CenterLine && s.centerLineType === CenterLineType.HORIZONTAL && s.labeled);
+    const own = _labeledCLs(this.shapeMap, CenterLineType.HORIZONTAL);
     const struct = this._structGraph
-      ? [...this._structGraph.shapeMap.values()]
-          .filter(s => s instanceof CenterLine && s.centerLineType === CenterLineType.HORIZONTAL && s.labeled)
+      ? _labeledCLs(this._structGraph.shapeMap, CenterLineType.HORIZONTAL)
       : [];
     return [...struct, ...own].sort((a, b) => a.value - b.value);
   }
@@ -2144,34 +2126,7 @@ export class PlanGraph {
   removeShape(id) { this._removeShape(id); }
 
   /** グラフを完全にクリアする（restoreGraph の前処理用）。*/
-  clear() {
-    this._graph = createGraph({ multigraph: true });
-    this._shapeLinks.clear();
-    this.shapeMap.clear();
-    this.intersectionMap.clear();
-    this.pointMap.clear();
-    this.roomMap.clear();
-    this.roomOrder.clear();
-    this.edgeMap.clear();
-    this.columnMap.clear();
-    this.beamMap.clear();
-    this.wallMap.clear();
-    this.wallOpeningMap.clear();
-    this.slabMap.clear();
-    this.footingMap.clear();
-    this.sleeveMap.clear();
-    this.excludedColumnSlots.clear();
-    this.excludedBeamSlots.clear();
-    this.excludedFootingSlots.clear();
-    this.columnAxisOffsets.clear();
-    this.interiorWallPanel   = DEFAULT_INTERIOR_WALL_PANEL;
-    this.exteriorWallBacking = DEFAULT_EXTERIOR_WALL_BACKING;
-    this.interiorWallBacking = DEFAULT_INTERIOR_WALL_BACKING;
-    this.ceilingBacking      = DEFAULT_CEILING_BACKING;
-    this.floorBacking        = DEFAULT_FLOOR_BACKING;
-    this.floorDatum          = 0;
-    this.structureOverride   = null;
-  }
+  clear() { this._resetFloorState(); }
 
   /**
    * 階固有データのみクリアする（フロア切替時に使用）。
@@ -2179,11 +2134,15 @@ export class PlanGraph {
    * shapeMap には通り芯が含まれないため clear() と同等だが、
    * 意図を明示するために別メソッドとして定義する。
    */
-  clearFloorData() {
+  clearFloorData() { this._resetFloorState(); }
+
+  // clear() / clearFloorData() 共通の階固有状態リセット本体。
+  // structGraph の通り芯・交点には触れない（intersectionMap は階固有交点のみを保持）。
+  _resetFloorState() {
     this._graph = createGraph({ multigraph: true });
     this._shapeLinks.clear();
     this.shapeMap.clear();
-    this.intersectionMap.clear(); // 階固有交点（通り芯×階固有CL等）のみ
+    this.intersectionMap.clear();
     this.pointMap.clear();
     this.roomMap.clear();
     this.roomOrder.clear();
@@ -2279,13 +2238,11 @@ export class PlanGraph {
   }
 
   _labeledVerticals() {
-    return [...this.shapeMap.values()]
-      .filter(s => s instanceof CenterLine && s.centerLineType === CenterLineType.VERTICAL && s.labeled);
+    return _labeledCLs(this.shapeMap, CenterLineType.VERTICAL);
   }
 
   _labeledHorizontals() {
-    return [...this.shapeMap.values()]
-      .filter(s => s instanceof CenterLine && s.centerLineType === CenterLineType.HORIZONTAL && s.labeled);
+    return _labeledCLs(this.shapeMap, CenterLineType.HORIZONTAL);
   }
 
   _getOrCreateIntersection(clVertical, clHorizontal) {
@@ -2331,10 +2288,44 @@ export class PlanGraph {
 
 // ---- module-private helpers ----
 
+// 通り芯の柱芯オフセット（columnAxisOffsets。ラーメン系のみ非0、未登録キー=0）。
+function _axisOffset(planGraph, clId) {
+  return planGraph?.columnAxisOffsets.get(clId) ?? 0;
+}
+
+// 柱・基礎・柱脚の平面位置 = 通り芯 effectiveValue + 柱芯オフセット + 個別偏心量。
+// StructuralColumn / StructuralFooting が共通で使う（eccentricity は {x,y}）。
+function _gridX(entity) {
+  return entity.verticalCL.effectiveValue
+       + _axisOffset(entity._planGraph, entity.verticalCL.id)
+       + entity.eccentricity.x;
+}
+function _gridY(entity) {
+  return entity.horizontalCL.effectiveValue
+       + _axisOffset(entity._planGraph, entity.horizontalCL.id)
+       + entity.eccentricity.y;
+}
+
+// 中心座標 ± 幅/2 → 開口の両端。Opening / RcWallOpening 共通。
+function _coordLo(center, width) { return center - width / 2; }
+function _coordHi(center, width) { return center + width / 2; }
+
+// labeled な指定軸種の CenterLine か（系統A: discipline 不問・グリッド用）
+function _isLabeledCL(s, type) {
+  return s instanceof CenterLine && s.centerLineType === type && s.labeled;
+}
+// labeled かつ構造の指定軸種か（系統B: 自動命名・reaction 用）
+function _isLabeledStructCL(s, type) {
+  return _isLabeledCL(s, type) && s.discipline === Discipline.STRUCT;
+}
+// shapeMap から系統A を集める（並べ替えなし）
+function _labeledCLs(shapeMap, type) {
+  return [...shapeMap.values()].filter(s => _isLabeledCL(s, type));
+}
+
 // labeled:true の CenterLine をソートして返す (自動命名対象)
 function _sortedCenterLines(shapeMap, type) {
-  const all = [...shapeMap.values()]
-    .filter(s => s instanceof CenterLine && s.centerLineType === type && s.labeled && s.discipline === Discipline.STRUCT);
+  const all = [...shapeMap.values()].filter(s => _isLabeledStructCL(s, type));
   switch (type) {
     case CenterLineType.VERTICAL:   return all.sort((a, b) => a.value - b.value);
     case CenterLineType.HORIZONTAL: return all.sort((a, b) => b.value - a.value);
