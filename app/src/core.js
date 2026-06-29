@@ -683,14 +683,6 @@ export class ExteriorFinishRow {
   setField(field, value) { this[field] = value; }
 }
 
-// 内装マスター管理の対象フィールド（壁・天井のみ）。
-// これらは Room.templateKey（内装マスター参照）+ customOverrides（個別上書き）で管理し、
-// getFinishInfo() でマージした実効値を返す。残りの仕上げフィールドは RoomFinish（自由文字列）。
-//   wallMaterial  : 壁材（面材コード）
-//   wallFinish    : 壁仕上げ（仕上げ材コード）
-//   ceilingHeight : 天井高さ mm
-export const ROOM_MASTER_FIELDS = Object.freeze(['wallMaterial', 'wallFinish', 'ceilingHeight']);
-
 // per-floor の既定材コード（材マスタ materialData.js 参照）
 export const DEFAULT_INTERIOR_WALL_PANEL   = '111111111166'; // 内壁: せっこうボード t=12.5（面材）
 export const DEFAULT_EXTERIOR_WALL_BACKING = '111111111155'; // 外壁下地: □-90×45 間柱（下地材）
@@ -708,7 +700,7 @@ export class Room {
     this.referenceRoomIds = referenceRoomIds; // 判定3: 参照先部屋IDセット
     this.kind             = kind; // 内外区分: 屋内 / 吹抜け / 屋外
     this.templateKey      = templateKey;      // 内装マスターへのポインタ（null = 未指定）
-    this.customOverrides  = observable.map(); // 個別上書きポケット（ROOM_MASTER_FIELDS のみ）
+    this.customOverrides  = observable.map(); // 個別上書きポケット（壁・天井フィールドのみ）
     this.finish           = new RoomFinish();
     this.namePosition     = null;   // { x, y } | null — null = roomBounds 重心を使用
     this.floorLevel       = null;   // 階基準からの符号付き床レベル差(mm)。null = 基準どおり
@@ -1246,12 +1238,9 @@ export class StructuralSlab extends StructuralEntity {
       slabKind:       observable,
       deckDirection:  observable,
       setCells:       action,
-      toggleDeckDirection: action,
     });
   }
   setCells(cells) { this.cells = new Set(cells); }
-  // デッキ方向を90度回転（X⇄Y）。描画エリアの両矢印クリック・構造リストのトグルから呼ぶ。
-  toggleDeckDirection() { this.deckDirection = this.deckDirection === 'x' ? 'y' : 'x'; }
 }
 
 export class RcSlab extends StructuralSlab {
@@ -1465,7 +1454,6 @@ export class PlanGraph {
       addSleeve:              action,
       removeSleeve:           action,
       addDimensionLine:       action,
-      removeDimensionLine:    action,
       removeShape:            action,
       clear:                  action,
       clearFloorData:         action,
@@ -1497,7 +1485,6 @@ export class PlanGraph {
       setColumnAxisOffset:  action,
       backingMaterials:         computed,
       addBackingMaterial:       action,
-      removeBackingMaterial:    action,
       edges:                    computed,
       addEdge:                  action,
       removeEdge:               action,
@@ -1680,7 +1667,6 @@ export class PlanGraph {
     return mat;
   }
 
-  removeBackingMaterial(id) { this.backingMaterialMap.delete(id); }
 
   // ---- 境界エッジ操作（仕上げモード）----
 
@@ -2153,12 +2139,6 @@ export class PlanGraph {
     d._planGraph = this;   // GRID の effectiveAnchors が gridXs/gridYs を引くため
     this.shapeMap.set(d.id, d);
     return d;
-  }
-
-  removeDimensionLine(id) {
-    const d = this.shapeMap.get(id);
-    if (!(d instanceof DimensionLine)) return;
-    this.shapeMap.delete(id);
   }
 
   removeShape(id) { this._removeShape(id); }
