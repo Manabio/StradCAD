@@ -365,12 +365,11 @@ const MemberCard = observer(({ members, group, graph, composition, project, read
       // 図の偏芯量寸法は絶対値表示。代表梁の現在の向き（無ければ柱外面合わせ＝面一の既定向き）を保って符号付けし、
       // faceGap（柱外面と梁縁のギャップ）を逆算して同一ラベルの全梁に保存する。eccentricity 自体は faceGap から
       // 再算出するため、外周の向きに応じて符号が自動付与され（対辺は逆符号・内部は0）、柱寸法・梁寸法変更にも追従する。
-      const exterior = buildExteriorSide(graph); // 外周モデルを1回構築し、以下の偏芯算出すべてで共有
-      const def = autoBeamEccentricity(graph, project, representative, 0, exterior); // faceGap=0（面一）の既定偏芯
+      const def = autoBeamEccentricity(graph, project, representative, 0); // faceGap=0（面一）の既定偏芯
       const sign = representative.eccentricity !== 0 ? Math.sign(representative.eccentricity) : (def !== 0 ? Math.sign(def) : 1);
-      const faceGap = faceGapForEccentricity(graph, project, representative, sign * Math.abs(value), exterior);
+      const faceGap = faceGapForEccentricity(graph, project, representative, sign * Math.abs(value));
       for (const m of members) m.setField('faceGap', faceGap);
-      autoFillBeamEccentricity(graph, project, exterior);
+      autoFillBeamEccentricity(graph, project);
       return;
     }
     if (dim.target === 'foundationSection') {
@@ -538,12 +537,11 @@ const MemberFieldInput = observer(({ members, fieldDef, graph, group, project, r
       const defaultMap = group.mapName === 'columnMap' ? DEFAULT_COLUMN_SECTION_BY_MATERIAL : DEFAULT_BEAM_SECTION_BY_MATERIAL;
       const refWidth = findSectionEntry(defaultMap[members[0].materialType])?.width ?? 0;
       const newWidth = findSectionEntry(newId)?.width ?? refWidth;
-      const exterior = group.mapName === 'beamMap' ? buildExteriorSide(graph) : null; // 梁のみ外周モデルを1回構築
       for (const m of members) {
         m.setField('sectionDefId', newId);
         m.setDimensionStatus('locked');
         if (group.mapName === 'beamMap') {
-          m.setField('eccentricity', autoBeamEccentricity(graph, project, m, m.faceGap ?? 0, exterior)); // 新断面幅 × faceGap で再算出
+          m.setField('eccentricity', autoBeamEccentricity(graph, project, m, m.faceGap ?? 0)); // 新断面幅 × faceGap で再算出
           continue;
         }
         if (!refWidth || newWidth === refWidth) continue;
@@ -688,7 +686,7 @@ const NewSpanMemberSelector = observer(({ group, graph, project }) => {
     const materialType = resolveDefaultMaterialType(graph, project);
     if (group.mapName === 'beamMap') {
       graph.addBeam(materialType, DEFAULT_BEAM_SECTION_BY_MATERIAL[materialType], axisCL, isVertical, clStart, clEnd, {});
-      autoFillBeamEccentricity(graph, project, buildExteriorSide(graph)); // 外周梁なら柱外面合わせの偏芯量を初期算出（faceGap=0＝面一）
+      autoFillBeamEccentricity(graph, project); // 外周梁なら柱外面合わせの偏芯量を初期算出（faceGap=0＝面一）
     } else {
       graph.addBearingWall(materialType, DEFAULT_SECTION_BY_MATERIAL[materialType], axisCL, isVertical, clStart, clEnd, {});
     }

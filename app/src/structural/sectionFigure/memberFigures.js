@@ -189,10 +189,12 @@ function columnFigure(col, ctx) {
   prims.push({ type: 'text', x: yLabelX, y: 0, text: 'Y', anchor: 'end', baseline: 'middle', size: 10, fill: '#94a3b8' });
 
   if (ctx.rigid) {
-    // 外側方向の符号（ctx.exteriorSignX/Y。内側＋方向=+1／−方向=−1／内部=0）。柱外面は「真の外側」に描く——
-    // offX の符号は出幅>柱半幅で反転するため faceX 算定に使えない（フットプリント由来の符号を使う）。
-    const sX = ctx.exteriorSignX ?? 0;
-    const sY = ctx.exteriorSignY ?? 0;
+    // 外側方向の符号は格納済みオフセットの符号から取る（出幅モデルは offset=s×(halfThis+出幅) で反転しない＝
+    // sign(offX)=s）。**図側でフットプリントを再走査しない**——R階伏図・上階伏図など供給グラフのフットプリントが
+    // 縮退/相違する階で中通りの符号が0へ落ち、柱芯偏芯量が表示されなくなる不具合（L字/R階伏図中間柱の偏芯不良）を
+    // 避けるため、幾何（autoFillColumnAxisOffsets が最下階を権威に確定した offset）にそのまま追従する。
+    const sX = Math.sign(offX);
+    const sY = Math.sign(offY);
     // 柱芯X／柱芯Y（オフセットが非0＝通り芯と異なるときだけ線・ラベルを出す）。
     if (offX !== 0) {
       prims.push({ type: 'line', x1: offX, y1: axTop, x2: offX, y2: axBot, dash: 'center', stroke: '#64748b' });

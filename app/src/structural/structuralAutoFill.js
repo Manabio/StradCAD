@@ -459,19 +459,17 @@ export function alignToOuterFace(baseOffset, sectionWidth, referenceWidth, align
 // 柱外面は autoFillColumnAxisOffsets が既定柱幅で定義した基準面に等しいため、柱芯オフセットは
 // 梁・柱で共有されて相殺し、eccentricity は s・((梁幅 − 既定柱幅)/2 + faceGap) に集約される
 // （導出: 梁縁 = 材芯 − s・梁半幅、柱外面 = 通り芯 + (柱芯オフセット − s・既定半幅)、梁縁 = 柱外面 + s・faceGap）。
-//   s        : 外周側の符号（内側が＋方向=+1／−方向=−1／内部・建物外=0）。単一の外周モデル
-//              （wallGate.buildExteriorSide＝仕上げフットプリント優先・無ければ部材CL外接矩形）から取る。
-//              梁スパン中点で問い合わせるため凹形状(L字・中庭)の外壁辺も位置ごとに正しく判定できる。
+//   s        : 外周側の符号。**梁の軸CLの柱芯オフセット(columnAxisOffsets)の符号**から取る——
+//              autoFillColumnAxisOffsets が axisExteriorSign で軸全体を走査して確定した「軸単位」の
+//              外周符号に必ず一致させるため。これにより L字内側コーナーを通る軸（例 X2/Y2）の
+//              内部側セグメントも、同じ軸の外周セグメント・柱と同じ向きに偏芯し、梁面がコーナーで
+//              段差せず一直線に揃う（局所スパンの内外だけ見ると内部側 s=0 でジョグが残る不具合の解消。
+//              R階伏図など自階に部屋が無い階の矩形縮退も、オフセットが最下階権威で確定済みのため無関係）。
 //   既定柱幅 : その階の実効主構造の既定柱断面幅（柱外面の基準＝columnAxisOffsets と整合）
 //   faceGap  : 柱外面と梁縁のギャップ(mm)。ラベル毎に指定する値（梁に保持）。
-// ラーメン系（S造/SRC造/RC造ラーメン）以外・内部梁(s=0)は eccentricity=0。
-// exterior（外周モデル）は呼び出し側が buildExteriorSide(graph) で1回構築して渡す（未指定なら内部で都度構築）。
+// ラーメン系（S造/SRC造/RC造ラーメン）以外・内部軸(柱芯オフセット0＝s=0)は eccentricity=0。
+// autoFillColumnAxisOffsets を先に呼んで columnAxisOffsets を確定させておくこと（recompute はその順序）。
 // ----------------------------------------------------------------
-
-/** 梁の外周側符号を外周モデルから取る。軸線(通り芯)＝梁スパン中点で外側方向を問い合わせる（最小側=+1）。 */
-function beamPerimeterSign(exterior, beam) {
-  return exterior.outsideSign(beam.axisCL.value, beam.isVertical, (beam.clStart.value + beam.clEnd.value) / 2);
-}
 
 /** 梁の伏図見付き幅(mm)＝梁幅b（描画 beamRenderWidth と同一基準。柱外面合わせの縁はこの幅で揃える）。
  *  RCは beamWidth(算定値)、鋼材はカタログ断面の幅b（width）。軒桁等で算定 beamWidth/beamDepth が立っても
@@ -482,38 +480,40 @@ function beamSectionWidth(beam) {
 }
 
 /** 梁の偏芯算出に必要な幾何（外周符号 s と base=(梁半幅 − 既定柱半幅)）。
- *  ラーメン系でない／内部梁（s=0）なら null（＝偏芯0）。 */
-function beamEccentricityGeom(graph, project, beam, exterior) {
+ *  s は梁の軸CLの柱芯オフセットの符号（＝柱と同一の軸単位外周符号）。ラーメン系でない／
+ *  当該軸が外周でない（柱芯オフセット0＝s=0）なら null（＝偏芯0）。 */
+function beamEccentricityGeom(graph, project, beam) {
   const effective = graph.structureOverride ?? project.structuralInfo.mainStructure;
   if (!isRigidFrameStructure(effective)) return null;
-  const s = beamPerimeterSign(exterior, beam);
+  const s = Math.sign(graph.columnAxisOffsets.get(beam.axisCL.id) ?? 0);
   if (s === 0) return null;
   return { s, base: (beamSectionWidth(beam) - defaultColumnWidth(effective)) / 2 };
 }
 
-/** 梁の faceGap から偏芯量（柱芯⇄材芯）を算出する。対象外（非ラーメン・内部梁）は0。
- *  faceGap 未指定時は梁自身の値、exterior 未指定時は内部で構築する（UIからの単発呼び出し用）。 */
-export function autoBeamEccentricity(graph, project, beam, faceGap = beam.faceGap ?? 0, exterior = buildExteriorSide(graph)) {
-  const geom = beamEccentricityGeom(graph, project, beam, exterior);
+/** 梁の faceGap から偏芯量（柱芯⇄材芯）を算出する。対象外（非ラーメン・内部軸）は0。
+ *  faceGap 未指定時は梁自身の値を使う（UIからの単発呼び出し用）。 */
+export function autoBeamEccentricity(graph, project, beam, faceGap = beam.faceGap ?? 0) {
+  const geom = beamEccentricityGeom(graph, project, beam);
   return geom ? geom.s * (geom.base + faceGap) : 0;
 }
 
 /** 図上で指定された偏芯量（符号付き）から、保存すべき faceGap を逆算する（autoBeamEccentricity の逆変換）。
- *  対象外（非ラーメン・内部梁）は既存 faceGap を保持。 */
-export function faceGapForEccentricity(graph, project, beam, eccSigned, exterior = buildExteriorSide(graph)) {
-  const geom = beamEccentricityGeom(graph, project, beam, exterior);
+ *  対象外（非ラーメン・内部軸）は既存 faceGap を保持。 */
+export function faceGapForEccentricity(graph, project, beam, eccSigned) {
+  const geom = beamEccentricityGeom(graph, project, beam);
   return geom ? geom.s * eccSigned - geom.base : (beam.faceGap ?? 0);
 }
 
-/** 全梁（大梁・小梁）の偏芯量を faceGap から再算出して整合する。構造モード突入時、autoFillColumnAxisOffsets と
- *  同タイミングで呼ぶ。柱寸法・梁寸法（既定柱幅・梁断面幅）が変わっても faceGap を保ったまま柱外面合わせを保つ。
- *  外周モデル exterior は未指定なら1回だけ構築して全梁で使い回す。更新した梁idの配列を返す。 */
-export function autoFillBeamEccentricity(graph, project, exterior = buildExteriorSide(graph)) {
+/** 全梁（大梁・小梁・軒桁）の偏芯量を faceGap から再算出して整合する。構造モード突入時、
+ *  autoFillColumnAxisOffsets の**後**に呼ぶ（符号源の columnAxisOffsets を確定させておく）。
+ *  柱寸法・梁寸法（既定柱幅・梁断面幅）が変わっても faceGap を保ったまま柱外面合わせを保つ。
+ *  更新した梁idの配列を返す。 */
+export function autoFillBeamEccentricity(graph, project) {
   const updated = [];
   for (const beam of graph.beams) {
     // 大梁・小梁・軒桁（屋根外周の横架材）が対象。軒桁も建物外周に乗るため柱外面合わせを行う。基礎梁は対象外。
     if (beam.role !== 'primary' && beam.role !== 'secondary' && beam.role !== 'eaves') continue;
-    const target = autoBeamEccentricity(graph, project, beam, beam.faceGap ?? 0, exterior);
+    const target = autoBeamEccentricity(graph, project, beam, beam.faceGap ?? 0);
     if (beam.eccentricity === target) continue;
     beam.setField('eccentricity', target);
     updated.push(beam.id);

@@ -52,7 +52,7 @@ export async function recomputeStructuralForGraph(targetGraph, project, mainStru
   const lowestGraph = await resolveLowestGraph(project, targetGraph);
   runInAction(() => autoFillColumnAxisOffsets(targetGraph, project, lowestGraph, exterior));
   // 梁の偏芯量（柱芯⇄材芯）を faceGap から再算出し、柱外面と梁縁の一致（柱寸法・梁寸法変更に追従）を保つ。
-  const updatedBeamEcc = runInAction(() => autoFillBeamEccentricity(targetGraph, project, exterior));
+  const updatedBeamEcc = runInAction(() => autoFillBeamEccentricity(targetGraph, project));
   // 別フロアにいる間に主要構造が変更された等で取りこぼした柱・梁を、実効主構造に合わせて変換する。
   const { convertedColumns, convertedBeams, convertedFootings } = runInAction(() => convertMembersToEffectiveMaterial(targetGraph, project, mainStructure));
   // 構造変更で「×」化した部材の自動生成分を削除する（問題.md「×は削除」。生成側は autoFillStructuralGrid の構造ゲート）。
