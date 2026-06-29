@@ -56,7 +56,8 @@ const SI = {
   MAIN_STRUCTURE: 0, OTHER_STRUCTURES: 1, FOUNDATION_TYPE: 2,
   DESIGN_STRENGTH: 3, CONCRETE_TYPE: 4, MAIN_BAR: 5, HOOP_BAR: 6,
   SNOW_AREA: 7, BASIC_WIND_SPEED: 8, SURFACE_ROUGHNESS: 9, SEISMIC_ZONE_FACTOR: 10,
-  COLUMN_FACE_PROJECTION: 11, // 出幅(mm)。追加フィールド＝旧ファイルは既定0で後方互換。
+  COLUMN_FACE_PROJECTION: 11, // 旧・建物1値の出幅(mm)。無キー時の移行既定として保持。
+  FACE_PROJ_KEYS: 12, FACE_PROJ_VALS: 13, // 出幅マップ（1構造×1通り芯）。keys/vals 並列ベクトル。
 };
 
 // Edge: 4 フィールド
@@ -245,8 +246,10 @@ function writeStructuralInfo(b, info) {
   const sSnow    = b.createString(info.snowArea         ?? '');
   const sRough   = b.createString(info.surfaceRoughness ?? '');
   const sSeismic = b.createString(info.seismicZoneFactor ?? '');
+  const fpKeysVec = writeStrVec(b, info.columnFaceProjKeys ?? []);
+  const fpValsVec = writeStrVec(b, info.columnFaceProjVals ?? []);
 
-  b.startObject(12);
+  b.startObject(14);
   b.addFieldOffset(SI.MAIN_STRUCTURE,      sMain,    0);
   b.addFieldOffset(SI.OTHER_STRUCTURES,    otherVec, 0);
   b.addFieldOffset(SI.FOUNDATION_TYPE,     sFound,   0);
@@ -259,6 +262,8 @@ function writeStructuralInfo(b, info) {
   b.addFieldOffset(SI.SURFACE_ROUGHNESS,   sRough,   0);
   b.addFieldOffset(SI.SEISMIC_ZONE_FACTOR, sSeismic, 0);
   b.addFieldFloat64(SI.COLUMN_FACE_PROJECTION, info.columnFaceProjection ?? 0, 0.0);
+  b.addFieldOffset(SI.FACE_PROJ_KEYS, fpKeysVec, 0);
+  b.addFieldOffset(SI.FACE_PROJ_VALS, fpValsVec, 0);
   return b.endObject();
 }
 
@@ -823,6 +828,8 @@ function readStructuralInfo(bb, tablePos) {
     surfaceRoughness:   r.str(SI.SURFACE_ROUGHNESS)    || 'III',
     seismicZoneFactor:  r.str(SI.SEISMIC_ZONE_FACTOR)  || '1.0',
     columnFaceProjection: r.f64(SI.COLUMN_FACE_PROJECTION) || 0,
+    columnFaceProjKeys: r.strVec(SI.FACE_PROJ_KEYS),
+    columnFaceProjVals: r.strVec(SI.FACE_PROJ_VALS),
   };
 }
 

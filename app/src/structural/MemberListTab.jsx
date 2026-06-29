@@ -352,10 +352,12 @@ const MemberCard = observer(({ members, group, graph, composition, project, read
   // ・厚指定（厚み）等は同一タグの全部材へ伝播。構造算定サイズは read-only のためここには来ない。
   const handleEditDim = readOnly ? undefined : (dim, value) => {
     if (dim.target === 'faceProjection') {
-      // 出幅（柱面⇄通り芯の距離）は建物に1値（全階・X/Y共通）。柱芯オフセットは出幅＋自階柱幅から
-      // 各階で派生するため、建物値を更新後、composition 内の全階グラフで columnAxisOffsets を再構築する
-      // （柱・梁・軸線・寸法を一致して再描画させる）。符号は subject graph のフットプリントを権威に使う。
-      project.structuralInfo.setField('columnFaceProjection', Math.abs(value));
+      // 出幅（柱面⇄通り芯の距離）は1構造×1通り芯。dim.axis(X/Y)で代表柱の対応CLを選び、その構造・通り芯の
+      // 出幅キーへ書く（柱芯ラベル移動と同一キー＝図とラベルで同一値を読み書き）。柱芯オフセットは出幅＋自階柱幅
+      // から各階で派生するため、更新後 composition 内の全階グラフで columnAxisOffsets を再構築する（柱・梁・軸線・
+      // 寸法を一致して再描画）。符号は subject graph のフットプリントを権威に使う。
+      const cl = dim.axis === 'Y' ? representative.horizontalCL : representative.verticalCL;
+      project.structuralInfo.setColumnFaceProjection(structure, cl, Math.abs(value));
       const graphs = composition?.bindings?.map(b => b.graph) ?? [graph];
       const exterior = buildExteriorSide(graph);
       for (const gg of graphs) autoFillColumnAxisOffsets(gg, project, graph, exterior);

@@ -348,9 +348,10 @@ export function axisExteriorSign(exterior, graph, cl, isVertical) {
 
 /** 柱芯（columnAxisOffsets＝通り芯から柱芯までの偏芯量）を、建物由来の出幅から決定的に再構築する。
  *  構造モード突入時・出幅編集時に autoFillStructuralGrid と同タイミングで呼ぶ。
- *  柱芯・偏芯量は per-floor だが、**柱の外面**（偏芯量0方向＝通り芯側の面）は「建物の出幅 projection」
- *  （通り芯から柱外面までの距離。建物に1値・全階共通）で決める——出幅が全階共通のため外面が階で
- *  食い違わない。各階は自階の既定柱幅で外面を出幅基準面に合わせるので、幅が違えば偏芯量も変わる
+ *  柱芯・偏芯量は per-floor だが、**柱の外面**（偏芯量0方向＝通り芯側の面）は「出幅 projection」
+ *  （通り芯から柱外面までの距離。1構造×1通り芯＝getColumnFaceProjection(effective, cl)）で決める——
+ *  同一構造の階は同じ出幅キーを共有するため外面が階で食い違わない（混構造は構造ごと、X/Y通り芯ごとに別値）。
+ *  各階は自階の既定柱幅で外面を出幅基準面に合わせるので、幅が違えば偏芯量も変わる
  *  （＝階依存を保ったまま外面が揃う）。導出（外周CLのみ。内部CLは0）：
  *      柱外面 = 通り芯 + s×出幅（通り芯の内側に出幅だけ控える）、偏芯量 offset = 外面 + s×halfThis = s×(halfThis + 出幅)
  *  柱芯は常に通り芯の内側（屋内側）に保たれ、通り芯・出幅寸法は柱芯の外側（屋外側）に位置する（出幅をいくら
@@ -367,12 +368,13 @@ export function autoFillColumnAxisOffsets(graph, project, lowestGraph = graph, e
     return;
   }
   const halfThis   = defaultColumnWidth(effective) / 2;
-  const projection = project.structuralInfo.columnFaceProjection ?? 0;
   const isLowest   = lowestGraph.plane?.id === graph.plane?.id;
   const ex         = isLowest ? exterior : buildExteriorSide(lowestGraph); // 符号権威＝最下階フットプリント
   for (const [axisCLs, isVertical] of [[graph.gridXs, true], [graph.gridYs, false]]) {
     for (const cl of axisCLs) {
       const s = axisExteriorSign(ex, lowestGraph, cl, isVertical);
+      // 出幅は1構造×1通り芯。当該実効構造・このCLの値を引く（混構造は構造ごと、X/Y通り芯ごとに別値）。
+      const projection = project.structuralInfo.getColumnFaceProjection(effective, cl);
       // 内部芯(s=0)は偏芯0。外周芯は出幅で外面を、自階の柱幅で柱芯を決める（柱芯は常に通り芯の内側）。
       graph.setColumnAxisOffset(cl.id, s === 0 ? 0 : s * (halfThis + projection));
     }

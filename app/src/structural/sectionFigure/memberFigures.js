@@ -205,20 +205,20 @@ function columnFigure(col, ctx) {
       prims.push({ type: 'text', x: colAxisLabelX, y: offY, text: '柱芯', anchor: 'end', baseline: 'middle', size: 10, fill: '#64748b' });
     }
     // 偏芯量寸法（編集不可）：通り芯⇄柱芯の変位量。外側（断面から遠い側）。
-    // 外面寸（出幅）寸法（編集可）：柱面⇄通り芯の距離（建物に1値・X/Y共通）。外面位置＝断面中心 cx を真の外側 sX へ
-    // 柱半幅ずらした面（|faceX|＝出幅）。内側（断面寄り）に置き、柱面へ寸法足を出す（足の長さは材寸と同じ footLen）。
-    // いずれも外周柱（外側符号≠0）のみ描く。
-    const faceProjOpts = { editable: true, target: 'faceProjection', fieldKey: 'columnFaceProjection' };
+    // 外面寸（出幅）寸法（編集可）：柱面⇄通り芯の距離（1構造×1通り芯。axis でX/Y＝対応CLを識別し、確定で
+    // その構造・通り芯の出幅キーへ書く）。外面位置＝断面中心 cx を真の外側 sX へ柱半幅ずらした面（|faceX|＝出幅）。
+    // 内側（断面寄り）に置き、柱面へ寸法足を出す（足の長さは材寸と同じ footLen）。いずれも外周柱（外側符号≠0）のみ描く。
+    const faceProjOpts = { editable: true, target: 'faceProjection' };
     if (sX !== 0) {
       const faceX = cx - sX * w / 2; // 柱外面X（通り芯相対・外側 sX 側）。|faceX|＝出幅
-      prims.push(...offsetDim('h', 0, offX, xEccDimY));                                            // X偏芯量（通り芯⇄柱芯）read-only：外
-      prims.push(...offsetDim('h', 0, faceX, xProjDimY, { ...faceProjOpts, foot: hiY, footLen }));  // X出幅（通り芯⇄柱面）editable：内・柱面へ足
+      prims.push(...offsetDim('h', 0, offX, xEccDimY));                                                        // X偏芯量（通り芯⇄柱芯）read-only：外
+      prims.push(...offsetDim('h', 0, faceX, xProjDimY, { ...faceProjOpts, axis: 'X', foot: hiY, footLen }));   // X出幅（通り芯⇄柱面）editable：内・柱面へ足
     }
     if (sY !== 0) {
       const faceY = cy - sY * h / 2; // 柱外面Y（通り芯相対・外側 sY 側）。|faceY|＝出幅
       // 縦寸法値は寸法線の右に空きが無いため左側に置く。
-      prims.push(...offsetDim('v', 0, offY, yEccDimX, { labelSide: 'left' }));                                       // Y偏芯量 read-only：外
-      prims.push(...offsetDim('v', 0, faceY, yProjDimX, { ...faceProjOpts, foot: hiX, footLen, labelSide: 'left' })); // Y出幅 editable：内・柱面へ足
+      prims.push(...offsetDim('v', 0, offY, yEccDimX, { labelSide: 'left' }));                                                  // Y偏芯量 read-only：外
+      prims.push(...offsetDim('v', 0, faceY, yProjDimX, { ...faceProjOpts, axis: 'Y', foot: hiX, footLen, labelSide: 'left' })); // Y出幅 editable：内・柱面へ足
     }
   }
   // 断面寸法（カタログ断面のため read-only）。右に成(h)・下に幅(w)。

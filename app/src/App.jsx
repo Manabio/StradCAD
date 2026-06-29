@@ -43,13 +43,14 @@ import { ConfirmDialog } from './ui/ConfirmDialog.jsx';
 import { StructuralSyncDialog } from './ui/StructuralSyncDialog.jsx';
 import { FloorChangeDialog } from './ui/FloorChangeDialog.jsx';
 import { IntersectionMarkers } from './renderer/CenterLinesLayer.jsx';
-import { GutterLayer } from './renderer/GutterLayer.jsx';
+import { GutterLayer, columnAxisLabelHits } from './renderer/GutterLayer.jsx';
 import { ShapesLayer }    from './renderer/ShapesLayer.jsx';
 import { SnapIndicator }  from './renderer/SnapIndicator.jsx';
 import { LongPressIndicator } from './renderer/LongPressIndicator.jsx';
 import { DrawPreview }    from './renderer/DrawPreview.jsx';
 import { CLAddPreview }   from './renderer/CLAddPreview.jsx';
 import { CLMoveInput, roundAbsToStep, calcStep } from './renderer/CLMoveInput.jsx';
+import { AxisFaceInput }     from './renderer/AxisFaceInput.jsx';
 import { RadialMenu }     from './ui/RadialMenu.jsx';
 import { AddCLDialog }    from './ui/AddCLDialog.jsx';
 import { WallDialog }          from './ui/WallDialog.jsx';
@@ -59,6 +60,7 @@ import { SiteDialog }          from './ui/SiteDialog.jsx';
 import { BuildingInfoDialog }  from './ui/BuildingInfoDialog.jsx';
 import { StructuralPanel } from './structural/StructuralPanel.jsx';
 import { autoFillColumns, autoFillColumnAxisOffsets, autoFillColumnSizes, resolveLowestGraph, convertMembersToEffectiveMaterial, deleteClassificationOverflow } from './structural/structuralAutoFill.js';
+import { buildExteriorSide } from './structural/wallGate.js';
 import { structureHasMemberKind, MEMBER_KIND } from './structural/structuralClassification.js';
 import { buildStructuralWallGate } from './structural/wallGate.js';
 import { renumberAllCategories } from './structural/memberNumbering.js';
@@ -157,6 +159,7 @@ const App = observer(() => {
   const moveDownRef       = useRef(null); // CL移動: pointer-down 記録用
   const stretchDownRef    = useRef(null); // ストレッチ開始判定用: { clientX, clientY, snap }
   const gutterCLRef       = useRef(null); // ガター長押し中のCL
+  const axisLabelRef      = useRef(null); // 柱芯ラベル長押し中: { cl, sx, sy }
   const finishDragDownRef = useRef(null); // 仕上げモード: pointerDown 座標
   const siteDrawDownRef   = useRef(null); // 敷地モード: ドラッグ開始スクリーン座標
 
@@ -245,6 +248,22 @@ const App = observer(() => {
     onCancel: () => setPressPos(null),
   });
 
+  // ---- 柱芯ラベル 長押しフック（構造モード・描画エリア内）----
+  // 成立で出幅編集の静止入力窓を開く。窓位置はラベルのスクリーン座標に固定（動かない）。
+  const axisLabelLongPress = useLongPress({
+    onStart:  (sx, sy) => setPressPos({ x: sx, y: sy }),
+    onFire:   () => {
+      setPressPos(null);
+      const hit = axisLabelRef.current;
+      axisLabelRef.current = null;
+      if (!hit) return;
+      const structure  = graph.structureOverride ?? project.structuralInfo.mainStructure;
+      const projection = project.structuralInfo.getColumnFaceProjection(structure, hit.cl);
+      modeRef.current?.startAxisEdit?.({ cl: hit.cl, structure, screenX: hit.sx, screenY: hit.sy, projection });
+    },
+    onCancel: () => setPressPos(null),
+  });
+
   // ---- 長押しフック ----
   const longPress = useLongPress({
     onStart:  (sx, sy) => setPressPos({ x: sx, y: sy }),
@@ -277,6 +296,7 @@ const App = observer(() => {
       setMenu(null);
       modeRef.current?.cancelDraw?.();
       modeRef.current?.cancelMove?.();
+      modeRef.current?.cancelAxisEdit?.();
       modeRef.current?.cancelStretch?.();
       modeRef.current?.cancelSiteDraw?.();
       siteDrawDownRef.current = null;
@@ -338,6 +358,15 @@ const App = observer(() => {
     if (modeRef.current?.drawState) {
       drawDownRef.current = { x: clientX, y: clientY };
       return;
+    }
+    // 構造モード: 描画エリア内の○「柱芯」ラベルをロングタップ → 出幅編集（ガター判定より先）
+    if (appMode === 'structure' && columnAxisMode) {
+      const hit = findColumnAxisLabel(clientX, clientY);
+      if (hit) {
+        axisLabelRef.current = { cl: hit.cl, sx: hit.sx, sy: hit.sy };
+        axisLabelLongPress.begin(clientX, clientY);
+        return;
+      }
     }
     const inGutter = isInGutter(clientX, clientY, size.width, size.height);
     if (inGutter) {
@@ -415,6 +444,12 @@ const App = observer(() => {
         drag.current = { lastX: clientX, lastY: clientY };
         setIsPanning(true);
       }
+      return;
+    }
+
+    // ---- 柱芯ラベル 長押し待機中（閾値超過で長押しキャンセル）----
+    if (axisLabelRef.current) {
+      if (axisLabelLongPress.move(clientX, clientY)) axisLabelRef.current = null;
       return;
     }
 
@@ -683,6 +718,8 @@ const App = observer(() => {
     longPress.abort();
     gutterLongPress.abort();
     gutterCLRef.current = null;
+    axisLabelLongPress.abort();
+    axisLabelRef.current = null;
     drag.current = null;
     setIsPanning(false);
   };
@@ -1727,6 +1764,8 @@ const App = observer(() => {
     longPress.abort();
     gutterLongPress.abort();
     gutterCLRef.current = null;
+    axisLabelLongPress.abort();
+    axisLabelRef.current = null;
     drag.current = null;
     setIsPanning(false);
     setSnapPoint(null);
@@ -1777,6 +1816,46 @@ const App = observer(() => {
       touchTapRef.current = null;
     }
   };
+
+  // ---- 描画エリア内の○「柱芯」ラベル ヒット判定 ----
+  // ヒットしたラベルの cl と、窓を固定するためのラベル中心スクリーン座標を返す。
+  function findColumnAxisLabel(sx, sy) {
+    const HIT = 18; // px（丸ラベル半径相当）
+    let best = null, bestD = HIT;
+    for (const h of columnAxisLabelHits(graph, viewport, size.width, size.height)) {
+      const d = Math.hypot(sx - h.sx, sy - h.sy);
+      if (d < bestD) { bestD = d; best = h; }
+    }
+    return best;
+  }
+
+  // ---- 出幅編集の確定 ----
+  // axisEditState の出幅を 1構造×1通り芯キーへ書込み、構造伏図に映る全グラフで柱芯オフセットを
+  // 再構築する（MobX連鎖で柱・梁・柱芯ラベル・寸法が即再描画）。同一構造の階は同じキーを共有するので
+  // 自動で揃う（非アクティブ階は構造モード突入時再計算で反映＝既存 faceProjection 編集と同じ割り切り）。
+  function commitAxisEdit() {
+    const es = modeRef.current?.axisEditState;
+    if (!es) return;
+    const { cl, structure, projection } = es;
+    const si  = project.structuralInfo;
+    const key = si.faceProjectionKey(structure, cl);
+    const oldRaw = si.columnFaceProjections.get(key); // undefined=未登録（移行既定にフォールバック中）
+    const newVal = Math.abs(projection ?? 0);
+    if (newVal === si.getColumnFaceProjection(structure, cl)) return; // 実効値に変化なし
+
+    const refill = () => {
+      const graphs   = structComposition?.bindings?.map(b => b.graph) ?? [graph];
+      const exterior = buildExteriorSide(graph); // 符号権威＝主題（アクティブ）階フットプリント
+      for (const gg of graphs) autoFillColumnAxisOffsets(gg, project, graph, exterior);
+    };
+    const apply = (raw) => runInAction(() => {
+      if (raw === undefined) si.columnFaceProjections.delete(key);
+      else                   si.columnFaceProjections.set(key, raw);
+      refill();
+    });
+    apply(newVal);
+    undoManager.push(() => apply(oldRaw), () => apply(newVal));
+  }
 
   // ---- ガター内の通り芯ヒット判定 ----
   function findGutterCL(sx, sy) {
@@ -2624,6 +2703,16 @@ const App = observer(() => {
         onCancel={() => modeRef.current?.cancelMove()}
         graph={graph}
         scaleDenominator={viewport.scaleDenominator}
+      />
+
+      {/* 柱芯ラベル ロングタップ → 出幅（柱外面⇔通り芯）の静止入力窓。
+          確定で出幅を1構造×1通り芯キーへ書込み→構造伏図に映る全グラフで柱芯オフセットを再構築し再描画する。
+          同一構造の階は同じ出幅キーを共有するため自動で揃う（非アクティブ階は構造モード突入時再計算で反映）。 */}
+      <AxisFaceInput
+        editState={mode?.axisEditState ?? null}
+        onChange={v => modeRef.current?.updateAxisEdit?.(v)}
+        onConfirm={() => { commitAxisEdit(); modeRef.current?.cancelAxisEdit?.(); }}
+        onCancel={() => modeRef.current?.cancelAxisEdit?.()}
       />
 
       <div style={{ width: '100%', height: '100%' }}>

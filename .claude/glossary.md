@@ -28,7 +28,10 @@
 部屋種別ごとの壁材・壁仕上げ・天井高さの既定値セット。`Room.templateKey`で参照、`customOverrides`で個別上書き。
 
 ## 柱芯（ColumnAxis）／偏芯量
-**柱芯**＝柱の中心。**偏芯量**＝通り芯と柱芯の距離。ラーメン系構造（S造/SRC造/RC造(ラーメン)）でのみ非0になり、`columnAxisOffsets: Map<clId, number>`（per-floor）に通り芯からの偏芯量だけを持つ。柱芯の○ラベル（旧 SX/SY 丸）は持たない。設計意図は`.claude/structural-model.md`。
+**柱芯**＝柱の中心。**偏芯量**＝通り芯と柱芯の距離。ラーメン系構造（S造/SRC造/RC造(ラーメン)）でのみ非0になり、`columnAxisOffsets: Map<clId, number>`（per-floor）に通り芯からの偏芯量だけを持つ。設計意図は`.claude/structural-model.md`。
+
+## 出幅（columnFaceProjection）
+**出幅**＝通り芯から柱外面までの距離。柱芯・偏芯量の真実値で、**1構造×1通り芯**（`structuralInfo.columnFaceProjections`）で持つ。図のX/Y出幅寸法、または描画エリアの○「柱芯」ラベルのロングタップで編集する。設計意図は`.claude/structural-model.md`。
 
 ## role（構造部材のrole）
 柱=`standard`/`foundation`、梁=`primary`/`secondary`/`foundation`/`eaves`/`roof`。伏図の慣習（基礎伏図に柱なし等）に対応する。

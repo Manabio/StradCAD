@@ -574,6 +574,32 @@ function columnAxisLabelCoords(graph, viewport, width, height) {
   };
 }
 
+// ○「柱芯」ラベルの当たり判定用に、各ラベル中心のスクリーン座標を {cl, sx, sy} で列挙する。
+// 描画（buildColumnAxisRowElements）と同じ幾何：X通り芯ラベルは上下辺、Y通り芯ラベルは左右辺に
+// 各2つ（柱芯位置＝通り芯+偏芯量に沿う）。columnAxisLabelCoords（ラベル線の直交座標）を再利用する。
+export function columnAxisLabelHits(graph, viewport, width, height) {
+  if (!graph) return [];
+  const coords  = columnAxisLabelCoords(graph, viewport, width, height);
+  const offsets = graph.columnAxisOffsets;
+  const toScreen = (wx, wy) => ({ sx: wx * viewport.scaleX + viewport.offsetX, sy: wy * viewport.scaleY + viewport.offsetY });
+  const hits = [];
+  for (const cl of graph.gridXs) {           // 縦CL（X通り芯）→ 上下辺
+    const ax = cl.effectiveValue + (offsets.get(cl.id) ?? 0);
+    for (const perp of [coords.top, coords.bottom]) {
+      if (perp == null) continue;
+      hits.push({ cl, ...toScreen(ax, perp) });
+    }
+  }
+  for (const cl of graph.gridYs) {           // 横CL（Y通り芯）→ 左右辺
+    const ay = cl.effectiveValue + (offsets.get(cl.id) ?? 0);
+    for (const perp of [coords.left, coords.right]) {
+      if (perp == null) continue;
+      hits.push({ cl, ...toScreen(perp, ay) });
+    }
+  }
+  return hits;
+}
+
 const CenterDimensions = observer(({ graph, viewport, width, height, columnAxisMode = false }) => {
   if (!graph) return null;
 

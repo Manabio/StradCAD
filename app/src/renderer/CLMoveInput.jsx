@@ -29,7 +29,7 @@ export function roundAbsToStep(absVal, cl, isV, scaleDenominator, graph) {
 }
 
 // 四則演算の安全な評価（括弧なし・正規表現で事前検証）
-function safeEval(str) {
+export function safeEval(str) {
   if (!str) return NaN;
   if (!/^[+-]?\d+\.?\d*([+\-*/]\d+\.?\d*)*$/.test(str)) return NaN;
   try {
@@ -46,7 +46,7 @@ function isRelative(str) {
 }
 
 // 末尾が演算子でなく評価可能 → 式完了
-function isComplete(str) {
+export function isComplete(str) {
   if (!str) return false;
   if (/[+\-*/]$/.test(str)) return false;
   return !isNaN(safeEval(str));
