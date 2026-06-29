@@ -2688,8 +2688,9 @@ const App = observer(() => {
                   />
                 )}
                 {appMode === 'site' && <SiteDrawPreview mode={mode} />}
-                <ShapesLayer graph={graph} viewport={viewport} />
-                <OpeningsLayer graph={graph} viewport={viewport} />
+                {/* 構造モードでは平面図（壁・建具）を描画しない。通り芯と構造部材のみ表示する。 */}
+                {appMode !== 'structure' && <ShapesLayer graph={graph} viewport={viewport} />}
+                {appMode !== 'structure' && <OpeningsLayer graph={graph} viewport={viewport} />}
                 {/* 平面モードでは自階の柱（構造モードで生成・保存済み）を表示する。構造モードの伏図と違い
                     1つ下の階ではなく自階graphの柱を描く（その階の平面に立つ柱はその階のもの）。 */}
                 {appMode === 'floorplan' && <ColumnsLayer graph={graph} viewport={viewport} />}
