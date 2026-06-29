@@ -346,7 +346,10 @@ function representativeCross(graph, cl, isVertical) {
  *  建物外周面が階で食い違わないようにする（仕様）。各階は自階の既定柱幅で外面を最下階の外面基準面に
  *  合わせるため、幅が違えば偏芯量も変わる（＝階依存を保ったまま外面が揃う）。最下階のオフセットは
  *  lowestGraph（呼び出し元が resolveLowestGraph で解決して渡す。非アクティブ階は peek 可）から読む。
- *  外側符号 s は梁偏芯と同一の外周モデル（exterior）から取る（柱・梁で内外定義を一致させる）。
+ *  外側符号 s と外面基準は「最下階」を権威とする：最下階自身は自階フットプリント(exterior)で外周判定し、
+ *  上階は最下階の確定オフセット offLowest から符号・外面を引き継ぐ。**上階で自階フットプリントを見ない**のは、
+ *  屋根伏図(R階伏図)など自階に部屋が無い階では外周モデルが部材CL外接矩形に縮退し、L字外周の中通り(例:X2)を
+ *  内部と誤判定して偏芯量が0に落ちるため（offLowest を読む前に s=0 で短絡していた不具合の修正）。
  *  ラーメン系（S造/SRC造/RC造(ラーメン)）でなければ既存の柱芯オフセットをすべて0に戻す（対象外＝通り芯と一致）。
  *  未登録のCLにのみ補完する（差分のみ補完。ユーザー上書きは保持）。 */
 export function autoFillColumnAxisOffsets(graph, project, lowestGraph = graph, exterior = buildExteriorSide(graph)) {
@@ -362,16 +365,24 @@ export function autoFillColumnAxisOffsets(graph, project, lowestGraph = graph, e
   for (const [axisCLs, isVertical] of [[graph.gridXs, true], [graph.gridYs, false]]) {
     for (const cl of axisCLs) {
       if (graph.columnAxisOffsets.has(cl.id)) continue; // 既存値（ユーザー上書き含む）は保持
-      // s = 外側方向の符号。外周モデル（仕上げフットプリント優先・無ければ部材CL外接矩形）から
-      // そのCLの代表交差位置で問い合わせる（内側＝+方向=+1／−方向=−1／内部・建物外=0）。
-      const s = exterior.outsideSign(cl.value, isVertical, representativeCross(graph, cl, isVertical));
-      if (s === 0) { graph.setColumnAxisOffset(cl.id, 0); continue; }
-      // 最下階の柱の外面位置（通り芯相対）。最下階の偏芯量は基底ルール「外面を通り芯に合わせる」
-      // （offset=s*halfLowest → 外面=通り芯）。最下階が手動で動いていればその実値に追従する。
-      const offLowest = isLowest ? s * halfLowest : (lowestGraph.columnAxisOffsets.get(cl.id) ?? s * halfLowest);
-      const outerFace = offLowest - s * halfLowest; // 通り芯相対の外面基準面
-      // 自階の柱幅で、その外面基準面に外面を合わせる偏芯量。
-      graph.setColumnAxisOffset(cl.id, outerFace + s * halfThis);
+      // 外側符号 s と外面基準面（通り芯相対）を求める。
+      const offLowest = lowestGraph.columnAxisOffsets.get(cl.id);
+      let s, outerFace;
+      if (!isLowest && offLowest !== undefined) {
+        // 上階：最下階の確定オフセットから符号・外面を引き継ぐ（自階フットプリントは見ない＝縮退回避）。
+        // ユーザーが最下階で手動移動していればその実値（符号・外面とも）に自動追従する。
+        s = Math.sign(offLowest);
+        outerFace = offLowest - s * halfLowest;
+      } else {
+        // 最下階自身、または最下階が未計算（offLowest 無し）の縮退時のみ外周モデルで符号を求める。
+        // 外周モデル（仕上げフットプリント優先・無ければ部材CL外接矩形）から、そのCLの代表交差位置で
+        // 問い合わせる（内側＝+方向=+1／−方向=−1／内部・建物外=0）。基底ルールは外面を通り芯に合わせる。
+        const ex = isLowest ? exterior : buildExteriorSide(lowestGraph);
+        s = ex.outsideSign(cl.value, isVertical, representativeCross(lowestGraph, cl, isVertical));
+        outerFace = 0; // offset=s*halfLowest → 外面=通り芯
+      }
+      // 内部芯(s=0)は偏芯0。外周芯は自階の柱幅で外面基準面に外面を合わせる偏芯量。
+      graph.setColumnAxisOffset(cl.id, s === 0 ? 0 : outerFace + s * halfThis);
     }
   }
 }

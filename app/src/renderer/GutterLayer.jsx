@@ -484,9 +484,10 @@ function buildColumnAxisAnchors(d, graph, viewport, gridBounds) {
   const points = [];
   [...gridCLs].sort((a, b) => a.value - b.value).forEach(cl => {
     const off = offsets.get(cl.id) ?? 0;
-    // isColumnAxis: 偏芯量≠0 の :axis 点＝通り芯と異なる実際の柱芯。○「柱芯」ラベルを付ける対象。
+    // :axis 点＝柱芯（通り芯+偏芯量）。○「柱芯」ラベルは全グリッド芯に付ける（偏芯0の内部芯も
+    // 柱芯＝通り芯位置に表示）。偏芯≠0 のときは別途 :grid 点（通り芯位置・ラベル無し）も置く。
     if (off !== 0) points.push({ id: `${cl.id}:grid`, value: cl.effectiveValue, isColumnAxis: false });
-    points.push({ id: `${cl.id}:axis`, value: cl.effectiveValue + off, isColumnAxis: off !== 0 });
+    points.push({ id: `${cl.id}:axis`, value: cl.effectiveValue + off, isColumnAxis: true });
   });
   points.sort((a, b) => a.value - b.value);
   return { boundary, lineCoord, anchors: points };
