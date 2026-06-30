@@ -7,17 +7,46 @@ const seg  = (p, q) => ({ x1: p.x, y1: p.y, x2: q.x, y2: q.y, dashed: false });
 const line = (p, q) => ({ x1: p.x, y1: p.y, x2: q.x, y2: q.y });
 const clamp01 = (t) => Math.max(0, Math.min(1, t));
 
-// 破れ縁（ブレークライン）: p→q を結ぶ線の中央に Z 字ノッチを入れた折れ線。
-function zigzag(p, q) {
-  const dx = q.x - p.x, dy = q.y - p.y;
-  const len = Math.hypot(dx, dy) || 1;
-  const ux = dx / len, uy = dy / len;     // 単位ベクトル
-  const nx = -uy, ny = ux;                // 法線
-  const a = Math.min(len * 0.15, 80);     // ノッチ寸法(mm)
+const LABEL_OUT = 350; // mm — U/D ラベルを始点（踏面1本目線）の外側へ押し出す距離
+const NUM_GAP   = 1 / 6; // 段数数字を各段の基点側踏面線から離す量（段内比率。中央0.5の1/3）
+
+const sub = (a, b) => ({ x: a.x - b.x, y: a.y - b.y });
+
+const BREAK_TILT = Math.PI / 6; // 30° — 破断線の傾き
+const BREAK_TICK = 90;          // mm — 中央ジョグ（Z字）の突起高さ
+const BREAK_JOG  = 90;          // mm — 中央ジョグの線方向半幅
+
+// 破断線: 全幅カット p→q を 30° 傾け、中央に Z 字ジョグを入れた図形（seg配列）。
+// 両端は元の幅方向2辺上に保ちつつ走行方向へずらすことで、傾いても全幅を切る。
+// up は走行上方向。数字のある側＝q 端を up 側へ持ち上げる向きに傾ける（数字側で高さを稼ぐ）。
+function breakSymbol(p, q, up) {
   const mx = (p.x + q.x) / 2, my = (p.y + q.y) / 2;
-  const m1 = { x: mx - ux * a * 0.5 + nx * a, y: my - uy * a * 0.5 + ny * a };
-  const m2 = { x: mx + ux * a * 0.5 - nx * a, y: my + uy * a * 0.5 - ny * a };
-  return [seg(p, m1), seg(m1, m2), seg(m2, q)];
+  const W = Math.hypot(q.x - p.x, q.y - p.y) || 1;
+  const wx = (q.x - p.x) / W, wy = (q.y - p.y) / W;        // 幅方向 単位（p→q）
+  let nx = -wy, ny = wx;                                   // w の法線 単位
+  if (nx * up.x + ny * up.y < 0) { nx = -nx; ny = -ny; }   // up（走行上方向）側へ揃える
+  const cos = Math.cos(BREAK_TILT), sin = Math.sin(BREAK_TILT);
+  const dx = wx * cos + nx * sin, dy = wy * cos + ny * sin; // q 端を up へ持ち上げた線方向 単位
+  const L = W / cos;                                        // 幅投影=全幅 となる長さ
+  const along = (s) => ({ x: mx + dx * s, y: my + dy * s });
+  const P1 = along(-L / 2), P2 = along(L / 2);
+  const A = along(-BREAK_JOG), C = along(BREAK_JOG);
+  const B = { x: A.x + nx * BREAK_TICK, y: A.y + ny * BREAK_TICK };
+  const D = { x: C.x - nx * BREAK_TICK, y: C.y - ny * BREAK_TICK };
+  return [seg(P1, A), seg(A, B), seg(B, D), seg(D, C), seg(C, P2)];
+}
+
+// 走行矢印: 始点 start（丸を描く）→ 終点 end（矢じり）。
+// label（U/D）は start から end と逆向き（＝踏面1本目線の外）へ押し出した中心に置く。
+function runArrow(start, end, label) {
+  const dx = start.x - end.x, dy = start.y - end.y;
+  const len = Math.hypot(dx, dy) || 1;
+  return {
+    x1: start.x, y1: start.y, x2: end.x, y2: end.y,
+    labelX: start.x + (dx / len) * LABEL_OUT,
+    labelY: start.y + (dy / len) * LABEL_OUT,
+    label,
+  };
 }
 
 // 設置エリア矩形 b から走行軸方向 t∈[0,1] / 幅方向 s∈[0,1] → ワールド点 の写像を作る。
@@ -58,11 +87,9 @@ function frameDecor(f, topT, view) {
   const c00 = f.pt(0, 0), c01 = f.pt(0, 1), c10 = f.pt(topT, 0), c11 = f.pt(topT, 1);
   const outline = [seg(c00, c01), seg(c00, c10), seg(c01, c11)];
   let breakLine = null;
-  if (view === 'install') breakLine = zigzag(c10, c11);
+  if (view === 'install') breakLine = breakSymbol(c10, c11, sub(f.pt(1, 0.5), f.pt(0, 0.5))); // 全幅カットを30°傾けたZ字破断線
   else outline.push(seg(c10, c11));
-  const aStart = f.pt(Math.min(0.08, topT * 0.2), 0.5);
-  const aEnd   = f.pt(topT - 0.06, 0.5);
-  const arrow  = { ...line(aStart, aEnd), label: view === 'install' ? 'U' : 'D' };
+  const arrow = runArrow(f.pt(0, 0.5), f.pt(topT, 0.5), view === 'install' ? 'U' : 'D');
   return { outline, breakLine, arrows: [arrow] };
 }
 
@@ -86,7 +113,7 @@ function buildStraight(stair, b, { view, detail, riser }) {
   const stepNumbers = [];
   if (detail) {
     for (let k = 1; k <= shownSteps; k++) {
-      const c = f.pt((k - 0.5) / total, 0.85);
+      const c = f.pt((k - 1 + NUM_GAP) / total, 0.85);
       stepNumbers.push({ x: c.x, y: c.y, text: String(k) });
     }
   }
@@ -136,8 +163,8 @@ function buildStraightLanding(stair, b, { view, detail, riser }) {
   if (detail) {
     for (const sb of stepBoundaries) {
       const centerMm = sb.num <= first
-        ? (sb.num - 0.5) * tread
-        : landingEnd + (sb.num - first - 0.5) * tread;
+        ? (sb.num - 1 + NUM_GAP) * tread
+        : landingEnd + (sb.num - first - 1 + NUM_GAP) * tread;
       if (centerMm >= shownMm) continue;
       const c = f.pt(tAt(centerMm), 0.85);
       stepNumbers.push({ x: c.x, y: c.y, text: String(sb.num) });
@@ -192,23 +219,22 @@ function buildSwitchback(stair, b, { view, detail, riser }) {
 
   let breakLine = null;
   if (isInstall) {
-    breakLine = inLaneA
-      ? zigzag(c(tAt(breakStep * tread), 0), c(tAt(breakStep * tread), 0.5))
-      : zigzag(c(tAt(n * tread - (breakStep - n) * tread), 0.5), c(tAt(n * tread - (breakStep - n) * tread), 1));
+    const bt = inLaneA ? tAt(breakStep * tread) : tAt(n * tread - (breakStep - n) * tread);
+    breakLine = breakSymbol(c(bt, 0), c(bt, 1), sub(f.pt(1, 0.5), f.pt(0, 0.5))); // 全幅カットを30°傾けたZ字破断線
   }
 
-  const arrows = [{ ...line(f.pt(tAt(tread * 0.3), 0.25), f.pt(tRun - 0.02, 0.25)), label: 'U' }];
-  if (drawB) arrows.push({ ...line(f.pt(tRun - 0.02, 0.75), f.pt(tAt(tread * 0.3), 0.75)), label: isInstall ? '' : 'D' });
+  const arrows = [runArrow(f.pt(0, 0.25), f.pt(tRun, 0.25), 'U')];
+  if (drawB) arrows.push(runArrow(f.pt(tRun, 0.75), f.pt(0, 0.75), isInstall ? '' : 'D'));
 
   const stepNumbers = [];
   if (detail) {
     for (let k = 1; k <= shownA; k++) {
-      const p = f.pt(tAt((k - 0.5) * tread), 0.25);
+      const p = f.pt(tAt((k - 1 + NUM_GAP) * tread), 0.25);
       stepNumbers.push({ x: p.x, y: p.y, text: String(k) });
     }
     if (drawB) {
       for (let j = 1; j <= shownB; j++) {
-        const p = f.pt(tAt(n * tread - (j - 0.5) * tread), 0.75);
+        const p = f.pt(tAt(n * tread - (j - 1 + NUM_GAP) * tread), 0.75);
         stepNumbers.push({ x: p.x, y: p.y, text: String(n + j) });
       }
     }
@@ -274,17 +300,18 @@ function buildWinding(stair, b, { view, detail, riser }) {
 
   let breakLine = null;
   if (isInstall) {
-    if (inLaneA) breakLine = zigzag(c(tAt(breakStep * tread), 0), c(tAt(breakStep * tread), 0.5));
-    else if (breakStep > n + w) breakLine = zigzag(c(tAt(n * tread - (breakStep - n - w) * tread), 0.5), c(tAt(n * tread - (breakStep - n - w) * tread), 1));
+    const up = sub(f.pt(1, 0.5), f.pt(0, 0.5));
+    if (inLaneA) { const bt = tAt(breakStep * tread); breakLine = breakSymbol(c(bt, 0), c(bt, 1), up); }
+    else if (breakStep > n + w) { const bt = tAt(n * tread - (breakStep - n - w) * tread); breakLine = breakSymbol(c(bt, 0), c(bt, 1), up); }
   }
 
-  const arrows = [{ ...line(f.pt(tAt(tread * 0.3), 0.25), f.pt(tRun - 0.02, 0.25)), label: 'U' }];
-  if (drawB) arrows.push({ ...line(f.pt(tRun - 0.02, 0.75), f.pt(tAt(tread * 0.3), 0.75)), label: isInstall ? '' : 'D' });
+  const arrows = [runArrow(f.pt(0, 0.25), f.pt(tRun, 0.25), 'U')];
+  if (drawB) arrows.push(runArrow(f.pt(tRun, 0.75), f.pt(0, 0.75), isInstall ? '' : 'D'));
 
   const stepNumbers = [];
   if (detail) {
     for (let k = 1; k <= shownA; k++) {
-      const p = f.pt(tAt((k - 0.5) * tread), 0.25);
+      const p = f.pt(tAt((k - 1 + NUM_GAP) * tread), 0.25);
       stepNumbers.push({ x: p.x, y: p.y, text: String(k) });
     }
     if (drawTurn) {
@@ -295,7 +322,7 @@ function buildWinding(stair, b, { view, detail, riser }) {
     }
     if (drawB) {
       for (let j = 1; j <= shownB; j++) {
-        const p = f.pt(tAt(n * tread - (j - 0.5) * tread), 0.75);
+        const p = f.pt(tAt(n * tread - (j - 1 + NUM_GAP) * tread), 0.75);
         stepNumbers.push({ x: p.x, y: p.y, text: String(n + w + j) });
       }
     }
@@ -369,25 +396,27 @@ function buildLTurn(stair, b, { view, detail, riser }) {
 
   let breakLine = null;
   if (isInstall) {
+    const upU = sub(toWorld(runU, runU), toWorld(0, runU)); // arm1 走行上方向（+u）
+    const upV = sub(toWorld(runU, 0), toWorld(runU, runU)); // arm2 走行上方向（-v）
     if (inArm1) {
       const u = runU * breakStep / first;
-      breakLine = zigzag(toWorld(u, runU), toWorld(u, 1));
+      breakLine = breakSymbol(toWorld(u, runU), toWorld(u, 1), upU);
     } else if (breakStep <= first + w) {
-      breakLine = zigzag(toWorld(runU, runU), toWorld(1, runU)); // 扇形内 → arm2 入口で破れ
+      breakLine = breakSymbol(toWorld(runU, runU), toWorld(1, runU), upV); // 扇形内 → arm2 入口で破れ
     } else {
       const v = runU * (1 - (breakStep - first - w) / straight);
-      breakLine = zigzag(toWorld(runU, v), toWorld(1, v));
+      breakLine = breakSymbol(toWorld(runU, v), toWorld(1, v), upV);
     }
   }
 
   const midA = (runU + 1) / 2;
-  const arrows = [{ ...line(toWorld(runU * 0.1, midA), toWorld(runU - 0.02, midA)), label: 'U' }];
-  if (drawArm2) arrows.push({ ...line(toWorld(midA, runU - 0.02), toWorld(midA, 0.05)), label: isInstall ? '' : 'D' });
+  const arrows = [runArrow(toWorld(0, midA), toWorld(runU, midA), 'U')];
+  if (drawArm2) arrows.push(runArrow(toWorld(midA, runU), toWorld(midA, 0), isInstall ? '' : 'D'));
 
   const stepNumbers = [];
   if (detail) {
     for (let k = 1; k <= shownFirst; k++) {
-      const p = toWorld(runU * (k - 0.5) / first, midA);
+      const p = toWorld(runU * (k - 1 + NUM_GAP) / first, midA);
       stepNumbers.push({ x: p.x, y: p.y, text: String(k) });
     }
     if (drawCorner && w > 0) {
@@ -400,7 +429,7 @@ function buildLTurn(stair, b, { view, detail, riser }) {
     if (drawArm2) {
       const shownStraight = isInstall ? Math.max(0, breakStep - first - w) : straight;
       for (let j = 1; j <= shownStraight; j++) {
-        const p = toWorld(midA, runU * (1 - (j - 0.5) / straight));
+        const p = toWorld(midA, runU * (1 - (j - 1 + NUM_GAP) / straight));
         stepNumbers.push({ x: p.x, y: p.y, text: String(first + w + j) });
       }
     }
@@ -460,19 +489,23 @@ function buildOpenWell(stair, b, { view, detail, riser }) {
 
   let breakLine = null;
   if (isInstall) {
-    if (bs <= n)        { const u = runW * bs / n;        breakLine = zigzag(toWorld(u, 1 - aw), toWorld(u, 1)); }
-    else if (bs <= 2 * n) { const v = 1 - (bs - n) / n;     breakLine = zigzag(toWorld(runW, v), toWorld(1, v)); }
-    else                { const u = runW * (1 - (bs - 2 * n) / n); breakLine = zigzag(toWorld(u, 0), toWorld(u, aw)); }
+    const upBottom = sub(toWorld(1, 0.5), toWorld(0, 0.5));  // 下アーム走行上方向（+u）
+    const upRight  = sub(toWorld(runW, 0), toWorld(runW, 1)); // 右アーム走行上方向（-v）
+    const upTop    = sub(toWorld(0, 0.5), toWorld(1, 0.5));  // 上アーム走行上方向（-u）
+    if (bs <= n)        { const u = runW * bs / n;        breakLine = breakSymbol(toWorld(u, 1 - aw), toWorld(u, 1), upBottom); }
+    else if (bs <= 2 * n) { const v = 1 - (bs - n) / n;     breakLine = breakSymbol(toWorld(runW, v), toWorld(1, v), upRight); }
+    else                { const u = runW * (1 - (bs - 2 * n) / n); breakLine = breakSymbol(toWorld(u, 0), toWorld(u, aw), upTop); }
   }
 
-  const arrows = [{ ...line(toWorld(runW * 0.1, (1 - aw + 1) / 2), toWorld(runW - 0.02, (1 - aw + 1) / 2)), label: 'U' }];
-  if (shownTop > 0) arrows.push({ ...line(toWorld(runW - 0.02, aw / 2), toWorld(runW * 0.1, aw / 2)), label: isInstall ? '' : 'D' });
+  const vB = (1 - aw + 1) / 2;
+  const arrows = [runArrow(toWorld(0, vB), toWorld(runW, vB), 'U')];
+  if (shownTop > 0) arrows.push(runArrow(toWorld(runW, aw / 2), toWorld(0, aw / 2), isInstall ? '' : 'D'));
 
   const stepNumbers = [];
   if (detail) {
-    for (let k = 1; k <= shownBottom; k++) { const p = toWorld(runW * (k - 0.5) / n, (1 - aw + 1) / 2); stepNumbers.push({ x: p.x, y: p.y, text: String(k) }); }
-    for (let k = 1; k <= shownRight;  k++) { const p = toWorld((runW + 1) / 2, 1 - (k - 0.5) / n);       stepNumbers.push({ x: p.x, y: p.y, text: String(n + k) }); }
-    for (let k = 1; k <= shownTop;    k++) { const p = toWorld(runW * (1 - (k - 0.5) / n), aw / 2);       stepNumbers.push({ x: p.x, y: p.y, text: String(2 * n + k) }); }
+    for (let k = 1; k <= shownBottom; k++) { const p = toWorld(runW * (k - 1 + NUM_GAP) / n, (1 - aw + 1) / 2); stepNumbers.push({ x: p.x, y: p.y, text: String(k) }); }
+    for (let k = 1; k <= shownRight;  k++) { const p = toWorld((runW + 1) / 2, 1 - (k - 1 + NUM_GAP) / n);       stepNumbers.push({ x: p.x, y: p.y, text: String(n + k) }); }
+    for (let k = 1; k <= shownTop;    k++) { const p = toWorld(runW * (1 - (k - 1 + NUM_GAP) / n), aw / 2);       stepNumbers.push({ x: p.x, y: p.y, text: String(2 * n + k) }); }
   }
   return { treads, outline, arrows, breakLine, stepNumbers };
 }
@@ -485,7 +518,7 @@ function buildOpenWell(stair, b, { view, detail, riser }) {
  * @param {{ view:'install'|'upper', detail:boolean, riser:number|null }} opts
  * @returns {{
  *   treads:{x1,y1,x2,y2}[], outline:{x1,y1,x2,y2,dashed}[],
- *   arrow:{x1,y1,x2,y2,label}|null, breakLine:{x1,y1,x2,y2}[]|null,
+ *   arrows:{x1,y1,x2,y2,labelX,labelY,label}[], breakLine:{x1,y1,x2,y2}[]|null,
  *   stepNumbers:{x,y,text}[],
  * }}
  */

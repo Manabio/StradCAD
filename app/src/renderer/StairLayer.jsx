@@ -1,5 +1,5 @@
 import { observer } from 'mobx-react-lite';
-import { Group, Line, Text, Rect } from 'react-konva';
+import { Group, Line, Text, Rect, Circle, Arrow } from 'react-konva';
 import { buildStairGeometry } from '../finish/stair/stairGeometry.js';
 
 const STAIR_STROKE = '#1e293b';
@@ -45,10 +45,17 @@ export const StairLayer = observer(({
     ));
     const arrows = (geom.arrows ?? []).map((a, i) => (
       <Group key={`a${i}`}>
-        <Line points={[a.x1, a.y1, a.x2, a.y2]} {...lineProps} />
+        {/* 始点: 寸法線と同じ塗り丸 */}
+        <Circle x={a.x1} y={a.y1} radius={px(2)} fill={STAIR_STROKE} listening={false} />
+        {/* 終点に矢じり */}
+        <Arrow
+          points={[a.x1, a.y1, a.x2, a.y2]}
+          stroke={STAIR_STROKE} fill={STAIR_STROKE} strokeWidth={px(1.5)}
+          pointerLength={px(10)} pointerWidth={px(8)} listening={false}
+        />
         {a.label && (
           <Text
-            x={a.x1} y={a.y1}
+            x={a.labelX} y={a.labelY}
             text={a.label} fontSize={200}
             fill={STAIR_STROKE} offsetX={60} offsetY={100} listening={false}
           />
