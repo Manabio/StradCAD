@@ -122,6 +122,7 @@ export class FloorSwapManager {
       void graph.shapeMap.size;
       void graph.intersectionMap.size;
       void graph.roomMap.size;
+      void graph.stairMap.size;
       for (const cl of graph.centerLines) {
         void cl._value;
         void cl.refOffset;

@@ -1,5 +1,6 @@
 import { makeObservable, observable, action, computed, runInAction } from 'mobx';
 import { worldToCell, refreshCells } from '../finish/gridCells.js';
+import { classifyStairArea } from '../finish/stair/stairClassify.js';
 import { ERR_MATERIAL_MISMATCH } from '../error.js';
 
 function setsEqual(a, b) {
@@ -21,6 +22,8 @@ export class FinishModeState {
   dragState      = null; // { currentCell, visitedCells: Map } | null
   selectedRoomId = null;
   namingRoomId   = null;
+  subMode        = null; // null = 部屋指定 / 'stair' = 階段配置
+  selectedStairId = null;
 
   // ---- 材データ（突入時ロード・離脱時破棄） ----
   materialsLoaded = false;       // ロード完了フラグ
@@ -39,6 +42,8 @@ export class FinishModeState {
       dragState:      observable.ref,
       selectedRoomId: observable,
       namingRoomId:   observable,
+      subMode:         observable,
+      selectedStairId: observable,
       materialsLoaded: observable,
       materialError:   observable,
       materialMap:     observable.ref,
@@ -52,6 +57,9 @@ export class FinishModeState {
       finishNaming: action,
       cancelNaming: action,
       deleteRoom:   action,
+      setSubMode:   action,
+      selectStair:  action,
+      deleteStair:  action,
     });
   }
 
@@ -168,9 +176,10 @@ export class FinishModeState {
     }
   }
 
-  commitDrag() {
+  commitDrag(floorHeight = null) {
     const state = this.dragState;
     if (!state) return;
+    if (this.subMode === 'stair') { this._commitStair(state, floorHeight); return; }
     const newCells = new Set(state.visitedCells.keys());
     if (newCells.size === 0) { this.dragState = null; return; }
 
@@ -363,6 +372,33 @@ export class FinishModeState {
     this.graph.removeRoom(roomId);
     if (this.selectedRoomId === roomId) this.selectedRoomId = null;
     if (this.namingRoomId === roomId) this.namingRoomId = null;
+  }
+
+  // ---- 階段配置 ----
+
+  setSubMode(sm) { this.subMode = sm; this.dragState = null; }
+
+  selectStair(id) { this.selectedStairId = id; }
+
+  deleteStair(id) {
+    this.graph.removeStair(id);
+    if (this.selectedStairId === id) this.selectedStairId = null;
+  }
+
+  /** 選択エリアから階段タイプ・向きを推定し、Stair を生成して選択する。 */
+  _commitStair(state, floorHeight = null) {
+    const cells = new Set(state.visitedCells.keys());
+    this.dragState = null;
+    if (cells.size === 0) return;
+    const cls = classifyStairArea(cells, this.graph, floorHeight);
+    const opts = {
+      type: cls.type, cells, upDirection: cls.upDirection,
+      flip: cls.flip ?? false, segments: cls.segments ?? null,
+    };
+    if (cls.totalSteps) opts.totalSteps = cls.totalSteps;
+    const stair = this.graph.addStair(opts);
+    this.selectedStairId = stair.id;
+    this.subMode = null; // 配置後は通常モードへ戻す
   }
 
   get isDragging()   { return this.dragState !== null; }

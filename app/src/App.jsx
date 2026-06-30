@@ -27,6 +27,10 @@ import { FinishModeLayer } from './finish/FinishModeLayer.jsx';
 import { RoomNameInput }   from './finish/RoomNameInput.jsx';
 import { FinishSidebar }   from './finish/FinishSidebar.jsx';
 import { FinishHalfModal } from './finish/FinishHalfModal.jsx';
+import { StairPanel }      from './finish/stair/StairPanel.jsx';
+import { StairLayer }      from './renderer/StairLayer.jsx';
+import { floorHeightAbove } from './finish/stair/stairDimensions.js';
+import { roomBounds }       from './finish/gridCells.js';
 import { generateRoomWallsFromOutline, generateExteriorWalls, snapshotWall, restoreWallsFromSnapshots } from './finish/wallGeneration.js';
 import { snapshotEdges, restoreEdges, syncEdgesFromTopology, buildCellToRoom } from './finish/edgeClassify.js';
 import { EdgeSectionLayer } from './renderer/EdgeSectionLayer.jsx';
@@ -142,6 +146,8 @@ const App = observer(() => {
   const [structComposition, setStructComposition] = useState(null); // 構造モードの図面合成（自階床下材＋1つ下の階の柱）。各カテゴリの供給グラフを保持する
   // フロア切替時にモードを再ロードするためのトリガー
   const [activeFloorId,   setActiveFloorId]   = useState(project.activePlaneId);
+  // 上階ビュー: 直下階の階段を peek して上階表現で描くための解決済みエントリ
+  const [upperStairEntries, setUpperStairEntries] = useState([]);
   // 構造モードのスライダーで選択中の図面スロット key（`slotType:planeId`）。1平面に複数スロットが
   // 乗る（木造の基礎伏図＋1階伏図・S造のR階伏図＋小屋伏図）ため、planeId とは別に保持する。
   const [activeStructSlotKey, setActiveStructSlotKey] = useState(null);
@@ -208,6 +214,35 @@ const App = observer(() => {
       if (s.materialError) setToast({ msg: s.materialError, key: Date.now() });
     });
 
+    return () => { cancelled = true; };
+  }, [appMode, activeFloorId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // 上階ビュー: 直下階（elevation が1つ下の採用フロア）の階段を peek し、
+  // 上階表現（全段）の描画用エントリへ解決する。階切替・モード切替で再計算する。
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const planes = project.planes; // elevation 昇順
+      const active = project.activePlane;
+      const idx = planes.findIndex(p => p.id === active?.id);
+      const below = idx > 0 ? planes[idx - 1] : null;
+      if (!below || !active || (appMode !== 'finish' && appMode !== 'floorplan')) {
+        setUpperStairEntries([]);
+        return;
+      }
+      const temp = await floorSwapManager.peek(below, project.structGraph);
+      if (cancelled) return;
+      const floorHeight = active.elevation - below.elevation; // 直下階の階高
+      const entries = temp.stairs.map(s => ({
+        id: s.id,
+        stair: s,
+        bounds: roomBounds(s.cells, temp),
+        riser: s.riser ?? (floorHeight != null ? floorHeight / Math.max(1, s.totalSteps) : null),
+        view: 'upper',
+        selectable: false,
+      }));
+      setUpperStairEntries(entries);
+    })();
     return () => { cancelled = true; };
   }, [appMode, activeFloorId]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -554,7 +589,14 @@ const App = observer(() => {
     // ---- 仕上げモード ----
     if (appMode === 'finish') {
       if (finishDragDownRef.current && modeRef.current?.dragState) {
-        modeRef.current?.commitDrag();
+        const wasStair = modeRef.current?.subMode === 'stair';
+        modeRef.current?.commitDrag(floorHeightAbove(project, project.activePlane));
+        // 階段配置時: 上階へ不足中心線を追加（非アクティブ階を peek して IDB へ保存）
+        if (wasStair) {
+          import('./finish/stair/stairFloorSync.js')
+            .then(m => m.syncUpperFloorCLs(project, project.activeGraph))
+            .catch(console.error);
+        }
       }
       finishDragDownRef.current = null;
       drag.current = null;
@@ -2796,6 +2838,30 @@ const App = observer(() => {
                     previewCells={mode.previewCells}
                   />
                 )}
+                {(appMode === 'finish' || appMode === 'floorplan') && (() => {
+                  const fh = floorHeightAbove(project, project.activePlane);
+                  const installEntries = graph.stairs.map(s => ({
+                    id: s.id,
+                    stair: s,
+                    bounds: roomBounds(s.cells, graph),
+                    riser: s.riser ?? (fh != null ? fh / Math.max(1, s.totalSteps) : null),
+                    view: 'install',
+                    selectable: appMode === 'finish',
+                  }));
+                  // 階切替の非同期過渡で同一階段が install/upper 両方に入るのを防ぐ
+                  // （install が設置階の正であり、upper は直下階由来。重複時は install を優先）
+                  const installIds = new Set(installEntries.map(e => e.id));
+                  const upperEntries = upperStairEntries.filter(e => !installIds.has(e.id));
+                  return (
+                    <StairLayer
+                      entries={[...installEntries, ...upperEntries]}
+                      viewport={viewport}
+                      detail={viewport.lodLevel === LodLevel.DETAIL}
+                      selectedStairId={appMode === 'finish' ? mode?.selectedStairId : null}
+                      onSelectStair={appMode === 'finish' ? (id => modeRef.current?.selectStair(id)) : null}
+                    />
+                  );
+                })()}
                 {appMode === 'site' && mode && (
                   <SiteLinesLayer
                     site={project.site}
@@ -2921,8 +2987,37 @@ const App = observer(() => {
         ) : null;
       })()}
 
+      {/* 仕上げモード: 階段配置トグルボタン */}
+      {appMode === 'finish' && mode && !mode.namingRoomId && !mode.selectedStairId && (
+        <button
+          onClick={() => modeRef.current?.setSubMode(mode.subMode === 'stair' ? null : 'stair')}
+          style={{
+            position: 'fixed', left: 12, bottom: 8, zIndex: 210,
+            padding: '6px 12px', fontSize: 13, borderRadius: 4, cursor: 'pointer',
+            border: '1px solid ' + (mode.subMode === 'stair' ? '#2563eb' : '#cbd5e1'),
+            background: mode.subMode === 'stair' ? '#2563eb' : '#fff',
+            color: mode.subMode === 'stair' ? '#fff' : '#334155',
+          }}
+        >
+          {mode.subMode === 'stair' ? '階段配置中…（エリアをドラッグ）' : '階段を配置'}
+        </button>
+      )}
+
+      {/* 仕上げモード: 階段パラメータパネル */}
+      {appMode === 'finish' && mode?.selectedStairId && (() => {
+        const stair = graph.stairMap.get(mode.selectedStairId);
+        return stair ? (
+          <StairPanel
+            stair={stair}
+            project={project}
+            onDelete={id => modeRef.current?.deleteStair(id)}
+            onClose={() => modeRef.current?.selectStair(null)}
+          />
+        ) : null;
+      })()}
+
       {/* 仕上げ表パネル */}
-      {appMode === 'finish' && mode && !mode.namingRoomId && (
+      {appMode === 'finish' && mode && !mode.namingRoomId && !mode.selectedStairId && (
         isLandscape
           ? <FinishSidebar
               graph={graph}

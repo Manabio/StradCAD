@@ -45,6 +45,16 @@ const GS = {
   COLUMN_AXIS_KEYS: 32, COLUMN_AXIS_VALS: 33,
   // トポロジー自動補完の除外集合（per-floor、基礎・柱脚分）
   EXCLUDED_FOOTING_SLOTS: 34,
+  // 階段（仕上げモード、設置階に帰属）
+  STAIRS: 35, STAIR_ORDER: 36,
+};
+
+// Stair: 16 フィールド
+const ST = {
+  ID: 0, TYPE: 1, STRUCTURE: 2, CELLS: 3, TOTAL_STEPS: 4,
+  TREAD: 5, HAS_RISER: 6, RISER: 7, NOSING: 8, WIDTH: 9,
+  UP_DIR: 10, FLIP: 11,
+  HAS_SEG: 12, SEG_FIRST: 13, SEG_LANDING: 14, SEG_STRAIGHT: 15, // 段構成
 };
 
 // StructuralMaterialType 列挙値エンコード（柱・梁・耐力壁・スラブ・基礎で共通）
@@ -545,6 +555,36 @@ function writeEdge(b, e) {
   return b.endObject();
 }
 
+function writeStair(b, st) {
+  const sId   = b.createString(st.id);
+  const sType = b.createString(st.type ?? 'straight');
+  const sStru = b.createString(st.structure ?? 'WOOD');
+  const sUp   = b.createString(st.upDirection ?? 'right');
+  const cellsVec = writeStrVec(b, st.cells ?? []);
+  const hasRiser = st.riser != null;
+  const seg = st.segments;
+  const hasSeg = seg != null;
+
+  b.startObject(16);
+  b.addFieldOffset(ST.ID,        sId,   0);
+  b.addFieldOffset(ST.TYPE,      sType, 0);
+  b.addFieldOffset(ST.STRUCTURE, sStru, 0);
+  b.addFieldOffset(ST.CELLS,     cellsVec, 0);
+  b.addFieldFloat64(ST.TOTAL_STEPS, st.totalSteps ?? 15, 0.0);
+  b.addFieldFloat64(ST.TREAD,    st.tread ?? 250, 0.0);
+  b.addFieldInt8(ST.HAS_RISER,   hasRiser ? 1 : 0, 0);
+  b.addFieldFloat64(ST.RISER,    hasRiser ? st.riser : 0, 0.0);
+  b.addFieldFloat64(ST.NOSING,   st.nosing ?? 30, 0.0);
+  b.addFieldFloat64(ST.WIDTH,    st.width ?? 900, 0.0);
+  b.addFieldOffset(ST.UP_DIR,    sUp,   0);
+  b.addFieldInt8(ST.FLIP,        st.flip ? 1 : 0, 0);
+  b.addFieldInt8(ST.HAS_SEG,     hasSeg ? 1 : 0, 0);
+  b.addFieldFloat64(ST.SEG_FIRST,    hasSeg ? (seg.first ?? 0)    : 0, 0.0);
+  b.addFieldFloat64(ST.SEG_LANDING,  hasSeg ? (seg.landing ?? 0)  : 0, 0.0);
+  b.addFieldFloat64(ST.SEG_STRAIGHT, hasSeg ? (seg.straight ?? 0) : 0, 0.0);
+  return b.endObject();
+}
+
 // ----------------------------------------------------------------
 // 構造モード（柱・梁・耐力壁・耐力壁開口・スラブ・基礎・柱脚・貫通孔）
 // サブタイプ別フィールドは extraKeys/extraVals（Room.overrides と同じ文字列ペア配列）で表現する。
@@ -1040,6 +1080,26 @@ function readEdge(bb, tablePos) {
   };
 }
 
+function readStair(bb, tablePos) {
+  const r = makeReader(bb, tablePos);
+  return {
+    id:          r.str(ST.ID),
+    type:        r.str(ST.TYPE) || 'straight',
+    structure:   r.str(ST.STRUCTURE) || 'WOOD',
+    cells:       r.strVec(ST.CELLS),
+    totalSteps:  r.f64(ST.TOTAL_STEPS) || 15,
+    tread:       r.f64(ST.TREAD) || 250,
+    riser:       r.i8(ST.HAS_RISER) ? r.f64(ST.RISER) : null,
+    nosing:      r.f64(ST.NOSING) || 30,
+    width:       r.f64(ST.WIDTH) || 900,
+    upDirection: r.str(ST.UP_DIR) || 'right',
+    flip:        r.i8(ST.FLIP) !== 0,
+    segments:    r.i8(ST.HAS_SEG)
+      ? { first: r.f64(ST.SEG_FIRST), landing: r.f64(ST.SEG_LANDING), straight: r.f64(ST.SEG_STRAIGHT) }
+      : null,
+  };
+}
+
 // ----------------------------------------------------------------
 // 構造モード（柱・梁・耐力壁・耐力壁開口・スラブ・基礎・柱脚・貫通孔）
 // ----------------------------------------------------------------
@@ -1222,6 +1282,8 @@ export function encode(snapshot) {
   const tagRegistryValsVec = writeStrVec(b, snapshot.tagRegistryVals ?? []);
   const columnAxisKeysVec = writeStrVec(b, snapshot.columnAxisOffsetKeys ?? []);
   const columnAxisValsVec = writeStrVec(b, snapshot.columnAxisOffsetVals ?? []);
+  const stairVec      = writeVec(b, snapshot.stairs ?? [], writeStair);
+  const stairOrderVec = writeStrVec(b, snapshot.stairOrder ?? []);
   const sIntPanel    = b.createString(snapshot.interiorWallPanel   ?? '');
   const sExtBacking  = b.createString(snapshot.exteriorWallBacking ?? '');
   const sIntBacking  = b.createString(snapshot.interiorWallBacking ?? '');
@@ -1230,7 +1292,7 @@ export function encode(snapshot) {
   const sStructureOverride = b.createString(snapshot.structureOverride ?? '');
   const structuralInfoOff  = writeStructuralInfo(b, snapshot.structuralInfo);
 
-  b.startObject(35);
+  b.startObject(37);
   b.addFieldOffset(GS.CLS,        clVec,        0);
   b.addFieldOffset(GS.PTS,        ptVec,        0);
   b.addFieldOffset(GS.WALLS,      wallVec,      0);
@@ -1266,6 +1328,8 @@ export function encode(snapshot) {
   b.addFieldOffset(GS.TAG_REGISTRY_VALS, tagRegistryValsVec, 0);
   b.addFieldOffset(GS.COLUMN_AXIS_KEYS, columnAxisKeysVec, 0);
   b.addFieldOffset(GS.COLUMN_AXIS_VALS, columnAxisValsVec, 0);
+  b.addFieldOffset(GS.STAIRS,        stairVec,      0);
+  b.addFieldOffset(GS.STAIR_ORDER,   stairOrderVec, 0);
   const root = b.endObject();
 
   b.finish(root);
@@ -1317,5 +1381,7 @@ export function decode(bytes) {
     tagRegistryVals: r.strVec(GS.TAG_REGISTRY_VALS),
     columnAxisOffsetKeys: r.strVec(GS.COLUMN_AXIS_KEYS),
     columnAxisOffsetVals: r.strVec(GS.COLUMN_AXIS_VALS),
+    stairs:          r.vec(GS.STAIRS, readStair),
+    stairOrder:      r.strVec(GS.STAIR_ORDER),
   };
 }

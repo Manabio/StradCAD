@@ -112,6 +112,20 @@ function buildSnapshot(graph) {
         };
       }),
     roomOrder: [...graph.roomOrder],
+    // 階段（仕上げモード、設置階に帰属）
+    stairs: graph.stairOrder
+      .filter(id => graph.stairMap.has(id))
+      .map(id => {
+        const s = graph.stairMap.get(id);
+        return {
+          id: s.id, type: s.type, structure: s.structure,
+          cells: [...s.cells], totalSteps: s.totalSteps, tread: s.tread,
+          riser: s.riser ?? null, nosing: s.nosing, width: s.width,
+          upDirection: s.upDirection, flip: s.flip,
+          segments: s.segments ?? null,
+        };
+      }),
+    stairOrder: [...graph.stairOrder],
     interiorWallPanel:   graph.interiorWallPanel,
     exteriorWallBacking: graph.exteriorWallBacking,
     interiorWallBacking: graph.interiorWallBacking,
@@ -567,6 +581,18 @@ function applySnapshot(graph, snapshot) {
     }
     const savedOrder = snapshot.roomOrder ?? [];
     graph.roomOrder.replace(savedOrder.filter(id => graph.roomMap.has(id)));
+
+    // 10b. 階段（仕上げモード）— addStair で stairMap/stairOrder に登録後、順序を上書き
+    for (const d of snapshot.stairs ?? []) {
+      graph.addStair({
+        type: d.type, structure: d.structure, cells: new Set(d.cells),
+        totalSteps: d.totalSteps, tread: d.tread, riser: d.riser ?? null,
+        nosing: d.nosing, width: d.width, upDirection: d.upDirection, flip: d.flip,
+        segments: d.segments ?? null,
+      }, d.id);
+    }
+    const savedStairOrder = snapshot.stairOrder ?? [];
+    graph.stairOrder.replace(savedStairOrder.filter(id => graph.stairMap.has(id)));
 
     // 10.5. 構造: スラブ（cellsのみ、CL非依存）→ 貫通孔（ホスト梁/スラブのID参照解決）
     for (const d of snapshot.slabs ?? []) {

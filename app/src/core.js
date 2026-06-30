@@ -14,6 +14,7 @@ import { coordLo as _coordLo, coordHi as _coordHi } from './core/_internal.js';
 
 import {
   Discipline, ShapeType, ShapeKind, CenterLineType, RoomKind,
+  StairType, StructuralMaterialType,
   LINE_WEIGHT_MM, DimensionKind, DimensionSide,
   DEFAULT_INTERIOR_WALL_PANEL, DEFAULT_EXTERIOR_WALL_BACKING,
   DEFAULT_INTERIOR_WALL_BACKING, DEFAULT_CEILING_BACKING, DEFAULT_FLOOR_BACKING,
@@ -21,7 +22,7 @@ import {
 
 export {
   Discipline, ShapeType, OpeningCategory, ShapeKind, CenterLineType, RoomKind,
-  StructuralMaterialType, LINE_WEIGHT_MM, DimensionKind, DimensionSide,
+  StairType, StructuralMaterialType, LINE_WEIGHT_MM, DimensionKind, DimensionSide,
   DEFAULT_INTERIOR_WALL_PANEL, DEFAULT_EXTERIOR_WALL_BACKING,
   DEFAULT_INTERIOR_WALL_BACKING, DEFAULT_CEILING_BACKING, DEFAULT_FLOOR_BACKING,
   SiteLineKind,
@@ -687,6 +688,54 @@ export class Room {
   }
 }
 
+// 階段（設置階＝下階のグラフに帰属。上階へは描画時に投影する）。
+// cells は Room と同じ設置エリア表現（worldToCell のキー集合）。
+export class Stair {
+  constructor(id, {
+    type        = StairType.STRAIGHT,
+    structure   = StructuralMaterialType.WOOD, // 木造 / 鉄骨
+    cells       = new Set(),
+    totalSteps  = 15,
+    tread       = 250,     // 踏面(mm)
+    riser       = null,    // 蹴上(mm) null=階高/totalSteps で自動
+    nosing      = 30,      // 蹴込(mm)
+    width       = 900,     // 階段幅(mm)
+    upDirection = 'right', // 昇り方向 'up'|'down'|'left'|'right'（向き推定結果）
+    flip        = false,
+    segments    = null,    // 段構成 { first, landing, straight }。直進では未使用(null)
+  } = {}) {
+    this.id          = id;
+    this.type        = type;
+    this.structure   = structure;
+    this.cells       = cells;
+    this.totalSteps  = totalSteps;
+    this.tread       = tread;
+    this.riser       = riser;
+    this.nosing      = nosing;
+    this.width       = width;
+    this.upDirection = upDirection;
+    this.flip        = flip;
+    this.segments    = segments;
+    makeObservable(this, {
+      type:        observable,
+      structure:   observable,
+      cells:       observable,
+      totalSteps:  observable,
+      tread:       observable,
+      riser:       observable,
+      nosing:      observable,
+      width:       observable,
+      upDirection: observable,
+      flip:        observable,
+      segments:    observable.ref,
+      setField:    action,
+      setCells:    action,
+    });
+  }
+  setField(field, value) { this[field] = value; }
+  setCells(cells)        { this.cells = cells; }
+}
+
 // ================================================================
 // STRUCTURAL ENTITIES — core/structuralEntities.js に分離。
 // PlanGraph が材種別→クラス解決表・キー生成・直接 new するクラスを import して使い、
@@ -773,6 +822,8 @@ export class PlanGraph {
     this.pointMap            = observable.map(); // id → Point (自由位置ノード)
     this.roomMap             = observable.map(); // id → Room
     this.roomOrder           = observable.array([]); // 仕上げ表の表示順 — Room ID の配列
+    this.stairMap            = observable.map(); // id → Stair（設置階に帰属）
+    this.stairOrder          = observable.array([]); // 階段の表示順 — Stair ID の配列
     this.exteriorRows        = observable.array([]); // 外部仕上げ行
     this.exteriorFittingRows = observable.array([]); // 外部建具仕上げ行
     this.structureRows       = observable.array([]); // 構造仕上げ行
@@ -876,6 +927,9 @@ export class PlanGraph {
       removeRoom:               action,
       reorderRooms:             action,
       rooms:                    computed,
+      addStair:                 action,
+      removeStair:              action,
+      stairs:                   computed,
       addExteriorRow:           action,
       removeExteriorRow:        action,
       removeExteriorRowGroup:   action,
@@ -1022,6 +1076,25 @@ export class PlanGraph {
 
   reorderRooms(newOrder) {
     this.roomOrder.replace(newOrder);
+  }
+
+  get stairs() {
+    return this.stairOrder
+      .filter(id => this.stairMap.has(id))
+      .map(id => this.stairMap.get(id));
+  }
+
+  addStair(opts = {}, id = crypto.randomUUID()) {
+    const stair = new Stair(id, opts);
+    this.stairMap.set(stair.id, stair);
+    this.stairOrder.push(stair.id);
+    return stair;
+  }
+
+  removeStair(id) {
+    this.stairMap.delete(id);
+    const idx = this.stairOrder.indexOf(id);
+    if (idx >= 0) this.stairOrder.splice(idx, 1);
   }
 
   addExteriorRow(category, part = '') {
@@ -1571,6 +1644,8 @@ export class PlanGraph {
     this.pointMap.clear();
     this.roomMap.clear();
     this.roomOrder.clear();
+    this.stairMap.clear();
+    this.stairOrder.clear();
     this.edgeMap.clear();
     this.columnMap.clear();
     this.beamMap.clear();

@@ -49,6 +49,17 @@ export const RoomKind = Object.freeze({
   EXTERIOR: 'exterior',  // 屋外
 });
 
+// 階段タイプ（MVPは STRAIGHT のみ実装。他は順次拡張）
+export const StairType = Object.freeze({
+  STRAIGHT:         'straight',         // 直進
+  STRAIGHT_LANDING: 'straight_landing', // 踊り場付直進
+  SWITCHBACK:       'switchback',       // 屈折（折り返し）
+  WINDING:          'winding',          // 回り
+  L_TURN:           'l_turn',           // 矩折
+  FLARED:           'flared',           // 曲がり
+  OPEN_WELL:        'open_well',        // 中空き
+});
+
 // 構造材の種別（柱・梁共通）
 export const StructuralMaterialType = Object.freeze({
   WOOD:  'WOOD',
