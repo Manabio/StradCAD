@@ -22,7 +22,6 @@ export class FinishModeState {
   dragState      = null; // { currentCell, visitedCells: Map } | null
   selectedRoomId = null;
   namingRoomId   = null;
-  subMode        = null; // null = 部屋指定 / 'stair' = 階段配置
   selectedStairId = null;
 
   // ---- 材データ（突入時ロード・離脱時破棄） ----
@@ -42,7 +41,6 @@ export class FinishModeState {
       dragState:      observable.ref,
       selectedRoomId: observable,
       namingRoomId:   observable,
-      subMode:         observable,
       selectedStairId: observable,
       materialsLoaded: observable,
       materialError:   observable,
@@ -57,9 +55,9 @@ export class FinishModeState {
       finishNaming: action,
       cancelNaming: action,
       deleteRoom:   action,
-      setSubMode:   action,
       selectStair:  action,
       deleteStair:  action,
+      convertRoomToStair: action,
     });
   }
 
@@ -176,10 +174,9 @@ export class FinishModeState {
     }
   }
 
-  commitDrag(floorHeight = null) {
+  commitDrag() {
     const state = this.dragState;
     if (!state) return;
-    if (this.subMode === 'stair') { this._commitStair(state, floorHeight); return; }
     const newCells = new Set(state.visitedCells.keys());
     if (newCells.size === 0) { this.dragState = null; return; }
 
@@ -374,9 +371,7 @@ export class FinishModeState {
     if (this.namingRoomId === roomId) this.namingRoomId = null;
   }
 
-  // ---- 階段配置 ----
-
-  setSubMode(sm) { this.subMode = sm; this.dragState = null; }
+  // ---- 階段 ----
 
   selectStair(id) { this.selectedStairId = id; }
 
@@ -385,11 +380,15 @@ export class FinishModeState {
     if (this.selectedStairId === id) this.selectedStairId = null;
   }
 
-  /** 選択エリアから階段タイプ・向きを推定し、Stair を生成して選択する。 */
-  _commitStair(state, floorHeight = null) {
-    const cells = new Set(state.visitedCells.keys());
-    this.dragState = null;
-    if (cells.size === 0) return;
+  /**
+   * 部屋名入力ダイアログで「階段」を選んだとき、その部屋を階段に変換する。
+   * 部屋セルからタイプ・向きを推定して Stair を生成し、部屋は削除する。
+   */
+  convertRoomToStair(roomId, floorHeight = null) {
+    const room = this.graph.roomMap.get(roomId);
+    if (!room) return null;
+    const cells = new Set(room.cells);
+    this.graph.removeRoom(roomId);
     const cls = classifyStairArea(cells, this.graph, floorHeight);
     const opts = {
       type: cls.type, cells, upDirection: cls.upDirection,
@@ -397,8 +396,10 @@ export class FinishModeState {
     };
     if (cls.totalSteps) opts.totalSteps = cls.totalSteps;
     const stair = this.graph.addStair(opts);
+    this.namingRoomId   = null;
+    this.selectedRoomId = null;
     this.selectedStairId = stair.id;
-    this.subMode = null; // 配置後は通常モードへ戻す
+    return stair;
   }
 
   get isDragging()   { return this.dragState !== null; }

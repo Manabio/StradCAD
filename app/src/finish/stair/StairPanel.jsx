@@ -1,6 +1,5 @@
 import { observer } from 'mobx-react-lite';
 import { StructuralMaterialType, StairType } from '@core';
-import { ModePanel } from '../../ui/ModePanel.jsx';
 import { computeStairDimensions, floorHeightAbove } from './stairDimensions.js';
 
 // 実装済みのタイプのみ選択肢に出す（未実装タイプは順次追加）
@@ -40,7 +39,8 @@ const labelStyle ={ fontSize: 12, color: '#475569', width: 64, flexShrink: 0 };
 const rowStyle   = { display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 };
 const inputStyle = { flex: 1, fontSize: 13, padding: '4px 6px', border: '1px solid #cbd5e1', borderRadius: 4 };
 
-export const StairPanel = observer(({ stair, project, onDelete, onClose }) => {
+// 階段パラメータ編集の中身（仕上げパレットの「階段」タブ内に配置）。
+export const StairEditor = observer(({ stair, project, onDelete }) => {
   if (!stair) return null;
 
   const floorHeight = floorHeightAbove(project, project?.activePlane);
@@ -69,8 +69,7 @@ export const StairPanel = observer(({ stair, project, onDelete, onClose }) => {
   };
 
   return (
-    <ModePanel title="階段" width={320} onClose={onClose}>
-      <div style={{ padding: 16, overflowY: 'auto' }}>
+    <div style={{ padding: 16, overflowY: 'auto' }}>
         <div style={{ fontSize: 12, color: '#64748b', marginBottom: 12 }}>
           {floorHeight != null ? `階高 ${Math.round(floorHeight)}mm` : '階高 未確定'}
         </div>
@@ -148,7 +147,6 @@ export const StairPanel = observer(({ stair, project, onDelete, onClose }) => {
         >
           階段を削除
         </button>
-      </div>
-    </ModePanel>
+    </div>
   );
 });

@@ -27,7 +27,6 @@ import { FinishModeLayer } from './finish/FinishModeLayer.jsx';
 import { RoomNameInput }   from './finish/RoomNameInput.jsx';
 import { FinishSidebar }   from './finish/FinishSidebar.jsx';
 import { FinishHalfModal } from './finish/FinishHalfModal.jsx';
-import { StairPanel }      from './finish/stair/StairPanel.jsx';
 import { StairLayer }      from './renderer/StairLayer.jsx';
 import { floorHeightAbove } from './finish/stair/stairDimensions.js';
 import { roomBounds }       from './finish/gridCells.js';
@@ -589,14 +588,7 @@ const App = observer(() => {
     // ---- 仕上げモード ----
     if (appMode === 'finish') {
       if (finishDragDownRef.current && modeRef.current?.dragState) {
-        const wasStair = modeRef.current?.subMode === 'stair';
-        modeRef.current?.commitDrag(floorHeightAbove(project, project.activePlane));
-        // 階段配置時: 上階へ不足中心線を追加（非アクティブ階を peek して IDB へ保存）
-        if (wasStair) {
-          import('./finish/stair/stairFloorSync.js')
-            .then(m => m.syncUpperFloorCLs(project, project.activeGraph))
-            .catch(console.error);
-        }
+        modeRef.current?.commitDrag();
       }
       finishDragDownRef.current = null;
       drag.current = null;
@@ -2983,45 +2975,24 @@ const App = observer(() => {
             viewport={viewport}
             onConfirm={(id, name) => modeRef.current?.finishNaming(id, name)}
             onCancel={id => modeRef.current?.cancelNaming(id)}
+            onConvertToStair={id => {
+              modeRef.current?.convertRoomToStair(id, floorHeightAbove(project, project.activePlane));
+              // 上階へ不足中心線を追加（非アクティブ階を peek して IDB へ保存）
+              import('./finish/stair/stairFloorSync.js')
+                .then(m => m.syncUpperFloorCLs(project, project.activeGraph))
+                .catch(console.error);
+            }}
           />
         ) : null;
       })()}
 
-      {/* 仕上げモード: 階段配置トグルボタン */}
-      {appMode === 'finish' && mode && !mode.namingRoomId && !mode.selectedStairId && (
-        <button
-          onClick={() => modeRef.current?.setSubMode(mode.subMode === 'stair' ? null : 'stair')}
-          style={{
-            position: 'fixed', left: 12, bottom: 8, zIndex: 210,
-            padding: '6px 12px', fontSize: 13, borderRadius: 4, cursor: 'pointer',
-            border: '1px solid ' + (mode.subMode === 'stair' ? '#2563eb' : '#cbd5e1'),
-            background: mode.subMode === 'stair' ? '#2563eb' : '#fff',
-            color: mode.subMode === 'stair' ? '#fff' : '#334155',
-          }}
-        >
-          {mode.subMode === 'stair' ? '階段配置中…（エリアをドラッグ）' : '階段を配置'}
-        </button>
-      )}
-
-      {/* 仕上げモード: 階段パラメータパネル */}
-      {appMode === 'finish' && mode?.selectedStairId && (() => {
-        const stair = graph.stairMap.get(mode.selectedStairId);
-        return stair ? (
-          <StairPanel
-            stair={stair}
-            project={project}
-            onDelete={id => modeRef.current?.deleteStair(id)}
-            onClose={() => modeRef.current?.selectStair(null)}
-          />
-        ) : null;
-      })()}
-
-      {/* 仕上げ表パネル */}
-      {appMode === 'finish' && mode && !mode.namingRoomId && !mode.selectedStairId && (
+      {/* 仕上げ表パネル（仕上げ表 / 階段 タブ） */}
+      {appMode === 'finish' && mode && !mode.namingRoomId && (
         isLandscape
           ? <FinishSidebar
               graph={graph}
               mode={mode}
+              project={project}
               selectedRoomId={mode.selectedRoomId}
               onSelectRoom={id => modeRef.current?.selectRoom(id)}
               floorName={floorName}
@@ -3029,6 +3000,7 @@ const App = observer(() => {
           : <FinishHalfModal
               graph={graph}
               mode={mode}
+              project={project}
               selectedRoomId={mode.selectedRoomId}
               onSelectRoom={id => modeRef.current?.selectRoom(id)}
               floorName={floorName}

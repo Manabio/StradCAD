@@ -1,6 +1,7 @@
 import { observer } from 'mobx-react-lite';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { ConfirmDialog } from '../ui/ConfirmDialog.jsx';
+import { StairTab } from './stair/StairTab.jsx';
 
 // ---- 内部仕上げ表 ----
 
@@ -154,6 +155,7 @@ const deleteButtonStyle = {
 
 const TABS = [
   { id: 'interior',  label: '内部' },
+  { id: 'stair',     label: '階段' },
   { id: 'exterior',  label: '外部' },
   { id: 'fittings',  label: '外部建具' },
   { id: 'structure', label: '構造' },
@@ -228,8 +230,10 @@ const CommonSpecTable = observer(({ graph, mode }) => (
 // FinishTable — タブ付きメイン
 // ================================================================
 
-export const FinishTable = observer(({ graph, mode, selectedRoomId, onSelectRoom, floorName }) => {
+export const FinishTable = observer(({ graph, mode, project, selectedRoomId, onSelectRoom, floorName }) => {
   const [activeTab, setActiveTab] = useState('interior');
+  // 階段が選択されたら「階段」タブへ自動切替
+  useEffect(() => { if (mode.selectedStairId) setActiveTab('stair'); }, [mode.selectedStairId]);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', flex: 1, overflow: 'hidden' }}>
@@ -270,6 +274,8 @@ export const FinishTable = observer(({ graph, mode, selectedRoomId, onSelectRoom
             onSelectRoom={onSelectRoom}
             floorName={floorName}
           />
+        : activeTab === 'stair'
+        ? <StairTab graph={graph} mode={mode} project={project} />
         : activeTab === 'common'
         ? <CommonSpecTable graph={graph} mode={mode} />
         : <ExteriorTable

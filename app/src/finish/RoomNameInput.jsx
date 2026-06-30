@@ -3,13 +3,15 @@ import { observer } from 'mobx-react-lite';
 import { roomBounds } from './gridCells.js';
 import { RoomKind } from '@core';
 
-const KIND_OPTIONS = [
-  { value: RoomKind.INTERIOR, label: '屋内' },
-  { value: RoomKind.VOID,     label: '吹抜け' },
-  { value: RoomKind.EXTERIOR, label: '屋外' },
+// 屋内 / 階段 / 吹抜け / 屋外。階段は RoomKind ではなく階段への変換アクション。
+const BUTTONS = [
+  { type: 'kind',  value: RoomKind.INTERIOR, label: '屋内' },
+  { type: 'stair',                           label: '階段' },
+  { type: 'kind',  value: RoomKind.VOID,     label: '吹抜け' },
+  { type: 'kind',  value: RoomKind.EXTERIOR, label: '屋外' },
 ];
 
-export const RoomNameInput = observer(({ room, graph, viewport, onConfirm, onCancel }) => {
+export const RoomNameInput = observer(({ room, graph, viewport, onConfirm, onCancel, onConvertToStair }) => {
   const [value, setValue] = useState(room.name || '');
   const inputRef = useRef(null);
 
@@ -63,25 +65,28 @@ export const RoomNameInput = observer(({ room, graph, viewport, onConfirm, onCan
         }}
       />
       <div style={{ display: 'flex', gap: 4 }}>
-        {KIND_OPTIONS.map(opt => (
-          <button
-            key={opt.value}
-            onClick={() => room.setKind(opt.value)}
-            style={{
-              flex: 1,
-              fontSize: 12,
-              padding: '5px 0',
-              borderRadius: 6,
-              border: room.kind === opt.value ? '1px solid #2563eb' : '1px solid #cbd5e1',
-              background: room.kind === opt.value ? '#eff6ff' : '#fff',
-              color: room.kind === opt.value ? '#2563eb' : '#475569',
-              fontWeight: room.kind === opt.value ? 700 : 400,
-              cursor: 'pointer',
-            }}
-          >
-            {opt.label}
-          </button>
-        ))}
+        {BUTTONS.map(opt => {
+          const active = opt.type === 'kind' && room.kind === opt.value;
+          return (
+            <button
+              key={opt.label}
+              onClick={() => opt.type === 'stair' ? onConvertToStair?.(room.id) : room.setKind(opt.value)}
+              style={{
+                flex: 1,
+                fontSize: 12,
+                padding: '5px 0',
+                borderRadius: 6,
+                border: active ? '1px solid #2563eb' : '1px solid #cbd5e1',
+                background: active ? '#eff6ff' : '#fff',
+                color: active ? '#2563eb' : '#475569',
+                fontWeight: active ? 700 : 400,
+                cursor: 'pointer',
+              }}
+            >
+              {opt.label}
+            </button>
+          );
+        })}
       </div>
       <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
         <button
