@@ -35,13 +35,14 @@ export const AxisFaceInput = observer(function AxisFaceInput({ editState, onChan
     setInputStr(str);
     if (str !== '' && isComplete(str)) {
       const v = safeEval(str);
-      if (!isNaN(v)) onChange(Math.abs(v)); // 出幅は通り芯からの距離＝正
+      // 符号を保持して渡す（外周軸では確定側で絶対値化、内部軸は符号＝移動の向き）。
+      if (!isNaN(v)) onChange(v);
     }
   }
 
   function confirm() {
     const v = safeEval(inputStrRef.current);
-    if (!isNaN(v)) onChange(Math.abs(v));
+    if (!isNaN(v)) onChange(v);
     onConfirm();
   }
 

@@ -364,9 +364,16 @@ const MemberCard = observer(({ members, group, graph, composition, project, read
         members.map(m => dim.axis === 'Y' ? m.horizontalCL : m.verticalCL)
           .filter(Boolean).map(c => [c.id, c]),
       ).values()];
-      for (const c of axisCLs) project.structuralInfo.setColumnFaceProjection(structure, c, Math.abs(value));
       const graphs = composition?.bindings?.map(b => b.graph) ?? [graph];
       const lowest = await resolveLowestGraph(project, graph);
+      // 出幅（柱面⇄通り芯）は外周軸のみ意味を持つ。内部軸の柱芯は描画エリアの柱芯ラベル（符号付き入力）で
+      // 制御するため、ここで abs 値に上書きしない（符号付き指定が潰れるのを防ぐ）。符号権威は最下階フットプリント。
+      const ex = buildExteriorSide(lowest);
+      const isVertical = dim.axis !== 'Y';
+      for (const c of axisCLs) {
+        if (axisExteriorSign(ex, lowest, c, isVertical) === 0) continue;
+        project.structuralInfo.setColumnFaceProjection(structure, c, Math.abs(value));
+      }
       for (const gg of graphs) {
         autoFillColumnAxisOffsets(gg, project, lowest);
         autoFillBeamEccentricity(gg, project); // 柱芯オフセット変更に梁の柱外面合わせを追従させる

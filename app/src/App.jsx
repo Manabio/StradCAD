@@ -59,9 +59,9 @@ import { CalibrationDialog }  from './ui/CalibrationDialog.jsx';
 import { SiteDialog }          from './ui/SiteDialog.jsx';
 import { BuildingInfoDialog }  from './ui/BuildingInfoDialog.jsx';
 import { StructuralPanel } from './structural/StructuralPanel.jsx';
-import { autoFillColumns, autoFillColumnAxisOffsets, autoFillBeamEccentricity, autoFillColumnSizes, resolveLowestGraph, convertMembersToEffectiveMaterial, deleteClassificationOverflow } from './structural/structuralAutoFill.js';
+import { autoFillColumns, autoFillColumnAxisOffsets, autoFillBeamEccentricity, autoFillColumnSizes, resolveLowestGraph, convertMembersToEffectiveMaterial, deleteClassificationOverflow, axisExteriorSign } from './structural/structuralAutoFill.js';
 import { structureHasMemberKind, MEMBER_KIND } from './structural/structuralClassification.js';
-import { buildStructuralWallGate } from './structural/wallGate.js';
+import { buildStructuralWallGate, buildExteriorSide } from './structural/wallGate.js';
 import { renumberAllCategories } from './structural/memberNumbering.js';
 import { recomputeStructuralForGraph, analyzeStructuralOverflow, deleteOverflowMembers } from './structural/structuralRecompute.js';
 import { syncRoofPlane } from './structural/roofPlane.js';
@@ -1839,13 +1839,17 @@ const App = observer(() => {
     const si  = project.structuralInfo;
     const key = si.faceProjectionKey(structure, cl);
     const oldRaw = si.columnFaceProjections.get(key); // undefined=未登録（移行既定にフォールバック中）
-    const newVal = Math.abs(projection ?? 0);
-    if (newVal === si.getColumnFaceProjection(structure, cl)) return; // 実効値に変化なし
 
     // 符号権威＝最下階フットプリント（resolveLowestGraph）。R階伏図など部屋の無い主題階を権威にすると
     // buildExteriorSide が部材CL外接矩形へ縮退し、L字ノッチ中通り（X2/Y2）の偏芯が0へ崩れる
     // （再計算 structuralRecompute と同じ単一権威に揃える）。
     const lowest = await resolveLowestGraph(project, graph);
+    // 外周軸は出幅＝通り芯からの距離＝正（向きはフットプリント）。内部軸は外側方向が無いので、
+    // 入力符号を移動の向きとして保持する（autoFillColumnAxisOffsets が X:+右/−左、Y:+上/−下 で解釈）。
+    const isVertical = cl.centerLineType === CenterLineType.VERTICAL;
+    const isExterior = axisExteriorSign(buildExteriorSide(lowest), lowest, cl, isVertical) !== 0;
+    const newVal = isExterior ? Math.abs(projection ?? 0) : (projection ?? 0);
+    if (newVal === si.getColumnFaceProjection(structure, cl)) return; // 実効値に変化なし
     const refill = () => {
       const graphs = structComposition?.bindings?.map(b => b.graph) ?? [graph];
       for (const gg of graphs) {

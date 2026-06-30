@@ -373,10 +373,17 @@ export function autoFillColumnAxisOffsets(graph, project, lowestGraph = graph, e
   for (const [axisCLs, isVertical] of [[graph.gridXs, true], [graph.gridYs, false]]) {
     for (const cl of axisCLs) {
       const s = axisExteriorSign(ex, lowestGraph, cl, isVertical);
-      // 出幅は1構造×1通り芯。当該実効構造・このCLの値を引く（混構造は構造ごと、X/Y通り芯ごとに別値）。
+      // 1構造×1通り芯の値を引く（混構造は構造ごと、X/Y通り芯ごとに別値）。外周軸は正の出幅、
+      // 内部軸は符号付きの柱芯移動指示（描画エリアの柱芯ラベルで入力）を表す。
       const projection = project.structuralInfo.getColumnFaceProjection(effective, cl);
-      // 内部芯(s=0)は偏芯0。外周芯は出幅で外面を、自階の柱幅で柱芯を決める（柱芯は常に通り芯の内側）。
-      graph.setColumnAxisOffset(cl.id, s === 0 ? 0 : s * (halfThis + projection));
+      const mag = halfThis + Math.abs(projection); // 柱半幅＋出幅相当（柱芯の移動量）
+      // 外周芯(s≠0): 向きはフットプリント。出幅で外面を、自階の柱幅で柱芯を決める（柱芯は常に通り芯の内側）。
+      // 内部芯(s=0): 外側方向が無いので入力値の符号を向きにする（X:+右/−左、Y:+上(−y)/−下(+y)＝y軸下向き正）。
+      // 入力0は偏芯0。
+      const offset = s !== 0
+        ? s * mag
+        : (projection === 0 ? 0 : (isVertical ? Math.sign(projection) : -Math.sign(projection)) * mag);
+      graph.setColumnAxisOffset(cl.id, offset);
     }
   }
 }
