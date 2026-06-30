@@ -6,73 +6,26 @@
 import { makeObservable, observable, computed, action, reaction } from 'mobx';
 import createGraph from 'ngraph.graph';
 import { INTERIOR_MASTERS } from './finish/materials/interiorMasters.js';
-import { findSectionEntry, diaphragmProjection } from './structural/sectionCatalog.js';
+import { coordLo as _coordLo, coordHi as _coordHi } from './core/_internal.js';
 
 // ================================================================
-// CONSTANTS
+// CONSTANTS — core/constants.js に集約。core.js が内部使用しつつ後方互換のため再エクスポートする。
 // ================================================================
 
-export const Discipline = Object.freeze({
-  ARCH:   'arch',    // 意匠
-  STRUCT: 'struct',  // 構造
-  FUSE:   'fuse',    // 伏図
-  MEP:    'mep',     // 設備
-  ELEC:   'elec',    // 電気
-});
+import {
+  Discipline, ShapeType, ShapeKind, CenterLineType, RoomKind,
+  LINE_WEIGHT_MM, DimensionKind, DimensionSide,
+  DEFAULT_INTERIOR_WALL_PANEL, DEFAULT_EXTERIOR_WALL_BACKING,
+  DEFAULT_INTERIOR_WALL_BACKING, DEFAULT_CEILING_BACKING, DEFAULT_FLOOR_BACKING,
+} from './core/constants.js';
 
-export const ShapeType = Object.freeze({
-  VERTICAL:   'vertical',
-  HORIZONTAL: 'horizontal',
-  DIAGONAL:   'diagonal',
-  ARC:        'arc',
-  CIRCLE:     'circle',
-  WALL:       'wall',
-  OPENING:    'opening',
-});
-
-// 開口の大区分: 建具(戸) / 窓
-export const OpeningCategory = Object.freeze({
-  FITTING: 'fitting',
-  WINDOW:  'window',
-});
-
-// 図形の種別: 一般図形 / 寸法図形
-export const ShapeKind = Object.freeze({
-  GENERAL:   'general',    // 一般図形 — 壁・開口・仕上げ等
-  DIMENSION: 'dimension',  // 寸法図形 — 中心線・おさえ
-});
-
-// 中心線の軸種別 — 自動命名の接頭辞と整列基準を決定する
-export const CenterLineType = Object.freeze({
-  VERTICAL:   'X',  // 垂直中心線 — value = x座標, 左→右昇順で X1, X2, ...
-  HORIZONTAL: 'Y',  // 水平中心線 — value = y座標, 下→上昇順で Y1, Y2, ...
-  RADIAL:     'R',  // 放射中心線 — value = 角度(度),  挿入順で  R1, R2, ...
-});
-
-// 部屋の内外区分
-export const RoomKind = Object.freeze({
-  INTERIOR: 'interior',  // 屋内
-  VOID:     'void',      // 吹抜け
-  EXTERIOR: 'exterior',  // 屋外
-});
-
-// 構造材の種別（柱・梁共通）
-export const StructuralMaterialType = Object.freeze({
-  WOOD:  'WOOD',
-  STEEL: 'STEEL',
-  RC:    'RC',
-});
-
-// 画面描画における線の太さの標準パレット（mm）。出図A2/A3セット準拠。
-// ワールドmm系（Shape.lineWeight、構造部材の輪郭線）と
-// 画面定数系（viewport.lineWeightsPx）の両方がこの定義だけを参照する。
-// A1・A4/A5以下セットは出図機能の実装時に追加する。
-export const LINE_WEIGHT_MM = Object.freeze({
-  ultraThick: 0.5,
-  thick:      0.35,
-  medium:     0.25,
-  thin:       0.13,
-});
+export {
+  Discipline, ShapeType, OpeningCategory, ShapeKind, CenterLineType, RoomKind,
+  StructuralMaterialType, LINE_WEIGHT_MM, DimensionKind, DimensionSide,
+  DEFAULT_INTERIOR_WALL_PANEL, DEFAULT_EXTERIOR_WALL_BACKING,
+  DEFAULT_INTERIOR_WALL_BACKING, DEFAULT_CEILING_BACKING, DEFAULT_FLOOR_BACKING,
+  SiteLineKind,
+} from './core/constants.js';
 
 // ================================================================
 // POINT (自由位置ノード)
@@ -454,19 +407,6 @@ export class CenterLine extends Shape {
 // セグメント長は to.value - from.value を整数 mm に丸めて表示。
 // ================================================================
 
-export const DimensionKind = Object.freeze({
-  GRID:    'grid',     // 通り芯寸法
-  CENTER:  'center',   // 中心線寸法
-  CONTROL: 'control',  // おさえ寸法
-});
-
-export const DimensionSide = Object.freeze({
-  TOP:    'top',
-  BOTTOM: 'bottom',
-  LEFT:   'left',
-  RIGHT:  'right',
-});
-
 // ----------------------------------------------------------------
 // 寸法アンカー
 //   cl 参照型: CL.value に追従(live)
@@ -683,13 +623,6 @@ export class ExteriorFinishRow {
   setField(field, value) { this[field] = value; }
 }
 
-// per-floor の既定材コード（材マスタ materialData.js 参照）
-export const DEFAULT_INTERIOR_WALL_PANEL   = '111111111166'; // 内壁: せっこうボード t=12.5（面材）
-export const DEFAULT_EXTERIOR_WALL_BACKING = '111111111155'; // 外壁下地: □-90×45 間柱（下地材）
-export const DEFAULT_INTERIOR_WALL_BACKING = '111111111155'; // 内壁下地: □-90×45 間柱（下地材）
-export const DEFAULT_CEILING_BACKING       = '111111111162'; // 天井下地: □-45×36 杉等・野縁（下地材、表示のみ）
-export const DEFAULT_FLOOR_BACKING         = '111111111157'; // 床下地: □-60×45 杉・松等・床根太（下地材、表示のみ）
-
 // cells は Set<string> — cellKey(xLeftCL, yTopCL) の集合
 export class Room {
   constructor(id, name = '', cells = new Set(), referenceRoomIds = new Set(),
@@ -755,535 +688,27 @@ export class Room {
 }
 
 // ================================================================
-// STRUCTURAL ENTITIES (構造モード — ラーメン構造の柱・梁)
-//
-// 柱・梁は自前の座標 (x,y) を持たず、既存 CenterLine の effectiveValue から
-// 都度導出する（「CLが座標の源泉」の原則を継承）。
-//   柱（StructuralColumn）: Intersection と同じ「垂直CL × 水平CL」の組で位置を導出
-//   梁（StructuralBeam）  : Wall と同じ「軸CL + 始端CL + 終端CL」の組を流用
-//
-// PlanGraph 側の columnMap/beamMap 管理・永続化（FlatBuffers）は別途対応する
-// （壁式構造・配置UI本実装と合わせて今回のスコープ外）。
+// STRUCTURAL ENTITIES — core/structuralEntities.js に分離。
+// PlanGraph が材種別→クラス解決表・キー生成・直接 new するクラスを import して使い、
+// 後方互換のため公開クラス／関数を再エクスポートする
+// （StructuralEntity / StructuralFooting は元から非公開のため再エクスポートしない）。
 // ================================================================
 
-// トポロジー自動補完の除外集合（PlanGraph.excludedColumnSlots/excludedBeamSlots）で使うキー生成。
-// structural/structuralAutoFill.js からも同じキー形式で参照するため export する。
-export function columnSlotKey(verticalCL, horizontalCL) {
-  return `${verticalCL.id}:${horizontalCL.id}`;
-}
-// 梁・耐力壁のスパンキー。始端・終端の順序に依存しないよう CL id を昇順に正規化する。
-export function spanKey(axisCL, clA, clB) {
-  return `${axisCL.id}:${[clA.id, clB.id].sort().join(':')}`;
-}
+import {
+  COLUMN_CLASS_BY_MATERIAL, BEAM_CLASS_BY_MATERIAL,
+  WALL_CLASS_BY_MATERIAL, SLAB_CLASS_BY_MATERIAL,
+  IndependentFooting, ColumnBase, RcWallOpening, PenetrationSleeve,
+  columnSlotKey, spanKey,
+} from './core/structuralEntities.js';
 
-class StructuralEntity {
-  constructor(id, materialType, sectionDefId, props = {}) {
-    this.id           = id;
-    this.materialType = materialType; // StructuralMaterialType の値
-    this.sectionDefId = sectionDefId; // 断面形状マスターへの参照ID（マスタ本体は次フェーズ）
-    this.memberNo     = null; // 部材番号（荷重バンドから決定的に自動採番、手動編集も可）
-    // 部材番号の手動ロック。true のとき自動採番（renumberMembers）で上書きしない（手動編集タグを保持）。
-    this.memberNoLocked = props.memberNoLocked ?? false;
-    // 寸法の3状態（Tri-state）。'auto'=自動算定値そのまま | 'locked'=手動固定（自動算定で上書きしない）
-    // | 'calculated'=構造計算のチェックを通過（現状は暫定の手動トグル。本物の計算ロジックは次フェーズ）。
-    this.dimensionStatus = props.dimensionStatus ?? 'auto';
-    makeObservable(this, {
-      sectionDefId:     observable,
-      memberNo:         observable,
-      memberNoLocked:   observable,
-      dimensionStatus:  observable,
-      setMemberNo:      action,
-      setMemberNoLocked: action,
-      setDimensionStatus: action,
-      setField:         action,
-    });
-  }
-  setMemberNo(no) { this.memberNo = no; }
-  setMemberNoLocked(locked) { this.memberNoLocked = locked; }
-  setDimensionStatus(status) { this.dimensionStatus = status; }
-  /** 構造リストタブのフォームから単一フィールドを更新する汎用セッター（StructuralInfo.setField と同型）。 */
-  setField(key, value) { this[key] = value; }
-}
-
-// ----------------------------------------------------------------
-// 柱（StructuralColumn・抽象） — Intersection と同じ「垂直CL × 水平CL」導出方式
-//
-//   x = verticalCL.effectiveValue   + eccentricity.x
-//   y = horizontalCL.effectiveValue + eccentricity.y
-//
-// eccentricity は平面 2 軸（柱は点なので XY どちらの方向にもズレ得るため、
-// Wall.axisOffset のようなスカラーでは表現できない）。
-// ----------------------------------------------------------------
-export class StructuralColumn extends StructuralEntity {
-  constructor(id, materialType, sectionDefId, verticalCL, horizontalCL, props = {}) {
-    super(id, materialType, sectionDefId, props);
-    this.verticalCL   = verticalCL;   // 柱が立つ交点の垂直CL（X系）
-    this.horizontalCL = horizontalCL; // 柱が立つ交点の水平CL（Y系）
-    this.eccentricity = props.eccentricity ?? { x: 0, y: 0 }; // 柱芯からの個別偏心量(mm)
-    this.rotation     = props.rotation ?? 0; // 平面上の配置角度（強軸・弱軸の向き）
-    // 杭は柱と同一クラス（A-1は断面の縦横比だけで柱状/箱状を区別、データ構造は同一という方針）。
-    // role='foundation' で杭を表現する（新規サブクラスは作らない）。
-    this.role         = props.role         ?? 'standard'; // 'standard' | 'foundation'（杭）
-    this.topLevel     = props.topLevel     ?? 0;    // 上端レベル(mm、floorDatum基準)
-    this.bottomLevel  = props.bottomLevel  ?? null; // 下端レベル(mm)。杭は下端=杭先端深度として使用
-    this.pileType     = props.pileType     ?? '既製杭'; // role==='foundation'のときのみ意味を持つ
-    this.pileDiameter = props.pileDiameter ?? null;     // 杭径(mm)
-    // 柱が支える概算負担床面積から算定した柱幅（mm）。柱脚サイズ算定の入力値。
-    // sectionDefId（カタログ断面）には連動しない参考値（structural/memberSizing.js）。
-    this.tributaryWidth = props.tributaryWidth ?? null;
-    this._planGraph   = null; // PlanGraph が addColumn/convertColumnMaterial 時にセット（columnAxisOffsets参照用）
-    makeObservable(this, {
-      verticalCL:   observable.ref,
-      horizontalCL: observable.ref,
-      eccentricity: observable,
-      rotation:     observable,
-      role:         observable,
-      topLevel:     observable,
-      bottomLevel:  observable,
-      pileType:     observable,
-      pileDiameter: observable,
-      tributaryWidth: observable,
-      x: computed,
-      y: computed,
-    });
-  }
-  // x/y = 通り芯 + 柱芯オフセット（columnAxisOffsets。ラーメン系のみ非0） + 個別偏心量
-  get x() { return _gridX(this); }
-  get y() { return _gridY(this); }
-}
-
-export class WoodColumn extends StructuralColumn {
-  constructor(id, sectionDefId, verticalCL, horizontalCL, props = {}) {
-    super(id, StructuralMaterialType.WOOD, sectionDefId, verticalCL, horizontalCL, props);
-    this.columnType  = props.columnType  ?? '管柱'; // '管柱' | '通し柱' | '隅柱'
-    this.woodSpecies = props.woodSpecies ?? '杉';
-    makeObservable(this, { columnType: observable, woodSpecies: observable });
-  }
-}
-
-export class SteelColumn extends StructuralColumn {
-  constructor(id, sectionDefId, verticalCL, horizontalCL, props = {}) {
-    super(id, StructuralMaterialType.STEEL, sectionDefId, verticalCL, horizontalCL, props);
-    this.basePlateDefId = props.basePlateDefId ?? 'BP-DEFAULT';
-    makeObservable(this, { basePlateDefId: observable });
-  }
-}
-
-export class RcColumn extends StructuralColumn {
-  constructor(id, sectionDefId, verticalCL, horizontalCL, props = {}) {
-    super(id, StructuralMaterialType.RC, sectionDefId, verticalCL, horizontalCL, props);
-    this.mainBars = props.mainBars ?? { count: 4, size: 'D19' };
-    this.hoopBars = props.hoopBars ?? { size: 'D10', pitch: 100 };
-    makeObservable(this, { mainBars: observable, hoopBars: observable });
-  }
-}
-
-// ----------------------------------------------------------------
-// 梁（StructuralBeam・抽象） — Wall と同じ「軸CL + 始端CL + 終端CL」方式
-//
-//   axisValue = axisCL.effectiveValue + eccentricity
-//   coord1    = clStart.effectiveValue
-//   coord2    = clEnd.effectiveValue
-//
-// eccentricity は軸直交方向 1 軸のみのスカラー（Wall.axisOffset と同じ発想。
-// 梁の長さ方向は clStart/clEnd で決まるため、もう1自由度は存在しない）。
-// ----------------------------------------------------------------
-export class StructuralBeam extends StructuralEntity {
-  constructor(id, materialType, sectionDefId, axisCL, isVertical, clStart, clEnd, props = {}) {
-    super(id, materialType, sectionDefId, props);
-    this.axisCL         = axisCL;     // 梁が沿う通り芯
-    this.isVertical      = isVertical;
-    this.clStart         = clStart;   // 始端の直交CL
-    this.clEnd           = clEnd;     // 終端の直交CL
-    this.eccentricity    = props.eccentricity ?? 0; // 柱芯からの個別偏心量(mm。材芯=柱芯+eccentricity)
-    // 柱外面と梁縁のギャップ(mm。0=面一)。eccentricity の自動算出の基準（ラベル毎に共有する指定値）。
-    // eccentricity は派生値: s*((梁幅-既定柱幅)/2 + faceGap)。s=外周側符号。structuralAutoFill.autoBeamEccentricity 参照。
-    this.faceGap         = props.faceGap ?? 0;
-    this.jointCondition  = props.jointCondition ?? { start: 'RIGID', end: 'RIGID' }; // 剛接合=ラーメン既定
-    // 小梁・基礎梁・軒桁・母屋・垂木はサブクラスを増やさず role + 既定値の組み合わせで表現する。
-    this.role             = props.role             ?? 'primary'; // primary/secondary/foundation/eaves/roof
-    this.levelOffset      = props.levelOffset      ?? 0; // 梁全体の基準レベル(mm、floorDatum基準)
-    this.startLevelOffset = props.startLevelOffset ?? 0; // levelOffsetからの始端追加オフセット（屋根部材の勾配用）
-    this.endLevelOffset   = props.endLevelOffset   ?? 0; // levelOffsetからの終端追加オフセット
-    // 梁幅b・梁成D（mm）。基礎梁(role:'foundation')のみ自動算定対象（structural/memberSizing.js）。
-    // sectionDefId（カタログ断面）には連動しない参考値（columnのtributaryWidthと同じ位置づけ）。
-    this.beamWidth = props.beamWidth ?? null;
-    this.beamDepth = props.beamDepth ?? null;
-    // 木造基礎梁（role:'foundation'）の断面詳細寸法（問題.md）。基礎種別ごとのベース／べた基礎の合成断面を
-    // 編集可能フィールドとして保持する。非基礎梁は null（断面図がデフォルト値で補完するため未編集分は持たない）。
-    //   embedDepth    : 基礎梁の地中部（GL下。立ち上がり = beamDepth − embedDepth）
-    //   baseWidth/baseThickness/baseOverhang : ベース幅・厚・屋外側張り出し（なし／土間コン）
-    //   matThickness/matTopAboveGL           : べた基礎の厚・天端（GL+）
-    this.foundationSection = props.foundationSection ?? null;
-    this._planGraph        = null; // PlanGraph が addBeam/convertBeamMaterial 時にセット（columnAxisOffsets参照用）
-    makeObservable(this, {
-      clStart:          observable.ref,
-      clEnd:            observable.ref,
-      eccentricity:     observable,
-      faceGap:          observable,
-      jointCondition:   observable,
-      role:             observable,
-      levelOffset:      observable,
-      startLevelOffset: observable,
-      endLevelOffset:   observable,
-      beamWidth:        observable,
-      beamDepth:        observable,
-      foundationSection: observable,
-      axisValue: computed,
-      coord1:    computed,
-      coord2:    computed,
-    });
-  }
-  // axisValue = 通り芯 + 柱芯オフセット（columnAxisOffsets。ラーメン系のみ非0） + 個別偏心量
-  get axisValue() {
-    return this.axisCL.effectiveValue + _axisOffset(this._planGraph, this.axisCL.id) + this.eccentricity;
-  }
-  // 端部の直交CLに立つ柱を columns から探す（垂直梁はaxisCLが垂直CL・perpCLが水平CL、水平梁はその逆）。
-  // columns は「その伏図に表示される柱集合」——構造モードでは1つ下の階の柱。梁はその表示中の柱の断面手前で
-  // 止めるため、自階graph(_planGraph)固定ではなく描画対象の柱集合を外から受け取る（spanForColumns 経由）。
-  _columnAtEnd(perpCL, columns) {
-    const verticalCL   = this.isVertical ? this.axisCL : perpCL;
-    const horizontalCL  = this.isVertical ? perpCL : this.axisCL;
-    return columns.find(
-      c => c.verticalCL.id === verticalCL.id && c.horizontalCL.id === horizontalCL.id
-    ) ?? null;
-  }
-  // 端部の中心座標と、柱断面の梁方向半幅（柱が無い端部は中心=CL位置+柱芯オフセット、半幅=0）。
-  // 柱がある端部は柱の実位置（個別偏心込み）を中心とし、断面寸法を柱の回転角で投影した半幅だけ手前で止める。
-  _endCenterAndHalfWidth(perpCL, columns, diaphragm = false) {
-    const column = this._columnAtEnd(perpCL, columns);
-    if (!column) {
-      return { center: perpCL.effectiveValue + _axisOffset(this._planGraph, perpCL.id), half: 0 };
-    }
-    const center = this.isVertical ? column.y : column.x;
-    const sec = findSectionEntry(column.sectionDefId);
-    if (!sec) return { center, half: 0 };
-    const rad = (column.rotation ?? 0) * Math.PI / 180;
-    // 詳細描画では梁をダイヤフラム（断面+e の四角）まで止める。e は鋼管のみ非0。
-    const e = diaphragm ? diaphragmProjection(sec) : 0;
-    const w = sec.width + 2 * e, h = sec.height + 2 * e;
-    const extent = this.isVertical
-      ? Math.abs(w * Math.sin(rad)) + Math.abs(h * Math.cos(rad))
-      : Math.abs(w * Math.cos(rad)) + Math.abs(h * Math.sin(rad));
-    return { center, half: extent / 2 };
-  }
-  // 表示する柱集合 columns に対し、両端を柱断面手前で止めた始終端座標を返す。
-  // 伏図で別階の柱を表示する場合はレンダラが表示中の柱集合を渡す（StructuralLayer.jsx）。
-  // opts.diaphragm=true（詳細描画）なら鋼管柱はダイヤフラム端で止める（梁はダイヤフラムまで）。
-  spanForColumns(columns, { diaphragm = false } = {}) {
-    const a = this._endCenterAndHalfWidth(this.clStart, columns, diaphragm);
-    const b = this._endCenterAndHalfWidth(this.clEnd, columns, diaphragm);
-    const dir = Math.sign(b.center - a.center) || 1;
-    return { coord1: a.center + dir * a.half, coord2: b.center - dir * b.half };
-  }
-  // coord1/coord2 = 柱がある端部は柱の断面手前（柱の中心ではなく断面まで）、無ければCL位置まで（自階graphの柱基準）。
-  get coord1() { return this.spanForColumns(this._planGraph?.columns ?? []).coord1; }
-  get coord2() { return this.spanForColumns(this._planGraph?.columns ?? []).coord2; }
-}
-
-export class WoodBeam extends StructuralBeam {
-  constructor(id, sectionDefId, axisCL, isVertical, clStart, clEnd, props = {}) {
-    super(id, StructuralMaterialType.WOOD, sectionDefId, axisCL, isVertical, clStart, clEnd, {
-      ...props,
-      jointCondition: props.jointCondition ?? { start: 'PIN', end: 'PIN' }, // 木造は基本ピン接合
-    });
-    this.beamType = props.beamType ?? '大梁'; // '大梁' | '小梁' | '桁' | '小屋梁'
-    makeObservable(this, { beamType: observable });
-  }
-}
-
-export class SteelBeam extends StructuralBeam {
-  constructor(id, sectionDefId, axisCL, isVertical, clStart, clEnd, props = {}) {
-    super(id, StructuralMaterialType.STEEL, sectionDefId, axisCL, isVertical, clStart, clEnd, props);
-    this.isCambered     = props.isCambered     ?? false;
-    this.stiffenerCount = props.stiffenerCount ?? 0;
-    makeObservable(this, { isCambered: observable, stiffenerCount: observable });
-  }
-}
-
-export class RcBeam extends StructuralBeam {
-  constructor(id, sectionDefId, axisCL, isVertical, clStart, clEnd, props = {}) {
-    super(id, StructuralMaterialType.RC, sectionDefId, axisCL, isVertical, clStart, clEnd, props);
-    this.topMainBars    = props.topMainBars    ?? { count: 3, size: 'D22' };
-    this.bottomMainBars = props.bottomMainBars ?? { count: 3, size: 'D22' };
-    this.stirrupBars    = props.stirrupBars    ?? { size: 'D10', pitch: 200 };
-    makeObservable(this, { topMainBars: observable, bottomMainBars: observable, stirrupBars: observable });
-  }
-}
-
-// materialType（StructuralMaterialType）→ サブクラスの解決表（PlanGraph.addColumn/addBeam 用）
-const COLUMN_CLASS_BY_MATERIAL = Object.freeze({
-  [StructuralMaterialType.WOOD]:  WoodColumn,
-  [StructuralMaterialType.STEEL]: SteelColumn,
-  [StructuralMaterialType.RC]:    RcColumn,
-});
-const BEAM_CLASS_BY_MATERIAL = Object.freeze({
-  [StructuralMaterialType.WOOD]:  WoodBeam,
-  [StructuralMaterialType.STEEL]: SteelBeam,
-  [StructuralMaterialType.RC]:    RcBeam,
-});
-
-// ----------------------------------------------------------------
-// 基礎・柱脚（StructuralFooting・抽象） — StructuralColumn と同じ「垂直CL × 水平CL」導出方式だが
-// 継承関係は持たない（柱状(A-1)/箱状(A-2)の意味的区別をクラス階層でも保つ）。
-//
-//   x = verticalCL.effectiveValue   + eccentricity.x
-//   y = horizontalCL.effectiveValue + eccentricity.y
-// ----------------------------------------------------------------
-class StructuralFooting extends StructuralEntity {
-  constructor(id, materialType, sectionDefId, verticalCL, horizontalCL, props = {}) {
-    super(id, materialType, sectionDefId, props);
-    this.verticalCL    = verticalCL;
-    this.horizontalCL  = horizontalCL;
-    this.eccentricity  = props.eccentricity  ?? { x: 0, y: 0 };
-    this.topLevel       = props.topLevel       ?? null; // 上端レベル(mm)。既定: 直上の柱/柱脚の下端
-    this.bottomLevel    = props.bottomLevel    ?? null; // 下端レベル(mm)
-    this.sectionShape   = props.sectionShape   ?? 'rect'; // 'rect' | 'round'
-    this.widthX         = props.widthX         ?? 1000; // 矩形: Wx（丸の場合は直径として widthX のみ使用）
-    this.widthY         = props.widthY         ?? 1000; // 矩形: Wy（丸の場合は無視）
-    this._planGraph      = null; // PlanGraph が addFooting 時にセット（columnAxisOffsets参照用。直上の柱と位置を揃える）
-    makeObservable(this, {
-      verticalCL:   observable.ref,
-      horizontalCL: observable.ref,
-      eccentricity: observable,
-      topLevel:     observable,
-      bottomLevel:  observable,
-      sectionShape: observable,
-      widthX:       observable,
-      widthY:       observable,
-      x: computed,
-      y: computed,
-    });
-  }
-  // x/y = 通り芯 + 柱芯オフセット（直上の柱・杭と同じ基準で揃える） + 個別偏心量
-  get x() { return _gridX(this); }
-  get y() { return _gridY(this); }
-}
-
-// 独立フーチング（基礎） — 柱・杭の直下に置かれる、最も広がった箱
-export class IndependentFooting extends StructuralFooting {
-  constructor(id, sectionDefId, verticalCL, horizontalCL, props = {}) {
-    super(id, props.materialType ?? StructuralMaterialType.RC, sectionDefId, verticalCL, horizontalCL, props);
-    this.footingType = props.footingType ?? '独立基礎'; // '独立基礎' | '複合基礎'
-    this.mainBars    = props.mainBars    ?? { size: 'D13', pitch: 200 };
-    this.supportType = props.supportType ?? '直接基礎'; // '直接基礎' | '杭基礎'
-    makeObservable(this, { footingType: observable, mainBars: observable, supportType: observable });
-  }
-}
-
-// 柱脚 — 柱と基礎/杭頭の間に入る箱状の接合部材。鉄骨/RCの材質分岐はサブクラスを分けず、
-// 両フィールド群を共存させ materialType で使う方を切り替える（コンストラクタの簡潔さ優先）。
-export class ColumnBase extends StructuralFooting {
-  constructor(id, sectionDefId, verticalCL, horizontalCL, props = {}) {
-    super(id, props.materialType ?? StructuralMaterialType.RC, sectionDefId, verticalCL, horizontalCL, props);
-    this.baseType        = props.baseType        ?? '固定'; // '露出' | '埋込' | 'ピン' | '固定'
-    this.basePlateDefId  = props.basePlateDefId  ?? null; // 鉄骨のみ
-    this.anchorBoltCount = props.anchorBoltCount ?? null; // 鉄骨のみ
-    this.anchorBoltSize  = props.anchorBoltSize  ?? null; // 鉄骨のみ
-    this.mainBars        = props.mainBars        ?? null; // RCのみ
-    // 基礎柱(ペデスタル)の埋込み深さ・全高(mm)。柱の負担床面積から算定したtributaryWidthの2.3倍を既定値とする
-    // （structural/memberSizing.js）。IndependentFootingには持たせない（種別判定は'pedestalDepth' in entity）。
-    this.pedestalDepth   = props.pedestalDepth   ?? null;
-    makeObservable(this, {
-      baseType: observable, basePlateDefId: observable,
-      anchorBoltCount: observable, anchorBoltSize: observable, mainBars: observable,
-      pedestalDepth: observable,
-    });
-  }
-}
-
-// ----------------------------------------------------------------
-// 耐力壁（StructuralWall・抽象） — StructuralBeam と同じ「軸CL + 始端CL + 終端CL」導出方式
-//
-//   axisValue = axisCL.effectiveValue + eccentricity
-//   coord1    = clStart.effectiveValue
-//   coord2    = clEnd.effectiveValue
-//   length    = |coord2 - coord1|
-//
-// 架構の Wall と異なり startOffset/endOffset（面取り対応）を持たない —
-// 耐力壁は柱・梁と同じく配置インタラクションで直接生成・削除され、
-// 仕上げモードのような全削除→再生成サイクルが無いため、自動面取りの対象外。
-// ----------------------------------------------------------------
-export class StructuralWall extends StructuralEntity {
-  constructor(id, materialType, sectionDefId, axisCL, isVertical, clStart, clEnd, props = {}) {
-    super(id, materialType, sectionDefId, props);
-    this.axisCL       = axisCL;     // 壁が沿う通り芯
-    this.isVertical   = isVertical;
-    this.clStart      = clStart;    // 始端の直交CL
-    this.clEnd        = clEnd;      // 終端の直交CL
-    this.eccentricity = props.eccentricity ?? 0;   // axisCLからの符号付き偏心量(mm)
-    this.thickness    = props.thickness    ?? 180; // 壁厚(mm) — 連続値の設計パラメータのため直接保持
-    this.bottomLevel  = props.bottomLevel  ?? 0;    // 高さ範囲・下端レベル(mm、floorDatum基準)
-    this.topLevel     = props.topLevel     ?? null; // 高さ範囲・上端レベル(mm)。null=階高から自動
-    // 耐力壁の種別（問題.md）。RC造='rc'（厚指定）／S造='none'|'brace'|'steelPlate'。
-    // 現状クラスはRC専用だが、S造の種別選択はメタ属性として保持する（新クラスは次フェーズ）。
-    this.wallType     = props.wallType     ?? 'rc'; // 'rc' | 'none' | 'brace' | 'steelPlate'
-    makeObservable(this, {
-      clStart:      observable.ref,
-      clEnd:        observable.ref,
-      eccentricity: observable,
-      thickness:    observable,
-      bottomLevel:  observable,
-      topLevel:     observable,
-      wallType:     observable,
-      axisValue: computed,
-      coord1:    computed,
-      coord2:    computed,
-      length:    computed,
-    });
-  }
-  get axisValue() { return this.axisCL.effectiveValue + this.eccentricity; }
-  get coord1()    { return this.clStart.effectiveValue; }
-  get coord2()    { return this.clEnd.effectiveValue; }
-  get length()    { return Math.abs(this.coord2 - this.coord1); }
-}
-
-export class RcBearingWall extends StructuralWall {
-  constructor(id, sectionDefId, axisCL, isVertical, clStart, clEnd, props = {}) {
-    super(id, StructuralMaterialType.RC, sectionDefId, axisCL, isVertical, clStart, clEnd, props);
-    this.verticalBars   = props.verticalBars   ?? { size: 'D10', pitch: 200 }; // たて筋
-    this.horizontalBars = props.horizontalBars ?? { size: 'D10', pitch: 200 }; // よこ筋
-    makeObservable(this, {
-      verticalBars:   observable,
-      horizontalBars: observable,
-      isStructuralBearingWall: computed,
-      crossSectionalArea:      computed,
-    });
-  }
-  // 壁式RC造の最小制限（学会基準等の目安値）: 壁厚150mm以上・壁長450mm以上
-  get isStructuralBearingWall() {
-    return this.thickness >= 150 && this.length >= 450;
-  }
-  get crossSectionalArea() {
-    return this.isStructuralBearingWall ? this.length * this.thickness : 0;
-  }
-}
-
-// ----------------------------------------------------------------
-// 耐力壁の開口（RcWallOpening） — 親 RcBearingWall を直接参照する。
-// 架構の Opening（Wallを直接参照しない自己完結アンカー）とは非対称な設計だが、
-// StructuralWall は仕上げモードのような再生成サイクルが無いため直接参照で安全かつ単純。
-// ----------------------------------------------------------------
-export class RcWallOpening {
-  constructor(id, wall, offset, width, props = {}) {
-    this.id     = id;
-    this.wall   = wall;    // 親 RcBearingWall への直接参照
-    this.offset = offset;  // wall.clStart からの符号付き距離(mm) — 開口中心位置
-    this.width  = width;   // 開口幅(mm) — 壁の長さ方向
-    this.height     = props.height     ?? 2000; // 開口高さ(mm) — 壁量計算上の準耐力壁判定等に使用
-    this.sillHeight = props.sillHeight ?? 0;    // 開口下端の高さ(mm、床上)
-    this.lintelBars = props.lintelBars ?? { size: 'D13', count: 2 }; // まぐさ補強筋
-    this.affectsEffectiveLength = props.affectsEffectiveLength ?? true; // 有効壁長算定への影響フラグ（計算ロジックは対象外）
-    makeObservable(this, {
-      wall:        observable.ref,
-      offset:      observable,
-      width:       observable,
-      height:      observable,
-      sillHeight:  observable,
-      lintelBars:  observable,
-      affectsEffectiveLength: observable,
-      centerCoord: computed,
-      coord1:      computed,
-      coord2:      computed,
-    });
-  }
-  get centerCoord() { return this.wall.clStart.effectiveValue + this.offset; }
-  get coord1()       { return _coordLo(this.centerCoord, this.width); }
-  get coord2()       { return _coordHi(this.centerCoord, this.width); }
-}
-
-// ----------------------------------------------------------------
-// スラブ（StructuralSlab・抽象） — Room と同じ「cells: Set<cellKey>」導出方式。
-// cellKey は finish/gridCells.js と同形式（"leftCLId:topCLId:rightCLId:bottomCLId"）。
-// CLが削除されて一部セルキーが解決不能になっても Room と同様にデータは保持し、
-// 描画時に解決できないセルを無視するだけに留める（teardown 不要）。
-// ----------------------------------------------------------------
-export class StructuralSlab extends StructuralEntity {
-  constructor(id, materialType, sectionDefId, cells, props = {}) {
-    super(id, materialType, sectionDefId, props);
-    this.cells      = cells ?? new Set();
-    this.thickness  = props.thickness  ?? 150; // スラブ厚(mm)
-    this.floorLevel = props.floorLevel ?? null; // Room.floorLevel と同じ「疎な例外」方式（null=floorDatumどおり）
-    // スラブ・べた基礎・屋根版はサブクラスを増やさず role で区別する。
-    this.role           = props.role           ?? 'slab'; // 'slab' | 'mat_foundation' | 'roof_panel'
-    this.levelRef       = props.levelRef       ?? 'top';  // 基準レベルが上端基準か下端基準か
-    this.slopeDirection = props.slopeDirection ?? null;    // {dx,dy} | null（水平面内の勾配方向、屋根版用）
-    this.slopeAngle     = props.slopeAngle     ?? 0;       // 勾配角度(度、0=水平)
-    // 厚指定の種別（問題.md）。'slab'=コンクリートスラブ / 'deck'=デッキプレート。
-    this.slabKind       = props.slabKind       ?? 'slab'; // 'slab' | 'deck'
-    // デッキ方向（slabKind==='deck'のみ意味を持つ）。'x'=X方向 / 'y'=Y方向。描画エリアの両矢印クリックで90度回転。
-    this.deckDirection  = props.deckDirection  ?? 'x';   // 'x' | 'y'
-    makeObservable(this, {
-      cells:          observable,
-      thickness:      observable,
-      floorLevel:     observable,
-      role:           observable,
-      levelRef:       observable,
-      slopeDirection: observable,
-      slopeAngle:     observable,
-      slabKind:       observable,
-      deckDirection:  observable,
-      setCells:       action,
-    });
-  }
-  setCells(cells) { this.cells = new Set(cells); }
-}
-
-export class RcSlab extends StructuralSlab {
-  constructor(id, sectionDefId, cells, props = {}) {
-    super(id, StructuralMaterialType.RC, sectionDefId, cells, props);
-    this.mainBars         = props.mainBars         ?? { size: 'D10', pitch: 200 }; // 主筋（短辺方向）
-    this.distributionBars = props.distributionBars ?? { size: 'D10', pitch: 200 }; // 配力筋（長辺方向）
-    makeObservable(this, { mainBars: observable, distributionBars: observable });
-  }
-}
-
-// ----------------------------------------------------------------
-// 貫通孔（PenetrationSleeve） — 梁(B)・スラブ(C)の配管/配線貫通孔。
-// 意匠Openingと同じ設計パターンで、ホスト構造材を直接参照せず自己完結アンカーを持つ
-// （StructuralEntity は継承しない＝materialType/sectionDefId/memberNo の採番対象外）。
-// ----------------------------------------------------------------
-export class PenetrationSleeve {
-  constructor(id, hostType, props = {}) {
-    this.id       = id;
-    this.hostType = hostType; // 'beam' | 'slab'
-    // 梁ホスト用アンカー（hostBeamId は同一CL上に複数梁がある場合の連鎖削除の一意特定用）
-    this.hostBeamId   = props.hostBeamId   ?? null;
-    this.hostAxisCL   = props.hostAxisCL   ?? null;
-    this.hostClStart  = props.hostClStart  ?? null;
-    this.hostClEnd    = props.hostClEnd    ?? null;
-    this.localPos     = props.localPos     ?? 0; // 軸方向ローカル位置(clStartからのmm)
-    this.heightOffset = props.heightOffset ?? 0; // 梁上端基準の断面内高さ位置(mm)
-    // スラブホスト用アンカー（hostSlabId は連鎖削除の一意特定用）
-    this.hostSlabId = props.hostSlabId ?? null;
-    this.hostCellKey = props.hostCellKey ?? null;
-    this.localX     = props.localX     ?? 0; // セル内ローカルx
-    this.localY     = props.localY     ?? 0; // セル内ローカルy
-    // 共通
-    this.diameter         = props.diameter         ?? 100;   // 径(mm)
-    this.hasReinforcement = props.hasReinforcement ?? false; // 補強プレート有無
-    makeObservable(this, {
-      hostAxisCL:  observable.ref,
-      hostClStart: observable.ref,
-      hostClEnd:   observable.ref,
-      localPos:      observable,
-      heightOffset:  observable,
-      hostCellKey:   observable,
-      localX:        observable,
-      localY:        observable,
-      diameter:         observable,
-      hasReinforcement: observable,
-    });
-  }
-}
-
-// materialType（StructuralMaterialType）→ サブクラスの解決表（PlanGraph.addBearingWall/addSlab 用）
-const WALL_CLASS_BY_MATERIAL = Object.freeze({
-  [StructuralMaterialType.RC]: RcBearingWall,
-});
-const SLAB_CLASS_BY_MATERIAL = Object.freeze({
-  [StructuralMaterialType.RC]: RcSlab,
-});
+export {
+  columnSlotKey, spanKey,
+  StructuralColumn, WoodColumn, SteelColumn, RcColumn,
+  StructuralBeam, WoodBeam, SteelBeam, RcBeam,
+  IndependentFooting, ColumnBase,
+  StructuralWall, RcBearingWall, RcWallOpening,
+  StructuralSlab, RcSlab, PenetrationSleeve,
+} from './core/structuralEntities.js';
 
 // ================================================================
 // PLANE (平面 = XY平面 1枚 + 高さ 1つ)
@@ -2288,28 +1713,6 @@ export class PlanGraph {
 
 // ---- module-private helpers ----
 
-// 通り芯の柱芯オフセット（columnAxisOffsets。ラーメン系のみ非0、未登録キー=0）。
-function _axisOffset(planGraph, clId) {
-  return planGraph?.columnAxisOffsets.get(clId) ?? 0;
-}
-
-// 柱・基礎・柱脚の平面位置 = 通り芯 effectiveValue + 柱芯オフセット + 個別偏心量。
-// StructuralColumn / StructuralFooting が共通で使う（eccentricity は {x,y}）。
-function _gridX(entity) {
-  return entity.verticalCL.effectiveValue
-       + _axisOffset(entity._planGraph, entity.verticalCL.id)
-       + entity.eccentricity.x;
-}
-function _gridY(entity) {
-  return entity.horizontalCL.effectiveValue
-       + _axisOffset(entity._planGraph, entity.horizontalCL.id)
-       + entity.eccentricity.y;
-}
-
-// 中心座標 ± 幅/2 → 開口の両端。Opening / RcWallOpening 共通。
-function _coordLo(center, width) { return center - width / 2; }
-function _coordHi(center, width) { return center + width / 2; }
-
 // labeled な指定軸種の CenterLine か（系統A: discipline 不問・グリッド用）
 function _isLabeledCL(s, type) {
   return s instanceof CenterLine && s.centerLineType === type && s.labeled;
@@ -2398,205 +1801,17 @@ function _shapeUsesCenterLine(shape, id) {
 }
 
 // ================================================================
-// SITE (敷地モード)
+// SITE (敷地モード) — core/site.js に分離。core 内部使用（Project.site）のため
+// Site を import しつつ、後方互換のため全クラスを再エクスポートする。
 // ================================================================
 
-export const SiteLineKind = Object.freeze({
-  BOUNDARY:   'boundary',   // 境界（隣地境界線）
-  ROAD:       'road',       // 道路境界
-  SURVEY:     'survey',     // 測量
-  ROAD_WIDTH: 'roadWidth',  // 道路幅員
-  OTHER:      'other',      // その他
-});
+import { Site } from './core/site.js';
+export { SitePoint, SiteLine, SiteTriangle, Site } from './core/site.js';
 
-// 敷地上の端点（SiteLine が共有する）
-export class SitePoint {
-  constructor(id, x, y) {
-    this.id = id;
-    this.x  = x;
-    this.y  = y;
-    makeObservable(this, {
-      x: observable,
-      y: observable,
-    });
-  }
-}
-
-// 敷地線分: 2つの SitePoint を結ぶ
-export class SiteLine {
-  // redPointId: 赤端点の SitePoint ID（生成時に1度だけ決定し、以降は不変）
-  constructor(id, startPoint, endPoint, lineKind = SiteLineKind.SURVEY, redPointId = startPoint.id) {
-    this.id         = id;
-    this.startPoint = startPoint; // SitePoint
-    this.endPoint   = endPoint;   // SitePoint
-    this.lineKind   = lineKind;
-    this.redPointId = redPointId;
-    makeObservable(this, {
-      lineKind: observable,
-      length:   computed,
-    });
-  }
-  get length() {
-    return Math.hypot(
-      this.endPoint.x - this.startPoint.x,
-      this.endPoint.y - this.startPoint.y,
-    );
-  }
-}
-
-// 三斜の三角形: 底辺 SiteLine + 頂点 SitePoint
-export class SiteTriangle {
-  constructor(id, baseLine, apexPoint, lineKind = SiteLineKind.SURVEY) {
-    this.id        = id;
-    this.baseLine  = baseLine;  // SiteLine（底辺）
-    this.apexPoint = apexPoint; // SitePoint（頂点）
-    this.lineKind  = lineKind;  // 境界/道路境界/測量
-    makeObservable(this, {
-      lineKind: observable,
-      area:     computed,
-    });
-  }
-  // 外積で三角形面積を算出 (mm² → ㎡)
-  get area() {
-    const { startPoint: A, endPoint: B } = this.baseLine;
-    const C = this.apexPoint;
-    const areaMm2 = Math.abs(
-      (B.x - A.x) * (C.y - A.y) - (C.x - A.x) * (B.y - A.y),
-    ) / 2;
-    return areaMm2 / 1_000_000;
-  }
-}
-
-// 敷地図全体: 点・線分・三角形を管理する
-export class Site {
-  constructor() {
-    this.pointMap    = observable.map(); // id → SitePoint
-    this.lineMap     = observable.map(); // id → SiteLine
-    this.triangleMap = observable.map(); // id → SiteTriangle
-    this.lineOrder   = observable.array([]); // 三斜タブ表示順 (SiteLine ID)
-    // 三斜の作成手順（線分長さ編集時の再計算に使用）
-    // [0]:        { type: 'base', lineId, length }
-    // [1..]:      { type: 'triangle', baseLineId, redLineId, redLen, redKind,
-    //               blueLineId, blueLen, blueKind, triangleId, triangleLineKind, side }
-    this.history     = observable.array([]);
-    makeObservable(this, {
-      points:        computed,
-      lines:         computed,
-      orderedLines:  computed,
-      triangles:     computed,
-      addPoint:      action,
-      removePoint:   action,
-      addLine:       action,
-      removeLine:    action,
-      addTriangle:   action,
-      removeTriangle: action,
-    });
-  }
-
-  get points()      { return [...this.pointMap.values()]; }
-  get lines()       { return [...this.lineMap.values()]; }
-  get triangles()   { return [...this.triangleMap.values()]; }
-
-  get orderedLines() {
-    return this.lineOrder
-      .filter(id => this.lineMap.has(id))
-      .map(id => this.lineMap.get(id));
-  }
-
-  addPoint(x, y, id = crypto.randomUUID()) {
-    const pt = new SitePoint(id, x, y);
-    this.pointMap.set(pt.id, pt);
-    return pt;
-  }
-
-  removePoint(id) {
-    this.pointMap.delete(id);
-  }
-
-  addLine(startPoint, endPoint, lineKind = SiteLineKind.SURVEY, id = crypto.randomUUID(), redPointId = startPoint.id) {
-    const line = new SiteLine(id, startPoint, endPoint, lineKind, redPointId);
-    this.lineMap.set(line.id, line);
-    this.lineOrder.push(line.id);
-    return line;
-  }
-
-  removeLine(id) {
-    // 底辺として使われている triangle も連鎖削除
-    for (const [tid, tri] of this.triangleMap) {
-      if (tri.baseLine.id === id) this.triangleMap.delete(tid);
-    }
-    this.lineMap.delete(id);
-    const idx = this.lineOrder.indexOf(id);
-    if (idx >= 0) this.lineOrder.splice(idx, 1);
-  }
-
-  addTriangle(baseLine, apexPoint, lineKind = SiteLineKind.SURVEY, id = crypto.randomUUID()) {
-    const tri = new SiteTriangle(id, baseLine, apexPoint, lineKind);
-    this.triangleMap.set(tri.id, tri);
-    return tri;
-  }
-
-  removeTriangle(id) {
-    this.triangleMap.delete(id);
-  }
-}
-
-// 構造情報: 建物全体の既定値（主要構造・標準材料グレード・地域荷重）。
-// 階ごとの例外は PlanGraph.structureOverride（mainStructure のみ。null=この建物全体値を継承）。
-export class StructuralInfo {
-  constructor() {
-    this.mainStructure    = '未定';
-    this.otherStructures  = observable.array([]);
-    this.foundationType   = 'ベタ基礎';
-    // 出幅（mm）: 通り芯から柱外面までの距離。1構造×1通り芯あたり1値で持つ（columnFaceProjections。
-    // キー=`${structure}|${cl.label}`。混構造では構造ごと、X/Y通り芯ごとに別値を指定できる）。
-    // ラーメン系の柱芯はこの出幅と自階の柱幅から決定的に導出する（autoFillColumnAxisOffsets）。
-    // 0＝外面が通り芯と一致（既定）。columnFaceProjection は旧・建物1値の保持先で、無キー時の移行既定。
-    this.columnFaceProjection  = 0;
-    this.columnFaceProjections = observable.map();
-    this.designStrength   = 'Fc24';
-    this.concreteType     = '普通コンクリート';
-    this.mainBar          = 'SD345';
-    this.hoopBar          = 'SD295A';
-    this.snowArea         = '一般区域（多雪以外）';
-    this.basicWindSpeed   = 34;
-    this.surfaceRoughness = 'III';
-    this.seismicZoneFactor = '1.0';
-    makeObservable(this, {
-      mainStructure:        observable,
-      foundationType:       observable,
-      columnFaceProjection: observable,
-      columnFaceProjections: observable,
-      designStrength:       observable,
-      concreteType:         observable,
-      mainBar:              observable,
-      hoopBar:              observable,
-      snowArea:             observable,
-      basicWindSpeed:       observable,
-      surfaceRoughness:     observable,
-      seismicZoneFactor:    observable,
-      setField:             action,
-      toggleOtherStructure: action,
-      setColumnFaceProjection: action,
-    });
-  }
-  setField(field, value) { this[field] = value; }
-  // 出幅キー: 1構造×1通り芯。通り芯ラベル（X1/Y1…）が方向も含めて軸を一意に表す。
-  faceProjectionKey(structure, cl) { return `${structure}|${cl.label}`; }
-  // 当該構造・通り芯の出幅。無キーは旧・建物1値（移行既定）→0 にフォールバック。
-  getColumnFaceProjection(structure, cl) {
-    return this.columnFaceProjections.get(this.faceProjectionKey(structure, cl))
-      ?? this.columnFaceProjection ?? 0;
-  }
-  setColumnFaceProjection(structure, cl, value) {
-    this.columnFaceProjections.set(this.faceProjectionKey(structure, cl), value);
-  }
-  toggleOtherStructure(name) {
-    const i = this.otherStructures.indexOf(name);
-    if (i >= 0) this.otherStructures.splice(i, 1);
-    else this.otherStructures.push(name);
-  }
-}
+// 構造情報（StructuralInfo） — core/structuralInfo.js に分離。
+// core 内部使用（Project.structuralInfo）のため import しつつ再エクスポートする。
+import { StructuralInfo } from './core/structuralInfo.js';
+export { StructuralInfo } from './core/structuralInfo.js';
 
 // ================================================================
 // PROJECT (MobX ルートストア)
