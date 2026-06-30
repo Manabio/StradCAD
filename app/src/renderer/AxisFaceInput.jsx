@@ -25,7 +25,8 @@ export const AxisFaceInput = observer(function AxisFaceInput({ editState, onChan
         inputRef.current?.select();
       }, 0);
     }
-  }, [editState]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editState?.cl]); // セッション識別子。projection更新での再発火（＝再選択）を防ぐ
 
   if (!editState) return null;
 
