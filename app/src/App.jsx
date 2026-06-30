@@ -1052,6 +1052,21 @@ const App = observer(() => {
     setOpeningDialog(null);
   }
 
+  // ---- フロア切替（仕上げモード中）：仕上げモードを抜けずに別階の仕上げ図へ移動する ----
+  // setActiveFloorId により mode再ロード effect が走り、新グラフで FinishModeState を再生成（init で材再ロード）。
+  // 命名中（namingRoomId）等の過渡状態は FinishModeState ごと破棄され自然にリセットされる。
+  async function handleFinishFloorSwitch(planeId) {
+    if (planeId === project.activePlaneId) return;
+    await switchFloor(planeId);
+    setActiveFloorId(planeId);
+    setSnapPoint(null);
+    setNearCL(null);
+    setNearWall(null);
+    setNearOpening(null);
+    setCursorWorld(null);
+    setMenu(null);
+  }
+
   // ---- フロア切替（構造モード中）：構造モードを抜けずに別階の構造伏図へ移動する ----
   // planeId のみ受ける経路（検討チップ）。移動先平面の先頭スロットを選択状態にする。
   async function handleStructuralFloorSwitch(planeId) {
@@ -2554,7 +2569,11 @@ const App = observer(() => {
       <FloorDrum
         floors={drumFloors}
         activeFloorId={appMode === 'structure' ? activeStructSlot : activeFloorId}
-        onSwitch={appMode === 'structure' ? handleStructuralSlotSwitch : handleFloorSwitch}
+        onSwitch={
+          appMode === 'structure' ? handleStructuralSlotSwitch
+          : appMode === 'finish'  ? handleFinishFloorSwitch
+          : handleFloorSwitch
+        }
         isLandscape={isLandscape}
       />
 
