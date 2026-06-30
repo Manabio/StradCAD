@@ -1368,13 +1368,8 @@ const App = observer(() => {
     }
 
     if (action === 'delete') {
-      const hasAlts = [...project.planeMap.values()]
-        .some(p => p.isAlternative && p.referenceId === planeId);
-      const msg = hasAlts
-        ? 'この階を削除すると、検討案も一緒に削除します。よろしいですか？'
-        : `「${plane.name}」の平面を削除してよろしいですか？`;
       setFloorConfirm({
-        message: msg,
+        message: 'この階を削除すると、１つ下の階にある階段も削除されます。削除は、採用・検討案共です。この階を削除してよろしいですか？',
         buttons: [
           { label: '削除', value: 'ok', primary: true, danger: true },
           { label: 'キャンセル', value: 'cancel' },
@@ -1385,10 +1380,18 @@ const App = observer(() => {
           const adopted = project.planes;
           const idx     = adopted.findIndex(p => p.id === planeId);
           const fallback = adopted[idx + 1] ?? adopted[idx - 1];
+          const below    = adopted[idx - 1] ?? null; // 直下の採用階（階段が接続していた階）
           if (project.activePlaneId === planeId || isActiveAnAltOf(planeId)) {
             if (fallback) await handleFloorSwitch(fallback.id);
           }
           await removeFloor(planeId);
+          // 消えた上階(n)に接続していた直下階(n-1)の階段を削除する。採用・検討案の両方。
+          if (below) {
+            await removeStairsOnFloor(below);
+            const belowAlts = [...project.planeMap.values()]
+              .filter(p => p.isAlternative && p.referenceId === below.id);
+            for (const alt of belowAlts) await removeStairsOnFloor(alt);
+          }
           // 右側の採用の startFloor / elevation を再計算
           const newAdopted = project.planes;
           if (idx < newAdopted.length) {
@@ -1483,6 +1486,15 @@ const App = observer(() => {
   function isActiveAnAltOf(planeId) {
     const active = project.activePlane;
     return active?.isAlternative && active.referenceId === planeId;
+  }
+
+  // 指定階の階段をすべて削除する。アクティブ階はライブグラフ、非アクティブ階は peek して保存。
+  async function removeStairsOnFloor(plane) {
+    const isActive = plane.id === project.activePlaneId;
+    const g = isActive ? project.activeGraph : await floorSwapManager.peek(plane, project.structGraph);
+    if (g.stairs.length === 0) return;
+    runInAction(() => { for (const s of [...g.stairs]) g.removeStair(s.id); });
+    if (!isActive) await saveFloor(plane.id, serializeGraph(g)); // アクティブ階は auto-save に委ねる
   }
 
   // 検討の並び替え（グループ内）
@@ -2973,6 +2985,7 @@ const App = observer(() => {
             room={room}
             graph={graph}
             viewport={viewport}
+            stairEnabled={floorHeightAbove(project, project.activePlane) != null}
             onConfirm={(id, name) => modeRef.current?.finishNaming(id, name)}
             onCancel={id => modeRef.current?.cancelNaming(id)}
             onConvertToStair={id => {

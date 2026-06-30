@@ -11,8 +11,10 @@ const BUTTONS = [
   { type: 'kind',  value: RoomKind.EXTERIOR, label: '屋外' },
 ];
 
-export const RoomNameInput = observer(({ room, graph, viewport, onConfirm, onCancel, onConvertToStair }) => {
+export const RoomNameInput = observer(({ room, graph, viewport, stairEnabled = true, onConfirm, onCancel, onConvertToStair }) => {
   const [value, setValue] = useState(room.name || '');
+  // 「階段」は確定前の排他選択フラグ。確定時に初めて変換アクションを発火する。
+  const [stairSelected, setStairSelected] = useState(false);
   const inputRef = useRef(null);
 
   useEffect(() => { inputRef.current?.focus(); }, []);
@@ -22,7 +24,10 @@ export const RoomNameInput = observer(({ room, graph, viewport, onConfirm, onCan
   const cy = (bounds.y1 + bounds.y2) / 2;
   const { x: sx, y: sy } = viewport.worldToScreen(cx, cy);
 
-  function confirm() { onConfirm(room.id, value.trim()); }
+  function confirm() {
+    if (stairSelected) onConvertToStair?.(room.id);
+    else               onConfirm(room.id, value.trim());
+  }
 
   function onKeyDown(e) {
     if (e.key === 'Enter')  { e.preventDefault(); confirm(); }
@@ -66,21 +71,29 @@ export const RoomNameInput = observer(({ room, graph, viewport, onConfirm, onCan
       />
       <div style={{ display: 'flex', gap: 4 }}>
         {BUTTONS.map(opt => {
-          const active = opt.type === 'kind' && room.kind === opt.value;
+          const disabled = opt.type === 'stair' && !stairEnabled;
+          const active = opt.type === 'stair'
+            ? stairSelected
+            : !stairSelected && room.kind === opt.value;
           return (
             <button
               key={opt.label}
-              onClick={() => opt.type === 'stair' ? onConvertToStair?.(room.id) : room.setKind(opt.value)}
+              disabled={disabled}
+              title={disabled ? '上階に採用階がありません' : undefined}
+              onClick={() => {
+                if (opt.type === 'stair') { setStairSelected(true); }
+                else { setStairSelected(false); room.setKind(opt.value); }
+              }}
               style={{
                 flex: 1,
                 fontSize: 12,
                 padding: '5px 0',
                 borderRadius: 6,
                 border: active ? '1px solid #2563eb' : '1px solid #cbd5e1',
-                background: active ? '#eff6ff' : '#fff',
-                color: active ? '#2563eb' : '#475569',
+                background: disabled ? '#f1f5f9' : (active ? '#eff6ff' : '#fff'),
+                color: disabled ? '#cbd5e1' : (active ? '#2563eb' : '#475569'),
                 fontWeight: active ? 700 : 400,
-                cursor: 'pointer',
+                cursor: disabled ? 'not-allowed' : 'pointer',
               }}
             >
               {opt.label}
