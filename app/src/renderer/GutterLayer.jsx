@@ -144,6 +144,7 @@ const GridDimensions = observer(({ graph, viewport, width, height }) => {
 // ================================================================
 
 const OFFSET_CM_AT_SCALE = 5; // 印刷スケール換算で5cm（例: 1/100 なら 50mm×100 = 5000mm）
+const MIN_GAP_CM         = 1; // 建物外端と寸法線の最小紙面距離。これを割ったら部屋内書きへ退避
 const DOT_RADIUS_PX      = 2;
 const NUM_FONT_PX        = 11;
 const FALLBACK_FONT_PX   = 10;
@@ -162,6 +163,36 @@ function positiveMod(n, m) { return ((n % m) + m) % m; }
 // N（=scaleDenominator）に比例するため、ズームに応じてリアルタイムに伸縮する。
 function offsetMm(viewport) {
   return OFFSET_CM_AT_SCALE * 10 * viewport.scaleDenominator;
+}
+
+// 「実画面で1cm」相当のワールド距離（mm）。offsetMm と同じく scaleDenominator に比例し、
+// 画面px一定（ズーム非依存）。建物外端と寸法線の最小離隔の判定に使う。
+function minGapMm(viewport) {
+  return MIN_GAP_CM * 10 * viewport.scaleDenominator;
+}
+
+// 中心線寸法の基準線(lineCoord)を算出する単一の真実源。
+// - 通常域: 建物外5cm(offsetMm)を維持。
+// - クッションゾーン: ガター側へ最も近い要素（near=寸法値の外端 / far=寸法線そのもの）が
+//   ガター内端(areaBounds=INSET内端)から「寸法線↔寸法値の離れ」(reach)以上内側に留まるよう
+//   lineCoord をクランプする。クランプ境界は画面固定の INSET 由来なので、パンに自然に追従する
+//   （詰める量＝パンニング量依存）。
+// - 建物内移動: 建物外端(boundary)と lineCoord の距離が minGapMm を割ったら null を返し、
+//   呼び出し元はその行を捨てて部屋内書きフォールバックへ回す。
+function centerLineCoord(d, boundary, viewport, areaBounds) {
+  const isNear  = d.side === DimensionSide.TOP || d.side === DimensionSide.LEFT;
+  const rawLine = isNear ? boundary - offsetMm(viewport) : boundary + offsetMm(viewport);
+  const reach   = (NUM_FONT_PX + TEXT_GAP_PX) / viewport.scaleX; // 寸法線↔寸法値の離れ
+  const guInner = d.axis === 'X'
+    ? (isNear ? areaBounds.yMin : areaBounds.yMax)
+    : (isNear ? areaBounds.xMin : areaBounds.xMax);
+  // near は寸法値(lineCoord-reach)がガター側に出るため線をさらに reach 内側へ、
+  // far は寸法線自身がガター側のため reach 内側へクランプする。
+  const lineCoord = isNear
+    ? Math.max(rawLine, guInner + 2 * reach)
+    : Math.min(rawLine, guInner - reach);
+  if (Math.abs(boundary - lineCoord) < minGapMm(viewport)) return null;
+  return lineCoord;
 }
 
 function isCenterDimensionTarget(cl) {
@@ -202,16 +233,12 @@ function buildRowAnchors(d, graph, viewport, areaBounds) {
   // floorSwapManager.deactivate() がフロアを IDB にスワップアウトする際、
   // activePlaneId 切替前の一瞬だけ graph.clearFloorData() 後の状態（CENTER 寸法行が0件）を
   // 観測してしまうことがある（正規のスワップアウト動作）。d が無い場合は単に何も描かない。
-  if (!d) return { boundary: null, anchors: [] };
+  if (!d) return { boundary: null, lineCoord: null, anchors: [] };
   const boundary = d.centerBoundary;
-  if (boundary == null) return { boundary: null, anchors: [] };
+  if (boundary == null) return { boundary: null, lineCoord: null, anchors: [] };
 
-  const isNear    = d.side === DimensionSide.TOP || d.side === DimensionSide.LEFT;
-  const lineCoord = isNear ? boundary - offsetMm(viewport) : boundary + offsetMm(viewport);
-  const visible = d.axis === 'X'
-    ? (lineCoord >= areaBounds.yMin && lineCoord <= areaBounds.yMax)
-    : (lineCoord >= areaBounds.xMin && lineCoord <= areaBounds.xMax);
-  if (!visible) return { boundary, anchors: [] };
+  const lineCoord = centerLineCoord(d, boundary, viewport, areaBounds);
+  if (lineCoord == null) return { boundary, lineCoord: null, anchors: [] };
 
   const gridCLs = d.axis === 'X' ? graph.gridXs : graph.gridYs;
   const myType  = d.axis === 'X' ? CenterLineType.VERTICAL : CenterLineType.HORIZONTAL;
@@ -221,7 +248,7 @@ function buildRowAnchors(d, graph, viewport, areaBounds) {
     return !!ext && ext[0] <= boundary && boundary <= ext[1];
   });
   const anchors = [...gridCLs, ...centerCLs].sort((a, b) => a.value - b.value);
-  return { boundary, anchors };
+  return { boundary, lineCoord, anchors };
 }
 
 // 隣接アンカー間のセグメント。両端が通り芯(labeled)のみの区間はGRID寸法に表示を委ねるため除外。
@@ -245,18 +272,14 @@ function legDashOffset(cl, graph, viewport, boundary) {
 
 // 1行（TOP/BOTTOM/LEFT/RIGHT）分の Konva 要素を生成する。
 // suppressKeys: 優先側の行で既に表示済みの区間キー（このセットに含まれる区間は数値・引出線を描かない）
-function buildRowElements(d, boundary, anchors, suppressKeys, viewport, graph) {
-  if (!d || boundary == null || anchors.length === 0) return { elements: [], segKeys: new Set() };
+function buildRowElements(d, boundary, lineCoord, anchors, suppressKeys, viewport, graph) {
+  if (!d || boundary == null || lineCoord == null || anchors.length === 0) return { elements: [], segKeys: new Set() };
 
   const segs        = buildSegments(anchors);
   const segKeys     = new Set(segs.map(segKey));
   const visibleSegs = segs.filter(s => !suppressKeys.has(segKey(s)));
   // 表示すべき区間が無い（中心線が1本も絡まない＝純グリッド区間のみ）場合は基準線も含めて何も描かない
   if (visibleSegs.length === 0) return { elements: [], segKeys };
-
-  const isNear    = d.side === DimensionSide.TOP || d.side === DimensionSide.LEFT;
-  const offset    = offsetMm(viewport);
-  const lineCoord = isNear ? boundary - offset : boundary + offset;
 
   const dotIds = new Set();
   visibleSegs.forEach(s => { dotIds.add(s.from.id); dotIds.add(s.to.id); });
@@ -625,15 +648,15 @@ const CenterDimensions = observer(({ graph, viewport, width, height, columnAxisM
     ];
   }
 
-  const { boundary: topB,    anchors: topA    } = buildRowAnchors(top,    graph, viewport, areaBounds);
-  const { boundary: bottomB, anchors: bottomA } = buildRowAnchors(bottom, graph, viewport, areaBounds);
-  const { boundary: leftB,   anchors: leftA   } = buildRowAnchors(left,   graph, viewport, areaBounds);
-  const { boundary: rightB,  anchors: rightA  } = buildRowAnchors(right,  graph, viewport, areaBounds);
+  const { boundary: topB,    lineCoord: topLC,    anchors: topA    } = buildRowAnchors(top,    graph, viewport, areaBounds);
+  const { boundary: bottomB, lineCoord: bottomLC, anchors: bottomA } = buildRowAnchors(bottom, graph, viewport, areaBounds);
+  const { boundary: leftB,   lineCoord: leftLC,   anchors: leftA   } = buildRowAnchors(left,   graph, viewport, areaBounds);
+  const { boundary: rightB,  lineCoord: rightLC,  anchors: rightA  } = buildRowAnchors(right,  graph, viewport, areaBounds);
 
-  const topRes    = buildRowElements(top,    topB,    topA,    new Set(),         viewport, graph);
-  const bottomRes = buildRowElements(bottom, bottomB, bottomA, topRes.segKeys,    viewport, graph);
-  const leftRes   = buildRowElements(left,   leftB,   leftA,   new Set(),         viewport, graph);
-  const rightRes  = buildRowElements(right,  rightB,  rightA,  leftRes.segKeys,   viewport, graph);
+  const topRes    = buildRowElements(top,    topB,    topLC,    topA,    new Set(),       viewport, graph);
+  const bottomRes = buildRowElements(bottom, bottomB, bottomLC, bottomA, topRes.segKeys,  viewport, graph);
+  const leftRes   = buildRowElements(left,   leftB,   leftLC,   leftA,   new Set(),       viewport, graph);
+  const rightRes  = buildRowElements(right,  rightB,  rightLC,  rightA,  leftRes.segKeys, viewport, graph);
 
   const fallbackX = buildFallbackElements(graph, viewport, 'X', topA,  bottomA);
   const fallbackY = buildFallbackElements(graph, viewport, 'Y', leftA, rightA);
