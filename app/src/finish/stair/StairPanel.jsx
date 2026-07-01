@@ -13,6 +13,22 @@ const TYPE_OPTIONS = [
   { value: StairType.OPEN_WELL,        label: '中空き階段' },
 ];
 
+// セル選択で判定されたタイプと相互に切替可能なタイプのグループ。
+// 選択肢はこのグループ内に限定する（中空きは単独＝切替先なし）。
+const TYPE_GROUPS = [
+  [StairType.STRAIGHT, StairType.STRAIGHT_LANDING],
+  [StairType.SWITCHBACK, StairType.WINDING],
+  [StairType.L_TURN, StairType.FLARED],
+  [StairType.OPEN_WELL],
+];
+
+// 指定タイプが属するグループの選択肢だけを返す。
+function typeOptionsFor(type) {
+  const group = TYPE_GROUPS.find(g => g.includes(type));
+  if (!group) return TYPE_OPTIONS;
+  return TYPE_OPTIONS.filter(o => group.includes(o.value));
+}
+
 // タイプ別の段構成入力フィールド（[key, ラベル]）
 const SEGMENT_FIELDS = {
   [StairType.STRAIGHT_LANDING]: [['first', '最初の段'], ['landing', '踊り場(段相当)'], ['straight', '直進部段']],
@@ -77,7 +93,7 @@ export const StairEditor = observer(({ stair, project, onDelete }) => {
         <div style={rowStyle}>
           <span style={labelStyle}>タイプ</span>
           <select style={inputStyle} value={stair.type} onChange={onTypeChange}>
-            {TYPE_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+            {typeOptionsFor(stair.type).map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
           </select>
         </div>
 
