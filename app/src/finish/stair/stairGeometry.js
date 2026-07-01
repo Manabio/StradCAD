@@ -50,7 +50,7 @@ function runArrow(start, end, label) {
 }
 
 // 設置エリア矩形 b から走行軸方向 t∈[0,1] / 幅方向 s∈[0,1] → ワールド点 の写像を作る。
-function makeFrame(stair, b) {
+export function makeFrame(stair, b) {
   const vertical = stair.upDirection === 'up' || stair.upDirection === 'down';
   const runLength = (vertical ? (b.y2 - b.y1) : (b.x2 - b.x1)) || 1;
   const coordAt = (t) => {
@@ -530,4 +530,127 @@ export function buildStairGeometry(stair, b, opts) {
   if (stair.type === StairType.FLARED)           return buildLTurn(stair, b, opts);
   if (stair.type === StairType.OPEN_WELL)        return buildOpenWell(stair, b, opts);
   return buildStraight(stair, b, opts);
+}
+
+// L字／中空きの正規化(u,v)→world 写像（buildLTurn/buildOpenWell と同一）。pt は fx,fy∈[0,1]→world。
+function normToWorld(stair, pt) {
+  return (u, v) => {
+    const vv = stair.flip ? 1 - v : v;
+    switch (stair.upDirection) {
+      case 'left':  return pt(1 - u, vv);
+      case 'down':  return pt(vv, u);
+      case 'up':    return pt(vv, 1 - u);
+      default:      return pt(u, vv);
+    }
+  };
+}
+
+// 各タイプのセグメント（踊り場・回り部・各アーム・各直進部）を走行軸に平行な区間として返す。
+// 返り値: [ [worldPointA, worldPointB, label, segKey|null], ... ]。segKey は stair.segments の対応キー
+//（＝図中編集の対象。null は派生量・非入力で読取専用）。各ビルダーと同じ既定・レイアウト算式で位置を求める。
+function segmentSpans(stair, b) {
+  const total = Math.max(1, stair.totalSteps);
+  const s = stair.segments ?? {};
+  const tread = stair.tread;
+  const r = (v) => Math.max(1, Math.round(v));
+  switch (stair.type) {
+    case StairType.STRAIGHT_LANDING: {
+      const f = makeFrame(stair, b);
+      const first    = Math.max(0, Math.round(s.first ?? Math.floor(total / 2)));
+      const straight = Math.max(0, Math.round(s.straight ?? (total - first)));
+      const landing  = s.landing ?? 4;
+      const landingLen = Math.max(landing * tread, MIN_LANDING);
+      const budget = first * tread + landingLen + straight * tread || 1;
+      const tAt = (mm) => mm / budget;
+      const lStart = first * tread, lEnd = lStart + landingLen;
+      return [
+        [f.pt(0, 0),            f.pt(tAt(lStart), 0), `最初 ${first}段`,   'first'],
+        [f.pt(tAt(lStart), 0),  f.pt(tAt(lEnd), 0),   `踊り場 ${landing}段`, 'landing'],
+        [f.pt(tAt(lEnd), 0),    f.pt(1, 0),           `直進 ${straight}段`, 'straight'],
+      ];
+    }
+    case StairType.SWITCHBACK: {
+      const f = makeFrame(stair, b);
+      const t2 = Math.max(2, total);
+      const n = s.straight ? r(s.straight) : Math.ceil(t2 / 2);
+      const m = Math.max(1, t2 - n);
+      const acrossLen = f.vertical ? (b.x2 - b.x1) : (b.y2 - b.y1);
+      const landingDepth = Math.max(acrossLen * 0.5, tread);
+      const budget = n * tread + landingDepth || 1;
+      const tRun = (n * tread) / budget;
+      return [
+        [f.pt(0, 0),    f.pt(tRun, 0), `往路 ${n}段`, 'straight'],
+        [f.pt(tRun, 0), f.pt(1, 0),    '踊り場',      null],
+        [f.pt(0, 1),    f.pt(tRun, 1), `復路 ${m}段`, null],
+      ];
+    }
+    case StairType.WINDING: {
+      const f = makeFrame(stair, b);
+      const t3 = Math.max(3, total);
+      const w = s.landing ? r(s.landing) : 3;
+      const n = s.straight ? r(s.straight) : Math.ceil((t3 - w) / 2);
+      const m = Math.max(1, t3 - w - n);
+      const acrossLen = f.vertical ? (b.x2 - b.x1) : (b.y2 - b.y1);
+      const turnDepth = Math.max(acrossLen * 0.5, tread);
+      const budget = n * tread + turnDepth || 1;
+      const tRun = (n * tread) / budget;
+      return [
+        [f.pt(0, 0),    f.pt(tRun, 0), `直進 ${n}段`, 'straight'],
+        [f.pt(tRun, 0), f.pt(1, 0),    `回り ${w}段`, 'landing'],
+        [f.pt(0, 1),    f.pt(tRun, 1), `直進 ${m}段`, null],
+      ];
+    }
+    case StairType.L_TURN:
+    case StairType.FLARED: {
+      const t2 = Math.max(2, total);
+      const first    = s.first ? r(s.first) : Math.ceil(t2 / 2);
+      const straight = s.straight ? r(s.straight) : Math.max(1, t2 - first);
+      const w = stair.type === StairType.FLARED ? Math.max(1, Math.round(s.landing ?? 2)) : 0;
+      const W = b.x2 - b.x1, H = b.y2 - b.y1, aw = 0.45, runU = 1 - aw;
+      const pt = (fx, fy) => ({ x: b.x1 + fx * W, y: b.y1 + fy * H });
+      const tw = normToWorld(stair, pt);
+      const spans = [
+        [tw(0, 1),    tw(runU, 1), `アーム1 ${first}段`,   'first'],
+        [tw(1, runU), tw(1, 0),    `アーム2 ${straight}段`, 'straight'],
+      ];
+      if (w > 0) spans.push([tw(runU, 1), tw(1, 1), `曲がり ${w}段`, 'landing']);
+      return spans;
+    }
+    case StairType.OPEN_WELL: {
+      const t3 = Math.max(3, total);
+      const n = s.straight ? r(s.straight) : Math.ceil(t3 / 3);
+      const W = b.x2 - b.x1, H = b.y2 - b.y1, aw = 0.3, runW = 1 - aw;
+      const pt = (fx, fy) => ({ x: b.x1 + fx * W, y: b.y1 + fy * H });
+      const tw = normToWorld(stair, pt);
+      return [
+        [tw(0, 1),    tw(runW, 1), `各直進部 ${n}段`, 'straight'],
+        [tw(1, 1),    tw(1, 0),    `${n}段`,          null],
+        [tw(runW, 0), tw(0, 0),    `${n}段`,          null],
+      ];
+    }
+    default:
+      return [];
+  }
+}
+
+/**
+ * タイプ別セグメントを、図の外側（全長寸法のさらに外）へ段数／長さの寸法線として配置する
+ * プリミティブ（AutoScaledFigure 形式）を返す。g は外側への張り出し量(mm)。
+ * segKey を持つ区間は editable（図中クリックで stair.segments[segKey] を編集）にする。
+ * STRAIGHT（内訳なし）は空配列。
+ */
+export function stairSegmentDims(stair, b, g) {
+  const spans = segmentSpans(stair, b);
+  if (spans.length === 0) return [];
+  const cx = (b.x1 + b.x2) / 2, cy = (b.y1 + b.y2) / 2;
+  const OUT = g * 2; // 全長寸法（g）のさらに外側へ寸法鎖を並べる
+  return spans.map(([a, c, label, segKey]) => {
+    const edit = segKey ? { editable: true, target: 'segments', segKey } : {};
+    if (Math.abs(a.x - c.x) >= Math.abs(a.y - c.y)) {
+      const y = (a.y + c.y) / 2, out = y >= cy ? 1 : -1;
+      return { type: 'dim', dir: 'h', from: a.x, to: c.x, at: y + out * OUT, label, ...edit };
+    }
+    const x = (a.x + c.x) / 2, out = x >= cx ? 1 : -1;
+    return { type: 'dim', dir: 'v', from: a.y, to: c.y, at: x + out * OUT, label, labelSide: out < 0 ? 'left' : undefined, ...edit };
+  });
 }

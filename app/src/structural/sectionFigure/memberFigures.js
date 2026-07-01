@@ -13,7 +13,7 @@
 
 import { findSectionEntry, SectionShape, diaphragmProjection } from '../sectionCatalog.js';
 import { withLayoutId } from './layoutStudy.js';
-import { shapeBounds, chooseScale } from './sectionGeometry.js';
+import { annotatedFigure } from './sectionGeometry.js';
 
 const STEEL_FILL = '#475569';
 // 偏芯量寸法線の端点マーカー（丸）の半径。縮尺に関わらずどの図でも同じ大きさに見えるようpx固定。
@@ -23,8 +23,6 @@ const MARKER_R_PX = 1.25;
 // g = GAP_BASE_PX / scale（mm）とすれば描画時 g * scale = GAP_BASE_PX（px）で縮尺非依存に一定となる。
 // 値を小さくすると注記が密に、大きくすると疎になる（要調整時はここを変える）。
 const GAP_BASE_PX = 22;
-// スクリーン空間注記が形状の外側へ張り出す px を、縮尺見積り時に枠から各辺確保する量（FIGURE_MARGIN_PX に上乗せ）。
-const ANNOTATION_RESERVE_PX = 24;
 
 // 寸法線が断面外へ張り出す mm 量を、断面の代表寸法から決める（縮尺非依存に見えるよう比率で）。
 // scale が分かっていれば px 一定（GAP_BASE_PX）になる mm を返す（スクリーン空間注記）。未指定（Konva等）は従来比率。
@@ -530,8 +528,6 @@ function dispatchFigure(entity, mapName, ctx) {
 // frame 未指定（Konva 等）や scale 確定済みは従来どおり（mm 比率 gap・scale は描画側が決める）。
 export function memberFigure(entity, mapName, ctx = {}) {
   if (!ctx.frame || ctx.scale != null) return dispatchFigure(entity, mapName, ctx);
-  const sb = shapeBounds(dispatchFigure(entity, mapName, ctx).primitives); // 1パス目：形状範囲（注記除外）
-  const f = ctx.frame;
-  const scale = chooseScale(sb.width, sb.height, f.maxWidth - 2 * ANNOTATION_RESERVE_PX, f.maxHeight - 2 * ANNOTATION_RESERVE_PX);
-  return { ...dispatchFigure(entity, mapName, { ...ctx, scale }), scale }; // 2パス目：px 一定 gap
+  // 共有ヘルパー（一般解）に委譲：形状で縮尺を決め、その scale で注記込み再生成（px 一定 gap）。
+  return annotatedFigure(scale => dispatchFigure(entity, mapName, { ...ctx, scale }).primitives, ctx.frame);
 }

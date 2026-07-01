@@ -41,7 +41,7 @@ export const StairTab = observer(({ graph, mode, project }) => {
           ))}
         </div>
       )}
-      {selected && <StairEditor stair={selected} project={project} onDelete={id => mode.deleteStair(id)} />}
+      {selected && <StairEditor stair={selected} graph={graph} project={project} onDelete={id => mode.deleteStair(id)} />}
     </div>
   );
 });

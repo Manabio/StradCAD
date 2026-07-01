@@ -1,6 +1,12 @@
 import { observer } from 'mobx-react-lite';
 import { StructuralMaterialType, StairType } from '@core';
 import { computeStairDimensions, floorHeightAbove } from './stairDimensions.js';
+import { roomBounds } from '../gridCells.js';
+import { stairFigurePrimitives } from './stairFigure.js';
+import { AutoScaledFigure } from '../../structural/sectionFigure/AutoScaledFigure.jsx';
+import { annotatedFigure } from '../../structural/sectionFigure/sectionGeometry.js';
+
+const STAIR_FIGURE_FRAME = { maxWidth: 280, maxHeight: 220 };
 
 // 実装済みのタイプのみ選択肢に出す（未実装タイプは順次追加）
 const TYPE_OPTIONS = [
@@ -56,32 +62,41 @@ const rowStyle   = { display: 'flex', alignItems: 'center', gap: 8, marginBottom
 const inputStyle = { flex: 1, fontSize: 13, padding: '4px 6px', border: '1px solid #cbd5e1', borderRadius: 4 };
 
 // 階段パラメータ編集の中身（仕上げパレットの「階段」タブ内に配置）。
-export const StairEditor = observer(({ stair, project, onDelete }) => {
+export const StairEditor = observer(({ stair, graph, project, onDelete }) => {
   if (!stair) return null;
 
   const floorHeight = floorHeightAbove(project, project?.activePlane);
   const dims = computeStairDimensions(stair, { floorHeight });
+
+  // 選択中セルの包絡矩形を bounds に、選択セル状態に即した形状・向きで模式図を描く。
+  // annotatedFigure（一般解）で形状基準の縮尺を決め、注記の隙間を px 一定にする。
+  const b = graph ? roomBounds(stair.cells, graph) : null;
+  const validB = b && [b.x1, b.y1, b.x2, b.y2].every(Number.isFinite) && b.x2 > b.x1 && b.y2 > b.y1;
+  const riser = stair.riser ?? (floorHeight != null ? floorHeight / Math.max(1, stair.totalSteps) : null);
+  const figure = validB
+    ? annotatedFigure(scale => stairFigurePrimitives(stair, b, { riser, scale }), STAIR_FIGURE_FRAME)
+    : null;
 
   const num = (field) => (e) => {
     const v = e.target.value;
     stair.setField(field, v === '' ? (field === 'riser' ? null : 0) : Number(v));
   };
 
-  const segFields = SEGMENT_FIELDS[stair.type] ?? [];
   const seg = stair.segments ?? {
     first: Math.floor(stair.totalSteps / 2),
     landing: 4,
     straight: stair.totalSteps - Math.floor(stair.totalSteps / 2),
-  };
-  const setSeg = (key) => (e) => {
-    const v = e.target.value === '' ? 0 : Number(e.target.value);
-    stair.setField('segments', { ...seg, [key]: v });
   };
   const onTypeChange = (e) => {
     const t = e.target.value;
     stair.setField('type', t);
     // 段構成タイプへ切替時に未初期化なら既定値を設定
     if (SEGMENT_FIELDS[t] && !stair.segments) stair.setField('segments', { ...seg });
+  };
+  // 図中編集：踏面・セグメント段数の寸法をクリック→NumPad 確定でフィールドへ反映（パネル入力は撤去済み）。
+  const onEditDim = (dim, value) => {
+    if (dim.target === 'segments') stair.setField('segments', { ...seg, [dim.segKey]: value });
+    else if (dim.target) stair.setField(dim.target, value);
   };
 
   return (
@@ -90,6 +105,12 @@ export const StairEditor = observer(({ stair, project, onDelete }) => {
           {floorHeight != null ? `階高 ${Math.round(floorHeight)}mm` : '階高 未確定'}
         </div>
 
+        {figure && (
+          <div style={{ marginBottom: 12, border: '1px solid #e2e8f0', borderRadius: 4, padding: 4, display: 'flex', justifyContent: 'center', overflowX: 'auto' }}>
+            <AutoScaledFigure primitives={figure.primitives} scale={figure.scale} onEditDim={onEditDim} {...STAIR_FIGURE_FRAME} />
+          </div>
+        )}
+
         <div style={rowStyle}>
           <span style={labelStyle}>タイプ</span>
           <select style={inputStyle} value={stair.type} onChange={onTypeChange}>
@@ -97,20 +118,10 @@ export const StairEditor = observer(({ stair, project, onDelete }) => {
           </select>
         </div>
 
-        {segFields.map(([key, lbl]) => (
-          <div style={rowStyle} key={key}>
-            <span style={labelStyle}>{lbl}</span>
-            <input type="number" style={inputStyle} value={seg[key] ?? 0} onChange={setSeg(key)} />
-          </div>
-        ))}
-
+        {/* 踏面・セグメント段数は図中の寸法クリックで編集（パネル入力は撤去）。 */}
         <div style={rowStyle}>
           <span style={labelStyle}>段数</span>
           <input type="number" style={inputStyle} value={stair.totalSteps} onChange={num('totalSteps')} />
-        </div>
-        <div style={rowStyle}>
-          <span style={labelStyle}>踏面(mm)</span>
-          <input type="number" style={inputStyle} value={stair.tread} onChange={num('tread')} />
         </div>
         <div style={rowStyle}>
           <span style={labelStyle}>蹴上(mm)</span>

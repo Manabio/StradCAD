@@ -176,6 +176,26 @@ function renderPrimitive(p, key, t, interactive) {
     case 'text':
       return <text key={key} x={t.tx(p.x)} y={t.ty(p.y)} fontSize={p.size ?? 11}
         textAnchor={p.anchor ?? 'middle'} dominantBaseline={p.baseline ?? 'alphabetic'} fill={p.fill ?? '#1e293b'}>{p.text}</text>;
+    case 'arrow': {
+      // 走行矢印（始点丸＋線＋矢じり＋ラベル）。階段の模式図で U/D の昇り方向を示す。
+      const x1 = t.tx(p.x1), y1 = t.ty(p.y1), x2 = t.tx(p.x2), y2 = t.ty(p.y2);
+      const dx = x2 - x1, dy = y2 - y1, len = Math.hypot(dx, dy) || 1;
+      const ux = dx / len, uy = dy / len;         // 走行方向 単位
+      const nx = -uy, ny = ux;                     // 法線 単位
+      const HEAD = 6, SPREAD = 3;                  // 矢じり長・広がり(px)
+      const hx = x2 - ux * HEAD, hy = y2 - uy * HEAD;
+      const stroke = p.stroke ?? COLOR.stroke;
+      return (
+        <g key={key} stroke={stroke} fill={stroke}>
+          <circle cx={x1} cy={y1} r={1.6} />
+          <line x1={x1} y1={y1} x2={x2} y2={y2} strokeWidth={1} />
+          <line x1={x2} y1={y2} x2={hx + nx * SPREAD} y2={hy + ny * SPREAD} strokeWidth={1} />
+          <line x1={x2} y1={y2} x2={hx - nx * SPREAD} y2={hy - ny * SPREAD} strokeWidth={1} />
+          {p.label && <text x={t.tx(p.labelX)} y={t.ty(p.labelY)} fontSize={10}
+            textAnchor="middle" dominantBaseline="middle" stroke="none">{p.label}</text>}
+        </g>
+      );
+    }
     case 'axisV': {
       // 通り芯/柱芯の一点鎖線（縦全域）。ラベルは呼び出し側が text プリミティブで mm 配置する
       // （px固定だと変位寸法と重なるため。位置制御を geometry 側へ委ねる）。
