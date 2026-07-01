@@ -28,8 +28,9 @@ export const StairLayer = observer(({
     const isSel = id === selectedStairId;
 
     const lineProps = { stroke: STAIR_STROKE, strokeWidth: px(1.5), listening: false };
+    // 踏み面は線種の共通定義（LINE_WEIGHT_MM）の thin を参照する
     const treads = geom.treads.map((s, i) => (
-      <Line key={`t${i}`} points={[s.x1, s.y1, s.x2, s.y2]} {...lineProps} />
+      <Line key={`t${i}`} points={[s.x1, s.y1, s.x2, s.y2]} {...lineProps} strokeWidth={viewport.lineWeightsPx.thin} />
     ));
     const outline = geom.outline.map((s, i) => (
       <Line
