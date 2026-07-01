@@ -9,24 +9,24 @@ const clamp01 = (t) => Math.max(0, Math.min(1, t));
 
 const LABEL_OUT = 350; // mm — U/D ラベルを始点（踏面1本目線）の外側へ押し出す距離
 const NUM_GAP   = 1 / 6; // 段数数字を各段の基点側踏面線から離す量（段内比率。中央0.5の1/3）
+const NUM_OUT   = 0.15;  // 2レーン階段で段数字を外周り端へ寄せる幅方向位置（外側s=0/1 からの距離）
 
-const sub = (a, b) => ({ x: a.x - b.x, y: a.y - b.y });
-
-const BREAK_TILT = Math.PI / 6; // 30° — 破断線の傾き
+const BREAK_TILT = Math.PI / 6; // 30° — 破断線を踏面（＝幅）方向から傾ける角度。全階段共通。
+// 縦連なり踏面を切る（垂直で切る＝幅が水平）→ 水平から30°、横連なり踏面を切る（水平で切る＝幅が垂直）→ 水平から60° の "/"。
 const BREAK_TICK = 90;          // mm — 中央ジョグ（Z字）の突起高さ
 const BREAK_JOG  = 90;          // mm — 中央ジョグの線方向半幅
 
-// 破断線: 全幅カット p→q を 30° 傾け、中央に Z 字ジョグを入れた図形（seg配列）。
-// 両端は元の幅方向2辺上に保ちつつ走行方向へずらすことで、傾いても全幅を切る。
-// up は走行上方向。数字のある側＝q 端を up 側へ持ち上げる向きに傾ける（数字側で高さを稼ぐ）。
-function breakSymbol(p, q, up) {
+// 破断線: 全幅カット p→q を踏面（幅）方向から30°傾け、中央に Z 字ジョグを入れた図形（seg配列）。
+// world では常に "/"（右上がり）で、走行方向・反転（flip）によらず向きは一定。幅が水平（縦連なり
+// 踏面＝垂直で切る）なら水平から30°、幅が垂直（横連なり踏面＝水平で切る）なら水平から60°になる。
+function breakSymbol(p, q) {
   const mx = (p.x + q.x) / 2, my = (p.y + q.y) / 2;
   const W = Math.hypot(q.x - p.x, q.y - p.y) || 1;
   const wx = (q.x - p.x) / W, wy = (q.y - p.y) / W;        // 幅方向 単位（p→q）
-  let nx = -wy, ny = wx;                                   // w の法線 単位
-  if (nx * up.x + ny * up.y < 0) { nx = -nx; ny = -ny; }   // up（走行上方向）側へ揃える
   const cos = Math.cos(BREAK_TILT), sin = Math.sin(BREAK_TILT);
-  const dx = wx * cos + nx * sin, dy = wy * cos + ny * sin; // q 端を up へ持ち上げた線方向 単位
+  let nx = -wy, ny = wx;                                   // w の法線 単位
+  let dx = wx * cos + nx * sin, dy = wy * cos + ny * sin;  // 幅方向を tilt 回転した線方向
+  if (dx * dy > 0) { nx = -nx; ny = -ny; dx = wx * cos + nx * sin; dy = wy * cos + ny * sin; } // "/"（右上がり）へ固定
   const L = W / cos;                                        // 幅投影=全幅 となる長さ
   const along = (s) => ({ x: mx + dx * s, y: my + dy * s });
   const P1 = along(-L / 2), P2 = along(L / 2);
@@ -45,6 +45,21 @@ function runArrow(start, end, label) {
     x1: start.x, y1: start.y, x2: end.x, y2: end.y,
     labelX: start.x + (dx / len) * LABEL_OUT,
     labelY: start.y + (dy / len) * LABEL_OUT,
+    label,
+  };
+}
+
+// U字（折り返し）矢印: 折れ線 pts[0]→…→pts[n]。pts[0] に始点丸、終点に矢じり。
+// label は始点から2点目と逆向き（走行始点の外）へ押し出す。
+function uTurnArrow(pts, label) {
+  const [p0, p1] = pts;
+  const dx = p0.x - p1.x, dy = p0.y - p1.y;
+  const len = Math.hypot(dx, dy) || 1;
+  return {
+    x1: p0.x, y1: p0.y,
+    points: pts.flatMap((p) => [p.x, p.y]),
+    labelX: p0.x + (dx / len) * LABEL_OUT,
+    labelY: p0.y + (dy / len) * LABEL_OUT,
     label,
   };
 }
@@ -87,7 +102,7 @@ function frameDecor(f, topT, view) {
   const c00 = f.pt(0, 0), c01 = f.pt(0, 1), c10 = f.pt(topT, 0), c11 = f.pt(topT, 1);
   const outline = [seg(c00, c01), seg(c00, c10), seg(c01, c11)];
   let breakLine = null;
-  if (view === 'install') breakLine = breakSymbol(c10, c11, sub(f.pt(1, 0.5), f.pt(0, 0.5))); // 全幅カットを30°傾けたZ字破断線
+  if (view === 'install') breakLine = breakSymbol(c10, c11); // 全幅カットを傾けたZ字破断線
   else outline.push(seg(c10, c11));
   const arrow = runArrow(f.pt(0, 0.5), f.pt(topT, 0.5), view === 'install' ? 'U' : 'D');
   return { outline, breakLine, arrows: [arrow] };
@@ -189,9 +204,10 @@ function buildSwitchback(stair, b, { view, detail, riser }) {
   const tRun = tAt(n * tread); // 段部終端＝踊り場前縁
   const lineS = (t, s0, s1) => line(f.pt(t, s0), f.pt(t, s1));
 
-  const breakStep = breakStepOf(total, riser, view);
-  const inLaneA = breakStep <= n;
   const isInstall = view === 'install';
+  // install の破れは常に復路1段目（踊り場の先）。FL+1600/riser では位置決めしない。
+  const breakStep = isInstall ? n + 1 : breakStepOf(total, riser, view);
+  const inLaneA = breakStep <= n; // install では必ず復路側（false）
 
   const treads = [];
   // 往路（レーンA s:0→0.5）
@@ -217,24 +233,25 @@ function buildSwitchback(stair, b, { view, detail, riser }) {
     seg(c(0, 0.5), c(tRun, 0.5)),// 中央仕切り（吹抜け側）
   ];
 
+  const btB = tAt(n * tread - (breakStep - n) * tread); // 復路1段目（install時の破れ位置）
   let breakLine = null;
-  if (isInstall) {
-    const bt = inLaneA ? tAt(breakStep * tread) : tAt(n * tread - (breakStep - n) * tread);
-    breakLine = breakSymbol(c(bt, 0), c(bt, 1), sub(f.pt(1, 0.5), f.pt(0, 0.5))); // 全幅カットを30°傾けたZ字破断線
-  }
+  if (isInstall) breakLine = breakSymbol(c(btB, 0.5), c(btB, 1)); // 復路レーンのみ（s0.5→1）
 
-  const arrows = [runArrow(f.pt(0, 0.25), f.pt(tRun, 0.25), 'U')];
-  if (drawB) arrows.push(runArrow(f.pt(tRun, 0.75), f.pt(0, 0.75), isInstall ? '' : 'D'));
+  // U字矢印: 往路中心を上り→踊り場中心を通って復路中心へ折り返し→破れ線(install)/復路基部(upper)まで。復路に別矢印は置かない。
+  const tMid = (tRun + 1) / 2;                       // 踊り場中心（走行軸）
+  const uEnd = isInstall ? btB : 0;                  // 破れ線位置 or 復路基部
+  const arrows = [uTurnArrow([f.pt(0, 0.25), f.pt(tMid, 0.25), f.pt(tMid, 0.75), f.pt(uEnd, 0.75)], isInstall ? 'U' : 'D')];
 
   const stepNumbers = [];
   if (detail) {
     for (let k = 1; k <= shownA; k++) {
-      const p = f.pt(tAt((k - 1 + NUM_GAP) * tread), 0.25);
+      const p = f.pt(tAt((k - 1 + NUM_GAP) * tread), NUM_OUT); // 往路: 外側 s=0 寄せ
       stepNumbers.push({ x: p.x, y: p.y, text: String(k) });
     }
+    // 復路: 往路の次から連番。往路末段(n)と復路初段(n+1)は踊り場前縁 tRun の踏面線を共有する。
     if (drawB) {
       for (let j = 1; j <= shownB; j++) {
-        const p = f.pt(tAt(n * tread - (j - 1 + NUM_GAP) * tread), 0.75);
+        const p = f.pt(tAt(n * tread - (j - 1 + NUM_GAP) * tread), 1 - NUM_OUT); // 復路: 外側 s=1 寄せ
         stepNumbers.push({ x: p.x, y: p.y, text: String(n + j) });
       }
     }
@@ -259,8 +276,9 @@ function buildWinding(stair, b, { view, detail, riser }) {
   const lineS = (t, s0, s1) => line(f.pt(t, s0), f.pt(t, s1));
 
   const isInstall = view === 'install';
-  const breakStep = breakStepOf(total, riser, view);
-  const inLaneA = breakStep <= n;
+  // install の破れは常に復路1段目（回り段の先）。FL+1600/riser では位置決めしない。
+  const breakStep = isInstall ? n + w + 1 : breakStepOf(total, riser, view);
+  const inLaneA = breakStep <= n; // install では必ず復路側（false）
 
   const treads = [];
   // 往路（レーンA）
@@ -298,31 +316,31 @@ function buildWinding(stair, b, { view, detail, riser }) {
     seg(c(0, 0.5), c(tRun, 0.5)), // 中央仕切り（吹抜け側）
   ];
 
+  const btB = tAt(n * tread - (breakStep - n - w) * tread); // 復路1段目（install時の破れ位置）
   let breakLine = null;
-  if (isInstall) {
-    const up = sub(f.pt(1, 0.5), f.pt(0, 0.5));
-    if (inLaneA) { const bt = tAt(breakStep * tread); breakLine = breakSymbol(c(bt, 0), c(bt, 1), up); }
-    else if (breakStep > n + w) { const bt = tAt(n * tread - (breakStep - n - w) * tread); breakLine = breakSymbol(c(bt, 0), c(bt, 1), up); }
-  }
+  if (isInstall) breakLine = breakSymbol(c(btB, 0.5), c(btB, 1)); // 復路レーンのみ（s0.5→1）
 
-  const arrows = [runArrow(f.pt(0, 0.25), f.pt(tRun, 0.25), 'U')];
-  if (drawB) arrows.push(runArrow(f.pt(tRun, 0.75), f.pt(0, 0.75), isInstall ? '' : 'D'));
+  // U字矢印: 折り返し階段と同じ。往路中心を上り→回り段中心を通って復路中心へ折り返し→破れ線(install)/復路基部(upper)まで。
+  const tMid = (tRun + 1) / 2;                       // 回り段中心（走行軸）
+  const uEnd = isInstall ? btB : 0;                  // 破れ線位置 or 復路基部
+  const arrows = [uTurnArrow([f.pt(0, 0.25), f.pt(tMid, 0.25), f.pt(tMid, 0.75), f.pt(uEnd, 0.75)], isInstall ? 'U' : 'D')];
 
   const stepNumbers = [];
   if (detail) {
     for (let k = 1; k <= shownA; k++) {
-      const p = f.pt(tAt((k - 1 + NUM_GAP) * tread), 0.25);
+      const p = f.pt(tAt((k - 1 + NUM_GAP) * tread), NUM_OUT); // 往路: 外側 s=0 寄せ
       stepNumbers.push({ x: p.x, y: p.y, text: String(k) });
     }
     if (drawTurn) {
       for (let j = 1; j <= w; j++) {
-        const p = perim((j - 0.5) / w);
-        stepNumbers.push({ x: (p.x + P.x) / 2, y: (p.y + P.y) / 2, text: String(n + j) });
+        const p = perim((j - 0.5) / w); // 回り段: 外周(perim)側へ寄せる
+        stepNumbers.push({ x: p.x * 0.7 + P.x * 0.3, y: p.y * 0.7 + P.y * 0.3, text: String(n + j) });
       }
     }
+    // 復路: 最後の縁 n+w+m が上階床（登りきった先）。install は復路1段目で破れ、上階は最後まで表示。
     if (drawB) {
       for (let j = 1; j <= shownB; j++) {
-        const p = f.pt(tAt(n * tread - (j - 1 + NUM_GAP) * tread), 0.75);
+        const p = f.pt(tAt(n * tread - (j - 1 + NUM_GAP) * tread), 1 - NUM_OUT); // 復路: 外側 s=1 寄せ
         stepNumbers.push({ x: p.x, y: p.y, text: String(n + w + j) });
       }
     }
@@ -396,16 +414,14 @@ function buildLTurn(stair, b, { view, detail, riser }) {
 
   let breakLine = null;
   if (isInstall) {
-    const upU = sub(toWorld(runU, runU), toWorld(0, runU)); // arm1 走行上方向（+u）
-    const upV = sub(toWorld(runU, 0), toWorld(runU, runU)); // arm2 走行上方向（-v）
     if (inArm1) {
       const u = runU * breakStep / first;
-      breakLine = breakSymbol(toWorld(u, runU), toWorld(u, 1), upU);
+      breakLine = breakSymbol(toWorld(u, runU), toWorld(u, 1));
     } else if (breakStep <= first + w) {
-      breakLine = breakSymbol(toWorld(runU, runU), toWorld(1, runU), upV); // 扇形内 → arm2 入口で破れ
+      breakLine = breakSymbol(toWorld(runU, runU), toWorld(1, runU)); // 扇形内 → arm2 入口で破れ
     } else {
       const v = runU * (1 - (breakStep - first - w) / straight);
-      breakLine = breakSymbol(toWorld(runU, v), toWorld(1, v), upV);
+      breakLine = breakSymbol(toWorld(runU, v), toWorld(1, v));
     }
   }
 
@@ -489,12 +505,9 @@ function buildOpenWell(stair, b, { view, detail, riser }) {
 
   let breakLine = null;
   if (isInstall) {
-    const upBottom = sub(toWorld(1, 0.5), toWorld(0, 0.5));  // 下アーム走行上方向（+u）
-    const upRight  = sub(toWorld(runW, 0), toWorld(runW, 1)); // 右アーム走行上方向（-v）
-    const upTop    = sub(toWorld(0, 0.5), toWorld(1, 0.5));  // 上アーム走行上方向（-u）
-    if (bs <= n)        { const u = runW * bs / n;        breakLine = breakSymbol(toWorld(u, 1 - aw), toWorld(u, 1), upBottom); }
-    else if (bs <= 2 * n) { const v = 1 - (bs - n) / n;     breakLine = breakSymbol(toWorld(runW, v), toWorld(1, v), upRight); }
-    else                { const u = runW * (1 - (bs - 2 * n) / n); breakLine = breakSymbol(toWorld(u, 0), toWorld(u, aw), upTop); }
+    if (bs <= n)        { const u = runW * bs / n;        breakLine = breakSymbol(toWorld(u, 1 - aw), toWorld(u, 1)); }
+    else if (bs <= 2 * n) { const v = 1 - (bs - n) / n;     breakLine = breakSymbol(toWorld(runW, v), toWorld(1, v)); }
+    else                { const u = runW * (1 - (bs - 2 * n) / n); breakLine = breakSymbol(toWorld(u, 0), toWorld(u, aw)); }
   }
 
   const vB = (1 - aw + 1) / 2;

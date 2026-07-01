@@ -48,9 +48,9 @@ export const StairLayer = observer(({
       <Group key={`a${i}`}>
         {/* 始点: 寸法線と同じ塗り丸 */}
         <Circle x={a.x1} y={a.y1} radius={px(2)} fill={STAIR_STROKE} listening={false} />
-        {/* 終点に矢じり */}
+        {/* 終点に矢じり（points があれば折れ線U字矢印） */}
         <Arrow
-          points={[a.x1, a.y1, a.x2, a.y2]}
+          points={a.points ?? [a.x1, a.y1, a.x2, a.y2]}
           stroke={STAIR_STROKE} fill={STAIR_STROKE} strokeWidth={px(1.5)}
           pointerLength={px(10)} pointerWidth={px(8)} listening={false}
         />

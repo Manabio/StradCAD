@@ -40,7 +40,7 @@ export function stairFigurePrimitives(stair, b, { riser = null, scale = null } =
   }
   // 走行矢印（始点丸＋矢じり＋U/Dラベル）
   for (const a of geom.arrows ?? []) {
-    prims.push({ type: 'arrow', x1: a.x1, y1: a.y1, x2: a.x2, y2: a.y2, labelX: a.labelX, labelY: a.labelY, label: a.label, stroke: STROKE });
+    prims.push({ type: 'arrow', x1: a.x1, y1: a.y1, x2: a.x2, y2: a.y2, points: a.points, labelX: a.labelX, labelY: a.labelY, label: a.label, stroke: STROKE });
   }
   // 段番号
   for (const n of geom.stepNumbers) {

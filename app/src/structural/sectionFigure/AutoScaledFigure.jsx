@@ -177,18 +177,24 @@ function renderPrimitive(p, key, t, interactive) {
       return <text key={key} x={t.tx(p.x)} y={t.ty(p.y)} fontSize={p.size ?? 11}
         textAnchor={p.anchor ?? 'middle'} dominantBaseline={p.baseline ?? 'alphabetic'} fill={p.fill ?? '#1e293b'}>{p.text}</text>;
     case 'arrow': {
-      // 走行矢印（始点丸＋線＋矢じり＋ラベル）。階段の模式図で U/D の昇り方向を示す。
-      const x1 = t.tx(p.x1), y1 = t.ty(p.y1), x2 = t.tx(p.x2), y2 = t.ty(p.y2);
-      const dx = x2 - x1, dy = y2 - y1, len = Math.hypot(dx, dy) || 1;
-      const ux = dx / len, uy = dy / len;         // 走行方向 単位
+      // 走行矢印（始点丸＋線／折れ線＋矢じり＋ラベル）。階段の模式図で U/D の昇り方向を示す。
+      // points があれば折れ線U字矢印（折返し/回り階段）。なければ x1,y1→x2,y2 の直線。
+      const flat = p.points ?? [p.x1, p.y1, p.x2, p.y2];
+      const sx = [], sy = [];
+      for (let i = 0; i < flat.length; i += 2) { sx.push(t.tx(flat[i])); sy.push(t.ty(flat[i + 1])); }
+      const last = sx.length - 1;
+      const x1 = sx[0], y1 = sy[0], x2 = sx[last], y2 = sy[last];
+      const dx = x2 - sx[last - 1], dy = y2 - sy[last - 1], len = Math.hypot(dx, dy) || 1; // 最終区間で矢じり向き
+      const ux = dx / len, uy = dy / len;          // 走行方向 単位
       const nx = -uy, ny = ux;                     // 法線 単位
       const HEAD = 6, SPREAD = 3;                  // 矢じり長・広がり(px)
       const hx = x2 - ux * HEAD, hy = y2 - uy * HEAD;
       const stroke = p.stroke ?? COLOR.stroke;
+      const linePts = sx.map((x, i) => `${x},${sy[i]}`).join(' ');
       return (
         <g key={key} stroke={stroke} fill={stroke}>
           <circle cx={x1} cy={y1} r={1.6} />
-          <line x1={x1} y1={y1} x2={x2} y2={y2} strokeWidth={1} />
+          <polyline points={linePts} fill="none" strokeWidth={1} />
           <line x1={x2} y1={y2} x2={hx + nx * SPREAD} y2={hy + ny * SPREAD} strokeWidth={1} />
           <line x1={x2} y1={y2} x2={hx - nx * SPREAD} y2={hy - ny * SPREAD} strokeWidth={1} />
           {p.label && <text x={t.tx(p.labelX)} y={t.ty(p.labelY)} fontSize={10}
