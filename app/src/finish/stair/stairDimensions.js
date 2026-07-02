@@ -26,8 +26,8 @@ export const STAIR_LIMITS = {
  */
 export function computeStairDimensions(stair, { floorHeight, isResidential = true }) {
   const totalSteps = Math.max(1, stair.totalSteps);
-  // 蹴上 = 階高 / 段数（明示指定があればそれを優先）
-  const riser = stair.riser ?? (floorHeight != null ? floorHeight / totalSteps : null);
+  // 蹴上 = 階高 / 物理段数（totalSteps - 1。+1は上階到達分で蹴上を持たない。明示指定があればそれを優先）
+  const riser = stair.riser ?? (floorHeight != null ? floorHeight / Math.max(1, totalSteps - 1) : null);
   const tread = stair.tread;
 
   const warnings = [];

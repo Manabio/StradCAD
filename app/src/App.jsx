@@ -236,7 +236,7 @@ const App = observer(() => {
         id: s.id,
         stair: s,
         bounds: roomBounds(s.cells, temp),
-        riser: s.riser ?? (floorHeight != null ? floorHeight / Math.max(1, s.totalSteps) : null),
+        riser: s.riser ?? (floorHeight != null ? floorHeight / Math.max(1, s.totalSteps - 1) : null),
         view: 'upper',
         selectable: false,
       }));
@@ -2848,7 +2848,7 @@ const App = observer(() => {
                     id: s.id,
                     stair: s,
                     bounds: roomBounds(s.cells, graph),
-                    riser: s.riser ?? (fh != null ? fh / Math.max(1, s.totalSteps) : null),
+                    riser: s.riser ?? (fh != null ? fh / Math.max(1, s.totalSteps - 1) : null),
                     view: 'install',
                     selectable: appMode === 'finish',
                   }));

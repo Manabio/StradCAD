@@ -71,7 +71,7 @@ function stairDimPrimitives(stair, b, riser, g) {
   ];
 
   // 踏面: 走行始端の1段分（t:0→1/total）を、全長寸法と反対側の外へ寸法線で示す（設計値ラベル・図中編集可）。
-  const total = Math.max(1, stair.totalSteps);
+  const total = Math.max(1, stair.totalSteps - 1); // 物理段数（totalSteps - 1。+1は上階到達分）
   const f = makeFrame(stair, b);
   const p0 = f.pt(0, 0), p1 = f.pt(1 / total, 0);
   const tread = { editable: true, target: 'tread', label: Math.round(stair.tread) };

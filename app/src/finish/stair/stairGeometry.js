@@ -103,7 +103,7 @@ function frameDecor(f, topT, view) {
   const outline = [seg(c00, c01), seg(c00, c10), seg(c01, c11)];
   let breakLine = null;
   if (view === 'install') breakLine = breakSymbol(c10, c11); // 全幅カットを傾けたZ字破断線
-  else outline.push(seg(c10, c11));
+  else outline.push({ ...seg(c10, c11), thin: true }); // 設置階上階への到達辺（$）はthin
   const arrow = runArrow(f.pt(0, 0.5), f.pt(topT, 0.5), view === 'install' ? 'U' : 'D');
   return { outline, breakLine, arrows: [arrow] };
 }
@@ -117,6 +117,8 @@ function frameDecor(f, topT, view) {
 function defaultSections(stair) {
   const total = Math.max(2, stair.totalSteps);
   switch (stair.type) {
+    case StairType.STRAIGHT:
+      return [Math.max(1, total - 1)];
     case StairType.STRAIGHT_LANDING:
     case StairType.L_TURN: {
       const first = Math.max(1, Math.floor((total - 2) / 2));
@@ -153,15 +155,16 @@ const getSections = (stair) => stair.sections ?? defaultSections(stair);
 // ---- 直進階段 ----
 function buildStraight(stair, b, { view, detail, riser }) {
   const f = makeFrame(stair, b);
-  const total = Math.max(1, stair.totalSteps);
-  const breakStep = breakStepOf(total, riser, view);
-  const shownSteps = view === 'install' ? breakStep : total;
-  const topT = shownSteps / total;
+  const total = Math.max(1, stair.totalSteps); // 物理段数+1（上階到達分）
+  const physical = getSections(stair)[0];      // 物理段数（実際に蹴上を持つ段）
+  const breakStep = breakStepOf(physical, riser, view);
+  const shownSteps = view === 'install' ? breakStep : physical;
+  const topT = shownSteps / physical;
   const nosingT = detail ? (stair.nosing / f.runLength) * (view === 'install' ? -1 : 1) : 0;
 
   const treads = [];
   for (let k = 1; k < shownSteps; k++) {
-    const t = clamp01(k / total + nosingT);
+    const t = clamp01(k / physical + nosingT);
     treads.push(line(f.pt(t, 0), f.pt(t, 1)));
   }
 
@@ -170,8 +173,13 @@ function buildStraight(stair, b, { view, detail, riser }) {
   const stepNumbers = [];
   if (detail) {
     for (let k = 1; k <= shownSteps; k++) {
-      const c = f.pt((k - 1 + NUM_GAP) / total, 0.85);
+      const c = f.pt((k - 1 + NUM_GAP) / physical, 0.85);
       stepNumbers.push({ x: c.x, y: c.y, text: String(k) });
+    }
+    if (view !== 'install') {
+      // 設置階上階への到達（総段数=最終番号）。物理段数を持たない別ラベル。
+      const end = f.pt(1, 0.85);
+      stepNumbers.push({ x: end.x, y: end.y, text: String(total) });
     }
   }
   return { treads, outline, arrows, breakLine, stepNumbers };
@@ -662,6 +670,12 @@ function segmentSpans(stair, b) {
   const sections = getSections(stair);
   const tread = stair.tread;
   switch (stair.type) {
+    case StairType.STRAIGHT: {
+      const f = makeFrame(stair, b);
+      return [
+        [f.pt(0, 0), f.pt(1, 0), `直進 ${sections[0]}段`, 0],
+      ];
+    }
     case StairType.STRAIGHT_LANDING: {
       const f = makeFrame(stair, b);
       const first = sections[0], straight = sections[2];

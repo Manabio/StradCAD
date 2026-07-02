@@ -37,7 +37,7 @@ export const StairLayer = observer(({
         key={`o${i}`}
         points={[s.x1, s.y1, s.x2, s.y2]}
         {...lineProps}
-        strokeWidth={px(2)}
+        strokeWidth={s.thin ? viewport.lineWeightsPx.thin : px(2)}
         dash={s.dashed ? [px(40), px(30)] : undefined}
       />
     ));

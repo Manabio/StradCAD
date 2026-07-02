@@ -38,7 +38,7 @@ function typeOptionsFor(type) {
 
 // 区間別・段数（sections配列）を持つタイプ。図中の寸法クリックで stair.sections[index] を編集する。
 const HAS_SECTIONS = new Set([
-  StairType.STRAIGHT_LANDING, StairType.SWITCHBACK, StairType.WINDING,
+  StairType.STRAIGHT, StairType.STRAIGHT_LANDING, StairType.SWITCHBACK, StairType.WINDING,
   StairType.L_TURN, StairType.FLARED, StairType.OPEN_WELL,
 ]);
 
@@ -69,7 +69,7 @@ export const StairEditor = observer(({ stair, graph, project, onDelete }) => {
   // annotatedFigure（一般解）で形状基準の縮尺を決め、注記の隙間を px 一定にする。
   const b = graph ? roomBounds(stair.cells, graph) : null;
   const validB = b && [b.x1, b.y1, b.x2, b.y2].every(Number.isFinite) && b.x2 > b.x1 && b.y2 > b.y1;
-  const riser = stair.riser ?? (floorHeight != null ? floorHeight / Math.max(1, stair.totalSteps) : null);
+  const riser = stair.riser ?? (floorHeight != null ? floorHeight / Math.max(1, stair.totalSteps - 1) : null);
   const figure = validB
     ? annotatedFigure(scale => stairFigurePrimitives(stair, b, { riser, scale }), STAIR_FIGURE_FRAME)
     : null;
