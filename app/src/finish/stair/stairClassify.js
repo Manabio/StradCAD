@@ -180,33 +180,34 @@ export function classifyStairArea(cells, graph, floorHeight = null) {
   let upDirection = isVertical ? 'up' : 'right';
 
   let type = StairType.STRAIGHT;
-  let segments = null;
+  let sections = null;
   let flip = false;
 
-  // 中空き（中央吹抜け）を優先判定。
+  // 中空き（中央吹抜け）を優先判定。踊り場（1段）を挟んだ [n1,1,n2,1,n3] の5区間。
   const ow = detectOpenWell(cells, graph, b);
   if (ow) {
     return {
       type: StairType.OPEN_WELL, bounds: b, isVertical, runLength, runWidth,
       upDirection: ow.upDirection, flip: false,
-      segments: { first: 0, landing: 0, straight: ow.straight },
-      totalSteps: ow.straight * 3,
+      sections: [ow.straight, 1, ow.straight, 1, ow.straight],
+      totalSteps: ow.straight * 3 + 3,
     };
   }
 
   // 矩折（L字）を判定（4象限のうち1象限が空）。
   const lt = detectLTurn(cells, graph, b);
   if (lt) {
-    // 矩折（直進2アーム）の段数。階高に対して不足するならコーナーを曲がり段で補い FLARED に落とす。
+    // 矩折（直進2アーム）の段数。階高に対して不足するならコーナーを曲がり段（実段）で補い FLARED に落とす。
+    // コーナーは平踊り場なら常に1段、曲がり段なら実段数。
     const baseTotal = lt.first + lt.straight;
     const required = floorHeight ? Math.ceil(floorHeight / MAX_RISER) : 0;
-    const landing = required > baseTotal ? required - baseTotal : 0;
-    const ltType = landing > 0 ? StairType.FLARED : StairType.L_TURN;
+    const corner = required > baseTotal ? required - baseTotal : 1;
+    const ltType = corner > 1 ? StairType.FLARED : StairType.L_TURN;
     return {
       type: ltType, bounds: b, isVertical, runLength, runWidth,
       upDirection: lt.upDirection, flip: lt.flip,
-      segments: { first: lt.first, landing, straight: lt.straight },
-      totalSteps: lt.first + landing + lt.straight,
+      sections: [lt.first, corner, lt.straight],
+      totalSteps: lt.first + corner + lt.straight + 1,
     };
   }
 
@@ -218,33 +219,36 @@ export function classifyStairArea(cells, graph, floorHeight = null) {
       ? (ut.landingHigh ? 'down' : 'up')
       : (ut.landingHigh ? 'right' : 'left');
     const straight = Math.max(1, Math.round(ut.laneLen / DEFAULT_TREAD));
+    let totalSteps;
     if (ut.kind === 'switchback') {
       type = StairType.SWITCHBACK;
-      segments = { first: 0, landing: 0, straight };
+      sections = [straight, 1, straight];      // 踊り場（1段）を挟んだ往路・復路
+      totalSteps = straight * 2 + 2;
     } else {
       type = StairType.WINDING;
       const winder = Math.max(1, Math.round(ut.turnLen / DEFAULT_TREAD));
-      segments = { first: 0, landing: winder, straight };
+      sections = [straight, winder, straight]; // 回り段（実段）を挟んだ往路・復路
+      totalSteps = straight * 2 + winder + 1;
     }
-    return { type, bounds: b, isVertical, runLength, runWidth, upDirection, segments, flip };
+    return { type, bounds: b, isVertical, runLength, runWidth, upDirection, sections, totalSteps, flip };
   }
 
   // 走行軸が「広い・狭い・広い」の3区間なら踊り場付直進と判定する。
   const spans = runSpans(cells, graph, isVertical);
+  let totalSteps;
   if (spans.length === 3) {
     const len = (s) => s.hi - s.lo;
     const [s0, s1, s2] = spans;
     if (len(s1) < len(s0) * 0.85 && len(s1) < len(s2) * 0.85) {
       type = StairType.STRAIGHT_LANDING;
-      // 基部側（昇り起点）の外側区間を first、反対側を straight とする。
+      // 基部側（昇り起点）の外側区間を first、反対側を straight とする。踊り場は常に1段。
       const baseLow = upDirection === 'right' || upDirection === 'down';
       const firstSpan    = baseLow ? s0 : s2;
       const straightSpan = baseLow ? s2 : s0;
-      segments = {
-        first:    Math.max(1, Math.round(len(firstSpan)    / DEFAULT_TREAD)),
-        landing:  Math.max(1, Math.round(len(s1)           / DEFAULT_TREAD)),
-        straight: Math.max(1, Math.round(len(straightSpan) / DEFAULT_TREAD)),
-      };
+      const first    = Math.max(1, Math.round(len(firstSpan)    / DEFAULT_TREAD));
+      const straight = Math.max(1, Math.round(len(straightSpan) / DEFAULT_TREAD));
+      sections = [first, 1, straight];
+      totalSteps = first + straight + 2;
     }
   }
 
@@ -255,7 +259,8 @@ export function classifyStairArea(cells, graph, floorHeight = null) {
     runLength,
     runWidth,
     upDirection,
-    segments,
+    sections,
+    totalSteps,
     flip,
   };
 }

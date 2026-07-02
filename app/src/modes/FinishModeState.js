@@ -392,7 +392,7 @@ export class FinishModeState {
     const cls = classifyStairArea(cells, this.graph, floorHeight);
     const opts = {
       type: cls.type, cells, upDirection: cls.upDirection,
-      flip: cls.flip ?? false, segments: cls.segments ?? null,
+      flip: cls.flip ?? false, sections: cls.sections ?? null,
     };
     if (cls.totalSteps) opts.totalSteps = cls.totalSteps;
     const stair = this.graph.addStair(opts);

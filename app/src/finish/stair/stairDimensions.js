@@ -44,11 +44,7 @@ export function computeStairDimensions(stair, { floorHeight, isResidential = tru
     }
   }
 
-  // 踊り場の長さ ≥ 1200mm（段構成を持つタイプ）
-  if (stair.segments) {
-    const landingLen = (stair.segments.landing ?? 0) * tread;
-    if (landingLen > 0 && landingLen < 1200) warnings.push(`踊り場長 ${Math.round(landingLen)}mm < 1200mm`);
-  }
+  // 踊り場の長さは stairGeometry.js の固定式（4踏面 or 1200mm の大きい方）で常に基準法（≥1200mm）を満たす。
 
   return {
     riser,

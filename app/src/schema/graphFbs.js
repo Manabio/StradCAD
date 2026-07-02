@@ -49,12 +49,12 @@ const GS = {
   STAIRS: 35, STAIR_ORDER: 36,
 };
 
-// Stair: 16 フィールド
+// Stair: 14 フィールド
 const ST = {
   ID: 0, TYPE: 1, STRUCTURE: 2, CELLS: 3, TOTAL_STEPS: 4,
   TREAD: 5, HAS_RISER: 6, RISER: 7, NOSING: 8, WIDTH: 9,
   UP_DIR: 10, FLIP: 11,
-  HAS_SEG: 12, SEG_FIRST: 13, SEG_LANDING: 14, SEG_STRAIGHT: 15, // 段構成
+  HAS_SECTIONS: 12, SECTIONS: 13, // 区間別・段数（歩行順、カンマ区切り文字列。例:"4,1,3"）
 };
 
 // StructuralMaterialType 列挙値エンコード（柱・梁・耐力壁・スラブ・基礎で共通）
@@ -562,10 +562,10 @@ function writeStair(b, st) {
   const sUp   = b.createString(st.upDirection ?? 'right');
   const cellsVec = writeStrVec(b, st.cells ?? []);
   const hasRiser = st.riser != null;
-  const seg = st.segments;
-  const hasSeg = seg != null;
+  const hasSections = st.sections != null;
+  const sSections = hasSections ? b.createString(st.sections.join(',')) : 0;
 
-  b.startObject(16);
+  b.startObject(14);
   b.addFieldOffset(ST.ID,        sId,   0);
   b.addFieldOffset(ST.TYPE,      sType, 0);
   b.addFieldOffset(ST.STRUCTURE, sStru, 0);
@@ -578,10 +578,8 @@ function writeStair(b, st) {
   b.addFieldFloat64(ST.WIDTH,    st.width ?? 900, 0.0);
   b.addFieldOffset(ST.UP_DIR,    sUp,   0);
   b.addFieldInt8(ST.FLIP,        st.flip ? 1 : 0, 0);
-  b.addFieldInt8(ST.HAS_SEG,     hasSeg ? 1 : 0, 0);
-  b.addFieldFloat64(ST.SEG_FIRST,    hasSeg ? (seg.first ?? 0)    : 0, 0.0);
-  b.addFieldFloat64(ST.SEG_LANDING,  hasSeg ? (seg.landing ?? 0)  : 0, 0.0);
-  b.addFieldFloat64(ST.SEG_STRAIGHT, hasSeg ? (seg.straight ?? 0) : 0, 0.0);
+  b.addFieldInt8(ST.HAS_SECTIONS, hasSections ? 1 : 0, 0);
+  b.addFieldOffset(ST.SECTIONS,   sSections, 0);
   return b.endObject();
 }
 
@@ -1094,8 +1092,8 @@ function readStair(bb, tablePos) {
     width:       r.f64(ST.WIDTH) || 900,
     upDirection: r.str(ST.UP_DIR) || 'right',
     flip:        r.i8(ST.FLIP) !== 0,
-    segments:    r.i8(ST.HAS_SEG)
-      ? { first: r.f64(ST.SEG_FIRST), landing: r.f64(ST.SEG_LANDING), straight: r.f64(ST.SEG_STRAIGHT) }
+    sections:    r.i8(ST.HAS_SECTIONS)
+      ? (r.str(ST.SECTIONS) || '').split(',').filter(Boolean).map(Number)
       : null,
   };
 }

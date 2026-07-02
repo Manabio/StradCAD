@@ -122,7 +122,7 @@ function buildSnapshot(graph) {
           cells: [...s.cells], totalSteps: s.totalSteps, tread: s.tread,
           riser: s.riser ?? null, nosing: s.nosing, width: s.width,
           upDirection: s.upDirection, flip: s.flip,
-          segments: s.segments ?? null,
+          sections: s.sections ?? null,
         };
       }),
     stairOrder: [...graph.stairOrder],
@@ -588,7 +588,7 @@ function applySnapshot(graph, snapshot) {
         type: d.type, structure: d.structure, cells: new Set(d.cells),
         totalSteps: d.totalSteps, tread: d.tread, riser: d.riser ?? null,
         nosing: d.nosing, width: d.width, upDirection: d.upDirection, flip: d.flip,
-        segments: d.segments ?? null,
+        sections: d.sections ?? null,
       }, d.id);
     }
     const savedStairOrder = snapshot.stairOrder ?? [];

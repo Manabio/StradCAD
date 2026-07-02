@@ -3,6 +3,7 @@ import { StructuralMaterialType, StairType } from '@core';
 import { computeStairDimensions, floorHeightAbove } from './stairDimensions.js';
 import { roomBounds } from '../gridCells.js';
 import { stairFigurePrimitives } from './stairFigure.js';
+import { defaultSections } from './stairGeometry.js';
 import { AutoScaledFigure } from '../../structural/sectionFigure/AutoScaledFigure.jsx';
 import { annotatedFigure } from '../../structural/sectionFigure/sectionGeometry.js';
 
@@ -35,15 +36,11 @@ function typeOptionsFor(type) {
   return TYPE_OPTIONS.filter(o => group.includes(o.value));
 }
 
-// タイプ別の段構成入力フィールド（[key, ラベル]）
-const SEGMENT_FIELDS = {
-  [StairType.STRAIGHT_LANDING]: [['first', '最初の段'], ['landing', '踊り場(段相当)'], ['straight', '直進部段']],
-  [StairType.SWITCHBACK]:       [['straight', '片側段数']],
-  [StairType.WINDING]:          [['straight', '直進部段数'], ['landing', '回り段数']],
-  [StairType.L_TURN]:           [['first', '最初の段数'], ['straight', '直進部段数']],
-  [StairType.FLARED]:           [['first', '最初の段数'], ['landing', '曲がり段数'], ['straight', '直進部段数']],
-  [StairType.OPEN_WELL]:        [['straight', '各直進部段数']],
-};
+// 区間別・段数（sections配列）を持つタイプ。図中の寸法クリックで stair.sections[index] を編集する。
+const HAS_SECTIONS = new Set([
+  StairType.STRAIGHT_LANDING, StairType.SWITCHBACK, StairType.WINDING,
+  StairType.L_TURN, StairType.FLARED, StairType.OPEN_WELL,
+]);
 
 const STRUCTURE_OPTIONS = [
   { value: StructuralMaterialType.WOOD,  label: '木造' },
@@ -82,21 +79,23 @@ export const StairEditor = observer(({ stair, graph, project, onDelete }) => {
     stair.setField(field, v === '' ? (field === 'riser' ? null : 0) : Number(v));
   };
 
-  const seg = stair.segments ?? {
-    first: Math.floor(stair.totalSteps / 2),
-    landing: 4,
-    straight: stair.totalSteps - Math.floor(stair.totalSteps / 2),
-  };
   const onTypeChange = (e) => {
     const t = e.target.value;
     stair.setField('type', t);
     // 段構成タイプへ切替時に未初期化なら既定値を設定
-    if (SEGMENT_FIELDS[t] && !stair.segments) stair.setField('segments', { ...seg });
+    if (HAS_SECTIONS.has(t) && !stair.sections) {
+      stair.setField('sections', defaultSections({ type: t, totalSteps: stair.totalSteps }));
+    }
   };
-  // 図中編集：踏面・セグメント段数の寸法をクリック→NumPad 確定でフィールドへ反映（パネル入力は撤去済み）。
+  // 図中編集：踏面・区間段数の寸法をクリック→NumPad 確定でフィールドへ反映（パネル入力は撤去済み）。
   const onEditDim = (dim, value) => {
-    if (dim.target === 'segments') stair.setField('segments', { ...seg, [dim.segKey]: value });
-    else if (dim.target) stair.setField(dim.target, value);
+    if (dim.target === 'sections') {
+      const arr = [...(stair.sections ?? defaultSections(stair))];
+      arr[dim.index] = value;
+      stair.setField('sections', arr);
+    } else if (dim.target) {
+      stair.setField(dim.target, value);
+    }
   };
 
   return (
@@ -118,10 +117,14 @@ export const StairEditor = observer(({ stair, graph, project, onDelete }) => {
           </select>
         </div>
 
-        {/* 踏面・セグメント段数は図中の寸法クリックで編集（パネル入力は撤去）。 */}
+        {/* 区間別段数は図中の寸法クリックで編集（パネル入力は撤去）。総段数はその総和+1の派生値。 */}
         <div style={rowStyle}>
           <span style={labelStyle}>段数</span>
-          <input type="number" style={inputStyle} value={stair.totalSteps} onChange={num('totalSteps')} />
+          <input
+            type="number" style={inputStyle} value={stair.totalSteps}
+            disabled={HAS_SECTIONS.has(stair.type)}
+            onChange={num('totalSteps')}
+          />
         </div>
         <div style={rowStyle}>
           <span style={labelStyle}>蹴上(mm)</span>

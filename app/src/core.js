@@ -702,7 +702,7 @@ export class Stair {
     width       = 900,     // 階段幅(mm)
     upDirection = 'right', // 昇り方向 'up'|'down'|'left'|'right'（向き推定結果）
     flip        = false,
-    segments    = null,    // 段構成 { first, landing, straight }。直進では未使用(null)
+    sections    = null,    // 区間別・実段数（歩行順）。直進では未使用(null)。totalSteps=総和+1(上階床到達分)
   } = {}) {
     this.id          = id;
     this.type        = type;
@@ -715,7 +715,7 @@ export class Stair {
     this.width       = width;
     this.upDirection = upDirection;
     this.flip        = flip;
-    this.segments    = segments;
+    this.sections    = sections;
     makeObservable(this, {
       type:        observable,
       structure:   observable,
@@ -727,13 +727,17 @@ export class Stair {
       width:       observable,
       upDirection: observable,
       flip:        observable,
-      segments:    observable.ref,
+      sections:    observable.ref,
       setField:    action,
       setCells:    action,
     });
   }
-  setField(field, value) { this[field] = value; }
-  setCells(cells)        { this.cells = cells; }
+  // sections（区間別・実段数配列）を設定すると、totalSteps（総段数=総和+上階床到達分1）を同期する。
+  setField(field, value) {
+    this[field] = value;
+    if (field === 'sections' && value) this.totalSteps = value.reduce((a, b) => a + b, 0) + 1;
+  }
+  setCells(cells) { this.cells = cells; }
 }
 
 // ================================================================
