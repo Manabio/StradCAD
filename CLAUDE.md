@@ -41,6 +41,7 @@ app/src/
 | 図面合成（複数階×複数カテゴリ）の設計意図 | `.claude/figure.md` |
 | モード切替アーキテクチャ | `.claude/mode-system.md` |
 | 階・Plane設計 | `.claude/floor-design.md` |
+| 階段モデルの設計意図 | `.claude/stair-model.md` |
 | IndexedDB永続化 | `.claude/persistence-idb.md` |
 | FlatBuffersシリアライズ | `.claude/serialization-fbs.md` |
 | 実装方針（全体ルール） | `.claude/implementation-policy.md` |

@@ -1,4 +1,4 @@
-import { buildStairGeometry, makeFrame, stairSegmentDims } from './stairGeometry.js';
+import { buildStairGeometry, makeFrame, stairSegmentDims, insetStairBounds, spansFromRisers_new } from './stairGeometry.js';
 import { DEFAULT_GAP_PX, orderDimsByLength, resolveDimOverlaps } from '../../structural/sectionFigure/sectionGeometry.js';
 
 // ================================================================
@@ -70,10 +70,13 @@ function stairDimPrimitives(stair, b, riser, g) {
     { type: 'dim', dir: 'v', from: b.y1, to: b.y2, at: b.x2 + g, label: `${vHeader} ${Math.round(h)}` }, // 縦スパン（右）
   ];
 
-  // 踏面: 走行始端の1段分（t:0→1/total）を、全長寸法と反対側の外へ寸法線で示す（設計値ラベル・図中編集可）。
-  const total = Math.max(1, stair.totalSteps - 1); // 物理段数（totalSteps - 1。+1は上階到達分）
-  const f = makeFrame(stair, b);
-  const p0 = f.pt(0, 0), p1 = f.pt(1 / total, 0);
+  // 踏面: 走行始端の1段分（t:0→1/spans）を、全長寸法と反対側の外へ寸法線で示す（設計値ラベル・図中編集可）。
+  // 実際に描かれる図形（bi＝中心線から壁厚/2逃げた矩形）に合わせる。
+  const bi = insetStairBounds(stair, b, 'upper');
+  const physical = Math.max(1, stair.totalSteps - 1); // 物理段数（totalSteps - 1。+1は上階到達分）
+  const spans_new = spansFromRisers_new(physical);    // 踏面数（stair-model.md: 実段数=踏面数+1）
+  const f = makeFrame(stair, bi);
+  const p0 = f.pt(0, 0), p1 = f.pt(1 / spans_new, 0);
   const tread = { editable: true, target: 'tread', label: Math.round(stair.tread) };
   if (vertical) {
     prims.push({ type: 'dim', dir: 'v', from: p0.y, to: p1.y, at: b.x1 - g, labelSide: 'left', ...tread });
@@ -88,6 +91,6 @@ function stairDimPrimitives(stair, b, riser, g) {
   prims.push({ type: 'text', x: (b.x1 + b.x2) / 2, y: b.y2 + g * 2, text: notes.join('  '), anchor: 'middle', baseline: 'hanging', size: 11, fill: '#334155' });
 
   // タイプ別セグメント（踊り場・回り部・各アーム・各直進部）を、その場に段数／長さの寸法線で注記
-  prims.push(...stairSegmentDims(stair, b, g));
+  prims.push(...stairSegmentDims(stair, bi, g));
   return prims;
 }

@@ -7,6 +7,11 @@ export const STRAIGHT_RATIO = 14 / 3;
 const DEFAULT_TREAD = 250; // mm（段数推定用。確定値は寸法フェーズで上書きされる）
 const MAX_RISER = 230;     // mm（住宅の蹴上上限。必要段数 = ceil(階高/MAX_RISER)）
 
+// 物理長(mm)から実段数を逆算する。stair-model.md: 実段数=踏面数+1（長さは踏面数ぶんのtread相当）。
+function risersFromLength_new(lengthMm, treadMm = DEFAULT_TREAD) {
+  return Math.max(1, Math.round(lengthMm / treadMm) + 1);
+}
+
 // 走行軸方向に並ぶセルの区間（重複は統合）を lo 昇順で返す。
 function runSpans(cells, graph, isVertical) {
   const seen = new Map();
@@ -58,7 +63,7 @@ function detectOpenWell(cells, graph, b) {
   const W = b.x2 - b.x1, H = b.y2 - b.y1;
   const rightColW = xa[cols] - xa[cols - 1];
   const armLen = (opening === 'left' || opening === 'right') ? W : H;
-  const straight = Math.max(2, Math.round((armLen - rightColW) / DEFAULT_TREAD));
+  const straight = Math.max(2, risersFromLength_new(armLen - rightColW));
   const UP = { left: 'right', right: 'left', top: 'down', bottom: 'up' };
   return { upDirection: UP[opening], straight };
 }
@@ -98,8 +103,8 @@ function detectLTurn(cells, graph, b) {
   return {
     upDirection: m.upDirection,
     flip: m.flip,
-    first:    Math.max(1, Math.round(((b.x2 - b.x1) - cw) / DEFAULT_TREAD)),
-    straight: Math.max(1, Math.round(((b.y2 - b.y1) - ch) / DEFAULT_TREAD)),
+    first:    risersFromLength_new((b.x2 - b.x1) - cw),
+    straight: risersFromLength_new((b.y2 - b.y1) - ch),
   };
 }
 
@@ -218,7 +223,7 @@ export function classifyStairArea(cells, graph, floorHeight = null) {
     upDirection = isVertical
       ? (ut.landingHigh ? 'down' : 'up')
       : (ut.landingHigh ? 'right' : 'left');
-    const straight = Math.max(1, Math.round(ut.laneLen / DEFAULT_TREAD));
+    const straight = risersFromLength_new(ut.laneLen);
     let totalSteps;
     if (ut.kind === 'switchback') {
       type = StairType.SWITCHBACK;
@@ -226,7 +231,7 @@ export function classifyStairArea(cells, graph, floorHeight = null) {
       totalSteps = straight * 2 + 2;
     } else {
       type = StairType.WINDING;
-      const winder = Math.max(1, Math.round(ut.turnLen / DEFAULT_TREAD));
+      const winder = risersFromLength_new(ut.turnLen);
       sections = [straight, winder, straight]; // 回り段（実段）を挟んだ往路・復路
       totalSteps = straight * 2 + winder + 1;
     }
@@ -245,8 +250,8 @@ export function classifyStairArea(cells, graph, floorHeight = null) {
       const baseLow = upDirection === 'right' || upDirection === 'down';
       const firstSpan    = baseLow ? s0 : s2;
       const straightSpan = baseLow ? s2 : s0;
-      const first    = Math.max(1, Math.round(len(firstSpan)    / DEFAULT_TREAD));
-      const straight = Math.max(1, Math.round(len(straightSpan) / DEFAULT_TREAD));
+      const first    = risersFromLength_new(len(firstSpan));
+      const straight = risersFromLength_new(len(straightSpan));
       sections = [first, 1, straight];
       totalSteps = first + straight + 2;
     }

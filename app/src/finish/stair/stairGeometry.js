@@ -19,6 +19,8 @@ const BREAK_JOG  = 90;          // mm — 中央ジョグの線方向半幅
 // 破断線: 全幅カット p→q を踏面（幅）方向から30°傾け、中央に Z 字ジョグを入れた図形（seg配列）。
 // world では常に "/"（右上がり）で、走行方向・反転（flip）によらず向きは一定。幅が水平（縦連なり
 // 踏面＝垂直で切る）なら水平から30°、幅が垂直（横連なり踏面＝水平で切る）なら水平から60°になる。
+// p1/p2 は実際の破断線の両端点（p側/q側）。傾きにより p1 は p から、p2 は q から走行方向へ
+// ∓(幅/2)*tan(BREAK_TILT) だけずれる（p側とq側で符号が逆）。呼び出し側は両側線をここへ延長・短縮して繋ぐ。
 function breakSymbol(p, q) {
   const mx = (p.x + q.x) / 2, my = (p.y + q.y) / 2;
   const W = Math.hypot(q.x - p.x, q.y - p.y) || 1;
@@ -33,7 +35,13 @@ function breakSymbol(p, q) {
   const A = along(-BREAK_JOG), C = along(BREAK_JOG);
   const B = { x: A.x + nx * BREAK_TICK, y: A.y + ny * BREAK_TICK };
   const D = { x: C.x - nx * BREAK_TICK, y: C.y - ny * BREAK_TICK };
-  return [seg(P1, A), seg(A, B), seg(B, D), seg(D, C), seg(C, P2)];
+  return { segs: [seg(P1, A), seg(A, B), seg(B, D), seg(D, C), seg(C, P2)], p1: P1, p2: P2 };
+}
+
+// breakSymbol の傾きにより、全幅 widthMm の破断線が p側/q側で走行方向へずれる量(mm、片側分)。
+// 踏面線・段数字は、破れ線が両側線を切り始める手前（この分だけ手前）で止める。
+function breakInsetMm(widthMm) {
+  return (widthMm / 2) * Math.tan(BREAK_TILT);
 }
 
 // 走行矢印: 始点 start（丸を描く）→ 終点 end（矢じり）。
@@ -97,15 +105,61 @@ function breakStepOf(totalRisers, riser, view) {
     : Math.max(1, Math.round(totalRisers * 0.6));
 }
 
-// 共通の外周・破れ縁・矢印を生成する。
-function frameDecor(f, topT, view) {
+// 共通の外周・破れ縁・矢印を生成する。install view では両側線を破断線の実端点まで延長／短縮して繋ぎ、
+// 踏面線・段数字が破断線の手前で止まるよう breakInset（mm）を返す。破れ線の見た目は、幅方向の
+// 外周端（隣接壁のCL側）だけさらにはね出す（b は inset 後の設置エリア矩形）。
+function frameDecor(f, topT, view, b) {
   const c00 = f.pt(0, 0), c01 = f.pt(0, 1), c10 = f.pt(topT, 0), c11 = f.pt(topT, 1);
-  const outline = [seg(c00, c01), seg(c00, c10), seg(c01, c11)];
   let breakLine = null;
-  if (view === 'install') breakLine = breakSymbol(c10, c11); // 全幅カットを傾けたZ字破断線
-  else outline.push({ ...seg(c10, c11), thin: true }); // 設置階上階への到達辺（$）はthin
-  const arrow = runArrow(f.pt(0, 0.5), f.pt(topT, 0.5), view === 'install' ? 'U' : 'D');
-  return { outline, breakLine, arrows: [arrow] };
+  let sideEnd0 = c10, sideEnd1 = c11;
+  let breakInset = 0; // mm
+  if (view === 'install') {
+    const { p1, p2 } = breakSymbol(c10, c11); // 全幅カットを傾けたZ字破断線（側線連結用・実寸）
+    sideEnd0 = p1; sideEnd1 = p2;
+    breakLine = breakSymbol(extendBreakEndToCL(c10, b), extendBreakEndToCL(c11, b)).segs; // 見た目はCLまではね出す
+    breakInset = breakInsetMm(Math.hypot(c11.x - c10.x, c11.y - c10.y));
+  }
+  const outline = [seg(c00, c01), seg(c00, sideEnd0), seg(c01, sideEnd1)];
+  if (view !== 'install') outline.push({ ...seg(c10, c11), thin: true }); // 設置階上階への到達辺（$）はthin
+  // D（降り口）はいちばん大きい踏面番号側（かみがた）を始点にし、番号の小さい方へ向かう矢印にする。
+  const arrow = view === 'install'
+    ? runArrow(f.pt(0, 0.5), f.pt(topT, 0.5), 'U')
+    : runArrow(f.pt(topT, 0.5), f.pt(0, 0.5), 'D');
+  return { outline, breakLine, arrows: [arrow], breakInset };
+}
+
+const WALL_BASE  = 90;            // mm — 既定壁下地厚（壁生成の既定値に合わせる。仕上げ厚は含めない）
+const WALL_INSET = WALL_BASE / 2; // mm — 中心線から逃げる量
+
+// 設置エリア矩形 b の各辺を、隣接壁の中心線から壁厚/2だけ内側へ逃がす。
+// 幅方向（走行方向に直交する両側線）は常に逃がす。走行方向の2辺（始端=登り口／終端=上階到達）は、
+// 設置階（install）は登り口を除く終端のみ、設置階上階（upper）は登り口・終端とも逃がす。
+export function insetStairBounds(stair, b, view) {
+  const vertical = stair.upDirection === 'up' || stair.upDirection === 'down';
+  let { x1, y1, x2, y2 } = b;
+  if (vertical) { x1 += WALL_INSET; x2 -= WALL_INSET; }
+  else          { y1 += WALL_INSET; y2 -= WALL_INSET; }
+  const insetEntry = view !== 'install';
+  switch (stair.upDirection) {
+    case 'down':  if (insetEntry) y1 += WALL_INSET; y2 -= WALL_INSET; break; // 始端=y1 終端=y2
+    case 'right': if (insetEntry) x1 += WALL_INSET; x2 -= WALL_INSET; break; // 始端=x1 終端=x2
+    case 'left':  x1 += WALL_INSET; if (insetEntry) x2 -= WALL_INSET; break; // 始端=x2 終端=x1
+    case 'up':
+    default:      y1 += WALL_INSET; if (insetEntry) y2 -= WALL_INSET; break; // 始端=y2 終端=y1
+  }
+  return { x1, y1, x2, y2 };
+}
+
+// 破れ線の見た目だけを、階段の幅方向の外周端（＝隣接壁の中心線 CL 側）まで、さらに壁厚/2 はね出す。
+// 突き抜けた先に階段が無い前提（隣接する階段の有無は判定しない）。b は inset 後の設置エリア矩形。
+// 点 p が b の外周辺（x1/x2/y1/y2）に乗っていなければ内周（吹抜け側等）の端点とみなし、動かさない。
+function extendBreakEndToCL(p, b) {
+  const EPS = 1e-3;
+  if (Math.abs(p.x - b.x1) < EPS) return { x: p.x - WALL_INSET, y: p.y };
+  if (Math.abs(p.x - b.x2) < EPS) return { x: p.x + WALL_INSET, y: p.y };
+  if (Math.abs(p.y - b.y1) < EPS) return { x: p.x, y: p.y - WALL_INSET };
+  if (Math.abs(p.y - b.y2) < EPS) return { x: p.x, y: p.y + WALL_INSET };
+  return p;
 }
 
 /**
@@ -152,28 +206,52 @@ function defaultSections(stair) {
 }
 const getSections = (stair) => stair.sections ?? defaultSections(stair);
 
+// 実段数(risers)から踏面数(spans)を求める共通ヘルパー（stair-model.md: 実段数=踏面数+1）。
+// 直進部・アームが実段数から区間の等分数を求める処理は、タイプ側で再実装せず必ずこれを経由する。
+function spansFromRisers_new(risers) {
+  return Math.max(1, risers - 1);
+}
+
+// 踊り場付直進（first段→踊り場→straight段）の区間割り付け。実段数→踏面数(n-1)の換算は
+// ここに集約し、buildStraightLanding／segmentSpansの両方から参照する。
+function straightLandingLayout_new(sections, tread) {
+  const first = sections[0], straight = sections[2];
+  const firstSpans_new = spansFromRisers_new(first);
+  const straightSpans_new = spansFromRisers_new(straight);
+  const landingLen = Math.max(4 * tread, MIN_LANDING);
+  const landingStart = firstSpans_new * tread;
+  const landingEnd = landingStart + landingLen;
+  const budget = landingEnd + straightSpans_new * tread || 1;
+  return { first, straight, firstSpans_new, straightSpans_new, landingLen, landingStart, landingEnd, budget };
+}
+
 // ---- 直進階段 ----
 function buildStraight(stair, b, { view, detail, riser }) {
   const f = makeFrame(stair, b);
   const total = Math.max(1, stair.totalSteps); // 物理段数+1（上階到達分）
   const physical = getSections(stair)[0];      // 物理段数（実際に蹴上を持つ段）
+  const spans_new = spansFromRisers_new(physical); // 踏面数（区間をn-1等分する）
   const breakStep = breakStepOf(physical, riser, view);
   const shownSteps = view === 'install' ? breakStep : physical;
-  const topT = shownSteps / physical;
+  const topT = (shownSteps - 1) / spans_new;
   const nosingT = detail ? (stair.nosing / f.runLength) * (view === 'install' ? -1 : 1) : 0;
 
+  const { outline, breakLine, arrows, breakInset } = frameDecor(f, topT, view, b);
+  const treadLimitT = topT - breakInset / f.runLength; // 破れ線が両側線を切り始める手前
+
   const treads = [];
-  for (let k = 1; k < shownSteps; k++) {
-    const t = clamp01(k / physical + nosingT);
+  for (let k = 1; k < shownSteps - 1; k++) {
+    const t = clamp01(k / spans_new + nosingT);
+    if (view === 'install' && t >= treadLimitT) break;
     treads.push(line(f.pt(t, 0), f.pt(t, 1)));
   }
-
-  const { outline, breakLine, arrows } = frameDecor(f, topT, view);
 
   const stepNumbers = [];
   if (detail) {
     for (let k = 1; k <= shownSteps; k++) {
-      const c = f.pt((k - 1 + NUM_GAP) / physical, 0.85);
+      const t = (k - 1 + NUM_GAP) / spans_new;
+      if (view === 'install' && t >= treadLimitT) break;
+      const c = f.pt(t, 0.85);
       stepNumbers.push({ x: c.x, y: c.y, text: String(k) });
     }
     if (view !== 'install') {
@@ -191,49 +269,52 @@ function buildStraightLanding(stair, b, { view, detail, riser }) {
   const f = makeFrame(stair, b);
   const sections = getSections(stair);
   const tread = stair.tread;
-  const first = sections[0], straight = sections[2];
-  const landingLen = Math.max(4 * tread, MIN_LANDING);
+  const { first, straight, firstSpans_new, straightSpans_new, landingStart, landingEnd, budget } =
+    straightLandingLayout_new(sections, tread);
   const totalRisers = Math.max(1, first + straight);
-  const budget = first * tread + landingLen + straight * tread || 1;
   const tAt = (mm) => mm / budget;
 
-  const landingStart = first * tread;
-  const landingEnd   = landingStart + landingLen;
-  // 実段の境界 mm と段番号（踊り場自身の1段ぶん、直進部の番号を+1シフトする）
-  const stepBoundaries = [];
-  for (let k = 1; k <= first; k++)    stepBoundaries.push({ mm: k * tread, num: k });
-  for (let j = 1; j <= straight; j++) stepBoundaries.push({ mm: landingEnd + j * tread, num: first + 1 + j });
+  // 踏面境界（線を引く位置）。直進部1は踊り場入口境界まで含む（frameDecorのoutlineに含まれないため）。
+  // 直進部2の最終境界（上階到達）はframeDecorのoutlineが描くため含めない。
+  const treadLineMms = [];
+  for (let k = 1; k <= firstSpans_new; k++)   treadLineMms.push(k * tread);
+  for (let j = 1; j < straightSpans_new; j++) treadLineMms.push(landingEnd + j * tread);
 
   const breakStep = breakStepOf(totalRisers, riser, view);
-  const breakMm = breakStep <= first ? breakStep * tread : landingEnd + (breakStep - first) * tread;
+  const breakMm = breakStep <= first
+    ? (breakStep - 1) * tread
+    : landingEnd + (breakStep - first - 1) * tread;
   const shownMm = view === 'install' ? breakMm : budget;
   const topT = tAt(shownMm);
   const nosingMm = detail ? stair.nosing * (view === 'install' ? -1 : 1) : 0;
 
+  const { outline, breakLine, arrows, breakInset } = frameDecor(f, topT, view, b);
+  const treadLimitMm = shownMm - breakInset; // 破れ線が両側線を切り始める手前
+
   const treads = [];
   const pushLineAt = (mm) => {
-    if (mm <= 1e-6 || mm >= shownMm - 1e-6) return;
+    if (mm <= 1e-6 || mm >= treadLimitMm - 1e-6) return;
     const t = clamp01(tAt(mm));
     treads.push(line(f.pt(t, 0), f.pt(t, 1)));
   };
-  for (const sb of stepBoundaries) pushLineAt(sb.mm + nosingMm);
-  // 踊り場の後縁（平坦バンドの輪郭。入口は最終段の踏面線=stepBoundariesのfirstが兼ねる）
+  for (const mm of treadLineMms) pushLineAt(mm + nosingMm);
+  // 踊り場の後縁（平坦バンドの輪郭。入口は直進部1の最終踏面線が兼ねる）
   pushLineAt(landingEnd);
 
-  const { outline, breakLine, arrows } = frameDecor(f, topT, view);
+  // 段数字位置（実段数ぶん。踊り場自身の1段を挟んで直進部2の番号を+1シフトする）
+  const stepLabels = [];
+  for (let k = 1; k <= first;    k++) stepLabels.push({ mm: (k - 1 + NUM_GAP) * tread, num: k });
+  for (let j = 1; j <= straight; j++) stepLabels.push({ mm: landingEnd + (j - 1 + NUM_GAP) * tread, num: first + 1 + j });
 
   const stepNumbers = [];
   if (detail) {
-    for (const sb of stepBoundaries) {
-      const centerMm = sb.num <= first
-        ? (sb.num - 1 + NUM_GAP) * tread
-        : landingEnd + (sb.num - first - 2 + NUM_GAP) * tread;
-      if (centerMm >= shownMm) continue;
-      const c = f.pt(tAt(centerMm), 0.85);
-      stepNumbers.push({ x: c.x, y: c.y, text: String(sb.num) });
+    for (const sl of stepLabels) {
+      if (sl.mm >= treadLimitMm) continue;
+      const c = f.pt(tAt(sl.mm), 0.85);
+      stepNumbers.push({ x: c.x, y: c.y, text: String(sl.num) });
     }
     const landingMid = (landingStart + landingEnd) / 2;
-    if (landingMid < shownMm) {
+    if (landingMid < treadLimitMm) {
       const c = f.pt(tAt(landingMid), 0.85);
       stepNumbers.push({ x: c.x, y: c.y, text: String(first + 1) });
     }
@@ -253,12 +334,13 @@ function buildSwitchback(stair, b, { view, detail, riser }) {
   const tread = stair.tread;
   const sections = getSections(stair);
   const n = sections[0], m = sections[2]; // 往路・復路の実段数
+  const nSpans_new = spansFromRisers_new(n); // 往路の踏面数（区間長の基準。復路もこの長さに揃える）
   const total = Math.max(2, n + m);
   const acrossLen = f.vertical ? (b.x2 - b.x1) : (b.y2 - b.y1);
   const landingDepth = Math.max(acrossLen * 0.5, tread); // 踊り場深さ（レーン幅相当）
-  const budget = n * tread + landingDepth || 1;
+  const budget = nSpans_new * tread + landingDepth || 1;
   const tAt = (mm) => mm / budget;
-  const tRun = tAt(n * tread); // 段部終端＝踊り場前縁
+  const tRun = tAt(nSpans_new * tread); // 段部終端＝踊り場前縁
   const lineS = (t, s0, s1) => line(f.pt(t, s0), f.pt(t, s1));
 
   const isInstall = view === 'install';
@@ -267,14 +349,14 @@ function buildSwitchback(stair, b, { view, detail, riser }) {
   const inLaneA = breakStep <= n; // install では必ず復路側（false）
 
   const treads = [];
-  // 往路（レーンA s:0→0.5）
+  // 往路（レーンA s:0→0.5）。踊り場前縁は下の明示pushが兼ねるため、最後の1本は描かない。
   const shownA = isInstall && inLaneA ? breakStep : n;
-  for (let k = 1; k < shownA; k++) treads.push(lineS(tAt(k * tread), 0, 0.5));
-  // 復路（レーンB s:0.5→1、踊り場から base へ戻る）
+  for (let k = 1; k < shownA - 1; k++) treads.push(lineS(tAt(k * tread), 0, 0.5));
+  // 復路（レーンB s:0.5→1、踊り場から base へ戻る）。同様に最後の1本（base到達）は描かない。
   const drawB = !(isInstall && inLaneA);
   const shownB = isInstall ? Math.max(0, breakStep - n) : m;
   if (drawB) {
-    for (let j = 1; j < shownB; j++) treads.push(lineS(tAt(n * tread - j * tread), 0.5, 1));
+    for (let j = 1; j < shownB - 1; j++) treads.push(lineS(tAt(nSpans_new * tread - j * tread), 0.5, 1));
   }
   treads.push(lineS(tRun, 0, 0.5));                // 踊り場前縁（往路側）
   treads.push(lineS(tRun, 0.5, 1));                // 踊り場前縁（復路側）
@@ -292,14 +374,18 @@ function buildSwitchback(stair, b, { view, detail, riser }) {
     seg(c(0, 0.5), c(tRun, 0.5)),// 中央仕切り（吹抜け側）
   ];
 
-  const btB = tAt(n * tread - (breakStep - n) * tread); // 復路1段目（install時の破れ位置）
+  const btB = tAt(nSpans_new * tread - (breakStep - n) * tread); // 復路1段目（install時の破れ位置）
   let breakLine = null;
-  if (isInstall) breakLine = breakSymbol(c(btB, 0.5), c(btB, 1)); // 復路レーンのみ（s0.5→1）
+  // 復路レーンのみ（s0.5→1）。外側端（s=1、隣接壁側）だけCLまではね出す（中央仕切り側は吹抜けのため動かさない）。
+  if (isInstall) breakLine = breakSymbol(c(btB, 0.5), extendBreakEndToCL(c(btB, 1), b)).segs;
 
-  // U字矢印: 往路中心を上り→踊り場中心を通って復路中心へ折り返し→破れ線(install)/復路基部(upper)まで。復路に別矢印は置かない。
+  // U字矢印: install(U)は往路中心を上り→踊り場中心を通って破れ線まで。
+  // upper(D)はいちばん大きい踏面番号側（復路基部＝かみがた）を始点に、番号の小さい方（往路基部）へ向かう。
   const tMid = (tRun + 1) / 2;                       // 踊り場中心（走行軸）
   const uEnd = isInstall ? btB : 0;                  // 破れ線位置 or 復路基部
-  const arrows = [uTurnArrow([f.pt(0, 0.25), f.pt(tMid, 0.25), f.pt(tMid, 0.75), f.pt(uEnd, 0.75)], isInstall ? 'U' : 'D')];
+  const arrows = [isInstall
+    ? uTurnArrow([f.pt(0, 0.25), f.pt(tMid, 0.25), f.pt(tMid, 0.75), f.pt(uEnd, 0.75)], 'U')
+    : uTurnArrow([f.pt(uEnd, 0.75), f.pt(tMid, 0.75), f.pt(tMid, 0.25), f.pt(0, 0.25)], 'D')];
 
   const stepNumbers = [];
   if (detail) {
@@ -315,7 +401,7 @@ function buildSwitchback(stair, b, { view, detail, riser }) {
     // 復路: 踊り場の次から連番。
     if (drawB) {
       for (let j = 1; j <= shownB; j++) {
-        const p = f.pt(tAt(n * tread - (j - 1 + NUM_GAP) * tread), 1 - NUM_OUT); // 復路: 外側 s=1 寄せ
+        const p = f.pt(tAt(nSpans_new * tread - (j - 1 + NUM_GAP) * tread), 1 - NUM_OUT); // 復路: 外側 s=1 寄せ
         stepNumbers.push({ x: p.x, y: p.y, text: String(n + 1 + j) });
       }
     }
@@ -335,12 +421,14 @@ function buildWinding(stair, b, { view, detail, riser }) {
   const tread = stair.tread;
   const sections = getSections(stair);
   const n = sections[0], w = sections[1], m = sections[2]; // 往路・回り・復路の実段数
+  const nSpans_new = spansFromRisers_new(n); // 往路の踏面数（区間長の基準。復路もこの長さに揃える）
+  const wSpans_new = spansFromRisers_new(w); // 回り段の踏面数
   const total = Math.max(3, n + w + m);
   const acrossLen = f.vertical ? (b.x2 - b.x1) : (b.y2 - b.y1);
   const turnDepth = Math.max(acrossLen * 0.5, tread);
-  const budget = n * tread + turnDepth || 1;
+  const budget = nSpans_new * tread + turnDepth || 1;
   const tAt = (mm) => mm / budget;
-  const tRun = tAt(n * tread);
+  const tRun = tAt(nSpans_new * tread);
   const lineS = (t, s0, s1) => line(f.pt(t, s0), f.pt(t, s1));
 
   const isInstall = view === 'install';
@@ -349,9 +437,9 @@ function buildWinding(stair, b, { view, detail, riser }) {
   const inLaneA = breakStep <= n; // install では必ず復路側（false）
 
   const treads = [];
-  // 往路（レーンA）
+  // 往路（レーンA）。回り段入口境界は下の明示pushが兼ねるため、最後の1本は描かない。
   const shownA = isInstall && inLaneA ? breakStep : n;
-  for (let k = 1; k < shownA; k++) treads.push(lineS(tAt(k * tread), 0, 0.5));
+  for (let k = 1; k < shownA - 1; k++) treads.push(lineS(tAt(k * tread), 0, 0.5));
 
   const drawTurn = !(isInstall && inLaneA);
   // 回り段（扇形）: pivot=(tRun,0.5) から外周（s0辺→奥t1辺→s1辺）へ放射
@@ -363,15 +451,15 @@ function buildWinding(stair, b, { view, detail, riser }) {
   };
   if (drawTurn) {
     treads.push(lineS(tRun, 0, 0.5));   // 回り段入口境界（往路側）
-    for (let j = 1; j < w; j++) treads.push(line(P, perim(j / w)));
+    for (let j = 1; j < wSpans_new; j++) treads.push(line(P, perim(j / wSpans_new)));
     treads.push(lineS(tRun, 0.5, 1));   // 回り段出口境界（復路側）
   }
 
-  // 復路（レーンB）: 回りを越えて破れる場合のみ
+  // 復路（レーンB）: 回りを越えて破れる場合のみ。最後の1本（base到達）は描かない。
   const drawB = drawTurn && (!isInstall || breakStep > n + w);
   const shownB = isInstall ? Math.max(0, breakStep - n - w) : m;
   if (drawB) {
-    for (let j = 1; j < shownB; j++) treads.push(lineS(tAt(n * tread - j * tread), 0.5, 1));
+    for (let j = 1; j < shownB - 1; j++) treads.push(lineS(tAt(nSpans_new * tread - j * tread), 0.5, 1));
   }
 
   const c = (t, s) => f.pt(t, s);
@@ -386,14 +474,18 @@ function buildWinding(stair, b, { view, detail, riser }) {
     seg(c(0, 0.5), c(tRun, 0.5)), // 中央仕切り（吹抜け側）
   ];
 
-  const btB = tAt(n * tread - (breakStep - n - w) * tread); // 復路1段目（install時の破れ位置）
+  const btB = tAt(nSpans_new * tread - (breakStep - n - w) * tread); // 復路1段目（install時の破れ位置）
   let breakLine = null;
-  if (isInstall) breakLine = breakSymbol(c(btB, 0.5), c(btB, 1)); // 復路レーンのみ（s0.5→1）
+  // 復路レーンのみ（s0.5→1）。外側端（s=1、隣接壁側）だけCLまではね出す（中央仕切り側は吹抜けのため動かさない）。
+  if (isInstall) breakLine = breakSymbol(c(btB, 0.5), extendBreakEndToCL(c(btB, 1), b)).segs;
 
-  // U字矢印: 折り返し階段と同じ。往路中心を上り→回り段中心を通って復路中心へ折り返し→破れ線(install)/復路基部(upper)まで。
+  // U字矢印: 折り返し階段と同じ。install(U)は往路中心を上り→回り段中心を通って破れ線まで。
+  // upper(D)はいちばん大きい踏面番号側（復路基部＝かみがた）を始点に、番号の小さい方（往路基部）へ向かう。
   const tMid = (tRun + 1) / 2;                       // 回り段中心（走行軸）
   const uEnd = isInstall ? btB : 0;                  // 破れ線位置 or 復路基部
-  const arrows = [uTurnArrow([f.pt(0, 0.25), f.pt(tMid, 0.25), f.pt(tMid, 0.75), f.pt(uEnd, 0.75)], isInstall ? 'U' : 'D')];
+  const arrows = [isInstall
+    ? uTurnArrow([f.pt(0, 0.25), f.pt(tMid, 0.25), f.pt(tMid, 0.75), f.pt(uEnd, 0.75)], 'U')
+    : uTurnArrow([f.pt(uEnd, 0.75), f.pt(tMid, 0.75), f.pt(tMid, 0.25), f.pt(0, 0.25)], 'D')];
 
   const stepNumbers = [];
   if (detail) {
@@ -402,15 +494,24 @@ function buildWinding(stair, b, { view, detail, riser }) {
       stepNumbers.push({ x: p.x, y: p.y, text: String(k) });
     }
     if (drawTurn) {
-      for (let j = 1; j <= w; j++) {
-        const p = perim((j - 0.5) / w); // 回り段: 外周(perim)側へ寄せる
-        stepNumbers.push({ x: p.x * 0.7 + P.x * 0.3, y: p.y * 0.7 + P.y * 0.3, text: String(n + j) });
+      if (w <= 1) {
+        // 平踊り場相当（実段差1）: 中央に1つだけ配置する（buildStraightLandingの踊り場と同じ扱い）
+        const p = perim(0.5);
+        stepNumbers.push({ x: p.x * 0.7 + P.x * 0.3, y: p.y * 0.7 + P.y * 0.3, text: String(n + 1) });
+      } else {
+        // 回り段: w-1個の踏面に1..w-1段目を外周(perim)側へ寄せて配置し、w段目（出口境界＝復路の初段扱い）は境界そのものに置く。
+        for (let j = 1; j < w; j++) {
+          const p = perim((j - 0.5) / wSpans_new);
+          stepNumbers.push({ x: p.x * 0.7 + P.x * 0.3, y: p.y * 0.7 + P.y * 0.3, text: String(n + j) });
+        }
+        const pLast = perim(1);
+        stepNumbers.push({ x: pLast.x * 0.7 + P.x * 0.3, y: pLast.y * 0.7 + P.y * 0.3, text: String(n + w) });
       }
     }
     // 復路: 回りの次から連番。最後の縁 n+w+m が上階床（登りきった先）。
     if (drawB) {
       for (let j = 1; j <= shownB; j++) {
-        const p = f.pt(tAt(n * tread - (j - 1 + NUM_GAP) * tread), 1 - NUM_OUT); // 復路: 外側 s=1 寄せ
+        const p = f.pt(tAt(nSpans_new * tread - (j - 1 + NUM_GAP) * tread), 1 - NUM_OUT); // 復路: 外側 s=1 寄せ
         stepNumbers.push({ x: p.x, y: p.y, text: String(n + w + j) });
       }
     }
@@ -430,6 +531,9 @@ function buildWinding(stair, b, { view, detail, riser }) {
 function buildLTurn(stair, b, { view, detail, riser }) {
   const sections = getSections(stair);
   const first = sections[0], w = sections[1], straight = sections[2];
+  const firstSpans_new = spansFromRisers_new(first);
+  const wSpans_new = spansFromRisers_new(w);
+  const straightSpans_new = spansFromRisers_new(straight);
   const isFlared = stair.type === StairType.FLARED;
   const totalRisers = first + straight + (isFlared ? w : 0); // 平踊り場(w=1)は蹴上げを持たないため段数に含めない
   const W = b.x2 - b.x1, H = b.y2 - b.y1;
@@ -459,20 +563,57 @@ function buildLTurn(stair, b, { view, detail, riser }) {
   const drawCorner = !(isInstall && inArm1);
   const drawArm2 = !(isInstall && breakStep <= first + w);
 
+  let breakLine = null;
+  let breakCase = null; // 'arm1' | 'corner' | 'arm2' | null
+  let breakInset = 0;   // mm
+  if (isInstall) {
+    let bp, bq;
+    if (inArm1) {
+      breakCase = 'arm1';
+      const u = runU * breakStep / firstSpans_new;
+      bp = toWorld(u, runU); bq = toWorld(u, 1);
+    } else if (breakStep <= first + w) {
+      breakCase = 'corner';
+      bp = toWorld(runU, runU); bq = toWorld(1, runU); // 扇形内 → arm2 入口で破れ
+    } else {
+      breakCase = 'arm2';
+      const v = runU * (1 - (breakStep - first - w) / straightSpans_new);
+      bp = toWorld(runU, v); bq = toWorld(1, v);
+    }
+    // 外周（隣接壁）側の端だけCLまではね出す（吹抜け側の端はそのまま）。
+    breakLine = breakSymbol(extendBreakEndToCL(bp, b), extendBreakEndToCL(bq, b)).segs;
+    breakInset = breakInsetMm(Math.hypot(bq.x - bp.x, bq.y - bp.y));
+  }
+
+  // 破れ線が傾くぶん、踏面線・段数字は手前で止める（arm1/arm2 のみ。コーナー扇形は既存どおり粗判定）
+  const uAxisLen = Math.hypot(toWorld(1, runU).x - toWorld(0, runU).x, toWorld(1, runU).y - toWorld(0, runU).y);
+  const vAxisLen = Math.hypot(toWorld(runU, 1).x - toWorld(runU, 0).x, toWorld(runU, 1).y - toWorld(runU, 0).y);
+  const arm1ULimit = breakCase === 'arm1' ? (runU * breakStep / firstSpans_new) - breakInset / uAxisLen : Infinity;
+  const arm2VLimit = breakCase === 'arm2'
+    ? runU * (1 - (breakStep - first - w) / straightSpans_new) + breakInset / vAxisLen
+    : -Infinity;
+
   const treads = [];
+  // アーム1（コーナー前縁は下の明示pushが兼ねるため、最後の1本は描かない）
   const shownFirst = isInstall && inArm1 ? breakStep : first;
-  for (let k = 1; k < shownFirst; k++) treads.push(lineUV(runU * k / first, runU, runU * k / first, 1));
+  for (let k = 1; k < shownFirst - 1; k++) {
+    const u = runU * k / firstSpans_new;
+    if (u >= arm1ULimit) break;
+    treads.push(lineUV(u, runU, u, 1));
+  }
 
   if (drawCorner) {
     treads.push(lineUV(runU, runU, runU, 1)); // arm1→コーナー前縁
     treads.push(lineUV(runU, runU, 1, runU)); // コーナー→arm2 前縁
     const pivot = toWorld(runU, runU);
-    for (let i = 1; i < w; i++) treads.push(line(pivot, perimCorner(i / w))); // 扇形の段
+    for (let i = 1; i < wSpans_new; i++) treads.push(line(pivot, perimCorner(i / wSpans_new))); // 扇形の段
   }
   if (drawArm2) {
+    // arm2 far端（上階到達）はoutlineが描くため、最後の1本は描かない。
     const shownStraight = isInstall ? Math.max(0, breakStep - first - w) : straight;
-    for (let j = 1; j < shownStraight; j++) {
-      const v = runU * (1 - j / straight);
+    for (let j = 1; j < shownStraight - 1; j++) {
+      const v = runU * (1 - j / straightSpans_new);
+      if (v <= arm2VLimit) break;
       treads.push(lineUV(runU, v, 1, v));
     }
   }
@@ -486,40 +627,45 @@ function buildLTurn(stair, b, { view, detail, riser }) {
     seg(toWorld(runU, runU), toWorld(0, runU)), // 内側（吹抜け側・横）
   ];
 
-  let breakLine = null;
-  if (isInstall) {
-    if (inArm1) {
-      const u = runU * breakStep / first;
-      breakLine = breakSymbol(toWorld(u, runU), toWorld(u, 1));
-    } else if (breakStep <= first + w) {
-      breakLine = breakSymbol(toWorld(runU, runU), toWorld(1, runU)); // 扇形内 → arm2 入口で破れ
-    } else {
-      const v = runU * (1 - (breakStep - first - w) / straight);
-      breakLine = breakSymbol(toWorld(runU, v), toWorld(1, v));
-    }
-  }
-
   const midA = (runU + 1) / 2;
   const arrows = [runArrow(toWorld(0, midA), toWorld(runU, midA), 'U')];
-  if (drawArm2) arrows.push(runArrow(toWorld(midA, runU), toWorld(midA, 0), isInstall ? '' : 'D'));
+  // D（upper）はいちばん大きい踏面番号側（arm2到達＝かみがた）を始点に、番号の小さい方（コーナー側）へ向かう。
+  if (drawArm2) {
+    arrows.push(isInstall
+      ? runArrow(toWorld(midA, runU), toWorld(midA, 0), '')
+      : runArrow(toWorld(midA, 0), toWorld(midA, runU), 'D'));
+  }
 
   const stepNumbers = [];
   if (detail) {
     for (let k = 1; k <= shownFirst; k++) {
-      const p = toWorld(runU * (k - 1 + NUM_GAP) / first, midA);
+      const u = runU * (k - 1 + NUM_GAP) / firstSpans_new;
+      if (u >= arm1ULimit) break;
+      const p = toWorld(u, midA);
       stepNumbers.push({ x: p.x, y: p.y, text: String(k) });
     }
     if (drawCorner) {
       const pivot = toWorld(runU, runU);
-      for (let i = 1; i <= w; i++) {
-        const q = perimCorner((i - 0.5) / w);
-        stepNumbers.push({ x: (pivot.x + q.x) / 2, y: (pivot.y + q.y) / 2, text: String(first + i) });
+      if (w <= 1) {
+        // 平踊り場（実段差1）: 中央に1つだけ配置する（buildStraightLandingの踊り場と同じ扱い）
+        const q = perimCorner(0.5);
+        stepNumbers.push({ x: (pivot.x + q.x) / 2, y: (pivot.y + q.y) / 2, text: String(first + 1) });
+      } else {
+        // 回り段（実段差w≥2）: w-1個の踏面に1..w-1段目を配置し、w段目（arm2側境界）は境界そのものに置く。
+        for (let i = 1; i < w; i++) {
+          const q = perimCorner((i - 0.5) / wSpans_new);
+          stepNumbers.push({ x: (pivot.x + q.x) / 2, y: (pivot.y + q.y) / 2, text: String(first + i) });
+        }
+        const qLast = perimCorner(1);
+        stepNumbers.push({ x: (pivot.x + qLast.x) / 2, y: (pivot.y + qLast.y) / 2, text: String(first + w) });
       }
     }
     if (drawArm2) {
       const shownStraight = isInstall ? Math.max(0, breakStep - first - w) : straight;
       for (let j = 1; j <= shownStraight; j++) {
-        const p = toWorld(midA, runU * (1 - (j - 1 + NUM_GAP) / straight));
+        const v = runU * (1 - (j - 1 + NUM_GAP) / straightSpans_new);
+        if (v <= arm2VLimit) break;
+        const p = toWorld(midA, v);
         stepNumbers.push({ x: p.x, y: p.y, text: String(first + w + j) });
       }
       if (view !== 'install') {
@@ -537,6 +683,9 @@ function buildLTurn(stair, b, { view, detail, riser }) {
 function buildOpenWell(stair, b, { view, detail, riser }) {
   const sections = getSections(stair);
   const n1 = sections[0], n2 = sections[2], n3 = sections[4]; // 下・右・上の実段数
+  const n1Spans_new = spansFromRisers_new(n1);
+  const n2Spans_new = spansFromRisers_new(n2);
+  const n3Spans_new = spansFromRisers_new(n3);
   const totalRisers = n1 + n2 + n3; // 2つの踊り場（各1段）は蹴上げを持たないため段数に含めない
   const W = b.x2 - b.x1, H = b.y2 - b.y1;
   const aw = 0.3;          // アーム幅（正規化）
@@ -566,21 +715,53 @@ function buildOpenWell(stair, b, { view, detail, riser }) {
   const landing1 = bs > n1;      // 踊り場1（下→右）
   const landing2 = bs > n1 + n2; // 踊り場2（右→上）
 
+  let breakLine = null;
+  let breakCase = null; // 'bottom' | 'right' | 'top' | null
+  let breakInset = 0;   // mm
+  if (isInstall) {
+    let bp, bq;
+    if (bs <= n1)           { breakCase = 'bottom'; const u = runW * bs / n1Spans_new; bp = toWorld(u, 1 - aw); bq = toWorld(u, 1); }
+    else if (bs <= n1 + n2) { breakCase = 'right';   const v = rV0 - (bs - n1) * (rSpan / n2Spans_new); bp = toWorld(runW, v); bq = toWorld(1, v); }
+    else                    { breakCase = 'top';     const u = runW * (1 - (bs - n1 - n2) / n3Spans_new); bp = toWorld(u, 0); bq = toWorld(u, aw); }
+    // 外周（隣接壁）側の端だけCLまではね出す（吹抜け側の端はそのまま）。
+    breakLine = breakSymbol(extendBreakEndToCL(bp, b), extendBreakEndToCL(bq, b)).segs;
+    breakInset = breakInsetMm(Math.hypot(bq.x - bp.x, bq.y - bp.y));
+  }
+
+  // 破れ線が傾くぶん、踏面線・段数字は手前で止める。
+  const uAxisLen = Math.hypot(toWorld(1, 0).x - toWorld(0, 0).x, toWorld(1, 0).y - toWorld(0, 0).y);
+  const vAxisLen = Math.hypot(toWorld(0, 1).x - toWorld(0, 0).x, toWorld(0, 1).y - toWorld(0, 0).y);
+  const bottomULimit = breakCase === 'bottom' ? (runW * bs / n1Spans_new) - breakInset / uAxisLen : Infinity;
+  const rightVLimit  = breakCase === 'right'  ? (rV0 - (bs - n1) * (rSpan / n2Spans_new)) + breakInset / vAxisLen : -Infinity;
+  const topULimit    = breakCase === 'top'    ? (runW * (1 - (bs - n1 - n2) / n3Spans_new)) + breakInset / uAxisLen : -Infinity;
+
   const treads = [];
-  // 下アーム（u 0→runW, v 1-aw→1）昇り→右
-  for (let k = 1; k < shownBottom; k++) { const u = runW * k / n1; treads.push(lineUV(u, 1 - aw, u, 1)); }
+  // 下アーム（u 0→runW, v 1-aw→1）昇り→右。踊り場1入口境界は下の明示pushが兼ねるため、最後の1本は描かない。
+  for (let k = 1; k < shownBottom - 1; k++) {
+    const u = runW * k / n1Spans_new;
+    if (u >= bottomULimit) break;
+    treads.push(lineUV(u, 1 - aw, u, 1));
+  }
   if (landing1) {
     treads.push(lineUV(runW, 1 - aw, runW, 1));   // 踊り場1入口境界（下アーム側）
     treads.push(lineUV(runW, 1 - aw, 1, 1 - aw));  // 踊り場1出口境界（右アーム側）
   }
-  // 右アーム（u runW→1, v rV0→rV1）下→上
-  for (let k = 1; k < shownRight; k++) { const v = rV0 - k * (rSpan / n2); treads.push(lineUV(runW, v, 1, v)); }
+  // 右アーム（u runW→1, v rV0→rV1）下→上。踊り場2入口境界は下の明示pushが兼ねるため、最後の1本は描かない。
+  for (let k = 1; k < shownRight - 1; k++) {
+    const v = rV0 - k * (rSpan / n2Spans_new);
+    if (v <= rightVLimit) break;
+    treads.push(lineUV(runW, v, 1, v));
+  }
   if (landing2) {
     treads.push(lineUV(runW, aw, 1, aw));         // 踊り場2入口境界（右アーム側）
     treads.push(lineUV(runW, 0, runW, aw));       // 踊り場2出口境界（上アーム側）
   }
-  // 上アーム（u runW→0, v 0→aw）右→左
-  for (let k = 1; k < shownTop; k++) { const u = runW * (1 - k / n3); treads.push(lineUV(u, 0, u, aw)); }
+  // 上アーム（u runW→0, v 0→aw）右→左。左端（上階到達）はoutlineが描くため、最後の1本は描かない。
+  for (let k = 1; k < shownTop - 1; k++) {
+    const u = runW * (1 - k / n3Spans_new);
+    if (u <= topULimit) break;
+    treads.push(lineUV(u, 0, u, aw));
+  }
 
   // 外周（C 字）＋ 中央ウェル
   const outline = [
@@ -595,30 +776,43 @@ function buildOpenWell(stair, b, { view, detail, riser }) {
     seg(toWorld(runW, 1 - aw), toWorld(0, 1 - aw)),
   ];
 
-  let breakLine = null;
-  if (isInstall) {
-    if (bs <= n1)         { const u = runW * bs / n1;        breakLine = breakSymbol(toWorld(u, 1 - aw), toWorld(u, 1)); }
-    else if (bs <= n1 + n2) { const v = rV0 - (bs - n1) * (rSpan / n2); breakLine = breakSymbol(toWorld(runW, v), toWorld(1, v)); }
-    else                 { const u = runW * (1 - (bs - n1 - n2) / n3); breakLine = breakSymbol(toWorld(u, 0), toWorld(u, aw)); }
-  }
-
   const vB = (1 - aw + 1) / 2;
   const arrows = [runArrow(toWorld(0, vB), toWorld(runW, vB), 'U')];
-  if (shownTop > 0) arrows.push(runArrow(toWorld(runW, aw / 2), toWorld(0, aw / 2), isInstall ? '' : 'D'));
+  // D（upper）はいちばん大きい踏面番号側（上アーム到達＝かみがた）を始点に、番号の小さい方へ向かう。
+  if (shownTop > 0) {
+    arrows.push(isInstall
+      ? runArrow(toWorld(runW, aw / 2), toWorld(0, aw / 2), '')
+      : runArrow(toWorld(0, aw / 2), toWorld(runW, aw / 2), 'D'));
+  }
 
   const stepNumbers = [];
   if (detail) {
-    for (let k = 1; k <= shownBottom; k++) { const p = toWorld(runW * (k - 1 + NUM_GAP) / n1, (1 - aw + 1) / 2); stepNumbers.push({ x: p.x, y: p.y, text: String(k) }); }
+    for (let k = 1; k <= shownBottom; k++) {
+      const u = runW * (k - 1 + NUM_GAP) / n1Spans_new;
+      if (u >= bottomULimit) break;
+      const p = toWorld(u, (1 - aw + 1) / 2);
+      stepNumbers.push({ x: p.x, y: p.y, text: String(k) });
+    }
     if (landing1) {
       const p = toWorld((runW + 1) / 2, (1 - aw + 1) / 2);
       stepNumbers.push({ x: p.x, y: p.y, text: String(n1 + 1) });
     }
-    for (let k = 1; k <= shownRight; k++) { const p = toWorld((runW + 1) / 2, rV0 - (k - 1 + NUM_GAP) * (rSpan / n2)); stepNumbers.push({ x: p.x, y: p.y, text: String(n1 + 1 + k) }); }
+    for (let k = 1; k <= shownRight; k++) {
+      const v = rV0 - (k - 1 + NUM_GAP) * (rSpan / n2Spans_new);
+      if (v <= rightVLimit) break;
+      const p = toWorld((runW + 1) / 2, v);
+      stepNumbers.push({ x: p.x, y: p.y, text: String(n1 + 1 + k) });
+    }
     if (landing2) {
       const p = toWorld((runW + 1) / 2, aw / 2);
       stepNumbers.push({ x: p.x, y: p.y, text: String(n1 + n2 + 2) });
     }
-    for (let k = 1; k <= shownTop; k++) { const p = toWorld(runW * (1 - (k - 1 + NUM_GAP) / n3), aw / 2); stepNumbers.push({ x: p.x, y: p.y, text: String(n1 + n2 + 2 + k) }); }
+    for (let k = 1; k <= shownTop; k++) {
+      const u = runW * (1 - (k - 1 + NUM_GAP) / n3Spans_new);
+      if (u <= topULimit) break;
+      const p = toWorld(u, aw / 2);
+      stepNumbers.push({ x: p.x, y: p.y, text: String(n1 + n2 + 2 + k) });
+    }
     if (!isInstall) {
       // 設置階上階への到達（総段数=最終番号）
       const p = toWorld(0, aw / 2);
@@ -641,13 +835,14 @@ function buildOpenWell(stair, b, { view, detail, riser }) {
  * }}
  */
 export function buildStairGeometry(stair, b, opts) {
-  if (stair.type === StairType.STRAIGHT_LANDING) return buildStraightLanding(stair, b, opts);
-  if (stair.type === StairType.SWITCHBACK)       return buildSwitchback(stair, b, opts);
-  if (stair.type === StairType.WINDING)          return buildWinding(stair, b, opts);
-  if (stair.type === StairType.L_TURN)           return buildLTurn(stair, b, opts);
-  if (stair.type === StairType.FLARED)           return buildLTurn(stair, b, opts);
-  if (stair.type === StairType.OPEN_WELL)        return buildOpenWell(stair, b, opts);
-  return buildStraight(stair, b, opts);
+  const bi = insetStairBounds(stair, b, opts.view);
+  if (stair.type === StairType.STRAIGHT_LANDING) return buildStraightLanding(stair, bi, opts);
+  if (stair.type === StairType.SWITCHBACK)       return buildSwitchback(stair, bi, opts);
+  if (stair.type === StairType.WINDING)          return buildWinding(stair, bi, opts);
+  if (stair.type === StairType.L_TURN)           return buildLTurn(stair, bi, opts);
+  if (stair.type === StairType.FLARED)           return buildLTurn(stair, bi, opts);
+  if (stair.type === StairType.OPEN_WELL)        return buildOpenWell(stair, bi, opts);
+  return buildStraight(stair, bi, opts);
 }
 
 // L字／中空きの正規化(u,v)→world 写像（buildLTurn/buildOpenWell と同一）。pt は fx,fy∈[0,1]→world。
@@ -678,11 +873,9 @@ function segmentSpans(stair, b) {
     }
     case StairType.STRAIGHT_LANDING: {
       const f = makeFrame(stair, b);
-      const first = sections[0], straight = sections[2];
-      const landingLen = Math.max(4 * tread, MIN_LANDING);
-      const budget = first * tread + landingLen + straight * tread || 1;
+      const { first, straight, landingStart: lStart, landingEnd: lEnd, budget } =
+        straightLandingLayout_new(sections, tread);
       const tAt = (mm) => mm / budget;
-      const lStart = first * tread, lEnd = lStart + landingLen;
       return [
         [f.pt(0, 0),            f.pt(tAt(lStart), 0), `最初 ${first}段`, 0],
         [f.pt(tAt(lStart), 0),  f.pt(tAt(lEnd), 0),   '踊り場',          null],
@@ -692,10 +885,11 @@ function segmentSpans(stair, b) {
     case StairType.SWITCHBACK: {
       const f = makeFrame(stair, b);
       const n = sections[0], m = sections[2];
+      const nSpans_new = spansFromRisers_new(n);
       const acrossLen = f.vertical ? (b.x2 - b.x1) : (b.y2 - b.y1);
       const landingDepth = Math.max(acrossLen * 0.5, tread);
-      const budget = n * tread + landingDepth || 1;
-      const tRun = (n * tread) / budget;
+      const budget = nSpans_new * tread + landingDepth || 1;
+      const tRun = (nSpans_new * tread) / budget;
       return [
         [f.pt(0, 0),    f.pt(tRun, 0), `往路 ${n}段`, 0],
         [f.pt(tRun, 0), f.pt(1, 0),    '踊り場',      null],
@@ -705,10 +899,11 @@ function segmentSpans(stair, b) {
     case StairType.WINDING: {
       const f = makeFrame(stair, b);
       const n = sections[0], w = sections[1], m = sections[2];
+      const nSpans_new = spansFromRisers_new(n);
       const acrossLen = f.vertical ? (b.x2 - b.x1) : (b.y2 - b.y1);
       const turnDepth = Math.max(acrossLen * 0.5, tread);
-      const budget = n * tread + turnDepth || 1;
-      const tRun = (n * tread) / budget;
+      const budget = nSpans_new * tread + turnDepth || 1;
+      const tRun = (nSpans_new * tread) / budget;
       return [
         [f.pt(0, 0),    f.pt(tRun, 0), `直進 ${n}段`, 0],
         [f.pt(tRun, 0), f.pt(1, 0),    `回り ${w}段`, 1],
@@ -768,4 +963,4 @@ export function stairSegmentDims(stair, b, g) {
   });
 }
 
-export { getSections, defaultSections };
+export { getSections, defaultSections, spansFromRisers_new };
