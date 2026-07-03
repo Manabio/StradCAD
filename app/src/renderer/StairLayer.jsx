@@ -93,7 +93,7 @@ export const StairLayer = observer(({
       <Text
         key={`n${i}`}
         x={n.x} y={n.y} text={n.text} fontSize={120}
-        fill={STAIR_STROKE} offsetX={40} offsetY={60} listening={false}
+        fill={STAIR_STROKE} offsetX={40 * n.text.length} offsetY={60} listening={false}
       />
     ));
 
