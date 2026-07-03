@@ -2,6 +2,7 @@ import { observer } from 'mobx-react-lite';
 import { StructuralMaterialType, StairType } from '@core';
 import { computeStairDimensions, floorHeightAbove } from './stairDimensions.js';
 import { roomBounds } from '../gridCells.js';
+import { measureStairSpans } from './stairClassify.js';
 import { stairFigurePrimitives } from './stairFigure.js';
 import { defaultSections } from './stairGeometry.js';
 import { AutoScaledFigure } from '../../structural/sectionFigure/AutoScaledFigure.jsx';
@@ -69,9 +70,10 @@ export const StairEditor = observer(({ stair, graph, project, onDelete }) => {
   // annotatedFigure（一般解）で形状基準の縮尺を決め、注記の隙間を px 一定にする。
   const b = graph ? roomBounds(stair.cells, graph) : null;
   const validB = b && [b.x1, b.y1, b.x2, b.y2].every(Number.isFinite) && b.x2 > b.x1 && b.y2 > b.y1;
-  const riser = stair.riser ?? (floorHeight != null ? floorHeight / Math.max(1, stair.totalSteps - 1) : null);
+  const riser = stair.riser ?? (floorHeight != null ? floorHeight / Math.max(1, stair.totalSteps) : null);
+  const spans = validB ? measureStairSpans(stair, graph) : null; // セル実測の区間長（区間長指定の反映）
   const figure = validB
-    ? annotatedFigure(scale => stairFigurePrimitives(stair, b, { riser, scale }), STAIR_FIGURE_FRAME)
+    ? annotatedFigure(scale => stairFigurePrimitives(stair, b, { riser, scale, spans }), STAIR_FIGURE_FRAME)
     : null;
 
   const num = (field) => (e) => {
@@ -82,16 +84,19 @@ export const StairEditor = observer(({ stair, graph, project, onDelete }) => {
   const onTypeChange = (e) => {
     const t = e.target.value;
     stair.setField('type', t);
-    // 段構成タイプへ切替時に未初期化なら既定値を設定
-    if (HAS_SECTIONS.has(t) && !stair.sections) {
-      stair.setField('sections', defaultSections({ type: t, totalSteps: stair.totalSteps }));
+    // 切替先タイプと区間数が合わないsections（未初期化・直進[1区間]↔踊り場付[3区間]等）は既定値で組み直す
+    const expected = defaultSections({ type: t, totalSteps: stair.totalSteps });
+    if (HAS_SECTIONS.has(t) && (!stair.sections || stair.sections.length !== expected?.length)) {
+      stair.setField('sections', expected);
     }
   };
-  // 図中編集：踏面・区間段数の寸法をクリック→NumPad 確定でフィールドへ反映（パネル入力は撤去済み）。
+  // 図中編集：踏面寸・区間踏面数の寸法をクリック→NumPad 確定でフィールドへ反映（パネル入力は撤去済み）。
+  // 区間の入力値は踏面数（マス数）。内部の sections は実段数のため、
+  // 直進部（偶数index）は +1（実段数=踏面数+1）、踊場・周回部（奇数index）はそのまま換算する。
   const onEditDim = (dim, value) => {
     if (dim.target === 'sections') {
       const arr = [...(stair.sections ?? defaultSections(stair))];
-      arr[dim.index] = value;
+      arr[dim.index] = Math.max(1, dim.index % 2 === 0 ? value + 1 : value);
       stair.setField('sections', arr);
     } else if (dim.target) {
       stair.setField(dim.target, value);
@@ -117,7 +122,7 @@ export const StairEditor = observer(({ stair, graph, project, onDelete }) => {
           </select>
         </div>
 
-        {/* 区間別段数は図中の寸法クリックで編集（パネル入力は撤去）。総段数はその総和+1の派生値。 */}
+        {/* 区間別の踏面数は図中の寸法クリックで編集（パネル入力は撤去）。総段数は総マス数+1の派生値。 */}
         <div style={rowStyle}>
           <span style={labelStyle}>段数</span>
           <input

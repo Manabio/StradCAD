@@ -26,9 +26,10 @@ function chevronPoints(pts, len) {
 
 /**
  * 階段を描画する。entries は描画用に解決済みの配列:
- *   { id, stair, bounds:{x1,y1,x2,y2}, riser:number|null, view:'install'|'upper', selectable:boolean }
+ *   { id, stair, bounds:{x1,y1,x2,y2}, riser:number|null, spans:{lengths:number[]}|null,
+ *     view:'install'|'upper', selectable:boolean }
  * install/upper の両ビュー（設置階・設置上階）を同じ経路で描く。
- * bounds は呼び出し側でワールド座標に解決済みのため、上階（peek した非アクティブ階）でも描ける。
+ * bounds・spans は呼び出し側でワールド座標に解決済みのため、上階（peek した非アクティブ階）でも描ける。
  */
 export const StairLayer = observer(({
   entries = [],
@@ -40,11 +41,11 @@ export const StairLayer = observer(({
   const px = (w) => w / viewport.scaleX; // ズーム非依存の線幅
 
   const groups = entries.map((e) => {
-    const { id, stair, bounds: b, riser, view, selectable } = e;
+    const { id, stair, bounds: b, riser, spans, view, selectable } = e;
     if (!b || ![b.x1, b.y1, b.x2, b.y2].every(Number.isFinite) || b.x2 <= b.x1 || b.y2 <= b.y1) {
       return null;
     }
-    const geom = buildStairGeometry(stair, b, { view, detail, riser });
+    const geom = buildStairGeometry(stair, b, { view, detail, riser, spans });
     const isSel = id === selectedStairId;
 
     const lineProps = { stroke: STAIR_STROKE, strokeWidth: px(1.5), listening: false };

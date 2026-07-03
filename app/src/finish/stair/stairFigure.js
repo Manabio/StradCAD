@@ -1,4 +1,4 @@
-import { buildStairGeometry, makeFrame, stairSegmentDims, insetStairBounds, spansFromRisers_new } from './stairGeometry.js';
+import { buildStairGeometry, makeFrame, stairSegmentDims, insetStairBounds } from './stairGeometry.js';
 import { DEFAULT_GAP_PX, orderDimsByLength, resolveDimOverlaps } from '../../structural/sectionFigure/sectionGeometry.js';
 
 // ================================================================
@@ -22,8 +22,9 @@ function gapMm(scale, b) {
 // 階段の模式図プリミティブ（mm座標）を返す。b は設置エリアの包絡矩形（roomBounds）。
 // view:'upper'（破断なし・全段）＋ detail:true（段番号）で全体像を描く。
 // scale は annotatedFigure が決めた縮尺（注記の隙間を px 一定にするため）。
-export function stairFigurePrimitives(stair, b, { riser = null, scale = null } = {}) {
-  const geom = buildStairGeometry(stair, b, { view: 'upper', detail: true, riser });
+// spans はセル実測の区間長（measureStairSpans。区間長指定の反映用。null なら合成）。
+export function stairFigurePrimitives(stair, b, { riser = null, scale = null, spans = null } = {}) {
+  const geom = buildStairGeometry(stair, b, { view: 'upper', detail: true, riser, spans });
   const prims = [];
 
   // 外周（実線／dashed は破線）
@@ -48,7 +49,7 @@ export function stairFigurePrimitives(stair, b, { riser = null, scale = null } =
   }
 
   // 所定寸法の注記
-  prims.push(...stairDimPrimitives(stair, b, riser, gapMm(scale, b)));
+  prims.push(...stairDimPrimitives(stair, b, riser, gapMm(scale, b), spans));
   // より長い寸法線ほど図の外側へ（同一方向・同一側の tier を長さで並べ替え。チェーンは保持）。
   const cx = (b.x1 + b.x2) / 2, cy = (b.y1 + b.y2) / 2;
   orderDimsByLength(prims, cx, cy);
@@ -59,8 +60,8 @@ export function stairFigurePrimitives(stair, b, { riser = null, scale = null } =
 
 // 所定寸法のプリミティブ。g は注記の張り出し量(mm)＝スクリーン空間で px 一定。
 // 全長・幅は「描かれた図（設置セル包絡矩形 b）」の x/y スパンを寸法線で注記（昇り方向に応じ見出し付与）。
-// 踏面は走行始端に1段分の寸法線（設計値ラベル）。蹴上・段数は設計値をテキストで併記する。
-function stairDimPrimitives(stair, b, riser, g) {
+// 踏面は走行始端に1マス分の寸法線（設計値ラベル）。蹴上・段数は設計値をテキストで併記する。
+function stairDimPrimitives(stair, b, riser, g, spans) {
   const w = b.x2 - b.x1, h = b.y2 - b.y1;
   const vertical = stair.upDirection === 'up' || stair.upDirection === 'down';
   const hHeader = vertical ? '幅' : '全長'; // 横スパン(h)の見出し
@@ -70,13 +71,12 @@ function stairDimPrimitives(stair, b, riser, g) {
     { type: 'dim', dir: 'v', from: b.y1, to: b.y2, at: b.x2 + g, label: `${vHeader} ${Math.round(h)}` }, // 縦スパン（右）
   ];
 
-  // 踏面: 走行始端の1段分（t:0→1/spans）を、全長寸法と反対側の外へ寸法線で示す（設計値ラベル・図中編集可）。
+  // 踏面: 走行始端の1マス分（t:0→1/総マス数）を、全長寸法と反対側の外へ寸法線で示す（設計値ラベル・図中編集可）。
   // 実際に描かれる図形（bi＝中心線から壁厚/2逃げた矩形）に合わせる。
   const bi = insetStairBounds(stair, b, 'upper');
-  const physical = Math.max(1, stair.totalSteps - 1); // 物理段数（totalSteps - 1。+1は上階到達分）
-  const spans_new = spansFromRisers_new(physical);    // 踏面数（stair-model.md: 実段数=踏面数+1）
+  const cells = Math.max(1, stair.totalSteps - 1); // 総マス数（totalSteps - 1。+1は上階到達分）
   const f = makeFrame(stair, bi);
-  const p0 = f.pt(0, 0), p1 = f.pt(1 / spans_new, 0);
+  const p0 = f.pt(0, 0), p1 = f.pt(1 / cells, 0);
   const tread = { editable: true, target: 'tread', label: Math.round(stair.tread) };
   if (vertical) {
     prims.push({ type: 'dim', dir: 'v', from: p0.y, to: p1.y, at: b.x1 - g, labelSide: 'left', ...tread });
@@ -90,7 +90,7 @@ function stairDimPrimitives(stair, b, riser, g) {
   notes.push(`${stair.totalSteps}段`);
   prims.push({ type: 'text', x: (b.x1 + b.x2) / 2, y: b.y2 + g * 2, text: notes.join('  '), anchor: 'middle', baseline: 'hanging', size: 11, fill: '#334155' });
 
-  // タイプ別セグメント（踊り場・回り部・各アーム・各直進部）を、その場に段数／長さの寸法線で注記
-  prims.push(...stairSegmentDims(stair, bi, g));
+  // タイプ別セグメント（踊り場・回り部・各アーム・各直進部）を、その場に踏面数／長さの寸法線で注記
+  prims.push(...stairSegmentDims(stair, bi, g, spans));
   return prims;
 }

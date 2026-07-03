@@ -26,8 +26,8 @@ export const STAIR_LIMITS = {
  */
 export function computeStairDimensions(stair, { floorHeight, isResidential = true }) {
   const totalSteps = Math.max(1, stair.totalSteps);
-  // 蹴上 = 階高 / 物理段数（totalSteps - 1。+1は上階到達分で蹴上を持たない。明示指定があればそれを優先）
-  const riser = stair.riser ?? (floorHeight != null ? floorHeight / Math.max(1, totalSteps - 1) : null);
+  // 蹴上 = 階高 / 総段数（totalSteps = 総蹴上数。上階到達の1段も蹴上を持つ。明示指定があればそれを優先）
+  const riser = stair.riser ?? (floorHeight != null ? floorHeight / totalSteps : null);
   const tread = stair.tread;
 
   const warnings = [];
@@ -50,7 +50,7 @@ export function computeStairDimensions(stair, { floorHeight, isResidential = tru
     riser,
     tread,
     totalSteps,
-    runLengthNeeded: tread * totalSteps, // 平面上の走行長(概算)。実描画段数はフェーズ5で確定
+    runLengthNeeded: tread * Math.max(1, totalSteps - 1), // 平面上の走行長(概算)＝踏面寸×総マス数。実描画はフェーズ5で確定
     warnings,
   };
 }
