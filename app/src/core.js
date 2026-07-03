@@ -386,6 +386,13 @@ export class CenterLine extends Shape {
   }
 }
 
+// CenterLine の種別（通り芯/中心/補助線）を discipline・lineType から判定する
+export function centerLineKind(cl) {
+  if (cl.lineType === 'dashed') return 'aux';
+  if (cl.discipline === Discipline.STRUCT) return 'struct';
+  return 'center';
+}
+
 // ================================================================
 // DIMENSION (寸法線)
 //
@@ -902,6 +909,7 @@ export class PlanGraph {
       dimensionLines:      computed,
       addCenterLine:          action,
       resolveExtentWallRefs:  action,
+      setCenterLineExtentRef: action,
       removeCenterLine:    action,
       demoteToAuxiliary:   action,
       promoteToGrid:       action,
@@ -1351,6 +1359,36 @@ export class PlanGraph {
     return cl;
   }
 
+  // extentLoRef/extentHiRef から参照先 CL/Wall を解決する（addCenterLine と共通のロジック）
+  _resolveExtentRef(ref) {
+    if (!ref) return { cl: null, wall: null };
+    if (ref.clId) {
+      const cl = this.shapeMap.get(ref.clId) ?? this._structGraph?.shapeMap.get(ref.clId);
+      return { cl: cl instanceof CenterLine ? cl : null, wall: null };
+    }
+    if (ref.wallId) {
+      const wall = this.shapeMap.get(ref.wallId);
+      return { cl: null, wall: wall?.type === ShapeType.WALL ? wall : null };
+    }
+    return { cl: null, wall: null };
+  }
+
+  // 中心線結合処理用: lo/hi 側の extent 参照を書き換え、解決キャッシュも更新する
+  setCenterLineExtentRef(cl, side, ref, staticValue = null) {
+    const { cl: refCL, wall: refWall } = this._resolveExtentRef(ref);
+    if (side === 'lo') {
+      cl.extentLoRef   = ref ?? null;
+      cl._extentLoCL   = refCL;
+      cl._extentLoWall = refWall;
+      cl._extentLo     = ref ? null : staticValue;
+    } else {
+      cl.extentHiRef   = ref ?? null;
+      cl._extentHiCL   = refCL;
+      cl._extentHiWall = refWall;
+      cl._extentHi     = ref ? null : staticValue;
+    }
+  }
+
   /**
    * 補助線の extentLoRef/HiRef に wallId がある場合、壁への参照を解決する。
    * restoreGraph で壁を追加した後に呼ぶ。
@@ -1378,6 +1416,25 @@ export class PlanGraph {
     this._reparentChildCenterLines(cl);
     this._teardownCenterLine(id);
     this._removeShape(id);
+  }
+
+  // id の CenterLine を削除すると壊れる外部参照があるか（結合による削除の安全ガード用）
+  // refId 単体の参照は _reparentChildCenterLines で繰り上がるため対象外。
+  hasExternalCenterLineReferences(id) {
+    const usesShape = [...this.shapeMap.values()]
+      .some(s => !(s instanceof CenterLine) && _shapeUsesCenterLine(s, id));
+    if (usesShape) return true;
+    const usesStruct =
+      [...this.columnMap.values()].some(c => c.verticalCL.id === id || c.horizontalCL.id === id) ||
+      [...this.beamMap.values()].some(b => b.axisCL.id === id || b.clStart.id === id || b.clEnd.id === id) ||
+      [...this.wallMap.values()].some(w => w.axisCL.id === id || w.clStart.id === id || w.clEnd.id === id) ||
+      [...this.footingMap.values()].some(f => f.verticalCL.id === id || f.horizontalCL.id === id) ||
+      [...this.sleeveMap.values()].some(s => s.hostType === 'beam' &&
+        (s.hostAxisCL?.id === id || s.hostClStart?.id === id || s.hostClEnd?.id === id));
+    if (usesStruct) return true;
+    return this.centerLines.some(other =>
+      other.id !== id && (other.extentLoRef?.clId === id || other.extentHiRef?.clId === id)
+    );
   }
 
   // 削除される CL を直接参照している子 CL の参照を繰り上げる

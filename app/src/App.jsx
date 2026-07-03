@@ -40,7 +40,7 @@ import { MemberTagLayer } from './renderer/MemberTagLayer.jsx';
 import { MemberStatusMenu } from './ui/MemberStatusMenu.jsx';
 import { PRIMARY_DIMENSION_FIELD_BY_MAP } from './structural/memberCatalog.js';
 import { detectContext, getMenuItems } from './interaction/menuItems.js';
-import { CenterLineType, Discipline, SiteLineKind, OpeningCategory } from '@core';
+import { CenterLineType, Discipline, SiteLineKind, OpeningCategory, centerLineKind } from '@core';
 import { addSkipZero, subtractSkipZero, makeFloorName, renameFloor } from './floorNumber.js';
 import { AddFloorDialog } from './ui/AddFloorDialog.jsx';
 import { ConfirmDialog } from './ui/ConfirmDialog.jsx';
@@ -78,6 +78,7 @@ import { STRUCTURAL_FIGURE_ID } from './structural/structuralFigure.js';
 import { SiteInfoPanel }       from './ui/SiteInfoPanel.jsx';
 import { SiteLinesLayer, SiteDrawPreview, computeSiteApex, pickRedPointId, getSiteLineRedBlue, computeApexSide } from './renderer/SiteLinesLayer.jsx';
 import { findLineHistoryStep, recomputeSiteFromHistory, cloneHistory, computePendingQueue } from './transform/siteHistory.js';
+import { mergeCenterLineChain, composeUndoWithMergeChain } from './transform/centerLineMerge.js';
 import { HamburgerMenu }       from './ui/HamburgerMenu.jsx';
 import { ModeBar }             from './ui/ModeBar.jsx';
 import { FloorDrum }           from './ui/FloorDrum.jsx';
@@ -712,11 +713,18 @@ const App = observer(() => {
       // CL が実際に動いた か、明示的な再プレスがあった場合のみ確定
       if (moveDownRef.current || newValue !== originalValue) {
         if (newValue !== originalValue) {
-          runInAction(() => bakeCLValue(cl, newValue));
-          undoManager.push(
-            () => runInAction(() => bakeCLValue(cl, originalValue)),
-            () => runInAction(() => bakeCLValue(cl, newValue)),
+          let chainResult = { merged: false };
+          runInAction(() => {
+            bakeCLValue(cl, newValue);
+            // 通り芯(labeled:true)は結合対象外。編集確定のたびに隣接する中心線との結合を確認する
+            if (!cl.labeled) chainResult = mergeCenterLineChain(graph, cl, { kind: centerLineKind(cl) });
+          });
+          const [undoFn, redoFn] = composeUndoWithMergeChain(
+            () => bakeCLValue(cl, originalValue),
+            () => bakeCLValue(cl, newValue),
+            chainResult,
           );
+          undoManager.push(() => runInAction(undoFn), () => runInAction(redoFn));
         }
         moveDownRef.current = null;
         modeRef.current?.commitMove();
@@ -2348,9 +2356,7 @@ const App = observer(() => {
       cl => cl.centerLineType === clType && Math.abs(cl.value - value) < OVERLAP_TOL
     );
     if (existing) {
-      const existingKind = existing.lineType === 'dashed' ? 'aux'
-        : existing.discipline === Discipline.STRUCT ? 'struct'
-        : 'center';
+      const existingKind = centerLineKind(existing);
 
       if (kind === existingKind) {
         if (kind === 'struct') {
@@ -2368,61 +2374,19 @@ const App = observer(() => {
           setToast({ msg: ERR_CL_DUPLICATE(kind), key: Date.now() });
           return;
         }
-        // 端点共有の隣接CLは1本に統合する
-        const newLoRef = extentProps.extentLoRef;
-        const newHiRef = extentProps.extentHiRef;
-        if (newLoRef && newHiRef) {
-          const adjacent = graph.centerLines.find(cl => {
-            if (cl.centerLineType !== clType || Math.abs(cl.value - value) >= OVERLAP_TOL) return false;
-            if (!cl.extentLoRef || !cl.extentHiRef) return false;
-            const ek = cl.lineType === 'dashed' ? 'aux' : cl.discipline === Discipline.STRUCT ? 'struct' : 'center';
-            return ek === kind && (
-              (newHiRef.clId != null && cl.extentLoRef.clId === newHiRef.clId) ||
-              (newLoRef.clId != null && cl.extentHiRef.clId === newLoRef.clId)
-            );
-          });
-          if (adjacent) {
-            const touchesLeft = adjacent.extentLoRef.clId === newHiRef.clId;
-            const mergedLoRef = touchesLeft ? newLoRef             : adjacent.extentLoRef;
-            const mergedHiRef = touchesLeft ? adjacent.extentHiRef : newHiRef;
-            const mergedLoCL  = graph.shapeMap.get(mergedLoRef.clId) ?? null;
-            const mergedHiCL  = graph.shapeMap.get(mergedHiRef.clId) ?? null;
-            const oldLoRef = adjacent.extentLoRef;
-            const oldHiRef = adjacent.extentHiRef;
-            const oldLoCL  = adjacent._extentLoCL;
-            const oldHiCL  = adjacent._extentHiCL;
-            const oldLo    = adjacent._extentLo;
-            const oldHi    = adjacent._extentHi;
-            runInAction(() => {
-              adjacent.extentLoRef = mergedLoRef;
-              adjacent.extentHiRef = mergedHiRef;
-              adjacent._extentLoCL  = mergedLoCL;
-              adjacent._extentHiCL  = mergedHiCL;
-              adjacent._extentLo    = null;
-              adjacent._extentHi    = null;
-            });
-            undoManager.push(
-              () => runInAction(() => {
-                adjacent.extentLoRef = oldLoRef;
-                adjacent.extentHiRef = oldHiRef;
-                adjacent._extentLoCL  = oldLoCL;
-                adjacent._extentHiCL  = oldHiCL;
-                adjacent._extentLo    = oldLo;
-                adjacent._extentHi    = oldHi;
-              }),
-              () => runInAction(() => {
-                adjacent.extentLoRef = mergedLoRef;
-                adjacent.extentHiRef = mergedHiRef;
-                adjacent._extentLoCL  = mergedLoCL;
-                adjacent._extentHiCL  = mergedHiCL;
-                adjacent._extentLo    = null;
-                adjacent._extentHi    = null;
-              }),
-            );
-            setClDialog(null);
-            setClPreview(null);
-            return;
-          }
+        // 隣接するCLがあれば結合する（線分の端点一致をベクトル演算で確認、多段連鎖にも対応）
+        // extentProps.extentLo/Hi は CenterLine コンストラクタ用の静的フォールバック値（ref があれば null）。
+        // getCenterLineSegment が読む座標は常に解決済みの newExtentLo/newExtentHi で渡す必要がある。
+        const virtualCandidate = { centerLineType: clType, value, ...extentProps, extentLo: newExtentLo, extentHi: newExtentHi };
+        const chainResult = runInAction(() => mergeCenterLineChain(graph, virtualCandidate, { kind }));
+        if (chainResult.merged) {
+          undoManager.push(
+            () => runInAction(chainResult.undo),
+            () => runInAction(chainResult.redo),
+          );
+          setClDialog(null);
+          setClPreview(null);
+          return;
         }
       }
 
@@ -2765,11 +2729,17 @@ const App = observer(() => {
             const { cl, originalValue } = ms;
             const newValue = cl.effectiveValue;
             if (newValue !== originalValue) {
-              runInAction(() => bakeCLValue(cl, newValue));
-              undoManager.push(
-                () => runInAction(() => bakeCLValue(cl, originalValue)),
-                () => runInAction(() => bakeCLValue(cl, newValue)),
+              let chainResult = { merged: false };
+              runInAction(() => {
+                bakeCLValue(cl, newValue);
+                if (!cl.labeled) chainResult = mergeCenterLineChain(graph, cl, { kind: centerLineKind(cl) });
+              });
+              const [undoFn, redoFn] = composeUndoWithMergeChain(
+                () => bakeCLValue(cl, originalValue),
+                () => bakeCLValue(cl, newValue),
+                chainResult,
               );
+              undoManager.push(() => runInAction(undoFn), () => runInAction(redoFn));
             } else {
               runInAction(() => { cl.pendingDelta = 0; });
             }
