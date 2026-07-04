@@ -63,9 +63,10 @@ export function RadialMenu({ pos, items, onSelect, onClose }) {
               }}
             >
               <button
-                className="radial-item"
+                className={`radial-item${item.disabled ? ' disabled' : ''}`}
                 onPointerDown={(e) => {
                   e.stopPropagation();
+                  if (item.disabled) return;
                   onSelect(item);
                   onClose();
                 }}

@@ -70,6 +70,36 @@ export function findNearestCenterLine(graph, wx, wy, thresholdPx, scaleX, scaleY
 }
 
 /**
+ * カーソルに最も近い、非ラベルCL（中心・補助線）の端点を返す（延長/短縮メニュー用）。
+ * 端点は描画上の突端（extentLo-overhang / extentHi+overhang）で判定する。
+ * 通り芯（labeled:true）・RADIAL・extentLo/Hi未確定のCLは対象外。
+ * @returns {{cl, side:'lo'|'hi'}|null}
+ */
+export function findNearestCenterLineEndpoint(graph, wx, wy, thresholdPx, scaleX, scaleY, viewport) {
+  if (!graph) return null;
+  let nearest = null, minDist = Infinity;
+  for (const cl of graph.centerLines) {
+    if (cl.labeled) continue;
+    const isV = cl.centerLineType === 'X';
+    const isH = cl.centerLineType === 'Y';
+    if (!isV && !isH) continue;
+    if (cl.extentLo == null || cl.extentHi == null) continue;
+    const overhang = overhangMm(viewport, cl.trim);
+    const tips = [
+      { side: 'lo', along: cl.extentLo - overhang },
+      { side: 'hi', along: cl.extentHi + overhang },
+    ];
+    for (const { side, along } of tips) {
+      const tx = isV ? cl.value : along;
+      const ty = isV ? along    : cl.value;
+      const dist = Math.hypot((tx - wx) * scaleX, (ty - wy) * scaleY);
+      if (dist < thresholdPx && dist < minDist) { minDist = dist; nearest = { cl, side }; }
+    }
+  }
+  return nearest;
+}
+
+/**
  * 中心線移動中、同種の他中心線へのスナップ値を返す。
  */
 export function findCLMoveSnap(graph, movingCL, wx, wy, thresholdPx, scaleX, scaleY) {

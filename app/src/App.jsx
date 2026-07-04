@@ -12,6 +12,7 @@ import { Viewport, LodLevel } from './viewport.js';
 import {
   findNearestIntersection,
   findNearestCenterLine,
+  findNearestCenterLineEndpoint,
   findCLMoveSnap,
   findBracketingCLs,
   findNearbyCenterLines,
@@ -79,6 +80,7 @@ import { SiteInfoPanel }       from './ui/SiteInfoPanel.jsx';
 import { SiteLinesLayer, SiteDrawPreview, computeSiteApex, pickRedPointId, getSiteLineRedBlue, computeApexSide } from './renderer/SiteLinesLayer.jsx';
 import { findLineHistoryStep, recomputeSiteFromHistory, cloneHistory, computePendingQueue } from './transform/siteHistory.js';
 import { mergeCenterLineChain, composeUndoWithMergeChain } from './transform/centerLineMerge.js';
+import { extendCenterLine, shortenCenterLine, canExtendCenterLine, canShortenCenterLine } from './transform/centerLineExtend.js';
 import { HamburgerMenu }       from './ui/HamburgerMenu.jsx';
 import { ModeBar }             from './ui/ModeBar.jsx';
 import { FloorDrum }           from './ui/FloorDrum.jsx';
@@ -122,7 +124,8 @@ const App = observer(() => {
   const [memberFocusRequest, setMemberFocusRequest] = useState(null); // { mapName, tag, fieldKey } | null — 部材タグクリックで構造リストの該当寸法欄を開く
   const [cursorWorld, setCursorWorld] = useState(null);
   const [cursorScreen,setCursorScreen]= useState({ x: 0, y: 0 });
-  const [nearCL,      setNearCL]      = useState(null);
+  const [nearCL,         setNearCL]         = useState(null);
+  const [nearCLEndpoint, setNearCLEndpoint] = useState(null); // { cl, side:'lo'|'hi' } | null
   const [nearWall,    setNearWall]    = useState(null);
   const [nearOpening, setNearOpening] = useState(null);
   const [clDialog,    setClDialog]    = useState(null); // { type, worldCoord }
@@ -159,6 +162,7 @@ const App = observer(() => {
   const touchTapRef   = useRef(null);
   const snapRef       = useRef(null);
   const nearCLRef     = useRef(null);
+  const nearCLEndpointRef = useRef(null);
   const nearWallRef    = useRef(null);
   const nearOpeningRef = useRef(null);
   const drawDownRef       = useRef(null);
@@ -184,6 +188,7 @@ const App = observer(() => {
 
   useEffect(() => { snapRef.current  = snapPoint; }, [snapPoint]);
   useEffect(() => { nearCLRef.current = nearCL;   }, [nearCL]);
+  useEffect(() => { nearCLEndpointRef.current = nearCLEndpoint; }, [nearCLEndpoint]);
   useEffect(() => { nearWallRef.current    = nearWall;    }, [nearWall]);
   useEffect(() => { nearOpeningRef.current = nearOpening; }, [nearOpening]);
 
@@ -306,13 +311,22 @@ const App = observer(() => {
     onFire:   (sx, sy) => {
       setPressPos(null);
       stretchDownRef.current = null; // ストレッチ意図をキャンセルしてメニューを開く
-      const snap    = snapRef.current;
-      const cl      = nearCLRef.current;
-      const opening = nearOpeningRef.current;
-      const wall    = nearWallRef.current;
-      const context = detectContext(snap, cl, opening, wall);
-      const items   = getMenuItems(context);
-      setMenu({ pos: { x: sx, y: sy }, items, snap, worldPos: viewport.screenToWorld(sx, sy), cl, wall, opening });
+      const snap         = snapRef.current;
+      const clEndpoint   = nearCLEndpointRef.current;
+      const cl           = nearCLRef.current;
+      const opening      = nearOpeningRef.current;
+      const wall         = nearWallRef.current;
+      const context      = detectContext(snap, cl, opening, wall, clEndpoint);
+      const endpointState = clEndpoint ? {
+        canExtend:  canExtendCenterLine(graph, clEndpoint.cl, clEndpoint.side),
+        canShorten: canShortenCenterLine(graph, clEndpoint.cl, clEndpoint.side),
+      } : null;
+      const items   = getMenuItems(context, endpointState);
+      setMenu({
+        pos: { x: sx, y: sy }, items, snap, worldPos: viewport.screenToWorld(sx, sy),
+        cl: clEndpoint ? clEndpoint.cl : cl, wall, opening,
+        clEndpointSide: clEndpoint ? clEndpoint.side : null,
+      });
     },
     onCancel: () => { setPressPos(null); stretchDownRef.current = null; },
   });
@@ -1962,6 +1976,7 @@ const App = observer(() => {
     if (isInGutter(clientX, clientY, size.width, size.height)) {
       setSnapPoint(null);
       setNearCL(null);
+      setNearCLEndpoint(null);
       setNearWall(null);
       setNearOpening(null);
       setCursorWorld(null);
@@ -1969,6 +1984,10 @@ const App = observer(() => {
     }
     const world = viewport.screenToWorld(clientX, clientY);
     const snap  = findNearestIntersection(graph, world.x, world.y, SNAP_THRESHOLD_PX, viewport.scaleX, viewport.scaleY);
+    // CL端点（延長/短縮メニュー）は交点スナップより優先度は下だが、CL/開口/壁の排他選択とは別枠で判定する
+    const clEndpointCand = (appMode === 'structure')
+      ? null
+      : findNearestCenterLineEndpoint(graph, world.x, world.y, CL_THRESHOLD_PX, viewport.scaleX, viewport.scaleY, viewport);
     // 交点スナップ中は CL/開口/壁の検出不要
     let cl = null, opening = null, wall = null;
     if (!snap) {
@@ -2007,6 +2026,7 @@ const App = observer(() => {
     }
     setSnapPoint(snap ?? null);
     setNearCL(cl ?? null);
+    setNearCLEndpoint(!snap ? (clEndpointCand ?? null) : null);
     setNearOpening(opening ?? null);
     setNearWall(wall ?? null);
     setCursorWorld(world);
@@ -2033,6 +2053,25 @@ const App = observer(() => {
       return;
     }
     if (item.id === 'cl-move') { modeRef.current?.startMove(menu.cl); return; }
+    if (item.id === 'cl-extend') {
+      const cl = menu.cl, side = menu.clEndpointSide;
+      let result;
+      runInAction(() => { result = extendCenterLine(graph, cl, side, viewport); });
+      if (result.extended) {
+        const [undoFn, redoFn] = composeUndoWithMergeChain(result.baseUndo, result.baseRedo, result.chainResult);
+        undoManager.push(() => runInAction(undoFn), () => runInAction(redoFn));
+      }
+      return;
+    }
+    if (item.id === 'cl-shorten') {
+      const cl = menu.cl, side = menu.clEndpointSide;
+      let result;
+      runInAction(() => { result = shortenCenterLine(graph, cl, side, viewport); });
+      if (result.shortened) {
+        undoManager.push(() => runInAction(result.baseUndo), () => runInAction(result.baseRedo));
+      }
+      return;
+    }
     if (item.id === 'cl-del')  {
       const cl = menu.cl;
       const isStruct = cl.discipline === Discipline.STRUCT && cl.labeled;
