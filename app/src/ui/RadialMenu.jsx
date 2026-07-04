@@ -71,7 +71,12 @@ export function RadialMenu({ pos, items, onSelect, onClose }) {
                   onClose();
                 }}
               >
-                <span className="radial-item-icon">{item.icon}</span>
+                <span
+                  className="radial-item-icon"
+                  style={item.iconRotate ? { transform: `rotate(${item.iconRotate}deg)` } : undefined}
+                >
+                  {item.icon}
+                </span>
                 <span className="radial-item-label">{item.label}</span>
               </button>
             </div>

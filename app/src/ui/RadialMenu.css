@@ -70,6 +70,7 @@
 }
 
 .radial-item-icon {
+  display: inline-block;
   font-size: 18px;
   line-height: 1;
   color: #1e40af;

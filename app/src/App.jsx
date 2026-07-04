@@ -320,6 +320,8 @@ const App = observer(() => {
       const endpointState = clEndpoint ? {
         canExtend:  canExtendCenterLine(graph, clEndpoint.cl, clEndpoint.side),
         canShorten: canShortenCenterLine(graph, clEndpoint.cl, clEndpoint.side),
+        isVertical: clEndpoint.cl.centerLineType === CenterLineType.VERTICAL,
+        side:       clEndpoint.side,
       } : null;
       const items   = getMenuItems(context, endpointState);
       setMenu({

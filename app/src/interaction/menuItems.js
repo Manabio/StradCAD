@@ -21,6 +21,13 @@ export function detectContext(snapPoint, nearCL, nearOpening, nearWall, nearCLEn
   return CONTEXT.EMPTY;
 }
 
+// 延長方向の画面角度（0=右, 90=下, 180=左, -90=上。CSS transform:rotate() と同じ時計回り）
+// side='hi'(値が大きい側)は縦線なら下、横線なら右。side='lo'はその逆。
+function extendIconAngle(isVertical, side) {
+  if (isVertical) return side === 'hi' ? 90 : -90;
+  return side === 'hi' ? 0 : 180;
+}
+
 export function getMenuItems(context, endpointState) {
   switch (context) {
     case CONTEXT.INTERSECTION:
@@ -30,11 +37,13 @@ export function getMenuItems(context, endpointState) {
         { id: 'del',   label: '削除',   icon: '✕' },
       ];
     case CONTEXT.CENTER_LINE_ENDPOINT: {
-      const { canExtend, canShorten } = endpointState ?? {};
+      const { canExtend, canShorten, isVertical, side } = endpointState ?? {};
+      const extendAngle  = extendIconAngle(isVertical, side);
+      const shortenAngle = extendAngle + 180; // 短縮は延長と正反対（内向き）を指す
       return [
-        { id: 'cl-extend',  label: '延長', icon: '⇥', disabled: !canExtend },
+        { id: 'cl-extend',  label: '延長', icon: '→', iconRotate: extendAngle, disabled: !canExtend },
         canShorten
-          ? { id: 'cl-shorten', label: '短縮', icon: '⇤' }
+          ? { id: 'cl-shorten', label: '短縮', icon: '→', iconRotate: shortenAngle }
           : { id: 'cl-del',     label: '削除', icon: '✕' },
       ];
     }
