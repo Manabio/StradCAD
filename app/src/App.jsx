@@ -34,6 +34,7 @@ import { measureStairSpans } from './finish/stair/stairClassify.js';
 import { roomBounds }       from './finish/gridCells.js';
 import { generateRoomWallsFromOutline, generateExteriorWalls, snapshotWall, restoreWallsFromSnapshots } from './finish/wallGeneration.js';
 import { snapshotEdges, restoreEdges, syncEdgesFromTopology, buildCellToRoom } from './finish/edgeClassify.js';
+import { reinterpretRoomsOnEntry, snapshotRoomsState, restoreRoomsState } from './finish/roomReinterpret.js';
 import { EdgeSectionLayer } from './renderer/EdgeSectionLayer.jsx';
 import { RoomLabelsLayer } from './renderer/RoomLabelsLayer.jsx';
 import { StructuralLayer, ColumnsLayer } from './renderer/StructuralLayer.jsx';
@@ -992,15 +993,34 @@ const App = observer(() => {
       }
     }
 
-    // floorplan→finish 再突入: 通り芯変更等のトポロジー差分でエッジを再同期
+    // floorplan→finish 再突入: 前回脱出時点のRoom.cellsを現在のCLトポロジーと
+    // 突き合わせて再解釈（辺の喪失によるセル統合・部分指定化）した上で、
+    // 通り芯変更等のトポロジー差分でエッジを再同期する
     if (appMode !== 'finish' && newMode === 'finish') {
+      const entryUndoFns = [];
+      const entryRedoFns = [];
+
+      const roomsBefore = snapshotRoomsState(graph);
+      runInAction(() => reinterpretRoomsOnEntry(graph));
+      const roomsAfter = snapshotRoomsState(graph);
+      if (JSON.stringify(roomsBefore) !== JSON.stringify(roomsAfter)) {
+        entryUndoFns.push(() => restoreRoomsState(graph, roomsBefore));
+        entryRedoFns.push(() => restoreRoomsState(graph, roomsAfter));
+      }
+
       const before = snapshotEdges(graph);
       runInAction(() => syncEdgesFromTopology(graph));
       const after = snapshotEdges(graph);
       if (JSON.stringify(before) !== JSON.stringify(after)) {
+        entryUndoFns.push(() => restoreEdges(graph, before));
+        entryRedoFns.push(() => restoreEdges(graph, after));
+      }
+
+      // 部屋の再解釈→エッジ再同期の順に適用したため、undo は逆順で巻き戻す
+      if (entryUndoFns.length > 0) {
         undoManager.push(
-          () => restoreEdges(graph, before),
-          () => restoreEdges(graph, after),
+          () => { [...entryUndoFns].reverse().forEach(fn => fn()); },
+          () => { entryRedoFns.forEach(fn => fn()); },
         );
       }
     }

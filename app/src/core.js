@@ -656,6 +656,7 @@ export class Room {
       floorLevel:       observable,
       setName:          action,
       addCell:          action,
+      removeCell:       action,
       setCells:         action,
       setKind:          action,
       setTemplateKey:   action,
@@ -667,6 +668,7 @@ export class Room {
   }
   setName(name)              { this.name = name; }
   addCell(key)               { this.cells.add(key); }
+  removeCell(key)            { this.cells.delete(key); }
   setCells(cells)            { this.cells = cells; }
   setKind(kind)              { this.kind = kind; }
   setNamePosition(x, y)     { this.namePosition = { x, y }; }
