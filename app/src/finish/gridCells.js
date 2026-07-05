@@ -10,22 +10,12 @@ function isDividerCL(cl) {
          (!cl.labeled && cl.lineType !== 'dashed' && cl.discipline === Discipline.ARCH);
 }
 
-// ある垂直方向の位置 perpCoord でアクティブな CL を昇順で返す
-//   verticalCL の perpCoord = wy （中心線の extentLo/Hi は y軸方向の範囲）
-//   horizontalCL の perpCoord = wx
-function getActiveCLs(graph, centerLineType, perpCoord) {
-  return graph.centerLines
-    .filter(cl => {
-      if (cl.centerLineType !== centerLineType) return false;
-      if (!isDividerCL(cl)) return false;
-      // 通り芯は常にアクティブ
-      if (cl.labeled && cl.discipline === Discipline.STRUCT) return true;
-      // 中心線: extentLo〜extentHi の範囲内のみアクティブ
-      const lo = cl.extentLo, hi = cl.extentHi;
-      if (lo == null || hi == null) return true;
-      return perpCoord >= lo && perpCoord <= hi;
-    })
-    .sort((a, b) => a.value - b.value);
+// cl の延長区間 [extentLo, extentHi] が [rangeLo, rangeHi] と重なるか（通り芯は常にアクティブ）
+function isActiveAcrossRange(cl, rangeLo, rangeHi) {
+  if (cl.labeled && cl.discipline === Discipline.STRUCT) return true;
+  const lo = cl.extentLo, hi = cl.extentHi;
+  if (lo == null || hi == null) return true;
+  return lo < rangeHi && hi > rangeLo;
 }
 
 // 区間 [lo, hi] 内に存在する全 CL 値をブレークポイントとして収集
@@ -61,28 +51,36 @@ export function dividerCLsBetween(graph, centerLineType, lo, hi) {
  *   key = "leftId:topId:rightId:bottomId"（4 CL で境界を完全に記述）
  */
 export function worldToCell(wx, wy, graph) {
-  const xs = getActiveCLs(graph, CenterLineType.VERTICAL,   wy);
-  const ys = getActiveCLs(graph, CenterLineType.HORIZONTAL, wx);
-  if (xs.length < 2 || ys.length < 2) return null;
+  const verticals   = graph.centerLines.filter(cl => cl.centerLineType === CenterLineType.VERTICAL   && isDividerCL(cl));
+  const horizontals = graph.centerLines.filter(cl => cl.centerLineType === CenterLineType.HORIZONTAL && isDividerCL(cl));
+  if (verticals.length < 2 || horizontals.length < 2) return null;
 
-  let leftCL = null, rightCL = null;
-  for (let i = 0; i < xs.length - 1; i++) {
-    if (wx >= xs[i].value && wx < xs[i + 1].value) {
-      leftCL = xs[i]; rightCL = xs[i + 1]; break;
+  // 中心線を部分的に短縮・延長してL字状の分割になっている場合、片軸だけの判定
+  // （wyだけで左右境界、wxだけで上下境界を決める）では矩形の内部を別の中心線が
+  // 横切っていても気づけない。実際に横切る中心線がなくなるまで矩形を反復的に
+  // 収縮させることで、真の最小セルに収束させる。
+  let left = -Infinity, right = Infinity, top = -Infinity, bottom = Infinity;
+  let leftCL = null, rightCL = null, topCL = null, bottomCL = null;
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const v of verticals) {
+      if (!isActiveAcrossRange(v, top, bottom)) continue;
+      if (v.value > wx && v.value < right) { right = v.value; rightCL = v; changed = true; }
+      if (v.value < wx && v.value > left)  { left  = v.value; leftCL  = v; changed = true; }
+    }
+    for (const h of horizontals) {
+      if (!isActiveAcrossRange(h, left, right)) continue;
+      if (h.value > wy && h.value < bottom) { bottom = h.value; bottomCL = h; changed = true; }
+      if (h.value < wy && h.value > top)    { top    = h.value; topCL    = h; changed = true; }
     }
   }
-  let topCL = null, bottomCL = null;
-  for (let j = 0; j < ys.length - 1; j++) {
-    if (wy >= ys[j].value && wy < ys[j + 1].value) {
-      topCL = ys[j]; bottomCL = ys[j + 1]; break;
-    }
-  }
-  if (!leftCL || !topCL) return null;
+  if (!leftCL || !rightCL || !topCL || !bottomCL) return null;
 
   return {
     key: `${leftCL.id}:${topCL.id}:${rightCL.id}:${bottomCL.id}`,
-    x1: leftCL.value,  x2: rightCL.value,
-    y1: topCL.value,   y2: bottomCL.value,
+    x1: left,  x2: right,
+    y1: top,   y2: bottom,
   };
 }
 
