@@ -1,5 +1,5 @@
 import { makeObservable, observable, action, computed, runInAction } from 'mobx';
-import { worldToCell, refreshCells } from '../finish/gridCells.js';
+import { regionCellsAt, refreshCells } from '../finish/gridCells.js';
 import { classifyStairArea } from '../finish/stair/stairClassify.js';
 import { ERR_MATERIAL_MISMATCH } from '../error.js';
 
@@ -154,23 +154,28 @@ export class FinishModeState {
     return this._composition?.resolveEdgeSection(edge, graph, this.materialMap, cellToRoom) ?? null;
   }
 
+  // 選択は連結領域単位。短縮CLでL字化した領域は、内部のどこを指しても
+  // 構成セル全部をまとめて拾う（先頭はポインタ直下のセル）
   startDrag(wx, wy) {
-    const cell = worldToCell(wx, wy, this.graph);
-    if (!cell) return;
-    this.dragState = { currentCell: cell, visitedCells: new Map([[cell.key, cell]]) };
+    const region = regionCellsAt(wx, wy, this.graph);
+    if (region.length === 0) return;
+    this.dragState = {
+      currentCell: region[0],
+      visitedCells: new Map(region.map(c => [c.key, c])),
+    };
   }
 
   updateDrag(wx, wy) {
     const state = this.dragState;
     if (!state) return;
-    const cell = worldToCell(wx, wy, this.graph);
-    if (!cell) return;
-    if (state.visitedCells.has(cell.key)) {
-      this.dragState = { ...state, currentCell: cell };
+    const region = regionCellsAt(wx, wy, this.graph);
+    if (region.length === 0) return;
+    if (region.every(c => state.visitedCells.has(c.key))) {
+      this.dragState = { ...state, currentCell: region[0] };
     } else {
       const visited = new Map(state.visitedCells);
-      visited.set(cell.key, cell);
-      this.dragState = { ...state, currentCell: cell, visitedCells: visited };
+      for (const c of region) visited.set(c.key, c);
+      this.dragState = { ...state, currentCell: region[0], visitedCells: visited };
     }
   }
 

@@ -42,52 +42,96 @@ export function dividerCLsBetween(graph, centerLineType, lo, hi) {
 // 公開 API
 // ================================================================
 
+// 昇順の値配列から w を含むマイクロ区間 [lo, hi) を返す（格子外は null）。
+// 値上の点は大きい側の区間に属する（呼び出し側は線上を避けた代表点を使う前提。
+// structuralAutoFill.js の端境界曖昧性コメント参照）。
+function microInterval(values, w) {
+  if (w < values[0] || w >= values[values.length - 1]) return null;
+  let lo = values[0];
+  for (const v of values) {
+    if (v <= w) lo = v;
+    else return [lo, v];
+  }
+  return null;
+}
+
+// 値 value 上の CL が直交区間 (rangeLo, rangeHi) を分割しているか
+function isSeparatingAt(cls, value, rangeLo, rangeHi) {
+  return cls.some(cl => cl.value === value && isActiveAcrossRange(cl, rangeLo, rangeHi));
+}
+
+// マイクロ列 [colLo, colHi] 内で wy を含む縦区間 { top, bottom } を返す。
+// この列区間で分割として働く水平CLだけを境界に採用する。上下いずれかの
+// 境界が見つからなければ null（格子の縦方向の外）。
+function columnPiece(horizontals, colLo, colHi, wy) {
+  let top = -Infinity, bottom = Infinity;
+  for (const h of horizontals) {
+    if (!isActiveAcrossRange(h, colLo, colHi)) continue;
+    if (h.value <= wy && h.value > top) top = h.value;
+    if (h.value > wy && h.value < bottom) bottom = h.value;
+  }
+  if (top === -Infinity || bottom === Infinity) return null;
+  return { top, bottom };
+}
+
 /**
  * ワールド座標 (wx, wy) がどのセルに属するかを返す。
  * その点でアクティブな CL（extentLo〜extentHi を尊重）だけを使って判定するため、
  * 中心線の線分外では分割されない。
  *
+ * 中心線の部分短縮でL字状の連結領域ができると「点を含む極大矩形」は一意に
+ * 定まらず、開始点によって互いに重なる矩形が得られてしまう（グリッド背景の
+ * 二重塗り・実在しないセル境界線の原因）。そこで全分割CL値で切ったマイクロ
+ * 格子を土台に「列内の縦区間 → 同一縦区間が続く隣接列との横結合」という
+ * 列優先の正準マージで一意な平面分割を定義する。どの点から呼んでもセル同士は
+ * 重ならず、同じ領域片には同じキー・同じ矩形が返る。
+ *
  * @returns {{ key, x1, x2, y1, y2 } | null}
- *   key = "leftId:topId:rightId:bottomId"（4 CL で境界を完全に記述）
+ *   key = "leftId:topId:rightId:bottomId"（4 CL で境界を完全に記述。L字の内部
+ *   分割位置に接する辺では、その区間で非アクティブなCLが識別子として使われる）
  */
 export function worldToCell(wx, wy, graph) {
-  const verticals   = graph.centerLines.filter(cl => cl.centerLineType === CenterLineType.VERTICAL   && isDividerCL(cl));
-  const horizontals = graph.centerLines.filter(cl => cl.centerLineType === CenterLineType.HORIZONTAL && isDividerCL(cl));
+  const verticals = graph.centerLines
+    .filter(cl => cl.centerLineType === CenterLineType.VERTICAL && isDividerCL(cl))
+    .sort((a, b) => a.value - b.value);
+  const horizontals = graph.centerLines
+    .filter(cl => cl.centerLineType === CenterLineType.HORIZONTAL && isDividerCL(cl))
+    .sort((a, b) => a.value - b.value);
   if (verticals.length < 2 || horizontals.length < 2) return null;
 
-  // 中心線を部分的に短縮・延長してL字状の分割になっている場合、片軸だけの判定
-  // （wyだけで左右境界、wxだけで上下境界を決める）では矩形の内部を別の中心線が
-  // 横切っていても気づけない、あるいは逆に短縮で無効化されたCLをいつまでも境界と
-  // 誤認し続ける（本来はより外側の中心線まで広がるべきセルが広がらない）。
-  // 毎周、直交軸の現在値を使って両軸を毎回ゼロから（-Infinity/Infinityから）
-  // 計算し直す不動点反復にすることで、狭まる方向・広がる方向のどちらの変化も
-  // 正しく収束させる（前回値を起点に「narrowのみ」で継ぎ足すと、無効化された
-  // 境界が居座ったまま外側の中心線が見つからなくなる）。
-  let left = -Infinity, right = Infinity, top = -Infinity, bottom = Infinity;
-  let leftCL = null, rightCL = null, topCL = null, bottomCL = null;
-  let changed = true;
-  const maxIterations = verticals.length + horizontals.length + 4; // 収束保証の安全弁
-  for (let iter = 0; changed && iter < maxIterations; iter++) {
-    changed = false;
+  const xValues = [...new Set(verticals.map(v => v.value))];
+  const col = microInterval(xValues, wx);
+  if (!col) return null;
+  const piece = columnPiece(horizontals, col[0], col[1], wy);
+  if (!piece) return null;
+  const { top, bottom } = piece;
 
-    let newLeft = -Infinity, newRight = Infinity, newLeftCL = null, newRightCL = null;
-    for (const v of verticals) {
-      if (!isActiveAcrossRange(v, top, bottom)) continue;
-      if (v.value > wx && v.value < newRight) { newRight = v.value; newRightCL = v; }
-      if (v.value < wx && v.value > newLeft)  { newLeft  = v.value; newLeftCL  = v; }
-    }
-    if (newLeft !== left || newRight !== right) changed = true;
-    left = newLeft; right = newRight; leftCL = newLeftCL; rightCL = newRightCL;
-
-    let newTop = -Infinity, newBottom = Infinity, newTopCL = null, newBottomCL = null;
-    for (const h of horizontals) {
-      if (!isActiveAcrossRange(h, left, right)) continue;
-      if (h.value > wy && h.value < newBottom) { newBottom = h.value; newBottomCL = h; }
-      if (h.value < wy && h.value > newTop)    { newTop    = h.value; newTopCL    = h; }
-    }
-    if (newTop !== top || newBottom !== bottom) changed = true;
-    top = newTop; bottom = newBottom; topCL = newTopCL; bottomCL = newBottomCL;
+  // 同一縦区間 [top, bottom] が続く限り、非分割の列境界を越えて左右へ結合する
+  let loIdx = xValues.indexOf(col[0]);
+  let hiIdx = xValues.indexOf(col[1]);
+  while (!isSeparatingAt(verticals, xValues[loIdx], top, bottom)) {
+    if (loIdx === 0) return null; // 左境界CLなし（領域が格子外へ抜ける）
+    const p = columnPiece(horizontals, xValues[loIdx - 1], xValues[loIdx], wy);
+    if (!p || p.top !== top || p.bottom !== bottom) break; // 縦区間が変わる → ここがL字の内部分割位置
+    loIdx--;
   }
+  while (!isSeparatingAt(verticals, xValues[hiIdx], top, bottom)) {
+    if (hiIdx === xValues.length - 1) return null; // 右境界CLなし
+    const p = columnPiece(horizontals, xValues[hiIdx], xValues[hiIdx + 1], wy);
+    if (!p || p.top !== top || p.bottom !== bottom) break;
+    hiIdx++;
+  }
+
+  const left = xValues[loIdx], right = xValues[hiIdx];
+  // 境界CLの解決。分割として働くCLを優先し、L字の内部分割位置（その区間では
+  // 非アクティブ）では値一致のCLを識別子として使う
+  const findBoundaryCL = (cls, value, rangeLo, rangeHi) =>
+    cls.find(cl => cl.value === value && isActiveAcrossRange(cl, rangeLo, rangeHi))
+    ?? cls.find(cl => cl.value === value);
+  const leftCL   = findBoundaryCL(verticals,   left,   top,  bottom);
+  const rightCL  = findBoundaryCL(verticals,   right,  top,  bottom);
+  const topCL    = findBoundaryCL(horizontals, top,    left, right);
+  const bottomCL = findBoundaryCL(horizontals, bottom, left, right);
   if (!leftCL || !rightCL || !topCL || !bottomCL) return null;
 
   return {
@@ -95,6 +139,63 @@ export function worldToCell(wx, wy, graph) {
     x1: left,  x2: right,
     y1: top,   y2: bottom,
   };
+}
+
+/**
+ * 点 (wx, wy) を含む「連結領域」の全セルを返す。
+ * セル境界のCLがその区間で非アクティブ（短縮などで実在しない）なら、境界の
+ * 向こう側のセルも同じ領域とみなして flood-fill で集める。通常の格子では
+ * 自セル1個、部分短縮でL字化した領域ではそれを構成する矩形セル群が返る。
+ *
+ * @returns {Array<{ key, x1, x2, y1, y2 }>} セルなしなら空配列
+ */
+export function regionCellsAt(wx, wy, graph) {
+  const start = worldToCell(wx, wy, graph);
+  if (!start) return [];
+
+  const verticals = graph.centerLines
+    .filter(cl => cl.centerLineType === CenterLineType.VERTICAL && isDividerCL(cl))
+    .sort((a, b) => a.value - b.value);
+  const horizontals = graph.centerLines
+    .filter(cl => cl.centerLineType === CenterLineType.HORIZONTAL && isDividerCL(cl))
+    .sort((a, b) => a.value - b.value);
+  const xValues = [...new Set(verticals.map(cl => cl.value))];
+  const yValues = [...new Set(horizontals.map(cl => cl.value))];
+
+  const cells = new Map([[start.key, start]]);
+  const queue = [start];
+
+  // 辺（値 edgeValue、直交区間 [lo, hi]）を CL 値で小区間に割り、CL が分割して
+  // いない開いた小区間の向こう側のセルを探索キューに加える
+  const probeAcross = (edgeCLs, edgeValue, probeOrtho, orthoValues, lo, hi, isVerticalEdge) => {
+    const breaks = [lo, ...orthoValues.filter(v => v > lo && v < hi), hi];
+    for (let i = 0; i < breaks.length - 1; i++) {
+      if (isSeparatingAt(edgeCLs, edgeValue, breaks[i], breaks[i + 1])) continue;
+      const mid = (breaks[i] + breaks[i + 1]) / 2;
+      const cell = isVerticalEdge
+        ? worldToCell(probeOrtho, mid, graph)
+        : worldToCell(mid, probeOrtho, graph);
+      if (cell && !cells.has(cell.key)) {
+        cells.set(cell.key, cell);
+        queue.push(cell);
+      }
+    }
+  };
+
+  while (queue.length > 0) {
+    const c = queue.pop();
+    const xi1 = xValues.indexOf(c.x1), xi2 = xValues.indexOf(c.x2);
+    const yi1 = yValues.indexOf(c.y1), yi2 = yValues.indexOf(c.y2);
+    if (xi1 > 0)
+      probeAcross(verticals, c.x1, (xValues[xi1 - 1] + c.x1) / 2, yValues, c.y1, c.y2, true);
+    if (xi2 !== -1 && xi2 < xValues.length - 1)
+      probeAcross(verticals, c.x2, (c.x2 + xValues[xi2 + 1]) / 2, yValues, c.y1, c.y2, true);
+    if (yi1 > 0)
+      probeAcross(horizontals, c.y1, (yValues[yi1 - 1] + c.y1) / 2, xValues, c.x1, c.x2, false);
+    if (yi2 !== -1 && yi2 < yValues.length - 1)
+      probeAcross(horizontals, c.y2, (c.y2 + yValues[yi2 + 1]) / 2, xValues, c.x1, c.x2, false);
+  }
+  return [...cells.values()];
 }
 
 /**
@@ -138,6 +239,85 @@ export function getAllCells(graph) {
     allXs[allXs.length - 1].value, allYs[allYs.length - 1].value,
     graph,
   );
+}
+
+/**
+ * グリッド区割り線の実在区間を列挙する（FinishModeLayer の背景描画用）。
+ * 各分割CLのアクティブ区間（通り芯は全長、それ以外は extent）を格子の外周で
+ * クリップした線分を返す。セル矩形の stroke で枠線を描くと、L字領域の内部
+ * 分割位置に実在しない線が見えてしまうため、区割り線はこの線分で描く。
+ *
+ * @returns {Array<{ key, isVertical, value, lo, hi }>}
+ */
+export function gridDividerSegments(graph) {
+  const verticals = graph.centerLines
+    .filter(cl => cl.centerLineType === CenterLineType.VERTICAL && isDividerCL(cl))
+    .sort((a, b) => a.value - b.value);
+  const horizontals = graph.centerLines
+    .filter(cl => cl.centerLineType === CenterLineType.HORIZONTAL && isDividerCL(cl))
+    .sort((a, b) => a.value - b.value);
+  if (verticals.length < 2 || horizontals.length < 2) return [];
+
+  const xMin = verticals[0].value,   xMax = verticals[verticals.length - 1].value;
+  const yMin = horizontals[0].value, yMax = horizontals[horizontals.length - 1].value;
+
+  const segs = [];
+  const push = (cl, isVertical, rangeLo, rangeHi) => {
+    const full = cl.labeled && cl.discipline === Discipline.STRUCT; // 通り芯は常に全長
+    const lo = full ? rangeLo : Math.max(cl.extentLo ?? -Infinity, rangeLo);
+    const hi = full ? rangeHi : Math.min(cl.extentHi ?? Infinity, rangeHi);
+    if (lo < hi) segs.push({ key: cl.id, isVertical, value: cl.value, lo, hi });
+  };
+  for (const v of verticals)   push(v, true,  yMin, yMax);
+  for (const h of horizontals) push(h, false, xMin, xMax);
+  return segs;
+}
+
+// 区間群の被覆数が奇数の部分区間を返す（外周＝1、集合内の共有辺＝2で打ち消し）
+function oddCoverageIntervals(intervals) {
+  const events = [];
+  for (const [lo, hi] of intervals) { events.push([lo, 1], [hi, -1]); }
+  events.sort((a, b) => a[0] - b[0]);
+  const result = [];
+  let count = 0, prev = null;
+  for (const [v, d] of events) {
+    if (prev !== null && v > prev && count % 2 === 1) result.push([prev, v]);
+    count += d;
+    prev = v;
+  }
+  return result;
+}
+
+/**
+ * 矩形群（パーティションのセル bounds。重なりなし・接する辺は同一値）の
+ * 外周線分を返す。集合内の2セルが共有する辺区間は打ち消され、輪郭だけが残る。
+ * 選択枠・プレビュー枠のように「領域の外形だけ」を描くために使う
+ * （セル矩形ごとの stroke だとL字領域の内部に実在しない線が入る）。
+ *
+ * @param {Array<{x1,y1,x2,y2}>} boundsList
+ * @returns {Array<{ isVertical, value, lo, hi }>}
+ */
+export function outlineSegments(boundsList) {
+  const vEdges = new Map(); // x値 → [y区間]
+  const hEdges = new Map(); // y値 → [x区間]
+  const add = (map, value, lo, hi) => {
+    if (!map.has(value)) map.set(value, []);
+    map.get(value).push([lo, hi]);
+  };
+  for (const b of boundsList) {
+    add(vEdges, b.x1, b.y1, b.y2);
+    add(vEdges, b.x2, b.y1, b.y2);
+    add(hEdges, b.y1, b.x1, b.x2);
+    add(hEdges, b.y2, b.x1, b.x2);
+  }
+  const segs = [];
+  for (const [value, intervals] of vEdges) {
+    for (const [lo, hi] of oddCoverageIntervals(intervals)) segs.push({ isVertical: true, value, lo, hi });
+  }
+  for (const [value, intervals] of hEdges) {
+    for (const [lo, hi] of oddCoverageIntervals(intervals)) segs.push({ isVertical: false, value, lo, hi });
+  }
+  return segs;
 }
 
 /**

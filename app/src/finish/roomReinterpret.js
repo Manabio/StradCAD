@@ -1,9 +1,10 @@
 // ================================================================
 // floorplanモードでのCL追加・削除・延長・短縮・移動を経てfinishモードへ
 // 再突入した際、各Room.cells（＝前回脱出時点の状態）を現在のCLトポロジーと
-// 突き合わせて再解釈する（問題.md 統一ルール）。
+// 突き合わせて再解釈する。
 //
-// 判定はセル単位（4-part キー）で行う:
+// 判定は旧セルの内部代表点が属する現在の「連結領域」（regionCellsAt。
+// 短縮でL字化していれば構成セル群）単位で行う:
 //   0辺喪失               : 何もしない（既存 refreshCells の細分化追従に任せる）
 //   関与する部屋が1つのみ   : 部屋の同一性は変えず、セルを現在の分割に置き換えるだけ
 //                            （内部間仕切りの消失・無名領域への拡張はこちらに含まれる）
@@ -14,7 +15,7 @@
 // ================================================================
 
 import { Room } from '@core';
-import { lostSides, cellInteriorPoint, worldToCell } from './gridCells.js';
+import { lostSides, cellInteriorPoint, regionCellsAt } from './gridCells.js';
 
 function isEarlierInOrder(graph, idA, idB) {
   const order = graph.roomOrder;
@@ -28,8 +29,8 @@ export function reinterpretRoomsOnEntry(graph) {
   const rooms = graph.rooms;
   if (rooms.length === 0) return;
 
-  // 1. 影響を受けるセルを収集し、現在のグリッド分割上での新セルキーでグルーピングする
-  const groups = new Map(); // newKey -> [{ room, oldKey, lostCount }]
+  // 1. 影響を受けるセルを収集し、現在の分割上での連結領域（正準ID）でグルーピングする
+  const groups = new Map(); // regionId -> { cells, entries: [{ room, oldKey, lostCount }] }
   for (const room of rooms) {
     for (const oldKey of room.cells) {
       const lost = lostSides(oldKey, graph);
@@ -38,22 +39,23 @@ export function reinterpretRoomsOnEntry(graph) {
       const pt = cellInteriorPoint(oldKey, graph);
       if (!pt) continue; // 退化ケース（対辺2本同時消失）→ 復元不能なので今回は現状維持
 
-      const cell = worldToCell(pt.x, pt.y, graph);
-      if (!cell) continue;
+      const region = regionCellsAt(pt.x, pt.y, graph);
+      if (region.length === 0) continue;
 
-      if (!groups.has(cell.key)) groups.set(cell.key, []);
-      groups.get(cell.key).push({ room, oldKey, lostCount: lost.length });
+      const regionId = region.map(c => c.key).sort().join('|');
+      if (!groups.has(regionId)) groups.set(regionId, { cells: region, entries: [] });
+      groups.get(regionId).entries.push({ room, oldKey, lostCount: lost.length });
     }
   }
 
   // 2. グループごとに解決
-  for (const [newKey, entries] of groups) {
+  for (const { cells, entries } of groups.values()) {
     const roomIds = new Set(entries.map(e => e.room.id));
 
     if (roomIds.size <= 1) {
       const room = entries[0].room;
       for (const e of entries) room.removeCell(e.oldKey);
-      room.addCell(newKey);
+      for (const c of cells) room.addCell(c.key);
       continue;
     }
 
@@ -68,14 +70,14 @@ export function reinterpretRoomsOnEntry(graph) {
       }
     }
 
-    dominant.addCell(newKey);
+    for (const c of cells) dominant.addCell(c.key);
     for (const e of entries) {
       e.room.removeCell(e.oldKey);
       if (e.room.id === dominant.id) continue;
 
       if (e.lostCount === 1) {
         // 1辺喪失 → 部分指定化（子の同一性・仕上げ情報は維持したまま親の内訳になる）
-        e.room.addCell(newKey);
+        for (const c of cells) e.room.addCell(c.key);
         e.room.referenceRoomIds.add(dominant.id);
       } else if (e.room.cells.size === 0) {
         // 2辺以上喪失 → 旧部屋名を削除し、親へ完全吸収
