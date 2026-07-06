@@ -159,6 +159,23 @@ export class FinishModeState {
   startDrag(wx, wy) {
     const region = regionCellsAt(wx, wy, this.graph);
     if (region.length === 0) return;
+
+    // 階段のセルを指した場合は部屋ドラッグを開始せず、その階段自体を選択する
+    // （階段は Room とは別エンティティのため、部屋の重なり判定に乗らず
+    //  そのまま放置すると新規部屋が誤って重ねて作られてしまう）。
+    const stair = this.graph.stairs.find(s => {
+      const cells = refreshCells(s.cells, this.graph);
+      return region.some(c => cells.has(c.key));
+    });
+    if (stair) {
+      this.selectedStairId = stair.id;
+      this.selectedRoomId  = null;
+      this.namingRoomId    = null;
+      this.dragState       = null;
+      return;
+    }
+
+    this.selectedStairId = null;
     this.dragState = {
       currentCell: region[0],
       visitedCells: new Map(region.map(c => [c.key, c])),
@@ -350,7 +367,10 @@ export class FinishModeState {
 
   cancelDrag() { this.dragState = null; }
 
-  selectRoom(roomId) { this.selectedRoomId = roomId; }
+  selectRoom(roomId) {
+    this.selectedRoomId = roomId;
+    this.selectedStairId = null;
+  }
 
   finishNaming(roomId, name) {
     const room = this.graph.roomMap.get(roomId);
@@ -378,7 +398,10 @@ export class FinishModeState {
 
   // ---- 階段 ----
 
-  selectStair(id) { this.selectedStairId = id; }
+  selectStair(id) {
+    this.selectedStairId = id;
+    this.selectedRoomId  = null;
+  }
 
   deleteStair(id) {
     this.graph.removeStair(id);
