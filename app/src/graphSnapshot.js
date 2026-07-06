@@ -343,6 +343,7 @@ export function restoreStructCLs(structGraph, structuralInfo, data, tagRegistry)
         refId: d.refId ?? null, refOffset: d.refOffset ?? 0,
       }, d.id);
     }
+    structGraph.resolveCenterLineRefs();
 
     // 建物全体: 構造情報（保存があれば反映。なければ既定値を維持）
     const si = snapshot.structuralInfo;
@@ -390,6 +391,7 @@ function applySnapshot(graph, snapshot) {
         refId: d.refId ?? null, refOffset: d.refOffset ?? 0,
       }, d.id);
     }
+    graph.resolveCenterLineRefs();
 
     // 2. 自由点
     for (const d of snapshot.points) graph.addPoint(d.x, d.y, d.id);

@@ -1392,6 +1392,30 @@ export class PlanGraph {
   }
 
   /**
+   * refId / extentLoRef.clId / extentHiRef.clId が指す CenterLine を再解決する。
+   * addCenterLine は呼び出し時点で shapeMap にある CL しか解決できないため、
+   * restoreGraph 等で参照先が自分より後に追加される順序だと解決漏れが起きる
+   * （問題.md: フロア切替でCLの短縮が解除されY2まで延長される不具合の原因）。
+   * 全 CL 追加後に呼び、未解決分だけ解決し直す。
+   */
+  resolveCenterLineRefs() {
+    for (const cl of this.centerLines) {
+      if (cl.refId && !cl._referencedCL) {
+        const refCL = this.shapeMap.get(cl.refId) ?? this._structGraph?.shapeMap.get(cl.refId);
+        if (refCL instanceof CenterLine) cl._referencedCL = refCL;
+      }
+      if (cl.extentLoRef?.clId && !cl._extentLoCL) {
+        const loCL = this.shapeMap.get(cl.extentLoRef.clId) ?? this._structGraph?.shapeMap.get(cl.extentLoRef.clId);
+        if (loCL instanceof CenterLine) cl._extentLoCL = loCL;
+      }
+      if (cl.extentHiRef?.clId && !cl._extentHiCL) {
+        const hiCL = this.shapeMap.get(cl.extentHiRef.clId) ?? this._structGraph?.shapeMap.get(cl.extentHiRef.clId);
+        if (hiCL instanceof CenterLine) cl._extentHiCL = hiCL;
+      }
+    }
+  }
+
+  /**
    * 補助線の extentLoRef/HiRef に wallId がある場合、壁への参照を解決する。
    * restoreGraph で壁を追加した後に呼ぶ。
    */
