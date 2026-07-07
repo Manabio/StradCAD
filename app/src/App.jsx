@@ -31,6 +31,7 @@ import { FinishHalfModal } from './finish/FinishHalfModal.jsx';
 import { StairLayer }      from './renderer/StairLayer.jsx';
 import { floorHeightAbove } from './finish/stair/stairDimensions.js';
 import { measureStairSpans } from './finish/stair/stairClassify.js';
+import { cellsBeyondBreak } from './finish/stair/stairGeometry.js';
 import { roomBounds, cellBoundsList } from './finish/gridCells.js';
 import { generateRoomWallsFromOutline, generateExteriorWalls, snapshotWall, restoreWallsFromSnapshots } from './finish/wallGeneration.js';
 import { snapshotEdges, restoreEdges, syncEdgesFromTopology, buildCellToRoom } from './finish/edgeClassify.js';
@@ -205,8 +206,8 @@ const App = observer(() => {
       ? import('./modes/FloorplanModeState.js').then(m => new m.FloorplanModeState(graph, project))
       : appMode === 'finish'
         ? import('./modes/FinishModeState.js').then(async m => {
-            const s = new m.FinishModeState(graph);
-            await s.init(); // 材データの動的ロード・照合
+            const s = new m.FinishModeState(graph, project);
+            await s.init(); // 材データの動的ロード・照合・直下階階段のロード
             return s;
           })
         : appMode === 'structure'
@@ -244,6 +245,7 @@ const App = observer(() => {
         id: s.id,
         stair: s,
         bounds: roomBounds(s.cells, temp),
+        cellBounds: cellBoundsList(s.cells, temp), // 実セル占有（選択枠用。選択は startDrag 経由で一本化）
         riser: s.riser ?? (floorHeight != null ? floorHeight / Math.max(1, s.totalSteps) : null),
         spans: measureStairSpans(s, temp), // セル実測の区間長（区間長指定の反映）
         view: 'upper',
@@ -1211,6 +1213,23 @@ const App = observer(() => {
     setFloorDialog({ isLowest });
   }
 
+  // 階追加（'upper'/'general'のみ対象。'lower' は対象外）: 元階の階段・外壁状態を新階へ引き継ぐ。
+  //   1. 元階に階段があれば、新階（〜最上階）へ階段補助線を同期する（syncUpperFloors。
+  //      新階は追加直後は最上階のため、フェーズ2の仕様どおり階段自体は設置されずCL＋外壁のみ）。
+  //   2. 元階に外壁（isExteriorWall）があれば、新階へ「外壁ループ内側」を部屋「n階」として自動追加する
+  //      （newStartFloor基準。地下階でも makeFloorName(startFloor, 1) で「地下n階」等に正しく整形される）。
+  // addFloor 直後・handleFloorSwitch 前に行う（新階はまだ非アクティブ＝peek→saveFloorの通常経路。
+  // handleFloorSwitch 後の activate() は IDB に保存済みの内容を読み込むため反映される）。
+  async function syncNewFloorFromSource(sourceGraph, newPlane, newStartFloor) {
+    const { syncUpperFloors, addNewFloorRoomFromSource } = await import('./finish/stair/stairFloorSync.js');
+    if (sourceGraph.stairs.length > 0) {
+      await syncUpperFloors(project, sourceGraph);
+    }
+    if (sourceGraph.walls.some(w => w.isExteriorWall)) {
+      await addNewFloorRoomFromSource(project, sourceGraph, newPlane, makeFloorName(newStartFloor, 1));
+    }
+  }
+
   // 上階を追加して切り替える
   async function executeAddUpper(currentPlane) {
     const topFloor      = currentPlane.startFloor + currentPlane.stories - 1;
@@ -1218,6 +1237,7 @@ const App = observer(() => {
     const newName       = makeFloorName(newStartFloor, 1);
     const nextElevation = currentPlane.elevation + 3000 * currentPlane.stories;
     const { plane } = addFloor(nextElevation, newName, newStartFloor, 1);
+    await syncNewFloorFromSource(project.activeGraph, plane, newStartFloor);
     await handleFloorSwitch(plane.id);
     await reflectStructuralAfterFloorAdd();
   }
@@ -1259,6 +1279,7 @@ const App = observer(() => {
       const newName       = makeFloorName(newStartFloor, n);
       const nextElevation = currentPlane.elevation + 3000 * currentPlane.stories;
       const { plane } = addFloor(nextElevation, newName, newStartFloor, n);
+      await syncNewFloorFromSource(project.activeGraph, plane, newStartFloor);
       await handleFloorSwitch(plane.id);
       await reflectStructuralAfterFloorAdd();
     }
@@ -2877,16 +2898,26 @@ const App = observer(() => {
                 )}
                 {(appMode === 'finish' || appMode === 'floorplan') && (() => {
                   const fh = floorHeightAbove(project, project.activePlane);
-                  const installEntries = graph.stairs.map(s => ({
-                    id: s.id,
-                    stair: s,
-                    bounds: roomBounds(s.cells, graph),
-                    cellBounds: cellBoundsList(s.cells, graph), // 実セル占有（L字等の選択ヒット・枠用）
-                    riser: s.riser ?? (fh != null ? fh / Math.max(1, s.totalSteps) : null),
-                    spans: measureStairSpans(s, graph), // セル実測の区間長（区間長指定の反映）
-                    view: 'install',
-                    selectable: appMode === 'finish',
-                  }));
+                  const installEntries = graph.stairs.map(s => {
+                    const riser = s.riser ?? (fh != null ? fh / Math.max(1, s.totalSteps) : null);
+                    // 破れ線先セルはヒット領域から除外する（下階階段の見下げクリック・階段下エリアの
+                    // 部屋ドラッグは startDrag に一本化されているため、ここでは自階階段の onClick を発火させない）
+                    const beyond = cellsBeyondBreak(s, graph, riser);
+                    const hitCells = beyond.size > 0
+                      ? new Set([...s.cells].filter(k => !beyond.has(k)))
+                      : s.cells;
+                    return {
+                      id: s.id,
+                      stair: s,
+                      bounds: roomBounds(s.cells, graph),
+                      cellBounds: cellBoundsList(s.cells, graph), // 実セル占有（L字等の選択枠用）
+                      hitCellBounds: cellBoundsList(hitCells, graph), // クリックヒット領域（破れ線先セル除外）
+                      riser,
+                      spans: measureStairSpans(s, graph), // セル実測の区間長（区間長指定の反映）
+                      view: 'install',
+                      selectable: appMode === 'finish',
+                    };
+                  });
                   // 階切替の非同期過渡で同一階段が install/upper 両方に入るのを防ぐ
                   // （install が設置階の正であり、upper は直下階由来。重複時は install を優先）
                   const installIds = new Set(installEntries.map(e => e.id));
@@ -3025,9 +3056,10 @@ const App = observer(() => {
             onCancel={id => modeRef.current?.cancelNaming(id)}
             onConvertToStair={id => {
               modeRef.current?.convertRoomToStair(id, floorHeightAbove(project, project.activePlane));
-              // 上階へ不足中心線を追加（非アクティブ階を peek して IDB へ保存）
+              // 設置階の上の全採用フロア（最上階まで）へ中心線・階段・外壁を同期
+              // （非アクティブ階を peek して IDB へ保存）
               import('./finish/stair/stairFloorSync.js')
-                .then(m => m.syncUpperFloorCLs(project, project.activeGraph))
+                .then(m => m.syncUpperFloors(project, project.activeGraph))
                 .catch(console.error);
             }}
           />

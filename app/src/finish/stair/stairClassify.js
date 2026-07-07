@@ -123,7 +123,7 @@ function detectLTurn(cells, graph, b) {
 //   折り返し部が「両レーンをまたぐ1セル」→ 屈折（踊り場）
 //   折り返し部が「レーンごとに分割された複数セル」→ 回り（回り段）
 // @returns {{ kind:'switchback'|'winding', laneLen, landingHigh, turnLen }|null}
-function detectUTurn(cells, graph, isVertical, b) {
+export function detectUTurn(cells, graph, isVertical, b) {
   const acrossMin = isVertical ? b.x1 : b.y1;
   const acrossMax = isVertical ? b.x2 : b.y2;
   const acrossFull = (acrossMax - acrossMin) || 1;

@@ -1,6 +1,9 @@
 import { makeObservable, observable, action, computed, runInAction } from 'mobx';
-import { regionCellsAt, refreshCells } from '../finish/gridCells.js';
+import { regionCellsAt, refreshCells, cellBoundsFromKey, cellBoundsList } from '../finish/gridCells.js';
 import { classifyStairArea } from '../finish/stair/stairClassify.js';
+import { cellsBeyondBreak } from '../finish/stair/stairGeometry.js';
+import { floorHeightAbove } from '../finish/stair/stairDimensions.js';
+import { floorSwapManager } from '../storage/FloorSwapManager.js';
 import { ERR_MATERIAL_MISMATCH } from '../error.js';
 
 function setsEqual(a, b) {
@@ -24,6 +27,9 @@ export class FinishModeState {
   namingRoomId   = null;
   selectedStairId = null;
 
+  // ---- 直下階の階段（見下げ表示のヒット判定用。init() で peek しロード） ----
+  lowerStairs = []; // Array<{ stair, cellBounds }>（cellBounds は下階graphで解決したワールド矩形配列）
+
   // ---- 材データ（突入時ロード・離脱時破棄） ----
   materialsLoaded = false;       // ロード完了フラグ
   materialError   = null;        // 照合エラーメッセージ | null
@@ -31,8 +37,10 @@ export class FinishModeState {
   materialMap     = null;        // Map<code, material>
   interiorMasters = null;        // 内装マスター（key → 定義）
 
-  constructor(graph) {
+  constructor(graph, project = null) {
     this.graph = graph;
+    this.project = project;
+    this._disposed = false; // dispose() 後の非同期継続（_loadLowerStairs 等）の書き込みを止めるガード
     // 仕上げモード突入後に finishNaming() で確定した Room ID を記録する。
     // FinishModeState はモード切替のたびに new で生成されるため、
     // フロアプランモードに戻ると自動的にリセットされる。
@@ -42,6 +50,7 @@ export class FinishModeState {
       selectedRoomId: observable,
       namingRoomId:   observable,
       selectedStairId: observable,
+      lowerStairs:     observable.ref,
       materialsLoaded: observable,
       materialError:   observable,
       materialMap:     observable.ref,
@@ -94,7 +103,96 @@ export class FinishModeState {
       this.materialError   = error;
     });
 
+    await this._loadLowerStairs();
+
     return { ok: error === null, error };
+  }
+
+  /**
+   * 直下階（activePlaneの1つ下の採用フロア）の階段を peek し、見下げクリック判定用に保持する。
+   * 直下階が無い場合は空配列のまま。App.jsx の upperStairEntries（描画用）と同じ peek 経路を使う。
+   * peek は非同期（IDB読込）のため、待機中に dispose() されるとモード切替後の古い状態を
+   * 書き込んでしまう（App.jsx:231 の cancelled ガードと同じ問題）。_disposed を見て止める。
+   */
+  async _loadLowerStairs() {
+    const project = this.project;
+    const planes = project?.planes ?? [];
+    const active = project?.activePlane;
+    const idx = planes.findIndex(p => p.id === active?.id);
+    const below = idx > 0 ? planes[idx - 1] : null;
+    if (!below || !active) {
+      if (!this._disposed) runInAction(() => { this.lowerStairs = []; });
+      return;
+    }
+    const temp = await floorSwapManager.peek(below, project.structGraph);
+    if (this._disposed) return;
+    runInAction(() => {
+      this.lowerStairs = temp.stairs.map(s => ({
+        stair: s,
+        cellBounds: cellBoundsList(s.cells, temp),
+      }));
+    });
+  }
+
+  /** 自階階段の蹴上(mm)。stair.riser 未指定なら階高/総段数から推定（App.jsx の install entries と同じ計算）。 */
+  _selfStairRiser(stair) {
+    if (stair.riser != null) return stair.riser;
+    const fh = floorHeightAbove(this.project, this.project?.activePlane);
+    return fh != null ? fh / Math.max(1, stair.totalSteps) : null;
+  }
+
+  /**
+   * stair の破れ線先セル集合。cellsBeyondBreak は stair.cells をそのまま参照するため、
+   * floorplanモードでの区切りCL追加により保存済みキーが古くなっている場合に備え、
+   * refreshCells 後のキー集合（cells）に差し替えた最小限のオブジェクトを渡す
+   * （既存の startDrag のポインタ判定と同じ refreshCells 前提を合わせるため）。
+   */
+  _beyondBreakOf(stair, cells) {
+    const shim = {
+      type: stair.type, upDirection: stair.upDirection, flip: stair.flip,
+      sections: stair.sections, totalSteps: stair.totalSteps, cells,
+    };
+    return cellsBeyondBreak(shim, this.graph, this._selfStairRiser(stair));
+  }
+
+  /** ワールド座標 (x,y) を占有する下階階段（見下げ）を返す。無ければ null。 */
+  _lowerStairForPoint(x, y) {
+    for (const entry of this.lowerStairs) {
+      if (entry.cellBounds.some(b => x >= b.x1 && x <= b.x2 && y >= b.y1 && y <= b.y2)) {
+        return entry.stair;
+      }
+    }
+    return null;
+  }
+
+  /**
+   * 部屋ドラッグから除外する自階階段セルの Set。破れ線先セルのうち、直下階に階段が無い
+   * （＝階段下エリア）ものは部屋ドラッグを許容するため除外対象から外す。
+   */
+  _roomExcludedStairKeys() {
+    const stairKeys = new Set();
+    for (const s of this.graph.stairs) {
+      const cells = refreshCells(s.cells, this.graph);
+      const beyond = this._beyondBreakOf(s, cells);
+      for (const key of cells) {
+        if (beyond.has(key)) {
+          const cb = cellBoundsFromKey(key, this.graph);
+          if (cb) {
+            const cx = (cb.x1 + cb.x2) / 2, cy = (cb.y1 + cb.y2) / 2;
+            if (!this._lowerStairForPoint(cx, cy)) continue; // 下階階段も無い→階段下エリアとして部屋ドラッグ許容
+          }
+        }
+        stairKeys.add(key);
+      }
+    }
+    return stairKeys;
+  }
+
+  /** 階段（自階／下階見下げ）を選択し、部屋選択・命名・部屋ドラッグ状態をクリアする。 */
+  _selectStair(id) {
+    this.selectStair(id);
+    this.namingRoomId = null;
+    this.dragState    = null;
   }
 
   /** 永続化データ（per-floor 設定・Room.customOverrides）が参照する材コード集合を集める。 */
@@ -156,6 +254,12 @@ export class FinishModeState {
 
   // 選択は連結領域単位。短縮CLでL字化した領域は、内部のどこを指しても
   // 構成セル全部をまとめて拾う（先頭はポインタ直下のセル）
+  //
+  // 階段クリックの優先順位（ポインタ直下 wx,wy で判定）:
+  //   1. 自階階段のセルかつ破れ線手前          → その自階階段を選択
+  //   2. 自階階段のセルで破れ線先＋下階階段あり → 下階階段を選択（見下げクリック）
+  //   3. 自階に階段が無い＋下階階段あり         → 下階階段を選択（見下げクリック）
+  //   4. 自階階段のセルで破れ線先＋下階階段なし → 階段下エリアとして部屋ドラッグを許可
   startDrag(wx, wy) {
     const region = regionCellsAt(wx, wy, this.graph);
     if (region.length === 0) return;
@@ -165,22 +269,36 @@ export class FinishModeState {
     // 判定すると、領域が階段の実占有より広い場合（L字の空象限が連結している等）に
     // 階段でないマスのクリックでも階段が選択されてしまう（＝矩形的な過剰選択）。
     const pointerKey = region[0].key;
-    const stair = this.graph.stairs.find(s =>
-      refreshCells(s.cells, this.graph).has(pointerKey)
-    );
+    let stair = null, stairCells = null;
+    for (const s of this.graph.stairs) {
+      const cells = refreshCells(s.cells, this.graph);
+      if (cells.has(pointerKey)) { stair = s; stairCells = cells; break; }
+    }
+
     if (stair) {
-      this.selectedStairId = stair.id;
-      this.selectedRoomId  = null;
-      this.namingRoomId    = null;
-      this.dragState       = null;
-      return;
+      const beyond = this._beyondBreakOf(stair, stairCells);
+      if (!beyond.has(pointerKey)) {
+        this._selectStair(stair.id); // 優先1: 自階階段（破れ線手前）
+        return;
+      }
+      const lower = this._lowerStairForPoint(wx, wy);
+      if (lower) {
+        this._selectStair(lower.id); // 優先2: 破れ線先＝下階階段の見下げ
+        return;
+      }
+      // 優先4: 破れ線先だが下階階段なし → 階段下エリアとして下の部屋ドラッグへフォールスルー
+    } else {
+      const lower = this._lowerStairForPoint(wx, wy);
+      if (lower) {
+        this._selectStair(lower.id); // 優先3: 自階に階段が無い箇所での下階階段の見下げ
+        return;
+      }
     }
 
     // 階段マスは部屋ドラッグに含めない（階段は Room とは別エンティティのため、
     // 部屋の重なり判定に乗らず、含めると階段に重なった部屋が誤って作られてしまう）。
-    const stairKeys = new Set(
-      this.graph.stairs.flatMap(s => [...refreshCells(s.cells, this.graph)])
-    );
+    // ただし破れ線先セルで直下階に階段が無いもの（階段下エリア）は部屋ドラッグを許容する。
+    const stairKeys = this._roomExcludedStairKeys();
     const cells = region.filter(c => !stairKeys.has(c.key));
     if (cells.length === 0) return;
 
@@ -455,5 +573,7 @@ export class FinishModeState {
     this._composition    = null;
     this.materialsLoaded = false;
     this.materialError   = null;
+    this.lowerStairs     = [];
+    this._disposed       = true;
   }
 }

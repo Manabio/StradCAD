@@ -48,5 +48,6 @@ L_TURN/FLAREDはlengthsに加えアーム幅（widths）も実測し、アーム
 （直進部=+1、踊場・周回部=そのまま）は StairPanel 側で行う。
 
 ## 既知の制約
-- sections は未永続化（IDB/FBS/undoスナップショット対象外）。再読込時は totalSteps から既定値を再構成する。
+- 破れ線の位置判定（クリック・ヒット領域用の`cellsBeyondBreak`）は描画側buildと同じ関数
+  （`lTurnBreakState`等）を共有する。破れ位置ルールを変えるときは片側だけ直さないこと。
 - OPEN_WELL のアーム長は正規化固定比（aw）で、セル実測をまだ反映しない（L_TURN/FLAREDは反映済み）。

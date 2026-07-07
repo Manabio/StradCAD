@@ -43,7 +43,7 @@ export const StairLayer = observer(({
   const px = (w) => w / viewport.scaleX; // ズーム非依存の線幅
 
   const groups = entries.map((e) => {
-    const { id, stair, bounds: b, riser, spans, view, selectable, cellBounds } = e;
+    const { id, stair, bounds: b, riser, spans, view, selectable, cellBounds, hitCellBounds } = e;
     if (!b || ![b.x1, b.y1, b.x2, b.y2].every(Number.isFinite) || b.x2 <= b.x1 || b.y2 <= b.y1) {
       return null;
     }
@@ -103,7 +103,11 @@ export const StairLayer = observer(({
     // L字（矩折・曲がり）や中空きなど非矩形占有のタイプで空きマスまで矩形に
     // 選択されてしまう。塗りは1パス（部屋選択と同方式）、枠は共有辺を打ち
     // 消した外周線分で描く。cellBounds 未解決時は包絡矩形にフォールバック。
-    const hitBounds = cellBounds?.length > 0 ? cellBounds : [b];
+    const outlineBounds = cellBounds?.length > 0 ? cellBounds : [b];
+    // クリックヒット領域は破れ線先セルを除外した hitCellBounds を優先する（下階階段の見下げ
+    // クリック・階段下エリアの部屋ドラッグは Stage 側の startDrag に一本化しているため、
+    // ここで自階階段の onClick を発火させない）。未指定時は選択枠と同じ領域を使う。
+    const hitBounds = hitCellBounds?.length > 0 ? hitCellBounds : outlineBounds;
 
     return (
       <Group key={`${view}:${id}`}>
@@ -119,7 +123,7 @@ export const StairLayer = observer(({
             onTap={() => onSelectStair(id)}
           />
         )}
-        {selectable && isSel && outlineSegments(hitBounds).map(seg => (
+        {isSel && outlineSegments(outlineBounds).map(seg => (
           <Line
             key={`sel${seg.isVertical ? 'v' : 'h'}${seg.value}:${seg.lo}`}
             points={seg.isVertical

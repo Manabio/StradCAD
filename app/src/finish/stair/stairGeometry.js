@@ -1,4 +1,6 @@
 import { StairType, totalStepsFromSections } from '@core';
+import { cellBoundsFromKey, roomBounds } from '../gridCells.js';
+import { measureStairSpans, detectUTurn } from './stairClassify.js';
 
 const BREAK_HEIGHT = 1600;   // mm — 破れ縁の断面高さ（FL+1600）
 const MIN_LANDING  = 1200;   // mm — 踊り場の最小長さ（問題.md）
@@ -131,7 +133,24 @@ export function makeFrame(stair, b) {
   const pt = (t, s) => vertical
     ? { x: acrossAt(s), y: coordAt(t) }
     : { x: coordAt(t), y: acrossAt(s) };
-  return { vertical, runLength, pt };
+  // coordAt/acrossAt の逆写像（world座標点 → t/s）。破れ線先セル判定（cellsBeyondBreak）で、
+  // 実セル境界がタイプ共通の走行軸(t)・幅方向(s)のどこに位置するかを求めるために使う。
+  const tOf = (p) => {
+    const coord = vertical ? p.y : p.x;
+    switch (stair.upDirection) {
+      case 'down':  return (coord - b.y1) / runLength;
+      case 'right': return (coord - b.x1) / runLength;
+      case 'left':  return (b.x2 - coord) / runLength;
+      case 'up':
+      default:      return (b.y2 - coord) / runLength;
+    }
+  };
+  const sOf = (p) => {
+    const coord = vertical ? p.x : p.y;
+    const raw = (coord - acrossLo) / ((acrossHi - acrossLo) || 1);
+    return stair.flip ? 1 - raw : raw;
+  };
+  return { vertical, runLength, pt, tOf, sOf };
 }
 
 // FL+1600 で切れるマス番号（install ビューの破れ位置。マス番号=蹴上の続き番号）。
@@ -311,6 +330,21 @@ function emitArrival(out, totalSteps, p, detail) {
   if (detail) out.stepNumbers.push({ x: p.x, y: p.y, text: String(totalSteps) });
 }
 
+// 直進（STRAIGHT）: マス番号→走行軸mm（そのマスの基点側境界）。
+// build側（buildStraight）と cellsBeyondBreak 側で共有し、破れ位置判定を単一ソース化する。
+function straightCellStartMm(run, L, cell) {
+  return (cell - 1) * (L / run.cells);
+}
+
+// 踊り場付直進（STRAIGHT_LANDING）: マス番号→走行軸mm（そのマスの基点側境界）。
+// build側（buildStraightLanding）と cellsBeyondBreak 側で共有し、破れ位置判定を単一ソース化する。
+function straightLandingCellStartMm(run1, land, run2, L1, LD, L2, cell) {
+  const landingEnd = L1 + LD;
+  if (cell <= run1.cells) return (cell - 1) * (L1 / run1.cells);
+  if (cell === land.numberStart) return L1;
+  return landingEnd + (cell - run2.numberStart) * (L2 / run2.cells);
+}
+
 // ---- 直進階段 ----
 function buildStraight(stair, b, { view, detail, riser }) {
   const f = makeFrame(stair, b);
@@ -319,7 +353,7 @@ function buildStraight(stair, b, { view, detail, riser }) {
   const L = f.runLength;          // 区間長 = 設置枠の走行全長
   const pitch = L / run.cells;
   const breakCell = breakStepOf(totalSteps, riser, view);
-  const shownMm = view === 'install' ? (breakCell - 1) * pitch : L;
+  const shownMm = view === 'install' ? straightCellStartMm(run, L, breakCell) : L;
   const topT = shownMm / L;
   const nosingMm = detail ? stair.nosing * (view === 'install' ? -1 : 1) : 0;
 
@@ -355,12 +389,9 @@ function buildStraightLanding(stair, b, { view, detail, riser, spans }) {
 
   // 破れ位置: マス番号（=蹴上の続き番号）→ 走行軸mm（そのマスの基点側境界）
   const breakCell = breakStepOf(totalSteps, riser, view);
-  const cellStartMm = (c) => {
-    if (c <= run1.cells) return (c - 1) * pitch1;
-    if (c === land.numberStart) return L1;
-    return landingEnd + (c - run2.numberStart) * pitch2;
-  };
-  const shownMm = view === 'install' ? cellStartMm(breakCell) : budget;
+  const shownMm = view === 'install'
+    ? straightLandingCellStartMm(run1, land, run2, L1, LD, L2, breakCell)
+    : budget;
   const topT = tAt(shownMm);
   const nosingMm = detail ? stair.nosing * (view === 'install' ? -1 : 1) : 0;
 
@@ -596,6 +627,21 @@ function lTurnLayout(spans) {
   return { awU: 0.45, awV: 0.45 };
 }
 
+// L字系（L_TURN/FLARED）: breakCell（マス番号）から各パーツ（アーム1・コーナー・アーム2）の
+// 可視状態を導く。build側（buildLTurn）と cellsBeyondBreak 側で共有し、破れ位置判定を
+// タイプ別に再実装せず単一ソース化する。
+function lTurnBreakState(run1, run2, totalSteps, riser, view) {
+  const breakCell = breakStepOf(totalSteps, riser, view);
+  const inArm1 = breakCell <= run1.cells;
+  const inCorner = !inArm1 && breakCell < run2.numberStart;
+  const isInstall = view === 'install';
+  return {
+    breakCell, inArm1, inCorner,
+    drawCorner: !(isInstall && inArm1),
+    drawArm2: !(isInstall && (inArm1 || inCorner)),
+  };
+}
+
 function buildLTurn(stair, b, { view, detail, riser, spans }) {
   const { parts, totalSteps } = stairParts(getSections(stair));
   const [run1, corner, run2] = parts;
@@ -616,11 +662,7 @@ function buildLTurn(stair, b, { view, detail, riser, spans }) {
     : toWorld(1, 1 - ((t - 0.5) / 0.5) * (1 - runV));
 
   const isInstall = view === 'install';
-  const breakCell = breakStepOf(totalSteps, riser, view);
-  const inArm1 = breakCell <= run1.cells;
-  const inCorner = !inArm1 && breakCell < run2.numberStart;
-  const drawCorner = !(isInstall && inArm1);
-  const drawArm2 = !(isInstall && (inArm1 || inCorner));
+  const { breakCell, inArm1, inCorner, drawCorner, drawArm2 } = lTurnBreakState(run1, run2, totalSteps, riser, view);
 
   // コーナーから離れる向き（アーム1側=u減少／アーム2側=v減少）。破れ線の内側（吹抜け・コーナー側）を
   // 必ずこの向きへ傾けるための基準（breakSymbolの世界座標基準"/"固定は向きを保証しないため使わない）。
@@ -727,6 +769,22 @@ function buildLTurn(stair, b, { view, detail, riser, spans }) {
   return { ...out, outline, arrows, breakLine };
 }
 
+// 中空き（OPEN_WELL）: breakCell（マス番号）から各パーツ（下/踊場1/右/踊場2/上）の可視状態を導く。
+// build側（buildOpenWell）と cellsBeyondBreak 側で共有し、破れ位置判定を単一ソース化する。
+function openWellBreakState(run1, land1, land2, totalSteps, riser, view) {
+  const bs = breakStepOf(totalSteps, riser, view); // 破れマス番号（=蹴上の続き番号）
+  const inBottom = bs <= run1.cells;
+  const inRight  = !inBottom && bs < land2.numberStart; // 踊場1マス（右アーム入口で破れ）を含む
+  const isInstall = view === 'install';
+  return {
+    bs, inBottom, inRight,
+    drawLand1: !isInstall || bs >= land1.numberStart,
+    drawRight: !isInstall || bs > land1.numberStart,
+    drawLand2: !isInstall || bs >= land2.numberStart,
+    drawTop:   !isInstall || bs > land2.numberStart,
+  };
+}
+
 // ---- 中空き階段（OPEN_WELL）----
 // 中央に吹抜け（well）を持ち、下→踊場1→右→踊場2→上 の3直進部+2踊場（各マス1）がC字に囲む。
 function buildOpenWell(stair, b, { view, detail, riser }) {
@@ -747,13 +805,8 @@ function buildOpenWell(stair, b, { view, detail, riser }) {
   const pitch3 = runW / run3.cells;
 
   const isInstall = view === 'install';
-  const bs = breakStepOf(totalSteps, riser, view); // 破れマス番号（=蹴上の続き番号）
-  const inBottom = bs <= run1.cells;
-  const inRight  = !inBottom && bs < land2.numberStart; // 踊場1マス（右アーム入口で破れ）を含む
-  const drawLand1 = !isInstall || bs >= land1.numberStart;
-  const drawRight = !isInstall || bs > land1.numberStart;
-  const drawLand2 = !isInstall || bs >= land2.numberStart;
-  const drawTop   = !isInstall || bs > land2.numberStart;
+  const { bs, inBottom, inRight, drawLand1, drawRight, drawLand2, drawTop } =
+    openWellBreakState(run1, land1, land2, totalSteps, riser, view);
 
   // 隣接する踊場から離れる向き（下アーム=u減少／右アーム=v減少／上アーム=u減少）。
   // 破れ線の内側（ウェル側）を必ずこの向きへ傾けるための基準。
@@ -1009,6 +1062,187 @@ export function stairSegmentDims(stair, b, g, spans) {
     const x = (a.x + c.x) / 2, out = x >= cx ? 1 : -1;
     return { type: 'dim', dir: 'v', from: a.y, to: c.y, at: x + out * OUT, label, labelSide: out < 0 ? 'left' : undefined, ...edit };
   });
+}
+
+// ================================================================
+// 破れ線先セル判定（仕上げモードの階段クリック判定用。App.jsx/FinishModeState.js が使用）
+// ================================================================
+
+const BEYOND_EPS = 1e-6; // t/s 比較の許容誤差（浮動小数）
+
+// L字／中空きの world → 正規化(u,v) 逆写像（normToWorld の逆）。fx,fy は b 内の比率。
+function worldToNorm(stair, b) {
+  const W = (b.x2 - b.x1) || 1, H = (b.y2 - b.y1) || 1;
+  return ({ x, y }) => {
+    const fx = (x - b.x1) / W, fy = (y - b.y1) / H;
+    switch (stair.upDirection) {
+      case 'left':  return { u: 1 - fx, v: stair.flip ? 1 - fy : fy };
+      case 'down':  return { u: fy,     v: stair.flip ? 1 - fx : fx };
+      case 'up':    return { u: 1 - fy, v: stair.flip ? 1 - fx : fx };
+      default:      return { u: fx,     v: stair.flip ? 1 - fy : fy }; // right
+    }
+  };
+}
+
+// I字（STRAIGHT/STRAIGHT_LANDING）: breakStepOf のマス番号→走行軸mm→セル境界照合。
+// セルの基点側境界（走行軸tの小さい方）が破れ位置以降なら「先」。
+function beyondBreakStraightLike(stair, graph, riser) {
+  const b = roomBounds(stair.cells, graph);
+  if (![b.x1, b.y1, b.x2, b.y2].every(Number.isFinite)) return new Set();
+  const f = makeFrame(stair, b);
+  const { parts, totalSteps } = stairParts(getSections(stair));
+  const breakCell = breakStepOf(totalSteps, riser, 'install');
+
+  let breakMm;
+  if (parts.length === 1) {
+    const [run] = parts;
+    breakMm = straightCellStartMm(run, f.runLength, breakCell);
+  } else if (parts.length === 3) {
+    const [run1, land, run2] = parts;
+    const ms = measuredLengths(measureStairSpans(stair, graph), 3);
+    if (!ms) return new Set(); // 区間長が実測できない（区間長指定が無い）→ 導出不能
+    const [L1, LD, L2] = ms;
+    breakMm = straightLandingCellStartMm(run1, land, run2, L1, LD, L2, breakCell);
+  } else {
+    return new Set();
+  }
+  const breakT = breakMm / f.runLength;
+
+  const result = new Set();
+  for (const key of stair.cells) {
+    const cb = cellBoundsFromKey(key, graph);
+    if (!cb) continue;
+    const t1 = f.tOf({ x: cb.x1, y: cb.y1 });
+    const t2 = f.tOf({ x: cb.x2, y: cb.y2 });
+    if (Math.min(t1, t2) >= breakT - BEYOND_EPS) result.add(key);
+  }
+  return result;
+}
+
+// U字系（SWITCHBACK/WINDING）: buildSwitchback/buildWinding は breakCell/riser を一切
+// 参照せず、install の破れを常に踊場・回り部との接続部（tRun）に固定描画する（riser 依存の
+// 部分可視は無い）。そのため cellsBeyondBreak も breakCell を使わず、最終直進部（復路＝レーンB、
+// makeFrame の s>0.5 側。flip は sOf が吸収済み）のセル全部を「先」とすれば描画と一致する。
+// 踊場・周回部（t≥tRun の全幅ストリップ）は install でも常に可視（emitTurn は無条件描画）のため
+// 除外する。SWITCHBACK の踊場は全幅1セルだが、WINDING の周回部（回り段）はレーン分割された
+// 複数セルになりうる（全幅セルではない）ため、幅比率（全幅セルか否か）ではなく tRun を使った
+// 走行軸（t）でのゲートで判定する（過去の不良: 全幅判定だと回り段のレーン側セルが復路と
+// 誤認され破れ先に誤分類されていた）。tRun は detectUTurn の実測 laneLen（measureStairSpans が
+// 使うのと同じ値）から求め、build側の uTurnLayout と同じ tRun に一致させる。
+function beyondBreakUTurnLike(stair, graph) {
+  const vertical = stair.upDirection === 'up' || stair.upDirection === 'down';
+  const b = roomBounds(stair.cells, graph);
+  if (![b.x1, b.y1, b.x2, b.y2].every(Number.isFinite)) return new Set();
+  const ut = detectUTurn(stair.cells, graph, vertical, b);
+  if (!ut) return new Set(); // U字構造として認識できない → 導出不能
+  const f = makeFrame(stair, b);
+  if (!(ut.laneLen > 0) || ut.laneLen >= f.runLength) return new Set(); // 実測不整合 → 導出不能
+  const tRun = ut.laneLen / f.runLength;
+
+  const result = new Set();
+  for (const key of stair.cells) {
+    const cb = cellBoundsFromKey(key, graph);
+    if (!cb) continue;
+    const center = { x: (cb.x1 + cb.x2) / 2, y: (cb.y1 + cb.y2) / 2 };
+    if (f.tOf(center) >= tRun - BEYOND_EPS) continue; // 踊場・周回部ストリップ（t≥tRun）は破れ手前（可視）
+    if (f.sOf(center) > 0.5 + BEYOND_EPS) result.add(key);
+  }
+  return result;
+}
+
+// 矩折（L_TURN）・曲がり（FLARED）: buildLTurn と同じ lTurnBreakState（breakCell＋
+// numberStart）でパーツ（アーム1・コーナー・アーム2）ごとの可視状態を求め、非表示パーツの
+// セル全部を「先」とする（描画と単一ソース。破れ位置のタイプ別再実装はしない）。
+// アーム1は breakCell 次第で部分可視（1セル内では判定不能）なため、完全非可視の
+// 極端ケース（breakCell が初段以前）のみ「先」とする（安全側）。
+function beyondBreakLTurnLike(stair, graph, riser) {
+  const b = roomBounds(stair.cells, graph);
+  if (![b.x1, b.y1, b.x2, b.y2].every(Number.isFinite)) return new Set();
+  const { parts, totalSteps } = stairParts(getSections(stair));
+  if (parts.length !== 3) return new Set();
+  const [run1, , run2] = parts;
+  const { breakCell, drawCorner, drawArm2 } = lTurnBreakState(run1, run2, totalSteps, riser, 'install');
+  const arm1Beyond   = breakCell <= run1.numberStart; // 初段より手前で破れる極端ケースのみ
+  const cornerBeyond = !drawCorner;
+  const arm2Beyond   = !drawArm2 || breakCell === run2.numberStart; // 深さ0で実質不可視の境界も含む
+
+  const norm = worldToNorm(stair, b);
+  const result = new Set();
+  for (const key of stair.cells) {
+    const cb = cellBoundsFromKey(key, graph);
+    if (!cb) continue;
+    const { u, v } = norm({ x: (cb.x1 + cb.x2) / 2, y: (cb.y1 + cb.y2) / 2 });
+    const inCornerQuad = u > 0.5 + BEYOND_EPS && v > 0.5 + BEYOND_EPS;
+    const inArm2Quad   = u > 0.5 + BEYOND_EPS && v <= 0.5 + BEYOND_EPS;
+    const inArm1Quad   = u <= 0.5 + BEYOND_EPS && v > 0.5 + BEYOND_EPS;
+    if (inCornerQuad && cornerBeyond) result.add(key);
+    else if (inArm2Quad && arm2Beyond) result.add(key);
+    else if (inArm1Quad && arm1Beyond) result.add(key);
+  }
+  return result;
+}
+
+// 中空き（OPEN_WELL）: buildOpenWell と同じ openWellBreakState（breakCell＋numberStart）で
+// パーツ（下/踊場1/右/踊場2/上）ごとの可視状態を求め、非表示パーツのセル全部を「先」とする
+// （描画と単一ソース）。下アームは breakCell 次第で部分可視なため、完全非可視の極端ケース
+// （breakCell が初段以前）のみ「先」とする（安全側）。既知の制約: アーム幅は固定比 aw=0.3
+// （buildOpenWell と同じ。セル実測は未反映）で領域を区切る。
+function beyondBreakOpenWellLike(stair, graph, riser) {
+  const b = roomBounds(stair.cells, graph);
+  if (![b.x1, b.y1, b.x2, b.y2].every(Number.isFinite)) return new Set();
+  const { parts, totalSteps } = stairParts(getSections(stair));
+  if (parts.length !== 5) return new Set();
+  const [run1, land1, run2, land2] = parts;
+  const { bs, drawLand1, drawRight, drawLand2, drawTop } =
+    openWellBreakState(run1, land1, land2, totalSteps, riser, 'install');
+  const bottomBeyond = bs <= run1.numberStart; // 初段より手前で破れる極端ケースのみ
+  const land1Beyond   = !drawLand1;
+  const rightBeyond    = !drawRight || bs === run2.numberStart; // 深さ0で実質不可視の境界も含む
+  const land2Beyond   = !drawLand2;
+  const topBeyond      = !drawTop;
+
+  const norm = worldToNorm(stair, b);
+  const AW = 0.3, RUNW = 1 - AW; // buildOpenWell と同じ固定比
+  const result = new Set();
+  for (const key of stair.cells) {
+    const cb = cellBoundsFromKey(key, graph);
+    if (!cb) continue;
+    const { u, v } = norm({ x: (cb.x1 + cb.x2) / 2, y: (cb.y1 + cb.y2) / 2 });
+    let beyond = false;
+    if (v > RUNW + BEYOND_EPS) beyond = u > RUNW + BEYOND_EPS ? land1Beyond : bottomBeyond;
+    else if (v < AW - BEYOND_EPS) beyond = u > RUNW + BEYOND_EPS ? land2Beyond : topBeyond;
+    else if (u > RUNW + BEYOND_EPS) beyond = rightBeyond;
+    if (beyond) result.add(key);
+  }
+  return result;
+}
+
+/**
+ * install ビューで破れ線より先（上部側・非表示側）になる自階セルキーの Set を返す。
+ * 判定が導出できないケース（区間長が実測できない・セル割りがタイプ構造として認識できない等）
+ * では空 Set を返す（安全側＝そのセルは「自階階段の破れ手前」として扱われ、現行挙動を維持する）。
+ * @param {import('@core').Stair} stair
+ * @param {object} graph - stair が属する graph（cellBoundsFromKey の解決に使う）
+ * @param {number|null} riser - 蹴上(mm)。null なら breakStepOf が既定比率にフォールバックする。
+ * @returns {Set<string>}
+ */
+export function cellsBeyondBreak(stair, graph, riser) {
+  if (!graph || !stair?.cells || stair.cells.size === 0) return new Set();
+  switch (stair.type) {
+    case StairType.STRAIGHT:
+    case StairType.STRAIGHT_LANDING:
+      return beyondBreakStraightLike(stair, graph, riser);
+    case StairType.SWITCHBACK:
+    case StairType.WINDING:
+      return beyondBreakUTurnLike(stair, graph);
+    case StairType.L_TURN:
+    case StairType.FLARED:
+      return beyondBreakLTurnLike(stair, graph, riser);
+    case StairType.OPEN_WELL:
+      return beyondBreakOpenWellLike(stair, graph, riser);
+    default:
+      return new Set();
+  }
 }
 
 export { getSections, defaultSections, stairParts, totalStepsFromSections };

@@ -9,8 +9,8 @@ import { RoomKind } from '@core';
 import { worldToCell, dividerCLsBetween } from './gridCells.js';
 import { buildCellToRoom } from './edgeClassify.js';
 
-const DEFAULT_WALL_BASE   = 90;    // mm
-const DEFAULT_WALL_FINISH = 12.5;  // mm
+export const DEFAULT_WALL_BASE   = 90;    // mm
+export const DEFAULT_WALL_FINISH = 12.5;  // mm
 
 // 隣接セル判定時、境界線からこの距離(mm)だけ内側をサンプリングする
 const ADJACENT_SAMPLE_EPS = 10; // mm
