@@ -31,7 +31,7 @@ import { FinishHalfModal } from './finish/FinishHalfModal.jsx';
 import { StairLayer }      from './renderer/StairLayer.jsx';
 import { floorHeightAbove } from './finish/stair/stairDimensions.js';
 import { measureStairSpans } from './finish/stair/stairClassify.js';
-import { roomBounds }       from './finish/gridCells.js';
+import { roomBounds, cellBoundsList } from './finish/gridCells.js';
 import { generateRoomWallsFromOutline, generateExteriorWalls, snapshotWall, restoreWallsFromSnapshots } from './finish/wallGeneration.js';
 import { snapshotEdges, restoreEdges, syncEdgesFromTopology, buildCellToRoom } from './finish/edgeClassify.js';
 import { reinterpretRoomsOnEntry, snapshotRoomsState, restoreRoomsState } from './finish/roomReinterpret.js';
@@ -2881,6 +2881,7 @@ const App = observer(() => {
                     id: s.id,
                     stair: s,
                     bounds: roomBounds(s.cells, graph),
+                    cellBounds: cellBoundsList(s.cells, graph), // 実セル占有（L字等の選択ヒット・枠用）
                     riser: s.riser ?? (fh != null ? fh / Math.max(1, s.totalSteps) : null),
                     spans: measureStairSpans(s, graph), // セル実測の区間長（区間長指定の反映）
                     view: 'install',

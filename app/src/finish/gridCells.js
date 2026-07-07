@@ -421,6 +421,16 @@ export function refreshCells(cells, graph) {
 }
 
 /**
+ * cells (Set<key>) を各セルの bounds 配列に解決する。
+ * 選択枠・ヒット領域のように「実際のセル占有形状」で描く用途に使う
+ * （包絡矩形だとL字・中空きなど非矩形占有で空きマスまで含んでしまう）。
+ * 消失キー（CL削除で解決不能）は除外する。
+ */
+export function cellBoundsList(cells, graph) {
+  return [...cells].map(key => cellBoundsFromKey(key, graph)).filter(Boolean);
+}
+
+/**
  * Room の cells (Set<key>) からその部屋全体の包絡矩形を返す。
  */
 export function roomBounds(cells, graph) {

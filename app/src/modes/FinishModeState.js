@@ -19,7 +19,7 @@ const MATERIAL_CODE_GRAPH_FIELDS    = [
 const MATERIAL_CODE_OVERRIDE_FIELDS = ['wallMaterial', 'wallFinish'];               // Room.customOverrides
 
 export class FinishModeState {
-  dragState      = null; // { currentCell, visitedCells: Map } | null
+  dragState      = null; // { currentCell, visitedCells: Map, stairKeys: Set } | null
   selectedRoomId = null;
   namingRoomId   = null;
   selectedStairId = null;
@@ -160,13 +160,14 @@ export class FinishModeState {
     const region = regionCellsAt(wx, wy, this.graph);
     if (region.length === 0) return;
 
-    // 階段のセルを指した場合は部屋ドラッグを開始せず、その階段自体を選択する
-    // （階段は Room とは別エンティティのため、部屋の重なり判定に乗らず
-    //  そのまま放置すると新規部屋が誤って重ねて作られてしまう）。
-    const stair = this.graph.stairs.find(s => {
-      const cells = refreshCells(s.cells, this.graph);
-      return region.some(c => cells.has(c.key));
-    });
+    // 階段のセルを直接指した場合は部屋ドラッグを開始せず、その階段自体を選択する。
+    // 判定はポインタ直下のセル（region[0]）のみで行う。連結領域全体との交差で
+    // 判定すると、領域が階段の実占有より広い場合（L字の空象限が連結している等）に
+    // 階段でないマスのクリックでも階段が選択されてしまう（＝矩形的な過剰選択）。
+    const pointerKey = region[0].key;
+    const stair = this.graph.stairs.find(s =>
+      refreshCells(s.cells, this.graph).has(pointerKey)
+    );
     if (stair) {
       this.selectedStairId = stair.id;
       this.selectedRoomId  = null;
@@ -175,17 +176,27 @@ export class FinishModeState {
       return;
     }
 
+    // 階段マスは部屋ドラッグに含めない（階段は Room とは別エンティティのため、
+    // 部屋の重なり判定に乗らず、含めると階段に重なった部屋が誤って作られてしまう）。
+    const stairKeys = new Set(
+      this.graph.stairs.flatMap(s => [...refreshCells(s.cells, this.graph)])
+    );
+    const cells = region.filter(c => !stairKeys.has(c.key));
+    if (cells.length === 0) return;
+
     this.selectedStairId = null;
     this.dragState = {
-      currentCell: region[0],
-      visitedCells: new Map(region.map(c => [c.key, c])),
+      currentCell: cells[0],
+      visitedCells: new Map(cells.map(c => [c.key, c])),
+      stairKeys,
     };
   }
 
   updateDrag(wx, wy) {
     const state = this.dragState;
     if (!state) return;
-    const region = regionCellsAt(wx, wy, this.graph);
+    const region = regionCellsAt(wx, wy, this.graph)
+      .filter(c => !state.stairKeys.has(c.key));
     if (region.length === 0) return;
     if (region.every(c => state.visitedCells.has(c.key))) {
       this.dragState = { ...state, currentCell: region[0] };

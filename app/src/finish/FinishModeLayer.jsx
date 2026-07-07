@@ -1,6 +1,6 @@
 import { observer } from 'mobx-react-lite';
 import { Rect, Text, Line, Group, Shape } from 'react-konva';
-import { getAllCells, gridDividerSegments, cellBoundsFromKey, roomBounds, outlineSegments } from './gridCells.js';
+import { getAllCells, gridDividerSegments, cellBoundsFromKey, cellBoundsList, roomBounds, outlineSegments } from './gridCells.js';
 import { computeExteriorWallSegments } from './wallGeneration.js';
 
 const EXTERIOR_WALL_WIDTH = 4; // px（ズームに依らない太線幅）
@@ -50,9 +50,7 @@ export const FinishModeLayer = observer(({
   const roomRects = [];
   graph.rooms.forEach((room, idx) => {
     const isSelected = room.id === selectedRoomId;
-    const boundsList = [...room.cells]
-      .map(key => cellBoundsFromKey(key, graph))
-      .filter(Boolean);
+    const boundsList = cellBoundsList(room.cells, graph);
     if (boundsList.length > 0) {
       roomRects.push(
         <Shape

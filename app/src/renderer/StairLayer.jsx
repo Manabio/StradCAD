@@ -1,6 +1,7 @@
 import { observer } from 'mobx-react-lite';
-import { Group, Line, Text, Rect, Circle } from 'react-konva';
+import { Group, Line, Text, Shape, Circle } from 'react-konva';
 import { buildStairGeometry } from '../finish/stair/stairGeometry.js';
+import { outlineSegments } from '../finish/gridCells.js';
 
 const STAIR_STROKE = '#1e293b';
 const CHEVRON_ANGLE = Math.PI / 7; // 矢じり(^)の開き角
@@ -27,7 +28,8 @@ function chevronPoints(pts, len) {
 /**
  * 階段を描画する。entries は描画用に解決済みの配列:
  *   { id, stair, bounds:{x1,y1,x2,y2}, riser:number|null, spans:{lengths:number[]}|null,
- *     view:'install'|'upper', selectable:boolean }
+ *     view:'install'|'upper', selectable:boolean,
+ *     cellBounds:Array<{x1,y1,x2,y2}>|undefined }  // 実セル占有（選択ヒット・枠用。省略時は bounds）
  * install/upper の両ビュー（設置階・設置上階）を同じ経路で描く。
  * bounds・spans は呼び出し側でワールド座標に解決済みのため、上階（peek した非アクティブ階）でも描ける。
  */
@@ -41,7 +43,7 @@ export const StairLayer = observer(({
   const px = (w) => w / viewport.scaleX; // ズーム非依存の線幅
 
   const groups = entries.map((e) => {
-    const { id, stair, bounds: b, riser, spans, view, selectable } = e;
+    const { id, stair, bounds: b, riser, spans, view, selectable, cellBounds } = e;
     if (!b || ![b.x1, b.y1, b.x2, b.y2].every(Number.isFinite) || b.x2 <= b.x1 || b.y2 <= b.y1) {
       return null;
     }
@@ -97,19 +99,37 @@ export const StairLayer = observer(({
       />
     ));
 
+    // 選択ヒット領域・ハイライトは実セル占有形状で描く。包絡矩形で描くと
+    // L字（矩折・曲がり）や中空きなど非矩形占有のタイプで空きマスまで矩形に
+    // 選択されてしまう。塗りは1パス（部屋選択と同方式）、枠は共有辺を打ち
+    // 消した外周線分で描く。cellBounds 未解決時は包絡矩形にフォールバック。
+    const hitBounds = cellBounds?.length > 0 ? cellBounds : [b];
+
     return (
       <Group key={`${view}:${id}`}>
         {selectable && onSelectStair && (
-          <Rect
-            x={b.x1} y={b.y1}
-            width={b.x2 - b.x1} height={b.y2 - b.y1}
+          <Shape
+            sceneFunc={(ctx, shape) => {
+              ctx.beginPath();
+              for (const cb of hitBounds) ctx.rect(cb.x1, cb.y1, cb.x2 - cb.x1, cb.y2 - cb.y1);
+              ctx.fillStrokeShape(shape);
+            }}
             fill={isSel ? 'rgba(37,99,235,0.10)' : 'transparent'}
-            stroke={isSel ? '#2563eb' : 'transparent'}
-            strokeWidth={isSel ? px(2) : 0}
             onClick={() => onSelectStair(id)}
             onTap={() => onSelectStair(id)}
           />
         )}
+        {selectable && isSel && outlineSegments(hitBounds).map(seg => (
+          <Line
+            key={`sel${seg.isVertical ? 'v' : 'h'}${seg.value}:${seg.lo}`}
+            points={seg.isVertical
+              ? [seg.value, seg.lo, seg.value, seg.hi]
+              : [seg.lo, seg.value, seg.hi, seg.value]}
+            stroke="#2563eb"
+            strokeWidth={px(2)}
+            listening={false}
+          />
+        ))}
         {treads}
         {outline}
         {breakLine}
