@@ -31,12 +31,17 @@
 描画に使う。導出できない場合のみ「踏面寸×マス数＋最小踊場」を合成して設置枠に引き伸ばす。
 踊場前縁の位置を「幅の半分」等のヒューリスティックで決め打ちすると、指定境界から線がずれる
 （過去の不良）。spans は StairLayer の entries／StairPanel の図から opts 経由で渡す。
+L_TURN/FLAREDはlengthsに加えアーム幅（widths）も実測し、アーム帯の幅・コーナー前縁位置へ
+比率で反映する（lTurnLayout。buildと寸法鎖segmentSpansが共用）。踏面寸はアーム別。
 
 ## タイプ依存が許されるのは「写像」のみ
 各buildは`emitRun`/`emitTurn`（共通描画）へ「区間内位置→ワールド」の写像だけを渡す。
 区間の入口・出口境界線は踊場・周回部側（または外周）が描き、直進部は内部マス境界のみ描く。
-- WINDING/FLAREDの回り段: pivotから扇形放射（perim系写像）
+- WINDING/FLAREDの回り段: pivotから扇形放射（perim系写像）。外周パラメータ t=0 は必ず入口側
+  （emitTurnの番号順の前提。逆向きだと段数字が歩行順と逆に並ぶ——過去の不良）
 - OPEN_WELL: 3直進部+2踊場をC字にたどる独自frame写像（makeFrameを使わない）
+- 破断線対角（breakDiagonalFrame）のacrossDirは必ず「壁（外周）→吹抜け・ウェル」向きに渡す。
+  逆符号だと破断記号が壁の外側へ描かれる（過去の不良）
 
 ## UIは踏面数でたずねる
 図中編集の区間寸法は踏面数（マス数）で表示・入力し、sections（実段数）への換算
@@ -44,4 +49,4 @@
 
 ## 既知の制約
 - sections は未永続化（IDB/FBS/undoスナップショット対象外）。再読込時は totalSteps から既定値を再構成する。
-- L_TURN/FLARED/OPEN_WELL のアーム長は正規化固定比（aw）で、セル実測をまだ反映しない。
+- OPEN_WELL のアーム長は正規化固定比（aw）で、セル実測をまだ反映しない（L_TURN/FLAREDは反映済み）。

@@ -68,9 +68,9 @@ function detectOpenWell(cells, graph, b) {
   return { upDirection: UP[opening], straight };
 }
 
-// 矩折（L字90度）の検出: 包絡矩形の4象限のうち3つが埋まり1つが空。
-// 空象限の対角がコーナー。@returns {{ upDirection, flip, first, straight }|null}
-function detectLTurn(cells, graph, b) {
+// L字（3象限占有）の空象限とコーナーセル実測。空象限の対角（コーナー）に最も近いセルの
+// 幅 cw・高さ ch がアーム幅の実測値になる。@returns {{ empty, cw, ch }|null}
+function lTurnCornerCell(cells, graph, b) {
   const midX = (b.x1 + b.x2) / 2, midY = (b.y1 + b.y2) / 2;
   const q = { tl: false, tr: false, bl: false, br: false };
   const cbs = [];
@@ -85,26 +85,37 @@ function detectLTurn(cells, graph, b) {
   }
   if ([q.tl, q.tr, q.bl, q.br].filter(Boolean).length !== 3) return null;
   const empty = !q.tl ? 'tl' : !q.tr ? 'tr' : !q.bl ? 'bl' : 'br';
-  // 空象限 → 昇り方向・反転・コーナー位置（arm1 は水平、コーナーは空象限の対角）
-  const MAP = {
-    tl: { upDirection: 'right', flip: false, cx: 'max', cy: 'max' },
-    bl: { upDirection: 'right', flip: true,  cx: 'max', cy: 'min' },
-    tr: { upDirection: 'left',  flip: false, cx: 'min', cy: 'max' },
-    br: { upDirection: 'left',  flip: true,  cx: 'min', cy: 'min' },
+  const cornerPt = {
+    x: empty === 'tl' || empty === 'bl' ? b.x2 : b.x1,
+    y: empty === 'tl' || empty === 'tr' ? b.y2 : b.y1,
   };
-  const m = MAP[empty];
-  const cornerPt = { x: m.cx === 'max' ? b.x2 : b.x1, y: m.cy === 'max' ? b.y2 : b.y1 };
   let cc = null, best = Infinity;
   for (const cb of cbs) {
     const d = Math.hypot((cb.x1 + cb.x2) / 2 - cornerPt.x, (cb.y1 + cb.y2) / 2 - cornerPt.y);
     if (d < best) { best = d; cc = cb; }
   }
-  const cw = cc ? cc.x2 - cc.x1 : 0, ch = cc ? cc.y2 - cc.y1 : 0;
+  if (!cc) return null;
+  return { empty, cw: cc.x2 - cc.x1, ch: cc.y2 - cc.y1 };
+}
+
+// 矩折（L字90度）の検出: 包絡矩形の4象限のうち3つが埋まり1つが空。
+// 空象限の対角がコーナー。@returns {{ upDirection, flip, first, straight }|null}
+function detectLTurn(cells, graph, b) {
+  const cc = lTurnCornerCell(cells, graph, b);
+  if (!cc) return null;
+  // 空象限 → 昇り方向・反転（arm1 は水平、コーナーは空象限の対角）
+  const MAP = {
+    tl: { upDirection: 'right', flip: false },
+    bl: { upDirection: 'right', flip: true },
+    tr: { upDirection: 'left',  flip: false },
+    br: { upDirection: 'left',  flip: true },
+  };
+  const m = MAP[cc.empty];
   return {
     upDirection: m.upDirection,
     flip: m.flip,
-    first:    risersFromLength((b.x2 - b.x1) - cw),
-    straight: risersFromLength((b.y2 - b.y1) - ch),
+    first:    risersFromLength((b.x2 - b.x1) - cc.cw),
+    straight: risersFromLength((b.y2 - b.y1) - cc.ch),
   };
 }
 
@@ -275,7 +286,8 @@ export function classifyStairArea(cells, graph, floorHeight = null) {
 /**
  * 設置セルから区間長（歩行順・sections 対応の mm 配列）を実測する（区間長指定の描画反映用）。
  * セル割りから導出できないタイプ・形状は null（描画側は 踏面寸×マス数 の合成にフォールバック）。
- * @returns {{ lengths:number[] }|null}
+ * L_TURN/FLARED は widths（[アーム1幅, アーム2幅] mm）も返す（アーム帯の実測反映用）。
+ * @returns {{ lengths:number[], widths?:number[] }|null}
  */
 export function measureStairSpans(stair, graph) {
   if (!graph || !stair?.cells || stair.cells.size === 0) return null;
@@ -298,6 +310,20 @@ export function measureStairSpans(stair, graph) {
       if (!ut || !(ut.laneLen > 0) || ut.laneLen >= runLength) return null;
       // [往路, 踊り場・回り部の深さ, 復路]。復路レーン長は往路と同じ（平行レーン）。
       return { lengths: [ut.laneLen, runLength - ut.laneLen, ut.laneLen] };
+    }
+    case StairType.L_TURN:
+    case StairType.FLARED: {
+      const cc = lTurnCornerCell(stair.cells, graph, b);
+      if (!cc || !(cc.cw > 0) || !(cc.ch > 0)) return null;
+      // 歩行順 [アーム1走行長, コーナー（u軸寸）, アーム2走行長]。widths=[アーム1幅, アーム2幅]。
+      // u軸（アーム1の走行軸）は upDirection が left/right のとき水平（normToWorld と同じ対応）。
+      const cu = vertical ? cc.ch : cc.cw; // コーナーのu軸寸 = アーム2幅
+      const cv = vertical ? cc.cw : cc.ch; // コーナーのv軸寸 = アーム1幅
+      const uLen = vertical ? b.y2 - b.y1 : b.x2 - b.x1;
+      const vLen = vertical ? b.x2 - b.x1 : b.y2 - b.y1;
+      const L1 = uLen - cu, L2 = vLen - cv;
+      if (!(L1 > 0) || !(L2 > 0)) return null;
+      return { lengths: [L1, cu, L2], widths: [cv, cu] };
     }
     default:
       return null;

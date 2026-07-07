@@ -581,22 +581,39 @@ function buildWinding(stair, b, { view, detail, spans }) {
 // 正規化座標 (u,v)∈[0,1]² の L 字（arm1=水平/下、arm2=垂直/右、コーナーは(1,1)）を
 // upDirection/flip で回転・鏡像して world へマップする。
 // コーナーは踊場・周回部（L_TURNはマス1の平踊場、FLAREDはマスw≥1の扇形回り段）。
-function buildLTurn(stair, b, { view, detail, riser }) {
+// アーム帯の幅はセル実測（spans）を比率で設置枠に引き伸ばして反映する。
+
+// L字系の共通レイアウト: アーム帯幅（正規化）。awU=アーム2幅/u軸全長、awV=アーム1幅/v軸全長。
+// セル実測（measureStairSpans の lengths+widths）があれば比率で設置枠に引き伸ばし、
+// 導出できない場合のみ固定比 0.45 に合成フォールバックする。
+function lTurnLayout(spans) {
+  const ms = measuredLengths(spans, 3);
+  const ws = spans?.widths;
+  if (ms && Array.isArray(ws) && ws.length === 2 && ws.every((v) => Number.isFinite(v) && v > 0)) {
+    const [L1, , L2] = ms;
+    return { awU: ws[1] / (L1 + ws[1]), awV: ws[0] / (L2 + ws[0]) };
+  }
+  return { awU: 0.45, awV: 0.45 };
+}
+
+function buildLTurn(stair, b, { view, detail, riser, spans }) {
   const { parts, totalSteps } = stairParts(getSections(stair));
   const [run1, corner, run2] = parts;
   const W = b.x2 - b.x1, H = b.y2 - b.y1;
-  const aw = 0.45;        // アーム幅（正規化）
-  const runU = 1 - aw;    // 直進部の終端（コーナー前縁）
-  const pitch1 = runU / run1.cells; // 正規化単位のマスピッチ
-  const pitch2 = runU / run2.cells;
+  const { awU, awV } = lTurnLayout(spans);
+  const runU = 1 - awU;   // arm1 の走行終端（コーナー前縁。arm2 帯は u∈[runU,1]）
+  const runV = 1 - awV;   // arm2 の走行終端（コーナー前縁。arm1 帯は v∈[runV,1]）
+  const pitch1 = runU / run1.cells; // 正規化単位のマスピッチ（アーム別踏面寸）
+  const pitch2 = runV / run2.cells;
 
   const pt = (fx, fy) => ({ x: b.x1 + fx * W, y: b.y1 + fy * H });
   const toWorld = normToWorld(stair, pt);
   const lineUV = (u0, v0, u1, v1) => line(toWorld(u0, v0), toWorld(u1, v1));
-  // コーナー扇形の外周（(1,runU)→(1,1)→(runU,1)）を t∈[0,1] で辿る
+  // コーナー扇形の外周を入口側→出口側（(runU,1)→(1,1)→(1,runV)）へ t∈[0,1] で辿る
+  //（emitTurn の cellPt は t=0 を入口側とみなすため、歩行順＝番号順に揃える）
   const perimCorner = (t) => t <= 0.5
-    ? toWorld(1, runU + (t / 0.5) * (1 - runU))
-    : toWorld(1 - ((t - 0.5) / 0.5) * (1 - runU), 1);
+    ? toWorld(runU + (t / 0.5) * (1 - runU), 1)
+    : toWorld(1, 1 - ((t - 0.5) / 0.5) * (1 - runV));
 
   const isInstall = view === 'install';
   const breakCell = breakStepOf(totalSteps, riser, view);
@@ -607,43 +624,44 @@ function buildLTurn(stair, b, { view, detail, riser }) {
 
   // コーナーから離れる向き（アーム1側=u減少／アーム2側=v減少）。破れ線の内側（吹抜け・コーナー側）を
   // 必ずこの向きへ傾けるための基準（breakSymbolの世界座標基準"/"固定は向きを保証しないため使わない）。
-  const awayDirArm1 = unit(toWorld(0, runU).x - toWorld(runU, runU).x, toWorld(0, runU).y - toWorld(runU, runU).y);
-  const awayDirArm2 = unit(toWorld(1, 0).x - toWorld(1, runU).x, toWorld(1, 0).y - toWorld(1, runU).y);
+  const awayDirArm1 = unit(toWorld(0, runV).x - toWorld(runU, runV).x, toWorld(0, runV).y - toWorld(runU, runV).y);
+  const awayDirArm2 = unit(toWorld(1, 0).x - toWorld(1, runV).x, toWorld(1, 0).y - toWorld(1, runV).y);
 
   const out = { treads: [], stepNumbers: [] };
   let breakLine = null;
+  let breakDiag = null;           // 破れ線の対角（矢印・踏面線を正確に接続するため）
   let breakInset = 0;             // mm
   let bpU = null, bpV = null;     // arm1/arm2 内の破れ位置（正規化。マスの基点側境界）
   if (isInstall) {
     let bp, bq, awayDir;
     if (inArm1) {
       bpU = (breakCell - 1) * pitch1;
-      bp = toWorld(bpU, runU); bq = toWorld(bpU, 1);
+      bp = toWorld(bpU, runV); bq = toWorld(bpU, 1);
       awayDir = awayDirArm1;
     } else if (inCorner) {
-      bp = toWorld(runU, runU); bq = toWorld(1, runU); // 扇形内 → arm2 入口で破れ
+      bp = toWorld(runU, runV); bq = toWorld(1, runV); // 扇形内 → arm2 入口で破れ
       awayDir = awayDirArm2;
     } else {
-      bpV = runU - (breakCell - run2.numberStart) * pitch2;
+      bpV = runV - (breakCell - run2.numberStart) * pitch2;
       bp = toWorld(runU, bpV); bq = toWorld(1, bpV);
       awayDir = awayDirArm2;
     }
     // 始点＝外周部（隣接壁側、bq）に固定し、内側（吹抜け・コーナー側）は「壁→吹抜け」×
     // 「コーナーから離れる走行方向」を合成した向きへ30°傾ける。
-    const acrossDir = unit(bq.x - bp.x, bq.y - bp.y);
+    const acrossDir = unit(bp.x - bq.x, bp.y - bq.y); // 壁→吹抜け（外側→内側）
     const widthMm = Math.hypot(bq.x - bp.x, bq.y - bp.y);
     const outerPt = extendBreakEndToCL(bq, b);
-    const breakDiag = breakDiagonalFrame(outerPt, acrossDir, awayDir);
+    breakDiag = breakDiagonalFrame(outerPt, acrossDir, awayDir);
     breakLine = breakSymbolAwayFromLanding(outerPt, acrossDir, awayDir, widthMm).segs;
     breakInset = breakInsetMm(widthMm);
-    // コーナーとの接続部（runU）に始点を固定した場合（inCorner）、arm2は全非表示になるが、
-    // 破れ線が届く深さD（吹抜け側、mm）までは、各マス境界を吹抜け側(v=runU)から
+    // コーナーとの接続部（v=runV）に始点を固定した場合（inCorner）、arm2は全非表示になるが、
+    // 破れ線が届く深さD（吹抜け側、mm）までは、各マス境界を吹抜け側(u=runU)から
     // 破れ線（対角）に触れる位置まで正確に描画できる分だけ描く（pitch2は正規化単位のためmm換算する）。
     if (inCorner) {
       const D = widthMm * Math.tan(BREAK_TILT); // mm
       const vAxisMm = Math.hypot(toWorld(runU, 1).x - toWorld(runU, 0).x, toWorld(runU, 1).y - toWorld(runU, 0).y);
       for (let k = 1; k < run2.cells; k++) {
-        const v = runU - k * pitch2;
+        const v = runV - k * pitch2;
         const depthMm = k * pitch2 * vAxisMm;
         if (depthMm >= D) break;
         out.treads.push(line(toWorld(runU, v), breakDiag.atDepth(depthMm)));
@@ -652,21 +670,22 @@ function buildLTurn(stair, b, { view, detail, riser }) {
   }
 
   // 破れ線が傾くぶん、踏面線・段数字は手前で止める（arm1/arm2 のみ。コーナー扇形は破れ時に非表示）
-  const uAxisLen = Math.hypot(toWorld(1, runU).x - toWorld(0, runU).x, toWorld(1, runU).y - toWorld(0, runU).y);
+  const uAxisLen = Math.hypot(toWorld(1, runV).x - toWorld(0, runV).x, toWorld(1, runV).y - toWorld(0, runV).y);
   const vAxisLen = Math.hypot(toWorld(runU, 1).x - toWorld(runU, 0).x, toWorld(runU, 1).y - toWorld(runU, 0).y);
   const limit1 = isInstall && inArm1 ? bpU - breakInset / uAxisLen : Infinity;
-  const limit2 = isInstall && bpV != null ? (runU - bpV) - breakInset / vAxisLen : Infinity;
+  const limit2 = isInstall && bpV != null ? (runV - bpV) - breakInset / vAxisLen : Infinity;
 
-  const midA = (runU + 1) / 2; // 矢印用（幅方向中央）。段数字はNUM_OUTで外周部近くへ寄せる。
+  const midU = (runU + 1) / 2; // arm2 帯の幅方向中央（矢印用）
+  const midV = (runV + 1) / 2; // arm1 帯の幅方向中央（矢印用）。段数字はNUM_OUTで外周部近くへ寄せる。
   // アーム1（コーナー入口境界=区間終端はコーナー側が描く）。外側=v=1 側へ寄せる。
   emitRun(out, run1, pitch1, {
-    treadLine: (u) => lineUV(u, runU, u, 1),
+    treadLine: (u) => lineUV(u, runV, u, 1),
     labelPt:   (u) => toWorld(u, 1 - NUM_OUT),
   }, { detail, limitMm: limit1 });
   if (drawCorner) {
-    out.treads.push(lineUV(runU, runU, runU, 1)); // arm1→コーナー入口境界
-    out.treads.push(lineUV(runU, runU, 1, runU)); // コーナー→arm2 出口境界
-    const pivot = toWorld(runU, runU);
+    out.treads.push(lineUV(runU, runV, runU, 1)); // arm1→コーナー入口境界
+    out.treads.push(lineUV(runU, runV, 1, runV)); // コーナー→arm2 出口境界
+    const pivot = toWorld(runU, runV);
     // 初段=下手側（arm1）と同じ幅方向位置（1-NUM_OUT）・同じ離れ（pitch1基準）で入口境界線近くに置く。
     // 2段目以降は pivot→外周 の混合（TURN_OUT）で外周部近くへ寄せる。
     emitTurn(out, corner, {
@@ -678,26 +697,31 @@ function buildLTurn(stair, b, { view, detail, riser }) {
   if (drawArm2) {
     // arm2 far端（上階到達）は outline が描く。外側=u=1 側へ寄せる。
     emitRun(out, run2, pitch2, {
-      treadLine: (mm) => lineUV(runU, runU - mm, 1, runU - mm),
-      labelPt:   (mm) => toWorld(1 - NUM_OUT, runU - mm),
+      treadLine: (mm) => lineUV(runU, runV - mm, 1, runV - mm),
+      labelPt:   (mm) => toWorld(1 - NUM_OUT, runV - mm),
     }, { detail, limitMm: limit2 });
   }
 
   const outline = [
-    { ...seg(toWorld(0, runU), toWorld(0, 1)), thin: true }, // arm1 base 端（区画初段）
+    { ...seg(toWorld(0, runV), toWorld(0, 1)), thin: true }, // arm1 base 端（区画初段）
     seg(toWorld(0, 1),    toWorld(1, 1)),       // arm1 外側
     seg(toWorld(1, 1),    toWorld(1, 0)),       // arm2 外側
     { ...seg(toWorld(1, 0), toWorld(runU, 0)), thin: true }, // arm2 far 端（設置階上階の最終段）
-    seg(toWorld(runU, 0), toWorld(runU, runU)), // 内側（吹抜け側・縦）
-    seg(toWorld(runU, runU), toWorld(0, runU)), // 内側（吹抜け側・横）
+    seg(toWorld(runU, 0), toWorld(runU, runV)), // 内側（吹抜け側・縦）
+    seg(toWorld(runU, runV), toWorld(0, runV)), // 内側（吹抜け側・横）
   ];
 
-  const arrows = [runArrow(toWorld(0, midA), toWorld(runU, midA), 'U')];
-  // D（upper）はいちばん大きい踏面番号側（arm2到達＝かみがた）を始点に、番号の小さい方（コーナー側）へ向かう。
-  if (drawArm2) {
-    arrows.push(isInstall
-      ? runArrow(toWorld(midA, runU), toWorld(midA, 0), '')
-      : runArrow(toWorld(midA, 0), toWorld(midA, runU), 'D'));
+  // 走行矢印: アーム1→コーナー→アーム2を通る1本の折れ線。install(U)はアーム1基部の丸から
+  // 破れ線（対角）に突き当たるまで（破れがアーム1内なら曲がらず直進のみ）。upper(D)は
+  // いちばん大きい踏面番号側（arm2到達＝かみがた）を始点に、番号の小さい方（アーム1基部）へ向かう。
+  let arrows;
+  if (!isInstall) {
+    arrows = [uTurnArrow([toWorld(midU, 0), toWorld(midU, midV), toWorld(0, midV)], 'D')];
+  } else if (inArm1) {
+    arrows = [runArrow(toWorld(0, midV), breakDiag.atPoint(toWorld(bpU, midV)), 'U')];
+  } else {
+    const end = breakDiag.atPoint(toWorld(midU, inCorner ? runV : bpV));
+    arrows = [uTurnArrow([toWorld(0, midV), toWorld(midU, midV), end], 'U')];
   }
   if (!isInstall) emitArrival(out, totalSteps, toWorld(1 - NUM_OUT, 0), detail);
   return { ...out, outline, arrows, breakLine };
@@ -762,7 +786,7 @@ function buildOpenWell(stair, b, { view, detail, riser }) {
     }
     // 始点＝外周部（隣接壁側、bq）に固定し、内側（ウェル側）は「壁→ウェル」×
     // 「踊場から離れる走行方向」を合成した向きへ30°傾ける。
-    const acrossDir = unit(bq.x - bp.x, bq.y - bp.y);
+    const acrossDir = unit(bp.x - bq.x, bp.y - bq.y); // 壁→ウェル（外側→内側）
     const widthMm = Math.hypot(bq.x - bp.x, bq.y - bp.y);
     const outerPt = extendBreakEndToCL(bq, b);
     const breakDiag = breakDiagonalFrame(outerPt, acrossDir, awayDir);
@@ -935,14 +959,16 @@ function segmentSpans(stair, b, spans) {
     case StairType.L_TURN:
     case StairType.FLARED: {
       const [run1, corner, run2] = parts;
-      const W = b.x2 - b.x1, H = b.y2 - b.y1, aw = 0.45, runU = 1 - aw;
+      const W = b.x2 - b.x1, H = b.y2 - b.y1;
+      const { awU, awV } = lTurnLayout(spans); // buildLTurn と同一レイアウト（実測反映）
+      const runU = 1 - awU, runV = 1 - awV;
       const pt = (fx, fy) => ({ x: b.x1 + fx * W, y: b.y1 + fy * H });
       const tw = normToWorld(stair, pt);
       const isFlared = stair.type === StairType.FLARED;
       return [
         [tw(0, 1),    tw(runU, 1), `アーム1 踏面${run1.cells}`,   0],
         [tw(runU, 1), tw(1, 1),    isFlared ? `曲がり 踏面${corner.cells}` : '踊り場', isFlared ? 1 : null],
-        [tw(1, runU), tw(1, 0),    `アーム2 踏面${run2.cells}`, 2],
+        [tw(1, runV), tw(1, 0),    `アーム2 踏面${run2.cells}`, 2],
       ];
     }
     case StairType.OPEN_WELL: {

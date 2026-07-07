@@ -47,3 +47,5 @@ app/src/
 | 実装方針（全体ルール） | `.claude/implementation-policy.md` |
 | 本番デプロイ | `.claude/deployment.md` |
 | **mdファイル自体を修正するときのルール** | `.claude/doc-policy.md` |
+
+@.claude/active-team.md
