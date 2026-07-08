@@ -9,7 +9,7 @@ const seg  = (p, q) => ({ x1: p.x, y1: p.y, x2: q.x, y2: q.y, dashed: false });
 const line = (p, q) => ({ x1: p.x, y1: p.y, x2: q.x, y2: q.y });
 const clamp01 = (t) => Math.max(0, Math.min(1, t));
 
-const LABEL_OUT = 350; // mm — U/D ラベルを始点（踏面1本目線）の外側へ押し出す距離
+export const LABEL_OUT = 350; // mm — U/D ラベルを始点（踏面1本目線）の外側へ押し出す距離
 const NUM_GAP   = 1 / 4; // 段数数字を基点側の線（踏面線／踊場・周回部の入口境界線）から離す量（区間内比率）
 const NUM_OUT   = 0.15;  // 段数字を幅方向の外周側（隣接壁側）へ寄せる位置（外側端からの距離。レーン/アーム/全幅で共通利用）
 const TURN_OUT  = 0.7;   // 踊場・周回部（マスw≥2）の2段目以降を pivot→外周 の混合で外周部近くへ寄せる比率

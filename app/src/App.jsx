@@ -116,6 +116,20 @@ function bakeCLValue(cl, newVal) {
   cl.pendingDelta = 0;
 }
 
+// 矩形2つが実質的に重なる（浮動小数の際どい接触は無視）か。EPS(mm) 未満の重なりは無視する。
+const RECT_OVERLAP_EPS = 1; // mm
+function rectsOverlap(a, b) {
+  return a.x1 < b.x2 - RECT_OVERLAP_EPS && a.x2 > b.x1 + RECT_OVERLAP_EPS
+      && a.y1 < b.y2 - RECT_OVERLAP_EPS && a.y2 > b.y1 + RECT_OVERLAP_EPS;
+}
+
+// listA のいずれかの矩形が listB のいずれかの矩形と重なるか（下階階段の見下げ upper エントリが
+// 自階 install エントリと同一 footprint かどうかの判定に使う。cellBounds 同士の総当たり）。
+function anyCellBoundsOverlap(listA, listB) {
+  if (!listA?.length || !listB?.length) return false;
+  return listA.some(a => listB.some(b => rectsOverlap(a, b)));
+}
+
 const App = observer(() => {
   const project = useStore();
   const [size,        setSize]        = useState({ width: window.innerWidth, height: window.innerHeight });
@@ -2912,6 +2926,7 @@ const App = observer(() => {
                       bounds: roomBounds(s.cells, graph),
                       cellBounds: cellBoundsList(s.cells, graph), // 実セル占有（L字等の選択枠用）
                       hitCellBounds: cellBoundsList(hitCells, graph), // クリックヒット領域（破れ線先セル除外）
+                      beyondBreakBounds: cellBoundsList(beyond, graph), // 破れ線先セルのワールド矩形（重なるupperの踏面間引きに使う）
                       riser,
                       spans: measureStairSpans(s, graph), // セル実測の区間長（区間長指定の反映）
                       view: 'install',
@@ -2921,7 +2936,23 @@ const App = observer(() => {
                   // 階切替の非同期過渡で同一階段が install/upper 両方に入るのを防ぐ
                   // （install が設置階の正であり、upper は直下階由来。重複時は install を優先）
                   const installIds = new Set(installEntries.map(e => e.id));
-                  const upperEntries = upperStairEntries.filter(e => !installIds.has(e.id));
+                  // footprint が自階 install 階段と重なる upper エントリ（下階階段が自階の
+                  // 自動設置階段と同じ位置に見下げ表示される場合）は、段数字を全部抑止し、
+                  // 矢印の始点を対応する install 階段の破れ線位置へクリップし、踏面線は
+                  // install の破れ線先セル（beyondBreakBounds。cellsBeyondBreak で全タイプ
+                  // 単一ソース判定済み）に中点が入るものだけ残す（重ならなければ従来どおり
+                  // フル描画。StairLayer 側でクリップ・抑止・間引きを行う）。
+                  const upperEntries = upperStairEntries
+                    .filter(e => !installIds.has(e.id))
+                    .map(e => {
+                      const overlapInstall = installEntries.find(ie => anyCellBoundsOverlap(e.cellBounds, ie.cellBounds));
+                      return overlapInstall
+                        ? {
+                            ...e, suppressNumbers: true, clipAgainstId: overlapInstall.id,
+                            beyondBreakBounds: overlapInstall.beyondBreakBounds,
+                          }
+                        : e;
+                    });
                   return (
                     <StairLayer
                       entries={[...installEntries, ...upperEntries]}
