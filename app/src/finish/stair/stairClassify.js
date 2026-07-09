@@ -173,16 +173,20 @@ export function detectUTurn(cells, graph, isVertical, b) {
     const frac = (aHi - aLo) / acrossFull;
     const rCenter = (rLo + rHi) / 2;
     if (frac >= 0.9) landingFull.push({ rCenter });
-    else if (frac <= 0.6) laneCells.push({ half: (aLo + aHi) / 2 < mid ? 'low' : 'high', rLo, rHi, rCenter, runLen: rHi - rLo });
+    else if (frac <= 0.6) laneCells.push({ key, half: (aLo + aHi) / 2 < mid ? 'low' : 'high', rLo, rHi, rCenter, runLen: rHi - rLo });
   }
   if (!laneCells.some(c => c.half === 'low') || !laneCells.some(c => c.half === 'high')) return null;
 
-  // 屈折: 全幅の踊り場セルがある
+  // 屈折: 全幅の踊り場セルがある。laneHalf = レーンセルキー → 幅方向どちらの半分か
+  //（entryヒントのレーン識別用。踊り場セルは含まれない＝スキップ対象になる）。
   if (landingFull.length >= 1) {
     const laneLen = Math.max(...laneCells.map(c => c.runLen));
     const landCenter = landingFull.reduce((s, l) => s + l.rCenter, 0) / landingFull.length;
     const laneCenter = laneCells.reduce((s, c) => s + c.rCenter, 0) / laneCells.length;
-    return { kind: 'switchback', laneLen, landingHigh: landCenter > laneCenter };
+    return {
+      kind: 'switchback', laneLen, landingHigh: landCenter > laneCenter,
+      laneHalf: new Map(laneCells.map(c => [c.key, c.half])),
+    };
   }
 
   // 回り: 走行方向に2列（直進部の広い列 + 回り段の狭い列）
@@ -192,11 +196,16 @@ export function detectUTurn(cells, graph, isVertical, b) {
   if (spans.length >= 2) {
     const turn = spans[0];                 // 最短列 = 回り段
     const straight = spans[spans.length - 1]; // 最長列 = 直進部
+    const turnSpanKey = `${Math.round(turn.rLo)}:${Math.round(turn.rHi)}`;
     return {
       kind: 'winding',
       laneLen: straight.runLen,
       turnLen: turn.runLen,
       landingHigh: turn.rCenter > straight.rCenter,
+      // 回り段列（周回部）のセルはレーン識別から除外＝entryヒントのスキップ対象
+      laneHalf: new Map(laneCells
+        .filter(c => `${Math.round(c.rLo)}:${Math.round(c.rHi)}` !== turnSpanKey)
+        .map(c => [c.key, c.half])),
     };
   }
   return null;
@@ -213,9 +222,10 @@ export function detectUTurn(cells, graph, isVertical, b) {
  *   フェーズ4: 最初に選択したセルを設置階の上り口とする。踊場・周回部セルなら選択順で次のセルを使う。
  *   タイプ判定（直進/L字/U字/中空き等）は変えず、upDirection・flip・sectionsの歩行順の決定にのみ使う。
  *   未指定・解決不能（cellsに含まれない等）なら現行の幾何推定にフォールバックする。
- *   対応: STRAIGHT・STRAIGHT_LANDING のみ。L_TURN/FLARED・SWITCHBACK/WINDING・OPEN_WELL は
- *   (upDirection,flip) が形状（コーナー位置・折返し位置）から一意に決まり歩行順を反転する自由度が
- *   無いため未対応（各分岐のコメント参照。誤って反転するとコーナー世界座標が実セル形状と矛盾する）。
+ *   対応: STRAIGHT・STRAIGHT_LANDING（upDirectionへ反映）、SWITCHBACK・WINDING（flipへ反映＝
+ *   往路レーンの選択）。L_TURN/FLARED・OPEN_WELL は (upDirection,flip) が形状（コーナー位置・
+ *   開口位置）から一意に決まり歩行順を反転する自由度が無いため未対応（各分岐のコメント参照。
+ *   誤って反転するとコーナー世界座標が実セル形状と矛盾する）。
  * @returns {{
  *   type: string,
  *   bounds: { x1, y1, x2, y2 },
@@ -279,15 +289,22 @@ export function classifyStairArea(cells, graph, floorHeight = null, entryCellKey
   }
 
   // U字（屈折／回り）を判定。
-  // entryヒント: 未対応。対称な2レーン構成のため、landingHigh（折り返し部の位置）が既に
-  // upDirectionを一意に決めており、低座標側の2レーン端（進入/到達）は隣接するため
-  // 座標のみでは区別できない（歩行順のレーン識別を持たない現行モデルの制約。フェーズ4スコープ外）。
+  // entryヒント: flip で対応。2レーンは対称で upDirection は landingHigh から一意に決まるが、
+  // 「どちらのレーンから歩き始めるか」は flip が写像する（makeFrame の acrossAt。
+  // 往路レーンA は flip=false で幅方向低座標側 s=0 に置かれる——buildSwitchback/buildWinding 参照）。
+  // 先頭の有効セル（踊り場・周回部セルはスキップ）が高座標側レーンなら flip=true。
   const ut = detectUTurn(cells, graph, isVertical, b);
   if (ut) {
     // 折り返し部が走行高位端にあれば昇り起点は低位側 → 高位へ向かう向き
     upDirection = isVertical
       ? (ut.landingHigh ? 'down' : 'up')
       : (ut.landingHigh ? 'right' : 'left');
+    if (entryCellKeys) {
+      // レーン識別できないセル（全幅踊り場・回り段列・中間幅）はすべてスキップ対象
+      const skipKeys = new Set([...cells].filter(k => !ut.laneHalf.has(k)));
+      const entryKey = resolveEntryCellKey(entryCellKeys, cells, skipKeys);
+      if (entryKey) flip = ut.laneHalf.get(entryKey) === 'high';
+    }
     const straight = risersFromLength(ut.laneLen);
     if (ut.kind === 'switchback') {
       type = StairType.SWITCHBACK;
