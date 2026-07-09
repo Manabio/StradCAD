@@ -2937,18 +2937,18 @@ const App = observer(() => {
                   // （install が設置階の正であり、upper は直下階由来。重複時は install を優先）
                   const installIds = new Set(installEntries.map(e => e.id));
                   // footprint が自階 install 階段と重なる upper エントリ（下階階段が自階の
-                  // 自動設置階段と同じ位置に見下げ表示される場合）は、段数字を全部抑止し、
-                  // 矢印の始点を対応する install 階段の破れ線位置へクリップし、踏面線は
-                  // install の破れ線先セル（beyondBreakBounds。cellsBeyondBreak で全タイプ
-                  // 単一ソース判定済み）に中点が入るものだけ残す（重ならなければ従来どおり
-                  // フル描画。StairLayer 側でクリップ・抑止・間引きを行う）。
+                  // 自動設置階段と同じ位置に見下げ表示される場合）は installOverlap を付与し、
+                  // StairLayer 側でプリミティブ別に独立フィルタする: 矢印は install の破れ線で
+                  // クリップ、踏面線は破れ線先セル（beyondBreakBounds。cellsBeyondBreak で
+                  // 全タイプ単一ソース判定済み）の中点判定、段数字はアンカー点判定で破れ先の
+                  // 番号だけ残す（重ならなければ従来どおりフル描画）。
                   const upperEntries = upperStairEntries
                     .filter(e => !installIds.has(e.id))
                     .map(e => {
                       const overlapInstall = installEntries.find(ie => anyCellBoundsOverlap(e.cellBounds, ie.cellBounds));
                       return overlapInstall
                         ? {
-                            ...e, suppressNumbers: true, clipAgainstId: overlapInstall.id,
+                            ...e, installOverlap: true, clipAgainstId: overlapInstall.id,
                             beyondBreakBounds: overlapInstall.beyondBreakBounds,
                           }
                         : e;

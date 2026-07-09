@@ -103,15 +103,16 @@ function chevronPoints(pts, len) {
  *   { id, stair, bounds:{x1,y1,x2,y2}, riser:number|null, spans:{lengths:number[]}|null,
  *     view:'install'|'upper', selectable:boolean,
  *     cellBounds:Array<{x1,y1,x2,y2}>|undefined,  // 実セル占有（選択ヒット・枠用。省略時は bounds）
- *     suppressNumbers?:boolean, clipAgainstId?:string }
- *   suppressNumbers/clipAgainstId/beyondBreakBounds は、footprint が自階 install 階段と重なる
- *   upper エントリ（下階階段の見下げが自階の自動設置階段と同じ位置に表示される場合）に
- *   App.jsx が付与する。段数字を全部抑止し、矢印は clipAgainstId が指す install エントリの
- *   破れ線（実 polyline）でクリップして到達点側だけを残し、踏面線は beyondBreakBounds
- *   （install 階段の cellsBeyondBreak をワールド矩形へ解決したもの。stairGeometry.js で
- *   全タイプ単一ソース判定済み）に中点が入るものだけ残す（破れ線を跨ぐ踏面は破れ線交点で
- *   部分線分にクリップする）。下階階段の踏面番号・矢印先端・重複踏面が破れ線手前に
- *   残って見える不良の対策。
+ *     installOverlap?:boolean, clipAgainstId?:string }
+ *   installOverlap/clipAgainstId/beyondBreakBounds は、footprint が自階 install 階段と重なる
+ *   upper エントリ（下階階段の見下げが自階の自動設置階段と同じ位置に表示される場合)に
+ *   App.jsx が付与する。可視判定はプリミティブ別に独立（共有ゲートを持たない）:
+ *   矢印は clipAgainstId が指す install エントリの破れ線（実 polyline）でクリップして
+ *   到達点側だけを残す。踏面線は beyondBreakBounds（install 階段の cellsBeyondBreak を
+ *   ワールド矩形へ解決したもの。stairGeometry.js で全タイプ単一ソース判定済み）に中点が
+ *   入るものだけ残す（破れ線を跨ぐ踏面は破れ線交点で部分線分にクリップする）。段数字は
+ *   点のためアンカー点が beyondBreakBounds（破れ先）に入る番号だけ残す（下階階段の
+ *   踏面番号・矢印先端・重複踏面が破れ線手前に残って見える不良の対策）。
  * install/upper の両ビュー（設置階・設置上階）を同じ経路で描く。
  * bounds・spans は呼び出し側でワールド座標に解決済みのため、上階（peek した非アクティブ階）でも描ける。
  */
@@ -145,20 +146,19 @@ export const StairLayer = observer(({
 
     const lineProps = { stroke: STAIR_STROKE, strokeWidth: px(1.5), listening: false };
 
-    // 段数字を抑止するエントリ（自階 install と footprint が重なる upper）は、対応する install
-    // の幾何（breakLine）を使って矢印を破れ線基準に調整する。install が見つからない/破れ線が
-    // 退化している場合は安全側で調整せず全描画する（外周・破れ線シンボル自体は常に geom の
-    // まま＝変更しない）。
-    const installGeom = e.suppressNumbers && e.clipAgainstId
+    // 自階 install と footprint が重なる upper エントリは、対応する install の幾何（breakLine）を
+    // 使って矢印を破れ線基準に調整する。install が見つからない/破れ線が退化している場合は
+    // 安全側で調整せず全描画する（外周・破れ線シンボル自体は常に geom のまま＝変更しない）。
+    const installGeom = e.installOverlap && e.clipAgainstId
       ? installGeomById.get(e.clipAgainstId)
       : null;
     const installBreakLine = installGeom?.breakLine;
 
     // 踏み面は線種の共通定義（LINE_WEIGHT_MM）の thin を参照する。
-    // 重なる upper エントリ（suppressNumbers 付き）は、install の破れ線先セル（beyondBreakBounds。
+    // 重なる upper エントリ（installOverlap 付き）は、install の破れ線先セル（beyondBreakBounds。
     // cellsBeyondBreak で全タイプ単一ソース判定済み）に中点が入る踏面だけを残し、install が描く
     // 手前側と重複する踏面を間引く。install エントリ自身も beyondBreakBounds を持つ（重なる upper
-    // へ渡すため）ので、suppressNumbers でガードしないと自階の手前踏面まで間引かれてしまう。
+    // へ渡すため）ので、installOverlap でガードしないと自階の手前踏面まで間引かれてしまう。
     // 破れ線（install の実 polyline）を跨ぐ踏面はセル粒度の中点判定だけでは全幅のまま手前側へ
     // はみ出すため、install の breakLine と交差する踏面だけは「破れ線交点〜先側端点」の部分
     // 線分にクリップする（先側＝両端点のうち beyondBreakBounds に入る方。両端点とも内包/
@@ -166,7 +166,7 @@ export const StairLayer = observer(({
     // 従来どおり中点判定のまま（挙動を変えない）。
     // beyondBreakBounds が空/未提供（cellsBeyondBreak が導出不能で空 Set を返した場合を含む）
     // なら安全側でフィルタなし（現状どおり全描画。二重線は残るが破綻しない）。
-    const treadSegs = e.suppressNumbers && e.beyondBreakBounds?.length > 0
+    const treadSegs = e.installOverlap && e.beyondBreakBounds?.length > 0
       ? geom.treads.reduce((acc, s) => {
           const crossing = findBreakCrossing(s, installBreakLine);
           if (crossing) {
@@ -258,7 +258,16 @@ export const StairLayer = observer(({
         </Group>
       );
     });
-    const stepNumbers = e.suppressNumbers ? [] : geom.stepNumbers.map((n, i) => (
+    // 段数字は踏面線のクリップとは独立したルールで間引く: 数字は点なので、重なる upper エントリ
+    // ではアンカー点が install の破れ線先セル（beyondBreakBounds）に入る番号（＝下階から登って
+    // きた階段の破れ先の部分。到達番号を含む）だけ残す。手前側の番号は install 自身が描くため
+    // 重複させない。領域が導出不能（空/未提供）なら従来どおり安全側で全抑止する。
+    const visibleNumbers = e.installOverlap
+      ? (e.beyondBreakBounds?.length > 0
+          ? geom.stepNumbers.filter((n) => pointInBounds(e.beyondBreakBounds, n.x, n.y))
+          : [])
+      : geom.stepNumbers;
+    const stepNumbers = visibleNumbers.map((n, i) => (
       <Text
         key={`n${i}`}
         x={n.x} y={n.y} text={n.text} fontSize={120}

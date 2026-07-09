@@ -289,7 +289,10 @@ function measuredLengths(spans, count) {
 // 直進部: 区間内のマス境界線（1..cells-1。区間終端の境界は接続する踊場・周回部／外周が描く）と
 // マス番号（続き番号）。axis.treadLine(mm)/axis.labelPt(mm) は区間基点からの距離→ワールドの写像。
 // limitMm は破れ線の手前で止める上限（区間内の距離。単位は axis と同じであれば mm でなくてもよい）。
-function emitRun(out, part, pitch, axis, { detail, limitMm = Infinity, nosingMm = 0 }) {
+// 破れの可視判定は踏面線と段数文字で独立: 踏面線（全幅の線分）は斜めの破れ線に触れる手前
+// （breakInset ぶん手前＝limitMm）で止める必要があるが、段数文字（点）は「属するマスが破れの手前か」
+// という離散判定（numberLimitMm＝インセットなしの破れ位置）だけで決まる。共有ゲートにしないこと。
+function emitRun(out, part, pitch, axis, { detail, limitMm = Infinity, numberLimitMm = limitMm, nosingMm = 0 }) {
   for (let k = 1; k < part.cells; k++) {
     const mm = k * pitch + nosingMm;
     if (mm <= 1e-6 || mm >= limitMm) continue;
@@ -298,7 +301,7 @@ function emitRun(out, part, pitch, axis, { detail, limitMm = Infinity, nosingMm 
   if (!detail) return;
   for (let k = 1; k <= part.cells; k++) {
     const mm = (k - 1 + NUM_GAP) * pitch;
-    if (mm >= limitMm) break;
+    if (mm >= numberLimitMm) break;
     const p = axis.labelPt(mm);
     out.stepNumbers.push({ x: p.x, y: p.y, text: String(part.numberStart + k - 1) });
   }
@@ -365,7 +368,12 @@ function buildStraight(stair, b, { view, detail, riser }) {
   emitRun(out, run, pitch, {
     treadLine: (mm) => line(f.pt(clamp01(mm / L), 0), f.pt(clamp01(mm / L), 1)),
     labelPt:   (mm) => f.pt(mm / L, numS),
-  }, { detail, limitMm: view === 'install' ? shownMm - breakInset : Infinity, nosingMm });
+  }, {
+    detail,
+    limitMm:       view === 'install' ? shownMm - breakInset : Infinity,
+    numberLimitMm: view === 'install' ? shownMm : Infinity,
+    nosingMm,
+  });
   if (view !== 'install') emitArrival(out, totalSteps, f.pt(1, numS), detail);
   return { ...out, outline, arrows, breakLine };
 }
@@ -396,7 +404,8 @@ function buildStraightLanding(stair, b, { view, detail, riser, spans }) {
   const nosingMm = detail ? stair.nosing * (view === 'install' ? -1 : 1) : 0;
 
   const { outline, breakLine, arrows, breakInset, wideSide } = frameDecor(f, topT, view, b);
-  const limitMm = view === 'install' ? shownMm - breakInset : Infinity; // 破れ線が両側線を切り始める手前
+  const limitMm = view === 'install' ? shownMm - breakInset : Infinity; // 破れ線が両側線を切り始める手前（踏面線用）
+  const numberLimitMm = view === 'install' ? shownMm : Infinity; // 段数文字用（マスが破れ手前なら番号を出す。インセット非依存）
   // I字: 破れ線が広い方へ寄せる（破れなしは既定で外周寄り）。区間全体で同じ側に統一する。
   const numS = wideSide === 0 ? NUM_OUT : 1 - NUM_OUT;
 
@@ -408,19 +417,19 @@ function buildStraightLanding(stair, b, { view, detail, riser, spans }) {
   emitRun(out, run1, pitch1, {
     treadLine: lineAt,
     labelPt:   (mm) => f.pt(tAt(mm), numS),
-  }, { detail, limitMm, nosingMm });
+  }, { detail, limitMm, numberLimitMm, nosingMm });
   // 踊場: 入口・後縁の境界と番号（初段=下手側の run1 と同じ幅方向位置、入口境界線近く）
   pushBoundary(L1 + nosingMm);
   pushBoundary(landingEnd);
   const landEntryMm = L1 + NUM_GAP * pitch1; // 直進部と同じ離れ（pitch1基準）
-  if (landEntryMm < limitMm) {
+  if (landEntryMm < numberLimitMm) {
     emitTurn(out, land, { entryPt: () => f.pt(tAt(landEntryMm), numS) }, { detail });
   }
   // 直進部2（最終境界=上階到達辺は frameDecor の outline が描く）
   emitRun(out, run2, pitch2, {
     treadLine: (mm) => lineAt(landingEnd + mm),
     labelPt:   (mm) => f.pt(tAt(landingEnd + mm), numS),
-  }, { detail, limitMm: limitMm - landingEnd, nosingMm });
+  }, { detail, limitMm: limitMm - landingEnd, numberLimitMm: numberLimitMm - landingEnd, nosingMm });
   if (view !== 'install') emitArrival(out, totalSteps, f.pt(1, numS), detail);
   return { ...out, outline, arrows, breakLine };
 }
@@ -711,11 +720,14 @@ function buildLTurn(stair, b, { view, detail, riser, spans }) {
     }
   }
 
-  // 破れ線が傾くぶん、踏面線・段数字は手前で止める（arm1/arm2 のみ。コーナー扇形は破れ時に非表示）
+  // 破れ線が傾くぶん、踏面線は手前で止める（arm1/arm2 のみ。コーナー扇形は破れ時に非表示）。
+  // 段数文字は点のためインセット非依存（破れマスの基点境界＝bp位置までのマスに番号を出す）。
   const uAxisLen = Math.hypot(toWorld(1, runV).x - toWorld(0, runV).x, toWorld(1, runV).y - toWorld(0, runV).y);
   const vAxisLen = Math.hypot(toWorld(runU, 1).x - toWorld(runU, 0).x, toWorld(runU, 1).y - toWorld(runU, 0).y);
   const limit1 = isInstall && inArm1 ? bpU - breakInset / uAxisLen : Infinity;
   const limit2 = isInstall && bpV != null ? (runV - bpV) - breakInset / vAxisLen : Infinity;
+  const numberLimit1 = isInstall && inArm1 ? bpU : Infinity;
+  const numberLimit2 = isInstall && bpV != null ? (runV - bpV) : Infinity;
 
   const midU = (runU + 1) / 2; // arm2 帯の幅方向中央（矢印用）
   const midV = (runV + 1) / 2; // arm1 帯の幅方向中央（矢印用）。段数字はNUM_OUTで外周部近くへ寄せる。
@@ -723,7 +735,7 @@ function buildLTurn(stair, b, { view, detail, riser, spans }) {
   emitRun(out, run1, pitch1, {
     treadLine: (u) => lineUV(u, runV, u, 1),
     labelPt:   (u) => toWorld(u, 1 - NUM_OUT),
-  }, { detail, limitMm: limit1 });
+  }, { detail, limitMm: limit1, numberLimitMm: numberLimit1 });
   if (drawCorner) {
     out.treads.push(lineUV(runU, runV, runU, 1)); // arm1→コーナー入口境界
     out.treads.push(lineUV(runU, runV, 1, runV)); // コーナー→arm2 出口境界
@@ -741,7 +753,7 @@ function buildLTurn(stair, b, { view, detail, riser, spans }) {
     emitRun(out, run2, pitch2, {
       treadLine: (mm) => lineUV(runU, runV - mm, 1, runV - mm),
       labelPt:   (mm) => toWorld(1 - NUM_OUT, runV - mm),
-    }, { detail, limitMm: limit2 });
+    }, { detail, limitMm: limit2, numberLimitMm: numberLimit2 });
   }
 
   const outline = [
@@ -814,7 +826,7 @@ function buildOpenWell(stair, b, { view, detail, riser }) {
   const awayDirRight  = unit(toWorld(runW, rV1).x - toWorld(runW, rV0).x, toWorld(runW, rV1).y - toWorld(runW, rV0).y);
   const awayDirTop    = unit(toWorld(0, aw).x - toWorld(runW, aw).x, toWorld(0, aw).y - toWorld(runW, aw).y);
 
-  // mm換算用の軸スケール（u/vは正規化単位のため）。破れ線が傾くぶん、踏面線・段数字は手前で止める。
+  // mm換算用の軸スケール（u/vは正規化単位のため）。破れ線が傾くぶん、踏面線は手前で止める。
   const uAxisLen = Math.hypot(toWorld(1, 0).x - toWorld(0, 0).x, toWorld(1, 0).y - toWorld(0, 0).y);
   const vAxisLen = Math.hypot(toWorld(0, 1).x - toWorld(0, 0).x, toWorld(0, 1).y - toWorld(0, 0).y);
 
@@ -870,6 +882,10 @@ function buildOpenWell(stair, b, { view, detail, riser }) {
   const limit1 = bpU1 != null ? bpU1 - breakInset / uAxisLen : Infinity;
   const limit2 = bpV  != null ? (rV0 - bpV) - breakInset / vAxisLen : (isInstall && inBottom ? 0 : Infinity);
   const limit3 = bpU3 != null ? (runW - bpU3) - breakInset / uAxisLen : (isInstall && !drawTop ? 0 : Infinity);
+  // 段数文字は点のためインセット非依存（破れマスの基点境界＝bp位置までのマスに番号を出す）
+  const numberLimit1 = bpU1 != null ? bpU1 : Infinity;
+  const numberLimit2 = bpV  != null ? (rV0 - bpV) : (isInstall && inBottom ? 0 : Infinity);
+  const numberLimit3 = bpU3 != null ? (runW - bpU3) : (isInstall && !drawTop ? 0 : Infinity);
 
   const midBottom = (1 - aw + 1) / 2; // 下アームの幅方向中心（既存の配置基準。踊場1の初段もここに揃える）
   const midRight  = (runW + 1) / 2;   // 右アームの幅方向中心（踊場2の初段もここに揃える）
@@ -877,7 +893,7 @@ function buildOpenWell(stair, b, { view, detail, riser }) {
   emitRun(out, run1, pitch1, {
     treadLine: (u) => lineUV(u, 1 - aw, u, 1),
     labelPt:   (u) => toWorld(u, midBottom),
-  }, { detail, limitMm: limit1 });
+  }, { detail, limitMm: limit1, numberLimitMm: numberLimit1 });
   if (drawLand1) {
     out.treads.push(lineUV(runW, 1 - aw, runW, 1));  // 踊場1入口境界（下アーム側）
     out.treads.push(lineUV(runW, 1 - aw, 1, 1 - aw)); // 踊場1出口境界（右アーム側）
@@ -889,7 +905,7 @@ function buildOpenWell(stair, b, { view, detail, riser }) {
     emitRun(out, run2, pitch2, {
       treadLine: (mm) => lineUV(runW, rV0 - mm, 1, rV0 - mm),
       labelPt:   (mm) => toWorld(midRight, rV0 - mm),
-    }, { detail, limitMm: limit2 });
+    }, { detail, limitMm: limit2, numberLimitMm: numberLimit2 });
   }
   if (drawLand2) {
     out.treads.push(lineUV(runW, aw, 1, aw));   // 踊場2入口境界（右アーム側）
@@ -902,7 +918,7 @@ function buildOpenWell(stair, b, { view, detail, riser }) {
     emitRun(out, run3, pitch3, {
       treadLine: (mm) => lineUV(runW - mm, 0, runW - mm, aw),
       labelPt:   (mm) => toWorld(runW - mm, aw / 2),
-    }, { detail, limitMm: limit3 });
+    }, { detail, limitMm: limit3, numberLimitMm: numberLimit3 });
   }
 
   // 外周（C 字）＋ 中央ウェル
