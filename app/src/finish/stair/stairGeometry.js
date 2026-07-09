@@ -10,6 +10,7 @@ const line = (p, q) => ({ x1: p.x, y1: p.y, x2: q.x, y2: q.y });
 const clamp01 = (t) => Math.max(0, Math.min(1, t));
 
 export const LABEL_OUT = 350; // mm — U/D ラベルを始点（踏面1本目線）の外側へ押し出す距離
+export const LANE_GAP = 100; // mm — 折返し・回り階段の往路・復路の間のあき（標準・詳細LOD。簡略は0を渡す）
 const NUM_GAP   = 1 / 4; // 段数数字を基点側の線（踏面線／踊場・周回部の入口境界線）から離す量（区間内比率）
 const NUM_OUT   = 0.15;  // 段数字を幅方向の外周側（隣接壁側）へ寄せる位置（外側端からの距離。レーン/アーム/全幅で共通利用）
 const TURN_OUT  = 0.7;   // 踊場・周回部（マスw≥2）の2段目以降を pivot→外周 の混合で外周部近くへ寄せる比率
@@ -456,7 +457,7 @@ function uTurnLayout(f, b, runA, runB, tread, spans) {
 // install の破れは常に踊場との接続部（復路の初段線＝tRun）。FL+1600/riser では位置決めしない。
 // 復路の段数字は install では表示しない（初段線位置＝破れの始点のため、初段に続き番号を置けない）。
 // 踏面線は、破れ線（対角）に触れるまで吹抜け側から描画できる分だけ描く。
-function buildSwitchback(stair, b, { view, detail, spans }) {
+function buildSwitchback(stair, b, { view, detail, spans, laneGapMm = 0 }) {
   const f = makeFrame(stair, b);
   const { parts, totalSteps } = stairParts(getSections(stair));
   const [runA, land, runB] = parts;
@@ -464,11 +465,18 @@ function buildSwitchback(stair, b, { view, detail, spans }) {
   const lineS = (t, s0, s1) => line(f.pt(t, s0), f.pt(t, s1));
   const isInstall = view === 'install';
   const c = (t, s) => f.pt(t, s);
+  // 往路・復路の間のあき（laneGapMm）。レーン内側端を中央(0.5)から半分ずつ逃がす
+  // （sA=往路内側／sB=復路内側。0なら sA=sB=0.5 で従来どおり中央仕切り1本）。
+  // 踊場（t≥tRun）は両レーンをまたぐ平場のため全幅のまま変えない。
+  const acrossLen = f.vertical ? (b.x2 - b.x1) : (b.y2 - b.y1);
+  const halfGap = Math.min(0.25, (laneGapMm / 2) / (acrossLen || 1));
+  const sA = 0.5 - halfGap, sB = 0.5 + halfGap;
+  const cA = sA / 2, cB = (sB + 1) / 2; // 各レーンの幅方向中心（矢印用）
 
   const out = { treads: [], stepNumbers: [] };
-  // 往路（レーンA s:0→0.5）
+  // 往路（レーンA s:0→sA）
   emitRun(out, runA, pitchA, {
-    treadLine: (mm) => lineS(tAt(mm), 0, 0.5),
+    treadLine: (mm) => lineS(tAt(mm), 0, sA),
     labelPt:   (mm) => f.pt(tAt(mm), NUM_OUT),        // 外側 s=0 寄せ
   }, { detail });
   // 踊場（両レーンをまたぐ平場）: 前縁境界（往路側・復路側）と番号
@@ -478,31 +486,34 @@ function buildSwitchback(stair, b, { view, detail, spans }) {
   // 初段=下手側（往路runA）と同じ幅方向位置（NUM_OUT）・同じ離れ（pitchA基準）で入口境界線近くに置く
   emitTurn(out, land, { entryPt: () => f.pt(tAt(laneLen + NUM_GAP * pitchA), NUM_OUT) }, { detail });
 
-  // 復路（レーンB s:0.5→1、踊場から base へ戻る）と、始点＝直進部2（復路）の初段＝踊場との
+  // 復路（レーンB s:sB→1、踊場から base へ戻る）と、始点＝直進部2（復路）の初段＝踊場との
   // 接続部（tRun）と外周部（s=1、隣接壁側）の交点に固定した破れ線を、共通の幾何から作る。
-  const widthMm = Math.hypot(c(tRun, 0.5).x - c(tRun, 1).x, c(tRun, 0.5).y - c(tRun, 1).y);
+  const widthMm = Math.hypot(c(tRun, sB).x - c(tRun, 1).x, c(tRun, sB).y - c(tRun, 1).y);
   let breakLine = null;
   let breakDiag = null; // 破れ線の対角（踏面線・矢印を正確に接続するため）
   if (isInstall) {
-    // 内側（s=0.5、吹抜け側）は「壁→吹抜け」×「踊場から離れる走行方向」を合成した向きへ30°傾け、
+    // 内側（s=sB、吹抜け側）は「壁→吹抜け」×「踊場から離れる走行方向」を合成した向きへ30°傾け、
     // upDirection/flipによらず踊場側へは確実に食い込まない（breakSymbolの世界座標基準"/"固定とは別）。
     const outerPt = extendBreakEndToCL(c(tRun, 1), b);
-    const acrossDir = unit(c(tRun, 0.5).x - c(tRun, 1).x, c(tRun, 0.5).y - c(tRun, 1).y);
-    const awayPt = c(tAt(laneLen - pitchB), 0.5); // レーンB内部（踊場から1ピッチ離れた参照点）
-    const awayDir = unit(awayPt.x - c(tRun, 0.5).x, awayPt.y - c(tRun, 0.5).y);
+    const acrossDir = unit(c(tRun, sB).x - c(tRun, 1).x, c(tRun, sB).y - c(tRun, 1).y);
+    const awayPt = c(tAt(laneLen - pitchB), sB); // レーンB内部（踊場から1ピッチ離れた参照点）
+    const awayDir = unit(awayPt.x - c(tRun, sB).x, awayPt.y - c(tRun, sB).y);
     breakDiag = breakDiagonalFrame(outerPt, acrossDir, awayDir);
-    breakLine = breakSymbolAwayFromLanding(outerPt, acrossDir, awayDir, widthMm).segs;
-    // 踏面線: 破れ線が届く深さD（吹抜け側）まで、各マス境界を吹抜け側(s=0.5)から
+    // 見た目の破れ線は始点=外周壁の中心線（outerPt）〜終点=レーン間の中心線（s=0.5、通り芯）。
+    // あき時もレーン内側端（sB）で止めず中心線まで延ばす。D（踏面の可視深さ）はレーン幅のまま。
+    const widthVis = Math.hypot(c(tRun, 0.5).x - outerPt.x, c(tRun, 0.5).y - outerPt.y);
+    breakLine = breakSymbolAwayFromLanding(outerPt, acrossDir, awayDir, widthVis).segs;
+    // 踏面線: 破れ線が届く深さD（吹抜け側）まで、各マス境界を吹抜け側(s=sB)から
     // 破れ線（対角）に触れる位置まで正確に描く。Dを超える境界はどの幅位置でも破れの奥（非表示）。
     const D = widthMm * Math.tan(BREAK_TILT);
     for (let k = 1; k < runB.cells; k++) {
       const depth = k * pitchB;
       if (depth >= D) break;
-      out.treads.push(line(f.pt(tAt(laneLen - depth), 0.5), breakDiag.atDepth(depth)));
+      out.treads.push(line(f.pt(tAt(laneLen - depth), sB), breakDiag.atDepth(depth)));
     }
   } else {
     emitRun(out, runB, pitchB, {
-      treadLine: (mm) => lineS(tAt(laneLen - mm), 0.5, 1),
+      treadLine: (mm) => lineS(tAt(laneLen - mm), sB, 1),
       labelPt:   (mm) => f.pt(tAt(laneLen - mm), 1 - NUM_OUT), // 外側 s=1 寄せ
     }, { detail });
   }
@@ -516,15 +527,17 @@ function buildSwitchback(stair, b, { view, detail, spans }) {
     seg(c(tRun, 0), c(1, 0)),    // 踊り場側面A
     seg(c(tRun, 1), c(1, 1)),    // 踊り場側面B
     seg(c(1, 0), c(1, 1)),       // 踊り場奥
-    seg(c(0, 0.5), c(tRun, 0.5)),// 中央仕切り（吹抜け側）
+    seg(c(0, sA), c(tRun, sA)),  // 中央仕切り（往路内側。あき時は2本になる）
+    ...(halfGap > 0 ? [seg(c(0, sB), c(tRun, sB))] : []), // 復路内側（あき時のみ）
   ];
 
-  // U字矢印: install(U)は往路中心を上り→踊り場中心を通って破れ線（対角、s=0.75位置）に突き当たるまで。
-  // upper(D)はいちばん大きい踏面番号側（復路基部＝かみがた）を始点に、番号の小さい方（往路基部）へ向かう。
-  const uArrowEnd = isInstall ? breakDiag.atPoint(f.pt(tRun, 0.75)) : f.pt(0, 0.75);
+  // U字矢印: install(U)は往路中心を上り→踊り場中心を通って破れ線（対角、復路レーン中心位置）に
+  // 突き当たるまで。upper(D)はいちばん大きい踏面番号側（復路基部＝かみがた）を始点に、
+  // 番号の小さい方（往路基部）へ向かう。
+  const uArrowEnd = isInstall ? breakDiag.atPoint(f.pt(tRun, cB)) : f.pt(0, cB);
   const arrows = [isInstall
-    ? uTurnArrow([f.pt(0, 0.25), f.pt(tMid, 0.25), f.pt(tMid, 0.75), uArrowEnd], 'U')
-    : uTurnArrow([f.pt(0, 0.75), f.pt(tMid, 0.75), f.pt(tMid, 0.25), f.pt(0, 0.25)], 'D')];
+    ? uTurnArrow([f.pt(0, cA), f.pt(tMid, cA), f.pt(tMid, cB), uArrowEnd], 'U')
+    : uTurnArrow([f.pt(0, cB), f.pt(tMid, cB), f.pt(tMid, cA), f.pt(0, cA)], 'D')];
 
   if (!isInstall) emitArrival(out, totalSteps, f.pt(0, 1 - NUM_OUT), detail);
   return { ...out, outline, arrows, breakLine };
@@ -535,7 +548,7 @@ function buildSwitchback(stair, b, { view, detail, spans }) {
 // install の破れは常に周回部との接続部（復路の初段線＝tRun）。FL+1600/riser では位置決めしない。
 // 復路の段数字は install では表示しない（初段線位置＝破れの始点のため、初段に続き番号を置けない）。
 // 踏面線は、破れ線（対角）に触れるまで吹抜け側から描画できる分だけ描く。
-function buildWinding(stair, b, { view, detail, spans }) {
+function buildWinding(stair, b, { view, detail, spans, laneGapMm = 0 }) {
   const f = makeFrame(stair, b);
   const { parts, totalSteps } = stairParts(getSections(stair));
   const [runA, turn, runB] = parts;
@@ -543,17 +556,24 @@ function buildWinding(stair, b, { view, detail, spans }) {
   const lineS = (t, s0, s1) => line(f.pt(t, s0), f.pt(t, s1));
   const isInstall = view === 'install';
   const c = (t, s) => f.pt(t, s);
+  // 往路・復路の間のあき（laneGapMm。折り返し階段と同じ）。周回部（t≥tRun）は全幅のまま。
+  const acrossLen = f.vertical ? (b.x2 - b.x1) : (b.y2 - b.y1);
+  const halfGap = Math.min(0.25, (laneGapMm / 2) / (acrossLen || 1));
+  const sA = 0.5 - halfGap, sB = 0.5 + halfGap;
+  const cA = sA / 2, cB = (sB + 1) / 2; // 各レーンの幅方向中心（矢印用）
 
   const out = { treads: [], stepNumbers: [] };
-  // 往路（レーンA s:0→0.5）
+  // 往路（レーンA s:0→sA）
   emitRun(out, runA, pitchA, {
-    treadLine: (mm) => lineS(tAt(mm), 0, 0.5),
+    treadLine: (mm) => lineS(tAt(mm), 0, sA),
     labelPt:   (mm) => f.pt(tAt(mm), NUM_OUT),        // 外側 s=0 寄せ
   }, { detail });
-  // 周回部（扇形）: 入口・出口境界と、pivot=(tRun,0.5) から外周（s0辺→奥t1辺→s1辺）へ放射するマス
-  out.treads.push(lineS(tRun, 0, 0.5));   // 入口境界（往路側）
-  out.treads.push(lineS(tRun, 0.5, 1));   // 出口境界（復路側）
-  const P = f.pt(tRun, 0.5);
+  // 周回部（扇形）: 入口・出口境界と、pivot から外周（s0辺→奥t1辺→s1辺）へ放射するマス。
+  // pivot はあき幅（sA..sB）のうち段数が低い方＝往路の内側端（tRun, sA）に置く。
+  // 出口境界はあき部の閉じ辺（sA..sB）と連続して sA→1 で描く（pivot への放射と同一直線）。
+  out.treads.push(lineS(tRun, 0, sA));    // 入口境界（往路側）
+  out.treads.push(lineS(tRun, sA, 1));    // あき閉じ辺＋出口境界（復路側）
+  const P = f.pt(tRun, sA);
   const perim = (u) => {
     if (u <= 1 / 3) { const k = u / (1 / 3);           return f.pt(tRun + k * (1 - tRun), 0); }
     if (u <= 2 / 3) { const k = (u - 1 / 3) / (1 / 3); return f.pt(1, k); }
@@ -566,31 +586,34 @@ function buildWinding(stair, b, { view, detail, spans }) {
     cellPt: (u) => radialMix(P, perim(u)),
     entryPt: () => f.pt(tAt(laneLen + NUM_GAP * pitchA), NUM_OUT),
   }, { detail });
-  // 復路（レーンB s:0.5→1）と、始点＝直進部2（復路）の初段＝周回部との接続部（tRun）と
+  // 復路（レーンB s:sB→1）と、始点＝直進部2（復路）の初段＝周回部との接続部（tRun）と
   // 外周部（s=1、隣接壁側）の交点に固定した破れ線を、共通の幾何から作る。
-  const widthMm = Math.hypot(c(tRun, 0.5).x - c(tRun, 1).x, c(tRun, 0.5).y - c(tRun, 1).y);
+  const widthMm = Math.hypot(c(tRun, sB).x - c(tRun, 1).x, c(tRun, sB).y - c(tRun, 1).y);
   let breakLine = null;
   let breakDiag = null; // 破れ線の対角（踏面線・矢印を正確に接続するため）
   if (isInstall) {
-    // 内側（s=0.5、吹抜け側）は「壁→吹抜け」×「周回部から離れる走行方向」を合成した向きへ30°傾け、
+    // 内側（s=sB、吹抜け側）は「壁→吹抜け」×「周回部から離れる走行方向」を合成した向きへ30°傾け、
     // upDirection/flipによらず周回部側へは確実に食い込まない（breakSymbolの世界座標基準"/"固定とは別）。
     const outerPt = extendBreakEndToCL(c(tRun, 1), b);
-    const acrossDir = unit(c(tRun, 0.5).x - c(tRun, 1).x, c(tRun, 0.5).y - c(tRun, 1).y);
-    const awayPt = c(tAt(laneLen - pitchB), 0.5); // レーンB内部（周回部から1ピッチ離れた参照点）
-    const awayDir = unit(awayPt.x - c(tRun, 0.5).x, awayPt.y - c(tRun, 0.5).y);
+    const acrossDir = unit(c(tRun, sB).x - c(tRun, 1).x, c(tRun, sB).y - c(tRun, 1).y);
+    const awayPt = c(tAt(laneLen - pitchB), sB); // レーンB内部（周回部から1ピッチ離れた参照点）
+    const awayDir = unit(awayPt.x - c(tRun, sB).x, awayPt.y - c(tRun, sB).y);
     breakDiag = breakDiagonalFrame(outerPt, acrossDir, awayDir);
-    breakLine = breakSymbolAwayFromLanding(outerPt, acrossDir, awayDir, widthMm).segs;
-    // 踏面線: 破れ線が届く深さD（吹抜け側）まで、各マス境界を吹抜け側(s=0.5)から
+    // 見た目の破れ線は始点=外周壁の中心線（outerPt）〜終点=レーン間の中心線（s=0.5、通り芯）。
+    // あき時もレーン内側端（sB）で止めず中心線まで延ばす。D（踏面の可視深さ）はレーン幅のまま。
+    const widthVis = Math.hypot(c(tRun, 0.5).x - outerPt.x, c(tRun, 0.5).y - outerPt.y);
+    breakLine = breakSymbolAwayFromLanding(outerPt, acrossDir, awayDir, widthVis).segs;
+    // 踏面線: 破れ線が届く深さD（吹抜け側）まで、各マス境界を吹抜け側(s=sB)から
     // 破れ線（対角）に触れる位置まで正確に描く。Dを超える境界はどの幅位置でも破れの奥（非表示）。
     const D = widthMm * Math.tan(BREAK_TILT);
     for (let k = 1; k < runB.cells; k++) {
       const depth = k * pitchB;
       if (depth >= D) break;
-      out.treads.push(line(f.pt(tAt(laneLen - depth), 0.5), breakDiag.atDepth(depth)));
+      out.treads.push(line(f.pt(tAt(laneLen - depth), sB), breakDiag.atDepth(depth)));
     }
   } else {
     emitRun(out, runB, pitchB, {
-      treadLine: (mm) => lineS(tAt(laneLen - mm), 0.5, 1),
+      treadLine: (mm) => lineS(tAt(laneLen - mm), sB, 1),
       labelPt:   (mm) => f.pt(tAt(laneLen - mm), 1 - NUM_OUT), // 外側 s=1 寄せ
     }, { detail });
   }
@@ -603,15 +626,16 @@ function buildWinding(stair, b, { view, detail, spans }) {
     seg(c(tRun, 0), c(1, 0)),     // 回り部側面A
     seg(c(1, 0), c(1, 1)),        // 回り部奥
     seg(c(1, 1), c(tRun, 1)),     // 回り部側面B
-    seg(c(0, 0.5), c(tRun, 0.5)), // 中央仕切り（吹抜け側）
+    seg(c(0, sA), c(tRun, sA)),   // 中央仕切り（往路内側。あき時は2本になる）
+    ...(halfGap > 0 ? [seg(c(0, sB), c(tRun, sB))] : []), // 復路内側（あき時のみ）
   ];
 
   // U字矢印: 折り返し階段と同じ（破れ線の対角に突き当たるまで延長）。
   const tMid = (tRun + 1) / 2;
-  const uArrowEnd = isInstall ? breakDiag.atPoint(f.pt(tRun, 0.75)) : f.pt(0, 0.75);
+  const uArrowEnd = isInstall ? breakDiag.atPoint(f.pt(tRun, cB)) : f.pt(0, cB);
   const arrows = [isInstall
-    ? uTurnArrow([f.pt(0, 0.25), f.pt(tMid, 0.25), f.pt(tMid, 0.75), uArrowEnd], 'U')
-    : uTurnArrow([f.pt(0, 0.75), f.pt(tMid, 0.75), f.pt(tMid, 0.25), f.pt(0, 0.25)], 'D')];
+    ? uTurnArrow([f.pt(0, cA), f.pt(tMid, cA), f.pt(tMid, cB), uArrowEnd], 'U')
+    : uTurnArrow([f.pt(0, cB), f.pt(tMid, cB), f.pt(tMid, cA), f.pt(0, cA)], 'D')];
 
   if (!isInstall) emitArrival(out, totalSteps, f.pt(0, 1 - NUM_OUT), detail);
   return { ...out, outline, arrows, breakLine };
@@ -703,7 +727,10 @@ function buildLTurn(stair, b, { view, detail, riser, spans }) {
     const widthMm = Math.hypot(bq.x - bp.x, bq.y - bp.y);
     const outerPt = extendBreakEndToCL(bq, b);
     breakDiag = breakDiagonalFrame(outerPt, acrossDir, awayDir);
-    breakLine = breakSymbolAwayFromLanding(outerPt, acrossDir, awayDir, widthMm).segs;
+    // 見た目の破れ線は始点=外周壁の中心線（outerPt）〜終点=吹抜け境界線（bp、通り芯）。
+    // widthMm（bq基準）のままだと outerPt の延長ぶん終点が境界の手前で止まる。
+    const widthVis = Math.hypot(bp.x - outerPt.x, bp.y - outerPt.y);
+    breakLine = breakSymbolAwayFromLanding(outerPt, acrossDir, awayDir, widthVis).segs;
     breakInset = breakInsetMm(widthMm);
     // コーナーとの接続部（v=runV）に始点を固定した場合（inCorner）、arm2は全非表示になるが、
     // 破れ線が届く深さD（吹抜け側、mm）までは、各マス境界を吹抜け側(u=runU)から
@@ -855,7 +882,10 @@ function buildOpenWell(stair, b, { view, detail, riser }) {
     const widthMm = Math.hypot(bq.x - bp.x, bq.y - bp.y);
     const outerPt = extendBreakEndToCL(bq, b);
     const breakDiag = breakDiagonalFrame(outerPt, acrossDir, awayDir);
-    breakLine = breakSymbolAwayFromLanding(outerPt, acrossDir, awayDir, widthMm).segs;
+    // 見た目の破れ線は始点=外周壁の中心線（outerPt）〜終点=ウェル境界線（bp、通り芯）。
+    // widthMm（bq基準）のままだと outerPt の延長ぶん終点が境界の手前で止まる。
+    const widthVis = Math.hypot(bp.x - outerPt.x, bp.y - outerPt.y);
+    breakLine = breakSymbolAwayFromLanding(outerPt, acrossDir, awayDir, widthVis).segs;
     breakInset = breakInsetMm(widthMm);
     const D = widthMm * Math.tan(BREAK_TILT); // 破れ線が届く最大深さ（mm、ウェル側）
     // 踊場との接続部に始点を固定した場合（右アーム入口＝bs===land1.numberStart、上アーム入口＝
@@ -952,8 +982,11 @@ function buildOpenWell(stair, b, { view, detail, riser }) {
  * @param {import('@core').Stair} stair - 階段（スカラ属性のみ参照。cells は不使用）
  * @param {{ x1,y1,x2,y2 }} b - 設置エリアの包絡矩形（ワールド座標。呼び出し側で解決）
  * @param {{ view:'install'|'upper', detail:boolean, riser:number|null,
- *           spans?:{lengths:number[]}|null }} opts
+ *           spans?:{lengths:number[]}|null, laneGapMm?:number }} opts
  *   spans … セル割りから実測した区間長（measureStairSpans）。区間長指定の反映用。null なら合成。
+ *   laneGapMm … 折返し・回り階段（SWITCHBACK/WINDING）の往路・復路の間のあき(mm)。
+ *   標準・詳細LODは LANE_GAP、簡略LODは0（従来どおり中央仕切り1本）を渡す。
+ *   回り階段の扇形 pivot はあき幅のうち段数が低い方＝往路の内側端（tRun, sA）。
  * @returns {{
  *   treads:{x1,y1,x2,y2}[], outline:{x1,y1,x2,y2,dashed}[],
  *   arrows:{x1,y1,x2,y2,labelX,labelY,label}[], breakLine:{x1,y1,x2,y2}[]|null,

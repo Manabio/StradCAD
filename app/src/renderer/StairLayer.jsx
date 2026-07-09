@@ -1,7 +1,8 @@
 import { observer } from 'mobx-react-lite';
 import { Group, Line, Text, Shape, Circle } from 'react-konva';
-import { buildStairGeometry, LABEL_OUT } from '../finish/stair/stairGeometry.js';
+import { buildStairGeometry, LABEL_OUT, LANE_GAP } from '../finish/stair/stairGeometry.js';
 import { outlineSegments } from '../finish/gridCells.js';
+import { LodLevel } from '../viewport.js';
 
 const STAIR_STROKE = '#1e293b';
 const CHEVRON_ANGLE = Math.PI / 7; // 矢じり(^)の開き角
@@ -125,6 +126,9 @@ export const StairLayer = observer(({
 }) => {
   const px = (w) => w / viewport.scaleX; // ズーム非依存の線幅
 
+  // 折返し階段の往路・復路の間のあき。簡略LODのみ0（中央仕切り1本）、標準・詳細はLANE_GAP。
+  const laneGapMm = viewport.lodLevel === LodLevel.SCHEMATIC ? 0 : LANE_GAP;
+
   // 1パス目: 全エントリの幾何を先に計算する（矢印クリップで他エントリ＝自階installの
   // breakLine を参照するため、レンダーの前に install 分を含め解決しておく必要がある）。
   const resolved = entries.map((e) => {
@@ -132,7 +136,7 @@ export const StairLayer = observer(({
     if (!b || ![b.x1, b.y1, b.x2, b.y2].every(Number.isFinite) || b.x2 <= b.x1 || b.y2 <= b.y1) {
       return null;
     }
-    return { e, geom: buildStairGeometry(stair, b, { view, detail, riser, spans }) };
+    return { e, geom: buildStairGeometry(stair, b, { view, detail, riser, spans, laneGapMm }) };
   });
   const installGeomById = new Map(
     resolved.filter(r => r && r.e.view === 'install').map(r => [r.e.id, r.geom]),

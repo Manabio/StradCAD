@@ -1,4 +1,4 @@
-import { buildStairGeometry, makeFrame, stairSegmentDims, insetStairBounds } from './stairGeometry.js';
+import { buildStairGeometry, makeFrame, stairSegmentDims, insetStairBounds, LANE_GAP } from './stairGeometry.js';
 import { DEFAULT_GAP_PX, orderDimsByLength, resolveDimOverlaps } from '../../structural/sectionFigure/sectionGeometry.js';
 
 // ================================================================
@@ -24,7 +24,7 @@ function gapMm(scale, b) {
 // scale は annotatedFigure が決めた縮尺（注記の隙間を px 一定にするため）。
 // spans はセル実測の区間長（measureStairSpans。区間長指定の反映用。null なら合成）。
 export function stairFigurePrimitives(stair, b, { riser = null, scale = null, spans = null } = {}) {
-  const geom = buildStairGeometry(stair, b, { view: 'upper', detail: true, riser, spans });
+  const geom = buildStairGeometry(stair, b, { view: 'upper', detail: true, riser, spans, laneGapMm: LANE_GAP });
   const prims = [];
 
   // 外周（実線／dashed は破線）

@@ -49,6 +49,9 @@ L_TURN/FLAREDはlengthsに加えアーム幅（widths）も実測し、アーム
 - OPEN_WELL: 3直進部+2踊場をC字にたどる独自frame写像（makeFrameを使わない）
 - 破断線対角（breakDiagonalFrame）のacrossDirは必ず「壁（外周）→吹抜け・ウェル」向きに渡す。
   逆符号だと破断記号が壁の外側へ描かれる（過去の不良）
+- 見た目の破れ線の始点・終点は中心線・通り芯にとめる: 始点=外周壁CL（extendBreakEndToCL）、
+  終点=内側の通り芯（U字=レーン間中心線s=0.5、L字・中空き=吹抜け・ウェル境界線）。
+  レーンあき（LANE_GAP）やinset端で止めない（widthVisで延長。D・breakInsetは実幅のまま）
 
 ## UIは踏面数でたずねる
 図中編集の区間寸法は踏面数（マス数）で表示・入力し、sections（実段数）への換算
