@@ -159,24 +159,39 @@ export const StairLayer = observer(({
     // cellsBeyondBreak で全タイプ単一ソース判定済み）に中点が入る踏面だけを残し、install が描く
     // 手前側と重複する踏面を間引く。install エントリ自身も beyondBreakBounds を持つ（重なる upper
     // へ渡すため）ので、installOverlap でガードしないと自階の手前踏面まで間引かれてしまう。
-    // 破れ線（install の実 polyline）を跨ぐ踏面はセル粒度の中点判定だけでは全幅のまま手前側へ
-    // はみ出すため、install の breakLine と交差する踏面だけは「破れ線交点〜先側端点」の部分
-    // 線分にクリップする（先側＝両端点のうち beyondBreakBounds に入る方。両端点とも内包/
-    // 非内包で先側を決められない場合は安全側で中点判定にフォールバック）。交差しない踏面は
-    // 従来どおり中点判定のまま（挙動を変えない）。
+    // 破れ線（install の実 polyline）を跨ぐ踏面は「破れ線交点〜先側端点」の部分線分にクリップして
+    // 破れ線どまりにする。先側の判定はセル粒度の beyondBreakBounds 内外では決められない
+    // （破れ線は斜めにセル内へ食い込むため、破れ線際の踏面は両端点とも先セル内になり、
+    // 全幅のまま破れ線を突き抜ける過去の不良）。破れ線の弦（ジョグを無視した両端点の直線）に
+    // 対する側で判定し、「先側」の符号は先セル群の重心が弦のどちら側かで決める。
+    // 交差しない踏面は従来どおり中点判定のまま（弦を無限直線として遠方の踏面に適用すると
+    // L字等で誤判定するため、弦の側判定は交差する＝破れ線際の踏面に限る）。
     // beyondBreakBounds が空/未提供（cellsBeyondBreak が導出不能で空 Set を返した場合を含む）
     // なら安全側でフィルタなし（現状どおり全描画。二重線は残るが破綻しない）。
+    let breakChord = null;
+    if (installBreakLine?.length > 0 && e.beyondBreakBounds?.length > 0) {
+      const a = installBreakLine[0];
+      const z = installBreakLine[installBreakLine.length - 1];
+      const ox = a.x1, oy = a.y1, dx = z.x2 - ox, dy = z.y2 - oy;
+      const side = (x, y) => Math.sign(dx * (y - oy) - dy * (x - ox));
+      let cx = 0, cy = 0;
+      for (const bb of e.beyondBreakBounds) { cx += (bb.x1 + bb.x2) / 2; cy += (bb.y1 + bb.y2) / 2; }
+      const beyondSign = side(cx / e.beyondBreakBounds.length, cy / e.beyondBreakBounds.length);
+      if (beyondSign !== 0) breakChord = { side, beyondSign };
+    }
     const treadSegs = e.installOverlap && e.beyondBreakBounds?.length > 0
       ? geom.treads.reduce((acc, s) => {
           const crossing = findBreakCrossing(s, installBreakLine);
-          if (crossing) {
-            const p1In = pointInBounds(e.beyondBreakBounds, s.x1, s.y1);
-            const p2In = pointInBounds(e.beyondBreakBounds, s.x2, s.y2);
-            if (p1In !== p2In) {
-              acc.push(p1In ? { ...s, x2: crossing.x, y2: crossing.y } : { ...s, x1: crossing.x, y1: crossing.y });
+          if (crossing && breakChord) {
+            const s1 = breakChord.side(s.x1, s.y1);
+            const s2 = breakChord.side(s.x2, s.y2);
+            if (s1 !== s2) {
+              if (s1 === breakChord.beyondSign) acc.push({ ...s, x2: crossing.x, y2: crossing.y });
+              else if (s2 === breakChord.beyondSign) acc.push({ ...s, x1: crossing.x, y1: crossing.y });
+              // どちらの端点も先側でない（弦上の退化）→ 全体が破れ手前＝描かない
               return acc;
             }
-            // 両端点とも同じ内外判定 → 先側を決められない。中点判定へフォールバック（下に続く）
+            // 両端点が同じ側（ジョグ突起だけを掠めた交差等）→ 中点判定へフォールバック（下に続く）
           }
           const mx = (s.x1 + s.x2) / 2, my = (s.y1 + s.y2) / 2;
           if (pointInBounds(e.beyondBreakBounds, mx, my)) acc.push(s);
