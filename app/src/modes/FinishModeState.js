@@ -254,11 +254,6 @@ export class FinishModeState {
     return this._composition?.exteriorWallDims(graph, this.materialMap) ?? null;
   }
 
-  /** エッジの詳細断面バンド（LOD詳細描画用）。未解決なら null。 */
-  resolveEdgeSection(edge, graph, cellToRoom) {
-    return this._composition?.resolveEdgeSection(edge, graph, this.materialMap, cellToRoom) ?? null;
-  }
-
   // 選択は連結領域単位。短縮CLでL字化した領域は、内部のどこを指しても
   // 構成セル全部をまとめて拾う（先頭はポインタ直下のセル）
   //

@@ -34,9 +34,8 @@ import { measureStairSpans } from './finish/stair/stairClassify.js';
 import { cellsBeyondBreak } from './finish/stair/stairGeometry.js';
 import { roomBounds, cellBoundsList } from './finish/gridCells.js';
 import { generateRoomWallsFromOutline, generateExteriorWalls, snapshotWall, restoreWallsFromSnapshots } from './finish/wallGeneration.js';
-import { snapshotEdges, restoreEdges, syncEdgesFromTopology, buildCellToRoom } from './finish/edgeClassify.js';
+import { snapshotEdges, restoreEdges, syncEdgesFromTopology } from './finish/edgeClassify.js';
 import { reinterpretRoomsOnEntry, snapshotRoomsState, restoreRoomsState } from './finish/roomReinterpret.js';
-import { EdgeSectionLayer } from './renderer/EdgeSectionLayer.jsx';
 import { RoomLabelsLayer } from './renderer/RoomLabelsLayer.jsx';
 import { StructuralLayer, ColumnsLayer } from './renderer/StructuralLayer.jsx';
 import { MemberTagLayer } from './renderer/MemberTagLayer.jsx';
@@ -2988,15 +2987,6 @@ const App = observer(() => {
                       setMemberFocusRequest({ mapName, tag: entity.memberNo, fieldKey: PRIMARY_DIMENSION_FIELD_BY_MAP[mapName] ?? null });
                     }}
                     onStatusMenuRequest={(entity, pos) => setStatusMenu({ entity, pos })}
-                  />
-                )}
-                {/* LOD 詳細: 仕上げモードかつ詳細レベル時、壁の層構成断面を ShapesLayer の帯の上に重ねて描画 */}
-                {appMode === 'finish' && mode?.materialMap && viewport.lodLevel === LodLevel.DETAIL && (
-                  <EdgeSectionLayer
-                    graph={graph}
-                    viewport={viewport}
-                    cellToRoom={buildCellToRoom(graph)}
-                    resolveEdgeSection={(edge, g, c2r) => modeRef.current?.resolveEdgeSection(edge, g, c2r) ?? null}
                   />
                 )}
                 {appMode === 'floorplan' && (
