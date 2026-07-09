@@ -21,7 +21,7 @@ import {
 } from './core/constants.js';
 
 export {
-  Discipline, ShapeType, OpeningCategory, ShapeKind, CenterLineType, RoomKind,
+  Discipline, ShapeType, OpeningCategory, ShapeKind, CenterLineType, RoomKind, RoomFeature,
   StairType, StructuralMaterialType, LINE_WEIGHT_MM, DimensionKind, DimensionSide,
   DEFAULT_INTERIOR_WALL_PANEL, DEFAULT_EXTERIOR_WALL_BACKING,
   DEFAULT_INTERIOR_WALL_BACKING, DEFAULT_CEILING_BACKING, DEFAULT_FLOOR_BACKING,
@@ -634,12 +634,13 @@ export class ExteriorFinishRow {
 // cells は Set<string> — cellKey(xLeftCL, yTopCL) の集合
 export class Room {
   constructor(id, name = '', cells = new Set(), referenceRoomIds = new Set(),
-              kind = RoomKind.INTERIOR, templateKey = null) {
+              kind = RoomKind.INTERIOR, templateKey = null, feature = null) {
     this.id               = id;
     this.name             = name;
     this.cells            = cells;
     this.referenceRoomIds = referenceRoomIds; // 判定3: 参照先部屋IDセット
-    this.kind             = kind; // 内外区分: 屋内 / 吹抜け / 屋外
+    this.kind             = kind; // 内外区分（base軸）: 屋内 / 屋外
+    this.feature          = feature; // 属性軸: 'stair' | 'void' | null（なし）
     this.templateKey      = templateKey;      // 内装マスターへのポインタ（null = 未指定）
     this.customOverrides  = observable.map(); // 個別上書きポケット（壁・天井フィールドのみ）
     this.finish           = new RoomFinish();
@@ -651,6 +652,7 @@ export class Room {
       cells:            observable,
       referenceRoomIds: observable,
       kind:             observable,
+      feature:          observable,
       templateKey:      observable,
       namePosition:     observable.ref,
       floorLevel:       observable,
@@ -659,6 +661,7 @@ export class Room {
       removeCell:       action,
       setCells:         action,
       setKind:          action,
+      setFeature:       action,
       setTemplateKey:   action,
       setOverride:      action,
       clearOverride:    action,
@@ -671,6 +674,7 @@ export class Room {
   removeCell(key)            { this.cells.delete(key); }
   setCells(cells)            { this.cells = cells; }
   setKind(kind)              { this.kind = kind; }
+  setFeature(feature)        { this.feature = feature; } // 'stair' | 'void' | null
   setNamePosition(x, y)     { this.namePosition = { x, y }; }
   setFloorLevel(mm)         { this.floorLevel = mm; } // mm | null（null = 階基準どおり）
 
@@ -721,6 +725,7 @@ export class Stair {
     upDirection = 'right', // 昇り方向 'up'|'down'|'left'|'right'（向き推定結果）
     flip        = false,
     sections    = null,    // 区間別・実段数（歩行順。偶数=直進部、奇数=踊場・周回部）。未指定はnull
+    roomId      = null,    // 変換元 Room の ID（旧データ・上階自動設置分は null）
   } = {}) {
     this.id          = id;
     this.type        = type;
@@ -734,6 +739,7 @@ export class Stair {
     this.upDirection = upDirection;
     this.flip        = flip;
     this.sections    = sections;
+    this.roomId      = roomId;
     makeObservable(this, {
       type:        observable,
       structure:   observable,
@@ -746,6 +752,7 @@ export class Stair {
       upDirection: observable,
       flip:        observable,
       sections:    observable.ref,
+      roomId:      observable,
       setField:    action,
       setCells:    action,
     });

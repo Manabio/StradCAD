@@ -2,6 +2,7 @@ import { observer } from 'mobx-react-lite';
 import { Rect, Text, Line, Group, Shape } from 'react-konva';
 import { getAllCells, gridDividerSegments, cellBoundsFromKey, cellBoundsList, roomBounds, outlineSegments } from './gridCells.js';
 import { computeExteriorWallSegments } from './wallGeneration.js';
+import { RoomFeature } from '@core';
 
 const EXTERIOR_WALL_WIDTH = 4; // px（ズームに依らない太線幅）
 
@@ -17,7 +18,6 @@ export const FinishModeLayer = observer(({
   graph,
   viewport,
   selectedRoomId,
-  onSelectRoom,
   previewCells = [],
 }) => {
   // extent を尊重した実在セルのみ列挙してグリッド背景を塗る。
@@ -46,9 +46,12 @@ export const FinishModeLayer = observer(({
 
   // 既存部屋の塗り。セルごとの Rect だと接する辺に塗りの継ぎ目や選択枠の
   // 内部線（L字領域の実在しない分割線）が出るため、部屋全体を1パスで塗り、
-  // 選択枠は共有辺を打ち消した外周線分で描く
+  // 選択枠は共有辺を打ち消した外周線分で描く。
+  // 選択は startDrag/commitDrag に一本化（listening={false}。部分指定/親のクリック競合を避ける）。
   const roomRects = [];
   graph.rooms.forEach((room, idx) => {
+    // 階段（feature===STAIR）は StairLayer 側が塗り・選択・名前表示を担当するため二重描画を避ける。
+    if (room.feature === RoomFeature.STAIR) return;
     const isSelected = room.id === selectedRoomId;
     const boundsList = cellBoundsList(room.cells, graph);
     if (boundsList.length > 0) {
@@ -62,8 +65,7 @@ export const FinishModeLayer = observer(({
           }}
           fill={roomColor(idx)}
           opacity={isSelected ? 0.85 : 0.55}
-          onClick={() => onSelectRoom(room.id)}
-          onTap={() => onSelectRoom(room.id)}
+          listening={false}
         />
       );
       if (isSelected) {
@@ -120,8 +122,7 @@ export const FinishModeLayer = observer(({
             verticalAlign="middle"
             offsetX={fontSize * room.name.length * 0.3}
             offsetY={fontSize / 2}
-            onClick={() => onSelectRoom(room.id)}
-            onTap={() => onSelectRoom(room.id)}
+            listening={false}
           />
         );
       }

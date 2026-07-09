@@ -31,7 +31,7 @@ function getShape(graph, id) {
 const REGION = Object.freeze({
   ANON_EXTERIOR:  'anonExterior',  // 無名屋外（部屋なし＝建物外部）
   NAMED_EXTERIOR: 'namedExterior', // 有名屋外（RoomKind.EXTERIOR）
-  INTERIOR:       'interior',      // 屋内（INTERIOR / VOID）
+  INTERIOR:       'interior',      // 屋内（kind !== EXTERIOR。feature の階段・吹抜けは無関係）
 });
 
 function regionOf(room) {

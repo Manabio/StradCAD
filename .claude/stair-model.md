@@ -61,3 +61,9 @@ L_TURN/FLAREDはlengthsに加えアーム幅（widths）も実測し、アーム
 - 破れ線の位置判定（クリック・ヒット領域用の`cellsBeyondBreak`）は描画側buildと同じ関数
   （`lTurnBreakState`等）を共有する。破れ位置ルールを変えるときは片側だけ直さないこと。
 - OPEN_WELL のアーム長は正規化固定比（aw）で、セル実測をまだ反映しない（L_TURN/FLAREDは反映済み）。
+- 上り口ヒント（階段指定時の選択順セル。`classifyStairArea`の`entryCellKeys`）が昇り方向へ
+  効くのは STRAIGHT/STRAIGHT_LANDING のみ。L字・U字・中空きは`(upDirection, flip)`が
+  コーナー・折返しの実位置に一意対応し「どちらの腕から歩き始めるか」を表す自由度が
+  モデルに無い（歩行レーン識別を持たない）ため適用不可——反転させると正規化コーナー位置が
+  実セル形状と矛盾する。対応するには階段モデル自体の拡張が必要。
+- 階段はRoomを残したまま設置する（`Stair.roomId`リンク。理由と不変条件は`.claude/data-model.md`）。

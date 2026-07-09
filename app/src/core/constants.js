@@ -42,11 +42,20 @@ export const CenterLineType = Object.freeze({
   RADIAL:     'R',  // 放射中心線 — value = 角度(度),  挿入順で  R1, R2, ...
 });
 
-// 部屋の内外区分
+// 部屋の内外区分（base軸）
+// Room.kind に代入してよいのは INTERIOR / EXTERIOR のみ。
+// VOID は旧データ（FlatBuffers等）のデコード時にのみ現れる値で、読込時に
+// { kind: INTERIOR, feature: RoomFeature.VOID } へ移行する（書き込みは常に新形式）。
 export const RoomKind = Object.freeze({
   INTERIOR: 'interior',  // 屋内
-  VOID:     'void',      // 吹抜け
+  VOID:     'void',      // 旧データ移行専用（新規に設定しない）
   EXTERIOR: 'exterior',  // 屋外
+});
+
+// 部屋の属性軸（feature） — kind とは独立。相互排他・個別ON/OFF可。null = なし。
+export const RoomFeature = Object.freeze({
+  STAIR: 'stair',  // 階段
+  VOID:  'void',   // 吹抜け
 });
 
 // 階段タイプ（MVPは STRAIGHT のみ実装。他は順次拡張）

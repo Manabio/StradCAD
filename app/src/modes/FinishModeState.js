@@ -1,10 +1,11 @@
 import { makeObservable, observable, action, computed, runInAction } from 'mobx';
-import { regionCellsAt, refreshCells, cellBoundsFromKey, cellBoundsList } from '../finish/gridCells.js';
+import { regionCellsAt, refreshCells, cellBoundsFromKey, cellBoundsList, worldToCell } from '../finish/gridCells.js';
 import { classifyStairArea } from '../finish/stair/stairClassify.js';
 import { cellsBeyondBreak } from '../finish/stair/stairGeometry.js';
 import { floorHeightAbove } from '../finish/stair/stairDimensions.js';
 import { floorSwapManager } from '../storage/FloorSwapManager.js';
 import { ERR_MATERIAL_MISMATCH } from '../error.js';
+import { RoomFeature } from '@core';
 
 function setsEqual(a, b) {
   if (a.size !== b.size) return false;
@@ -22,9 +23,13 @@ const MATERIAL_CODE_GRAPH_FIELDS    = [
 const MATERIAL_CODE_OVERRIDE_FIELDS = ['wallMaterial', 'wallFinish'];               // Room.customOverrides
 
 export class FinishModeState {
-  dragState      = null; // { currentCell, visitedCells: Map, stairKeys: Set } | null
+  dragState      = null; // { currentCell, visitedCells: Map, stairKeys: Set, startCellKey } | null
   selectedRoomId = null;
   namingRoomId   = null;
+  namingIsNew    = false; // namingRoomId が新規作成（commitDragでaddRoom）か既存部屋選択かのフラグ
+  // commitDragでダイアログを開いたときの選択順セルキー配列（非observable。フェーズ4: 階段変換時の
+  // 上り口ヒントに使う。startDrag優先1の階段選択経路では設定しない）。ダイアログを閉じる際にクリア。
+  namingCellOrder = null;
   selectedStairId = null;
 
   // ---- 直下階の階段（見下げ表示のヒット判定用。init() で peek しロード） ----
@@ -41,7 +46,7 @@ export class FinishModeState {
     this.graph = graph;
     this.project = project;
     this._disposed = false; // dispose() 後の非同期継続（_loadLowerStairs 等）の書き込みを止めるガード
-    // 仕上げモード突入後に finishNaming() で確定した Room ID を記録する。
+    // 仕上げモード突入後に applyNaming() で確定した Room ID を記録する。
     // FinishModeState はモード切替のたびに new で生成されるため、
     // フロアプランモードに戻ると自動的にリセットされる。
     this.sessionModifiedRoomIds = new Set();
@@ -49,6 +54,7 @@ export class FinishModeState {
       dragState:      observable.ref,
       selectedRoomId: observable,
       namingRoomId:   observable,
+      namingIsNew:    observable,
       selectedStairId: observable,
       lowerStairs:     observable.ref,
       materialsLoaded: observable,
@@ -61,12 +67,13 @@ export class FinishModeState {
       commitDrag:   action,
       cancelDrag:   action,
       selectRoom:   action,
-      finishNaming: action,
+      applyNaming:  action,
       cancelNaming: action,
       deleteRoom:   action,
+      deleteFromDialog: action,
       selectStair:  action,
       deleteStair:  action,
-      convertRoomToStair: action,
+      revertStairToRoom:  action,
     });
   }
 
@@ -256,11 +263,15 @@ export class FinishModeState {
   // 構成セル全部をまとめて拾う（先頭はポインタ直下のセル）
   //
   // 階段クリックの優先順位（ポインタ直下 wx,wy で判定）:
-  //   1. 自階階段のセルかつ破れ線手前          → その自階階段を選択
-  //   2. 自階階段のセルで破れ線先＋下階階段あり → 下階階段を選択（見下げクリック）
-  //   3. 自階に階段が無い＋下階階段あり         → 下階階段を選択（見下げクリック）
+  //   1. 自階階段のセルかつ破れ線手前          → その自階階段を選択（roomIdのRoomがあればダイアログも開く＝既存扱い）
+  //   2. 自階階段のセルで破れ線先＋下階階段あり → 下階階段を選択（見下げクリック。ダイアログなし）
+  //   3. 自階に階段が無い＋下階階段あり         → 下階階段を選択（見下げクリック。ダイアログなし）
   //   4. 自階階段のセルで破れ線先＋下階階段なし → 階段下エリアとして部屋ドラッグを許可
   startDrag(wx, wy) {
+    // 開いているダイアログがあればまず閉じる（キャンバスクリックで閉じる）。
+    // namingIsNew（新規部屋）なら現行どおり削除、既存部屋なら選択維持のまま閉じるだけ（cancelNaming参照）。
+    if (this.namingRoomId) this.cancelNaming(this.namingRoomId);
+
     const region = regionCellsAt(wx, wy, this.graph);
     if (region.length === 0) return;
 
@@ -278,7 +289,14 @@ export class FinishModeState {
     if (stair) {
       const beyond = this._beyondBreakOf(stair, stairCells);
       if (!beyond.has(pointerKey)) {
-        this._selectStair(stair.id); // 優先1: 自階階段（破れ線手前）
+        // 優先1: 自階階段（破れ線手前）— stair.roomId の Room があれば既存扱いでダイアログも開く
+        // （上り口ヒントは不要 — 選択順セルキーが無い経路のため namingCellOrder は明示的にクリアする）
+        this._selectStair(stair.id);
+        if (stair.roomId && this.graph.roomMap.has(stair.roomId)) {
+          this.namingIsNew     = false;
+          this.namingRoomId    = stair.roomId;
+          this.namingCellOrder = null;
+        }
         return;
       }
       const lower = this._lowerStairForPoint(wx, wy);
@@ -307,6 +325,7 @@ export class FinishModeState {
       currentCell: cells[0],
       visitedCells: new Map(cells.map(c => [c.key, c])),
       stairKeys,
+      startCellKey: cells[0].key, // ドラッグ開始セル（階段セル除外後）。commitDragの所属判定に使う
     };
   }
 
@@ -325,11 +344,25 @@ export class FinishModeState {
     }
   }
 
+  /**
+   * 選択状態表（判定はドラッグ開始セル startCellKey で行う）:
+   *   完全一致                 → 全体選択・既存ダイアログ                              [判定1]
+   *   複数部屋を完全包含        → 統合（dominantに吸収）・既存ダイアログ                [判定2]
+   *   開始セルが部分指定        → その部分指定を全体選択・既存ダイアログ                [判定3-部分指定]
+   *   開始セルが親/単一の名前セル → その部屋を全体選択・既存ダイアログ                   [判定3-名前セル]
+   *   開始セルが親/単一のその他セル → 新規部分指定（cells=newCells∩その部屋）・新規ダイアログ [判定3-その他セル]
+   *   開始セルが未指定           → 新規部屋（newCellsから全部屋所属セルを除外）・新規ダイアログ [判定3-未指定]
+   * 階段エリアのセル（開始セルが自階階段）は startDrag 側で既にダイアログまで処理済みで
+   * commitDrag には到達しない。feature=STAIR の部屋は cells ドリフトに備えて防御的に除外する。
+   */
   commitDrag() {
     const state = this.dragState;
     if (!state) return;
     const newCells = new Set(state.visitedCells.keys());
     if (newCells.size === 0) { this.dragState = null; return; }
+    const startCellKey = state.startCellKey;
+    // ダイアログを開く際に渡す選択順セルキー配列（挿入順。フェーズ4の上り口ヒント用）
+    const cellOrder = [...state.visitedCells.keys()];
 
     // 部屋の保存済みセルは指定時点のグリッド分割を凍結したキーであり、その後
     // floorplanモードで領域内部に区切りCLが追加されると現在のキーと一致しなく
@@ -340,158 +373,120 @@ export class FinishModeState {
       return cellsCache.get(r.id);
     };
 
-    const overlapping = this.graph.rooms.filter(r =>
-      [...cellsOf(r)].some(c => newCells.has(c))
-    );
+    const rooms = this.graph.rooms.filter(r => r.feature !== RoomFeature.STAIR);
+    const overlapping = rooms.filter(r => [...cellsOf(r)].some(c => newCells.has(c)));
 
-    // 判定0: 重複なし — 新規部屋として登録
-    if (overlapping.length === 0) {
-      const room = this.graph.addRoom(newCells);
-      this.dragState      = null;
-      this.namingRoomId   = room.id;
-      this.selectedRoomId = room.id;
-      return;
-    }
+    if (overlapping.length > 0) {
+      // 判定1: 既存部屋と完全一致 — 全体選択・既存ダイアログ（セルは変えない）
+      const exactMatch = overlapping.find(r => setsEqual(cellsOf(r), newCells));
+      if (exactMatch) { this._openDialog(exactMatch.id, false, cellOrder); return; }
 
-    // 判定1: 既存部屋と完全一致 — リネームのみ（セルは変えない）
-    const exactMatch = overlapping.find(r => setsEqual(cellsOf(r), newCells));
-    if (exactMatch) {
-      this.dragState      = null;
-      this.namingRoomId   = exactMatch.id;
-      this.selectedRoomId = exactMatch.id;
-      return;
-    }
-
-    // 判定2: 重複する全部屋が newCells に包含される — 拡張・統合
-    // （例: A部屋とB部屋を合わせてドラッグ → 一つの大きな部屋に）
-    const allContained = overlapping.every(r =>
-      [...cellsOf(r)].every(c => newCells.has(c))
-    );
-    if (allContained) {
-      const dominant = overlapping.reduce((a, b) =>
-        cellsOf(b).size > cellsOf(a).size ? b : a
-      );
-      dominant.setCells(newCells);
-      dominant.generatedWallIds.clear();
-      for (const r of overlapping) {
-        if (r.id !== dominant.id) this.graph.removeRoom(r.id);
-      }
-      this.dragState      = null;
-      this.namingRoomId   = dominant.id;
-      this.selectedRoomId = dominant.id;
-      return;
-    }
-
-    // 判定S: 「参照元 R + その部分指定」構造で newCells が収まるか確認
-    //
-    // 条件:
-    //   1. overlapping 内に「参照元（referenceRoomIds 空）かつ newCells ⊆ R.cells」な部屋 R がある
-    //   2. overlapping の残りは全て R の部分指定（R を参照している子部屋）
-    const mainRoom = overlapping.find(r =>
-      r.referenceRoomIds.size === 0 &&
-      [...newCells].every(c => cellsOf(r).has(c))
-    );
-
-    if (mainRoom) {
-      const R = mainRoom;
-      const otherOverlapping = overlapping.filter(r => r.id !== R.id);
-      const allChildrenOfR = otherOverlapping.every(r => r.referenceRoomIds.has(R.id));
-
-      if (allChildrenOfR) {
-        const partialSpecs = this.graph.rooms.filter(p => p.referenceRoomIds.has(R.id));
-        const coveredByPartial = partialSpecs.some(p =>
-          [...newCells].some(c => cellsOf(p).has(c))
+      // 判定2: 重複する全部屋が newCells に包含される — 拡張・統合
+      // （例: A部屋とB部屋を合わせてドラッグ → 一つの大きな部屋に）
+      const allContained = overlapping.every(r => [...cellsOf(r)].every(c => newCells.has(c)));
+      if (allContained) {
+        const dominant = overlapping.reduce((a, b) =>
+          cellsOf(b).size > cellsOf(a).size ? b : a
         );
-
-        if (coveredByPartial) {
-          // ケース2': 部分指定のセル域が選択された → 部分指定をリネーム
-          const targetPartial = partialSpecs.find(p =>
-            [...newCells].every(c => cellsOf(p).has(c))
-          );
-          if (targetPartial) {
-            this.dragState      = null;
-            this.namingRoomId   = targetPartial.id;
-            this.selectedRoomId = targetPartial.id;
-            return;
+        // 吸収される部屋の部分指定（子）は dominant へ referenceRoomIds を付け替える（孤児参照を作らない）。
+        // child === dominant を除外し、自己参照（dominant.referenceRoomIds.add(dominant.id)）を防ぐ
+        // （自己参照が生じると deleteRoom の子カスケードが無限再帰しうる）。
+        for (const r of overlapping) {
+          if (r.id === dominant.id) continue;
+          for (const child of rooms) {
+            if (child.id === dominant.id) continue;
+            if (child.referenceRoomIds.has(r.id)) {
+              child.referenceRoomIds.delete(r.id);
+              child.referenceRoomIds.add(dominant.id);
+            }
           }
-          // targetPartial 未特定（複数の部分指定を跨ぐ選択）→ 判定3へ
-        } else {
-          // 参照元のセル域が選択された
-          const partialModifiedFirst = partialSpecs.some(p =>
-            this.sessionModifiedRoomIds.has(p.id)
-          );
-          if (partialModifiedFirst) {
-            // ケース2': 部分指定が先に命名済み → 参照元 R をリネーム
-            this.dragState      = null;
-            this.namingRoomId   = R.id;
-            this.selectedRoomId = R.id;
-          } else if (partialSpecs.length === 0 && this.sessionModifiedRoomIds.has(R.id)) {
-            // 部分指定なし かつ 親が今セッションで命名済み → 新規部分指定として登録
-            // （ケース2'のセットアップ: 同セッション内で A+B→"部屋1" の直後に B をドラッグ）
-            const room = this.graph.addRoom(newCells, '', crypto.randomUUID(), new Set([R.id]));
-            this.dragState      = null;
-            this.namingRoomId   = room.id;
-            this.selectedRoomId = room.id;
-          } else {
-            // ケース1/2: 分割
-            this._splitRoom(R, newCells, partialSpecs, cellsOf);
-          }
-          return;
         }
+        dominant.setCells(newCells);
+        dominant.generatedWallIds.clear();
+        for (const r of overlapping) {
+          if (r.id !== dominant.id) this.graph.removeRoom(r.id);
+        }
+        this._openDialog(dominant.id, false, cellOrder);
+        return;
       }
     }
 
-    // 判定3: 上記のいずれにも当てはまらない部分重複 — 部分指定として登録
-    // （複数部屋にまたがるドラッグなど）
-    const refIds = new Set(overlapping.map(r => r.id));
-    const room = this.graph.addRoom(newCells, '', crypto.randomUUID(), refIds);
-    this.dragState      = null;
-    this.namingRoomId   = room.id;
-    this.selectedRoomId = room.id;
+    // 判定3: 上記のいずれにも当てはまらない — 開始セルの所属で分岐
+    // 部分指定（referenceRoomIds 非空）が優先。複数該当なら roomOrder 先勝ち。
+    const partialOwners = rooms.filter(r => r.referenceRoomIds.size > 0 && cellsOf(r).has(startCellKey));
+    if (partialOwners.length > 0) {
+      this._openDialog(this._firstInRoomOrder(partialOwners).id, false, cellOrder);
+      return;
+    }
+
+    // 親/単一部屋（referenceRoomIds 空）
+    const owner = rooms.find(r => r.referenceRoomIds.size === 0 && cellsOf(r).has(startCellKey));
+    if (owner) {
+      if (this._nameCellKeyOf(owner) === startCellKey) {
+        // 名前セル — その部屋を全体選択・既存ダイアログ
+        this._openDialog(owner.id, false, cellOrder);
+        return;
+      }
+      // その他セル — 新規部分指定（cells = newCells ∩ その部屋の現在セル）
+      const cells = new Set([...newCells].filter(c => cellsOf(owner).has(c)));
+      const room = this.graph.addRoom(cells, '', crypto.randomUUID(), new Set([owner.id]));
+      this._openDialog(room.id, true, cellOrder);
+      return;
+    }
+
+    // 未指定 — 新規部屋（newCells から全部屋所属セルを除外。除外で空になったら何もしない）
+    const claimed = new Set();
+    for (const r of rooms) for (const c of cellsOf(r)) claimed.add(c);
+    const freeCells = new Set([...newCells].filter(c => !claimed.has(c)));
+    this.dragState = null;
+    if (freeCells.size === 0) return;
+    const room = this.graph.addRoom(freeCells);
+    this._openDialog(room.id, true, cellOrder);
   }
 
-  _splitRoom(R, newCells, partialSpecs, cellsOf) {
-    const isCase1 = partialSpecs.length === 0;
-    if (isCase1) {
-      // ケース1: 単純分割 — R の残りセルをそのまま維持し、選択セルで新部屋を作る
-      const remaining = new Set([...cellsOf(R)].filter(c => !newCells.has(c)));
-      R.setCells(remaining);
-      R.generatedWallIds.clear();
+  /** referenceRoomIds 非空の候補が複数ある場合、graph.roomOrder で最も先の部屋を返す。 */
+  _firstInRoomOrder(list) {
+    const order = this.graph.roomOrder;
+    return list.reduce((a, b) => order.indexOf(a.id) <= order.indexOf(b.id) ? a : b);
+  }
+
+  /**
+   * room の「名前セル」（名前の表示アンカーを worldToCell したセルキー）。無名部屋は null（＝名前セルなし扱い）。
+   * アンカー算出は FinishModeLayer.jsx の部屋名描画ロジックと同一
+   * （room.namePosition があればその座標、なければ room.cells 中の最大面積セル中心）。
+   */
+  _nameCellKeyOf(room) {
+    if (!room.name) return null;
+    let cx, cy;
+    if (room.namePosition) {
+      cx = room.namePosition.x;
+      cy = room.namePosition.y;
     } else {
-      // ケース2: 部分指定を独立させ、R を解体
-      for (const p of partialSpecs) {
-        p.referenceRoomIds.clear();
-        p.generatedWallIds.clear();
+      let largest = null, maxArea = 0;
+      for (const key of room.cells) {
+        const b = cellBoundsFromKey(key, this.graph);
+        if (!b) continue;
+        const area = (b.x2 - b.x1) * (b.y2 - b.y1);
+        if (area > maxArea) { maxArea = area; largest = b; }
       }
-      const partialCells = new Set(partialSpecs.flatMap(p => [...cellsOf(p)]));
-      const remaining = new Set(
-        [...cellsOf(R)].filter(c => !newCells.has(c) && !partialCells.has(c))
-      );
-      if (remaining.size > 0) {
-        R.setCells(remaining);
-        R.generatedWallIds.clear();
-      } else {
-        this.graph.removeRoom(R.id);
-      }
+      if (!largest) return null;
+      cx = (largest.x1 + largest.x2) / 2;
+      cy = (largest.y1 + largest.y2) / 2;
     }
-    const newRoom = this.graph.addRoom(newCells);
+    const cell = worldToCell(cx, cy, this.graph);
+    return cell ? cell.key : null;
+  }
 
-    // ケース1: 新部屋（ユーザーが選択したセル）を残存部屋 R の直前に配置する
-    // 仕上げ表の期待順: 新部屋 → R（残余）
-    if (isCase1 && this.graph.roomMap.has(R.id)) {
-      const ro = this.graph.roomOrder;
-      const newIdx = ro.indexOf(newRoom.id);
-      if (newIdx >= 0) {
-        ro.splice(newIdx, 1);
-        const rIdx = ro.indexOf(R.id);
-        if (rIdx >= 0) ro.splice(rIdx, 0, newRoom.id);
-        else ro.push(newRoom.id);
-      }
-    }
-
-    this.dragState      = null;
-    this.namingRoomId   = newRoom.id;
-    this.selectedRoomId = newRoom.id;
+  /**
+   * ドラッグ確定後、部屋名ダイアログを開く（既存部屋 or 新規部屋）共通処理。
+   * cellOrder（選択順セルキー配列）は階段変換時の上り口ヒントとして applyNaming が使う。
+   */
+  _openDialog(roomId, isNew, cellOrder = null) {
+    this.dragState       = null;
+    this.namingIsNew     = isNew;
+    this.namingRoomId    = roomId;
+    this.namingCellOrder = cellOrder;
+    this.selectedRoomId  = roomId;
   }
 
   cancelDrag() { this.dragState = null; }
@@ -501,28 +496,133 @@ export class FinishModeState {
     this.selectedStairId = null;
   }
 
-  finishNaming(roomId, name) {
+  /**
+   * ダイアログ確定時に kind/feature/name をまとめて適用する（旧 finishNaming を置き換え）。
+   * feature の遷移により Stair の生成・削除・名前変更を行う:
+   *   非STAIR → 'stair': 新規変換（Stair生成。名前は空許容）
+   *   STAIR   → 'stair': 名前変更のみ（既存Stairは再変換しない）
+   *   STAIR   → null/'void': 連動Stairを削除してfeatureを設定
+   *   それ以外: setFeatureのみ（kindの排他・void切替）
+   * 名前は feature==='stair' 以外は現行どおり既定「部屋」を適用する（stairは空許容）。
+   * @returns {Stair|null} 新規に階段変換した場合はその Stair（呼び出し側の stairFloorSync 判定用）、それ以外は null。
+   */
+  applyNaming(roomId, { name, kind, feature }, floorHeight = null) {
     const room = this.graph.roomMap.get(roomId);
-    if (room) room.setName(name || '部屋');
-    // このセッションで命名した部屋として記録する。
-    // 判定S で「部分指定が先に命名されたか」の判断に使う。
-    this.sessionModifiedRoomIds.add(roomId);
-    this.namingRoomId = null;
+    if (!room) return null;
+
+    room.setKind(kind);
+
+    const wasStair = room.feature === RoomFeature.STAIR;
+    const toStair  = feature === RoomFeature.STAIR;
+    let convertedStair = null;
+
+    if (toStair) {
+      room.setName(name); // 階段は空許容（既定「部屋」を適用しない）
+      if (name) this.sessionModifiedRoomIds.add(roomId);
+      if (!wasStair) {
+        room.setFeature(RoomFeature.STAIR);
+        const cells = new Set(room.cells);
+        // namingCellOrder（commitDragで開いたダイアログの選択順セルキー）を上り口ヒントとして渡す。
+        // startDrag優先1経由（namingCellOrder無し）では null のまま渡り、現行の幾何推定にフォールバックする。
+        const cls = classifyStairArea(cells, this.graph, floorHeight, this.namingCellOrder);
+        const opts = {
+          type: cls.type, cells, upDirection: cls.upDirection,
+          flip: cls.flip ?? false, sections: cls.sections ?? null,
+          roomId: room.id,
+        };
+        if (cls.totalSteps) opts.totalSteps = cls.totalSteps;
+        convertedStair = this.graph.addStair(opts);
+        this.selectedStairId = convertedStair.id;
+      } else {
+        // 既にSTAIR — 再変換せず、既存Stairの選択だけ更新する
+        const stair = [...this.graph.stairMap.values()].find(s => s.roomId === roomId);
+        this.selectedStairId = stair ? stair.id : null;
+      }
+      this.selectedRoomId = null;
+    } else {
+      if (wasStair) this._removeLinkedStair(roomId); // STAIR → null/void: 連動Stairを削除
+      room.setFeature(feature ?? null);
+      room.setName(name || '部屋');
+      this.sessionModifiedRoomIds.add(roomId);
+      this.selectedRoomId  = roomId;
+      this.selectedStairId = null;
+    }
+
+    this.namingRoomId    = null;
+    this.namingIsNew     = false;
+    this.namingCellOrder = null;
     // 境界エッジの生成はモード境界の差分追跡で行う（フェーズ4）。命名時の即時生成は廃止。
+    return convertedStair;
   }
 
+  /** roomId を roomId に持つ Stair があれば道連れで削除する（Room削除経路の共通ガード）。 */
+  _removeLinkedStair(roomId) {
+    const stair = [...this.graph.stairMap.values()].find(s => s.roomId === roomId);
+    if (!stair) return;
+    this.graph.removeStair(stair.id);
+    if (this.selectedStairId === stair.id) this.selectedStairId = null;
+  }
+
+  /**
+   * ダイアログの「キャンセル」。namingIsNew（新規部屋）のときだけ現行どおり部屋を削除する
+   * （sessionModifiedRoomIds には記録しない）。既存部屋のときは何も変更せず閉じるだけ（選択は維持）。
+   */
   cancelNaming(roomId) {
-    // キャンセル時は部屋を削除し、sessionModifiedRoomIds には記録しない
-    this.graph.removeRoom(roomId);
-    this.namingRoomId   = null;
-    this.selectedRoomId = null;
+    if (this.namingIsNew) {
+      this._removeLinkedStair(roomId);
+      this.graph.removeRoom(roomId);
+      this.selectedRoomId = null;
+    }
+    this.namingRoomId    = null;
+    this.namingIsNew     = false;
+    this.namingCellOrder = null;
   }
 
-  /** ユーザーが明示的に部屋を削除する（仕上げ表の削除ボタン用）。壁・境界エッジの後始末はモード切替時の既存ロジックに委ねる。 */
+  /**
+   * ユーザーが明示的に部屋を削除する（仕上げ表の削除ボタン・ダイアログの削除ボタン共通）。
+   * 子（自idを referenceRoomIds に含む部分指定）があれば先に道連れで削除する（親カスケード）。
+   * その部屋を roomId に持つ Stair があれば道連れで削除する。壁・境界エッジの後始末はモード切替時の既存ロジックに委ねる。
+   */
   deleteRoom(roomId) {
+    const children = this.graph.rooms.filter(r => r.referenceRoomIds.has(roomId));
+    for (const child of children) this.deleteRoom(child.id); // 再帰（各自の連動Stairガード込み）
+
+    this._removeLinkedStair(roomId);
     this.graph.removeRoom(roomId);
     if (this.selectedRoomId === roomId) this.selectedRoomId = null;
     if (this.namingRoomId === roomId) this.namingRoomId = null;
+  }
+
+  /**
+   * ダイアログの「削除」ボタン用。
+   *   feature=STAIR の部屋   → 連動Stairごと削除（deleteStair。選択クリア）
+   *   部分指定（referenceRoomIds非空） → 削除後、参照元（親）を全体選択
+   *   親（子持ち）・単一部屋  → deleteRoom（親カスケードで子も一括削除）
+   */
+  deleteFromDialog(roomId) {
+    const room = this.graph.roomMap.get(roomId);
+    if (!room) {
+      this.namingRoomId    = null;
+      this.namingIsNew     = false;
+      this.namingCellOrder = null;
+      return;
+    }
+
+    if (room.feature === RoomFeature.STAIR) {
+      const stair = [...this.graph.stairMap.values()].find(s => s.roomId === roomId);
+      if (stair) this.deleteStair(stair.id);
+      else this.deleteRoom(roomId); // 連動Stairが見つからない防御ケース
+    } else if (room.referenceRoomIds.size > 0) {
+      const parentId = [...room.referenceRoomIds][0];
+      this.deleteRoom(roomId);
+      if (this.graph.roomMap.has(parentId)) this.selectedRoomId = parentId;
+    } else {
+      this.deleteRoom(roomId);
+    }
+
+    this.namingRoomId    = null;
+    this.namingIsNew     = false;
+    this.namingCellOrder = null;
   }
 
   // ---- 階段 ----
@@ -532,31 +632,32 @@ export class FinishModeState {
     this.selectedRoomId  = null;
   }
 
+  /** stair.roomId の Room が存在すればそれも削除する（階段タブの削除ボタン経由でも Room が残らないように）。 */
   deleteStair(id) {
+    const stair = this.graph.stairMap.get(id);
+    if (stair?.roomId && this.graph.roomMap.has(stair.roomId)) {
+      this.graph.removeRoom(stair.roomId);
+      if (this.selectedRoomId === stair.roomId) this.selectedRoomId = null;
+      if (this.namingRoomId === stair.roomId) this.namingRoomId = null;
+    }
     this.graph.removeStair(id);
     if (this.selectedStairId === id) this.selectedStairId = null;
   }
 
   /**
-   * 部屋名入力ダイアログで「階段」を選んだとき、その部屋を階段に変換する。
-   * 部屋セルからタイプ・向きを推定して Stair を生成し、部屋は削除する。
+   * 階段OFF復帰: stair.roomId の Room を feature=null に戻し、Stair を削除して選択を Room へ戻す。
+   * Room が存在しない旧データ Stair（上階自動設置分・移行前データ）は何もしない。
+   * （現状 applyNaming の STAIR→null/void 遷移が同等の処理を担うため未配線。フェーズ4以降のUI導線候補として保持）
    */
-  convertRoomToStair(roomId, floorHeight = null) {
-    const room = this.graph.roomMap.get(roomId);
-    if (!room) return null;
-    const cells = new Set(room.cells);
-    this.graph.removeRoom(roomId);
-    const cls = classifyStairArea(cells, this.graph, floorHeight);
-    const opts = {
-      type: cls.type, cells, upDirection: cls.upDirection,
-      flip: cls.flip ?? false, sections: cls.sections ?? null,
-    };
-    if (cls.totalSteps) opts.totalSteps = cls.totalSteps;
-    const stair = this.graph.addStair(opts);
-    this.namingRoomId   = null;
-    this.selectedRoomId = null;
-    this.selectedStairId = stair.id;
-    return stair;
+  revertStairToRoom(stairId) {
+    const stair = this.graph.stairMap.get(stairId);
+    if (!stair) return;
+    const room = stair.roomId ? this.graph.roomMap.get(stair.roomId) : null;
+    if (!room) return;
+    room.setFeature(null);
+    this.graph.removeStair(stairId);
+    this.selectedStairId = null;
+    this.selectedRoomId  = room.id;
   }
 
   get isDragging()   { return this.dragState !== null; }

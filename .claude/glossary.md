@@ -21,6 +21,12 @@
 ## 屋根専用平面（isRoofPlane）
 構造モードのみに存在する合成Plane。`project.planes`/`orderedTabs`から除外、`project.roofPlane`で個別アクセス。
 ぞー
+## kind / feature（Roomの2軸区分）
+`kind`＝屋内/屋外（内外判定はこちらのみ参照）。`feature`＝階段/吹抜け/なし（属性）。旧enumの`void`は読込時に「屋内+吹抜け」へ移行される。設計意図は`.claude/data-model.md`。
+
+## 部分指定 / 参照元
+**部分指定**＝既存部屋の一部セルに別名を与えるRoom（`referenceRoomIds`で参照元＝親を指す。外周壁は親が担う）。**参照元**＝`referenceRoomIds`が空のRoom。親の削除は部分指定を道連れにする。
+
 ## Edge（境界エッジ） / boundaryMaster
 仕上げモードの部屋境界。`boundaryMaster`はその層構成（壁の材構成）の既定値セット。
 

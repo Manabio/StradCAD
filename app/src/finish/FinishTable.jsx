@@ -2,6 +2,7 @@ import { observer } from 'mobx-react-lite';
 import { useState, useEffect } from 'react';
 import { ConfirmDialog } from '../ui/ConfirmDialog.jsx';
 import { StairTab } from './stair/StairTab.jsx';
+import { RoomFeature } from '@core';
 
 // ---- 内部仕上げ表 ----
 
@@ -234,6 +235,8 @@ export const FinishTable = observer(({ graph, mode, project, selectedRoomId, onS
   const [activeTab, setActiveTab] = useState('interior');
   // 階段が選択されたら「階段」タブへ自動切替
   useEffect(() => { if (mode.selectedStairId) setActiveTab('stair'); }, [mode.selectedStairId]);
+  // 部屋が選択されたら「内部」タブへ自動切替
+  useEffect(() => { if (mode.selectedRoomId) setActiveTab('interior'); }, [mode.selectedRoomId]);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', flex: 1, overflow: 'hidden' }}>
@@ -292,7 +295,8 @@ export const FinishTable = observer(({ graph, mode, project, selectedRoomId, onS
 // ================================================================
 
 const InteriorTable = observer(({ graph, mode, selectedRoomId, onSelectRoom, floorName }) => {
-  const rooms = graph.rooms;
+  // 階段（feature===STAIR）は階段タブが担当するため内部仕上げ表からは除外する。
+  const rooms = graph.rooms.filter(r => r.feature !== RoomFeature.STAIR);
 
   const [dragId, setDragId]             = useState(null);
   const [overIndex, setOverIndex]       = useState(null);
@@ -313,17 +317,41 @@ const InteriorTable = observer(({ graph, mode, selectedRoomId, onSelectRoom, flo
   function handleDrop(e, dropIndex) {
     e.preventDefault();
     if (dragId === null) return;
-    const currentOrder = graph.roomOrder.slice();
+    const original = graph.roomOrder.slice();
+    const currentOrder = original.slice();
     const fromIndex = currentOrder.indexOf(dragId);
-    if (fromIndex === -1 || fromIndex === dropIndex) {
+    if (fromIndex === -1) {
       setDragId(null);
       setOverIndex(null);
       return;
     }
+    // 自己ドロップ（自分の位置へ落とす）は no-op — dragId除去後のindexOfが-1になり
+    // 末尾へ誤って移動してしまうのを防ぐ
+    if (rooms[dropIndex] && rooms[dropIndex].id === dragId) {
+      setDragId(null);
+      setOverIndex(null);
+      return;
+    }
+
     currentOrder.splice(fromIndex, 1);
-    const adjusted = fromIndex < dropIndex ? dropIndex - 1 : dropIndex;
-    currentOrder.splice(adjusted, 0, dragId);
-    graph.reorderRooms(currentOrder);
+
+    // dropIndex は表示用フィルタ後配列（rooms、feature=STAIR除外済み）の index。
+    // graph.roomOrder（未フィルタ、階段Roomも含む）への挿入位置は、落下先の可視行IDを
+    // currentOrder 上で探して求める（フィルタ後indexをそのままspliceに使うと階段Room分だけずれる）。
+    let insertAt;
+    if (dropIndex < rooms.length) {
+      insertAt = currentOrder.indexOf(rooms[dropIndex].id);
+    } else {
+      // 末尾ドロップ = 最後の可視行の直後
+      const lastVisibleId = rooms[rooms.length - 1]?.id;
+      insertAt = lastVisibleId != null ? currentOrder.indexOf(lastVisibleId) + 1 : currentOrder.length;
+    }
+    if (insertAt === -1) insertAt = currentOrder.length;
+
+    currentOrder.splice(insertAt, 0, dragId);
+    const unchanged = currentOrder.length === original.length
+      && currentOrder.every((id, i) => id === original[i]);
+    if (!unchanged) graph.reorderRooms(currentOrder);
     setDragId(null);
     setOverIndex(null);
   }
@@ -383,19 +411,23 @@ const InteriorTable = observer(({ graph, mode, selectedRoomId, onSelectRoom, flo
           />
         )}
       </div>
-      {deleteConfirm && (
-        <ConfirmDialog
-          message={`「${deleteConfirm.roomName || '（名称未設定）'}」を削除しますか？`}
-          buttons={[
-            { label: 'キャンセル', value: 'cancel' },
-            { label: '削除', value: 'ok', danger: true },
-          ]}
-          onSelect={value => {
-            if (value === 'ok') mode.deleteRoom(deleteConfirm.roomId);
-            setDeleteConfirm(null);
-          }}
-        />
-      )}
+      {deleteConfirm && (() => {
+        const childCount = graph.rooms.filter(r => r.referenceRoomIds.has(deleteConfirm.roomId)).length;
+        const suffix = childCount > 0 ? `（部分指定${childCount}件も削除されます）` : '';
+        return (
+          <ConfirmDialog
+            message={`「${deleteConfirm.roomName || '（名称未設定）'}」を削除しますか？${suffix}`}
+            buttons={[
+              { label: 'キャンセル', value: 'cancel' },
+              { label: '削除', value: 'ok', danger: true },
+            ]}
+            onSelect={value => {
+              if (value === 'ok') mode.deleteRoom(deleteConfirm.roomId);
+              setDeleteConfirm(null);
+            }}
+          />
+        );
+      })()}
     </div>
   );
 });

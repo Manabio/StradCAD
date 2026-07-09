@@ -1,5 +1,5 @@
 import { runInAction } from 'mobx';
-import { ShapeType, CenterLine, HDimensionLine, VDimensionLine, DimensionAnchor, DimensionKind, DimensionSide, Discipline, Room, RoomKind, IndependentFooting } from '@core';
+import { ShapeType, CenterLine, HDimensionLine, VDimensionLine, DimensionAnchor, DimensionKind, DimensionSide, Discipline, Room, RoomKind, RoomFeature, IndependentFooting } from '@core';
 import { encode, decode } from './schema/graphFbs.js';
 import { packExtraFields, unpackExtraFields } from './structural/fieldPacking.js';
 
@@ -91,6 +91,7 @@ function buildSnapshot(graph) {
           cells:            [...r.cells],
           referenceRoomIds: [...r.referenceRoomIds],
           kind:             r.kind,
+          feature:          r.feature,
           generatedWallIds: [...r.generatedWallIds],
           hasNamePosition:  r.namePosition != null,
           posX:             r.namePosition?.x ?? 0,
@@ -123,6 +124,7 @@ function buildSnapshot(graph) {
           riser: s.riser ?? null, nosing: s.nosing, width: s.width,
           upDirection: s.upDirection, flip: s.flip,
           sections: s.sections ?? null,
+          roomId: s.roomId ?? null,
         };
       }),
     stairOrder: [...graph.stairOrder],
@@ -566,8 +568,12 @@ function applySnapshot(graph, snapshot) {
 
     // 10. 部屋（仕上げモード）— roomOrder 順で roomMap に登録してから順序を上書き
     for (const d of snapshot.rooms ?? []) {
+      // 旧スナップショット（feature 無し）移行: kind==='void' → interior + feature=void
+      const legacyVoid = d.kind === RoomKind.VOID;
+      const kind = legacyVoid ? RoomKind.INTERIOR : (d.kind || RoomKind.INTERIOR);
+      const feature = legacyVoid ? RoomFeature.VOID : (d.feature ?? null);
       const room = new Room(d.id, d.name || '', new Set(d.cells), new Set(d.referenceRoomIds),
-        d.kind || RoomKind.INTERIOR, d.templateKey ?? null);
+        kind, d.templateKey ?? null, feature);
       room.generatedWallIds = new Set(d.generatedWallIds);
       if (d.hasNamePosition) room.setNamePosition(d.posX, d.posY);
       if (d.floorLevel != null) room.setFloorLevel(d.floorLevel);
@@ -590,7 +596,7 @@ function applySnapshot(graph, snapshot) {
         type: d.type, structure: d.structure, cells: new Set(d.cells),
         totalSteps: d.totalSteps, tread: d.tread, riser: d.riser ?? null,
         nosing: d.nosing, width: d.width, upDirection: d.upDirection, flip: d.flip,
-        sections: d.sections ?? null,
+        sections: d.sections ?? null, roomId: d.roomId ?? null,
       }, d.id);
     }
     const savedStairOrder = snapshot.stairOrder ?? [];

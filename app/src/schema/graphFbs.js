@@ -49,12 +49,13 @@ const GS = {
   STAIRS: 35, STAIR_ORDER: 36,
 };
 
-// Stair: 14 フィールド
+// Stair: 15 フィールド
 const ST = {
   ID: 0, TYPE: 1, STRUCTURE: 2, CELLS: 3, TOTAL_STEPS: 4,
   TREAD: 5, HAS_RISER: 6, RISER: 7, NOSING: 8, WIDTH: 9,
   UP_DIR: 10, FLIP: 11,
   HAS_SECTIONS: 12, SECTIONS: 13, // 区間別・段数（歩行順、カンマ区切り文字列。例:"4,1,3"）
+  ROOM_ID: 14, // 変換元 Room の ID（空文字列 = null。旧データ・上階自動設置分は常に空）
 };
 
 // StructuralMaterialType 列挙値エンコード（柱・梁・耐力壁・スラブ・基礎で共通）
@@ -73,7 +74,7 @@ const SI = {
 // Edge: 4 フィールド
 const ED = { KEY: 0, MASTER_TYPE: 1, OVR_KEYS: 2, OVR_VALS: 3 };
 
-// Room: 24 フィールド
+// Room: 25 フィールド
 const RM = {
   ID: 0, NAME: 1, CELLS: 2, REF_IDS: 3, GEN_WALL_IDS: 4,
   HAS_POS: 5, POS_X: 6, POS_Y: 7,
@@ -83,11 +84,16 @@ const RM = {
   KIND: 18,
   TEMPLATE_KEY: 19, OVR_KEYS: 20, OVR_VALS: 21, // 内装マスター参照 + 個別上書きポケット
   HAS_FLOOR_LEVEL: 22, FLOOR_LEVEL: 23, // 床レベル差(mm)。null は HAS=0 で表現
+  FEATURE: 24, // 属性軸（none=0 / stair=1 / void=2）。kind とは独立
 };
 
-// Room.kind 列挙値エンコード
+// Room.kind 列挙値エンコード（VOID は旧データデコード専用。書き込みは INTERIOR/EXTERIOR のみ）
 const ROOM_KIND_ENC = { interior: 0, void: 1, exterior: 2 };
 const ROOM_KIND_DEC = ['interior', 'void', 'exterior'];
+
+// Room.feature 列挙値エンコード（属性軸。null は none=0）
+const ROOM_FEATURE_ENC = { stair: 1, void: 2 };
+const ROOM_FEATURE_DEC = [null, 'stair', 'void'];
 
 // CenterLine: 17 フィールド (0–16)
 const CL = {
@@ -512,7 +518,13 @@ function writeRoom(b, rm) {
   const sFinCornice = b.createString(rm.finish?.cornice           ?? '');
   const sFinNote    = b.createString(rm.finish?.note              ?? '');
 
-  b.startObject(24);
+  // kind は interior/exterior のみ書く。旧来 kind==='void' な Room が来た場合の防御:
+  // interior + feature=void として書き込む（新形式へ正規化）。
+  const isLegacyVoidKind = rm.kind === 'void';
+  const kindEnc    = isLegacyVoidKind ? ROOM_KIND_ENC.interior : (ROOM_KIND_ENC[rm.kind] ?? 0);
+  const featureVal = isLegacyVoidKind ? 'void' : (rm.feature ?? null);
+
+  b.startObject(25);
   b.addFieldOffset(RM.ID,           sId,          0);
   b.addFieldOffset(RM.NAME,         sName,        0);
   b.addFieldOffset(RM.CELLS,        cellsVec,     0);
@@ -531,12 +543,13 @@ function writeRoom(b, rm) {
   b.addFieldOffset(RM.FIN_CEIL_H,   sFinCeilH,    0);
   b.addFieldOffset(RM.FIN_CORNICE,  sFinCornice,  0);
   b.addFieldOffset(RM.FIN_NOTE,     sFinNote,     0);
-  b.addFieldInt8(RM.KIND,           ROOM_KIND_ENC[rm.kind] ?? 0, 0);
+  b.addFieldInt8(RM.KIND,           kindEnc, 0);
   b.addFieldOffset(RM.TEMPLATE_KEY, sTemplate,    0);
   b.addFieldOffset(RM.OVR_KEYS,     ovrKeysVec,   0);
   b.addFieldOffset(RM.OVR_VALS,     ovrValsVec,   0);
   b.addFieldInt8(RM.HAS_FLOOR_LEVEL, rm.floorLevel != null ? 1 : 0, 0);
   b.addFieldFloat64(RM.FLOOR_LEVEL,  rm.floorLevel ?? 0.0, 0.0);
+  b.addFieldInt8(RM.FEATURE,        ROOM_FEATURE_ENC[featureVal] ?? 0, 0);
   return b.endObject();
 }
 
@@ -560,12 +573,13 @@ function writeStair(b, st) {
   const sType = b.createString(st.type ?? 'straight');
   const sStru = b.createString(st.structure ?? 'WOOD');
   const sUp   = b.createString(st.upDirection ?? 'right');
+  const sRoomId = b.createString(st.roomId ?? '');
   const cellsVec = writeStrVec(b, st.cells ?? []);
   const hasRiser = st.riser != null;
   const hasSections = st.sections != null;
   const sSections = hasSections ? b.createString(st.sections.join(',')) : 0;
 
-  b.startObject(14);
+  b.startObject(15);
   b.addFieldOffset(ST.ID,        sId,   0);
   b.addFieldOffset(ST.TYPE,      sType, 0);
   b.addFieldOffset(ST.STRUCTURE, sStru, 0);
@@ -580,6 +594,7 @@ function writeStair(b, st) {
   b.addFieldInt8(ST.FLIP,        st.flip ? 1 : 0, 0);
   b.addFieldInt8(ST.HAS_SECTIONS, hasSections ? 1 : 0, 0);
   b.addFieldOffset(ST.SECTIONS,   sSections, 0);
+  b.addFieldOffset(ST.ROOM_ID,    sRoomId, 0);
   return b.endObject();
 }
 
@@ -1039,6 +1054,14 @@ function readRoom(bb, tablePos) {
   const ovrKeys = r.strVec(RM.OVR_KEYS);
   const ovrVals = r.strVec(RM.OVR_VALS);
   const overrides = ovrKeys.map((key, i) => ({ key, value: ovrVals[i] ?? '' }));
+  // 旧データ移行: kind==='void' で保存されたバッファは interior + feature=void として復元する
+  // （FEATURE フィールド未設定の旧バッファは FlatBuffers のデフォルト値 0=none が返る）。
+  let kind    = ROOM_KIND_DEC[r.i8(RM.KIND)] ?? 'interior';
+  let feature = ROOM_FEATURE_DEC[r.i8(RM.FEATURE)] ?? null;
+  if (kind === 'void') {
+    kind = 'interior';
+    feature = 'void';
+  }
   return {
     id:               r.str(RM.ID),
     name:             r.str(RM.NAME),
@@ -1059,7 +1082,8 @@ function readRoom(bb, tablePos) {
       cornice:           r.str(RM.FIN_CORNICE),
       note:              r.str(RM.FIN_NOTE),
     },
-    kind: ROOM_KIND_DEC[r.i8(RM.KIND)] ?? 'interior',
+    kind,
+    feature,
     templateKey: r.str(RM.TEMPLATE_KEY) || null,
     overrides,
     floorLevel: r.i8(RM.HAS_FLOOR_LEVEL) ? r.f64(RM.FLOOR_LEVEL) : null,
@@ -1095,6 +1119,7 @@ function readStair(bb, tablePos) {
     sections:    r.i8(ST.HAS_SECTIONS)
       ? (r.str(ST.SECTIONS) || '').split(',').filter(Boolean).map(Number)
       : null,
+    roomId:      r.str(ST.ROOM_ID) || null, // 旧データ（フィールド欠落）は空文字列扱い→null
   };
 }
 

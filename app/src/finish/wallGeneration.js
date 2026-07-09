@@ -199,8 +199,10 @@ function findOutsideRoom(p, graph, cellToRoom) {
 /**
  * 部屋の外周エッジ1本が外壁ループに含まれるかどうかを判定する。
  *
- * - 内外区分が「屋内/吹抜け」の部屋: 外側に部屋が割り当てられていない（建物外周）場合のみ外壁
- * - 内外区分が「屋外」の部屋: 外側が「屋内/吹抜け」の部屋（中庭の境界）の場合のみ外壁
+ * - 内外区分が「屋内」（kind !== EXTERIOR）の部屋: 外側に部屋が割り当てられていない（建物外周）場合のみ外壁
+ * - 内外区分が「屋外」の部屋: 外側が「屋内」（kind !== EXTERIOR）の部屋（中庭の境界）の場合のみ外壁
+ *
+ * feature（階段・吹抜け属性）は外壁分類に無関係。
  *
  * @returns {'outer' | 'courtyard' | null}
  */
@@ -211,7 +213,7 @@ function classifyExteriorEdge(room, p, graph, cellToRoom) {
   if (room.kind !== RoomKind.EXTERIOR) {
     return outsideKind === null ? 'outer' : null;
   }
-  return (outsideKind === RoomKind.INTERIOR || outsideKind === RoomKind.VOID) ? 'courtyard' : null;
+  return (outsideKind !== null && outsideKind !== RoomKind.EXTERIOR) ? 'courtyard' : null;
 }
 
 /**

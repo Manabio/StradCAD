@@ -1,9 +1,9 @@
 // 構造部材の自動生成を「建物フットプリント（仕上げモードの部屋領域）」でゲートする純関数群。
 //
 // 部材の有無を外壁線位置で決めるための実装。外壁は部屋領域の外周に生成される（finish/wallGeneration.js）
-// ため、外壁線の位置 ≡ 屋内/吹抜けフットプリントの境界。そこで Wall 実体を読まず、各階の部屋セル
-// （屋内 INTERIOR / 吹抜け VOID）を「建物内」フットプリントとして扱い、グリッド辺・交点が建物に接するかで
-// 生成可否を取捨する（A案＝セル/部屋ベースのフットプリント判定）。
+// ため、外壁線の位置 ≡ 屋内フットプリントの境界。そこで Wall 実体を読まず、各階の部屋セル
+// （kind === INTERIOR。吹抜け等の feature は無関係）を「建物内」フットプリントとして扱い、グリッド辺・交点が
+// 建物に接するかで生成可否を取捨する（A案＝セル/部屋ベースのフットプリント判定）。
 //
 // 「建物全体の上下階」を加味する規律＝鉛直連続性：部材は「自階かつ直下の全階で建物が連続している」位置だけ
 // 残す（自階＋直下フロアのフットプリントをANDで束ねる）。直下に支えの無い位置の梁・柱（例：下階の欠け／
@@ -19,13 +19,13 @@ import { floorSwapManager } from '../storage/FloorSwapManager.js';
 // 軸線・交点から±この距離(mm)だけ離してセルをサンプリングする（finish/edgeClassify.js の ADJACENT_SAMPLE_EPS と同値）。
 const SAMPLE_EPS = 10;
 
-/** あるグラフの建物フットプリント述語を作る。屋内(INTERIOR)・吹抜け(VOID)のみ建物内とみなし、
- *  有名屋外(EXTERIOR=中庭/バルコニー)・無名屋外(未割当)は建物外とする。
+/** あるグラフの建物フットプリント述語を作る。屋内(kind === INTERIOR)のみ建物内とみなし、
+ *  有名屋外(EXTERIOR=中庭/バルコニー)・無名屋外(未割当)は建物外とする（feature の吹抜けは無関係）。
  *  @returns {{ probe: (wx:number, wy:number)=>boolean, size: number }} size=フットプリントのセル数 */
 function footprintProbe(graph) {
   const cellToRoom = buildCellToRoom(graph);
-  const isBuildingRoom = (room) => !!room && (room.kind === RoomKind.INTERIOR || room.kind === RoomKind.VOID);
-  let size = 0; // 建物内（屋内/吹抜け）セル数。屋外部屋しか無い階で全部材を消さないよう屋外は数えない。
+  const isBuildingRoom = (room) => !!room && room.kind === RoomKind.INTERIOR;
+  let size = 0; // 建物内（屋内）セル数。屋外部屋しか無い階で全部材を消さないよう屋外は数えない。
   for (const room of cellToRoom.values()) if (isBuildingRoom(room)) size++;
   const probe = (wx, wy) => {
     const cell = worldToCell(wx, wy, graph);
@@ -35,13 +35,13 @@ function footprintProbe(graph) {
   return { probe, size };
 }
 
-/** 建物フットプリント（屋内 INTERIOR ／ 吹抜け VOID の部屋セル）のセルキー集合を返す。
+/** 建物フットプリント（屋内 kind === INTERIOR の部屋セル）のセルキー集合を返す。
  *  べた基礎のマットスラブ（footprint を覆う床版）の cells 算定に使う。部屋未定義なら空集合。 */
 export function footprintCellKeys(graph) {
   const cellToRoom = buildCellToRoom(graph);
   const keys = new Set();
   for (const [key, room] of cellToRoom) {
-    if (room && (room.kind === RoomKind.INTERIOR || room.kind === RoomKind.VOID)) keys.add(key);
+    if (room && room.kind === RoomKind.INTERIOR) keys.add(key);
   }
   return keys;
 }

@@ -21,6 +21,12 @@ Intersection・Shape・Wall・Opening・構造部材はすべて自前の座標�
 ## Edge・boundaryMasterは判定ロジックをEdge自体に持たせない
 境界の分類・選定は`finish/edgeClassify.js`の純関数に置く。Edgeはキャッシュ(`masterType`)と個別上書き(`overrides`)のみ持つ。
 
+## Roomの内外区分は kind × feature の2軸（旧voidは読込時移行）
+`kind`（屋内/屋外）と`feature`（階段/吹抜け/なし）は独立。外壁・footprint等の内外判定は**kind軸のみ**を見る（featureを混ぜない）。旧データの`kind='void'`は読込時に「屋内+吹抜け」へ移行するが、デコード経路はFlatBuffers・plain object・undoスナップショットの**3系統**あり、移行を1箇所に足しても他が漏れる——変更時は3経路すべてを揃えること。
+
+## 階段はRoomを残したままStairと相互リンクする
+階段化でRoomを消すと外壁生成（graph.rooms走査）から階段エリアが消えるため、`feature=STAIR`のRoomを保持し`Stair.roomId`でリンクする。不変条件: 削除は必ず双方向道連れ（片側だけ消すと孤児化）、階段Roomは部屋再解釈（roomReinterpret）の対象外（吸収されるとリンクが壊れる）、内周壁生成・仕上げ表内部タブ・キャンバス部屋塗りからは除外する。roomIdなしのStair（旧データ・上階自動設置）は従来どおりRoomなしで動く互換経路として残している。
+
 ## floorDatum/floorLevel・templateKey/customOverridesは「共有基準＋疎な例外」
 床レベルは階のfloorDatumを基準に逸脱する部屋のみfloorLevelを持つ。壁材・壁仕上げ・天井高さは内装マスター（templateKey）参照+個別上書き（customOverrides、マスタ値と同値なら自動的に空に戻す）。同じパターンを`PlanGraph.structureOverride`（主構造の階例外）でも使う。
 

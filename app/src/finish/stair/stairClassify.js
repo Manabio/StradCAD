@@ -7,6 +7,38 @@ export const STRAIGHT_RATIO = 14 / 3;
 const DEFAULT_TREAD = 250; // mm（段数推定用。確定値は寸法フェーズで上書きされる）
 const MAX_RISER = 230;     // mm（住宅の蹴上上限。必要段数 = ceil(階高/MAX_RISER)）
 
+// STRAIGHT entryヒント: entryセル中心が走行軸中点とみなせる距離(mm)。単一セル・奇数分割の
+// 中央セル等、低座標/高座標のどちらとも言えない場合に上書きを抑止するための許容値。
+const STRAIGHT_ENTRY_MID_EPS = 1;
+
+/**
+ * entryCellKeys（選択順のセルキー配列）から、landingKeys（踊場・周回部セル）を除いた
+ * 先頭の有効なセルキーを返す（＝上り口セル）。cells に含まれないキーは無視する。
+ * 全て踊場・該当なしの場合は null（呼び出し側は現行の幾何推定にフォールバックする）。
+ */
+function resolveEntryCellKey(entryCellKeys, cells, landingKeys) {
+  if (!entryCellKeys) return null;
+  for (const key of entryCellKeys) {
+    if (!cells.has(key)) continue; // 防御: cells に無いキーは無視
+    if (landingKeys && landingKeys.has(key)) continue; // 踊場・周回部セルはスキップ
+    return key;
+  }
+  return null;
+}
+
+// 走行軸(isVertical)の区間 span（{lo,hi}）に属するセルキー集合を返す（runSpans と同じ丸め規則）。
+function cellKeysInSpan(cells, graph, isVertical, span) {
+  const keys = new Set();
+  for (const key of cells) {
+    const cb = cellBoundsFromKey(key, graph);
+    if (!cb) continue;
+    const lo = isVertical ? cb.y1 : cb.x1;
+    const hi = isVertical ? cb.y2 : cb.x2;
+    if (Math.round(lo) === Math.round(span.lo) && Math.round(hi) === Math.round(span.hi)) keys.add(key);
+  }
+  return keys;
+}
+
 // 物理長(mm)から直進部の実段数を逆算する。stair-model.md: 実段数=踏面数+1（長さは踏面数ぶんのtread相当）。
 function risersFromLength(lengthMm, treadMm = DEFAULT_TREAD) {
   return Math.max(1, Math.round(lengthMm / treadMm) + 1);
@@ -176,6 +208,14 @@ export function detectUTurn(cells, graph, isVertical, b) {
  *
  * @param {Set<string>} cells - 設置エリアのセルキー集合
  * @param {object} graph
+ * @param {number|null} floorHeight
+ * @param {string[]|null} entryCellKeys - 上り口ヒント（部屋ドラッグの選択順セルキー配列。
+ *   フェーズ4: 最初に選択したセルを設置階の上り口とする。踊場・周回部セルなら選択順で次のセルを使う。
+ *   タイプ判定（直進/L字/U字/中空き等）は変えず、upDirection・flip・sectionsの歩行順の決定にのみ使う。
+ *   未指定・解決不能（cellsに含まれない等）なら現行の幾何推定にフォールバックする。
+ *   対応: STRAIGHT・STRAIGHT_LANDING のみ。L_TURN/FLARED・SWITCHBACK/WINDING・OPEN_WELL は
+ *   (upDirection,flip) が形状（コーナー位置・折返し位置）から一意に決まり歩行順を反転する自由度が
+ *   無いため未対応（各分岐のコメント参照。誤って反転するとコーナー世界座標が実セル形状と矛盾する）。
  * @returns {{
  *   type: string,
  *   bounds: { x1, y1, x2, y2 },
@@ -185,7 +225,7 @@ export function detectUTurn(cells, graph, isVertical, b) {
  *   upDirection: string,  // 'up'|'down'|'left'|'right'（既定の昇り方向。後でユーザーが反転可）
  * }}
  */
-export function classifyStairArea(cells, graph, floorHeight = null) {
+export function classifyStairArea(cells, graph, floorHeight = null, entryCellKeys = null) {
   const b = roomBounds(cells, graph);
   const w = b.x2 - b.x1;   // 横幅
   const h = b.y2 - b.y1;   // 縦幅
@@ -200,6 +240,7 @@ export function classifyStairArea(cells, graph, floorHeight = null) {
   let flip = false;
 
   // 中空き（中央吹抜け）を優先判定。踊り場（1段）を挟んだ [n1,1,n2,1,n3] の5区間。
+  // entryヒント: 未対応（開口位置から個々の踊場セルを一意に識別するのが複雑なため。フェーズ4スコープ外）。
   const ow = detectOpenWell(cells, graph, b);
   if (ow) {
     const owSections = [ow.straight, 1, ow.straight, 1, ow.straight];
@@ -212,6 +253,14 @@ export function classifyStairArea(cells, graph, floorHeight = null) {
   }
 
   // 矩折（L字）を判定（4象限のうち1象限が空）。
+  // entryヒント: 未対応。normToWorld/worldToNorm（stairGeometry.js）の検証により、
+  // 正規化空間の arm1（sections[0]）は常に物理的な水平アーム、arm2（sections[2]）は常に垂直アーム
+  // に固定されており、(upDirection,flip) は空象限（コーナー位置）から一意に決まる。
+  // アーム長が非対称（first≠straight）な一般形では歩行順を反転する自由度が無く、
+  // 誤って反転するとコーナーの世界座標が実際のセル形状と矛盾する。アーム長が対称な場合は
+  // 数値上の矛盾が生じない境界ケースだが、本モデルには「どちらの腕を先に歩くか」を独立に
+  // 表す概念（レーン識別）が無いため、対称・非対称を問わず entryヒントは未対応とする
+  // （フェーズ4スコープ外）。
   const lt = detectLTurn(cells, graph, b);
   if (lt) {
     // 矩折（直進2アーム）の段数。階高に対して不足するならコーナーを曲がり段（実段）で補い FLARED に落とす。
@@ -230,6 +279,9 @@ export function classifyStairArea(cells, graph, floorHeight = null) {
   }
 
   // U字（屈折／回り）を判定。
+  // entryヒント: 未対応。対称な2レーン構成のため、landingHigh（折り返し部の位置）が既に
+  // upDirectionを一意に決めており、低座標側の2レーン端（進入/到達）は隣接するため
+  // 座標のみでは区別できない（歩行順のレーン識別を持たない現行モデルの制約。フェーズ4スコープ外）。
   const ut = detectUTurn(cells, graph, isVertical, b);
   if (ut) {
     // 折り返し部が走行高位端にあれば昇り起点は低位側 → 高位へ向かう向き
@@ -259,6 +311,18 @@ export function classifyStairArea(cells, graph, floorHeight = null) {
     const [s0, s1, s2] = spans;
     if (len(s1) < len(s0) * 0.85 && len(s1) < len(s2) * 0.85) {
       type = StairType.STRAIGHT_LANDING;
+      if (entryCellKeys) {
+        // 中央区間（s1）は踊場としてスキップ対象。
+        const landingKeys = cellKeysInSpan(cells, graph, isVertical, s1);
+        const entryKey = resolveEntryCellKey(entryCellKeys, cells, landingKeys);
+        if (entryKey) {
+          if (cellKeysInSpan(cells, graph, isVertical, s0).has(entryKey)) {
+            upDirection = isVertical ? 'down' : 'right'; // s0（低座標側）が上り口 → 高座標側へ昇る
+          } else if (cellKeysInSpan(cells, graph, isVertical, s2).has(entryKey)) {
+            upDirection = isVertical ? 'up' : 'left';    // s2（高座標側）が上り口 → 低座標側へ昇る
+          }
+        }
+      }
       // 基部側（昇り起点）の外側区間を first、反対側を straight とする。踊り場は常に1段。
       const baseLow = upDirection === 'right' || upDirection === 'down';
       const firstSpan    = baseLow ? s0 : s2;
@@ -267,6 +331,28 @@ export function classifyStairArea(cells, graph, floorHeight = null) {
       const straight = risersFromLength(len(straightSpan));
       sections = [first, 1, straight];
       totalSteps = totalStepsFromSections(sections);
+    }
+  }
+
+  // 直進（上記のいずれにも該当しない場合）: entryヒントで upDirection を直接決定する
+  // （踊場・周回部の概念が無いため、スキップ対象は無し＝先頭の有効キーをそのまま使う）。
+  if (entryCellKeys && type === StairType.STRAIGHT && cells.size > 1) {
+    const entryKey = resolveEntryCellKey(entryCellKeys, cells, null);
+    if (entryKey) {
+      const cb = cellBoundsFromKey(entryKey, graph);
+      if (cb) {
+        const mid    = isVertical ? (b.y1 + b.y2) / 2 : (b.x1 + b.x2) / 2;
+        const center = isVertical ? (cb.y1 + cb.y2) / 2 : (cb.x1 + cb.x2) / 2;
+        // entryセルが走行軸中点をまたぐ（中央セル等）場合は低座標/高座標のどちらとも
+        // 言えないため上書きせず、幾何既定のまま維持する（食い違った反転を防ぐ）。
+        if (Math.abs(center - mid) >= STRAIGHT_ENTRY_MID_EPS) {
+          const entryIsLow = center < mid;
+          // 上り口から遠ざかる向きに昇る
+          upDirection = isVertical
+            ? (entryIsLow ? 'down' : 'up')
+            : (entryIsLow ? 'right' : 'left');
+        }
+      }
     }
   }
 

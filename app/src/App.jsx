@@ -43,7 +43,7 @@ import { MemberTagLayer } from './renderer/MemberTagLayer.jsx';
 import { MemberStatusMenu } from './ui/MemberStatusMenu.jsx';
 import { PRIMARY_DIMENSION_FIELD_BY_MAP } from './structural/memberCatalog.js';
 import { detectContext, getMenuItems } from './interaction/menuItems.js';
-import { CenterLineType, Discipline, SiteLineKind, OpeningCategory, centerLineKind } from '@core';
+import { CenterLineType, Discipline, SiteLineKind, OpeningCategory, RoomFeature, centerLineKind } from '@core';
 import { addSkipZero, subtractSkipZero, makeFloorName, renameFloor } from './floorNumber.js';
 import { AddFloorDialog } from './ui/AddFloorDialog.jsx';
 import { ConfirmDialog } from './ui/ConfirmDialog.jsx';
@@ -1067,6 +1067,7 @@ const App = observer(() => {
       // 寸法は実材厚から導出（modeRef.current は脱出直前でまだ生存・材ロード済み）。
       const fmode = modeRef.current;
       for (const room of graph.rooms) {
+        if (room.feature === RoomFeature.STAIR) continue; // 階段エリアは内周壁を作らない（従来どおり）
         if (room.generatedWallIds.size > 0) continue;
         if (room.referenceRoomIds && room.referenceRoomIds.size > 0) continue;
 
@@ -2906,7 +2907,6 @@ const App = observer(() => {
                     graph={graph}
                     viewport={viewport}
                     selectedRoomId={mode.selectedRoomId}
-                    onSelectRoom={id => modeRef.current?.selectRoom(id)}
                     previewCells={mode.previewCells}
                   />
                 )}
@@ -3083,16 +3083,19 @@ const App = observer(() => {
             graph={graph}
             viewport={viewport}
             stairEnabled={floorHeightAbove(project, project.activePlane) != null}
-            onConfirm={(id, name) => modeRef.current?.finishNaming(id, name)}
-            onCancel={id => modeRef.current?.cancelNaming(id)}
-            onConvertToStair={id => {
-              modeRef.current?.convertRoomToStair(id, floorHeightAbove(project, project.activePlane));
-              // 設置階の上の全採用フロア（最上階まで）へ中心線・階段・外壁を同期
-              // （非アクティブ階を peek して IDB へ保存）
-              import('./finish/stair/stairFloorSync.js')
-                .then(m => m.syncUpperFloors(project, project.activeGraph))
-                .catch(console.error);
+            onConfirm={(id, payload) => {
+              const floorHeight = floorHeightAbove(project, project.activePlane);
+              const convertedStair = modeRef.current?.applyNaming(id, payload, floorHeight);
+              if (convertedStair) {
+                // 新規に階段変換された場合のみ、設置階の上の全採用フロア（最上階まで）へ
+                // 中心線・階段・外壁を同期する（非アクティブ階を peek して IDB へ保存）
+                import('./finish/stair/stairFloorSync.js')
+                  .then(m => m.syncUpperFloors(project, project.activeGraph))
+                  .catch(console.error);
+              }
             }}
+            onCancel={id => modeRef.current?.cancelNaming(id)}
+            onDelete={id => modeRef.current?.deleteFromDialog(id)}
           />
         ) : null;
       })()}

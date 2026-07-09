@@ -14,7 +14,7 @@
 //                            （少ない方の cells が空になれば部屋自体を削除）
 // ================================================================
 
-import { Room } from '@core';
+import { Room, RoomFeature } from '@core';
 import { lostSides, cellInteriorPoint, regionCellsAt } from './gridCells.js';
 
 function isEarlierInOrder(graph, idA, idB) {
@@ -32,6 +32,9 @@ export function reinterpretRoomsOnEntry(graph) {
   // 1. 影響を受けるセルを収集し、現在の分割上での連結領域（正準ID）でグルーピングする
   const groups = new Map(); // regionId -> { cells, entries: [{ room, oldKey, lostCount }] }
   for (const room of rooms) {
+    // 階段Room（feature===STAIR）は再解釈しない。フットプリントは階段設置時に確定済みで、
+    // 吸収/削除されると Stair.roomId が孤児化するため（フェーズ2以前は階段はRoomでなく対象外だった＝従来挙動を維持）。
+    if (room.feature === RoomFeature.STAIR) continue;
     for (const oldKey of room.cells) {
       const lost = lostSides(oldKey, graph);
       if (lost.length === 0) continue;
@@ -107,7 +110,7 @@ export function snapshotRoomsState(graph) {
       const r = graph.roomMap.get(id);
       return {
         id: r.id, name: r.name, cells: [...r.cells], referenceRoomIds: [...r.referenceRoomIds],
-        kind: r.kind, templateKey: r.templateKey, floorLevel: r.floorLevel,
+        kind: r.kind, feature: r.feature, templateKey: r.templateKey, floorLevel: r.floorLevel,
         namePosition: r.namePosition ? { x: r.namePosition.x, y: r.namePosition.y } : null,
         generatedWallIds: [...r.generatedWallIds],
         customOverrides: [...r.customOverrides],
@@ -122,7 +125,7 @@ export function restoreRoomsState(graph, snap) {
   graph.roomMap.clear();
   graph.roomOrder.clear();
   for (const d of snap.rooms) {
-    const room = new Room(d.id, d.name, new Set(d.cells), new Set(d.referenceRoomIds), d.kind, d.templateKey);
+    const room = new Room(d.id, d.name, new Set(d.cells), new Set(d.referenceRoomIds), d.kind, d.templateKey, d.feature ?? null);
     room.generatedWallIds = new Set(d.generatedWallIds);
     if (d.floorLevel != null) room.setFloorLevel(d.floorLevel);
     if (d.namePosition) room.setNamePosition(d.namePosition.x, d.namePosition.y);
