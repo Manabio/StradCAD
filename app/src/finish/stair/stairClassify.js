@@ -101,7 +101,8 @@ function detectOpenWell(cells, graph, b) {
 }
 
 // L字（3象限占有）の空象限とコーナーセル実測。空象限の対角（コーナー）に最も近いセルの
-// 幅 cw・高さ ch がアーム幅の実測値になる。@returns {{ empty, cw, ch }|null}
+// 幅 cw・高さ ch がアーム幅の実測値になる。corner はコーナーセルの実セル境界
+//（アーム識別の行帯・列帯の基準）。@returns {{ empty, cw, ch, corner }|null}
 function lTurnCornerCell(cells, graph, b) {
   const midX = (b.x1 + b.x2) / 2, midY = (b.y1 + b.y2) / 2;
   const q = { tl: false, tr: false, bl: false, br: false };
@@ -127,25 +128,51 @@ function lTurnCornerCell(cells, graph, b) {
     if (d < best) { best = d; cc = cb; }
   }
   if (!cc) return null;
-  return { empty, cw: cc.x2 - cc.x1, ch: cc.y2 - cc.y1 };
+  return { empty, cw: cc.x2 - cc.x1, ch: cc.y2 - cc.y1, corner: cc };
 }
 
 // 矩折（L字90度）の検出: 包絡矩形の4象限のうち3つが埋まり1つが空。
-// 空象限の対角がコーナー。@returns {{ upDirection, flip, first, straight }|null}
+// 空象限の対角がコーナー。upDirection/flip は水平アームを arm1（上り始め）とする既定写像。
+// entryヒント用に armOf（セルキー → 'h'水平アーム|'v'垂直アーム。コーナーセルは登録しない
+// ＝スキップ対象）と、垂直アームを arm1 とする代替写像 vAlt も返す。
+// first/straight は水平/垂直アームの実段数（vAlt 採用時は呼び出し側が歩行順に入れ替える）。
+// @returns {{ upDirection, flip, vAlt:{upDirection,flip}, armOf, first, straight }|null}
 function detectLTurn(cells, graph, b) {
   const cc = lTurnCornerCell(cells, graph, b);
   if (!cc) return null;
-  // 空象限 → 昇り方向・反転（arm1 は水平、コーナーは空象限の対角）
+  // 空象限 → 昇り方向・反転。normToWorld（stairGeometry.js）は upDirection×flip の8通りで
+  // 正方形の全対称を写像でき、同じL字形状（コーナー位置）に対して MAP=水平アームが arm1
+  //（left/right 系。u軸=水平）と V_MAP=垂直アームが arm1（up/down 系。u軸=垂直）の2通りがある。
+  // どちらもコーナー（正規化(1,1)）は空象限の対角に写る。
   const MAP = {
     tl: { upDirection: 'right', flip: false },
     bl: { upDirection: 'right', flip: true },
     tr: { upDirection: 'left',  flip: false },
     br: { upDirection: 'left',  flip: true },
   };
+  const V_MAP = {
+    tl: { upDirection: 'down', flip: false },
+    bl: { upDirection: 'up',   flip: false },
+    tr: { upDirection: 'down', flip: true },
+    br: { upDirection: 'up',   flip: true },
+  };
+  // アーム識別: セル中心がコーナーセルの行帯（y範囲）内なら水平アーム、列帯（x範囲）内なら
+  // 垂直アーム。両方＝コーナーセル自身はどちらでもないため登録しない。
+  const armOf = new Map();
+  for (const key of cells) {
+    const cb = cellBoundsFromKey(key, graph);
+    if (!cb) continue;
+    const cx = (cb.x1 + cb.x2) / 2, cy = (cb.y1 + cb.y2) / 2;
+    const inRow = cy > cc.corner.y1 && cy < cc.corner.y2;
+    const inCol = cx > cc.corner.x1 && cx < cc.corner.x2;
+    if (inRow !== inCol) armOf.set(key, inRow ? 'h' : 'v');
+  }
   const m = MAP[cc.empty];
   return {
     upDirection: m.upDirection,
     flip: m.flip,
+    vAlt: V_MAP[cc.empty],
+    armOf,
     first:    risersFromLength((b.x2 - b.x1) - cc.cw),
     straight: risersFromLength((b.y2 - b.y1) - cc.ch),
   };
@@ -223,9 +250,9 @@ export function detectUTurn(cells, graph, isVertical, b) {
  *   タイプ判定（直進/L字/U字/中空き等）は変えず、upDirection・flip・sectionsの歩行順の決定にのみ使う。
  *   未指定・解決不能（cellsに含まれない等）なら現行の幾何推定にフォールバックする。
  *   対応: STRAIGHT・STRAIGHT_LANDING（upDirectionへ反映）、SWITCHBACK・WINDING（flipへ反映＝
- *   往路レーンの選択）。L_TURN/FLARED・OPEN_WELL は (upDirection,flip) が形状（コーナー位置・
- *   開口位置）から一意に決まり歩行順を反転する自由度が無いため未対応（各分岐のコメント参照。
- *   誤って反転するとコーナー世界座標が実セル形状と矛盾する）。
+ *   往路レーンの選択）、L_TURN/FLARED（(upDirection,flip)へ反映＝上り始めのアーム選択。
+ *   entryセルの属するアームを arm1 とみなし、コーナー接続と反対側の辺が上り口になる）。
+ *   OPEN_WELL のみ未対応（フェーズ4スコープ外。分岐のコメント参照）。
  * @returns {{
  *   type: string,
  *   bounds: { x1, y1, x2, y2 },
@@ -263,26 +290,34 @@ export function classifyStairArea(cells, graph, floorHeight = null, entryCellKey
   }
 
   // 矩折（L字）を判定（4象限のうち1象限が空）。
-  // entryヒント: 未対応。normToWorld/worldToNorm（stairGeometry.js）の検証により、
-  // 正規化空間の arm1（sections[0]）は常に物理的な水平アーム、arm2（sections[2]）は常に垂直アーム
-  // に固定されており、(upDirection,flip) は空象限（コーナー位置）から一意に決まる。
-  // アーム長が非対称（first≠straight）な一般形では歩行順を反転する自由度が無く、
-  // 誤って反転するとコーナーの世界座標が実際のセル形状と矛盾する。アーム長が対称な場合は
-  // 数値上の矛盾が生じない境界ケースだが、本モデルには「どちらの腕を先に歩くか」を独立に
-  // 表す概念（レーン識別）が無いため、対称・非対称を問わず entryヒントは未対応とする
-  // （フェーズ4スコープ外）。
+  // entryヒント: (upDirection,flip) で対応＝上り始めのアーム選択。先頭の有効セル（コーナー
+  // セルはスキップ）が属するアームを arm1（sections[0]、上り始めの直進部）とみなし、
+  // 上り口はそのアームのコーナー（踊り場）接続と反対側の辺になる。垂直アームが arm1 なら
+  // 代替写像 vAlt（up/down 系。detectLTurn 参照）へ切り替え、アーム実段数（first/straight）
+  // も歩行順に入れ替える。ヒント未指定・解決不能なら既定（水平アームが arm1）のまま。
   const lt = detectLTurn(cells, graph, b);
   if (lt) {
+    let ltUp = lt.upDirection, ltFlip = lt.flip;
+    let first = lt.first, straight = lt.straight;
+    if (entryCellKeys) {
+      // アーム識別できないセル（コーナーセル等）はスキップ対象
+      const skipKeys = new Set([...cells].filter(k => !lt.armOf.has(k)));
+      const entryKey = resolveEntryCellKey(entryCellKeys, cells, skipKeys);
+      if (entryKey && lt.armOf.get(entryKey) === 'v') {
+        ({ upDirection: ltUp, flip: ltFlip } = lt.vAlt);
+        [first, straight] = [straight, first];
+      }
+    }
     // 矩折（直進2アーム）の段数。階高に対して不足するならコーナーを曲がり段（実段）で補い FLARED に落とす。
     // コーナーは平踊り場なら1段（総段数に足されない）、曲がり段なら実段差（マスw＝w段ぶん足される）。
-    const baseTotal = lt.first + lt.straight; // 矩折（コーナー平踊り場）の総段数
+    const baseTotal = first + straight; // 矩折（コーナー平踊り場）の総段数
     const required = floorHeight ? Math.ceil(floorHeight / MAX_RISER) : 0;
     const corner = required > baseTotal ? required - baseTotal + 1 : 1;
     const ltType = corner > 1 ? StairType.FLARED : StairType.L_TURN;
-    const ltSections = [lt.first, corner, lt.straight];
+    const ltSections = [first, corner, straight];
     return {
       type: ltType, bounds: b, isVertical, runLength, runWidth,
-      upDirection: lt.upDirection, flip: lt.flip,
+      upDirection: ltUp, flip: ltFlip,
       sections: ltSections,
       totalSteps: totalStepsFromSections(ltSections),
     };
