@@ -43,6 +43,7 @@ app/src/
 | 階・Plane設計 | `.claude/floor-design.md` |
 | 階段モデルの設計意図 | `.claude/stair-model.md` |
 | IndexedDB永続化 | `.claude/persistence-idb.md` |
+| Undo/Redo（またぎ・スナップショット方式） | `.claude/undo-redo.md` |
 | FlatBuffersシリアライズ | `.claude/serialization-fbs.md` |
 | 実装方針（全体ルール） | `.claude/implementation-policy.md` |
 | 本番デプロイ | `.claude/deployment.md` |

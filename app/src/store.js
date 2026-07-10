@@ -94,11 +94,11 @@ reaction(
  * @param {string} name        フロア名（例: '2FL'）
  * @param {number} startFloor  開始階番号（デフォルト 1）
  * @param {number} stories     層数（デフォルト 1）
+ * @param {string} [planeId]   plane.id（省略時は新規発番。階追加 undo の redo が同一 ID で再作成するために指定する）
  * @returns {{ plane, graph }}
  */
-export function addFloor(elevation, name, startFloor = 1, stories = 1) {
-  const newPlaneId = crypto.randomUUID();
-  const result = project.addPlane(elevation, name, newPlaneId, startFloor, stories);
+export function addFloor(elevation, name, startFloor = 1, stories = 1, planeId = crypto.randomUUID()) {
+  const result = project.addPlane(elevation, name, planeId, startFloor, stories);
 
   // 新フロアにも寸法線を追加
   result.graph.addDimensionLine(HDimensionLine, { dimensionKind: DimensionKind.GRID, side: DimensionSide.TOP    });

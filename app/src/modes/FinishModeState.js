@@ -4,6 +4,7 @@ import { classifyStairArea } from '../finish/stair/stairClassify.js';
 import { cellsBeyondBreak } from '../finish/stair/stairGeometry.js';
 import { floorHeightAbove } from '../finish/stair/stairDimensions.js';
 import { floorSwapManager } from '../storage/FloorSwapManager.js';
+import { snapshotFinishState, pushFinishUndo, withFinishUndo } from '../finish/finishUndo.js';
 import { ERR_MATERIAL_MISMATCH } from '../error.js';
 import { RoomFeature } from '@core';
 
@@ -50,6 +51,13 @@ export class FinishModeState {
     // FinishModeState はモード切替のたびに new で生成されるため、
     // フロアプランモードに戻ると自動的にリセットされる。
     this.sessionModifiedRoomIds = new Set();
+    // 新規部屋ダイアログの undo 用スナップショット（部屋作成前の状態。非observable）。
+    // commitDrag での作成とダイアログ確定（applyNaming）を1つの undo エントリに
+    // まとめるため、確定まで push を保留する。キャンセル時は破棄（作成＋取消＝差分なし）。
+    this._pendingDialogUndo = null;
+    // 直近の applyNaming が積んだ undo エントリ（非observable）。階段変換時、
+    // App.jsx が上階自動設置（syncUpperFloors）の巻き戻しを同じエントリへ合成するために参照する。
+    this.lastNamingUndoEntry = null;
     makeObservable(this, {
       dragState:      observable.ref,
       selectedRoomId: observable,
@@ -365,6 +373,10 @@ export class FinishModeState {
     // ダイアログを開く際に渡す選択順セルキー配列（挿入順。フェーズ4の上り口ヒント用）
     const cellOrder = [...state.visitedCells.keys()];
 
+    // undo 用: 変更前スナップショット。統合（判定2）は即時 push、
+    // 新規作成（判定3）はダイアログ確定（applyNaming）まで push を保留する。
+    const undoBefore = snapshotFinishState(this.graph);
+
     // 部屋の保存済みセルは指定時点のグリッド分割を凍結したキーであり、その後
     // floorplanモードで領域内部に区切りCLが追加されると現在のキーと一致しなく
     // なる。refreshCells で現在のグリッド分割に展開してから比較する。
@@ -408,6 +420,8 @@ export class FinishModeState {
         for (const r of overlapping) {
           if (r.id !== dominant.id) this.graph.removeRoom(r.id);
         }
+        // 統合はダイアログをキャンセルしても確定したまま残るため、ここで即時 push する
+        pushFinishUndo(this.graph, undoBefore);
         this._openDialog(dominant.id, false, cellOrder);
         return;
       }
@@ -432,6 +446,7 @@ export class FinishModeState {
       // その他セル — 新規部分指定（cells = newCells ∩ その部屋の現在セル）
       const cells = new Set([...newCells].filter(c => cellsOf(owner).has(c)));
       const room = this.graph.addRoom(cells, '', crypto.randomUUID(), new Set([owner.id]));
+      this._pendingDialogUndo = undoBefore;
       this._openDialog(room.id, true, cellOrder);
       return;
     }
@@ -443,6 +458,7 @@ export class FinishModeState {
     this.dragState = null;
     if (freeCells.size === 0) return;
     const room = this.graph.addRoom(freeCells);
+    this._pendingDialogUndo = undoBefore;
     this._openDialog(room.id, true, cellOrder);
   }
 
@@ -509,6 +525,11 @@ export class FinishModeState {
    * @returns {Stair|null} 新規に階段変換した場合はその Stair（呼び出し側の stairFloorSync 判定用）、それ以外は null。
    */
   applyNaming(roomId, { name, kind, feature }, floorHeight = null) {
+    // 新規部屋なら作成前（commitDrag 冒頭）のスナップショットを使い、
+    // 「作成＋命名」を1つの undo エントリにまとめる。既存部屋なら現時点から。
+    const undoBefore = this._pendingDialogUndo ?? snapshotFinishState(this.graph);
+    this._pendingDialogUndo = null;
+
     const room = this.graph.roomMap.get(roomId);
     if (!room) return null;
 
@@ -554,6 +575,7 @@ export class FinishModeState {
     this.namingIsNew     = false;
     this.namingCellOrder = null;
     // 境界エッジの生成はモード境界の差分追跡で行う（フェーズ4）。命名時の即時生成は廃止。
+    this.lastNamingUndoEntry = pushFinishUndo(this.graph, undoBefore);
     return convertedStair;
   }
 
@@ -570,6 +592,8 @@ export class FinishModeState {
    * （sessionModifiedRoomIds には記録しない）。既存部屋のときは何も変更せず閉じるだけ（選択は維持）。
    */
   cancelNaming(roomId) {
+    // 新規部屋の作成＋キャンセルは差分ゼロなので undo エントリを積まず、保留分を破棄する
+    this._pendingDialogUndo = null;
     if (this.namingIsNew) {
       this._removeLinkedStair(roomId);
       this.graph.removeRoom(roomId);
@@ -586,8 +610,13 @@ export class FinishModeState {
    * その部屋を roomId に持つ Stair があれば道連れで削除する。壁・境界エッジの後始末はモード切替時の既存ロジックに委ねる。
    */
   deleteRoom(roomId) {
+    withFinishUndo(this.graph, () => this._deleteRoomNoUndo(roomId));
+  }
+
+  /** deleteRoom の実体（undo 記録なし。カスケード再帰・deleteFromDialog から使う）。 */
+  _deleteRoomNoUndo(roomId) {
     const children = this.graph.rooms.filter(r => r.referenceRoomIds.has(roomId));
-    for (const child of children) this.deleteRoom(child.id); // 再帰（各自の連動Stairガード込み）
+    for (const child of children) this._deleteRoomNoUndo(child.id); // 再帰（各自の連動Stairガード込み）
 
     this._removeLinkedStair(roomId);
     this.graph.removeRoom(roomId);
@@ -602,6 +631,10 @@ export class FinishModeState {
    *   親（子持ち）・単一部屋  → deleteRoom（親カスケードで子も一括削除）
    */
   deleteFromDialog(roomId) {
+    // 新規部屋（作成→即削除）は保留スナップショットを使う＝差分ゼロでエントリなし
+    const undoBefore = this._pendingDialogUndo ?? snapshotFinishState(this.graph);
+    this._pendingDialogUndo = null;
+
     const room = this.graph.roomMap.get(roomId);
     if (!room) {
       this.namingRoomId    = null;
@@ -612,19 +645,20 @@ export class FinishModeState {
 
     if (room.feature === RoomFeature.STAIR) {
       const stair = [...this.graph.stairMap.values()].find(s => s.roomId === roomId);
-      if (stair) this.deleteStair(stair.id);
-      else this.deleteRoom(roomId); // 連動Stairが見つからない防御ケース
+      if (stair) this._deleteStairNoUndo(stair.id);
+      else this._deleteRoomNoUndo(roomId); // 連動Stairが見つからない防御ケース
     } else if (room.referenceRoomIds.size > 0) {
       const parentId = [...room.referenceRoomIds][0];
-      this.deleteRoom(roomId);
+      this._deleteRoomNoUndo(roomId);
       if (this.graph.roomMap.has(parentId)) this.selectedRoomId = parentId;
     } else {
-      this.deleteRoom(roomId);
+      this._deleteRoomNoUndo(roomId);
     }
 
     this.namingRoomId    = null;
     this.namingIsNew     = false;
     this.namingCellOrder = null;
+    pushFinishUndo(this.graph, undoBefore);
   }
 
   // ---- 階段 ----
@@ -636,6 +670,11 @@ export class FinishModeState {
 
   /** stair.roomId の Room が存在すればそれも削除する（階段タブの削除ボタン経由でも Room が残らないように）。 */
   deleteStair(id) {
+    withFinishUndo(this.graph, () => this._deleteStairNoUndo(id));
+  }
+
+  /** deleteStair の実体（undo 記録なし。deleteFromDialog から使う）。 */
+  _deleteStairNoUndo(id) {
     const stair = this.graph.stairMap.get(id);
     if (stair?.roomId && this.graph.roomMap.has(stair.roomId)) {
       this.graph.removeRoom(stair.roomId);
@@ -656,8 +695,10 @@ export class FinishModeState {
     if (!stair) return;
     const room = stair.roomId ? this.graph.roomMap.get(stair.roomId) : null;
     if (!room) return;
-    room.setFeature(null);
-    this.graph.removeStair(stairId);
+    withFinishUndo(this.graph, () => {
+      room.setFeature(null);
+      this.graph.removeStair(stairId);
+    });
     this.selectedStairId = null;
     this.selectedRoomId  = room.id;
   }
@@ -669,6 +710,7 @@ export class FinishModeState {
 
   dispose() {
     this.cancelDrag();
+    this._pendingDialogUndo = null;
     // 材データを破棄（仕上げモード離脱時）
     this.materials       = null;
     this.materialMap     = null;

@@ -19,3 +19,6 @@ Reactフックはコンポーネント外の`import()`非同期ロードと組�
 
 ## フロア切替直後の古いgraph参照に注意
 `switchFloor`はasync。完了直後は`project.activeGraph`を直接読み直すこと。イベントハンドラのローカル変数`graph`（render時点のクロージャ）は古いフロアを指す。詳細は`.claude/floor-design.md`参照。
+
+## モード境界でgraphを変える処理は必ずundoエントリを積む
+履歴ナビゲーション（またぎundo）はモード切替を「素の切替」で再現し、`handleModeChange`の境界同期を再実行しない。境界処理にgraph変更を追加するときはundoエントリが必須（`.claude/undo-redo.md`）。

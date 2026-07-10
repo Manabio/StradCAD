@@ -74,7 +74,7 @@ import { syncRoofPlane } from './structural/roofPlane.js';
 import { buildStructuralFigureSlots, designationForSlot, firstSlotKeyForPlane } from './structural/structuralFigureSlots.js';
 import { figureBindingManager } from './figure/FigureBindingManager.js';
 import { floorSwapManager } from './storage/FloorSwapManager.js';
-import { saveFloor } from './storage/db.js';
+import { saveFloor, loadFloor, deleteFloor as dbDeleteFloor } from './storage/db.js';
 import { getFigure } from './figure/figureRegistry.js';
 import { STRUCTURAL_FIGURE_ID } from './structural/structuralFigure.js';
 import { SiteInfoPanel }       from './ui/SiteInfoPanel.jsx';
@@ -355,11 +355,84 @@ const App = observer(() => {
     return () => window.removeEventListener('resize', onResize);
   }, []);
 
+  // ---- モード・フロアまたぎ undo/redo ----
+  // 各エントリは記録時のコンテキスト（モード・階）を持つ（undoManager.contextProvider）。
+  // 実行前にコンテキストが現在と違えば、先に表示をそのモード・階へ戻してから実行する。
+  // 切替は「素の」切替（モード境界の再解釈・壁生成・エッジ同期は行わない——それら自体が
+  // undo エントリとして履歴に積まれており、再実行すると履歴と二重適用になるため）。
+  // フロア切替でグラフは IDB から同一オブジェクトへ復元されるため、エントリが握る
+  // graph 参照は切替後も有効になる（＝フロアまたぎ undo もこれで成立する）。
+  undoManager.contextProvider = () => ({ mode: appMode, planeId: project.activePlaneId });
+
+  async function switchHistoryContext(ctx) {
+    if (ctx.planeId && ctx.planeId !== project.activePlaneId && project.planeMap.has(ctx.planeId)) {
+      await switchFloor(ctx.planeId);
+      setActiveFloorId(ctx.planeId);
+      setSnapPoint(null);
+      setNearCL(null);
+      setNearWall(null);
+      setNearOpening(null);
+      setCursorWorld(null);
+      setMenu(null);
+      setClDialog(null);
+      setWallDialog(null);
+      setOpeningDialog(null);
+    }
+    if (ctx.mode && ctx.mode !== appMode) {
+      if (appMode === 'structure' && ctx.mode !== 'structure') {
+        // 構造モードからの離脱は図面合成バインディングの停止が必須（handleModeChange と同じ後始末）
+        figureBindingManager.deactivate();
+        setStructComposition(null);
+        setShowStructuralInfoDialog(false);
+      }
+      setMode(null);
+      setAppMode(ctx.mode);
+      if (ctx.mode === 'structure') {
+        // 構造モードへの復帰は図面合成の再構築が必須（自動補完は決定的な冪等インフラで undo を汚さない）
+        setActiveStructSlotKey(firstSlotKeyForPlane(buildStructuralFigureSlots(project), project.activePlaneId));
+        await runStructuralModeSetup(project.activeGraph);
+      }
+    }
+  }
+
+  // Ctrl+Z / Ctrl+Y の実体。コンテキスト切替は非同期のため、進行中の多重実行は弾く。
+  // 切替中に履歴が動いた（別の push/undo が割り込んだ）場合は実行を中止する。
+  const historyNavRef = useRef(false);
+  async function performUndo() {
+    if (historyNavRef.current) return;
+    const cmd = undoManager.peekUndo();
+    if (!cmd) return;
+    historyNavRef.current = true;
+    try {
+      if (cmd.context) await switchHistoryContext(cmd.context);
+      if (undoManager.peekUndo() === cmd) undoManager.undo();
+    } finally {
+      historyNavRef.current = false;
+    }
+  }
+  async function performRedo() {
+    if (historyNavRef.current) return;
+    const cmd = undoManager.peekRedo();
+    if (!cmd) return;
+    historyNavRef.current = true;
+    try {
+      if (cmd.context) await switchHistoryContext(cmd.context);
+      if (undoManager.peekRedo() === cmd) undoManager.redo();
+    } finally {
+      historyNavRef.current = false;
+    }
+  }
+  // keydown リスナは初回マウント時のみ登録されるため、最新レンダーのクロージャを ref 経由で呼ぶ
+  const performUndoRef = useRef(null);
+  const performRedoRef = useRef(null);
+  performUndoRef.current = performUndo;
+  performRedoRef.current = performRedo;
+
   // ESC / Ctrl+Z / Ctrl+Y
   useEffect(() => {
     const onKey = (e) => {
-      if ((e.ctrlKey || e.metaKey) && e.key === 'z') { e.preventDefault(); undoManager.undo(); return; }
-      if ((e.ctrlKey || e.metaKey) && e.key === 'y') { e.preventDefault(); undoManager.redo(); return; }
+      if ((e.ctrlKey || e.metaKey) && e.key === 'z') { e.preventDefault(); performUndoRef.current?.(); return; }
+      if ((e.ctrlKey || e.metaKey) && e.key === 'y') { e.preventDefault(); performRedoRef.current?.(); return; }
       if (e.key !== 'Escape') return;
       setMenu(null);
       modeRef.current?.cancelDraw?.();
@@ -890,11 +963,12 @@ const App = observer(() => {
 
   // アクティブな graph を再計算し、変化があれば undo に積む（通常の auto-save に乗る）。
   // 再計算後（削除前）の baseline と、フットプリント外に出た部材（overflow）を返す。
-  async function recomputeActiveStructural() {
+  // pushUndo=false は階追加フロー用（withFloorAddUndo が全階分を1エントリで巻き戻すため個別には積まない）。
+  async function recomputeActiveStructural(pushUndo = true) {
     const g = project.activeGraph;
     const mainStructure = g.structureOverride ?? project.structuralInfo.mainStructure;
     const { changed, before, after } = await recomputeStructuralForGraph(g, project, mainStructure);
-    if (changed) {
+    if (changed && pushUndo) {
       undoManager.push(
         () => restoreGraph(g, before),
         () => restoreGraph(g, after),
@@ -928,11 +1002,12 @@ const App = observer(() => {
   }
 
   // 要件1：階追加後。追加で N（負担階数）・基礎指定が変わるため、全実体階の構造部材を更新する。
-  // アクティブ（追加直後の表示階）は undo 付きで、その他の実体階は peek+保存で反映する。
+  // アクティブ（追加直後の表示階）はメモリ上で、その他の実体階は peek+保存で反映する。
+  // undo は個別に積まない（呼び出し元の withFloorAddUndo が階追加フロー全体を1エントリで記録する）。
   // これにより別階・別モードへ移動したとき、更新後の柱・梁・材寸がそのまま描画される。
   async function reflectStructuralAfterFloorAdd() {
     const activeId = project.activePlaneId;
-    const collected = [await recomputeActiveStructural()];
+    const collected = [await recomputeActiveStructural(false)];
     for (const plane of project.planes) {
       if (plane.id === activeId) continue;
       collected.push(await recomputeInactiveStructural(plane));
@@ -1259,16 +1334,111 @@ const App = observer(() => {
     }
   }
 
+  // ---- 階追加の undo 記録 ----
+
+  // Uint8Array 同士の内容比較（null 同士は等しい）
+  function floorBytesEqual(a, b) {
+    if (a === b) return true;
+    if (!a || !b || a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+    return true;
+  }
+
+  // 現在の全採用フロアの状態を planeId → bytes で収集する（アクティブ階はメモリから、
+  // 非アクティブ階は IDB から。IDB 未保存の階は null）。
+  async function collectFloorBytes() {
+    const map = new Map();
+    for (const p of project.planes) {
+      map.set(p.id, p.id === project.activePlaneId
+        ? serializeGraph(project.activeGraph)
+        : (await loadFloor(p.id)) ?? null);
+    }
+    return map;
+  }
+
+  // planeId のフロアへスナップショットを適用する。アクティブならメモリ上のグラフへ復元し、
+  // 非アクティブなら IDB へ書き戻す（peek はキャッシュを持たないためこれで完全に復元される）。
+  // bytes === null は「IDB 未保存」状態への巻き戻し（レコード削除）。
+  function applyFloorBytes(planeId, bytes) {
+    if (project.activePlaneId === planeId && project.activeGraph) {
+      if (bytes != null) restoreGraph(project.activeGraph, bytes);
+      return;
+    }
+    (bytes != null ? saveFloor(planeId, bytes) : dbDeleteFloor(planeId)).catch(console.error);
+  }
+
+  // 階追加フロー全体（addFloor＋新階への同期＋切替＋全階の構造反映）を実行し、
+  // 1つの undo エントリとして記録する。
+  //   undo: 追加階に居れば元の階へ戻り、追加階を削除し、同期・構造反映で変わった既存階を元へ戻す
+  //   redo: 同じ planeId で階を作り直し、追加後状態の bytes を IDB へ書き戻して再度切り替える
+  // フロア切替・IDB 書き込みは非同期のため undo/redo 内では投げ放しで実行する
+  // （完了前に次の undo を重ねると競合しうるが、通常の操作間隔では問題にならない）。
+  async function withFloorAddUndo(run) {
+    const sourcePlaneId = project.activePlaneId;
+    const before = await collectFloorBytes();
+
+    await run();
+
+    const addedPlanes = project.planes
+      .filter(p => !before.has(p.id))
+      .map(p => ({ id: p.id, elevation: p.elevation, name: p.name, startFloor: p.startFloor, stories: p.stories }));
+    if (addedPlanes.length === 0) return;
+
+    const activeAfterId = project.activePlaneId;
+    const after = await collectFloorBytes();
+    const addedBytes = new Map(addedPlanes.map(pl => [pl.id, after.get(pl.id) ?? null]));
+    const changedSiblings = [];
+    for (const [planeId, beforeBytes] of before) {
+      const afterBytes = after.get(planeId);
+      if (after.has(planeId) && !floorBytesEqual(beforeBytes, afterBytes)) {
+        changedSiblings.push({ planeId, before: beforeBytes, after: afterBytes });
+      }
+    }
+
+    undoManager.push(
+      () => {
+        (async () => {
+          setStructSync(null); // 追加起因の部材整理ダイアログは巻き戻しで無効になるため閉じる
+          setStructSyncOpen(false);
+          // アクティブ階は削除できないため、追加階に居る場合は先に元の階へ戻る
+          // （元の階が消えている防御ケースでは追加階以外の最初の採用フロアへ）
+          if (addedPlanes.some(pl => pl.id === project.activePlaneId)) {
+            const backId = project.planeMap.has(sourcePlaneId)
+              ? sourcePlaneId
+              : project.planes.find(p => !addedPlanes.some(pl => pl.id === p.id))?.id;
+            if (!backId) return; // 戻り先なし（起こらない想定）
+            await handleFloorSwitch(backId);
+          }
+          for (const pl of addedPlanes) await removeFloor(pl.id);
+          for (const rec of changedSiblings) applyFloorBytes(rec.planeId, rec.before);
+        })().catch(console.error);
+      },
+      () => {
+        (async () => {
+          for (const pl of addedPlanes) {
+            addFloor(pl.elevation, pl.name, pl.startFloor, pl.stories, pl.id);
+            const bytes = addedBytes.get(pl.id);
+            if (bytes != null) await saveFloor(pl.id, bytes);
+          }
+          for (const rec of changedSiblings) applyFloorBytes(rec.planeId, rec.after);
+          await handleFloorSwitch(activeAfterId); // activate() が保存済み bytes を読み込む
+        })().catch(console.error);
+      },
+    );
+  }
+
   // 上階を追加して切り替える
   async function executeAddUpper(currentPlane) {
-    const topFloor      = currentPlane.startFloor + currentPlane.stories - 1;
-    const newStartFloor = addSkipZero(topFloor, 1);
-    const newName       = makeFloorName(newStartFloor, 1);
-    const nextElevation = currentPlane.elevation + 3000 * currentPlane.stories;
-    const { plane } = addFloor(nextElevation, newName, newStartFloor, 1);
-    await syncNewFloorFromSource(project.activeGraph, plane, newStartFloor);
-    await handleFloorSwitch(plane.id);
-    await reflectStructuralAfterFloorAdd();
+    await withFloorAddUndo(async () => {
+      const topFloor      = currentPlane.startFloor + currentPlane.stories - 1;
+      const newStartFloor = addSkipZero(topFloor, 1);
+      const newName       = makeFloorName(newStartFloor, 1);
+      const nextElevation = currentPlane.elevation + 3000 * currentPlane.stories;
+      const { plane } = addFloor(nextElevation, newName, newStartFloor, 1);
+      await syncNewFloorFromSource(project.activeGraph, plane, newStartFloor);
+      await handleFloorSwitch(plane.id);
+      await reflectStructuralAfterFloorAdd();
+    });
   }
 
   // ダイアログ確定: action = 'upper' | 'lower' | 'general'
@@ -1283,34 +1453,38 @@ const App = observer(() => {
     }
 
     if (action === 'lower') {
-      // 下階 n 階分+: 表示中の開始階から連鎖して n 本追加
-      const lowestElevation = project.planes[0]?.elevation ?? 0;
-      let prevFloor = currentPlane.startFloor;
-      let lastPlane = null;
-      for (let i = 1; i <= n; i++) {
-        const sf   = subtractSkipZero(prevFloor, 1);
-        const name = makeFloorName(sf, 1);
-        const elev = lowestElevation - 3000 * i;
-        const result = addFloor(elev, name, sf, 1);
-        lastPlane = result.plane;
-        prevFloor = sf;
-      }
-      // 作成した最も下の階に切り替え
-      if (lastPlane) await handleFloorSwitch(lastPlane.id);
-      await reflectStructuralAfterFloorAdd();
+      await withFloorAddUndo(async () => {
+        // 下階 n 階分+: 表示中の開始階から連鎖して n 本追加
+        const lowestElevation = project.planes[0]?.elevation ?? 0;
+        let prevFloor = currentPlane.startFloor;
+        let lastPlane = null;
+        for (let i = 1; i <= n; i++) {
+          const sf   = subtractSkipZero(prevFloor, 1);
+          const name = makeFloorName(sf, 1);
+          const elev = lowestElevation - 3000 * i;
+          const result = addFloor(elev, name, sf, 1);
+          lastPlane = result.plane;
+          prevFloor = sf;
+        }
+        // 作成した最も下の階に切り替え
+        if (lastPlane) await handleFloorSwitch(lastPlane.id);
+        await reflectStructuralAfterFloorAdd();
+      });
       return;
     }
 
     if (action === 'general') {
-      // 上階 n 階分の一般階
-      const topFloor      = currentPlane.startFloor + currentPlane.stories - 1;
-      const newStartFloor = addSkipZero(topFloor, 1);
-      const newName       = makeFloorName(newStartFloor, n);
-      const nextElevation = currentPlane.elevation + 3000 * currentPlane.stories;
-      const { plane } = addFloor(nextElevation, newName, newStartFloor, n);
-      await syncNewFloorFromSource(project.activeGraph, plane, newStartFloor);
-      await handleFloorSwitch(plane.id);
-      await reflectStructuralAfterFloorAdd();
+      await withFloorAddUndo(async () => {
+        // 上階 n 階分の一般階
+        const topFloor      = currentPlane.startFloor + currentPlane.stories - 1;
+        const newStartFloor = addSkipZero(topFloor, 1);
+        const newName       = makeFloorName(newStartFloor, n);
+        const nextElevation = currentPlane.elevation + 3000 * currentPlane.stories;
+        const { plane } = addFloor(nextElevation, newName, newStartFloor, n);
+        await syncNewFloorFromSource(project.activeGraph, plane, newStartFloor);
+        await handleFloorSwitch(plane.id);
+        await reflectStructuralAfterFloorAdd();
+      });
     }
   }
 
@@ -1966,8 +2140,8 @@ const App = observer(() => {
     if (tap && e.evt.touches.length === 0) {
       const elapsed = Date.now() - tap.time;
       if (elapsed < 300) {
-        if (tap.count === 2) undoManager.undo();
-        else if (tap.count === 3) undoManager.redo();
+        if (tap.count === 2) performUndo();
+        else if (tap.count === 3) performRedo();
       }
       touchTapRef.current = null;
     }
@@ -2649,8 +2823,8 @@ const App = observer(() => {
         height: TOP_BAR, display: 'flex', alignItems: 'center', gap: 2, zIndex: 200,
       }}>
         {[
-          { label: '↩', title: '元に戻す (Ctrl+Z / 2本指タップ)', can: undoManager.canUndo, action: () => undoManager.undo() },
-          { label: '↪', title: 'やり直す (Ctrl+Y / 3本指タップ)', can: undoManager.canRedo, action: () => undoManager.redo() },
+          { label: '↩', title: '元に戻す (Ctrl+Z / 2本指タップ)', can: undoManager.canUndo, action: () => performUndo() },
+          { label: '↪', title: 'やり直す (Ctrl+Y / 3本指タップ)', can: undoManager.canRedo, action: () => performRedo() },
         ].map(({ label, title, can, action }) => (
           <button
             key={label}
@@ -3094,9 +3268,12 @@ const App = observer(() => {
               const convertedStair = modeRef.current?.applyNaming(id, payload, floorHeight);
               if (convertedStair) {
                 // 新規に階段変換された場合のみ、設置階の上の全採用フロア（最上階まで）へ
-                // 中心線・階段・外壁を同期する（非アクティブ階を peek して IDB へ保存）
+                // 中心線・階段・外壁を同期する（非アクティブ階を peek して IDB へ保存）。
+                // undoEntry を渡し、自動設置分の巻き戻しを変換エントリへ合成する
+                // （変換の Ctrl+Z 1回で上階分もまとめて undo される）。
+                const undoEntry = modeRef.current?.lastNamingUndoEntry ?? null;
                 import('./finish/stair/stairFloorSync.js')
-                  .then(m => m.syncUpperFloors(project, project.activeGraph))
+                  .then(m => m.syncUpperFloors(project, project.activeGraph, { undoEntry }))
                   .catch(console.error);
               }
             }}

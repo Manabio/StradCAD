@@ -1,6 +1,7 @@
 import { observer } from 'mobx-react-lite';
 import { Text } from 'react-konva';
 import { cellBoundsFromKey, getCellsInRect, roomBounds } from '../finish/gridCells.js';
+import { withFinishUndo } from '../finish/finishUndo.js';
 
 const FONT_SIZE_PX = 14; // スクリーン上の表示サイズ (px)
 
@@ -59,10 +60,10 @@ export const RoomLabelsLayer = observer(({ graph, viewport }) => {
         onMouseEnter={e => { e.target.getStage().container().style.cursor = 'grab'; }}
         onMouseLeave={e => { e.target.getStage().container().style.cursor = 'default'; }}
         onDragEnd={e => {
-          room.setNamePosition(
+          withFinishUndo(graph, () => room.setNamePosition(
             e.target.x() + estimatedHalfWidth,
             e.target.y() + fontSize / 2,
-          );
+          ));
         }}
         listening
       />

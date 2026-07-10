@@ -2,7 +2,7 @@
 
 このプロジェクトで必ず遵守する6つの方針。
 
-1. **データ入替えはFlatBuffersのみ**（JSON.stringify/parse禁止）。Uint8Arrayのまま保存・undo・転送する。詳細: `.claude/serialization-fbs.md`
+1. **データ入替えはFlatBuffersのみ**（JSON.stringify/parse禁止）。Uint8Arrayのまま保存・undo・転送する。詳細: `.claude/serialization-fbs.md`。単発操作のundoスナップショット（plain object往復・JSON差分比較）はデータ入替えに該当せず対象外（`.claude/undo-redo.md`）
 2. **非アクティブフロアはIndexedDBにスワップアウト**し、アクティブフロアのみメモリに展開する。詳細: `.claude/persistence-idb.md`
 3. **モードは動的ロード・破棄するMobXクラス**で書く（Reactフックで新モードを書かない）。詳細: `.claude/mode-system.md`
 4. **描画ロジックはApp.jsx/renderer/に共通化**し、モードモジュールがKonva要素を返す構造にしない。

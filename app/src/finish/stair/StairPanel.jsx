@@ -7,6 +7,7 @@ import { stairFigurePrimitives } from './stairFigure.js';
 import { defaultSections } from './stairGeometry.js';
 import { AutoScaledFigure } from '../../structural/sectionFigure/AutoScaledFigure.jsx';
 import { annotatedFigure } from '../../structural/sectionFigure/sectionGeometry.js';
+import { withFinishUndo, beginFieldUndo, endFieldUndo } from '../finishUndo.js';
 
 const STAIR_FIGURE_FRAME = { maxWidth: 280, maxHeight: 220 };
 
@@ -76,12 +77,17 @@ export const StairEditor = observer(({ stair, graph, project, onDelete }) => {
     ? annotatedFigure(scale => stairFigurePrimitives(stair, b, { riser, scale, spans }), STAIR_FIGURE_FRAME)
     : null;
 
+  // 数値入力はキーストローク単位でなくフォーカス〜ブラーで1 undo エントリに集約する
   const num = (field) => (e) => {
     const v = e.target.value;
     stair.setField(field, v === '' ? (field === 'riser' ? null : 0) : Number(v));
   };
+  const fieldUndoProps = {
+    onFocus: () => beginFieldUndo(graph),
+    onBlur:  () => endFieldUndo(graph),
+  };
 
-  const onTypeChange = (e) => {
+  const onTypeChange = (e) => withFinishUndo(graph, () => {
     const t = e.target.value;
     stair.setField('type', t);
     // 切替先タイプと区間数が合わないsections（未初期化・直進[1区間]↔踊り場付[3区間]等）は既定値で組み直す
@@ -89,11 +95,11 @@ export const StairEditor = observer(({ stair, graph, project, onDelete }) => {
     if (HAS_SECTIONS.has(t) && (!stair.sections || stair.sections.length !== expected?.length)) {
       stair.setField('sections', expected);
     }
-  };
+  });
   // 図中編集：踏面寸・区間踏面数の寸法をクリック→NumPad 確定でフィールドへ反映（パネル入力は撤去済み）。
   // 区間の入力値は踏面数（マス数）。内部の sections は実段数のため、
   // 直進部（偶数index）は +1（実段数=踏面数+1）、踊場・周回部（奇数index）はそのまま換算する。
-  const onEditDim = (dim, value) => {
+  const onEditDim = (dim, value) => withFinishUndo(graph, () => {
     if (dim.target === 'sections') {
       const arr = [...(stair.sections ?? defaultSections(stair))];
       arr[dim.index] = Math.max(1, dim.index % 2 === 0 ? value + 1 : value);
@@ -101,7 +107,7 @@ export const StairEditor = observer(({ stair, graph, project, onDelete }) => {
     } else if (dim.target) {
       stair.setField(dim.target, value);
     }
-  };
+  });
 
   return (
     <div style={{ padding: 16, overflowY: 'auto' }}>
@@ -128,7 +134,7 @@ export const StairEditor = observer(({ stair, graph, project, onDelete }) => {
           <input
             type="number" style={inputStyle} value={stair.totalSteps}
             disabled={HAS_SECTIONS.has(stair.type)}
-            onChange={num('totalSteps')}
+            onChange={num('totalSteps')} {...fieldUndoProps}
           />
         </div>
         <div style={rowStyle}>
@@ -136,32 +142,32 @@ export const StairEditor = observer(({ stair, graph, project, onDelete }) => {
           <input
             type="number" style={inputStyle}
             placeholder={dims.riser != null ? `自動 ${Math.round(dims.riser)}` : '自動'}
-            value={stair.riser ?? ''} onChange={num('riser')}
+            value={stair.riser ?? ''} onChange={num('riser')} {...fieldUndoProps}
           />
         </div>
         <div style={rowStyle}>
           <span style={labelStyle}>蹴込(mm)</span>
-          <input type="number" style={inputStyle} value={stair.nosing} onChange={num('nosing')} />
+          <input type="number" style={inputStyle} value={stair.nosing} onChange={num('nosing')} {...fieldUndoProps} />
         </div>
         <div style={rowStyle}>
           <span style={labelStyle}>幅(mm)</span>
-          <input type="number" style={inputStyle} value={stair.width} onChange={num('width')} />
+          <input type="number" style={inputStyle} value={stair.width} onChange={num('width')} {...fieldUndoProps} />
         </div>
         <div style={rowStyle}>
           <span style={labelStyle}>構造</span>
-          <select style={inputStyle} value={stair.structure} onChange={e => stair.setField('structure', e.target.value)}>
+          <select style={inputStyle} value={stair.structure} onChange={e => withFinishUndo(graph, () => stair.setField('structure', e.target.value))}>
             {STRUCTURE_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
           </select>
         </div>
         <div style={rowStyle}>
           <span style={labelStyle}>昇り方向</span>
-          <select style={inputStyle} value={stair.upDirection} onChange={e => stair.setField('upDirection', e.target.value)}>
+          <select style={inputStyle} value={stair.upDirection} onChange={e => withFinishUndo(graph, () => stair.setField('upDirection', e.target.value))}>
             {DIRECTION_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
           </select>
         </div>
         <div style={rowStyle}>
           <span style={labelStyle}>反転</span>
-          <input type="checkbox" checked={stair.flip} onChange={e => stair.setField('flip', e.target.checked)} />
+          <input type="checkbox" checked={stair.flip} onChange={e => withFinishUndo(graph, () => stair.setField('flip', e.target.checked))} />
         </div>
 
         {dims.warnings.length > 0 && (

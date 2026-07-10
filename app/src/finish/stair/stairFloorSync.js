@@ -1,6 +1,7 @@
 import { floorSwapManager } from '../../storage/FloorSwapManager.js';
-import { serializeGraph } from '../../graphSnapshot.js';
+import { serializeGraph, restoreGraph } from '../../graphSnapshot.js';
 import { saveFloor } from '../../storage/db.js';
+import { undoManager } from '../../undoManager.js';
 import { cellBoundsList, outlineSegments, refreshCells } from '../gridCells.js';
 import { ensureStairRooms } from '../roomReinterpret.js';
 import { DEFAULT_WALL_BASE, DEFAULT_WALL_FINISH } from '../wallGeneration.js';
@@ -203,14 +204,23 @@ export function generateStairExteriorWalls(graph, cells, { wallBase = DEFAULT_WA
  * 4. ペアRoomの補完: roomId なしの階段へ feature=STAIR の Room を作り相互リンクする
  *    （ensureStairRooms。設置階と同じ不変条件を上階でも守る——data-model.md）。
  *
- * 非アクティブ階への変更はいずれも floorSwapManager.peek → saveFloor の既存パターンを踏襲する
- * （undo 対象外。フェーズ1（中心線同期のみ）と同じ扱い）。同期対象にアクティブ階が含まれる
- * 場合（syncUpperFloorsAuto 経由）はメモリ上のグラフを直接更新する（ループ内コメント参照）。
+ * 非アクティブ階への変更はいずれも floorSwapManager.peek → saveFloor の既存パターンを踏襲する。
+ * 同期対象にアクティブ階が含まれる場合（syncUpperFloorsAuto 経由）はメモリ上のグラフを
+ * 直接更新する（ループ内コメント参照）。
+ *
+ * undo: opts.undoEntry（applyNaming が積んだ階段変換エントリ）を渡すと、変更した各階の
+ * before/after をシリアライズ済みバイト列で記録し、そのエントリへ合成（undoManager.amend）
+ * する——変換の Ctrl+Z 1回で上階の自動設置分もまとめて巻き戻る。復元はその階が
+ * アクティブならメモリ上のグラフへ restoreGraph、非アクティブなら saveFloor で IDB へ
+ * 書き戻す（peek はキャッシュを持たず毎回 IDB から読むため、これで完全に復元される）。
+ * undoEntry を渡さない呼び出し（階追加時の syncUpperFloorsAuto 等）は従来どおり undo 対象外。
  *
  * @param {object} project
  * @param {object} activeGraph - 設置階（アクティブ）のグラフ
+ * @param {object} [opts]
+ * @param {object|null} [opts.undoEntry] - 合成先の undo エントリ（undoManager.push の戻り値）
  */
-export async function syncUpperFloors(project, activeGraph) {
+export async function syncUpperFloors(project, activeGraph, { undoEntry = null } = {}) {
   const planes = project.planes; // elevation 昇順・採用フロアのみ（検討フロア/屋根伏図は除外済み）
   const active = activeGraph?.plane;
   if (!active) return;
@@ -223,6 +233,8 @@ export async function syncUpperFloors(project, activeGraph) {
   );
   if (needed.size === 0) return;
 
+  const undoRecords = []; // { planeId, before, after }（undoEntry がある場合のみ収集）
+
   for (let i = idx + 1; i < planes.length; i++) {
     const plane = planes[i];
     const hasFloorAbove = i + 1 < planes.length; // このフロアの、さらに上に採用フロアがあるか
@@ -234,6 +246,7 @@ export async function syncUpperFloors(project, activeGraph) {
     const temp = isActive
       ? project.activeGraph
       : await floorSwapManager.peek(plane, project.structGraph);
+    const beforeBytes = undoEntry ? serializeGraph(temp) : null;
     let changed = false;
 
     // 1. 不足CLを追加（extent も写す）
@@ -290,6 +303,23 @@ export async function syncUpperFloors(project, activeGraph) {
     }
 
     if (changed && !isActive) await saveFloor(plane.id, serializeGraph(temp));
+    if (changed && undoEntry) {
+      undoRecords.push({ planeId: plane.id, before: beforeBytes, after: serializeGraph(temp) });
+    }
+  }
+
+  // 変更した各階の巻き戻し・再適用を、変換エントリ（undoEntry）へ合成する
+  if (undoEntry && undoRecords.length > 0) {
+    const applyBytes = (which) => {
+      for (const rec of undoRecords) {
+        if (project.activePlane?.id === rec.planeId) {
+          restoreGraph(project.activeGraph, rec[which]); // undo 時にその階がアクティブなら生きているグラフへ復元
+        } else {
+          saveFloor(rec.planeId, rec[which]).catch(console.error); // 非アクティブ階は IDB のみが正
+        }
+      }
+    };
+    undoManager.amend(undoEntry, () => applyBytes('before'), () => applyBytes('after'));
   }
 }
 

@@ -2,6 +2,7 @@ import { observer } from 'mobx-react-lite';
 import { useState, useEffect } from 'react';
 import { ConfirmDialog } from '../ui/ConfirmDialog.jsx';
 import { StairTab } from './stair/StairTab.jsx';
+import { withFinishUndo, beginFieldUndo, endFieldUndo } from './finishUndo.js';
 import { RoomFeature } from '@core';
 
 // ---- 内部仕上げ表 ----
@@ -214,15 +215,15 @@ const CommonSpecTable = observer(({ graph, mode }) => (
   <div style={{ display: 'flex', flexDirection: 'column', flex: 1, overflow: 'hidden' }}>
     <div style={{ overflowY: 'auto', flex: 1 }}>
       <PerFloorRow label="内壁下地" mode={mode} category="backing"
-        value={graph.interiorWallBacking} onChange={code => graph.setInteriorWallBacking(code)} />
+        value={graph.interiorWallBacking} onChange={code => withFinishUndo(graph, () => graph.setInteriorWallBacking(code))} />
       <PerFloorRow label="内外壁" mode={mode} category="backing"
-        value={graph.exteriorWallBacking} onChange={code => graph.setExteriorWallBacking(code)} />
+        value={graph.exteriorWallBacking} onChange={code => withFinishUndo(graph, () => graph.setExteriorWallBacking(code))} />
       <PerFloorRow label="外壁下地" mode={mode} category="backing"
-        value={graph.exteriorWallBacking} onChange={code => graph.setExteriorWallBacking(code)} />
+        value={graph.exteriorWallBacking} onChange={code => withFinishUndo(graph, () => graph.setExteriorWallBacking(code))} />
       <PerFloorRow label="天井" mode={mode} category="backing"
-        value={graph.ceilingBacking} onChange={code => graph.setCeilingBacking(code)} />
+        value={graph.ceilingBacking} onChange={code => withFinishUndo(graph, () => graph.setCeilingBacking(code))} />
       <PerFloorRow label="床" mode={mode} category="backing"
-        value={graph.floorBacking} onChange={code => graph.setFloorBacking(code)} />
+        value={graph.floorBacking} onChange={code => withFinishUndo(graph, () => graph.setFloorBacking(code))} />
     </div>
   </div>
 ));
@@ -352,7 +353,7 @@ const InteriorTable = observer(({ graph, mode, selectedRoomId, onSelectRoom, flo
     currentOrder.splice(insertAt, 0, dragId);
     const unchanged = currentOrder.length === original.length
       && currentOrder.every((id, i) => id === original[i]);
-    if (!unchanged) graph.reorderRooms(currentOrder);
+    if (!unchanged) withFinishUndo(graph, () => graph.reorderRooms(currentOrder));
     setDragId(null);
     setOverIndex(null);
   }
@@ -375,7 +376,7 @@ const InteriorTable = observer(({ graph, mode, selectedRoomId, onSelectRoom, flo
         mode={mode}
         category="panel"
         value={graph.interiorWallPanel}
-        onChange={code => graph.setInteriorWallPanel(code)}
+        onChange={code => withFinishUndo(graph, () => graph.setInteriorWallPanel(code))}
       />
       {floorName && (
         <div style={{ padding: '8px 12px 0', fontSize: 12, fontWeight: 700, color: '#64748b', flexShrink: 0 }}>
@@ -521,6 +522,7 @@ const FieldCell = observer(({ fieldKey, room, mode }) => {
 });
 
 const FinishCell = observer(({ room, field, mode }) => {
+  const graph = mode?.graph;
   // 内装マスター管理フィールド（壁材・壁仕上げ・天井高さ）— getFinishInfo + setOverride
   if (field.source === 'master') {
     const value = room.getFinishInfo()[field.key];
@@ -533,28 +535,32 @@ const FinishCell = observer(({ room, field, mode }) => {
           mode={mode}
           category={field.category}
           value={value}
-          onChange={handle}
+          onChange={v => withFinishUndo(graph, () => handle(v))}
         />
       );
     }
-    // number（天井高さ）
+    // number（天井高さ）— キーストローク単位でなくフォーカス〜ブラーで1 undo エントリ
     return (
       <input
         type="number"
         value={value ?? ''}
         onChange={e => handle(e.target.value === '' ? '' : Number(e.target.value))}
+        onFocus={() => beginFieldUndo(graph)}
+        onBlur={() => endFieldUndo(graph)}
         onClick={e => e.stopPropagation()}
         style={cellInputStyle}
       />
     );
   }
 
-  // 自由文字列フィールド（room.finish）
+  // 自由文字列フィールド（room.finish）— フォーカス〜ブラーで1 undo エントリ
   const value = room.finish[field.key] ?? '';
   return (
     <input
       value={value}
       onChange={e => room.finish.setField(field.key, e.target.value)}
+      onFocus={() => beginFieldUndo(graph)}
+      onBlur={() => endFieldUndo(graph)}
       onClick={e => e.stopPropagation()}
       style={cellInputStyle}
     />
@@ -619,12 +625,12 @@ const FlatExteriorTable = observer(({ graph, category }) => {
             <tr key={row.id} style={{ background: '#fff' }}>
               {EXTERIOR_COLS.map(col => (
                 <td key={col.key} style={cellBase}>
-                  <ExteriorCell row={row} fieldKey={col.key} />
+                  <ExteriorCell graph={graph} row={row} fieldKey={col.key} />
                 </td>
               ))}
               <td style={{ ...cellBase, textAlign: 'center', padding: '2px 4px' }}>
                 <button
-                  onClick={() => graph.removeExteriorRow(category, row.id)}
+                  onClick={() => withFinishUndo(graph, () => graph.removeExteriorRow(category, row.id))}
                   style={{
                     background: 'none',
                     border: 'none',
@@ -645,7 +651,7 @@ const FlatExteriorTable = observer(({ graph, category }) => {
       </table>
       <div style={{ padding: '6px 8px' }}>
         <button
-          onClick={() => graph.addExteriorRow(category)}
+          onClick={() => withFinishUndo(graph, () => graph.addExteriorRow(category))}
           style={{
             fontSize: 12,
             color: '#2563eb',
@@ -690,7 +696,7 @@ const GroupedExteriorTable = observer(({ graph, category }) => {
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
             <div style={{ fontSize: 13, fontWeight: 700, color: '#374151' }}>{part || '（部位未設定）'}</div>
             <button
-              onClick={() => graph.removeExteriorRowGroup(category, part)}
+              onClick={() => withFinishUndo(graph, () => graph.removeExteriorRowGroup(category, part))}
               style={{
                 fontSize: 11, color: '#94a3b8', background: 'none',
                 border: 'none', cursor: 'pointer', padding: '0 4px',
@@ -714,12 +720,12 @@ const GroupedExteriorTable = observer(({ graph, category }) => {
                 <tr key={row.id} style={{ background: '#fff' }}>
                   {PART_GROUP_COLS.map(col => (
                     <td key={col.key} style={cellBase}>
-                      <ExteriorCell row={row} fieldKey={col.key} />
+                      <ExteriorCell graph={graph} row={row} fieldKey={col.key} />
                     </td>
                   ))}
                   <td style={{ ...cellBase, textAlign: 'center', padding: '2px 4px' }}>
                     <button
-                      onClick={() => graph.removeExteriorRow(category, row.id)}
+                      onClick={() => withFinishUndo(graph, () => graph.removeExteriorRow(category, row.id))}
                       style={{
                         background: 'none', border: 'none', color: '#94a3b8',
                         cursor: 'pointer', fontSize: 14, lineHeight: 1, padding: '0 2px',
@@ -734,7 +740,7 @@ const GroupedExteriorTable = observer(({ graph, category }) => {
             </tbody>
           </table>
           <button
-            onClick={() => graph.addExteriorRow(category, part)}
+            onClick={() => withFinishUndo(graph, () => graph.addExteriorRow(category, part))}
             style={{
               marginTop: 4, fontSize: 12, color: '#2563eb', background: 'none',
               border: '1px dashed #93c5fd', borderRadius: 4, padding: '3px 10px', cursor: 'pointer',
@@ -749,7 +755,7 @@ const GroupedExteriorTable = observer(({ graph, category }) => {
           value=""
           onChange={e => {
             const part = e.target.value;
-            if (part) graph.addExteriorRow(category, part);
+            if (part) withFinishUndo(graph, () => graph.addExteriorRow(category, part));
           }}
           style={{
             fontSize: 12, color: '#2563eb', background: '#fff',
@@ -767,10 +773,12 @@ const GroupedExteriorTable = observer(({ graph, category }) => {
   );
 });
 
-const ExteriorCell = observer(({ row, fieldKey }) => (
+const ExteriorCell = observer(({ graph, row, fieldKey }) => (
   <input
     value={row[fieldKey]}
     onChange={e => row.setField(fieldKey, e.target.value)}
+    onFocus={() => beginFieldUndo(graph)}
+    onBlur={() => endFieldUndo(graph)}
     style={{
       width: '100%',
       minWidth: 60,
