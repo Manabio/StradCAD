@@ -1226,7 +1226,7 @@ const App = observer(() => {
     await runStructuralModeSetup(project.activeGraph);
   }
 
-  function handleAddFloor() {
+  function handleAddFloor(e) {
     const currentPlane = project.activePlane;
     if (!currentPlane || currentPlane.isAlternative) return; // 採用のみ
 
@@ -1238,8 +1238,9 @@ const App = observer(() => {
       return;
     }
 
-    // ケース1（最下階）/ ケース3（その他）→ ダイアログを開く
-    setFloorDialog({ isLowest });
+    // ケース1（最下階）/ ケース3（その他）→ ボタン直下にダイアログを開く
+    const rect = e.currentTarget.getBoundingClientRect();
+    setFloorDialog({ isLowest, anchor: { x: rect.left, y: rect.bottom } });
   }
 
   // 階追加（'upper'/'general'のみ対象。'lower' は対象外）: 元階の階段・外壁状態を新階へ引き継ぐ。
@@ -2807,6 +2808,7 @@ const App = observer(() => {
       {floorDialog && (
         <AddFloorDialog
           isLowest={floorDialog.isLowest}
+          anchor={floorDialog.anchor}
           onConfirm={handleAddFloorConfirm}
           onCancel={() => setFloorDialog(null)}
         />
