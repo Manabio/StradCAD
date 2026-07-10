@@ -175,6 +175,8 @@ export class FinishModeState {
   /**
    * 部屋ドラッグから除外する自階階段セルの Set。破れ線先セルのうち、直下階に階段が無い
    * （＝階段下エリア）ものは部屋ドラッグを許容するため除外対象から外す。
+   * 階段吹抜け（STAIR_VOID。最上階の自動管理 Room）のセルも除外する
+   * （commitDrag の rooms 走査から外れるため、除外しないと二重割当の部屋が作れてしまう）。
    */
   _roomExcludedStairKeys() {
     const stairKeys = new Set();
@@ -191,6 +193,10 @@ export class FinishModeState {
         }
         stairKeys.add(key);
       }
+    }
+    for (const room of this.graph.rooms) {
+      if (room.feature !== RoomFeature.STAIR_VOID) continue;
+      for (const key of refreshCells(room.cells, this.graph)) stairKeys.add(key);
     }
     return stairKeys;
   }
@@ -368,7 +374,8 @@ export class FinishModeState {
       return cellsCache.get(r.id);
     };
 
-    const rooms = this.graph.rooms.filter(r => r.feature !== RoomFeature.STAIR);
+    const rooms = this.graph.rooms.filter(r =>
+      r.feature !== RoomFeature.STAIR && r.feature !== RoomFeature.STAIR_VOID);
     const overlapping = rooms.filter(r => [...cellsOf(r)].some(c => newCells.has(c)));
 
     if (overlapping.length > 0) {

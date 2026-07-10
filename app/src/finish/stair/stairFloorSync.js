@@ -2,8 +2,9 @@ import { floorSwapManager } from '../../storage/FloorSwapManager.js';
 import { serializeGraph } from '../../graphSnapshot.js';
 import { saveFloor } from '../../storage/db.js';
 import { cellBoundsList, outlineSegments, refreshCells } from '../gridCells.js';
+import { ensureStairRooms } from '../roomReinterpret.js';
 import { DEFAULT_WALL_BASE, DEFAULT_WALL_FINISH } from '../wallGeneration.js';
-import { CenterLineType } from '@core';
+import { CenterLineType, RoomFeature, RoomKind } from '@core';
 
 const EPS = 1e-6;
 
@@ -17,6 +18,28 @@ function findCounterpart(graph, type, value) {
 function setsEqual(a, b) {
   if (a.size !== b.size) return false;
   for (const x of a) if (!b.has(x)) return false;
+  return true;
+}
+
+// 屋内階段判定: ペア Room の kind が EXTERIOR でなければ屋内（roomId なしの旧データは屋内扱い）
+function isIndoorStair(graph, stair) {
+  const room = stair.roomId ? graph.roomMap.get(stair.roomId) : null;
+  return (room?.kind ?? RoomKind.INTERIOR) !== RoomKind.EXTERIOR;
+}
+
+/**
+ * 最上階の階段 footprint へ階段吹抜け（STAIR_VOID）Room を自動指定する。
+ * 既存 Room（stairVoid 自身を含む）とセルが重なる場合は何もしない（冪等・二重割当防止）。
+ * @returns {boolean} 追加したか
+ */
+function addStairVoidRoom(graph, cells) {
+  if (cells.size === 0) return false;
+  for (const room of graph.rooms) {
+    const roomCells = refreshCells(room.cells, graph);
+    if ([...cells].some(k => roomCells.has(k))) return false;
+  }
+  const room = graph.addRoom(new Set(cells));
+  room.setFeature(RoomFeature.STAIR_VOID);
   return true;
 }
 
@@ -170,15 +193,19 @@ export function generateStairExteriorWalls(graph, cells, { wallBase = DEFAULT_WA
  *    全階共通のため対象外。
  * 2. 階段の自動設置: その階の「さらに上」にも採用フロアがある場合のみ（最上階には設置
  *    しない＝階段は次階への到達手段のため）、同 footprint の階段がまだ無ければ設置階と
- *    同じ内容（sections 含む）で追加する（type:value 照合で冪等）。
+ *    同じ内容（sections 含む）で追加する（type:value 照合で冪等）。最上階には代わりに、
+ *    屋内階段の footprint へ階段吹抜け（STAIR_VOID）を自動指定する（addStairVoidRoom）。
  * 3. 外壁の自動指定: その階に isExteriorWall の壁が1本も無い場合のみ、階段 footprint の
  *    外周に外壁を生成する（既にあれば何もしない＝冪等）。最上階を含む全上階に適用する
  *    （ユーザー決定：階段が設置されない最上階にも階段形の外壁を生成する）。footprint は
  *    常に設置階の階段セルを変換した translatedCells を使う（最上階には Stair 実体が無いため
  *    temp.stairs には依存しない）。
+ * 4. ペアRoomの補完: roomId なしの階段へ feature=STAIR の Room を作り相互リンクする
+ *    （ensureStairRooms。設置階と同じ不変条件を上階でも守る——data-model.md）。
  *
  * 非アクティブ階への変更はいずれも floorSwapManager.peek → saveFloor の既存パターンを踏襲する
- * （undo 対象外。フェーズ1（中心線同期のみ）と同じ扱い）。
+ * （undo 対象外。フェーズ1（中心線同期のみ）と同じ扱い）。同期対象にアクティブ階が含まれる
+ * 場合（syncUpperFloorsAuto 経由）はメモリ上のグラフを直接更新する（ループ内コメント参照）。
  *
  * @param {object} project
  * @param {object} activeGraph - 設置階（アクティブ）のグラフ
@@ -199,7 +226,14 @@ export async function syncUpperFloors(project, activeGraph) {
   for (let i = idx + 1; i < planes.length; i++) {
     const plane = planes[i];
     const hasFloorAbove = i + 1 < planes.length; // このフロアの、さらに上に採用フロアがあるか
-    const temp = await floorSwapManager.peek(plane, project.structGraph);
+    // 起点探索付き同期（syncUpperFloorsAuto）ではアクティブ階が同期対象に含まれうる。
+    // アクティブ階を peek→saveFloor で書き換えると、後のモード切替保存（deactivate が
+    // メモリ上のグラフを保存する）で上書き消失するため、メモリ上のグラフを直接更新する
+    // （永続化は auto-save / deactivate に任せ、saveFloor はスキップする）。
+    const isActive = plane.id === project.activePlane?.id;
+    const temp = isActive
+      ? project.activeGraph
+      : await floorSwapManager.peek(plane, project.structGraph);
     let changed = false;
 
     // 1. 不足CLを追加（extent も写す）
@@ -228,6 +262,10 @@ export async function syncUpperFloors(project, activeGraph) {
           });
           changed = true;
         }
+      } else if (isIndoorStair(activeGraph, stair)) {
+        // 最上階: 屋内階段の footprint へ階段吹抜け（STAIR_VOID）を自動指定する
+        // （階段実体は置かない。描画・操作対象外の自動管理 Room。屋外階段は吹抜け不要）。
+        if (addStairVoidRoom(temp, translatedCells)) changed = true;
       }
 
       if (!hadExteriorWall) {
@@ -236,8 +274,59 @@ export async function syncUpperFloors(project, activeGraph) {
       }
     }
 
-    if (changed) await saveFloor(plane.id, serializeGraph(temp));
+    // 4. ペアRoomの補完: 自動設置した階段（今回分・過去分とも）へ feature=STAIR の Room を
+    //    作り相互リンクする。Room が無いと部屋指定時の外壁生成が階段エリアを「無名屋外」
+    //    とみなし、隣接部屋の周囲に誤った外壁ループができる（data-model.md の不変条件）。
+    //    footprint が一致する階段吹抜け（旧最上階の自動指定分）はペア Room へ転用される。
+    if (ensureStairRooms(temp).length > 0) changed = true;
+
+    // 5. 中間階に残った階段吹抜けの掃除: 転用（手順4）に乗らなかった STAIR_VOID は
+    //    最上階でのみ意味を持つ自動管理 Room のため削除する（footprint 不一致の残骸対策）。
+    if (hasFloorAbove) {
+      for (const r of temp.rooms.filter(r => r.feature === RoomFeature.STAIR_VOID)) {
+        temp.removeRoom(r.id);
+        changed = true;
+      }
+    }
+
+    if (changed && !isActive) await saveFloor(plane.id, serializeGraph(temp));
   }
+}
+
+/**
+ * syncUpperFloors の起点探索付きラッパー（階追加時用）。表示中の階（sourceGraph）に階段が
+ * あればそのまま同期し、無ければそれより下の採用フロアを上から順に peek して、階段を持つ
+ * 最初の階を起点に同期する（例: 階段の無い最上階を表示したまま階を追加した場合、旧最上階
+ * への階段設置と新最上階への階段吹抜け指定は、中間階の階段を起点にしないと走らない）。
+ */
+export async function syncUpperFloorsAuto(project, sourceGraph) {
+  if (sourceGraph.stairs.length > 0) return syncUpperFloors(project, sourceGraph);
+  const planes = project.planes;
+  const idx = planes.findIndex(p => p.id === sourceGraph.plane?.id);
+  for (let i = idx - 1; i >= 0; i--) {
+    const temp = await floorSwapManager.peek(planes[i], project.structGraph);
+    if (temp.stairs.length > 0) return syncUpperFloors(project, temp);
+  }
+}
+
+/**
+ * アクティブ階が最上階（採用）のとき、直下階の屋内階段 footprint へ階段吹抜け（STAIR_VOID）を
+ * 補完する（仕上げモード突入時の既存データ修復。syncUpperFloors と同じ自動同期のため undo 対象外）。
+ * @returns {Promise<boolean>} 追加したか
+ */
+export async function ensureTopStairVoid(project, activeGraph) {
+  const planes = project.planes;
+  const idx = planes.findIndex(p => p.id === activeGraph?.plane?.id);
+  if (idx < 1 || idx !== planes.length - 1) return false; // 最上階のみ・下階必須
+  const below = await floorSwapManager.peek(planes[idx - 1], project.structGraph);
+  let changed = false;
+  for (const stair of below.stairs) {
+    if (!isIndoorStair(below, stair)) continue;
+    const cells = translateCellSet(stair.cells, below, project.structGraph, activeGraph);
+    if (!cells) continue; // CL変換不能 → 安全側でスキップ
+    if (addStairVoidRoom(activeGraph, cells)) changed = true;
+  }
+  return changed;
 }
 
 /**
@@ -248,10 +337,9 @@ export async function syncUpperFloors(project, activeGraph) {
  *
  * セル集合は元階の全 Room セル ∪ 全階段 footprint セル（refreshCells で現行グリッドへ展開）
  * とする。外壁ループ（'outer'）の内側は、部屋・階段以外に建物内部の領域が無いことから
- * 通常この和集合と一致する（wallGeneration.js の classifyExteriorEdge・edgeClassify.js の
- * buildCellToRoom を確認済み。階段は Room ではないため cellToRoom に現れず、外壁生成側は
- * 階段に隣接する境界を「外側」とみなしうる——これは階段を Room に含めていない既存の仕様上の
- * 制約であり、本関数はそれとは独立に「見えている領域を安全側で丸ごと複写する」方針を取る）。
+ * 通常この和集合と一致する。階段は通常 feature=STAIR のペア Room を持ち Room セル側にも
+ * 含まれるが（data-model.md）、ペア Room を補完できない互換経路（既存 Room とフットプリント
+ * が重なる場合）が残るため、階段 footprint の和集合は安全網として維持する。
  * 完全な一致が崩れるケース（外壁ループに寄与しない離れ部屋等）でも、この和集合を安全側の
  * 近似として採用する（過小に切り詰めるより、部屋が実領域より広く複写される方が実害が小さい）。
  *
@@ -281,6 +369,15 @@ export async function addNewFloorRoomFromSource(project, sourceGraph, newPlane, 
   const translatedCells = translateCellSet(sourceCells, sourceGraph, project.structGraph, temp);
   if (!translatedCells || translatedCells.size === 0) return; // CL変換不能 → 安全側で見送る
 
-  temp.addRoom(translatedCells, roomName);
+  // 新階側で既に割当済みのセル（直前の syncUpperFloors が自動指定した階段吹抜け等）は
+  // 除外する（セルの二重割当防止。階段部は吹抜け側が「屋内」を担うため壁生成にも影響しない）
+  const assigned = new Set();
+  for (const room of temp.rooms) {
+    for (const key of refreshCells(room.cells, temp)) assigned.add(key);
+  }
+  const freeCells = new Set([...translatedCells].filter(k => !assigned.has(k)));
+  if (freeCells.size === 0) return;
+
+  temp.addRoom(freeCells, roomName);
   await saveFloor(newPlane.id, serializeGraph(temp));
 }

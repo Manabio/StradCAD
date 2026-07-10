@@ -35,7 +35,7 @@ import { cellsBeyondBreak } from './finish/stair/stairGeometry.js';
 import { roomBounds, cellBoundsList } from './finish/gridCells.js';
 import { generateRoomWallsFromOutline, generateExteriorWalls, snapshotWall, restoreWallsFromSnapshots } from './finish/wallGeneration.js';
 import { snapshotEdges, restoreEdges, syncEdgesFromTopology } from './finish/edgeClassify.js';
-import { reinterpretRoomsOnEntry, snapshotRoomsState, restoreRoomsState } from './finish/roomReinterpret.js';
+import { reinterpretRoomsOnEntry, ensureStairRooms, snapshotRoomsState, restoreRoomsState } from './finish/roomReinterpret.js';
 import { RoomLabelsLayer } from './renderer/RoomLabelsLayer.jsx';
 import { StructuralLayer, ColumnsLayer } from './renderer/StructuralLayer.jsx';
 import { MemberTagLayer } from './renderer/MemberTagLayer.jsx';
@@ -1012,15 +1012,30 @@ const App = observer(() => {
     // 突き合わせて再解釈（辺の喪失によるセル統合・部分指定化）した上で、
     // 通り芯変更等のトポロジー差分でエッジを再同期する
     if (appMode !== 'finish' && newMode === 'finish') {
+      // 最上階なら直下階の屋内階段footprintへ階段吹抜け（STAIR_VOID）を補完する
+      // （既存データ修復。syncUpperFloors と同じ自動同期のため undo 対象外）
+      const { ensureTopStairVoid } = await import('./finish/stair/stairFloorSync.js');
+      await ensureTopStairVoid(project, graph);
+
       const entryUndoFns = [];
       const entryRedoFns = [];
 
       const roomsBefore = snapshotRoomsState(graph);
-      runInAction(() => reinterpretRoomsOnEntry(graph));
+      const stairRoomChanges = [];
+      runInAction(() => {
+        reinterpretRoomsOnEntry(graph);
+        // roomIdなしStair（旧データ・上階自動設置分）へ階段Roomを補完（開くだけで修復）
+        stairRoomChanges.push(...ensureStairRooms(graph));
+      });
       const roomsAfter = snapshotRoomsState(graph);
       if (JSON.stringify(roomsBefore) !== JSON.stringify(roomsAfter)) {
         entryUndoFns.push(() => restoreRoomsState(graph, roomsBefore));
         entryRedoFns.push(() => restoreRoomsState(graph, roomsAfter));
+      }
+      // 補完した Room 自体は rooms スナップショットが巻き戻すが、Stair.roomId は対象外のため個別に戻す
+      if (stairRoomChanges.length > 0) {
+        entryUndoFns.push(() => { for (const c of stairRoomChanges) c.stair.setField('roomId', c.prevRoomId); });
+        entryRedoFns.push(() => { for (const c of stairRoomChanges) c.stair.setField('roomId', c.room.id); });
       }
 
       const before = snapshotEdges(graph);
@@ -1066,7 +1081,7 @@ const App = observer(() => {
       // 寸法は実材厚から導出（modeRef.current は脱出直前でまだ生存・材ロード済み）。
       const fmode = modeRef.current;
       for (const room of graph.rooms) {
-        if (room.feature === RoomFeature.STAIR) continue; // 階段エリアは内周壁を作らない（従来どおり）
+        if (room.feature === RoomFeature.STAIR || room.feature === RoomFeature.STAIR_VOID) continue; // 階段・階段吹抜けエリアは内周壁を作らない
         if (room.generatedWallIds.size > 0) continue;
         if (room.referenceRoomIds && room.referenceRoomIds.size > 0) continue;
 
@@ -1228,17 +1243,16 @@ const App = observer(() => {
   }
 
   // 階追加（'upper'/'general'のみ対象。'lower' は対象外）: 元階の階段・外壁状態を新階へ引き継ぐ。
-  //   1. 元階に階段があれば、新階（〜最上階）へ階段補助線を同期する（syncUpperFloors。
-  //      新階は追加直後は最上階のため、フェーズ2の仕様どおり階段自体は設置されずCL＋外壁のみ）。
+  //   1. 下階のどこかに階段があれば、新階（〜最上階）へ階段補助線を同期する（syncUpperFloorsAuto。
+  //      表示階に階段が無くても下階から起点を探索する。旧最上階＝中間階へ移行した階には階段が
+  //      設置され、階段吹抜けはペアRoomへ転用される。新最上階には CL＋外壁＋階段吹抜けのみ）。
   //   2. 元階に外壁（isExteriorWall）があれば、新階へ「外壁ループ内側」を部屋「n階」として自動追加する
   //      （newStartFloor基準。地下階でも makeFloorName(startFloor, 1) で「地下n階」等に正しく整形される）。
   // addFloor 直後・handleFloorSwitch 前に行う（新階はまだ非アクティブ＝peek→saveFloorの通常経路。
   // handleFloorSwitch 後の activate() は IDB に保存済みの内容を読み込むため反映される）。
   async function syncNewFloorFromSource(sourceGraph, newPlane, newStartFloor) {
-    const { syncUpperFloors, addNewFloorRoomFromSource } = await import('./finish/stair/stairFloorSync.js');
-    if (sourceGraph.stairs.length > 0) {
-      await syncUpperFloors(project, sourceGraph);
-    }
+    const { syncUpperFloorsAuto, addNewFloorRoomFromSource } = await import('./finish/stair/stairFloorSync.js');
+    await syncUpperFloorsAuto(project, sourceGraph);
     if (sourceGraph.walls.some(w => w.isExteriorWall)) {
       await addNewFloorRoomFromSource(project, sourceGraph, newPlane, makeFloorName(newStartFloor, 1));
     }

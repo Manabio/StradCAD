@@ -296,7 +296,8 @@ export const FinishTable = observer(({ graph, mode, project, selectedRoomId, onS
 
 const InteriorTable = observer(({ graph, mode, selectedRoomId, onSelectRoom, floorName }) => {
   // 階段（feature===STAIR）は階段タブが担当するため内部仕上げ表からは除外する。
-  const rooms = graph.rooms.filter(r => r.feature !== RoomFeature.STAIR);
+  // 階段吹抜け（STAIR_VOID）は自動管理 Room のため同じく表に出さない。
+  const rooms = graph.rooms.filter(r => r.feature !== RoomFeature.STAIR && r.feature !== RoomFeature.STAIR_VOID);
 
   const [dragId, setDragId]             = useState(null);
   const [overIndex, setOverIndex]       = useState(null);

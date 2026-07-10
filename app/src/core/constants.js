@@ -54,8 +54,9 @@ export const RoomKind = Object.freeze({
 
 // 部屋の属性軸（feature） — kind とは独立。相互排他・個別ON/OFF可。null = なし。
 export const RoomFeature = Object.freeze({
-  STAIR: 'stair',  // 階段
-  VOID:  'void',   // 吹抜け
+  STAIR:      'stair',     // 階段
+  VOID:       'void',      // 吹抜け（ユーザー指定）
+  STAIR_VOID: 'stairVoid', // 階段吹抜け（最上階の屋内階段footprintへ自動指定。描画・操作対象外の自動管理Room）
 });
 
 // 階段タイプ（MVPは STRAIGHT のみ実装。他は順次拡張）

@@ -15,7 +15,7 @@
 // ================================================================
 
 import { Room, RoomFeature } from '@core';
-import { lostSides, cellInteriorPoint, regionCellsAt } from './gridCells.js';
+import { lostSides, cellInteriorPoint, regionCellsAt, refreshCells } from './gridCells.js';
 
 function isEarlierInOrder(graph, idA, idB) {
   const order = graph.roomOrder;
@@ -34,7 +34,8 @@ export function reinterpretRoomsOnEntry(graph) {
   for (const room of rooms) {
     // 階段Room（feature===STAIR）は再解釈しない。フットプリントは階段設置時に確定済みで、
     // 吸収/削除されると Stair.roomId が孤児化するため（フェーズ2以前は階段はRoomでなく対象外だった＝従来挙動を維持）。
-    if (room.feature === RoomFeature.STAIR) continue;
+    // 階段吹抜け（STAIR_VOID）も同様に対象外（自動管理 Room。同期側が footprint を管理する）。
+    if (room.feature === RoomFeature.STAIR || room.feature === RoomFeature.STAIR_VOID) continue;
     for (const oldKey of room.cells) {
       const lost = lostSides(oldKey, graph);
       if (lost.length === 0) continue;
@@ -88,6 +89,60 @@ export function reinterpretRoomsOnEntry(graph) {
       }
     }
   }
+}
+
+function cellSetsEqual(a, b) {
+  if (a.size !== b.size) return false;
+  for (const x of a) if (!b.has(x)) return false;
+  return true;
+}
+
+/**
+ * ペア Room を持たない Stair（旧データ・上階自動設置分）へ feature=STAIR の Room を補完し、
+ * 相互リンク（Stair.roomId）を回復する（不変条件は `.claude/data-model.md`。Room が無いと
+ * 外壁生成・境界分類が階段エリアを「無名屋外」とみなし、隣接部屋の周囲に誤った外壁ができる）。
+ * footprint が一致する階段吹抜け（STAIR_VOID。旧最上階の自動指定分）があれば、新規作成せず
+ * その Room をペア Room へ転用する（階追加による中間階への移行。セル集合と Room 同一性を保つ）。
+ * フットプリントが既存 Room のセルと重なる場合は補完しない（その領域は既に「屋内」で
+ * 症状が出ず、セルの二重割当を避けるため）。
+ * @param {import('@core').FloorGraph} graph
+ * @returns {{stair, room, prevRoomId}[]} 補完した組（undo 用。呼び出し側で roomId を戻す。
+ *   room.feature の巻き戻しは rooms スナップショット側が担う）
+ */
+export function ensureStairRooms(graph) {
+  const changes = [];
+  const orphans = graph.stairs.filter(s => !s.roomId || !graph.roomMap.has(s.roomId));
+  if (orphans.length === 0) return changes;
+
+  const assigned = new Set();
+  for (const room of graph.rooms) {
+    for (const key of refreshCells(room.cells, graph)) assigned.add(key);
+  }
+  for (const stair of orphans) {
+    const cells = refreshCells(stair.cells, graph);
+    if (cells.size === 0) continue;
+
+    // 旧最上階の階段吹抜けが footprint と一致すればペア Room へ転用
+    const voidRoom = graph.rooms.find(r =>
+      r.feature === RoomFeature.STAIR_VOID && cellSetsEqual(refreshCells(r.cells, graph), cells));
+    if (voidRoom) {
+      voidRoom.setFeature(RoomFeature.STAIR);
+      const prevRoomId = stair.roomId;
+      stair.setField('roomId', voidRoom.id);
+      changes.push({ stair, room: voidRoom, prevRoomId });
+      continue;
+    }
+
+    if ([...cells].some(key => assigned.has(key))) continue;
+
+    const room = graph.addRoom(cells);
+    room.setFeature(RoomFeature.STAIR);
+    const prevRoomId = stair.roomId;
+    stair.setField('roomId', room.id);
+    for (const key of cells) assigned.add(key);
+    changes.push({ stair, room, prevRoomId });
+  }
+  return changes;
 }
 
 // ----------------------------------------------------------------

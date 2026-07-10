@@ -25,7 +25,10 @@ Intersection・Shape・Wall・Opening・構造部材はすべて自前の座標�
 `kind`（屋内/屋外）と`feature`（階段/吹抜け/なし）は独立。外壁・footprint等の内外判定は**kind軸のみ**を見る（featureを混ぜない）。旧データの`kind='void'`は読込時に「屋内+吹抜け」へ移行するが、デコード経路はFlatBuffers・plain object・undoスナップショットの**3系統**あり、移行を1箇所に足しても他が漏れる——変更時は3経路すべてを揃えること。
 
 ## 階段はRoomを残したままStairと相互リンクする
-階段化でRoomを消すと外壁生成（graph.rooms走査）から階段エリアが消えるため、`feature=STAIR`のRoomを保持し`Stair.roomId`でリンクする。不変条件: 削除は必ず双方向道連れ（片側だけ消すと孤児化）、階段Roomは部屋再解釈（roomReinterpret）の対象外（吸収されるとリンクが壊れる）、内周壁生成・仕上げ表内部タブ・キャンバス部屋塗りからは除外する。roomIdなしのStair（旧データ・上階自動設置）は従来どおりRoomなしで動く互換経路として残している。
+階段化でRoomを消すと外壁生成（graph.rooms走査）から階段エリアが消えるため、`feature=STAIR`のRoomを保持し`Stair.roomId`でリンクする。不変条件: 削除は必ず双方向道連れ（片側だけ消すと孤児化）、階段Roomは部屋再解釈（roomReinterpret）の対象外（吸収されるとリンクが壊れる）、内周壁生成・仕上げ表内部タブ・キャンバス部屋塗りからは除外する。roomIdなしのStair（旧データ）は上階自動設置（syncUpperFloors）・仕上げモード突入時にRoomを自動補完する（ensureStairRooms）。補完できないのはフットプリントが既存Roomと重なる場合のみで、そのときはRoomなしで動く互換経路に残る（既に「屋内」なので外壁判定に実害なし）。
+
+## 最上階の屋内階段footprintは階段吹抜け（feature=STAIR_VOID）で表す
+最上階には階段実体を置かない（階段は次階への到達手段）が、footprintを「屋内」として外壁生成・境界分類に参加させる必要があるため、自動管理Room（`feature=STAIR_VOID`・無名・kind=INTERIOR）を自動指定する（syncUpperFloors／仕上げモード突入時のensureTopStairVoid。屋外階段は対象外）。ユーザー指定の吹抜け（`feature=VOID`）とは描画・操作の扱いが異なる: STAIR_VOIDは塗り・仕上げ表・部屋ドラッグ・内周壁・部屋再解釈のすべてから除外し、一切描画しない。階追加で旧最上階が中間階になると、階段吹抜けはそのままペアRoomへ転用される（ensureStairRoomsのfootprint一致判定。転用できない残骸は同期時に削除）。自動同期による指定・転用・削除はいずれもundo対象外。
 
 ## floorDatum/floorLevel・templateKey/customOverridesは「共有基準＋疎な例外」
 床レベルは階のfloorDatumを基準に逸脱する部屋のみfloorLevelを持つ。壁材・壁仕上げ・天井高さは内装マスター（templateKey）参照+個別上書き（customOverrides、マスタ値と同値なら自動的に空に戻す）。同じパターンを`PlanGraph.structureOverride`（主構造の階例外）でも使う。

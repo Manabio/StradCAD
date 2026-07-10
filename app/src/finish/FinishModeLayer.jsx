@@ -51,7 +51,8 @@ export const FinishModeLayer = observer(({
   const roomRects = [];
   graph.rooms.forEach((room, idx) => {
     // 階段（feature===STAIR）は StairLayer 側が塗り・選択・名前表示を担当するため二重描画を避ける。
-    if (room.feature === RoomFeature.STAIR) return;
+    // 階段吹抜け（STAIR_VOID）は自動管理 Room で、意図的に何も描かない（下階階段の見下げ描画のみ）。
+    if (room.feature === RoomFeature.STAIR || room.feature === RoomFeature.STAIR_VOID) return;
     const isSelected = room.id === selectedRoomId;
     const boundsList = cellBoundsList(room.cells, graph);
     if (boundsList.length > 0) {
