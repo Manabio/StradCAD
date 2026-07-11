@@ -264,6 +264,30 @@ export function computeExteriorWallSegments(graph) {
 // 壁生成
 // ----------------------------------------------------------------
 
+// 座標一致判定の許容誤差(mm)。開口辺・エッジとも CL 実値由来のため実質同値の比較
+const OPENING_EPS = 1e-6;
+
+/**
+ * エッジパラメータ p（computeExternalEdgeParams の1件）が、階段の上り口・下り口の
+ * 開口辺（stairPortEdges の結果）上に乗っているかを判定する。
+ * サブ区間の切断点には開口辺の端（階段footprint境界のCL）が必ず含まれるため
+ * （externalSubIntervals が dividerCLsBetween で全分割CLを切断候補にする）、
+ * 区間中点が開口辺内にあるかだけで過不足なく判定できる。
+ */
+function onStairOpening(p, graph, openings) {
+  if (openings.length === 0) return false;
+  const axisCL  = getShape(graph, p.axisCLId);
+  const startCL = getShape(graph, p.startCLId);
+  const endCL   = getShape(graph, p.endCLId);
+  if (!axisCL || !startCL || !endCL) return false;
+  const mid = (startCL.value + endCL.value) / 2;
+  return openings.some(o =>
+    o.isVertical === p.isVertical &&
+    Math.abs(o.value - axisCL.value) < OPENING_EPS &&
+    mid > o.lo && mid < o.hi,
+  );
+}
+
 // ----------------------------------------------------------------
 // コーナーマップ方式による壁生成
 // ----------------------------------------------------------------
@@ -281,10 +305,15 @@ export function computeExteriorWallSegments(graph) {
  * 水平辺の startOffset = コーナーにある垂直辺の axisOffset
  * 水平辺の endOffset   = コーナーにある垂直辺の axisOffset
  * 垂直辺は h/v を逆にして同様。
+ *
+ * stairOpenings（階段の上り口・下り口の開口辺。stairPortEdges の結果）上のエッジは
+ * 壁を生成しない。フィルタはコーナーマップ構築前に行うため、開口辺に接する隣接壁の
+ * 端点オフセットは登録されず（null → 0）、隣接壁は開口境界のCL位置で止まる。
  */
-export function generateRoomWallsFromOutline(graph, room, { wallBase = DEFAULT_WALL_BASE, wallFinish = DEFAULT_WALL_FINISH } = {}) {
+export function generateRoomWallsFromOutline(graph, room, { wallBase = DEFAULT_WALL_BASE, wallFinish = DEFAULT_WALL_FINISH } = {}, stairOpenings = []) {
   const offset = wallBase / 2 + wallFinish;
-  const rawParams = computeExternalEdgeParams(room, offset, graph);
+  const rawParams = computeExternalEdgeParams(room, offset, graph)
+    .filter(p => !onStairOpening(p, graph, stairOpenings));
 
   // コーナーマップ構築
   // key: "hCLId:vCLId" (水平CL id : 垂直CL id)
@@ -357,8 +386,12 @@ export function generateRoomWallsFromOutline(graph, room, { wallBase = DEFAULT_W
  * generateRoomWallsFromOutline と同様にコーナーマップでオフセットを決定し、
  * loopType ごとに閉じたループとして扱う。生成された壁には
  * isRoomWall=true（chamferWalls による再調整を抑止）/ isExteriorWall=true を設定する。
+ *
+ * stairOpenings（階段の上り口・下り口の開口辺）上のエッジは、courtyard（両側とも部屋）
+ * の場合のみ壁を生成しない。outer（外側が未割当＝部屋指定なし）は建物外周のため
+ * 開口辺でも壁を残す。
  */
-export function generateExteriorWalls(graph, { wallBase = DEFAULT_WALL_BASE, wallFinish = DEFAULT_WALL_FINISH } = {}) {
+export function generateExteriorWalls(graph, { wallBase = DEFAULT_WALL_BASE, wallFinish = DEFAULT_WALL_FINISH } = {}, stairOpenings = []) {
   const offset = wallBase / 2 + wallFinish;
 
   const cellToRoom = buildCellToRoom(graph);
@@ -369,6 +402,7 @@ export function generateExteriorWalls(graph, { wallBase = DEFAULT_WALL_BASE, wal
     for (const p of computeExternalEdgeParams(room, offset, graph)) {
       const loopType = classifyExteriorEdge(room, p, graph, cellToRoom);
       if (!loopType) continue;
+      if (loopType === 'courtyard' && onStairOpening(p, graph, stairOpenings)) continue;
 
       // 外壁は常に「室外側（室内方向の逆）」に生成する
       // （p.axisOffset は常に室内方向を指すため、outer/courtyard とも反転する）

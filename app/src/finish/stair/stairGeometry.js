@@ -1,5 +1,5 @@
 import { StairType, totalStepsFromSections } from '@core';
-import { cellBoundsFromKey, roomBounds } from '../gridCells.js';
+import { cellBoundsFromKey, roomBounds, cellBoundsList, outlineSegments } from '../gridCells.js';
 import { measureStairSpans, detectUTurn } from './stairClassify.js';
 
 const BREAK_HEIGHT = 1600;   // mm — 破れ縁の断面高さ（FL+1600）
@@ -182,8 +182,8 @@ function frameDecor(f, topT, view, b) {
     const proj = (p) => (p.x - c00.x) * tx + (p.y - c00.y) * ty;
     wideSide = proj(p1) >= proj(p2) ? 0 : 1;
   }
-  const outline = [{ ...seg(c00, c01), thin: true }, seg(c00, sideEnd0), seg(c01, sideEnd1)]; // c00-c01=区画初段
-  if (view !== 'install') outline.push({ ...seg(c10, c11), thin: true }); // 設置階上階への到達辺（$）はthin
+  const outline = [{ ...seg(c00, c01), thin: true, port: 'entry' }, seg(c00, sideEnd0), seg(c01, sideEnd1)]; // c00-c01=区画初段
+  if (view !== 'install') outline.push({ ...seg(c10, c11), thin: true, port: 'arrival' }); // 設置階上階への到達辺（$）はthin
   // D（降り口）はいちばん大きい踏面番号側（かみがた）を始点にし、番号の小さい方へ向かう矢印にする。
   const arrow = view === 'install'
     ? runArrow(f.pt(0, 0.5), f.pt(topT, 0.5), 'U')
@@ -520,8 +520,8 @@ function buildSwitchback(stair, b, { view, detail, spans, laneGapMm = 0 }) {
 
   // 外周（base 側・両レーン外側・踊り場の三方）＋ 中央仕切り。base側は往路出発／復路到達(設置階上階)で2分割する。
   const outline = [
-    { ...seg(c(0, 0), c(0, 0.5)), thin: true },     // base側（往路出発＝区画初段）
-    { ...seg(c(0, 0.5), c(0, 1)), thin: true },     // base側（復路到達＝設置階上階の最終段）
+    { ...seg(c(0, 0), c(0, 0.5)), thin: true, port: 'entry' },   // base側（往路出発＝区画初段）
+    { ...seg(c(0, 0.5), c(0, 1)), thin: true, port: 'arrival' }, // base側（復路到達＝設置階上階の最終段）
     seg(c(0, 0), c(tRun, 0)),    // レーンA外側
     seg(c(0, 1), c(tRun, 1)),    // レーンB外側
     seg(c(tRun, 0), c(1, 0)),    // 踊り場側面A
@@ -619,8 +619,8 @@ function buildWinding(stair, b, { view, detail, spans, laneGapMm = 0 }) {
   }
 
   const outline = [
-    { ...seg(c(0, 0), c(0, 0.5)), thin: true },  // base側（往路出発＝区画初段）
-    { ...seg(c(0, 0.5), c(0, 1)), thin: true },  // base側（復路到達＝設置階上階の最終段）
+    { ...seg(c(0, 0), c(0, 0.5)), thin: true, port: 'entry' },   // base側（往路出発＝区画初段）
+    { ...seg(c(0, 0.5), c(0, 1)), thin: true, port: 'arrival' }, // base側（復路到達＝設置階上階の最終段）
     seg(c(0, 0), c(tRun, 0)),     // レーンA外側
     seg(c(0, 1), c(tRun, 1)),     // レーンB外側
     seg(c(tRun, 0), c(1, 0)),     // 回り部側面A
@@ -784,10 +784,10 @@ function buildLTurn(stair, b, { view, detail, riser, spans }) {
   }
 
   const outline = [
-    { ...seg(toWorld(0, runV), toWorld(0, 1)), thin: true }, // arm1 base 端（区画初段）
+    { ...seg(toWorld(0, runV), toWorld(0, 1)), thin: true, port: 'entry' }, // arm1 base 端（区画初段）
     seg(toWorld(0, 1),    toWorld(1, 1)),       // arm1 外側
     seg(toWorld(1, 1),    toWorld(1, 0)),       // arm2 外側
-    { ...seg(toWorld(1, 0), toWorld(runU, 0)), thin: true }, // arm2 far 端（設置階上階の最終段）
+    { ...seg(toWorld(1, 0), toWorld(runU, 0)), thin: true, port: 'arrival' }, // arm2 far 端（設置階上階の最終段）
     seg(toWorld(runU, 0), toWorld(runU, runV)), // 内側（吹抜け側・縦）
     seg(toWorld(runU, runV), toWorld(0, runV)), // 内側（吹抜け側・横）
   ];
@@ -956,8 +956,8 @@ function buildOpenWell(stair, b, { view, detail, riser }) {
     seg(toWorld(0, 1), toWorld(1, 1)),         // 下辺
     seg(toWorld(1, 1), toWorld(1, 0)),         // 右辺
     seg(toWorld(1, 0), toWorld(0, 0)),         // 上辺
-    { ...seg(toWorld(0, 0), toWorld(0, aw)), thin: true },     // 左・上アーム端（設置階上階の最終段）
-    { ...seg(toWorld(0, 1 - aw), toWorld(0, 1)), thin: true }, // 左・下アーム端（区画初段）
+    { ...seg(toWorld(0, 0), toWorld(0, aw)), thin: true, port: 'arrival' },   // 左・上アーム端（設置階上階の最終段）
+    { ...seg(toWorld(0, 1 - aw), toWorld(0, 1)), thin: true, port: 'entry' }, // 左・下アーム端（区画初段）
     // ウェル内周（開口は左）
     seg(toWorld(0, aw), toWorld(runW, aw)),
     seg(toWorld(runW, aw), toWorld(runW, 1 - aw)),
@@ -988,10 +988,12 @@ function buildOpenWell(stair, b, { view, detail, riser }) {
  *   標準・詳細LODは LANE_GAP、簡略LODは0（従来どおり中央仕切り1本）を渡す。
  *   回り階段の扇形 pivot はあき幅のうち段数が低い方＝往路の内側端（tRun, sA）。
  * @returns {{
- *   treads:{x1,y1,x2,y2}[], outline:{x1,y1,x2,y2,dashed}[],
+ *   treads:{x1,y1,x2,y2}[], outline:{x1,y1,x2,y2,dashed,thin?,port?}[],
  *   arrows:{x1,y1,x2,y2,labelX,labelY,label}[], breakLine:{x1,y1,x2,y2}[]|null,
  *   stepNumbers:{x,y,text}[],
  * }}
+ *   outline の port … 'entry'=区画初段（上り口）／'arrival'=設置階上階への到達辺（下り口）。
+ *   thin な線分にのみ付く（stairPortEdges が開口辺の特定に使う）。
  */
 export function buildStairGeometry(stair, b, opts) {
   const bi = insetStairBounds(stair, b, opts.view);
@@ -1002,6 +1004,54 @@ export function buildStairGeometry(stair, b, opts) {
   if (stair.type === StairType.FLARED)           return buildLTurn(stair, bi, opts);
   if (stair.type === StairType.OPEN_WELL)        return buildOpenWell(stair, bi, opts);
   return buildStraight(stair, bi, opts);
+}
+
+/**
+ * 階段の上り口（entry）・下り口（arrival＝設置階上階への到達辺）が乗る footprint 境界辺を返す。
+ *
+ * buildStairGeometry（upper ビュー＝両 port の thin 線分が揃う）の port 付き外周線分を、
+ * セル実形状の外形線分（outlineSegments。インセット前の実境界＝CL位置）へ最近傍でスナップし、
+ * その外形線分の全長を開口辺として採用する（U字系は entry/arrival が同一境界辺の半幅ずつ
+ * のため、セル割りに応じて「半幅2本」または「全幅1本（重複排除）」で base 側全幅をカバーする）。
+ *
+ * 壁の自動生成（wallGeneration.js）が「開口辺上に壁を作らない」判定に使う。
+ * 世界座標のみを返すため、他階のグラフで計算した結果とも直接比較できる（世界座標は全階共通）。
+ *
+ * @param {import('@core').Stair} stair
+ * @param {object} graph
+ * @param {('entry'|'arrival')[]} [ports] - 対象の口（既定は両方）
+ * @returns {{ isVertical:boolean, value:number, lo:number, hi:number }[]}
+ */
+export function stairPortEdges(stair, graph, ports = ['entry', 'arrival']) {
+  const boundsList = cellBoundsList(stair.cells, graph);
+  if (boundsList.length === 0) return [];
+  const b = roomBounds(stair.cells, graph);
+  if (![b.x1, b.y1, b.x2, b.y2].every(Number.isFinite) || b.x2 <= b.x1 || b.y2 <= b.y1) return [];
+
+  const spans = measureStairSpans(stair, graph);
+  const geom = buildStairGeometry(stair, b, { view: 'upper', detail: false, riser: null, spans, laneGapMm: 0 });
+  const outline = outlineSegments(boundsList);
+  const SNAP_DIST = WALL_INSET * 2 + 10; // mm — インセット（WALL_INSET）ぶんのずれを許容
+
+  const edges = [];
+  for (const s of geom.outline) {
+    if (!s.thin || !s.port || !ports.includes(s.port)) continue;
+    const isVertical = Math.abs(s.x1 - s.x2) < Math.abs(s.y1 - s.y2);
+    const value = isVertical ? (s.x1 + s.x2) / 2 : (s.y1 + s.y2) / 2;
+    const lo = isVertical ? Math.min(s.y1, s.y2) : Math.min(s.x1, s.x2);
+    const hi = isVertical ? Math.max(s.y1, s.y2) : Math.max(s.x1, s.x2);
+    let best = null;
+    for (const o of outline) {
+      if (o.isVertical !== isVertical) continue;
+      if (Math.abs(o.value - value) > SNAP_DIST) continue;
+      if (Math.min(o.hi, hi) - Math.max(o.lo, lo) <= 0) continue; // 区間が重ならない外形線分は対象外
+      if (!best || Math.abs(o.value - value) < Math.abs(best.value - value)) best = o;
+    }
+    if (best && !edges.some(e => e.isVertical === best.isVertical && e.value === best.value && e.lo === best.lo && e.hi === best.hi)) {
+      edges.push({ isVertical: best.isVertical, value: best.value, lo: best.lo, hi: best.hi });
+    }
+  }
+  return edges;
 }
 
 // L字／中空きの正規化(u,v)→world 写像（buildLTurn/buildOpenWell と同一）。pt は fx,fy∈[0,1]→world。

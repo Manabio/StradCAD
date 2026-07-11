@@ -31,7 +31,7 @@ import { FinishHalfModal } from './finish/FinishHalfModal.jsx';
 import { StairLayer }      from './renderer/StairLayer.jsx';
 import { floorHeightAbove } from './finish/stair/stairDimensions.js';
 import { measureStairSpans } from './finish/stair/stairClassify.js';
-import { cellsBeyondBreak } from './finish/stair/stairGeometry.js';
+import { cellsBeyondBreak, stairPortEdges } from './finish/stair/stairGeometry.js';
 import { roomBounds, cellBoundsList } from './finish/gridCells.js';
 import { generateRoomWallsFromOutline, generateExteriorWalls, snapshotWall, restoreWallsFromSnapshots } from './finish/wallGeneration.js';
 import { snapshotEdges, restoreEdges, syncEdgesFromTopology } from './finish/edgeClassify.js';
@@ -1151,6 +1151,20 @@ const App = observer(() => {
         redoFns.push(() => orphanSnapshots.forEach(s => graph.removeShape(s.id)));
       }
 
+      // 階段の上り口・下り口の開口辺（この辺上に部屋の壁を作らない）。
+      // 自階の階段は entry（上り口）＋ arrival（下り口。中間階では下階の同形状階段の到達辺を兼ねる）。
+      // 最上階（階段実体なし・階段吹抜けのみ）は直下階の階段の到達辺＝下り口を開口に加える
+      // （世界座標は全階共通のため、直下階グラフで計算した辺をそのまま使える）。
+      const stairOpenings = graph.stairs.flatMap(s => stairPortEdges(s, graph));
+      if (graph.rooms.some(r => r.feature === RoomFeature.STAIR_VOID)) {
+        const planes = project.planes;
+        const planeIdx = planes.findIndex(p => p.id === graph.plane?.id);
+        if (planeIdx > 0) {
+          const below = await floorSwapManager.peek(planes[planeIdx - 1], project.structGraph);
+          stairOpenings.push(...below.stairs.flatMap(s => stairPortEdges(s, below, ['arrival'])));
+        }
+      }
+
       // ステップ2: 新規壁生成（generatedWallIds なし かつ 部分指定でない部屋）
       // 部分指定（referenceRoomIds あり）は親が外周壁を担うためスキップ
       // 寸法は実材厚から導出（modeRef.current は脱出直前でまだ生存・材ロード済み）。
@@ -1160,7 +1174,7 @@ const App = observer(() => {
         if (room.generatedWallIds.size > 0) continue;
         if (room.referenceRoomIds && room.referenceRoomIds.size > 0) continue;
 
-        const walls = generateRoomWallsFromOutline(graph, room, fmode?.roomWallDims?.(graph, room) || {});
+        const walls = generateRoomWallsFromOutline(graph, room, fmode?.roomWallDims?.(graph, room) || {}, stairOpenings);
         if (walls.length === 0) continue;
 
         walls.forEach(w => room.generatedWallIds.add(w.id));
@@ -1180,7 +1194,7 @@ const App = observer(() => {
       if (oldExteriorSnapshots.length > 0) {
         oldExteriorSnapshots.forEach(s => graph.removeShape(s.id));
       }
-      const newExteriorWalls = generateExteriorWalls(graph, fmode?.exteriorWallDims?.(graph) || {});
+      const newExteriorWalls = generateExteriorWalls(graph, fmode?.exteriorWallDims?.(graph) || {}, stairOpenings);
       const newExteriorSnapshots = newExteriorWalls.map(snapshotWall);
       if (oldExteriorSnapshots.length > 0 || newExteriorSnapshots.length > 0) {
         undoFns.push(() => {
