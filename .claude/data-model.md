@@ -33,6 +33,9 @@ Intersection・Shape・Wall・Opening・構造部材はすべて自前の座標�
 ## floorDatum/floorLevel・templateKey/customOverridesは「共有基準＋疎な例外」
 床レベルは階のfloorDatumを基準に逸脱する部屋のみfloorLevelを持つ。壁材・壁仕上げ・天井高さは内装マスター（templateKey）参照+個別上書き（customOverrides、マスタ値と同値なら自動的に空に戻す）。同じパターンを`PlanGraph.structureOverride`（主構造の階例外）でも使う。
 
+## CL端点の「端点ルール」（交点を失った端は固定・はねだし）
+中心線の端は通常、直交CLとの交点上に乗る（延長・短縮も交点間で動く）。線分編集で交点が失われた端（参照先CL削除・直交CLの短縮）は「端点」となり、(1)座標をその場に固定（削除時は`detachFromCenterLine`がextent参照を静的化）、(2)延長・短縮の対象外（`isEndpointAt`で導出判定。保存フラグは持たない——直交CLの短縮による端点化は参照が生きたまま起きるため、状態保存では追従できない）、(3)壁は端点ノードに壁があったと想定した分（下地偏芯量＋仕上げ厚＝`|axisOffset|`）だけはね出して止める。壁側の適用は3経路：CL削除時の既存壁の端繰り上げ（core.js）、壁生成時の軸CL線分範囲クリップ（wallGeneration.js。交点消失後もセル分割は列全体を割り続けるため、生成セグメントが線分範囲を越え得る）、詳細LODの木口2重線（ShapesLayer.jsx）。補助線は静的端点（オーバーハング付き）が正規状態のため端点ルールの対象外。
+
 ## SiteLine.redPointIdは生成時に1度だけ決定する
 画面表示用の赤/青端点をviewport基準で都度再計算するとパン/ズームで入れ替わるため、線分生成時に固定し以後再計算しない。
 

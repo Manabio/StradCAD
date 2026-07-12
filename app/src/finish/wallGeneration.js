@@ -289,6 +289,37 @@ function onStairOpening(p, graph, openings) {
 }
 
 // ----------------------------------------------------------------
+// 端点ルール（軸CLの線分範囲による壁のクリップ）
+// ----------------------------------------------------------------
+
+// 端点判定の座標一致許容誤差(mm)
+const ENDPOINT_EPS = 0.5;
+
+/**
+ * 壁セグメントを軸CL（中心線）の線分範囲へクリップする（端点ルール）。
+ *
+ * 線分編集で交点が無くなった中心線は、セル分割上は列全体を分割し続けるため、
+ * 生成セグメントが軸CLの実在範囲（extentLo〜extentHi）を越えることがある。
+ * 越えた端は「端点」であり、端点ノードに壁があったと想定した protrusion
+ * （下地偏芯量＋仕上げ厚）だけCL端からはね出して止める。範囲外へ完全に出る
+ * セグメントは壁を作らない（null）。通り芯・範囲未確定のCLはクリップしない。
+ *
+ * seg は mergeSegments 後（startCL.value <= endCL.value）であること。
+ * @returns {{ startOffset, endOffset } | null}
+ */
+function clipToAxisExtent(axisCL, startCL, startOffset, endCL, endOffset, protrusion) {
+  if (axisCL.labeled || axisCL.extentLo == null || axisCL.extentHi == null) {
+    return { startOffset, endOffset };
+  }
+  const lo = axisCL.extentLo, hi = axisCL.extentHi;
+  if (startCL.value >= hi - ENDPOINT_EPS || endCL.value <= lo + ENDPOINT_EPS) return null;
+  let s = startOffset, e = endOffset;
+  if (startCL.value < lo - ENDPOINT_EPS) s = (lo - protrusion) - startCL.value;
+  if (endCL.value   > hi + ENDPOINT_EPS) e = (hi + protrusion) - endCL.value;
+  return { startOffset: s, endOffset: e };
+}
+
+// ----------------------------------------------------------------
 // コーナーマップ方式による壁生成
 // ----------------------------------------------------------------
 
@@ -368,7 +399,11 @@ export function generateRoomWallsFromOutline(graph, room, { wallBase = DEFAULT_W
         endOffset   = cornerMap.get(`${seg.endCLId}:${axisCLId}`)?.hOffset   ?? 0;
       }
 
-      const w = graph.addWall(axisCL, axisOffset, isVertical, startCL, startOffset, endCL, endOffset, { isRoomWall: true, wallFinish });
+      // 端点ルール: 軸CLの線分範囲を越える部分ははねだし付きで止める
+      const clipped = clipToAxisExtent(axisCL, startCL, startOffset, endCL, endOffset, offset);
+      if (!clipped) continue;
+
+      const w = graph.addWall(axisCL, axisOffset, isVertical, startCL, clipped.startOffset, endCL, clipped.endOffset, { isRoomWall: true, wallFinish });
       walls.push(w);
     }
   }
@@ -459,7 +494,11 @@ export function generateExteriorWalls(graph, { wallBase = DEFAULT_WALL_BASE, wal
           endOffset   = cornerMap.get(`${seg.endCLId}:${axisCLId}`)?.hOffset   ?? 0;
         }
 
-        const w = graph.addWall(axisCL, axisOffset, isVertical, startCL, startOffset, endCL, endOffset, {
+        // 端点ルール: 軸CLの線分範囲を越える部分ははねだし付きで止める
+        const clipped = clipToAxisExtent(axisCL, startCL, startOffset, endCL, endOffset, offset);
+        if (!clipped) continue;
+
+        const w = graph.addWall(axisCL, axisOffset, isVertical, startCL, clipped.startOffset, endCL, clipped.endOffset, {
           isRoomWall: true,
           isExteriorWall: true,
           wallFinish,

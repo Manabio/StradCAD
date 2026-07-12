@@ -2336,13 +2336,24 @@ const App = observer(() => {
       const cl = menu.cl;
       const isStruct = cl.discipline === Discipline.STRUCT && cl.labeled;
       if (isStruct) {
-        // 通り芯の削除 — structGraph をスナップショット経由で Undo
+        // 通り芯の削除 — structGraph をスナップショット経由で Undo。
+        // structGraph の teardown は階グラフの図形に届かないため、アクティブ階グラフ側の
+        // 壁端・extent 参照を先に切り離す（端点ルール）。階グラフも Undo 対象に含める。
+        const beforeArch = serializeGraph(graph);
         const before = serializeStructCLs(project.structGraph, project.structuralInfo, project.structuralTagRegistry);
+        graph.detachFromCenterLine(cl.id);
         project.structGraph.removeCenterLine(cl.id);
+        const afterArch = serializeGraph(graph);
         const after = serializeStructCLs(project.structGraph, project.structuralInfo, project.structuralTagRegistry);
         undoManager.push(
-          () => restoreStructCLs(project.structGraph, project.structuralInfo, before, project.structuralTagRegistry),
-          () => restoreStructCLs(project.structGraph, project.structuralInfo, after, project.structuralTagRegistry),
+          () => {
+            restoreStructCLs(project.structGraph, project.structuralInfo, before, project.structuralTagRegistry);
+            restoreGraph(graph, beforeArch);
+          },
+          () => {
+            restoreStructCLs(project.structGraph, project.structuralInfo, after, project.structuralTagRegistry);
+            restoreGraph(graph, afterArch);
+          },
         );
       } else {
         const before = serializeGraph(graph);

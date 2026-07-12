@@ -920,6 +920,7 @@ export class PlanGraph {
       resolveExtentWallRefs:  action,
       setCenterLineExtentRef: action,
       removeCenterLine:    action,
+      detachFromCenterLine: action,
       demoteToAuxiliary:   action,
       promoteToGrid:       action,
       addPoint:            action,
@@ -1447,8 +1448,54 @@ export class PlanGraph {
     const cl = this.shapeMap.get(id);
     if (!(cl instanceof CenterLine)) return;
     this._reparentChildCenterLines(cl);
+    this.detachFromCenterLine(id); // 端点ルール: teardown より先に壁端・extent を切り離す
     this._teardownCenterLine(id);
     this._removeShape(id);
+  }
+
+  /**
+   * 指定 CL への参照を切り離す（端点ルール）。CL 削除の直前に呼ぶ。
+   *
+   * - 他CLの extentLo/HiRef が id を指す場合: 現在座標で静的化する。
+   *   交点を失った線分の端は「端点」となり座標が削除位置に固定される
+   *   （延長・短縮の除外判定は transform/centerLineExtend.js の isEndpointAt）。
+   * - 壁の clStart/clEnd が id の場合: 参照を反対側の端CLへ繰り上げ、端点側は
+   *   「端点ノードに壁があったと想定した」分（|axisOffset| = 下地偏芯量＋仕上げ厚）
+   *   だけ CL 位置からはね出して止める。
+   * - 軸CLが id の壁・両端とも id を参照する壁・id をアンカーとする開口は削除する。
+   *
+   * 自グラフの CL 削除（removeCenterLine）に加え、通り芯削除時は各階グラフ側の
+   * 参照を切り離すため App 側からも呼ばれる（structGraph の teardown は
+   * 階グラフの図形に届かないため）。
+   */
+  detachFromCenterLine(id) {
+    for (const w of this.walls) {
+      const s = w.clStart.id === id, e = w.clEnd.id === id;
+      if (w.axisCL.id === id || (s && e)) { this._removeShape(w.id); continue; }
+      if (s) this._endpointWallEnd(w, 'start');
+      else if (e) this._endpointWallEnd(w, 'end');
+    }
+    for (const o of this.openings) {
+      if (o.axisCL.id === id || o.refCL.id === id) this._removeShape(o.id);
+    }
+    for (const cl of this.centerLines) {
+      if (cl.extentLoRef?.clId === id) this.setCenterLineExtentRef(cl, 'lo', null, cl.extentLo);
+      if (cl.extentHiRef?.clId === id) this.setCenterLineExtentRef(cl, 'hi', null, cl.extentHi);
+    }
+  }
+
+  // 参照CLを失う壁端を反対側の端CLへ繰り上げ、端点はねだし分を加えたオフセットへ変換する。
+  // はねだしは端CLの位置（ノード）基準（トリム済み端も削除前の交点位置から張り直す）。
+  _endpointWallEnd(wall, which) {
+    const [endCL, otherCL, otherOffset] = which === 'start'
+      ? [wall.clStart, wall.clEnd, wall.endOffset]
+      : [wall.clEnd, wall.clStart, wall.startOffset];
+    const node = endCL.value;
+    const dir  = Math.sign(node - (otherCL.value + otherOffset));
+    if (dir === 0) { this._removeShape(wall.id); return; }
+    const newOffset = node + dir * Math.abs(wall.axisOffset) - otherCL.value;
+    if (which === 'start') { wall.clStart = otherCL; wall.startOffset = newOffset; }
+    else                   { wall.clEnd   = otherCL; wall.endOffset   = newOffset; }
   }
 
   // id の CenterLine を削除すると壊れる外部参照があるか（結合による削除の安全ガード用）

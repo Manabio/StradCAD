@@ -2,6 +2,7 @@ import { observer } from 'mobx-react-lite';
 import { Line, Rect, Circle, Path } from 'react-konva';
 import { ShapeType } from '@core';
 import { findOpeningsOnWall } from '../openings/openingGeometry.js';
+import { isEndpointAt } from '../transform/centerLineExtend.js';
 import { LodLevel, resolveStrokeWidth } from '../viewport.js';
 
 const DASH = {
@@ -16,6 +17,8 @@ const WALL_BACKING_PITCH = 450;
 // 壁下地の角材を通り芯方向に描く際の見かけ幅(mm)。実材の長手方向寸法は壁データに
 // 持たないため、間柱の標準的な厚み（□-90×45 の 45 側）を描画上の固定値として使う。
 const WALL_STUD_WIDTH = 45;
+// 端点はねだし判定の座標許容誤差(mm)
+const ENDPOINT_EPS = 0.5;
 
 function strokeProps(shape, scaleX, scaleY) {
   return {
@@ -172,6 +175,30 @@ export const ShapesLayer = observer(({ graph, viewport }) => {
               {...sp}
             />
           )));
+        }
+
+        // 端点はねだし部の木口: 仕上げ厚の見切り線を妻線の内側に加えて2重線にする
+        // （他の仕上げ線と同様、詳細のみ）。端点判定は軸CLの線分範囲越え＋交点消失で導出する
+        if (shape.wallFinish > 0) {
+          const axisCL = shape.axisCL;
+          const tips = [
+            { side: 'lo', beyond: axisCL.extentLo != null && lo < axisCL.extentLo - ENDPOINT_EPS, capV: lo + shape.wallFinish },
+            { side: 'hi', beyond: axisCL.extentHi != null && hi > axisCL.extentHi + ENDPOINT_EPS, capV: hi - shape.wallFinish },
+          ];
+          for (const t of tips) {
+            if (!t.beyond || !isEndpointAt(graph, axisCL, t.side)) continue;
+            if (!segments.some(([a, b]) => t.capV > a && t.capV < b)) continue;
+            elems.push(
+              <Line
+                key={`${shape.id}:ecap:${t.side}`}
+                points={shape.isVertical
+                  ? [axisV, t.capV, faceV, t.capV]
+                  : [t.capV, axisV, t.capV, faceV]
+                }
+                {...sp}
+              />,
+            );
+          }
         }
 
         // 下地（間柱）断面: 通り芯(axisCL)上に左右対称に乗る実材厚 = (thickHi-thickLo-wallFinish)*2

@@ -12,6 +12,32 @@ function perpTypeOf(cl) {
   return cl.centerLineType === CenterLineType.VERTICAL ? CenterLineType.HORIZONTAL : CenterLineType.VERTICAL;
 }
 
+// 端点判定の座標一致許容誤差(mm)。端点は直交CLの value を直接コピーして作られるため
+// 実質同値の比較だが、旧データの丸め誤差を吸収する余裕を持たせる。
+const ENDPOINT_EPS = 0.5;
+
+/**
+ * 中心線の lo/hi 側の端が「端点」かどうかを判定する（端点ルール）。
+ *
+ * 中心線の端は通常、直交CLとの交差（交点）上に乗る。線分編集（直交CLの短縮・削除）で
+ * 交差が失われた端は「端点」となり、延長・短縮の対象から外れ、座標がその場に固定される。
+ * 補助線はオーバーハング付きの静的端点が正規状態のため対象外（常に false）。
+ */
+export function isEndpointAt(graph, cl, side) {
+  if (centerLineKind(cl) !== 'center') return false;
+  const coord = side === 'lo' ? cl.extentLo : cl.extentHi;
+  if (coord == null) return false;
+  const perpType = perpTypeOf(cl);
+  const wc = cl.value;
+  return !graph.centerLines.some(other => {
+    if (other.id === cl.id || other.centerLineType !== perpType) return false;
+    if (Math.abs(other.value - coord) > ENDPOINT_EPS) return false;
+    // その直交CLが自身の位置まで届いている（交差している）こと
+    if (other.labeled || other.extentLo == null || other.extentHi == null) return true;
+    return other.extentLo - ENDPOINT_EPS <= wc && wc <= other.extentHi + ENDPOINT_EPS;
+  });
+}
+
 // coord より 'lo' 側(小さい)/'hi' 側(大きい)で最も近い候補を返す（getValue で値を取り出す）
 function nearestBeyond(items, coord, direction, getValue) {
   let best = null, bestVal = null;
@@ -89,11 +115,13 @@ export function findShortenBoundary(graph, cl, side) {
   return { type: 'point' };
 }
 
-export function canExtendCenterLine(graph, cl, side)  { return !!findExtendBoundary(graph, cl, side); }
-export function canShortenCenterLine(graph, cl, side) { return !!findShortenBoundary(graph, cl, side); }
+// 端点（交点を失った端）は延長・短縮の対象にならない（端点ルール）
+export function canExtendCenterLine(graph, cl, side)  { return !isEndpointAt(graph, cl, side) && !!findExtendBoundary(graph, cl, side); }
+export function canShortenCenterLine(graph, cl, side) { return !isEndpointAt(graph, cl, side) && !!findShortenBoundary(graph, cl, side); }
 
 // side側の端点を隣のCL（または壁）まで延長する。延長後、同種同軸のCLと端点が一致すれば結合する。
 export function extendCenterLine(graph, cl, side, viewport) {
+  if (isEndpointAt(graph, cl, side)) return { extended: false };
   const boundary = findExtendBoundary(graph, cl, side);
   if (!boundary) return { extended: false };
 
@@ -126,6 +154,7 @@ export function extendCenterLine(graph, cl, side, viewport) {
 // 内側にCLが無ければ、反対側の端点と全く同じ参照/値をコピーして1点線分（最小短縮単位）にする
 // ——反対側が参照先を持つ場合は同じ参照を共有させ、後で参照先が動いても常に1点であり続ける。
 export function shortenCenterLine(graph, cl, side, viewport) {
+  if (isEndpointAt(graph, cl, side)) return { shortened: false };
   const boundary = findShortenBoundary(graph, cl, side);
   if (!boundary) return { shortened: false };
 
