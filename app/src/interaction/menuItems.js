@@ -28,7 +28,7 @@ function extendIconAngle(isVertical, side) {
   return side === 'hi' ? 0 : 180;
 }
 
-export function getMenuItems(context, endpointState) {
+export function getMenuItems(context, endpointState, clState) {
   switch (context) {
     case CONTEXT.INTERSECTION:
       return [
@@ -47,10 +47,16 @@ export function getMenuItems(context, endpointState) {
           : { id: 'cl-del',     label: '削除', icon: '✕' },
       ];
     }
-    case CONTEXT.CENTER_LINE:
+    case CONTEXT.CENTER_LINE: {
+      // 12時=移動、4時=削除。移動アイコンはスナップ移動の方向（線と直交）を指す両矢印。
+      // 移動をサポートしないモード（clState.canMove が偽）では従来どおり削除のみ。
+      const { canMove, isVertical } = clState ?? {};
+      if (!canMove) return [{ id: 'cl-del', label: '削除', icon: '✕' }];
       return [
-        { id: 'cl-del', label: '削除', icon: '✕' },
+        { id: 'cl-move', label: '移動', icon: '⇄', iconRotate: isVertical ? 0 : 90, angle: -90 },
+        { id: 'cl-del',  label: '削除', icon: '✕', angle: 30 },
       ];
+    }
     case CONTEXT.EMPTY:
       return [
         { id: 'cl-v',  label: '垂直線', icon: '┃', angle: -90 },

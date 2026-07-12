@@ -41,7 +41,7 @@ import { StructuralLayer, ColumnsLayer } from './renderer/StructuralLayer.jsx';
 import { MemberTagLayer } from './renderer/MemberTagLayer.jsx';
 import { MemberStatusMenu } from './ui/MemberStatusMenu.jsx';
 import { PRIMARY_DIMENSION_FIELD_BY_MAP } from './structural/memberCatalog.js';
-import { detectContext, getMenuItems } from './interaction/menuItems.js';
+import { CONTEXT, detectContext, getMenuItems } from './interaction/menuItems.js';
 import { CenterLineType, Discipline, SiteLineKind, OpeningCategory, RoomFeature, centerLineKind } from '@core';
 import { addSkipZero, subtractSkipZero, makeFloorName, renameFloor } from './floorNumber.js';
 import { AddFloorDialog } from './ui/AddFloorDialog.jsx';
@@ -339,7 +339,14 @@ const App = observer(() => {
         isVertical: clEndpoint.cl.centerLineType === CenterLineType.VERTICAL,
         side:       clEndpoint.side,
       } : null;
-      const items   = getMenuItems(context, endpointState);
+      // 中心線上メニュー: 移動可否と線の向き（移動アイコンの矢印方向）を渡す。
+      // 移動を選ばれたときに備え、移動範囲の計算（他フロアのIDB読み込みを含む）を先読みしておく。
+      const clState = context === CONTEXT.CENTER_LINE ? {
+        canMove:    typeof modeRef.current?.startMove === 'function',
+        isVertical: cl.centerLineType === CenterLineType.VERTICAL,
+      } : null;
+      if (clState?.canMove) modeRef.current.preloadMove(cl);
+      const items   = getMenuItems(context, endpointState, clState);
       setMenu({
         pos: { x: sx, y: sy }, items, snap, worldPos: viewport.screenToWorld(sx, sy),
         cl: clEndpoint ? clEndpoint.cl : cl, wall, opening,
@@ -2312,7 +2319,14 @@ const App = observer(() => {
       });
       return;
     }
-    if (item.id === 'cl-move') { modeRef.current?.startMove(menu.cl); return; }
+    if (item.id === 'cl-move') {
+      // スナップ移動突入 — ガター長押しと同じ中心線移動処理（moveState）を使う
+      (async () => {
+        const err = await modeRef.current?.startMove(menu.cl);
+        if (err) setToast({ msg: err, key: Date.now() });
+      })();
+      return;
+    }
     if (item.id === 'cl-extend') {
       const cl = menu.cl, side = menu.clEndpointSide;
       let result;
