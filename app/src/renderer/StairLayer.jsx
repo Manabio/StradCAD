@@ -1,6 +1,6 @@
 import { observer } from 'mobx-react-lite';
 import { Group, Line, Text, Shape, Circle } from 'react-konva';
-import { buildStairGeometry, LABEL_OUT, LANE_GAP } from '../finish/stair/stairGeometry.js';
+import { buildStairGeometry, resolveStairSideLines, LABEL_OUT, LANE_GAP } from '../finish/stair/stairGeometry.js';
 import { outlineSegments } from '../finish/gridCells.js';
 import { LodLevel } from '../viewport.js';
 
@@ -102,9 +102,11 @@ function chevronPoints(pts, len) {
 /**
  * 階段を描画する。entries は描画用に解決済みの配列:
  *   { id, stair, bounds:{x1,y1,x2,y2}, riser:number|null, spans:{lengths:number[]}|null,
- *     view:'install'|'upper', selectable:boolean,
+ *     view:'install'|'upper', selectable:boolean, graph?:object,
  *     cellBounds:Array<{x1,y1,x2,y2}>|undefined,  // 実セル占有（選択ヒット・枠用。省略時は bounds）
  *     installOverlap?:boolean, clipAgainstId?:string }
+ *   graph は stair.cells・壁の実体を解決するグラフ（その階段が実在する階のグラフ。upper エントリ
+ *   では peek した下階グラフ）。省略時は側面線の壁有無判定をせず常時描画する（安全側）。
  *   installOverlap/clipAgainstId/beyondBreakBounds は、footprint が自階 install 階段と重なる
  *   upper エントリ（下階階段の見下げが自階の自動設置階段と同じ位置に表示される場合)に
  *   App.jsx が付与する。可視判定はプリミティブ別に独立（共有ゲートを持たない）:
@@ -131,12 +133,15 @@ export const StairLayer = observer(({
 
   // 1パス目: 全エントリの幾何を先に計算する（矢印クリップで他エントリ＝自階installの
   // breakLine を参照するため、レンダーの前に install 分を含め解決しておく必要がある）。
+  // 側面線（outline の side タグ）の壁有無は resolveStairSideLines（stairGeometry.js）で
+  // 解決する——描画ルールの宣言はそちら側に集約し、ここでは結果を写像するだけにする。
   const resolved = entries.map((e) => {
-    const { stair, bounds: b, riser, spans, view } = e;
+    const { stair, bounds: b, riser, spans, view, graph } = e;
     if (!b || ![b.x1, b.y1, b.x2, b.y2].every(Number.isFinite) || b.x2 <= b.x1 || b.y2 <= b.y1) {
       return null;
     }
-    return { e, geom: buildStairGeometry(stair, b, { view, detail, riser, spans, laneGapMm }) };
+    const built = buildStairGeometry(stair, b, { view, detail, riser, spans, laneGapMm });
+    return { e, geom: graph ? resolveStairSideLines(stair, graph, built) : built };
   });
   const installGeomById = new Map(
     resolved.filter(r => r && r.e.view === 'install').map(r => [r.e.id, r.geom]),
@@ -210,7 +215,7 @@ export const StairLayer = observer(({
         key={`o${i}`}
         points={[s.x1, s.y1, s.x2, s.y2]}
         {...lineProps}
-        strokeWidth={s.thin ? viewport.lineWeightsPx.thin : px(2)}
+        strokeWidth={s.thin ? viewport.lineWeightsPx.thin : s.medium ? viewport.lineWeightsPx.medium : px(2)}
         dash={s.dashed ? [px(40), px(30)] : undefined}
       />
     ));

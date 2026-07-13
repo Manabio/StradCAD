@@ -257,6 +257,7 @@ const App = observer(() => {
       const entries = temp.stairs.map(s => ({
         id: s.id,
         stair: s,
+        graph: temp, // 側面線の壁有無判定（resolveStairSideLines）。その階段が実在する下階のグラフを渡す
         bounds: roomBounds(s.cells, temp),
         cellBounds: cellBoundsList(s.cells, temp), // 実セル占有（選択枠用。選択は startDrag 経由で一本化）
         riser: s.riser ?? (floorHeight != null ? floorHeight / Math.max(1, s.totalSteps) : null),
@@ -3155,6 +3156,7 @@ const App = observer(() => {
                     return {
                       id: s.id,
                       stair: s,
+                      graph, // 側面線の壁有無判定（resolveStairSideLines）に使う
                       bounds: roomBounds(s.cells, graph),
                       cellBounds: cellBoundsList(s.cells, graph), // 実セル占有（L字等の選択枠用）
                       hitCellBounds: cellBoundsList(hitCells, graph), // クリックヒット領域（破れ線先セル除外）
