@@ -32,7 +32,7 @@ import { StairLayer }      from './renderer/StairLayer.jsx';
 import { floorHeightAbove } from './finish/stair/stairDimensions.js';
 import { measureStairSpans } from './finish/stair/stairClassify.js';
 import { cellsBeyondBreak, stairPortEdges } from './finish/stair/stairGeometry.js';
-import { roomBounds, cellBoundsList } from './finish/gridCells.js';
+import { roomBounds, cellBoundsList, refreshCells } from './finish/gridCells.js';
 import { generateRoomWallsFromOutline, generateExteriorWalls, snapshotWall, restoreWallsFromSnapshots } from './finish/wallGeneration.js';
 import { snapshotEdges, restoreEdges, syncEdgesFromTopology } from './finish/edgeClassify.js';
 import { reinterpretRoomsOnEntry, ensureStairRooms, snapshotRoomsState, restoreRoomsState } from './finish/roomReinterpret.js';
@@ -3143,10 +3143,14 @@ const App = observer(() => {
                   const installEntries = graph.stairs.map(s => {
                     const riser = s.riser ?? (fh != null ? fh / Math.max(1, s.totalSteps) : null);
                     // 破れ線先セルはヒット領域から除外する（下階階段の見下げクリック・階段下エリアの
-                    // 部屋ドラッグは startDrag に一本化されているため、ここでは自階階段の onClick を発火させない）
+                    // 部屋ドラッグは startDrag に一本化されているため、ここでは自階階段の onClick を発火させない）。
+                    // cellsBeyondBreak は refreshCells 済みの現行キーを返すため、突き合わせる側も
+                    // 現行のグリッド分割へ展開する（直進階段の階段下分割CL — stairUnderSplit.js — で
+                    // 保存キーより細分化されている場合に一致させる）。
                     const beyond = cellsBeyondBreak(s, graph, riser);
+                    const refreshed = refreshCells(s.cells, graph);
                     const hitCells = beyond.size > 0
-                      ? new Set([...s.cells].filter(k => !beyond.has(k)))
+                      ? new Set([...refreshed].filter(k => !beyond.has(k)))
                       : s.cells;
                     return {
                       id: s.id,

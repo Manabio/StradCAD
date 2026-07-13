@@ -2,6 +2,7 @@ import { makeObservable, observable, action, computed, runInAction } from 'mobx'
 import { regionCellsAt, refreshCells, cellBoundsFromKey, cellBoundsList, worldToCell } from '../finish/gridCells.js';
 import { classifyStairArea } from '../finish/stair/stairClassify.js';
 import { cellsBeyondBreak } from '../finish/stair/stairGeometry.js';
+import { ensureUnderStairSplit, removeUnderStairSplit } from '../finish/stair/stairUnderSplit.js';
 import { floorHeightAbove } from '../finish/stair/stairDimensions.js';
 import { floorSwapManager } from '../storage/FloorSwapManager.js';
 import { snapshotFinishState, pushFinishUndo, withFinishUndo } from '../finish/finishUndo.js';
@@ -93,6 +94,14 @@ export class FinishModeState {
    * @returns {Promise<{ ok: boolean, error: string|null }>}
    */
   async init() {
+    // 直進階段の階段下分割CL（stairUnderSplit.js）を保証する（旧データ・上階自動設置分の
+    // 補完＝開くだけで修復。syncUpperFloors と同じ自動同期のため undo 対象外）。
+    runInAction(() => {
+      for (const stair of this.graph.stairs) {
+        ensureUnderStairSplit(stair, this.graph, this._selfStairRiser(stair));
+      }
+    });
+
     const [matMod, masterMod, compMod] = await Promise.all([
       import('../finish/materials/materialData.js'),
       import('../finish/materials/interiorMasters.js'),
@@ -157,17 +166,11 @@ export class FinishModeState {
   }
 
   /**
-   * stair の破れ線先セル集合。cellsBeyondBreak は stair.cells をそのまま参照するため、
-   * floorplanモードでの区切りCL追加により保存済みキーが古くなっている場合に備え、
-   * refreshCells 後のキー集合（cells）に差し替えた最小限のオブジェクトを渡す
-   * （既存の startDrag のポインタ判定と同じ refreshCells 前提を合わせるため）。
+   * stair の破れ線先セル集合。cellsBeyondBreak が内部で refreshCells 済みのため、
+   * 返るキーは現行グリッド分割のもの（startDrag のポインタ判定と同じ前提）。
    */
-  _beyondBreakOf(stair, cells) {
-    const shim = {
-      type: stair.type, upDirection: stair.upDirection, flip: stair.flip,
-      sections: stair.sections, totalSteps: stair.totalSteps, cells,
-    };
-    return cellsBeyondBreak(shim, this.graph, this._selfStairRiser(stair));
+  _beyondBreakOf(stair) {
+    return cellsBeyondBreak(stair, this.graph, this._selfStairRiser(stair));
   }
 
   /** ワールド座標 (x,y) を占有する下階階段（見下げ）を返す。無ければ null。 */
@@ -190,7 +193,7 @@ export class FinishModeState {
     const stairKeys = new Set();
     for (const s of this.graph.stairs) {
       const cells = refreshCells(s.cells, this.graph);
-      const beyond = this._beyondBreakOf(s, cells);
+      const beyond = this._beyondBreakOf(s);
       for (const key of cells) {
         if (beyond.has(key)) {
           const cb = cellBoundsFromKey(key, this.graph);
@@ -289,14 +292,14 @@ export class FinishModeState {
     // 判定すると、領域が階段の実占有より広い場合（L字の空象限が連結している等）に
     // 階段でないマスのクリックでも階段が選択されてしまう（＝矩形的な過剰選択）。
     const pointerKey = region[0].key;
-    let stair = null, stairCells = null;
+    let stair = null;
     for (const s of this.graph.stairs) {
       const cells = refreshCells(s.cells, this.graph);
-      if (cells.has(pointerKey)) { stair = s; stairCells = cells; break; }
+      if (cells.has(pointerKey)) { stair = s; break; }
     }
 
     if (stair) {
-      const beyond = this._beyondBreakOf(stair, stairCells);
+      const beyond = this._beyondBreakOf(stair);
       if (!beyond.has(pointerKey)) {
         // 優先1: 自階階段（破れ線手前）— stair.roomId の Room があれば既存扱いでダイアログも開く
         // （上り口ヒントは不要 — 選択順セルキーが無い経路のため namingCellOrder は明示的にクリアする）
@@ -555,6 +558,8 @@ export class FinishModeState {
         };
         if (cls.totalSteps) opts.totalSteps = cls.totalSteps;
         convertedStair = this.graph.addStair(opts);
+        // 直進階段は破れ線位置（FL+1600）の分割CLで階段下の指定経路を用意する（stairUnderSplit.js）
+        ensureUnderStairSplit(convertedStair, this.graph, this._selfStairRiser(convertedStair));
         this.selectedStairId = convertedStair.id;
       } else {
         // 既にSTAIR — 再変換せず、既存Stairの選択だけ更新する
@@ -583,6 +588,7 @@ export class FinishModeState {
   _removeLinkedStair(roomId) {
     const stair = [...this.graph.stairMap.values()].find(s => s.roomId === roomId);
     if (!stair) return;
+    removeUnderStairSplit(stair, this.graph); // 階段下の分割CLを指定ごと元に戻す
     this.graph.removeStair(stair.id);
     if (this.selectedStairId === stair.id) this.selectedStairId = null;
   }
@@ -676,6 +682,7 @@ export class FinishModeState {
   /** deleteStair の実体（undo 記録なし。deleteFromDialog から使う）。 */
   _deleteStairNoUndo(id) {
     const stair = this.graph.stairMap.get(id);
+    if (stair) removeUnderStairSplit(stair, this.graph); // 階段下の分割CLを指定ごと元に戻す
     if (stair?.roomId && this.graph.roomMap.has(stair.roomId)) {
       this.graph.removeRoom(stair.roomId);
       if (this.selectedRoomId === stair.roomId) this.selectedRoomId = null;
@@ -697,6 +704,7 @@ export class FinishModeState {
     if (!room) return;
     withFinishUndo(this.graph, () => {
       room.setFeature(null);
+      removeUnderStairSplit(stair, this.graph); // 階段下の分割CLを指定ごと元に戻す
       this.graph.removeStair(stairId);
     });
     this.selectedStairId = null;

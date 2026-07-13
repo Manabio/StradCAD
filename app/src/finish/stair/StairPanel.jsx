@@ -5,6 +5,7 @@ import { roomBounds } from '../gridCells.js';
 import { measureStairSpans } from './stairClassify.js';
 import { stairFigurePrimitives } from './stairFigure.js';
 import { defaultSections } from './stairGeometry.js';
+import { resetUnderStairSplit } from './stairUnderSplit.js';
 import { AutoScaledFigure } from '../../structural/sectionFigure/AutoScaledFigure.jsx';
 import { annotatedFigure } from '../../structural/sectionFigure/sectionGeometry.js';
 import { withFinishUndo, beginFieldUndo, endFieldUndo } from '../finishUndo.js';
@@ -77,10 +78,20 @@ export const StairEditor = observer(({ stair, graph, project, onDelete }) => {
     ? annotatedFigure(scale => stairFigurePrimitives(stair, b, { riser, scale, spans }), STAIR_FIGURE_FRAME)
     : null;
 
+  // 直進階段の編集時は階段下の分割セル指定を元に戻す（stairUnderSplit.js。
+  // 分割CL自体は現仕様＝破れ線位置 FL+1600 へ同期され、STRAIGHT のままなら指定経路は
+  // 維持される）。蹴上は編集後の値で解決し直す（render 時の riser は編集前のため）。
+  const afterEdit = () => {
+    if (!graph) return;
+    const r = stair.riser ?? (floorHeight != null ? floorHeight / Math.max(1, stair.totalSteps) : null);
+    resetUnderStairSplit(stair, graph, r);
+  };
+
   // 数値入力はキーストローク単位でなくフォーカス〜ブラーで1 undo エントリに集約する
   const num = (field) => (e) => {
     const v = e.target.value;
     stair.setField(field, v === '' ? (field === 'riser' ? null : 0) : Number(v));
+    afterEdit();
   };
   const fieldUndoProps = {
     onFocus: () => beginFieldUndo(graph),
@@ -95,6 +106,7 @@ export const StairEditor = observer(({ stair, graph, project, onDelete }) => {
     if (HAS_SECTIONS.has(t) && (!stair.sections || stair.sections.length !== expected?.length)) {
       stair.setField('sections', expected);
     }
+    afterEdit();
   });
   // 図中編集：踏面寸・区間踏面数の寸法をクリック→NumPad 確定でフィールドへ反映（パネル入力は撤去済み）。
   // 区間の入力値は踏面数（マス数）。内部の sections は実段数のため、
@@ -107,6 +119,7 @@ export const StairEditor = observer(({ stair, graph, project, onDelete }) => {
     } else if (dim.target) {
       stair.setField(dim.target, value);
     }
+    afterEdit();
   });
 
   return (
@@ -155,19 +168,19 @@ export const StairEditor = observer(({ stair, graph, project, onDelete }) => {
         </div>
         <div style={rowStyle}>
           <span style={labelStyle}>構造</span>
-          <select style={inputStyle} value={stair.structure} onChange={e => withFinishUndo(graph, () => stair.setField('structure', e.target.value))}>
+          <select style={inputStyle} value={stair.structure} onChange={e => withFinishUndo(graph, () => { stair.setField('structure', e.target.value); afterEdit(); })}>
             {STRUCTURE_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
           </select>
         </div>
         <div style={rowStyle}>
           <span style={labelStyle}>昇り方向</span>
-          <select style={inputStyle} value={stair.upDirection} onChange={e => withFinishUndo(graph, () => stair.setField('upDirection', e.target.value))}>
+          <select style={inputStyle} value={stair.upDirection} onChange={e => withFinishUndo(graph, () => { stair.setField('upDirection', e.target.value); afterEdit(); })}>
             {DIRECTION_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
           </select>
         </div>
         <div style={rowStyle}>
           <span style={labelStyle}>反転</span>
-          <input type="checkbox" checked={stair.flip} onChange={e => withFinishUndo(graph, () => stair.setField('flip', e.target.checked))} />
+          <input type="checkbox" checked={stair.flip} onChange={e => withFinishUndo(graph, () => { stair.setField('flip', e.target.checked); afterEdit(); })} />
         </div>
 
         {dims.warnings.length > 0 && (

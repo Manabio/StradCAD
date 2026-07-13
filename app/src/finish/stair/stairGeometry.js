@@ -1,5 +1,5 @@
 import { StairType, totalStepsFromSections } from '@core';
-import { cellBoundsFromKey, roomBounds, cellBoundsList, outlineSegments } from '../gridCells.js';
+import { cellBoundsFromKey, roomBounds, cellBoundsList, outlineSegments, refreshCells } from '../gridCells.js';
 import { measureStairSpans, detectUTurn } from './stairClassify.js';
 
 const BREAK_HEIGHT = 1600;   // mm — 破れ縁の断面高さ（FL+1600）
@@ -338,6 +338,21 @@ function emitArrival(out, totalSteps, p, detail) {
 // build側（buildStraight）と cellsBeyondBreak 側で共有し、破れ位置判定を単一ソース化する。
 function straightCellStartMm(run, L, cell) {
   return (cell - 1) * (L / run.cells);
+}
+
+/**
+ * 直進（STRAIGHT・1区間）の install 破れ位置（走行軸mm・上り口基点）。
+ * buildStraight／beyondBreakStraightLike と同じ breakStepOf→straightCellStartMm を使い、
+ * 階段下分割CL（stairUnderSplit.js）と破れ位置を単一ソース化する。直進1区間でなければ null。
+ * @param {object} stair - type/sections/totalSteps を持つ Stair（相当）
+ * @param {number} runLength - 走行方向の全長(mm)
+ * @param {number|null} riser - 蹴上(mm)。null なら breakStepOf が既定比率にフォールバックする。
+ */
+export function straightBreakMm(stair, runLength, riser) {
+  const { parts, totalSteps } = stairParts(getSections(stair));
+  if (parts.length !== 1) return null;
+  const breakCell = breakStepOf(totalSteps, riser, 'install');
+  return straightCellStartMm(parts[0], runLength, breakCell);
 }
 
 // 踊り場付直進（STRAIGHT_LANDING）: マス番号→走行軸mm（そのマスの基点側境界）。
@@ -1327,18 +1342,27 @@ function beyondBreakOpenWellLike(stair, graph, riser) {
  */
 export function cellsBeyondBreak(stair, graph, riser) {
   if (!graph || !stair?.cells || stair.cells.size === 0) return new Set();
+  // 保存キーは指定時点のグリッド分割を凍結したもの。floorplanモードの区切りCL追加や
+  // 階段下分割CL（stairUnderSplit.js）でセルが細分化されている場合に備え、現行の
+  // グリッド分割へ展開したキー集合で判定する（返すキーも現行分割のもの）。
+  const cells = refreshCells(stair.cells, graph);
+  if (cells.size === 0) return new Set();
+  const shim = {
+    type: stair.type, upDirection: stair.upDirection, flip: stair.flip,
+    sections: stair.sections, totalSteps: stair.totalSteps, cells,
+  };
   switch (stair.type) {
     case StairType.STRAIGHT:
     case StairType.STRAIGHT_LANDING:
-      return beyondBreakStraightLike(stair, graph, riser);
+      return beyondBreakStraightLike(shim, graph, riser);
     case StairType.SWITCHBACK:
     case StairType.WINDING:
-      return beyondBreakUTurnLike(stair, graph);
+      return beyondBreakUTurnLike(shim, graph);
     case StairType.L_TURN:
     case StairType.FLARED:
-      return beyondBreakLTurnLike(stair, graph, riser);
+      return beyondBreakLTurnLike(shim, graph, riser);
     case StairType.OPEN_WELL:
-      return beyondBreakOpenWellLike(stair, graph, riser);
+      return beyondBreakOpenWellLike(shim, graph, riser);
     default:
       return new Set();
   }

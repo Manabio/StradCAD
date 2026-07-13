@@ -11,6 +11,7 @@
 import { runInAction } from 'mobx';
 import { undoManager } from '../undoManager.js';
 import { snapshotRoomsState, restoreRoomsState } from './roomReinterpret.js';
+import { snapshotUnderSplitCLs, restoreUnderSplitCLs } from './stair/stairUnderSplit.js';
 import { ExteriorFinishRow } from '@core';
 
 const EXTERIOR_CATEGORIES = ['exteriorRows', 'exteriorFittingRows', 'structureRows'];
@@ -59,6 +60,9 @@ export function snapshotFinishState(graph) {
   return {
     rooms:  snapshotRoomsState(graph),
     stairs: snapshotStairs(graph),
+    // 中心線は仕上げ状態の対象外だが、直進階段の階段下分割CL（stairUnderSplit.js）だけは
+    // 階段操作（変換・編集・削除）と不可分のため対象に含める（幾何導出で同定・同一IDで復元）
+    splitCLs: snapshotUnderSplitCLs(graph),
     exterior: Object.fromEntries(EXTERIOR_CATEGORIES.map(cat => [
       cat,
       graph[cat].map(r => Object.fromEntries([['id', r.id], ...EXTERIOR_FIELDS.map(f => [f, r[f]])])),
@@ -68,8 +72,11 @@ export function snapshotFinishState(graph) {
 }
 
 function restoreFinishState(graph, snap) {
+  // 分割CLの同定（幾何導出）には復元前の stairs が必要なため、先に現在分を採取しておく
+  const currentSplitCLs = snapshotUnderSplitCLs(graph);
   restoreRoomsState(graph, snap.rooms);
   restoreStairs(graph, snap.stairs);
+  restoreUnderSplitCLs(graph, currentSplitCLs, snap.splitCLs);
   for (const cat of EXTERIOR_CATEGORIES) {
     graph[cat].replace(snap.exterior[cat].map(d => {
       const row = new ExteriorFinishRow();
