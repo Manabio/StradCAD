@@ -1343,7 +1343,7 @@ const App = observer(() => {
   // 階追加（'upper'/'general'のみ対象。'lower' は対象外）: 元階の階段・外壁状態を新階へ引き継ぐ。
   //   1. 下階のどこかに階段があれば、新階（〜最上階）へ階段補助線を同期する（syncUpperFloorsAuto。
   //      表示階に階段が無くても下階から起点を探索する。旧最上階＝中間階へ移行した階には階段が
-  //      設置され、階段吹抜けはペアRoomへ転用される。新最上階には CL＋外壁＋階段吹抜けのみ）。
+  //      設置され、階段吹抜けはペアRoomへ転用される。新最上階には CL＋階段吹抜けのみ。壁は生成しない）。
   //   2. 元階に外壁（isExteriorWall）があれば、新階へ「外壁ループ内側」を部屋「n階」として自動追加する
   //      （newStartFloor基準。地下階でも makeFloorName(startFloor, 1) で「地下n階」等に正しく整形される）。
   // addFloor 直後・handleFloorSwitch 前に行う（新階はまだ非アクティブ＝peek→saveFloorの通常経路。
@@ -3313,7 +3313,7 @@ const App = observer(() => {
               const convertedStair = modeRef.current?.applyNaming(id, payload, floorHeight);
               if (convertedStair) {
                 // 新規に階段変換された場合のみ、設置階の上の全採用フロア（最上階まで）へ
-                // 中心線・階段・外壁を同期する（非アクティブ階を peek して IDB へ保存）。
+                // 中心線・階段を同期する（非アクティブ階を peek して IDB へ保存。壁は生成しない）。
                 // undoEntry を渡し、自動設置分の巻き戻しを変換エントリへ合成する
                 // （変換の Ctrl+Z 1回で上階分もまとめて undo される）。
                 const undoEntry = modeRef.current?.lastNamingUndoEntry ?? null;

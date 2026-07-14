@@ -84,12 +84,16 @@ function matchesSpec(cl, spec) {
 /**
  * stair の分割CLを幾何から同定して返す（縦横両軸で照合。upDirection 変更後の旧軸や、
  * 蹴上変更で位置がずれた旧分割CLも拾う）。該当なしは空配列。
+ * 階段自身の cells キーが参照するCLは footprint 構造線（U字の踊り場・回り部境界、
+ * 踊り場付直進の区間境界等。短縮中心線は無ラベルARCH実線のため幾何署名が一致しうる）で
+ * あり除外する——分割CLは Stair 作成後に追加されるため cells キーには決して現れない。
  * @returns {import('@core').CenterLine[]}
  */
 export function findUnderStairSplitCLs(stair, graph) {
   const b = stairBounds(stair, graph);
   if (!b) return [];
-  return graph.centerLines.filter(cl => isSplitCLFor(cl, b));
+  const footprintCLIds = new Set([...stair.cells].flatMap(k => k.split(':')));
+  return graph.centerLines.filter(cl => !footprintCLIds.has(cl.id) && isSplitCLFor(cl, b));
 }
 
 // 自動管理 Room（階段ペア・階段吹抜け）か。階段下の「指定」ではないため指定解除の対象外とし、
