@@ -1178,7 +1178,11 @@ const App = observer(() => {
       // 寸法は実材厚から導出（modeRef.current は脱出直前でまだ生存・材ロード済み）。
       const fmode = modeRef.current;
       for (const room of graph.rooms) {
-        if (room.feature === RoomFeature.STAIR || room.feature === RoomFeature.STAIR_VOID) continue; // 階段・階段吹抜けエリアは内周壁を作らない
+        // 階段ペアRoom（feature=STAIR）も対象に含める: 側面の階段側にも壁（仕上げ面・仕上げ線）を
+        // 生成する（上り口・下り口は stairOpenings フィルタで開口のまま）。壁が無いと
+        // resolveStairSideLines が隣接部屋側の壁で側面線を消した際に階段側の仕上げ面が無表示になる。
+        // 階段吹抜け（STAIR_VOID）は引き続き対象外（吹抜けは床の開口であり自室の内周壁を持たない）。
+        if (room.feature === RoomFeature.STAIR_VOID) continue;
         if (room.generatedWallIds.size > 0) continue;
         if (room.referenceRoomIds && room.referenceRoomIds.size > 0) continue;
 
