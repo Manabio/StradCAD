@@ -19,7 +19,7 @@ function setsEqual(a, b) {
 // 永続化されるのは選択された材のみ（材マスタ全体は保存しない）ため、
 // これらのフィールドが参照する材コードのみを照合する。
 const MATERIAL_CODE_GRAPH_FIELDS    = [
-  'interiorWallPanel', 'exteriorWallBacking',
+  'exteriorWallBacking',
   'interiorWallBacking', 'ceilingBacking', 'floorBacking',
 ]; // per-floor 設定
 const MATERIAL_CODE_OVERRIDE_FIELDS = ['wallMaterial', 'wallFinish'];               // Room.customOverrides

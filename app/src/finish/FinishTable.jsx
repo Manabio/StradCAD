@@ -192,7 +192,7 @@ const MaterialSelect = observer(({ mode, category, value, onChange, style }) => 
   );
 });
 
-// 表の上に1行表示する per-floor 設定行（内壁 / 外壁下地）
+// 表の上に1行表示する per-floor 設定行（共通仕様タブの下地材設定）
 const PerFloorRow = observer(({ label, mode, category, value, onChange }) => (
   <div style={{
     display: 'flex', alignItems: 'center', gap: 8,
@@ -376,14 +376,6 @@ const InteriorTable = observer(({ graph, mode, selectedRoomId, onSelectRoom, flo
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', flex: 1, overflow: 'hidden' }}>
-      {/* 内壁（面材選択肢・このフロア共通） */}
-      <PerFloorRow
-        label="内壁"
-        mode={mode}
-        category="panel"
-        value={graph.interiorWallPanel}
-        onChange={code => withFinishUndo(graph, () => graph.setInteriorWallPanel(code))}
-      />
       {floorName && (
         <div style={{ padding: '8px 12px 0', fontSize: 12, fontWeight: 700, color: '#64748b', flexShrink: 0 }}>
           {floorName}

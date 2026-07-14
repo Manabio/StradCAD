@@ -28,7 +28,8 @@ const SIDE_DEC     = ['top', 'bottom', 'left', 'right'];
 // GraphSnapshot (root): 35 フィールド
 const GS = {
   CLS: 0, PTS: 1, WALLS: 2, DIAGS: 3, VLINES: 4, HLINES: 5, ARCS: 6, CIRCS: 7, DIMS: 8, ROOMS: 9, ROOM_ORDER: 10,
-  INTERIOR_WALL_PANEL: 11, EXTERIOR_WALL_BACKING: 12, // per-floor 設定
+  // 11 は旧 INTERIOR_WALL_PANEL（内壁面材の per-floor 設定。部屋の壁材へ移行し廃止。slot 予約）
+  EXTERIOR_WALL_BACKING: 12, // per-floor 設定
   FLOOR_DATUM: 13, // この階の設計用床レベル(mm)
   EDGES: 14, // 境界エッジ（仕上げモード）
   INTERIOR_WALL_BACKING: 15, CEILING_BACKING: 16, FLOOR_BACKING: 17, // 共通仕様タブ per-floor 設定
@@ -1345,7 +1346,6 @@ export function encode(snapshot) {
   const exteriorRowsVec        = writeVec(b, snapshot.exteriorRows        ?? [], writeExteriorRow);
   const exteriorFittingRowsVec = writeVec(b, snapshot.exteriorFittingRows ?? [], writeExteriorRow);
   const structureRowsVec       = writeVec(b, snapshot.structureRows       ?? [], writeExteriorRow);
-  const sIntPanel    = b.createString(snapshot.interiorWallPanel   ?? '');
   const sExtBacking  = b.createString(snapshot.exteriorWallBacking ?? '');
   const sIntBacking  = b.createString(snapshot.interiorWallBacking ?? '');
   const sCeilBacking = b.createString(snapshot.ceilingBacking      ?? '');
@@ -1365,7 +1365,6 @@ export function encode(snapshot) {
   b.addFieldOffset(GS.DIMS,       dimVec,       0);
   b.addFieldOffset(GS.ROOMS,      roomVec,      0);
   b.addFieldOffset(GS.ROOM_ORDER, roomOrderVec, 0);
-  b.addFieldOffset(GS.INTERIOR_WALL_PANEL,   sIntPanel,   0);
   b.addFieldOffset(GS.EXTERIOR_WALL_BACKING, sExtBacking, 0);
   b.addFieldFloat64(GS.FLOOR_DATUM,          snapshot.floorDatum ?? 0, 0.0);
   b.addFieldOffset(GS.EDGES,                 edgeVec,     0);
@@ -1421,7 +1420,6 @@ export function decode(bytes) {
     dimensionLines:  r.vec(GS.DIMS,       readDim),
     rooms:           r.vec(GS.ROOMS,      readRoom),
     roomOrder:       r.strVec(GS.ROOM_ORDER),
-    interiorWallPanel:   r.str(GS.INTERIOR_WALL_PANEL)   || null,
     exteriorWallBacking: r.str(GS.EXTERIOR_WALL_BACKING) || null,
     interiorWallBacking: r.str(GS.INTERIOR_WALL_BACKING) || null,
     ceilingBacking:      r.str(GS.CEILING_BACKING)       || null,

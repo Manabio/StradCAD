@@ -16,14 +16,14 @@ import {
   Discipline, ShapeType, ShapeKind, CenterLineType, RoomKind,
   StairType, StructuralMaterialType,
   LINE_WEIGHT_MM, DimensionKind, DimensionSide,
-  DEFAULT_INTERIOR_WALL_PANEL, DEFAULT_EXTERIOR_WALL_BACKING,
+  DEFAULT_WALL_MATERIAL, DEFAULT_EXTERIOR_WALL_BACKING,
   DEFAULT_INTERIOR_WALL_BACKING, DEFAULT_CEILING_BACKING, DEFAULT_FLOOR_BACKING,
 } from './core/constants.js';
 
 export {
   Discipline, ShapeType, OpeningCategory, ShapeKind, CenterLineType, RoomKind, RoomFeature,
   StairType, StructuralMaterialType, LINE_WEIGHT_MM, DimensionKind, DimensionSide,
-  DEFAULT_INTERIOR_WALL_PANEL, DEFAULT_EXTERIOR_WALL_BACKING,
+  DEFAULT_WALL_MATERIAL, DEFAULT_EXTERIOR_WALL_BACKING,
   DEFAULT_INTERIOR_WALL_BACKING, DEFAULT_CEILING_BACKING, DEFAULT_FLOOR_BACKING,
   SiteLineKind,
 } from './core/constants.js';
@@ -696,10 +696,16 @@ export class Room {
   }
   clearOverride(field)       { this.customOverrides.delete(field); }
 
-  /** 内装マスター + 個別上書きをマージした、壁・天井フィールドの実効値。 */
+  /**
+   * 内装マスター + 個別上書きをマージした、壁・天井フィールドの実効値。
+   * 壁材（wallMaterial）はマスター・上書きとも未指定なら既定（せっこうボード t=12.5）に
+   * フォールバックする（壁描画の仕上げ厚導出が部屋の壁材を単一情報源とするため）。
+   */
   getFinishInfo() {
     const master = INTERIOR_MASTERS[this.templateKey] ?? {};
-    return { ...master, ...Object.fromEntries(this.customOverrides) };
+    const info = { ...master, ...Object.fromEntries(this.customOverrides) };
+    if (!info.wallMaterial) info.wallMaterial = DEFAULT_WALL_MATERIAL;
+    return info;
   }
 }
 
@@ -879,7 +885,6 @@ export class PlanGraph {
     this.excludedFootingSlots = observable.set();
 
     // per-floor 設定（仕上げモード）— 材コード（選択された材として永続化）
-    this.interiorWallPanel   = DEFAULT_INTERIOR_WALL_PANEL;   // 内壁: 面材コード
     this.exteriorWallBacking = DEFAULT_EXTERIOR_WALL_BACKING; // 外壁下地: 下地材コード
     this.interiorWallBacking = DEFAULT_INTERIOR_WALL_BACKING; // 内壁下地: 下地材コード
     // 天井・床下地は表示のみ（共通仕様タブで保存するが、断面計算には未接続。
@@ -967,14 +972,12 @@ export class PlanGraph {
       removeExteriorRow:        action,
       removeExteriorRowGroup:   action,
       removeExteriorRowsByRoomId: action,
-      interiorWallPanel:        observable,
       exteriorWallBacking:      observable,
       interiorWallBacking:      observable,
       ceilingBacking:           observable,
       floorBacking:             observable,
       floorDatum:               observable,
       structureOverride:        observable,
-      setInteriorWallPanel:     action,
       setExteriorWallBacking:   action,
       setInteriorWallBacking:   action,
       setCeilingBacking:        action,
@@ -1160,9 +1163,8 @@ export class PlanGraph {
     }
   }
 
-  // ---- per-floor 設定（内壁面材 / 外壁下地 / 内壁下地 / 天井・床下地）----
+  // ---- per-floor 設定（外壁下地 / 内壁下地 / 天井・床下地）----
 
-  setInteriorWallPanel(code)   { this.interiorWallPanel   = code; }
   setExteriorWallBacking(code) { this.exteriorWallBacking = code; }
   setInteriorWallBacking(code) { this.interiorWallBacking = code; }
   setCeilingBacking(code)      { this.ceilingBacking      = code; }
@@ -1823,7 +1825,6 @@ export class PlanGraph {
     this.excludedBeamSlots.clear();
     this.excludedFootingSlots.clear();
     this.columnAxisOffsets.clear();
-    this.interiorWallPanel   = DEFAULT_INTERIOR_WALL_PANEL;
     this.exteriorWallBacking = DEFAULT_EXTERIOR_WALL_BACKING;
     this.interiorWallBacking = DEFAULT_INTERIOR_WALL_BACKING;
     this.ceilingBacking      = DEFAULT_CEILING_BACKING;

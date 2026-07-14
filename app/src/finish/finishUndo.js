@@ -21,7 +21,6 @@ const EXTERIOR_FIELDS     = ['part', 'finish', 'base', 'note', 'roomId'];
 
 // per-floor 材設定（field → setter 名）
 const PER_FLOOR_SETTERS = {
-  interiorWallPanel:   'setInteriorWallPanel',
   exteriorWallBacking: 'setExteriorWallBacking',
   interiorWallBacking: 'setInteriorWallBacking',
   ceilingBacking:      'setCeilingBacking',

@@ -135,7 +135,6 @@ function buildSnapshot(graph) {
         };
       }),
     stairOrder: [...graph.stairOrder],
-    interiorWallPanel:   graph.interiorWallPanel,
     exteriorWallBacking: graph.exteriorWallBacking,
     interiorWallBacking: graph.interiorWallBacking,
     ceilingBacking:      graph.ceilingBacking,
@@ -643,7 +642,6 @@ function applySnapshot(graph, snapshot) {
     }
 
     // 11. per-floor 設定（保存があれば上書き。なければ clear() の既定値を維持）
-    if (snapshot.interiorWallPanel)   graph.setInteriorWallPanel(snapshot.interiorWallPanel);
     if (snapshot.exteriorWallBacking) graph.setExteriorWallBacking(snapshot.exteriorWallBacking);
     if (snapshot.interiorWallBacking) graph.setInteriorWallBacking(snapshot.interiorWallBacking);
     if (snapshot.ceilingBacking)      graph.setCeilingBacking(snapshot.ceilingBacking);

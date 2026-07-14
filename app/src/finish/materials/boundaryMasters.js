@@ -7,10 +7,10 @@
 //
 // 層の供給元（src）が指定された層は、固定材コードではなく実行時に解決する:
 //   FLOOR_EXTERIOR_BACKING : graph.exteriorWallBacking（per-floor 設定）
-//   FLOOR_INTERIOR_PANEL   : graph.interiorWallPanel  （per-floor 設定）
 //   FLOOR_INTERIOR_BACKING : graph.interiorWallBacking（per-floor 設定）
+//   ROOM_WALL_MATERIAL     : 隣接部屋の壁材（wallMaterial）へ委譲
 //   ROOM_FINISH            : 隣接部屋の内装マスター（壁材＋壁仕上げ）へ委譲
-// これにより外壁下地・内壁面材・室側仕上げの単一情報源を保つ。
+// これにより外壁下地・壁材・室側仕上げの単一情報源を保つ。
 //
 // ※ マスター自体の編集 UI は本課題の範囲外（静的データとして扱う）。
 // ※ 材データと同様、仕上げモード突入時に動的 import して使う想定。
@@ -19,8 +19,8 @@
 /** 層の供給元（固定コード以外の解決方法）。 */
 export const LAYER_SOURCE = Object.freeze({
   FLOOR_EXTERIOR_BACKING: 'floorExteriorBacking',
-  FLOOR_INTERIOR_PANEL:   'floorInteriorPanel',
   FLOOR_INTERIOR_BACKING: 'floorInteriorBacking',
+  ROOM_WALL_MATERIAL:     'roomWallMaterial',
   ROOM_FINISH:            'roomFinish',
 });
 
@@ -114,9 +114,9 @@ export const BOUNDARY_MASTERS = Object.freeze({
     // 両側が部屋。室側仕上げは両面とも Room（内装マスター）へ委譲。
     layers: Object.freeze([
       { role: '室側仕上げ', src: LAYER_SOURCE.ROOM_FINISH },
-      { role: '面材',       src: LAYER_SOURCE.FLOOR_INTERIOR_PANEL },
+      { role: '面材',       src: LAYER_SOURCE.ROOM_WALL_MATERIAL },
       { role: '下地',       src: LAYER_SOURCE.FLOOR_INTERIOR_BACKING },
-      { role: '面材',       src: LAYER_SOURCE.FLOOR_INTERIOR_PANEL },
+      { role: '面材',       src: LAYER_SOURCE.ROOM_WALL_MATERIAL },
       { role: '室側仕上げ', src: LAYER_SOURCE.ROOM_FINISH },
     ].map(l => Object.freeze(l))),
   }),
