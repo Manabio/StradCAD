@@ -3,7 +3,7 @@ import { useState, useEffect } from 'react';
 import { ConfirmDialog } from '../ui/ConfirmDialog.jsx';
 import { StairTab } from './stair/StairTab.jsx';
 import { withFinishUndo, beginFieldUndo, endFieldUndo } from './finishUndo.js';
-import { RoomFeature } from '@core';
+import { RoomFeature, RoomKind } from '@core';
 
 // ---- 内部仕上げ表 ----
 
@@ -236,8 +236,11 @@ export const FinishTable = observer(({ graph, mode, project, selectedRoomId, onS
   const [activeTab, setActiveTab] = useState('interior');
   // 階段が選択されたら「階段」タブへ自動切替
   useEffect(() => { if (mode.selectedStairId) setActiveTab('stair'); }, [mode.selectedStairId]);
-  // 部屋が選択されたら「内部」タブへ自動切替
-  useEffect(() => { if (mode.selectedRoomId) setActiveTab('interior'); }, [mode.selectedRoomId]);
+  // 部屋が選択されたら「内部」タブへ自動切替（階段選択時は階段タブが勝つ。宣言順で下の effect が
+  // 後に評価されるため、両方セットされた場合はここで内部タブに切り替わらないよう明示的にガードする）
+  useEffect(() => {
+    if (mode.selectedRoomId && !mode.selectedStairId) setActiveTab('interior');
+  }, [mode.selectedRoomId, mode.selectedStairId]);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', flex: 1, overflow: 'hidden' }}>
@@ -296,9 +299,12 @@ export const FinishTable = observer(({ graph, mode, project, selectedRoomId, onS
 // ================================================================
 
 const InteriorTable = observer(({ graph, mode, selectedRoomId, onSelectRoom, floorName }) => {
-  // 階段（feature===STAIR）は階段タブが担当するため内部仕上げ表からは除外する。
-  // 階段吹抜け（STAIR_VOID）は自動管理 Room のため同じく表に出さない。
-  const rooms = graph.rooms.filter(r => r.feature !== RoomFeature.STAIR && r.feature !== RoomFeature.STAIR_VOID);
+  // 屋外階段（feature===STAIR かつ kind===EXTERIOR）は階段タブ＋外部タブが担当するため
+  // 内部仕上げ表からは除外する。屋内階段（kind===INTERIOR）は通常部屋と同じカードで表示する
+  // （上階自動設置の無名ペアRoomも同様に表示される＝意図どおり）。
+  // 階段吹抜け（STAIR_VOID）は自動管理 Room のため引き続き表に出さない。
+  const rooms = graph.rooms.filter(r =>
+    (r.feature !== RoomFeature.STAIR || r.kind === RoomKind.INTERIOR) && r.feature !== RoomFeature.STAIR_VOID);
 
   const [dragId, setDragId]             = useState(null);
   const [overIndex, setOverIndex]       = useState(null);
@@ -337,9 +343,9 @@ const InteriorTable = observer(({ graph, mode, selectedRoomId, onSelectRoom, flo
 
     currentOrder.splice(fromIndex, 1);
 
-    // dropIndex は表示用フィルタ後配列（rooms、feature=STAIR除外済み）の index。
-    // graph.roomOrder（未フィルタ、階段Roomも含む）への挿入位置は、落下先の可視行IDを
-    // currentOrder 上で探して求める（フィルタ後indexをそのままspliceに使うと階段Room分だけずれる）。
+    // dropIndex は表示用フィルタ後配列（rooms、屋外階段・STAIR_VOID除外済み。屋内階段は含む）の index。
+    // graph.roomOrder（未フィルタ、除外分も含む）への挿入位置は、落下先の可視行IDを
+    // currentOrder 上で探して求める（フィルタ後indexをそのままspliceに使うと除外分だけずれる）。
     let insertAt;
     if (dropIndex < rooms.length) {
       insertAt = currentOrder.indexOf(rooms[dropIndex].id);
@@ -459,7 +465,7 @@ const RoomCard = observer(({ room, mode, isExpanded, isDragging, isOver,
         ⠿
       </span>
       <span style={{ flex: 1, fontSize: 13, fontWeight: 700, color: '#1e293b' }}>
-        {room.name || '（名称未設定）'}
+        {room.name || (room.feature === RoomFeature.STAIR ? '階段' : '（名称未設定）')}
       </span>
       <span style={{ color: '#94a3b8', fontSize: 11 }}>{isExpanded ? '▼' : '◀'}</span>
     </div>
@@ -506,6 +512,17 @@ const FieldCell = observer(({ fieldKey, room, mode }) => {
         <span style={cardLabelStyle}>Bボックス：</span>
         <div style={cardInputWrapStyle}>
           <input disabled style={cellInputStyle} />
+        </div>
+      </div>
+    );
+  }
+  // 階段カードの天井高欄は「階高」に差し替え、表示値「-」の入力不可とする（データは書き込まない）。
+  if (fieldKey === 'ceilingHeight' && room.feature === RoomFeature.STAIR) {
+    return (
+      <div style={cardFieldStyle}>
+        <span style={cardLabelStyle}>階高：</span>
+        <div style={cardInputWrapStyle}>
+          <input disabled value="-" style={cellInputStyle} />
         </div>
       </div>
     );

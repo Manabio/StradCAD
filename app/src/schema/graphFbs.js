@@ -47,6 +47,8 @@ const GS = {
   EXCLUDED_FOOTING_SLOTS: 34,
   // 階段（仕上げモード、設置階に帰属）
   STAIRS: 35, STAIR_ORDER: 36,
+  // 外部仕上げ行（仕上げモード: 外部/外部建具/構造。per-floor）
+  EXTERIOR_ROWS: 37, EXTERIOR_FITTING_ROWS: 38, STRUCTURE_ROWS: 39,
 };
 
 // Stair: 15 フィールド
@@ -73,6 +75,9 @@ const SI = {
 
 // Edge: 4 フィールド
 const ED = { KEY: 0, MASTER_TYPE: 1, OVR_KEYS: 2, OVR_VALS: 3 };
+
+// ExteriorFinishRow（外部仕上げ行 — exteriorRows/exteriorFittingRows/structureRowsで共通）: 6 フィールド
+const XR = { ID: 0, PART: 1, FINISH: 2, BASE: 3, NOTE: 4, ROOM_ID: 5 };
 
 // Room: 25 フィールド
 const RM = {
@@ -565,6 +570,24 @@ function writeEdge(b, e) {
   b.addFieldOffset(ED.MASTER_TYPE, sMaster,    0);
   b.addFieldOffset(ED.OVR_KEYS,    ovrKeysVec, 0);
   b.addFieldOffset(ED.OVR_VALS,    ovrValsVec, 0);
+  return b.endObject();
+}
+
+function writeExteriorRow(b, r) {
+  const sId     = b.createString(r.id);
+  const sPart   = b.createString(r.part   ?? '');
+  const sFinish = b.createString(r.finish ?? '');
+  const sBase   = b.createString(r.base   ?? '');
+  const sNote   = b.createString(r.note   ?? '');
+  const sRoomId = b.createString(r.roomId ?? '');
+
+  b.startObject(6);
+  b.addFieldOffset(XR.ID,      sId,     0);
+  b.addFieldOffset(XR.PART,    sPart,   0);
+  b.addFieldOffset(XR.FINISH,  sFinish, 0);
+  b.addFieldOffset(XR.BASE,    sBase,   0);
+  b.addFieldOffset(XR.NOTE,    sNote,   0);
+  b.addFieldOffset(XR.ROOM_ID, sRoomId, 0);
   return b.endObject();
 }
 
@@ -1102,6 +1125,18 @@ function readEdge(bb, tablePos) {
   };
 }
 
+function readExteriorRow(bb, tablePos) {
+  const r = makeReader(bb, tablePos);
+  return {
+    id:     r.str(XR.ID),
+    part:   r.str(XR.PART),
+    finish: r.str(XR.FINISH),
+    base:   r.str(XR.BASE),
+    note:   r.str(XR.NOTE),
+    roomId: r.str(XR.ROOM_ID) || null,
+  };
+}
+
 function readStair(bb, tablePos) {
   const r = makeReader(bb, tablePos);
   return {
@@ -1307,6 +1342,9 @@ export function encode(snapshot) {
   const columnAxisValsVec = writeStrVec(b, snapshot.columnAxisOffsetVals ?? []);
   const stairVec      = writeVec(b, snapshot.stairs ?? [], writeStair);
   const stairOrderVec = writeStrVec(b, snapshot.stairOrder ?? []);
+  const exteriorRowsVec        = writeVec(b, snapshot.exteriorRows        ?? [], writeExteriorRow);
+  const exteriorFittingRowsVec = writeVec(b, snapshot.exteriorFittingRows ?? [], writeExteriorRow);
+  const structureRowsVec       = writeVec(b, snapshot.structureRows       ?? [], writeExteriorRow);
   const sIntPanel    = b.createString(snapshot.interiorWallPanel   ?? '');
   const sExtBacking  = b.createString(snapshot.exteriorWallBacking ?? '');
   const sIntBacking  = b.createString(snapshot.interiorWallBacking ?? '');
@@ -1315,7 +1353,7 @@ export function encode(snapshot) {
   const sStructureOverride = b.createString(snapshot.structureOverride ?? '');
   const structuralInfoOff  = writeStructuralInfo(b, snapshot.structuralInfo);
 
-  b.startObject(37);
+  b.startObject(40);
   b.addFieldOffset(GS.CLS,        clVec,        0);
   b.addFieldOffset(GS.PTS,        ptVec,        0);
   b.addFieldOffset(GS.WALLS,      wallVec,      0);
@@ -1353,6 +1391,9 @@ export function encode(snapshot) {
   b.addFieldOffset(GS.COLUMN_AXIS_VALS, columnAxisValsVec, 0);
   b.addFieldOffset(GS.STAIRS,        stairVec,      0);
   b.addFieldOffset(GS.STAIR_ORDER,   stairOrderVec, 0);
+  b.addFieldOffset(GS.EXTERIOR_ROWS,         exteriorRowsVec,        0);
+  b.addFieldOffset(GS.EXTERIOR_FITTING_ROWS, exteriorFittingRowsVec, 0);
+  b.addFieldOffset(GS.STRUCTURE_ROWS,        structureRowsVec,       0);
   const root = b.endObject();
 
   b.finish(root);
@@ -1406,5 +1447,8 @@ export function decode(bytes) {
     columnAxisOffsetVals: r.strVec(GS.COLUMN_AXIS_VALS),
     stairs:          r.vec(GS.STAIRS, readStair),
     stairOrder:      r.strVec(GS.STAIR_ORDER),
+    exteriorRows:        r.vec(GS.EXTERIOR_ROWS,         readExteriorRow),
+    exteriorFittingRows: r.vec(GS.EXTERIOR_FITTING_ROWS, readExteriorRow),
+    structureRows:       r.vec(GS.STRUCTURE_ROWS,        readExteriorRow),
   };
 }

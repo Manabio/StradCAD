@@ -620,11 +620,13 @@ export class ExteriorFinishRow {
     this.finish = '';
     this.base   = '';
     this.note   = '';
+    this.roomId = null; // 階段ペアRoomのID（階段連動行のみ設定。手入力行は null）
     makeObservable(this, {
       part:     observable,
       finish:   observable,
       base:     observable,
       note:     observable,
+      roomId:   observable,
       setField: action,
     });
   }
@@ -964,6 +966,7 @@ export class PlanGraph {
       addExteriorRow:           action,
       removeExteriorRow:        action,
       removeExteriorRowGroup:   action,
+      removeExteriorRowsByRoomId: action,
       interiorWallPanel:        observable,
       exteriorWallBacking:      observable,
       interiorWallBacking:      observable,
@@ -1128,9 +1131,10 @@ export class PlanGraph {
     if (idx >= 0) this.stairOrder.splice(idx, 1);
   }
 
-  addExteriorRow(category, part = '') {
+  addExteriorRow(category, part = '', roomId = null) {
     const row = new ExteriorFinishRow();
     if (part) row.setField('part', part);
+    row.roomId = roomId;
     this[category].push(row);
     return row;
   }
@@ -1145,6 +1149,14 @@ export class PlanGraph {
     const arr = this[category];
     for (let i = arr.length - 1; i >= 0; i--) {
       if (arr[i].part === part) arr.splice(i, 1);
+    }
+  }
+
+  /** roomId にリンクした外部仕上げ行（階段連動。exteriorRowsのみ対象）があれば削除する。 */
+  removeExteriorRowsByRoomId(roomId) {
+    const arr = this.exteriorRows;
+    for (let i = arr.length - 1; i >= 0; i--) {
+      if (arr[i].roomId === roomId) arr.splice(i, 1);
     }
   }
 
@@ -1796,6 +1808,9 @@ export class PlanGraph {
     this.roomOrder.clear();
     this.stairMap.clear();
     this.stairOrder.clear();
+    this.exteriorRows.clear();
+    this.exteriorFittingRows.clear();
+    this.structureRows.clear();
     this.edgeMap.clear();
     this.columnMap.clear();
     this.beamMap.clear();

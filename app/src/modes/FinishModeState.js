@@ -7,7 +7,7 @@ import { floorHeightAbove } from '../finish/stair/stairDimensions.js';
 import { floorSwapManager } from '../storage/FloorSwapManager.js';
 import { snapshotFinishState, pushFinishUndo, withFinishUndo } from '../finish/finishUndo.js';
 import { ERR_MATERIAL_MISMATCH } from '../error.js';
-import { RoomFeature } from '@core';
+import { RoomFeature, RoomKind } from '@core';
 
 function setsEqual(a, b) {
   if (a.size !== b.size) return false;
@@ -566,7 +566,16 @@ export class FinishModeState {
         const stair = [...this.graph.stairMap.values()].find(s => s.roomId === roomId);
         this.selectedStairId = stair ? stair.id : null;
       }
-      this.selectedRoomId = null;
+      // 屋外階段 → 外部タブに部位「階段」の行を自動追加（新規変換・既存階段の再確定＝kind切替の両方が通る）。
+      // 屋内階段（屋外→屋内へ切替された場合含む）→ 連動行を削除。
+      if (room.kind === RoomKind.EXTERIOR) {
+        if (!this.graph.exteriorRows.some(r => r.roomId === room.id)) {
+          this.graph.addExteriorRow('exteriorRows', '階段', room.id);
+        }
+      } else {
+        this.graph.removeExteriorRowsByRoomId(room.id);
+      }
+      this.selectedRoomId = room.id;
     } else {
       if (wasStair) this._removeLinkedStair(roomId); // STAIR → null/void: 連動Stairを削除
       room.setFeature(feature ?? null);
@@ -590,6 +599,7 @@ export class FinishModeState {
     if (!stair) return;
     removeUnderStairSplit(stair, this.graph); // 階段下の分割CLを指定ごと元に戻す
     this.graph.removeStair(stair.id);
+    this.graph.removeExteriorRowsByRoomId(roomId); // 連動する外部仕上げ行（部位「階段」）も削除
     if (this.selectedStairId === stair.id) this.selectedStairId = null;
   }
 
@@ -671,7 +681,10 @@ export class FinishModeState {
 
   selectStair(id) {
     this.selectedStairId = id;
-    this.selectedRoomId  = null;
+    // 自階階段なら背後で仕上げ表の部屋カードも選択状態にする。下階階段（見下げ）は
+    // roomId が自階 roomMap に無いため（別階のRoom参照）、自然に null になる。
+    const roomId = this.graph.stairMap.get(id)?.roomId ?? null;
+    this.selectedRoomId = roomId && this.graph.roomMap.has(roomId) ? roomId : null;
   }
 
   /** stair.roomId の Room が存在すればそれも削除する（階段タブの削除ボタン経由でも Room が残らないように）。 */
@@ -688,6 +701,7 @@ export class FinishModeState {
       if (this.selectedRoomId === stair.roomId) this.selectedRoomId = null;
       if (this.namingRoomId === stair.roomId) this.namingRoomId = null;
     }
+    if (stair?.roomId) this.graph.removeExteriorRowsByRoomId(stair.roomId); // 連動する外部仕上げ行も削除
     this.graph.removeStair(id);
     if (this.selectedStairId === id) this.selectedStairId = null;
   }
@@ -706,6 +720,7 @@ export class FinishModeState {
       room.setFeature(null);
       removeUnderStairSplit(stair, this.graph); // 階段下の分割CLを指定ごと元に戻す
       this.graph.removeStair(stairId);
+      this.graph.removeExteriorRowsByRoomId(room.id); // 連動する外部仕上げ行も削除
     });
     this.selectedStairId = null;
     this.selectedRoomId  = room.id;

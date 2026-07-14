@@ -1,5 +1,5 @@
 import { runInAction } from 'mobx';
-import { ShapeType, CenterLine, HDimensionLine, VDimensionLine, DimensionAnchor, DimensionKind, DimensionSide, Discipline, Room, RoomKind, RoomFeature, IndependentFooting } from '@core';
+import { ShapeType, CenterLine, HDimensionLine, VDimensionLine, DimensionAnchor, DimensionKind, DimensionSide, Discipline, Room, RoomKind, RoomFeature, IndependentFooting, ExteriorFinishRow } from '@core';
 import { encode, decode } from './schema/graphFbs.js';
 import { packExtraFields, unpackExtraFields } from './structural/fieldPacking.js';
 
@@ -15,6 +15,13 @@ function isStructCL(s) {
 // ----------------------------------------------------------------
 function baseProps(s) {
   return { discipline: s.discipline, lineWeight: s.lineWeight, lineType: s.lineType, color: s.color };
+}
+
+// ----------------------------------------------------------------
+// 共通: 外部仕上げ行（exteriorRows/exteriorFittingRows/structureRowsで共通の形）
+// ----------------------------------------------------------------
+function serializeExteriorRow(r) {
+  return { id: r.id, part: r.part, finish: r.finish, base: r.base, note: r.note, roomId: r.roomId ?? null };
 }
 
 // ----------------------------------------------------------------
@@ -140,6 +147,10 @@ function buildSnapshot(graph) {
       masterType: e.masterType ?? null,
       overrides:  [...e.overrides].map(([key, value]) => ({ key, value: String(value) })),
     })),
+    // 外部仕上げ行（仕上げモード: 外部/外部建具/構造。roomId は階段連動行のみ非null）
+    exteriorRows:        graph.exteriorRows.map(serializeExteriorRow),
+    exteriorFittingRows: graph.exteriorFittingRows.map(serializeExteriorRow),
+    structureRows:       graph.structureRows.map(serializeExteriorRow),
     // 構造モード（柱・梁・耐力壁・耐力壁開口・スラブ・基礎・柱脚・貫通孔）
     columns: graph.columns.map(c => {
       const [extraKeys, extraVals] = packExtraFields(c,
@@ -649,6 +660,24 @@ function applySnapshot(graph, snapshot) {
     // 12. 境界エッジ（仕上げモード）— overrides は verbatim 復元
     for (const d of snapshot.edges ?? []) {
       graph.addEdge(d.key, d.masterType ?? null, (d.overrides ?? []).map(o => [o.key, o.value]));
+    }
+
+    // 13. 外部仕上げ行（仕上げモード: 外部/外部建具/構造）— roomId は同floor内Room.idの文字列参照のため解決不要
+    for (const [category, rows] of [
+      ['exteriorRows',        snapshot.exteriorRows],
+      ['exteriorFittingRows', snapshot.exteriorFittingRows],
+      ['structureRows',       snapshot.structureRows],
+    ]) {
+      for (const d of rows ?? []) {
+        const row = new ExteriorFinishRow();
+        row.id = d.id; // 同一IDで復元（undo/redoサイクルと同じ流儀）
+        row.setField('part',   d.part   ?? '');
+        row.setField('finish', d.finish ?? '');
+        row.setField('base',   d.base   ?? '');
+        row.setField('note',   d.note   ?? '');
+        row.roomId = d.roomId ?? null;
+        graph[category].push(row);
+      }
     }
   });
 }

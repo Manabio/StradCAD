@@ -15,7 +15,9 @@ import { snapshotUnderSplitCLs, restoreUnderSplitCLs } from './stair/stairUnderS
 import { ExteriorFinishRow } from '@core';
 
 const EXTERIOR_CATEGORIES = ['exteriorRows', 'exteriorFittingRows', 'structureRows'];
-const EXTERIOR_FIELDS     = ['part', 'finish', 'base', 'note'];
+// roomId（階段連動リンク）も対象に含める。含めないと undo → redo で行は残っても
+// リンクだけ失われ、以後の階段削除で連動削除（removeExteriorRowsByRoomId）が効かなくなる。
+const EXTERIOR_FIELDS     = ['part', 'finish', 'base', 'note', 'roomId'];
 
 // per-floor 材設定（field → setter 名）
 const PER_FLOOR_SETTERS = {
@@ -81,7 +83,10 @@ function restoreFinishState(graph, snap) {
     graph[cat].replace(snap.exterior[cat].map(d => {
       const row = new ExteriorFinishRow();
       row.id = d.id; // 同一 ID で復元し undo → redo → undo のサイクルを保つ
-      for (const f of EXTERIOR_FIELDS) row.setField(f, d[f]);
+      for (const f of EXTERIOR_FIELDS) {
+        // roomId は旧スナップショット（フィールド追加前・キー欠落）だと undefined になりうるため null 正規化する
+        row.setField(f, f === 'roomId' ? (d[f] ?? null) : d[f]);
+      }
       return row;
     }));
   }
