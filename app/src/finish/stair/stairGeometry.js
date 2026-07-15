@@ -26,7 +26,9 @@ const BREAK_JOG  = 90;          // mm — 中央ジョグの線方向半幅
 // 踏面＝垂直で切る）なら水平から30°、幅が垂直（横連なり踏面＝水平で切る）なら水平から60°になる。
 // p1/p2 は実際の破断線の両端点（p側/q側）。傾きにより p1 は p から、p2 は q から走行方向へ
 // ∓(幅/2)*tan(BREAK_TILT) だけずれる（p側とq側で符号が逆）。呼び出し側は両側線をここへ延長・短縮して繋ぐ。
-function breakSymbol(p, q) {
+// overhang は見た目の両端を線方向へ CL からさらにはり出す量（mm。中心線のはね出しと同じ扱い。
+// p1/p2＝実端点にははり出しを含めない）。
+function breakSymbol(p, q, overhang = 0) {
   const mx = (p.x + q.x) / 2, my = (p.y + q.y) / 2;
   const W = Math.hypot(q.x - p.x, q.y - p.y) || 1;
   const wx = (q.x - p.x) / W, wy = (q.y - p.y) / W;        // 幅方向 単位（p→q）
@@ -37,10 +39,11 @@ function breakSymbol(p, q) {
   const L = W / cos;                                        // 幅投影=全幅 となる長さ
   const along = (s) => ({ x: mx + dx * s, y: my + dy * s });
   const P1 = along(-L / 2), P2 = along(L / 2);
+  const E1 = along(-L / 2 - overhang), E2 = along(L / 2 + overhang); // 見た目（segs）だけの端点
   const A = along(-BREAK_JOG), C = along(BREAK_JOG);
   const B = { x: A.x + nx * BREAK_TICK, y: A.y + ny * BREAK_TICK };
   const D = { x: C.x - nx * BREAK_TICK, y: C.y - ny * BREAK_TICK };
-  return { segs: [seg(P1, A), seg(A, B), seg(B, D), seg(D, C), seg(C, P2)], p1: P1, p2: P2 };
+  return { segs: [seg(E1, A), seg(A, B), seg(B, D), seg(D, C), seg(C, E2)], p1: P1, p2: P2 };
 }
 
 // breakSymbol の傾きにより、全幅 widthMm の破断線が p側/q側で走行方向へずれる量(mm、片側分)。
@@ -72,17 +75,20 @@ function breakDiagonalFrame(outerPt, acrossDir, awayDir) {
   };
 }
 
-function breakSymbolAwayFromLanding(outerPt, acrossDir, awayDir, widthMm) {
+// overhang は見た目の両端（外周側=outerPt／内側=通り芯どまりの inner）を線方向へ
+// さらにはり出す量（mm。中心線のはね出しと同じ扱い。inner/outer の論理端点は動かさない）。
+function breakSymbolAwayFromLanding(outerPt, acrossDir, awayDir, widthMm, overhang = 0) {
   const { dir, along } = breakDiagonalFrame(outerPt, acrossDir, awayDir);
   const nx = -dir.y, ny = dir.x;
   const L = widthMm / Math.cos(BREAK_TILT);
   const inner = along(L);
+  const outerExt = along(-overhang), innerExt = along(L + overhang); // 見た目（segs）だけの端点
   const A = along(L / 2 - BREAK_JOG), C = along(L / 2 + BREAK_JOG);
   const B = { x: A.x + nx * BREAK_TICK, y: A.y + ny * BREAK_TICK };
   const D = { x: C.x - nx * BREAK_TICK, y: C.y - ny * BREAK_TICK };
   // s順（outerPt=0 → A(L/2-JOG) → B/D(ジョグ) → C(L/2+JOG) → inner=L）に辿ることで、
   // 斜め線がZ（ジョグ）区間を横断しないようにする（A/Cの前後を誤ると斜め線がジョグを飛び越えて交差する）。
-  return { segs: [seg(outerPt, A), seg(A, B), seg(B, D), seg(D, C), seg(C, inner)], inner, outer: outerPt };
+  return { segs: [seg(outerExt, A), seg(A, B), seg(B, D), seg(D, C), seg(C, innerExt)], inner, outer: outerPt };
 }
 
 // 走行矢印: 始点 start（丸を描く）→ 終点 end（矢じり）。
@@ -165,10 +171,11 @@ function breakStepOf(totalRisers, riser, view) {
 
 // 共通の外周・破れ縁・矢印を生成する。install view では両側線を破断線の実端点まで延長／短縮して繋ぎ、
 // 踏面線・段数字が破断線の手前で止まるよう breakInset（mm）を返す。破れ線の見た目は、幅方向の
-// 外周端（隣接壁のCL側）だけさらにはね出す（b は inset 後の設置エリア矩形）。
+// 外周端（隣接壁のCL側）だけさらにはね出し（b は inset 後の設置エリア矩形）、その端部を
+// overhang（mm）だけ線方向へ CL からはり出す（中心線の端のはね出しと同じ扱い）。
 // wideSide: 破断線は幅方向から30°傾くため s=0側/s=1側で走行方向の見えがかり長さが異なる（I字の
 // 「破れ線の広い方」判定用）。0=s=0側が広い／1=s=1側が広い／null=破れなし（install以外）。
-function frameDecor(f, topT, view, b) {
+function frameDecor(f, topT, view, b, overhang = 0) {
   const c00 = f.pt(0, 0), c01 = f.pt(0, 1), c10 = f.pt(topT, 0), c11 = f.pt(topT, 1);
   let breakLine = null;
   let sideEnd0 = c10, sideEnd1 = c11;
@@ -177,7 +184,7 @@ function frameDecor(f, topT, view, b) {
   if (view === 'install') {
     const { p1, p2 } = breakSymbol(c10, c11); // 全幅カットを傾けたZ字破断線（側線連結用・実寸）
     sideEnd0 = p1; sideEnd1 = p2;
-    breakLine = breakSymbol(extendBreakEndToCL(c10, b), extendBreakEndToCL(c11, b)).segs; // 見た目はCLまではね出す
+    breakLine = breakSymbol(extendBreakEndToCL(c10, b), extendBreakEndToCL(c11, b), overhang).segs; // 見た目はCL＋はり出し
     breakInset = breakInsetMm(Math.hypot(c11.x - c10.x, c11.y - c10.y));
     const tx = c10.x - c00.x, ty = c10.y - c00.y; // 走行方向（0→topT）への射影で比較
     const proj = (p) => (p.x - c00.x) * tx + (p.y - c00.y) * ty;
@@ -371,7 +378,7 @@ function straightLandingCellStartMm(run1, land, run2, L1, LD, L2, cell) {
 }
 
 // ---- 直進階段 ----
-function buildStraight(stair, b, { view, detail, riser }) {
+function buildStraight(stair, b, { view, detail, riser, breakOverhangMm = 0 }) {
   const f = makeFrame(stair, b);
   const { parts, totalSteps } = stairParts(getSections(stair));
   const run = parts[0];
@@ -382,7 +389,7 @@ function buildStraight(stair, b, { view, detail, riser }) {
   const topT = shownMm / L;
   const nosingMm = detail ? stair.nosing * (view === 'install' ? -1 : 1) : 0;
 
-  const { outline, breakLine, arrows, breakInset, wideSide } = frameDecor(f, topT, view, b);
+  const { outline, breakLine, arrows, breakInset, wideSide } = frameDecor(f, topT, view, b, breakOverhangMm);
   // I字: 破れ線が広い方（走行方向により長く見えがかる側＝文字をより多く描画できる側）へ寄せる。
   // 破れがない（upper）場合は既定で外周寄り（1-NUM_OUT）に置く。
   const numS = wideSide === 0 ? NUM_OUT : 1 - NUM_OUT;
@@ -403,7 +410,7 @@ function buildStraight(stair, b, { view, detail, riser }) {
 // ---- 踊り場付直進階段 ----
 // 走行軸上に 直進部 → 踊場（マス1・平坦バンド）→ 直進部 を配置する。区間長はセル実測
 //（区間長指定）があればそれを使い、無ければ 踏面寸×マス数＋最小踊場 を合成して枠に引き伸ばす。
-function buildStraightLanding(stair, b, { view, detail, riser, spans }) {
+function buildStraightLanding(stair, b, { view, detail, riser, spans, breakOverhangMm = 0 }) {
   const f = makeFrame(stair, b);
   const { parts, totalSteps } = stairParts(getSections(stair));
   const [run1, land, run2] = parts;
@@ -425,7 +432,7 @@ function buildStraightLanding(stair, b, { view, detail, riser, spans }) {
   const topT = tAt(shownMm);
   const nosingMm = detail ? stair.nosing * (view === 'install' ? -1 : 1) : 0;
 
-  const { outline, breakLine, arrows, breakInset, wideSide } = frameDecor(f, topT, view, b);
+  const { outline, breakLine, arrows, breakInset, wideSide } = frameDecor(f, topT, view, b, breakOverhangMm);
   const limitMm = view === 'install' ? shownMm - breakInset : Infinity; // 破れ線が両側線を切り始める手前（踏面線用）
   const numberLimitMm = view === 'install' ? shownMm : Infinity; // 段数文字用（マスが破れ手前なら番号を出す。インセット非依存）
   // I字: 破れ線が広い方へ寄せる（破れなしは既定で外周寄り）。区間全体で同じ側に統一する。
@@ -478,7 +485,7 @@ function uTurnLayout(f, b, runA, runB, tread, spans) {
 // install の破れは常に踊場との接続部（復路の初段線＝tRun）。FL+1600/riser では位置決めしない。
 // 復路の段数字は install では表示しない（初段線位置＝破れの始点のため、初段に続き番号を置けない）。
 // 踏面線は、破れ線（対角）に触れるまで吹抜け側から描画できる分だけ描く。
-function buildSwitchback(stair, b, { view, detail, spans, laneGapMm = 0 }) {
+function buildSwitchback(stair, b, { view, detail, spans, laneGapMm = 0, breakOverhangMm = 0 }) {
   const f = makeFrame(stair, b);
   const { parts, totalSteps } = stairParts(getSections(stair));
   const [runA, land, runB] = parts;
@@ -523,7 +530,7 @@ function buildSwitchback(stair, b, { view, detail, spans, laneGapMm = 0 }) {
     // 見た目の破れ線は始点=外周壁の中心線（outerPt）〜終点=レーン間の中心線（s=0.5、通り芯）。
     // あき時もレーン内側端（sB）で止めず中心線まで延ばす。D（踏面の可視深さ）はレーン幅のまま。
     const widthVis = Math.hypot(c(tRun, 0.5).x - outerPt.x, c(tRun, 0.5).y - outerPt.y);
-    breakLine = breakSymbolAwayFromLanding(outerPt, acrossDir, awayDir, widthVis).segs;
+    breakLine = breakSymbolAwayFromLanding(outerPt, acrossDir, awayDir, widthVis, breakOverhangMm).segs;
     // 踏面線: 破れ線が届く深さD（吹抜け側）まで、各マス境界を吹抜け側(s=sB)から
     // 破れ線（対角）に触れる位置まで正確に描く。Dを超える境界はどの幅位置でも破れの奥（非表示）。
     const D = widthMm * Math.tan(BREAK_TILT);
@@ -569,7 +576,7 @@ function buildSwitchback(stair, b, { view, detail, spans, laneGapMm = 0 }) {
 // install の破れは常に周回部との接続部（復路の初段線＝tRun）。FL+1600/riser では位置決めしない。
 // 復路の段数字は install では表示しない（初段線位置＝破れの始点のため、初段に続き番号を置けない）。
 // 踏面線は、破れ線（対角）に触れるまで吹抜け側から描画できる分だけ描く。
-function buildWinding(stair, b, { view, detail, spans, laneGapMm = 0 }) {
+function buildWinding(stair, b, { view, detail, spans, laneGapMm = 0, breakOverhangMm = 0 }) {
   const f = makeFrame(stair, b);
   const { parts, totalSteps } = stairParts(getSections(stair));
   const [runA, turn, runB] = parts;
@@ -623,7 +630,7 @@ function buildWinding(stair, b, { view, detail, spans, laneGapMm = 0 }) {
     // 見た目の破れ線は始点=外周壁の中心線（outerPt）〜終点=レーン間の中心線（s=0.5、通り芯）。
     // あき時もレーン内側端（sB）で止めず中心線まで延ばす。D（踏面の可視深さ）はレーン幅のまま。
     const widthVis = Math.hypot(c(tRun, 0.5).x - outerPt.x, c(tRun, 0.5).y - outerPt.y);
-    breakLine = breakSymbolAwayFromLanding(outerPt, acrossDir, awayDir, widthVis).segs;
+    breakLine = breakSymbolAwayFromLanding(outerPt, acrossDir, awayDir, widthVis, breakOverhangMm).segs;
     // 踏面線: 破れ線が届く深さD（吹抜け側）まで、各マス境界を吹抜け側(s=sB)から
     // 破れ線（対角）に触れる位置まで正確に描く。Dを超える境界はどの幅位置でも破れの奥（非表示）。
     const D = widthMm * Math.tan(BREAK_TILT);
@@ -696,7 +703,7 @@ function lTurnBreakState(run1, run2, totalSteps, riser, view) {
   };
 }
 
-function buildLTurn(stair, b, { view, detail, riser, spans }) {
+function buildLTurn(stair, b, { view, detail, riser, spans, breakOverhangMm = 0 }) {
   const { parts, totalSteps } = stairParts(getSections(stair));
   const [run1, corner, run2] = parts;
   const W = b.x2 - b.x1, H = b.y2 - b.y1;
@@ -751,7 +758,7 @@ function buildLTurn(stair, b, { view, detail, riser, spans }) {
     // 見た目の破れ線は始点=外周壁の中心線（outerPt）〜終点=吹抜け境界線（bp、通り芯）。
     // widthMm（bq基準）のままだと outerPt の延長ぶん終点が境界の手前で止まる。
     const widthVis = Math.hypot(bp.x - outerPt.x, bp.y - outerPt.y);
-    breakLine = breakSymbolAwayFromLanding(outerPt, acrossDir, awayDir, widthVis).segs;
+    breakLine = breakSymbolAwayFromLanding(outerPt, acrossDir, awayDir, widthVis, breakOverhangMm).segs;
     breakInset = breakInsetMm(widthMm);
     // コーナーとの接続部（v=runV）に始点を固定した場合（inCorner）、arm2は全非表示になるが、
     // 破れ線が届く深さD（吹抜け側、mm）までは、各マス境界を吹抜け側(u=runU)から
@@ -847,7 +854,7 @@ function openWellBreakState(run1, land1, land2, totalSteps, riser, view) {
 
 // ---- 中空き階段（OPEN_WELL）----
 // 中央に吹抜け（well）を持ち、下→踊場1→右→踊場2→上 の3直進部+2踊場（各マス1）がC字に囲む。
-function buildOpenWell(stair, b, { view, detail, riser }) {
+function buildOpenWell(stair, b, { view, detail, riser, breakOverhangMm = 0 }) {
   const { parts, totalSteps } = stairParts(getSections(stair));
   const [run1, land1, run2, land2, run3] = parts;
   const W = b.x2 - b.x1, H = b.y2 - b.y1;
@@ -906,7 +913,7 @@ function buildOpenWell(stair, b, { view, detail, riser }) {
     // 見た目の破れ線は始点=外周壁の中心線（outerPt）〜終点=ウェル境界線（bp、通り芯）。
     // widthMm（bq基準）のままだと outerPt の延長ぶん終点が境界の手前で止まる。
     const widthVis = Math.hypot(bp.x - outerPt.x, bp.y - outerPt.y);
-    breakLine = breakSymbolAwayFromLanding(outerPt, acrossDir, awayDir, widthVis).segs;
+    breakLine = breakSymbolAwayFromLanding(outerPt, acrossDir, awayDir, widthVis, breakOverhangMm).segs;
     breakInset = breakInsetMm(widthMm);
     const D = widthMm * Math.tan(BREAK_TILT); // 破れ線が届く最大深さ（mm、ウェル側）
     // 踊場との接続部に始点を固定した場合（右アーム入口＝bs===land1.numberStart、上アーム入口＝
@@ -1003,11 +1010,14 @@ function buildOpenWell(stair, b, { view, detail, riser }) {
  * @param {import('@core').Stair} stair - 階段（スカラ属性のみ参照。cells は不使用）
  * @param {{ x1,y1,x2,y2 }} b - 設置エリアの包絡矩形（ワールド座標。呼び出し側で解決）
  * @param {{ view:'install'|'upper', detail:boolean, riser:number|null,
- *           spans?:{lengths:number[]}|null, laneGapMm?:number }} opts
+ *           spans?:{lengths:number[]}|null, laneGapMm?:number, breakOverhangMm?:number }} opts
  *   spans … セル割りから実測した区間長（measureStairSpans）。区間長指定の反映用。null なら合成。
  *   laneGapMm … 折返し・回り階段（SWITCHBACK/WINDING）の往路・復路の間のあき(mm)。
  *   標準・詳細LODは LANE_GAP、簡略LODは0（従来どおり中央仕切り1本）を渡す。
  *   回り階段の扇形 pivot はあき幅のうち段数が低い方＝往路の内側端（tRun, sA）。
+ *   breakOverhangMm … 破れ線の見た目の両端を線方向へ CL からはり出す量(mm)。中心線の端の
+ *   はね出しと同じ扱いで、描画側が overhangMm(viewport) を渡す（既定0＝はり出しなし）。
+ *   見た目のみで、側線連結・踏面クリップ等の実端点幾何には影響しない。
  * @returns {{
  *   treads:{x1,y1,x2,y2}[], outline:{x1,y1,x2,y2,dashed,thin?,port?,side?}[],
  *   arrows:{x1,y1,x2,y2,labelX,labelY,label}[], breakLine:{x1,y1,x2,y2}[]|null,

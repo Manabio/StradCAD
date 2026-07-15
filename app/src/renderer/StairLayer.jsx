@@ -2,6 +2,7 @@ import { observer } from 'mobx-react-lite';
 import { Group, Line, Text, Shape, Circle } from 'react-konva';
 import { buildStairGeometry, resolveStairSideLines, LABEL_OUT, LANE_GAP } from '../finish/stair/stairGeometry.js';
 import { outlineSegments } from '../finish/gridCells.js';
+import { overhangMm } from '../snap.js';
 import { LodLevel } from '../viewport.js';
 
 const STAIR_STROKE = '#1e293b';
@@ -131,6 +132,9 @@ export const StairLayer = observer(({
   // 折返し階段の往路・復路の間のあき。簡略LODのみ0（中央仕切り1本）、標準・詳細はLANE_GAP。
   const laneGapMm = viewport.lodLevel === LodLevel.SCHEMATIC ? 0 : LANE_GAP;
 
+  // 破れ線の見た目端部を中心線の端と同じルールで CL からはり出す（縮尺依存。snap.js の overhangMm）。
+  const breakOverhangMm = overhangMm(viewport, false);
+
   // 1パス目: 全エントリの幾何を先に計算する（矢印クリップで他エントリ＝自階installの
   // breakLine を参照するため、レンダーの前に install 分を含め解決しておく必要がある）。
   // 側面線（outline の side タグ）の壁有無は resolveStairSideLines（stairGeometry.js）で
@@ -140,7 +144,7 @@ export const StairLayer = observer(({
     if (!b || ![b.x1, b.y1, b.x2, b.y2].every(Number.isFinite) || b.x2 <= b.x1 || b.y2 <= b.y1) {
       return null;
     }
-    const built = buildStairGeometry(stair, b, { view, detail, riser, spans, laneGapMm });
+    const built = buildStairGeometry(stair, b, { view, detail, riser, spans, laneGapMm, breakOverhangMm });
     return { e, geom: graph ? resolveStairSideLines(stair, graph, built) : built };
   });
   const installGeomById = new Map(
