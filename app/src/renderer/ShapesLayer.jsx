@@ -4,6 +4,8 @@ import { ShapeType } from '@core';
 import { findOpeningsOnWall } from '../openings/openingGeometry.js';
 import { isEndpointAt } from '../transform/centerLineExtend.js';
 import { LodLevel, resolveStrokeWidth } from '../viewport.js';
+import { subtractIntervals } from '../finish/stair/stairGeometry.js';
+import { resolveWallTJunctions } from './wallJunctionResolve.js';
 
 const DASH = {
   solid:     undefined,
@@ -49,9 +51,12 @@ export const ShapesLayer = observer(({ graph, viewport }) => {
 
   // 下地（間柱）描画の重複防止: 同一axisCL上で範囲が重なる正負オフセットの壁ペア
   // （部屋境界の内外両側）は通り芯上の同じ構造材を指すため、正(+)側のみ描画する。
+  // 偏芯壁（backingOffset指定あり）は下地帯が通り芯に対して対称でない＝相手側と共有する構造材
+  // ではないため、この重複防止の対象外（自分の下地は常に描画・相手側の判定にも使わない）。
   const deferredBackingIds = new Set();
   if (lodLevel === LodLevel.DETAIL) {
-    const wallShapes = graph.generalShapes.filter(s => s.type === ShapeType.WALL && s.wallFinish != null);
+    const wallShapes = graph.generalShapes.filter(s =>
+      s.type === ShapeType.WALL && s.wallFinish != null && s.backingOffset == null);
     for (const w of wallShapes) {
       if (w.axisOffset >= 0) continue;
       const wLo = Math.min(w.coord1, w.coord2), wHi = Math.max(w.coord1, w.coord2);
@@ -62,6 +67,15 @@ export const ShapesLayer = observer(({ graph, viewport }) => {
       if (hasPositiveOverlap) deferredBackingIds.add(w.id);
     }
   }
+
+  // 壁のT字取り合い（突き当たり）解決: 詳細LODでのみ、ジオメトリを変えずに描画時だけ反映する
+  // （wallJunctionResolve.js。resolveStairSideLines と同じ「描画ルールを幾何モジュールに
+  // 集約しレンダラは写像するだけ」というパターン）。壁全般が対象——手動壁・部屋壁・外壁・
+  // 階段下壁を区別しない。
+  // 上の deferredBackingIds と同様、useMemo 等の追加メモ化はせず壁配列を毎レンダー走査する
+  // （このファイルの既存慣習に合わせる。過剰最適化はしない——壁数が増えて気になる場合は
+  // 将来 useMemo 化を検討）。
+  const wallJunctions = lodLevel === LodLevel.DETAIL ? resolveWallTJunctions(graph.walls) : null;
 
   return graph.generalShapes.map((shape) => {
     const sp = strokeProps(shape, scaleX, scaleY);
@@ -128,7 +142,28 @@ export const ShapesLayer = observer(({ graph, viewport }) => {
         const axisV = shape.axisCL.effectiveValue;
         const faceV = shape.axisValue;
         const thickLo = Math.min(axisV, faceV), thickHi = Math.max(axisV, faceV);
-        const rects = segments.flatMap(([a, b], i) => [
+
+        // 妻線(cap)・端点はねだし部木口(ecap)の描画範囲: 既定（backingDepth未指定=null）は
+        // axisV〜faceV（下地帯が通り芯位置から始まる対称壁の想定。従来どおり変更なし）。
+        // backingDepth を明示する偏芯壁（階段下部屋の薄壁等）は、通り芯〜面材間に逃げ空隙を
+        // 持ちうるため、実際に材が存在する範囲（下地帯 ∪ 仕上げ帯）に限定する
+        // （decisional・LOD非依存）。式は core.js の Wall.materialRange と共有する
+        // （階段下壁のコーナートリム stairUnderWalls.js でも同じ式を使う）。
+        const { lo: capLo, hi: capHi } = shape.materialRange;
+
+        // 壁のT字取り合い（wallJunctionResolve.js）: 自壁が「突き当たり側（A）」の場合は
+        // baseExtend、「通し壁（B）」の場合は finishCuts が入る（両方同時に持つ壁もありうる）。
+        // 詳細LOD以外（wallJunctions=null）は常に空——標準・略図の描画は一切変えない。
+        const junction    = wallJunctions?.get(shape.id);
+        const baseExtend  = junction?.baseExtend ?? {};
+        const finishCuts  = junction?.finishCuts ?? [];
+        // 仕上げ面線・仕上げ境界線（fin線）専用のセグメント: 直交する通し壁側からの
+        // finishCuts があれば、その区間だけ切り欠く（cap線・下地には適用しない——
+        // cap線は自壁の物理端点の断面、下地は baseExtend で別途扱う）。
+        const finishSegments = finishCuts.length === 0 ? segments
+          : segments.flatMap(([a, b]) => subtractIntervals(a, b, finishCuts));
+
+        const faceLines = finishSegments.map(([a, b], i) => (
           <Line
             key={`${shape.id}:face:${i}`}
             points={shape.isVertical
@@ -136,24 +171,35 @@ export const ShapesLayer = observer(({ graph, viewport }) => {
               : [a, faceV, b, faceV]
             }
             {...sp}
-          />,
-          <Line
-            key={`${shape.id}:capA:${i}`}
-            points={shape.isVertical
-              ? [axisV, a, faceV, a]
-              : [a, axisV, a, faceV]
-            }
-            {...sp}
-          />,
-          <Line
-            key={`${shape.id}:capB:${i}`}
-            points={shape.isVertical
-              ? [axisV, b, faceV, b]
-              : [b, axisV, b, faceV]
-            }
-            {...sp}
-          />,
-        ]);
+          />
+        ));
+        // cap線（妻線）: 自壁がT字の突き当たり側（A）としてその端で baseExtend を持つ場合、
+        // その端は下地がB内部へ食い込む取り合いになり、そこで壁が「終わる」断面線は不要
+        // なため描画を抑止する（自壁の物理両端＝最初のセグメントのa・最後のセグメントのb
+        // でのみ判定。開口で分割された中間セグメント境界は対象外）。
+        const capLines = segments.flatMap(([a, b], i) => {
+          const line = [];
+          if (!(i === 0 && baseExtend.lo != null)) {
+            line.push(
+              <Line
+                key={`${shape.id}:capA:${i}`}
+                points={shape.isVertical ? [capLo, a, capHi, a] : [a, capLo, a, capHi]}
+                {...sp}
+              />,
+            );
+          }
+          if (!(i === segments.length - 1 && baseExtend.hi != null)) {
+            line.push(
+              <Line
+                key={`${shape.id}:capB:${i}`}
+                points={shape.isVertical ? [capLo, b, capHi, b] : [b, capLo, b, capHi]}
+                {...sp}
+              />,
+            );
+          }
+          return line;
+        });
+        const rects = [...faceLines, ...capLines];
 
         // 詳細のみ: 仕上げ面〜下地境界の平行線 + 下地（間柱断面）450mmピッチ配置
         // wallFinish は generateRoomWallsFromOutline/generateExteriorWalls 生成時のみ確定（手動壁は null）
@@ -165,7 +211,7 @@ export const ShapesLayer = observer(({ graph, viewport }) => {
 
         if (shape.wallFinish > 0 && shape.wallFinish < thickHi - thickLo) {
           const boundary = faceV >= axisV ? thickHi - shape.wallFinish : thickLo + shape.wallFinish;
-          elems.push(...segments.map(([a, b], i) => (
+          elems.push(...finishSegments.map(([a, b], i) => (
             <Line
               key={`${shape.id}:fin:${i}`}
               points={shape.isVertical
@@ -192,8 +238,8 @@ export const ShapesLayer = observer(({ graph, viewport }) => {
               <Line
                 key={`${shape.id}:ecap:${t.side}`}
                 points={shape.isVertical
-                  ? [axisV, t.capV, faceV, t.capV]
-                  : [t.capV, axisV, t.capV, faceV]
+                  ? [capLo, t.capV, capHi, t.capV]
+                  : [t.capV, capLo, t.capV, capHi]
                 }
                 {...sp}
               />,
@@ -201,19 +247,29 @@ export const ShapesLayer = observer(({ graph, viewport }) => {
           }
         }
 
-        // 下地（間柱）断面: 通り芯(axisCL)上に左右対称に乗る実材厚 = (thickHi-thickLo-wallFinish)*2
-        const backingDepth = 2 * (thickHi - thickLo - shape.wallFinish);
-        if (backingDepth > 0 && !deferredBackingIds.has(shape.id)) {
+        // 下地（間柱）断面: 通り芯(axisCL)上の実材厚。式は core.js の Wall.backingRange と
+        // 共有する（backingRange===null は「下地なし＝仕上げのみの薄壁」で描画しない）。
+        // T字取り合いで自壁が突き当たり側（A）の場合、baseExtend の端まで下地の描画範囲を
+        // 延ばす（通し壁の仕上げ層を貫通して相手の下地近位面まで到達する見た目にする。
+        // 仕上げ関連要素＝finishSegments とは独立に扱う）。
+        const backingBand = shape.backingRange;
+        if (backingBand && !deferredBackingIds.has(shape.id)) {
+          const backingDepth = backingBand.hi - backingBand.lo;
           const halfDepth = backingDepth / 2, halfWidth = WALL_STUD_WIDTH / 2;
-          for (const [a, b] of segments) {
+          const backingCenterV = (backingBand.lo + backingBand.hi) / 2;
+          const backingSegments = segments.map(([a, b], i, arr) => [
+            i === 0 && baseExtend.lo != null ? Math.min(a, baseExtend.lo) : a,
+            i === arr.length - 1 && baseExtend.hi != null ? Math.max(b, baseExtend.hi) : b,
+          ]);
+          for (const [a, b] of backingSegments) {
             let p = lo + Math.ceil((a - lo) / WALL_BACKING_PITCH) * WALL_BACKING_PITCH;
             if (p - halfWidth < a) p += WALL_BACKING_PITCH;
             for (; p + halfWidth <= b; p += WALL_BACKING_PITCH) {
               elems.push(
                 <Rect
                   key={`${shape.id}:stud:${p}`}
-                  x={shape.isVertical ? axisV - halfDepth : p - halfWidth}
-                  y={shape.isVertical ? p - halfWidth : axisV - halfDepth}
+                  x={shape.isVertical ? backingCenterV - halfDepth : p - halfWidth}
+                  y={shape.isVertical ? p - halfWidth : backingCenterV - halfDepth}
                   width={shape.isVertical ? backingDepth : WALL_STUD_WIDTH}
                   height={shape.isVertical ? WALL_STUD_WIDTH : backingDepth}
                   fill="transparent"

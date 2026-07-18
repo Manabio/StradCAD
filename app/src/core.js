@@ -222,21 +222,77 @@ export class Wall extends Shape {
     // 室内側仕上げ厚(mm)。axisOffset = wallBase/2 + wallFinish の内訳のうち仕上げ側のみを保持し、
     // LOD詳細描画で「仕上げ面〜下地境界」の平行線・下地ピッチ線の位置を導出する（生成時のみ確定。null=不明・手動壁）。
     this.wallFinish  = props?.wallFinish ?? null;
+    // 下地帯中心の axisCL.value からの符号付きオフセット(mm)。偏芯壁（階段下部屋等）のみ設定される。
+    // null=現行（axisOffsetを中心に対称な下地帯）。生成時のみ確定・不変。
+    this.backingOffset = props?.backingOffset ?? null;
+    // 下地帯の深さ(mm)。null=現行式（wallBase等から導出）。0は「下地なし＝仕上げのみの薄壁」を表す明示値。
+    this.backingDepth  = props?.backingDepth ?? null;
     makeObservable(this, {
       clStart:     observable.ref,
       clEnd:       observable.ref,
       axisOffset:  observable,
       startOffset: observable,
       endOffset:   observable,
-      axisValue:   computed,
-      coord1:      computed,
-      coord2:      computed,
+      axisValue:     computed,
+      coord1:        computed,
+      coord2:        computed,
+      materialRange: computed,
+      backingRange:  computed,
     });
   }
 
   get axisValue() { return this.axisCL.effectiveValue + this.axisOffset; }
   get coord1()    { return this.clStart.effectiveValue + this.startOffset; }
   get coord2()    { return this.clEnd.effectiveValue   + this.endOffset;   }
+
+  /**
+   * 実際に材が存在する範囲（下地帯 ∪ 仕上げ帯）を、axisCL の厚み方向座標で返す。
+   * backingDepth が null（対称壁）の場合は axisValue〜axisCL.effectiveValue の対称範囲
+   * （従来どおり）。backingDepth===0 は下地なし＝仕上げ帯のみ。
+   * ShapesLayer の詳細LOD cap 描画、階段下壁のコーナートリム（stairUnderWalls.js）で共有する。
+   * @returns {{lo:number, hi:number}}
+   */
+  get materialRange() {
+    const axisV = this.axisCL.effectiveValue;
+    const faceV = this.axisValue;
+    const thickLo = Math.min(axisV, faceV), thickHi = Math.max(axisV, faceV);
+    if (this.backingDepth == null) return { lo: thickLo, hi: thickHi };
+
+    const dir = Math.sign(faceV - axisV) || 1;
+    const finBoundary = faceV - dir * (this.wallFinish ?? 0);
+    const finLo = Math.min(finBoundary, faceV), finHi = Math.max(finBoundary, faceV);
+    if (this.backingDepth === 0) return { lo: finLo, hi: finHi };
+
+    const backingCenterV = axisV + (this.backingOffset ?? 0);
+    const halfDepth = this.backingDepth / 2;
+    return {
+      lo: Math.min(backingCenterV - halfDepth, finLo),
+      hi: Math.max(backingCenterV + halfDepth, finHi),
+    };
+  }
+
+  /**
+   * 下地帯（間柱）だけの厚み方向範囲（materialRange から仕上げ帯を除いた部分）。
+   * backingDepth===0（下地なし＝仕上げのみの薄壁）は null。backingDepth/backingOffset が
+   * null（対称壁の既定式）は axisCL中心・2*(全厚-wallFinish) の対称範囲
+   * （ShapesLayer の詳細LOD下地描画の既定式と同じ）。wallFinish が不明（手動壁）な対称壁は
+   * 算出不能のため null。壁のT字取り合い描画解決（renderer/wallJunctionResolve.js）で使う。
+   * @returns {{lo:number, hi:number}|null}
+   */
+  get backingRange() {
+    const axisV = this.axisCL.effectiveValue;
+    if (this.backingDepth === 0) return null;
+    if (this.backingDepth != null) {
+      const center = axisV + (this.backingOffset ?? 0);
+      const half = this.backingDepth / 2;
+      return { lo: center - half, hi: center + half };
+    }
+    if (this.wallFinish == null) return null;
+    const faceV = this.axisValue;
+    const depth = 2 * (Math.abs(faceV - axisV) - this.wallFinish);
+    if (!(depth > 0)) return null;
+    return { lo: axisV - depth / 2, hi: axisV + depth / 2 };
+  }
 }
 
 // ----------------------------------------------------------------

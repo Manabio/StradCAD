@@ -84,9 +84,12 @@ function externalSubIntervals(startId, endId, adjacentSpans, graph) {
  * 値域のオーバーラップで隣接判定するため、異なる幅・高さのセルが境界を部分共有する
  * 場合（L字型の部屋など）でも外周を正しく抽出できる。
  *
+ * offset=1 で呼ぶと axisOffset が符号のみ（±1）になり、階段下壁生成（stairUnderWalls.js）が
+ * エッジごとに異なる実オフセット値へ差し替える用途に使える。
+ *
  * @returns {{ axisCLId, startCLId, endCLId, isVertical, axisOffset }[]}
  */
-function computeExternalEdgeParams(room, offset, graph) {
+export function computeExternalEdgeParams(room, offset, graph) {
   // 各境界 CL を持つセルのスパンを収集
   const byTopCL    = new Map(); // clId → [{L, R}]（このCLをtopに持つセル）
   const byBottomCL = new Map(); // clId → [{L, R}]（このCLをbottomに持つセル）
@@ -143,7 +146,7 @@ function computeExternalEdgeParams(room, offset, graph) {
  * 同一 axisCLId・axisOffset のセグメント群を、端点CLが連続するものでマージする。
  * セグメントは startCL.value 昇順でソートし、endCLId === 次の startCLId なら結合。
  */
-function mergeSegments(segs, graph) {
+export function mergeSegments(segs, graph) {
   if (segs.length === 0) return [];
 
   const sorted = [...segs].sort((a, b) => {
@@ -177,7 +180,7 @@ function mergeSegments(segs, graph) {
  * @param {{axisCLId, startCLId, endCLId, isVertical, axisOffset}} p
  * @returns {import('@core').Room | null} 外側セルが属する部屋（未割当なら null）
  */
-function findOutsideRoom(p, graph, cellToRoom) {
+export function findOutsideRoom(p, graph, cellToRoom) {
   const axisCL  = getShape(graph, p.axisCLId);
   const startCL = getShape(graph, p.startCLId);
   const endCL   = getShape(graph, p.endCLId);
@@ -307,7 +310,7 @@ const ENDPOINT_EPS = 0.5;
  * seg は mergeSegments 後（startCL.value <= endCL.value）であること。
  * @returns {{ startOffset, endOffset } | null}
  */
-function clipToAxisExtent(axisCL, startCL, startOffset, endCL, endOffset, protrusion) {
+export function clipToAxisExtent(axisCL, startCL, startOffset, endCL, endOffset, protrusion) {
   if (axisCL.labeled || axisCL.extentLo == null || axisCL.extentHi == null) {
     return { startOffset, endOffset };
   }
@@ -528,6 +531,8 @@ export function snapshotWall(w) {
     isRoomWall:  w.isRoomWall,
     isExteriorWall: w.isExteriorWall,
     wallFinish:  w.wallFinish,
+    backingOffset: w.backingOffset,
+    backingDepth:  w.backingDepth,
   };
 }
 
@@ -546,6 +551,8 @@ export function restoreWallsFromSnapshots(graph, snapshots) {
     if (s.isRoomWall)     props.isRoomWall     = true;
     if (s.isExteriorWall) props.isExteriorWall = true;
     if (s.wallFinish != null) props.wallFinish = s.wallFinish;
+    if (s.backingOffset != null) props.backingOffset = s.backingOffset;
+    if (s.backingDepth  != null) props.backingDepth  = s.backingDepth;
     const w = graph.addWall(axisCL, s.axisOffset, s.isVertical, startCL, s.startOffset ?? 0, endCL, s.endOffset ?? 0, props, s.id);
     walls.push(w);
   }

@@ -1102,7 +1102,7 @@ const WALL_AXIS_CL_EPS = 0.5; // mm
 
 // [targetLo,targetHi] から covers（[lo,hi]の配列）が覆う部分を差し引いた残り区間（複数）を返す。
 // 部分壁・分断壁など、side 線分の一部だけに壁があるケースを正しく部分描画するために使う。
-function subtractIntervals(targetLo, targetHi, covers) {
+export function subtractIntervals(targetLo, targetHi, covers) {
   let remaining = [[targetLo, targetHi]];
   for (const [cLo, cHi] of covers) {
     const next = [];

@@ -2,7 +2,7 @@ import { makeObservable, observable, action, computed, runInAction } from 'mobx'
 import { regionCellsAt, refreshCells, cellBoundsFromKey, cellBoundsList, worldToCell } from '../finish/gridCells.js';
 import { classifyStairArea } from '../finish/stair/stairClassify.js';
 import { cellsBeyondBreak } from '../finish/stair/stairGeometry.js';
-import { ensureUnderStairSplit, removeUnderStairSplit } from '../finish/stair/stairUnderSplit.js';
+import { ensureUnderStairSplit, removeUnderStairSplit, findUnderStairSplitCLs } from '../finish/stair/stairUnderSplit.js';
 import { floorHeightAbove } from '../finish/stair/stairDimensions.js';
 import { floorSwapManager } from '../storage/FloorSwapManager.js';
 import { snapshotFinishState, pushFinishUndo, withFinishUndo } from '../finish/finishUndo.js';
@@ -269,6 +269,47 @@ export class FinishModeState {
   /** 外壁ループの寸法 {wallBase, wallFinish}。未解決なら null。 */
   exteriorWallDims(graph) {
     return this._composition?.exteriorWallDims(graph, this.materialMap) ?? null;
+  }
+
+  /**
+   * 階段下部屋（破れ線先セルに部屋指定された領域）を検出する（仕上げモード脱出時の
+   * 階段下壁生成 stairUnderWalls.js の入力）。中間階（beyondセルの直下に下階階段がある＝
+   * 見下げ吹抜け）の階段は対象外（部屋ドラッグでは既に除外されているため通常は該当なしだが、
+   * データ不整合への安全側ガードとして保持する）。
+   * @returns {Array<{ stair, room, riser, beyondCells:Set<string>, splitCLIds:Set<string> }>}
+   */
+  stairUnderRooms(graph) {
+    const result = [];
+    for (const stair of graph.stairs) {
+      const riser  = this._selfStairRiser(stair);
+      const beyond = cellsBeyondBreak(stair, graph, riser);
+      if (beyond.size === 0) continue;
+
+      // beyondセルのいずれかが下階階段の見下げに当たる中間階の階段は対象外
+      // （階段下エリアではなく下階階段の吹抜けのため）。
+      let hasLowerStair = false;
+      for (const key of beyond) {
+        const cb = cellBoundsFromKey(key, graph);
+        if (!cb) continue;
+        const cx = (cb.x1 + cb.x2) / 2, cy = (cb.y1 + cb.y2) / 2;
+        if (this._lowerStairForPoint(cx, cy)) { hasLowerStair = true; break; }
+      }
+      if (hasLowerStair) continue;
+
+      const splitCLIds = new Set(findUnderStairSplitCLs(stair, graph).map(cl => cl.id));
+
+      for (const room of graph.rooms) {
+        if (room.feature === RoomFeature.STAIR || room.feature === RoomFeature.STAIR_VOID) continue;
+        if (stair.roomId && room.id === stair.roomId) continue;
+        let intersects = false;
+        for (const key of refreshCells(room.cells, graph)) {
+          if (beyond.has(key)) { intersects = true; break; }
+        }
+        if (!intersects) continue;
+        result.push({ stair, room, riser, beyondCells: beyond, splitCLIds });
+      }
+    }
+    return result;
   }
 
   // 選択は連結領域単位。短縮CLでL字化した領域は、内部のどこを指しても

@@ -117,13 +117,15 @@ const ER = { CL_ID: 0, WALL_ID: 1, OFFSET: 2 };
 // Point: 3 フィールド
 const PT = { ID: 0, X: 1, Y: 2 };
 
-// Wall: 16 フィールド
+// Wall: 20 フィールド
 const WL = {
   ID: 0, AXIS_CL: 1, AXIS_OFF: 2, IS_V: 3,
   CL_S: 4, S_OFF: 5, CL_E: 6, E_OFF: 7,
   DISC: 8, LW: 9, LT: 10, COL: 11,
   IS_ROOM_WALL: 12, IS_EXTERIOR_WALL: 13,
   HAS_WALL_FINISH: 14, WALL_FINISH: 15, // 室内側仕上げ厚(mm)。null=不明・手動壁
+  HAS_BACKING_OFFSET: 16, BACKING_OFFSET: 17, // 下地帯中心のaxisCL.valueからの符号付きオフセット(mm)。null=対称（現行式）
+  HAS_BACKING_DEPTH: 18, BACKING_DEPTH: 19,   // 下地帯深さ(mm)。null=現行式。0=下地なし（仕上げのみの薄壁）
 };
 
 // Opening: 15 フィールド（開口 — 建具・窓）
@@ -335,8 +337,10 @@ function writeWall(b, w) {
   const bp    = strBase(b, w);
 
   const hasWallFinish = w.wallFinish != null;
+  const hasBackingOffset = w.backingOffset != null;
+  const hasBackingDepth  = w.backingDepth  != null;
 
-  b.startObject(16);
+  b.startObject(20);
   b.addFieldOffset(WL.ID,      sId,   0);
   b.addFieldOffset(WL.AXIS_CL, sAxis, 0);
   b.addFieldFloat64(WL.AXIS_OFF, w.axisOffset ?? 0, 0.0);
@@ -353,6 +357,10 @@ function writeWall(b, w) {
   b.addFieldInt8(WL.IS_EXTERIOR_WALL, w.isExteriorWall ? 1 : 0, 0);
   b.addFieldInt8(WL.HAS_WALL_FINISH, hasWallFinish ? 1 : 0, 0);
   b.addFieldFloat64(WL.WALL_FINISH, hasWallFinish ? w.wallFinish : 0, 0.0);
+  b.addFieldInt8(WL.HAS_BACKING_OFFSET, hasBackingOffset ? 1 : 0, 0);
+  b.addFieldFloat64(WL.BACKING_OFFSET, hasBackingOffset ? w.backingOffset : 0, 0.0);
+  b.addFieldInt8(WL.HAS_BACKING_DEPTH, hasBackingDepth ? 1 : 0, 0);
+  b.addFieldFloat64(WL.BACKING_DEPTH, hasBackingDepth ? w.backingDepth : 0, 0.0);
   return b.endObject();
 }
 
@@ -954,6 +962,9 @@ function readWall(bb, tablePos) {
     isRoomWall:  r.i8(WL.IS_ROOM_WALL) !== 0,
     isExteriorWall: r.i8(WL.IS_EXTERIOR_WALL) !== 0,
     wallFinish:  r.i8(WL.HAS_WALL_FINISH) !== 0 ? r.f64(WL.WALL_FINISH) : null,
+    // 旧データ（フィールド未保存）は HAS_ フラグが立たず null になる（=現行対称描画へ後方互換）
+    backingOffset: r.i8(WL.HAS_BACKING_OFFSET) !== 0 ? r.f64(WL.BACKING_OFFSET) : null,
+    backingDepth:  r.i8(WL.HAS_BACKING_DEPTH)  !== 0 ? r.f64(WL.BACKING_DEPTH)  : null,
   };
 }
 
