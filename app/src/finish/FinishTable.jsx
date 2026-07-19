@@ -3,12 +3,13 @@ import { useState, useEffect } from 'react';
 import { ConfirmDialog } from '../ui/ConfirmDialog.jsx';
 import { StairTab } from './stair/StairTab.jsx';
 import { withFinishUndo, beginFieldUndo, endFieldUndo } from './finishUndo.js';
-import { RoomFeature, RoomKind } from '@core';
+import { RoomFeature, RoomKind, DEFAULT_ROOM_FLOOR_LEVEL, DEFAULT_ROOM_CEILING_HEIGHT } from '@core';
 
 // ---- 内部仕上げ表 ----
 
-// kind  : 'text'（自由文字列・room.finish）/ 'material'（材ドロップダウン・内装マスター管理）/ 'number'（数値・内装マスター管理）
+// kind  : 'text'（自由文字列・room.finish）/ 'material'（材ドロップダウン・内装マスター管理）
 // source: 'finish'（room.finish）/ 'master'（room.getFinishInfo() + setOverride）
+// ※ ceilingHeight（CH）は master 管理だが自由入力（傾斜天井のレンジ表記「2300～3500」等を許容）
 const INTERIOR_FIELDS = [
   { key: 'floorMaterial',     label: '仕上げ',   group: '床',   groupSpan: 1, kind: 'text',   source: 'finish' },
   { key: 'baseboardMaterial', label: '仕上げ',   group: '巾木', groupSpan: 2, kind: 'text',   source: 'finish' },
@@ -18,7 +19,7 @@ const INTERIOR_FIELDS = [
   { key: 'dadoMaterial',      label: '腰仕上げ', group: null,   groupSpan: 0, kind: 'text',   source: 'finish' },
   { key: 'dadoHeight',        label: '腰H',      group: null,   groupSpan: 0, kind: 'text',   source: 'finish' },
   { key: 'ceilingMaterial',   label: '仕上げ',   group: '天井', groupSpan: 3, kind: 'text',   source: 'finish' },
-  { key: 'ceilingHeight',     label: 'H',        group: null,   groupSpan: 0, kind: 'number', source: 'master' },
+  { key: 'ceilingHeight',     label: 'H',        group: null,   groupSpan: 0, kind: 'text',   source: 'master' },
   { key: 'cornice',           label: '周り縁',   group: null,   groupSpan: 0, kind: 'text',   source: 'finish' },
   { key: 'note',              label: '備考',     group: '備考', groupSpan: 1, kind: 'text',   source: 'finish' },
 ];
@@ -35,7 +36,7 @@ const CARD_FIELD_LABELS = {
   dadoMaterial:      '腰仕上げ',
   dadoHeight:        '腰 H',
   ceilingMaterial:   '天井',
-  ceilingHeight:     '天井高',
+  ceilingHeight:     'CH',
   cornice:           '廻り縁',
 };
 
@@ -43,7 +44,7 @@ const CARD_FIELD_LABELS = {
 const CARD_SECTIONS = [
   { title: '床・巾木', rows: [
     ['floorMaterial', 'baseboardMaterial'],
-    [null, 'baseboardHeight'],
+    ['floorLevel', 'baseboardHeight'],
   ] },
   { title: '壁・腰', rows: [
     ['wallMaterial', 'dadoMaterial'],
@@ -54,6 +55,20 @@ const CARD_SECTIONS = [
     ['__bbox_placeholder', 'ceilingHeight'],
   ] },
 ];
+
+// CH 文字列に 0 以下の数値が含まれるか（問題.md: CHは0より大きい）。
+// 全角数字は半角へ正規化し、レンジ表記「2300～3500」の各数値トークンを個別に検査する。
+function chContainsZero(text) {
+  const s = String(text).replace(/[０-９]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xFEE0));
+  const tokens = s.match(/-?\d+(?:\.\d+)?/g) ?? [];
+  return tokens.some(t => Number(t) <= 0);
+}
+
+// CH の 0 指定エラー文（部屋カード・共通仕様タブ共通）
+const chZeroError = (fallback) => `CHに０は指定できません。初期値：${fallback}にします。`;
+
+// エラー文のインライン表示スタイル（トーストは App.jsx ローカルのため、欄直下に表示して3.5秒で自動消去）
+const fieldErrorStyle = { fontSize: 10, color: '#dc2626', whiteSpace: 'normal' };
 
 // セル内入力の共通スタイル
 const cellInputStyle = {
@@ -205,28 +220,72 @@ const PerFloorRow = observer(({ label, mode, category, value, onChange }) => (
   </div>
 ));
 
+// 数値の per-floor 設定行（共通仕様タブの部屋既定値: FL初期値・CH初期値）。
+// フォーカス〜ブラーで1 undo エントリ。onChange には入力文字列をそのまま渡す（空欄処理は呼び出し側）。
+// onBlurValidate は endFieldUndo より前に呼ぶ（検証による是正を同じ undo エントリに含めるため）。
+const PerFloorNumberRow = observer(({ label, graph, value, onChange, onBlurValidate }) => (
+  <div style={{
+    display: 'flex', alignItems: 'center', gap: 8,
+    padding: '6px 12px', borderBottom: '1px solid #e2e8f0',
+    background: '#fafafa', flexShrink: 0,
+  }}>
+    <span style={{ fontSize: 12, fontWeight: 700, color: '#374151', whiteSpace: 'nowrap' }}>{label}：</span>
+    <input
+      type="number"
+      value={value ?? ''}
+      onChange={e => onChange(e.target.value)}
+      onFocus={() => beginFieldUndo(graph)}
+      onBlur={() => { onBlurValidate?.(); endFieldUndo(graph); }}
+      style={{ ...cellInputStyle, flex: 1, minWidth: 120 }}
+    />
+  </div>
+));
+
 // ================================================================
 // CommonSpecTable — 共通仕様タブ（下地材のフロア共通設定）
 // ================================================================
 
 // 「内外壁」は内部的に graph.exteriorWallBacking と同じ設定を指す（独立フィールドは持たない）。
 // 外壁下地の値を変更すると本行の表示も連動して追従する。
-const CommonSpecTable = observer(({ graph, mode }) => (
-  <div style={{ display: 'flex', flexDirection: 'column', flex: 1, overflow: 'hidden' }}>
-    <div style={{ overflowY: 'auto', flex: 1 }}>
-      <PerFloorRow label="内壁下地" mode={mode} category="backing"
-        value={graph.interiorWallBacking} onChange={code => withFinishUndo(graph, () => graph.setInteriorWallBacking(code))} />
-      <PerFloorRow label="内外壁" mode={mode} category="backing"
-        value={graph.exteriorWallBacking} onChange={code => withFinishUndo(graph, () => graph.setExteriorWallBacking(code))} />
-      <PerFloorRow label="外壁下地" mode={mode} category="backing"
-        value={graph.exteriorWallBacking} onChange={code => withFinishUndo(graph, () => graph.setExteriorWallBacking(code))} />
-      <PerFloorRow label="天井" mode={mode} category="backing"
-        value={graph.ceilingBacking} onChange={code => withFinishUndo(graph, () => graph.setCeilingBacking(code))} />
-      <PerFloorRow label="床" mode={mode} category="backing"
-        value={graph.floorBacking} onChange={code => withFinishUndo(graph, () => graph.setFloorBacking(code))} />
+const CommonSpecTable = observer(({ graph, mode }) => {
+  // CH初期値の 0 指定エラー（部屋カードの CH と同じルール: CHは0より大きい）
+  const [chError, setChError] = useState(null);
+  useEffect(() => {
+    if (!chError) return;
+    const t = setTimeout(() => setChError(null), 3500);
+    return () => clearTimeout(t);
+  }, [chError]);
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', flex: 1, overflow: 'hidden' }}>
+      <div style={{ overflowY: 'auto', flex: 1 }}>
+        <PerFloorRow label="内壁下地" mode={mode} category="backing"
+          value={graph.interiorWallBacking} onChange={code => withFinishUndo(graph, () => graph.setInteriorWallBacking(code))} />
+        <PerFloorRow label="内外壁" mode={mode} category="backing"
+          value={graph.exteriorWallBacking} onChange={code => withFinishUndo(graph, () => graph.setExteriorWallBacking(code))} />
+        <PerFloorRow label="外壁下地" mode={mode} category="backing"
+          value={graph.exteriorWallBacking} onChange={code => withFinishUndo(graph, () => graph.setExteriorWallBacking(code))} />
+        <PerFloorRow label="天井" mode={mode} category="backing"
+          value={graph.ceilingBacking} onChange={code => withFinishUndo(graph, () => graph.setCeilingBacking(code))} />
+        <PerFloorRow label="床" mode={mode} category="backing"
+          value={graph.floorBacking} onChange={code => withFinishUndo(graph, () => graph.setFloorBacking(code))} />
+        {/* 部屋の既定値 — 部屋カードの FL / CH が未指定のときに参照される（空欄 = 既定へ復帰） */}
+        <PerFloorNumberRow label="FL初期値" graph={graph} value={graph.defaultFloorLevel}
+          onChange={v => graph.setDefaultFloorLevel(v === '' ? DEFAULT_ROOM_FLOOR_LEVEL : Number(v))} />
+        <PerFloorNumberRow label="CH初期値" graph={graph} value={graph.defaultCeilingHeight}
+          onChange={v => { setChError(null); graph.setDefaultCeilingHeight(v === '' ? DEFAULT_ROOM_CEILING_HEIGHT : Number(v)); }}
+          onBlurValidate={() => {
+            // CHは0より大きい: 0以下は既定(2400)へ戻してエラー表示
+            if (!(graph.defaultCeilingHeight > 0)) {
+              graph.setDefaultCeilingHeight(DEFAULT_ROOM_CEILING_HEIGHT);
+              setChError(chZeroError(DEFAULT_ROOM_CEILING_HEIGHT));
+            }
+          }} />
+        {chError && <div style={{ ...fieldErrorStyle, fontSize: 11, padding: '4px 12px' }}>{chError}</div>}
+      </div>
     </div>
-  </div>
-));
+  );
+});
 
 // ================================================================
 // FinishTable — タブ付きメイン
@@ -508,6 +567,38 @@ const FieldCell = observer(({ fieldKey, room, mode }) => {
       </div>
     );
   }
+  // FL — Room.floorLevel（当該階FLからの符号付き相対高さmm。空欄 = null = 階基準どおり）。
+  // 内装マスターではなく Room 直下のフィールドのため、setOverride を経由しない。
+  if (fieldKey === 'floorLevel') {
+    const graph = mode?.graph;
+    // 階段は踏面ごとにレベルが変わるため入力不可の「-」表示とする（階高欄と同じ扱い）
+    if (room.feature === RoomFeature.STAIR) {
+      return (
+        <div style={cardFieldStyle}>
+          <span style={cardLabelStyle}>FL：</span>
+          <div style={cardInputWrapStyle}>
+            <input disabled value="-" style={cellInputStyle} />
+          </div>
+        </div>
+      );
+    }
+    return (
+      <div style={cardFieldStyle}>
+        <span style={cardLabelStyle}>FL：</span>
+        <div style={cardInputWrapStyle}>
+          <input
+            type="number"
+            value={room.floorLevel ?? graph?.defaultFloorLevel ?? DEFAULT_ROOM_FLOOR_LEVEL}
+            onChange={e => room.setFloorLevel(e.target.value === '' ? null : Number(e.target.value))}
+            onFocus={() => beginFieldUndo(graph)}
+            onBlur={() => endFieldUndo(graph)}
+            onClick={e => e.stopPropagation()}
+            style={cellInputStyle}
+          />
+        </div>
+      </div>
+    );
+  }
   // 階段カードの天井高欄は「階高」に差し替え、表示値「-」の入力不可とする（データは書き込まない）。
   if (fieldKey === 'ceilingHeight' && room.feature === RoomFeature.STAIR) {
     return (
@@ -532,10 +623,22 @@ const FieldCell = observer(({ fieldKey, room, mode }) => {
 
 const FinishCell = observer(({ room, field, mode }) => {
   const graph = mode?.graph;
+  // CH の 0 指定エラー（ブラー時検証。3.5秒で自動消去。CH 以外のフィールドでは未使用）
+  const [chError, setChError] = useState(null);
+  useEffect(() => {
+    if (!chError) return;
+    const t = setTimeout(() => setChError(null), 3500);
+    return () => clearTimeout(t);
+  }, [chError]);
+
   // 内装マスター管理フィールド（壁材・壁仕上げ・天井高さ）— getFinishInfo + setOverride
   if (field.source === 'master') {
-    const value = room.getFinishInfo()[field.key];
-    // 空入力はポケットを空に戻す（= 内装マスター値へ復帰）
+    const info = room.getFinishInfo();
+    // CH はマスター・上書きとも未指定なら per-floor 既定（共通仕様タブの CH初期値）へフォールバック
+    const value = field.key === 'ceilingHeight'
+      ? (info.ceilingHeight ?? graph?.defaultCeilingHeight ?? DEFAULT_ROOM_CEILING_HEIGHT)
+      : info[field.key];
+    // 空入力はポケットを空に戻す（= 内装マスター値／per-floor 既定へ復帰）
     const handle = v => (v === '' ? room.clearOverride(field.key) : room.setOverride(field.key, v));
 
     if (field.kind === 'material') {
@@ -548,17 +651,42 @@ const FinishCell = observer(({ room, field, mode }) => {
         />
       );
     }
-    // number（天井高さ）— キーストローク単位でなくフォーカス〜ブラーで1 undo エントリ
+    // CH（天井高さ）— 自由入力（傾斜天井のレンジ表記可）。フォーカス〜ブラーで1 undo エントリ。
+    // 上階の吹抜けが部屋上部を覆う場合は自動計算（階高＋上階吹抜け部屋CH）:
+    //   丸ごと吹抜け → 計算値の読取専用表示 / 一部吹抜け → 自CH（編集可）に「, 計算値」を併記
+    const voidInfo = field.key === 'ceilingHeight' ? (mode?.voidCHAbove?.(room) ?? null) : null;
+    if (voidInfo?.full) {
+      return <input disabled value={voidInfo.ch} style={cellInputStyle} />;
+    }
     return (
-      <input
-        type="number"
-        value={value ?? ''}
-        onChange={e => handle(e.target.value === '' ? '' : Number(e.target.value))}
-        onFocus={() => beginFieldUndo(graph)}
-        onBlur={() => endFieldUndo(graph)}
-        onClick={e => e.stopPropagation()}
-        style={cellInputStyle}
-      />
+      <span style={{ display: 'flex', flexDirection: 'column', minWidth: 0, flex: 1 }}>
+        <span style={{ display: 'flex', alignItems: 'center', minWidth: 0 }}>
+          <input
+            type="text"
+            value={value ?? ''}
+            onChange={e => { setChError(null); handle(e.target.value); }}
+            onFocus={() => beginFieldUndo(graph)}
+            onBlur={() => {
+              // CHは0より大きい: 0（レンジ表記中の0含む）は拒否し、上書きを消して
+              // マスター／CH初期値へ戻す（endFieldUndo より前に是正 = 同じ undo エントリ）
+              const cur = room.getFinishInfo().ceilingHeight;
+              if (cur != null && cur !== '' && chContainsZero(cur)) {
+                room.clearOverride('ceilingHeight');
+                const fallback = room.getFinishInfo().ceilingHeight
+                  ?? graph?.defaultCeilingHeight ?? DEFAULT_ROOM_CEILING_HEIGHT;
+                setChError(chZeroError(fallback));
+              }
+              endFieldUndo(graph);
+            }}
+            onClick={e => e.stopPropagation()}
+            style={cellInputStyle}
+          />
+          {voidInfo && (
+            <span style={{ fontSize: 12, color: '#374151', whiteSpace: 'nowrap' }}>, {voidInfo.ch}</span>
+          )}
+        </span>
+        {chError && <span style={fieldErrorStyle}>{chError}</span>}
+      </span>
     );
   }
 

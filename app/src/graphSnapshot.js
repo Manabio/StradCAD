@@ -141,6 +141,8 @@ function buildSnapshot(graph) {
     interiorWallBacking: graph.interiorWallBacking,
     ceilingBacking:      graph.ceilingBacking,
     floorBacking:        graph.floorBacking,
+    defaultFloorLevel:    graph.defaultFloorLevel,
+    defaultCeilingHeight: graph.defaultCeilingHeight,
     floorDatum:          graph.floorDatum,
     structureOverride:   graph.structureOverride ?? null,
     edges: graph.edges.map(e => ({
@@ -592,9 +594,12 @@ function applySnapshot(graph, snapshot) {
       for (const [key, val] of Object.entries(d.finish ?? {})) {
         if (val) room.finish.setField(key, val);
       }
-      // 個別上書きポケットを verbatim 復元（ceilingHeight は数値へ復元）
+      // 個別上書きポケットを verbatim 復元（ceilingHeight は数値表記なら数値へ復元。
+      // 傾斜天井のレンジ表記（例:"2300～3500"）は文字列のまま保持する）
       for (const ov of d.overrides ?? []) {
-        const value = ov.key === 'ceilingHeight' ? Number(ov.value) : ov.value;
+        const num = Number(ov.value);
+        const value = ov.key === 'ceilingHeight' && ov.value !== '' && Number.isFinite(num)
+          ? num : ov.value;
         room.customOverrides.set(ov.key, value);
       }
       graph.roomMap.set(room.id, room);
@@ -648,6 +653,9 @@ function applySnapshot(graph, snapshot) {
     if (snapshot.interiorWallBacking) graph.setInteriorWallBacking(snapshot.interiorWallBacking);
     if (snapshot.ceilingBacking)      graph.setCeilingBacking(snapshot.ceilingBacking);
     if (snapshot.floorBacking)        graph.setFloorBacking(snapshot.floorBacking);
+    if (snapshot.defaultFloorLevel != null) graph.setDefaultFloorLevel(snapshot.defaultFloorLevel);
+    // CH初期値は 0/null を「未保存（旧データ）」とみなし clear() の既定(2400)を維持する
+    if (snapshot.defaultCeilingHeight)      graph.setDefaultCeilingHeight(snapshot.defaultCeilingHeight);
     if (snapshot.floorDatum != null)  graph.setFloorDatum(snapshot.floorDatum);
     if (snapshot.structureOverride)   graph.setStructureOverride(snapshot.structureOverride);
     for (const k of snapshot.excludedColumnSlots  ?? []) graph.excludedColumnSlots.add(k);

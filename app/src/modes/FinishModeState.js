@@ -37,6 +37,10 @@ export class FinishModeState {
   // ---- 直下階の階段（見下げ表示のヒット判定用。init() で peek しロード） ----
   lowerStairs = []; // Array<{ stair, cellBounds }>（cellBounds は下階graphで解決したワールド矩形配列）
 
+  // ---- 直上階の吹抜け（部屋カードのCH自動計算用。init() で peek しロード） ----
+  upperVoids = []; // Array<{ cellBounds, ch }>（cellBounds は上階graphで解決したワールド矩形配列、ch は吹抜け部屋のCH実効値）
+  upperFloorHeight = null; // 当該階FL標高〜直上階FL標高の差(mm)。上階が無ければ null
+
   // ---- 材データ（突入時ロード・離脱時破棄） ----
   materialsLoaded = false;       // ロード完了フラグ
   materialError   = null;        // 照合エラーメッセージ | null
@@ -66,6 +70,8 @@ export class FinishModeState {
       namingIsNew:    observable,
       selectedStairId: observable,
       lowerStairs:     observable.ref,
+      upperVoids:      observable.ref,
+      upperFloorHeight: observable,
       materialsLoaded: observable,
       materialError:   observable,
       materialMap:     observable.ref,
@@ -127,7 +133,7 @@ export class FinishModeState {
       this.materialError   = error;
     });
 
-    await this._loadLowerStairs();
+    await Promise.all([this._loadLowerStairs(), this._loadUpperVoids()]);
 
     return { ok: error === null, error };
   }
@@ -156,6 +162,64 @@ export class FinishModeState {
         cellBounds: cellBoundsList(s.cells, temp),
       }));
     });
+  }
+
+  /**
+   * 直上階（activePlaneの1つ上の採用フロア）の吹抜け（feature='void'）を peek し、
+   * 部屋カードの CH 自動計算（voidCHAbove）用に保持する。直上階が無ければ空のまま。
+   * _loadLowerStairs と同じ peek 経路・_disposed ガード。
+   */
+  async _loadUpperVoids() {
+    const project = this.project;
+    const planes = project?.planes ?? [];
+    const active = project?.activePlane;
+    const idx = planes.findIndex(p => p.id === active?.id);
+    const above = idx >= 0 && idx + 1 < planes.length ? planes[idx + 1] : null;
+    if (!above || !active) {
+      if (!this._disposed) runInAction(() => { this.upperVoids = []; this.upperFloorHeight = null; });
+      return;
+    }
+    const temp = await floorSwapManager.peek(above, project.structGraph);
+    if (this._disposed) return;
+    const voids = temp.rooms
+      .filter(r => r.feature === RoomFeature.VOID)
+      .map(r => ({
+        cellBounds: cellBoundsList(r.cells, temp),
+        ch: r.getFinishInfo().ceilingHeight ?? temp.defaultCeilingHeight,
+      }));
+    runInAction(() => {
+      this.upperVoids = voids;
+      this.upperFloorHeight = above.elevation - active.elevation;
+    });
+  }
+
+  /**
+   * 部屋上部の吹抜けによる CH 自動計算。上階の吹抜け（feature='void'）が部屋セルを
+   * どれだけ覆うかで判定する:
+   *   全セル → { full:true, ch }（丸ごと吹抜け。CH欄は計算値の読取専用表示）
+   *   一部   → { full:false, ch }（自CHに「, 計算値」を併記）
+   *   覆いなし・上階なし・上階CHが数値でない（レンジ表記等） → null（通常表示）
+   * ch = (上階FL標高 − 当該階FL標高) + 上階吹抜け部屋の実効CH。
+   * 複数の吹抜けが覆う場合は覆うセル数が最多の吹抜けの CH を採用する。
+   */
+  voidCHAbove(room) {
+    if (this.upperFloorHeight == null || this.upperVoids.length === 0) return null;
+    const counts = new Map(); // 吹抜けエントリ → 覆っている自部屋セル数
+    let covered = 0, total = 0;
+    for (const key of refreshCells(room.cells, this.graph)) {
+      total++;
+      const b = cellBoundsFromKey(key, this.graph);
+      if (!b) continue;
+      const cx = (b.x1 + b.x2) / 2, cy = (b.y1 + b.y2) / 2;
+      const v = this.upperVoids.find(e =>
+        e.cellBounds.some(r => cx >= r.x1 && cx <= r.x2 && cy >= r.y1 && cy <= r.y2));
+      if (v) { covered++; counts.set(v, (counts.get(v) ?? 0) + 1); }
+    }
+    if (covered === 0 || total === 0) return null;
+    const best = [...counts.entries()].reduce((a, b2) => (b2[1] > a[1] ? b2 : a))[0];
+    const upperCH = Number(best.ch);
+    if (!Number.isFinite(upperCH)) return null;
+    return { full: covered === total, ch: this.upperFloorHeight + upperCH };
   }
 
   /** 自階階段の蹴上(mm)。stair.riser 未指定なら階高/総段数から推定（App.jsx の install entries と同じ計算）。 */
@@ -783,6 +847,8 @@ export class FinishModeState {
     this.materialsLoaded = false;
     this.materialError   = null;
     this.lowerStairs     = [];
+    this.upperVoids      = [];
+    this.upperFloorHeight = null;
     this._disposed       = true;
   }
 }

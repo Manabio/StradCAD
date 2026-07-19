@@ -18,6 +18,7 @@ import {
   LINE_WEIGHT_MM, DimensionKind, DimensionSide,
   DEFAULT_WALL_MATERIAL, DEFAULT_EXTERIOR_WALL_BACKING,
   DEFAULT_INTERIOR_WALL_BACKING, DEFAULT_CEILING_BACKING, DEFAULT_FLOOR_BACKING,
+  DEFAULT_ROOM_FLOOR_LEVEL, DEFAULT_ROOM_CEILING_HEIGHT,
 } from './core/constants.js';
 
 export {
@@ -25,6 +26,7 @@ export {
   StairType, StructuralMaterialType, LINE_WEIGHT_MM, DimensionKind, DimensionSide,
   DEFAULT_WALL_MATERIAL, DEFAULT_EXTERIOR_WALL_BACKING,
   DEFAULT_INTERIOR_WALL_BACKING, DEFAULT_CEILING_BACKING, DEFAULT_FLOOR_BACKING,
+  DEFAULT_ROOM_FLOOR_LEVEL, DEFAULT_ROOM_CEILING_HEIGHT,
   SiteLineKind,
 } from './core/constants.js';
 
@@ -948,6 +950,10 @@ export class PlanGraph {
     this.ceilingBacking      = DEFAULT_CEILING_BACKING;       // 天井下地: 下地材コード
     this.floorBacking        = DEFAULT_FLOOR_BACKING;         // 床下地: 下地材コード
 
+    // 部屋の既定値（共通仕様タブ per-floor 設定）。部屋側が null のとき参照される。
+    this.defaultFloorLevel    = DEFAULT_ROOM_FLOOR_LEVEL;    // FL初期値: 階FLからの相対高さmm
+    this.defaultCeilingHeight = DEFAULT_ROOM_CEILING_HEIGHT; // CH初期値: 床面から天井までmm
+
     // この階の設計用床レベル(mm)。部屋は Room.floorLevel（基準からの符号付き差）で逸脱を表す。
     this.floorDatum          = 0;
 
@@ -1032,12 +1038,16 @@ export class PlanGraph {
       interiorWallBacking:      observable,
       ceilingBacking:           observable,
       floorBacking:             observable,
+      defaultFloorLevel:        observable,
+      defaultCeilingHeight:     observable,
       floorDatum:               observable,
       structureOverride:        observable,
       setExteriorWallBacking:   action,
       setInteriorWallBacking:   action,
       setCeilingBacking:        action,
       setFloorBacking:          action,
+      setDefaultFloorLevel:     action,
+      setDefaultCeilingHeight:  action,
       setFloorDatum:            action,
       setStructureOverride:     action,
       setColumnAxisOffset:  action,
@@ -1225,14 +1235,18 @@ export class PlanGraph {
   setInteriorWallBacking(code) { this.interiorWallBacking = code; }
   setCeilingBacking(code)      { this.ceilingBacking      = code; }
   setFloorBacking(code)        { this.floorBacking        = code; }
+  setDefaultFloorLevel(mm)     { this.defaultFloorLevel    = mm; }
+  setDefaultCeilingHeight(mm)  { this.defaultCeilingHeight = mm; }
   setFloorDatum(mm) { this.floorDatum = mm; }
   setStructureOverride(v) { this.structureOverride = v; }
 
   /** 柱芯オフセット（CL id → 通り芯からの偏心量mm）を1件設定する。 */
   setColumnAxisOffset(clId, value) { this.columnAxisOffsets.set(clId, value); }
 
-  /** 部屋の実効床レベル(mm) = 階基準 + 部屋デルタ（null = 基準どおり）。 */
-  effectiveFloorLevel(room) { return this.floorDatum + (room?.floorLevel ?? 0); }
+  /** 部屋の実効床レベル(mm) = 階基準 + 部屋デルタ（null = FL初期値どおり）。 */
+  effectiveFloorLevel(room) {
+    return this.floorDatum + (room ? (room.floorLevel ?? this.defaultFloorLevel) : 0);
+  }
   /** 段差の高低差(mm) = level(roomB) − level(roomA)（導出値・保持しない）。 */
   floorLevelDiff(roomA, roomB) {
     return this.effectiveFloorLevel(roomB) - this.effectiveFloorLevel(roomA);
@@ -1885,6 +1899,8 @@ export class PlanGraph {
     this.interiorWallBacking = DEFAULT_INTERIOR_WALL_BACKING;
     this.ceilingBacking      = DEFAULT_CEILING_BACKING;
     this.floorBacking        = DEFAULT_FLOOR_BACKING;
+    this.defaultFloorLevel    = DEFAULT_ROOM_FLOOR_LEVEL;
+    this.defaultCeilingHeight = DEFAULT_ROOM_CEILING_HEIGHT;
     this.floorDatum          = 0;
     this.structureOverride   = null;
   }

@@ -109,6 +109,10 @@ export const DEFAULT_INTERIOR_WALL_BACKING = '111111111155'; // 内壁下地: �
 export const DEFAULT_CEILING_BACKING       = '111111111162'; // 天井下地: □-45×36 杉等・野縁（下地材、表示のみ）
 export const DEFAULT_FLOOR_BACKING         = '111111111157'; // 床下地: □-60×45 杉・松等・床根太（下地材、表示のみ）
 
+// 部屋の既定値（共通仕様タブで per-floor に変更可能）
+export const DEFAULT_ROOM_FLOOR_LEVEL    = 0;    // FL初期値: 当該階FLからの相対高さmm（±0）
+export const DEFAULT_ROOM_CEILING_HEIGHT = 2400; // CH初期値: 部屋の床面から天井までの距離mm
+
 // 敷地線の種別
 export const SiteLineKind = Object.freeze({
   BOUNDARY:   'boundary',   // 境界（隣地境界線）

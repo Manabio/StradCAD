@@ -50,6 +50,8 @@ const GS = {
   STAIRS: 35, STAIR_ORDER: 36,
   // 外部仕上げ行（仕上げモード: 外部/外部建具/構造。per-floor）
   EXTERIOR_ROWS: 37, EXTERIOR_FITTING_ROWS: 38, STRUCTURE_ROWS: 39,
+  // 部屋の既定値（共通仕様タブ per-floor 設定）。CH初期値は 0 = 未保存（旧データ）扱い
+  DEFAULT_FLOOR_LEVEL: 40, DEFAULT_CEILING_HEIGHT: 41,
 };
 
 // Stair: 15 フィールド
@@ -1364,7 +1366,7 @@ export function encode(snapshot) {
   const sStructureOverride = b.createString(snapshot.structureOverride ?? '');
   const structuralInfoOff  = writeStructuralInfo(b, snapshot.structuralInfo);
 
-  b.startObject(40);
+  b.startObject(42);
   b.addFieldOffset(GS.CLS,        clVec,        0);
   b.addFieldOffset(GS.PTS,        ptVec,        0);
   b.addFieldOffset(GS.WALLS,      wallVec,      0);
@@ -1382,6 +1384,8 @@ export function encode(snapshot) {
   b.addFieldOffset(GS.INTERIOR_WALL_BACKING, sIntBacking,   0);
   b.addFieldOffset(GS.CEILING_BACKING,       sCeilBacking,  0);
   b.addFieldOffset(GS.FLOOR_BACKING,         sFloorBacking, 0);
+  b.addFieldFloat64(GS.DEFAULT_FLOOR_LEVEL,    snapshot.defaultFloorLevel    ?? 0, 0.0);
+  b.addFieldFloat64(GS.DEFAULT_CEILING_HEIGHT, snapshot.defaultCeilingHeight ?? 0, 0.0);
   b.addFieldOffset(GS.OPENINGS,              openingVec,    0);
   b.addFieldOffset(GS.STRUCTURE_OVERRIDE,    sStructureOverride, 0);
   b.addFieldOffset(GS.STRUCTURAL_INFO,       structuralInfoOff,  0);
@@ -1435,6 +1439,8 @@ export function decode(bytes) {
     interiorWallBacking: r.str(GS.INTERIOR_WALL_BACKING) || null,
     ceilingBacking:      r.str(GS.CEILING_BACKING)       || null,
     floorBacking:        r.str(GS.FLOOR_BACKING)         || null,
+    defaultFloorLevel:    r.f64(GS.DEFAULT_FLOOR_LEVEL),
+    defaultCeilingHeight: r.f64(GS.DEFAULT_CEILING_HEIGHT) || null, // 0 = 旧データ（未保存）→ 既定(2400)を維持
     floorDatum:          r.f64(GS.FLOOR_DATUM),
     edges:               r.vec(GS.EDGES, readEdge),
     openings:            r.vec(GS.OPENINGS, readOpening),

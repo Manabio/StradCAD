@@ -19,12 +19,14 @@ const EXTERIOR_CATEGORIES = ['exteriorRows', 'exteriorFittingRows', 'structureRo
 // リンクだけ失われ、以後の階段削除で連動削除（removeExteriorRowsByRoomId）が効かなくなる。
 const EXTERIOR_FIELDS     = ['part', 'finish', 'base', 'note', 'roomId'];
 
-// per-floor 材設定（field → setter 名）
+// per-floor 材設定・部屋既定値（field → setter 名）
 const PER_FLOOR_SETTERS = {
-  exteriorWallBacking: 'setExteriorWallBacking',
-  interiorWallBacking: 'setInteriorWallBacking',
-  ceilingBacking:      'setCeilingBacking',
-  floorBacking:        'setFloorBacking',
+  exteriorWallBacking:  'setExteriorWallBacking',
+  interiorWallBacking:  'setInteriorWallBacking',
+  ceilingBacking:       'setCeilingBacking',
+  floorBacking:         'setFloorBacking',
+  defaultFloorLevel:    'setDefaultFloorLevel',
+  defaultCeilingHeight: 'setDefaultCeilingHeight',
 };
 
 function snapshotStairs(graph) {
