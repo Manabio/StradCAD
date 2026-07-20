@@ -554,6 +554,35 @@ const FieldRow = observer(({ leftKey, rightKey, room, mode }) => (
   </div>
 ));
 
+// FL入力欄。type="number" では「-」だけの中間状態を value に保持できず（DOMが空文字を返す）
+// 負値が打てないため、テキスト入力＋編集中ドラフトで受ける。数値として解釈できた時点で Room へ
+// 反映し、「-」のまま確定した場合は空欄と同じく null（階基準どおり）に戻す。
+const FloorLevelInput = observer(({ room, graph }) => {
+  const [draft, setDraft] = useState(null); // 編集中の生テキスト（null = 非編集）
+  const committed = room.floorLevel ?? graph?.defaultFloorLevel ?? DEFAULT_ROOM_FLOOR_LEVEL;
+  return (
+    <input
+      type="text"
+      inputMode="numeric"
+      value={draft ?? String(committed)}
+      onChange={e => {
+        const t = e.target.value;
+        if (!/^-?\d*$/.test(t)) return; // 数字と先頭の「-」のみ許可
+        setDraft(t);
+        if (t !== '' && t !== '-') room.setFloorLevel(Number(t));
+      }}
+      onFocus={() => beginFieldUndo(graph)}
+      onBlur={() => {
+        if (draft === '' || draft === '-') room.setFloorLevel(null); // 空欄 = 階基準どおり
+        setDraft(null);
+        endFieldUndo(graph);
+      }}
+      onClick={e => e.stopPropagation()}
+      style={cellInputStyle}
+    />
+  );
+});
+
 // '__bbox_placeholder' は表示のみの非機能プレースホルダ（データ未接続）
 const FieldCell = observer(({ fieldKey, room, mode }) => {
   if (!fieldKey) return <div style={cardFieldStyle} />;
@@ -586,15 +615,7 @@ const FieldCell = observer(({ fieldKey, room, mode }) => {
       <div style={cardFieldStyle}>
         <span style={cardLabelStyle}>FL：</span>
         <div style={cardInputWrapStyle}>
-          <input
-            type="number"
-            value={room.floorLevel ?? graph?.defaultFloorLevel ?? DEFAULT_ROOM_FLOOR_LEVEL}
-            onChange={e => room.setFloorLevel(e.target.value === '' ? null : Number(e.target.value))}
-            onFocus={() => beginFieldUndo(graph)}
-            onBlur={() => endFieldUndo(graph)}
-            onClick={e => e.stopPropagation()}
-            style={cellInputStyle}
-          />
+          <FloorLevelInput room={room} graph={graph} />
         </div>
       </div>
     );

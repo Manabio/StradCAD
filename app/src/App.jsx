@@ -38,13 +38,14 @@ import { generateRoomWallsFromOutline, generateExteriorWalls, snapshotWall, rest
 import { snapshotEdges, restoreEdges, syncEdgesFromTopology } from './finish/edgeClassify.js';
 import { reinterpretRoomsOnEntry, ensureStairRooms, snapshotRoomsState, restoreRoomsState } from './finish/roomReinterpret.js';
 import { RoomLabelsLayer } from './renderer/RoomLabelsLayer.jsx';
+import { StepSectionLayer } from './renderer/StepSectionLayer.jsx';
 import { StructuralLayer, ColumnsLayer } from './renderer/StructuralLayer.jsx';
 import { MemberTagLayer } from './renderer/MemberTagLayer.jsx';
 import { MemberStatusMenu } from './ui/MemberStatusMenu.jsx';
 import { PRIMARY_DIMENSION_FIELD_BY_MAP } from './structural/memberCatalog.js';
 import { CONTEXT, detectContext, getMenuItems } from './interaction/menuItems.js';
 import { CenterLineType, Discipline, SiteLineKind, OpeningCategory, RoomFeature, centerLineKind } from '@core';
-import { addSkipZero, subtractSkipZero, makeFloorName, renameFloor } from './floorNumber.js';
+import { addSkipZero, subtractSkipZero, makeFloorName, makeFloorLevelPrefix, renameFloor } from './floorNumber.js';
 import { AddFloorDialog } from './ui/AddFloorDialog.jsx';
 import { ConfirmDialog } from './ui/ConfirmDialog.jsx';
 import { StructuralSyncDialog } from './ui/StructuralSyncDialog.jsx';
@@ -3332,8 +3333,15 @@ const App = observer(() => {
                   />
                 )}
                 {appMode === 'floorplan' && (
-                  <RoomLabelsLayer graph={graph} viewport={viewport} />
+                  <RoomLabelsLayer
+                    graph={graph}
+                    viewport={viewport}
+                    floorPrefix={makeFloorLevelPrefix(project.activePlane?.startFloor ?? 1)}
+                  />
                 )}
+                {/* 段差断面: 段差線は全LOD（略図＝細線 / 標準・詳細＝中線）、ハッチ・寸法は詳細のみ
+                    ——レイヤー内部でLOD分岐する */}
+                {appMode === 'floorplan' && <StepSectionLayer graph={graph} viewport={viewport} />}
                 {appMode !== 'site' && <IntersectionMarkers graph={graph} viewport={viewport} />}
                 <DrawPreview
                   drawState={mode?.drawState ?? null}

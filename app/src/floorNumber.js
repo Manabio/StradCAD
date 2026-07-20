@@ -44,6 +44,14 @@ export function renameFloor(oldName, newStartFloor) {
 }
 
 /**
+ * 床レベル表記の階プレフィックスを返す（例: 2階→"2"、地下1階→"B1"）。
+ * 「2FL」「B1FL」のように FL 表記の頭へ付ける用途。
+ */
+export function makeFloorLevelPrefix(startFloor) {
+  return startFloor < 0 ? `B${Math.abs(startFloor)}` : `${startFloor}`;
+}
+
+/**
  * {startFloor: n, stories: m} から表示名称を生成する。
  *
  * m が小数（中間階）:
