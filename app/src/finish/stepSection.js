@@ -3,18 +3,24 @@
  *
  * 検出ロジック:
  *   1. computeNamedBoundaryEdges（edgeClassify.js）でセル境界単位の候補を列挙する。
- *   2. edgeGeometry で両側の部屋を解決し、屋内どうし・floorLevelDiff≠0・階段吹抜け
- *      （STAIR_VOID）でない組だけを残す（STEPマスター判定 selectBoundaryMaster と同じ条件）。
- *   3. 同一軸CL・同一部屋組でグループ化し mergeSegments（wallGeneration.js）で連続区間へ結合する。
+ *   2. 各境界を「直交する区切りCL」で刻み、小区間ごとに両側の部屋を解決して段差量を求める
+ *      （屋内どうし・floorLevelDiff≠0・階段吹抜け(STAIR_VOID)でない組のみ。STEPマスター
+ *      判定 selectBoundaryMaster と同じ条件）。
+ *   3. 同一軸CL・同一段差量の小区間を数値区間として結合する（重複もここで畳まれる）。
  *   4. 区間上の壁・開口（本ファイルの openSubIntervals）を差し引き、残った開放区間（間口）
  *      ごとに1件の断面プロファイルを作る。
+ *
+ * 小区間ごとに部屋を解決するのが要（セル境界の中点1点で部屋組を決めない）。中心線を部分的に
+ * 短縮すると、その区間ではセルが横へ連結して「境界が実在しない」状態になるが、セルキーの上では
+ * 境界CLが端点として残り続ける。中点だけを見ると、境界が実在しない区間まで段差として扱われる。
  *
  * 描画ルールをここへ集約し、レンダラ（StepSectionLayer.jsx）は結果を Konva 要素へ写像するだけ
  * にする（wallJunctionResolve.js・finish/stair/stairGeometry.js と同じパターン）。
  */
-import { RoomFeature, RoomKind } from '@core';
+import { CenterLineType, RoomFeature, RoomKind } from '@core';
 import { computeNamedBoundaryEdges, edgeGeometry, buildCellToRoom } from './edgeClassify.js';
-import { mergeSegments, DEFAULT_WALL_BASE, DEFAULT_WALL_FINISH } from './wallGeneration.js';
+import { worldToCell, dividerCLsBetween } from './gridCells.js';
+import { DEFAULT_WALL_BASE, DEFAULT_WALL_FINISH } from './wallGeneration.js';
 import { subtractIntervals } from './stair/stairGeometry.js';
 
 // 断面プロファイルの張り出し長（軸CLから左右へ。mm）
@@ -31,11 +37,17 @@ export const STEP_SECTION_WITNESS_GAP_MM = 30;
 // 寸法値を蹴上げ（段差）から離す距離（mm）— 寸法線より段差寄りに置く
 export const STEP_SECTION_DIM_TEXT_ACROSS_MM = 150;
 
-// これ未満の開口幅は描画しない（浮動小数の残差を無視）
-const MIN_OPEN_MM = 1;
+// 段差断面を描く最小の間口幅(mm)。部屋外周壁の端点はコーナーで直交壁の仕上げ面ぶん
+// （= STEP_LINE_ECCENTRICITY_MM）内側へ詰められているため、境界から壁を差し引くと両端に
+// 数十mmの残差が残る。これは作図上の詰め代であって開口ではない（詰め代の位置は直交壁の材が
+// 占めている）。人が通れない幅の区間は間口とみなさない。
+const MIN_OPEN_MM = 200;
 
 // 端点CL・壁スパンの一致判定の許容差(mm)（stairGeometry.js の WALL_AXIS_CL_EPS と同水準）
 const WALL_AXIS_EPS = 0.5;
+
+// 隣接セル判定のサンプリング距離(mm)。edgeClassify.js の ADJACENT_SAMPLE_EPS と同値。
+const ADJACENT_SAMPLE_EPS = 10;
 
 // struct CL は graph._structGraph.shapeMap に格納されるため両方を検索する（他 finish/*.js と同じ規約）
 function getShape(graph, id) {
@@ -175,6 +187,58 @@ function buildStepSection({ id, axisVal, isVertical, along, diff, lineLo, lineHi
 }
 
 /**
+ * 軸CL上の点（across = axisVal, along）の両側セルが属する部屋を返す。
+ * @returns {[Room|null, Room|null]} [負側, 正側]（null = 無名屋外／格子外）
+ */
+function roomsAcross(graph, cellToRoom, isVertical, axisVal, along) {
+  const at = (off) => {
+    const cell = isVertical
+      ? worldToCell(axisVal + off, along, graph)
+      : worldToCell(along, axisVal + off, graph);
+    return cell ? (cellToRoom.get(cell.key) ?? null) : null;
+  };
+  return [at(-ADJACENT_SAMPLE_EPS), at(+ADJACENT_SAMPLE_EPS)];
+}
+
+/**
+ * 軸CL上の1点における段差量(mm)。段差断面の対象外なら 0 を返す。
+ * 条件は境界マスター選定（selectBoundaryMaster の STEP）と揃える。
+ */
+function stepDiffAt(graph, cellToRoom, isVertical, axisVal, along) {
+  const [roomNeg, roomPos] = roomsAcross(graph, cellToRoom, isVertical, axisVal, along);
+  // 片側が無名屋外、または両側が同一部屋（＝境界が実在しない区間を含む）→ 対象外
+  if (!roomNeg || !roomPos || roomNeg.id === roomPos.id) return 0;
+  if (roomNeg.kind === RoomKind.EXTERIOR || roomPos.kind === RoomKind.EXTERIOR) return 0;
+  // 階段吹抜け（STAIR_VOID）は一切描画しない自動管理Room
+  if (roomNeg.feature === RoomFeature.STAIR_VOID || roomPos.feature === RoomFeature.STAIR_VOID) return 0;
+  return graph.floorLevelDiff(roomNeg, roomPos);
+}
+
+/**
+ * 同一段差量の数値区間を、接する・重なるものどうし結合する。
+ * 同じ境界が親部屋と部分指定部屋の両方から二重に上がるため、重複もここで畳まれる。
+ * @param {{lo:number, hi:number, diff:number}[]} spans
+ */
+function mergeSpans(spans) {
+  const byDiff = new Map();
+  for (const s of spans) {
+    if (!byDiff.has(s.diff)) byDiff.set(s.diff, []);
+    byDiff.get(s.diff).push(s);
+  }
+  const merged = [];
+  for (const [diff, list] of byDiff) {
+    list.sort((a, b) => a.lo - b.lo);
+    let cur = { lo: list[0].lo, hi: list[0].hi, diff };
+    for (const s of list.slice(1)) {
+      if (s.lo <= cur.hi + WALL_AXIS_EPS) cur.hi = Math.max(cur.hi, s.hi);
+      else { merged.push(cur); cur = { lo: s.lo, hi: s.hi, diff }; }
+    }
+    merged.push(cur);
+  }
+  return merged;
+}
+
+/**
  * グラフ全体から段差断面の描画データを列挙する。
  * @param {object} graph
  * @returns {ReturnType<typeof buildStepSection>[]}
@@ -183,45 +247,41 @@ export function computeStepSections(graph) {
   if (!graph) return [];
   const cellToRoom = buildCellToRoom(graph);
 
-  // "axisCLId:roomIdA|roomIdB" → segs[]（同一部屋組・同一軸CLの境界セグメントをまとめる）
-  const groups = new Map();
+  // axisCLId → { isVertical, spans: [{lo, hi, diff}] }
+  const byAxis = new Map();
   for (const key of computeNamedBoundaryEdges(graph)) {
     const geo = edgeGeometry(key, graph, cellToRoom);
     if (!geo) continue;
-    const { roomNeg, roomPos, isVertical, axisCL, startCL, endCL } = geo;
-    if (!roomNeg || !roomPos || roomNeg.id === roomPos.id) continue;
-    // STEPマスター判定（selectBoundaryMaster）と同じ条件: 両側が屋内であること
-    if (roomNeg.kind === RoomKind.EXTERIOR || roomPos.kind === RoomKind.EXTERIOR) continue;
-    // 階段吹抜け（STAIR_VOID）は一切描画しない自動管理Room（明らかに不適切な組として除外）
-    if (roomNeg.feature === RoomFeature.STAIR_VOID || roomPos.feature === RoomFeature.STAIR_VOID) continue;
-    if (graph.floorLevelDiff(roomNeg, roomPos) === 0) continue;
+    const { isVertical, axisCL, startCL, endCL } = geo;
+    // 壁・開口の coord1/coord2 は effectiveValue 由来のため、比較・配置も同じ基準に揃える
+    const axisVal = axisCL.effectiveValue;
+    const lo = Math.min(startCL.effectiveValue, endCL.effectiveValue);
+    const hi = Math.max(startCL.effectiveValue, endCL.effectiveValue);
 
-    const pairKey = [roomNeg.id, roomPos.id].sort().join('|');
-    const gKey = `${axisCL.id}:${pairKey}`;
-    if (!groups.has(gKey)) groups.set(gKey, []);
-    groups.get(gKey).push({
-      axisCLId: axisCL.id, startCLId: startCL.id, endCLId: endCL.id,
-      isVertical, roomNeg, roomPos,
-    });
+    // 直交する区切りCLで刻む。この刻みの中では両側のセル（＝部屋）が変わらないので、
+    // 小区間の中点1点のサンプリングでその区間全体の段差量が確定する。
+    const orthoType = isVertical ? CenterLineType.HORIZONTAL : CenterLineType.VERTICAL;
+    const cuts = dividerCLsBetween(graph, orthoType, lo, hi).map(cl => cl.effectiveValue);
+    const breaks = [...new Set([lo, ...cuts, hi])].sort((a, b) => a - b);
+
+    for (let i = 0; i < breaks.length - 1; i++) {
+      const subLo = breaks[i], subHi = breaks[i + 1];
+      if (subHi - subLo < WALL_AXIS_EPS) continue;
+      const diff = stepDiffAt(graph, cellToRoom, isVertical, axisVal, (subLo + subHi) / 2);
+      if (diff === 0) continue;
+      if (!byAxis.has(axisCL.id)) byAxis.set(axisCL.id, { isVertical, spans: [] });
+      byAxis.get(axisCL.id).spans.push({ lo: subLo, hi: subHi, diff });
+    }
   }
 
-  // 同じ境界が複数の部屋組で検出されることがある（部分指定の部屋は親と重なるため、
-  // 同一の軸CL・同一区間が別ペアとして二重に上がる）。位置が同じ断面は1件に畳む
-  // ——重複を残すと React の key が衝突し、片方が描画から落ちる。
+  // 位置が同じ断面は1件に畳む——重複を残すと React の key が衝突し、片方が描画から落ちる。
   const sectionMap = new Map();
-  for (const [, segs] of groups) {
-    const { axisCLId, isVertical, roomNeg, roomPos } = segs[0];
+  for (const [axisCLId, { isVertical, spans }] of byAxis) {
     const axisShape = getShape(graph, axisCLId);
     if (!axisShape) continue;
-    // 壁・開口の coord1/coord2 は effectiveValue 由来のため、比較・配置も同じ基準に揃える
     const axisVal = axisShape.effectiveValue;
-    const diff = graph.floorLevelDiff(roomNeg, roomPos);
 
-    for (const seg of mergeSegments(segs, graph)) {
-      const sCL = getShape(graph, seg.startCLId), eCL = getShape(graph, seg.endCLId);
-      if (!sCL || !eCL) continue;
-      const lo = Math.min(sCL.effectiveValue, eCL.effectiveValue), hi = Math.max(sCL.effectiveValue, eCL.effectiveValue);
-
+    for (const { lo, hi, diff } of mergeSpans(spans)) {
       for (const [subLo, subHi] of openSubIntervals(graph, axisCLId, isVertical, lo, hi)) {
         // 段差線の両端は、間口端に直交壁があればその仕上げ面まで詰める（壁がなければCL位置のまま）
         const loInset = hasCrossWallAt(graph, subLo, isVertical, axisVal) ? STEP_LINE_ECCENTRICITY_MM : 0;

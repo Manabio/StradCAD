@@ -231,10 +231,17 @@ export function computeExteriorWallSegments(graph) {
   const cellToRoom = buildCellToRoom(graph);
 
   const groups = new Map(); // "axisCLId:loopType" → segs[]
+  // 部分指定の部屋は親と同じ外周エッジを重複して上げる（cells は親の部分集合なので
+  // 外周の一部が完全に一致する）。同一エッジが2本入ると mergeSegments は端点CLが
+  // 連続しないため結合できず、まったく同じ線分が2件返って React の key が衝突する。
+  const seen = new Set();
   for (const room of graph.rooms) {
     for (const p of computeExternalEdgeParams(room, 1, graph)) {
       const loopType = classifyExteriorEdge(room, p, graph, cellToRoom);
       if (!loopType) continue;
+      const segId = `${p.axisCLId}:${loopType}:${p.startCLId}:${p.endCLId}:${p.axisOffset}`;
+      if (seen.has(segId)) continue;
+      seen.add(segId);
       const key = `${p.axisCLId}:${loopType}`;
       if (!groups.has(key)) groups.set(key, []);
       groups.get(key).push({ ...p, loopType });
