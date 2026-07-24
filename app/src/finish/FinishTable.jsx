@@ -362,8 +362,10 @@ const InteriorTable = observer(({ graph, mode, selectedRoomId, onSelectRoom, flo
   // 内部仕上げ表からは除外する。屋内階段（kind===INTERIOR）は通常部屋と同じカードで表示する
   // （上階自動設置の無名ペアRoomも同様に表示される＝意図どおり）。
   // 階段吹抜け（STAIR_VOID）は自動管理 Room のため引き続き表に出さない。
+  // 未定義の部屋（UNDEFINED）も表に出さない（B: 名前未確定のため命名対象外）。
   const rooms = graph.rooms.filter(r =>
-    (r.feature !== RoomFeature.STAIR || r.kind === RoomKind.INTERIOR) && r.feature !== RoomFeature.STAIR_VOID);
+    (r.feature !== RoomFeature.STAIR || r.kind === RoomKind.INTERIOR)
+    && r.feature !== RoomFeature.STAIR_VOID && r.feature !== RoomFeature.UNDEFINED);
 
   const [dragId, setDragId]             = useState(null);
   const [overIndex, setOverIndex]       = useState(null);

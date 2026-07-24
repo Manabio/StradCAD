@@ -35,7 +35,9 @@ export function reinterpretRoomsOnEntry(graph) {
     // 階段Room（feature===STAIR）は再解釈しない。フットプリントは階段設置時に確定済みで、
     // 吸収/削除されると Stair.roomId が孤児化するため（フェーズ2以前は階段はRoomでなく対象外だった＝従来挙動を維持）。
     // 階段吹抜け（STAIR_VOID）も同様に対象外（自動管理 Room。同期側が footprint を管理する）。
-    if (room.feature === RoomFeature.STAIR || room.feature === RoomFeature.STAIR_VOID) continue;
+    // 未定義の部屋（UNDEFINED）も対象外（外壁線維持のための残置セル。命名/削除でのみ変化する）。
+    if (room.feature === RoomFeature.STAIR || room.feature === RoomFeature.STAIR_VOID
+      || room.feature === RoomFeature.UNDEFINED) continue;
     for (const oldKey of room.cells) {
       const lost = lostSides(oldKey, graph);
       if (lost.length === 0) continue;
@@ -152,7 +154,7 @@ export function ensureStairRooms(graph) {
 // —— snapshotWall/snapshotEdges と同じ「単発操作の巻き戻し」用途のため）
 // ----------------------------------------------------------------
 
-const FINISH_FIELDS = [
+export const FINISH_FIELDS = [
   'floorMaterial', 'baseboardMaterial', 'baseboardHeight', 'dadoMaterial',
   'dadoHeight', 'ceilingMaterial', 'cornice', 'note',
 ];

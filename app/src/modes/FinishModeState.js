@@ -6,6 +6,7 @@ import { ensureUnderStairSplit, removeUnderStairSplit, findUnderStairSplitCLs } 
 import { floorHeightAbove } from '../finish/stair/stairDimensions.js';
 import { floorSwapManager } from '../storage/FloorSwapManager.js';
 import { snapshotFinishState, pushFinishUndo, withFinishUndo } from '../finish/finishUndo.js';
+import { FINISH_FIELDS } from '../finish/roomReinterpret.js';
 import { ERR_MATERIAL_MISMATCH } from '../error.js';
 import { RoomFeature, RoomKind } from '@core';
 
@@ -363,7 +364,8 @@ export class FinishModeState {
       const splitCLIds = new Set(findUnderStairSplitCLs(stair, graph).map(cl => cl.id));
 
       for (const room of graph.rooms) {
-        if (room.feature === RoomFeature.STAIR || room.feature === RoomFeature.STAIR_VOID) continue;
+        if (room.feature === RoomFeature.STAIR || room.feature === RoomFeature.STAIR_VOID
+          || room.feature === RoomFeature.UNDEFINED) continue;
         if (stair.roomId && room.id === stair.roomId) continue;
         let intersects = false;
         for (const key of refreshCells(room.cells, graph)) {
@@ -495,7 +497,8 @@ export class FinishModeState {
     };
 
     const rooms = this.graph.rooms.filter(r =>
-      r.feature !== RoomFeature.STAIR && r.feature !== RoomFeature.STAIR_VOID);
+      r.feature !== RoomFeature.STAIR && r.feature !== RoomFeature.STAIR_VOID
+      && r.feature !== RoomFeature.UNDEFINED);
     const overlapping = rooms.filter(r => [...cellsOf(r)].some(c => newCells.has(c)));
 
     if (overlapping.length > 0) {
@@ -693,6 +696,8 @@ export class FinishModeState {
     this.namingRoomId    = null;
     this.namingIsNew     = false;
     this.namingCellOrder = null;
+    // 確定時にのみ未定義Roomから該当セルを引き抜く（cancelNaming 時は未定義側を変更しないため安全）。
+    this._subtractCellsFromUndefined(room.cells);
     // 境界エッジの生成はモード境界の差分追跡で行う（フェーズ4）。命名時の即時生成は廃止。
     this.lastNamingUndoEntry = pushFinishUndo(this.graph, undoBefore);
     return convertedStair;
@@ -706,6 +711,36 @@ export class FinishModeState {
     this.graph.removeStair(stair.id);
     this.graph.removeExteriorRowsByRoomId(roomId); // 連動する外部仕上げ行（部位「階段」）も削除
     if (this.selectedStairId === stair.id) this.selectedStairId = null;
+  }
+
+  /**
+   * Room を「未定義」へ変換する（削除しても外壁線を維持するための残置）。
+   * kind と cells は保持し、名前・feature・仕上げ関連のみ初期化する。
+   * 未定義Room は仕上げ表から除外・無描画だがセル選択は可能（ドラッグで親指定Roomとして切り出せる）。
+   */
+  _makeUndefined(room) {
+    room.setName('');
+    room.setFeature(RoomFeature.UNDEFINED);
+    room.setTemplateKey(null);
+    room.customOverrides.clear();
+    for (const f of FINISH_FIELDS) room.finish.setField(f, '');
+    room.setFloorLevel(null);
+    room.namePosition = null;
+    room.generatedWallIds.clear();
+  }
+
+  /**
+   * cells を未定義Room群から取り除く（命名確定・新規候補室の削除取消で呼ぶ）。
+   * refreshCells で現行キーへ正規化した集合から差し引き、空になった未定義Roomは削除する。
+   */
+  _subtractCellsFromUndefined(cells) {
+    for (const u of this.graph.rooms) {
+      if (u.feature !== RoomFeature.UNDEFINED) continue;
+      const current = refreshCells(u.cells, this.graph);
+      const remaining = new Set([...current].filter(c => !cells.has(c)));
+      if (remaining.size === 0) this.graph.removeRoom(u.id);
+      else u.setCells(remaining);
+    }
   }
 
   /**
@@ -734,22 +769,34 @@ export class FinishModeState {
     withFinishUndo(this.graph, () => this._deleteRoomNoUndo(roomId));
   }
 
-  /** deleteRoom の実体（undo 記録なし。カスケード再帰・deleteFromDialog から使う）。 */
+  /**
+   * deleteRoom の実体（undo 記録なし。カスケード再帰・deleteFromDialog から使う）。
+   * 部分指定（referenceRoomIds非空）の子・屋外部屋は現行どおり removeRoom。
+   * 屋内の親/単一部屋は removeRoom せず _makeUndefined へ変換し、外壁線を維持する
+   * （B: 未定義の部屋。子を持つ親は先に子を再帰 removeRoom してから未定義化する）。
+   */
   _deleteRoomNoUndo(roomId) {
+    const room = this.graph.roomMap.get(roomId);
+    if (!room) return;
     const children = this.graph.rooms.filter(r => r.referenceRoomIds.has(roomId));
     for (const child of children) this._deleteRoomNoUndo(child.id); // 再帰（各自の連動Stairガード込み）
 
     this._removeLinkedStair(roomId);
-    this.graph.removeRoom(roomId);
+    if (room.referenceRoomIds.size > 0 || room.kind === RoomKind.EXTERIOR) {
+      this.graph.removeRoom(roomId);
+    } else {
+      this._makeUndefined(room);
+    }
     if (this.selectedRoomId === roomId) this.selectedRoomId = null;
     if (this.namingRoomId === roomId) this.namingRoomId = null;
   }
 
   /**
-   * ダイアログの「削除」ボタン用。
-   *   feature=STAIR の部屋   → 連動Stairごと削除（deleteStair。選択クリア）
+   * ダイアログの「削除」ボタン用。判定順が重要（先頭を後回しにすると新規候補室が誤って未定義化される）。
+   *   新規候補室（namingIsNew）  → 作成取消。removeRoom し、切り出し元の未定義Roomへ cells を差し戻す
+   *   feature=STAIR の部屋      → 連動Stairごと削除（deleteStair。選択クリア）
    *   部分指定（referenceRoomIds非空） → 削除後、参照元（親）を全体選択
-   *   親（子持ち）・単一部屋  → deleteRoom（親カスケードで子も一括削除）
+   *   親（子持ち）・単一部屋      → deleteRoom（親カスケードで子も一括削除。屋内なら未定義化）
    */
   deleteFromDialog(roomId) {
     // 新規部屋（作成→即削除）は保留スナップショットを使う＝差分ゼロでエントリなし
@@ -764,7 +811,12 @@ export class FinishModeState {
       return;
     }
 
-    if (room.feature === RoomFeature.STAIR) {
+    if (this.namingIsNew) {
+      const cells = new Set(room.cells);
+      this.graph.removeRoom(roomId);
+      this._subtractCellsFromUndefined(cells);
+      if (this.selectedRoomId === roomId) this.selectedRoomId = null;
+    } else if (room.feature === RoomFeature.STAIR) {
       const stair = [...this.graph.stairMap.values()].find(s => s.roomId === roomId);
       if (stair) this._deleteStairNoUndo(stair.id);
       else this._deleteRoomNoUndo(roomId); // 連動Stairが見つからない防御ケース
@@ -797,12 +849,20 @@ export class FinishModeState {
     withFinishUndo(this.graph, () => this._deleteStairNoUndo(id));
   }
 
-  /** deleteStair の実体（undo 記録なし。deleteFromDialog から使う）。 */
+  /**
+   * deleteStair の実体（undo 記録なし。deleteFromDialog から使う）。
+   * ペアRoom（stair.roomId の Room）は屋外なら removeRoom、屋内なら _makeUndefined で外壁線を維持する。
+   */
   _deleteStairNoUndo(id) {
     const stair = this.graph.stairMap.get(id);
     if (stair) removeUnderStairSplit(stair, this.graph); // 階段下の分割CLを指定ごと元に戻す
     if (stair?.roomId && this.graph.roomMap.has(stair.roomId)) {
-      this.graph.removeRoom(stair.roomId);
+      const room = this.graph.roomMap.get(stair.roomId);
+      if (room.kind === RoomKind.EXTERIOR) {
+        this.graph.removeRoom(stair.roomId);
+      } else {
+        this._makeUndefined(room);
+      }
       if (this.selectedRoomId === stair.roomId) this.selectedRoomId = null;
       if (this.namingRoomId === stair.roomId) this.namingRoomId = null;
     }

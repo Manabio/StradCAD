@@ -209,8 +209,9 @@ function stepDiffAt(graph, cellToRoom, isVertical, axisVal, along) {
   // 片側が無名屋外、または両側が同一部屋（＝境界が実在しない区間を含む）→ 対象外
   if (!roomNeg || !roomPos || roomNeg.id === roomPos.id) return 0;
   if (roomNeg.kind === RoomKind.EXTERIOR || roomPos.kind === RoomKind.EXTERIOR) return 0;
-  // 階段吹抜け（STAIR_VOID）は一切描画しない自動管理Room
+  // 階段吹抜け（STAIR_VOID）は一切描画しない自動管理Room。未定義部屋は床レベルを持たない
   if (roomNeg.feature === RoomFeature.STAIR_VOID || roomPos.feature === RoomFeature.STAIR_VOID) return 0;
+  if (roomNeg.feature === RoomFeature.UNDEFINED || roomPos.feature === RoomFeature.UNDEFINED) return 0;
   return graph.floorLevelDiff(roomNeg, roomPos);
 }
 

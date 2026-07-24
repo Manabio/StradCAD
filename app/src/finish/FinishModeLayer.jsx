@@ -52,7 +52,9 @@ export const FinishModeLayer = observer(({
   graph.rooms.forEach((room, idx) => {
     // 階段（feature===STAIR）は StairLayer 側が塗り・選択・名前表示を担当するため二重描画を避ける。
     // 階段吹抜け（STAIR_VOID）は自動管理 Room で、意図的に何も描かない（下階階段の見下げ描画のみ）。
-    if (room.feature === RoomFeature.STAIR || room.feature === RoomFeature.STAIR_VOID) return;
+    // 未定義の部屋（UNDEFINED）も無描画（セル選択は listening={false} のため startDrag/commitDrag 側で拾う）。
+    if (room.feature === RoomFeature.STAIR || room.feature === RoomFeature.STAIR_VOID
+      || room.feature === RoomFeature.UNDEFINED) return;
     const isSelected = room.id === selectedRoomId;
     const boundsList = cellBoundsList(room.cells, graph);
     if (boundsList.length > 0) {

@@ -100,8 +100,8 @@ const ROOM_KIND_ENC = { interior: 0, void: 1, exterior: 2 };
 const ROOM_KIND_DEC = ['interior', 'void', 'exterior'];
 
 // Room.feature 列挙値エンコード（属性軸。null は none=0）
-const ROOM_FEATURE_ENC = { stair: 1, void: 2, stairVoid: 3 };
-const ROOM_FEATURE_DEC = [null, 'stair', 'void', 'stairVoid'];
+const ROOM_FEATURE_ENC = { stair: 1, void: 2, stairVoid: 3, undefined: 4 };
+const ROOM_FEATURE_DEC = [null, 'stair', 'void', 'stairVoid', 'undefined'];
 
 // CenterLine: 17 フィールド (0–16)
 const CL = {

@@ -13,7 +13,7 @@
 //    選定はトポロジー論理のみで、材データには依存しない。
 // ================================================================
 
-import { CenterLineType, RoomKind, Discipline, edgeKey } from '@core';
+import { CenterLineType, RoomKind, RoomFeature, Discipline, edgeKey } from '@core';
 import { worldToCell, refreshCells } from './gridCells.js';
 
 // 隣接セル判定時、境界線からこの距離(mm)だけ内側をサンプリングする。
@@ -150,6 +150,8 @@ export function selectBoundaryMaster(edge, graph, cellToRoom) {
 
   if (pair(REGION.INTERIOR, REGION.INTERIOR)) {
     // 別部屋。レベル差があれば段差、なければ内壁。
+    // 未定義部屋は床レベルを持たないため段差の対象外（stepDiffAt と揃える）。
+    if (roomA?.feature === RoomFeature.UNDEFINED || roomB?.feature === RoomFeature.UNDEFINED) return 'INTERIOR_WALL';
     return Math.abs(graph.floorLevelDiff(roomA, roomB)) > 0 ? 'STEP' : 'INTERIOR_WALL';
   }
   if (pair(REGION.INTERIOR, REGION.ANON_EXTERIOR))  return 'EXTERIOR_WALL';

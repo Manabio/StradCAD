@@ -48,7 +48,6 @@ import { CenterLineType, Discipline, SiteLineKind, OpeningCategory, RoomFeature,
 import { addSkipZero, subtractSkipZero, makeFloorName, makeFloorLevelPrefix, renameFloor } from './floorNumber.js';
 import { AddFloorDialog } from './ui/AddFloorDialog.jsx';
 import { ConfirmDialog } from './ui/ConfirmDialog.jsx';
-import { StructuralSyncDialog } from './ui/StructuralSyncDialog.jsx';
 import { FloorChangeDialog } from './ui/FloorChangeDialog.jsx';
 import { IntersectionMarkers } from './renderer/CenterLinesLayer.jsx';
 import { GutterLayer, columnAxisLabelHits } from './renderer/GutterLayer.jsx';
@@ -71,7 +70,7 @@ import { autoFillColumns, autoFillColumnAxisOffsets, autoFillBeamEccentricity, a
 import { structureHasMemberKind, MEMBER_KIND } from './structural/structuralClassification.js';
 import { buildStructuralWallGate, buildExteriorSide } from './structural/wallGate.js';
 import { renumberAllCategories } from './structural/memberNumbering.js';
-import { recomputeStructuralForGraph, analyzeStructuralOverflow, deleteOverflowMembers } from './structural/structuralRecompute.js';
+import { recomputeStructuralForGraph } from './structural/structuralRecompute.js';
 import { syncRoofPlane } from './structural/roofPlane.js';
 import { buildStructuralFigureSlots, designationForSlot, firstSlotKeyForPlane } from './structural/structuralFigureSlots.js';
 import { figureBindingManager } from './figure/FigureBindingManager.js';
@@ -159,10 +158,6 @@ const App = observer(() => {
   const [showBuildingInfoDialog, setShowBuildingInfoDialog] = useState(false);
   const [showStructuralInfoDialog, setShowStructuralInfoDialog] = useState(false);
   const [toast,           setToast]           = useState(null); // { msg, key }
-  // 構造モード外部問合せ：フットプリント外に出た部材の整理セッション。
-  // { floors:[{planeId, baseline, overflow}], autoCount, protectedCount, applied } / null
-  const [structSync,      setStructSync]      = useState(null);
-  const [structSyncOpen,  setStructSyncOpen]  = useState(false); // 整理ダイアログ開閉（閉じても structSync は保持し banner から再オープン可能）
   const [appMode,         setAppMode]         = useState('floorplan'); // 'floorplan' | 'finish' | 'structure' | 'site'
   const [structComposition, setStructComposition] = useState(null); // 構造モードの図面合成（自階床下材＋1つ下の階の柱）。各カテゴリの供給グラフを保持する
   // フロア切替時にモードを再ロードするためのトリガー
@@ -972,7 +967,6 @@ const App = observer(() => {
   // mainStructure は屋根平面（軒桁）でのみ意味を持つが、ここでの対象は常に実体階なので自階の実効値でよい。
 
   // アクティブな graph を再計算し、変化があれば undo に積む（通常の auto-save に乗る）。
-  // 再計算後（削除前）の baseline と、フットプリント外に出た部材（overflow）を返す。
   // pushUndo=false は階追加フロー用（withFloorAddUndo が全階分を1エントリで巻き戻すため個別には積まない）。
   async function recomputeActiveStructural(pushUndo = true) {
     const g = project.activeGraph;
@@ -984,31 +978,16 @@ const App = observer(() => {
         () => restoreGraph(g, after),
       );
     }
-    const overflow = await analyzeStructuralOverflow(g, project);
-    return { planeId: g.plane.id, baseline: serializeGraph(g), overflow };
   }
 
   // 非アクティブな実体階を peek して再計算し、変化があれば IDB に直接保存する。
   // syncRoofPlane と同格の「建物形状が変わった時点でやり直すインフラ」として undo 対象外で割り切る
   // （跨ぎフロア undo は単一アクティブ graph モデルでは扱えないため。削除の取消はベースライン保持で担保する）。
-  // 再計算後（削除前）の baseline と overflow を返す。
   async function recomputeInactiveStructural(plane) {
     const temp = await floorSwapManager.peek(plane, project.structGraph);
     const mainStructure = temp.structureOverride ?? project.structuralInfo.mainStructure;
     const { changed } = await recomputeStructuralForGraph(temp, project, mainStructure);
     if (changed) await saveFloor(plane.id, serializeGraph(temp));
-    const overflow = await analyzeStructuralOverflow(temp, project);
-    return { planeId: plane.id, baseline: serializeGraph(temp), overflow };
-  }
-
-  // 収集した各階の overflow を集計し、フットプリント外部材があれば整理ダイアログを開く。
-  function promptStructSyncIfOverflow(collected) {
-    const floors = collected.filter(f => f.overflow.length > 0);
-    if (floors.length === 0) { setStructSync(null); setStructSyncOpen(false); return; }
-    const autoCount      = floors.reduce((n, f) => n + f.overflow.filter(m => !m.protected).length, 0);
-    const protectedCount = floors.reduce((n, f) => n + f.overflow.filter(m =>  m.protected).length, 0);
-    setStructSync({ floors, autoCount, protectedCount, applied: 'keep' });
-    setStructSyncOpen(true);
   }
 
   // 要件1：階追加後。追加で N（負担階数）・基礎指定が変わるため、全実体階の構造部材を更新する。
@@ -1017,12 +996,11 @@ const App = observer(() => {
   // これにより別階・別モードへ移動したとき、更新後の柱・梁・材寸がそのまま描画される。
   async function reflectStructuralAfterFloorAdd() {
     const activeId = project.activePlaneId;
-    const collected = [await recomputeActiveStructural(false)];
+    await recomputeActiveStructural(false);
     for (const plane of project.planes) {
       if (plane.id === activeId) continue;
-      collected.push(await recomputeInactiveStructural(plane));
+      await recomputeInactiveStructural(plane);
     }
-    promptStructSyncIfOverflow(collected);
   }
 
   // 要件2：仕上げモード退出後。フットプリント（外壁線・吹抜け）変更は鉛直連続性ゲートにより
@@ -1030,37 +1008,14 @@ const App = observer(() => {
   // そのため自階（アクティブ）＋上の全階を再計算する。下階は影響を受けない。
   // 退出先が構造モードのときは runStructuralModeSetup が自階を再計算するため、自階はそちらに委ねる。
   async function reflectStructuralAfterFinishExit(currentPlaneId, goingToStructure) {
-    const collected = [];
-    if (!goingToStructure) collected.push(await recomputeActiveStructural());
+    if (!goingToStructure) await recomputeActiveStructural();
     const planes = project.planes; // elevation 昇順
     const idx = planes.findIndex(p => p.id === currentPlaneId);
     if (idx !== -1) {
       for (let i = idx + 1; i < planes.length; i++) {
-        collected.push(await recomputeInactiveStructural(planes[i]));
+        await recomputeInactiveStructural(planes[i]);
       }
     }
-    promptStructSyncIfOverflow(collected);
-  }
-
-  // 整理ダイアログのオプション適用。各階を baseline（削除前）へ戻してから mode に従い削除＋再計算する。
-  // 常に baseline 基準なので非累積——'keep'→'all'→'auto' と何度切り替えても結果は確定的で、'keep' で元に戻る。
-  //   mode: 'keep' = 削除しない（baseline のまま） | 'auto' = 自動生成分のみ | 'all' = フットプリント外を全削除。
-  async function applyStructSync(mode) {
-    if (!structSync) return;
-    for (const f of structSync.floors) {
-      const plane = project.planeMap.get(f.planeId);
-      if (!plane) continue;
-      const isActive = plane.id === project.activePlaneId;
-      const g = isActive ? project.activeGraph : await floorSwapManager.peek(plane, project.structGraph);
-      restoreGraph(g, f.baseline); // 削除前へ巻き戻す
-      if (mode !== 'keep') {
-        deleteOverflowMembers(g, f.overflow, mode);
-        const mainStructure = g.structureOverride ?? project.structuralInfo.mainStructure;
-        await recomputeStructuralForGraph(g, project, mainStructure);
-      }
-      if (!isActive) await saveFloor(plane.id, serializeGraph(g)); // アクティブ階は auto-save に委ねる
-    }
-    setStructSync(prev => prev ? { ...prev, applied: mode } : null);
   }
 
   // ---- モード境界: 構造モード突入（図面合成の構築・情報ダイアログ）----
@@ -1222,7 +1177,8 @@ const App = observer(() => {
       // 生成する（上り口・下り口は stairOpenings フィルタで開口のまま）。壁が無いと
       // resolveStairSideLines が隣接部屋側の壁で側面線を消した際に階段側の仕上げ面が無表示になる。
       // 階段吹抜け（STAIR_VOID）は引き続き対象外（吹抜けは床の開口であり自室の内周壁を持たない）。
-      if (room.feature === RoomFeature.STAIR_VOID) continue;
+      // 未定義の部屋（UNDEFINED）も対象外（外壁線は維持するが内周壁は生成しない＝命名確定後の通常経路に委ねる）。
+      if (room.feature === RoomFeature.STAIR_VOID || room.feature === RoomFeature.UNDEFINED) continue;
       if (room.generatedWallIds.size > 0) continue;
       if (room.referenceRoomIds && room.referenceRoomIds.size > 0 && room.feature !== RoomFeature.STAIR) continue;
 
@@ -1594,8 +1550,6 @@ const App = observer(() => {
     undoManager.push(
       () => {
         (async () => {
-          setStructSync(null); // 追加起因の部材整理ダイアログは巻き戻しで無効になるため閉じる
-          setStructSyncOpen(false);
           // アクティブ階は削除できないため、追加階に居る場合は先に元の階へ戻る
           // （元の階が消えている防御ケースでは追加階以外の最初の採用フロアへ）
           if (addedPlanes.some(pl => pl.id === project.activePlaneId)) {
@@ -3561,38 +3515,6 @@ const App = observer(() => {
         <div key={toast.key} className="cl-toast" onClick={() => setToast(null)}>
           {toast.msg}
         </div>
-      )}
-
-      {/* 構造部材の整理：閉じた後も structSync を保持し、別階を確認してから再オープンできる banner */}
-      {structSync && !structSyncOpen && (
-        <div
-          className="cl-toast"
-          style={{ cursor: 'pointer', background: '#1e293b' }}
-          onClick={() => setStructSyncOpen(true)}
-        >
-          フットプリント外の構造部材 {structSync.autoCount + structSync.protectedCount} 件 ▸ 整理
-          <span
-            style={{ marginLeft: 10, opacity: 0.7 }}
-            onClick={e => { e.stopPropagation(); setStructSync(null); }}
-          >✕</span>
-        </div>
-      )}
-
-      {structSync && structSyncOpen && (
-        <StructuralSyncDialog
-          summary={{
-            autoCount: structSync.autoCount,
-            protectedCount: structSync.protectedCount,
-            floors: structSync.floors.map(f => ({
-              name: project.planeMap.get(f.planeId)?.name ?? '?',
-              auto: f.overflow.filter(m => !m.protected).length,
-              protected: f.overflow.filter(m => m.protected).length,
-            })),
-          }}
-          applied={structSync.applied}
-          onApply={mode => applyStructSync(mode).catch(console.error)}
-          onClose={() => setStructSyncOpen(false)}
-        />
       )}
 
       {showCalibration && (
