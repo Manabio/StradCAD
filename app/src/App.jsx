@@ -1063,6 +1063,287 @@ const App = observer(() => {
     setStructSync(prev => prev ? { ...prev, applied: mode } : null);
   }
 
+  // ---- モード境界: 構造モード突入（図面合成の構築・情報ダイアログ）----
+  // handleModeChange（appMode切替）と移動スライダーの階切替（appMode維持）の両方から呼ぶ。
+  // openInfoDialog: スライダー階切替では毎回ダイアログが開くのはUXとして不合理なため false にする。
+  async function runStructuralEntryBoundary(targetGraph, { openInfoDialog = true } = {}) {
+    if (openInfoDialog) setShowStructuralInfoDialog(true);
+    await runStructuralModeSetup(targetGraph);
+  }
+
+  // ---- モード境界: 構造モード脱出（図面合成バインディングの停止・確定保存）----
+  // closeInfoDialog: スライダー階切替では情報ダイアログの開閉状態を変更しない。
+  function runStructuralExitBoundary({ closeInfoDialog = true } = {}) {
+    figureBindingManager.deactivate();
+    setStructComposition(null);
+    if (closeInfoDialog) setShowStructuralInfoDialog(false);
+  }
+
+  // ---- モード境界: 仕上げモード突入（前回脱出時点のRoom.cellsを現在のCLトポロジーと
+  // 突き合わせて再解釈した上で、通り芯変更等のトポロジー差分でエッジを再同期する）----
+  async function runFinishEntryBoundary(graph) {
+    // 最上階なら直下階の屋内階段footprintへ階段吹抜け（STAIR_VOID）を補完する
+    // （既存データ修復。syncUpperFloors と同じ自動同期のため undo 対象外）
+    const { ensureTopStairVoid } = await import('./finish/stair/stairFloorSync.js');
+    await ensureTopStairVoid(project, graph);
+
+    const entryUndoFns = [];
+    const entryRedoFns = [];
+
+    const roomsBefore = snapshotRoomsState(graph);
+    const stairRoomChanges = [];
+    runInAction(() => {
+      reinterpretRoomsOnEntry(graph);
+      // roomIdなしStair（旧データ・上階自動設置分）へ階段Roomを補完（開くだけで修復）
+      stairRoomChanges.push(...ensureStairRooms(graph));
+    });
+    const roomsAfter = snapshotRoomsState(graph);
+    if (JSON.stringify(roomsBefore) !== JSON.stringify(roomsAfter)) {
+      entryUndoFns.push(() => restoreRoomsState(graph, roomsBefore));
+      entryRedoFns.push(() => restoreRoomsState(graph, roomsAfter));
+    }
+    // 補完した Room 自体は rooms スナップショットが巻き戻すが、Stair.roomId は対象外のため個別に戻す
+    if (stairRoomChanges.length > 0) {
+      entryUndoFns.push(() => { for (const c of stairRoomChanges) c.stair.setField('roomId', c.prevRoomId); });
+      entryRedoFns.push(() => { for (const c of stairRoomChanges) c.stair.setField('roomId', c.room.id); });
+    }
+
+    const before = snapshotEdges(graph);
+    runInAction(() => syncEdgesFromTopology(graph));
+    const after = snapshotEdges(graph);
+    if (JSON.stringify(before) !== JSON.stringify(after)) {
+      entryUndoFns.push(() => restoreEdges(graph, before));
+      entryRedoFns.push(() => restoreEdges(graph, after));
+    }
+
+    // 部屋の再解釈→エッジ再同期の順に適用したため、undo は逆順で巻き戻す
+    if (entryUndoFns.length > 0) {
+      undoManager.push(
+        () => { [...entryUndoFns].reverse().forEach(fn => fn()); },
+        () => { entryRedoFns.forEach(fn => fn()); },
+      );
+    }
+  }
+
+  // ---- モード境界: 仕上げモード脱出（部屋ごとの壁自動生成・外壁再生成・構造反映を確定）----
+  // handleModeChange（appMode切替）と移動スライダーの階切替（appMode維持）の両方から呼ぶ。
+  // goingToStructure: 遷移先が構造モードなら reflectStructuralAfterFinishExit 側で
+  // 自階の再計算をスキップする（構造モード突入境界処理に委ねるため）。
+  async function runFinishExitBoundary(graph, { goingToStructure = false } = {}) {
+    // ステップ1: 孤立壁（isRoomWall かつ未 claim）を収集・削除
+    const claimedWallIds = new Set();
+    for (const room of graph.rooms) {
+      for (const id of room.generatedWallIds) claimedWallIds.add(id);
+    }
+    const orphanSnapshots = [];
+    for (const [id, shape] of graph.shapeMap) {
+      if (shape.isRoomWall && !claimedWallIds.has(id)) orphanSnapshots.push(snapshotWall(shape));
+    }
+
+    const undoFns = [];
+    const redoFns = [];
+
+    // 孤立壁の削除（合体で消えた部屋の壁）
+    if (orphanSnapshots.length > 0) {
+      orphanSnapshots.forEach(s => graph.removeShape(s.id));
+      undoFns.push(() => restoreWallsFromSnapshots(graph, orphanSnapshots));
+      redoFns.push(() => orphanSnapshots.forEach(s => graph.removeShape(s.id)));
+    }
+
+    // 階段の上り口・下り口の開口辺（この辺上に部屋の壁を作らない）。
+    // 自階の階段は entry（上り口）＋ arrival（下り口。中間階では下階の同形状階段の到達辺を兼ねる）。
+    // 最上階（階段実体なし・階段吹抜けのみ）は直下階の階段の到達辺＝下り口を開口に加える
+    // （世界座標は全階共通のため、直下階グラフで計算した辺をそのまま使える）。
+    const stairOpenings = graph.stairs.flatMap(s => stairPortEdges(s, graph));
+    if (graph.rooms.some(r => r.feature === RoomFeature.STAIR_VOID)) {
+      const planes = project.planes;
+      const planeIdx = planes.findIndex(p => p.id === graph.plane?.id);
+      if (planeIdx > 0) {
+        const below = await floorSwapManager.peek(planes[planeIdx - 1], project.structGraph);
+        stairOpenings.push(...below.stairs.flatMap(s => stairPortEdges(s, below, ['arrival'])));
+      }
+    }
+
+    // 寸法は実材厚から導出（modeRef.current は脱出直前でまだ生存・材ロード済み）。
+    const fmode = modeRef.current;
+
+    // ステップ2a: 階段下部屋（破れ線先セルに部屋指定された階段下エリア）の壁生成。
+    // ステップ2より先に行い、この部屋を generatedWallIds 済みにしてステップ2の通常経路
+    // （偏芯を持たない対称壁）から除外する。claimedEdges（underEdges）は破れ線・踊り場境界
+    // （無壁）と、この部屋が既に受け持った外周（外側部屋の薄壁を含む）の重複生成を防ぐため、
+    // ステップ2・3の開口辺フィルタへ合流させる（生成順: 2a→2→3）。
+    // claim（stairUnderClaimedEdges）は壁生成（generateStairUnderWalls）と分離しており、
+    // 再脱出時（部屋が既に generatedWallIds を持ち壁は再生成しない）でも毎回行う——冪等性
+    // のため。省略すると2回目の脱出でclaimが空になり、ステップ3の外壁（毎回全削除・再生成）
+    // で初回に抑止された辺に壁が生成されてしまう。
+    // 既知制約: 同一部屋が2階段にまたがる退化構成（stairUnderRoomsが同じroomを複数返す）は
+    // 先に処理された stair の claim/壁生成が優先される。
+    // step2aEntries: この部屋群が現に持つ2a壁（新規生成分に加え、再脱出時に生成をスキップした
+    // 既存分も含む）を { wall, room } で保持する。ステップ3後のトリムパス
+    // （trimStairUnderJunctions。隣接壁・外壁との T字/出隅/入隅取り合い）の対象にする
+    // ——room は出隅/入隅判定（象限がそのRoomのセルに属するか）に使う。再脱出時も対象に
+    // 含めるのは、ステップ3の外壁は毎回全削除・再生成されるため（面位置は決定的なら実質
+    // 不変だが、CLがユーザー編集で動いた場合にも追従できるようにする）。既に正しい位置なら
+    // トリムは再度no-opになるだけで冪等（REASONED、下記トリムパスの説明を参照）。
+    const underEdges = [];
+    const step2aEntries = [];
+    for (const { stair, room, splitCLIds } of (fmode?.stairUnderRooms?.(graph) ?? [])) {
+      underEdges.push(...stairUnderClaimedEdges(graph, room));
+      if (room.generatedWallIds.size > 0) {
+        // 再脱出時: 壁は再生成しないが、既存の2a壁はトリム対象として拾う
+        for (const id of room.generatedWallIds) {
+          const w = graph.shapeMap.get(id);
+          if (w) step2aEntries.push({ wall: w, room });
+        }
+        continue;
+      }
+      const { walls } = generateStairUnderWalls(
+        graph, stair, room, fmode?.roomWallDims?.(graph, room) || {},
+        { splitCLIds, dimsOf: r => fmode?.roomWallDims?.(graph, r) || {} },
+      );
+      if (walls.length === 0) continue;
+
+      walls.forEach(w => room.generatedWallIds.add(w.id));
+      step2aEntries.push(...walls.map(w => ({ wall: w, room })));
+      const snapshots = walls.map(snapshotWall);
+      const wallIds = walls.map(w => w.id);
+
+      const r = room;
+      undoFns.push(() => { wallIds.forEach(id => graph.removeShape(id)); r.generatedWallIds.clear(); });
+      redoFns.push(() => { restoreWallsFromSnapshots(graph, snapshots).forEach(w => r.generatedWallIds.add(w.id)); });
+    }
+
+    // ステップ2: 新規壁生成（generatedWallIds なし かつ 部分指定でない部屋）
+    // 部分指定（referenceRoomIds あり）は親が外周壁を担うためスキップ。
+    // ただし部屋の部分指定から階段変換した階段（feature=STAIR かつ referenceRoomIds 非空）は、
+    // 親と隣接する面（parentAdjacentEdges）だけ抑止すれば足りるため対象に含める（ルール7）。
+    for (const room of graph.rooms) {
+      // 階段ペアRoom（feature=STAIR）も対象に含める: 側面の階段側にも壁（仕上げ面・仕上げ線）を
+      // 生成する（上り口・下り口は stairOpenings フィルタで開口のまま）。壁が無いと
+      // resolveStairSideLines が隣接部屋側の壁で側面線を消した際に階段側の仕上げ面が無表示になる。
+      // 階段吹抜け（STAIR_VOID）は引き続き対象外（吹抜けは床の開口であり自室の内周壁を持たない）。
+      if (room.feature === RoomFeature.STAIR_VOID) continue;
+      if (room.generatedWallIds.size > 0) continue;
+      if (room.referenceRoomIds && room.referenceRoomIds.size > 0 && room.feature !== RoomFeature.STAIR) continue;
+
+      const parentEdges = room.feature === RoomFeature.STAIR ? parentAdjacentEdges(graph, room) : [];
+      const walls = generateRoomWallsFromOutline(graph, room, fmode?.roomWallDims?.(graph, room) || {}, [...stairOpenings, ...underEdges, ...parentEdges]);
+      if (walls.length === 0) continue;
+
+      walls.forEach(w => room.generatedWallIds.add(w.id));
+      const snapshots = walls.map(snapshotWall);
+      const wallIds = walls.map(w => w.id);
+
+      const r = room;
+      undoFns.push(() => { wallIds.forEach(id => graph.removeShape(id)); r.generatedWallIds.clear(); });
+      redoFns.push(() => { restoreWallsFromSnapshots(graph, snapshots).forEach(w => r.generatedWallIds.add(w.id)); });
+    }
+
+    // ステップ3: 外壁の再生成（既存の isExteriorWall 壁を削除して作り直す）
+    const oldExteriorSnapshots = [];
+    for (const shape of graph.shapeMap.values()) {
+      if (shape.isExteriorWall) oldExteriorSnapshots.push(snapshotWall(shape));
+    }
+    if (oldExteriorSnapshots.length > 0) {
+      oldExteriorSnapshots.forEach(s => graph.removeShape(s.id));
+    }
+    const newExteriorWalls = generateExteriorWalls(graph, fmode?.exteriorWallDims?.(graph) || {}, [...stairOpenings, ...underEdges]);
+    const newExteriorSnapshots = newExteriorWalls.map(snapshotWall);
+    if (oldExteriorSnapshots.length > 0 || newExteriorSnapshots.length > 0) {
+      undoFns.push(() => {
+        newExteriorSnapshots.forEach(s => graph.removeShape(s.id));
+        restoreWallsFromSnapshots(graph, oldExteriorSnapshots);
+      });
+      redoFns.push(() => {
+        oldExteriorSnapshots.forEach(s => graph.removeShape(s.id));
+        restoreWallsFromSnapshots(graph, newExteriorSnapshots);
+      });
+    }
+
+    // ステップ3.5: ステップ2aで生成した階段下壁（偏芯主壁＋薄壁）の突き当たり処理。
+    // ステップ3の後に行う: この時点で自室壁（2a）・隣接部屋壁（2）・外壁（3）が全て揃っており、
+    // 取り合い相手が出そろっているため。
+    // trimStairUnderJunctions（stairUnderWalls.js）を使う: 手動壁の graph.trimIntersectingWalls
+    // は相手壁の最近傍端点を無条件にfaceへスナップするため、2a壁の端が既存壁の中間（T字）に
+    // 突き当たる場合に既存壁側まで切り詰めてしまう（要件のバグ報告どおり実コードで確認。
+    // core.js:1735-1770 の cand 計算に交点までの距離ガードが無い）。手動壁の挙動は変えず、
+    // 2a壁専用にT字（既存壁は不変・2a壁側のみ近位faceで止める）/コーナー（出隅は遠位face、
+    // 入隅は近位faceへ双方スナップ）を区別する専用関数を stairUnderWalls.js に用意した
+    // （判断根拠: 出隅/入隅の材料範囲判定は偏芯壁対応の materialRange・部屋セル象限判定という
+    // 2a壁固有の概念を要し、手動壁向けの汎用 core.js API を汚さない方が既存コードの構造に
+    // 馴染む）。2a壁同士は trimStairUnderJunctions 内で対象外にする（生成時のコーナーマップで
+    // 既に正しく取り合っているため）。
+    // undo/redo は壁オブジェクト参照を保持しない（このエントリ内の後続 undo/redo で 2a壁・
+    // 隣接部屋壁・外壁が削除→再生成されオブジェクト実体が変わるため）。壁IDで解決し直す
+    // before/after 全体差分方式（edgeBefore/edgeAfter と同じ発想）を使う。
+    // 再脱出時の冪等性: step2aEntries には壁生成をスキップした既存2a壁も含めているため
+    // （このケースでは undoFns/redoFns への 2a壁生成エントリは積まれないが、トリムパスは
+    // 毎回走る）、外壁が毎回作り直されても再トリムで同じ face 位置に再収束する（面位置が
+    // 前回と不変なら candidate offset も不変で実質no-op。REASONED）。
+    if (step2aEntries.length > 0) {
+      const touched = new Map(); // wallId -> { before: {startOffset, endOffset} }
+      const captureBefore = (id, startOffset, endOffset) => {
+        if (!touched.has(id)) touched.set(id, { before: { startOffset, endOffset } });
+      };
+      const junctionSnaps = trimStairUnderJunctions(graph, step2aEntries);
+      for (const snap of junctionSnaps) captureBefore(snap.wall.id, snap.startOffset, snap.endOffset);
+      const trimChanges = [];
+      for (const [id, rec] of touched) {
+        const w = graph.shapeMap.get(id);
+        if (!w) continue;
+        const after = { startOffset: w.startOffset, endOffset: w.endOffset };
+        if (after.startOffset !== rec.before.startOffset || after.endOffset !== rec.before.endOffset) {
+          trimChanges.push({ id, before: rec.before, after });
+        }
+      }
+      if (trimChanges.length > 0) {
+        undoFns.push(() => {
+          for (const c of trimChanges) {
+            const w = graph.shapeMap.get(c.id);
+            if (w) { w.startOffset = c.before.startOffset; w.endOffset = c.before.endOffset; }
+          }
+        });
+        redoFns.push(() => {
+          for (const c of trimChanges) {
+            const w = graph.shapeMap.get(c.id);
+            if (w) { w.startOffset = c.after.startOffset; w.endOffset = c.after.endOffset; }
+          }
+        });
+      }
+    }
+
+    // ステップ4: 境界エッジのトポロジー差分同期（脱出時に確定・永続化）
+    const edgeBefore = snapshotEdges(graph);
+    runInAction(() => syncEdgesFromTopology(graph));
+    const edgeAfter = snapshotEdges(graph);
+    if (JSON.stringify(edgeBefore) !== JSON.stringify(edgeAfter)) {
+      undoFns.push(() => restoreEdges(graph, edgeBefore));
+      redoFns.push(() => restoreEdges(graph, edgeAfter));
+    }
+
+    // 全変更を単一の undo エントリとして登録（undo は逆順実行）
+    if (undoFns.length > 0) {
+      undoManager.push(
+        () => { [...undoFns].reverse().forEach(fn => fn()); },
+        () => { redoFns.forEach(fn => fn()); },
+      );
+    }
+
+    // ステップ5: 階段設置階の上階（自動設置ペアRoom・最上階の階段吹抜け）へ階段側仕上げ壁を
+    // 同期生成する。上階は脱出処理（ステップ2）の対象外のため、これが無いと上階で階段側の
+    // 仕上げ材が描画されない。内装未編集の自動Roomへは設置階ペアRoomの内装を写してから
+    // 生成する（階段仕上げ材の参照）。syncUpperFloors と同じ自動同期のため undo 対象外。
+    if (graph.stairs.length > 0) {
+      const { syncUpperStairFinishWalls } = await import('./finish/stair/stairFloorSync.js');
+      await syncUpperStairFinishWalls(project, graph, {
+        dimsOf: (g, room) => fmode?.roomWallDims?.(g, room) || {},
+      });
+    }
+
+    // 要件2：フットプリント確定後に構造モードへ問合せ、自階＋上の全階の構造部材を更新する。
+    await reflectStructuralAfterFinishExit(graph.plane.id, goingToStructure);
+  }
+
   // ---- モード切り替え：finish→floorplan で部屋ごとに壁を自動生成 ----
   async function handleModeChange(newMode) {
     // 以降のモード固有処理はこの graph を対象とする。R階伏図からの脱出時は降りた先の階で再取得する。
@@ -1071,15 +1352,12 @@ const App = observer(() => {
     // 構造モード突入と同時に構造情報ダイアログをポップアップし、主要構造の指定有無を検証
     // （実効値 = 階の上書きがあればそれ、なければ建物全体の既定値）
     if (appMode !== 'structure' && newMode === 'structure') {
-      setShowStructuralInfoDialog(true);
-      runStructuralModeSetup(graph).catch(console.error);
+      runStructuralEntryBoundary(graph).catch(console.error);
     }
 
     // 構造モードを抜けるときは図面合成のバインディング（編集可能peek）を停止・確定保存する。
     if (appMode === 'structure' && newMode !== 'structure') {
-      figureBindingManager.deactivate();
-      setStructComposition(null);
-      setShowStructuralInfoDialog(false);
+      runStructuralExitBoundary();
 
       // R階伏図（屋根専用平面）は構造モード専用の合成平面で他モードには存在しない。
       // 他モードへ移る場合は直下の実体階（最上階）へ降りてから切り替える。
@@ -1097,262 +1375,11 @@ const App = observer(() => {
     // 突き合わせて再解釈（辺の喪失によるセル統合・部分指定化）した上で、
     // 通り芯変更等のトポロジー差分でエッジを再同期する
     if (appMode !== 'finish' && newMode === 'finish') {
-      // 最上階なら直下階の屋内階段footprintへ階段吹抜け（STAIR_VOID）を補完する
-      // （既存データ修復。syncUpperFloors と同じ自動同期のため undo 対象外）
-      const { ensureTopStairVoid } = await import('./finish/stair/stairFloorSync.js');
-      await ensureTopStairVoid(project, graph);
-
-      const entryUndoFns = [];
-      const entryRedoFns = [];
-
-      const roomsBefore = snapshotRoomsState(graph);
-      const stairRoomChanges = [];
-      runInAction(() => {
-        reinterpretRoomsOnEntry(graph);
-        // roomIdなしStair（旧データ・上階自動設置分）へ階段Roomを補完（開くだけで修復）
-        stairRoomChanges.push(...ensureStairRooms(graph));
-      });
-      const roomsAfter = snapshotRoomsState(graph);
-      if (JSON.stringify(roomsBefore) !== JSON.stringify(roomsAfter)) {
-        entryUndoFns.push(() => restoreRoomsState(graph, roomsBefore));
-        entryRedoFns.push(() => restoreRoomsState(graph, roomsAfter));
-      }
-      // 補完した Room 自体は rooms スナップショットが巻き戻すが、Stair.roomId は対象外のため個別に戻す
-      if (stairRoomChanges.length > 0) {
-        entryUndoFns.push(() => { for (const c of stairRoomChanges) c.stair.setField('roomId', c.prevRoomId); });
-        entryRedoFns.push(() => { for (const c of stairRoomChanges) c.stair.setField('roomId', c.room.id); });
-      }
-
-      const before = snapshotEdges(graph);
-      runInAction(() => syncEdgesFromTopology(graph));
-      const after = snapshotEdges(graph);
-      if (JSON.stringify(before) !== JSON.stringify(after)) {
-        entryUndoFns.push(() => restoreEdges(graph, before));
-        entryRedoFns.push(() => restoreEdges(graph, after));
-      }
-
-      // 部屋の再解釈→エッジ再同期の順に適用したため、undo は逆順で巻き戻す
-      if (entryUndoFns.length > 0) {
-        undoManager.push(
-          () => { [...entryUndoFns].reverse().forEach(fn => fn()); },
-          () => { entryRedoFns.forEach(fn => fn()); },
-        );
-      }
+      await runFinishEntryBoundary(graph);
     }
 
     if (appMode === 'finish' && newMode !== 'finish') {
-      // ステップ1: 孤立壁（isRoomWall かつ未 claim）を収集・削除
-      const claimedWallIds = new Set();
-      for (const room of graph.rooms) {
-        for (const id of room.generatedWallIds) claimedWallIds.add(id);
-      }
-      const orphanSnapshots = [];
-      for (const [id, shape] of graph.shapeMap) {
-        if (shape.isRoomWall && !claimedWallIds.has(id)) orphanSnapshots.push(snapshotWall(shape));
-      }
-
-      const undoFns = [];
-      const redoFns = [];
-
-      // 孤立壁の削除（合体で消えた部屋の壁）
-      if (orphanSnapshots.length > 0) {
-        orphanSnapshots.forEach(s => graph.removeShape(s.id));
-        undoFns.push(() => restoreWallsFromSnapshots(graph, orphanSnapshots));
-        redoFns.push(() => orphanSnapshots.forEach(s => graph.removeShape(s.id)));
-      }
-
-      // 階段の上り口・下り口の開口辺（この辺上に部屋の壁を作らない）。
-      // 自階の階段は entry（上り口）＋ arrival（下り口。中間階では下階の同形状階段の到達辺を兼ねる）。
-      // 最上階（階段実体なし・階段吹抜けのみ）は直下階の階段の到達辺＝下り口を開口に加える
-      // （世界座標は全階共通のため、直下階グラフで計算した辺をそのまま使える）。
-      const stairOpenings = graph.stairs.flatMap(s => stairPortEdges(s, graph));
-      if (graph.rooms.some(r => r.feature === RoomFeature.STAIR_VOID)) {
-        const planes = project.planes;
-        const planeIdx = planes.findIndex(p => p.id === graph.plane?.id);
-        if (planeIdx > 0) {
-          const below = await floorSwapManager.peek(planes[planeIdx - 1], project.structGraph);
-          stairOpenings.push(...below.stairs.flatMap(s => stairPortEdges(s, below, ['arrival'])));
-        }
-      }
-
-      // 寸法は実材厚から導出（modeRef.current は脱出直前でまだ生存・材ロード済み）。
-      const fmode = modeRef.current;
-
-      // ステップ2a: 階段下部屋（破れ線先セルに部屋指定された階段下エリア）の壁生成。
-      // ステップ2より先に行い、この部屋を generatedWallIds 済みにしてステップ2の通常経路
-      // （偏芯を持たない対称壁）から除外する。claimedEdges（underEdges）は破れ線・踊り場境界
-      // （無壁）と、この部屋が既に受け持った外周（外側部屋の薄壁を含む）の重複生成を防ぐため、
-      // ステップ2・3の開口辺フィルタへ合流させる（生成順: 2a→2→3）。
-      // claim（stairUnderClaimedEdges）は壁生成（generateStairUnderWalls）と分離しており、
-      // 再脱出時（部屋が既に generatedWallIds を持ち壁は再生成しない）でも毎回行う——冪等性
-      // のため。省略すると2回目の脱出でclaimが空になり、ステップ3の外壁（毎回全削除・再生成）
-      // で初回に抑止された辺に壁が生成されてしまう。
-      // 既知制約: 同一部屋が2階段にまたがる退化構成（stairUnderRoomsが同じroomを複数返す）は
-      // 先に処理された stair の claim/壁生成が優先される。
-      // step2aEntries: この部屋群が現に持つ2a壁（新規生成分に加え、再脱出時に生成をスキップした
-      // 既存分も含む）を { wall, room } で保持する。ステップ3後のトリムパス
-      // （trimStairUnderJunctions。隣接壁・外壁との T字/出隅/入隅取り合い）の対象にする
-      // ——room は出隅/入隅判定（象限がそのRoomのセルに属するか）に使う。再脱出時も対象に
-      // 含めるのは、ステップ3の外壁は毎回全削除・再生成されるため（面位置は決定的なら実質
-      // 不変だが、CLがユーザー編集で動いた場合にも追従できるようにする）。既に正しい位置なら
-      // トリムは再度no-opになるだけで冪等（REASONED、下記トリムパスの説明を参照）。
-      const underEdges = [];
-      const step2aEntries = [];
-      for (const { stair, room, splitCLIds } of (fmode?.stairUnderRooms?.(graph) ?? [])) {
-        underEdges.push(...stairUnderClaimedEdges(graph, room));
-        if (room.generatedWallIds.size > 0) {
-          // 再脱出時: 壁は再生成しないが、既存の2a壁はトリム対象として拾う
-          for (const id of room.generatedWallIds) {
-            const w = graph.shapeMap.get(id);
-            if (w) step2aEntries.push({ wall: w, room });
-          }
-          continue;
-        }
-        const { walls } = generateStairUnderWalls(
-          graph, stair, room, fmode?.roomWallDims?.(graph, room) || {},
-          { splitCLIds, dimsOf: r => fmode?.roomWallDims?.(graph, r) || {} },
-        );
-        if (walls.length === 0) continue;
-
-        walls.forEach(w => room.generatedWallIds.add(w.id));
-        step2aEntries.push(...walls.map(w => ({ wall: w, room })));
-        const snapshots = walls.map(snapshotWall);
-        const wallIds = walls.map(w => w.id);
-
-        const r = room;
-        undoFns.push(() => { wallIds.forEach(id => graph.removeShape(id)); r.generatedWallIds.clear(); });
-        redoFns.push(() => { restoreWallsFromSnapshots(graph, snapshots).forEach(w => r.generatedWallIds.add(w.id)); });
-      }
-
-      // ステップ2: 新規壁生成（generatedWallIds なし かつ 部分指定でない部屋）
-      // 部分指定（referenceRoomIds あり）は親が外周壁を担うためスキップ。
-      // ただし部屋の部分指定から階段変換した階段（feature=STAIR かつ referenceRoomIds 非空）は、
-      // 親と隣接する面（parentAdjacentEdges）だけ抑止すれば足りるため対象に含める（ルール7）。
-      for (const room of graph.rooms) {
-        // 階段ペアRoom（feature=STAIR）も対象に含める: 側面の階段側にも壁（仕上げ面・仕上げ線）を
-        // 生成する（上り口・下り口は stairOpenings フィルタで開口のまま）。壁が無いと
-        // resolveStairSideLines が隣接部屋側の壁で側面線を消した際に階段側の仕上げ面が無表示になる。
-        // 階段吹抜け（STAIR_VOID）は引き続き対象外（吹抜けは床の開口であり自室の内周壁を持たない）。
-        if (room.feature === RoomFeature.STAIR_VOID) continue;
-        if (room.generatedWallIds.size > 0) continue;
-        if (room.referenceRoomIds && room.referenceRoomIds.size > 0 && room.feature !== RoomFeature.STAIR) continue;
-
-        const parentEdges = room.feature === RoomFeature.STAIR ? parentAdjacentEdges(graph, room) : [];
-        const walls = generateRoomWallsFromOutline(graph, room, fmode?.roomWallDims?.(graph, room) || {}, [...stairOpenings, ...underEdges, ...parentEdges]);
-        if (walls.length === 0) continue;
-
-        walls.forEach(w => room.generatedWallIds.add(w.id));
-        const snapshots = walls.map(snapshotWall);
-        const wallIds = walls.map(w => w.id);
-
-        const r = room;
-        undoFns.push(() => { wallIds.forEach(id => graph.removeShape(id)); r.generatedWallIds.clear(); });
-        redoFns.push(() => { restoreWallsFromSnapshots(graph, snapshots).forEach(w => r.generatedWallIds.add(w.id)); });
-      }
-
-      // ステップ3: 外壁の再生成（既存の isExteriorWall 壁を削除して作り直す）
-      const oldExteriorSnapshots = [];
-      for (const shape of graph.shapeMap.values()) {
-        if (shape.isExteriorWall) oldExteriorSnapshots.push(snapshotWall(shape));
-      }
-      if (oldExteriorSnapshots.length > 0) {
-        oldExteriorSnapshots.forEach(s => graph.removeShape(s.id));
-      }
-      const newExteriorWalls = generateExteriorWalls(graph, fmode?.exteriorWallDims?.(graph) || {}, [...stairOpenings, ...underEdges]);
-      const newExteriorSnapshots = newExteriorWalls.map(snapshotWall);
-      if (oldExteriorSnapshots.length > 0 || newExteriorSnapshots.length > 0) {
-        undoFns.push(() => {
-          newExteriorSnapshots.forEach(s => graph.removeShape(s.id));
-          restoreWallsFromSnapshots(graph, oldExteriorSnapshots);
-        });
-        redoFns.push(() => {
-          oldExteriorSnapshots.forEach(s => graph.removeShape(s.id));
-          restoreWallsFromSnapshots(graph, newExteriorSnapshots);
-        });
-      }
-
-      // ステップ3.5: ステップ2aで生成した階段下壁（偏芯主壁＋薄壁）の突き当たり処理。
-      // ステップ3の後に行う: この時点で自室壁（2a）・隣接部屋壁（2）・外壁（3）が全て揃っており、
-      // 取り合い相手が出そろっているため。
-      // trimStairUnderJunctions（stairUnderWalls.js）を使う: 手動壁の graph.trimIntersectingWalls
-      // は相手壁の最近傍端点を無条件にfaceへスナップするため、2a壁の端が既存壁の中間（T字）に
-      // 突き当たる場合に既存壁側まで切り詰めてしまう（要件のバグ報告どおり実コードで確認。
-      // core.js:1735-1770 の cand 計算に交点までの距離ガードが無い）。手動壁の挙動は変えず、
-      // 2a壁専用にT字（既存壁は不変・2a壁側のみ近位faceで止める）/コーナー（出隅は遠位face、
-      // 入隅は近位faceへ双方スナップ）を区別する専用関数を stairUnderWalls.js に用意した
-      // （判断根拠: 出隅/入隅の材料範囲判定は偏芯壁対応の materialRange・部屋セル象限判定という
-      // 2a壁固有の概念を要し、手動壁向けの汎用 core.js API を汚さない方が既存コードの構造に
-      // 馴染む）。2a壁同士は trimStairUnderJunctions 内で対象外にする（生成時のコーナーマップで
-      // 既に正しく取り合っているため）。
-      // undo/redo は壁オブジェクト参照を保持しない（このエントリ内の後続 undo/redo で 2a壁・
-      // 隣接部屋壁・外壁が削除→再生成されオブジェクト実体が変わるため）。壁IDで解決し直す
-      // before/after 全体差分方式（edgeBefore/edgeAfter と同じ発想）を使う。
-      // 再脱出時の冪等性: step2aEntries には壁生成をスキップした既存2a壁も含めているため
-      // （このケースでは undoFns/redoFns への 2a壁生成エントリは積まれないが、トリムパスは
-      // 毎回走る）、外壁が毎回作り直されても再トリムで同じ face 位置に再収束する（面位置が
-      // 前回と不変なら candidate offset も不変で実質no-op。REASONED）。
-      if (step2aEntries.length > 0) {
-        const touched = new Map(); // wallId -> { before: {startOffset, endOffset} }
-        const captureBefore = (id, startOffset, endOffset) => {
-          if (!touched.has(id)) touched.set(id, { before: { startOffset, endOffset } });
-        };
-        const junctionSnaps = trimStairUnderJunctions(graph, step2aEntries);
-        for (const snap of junctionSnaps) captureBefore(snap.wall.id, snap.startOffset, snap.endOffset);
-        const trimChanges = [];
-        for (const [id, rec] of touched) {
-          const w = graph.shapeMap.get(id);
-          if (!w) continue;
-          const after = { startOffset: w.startOffset, endOffset: w.endOffset };
-          if (after.startOffset !== rec.before.startOffset || after.endOffset !== rec.before.endOffset) {
-            trimChanges.push({ id, before: rec.before, after });
-          }
-        }
-        if (trimChanges.length > 0) {
-          undoFns.push(() => {
-            for (const c of trimChanges) {
-              const w = graph.shapeMap.get(c.id);
-              if (w) { w.startOffset = c.before.startOffset; w.endOffset = c.before.endOffset; }
-            }
-          });
-          redoFns.push(() => {
-            for (const c of trimChanges) {
-              const w = graph.shapeMap.get(c.id);
-              if (w) { w.startOffset = c.after.startOffset; w.endOffset = c.after.endOffset; }
-            }
-          });
-        }
-      }
-
-      // ステップ4: 境界エッジのトポロジー差分同期（脱出時に確定・永続化）
-      const edgeBefore = snapshotEdges(graph);
-      runInAction(() => syncEdgesFromTopology(graph));
-      const edgeAfter = snapshotEdges(graph);
-      if (JSON.stringify(edgeBefore) !== JSON.stringify(edgeAfter)) {
-        undoFns.push(() => restoreEdges(graph, edgeBefore));
-        redoFns.push(() => restoreEdges(graph, edgeAfter));
-      }
-
-      // 全変更を単一の undo エントリとして登録（undo は逆順実行）
-      if (undoFns.length > 0) {
-        undoManager.push(
-          () => { [...undoFns].reverse().forEach(fn => fn()); },
-          () => { redoFns.forEach(fn => fn()); },
-        );
-      }
-
-      // ステップ5: 階段設置階の上階（自動設置ペアRoom・最上階の階段吹抜け）へ階段側仕上げ壁を
-      // 同期生成する。上階は脱出処理（ステップ2）の対象外のため、これが無いと上階で階段側の
-      // 仕上げ材が描画されない。内装未編集の自動Roomへは設置階ペアRoomの内装を写してから
-      // 生成する（階段仕上げ材の参照）。syncUpperFloors と同じ自動同期のため undo 対象外。
-      if (graph.stairs.length > 0) {
-        const { syncUpperStairFinishWalls } = await import('./finish/stair/stairFloorSync.js');
-        await syncUpperStairFinishWalls(project, graph, {
-          dimsOf: (g, room) => fmode?.roomWallDims?.(g, room) || {},
-        });
-      }
-
-      // 要件2：フットプリント確定後に構造モードへ問合せ、自階＋上の全階の構造部材を更新する。
-      await reflectStructuralAfterFinishExit(graph.plane.id, newMode === 'structure');
+      await runFinishExitBoundary(graph, { goingToStructure: newMode === 'structure' });
     }
     // 旧モードを同期的にクリア。setMode(null) は effect 内（描画後）に走るため、
     // ここでクリアしないと appMode 変更直後の1レンダリングで旧モードのまま
@@ -1380,11 +1407,19 @@ const App = observer(() => {
   }
 
   // ---- フロア切替（仕上げモード中）：仕上げモードを抜けずに別階の仕上げ図へ移動する ----
-  // setActiveFloorId により mode再ロード effect が走り、新グラフで FinishModeState を再生成（init で材再ロード）。
-  // 命名中（namingRoomId）等の過渡状態は FinishModeState ごと破棄され自然にリセットされる。
+  // 「現モードの当該階を平面モード相当に確定→階移動→現モードへ再突入」を handleModeChange の
+  // モード境界処理と共有する（境界処理自体は appMode を変えない）。
+  // 脱出境界処理は switchFloor 前（modeRef.current がまだ切替前階のまま生存＝roomWallDims等が使える）、
+  // 突入境界処理は switchFloor 後の graph（project.activeGraph を読み直したもの。.claude/floor-design.md）
+  // に対して行い、それが終わってから setActiveFloorId でモード再ロード effect を走らせる
+  // （先に activeFloorId を更新すると、境界処理前のグラフで FinishModeState が生成されてしまう）。
   async function handleFinishFloorSwitch(planeId) {
     if (planeId === project.activePlaneId) return;
+    const graph = project.activeGraph; // 切替前階（脱出境界処理の対象）
+    await runFinishExitBoundary(graph, { goingToStructure: false });
     await switchFloor(planeId);
+    const nextGraph = project.activeGraph; // 切替後は読み直す
+    await runFinishEntryBoundary(nextGraph);
     setActiveFloorId(planeId);
     setSnapPoint(null);
     setNearCL(null);
@@ -1396,12 +1431,16 @@ const App = observer(() => {
 
   // ---- フロア切替（構造モード中）：構造モードを抜けずに別階の構造伏図へ移動する ----
   // planeId のみ受ける経路（検討チップ）。移動先平面の先頭スロットを選択状態にする。
+  // 情報ダイアログの開閉はここでは変更しない（毎回ポップアップするのはUXとして不合理）。
   async function handleStructuralFloorSwitch(planeId) {
     if (planeId === project.activePlaneId) {
       setActiveStructSlotKey(firstSlotKeyForPlane(buildStructuralFigureSlots(project), planeId));
       return;
     }
+    runStructuralExitBoundary({ closeInfoDialog: false });
     await switchFloor(planeId);
+    const nextGraph = project.activeGraph; // 切替後は読み直す
+    await runStructuralEntryBoundary(nextGraph, { openInfoDialog: false });
     setActiveFloorId(planeId);
     setActiveStructSlotKey(firstSlotKeyForPlane(buildStructuralFigureSlots(project), planeId));
     setMode(null);
@@ -1414,7 +1453,6 @@ const App = observer(() => {
     setClDialog(null);
     setWallDialog(null);
     setOpeningDialog(null);
-    await runStructuralModeSetup(project.activeGraph);
   }
 
   // ---- 図面スロット切替（構造モードのスライダー）：slotType:planeId 単位で選択・移動する ----
@@ -1426,7 +1464,10 @@ const App = observer(() => {
       setActiveStructSlotKey(slotKey); // 同一平面内のスロット選択（部材合成の細分は次フェーズ）
       return;
     }
+    runStructuralExitBoundary({ closeInfoDialog: false });
     await switchFloor(slot.planeId);
+    const nextGraph = project.activeGraph; // 切替後は読み直す
+    await runStructuralEntryBoundary(nextGraph, { openInfoDialog: false });
     setActiveFloorId(slot.planeId);
     setActiveStructSlotKey(slotKey);
     setMode(null);
@@ -1439,7 +1480,21 @@ const App = observer(() => {
     setClDialog(null);
     setWallDialog(null);
     setOpeningDialog(null);
-    await runStructuralModeSetup(project.activeGraph);
+  }
+
+  // ---- フロア切替（敷地モード中）：敷地モードを維持したまま別階へ移動する ----
+  // 敷地モードは階に紐づく確定処理（部屋壁生成・図面合成バインディング等）を持たないため、
+  // モード境界処理は不要（switchFloor するだけでよい）。
+  async function handleSiteFloorSwitch(planeId) {
+    if (planeId === project.activePlaneId) return;
+    await switchFloor(planeId);
+    setActiveFloorId(planeId);
+    setSnapPoint(null);
+    setNearCL(null);
+    setNearWall(null);
+    setNearOpening(null);
+    setCursorWorld(null);
+    setMenu(null);
   }
 
   function handleAddFloor(e) {
@@ -3028,6 +3083,7 @@ const App = observer(() => {
         onSwitch={
           appMode === 'structure' ? handleStructuralSlotSwitch
           : appMode === 'finish'  ? handleFinishFloorSwitch
+          : appMode === 'site'    ? handleSiteFloorSwitch
           : handleFloorSwitch
         }
         isLandscape={isLandscape}
