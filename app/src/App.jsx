@@ -1340,6 +1340,17 @@ const App = observer(() => {
         );
       }
 
+      // ステップ5: 階段設置階の上階（自動設置ペアRoom・最上階の階段吹抜け）へ階段側仕上げ壁を
+      // 同期生成する。上階は脱出処理（ステップ2）の対象外のため、これが無いと上階で階段側の
+      // 仕上げ材が描画されない。内装未編集の自動Roomへは設置階ペアRoomの内装を写してから
+      // 生成する（階段仕上げ材の参照）。syncUpperFloors と同じ自動同期のため undo 対象外。
+      if (graph.stairs.length > 0) {
+        const { syncUpperStairFinishWalls } = await import('./finish/stair/stairFloorSync.js');
+        await syncUpperStairFinishWalls(project, graph, {
+          dimsOf: (g, room) => fmode?.roomWallDims?.(g, room) || {},
+        });
+      }
+
       // 要件2：フットプリント確定後に構造モードへ問合せ、自階＋上の全階の構造部材を更新する。
       await reflectStructuralAfterFinishExit(graph.plane.id, newMode === 'structure');
     }

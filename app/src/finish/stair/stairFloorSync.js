@@ -4,6 +4,8 @@ import { saveFloor } from '../../storage/db.js';
 import { undoManager } from '../../undoManager.js';
 import { refreshCells } from '../gridCells.js';
 import { ensureStairRooms } from '../roomReinterpret.js';
+import { generateRoomWallsFromOutline } from '../wallGeneration.js';
+import { stairPortEdges } from './stairGeometry.js';
 import { RoomFeature, RoomKind } from '@core';
 
 const EPS = 1e-6;
@@ -161,6 +163,7 @@ function addMissingCLs(needed, sourceGraph, structGraph, upperGraph) {
  *
  * 壁は生成しない（ユーザー決定：階段設置と同時の壁生成は行わない。上階の外壁は
  * ペアRoom・階段吹抜けの kind=INTERIOR を通じて通常の屋内外判定・外壁生成に委ねる）。
+ * 階段側の仕上げ壁は、仕上げモード脱出時に syncUpperStairFinishWalls が別途同期生成する。
  *
  * 非アクティブ階への変更はいずれも floorSwapManager.peek → saveFloor の既存パターンを踏襲する。
  * 同期対象にアクティブ階が含まれる場合（syncUpperFloorsAuto 経由）はメモリ上のグラフを
@@ -305,6 +308,88 @@ export async function ensureTopStairVoid(project, activeGraph) {
     if (addStairVoidRoom(activeGraph, cells)) changed = true;
   }
   return changed;
+}
+
+/**
+ * 階段設置階の仕上げモード脱出時に、上階の階段 footprint（自動設置ペアRoom・最上階の
+ * 階段吹抜け STAIR_VOID）へ「階段側の仕上げ壁」を同期生成する。
+ *
+ * 設置階ではペアRoom（feature=STAIR）が脱出時の壁生成（App.jsx ステップ2）で階段側の
+ * 仕上げ面・仕上げ線を得るが、上階は脱出処理の対象外のため壁が無く、階段側仕上げ材が
+ * 描画されない。この同期がそれを塞ぐ。生成規則は設置階の挙動に揃える:
+ * - 対象は「壁が未生成（generatedWallIds が空）」の Room のみ。生成済みの Room には
+ *   触れない（設置階の「壁は一度生成したら再生成しない」挙動と同じ）。
+ * - 開口辺: 中間階（階段実体あり）＝その階の階段の上り口＋下り口（stairPortEdges）。
+ *   最上階（STAIR_VOID）＝直下階の同 footprint 階段の到達辺（下り口）。
+ * - 階段仕上げ材の参照（内装コピー方式）: 内装未編集（templateKey なし・個別上書きなし）の
+ *   自動 Room へ、設置階ペアRoom の templateKey・customOverrides を写してから壁を生成する。
+ *   以降はその階の Room（仕上げ表のカード）が単一情報源になる。
+ * - 多層設置: 設置階から最上階まで、footprint 一致の階段実体を連鎖でたどる。
+ *
+ * syncUpperFloors と同じ自動同期のため undo 対象外。呼び出しは仕上げモード脱出時
+ * （設置階がアクティブな時）のみ＝同期対象は常に非アクティブ階（peek → saveFloor）。
+ *
+ * @param {object} project
+ * @param {object} activeGraph - 脱出した階（アクティブ）のグラフ
+ * @param {object} [opts]
+ * @param {(graph, room) => ({wallBase:number, wallFinish:number}|null)} [opts.dimsOf]
+ *   壁寸法の解決（FinishModeState.roomWallDims。graph には対象階の peek グラフを渡す）
+ */
+export async function syncUpperStairFinishWalls(project, activeGraph, { dimsOf } = {}) {
+  const planes = project.planes;
+  const active = activeGraph?.plane;
+  if (!active || activeGraph.stairs.length === 0) return;
+  const idx = planes.findIndex(p => p.id === active.id);
+  if (idx < 0 || idx + 1 >= planes.length) return;
+
+  // 階段ごとに「直下階の階段実体」を追跡する連鎖（最上階 STAIR_VOID の到達辺開口の計算に使う）
+  let chains = activeGraph.stairs.map(stair => ({
+    srcRoom: stair.roomId ? (activeGraph.roomMap.get(stair.roomId) ?? null) : null,
+    belowStair: stair,
+    belowGraph: activeGraph,
+  }));
+
+  for (let i = idx + 1; i < planes.length && chains.length > 0; i++) {
+    const plane = planes[i];
+    if (plane.id === project.activePlane?.id) return; // 想定外（呼び出しは脱出階がアクティブな時のみ）
+    const temp = await floorSwapManager.peek(plane, project.structGraph);
+    let changed = false;
+    const next = [];
+
+    for (const chain of chains) {
+      const translated = translateCellSet(chain.belowStair.cells, chain.belowGraph, project.structGraph, temp);
+      if (!translated) continue; // CL変換不能 → 安全側でこの連鎖は打ち切り
+      const cells = refreshCells(translated, temp);
+      if (cells.size === 0) continue;
+
+      // この階の同 footprint 階段（中間階）。連鎖の次段はこの階段を「直下階の階段」とする
+      const tempStair = temp.stairs.find(s => setsEqual(refreshCells(s.cells, temp), cells)) ?? null;
+      if (tempStair) next.push({ ...chain, belowStair: tempStair, belowGraph: temp });
+
+      const room = temp.rooms.find(r =>
+        (r.feature === RoomFeature.STAIR || r.feature === RoomFeature.STAIR_VOID) &&
+        setsEqual(refreshCells(r.cells, temp), cells)) ?? null;
+      if (!room || room.generatedWallIds.size > 0) continue;
+
+      // 内装コピー: 未編集の自動 Room のみ（ユーザー編集済みの内装は上書きしない）
+      if (chain.srcRoom && room.templateKey == null && room.customOverrides.size === 0) {
+        if (chain.srcRoom.templateKey != null) { room.setTemplateKey(chain.srcRoom.templateKey); changed = true; }
+        for (const [k, v] of chain.srcRoom.customOverrides) { room.customOverrides.set(k, v); changed = true; }
+      }
+
+      const openings = (room.feature === RoomFeature.STAIR && tempStair)
+        ? stairPortEdges(tempStair, temp)
+        : stairPortEdges(chain.belowStair, chain.belowGraph, ['arrival']);
+      const walls = generateRoomWallsFromOutline(temp, room, dimsOf?.(temp, room) || {}, openings);
+      if (walls.length > 0) {
+        walls.forEach(w => room.generatedWallIds.add(w.id));
+        changed = true;
+      }
+    }
+
+    if (changed) await saveFloor(plane.id, serializeGraph(temp));
+    chains = next;
+  }
 }
 
 /**
