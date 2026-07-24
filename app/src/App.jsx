@@ -385,8 +385,9 @@ const App = observer(() => {
     }
     if (ctx.mode && ctx.mode !== appMode) {
       if (appMode === 'structure' && ctx.mode !== 'structure') {
-        // 構造モードからの離脱は図面合成バインディングの停止が必須（handleModeChange と同じ後始末）
-        figureBindingManager.deactivate();
+        // 構造モードからの離脱は図面合成バインディングの停止が必須（handleModeChange と同じ後始末。
+        // 履歴ナビゲーションは「素の切替」のため他階反映等の境界同期は行わない）
+        await figureBindingManager.deactivate();
         setStructComposition(null);
         setShowStructuralInfoDialog(false);
       }
@@ -897,8 +898,9 @@ const App = observer(() => {
     // 自階：自動補完・柱芯・材変換・材寸算定・採番（structuralRecompute.js。undo 非依存の純計算）。
     const { changed } = await recomputeStructuralForGraph(subjectGraph, project, belowMainStructure);
 
-    // 1つ下の階（構造伏図に映る柱の供給元）も実効主構造へ揃える。突入時は belowGraph が読み取り専用 peek の
-    // ため表示用（非永続）、主構造変更時は既に commit 済みで編集可能 peek のため恒久化される——これにより
+    // 1つ下の階（構造伏図に映る柱の供給元）も実効主構造へ揃える。突入時は reflectStructuralToOtherFloors が
+    // 事前に下階を反映・永続化済みのため、ここは peek 済みバインディングへの差分適用（通常は差分ゼロ）。
+    // 主構造変更時は既に commit 済みで編集可能 peek のため恒久化される——これにより
     // 「主構造を変えても下階の柱が旧材のまま取り残される」不具合を解消する。convertMembersToEffectiveMaterial は
     // 既存の旧材を変換、autoFillColumns は未生成分を新材で生成する（差分のみ）。
     // 主構造変更時のみ下階の before/after を取り、自階と同じ undo エントリで一括復元する。
@@ -938,7 +940,7 @@ const App = observer(() => {
   }
 
   // ---- 構造モード突入時のセットアップ（屋根平面同期・バインディング生成・再計算）----
-  // handleModeChange('structure') と、構造モード中のフロア切替（onSwitchStructuralFloor）の両方から呼ぶ。
+  // handleModeChange('structure') と、構造モード中のフロア切替（switchFloorKeepingMode）の両方から呼ぶ。
   async function runStructuralModeSetup(targetGraph) {
     const effectiveMainStructure = targetGraph.structureOverride ?? project.structuralInfo.mainStructure;
     if (effectiveMainStructure === '未定') {
@@ -947,6 +949,12 @@ const App = observer(() => {
 
     // 最上階の直上に屋根専用平面（小屋伏／R階伏）を同期する（undo対象外。建物形状が変わった時点でやり直し前提のインフラ）。
     runInAction(() => syncRoofPlane(project));
+
+    // 突入時点でアクティブ階以外の全実体階へも構造部材を反映・永続化する（undo対象外インフラ）。
+    // 自階だけの再計算では「訪れた伏図の階」にしか部材が入らず、他の伏図・他モードの図面が空のままになる。
+    // バインディング構築より先に行うことで、下階レイヤの peek は反映済みデータを読む
+    // （表示用 autofill は差分ゼロとなり、編集可能 peek のベースラインとも一致する）。
+    await reflectStructuralToOtherFloors();
 
     // 図面合成（構造伏図＝自階床下材＋1つ下の階の柱）のバインディングを組み立てる。
     // 非アクティブな下階は FigureBindingManager 内部で floorSwapManager.peek() により読み取り専用に覗く
@@ -990,17 +998,25 @@ const App = observer(() => {
     if (changed) await saveFloor(plane.id, serializeGraph(temp));
   }
 
+  // アクティブ階以外の全実体階の構造部材を peek+再計算+保存で反映する（undo 対象外の決定的インフラ）。
+  // 構造モードの境界（突入・脱出）と階追加フローが共有する「他階への構造反映」の単一実装——
+  // これが無いと、構造モードで生成・編集した部材が「訪れた伏図の階」にしか入らず、
+  // 他モード・他階へ移動したときに他の伏図・平面図へ構造部材が現れない（問題.md）。
+  async function reflectStructuralToOtherFloors() {
+    const activeId = project.activePlaneId;
+    for (const plane of project.planes) {
+      if (plane.id === activeId) continue;
+      await recomputeInactiveStructural(plane);
+    }
+  }
+
   // 要件1：階追加後。追加で N（負担階数）・基礎指定が変わるため、全実体階の構造部材を更新する。
   // アクティブ（追加直後の表示階）はメモリ上で、その他の実体階は peek+保存で反映する。
   // undo は個別に積まない（呼び出し元の withFloorAddUndo が階追加フロー全体を1エントリで記録する）。
   // これにより別階・別モードへ移動したとき、更新後の柱・梁・材寸がそのまま描画される。
   async function reflectStructuralAfterFloorAdd() {
-    const activeId = project.activePlaneId;
     await recomputeActiveStructural(false);
-    for (const plane of project.planes) {
-      if (plane.id === activeId) continue;
-      await recomputeInactiveStructural(plane);
-    }
+    await reflectStructuralToOtherFloors();
   }
 
   // 要件2：仕上げモード退出後。フットプリント（外壁線・吹抜け）変更は鉛直連続性ゲートにより
@@ -1026,12 +1042,17 @@ const App = observer(() => {
     await runStructuralModeSetup(targetGraph);
   }
 
-  // ---- モード境界: 構造モード脱出（図面合成バインディングの停止・確定保存）----
+  // ---- モード境界: 構造モード脱出（図面合成バインディングの停止・確定保存・他階への反映）----
   // closeInfoDialog: スライダー階切替では情報ダイアログの開閉状態を変更しない。
-  function runStructuralExitBoundary({ closeInfoDialog = true } = {}) {
-    figureBindingManager.deactivate();
+  // reflectOtherFloors: モード内編集（出幅・主構造・部材編集等）の他階への波及を脱出時に確定する。
+  //   モード維持階切替では直後の突入境界が同じ反映を行うため false で省く。
+  async function runStructuralExitBoundary({ closeInfoDialog = true, reflectOtherFloors = true } = {}) {
+    // 編集可能peek（下階）の保留編集の保存完了まで待つ——直後に同じ階を peek する
+    // 他階反映・階切替が、書込み前の古いデータを読む競合を防ぐ。
+    await figureBindingManager.deactivate();
     setStructComposition(null);
     if (closeInfoDialog) setShowStructuralInfoDialog(false);
+    if (reflectOtherFloors) await reflectStructuralToOtherFloors();
   }
 
   // ---- モード境界: 仕上げモード突入（前回脱出時点のRoom.cellsを現在のCLトポロジーと
@@ -1300,43 +1321,66 @@ const App = observer(() => {
     await reflectStructuralAfterFinishExit(graph.plane.id, goingToStructure);
   }
 
-  // ---- モード切り替え：finish→floorplan で部屋ごとに壁を自動生成 ----
+  // ---- モード境界レジストリ ----
+  // モードの突入（enter）・脱出（exit）境界処理の唯一の登録場所。モード切替（handleModeChange）と
+  // 階切替（switchFloorKeepingMode / handleFloorSwitch）は必ずこの表を経由するため、境界処理を持つ
+  // モードを追加するときはここに登録するだけで全経路へ適用される（経路ごとの適用漏れが構造的に起きない）。
+  // enter/exit は Promise を返す。ctx = { toMode / fromMode, floorSwitch(モード維持階切替か) }。
+  //   deferEnterOnModeChange: モード切替時は enter の完了を待たずにモードを切り替える
+  //     （構造: 情報ダイアログと画面切替を先行させ、自動補完は裏で進める。階切替時は常に完了を待つ）。
+  //   afterFloorSwitch: モード維持階切替の共通後始末に加えるモード固有リセット。
+  // floorplan / site は階に紐づく確定処理を持たないため未登録（switchFloor するだけでよい）。
+  const modeBoundaries = {
+    finish: {
+      // 突入: 前回脱出時点のRoom.cellsを現在のCLトポロジーと突き合わせて再解釈した上でエッジを再同期。
+      // 脱出: 部屋ごとの壁自動生成・外壁再生成・構造反映を確定。
+      enter: (graph) => runFinishEntryBoundary(graph),
+      exit: (graph, { toMode }) => runFinishExitBoundary(graph, { goingToStructure: toMode === 'structure' }),
+    },
+    structure: {
+      // 突入: 構造情報ダイアログ・図面合成の構築・全階の自動補完反映。脱出: バインディング停止・確定保存・他階反映。
+      deferEnterOnModeChange: true,
+      enter: (graph, { floorSwitch }) => runStructuralEntryBoundary(graph, { openInfoDialog: !floorSwitch }),
+      exit: (graph, { floorSwitch }) => runStructuralExitBoundary({ closeInfoDialog: !floorSwitch, reflectOtherFloors: !floorSwitch }),
+      afterFloorSwitch: (planeId) => {
+        setActiveStructSlotKey(firstSlotKeyForPlane(buildStructuralFigureSlots(project), planeId));
+        setMode(null);
+        setClDialog(null);
+        setWallDialog(null);
+        setOpeningDialog(null);
+      },
+    },
+  };
+
+  // ---- モード切り替え ----
   async function handleModeChange(newMode) {
+    if (newMode === appMode) { setMode(null); setAppMode(newMode); return; } // 同一モードは境界処理なし
+
     // 以降のモード固有処理はこの graph を対象とする。R階伏図からの脱出時は降りた先の階で再取得する。
     let graph = project.activeGraph;
 
-    // 構造モード突入と同時に構造情報ダイアログをポップアップし、主要構造の指定有無を検証
-    // （実効値 = 階の上書きがあればそれ、なければ建物全体の既定値）
-    if (appMode !== 'structure' && newMode === 'structure') {
-      runStructuralEntryBoundary(graph).catch(console.error);
-    }
+    // 旧モードの脱出境界を確定してから切り替える（graph 変更を伴う境界処理は完了を待つ）。
+    await modeBoundaries[appMode]?.exit?.(graph, { toMode: newMode, floorSwitch: false });
 
-    // 構造モードを抜けるときは図面合成のバインディング（編集可能peek）を停止・確定保存する。
-    if (appMode === 'structure' && newMode !== 'structure') {
-      runStructuralExitBoundary();
-
-      // R階伏図（屋根専用平面）は構造モード専用の合成平面で他モードには存在しない。
-      // 他モードへ移る場合は直下の実体階（最上階）へ降りてから切り替える。
-      if (project.activePlane?.isRoofPlane) {
-        const belowId = project.activePlane.roofForPlaneId;
-        if (belowId != null && project.planeMap.has(belowId)) {
-          await switchFloor(belowId);
-          setActiveFloorId(belowId);
-          graph = project.activeGraph; // 降りた先のフロアを以降の処理対象にする
-        }
+    // R階伏図（屋根専用平面）は構造モード専用の合成平面で他モードには存在しない。
+    // 他モードへ移る場合は直下の実体階（最上階）へ降りてから切り替える。
+    if (project.activePlane?.isRoofPlane) {
+      const belowId = project.activePlane.roofForPlaneId;
+      if (belowId != null && project.planeMap.has(belowId)) {
+        await switchFloor(belowId);
+        setActiveFloorId(belowId);
+        graph = project.activeGraph; // 降りた先のフロアを以降の処理対象にする
       }
     }
 
-    // floorplan→finish 再突入: 前回脱出時点のRoom.cellsを現在のCLトポロジーと
-    // 突き合わせて再解釈（辺の喪失によるセル統合・部分指定化）した上で、
-    // 通り芯変更等のトポロジー差分でエッジを再同期する
-    if (appMode !== 'finish' && newMode === 'finish') {
-      await runFinishEntryBoundary(graph);
+    // 新モードの突入境界（構造は deferEnterOnModeChange＝完了を待たずに切替を先行させる）。
+    const next = modeBoundaries[newMode];
+    if (next?.enter) {
+      const entered = next.enter(graph, { fromMode: appMode, floorSwitch: false });
+      if (next.deferEnterOnModeChange) entered.catch(console.error);
+      else await entered;
     }
 
-    if (appMode === 'finish' && newMode !== 'finish') {
-      await runFinishExitBoundary(graph, { goingToStructure: newMode === 'structure' });
-    }
     // 旧モードを同期的にクリア。setMode(null) は effect 内（描画後）に走るため、
     // ここでクリアしないと appMode 変更直後の1レンダリングで旧モードのまま
     // モード固有パネルが描画されてしまう（型不一致でクラッシュする）。
@@ -1344,9 +1388,11 @@ const App = observer(() => {
     setAppMode(newMode);
   }
 
-  // ---- フロア切替 ----
+  // ---- フロア切替（平面モードへ移動する切替。階追加・削除・階段フロー等の共通経路）----
+  // どのモードから呼ばれても現モードの脱出境界を先に確定する（モード境界レジストリ経由＝適用漏れ防止）。
   async function handleFloorSwitch(planeId) {
     if (planeId === project.activePlaneId) return;
+    await modeBoundaries[appMode]?.exit?.(project.activeGraph, { toMode: 'floorplan', floorSwitch: false });
     await switchFloor(planeId);
     setActiveFloorId(planeId);
     setMode(null);
@@ -1362,21 +1408,22 @@ const App = observer(() => {
     setOpeningDialog(null);
   }
 
-  // ---- フロア切替（仕上げモード中）：仕上げモードを抜けずに別階の仕上げ図へ移動する ----
-  // 「現モードの当該階を平面モード相当に確定→階移動→現モードへ再突入」を handleModeChange の
-  // モード境界処理と共有する（境界処理自体は appMode を変えない）。
+  // ---- フロア切替（モード維持）：現モードを抜けずに別階の同種図面へ移動する ----
+  // 「現モードの当該階を確定→階移動→現モードへ再突入」をモード境界レジストリ経由で共通適用する
+  // （境界処理を持たないモードは素の switchFloor になる）。
   // 脱出境界処理は switchFloor 前（modeRef.current がまだ切替前階のまま生存＝roomWallDims等が使える）、
   // 突入境界処理は switchFloor 後の graph（project.activeGraph を読み直したもの。.claude/floor-design.md）
   // に対して行い、それが終わってから setActiveFloorId でモード再ロード effect を走らせる
-  // （先に activeFloorId を更新すると、境界処理前のグラフで FinishModeState が生成されてしまう）。
-  async function handleFinishFloorSwitch(planeId) {
+  // （先に activeFloorId を更新すると、境界処理前のグラフでモード状態が生成されてしまう）。
+  async function switchFloorKeepingMode(planeId) {
     if (planeId === project.activePlaneId) return;
+    const boundary = modeBoundaries[appMode];
     const graph = project.activeGraph; // 切替前階（脱出境界処理の対象）
-    await runFinishExitBoundary(graph, { goingToStructure: false });
+    await boundary?.exit?.(graph, { toMode: appMode, floorSwitch: true });
     await switchFloor(planeId);
-    const nextGraph = project.activeGraph; // 切替後は読み直す
-    await runFinishEntryBoundary(nextGraph);
+    await boundary?.enter?.(project.activeGraph, { floorSwitch: true }); // 切替後は読み直す
     setActiveFloorId(planeId);
+    boundary?.afterFloorSwitch?.(planeId);
     setSnapPoint(null);
     setNearCL(null);
     setNearWall(null);
@@ -1385,30 +1432,14 @@ const App = observer(() => {
     setMenu(null);
   }
 
-  // ---- フロア切替（構造モード中）：構造モードを抜けずに別階の構造伏図へ移動する ----
-  // planeId のみ受ける経路（検討チップ）。移動先平面の先頭スロットを選択状態にする。
+  // ---- フロア切替（構造モード中・planeId 経路：検討チップ）。移動先平面の先頭スロットを選択状態にする。
   // 情報ダイアログの開閉はここでは変更しない（毎回ポップアップするのはUXとして不合理）。
   async function handleStructuralFloorSwitch(planeId) {
     if (planeId === project.activePlaneId) {
       setActiveStructSlotKey(firstSlotKeyForPlane(buildStructuralFigureSlots(project), planeId));
       return;
     }
-    runStructuralExitBoundary({ closeInfoDialog: false });
-    await switchFloor(planeId);
-    const nextGraph = project.activeGraph; // 切替後は読み直す
-    await runStructuralEntryBoundary(nextGraph, { openInfoDialog: false });
-    setActiveFloorId(planeId);
-    setActiveStructSlotKey(firstSlotKeyForPlane(buildStructuralFigureSlots(project), planeId));
-    setMode(null);
-    setSnapPoint(null);
-    setNearCL(null);
-    setNearWall(null);
-    setNearOpening(null);
-    setCursorWorld(null);
-    setMenu(null);
-    setClDialog(null);
-    setWallDialog(null);
-    setOpeningDialog(null);
+    await switchFloorKeepingMode(planeId);
   }
 
   // ---- 図面スロット切替（構造モードのスライダー）：slotType:planeId 単位で選択・移動する ----
@@ -1420,37 +1451,8 @@ const App = observer(() => {
       setActiveStructSlotKey(slotKey); // 同一平面内のスロット選択（部材合成の細分は次フェーズ）
       return;
     }
-    runStructuralExitBoundary({ closeInfoDialog: false });
-    await switchFloor(slot.planeId);
-    const nextGraph = project.activeGraph; // 切替後は読み直す
-    await runStructuralEntryBoundary(nextGraph, { openInfoDialog: false });
-    setActiveFloorId(slot.planeId);
-    setActiveStructSlotKey(slotKey);
-    setMode(null);
-    setSnapPoint(null);
-    setNearCL(null);
-    setNearWall(null);
-    setNearOpening(null);
-    setCursorWorld(null);
-    setMenu(null);
-    setClDialog(null);
-    setWallDialog(null);
-    setOpeningDialog(null);
-  }
-
-  // ---- フロア切替（敷地モード中）：敷地モードを維持したまま別階へ移動する ----
-  // 敷地モードは階に紐づく確定処理（部屋壁生成・図面合成バインディング等）を持たないため、
-  // モード境界処理は不要（switchFloor するだけでよい）。
-  async function handleSiteFloorSwitch(planeId) {
-    if (planeId === project.activePlaneId) return;
-    await switchFloor(planeId);
-    setActiveFloorId(planeId);
-    setSnapPoint(null);
-    setNearCL(null);
-    setNearWall(null);
-    setNearOpening(null);
-    setCursorWorld(null);
-    setMenu(null);
+    await switchFloorKeepingMode(slot.planeId);
+    setActiveStructSlotKey(slotKey); // afterFloorSwitch の既定（先頭スロット）を指定スロットで上書き
   }
 
   function handleAddFloor(e) {
@@ -3035,10 +3037,9 @@ const App = observer(() => {
         floors={drumFloors}
         activeFloorId={appMode === 'structure' ? activeStructSlot : activeFloorId}
         onSwitch={
-          appMode === 'structure' ? handleStructuralSlotSwitch
-          : appMode === 'finish'  ? handleFinishFloorSwitch
-          : appMode === 'site'    ? handleSiteFloorSwitch
-          : handleFloorSwitch
+          appMode === 'structure' ? handleStructuralSlotSwitch  // スロット単位（slotType:planeId）で移動
+          : appMode === 'floorplan' ? handleFloorSwitch          // 平面はモード再設定を伴う従来経路
+          : switchFloorKeepingMode                               // その他はモード維持の共通経路（境界レジストリ適用）
         }
         isLandscape={isLandscape}
       />
@@ -3054,7 +3055,7 @@ const App = observer(() => {
 
       {/* フロアセレクター — 左上（Undo/Redo ボタンの右隣）
           構造モード中はタブのラベル自体を図面呼称（基礎伏図／1階伏図／2階床伏図 等）に書き換える。
-          クリックすると構造モードを抜けずに別階の構造伏図へ移動する（onSwitchStructural）。
+          クリックすると構造モードを抜けずに別階の構造伏図へ移動する（handleStructuralFloorSwitch）。
           平面モードに戻すとラベルは元の階名（1階 等）に戻る。 */}
       <div style={{
         position: 'fixed', top: 0, left: 80,

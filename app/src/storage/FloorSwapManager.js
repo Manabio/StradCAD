@@ -75,7 +75,7 @@ export class FloorSwapManager {
    * するため、表示生成分は保存されず、以降のユーザー編集のみが保存される。
    */
   startEditablePeek(plane, graph) {
-    this.stopEditablePeek();
+    void this.stopEditablePeek();
     let initialized = false;
     let timer = null;
     const dispose = autorun(() => {
@@ -86,13 +86,17 @@ export class FloorSwapManager {
     });
     this._peekCleanup = () => {
       dispose();
-      if (timer) { clearTimeout(timer); saveFloor(plane.id, serializeGraph(graph)); } // 保留中の編集を確定
+      if (timer) { clearTimeout(timer); return saveFloor(plane.id, serializeGraph(graph)); } // 保留中の編集を確定
+      return Promise.resolve();
     };
   }
 
+  /** 編集可能peekを停止し、保留中の編集の確定保存まで待てる Promise を返す。
+   *  呼び出し側が直後に同じ階を loadFloor/peek する場合は必ず await すること（書込み前に読む競合の防止）。 */
   stopEditablePeek() {
-    this._peekCleanup?.();
+    const flushed = this._peekCleanup?.() ?? Promise.resolve();
     this._peekCleanup = null;
+    return flushed;
   }
 
   // ----------------------------------------------------------------
@@ -123,6 +127,15 @@ export class FloorSwapManager {
       void graph.intersectionMap.size;
       void graph.roomMap.size;
       void graph.stairMap.size;
+      // 構造部材の生成・削除も dirty 対象にする（構造モードの自動補完・部材編集だけを行った
+      // セッションで beforeunload 警告が出ず部材が失われるのを防ぐ。粒度は shapeMap と同じ size のみ）。
+      void graph.columnMap.size;
+      void graph.beamMap.size;
+      void graph.wallMap.size;
+      void graph.slabMap.size;
+      void graph.footingMap.size;
+      void graph.sleeveMap.size;
+      void graph.columnAxisOffsets.size;
       for (const cl of graph.centerLines) {
         void cl._value;
         void cl.refOffset;

@@ -56,7 +56,7 @@ export class FigureBindingManager {
   _composition = null;
 
   async activate(figureDef, subjectPlane, subjectGraph, project) {
-    this.deactivate(); // 前セッションの編集可能 peek を確定停止してから組み直す
+    await this.deactivate(); // 前セッションの編集可能 peek を確定停止（保存完了まで待つ）してから組み直す
     const comp = new FigureComposition(figureDef, subjectPlane);
     const byPlaneId = new Map(); // planeId → binding（同一階を複数レイヤが参照しても1グラフに集約）
 
@@ -93,9 +93,12 @@ export class FigureBindingManager {
     }
   }
 
+  /** 編集可能 peek を確定停止する。保留中編集の保存完了まで待てる Promise を返す——
+   *  直後に同じ階を peek/recompute する呼び出し側は必ず await すること（書込み前に読む競合の防止）。 */
   deactivate() {
-    floorSwapManager.stopEditablePeek();
+    const flushed = floorSwapManager.stopEditablePeek();
     this._composition = null;
+    return flushed;
   }
 }
 
