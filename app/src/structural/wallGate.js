@@ -4,6 +4,8 @@
 // ため、外壁線の位置 ≡ 屋内フットプリントの境界。そこで Wall 実体を読まず、各階の部屋セル
 // （kind === INTERIOR。吹抜け等の feature は無関係）を「建物内」フットプリントとして扱い、グリッド辺・交点が
 // 建物に接するかで生成可否を取捨する（A案＝セル/部屋ベースのフットプリント判定）。
+// ただし階段(STAIR)・階段吹抜け(STAIR_VOID)の属性Roomだけの階は「フットプリント未定義」として扱う
+// （establishesFootprint 参照——属性Room単独では建物の囲いを定義しないため）。
 //
 // 「建物全体の上下階」を加味する規律＝鉛直連続性：部材は「自階かつ直下の全階で建物が連続している」位置だけ
 // 残す（自階＋直下フロアのフットプリントをANDで束ねる）。直下に支えの無い位置の梁・柱（例：下階の欠け／
@@ -11,7 +13,7 @@
 // 非アクティブな下階は floorSwapManager.peek で読み取り専用に覗き、各 graph 内で世界座標→セルを解決する
 // （世界座標は全階共通原点のため跨ぎ比較可。figure.md「他階部材を主題階の中心線へ再解決しない」規律を保つ）。
 
-import { RoomKind } from '../core.js';
+import { RoomKind, RoomFeature } from '../core.js';
 import { worldToCell } from '../finish/gridCells.js';
 import { buildCellToRoom } from '../finish/edgeClassify.js';
 import { floorSwapManager } from '../storage/FloorSwapManager.js';
@@ -19,14 +21,32 @@ import { floorSwapManager } from '../storage/FloorSwapManager.js';
 // 軸線・交点から±この距離(mm)だけ離してセルをサンプリングする（finish/edgeClassify.js の ADJACENT_SAMPLE_EPS と同値）。
 const SAMPLE_EPS = 10;
 
-/** あるグラフの建物フットプリント述語を作る。屋内(kind === INTERIOR)のみ建物内とみなし、
- *  有名屋外(EXTERIOR=中庭/バルコニー)・無名屋外(未割当)は建物外とする（feature の吹抜けは無関係）。
- *  @returns {{ probe: (wx:number, wy:number)=>boolean, size: number }} size=フットプリントのセル数 */
+// 建物内（屋内）とみなす部屋か。有名屋外(EXTERIOR=中庭/バルコニー)・無名屋外(未割当)は建物外
+// （feature の吹抜け・階段・未定義は無関係＝屋内なら建物内）。
+const isBuildingRoom = (room) => !!room && room.kind === RoomKind.INTERIOR;
+
+// フットプリントの「権威」を確立する部屋か。階段(STAIR)・階段吹抜け(STAIR_VOID)は
+// セル指定/上階自動生成される属性Roomで、それ単独では建物の囲い（外壁線）を定義しない——
+// 部屋未着手の階に階段だけを指定するとフットプリントが階段セルへ縮退し、構造部材の
+// 生成ゲート・外周符号が階段まわり以外を全部落とす（再発防止）。これらしか無い階は
+// 「フットプリント未定義」（ゲートなし/矩形フォールバック）として扱う——階段吹抜けのみの
+// 未着手上階も従来の「部屋なし階＝ゲートなし（全グリッド生成）」と同じ挙動に戻る。
+// 権威が確立された階では建物内判定（isBuildingRoom）に INTERIOR として通常どおり参加する。
+// VOID（吹抜け）・UNDEFINED（未定義部屋）は権威を保つ——前者はユーザーが建物範囲として
+// 明示指定した領域、後者は部屋削除後も外壁線を維持するための残置（仕様）のため。
+const establishesFootprint = (room) =>
+  isBuildingRoom(room)
+  && room.feature !== RoomFeature.STAIR
+  && room.feature !== RoomFeature.STAIR_VOID;
+
+/** あるグラフの建物フットプリント述語を作る。屋内(kind === INTERIOR)のみ建物内とみなす。
+ *  @returns {{ probe: (wx:number, wy:number)=>boolean, size: number }}
+ *  size=権威を確立するフットプリントセル数（0なら「フットプリント未定義」扱い。
+ *  屋外部屋・階段/階段吹抜けのみの階で全部材を消さないよう、これらは数えない）。 */
 function footprintProbe(graph) {
   const cellToRoom = buildCellToRoom(graph);
-  const isBuildingRoom = (room) => !!room && room.kind === RoomKind.INTERIOR;
-  let size = 0; // 建物内（屋内）セル数。屋外部屋しか無い階で全部材を消さないよう屋外は数えない。
-  for (const room of cellToRoom.values()) if (isBuildingRoom(room)) size++;
+  let size = 0;
+  for (const room of cellToRoom.values()) if (establishesFootprint(room)) size++;
   const probe = (wx, wy) => {
     const cell = worldToCell(wx, wy, graph);
     if (!cell) return false;
@@ -36,14 +56,18 @@ function footprintProbe(graph) {
 }
 
 /** 建物フットプリント（屋内 kind === INTERIOR の部屋セル）のセルキー集合を返す。
- *  べた基礎のマットスラブ（footprint を覆う床版）の cells 算定に使う。部屋未定義なら空集合。 */
+ *  べた基礎のマットスラブ（footprint を覆う床版）の cells 算定に使う。
+ *  部屋未定義（権威を確立する部屋なし＝階段/階段吹抜けのみの階を含む）なら空集合。 */
 export function footprintCellKeys(graph) {
   const cellToRoom = buildCellToRoom(graph);
   const keys = new Set();
+  let hasAuthority = false;
   for (const [key, room] of cellToRoom) {
-    if (room && room.kind === RoomKind.INTERIOR) keys.add(key);
+    if (!isBuildingRoom(room)) continue;
+    if (establishesFootprint(room)) hasAuthority = true;
+    keys.add(key);
   }
-  return keys;
+  return hasAuthority ? keys : new Set();
 }
 
 // ----------------------------------------------------------------
@@ -126,7 +150,8 @@ function makeWallGate(probes) {
  *  フットプリント未定義(部屋なし)の下階は AND から除外する（仕上げモード未着手の階で全部材を消さないため）。
  *  以下の場合は null を返し、呼び出し側はゲートなし(全グリッド生成＝従来挙動)で動く：
  *    - 基準階が採用フロアでない
- *    - 基準階に部屋(フットプリント)が未定義（仕上げモード未使用の従来プロジェクトを壊さないため） */
+ *    - 基準階に部屋(フットプリント)が未定義（仕上げモード未使用の従来プロジェクトを壊さないため。
+ *      権威を確立する部屋が無い＝階段・階段吹抜けRoomのみの階も同じ扱い。establishesFootprint 参照） */
 export async function buildStructuralWallGate(plane, project, activeGraph) {
   const planes = project.planes; // elevation 昇順、屋根・検討を除く採用フロア
   const baseId = plane.isRoofPlane ? plane.roofForPlaneId : plane.id;
