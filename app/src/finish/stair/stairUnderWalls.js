@@ -401,33 +401,6 @@ export function generateStairUnderWalls(graph, stair, room, dims, opts = {}) {
   return { walls, claimedEdges };
 }
 
-/**
- * room（部屋の部分指定から階段変換した階段。feature=STAIR かつ referenceRoomIds 非空）の外周エッジのうち、
- * 親部屋（referenceRoomIds が指す Room）と隣接する面だけを {isVertical,value,lo,hi} で返す。
- * generateRoomWallsFromOutline の開口辺フィルタへ渡し、親と隣接する面のみ壁を抑止する
- * （それ以外の面は通常どおり側壁を生成する。ルール7）。
- * @returns {{isVertical:boolean,value:number,lo:number,hi:number}[]}
- */
-export function parentAdjacentEdges(graph, room) {
-  if (!room.referenceRoomIds || room.referenceRoomIds.size === 0) return [];
-  const unitParams  = computeExternalEdgeParams(room, 1, graph);
-  const cellToRoom  = buildCellToRoom(graph);
-  const edges = [];
-  for (const p of unitParams) {
-    const outsideRoom = findOutsideRoom(p, graph, cellToRoom);
-    if (!outsideRoom || !room.referenceRoomIds.has(outsideRoom.id)) continue;
-    const axisCL  = getShape(graph, p.axisCLId);
-    const startCL = getShape(graph, p.startCLId);
-    const endCL   = getShape(graph, p.endCLId);
-    if (!axisCL || !startCL || !endCL) continue;
-    edges.push({
-      isVertical: p.isVertical, value: axisCL.value,
-      lo: Math.min(startCL.value, endCL.value), hi: Math.max(startCL.value, endCL.value),
-    });
-  }
-  return edges;
-}
-
 // ----------------------------------------------------------------
 // 2a壁の突き当たり処理（T字・出隅/入隅）
 // ----------------------------------------------------------------

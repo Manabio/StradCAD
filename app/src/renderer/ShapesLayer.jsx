@@ -53,6 +53,10 @@ export const ShapesLayer = observer(({ graph, viewport }) => {
   // （部屋境界の内外両側）は通り芯上の同じ構造材を指すため、正(+)側のみ描画する。
   // 偏芯壁（backingOffset指定あり）は下地帯が通り芯に対して対称でない＝相手側と共有する構造材
   // ではないため、この重複防止の対象外（自分の下地は常に描画・相手側の判定にも使わない）。
+  // 新モデル（finish/wallGeneration.js の resolveBackingOwnership/applyBackingOwnership）で
+  // 生成された壁は backingOffset を必ず明示（オーナーは0・非オーナーは薄壁でbackingDepth=0）
+  // するため、この判定（backingOffset==null）の対象に自然に入らない——ここは旧データ
+  // （backingOffset未設定の対称壁ペア）の表示互換のためのフォールバックとして残す。
   const deferredBackingIds = new Set();
   if (lodLevel === LodLevel.DETAIL) {
     const wallShapes = graph.generalShapes.filter(s =>

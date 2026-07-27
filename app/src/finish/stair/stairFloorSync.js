@@ -4,8 +4,6 @@ import { saveFloor } from '../../storage/db.js';
 import { undoManager } from '../../undoManager.js';
 import { refreshCells } from '../gridCells.js';
 import { ensureStairRooms } from '../roomReinterpret.js';
-import { generateRoomWallsFromOutline } from '../wallGeneration.js';
-import { stairPortEdges } from './stairGeometry.js';
 import { RoomFeature, RoomKind } from '@core';
 
 const EPS = 1e-6;
@@ -163,7 +161,11 @@ function addMissingCLs(needed, sourceGraph, structGraph, upperGraph) {
  *
  * 壁は生成しない（ユーザー決定：階段設置と同時の壁生成は行わない。上階の外壁は
  * ペアRoom・階段吹抜けの kind=INTERIOR を通じて通常の屋内外判定・外壁生成に委ねる）。
- * 階段側の仕上げ壁は、仕上げモード脱出時に syncUpperStairFinishWalls が別途同期生成する。
+ * 階段側の仕上げ壁も同様にここでは生成しない——新モデルでは階段ペアRoom・階段吹抜けも
+ * 通常のRoomと同じ経路（App.jsx runFinishExitBoundary ステップ1〜3）で壁を持つため、
+ * その階自身が仕上げモードを脱出したときに生成される。設置階ペアRoomの内装
+ * （templateKey・customOverrides）は、仕上げモード脱出時に syncUpperStairInteriors が
+ * 別途同期コピーする。
  *
  * 非アクティブ階への変更はいずれも floorSwapManager.peek → saveFloor の既存パターンを踏襲する。
  * 同期対象にアクティブ階が含まれる場合（syncUpperFloorsAuto 経由）はメモリ上のグラフを
@@ -312,18 +314,16 @@ export async function ensureTopStairVoid(project, activeGraph) {
 
 /**
  * 階段設置階の仕上げモード脱出時に、上階の階段 footprint（自動設置ペアRoom・最上階の
- * 階段吹抜け STAIR_VOID）へ「階段側の仕上げ壁」を同期生成する。
+ * 階段吹抜け STAIR_VOID）へ、設置階ペアRoomの内装（templateKey・customOverrides）を
+ * 同期コピーする（階段仕上げ材の参照。以降はその階の Room＝仕上げ表のカードが単一情報源）。
  *
- * 設置階ではペアRoom（feature=STAIR）が脱出時の壁生成（App.jsx ステップ2）で階段側の
- * 仕上げ面・仕上げ線を得るが、上階は脱出処理の対象外のため壁が無く、階段側仕上げ材が
- * 描画されない。この同期がそれを塞ぐ。生成規則は設置階の挙動に揃える:
- * - 対象は「壁が未生成（generatedWallIds が空）」の Room のみ。生成済みの Room には
- *   触れない（設置階の「壁は一度生成したら再生成しない」挙動と同じ）。
- * - 開口辺: 中間階（階段実体あり）＝その階の階段の上り口＋下り口（stairPortEdges）。
- *   最上階（STAIR_VOID）＝直下階の同 footprint 階段の到達辺（下り口）。
- * - 階段仕上げ材の参照（内装コピー方式）: 内装未編集（templateKey なし・個別上書きなし）の
- *   自動 Room へ、設置階ペアRoom の templateKey・customOverrides を写してから壁を生成する。
- *   以降はその階の Room（仕上げ表のカード）が単一情報源になる。
+ * 壁はこの同期では生成しない——新モデルでは階段ペアRoom・階段吹抜けも通常のRoomと同じ経路
+ * （App.jsx runFinishExitBoundary ステップ1〜3。下地オーナー壁＋仕上げ薄壁方式）で壁を持つため、
+ * 上階の壁はその階自身が仕上げモードを脱出した際に生成される。旧データ（同一CL上の二重壁等）の
+ * 修復も、その階の仕上げモード脱出時の全削除・再生成（ステップ1）が担う——この同期関数では
+ * 何もしない。
+ * - 対象は「内装未編集（templateKey なし・customOverrides 空）」の Room のみコピーする。
+ *   ユーザーが編集済みの内装は上書きしない。
  * - 多層設置: 設置階から最上階まで、footprint 一致の階段実体を連鎖でたどる。
  *
  * syncUpperFloors と同じ自動同期のため undo 対象外。呼び出しは仕上げモード脱出時
@@ -331,18 +331,15 @@ export async function ensureTopStairVoid(project, activeGraph) {
  *
  * @param {object} project
  * @param {object} activeGraph - 脱出した階（アクティブ）のグラフ
- * @param {object} [opts]
- * @param {(graph, room) => ({wallBase:number, wallFinish:number}|null)} [opts.dimsOf]
- *   壁寸法の解決（FinishModeState.roomWallDims。graph には対象階の peek グラフを渡す）
  */
-export async function syncUpperStairFinishWalls(project, activeGraph, { dimsOf } = {}) {
+export async function syncUpperStairInteriors(project, activeGraph) {
   const planes = project.planes;
   const active = activeGraph?.plane;
   if (!active || activeGraph.stairs.length === 0) return;
   const idx = planes.findIndex(p => p.id === active.id);
   if (idx < 0 || idx + 1 >= planes.length) return;
 
-  // 階段ごとに「直下階の階段実体」を追跡する連鎖（最上階 STAIR_VOID の到達辺開口の計算に使う）
+  // 階段ごとに「直下階の階段実体」を追跡する連鎖（footprint 追跡のみに使う）
   let chains = activeGraph.stairs.map(stair => ({
     srcRoom: stair.roomId ? (activeGraph.roomMap.get(stair.roomId) ?? null) : null,
     belowStair: stair,
@@ -369,21 +366,12 @@ export async function syncUpperStairFinishWalls(project, activeGraph, { dimsOf }
       const room = temp.rooms.find(r =>
         (r.feature === RoomFeature.STAIR || r.feature === RoomFeature.STAIR_VOID) &&
         setsEqual(refreshCells(r.cells, temp), cells)) ?? null;
-      if (!room || room.generatedWallIds.size > 0) continue;
+      if (!room) continue;
 
       // 内装コピー: 未編集の自動 Room のみ（ユーザー編集済みの内装は上書きしない）
       if (chain.srcRoom && room.templateKey == null && room.customOverrides.size === 0) {
         if (chain.srcRoom.templateKey != null) { room.setTemplateKey(chain.srcRoom.templateKey); changed = true; }
         for (const [k, v] of chain.srcRoom.customOverrides) { room.customOverrides.set(k, v); changed = true; }
-      }
-
-      const openings = (room.feature === RoomFeature.STAIR && tempStair)
-        ? stairPortEdges(tempStair, temp)
-        : stairPortEdges(chain.belowStair, chain.belowGraph, ['arrival']);
-      const walls = generateRoomWallsFromOutline(temp, room, dimsOf?.(temp, room) || {}, openings);
-      if (walls.length > 0) {
-        walls.forEach(w => room.generatedWallIds.add(w.id));
-        changed = true;
       }
     }
 

@@ -15,6 +15,9 @@ Intersection・Shape・Wall・Opening・構造部材はすべて自前の座標�
 ## Wallは自前のオフセットを持ち、ngraphに参加しない
 軸CLからのオフセットで位置を持つ（shapeMapのみで管理）。`isRoomWall`の壁はchamferWallsの対象外（生成時のコーナーマップによるオフセットを固定値として保持）。
 
+## 内周壁は仕上げ脱出境界で全削除・導出再生成する（下地オーナー壁＋仕上げ薄壁方式）
+内周壁（`isRoomWall`かつ非外壁）は「部屋指定・内装・偏芯からの導出物」であり、壁自体に前回の解決結果を持ち越さない。`runFinishExitBoundary`は脱出のたびに全削除→部屋ごとに再生成する（順序非依存・冪等。2a=階段下部屋の壁のみ例外、下記）。同一CL上の下地（間柱帯）はスパン単位でオーナー1本だけを持つ——生成直後は軸オフセットの符号（＋側優先）、外周CLでは外壁がオーナーになる（`finish/wallGeneration.js`の`resolveBackingOwnership`/`applyBackingOwnership`）。オーナー以外は`backingDepth=0`の仕上げ薄壁として面ごとに独立描画される。階段ペアRoom（`feature=STAIR`）・階段吹抜け（`STAIR_VOID`）も通常のRoomと同じ経路で壁を持つ。階段下部屋（破れ線先セルに部屋指定された領域。通称「2a」）だけは例外——`generateStairUnderWalls`固有の偏芯式で一度生成したら不変・専用トリムを持つ別管理の壁のため、全削除・所有権解決・CL偏芯（`clEccentricity.js`）のいずれの対象にもならない。
+
 ## CL偏芯（clEccentricities）はレコードと導出結果を分離する
 `PlanGraph.clEccentricities`（clId→`{mode:'value'|'face', value, side, backing}`）は「何を指定したか」だけを保持し、Wall側（axisOffset/wallFinish/backingOffset/backingDepth/finishSide）へは`finish/clEccentricity.js`の`applyCLEccentricity`が導出した結果のみを書き込む——値を直接Wallへ書くと下地材変更時に再計算できず不整合が固定化する。`backing=''`は「per-floor既定（`interiorWallBacking`）に従う」という明示的なフォールバック合図であり、未指定と同義に扱わない。適用点は操作確定時とモード境界（`runFinishExitBoundary`ステップ2b）の両方で、前回の適用結果に依存せず現在のspecと現材から毎回フル再計算する（冪等）——材未ロード・下地コード未解決時は黙って既定値へ潰さず適用自体をスキップする。
 

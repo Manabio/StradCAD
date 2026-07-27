@@ -521,6 +521,268 @@ export function generateExteriorWalls(graph, { wallBase = DEFAULT_WALL_BASE, wal
   return walls;
 }
 
+// ----------------------------------------------------------------
+// 下地オーナー解決（下地オーナー壁＋仕上げ薄壁方式）
+// ----------------------------------------------------------------
+
+// 同一CL上の壁スパン重なりを「有意」とみなす下限(mm)。clEccentricity.js の
+// SPAN_OVERLAP_EPS・stairUnderWalls.js の SKIP_OVERLAP_EPS と同水準
+// （浮動小数の丸め・端点接触を誤って有意重なりと判定しない）。
+// 3ファイルとも同じ意図の閾値のため、値を変更する場合は3箇所とも揃えること
+// （clEccentricity.js:SPAN_OVERLAP_EPS / stairUnderWalls.js:SKIP_OVERLAP_EPS 参照）。
+const SPAN_OVERLAP_EPS = 5; // mm
+
+function wallSpan(w) {
+  return [Math.min(w.coord1, w.coord2), Math.max(w.coord1, w.coord2)];
+}
+
+/**
+ * 壁 o の端点（coord1/coord2）のうち value に一致する側の {cl, offset} を返す
+ * （分割で生じる新端点を、相手壁の実端点参照＋オフセットへそのまま流用して値を一致させるため）。
+ * @returns {{cl:import('@core').Shape, offset:number}|null}
+ */
+function anchorForValue(o, value, eps) {
+  if (Math.abs(o.coord1 - value) <= eps) return { cl: o.clStart, offset: o.startOffset };
+  if (Math.abs(o.coord2 - value) <= eps) return { cl: o.clEnd, offset: o.endOffset };
+  return null;
+}
+
+/**
+ * 壁 w（非オーナー候補）を、オーナー壁群 ownerWalls（同一 axisCL）のスパンに対して
+ * 「重なる区間＝薄壁（backingDepth=0）」「重ならない区間＝オーナー」に仕分ける。
+ * 全区間が同じ扱いなら分割せず w 自身のフィールドを書き換えて返す（null）。
+ * 部分重なりがあれば graph.removeShape(w) → graph.addWall で複数本に分割し、
+ * 新しい壁の配列を返す（呼び出し側が generatedWallIds を張り替える）。
+ *
+ * 分割点は必ず ownerWalls のいずれかの端点（coord1/coord2）と一致するため、その壁の
+ * clStart/clEnd 参照＋オフセットをそのまま新端点として流用する（座標値を独自に再計算せず
+ * 相手の実端点値と完全一致させる）。w 自身の真の両端（分割されない側）は w の元の
+ * clStart/clEnd 参照を維持する。
+ *
+ * @param {object} graph
+ * @param {import('@core').Wall} w
+ * @param {import('@core').Wall[]} ownerWalls
+ * @param {{claimUncovered?: boolean}} [opts]
+ *   claimUncovered=true（既定。resolveBackingOwnership が使う——生成直後の壁のフル初期解決）:
+ *   重ならない区間は「オーナーの既定式」（backingOffset=0・backingDepth=2*(|axisOffset|-
+ *   wallFinish)）で明示し直す。
+ *   claimUncovered=false（App.jsx ステップ3の外壁オーナー化パスが使う）: 重ならない区間・
+ *   分割で生じる新壁のうち非covered分は一切変更しない——このパス以前に確定済みの
+ *   backingOffset/backingDepth/finishSide（ステップ2の所有権解決・ステップ2bのCL偏芯）を
+ *   そのまま継承する。外壁パスは「外壁スパンに重なる区間を薄壁化する」ことだけを担い、
+ *   既に確定済みの内周壁の解決を上書きしない（F1: 上書きすると偏芯結果が破壊される）。
+ * @returns {import('@core').Wall[]|null}
+ */
+function splitWallByOwnership(graph, w, ownerWalls, { claimUncovered = true } = {}) {
+  const [wLo, wHi] = wallSpan(w);
+  const ownerSpans = ownerWalls.map(wallSpan);
+
+  // 切断点候補: 両端 + オーナー壁群の端点のうち w の内部にあるもの。
+  const rawCuts = [wLo, wHi];
+  for (const [a, b] of ownerSpans) {
+    if (a > wLo + SPAN_OVERLAP_EPS && a < wHi - SPAN_OVERLAP_EPS) rawCuts.push(a);
+    if (b > wLo + SPAN_OVERLAP_EPS && b < wHi - SPAN_OVERLAP_EPS) rawCuts.push(b);
+  }
+  const sortedCuts = [...new Set(rawCuts)].sort((a, b) => a - b);
+
+  // 近接する切断点（間隔が SPAN_OVERLAP_EPS 以下）を1点に統合する: 統合しないと、その間の
+  // 極小区間が「有意な長さなし」として後段で捨てられ、分割壁の間に最大 EPS 分の隙間が
+  // できてしまう（区間を捨てるのではなく点を間引くことでこれを避ける）。
+  const dedupCuts = [];
+  for (const v of sortedCuts) {
+    if (dedupCuts.length > 0 && v - dedupCuts[dedupCuts.length - 1] <= SPAN_OVERLAP_EPS) continue;
+    dedupCuts.push(v);
+  }
+
+  // 開口（建具・窓）を跨ぐ切断は行わない: findHostWall は開口のスパン全体が1本の壁に
+  // 収まることを要求するため、開口の内部で壁を分割すると開口がどちらの新壁にもホストされず
+  // 孤立してしまう。開口の内部（両端は除く＝開口の境界での分割は許容）に落ちる切断点だけを
+  // 除去する（両端 wLo/wHi は常に残す）。
+  const openings = graph.openings.filter(o => o.isVertical === w.isVertical && o.axisCL.id === w.axisCL.id);
+  const finalCuts = dedupCuts.filter(v =>
+    v === wLo || v === wHi ||
+    !openings.some(o => o.coord1 < v - SPAN_OVERLAP_EPS && v + SPAN_OVERLAP_EPS < o.coord2));
+
+  // 区間ごとの covered 判定: 区間全体でオーナースパンとの重なりが有意にあれば covered と
+  // みなす（中点だけでなく区間内のどこかで重なれば covered）。開口を跨ぐ切断点を間引いた
+  // 結果、1区間が本来は covered/非covered に分かれるべき混在区間になり得るため、その場合は
+  // 安全側で「一部でも covered なら区間全体を薄壁」に倒す（下地の二重化よりギャップの方が
+  // 実害が小さいという判断）。
+  const overlapsAny = (lo, hi) => ownerSpans.some(([c1, c2]) => Math.min(hi, c2) - Math.max(lo, c1) > SPAN_OVERLAP_EPS);
+
+  const subs = [];
+  for (let i = 0; i < finalCuts.length - 1; i++) {
+    const lo = finalCuts[i], hi = finalCuts[i + 1];
+    if (hi - lo <= SPAN_OVERLAP_EPS) continue; // dedup済みのため通常到達しない（安全側の残置）
+    subs.push({ lo, hi, covered: overlapsAny(lo, hi) });
+  }
+  // 隣接する同タグ区間はマージする（分割数を必要最小限にする）
+  const merged = [];
+  for (const s of subs) {
+    const last = merged[merged.length - 1];
+    if (last && last.covered === s.covered) last.hi = s.hi;
+    else merged.push({ ...s });
+  }
+  if (merged.length === 0) return null; // 区間が完全に消えた（到達しない想定の安全側）
+
+  // オーナー側フィールド（claimUncovered=true の既定式でのみ使う）。finishSide は既存値を
+  // 優先する——axisOffset===0（CL偏芯の仕上げ面合わせで面がCL上に一致したケース）では
+  // sign(axisOffset) が0になり側を導出できないため、既に確定済みの finishSide を壊さない。
+  const sign = w.finishSide ?? (Math.sign(w.axisOffset) || 1);
+  const ownerBackingDepth = 2 * (Math.abs(w.axisOffset) - w.wallFinish);
+  const fieldsFor = (covered) => claimUncovered
+    ? { backingOffset: 0, backingDepth: covered ? 0 : ownerBackingDepth, finishSide: sign }
+    : { backingOffset: w.backingOffset, backingDepth: covered ? 0 : w.backingDepth, finishSide: w.finishSide };
+
+  if (merged.length === 1) {
+    const covered = merged[0].covered;
+    if (!claimUncovered && !covered) return null; // 何もしない（既存の解決結果をそのまま保持）
+    const f = fieldsFor(covered);
+    w.backingOffset = f.backingOffset; w.backingDepth = f.backingDepth; w.finishSide = f.finishSide;
+    return null;
+  }
+
+  // 部分重なり: 壁を分割する。w の真の両端（分割されない側）は元の clStart/clEnd を保つ。
+  const origLoRef = w.coord1 <= w.coord2 ? { cl: w.clStart, offset: w.startOffset } : { cl: w.clEnd, offset: w.endOffset };
+  const origHiRef = w.coord1 <= w.coord2 ? { cl: w.clEnd, offset: w.endOffset } : { cl: w.clStart, offset: w.startOffset };
+  const refAt = (value) => {
+    if (Math.abs(value - wLo) <= SPAN_OVERLAP_EPS) return origLoRef;
+    if (Math.abs(value - wHi) <= SPAN_OVERLAP_EPS) return origHiRef;
+    for (const o of ownerWalls) {
+      const a = anchorForValue(o, value, SPAN_OVERLAP_EPS);
+      if (a) return a;
+    }
+    return null;
+  };
+
+  // 2パス化: 先に全区間の端点参照を解決し切ってから addWall する。1つでも解決できなければ
+  // graph を一切変更せずに分割を断念する（addWall 済みの壁だけがグラフに残る・元の壁が
+  // 消えたまま新壁が無い、といった中途半端な状態を作らない）。
+  const refs = merged.map(s => ({ s, startRef: refAt(s.lo), endRef: refAt(s.hi) }));
+  if (refs.some(r => !r.startRef || !r.endRef)) {
+    if (!claimUncovered) return null; // 既存の解決結果を保持（何もしない）
+    // フォールバック（安全側）: 分割せず、重なりが1か所でもあれば薄壁として扱う
+    const anyCovered = merged.some(m => m.covered);
+    w.backingOffset = 0;
+    w.backingDepth  = anyCovered ? 0 : ownerBackingDepth;
+    w.finishSide    = sign;
+    return null;
+  }
+
+  const newWalls = refs.map(({ s, startRef, endRef }) =>
+    graph.addWall(w.axisCL, w.axisOffset, w.isVertical, startRef.cl, startRef.offset, endRef.cl, endRef.offset, {
+      isRoomWall:     w.isRoomWall,
+      isExteriorWall: w.isExteriorWall,
+      wallFinish:     w.wallFinish,
+      ...fieldsFor(s.covered),
+    }));
+
+  graph.removeShape(w.id);
+  return newWalls;
+}
+
+/**
+ * ownerWalls を下地オーナーとして確定し（setOwnerFields=true の既定時。backingOffset=0・
+ * backingDepth=既定式・finishSide=既存値優先）、challengerWalls のうち ownerWalls と同一
+ * axisCL・スパンが重なる区間を薄壁（backingDepth=0）にする（部分重なりは
+ * splitWallByOwnership で分割）。どちらが「オーナー」かは呼び出し側が決める
+ * （+側／外壁など）——ここでは判定しない。
+ *
+ * challengerWalls のうち、どの axisCL にも ownerWalls が存在しない壁は一切変更しない
+ * （既存の解決結果——他パスが既に付けた backingOffset/backingDepth/finishSide や、
+ * 生成時の既定値——をそのまま保持する）。対抗するオーナーが無い CL の解決は呼び出し側
+ * （resolveBackingOwnership 等）の責務であり、ここで「対抗が無ければ自分がオーナー」と
+ * 決めてしまうと、複数の所有権パスを順に適用する構成（例: 内周壁パス→外壁パス）で、
+ * 先のパスが既に確定した非オーナー壁を後のパスが誤って再びオーナーへ戻してしまう
+ * （そのCLに後のパスのオーナー種別が存在しないだけで、内容としては無関係な CL のため）。
+ *
+ * @param {object} graph
+ * @param {import('@core').Wall[]} ownerWalls
+ * @param {import('@core').Wall[]} challengerWalls
+ * @param {{setOwnerFields?: boolean, claimUncovered?: boolean}} [opts]
+ *   setOwnerFields=false: ownerWalls 自身のフィールドを一切書き換えない（App.jsx ステップ3の
+ *   外壁オーナー化パスが使う——外壁は backingRange の既存フォールバック式で既に正しい下地帯を
+ *   返すため明示不要。明示すると materialRange が既定式ぶん広がる副作用がある。F1/F10参照）。
+ *   claimUncovered: splitWallByOwnership へそのまま渡す（同関数のdocを参照）。
+ * @returns {Map<string, import('@core').Wall[]>} 分割が起きた壁の 旧ID→新壁群（呼び出し側が
+ *   generatedWallIds を張り替える。分割が無かった壁は含まれない）
+ */
+export function applyBackingOwnership(graph, ownerWalls, challengerWalls, { setOwnerFields = true, claimUncovered = true } = {}) {
+  if (setOwnerFields) {
+    for (const w of ownerWalls) {
+      if (w.wallFinish == null) continue; // 手動壁等（生成時確定値が無い）は対象外
+      w.backingOffset = 0;
+      w.backingDepth  = 2 * (Math.abs(w.axisOffset) - w.wallFinish);
+      // finishSide は既存値を優先する（axisOffset===0＝CL偏芯の仕上げ面合わせでは
+      // sign(axisOffset)が0になり側を導出できないため、既に確定済みの値を壊さない）。
+      w.finishSide    = w.finishSide ?? (Math.sign(w.axisOffset) || 1);
+    }
+  }
+
+  const ownersByCL = new Map(); // axisCLId → owner壁[]
+  for (const w of ownerWalls) {
+    if (w.wallFinish == null) continue;
+    if (!ownersByCL.has(w.axisCL.id)) ownersByCL.set(w.axisCL.id, []);
+    ownersByCL.get(w.axisCL.id).push(w);
+  }
+
+  const splitMap = new Map();
+  for (const w of challengerWalls) {
+    if (w.wallFinish == null) continue;
+    const owners = ownersByCL.get(w.axisCL.id);
+    if (!owners || owners.length === 0) continue; // 対抗オーナーが無いCL＝このパスの対象外
+    const news = splitWallByOwnership(graph, w, owners, { claimUncovered });
+    if (news) splitMap.set(w.id, news);
+  }
+  return splitMap;
+}
+
+/**
+ * 同一CL上の下地（間柱帯）を1つに統一する（下地オーナー壁＋仕上げ薄壁方式）。
+ * walls は今回生成した内周壁全体（複数Roomにわたる。階段ペアRoom・階段吹抜けの壁も含む）。
+ *
+ * オーナー規則: axisCL・スパン単位で「＋側（axisOffsetが正＝座標値が増える側）の壁が
+ * 常にオーナー。−側の壁は、＋側の壁と重ならないサブ区間のみオーナー」。生成直後は
+ * axisOffset = ±(wallBase/2+wallFinish) の対称式のため、符号＝側が成立する
+ * （CL偏芯適用前のこの時点でのみ有効な前提。適用後は clEccentricity.js 側の isOwner が
+ * 別途スパン重なりで再判定する）。＋側同士のスパン重なり（同じ側に複数Roomの壁が並んで
+ * 重複するケース）は判定しない——Room.cells は部屋間で排他（同じセルを2部屋が持てない）
+ * ため、同一CL・同一側に生成される壁のスパンは重ならない前提が成立する。
+ *
+ * @param {object} graph
+ * @param {import('@core').Wall[]} walls
+ * @returns {Map<string, import('@core').Wall[]>} applyBackingOwnership と同形
+ */
+export function resolveBackingOwnership(graph, walls) {
+  const groups = new Map(); // axisCLId → walls[]
+  for (const w of walls) {
+    if (w.wallFinish == null) continue;
+    if (!groups.has(w.axisCL.id)) groups.set(w.axisCL.id, []);
+    groups.get(w.axisCL.id).push(w);
+  }
+
+  const splitMap = new Map();
+  for (const [, group] of groups) {
+    const posWalls = group.filter(w => Math.sign(w.axisOffset) > 0);
+    const negWalls = group.filter(w => Math.sign(w.axisOffset) < 0);
+    if (posWalls.length === 0) {
+      // − 側だけのグループ（対抗する＋側が今回の生成分に無い＝このCLでは − 側が唯一の壁）:
+      // − 側全体をオーナーとして明示する（applyBackingOwnership はオーナー無しCLのchallengerに
+      // 触れない設計のため、この解決はここで直接行う）。
+      for (const w of negWalls) {
+        if (w.wallFinish == null) continue;
+        w.backingOffset = 0;
+        w.backingDepth  = 2 * (Math.abs(w.axisOffset) - w.wallFinish);
+        // finishSide は既存値を優先する（axisOffset===0では側を導出できないため）。
+        w.finishSide    = w.finishSide ?? (Math.sign(w.axisOffset) || 1);
+      }
+      continue;
+    }
+    for (const [id, news] of applyBackingOwnership(graph, posWalls, negWalls)) splitMap.set(id, news);
+  }
+  return splitMap;
+}
+
 /**
  * Wall オブジェクトから undo/redo 用スナップショットを作成する。
  * CL は ID 参照で保持し、復元時に graph.shapeMap から解決する。

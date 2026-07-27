@@ -71,7 +71,18 @@ function representativeRoom(graph, clId, side, cellToRoom) {
   return best;
 }
 
-/** clId 上の INTERIOR_WALL エッジのスパン集合から、graph.stairs の全セルを除いた対象部屋一覧を集める。 */
+/**
+ * graph.stairs の全セル（階段の平面footprint全体。破れ線先の階段下エリアも含む）を集める。
+ * 階段下部屋（2a。stairUnderRooms が返す通常Room）を偏芯対象から除外する判定に使う——
+ * 2a壁は generateStairUnderWalls 固有の偏芯ルール（LANE_CLEARANCE式）で生成・
+ * trimStairUnderJunctions でトリムされる別管理の壁のため、ここで汎用偏芯式を適用すると、
+ * 2a側の生成・トリム（App.jsx ステップ2a/3.5）と偏芯適用（ステップ2b）が毎脱出で
+ * 互いの結果を上書きし合う（無限に収束しない・面位置が脱出ごとにブレる）。
+ * 階段ペアRoom（feature=STAIR）・階段吹抜け（STAIR_VOID）はセルが階段そのもの（stair.cells）と
+ * 一致するが、これらは通常Roomと同じ経路（generateRoomWallsFromOutline）で壁を持つため
+ * 除外しない——feature で区別する（stairUnderRooms は STAIR/STAIR_VOID/UNDEFINED を除外して
+ * 選定するため、階段セルに重なる「feature がどちらでもない」Room＝2a部屋だけがこの除外の対象）。
+ */
 function collectStairCells(graph) {
   const stairCells = new Set();
   for (const stair of graph.stairs) {
@@ -120,7 +131,10 @@ export function resolveEccentricity(graph, clId, materialMap, specOverride) {
  * spec が undefined（解除）の場合は roomWallDims の対称既定式へ戻し、
  * backingOffset/backingDepth/finishSide を null（現行式）に戻す。
  *
- * 対象: clId を軸CLに持つ、非外壁・非階段（階段下部屋・階段ペアRoom除外）の room 生成壁。
+ * 対象: clId を軸CLに持つ、非外壁の room 生成壁（UNDEFINED の部屋は除く。階段ペアRoom・
+ * 階段吹抜けも、新モデルでは通常のRoomと同じ経路で壁を持つため対象に含める。ただし
+ * 階段下部屋（2a。階段セルに重なるが feature が STAIR/STAIR_VOID ではない通常Room）は
+ * 別管理の壁のため対象外——collectStairCells 参照）。
  * 内壁指定（INTERIOR_WALL エッジ）のスパンと有意に重ならない壁は対象外。
  *
  * @param {object} graph
@@ -154,13 +168,20 @@ export function applyCLEccentricity(graph, clId, { materialMap } = {}) {
   // 対象壁の抽出（所属Room付き）。適用時はINTERIOR_WALLスパンとの重なりで判定するが、
   // 解除時はスパンが既に消えている前提のため、代わりに偏芯の痕跡（finishSide/backingOffset
   // が非null）を持つ壁で判定する——痕跡を持つ壁だけが「戻すべき対象」。
+  // feature除外は UNDEFINED のみ（階段ペアRoom・階段吹抜けも新モデルでは通常のRoomと
+  // 同じ経路で壁を持つため対象に含める）。ただし階段下部屋（2a。階段セルに重なるが
+  // feature が STAIR/STAIR_VOID ではない通常Room）は対象外——2a壁は別管理
+  // （collectStairCells のコメント参照）。ペアRoom・吹抜け自身のセルも階段セルと重なるが、
+  // feature で区別してそちらは除外しない。
   const targets = [];
   for (const room of graph.rooms) {
-    if (room.feature === RoomFeature.STAIR_VOID || room.feature === RoomFeature.UNDEFINED) continue;
+    if (room.feature === RoomFeature.UNDEFINED) continue;
     const roomCells = refreshCells(room.cells, graph);
-    let overlapsStair = false;
-    for (const key of roomCells) { if (stairCells.has(key)) { overlapsStair = true; break; } }
-    if (overlapsStair) continue;
+    if (room.feature !== RoomFeature.STAIR && room.feature !== RoomFeature.STAIR_VOID) {
+      let overlapsStair = false;
+      for (const key of roomCells) { if (stairCells.has(key)) { overlapsStair = true; break; } }
+      if (overlapsStair) continue;
+    }
 
     for (const wid of room.generatedWallIds) {
       const w = graph.shapeMap.get(wid);
