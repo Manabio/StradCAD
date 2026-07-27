@@ -10,6 +10,20 @@ export function toNumpadKey(key) {
   return null;
 }
 
+// 数式文字列を数値評価する（App.jsx evalExpr と同一ロジック）。
+// positiveOnly=true（既定）は v>0 のみ許容（CL移動量等）。false は 0以下・負値も許容する
+// （CL偏芯量など符号付き入力向け。第2段のSiteInfoPanel.jsx差し替えで使用）。
+export function evalNumpadExpr(s, { positiveOnly = true } = {}) {
+  if (!s) return NaN;
+  try {
+    const expr = s.replace(/×/g, '*').replace(/÷/g, '/');
+    if (/[+\-*/]$/.test(expr)) return NaN;
+    const v = Function(`"use strict"; return (${expr})`)();
+    if (typeof v !== 'number' || !isFinite(v)) return NaN;
+    return positiveOnly ? (v > 0 ? v : NaN) : v;
+  } catch { return NaN; }
+}
+
 // NumPad キー 1 つを現在値に適用して新しい値を返す（キーボード入力との共有用）
 export function applyKeyToNumpadValue(value, k) {
   function canAppendOp(v) {

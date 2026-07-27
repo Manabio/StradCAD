@@ -35,7 +35,9 @@ import { cellsBeyondBreak, stairPortEdges } from './finish/stair/stairGeometry.j
 import { generateStairUnderWalls, parentAdjacentEdges, stairUnderClaimedEdges, trimStairUnderJunctions } from './finish/stair/stairUnderWalls.js';
 import { roomBounds, cellBoundsList, refreshCells } from './finish/gridCells.js';
 import { generateRoomWallsFromOutline, generateExteriorWalls, snapshotWall, restoreWallsFromSnapshots } from './finish/wallGeneration.js';
-import { snapshotEdges, restoreEdges, syncEdgesFromTopology } from './finish/edgeClassify.js';
+import { snapshotEdges, restoreEdges, syncEdgesFromTopology, interiorWallSpans } from './finish/edgeClassify.js';
+// finish/clEccentricity.js は edgeComposition.js 経由で materials/materialData.js（材マスタ全件）を
+// 静的に引くため、コード分割維持のため動的 import する（materialData.js のヘッダコメント参照）。
 import { reinterpretRoomsOnEntry, ensureStairRooms, snapshotRoomsState, restoreRoomsState } from './finish/roomReinterpret.js';
 import { RoomLabelsLayer } from './renderer/RoomLabelsLayer.jsx';
 import { StepSectionLayer } from './renderer/StepSectionLayer.jsx';
@@ -89,6 +91,8 @@ import { FloorDrum }           from './ui/FloorDrum.jsx';
 import { AltChip }             from './ui/AltChip.jsx';
 import { FloorplanPalette }    from './renderer/FloorplanPalette.jsx';
 import { RULER, TOP_BAR, INSET, inGutter as isInGutter } from './layout.js';
+import { evalNumpadExpr } from './ui/numpadUtils.js';
+import { EccentricityDialog } from './ui/EccentricityDialog.jsx';
 
 const SNAP_THRESHOLD_PX = 20;
 const CL_THRESHOLD_PX   = 8;
@@ -97,15 +101,7 @@ const WALL_THRESHOLD_PX = 8;
 const viewport = new Viewport(window.innerWidth, window.innerHeight, RULER, RULER);
 
 // CL の pendingDelta を実座標に bake する（ref CL / 通常 CL 両対応）
-function evalExpr(s) {
-  if (!s) return NaN;
-  try {
-    const expr = s.replace(/×/g, '*').replace(/÷/g, '/');
-    if (/[+\-*/]$/.test(expr)) return NaN;
-    const v = Function(`"use strict"; return (${expr})`)();
-    return typeof v === 'number' && isFinite(v) && v > 0 ? v : NaN;
-  } catch { return NaN; }
-}
+const evalExpr = (s) => evalNumpadExpr(s, { positiveOnly: true });
 
 function bakeCLValue(cl, newVal) {
   if (cl.refId) {
@@ -147,6 +143,7 @@ const App = observer(() => {
   const [clDialog,    setClDialog]    = useState(null); // { type, worldCoord }
   const [clPreview,   setClPreview]   = useState(null);
   const [wallDialog,     setWallDialog]     = useState(null); // { worldPos }
+  const [eccDialog,      setEccDialog]      = useState(null); // { cl } — CL偏芯ダイアログ
   const [openingDialog,  setOpeningDialog]  = useState(null); // { wall, worldPos, category, existing }
   const [floorDialog,    setFloorDialog]    = useState(null); // { isLowest }
   const [floorConfirm,   setFloorConfirm]   = useState(null); // { message, buttons, onSelect }
@@ -340,8 +337,9 @@ const App = observer(() => {
       // 中心線上メニュー: 移動可否と線の向き（移動アイコンの矢印方向）を渡す。
       // 移動を選ばれたときに備え、移動範囲の計算（他フロアのIDB読み込みを含む）を先読みしておく。
       const clState = context === CONTEXT.CENTER_LINE ? {
-        canMove:    typeof modeRef.current?.startMove === 'function',
-        isVertical: cl.centerLineType === CenterLineType.VERTICAL,
+        canMove:         typeof modeRef.current?.startMove === 'function',
+        isVertical:      cl.centerLineType === CenterLineType.VERTICAL,
+        hasInteriorWall: interiorWallSpans(graph, cl.id).length > 0,
       } : null;
       if (clState?.canMove) modeRef.current.preloadMove(cl);
       const items   = getMenuItems(context, endpointState, clState);
@@ -1216,6 +1214,50 @@ const App = observer(() => {
       redoFns.push(() => { restoreWallsFromSnapshots(graph, snapshots).forEach(w => r.generatedWallIds.add(w.id)); });
     }
 
+    // ステップ2b: CL偏芯の適用（内壁指定のあるCLに設定された偏芯仕様を対象壁へ反映する。
+    // spec と現材から毎回フル再計算する冪等処理——脱出のたびに材変更を偏芯壁へ反映させる）。
+    // ステップ3（外壁の全削除・再生成）より前に行う: 対象は非外壁のみのため実害はないが、
+    // 生成済みの内壁（ステップ2）に対して行うのが素直なため直後に置く。
+    // fmode?.materialMap が無ければ丸ごとスキップする（applyCLEccentricity 自体も materialMap
+    // 無しでは何もしないが、無駄な動的importとループを避ける。QA finding 2）。
+    if (graph.clEccentricities.size > 0 && fmode?.materialMap) {
+      const { applyCLEccentricity } = await import('./finish/clEccentricity.js');
+      const eccTouched = new Map(); // wallId -> 変更前スナップショット（初回遭遇時点）
+      for (const clId of graph.clEccentricities.keys()) {
+        for (const c of applyCLEccentricity(graph, clId, { materialMap: fmode?.materialMap })) {
+          if (!eccTouched.has(c.wall.id)) {
+            eccTouched.set(c.wall.id, {
+              axisOffset: c.axisOffset, wallFinish: c.wallFinish, backingOffset: c.backingOffset,
+              backingDepth: c.backingDepth, finishSide: c.finishSide, startOffset: c.startOffset, endOffset: c.endOffset,
+            });
+          }
+        }
+      }
+      if (eccTouched.size > 0) {
+        const eccChanges = [];
+        for (const [id, before] of eccTouched) {
+          const w = graph.shapeMap.get(id);
+          if (!w) continue;
+          eccChanges.push({
+            id, before,
+            after: {
+              axisOffset: w.axisOffset, wallFinish: w.wallFinish, backingOffset: w.backingOffset,
+              backingDepth: w.backingDepth, finishSide: w.finishSide, startOffset: w.startOffset, endOffset: w.endOffset,
+            },
+          });
+        }
+        const applyFields = (id, f) => {
+          const w = graph.shapeMap.get(id);
+          if (!w) return;
+          w.axisOffset = f.axisOffset; w.wallFinish = f.wallFinish;
+          w.backingOffset = f.backingOffset; w.backingDepth = f.backingDepth;
+          w.finishSide = f.finishSide; w.startOffset = f.startOffset; w.endOffset = f.endOffset;
+        };
+        undoFns.push(() => eccChanges.forEach(c => applyFields(c.id, c.before)));
+        redoFns.push(() => eccChanges.forEach(c => applyFields(c.id, c.after)));
+      }
+    }
+
     // ステップ3: 外壁の再生成（既存の isExteriorWall 壁を削除して作り直す）
     const oldExteriorSnapshots = [];
     for (const shape of graph.shapeMap.values()) {
@@ -1296,6 +1338,59 @@ const App = observer(() => {
     if (JSON.stringify(edgeBefore) !== JSON.stringify(edgeAfter)) {
       undoFns.push(() => restoreEdges(graph, edgeBefore));
       redoFns.push(() => restoreEdges(graph, edgeAfter));
+    }
+
+    // ステップ4b: 内壁指定（INTERIOR_WALLエッジ）が消えたCLの偏芯レコードを掃除する
+    // （ステップ4のトポロジー再同期後に判定——エッジが無くなった＝もう対象壁が無いCLの
+    // レコードを残すと再突入時に亡霊レコードとして残り続ける）。
+    // レコード削除の直後に applyCLEccentricity を「解除」として呼び、既に偏芯済みの壁も
+    // 既定式へ戻す——レコードだけ消して壁を偏芯したまま孤児化させると、ユーザーが解除できなく
+    // なる（QA finding 3）。clEccentricity.js 側は spec なし（解除）の場合 materialMap 不要・
+    // スパン消滅後も続行するよう改修済み。壁側の変更差分はステップ2bと同型でundoFns/redoFnsへ
+    // 積み、既存のレコード復元undoと併存させる（undo実行時は両方が走り、レコード・壁の双方を
+    // 削除前の状態へ戻す）。
+    const staleEccIds = [...graph.clEccentricities.keys()].filter(clId => interiorWallSpans(graph, clId).length === 0);
+    if (staleEccIds.length > 0) {
+      const { applyCLEccentricity } = await import('./finish/clEccentricity.js');
+      const removedEcc = staleEccIds.map(clId => [clId, graph.clEccentricities.get(clId)]);
+      runInAction(() => { for (const clId of staleEccIds) graph.removeCLEccentricity(clId); });
+      undoFns.push(() => runInAction(() => { for (const [clId, rec] of removedEcc) graph.setCLEccentricity(clId, rec); }));
+      redoFns.push(() => runInAction(() => { for (const clId of staleEccIds) graph.removeCLEccentricity(clId); }));
+
+      const eccTouched = new Map(); // wallId -> 変更前スナップショット（初回遭遇時点）
+      for (const clId of staleEccIds) {
+        for (const c of applyCLEccentricity(graph, clId, { materialMap: fmode?.materialMap })) {
+          if (!eccTouched.has(c.wall.id)) {
+            eccTouched.set(c.wall.id, {
+              axisOffset: c.axisOffset, wallFinish: c.wallFinish, backingOffset: c.backingOffset,
+              backingDepth: c.backingDepth, finishSide: c.finishSide, startOffset: c.startOffset, endOffset: c.endOffset,
+            });
+          }
+        }
+      }
+      if (eccTouched.size > 0) {
+        const eccChanges = [];
+        for (const [id, before] of eccTouched) {
+          const w = graph.shapeMap.get(id);
+          if (!w) continue;
+          eccChanges.push({
+            id, before,
+            after: {
+              axisOffset: w.axisOffset, wallFinish: w.wallFinish, backingOffset: w.backingOffset,
+              backingDepth: w.backingDepth, finishSide: w.finishSide, startOffset: w.startOffset, endOffset: w.endOffset,
+            },
+          });
+        }
+        const applyFields = (id, f) => {
+          const w = graph.shapeMap.get(id);
+          if (!w) return;
+          w.axisOffset = f.axisOffset; w.wallFinish = f.wallFinish;
+          w.backingOffset = f.backingOffset; w.backingDepth = f.backingDepth;
+          w.finishSide = f.finishSide; w.startOffset = f.startOffset; w.endOffset = f.endOffset;
+        };
+        undoFns.push(() => eccChanges.forEach(c => applyFields(c.id, c.before)));
+        redoFns.push(() => eccChanges.forEach(c => applyFields(c.id, c.after)));
+      }
     }
 
     // 全変更を単一の undo エントリとして登録（undo は逆順実行）
@@ -2511,6 +2606,10 @@ const App = observer(() => {
       }
       return;
     }
+    if (item.id === 'cl-ecc') {
+      setEccDialog({ cl: menu.cl });
+      return;
+    }
     if (item.id === 'del') {
       if (menu.snap) {
         const before = serializeGraph(graph);
@@ -2611,6 +2710,22 @@ const App = observer(() => {
       },
     );
     setWallDialog(null);
+  }
+
+  // ---- CL偏芯 ----
+  async function handleEccConfirm(rec, materialMap) {
+    if (!eccDialog) return;
+    const cl = eccDialog.cl;
+    const { applyCLEccentricity } = await import('./finish/clEccentricity.js');
+    const before = serializeGraph(graph);
+    runInAction(() => {
+      if (rec) graph.setCLEccentricity(cl.id, rec);
+      else     graph.removeCLEccentricity(cl.id);
+      applyCLEccentricity(graph, cl.id, { materialMap });
+    });
+    const after = serializeGraph(graph);
+    undoManager.push(() => restoreGraph(graph, before), () => restoreGraph(graph, after));
+    setEccDialog(null);
   }
 
   // 木造（在来）の自動判定（問題.md）: 平面モードで主構造が未指定のとき、追加した通り芯が
@@ -3134,6 +3249,15 @@ const App = observer(() => {
           backingMaterials={graph.backingMaterials}
           onConfirm={handleWallConfirm}
           onCancel={() => setWallDialog(null)}
+        />
+      )}
+
+      {eccDialog && (
+        <EccentricityDialog
+          graph={graph}
+          cl={eccDialog.cl}
+          onConfirm={handleEccConfirm}
+          onCancel={() => setEccDialog(null)}
         />
       )}
 

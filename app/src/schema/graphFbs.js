@@ -52,6 +52,8 @@ const GS = {
   EXTERIOR_ROWS: 37, EXTERIOR_FITTING_ROWS: 38, STRUCTURE_ROWS: 39,
   // 部屋の既定値（共通仕様タブ per-floor 設定）。CH初期値は 0 = 未保存（旧データ）扱い
   DEFAULT_FLOOR_LEVEL: 40, DEFAULT_CEILING_HEIGHT: 41,
+  // CL偏芯（内壁指定のあるCLの偏芯仕様、per-floor）
+  CL_ECCENTRICITIES: 42,
 };
 
 // Stair: 15 フィールド
@@ -119,7 +121,7 @@ const ER = { CL_ID: 0, WALL_ID: 1, OFFSET: 2 };
 // Point: 3 フィールド
 const PT = { ID: 0, X: 1, Y: 2 };
 
-// Wall: 20 フィールド
+// Wall: 21 フィールド
 const WL = {
   ID: 0, AXIS_CL: 1, AXIS_OFF: 2, IS_V: 3,
   CL_S: 4, S_OFF: 5, CL_E: 6, E_OFF: 7,
@@ -128,7 +130,11 @@ const WL = {
   HAS_WALL_FINISH: 14, WALL_FINISH: 15, // 室内側仕上げ厚(mm)。null=不明・手動壁
   HAS_BACKING_OFFSET: 16, BACKING_OFFSET: 17, // 下地帯中心のaxisCL.valueからの符号付きオフセット(mm)。null=対称（現行式）
   HAS_BACKING_DEPTH: 18, BACKING_DEPTH: 19,   // 下地帯深さ(mm)。null=現行式。0=下地なし（仕上げのみの薄壁）
+  FINISH_SIDE: 20, // 仕上げ面が向く側（int8、-1/0/1）。0=未設定=null（従来どおり導出）
 };
+
+// CLEccentricity（CL偏芯レコード）: 5 フィールド
+const CE = { CL_ID: 0, MODE: 1, VALUE: 2, SIDE: 3, BACKING: 4 };
 
 // Opening: 15 フィールド（開口 — 建具・窓）
 const OP = {
@@ -342,7 +348,7 @@ function writeWall(b, w) {
   const hasBackingOffset = w.backingOffset != null;
   const hasBackingDepth  = w.backingDepth  != null;
 
-  b.startObject(20);
+  b.startObject(21);
   b.addFieldOffset(WL.ID,      sId,   0);
   b.addFieldOffset(WL.AXIS_CL, sAxis, 0);
   b.addFieldFloat64(WL.AXIS_OFF, w.axisOffset ?? 0, 0.0);
@@ -363,6 +369,7 @@ function writeWall(b, w) {
   b.addFieldFloat64(WL.BACKING_OFFSET, hasBackingOffset ? w.backingOffset : 0, 0.0);
   b.addFieldInt8(WL.HAS_BACKING_DEPTH, hasBackingDepth ? 1 : 0, 0);
   b.addFieldFloat64(WL.BACKING_DEPTH, hasBackingDepth ? w.backingDepth : 0, 0.0);
+  b.addFieldInt8(WL.FINISH_SIDE, w.finishSide ?? 0, 0);
   return b.endObject();
 }
 
@@ -581,6 +588,19 @@ function writeEdge(b, e) {
   b.addFieldOffset(ED.MASTER_TYPE, sMaster,    0);
   b.addFieldOffset(ED.OVR_KEYS,    ovrKeysVec, 0);
   b.addFieldOffset(ED.OVR_VALS,    ovrValsVec, 0);
+  return b.endObject();
+}
+
+function writeClEcc(b, ce) {
+  const sClId    = b.createString(ce.clId ?? '');
+  const sBacking = b.createString(ce.backing ?? '');
+
+  b.startObject(5);
+  b.addFieldOffset(CE.CL_ID,   sClId, 0);
+  b.addFieldInt8(CE.MODE,      ce.mode === 'face' ? 1 : 0, 0);
+  b.addFieldFloat64(CE.VALUE,  ce.value ?? 0, 0.0);
+  b.addFieldInt8(CE.SIDE,      ce.side < 0 ? -1 : 1, 0);
+  b.addFieldOffset(CE.BACKING, sBacking, 0);
   return b.endObject();
 }
 
@@ -967,6 +987,8 @@ function readWall(bb, tablePos) {
     // 旧データ（フィールド未保存）は HAS_ フラグが立たず null になる（=現行対称描画へ後方互換）
     backingOffset: r.i8(WL.HAS_BACKING_OFFSET) !== 0 ? r.f64(WL.BACKING_OFFSET) : null,
     backingDepth:  r.i8(WL.HAS_BACKING_DEPTH)  !== 0 ? r.f64(WL.BACKING_DEPTH)  : null,
+    // 0 = 未設定（旧データ含む）→ null（従来どおり sign(faceV-axisV) から導出）
+    finishSide:    r.i8(WL.FINISH_SIDE) || null,
   };
 }
 
@@ -1136,6 +1158,17 @@ function readEdge(bb, tablePos) {
     key:        r.str(ED.KEY),
     masterType: r.str(ED.MASTER_TYPE) || null,
     overrides,
+  };
+}
+
+function readClEcc(bb, tablePos) {
+  const r = makeReader(bb, tablePos);
+  return {
+    clId:    r.str(CE.CL_ID),
+    mode:    r.i8(CE.MODE) === 1 ? 'face' : 'value',
+    value:   r.f64(CE.VALUE),
+    side:    r.i8(CE.SIDE) < 0 ? -1 : 1,
+    backing: r.str(CE.BACKING) || '',
   };
 }
 
@@ -1354,6 +1387,7 @@ export function encode(snapshot) {
   const tagRegistryValsVec = writeStrVec(b, snapshot.tagRegistryVals ?? []);
   const columnAxisKeysVec = writeStrVec(b, snapshot.columnAxisOffsetKeys ?? []);
   const columnAxisValsVec = writeStrVec(b, snapshot.columnAxisOffsetVals ?? []);
+  const clEccVec = writeVec(b, snapshot.clEccentricities ?? [], writeClEcc);
   const stairVec      = writeVec(b, snapshot.stairs ?? [], writeStair);
   const stairOrderVec = writeStrVec(b, snapshot.stairOrder ?? []);
   const exteriorRowsVec        = writeVec(b, snapshot.exteriorRows        ?? [], writeExteriorRow);
@@ -1366,7 +1400,7 @@ export function encode(snapshot) {
   const sStructureOverride = b.createString(snapshot.structureOverride ?? '');
   const structuralInfoOff  = writeStructuralInfo(b, snapshot.structuralInfo);
 
-  b.startObject(42);
+  b.startObject(43);
   b.addFieldOffset(GS.CLS,        clVec,        0);
   b.addFieldOffset(GS.PTS,        ptVec,        0);
   b.addFieldOffset(GS.WALLS,      wallVec,      0);
@@ -1408,6 +1442,7 @@ export function encode(snapshot) {
   b.addFieldOffset(GS.EXTERIOR_ROWS,         exteriorRowsVec,        0);
   b.addFieldOffset(GS.EXTERIOR_FITTING_ROWS, exteriorFittingRowsVec, 0);
   b.addFieldOffset(GS.STRUCTURE_ROWS,        structureRowsVec,       0);
+  b.addFieldOffset(GS.CL_ECCENTRICITIES,     clEccVec,               0);
   const root = b.endObject();
 
   b.finish(root);
@@ -1465,5 +1500,6 @@ export function decode(bytes) {
     exteriorRows:        r.vec(GS.EXTERIOR_ROWS,         readExteriorRow),
     exteriorFittingRows: r.vec(GS.EXTERIOR_FITTING_ROWS, readExteriorRow),
     structureRows:       r.vec(GS.STRUCTURE_ROWS,        readExteriorRow),
+    clEccentricities:    r.vec(GS.CL_ECCENTRICITIES,     readClEcc),
   };
 }

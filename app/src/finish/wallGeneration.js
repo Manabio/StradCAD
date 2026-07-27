@@ -540,6 +540,7 @@ export function snapshotWall(w) {
     wallFinish:  w.wallFinish,
     backingOffset: w.backingOffset,
     backingDepth:  w.backingDepth,
+    finishSide:  w.finishSide,
   };
 }
 
@@ -560,6 +561,7 @@ export function restoreWallsFromSnapshots(graph, snapshots) {
     if (s.wallFinish != null) props.wallFinish = s.wallFinish;
     if (s.backingOffset != null) props.backingOffset = s.backingOffset;
     if (s.backingDepth  != null) props.backingDepth  = s.backingDepth;
+    if (s.finishSide    != null) props.finishSide    = s.finishSide;
     const w = graph.addWall(axisCL, s.axisOffset, s.isVertical, startCL, s.startOffset ?? 0, endCL, s.endOffset ?? 0, props, s.id);
     walls.push(w);
   }

@@ -24,7 +24,9 @@ export function findHostWall(opening, graph) {
   for (const w of graph.walls) {
     if (w.isVertical !== opening.isVertical) continue;
     if (w.axisCL.id  !== opening.axisCL.id)  continue;
-    if (Math.sign(w.axisOffset) !== opening.wallSide) continue;
+    // CL偏芯の仕上げ面合わせで axisOffset===0（CL上に面が一致）になった壁は両側にマッチさせる
+    const wSign = Math.sign(w.axisOffset);
+    if (wSign !== 0 && wSign !== opening.wallSide) continue;
     const lo = Math.min(w.coord1, w.coord2), hi = Math.max(w.coord1, w.coord2);
     if (opening.coord1 < lo || opening.coord2 > hi) continue;
     if (Math.abs(w.axisOffset) < bestAbs) { bestAbs = Math.abs(w.axisOffset); best = w; }

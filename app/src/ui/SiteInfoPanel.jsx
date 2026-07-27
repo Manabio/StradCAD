@@ -4,7 +4,7 @@ import { SiteLineKind } from '@core';
 import { getSiteLineRedBlue } from '../renderer/SiteLinesLayer.jsx';
 import { isSanshaKind, computeLineTriNums } from '../site/lineClassification.js';
 import { NumPad } from './NumPad.jsx';
-import { applyKeyToNumpadValue, toNumpadKey } from './numpadUtils.js';
+import { applyKeyToNumpadValue, toNumpadKey, evalNumpadExpr } from './numpadUtils.js';
 import { ModePanel } from './ModePanel.jsx';
 import { BottomSheet } from './BottomSheet.jsx';
 
@@ -38,17 +38,7 @@ function computeAreaRows(site) {
 }
 
 // 式文字列を評価して数値を返す。無効なら NaN
-function evalExpr(s) {
-  if (!s) return NaN;
-  try {
-    // × / ÷ を JS 演算子に変換
-    const expr = s.replace(/×/g, '*').replace(/÷/g, '/');
-    // 末尾が演算子ならそのまま NaN
-    if (/[+\-*/]$/.test(expr)) return NaN;
-    const v = Function(`"use strict"; return (${expr})`)();
-    return typeof v === 'number' && isFinite(v) && v > 0 ? v : NaN;
-  } catch { return NaN; }
-}
+const evalExpr = (s) => evalNumpadExpr(s, { positiveOnly: true });
 
 const TH_BASE = {
   padding: '4px 6px',

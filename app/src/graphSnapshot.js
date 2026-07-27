@@ -56,6 +56,7 @@ function buildSnapshot(graph) {
       wallFinish: w.wallFinish ?? null,
       backingOffset: w.backingOffset ?? null,
       backingDepth: w.backingDepth ?? null,
+      finishSide: w.finishSide ?? null,
       ...baseProps(w),
     })),
     openings: gs.filter(s => s.type === ShapeType.OPENING).map(o => ({
@@ -238,6 +239,10 @@ function buildSnapshot(graph) {
     // 柱芯（ColumnAxis）オフセット。CL id → 通り芯からの偏心量(mm)。
     columnAxisOffsetKeys: [...graph.columnAxisOffsets.keys()],
     columnAxisOffsetVals: [...graph.columnAxisOffsets.values()].map(String),
+    // CL偏芯（内壁指定のあるCLの偏芯仕様）。edges と同様、CL id を含む1レコード1件のテーブル配列。
+    clEccentricities: [...graph.clEccentricities.entries()].map(([clId, r]) => ({
+      clId, mode: r.mode, value: r.value, side: r.side, backing: r.backing,
+    })),
   };
 }
 
@@ -419,7 +424,7 @@ function applySnapshot(graph, snapshot) {
       const clEnd   = resolveCL(graph, d.clEndId);
       if (axisCL && clStart && clEnd) {
         graph.addWall(axisCL, d.axisOffset ?? 0, d.isVertical, clStart, d.startOffset, clEnd, d.endOffset,
-          { discipline: d.discipline, lineWeight: d.lineWeight, lineType: d.lineType, color: d.color, isRoomWall: d.isRoomWall ?? false, isExteriorWall: d.isExteriorWall ?? false, wallFinish: d.wallFinish ?? null, backingOffset: d.backingOffset ?? null, backingDepth: d.backingDepth ?? null }, d.id);
+          { discipline: d.discipline, lineWeight: d.lineWeight, lineType: d.lineType, color: d.color, isRoomWall: d.isRoomWall ?? false, isExteriorWall: d.isExteriorWall ?? false, wallFinish: d.wallFinish ?? null, backingOffset: d.backingOffset ?? null, backingDepth: d.backingDepth ?? null, finishSide: d.finishSide ?? null }, d.id);
       }
     }
     graph.resolveExtentWallRefs();
@@ -664,6 +669,14 @@ function applySnapshot(graph, snapshot) {
     const axisKeys = snapshot.columnAxisOffsetKeys ?? [];
     const axisVals = snapshot.columnAxisOffsetVals ?? [];
     axisKeys.forEach((clId, i) => graph.columnAxisOffsets.set(clId, Number(axisVals[i])));
+    for (const d of snapshot.clEccentricities ?? []) {
+      graph.setCLEccentricity(d.clId, {
+        mode: d.mode === 'face' ? 'face' : 'value',
+        value: d.value ?? 0,
+        side: d.side === -1 ? -1 : 1,
+        backing: d.backing ?? '',
+      });
+    }
 
     // 12. 境界エッジ（仕上げモード）— overrides は verbatim 復元
     for (const d of snapshot.edges ?? []) {

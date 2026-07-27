@@ -27,6 +27,27 @@ export function materialThickness(mat) {
 }
 
 /**
+ * 部屋の内装マスター＋指定の下地材コードから wallBase/wallFinish を導出する共通ヘルパー。
+ * roomWallDims（外壁下地）・interiorWallDims（内壁下地）は下地材コードの解決規約だけが違う
+ * 薄いラッパ（挙動不変）。
+ * @returns {{ wallBase:number, wallFinish:number } | null} 解決不可なら null
+ */
+function wallDimsWith(graph, room, materialMap, backingCode) {
+  if (!materialMap) return null;
+  const backing = materialMap.get(backingCode);
+  const finishInfo = room?.getFinishInfo?.() ?? {};
+  const panel   = materialMap.get(finishInfo.wallMaterial ?? DEFAULT_WALL_MATERIAL);
+  if (!backing || !panel) return null;
+
+  const finishMat = finishInfo.wallFinish ? materialMap.get(finishInfo.wallFinish) : null;
+
+  return {
+    wallBase:   materialThickness(backing),
+    wallFinish: materialThickness(panel) + materialThickness(finishMat),
+  };
+}
+
+/**
  * 部屋の外周壁の寸法を per-floor 設定＋部屋の内装マスターから導出する。
  *   wallBase   = 外壁下地（exteriorWallBacking）の断面深さ
  *   wallFinish = 部屋の壁材（wallMaterial）厚 ＋ 室側仕上げ（部屋の wallFinish）厚
@@ -34,18 +55,16 @@ export function materialThickness(mat) {
  * @returns {{ wallBase:number, wallFinish:number } | null} 解決不可なら null（既定値へフォールバック）
  */
 export function roomWallDims(graph, room, materialMap) {
-  if (!materialMap) return null;
-  const backing = materialMap.get(graph.exteriorWallBacking);
-  const finishInfo = room?.getFinishInfo?.() ?? {};
-  const panel   = materialMap.get(finishInfo.wallMaterial ?? DEFAULT_WALL_MATERIAL);
-  if (!backing || !panel) return null;
+  return wallDimsWith(graph, room, materialMap, graph.exteriorWallBacking);
+}
 
-  const finishMat  = finishInfo.wallFinish ? materialMap.get(finishInfo.wallFinish) : null;
-
-  return {
-    wallBase:   materialThickness(backing),
-    wallFinish: materialThickness(panel) + materialThickness(finishMat),
-  };
+/**
+ * 内壁の寸法。下地は interiorWallBacking（backingCode 指定時はそちら）、仕上げは部屋の内装マスター。
+ * CL偏芯（finish/clEccentricity.js）の「仕上げ面合わせ」計算で使う。
+ * @returns {{ wallBase:number, wallFinish:number } | null} 解決不可なら null
+ */
+export function interiorWallDims(graph, room, materialMap, backingCode = '') {
+  return wallDimsWith(graph, room, materialMap, backingCode || graph.interiorWallBacking);
 }
 
 /** 外壁ループの寸法（特定部屋に紐づかないため、壁材は既定・室側仕上げは含めない）。 */

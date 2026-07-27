@@ -222,19 +222,27 @@ export class Wall extends Shape {
     this.isRoomWall  = props?.isRoomWall ?? false; // 部屋外周壁フラグ（chamferWalls で端点を固定）
     this.isExteriorWall = props?.isExteriorWall ?? false; // 外壁フラグ（仕上げモードの外壁ループから生成）
     // 室内側仕上げ厚(mm)。axisOffset = wallBase/2 + wallFinish の内訳のうち仕上げ側のみを保持し、
-    // LOD詳細描画で「仕上げ面〜下地境界」の平行線・下地ピッチ線の位置を導出する（生成時のみ確定。null=不明・手動壁）。
+    // LOD詳細描画で「仕上げ面〜下地境界」の平行線・下地ピッチ線の位置を導出する（生成時のみ確定。null=不明・手動壁。
+    // CL偏芯壁は applyCLEccentricity が随時再導出して書き換える）。
     this.wallFinish  = props?.wallFinish ?? null;
-    // 下地帯中心の axisCL.value からの符号付きオフセット(mm)。偏芯壁（階段下部屋等）のみ設定される。
-    // null=現行（axisOffsetを中心に対称な下地帯）。生成時のみ確定・不変。
+    // 下地帯中心の axisCL.value からの符号付きオフセット(mm)。偏芯壁（階段下部屋・CL偏芯等）のみ設定される。
+    // null=現行（axisOffsetを中心に対称な下地帯）。生成時のみ確定（CL偏芯壁は applyCLEccentricity が再導出）。
     this.backingOffset = props?.backingOffset ?? null;
     // 下地帯の深さ(mm)。null=現行式（wallBase等から導出）。0は「下地なし＝仕上げのみの薄壁」を表す明示値。
     this.backingDepth  = props?.backingDepth ?? null;
+    // 仕上げ面が向く側（±1）。CL偏芯の「仕上げ面合わせ」でCL上に面が一致し dir 導出が
+    // 不能になるケースの明示指定。null=従来どおり sign(faceV-axisV) から導出する。
+    this.finishSide  = props?.finishSide ?? null;
     makeObservable(this, {
       clStart:     observable.ref,
       clEnd:       observable.ref,
       axisOffset:  observable,
       startOffset: observable,
       endOffset:   observable,
+      wallFinish:    observable,
+      backingOffset: observable,
+      backingDepth:  observable,
+      finishSide:    observable,
       axisValue:     computed,
       coord1:        computed,
       coord2:        computed,
@@ -260,7 +268,9 @@ export class Wall extends Shape {
     const thickLo = Math.min(axisV, faceV), thickHi = Math.max(axisV, faceV);
     if (this.backingDepth == null) return { lo: thickLo, hi: thickHi };
 
-    const dir = Math.sign(faceV - axisV) || 1;
+    // finishSide 明示指定があれば優先する（CL偏芯の仕上げ面合わせで faceV===axisV となり
+    // sign(faceV-axisV) が破綻するケースの対策。7.1参照）。
+    const dir = this.finishSide ?? (Math.sign(faceV - axisV) || 1);
     const finBoundary = faceV - dir * (this.wallFinish ?? 0);
     const finLo = Math.min(finBoundary, faceV), finHi = Math.max(finBoundary, faceV);
     if (this.backingDepth === 0) return { lo: finLo, hi: finHi };
@@ -289,6 +299,10 @@ export class Wall extends Shape {
       const half = this.backingDepth / 2;
       return { lo: center - half, hi: center + half };
     }
+    // 以下は axisCL中心の対称範囲を仮定するフォールバック枝。CL偏芯（finish/clEccentricity.js
+    // applyCLEccentricity）が設定する壁は finishSide とともに backingOffset/backingDepth も
+    // 必ず明示するため、finishSide が非nullの壁はこの枝に到達しない前提——到達すると
+    // 非対称な実位置と食い違う（対称仮定が破綻する）。
     if (this.wallFinish == null) return null;
     const faceV = this.axisValue;
     const depth = 2 * (Math.abs(faceV - axisV) - this.wallFinish);
@@ -936,6 +950,11 @@ export class PlanGraph {
     // ラーメン系（S造/SRC造/RC造(ラーメン)）でのみ非0になる（structural/structuralAutoFill.js が自動生成）。
     this.columnAxisOffsets = observable.map();
 
+    // CL偏芯（内壁指定のあるCLの偏芯仕様）: clId → レコード。未登録キー=偏芯なし（従来どおり）。
+    // レコード形状は setCLEccentricity 参照。壁への反映は finish/clEccentricity.js の
+    // applyCLEccentricity が毎回フル再計算して焼き込む（Wall側は導出結果のみを持つ）。
+    this.clEccentricities = observable.map();
+
     // トポロジー自動補完で「ユーザーが明示的に削除した箇所」を記憶する除外集合（per-floor、永続化対象）。
     // キーは柱・フーチング: `${verticalCL.id}:${horizontalCL.id}`、梁: spanKey()（始端終端の順序非依存）。
     this.excludedColumnSlots  = observable.set();
@@ -1051,6 +1070,8 @@ export class PlanGraph {
       setFloorDatum:            action,
       setStructureOverride:     action,
       setColumnAxisOffset:  action,
+      setCLEccentricity:    action,
+      removeCLEccentricity: action,
       backingMaterials:         computed,
       addBackingMaterial:       action,
       edges:                    computed,
@@ -1242,6 +1263,14 @@ export class PlanGraph {
 
   /** 柱芯オフセット（CL id → 通り芯からの偏心量mm）を1件設定する。 */
   setColumnAxisOffset(clId, value) { this.columnAxisOffsets.set(clId, value); }
+
+  /**
+   * CL偏芯レコードを1件設定する。rec = { mode: 'value'|'face', value:number, side:1|-1, backing:string }。
+   * backing==='' は per-floor 既定（interiorWallBacking）を参照する合図。immutableに保つため凍結する。
+   */
+  setCLEccentricity(clId, rec) { this.clEccentricities.set(clId, Object.freeze({ ...rec })); }
+  /** CL偏芯指定を解除する（＝偏芯なしの既定へ戻す）。 */
+  removeCLEccentricity(clId)   { this.clEccentricities.delete(clId); }
 
   /** 部屋の実効床レベル(mm) = 階基準 + 部屋デルタ（null = FL初期値どおり）。 */
   effectiveFloorLevel(room) {
@@ -1895,6 +1924,7 @@ export class PlanGraph {
     this.excludedBeamSlots.clear();
     this.excludedFootingSlots.clear();
     this.columnAxisOffsets.clear();
+    this.clEccentricities.clear();
     this.exteriorWallBacking = DEFAULT_EXTERIOR_WALL_BACKING;
     this.interiorWallBacking = DEFAULT_INTERIOR_WALL_BACKING;
     this.ceilingBacking      = DEFAULT_CEILING_BACKING;
@@ -1961,6 +1991,7 @@ export class PlanGraph {
       .filter(f => f.verticalCL.id === id || f.horizontalCL.id === id)
       .forEach(f => this.footingMap.delete(f.id));
     this.columnAxisOffsets.delete(id);
+    this.clEccentricities.delete(id);
     // 貫通孔（梁ホストのみ。スラブホストはcellKeyのみのCL非依存アンカーのため対象外、
     // Room/StructuralSlab と同様にteardown不要という設計）
     [...this.sleeveMap.values()]

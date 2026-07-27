@@ -48,14 +48,18 @@ export function getMenuItems(context, endpointState, clState) {
       ];
     }
     case CONTEXT.CENTER_LINE: {
-      // 12時=移動、4時=削除。移動アイコンはスナップ移動の方向（線と直交）を指す両矢印。
+      // 12時=移動、4時=削除、8時=偏芯（内壁指定のあるCLのみ。仕上げモードでの部屋命名により
+      // 生成されたINTERIOR_WALLエッジ分類は脱出後も保持されるため、移動可能なモード側の
+      // 長押しメニューで扱う）。移動アイコンはスナップ移動の方向（線と直交）を指す両矢印。
       // 移動をサポートしないモード（clState.canMove が偽）では従来どおり削除のみ。
-      const { canMove, isVertical } = clState ?? {};
+      const { canMove, isVertical, hasInteriorWall } = clState ?? {};
       if (!canMove) return [{ id: 'cl-del', label: '削除', icon: '✕' }];
-      return [
+      const items = [
         { id: 'cl-move', label: '移動', icon: '⇄', iconRotate: isVertical ? 0 : 90, angle: -90 },
         { id: 'cl-del',  label: '削除', icon: '✕', angle: 30 },
       ];
+      if (hasInteriorWall) items.push({ id: 'cl-ecc', label: '偏芯', icon: '◨', angle: 150 });
+      return items;
     }
     case CONTEXT.EMPTY:
       return [

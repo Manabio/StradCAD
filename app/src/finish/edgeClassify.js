@@ -164,6 +164,22 @@ export function selectBoundaryMaster(edge, graph, cellToRoom) {
   return 'EXTERIOR_WALL'; // その他（半面未定義等）暫定
 }
 
+/**
+ * clId 上の INTERIOR_WALL エッジのスパン [{lo,hi}] を返す（空配列＝内壁指定なし）。
+ * CL偏芯（finish/clEccentricity.js）の適用対象CL判定に使う。
+ */
+export function interiorWallSpans(graph, clId) {
+  const spans = [];
+  for (const edge of graph.edges) {
+    if (edge.masterType !== 'INTERIOR_WALL' || edge.axisCLId !== clId) continue;
+    const startCL = getShape(graph, edge.startCLId);
+    const endCL   = getShape(graph, edge.endCLId);
+    if (!startCL || !endCL) continue;
+    spans.push({ lo: Math.min(startCL.value, endCL.value), hi: Math.max(startCL.value, endCL.value) });
+  }
+  return spans;
+}
+
 // ----------------------------------------------------------------
 // トポロジー差分同期（モード境界で実行）
 // ----------------------------------------------------------------

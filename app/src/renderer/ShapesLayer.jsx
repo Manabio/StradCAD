@@ -141,7 +141,6 @@ export const ShapesLayer = observer(({ graph, viewport }) => {
         // （仕上げ面の長辺 + 両端の妻線のみを描き、軸CL上の長辺は描かない）
         const axisV = shape.axisCL.effectiveValue;
         const faceV = shape.axisValue;
-        const thickLo = Math.min(axisV, faceV), thickHi = Math.max(axisV, faceV);
 
         // 妻線(cap)・端点はねだし部木口(ecap)の描画範囲: 既定（backingDepth未指定=null）は
         // axisV〜faceV（下地帯が通り芯位置から始まる対称壁の想定。従来どおり変更なし）。
@@ -209,8 +208,19 @@ export const ShapesLayer = observer(({ graph, viewport }) => {
 
         const elems = [...rects];
 
-        if (shape.wallFinish > 0 && shape.wallFinish < thickHi - thickLo) {
-          const boundary = faceV >= axisV ? thickHi - shape.wallFinish : thickLo + shape.wallFinish;
+        // dir: 仕上げ面が向く側。CL偏芯の「仕上げ面合わせ」で面がCL上に一致し（axisOffset===0
+        // → faceV===axisV）sign(faceV-axisV) が不定になるケースは finishSide の明示値を
+        // 優先する（Wall.finishSide のドキュメント参照）。境界判定も axisV〜faceV の対称範囲
+        // （axisOffset===0で潰れる）ではなく、実際に材が存在する範囲 materialRange
+        // （capLo/capHi。backingDepth等の偏芯を反映）で行う。
+        // 境界の等号は含める（<= / >=）: backingDepth===0（下地なし＝仕上げのみの薄壁。階段下
+        // レーン間薄壁・CL偏芯の非オーナー薄壁）は capLo===boundary または capHi===boundary に
+        // ちょうど一致するため、厳密不等号だと線が消える（QA回帰）。ただし axisV に一致する
+        // （=下地帯が無い対称壁で仕上げ厚が壁厚と同値になる退化ケース）は境界線として無意味なため
+        // ENDPOINT_EPS で除外する。
+        const dir      = shape.finishSide ?? (Math.sign(faceV - axisV) || 1);
+        const boundary = faceV - dir * shape.wallFinish;
+        if (shape.wallFinish > 0 && boundary >= capLo && boundary <= capHi && Math.abs(boundary - axisV) > ENDPOINT_EPS) {
           elems.push(...finishSegments.map(([a, b], i) => (
             <Line
               key={`${shape.id}:fin:${i}`}

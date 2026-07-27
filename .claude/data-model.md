@@ -15,6 +15,9 @@ Intersection・Shape・Wall・Opening・構造部材はすべて自前の座標�
 ## Wallは自前のオフセットを持ち、ngraphに参加しない
 軸CLからのオフセットで位置を持つ（shapeMapのみで管理）。`isRoomWall`の壁はchamferWallsの対象外（生成時のコーナーマップによるオフセットを固定値として保持）。
 
+## CL偏芯（clEccentricities）はレコードと導出結果を分離する
+`PlanGraph.clEccentricities`（clId→`{mode:'value'|'face', value, side, backing}`）は「何を指定したか」だけを保持し、Wall側（axisOffset/wallFinish/backingOffset/backingDepth/finishSide）へは`finish/clEccentricity.js`の`applyCLEccentricity`が導出した結果のみを書き込む——値を直接Wallへ書くと下地材変更時に再計算できず不整合が固定化する。`backing=''`は「per-floor既定（`interiorWallBacking`）に従う」という明示的なフォールバック合図であり、未指定と同義に扱わない。適用点は操作確定時とモード境界（`runFinishExitBoundary`ステップ2b）の両方で、前回の適用結果に依存せず現在のspecと現材から毎回フル再計算する（冪等）——材未ロード・下地コード未解決時は黙って既定値へ潰さず適用自体をスキップする。
+
 ## OpeningはWallを直接参照しない
 外壁・部屋境界壁は仕上げモード往復のたびに全削除→再生成されるため、Wall参照を持つと迷子になる。Wallと同じ「CL+オフセット」の自己完結アンカーを持ち、表示時に`findHostWall`で都度再発見する。壁ギャップ判定（`findOpeningsOnWall`）はホスト解決と異なり`wallSide`の符号を無視する——部屋境界には符号違いの壁が複数本生成されるため。実記号描画は`IMPLEMENTED_MECHANISMS`（SWING/SLIDE_DOUBLE）のみ実装、新規機構追加時はそこに追加した上で`OpeningsLayer.jsx`に描画関数を追加する。
 
