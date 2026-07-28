@@ -23,8 +23,10 @@ function gapMm(scale, b) {
 // view:'upper'（破断なし・全段）＋ detail:true（段番号）で全体像を描く。
 // scale は annotatedFigure が決めた縮尺（注記の隙間を px 一定にするため）。
 // spans はセル実測の区間長（measureStairSpans。区間長指定の反映用。null なら合成）。
-export function stairFigurePrimitives(stair, b, { riser = null, scale = null, spans = null } = {}) {
-  const geom = buildStairGeometry(stair, b, { view: 'upper', detail: true, riser, spans, laneGapMm: LANE_GAP });
+// graph は指定時、insetStairBounds が実壁面（CL偏芯を反映した壁位置）へ取り合うのに使う
+// （省略時は従来どおり固定 WALL_INSET。機能1）。
+export function stairFigurePrimitives(stair, b, { riser = null, scale = null, spans = null, graph = null } = {}) {
+  const geom = buildStairGeometry(stair, b, { view: 'upper', detail: true, riser, spans, laneGapMm: LANE_GAP, graph });
   const prims = [];
 
   // 外周（実線／dashed は破線）
@@ -49,7 +51,7 @@ export function stairFigurePrimitives(stair, b, { riser = null, scale = null, sp
   }
 
   // 所定寸法の注記
-  prims.push(...stairDimPrimitives(stair, b, riser, gapMm(scale, b), spans));
+  prims.push(...stairDimPrimitives(stair, b, riser, gapMm(scale, b), spans, graph));
   // より長い寸法線ほど図の外側へ（同一方向・同一側の tier を長さで並べ替え。チェーンは保持）。
   const cx = (b.x1 + b.x2) / 2, cy = (b.y1 + b.y2) / 2;
   orderDimsByLength(prims, cx, cy);
@@ -61,7 +63,7 @@ export function stairFigurePrimitives(stair, b, { riser = null, scale = null, sp
 // 所定寸法のプリミティブ。g は注記の張り出し量(mm)＝スクリーン空間で px 一定。
 // 全長・幅は「描かれた図（設置セル包絡矩形 b）」の x/y スパンを寸法線で注記（昇り方向に応じ見出し付与）。
 // 踏面は走行始端に1マス分の寸法線（設計値ラベル）。蹴上・段数は設計値をテキストで併記する。
-function stairDimPrimitives(stair, b, riser, g, spans) {
+function stairDimPrimitives(stair, b, riser, g, spans, graph = null) {
   const w = b.x2 - b.x1, h = b.y2 - b.y1;
   const vertical = stair.upDirection === 'up' || stair.upDirection === 'down';
   const hHeader = vertical ? '幅' : '全長'; // 横スパン(h)の見出し
@@ -73,7 +75,7 @@ function stairDimPrimitives(stair, b, riser, g, spans) {
 
   // 踏面: 走行始端の1マス分（t:0→1/総マス数）を、全長寸法と反対側の外へ寸法線で示す（設計値ラベル・図中編集可）。
   // 実際に描かれる図形（bi＝中心線から壁厚/2逃げた矩形）に合わせる。
-  const bi = insetStairBounds(stair, b, 'upper');
+  const bi = insetStairBounds(stair, b, 'upper', graph);
   const cells = Math.max(1, stair.totalSteps - 1); // 総マス数（totalSteps - 1。+1は上階到達分）
   const f = makeFrame(stair, bi);
   const p0 = f.pt(0, 0), p1 = f.pt(1 / cells, 0);

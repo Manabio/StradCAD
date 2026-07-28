@@ -144,7 +144,7 @@ export const StairLayer = observer(({
     if (!b || ![b.x1, b.y1, b.x2, b.y2].every(Number.isFinite) || b.x2 <= b.x1 || b.y2 <= b.y1) {
       return null;
     }
-    const built = buildStairGeometry(stair, b, { view, detail, riser, spans, laneGapMm, breakOverhangMm });
+    const built = buildStairGeometry(stair, b, { view, detail, riser, spans, laneGapMm, breakOverhangMm, graph });
     return { e, geom: graph ? resolveStairSideLines(stair, graph, built) : built };
   });
   const installGeomById = new Map(

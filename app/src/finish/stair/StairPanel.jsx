@@ -75,7 +75,7 @@ export const StairEditor = observer(({ stair, graph, project, onDelete }) => {
   const riser = stair.riser ?? (floorHeight != null ? floorHeight / Math.max(1, stair.totalSteps) : null);
   const spans = validB ? measureStairSpans(stair, graph) : null; // セル実測の区間長（区間長指定の反映）
   const figure = validB
-    ? annotatedFigure(scale => stairFigurePrimitives(stair, b, { riser, scale, spans }), STAIR_FIGURE_FRAME)
+    ? annotatedFigure(scale => stairFigurePrimitives(stair, b, { riser, scale, spans, graph }), STAIR_FIGURE_FRAME)
     : null;
 
   // 直進階段の編集時は階段下の分割セル指定を元に戻す（stairUnderSplit.js。

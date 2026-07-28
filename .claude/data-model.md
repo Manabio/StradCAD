@@ -21,6 +21,9 @@ Intersection・Shape・Wall・Opening・構造部材はすべて自前の座標�
 ## CL偏芯（clEccentricities）はレコードと導出結果を分離する
 `PlanGraph.clEccentricities`（clId→`{mode:'value'|'face', value, side, backing}`）は「何を指定したか」だけを保持し、Wall側（axisOffset/wallFinish/backingOffset/backingDepth/finishSide）へは`finish/clEccentricity.js`の`applyCLEccentricity`が導出した結果のみを書き込む——値を直接Wallへ書くと下地材変更時に再計算できず不整合が固定化する。`backing=''`は「per-floor既定（`interiorWallBacking`）に従う」という明示的なフォールバック合図であり、未指定と同義に扱わない。適用点は操作確定時とモード境界（`runFinishExitBoundary`ステップ2b）の両方で、前回の適用結果に依存せず現在のspecと現材から毎回フル再計算する（冪等）——材未ロード・下地コード未解決時は黙って既定値へ潰さず適用自体をスキップする。
 
+## CL偏芯は階段・吹抜けに面するCLで階をまたいで連動する
+階段に面する壁の偏芯は設置階〜最上階、吹抜け（`feature=VOID`）に面する壁の偏芯はその階と直下階の間で共通にする（`finish/eccentricityFloorSync.js`の`propagateCLEccentricities`）。連動先はグラフの現在状態（隣接Roomのfeature）から呼び出しのたびに導出し保存しない——階段吹抜けへの転用や吹抜けの追加・削除で対象は自動的に変わる。方式は`stairFloorSync.js`と同じレコード複製パターン（peek→set/removeCLEccentricity→applyCLEccentricity→saveFloor）に乗り、CL対応付け（`finish/floorCLMap.js`の`translateCLId`。stairFloorSync.jsと共用）が解決できない階は安全側でスキップする（CLを勝手に追加しない）。階段の描画幅（`stairGeometry.js`の`insetStairBounds`）・吹抜けの×（`finish/voidGeometry.js`）は`finish/wallFaces.js`の`faceRect`で実壁面を都度解決するため、偏芯変更後の再描画で自動的に取り合う。編集直後の連動（`handleEccConfirm`）はundoエントリへ合成するが、モード境界（仕上げモード突入時の`pullCLEccentricities`・脱出時の`runFinishExitBoundary`ステップ4c）が行う自動再伝播はundo対象外。ステップ4bが内壁指定消失を理由にレコードを削除した場合、その削除自体は連動先へ伝播しないため、連動先に孤児レコードが残り、その階が次回仕上げモードを脱出する際にステップ4c（push）で連動先へ再伝播され、消したはずの偏芯指定が復活しうる（既知の限界。4bの条件は緩めない設計判断）。
+
 ## OpeningはWallを直接参照しない
 外壁・部屋境界壁は仕上げモード往復のたびに全削除→再生成されるため、Wall参照を持つと迷子になる。Wallと同じ「CL+オフセット」の自己完結アンカーを持ち、表示時に`findHostWall`で都度再発見する。壁ギャップ判定（`findOpeningsOnWall`）はホスト解決と異なり`wallSide`の符号を無視する——部屋境界には符号違いの壁が複数本生成されるため。実記号描画は`IMPLEMENTED_MECHANISMS`（SWING/SLIDE_DOUBLE）のみ実装、新規機構追加時はそこに追加した上で`OpeningsLayer.jsx`に描画関数を追加する。
 

@@ -180,6 +180,23 @@ export function interiorWallSpans(graph, clId) {
   return spans;
 }
 
+/**
+ * clId 上の INTERIOR_WALL エッジ両側に接する部屋（Room）の集合を返す（無名屋外側は含まない）。
+ * feature（階段/吹抜け等）の判定は呼び出し側が行う——CL偏芯の階またぎ連動
+ * （finish/eccentricityFloorSync.js）の連動対象判定に使う。
+ */
+export function roomsAdjacentToCL(graph, clId, cellToRoom) {
+  const rooms = new Set();
+  for (const edge of graph.edges) {
+    if (edge.masterType !== 'INTERIOR_WALL' || edge.axisCLId !== clId) continue;
+    const geo = edgeGeometry(edge, graph, cellToRoom);
+    if (!geo) continue;
+    if (geo.roomNeg) rooms.add(geo.roomNeg);
+    if (geo.roomPos) rooms.add(geo.roomPos);
+  }
+  return rooms;
+}
+
 // ----------------------------------------------------------------
 // トポロジー差分同期（モード境界で実行）
 // ----------------------------------------------------------------

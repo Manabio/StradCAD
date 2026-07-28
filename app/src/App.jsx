@@ -41,6 +41,8 @@ import { snapshotEdges, restoreEdges, syncEdgesFromTopology, interiorWallSpans }
 import { reinterpretRoomsOnEntry, ensureStairRooms, snapshotRoomsState, restoreRoomsState } from './finish/roomReinterpret.js';
 import { RoomLabelsLayer } from './renderer/RoomLabelsLayer.jsx';
 import { StepSectionLayer } from './renderer/StepSectionLayer.jsx';
+import { VoidLayer } from './renderer/VoidLayer.jsx';
+import { computeVoidCrosses } from './finish/voidGeometry.js';
 import { StructuralLayer, ColumnsLayer } from './renderer/StructuralLayer.jsx';
 import { MemberTagLayer } from './renderer/MemberTagLayer.jsx';
 import { MemberStatusMenu } from './ui/MemberStatusMenu.jsx';
@@ -161,6 +163,10 @@ const App = observer(() => {
   const [activeFloorId,   setActiveFloorId]   = useState(project.activePlaneId);
   // 上階ビュー: 直下階の階段を peek して上階表現で描くための解決済みエントリ
   const [upperStairEntries, setUpperStairEntries] = useState([]);
+  // 直上階の吹抜け（feature=VOID）を peek して直下階（自階）へ投影表示するための×座標
+  const [upperVoidCrosses, setUpperVoidCrosses] = useState([]);
+  // CL偏芯の階またぎ連動（他階のIDBを直接更新）後に、直上階peek系のstateを再計算させるトリガー
+  const [floorSyncTick, setFloorSyncTick] = useState(0);
   // 構造モードのスライダーで選択中の図面スロット key（`slotType:planeId`）。1平面に複数スロットが
   // 乗る（木造の基礎伏図＋1階伏図・S造のR階伏図＋小屋伏図）ため、planeId とは別に保持する。
   const [activeStructSlotKey, setActiveStructSlotKey] = useState(null);
@@ -234,6 +240,7 @@ const App = observer(() => {
 
   // 上階ビュー: 直下階（elevation が1つ下の採用フロア）の階段を peek し、
   // 上階表現（全段）の描画用エントリへ解決する。階切替・モード切替で再計算する。
+  // CL偏芯の階またぎ連動（floorSyncTick）でも再計算する——連動先の壁面位置が変わりうるため。
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -262,7 +269,29 @@ const App = observer(() => {
       setUpperStairEntries(entries);
     })();
     return () => { cancelled = true; };
-  }, [appMode, activeFloorId]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [appMode, activeFloorId, floorSyncTick]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // 吹抜け直下の階ビュー: 直上階（elevation が1つ上の採用フロア）を peek し、その吹抜け
+  // （feature=VOID）の×座標を自階へ投影表示する（世界座標は全階共通のため peek 結果の座標を
+  // そのまま使える。stairFloorSync.js の stairPortEdges と同じ前提）。CL偏芯の階またぎ連動
+  // （floorSyncTick）でも再計算する——連動先の壁面位置が変わりうるため。
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const planes = project.planes; // elevation 昇順
+      const active = project.activePlane;
+      const idx = planes.findIndex(p => p.id === active?.id);
+      const above = idx >= 0 && idx + 1 < planes.length ? planes[idx + 1] : null;
+      if (!above || !active || (appMode !== 'finish' && appMode !== 'floorplan')) {
+        setUpperVoidCrosses([]);
+        return;
+      }
+      const temp = await floorSwapManager.peek(above, project.structGraph);
+      if (cancelled) return;
+      setUpperVoidCrosses(computeVoidCrosses(temp));
+    })();
+    return () => { cancelled = true; };
+  }, [appMode, activeFloorId, floorSyncTick]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (!toast) return;
@@ -1090,6 +1119,21 @@ const App = observer(() => {
       entryRedoFns.push(() => restoreEdges(graph, after));
     }
 
+    // F3（プル側）: 自階にまだ偏芯レコードが無いCLについて、連動先（階段は設置階〜最上階、
+    // 吹抜けはその階と直下階）に既存の指定があれば取り込む。push（handleEccConfirm・
+    // runFinishExitBoundary ステップ4c）だけでは、連動先がまだ仕上げモードに入っていない・
+    // 内壁指定（部屋名）がまだ無い等でグラフ上のリンクが見えない間は伝播できないため、
+    // 突入のたびにここで埋める。pullMaterialMap は fmode（唯一の通常の情報源）がこの時点では
+    // まだ生存していないため、clEccentricity.js と同じ理由で独立に動的 import する
+    // （コード分割維持。materialData.js のヘッダコメント参照）。ensureTopStairVoid と同格の
+    // 自動同期のため undo 対象外。
+    const [{ pullCLEccentricities }, pullMatMod] = await Promise.all([
+      import('./finish/eccentricityFloorSync.js'),
+      import('./finish/materials/materialData.js'),
+    ]);
+    const pullMaterialMap = new Map(pullMatMod.MATERIALS.map(m => [m.code, m]));
+    await pullCLEccentricities(project, graph, { materialMap: pullMaterialMap });
+
     // 部屋の再解釈→エッジ再同期の順に適用したため、undo は逆順で巻き戻す
     if (entryUndoFns.length > 0) {
       undoManager.push(
@@ -1479,6 +1523,20 @@ const App = observer(() => {
         undoFns.push(() => eccChanges.forEach(c => applyFields(c.id, c.before)));
         redoFns.push(() => eccChanges.forEach(c => applyFields(c.id, c.after)));
       }
+    }
+
+    // ステップ4c: CL偏芯の階またぎ連動（階段は設置階〜最上階、吹抜けは直下階と共通）を、
+    // ステップ4b の掃除後に残っている graph.clEccentricities の内容で連動先の他階へ
+    // 再伝播する——脱出のたびに材変更・偏芯編集を連動先へ反映させる自動同期。4b が削除した
+    // レコードそのものは伝播しない（4bの条件は緩めない。連動先の孤児レコードが残る既知の
+    // 限界はここでは扱わない）。syncUpperStairInteriors（ステップ5）と同格の自動同期のため
+    // undo 対象外。バッチ版（propagateCLEccentricities）で階ごとに peek 1回へ畳む（F5）。
+    // observable map の keys() を await をまたいで直接 iterate しないよう、先に配列へ
+    // スナップショットしてから渡す（F9）。
+    if (graph.clEccentricities.size > 0) {
+      const { propagateCLEccentricities } = await import('./finish/eccentricityFloorSync.js');
+      const clIds = [...graph.clEccentricities.keys()];
+      await propagateCLEccentricities(project, graph, clIds, { materialMap: fmode?.materialMap });
     }
 
     // 全変更を単一の undo エントリとして登録（undo は逆順実行）
@@ -2811,8 +2869,12 @@ const App = observer(() => {
       applyCLEccentricity(graph, cl.id, { materialMap });
     });
     const after = serializeGraph(graph);
-    undoManager.push(() => restoreGraph(graph, before), () => restoreGraph(graph, after));
+    const entry = undoManager.push(() => restoreGraph(graph, before), () => restoreGraph(graph, after));
     setEccDialog(null);
+    // 階段・吹抜けに面する壁の偏芯は、設置階〜最上階／直下階と連動する（同一エントリで undo）
+    const { propagateCLEccentricity } = await import('./finish/eccentricityFloorSync.js');
+    await propagateCLEccentricity(project, graph, cl.id, { materialMap, undoEntry: entry });
+    setFloorSyncTick(t => t + 1); // 連動先の壁面位置が変わりうるため、上階peek系のstateを再計算させる
   }
 
   // 木造（在来）の自動判定（問題.md）: 平面モードで主構造が未指定のとき、追加した通り芯が
@@ -3575,6 +3637,9 @@ const App = observer(() => {
                 {/* 段差断面: 段差線は全LOD（略図＝細線 / 標準・詳細＝中線）、ハッチ・寸法は詳細のみ
                     ——レイヤー内部でLOD分岐する */}
                 {appMode === 'floorplan' && <StepSectionLayer graph={graph} viewport={viewport} />}
+                {(appMode === 'floorplan' || appMode === 'finish') && (
+                  <VoidLayer graph={graph} viewport={viewport} upperCrosses={upperVoidCrosses} />
+                )}
                 {appMode !== 'site' && <IntersectionMarkers graph={graph} viewport={viewport} />}
                 <DrawPreview
                   drawState={mode?.drawState ?? null}

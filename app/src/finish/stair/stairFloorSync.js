@@ -4,16 +4,8 @@ import { saveFloor } from '../../storage/db.js';
 import { undoManager } from '../../undoManager.js';
 import { refreshCells } from '../gridCells.js';
 import { ensureStairRooms } from '../roomReinterpret.js';
+import { findCounterpartCL, translateCLId } from '../floorCLMap.js';
 import { RoomFeature, RoomKind } from '@core';
-
-const EPS = 1e-6;
-
-// graph 内で type:value が一致する CL を探す
-function findCounterpart(graph, type, value) {
-  return graph.centerLines.find(
-    c => c.centerLineType === type && Math.abs(c.value - value) < EPS,
-  ) ?? null;
-}
 
 function setsEqual(a, b) {
   if (a.size !== b.size) return false;
@@ -58,7 +50,7 @@ function translateExtent(src, side, activeGraph, structGraph, upperGraph) {
     if (structGraph?.shapeMap.has(ref.clId)) return { ref, staticVal: null };
     const srcRef = activeGraph.shapeMap.get(ref.clId);
     const counterpart = srcRef
-      ? findCounterpart(upperGraph, srcRef.centerLineType, srcRef.value)
+      ? findCounterpartCL(upperGraph, srcRef.centerLineType, srcRef.value)
       : null;
     if (counterpart) {
       return { ref: { clId: counterpart.id, offset: ref.offset ?? 0 }, staticVal: null };
@@ -67,19 +59,6 @@ function translateExtent(src, side, activeGraph, structGraph, upperGraph) {
   }
   if (ref?.wallId) return { ref: null, staticVal: resolved };
   return { ref: null, staticVal };
-}
-
-/**
- * per-floor CL id を上階（またはstructGraph共通）の対応CL idへ変換する。
- * 通り芯（structGraph 側）は全階共通のため同一IDのまま。設置階 per-floor CLは
- * type:value 照合で上階側の対応CLを探す。解決できなければ null（呼び出し側は安全側でスキップ）。
- */
-function translateCLId(id, activeGraph, structGraph, upperGraph) {
-  if (structGraph?.shapeMap.has(id)) return id;
-  const cl = activeGraph.shapeMap.get(id);
-  if (!cl) return null;
-  const counterpart = findCounterpart(upperGraph, cl.centerLineType, cl.value);
-  return counterpart ? counterpart.id : null;
 }
 
 // セルキー（"leftId:topId:rightId:bottomId"）を上階のCL id集合へ変換する。1つでも解決不能なら null。
@@ -129,7 +108,7 @@ function collectNeededCLs(cellKeys, sourceGraph) {
 function addMissingCLs(needed, sourceGraph, structGraph, upperGraph) {
   const added = []; // [元CL, upperGraphに追加したCL]
   for (const cl of needed.values()) {
-    if (findCounterpart(upperGraph, cl.centerLineType, cl.value)) continue;
+    if (findCounterpartCL(upperGraph, cl.centerLineType, cl.value)) continue;
     const nc = upperGraph.addCenterLine(cl.centerLineType, cl.value, {
       labeled: false, trim: false, discipline: cl.discipline,
       lineWeight: cl.lineWeight, lineType: cl.lineType, color: cl.color,

@@ -2,6 +2,7 @@ import { StairType, totalStepsFromSections } from '@core';
 import { cellBoundsFromKey, roomBounds, cellBoundsList, outlineSegments, refreshCells } from '../gridCells.js';
 import { measureStairSpans, detectUTurn } from './stairClassify.js';
 import { DEFAULT_WALL_BASE, DEFAULT_WALL_FINISH } from '../wallGeneration.js';
+import { faceRect } from '../wallFaces.js';
 
 const BREAK_HEIGHT = 1600;   // mm — 破れ縁の断面高さ（FL+1600）
 const MIN_LANDING  = 1200;   // mm — 踊り場の最小長さ（問題.md）
@@ -210,20 +211,48 @@ const WALL_INSET = WALL_BASE / 2 + DEFAULT_WALL_FINISH;       // mm — 中心�
 // 設置エリア矩形 b の各辺を、隣接壁の中心線から壁厚/2だけ内側へ逃がす。
 // 幅方向（走行方向に直交する両側線）は常に逃がす。走行方向の2辺（始端=登り口／終端=上階到達）は、
 // 設置階（install）は登り口を除く終端のみ、設置階上階（upper）は登り口・終端とも逃がす。
-export function insetStairBounds(stair, b, view) {
+// graph を渡すと、逃がす先を faceRect(refreshCells(stair.cells, graph), graph) の実壁面
+// （壁が生成済みの辺のみ）に差し替える——CL偏芯で壁位置が変わっても取り合う（機能1）。
+// faceRect が退化矩形として null を返した場合（F8）も含め、壁が無い・解決不能な辺は
+// 従来どおり固定 WALL_INSET へフォールバックする。view別ルールは graph の有無で変えない。
+// 戻り値の sideInsetMm は幅方向の実際の逃げ量（graph 無指定・壁無しは WALL_INSET）の
+// 最大値——resolveStairSideLines が snapToFootprintEdge の許容差を動的に決めるのに使う（F2）。
+export function insetStairBounds(stair, b, view, graph = null) {
   const vertical = stair.upDirection === 'up' || stair.upDirection === 'down';
+  const face = graph ? faceRect(refreshCells(stair.cells, graph), graph) : null;
+  const faceOr = (hasWall, faceVal, fallback) => (face && hasWall) ? faceVal : fallback;
   let { x1, y1, x2, y2 } = b;
-  if (vertical) { x1 += WALL_INSET; x2 -= WALL_INSET; }
-  else          { y1 += WALL_INSET; y2 -= WALL_INSET; }
+  let sideInsetMm;
+  if (vertical) {
+    x1 = faceOr(face?.hasWall.left,  face?.x1, x1 + WALL_INSET);
+    x2 = faceOr(face?.hasWall.right, face?.x2, x2 - WALL_INSET);
+    sideInsetMm = Math.max(x1 - b.x1, b.x2 - x2);
+  } else {
+    y1 = faceOr(face?.hasWall.top,    face?.y1, y1 + WALL_INSET);
+    y2 = faceOr(face?.hasWall.bottom, face?.y2, y2 - WALL_INSET);
+    sideInsetMm = Math.max(y1 - b.y1, b.y2 - y2);
+  }
   const insetEntry = view !== 'install';
   switch (stair.upDirection) {
-    case 'down':  if (insetEntry) y1 += WALL_INSET; y2 -= WALL_INSET; break; // 始端=y1 終端=y2
-    case 'right': if (insetEntry) x1 += WALL_INSET; x2 -= WALL_INSET; break; // 始端=x1 終端=x2
-    case 'left':  x1 += WALL_INSET; if (insetEntry) x2 -= WALL_INSET; break; // 始端=x2 終端=x1
+    case 'down':  // 始端=y1 終端=y2
+      if (insetEntry) y1 = faceOr(face?.hasWall.top,    face?.y1, y1 + WALL_INSET);
+      y2 = faceOr(face?.hasWall.bottom, face?.y2, y2 - WALL_INSET);
+      break;
+    case 'right': // 始端=x1 終端=x2
+      if (insetEntry) x1 = faceOr(face?.hasWall.left,  face?.x1, x1 + WALL_INSET);
+      x2 = faceOr(face?.hasWall.right, face?.x2, x2 - WALL_INSET);
+      break;
+    case 'left':  // 始端=x2 終端=x1
+      x1 = faceOr(face?.hasWall.left,  face?.x1, x1 + WALL_INSET);
+      if (insetEntry) x2 = faceOr(face?.hasWall.right, face?.x2, x2 - WALL_INSET);
+      break;
     case 'up':
-    default:      y1 += WALL_INSET; if (insetEntry) y2 -= WALL_INSET; break; // 始端=y2 終端=y1
+    default:      // 始端=y2 終端=y1
+      y1 = faceOr(face?.hasWall.top, face?.y1, y1 + WALL_INSET);
+      if (insetEntry) y2 = faceOr(face?.hasWall.bottom, face?.y2, y2 - WALL_INSET);
+      break;
   }
-  return { x1, y1, x2, y2 };
+  return { x1, y1, x2, y2, sideInsetMm };
 }
 
 // 破れ線の見た目だけを、階段の幅方向の外周端（＝隣接壁の中心線 CL 側）まで、さらに壁厚/2 はね出す。
@@ -1007,10 +1036,11 @@ function buildOpenWell(stair, b, { view, detail, riser, breakOverhangMm = 0 }) {
 /**
  * 階段の描画プリミティブ（ワールド座標）を生成する。タイプ別にディスパッチ。
  *
- * @param {import('@core').Stair} stair - 階段（スカラ属性のみ参照。cells は不使用）
+ * @param {import('@core').Stair} stair - 階段（スカラ属性を主に参照。cells は opts.graph 指定時のみ
+ *   insetStairBounds が実壁面の解決に使う）
  * @param {{ x1,y1,x2,y2 }} b - 設置エリアの包絡矩形（ワールド座標。呼び出し側で解決）
  * @param {{ view:'install'|'upper', detail:boolean, riser:number|null,
- *           spans?:{lengths:number[]}|null, laneGapMm?:number, breakOverhangMm?:number }} opts
+ *           spans?:{lengths:number[]}|null, laneGapMm?:number, breakOverhangMm?:number, graph?:object|null }} opts
  *   spans … セル割りから実測した区間長（measureStairSpans）。区間長指定の反映用。null なら合成。
  *   laneGapMm … 折返し・回り階段（SWITCHBACK/WINDING）の往路・復路の間のあき(mm)。
  *   標準・詳細LODは LANE_GAP、簡略LODは0（従来どおり中央仕切り1本）を渡す。
@@ -1018,6 +1048,8 @@ function buildOpenWell(stair, b, { view, detail, riser, breakOverhangMm = 0 }) {
  *   breakOverhangMm … 破れ線の見た目の両端を線方向へ CL からはり出す量(mm)。中心線の端の
  *   はね出しと同じ扱いで、描画側が overhangMm(viewport) を渡す（既定0＝はり出しなし）。
  *   見た目のみで、側線連結・踏面クリップ等の実端点幾何には影響しない。
+ *   graph … 指定時、insetStairBounds が faceRect(stair.cells, graph) の実壁面へ取り合う
+ *   （CL偏芯で壁位置が変わっても追従。機能1）。未指定は従来どおり固定 WALL_INSET。
  * @returns {{
  *   treads:{x1,y1,x2,y2}[], outline:{x1,y1,x2,y2,dashed,thin?,port?,side?}[],
  *   arrows:{x1,y1,x2,y2,labelX,labelY,label}[], breakLine:{x1,y1,x2,y2}[]|null,
@@ -1027,24 +1059,30 @@ function buildOpenWell(stair, b, { view, detail, riser, breakOverhangMm = 0 }) {
  *   thin な線分にのみ付く（stairPortEdges が開口辺の特定に使う）。
  *   outline の side … footprint 境界に沿う側面線（壁が実在する区間があれば描画対象から除く。
  *   吹抜け側・仕切り等の内部線には付かない）。resolveStairSideLines が解決に使う。
+ *   sideInsetMm … insetStairBounds が幅方向に実際に適用した逃げ量の最大値(mm)。
+ *   resolveStairSideLines が snapToFootprintEdge の許容差を動的に決めるのに使う（F2）。
  */
 export function buildStairGeometry(stair, b, opts) {
-  const bi = insetStairBounds(stair, b, opts.view);
-  if (stair.type === StairType.STRAIGHT_LANDING) return buildStraightLanding(stair, bi, opts);
-  if (stair.type === StairType.SWITCHBACK)       return buildSwitchback(stair, bi, opts);
-  if (stair.type === StairType.WINDING)          return buildWinding(stair, bi, opts);
-  if (stair.type === StairType.L_TURN)           return buildLTurn(stair, bi, opts);
-  if (stair.type === StairType.FLARED)           return buildLTurn(stair, bi, opts);
-  if (stair.type === StairType.OPEN_WELL)        return buildOpenWell(stair, bi, opts);
-  return buildStraight(stair, bi, opts);
+  const { sideInsetMm, ...bi } = insetStairBounds(stair, b, opts.view, opts.graph ?? null);
+  let geom;
+  if (stair.type === StairType.STRAIGHT_LANDING) geom = buildStraightLanding(stair, bi, opts);
+  else if (stair.type === StairType.SWITCHBACK)  geom = buildSwitchback(stair, bi, opts);
+  else if (stair.type === StairType.WINDING)     geom = buildWinding(stair, bi, opts);
+  else if (stair.type === StairType.L_TURN)      geom = buildLTurn(stair, bi, opts);
+  else if (stair.type === StairType.FLARED)      geom = buildLTurn(stair, bi, opts);
+  else if (stair.type === StairType.OPEN_WELL)   geom = buildOpenWell(stair, bi, opts);
+  else                                            geom = buildStraight(stair, bi, opts);
+  return { ...geom, sideInsetMm };
 }
 
 // geom 側の外周線分（world座標）を footprint 実境界（outline。outlineSegments(cellBoundsList(...))
 // の結果＝インセット前の実境界＝CL位置）へ最近傍でスナップする（stairPortEdges・壁有無判定で共有）。
-// SNAP_DIST（WALL_INSET由来）ぶんのインセットのずれを許容し、区間が重ならない外形線分は対象外。
+// snapDist（既定 SNAP_DIST。WALL_INSET由来）ぶんのインセットのずれを許容し、区間が重ならない
+// 外形線分は対象外。graph を渡さない呼び出し（stairPortEdges 等）は既定値のまま挙動不変。
+// resolveStairSideLines は実際に適用されたインセット量（geom.sideInsetMm）から動的な値を渡す（F2）。
 const SNAP_DIST = WALL_INSET * 2 + 10; // mm
 
-function snapToFootprintEdge(s, outline) {
+function snapToFootprintEdge(s, outline, snapDist = SNAP_DIST) {
   const isVertical = Math.abs(s.x1 - s.x2) < Math.abs(s.y1 - s.y2);
   const value = isVertical ? (s.x1 + s.x2) / 2 : (s.y1 + s.y2) / 2;
   const lo = isVertical ? Math.min(s.y1, s.y2) : Math.min(s.x1, s.x2);
@@ -1052,7 +1090,7 @@ function snapToFootprintEdge(s, outline) {
   let best = null;
   for (const o of outline) {
     if (o.isVertical !== isVertical) continue;
-    if (Math.abs(o.value - value) > SNAP_DIST) continue;
+    if (Math.abs(o.value - value) > snapDist) continue;
     if (Math.min(o.hi, hi) - Math.max(o.lo, lo) <= 0) continue; // 区間が重ならない外形線分は対象外
     if (!best || Math.abs(o.value - value) < Math.abs(best.value - value)) best = o;
   }
@@ -1136,9 +1174,13 @@ export function resolveStairSideLines(stair, graph, geom) {
   const boundsList = cellBoundsList(stair.cells, graph);
   const outline = boundsList.length > 0 ? outlineSegments(boundsList) : [];
   const walls = graph.walls;
+  // F2: snap許容差は実際に適用されたインセット量（geom.sideInsetMm。CL偏芯で実壁面が固定
+  // WALL_INSET を超えて離れうる）から動的に求める。geom.sideInsetMm 未設定（buildStairGeometry
+  // 経由でない呼び出し等）は WALL_INSET 起点の既定 SNAP_DIST 相当へフォールバックする。
+  const snapDist = (geom.sideInsetMm ?? WALL_INSET) * 2 + 10;
   const resolvedOutline = geom.outline.reduce((acc, s) => {
     if (!s.side) { acc.push(s); return acc; }
-    const edge = outline.length > 0 ? snapToFootprintEdge(s, outline) : null;
+    const edge = outline.length > 0 ? snapToFootprintEdge(s, outline, snapDist) : null;
     if (!edge) { acc.push({ ...s, medium: true }); return acc; } // 境界を特定できない→安全側で全描画
     const isVertical = edge.isVertical;
     const sLo = isVertical ? Math.min(s.y1, s.y2) : Math.min(s.x1, s.x2);
