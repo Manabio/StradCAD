@@ -218,8 +218,11 @@ function renderPrimitive(p, key, t, interactive) {
       return (
         <g key={key}>
           <line x1={FIGURE_X0} y1={y} x2={t.pxWidth} y2={y} stroke={COLOR.axis} strokeWidth={1} />
-          {/* noLabel: ラベルを別の text プリミティブで持つ場合（GLを通り芯のように独立移動させる）は描かない。 */}
-          {!p.noLabel && <text x={FIGURE_X0} y={y - 3} fontSize={10} textAnchor="start" fill="#94a3b8">▽{p.label}</text>}
+          {/* noLabel: ラベルを別の text プリミティブで持つ場合（GLを通り芯のように独立移動させる）は描かない。
+              below: 線の下側から押さえるレベル記号（△CH等。既定は線の上側から▽）。 */}
+          {!p.noLabel && (p.below
+            ? <text x={FIGURE_X0} y={y + 11} fontSize={10} textAnchor="start" fill="#94a3b8">△{p.label}</text>
+            : <text x={FIGURE_X0} y={y - 3} fontSize={10} textAnchor="start" fill="#94a3b8">▽{p.label}</text>)}
         </g>
       );
     }
@@ -303,20 +306,33 @@ function renderDim(p, key, t, interactive) {
   const ticks = (hasFoot || p.noTick) ? [] : (isH
     ? [[a.x1, a.y1 - TICK, a.x1, a.y1 + TICK], [a.x2, a.y2 - TICK, a.x2, a.y2 + TICK]]
     : [[a.x1 - TICK, a.y1, a.x1 + TICK, a.y1], [a.x2 - TICK, a.y2, a.x2 + TICK, a.y2]]);
+  // labelVertical: 縦寸法の値を-90度回転（文字の天が画面左向き＝下から上へ読む）で寸法線上に描く。
+  const vlx = a.x1 + (p.labelDX ? t.sx(p.labelDX) : 0);
+  const vly = (a.y1 + a.y2) / 2 + (p.labelDY ? t.sx(p.labelDY) : 0);
   return (
     <g key={key} stroke={COLOR.dim}>
       <line x1={a.x1} y1={a.y1} x2={a.x2} y2={a.y2} strokeWidth={1} />
       {ticks.map((tk, i) => <line key={`t${i}`} x1={tk[0]} y1={tk[1]} x2={tk[2]} y2={tk[3]} strokeWidth={1} />)}
       {feet.map((tk, i) => <line key={`f${i}`} x1={tk[0]} y1={tk[1]} x2={tk[2]} y2={tk[3]} strokeWidth={1} />)}
+      {/* dot: 寸法線端（足との交点）の塗りつぶし丸端末記号 */}
+      {p.dot && <circle cx={a.x1} cy={a.y1} r={2} fill={COLOR.dim} stroke="none" />}
+      {p.dot && <circle cx={a.x2} cy={a.y2} r={2} fill={COLOR.dim} stroke="none" />}
       {/* 編集オーバーレイが出るのは editable かつ interactive のときのみ。それ以外は静的テキスト。
           数値ラベルは labelDX/labelDY(mm) だけ線から独立に動かせる（配置検討モードの ::label オフセット）。 */}
       {!(p.editable && interactive) && (
-        <text
-          x={(isH ? (a.x1 + a.x2) / 2 : (labelLeft ? a.x1 - 8 : a.x1 + 8)) + (p.labelDX ? t.sx(p.labelDX) : 0)}
-          y={(isH ? a.y1 - 8 : (a.y1 + a.y2) / 2) + (p.labelDY ? t.sx(p.labelDY) : 0)}
-          fontSize={11} textAnchor={isH ? 'middle' : (labelLeft ? 'end' : 'start')} dominantBaseline="middle" fill={COLOR.dim} stroke="none">
-          {p.label}
-        </text>
+        p.labelVertical && !isH ? (
+          <text x={vlx} y={vly} transform={`rotate(-90 ${vlx} ${vly})`}
+            fontSize={11} textAnchor="middle" dominantBaseline="middle" fill={COLOR.dim} stroke="none">
+            {p.label}
+          </text>
+        ) : (
+          <text
+            x={(isH ? (a.x1 + a.x2) / 2 : (labelLeft ? a.x1 - 8 : a.x1 + 8)) + (p.labelDX ? t.sx(p.labelDX) : 0)}
+            y={(isH ? a.y1 - 8 : (a.y1 + a.y2) / 2) + (p.labelDY ? t.sx(p.labelDY) : 0)}
+            fontSize={11} textAnchor={isH ? 'middle' : (labelLeft ? 'end' : 'start')} dominantBaseline="middle" fill={COLOR.dim} stroke="none">
+            {p.label}
+          </text>
+        )
       )}
     </g>
   );

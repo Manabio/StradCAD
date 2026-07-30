@@ -137,6 +137,7 @@ export class FloorSwapManager {
       void graph.sleeveMap.size;
       void graph.columnAxisOffsets.size;
       void graph.clEccentricities.size;
+      void graph.kneeDropWalls.size;
       for (const cl of graph.centerLines) {
         void cl._value;
         void cl.refOffset;

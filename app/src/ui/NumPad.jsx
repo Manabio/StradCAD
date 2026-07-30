@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import './NumPad.css';
 import { applyKeyToNumpadValue, toNumpadKey } from './numpadUtils.js';
 
@@ -30,6 +30,26 @@ export function NumPad({
 }) {
   // 全選択状態。selectOnStart のときだけ true で開始し、最初の入力で解除する。
   const [selected, setSelected] = useState(selectOnStart);
+
+  // ドラッグ移動。キー以外の部分（表示行・余白）をつかんで動かす。キーは自前の
+  // pointerdown で stopPropagation するため、コンテナに届いた pointerdown はドラッグ開始とみなせる。
+  // 位置は既定位置（画面下中央）からのオフセットで持ち、マウント毎にリセットされる。
+  const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
+  const dragRef = useRef(null); // { pointerId, startX, startY, baseX, baseY } | null
+
+  function handleDragStart(e) {
+    e.stopPropagation(); // cancelOnOutside の document ハンドラへ届かせない（従来挙動を維持）
+    dragRef.current = { pointerId: e.pointerId, startX: e.clientX, startY: e.clientY, baseX: dragOffset.x, baseY: dragOffset.y };
+    e.currentTarget.setPointerCapture(e.pointerId);
+  }
+  function handleDragMove(e) {
+    const d = dragRef.current;
+    if (!d || e.pointerId !== d.pointerId) return;
+    setDragOffset({ x: d.baseX + e.clientX - d.startX, y: d.baseY + e.clientY - d.startY });
+  }
+  function handleDragEnd(e) {
+    if (dragRef.current?.pointerId === e.pointerId) dragRef.current = null;
+  }
 
   // キー1つを現在値へ適用。全選択中は現在値を空とみなして置換し、選択を解除する。
   function applyKey(k) {
@@ -66,7 +86,14 @@ export function NumPad({
   }, [cancelOnOutside, onCancel]);
 
   return (
-    <div className="numpad" onPointerDown={e => e.stopPropagation()}>
+    <div
+      className="numpad"
+      style={{ transform: `translate(calc(-50% + ${dragOffset.x}px), ${dragOffset.y}px)` }}
+      onPointerDown={handleDragStart}
+      onPointerMove={handleDragMove}
+      onPointerUp={handleDragEnd}
+      onPointerCancel={handleDragEnd}
+    >
       {!hideDisplay && (
         <div className="numpad-display">
           <span className="numpad-axis">{label}</span>

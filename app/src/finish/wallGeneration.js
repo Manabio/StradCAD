@@ -284,7 +284,7 @@ const OPENING_EPS = 1e-6;
  * （externalSubIntervals が dividerCLsBetween で全分割CLを切断候補にする）、
  * 区間中点が開口辺内にあるかだけで過不足なく判定できる。
  */
-function onStairOpening(p, graph, openings) {
+export function onStairOpening(p, graph, openings) {
   if (openings.length === 0) return false;
   const axisCL  = getShape(graph, p.axisCLId);
   const startCL = getShape(graph, p.startCLId);

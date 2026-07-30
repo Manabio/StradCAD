@@ -1,11 +1,12 @@
 import { observer } from 'mobx-react-lite';
-import { Line, Rect, Circle, Path } from 'react-konva';
+import { Group, Line, Rect, Circle, Path } from 'react-konva';
 import { ShapeType } from '@core';
 import { findOpeningsOnWall } from '../openings/openingGeometry.js';
 import { isEndpointAt } from '../transform/centerLineExtend.js';
 import { LodLevel, resolveStrokeWidth } from '../viewport.js';
 import { subtractIntervals } from '../finish/stair/stairGeometry.js';
 import { resolveWallTJunctions } from './wallJunctionResolve.js';
+import { resolveKneeDropOverlays } from '../finish/kneeDropWall.js';
 
 const DASH = {
   solid:     undefined,
@@ -45,7 +46,21 @@ export function arcPathD(cx, cy, radius, startAngleDeg, includedAngleDeg) {
   return `M ${x1} ${y1} A ${radius} ${radius} 0 ${large} ${sweep} ${x2} ${y2}`;
 }
 
-export const ShapesLayer = observer(({ graph, viewport }) => {
+// 2a壁の描画クリップ（stairUnderClip.js の stairUnderWallClips が返すサブパス配列）を
+// Konva の Group clipFunc へ渡す。clipFunc はグループの絶対変換込みで呼ばれるため
+// （Konva Container._drawChildren）、座標変換は不要——ワールドmm座標のまま moveTo/lineTo する。
+function makeClipFunc(subpaths) {
+  return (ctx) => {
+    for (const sp of subpaths) {
+      if (sp.length === 0) continue;
+      ctx.moveTo(sp[0].x, sp[0].y);
+      for (let i = 1; i < sp.length; i++) ctx.lineTo(sp[i].x, sp[i].y);
+      ctx.closePath();
+    }
+  };
+}
+
+export const ShapesLayer = observer(({ graph, viewport, stairUnderClips = null }) => {
   if (!graph) return null;
   const { scaleX, scaleY, lodLevel } = viewport;
 
@@ -81,6 +96,10 @@ export const ShapesLayer = observer(({ graph, viewport }) => {
   // 将来 useMemo 化を検討）。
   const wallJunctions = lodLevel === LodLevel.DETAIL ? resolveWallTJunctions(graph.walls) : null;
 
+  // 腰壁・垂れ壁の描画オーバーレイ（毎レンダー解決。resolveWallTJunctions と同型）。
+  // 略図LOD（単線）では特別描画なし。
+  const kneeDropOverlays = lodLevel !== LodLevel.SCHEMATIC ? resolveKneeDropOverlays(graph) : null;
+
   return graph.generalShapes.map((shape) => {
     const sp = strokeProps(shape, scaleX, scaleY);
 
@@ -114,6 +133,10 @@ export const ShapesLayer = observer(({ graph, viewport }) => {
         );
 
       case ShapeType.WALL: {
+        // 3通り（略図の単線／標準の帯／詳細の下地・仕上げ要素）の描画結果を1変数へ集約し、
+        // 2a壁（階段下部屋の偏芯壁）は末尾で1回だけ描画クリップ（stairUnderClips）を適用する
+        // （破れ線より階段踏面側の部分を描かない。.claude/stair-model.md 参照）。
+        const out = (() => {
         // ホストされた開口がある区間を除いた複数の区間に分割する
         const openings = findOpeningsOnWall(shape, graph)
           .slice().sort((a, b) => a.coord1 - b.coord1);
@@ -136,6 +159,28 @@ export const ShapesLayer = observer(({ graph, viewport }) => {
                 : [a, shape.axisValue, b, shape.axisValue]
               }
               {...sp}
+            />
+          ));
+        }
+
+        // 腰壁・垂れ壁: 平面切断高さ以下の腰壁／壁本体を貫かない垂れ壁は、通常の壁帯描画の
+        // 代わりに天板幅（faceLo-出幅 〜 faceHi+出幅）の輪郭を実線（腰壁）/破線（垂れ壁）で描く
+        // （resolveKneeDropOverlays が優先順位込みで解決済み。開口による区間分割はそのまま使う）。
+        const kneeDrop = kneeDropOverlays?.get(shape.id) ?? null;
+        if (kneeDrop) {
+          const dash = kneeDrop.mode === 'knee' ? DASH.solid : DASH.dashed;
+          return segments.map(([a, b], i) => (
+            <Rect
+              key={`${shape.id}:kdcap:${i}`}
+              x={shape.isVertical ? kneeDrop.capLo : a}
+              y={shape.isVertical ? a : kneeDrop.capLo}
+              width={shape.isVertical ? kneeDrop.capHi - kneeDrop.capLo : b - a}
+              height={shape.isVertical ? b - a : kneeDrop.capHi - kneeDrop.capLo}
+              fill="transparent"
+              stroke={sp.stroke}
+              strokeWidth={sp.strokeWidth}
+              dash={dash}
+              listening={false}
             />
           ));
         }
@@ -297,6 +342,10 @@ export const ShapesLayer = observer(({ graph, viewport }) => {
         }
 
         return elems;
+        })();
+
+        const clip = stairUnderClips?.get(shape.id);
+        return clip ? <Group key={shape.id} clipFunc={makeClipFunc(clip)}>{out}</Group> : out;
       }
 
       case ShapeType.ARC:

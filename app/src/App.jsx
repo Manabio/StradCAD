@@ -31,11 +31,12 @@ import { FinishHalfModal } from './finish/FinishHalfModal.jsx';
 import { StairLayer }      from './renderer/StairLayer.jsx';
 import { floorHeightAbove } from './finish/stair/stairDimensions.js';
 import { measureStairSpans } from './finish/stair/stairClassify.js';
-import { cellsBeyondBreak, stairPortEdges } from './finish/stair/stairGeometry.js';
+import { cellsBeyondBreak, stairPortEdges, LANE_GAP } from './finish/stair/stairGeometry.js';
+import { stairUnderWallClips } from './finish/stair/stairUnderClip.js';
 import { generateStairUnderWalls, stairUnderClaimedEdges, trimStairUnderJunctions } from './finish/stair/stairUnderWalls.js';
 import { roomBounds, cellBoundsList, refreshCells } from './finish/gridCells.js';
 import { generateRoomWallsFromOutline, generateExteriorWalls, snapshotWall, restoreWallsFromSnapshots, resolveBackingOwnership, applyBackingOwnership } from './finish/wallGeneration.js';
-import { snapshotEdges, restoreEdges, syncEdgesFromTopology, interiorWallSpans } from './finish/edgeClassify.js';
+import { snapshotEdges, restoreEdges, syncEdgesFromTopology, interiorWallSpans, buildCellToRoom } from './finish/edgeClassify.js';
 // finish/clEccentricity.js は edgeComposition.js 経由で materials/materialData.js（材マスタ全件）を
 // 静的に引くため、コード分割維持のため動的 import する（materialData.js のヘッダコメント参照）。
 import { reinterpretRoomsOnEntry, ensureStairRooms, snapshotRoomsState, restoreRoomsState } from './finish/roomReinterpret.js';
@@ -95,6 +96,8 @@ import { FloorplanPalette }    from './renderer/FloorplanPalette.jsx';
 import { RULER, TOP_BAR, INSET, inGutter as isInGutter } from './layout.js';
 import { evalNumpadExpr } from './ui/numpadUtils.js';
 import { EccentricityDialog } from './ui/EccentricityDialog.jsx';
+import { KneeDropWallDialog } from './ui/KneeDropWallDialog.jsx';
+import { resolveWallSpanKey, isEligibleWallSpan, kneeDropWallGeometry } from './finish/kneeDropWall.js';
 
 const SNAP_THRESHOLD_PX = 20;
 const CL_THRESHOLD_PX   = 8;
@@ -146,6 +149,7 @@ const App = observer(() => {
   const [clPreview,   setClPreview]   = useState(null);
   const [wallDialog,     setWallDialog]     = useState(null); // { worldPos }
   const [eccDialog,      setEccDialog]      = useState(null); // { cl } — CL偏芯ダイアログ
+  const [kneeDropWallDialog, setKneeDropWallDialog] = useState(null); // { spanKey, anchor } — 腰壁・垂れ壁ダイアログ
   const [openingDialog,  setOpeningDialog]  = useState(null); // { wall, worldPos, category, existing }
   const [floorDialog,    setFloorDialog]    = useState(null); // { isLowest }
   const [floorConfirm,   setFloorConfirm]   = useState(null); // { message, buttons, onSelect }
@@ -161,8 +165,11 @@ const App = observer(() => {
   const [structComposition, setStructComposition] = useState(null); // 構造モードの図面合成（自階床下材＋1つ下の階の柱）。各カテゴリの供給グラフを保持する
   // フロア切替時にモードを再ロードするためのトリガー
   const [activeFloorId,   setActiveFloorId]   = useState(project.activePlaneId);
-  // 上階ビュー: 直下階の階段を peek して上階表現で描くための解決済みエントリ
-  const [upperStairEntries, setUpperStairEntries] = useState([]);
+  // 上階ビュー: 直下階の階段を peek して上階表現で描くための解決済みエントリ。
+  // null=未解決（初回マウント・階/モード切替直後で peek 未完了）、配列=解決済み（空配列含む）。
+  // 2a壁クリップ（stairUnderClips）の中間階ガードは null の間、安全側で判定不能扱いにする
+  // （QA指摘: 切替直後の1フレームは前の階の値が残ってしまい中間階ガードが効かない）。
+  const [upperStairEntries, setUpperStairEntries] = useState(null);
   // 直上階の吹抜け（feature=VOID）を peek して直下階（自階）へ投影表示するための×座標
   const [upperVoidCrosses, setUpperVoidCrosses] = useState([]);
   // CL偏芯の階またぎ連動（他階のIDBを直接更新）後に、直上階peek系のstateを再計算させるトリガー
@@ -243,13 +250,16 @@ const App = observer(() => {
   // CL偏芯の階またぎ連動（floorSyncTick）でも再計算する——連動先の壁面位置が変わりうるため。
   useEffect(() => {
     let cancelled = false;
+    // 新しい階・モードの解決が終わるまで「未解決」（null）にする——解決前は前の階の値が
+    // 残ったまま中間階ガード（stairUnderClips）が誤判定しうるため（QA指摘）。
+    setUpperStairEntries(null);
     (async () => {
       const planes = project.planes; // elevation 昇順
       const active = project.activePlane;
       const idx = planes.findIndex(p => p.id === active?.id);
       const below = idx > 0 ? planes[idx - 1] : null;
       if (!below || !active || (appMode !== 'finish' && appMode !== 'floorplan')) {
-        setUpperStairEntries([]);
+        if (!cancelled) setUpperStairEntries([]);
         return;
       }
       const temp = await floorSwapManager.peek(below, project.structGraph);
@@ -371,7 +381,9 @@ const App = observer(() => {
         hasInteriorWall: interiorWallSpans(graph, cl.id).length > 0,
       } : null;
       if (clState?.canMove) modeRef.current.preloadMove(cl);
-      const items   = getMenuItems(context, endpointState, clState);
+      // 壁上メニュー: 腰壁・垂れ壁の適格性（2a壁は対象外）を渡す。
+      const wallState = context === CONTEXT.WALL ? { eligible: isEligibleWallSpan(wall, graph) } : null;
+      const items   = getMenuItems(context, endpointState, clState, wallState);
       setMenu({
         pos: { x: sx, y: sy }, items, snap, worldPos: viewport.screenToWorld(sx, sy),
         cl: clEndpoint ? clEndpoint.cl : cl, wall, opening,
@@ -1232,10 +1244,15 @@ const App = observer(() => {
     // 含めるのは、ステップ3の外壁は毎回全削除・再生成されるため（面位置は決定的なら実質
     // 不変だが、CLがユーザー編集で動いた場合にも追従できるようにする）。既に正しい位置なら
     // トリムは再度no-opになるだけで冪等（REASONED、下記トリムパスの説明を参照）。
+    // buildCellToRoom(graph) は2a部屋1件につき claim経路・生成経路の双方で呼ばれると2回
+    // 走ってしまう（QA指摘）。壁がまだ1本も追加されていないこの時点でグラフ全体から
+    // 1度だけ作り、両経路で共有する（Room.cellsは触っていないため、このループ内で使い回しても
+    // 結果は変わらない）。
+    const stairUnderCellToRoom = buildCellToRoom(graph);
     const underEdges = [];
     const step2aEntries = [];
     for (const { stair, room, splitCLIds } of stairUnderEntries) {
-      underEdges.push(...stairUnderClaimedEdges(graph, room));
+      underEdges.push(...stairUnderClaimedEdges(graph, stair, room, { stairOpenings, under2aRoomIds, cellToRoom: stairUnderCellToRoom }));
       if (room.generatedWallIds.size > 0) {
         // 再脱出時: 壁は再生成しないが、既存の2a壁はトリム対象として拾う
         for (const id of room.generatedWallIds) {
@@ -1246,7 +1263,7 @@ const App = observer(() => {
       }
       const { walls } = generateStairUnderWalls(
         graph, stair, room, fmode?.roomWallDims?.(graph, room) || {},
-        { splitCLIds, dimsOf: r => fmode?.roomWallDims?.(graph, r) || {} },
+        { splitCLIds, dimsOf: r => fmode?.roomWallDims?.(graph, r) || {}, stairOpenings, under2aRoomIds, cellToRoom: stairUnderCellToRoom },
       );
       if (walls.length === 0) continue;
 
@@ -1470,6 +1487,22 @@ const App = observer(() => {
     if (JSON.stringify(edgeBefore) !== JSON.stringify(edgeAfter)) {
       undoFns.push(() => restoreEdges(graph, edgeBefore));
       redoFns.push(() => restoreEdges(graph, edgeAfter));
+    }
+
+    // 腰壁・垂れ壁の孤児掃除: ステップ4のエッジ再同期直後、区間の幾何が解決できなくなった
+    // （対象壁が消えた・CLトポロジーが変わった）キーを削除する（CL偏芯ステップ4bと同じ発想。
+    // .claude/data-model.md「CL偏芯はレコードと導出結果を分離する」節参照）。腰壁・垂れ壁は
+    // 壁側へ値を焼き込まない（天板の描画のみ）ため、CL偏芯4bのような壁復元は不要。
+    if (graph.kneeDropWalls.size > 0) {
+      const cellToRoom = buildCellToRoom(graph);
+      const staleKneeDropKeys = [...graph.kneeDropWalls.keys()]
+        .filter(key => !kneeDropWallGeometry(graph, key, cellToRoom));
+      if (staleKneeDropKeys.length > 0) {
+        const removedKneeDrop = staleKneeDropKeys.map(key => [key, graph.kneeDropWalls.get(key)]);
+        runInAction(() => { for (const key of staleKneeDropKeys) graph.removeKneeDropWall(key); });
+        undoFns.push(() => runInAction(() => { for (const [key, rec] of removedKneeDrop) graph.setKneeDropWall(key, rec); }));
+        redoFns.push(() => runInAction(() => { for (const key of staleKneeDropKeys) graph.removeKneeDropWall(key); }));
+      }
     }
 
     // ステップ4b: 内壁指定（INTERIOR_WALLエッジ）が消えたCLの偏芯レコードを掃除する
@@ -2782,6 +2815,12 @@ const App = observer(() => {
       setOpeningDialog({ wall, worldPos: menu.worldPos, category: o.category, existing: o });
       return;
     }
+    if (item.id === 'knee-drop-wall') {
+      const spanKey = resolveWallSpanKey(menu.wall, menu.worldPos, graph);
+      if (spanKey) setKneeDropWallDialog({ spanKey, anchor: menu.pos, isVerticalWall: menu.wall.isVertical, wallOffsetSign: Math.sign(menu.wall.axisOffset) });
+      else         setToast({ msg: '区間を特定できません', key: Date.now() });
+      return;
+    }
     if (item.id === 'opening-del') {
       const o = menu.opening;
       graph.removeShape(o.id);
@@ -2875,6 +2914,24 @@ const App = observer(() => {
     const { propagateCLEccentricity } = await import('./finish/eccentricityFloorSync.js');
     await propagateCLEccentricity(project, graph, cl.id, { materialMap, undoEntry: entry });
     setFloorSyncTick(t => t + 1); // 連動先の壁面位置が変わりうるため、上階peek系のstateを再計算させる
+  }
+
+  // ---- 腰壁・垂れ壁 ----
+  // レコード1件のみを書き換える軽量差分undo（serializeGraph全体スナップショットは使わない
+  // ——壁の厚みジオメトリ自体は変えず、天板の追加描画（ShapesLayer.jsx）のみに影響するため）。
+  function handleKneeDropWallConfirm(rec) {
+    if (!kneeDropWallDialog) return;
+    const { spanKey } = kneeDropWallDialog;
+    const before = graph.kneeDropWalls.get(spanKey) ?? null;
+    runInAction(() => {
+      if (rec) graph.setKneeDropWall(spanKey, rec);
+      else     graph.removeKneeDropWall(spanKey);
+    });
+    undoManager.push(
+      () => runInAction(() => { if (before) graph.setKneeDropWall(spanKey, before); else graph.removeKneeDropWall(spanKey); }),
+      () => runInAction(() => { if (rec)    graph.setKneeDropWall(spanKey, rec);    else graph.removeKneeDropWall(spanKey); }),
+    );
+    setKneeDropWallDialog(null);
   }
 
   // 木造（在来）の自動判定（問題.md）: 平面モードで主構造が未指定のとき、追加した通り芯が
@@ -3249,6 +3306,87 @@ const App = observer(() => {
     : floorName;
   const chipManagementItems = chipActivePlane ? buildFloorMenuItems(chipActivePlane) : [];
 
+  // 階段の設置階（install）・上階見下げ（upper）の描画エントリ。StairLayer の描画と
+  // 2a壁の描画クリップ（stairUnderClip.js）の双方が使うため、ここで1度だけ計算する
+  // （install側は二重計算しない。ただしbuildStairGeometry自体はStairLayerの描画用フル
+  // ジオメトリと stairUnderClip.js の breakLine 抽出用で別々に呼ばれる——後者は前者の
+  // 出力を再利用しない、別計算）。upperStairEntries は finish/floorplan 以外または
+  // 階・モード切替直後の1フレームは null（未解決。該当useEffect参照）。
+  // isStairMode: site・structure モードでは階段を描画しないため、cellsBeyondBreak・
+  // refreshCells・measureStairSpans 等の無駄な計算と observable 購読（graph.stairs等）を
+  // 空配列で止める（QA指摘）。stairUnderClips のゲートも同じ変数で揃える。
+  const isStairMode = appMode === 'finish' || appMode === 'floorplan';
+  const stairFh = floorHeightAbove(project, project.activePlane);
+  const installEntries = isStairMode ? graph.stairs.map(s => {
+    const riser = s.riser ?? (stairFh != null ? stairFh / Math.max(1, s.totalSteps) : null);
+    // 破れ線先セルはヒット領域から除外する（下階階段の見下げクリック・階段下エリアの
+    // 部屋ドラッグは startDrag に一本化されているため、ここでは自階階段の onClick を発火させない）。
+    const beyond = cellsBeyondBreak(s, graph, riser);
+    const refreshed = refreshCells(s.cells, graph);
+    const hitCells = beyond.size > 0
+      ? new Set([...refreshed].filter(k => !beyond.has(k)))
+      : s.cells;
+    return {
+      id: s.id,
+      stair: s,
+      graph, // 側面線の壁有無判定（resolveStairSideLines）に使う
+      bounds: roomBounds(s.cells, graph),
+      cellBounds: cellBoundsList(s.cells, graph), // 実セル占有（L字等の選択枠用）
+      hitCellBounds: cellBoundsList(hitCells, graph), // クリックヒット領域（破れ線先セル除外）
+      beyondBreakBounds: cellBoundsList(beyond, graph), // 破れ線先セルのワールド矩形（重なるupperの踏面間引きに使う）
+      riser,
+      spans: measureStairSpans(s, graph), // セル実測の区間長（区間長指定の反映）
+      view: 'install',
+      selectable: appMode === 'finish',
+    };
+  }) : [];
+  // 階切替の非同期過渡で同一階段が install/upper 両方に入るのを防ぐ
+  // （install が設置階の正であり、upper は直下階由来。重複時は install を優先）
+  const installStairIds = new Set(installEntries.map(e => e.id));
+  // footprint が自階 install 階段と重なる upper エントリ（下階階段が自階の
+  // 自動設置階段と同じ位置に見下げ表示される場合）は installOverlap を付与し、
+  // StairLayer 側でプリミティブ別に独立フィルタする: 矢印は install の破れ線で
+  // クリップ、踏面線は破れ線先セル（beyondBreakBounds。cellsBeyondBreak で
+  // 全タイプ単一ソース判定済み）の中点判定、段数字はアンカー点判定で破れ先の
+  // 番号だけ残す（重ならなければ従来どおりフル描画）。
+  // upperStairEntries===null（未解決）の間は StairLayer には従来どおり空扱いで渡す
+  // （初回マウント時の見た目は元々空だったため変化なし）。中間階ガードの安全側判定は
+  // 下記 stairUnderClips 側で null を別途見て行う。isStairMode===false でも空配列に
+  // 揃える（site・structure モードでの無駄なフィルタ・マップ計算を止める）。
+  const upperEntries = isStairMode
+    ? (upperStairEntries ?? [])
+        .filter(e => !installStairIds.has(e.id))
+        .map(e => {
+          const overlapInstall = installEntries.find(ie => anyCellBoundsOverlap(e.cellBounds, ie.cellBounds));
+          return overlapInstall
+            ? {
+                ...e, installOverlap: true, clipAgainstId: overlapInstall.id,
+                beyondBreakBounds: overlapInstall.beyondBreakBounds,
+              }
+            : e;
+        })
+    : [];
+
+  // 折返し階段の往路・復路の間のあき（簡略LODのみ0）・破れ線の見た目端部のはり出し量。
+  // StairLayer の描画と2a壁クリップ計算の双方へ渡す（描かれる破れ線とクリップ線のズレ防止）。
+  const stairLaneGapMm = viewport.lodLevel === LodLevel.SCHEMATIC ? 0 : LANE_GAP;
+  const stairBreakOverhangMm = overhangMm(viewport, false);
+
+  // 2a壁（階段下部屋の偏芯壁）の破れ線より階段踏面側を描画しないための、壁ID→クリップ多角形。
+  // StairLayer と同じ条件（isStairMode）でゲートする——それ以外のモード（site等）では
+  // 壁を常にクリップなしで描く（モード間で壁の見え方を変えない）。また upperStairEntries が
+  // 未解決（null。階/モード切替直後の1フレーム）の間は中間階ガードが判定不能なため、
+  // 安全側で一切クリップしない（QA指摘）。stairUnderWallClips はクリップ対象が0件のとき自ら
+  // null を返す（毎レンダー新規の空Mapを渡し続けて observer の差分検出が無駄に走るのを防ぐ）。
+  const stairUnderClips = isStairMode && upperStairEntries !== null
+    ? stairUnderWallClips(graph, installEntries, {
+        laneGapMm: stairLaneGapMm,
+        breakOverhangMm: stairBreakOverhangMm,
+        detail: viewport.lodLevel === LodLevel.DETAIL,
+        lowerStairCellBounds: upperEntries.map(e => e.cellBounds).filter(Boolean).flat(),
+      })
+    : null;
+
   return (
     <>
       {/* Undo/Redo ボタン — 左上 */}
@@ -3410,6 +3548,18 @@ const App = observer(() => {
         />
       )}
 
+      {kneeDropWallDialog && (
+        <KneeDropWallDialog
+          graph={graph}
+          spanKey={kneeDropWallDialog.spanKey}
+          anchor={kneeDropWallDialog.anchor}
+          isVerticalWall={kneeDropWallDialog.isVerticalWall}
+          wallOffsetSign={kneeDropWallDialog.wallOffsetSign}
+          onConfirm={handleKneeDropWallConfirm}
+          onCancel={() => setKneeDropWallDialog(null)}
+        />
+      )}
+
       {openingDialog && (
         <OpeningDialog
           wall={openingDialog.wall}
@@ -3542,64 +3692,17 @@ const App = observer(() => {
                     previewCells={mode.previewCells}
                   />
                 )}
-                {(appMode === 'finish' || appMode === 'floorplan') && (() => {
-                  const fh = floorHeightAbove(project, project.activePlane);
-                  const installEntries = graph.stairs.map(s => {
-                    const riser = s.riser ?? (fh != null ? fh / Math.max(1, s.totalSteps) : null);
-                    // 破れ線先セルはヒット領域から除外する（下階階段の見下げクリック・階段下エリアの
-                    // 部屋ドラッグは startDrag に一本化されているため、ここでは自階階段の onClick を発火させない）。
-                    // cellsBeyondBreak は refreshCells 済みの現行キーを返すため、突き合わせる側も
-                    // 現行のグリッド分割へ展開する（直進階段の階段下分割CL — stairUnderSplit.js — で
-                    // 保存キーより細分化されている場合に一致させる）。
-                    const beyond = cellsBeyondBreak(s, graph, riser);
-                    const refreshed = refreshCells(s.cells, graph);
-                    const hitCells = beyond.size > 0
-                      ? new Set([...refreshed].filter(k => !beyond.has(k)))
-                      : s.cells;
-                    return {
-                      id: s.id,
-                      stair: s,
-                      graph, // 側面線の壁有無判定（resolveStairSideLines）に使う
-                      bounds: roomBounds(s.cells, graph),
-                      cellBounds: cellBoundsList(s.cells, graph), // 実セル占有（L字等の選択枠用）
-                      hitCellBounds: cellBoundsList(hitCells, graph), // クリックヒット領域（破れ線先セル除外）
-                      beyondBreakBounds: cellBoundsList(beyond, graph), // 破れ線先セルのワールド矩形（重なるupperの踏面間引きに使う）
-                      riser,
-                      spans: measureStairSpans(s, graph), // セル実測の区間長（区間長指定の反映）
-                      view: 'install',
-                      selectable: appMode === 'finish',
-                    };
-                  });
-                  // 階切替の非同期過渡で同一階段が install/upper 両方に入るのを防ぐ
-                  // （install が設置階の正であり、upper は直下階由来。重複時は install を優先）
-                  const installIds = new Set(installEntries.map(e => e.id));
-                  // footprint が自階 install 階段と重なる upper エントリ（下階階段が自階の
-                  // 自動設置階段と同じ位置に見下げ表示される場合）は installOverlap を付与し、
-                  // StairLayer 側でプリミティブ別に独立フィルタする: 矢印は install の破れ線で
-                  // クリップ、踏面線は破れ線先セル（beyondBreakBounds。cellsBeyondBreak で
-                  // 全タイプ単一ソース判定済み）の中点判定、段数字はアンカー点判定で破れ先の
-                  // 番号だけ残す（重ならなければ従来どおりフル描画）。
-                  const upperEntries = upperStairEntries
-                    .filter(e => !installIds.has(e.id))
-                    .map(e => {
-                      const overlapInstall = installEntries.find(ie => anyCellBoundsOverlap(e.cellBounds, ie.cellBounds));
-                      return overlapInstall
-                        ? {
-                            ...e, installOverlap: true, clipAgainstId: overlapInstall.id,
-                            beyondBreakBounds: overlapInstall.beyondBreakBounds,
-                          }
-                        : e;
-                    });
-                  return (
-                    <StairLayer
-                      entries={[...installEntries, ...upperEntries]}
-                      viewport={viewport}
-                      detail={viewport.lodLevel === LodLevel.DETAIL}
-                      selectedStairId={appMode === 'finish' ? mode?.selectedStairId : null}
-                      onSelectStair={appMode === 'finish' ? (id => modeRef.current?.selectStair(id)) : null}
-                    />
-                  );
-                })()}
+                {isStairMode && (
+                  <StairLayer
+                    entries={[...installEntries, ...upperEntries]}
+                    viewport={viewport}
+                    detail={viewport.lodLevel === LodLevel.DETAIL}
+                    laneGapMm={stairLaneGapMm}
+                    breakOverhangMm={stairBreakOverhangMm}
+                    selectedStairId={appMode === 'finish' ? mode?.selectedStairId : null}
+                    onSelectStair={appMode === 'finish' ? (id => modeRef.current?.selectStair(id)) : null}
+                  />
+                )}
                 {appMode === 'site' && mode && (
                   <SiteLinesLayer
                     site={project.site}
@@ -3610,7 +3713,7 @@ const App = observer(() => {
                 )}
                 {appMode === 'site' && <SiteDrawPreview mode={mode} />}
                 {/* 構造モードでは平面図（壁・建具）を描画しない。通り芯と構造部材のみ表示する。 */}
-                {appMode !== 'structure' && <ShapesLayer graph={graph} viewport={viewport} />}
+                {appMode !== 'structure' && <ShapesLayer graph={graph} viewport={viewport} stairUnderClips={stairUnderClips} />}
                 {appMode !== 'structure' && <OpeningsLayer graph={graph} viewport={viewport} />}
                 {/* 平面モードでは自階の柱（構造モードで生成・保存済み）を表示する。構造モードの伏図と違い
                     1つ下の階ではなく自階graphの柱を描く（その階の平面に立つ柱はその階のもの）。 */}

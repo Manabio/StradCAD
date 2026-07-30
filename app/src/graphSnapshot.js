@@ -243,6 +243,12 @@ function buildSnapshot(graph) {
     clEccentricities: [...graph.clEccentricities.entries()].map(([clId, r]) => ({
       clId, mode: r.mode, value: r.value, side: r.side, backing: r.backing,
     })),
+    // 腰壁・垂れ壁（1区間単位の指定）。key は edgeKey(axisCLId, startCLId, endCLId)。
+    kneeDropWalls: [...graph.kneeDropWalls.entries()].map(([key, r]) => ({
+      key,
+      hasKnee: r.knee != null, kneeTop: r.knee?.topHeight ?? 0,
+      hasDrop: r.drop != null, dropBottom: r.drop?.bottomHeight ?? 0,
+    })),
   };
 }
 
@@ -675,6 +681,12 @@ function applySnapshot(graph, snapshot) {
         value: d.value ?? 0,
         side: d.side === -1 ? -1 : 1,
         backing: d.backing ?? '',
+      });
+    }
+    for (const d of snapshot.kneeDropWalls ?? []) {
+      graph.setKneeDropWall(d.key, {
+        knee: d.hasKnee ? { topHeight: d.kneeTop ?? 0 } : null,
+        drop: d.hasDrop ? { bottomHeight: d.dropBottom ?? 0 } : null,
       });
     }
 

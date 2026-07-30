@@ -54,6 +54,8 @@ const GS = {
   DEFAULT_FLOOR_LEVEL: 40, DEFAULT_CEILING_HEIGHT: 41,
   // CL偏芯（内壁指定のあるCLの偏芯仕様、per-floor）
   CL_ECCENTRICITIES: 42,
+  // 腰壁・垂れ壁（1区間単位の指定、per-floor）
+  KNEE_DROP_WALLS: 43,
 };
 
 // Stair: 15 フィールド
@@ -135,6 +137,8 @@ const WL = {
 
 // CLEccentricity（CL偏芯レコード）: 5 フィールド
 const CE = { CL_ID: 0, MODE: 1, VALUE: 2, SIDE: 3, BACKING: 4 };
+// KneeDropWall（腰壁・垂れ壁レコード）: 5 フィールド
+const KDW = { KEY: 0, HAS_KNEE: 1, KNEE_TOP: 2, HAS_DROP: 3, DROP_BOTTOM: 4 };
 
 // Opening: 15 フィールド（開口 — 建具・窓）
 const OP = {
@@ -601,6 +605,18 @@ function writeClEcc(b, ce) {
   b.addFieldFloat64(CE.VALUE,  ce.value ?? 0, 0.0);
   b.addFieldInt8(CE.SIDE,      ce.side < 0 ? -1 : 1, 0);
   b.addFieldOffset(CE.BACKING, sBacking, 0);
+  return b.endObject();
+}
+
+function writeKneeDropWall(b, kdw) {
+  const sKey = b.createString(kdw.key ?? '');
+
+  b.startObject(5);
+  b.addFieldOffset(KDW.KEY,         sKey, 0);
+  b.addFieldInt8(KDW.HAS_KNEE,      kdw.hasKnee ? 1 : 0, 0);
+  b.addFieldFloat64(KDW.KNEE_TOP,   kdw.kneeTop ?? 0, 0.0);
+  b.addFieldInt8(KDW.HAS_DROP,      kdw.hasDrop ? 1 : 0, 0);
+  b.addFieldFloat64(KDW.DROP_BOTTOM, kdw.dropBottom ?? 0, 0.0);
   return b.endObject();
 }
 
@@ -1172,6 +1188,17 @@ function readClEcc(bb, tablePos) {
   };
 }
 
+function readKneeDropWall(bb, tablePos) {
+  const r = makeReader(bb, tablePos);
+  return {
+    key:        r.str(KDW.KEY),
+    hasKnee:    r.i8(KDW.HAS_KNEE) !== 0,
+    kneeTop:    r.f64(KDW.KNEE_TOP),
+    hasDrop:    r.i8(KDW.HAS_DROP) !== 0,
+    dropBottom: r.f64(KDW.DROP_BOTTOM),
+  };
+}
+
 function readExteriorRow(bb, tablePos) {
   const r = makeReader(bb, tablePos);
   return {
@@ -1388,6 +1415,7 @@ export function encode(snapshot) {
   const columnAxisKeysVec = writeStrVec(b, snapshot.columnAxisOffsetKeys ?? []);
   const columnAxisValsVec = writeStrVec(b, snapshot.columnAxisOffsetVals ?? []);
   const clEccVec = writeVec(b, snapshot.clEccentricities ?? [], writeClEcc);
+  const kneeDropWallVec = writeVec(b, snapshot.kneeDropWalls ?? [], writeKneeDropWall);
   const stairVec      = writeVec(b, snapshot.stairs ?? [], writeStair);
   const stairOrderVec = writeStrVec(b, snapshot.stairOrder ?? []);
   const exteriorRowsVec        = writeVec(b, snapshot.exteriorRows        ?? [], writeExteriorRow);
@@ -1400,7 +1428,7 @@ export function encode(snapshot) {
   const sStructureOverride = b.createString(snapshot.structureOverride ?? '');
   const structuralInfoOff  = writeStructuralInfo(b, snapshot.structuralInfo);
 
-  b.startObject(43);
+  b.startObject(44);
   b.addFieldOffset(GS.CLS,        clVec,        0);
   b.addFieldOffset(GS.PTS,        ptVec,        0);
   b.addFieldOffset(GS.WALLS,      wallVec,      0);
@@ -1443,6 +1471,7 @@ export function encode(snapshot) {
   b.addFieldOffset(GS.EXTERIOR_FITTING_ROWS, exteriorFittingRowsVec, 0);
   b.addFieldOffset(GS.STRUCTURE_ROWS,        structureRowsVec,       0);
   b.addFieldOffset(GS.CL_ECCENTRICITIES,     clEccVec,               0);
+  b.addFieldOffset(GS.KNEE_DROP_WALLS,       kneeDropWallVec,        0);
   const root = b.endObject();
 
   b.finish(root);
@@ -1501,5 +1530,6 @@ export function decode(bytes) {
     exteriorFittingRows: r.vec(GS.EXTERIOR_FITTING_ROWS, readExteriorRow),
     structureRows:       r.vec(GS.STRUCTURE_ROWS,        readExteriorRow),
     clEccentricities:    r.vec(GS.CL_ECCENTRICITIES,     readClEcc),
+    kneeDropWalls:       r.vec(GS.KNEE_DROP_WALLS,       readKneeDropWall),
   };
 }

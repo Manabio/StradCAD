@@ -28,7 +28,7 @@ function extendIconAngle(isVertical, side) {
   return side === 'hi' ? 0 : 180;
 }
 
-export function getMenuItems(context, endpointState, clState) {
+export function getMenuItems(context, endpointState, clState, wallState) {
   switch (context) {
     case CONTEXT.INTERSECTION:
       return [
@@ -66,11 +66,15 @@ export function getMenuItems(context, endpointState, clState) {
         { id: 'cl-v',  label: '垂直線', icon: '┃', angle: -90 },
         { id: 'cl-h',  label: '水平線', icon: '━', angle: 0 },
       ];
-    case CONTEXT.WALL:
-      return [
+    case CONTEXT.WALL: {
+      const items = [
         { id: 'add-fitting', label: '建具', icon: '🚪' },
         { id: 'add-window',  label: '窓',   icon: '🪟' },
       ];
+      // 腰壁・垂れ壁: 2a壁（階段下部屋の偏芯壁）は対象外（wallState.eligible が false）
+      if (wallState?.eligible) items.push({ id: 'knee-drop-wall', label: '腰/垂壁', icon: '▤' });
+      return items;
+    }
     case CONTEXT.OPENING:
       return [
         { id: 'opening-edit', label: '編集', icon: '✎' },

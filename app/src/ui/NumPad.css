@@ -14,6 +14,8 @@
   gap: 8px;
   user-select: none;
   -webkit-user-select: none;
+  touch-action: none; /* タッチでのドラッグ移動をスクロールに奪わせない */
+  cursor: move;
 }
 
 /* 値表示行 */

@@ -1,9 +1,7 @@
 import { observer } from 'mobx-react-lite';
 import { Group, Line, Text, Shape, Circle } from 'react-konva';
-import { buildStairGeometry, resolveStairSideLines, LABEL_OUT, LANE_GAP } from '../finish/stair/stairGeometry.js';
+import { buildStairGeometry, resolveStairSideLines, LABEL_OUT } from '../finish/stair/stairGeometry.js';
 import { outlineSegments } from '../finish/gridCells.js';
-import { overhangMm } from '../snap.js';
-import { LodLevel } from '../viewport.js';
 
 const STAIR_STROKE = '#1e293b';
 const CHEVRON_ANGLE = Math.PI / 7; // 矢じり(^)の開き角
@@ -124,16 +122,16 @@ export const StairLayer = observer(({
   entries = [],
   viewport,
   detail = false,
+  laneGapMm = 0,
+  breakOverhangMm = 0,
   selectedStairId = null,
   onSelectStair = null,
 }) => {
   const px = (w) => w / viewport.scaleX; // ズーム非依存の線幅
 
-  // 折返し階段の往路・復路の間のあき。簡略LODのみ0（中央仕切り1本）、標準・詳細はLANE_GAP。
-  const laneGapMm = viewport.lodLevel === LodLevel.SCHEMATIC ? 0 : LANE_GAP;
-
-  // 破れ線の見た目端部を中心線の端と同じルールで CL からはり出す（縮尺依存。snap.js の overhangMm）。
-  const breakOverhangMm = overhangMm(viewport, false);
+  // laneGapMm（折返し階段の往路・復路の間のあき）・breakOverhangMm（破れ線の見た目端部の
+  // はり出し量）は呼び出し側（App.jsx）で1度だけ算出して渡す（2a壁の描画クリップ計算
+  // stairUnderClip.js とここで同じ値を使い、描かれる破れ線とクリップ線のズレを防ぐ）。
 
   // 1パス目: 全エントリの幾何を先に計算する（矢印クリップで他エントリ＝自階installの
   // breakLine を参照するため、レンダーの前に install 分を含め解決しておく必要がある）。

@@ -955,6 +955,11 @@ export class PlanGraph {
     // applyCLEccentricity が毎回フル再計算して焼き込む（Wall側は導出結果のみを持つ）。
     this.clEccentricities = observable.map();
 
+    // 腰壁・垂れ壁（1区間単位の指定）: edgeKey(axisCLId, startCLId, endCLId) → レコード。
+    // レコード形状は setKneeDropWall 参照。区間の解決・輪郭描画は finish/kneeDropWall.js が担う
+    // （このクラス自体は保存・削除のみ）。
+    this.kneeDropWalls = observable.map();
+
     // トポロジー自動補完で「ユーザーが明示的に削除した箇所」を記憶する除外集合（per-floor、永続化対象）。
     // キーは柱・フーチング: `${verticalCL.id}:${horizontalCL.id}`、梁: spanKey()（始端終端の順序非依存）。
     this.excludedColumnSlots  = observable.set();
@@ -1072,6 +1077,8 @@ export class PlanGraph {
       setColumnAxisOffset:  action,
       setCLEccentricity:    action,
       removeCLEccentricity: action,
+      setKneeDropWall:      action,
+      removeKneeDropWall:   action,
       backingMaterials:         computed,
       addBackingMaterial:       action,
       edges:                    computed,
@@ -1271,6 +1278,15 @@ export class PlanGraph {
   setCLEccentricity(clId, rec) { this.clEccentricities.set(clId, Object.freeze({ ...rec })); }
   /** CL偏芯指定を解除する（＝偏芯なしの既定へ戻す）。 */
   removeCLEccentricity(clId)   { this.clEccentricities.delete(clId); }
+
+  /**
+   * 腰壁・垂れ壁レコードを1件設定する。key = edgeKey(axisCLId, startCLId, endCLId)（start/endはCL
+   * value昇順に正規化）。rec = { knee: {topHeight:number}|null, drop: {bottomHeight:number}|null }。
+   * immutableに保つため凍結する（CL偏芯と同方式）。
+   */
+  setKneeDropWall(key, rec) { this.kneeDropWalls.set(key, Object.freeze({ ...rec })); }
+  /** 腰壁・垂れ壁指定を解除する（＝両方nullの既定へ戻す）。 */
+  removeKneeDropWall(key)   { this.kneeDropWalls.delete(key); }
 
   /** 部屋の実効床レベル(mm) = 階基準 + 部屋デルタ（null = FL初期値どおり）。 */
   effectiveFloorLevel(room) {
@@ -1925,6 +1941,7 @@ export class PlanGraph {
     this.excludedFootingSlots.clear();
     this.columnAxisOffsets.clear();
     this.clEccentricities.clear();
+    this.kneeDropWalls.clear();
     this.exteriorWallBacking = DEFAULT_EXTERIOR_WALL_BACKING;
     this.interiorWallBacking = DEFAULT_INTERIOR_WALL_BACKING;
     this.ceilingBacking      = DEFAULT_CEILING_BACKING;

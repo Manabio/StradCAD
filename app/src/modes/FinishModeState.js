@@ -3,6 +3,7 @@ import { regionCellsAt, refreshCells, cellBoundsFromKey, cellBoundsList, worldTo
 import { classifyStairArea } from '../finish/stair/stairClassify.js';
 import { cellsBeyondBreak } from '../finish/stair/stairGeometry.js';
 import { ensureUnderStairSplit, removeUnderStairSplit, findUnderStairSplitCLs } from '../finish/stair/stairUnderSplit.js';
+import { stairUnderRoomsOf } from '../finish/stair/stairUnderRooms.js';
 import { floorHeightAbove } from '../finish/stair/stairDimensions.js';
 import { floorSwapManager } from '../storage/FloorSwapManager.js';
 import { snapshotFinishState, pushFinishUndo, withFinishUndo } from '../finish/finishUndo.js';
@@ -363,15 +364,7 @@ export class FinishModeState {
 
       const splitCLIds = new Set(findUnderStairSplitCLs(stair, graph).map(cl => cl.id));
 
-      for (const room of graph.rooms) {
-        if (room.feature === RoomFeature.STAIR || room.feature === RoomFeature.STAIR_VOID
-          || room.feature === RoomFeature.UNDEFINED) continue;
-        if (stair.roomId && room.id === stair.roomId) continue;
-        let intersects = false;
-        for (const key of refreshCells(room.cells, graph)) {
-          if (beyond.has(key)) { intersects = true; break; }
-        }
-        if (!intersects) continue;
+      for (const room of stairUnderRoomsOf(stair, graph, beyond)) {
         result.push({ stair, room, riser, beyondCells: beyond, splitCLIds });
       }
     }
