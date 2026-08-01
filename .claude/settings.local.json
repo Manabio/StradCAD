@@ -10,7 +10,9 @@
       "mcp__browser-vision__navigate_page",
       "mcp__browser-vision__list_console_messages",
       "mcp__browser-vision__list_pages",
-      "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" http://localhost:5173/)"
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" http://localhost:5173/)",
+      "Bash(node -e ' *)",
+      "mcp__browser-vision__fill"
     ]
   },
   "autoMemoryDirectory": "./.claude/memory",
