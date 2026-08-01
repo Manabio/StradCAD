@@ -7,22 +7,31 @@ const KINDS = [
   { id: 'aux',    label: '補助線', hint: 'ラベルなし補助線（破線）' },
 ];
 
+const BEAM_KIND = { id: 'beam', label: '梁芯', hint: '小梁を生成する梁芯（伏図）' };
+
+// appMode ごとに出す種別を絞る。未登録モード（floorplan/finish/site）は従来通り KINDS 全種。
+const KINDS_BY_MODE = { structure: [BEAM_KIND] };
+
 const CIRCLE_NUMS = ['①', '②', '③', '④', '⑤', '⑥', '⑦', '⑧', '⑨', '⑩'];
 
 /**
  * 通り芯追加ダイアログ
  *
  * Y軸は上が正・下が負（表示座標 = −ワールドY）。
- * onConfirm(worldValue, kind) : kind = 'center'|'struct'|'aux'
+ * onConfirm(worldValue, kind) : kind = 'center'|'struct'|'aux'|'beam'
+ * columnAxisRefs: 構造モード（appMode==='structure'）専用の「柱芯」参照選択肢。
+ * 要素は { id:'colaxis:'+clId, clId, value(柱芯実位置), axisOffset(通り芯からの偏芯量), label } の合成CL
+ * （実CLではない）。他モードでは常に空配列＝従来と完全に同一。
  */
-export function AddCLDialog({ type, worldCoord, gridCLs, nearbyCLs = [], onConfirm, onCancel, onPreviewChange }) {
+export function AddCLDialog({ type, worldCoord, gridCLs, nearbyCLs = [], appMode, columnAxisRefs = [], onConfirm, onCancel, onPreviewChange }) {
   const isV  = type === 'vertical';
   const sign = isV ? 1 : -1;
   const axisLabel = isV ? 'X' : 'Y';
+  const kinds = KINDS_BY_MODE[appMode] ?? KINDS;
 
   const nearbyIds  = new Set(nearbyCLs.map(cl => cl.id));
   const gridOnly   = gridCLs.filter(cl => !nearbyIds.has(cl.id));
-  const allOptions = [...nearbyCLs, ...gridOnly];
+  const allOptions = [...nearbyCLs, ...gridOnly, ...columnAxisRefs];
 
   const nearest = allOptions.length > 0
     ? allOptions.reduce((best, cl) =>
@@ -30,7 +39,7 @@ export function AddCLDialog({ type, worldCoord, gridCLs, nearbyCLs = [], onConfi
       )
     : null;
 
-  const [kind,    setKind]    = useState('center');
+  const [kind,    setKind]    = useState(kinds[0].id);
   const [trim,    setTrim]    = useState(false);
   const [refId,   setRefId]   = useState(nearest?.id ?? '');
   const [distStr, setDistStr] = useState(() =>
@@ -84,9 +93,16 @@ export function AddCLDialog({ type, worldCoord, gridCLs, nearbyCLs = [], onConfi
   function handleConfirm() {
     if (isMultiSpan && batchWorldValues) {
       onConfirm(batchWorldValues, kind, trim, null, null);
-    } else {
-      onConfirm(previewWorld, kind, trim, refId, dist * dir);
+      return;
     }
+    if (refCL?.clId) {
+      // 柱芯参照（columnAxisRefs の合成CL）: 合成id 'colaxis:...' をそのまま渡さず、
+      // 元の通り芯clId＋静的オフセット（柱芯偏芯量＋距離）に畳んで永続化する
+      // （通り芯の移動には追従するが、出幅編集による柱芯の再計算には追従しない。割り切り）。
+      onConfirm(previewWorld, kind, trim, refCL.clId, refCL.axisOffset + dist * dir);
+      return;
+    }
+    onConfirm(previewWorld, kind, trim, refId, dist * dir);
   }
 
   function handleKeyDown(e) {
@@ -104,7 +120,7 @@ export function AddCLDialog({ type, worldCoord, gridCLs, nearbyCLs = [], onConfi
 
         {/* 種別セレクタ */}
         <div className="cl-kind-group">
-          {KINDS.map(k => (
+          {kinds.map(k => (
             <button
               key={k.id}
               className={`cl-kind-btn${kind === k.id ? ' cl-kind-btn--active' : ''}`}
@@ -136,6 +152,13 @@ export function AddCLDialog({ type, worldCoord, gridCLs, nearbyCLs = [], onConfi
                 ))}
               </optgroup>
             )}
+            {columnAxisRefs.length > 0 && (
+              <optgroup label="柱芯">
+                {columnAxisRefs.map(ref => (
+                  <option key={ref.id} value={ref.id}>{ref.label}</option>
+                ))}
+              </optgroup>
+            )}
           </select>
         </label>
 
@@ -164,6 +187,7 @@ export function AddCLDialog({ type, worldCoord, gridCLs, nearbyCLs = [], onConfi
           }
         </div>
 
+        {/* 梁芯（kind==='beam'）は extent 計算が center と同一処理になったためトリムも中心と同じ扱い */}
         <label className="cl-dialog-row cl-dialog-row--check">
           <input
             type="checkbox"

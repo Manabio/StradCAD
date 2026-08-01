@@ -1,4 +1,4 @@
-import { StructuralMaterialType, columnSlotKey, spanKey } from '../core.js';
+import { StructuralMaterialType, CenterLineType, columnSlotKey, spanKey, centerLineKind, findHostPrimaryBeam } from '../core.js';
 import { DEFAULT_SECTION_BY_MATERIAL, DEFAULT_COLUMN_SECTION_BY_MATERIAL, DEFAULT_BEAM_SECTION_BY_MATERIAL } from './memberCatalog.js';
 import { findSectionEntry } from './sectionCatalog.js';
 import { isFoundationPlane } from './drawingDesignation.js';
@@ -188,6 +188,49 @@ export function autoFillBeams(graph, project, role = 'primary', wallGate = null)
   return created;
 }
 
+// 梁芯CL（direct discipline:'fuse'、labeled:false）の追加座標許容誤差(mm)。
+const SPAN_EPS = 0.5;
+
+/** 階固有の梁芯CL（centerLineKind==='beam'）を列挙する。 */
+export function beamAxisCenterLines(graph) {
+  return graph.centerLines.filter(cl => centerLineKind(cl) === 'beam');
+}
+
+/** 梁芯CL（discipline:'fuse'）ごとに、この梁芯を跨ぐ直交大梁(role:'primary')を持つ通り芯の
+ *  連続ペア（＝梁と梁の内側）へ小梁（role:'secondary', symbol B）を自動生成する（除外集合のスロットはスキップ）。
+ *  基礎伏図・屋上伏図はhostとなる大梁がrole:'primary'でない（'foundation'/'eaves'）ため自動的に0本になる
+ *  （分岐不要）。構造モード突入時の再計算（autoFillStructuralGrid）と、梁芯CL追加時の両方から呼ぶ。 */
+export function autoFillSecondaryBeams(graph, project) {
+  if (!isStructureSpecified(graph, project)) return [];
+  const structure = effectiveStructure(graph, project);
+  if (!structureHasMemberKind(MEMBER_KIND.BEAM, structure)) return [];
+  const materialType = resolveDefaultMaterialType(graph, project);
+  const section = DEFAULT_BEAM_SECTION_BY_MATERIAL[materialType];
+  const existing = new Set(graph.beams.map(b => spanKey(b.axisCL, b.clStart, b.clEnd)));
+  const created = [];
+  for (const cl of beamAxisCenterLines(graph)) {
+    if (cl.centerLineType === CenterLineType.RADIAL) continue; // 放射CLはジオメトリ未対応（getCenterLineSegment同様）
+    const isVertical = cl.centerLineType === CenterLineType.VERTICAL;
+    const cross = isVertical ? graph.gridYs : graph.gridXs; // value昇順の直交通り芯
+    const lo = cl.extentLo ?? -Infinity, hi = cl.extentHi ?? Infinity;
+    const inRange = cross.filter(p => p.value >= lo - SPAN_EPS && p.value <= hi + SPAN_EPS);
+    // 「梁と梁の内側」＝この梁芯を跨ぐ大梁を持つ通り芯同士を連続ペアで結ぶ。隣接通り芯ペアで見ると、
+    // 途中に大梁を持たない通り芯（L字の他翼由来・wallGateで梁が省かれた軸など）が1本挟まるだけで
+    // 小梁が全く生成されなくなるため、host有りの通り芯だけを抽出してから隣接ペアにする。
+    // 座標基準はeffectiveValue（pendingDelta込み）に統一する。host判定はfindHostPrimaryBeam
+    // （core/structuralEntities.js）に集約——描画側（spanForHostBeams）と同一実装・同一tolerance。
+    const hosts = inRange.filter(p => findHostPrimaryBeam(graph.beams, p.id, !isVertical, cl.effectiveValue));
+    for (let i = 0; i < hosts.length - 1; i++) {
+      const a = hosts[i], b = hosts[i + 1];
+      const key = spanKey(cl, a, b);
+      if (existing.has(key) || graph.excludedBeamSlots.has(key)) continue;
+      created.push(graph.addBeam(materialType, section, cl, isVertical, a, b, { role: 'secondary', beamType: '小梁' }));
+      existing.add(key);
+    }
+  }
+  return created;
+}
+
 /** 屋上伏図（isRoofPlane）専用：梁が存在しないグリッド辺を検出し、軒桁を含む横架材（role:'eaves',
  *  symbol EG）をデフォルト材料・断面で自動生成する（除外集合のスロットはスキップ）。
  *  autoFillBeams の role='primary' 相当を屋根専用平面向けに複製したもの——spanKey がroleを見ないため、
@@ -249,7 +292,10 @@ export function autoFillStructuralGrid(graph, project, belowMainStructure, wallG
   const beamKind = foundation ? MEMBER_KIND.FOUNDATION_BEAM : MEMBER_KIND.BEAM;
   const newBeams     = (!isRoof && ownSpecified && structureHasMemberKind(beamKind, structure)) ? autoFillBeams(graph, project, foundation ? 'foundation' : 'primary', wallGate) : [];
   const newRoofBeams = (isRoof && belowMainStructure !== UNSPECIFIED_STRUCTURE) ? autoFillRoofBeams(graph, project, belowMainStructure, wallGate) : [];
-  return { newColumns, newFootings, newBeams: [...newBeams, ...newRoofBeams] };
+  // 梁芯CL（discipline:'fuse'）ごとの小梁自動生成。wallGate は直接引かない
+  // （直交大梁に挟まれている＝大梁のフットプリント判定を継承するため。上のnewBeams生成後に呼ぶ）。
+  const newSecondaryBeams = autoFillSecondaryBeams(graph, project);
+  return { newColumns, newFootings, newBeams: [...newBeams, ...newRoofBeams, ...newSecondaryBeams] };
 }
 
 /** 主要構造（実効値）と異なる材種の既存柱・梁を、新しい材種のサブクラスへ変換する。
@@ -480,12 +526,11 @@ export function alignToOuterFace(baseOffset, sectionWidth, referenceWidth, align
 // autoFillColumnAxisOffsets を先に呼んで columnAxisOffsets を確定させておくこと（recompute はその順序）。
 // ----------------------------------------------------------------
 
-/** 梁の伏図見付き幅(mm)＝梁幅b（描画 beamRenderWidth と同一基準。柱外面合わせの縁はこの幅で揃える）。
- *  RCは beamWidth(算定値)、鋼材はカタログ断面の幅b（width）。軒桁等で算定 beamWidth/beamDepth が立っても
- *  鋼材はカタログ断面を優先する（算定値は屋根スパン由来でカタログ断面とは別物のため）。 */
+/** 梁の伏図見付き幅(mm)＝梁幅b（描画 beamRenderWidth・小梁の端部クリアランス算定と同一基準。
+ *  柱外面合わせの縁はこの幅で揃える）。実体は StructuralBeam.sectionWidth（core/structuralEntities.js）
+ *  に集約し、ここは薄い委譲のみ（構造モードの梁エンティティは常にこのgetterを持つため呼び出し元は不変）。 */
 function beamSectionWidth(beam) {
-  if (beam.materialType === StructuralMaterialType.RC) return beam.beamWidth ?? 300;
-  return findSectionEntry(beam.sectionDefId)?.width ?? 300;
+  return beam.sectionWidth;
 }
 
 /** 梁の偏芯算出に必要な幾何（外周符号 s と base=(梁半幅 − 既定柱半幅)）。

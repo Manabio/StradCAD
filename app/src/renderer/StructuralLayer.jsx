@@ -255,8 +255,17 @@ export const StructuralLayer = observer(({ composition, viewport, project }) => 
               <Line key={b.id} points={[p1.x, p1.y, p2.x, p2.y]} stroke={color} strokeWidth={thin} dash={beamDash} listening={false} />,
             ];
           }
-          const segment = [[Math.min(coord1, coord2), Math.max(coord1, coord2)]];
-          return bandLines(`beam:${b.id}`, b.isVertical, b.axisValue, width / 2, segment, color, medium, beamDash);
+          const lo = Math.min(coord1, coord2), hi = Math.max(coord1, coord2);
+          // 小梁（role:'secondary'）は端部が大梁の縁+クリアランスで止まる（通しで描く大梁・基礎梁・軒桁とは
+          // 異なり端が構造物に突き当たらない）ため、開いた2本線のままだと切りっぱなしに見える。
+          // 端を横断する線分で閉じ、閉矩形（口の字）で描く（bandRect は foundation の帯と共通の実装）。
+          if (b.role === 'secondary') {
+            return [
+              <Rect key={b.id} {...bandRect(b, lo, hi, width / 2)}
+                stroke={color} strokeWidth={medium} dash={beamDash} listening={false} />,
+            ];
+          }
+          return bandLines(`beam:${b.id}`, b.isVertical, b.axisValue, width / 2, [[lo, hi]], color, medium, beamDash);
         })}
       </Group>
       <Group {...groupPropsForStyle(slab?.spec.style)}>

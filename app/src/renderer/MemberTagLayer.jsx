@@ -7,6 +7,7 @@ import { COLOR_BY_MATERIAL, columnRenderSize, beamRenderWidth } from './Structur
 import { groupPropsForStyle } from '../figure/figureStyle.js';
 
 const FONT_SIZE_PX = 22; // スクリーン上の表示サイズ(px)。RoomLabelsLayer と同じ逆補正方式。
+const SECONDARY_TAG_FONT_SIZE_PX = 18; // 小梁タグは大梁(G)より一回り小さく表示する
 const TAG_GAP_MM = 30; // 部材本体の縁からタグまでの余白（実寸マージンに加算）
 
 // 柱の実描画サイズ（StructuralLayer.jsxの単一実装を共用。描画と食い違うと結局重なるため）から
@@ -151,10 +152,11 @@ export const MemberTagLayer = observer(({ composition, viewport, onTagClick, onS
       );
     });
 
-  const axisTags = (entities, mapName, marginFor) => entities
+  const axisTags = (entities, mapName, marginFor, fontSizeFor = null) => entities
     .filter(e => e.memberNo)
     .map(e => {
       const margin = marginFor(e);
+      const fs = fontSizeFor?.(e) ?? fontSize;
       const mid = (e.coord1 + e.coord2) / 2;
       const x = e.isVertical ? e.axisValue - margin : mid;
       const y = e.isVertical ? mid : e.axisValue - margin;
@@ -165,10 +167,10 @@ export const MemberTagLayer = observer(({ composition, viewport, onTagClick, onS
           mapName={mapName}
           x={x}
           y={y}
-          offsetX={estimateTagWidth(e.memberNo, fontSize) / 2}
-          offsetY={fontSize}
+          offsetX={estimateTagWidth(e.memberNo, fs) / 2}
+          offsetY={fs}
           rotation={e.isVertical ? -90 : 0}
-          fontSize={fontSize}
+          fontSize={fs}
           materialColor={COLOR_BY_MATERIAL[e.materialType]}
           onTagClick={onTagClick}
           onStatusMenuRequest={onStatusMenuRequest}
@@ -207,7 +209,13 @@ export const MemberTagLayer = observer(({ composition, viewport, onTagClick, onS
         {pointTags(footingGraph?.footings ?? [], 'footingMap', footingMargin)}
       </Group>
       <Group {...groupPropsForStyle(composition.styleForCategory('beamMap'))}>
-        {axisTags(beamGraph?.beams ?? [], 'beamMap', b => beamMargin(b, lod))}
+        {axisTags(
+          // 小梁タグは略図（LOD SCHEMATIC）では非表示（大梁のみ残す）
+          (beamGraph?.beams ?? []).filter(b => !(lod === LodLevel.SCHEMATIC && b.role === 'secondary')),
+          'beamMap',
+          b => beamMargin(b, lod),
+          b => (b.role === 'secondary' ? SECONDARY_TAG_FONT_SIZE_PX : FONT_SIZE_PX) / viewport.scaleX,
+        )}
       </Group>
       <Group {...groupPropsForStyle(composition.styleForCategory('wallMap'))}>
         {axisTags(wallGraph?.structuralWalls ?? [], 'wallMap', w => wallMargin(w, lod))}

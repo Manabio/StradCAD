@@ -71,10 +71,10 @@ import { CalibrationDialog }  from './ui/CalibrationDialog.jsx';
 import { SiteDialog }          from './ui/SiteDialog.jsx';
 import { BuildingInfoDialog }  from './ui/BuildingInfoDialog.jsx';
 import { StructuralPanel } from './structural/StructuralPanel.jsx';
-import { autoFillColumns, autoFillColumnAxisOffsets, autoFillBeamEccentricity, autoFillColumnSizes, resolveLowestGraph, convertMembersToEffectiveMaterial, deleteClassificationOverflow, axisExteriorSign } from './structural/structuralAutoFill.js';
+import { autoFillColumns, autoFillColumnAxisOffsets, autoFillBeamEccentricity, autoFillColumnSizes, resolveLowestGraph, convertMembersToEffectiveMaterial, deleteClassificationOverflow, axisExteriorSign, autoFillSecondaryBeams } from './structural/structuralAutoFill.js';
 import { structureHasMemberKind, MEMBER_KIND } from './structural/structuralClassification.js';
 import { buildStructuralWallGate, buildExteriorSide } from './structural/wallGate.js';
-import { renumberAllCategories } from './structural/memberNumbering.js';
+import { renumberAllCategories, renumberMembers } from './structural/memberNumbering.js';
 import { recomputeStructuralForGraph } from './structural/structuralRecompute.js';
 import { syncRoofPlane } from './structural/roofPlane.js';
 import { buildStructuralFigureSlots, designationForSlot, firstSlotKeyForPlane } from './structural/structuralFigureSlots.js';
@@ -129,6 +129,27 @@ function rectsOverlap(a, b) {
 function anyCellBoundsOverlap(listA, listB) {
   if (!listA?.length || !listB?.length) return false;
   return listA.some(a => listB.some(b => rectsOverlap(a, b)));
+}
+
+// 構造モードのAddCLDialogに渡す「柱芯」参照選択肢。columnAxisOffsets（通り芯→柱芯の偏芯量。
+// structural-model.md「柱芯は『建物由来の出幅』から導出する」参照）が非0の通り芯のみを対象にする
+// （0=通り芯と同位置のため選択肢ノイズになる）。柱芯実位置＝通り芯実位置(cl.value)＋offset
+// ——gridCLs構築（graph.gridXs/gridYs、value基準）と同じ座標基準に揃える。
+function buildColumnAxisRefs(graph, type) {
+  const axisCLs = type === 'vertical' ? graph.gridXs : graph.gridYs;
+  const refs = [];
+  for (const cl of axisCLs) {
+    const offset = graph.columnAxisOffsets.get(cl.id) ?? 0;
+    if (offset === 0) continue;
+    refs.push({
+      id:    `colaxis:${cl.id}`,
+      clId:  cl.id,
+      value: cl.value + offset,
+      axisOffset: offset,
+      label: `${cl.label ?? ''} 柱芯`,
+    });
+  }
+  return refs;
 }
 
 const App = observer(() => {
@@ -2655,17 +2676,16 @@ const App = observer(() => {
     }
     const world = viewport.screenToWorld(clientX, clientY);
     const snap  = findNearestIntersection(graph, world.x, world.y, SNAP_THRESHOLD_PX, viewport.scaleX, viewport.scaleY);
+    // 構造モードでは通り芯上でマウスが反応しない（既存仕様）が、梁芯は選択・削除・延長/短縮できる必要が
+    // あるため、appModeで丸ごとnullにはせず kindFilter で「構造モード=梁芯のみ／他モード=梁芯以外」に絞る
+    // （非表示の梁芯を非構造モードで拾わない・構造モードでは梁芯だけがヒットする、の両方をこれ一本で満たす）。
+    const clKindFilter = appMode === 'structure' ? (k => k === 'beam') : (k => k !== 'beam');
     // CL端点（延長/短縮メニュー）は交点スナップより優先度は下だが、CL/開口/壁の排他選択とは別枠で判定する
-    const clEndpointCand = (appMode === 'structure')
-      ? null
-      : findNearestCenterLineEndpoint(graph, world.x, world.y, CL_THRESHOLD_PX, viewport.scaleX, viewport.scaleY, viewport);
+    const clEndpointCand = findNearestCenterLineEndpoint(graph, world.x, world.y, CL_THRESHOLD_PX, viewport.scaleX, viewport.scaleY, viewport, clKindFilter);
     // 交点スナップ中は CL/開口/壁の検出不要
     let cl = null, opening = null, wall = null;
     if (!snap) {
-      // 構造モードでは通り芯上でマウスが反応しない（カーソル変化・長押しメニュー共に無効）
-      const clCand      = appMode === 'structure'
-        ? null
-        : findNearestCenterLine(graph, world.x, world.y, CL_THRESHOLD_PX, viewport.scaleX, viewport.scaleY, viewport);
+      const clCand      = findNearestCenterLine(graph, world.x, world.y, CL_THRESHOLD_PX, viewport.scaleX, viewport.scaleY, viewport, clKindFilter);
       const openingCand = findOpeningAt(graph, world.x, world.y, WALL_THRESHOLD_PX, viewport.scaleX, viewport.scaleY);
       const wallCand    = findNearestWall(graph, world.x, world.y, WALL_THRESHOLD_PX, viewport.scaleX, viewport.scaleY);
       // 部屋の壁は軸CLから数十mmしかオフセットしておらず、通常のズームでは
@@ -2710,10 +2730,13 @@ const App = observer(() => {
       const isV  = item.id === 'cl-v';
       const pos  = menu.worldPos;
       const clType = isV ? CenterLineType.VERTICAL : CenterLineType.HORIZONTAL;
+      // findNearbyCenterLines は全モード共通（構造モードの梁芯追加ダイアログでも使う）ため、
+      // 梁芯CLの除外はここ（appMode既知の呼び出し側）で行う——非構造モードでは非表示の梁芯を
+      // 「近接する中心線」の参照候補に出さない（描画（appMode限定表示）と同じ条件に揃える）。
       const nearbyCLs = findNearbyCenterLines(
         graph, pos.x, pos.y, SNAP_THRESHOLD_PX * 2,
         viewport.scaleX, viewport.scaleY, clType
-      );
+      ).filter(cl => appMode === 'structure' || centerLineKind(cl) !== 'beam');
       setClDialog({
         type:       isV ? 'vertical' : 'horizontal',
         worldCoord: isV ? pos.x : pos.y,
@@ -3004,14 +3027,23 @@ const App = observer(() => {
       return;
     }
 
-    // extent 計算: center は直交CL参照、aux は3ケース判定（壁・CL・フリー）
+    // extent 計算: center・beam（梁芯は中心線相当の処理を共用）は直交CL参照、aux は3ケース判定（壁・CL・フリー）
     let extentProps = {};
     let newExtentLo = null, newExtentHi = null;
-    if (kind === 'center') {
+    if (kind === 'center' || kind === 'beam') {
       const perpType = clType === CenterLineType.VERTICAL ? CenterLineType.HORIZONTAL : CenterLineType.VERTICAL;
       const wc = clDialog.worldCoord;
       const perpCLs = graph.centerLines.filter(cl => {
         if (cl.centerLineType !== perpType) return false;
+        if (kind === 'beam') {
+          // 梁芯の端部候補は通り芯（labeled）のみに限定する。中心線・補助線を候補に含めると
+          // 直交グリッド（autoFillSecondaryBeamsが見るgraph.gridXs/Ys＝通り芯のみ）に存在しない
+          // 区画へextentが確定してしまい、小梁が0本になる事故になる（QA指摘）。
+          return cl.labeled;
+        }
+        // center: 梁芯（discipline:'fuse'。構造モード専用表示で他モードでは非表示）は
+        // 端部候補から除外する——非表示の線が中心線のextent端部に選ばれるのを防ぐ。
+        if (centerLineKind(cl) === 'beam') return false;
         // 非ラベルCL: extentLo/Hi の実範囲（はね出し前）に新規CLの座標が含まれるものだけ対象
         if (!cl.labeled && cl.extentLo != null && cl.extentHi != null) {
           if (wc < cl.extentLo || wc > cl.extentHi) return false;
@@ -3166,6 +3198,13 @@ const App = observer(() => {
         }
       }
 
+      // 梁芯は他種別（通り芯/中心/補助線）と同位置に共存できない（大梁と完全重複する小梁の生成防止）。
+      // 逆方向（既存が梁芯で新規が別種別）も同様に拒否する。
+      if (kind !== existingKind && (kind === 'beam' || existingKind === 'beam')) {
+        setToast({ msg: ERR_CL_DUPLICATE(existingKind), key: Date.now() });
+        return;
+      }
+
       if (kind === 'struct' && existingKind === 'center') {
         // 既存の中心線を削除して通り芯を新規追加
         setToast({ msg: ERR_CL_CENTER_UPGRADED, key: Date.now() });
@@ -3226,9 +3265,28 @@ const App = observer(() => {
       ...extentProps,
       ...(kind === 'struct' ? { discipline: Discipline.STRUCT } : {}),
       ...(kind === 'aux'    ? { labeled: false, lineType: 'dashed' } : {}),
+      ...(kind === 'beam'   ? { discipline: Discipline.FUSE, labeled: false } : {}),
       trim: !!trim,
       ...(isRefResolvable ? { refId, refOffset: refOffset ?? 0 } : {}),
     };
+
+    if (kind === 'beam') {
+      // 梁芯CL追加＋直交大梁に挟まれた区間の小梁自動生成＋採番を1 undoエントリにまとめる
+      // （グラフスナップショット方式。CL削除連鎖などと同じ既存パターン）。
+      const before = serializeGraph(graph);
+      runInAction(() => {
+        graph.addCenterLine(clType, value, props);
+        autoFillSecondaryBeams(graph, project);
+        autoFillBeamEccentricity(graph, project);
+        renumberMembers(graph, project, 'beamMap');
+      });
+      const after = serializeGraph(graph);
+      undoManager.push(() => restoreGraph(graph, before), () => restoreGraph(graph, after));
+      setClDialog(null);
+      setClPreview(null);
+      return;
+    }
+
     const cl = targetGraph.addCenterLine(clType, value, props);
     const clId = cl.id;
     undoManager.push(
@@ -3522,6 +3580,8 @@ const App = observer(() => {
           worldCoord={clDialog.worldCoord}
           gridCLs={clDialog.type === 'vertical' ? graph.gridXs : graph.gridYs}
           nearbyCLs={clDialog.nearbyCLs ?? []}
+          appMode={appMode}
+          columnAxisRefs={appMode === 'structure' ? buildColumnAxisRefs(graph, clDialog.type) : []}
           onConfirm={handleCLDialogConfirm}
           onCancel={() => { setClDialog(null); setClPreview(null); }}
           onPreviewChange={setClPreview}
@@ -3668,6 +3728,7 @@ const App = observer(() => {
                 width={size.width}
                 height={size.height}
                 columnAxisMode={columnAxisMode}
+                appMode={appMode}
               />}
             </Group>
 

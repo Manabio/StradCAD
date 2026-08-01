@@ -3,14 +3,15 @@
 ## CL（CenterLine）
 座標の源泉となる基準線。`X`(垂直)/`Y`(水平)/`R`(放射)。`value`=確定座標、`pendingDelta`=ドラッグ中の未確定変位、`effectiveValue`=両者の合計（描画・スナップは常にこれを参照）。
 
-## 通り芯 / 中心 / 補助線（AddCLDialogの種別）
+## 通り芯 / 中心 / 補助線 / 梁芯（AddCLDialogの種別）
 | 種別 | discipline | labeled | 意味 |
 |---|---|---|---|
 | 通り芯 | `struct` | `true` | グリッド軸。ガターラベル・交点自動生成の対象 |
 | 中心 | `arch` | `false` | ラベルなし中心線（フロア固有） |
 | 補助線 | `arch` | `false` | ラベルなし破線（フロア固有） |
+| 梁芯 | `fuse` | `false` | ラベルなし中心線（フロア固有）。小梁の自動生成トリガー。構造モード（`appMode==='structure'`）のAddCLDialogではこれのみ選択可 |
 
-ガターラベル・ガター丸の表示対象は「`discipline==='struct'` かつ `labeled===true`」のみ。
+ガターラベル・ガター丸の表示対象は「`discipline==='struct'` かつ `labeled===true`」のみ。梁芯は「中心」と同じ表現形式（extentLoRef/HiRef）を使う別種別（`centerLineKind()`が`'beam'`を返す）。設計意図は`.claude/structural-model.md`。
 
 ## discipline（分野）
 `arch`(意匠・既定) / `struct`(構造) / `fuse`(伏図) / `mep`(設備) / `elec`(電気)。

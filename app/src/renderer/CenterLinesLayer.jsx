@@ -1,6 +1,6 @@
 import { observer } from 'mobx-react-lite';
 import { Line, Circle } from 'react-konva';
-import { CenterLineType, DimensionSide } from '@core';
+import { CenterLineType, DimensionSide, centerLineKind } from '@core';
 import { overhangMm } from '../snap.js';
 import { gutterEdgeCoord } from './gutterPrimitives.jsx';
 
@@ -53,7 +53,11 @@ export function clExtent(cl, graph, viewport, width, height) {
 // columnAxisMode時は、通り芯からの柱芯偏心（columnAxisOffsets、ラーメン系のみ非0）を
 // 同じ一点鎖線で建物内に描画する。柱・梁の実位置はこのオフセットをCL.effectiveValueに加算した
 // 位置を使う（core.js参照）——ここではその基準線を可視化するだけで、新規CL/Shapeは作らない。
-export const CenterLinesLayer = observer(({ graph, viewport, width, height, columnAxisMode = false, axisLineCoords = null }) => {
+// appMode: 梁芯CL（discipline:'fuse'）は構造モード（appMode==='structure'）以外では描画しない
+// （データ（CenterLine実体・shapeMap上）は残したまま、描画のみスキップする——他モードから見えず
+// 操作できなくなるが、構造モード専用の線という仕様どおり）。線のスタイルは柱芯線（下のaxisLines）と
+// 同一にする（青#3b82f6・一点鎖線[12,4,2,4]・opacity1・通常CLと同じstrokeWidth）。
+export const CenterLinesLayer = observer(({ graph, viewport, width, height, columnAxisMode = false, axisLineCoords = null, appMode }) => {
   if (!graph) return null;
   const b = viewportBounds(viewport, width, height);
 
@@ -61,6 +65,10 @@ export const CenterLinesLayer = observer(({ graph, viewport, width, height, colu
     const isV = cl.centerLineType === CenterLineType.VERTICAL;
     const isH = cl.centerLineType === CenterLineType.HORIZONTAL;
     if (!isV && !isH) return null;
+
+    // 梁芯CLは構造モード限定表示（柱芯線と同格の扱い）。
+    const isBeamAxis = centerLineKind(cl) === 'beam';
+    if (isBeamAxis && appMode !== 'structure') return null;
 
     const ext = clExtent(cl, graph, viewport, width, height);
     const [p1, p2] = ext ?? (isV ? [b.yMin, b.yMax] : [b.xMin, b.xMax]);
@@ -75,12 +83,12 @@ export const CenterLinesLayer = observer(({ graph, viewport, width, height, colu
       <Line
         key={cl.id}
         points={points}
-        stroke={cl.labeled ? '#3b82f6' : '#64748b'}
+        stroke={cl.labeled || isBeamAxis ? '#3b82f6' : '#64748b'}
         strokeWidth={viewport.lineWeightsPx.thin}
         dash={isAux ? undefined : [12, 4, 2, 4]}
         strokeScaleEnabled={false}
         listening={false}
-        opacity={cl.labeled ? 1 : 0.5}
+        opacity={cl.labeled || isBeamAxis ? 1 : 0.5}
       />
     );
   });

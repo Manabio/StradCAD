@@ -462,6 +462,7 @@ export class CenterLine extends Shape {
 export function centerLineKind(cl) {
   if (cl.lineType === 'dashed') return 'aux';
   if (cl.discipline === Discipline.STRUCT) return 'struct';
+  if (cl.discipline === Discipline.FUSE) return 'beam';
   return 'center';
 }
 
@@ -860,7 +861,7 @@ import {
 } from './core/structuralEntities.js';
 
 export {
-  columnSlotKey, spanKey,
+  columnSlotKey, spanKey, findHostPrimaryBeam, HOST_BEAM_MATCH_TOL_MM,
   StructuralColumn, WoodColumn, SteelColumn, RcColumn,
   StructuralBeam, WoodBeam, SteelBeam, RcBeam,
   IndependentFooting, ColumnBase,

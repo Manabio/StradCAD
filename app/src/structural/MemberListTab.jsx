@@ -189,7 +189,7 @@ export const MemberListTab = observer(({ composition, project, focusRequest }) =
         const readOnly = composition.roleForCategory(group.mapName) === LayerRole.REFERENCE;
         return (
           <MemberGroupSection
-            key={group.mapName}
+            key={group.key}
             group={group}
             graph={g}
             composition={composition}
@@ -252,7 +252,7 @@ const MemberGroupSection = observer(({ group, graph, composition, project, struc
   // 構造種別が持たない部材種別（×）の個体は一覧から除外する（footing→ベース/柱脚、beam→梁/基礎梁を role で割る）。
   // structure=null（主構造未設定）は素通し。memberKindOf が null を返す表外部材（軒桁・杭）は structureHasMemberKind=true で残る。
   // R階伏図は figureType=ROOF で個体も取捨する（軒桁＝null は表外で残るが、梁グループ自体が梁ルールで取捨される）。
-  const allEntities = [...graph[group.mapName].values()];
+  const allEntities = [...graph[group.mapName].values()].filter(group.filter ?? (() => true));
   const entities = structure == null ? allEntities : allEntities.filter(e => structureHasMemberKind(memberKindOf(group.mapName, e), structure, figureType));
   const byTag = new Map();
   for (const e of entities) {
@@ -261,10 +261,12 @@ const MemberGroupSection = observer(({ group, graph, composition, project, struc
     byTag.get(tag).push(e);
   }
   const tagGroups = [...byTag.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+  // hideWhenEmpty:true のグループ（小梁）は0件時セクション自体を出さない（基礎伏図・R階伏図等）。
+  if (group.hideWhenEmpty && tagGroups.length === 0) return null;
 
   // 木造系の基礎伏図の梁＝土台基礎。見出しを「土台基礎」に改め、基礎種別（なし/ベタ基礎/土間コン）を右横に置く。
   // 基礎種別は基礎梁の断面に効く建物全体設定（project.structuralInfo.foundationType）を直接編集する。
-  const isWoodFoundationBeamGroup = group.mapName === 'beamMap'
+  const isWoodFoundationBeamGroup = group.mapName === 'beamMap' && group.key === 'beam'
     && isWoodStructure(structure) && isFoundationPlane(graph.plane, project);
   const groupLabel = isWoodFoundationBeamGroup ? '土台基礎' : group.label;
 
@@ -306,7 +308,7 @@ const MemberGroupSection = observer(({ group, graph, composition, project, struc
           />
         );
       })}
-      {!readOnly && <NewMemberSelector group={group} graph={graph} project={project} structure={structure} />}
+      {!readOnly && group.allowManualAdd !== false && <NewMemberSelector group={group} graph={graph} project={project} structure={structure} />}
     </div>
   );
 });

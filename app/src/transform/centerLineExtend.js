@@ -24,7 +24,8 @@ const ENDPOINT_EPS = 0.5;
  * 補助線はオーバーハング付きの静的端点が正規状態のため対象外（常に false）。
  */
 export function isEndpointAt(graph, cl, side) {
-  if (centerLineKind(cl) !== 'center') return false;
+  const kind = centerLineKind(cl);
+  if (kind !== 'center' && kind !== 'beam') return false;
   const coord = side === 'lo' ? cl.extentLo : cl.extentHi;
   if (coord == null) return false;
   const perpType = perpTypeOf(cl);
@@ -167,7 +168,7 @@ export function shortenCenterLine(graph, cl, side, viewport) {
     const opposite = side === 'lo' ? 'hi' : 'lo';
     ref         = opposite === 'lo' ? cl.extentLoRef : cl.extentHiRef;
     staticValue = opposite === 'lo' ? cl._extentLo    : cl._extentHi;
-  } else if (kind === 'center') {
+  } else if (kind === 'center' || kind === 'beam') {
     ref = { clId: boundary.item.id, offset: 0 };
   } else {
     const overhang = overhangMm(viewport, cl.trim);

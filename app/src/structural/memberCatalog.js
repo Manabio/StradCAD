@@ -13,13 +13,21 @@ export const MEMBER_CATEGORY = Object.freeze({
   PLANE_V:     'D',  // 耐力壁
 });
 
-// 構造リストタブのグルーピング定義（PlanGraph の map 名 → 分類・ラベル・断面アイコン形状）
+// 構造リストタブのグルーピング定義（PlanGraph の map 名 → 分類・ラベル・断面アイコン形状）。
+// key はReactキー・display用の一意識別子（複数グループが同一mapNameを共有できるようmapNameとは独立に持つ）。
+// filter（省略時は全件）は同一mapNameを role 等でさらに分けるグループ（梁/小梁）が使う。
+// allowManualAdd:false は「＋追加」UIを出さない（小梁は梁芯CLからの自動生成のみ）。
+// hideWhenEmpty:true は0件時にセクション自体を非表示にする（groupMemberKindsによる分類全体の
+// 非表示とは別軸——梁カテゴリ自体は表示するが、小梁が1本もない基礎伏図/R階伏図等では空セクションを出さない）。
 export const MEMBER_GROUPS = [
-  { mapName: 'columnMap',  category: MEMBER_CATEGORY.COLUMN_LIKE, label: '柱・杭',     iconShape: 'square' },
-  { mapName: 'footingMap', category: MEMBER_CATEGORY.BOX_LIKE,    label: '基礎・柱脚', iconShape: 'box' },
-  { mapName: 'beamMap',    category: MEMBER_CATEGORY.ROD,         label: '梁',         iconShape: 'band' },
-  { mapName: 'slabMap',    category: MEMBER_CATEGORY.PLANE_H,     label: 'スラブ',     iconShape: 'plane' },
-  { mapName: 'wallMap',    category: MEMBER_CATEGORY.PLANE_V,     label: '耐力壁',     iconShape: 'wall' },
+  { key: 'column',  mapName: 'columnMap',  category: MEMBER_CATEGORY.COLUMN_LIKE, label: '柱・杭',     iconShape: 'square' },
+  { key: 'footing', mapName: 'footingMap', category: MEMBER_CATEGORY.BOX_LIKE,    label: '基礎・柱脚', iconShape: 'box' },
+  { key: 'beam',    mapName: 'beamMap',    category: MEMBER_CATEGORY.ROD,         label: '梁',         iconShape: 'band',
+    filter: b => b.role !== 'secondary' },
+  { key: 'beamSub', mapName: 'beamMap',    category: MEMBER_CATEGORY.ROD,         label: '小梁',       iconShape: 'band',
+    filter: b => b.role === 'secondary', allowManualAdd: false, hideWhenEmpty: true },
+  { key: 'slab',    mapName: 'slabMap',    category: MEMBER_CATEGORY.PLANE_H,     label: 'スラブ',     iconShape: 'plane' },
+  { key: 'wall',    mapName: 'wallMap',    category: MEMBER_CATEGORY.PLANE_V,     label: '耐力壁',     iconShape: 'wall' },
 ];
 
 // 削除APIの対応表（PlanGraph側のメソッド名）

@@ -195,8 +195,13 @@ function centerLineCoord(d, boundary, viewport, areaBounds) {
   return lineCoord;
 }
 
-function isCenterDimensionTarget(cl) {
-  return !cl.labeled && cl.lineType !== 'dashed' && cl.discipline === Discipline.ARCH;
+// 梁芯（discipline:'fuse'）は中心線（discipline:'arch'）と同じ寸法処理を共用するが、構造モード
+// （appMode==='structure'）以外では対象外にする——CenterLinesLayer の描画スキップ（appMode限定表示）
+// と寸法行の出し分けを一致させ、非表示の線が寸法だけ出る食い違いを防ぐ。
+function isCenterDimensionTarget(cl, appMode) {
+  if (cl.labeled || cl.lineType === 'dashed') return false;
+  if (cl.discipline === Discipline.ARCH) return true;
+  return appMode === 'structure' && cl.discipline === Discipline.FUSE;
 }
 
 function segKey(seg) { return `${seg.from.id}:${seg.to.id}`; }
@@ -229,7 +234,7 @@ function gridLineBounds(viewport, width, height) {
 // value 昇順で返す。境界に到達しているかは clExtent（オーバーハング込み）で判定する。
 // この行の基準線（lineCoord）が描画エリアの外に出る場合は、外書き自体を諦めて
 // 中心線を部屋内書きフォールバックに回すため、アンカーを空にする。
-function buildRowAnchors(d, graph, viewport, areaBounds) {
+function buildRowAnchors(d, graph, viewport, areaBounds, appMode) {
   // floorSwapManager.deactivate() がフロアを IDB にスワップアウトする際、
   // activePlaneId 切替前の一瞬だけ graph.clearFloorData() 後の状態（CENTER 寸法行が0件）を
   // 観測してしまうことがある（正規のスワップアウト動作）。d が無い場合は単に何も描かない。
@@ -243,7 +248,7 @@ function buildRowAnchors(d, graph, viewport, areaBounds) {
   const gridCLs = d.axis === 'X' ? graph.gridXs : graph.gridYs;
   const myType  = d.axis === 'X' ? CenterLineType.VERTICAL : CenterLineType.HORIZONTAL;
   const centerCLs = graph.centerLines.filter(cl => {
-    if (cl.centerLineType !== myType || !isCenterDimensionTarget(cl)) return false;
+    if (cl.centerLineType !== myType || !isCenterDimensionTarget(cl, appMode)) return false;
     const ext = clExtent(cl, graph, viewport);
     return !!ext && ext[0] <= boundary && boundary <= ext[1];
   });
@@ -430,7 +435,7 @@ function pushFallbackSegment(els, axis, cl, neighbor, suffix, fontSize, dotR, ga
 // LODに関わらず常時表示する（連鎖した部屋内寸法の一部だけが倍率で消えると不自然なため）。
 // 隣接CL（prev/next）とは生の延伸範囲が重なる位置（横寸法は下1/3・縦寸法は右1/3点）にのみ描く。
 // 重ならない場合（隣接CLがそこに実在しない）はその区間を描かない。
-function buildFallbackElements(graph, viewport, axis, anchorsA, anchorsB) {
+function buildFallbackElements(graph, viewport, axis, anchorsA, anchorsB, appMode) {
   const visibleReachIds = new Set([
     ...anchorsA.map(a => a.id),
     ...anchorsB.map(a => a.id),
@@ -438,7 +443,7 @@ function buildFallbackElements(graph, viewport, axis, anchorsA, anchorsB) {
 
   const myType   = axis === 'X' ? CenterLineType.VERTICAL : CenterLineType.HORIZONTAL;
   const gridCLs  = axis === 'X' ? graph.gridXs : graph.gridYs;
-  const centerCLs = graph.centerLines.filter(cl => cl.centerLineType === myType && isCenterDimensionTarget(cl));
+  const centerCLs = graph.centerLines.filter(cl => cl.centerLineType === myType && isCenterDimensionTarget(cl, appMode));
   const all = [...gridCLs, ...centerCLs].sort((a, b) => a.effectiveValue - b.effectiveValue);
 
   const fontSize = FALLBACK_FONT_PX / viewport.scaleX;
@@ -623,7 +628,12 @@ export function columnAxisLabelHits(graph, viewport, width, height) {
   return hits;
 }
 
-const CenterDimensions = observer(({ graph, viewport, width, height, columnAxisMode = false }) => {
+// columnAxisMode（構造モード・ラーメン系）時は CENTER 行が柱芯(SX/SY)表示に専有される（下記分岐）。
+// 柱芯アンカーは「グリッドからのオフセットのみで決まる1:1の点」で浮いた中心線の重なり判定・連鎖探索を
+// 持たない設計（buildColumnAxisAnchors 参照）のため、梁芯（浮いた中心線そのもの）をここへ混在させると
+// その前提が崩れる。columnAxisMode 中は梁芯の寸法行を出さない（線自体は CenterLinesLayer が引き続き
+// 描画する）——柱芯寸法と梁芯寸法を同一行に共存させない棲み分けとする。
+const CenterDimensions = observer(({ graph, viewport, width, height, columnAxisMode = false, appMode }) => {
   if (!graph) return null;
 
   const areaBounds = drawingAreaBounds(viewport, width, height);
@@ -648,18 +658,18 @@ const CenterDimensions = observer(({ graph, viewport, width, height, columnAxisM
     ];
   }
 
-  const { boundary: topB,    lineCoord: topLC,    anchors: topA    } = buildRowAnchors(top,    graph, viewport, areaBounds);
-  const { boundary: bottomB, lineCoord: bottomLC, anchors: bottomA } = buildRowAnchors(bottom, graph, viewport, areaBounds);
-  const { boundary: leftB,   lineCoord: leftLC,   anchors: leftA   } = buildRowAnchors(left,   graph, viewport, areaBounds);
-  const { boundary: rightB,  lineCoord: rightLC,  anchors: rightA  } = buildRowAnchors(right,  graph, viewport, areaBounds);
+  const { boundary: topB,    lineCoord: topLC,    anchors: topA    } = buildRowAnchors(top,    graph, viewport, areaBounds, appMode);
+  const { boundary: bottomB, lineCoord: bottomLC, anchors: bottomA } = buildRowAnchors(bottom, graph, viewport, areaBounds, appMode);
+  const { boundary: leftB,   lineCoord: leftLC,   anchors: leftA   } = buildRowAnchors(left,   graph, viewport, areaBounds, appMode);
+  const { boundary: rightB,  lineCoord: rightLC,  anchors: rightA  } = buildRowAnchors(right,  graph, viewport, areaBounds, appMode);
 
   const topRes    = buildRowElements(top,    topB,    topLC,    topA,    new Set(),       viewport, graph);
   const bottomRes = buildRowElements(bottom, bottomB, bottomLC, bottomA, topRes.segKeys,  viewport, graph);
   const leftRes   = buildRowElements(left,   leftB,   leftLC,   leftA,   new Set(),       viewport, graph);
   const rightRes  = buildRowElements(right,  rightB,  rightLC,  rightA,  leftRes.segKeys, viewport, graph);
 
-  const fallbackX = buildFallbackElements(graph, viewport, 'X', topA,  bottomA);
-  const fallbackY = buildFallbackElements(graph, viewport, 'Y', leftA, rightA);
+  const fallbackX = buildFallbackElements(graph, viewport, 'X', topA,  bottomA, appMode);
+  const fallbackY = buildFallbackElements(graph, viewport, 'Y', leftA, rightA,  appMode);
 
   return [
     ...topRes.elements, ...bottomRes.elements,
@@ -669,7 +679,9 @@ const CenterDimensions = observer(({ graph, viewport, width, height, columnAxisM
 });
 
 // ---- 統合エクスポート ----
-export const GutterLayer = observer(({ graph, viewport, width, height, columnAxisMode = false }) => {
+// appMode: 梁芯（discipline:'fuse'）の表示・寸法対象化を構造モード限定にするために必要
+// （CenterLinesLayer の描画スキップ・CenterDimensions の isCenterDimensionTarget 両方へ伝播する）。
+export const GutterLayer = observer(({ graph, viewport, width, height, columnAxisMode = false, appMode }) => {
   if (!graph) return null;
   const axisLineCoords = columnAxisMode
     ? columnAxisLabelCoords(graph, viewport, width, height)
@@ -677,10 +689,10 @@ export const GutterLayer = observer(({ graph, viewport, width, height, columnAxi
   return (
     <>
       <CenterLinesLayer graph={graph} viewport={viewport} width={width} height={height}
-        columnAxisMode={columnAxisMode} axisLineCoords={axisLineCoords} />
+        columnAxisMode={columnAxisMode} axisLineCoords={axisLineCoords} appMode={appMode} />
       <GutterCircleLabels graph={graph} viewport={viewport} width={width} height={height} />
       <GridDimensions graph={graph} viewport={viewport} width={width} height={height} />
-      <CenterDimensions graph={graph} viewport={viewport} width={width} height={height} columnAxisMode={columnAxisMode} />
+      <CenterDimensions graph={graph} viewport={viewport} width={width} height={height} columnAxisMode={columnAxisMode} appMode={appMode} />
     </>
   );
 });

@@ -143,6 +143,25 @@ export class RcColumn extends StructuralColumn {
   }
 }
 
+// 小梁（role:'secondary'）の端部クリアランス(mm)。host（取りつく大梁）の縁からこの分だけ離して止める。
+export const SECONDARY_BEAM_CLEARANCE_MM = 50;
+
+// host大梁の跨ぎ判定の座標許容誤差(mm)。生成条件（structuralAutoFill.autoFillSecondaryBeams）と
+// 端部クリアランス（StructuralBeam.spanForHostBeams）が同じ値を共有する。
+export const HOST_BEAM_MATCH_TOL_MM = 0.5;
+
+// 直交CL位置(perpCLId)に、coordを跨ぐ大梁(role:'primary')があれば返す（無ければnull）。
+// 小梁の生成条件（structuralAutoFill.autoFillSecondaryBeams）と描画時の端部クリアランス
+// （StructuralBeam._hostEndCenterAndHalfWidth）が二重実装せず同じ関数を使うための単一実装。
+// 座標基準は value（生値）ではなく effectiveValue 系（pendingDelta込み）に統一する——生値で判定すると
+// 通り芯ドラッグ中に描画側だけhostを見失い、小梁端の座標がジャンプする不具合になる（再発防止）。
+export function findHostPrimaryBeam(beams, perpCLId, hostIsVertical, coord, tolerance = HOST_BEAM_MATCH_TOL_MM) {
+  return beams.find(h =>
+    h.role === 'primary' && h.isVertical === hostIsVertical && h.axisCL.id === perpCLId &&
+    Math.min(h.clStart.effectiveValue, h.clEnd.effectiveValue) - tolerance <= coord &&
+    coord <= Math.max(h.clStart.effectiveValue, h.clEnd.effectiveValue) + tolerance) ?? null;
+}
+
 // ----------------------------------------------------------------
 // 梁（StructuralBeam・抽象） — Wall と同じ「軸CL + 始端CL + 終端CL」方式
 //
@@ -197,11 +216,18 @@ export class StructuralBeam extends StructuralEntity {
       axisValue: computed,
       coord1:    computed,
       coord2:    computed,
+      sectionWidth: computed,
     });
   }
   // axisValue = 通り芯 + 柱芯オフセット（columnAxisOffsets。ラーメン系のみ非0） + 個別偏心量
   get axisValue() {
     return this.axisCL.effectiveValue + _axisOffset(this._planGraph, this.axisCL.id) + this.eccentricity;
+  }
+  // 伏図見付き幅(mm)＝梁幅b（structural/structuralAutoFill.js の梁偏芯算定・描画 beamRenderWidth と同一基準）。
+  // RCはbeamWidth（算定値）、鋼材はカタログ断面の幅b（軒桁等で算定beamWidthが立っていてもカタログ優先）。
+  get sectionWidth() {
+    if (this.materialType === StructuralMaterialType.RC) return this.beamWidth ?? 300;
+    return findSectionEntry(this.sectionDefId)?.width ?? 300;
   }
   // 端部の直交CLに立つ柱を columns から探す（垂直梁はaxisCLが垂直CL・perpCLが水平CL、水平梁はその逆）。
   // columns は「その伏図に表示される柱集合」——構造モードでは1つ下の階の柱。梁はその表示中の柱の断面手前で
@@ -232,10 +258,29 @@ export class StructuralBeam extends StructuralEntity {
       : Math.abs(w * Math.cos(rad)) + Math.abs(h * Math.sin(rad));
     return { center, half: extent / 2 };
   }
+  // 端部の直交CLに、この小梁を跨いで支持する大梁(role:'primary')があれば、その縁+クリアランスで止める
+  // 座標と半幅を返す（無ければ柱と同じ規約でCL位置=center・半幅0）。host判定は findHostPrimaryBeam に
+  // 委譲する（structuralAutoFill.autoFillSecondaryBeams と同一実装・同一tolerance・同一座標基準）。
+  _hostEndCenterAndHalfWidth(perpCL, beams, clearance) {
+    const host = findHostPrimaryBeam(beams, perpCL.id, !this.isVertical, this.axisValue);
+    if (!host) return { center: perpCL.effectiveValue + _axisOffset(this._planGraph, perpCL.id), half: 0 };
+    return { center: host.axisValue, half: host.sectionWidth / 2 + clearance };
+  }
+  // 小梁（role:'secondary'）専用: 両端を「取りつく大梁の縁+クリアランス」で止めた始終端座標を返す
+  // （host無しの端はCL位置まで＝柱と同じ規約）。beams は自階graphの梁集合（_planGraph.beams）。
+  spanForHostBeams(beams, clearance = SECONDARY_BEAM_CLEARANCE_MM) {
+    const a = this._hostEndCenterAndHalfWidth(this.clStart, beams, clearance);
+    const b = this._hostEndCenterAndHalfWidth(this.clEnd, beams, clearance);
+    const dir = Math.sign(b.center - a.center) || 1;
+    return { coord1: a.center + dir * a.half, coord2: b.center - dir * b.half };
+  }
   // 表示する柱集合 columns に対し、両端を柱断面手前で止めた始終端座標を返す。
   // 伏図で別階の柱を表示する場合はレンダラが表示中の柱集合を渡す（StructuralLayer.jsx）。
   // opts.diaphragm=true（詳細描画）なら鋼管柱はダイヤフラム端で止める（梁はダイヤフラムまで）。
+  // 小梁（role:'secondary'）は柱ではなく取りつく大梁の縁で止まるため、渡された columns を使わず
+  // spanForHostBeams に委譲する（coord1/coord2 getter・StructuralLayer.jsx の両方が自動でトリム後座標になる）。
   spanForColumns(columns, { diaphragm = false } = {}) {
+    if (this.role === 'secondary') return this.spanForHostBeams(this._planGraph?.beams ?? []);
     const a = this._endCenterAndHalfWidth(this.clStart, columns, diaphragm);
     const b = this._endCenterAndHalfWidth(this.clEnd, columns, diaphragm);
     const dir = Math.sign(b.center - a.center) || 1;

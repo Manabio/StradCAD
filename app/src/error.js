@@ -1,4 +1,4 @@
-const KIND_LABEL = { struct: '通り芯', center: '中心線', aux: '補助線' };
+const KIND_LABEL = { struct: '通り芯', center: '中心線', aux: '補助線', beam: '梁芯' };
 
 export const ERR_CL_DUPLICATE = (kind) =>
   `既に同じ位置に${KIND_LABEL[kind]}があり、追加できません。`;

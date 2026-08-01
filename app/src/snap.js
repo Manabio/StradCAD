@@ -2,6 +2,7 @@
 // threshold は px 単位で渡し、ワールド差分に scaleX/Y を掛けてスクリーン距離に換算する。
 import { spatialIndex } from './store.js';
 import { findHostWall } from './openings/openingGeometry.js';
+import { centerLineKind } from './core.js';
 
 // 中心線の端のはね出し量 (mm)。区分線形:
 //   denom <  BASE_DENOM         : (LOW_DENOM, LOW_MM) → (BASE_DENOM, BASE_MM) の直線
@@ -46,11 +47,16 @@ export function findNearestIntersection(graph, wx, wy, thresholdPx, scaleX, scal
  * VERTICAL  → X 方向スクリーン距離
  * HORIZONTAL → Y 方向スクリーン距離
  * viewport を渡すと、ラベルなしCLの描画範囲（オーバーハング込み）外を除外する。
+ * kindFilter(centerLineKind(cl)) が true の種別だけを対象にする（既定は梁芯を除外＝非構造モード用。
+ * 構造モードの呼び出し元は `k => k === 'beam'` を渡し、梁芯だけをヒットテスト対象にする——
+ * 「通り芯上でマウスが反応しない」既存仕様は維持しつつ、梁芯だけは選択・削除・延長/短縮できるようにする
+ * ため appMode で無条件 null にせず kindFilter で絞る（App.jsx updateSnap 参照）。
  */
-export function findNearestCenterLine(graph, wx, wy, thresholdPx, scaleX, scaleY, viewport = null) {
+export function findNearestCenterLine(graph, wx, wy, thresholdPx, scaleX, scaleY, viewport = null, kindFilter = k => k !== 'beam') {
   if (!graph) return null;
   let nearest = null, minDist = Infinity;
   for (const cl of graph.centerLines) {
+    if (!kindFilter(centerLineKind(cl))) continue;
     const isV  = cl.centerLineType === 'X';
     const isH  = cl.centerLineType === 'Y';
     const dist = isV ? Math.abs(cl.value - wx) * scaleX
@@ -70,16 +76,17 @@ export function findNearestCenterLine(graph, wx, wy, thresholdPx, scaleX, scaleY
 }
 
 /**
- * カーソルに最も近い、非ラベルCL（中心・補助線）の端点を返す（延長/短縮メニュー用）。
+ * カーソルに最も近い、非ラベルCL（中心・補助線・梁芯）の端点を返す（延長/短縮メニュー用）。
  * 端点は描画上の突端（extentLo-overhang / extentHi+overhang）で判定する。
- * 通り芯（labeled:true）・RADIAL・extentLo/Hi未確定のCLは対象外。
+ * 通り芯（labeled:true）・RADIAL・extentLo/Hi未確定のCLは対象外。kindFilterは findNearestCenterLine
+ * と同じ規約（既定は梁芯を除外、構造モードは `k => k === 'beam'` で梁芯だけに絞る）。
  * @returns {{cl, side:'lo'|'hi'}|null}
  */
-export function findNearestCenterLineEndpoint(graph, wx, wy, thresholdPx, scaleX, scaleY, viewport) {
+export function findNearestCenterLineEndpoint(graph, wx, wy, thresholdPx, scaleX, scaleY, viewport, kindFilter = k => k !== 'beam') {
   if (!graph) return null;
   let nearest = null, minDist = Infinity;
   for (const cl of graph.centerLines) {
-    if (cl.labeled) continue;
+    if (cl.labeled || !kindFilter(centerLineKind(cl))) continue;
     const isV = cl.centerLineType === 'X';
     const isH = cl.centerLineType === 'Y';
     if (!isV && !isH) continue;
@@ -101,6 +108,10 @@ export function findNearestCenterLineEndpoint(graph, wx, wy, thresholdPx, scaleX
 
 /**
  * 中心線移動中、同種の他中心線へのスナップ値を返す。
+ * 呼び出し元（App.jsx の moveState/stretchState 駆動コード）は FloorplanModeState 専用の状態
+ * （StructuralModeState には moveState/stretchState が無い）を経由するため、構造モードでは
+ * そもそも呼ばれない。梁芯の移動UIは未実装（構造モードにmoveStateが無い）のため、
+ * findNearestCenterLine/findNearestCenterLineEndpoint と異なりkindFilterは持たず無条件除外のままでよい。
  */
 export function findCLMoveSnap(graph, movingCL, wx, wy, thresholdPx, scaleX, scaleY) {
   if (!graph) return null;
@@ -110,6 +121,7 @@ export function findCLMoveSnap(graph, movingCL, wx, wy, thresholdPx, scaleX, sca
   let best = null, minDist = Infinity;
   for (const cl of graph.centerLines) {
     if (cl.id === movingCL.id || cl.centerLineType !== movingCL.centerLineType) continue;
+    if (centerLineKind(cl) === 'beam') continue;
     const dist = Math.abs(cl.value - coord) * scale;
     if (dist < thresholdPx && dist < minDist) { minDist = dist; best = cl.value; }
   }
