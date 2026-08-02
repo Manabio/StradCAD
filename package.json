@@ -9,7 +9,8 @@
     "dev": "npm --prefix app run dev",
     "build": "npm --prefix app run build",
     "lint": "npm --prefix app run lint",
-    "preview": "npm --prefix app run preview"
+    "preview": "npm --prefix app run preview",
+    "test": "npm --prefix app run test"
   },
   "dependencies": {
     "context-mode": "^1.0.162"
