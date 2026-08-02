@@ -80,7 +80,7 @@ reaction(
 // ----------------------------------------------------------------
 (async () => {
   await clearAllStores();
-  floorSwapManager.setupStructGraph(project.structGraph, project.structuralInfo, savedProjectId, project.structuralTagRegistry).catch(console.error);
+  floorSwapManager.setupStructGraph(project.structGraph, project.structuralInfo, savedProjectId, project.memberGroupLedger).catch(console.error);
   floorSwapManager.activate(plane, graph).catch(console.error);
 })();
 
@@ -160,7 +160,13 @@ export async function removeFloor(planeId) {
   }
   for (const id of idsToDelete) await dbDeleteFloor(id);
 
-  runInAction(() => { project.removePlane(planeId); });
+  runInAction(() => {
+    project.removePlane(planeId);
+    // project.planes が縮むと memberNumberIndex の floorRanks が古い rank（planes配列の範囲外）を
+    // 指したままになり得る（floorSpanLabel/assignNumbers は防御済みだが、古い階の情報を表示し続ける
+    // のを避けるため即時に捨てる。次のモード境界の反映パスで正しく再収集される）。
+    project.clearMemberNumberIndex();
+  });
 }
 
 /**
@@ -193,7 +199,7 @@ export async function switchFloor(nextPlaneId) {
  * 現在のフロアと通り芯を IndexedDB に明示的に保存し、dirty をリセットする。
  */
 export async function saveToIDB() {
-  await floorSwapManager.saveNow(plane, graph, project.structGraph, project.structuralInfo, savedProjectId, project.structuralTagRegistry);
+  await floorSwapManager.saveNow(plane, graph, project.structGraph, project.structuralInfo, savedProjectId, project.memberGroupLedger);
   clearDirty();
 }
 

@@ -46,25 +46,29 @@ class StructuralEntity {
     this.id           = id;
     this.materialType = materialType; // StructuralMaterialType の値
     this.sectionDefId = sectionDefId; // 断面形状マスターへの参照ID（マスタ本体は次フェーズ）
-    this.memberNo     = null; // 部材番号（荷重バンドから決定的に自動採番、手動編集も可）
-    // 部材番号の手動ロック。true のとき自動採番（renumberMembers）で上書きしない（手動編集タグを保持）。
-    this.memberNoLocked = props.memberNoLocked ?? false;
+    this.memberNo     = null; // 部材番号（材寸グループ採番から決定的に自動算定、手動編集も可。structural/memberNumbering.js）
+    // 明示グループID（"C#1" のように記号+"#"+連番。分割・統合・手動採番の明示操作でのみ設定される）。
+    // null＝材寸署名（memberCatalog.memberSignature）から自動導出（既定の集約）。
+    // structural/memberGroups.js（台帳との conform）・memberNumbering.js（採番）が参照する。
+    // 手動タグは台帳の grp.no:<numberGroupId> に一本化（部材単位ロックは廃止。同一グループ内の
+    // 番号食い違いを作れてしまうため。旧 memberNoLocked は Phase D で廃止済み）。
+    this.numberGroupId = props.numberGroupId ?? null;
     // 寸法の3状態（Tri-state）。'auto'=自動算定値そのまま | 'locked'=手動固定（自動算定で上書きしない）
     // | 'calculated'=構造計算のチェックを通過（現状は暫定の手動トグル。本物の計算ロジックは次フェーズ）。
     this.dimensionStatus = props.dimensionStatus ?? 'auto';
     makeObservable(this, {
       sectionDefId:     observable,
       memberNo:         observable,
-      memberNoLocked:   observable,
+      numberGroupId:    observable,
       dimensionStatus:  observable,
       setMemberNo:      action,
-      setMemberNoLocked: action,
+      setNumberGroupId: action,
       setDimensionStatus: action,
       setField:         action,
     });
   }
   setMemberNo(no) { this.memberNo = no; }
-  setMemberNoLocked(locked) { this.memberNoLocked = locked; }
+  setNumberGroupId(gid) { this.numberGroupId = gid; }
   setDimensionStatus(status) { this.dimensionStatus = status; }
   /** 構造リストタブのフォームから単一フィールドを更新する汎用セッター（StructuralInfo.setField と同型）。 */
   setField(key, value) { this[key] = value; }

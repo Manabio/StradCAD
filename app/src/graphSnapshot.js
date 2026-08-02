@@ -159,7 +159,7 @@ function buildSnapshot(graph) {
     columns: graph.columns.map(c => {
       const [extraKeys, extraVals] = packExtraFields(c,
         ['pileType', 'pileDiameter', 'columnType', 'woodSpecies', 'basePlateDefId', 'mainBars', 'hoopBars',
-          'dimensionStatus', 'memberNoLocked', 'tributaryWidth']);
+          'dimensionStatus', 'tributaryWidth', 'numberGroupId']);
       return {
         id: c.id, materialType: c.materialType, sectionDefId: c.sectionDefId,
         verticalCLId: c.verticalCL.id, horizontalCLId: c.horizontalCL.id,
@@ -170,8 +170,8 @@ function buildSnapshot(graph) {
     }),
     beams: graph.beams.map(bm => {
       const [extraKeys, extraVals] = packExtraFields(bm,
-        ['beamType', 'isCambered', 'stiffenerCount', 'topMainBars', 'bottomMainBars', 'stirrupBars', 'dimensionStatus', 'memberNoLocked',
-          'beamWidth', 'beamDepth', 'faceGap', 'foundationSection']);
+        ['beamType', 'isCambered', 'stiffenerCount', 'topMainBars', 'bottomMainBars', 'stirrupBars', 'dimensionStatus',
+          'beamWidth', 'beamDepth', 'faceGap', 'foundationSection', 'numberGroupId']);
       return {
         id: bm.id, materialType: bm.materialType, sectionDefId: bm.sectionDefId,
         axisCLId: bm.axisCL.id, isVertical: bm.isVertical,
@@ -183,7 +183,7 @@ function buildSnapshot(graph) {
       };
     }),
     structuralWalls: graph.structuralWalls.map(w => {
-      const [extraKeys, extraVals] = packExtraFields(w, ['verticalBars', 'horizontalBars', 'dimensionStatus', 'memberNoLocked', 'wallType']);
+      const [extraKeys, extraVals] = packExtraFields(w, ['verticalBars', 'horizontalBars', 'dimensionStatus', 'wallType', 'numberGroupId']);
       return {
         id: w.id, materialType: w.materialType, sectionDefId: w.sectionDefId,
         axisCLId: w.axisCL.id, isVertical: w.isVertical,
@@ -202,7 +202,7 @@ function buildSnapshot(graph) {
       };
     }),
     slabs: graph.slabs.map(s => {
-      const [extraKeys, extraVals] = packExtraFields(s, ['mainBars', 'distributionBars', 'dimensionStatus', 'memberNoLocked', 'slabKind', 'deckDirection']);
+      const [extraKeys, extraVals] = packExtraFields(s, ['mainBars', 'distributionBars', 'dimensionStatus', 'slabKind', 'deckDirection', 'numberGroupId']);
       return {
         id: s.id, materialType: s.materialType, sectionDefId: s.sectionDefId,
         cells: [...s.cells], thickness: s.thickness, floorLevel: s.floorLevel,
@@ -214,7 +214,7 @@ function buildSnapshot(graph) {
     footings: graph.footings.map(f => {
       const [extraKeys, extraVals] = packExtraFields(f,
         ['footingType', 'mainBars', 'supportType', 'baseType', 'basePlateDefId', 'anchorBoltCount', 'anchorBoltSize',
-          'dimensionStatus', 'memberNoLocked', 'pedestalDepth']);
+          'dimensionStatus', 'pedestalDepth', 'numberGroupId']);
       return {
         id: f.id, kind: f instanceof IndependentFooting ? 'independent' : 'base',
         materialType: f.materialType, sectionDefId: f.sectionDefId,
@@ -256,7 +256,7 @@ function buildSnapshot(graph) {
 // 通り芯専用 snapshot (structGraph 用)
 // CenterLine のみ。Shape / Intersection は不要（addCenterLine が再生成）。
 // ----------------------------------------------------------------
-function buildStructSnapshot(structGraph, structuralInfo, tagRegistry) {
+function buildStructSnapshot(structGraph, structuralInfo, ledger) {
   return {
     centerLines: [...structGraph.shapeMap.values()]
       .filter(s => isStructCL(s))
@@ -288,9 +288,10 @@ function buildStructSnapshot(structGraph, structuralInfo, tagRegistry) {
       surfaceRoughness:   structuralInfo.surfaceRoughness,
       seismicZoneFactor:  structuralInfo.seismicZoneFactor,
     },
-    // 建物全体: 構造部材タグ台帳（project.structuralTagRegistry）。per-floor の snapshot では使用しない
-    tagRegistryKeys: tagRegistry ? [...tagRegistry.keys()]   : [],
-    tagRegistryVals: tagRegistry ? [...tagRegistry.values()] : [],
+    // 建物全体: 部材グループ台帳（project.memberGroupLedger）。per-floor の snapshot では使用しない。
+    // FBSスキーマ変更なしのため、既存の tagRegistryKeys/Vals チャネルへそのまま乗せる。
+    tagRegistryKeys: ledger ? [...ledger.keys()]   : [],
+    tagRegistryVals: ledger ? [...ledger.values()] : [],
   };
 }
 
@@ -304,8 +305,8 @@ export function serializeGraph(graph) {
 // ----------------------------------------------------------------
 // シリアライズ: 通り芯グラフ → Uint8Array
 // ----------------------------------------------------------------
-export function serializeStructCLs(structGraph, structuralInfo, tagRegistry) {
-  return encode(buildStructSnapshot(structGraph, structuralInfo, tagRegistry));
+export function serializeStructCLs(structGraph, structuralInfo, ledger) {
+  return encode(buildStructSnapshot(structGraph, structuralInfo, ledger));
 }
 
 // ----------------------------------------------------------------
@@ -350,7 +351,7 @@ export function restoreGraph(graph, data) {
 // ----------------------------------------------------------------
 // デシリアライズ: Uint8Array | plain object → 通り芯グラフ
 // ----------------------------------------------------------------
-export function restoreStructCLs(structGraph, structuralInfo, data, tagRegistry) {
+export function restoreStructCLs(structGraph, structuralInfo, data, ledger) {
   let snapshot;
   if (data instanceof Uint8Array || data instanceof ArrayBuffer) {
     snapshot = decode(data);
@@ -392,11 +393,14 @@ export function restoreStructCLs(structGraph, structuralInfo, data, tagRegistry)
       structuralInfo.setField('seismicZoneFactor',   si.seismicZoneFactor);
     }
 
-    // 建物全体: 構造部材タグ台帳（project.structuralTagRegistry）
-    if (tagRegistry) {
+    // 建物全体: 部材グループ台帳（project.memberGroupLedger）。centerLines と同様、スナップショットは
+    // 完全な状態を表すため先に clear する（分割・統合UIが grp.spec/grp.join を書き込むようになった
+    // Phase B以降、ここで clear しないと undo/redo でスナップショットに無いキーが残留してしまう）。
+    if (ledger) {
+      ledger.clear();
       const keys = snapshot.tagRegistryKeys ?? [];
       const vals = snapshot.tagRegistryVals ?? [];
-      for (let i = 0; i < keys.length; i++) tagRegistry.set(keys[i], vals[i]);
+      for (let i = 0; i < keys.length; i++) ledger.set(keys[i], vals[i]);
     }
   });
 }

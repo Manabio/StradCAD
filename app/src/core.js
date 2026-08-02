@@ -2196,11 +2196,14 @@ export class Project {
     this.site = new Site();
     this.structuralInfo = new StructuralInfo();
 
-    // 構造部材タグ台帳（建物全体で共有。registryKey → タグ文字列）。
-    // 「同一形状は同一タグ」を階をまたいで実現するため project レベルに置く
-    // （columnMap 等は階ごとに独立したインスタンスを持つため、タグの一致は CL 参照ではなく
-    //  この台帳のキー一致で判定する。structural/memberNumbering.js 参照）。
-    this.structuralTagRegistry = observable.map();
+    // 部材グループ台帳（建物全体で共有。grp.spec:<gid>/grp.join:<gid>/grp.no:<gid>/grp.mergedInto:<gid> → 文字列）。
+    // 分割・統合・手動採番というユーザーの明示操作だけを持つ（既定の集約は毎回 signature から導出する。
+    // structural/memberGroups.js・memberNumbering.js 参照）。FBS の tagRegistryKeys/Vals チャネルへ
+    // そのまま乗せる（graphSnapshot.js buildStructSnapshot/restoreStructCLs）。
+    this.memberGroupLedger = observable.map();
+    // 部材番号グループの派生キャッシュ（非永続。モード境界の収集フェーズで再構築される。
+    // groupKey → {mapName, symbol, sizeKey, signature, floorRanks:Set<number>, hasRoof, counts:Map<planeId,number>}）。
+    this.memberNumberIndex = observable.map();
 
     makeObservable(this, {
       name:          observable,
@@ -2212,11 +2215,11 @@ export class Project {
       roofPlane:     computed,
       addPlane:      action,
       removePlane:   action,
-      setTagRegistryEntry: action,
+      clearMemberNumberIndex: action,
     });
   }
 
-  setTagRegistryEntry(key, tag) { this.structuralTagRegistry.set(key, tag); }
+  clearMemberNumberIndex() { this.memberNumberIndex.clear(); }
 
   get activeGraph() {
     return this.activePlaneId ? this.graphMap.get(this.activePlaneId) : undefined;

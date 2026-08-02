@@ -14,7 +14,8 @@ import {
   autoFillMatFoundation,
   deleteClassificationOverflow,
 } from './structuralAutoFill.js';
-import { renumberAllCategories } from './memberNumbering.js';
+import { collectFloorGroups } from './memberNumbering.js';
+import { conformToLedger } from './memberGroups.js';
 
 /**
  * 構造モードの再計算パイプライン（「構造モードへの外部問合せ」の実体）。
@@ -65,8 +66,13 @@ export async function recomputeStructuralForGraph(targetGraph, project, mainStru
   const updatedBeamSizes = runInAction(() => autoFillFoundationBeamSizes(targetGraph, project));
   // 軒桁を含む横架材(role:'eaves')の梁幅b・梁成Dを、屋上伏図自身の最長スパンから再算定する。
   const updatedRoofBeamSizes = runInAction(() => autoFillRoofBeamSizes(targetGraph));
-  // 未採番の部材（自動補完・変換分含む）にタグを割り当てる（建物全体で共有する台帳を参照）。
-  runInAction(() => renumberAllCategories(targetGraph, project));
+  // 採番の収集フェーズ: 台帳（分割・統合の明示操作）へ conform し、材寸グループを
+  // project.memberNumberIndex（建物全体、非永続キャッシュ）へ積む。番号の確定（assignNumbers/applyNumbers）
+  // は建物全体の情報が必要なため、呼び出し側（App.jsx の反映パス）が2パス目として行う。
+  runInAction(() => {
+    conformToLedger(targetGraph, project);
+    collectFloorGroups(targetGraph, project);
+  });
 
   const changed = newColumns.length > 0 || newFootings.length > 0 || newBeams.length > 0
     || matFoundation.created.length > 0 || matFoundation.removed.length > 0

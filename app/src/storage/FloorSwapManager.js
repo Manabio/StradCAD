@@ -11,8 +11,8 @@
  *   disposeAll()                     — 全 auto-save 停止
  *
  * ── 通り芯・構造情報操作 ──
- *   setupStructGraph(structGraph, structuralInfo, projectId, tagRegistry)
- *                                    — IDB から通り芯・構造情報・構造部材タグ台帳を復元 + auto-save 開始
+ *   setupStructGraph(structGraph, structuralInfo, projectId, ledger)
+ *                                    — IDB から通り芯・構造情報・部材グループ台帳を復元 + auto-save 開始
  *   disposeStructGraph()             — 通り芯・構造情報 auto-save 停止
  */
 
@@ -103,11 +103,11 @@ export class FloorSwapManager {
   // 通り芯（全階共通）操作
   // ----------------------------------------------------------------
 
-  async setupStructGraph(structGraph, structuralInfo, projectId, tagRegistry) {
+  async setupStructGraph(structGraph, structuralInfo, projectId, ledger) {
     this.disposeStructGraph();
     const bytes = await loadProject(projectId);
-    if (bytes) restoreStructCLs(structGraph, structuralInfo, bytes, tagRegistry);
-    this._startStructAutoSave(structGraph, structuralInfo, tagRegistry);
+    if (bytes) restoreStructCLs(structGraph, structuralInfo, bytes, ledger);
+    this._startStructAutoSave(structGraph, structuralInfo, ledger);
   }
 
   disposeStructGraph() {
@@ -160,7 +160,7 @@ export class FloorSwapManager {
   // Private: 通り芯 dirty 追跡
   // ----------------------------------------------------------------
 
-  _startStructAutoSave(structGraph, structuralInfo, tagRegistry) {
+  _startStructAutoSave(structGraph, structuralInfo, ledger) {
     let initialized = false;
 
     const dispose = autorun(() => {
@@ -181,8 +181,8 @@ export class FloorSwapManager {
       void structuralInfo.basicWindSpeed;
       void structuralInfo.surfaceRoughness;
       void structuralInfo.seismicZoneFactor;
-      // 構造部材タグ台帳（project.structuralTagRegistry）の変更も dirty 対象にする
-      void tagRegistry?.size;
+      // 部材グループ台帳（project.memberGroupLedger）の変更も dirty 対象にする
+      void ledger?.size;
 
       if (!initialized) { initialized = true; return; }
 
@@ -196,9 +196,9 @@ export class FloorSwapManager {
   // 明示的保存
   // ----------------------------------------------------------------
 
-  async saveNow(plane, graph, structGraph, structuralInfo, projectId, tagRegistry) {
+  async saveNow(plane, graph, structGraph, structuralInfo, projectId, ledger) {
     await saveFloor(plane.id, serializeGraph(graph));
-    await saveProject(projectId, serializeStructCLs(structGraph, structuralInfo, tagRegistry));
+    await saveProject(projectId, serializeStructCLs(structGraph, structuralInfo, ledger));
   }
 }
 

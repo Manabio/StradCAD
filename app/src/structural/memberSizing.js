@@ -33,7 +33,7 @@ export function roundUpToPitch(value, pitch) {
 
 /** plane が支える階数（自分を含め上に何階あるか）。屋根専用平面は常に1。
  *  project.planes（elevation昇順、屋根平面除く）上のrankから求める
- *  （memberNumbering.js の bandIndexForPlane と同じrank探索パターン）。
+ *  （memberNumbering.js の collectFloorGroups と同じrank探索パターン）。
  *  最下階（rank 0、基礎伏図）は全階数を返す＝基礎が建物全体を支える。 */
 export function storiesSupportedAbove(plane, project) {
   if (plane.isRoofPlane) return 1;
