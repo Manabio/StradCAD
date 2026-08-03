@@ -14,6 +14,7 @@ import {
   findNearestCenterLine,
   findNearestCenterLineEndpoint,
   findCLMoveSnap,
+  findBeamAxisMoveSnap,
   findBracketingCLs,
   findNearbyCenterLines,
   findNearestWall,
@@ -49,7 +50,7 @@ import { MemberTagLayer } from './renderer/MemberTagLayer.jsx';
 import { MemberStatusMenu } from './ui/MemberStatusMenu.jsx';
 import { PRIMARY_DIMENSION_FIELD_BY_MAP } from './structural/memberCatalog.js';
 import { CONTEXT, detectContext, getMenuItems } from './interaction/menuItems.js';
-import { CenterLineType, Discipline, SiteLineKind, OpeningCategory, RoomFeature, centerLineKind } from '@core';
+import { CenterLineType, Discipline, SiteLineKind, OpeningCategory, RoomFeature, centerLineKind, CL_OVERLAP_TOL_MM } from '@core';
 import { addSkipZero, subtractSkipZero, makeFloorName, makeFloorLevelPrefix, renameFloor } from './floorNumber.js';
 import { AddFloorDialog } from './ui/AddFloorDialog.jsx';
 import { ConfirmDialog } from './ui/ConfirmDialog.jsx';
@@ -61,7 +62,8 @@ import { SnapIndicator }  from './renderer/SnapIndicator.jsx';
 import { LongPressIndicator } from './renderer/LongPressIndicator.jsx';
 import { DrawPreview }    from './renderer/DrawPreview.jsx';
 import { CLAddPreview }   from './renderer/CLAddPreview.jsx';
-import { CLMoveInput, roundAbsToStep, calcStep } from './renderer/CLMoveInput.jsx';
+import { CLMoveInput } from './renderer/CLMoveInput.jsx';
+import { roundAbsToStep, calcStep } from './renderer/clMoveMath.js';
 import { AxisFaceInput }     from './renderer/AxisFaceInput.jsx';
 import { RadialMenu }     from './ui/RadialMenu.jsx';
 import { AddCLDialog }    from './ui/AddCLDialog.jsx';
@@ -76,6 +78,7 @@ import { structureHasMemberKind, MEMBER_KIND } from './structural/structuralClas
 import { buildStructuralWallGate, buildExteriorSide } from './structural/wallGate.js';
 import { renumberMembers, collectFloorGroups, assignNumbers, applyNumbers } from './structural/memberNumbering.js';
 import { conformToLedger } from './structural/memberGroups.js';
+import { resolveSecondaryBeamsForAxis } from './structural/beamAxisMove.js';
 import { recomputeStructuralForGraph } from './structural/structuralRecompute.js';
 import { syncRoofPlane } from './structural/roofPlane.js';
 import { buildStructuralFigureSlots, designationForSlot, firstSlotKeyForPlane } from './structural/structuralFigureSlots.js';
@@ -668,10 +671,15 @@ const App = observer(() => {
       const cl    = ms.cl;
       const isV   = cl.centerLineType === 'X';
       const rawVal  = isV ? world.x : world.y;
-      const snapVal = findCLMoveSnap(graph, cl, world.x, world.y, SNAP_THRESHOLD_PX, viewport.scaleX, viewport.scaleY);
-      const candidate = snapVal ?? roundAbsToStep(rawVal, cl, isV, viewport.scaleDenominator, graph);
+      const snapVal = appMode === 'structure' && centerLineKind(cl) === 'beam'
+        ? findBeamAxisMoveSnap(graph, cl, world.x, world.y, SNAP_THRESHOLD_PX, viewport.scaleX, viewport.scaleY)
+        : findCLMoveSnap(graph, cl, world.x, world.y, SNAP_THRESHOLD_PX, viewport.scaleX, viewport.scaleY);
+      const candidate = snapVal ?? roundAbsToStep(rawVal, cl, isV, viewport.scaleDenominator, graph, appMode === 'structure');
       const newVal  = Math.min(Math.max(candidate, ms.range.min), ms.range.max);
-      modeRef.current?.updateMove(newVal);
+      // 不正なスクリーン座標（clientX/Y欠落等）由来のNaNが cl.pendingDelta を汚さないようにする防御。
+      // 一度 pendingDelta が NaN になると effectiveValue も NaN 化し、以後の originalValue 比較
+      // （NaN !== 何であっても常に真）で確定分岐を誤らせる・再解決が壊れるおそれがあるため。
+      if (Number.isFinite(newVal)) modeRef.current?.updateMove(newVal);
       setCursorWorld(world);
       setCursorScreen({ x: clientX, y: clientY });
       // スナップインジケータ: 他CLにスナップ中（かつ可動範囲内）は表示
@@ -757,6 +765,55 @@ const App = observer(() => {
     }
     updateSnap(clientX, clientY);
   };
+
+  // ---- CL移動の確定処理（ドラッグ確定=handlePointerUp・NumPad/Enter確定=CLMoveInput onCommit の
+  // 単一実装。以前は2箇所に重複しており、片方だけ直すと確定経路によって挙動が食い違うバグになるため
+  // 抽出した）。呼び出し側は「確定してよいか」（移動が実際にあったか等）を判定してから呼ぶこと——
+  // ここでは常に確定する（moveState を閉じる）前提で処理する。
+  // 平面モード等（通り芯・中心線・補助線）は従来どおり bake→隣接CLとの結合判定→Undo。
+  // 梁芯（centerLineKind(cl)==='beam'）は小梁の局所再解決・再採番が要るため、梁芯の追加・削除と同じ
+  // グラフスナップショット方式のUndoにする（mergeCenterLineChain は呼ばない——§3の範囲クランプで
+  // 他の梁芯と同一座標に到達できないため共線判定が成立せず、到達不能な分岐を残さないため）。
+  function commitCLMove(cl, originalValue) {
+    const newValue = cl.effectiveValue;
+    if (newValue === originalValue) {
+      runInAction(() => { cl.pendingDelta = 0; });
+      modeRef.current?.commitMove();
+      return;
+    }
+
+    if (centerLineKind(cl) !== 'beam') {
+      let chainResult = { merged: false };
+      runInAction(() => {
+        bakeCLValue(cl, newValue);
+        // 通り芯(labeled:true)は結合対象外。編集確定のたびに隣接する中心線との結合を確認する
+        if (!cl.labeled) chainResult = mergeCenterLineChain(graph, cl, { kind: centerLineKind(cl) });
+      });
+      const [undoFn, redoFn] = composeUndoWithMergeChain(
+        () => bakeCLValue(cl, originalValue),
+        () => bakeCLValue(cl, newValue),
+        chainResult,
+      );
+      undoManager.push(() => runInAction(undoFn), () => runInAction(redoFn));
+      modeRef.current?.commitMove();
+      return;
+    }
+
+    // ---- 梁芯: グラフスナップショット方式（局所再解決・再採番を含む1 undoエントリ）----
+    const before = serializeGraph(graph);
+    let counts = { before: 0, after: 0 };
+    runInAction(() => {
+      bakeCLValue(cl, newValue);
+      counts = resolveSecondaryBeamsForAxis(graph, cl, project);
+      renumberMembers(graph, project, 'beamMap');
+    });
+    const after = serializeGraph(graph);
+    undoManager.push(() => restoreGraph(graph, before), () => restoreGraph(graph, after));
+    if (counts.after !== counts.before) {
+      setToast({ msg: `小梁を${counts.before}本 → ${counts.after}本 に再構成しました`, key: Date.now() });
+    }
+    modeRef.current?.commitMove();
+  }
 
   // ---- ポインタ Up ----
   const handlePointerUp = (e) => {
@@ -884,22 +941,8 @@ const App = observer(() => {
       const newValue = cl.effectiveValue;
       // CL が実際に動いた か、明示的な再プレスがあった場合のみ確定
       if (moveDownRef.current || newValue !== originalValue) {
-        if (newValue !== originalValue) {
-          let chainResult = { merged: false };
-          runInAction(() => {
-            bakeCLValue(cl, newValue);
-            // 通り芯(labeled:true)は結合対象外。編集確定のたびに隣接する中心線との結合を確認する
-            if (!cl.labeled) chainResult = mergeCenterLineChain(graph, cl, { kind: centerLineKind(cl) });
-          });
-          const [undoFn, redoFn] = composeUndoWithMergeChain(
-            () => bakeCLValue(cl, originalValue),
-            () => bakeCLValue(cl, newValue),
-            chainResult,
-          );
-          undoManager.push(() => runInAction(undoFn), () => runInAction(redoFn));
-        }
+        commitCLMove(cl, originalValue);
         moveDownRef.current = null;
-        modeRef.current?.commitMove();
         drag.current = null;
         return;
       }
@@ -3080,9 +3123,8 @@ const App = observer(() => {
 
     // ---- スパン配列バッチモード（kind='struct' かつ value が配列）----
     if (Array.isArray(value)) {
-      const OVERLAP_TOL = 0.5;
       const newValues = value.filter(v =>
-        !graph.centerLines.some(cl => cl.centerLineType === clType && Math.abs(cl.value - v) < OVERLAP_TOL)
+        !graph.centerLines.some(cl => cl.centerLineType === clType && Math.abs(cl.value - v) < CL_OVERLAP_TOL_MM)
       );
       if (newValues.length === 0) {
         setToast({ msg: ERR_CL_DUPLICATE('struct'), key: Date.now() });
@@ -3239,9 +3281,8 @@ const App = observer(() => {
     }
 
     // ---- 重複チェック（extent計算後に実施） ----
-    const OVERLAP_TOL = 0.5; // mm
     const existing = graph.centerLines.find(
-      cl => cl.centerLineType === clType && Math.abs(cl.value - value) < OVERLAP_TOL
+      cl => cl.centerLineType === clType && Math.abs(cl.value - value) < CL_OVERLAP_TOL_MM
     );
     if (existing) {
       const existingKind = centerLineKind(existing);
@@ -3744,30 +3785,12 @@ const App = observer(() => {
         onUpdate={v => modeRef.current?.updateMove(v)}
         onCommit={() => {
           const ms = modeRef.current?.moveState;
-          if (ms) {
-            const { cl, originalValue } = ms;
-            const newValue = cl.effectiveValue;
-            if (newValue !== originalValue) {
-              let chainResult = { merged: false };
-              runInAction(() => {
-                bakeCLValue(cl, newValue);
-                if (!cl.labeled) chainResult = mergeCenterLineChain(graph, cl, { kind: centerLineKind(cl) });
-              });
-              const [undoFn, redoFn] = composeUndoWithMergeChain(
-                () => bakeCLValue(cl, originalValue),
-                () => bakeCLValue(cl, newValue),
-                chainResult,
-              );
-              undoManager.push(() => runInAction(undoFn), () => runInAction(redoFn));
-            } else {
-              runInAction(() => { cl.pendingDelta = 0; });
-            }
-          }
-          modeRef.current?.commitMove();
+          if (ms) commitCLMove(ms.cl, ms.originalValue);
         }}
         onCancel={() => modeRef.current?.cancelMove()}
         graph={graph}
         scaleDenominator={viewport.scaleDenominator}
+        structural={appMode === 'structure'}
       />
 
       {/* 柱芯ラベル ロングタップ → 出幅（柱外面⇔通り芯）の静止入力窓。

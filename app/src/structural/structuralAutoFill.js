@@ -196,6 +196,23 @@ export function beamAxisCenterLines(graph) {
   return graph.centerLines.filter(cl => centerLineKind(cl) === 'beam');
 }
 
+/** 梁芯CL cl の「hostとなる直交大梁(role:'primary')を持つ通り芯」配列（value昇順、extentでフィルタ済み）を
+ *  返す。隣接要素の連続ペアが小梁の生成対象区間になる（「梁と梁の内側」＝host有り通り芯の連続ペア。
+ *  隣接通り芯ペアではない——途中に大梁を持たない通り芯（L字の他翼由来・wallGateで梁が省かれた軸など）が
+ *  1本挟まるだけで小梁が全く生成されなくなるのを避けるため）。座標基準はeffectiveValue（pendingDelta込み）
+ *  に統一する。host判定はfindHostPrimaryBeam（core/structuralEntities.js）に集約——描画側（spanForHostBeams）
+ *  と同一実装・同一tolerance。autoFillSecondaryBeams（自動補完）と structural/beamAxisMove.js の
+ *  resolveSecondaryBeamsForAxis（梁芯移動確定時の局所再解決）が共有する単一実装——host判定・区間規則を
+ *  二系統に分岐させないための切り出し。 */
+export function secondaryBeamSpansFor(graph, cl) {
+  if (cl.centerLineType === CenterLineType.RADIAL) return []; // 放射CLはジオメトリ未対応（getCenterLineSegment同様）
+  const isVertical = cl.centerLineType === CenterLineType.VERTICAL;
+  const cross = isVertical ? graph.gridYs : graph.gridXs; // value昇順の直交通り芯
+  const lo = cl.extentLo ?? -Infinity, hi = cl.extentHi ?? Infinity;
+  const inRange = cross.filter(p => p.value >= lo - SPAN_EPS && p.value <= hi + SPAN_EPS);
+  return inRange.filter(p => findHostPrimaryBeam(graph.beams, p.id, !isVertical, cl.effectiveValue));
+}
+
 /** 梁芯CL（discipline:'fuse'）ごとに、この梁芯を跨ぐ直交大梁(role:'primary')を持つ通り芯の
  *  連続ペア（＝梁と梁の内側）へ小梁（role:'secondary', symbol B）を自動生成する（除外集合のスロットはスキップ）。
  *  基礎伏図・屋上伏図はhostとなる大梁がrole:'primary'でない（'foundation'/'eaves'）ため自動的に0本になる
@@ -209,17 +226,8 @@ export function autoFillSecondaryBeams(graph, project) {
   const existing = new Set(graph.beams.map(b => spanKey(b.axisCL, b.clStart, b.clEnd)));
   const created = [];
   for (const cl of beamAxisCenterLines(graph)) {
-    if (cl.centerLineType === CenterLineType.RADIAL) continue; // 放射CLはジオメトリ未対応（getCenterLineSegment同様）
     const isVertical = cl.centerLineType === CenterLineType.VERTICAL;
-    const cross = isVertical ? graph.gridYs : graph.gridXs; // value昇順の直交通り芯
-    const lo = cl.extentLo ?? -Infinity, hi = cl.extentHi ?? Infinity;
-    const inRange = cross.filter(p => p.value >= lo - SPAN_EPS && p.value <= hi + SPAN_EPS);
-    // 「梁と梁の内側」＝この梁芯を跨ぐ大梁を持つ通り芯同士を連続ペアで結ぶ。隣接通り芯ペアで見ると、
-    // 途中に大梁を持たない通り芯（L字の他翼由来・wallGateで梁が省かれた軸など）が1本挟まるだけで
-    // 小梁が全く生成されなくなるため、host有りの通り芯だけを抽出してから隣接ペアにする。
-    // 座標基準はeffectiveValue（pendingDelta込み）に統一する。host判定はfindHostPrimaryBeam
-    // （core/structuralEntities.js）に集約——描画側（spanForHostBeams）と同一実装・同一tolerance。
-    const hosts = inRange.filter(p => findHostPrimaryBeam(graph.beams, p.id, !isVertical, cl.effectiveValue));
+    const hosts = secondaryBeamSpansFor(graph, cl);
     for (let i = 0; i < hosts.length - 1; i++) {
       const a = hosts[i], b = hosts[i + 1];
       const key = spanKey(cl, a, b);

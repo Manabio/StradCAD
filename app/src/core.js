@@ -27,7 +27,7 @@ export {
   DEFAULT_WALL_MATERIAL, DEFAULT_EXTERIOR_WALL_BACKING,
   DEFAULT_INTERIOR_WALL_BACKING, DEFAULT_CEILING_BACKING, DEFAULT_FLOOR_BACKING,
   DEFAULT_ROOM_FLOOR_LEVEL, DEFAULT_ROOM_CEILING_HEIGHT,
-  SiteLineKind,
+  SiteLineKind, CL_OVERLAP_TOL_MM,
 } from './core/constants.js';
 
 // ================================================================

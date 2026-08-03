@@ -114,6 +114,10 @@ export const DEFAULT_FLOOR_BACKING         = '111111111157'; // 床下地: □-6
 export const DEFAULT_ROOM_FLOOR_LEVEL    = 0;    // FL初期値: 当該階FLからの相対高さmm（±0）
 export const DEFAULT_ROOM_CEILING_HEIGHT = 2400; // CH初期値: 部屋の床面から天井までの距離mm
 
+// CL（中心線）の重複判定許容誤差(mm)。追加時の重複ガード（App.jsx）・梁芯移動の範囲クランプ内寄せ
+// （structural/beamAxisMove.js）の両方が同じ値・同じ目的（他CLと同一座標に到達させない）で共有する。
+export const CL_OVERLAP_TOL_MM = 0.5;
+
 // 敷地線の種別
 export const SiteLineKind = Object.freeze({
   BOUNDARY:   'boundary',   // 境界（隣地境界線）
