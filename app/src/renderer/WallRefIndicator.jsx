@@ -1,6 +1,10 @@
 import { Text } from 'react-konva';
+import { centerLineKind } from '@core';
+import { circleRefSymbol } from '../ui/circleRef.js';
 
-const CIRCLE_NUMS = ['①', '②', '③', '④', '⑤', '⑥', '⑦', '⑧', '⑨', '⑩'];
+// 梁芯（centerLineKind==='beam'）は梁芯線と同じ青（CenterLinesLayer.jsx参照）、それ以外は従来の赤のまま。
+const BEAM_COLOR   = '#3b82f6';
+const DEFAULT_COLOR = '#ef4444';
 
 export function WallRefIndicator({ nearbyCLs, worldPos, viewport }) {
   return nearbyCLs.map((cl, i) => {
@@ -14,9 +18,9 @@ export function WallRefIndicator({ nearbyCLs, worldPos, viewport }) {
         key={cl.id}
         x={sx - 11}
         y={sy - 11}
-        text={CIRCLE_NUMS[i] ?? `(${i + 1})`}
+        text={circleRefSymbol(i)}
         fontSize={22}
-        fill="#ef4444"
+        fill={centerLineKind(cl) === 'beam' ? BEAM_COLOR : DEFAULT_COLOR}
         listening={false}
       />
     );

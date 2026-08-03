@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { circleRefSymbol, circleRefKindLabel } from './circleRef.js';
 import './AddCLDialog.css';
 
 const KINDS = [
@@ -11,8 +12,6 @@ const BEAM_KIND = { id: 'beam', label: '梁芯', hint: '小梁を生成する梁
 
 // appMode ごとに出す種別を絞る。未登録モード（floorplan/finish/site）は従来通り KINDS 全種。
 const KINDS_BY_MODE = { structure: [BEAM_KIND] };
-
-const CIRCLE_NUMS = ['①', '②', '③', '④', '⑤', '⑥', '⑦', '⑧', '⑨', '⑩'];
 
 /**
  * 通り芯追加ダイアログ
@@ -140,7 +139,7 @@ export function AddCLDialog({ type, worldCoord, gridCLs, nearbyCLs = [], appMode
               <optgroup label="近接する中心線">
                 {nearbyCLs.map((cl, i) => (
                   <option key={cl.id} value={cl.id}>
-                    {CIRCLE_NUMS[i] ?? `(${i + 1})`} {cl.label || '中心線'}
+                    {circleRefSymbol(i)} {circleRefKindLabel(cl)}
                   </option>
                 ))}
               </optgroup>
@@ -164,7 +163,7 @@ export function AddCLDialog({ type, worldCoord, gridCLs, nearbyCLs = [], appMode
 
         <label className="cl-dialog-row">
           <span className="cl-dialog-label">
-            {refCL ? (refCL.label || '中心線') : `${axisLabel} =`}
+            {refCL ? circleRefKindLabel(refCL) : `${axisLabel} =`}
           </span>
           {dirLabel && <span className="cl-dialog-dir">{dirLabel}</span>}
           <input

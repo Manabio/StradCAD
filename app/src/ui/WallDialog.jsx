@@ -1,8 +1,7 @@
 import { useState } from 'react';
 import './AddCLDialog.css';
 import { NumPad } from './NumPad.jsx';
-
-const CIRCLE_NUMS = ['①', '②', '③', '④', '⑤', '⑥', '⑦', '⑧', '⑨', '⑩'];
+import { circleRefSymbol, circleRefKindLabel } from './circleRef.js';
 
 /**
  * 壁追加ダイアログ
@@ -122,7 +121,7 @@ export function WallDialog({ worldPos, allCLs, nearbyCLs = [], backingMaterials 
               <optgroup label="近接する中心線">
                 {nearbyCLs.map((cl, i) => (
                   <option key={cl.id} value={cl.id}>
-                    {CIRCLE_NUMS[i] ?? `(${i + 1})`} {cl.label || '中心線'}{'　'}{cl.centerLineType === 'X' ? '垂直' : '水平'}
+                    {circleRefSymbol(i)} {circleRefKindLabel(cl)}{'　'}{cl.centerLineType === 'X' ? '垂直' : '水平'}
                   </option>
                 ))}
               </optgroup>
@@ -184,7 +183,7 @@ export function WallDialog({ worldPos, allCLs, nearbyCLs = [], backingMaterials 
 
         <label className="cl-dialog-row">
           <span className="cl-dialog-label">
-            {refCL ? (refCL.label || '中心線') : '距離'}
+            {refCL ? circleRefKindLabel(refCL) : '距離'}
           </span>
           {dirLabel && <span className="cl-dialog-dir">{dirLabel}</span>}
           <input
