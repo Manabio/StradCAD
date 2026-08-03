@@ -8,7 +8,7 @@
     "build": "vite build",
     "lint": "eslint .",
     "preview": "vite preview",
-    "test": "node --test"
+    "test": "node --import ./scripts/testSetup.mjs --test"
   },
   "dependencies": {
     "flatbuffers": "^25.9.23",
