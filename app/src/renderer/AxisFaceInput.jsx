@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { observer } from 'mobx-react-lite';
 import { NumPad } from '../ui/NumPad.jsx';
-import { safeEval, isComplete } from './CLMoveInput.jsx';
+import { safeEval, isComplete } from './clMoveMath.js';
 import './CLMoveInput.css';
 
 // 柱芯ラベル ロングタップで開く「出幅（柱外面⇔通り芯）」の静止入力窓＋numPad。

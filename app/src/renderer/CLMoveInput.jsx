@@ -1,64 +1,11 @@
 import { useState, useEffect, useRef } from 'react';
 import { observer } from 'mobx-react-lite';
 import { NumPad } from '../ui/NumPad.jsx';
+import { calcStep, getDisplayBase, canAppendOp, resolveDisplayValue } from './clMoveMath.js';
 import './CLMoveInput.css';
 
-// 倍率分母の最大桁単位: 151→100, 230→200
-export function calcStep(scaleDenom) {
-  if (!scaleDenom || scaleDenom <= 0) return 1;
-  const exp = Math.floor(Math.log10(scaleDenom));
-  const place = Math.pow(10, exp);
-  return Math.floor(scaleDenom / place) * place;
-}
-
-// CLの表示基準値を返す（相対表示の原点）
-export function getDisplayBase(cl, isV, graph) {
-  if (cl.refId) return cl._referencedCL?.value ?? 0;
-  const gridCLs = isV ? (graph?.gridXs ?? []) : (graph?.gridYs ?? []);
-  const originCL = gridCLs.find(c => c.id !== cl.id);
-  return originCL ? originCL.value : 0;
-}
-
-// 絶対座標をステップ丸めした絶対座標に変換
-export function roundAbsToStep(absVal, cl, isV, scaleDenominator, graph) {
-  const base = getDisplayBase(cl, isV, graph);
-  const displayVal = isV ? absVal - base : -(absVal - base);
-  const step = calcStep(scaleDenominator);
-  const roundedDisplay = step > 0 ? Math.round(displayVal / step) * step : Math.round(displayVal);
-  return isV ? base + roundedDisplay : base - roundedDisplay;
-}
-
-// 四則演算の安全な評価（括弧なし・正規表現で事前検証）
-export function safeEval(str) {
-  if (!str) return NaN;
-  if (!/^[+-]?\d+\.?\d*([+\-*/]\d+\.?\d*)*$/.test(str)) return NaN;
-  try {
-    const result = Function(`'use strict'; return (${str})`)();
-    return typeof result === 'number' && isFinite(result) ? result : NaN;
-  } catch {
-    return NaN;
-  }
-}
-
-// 先頭が+/-かつ数値1つ → 相対演算
-function isRelative(str) {
-  return /^[+-]\d+(\.\d+)?$/.test(str);
-}
-
-// 末尾が演算子でなく評価可能 → 式完了
-export function isComplete(str) {
-  if (!str) return false;
-  if (/[+\-*/]$/.test(str)) return false;
-  return !isNaN(safeEval(str));
-}
-
-// 末尾が演算子でない → 演算子を追加できる
-function canAppendOp(str) {
-  return str.length > 0 && !/[+\-*/]$/.test(str);
-}
-
 export const CLMoveInput = observer(function CLMoveInput({
-  moveState, screenX, screenY, onUpdate, onCommit, onCancel, graph, scaleDenominator,
+  moveState, screenX, screenY, onUpdate, onCommit, onCancel, graph, scaleDenominator, structural = false,
 }) {
   const cl  = moveState?.cl ?? null;
   const isV = cl?.centerLineType === 'X';
@@ -67,7 +14,7 @@ export const CLMoveInput = observer(function CLMoveInput({
   let base = 0;
 
   if (cl) {
-    base = getDisplayBase(cl, isV, graph);
+    base = getDisplayBase(cl, isV, graph, structural);
     displayValue = isV ? cl.effectiveValue - base : -(cl.effectiveValue - base);
   }
 
@@ -121,9 +68,7 @@ export const CLMoveInput = observer(function CLMoveInput({
   }
 
   function resolveDisplay(str) {
-    if (!isComplete(str)) return NaN;
-    const raw = safeEval(str);
-    return isRelative(str) ? relativeBaseRef.current + raw : raw;
+    return resolveDisplayValue(str, relativeBaseRef.current);
   }
 
   function applyStr(str) {
@@ -187,7 +132,9 @@ export const CLMoveInput = observer(function CLMoveInput({
   const axisLabel = isV ? 'X' : 'Y';
   let fromLabel;
   if (cl.refId) {
-    fromLabel = `${cl._referencedCL?.label ?? axisLabel}から`;
+    const refLabel = cl._referencedCL?.label ?? axisLabel;
+    const axisOffset = structural ? (graph?.columnAxisOffsets?.get(cl.refId) ?? 0) : 0;
+    fromLabel = axisOffset !== 0 ? `${refLabel}柱芯から` : `${refLabel}から`;
   } else {
     const gridCLs = isV ? (graph?.gridXs ?? []) : (graph?.gridYs ?? []);
     const originCL = gridCLs.find(c => c.id !== cl.id);
