@@ -56,6 +56,8 @@ const GS = {
   CL_ECCENTRICITIES: 42,
   // 腰壁・垂れ壁（1区間単位の指定、per-floor）
   KNEE_DROP_WALLS: 43,
+  // 壁由来の梁芯CL自動生成（structural/wallBeamAxes.js）の除外集合（per-floor、座標ベースキー）
+  EXCLUDED_WALL_BEAM_AXES: 44,
 };
 
 // Stair: 15 フィールド
@@ -1410,6 +1412,7 @@ export function encode(snapshot) {
   const excludedColumnSlotsVec  = writeStrVec(b, snapshot.excludedColumnSlots  ?? []);
   const excludedBeamSlotsVec    = writeStrVec(b, snapshot.excludedBeamSlots    ?? []);
   const excludedFootingSlotsVec = writeStrVec(b, snapshot.excludedFootingSlots ?? []);
+  const excludedWallBeamAxesVec = writeStrVec(b, snapshot.excludedWallBeamAxes ?? []);
   const tagRegistryKeysVec = writeStrVec(b, snapshot.tagRegistryKeys ?? []);
   const tagRegistryValsVec = writeStrVec(b, snapshot.tagRegistryVals ?? []);
   const columnAxisKeysVec = writeStrVec(b, snapshot.columnAxisOffsetKeys ?? []);
@@ -1428,7 +1431,7 @@ export function encode(snapshot) {
   const sStructureOverride = b.createString(snapshot.structureOverride ?? '');
   const structuralInfoOff  = writeStructuralInfo(b, snapshot.structuralInfo);
 
-  b.startObject(44);
+  b.startObject(45);
   b.addFieldOffset(GS.CLS,        clVec,        0);
   b.addFieldOffset(GS.PTS,        ptVec,        0);
   b.addFieldOffset(GS.WALLS,      wallVec,      0);
@@ -1461,6 +1464,7 @@ export function encode(snapshot) {
   b.addFieldOffset(GS.EXCLUDED_COLUMN_SLOTS,  excludedColumnSlotsVec,  0);
   b.addFieldOffset(GS.EXCLUDED_BEAM_SLOTS,    excludedBeamSlotsVec,    0);
   b.addFieldOffset(GS.EXCLUDED_FOOTING_SLOTS, excludedFootingSlotsVec, 0);
+  b.addFieldOffset(GS.EXCLUDED_WALL_BEAM_AXES, excludedWallBeamAxesVec, 0);
   b.addFieldOffset(GS.TAG_REGISTRY_KEYS, tagRegistryKeysVec, 0);
   b.addFieldOffset(GS.TAG_REGISTRY_VALS, tagRegistryValsVec, 0);
   b.addFieldOffset(GS.COLUMN_AXIS_KEYS, columnAxisKeysVec, 0);
@@ -1520,6 +1524,7 @@ export function decode(bytes) {
     excludedColumnSlots:  r.strVec(GS.EXCLUDED_COLUMN_SLOTS),
     excludedBeamSlots:    r.strVec(GS.EXCLUDED_BEAM_SLOTS),
     excludedFootingSlots: r.strVec(GS.EXCLUDED_FOOTING_SLOTS),
+    excludedWallBeamAxes: r.strVec(GS.EXCLUDED_WALL_BEAM_AXES),
     tagRegistryKeys: r.strVec(GS.TAG_REGISTRY_KEYS),
     tagRegistryVals: r.strVec(GS.TAG_REGISTRY_VALS),
     columnAxisOffsetKeys: r.strVec(GS.COLUMN_AXIS_KEYS),

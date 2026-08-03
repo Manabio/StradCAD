@@ -16,6 +16,7 @@
 // ※ このファイルは仕上げモード突入時にのみ動的 import される（コード分割）。
 //    ロード・照合・破棄のライフサイクルは FinishModeState 側で扱う（本ファイルは純データ）。
 // ================================================================
+import { RC_WALL_BACKING_CODES } from './backingClass.js';
 
 /** 材の役割（カテゴリ）。壁材＝面材選択肢、外壁下地＝下地材選択肢のフィルタに使用。 */
 export const MATERIAL_CATEGORY = Object.freeze({
@@ -82,6 +83,12 @@ const BACKING = [
   { code: '111111111162', name: '□-45×36', spec: '杉等（野縁/一般天井用）',  x: 45, y: 36, thickness: null, note: '天井の石膏ボードを張り付けるための受け材野縁 910mmまたは455mm間隔で格子状に配置' },
   { code: '111111111163', name: '□-36×36', spec: '杉等（寸二角）',          x: 36, y: 36, thickness: null, note: '天井野縁省スペース用 内装の格子枠 または各種家具固定用のバックアップ下地' },
   { code: '111111111164', name: '□-30×30', spec: '杉・栂等（一寸角）',      x: 30, y: 30, thickness: null, note: '内装の各種見切り ドア枠まわりのすき間調整 軽量な壁の補強小桟' },
+  // RC壁下地（構造モード「壁由来の梁芯・小梁自動生成」の条件(a)判定対象。backingClass.js の
+  // RC_WALL_BACKING_CODES と同じコードを参照する＝二重管理防止）。他の下地材と異なり部材の
+  // 断面ではなく壁厚そのものを表すため、x,y ではなく thickness に値を持たせる（PANEL/FINISH と同じ形）。
+  { code: RC_WALL_BACKING_CODES[0], name: 'RC壁 t=150', spec: '鉄筋コンクリート（設計基準強度は別途構造情報で管理）', x: 0, y: 0, thickness: 150, note: 'RC造壁下地（壁式・ラーメン間仕切り等）' },
+  { code: RC_WALL_BACKING_CODES[1], name: 'RC壁 t=180', spec: '鉄筋コンクリート（設計基準強度は別途構造情報で管理）', x: 0, y: 0, thickness: 180, note: 'RC造壁下地（耐力壁・外壁標準厚）' },
+  { code: RC_WALL_BACKING_CODES[2], name: 'RC壁 t=200', spec: '鉄筋コンクリート（設計基準強度は別途構造情報で管理）', x: 0, y: 0, thickness: 200, note: 'RC造壁下地（耐力壁・地下外壁等の厚壁）' },
 ];
 
 // ----------------------------------------------------------------

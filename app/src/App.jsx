@@ -803,6 +803,11 @@ const App = observer(() => {
     const before = serializeGraph(graph);
     let counts = { before: 0, after: 0 };
     runInAction(() => {
+      // 移動＝元位置の放棄と解釈する。次回のモード境界再計算で「壁由来の梁芯自動生成」が元の座標に
+      // 復活しないよう、移動前の座標を除外集合へ記録する（cl-del分岐の記録と同じ意味・同じキー形式。
+      // 手動追加の梁芯を動かした場合も無害——その座標に壁が無ければ単に使われないキーが残るだけ）。
+      const axisKey = cl.centerLineType === CenterLineType.VERTICAL ? 'X' : 'Y';
+      graph.excludedWallBeamAxes.add(`${axisKey}:${Math.round(originalValue)}`);
       bakeCLValue(cl, newValue);
       counts = resolveSecondaryBeamsForAxis(graph, cl, project);
       renumberMembers(graph, project, 'beamMap');
@@ -2854,12 +2859,13 @@ const App = observer(() => {
       const pos  = menu.worldPos;
       const clType = isV ? CenterLineType.VERTICAL : CenterLineType.HORIZONTAL;
       // findNearbyCenterLines は全モード共通（構造モードの梁芯追加ダイアログでも使う）ため、
-      // 梁芯CLの除外はここ（appMode既知の呼び出し側）で行う——非構造モードでは非表示の梁芯を
-      // 「近接する中心線」の参照候補に出さない（描画（appMode限定表示）と同じ条件に揃える）。
+      // 種別の絞り込みはここ（appMode既知の呼び出し側）で行う——描画（appMode限定表示。
+      // CenterLinesLayer）と同じ条件に揃える。構造モードは梁芯のみ（意匠CLは非表示のため参照候補にも
+      // 出さない）、それ以外は梁芯を除外する（従来どおり）。
       const nearbyCLs = findNearbyCenterLines(
         graph, pos.x, pos.y, SNAP_THRESHOLD_PX * 2,
         viewport.scaleX, viewport.scaleY, clType
-      ).filter(cl => appMode === 'structure' || centerLineKind(cl) !== 'beam');
+      ).filter(cl => appMode === 'structure' ? centerLineKind(cl) === 'beam' : centerLineKind(cl) !== 'beam');
       setClDialog({
         type:       isV ? 'vertical' : 'horizontal',
         worldCoord: isV ? pos.x : pos.y,
@@ -2921,7 +2927,16 @@ const App = observer(() => {
         );
       } else {
         const before = serializeGraph(graph);
-        graph.removeCenterLine(cl.id);
+        // 梁芯CLの削除は「壁由来の梁芯自動生成」に対する明示的な手動削除として扱う——次回のモード境界
+        // 再計算で元の座標に再生成されないよう、座標ベースの除外集合へ記録する（壁の位置自体は削除しない
+        // ため、記録しないと自動生成が復活させてしまう）。キーは structural/wallBeamAxes.js と同じ形式。
+        runInAction(() => {
+          if (centerLineKind(cl) === 'beam') {
+            const axisKey = cl.centerLineType === CenterLineType.VERTICAL ? 'X' : 'Y';
+            graph.excludedWallBeamAxes.add(`${axisKey}:${Math.round(cl.effectiveValue)}`);
+          }
+          graph.removeCenterLine(cl.id);
+        });
         const after = serializeGraph(graph);
         undoManager.push(
           () => restoreGraph(graph, before),
@@ -3396,7 +3411,11 @@ const App = observer(() => {
       // （グラフスナップショット方式。CL削除連鎖などと同じ既存パターン）。
       const before = serializeGraph(graph);
       runInAction(() => {
-        graph.addCenterLine(clType, value, props);
+        const newCl = graph.addCenterLine(clType, value, props);
+        // 壁由来の梁芯自動生成の除外集合を解除する（addColumn/addBeamがexcluded*Slotsを解除する
+        // 既存パターンと同型）——手動でこの位置に梁芯を追加した以上、以後の自動生成で復活してよい。
+        const axisKey = clType === CenterLineType.VERTICAL ? 'X' : 'Y';
+        graph.excludedWallBeamAxes.delete(`${axisKey}:${Math.round(newCl.effectiveValue)}`);
         autoFillSecondaryBeams(graph, project);
         autoFillBeamEccentricity(graph, project);
         renumberMembers(graph, project, 'beamMap');

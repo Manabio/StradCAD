@@ -19,10 +19,13 @@
 import { MATERIAL_CATEGORY } from './materials/materialData.js';
 import { DEFAULT_WALL_MATERIAL } from '@core';
 
-/** 材の「壁を横断する方向」の厚(mm)。面材/仕上げは厚、下地は断面の大きい寸法。 */
+/** 材の「壁を横断する方向」の厚(mm)。面材/仕上げは厚、下地は断面の大きい寸法。
+ *  ただしRC壁下地（x:0,y:0,thickness:150/180/200）は部材断面ではなく壁厚そのものを
+ *  thicknessで表しているため、thicknessが入っていればそちらを優先する
+ *  （既存の木・鋼下地54件は全てthickness:nullのため従来どおりx/yの大きい方が使われ、挙動不変）。 */
 export function materialThickness(mat) {
   if (!mat) return 0;
-  if (mat.category === MATERIAL_CATEGORY.BACKING) return Math.max(mat.x ?? 0, mat.y ?? 0);
+  if (mat.category === MATERIAL_CATEGORY.BACKING) return mat.thickness ?? Math.max(mat.x ?? 0, mat.y ?? 0);
   return mat.thickness ?? 0;
 }
 

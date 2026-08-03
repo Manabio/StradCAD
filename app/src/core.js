@@ -966,6 +966,10 @@ export class PlanGraph {
     this.excludedColumnSlots  = observable.set();
     this.excludedBeamSlots    = observable.set();
     this.excludedFootingSlots = observable.set();
+    // 壁由来の梁芯CL自動生成（structural/wallBeamAxes.js）専用の除外集合。梁芯CLそのもの（梁のスロット
+    // ではない）の手動削除・移動元を記憶する。キーは座標ベース `${'X'|'Y'}:${Math.round(coord)}`
+    // （CL実体のidではない——壁を動かせば別スロットとして扱われ再生成されるのが意図どおりのため）。
+    this.excludedWallBeamAxes = observable.set();
 
     // per-floor 設定（仕上げモード）— 材コード（選択された材として永続化）
     this.exteriorWallBacking = DEFAULT_EXTERIOR_WALL_BACKING; // 外壁下地: 下地材コード
@@ -1940,6 +1944,7 @@ export class PlanGraph {
     this.excludedColumnSlots.clear();
     this.excludedBeamSlots.clear();
     this.excludedFootingSlots.clear();
+    this.excludedWallBeamAxes.clear();
     this.columnAxisOffsets.clear();
     this.clEccentricities.clear();
     this.kneeDropWalls.clear();

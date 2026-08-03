@@ -1,6 +1,6 @@
 import { observer } from 'mobx-react-lite';
 import { Line, Circle } from 'react-konva';
-import { CenterLineType, DimensionSide, centerLineKind } from '@core';
+import { CenterLineType, DimensionSide, Discipline, centerLineKind } from '@core';
 import { overhangMm } from '../snap.js';
 import { gutterEdgeCoord } from './gutterPrimitives.jsx';
 
@@ -69,6 +69,12 @@ export const CenterLinesLayer = observer(({ graph, viewport, width, height, colu
     // 梁芯CLは構造モード限定表示（柱芯線と同格の扱い）。
     const isBeamAxis = centerLineKind(cl) === 'beam';
     if (isBeamAxis && appMode !== 'structure') return null;
+
+    // 意匠系CL（中心線・補助線。labeled:false かつ discipline:'arch'）は逆に構造モードでは表示しない
+    // ——構造モードは梁芯（壁由来の自動生成含む）に一本化し、意匠CLを目印に使わせない設計。
+    // データ（CenterLine実体）は残したまま描画だけスキップする（削除ではない。既存規律どおり）。
+    const isArchCL = !cl.labeled && cl.discipline === Discipline.ARCH;
+    if (isArchCL && appMode === 'structure') return null;
 
     const ext = clExtent(cl, graph, viewport, width, height);
     const [p1, p2] = ext ?? (isV ? [b.yMin, b.yMax] : [b.xMin, b.xMax]);

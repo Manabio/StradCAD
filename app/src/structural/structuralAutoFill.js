@@ -6,6 +6,7 @@ import { computeTributaryColumnWidth, computeColumnBaseSize, computeFoundationBe
 import { floorSwapManager } from '../storage/FloorSwapManager.js';
 import { isRigidFrameStructure, structureHasMemberKind, memberKindOf, MEMBER_KIND } from './structuralClassification.js';
 import { buildExteriorSide, footprintCellKeys } from './wallGate.js';
+import { autoFillWallBeamAxes } from './wallBeamAxes.js';
 
 // 構造モード突入時に呼ばれる、構造体トポロジー（構造グリッド）から未定義の柱・梁・基礎を検出して
 // デフォルト材料・断面で自動生成する純関数群。finish/edgeClassify.js の選定・差分同期パターンを流用する。
@@ -282,8 +283,10 @@ export function autoFillRoofBeamSizes(graph) {
  *  生成する（'primary'は生成しない）。belowMainStructure: 屋根横架材が属する「1つ下の階（=最上の実体平面）」の
  *  実効主構造（呼び出し元が drawingDesignation.js の structuralPlaneBelow で求めて渡す）。
  *  wallGate: 建物フットプリント（部屋領域＝外壁線位置）の鉛直連続性で柱・梁・基礎・軒桁の有無を取捨するゲート
- *  （wallGate.js / buildStructuralWallGate。屋根は直下の最上階基準。null＝ゲートなしで全グリッド生成）。 */
-export function autoFillStructuralGrid(graph, project, belowMainStructure, wallGate = null) {
+ *  （wallGate.js / buildStructuralWallGate。屋根は直下の最上階基準。null＝ゲートなしで全グリッド生成）。
+ *  wallSources: 壁由来の梁芯生成対象（structural/wallBeamAxes.js collectWallBeamSources の結果。
+ *  下階peekを含む非同期収集のため呼び出し側が await して渡す＝wallGateと同じ既存パターン）。 */
+export function autoFillStructuralGrid(graph, project, belowMainStructure, wallGate = null, wallSources = []) {
   const foundation = isFoundationPlane(graph.plane, project);
   const isRoof = graph.plane.isRoofPlane;
   // 自階帰属の柱・梁・基礎は自階の主構造が確定するまで生成しない（autoFillColumns は自前でも同ガード）。
@@ -300,10 +303,13 @@ export function autoFillStructuralGrid(graph, project, belowMainStructure, wallG
   const beamKind = foundation ? MEMBER_KIND.FOUNDATION_BEAM : MEMBER_KIND.BEAM;
   const newBeams     = (!isRoof && ownSpecified && structureHasMemberKind(beamKind, structure)) ? autoFillBeams(graph, project, foundation ? 'foundation' : 'primary', wallGate) : [];
   const newRoofBeams = (isRoof && belowMainStructure !== UNSPECIFIED_STRUCTURE) ? autoFillRoofBeams(graph, project, belowMainStructure, wallGate) : [];
+  // 壁由来の梁芯CL自動生成。大梁生成後・小梁生成直前に呼ぶ（生成順序: 大梁 → 梁芯 → 小梁）。
+  const newWallBeamAxes = autoFillWallBeamAxes(graph, wallSources);
   // 梁芯CL（discipline:'fuse'）ごとの小梁自動生成。wallGate は直接引かない
   // （直交大梁に挟まれている＝大梁のフットプリント判定を継承するため。上のnewBeams生成後に呼ぶ）。
+  // 出自を問わず全梁芯が対象のため、壁由来の梁芯（newWallBeamAxes）もそのまま拾う。
   const newSecondaryBeams = autoFillSecondaryBeams(graph, project);
-  return { newColumns, newFootings, newBeams: [...newBeams, ...newRoofBeams, ...newSecondaryBeams] };
+  return { newColumns, newFootings, newBeams: [...newBeams, ...newRoofBeams, ...newWallBeamAxes, ...newSecondaryBeams] };
 }
 
 /** 主要構造（実効値）と異なる材種の既存柱・梁を、新しい材種のサブクラスへ変換する。

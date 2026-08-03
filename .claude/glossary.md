@@ -13,6 +13,8 @@
 
 ガターラベル・ガター丸の表示対象は「`discipline==='struct'` かつ `labeled===true`」のみ。梁芯は「中心」と同じ表現形式（extentLoRef/HiRef）を使う別種別（`centerLineKind()`が`'beam'`を返す）。設計意図は`.claude/structural-model.md`。
 
+構造モード（`appMode==='structure'`）では「中心」「補助線」（`discipline:'arch'`かつ`labeled:false`）は描画・寸法対象から外れる（データは残る。削除ではない）。構造モードで目印にする浮いた線は梁芯に一本化する設計。
+
 ## discipline（分野）
 `arch`(意匠・既定) / `struct`(構造) / `fuse`(伏図) / `mep`(設備) / `elec`(電気)。
 

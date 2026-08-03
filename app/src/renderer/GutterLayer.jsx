@@ -198,10 +198,12 @@ function centerLineCoord(d, boundary, viewport, areaBounds) {
 // 梁芯（discipline:'fuse'）は中心線（discipline:'arch'）と同じ寸法処理を共用するが、構造モード
 // （appMode==='structure'）以外では対象外にする——CenterLinesLayer の描画スキップ（appMode限定表示）
 // と寸法行の出し分けを一致させ、非表示の線が寸法だけ出る食い違いを防ぐ。
+// 逆に構造モードでは意匠中心線（discipline:'arch'）を対象外にする——CenterLinesLayer が同モードで
+// 意匠CLの描画をスキップするのと対にする（非表示の線に寸法だけ出る食い違いを防ぐ、上と同じ理由の逆方向）。
 function isCenterDimensionTarget(cl, appMode) {
   if (cl.labeled || cl.lineType === 'dashed') return false;
-  if (cl.discipline === Discipline.ARCH) return true;
-  return appMode === 'structure' && cl.discipline === Discipline.FUSE;
+  if (appMode === 'structure') return cl.discipline === Discipline.FUSE;
+  return cl.discipline === Discipline.ARCH;
 }
 
 function segKey(seg) { return `${seg.from.id}:${seg.to.id}`; }

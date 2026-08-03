@@ -1,6 +1,7 @@
 import { runInAction } from 'mobx';
 import { serializeGraph } from '../graphSnapshot.js';
 import { buildStructuralWallGate, buildExteriorSide } from './wallGate.js';
+import { collectWallBeamSources } from './wallBeamAxes.js';
 import {
   autoFillStructuralGrid,
   autoFillColumnAxisOffsets,
@@ -39,10 +40,12 @@ export async function recomputeStructuralForGraph(targetGraph, project, mainStru
   // 非アクティブ下階は peek で覗く。自階に部屋が無い／屋根平面では null＝従来の全グリッド生成。wallGate.js 参照。
   const before = serializeGraph(targetGraph);
   const wallGate = await buildStructuralWallGate(targetGraph.plane, project, targetGraph);
+  // 壁由来の梁芯生成対象（下階peekを含む非同期収集。wallGateと同じパターンで先に await する）。
+  const wallSources = await collectWallBeamSources(targetGraph, project);
 
   // 構造体トポロジーから未定義の柱・梁・基礎（基礎伏図のみ）を検出し、自動補完する。
   // ユーザーが明示削除した箇所は除外集合（excludedColumnSlots 等）により復活しない。
-  const { newColumns, newFootings, newBeams } = runInAction(() => autoFillStructuralGrid(targetGraph, project, mainStructure, wallGate));
+  const { newColumns, newFootings, newBeams } = runInAction(() => autoFillStructuralGrid(targetGraph, project, mainStructure, wallGate, wallSources));
   // べた基礎（木造）のマットスラブを基礎伏図に生成・撤去する（基礎種別で取捨。問題.md）。基礎伏図以外では no-op。
   const matFoundation = runInAction(() => autoFillMatFoundation(targetGraph, project));
   // 外周モデル（side ビュー）を1回構築し、柱芯オフセットと梁偏芯の両方に渡す——柱・梁で外側方向（内外定義）を一致させる。

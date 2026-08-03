@@ -236,6 +236,7 @@ function buildSnapshot(graph) {
     excludedColumnSlots:  [...graph.excludedColumnSlots],
     excludedBeamSlots:    [...graph.excludedBeamSlots],
     excludedFootingSlots: [...graph.excludedFootingSlots],
+    excludedWallBeamAxes: [...graph.excludedWallBeamAxes],
     // 柱芯（ColumnAxis）オフセット。CL id → 通り芯からの偏心量(mm)。
     columnAxisOffsetKeys: [...graph.columnAxisOffsets.keys()],
     columnAxisOffsetVals: [...graph.columnAxisOffsets.values()].map(String),
@@ -676,6 +677,7 @@ function applySnapshot(graph, snapshot) {
     for (const k of snapshot.excludedColumnSlots  ?? []) graph.excludedColumnSlots.add(k);
     for (const k of snapshot.excludedBeamSlots    ?? []) graph.excludedBeamSlots.add(k);
     for (const k of snapshot.excludedFootingSlots ?? []) graph.excludedFootingSlots.add(k);
+    for (const k of snapshot.excludedWallBeamAxes ?? []) graph.excludedWallBeamAxes.add(k);
     const axisKeys = snapshot.columnAxisOffsetKeys ?? [];
     const axisVals = snapshot.columnAxisOffsetVals ?? [];
     axisKeys.forEach((clId, i) => graph.columnAxisOffsets.set(clId, Number(axisVals[i])));
