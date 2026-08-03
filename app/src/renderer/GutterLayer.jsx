@@ -628,11 +628,14 @@ export function columnAxisLabelHits(graph, viewport, width, height) {
   return hits;
 }
 
-// columnAxisMode（構造モード・ラーメン系）時は CENTER 行が柱芯(SX/SY)表示に専有される（下記分岐）。
-// 柱芯アンカーは「グリッドからのオフセットのみで決まる1:1の点」で浮いた中心線の重なり判定・連鎖探索を
-// 持たない設計（buildColumnAxisAnchors 参照）のため、梁芯（浮いた中心線そのもの）をここへ混在させると
-// その前提が崩れる。columnAxisMode 中は梁芯の寸法行を出さない（線自体は CenterLinesLayer が引き続き
-// 描画する）——柱芯寸法と梁芯寸法を同一行に共存させない棲み分けとする。
+// columnAxisMode（構造モード・ラーメン系）時は CENTER 行（外書き）が柱芯(SX/SY)表示に専有される
+// （下記分岐）。柱芯アンカーは「グリッドからのオフセットのみで決まる1:1の点」で浮いた中心線の重なり
+// 判定・連鎖探索を持たない設計（buildColumnAxisAnchors 参照）のため、梁芯（浮いた中心線そのもの）を
+// ここへ混在させるとその前提が崩れる——柱芯寸法と梁芯寸法を同一行に共存させない棲み分けとする。
+// ただし部屋内書き（buildFallbackElements）は外書き行を一切使わないため、この棲み分けと無関係に
+// columnAxisMode 中も共存できる。外書き行には中心線系が1本も出ない（表示済み集合は空）ので、
+// columnAxisMode 中は全ての梁芯・意匠中心線がフォールバックとして部屋内に描かれる（線自体は
+// CenterLinesLayer が引き続き描画する）。
 const CenterDimensions = observer(({ graph, viewport, width, height, columnAxisMode = false, appMode }) => {
   if (!graph) return null;
 
@@ -650,11 +653,17 @@ const CenterDimensions = observer(({ graph, viewport, width, height, columnAxisM
     const { boundary: bottomB, lineCoord: bottomL, anchors: bottomA } = buildColumnAxisAnchors(bottom, graph, viewport, gridBounds);
     const { boundary: leftB,   lineCoord: leftL,   anchors: leftA   } = buildColumnAxisAnchors(left,   graph, viewport, gridBounds);
     const { boundary: rightB,  lineCoord: rightL,  anchors: rightA  } = buildColumnAxisAnchors(right,  graph, viewport, gridBounds);
+    // 柱芯行に専有されるのは外書き行だけ。浮いた中心線（梁芯・意匠中心線）の部屋内書きは同一行を
+    // 使わないため共存できる（buildColumnAxisAnchors の前提には触れない）。外書き行にはこれらが
+    // 一切出ないので、表示済み集合（第4・5引数）は空配列でよい。
+    const fallbackX = buildFallbackElements(graph, viewport, 'X', [], [], appMode);
+    const fallbackY = buildFallbackElements(graph, viewport, 'Y', [], [], appMode);
     return [
       ...buildColumnAxisRowElements(top,    topB,    topL,    topA,    viewport),
       ...buildColumnAxisRowElements(bottom, bottomB, bottomL, bottomA, viewport),
       ...buildColumnAxisRowElements(left,   leftB,   leftL,   leftA,   viewport),
       ...buildColumnAxisRowElements(right,  rightB,  rightL,  rightA, viewport),
+      ...fallbackX, ...fallbackY,
     ];
   }
 
