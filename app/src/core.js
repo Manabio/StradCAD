@@ -5,7 +5,6 @@
  */
 import { makeObservable, observable, computed, action, reaction } from 'mobx';
 import createGraph from 'ngraph.graph';
-import { INTERIOR_MASTERS } from './finish/materials/interiorMasters.js';
 import {
   _isLabeledStructCL, _labeledCLs, _sortedCenterLines, _shapeUsesCenterLine,
 } from './core/clQuery.js';
@@ -16,9 +15,8 @@ import { chamferWalls as _chamferWalls, trimIntersectingWalls as _trimIntersecti
 // ================================================================
 
 import {
-  ShapeType, ShapeKind, CenterLineType, RoomKind,
-  StairType, StructuralMaterialType,
-  DEFAULT_WALL_MATERIAL, DEFAULT_EXTERIOR_WALL_BACKING,
+  ShapeType, ShapeKind, CenterLineType,
+  DEFAULT_EXTERIOR_WALL_BACKING,
   DEFAULT_INTERIOR_WALL_BACKING, DEFAULT_CEILING_BACKING, DEFAULT_FLOOR_BACKING,
   DEFAULT_ROOM_FLOOR_LEVEL, DEFAULT_ROOM_CEILING_HEIGHT,
 } from './core/constants.js';
@@ -71,263 +69,20 @@ import { DimensionLine } from './core/dimension.js';
 export { DimensionAnchor, HDimensionLine, VDimensionLine } from './core/dimension.js';
 
 // ================================================================
-// WALL BACKING MATERIAL (壁下地材)
-//
-// 下地に使用する材を 1 種定義する。
-// x < y を常に保証する（x = 短辺, y = 長辺）。
+// WALL BACKING MATERIAL / EDGE / ROOM 系 — core/room.js に分離。後方互換のため再エクスポートする。
 // ================================================================
 
-export class WallBackingMaterial {
-  constructor(id, name, x, y) {
-    this.id   = id;
-    this.name = name;
-    this.x    = Math.min(x, y);
-    this.y    = Math.max(x, y);
-    makeObservable(this, {
-      name:          observable,
-      x:             observable,
-      y:             observable,
-      setName:       action,
-      setDimensions: action,
-    });
-  }
-  setName(name) { this.name = name; }
-  setDimensions(x, y) { this.x = Math.min(x, y); this.y = Math.max(x, y); }
-}
+import { WallBackingMaterial, Edge, ExteriorFinishRow, Room } from './core/room.js';
+export {
+  WallBackingMaterial, edgeKey, Edge, RoomFinish, ExteriorFinishRow, Room,
+} from './core/room.js';
 
 // ================================================================
-// EDGE (境界エッジ — 仕上げモードの部屋境界)
-//
-// 両端をノード（交点）で挟まれ、両側に名称がついた境界セグメントに附帯する
-// 情報をまとめる。座標は持たず、CL-ID ベースの安定キーで同定する:
-//   key = `${axisCLId}:${startCLId}:${endCLId}`（CL 移動で不変）
-//
-// データを小さく保つため、本クラスはデータ＋問合せ・書換えのみを持ち、
-// 判定・選定（境界マスター選定など）は仕上げモードの function 側で行う。
-//   masterType : 選定結果のキャッシュ（BOUNDARY_MASTERS のキー）| null（都度導出可）
-//   overrides  : 材の個別上書きポケット（Room.customOverrides と同方式）
+// STAIR (階段) — core/stair.js に分離。後方互換のため再エクスポートする。
 // ================================================================
 
-/** エッジ安定キーを組み立てる。 */
-export function edgeKey(axisCLId, startCLId, endCLId) {
-  return `${axisCLId}:${startCLId}:${endCLId}`;
-}
-
-export class Edge {
-  constructor(key, masterType = null, overrides = null) {
-    this.key        = key;
-    this.masterType = masterType;
-    this.overrides  = observable.map(); // field → value（材コード等）
-    if (overrides) for (const [k, v] of overrides) this.overrides.set(k, v);
-    makeObservable(this, {
-      masterType:    observable,
-      setMasterType: action,
-      setOverride:   action,
-      clearOverride: action,
-    });
-  }
-
-  // key の構成要素（必要時に分解）
-  get axisCLId()  { return this.key.split(':')[0]; }
-  get startCLId() { return this.key.split(':')[1]; }
-  get endCLId()   { return this.key.split(':')[2]; }
-
-  setMasterType(t)          { this.masterType = t; }
-  setOverride(field, value) { this.overrides.set(field, value); }
-  clearOverride(field)      { this.overrides.delete(field); }
-}
-
-// ================================================================
-// ROOM (仕上げモード — 部屋領域 + 仕上げ情報)
-// ================================================================
-
-// 自由文字列の仕上げフィールド。
-// 壁材（wallMaterial）・壁仕上げ（wallFinish）・天井高さ（ceilingHeight）は
-// 内装マスター（templateKey）+ customOverrides で管理するため、ここには持たない。
-export class RoomFinish {
-  constructor() {
-    this.floorMaterial     = '';
-    this.baseboardMaterial = '';
-    this.baseboardHeight   = '';
-    this.dadoMaterial      = '';
-    this.dadoHeight        = '';
-    this.ceilingMaterial   = '';
-    this.cornice           = '';
-    this.note              = '';
-    makeObservable(this, {
-      floorMaterial:     observable,
-      baseboardMaterial: observable,
-      baseboardHeight:   observable,
-      dadoMaterial:      observable,
-      dadoHeight:        observable,
-      ceilingMaterial:   observable,
-      cornice:           observable,
-      note:              observable,
-      setField:          action,
-    });
-  }
-  setField(field, value) { this[field] = value; }
-}
-
-export class ExteriorFinishRow {
-  constructor() {
-    this.id     = crypto.randomUUID();
-    this.part   = '';
-    this.finish = '';
-    this.base   = '';
-    this.note   = '';
-    this.roomId = null; // 階段ペアRoomのID（階段連動行のみ設定。手入力行は null）
-    makeObservable(this, {
-      part:     observable,
-      finish:   observable,
-      base:     observable,
-      note:     observable,
-      roomId:   observable,
-      setField: action,
-    });
-  }
-  setField(field, value) { this[field] = value; }
-}
-
-// cells は Set<string> — cellKey(xLeftCL, yTopCL) の集合
-export class Room {
-  constructor(id, name = '', cells = new Set(), referenceRoomIds = new Set(),
-              kind = RoomKind.INTERIOR, templateKey = null, feature = null) {
-    this.id               = id;
-    this.name             = name;
-    this.cells            = cells;
-    this.referenceRoomIds = referenceRoomIds; // 判定3: 参照先部屋IDセット
-    this.kind             = kind; // 内外区分（base軸）: 屋内 / 屋外
-    this.feature          = feature; // 属性軸: 'stair' | 'void' | 'stairVoid' | null（なし）
-    this.templateKey      = templateKey;      // 内装マスターへのポインタ（null = 未指定）
-    this.customOverrides  = observable.map(); // 個別上書きポケット（壁・天井フィールドのみ）
-    this.finish           = new RoomFinish();
-    this.namePosition     = null;   // { x, y } | null — null = roomBounds 重心を使用
-    this.floorLevel       = null;   // 階基準からの符号付き床レベル差(mm)。null = 基準どおり
-    this.generatedWallIds = new Set(); // 自動生成された Wall の ID を管理（非 observable）
-    makeObservable(this, {
-      name:             observable,
-      cells:            observable,
-      referenceRoomIds: observable,
-      kind:             observable,
-      feature:          observable,
-      templateKey:      observable,
-      namePosition:     observable.ref,
-      floorLevel:       observable,
-      setName:          action,
-      addCell:          action,
-      removeCell:       action,
-      setCells:         action,
-      setKind:          action,
-      setFeature:       action,
-      setTemplateKey:   action,
-      setOverride:      action,
-      clearOverride:    action,
-      setNamePosition:  action,
-      setFloorLevel:    action,
-    });
-  }
-  setName(name)              { this.name = name; }
-  addCell(key)               { this.cells.add(key); }
-  removeCell(key)            { this.cells.delete(key); }
-  setCells(cells)            { this.cells = cells; }
-  setKind(kind)              { this.kind = kind; }
-  setFeature(feature)        { this.feature = feature; } // 'stair' | 'void' | 'stairVoid' | null
-  setNamePosition(x, y)     { this.namePosition = { x, y }; }
-  setFloorLevel(mm)         { this.floorLevel = mm; } // mm | null（null = 階基準どおり）
-
-  setTemplateKey(key)        { this.templateKey = key; }
-
-  /**
-   * 個別上書き。マスター値と同値なら override を削除し、ポケットを空に保つ。
-   * （数値フィールドの型差を吸収するため緩く比較）
-   */
-  setOverride(field, value) {
-    const master = INTERIOR_MASTERS[this.templateKey] ?? {};
-    if (field in master && String(master[field]) === String(value)) {
-      this.customOverrides.delete(field);
-    } else {
-      this.customOverrides.set(field, value);
-    }
-  }
-  clearOverride(field)       { this.customOverrides.delete(field); }
-
-  /**
-   * 内装マスター + 個別上書きをマージした、壁・天井フィールドの実効値。
-   * 壁材（wallMaterial）はマスター・上書きとも未指定なら既定（せっこうボード t=12.5）に
-   * フォールバックする（壁描画の仕上げ厚導出が部屋の壁材を単一情報源とするため）。
-   */
-  getFinishInfo() {
-    const master = INTERIOR_MASTERS[this.templateKey] ?? {};
-    const info = { ...master, ...Object.fromEntries(this.customOverrides) };
-    if (!info.wallMaterial) info.wallMaterial = DEFAULT_WALL_MATERIAL;
-    return info;
-  }
-}
-
-// sections（歩行順・区間別の実段数配列。偶数index=直進部、奇数index=踊場・周回部）から総段数を求める。
-// 各区間が図に持つマス（踏面）数は、直進部=実段数-1（最終の1段は次区間へ乗る段）、踊場・周回部=実段差ぶん
-//（平踊場は1）。総段数 = 総マス数 + 1（設置階上階への到達）= 総蹴上数。
-export function totalStepsFromSections(sections) {
-  const cells = sections.reduce(
-    (a, n, i) => a + (i % 2 === 0 ? Math.max(1, n - 1) : Math.max(1, n)), 0);
-  return cells + 1;
-}
-
-// 階段（設置階＝下階のグラフに帰属。上階へは描画時に投影する）。
-// cells は Room と同じ設置エリア表現（worldToCell のキー集合）。
-export class Stair {
-  constructor(id, {
-    type        = StairType.STRAIGHT,
-    structure   = StructuralMaterialType.WOOD, // 木造 / 鉄骨
-    cells       = new Set(),
-    totalSteps  = 15,
-    tread       = 250,     // 踏面(mm)
-    riser       = null,    // 蹴上(mm) null=階高/totalSteps で自動
-    nosing      = 30,      // 蹴込(mm)
-    width       = 900,     // 階段幅(mm)
-    upDirection = 'right', // 昇り方向 'up'|'down'|'left'|'right'（向き推定結果）
-    flip        = false,
-    sections    = null,    // 区間別・実段数（歩行順。偶数=直進部、奇数=踊場・周回部）。未指定はnull
-    roomId      = null,    // 変換元 Room の ID（旧データ・上階自動設置分は null）
-  } = {}) {
-    this.id          = id;
-    this.type        = type;
-    this.structure   = structure;
-    this.cells       = cells;
-    this.totalSteps  = sections ? totalStepsFromSections(sections) : totalSteps;
-    this.tread       = tread;
-    this.riser       = riser;
-    this.nosing      = nosing;
-    this.width       = width;
-    this.upDirection = upDirection;
-    this.flip        = flip;
-    this.sections    = sections;
-    this.roomId      = roomId;
-    makeObservable(this, {
-      type:        observable,
-      structure:   observable,
-      cells:       observable,
-      totalSteps:  observable,
-      tread:       observable,
-      riser:       observable,
-      nosing:      observable,
-      width:       observable,
-      upDirection: observable,
-      flip:        observable,
-      sections:    observable.ref,
-      roomId:      observable,
-      setField:    action,
-      setCells:    action,
-    });
-  }
-  // sections（区間別・実段数配列）を設定すると、totalSteps（総マス数+上階床到達分1）を同期する。
-  setField(field, value) {
-    this[field] = value;
-    if (field === 'sections' && value) this.totalSteps = totalStepsFromSections(value);
-  }
-  setCells(cells) { this.cells = cells; }
-}
+import { Stair } from './core/stair.js';
+export { totalStepsFromSections, Stair } from './core/stair.js';
 
 // ================================================================
 // STRUCTURAL ENTITIES — core/structuralEntities.js に分離。
@@ -353,37 +108,11 @@ export {
 } from './core/structuralEntities.js';
 
 // ================================================================
-// PLANE (平面 = XY平面 1枚 + 高さ 1つ)
+// PLANE (平面 = XY平面 1枚 + 高さ 1つ) — core/plane.js に分離。後方互換のため再エクスポートする。
 // ================================================================
 
-export class Plane {
-  constructor(id, elevation, name = '', startFloor = 1, stories = 1,
-              isAlternative = false, referenceId = null, altIndex = 0,
-              isRoofPlane = false, roofForPlaneId = null) {
-    this.id            = id;
-    this.elevation     = elevation;
-    this.name          = name;
-    this.startFloor    = startFloor;
-    this.stories       = stories;
-    this.isAlternative = isAlternative; // true = 検討
-    this.referenceId   = referenceId;   // 検討の場合、採用の plane.id
-    this.altIndex      = altIndex;      // 検討の表示順
-    // 屋根専用平面（小屋伏／R階伏）。構造モードでのみ使う合成平面で、フロアタブ・階番号ロジックの対象外。
-    this.isRoofPlane    = isRoofPlane;
-    this.roofForPlaneId = roofForPlaneId; // どの実体平面の上に乗る屋根平面か（structural/roofPlane.js 参照）
-    makeObservable(this, {
-      elevation:      observable,
-      name:           observable,
-      startFloor:     observable,
-      stories:        observable,
-      isAlternative:  observable,
-      referenceId:    observable,
-      altIndex:       observable,
-      isRoofPlane:    observable,
-      roofForPlaneId: observable,
-    });
-  }
-}
+import { Plane } from './core/plane.js';
+export { Plane } from './core/plane.js';
 
 // ================================================================
 // PLAN GRAPH (ngraph ラッパ — 平面図の主グラフ)
