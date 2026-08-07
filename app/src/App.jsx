@@ -6,7 +6,6 @@ import { serializeGraph, restoreGraph } from './graphSnapshot.js';
 import { Stage, Layer, Group } from 'react-konva';
 import { useStore, addFloor, switchFloor, saveToIDB, addAlternativeFloor, removeFloor } from './store.js';
 import { isDirty } from './dirtyState.js';
-import { ERR_STRUCT_MAIN_UNSPECIFIED } from './error.js';
 import { LodLevel } from './viewport.js';
 import { viewport } from './appViewport.js';
 import {
@@ -30,14 +29,9 @@ import { FinishSidebar }   from './finish/FinishSidebar.jsx';
 import { FinishHalfModal } from './finish/FinishHalfModal.jsx';
 import { StairLayer }      from './renderer/StairLayer.jsx';
 import { floorHeightAbove } from './finish/stair/stairDimensions.js';
-import { stairPortEdges } from './finish/stair/stairGeometry.js';
-import { generateStairUnderWalls, stairUnderClaimedEdges, trimStairUnderJunctions } from './finish/stair/stairUnderWalls.js';
 import { buildStairEntries, buildUpperStairPeekEntries } from './finish/stair/stairEntries.js';
-import { generateRoomWallsFromOutline, generateExteriorWalls, snapshotWall, restoreWallsFromSnapshots, resolveBackingOwnership, applyBackingOwnership } from './finish/wallGeneration.js';
-import { snapshotEdges, restoreEdges, syncEdgesFromTopology, interiorWallSpans, buildCellToRoom } from './finish/edgeClassify.js';
-// finish/clEccentricity.js は edgeComposition.js 経由で materials/materialData.js（材マスタ全件）を
-// 静的に引くため、コード分割維持のため動的 import する（materialData.js のヘッダコメント参照）。
-import { reinterpretRoomsOnEntry, ensureStairRooms, snapshotRoomsState, restoreRoomsState } from './finish/roomReinterpret.js';
+import { interiorWallSpans } from './finish/edgeClassify.js';
+import { runFinishEntryBoundary, runFinishExitBoundary } from './finish/finishBoundary.js';
 import { RoomLabelsLayer } from './renderer/RoomLabelsLayer.jsx';
 import { StepSectionLayer } from './renderer/StepSectionLayer.jsx';
 import { VoidLayer } from './renderer/VoidLayer.jsx';
@@ -47,7 +41,7 @@ import { MemberTagLayer } from './renderer/MemberTagLayer.jsx';
 import { MemberStatusMenu } from './ui/MemberStatusMenu.jsx';
 import { PRIMARY_DIMENSION_FIELD_BY_MAP } from './structural/memberCatalog.js';
 import { CONTEXT, detectContext, buildMenuState } from './interaction/menuItems.js';
-import { CenterLineType, OpeningCategory, RoomFeature, centerLineKind } from '@core';
+import { CenterLineType, OpeningCategory, centerLineKind } from '@core';
 import { addSkipZero, subtractSkipZero, makeFloorName, makeFloorLevelPrefix, renameFloor } from './floorNumber.js';
 import {
   floorBytesEqual, applyFloorBytes, isActiveAnAltOf,
@@ -75,20 +69,14 @@ import { CalibrationDialog }  from './ui/CalibrationDialog.jsx';
 import { SiteDialog }          from './ui/SiteDialog.jsx';
 import { BuildingInfoDialog }  from './ui/BuildingInfoDialog.jsx';
 import { StructuralPanel } from './structural/StructuralPanel.jsx';
-import { autoFillColumns, autoFillColumnAxisOffsets, autoFillBeamEccentricity, autoFillColumnSizes, resolveLowestGraph, convertMembersToEffectiveMaterial, deleteClassificationOverflow, axisExteriorSign } from './structural/structuralAutoFill.js';
-import { structureHasMemberKind, MEMBER_KIND } from './structural/structuralClassification.js';
-import { buildStructuralWallGate, buildExteriorSide } from './structural/wallGate.js';
-import { collectFloorGroups, assignNumbers, applyNumbers } from './structural/memberNumbering.js';
-import { conformToLedger } from './structural/memberGroups.js';
-import { recomputeStructuralForGraph } from './structural/structuralRecompute.js';
-import { syncRoofPlane } from './structural/roofPlane.js';
+import { autoFillColumnAxisOffsets, autoFillBeamEccentricity, resolveLowestGraph, axisExteriorSign } from './structural/structuralAutoFill.js';
+import { buildExteriorSide } from './structural/wallGate.js';
 import { buildStructuralFigureSlots, designationForSlot, firstSlotKeyForPlane } from './structural/structuralFigureSlots.js';
+import { recomputeStructuralComposition, runStructuralModeSetup, reflectStructuralToOtherFloors, reflectStructuralAfterFloorAdd } from './structural/structuralOrchestration.js';
 import { figureBindingManager } from './figure/FigureBindingManager.js';
 import { floorSwapManager } from './storage/FloorSwapManager.js';
 import { saveFloor, loadFloor } from './storage/db.js';
 import { readLocalAutosaveRaw, parseAutosaveData, writeLocalAutosave, parseOpenedFileBytes } from './storage/localSnapshot.js';
-import { getFigure } from './figure/figureRegistry.js';
-import { STRUCTURAL_FIGURE_ID } from './structural/structuralFigure.js';
 import { SiteInfoPanel }       from './ui/SiteInfoPanel.jsx';
 import { SiteLinesLayer, SiteDrawPreview } from './renderer/SiteLinesLayer.jsx';
 import {
@@ -109,7 +97,7 @@ import { TOP_BAR, INSET, inGutter as isInGutter } from './layout.js';
 import { evalNumpadExpr } from './ui/numpadUtils.js';
 import { EccentricityDialog } from './ui/EccentricityDialog.jsx';
 import { KneeDropWallDialog } from './ui/KneeDropWallDialog.jsx';
-import { resolveWallSpanKey, isEligibleWallSpan, kneeDropWallGeometry } from './finish/kneeDropWall.js';
+import { resolveWallSpanKey, isEligibleWallSpan } from './finish/kneeDropWall.js';
 
 const evalExpr = (s) => evalNumpadExpr(s, { positiveOnly: true });
 
@@ -428,7 +416,9 @@ const App = observer(() => {
       if (ctx.mode === 'structure') {
         // 構造モードへの復帰は図面合成の再構築が必須（自動補完は決定的な冪等インフラで undo を汚さない）
         setActiveStructSlotKey(firstSlotKeyForPlane(buildStructuralFigureSlots(project), project.activePlaneId));
-        await runStructuralModeSetup(project.activeGraph);
+        setStructComposition(await runStructuralModeSetup(project.activeGraph, project, {
+          onToast: msg => setToast({ msg, key: Date.now() }),
+        }));
       }
     }
   }
@@ -857,208 +847,6 @@ const App = observer(() => {
     setIsPanning(false);
   };
 
-  // applyNumbers の renumbered（既存タグが別タグへ変わった遷移一覧）から、モード境界の再採番トーストを
-  // 1回だけ出す（初回採番=null→タグ は applyNumbers 側で除外済みのためここでは判定不要）。
-  // 代表1件＋残りは「他N件」で簡潔に（設計意図: design-member-numbering-ui.md 5節）。
-  function reportRenumberToast(renumbered) {
-    if (!renumbered.length) return;
-    const [first] = renumbered;
-    const extra = renumbered.length - 1;
-    setToast({
-      msg: `材寸の変更にともない部材番号を振り直しました（${first.from} → ${first.to}${extra > 0 ? ` 他${extra}件` : ''}）`,
-      key: Date.now(),
-    });
-  }
-
-  // ---- 構造再計算コア（突入時・主構造変更時で共有）----
-  // 既に activate 済みの composition を受け取り、構造伏図に映る全グラフ（自階＋1つ下の階）を再計算する。
-  // mutate（主構造の変更操作）を渡すと、自階スナップショットの before 取得後・after 取得前に runInAction で
-  // 実行し、主構造変更と部材の生成・材変換・採番をまとめて1つの undo エントリにする（override は graph
-  // snapshot に含まれるため undo で戻る。建物全体既定値 mainStructure は project 側のため従来どおり対象外）。
-  // 主構造変更時（mutate あり）は下階グラフ（伏図に映る柱の供給元）も同じ undo エントリで戻す。
-  // 突入時（mutate なし）は自階 recompute の差分があるときだけ undo を積む（下階は表示用 peek＝undo 非対象。従来挙動を保持）。
-  async function recomputeStructuralComposition(composition, subjectGraph, { mutate } = {}) {
-    const before = serializeGraph(subjectGraph);
-    if (mutate) runInAction(mutate);
-
-    // 自階床下材＝subjectGraph、1つ下の階の柱＝belowGraph。基礎伏図（1つ下が無い）は belowGraph=null。
-    const belowGraph = composition.graphForCategory('columnMap');
-    const belowMainStructure = belowGraph
-      ? belowGraph.structureOverride ?? project.structuralInfo.mainStructure
-      : subjectGraph.structureOverride ?? project.structuralInfo.mainStructure;
-
-    // 自階：自動補完・柱芯・材変換・材寸算定・採番の収集（structuralRecompute.js。undo 非依存の純計算）。
-    // 番号の確定（assignNumbers/applyNumbers）はまだ行わない——下階分の収集も済んでから1回だけ行う。
-    const { changed } = await recomputeStructuralForGraph(subjectGraph, project, belowMainStructure);
-
-    // 1つ下の階（構造伏図に映る柱の供給元）も実効主構造へ揃える。突入時は reflectStructuralToOtherFloors が
-    // 事前に下階を反映・永続化済みのため、ここは peek 済みバインディングへの差分適用（通常は差分ゼロ）。
-    // 主構造変更時は既に commit 済みで編集可能 peek のため恒久化される——これにより
-    // 「主構造を変えても下階の柱が旧材のまま取り残される」不具合を解消する。convertMembersToEffectiveMaterial は
-    // 既存の旧材を変換、autoFillColumns は未生成分を新材で生成する（差分のみ）。
-    // 主構造変更時のみ下階の before/after を取り、自階と同じ undo エントリで一括復元する。
-    let belowBefore = null, belowAfter = null;
-    if (belowGraph) {
-      const belowGate = await buildStructuralWallGate(belowGraph.plane, project, subjectGraph);
-      const belowLowestGraph = await resolveLowestGraph(project, belowGraph);
-      // belowMainStructure 引数は軒桁(eaves)専用。通常階の下階に eaves は無いため自階の実効値で十分。
-      const belowBelowMainStructure = belowGraph.structureOverride ?? project.structuralInfo.mainStructure;
-      if (mutate) belowBefore = serializeGraph(belowGraph);
-      const belowStructure = belowGraph.structureOverride ?? project.structuralInfo.mainStructure;
-      runInAction(() => {
-        convertMembersToEffectiveMaterial(belowGraph, project, belowBelowMainStructure);
-        // 主構造変更で柱が「×」化した場合は、下階の柱を生成せず既存の自動柱を削除する（問題.md「×は削除/○は生成」）。
-        if (structureHasMemberKind(MEMBER_KIND.COLUMN, belowStructure)) autoFillColumns(belowGraph, project, belowGate);
-        deleteClassificationOverflow(belowGraph, project);
-        autoFillColumnAxisOffsets(belowGraph, project, belowLowestGraph);
-        autoFillColumnSizes(belowGraph, project, belowGraph.plane);
-        conformToLedger(belowGraph, project);
-        collectFloorGroups(belowGraph, project);
-      });
-    }
-
-    // 自階＋下階の収集が揃った時点の project.memberNumberIndex（直前の reflectStructuralToOtherFloors が
-    // 積んだ他階分を含む）で1回だけ採番し、両方へ適用する（memberNumbering.js の2パス方式）。
-    // ここが「ユーザーが今見ている画面の番号が確定する」地点のため、材寸変更にともなう振り直しの
-    // トーストもここで報告する（初回採番=null→タグ は applyNumbers 側で除外済み）。
-    const tags = assignNumbers(project);
-    const renumbered = [];
-    runInAction(() => {
-      renumbered.push(...applyNumbers(subjectGraph, project, tags).renumbered);
-      if (belowGraph) renumbered.push(...applyNumbers(belowGraph, project, tags).renumbered);
-    });
-    reportRenumberToast(renumbered);
-    if (belowGraph && mutate) belowAfter = serializeGraph(belowGraph);
-
-    const after = serializeGraph(subjectGraph);
-    if (mutate || changed) {
-      undoManager.push(
-        () => {
-          restoreGraph(subjectGraph, before);
-          if (belowBefore) restoreGraph(belowGraph, belowBefore);
-        },
-        () => {
-          restoreGraph(subjectGraph, after);
-          if (belowAfter) restoreGraph(belowGraph, belowAfter);
-        },
-      );
-    }
-  }
-
-  // ---- 構造モード突入時のセットアップ（屋根平面同期・バインディング生成・再計算）----
-  // handleModeChange('structure') と、構造モード中のフロア切替（switchFloorKeepingMode）の両方から呼ぶ。
-  async function runStructuralModeSetup(targetGraph) {
-    const effectiveMainStructure = targetGraph.structureOverride ?? project.structuralInfo.mainStructure;
-    if (effectiveMainStructure === '未定') {
-      setToast({ msg: ERR_STRUCT_MAIN_UNSPECIFIED, key: Date.now() });
-    }
-
-    // 最上階の直上に屋根専用平面（小屋伏／R階伏）を同期する（undo対象外。建物形状が変わった時点でやり直し前提のインフラ）。
-    runInAction(() => syncRoofPlane(project));
-
-    // 突入時点でアクティブ階以外の全実体階へも構造部材を反映・永続化する（undo対象外インフラ）。
-    // 自階だけの再計算では「訪れた伏図の階」にしか部材が入らず、他の伏図・他モードの図面が空のままになる。
-    // バインディング構築より先に行うことで、下階レイヤの peek は反映済みデータを読む
-    // （表示用 autofill は差分ゼロとなり、編集可能 peek のベースラインとも一致する）。
-    await reflectStructuralToOtherFloors();
-
-    // 図面合成（構造伏図＝自階床下材＋1つ下の階の柱）のバインディングを組み立てる。
-    // 非アクティブな下階は FigureBindingManager 内部で floorSwapManager.peek() により読み取り専用に覗く
-    // （graph.structureOverride はメモリ上信頼できないため。詳細は data-model.md / structural-model.md）。
-    const composition = await figureBindingManager.activate(getFigure(STRUCTURAL_FIGURE_ID), targetGraph.plane, targetGraph, project);
-
-    // 自階＋下階の再計算（突入時・主構造変更時で共有する純計算コア）。
-    await recomputeStructuralComposition(composition, targetGraph);
-
-    setStructComposition(composition);
-    // 下階の柱は、その伏図の構造リストから編集する（描画対象＝編集対象を一致させる）。
-    // 表示用 autofill 完了後に commit して secondaryEdit バインディング（下階）を編集可能 peek 化する。
-    // 基礎伏図（下階なし）は secondaryEdit バインディングが無く編集チャネルは張られない。
-    figureBindingManager.commit(composition);
-  }
-
-  // ---- 構造モードへの外部問合せ（階追加・仕上げ退出時に、構造モードに入らず構造部材を更新する）----
-  // mainStructure は屋根平面（軒桁）でのみ意味を持つが、ここでの対象は常に実体階なので自階の実効値でよい。
-
-  // アクティブな graph を再計算し、変化があれば undo に積む（通常の auto-save に乗る）。
-  // pushUndo=false は階追加フロー用（withFloorAddUndo が全階分を1エントリで巻き戻すため個別には積まない）。
-  async function recomputeActiveStructural(pushUndo = true) {
-    const g = project.activeGraph;
-    const mainStructure = g.structureOverride ?? project.structuralInfo.mainStructure;
-    const { changed, before, after } = await recomputeStructuralForGraph(g, project, mainStructure);
-    if (changed && pushUndo) {
-      undoManager.push(
-        () => restoreGraph(g, before),
-        () => restoreGraph(g, after),
-      );
-    }
-  }
-
-  // 非アクティブな実体階を peek して再計算し、変化があれば IDB に直接保存する。
-  // syncRoofPlane と同格の「建物形状が変わった時点でやり直すインフラ」として undo 対象外で割り切る
-  // （跨ぎフロア undo は単一アクティブ graph モデルでは扱えないため。削除の取消はベースライン保持で担保する）。
-  // 採番は収集（conformToLedger + collectFloorGroups。structuralRecompute.js）のみ行い、番号の確定は
-  // 呼び出し側（reflectStructuralToOtherFloors 等）が全階の収集後に1回だけ行う。
-  async function recomputeInactiveStructural(plane) {
-    const temp = await floorSwapManager.peek(plane, project.structGraph);
-    const mainStructure = temp.structureOverride ?? project.structuralInfo.mainStructure;
-    const { changed } = await recomputeStructuralForGraph(temp, project, mainStructure);
-    if (changed) await saveFloor(plane.id, serializeGraph(temp));
-  }
-
-  // 採番パス2: 直前に収集済みの project.memberNumberIndex を使って plane 1つへ番号を適用し、
-  // 変化があれば保存する（非アクティブ階を peek→適用→保存。全階を同時にメモリ展開しない）。
-  async function applyMemberNumbersToFloor(plane, tags) {
-    const temp = await floorSwapManager.peek(plane, project.structGraph);
-    let changed = false;
-    runInAction(() => { ({ changed } = applyNumbers(temp, project, tags)); });
-    if (changed) await saveFloor(plane.id, serializeGraph(temp));
-  }
-
-  // アクティブ階以外の全実体階の構造部材を peek+再計算+保存で反映する（undo 対象外の決定的インフラ）。
-  // 構造モードの境界（突入・脱出）と階追加フローが共有する「他階への構造反映」の単一実装——
-  // これが無いと、構造モードで生成・編集した部材が「訪れた伏図の階」にしか入らず、
-  // 他モード・他階へ移動したときに他の伏図・平面図へ構造部材が現れない（問題.md）。
-  //
-  // 材寸グループ採番は建物全体の情報が必要なため2パスで行う（memberNumbering.js）:
-  //   パス1（収集）: 自階（メモリ上の現状）＋他の全実体階（peek→recompute→保存）を
-  //                  project.memberNumberIndex へ積む。
-  //   パス2（採番・適用）: assignNumbers を建物全体で1回だけ実行し、自階＋他の全実体階へ適用する
-  //                  （変化があった階のみ保存）。
-  // 屋根専用平面（isRoofPlane）は project.planes に含まれない（採番の「実体階」ループの対象外）ため、
-  // 上の収集ループでは漏れる。屋根専用平面だけの記号（RF/PR/EG等）が収集から欠けると、記号ごとの
-  // 階プレフィックス要否判定（needsPrefix。屋根グループの有無で階集合の同一性が変わる）が
-  // 「屋根平面を直接訪れたかどうか」で揺れ、既存タグが行き来する誤った再採番トーストの原因になる。
-  // 屋根専用平面には自階再計算（recomputeStructuralForGraph。mainStructureの解決に図面合成が要る）を
-  // 素直には適用できないため、最低ラインとして「収集だけ」を常に行う（peekしたグラフは保存しない・
-  // 番号も書き戻さない。実際の番号確定はユーザーが屋根伏図を直接訪れたときの通常経路に委ねる）。
-  async function collectRoofPlaneGroups() {
-    const roofPlane = project.roofPlane;
-    if (!roofPlane || roofPlane.id === project.activePlaneId) return; // アクティブなら既に収集済み
-    const temp = await floorSwapManager.peek(roofPlane, project.structGraph);
-    runInAction(() => {
-      conformToLedger(temp, project);
-      collectFloorGroups(temp, project);
-    });
-  }
-
-  async function reflectStructuralToOtherFloors() {
-    const activeId = project.activePlaneId;
-    runInAction(() => project.clearMemberNumberIndex());
-    if (project.activeGraph) runInAction(() => collectFloorGroups(project.activeGraph, project));
-    for (const plane of project.planes) {
-      if (plane.id === activeId) continue;
-      await recomputeInactiveStructural(plane);
-    }
-    await collectRoofPlaneGroups();
-    const tags = assignNumbers(project);
-    if (project.activeGraph) runInAction(() => applyNumbers(project.activeGraph, project, tags));
-    for (const plane of project.planes) {
-      if (plane.id === activeId) continue;
-      await applyMemberNumbersToFloor(plane, tags);
-    }
-  }
-
   // ---- モード境界: 建具モード突入（記号別採番を全階から収集して確定する）----
   // graph を一切変更しない（他階は peek のみ・保存も書き戻しもしない）ため undo エントリは不要
   // （.claude/undo-redo.md「undo対象外」の割り切りと同型。番号は project.openingNumberIndex という
@@ -1075,45 +863,14 @@ const App = observer(() => {
     runInAction(() => applyOpeningTags(project, assignOpeningNumbers(project)));
   }
 
-  // 要件1：階追加後。追加で N（負担階数）・基礎指定が変わるため、全実体階の構造部材を更新する。
-  // アクティブ（追加直後の表示階）はメモリ上で、その他の実体階は peek+保存で反映する。
-  // undo は個別に積まない（呼び出し元の withFloorAddUndo が階追加フロー全体を1エントリで記録する）。
-  // これにより別階・別モードへ移動したとき、更新後の柱・梁・材寸がそのまま描画される。
-  async function reflectStructuralAfterFloorAdd() {
-    await recomputeActiveStructural(false);
-    await reflectStructuralToOtherFloors();
-  }
-
-  // 要件2：仕上げモード退出後。フットプリント（外壁線・吹抜け）変更は鉛直連続性ゲートにより
-  // 自階と「自階より上の全実体階」のゲートに効く（wallGate.js：基準階＋直下の全階のAND）。
-  // そのため自階（アクティブ）＋上の全階を再計算する。下階は影響を受けない。
-  // 退出先が構造モードのときは runStructuralModeSetup が自階を再計算するため、自階・番号確定は
-  // そちら（reflectStructuralToOtherFloors）に委ねる。退出先が構造モードでない場合はここで
-  // 採番も確定する（次に構造モードへ入るまで番号が未確定のままにならないよう、直近の収集結果で確定する）。
-  async function reflectStructuralAfterFinishExit(currentPlaneId, goingToStructure) {
-    if (!goingToStructure) await recomputeActiveStructural();
-    const planes = project.planes; // elevation 昇順
-    const idx = planes.findIndex(p => p.id === currentPlaneId);
-    const touchedPlanes = [];
-    if (idx !== -1) {
-      for (let i = idx + 1; i < planes.length; i++) {
-        await recomputeInactiveStructural(planes[i]);
-        touchedPlanes.push(planes[i]);
-      }
-    }
-    if (!goingToStructure) {
-      const tags = assignNumbers(project);
-      if (project.activeGraph) runInAction(() => applyNumbers(project.activeGraph, project, tags));
-      for (const plane of touchedPlanes) await applyMemberNumbersToFloor(plane, tags);
-    }
-  }
-
   // ---- モード境界: 構造モード突入（図面合成の構築・情報ダイアログ）----
   // handleModeChange（appMode切替）と移動スライダーの階切替（appMode維持）の両方から呼ぶ。
   // openInfoDialog: スライダー階切替では毎回ダイアログが開くのはUXとして不合理なため false にする。
   async function runStructuralEntryBoundary(targetGraph, { openInfoDialog = true } = {}) {
     if (openInfoDialog) setShowStructuralInfoDialog(true);
-    await runStructuralModeSetup(targetGraph);
+    setStructComposition(await runStructuralModeSetup(targetGraph, project, {
+      onToast: msg => setToast({ msg, key: Date.now() }),
+    }));
   }
 
   // ---- モード境界: 構造モード脱出（図面合成バインディングの停止・確定保存・他階への反映）----
@@ -1126,507 +883,7 @@ const App = observer(() => {
     await figureBindingManager.deactivate();
     setStructComposition(null);
     if (closeInfoDialog) setShowStructuralInfoDialog(false);
-    if (reflectOtherFloors) await reflectStructuralToOtherFloors();
-  }
-
-  // ---- モード境界: 仕上げモード突入（前回脱出時点のRoom.cellsを現在のCLトポロジーと
-  // 突き合わせて再解釈した上で、通り芯変更等のトポロジー差分でエッジを再同期する）----
-  async function runFinishEntryBoundary(graph) {
-    // 最上階なら直下階の屋内階段footprintへ階段吹抜け（STAIR_VOID）を補完する
-    // （既存データ修復。syncUpperFloors と同じ自動同期のため undo 対象外）
-    const { ensureTopStairVoid } = await import('./finish/stair/stairFloorSync.js');
-    await ensureTopStairVoid(project, graph);
-
-    const entryUndoFns = [];
-    const entryRedoFns = [];
-
-    const roomsBefore = snapshotRoomsState(graph);
-    const stairRoomChanges = [];
-    runInAction(() => {
-      reinterpretRoomsOnEntry(graph);
-      // roomIdなしStair（旧データ・上階自動設置分）へ階段Roomを補完（開くだけで修復）
-      stairRoomChanges.push(...ensureStairRooms(graph));
-    });
-    const roomsAfter = snapshotRoomsState(graph);
-    if (JSON.stringify(roomsBefore) !== JSON.stringify(roomsAfter)) {
-      entryUndoFns.push(() => restoreRoomsState(graph, roomsBefore));
-      entryRedoFns.push(() => restoreRoomsState(graph, roomsAfter));
-    }
-    // 補完した Room 自体は rooms スナップショットが巻き戻すが、Stair.roomId は対象外のため個別に戻す
-    if (stairRoomChanges.length > 0) {
-      entryUndoFns.push(() => { for (const c of stairRoomChanges) c.stair.setField('roomId', c.prevRoomId); });
-      entryRedoFns.push(() => { for (const c of stairRoomChanges) c.stair.setField('roomId', c.room.id); });
-    }
-
-    const before = snapshotEdges(graph);
-    runInAction(() => syncEdgesFromTopology(graph));
-    const after = snapshotEdges(graph);
-    if (JSON.stringify(before) !== JSON.stringify(after)) {
-      entryUndoFns.push(() => restoreEdges(graph, before));
-      entryRedoFns.push(() => restoreEdges(graph, after));
-    }
-
-    // F3（プル側）: 自階にまだ偏芯レコードが無いCLについて、連動先（階段は設置階〜最上階、
-    // 吹抜けはその階と直下階）に既存の指定があれば取り込む。push（handleEccConfirm・
-    // runFinishExitBoundary ステップ4c）だけでは、連動先がまだ仕上げモードに入っていない・
-    // 内壁指定（部屋名）がまだ無い等でグラフ上のリンクが見えない間は伝播できないため、
-    // 突入のたびにここで埋める。pullMaterialMap は fmode（唯一の通常の情報源）がこの時点では
-    // まだ生存していないため、clEccentricity.js と同じ理由で独立に動的 import する
-    // （コード分割維持。materialData.js のヘッダコメント参照）。ensureTopStairVoid と同格の
-    // 自動同期のため undo 対象外。
-    const [{ pullCLEccentricities }, pullMatMod] = await Promise.all([
-      import('./finish/eccentricityFloorSync.js'),
-      import('./finish/materials/materialData.js'),
-    ]);
-    const pullMaterialMap = new Map(pullMatMod.MATERIALS.map(m => [m.code, m]));
-    await pullCLEccentricities(project, graph, { materialMap: pullMaterialMap });
-
-    // 部屋の再解釈→エッジ再同期の順に適用したため、undo は逆順で巻き戻す
-    if (entryUndoFns.length > 0) {
-      undoManager.push(
-        () => { [...entryUndoFns].reverse().forEach(fn => fn()); },
-        () => { entryRedoFns.forEach(fn => fn()); },
-      );
-    }
-  }
-
-  // ---- モード境界: 仕上げモード脱出（部屋ごとの壁自動生成・外壁再生成・構造反映を確定）----
-  // handleModeChange（appMode切替）と移動スライダーの階切替（appMode維持）の両方から呼ぶ。
-  // goingToStructure: 遷移先が構造モードなら reflectStructuralAfterFinishExit 側で
-  // 自階の再計算をスキップする（構造モード突入境界処理に委ねるため）。
-  async function runFinishExitBoundary(graph, { goingToStructure = false } = {}) {
-    const undoFns = [];
-    const redoFns = [];
-
-    // 寸法は実材厚から導出（modeRef.current は脱出直前でまだ生存・材ロード済み）。
-    const fmode = modeRef.current;
-
-    // 壁導出ブロック（ステップ1〜3.5）は fmode が生きている場合のみ実行する。fmode が null
-    // （モード切替中で材ロードがまだ完了していない等の一時的な状態）だと roomWallDims/
-    // exteriorWallDims が既定寸法へフォールバックし、ステップ1が実材厚で生成済みの既存壁・
-    // 2a壁まで全削除して既定寸法で作り直してしまう（不可逆な破壊）。clEccentricity.js が
-    // materialMap 未ロード時に適用自体をスキップする方針（適用時は黙って既定値へ潰さず
-    // 止める）と同じ考え方（F2）。fmode が null のときは壁を一切触らず、ステップ4・4b・5・
-    // 構造反映は従来どおり実行する（これらは Room/Edge のトポロジーが対象で、壁の実材寸法
-    // には依存しないため）。
-    if (fmode) {
-    // 階段下部屋（破れ線先セルに部屋指定された領域。ステップ2a）。壁は一度生成したら不変・
-    // claim・トリムの既存仕組みを変更しない——ステップ1の全削除・ステップ2の対象からは
-    // 常に除外する。ステップ1・2aの双方で使うため先に1回だけ計算する。
-    const stairUnderEntries = fmode?.stairUnderRooms?.(graph) ?? [];
-    const under2aRoomIds = new Set(stairUnderEntries.map(e => e.room.id));
-
-    // ステップ1: 内周壁（isRoomWall && 非外壁）を全削除する（外壁ステップ3と同じ思想。
-    // 「壁＝部屋指定・内装・偏芯からの導出物」として脱出のたびに全削除→ステップ2で
-    // 導出し直す。順序非依存・冪等になり、旧版が個別に行っていた自己修復（孤立壁削除・
-    // 階段側壁の個別削除）は不要になった。階段ペアRoom（feature=STAIR）・階段吹抜け
-    // （STAIR_VOID）の壁も対象——新モデルでは通常のRoomと同じ経路で壁を持つため、
-    // 旧版の特別扱いは廃止した。2a壁（下記 under2aWallIds）だけは対象外。
-    const under2aWallIds = new Set();
-    for (const room of graph.rooms) {
-      if (under2aRoomIds.has(room.id)) for (const id of room.generatedWallIds) under2aWallIds.add(id);
-    }
-    const staleInteriorSnapshots = [];
-    for (const [id, shape] of graph.shapeMap) {
-      if (shape.isRoomWall && !shape.isExteriorWall && !under2aWallIds.has(id)) staleInteriorSnapshots.push(snapshotWall(shape));
-    }
-    if (staleInteriorSnapshots.length > 0) {
-      const roomWallIdsBefore = new Map(); // room -> Set<wallId>（undo復元用。2a部屋は対象外）
-      for (const room of graph.rooms) {
-        if (!under2aRoomIds.has(room.id)) roomWallIdsBefore.set(room, new Set(room.generatedWallIds));
-      }
-      staleInteriorSnapshots.forEach(s => graph.removeShape(s.id));
-      for (const room of roomWallIdsBefore.keys()) room.generatedWallIds.clear();
-      undoFns.push(() => {
-        restoreWallsFromSnapshots(graph, staleInteriorSnapshots);
-        for (const [room, ids] of roomWallIdsBefore) { room.generatedWallIds.clear(); ids.forEach(id => room.generatedWallIds.add(id)); }
-      });
-      redoFns.push(() => {
-        for (const room of roomWallIdsBefore.keys()) room.generatedWallIds.clear();
-        staleInteriorSnapshots.forEach(s => graph.removeShape(s.id));
-      });
-    }
-
-    // 階段の上り口・下り口の開口辺（この辺上に部屋の壁を作らない）。
-    // 自階の階段は entry（上り口）＋ arrival（下り口。中間階では下階の同形状階段の到達辺を兼ねる）。
-    // 最上階（階段実体なし・階段吹抜けのみ）は直下階の階段の到達辺＝下り口を開口に加える
-    // （世界座標は全階共通のため、直下階グラフで計算した辺をそのまま使える）。
-    const stairOpenings = graph.stairs.flatMap(s => stairPortEdges(s, graph));
-    if (graph.rooms.some(r => r.feature === RoomFeature.STAIR_VOID)) {
-      const planes = project.planes;
-      const planeIdx = planes.findIndex(p => p.id === graph.plane?.id);
-      if (planeIdx > 0) {
-        const below = await floorSwapManager.peek(planes[planeIdx - 1], project.structGraph);
-        stairOpenings.push(...below.stairs.flatMap(s => stairPortEdges(s, below, ['arrival'])));
-      }
-    }
-
-    // ステップ2a: 階段下部屋（破れ線先セルに部屋指定された階段下エリア）の壁生成。
-    // ステップ2より先に行い、この部屋を generatedWallIds 済みにしてステップ2の通常経路
-    // （偏芯を持たない対称壁）から除外する。claimedEdges（underEdges）は破れ線・踊り場境界
-    // （無壁）と、この部屋が既に受け持った外周（外側部屋の薄壁を含む）の重複生成を防ぐため、
-    // ステップ2・3の開口辺フィルタへ合流させる（生成順: 2a→2→3）。
-    // claim（stairUnderClaimedEdges）は壁生成（generateStairUnderWalls）と分離しており、
-    // 再脱出時（部屋が既に generatedWallIds を持ち壁は再生成しない）でも毎回行う——冪等性
-    // のため。省略すると2回目の脱出でclaimが空になり、ステップ3の外壁（毎回全削除・再生成）
-    // で初回に抑止された辺に壁が生成されてしまう。
-    // 既知制約: 同一部屋が2階段にまたがる退化構成（stairUnderRoomsが同じroomを複数返す）は
-    // 先に処理された stair の claim/壁生成が優先される。
-    // step2aEntries: この部屋群が現に持つ2a壁（新規生成分に加え、再脱出時に生成をスキップした
-    // 既存分も含む）を { wall, room } で保持する。ステップ3後のトリムパス
-    // （trimStairUnderJunctions。隣接壁・外壁との T字/出隅/入隅取り合い）の対象にする
-    // ——room は出隅/入隅判定（象限がそのRoomのセルに属するか）に使う。再脱出時も対象に
-    // 含めるのは、ステップ3の外壁は毎回全削除・再生成されるため（面位置は決定的なら実質
-    // 不変だが、CLがユーザー編集で動いた場合にも追従できるようにする）。既に正しい位置なら
-    // トリムは再度no-opになるだけで冪等（REASONED、下記トリムパスの説明を参照）。
-    // buildCellToRoom(graph) は2a部屋1件につき claim経路・生成経路の双方で呼ばれると2回
-    // 走ってしまう（QA指摘）。壁がまだ1本も追加されていないこの時点でグラフ全体から
-    // 1度だけ作り、両経路で共有する（Room.cellsは触っていないため、このループ内で使い回しても
-    // 結果は変わらない）。
-    const stairUnderCellToRoom = buildCellToRoom(graph);
-    const underEdges = [];
-    const step2aEntries = [];
-    for (const { stair, room, splitCLIds } of stairUnderEntries) {
-      underEdges.push(...stairUnderClaimedEdges(graph, stair, room, { stairOpenings, under2aRoomIds, cellToRoom: stairUnderCellToRoom }));
-      if (room.generatedWallIds.size > 0) {
-        // 再脱出時: 壁は再生成しないが、既存の2a壁はトリム対象として拾う
-        for (const id of room.generatedWallIds) {
-          const w = graph.shapeMap.get(id);
-          if (w) step2aEntries.push({ wall: w, room });
-        }
-        continue;
-      }
-      const { walls } = generateStairUnderWalls(
-        graph, stair, room, fmode?.roomWallDims?.(graph, room) || {},
-        { splitCLIds, dimsOf: r => fmode?.roomWallDims?.(graph, r) || {}, stairOpenings, under2aRoomIds, cellToRoom: stairUnderCellToRoom },
-      );
-      if (walls.length === 0) continue;
-
-      walls.forEach(w => room.generatedWallIds.add(w.id));
-      step2aEntries.push(...walls.map(w => ({ wall: w, room })));
-      const snapshots = walls.map(snapshotWall);
-      const wallIds = walls.map(w => w.id);
-
-      const r = room;
-      undoFns.push(() => { wallIds.forEach(id => graph.removeShape(id)); r.generatedWallIds.clear(); });
-      redoFns.push(() => { restoreWallsFromSnapshots(graph, snapshots).forEach(w => r.generatedWallIds.add(w.id)); });
-    }
-
-    // ステップ2: 新規壁生成（対象: UNDEFINED・部分指定（referenceRoomIds あり。親が外周壁を
-    // 担う）・2a部屋を除く全Room）。generatedWallIds ゲート（size>0でskip）は撤廃した
-    // ——ステップ1で対象範囲の壁を全削除済みのため、毎回全再生成してよい（順序非依存・冪等）。
-    // UNDEFINED は内周壁を持たない（新モデル＝全再生成方式では、未定義化した時点で内周壁は
-    // 消える。外壁線はステップ3が維持するため部屋の輪郭自体は失われない。意図どおりの新挙動）。
-    // 階段ペアRoom（feature=STAIR）・階段吹抜け（STAIR_VOID）も同仕様で参加する:
-    // 下地オーナー壁＋仕上げ薄壁方式——同一CL上の下地（間柱帯）は1つだけ、各面（部屋側・
-    // 階段側）の仕上げ材は面ごとに描画される。所有権解決（resolveBackingOwnership。
-    // wallGeneration.js）をこの直後に行い、＋側の壁を下地オーナーに、−側の壁を仕上げ薄壁
-    // （backingDepth=0）に確定する（部分重なりは壁を分割する）。
-    // 部分指定（referenceRoomIds あり）は通常、親が外周壁を担うため対象外——ただし
-    // feature=STAIR（部屋の部分指定から階段変換した階段）は例外で対象に含める。旧版にあった
-    // 親隣接面だけの抑止（parentAdjacentEdges）は不要——新モデルでは所有権解決
-    // （resolveBackingOwnership）が親側の壁との重なりを検出して自動的に薄壁化するため。
-    const wallIdToRoom = new Map(); // wallId -> 生成元Room（所有権解決の分割で generatedWallIds を張り替えるため）
-    const roomWallLists = new Map(); // room -> Wall[]（今回生成分。所有権解決前）
-    const processedRooms = [];
-    for (const room of graph.rooms) {
-      if (room.feature === RoomFeature.UNDEFINED) continue;
-      if (room.referenceRoomIds?.size > 0 && room.feature !== RoomFeature.STAIR) continue;
-      if (under2aRoomIds.has(room.id)) continue;
-
-      const walls = generateRoomWallsFromOutline(graph, room, fmode?.roomWallDims?.(graph, room) || {}, [...stairOpenings, ...underEdges]);
-      if (walls.length === 0) continue;
-
-      walls.forEach(w => { room.generatedWallIds.add(w.id); wallIdToRoom.set(w.id, room); });
-      roomWallLists.set(room, walls);
-      processedRooms.push(room);
-    }
-
-    // 所有権解決: 同一CL上の下地を1本に統一する。分割で生じた新壁は wallIdToRoom へ
-    // 反映し、旧壁IDを新壁群に張り替える（generatedWallIds も同様に張り替える）。
-    const allNewInteriorWalls = processedRooms.flatMap(r => roomWallLists.get(r));
-    for (const [oldId, newWalls] of resolveBackingOwnership(graph, allNewInteriorWalls)) {
-      const room = wallIdToRoom.get(oldId);
-      if (!room) continue;
-      room.generatedWallIds.delete(oldId);
-      for (const nw of newWalls) { room.generatedWallIds.add(nw.id); wallIdToRoom.set(nw.id, room); }
-    }
-
-    // ステップ2b: CL偏芯の適用（内壁指定のあるCLに設定された偏芯仕様を対象壁へ反映する。
-    // spec と現材から毎回フル再計算する冪等処理——脱出のたびに材変更を偏芯壁へ反映させる）。
-    // ステップ3（外壁の全削除・再生成）より前に行う: 対象は非外壁のみのため実害はないが、
-    // 生成済みの内壁（ステップ2）に対して行うのが素直なため直後に置く。
-    // fmode?.materialMap が無ければ丸ごとスキップする（applyCLEccentricity 自体も materialMap
-    // 無しでは何もしないが、無駄な動的importとループを避ける。QA finding 2）。
-    if (graph.clEccentricities.size > 0 && fmode?.materialMap) {
-      const { applyCLEccentricity } = await import('./finish/clEccentricity.js');
-      const eccTouched = new Map(); // wallId -> 変更前スナップショット（初回遭遇時点）
-      for (const clId of graph.clEccentricities.keys()) {
-        for (const c of applyCLEccentricity(graph, clId, { materialMap: fmode?.materialMap })) {
-          if (!eccTouched.has(c.wall.id)) {
-            eccTouched.set(c.wall.id, {
-              axisOffset: c.axisOffset, wallFinish: c.wallFinish, backingOffset: c.backingOffset,
-              backingDepth: c.backingDepth, finishSide: c.finishSide, startOffset: c.startOffset, endOffset: c.endOffset,
-            });
-          }
-        }
-      }
-      if (eccTouched.size > 0) {
-        const eccChanges = [];
-        for (const [id, before] of eccTouched) {
-          const w = graph.shapeMap.get(id);
-          if (!w) continue;
-          eccChanges.push({
-            id, before,
-            after: {
-              axisOffset: w.axisOffset, wallFinish: w.wallFinish, backingOffset: w.backingOffset,
-              backingDepth: w.backingDepth, finishSide: w.finishSide, startOffset: w.startOffset, endOffset: w.endOffset,
-            },
-          });
-        }
-        const applyFields = (id, f) => {
-          const w = graph.shapeMap.get(id);
-          if (!w) return;
-          w.axisOffset = f.axisOffset; w.wallFinish = f.wallFinish;
-          w.backingOffset = f.backingOffset; w.backingDepth = f.backingDepth;
-          w.finishSide = f.finishSide; w.startOffset = f.startOffset; w.endOffset = f.endOffset;
-        };
-        // 実行時は常に no-op になる想定の undo/redo（F7。動作自体は正しいので削除しない）:
-        // ここで触れる壁は必ず「ステップ2（内周壁生成＋所有権解決）」の対象Room
-        // （generatedWallIds）に属する——applyCLEccentricity の対象抽出・コーナー追従が
-        // いずれも room.generatedWallIds を起点にするため。ステップ2側の undo/redo は
-        // ステップ3の外壁オーナー化パスの後まで遅延して push される（下記）ため配列内では
-        // この push より後に来る。undo は配列を逆順実行するのでステップ2側が先に走り対象の
-        // 壁を削除済みにし、redo は順に実行するのでステップ2側が後に走り最終状態
-        // （このeccChanges.after込みで取ったスナップショット）で壁を作り直す——結果として
-        // ここの applyFields は対象の壁が存在しない時点で呼ばれ、`if (!w) return;` で
-        // 無害化される。
-        undoFns.push(() => eccChanges.forEach(c => applyFields(c.id, c.before)));
-        redoFns.push(() => eccChanges.forEach(c => applyFields(c.id, c.after)));
-      }
-    }
-
-    // ステップ3: 外壁の再生成（既存の isExteriorWall 壁を削除して作り直す）
-    const oldExteriorSnapshots = [];
-    for (const shape of graph.shapeMap.values()) {
-      if (shape.isExteriorWall) oldExteriorSnapshots.push(snapshotWall(shape));
-    }
-    if (oldExteriorSnapshots.length > 0) {
-      oldExteriorSnapshots.forEach(s => graph.removeShape(s.id));
-    }
-    const newExteriorWalls = generateExteriorWalls(graph, fmode?.exteriorWallDims?.(graph) || {}, [...stairOpenings, ...underEdges]);
-
-    // 外壁オーナー化パス:「外周CLでは外壁が下地オーナー」の規則で、同一CLでスパンが重なる
-    // 内周壁（ステップ2生成分）の covered 区間だけを薄壁化する（部分重なりは
-    // applyBackingOwnership 内の分割ヘルパで分割）。setOwnerFields:false — 外壁自身の
-    // backingOffset/backingDepth/finishSide は一切書き換えない（外壁は backingRange の
-    // 既存フォールバック式が同値の下地帯を返すため明示不要。明示すると materialRange が
-    // 既定式ぶん広がる副作用がある）。claimUncovered:false — 内周壁の非covered区間・分割後の
-    // 非covered新壁は、ステップ2の所有権解決・ステップ2bのCL偏芯が既に確定した値をそのまま
-    // 継承する（ここで既定式に塗り直すとその結果を破壊してしまう。F1）。
-    // 内周壁側の分割・薄壁化は wallIdToRoom／室の generatedWallIds へ反映し、下記の内周壁
-    // undo/redo（ステップ2の所有権解決結果に、このステップ3の追加分割を合流させたもの）へ
-    // 含める——ここより後に内周壁の undo/redo をまとめて push するのはそのため。
-    const currentInteriorWalls = [...wallIdToRoom.keys()].map(id => graph.shapeMap.get(id)).filter(Boolean);
-    for (const [oldId, newWalls] of applyBackingOwnership(graph, newExteriorWalls, currentInteriorWalls, { setOwnerFields: false, claimUncovered: false })) {
-      const room = wallIdToRoom.get(oldId);
-      if (!room) continue;
-      room.generatedWallIds.delete(oldId);
-      for (const nw of newWalls) { room.generatedWallIds.add(nw.id); wallIdToRoom.set(nw.id, room); }
-    }
-
-    const newExteriorSnapshots = newExteriorWalls.map(snapshotWall);
-    if (oldExteriorSnapshots.length > 0 || newExteriorSnapshots.length > 0) {
-      undoFns.push(() => {
-        newExteriorSnapshots.forEach(s => graph.removeShape(s.id));
-        restoreWallsFromSnapshots(graph, oldExteriorSnapshots);
-      });
-      redoFns.push(() => {
-        oldExteriorSnapshots.forEach(s => graph.removeShape(s.id));
-        restoreWallsFromSnapshots(graph, newExteriorSnapshots);
-      });
-    }
-
-    // ステップ2（内周壁生成＋所有権解決）の undo/redo をここで確定する。ステップ3の外壁
-    // オーナー化パスが内周壁をさらに分割しうるため、その反映が終わったこの時点まで遅延させ、
-    // 各室の generatedWallIds の最終状態から一括でスナップショットを取る（分割前の中間状態を
-    // undo対象にしない）。この時点では室は元々壁を持たなかった（ステップ2の対象は毎回
-    // 全削除後のRoomのみ）ため、undo は単純に「今回生成した壁を全削除して generatedWallIds を
-    // clear」でよい。
-    for (const room of processedRooms) {
-      const wallIds = [...room.generatedWallIds];
-      if (wallIds.length === 0) continue;
-      const snapshots = wallIds.map(id => graph.shapeMap.get(id)).filter(Boolean).map(snapshotWall);
-      const r = room;
-      undoFns.push(() => { wallIds.forEach(id => graph.removeShape(id)); r.generatedWallIds.clear(); });
-      redoFns.push(() => { restoreWallsFromSnapshots(graph, snapshots).forEach(w => r.generatedWallIds.add(w.id)); });
-    }
-
-    // ステップ3.5: ステップ2aで生成した階段下壁（偏芯主壁＋薄壁）の突き当たり処理。
-    // ステップ3の後に行う: この時点で自室壁（2a）・隣接部屋壁（2）・外壁（3）が全て揃っており、
-    // 取り合い相手が出そろっているため。
-    // trimStairUnderJunctions（stairUnderWalls.js）を使う: 手動壁の graph.trimIntersectingWalls
-    // は相手壁の最近傍端点を無条件にfaceへスナップするため、2a壁の端が既存壁の中間（T字）に
-    // 突き当たる場合に既存壁側まで切り詰めてしまう（要件のバグ報告どおり実コードで確認。
-    // core.js:1735-1770 の cand 計算に交点までの距離ガードが無い）。手動壁の挙動は変えず、
-    // 2a壁専用にT字（既存壁は不変・2a壁側のみ近位faceで止める）/コーナー（出隅は遠位face、
-    // 入隅は近位faceへ双方スナップ）を区別する専用関数を stairUnderWalls.js に用意した
-    // （判断根拠: 出隅/入隅の材料範囲判定は偏芯壁対応の materialRange・部屋セル象限判定という
-    // 2a壁固有の概念を要し、手動壁向けの汎用 core.js API を汚さない方が既存コードの構造に
-    // 馴染む）。2a壁同士は trimStairUnderJunctions 内で対象外にする（生成時のコーナーマップで
-    // 既に正しく取り合っているため）。
-    // undo/redo は壁オブジェクト参照を保持しない（このエントリ内の後続 undo/redo で 2a壁・
-    // 隣接部屋壁・外壁が削除→再生成されオブジェクト実体が変わるため）。壁IDで解決し直す
-    // before/after 全体差分方式（edgeBefore/edgeAfter と同じ発想）を使う。
-    // 再脱出時の冪等性: step2aEntries には壁生成をスキップした既存2a壁も含めているため
-    // （このケースでは undoFns/redoFns への 2a壁生成エントリは積まれないが、トリムパスは
-    // 毎回走る）、外壁が毎回作り直されても再トリムで同じ face 位置に再収束する（面位置が
-    // 前回と不変なら candidate offset も不変で実質no-op。REASONED）。
-    if (step2aEntries.length > 0) {
-      const touched = new Map(); // wallId -> { before: {startOffset, endOffset} }
-      const captureBefore = (id, startOffset, endOffset) => {
-        if (!touched.has(id)) touched.set(id, { before: { startOffset, endOffset } });
-      };
-      const junctionSnaps = trimStairUnderJunctions(graph, step2aEntries);
-      for (const snap of junctionSnaps) captureBefore(snap.wall.id, snap.startOffset, snap.endOffset);
-      const trimChanges = [];
-      for (const [id, rec] of touched) {
-        const w = graph.shapeMap.get(id);
-        if (!w) continue;
-        const after = { startOffset: w.startOffset, endOffset: w.endOffset };
-        if (after.startOffset !== rec.before.startOffset || after.endOffset !== rec.before.endOffset) {
-          trimChanges.push({ id, before: rec.before, after });
-        }
-      }
-      if (trimChanges.length > 0) {
-        undoFns.push(() => {
-          for (const c of trimChanges) {
-            const w = graph.shapeMap.get(c.id);
-            if (w) { w.startOffset = c.before.startOffset; w.endOffset = c.before.endOffset; }
-          }
-        });
-        redoFns.push(() => {
-          for (const c of trimChanges) {
-            const w = graph.shapeMap.get(c.id);
-            if (w) { w.startOffset = c.after.startOffset; w.endOffset = c.after.endOffset; }
-          }
-        });
-      }
-    }
-    } // if (fmode) — 壁導出ブロック（ステップ1〜3.5）はここまで（F2）
-
-    // ステップ4: 境界エッジのトポロジー差分同期（脱出時に確定・永続化）
-    const edgeBefore = snapshotEdges(graph);
-    runInAction(() => syncEdgesFromTopology(graph));
-    const edgeAfter = snapshotEdges(graph);
-    if (JSON.stringify(edgeBefore) !== JSON.stringify(edgeAfter)) {
-      undoFns.push(() => restoreEdges(graph, edgeBefore));
-      redoFns.push(() => restoreEdges(graph, edgeAfter));
-    }
-
-    // 腰壁・垂れ壁の孤児掃除: ステップ4のエッジ再同期直後、区間の幾何が解決できなくなった
-    // （対象壁が消えた・CLトポロジーが変わった）キーを削除する（CL偏芯ステップ4bと同じ発想。
-    // .claude/data-model.md「CL偏芯はレコードと導出結果を分離する」節参照）。腰壁・垂れ壁は
-    // 壁側へ値を焼き込まない（天板の描画のみ）ため、CL偏芯4bのような壁復元は不要。
-    if (graph.kneeDropWalls.size > 0) {
-      const cellToRoom = buildCellToRoom(graph);
-      const staleKneeDropKeys = [...graph.kneeDropWalls.keys()]
-        .filter(key => !kneeDropWallGeometry(graph, key, cellToRoom));
-      if (staleKneeDropKeys.length > 0) {
-        const removedKneeDrop = staleKneeDropKeys.map(key => [key, graph.kneeDropWalls.get(key)]);
-        runInAction(() => { for (const key of staleKneeDropKeys) graph.removeKneeDropWall(key); });
-        undoFns.push(() => runInAction(() => { for (const [key, rec] of removedKneeDrop) graph.setKneeDropWall(key, rec); }));
-        redoFns.push(() => runInAction(() => { for (const key of staleKneeDropKeys) graph.removeKneeDropWall(key); }));
-      }
-    }
-
-    // ステップ4b: 内壁指定（INTERIOR_WALLエッジ）が消えたCLの偏芯レコードを掃除する
-    // （ステップ4のトポロジー再同期後に判定——エッジが無くなった＝もう対象壁が無いCLの
-    // レコードを残すと再突入時に亡霊レコードとして残り続ける）。
-    // レコード削除の直後に applyCLEccentricity を「解除」として呼び、既に偏芯済みの壁も
-    // 既定式へ戻す——レコードだけ消して壁を偏芯したまま孤児化させると、ユーザーが解除できなく
-    // なる（QA finding 3）。clEccentricity.js 側は spec なし（解除）の場合 materialMap 不要・
-    // スパン消滅後も続行するよう改修済み。壁側の変更差分はステップ2bと同型でundoFns/redoFnsへ
-    // 積み、既存のレコード復元undoと併存させる（undo実行時は両方が走り、レコード・壁の双方を
-    // 削除前の状態へ戻す）。
-    const staleEccIds = [...graph.clEccentricities.keys()].filter(clId => interiorWallSpans(graph, clId).length === 0);
-    if (staleEccIds.length > 0) {
-      const { applyCLEccentricity } = await import('./finish/clEccentricity.js');
-      const removedEcc = staleEccIds.map(clId => [clId, graph.clEccentricities.get(clId)]);
-      runInAction(() => { for (const clId of staleEccIds) graph.removeCLEccentricity(clId); });
-      undoFns.push(() => runInAction(() => { for (const [clId, rec] of removedEcc) graph.setCLEccentricity(clId, rec); }));
-      redoFns.push(() => runInAction(() => { for (const clId of staleEccIds) graph.removeCLEccentricity(clId); }));
-
-      const eccTouched = new Map(); // wallId -> 変更前スナップショット（初回遭遇時点）
-      for (const clId of staleEccIds) {
-        for (const c of applyCLEccentricity(graph, clId, { materialMap: fmode?.materialMap })) {
-          if (!eccTouched.has(c.wall.id)) {
-            eccTouched.set(c.wall.id, {
-              axisOffset: c.axisOffset, wallFinish: c.wallFinish, backingOffset: c.backingOffset,
-              backingDepth: c.backingDepth, finishSide: c.finishSide, startOffset: c.startOffset, endOffset: c.endOffset,
-            });
-          }
-        }
-      }
-      if (eccTouched.size > 0) {
-        const eccChanges = [];
-        for (const [id, before] of eccTouched) {
-          const w = graph.shapeMap.get(id);
-          if (!w) continue;
-          eccChanges.push({
-            id, before,
-            after: {
-              axisOffset: w.axisOffset, wallFinish: w.wallFinish, backingOffset: w.backingOffset,
-              backingDepth: w.backingDepth, finishSide: w.finishSide, startOffset: w.startOffset, endOffset: w.endOffset,
-            },
-          });
-        }
-        const applyFields = (id, f) => {
-          const w = graph.shapeMap.get(id);
-          if (!w) return;
-          w.axisOffset = f.axisOffset; w.wallFinish = f.wallFinish;
-          w.backingOffset = f.backingOffset; w.backingDepth = f.backingDepth;
-          w.finishSide = f.finishSide; w.startOffset = f.startOffset; w.endOffset = f.endOffset;
-        };
-        undoFns.push(() => eccChanges.forEach(c => applyFields(c.id, c.before)));
-        redoFns.push(() => eccChanges.forEach(c => applyFields(c.id, c.after)));
-      }
-    }
-
-    // ステップ4c: CL偏芯の階またぎ連動（階段は設置階〜最上階、吹抜けは直下階と共通）を、
-    // ステップ4b の掃除後に残っている graph.clEccentricities の内容で連動先の他階へ
-    // 再伝播する——脱出のたびに材変更・偏芯編集を連動先へ反映させる自動同期。4b が削除した
-    // レコードそのものは伝播しない（4bの条件は緩めない。連動先の孤児レコードが残る既知の
-    // 限界はここでは扱わない）。syncUpperStairInteriors（ステップ5）と同格の自動同期のため
-    // undo 対象外。バッチ版（propagateCLEccentricities）で階ごとに peek 1回へ畳む（F5）。
-    // observable map の keys() を await をまたいで直接 iterate しないよう、先に配列へ
-    // スナップショットしてから渡す（F9）。
-    if (graph.clEccentricities.size > 0) {
-      const { propagateCLEccentricities } = await import('./finish/eccentricityFloorSync.js');
-      const clIds = [...graph.clEccentricities.keys()];
-      await propagateCLEccentricities(project, graph, clIds, { materialMap: fmode?.materialMap });
-    }
-
-    // 全変更を単一の undo エントリとして登録（undo は逆順実行）
-    if (undoFns.length > 0) {
-      undoManager.push(
-        () => { [...undoFns].reverse().forEach(fn => fn()); },
-        () => { redoFns.forEach(fn => fn()); },
-      );
-    }
-
-    // ステップ5: 階段設置階の上階（自動設置ペアRoom・最上階の階段吹抜け）へ、設置階ペアRoomの
-    // 内装（templateKey・customOverrides）を同期コピーする（階段仕上げ材の参照）。壁は
-    // この同期では生成しない——新モデルでは階段ペアRoom・吹抜けも通常のRoomと同じ経路
-    // （ステップ1〜3）で壁を持つため、上階の壁はその階自身が仕上げモードを脱出した際に
-    // 生成される。syncUpperFloors と同じ自動同期のため undo 対象外。
-    if (graph.stairs.length > 0) {
-      const { syncUpperStairInteriors } = await import('./finish/stair/stairFloorSync.js');
-      await syncUpperStairInteriors(project, graph);
-    }
-
-    // 要件2：フットプリント確定後に構造モードへ問合せ、自階＋上の全階の構造部材を更新する。
-    await reflectStructuralAfterFinishExit(graph.plane.id, goingToStructure);
+    if (reflectOtherFloors) await reflectStructuralToOtherFloors(project);
   }
 
   // ---- モード境界レジストリ ----
@@ -1642,8 +899,8 @@ const App = observer(() => {
     finish: {
       // 突入: 前回脱出時点のRoom.cellsを現在のCLトポロジーと突き合わせて再解釈した上でエッジを再同期。
       // 脱出: 部屋ごとの壁自動生成・外壁再生成・構造反映を確定。
-      enter: (graph) => runFinishEntryBoundary(graph),
-      exit: (graph, { toMode }) => runFinishExitBoundary(graph, { goingToStructure: toMode === 'structure' }),
+      enter: (graph) => runFinishEntryBoundary(graph, project),
+      exit: (graph, { toMode }) => runFinishExitBoundary(graph, project, modeRef.current, { goingToStructure: toMode === 'structure' }),
     },
     structure: {
       // 突入: 構造情報ダイアログ・図面合成の構築・全階の自動補完反映。脱出: バインディング停止・確定保存・他階反映。
@@ -1885,7 +1142,7 @@ const App = observer(() => {
       const { plane } = addFloor(nextElevation, newName, newStartFloor, 1);
       await syncNewFloorFromSource(project.activeGraph, plane, newStartFloor);
       await handleFloorSwitch(plane.id);
-      await reflectStructuralAfterFloorAdd();
+      await reflectStructuralAfterFloorAdd(project);
     });
   }
 
@@ -1916,7 +1173,7 @@ const App = observer(() => {
         }
         // 作成した最も下の階に切り替え
         if (lastPlane) await handleFloorSwitch(lastPlane.id);
-        await reflectStructuralAfterFloorAdd();
+        await reflectStructuralAfterFloorAdd(project);
       });
       return;
     }
@@ -1931,7 +1188,7 @@ const App = observer(() => {
         const { plane } = addFloor(nextElevation, newName, newStartFloor, n);
         await syncNewFloorFromSource(project.activeGraph, plane, newStartFloor);
         await handleFloorSwitch(plane.id);
-        await reflectStructuralAfterFloorAdd();
+        await reflectStructuralAfterFloorAdd(project);
       });
     }
   }
@@ -3179,8 +2436,13 @@ const App = observer(() => {
           onToast={msg => setToast({ msg, key: Date.now() })}
           onStructureChanged={mutate => {
             // 主構造変更（mutate）→ 構造伏図に映る全グラフ（自階＋下階）を再計算し、下階の柱も実効主構造へ追従させる。
-            if (structComposition) recomputeStructuralComposition(structComposition, project.activeGraph, { mutate }).catch(console.error);
-            else runInAction(mutate); // 万一 composition 未確立時は変更だけ反映
+            if (structComposition) {
+              recomputeStructuralComposition(structComposition, project.activeGraph, project, {
+                mutate, onToast: msg => setToast({ msg, key: Date.now() }),
+              }).catch(console.error);
+            } else {
+              runInAction(mutate); // 万一 composition 未確立時は変更だけ反映
+            }
           }}
         />
       )}
