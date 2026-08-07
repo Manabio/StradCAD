@@ -1,7 +1,7 @@
 /**
  * core 内部共有ヘルパー（モジュール横断で使う純関数）。
  *
- * core.js と core/structuralEntities.js の双方から参照される。
+ * core/wall.js と core/structuralEntities.js の双方から参照される。
  * 公開APIではない（core.js は再エクスポートしない）。
  */
 
