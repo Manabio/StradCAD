@@ -131,24 +131,6 @@
   text-align: center;
 }
 
-.cl-dialog-row--check {
-  cursor: pointer;
-  gap: 6px;
-}
-
-.cl-dialog-row--check input[type="checkbox"] {
-  width: 14px;
-  height: 14px;
-  cursor: pointer;
-  flex-shrink: 0;
-  margin: 0;
-}
-
-.cl-dialog-row--check .cl-dialog-label {
-  width: auto;
-  text-align: left;
-}
-
 .cl-dialog-actions {
   display: flex;
   gap: 8px;

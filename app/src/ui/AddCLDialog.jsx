@@ -19,7 +19,7 @@ const KINDS_BY_MODE = { structure: [BEAM_KIND] };
  * 通り芯追加ダイアログ
  *
  * Y軸は上が正・下が負（表示座標 = −ワールドY）。
- * onConfirm(worldValue, kind, trim) : kind = 'center'|'struct'|'aux'|'beam'
+ * onConfirm(worldValue, kind, refId, refOffset) : kind = 'center'|'struct'|'aux'|'beam'
  * columnAxisRefs: 構造モード（appMode==='structure'）専用の「柱芯」参照選択肢。
  * 要素は { id:'colaxis:'+clId, clId, value(柱芯実位置), axisOffset(通り芯からの偏芯量), label } の合成CL
  * （実CLではない）。他モードでは常に空配列＝従来と完全に同一。
@@ -41,7 +41,6 @@ export function AddCLDialog({ type, worldCoord, gridCLs, nearbyCLs = [], appMode
     : null;
 
   const [kind,    setKind]    = useState(kinds[0].id);
-  const [trim,    setTrim]    = useState(false);
   const [refId,   setRefId]   = useState(nearest?.id ?? '');
   const [distStr, setDistStr] = useState(() =>
     nearest
@@ -94,17 +93,17 @@ export function AddCLDialog({ type, worldCoord, gridCLs, nearbyCLs = [], appMode
 
   function handleConfirm() {
     if (isMultiSpan && batchWorldValues) {
-      onConfirm(batchWorldValues, kind, trim, null, null);
+      onConfirm(batchWorldValues, kind, null, null);
       return;
     }
     if (refCL?.clId) {
       // 柱芯参照（columnAxisRefs の合成CL）: 合成id 'colaxis:...' をそのまま渡さず、
       // 元の通り芯clId＋静的オフセット（柱芯偏芯量＋距離）に畳んで永続化する
       // （通り芯の移動には追従するが、出幅編集による柱芯の再計算には追従しない。割り切り）。
-      onConfirm(previewWorld, kind, trim, refCL.clId, refCL.axisOffset + dist * dir);
+      onConfirm(previewWorld, kind, refCL.clId, refCL.axisOffset + dist * dir);
       return;
     }
-    onConfirm(previewWorld, kind, trim, refId, dist * dir);
+    onConfirm(previewWorld, kind, refId, dist * dir);
   }
 
   function handleKeyDown(e) {
@@ -187,16 +186,6 @@ export function AddCLDialog({ type, worldCoord, gridCLs, nearbyCLs = [], appMode
             : `${axisLabel} = ${Math.round(previewDisplay)} mm`
           }
         </div>
-
-        {/* 梁芯（kind==='beam'）は extent 計算が center と同一処理になったためトリムも中心と同じ扱い */}
-        <label className="cl-dialog-row cl-dialog-row--check">
-          <input
-            type="checkbox"
-            checked={trim}
-            onChange={e => setTrim(e.target.checked)}
-          />
-          <span className="cl-dialog-label">トリム（直交芯端でカット）</span>
-        </label>
 
         <div className="cl-dialog-actions">
           <button className="cl-dialog-btn cl-dialog-btn--cancel" onClick={onCancel}>

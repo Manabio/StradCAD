@@ -3137,7 +3137,7 @@ const App = observer(() => {
     });
   }
 
-  function handleCLDialogConfirm(value, kind, trim, refId, refOffset) {
+  function handleCLDialogConfirm(value, kind, refId, refOffset) {
     if (!clDialog) return;
     const clType = clDialog.type === 'vertical' ? CenterLineType.VERTICAL : CenterLineType.HORIZONTAL;
 
@@ -3156,7 +3156,6 @@ const App = observer(() => {
         project.structGraph.addCenterLine(clType, v, {
           discipline: Discipline.STRUCT,
           labeled:    true,
-          trim:       !!trim,
         })
       );
       const after = serializeStructCLs(project.structGraph, project.structuralInfo, project.memberGroupLedger);
@@ -3207,7 +3206,7 @@ const App = observer(() => {
       const isNewV   = clType === CenterLineType.VERTICAL;
       const wc       = clDialog.worldCoord;
       const pc       = clDialog.perpCoord;
-      const overhang = overhangMm(viewport, !!trim);
+      const overhang = overhangMm(viewport, false);
 
       // フリーエンドポイント用: ポインティング座標をキリ良い数値に丸める
       const niceStep = calcStep(viewport.scaleDenominator);
@@ -3366,7 +3365,6 @@ const App = observer(() => {
         graph.removeCenterLine(deletedId);
         const structProps = {
           discipline: Discipline.STRUCT,
-          trim: !!trim,
           ...(refId ? { refId, refOffset: refOffset ?? 0 } : {}),
         };
         // 通り芯は project.structGraph に追加する
@@ -3407,7 +3405,6 @@ const App = observer(() => {
       ...(kind === 'struct' ? { discipline: Discipline.STRUCT } : {}),
       ...(kind === 'aux'    ? { labeled: false, lineType: 'dashed' } : {}),
       ...(kind === 'beam'   ? { discipline: Discipline.FUSE, labeled: false } : {}),
-      trim: !!trim,
       ...(isRefResolvable ? { refId, refOffset: refOffset ?? 0 } : {}),
     };
 
