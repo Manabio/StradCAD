@@ -19,7 +19,7 @@ import { chamferWalls as _chamferWalls, trimIntersectingWalls as _trimIntersecti
 import {
   Discipline, ShapeType, ShapeKind, CenterLineType, RoomKind,
   StairType, StructuralMaterialType,
-  LINE_WEIGHT_MM, DimensionKind, DimensionSide,
+  DimensionKind, DimensionSide,
   DEFAULT_WALL_MATERIAL, DEFAULT_EXTERIOR_WALL_BACKING,
   DEFAULT_INTERIOR_WALL_BACKING, DEFAULT_CEILING_BACKING, DEFAULT_FLOOR_BACKING,
   DEFAULT_ROOM_FLOOR_LEVEL, DEFAULT_ROOM_CEILING_HEIGHT,
@@ -35,169 +35,20 @@ export {
 } from './core/constants.js';
 
 // ================================================================
-// POINT (自由位置ノード)
-// グリッドに拘束されない独立した座標点
-// Arc/Circle の中心として使用する
+// POINT / INTERSECTION — core/nodes.js に分離。後方互換のため再エクスポートする。
 // ================================================================
 
-export class Point {
-  constructor(id, x, y) {
-    this.id       = id;
-    this.x        = x;
-    this.y        = y;
-    this.pendingDX = 0;
-    this.pendingDY = 0;
-    makeObservable(this, {
-      x:          observable,
-      y:          observable,
-      pendingDX:  observable,
-      pendingDY:  observable,
-      effectiveX: computed,
-      effectiveY: computed,
-    });
-  }
-  get effectiveX() { return this.x + this.pendingDX; }
-  get effectiveY() { return this.y + this.pendingDY; }
-}
+import { Point, Intersection } from './core/nodes.js';
+export { Point, Intersection } from './core/nodes.js';
 
 // ================================================================
-// INTERSECTION (グリッドノード)
-//
-// 垂直中心線 × 水平中心線 の交点。
-// CenterLine が位置の源泉であり、Intersection は派生。
-// { id, x, y } を持つ点として Point と共通インターフェイスを満たす。
+// SHAPES (グラフエッジ) — 基底クラス Shape は core/shapeBase.js に分離（非公開のため再エクスポートしない）。
+// VerticalLine/HorizontalLine/DiagonalLine/Arc/Circle は core/shapes.js に分離。
 // ================================================================
 
-export class Intersection {
-  constructor(clVertical, clHorizontal) {
-    this.id           = `${clVertical.id}:${clHorizontal.id}`;
-    this.clVertical   = clVertical;    // CenterLine (VERTICAL)
-    this.clHorizontal = clHorizontal;  // CenterLine (HORIZONTAL)
-    makeObservable(this, { x: computed, y: computed });
-  }
-  // CenterLine.effectiveValue の変化に追従
-  get x() { return this.clVertical.effectiveValue; }
-  get y() { return this.clHorizontal.effectiveValue; }
-}
-
-// ================================================================
-// SHAPES (グラフエッジ) — 基底クラス
-// ================================================================
-
-const SHAPE_DEFAULTS = Object.freeze({
-  discipline: Discipline.ARCH,
-  layerId:    'default',
-  lineWeight: LINE_WEIGHT_MM.medium,
-  lineType:   'solid',
-  color:      '#000000',
-  kind:       ShapeKind.GENERAL,
-});
-
-class Shape {
-  constructor(id, props = {}) {
-    this.id = id;
-    const p = { ...SHAPE_DEFAULTS, ...props };
-    this.discipline = p.discipline;
-    this.layerId    = p.layerId;
-    this.lineWeight = p.lineWeight;
-    this.lineType   = p.lineType;
-    this.color      = p.color;
-    this.kind       = p.kind;
-    makeObservable(this, {
-      discipline: observable,
-      layerId:    observable,
-      lineWeight: observable,
-      lineType:   observable,
-      color:      observable,
-      kind:       observable,
-      setProps:   action,
-    });
-  }
-
-  setProps(props) { Object.assign(this, props); }
-}
-
-// ----------------------------------------------------------------
-// 垂直線: x固定, y1→y2
-// エッジ: Intersection(clVertical, clHStart) ↔ Intersection(clVertical, clHEnd)
-// ----------------------------------------------------------------
-export class VerticalLine extends Shape {
-  constructor(id, clVertical, clHStart, clHEnd, props) {
-    super(id, props);
-    this.type      = ShapeType.VERTICAL;
-    this.clVertical = clVertical;  // CenterLine (VERTICAL)
-    this.clHStart   = clHStart;    // CenterLine (HORIZONTAL)
-    this.clHEnd     = clHEnd;      // CenterLine (HORIZONTAL)
-    makeObservable(this, { x: computed, y1: computed, y2: computed });
-  }
-  get x()  { return this.clVertical.effectiveValue; }
-  get y1() { return this.clHStart.effectiveValue; }
-  get y2() { return this.clHEnd.effectiveValue; }
-}
-
-// ----------------------------------------------------------------
-// 水平線: y固定, x1→x2
-// エッジ: Intersection(clVStart, clHorizontal) ↔ Intersection(clVEnd, clHorizontal)
-// ----------------------------------------------------------------
-export class HorizontalLine extends Shape {
-  constructor(id, clHorizontal, clVStart, clVEnd, props) {
-    super(id, props);
-    this.type         = ShapeType.HORIZONTAL;
-    this.clHorizontal = clHorizontal;  // CenterLine (HORIZONTAL)
-    this.clVStart     = clVStart;      // CenterLine (VERTICAL)
-    this.clVEnd       = clVEnd;        // CenterLine (VERTICAL)
-    makeObservable(this, { y: computed, x1: computed, x2: computed });
-  }
-  get y()  { return this.clHorizontal.effectiveValue; }
-  get x1() { return this.clVStart.effectiveValue; }
-  get x2() { return this.clVEnd.effectiveValue; }
-}
-
-// ----------------------------------------------------------------
-// 斜線: 交点A→交点B で定義
-// ----------------------------------------------------------------
-export class DiagonalLine extends Shape {
-  constructor(id, nodeA, nodeB, props) {
-    super(id, props);
-    this.type  = ShapeType.DIAGONAL;
-    this.nodeA = nodeA;
-    this.nodeB = nodeB;
-  }
-}
-
-// ----------------------------------------------------------------
-// 円弧: 中心(Intersection|Point) + 半径 + 開始角(度) + 内角(度)
-// ----------------------------------------------------------------
-export class Arc extends Shape {
-  constructor(id, center, radius, startAngle, includedAngle, props) {
-    super(id, props);
-    this.type          = ShapeType.ARC;
-    this.center        = center;
-    this.radius        = radius;
-    this.startAngle    = startAngle;
-    this.includedAngle = includedAngle;
-    makeObservable(this, {
-      radius:        observable,
-      startAngle:    observable,
-      includedAngle: observable,
-      endAngle:      computed,
-    });
-  }
-  get endAngle() { return this.startAngle + this.includedAngle; }
-}
-
-// ----------------------------------------------------------------
-// 円: 中心(Intersection|Point) + 半径
-// ----------------------------------------------------------------
-export class Circle extends Shape {
-  constructor(id, center, radius, props) {
-    super(id, props);
-    this.type   = ShapeType.CIRCLE;
-    this.center = center;
-    this.radius = radius;
-    makeObservable(this, { radius: observable });
-  }
-}
+import { Shape } from './core/shapeBase.js';
+import { VerticalLine, HorizontalLine, DiagonalLine, Arc, Circle } from './core/shapes.js';
+export { VerticalLine, HorizontalLine, DiagonalLine, Arc, Circle } from './core/shapes.js';
 
 // ----------------------------------------------------------------
 // 壁: 軸 CL 参照 + オフセット + 直交 CL 参照端点
