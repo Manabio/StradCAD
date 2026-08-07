@@ -22,6 +22,7 @@ import {
   _isLabeledStructCL, _labeledCLs, _sortedCenterLines, _shapeUsesCenterLine,
 } from './clQuery.js';
 import { chamferWalls as _chamferWalls, trimIntersectingWalls as _trimIntersectingWalls } from './wallChamfer.js';
+import { resolveCLById, resolveWallById, resolveExtentRef, resolveNewCenterLineRefs } from './clRefResolve.js';
 import {
   ShapeType, ShapeKind, CenterLineType,
   DEFAULT_EXTERIOR_WALL_BACKING,
@@ -592,50 +593,18 @@ export class PlanGraph {
    */
   addCenterLine(centerLineType, value, props = {}, id = crypto.randomUUID()) {
     const cl = new CenterLine(id, centerLineType, value, props);
-    // refId がある場合、参照先 CL への参照を設定
-    // 自グラフで見つからない場合は _structGraph も検索する（中心線が通り芯を参照するケース）
-    if (cl.refId) {
-      const refCL = this.shapeMap.get(cl.refId) ?? this._structGraph?.shapeMap.get(cl.refId);
-      if (refCL instanceof CenterLine) cl._referencedCL = refCL;
-    }
-    // extentLoRef/HiRef がある場合、参照先 CL または Wall への参照を解決
-    if (cl.extentLoRef) {
-      if (cl.extentLoRef.clId) {
-        const loCL = this.shapeMap.get(cl.extentLoRef.clId)
-                  ?? this._structGraph?.shapeMap.get(cl.extentLoRef.clId);
-        if (loCL instanceof CenterLine) cl._extentLoCL = loCL;
-      } else if (cl.extentLoRef.wallId) {
-        const loWall = this.shapeMap.get(cl.extentLoRef.wallId);
-        if (loWall?.type === ShapeType.WALL) cl._extentLoWall = loWall;
-      }
-    }
-    if (cl.extentHiRef) {
-      if (cl.extentHiRef.clId) {
-        const hiCL = this.shapeMap.get(cl.extentHiRef.clId)
-                  ?? this._structGraph?.shapeMap.get(cl.extentHiRef.clId);
-        if (hiCL instanceof CenterLine) cl._extentHiCL = hiCL;
-      } else if (cl.extentHiRef.wallId) {
-        const hiWall = this.shapeMap.get(cl.extentHiRef.wallId);
-        if (hiWall?.type === ShapeType.WALL) cl._extentHiWall = hiWall;
-      }
-    }
+    // refId・extentLoRef・extentHiRef の解決は core/clRefResolve.js に集約
+    // （自グラフで見つからない場合は _structGraph も検索する＝中心線が通り芯を参照するケース）
+    resolveNewCenterLineRefs(this.shapeMap, this._structGraph, cl, CenterLine, ShapeType);
     this.shapeMap.set(cl.id, cl);
     if (cl.labeled) this._createIntersections(cl);
     return cl;
   }
 
-  // extentLoRef/extentHiRef から参照先 CL/Wall を解決する（addCenterLine と共通のロジック）
+  // extentLoRef/extentHiRef から参照先 CL/Wall を解決する（addCenterLine と共通のロジック。
+  // core/clRefResolve.js の resolveExtentRef に集約済み）
   _resolveExtentRef(ref) {
-    if (!ref) return { cl: null, wall: null };
-    if (ref.clId) {
-      const cl = this.shapeMap.get(ref.clId) ?? this._structGraph?.shapeMap.get(ref.clId);
-      return { cl: cl instanceof CenterLine ? cl : null, wall: null };
-    }
-    if (ref.wallId) {
-      const wall = this.shapeMap.get(ref.wallId);
-      return { cl: null, wall: wall?.type === ShapeType.WALL ? wall : null };
-    }
-    return { cl: null, wall: null };
+    return resolveExtentRef(this.shapeMap, this._structGraph, ref, CenterLine, ShapeType);
   }
 
   // 中心線結合処理用: lo/hi 側の extent 参照を書き換え、解決キャッシュも更新する
@@ -659,21 +628,21 @@ export class PlanGraph {
    * addCenterLine は呼び出し時点で shapeMap にある CL しか解決できないため、
    * restoreGraph 等で参照先が自分より後に追加される順序だと解決漏れが起きる
    * （問題.md: フロア切替でCLの短縮が解除されY2まで延長される不具合の原因）。
-   * 全 CL 追加後に呼び、未解決分だけ解決し直す。
+   * 全 CL 追加後に呼び、未解決分だけ解決し直す（解決済みの参照は上書きしない）。
    */
   resolveCenterLineRefs() {
     for (const cl of this.centerLines) {
       if (cl.refId && !cl._referencedCL) {
-        const refCL = this.shapeMap.get(cl.refId) ?? this._structGraph?.shapeMap.get(cl.refId);
-        if (refCL instanceof CenterLine) cl._referencedCL = refCL;
+        const refCL = resolveCLById(this.shapeMap, this._structGraph, cl.refId, CenterLine);
+        if (refCL) cl._referencedCL = refCL;
       }
       if (cl.extentLoRef?.clId && !cl._extentLoCL) {
-        const loCL = this.shapeMap.get(cl.extentLoRef.clId) ?? this._structGraph?.shapeMap.get(cl.extentLoRef.clId);
-        if (loCL instanceof CenterLine) cl._extentLoCL = loCL;
+        const loCL = resolveCLById(this.shapeMap, this._structGraph, cl.extentLoRef.clId, CenterLine);
+        if (loCL) cl._extentLoCL = loCL;
       }
       if (cl.extentHiRef?.clId && !cl._extentHiCL) {
-        const hiCL = this.shapeMap.get(cl.extentHiRef.clId) ?? this._structGraph?.shapeMap.get(cl.extentHiRef.clId);
-        if (hiCL instanceof CenterLine) cl._extentHiCL = hiCL;
+        const hiCL = resolveCLById(this.shapeMap, this._structGraph, cl.extentHiRef.clId, CenterLine);
+        if (hiCL) cl._extentHiCL = hiCL;
       }
     }
   }
@@ -685,12 +654,12 @@ export class PlanGraph {
   resolveExtentWallRefs() {
     for (const cl of this.centerLines) {
       if (cl.extentLoRef?.wallId) {
-        const loWall = this.shapeMap.get(cl.extentLoRef.wallId);
-        if (loWall?.type === ShapeType.WALL) cl._extentLoWall = loWall;
+        const loWall = resolveWallById(this.shapeMap, cl.extentLoRef.wallId, ShapeType);
+        if (loWall) cl._extentLoWall = loWall;
       }
       if (cl.extentHiRef?.wallId) {
-        const hiWall = this.shapeMap.get(cl.extentHiRef.wallId);
-        if (hiWall?.type === ShapeType.WALL) cl._extentHiWall = hiWall;
+        const hiWall = resolveWallById(this.shapeMap, cl.extentHiRef.wallId, ShapeType);
+        if (hiWall) cl._extentHiWall = hiWall;
       }
     }
   }
