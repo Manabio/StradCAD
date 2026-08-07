@@ -142,15 +142,18 @@ const CE = { CL_ID: 0, MODE: 1, VALUE: 2, SIDE: 3, BACKING: 4 };
 // KneeDropWall（腰壁・垂れ壁レコード）: 5 フィールド
 const KDW = { KEY: 0, HAS_KNEE: 1, KNEE_TOP: 2, HAS_DROP: 3, DROP_BOTTOM: 4 };
 
-// Opening: 19 フィールド（開口 — 建具・窓）
+// Opening: 24 フィールド（開口 — 建具・窓）
 const OP = {
   ID: 0, AXIS_CL: 1, WALL_SIDE: 2, IS_V: 3,
   REF_CL: 4, REF_OFF: 5, WIDTH: 6, CATEGORY: 7, SUB_TYPE: 8,
   HINGE_SIDE: 9, SWING_SIDE: 10,
   DISC: 11, LW: 12, LT: 13, COL: 14,
-  FIXTURE_TYPE: 15, // 建具記号（外壁窓のみ）。0=なし/1=AW/2=JW/3=SW/4=AD/5=SD/6=WD
+  FIXTURE_TYPE: 15, // 建具記号（外壁窓のみ）。0=なし/1=AW/2=JW/3=SW/4=AD/5=SD/6=WD/7=WW
   HAS_SILL_H: 16, SILL_H: 17, // 窓台高さ(mm)。null=未設定
   HEIGHT: 18, // 建具高さ(mm)。0=未設定
+  FINISH: 19, MATERIAL_GLASS: 20, // 建具表: 仕上／材料・ガラス（自由入力文字列。空文字=未入力=null）
+  FRAME_DEPTH: 21, // 見込み(mm)。0=未設定（heightと同じ規約。0mmの見込みは不正値のためhasフラグ不要）
+  HARDWARE: 22, NOTE: 23, // 建具表: 金物／備考（自由入力文字列）
 };
 
 // Opening.category 列挙値エンコード
@@ -158,8 +161,8 @@ const OPENING_CATEGORY_ENC = { fitting: 0, window: 1 };
 const OPENING_CATEGORY_DEC = ['fitting', 'window'];
 
 // Opening.fixtureType 列挙値エンコード
-const FIXTURE_TYPE_ENC = { AW: 1, JW: 2, SW: 3, AD: 4, SD: 5, WD: 6 };
-const FIXTURE_TYPE_DEC = [null, 'AW', 'JW', 'SW', 'AD', 'SD', 'WD'];
+const FIXTURE_TYPE_ENC = { AW: 1, JW: 2, SW: 3, AD: 4, SD: 5, WD: 6, WW: 7 };
+const FIXTURE_TYPE_DEC = [null, 'AW', 'JW', 'SW', 'AD', 'SD', 'WD', 'WW'];
 
 // DiagonalLine: 7 フィールド
 const DG = { ID: 0, A: 1, B: 2, DISC: 3, LW: 4, LT: 5, COL: 6 };
@@ -387,15 +390,19 @@ function writeWall(b, w) {
 }
 
 function writeOpening(b, o) {
-  const sId    = b.createString(o.id);
-  const sAxis  = b.createString(o.axisCLId);
-  const sRef   = b.createString(o.refCLId);
-  const sSub   = b.createString(o.subType ?? '');
+  const sId       = b.createString(o.id);
+  const sAxis     = b.createString(o.axisCLId);
+  const sRef      = b.createString(o.refCLId);
+  const sSub      = b.createString(o.subType ?? '');
+  const sFinish   = b.createString(o.finish ?? '');
+  const sMatGlass = b.createString(o.materialGlass ?? '');
+  const sHardware = b.createString(o.hardware ?? '');
+  const sNote     = b.createString(o.note ?? '');
   const bp     = strBase(b, o);
 
   const hasSillH = o.sillHeight != null;
 
-  b.startObject(19);
+  b.startObject(24);
   b.addFieldOffset(OP.ID,         sId,   0);
   b.addFieldOffset(OP.AXIS_CL,    sAxis, 0);
   b.addFieldInt8(OP.WALL_SIDE,    o.wallSide < 0 ? -1 : 1, 0);
@@ -415,6 +422,11 @@ function writeOpening(b, o) {
   b.addFieldInt8(OP.HAS_SILL_H,   hasSillH ? 1 : 0, 0);
   b.addFieldFloat64(OP.SILL_H,    hasSillH ? o.sillHeight : 0, 0.0);
   b.addFieldFloat64(OP.HEIGHT,    o.height ?? 0, 0.0);
+  b.addFieldOffset(OP.FINISH,         sFinish,   0);
+  b.addFieldOffset(OP.MATERIAL_GLASS, sMatGlass, 0);
+  b.addFieldFloat64(OP.FRAME_DEPTH,   o.frameDepth ?? 0, 0.0);
+  b.addFieldOffset(OP.HARDWARE,       sHardware, 0);
+  b.addFieldOffset(OP.NOTE,           sNote,     0);
   return b.endObject();
 }
 
@@ -1044,6 +1056,11 @@ function readOpening(bb, tablePos) {
     fixtureType: FIXTURE_TYPE_DEC[r.i8(OP.FIXTURE_TYPE)] ?? null,
     sillHeight:  r.i8(OP.HAS_SILL_H) !== 0 ? r.f64(OP.SILL_H) : null,
     height:      r.f64(OP.HEIGHT) || null,
+    finish:        r.str(OP.FINISH)         || null,
+    materialGlass: r.str(OP.MATERIAL_GLASS) || null,
+    frameDepth:    r.f64(OP.FRAME_DEPTH)    || null,
+    hardware:      r.str(OP.HARDWARE)       || null,
+    note:          r.str(OP.NOTE)           || null,
   };
 }
 

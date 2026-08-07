@@ -11,8 +11,15 @@ import {
   openingGroupsOnFloor, fixtureSymbolOf, openingTagOf, effectiveHeight,
 } from './openingNumbering.js';
 
-function makeOpening(id, { fixtureType = 'AW', subType = 'doubleSliding', width = 1690, height = 1170, sillHeight = 800, category = 'window' } = {}) {
-  return { id, fixtureType, subType, width, height, sillHeight, category };
+function tagOfOpeningId(groups, id) {
+  return groups.find(gr => gr.openings.some(o => o.id === id))?.tag;
+}
+
+function makeOpening(id, {
+  fixtureType = 'AW', subType = 'doubleSliding', width = 1690, height = 1170, sillHeight = 800, category = 'window',
+  finish = null, materialGlass = null, frameDepth = null, hardware = null, note = null,
+} = {}) {
+  return { id, fixtureType, subType, width, height, sillHeight, category, finish, materialGlass, frameDepth, hardware, note };
 }
 
 function makeGraph(planeId, openings) {
@@ -155,4 +162,116 @@ test('openingSignature: height=null（旧データ）はカタログ既定と同
   const tagExplicit = openingTagOf(explicit, project);
   assert.ok(tagLegacy, 'height=nullでもタグが確定する');
   assert.equal(tagLegacy, tagExplicit, '同じ仕様として同一タグになるはず');
+});
+
+// ================================================================
+// 枝番（同一base・建具表バリアント違い）
+// ================================================================
+
+// ---- 同一寸法・材料違い2件 → AW-1a / AW-1b（無印なし） ----
+test('assignOpeningNumbers: 同一base・材料違い2件は枝番a/bが付く（無印は出ない）', () => {
+  const project = makeProject();
+  const g = makeGraph('p1', [
+    makeOpening('a', { materialGlass: 'アルミ' }),
+    makeOpening('b', { materialGlass: '樹脂' }),
+  ]);
+  renumberOpenings(g, project);
+
+  const groups = openingGroupsOnFloor(g, project);
+  assert.equal(groups.length, 2, 'バリアントごとに別グループ・別行になる');
+  const tagA = tagOfOpeningId(groups, 'a');
+  const tagB = tagOfOpeningId(groups, 'b');
+  // materialGlass 'アルミ' < '樹脂'（辞書順）なので 'アルミ' 側が a
+  assert.equal(tagA, 'AW-1a');
+  assert.equal(tagB, 'AW-1b');
+});
+
+// ---- バリアント1種類 → AW-1（枝番なし） ----
+test('assignOpeningNumbers: 建具表バリアントが1種類だけなら枝番は付かない', () => {
+  const project = makeProject();
+  const g = makeGraph('p1', [
+    makeOpening('a', { materialGlass: 'アルミ' }),
+    makeOpening('b', { materialGlass: 'アルミ' }), // 同一バリアント（同一グループに集約される）
+  ]);
+  renumberOpenings(g, project);
+
+  const groups = openingGroupsOnFloor(g, project);
+  assert.equal(groups.length, 1, '同一バリアントは1グループに集約される');
+  assert.equal(groups[0].tag, 'AW-1');
+});
+
+// ---- 材料を編集してバリアントが合流したら枝番が消える（2種→1種） ----
+test('assignOpeningNumbers: 材料編集でバリアントが1種類に合流すると枝番が消える', () => {
+  const project = makeProject();
+  const openingA = makeOpening('a', { materialGlass: 'アルミ' });
+  const openingB = makeOpening('b', { materialGlass: '樹脂' });
+  const g = makeGraph('p1', [openingA, openingB]);
+  renumberOpenings(g, project);
+
+  let groups = openingGroupsOnFloor(g, project);
+  assert.equal(tagOfOpeningId(groups, 'a'), 'AW-1a');
+  assert.equal(tagOfOpeningId(groups, 'b'), 'AW-1b');
+
+  // bの材料をaと同じ「アルミ」へ編集 → バリアントが1種類に合流し枝番が消える
+  openingB.materialGlass = 'アルミ';
+  renumberOpenings(g, project);
+
+  groups = openingGroupsOnFloor(g, project);
+  assert.equal(groups.length, 1, '同一バリアントに合流して1グループになる');
+  assert.equal(groups[0].tag, 'AW-1', '合流後は枝番なしのAW-1に戻る');
+});
+
+// ---- 別baseには影響しない（AW-2は枝番なしのまま） ----
+test('assignOpeningNumbers: 別baseの枝番は互いに影響しない（幅違いのAW-2は枝番なしのまま）', () => {
+  const project = makeProject();
+  const g = makeGraph('p1', [
+    makeOpening('a', { width: 1690, materialGlass: 'アルミ' }),
+    makeOpening('b', { width: 1690, materialGlass: '樹脂' }), // base1（幅1690）内で枝番a/bが必要
+    makeOpening('c', { width: 600, subType: 'casement', materialGlass: 'アルミ' }), // base2（幅600）は単独
+  ]);
+  renumberOpenings(g, project);
+
+  const groups = openingGroupsOnFloor(g, project);
+  assert.equal(tagOfOpeningId(groups, 'a'), 'AW-1a', '幅1690（若番）は枝番が必要');
+  assert.equal(tagOfOpeningId(groups, 'b'), 'AW-1b');
+  assert.equal(tagOfOpeningId(groups, 'c'), 'AW-2', '別base(幅600)はバリアント1種類なので枝番なし');
+});
+
+// ---- 全階統一: 1Fと2Fの同base・別材料がa/bに分かれる ----
+test('assignOpeningNumbers: 全階統一——1Fと2Fの同base・別材料バリアントもa/bに分かれる', () => {
+  const project = makeProject();
+  const g1 = makeGraph('p1', [makeOpening('a', { materialGlass: 'アルミ' })]);
+  const g2 = makeGraph('p2', [makeOpening('b', { materialGlass: '樹脂' })]);
+
+  collectFloorOpeningGroups(g1, project);
+  collectFloorOpeningGroups(g2, project);
+  applyOpeningTags(project, assignOpeningNumbers(project));
+
+  const groups1 = openingGroupsOnFloor(g1, project);
+  const groups2 = openingGroupsOnFloor(g2, project);
+  assert.equal(tagOfOpeningId(groups1, 'a'), 'AW-1a', '1F側（アルミ）');
+  assert.equal(tagOfOpeningId(groups2, 'b'), 'AW-1b', '2F側（樹脂）も同じbase番号1を共有し、枝番だけで区別される');
+});
+
+// ---- Finding A 回帰: 枝番28件でも文字列ソートで a,aa,ab,b… の順になってはいけない（AW-10問題と同型） ----
+test('openingGroupsOnFloor: 枝番28件でも桁数優先ソートでa,b,…,z,aa,abの順に並ぶ', () => {
+  const project = makeProject();
+  // 同一baseでmaterialGlassだけ28通り違うバリアントを作る（辞書順が保たれるようゼロ埋め）。
+  const openings = Array.from({ length: 28 }, (_, i) => makeOpening(`o${i}`, { materialGlass: `M${String(i).padStart(2, '0')}` }));
+  const g = makeGraph('p1', openings);
+  renumberOpenings(g, project);
+
+  const groups = openingGroupsOnFloor(g, project);
+  assert.equal(groups.length, 28);
+  assert.equal(groups[0].tag, 'AW-1a');
+  assert.equal(groups[1].tag, 'AW-1b');
+  assert.equal(groups[2].tag, 'AW-1c');
+
+  const tags = groups.map(gr => gr.tag);
+  const idxZ  = tags.indexOf('AW-1z');
+  const idxAA = tags.indexOf('AW-1aa');
+  const idxAB = tags.indexOf('AW-1ab');
+  assert.ok(idxZ >= 0 && idxAA >= 0 && idxAB >= 0, 'z, aa, ab のタグが存在するはず');
+  assert.ok(idxZ < idxAA, '文字列ソートだとaaがzより前に来てしまう（修正前の不具合の回帰）');
+  assert.ok(idxAA < idxAB);
 });

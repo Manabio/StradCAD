@@ -143,3 +143,57 @@ test('Opening.height=0 は不正値として encode→decode 後は null に正�
   assert.equal(o2.height, null, 'graphFbs.js の OP.HEIGHT は「0=未設定」規約（r.f64(OP.HEIGHT) || null）。' +
     'sillHeightの0（掃き出し窓）とは異なり、heightの0は物理的に無効な値のため常にnullへ丸められる');
 });
+
+// ---- 建具表の新規5フィールド（finish/materialGlass/frameDepth/hardware/note）のFBS往復 ----
+test('建具表の新規5フィールドは FlatBuffers encode→decode で値ありのまま往復する', () => {
+  const { graph, opening } = makeGraphWithWindow({
+    fixtureType: 'AW', sillHeight: 800, height: 1170,
+    finish: '内部塗装', materialGlass: 'アルミ', frameDepth: 105, hardware: 'クレセント錠', note: '網戸付き',
+  });
+
+  const bytes = serializeGraph(graph);
+  const restored = makeGraph();
+  restoreGraph(restored, bytes);
+
+  const o2 = restored.shapeMap.get(opening.id);
+  assert.ok(o2);
+  assert.equal(o2.finish, '内部塗装');
+  assert.equal(o2.materialGlass, 'アルミ');
+  assert.equal(o2.frameDepth, 105);
+  assert.equal(o2.hardware, 'クレセント錠');
+  assert.equal(o2.note, '網戸付き');
+});
+
+test('建具表の新規5フィールドは未設定（null）なら encode→decode 後も null のまま', () => {
+  const { graph, opening } = makeGraphWithWindow({ fixtureType: 'AW', sillHeight: 800, height: 1170 });
+  assert.equal(opening.finish, null);
+  assert.equal(opening.materialGlass, null);
+  assert.equal(opening.frameDepth, null);
+  assert.equal(opening.hardware, null);
+  assert.equal(opening.note, null);
+
+  const bytes = serializeGraph(graph);
+  const restored = makeGraph();
+  restoreGraph(restored, bytes);
+
+  const o2 = restored.shapeMap.get(opening.id);
+  assert.ok(o2);
+  assert.equal(o2.finish, null);
+  assert.equal(o2.materialGlass, null);
+  assert.equal(o2.frameDepth, null);
+  assert.equal(o2.hardware, null);
+  assert.equal(o2.note, null);
+});
+
+// ---- frameDepth=0 は height と同じ規約で不正値としてnullに正規化される ----
+test('Opening.frameDepth=0 は不正値として encode→decode 後は null に正規化される', () => {
+  const { graph, opening } = makeGraphWithWindow({ fixtureType: 'AW', sillHeight: 800, height: 1170, frameDepth: 0 });
+
+  const bytes = serializeGraph(graph);
+  const restored = makeGraph();
+  restoreGraph(restored, bytes);
+
+  const o2 = restored.shapeMap.get(opening.id);
+  assert.ok(o2);
+  assert.equal(o2.frameDepth, null, '0mmの見込みは物理的に無効な値のためnullへ丸められる（heightと同じ規約）');
+});

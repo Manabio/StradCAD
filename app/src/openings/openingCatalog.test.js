@@ -1,26 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseSillHeight, defaultOpeningHeight } from './openingCatalog.js';
-
-test('parseSillHeight: 窓カテゴリで空欄は null（0ではない。未設定と0mmを区別する）', () => {
-  assert.equal(parseSillHeight('', true), null);
-  assert.equal(parseSillHeight('   ', true), null);
-});
-
-test('parseSillHeight: 窓カテゴリでない場合は入力値に関わらず null', () => {
-  assert.equal(parseSillHeight('800', false), null);
-  assert.equal(parseSillHeight('', false), null);
-});
-
-test('parseSillHeight: 窓カテゴリで数値文字列は絶対値の数値を返す', () => {
-  assert.equal(parseSillHeight('800', true), 800);
-  assert.equal(parseSillHeight('-100', true), 100);
-  assert.equal(parseSillHeight('0', true), 0);
-});
-
-test('parseSillHeight: 窓カテゴリで不正入力（非数値）は0（幅・位置と同じ変換規約）', () => {
-  assert.equal(parseSillHeight('abc', true), 0);
-});
+import { defaultOpeningHeight, defaultMaterialGlassFor, FIXTURE_SYMBOLS } from './openingCatalog.js';
 
 test('defaultOpeningHeight: カタログに存在する種別はdefaultHeightを返す', () => {
   assert.equal(defaultOpeningHeight('window', 'doubleSliding'), 1170);
@@ -30,4 +10,25 @@ test('defaultOpeningHeight: カタログに存在する種別はdefaultHeightを
 test('defaultOpeningHeight: 未知のsubTypeはカテゴリ既定へフォールバック', () => {
   assert.equal(defaultOpeningHeight('window', 'unknownType'), 1100);
   assert.equal(defaultOpeningHeight('fitting', 'unknownType'), 2000);
+});
+
+// ---- 建具表「材料・ガラス」の記号別初期値 ----
+test('defaultMaterialGlassFor: 記号ごとの初期値を返す', () => {
+  assert.equal(defaultMaterialGlassFor('AW'), 'アルミ');
+  assert.equal(defaultMaterialGlassFor('AD'), 'アルミ');
+  assert.equal(defaultMaterialGlassFor('WD'), 'ポリ合板フラッシュ戸、木製枠');
+  assert.equal(defaultMaterialGlassFor('WW'), '木製');
+  assert.equal(defaultMaterialGlassFor('JW'), '樹脂');
+  assert.equal(defaultMaterialGlassFor('SW'), 'スチール');
+  assert.equal(defaultMaterialGlassFor('SD'), 'スチール');
+});
+
+test('defaultMaterialGlassFor: 未知の記号はnull', () => {
+  assert.equal(defaultMaterialGlassFor('XX'), null);
+});
+
+test('FIXTURE_SYMBOLS: WW（木製窓）が窓カテゴリに存在する', () => {
+  const ww = FIXTURE_SYMBOLS.find(f => f.key === 'WW');
+  assert.ok(ww);
+  assert.equal(ww.category, 'window');
 });

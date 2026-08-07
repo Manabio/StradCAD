@@ -54,10 +54,23 @@ export const FIXTURE_SYMBOLS = [
   { key: 'AW', label: 'AW（アルミ製窓）',     category: 'window'  },
   { key: 'JW', label: 'JW（樹脂製窓）',       category: 'window'  },
   { key: 'SW', label: 'SW（スチール製窓）',   category: 'window'  },
+  { key: 'WW', label: 'WW（木製窓）',         category: 'window'  },
   { key: 'AD', label: 'AD（アルミ製ドア）',   category: 'fitting' },
   { key: 'SD', label: 'SD（スチール製ドア）', category: 'fitting' },
   { key: 'WD', label: 'WD（木製建具）',       category: 'fitting' },
 ];
+
+// 建具表「材料・ガラス」欄の記号別初期値。AW/AD=アルミ、WD/WW=木質、JW=樹脂、SW/SD=スチール
+// （記号の意味＝材質から導出。WDのみ既製品の慣習表記で建具種別まで含める）。
+export const DEFAULT_MATERIALS = {
+  AW: 'アルミ',
+  AD: 'アルミ',
+  WD: 'ポリ合板フラッシュ戸、木製枠',
+  WW: '木製',
+  JW: '樹脂',
+  SW: 'スチール',
+  SD: 'スチール',
+};
 
 /** wallKind ('interior' | 'exterior') に応じた建具カタログの絞り込み。 */
 export function getFittingOptions(wallKind) {
@@ -90,19 +103,7 @@ export function defaultOpeningHeight(category, subType) {
   return findCatalogEntry(category, subType)?.defaultHeight ?? (category === 'window' ? 1100 : 2000);
 }
 
-/**
- * 窓台高さ入力文字列 → Opening.sillHeight（number | null）。
- * core.js のコメントどおり null=未設定 の意味論をUI側でも守る:
- *   - 窓カテゴリでなければ null（窓以外は意味を持たないフィールド）。
- *   - 窓カテゴリで入力欄が空欄なら null（0mmと未設定を区別する）。
- *   - それ以外（不正入力含む）は幅・位置と同じ変換規約（Math.abs(Number(s)) || 0）。
- * @param {string} sillStr
- * @param {boolean} isWindow
- * @returns {number|null}
- */
-export function parseSillHeight(sillStr, isWindow) {
-  if (!isWindow) return null;
-  const s = (sillStr ?? '').trim();
-  if (s === '') return null;
-  return Math.abs(Number(s)) || 0;
+/** 建具記号に応じた「材料・ガラス」欄の既定値（DEFAULT_MATERIALS参照）。未知の記号はnull。 */
+export function defaultMaterialGlassFor(symbol) {
+  return DEFAULT_MATERIALS[symbol] ?? null;
 }

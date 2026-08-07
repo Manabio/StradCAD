@@ -1,23 +1,33 @@
 // ================================================================
-// 建具番号（記号別採番） — 設計意図は .claude/opening-model.md 参照。
+// 建具番号（記号別採番＋枝番） — 設計意図は .claude/opening-model.md 参照。
 //
 // structural/memberNumbering.js の2パス構造をなぞるが共通化はしない
 // （構造固有の台帳・sizeKey・階プレフィックス等が流れ込むため並行実装が正当）。
 //
-// グループキー = openingSignature(opening)（記号|種別|幅|高さ|窓台高さ）。
-// 「同一仕様＝同一グループ」（signatureから毎回導出。手動タグ台帳は持たない）。
+// signature は「base（記号|種別|幅|高さ|窓台高さ）」＋「sub（仕上|材料・ガラス|見込み|金物|備考）」の
+// 結合キー（openingSignature = openingBaseSignature + openingSubSignature）。グループの粒度は
+// フラット（project.openingNumberIndex は signature 単一階層の Map のまま。base→variantsの
+// ネストMapにはしない）——deep observable の再発防止パターン（差し替え・ゴースト掃除。下記コメント）を
+// 二重に持たずに済み、openingTagOf/openingGroupsOnFloor の「signatureで1件引く」形も変わらないため、
+// 既存コードへの追加差分が最小になる。各グループは自身の baseSignature を持ち、assignOpeningNumbers が
+// 採番の瞬間だけ symbol→baseSignature→variants の一時的な入れ子（Mapのローカル変数）を組み立てる。
+//
+// 「同一仕様（signature）＝同一グループ」（signatureから毎回導出。手動タグ台帳は持たない）。
 //
 // 採番は2パスに分かれる（建物全体の情報が必要なため、単一graphでは完結しない）:
 //   パス1（各階）: collectFloorOpeningGroups で project.openingNumberIndex（非永続キャッシュ）に
-//                  signature → {symbol, subType, width, height, sillHeight, counts} を積む。
+//                  signature → {symbol, subType, width, height, sillHeight, baseSignature, counts} を積む。
 //   パス2（建物全体で1回）: assignOpeningNumbers(project) が純関数として signature → タグ の
-//                  対応表を作り、applyOpeningTags(project, tags) が各グループの .tag へ書き戻す。
+//                  対応表を作り、applyOpeningTags(project, tags) が各グループの .tag/.no/.branch へ書き戻す。
 //
 // 採番規則（assignOpeningNumbers）:
 //   1. 記号（symbol）ごとに分ける。
-//   2. 各記号内を 幅降順 → 高さ降順 → 窓台高さ昇順 → signature 辞書順 でソート（決定論性）。
-//   3. 先頭から 1,2,3… でタグ＝`${symbol}-${n}`（ハイフン区切り。建具表の慣習。構造のC1とは書式が違う）。
-//   4. 階プレフィックスは付けない（採番は全階統一＝記号-番号は仕様を指す）。
+//   2. 記号内を baseSignature でまとめ、各baseの代表値で 幅降順 → 高さ降順 → 窓台高さ昇順 →
+//      baseSignature辞書順 にソートして 1,2,3… の基本番号を振る（ソート規則は枝番導入前と同じ）。
+//   3. 各base内の建具表バリアント（sub側の組）が1種類だけなら枝番なし（タグ＝`${symbol}-${n}`）。
+//      2種類以上ならsignature辞書順（＝sub側の辞書順）で a, b, c… を振り、タグ＝`${symbol}-${n}${枝番}`
+//      （無印と枝番の混在はしない——1種類→2種類に増えた瞬間、既存の無印タグも枝番付きへ動く）。
+//   4. 階プレフィックスは付けない（採番は全階統一＝記号-番号(-枝番)は仕様を指す）。
 // ================================================================
 
 import { defaultFixtureSymbol, defaultOpeningHeight } from './openingCatalog.js';
@@ -41,12 +51,37 @@ export function effectiveHeight(opening) {
 
 function round(v) { return Math.round(v); }
 
-/** 採番グループの同一性キー（記号|種別|幅|高さ|窓台高さ）。 */
-export function openingSignature(opening) {
+// signature の各項目に使う正規化（null/未入力は'-'、値ありはそのまま。文字列化して結合する）。
+function norm(v) { return v == null || v === '' ? '-' : String(v); }
+
+/** 基本番号のグルーピングキー（記号|種別|幅|高さ|窓台高さ）。枝番導入前の signature と同じ形。 */
+export function openingBaseSignature(opening) {
   const symbol = fixtureSymbolOf(opening);
   const height = effectiveHeight(opening);
   const sill = opening.sillHeight;
   return `${symbol}|${opening.subType}|${round(opening.width)}|${round(height)}|${sill == null ? '-' : round(sill)}`;
+}
+
+/** 枝番のグルーピングキー（仕上|材料・ガラス|見込み|金物|備考）。 */
+export function openingSubSignature(opening) {
+  return `${norm(opening.finish)}|${norm(opening.materialGlass)}|${norm(opening.frameDepth)}|${norm(opening.hardware)}|${norm(opening.note)}`;
+}
+
+/** 採番グループの同一性キー（openingBaseSignature + openingSubSignature の結合）。 */
+export function openingSignature(opening) {
+  return `${openingBaseSignature(opening)}||${openingSubSignature(opening)}`;
+}
+
+// 0始まりindex → 'a','b',…,'z','aa','ab',…（スプレッドシートの列名と同じ26進）。
+function branchLetter(index) {
+  let n = index + 1;
+  let s = '';
+  while (n > 0) {
+    n -= 1;
+    s = String.fromCharCode(97 + (n % 26)) + s;
+    n = Math.floor(n / 26);
+  }
+  return s;
 }
 
 // ----------------------------------------------------------------
@@ -81,9 +116,16 @@ export function collectFloorOpeningGroups(graph, project) {
         width: opening.width,
         height: effectiveHeight(opening),
         sillHeight: opening.sillHeight,
+        finish: opening.finish,
+        materialGlass: opening.materialGlass,
+        frameDepth: opening.frameDepth,
+        hardware: opening.hardware,
+        note: opening.note,
+        baseSignature: openingBaseSignature(opening),
         counts: new Map(),
         tag: null,
         no: null,
+        branch: null,
       });
     }
   }
@@ -108,8 +150,8 @@ export function collectFloorOpeningGroups(graph, project) {
 // パス2: 採番（純関数）
 // ----------------------------------------------------------------
 
-// 幅降順・高さ降順・窓台高さ昇順・signature昇順のタイブレークで比較する（負=aが先）。
-// entry = { signature, group }
+// 幅降順・高さ降順・窓台高さ昇順・signature（baseレベルではbaseSignature）昇順のタイブレークで
+// 比較する（負=aが先）。entry = { signature, group }
 function compareGroupsDesc(a, b) {
   if (a.group.width !== b.group.width) return b.group.width - a.group.width;
   if (a.group.height !== b.group.height) return b.group.height - a.group.height;
@@ -119,31 +161,56 @@ function compareGroupsDesc(a, b) {
 }
 
 /**
- * project.openingNumberIndex（建物全体、収集済み）から signature → { tag, no } の対応表を作る
- * 純関数。副作用なし（entity・index には触れない）。no は記号内の連番（数値）——タグ文字列
- * （`AW-10`等）は辞書順ソートだと`AW-2`より前に来てしまうため、number順に並べたいリスト側
- * （openingGroupsOnFloor）は tag ではなく no を比較に使う。
+ * project.openingNumberIndex（建物全体、収集済み）から signature → { tag, no, branch } の
+ * 対応表を作る純関数。副作用なし（entity・index には触れない）。
+ *   no     = 記号内の基本番号（数値）。タグ文字列（`AW-10`等）は辞書順ソートだと`AW-2`より
+ *            前に来てしまうため、number順に並べたいリスト側（openingGroupsOnFloor）は
+ *            tag ではなく no（→同点ならbranch）を比較に使う。
+ *   branch = 同一base内に建具表バリアントが複数あるときだけ付く枝番（'a'|'b'|…）。単一なら null。
  */
 export function assignOpeningNumbers(project) {
-  const bySymbol = new Map(); // symbol → [{signature, group}]
+  // symbol → baseSignature → [{signature, group}]（枝番判定のための一時的な入れ子。
+  // project.openingNumberIndex 自体はフラットなまま——上部ヘッダコメント参照）。
+  const bySymbol = new Map();
   for (const [signature, group] of project.openingNumberIndex) {
-    if (!bySymbol.has(group.symbol)) bySymbol.set(group.symbol, []);
-    bySymbol.get(group.symbol).push({ signature, group });
+    if (!bySymbol.has(group.symbol)) bySymbol.set(group.symbol, new Map());
+    const bases = bySymbol.get(group.symbol);
+    if (!bases.has(group.baseSignature)) bases.set(group.baseSignature, []);
+    bases.get(group.baseSignature).push({ signature, group });
   }
 
   const tags = new Map();
-  for (const [symbol, entries] of bySymbol) {
-    const sorted = [...entries].sort(compareGroupsDesc);
-    sorted.forEach((entry, i) => tags.set(entry.signature, { tag: `${symbol}-${i + 1}`, no: i + 1 }));
+  for (const [symbol, bases] of bySymbol) {
+    // 各baseの代表値（同一base内は幅・高さ・窓台高さが必ず同値）でbase間の順位を決める。
+    const baseList = [...bases.entries()].map(([baseSignature, variants]) => ({
+      baseSignature, variants, repGroup: variants[0].group,
+    }));
+    baseList.sort((a, b) => compareGroupsDesc(
+      { signature: a.baseSignature, group: a.repGroup },
+      { signature: b.baseSignature, group: b.repGroup },
+    ));
+
+    baseList.forEach((base, i) => {
+      const no = i + 1;
+      const variants = [...base.variants].sort((a, b) => (a.signature < b.signature ? -1 : (a.signature > b.signature ? 1 : 0)));
+      if (variants.length === 1) {
+        tags.set(variants[0].signature, { tag: `${symbol}-${no}`, no, branch: null });
+      } else {
+        variants.forEach((v, vi) => {
+          const branch = branchLetter(vi);
+          tags.set(v.signature, { tag: `${symbol}-${no}${branch}`, no, branch });
+        });
+      }
+    });
   }
   return tags;
 }
 
-/** assignOpeningNumbers の結果を project.openingNumberIndex の各グループの .tag/.no へ書き戻す。 */
+/** assignOpeningNumbers の結果を project.openingNumberIndex の各グループの .tag/.no/.branch へ書き戻す。 */
 export function applyOpeningTags(project, tags) {
-  for (const [signature, { tag, no }] of tags) {
+  for (const [signature, { tag, no, branch }] of tags) {
     const group = project.openingNumberIndex.get(signature);
-    if (group) { group.tag = tag; group.no = no; }
+    if (group) { group.tag = tag; group.no = no; group.branch = branch; }
   }
 }
 
@@ -185,10 +252,14 @@ export function openingGroupsOnFloor(graph, project) {
     if (a.tag == null) return 1;
     if (b.tag == null) return -1;
     // タグ文字列（`AW-10`等）の辞書順ソートだと`AW-2`より前に来てしまうため、
-    // 記号は文字列比較・番号は数値比較の2段ソートにする（Finding 2 再発防止）。
+    // 記号は文字列比較・番号は数値比較・枝番は文字列比較の3段ソートにする（Finding 2 再発防止）。
     const symA = a.group?.symbol ?? '', symB = b.group?.symbol ?? '';
     if (symA !== symB) return symA < symB ? -1 : 1;
-    return (a.group?.no ?? 0) - (b.group?.no ?? 0);
+    const noA = a.group?.no ?? 0, noB = b.group?.no ?? 0;
+    if (noA !== noB) return noA - noB;
+    const brA = a.group?.branch ?? '', brB = b.group?.branch ?? '';
+    if (brA.length !== brB.length) return brA.length - brB.length; // 26進は桁数が長いほど必ず後ろ（a,b,…,z,aa,ab,…）
+    return brA < brB ? -1 : (brA > brB ? 1 : 0);
   });
   return out;
 }

@@ -17,11 +17,14 @@
 import { runInAction } from 'mobx';
 import { undoManager } from '../undoManager.js';
 import { OpeningCategory } from '../core.js';
-import { getFittingOptions, WINDOW_CATALOG, defaultFixtureSymbolFor, defaultOpeningHeight } from './openingCatalog.js';
+import { getFittingOptions, WINDOW_CATALOG, defaultFixtureSymbolFor, defaultOpeningHeight, defaultMaterialGlassFor } from './openingCatalog.js';
 import { findHostWall, validateOpeningPlacement } from './openingGeometry.js';
 import { renumberOpenings } from './openingNumbering.js';
 
-const EDITABLE = ['refOffset', 'width', 'height', 'subType', 'hingeSide', 'swingSide', 'fixtureType', 'sillHeight'];
+const EDITABLE = [
+  'refOffset', 'width', 'height', 'subType', 'hingeSide', 'swingSide', 'fixtureType', 'sillHeight',
+  'finish', 'materialGlass', 'frameDepth', 'hardware', 'note',
+];
 
 /** Opening の編集可能フィールドのみを持つ plain object スナップショット（refCL は id で保持）。 */
 export function snapshotOpening(o) {
@@ -37,7 +40,10 @@ function restoreOpening(graph, o, snap) {
 
 function addOpeningFromSnapshot(graph, o) {
   return graph.addOpening(o.axisCL, o.wallSide, o.isVertical, o.refCL, o.refOffset, o.width, o.category, o.subType,
-    { hingeSide: o.hingeSide, swingSide: o.swingSide, fixtureType: o.fixtureType, sillHeight: o.sillHeight, height: o.height }, o.id);
+    {
+      hingeSide: o.hingeSide, swingSide: o.swingSide, fixtureType: o.fixtureType, sillHeight: o.sillHeight, height: o.height,
+      finish: o.finish, materialGlass: o.materialGlass, frameDepth: o.frameDepth, hardware: o.hardware, note: o.note,
+    }, o.id);
 }
 
 /** before から現在までの差分を undo エントリとして積む。差分が無ければ積まない。 */
@@ -96,6 +102,7 @@ export function placeOpeningWithDefaults(graph, project, wall, worldPos, categor
   const height = defaultOpeningHeight(category, subType);
   const sillHeight = category === OpeningCategory.WINDOW ? 800 : null;
   const fixtureType = defaultFixtureSymbolFor(category, wallKind);
+  const materialGlass = defaultMaterialGlassFor(fixtureType);
   const refCL = wall.clStart;
 
   // refOffset は refCL.effectiveValue（CL偏芯ドラッグ中の pendingDelta を含む実効座標）基準——
@@ -116,7 +123,7 @@ export function placeOpeningWithDefaults(graph, project, wall, worldPos, categor
 
   const wallSide = Math.sign(wall.axisOffset) || 1;
   const opening = graph.addOpening(wall.axisCL, wallSide, wall.isVertical, refCL, refOffset, width, category, subType,
-    { hingeSide: -1, swingSide: 1, fixtureType, sillHeight, height });
+    { hingeSide: -1, swingSide: 1, fixtureType, sillHeight, height, materialGlass });
   undoManager.push(
     () => runInAction(() => { graph.removeShape(opening.id); renumberOpenings(graph, project); }),
     () => runInAction(() => { addOpeningFromSnapshot(graph, opening); renumberOpenings(graph, project); }),
@@ -145,4 +152,14 @@ export function validateOpeningEdit(o, graph, { width, refOffset }) {
   if (!wall) return null;
   const centerCoord = o.refCL.effectiveValue + refOffset;
   return validateOpeningPlacement(wall, centerCoord - width / 2, centerCoord + width / 2, graph, o.id);
+}
+
+/**
+ * 建具記号を変更したときの「材料・ガラス」欄の差し替え規則: 現在値が未入力(null)、または
+ * 旧記号の初期値のままなら新記号の初期値へ差し替える。ユーザーが編集済み（未入力でなく、かつ
+ * 初期値と異なる値を入力済み）の値は上書きしない。
+ */
+export function materialGlassAfterFixtureChange(currentValue, oldSymbol, newSymbol) {
+  const isUnedited = currentValue == null || currentValue === defaultMaterialGlassFor(oldSymbol);
+  return isUnedited ? defaultMaterialGlassFor(newSymbol) : currentValue;
 }

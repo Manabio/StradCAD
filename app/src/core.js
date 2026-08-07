@@ -319,9 +319,11 @@ export class Wall extends Shape {
 //   wallSide: axisCL のどちら側か（Wall.axisOffset の符号と同義、±1）
 //   refCL/refOffset: 壁の長さ方向の基準位置（通常は壁の clStart を流用）
 //   hingeSide/swingSide: swing系（片開き戸等）のみ意味を持つ。それ以外は既定値を保持するだけ
-//   fixtureType: 建具記号（'AW'|'JW'|'SW'|'AD'|'SD'|'WD'|null）。null=未設定（openings/ 層がカテゴリ既定へフォールバック）
+//   fixtureType: 建具記号（'AW'|'JW'|'SW'|'AD'|'SD'|'WD'|'WW'|null）。null=未設定（openings/ 層がカテゴリ既定へフォールバック）
 //   sillHeight: 窓台高さ(mm、FLからサッシ下端まで、null=未設定)。窓カテゴリのみ意味を持つ
 //   height: 建具高さ(mm、null=未設定＝旧データ)。窓は sillHeight〜sillHeight+height が開口範囲
+//   finish/materialGlass/hardware/note: 建具表の自由入力項目（string|null、null=未入力）
+//   frameDepth: 見込み(mm、null=未設定)。0は不正値としてnull扱い（heightと同じ規約。openings/層で正規化）
 // ----------------------------------------------------------------
 export class Opening extends Shape {
   constructor(id, axisCL, wallSide, isVertical, refCL, refOffset, width, category, subType, props) {
@@ -337,9 +339,14 @@ export class Opening extends Shape {
     this.subType     = subType;    // openingCatalog.js のキー（'singleSwing' 等）
     this.hingeSide   = props?.hingeSide ?? -1; // ±1: 蝶番側（refOffset負/正方向の端）。swing系のみ意味を持つ
     this.swingSide   = props?.swingSide ?? 1;  // ±1: 開く方向（wallSideと同じ/逆の面）。swing系のみ意味を持つ
-    this.fixtureType = props?.fixtureType ?? null; // 建具記号 'AW'|'JW'|'SW'|'AD'|'SD'|'WD'|null
+    this.fixtureType = props?.fixtureType ?? null; // 建具記号 'AW'|'JW'|'SW'|'AD'|'SD'|'WD'|'WW'|null
     this.sillHeight  = props?.sillHeight  ?? null; // 窓台高さ(mm): FLからサッシ下端まで。窓カテゴリのみ意味を持つ
     this.height      = props?.height      ?? null; // 建具高さ(mm、開口下端から上端まで。null=未設定＝旧データ)
+    this.finish        = props?.finish        ?? null; // 仕上（建具表の自由入力）
+    this.materialGlass  = props?.materialGlass  ?? null; // 材料・ガラス（建具表の自由入力。記号別初期値あり）
+    this.frameDepth     = props?.frameDepth     ?? null; // 見込み(mm、null=未設定)
+    this.hardware       = props?.hardware       ?? null; // 金物（建具表の自由入力）
+    this.note           = props?.note           ?? null; // 備考（建具表の自由入力）
     makeObservable(this, {
       axisCL:      observable.ref,
       wallSide:    observable,
@@ -352,6 +359,11 @@ export class Opening extends Shape {
       fixtureType: observable,
       sillHeight:  observable,
       height:      observable,
+      finish:        observable,
+      materialGlass: observable,
+      frameDepth:    observable,
+      hardware:      observable,
+      note:          observable,
       centerCoord: computed,
       coord1:      computed,
       coord2:      computed,

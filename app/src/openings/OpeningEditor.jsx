@@ -1,21 +1,22 @@
 import { useRef } from 'react';
 import { observer } from 'mobx-react-lite';
 import { runInAction } from 'mobx';
-import { getFittingOptions, WINDOW_CATALOG, getFixtureSymbols, findCatalogEntry, defaultOpeningHeight, parseSillHeight, OpeningMechanism } from './openingCatalog.js';
+import { getFittingOptions, WINDOW_CATALOG, getFixtureSymbols, findCatalogEntry, defaultOpeningHeight, OpeningMechanism } from './openingCatalog.js';
 import { OpeningCategory } from '../core.js';
 import { findHostWall } from './openingGeometry.js';
 import { buildOpeningElevation } from './openingElevationFigure.js';
+import { openingMountLocation } from './openingRoomLabel.js';
 import { AutoScaledFigure } from '../structural/sectionFigure/AutoScaledFigure.jsx';
 import {
   beginOpeningFieldUndo, endOpeningFieldUndo, withOpeningUndo, validateOpeningEdit, removeOpeningWithUndo,
+  materialGlassAfterFixtureChange,
 } from './openingEdit.js';
 import { openingTagOf, fixtureSymbolOf } from './openingNumbering.js';
 
-// 数値入力は絶対値化して確定する（幅・高さ・位置・窓台高さ共通の規約。openingCatalog.js の
-// parseSillHeight docstring「幅・位置と同じ変換規約」参照）。height はさらに絶対値化後の0を
-// 不正値として未設定(null)に正規化する（graphFbs.js OP.HEIGHT の「0=未設定」規約と統一。
-// .claude/opening-model.md参照）。入力欄（numField）・図上のdim編集（onEditDim）の両経路で
-// 同じ規約を適用する。
+// 数値入力は絶対値化して確定する（幅・高さ・位置・窓台高さ共通の規約。図上のdim編集（onEditDim）・
+// numField の両方で使う）。height はさらに絶対値化後の0を不正値として未設定(null)に正規化する
+// （graphFbs.js OP.HEIGHT の「0=未設定」規約と統一。.claude/opening-model.md参照）。
+// 幅・高さ・窓台高さはフォームの数値入力欄を持たず、onEditDim（図上クリック編集）のみで編集する。
 function sanitizeHeightInput(v) {
   const n = Math.abs(v) || 0;
   return n === 0 ? null : n;
@@ -26,10 +27,11 @@ const FIGURE_FRAME = { maxWidth: 380, maxHeight: 260 };
 const labelStyle = { fontSize: 12, color: '#475569', width: 72, flexShrink: 0 };
 const rowStyle   = { display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 };
 const inputStyle = { flex: 1, fontSize: 13, padding: '4px 6px', border: '1px solid #cbd5e1', borderRadius: 4 };
+const readonlyStyle = { ...inputStyle, background: '#f1f5f9', color: '#475569' };
 
-// 建具モードパネル下段: 選択中建具の姿図＋数値編集フォーム。StairPanel.jsx の構成を踏襲。
+// 建具モードパネル下段: 選択中建具の姿図＋建具表フォーム。StairPanel.jsx の構成を踏襲。
+// 幅・高さ・窓台高さは姿図中のクリック編集寸法（onEditDim）に一本化し、フォームには置かない。
 export const OpeningEditor = observer(function OpeningEditor({ graph, project, opening, mode, onToast }) {
-  const beforeWidthRef  = useRef(null);
   const beforeOffsetRef = useRef(null);
 
   if (!opening) {
@@ -46,6 +48,7 @@ export const OpeningEditor = observer(function OpeningEditor({ graph, project, o
   const catalog  = isWindow ? WINDOW_CATALOG : getFittingOptions(wallKind);
   const entry    = findCatalogEntry(opening.category, opening.subType);
   const tag      = openingTagOf(opening, project);
+  const mountLocation = openingMountLocation(opening, graph);
 
   const figure = buildOpeningElevation(opening, { tag, entry });
 
@@ -65,6 +68,10 @@ export const OpeningEditor = observer(function OpeningEditor({ graph, project, o
   const onEditDim = (dim, value) => {
     if (!dim.target) return;
     const v = dim.target === 'height' ? sanitizeHeightInput(value) : (Math.abs(value) || 0);
+    if (dim.target === 'width') {
+      const err = validateOpeningEdit(opening, graph, { width: v, refOffset: opening.refOffset });
+      if (err) { onToast?.(err); return; } // 代入しない＝undoエントリも積まない
+    }
     commitEdit(() => { runInAction(() => { opening[dim.target] = v; }); });
   };
 
@@ -81,7 +88,13 @@ export const OpeningEditor = observer(function OpeningEditor({ graph, project, o
   });
 
   const onFixtureTypeChange = (e) => commitEdit(() => {
-    runInAction(() => { opening.fixtureType = e.target.value; });
+    const oldSymbol = fixtureSymbolOf(opening);
+    const newSymbol = e.target.value;
+    runInAction(() => {
+      opening.fixtureType = newSymbol;
+      // 材料・ガラスが旧記号の初期値のままなら新記号の初期値へ差し替える（編集済みの値は維持）。
+      opening.materialGlass = materialGlassAfterFixtureChange(opening.materialGlass, oldSymbol, newSymbol);
+    });
   });
 
   const numField = (field, { allowNull = false, zeroAsNull = false } = {}) => (e) => {
@@ -93,22 +106,11 @@ export const OpeningEditor = observer(function OpeningEditor({ graph, project, o
     });
   };
 
-  // 窓台高さは parseSillHeight（openingCatalog.js）の変換規約（trim・絶対値化・空欄=null）に
-  // 一本化する——numField の素朴な Number() 変換と2本並立させない（NaN混入も防げる）。
-  const onSillHeightChange = (e) => {
-    runInAction(() => { opening.sillHeight = parseSillHeight(e.target.value, isWindow); });
-  };
-
-  const onWidthFocus = () => { beforeWidthRef.current = opening.width; beginOpeningFieldUndo(graph, project, opening); };
-  const onWidthBlur = () => {
-    const beforeTag = openingTagOf(opening, project);
-    const err = validateOpeningEdit(opening, graph, { width: opening.width, refOffset: opening.refOffset });
-    if (err) {
-      runInAction(() => { opening.width = beforeWidthRef.current; });
-      onToast?.(err);
-    }
-    endOpeningFieldUndo(graph, project, opening);
-    if (!err) notifyIfTagChanged(beforeTag);
+  // 自由入力（テキスト）欄: 空欄・空白のみはnull（未入力）に正規化し、保存値もtrimで統一する
+  // （前後空白の有無だけで枝番のバリアントが割れてしまうのを防ぐ）。
+  const textField = (field) => (e) => {
+    const t = e.target.value.trim();
+    runInAction(() => { opening[field] = t === '' ? null : t; });
   };
 
   const onOffsetFocus = () => { beforeOffsetRef.current = opening.refOffset; beginOpeningFieldUndo(graph, project, opening); };
@@ -155,24 +157,39 @@ export const OpeningEditor = observer(function OpeningEditor({ graph, project, o
       </div>
 
       <div style={rowStyle}>
-        <span style={labelStyle}>幅(mm)</span>
-        <input type="number" style={inputStyle} value={opening.width}
-          onChange={numField('width')} onFocus={onWidthFocus} onBlur={onWidthBlur} />
+        <span style={labelStyle}>取付箇所</span>
+        <input type="text" readOnly style={readonlyStyle} value={mountLocation} />
       </div>
 
       <div style={rowStyle}>
-        <span style={labelStyle}>高さ(mm)</span>
-        <input type="number" style={inputStyle} value={opening.height || ''}
-          onChange={numField('height', { allowNull: true, zeroAsNull: true })} {...fieldUndoProps} />
+        <span style={labelStyle}>仕上</span>
+        <input type="text" style={inputStyle} value={opening.finish ?? ''}
+          onChange={textField('finish')} {...fieldUndoProps} />
       </div>
 
-      {isWindow && (
-        <div style={rowStyle}>
-          <span style={labelStyle}>窓台高さ(mm)</span>
-          <input type="number" style={inputStyle} value={opening.sillHeight ?? ''}
-            onChange={onSillHeightChange} {...fieldUndoProps} />
-        </div>
-      )}
+      <div style={rowStyle}>
+        <span style={labelStyle}>材料・ガラス</span>
+        <input type="text" style={inputStyle} value={opening.materialGlass ?? ''}
+          onChange={textField('materialGlass')} {...fieldUndoProps} />
+      </div>
+
+      <div style={rowStyle}>
+        <span style={labelStyle}>見込み(mm)</span>
+        <input type="number" style={inputStyle} value={opening.frameDepth || ''}
+          onChange={numField('frameDepth', { allowNull: true, zeroAsNull: true })} {...fieldUndoProps} />
+      </div>
+
+      <div style={rowStyle}>
+        <span style={labelStyle}>金物</span>
+        <input type="text" style={inputStyle} value={opening.hardware ?? ''}
+          onChange={textField('hardware')} {...fieldUndoProps} />
+      </div>
+
+      <div style={rowStyle}>
+        <span style={labelStyle}>備考</span>
+        <input type="text" style={inputStyle} value={opening.note ?? ''}
+          onChange={textField('note')} {...fieldUndoProps} />
+      </div>
 
       <div style={rowStyle}>
         <span style={labelStyle}>位置（{opening.refCL?.label ?? '基準'}から）</span>

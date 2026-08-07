@@ -17,7 +17,8 @@ import { CenterLineType, RoomKind, RoomFeature, Discipline, edgeKey } from '@cor
 import { worldToCell, refreshCells } from './gridCells.js';
 
 // 隣接セル判定時、境界線からこの距離(mm)だけ内側をサンプリングする。
-const ADJACENT_SAMPLE_EPS = 10; // mm
+// openings/openingRoomLabel.js も同じサンプリング距離を共有する（隣接判定の重複実装を避けるため export）。
+export const ADJACENT_SAMPLE_EPS = 10; // mm
 
 // struct CL は _structGraph.shapeMap に格納されるため両方を検索する。
 function getShape(graph, id) {
