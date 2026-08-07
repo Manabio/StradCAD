@@ -2,7 +2,13 @@
 // threshold は px 単位で渡し、ワールド差分に scaleX/Y を掛けてスクリーン距離に換算する。
 import { spatialIndex } from './store.js';
 import { findHostWall } from './openings/openingGeometry.js';
-import { centerLineKind } from './core.js';
+import { centerLineKind, CenterLineType } from './core.js';
+import { inGutter as isInGutter } from './layout.js';
+
+// ポインタ位置スナップ判定のスクリーン距離しきい値 (px)
+export const SNAP_THRESHOLD_PX = 20;
+export const CL_THRESHOLD_PX   = 8;
+export const WALL_THRESHOLD_PX = 8;
 
 // 中心線の端のはね出し量 (mm)。区分線形:
 //   denom <  BASE_DENOM         : (LOW_DENOM, LOW_MM) → (BASE_DENOM, BASE_MM) の直線
@@ -237,6 +243,63 @@ export function findOpeningAt(graph, wx, wy, thresholdPx, scaleX, scaleY) {
     return o;
   }
   return null;
+}
+
+/**
+ * ポインタ位置（クライアント座標）から交点スナップ・近傍CL/CL端点/壁/開口の候補を解決する
+ * （App.jsx updateSnap の「候補解決」部分。setState への反映は呼び出し側の責務）。
+ * ガター帯（描画エリア外周）内は全候補 null・world null を返す。
+ * appMode==='structure' のときは梁芯のみ、それ以外は梁芯以外を CL/CL端点の対象にする
+ * （findNearestCenterLine 等の kindFilter 既定値と同じ規約）。
+ * 交点スナップ中は CL/開口/壁の検出をスキップし、CL端点も返さない（候補計算自体は走るが結果は捨てる）。
+ * CL・開口・壁は画面距離が最も近い候補のみを残す排他選択（同距離は cl > opening > wall）。
+ * @returns {{ snap, nearCL, nearCLEndpoint, nearWall, nearOpening, world }}
+ */
+export function resolvePointerTargets(graph, viewport, clientX, clientY, opts = {}) {
+  const { width, height, appMode } = opts;
+  if (isInGutter(clientX, clientY, width, height)) {
+    return { snap: null, nearCL: null, nearCLEndpoint: null, nearWall: null, nearOpening: null, world: null };
+  }
+  const world = viewport.screenToWorld(clientX, clientY);
+  const snap  = findNearestIntersection(graph, world.x, world.y, SNAP_THRESHOLD_PX, viewport.scaleX, viewport.scaleY);
+  const clKindFilter = appMode === 'structure' ? (k => k === 'beam') : (k => k !== 'beam');
+  const clEndpointCand = findNearestCenterLineEndpoint(graph, world.x, world.y, CL_THRESHOLD_PX, viewport.scaleX, viewport.scaleY, viewport, clKindFilter);
+  let cl = null, opening = null, wall = null;
+  if (!snap) {
+    const clCand      = findNearestCenterLine(graph, world.x, world.y, CL_THRESHOLD_PX, viewport.scaleX, viewport.scaleY, viewport, clKindFilter);
+    const openingCand = findOpeningAt(graph, world.x, world.y, WALL_THRESHOLD_PX, viewport.scaleX, viewport.scaleY);
+    const wallCand    = findNearestWall(graph, world.x, world.y, WALL_THRESHOLD_PX, viewport.scaleX, viewport.scaleY);
+    const candidates = [];
+    if (clCand) {
+      const isV = clCand.centerLineType === CenterLineType.VERTICAL;
+      const dist = isV ? Math.abs(clCand.value - world.x) * viewport.scaleX : Math.abs(clCand.value - world.y) * viewport.scaleY;
+      candidates.push({ type: 'cl', value: clCand, dist });
+    }
+    if (openingCand) {
+      const host = findHostWall(openingCand, graph);
+      if (host) {
+        const dist = host.isVertical ? Math.abs(host.axisValue - world.x) * viewport.scaleX : Math.abs(host.axisValue - world.y) * viewport.scaleY;
+        candidates.push({ type: 'opening', value: openingCand, dist });
+      }
+    }
+    if (wallCand) {
+      const dist = wallCand.isVertical ? Math.abs(wallCand.axisValue - world.x) * viewport.scaleX : Math.abs(wallCand.axisValue - world.y) * viewport.scaleY;
+      candidates.push({ type: 'wall', value: wallCand, dist });
+    }
+    candidates.sort((a, b) => a.dist - b.dist);
+    const nearest = candidates[0] ?? null;
+    if (nearest?.type === 'cl')      cl = nearest.value;
+    if (nearest?.type === 'opening') opening = nearest.value;
+    if (nearest?.type === 'wall')    wall = nearest.value;
+  }
+  return {
+    snap: snap ?? null,
+    nearCL: cl ?? null,
+    nearCLEndpoint: !snap ? (clEndpointCand ?? null) : null,
+    nearWall: wall ?? null,
+    nearOpening: opening ?? null,
+    world,
+  };
 }
 
 export function snapAngle(dx, dy) {

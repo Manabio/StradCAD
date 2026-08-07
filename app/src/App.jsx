@@ -11,34 +11,29 @@ import { ERR_CL_DUPLICATE, ERR_CL_CENTER_UPGRADED, ERR_CL_STRUCT_EXISTS, ERR_STR
 import { LodLevel } from './viewport.js';
 import { viewport } from './appViewport.js';
 import {
-  findNearestIntersection,
-  findNearestCenterLine,
-  findNearestCenterLineEndpoint,
   findCLMoveSnap,
   findBeamAxisMoveSnap,
   findBracketingCLs,
   findNearbyCenterLines,
-  findNearestWall,
-  findOpeningAt,
   overhangMm,
+  resolvePointerTargets,
+  SNAP_THRESHOLD_PX,
 } from './snap.js';
-import { findHostWall } from './openings/openingGeometry.js';
 import { OpeningPanel } from './openings/OpeningPanel.jsx';
 import { OpeningsLayer } from './renderer/OpeningsLayer.jsx';
 import { placeOpeningWithDefaults, removeOpeningWithUndo } from './openings/openingEdit.js';
 import { collectFloorOpeningGroups, assignOpeningNumbers, applyOpeningTags } from './openings/openingNumbering.js';
 import { useLongPress }  from './interaction/useLongPress.js';
+import { findColumnAxisLabel, findGutterCL } from './interaction/gutterHitTest.js';
 import { FinishModeLayer } from './finish/FinishModeLayer.jsx';
 import { RoomNameInput }   from './finish/RoomNameInput.jsx';
 import { FinishSidebar }   from './finish/FinishSidebar.jsx';
 import { FinishHalfModal } from './finish/FinishHalfModal.jsx';
 import { StairLayer }      from './renderer/StairLayer.jsx';
 import { floorHeightAbove } from './finish/stair/stairDimensions.js';
-import { measureStairSpans } from './finish/stair/stairClassify.js';
-import { cellsBeyondBreak, stairPortEdges, LANE_GAP } from './finish/stair/stairGeometry.js';
-import { stairUnderWallClips } from './finish/stair/stairUnderClip.js';
+import { stairPortEdges } from './finish/stair/stairGeometry.js';
 import { generateStairUnderWalls, stairUnderClaimedEdges, trimStairUnderJunctions } from './finish/stair/stairUnderWalls.js';
-import { roomBounds, cellBoundsList, refreshCells } from './finish/gridCells.js';
+import { buildStairEntries, buildUpperStairPeekEntries } from './finish/stair/stairEntries.js';
 import { generateRoomWallsFromOutline, generateExteriorWalls, snapshotWall, restoreWallsFromSnapshots, resolveBackingOwnership, applyBackingOwnership } from './finish/wallGeneration.js';
 import { snapshotEdges, restoreEdges, syncEdgesFromTopology, interiorWallSpans, buildCellToRoom } from './finish/edgeClassify.js';
 // finish/clEccentricity.js は edgeComposition.js 経由で materials/materialData.js（材マスタ全件）を
@@ -52,14 +47,19 @@ import { StructuralLayer, ColumnsLayer } from './renderer/StructuralLayer.jsx';
 import { MemberTagLayer } from './renderer/MemberTagLayer.jsx';
 import { MemberStatusMenu } from './ui/MemberStatusMenu.jsx';
 import { PRIMARY_DIMENSION_FIELD_BY_MAP } from './structural/memberCatalog.js';
-import { CONTEXT, detectContext, getMenuItems } from './interaction/menuItems.js';
+import { CONTEXT, detectContext, buildMenuState } from './interaction/menuItems.js';
 import { CenterLineType, Discipline, SiteLineKind, OpeningCategory, RoomFeature, centerLineKind, CL_OVERLAP_TOL_MM } from '@core';
 import { addSkipZero, subtractSkipZero, makeFloorName, makeFloorLevelPrefix, renameFloor } from './floorNumber.js';
+import {
+  floorBytesEqual, applyFloorBytes, isActiveAnAltOf,
+  computeFloorReorder, computeAltReorder, resolveChipReorderTarget, computeFloorChangeReorder,
+} from './floorOps.js';
 import { AddFloorDialog } from './ui/AddFloorDialog.jsx';
+import { buildFloorChipModel } from './ui/floorChipModel.js';
 import { ConfirmDialog } from './ui/ConfirmDialog.jsx';
 import { FloorChangeDialog } from './ui/FloorChangeDialog.jsx';
 import { IntersectionMarkers } from './renderer/CenterLinesLayer.jsx';
-import { GutterLayer, columnAxisLabelHits } from './renderer/GutterLayer.jsx';
+import { GutterLayer } from './renderer/GutterLayer.jsx';
 import { ShapesLayer }    from './renderer/ShapesLayer.jsx';
 import { SnapIndicator }  from './renderer/SnapIndicator.jsx';
 import { LongPressIndicator } from './renderer/LongPressIndicator.jsx';
@@ -87,7 +87,8 @@ import { syncRoofPlane } from './structural/roofPlane.js';
 import { buildStructuralFigureSlots, designationForSlot, firstSlotKeyForPlane } from './structural/structuralFigureSlots.js';
 import { figureBindingManager } from './figure/FigureBindingManager.js';
 import { floorSwapManager } from './storage/FloorSwapManager.js';
-import { saveFloor, loadFloor, deleteFloor as dbDeleteFloor } from './storage/db.js';
+import { saveFloor, loadFloor } from './storage/db.js';
+import { readLocalAutosaveRaw, parseAutosaveData, writeLocalAutosave, parseOpenedFileBytes } from './storage/localSnapshot.js';
 import { getFigure } from './figure/figureRegistry.js';
 import { STRUCTURAL_FIGURE_ID } from './structural/structuralFigure.js';
 import { SiteInfoPanel }       from './ui/SiteInfoPanel.jsx';
@@ -106,10 +107,6 @@ import { EccentricityDialog } from './ui/EccentricityDialog.jsx';
 import { KneeDropWallDialog } from './ui/KneeDropWallDialog.jsx';
 import { resolveWallSpanKey, isEligibleWallSpan, kneeDropWallGeometry } from './finish/kneeDropWall.js';
 
-const SNAP_THRESHOLD_PX = 20;
-const CL_THRESHOLD_PX   = 8;
-const WALL_THRESHOLD_PX = 8;
-
 // CL の pendingDelta を実座標に bake する（ref CL / 通常 CL 両対応）
 const evalExpr = (s) => evalNumpadExpr(s, { positiveOnly: true });
 
@@ -120,20 +117,6 @@ function bakeCLValue(cl, newVal) {
     cl.value = newVal;
   }
   cl.pendingDelta = 0;
-}
-
-// 矩形2つが実質的に重なる（浮動小数の際どい接触は無視）か。EPS(mm) 未満の重なりは無視する。
-const RECT_OVERLAP_EPS = 1; // mm
-function rectsOverlap(a, b) {
-  return a.x1 < b.x2 - RECT_OVERLAP_EPS && a.x2 > b.x1 + RECT_OVERLAP_EPS
-      && a.y1 < b.y2 - RECT_OVERLAP_EPS && a.y2 > b.y1 + RECT_OVERLAP_EPS;
-}
-
-// listA のいずれかの矩形が listB のいずれかの矩形と重なるか（下階階段の見下げ upper エントリが
-// 自階 install エントリと同一 footprint かどうかの判定に使う。cellBounds 同士の総当たり）。
-function anyCellBoundsOverlap(listA, listB) {
-  if (!listA?.length || !listB?.length) return false;
-  return listA.some(a => listB.some(b => rectsOverlap(a, b)));
 }
 
 // 構造モードのAddCLDialogに渡す「柱芯」参照選択肢。columnAxisOffsets（通り芯→柱芯の偏芯量。
@@ -297,18 +280,7 @@ const App = observer(() => {
       const temp = await floorSwapManager.peek(below, project.structGraph);
       if (cancelled) return;
       const floorHeight = active.elevation - below.elevation; // 直下階の階高
-      const entries = temp.stairs.map(s => ({
-        id: s.id,
-        stair: s,
-        graph: temp, // 側面線の壁有無判定（resolveStairSideLines）。その階段が実在する下階のグラフを渡す
-        bounds: roomBounds(s.cells, temp),
-        cellBounds: cellBoundsList(s.cells, temp), // 実セル占有（選択枠用。選択は startDrag 経由で一本化）
-        riser: s.riser ?? (floorHeight != null ? floorHeight / Math.max(1, s.totalSteps) : null),
-        spans: measureStairSpans(s, temp), // セル実測の区間長（区間長指定の反映）
-        view: 'upper',
-        selectable: false,
-      }));
-      setUpperStairEntries(entries);
+      setUpperStairEntries(buildUpperStairPeekEntries(temp, floorHeight));
     })();
     return () => { cancelled = true; };
   }, [appMode, activeFloorId, floorSyncTick]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -398,28 +370,22 @@ const App = observer(() => {
       const cl           = nearCLRef.current;
       const opening      = nearOpeningRef.current;
       const wall         = nearWallRef.current;
-      const context      = detectContext(snap, cl, opening, wall, clEndpoint);
-      // 建具モードは壁・開口以外の長押しメニューを出さない（CL移動等の平面編集操作は行わない）。
-      if (appMode === 'opening' && context !== CONTEXT.WALL && context !== CONTEXT.OPENING) return;
-      const endpointState = clEndpoint ? {
-        canExtend:  canExtendCenterLine(graph, clEndpoint.cl, clEndpoint.side),
-        canShorten: canShortenCenterLine(graph, clEndpoint.cl, clEndpoint.side),
-        isVertical: clEndpoint.cl.centerLineType === CenterLineType.VERTICAL,
-        side:       clEndpoint.side,
-      } : null;
-      // 中心線上メニュー: 移動可否と線の向き（移動アイコンの矢印方向）を渡す。
+      // context 判定・メニュー items 生成は menuItems.js に集約（建具モードは壁・開口以外は null）。
+      // menuItems.js は import ゼロ（node:test対応）に保つため、graph 依存の判定値はここで算出して渡す。
+      const menuContext = detectContext(snap, cl, opening, wall, clEndpoint);
+      const state = buildMenuState(appMode, {
+        snap, cl, clEndpoint, opening, wall,
+        canMove: typeof modeRef.current?.startMove === 'function',
+        canExtend:  clEndpoint ? canExtendCenterLine(graph, clEndpoint.cl, clEndpoint.side) : undefined,
+        canShorten: clEndpoint ? canShortenCenterLine(graph, clEndpoint.cl, clEndpoint.side) : undefined,
+        hasInteriorWall: menuContext === CONTEXT.CENTER_LINE ? interiorWallSpans(graph, cl.id).length > 0 : undefined,
+        wallEligible:    menuContext === CONTEXT.WALL ? isEligibleWallSpan(wall, graph) : undefined,
+      });
+      if (!state) return;
       // 移動を選ばれたときに備え、移動範囲の計算（他フロアのIDB読み込みを含む）を先読みしておく。
-      const clState = context === CONTEXT.CENTER_LINE ? {
-        canMove:         typeof modeRef.current?.startMove === 'function',
-        isVertical:      cl.centerLineType === CenterLineType.VERTICAL,
-        hasInteriorWall: interiorWallSpans(graph, cl.id).length > 0,
-      } : null;
-      if (clState?.canMove) modeRef.current.preloadMove(cl);
-      // 壁上メニュー: 腰壁・垂れ壁の適格性（2a壁は対象外）を渡す。
-      const wallState = context === CONTEXT.WALL ? { eligible: isEligibleWallSpan(wall, graph) } : null;
-      const items   = getMenuItems(context, endpointState, clState, wallState);
+      if (state.clState?.canMove) modeRef.current.preloadMove(cl);
       setMenu({
-        pos: { x: sx, y: sy }, items, snap, worldPos: viewport.screenToWorld(sx, sy),
+        pos: { x: sx, y: sy }, items: state.items, snap, worldPos: viewport.screenToWorld(sx, sy),
         cl: clEndpoint ? clEndpoint.cl : cl, wall, opening,
         clEndpointSide: clEndpoint ? clEndpoint.side : null,
       });
@@ -580,7 +546,7 @@ const App = observer(() => {
     }
     // 構造モード: 描画エリア内の○「柱芯」ラベルをロングタップ → 出幅編集（ガター判定より先）
     if (appMode === 'structure' && columnAxisMode) {
-      const hit = findColumnAxisLabel(clientX, clientY);
+      const hit = findColumnAxisLabel(graph, viewport, size.width, size.height, clientX, clientY);
       if (hit) {
         axisLabelRef.current = { cl: hit.cl, sx: hit.sx, sy: hit.sy };
         axisLabelLongPress.begin(clientX, clientY);
@@ -589,7 +555,7 @@ const App = observer(() => {
     }
     const inGutter = isInGutter(clientX, clientY, size.width, size.height);
     if (inGutter) {
-      const cl = findGutterCL(clientX, clientY);
+      const cl = findGutterCL(graph, viewport, size.width, size.height, clientX, clientY);
       if (cl) {
         gutterCLRef.current = cl;
         gutterLongPress.begin(clientX, clientY);
@@ -1944,14 +1910,6 @@ const App = observer(() => {
 
   // ---- 階追加の undo 記録 ----
 
-  // Uint8Array 同士の内容比較（null 同士は等しい）
-  function floorBytesEqual(a, b) {
-    if (a === b) return true;
-    if (!a || !b || a.length !== b.length) return false;
-    for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
-    return true;
-  }
-
   // 現在の全採用フロアの状態を planeId → bytes で収集する（アクティブ階はメモリから、
   // 非アクティブ階は IDB から。IDB 未保存の階は null）。
   async function collectFloorBytes() {
@@ -1962,17 +1920,6 @@ const App = observer(() => {
         : (await loadFloor(p.id)) ?? null);
     }
     return map;
-  }
-
-  // planeId のフロアへスナップショットを適用する。アクティブならメモリ上のグラフへ復元し、
-  // 非アクティブなら IDB へ書き戻す（peek はキャッシュを持たないためこれで完全に復元される）。
-  // bytes === null は「IDB 未保存」状態への巻き戻し（レコード削除）。
-  function applyFloorBytes(planeId, bytes) {
-    if (project.activePlaneId === planeId && project.activeGraph) {
-      if (bytes != null) restoreGraph(project.activeGraph, bytes);
-      return;
-    }
-    (bytes != null ? saveFloor(planeId, bytes) : dbDeleteFloor(planeId)).catch(console.error);
   }
 
   // 階追加フロー全体（addFloor＋新階への同期＋切替＋全階の構造反映）を実行し、
@@ -2016,7 +1963,7 @@ const App = observer(() => {
             await handleFloorSwitch(backId);
           }
           for (const pl of addedPlanes) await removeFloor(pl.id);
-          for (const rec of changedSiblings) applyFloorBytes(rec.planeId, rec.before);
+          for (const rec of changedSiblings) applyFloorBytes(project, rec.planeId, rec.before);
         })().catch(console.error);
       },
       () => {
@@ -2026,7 +1973,7 @@ const App = observer(() => {
             const bytes = addedBytes.get(pl.id);
             if (bytes != null) await saveFloor(pl.id, bytes);
           }
-          for (const rec of changedSiblings) applyFloorBytes(rec.planeId, rec.after);
+          for (const rec of changedSiblings) applyFloorBytes(project, rec.planeId, rec.after);
           await handleFloorSwitch(activeAfterId); // activate() が保存済み bytes を読み込む
         })().catch(console.error);
       },
@@ -2095,92 +2042,35 @@ const App = observer(() => {
   }
 
   // ---- フロアタブのドラッグ割り込み ----
+  // 並替後の startFloor/elevation/name 再採番は floorOps.js の計算部（computeFloorReorder）に委譲。
   function handleReorderFloor(fromId, toZone) {
-    // project.planes は elevation 昇順 (= startFloor 昇順と一致)
-    const sorted = project.planes;
-    const fromIndex = sorted.findIndex(p => p.id === fromId);
-    if (fromIndex <= 0) return;  // 最下階（index 0）はドラッグ不可
-    if (toZone <= 0) return;     // 最下階の前にはドロップ不可
-    if (toZone === fromIndex || toZone === fromIndex + 1) return; // 隣接 = no-op
-
-    // 最下階は固定、index 1.. のみ並び替え
-    const bottom = sorted[0];
-    const rest   = sorted.slice(1);
-    const ri     = fromIndex - 1;  // rest 内のインデックス
-    const [moved] = rest.splice(ri, 1);
-    let rt = toZone - 1;
-    if (rt > ri) rt--;             // splice で詰まった分を補正
-    rest.splice(rt, 0, moved);
-
-    const newOrder = [bottom, ...rest];
-
+    const updates = computeFloorReorder(project.planes, fromId, toZone);
+    if (!updates) return;
     runInAction(() => {
-      let prevSF      = bottom.startFloor;
-      let prevStories = bottom.stories;
-      let prevElev    = bottom.elevation;
-
-      for (let i = 1; i < newOrder.length; i++) {
-        const plane  = newOrder[i];
-        const newSF  = addSkipZero(prevSF + prevStories - 1, 1);
-        const newElev = prevElev + prevStories * 3000;
-        // 一般階は makeFloorName、それ以外は renameFloor で書式を保持
-        plane.name       = plane.stories > 1
-          ? makeFloorName(newSF, plane.stories)
-          : renameFloor(plane.name, newSF);
-        plane.startFloor = newSF;
-        plane.elevation  = newElev;
-        prevSF      = newSF;
-        prevStories = plane.stories;
-        prevElev    = newElev;
+      for (const u of updates) {
+        const plane = project.planeMap.get(u.id);
+        plane.name       = u.name;
+        plane.startFloor = u.startFloor;
+        plane.elevation  = u.elevation;
       }
     });
   }
 
-  // ---- フロアメニュー項目の生成（検討チップのロングタップ・メニュー用）----
-  // 検討追加（add-alt）は検討チップの短タップが担うため、ここには含めない。
-  // 並替（move-up/move-down）・階管理・検討操作をすべてここに集約する。
-  function buildFloorMenuItems(plane) {
-    if (plane.isAlternative) {
-      const alts = [...project.planeMap.values()]
-        .filter(p => p.isAlternative && p.referenceId === plane.referenceId)
-        .sort((a, b) => a.altIndex - b.altIndex);
-      const i = alts.findIndex(p => p.id === plane.id);
-      const items = [];
-      if (i > 0)                 items.push({ id: 'move-down', label: '◀ 前の案へ' });
-      if (i < alts.length - 1)   items.push({ id: 'move-up',   label: '次の案へ ▶' });
-      items.push({ id: 'promote',    label: '採用' });
-      items.push({ id: 'copy-alt',   label: '案コピー' });
-      items.push({ id: 'delete-alt', label: '削除', danger: true });
-      return items;
-    }
-    const adopted   = project.planes;
-    const i         = adopted.findIndex(p => p.id === plane.id);
-    const isLowest  = i === 0;
-    const isHighest = i === adopted.length - 1;
-    const items = [];
-    if (isLowest || isLowest === isHighest) items.push({ id: 'floor-change', label: '階変更' });
-    if (i >= 2)                items.push({ id: 'move-down', label: '▼ 下の階へ' });
-    if (!isHighest && i >= 1)  items.push({ id: 'move-up',   label: '▲ 上の階へ' });
-    if (!isLowest && !isHighest) items.push({ id: 'mezzanine', label: '中間階に' });
-    if (!isLowest) items.push({ id: 'delete', label: '削除', danger: true });
-    return items;
-  }
-
   // ---- 階・検討案の並替（検討チップのメニューから。±1で隣と入替え）----
   // 既存の handleReorderFloor / handleReorderAlt（ドロップゾーン方式）を再利用する。
+  // 対象（alt/floor）とtoZoneの判定は floorOps.js の計算部（resolveChipReorderTarget）に委譲。
   function handleChipReorder(planeId, direction) {
     const plane = project.planeMap.get(planeId);
     if (!plane) return;
-    if (plane.isAlternative) {
-      const alts = [...project.planeMap.values()]
-        .filter(p => p.isAlternative && p.referenceId === plane.referenceId)
-        .sort((a, b) => a.altIndex - b.altIndex);
-      const i = alts.findIndex(p => p.id === planeId);
-      handleReorderAlt(planeId, direction > 0 ? i + 2 : i - 1, plane.referenceId);
-    } else {
-      const i = project.planes.findIndex(p => p.id === planeId);
-      handleReorderFloor(planeId, direction > 0 ? i + 2 : i - 1);
-    }
+    const alts = plane.isAlternative
+      ? [...project.planeMap.values()]
+          .filter(p => p.isAlternative && p.referenceId === plane.referenceId)
+          .sort((a, b) => a.altIndex - b.altIndex)
+      : [];
+    const target = resolveChipReorderTarget(plane, alts, project.planes, direction);
+    if (!target) return;
+    if (target.kind === 'alt') handleReorderAlt(planeId, target.toZone, target.refId);
+    else                       handleReorderFloor(planeId, target.toZone);
   }
 
   // ---- フロアメニュー選択 ----
@@ -2257,7 +2147,7 @@ const App = observer(() => {
           const idx     = adopted.findIndex(p => p.id === planeId);
           const fallback = adopted[idx + 1] ?? adopted[idx - 1];
           const below    = adopted[idx - 1] ?? null; // 直下の採用階（階段が接続していた階）
-          if (project.activePlaneId === planeId || isActiveAnAltOf(planeId)) {
+          if (project.activePlaneId === planeId || isActiveAnAltOf(project, planeId)) {
             if (fallback) await handleFloorSwitch(fallback.id);
           }
           await removeFloor(planeId);
@@ -2358,12 +2248,6 @@ const App = observer(() => {
     }
   }
 
-  // アクティブプレーンが planeId の検討かどうか
-  function isActiveAnAltOf(planeId) {
-    const active = project.activePlane;
-    return active?.isAlternative && active.referenceId === planeId;
-  }
-
   // 指定階の階段をすべて削除する。アクティブ階はライブグラフ、非アクティブ階は peek して保存。
   async function removeStairsOnFloor(plane) {
     const isActive = plane.id === project.activePlaneId;
@@ -2373,42 +2257,27 @@ const App = observer(() => {
     if (!isActive) await saveFloor(plane.id, serializeGraph(g)); // アクティブ階は auto-save に委ねる
   }
 
-  // 検討の並び替え（グループ内）
+  // 検討の並び替え（グループ内）。再採番の計算は floorOps.js（computeAltReorder）に委譲。
   function handleReorderAlt(fromId, toZone, refId) {
     const alts = [...project.planeMap.values()]
       .filter(p => p.isAlternative && p.referenceId === refId)
       .sort((a, b) => a.altIndex - b.altIndex);
-    const fromI = alts.findIndex(p => p.id === fromId);
-    if (fromI < 0 || toZone === fromI || toZone === fromI + 1) return;
-    const newOrder = [...alts];
-    const [moved] = newOrder.splice(fromI, 1);
-    let rt = toZone;
-    if (rt > fromI) rt--;
-    newOrder.splice(rt, 0, moved);
-    runInAction(() => { newOrder.forEach((p, i) => { p.altIndex = i; }); });
+    const updates = computeAltReorder(alts, fromId, toZone);
+    if (!updates) return;
+    runInAction(() => { for (const u of updates) { project.planeMap.get(u.id).altIndex = u.altIndex; } });
   }
 
-  // 階変更
+  // 階変更。再採番の計算は floorOps.js（computeFloorChangeReorder）に委譲。
   function handleFloorChange(planeId, newStartFloor) {
     setFloorChangeDlg(null);
-    if (newStartFloor === 0) return;
-    const adopted = project.planes;
-    const idx     = adopted.findIndex(p => p.id === planeId);
-    if (idx < 0) return;
+    const updates = computeFloorChangeReorder(project.planes, planeId, newStartFloor);
+    if (!updates) return;
     runInAction(() => {
-      let prevSF   = newStartFloor;
-      let prevSto  = 1;
-      let prevElev = adopted[idx - 1]
-        ? adopted[idx - 1].elevation + adopted[idx - 1].stories * 3000
-        : adopted[0].elevation;
-      for (let i = idx; i < adopted.length; i++) {
-        const p  = adopted[i];
-        const sf = i === idx ? newStartFloor : addSkipZero(prevSF + prevSto - 1, 1);
-        const el = i === idx ? prevElev : prevElev + prevSto * 3000;
-        p.name       = p.stories > 1 ? makeFloorName(sf, p.stories) : renameFloor(p.name, sf);
-        p.startFloor = sf;
-        p.elevation  = el;
-        prevSF = sf; prevSto = p.stories; prevElev = el;
+      for (const u of updates) {
+        const p = project.planeMap.get(u.id);
+        p.name       = u.name;
+        p.startFloor = u.startFloor;
+        p.elevation  = u.elevation;
       }
     });
   }
@@ -2622,14 +2491,10 @@ const App = observer(() => {
       return;
     }
     if (id === 'load') {
-      const raw = localStorage.getItem('strad-autosave');
+      const raw = readLocalAutosaveRaw();
       if (!raw) { setToast({ msg: '自動保存データが見つかりません', key: Date.now() }); return; }
       try {
-        // base64 (新形式) と JSON 文字列 (旧形式) の両方に対応
-        const data = raw.trimStart().startsWith('{')
-          ? JSON.parse(raw)
-          : Uint8Array.from(atob(raw), c => c.charCodeAt(0));
-        restoreGraph(graph, data);
+        restoreGraph(graph, parseAutosaveData(raw));
         setToast({ msg: '読込み完了', key: Date.now() });
       } catch {
         setToast({ msg: '読込みに失敗しました', key: Date.now() });
@@ -2637,11 +2502,7 @@ const App = observer(() => {
       return;
     }
     if (id === 'export') {
-      const bytes = serializeGraph(graph);
-      // Uint8Array → base64 (大容量でも安全な方式)
-      let binary = '';
-      for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
-      localStorage.setItem('strad-autosave', btoa(binary));
+      writeLocalAutosave(graph);
       setToast({ msg: '書出し（自動保存）完了', key: Date.now() });
       return;
     }
@@ -2658,11 +2519,7 @@ const App = observer(() => {
     reader.onload = (ev) => {
       try {
         const bytes = new Uint8Array(ev.target.result);
-        // JSON ファイル (旧形式) と FlatBuffers バイナリ (新形式) の両方に対応
-        const data = bytes[0] === 0x7B // '{' = JSON
-          ? JSON.parse(new TextDecoder().decode(bytes))
-          : bytes;
-        restoreGraph(graph, data);
+        restoreGraph(graph, parseOpenedFileBytes(bytes));
         setToast({ msg: 'ファイルを開きました', key: Date.now() });
       } catch {
         setToast({ msg: 'ファイルの読み込みに失敗しました', key: Date.now() });
@@ -2753,18 +2610,6 @@ const App = observer(() => {
     }
   };
 
-  // ---- 描画エリア内の○「柱芯」ラベル ヒット判定 ----
-  // ヒットしたラベルの cl と、窓を固定するためのラベル中心スクリーン座標を返す。
-  function findColumnAxisLabel(sx, sy) {
-    const HIT = 18; // px（丸ラベル半径相当）
-    let best = null, bestD = HIT;
-    for (const h of columnAxisLabelHits(graph, viewport, size.width, size.height)) {
-      const d = Math.hypot(sx - h.sx, sy - h.sy);
-      if (d < bestD) { bestD = d; best = h; }
-    }
-    return best;
-  }
-
   // ---- 出幅編集の確定 ----
   // axisEditState の出幅を 1構造×1通り芯キーへ書込み、構造伏図に映る全グラフで柱芯オフセットを
   // 再構築する（MobX連鎖で柱・梁・柱芯ラベル・寸法が即再描画）。同一構造の階は同じキーを共有するので
@@ -2803,85 +2648,18 @@ const App = observer(() => {
     undoManager.push(() => apply(oldRaw), () => apply(newVal));
   }
 
-  // ---- ガター内の通り芯ヒット判定 ----
-  function findGutterCL(sx, sy) {
-    const HIT = 24; // px
-    const cls = graph.centerLines.filter(cl => cl.labeled);
-    if (sy < INSET.top || sy > size.height - INSET.bottom) {
-      for (const cl of cls) {
-        if (cl.centerLineType !== CenterLineType.VERTICAL) continue;
-        if (Math.abs(cl.value * viewport.scaleX + viewport.offsetX - sx) < HIT) return cl;
-      }
-    }
-    if (sx < INSET.left || sx > size.width - INSET.right) {
-      for (const cl of cls) {
-        if (cl.centerLineType !== CenterLineType.HORIZONTAL) continue;
-        if (Math.abs(cl.value * viewport.scaleY + viewport.offsetY - sy) < HIT) return cl;
-      }
-    }
-    return null;
-  }
-
   // ---- スナップ & 近傍CL/壁/開口 計算 ----
+  // 候補解決は snap.js の resolvePointerTargets に一本化（App側は setState への反映のみ）。
   function updateSnap(clientX, clientY) {
-    // 通り芯表示エリア内はスナップ・カーソル更新しない
-    if (isInGutter(clientX, clientY, size.width, size.height)) {
-      setSnapPoint(null);
-      setNearCL(null);
-      setNearCLEndpoint(null);
-      setNearWall(null);
-      setNearOpening(null);
-      setCursorWorld(null);
-      return;
-    }
-    const world = viewport.screenToWorld(clientX, clientY);
-    const snap  = findNearestIntersection(graph, world.x, world.y, SNAP_THRESHOLD_PX, viewport.scaleX, viewport.scaleY);
-    // 構造モードでは通り芯上でマウスが反応しない（既存仕様）が、梁芯は選択・削除・延長/短縮できる必要が
-    // あるため、appModeで丸ごとnullにはせず kindFilter で「構造モード=梁芯のみ／他モード=梁芯以外」に絞る
-    // （非表示の梁芯を非構造モードで拾わない・構造モードでは梁芯だけがヒットする、の両方をこれ一本で満たす）。
-    const clKindFilter = appMode === 'structure' ? (k => k === 'beam') : (k => k !== 'beam');
-    // CL端点（延長/短縮メニュー）は交点スナップより優先度は下だが、CL/開口/壁の排他選択とは別枠で判定する
-    const clEndpointCand = findNearestCenterLineEndpoint(graph, world.x, world.y, CL_THRESHOLD_PX, viewport.scaleX, viewport.scaleY, viewport, clKindFilter);
-    // 交点スナップ中は CL/開口/壁の検出不要
-    let cl = null, opening = null, wall = null;
-    if (!snap) {
-      const clCand      = findNearestCenterLine(graph, world.x, world.y, CL_THRESHOLD_PX, viewport.scaleX, viewport.scaleY, viewport, clKindFilter);
-      const openingCand = findOpeningAt(graph, world.x, world.y, WALL_THRESHOLD_PX, viewport.scaleX, viewport.scaleY);
-      const wallCand    = findNearestWall(graph, world.x, world.y, WALL_THRESHOLD_PX, viewport.scaleX, viewport.scaleY);
-      // 部屋の壁は軸CLから数十mmしかオフセットしておらず、通常のズームでは
-      // CL・開口・壁の判定範囲(8px)が重なる。「CLが常に勝つ」固定優先順位だと
-      // 部屋の壁上で常にCLメニュー（削除のみ）になってしまうため、画面距離が
-      // 最も近い候補を優先する（同距離なら cl > opening > wall の順で安定ソート）。
-      const candidates = [];
-      if (clCand) {
-        const isV = clCand.centerLineType === CenterLineType.VERTICAL;
-        const dist = isV ? Math.abs(clCand.value - world.x) * viewport.scaleX : Math.abs(clCand.value - world.y) * viewport.scaleY;
-        candidates.push({ type: 'cl', value: clCand, dist });
-      }
-      if (openingCand) {
-        const host = findHostWall(openingCand, graph);
-        if (host) {
-          const dist = host.isVertical ? Math.abs(host.axisValue - world.x) * viewport.scaleX : Math.abs(host.axisValue - world.y) * viewport.scaleY;
-          candidates.push({ type: 'opening', value: openingCand, dist });
-        }
-      }
-      if (wallCand) {
-        const dist = wallCand.isVertical ? Math.abs(wallCand.axisValue - world.x) * viewport.scaleX : Math.abs(wallCand.axisValue - world.y) * viewport.scaleY;
-        candidates.push({ type: 'wall', value: wallCand, dist });
-      }
-      candidates.sort((a, b) => a.dist - b.dist);
-      const nearest = candidates[0] ?? null;
-      if (nearest?.type === 'cl')      cl = nearest.value;
-      if (nearest?.type === 'opening') opening = nearest.value;
-      if (nearest?.type === 'wall')    wall = nearest.value;
-    }
-    setSnapPoint(snap ?? null);
-    setNearCL(cl ?? null);
-    setNearCLEndpoint(!snap ? (clEndpointCand ?? null) : null);
-    setNearOpening(opening ?? null);
-    setNearWall(wall ?? null);
-    setCursorWorld(world);
-    setCursorScreen({ x: clientX, y: clientY });
+    const r = resolvePointerTargets(graph, viewport, clientX, clientY, { width: size.width, height: size.height, appMode });
+    setSnapPoint(r.snap);
+    setNearCL(r.nearCL);
+    setNearCLEndpoint(r.nearCLEndpoint);
+    setNearWall(r.nearWall);
+    setNearOpening(r.nearOpening);
+    setCursorWorld(r.world);
+    // ガター帯内（r.world===null）はカーソル座標を更新しない（従来どおり）
+    if (r.world) setCursorScreen({ x: clientX, y: clientY });
   }
 
   // ---- メニュー選択 ----
@@ -3489,22 +3267,7 @@ const App = observer(() => {
     : project.planes.map(p => ({ id: p.id, name: p.name }));
 
   // 検討チップ用 — 現在の階の採用＋検討案。
-  const chipActivePlane = project.activePlane;
-  const chipRefId  = chipActivePlane?.isAlternative ? chipActivePlane.referenceId : chipActivePlane?.id;
-  const chipAdopted = chipRefId != null ? project.planeMap.get(chipRefId) : null;
-  const chipAlts = chipRefId != null
-    ? [...project.planeMap.values()]
-        .filter(p => p.isAlternative && p.referenceId === chipRefId)
-        .sort((a, b) => a.altIndex - b.altIndex)
-    : [];
-  const chipVariants = chipAdopted
-    ? [{ id: chipAdopted.id, label: '採用', isActive: project.activePlaneId === chipAdopted.id },
-       ...chipAlts.map(p => ({ id: p.id, label: p.name, isActive: project.activePlaneId === p.id }))]
-    : [];
-  const chipText = chipActivePlane
-    ? (chipActivePlane.isAlternative ? chipActivePlane.name : `${chipAdopted?.name ?? floorName}：採用`)
-    : floorName;
-  const chipManagementItems = chipActivePlane ? buildFloorMenuItems(chipActivePlane) : [];
+  const { chipActivePlane, chipVariants, chipText, chipManagementItems } = buildFloorChipModel(project, floorName);
 
   // 階段の設置階（install）・上階見下げ（upper）の描画エントリ。StairLayer の描画と
   // 2a壁の描画クリップ（stairUnderClip.js）の双方が使うため、ここで1度だけ計算する
@@ -3512,80 +3275,11 @@ const App = observer(() => {
   // ジオメトリと stairUnderClip.js の breakLine 抽出用で別々に呼ばれる——後者は前者の
   // 出力を再利用しない、別計算）。upperStairEntries は finish/floorplan 以外または
   // 階・モード切替直後の1フレームは null（未解決。該当useEffect参照）。
-  // isStairMode: site・structure モードでは階段を描画しないため、cellsBeyondBreak・
-  // refreshCells・measureStairSpans 等の無駄な計算と observable 購読（graph.stairs等）を
-  // 空配列で止める（QA指摘）。stairUnderClips のゲートも同じ変数で揃える。
-  const isStairMode = appMode === 'finish' || appMode === 'floorplan';
-  const stairFh = floorHeightAbove(project, project.activePlane);
-  const installEntries = isStairMode ? graph.stairs.map(s => {
-    const riser = s.riser ?? (stairFh != null ? stairFh / Math.max(1, s.totalSteps) : null);
-    // 破れ線先セルはヒット領域から除外する（下階階段の見下げクリック・階段下エリアの
-    // 部屋ドラッグは startDrag に一本化されているため、ここでは自階階段の onClick を発火させない）。
-    const beyond = cellsBeyondBreak(s, graph, riser);
-    const refreshed = refreshCells(s.cells, graph);
-    const hitCells = beyond.size > 0
-      ? new Set([...refreshed].filter(k => !beyond.has(k)))
-      : s.cells;
-    return {
-      id: s.id,
-      stair: s,
-      graph, // 側面線の壁有無判定（resolveStairSideLines）に使う
-      bounds: roomBounds(s.cells, graph),
-      cellBounds: cellBoundsList(s.cells, graph), // 実セル占有（L字等の選択枠用）
-      hitCellBounds: cellBoundsList(hitCells, graph), // クリックヒット領域（破れ線先セル除外）
-      beyondBreakBounds: cellBoundsList(beyond, graph), // 破れ線先セルのワールド矩形（重なるupperの踏面間引きに使う）
-      riser,
-      spans: measureStairSpans(s, graph), // セル実測の区間長（区間長指定の反映）
-      view: 'install',
-      selectable: appMode === 'finish',
-    };
-  }) : [];
-  // 階切替の非同期過渡で同一階段が install/upper 両方に入るのを防ぐ
-  // （install が設置階の正であり、upper は直下階由来。重複時は install を優先）
-  const installStairIds = new Set(installEntries.map(e => e.id));
-  // footprint が自階 install 階段と重なる upper エントリ（下階階段が自階の
-  // 自動設置階段と同じ位置に見下げ表示される場合）は installOverlap を付与し、
-  // StairLayer 側でプリミティブ別に独立フィルタする: 矢印は install の破れ線で
-  // クリップ、踏面線は破れ線先セル（beyondBreakBounds。cellsBeyondBreak で
-  // 全タイプ単一ソース判定済み）の中点判定、段数字はアンカー点判定で破れ先の
-  // 番号だけ残す（重ならなければ従来どおりフル描画）。
-  // upperStairEntries===null（未解決）の間は StairLayer には従来どおり空扱いで渡す
-  // （初回マウント時の見た目は元々空だったため変化なし）。中間階ガードの安全側判定は
-  // 下記 stairUnderClips 側で null を別途見て行う。isStairMode===false でも空配列に
-  // 揃える（site・structure モードでの無駄なフィルタ・マップ計算を止める）。
-  const upperEntries = isStairMode
-    ? (upperStairEntries ?? [])
-        .filter(e => !installStairIds.has(e.id))
-        .map(e => {
-          const overlapInstall = installEntries.find(ie => anyCellBoundsOverlap(e.cellBounds, ie.cellBounds));
-          return overlapInstall
-            ? {
-                ...e, installOverlap: true, clipAgainstId: overlapInstall.id,
-                beyondBreakBounds: overlapInstall.beyondBreakBounds,
-              }
-            : e;
-        })
-    : [];
-
-  // 折返し階段の往路・復路の間のあき（簡略LODのみ0）・破れ線の見た目端部のはり出し量。
-  // StairLayer の描画と2a壁クリップ計算の双方へ渡す（描かれる破れ線とクリップ線のズレ防止）。
-  const stairLaneGapMm = viewport.lodLevel === LodLevel.SCHEMATIC ? 0 : LANE_GAP;
-  const stairBreakOverhangMm = overhangMm(viewport, false);
-
-  // 2a壁（階段下部屋の偏芯壁）の破れ線より階段踏面側を描画しないための、壁ID→クリップ多角形。
-  // StairLayer と同じ条件（isStairMode）でゲートする——それ以外のモード（site等）では
-  // 壁を常にクリップなしで描く（モード間で壁の見え方を変えない）。また upperStairEntries が
-  // 未解決（null。階/モード切替直後の1フレーム）の間は中間階ガードが判定不能なため、
-  // 安全側で一切クリップしない（QA指摘）。stairUnderWallClips はクリップ対象が0件のとき自ら
-  // null を返す（毎レンダー新規の空Mapを渡し続けて observer の差分検出が無駄に走るのを防ぐ）。
-  const stairUnderClips = isStairMode && upperStairEntries !== null
-    ? stairUnderWallClips(graph, installEntries, {
-        laneGapMm: stairLaneGapMm,
-        breakOverhangMm: stairBreakOverhangMm,
-        detail: viewport.lodLevel === LodLevel.DETAIL,
-        lowerStairCellBounds: upperEntries.map(e => e.cellBounds).filter(Boolean).flat(),
-      })
-    : null;
+  const { isStairMode, installEntries, upperEntries, stairLaneGapMm, stairBreakOverhangMm, stairUnderClips } =
+    buildStairEntries(graph, project, {
+      appMode, viewport, upperStairEntriesPeek: upperStairEntries,
+      stairBreakOverhangMm: overhangMm(viewport, false), // stairEntries.js は snap.js に依存しないため、ここで算出して渡す
+    });
 
   return (
     <>

@@ -3,8 +3,11 @@ import { Line, Circle } from 'react-konva';
 import { DimensionKind, DimensionSide, CenterLineType, Discipline } from '@core';
 import { CenterLinesLayer, clExtent } from './CenterLinesLayer.jsx';
 import { DIMENSION_LINE_WEIGHT } from './dimensionStyle.js';
-import { OUTWARD, gutterEdgeCoord, labelCircle, labelCircleRadius, dimensionRow } from './gutterPrimitives.jsx';
+import { gutterEdgeCoord, labelCircle, dimensionRow } from './gutterPrimitives.jsx';
 import { INSET } from '../layout.js';
+import {
+  gridLineBounds, offsetMm, columnAxisPush, buildColumnAxisAnchors, columnAxisLabelCoords,
+} from './gutterLabelHits.js';
 
 // ================================================================
 // ガーターレイヤー (window全体にフィットする1枚のレイヤー、描画エリアと同倍率)
@@ -143,7 +146,6 @@ const GridDimensions = observer(({ graph, viewport, width, height }) => {
 // 中心線自身の張り出し線分からの距離で計算することで、見た目上パターンが連続して見えるようにする。
 // ================================================================
 
-const OFFSET_CM_AT_SCALE = 5; // 印刷スケール換算で5cm（例: 1/100 なら 50mm×100 = 5000mm）
 const MIN_GAP_CM         = 1; // 建物外端と寸法線の最小紙面距離。これを割ったら部屋内書きへ退避
 const DOT_RADIUS_PX      = 2;
 const NUM_FONT_PX        = 11;
@@ -159,13 +161,7 @@ const CL_LEG_PERIOD  = CL_LEG_DASH.reduce((a, b) => a + b, 0);
 
 function positiveMod(n, m) { return ((n % m) + m) % m; }
 
-// 「実画面で5cm」= 印刷スケール 1/N の紙面上で5cm相当のワールド距離（mm）。
-// N（=scaleDenominator）に比例するため、ズームに応じてリアルタイムに伸縮する。
-function offsetMm(viewport) {
-  return OFFSET_CM_AT_SCALE * 10 * viewport.scaleDenominator;
-}
-
-// 「実画面で1cm」相当のワールド距離（mm）。offsetMm と同じく scaleDenominator に比例し、
+// 「実画面で1cm」相当のワールド距離（mm）。offsetMm（gutterLabelHits.js）と同じく scaleDenominator に比例し、
 // 画面px一定（ズーム非依存）。建物外端と寸法線の最小離隔の判定に使う。
 function minGapMm(viewport) {
   return MIN_GAP_CM * 10 * viewport.scaleDenominator;
@@ -218,19 +214,9 @@ function drawingAreaBounds(viewport, width, height) {
   };
 }
 
-// 通り芯寸法(GRID)の基準線スクリーン位置を4辺分まとめてワールド座標で返す
-// （GridDimensions の lineY/lineX と同じ式。位置がずれるとクランプ後の見た目も狂うため必ず揃える）。
-// 柱芯寸法線がガターへ逃げて停止する位置をここへ揃えることで、丸ラベルから見た
-// 「通り芯寸法側の離れ」と「柱芯寸法線側の離れ」を一致させる（丸ラベルは自分の寸法線から
-// 外側へpush分ずらした位置にあるだけなので、寸法線同士が同じ座標になれば両者の離れも揃う）。
-function gridLineBounds(viewport, width, height) {
-  return {
-    top:    viewport.screenToWorld(0, INSET.top - GRID_LINE_INSET).y,
-    bottom: viewport.screenToWorld(0, height - INSET.bottom + GRID_B_LINE_INSET).y,
-    left:   viewport.screenToWorld(INSET.left - GRID_LINE_INSET, 0).x,
-    right:  viewport.screenToWorld(width - INSET.right + GRID_NUM_INSET, 0).x,
-  };
-}
+// gridLineBounds は renderer/gutterLabelHits.js（純関数レイヤ。react-konva非依存）へ移設済み。
+// GRID_LINE_INSET/GRID_NUM_INSET/GRID_B_LINE_INSET の値は同ファイルの内部定数と揃える必要がある
+// （GridDimensions の lineY/lineX と同じ式で使う。位置がずれるとクランプ後の見た目も狂うため）。
 
 // 1行（TOP/BOTTOM/LEFT/RIGHT）分のアンカー（通り芯CL + 境界に到達している中心線CL）を
 // value 昇順で返す。境界に到達しているかは clExtent（オーバーハング込み）で判定する。
@@ -480,48 +466,7 @@ function buildFallbackElements(graph, viewport, axis, anchorsA, anchorsB, appMod
   return els;
 }
 
-// 柱芯寸法線を通り芯寸法(GRID)の基準線から内側へ離す余白（半径相当+OUTWARD、行の軸に応じた向きの
-// スケールで換算）。○ラベル廃止後は、ガター逃げ時に柱芯寸法線がGRID基準線へ重ならない離隔としてのみ使う。
-function columnAxisPush(axis, viewport) {
-  const pushScale = axis === 'X' ? viewport.scaleY : viewport.scaleX;
-  return labelCircleRadius(viewport) + OUTWARD / pushScale;
-}
-
-// 1行分の柱芯アンカーを value 昇順で返す。中心線版の部屋内フォールバックとは異なり、
-// 柱芯はグリッドからのオフセットのみで決まる1:1の点で「浮いた中心線」が存在しないため、
-// 重なり判定・連鎖探索は不要——外側オフセット位置が描画エリア外に出る（柱芯がガーターへ
-// 逃げる）場合でも、柱芯寸法線は通り芯寸法(GRID)の基準線（gridBounds、gridLineBounds参照）
-// より外（ガーター側）へは出さず、その内側（モデル側）2*push分の位置で止める。丸ラベルは
-// 自分の寸法線からpush分しか離れない（buildColumnAxisRowElements参照）ため、停止位置を
-// GRID基準線とちょうど揃える（=0オフセット）と二つの寸法線自体が重なってしまう。2*push分
-// 内側に留めることで「GRID基準線 → 丸ラベル → 柱芯寸法線」の順にpush間隔で並び、GRID基準線が
-// 常に最も外側、丸ラベルが両方の寸法線からちょうどpushずつ離れた、重なりのない配置になる
-// （丸ラベル自体のクランプは buildColumnAxisRowElements 側で行う）。
-function buildColumnAxisAnchors(d, graph, viewport, gridBounds) {
-  if (!d) return { boundary: null, lineCoord: null, anchors: [] };
-  const boundary = d.centerBoundary;
-  if (boundary == null) return { boundary: null, lineCoord: null, anchors: [] };
-
-  const isNear = d.side === DimensionSide.TOP || d.side === DimensionSide.LEFT;
-  const rawLineCoord = isNear ? boundary - offsetMm(viewport) : boundary + offsetMm(viewport);
-  const push = columnAxisPush(d.axis, viewport);
-  const lineCoord = d.axis === 'X'
-    ? (isNear ? Math.max(rawLineCoord, gridBounds.top + 2 * push) : Math.min(rawLineCoord, gridBounds.bottom - 2 * push))
-    : (isNear ? Math.max(rawLineCoord, gridBounds.left + 2 * push) : Math.min(rawLineCoord, gridBounds.right - 2 * push));
-
-  const gridCLs = d.axis === 'X' ? graph.gridXs : graph.gridYs;
-  const offsets = graph.columnAxisOffsets;
-  const points = [];
-  [...gridCLs].sort((a, b) => a.value - b.value).forEach(cl => {
-    const off = offsets.get(cl.id) ?? 0;
-    // :axis 点＝柱芯（通り芯+偏芯量）。○「柱芯」ラベルは全グリッド芯に付ける（偏芯0の内部芯も
-    // 柱芯＝通り芯位置に表示）。偏芯≠0 のときは別途 :grid 点（通り芯位置・ラベル無し）も置く。
-    if (off !== 0) points.push({ id: `${cl.id}:grid`, value: cl.effectiveValue, isColumnAxis: false });
-    points.push({ id: `${cl.id}:axis`, value: cl.effectiveValue + off, isColumnAxis: true });
-  });
-  points.sort((a, b) => a.value - b.value);
-  return { boundary, lineCoord, anchors: points };
-}
+// columnAxisPush・buildColumnAxisAnchors は renderer/gutterLabelHits.js（純関数レイヤ）へ移設済み。
 
 // 隣接アンカー間のセグメント（中心線版と異なり「両端通り芯のみは除外」のような間引きは行わない —
 // 柱芯アンカーは通り芯と同位置の点を重複して持たないため、間引く対象が発生しない）。
@@ -579,56 +524,7 @@ function buildColumnAxisRowElements(d, boundary, lineCoord, anchors, viewport) {
   return els;
 }
 
-// 柱芯（一点鎖線）の端点を伸ばす先＝○「柱芯」ラベルの中心座標を4辺分まとめて返す。
-// ラベルは柱芯寸法線（lineCoord）の外側 push 分（buildColumnAxisRowElements と同じ）に置くため、
-// その push 分を足した位置を返す。通り芯が丸ラベル中心（gutterEdgeCoord）まで伸びるのと同じ見た目になり、
-// かつ寸法線側に足を引かずに軸線自体をラベルへ届かせる（足無しの見た目を保つ）。
-function columnAxisLabelCoords(graph, viewport, width, height) {
-  const gridBounds = gridLineBounds(viewport, width, height);
-  const rows   = graph.dimensionLines.filter(d => d.dimensionKind === DimensionKind.CENTER);
-  const find   = side => rows.find(d => d.side === side);
-  const labelCoordFor = side => {
-    const d = find(side);
-    if (!d) return null;
-    const { lineCoord } = buildColumnAxisAnchors(d, graph, viewport, gridBounds);
-    if (lineCoord == null) return null;
-    const isNear = side === DimensionSide.TOP || side === DimensionSide.LEFT;
-    const push   = columnAxisPush(d.axis, viewport);
-    return isNear ? lineCoord - push : lineCoord + push;
-  };
-  return {
-    top:    labelCoordFor(DimensionSide.TOP),
-    bottom: labelCoordFor(DimensionSide.BOTTOM),
-    left:   labelCoordFor(DimensionSide.LEFT),
-    right:  labelCoordFor(DimensionSide.RIGHT),
-  };
-}
-
-// ○「柱芯」ラベルの当たり判定用に、各ラベル中心のスクリーン座標を {cl, sx, sy} で列挙する。
-// 描画（buildColumnAxisRowElements）と同じ幾何：X通り芯ラベルは上下辺、Y通り芯ラベルは左右辺に
-// 各2つ（柱芯位置＝通り芯+偏芯量に沿う）。columnAxisLabelCoords（ラベル線の直交座標）を再利用する。
-export function columnAxisLabelHits(graph, viewport, width, height) {
-  if (!graph) return [];
-  const coords  = columnAxisLabelCoords(graph, viewport, width, height);
-  const offsets = graph.columnAxisOffsets;
-  const toScreen = (wx, wy) => ({ sx: wx * viewport.scaleX + viewport.offsetX, sy: wy * viewport.scaleY + viewport.offsetY });
-  const hits = [];
-  for (const cl of graph.gridXs) {           // 縦CL（X通り芯）→ 上下辺
-    const ax = cl.effectiveValue + (offsets.get(cl.id) ?? 0);
-    for (const perp of [coords.top, coords.bottom]) {
-      if (perp == null) continue;
-      hits.push({ cl, ...toScreen(ax, perp) });
-    }
-  }
-  for (const cl of graph.gridYs) {           // 横CL（Y通り芯）→ 左右辺
-    const ay = cl.effectiveValue + (offsets.get(cl.id) ?? 0);
-    for (const perp of [coords.left, coords.right]) {
-      if (perp == null) continue;
-      hits.push({ cl, ...toScreen(perp, ay) });
-    }
-  }
-  return hits;
-}
+// columnAxisLabelCoords・columnAxisLabelHits は renderer/gutterLabelHits.js（純関数レイヤ）へ移設済み。
 
 // columnAxisMode（構造モード・ラーメン系）時は CENTER 行（外書き）が柱芯(SX/SY)表示に専有される
 // （下記分岐）。柱芯アンカーは「グリッドからのオフセットのみで決まる1:1の点」で浮いた中心線の重なり

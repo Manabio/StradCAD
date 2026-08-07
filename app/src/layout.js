@@ -21,3 +21,13 @@ export const INSET = {
 export function inGutter(x, y, width, height) {
   return x < INSET.left || y < INSET.top || x > width - INSET.right || y > height - INSET.bottom;
 }
+
+// 丸ラベルを外側方向にずらす量 (px, 画面定数)。gutterPrimitives.jsx・renderer/gutterLabelHits.js
+// （柱芯ラベルのヒット判定・純関数レイヤ）の両方が参照する単一の真実源。
+export const OUTWARD = 6;
+
+// 丸ラベルの半径。gutterPrimitives.jsx（描画）・renderer/gutterLabelHits.js（ヒット判定）双方が
+// 参照する単一の真実源（純粋な数値計算のみ・react-konva等のJSX依存を持たない）。
+export function labelCircleRadius(viewport) {
+  return Math.round(RULER * 0.25) / viewport.scaleX;
+}

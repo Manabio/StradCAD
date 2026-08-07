@@ -1,6 +1,6 @@
 import { Line, Circle, Text } from 'react-konva';
 import { DimensionSide } from '@core';
-import { RULER, INSET } from '../layout.js';
+import { RULER, INSET, OUTWARD, labelCircleRadius } from '../layout.js';
 
 // ================================================================
 // ガター注記の共通プリミティブ。
@@ -8,10 +8,9 @@ import { RULER, INSET } from '../layout.js';
 // 中心線寸法（GutterLayer.jsx の buildRowElements / pushFallbackSegment）の
 // いずれもここを参照することで、丸ラベル・寸法行・寸法値テキストの見た目が常に一致する
 // （片方だけ変えてもう片方が古いままになる、という参照漏れを防ぐ）。
+// OUTWARD・labelCircleRadius 自体は layout.js が単一の真実源（renderer/gutterLabelHits.js
+// という react-konva に依存しない純関数レイヤからも参照するため。JSX非依存に保つ）。
 // ================================================================
-
-// 丸ラベルを外側方向にずらす量 (px, 画面定数)
-export const OUTWARD = 6;
 
 // ガター端から画面定数pxの位置（ズームに関わらず一定）。丸ラベルの定位置に使う。
 // 帯の厚み・半径は RULER 基準、上端位置のみ INSET.top（ツールバー分下がる）を使う。
@@ -23,11 +22,6 @@ export function gutterEdgeCoord(viewport, width, height, side) {
     case DimensionSide.RIGHT:  return viewport.screenToWorld(width - RULER / 2 + OUTWARD, 0).x;
     default: return null;
   }
-}
-
-// 丸ラベルの半径。labelCircle 本体と、丸を寸法線から押し出す側（呼び出し元）の両方が参照する。
-export function labelCircleRadius(viewport) {
-  return Math.round(RULER * 0.25) / viewport.scaleX;
 }
 
 // 丸ラベル（塗り・縁取り・太字青文字）。(x, y) は丸の中心。

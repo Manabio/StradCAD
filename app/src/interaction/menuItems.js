@@ -1,3 +1,9 @@
+// import ゼロを維持する（node:test から安全に import できるようにするため。centerLineExtend.js /
+// edgeClassify.js / kneeDropWall.js は snap.js → store.js（localStorage/indexedDB）へ連鎖しており、
+// これらに依存すると node:test 環境で import 不能になる）。graph 依存の判定値
+// （canExtend/canShorten/hasInteriorWall/wallEligible）は呼び出し側（App.jsx）が算出して渡す。
+// CenterLineType.VERTICAL は 'X' 固定値で判定する（core/constants.js 参照。snap.js と同じ回避策）。
+
 export const CONTEXT = Object.freeze({
   INTERSECTION:        'intersection',
   CENTER_LINE_ENDPOINT: 'centerLineEndpoint',
@@ -88,4 +94,37 @@ export function getMenuItems(context, endpointState, clState, wallState) {
     default:
       return [];
   }
+}
+
+/**
+ * 長押しメニューの状態組立（context 判定＋items 生成）。App.jsx longPress の onFire から抽出。
+ * appMode==='opening'（建具モード）は壁・開口以外の長押しメニューを出さない（CL移動等の平面編集
+ * 操作は行わない）ため null を返す——呼び出し側はこれを合図にメニューを開かない。
+ * canMove は「CL移動をサポートするモードか」（呼び出し側の modeRef.current?.startMove の有無）。
+ * canExtend/canShorten（CL端点の延長/短縮可否）・hasInteriorWall（中心線に内壁指定があるか）・
+ * wallEligible（腰壁・垂れ壁の適格性）は graph 依存のため呼び出し側（App.jsx）が算出して渡す
+ * （このモジュールを import ゼロに保つため。ファイル冒頭コメント参照）。
+ * @returns {{context, items, endpointState, clState, wallState}|null}
+ */
+export function buildMenuState(appMode, {
+  snap, cl, clEndpoint, opening, wall, canMove, canExtend, canShorten, hasInteriorWall, wallEligible,
+}) {
+  const context = detectContext(snap, cl, opening, wall, clEndpoint);
+  if (appMode === 'opening' && context !== CONTEXT.WALL && context !== CONTEXT.OPENING) return null;
+  const endpointState = clEndpoint ? {
+    canExtend,
+    canShorten,
+    isVertical: clEndpoint.cl.centerLineType === 'X', // CenterLineType.VERTICAL
+    side:       clEndpoint.side,
+  } : null;
+  // 中心線上メニュー: 移動可否と線の向き（移動アイコンの矢印方向）を渡す。
+  const clState = context === CONTEXT.CENTER_LINE ? {
+    canMove,
+    isVertical: cl.centerLineType === 'X', // CenterLineType.VERTICAL
+    hasInteriorWall,
+  } : null;
+  // 壁上メニュー: 腰壁・垂れ壁の適格性（2a壁は対象外）を渡す。
+  const wallState = context === CONTEXT.WALL ? { eligible: wallEligible } : null;
+  const items = getMenuItems(context, endpointState, clState, wallState);
+  return { context, items, endpointState, clState, wallState };
 }
