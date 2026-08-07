@@ -1,7 +1,8 @@
 import { useState, useEffect, useRef } from 'react';
 import { observer } from 'mobx-react-lite';
 import { NumPad } from '../ui/NumPad.jsx';
-import { calcStep, getDisplayBase, canAppendOp, resolveDisplayValue } from './clMoveMath.js';
+import { toNumpadKey, applyKeyToNumpadValue } from '../ui/numpadUtils.js';
+import { calcStep, getDisplayBase, resolveDisplayValue } from './clMoveMath.js';
 import './CLMoveInput.css';
 
 export const CLMoveInput = observer(function CLMoveInput({
@@ -95,27 +96,13 @@ export const CLMoveInput = observer(function CLMoveInput({
       if (document.activeElement?.tagName === 'INPUT') return;
       const str   = inputStrRef.current;
       const apply = applyRef.current;
+      const k     = toNumpadKey(e.key);
 
-      if (e.key >= '0' && e.key <= '9') {
+      if (k !== null) {
         e.preventDefault();
-        apply((str === '' || str === '0') ? e.key : str + e.key);
-      } else if (e.key === 'Backspace') {
-        e.preventDefault();
-        apply(str.length > 1 ? str.slice(0, -1) : '');
-      } else if (e.key === '.') {
-        e.preventDefault();
-        if (!str.includes('.')) apply(str + '.');
-      } else if (e.key === '-') {
-        e.preventDefault();
-        if (str === '' || str === '0') apply('-');
-        else if (canAppendOp(str)) apply(str + '-');
-      } else if (e.key === '+') {
-        e.preventDefault();
-        if (str === '') apply('+');
-        else if (canAppendOp(str)) apply(str + '+');
-      } else if (e.key === '*' || e.key === '/') {
-        e.preventDefault();
-        if (canAppendOp(str)) apply(str + e.key);
+        // minusReplacesZero: 表示値0からの負数入力は "0-" ではなく "-" に置換する（絶対値をマイナスから
+        // 打ち始めるUX。従来からの挙動を維持）
+        apply(applyKeyToNumpadValue(str, k, { minusReplacesZero: true }));
       } else if (e.key === 'Enter') {
         const v = resolveDisplay(inputStrRef.current);
         if (!isNaN(v)) commitDisplayVal(v);

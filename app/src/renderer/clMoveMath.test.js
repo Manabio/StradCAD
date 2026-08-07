@@ -44,6 +44,16 @@ test('safeEval: 括弧なし四則演算のみ許可し、それ以外はNaN', (
   assert.ok(Number.isNaN(safeEval('(1+2)')));
 });
 
+test('safeEval: ".5" 形式・×÷ も evalNumpadExpr への委譲で評価できる', () => {
+  assert.equal(safeEval('.5'), 0.5);
+  assert.equal(safeEval('3×4'), 12);
+});
+
+// isRelative修正の回帰止め: "+.5"（数字なし小数）も "+0.5" と同様に相対演算扱いになること
+test('resolveDisplayValue: "+.5" は "+0.5" と同様に relativeBase へ加算される（isRelativeの.5対応回帰）', () => {
+  assert.equal(resolveDisplayValue('+.5', 1000), 1000.5);
+});
+
 test('calcStep: 倍率分母の最大桁単位', () => {
   assert.equal(calcStep(151), 100);
   assert.equal(calcStep(230), 200);

@@ -2,6 +2,8 @@
 // 持つコンポーネント本体から切り出す——node:test（jsdom等に頼らない既存流儀）から直接検証できるようにする
 // ため。平面モード・構造モード（梁芯）の両方が同じ実装を使う（本ファイルはappMode非依存）。
 
+import { evalNumpadExpr } from '../ui/numpadUtils.js';
+
 // 倍率分母の最大桁単位: 151→100, 230→200
 export function calcStep(scaleDenom) {
   if (!scaleDenom || scaleDenom <= 0) return 1;
@@ -38,16 +40,10 @@ export function roundAbsToStep(absVal, cl, isV, scaleDenominator, graph, columnA
   return isV ? base + roundedDisplay : base - roundedDisplay;
 }
 
-// 四則演算の安全な評価（括弧なし・正規表現で事前検証）
+// 四則演算の安全な評価。ui/numpadUtils.js の evalNumpadExpr（NumPad共通の事前検証つき評価）へ委譲する。
+// CL移動量は符号付き値（負の偏芯オフセット等）を扱うため positiveOnly:false で呼ぶ
 export function safeEval(str) {
-  if (!str) return NaN;
-  if (!/^[+-]?\d+\.?\d*([+\-*/]\d+\.?\d*)*$/.test(str)) return NaN;
-  try {
-    const result = Function(`'use strict'; return (${str})`)();
-    return typeof result === 'number' && isFinite(result) ? result : NaN;
-  } catch {
-    return NaN;
-  }
+  return evalNumpadExpr(str, { positiveOnly: false });
 }
 
 // 先頭が「+」かつ数値1つ → 相対演算（現在値へ加算）。既定でフィールド全選択のまま数値入力を始める
@@ -56,7 +52,7 @@ export function safeEval(str) {
 // 「絶対値として負数を打つ」手段が無くなり曖昧性を解消できないため、相対演算は "+" 始まりのみ対応する
 // （相対減算をしたい場合は結果の絶対値を直接打つ）。
 export function isRelative(str) {
-  return /^\+\d+(\.\d+)?$/.test(str);
+  return /^\+(\d+(\.\d+)?|\.\d+)$/.test(str);
 }
 
 // 末尾が演算子でなく評価可能 → 式完了
@@ -64,11 +60,6 @@ export function isComplete(str) {
   if (!str) return false;
   if (/[+\-*/]$/.test(str)) return false;
   return !isNaN(safeEval(str));
-}
-
-// 末尾が演算子でない → 演算子を追加できる
-export function canAppendOp(str) {
-  return str.length > 0 && !/[+\-*/]$/.test(str);
 }
 
 // 入力文字列 → 確定する表示値（相対なら relativeBase へ加算、絶対ならそのまま）。不完全な式は NaN。
