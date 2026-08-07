@@ -5,7 +5,7 @@
 // 補助線(aux)の延長は壁も境界候補に含める（AddCLDialog の作成ロジックと同じ非対称性）。
 // 短縮は壁を対象にしない（自身の直交CLのみ、1つ内側の交点まで）。
 import { CenterLineType, centerLineKind } from '@core';
-import { overhangMm } from '../snap.js';
+import { overhangMm } from '../snapGeometry.js';
 import { mergeCenterLineChain } from './centerLineMerge.js';
 
 function perpTypeOf(cl) {
