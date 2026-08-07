@@ -8,7 +8,8 @@ import { useStore, addFloor, switchFloor, saveToIDB, addAlternativeFloor, remove
 import { isDirty } from './dirtyState.js';
 import { serializeStructCLs, restoreStructCLs } from './graphSnapshot.js';
 import { ERR_CL_DUPLICATE, ERR_CL_CENTER_UPGRADED, ERR_CL_STRUCT_EXISTS, ERR_STRUCT_MAIN_UNSPECIFIED } from './error.js';
-import { Viewport, LodLevel } from './viewport.js';
+import { LodLevel } from './viewport.js';
+import { viewport } from './appViewport.js';
 import {
   findNearestIntersection,
   findNearestCenterLine,
@@ -99,7 +100,7 @@ import { ModeBar }             from './ui/ModeBar.jsx';
 import { FloorDrum }           from './ui/FloorDrum.jsx';
 import { AltChip }             from './ui/AltChip.jsx';
 import { FloorplanPalette }    from './renderer/FloorplanPalette.jsx';
-import { RULER, TOP_BAR, INSET, inGutter as isInGutter } from './layout.js';
+import { TOP_BAR, INSET, inGutter as isInGutter } from './layout.js';
 import { evalNumpadExpr } from './ui/numpadUtils.js';
 import { EccentricityDialog } from './ui/EccentricityDialog.jsx';
 import { KneeDropWallDialog } from './ui/KneeDropWallDialog.jsx';
@@ -108,8 +109,6 @@ import { resolveWallSpanKey, isEligibleWallSpan, kneeDropWallGeometry } from './
 const SNAP_THRESHOLD_PX = 20;
 const CL_THRESHOLD_PX   = 8;
 const WALL_THRESHOLD_PX = 8;
-
-const viewport = new Viewport(window.innerWidth, window.innerHeight, RULER, RULER);
 
 // CL の pendingDelta を実座標に bake する（ref CL / 通常 CL 両対応）
 const evalExpr = (s) => evalNumpadExpr(s, { positiveOnly: true });
