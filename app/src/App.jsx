@@ -3,10 +3,9 @@ import { observer } from 'mobx-react-lite';
 import { runInAction } from 'mobx';
 import { undoManager } from './undoManager.js';
 import { serializeGraph, restoreGraph } from './graphSnapshot.js';
-import { Stage, Layer, Group } from 'react-konva';
+import { Stage } from 'react-konva';
 import { useStore, addFloor, switchFloor, saveToIDB, addAlternativeFloor, removeFloor } from './store.js';
 import { isDirty } from './dirtyState.js';
-import { LodLevel } from './viewport.js';
 import { viewport } from './appViewport.js';
 import {
   findBracketingCLs,
@@ -15,28 +14,19 @@ import {
   SNAP_THRESHOLD_PX,
 } from './snap.js';
 import { OpeningPanel } from './openings/OpeningPanel.jsx';
-import { OpeningsLayer } from './renderer/OpeningsLayer.jsx';
 import { placeOpeningWithDefaults, removeOpeningWithUndo } from './openings/openingEdit.js';
 import { collectFloorOpeningGroups, assignOpeningNumbers, applyOpeningTags } from './openings/openingNumbering.js';
 import { usePointerInteraction } from './interaction/usePointerInteraction.js';
-import { FinishModeLayer } from './finish/FinishModeLayer.jsx';
 import { RoomNameInput }   from './finish/RoomNameInput.jsx';
 import { FinishSidebar }   from './finish/FinishSidebar.jsx';
 import { FinishHalfModal } from './finish/FinishHalfModal.jsx';
-import { StairLayer }      from './renderer/StairLayer.jsx';
 import { floorHeightAbove } from './finish/stair/stairDimensions.js';
 import { buildStairEntries, buildUpperStairPeekEntries } from './finish/stair/stairEntries.js';
 import { runFinishEntryBoundary, runFinishExitBoundary } from './finish/finishBoundary.js';
-import { RoomLabelsLayer } from './renderer/RoomLabelsLayer.jsx';
-import { StepSectionLayer } from './renderer/StepSectionLayer.jsx';
-import { VoidLayer } from './renderer/VoidLayer.jsx';
 import { computeVoidCrosses } from './finish/voidGeometry.js';
-import { StructuralLayer, ColumnsLayer } from './renderer/StructuralLayer.jsx';
-import { MemberTagLayer } from './renderer/MemberTagLayer.jsx';
 import { MemberStatusMenu } from './ui/MemberStatusMenu.jsx';
-import { PRIMARY_DIMENSION_FIELD_BY_MAP } from './structural/memberCatalog.js';
 import { CenterLineType, OpeningCategory, centerLineKind } from '@core';
-import { addSkipZero, subtractSkipZero, makeFloorName, makeFloorLevelPrefix, renameFloor } from './floorNumber.js';
+import { addSkipZero, subtractSkipZero, makeFloorName, renameFloor } from './floorNumber.js';
 import {
   floorBytesEqual, applyFloorBytes, isActiveAnAltOf,
   computeFloorReorder, computeAltReorder, resolveChipReorderTarget, computeFloorChangeReorder,
@@ -45,19 +35,12 @@ import { AddFloorDialog } from './ui/AddFloorDialog.jsx';
 import { buildFloorChipModel } from './ui/floorChipModel.js';
 import { ConfirmDialog } from './ui/ConfirmDialog.jsx';
 import { FloorChangeDialog } from './ui/FloorChangeDialog.jsx';
-import { IntersectionMarkers } from './renderer/CenterLinesLayer.jsx';
-import { GutterLayer } from './renderer/GutterLayer.jsx';
-import { ShapesLayer }    from './renderer/ShapesLayer.jsx';
-import { SnapIndicator }  from './renderer/SnapIndicator.jsx';
 import { LongPressIndicator } from './renderer/LongPressIndicator.jsx';
-import { DrawPreview }    from './renderer/DrawPreview.jsx';
-import { CLAddPreview }   from './renderer/CLAddPreview.jsx';
 import { CLMoveInput } from './renderer/CLMoveInput.jsx';
 import { AxisFaceInput }     from './renderer/AxisFaceInput.jsx';
 import { RadialMenu }     from './ui/RadialMenu.jsx';
 import { AddCLDialog }    from './ui/AddCLDialog.jsx';
 import { WallDialog }          from './ui/WallDialog.jsx';
-import { WallRefIndicator }   from './renderer/WallRefIndicator.jsx';
 import { CalibrationDialog }  from './ui/CalibrationDialog.jsx';
 import { SiteDialog }          from './ui/SiteDialog.jsx';
 import { BuildingInfoDialog }  from './ui/BuildingInfoDialog.jsx';
@@ -71,7 +54,6 @@ import { floorSwapManager } from './storage/FloorSwapManager.js';
 import { saveFloor, loadFloor } from './storage/db.js';
 import { readLocalAutosaveRaw, parseAutosaveData, writeLocalAutosave, parseOpenedFileBytes } from './storage/localSnapshot.js';
 import { SiteInfoPanel }       from './ui/SiteInfoPanel.jsx';
-import { SiteLinesLayer, SiteDrawPreview } from './renderer/SiteLinesLayer.jsx';
 import {
   confirmSiteLineLen, confirmSiteTriangle, cycleSiteLineKind,
 } from './transform/siteEdit.js';
@@ -86,7 +68,8 @@ import { ModeBar }             from './ui/ModeBar.jsx';
 import { FloorDrum }           from './ui/FloorDrum.jsx';
 import { AltChip }             from './ui/AltChip.jsx';
 import { FloorplanPalette }    from './renderer/FloorplanPalette.jsx';
-import { TOP_BAR, INSET } from './layout.js';
+import { SceneLayers }         from './renderer/SceneLayers.jsx';
+import { TOP_BAR } from './layout.js';
 import { evalNumpadExpr } from './ui/numpadUtils.js';
 import { EccentricityDialog } from './ui/EccentricityDialog.jsx';
 import { KneeDropWallDialog } from './ui/KneeDropWallDialog.jsx';
@@ -1597,126 +1580,33 @@ const App = observer(() => {
           onTouchEnd={pointerHandlers.onTouchEnd}
           style={{ cursor }}
         >
-          <Layer name="world">
-            {/* ガーターレイヤー（通り芯本体・丸ラベル・通り芯寸法）— window全体・クリップなし・描画エリアと同倍率 */}
-            <Group
-              x={viewport.offsetX}
-              y={viewport.offsetY}
-              scaleX={viewport.scaleX}
-              scaleY={viewport.scaleY}
-            >
-              {appMode !== 'site' && <GutterLayer
-                graph={graph}
-                viewport={viewport}
-                width={size.width}
-                height={size.height}
-                columnAxisMode={columnAxisMode}
-                appMode={appMode}
-              />}
-            </Group>
-
-            {/* 描画域を通り芯表示エリアの内側にクリップ（上端はツールバー＋上ガター分だけ下げる） */}
-            <Group
-              clipX={INSET.left}
-              clipY={INSET.top}
-              clipWidth={size.width  - INSET.left - INSET.right}
-              clipHeight={size.height - INSET.top - INSET.bottom}
-            >
-              <Group
-                x={viewport.offsetX}
-                y={viewport.offsetY}
-                scaleX={viewport.scaleX}
-                scaleY={viewport.scaleY}
-              >
-                {appMode === 'finish' && mode && (
-                  <FinishModeLayer
-                    graph={graph}
-                    viewport={viewport}
-                    selectedRoomId={mode.selectedRoomId}
-                    previewCells={mode.previewCells}
-                  />
-                )}
-                {isStairMode && (
-                  <StairLayer
-                    entries={[...installEntries, ...upperEntries]}
-                    viewport={viewport}
-                    detail={viewport.lodLevel === LodLevel.DETAIL}
-                    laneGapMm={stairLaneGapMm}
-                    breakOverhangMm={stairBreakOverhangMm}
-                    selectedStairId={appMode === 'finish' ? mode?.selectedStairId : null}
-                    onSelectStair={appMode === 'finish' ? (id => modeRef.current?.selectStair(id)) : null}
-                  />
-                )}
-                {appMode === 'site' && mode && (
-                  <SiteLinesLayer
-                    site={project.site}
-                    viewport={viewport}
-                    selectedLineId={mode.selectedLineId}
-                    onSelectLine={id => modeRef.current?.selectLine(id)}
-                  />
-                )}
-                {appMode === 'site' && <SiteDrawPreview mode={mode} />}
-                {/* 構造モードでは平面図（壁・建具）を描画しない。通り芯と構造部材のみ表示する。 */}
-                {appMode !== 'structure' && <ShapesLayer graph={graph} viewport={viewport} stairUnderClips={stairUnderClips} />}
-                {appMode !== 'structure' && <OpeningsLayer graph={graph} viewport={viewport} selectedId={appMode === 'opening' ? mode?.selectedOpeningId : null} />}
-                {/* 平面モードでは自階の柱（構造モードで生成・保存済み）を表示する。構造モードの伏図と違い
-                    1つ下の階ではなく自階graphの柱を描く（その階の平面に立つ柱はその階のもの）。 */}
-                {appMode === 'floorplan' && <ColumnsLayer graph={graph} viewport={viewport} />}
-                {appMode === 'structure' && <StructuralLayer composition={structComposition} viewport={viewport} project={project} />}
-                {appMode === 'structure' && (
-                  <MemberTagLayer
-                    composition={structComposition}
-                    viewport={viewport}
-                    onTagClick={(entity, mapName) => {
-                      setShowStructuralInfoDialog(true);
-                      setMemberFocusRequest({ mapName, tag: entity.memberNo, fieldKey: PRIMARY_DIMENSION_FIELD_BY_MAP[mapName] ?? null, entityId: entity.id });
-                    }}
-                    onStatusMenuRequest={(entity, pos) => setStatusMenu({ entity, pos })}
-                  />
-                )}
-                {appMode === 'floorplan' && (
-                  <RoomLabelsLayer
-                    graph={graph}
-                    viewport={viewport}
-                    floorPrefix={makeFloorLevelPrefix(project.activePlane?.startFloor ?? 1)}
-                  />
-                )}
-                {/* 段差断面: 段差線は全LOD（略図＝細線 / 標準・詳細＝中線）、ハッチ・寸法は詳細のみ
-                    ——レイヤー内部でLOD分岐する */}
-                {appMode === 'floorplan' && <StepSectionLayer graph={graph} viewport={viewport} />}
-                {(appMode === 'floorplan' || appMode === 'finish') && (
-                  <VoidLayer graph={graph} viewport={viewport} upperCrosses={upperVoidCrosses} />
-                )}
-                {appMode !== 'site' && <IntersectionMarkers graph={graph} viewport={viewport} />}
-                <DrawPreview
-                  drawState={mode?.drawState ?? null}
-                  snapPoint={snapPoint}
-                  cursorWorld={cursorWorld}
-                />
-                <CLAddPreview value={clPreview} type={clDialog?.type} />
-              </Group>
-            </Group>
-          </Layer>
-
-          <Layer name="overlay">
-            {!menu && <SnapIndicator snap={snapPoint} viewport={viewport} />}
-            {wallDialog && wallDialog.nearbyCLs?.length > 0 && (
-              <WallRefIndicator
-                nearbyCLs={wallDialog.nearbyCLs}
-                worldPos={wallDialog.worldPos}
-                viewport={viewport}
-              />
-            )}
-            {clDialog && clDialog.nearbyCLs?.length > 0 && (
-              <WallRefIndicator
-                nearbyCLs={clDialog.nearbyCLs}
-                worldPos={clDialog.worldPos}
-                viewport={viewport}
-              />
-            )}
-          </Layer>
-
-          <Layer name="ui" />
+          <SceneLayers
+            graph={graph}
+            project={project}
+            appMode={appMode}
+            mode={mode}
+            modeRef={modeRef}
+            viewport={viewport}
+            size={size}
+            columnAxisMode={columnAxisMode}
+            isStairMode={isStairMode}
+            installEntries={installEntries}
+            upperEntries={upperEntries}
+            stairLaneGapMm={stairLaneGapMm}
+            stairBreakOverhangMm={stairBreakOverhangMm}
+            stairUnderClips={stairUnderClips}
+            structComposition={structComposition}
+            upperVoidCrosses={upperVoidCrosses}
+            snapPoint={snapPoint}
+            cursorWorld={cursorWorld}
+            clPreview={clPreview}
+            clDialog={clDialog}
+            wallDialog={wallDialog}
+            menu={menu}
+            setShowStructuralInfoDialog={setShowStructuralInfoDialog}
+            setMemberFocusRequest={setMemberFocusRequest}
+            setStatusMenu={setStatusMenu}
+          />
         </Stage>
       </div>
 
