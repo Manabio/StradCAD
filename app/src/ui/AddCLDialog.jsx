@@ -169,7 +169,6 @@ export function AddCLDialog({ type, worldCoord, gridCLs, nearbyCLs = [], appMode
           <input
             type="text"
             className="cl-dialog-input"
-            style={{ width: kind === 'struct' ? 112 : 88 }}
             value={distStr}
             placeholder={kind === 'struct' ? '例: 3000,3000' : ''}
             onChange={e => setDistStr(e.target.value)}
