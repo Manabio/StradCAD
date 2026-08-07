@@ -142,17 +142,24 @@ const CE = { CL_ID: 0, MODE: 1, VALUE: 2, SIDE: 3, BACKING: 4 };
 // KneeDropWall（腰壁・垂れ壁レコード）: 5 フィールド
 const KDW = { KEY: 0, HAS_KNEE: 1, KNEE_TOP: 2, HAS_DROP: 3, DROP_BOTTOM: 4 };
 
-// Opening: 15 フィールド（開口 — 建具・窓）
+// Opening: 19 フィールド（開口 — 建具・窓）
 const OP = {
   ID: 0, AXIS_CL: 1, WALL_SIDE: 2, IS_V: 3,
   REF_CL: 4, REF_OFF: 5, WIDTH: 6, CATEGORY: 7, SUB_TYPE: 8,
   HINGE_SIDE: 9, SWING_SIDE: 10,
   DISC: 11, LW: 12, LT: 13, COL: 14,
+  FIXTURE_TYPE: 15, // 建具記号（外壁窓のみ）。0=なし/1=AW/2=JW/3=SW/4=AD/5=SD/6=WD
+  HAS_SILL_H: 16, SILL_H: 17, // 窓台高さ(mm)。null=未設定
+  HEIGHT: 18, // 建具高さ(mm)。0=未設定
 };
 
 // Opening.category 列挙値エンコード
 const OPENING_CATEGORY_ENC = { fitting: 0, window: 1 };
 const OPENING_CATEGORY_DEC = ['fitting', 'window'];
+
+// Opening.fixtureType 列挙値エンコード
+const FIXTURE_TYPE_ENC = { AW: 1, JW: 2, SW: 3, AD: 4, SD: 5, WD: 6 };
+const FIXTURE_TYPE_DEC = [null, 'AW', 'JW', 'SW', 'AD', 'SD', 'WD'];
 
 // DiagonalLine: 7 フィールド
 const DG = { ID: 0, A: 1, B: 2, DISC: 3, LW: 4, LT: 5, COL: 6 };
@@ -386,7 +393,9 @@ function writeOpening(b, o) {
   const sSub   = b.createString(o.subType ?? '');
   const bp     = strBase(b, o);
 
-  b.startObject(15);
+  const hasSillH = o.sillHeight != null;
+
+  b.startObject(19);
   b.addFieldOffset(OP.ID,         sId,   0);
   b.addFieldOffset(OP.AXIS_CL,    sAxis, 0);
   b.addFieldInt8(OP.WALL_SIDE,    o.wallSide < 0 ? -1 : 1, 0);
@@ -402,6 +411,10 @@ function writeOpening(b, o) {
   b.addFieldFloat64(OP.LW,        o.lineWeight ?? 0.25, 0.0);
   b.addFieldOffset(OP.LT,         bp.lt,   0);
   b.addFieldOffset(OP.COL,        bp.col,  0);
+  b.addFieldInt8(OP.FIXTURE_TYPE, FIXTURE_TYPE_ENC[o.fixtureType] ?? 0, 0);
+  b.addFieldInt8(OP.HAS_SILL_H,   hasSillH ? 1 : 0, 0);
+  b.addFieldFloat64(OP.SILL_H,    hasSillH ? o.sillHeight : 0, 0.0);
+  b.addFieldFloat64(OP.HEIGHT,    o.height ?? 0, 0.0);
   return b.endObject();
 }
 
@@ -1028,6 +1041,9 @@ function readOpening(bb, tablePos) {
     lineWeight:  r.f64(OP.LW)   || 0.25,
     lineType:    r.str(OP.LT)   || 'solid',
     color:       r.str(OP.COL)  || '#000000',
+    fixtureType: FIXTURE_TYPE_DEC[r.i8(OP.FIXTURE_TYPE)] ?? null,
+    sillHeight:  r.i8(OP.HAS_SILL_H) !== 0 ? r.f64(OP.SILL_H) : null,
+    height:      r.f64(OP.HEIGHT) || null,
   };
 }
 

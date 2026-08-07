@@ -5,6 +5,7 @@ import { TOP_BAR } from '../layout.js';
 // キーボード・タッチ共通で操作できるよう、通常の <button> で構成する。
 const MODES = [
   { mode: 'floorplan', label: '平面' },
+  { mode: 'opening',   label: '建具' },
   { mode: 'finish',    label: '仕上げ' },
   { mode: 'structure', label: '構造' },
   { mode: 'site',      label: '敷地' },

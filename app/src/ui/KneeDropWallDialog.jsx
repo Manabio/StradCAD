@@ -10,7 +10,8 @@ import { effectiveCeilingHeight, validateKneeDropWall, ERR_CEILING_HEIGHT_UNRESO
 
 /**
  * 腰壁・垂れ壁ダイアログ（壁の長押し「腰/垂壁」から開く）。
- * OpeningDialog.jsx と同パターン（2フィールド + 単一NumPad、focusedFieldで切替）。
+ * 複数フィールド + 単一NumPad、focusedFieldでどのフィールドを編集中か切り替えるパターン
+ * （旧 OpeningDialog.jsx が同型だったが建具モード新設に伴い削除済み。現在この形の他の参照先はない）。
  * 位置は長押し位置アンカー＋クランプ（AddFloorDialog.jsx の前例）。
  *
  * @param {object}   graph

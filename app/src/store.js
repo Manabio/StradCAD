@@ -166,6 +166,8 @@ export async function removeFloor(planeId) {
     // 指したままになり得る（floorSpanLabel/assignNumbers は防御済みだが、古い階の情報を表示し続ける
     // のを避けるため即時に捨てる。次のモード境界の反映パスで正しく再収集される）。
     project.clearMemberNumberIndex();
+    // openingNumberIndex も counts が planeId キーゆえ同じ理由で捨てる（.claude/opening-model.md）。
+    project.clearOpeningNumberIndex();
   });
 }
 

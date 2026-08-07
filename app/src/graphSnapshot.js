@@ -64,6 +64,8 @@ function buildSnapshot(graph) {
       refCLId: o.refCL.id, refOffset: o.refOffset, width: o.width,
       category: o.category, subType: o.subType,
       hingeSide: o.hingeSide, swingSide: o.swingSide,
+      fixtureType: o.fixtureType ?? null, sillHeight: o.sillHeight ?? null,
+      height: o.height ?? null,
       ...baseProps(o),
     })),
     diagonals: gs.filter(s => s.type === ShapeType.DIAGONAL).map(d => ({
@@ -511,7 +513,9 @@ function applySnapshot(graph, snapshot) {
       if (axisCL && refCL) {
         graph.addOpening(axisCL, d.wallSide, d.isVertical, refCL, d.refOffset, d.width, d.category, d.subType,
           { discipline: d.discipline, lineWeight: d.lineWeight, lineType: d.lineType, color: d.color,
-            hingeSide: d.hingeSide, swingSide: d.swingSide }, d.id);
+            hingeSide: d.hingeSide, swingSide: d.swingSide,
+            fixtureType: d.fixtureType ?? null, sillHeight: d.sillHeight ?? null,
+            height: d.height ?? null }, d.id);
       }
     }
 

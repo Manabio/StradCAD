@@ -319,6 +319,9 @@ export class Wall extends Shape {
 //   wallSide: axisCL のどちら側か（Wall.axisOffset の符号と同義、±1）
 //   refCL/refOffset: 壁の長さ方向の基準位置（通常は壁の clStart を流用）
 //   hingeSide/swingSide: swing系（片開き戸等）のみ意味を持つ。それ以外は既定値を保持するだけ
+//   fixtureType: 建具記号（'AW'|'JW'|'SW'|'AD'|'SD'|'WD'|null）。null=未設定（openings/ 層がカテゴリ既定へフォールバック）
+//   sillHeight: 窓台高さ(mm、FLからサッシ下端まで、null=未設定)。窓カテゴリのみ意味を持つ
+//   height: 建具高さ(mm、null=未設定＝旧データ)。窓は sillHeight〜sillHeight+height が開口範囲
 // ----------------------------------------------------------------
 export class Opening extends Shape {
   constructor(id, axisCL, wallSide, isVertical, refCL, refOffset, width, category, subType, props) {
@@ -334,6 +337,9 @@ export class Opening extends Shape {
     this.subType     = subType;    // openingCatalog.js のキー（'singleSwing' 等）
     this.hingeSide   = props?.hingeSide ?? -1; // ±1: 蝶番側（refOffset負/正方向の端）。swing系のみ意味を持つ
     this.swingSide   = props?.swingSide ?? 1;  // ±1: 開く方向（wallSideと同じ/逆の面）。swing系のみ意味を持つ
+    this.fixtureType = props?.fixtureType ?? null; // 建具記号 'AW'|'JW'|'SW'|'AD'|'SD'|'WD'|null
+    this.sillHeight  = props?.sillHeight  ?? null; // 窓台高さ(mm): FLからサッシ下端まで。窓カテゴリのみ意味を持つ
+    this.height      = props?.height      ?? null; // 建具高さ(mm、開口下端から上端まで。null=未設定＝旧データ)
     makeObservable(this, {
       axisCL:      observable.ref,
       wallSide:    observable,
@@ -343,6 +349,9 @@ export class Opening extends Shape {
       subType:     observable,
       hingeSide:   observable,
       swingSide:   observable,
+      fixtureType: observable,
+      sillHeight:  observable,
+      height:      observable,
       centerCoord: computed,
       coord1:      computed,
       coord2:      computed,
@@ -2209,6 +2218,9 @@ export class Project {
     // 部材番号グループの派生キャッシュ（非永続。モード境界の収集フェーズで再構築される。
     // groupKey → {mapName, symbol, sizeKey, signature, floorRanks:Set<number>, hasRoof, counts:Map<planeId,number>}）。
     this.memberNumberIndex = observable.map();
+    // 建具番号グループの派生キャッシュ（非永続。建具モード突入時の収集フェーズで再構築される。
+    // signature → { symbol, subType, width, height, sillHeight, counts:Map<planeId,number>, tag }）。
+    this.openingNumberIndex = observable.map();
 
     makeObservable(this, {
       name:          observable,
@@ -2221,10 +2233,12 @@ export class Project {
       addPlane:      action,
       removePlane:   action,
       clearMemberNumberIndex: action,
+      clearOpeningNumberIndex: action,
     });
   }
 
   clearMemberNumberIndex() { this.memberNumberIndex.clear(); }
+  clearOpeningNumberIndex() { this.openingNumberIndex.clear(); }
 
   get activeGraph() {
     return this.activePlaneId ? this.graphMap.get(this.activePlaneId) : undefined;

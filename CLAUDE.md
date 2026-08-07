@@ -23,7 +23,7 @@ app/src/
 ├── renderer/     Konva描画レイヤー
 ├── interaction/  ポインタ操作フック・メニュー定義
 ├── transform/    空間インデックス・変形・随伴探査
-├── openings/     建具・窓カタログ
+├── openings/     建具モード（カタログ・記号別採番・編集・姿図・パネル）
 ├── floorNumber.js, calibration.js
 ├── ui/           ダイアログ・パネル
 ├── finish/       仕上げモード（部屋・材・境界）
@@ -38,6 +38,7 @@ app/src/
 |---|---|
 | データモデルの設計意図 | `.claude/data-model.md` |
 | 構造モードの設計意図 | `.claude/structural-model.md` |
+| 建具モードの設計意図 | `.claude/opening-model.md` |
 | 図面合成（複数階×複数カテゴリ）の設計意図 | `.claude/figure.md` |
 | モード切替アーキテクチャ | `.claude/mode-system.md` |
 | 階・Plane設計 | `.claude/floor-design.md` |

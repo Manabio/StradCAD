@@ -218,7 +218,25 @@ function tickSymbol(opening, host, sp) {
   );
 }
 
-export const OpeningsLayer = observer(({ graph, viewport }) => {
+// 選択中開口のハイライト矩形（リスト⇄図面の対応表示。建具モード専用）。
+// 壁厚方向は host.materialRange（実際に材が存在する範囲）へ視認用マージンを足す。
+const SELECT_HIGHLIGHT_MARGIN_MM = 30;
+function selectionHighlight(opening, host, isVertical) {
+  const { lo, hi } = host.materialRange;
+  const perpLo = lo - SELECT_HIGHLIGHT_MARGIN_MM, perpHi = hi + SELECT_HIGHLIGHT_MARGIN_MM;
+  return (
+    <Rect
+      key={`${opening.id}-sel`}
+      {...rectSpec(isVertical, opening.coord1, opening.coord2, perpLo, perpHi)}
+      stroke="#2563eb"
+      strokeWidth={2}
+      fill="transparent"
+      listening={false}
+    />
+  );
+}
+
+export const OpeningsLayer = observer(({ graph, viewport, selectedId = null }) => {
   if (!graph) return null;
   const { scaleX, scaleY, lodLevel } = viewport;
 
@@ -232,6 +250,7 @@ export const OpeningsLayer = observer(({ graph, viewport }) => {
       strokeWidth: resolveStrokeWidth(opening.lineWeight, Math.min(scaleX, scaleY)),
       listening:   false,
     };
+    const highlight = opening.id === selectedId ? selectionHighlight(opening, host, opening.isVertical) : null;
 
     // 略図: 機構を問わずティックマークのみ（視認ノイズを減らす簡略表示）
     if (lodLevel !== LodLevel.SCHEMATIC && entry && IMPLEMENTED_MECHANISMS.has(entry.mechanism)) {
@@ -239,6 +258,7 @@ export const OpeningsLayer = observer(({ graph, viewport }) => {
         const detail = lodLevel === LodLevel.DETAIL;
         return (
           <Fragment key={opening.id}>
+            {highlight}
             {detail && swingFrameSymbol(opening, host, graph, sp)}
             {swingSymbol(
               opening, host, sp,
@@ -253,11 +273,12 @@ export const OpeningsLayer = observer(({ graph, viewport }) => {
         const detail = lodLevel === LodLevel.DETAIL;
         return (
           <Fragment key={opening.id}>
+            {highlight}
             {detail ? slideDoubleDetailSymbol(opening, host, graph, sp) : slideDoubleSymbol(opening, host, sp)}
           </Fragment>
         );
       }
     }
-    return <Fragment key={opening.id}>{tickSymbol(opening, host, sp)}</Fragment>;
+    return <Fragment key={opening.id}>{highlight}{tickSymbol(opening, host, sp)}</Fragment>;
   });
 });

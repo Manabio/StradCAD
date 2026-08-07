@@ -22,8 +22,10 @@ import {
   overhangMm,
 } from './snap.js';
 import { findHostWall } from './openings/openingGeometry.js';
-import { OpeningDialog } from './ui/OpeningDialog.jsx';
+import { OpeningPanel } from './openings/OpeningPanel.jsx';
 import { OpeningsLayer } from './renderer/OpeningsLayer.jsx';
+import { placeOpeningWithDefaults, removeOpeningWithUndo } from './openings/openingEdit.js';
+import { collectFloorOpeningGroups, assignOpeningNumbers, applyOpeningTags } from './openings/openingNumbering.js';
 import { useLongPress }  from './interaction/useLongPress.js';
 import { FinishModeLayer } from './finish/FinishModeLayer.jsx';
 import { RoomNameInput }   from './finish/RoomNameInput.jsx';
@@ -175,7 +177,6 @@ const App = observer(() => {
   const [wallDialog,     setWallDialog]     = useState(null); // { worldPos }
   const [eccDialog,      setEccDialog]      = useState(null); // { cl } — CL偏芯ダイアログ
   const [kneeDropWallDialog, setKneeDropWallDialog] = useState(null); // { spanKey, anchor } — 腰壁・垂れ壁ダイアログ
-  const [openingDialog,  setOpeningDialog]  = useState(null); // { wall, worldPos, category, existing }
   const [floorDialog,    setFloorDialog]    = useState(null); // { isLowest }
   const [floorConfirm,   setFloorConfirm]   = useState(null); // { message, buttons, onSelect }
   const [floorChangeDlg, setFloorChangeDlg] = useState(null); // { planeId }
@@ -219,6 +220,7 @@ const App = observer(() => {
   const axisLabelRef      = useRef(null); // 柱芯ラベル長押し中: { cl, sx, sy }
   const finishDragDownRef = useRef(null); // 仕上げモード: pointerDown 座標
   const siteDrawDownRef   = useRef(null); // 敷地モード: ドラッグ開始スクリーン座標
+  const openingSelectRef  = useRef(null); // 建具モードへの遷移直後に選択する開口ID（モードロード時に読み取って消費）
 
   // アクティブなモード状態 (FloorplanModeState | FinishModeState | null)
   // modeRef: イベントハンドラから同期的にアクセス
@@ -257,7 +259,13 @@ const App = observer(() => {
           })
         : appMode === 'structure'
           ? import('./modes/StructuralModeState.js').then(m => new m.StructuralModeState(graph))
-          : import('./modes/SiteModeState.js').then(m => new m.SiteModeState(project.site));
+          : appMode === 'opening'
+            ? import('./modes/OpeningModeState.js').then(m => {
+                const s = new m.OpeningModeState(graph, project, openingSelectRef.current);
+                openingSelectRef.current = null;
+                return s;
+              })
+            : import('./modes/SiteModeState.js').then(m => new m.SiteModeState(project.site));
 
     loader.then(s => {
       if (cancelled) { s.dispose(); return; }
@@ -392,6 +400,8 @@ const App = observer(() => {
       const opening      = nearOpeningRef.current;
       const wall         = nearWallRef.current;
       const context      = detectContext(snap, cl, opening, wall, clEndpoint);
+      // 建具モードは壁・開口以外の長押しメニューを出さない（CL移動等の平面編集操作は行わない）。
+      if (appMode === 'opening' && context !== CONTEXT.WALL && context !== CONTEXT.OPENING) return;
       const endpointState = clEndpoint ? {
         canExtend:  canExtendCenterLine(graph, clEndpoint.cl, clEndpoint.side),
         canShorten: canShortenCenterLine(graph, clEndpoint.cl, clEndpoint.side),
@@ -445,7 +455,6 @@ const App = observer(() => {
       setMenu(null);
       setClDialog(null);
       setWallDialog(null);
-      setOpeningDialog(null);
     }
     if (ctx.mode && ctx.mode !== appMode) {
       if (appMode === 'structure' && ctx.mode !== 'structure') {
@@ -958,8 +967,9 @@ const App = observer(() => {
     moveDownRef.current = null;
 
     // 平面モード: 通常タップで開口を選択（パレット表示）/ 空白タップで選択解除。
+    // 建具モード: 通常タップで開口を選択（パネルに姿図・フォームを表示）/ 空白タップで選択解除。
     // 描画・移動・パン・長押しメニュー中は対象外。
-    if (appMode === 'floorplan' && !menu && !drag.current
+    if ((appMode === 'floorplan' || appMode === 'opening') && !menu && !drag.current
         && !drawDownRef.current && !modeRef.current?.moveState && !modeRef.current?.drawState) {
       modeRef.current?.selectOpening?.(nearOpeningRef.current?.id ?? null);
     }
@@ -1187,6 +1197,22 @@ const App = observer(() => {
       if (plane.id === activeId) continue;
       await applyMemberNumbersToFloor(plane, tags);
     }
+  }
+
+  // ---- モード境界: 建具モード突入（記号別採番を全階から収集して確定する）----
+  // graph を一切変更しない（他階は peek のみ・保存も書き戻しもしない）ため undo エントリは不要
+  // （.claude/undo-redo.md「undo対象外」の割り切りと同型。番号は project.openingNumberIndex という
+  // 導出のみのキャッシュへ積むだけで、entity側には何も書かない）。
+  async function collectOpeningNumbersAllFloors(activeGraph) {
+    const activeId = project.activePlaneId;
+    runInAction(() => project.clearOpeningNumberIndex());
+    if (activeGraph) runInAction(() => collectFloorOpeningGroups(activeGraph, project));
+    for (const plane of project.planes) {
+      if (plane.id === activeId) continue;
+      const temp = await floorSwapManager.peek(plane, project.structGraph);
+      runInAction(() => collectFloorOpeningGroups(temp, project));
+    }
+    runInAction(() => applyOpeningTags(project, assignOpeningNumbers(project)));
   }
 
   // 要件1：階追加後。追加で N（負担階数）・基礎指定が変わるため、全実体階の構造部材を更新する。
@@ -1769,8 +1795,16 @@ const App = observer(() => {
         setMode(null);
         setClDialog(null);
         setWallDialog(null);
-        setOpeningDialog(null);
       },
+    },
+    opening: {
+      // 突入: 記号別採番を全階収集して確定する（graph は変えないため exit・undo エントリは不要）。
+      // deferEnterOnModeChange: モード切替（handleModeChange）では全階peek（IDB読み）の完了を待たず
+      // 画面切替を先行させる（構造モードと同じ扱い）。切替直後の一瞬はタグ未確定（リストは「—」）だが、
+      // project.openingNumberIndex は observable.map のため収集完了後にパネルが自動再描画される。
+      // 階切替（switchFloorKeepingMode）は常に完了を待つ（mode-system.mdの既定動作、フラグ不参照）。
+      deferEnterOnModeChange: true,
+      enter: (graph) => collectOpeningNumbersAllFloors(graph),
     },
   };
 
@@ -1827,7 +1861,6 @@ const App = observer(() => {
     setMenu(null);
     setClDialog(null);
     setWallDialog(null);
-    setOpeningDialog(null);
   }
 
   // ---- フロア切替（モード維持）：現モードを抜けずに別階の同種図面へ移動する ----
@@ -2962,18 +2995,14 @@ const App = observer(() => {
       return;
     }
     if (item.id === 'add-fitting' || item.id === 'add-window') {
-      setOpeningDialog({
-        wall:     menu.wall,
-        worldPos: menu.worldPos,
-        category: item.id === 'add-fitting' ? OpeningCategory.FITTING : OpeningCategory.WINDOW,
-        existing: null,
-      });
+      const category = item.id === 'add-fitting' ? OpeningCategory.FITTING : OpeningCategory.WINDOW;
+      const { opening, error } = placeOpeningWithDefaults(graph, project, menu.wall, menu.worldPos, category);
+      if (error) setToast({ msg: error, key: Date.now() });
+      else       enterOpeningMode(opening.id);
       return;
     }
     if (item.id === 'opening-edit') {
-      const o    = menu.opening;
-      const wall = findHostWall(o, graph);
-      setOpeningDialog({ wall, worldPos: menu.worldPos, category: o.category, existing: o });
+      enterOpeningMode(menu.opening.id);
       return;
     }
     if (item.id === 'knee-drop-wall') {
@@ -2983,41 +3012,17 @@ const App = observer(() => {
       return;
     }
     if (item.id === 'opening-del') {
-      const o = menu.opening;
-      graph.removeShape(o.id);
-      undoManager.push(
-        () => graph.addOpening(o.axisCL, o.wallSide, o.isVertical, o.refCL, o.refOffset, o.width, o.category, o.subType,
-          { hingeSide: o.hingeSide, swingSide: o.swingSide }, o.id),
-        () => graph.removeShape(o.id),
-      );
+      removeOpeningWithUndo(graph, project, menu.opening);
       return;
     }
     modeRef.current?.startDraw(item.id, menu?.snap, menu?.worldPos);
   }
 
-  // ---- 開口（建具・窓）追加・編集 ----
-  function handleOpeningConfirm({ refCL, refOffset, width, subType, hingeSide, swingSide }) {
-    if (!openingDialog) return;
-    if (openingDialog.existing) {
-      const o = openingDialog.existing;
-      const before = { wallSide: o.wallSide, refCL: o.refCL, refOffset: o.refOffset, width: o.width, subType: o.subType, hingeSide: o.hingeSide, swingSide: o.swingSide };
-      const after  = { wallSide: o.wallSide, refCL, refOffset, width, subType, hingeSide, swingSide };
-      runInAction(() => Object.assign(o, after));
-      undoManager.push(
-        () => runInAction(() => Object.assign(o, before)),
-        () => runInAction(() => Object.assign(o, after)),
-      );
-    } else {
-      const wall = openingDialog.wall;
-      const wallSide = Math.sign(wall.axisOffset) || 1;
-      const o = graph.addOpening(wall.axisCL, wallSide, wall.isVertical, refCL, refOffset, width, openingDialog.category, subType, { hingeSide, swingSide });
-      undoManager.push(
-        () => graph.removeShape(o.id),
-        () => graph.addOpening(o.axisCL, o.wallSide, o.isVertical, o.refCL, o.refOffset, o.width, o.category, o.subType,
-          { hingeSide: o.hingeSide, swingSide: o.swingSide }, o.id),
-      );
-    }
-    setOpeningDialog(null);
+  // ---- 建具モードへの遷移。既に建具モードなら選択だけ切り替える ----
+  function enterOpeningMode(id) {
+    if (appMode === 'opening') { modeRef.current?.selectOpening(id); return; }
+    openingSelectRef.current = id;
+    handleModeChange('opening');
   }
 
   // ---- 壁追加 ----
@@ -3459,6 +3464,7 @@ const App = observer(() => {
                : isPanning        ? 'grabbing'
                : appMode === 'finish' ? (isDragging ? 'crosshair' : 'default')
                : appMode === 'site'   ? (mode?.siteDrawState ? 'crosshair' : 'default')
+               : appMode === 'opening' ? ((nearOpening || nearWall) ? 'pointer' : 'default')
                : isMoving         ? 'grab'
                : isDrawing        ? 'crosshair'
                : snapPoint        ? 'cell'
@@ -3760,18 +3766,6 @@ const App = observer(() => {
         />
       )}
 
-      {openingDialog && (
-        <OpeningDialog
-          wall={openingDialog.wall}
-          worldPos={openingDialog.worldPos}
-          category={openingDialog.category}
-          existing={openingDialog.existing}
-          graph={graph}
-          onConfirm={handleOpeningConfirm}
-          onCancel={() => setOpeningDialog(null)}
-        />
-      )}
-
       {floorDialog && (
         <AddFloorDialog
           isLowest={floorDialog.isLowest}
@@ -3897,7 +3891,7 @@ const App = observer(() => {
                 {appMode === 'site' && <SiteDrawPreview mode={mode} />}
                 {/* 構造モードでは平面図（壁・建具）を描画しない。通り芯と構造部材のみ表示する。 */}
                 {appMode !== 'structure' && <ShapesLayer graph={graph} viewport={viewport} stairUnderClips={stairUnderClips} />}
-                {appMode !== 'structure' && <OpeningsLayer graph={graph} viewport={viewport} />}
+                {appMode !== 'structure' && <OpeningsLayer graph={graph} viewport={viewport} selectedId={appMode === 'opening' ? mode?.selectedOpeningId : null} />}
                 {/* 平面モードでは自階の柱（構造モードで生成・保存済み）を表示する。構造モードの伏図と違い
                     1つ下の階ではなく自階graphの柱を描く（その階の平面に立つ柱はその階のもの）。 */}
                 {appMode === 'floorplan' && <ColumnsLayer graph={graph} viewport={viewport} />}
@@ -4071,6 +4065,17 @@ const App = observer(() => {
           onConfirmLineLen={handleConfirmLineLen}
           onConfirmTriangle={handleConfirmTriangle}
           onCycleLineKind={handleCycleLineKind}
+        />
+      )}
+
+      {/* 建具モード: 記号別採番リスト＋姿図・数値編集パネル */}
+      {appMode === 'opening' && mode && (
+        <OpeningPanel
+          graph={graph}
+          project={project}
+          mode={mode}
+          isLandscape={isLandscape}
+          onToast={msg => setToast({ msg, key: Date.now() })}
         />
       )}
 
