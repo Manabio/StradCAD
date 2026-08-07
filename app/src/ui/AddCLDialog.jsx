@@ -1,5 +1,7 @@
 import { useState, useEffect } from 'react';
 import { circleRefSymbol, circleRefKindLabel } from './circleRef.js';
+import { NumPad } from './NumPad.jsx';
+import { evalNumpadExpr } from './numpadUtils.js';
 import './AddCLDialog.css';
 
 const KINDS = [
@@ -17,7 +19,7 @@ const KINDS_BY_MODE = { structure: [BEAM_KIND] };
  * 通り芯追加ダイアログ
  *
  * Y軸は上が正・下が負（表示座標 = −ワールドY）。
- * onConfirm(worldValue, kind) : kind = 'center'|'struct'|'aux'|'beam'
+ * onConfirm(worldValue, kind, trim) : kind = 'center'|'struct'|'aux'|'beam'
  * columnAxisRefs: 構造モード（appMode==='structure'）専用の「柱芯」参照選択肢。
  * 要素は { id:'colaxis:'+clId, clId, value(柱芯実位置), axisOffset(通り芯からの偏芯量), label } の合成CL
  * （実CLではない）。他モードでは常に空配列＝従来と完全に同一。
@@ -54,16 +56,17 @@ export function AddCLDialog({ type, worldCoord, gridCLs, nearbyCLs = [], appMode
   const dirLabel = dir == null ? null
     : isV ? (dir > 0 ? '右→' : '←左') : (dir > 0 ? '↓下' : '上↑');
 
-  const dist = refCL
-    ? Math.abs(Number(distStr) || 0)
-    : (Number(distStr) || 0);
+  // 計算式対応（例: 910×3, 1820+455）。未完成・不正な式は 0 扱い（従来の || 0 と同挙動）
+  const distVal  = evalNumpadExpr(distStr, { positiveOnly: false });
+  const distNum  = Number.isNaN(distVal) ? 0 : distVal;
+  const dist = refCL ? Math.abs(distNum) : distNum;
   const previewWorld   = refCL ? refCL.value + dir * dist : sign * dist;
   const previewDisplay = sign * previewWorld;
 
   // スパン配列モード: kind='struct' かつカンマ区切りの場合
   const isMultiSpan = kind === 'struct' && distStr.includes(',');
   const parsedSpans = isMultiSpan
-    ? distStr.split(',').map(s => Number(s.trim())).filter(n => n > 0 && isFinite(n))
+    ? distStr.split(',').map(s => evalNumpadExpr(s.trim())).filter(n => n > 0 && isFinite(n))
     : null;
   const batchWorldValues = (isMultiSpan && parsedSpans && parsedSpans.length > 0)
     ? (() => {
@@ -204,6 +207,15 @@ export function AddCLDialog({ type, worldCoord, gridCLs, nearbyCLs = [], appMode
           </button>
         </div>
       </div>
+
+      {/* 値はダイアログ内の入力欄に表示されるため hideDisplay。物理キーボードは入力欄の onKeyDown が担うため keyboard は付けない */}
+      <NumPad
+        value={distStr}
+        hideDisplay
+        onChange={setDistStr}
+        onConfirm={handleConfirm}
+        onCancel={onCancel}
+      />
     </>
   );
 }
