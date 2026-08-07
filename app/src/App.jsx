@@ -9,20 +9,16 @@ import { isDirty } from './dirtyState.js';
 import { LodLevel } from './viewport.js';
 import { viewport } from './appViewport.js';
 import {
-  findCLMoveSnap,
-  findBeamAxisMoveSnap,
   findBracketingCLs,
   findNearbyCenterLines,
   overhangMm,
-  resolvePointerTargets,
   SNAP_THRESHOLD_PX,
 } from './snap.js';
 import { OpeningPanel } from './openings/OpeningPanel.jsx';
 import { OpeningsLayer } from './renderer/OpeningsLayer.jsx';
 import { placeOpeningWithDefaults, removeOpeningWithUndo } from './openings/openingEdit.js';
 import { collectFloorOpeningGroups, assignOpeningNumbers, applyOpeningTags } from './openings/openingNumbering.js';
-import { useLongPress }  from './interaction/useLongPress.js';
-import { findColumnAxisLabel, findGutterCL } from './interaction/gutterHitTest.js';
+import { usePointerInteraction } from './interaction/usePointerInteraction.js';
 import { FinishModeLayer } from './finish/FinishModeLayer.jsx';
 import { RoomNameInput }   from './finish/RoomNameInput.jsx';
 import { FinishSidebar }   from './finish/FinishSidebar.jsx';
@@ -30,7 +26,6 @@ import { FinishHalfModal } from './finish/FinishHalfModal.jsx';
 import { StairLayer }      from './renderer/StairLayer.jsx';
 import { floorHeightAbove } from './finish/stair/stairDimensions.js';
 import { buildStairEntries, buildUpperStairPeekEntries } from './finish/stair/stairEntries.js';
-import { interiorWallSpans } from './finish/edgeClassify.js';
 import { runFinishEntryBoundary, runFinishExitBoundary } from './finish/finishBoundary.js';
 import { RoomLabelsLayer } from './renderer/RoomLabelsLayer.jsx';
 import { StepSectionLayer } from './renderer/StepSectionLayer.jsx';
@@ -40,7 +35,6 @@ import { StructuralLayer, ColumnsLayer } from './renderer/StructuralLayer.jsx';
 import { MemberTagLayer } from './renderer/MemberTagLayer.jsx';
 import { MemberStatusMenu } from './ui/MemberStatusMenu.jsx';
 import { PRIMARY_DIMENSION_FIELD_BY_MAP } from './structural/memberCatalog.js';
-import { CONTEXT, detectContext, buildMenuState } from './interaction/menuItems.js';
 import { CenterLineType, OpeningCategory, centerLineKind } from '@core';
 import { addSkipZero, subtractSkipZero, makeFloorName, makeFloorLevelPrefix, renameFloor } from './floorNumber.js';
 import {
@@ -59,7 +53,6 @@ import { LongPressIndicator } from './renderer/LongPressIndicator.jsx';
 import { DrawPreview }    from './renderer/DrawPreview.jsx';
 import { CLAddPreview }   from './renderer/CLAddPreview.jsx';
 import { CLMoveInput } from './renderer/CLMoveInput.jsx';
-import { roundAbsToStep } from './renderer/clMoveMath.js';
 import { AxisFaceInput }     from './renderer/AxisFaceInput.jsx';
 import { RadialMenu }     from './ui/RadialMenu.jsx';
 import { AddCLDialog }    from './ui/AddCLDialog.jsx';
@@ -80,12 +73,12 @@ import { readLocalAutosaveRaw, parseAutosaveData, writeLocalAutosave, parseOpene
 import { SiteInfoPanel }       from './ui/SiteInfoPanel.jsx';
 import { SiteLinesLayer, SiteDrawPreview } from './renderer/SiteLinesLayer.jsx';
 import {
-  confirmSiteLineLen, confirmSiteTriangle, cycleSiteLineKind, commitSiteTapLine,
+  confirmSiteLineLen, confirmSiteTriangle, cycleSiteLineKind,
 } from './transform/siteEdit.js';
 import { composeUndoWithMergeChain } from './transform/centerLineMerge.js';
-import { extendCenterLine, shortenCenterLine, canExtendCenterLine, canShortenCenterLine } from './transform/centerLineExtend.js';
+import { extendCenterLine, shortenCenterLine } from './transform/centerLineExtend.js';
 import {
-  commitCLMoveOp, commitStretchWithUndo, deleteCenterLineWithUndo,
+  deleteCenterLineWithUndo,
   shouldSuggestWoodStructure, addCenterLineFromDialog,
 } from './transform/centerLineOps.js';
 import { HamburgerMenu }       from './ui/HamburgerMenu.jsx';
@@ -93,11 +86,11 @@ import { ModeBar }             from './ui/ModeBar.jsx';
 import { FloorDrum }           from './ui/FloorDrum.jsx';
 import { AltChip }             from './ui/AltChip.jsx';
 import { FloorplanPalette }    from './renderer/FloorplanPalette.jsx';
-import { TOP_BAR, INSET, inGutter as isInGutter } from './layout.js';
+import { TOP_BAR, INSET } from './layout.js';
 import { evalNumpadExpr } from './ui/numpadUtils.js';
 import { EccentricityDialog } from './ui/EccentricityDialog.jsx';
 import { KneeDropWallDialog } from './ui/KneeDropWallDialog.jsx';
-import { resolveWallSpanKey, isEligibleWallSpan } from './finish/kneeDropWall.js';
+import { resolveWallSpanKey } from './finish/kneeDropWall.js';
 
 const evalExpr = (s) => evalNumpadExpr(s, { positiveOnly: true });
 
@@ -125,17 +118,9 @@ function buildColumnAxisRefs(graph, type) {
 const App = observer(() => {
   const project = useStore();
   const [size,        setSize]        = useState({ width: window.innerWidth, height: window.innerHeight });
-  const [snapPoint,   setSnapPoint]   = useState(null);
-  const [pressPos,    setPressPos]    = useState(null);
   const [menu,        setMenu]        = useState(null); // { pos, items, snap, worldPos, cl }
   const [statusMenu,  setStatusMenu]  = useState(null); // { entity, pos } | null — 部材タグ右クリック（適合状態の暫定トグル）
   const [memberFocusRequest, setMemberFocusRequest] = useState(null); // { mapName, tag, fieldKey, entityId } | null — 部材タグクリックで構造リストの該当寸法欄を開く（entityIdは「この部材」スコープの対象特定に使う）
-  const [cursorWorld, setCursorWorld] = useState(null);
-  const [cursorScreen,setCursorScreen]= useState({ x: 0, y: 0 });
-  const [nearCL,         setNearCL]         = useState(null);
-  const [nearCLEndpoint, setNearCLEndpoint] = useState(null); // { cl, side:'lo'|'hi' } | null
-  const [nearWall,    setNearWall]    = useState(null);
-  const [nearOpening, setNearOpening] = useState(null);
   const [clDialog,    setClDialog]    = useState(null); // { type, worldCoord }
   const [clPreview,   setClPreview]   = useState(null);
   const [wallDialog,     setWallDialog]     = useState(null); // { worldPos }
@@ -144,7 +129,6 @@ const App = observer(() => {
   const [floorDialog,    setFloorDialog]    = useState(null); // { isLowest }
   const [floorConfirm,   setFloorConfirm]   = useState(null); // { message, buttons, onSelect }
   const [floorChangeDlg, setFloorChangeDlg] = useState(null); // { planeId }
-  const [isPanning,   setIsPanning]   = useState(false);
   const [scaleInput,      setScaleInput]      = useState(null); // null=非編集, string=編集中
   const [showCalibration, setShowCalibration] = useState(false);
   const [showSiteDialog,  setShowSiteDialog]  = useState(false);
@@ -168,22 +152,7 @@ const App = observer(() => {
   // 乗る（木造の基礎伏図＋1階伏図・S造のR階伏図＋小屋伏図）ため、planeId とは別に保持する。
   const [activeStructSlotKey, setActiveStructSlotKey] = useState(null);
 
-  const drag          = useRef(null);
   const fileInputRef  = useRef(null);
-  const pinch         = useRef(null);
-  const touchTapRef   = useRef(null);
-  const snapRef       = useRef(null);
-  const nearCLRef     = useRef(null);
-  const nearCLEndpointRef = useRef(null);
-  const nearWallRef    = useRef(null);
-  const nearOpeningRef = useRef(null);
-  const drawDownRef       = useRef(null);
-  const moveDownRef       = useRef(null); // CL移動: pointer-down 記録用
-  const stretchDownRef    = useRef(null); // ストレッチ開始判定用: { clientX, clientY, snap }
-  const gutterCLRef       = useRef(null); // ガター長押し中のCL
-  const axisLabelRef      = useRef(null); // 柱芯ラベル長押し中: { cl, sx, sy }
-  const finishDragDownRef = useRef(null); // 仕上げモード: pointerDown 座標
-  const siteDrawDownRef   = useRef(null); // 敷地モード: ドラッグ開始スクリーン座標
   const openingSelectRef  = useRef(null); // 建具モードへの遷移直後に選択する開口ID（モードロード時に読み取って消費）
 
   // アクティブなモード状態 (FloorplanModeState | FinishModeState | null)
@@ -199,11 +168,21 @@ const App = observer(() => {
   // が結果として書き込む columnAxisOffsets の有無で代用する（非ラーメン系は常にclear()される）。
   const columnAxisMode = appMode === 'structure' && graph.columnAxisOffsets.size > 0;
 
-  useEffect(() => { snapRef.current  = snapPoint; }, [snapPoint]);
-  useEffect(() => { nearCLRef.current = nearCL;   }, [nearCL]);
-  useEffect(() => { nearCLEndpointRef.current = nearCLEndpoint; }, [nearCLEndpoint]);
-  useEffect(() => { nearWallRef.current    = nearWall;    }, [nearWall]);
-  useEffect(() => { nearOpeningRef.current = nearOpening; }, [nearOpening]);
+  // ---- ポインタ/タッチ/長押しのジェスチャー配線（interaction/usePointerInteraction.js）----
+  const {
+    handlers: pointerHandlers,
+    snapPoint, nearCL, nearWall, nearOpening,
+    cursorWorld, cursorScreen, pressPos, isPanning,
+    commitCLMove,
+    setSnapPoint, setNearCL, setNearWall, setNearOpening, setCursorWorld,
+    resetGestureRefs,
+  } = usePointerInteraction({
+    project, graph, size, appMode, columnAxisMode, modeRef,
+    menu, setMenu,
+    onToast: msg => setToast({ msg, key: Date.now() }),
+    onUndo: performUndo,
+    onRedo: performRedo,
+  });
 
   // モード切替: 旧モードを破棄してから新モジュールを動的ロード
   useEffect(() => {
@@ -305,76 +284,6 @@ const App = observer(() => {
     return () => window.removeEventListener('beforeunload', handler);
   }, []);
 
-  // ---- ガター通り芯 長押しフック ----
-  // 長押し確定（500ms後）までの待ち時間を使い、押下直後（onStart）から移動範囲の
-  // 計算を先読みしておく（通り芯の場合は他フロアのIDB読み込みを含むため非同期）。
-  const gutterLongPress = useLongPress({
-    onStart:  (sx, sy) => {
-      setPressPos({ x: sx, y: sy });
-      if (gutterCLRef.current) modeRef.current?.preloadMove(gutterCLRef.current);
-    },
-    onFire:   async () => {
-      setPressPos(null);
-      const cl = gutterCLRef.current;
-      gutterCLRef.current = null;
-      if (cl) {
-        const err = await modeRef.current?.startMove(cl);
-        if (err) setToast({ msg: err, key: Date.now() });
-      }
-    },
-    onCancel: () => setPressPos(null),
-  });
-
-  // ---- 柱芯ラベル 長押しフック（構造モード・描画エリア内）----
-  // 成立で出幅編集の静止入力窓を開く。窓位置はラベルのスクリーン座標に固定（動かない）。
-  const axisLabelLongPress = useLongPress({
-    onStart:  (sx, sy) => setPressPos({ x: sx, y: sy }),
-    onFire:   () => {
-      setPressPos(null);
-      const hit = axisLabelRef.current;
-      axisLabelRef.current = null;
-      if (!hit) return;
-      const structure  = graph.structureOverride ?? project.structuralInfo.mainStructure;
-      const projection = project.structuralInfo.getColumnFaceProjection(structure, hit.cl);
-      modeRef.current?.startAxisEdit?.({ cl: hit.cl, structure, screenX: hit.sx, screenY: hit.sy, projection });
-    },
-    onCancel: () => setPressPos(null),
-  });
-
-  // ---- 長押しフック ----
-  const longPress = useLongPress({
-    onStart:  (sx, sy) => setPressPos({ x: sx, y: sy }),
-    onFire:   (sx, sy) => {
-      setPressPos(null);
-      stretchDownRef.current = null; // ストレッチ意図をキャンセルしてメニューを開く
-      const snap         = snapRef.current;
-      const clEndpoint   = nearCLEndpointRef.current;
-      const cl           = nearCLRef.current;
-      const opening      = nearOpeningRef.current;
-      const wall         = nearWallRef.current;
-      // context 判定・メニュー items 生成は menuItems.js に集約（建具モードは壁・開口以外は null）。
-      // menuItems.js は import ゼロ（node:test対応）に保つため、graph 依存の判定値はここで算出して渡す。
-      const menuContext = detectContext(snap, cl, opening, wall, clEndpoint);
-      const state = buildMenuState(appMode, {
-        snap, cl, clEndpoint, opening, wall,
-        canMove: typeof modeRef.current?.startMove === 'function',
-        canExtend:  clEndpoint ? canExtendCenterLine(graph, clEndpoint.cl, clEndpoint.side) : undefined,
-        canShorten: clEndpoint ? canShortenCenterLine(graph, clEndpoint.cl, clEndpoint.side) : undefined,
-        hasInteriorWall: menuContext === CONTEXT.CENTER_LINE ? interiorWallSpans(graph, cl.id).length > 0 : undefined,
-        wallEligible:    menuContext === CONTEXT.WALL ? isEligibleWallSpan(wall, graph) : undefined,
-      });
-      if (!state) return;
-      // 移動を選ばれたときに備え、移動範囲の計算（他フロアのIDB読み込みを含む）を先読みしておく。
-      if (state.clState?.canMove) modeRef.current.preloadMove(cl);
-      setMenu({
-        pos: { x: sx, y: sy }, items: state.items, snap, worldPos: viewport.screenToWorld(sx, sy),
-        cl: clEndpoint ? clEndpoint.cl : cl, wall, opening,
-        clEndpointSide: clEndpoint ? clEndpoint.side : null,
-      });
-    },
-    onCancel: () => { setPressPos(null); stretchDownRef.current = null; },
-  });
-
   useEffect(() => {
     const onResize = () => setSize({ width: window.innerWidth, height: window.innerHeight });
     window.addEventListener('resize', onResize);
@@ -453,8 +362,10 @@ const App = observer(() => {
   // keydown リスナは初回マウント時のみ登録されるため、最新レンダーのクロージャを ref 経由で呼ぶ
   const performUndoRef = useRef(null);
   const performRedoRef = useRef(null);
+  const resetGestureRefsRef = useRef(null);
   performUndoRef.current = performUndo;
   performRedoRef.current = performRedo;
+  resetGestureRefsRef.current = resetGestureRefs;
 
   // ESC / Ctrl+Z / Ctrl+Y
   useEffect(() => {
@@ -468,384 +379,11 @@ const App = observer(() => {
       modeRef.current?.cancelAxisEdit?.();
       modeRef.current?.cancelStretch?.();
       modeRef.current?.cancelSiteDraw?.();
-      siteDrawDownRef.current = null;
-      stretchDownRef.current = null;
+      resetGestureRefsRef.current?.();
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, []);
-
-  // ---- ホイールズーム ----
-  const handleWheel = (e) => {
-    e.evt.preventDefault();
-    const factor = e.evt.deltaY < 0 ? 1.1 : 1 / 1.1;
-    viewport.zoomAt(e.evt.clientX, e.evt.clientY, factor);
-    updateSnap(e.evt.clientX, e.evt.clientY);
-  };
-
-  // ---- ポインタ Down ----
-  const handlePointerDown = (e) => {
-    const { clientX, clientY } = e.evt;
-    if (e.evt.touches) return;
-    if (menu) return;
-
-    // ---- 仕上げモード ----
-    if (appMode === 'finish') {
-      const inGutter = isInGutter(clientX, clientY, size.width, size.height);
-      if (inGutter) {
-        drag.current = { lastX: clientX, lastY: clientY };
-        setIsPanning(true);
-      } else {
-        finishDragDownRef.current = { x: clientX, y: clientY };
-        const world = viewport.screenToWorld(clientX, clientY);
-        modeRef.current?.startDrag(world.x, world.y);
-      }
-      return;
-    }
-
-    // ---- 敷地モード ----
-    if (appMode === 'site') {
-      const inGutter = isInGutter(clientX, clientY, size.width, size.height);
-      if (inGutter) {
-        drag.current = { lastX: clientX, lastY: clientY };
-        setIsPanning(true);
-      } else {
-        const sm = modeRef.current?.subMode;
-        if (sm === 'sansha' || sm === 'other') {
-          // ドラッグかタップかを pointerUp で判定するために記録
-          siteDrawDownRef.current = { x: clientX, y: clientY };
-          drag.current = { lastX: clientX, lastY: clientY };
-        }
-      }
-      return;
-    }
-
-    if (modeRef.current?.moveState) {
-      moveDownRef.current = { x: clientX, y: clientY };
-      return;
-    }
-    if (modeRef.current?.drawState) {
-      drawDownRef.current = { x: clientX, y: clientY };
-      return;
-    }
-    // 構造モード: 描画エリア内の○「柱芯」ラベルをロングタップ → 出幅編集（ガター判定より先）
-    if (appMode === 'structure' && columnAxisMode) {
-      const hit = findColumnAxisLabel(graph, viewport, size.width, size.height, clientX, clientY);
-      if (hit) {
-        axisLabelRef.current = { cl: hit.cl, sx: hit.sx, sy: hit.sy };
-        axisLabelLongPress.begin(clientX, clientY);
-        return;
-      }
-    }
-    const inGutter = isInGutter(clientX, clientY, size.width, size.height);
-    if (inGutter) {
-      const cl = findGutterCL(graph, viewport, size.width, size.height, clientX, clientY);
-      if (cl) {
-        gutterCLRef.current = cl;
-        gutterLongPress.begin(clientX, clientY);
-      } else {
-        drag.current = { lastX: clientX, lastY: clientY };
-        setIsPanning(true);
-      }
-      return;
-    }
-    // 交点スナップ中なら押下位置を記録（移動閾値超えでストレッチへ）
-    if (snapRef.current) stretchDownRef.current = { clientX, clientY, snap: snapRef.current };
-    longPress.begin(clientX, clientY);
-  };
-
-  // ---- ポインタ Move ----
-  const handlePointerMove = (e) => {
-    const { clientX, clientY } = e.evt;
-    if (menu) return;
-
-    // ---- 仕上げモード ----
-    if (appMode === 'finish') {
-      if (drag.current) {
-        const dx = clientX - drag.current.lastX;
-        const dy = clientY - drag.current.lastY;
-        drag.current.lastX = clientX;
-        drag.current.lastY = clientY;
-        viewport.pan(dx, dy);
-        return;
-      }
-      if (finishDragDownRef.current && modeRef.current?.dragState) {
-        const world = viewport.screenToWorld(clientX, clientY);
-        modeRef.current?.updateDrag(world.x, world.y);
-      }
-      return;
-    }
-
-    // ---- 敷地モード ----
-    if (appMode === 'site') {
-      if (drag.current) {
-        const dx = clientX - drag.current.lastX;
-        const dy = clientY - drag.current.lastY;
-        drag.current.lastX = clientX;
-        drag.current.lastY = clientY;
-        viewport.pan(dx, dy);
-      }
-      // 始点確定後はドラッグ中でもマウス位置でプレビューを更新する
-      if (modeRef.current?.siteDrawState) {
-        const world = viewport.screenToWorld(clientX, clientY);
-        modeRef.current.updateSiteDraw(world.x, world.y);
-      }
-      return;
-    }
-
-    // パン中
-    if (drag.current) {
-      const dx = clientX - drag.current.lastX;
-      const dy = clientY - drag.current.lastY;
-      drag.current.lastX = clientX;
-      drag.current.lastY = clientY;
-      viewport.pan(dx, dy);
-      setSnapPoint(null);
-      setCursorWorld(null);
-      return;
-    }
-
-    // ---- ガターCL 長押し待機中 ----
-    if (gutterCLRef.current) {
-      const shouldPan = gutterLongPress.move(clientX, clientY);
-      if (shouldPan) {
-        gutterCLRef.current = null;
-        drag.current = { lastX: clientX, lastY: clientY };
-        setIsPanning(true);
-      }
-      return;
-    }
-
-    // ---- 柱芯ラベル 長押し待機中（閾値超過で長押しキャンセル）----
-    if (axisLabelRef.current) {
-      if (axisLabelLongPress.move(clientX, clientY)) axisLabelRef.current = null;
-      return;
-    }
-
-    // ---- CL 移動モード ----
-    const ms = modeRef.current?.moveState;
-    if (ms) {
-      const world = viewport.screenToWorld(clientX, clientY);
-      const cl    = ms.cl;
-      const isV   = cl.centerLineType === 'X';
-      const rawVal  = isV ? world.x : world.y;
-      const snapVal = appMode === 'structure' && centerLineKind(cl) === 'beam'
-        ? findBeamAxisMoveSnap(graph, cl, world.x, world.y, SNAP_THRESHOLD_PX, viewport.scaleX, viewport.scaleY)
-        : findCLMoveSnap(graph, cl, world.x, world.y, SNAP_THRESHOLD_PX, viewport.scaleX, viewport.scaleY);
-      const candidate = snapVal ?? roundAbsToStep(rawVal, cl, isV, viewport.scaleDenominator, graph, appMode === 'structure');
-      const newVal  = Math.min(Math.max(candidate, ms.range.min), ms.range.max);
-      // 不正なスクリーン座標（clientX/Y欠落等）由来のNaNが cl.pendingDelta を汚さないようにする防御。
-      // 一度 pendingDelta が NaN になると effectiveValue も NaN 化し、以後の originalValue 比較
-      // （NaN !== 何であっても常に真）で確定分岐を誤らせる・再解決が壊れるおそれがあるため。
-      if (Number.isFinite(newVal)) modeRef.current?.updateMove(newVal);
-      setCursorWorld(world);
-      setCursorScreen({ x: clientX, y: clientY });
-      // スナップインジケータ: 他CLにスナップ中（かつ可動範囲内）は表示
-      setSnapPoint(snapVal != null && snapVal === newVal
-        ? { x: isV ? newVal : world.x, y: isV ? world.y : newVal }
-        : null
-      );
-      return;
-    }
-
-    // ---- ストレッチモード（交点・自由点の 2D ドラッグ）----
-    const ss = modeRef.current?.stretchState;
-    if (ss) {
-      const world = viewport.screenToWorld(clientX, clientY);
-      const { type, vertex } = ss.target;
-      let finalX = world.x;
-      let finalY = world.y;
-      if (type === 'intersection') {
-        const snapX = findCLMoveSnap(graph, vertex.clVertical,   world.x, world.y, SNAP_THRESHOLD_PX, viewport.scaleX, viewport.scaleY);
-        const snapY = findCLMoveSnap(graph, vertex.clHorizontal, world.x, world.y, SNAP_THRESHOLD_PX, viewport.scaleX, viewport.scaleY);
-        finalX = snapX ?? world.x;
-        finalY = snapY ?? world.y;
-        setSnapPoint((snapX != null || snapY != null) ? { x: finalX, y: finalY } : null);
-      } else {
-        setSnapPoint(null);
-      }
-      modeRef.current.updateStretch(finalX, finalY);
-      setCursorWorld(world);
-      setCursorScreen({ x: clientX, y: clientY });
-      return;
-    }
-
-    // ---- 描画モード ----
-    if (modeRef.current?.drawState) {
-      if (drawDownRef.current) {
-        const ddx = clientX - drawDownRef.current.x;
-        const ddy = clientY - drawDownRef.current.y;
-        if (Math.hypot(ddx, ddy) > 8) {
-          drag.current = { lastX: clientX, lastY: clientY };
-          drawDownRef.current = null;
-          setIsPanning(true);
-          return;
-        }
-      }
-      updateSnap(clientX, clientY);
-      return;
-    }
-
-    // ---- 通常モード ----
-    // ストレッチ起動判定: 交点近傍からのドラッグを検出して longPress パンより優先
-    if (stretchDownRef.current) {
-      const { clientX: dX, clientY: dY, snap } = stretchDownRef.current;
-      if (Math.hypot(clientX - dX, clientY - dY) > 8) {
-        stretchDownRef.current = null;
-        if (snap) {
-          const shapes = graph?.getShapesAtNode(snap) ?? [];
-          const target = { type: 'intersection', vertex: snap, shapes };
-          longPress.abort();
-          modeRef.current?.startStretch(target);
-          // 起動フレームで即座に位置更新
-          const world = viewport.screenToWorld(clientX, clientY);
-          const snapX = findCLMoveSnap(graph, snap.clVertical,   world.x, world.y, SNAP_THRESHOLD_PX, viewport.scaleX, viewport.scaleY);
-          const snapY = findCLMoveSnap(graph, snap.clHorizontal, world.x, world.y, SNAP_THRESHOLD_PX, viewport.scaleX, viewport.scaleY);
-          modeRef.current?.updateStretch(snapX ?? world.x, snapY ?? world.y);
-          setCursorWorld(world);
-          setCursorScreen({ x: clientX, y: clientY });
-          setSnapPoint((snapX != null || snapY != null) ? { x: snapX ?? world.x, y: snapY ?? world.y } : null);
-          return;
-        }
-        // snap なし → パンへフォールバック
-        drag.current = { lastX: clientX, lastY: clientY };
-        setIsPanning(true);
-        return;
-      }
-    }
-
-    const shouldPan = longPress.move(clientX, clientY);
-    if (shouldPan) {
-      stretchDownRef.current = null;
-      drag.current = { lastX: clientX, lastY: clientY };
-      setIsPanning(true);
-      return;
-    }
-    updateSnap(clientX, clientY);
-  };
-
-  // CL移動確定の実処理は transform/centerLineOps.js の commitCLMoveOp。ここは toast 反映と commitMove() のみ
-  // （ドラッグ確定=handlePointerUp・NumPad/Enter確定=CLMoveInput onCommit の単一実装。全経路で最後に
-  // commitMove() を呼ぶこと——片方だけ直すと確定経路によって挙動が食い違うバグになる）。
-  function commitCLMove(cl, originalValue) {
-    const { toast } = commitCLMoveOp(graph, project, cl, originalValue);
-    if (toast) setToast({ msg: toast, key: Date.now() });
-    modeRef.current?.commitMove();
-  }
-
-  // ---- ポインタ Up ----
-  const handlePointerUp = (e) => {
-    // ---- 仕上げモード ----
-    if (appMode === 'finish') {
-      if (finishDragDownRef.current && modeRef.current?.dragState) {
-        modeRef.current?.commitDrag();
-      }
-      finishDragDownRef.current = null;
-      drag.current = null;
-      setIsPanning(false);
-      return;
-    }
-
-    // ---- 敷地モード ----
-    if (appMode === 'site') {
-      drag.current = null;
-      setIsPanning(false);
-      const downPt = siteDrawDownRef.current;
-      siteDrawDownRef.current = null;
-      if (!downPt) return;
-      const { clientX, clientY } = e.evt;
-      const moved = Math.hypot(clientX - downPt.x, clientY - downPt.y);
-      if (moved >= 10) {
-        // ドラッグ → パン完了。描画状態はそのまま維持（パン後も続けて終点をクリックできる）
-        return;
-      }
-      // タップ確定
-      const sm = modeRef.current?.subMode;
-      if (sm !== 'sansha' && sm !== 'other') return;
-      const world = viewport.screenToWorld(clientX, clientY);
-      if (!modeRef.current.siteDrawState) {
-        if (project.site.lines.length === 0) {
-          // 線分が1本もない場合のみ始点確定（三斜入力の最初の1本）
-          modeRef.current.startSiteDraw(world.x, world.y);
-        } else {
-          // 線分が存在する場合: 空白クリック = 選択解除
-          modeRef.current.clearSelection();
-        }
-      } else {
-        // 2クリック目: 終点確定 → 線分追加（pointermove が発火しないタップ操作でも
-        // 確実に2点目の座標を反映させるため、commit前に終点を更新する）
-        modeRef.current.updateSiteDraw(world.x, world.y);
-        const result = modeRef.current.commitSiteDraw();
-        if (result) {
-          const { startWorld, endWorld } = result;
-          const { lineId } = commitSiteTapLine(project, viewport, sm, startWorld, endWorld);
-          // 三斜入力: 線分aを自動選択し、線分長さ入力欄にフォーカス
-          if (sm === 'sansha') {
-            modeRef.current.selectLine(lineId);
-          }
-        }
-      }
-      return;
-    }
-
-    // ---- ストレッチ確定 ----
-    const ss = modeRef.current?.stretchState;
-    if (ss) {
-      commitStretchWithUndo(ss);
-      modeRef.current.commitStretch();
-      stretchDownRef.current = null;
-      drag.current = null;
-      return;
-    }
-
-    const ms2 = modeRef.current?.moveState;
-    if (ms2) {
-      const { cl, originalValue } = ms2;
-      // ドラッグ中は cl.value が未変更 — effectiveValue（= value + pendingDelta）が実位置
-      const newValue = cl.effectiveValue;
-      // CL が実際に動いた か、明示的な再プレスがあった場合のみ確定
-      if (moveDownRef.current || newValue !== originalValue) {
-        commitCLMove(cl, originalValue);
-        moveDownRef.current = null;
-        drag.current = null;
-        return;
-      }
-      // 長押し直後の離し（移動なし）→ 移動モードを維持
-      moveDownRef.current = null;
-      return;
-    }
-    moveDownRef.current = null;
-
-    // 平面モード: 通常タップで開口を選択（パレット表示）/ 空白タップで選択解除。
-    // 建具モード: 通常タップで開口を選択（パネルに姿図・フォームを表示）/ 空白タップで選択解除。
-    // 描画・移動・パン・長押しメニュー中は対象外。
-    if ((appMode === 'floorplan' || appMode === 'opening') && !menu && !drag.current
-        && !drawDownRef.current && !modeRef.current?.moveState && !modeRef.current?.drawState) {
-      modeRef.current?.selectOpening?.(nearOpeningRef.current?.id ?? null);
-    }
-
-    // 描画モード: タップで完成
-    if (modeRef.current?.drawState && !drag.current && drawDownRef.current) {
-      const snap  = snapRef.current;
-      const world = viewport.screenToWorld(e.evt.clientX, e.evt.clientY);
-      const shape = modeRef.current?.completeDraw(snap, world);
-      if (shape) {
-        undoManager.push(
-          () => graph.removeShape(shape.id),
-          () => graph.addDiagonalLine(shape.nodeA, shape.nodeB),
-        );
-      }
-    }
-    drawDownRef.current    = null;
-    stretchDownRef.current = null;
-    longPress.abort();
-    gutterLongPress.abort();
-    gutterCLRef.current = null;
-    axisLabelLongPress.abort();
-    axisLabelRef.current = null;
-    drag.current = null;
-    setIsPanning(false);
-  };
 
   // ---- モード境界: 建具モード突入（記号別採番を全階から収集して確定する）----
   // graph を一切変更しない（他階は peek のみ・保存も書き戻しもしない）ため undo エントリは不要
@@ -1506,88 +1044,6 @@ const App = observer(() => {
     reader.readAsArrayBuffer(file);
   }
 
-  // ---- ポインタ Leave (外アップ扱い) ----
-  const handlePointerLeave = () => {
-    if (appMode === 'finish') {
-      modeRef.current?.cancelDrag();
-      finishDragDownRef.current = null;
-      drag.current = null;
-      setIsPanning(false);
-      return;
-    }
-    if (appMode === 'site') {
-      modeRef.current?.cancelSiteDraw();
-      siteDrawDownRef.current = null;
-      drag.current = null;
-      setIsPanning(false);
-      return;
-    }
-    // CL移動中にキャンバス外に出たらキャンセル
-    if (modeRef.current?.moveState) {
-      moveDownRef.current = null;
-      modeRef.current?.cancelMove();
-      drag.current = null;
-      setSnapPoint(null);
-      setCursorWorld(null);
-      return;
-    }
-    drawDownRef.current = null;
-    longPress.abort();
-    gutterLongPress.abort();
-    gutterCLRef.current = null;
-    axisLabelLongPress.abort();
-    axisLabelRef.current = null;
-    drag.current = null;
-    setIsPanning(false);
-    setSnapPoint(null);
-    setNearCL(null);
-    setNearWall(null);
-    setNearOpening(null);
-    setCursorWorld(null);
-  };
-
-  // ---- タッチ: マルチ指タップ検出 ----
-  const handleTouchStart = (e) => {
-    const count = e.evt.touches.length;
-    if (count === 2 || count === 3) {
-      touchTapRef.current = { count, time: Date.now() };
-    } else {
-      touchTapRef.current = null;
-    }
-  };
-
-  // ---- タッチ: ピンチズーム ----
-  const handleTouchMove = (e) => {
-    e.evt.preventDefault();
-    const touches = e.evt.touches;
-    if (touches.length >= 2) touchTapRef.current = null; // 動きあり → タップではない
-    if (touches.length !== 2) return;
-    const [t0, t1] = [touches[0], touches[1]];
-    const midX = (t0.clientX + t1.clientX) / 2;
-    const midY = (t0.clientY + t1.clientY) / 2;
-    const dist  = Math.hypot(t1.clientX - t0.clientX, t1.clientY - t0.clientY);
-    if (pinch.current) {
-      viewport.zoomAt(midX, midY, dist / pinch.current.dist);
-      viewport.pan(midX - pinch.current.midX, midY - pinch.current.midY);
-    }
-    pinch.current = { dist, midX, midY };
-  };
-
-  const handleTouchEnd = (e) => {
-    if (e.evt.touches.length < 2) pinch.current = null;
-
-    // マルチ指タップ判定: 全指が離れたとき
-    const tap = touchTapRef.current;
-    if (tap && e.evt.touches.length === 0) {
-      const elapsed = Date.now() - tap.time;
-      if (elapsed < 300) {
-        if (tap.count === 2) performUndo();
-        else if (tap.count === 3) performRedo();
-      }
-      touchTapRef.current = null;
-    }
-  };
-
   // ---- 出幅編集の確定 ----
   // axisEditState の出幅を 1構造×1通り芯キーへ書込み、構造伏図に映る全グラフで柱芯オフセットを
   // 再構築する（MobX連鎖で柱・梁・柱芯ラベル・寸法が即再描画）。同一構造の階は同じキーを共有するので
@@ -1624,20 +1080,6 @@ const App = observer(() => {
     });
     apply(newVal);
     undoManager.push(() => apply(oldRaw), () => apply(newVal));
-  }
-
-  // ---- スナップ & 近傍CL/壁/開口 計算 ----
-  // 候補解決は snap.js の resolvePointerTargets に一本化（App側は setState への反映のみ）。
-  function updateSnap(clientX, clientY) {
-    const r = resolvePointerTargets(graph, viewport, clientX, clientY, { width: size.width, height: size.height, appMode });
-    setSnapPoint(r.snap);
-    setNearCL(r.nearCL);
-    setNearCLEndpoint(r.nearCLEndpoint);
-    setNearWall(r.nearWall);
-    setNearOpening(r.nearOpening);
-    setCursorWorld(r.world);
-    // ガター帯内（r.world===null）はカーソル座標を更新しない（従来どおり）
-    if (r.world) setCursorScreen({ x: clientX, y: clientY });
   }
 
   // ---- メニュー選択 ----
@@ -2145,14 +1587,14 @@ const App = observer(() => {
         <Stage
           width={size.width}
           height={size.height}
-          onWheel={handleWheel}
-          onPointerDown={handlePointerDown}
-          onPointerMove={handlePointerMove}
-          onPointerUp={handlePointerUp}
-          onPointerLeave={handlePointerLeave}
-          onTouchStart={handleTouchStart}
-          onTouchMove={handleTouchMove}
-          onTouchEnd={handleTouchEnd}
+          onWheel={pointerHandlers.onWheel}
+          onPointerDown={pointerHandlers.onPointerDown}
+          onPointerMove={pointerHandlers.onPointerMove}
+          onPointerUp={pointerHandlers.onPointerUp}
+          onPointerLeave={pointerHandlers.onPointerLeave}
+          onTouchStart={pointerHandlers.onTouchStart}
+          onTouchMove={pointerHandlers.onTouchMove}
+          onTouchEnd={pointerHandlers.onTouchEnd}
           style={{ cursor }}
         >
           <Layer name="world">
