@@ -3,3 +3,4 @@ dist/
 .env
 *.local
 問題.md
+debug.log
