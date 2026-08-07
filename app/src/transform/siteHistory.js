@@ -1,4 +1,4 @@
-import { computeApexFromSide } from '../renderer/SiteLinesLayer.jsx';
+import { computeApexFromSide } from '../site/siteGeometry.js';
 
 // 線分IDから、その線分の長さを確定したhistoryステップを探す。
 // 戻り値: { index, role } | null

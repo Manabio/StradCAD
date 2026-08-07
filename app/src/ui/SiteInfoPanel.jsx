@@ -1,7 +1,7 @@
 ﻿import { useEffect, useRef } from 'react';
 import { observer } from 'mobx-react-lite';
 import { SiteLineKind } from '@core';
-import { getSiteLineRedBlue } from '../renderer/SiteLinesLayer.jsx';
+import { getSiteLineRedBlue } from '../site/siteGeometry.js';
 import { isSanshaKind, computeLineTriNums } from '../site/lineClassification.js';
 import { NumPad } from './NumPad.jsx';
 import { applyKeyToNumpadValue, toNumpadKey, evalNumpadExpr } from './numpadUtils.js';
