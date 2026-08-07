@@ -43,6 +43,25 @@ import {
   columnSlotKey, spanKey,
 } from './structuralEntities.js';
 
+// ---- module-private helpers ----
+
+// own（自グラフ）とstructGraph（あれば）の同種コレクションを [...struct, ...own] の順でマージする
+// （gridXs/gridYs/intersections/centerLines で共有）。computed getter から呼ばれるため、
+// MobXの依存追跡を変えないよう純関数・thisを持たない形にする（同期呼び出しなので追跡は保たれる）。
+function _mergeWithStructGraph(planGraph, deriveFn) {
+  const own = deriveFn(planGraph);
+  if (!planGraph._structGraph) return own;
+  return [...deriveFn(planGraph._structGraph), ...own];
+}
+
+// 配列から述語に一致する要素をすべて削除する（removeExteriorRow/RowGroup/RowsByRoomId で共有）。
+// 後方から splice することで削除中のインデックスずれを避ける。
+function _removeArrayItemsWhere(arr, predicate) {
+  for (let i = arr.length - 1; i >= 0; i--) {
+    if (predicate(arr[i])) arr.splice(i, 1);
+  }
+}
+
 export class PlanGraph {
   constructor(plane) {
     this.plane = plane;
@@ -255,27 +274,19 @@ export class PlanGraph {
   // グリッド軸として機能する labeled:true VERTICAL CenterLine (= 旧 GridX 相当)
   // _structGraph がある場合は通り芯（全階共通）も含める
   get gridXs() {
-    const own = _labeledCLs(this.shapeMap, CenterLineType.VERTICAL, CenterLine);
-    const struct = this._structGraph
-      ? _labeledCLs(this._structGraph.shapeMap, CenterLineType.VERTICAL, CenterLine)
-      : [];
-    return [...struct, ...own].sort((a, b) => a.value - b.value);
+    return _mergeWithStructGraph(this, g => _labeledCLs(g.shapeMap, CenterLineType.VERTICAL, CenterLine))
+      .sort((a, b) => a.value - b.value);
   }
 
   // グリッド軸として機能する labeled:true HORIZONTAL CenterLine (= 旧 GridY 相当)
   get gridYs() {
-    const own = _labeledCLs(this.shapeMap, CenterLineType.HORIZONTAL, CenterLine);
-    const struct = this._structGraph
-      ? _labeledCLs(this._structGraph.shapeMap, CenterLineType.HORIZONTAL, CenterLine)
-      : [];
-    return [...struct, ...own].sort((a, b) => a.value - b.value);
+    return _mergeWithStructGraph(this, g => _labeledCLs(g.shapeMap, CenterLineType.HORIZONTAL, CenterLine))
+      .sort((a, b) => a.value - b.value);
   }
 
   // 交点: structGraph の交点（通り芯×通り芯）+ 自グラフの交点（通り芯×階固有CL等）
   get intersections() {
-    const own = [...this.intersectionMap.values()];
-    if (!this._structGraph) return own;
-    return [...this._structGraph.intersectionMap.values(), ...own];
+    return _mergeWithStructGraph(this, g => [...g.intersectionMap.values()]);
   }
 
   get points()        { return [...this.pointMap.values()]; }
@@ -293,10 +304,7 @@ export class PlanGraph {
 
   // CenterLine: 自グラフ（階固有）+ structGraph（通り芯）の両方を返す
   get centerLines() {
-    const own = [...this.shapeMap.values()].filter(s => s instanceof CenterLine);
-    if (!this._structGraph) return own;
-    const struct = [...this._structGraph.shapeMap.values()].filter(s => s instanceof CenterLine);
-    return [...struct, ...own];
+    return _mergeWithStructGraph(this, g => [...g.shapeMap.values()].filter(s => s instanceof CenterLine));
   }
 
   get dimensionLines(){ return [...this.shapeMap.values()].filter(s => s instanceof DimensionLine); }
@@ -363,25 +371,18 @@ export class PlanGraph {
     return row;
   }
 
+  // id はユニーク（crypto.randomUUID()）のため「一致する全件削除」と「最初の1件削除」は等価。
   removeExteriorRow(category, id) {
-    const arr = this[category];
-    const idx = arr.findIndex(r => r.id === id);
-    if (idx >= 0) arr.splice(idx, 1);
+    _removeArrayItemsWhere(this[category], r => r.id === id);
   }
 
   removeExteriorRowGroup(category, part) {
-    const arr = this[category];
-    for (let i = arr.length - 1; i >= 0; i--) {
-      if (arr[i].part === part) arr.splice(i, 1);
-    }
+    _removeArrayItemsWhere(this[category], r => r.part === part);
   }
 
   /** roomId にリンクした外部仕上げ行（階段連動。exteriorRowsのみ対象）があれば削除する。 */
   removeExteriorRowsByRoomId(roomId) {
-    const arr = this.exteriorRows;
-    for (let i = arr.length - 1; i >= 0; i--) {
-      if (arr[i].roomId === roomId) arr.splice(i, 1);
-    }
+    _removeArrayItemsWhere(this.exteriorRows, r => r.roomId === roomId);
   }
 
   // ---- per-floor 設定（外壁下地 / 内壁下地 / 天井・床下地）----
@@ -725,17 +726,12 @@ export class PlanGraph {
   // id の CenterLine を削除すると壊れる外部参照があるか（結合による削除の安全ガード用）
   // refId 単体の参照は _reparentChildCenterLines で繰り上がるため対象外。
   hasExternalCenterLineReferences(id) {
-    const usesShape = [...this.shapeMap.values()]
-      .some(s => !(s instanceof CenterLine) && _shapeUsesCenterLine(s, id, Intersection));
-    if (usesShape) return true;
-    const usesStruct =
-      [...this.columnMap.values()].some(c => c.verticalCL.id === id || c.horizontalCL.id === id) ||
-      [...this.beamMap.values()].some(b => b.axisCL.id === id || b.clStart.id === id || b.clEnd.id === id) ||
-      [...this.wallMap.values()].some(w => w.axisCL.id === id || w.clStart.id === id || w.clEnd.id === id) ||
-      [...this.footingMap.values()].some(f => f.verticalCL.id === id || f.horizontalCL.id === id) ||
-      [...this.sleeveMap.values()].some(s => s.hostType === 'beam' &&
-        (s.hostAxisCL?.id === id || s.hostClStart?.id === id || s.hostClEnd?.id === id));
+    const refs = this._structuralRefsToCL(id);
+    const usesStruct = refs.shapes.length > 0 || refs.columns.length > 0 || refs.beams.length > 0
+      || refs.walls.length > 0 || refs.footings.length > 0 || refs.sleeves.length > 0;
     if (usesStruct) return true;
+    // 他CLの extentLoRef/extentHiRef がこのCLを指しているか（_structuralRefsToCL の走査対象外。
+    // CenterLine同士の参照であり「構造材」ではないため共有ヘルパには含めない）。
     return this.centerLines.some(other =>
       other.id !== id && (other.extentLoRef?.clId === id || other.extentHiRef?.clId === id)
     );
@@ -980,35 +976,45 @@ export class PlanGraph {
 
   // CenterLine 削除・降格に伴う Shape・Intersection の連鎖削除
   _teardownCenterLine(id) {
-    [...this.shapeMap.values()]
-      .filter(s => !(s instanceof CenterLine) && _shapeUsesCenterLine(s, id, Intersection))
-      .forEach(s => this._removeShape(s.id));
-    [...this.columnMap.values()]
-      .filter(c => c.verticalCL.id === id || c.horizontalCL.id === id)
-      .forEach(c => this.columnMap.delete(c.id));
-    [...this.beamMap.values()]
-      .filter(b => b.axisCL.id === id || b.clStart.id === id || b.clEnd.id === id)
-      .forEach(b => this.beamMap.delete(b.id));
-    [...this.wallMap.values()]
-      .filter(w => w.axisCL.id === id || w.clStart.id === id || w.clEnd.id === id)
-      .forEach(w => this.removeWall(w.id));
-    [...this.footingMap.values()]
-      .filter(f => f.verticalCL.id === id || f.horizontalCL.id === id)
-      .forEach(f => this.footingMap.delete(f.id));
+    const refs = this._structuralRefsToCL(id);
+    refs.shapes.forEach(s => this._removeShape(s.id));
+    refs.columns.forEach(c => this.columnMap.delete(c.id));
+    refs.beams.forEach(b => this.beamMap.delete(b.id));
+    refs.walls.forEach(w => this.removeWall(w.id));
+    refs.footings.forEach(f => this.footingMap.delete(f.id));
     this.columnAxisOffsets.delete(id);
     this.clEccentricities.delete(id);
     // 貫通孔（梁ホストのみ。スラブホストはcellKeyのみのCL非依存アンカーのため対象外、
     // Room/StructuralSlab と同様にteardown不要という設計）
-    [...this.sleeveMap.values()]
-      .filter(s => s.hostType === 'beam' &&
-        (s.hostAxisCL?.id === id || s.hostClStart?.id === id || s.hostClEnd?.id === id))
-      .forEach(s => this.sleeveMap.delete(s.id));
+    refs.sleeves.forEach(s => this.sleeveMap.delete(s.id));
     [...this.intersectionMap.entries()]
       .filter(([, n]) => n.clVertical.id === id || n.clHorizontal.id === id)
       .forEach(([key, n]) => {
         this._graph.removeNode(n.id);
         this.intersectionMap.delete(key);
       });
+  }
+
+  // id の CenterLine を参照している構造材群（shapeMap一般Shape・柱・梁・耐力壁・基礎・梁ホストスリーブ）を
+  // 集める（_teardownCenterLineの道連れ削除・hasExternalCenterLineReferencesの安全ガード判定で共有）。
+  // columnAxisOffsets/clEccentricities/intersectionMap（teardown専用の後始末）、centerLines同士の
+  // extentRef相互参照（hasExternalCenterLineReferences専用）は「構造材」ではないため対象外。
+  _structuralRefsToCL(id) {
+    return {
+      shapes: [...this.shapeMap.values()]
+        .filter(s => !(s instanceof CenterLine) && _shapeUsesCenterLine(s, id, Intersection)),
+      columns: [...this.columnMap.values()]
+        .filter(c => c.verticalCL.id === id || c.horizontalCL.id === id),
+      beams: [...this.beamMap.values()]
+        .filter(b => b.axisCL.id === id || b.clStart.id === id || b.clEnd.id === id),
+      walls: [...this.wallMap.values()]
+        .filter(w => w.axisCL.id === id || w.clStart.id === id || w.clEnd.id === id),
+      footings: [...this.footingMap.values()]
+        .filter(f => f.verticalCL.id === id || f.horizontalCL.id === id),
+      sleeves: [...this.sleeveMap.values()]
+        .filter(s => s.hostType === 'beam' &&
+          (s.hostAxisCL?.id === id || s.hostClStart?.id === id || s.hostClEnd?.id === id)),
+    };
   }
 
   _labeledVerticals() {
