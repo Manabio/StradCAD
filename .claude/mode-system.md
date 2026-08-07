@@ -12,7 +12,7 @@ Reactフックはコンポーネント外の`import()`非同期ロードと組�
 `handleModeChange`等のイベントハンドラ内で状態更新前に`setMode(null)`を呼ばないと、切替直後の1レンダリングで旧モードのインスタンス（古いgraphを抱えたまま）がモード固有パネルに渡り、型不一致でクラッシュする（例: finishパネルが旧FloorplanModeStateを受け取る）。
 
 ## モード間で共有しない状態はApp.jsx側のref/stateに置く
-ジェスチャー追跡用の一時ref（drawDownRef, stretchDownRef, gutterCLRef等）はモードモジュールに入れない。モード固有の永続的な状態のみモードクラスに置く。
+ジェスチャー追跡用の一時ref（drawDownRef, stretchDownRef, gutterCLRef等）はモードモジュールに入れない。モード固有の永続的な状態のみモードクラスに置く。ポインタ配線のカスタムフック`interaction/usePointerInteraction.js`も同じ理由でApp.jsx側に含める（modes/には置かない）。
 
 ## ガター操作とキャンバス操作は完全に分離する
 ガター内の`pointerDown`は通常の`longPress`を呼ばず`gutterLongPress`を使う。ガター内ではスナップも無効。新しいガター操作を追加する際もこの分離を維持する。

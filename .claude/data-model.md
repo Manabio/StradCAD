@@ -49,7 +49,7 @@ Intersection・Shape・Wall・Opening・構造部材はすべて自前の座標�
 画面表示用の赤/青端点をviewport基準で都度再計算するとパン/ズームで入れ替わるため、線分生成時に固定し以後再計算しない。
 
 ## 近傍検出の優先順位は「画面距離が最も近い1件」で解決する
-交点・CL・開口・壁の近傍判定（8px圏内）は固定優先順位にすると常に同じ種別が勝つ（部屋の壁は軸CLから近いため）。`App.jsx updateSnap`が3者を独立に検出した上で画面距離が最も近い1件を選び、残りをnullにしてから`detectContext`に渡す。交点のみ常に最優先。
+交点・CL・開口・壁の近傍判定（8px圏内）は固定優先順位にすると常に同じ種別が勝つ（部屋の壁は軸CLから近いため）。`snap.js resolvePointerTargets`が3者を独立に検出した上で画面距離が最も近い1件を選び残りをnullにし、その結果を`interaction/usePointerInteraction.js`が`detectContext`へ渡す。交点のみ常に最優先。
 
 ## 線の太さは2系統の変換方法を意図的に残している
 `LINE_WEIGHT_MM`という1つのmm定義から、実体を伴う図形は`resolveStrokeWidth`（ズーム追従）、画面注記（通り芯・寸法線等）は`viewport.lineWeightsPx`（校正値ベース固定px）の2方法でpx化する。対象の性質（ズームで太さが変わるべきか）で決まる正しい設計のため統合しない。

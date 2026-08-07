@@ -15,8 +15,8 @@ React19+Vite / react-konva(Konva.js) / MobX6 / ngraph.graph(マルチグラフ) 
 ## ファイル構成（分類のみ。各ファイルの役割・APIはソースを参照）
 ```
 app/src/
-├── core.js, store.js, App.jsx                     ドメインモデル・MobXストア・メイン
-├── viewport.js, snap.js, undoManager.js, graphSnapshot.js, error.js
+├── core.js, core/, store.js, App.jsx              ドメインモデル・MobXストア・メイン
+├── viewport.js, appViewport.js, snap.js, snapGeometry.js, undoManager.js, graphSnapshot.js, floorOps.js, error.js
 ├── modes/        モード状態（MobX、切替時に動的ロード・破棄）
 ├── schema/       FlatBuffers encode/decode
 ├── storage/      IndexedDB永続化
@@ -24,6 +24,7 @@ app/src/
 ├── interaction/  ポインタ操作フック・メニュー定義
 ├── transform/    空間インデックス・変形・随伴探査
 ├── openings/     建具モード（カタログ・記号別採番・編集・姿図・パネル）
+├── figure/, site/  図面合成（複数階×複数カテゴリ）・敷地モード
 ├── floorNumber.js, calibration.js
 ├── ui/           ダイアログ・パネル
 ├── finish/       仕上げモード（部屋・材・境界）

@@ -67,6 +67,8 @@ import { HamburgerMenu }       from './ui/HamburgerMenu.jsx';
 import { ModeBar }             from './ui/ModeBar.jsx';
 import { FloorDrum }           from './ui/FloorDrum.jsx';
 import { AltChip }             from './ui/AltChip.jsx';
+import { HistoryButtons }      from './ui/HistoryButtons.jsx';
+import { ScaleIndicator }      from './ui/ScaleIndicator.jsx';
 import { FloorplanPalette }    from './renderer/FloorplanPalette.jsx';
 import { SceneLayers }         from './renderer/SceneLayers.jsx';
 import { TOP_BAR } from './layout.js';
@@ -112,7 +114,6 @@ const App = observer(() => {
   const [floorDialog,    setFloorDialog]    = useState(null); // { isLowest }
   const [floorConfirm,   setFloorConfirm]   = useState(null); // { message, buttons, onSelect }
   const [floorChangeDlg, setFloorChangeDlg] = useState(null); // { planeId }
-  const [scaleInput,      setScaleInput]      = useState(null); // null=非編集, string=編集中
   const [showCalibration, setShowCalibration] = useState(false);
   const [showSiteDialog,  setShowSiteDialog]  = useState(false);
   const [showBuildingInfoDialog, setShowBuildingInfoDialog] = useState(false);
@@ -1279,15 +1280,6 @@ const App = observer(() => {
 
   const closeMenu = () => setMenu(null);
 
-  // ---- 実スケール適用 ----
-  function applyScaleInput() {
-    const d = parseInt(scaleInput, 10);
-    if (d > 0) {
-      viewport.zoomAt(size.width / 2, size.height / 2, viewport.scaleDenominator / d);
-    }
-    setScaleInput(null);
-  }
-
   const isLandscape = size.width > size.height;
 
   const isDrawing  = mode?.isDrawing  ?? false;
@@ -1344,33 +1336,7 @@ const App = observer(() => {
   return (
     <>
       {/* Undo/Redo ボタン — 左上 */}
-      <div style={{
-        position: 'fixed', top: 0, left: 6,
-        height: TOP_BAR, display: 'flex', alignItems: 'center', gap: 2, zIndex: 200,
-      }}>
-        {[
-          { label: '↩', title: '元に戻す (Ctrl+Z / 2本指タップ)', can: undoManager.canUndo, action: () => performUndo() },
-          { label: '↪', title: 'やり直す (Ctrl+Y / 3本指タップ)', can: undoManager.canRedo, action: () => performRedo() },
-        ].map(({ label, title, can, action }) => (
-          <button
-            key={label}
-            onClick={action}
-            disabled={!can}
-            title={title}
-            style={{
-              width: 32, height: 32, borderRadius: 8,
-              border: '1px solid #e2e8f0',
-              background: can ? '#fff' : '#f8fafc',
-              color: can ? '#334155' : '#cbd5e1',
-              fontSize: 16, cursor: can ? 'pointer' : 'default',
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-              lineHeight: 1,
-            }}
-          >
-            {label}
-          </button>
-        ))}
-      </div>
+      <HistoryButtons onUndo={performUndo} onRedo={performRedo} />
 
       {/* ハンバーガーメニュー — 右上 */}
       <div style={{
@@ -1610,44 +1576,8 @@ const App = observer(() => {
         </Stage>
       </div>
 
-      <div style={{
-        position: 'fixed', bottom: 8, right: 12,
-        display: 'flex', alignItems: 'center', gap: 6,
-      }}>
-        {/* 縮尺表示 / 入力 */}
-        {scaleInput === null ? (
-          <div
-            onClick={() => setScaleInput(String(viewport.scaleDenominator))}
-            title="クリックして縮尺を入力"
-            style={{ fontSize: 12, color: '#666', cursor: 'pointer', userSelect: 'none' }}
-          >
-            1/{viewport.scaleDenominator}
-          </div>
-        ) : (
-          <div style={{
-            fontSize: 12, color: '#333',
-            background: '#fff', border: '1px solid #94a3b8',
-            borderRadius: 4, padding: '2px 6px',
-            display: 'flex', alignItems: 'center', gap: 2,
-          }}>
-            1/
-            <input
-              value={scaleInput}
-              onChange={e => setScaleInput(e.target.value)}
-              onKeyDown={e => {
-                if (e.key === 'Enter')  applyScaleInput();
-                if (e.key === 'Escape') setScaleInput(null);
-              }}
-              onBlur={() => setScaleInput(null)}
-              autoFocus
-              style={{
-                width: 52, fontSize: 12, border: 'none', outline: 'none',
-                textAlign: 'right', padding: 0,
-              }}
-            />
-          </div>
-        )}
-      </div>
+      {/* 縮尺表示 / 入力 — 右下 */}
+      <ScaleIndicator width={size.width} height={size.height} />
 
       {/* 仕上げモード: 部屋名入力ポップアップ */}
       {appMode === 'finish' && mode?.namingRoomId && (() => {
