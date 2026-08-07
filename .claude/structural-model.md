@@ -1,6 +1,6 @@
 # 構造モードの設計意図
 
-クラス階層・フィールド一覧は`core.js`を読めば分かるため省略する。用語は`.claude/glossary.md`参照。
+クラス階層・フィールド一覧は`core/structuralEntities.js`を読めば分かるため省略する。用語は`.claude/glossary.md`参照。
 
 ## 柱・梁・耐力壁・スラブ・基礎・貫通孔はshapeMap外で管理する
 Wall/Openingと同じ「CL+オフセット」系アンカーで座標を導出するが、専用のobservable.map群（columnMap等）で管理しngraphに参加しない。CL削除時の連鎖削除（`_teardownCenterLine`）はshapeMap用ロジックを使えないため各map向けに個別の参照チェックを持つ——新しいmapを追加する際はteardown処理の追加も忘れないこと。

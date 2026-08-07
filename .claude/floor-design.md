@@ -1,6 +1,6 @@
 # 階・Plane設計の意図
 
-Planeのフィールド一覧・floorNumber.jsの関数シグネチャは`core.js`/`floorNumber.js`を読めば分かるため省略する。
+Planeのフィールド一覧・floorNumber.jsの関数シグネチャは`core/plane.js`/`floorNumber.js`を読めば分かるため省略する。
 
 ## データ帰属の境界線
 通り芯（labeled struct CL）のみ全階共通（`projects` IDBストア）。中心線・補助線・寸法線・壁・図形・部屋は階固有（`floors` IDBストア）。Planeメタデータ（startFloor/stories/name/isRoofPlane等）自体はIDB非永続——セッション内メモリのみで、リロード後は初期1階のみ復元される。

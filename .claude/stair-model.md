@@ -16,7 +16,7 @@
 - 段数字は歩行順のマスへの**続き番号**。区間の実段数ぶんループしてはならない（マス数ぶんが正）。
   境界の段（踊場へ乗る一歩）を直進部と踊場の両方で数えると番号・総段数が二重カウントでずれる。
 - `totalSteps` = 総マス数+1（設置階上階への到達）= **総蹴上数**。蹴上=階高/totalSteps。
-  同期式は`totalStepsFromSections`（core.js）に一本化し、sections設定時に自動同期する。
+  同期式は`totalStepsFromSections`（core/stair.js）に一本化し、sections設定時に自動同期する。
 - U字・L字接続時、段数字は外寄りに配置する（`NUM_OUT`。レーン/アーム/I字の全幅で共通の定数）。
 - 踊場・周回部の初段（`numberStart`）は、直前区間（下手側）のラベルと同じ幅方向位置・入口境界線近くに
   `geo.entryPt()`で置く（`emitTurn`）。2段目以降だけ`radialMix`でpivot→外周へ寄せる（`TURN_OUT`）。
