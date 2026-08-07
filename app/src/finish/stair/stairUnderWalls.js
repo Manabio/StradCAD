@@ -55,11 +55,11 @@ const T_EPS = 1e-3;
 // レーン間中心線から階段下部屋側へ逃げる固定量(mm)。主構造非依存（ルール6・固定値）。
 const LANE_CLEARANCE = 50;
 
-// 2a壁の突き当たり判定の許容差(mm)。core.js trimIntersectingWalls の tolerance と同水準。
+// 2a壁の突き当たり判定の許容差(mm)。core/wallChamfer.js trimIntersectingWalls の tolerance と同水準。
 const JUNCTION_TOLERANCE = 150; // mm
 // 出隅/入隅の象限判定サンプル点のコーナーからのオフセット(mm)。SAMPLE_EPS と同水準。
 const QUADRANT_EPS = 10; // mm
-// 突き当たり調整時の最小残存長(mm)。core.js trimIntersectingWalls の MIN_LEN と同水準。
+// 突き当たり調整時の最小残存長(mm)。core/wallChamfer.js trimIntersectingWalls 内のローカル定数 MIN_LEN と同水準。
 const MIN_LEN = 1; // mm
 
 // ----------------------------------------------------------------
@@ -625,7 +625,7 @@ export function trimStairUnderJunctions(graph, entries, tolerance = JUNCTION_TOL
       const hy = h.axisValue;
       const [hx1, hx2] = wallLenRange(h);
 
-      // 近接チェック（core.js trimIntersectingWalls と同じ face 座標ベース）
+      // 近接チェック（core/wallChamfer.js trimIntersectingWalls と同じ face 座標ベース）
       if (vx < hx1 - tolerance || vx > hx2 + tolerance) continue;
       if (hy < vy1 - tolerance || hy > vy2 + tolerance) continue;
 

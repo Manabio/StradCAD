@@ -357,13 +357,13 @@ export async function runFinishExitBoundary(graph, project, fmode, { goingToStru
   // trimStairUnderJunctions（stairUnderWalls.js）を使う: 手動壁の graph.trimIntersectingWalls
   // は相手壁の最近傍端点を無条件にfaceへスナップするため、2a壁の端が既存壁の中間（T字）に
   // 突き当たる場合に既存壁側まで切り詰めてしまう（要件のバグ報告どおり実コードで確認。
-  // core.js:1735-1770 の cand 計算に交点までの距離ガードが無い）。手動壁の挙動は変えず、
-  // 2a壁専用にT字（既存壁は不変・2a壁側のみ近位faceで止める）/コーナー（出隅は遠位face、
-  // 入隅は近位faceへ双方スナップ）を区別する専用関数を stairUnderWalls.js に用意した
-  // （判断根拠: 出隅/入隅の材料範囲判定は偏芯壁対応の materialRange・部屋セル象限判定という
-  // 2a壁固有の概念を要し、手動壁向けの汎用 core.js API を汚さない方が既存コードの構造に
-  // 馴染む）。2a壁同士は trimStairUnderJunctions 内で対象外にする（生成時のコーナーマップで
-  // 既に正しく取り合っているため）。
+  // core/wallChamfer.js trimIntersectingWalls の cand 計算に交点までの距離ガードが無い）。
+  // 手動壁の挙動は変えず、2a壁専用にT字（既存壁は不変・2a壁側のみ近位faceで止める）/コーナー
+  // （出隅は遠位face、入隅は近位faceへ双方スナップ）を区別する専用関数を stairUnderWalls.js
+  // に用意した（判断根拠: 出隅/入隅の材料範囲判定は偏芯壁対応の materialRange・部屋セル象限
+  // 判定という2a壁固有の概念を要し、手動壁向けの汎用 core.js API を汚さない方が既存コードの
+  // 構造に馴染む）。2a壁同士は trimStairUnderJunctions 内で対象外にする（生成時のコーナー
+  // マップで既に正しく取り合っているため）。
   // undo/redo は壁オブジェクト参照を保持しない（このエントリ内の後続 undo/redo で 2a壁・
   // 隣接部屋壁・外壁が削除→再生成されオブジェクト実体が変わるため）。壁IDで解決し直す
   // before/after 全体差分方式（edgeBefore/edgeAfter と同じ発想）を使う。

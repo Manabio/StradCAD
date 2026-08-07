@@ -2,7 +2,7 @@
  * 壁のT字取り合い（突き当たり）を検出し、詳細LOD描画にのみ反映する調整結果を返す。
  *
  * ジオメトリ（Wall.startOffset/endOffset 等）は一切変更しない。既存のトリム
- * （core.js trimIntersectingWalls＝手動壁、stairUnderWalls.js trimStairUnderJunctions＝
+ * （core/wallChamfer.js trimIntersectingWalls＝手動壁、stairUnderWalls.js trimStairUnderJunctions＝
  * 階段下壁）が壁の論理端点を相手壁の face（materialRange の境界）へ既にスナップしている
  * 前提の上で、「その端点から先、下地だけが相手壁の仕上げ層を貫通して相手の下地近位面まで
  * 到達する」という描画上の見た目だけを解決する。resolveStairSideLines（stairGeometry.js）
