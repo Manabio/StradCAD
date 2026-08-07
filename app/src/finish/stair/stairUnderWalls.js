@@ -29,7 +29,7 @@
  * 二重実装しない）。
  *
  * 生成後の2a壁は、隣接部屋壁・外壁との突き当たり処理（T字・出隅/入隅）を
- * trimStairUnderJunctions で別途行う（App.jsx 仕上げ脱出ステップ3.5）。
+ * trimStairUnderJunctions で別途行う（finish/finishBoundary.js 仕上げ脱出ステップ3.5）。
  */
 
 import { StairType, RoomFeature } from '@core';
@@ -397,7 +397,7 @@ function computeClaimedEdges(graph, unitParams) {
  * （壁の生成有無に関わらない claim 専用の軽量経路）。generateStairUnderWalls 内の claim 計算と
  * 同じロジック（computeClaimedEdges）を共有する。部屋が既に generatedWallIds を持つ再脱出時
  * （壁は再生成しない）でも claim だけは毎回行う必要があるため、壁生成から独立して呼べるように
- * 分離している（App.jsx ステップ2a）。
+ * 分離している（finish/finishBoundary.js ステップ2a）。
  *
  * 委譲エッジ（isDelegatedEdge。相手がユーザー指定の通常部屋・吹抜けVOID）は claim しない
  * ——ステップ2の隣室壁生成に委譲するため、ここで claim すると隣室壁が抑止され壁ゼロになる。

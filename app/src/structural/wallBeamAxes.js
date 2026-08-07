@@ -127,7 +127,7 @@ function bracketExtent(gridCLs, lo, hi) {
  * wallSources（collectWallBeamSourcesの結果）から梁芯CLを生成する（同期・純生成）。
  * autoFillStructuralGrid の autoFillSecondaryBeams 直前で呼ぶ。
  *   - 除外集合（graph.excludedWallBeamAxes、キー `${'X'|'Y'}:${Math.round(coord)}`）にあれば生成しない
- *     （手動削除・移動元の尊重。記録/解除は App.jsx 側）。
+ *     （手動削除・移動元の尊重。記録/解除は transform/centerLineOps.js 側）。
   *   - 重複ガード: 同方向の通り芯（labeled）・既存の梁芯（fuse）とだけ CL_OVERLAP_TOL_MM 以内なら
  *     スキップする（意匠中心線・補助線は対象外——壁は意匠中心線＝部屋境界に沿って生成されるのが
  *     常態のため、これらも障害物にすると壁由来の梁芯が主用途で何も生成されなくなる。実機検証で発覚。

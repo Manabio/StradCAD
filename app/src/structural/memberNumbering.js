@@ -303,7 +303,7 @@ export function applyNumbers(graph, project, tags, onlyMapName = null) {
  * mapName を指定すると適用（applyNumbers）をそのカテゴリだけに絞る（他カテゴリは収集のみ行われ、
  * project.memberNumberIndex は更新されるが memberNo は変化しない）。
  *
- * 建物全体をまたぐ厳密な再採番は App.jsx の reflectStructuralToOtherFloors（全階収集→assignNumbers
+ * 建物全体をまたぐ厳密な再採番は structural/structuralOrchestration.js の reflectStructuralToOtherFloors（全階収集→assignNumbers
  * を1回→全階へapply）が担う。この関数はそれ以外の「1 graph だけのローカル編集」（部材の追加・
  * 手動タグの解除など）から呼ぶ即時反映用で、project.memberNumberIndex に既に積まれている他階分
  * （直近の反映パスで得た情報）を使って番号を決める——他階が一度も反映されていない場合は自階だけの

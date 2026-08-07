@@ -71,7 +71,7 @@ export async function recomputeStructuralForGraph(targetGraph, project, mainStru
   const updatedRoofBeamSizes = runInAction(() => autoFillRoofBeamSizes(targetGraph));
   // 採番の収集フェーズ: 台帳（分割・統合の明示操作）へ conform し、材寸グループを
   // project.memberNumberIndex（建物全体、非永続キャッシュ）へ積む。番号の確定（assignNumbers/applyNumbers）
-  // は建物全体の情報が必要なため、呼び出し側（App.jsx の反映パス）が2パス目として行う。
+  // は建物全体の情報が必要なため、呼び出し側（structuralOrchestration.js の反映パス）が2パス目として行う。
   runInAction(() => {
     conformToLedger(targetGraph, project);
     collectFloorGroups(targetGraph, project);

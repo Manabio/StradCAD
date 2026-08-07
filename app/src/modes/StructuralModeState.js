@@ -48,9 +48,9 @@ export class StructuralModeState {
 
   // ---- 梁芯CL移動 ----
   // ガター長押し（FloorplanModeState）と違い、梁芯の範囲計算は他フロアのIDB読み込みを伴わないため
-  // 先読みは不要。App.jsx の長押しメニュー表示が canMove の真時に無条件で preloadMove を呼ぶため
-  // （App.jsx:405）、メソッド自体は必須（無いと長押しの瞬間に TypeError になる）。
-  // App.jsx が preloadMove(cl) の形で呼ぶが、梁芯は先読みする非同期処理が無いため引数は使わない。
+  // 先読みは不要。interaction/usePointerInteraction.js の長押しメニュー表示が canMove の真時に無条件で preloadMove を呼ぶため
+  // メソッド自体は必須（無いと長押しの瞬間に TypeError になる）。
+  // interaction/usePointerInteraction.js が preloadMove(cl) の形で呼ぶが、梁芯は先読みする非同期処理が無いため引数は使わない。
   preloadMove() {}
 
   // 長押しメニューの「移動」選択時に呼ぶ。FloorplanModeState.startMove と違い非同期処理が無いため同期のまま。

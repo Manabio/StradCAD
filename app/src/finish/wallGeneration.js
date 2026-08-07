@@ -566,7 +566,7 @@ function anchorForValue(o, value, eps) {
  *   claimUncovered=true（既定。resolveBackingOwnership が使う——生成直後の壁のフル初期解決）:
  *   重ならない区間は「オーナーの既定式」（backingOffset=0・backingDepth=2*(|axisOffset|-
  *   wallFinish)）で明示し直す。
- *   claimUncovered=false（App.jsx ステップ3の外壁オーナー化パスが使う）: 重ならない区間・
+ *   claimUncovered=false（finish/finishBoundary.js ステップ3の外壁オーナー化パスが使う）: 重ならない区間・
  *   分割で生じる新壁のうち非covered分は一切変更しない——このパス以前に確定済みの
  *   backingOffset/backingDepth/finishSide（ステップ2の所有権解決・ステップ2bのCL偏芯）を
  *   そのまま継承する。外壁パスは「外壁スパンに重なる区間を薄壁化する」ことだけを担い、
@@ -700,7 +700,7 @@ function splitWallByOwnership(graph, w, ownerWalls, { claimUncovered = true } = 
  * @param {import('@core').Wall[]} ownerWalls
  * @param {import('@core').Wall[]} challengerWalls
  * @param {{setOwnerFields?: boolean, claimUncovered?: boolean}} [opts]
- *   setOwnerFields=false: ownerWalls 自身のフィールドを一切書き換えない（App.jsx ステップ3の
+ *   setOwnerFields=false: ownerWalls 自身のフィールドを一切書き換えない（finish/finishBoundary.js ステップ3の
  *   外壁オーナー化パスが使う——外壁は backingRange の既存フォールバック式で既に正しい下地帯を
  *   返すため明示不要。明示すると materialRange が既定式ぶん広がる副作用がある。F1/F10参照）。
  *   claimUncovered: splitWallByOwnership へそのまま渡す（同関数のdocを参照）。

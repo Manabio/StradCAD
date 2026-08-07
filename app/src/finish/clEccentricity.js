@@ -76,7 +76,7 @@ function representativeRoom(graph, clId, side, cellToRoom) {
  * 階段下部屋（2a。stairUnderRooms が返す通常Room）を偏芯対象から除外する判定に使う——
  * 2a壁は generateStairUnderWalls 固有の偏芯ルール（LANE_CLEARANCE式）で生成・
  * trimStairUnderJunctions でトリムされる別管理の壁のため、ここで汎用偏芯式を適用すると、
- * 2a側の生成・トリム（App.jsx ステップ2a/3.5）と偏芯適用（ステップ2b）が毎脱出で
+ * 2a側の生成・トリム（finish/finishBoundary.js ステップ2a/3.5）と偏芯適用（ステップ2b）が毎脱出で
  * 互いの結果を上書きし合う（無限に収束しない・面位置が脱出ごとにブレる）。
  * 階段ペアRoom（feature=STAIR）・階段吹抜け（STAIR_VOID）はセルが階段そのもの（stair.cells）と
  * 一致するが、これらは通常Roomと同じ経路（generateRoomWallsFromOutline）で壁を持つため

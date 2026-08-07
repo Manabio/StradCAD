@@ -167,7 +167,7 @@ export async function propagateCLEccentricity(project, activeGraph, clId, opts =
  * 内壁指定（部屋名）がまだ無い等でグラフ上のリンクが見えない間は伝播できない——このケースを
  * 仕上げモード突入時に埋める。ensureUnderStairSplit（FinishModeState.js:104-110）と同格の
  * 自動同期——アクティブグラフ自身を突入時に修復する処理であり、entry 境界の undo エントリ
- * （App.jsx runFinishEntryBoundary の entryUndoFns/entryRedoFns）には積まない。
+ * （finish/finishBoundary.js runFinishEntryBoundary の entryUndoFns/entryRedoFns）には積まない。
  *
  * @param {object} project
  * @param {object} activeGraph - 突入した階（アクティブ）のグラフ

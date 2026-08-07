@@ -40,7 +40,7 @@ export function findNearestIntersection(graph, wx, wy, thresholdPx, scaleX, scal
  * kindFilter(centerLineKind(cl)) が true の種別だけを対象にする（既定は梁芯を除外＝非構造モード用。
  * 構造モードの呼び出し元は `k => k === 'beam'` を渡し、梁芯だけをヒットテスト対象にする——
  * 「通り芯上でマウスが反応しない」既存仕様は維持しつつ、梁芯だけは選択・削除・延長/短縮できるようにする
- * ため appMode で無条件 null にせず kindFilter で絞る（App.jsx updateSnap 参照）。
+ * ため appMode で無条件 null にせず kindFilter で絞る（interaction/usePointerInteraction.js updateSnap 参照）。
  */
 export function findNearestCenterLine(graph, wx, wy, thresholdPx, scaleX, scaleY, viewport = null, kindFilter = k => k !== 'beam') {
   if (!graph) return null;
@@ -101,7 +101,7 @@ export function findNearestCenterLineEndpoint(graph, wx, wy, thresholdPx, scaleX
  * 梁芯（centerLineKind==='beam'）は対象から無条件除外する——通り芯・他の梁芯の値は梁芯の移動範囲
  * （structural/beamAxisMove.js beamAxisMoveRange）にとって到達不能な禁止位置（他種別CLと同位置に
  * 共存不可という追加時ガードに抵触するため）で、吸着先として意味的に間違っている。梁芯の移動は
- * 専用の findBeamAxisMoveSnap を使う（呼び出し元 App.jsx が centerLineKind(cl)==='beam' で呼び分ける）。
+ * 専用の findBeamAxisMoveSnap を使う（呼び出し元 interaction/usePointerInteraction.js が centerLineKind(cl)==='beam' で呼び分ける）。
  */
 export function findCLMoveSnap(graph, movingCL, wx, wy, thresholdPx, scaleX, scaleY) {
   if (!graph) return null;
@@ -217,7 +217,7 @@ export function findOpeningAt(graph, wx, wy, thresholdPx, scaleX, scaleY) {
 
 /**
  * ポインタ位置（クライアント座標）から交点スナップ・近傍CL/CL端点/壁/開口の候補を解決する
- * （App.jsx updateSnap の「候補解決」部分。setState への反映は呼び出し側の責務）。
+ * （interaction/usePointerInteraction.js updateSnap の「候補解決」部分。setState への反映は呼び出し側の責務）。
  * ガター帯（描画エリア外周）内は全候補 null・world null を返す。
  * appMode==='structure' のときは梁芯のみ、それ以外は梁芯以外を CL/CL端点の対象にする
  * （findNearestCenterLine 等の kindFilter 既定値と同じ規約）。

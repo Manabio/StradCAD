@@ -1,7 +1,7 @@
 // import ゼロを維持する（node:test から安全に import できるようにするため。centerLineExtend.js /
 // edgeClassify.js / kneeDropWall.js は snap.js → store.js（localStorage/indexedDB）へ連鎖しており、
 // これらに依存すると node:test 環境で import 不能になる）。graph 依存の判定値
-// （canExtend/canShorten/hasInteriorWall/wallEligible）は呼び出し側（App.jsx）が算出して渡す。
+// （canExtend/canShorten/hasInteriorWall/wallEligible）は呼び出し側（interaction/usePointerInteraction.js）が算出して渡す。
 // CenterLineType.VERTICAL は 'X' 固定値で判定する（core/constants.js 参照。snap.js と同じ回避策）。
 
 export const CONTEXT = Object.freeze({
@@ -97,12 +97,12 @@ export function getMenuItems(context, endpointState, clState, wallState) {
 }
 
 /**
- * 長押しメニューの状態組立（context 判定＋items 生成）。App.jsx longPress の onFire から抽出。
+ * 長押しメニューの状態組立（context 判定＋items 生成）。interaction/usePointerInteraction.js longPress の onFire から抽出。
  * appMode==='opening'（建具モード）は壁・開口以外の長押しメニューを出さない（CL移動等の平面編集
  * 操作は行わない）ため null を返す——呼び出し側はこれを合図にメニューを開かない。
  * canMove は「CL移動をサポートするモードか」（呼び出し側の modeRef.current?.startMove の有無）。
  * canExtend/canShorten（CL端点の延長/短縮可否）・hasInteriorWall（中心線に内壁指定があるか）・
- * wallEligible（腰壁・垂れ壁の適格性）は graph 依存のため呼び出し側（App.jsx）が算出して渡す
+ * wallEligible（腰壁・垂れ壁の適格性）は graph 依存のため呼び出し側（interaction/usePointerInteraction.js）が算出して渡す
  * （このモジュールを import ゼロに保つため。ファイル冒頭コメント参照）。
  * @returns {{context, items, endpointState, clState, wallState}|null}
  */

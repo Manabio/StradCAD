@@ -141,7 +141,7 @@ function addMissingCLs(needed, sourceGraph, structGraph, upperGraph) {
  * 壁は生成しない（ユーザー決定：階段設置と同時の壁生成は行わない。上階の外壁は
  * ペアRoom・階段吹抜けの kind=INTERIOR を通じて通常の屋内外判定・外壁生成に委ねる）。
  * 階段側の仕上げ壁も同様にここでは生成しない——新モデルでは階段ペアRoom・階段吹抜けも
- * 通常のRoomと同じ経路（App.jsx runFinishExitBoundary ステップ1〜3）で壁を持つため、
+ * 通常のRoomと同じ経路（finish/finishBoundary.js runFinishExitBoundary ステップ1〜3）で壁を持つため、
  * その階自身が仕上げモードを脱出したときに生成される。設置階ペアRoomの内装
  * （templateKey・customOverrides）は、仕上げモード脱出時に syncUpperStairInteriors が
  * 別途同期コピーする。
@@ -297,7 +297,7 @@ export async function ensureTopStairVoid(project, activeGraph) {
  * 同期コピーする（階段仕上げ材の参照。以降はその階の Room＝仕上げ表のカードが単一情報源）。
  *
  * 壁はこの同期では生成しない——新モデルでは階段ペアRoom・階段吹抜けも通常のRoomと同じ経路
- * （App.jsx runFinishExitBoundary ステップ1〜3。下地オーナー壁＋仕上げ薄壁方式）で壁を持つため、
+ * （finish/finishBoundary.js runFinishExitBoundary ステップ1〜3。下地オーナー壁＋仕上げ薄壁方式）で壁を持つため、
  * 上階の壁はその階自身が仕上げモードを脱出した際に生成される。旧データ（同一CL上の二重壁等）の
  * 修復も、その階の仕上げモード脱出時の全削除・再生成（ステップ1）が担う——この同期関数では
  * 何もしない。
@@ -363,7 +363,7 @@ export async function syncUpperStairInteriors(project, activeGraph) {
  * 元階（sourceGraph）に外壁ループ（isExteriorWall の壁）がある状態で階を追加したとき、
  * 新階（newPlane）へ「外壁ループ内側の領域」を1つの Room（部屋名 roomName。例:"2階"）として
  * 自動追加する。外壁線自体はコピーしない（部屋があれば仕上げモード境界の外壁再生成
- * （App.jsx の finish モード退出処理ステップ3）が自動生成するため）。
+ * （finish/finishBoundary.js の finish モード退出処理ステップ3）が自動生成するため）。
  *
  * セル集合は元階の全 Room セル ∪ 全階段 footprint セル（refreshCells で現行グリッドへ展開）
  * とする。外壁ループ（'outer'）の内側は、部屋・階段以外に建物内部の領域が無いことから

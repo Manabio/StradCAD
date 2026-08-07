@@ -144,7 +144,7 @@ export class FinishModeState {
    * 直下階（activePlaneの1つ下の採用フロア）の階段を peek し、見下げクリック判定用に保持する。
    * 直下階が無い場合は空配列のまま。App.jsx の upperStairEntries（描画用）と同じ peek 経路を使う。
    * peek は非同期（IDB読込）のため、待機中に dispose() されるとモード切替後の古い状態を
-   * 書き込んでしまう（App.jsx:231 の cancelled ガードと同じ問題）。_disposed を見て止める。
+   * 書き込んでしまう（App.jsx のモード再ロード effect の cancelled ガードと同じ問題）。_disposed を見て止める。
    */
   async _loadLowerStairs() {
     const project = this.project;
@@ -224,7 +224,7 @@ export class FinishModeState {
     return { full: covered === total, ch: this.upperFloorHeight + upperCH };
   }
 
-  /** 自階階段の蹴上(mm)。stair.riser 未指定なら階高/総段数から推定（App.jsx の install entries と同じ計算）。 */
+  /** 自階階段の蹴上(mm)。stair.riser 未指定なら階高/総段数から推定（finish/stair/stairEntries.js の install entries と同じ計算）。 */
   _selfStairRiser(stair) {
     if (stair.riser != null) return stair.riser;
     const fh = floorHeightAbove(this.project, this.project?.activePlane);

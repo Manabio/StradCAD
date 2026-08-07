@@ -18,7 +18,7 @@ export const CommonInfoTab = observer(function CommonInfoTab({ project, graph, o
   const hasOverride = graph.structureOverride != null;
   const mainStructureValue = hasOverride ? graph.structureOverride : info.mainStructure;
 
-  // 主構造（実効値）が変わる操作は onStructureChanged（App.jsx の recomputeStructuralComposition）へ委譲する。
+  // 主構造（実効値）が変わる操作は onStructureChanged（structuralOrchestration.js の recomputeStructuralComposition。App.jsx の onStructureChanged 経由）へ委譲する。
   // mutate（主構造の書き換え）を渡すと、自階＋下階の生成・材変換・採番と undo 登録をまとめてコア側が行う
   // ——構造伏図に映る下階の柱も実効主構造へ追従させるため、変換の単位を App 側の合成（composition）に揃える。
   function setMainStructure(v) {
