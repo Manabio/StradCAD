@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { observer } from 'mobx-react-lite';
-import { runInAction } from 'mobx';
+import { runInAction, reaction } from 'mobx';
 import { undoManager } from './undoManager.js';
 import { serializeGraph, restoreGraph } from './graphSnapshot.js';
 import { Stage } from 'react-konva';
@@ -15,7 +15,7 @@ import {
 } from './snap.js';
 import { OpeningPanel } from './openings/OpeningPanel.jsx';
 import { placeOpeningWithDefaults, removeOpeningWithUndo } from './openings/openingEdit.js';
-import { collectFloorOpeningGroups, assignOpeningNumbers, applyOpeningTags } from './openings/openingNumbering.js';
+import { collectFloorOpeningGroups, assignOpeningNumbers, applyOpeningTags, renumberOpenings, openingSignature } from './openings/openingNumbering.js';
 import { usePointerInteraction } from './interaction/usePointerInteraction.js';
 import { RoomNameInput }   from './finish/RoomNameInput.jsx';
 import { FinishSidebar }   from './finish/FinishSidebar.jsx';
@@ -203,6 +203,20 @@ const App = observer(() => {
     });
 
     return () => { cancelled = true; };
+  }, [appMode, activeFloorId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ---- 平面モードの建具記号: 採番キャッシュ(project.openingNumberIndex)の鮮度を保つ ----
+  // index を変異するだけで graph は不変 → undoエントリ不要（.claude/opening-model.md）。
+  // autorun ではなく reaction: effect 内で index を変異するため autorun だと自己再入する。
+  useEffect(() => {
+    if (appMode !== 'floorplan') return undefined;
+    const g = project.activeGraph;   // 切替直後は activeGraph を読み直す（.claude/floor-design.md）
+    if (!g) return undefined;
+    return reaction(
+      () => g.openings.map(openingSignature).join(';'),
+      () => runInAction(() => renumberOpenings(g, project)),
+      { fireImmediately: true },
+    );
   }, [appMode, activeFloorId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // 上階ビュー: 直下階（elevation が1つ下の採用フロア）の階段を peek し、
@@ -1567,6 +1581,7 @@ const App = observer(() => {
             cursorWorld={cursorWorld}
             clPreview={clPreview}
             clDialog={clDialog}
+            onOpeningTagClick={enterOpeningMode}
             wallDialog={wallDialog}
             menu={menu}
             setShowStructuralInfoDialog={setShowStructuralInfoDialog}

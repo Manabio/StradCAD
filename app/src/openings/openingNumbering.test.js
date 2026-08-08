@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 import { observable } from 'mobx';
 import {
   collectFloorOpeningGroups, assignOpeningNumbers, applyOpeningTags, renumberOpenings,
-  openingGroupsOnFloor, fixtureSymbolOf, openingTagOf, effectiveHeight,
+  openingGroupsOnFloor, fixtureSymbolOf, openingTagOf, effectiveHeight, openingTagPartsOf,
 } from './openingNumbering.js';
 
 function tagOfOpeningId(groups, id) {
@@ -274,4 +274,44 @@ test('openingGroupsOnFloor: 枝番28件でも桁数優先ソートでa,b,…,z,a
   assert.ok(idxZ >= 0 && idxAA >= 0 && idxAB >= 0, 'z, aa, ab のタグが存在するはず');
   assert.ok(idxZ < idxAA, '文字列ソートだとaaがzより前に来てしまう（修正前の不具合の回帰）');
   assert.ok(idxAA < idxAB);
+});
+
+// ================================================================
+// openingTagPartsOf（建具記号丸の上下2段テキスト用パーツ）
+// ================================================================
+
+// ---- 枝番あり: no+branch を結合した文字列になる ----
+test('openingTagPartsOf: 枝番ありは no+branch を結合した番号文字列を返す', () => {
+  const project = makeProject();
+  const g = makeGraph('p1', [
+    makeOpening('a', { materialGlass: 'アルミ' }),
+    makeOpening('b', { materialGlass: '樹脂' }),
+  ]);
+  renumberOpenings(g, project);
+
+  const openingA = g.openings.find(o => o.id === 'a');
+  const parts = openingTagPartsOf(openingA, project);
+  assert.equal(parts.symbol, 'AW');
+  assert.equal(parts.number, '1a');
+});
+
+// ---- 枝番なし: number は数値のみの文字列 ----
+test('openingTagPartsOf: 枝番なしは number が数値のみの文字列になる', () => {
+  const project = makeProject();
+  const g = makeGraph('p1', [makeOpening('a', { width: 1690 })]);
+  renumberOpenings(g, project);
+
+  const openingA = g.openings.find(o => o.id === 'a');
+  const parts = openingTagPartsOf(openingA, project);
+  assert.equal(parts.symbol, 'AW');
+  assert.equal(parts.number, '1');
+});
+
+// ---- 失敗系: 未収集（project.openingNumberIndex に無い）なら number は null、symbol はフォールバックする ----
+test('openingTagPartsOf: 未収集（採番未実施）でも symbol はフォールバックし number は null になる', () => {
+  const project = makeProject(); // collect/assignを一切呼ばない
+  const opening = makeOpening('solo', { fixtureType: null, category: 'window' });
+  const parts = openingTagPartsOf(opening, project);
+  assert.equal(parts.symbol, 'AW', 'fixtureType未設定でもfixtureSymbolOfのフォールバックで記号は確定する');
+  assert.equal(parts.number, null, '採番未実施では番号は確定しない');
 });

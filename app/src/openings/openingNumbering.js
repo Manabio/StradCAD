@@ -220,6 +220,19 @@ export function openingTagOf(opening, project) {
 }
 
 /**
+ * 建具記号丸の上下2段テキスト用パーツ。symbol はグループが無くても fixtureSymbolOf へ
+ * フォールバックする（未収集でも記号自体は常に確定するため）。number は「no+branch」の
+ * 文字列（例 '1'/'1a'）で、採番未確定（グループ未収集）なら null（呼び出し側で空文字表示）。
+ * @returns {{symbol: string, number: string|null}}
+ */
+export function openingTagPartsOf(opening, project) {
+  const group = project.openingNumberIndex.get(openingSignature(opening));
+  const symbol = group?.symbol ?? fixtureSymbolOf(opening);
+  const number = group?.no != null ? `${group.no}${group.branch ?? ''}` : null;
+  return { symbol, number };
+}
+
+/**
  * 自階だけ collect → assign → apply する即時反映用（構造の renumberMembers と同格）。
  * project.openingNumberIndex に既に積まれている他階分（直近の反映パスで得た情報）を使って
  * 番号を決める——他階が一度も反映されていない場合は自階だけの相対順位で決まり、次のモード境界の

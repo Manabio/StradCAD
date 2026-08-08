@@ -12,6 +12,7 @@ import { StepSectionLayer } from './StepSectionLayer.jsx';
 import { VoidLayer } from './VoidLayer.jsx';
 import { StructuralLayer, ColumnsLayer } from './StructuralLayer.jsx';
 import { MemberTagLayer } from './MemberTagLayer.jsx';
+import { OpeningTagLayer } from './OpeningTagLayer.jsx';
 import { PRIMARY_DIMENSION_FIELD_BY_MAP } from '../structural/memberCatalog.js';
 import { IntersectionMarkers } from './CenterLinesLayer.jsx';
 import { GutterLayer } from './GutterLayer.jsx';
@@ -32,6 +33,7 @@ export const SceneLayers = observer(({
   structComposition, upperVoidCrosses,
   snapPoint, cursorWorld, clPreview, clDialog, wallDialog, menu,
   setShowStructuralInfoDialog, setMemberFocusRequest, setStatusMenu,
+  onOpeningTagClick,
 }) => {
   return (
     <>
@@ -125,6 +127,15 @@ export const SceneLayers = observer(({
             {(appMode === 'floorplan' || appMode === 'finish') && (
               <VoidLayer graph={graph} viewport={viewport} upperCrosses={upperVoidCrosses} />
             )}
+            {/* 表示可否は shouldShowOpeningTags(appMode, lodLevel) が唯一の判定
+                （floorplan×DETAIL / opening×STANDARD・DETAILのみ。レイヤー内部でnullを返す） */}
+            <OpeningTagLayer
+              graph={graph}
+              project={project}
+              viewport={viewport}
+              appMode={appMode}
+              onSelectOpening={onOpeningTagClick}
+            />
             {appMode !== 'site' && <IntersectionMarkers graph={graph} viewport={viewport} />}
             <DrawPreview
               drawState={mode?.drawState ?? null}

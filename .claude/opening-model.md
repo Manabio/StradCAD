@@ -28,5 +28,9 @@
 建具表の項目のうち「取付箇所」（隣接部屋名）だけは**永続化しない導出値**——`openings/openingRoomLabel.js`の`openingMountLocation`が呼び出し時点のgraphトポロジー（`findHostWall`で得たホスト壁＋`finish/edgeClassify.js`の`buildCellToRoom`/`worldToCell`）から毎回計算する。部屋名や間取りが変わればOpening側は無編集のまま表示だけ追随する（採番の`project.openingNumberIndex`と同じ「導出は保存しない」思想）。隣接部屋の判定ロジックは`edgeGeometry`（境界エッジのサンプリング方式：軸直交方向へ±10mmの点をセル化→`cellToRoom`で引く）を踏襲し、新しい判定方式を作らない。
 一方`finish`/`materialGlass`/`frameDepth`/`hardware`/`note`はユーザー入力の**永続フィールド**（`Opening`本体・FBS末尾追加）。導出値と永続値を混在させないのは、モード境界のundo・全階反映の設計（上記「番号は導出のみ」節）と同じ理由——導出値をentityに書き戻すと、境界処理にgraph変更が紛れ込みundoエントリが必要になってしまう。
 
+## 記号丸の配置と採番の鮮度
+建具記号丸（円に直径横線・上段記号／下段採番）の配置計算は`openings/openingTagPlacement.js`が純関数で担い、`renderer/OpeningTagLayer.jsx`はviewport由来のpx→mm換算とKonva描画・クリック配線のみを行う。窓は壁面から室内側へオフセット、開き戸は動作扇形の重心に置く。反転（円弧同士が重なる場合の壁軸鏡映）は位置だけでなく退避方向（u/v基底）も一緒に鏡映する——位置だけ鏡映すると退避方向が元の（壁・扉側へ戻る）向きのままになるため。重なる場合は決定的な順序で退避先を探し、見つからなければ元の位置を返す（配置失敗を握りつぶさない）。障害物は壁の材範囲と開き戸自身の動作扇形のみ——部屋名・寸法・構造部材は対象外（今後の検討課題）。
+`project.openingNumberIndex`（採番キャッシュ）は建物状態から導出するため、平面モードでは`App.jsx`が`graph.openings`の署名（`openingSignature`の結合文字列）を`reaction`で監視し、変化のたびに`renumberOpenings`で自階の採番を再計算する——`autorun`ではなくreaction+`runInAction`にしているのは、effect内でindexを変異するとautorunは自己再入してしまうため。建具モード中はこの監視を止める（モード境界の全階収集と競合させない）。
+
 ## 材料・ガラスの記号別初期値は「新規配置時に設定・記号変更時は未編集なら差し替え」
 `openingCatalog.js`の`DEFAULT_MATERIALS`（記号→初期値。AW/AD=アルミ、WD=ポリ合板フラッシュ戸+木製枠、WW=木製、JW=樹脂、SW/SD=スチール）が唯一のマスタ。`placeOpeningWithDefaults`が新規配置時に`materialGlass`へ設定する。エディタで記号（fixtureType）を変更したとき、`openingEdit.js`の`materialGlassAfterFixtureChange`は**現在値が旧記号の初期値と完全一致する場合のみ**新記号の初期値へ差し替える——文字列比較なので、ユーザーが少しでも手を入れた値（初期値と異なる文字列）は記号を変えても上書きされない。

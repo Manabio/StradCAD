@@ -78,4 +78,7 @@
 ## 姿図（建具モード）
 建具1件の正面図（枠・機構表現・寸法）。`openings/openingElevationFigure.js`が純関数でプリミティブ配列を生成し、`structural/sectionFigure/AutoScaledFigure.jsx`で描画する（断面図と同じレンダラを再利用）。
 
+## 建具記号丸
+平面図・建具モードに表示する「円に直径横線、上段=建具記号、下段=採番」の注記シンボル。窓は壁面から室内側へオフセット、開き戸は動作扇形の重心に配置し、常に画面に正対（回転なし・ズーム非依存サイズ）する。配置計算は`openings/openingTagPlacement.js`（純関数）、描画は`renderer/OpeningTagLayer.jsx`。設計意図は`.claude/opening-model.md`。
+
 
