@@ -19,6 +19,7 @@ import { StairType } from '@core';
 import { buildStairGeometry, cellsBeyondBreak } from './stairGeometry.js';
 import { cellBoundsList } from '../gridCells.js';
 import { stairUnderRoomsOf } from './stairUnderRooms.js';
+import { wallWorldRect } from '../../openings/openingGeometry.js';
 
 // keep領域（破れ線先セルの実矩形）の拡張量(mm)。2a壁の下地厚(90)+仕上げ厚(12.5)と、外側の
 // 隣室仕上げ薄壁厚(12.5)を合わせた実材幅（102.5+12.5）を確実に飲み込む余裕。
@@ -61,15 +62,6 @@ function signedArea(pts) {
 function orient(pts, wantPositive) {
   const isPositive = signedArea(pts) > 0;
   return isPositive === wantPositive ? pts : [...pts].reverse();
-}
-
-// 壁の実材範囲（materialRange）× 長さ方向範囲（coord1/coord2）のワールド矩形。
-function wallWorldRect(w) {
-  const lo = Math.min(w.coord1, w.coord2), hi = Math.max(w.coord1, w.coord2);
-  const { lo: mLo, hi: mHi } = w.materialRange;
-  return w.isVertical
-    ? { x1: mLo, y1: lo, x2: mHi, y2: hi }
-    : { x1: lo, y1: mLo, x2: hi, y2: mHi };
 }
 
 // breakLine（buildStairGeometry の結果。連結したセグメント配列）を頂点列（連結点列）へ変換する。

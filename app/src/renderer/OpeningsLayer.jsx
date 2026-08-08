@@ -2,7 +2,7 @@ import { Fragment } from 'react';
 import { observer } from 'mobx-react-lite';
 import { Line, Rect, Path } from 'react-konva';
 import { OpeningCategory } from '../core.js';
-import { findHostWall } from '../openings/openingGeometry.js';
+import { findHostWall, wallFaceRange } from '../openings/openingGeometry.js';
 import { findCatalogEntry, IMPLEMENTED_MECHANISMS, OpeningMechanism } from '../openings/openingCatalog.js';
 import { arcPathD } from './ShapesLayer.jsx';
 import { LodLevel, resolveStrokeWidth } from '../viewport.js';
@@ -80,19 +80,6 @@ function swingSymbol(opening, host, sp, hingeInset = 0, latchInset = 0, leafThic
       />
     </>
   );
-}
-
-// 開口と同じ axisCL 上にある反対側（符号違い）の壁を探し、壁の両面位置 [faceLo, faceHi] を返す。
-// 反対側が見つからない場合（外壁・手動壁）は軸CLを中心に対称とみなす。
-function wallFaceRange(host, graph) {
-  const lo = Math.min(host.coord1, host.coord2), hi = Math.max(host.coord1, host.coord2);
-  const counterpart = graph.walls.find((w) =>
-    w !== host && w.axisCL === host.axisCL && w.isVertical === host.isVertical &&
-    Math.sign(w.axisOffset) === -Math.sign(host.axisOffset) &&
-    Math.min(w.coord1, w.coord2) < hi && Math.max(w.coord1, w.coord2) > lo,
-  );
-  const otherFace = counterpart ? counterpart.axisValue : 2 * host.axisCL.effectiveValue - host.axisValue;
-  return [Math.min(host.axisValue, otherFace), Math.max(host.axisValue, otherFace)];
 }
 
 // 1つの方立の外形を単一の輪郭（六角形）として返す（内部に分割線を作らない）。

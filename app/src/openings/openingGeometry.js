@@ -65,3 +65,32 @@ export function validateOpeningPlacement(wall, coord1, coord2, graph, excludeId 
   if (overlap) return ERR_OPENING_OVERLAP;
   return null;
 }
+
+/**
+ * 壁の実材範囲（materialRange）× 長さ方向範囲（coord1/coord2）のワールド矩形。
+ * finish/stair/stairUnderClip.js（2a壁クリップの障害物判定）・openings/openingTagPlacement.js
+ * （建具記号丸の壁バンド回避）の両方から共有する単一実装。
+ */
+export function wallWorldRect(w) {
+  const lo = Math.min(w.coord1, w.coord2), hi = Math.max(w.coord1, w.coord2);
+  const { lo: mLo, hi: mHi } = w.materialRange;
+  return w.isVertical
+    ? { x1: mLo, y1: lo, x2: mHi, y2: hi }
+    : { x1: lo, y1: mLo, x2: hi, y2: mHi };
+}
+
+/**
+ * 開口と同じ axisCL 上にある反対側（符号違い）の壁を探し、壁の両面位置 [faceLo, faceHi] を返す。
+ * 反対側が見つからない場合（外壁・手動壁）は軸CLを中心に対称とみなす。
+ * OpeningsLayer（詳細LOD枠描画）・openingTagPlacement（記号丸のオフセット配置）で共有する。
+ */
+export function wallFaceRange(host, graph) {
+  const lo = Math.min(host.coord1, host.coord2), hi = Math.max(host.coord1, host.coord2);
+  const counterpart = graph.walls.find((w) =>
+    w !== host && w.axisCL === host.axisCL && w.isVertical === host.isVertical &&
+    Math.sign(w.axisOffset) === -Math.sign(host.axisOffset) &&
+    Math.min(w.coord1, w.coord2) < hi && Math.max(w.coord1, w.coord2) > lo,
+  );
+  const otherFace = counterpart ? counterpart.axisValue : 2 * host.axisCL.effectiveValue - host.axisValue;
+  return [Math.min(host.axisValue, otherFace), Math.max(host.axisValue, otherFace)];
+}
