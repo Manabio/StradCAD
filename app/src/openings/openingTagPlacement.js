@@ -10,7 +10,7 @@
 // mm の数値で受け取る）。設計意図は .claude/opening-model.md 参照。
 // ================================================================
 
-import { findHostWall, wallFaceRange, wallWorldRect } from './openingGeometry.js';
+import { findHostWall, wallFaceRange, wallWorldRect, wallFaceDir } from './openingGeometry.js';
 import { findCatalogEntry, OpeningMechanism } from './openingCatalog.js';
 // viewport.js は mobx と @core しか import しない純モジュールのため、node:test 単体import制約
 // （store.js/snap.js/.jsx を静的に引かない）に抵触しない（前例: finish/stair/stairEntries.js:6）。
@@ -36,7 +36,7 @@ function toWorld(isVertical, along, perp) {
  * 外壁はその逆（室内は常に軸CLへ向かう側）とする。
  */
 export function roomSideDir(opening, host) {
-  const faceDir = host.finishSide ?? (Math.sign(host.axisValue - host.axisCL.effectiveValue) || opening.wallSide || 1);
+  const faceDir = wallFaceDir(host, opening.wallSide || 1);
   return host.isExteriorWall ? -faceDir : faceDir;
 }
 

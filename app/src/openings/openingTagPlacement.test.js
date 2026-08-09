@@ -88,6 +88,35 @@ test('openingTagAnchor: 内壁の窓は外壁と逆側（faceDirそのまま）�
 });
 
 // ================================================================
+// roomSideDir: wallFaceDir のフォールバック枝（QA指摘・前タスク未対応分の回帰）
+// ================================================================
+
+test('roomSideDir: finishSide明示指定はaxisOffsetのnaiveなsignより優先される（CL偏芯の仕上げ面合わせ）', () => {
+  const graph = makeGraph();
+  const xCL = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
+  const y0  = graph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: false, discipline: Discipline.ARCH });
+  const y1  = graph.addCenterLine(CenterLineType.HORIZONTAL, 4000, { labeled: false, discipline: Discipline.ARCH });
+  // axisOffset=100(正)だがfinishSide=-1明示 → naiveなsign(+1)の逆が仕上げ面の向きになる
+  const wall = graph.addWall(xCL, 100, true, y0, 0, y1, 0, { isExteriorWall: false, finishSide: -1 });
+  const opening = graph.addOpening(xCL, 1, true, y0, 2000, 400, OpeningCategory.WINDOW, 'doubleSliding', {});
+
+  assert.equal(roomSideDir(opening, wall), -1, '内壁はfaceDirがそのまま室内側。finishSide=-1に従うはず（naiveなsign(+1)なら誤って+1になる）');
+});
+
+test('roomSideDir: axisOffset===0（CL上に面が一致するCL偏芯壁）はopening.wallSideへフォールバックする', () => {
+  const graph = makeGraph();
+  const xCL = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
+  const y0  = graph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: false, discipline: Discipline.ARCH });
+  const y1  = graph.addCenterLine(CenterLineType.HORIZONTAL, 4000, { labeled: false, discipline: Discipline.ARCH });
+  const wall = graph.addWall(xCL, 0, true, y0, 0, y1, 0, { isExteriorWall: false }); // axisValue===axisCL.effectiveValue
+  const openingPos = graph.addOpening(xCL, 1,  true, y0, 2000, 400, OpeningCategory.WINDOW, 'doubleSliding', {});
+  const openingNeg = graph.addOpening(xCL, -1, true, y0, 2500, 400, OpeningCategory.WINDOW, 'doubleSliding', {});
+
+  assert.equal(roomSideDir(openingPos, wall), 1,  'wallSide=1のopeningはfallback=1になるはず');
+  assert.equal(roomSideDir(openingNeg, wall), -1, 'wallSide=-1のopeningはfallback=-1になるはず');
+});
+
+// ================================================================
 // openingTagAnchor（sectorアンカー・開き戸）
 // ================================================================
 

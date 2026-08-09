@@ -81,4 +81,10 @@
 ## 建具記号丸
 平面図・建具モードに表示する「円に直径横線、上段=建具記号、下段=採番」の注記シンボル。窓は壁面から室内側へオフセット、開き戸は動作扇形の重心に配置し、常に画面に正対（回転なし・ズーム非依存サイズ）する。配置計算は`openings/openingTagPlacement.js`（純関数）、描画は`renderer/OpeningTagLayer.jsx`。設計意図は`.claude/opening-model.md`。
 
+## 壁ラジアル（メニュー）
+壁を長押しして開く建具・窓配置や腰壁・垂れ壁選択のメニュー。ヒット域は壁の仕上げ面線とその近傍のみ（壁の真ん中＝通り芯位置は対象外・通り芯側のメニューに譲る）。判定は`snap.js`の`findNearestWall`（本体は`openings/openingGeometry.js`の`nearestWallHit`）。設計意図は`.claude/opening-model.md`。
+
+## 材側
+壁の仕上げ面線（`axisValue`）から見て軸CL側。対義語は部屋側（面線から見て材と反対側）。壁ラジアルのヒット域判定（`isWallRadialHit`）で使う区分。
+
 

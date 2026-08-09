@@ -1,7 +1,7 @@
 // スナップ計算はすべてスクリーン空間距離 (px) で判定する。
 // threshold は px 単位で渡し、ワールド差分に scaleX/Y を掛けてスクリーン距離に換算する。
 import { spatialIndex } from './store.js';
-import { findHostWall } from './openings/openingGeometry.js';
+import { findHostWall, nearestWallHit } from './openings/openingGeometry.js';
 import { centerLineKind, CenterLineType } from './core.js';
 import { inGutter as isInGutter } from './layout.js';
 // overhangMm・findBracketingCLs は spatialIndex/store に依存しない純関数のため snapGeometry.js へ
@@ -14,6 +14,11 @@ export { overhangMm, findBracketingCLs };
 export const SNAP_THRESHOLD_PX = 20;
 export const CL_THRESHOLD_PX   = 8;
 export const WALL_THRESHOLD_PX = 8;
+// 壁ラジアルのヒット域のうち、面線から材側（軸CL方向）への許容(px)。壁線には描画上の太さが
+// あるため、面線から見て部屋側の判定（差>=0）だけだと線をわずかに内側へ外しただけで通り芯
+// メニューに落ちてしまう。WALL_THRESHOLD_PXより小さい値にし、かつ isWallRadialHit 側で
+// 面線〜軸CLの距離とのmin(）を取ることで壁の真ん中（軸CL）には決して届かないようにする。
+export const WALL_LINE_INWARD_PX = 2;
 
 export function findNearestIntersection(graph, wx, wy, thresholdPx, scaleX, scaleY) {
   if (!graph) return null;
@@ -180,24 +185,24 @@ export function findNearbyCenterLines(graph, wx, wy, thresholdPx, scaleX, scaleY
 }
 
 /**
- * カーソルに最も近い壁を返す（開口配置の長押し検出用）。
+ * カーソルに最も近い壁を返す（開口配置の長押し検出用。腰壁・垂れ壁メニュー・カーソル pointer
+ * 表示も同じ結果を使う——単一のヒット判定なので用途によって挙動を分けない）。
  * 自動生成壁（isRoomWall）のみを対象とする — 現行UIには壁の手描きツールが
  * 存在しないため、レガシーインポートデータ由来の isRoomWall:false 壁を
  * 開口のホスト候補から確実に除外する。
+ * ヒット域は「壁線とその近傍」——壁線そのものを含むため、部屋側は WALL_THRESHOLD_PX まで、
+ * 材側（軸CL方向）は WALL_LINE_INWARD_PX までのわずかな許容を持つが、壁の真ん中（軸CL位置）
+ * には決して届かない（isWallRadialHit がクランプする）。軸CL位置は通り芯のメニューに譲る。
+ * 詳細は .claude/opening-model.md 参照。本体は nearestWallHit（node:test 単体テスト対応の
+ * ため純関数として openingGeometry.js に置く）。
+ *
+ * findOpeningAt（開口の当たり判定）は非対称——WALL_THRESHOLD_PXのみで材側許容を持たない
+ * （開口自体には「材の中」という概念がない）。そのため材側許容域では、開口の上ならOPENINGメニュー
+ * が出るが、隣の無地の壁面では出ない、という差が生じるが仕様として許容する。
  */
 export function findNearestWall(graph, wx, wy, thresholdPx, scaleX, scaleY) {
   if (!graph) return null;
-  let nearest = null, minDist = Infinity;
-  for (const w of graph.walls) {
-    if (!w.isRoomWall) continue;
-    const perp = w.isVertical ? Math.abs(w.axisValue - wx) * scaleX : Math.abs(w.axisValue - wy) * scaleY;
-    if (perp >= thresholdPx || perp >= minDist) continue;
-    const along = w.isVertical ? wy : wx;
-    const lo = Math.min(w.coord1, w.coord2), hi = Math.max(w.coord1, w.coord2);
-    if (along < lo || along > hi) continue;
-    minDist = perp; nearest = w;
-  }
-  return nearest;
+  return nearestWallHit(graph.walls, wx, wy, thresholdPx, scaleX, scaleY, WALL_LINE_INWARD_PX);
 }
 
 /** カーソルに最も近い既存開口を返す（編集・削除メニュー用）。 */
