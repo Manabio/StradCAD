@@ -18,7 +18,7 @@ import { runInAction } from 'mobx';
 import { undoManager } from '../undoManager.js';
 import { OpeningCategory } from '../core.js';
 import { getFittingOptions, WINDOW_CATALOG, defaultFixtureSymbolFor, defaultOpeningHeight, defaultMaterialGlassFor } from './openingCatalog.js';
-import { findHostWall, validateOpeningPlacement, wallFaceDir, swingSideTowardPerp, exteriorSideDir } from './openingGeometry.js';
+import { findHostWall, validateOpeningPlacement, swingSideTowardPerp, exteriorSideDir } from './openingGeometry.js';
 import { renumberOpenings } from './openingNumbering.js';
 
 const EDITABLE = [
@@ -133,7 +133,7 @@ export function placeOpeningWithDefaults(graph, project, wall, worldPos, categor
   // 特定する——境界が長さ方向で外壁区間／隣室区間に分かれる（segmented）平面では、worldPos
   // ではなく実配置位置で判定しないと誤った区間の相手を拾う。.claude/opening-model.md 参照。
   const hingeSide = -1;
-  const faceDir = wallFaceDir(wall);
+  const faceDir = wall.faceDir;
   const openDir = exteriorSideDir(wall, graph, centerCoord) ?? faceDir;
   const swingSide = swingSideTowardPerp(wall.isVertical, hingeSide, openDir);
   const opening = graph.addOpening(wall.axisCL, wallSide, wall.isVertical, refCL, refOffset, width, category, subType,

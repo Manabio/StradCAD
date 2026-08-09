@@ -42,7 +42,7 @@ export class Wall extends Shape {
     // 下地帯の深さ(mm)。null=現行式（wallBase等から導出）。0は「下地なし＝仕上げのみの薄壁」を表す明示値。
     this.backingDepth  = props?.backingDepth ?? null;
     // 仕上げ面が向く側（±1）。CL偏芯の「仕上げ面合わせ」でCL上に面が一致し dir 導出が
-    // 不能になるケースの明示指定。null=従来どおり sign(faceV-axisV) から導出する。
+    // 不能になるケースの明示指定。null=Wall.faceDir が sign(axisOffset) から導出する。
     this.finishSide  = props?.finishSide ?? null;
     makeObservable(this, {
       clStart:     observable.ref,
@@ -59,12 +59,22 @@ export class Wall extends Shape {
       coord2:        computed,
       materialRange: computed,
       backingRange:  computed,
+      faceDir:       computed,
     });
   }
 
   get axisValue() { return this.axisCL.effectiveValue + this.axisOffset; }
   get coord1()    { return this.clStart.effectiveValue + this.startOffset; }
   get coord2()    { return this.clEnd.effectiveValue   + this.endOffset;   }
+
+  /**
+   * 仕上げ面が向く側（±1）。finishSide 明示指定を優先し、無ければ axisOffset の符号
+   * （axisValue - axisCL.effectiveValue と同符号。axisValue = axisCL.effectiveValue + axisOffset
+   * のため）。axisOffset===0（CL偏芯の仕上げ面合わせで面がCL上に一致するケース）は
+   * fallback を返す。materialRange・renderer/finish/openings 各所の dir 導出を集約する単一実装。
+   */
+  faceDirOr(fallback = 1) { return this.finishSide ?? (Math.sign(this.axisOffset) || fallback); }
+  get faceDir() { return this.faceDirOr(1); }
 
   /**
    * 実際に材が存在する範囲（下地帯 ∪ 仕上げ帯）を、axisCL の厚み方向座標で返す。
@@ -79,9 +89,7 @@ export class Wall extends Shape {
     const thickLo = Math.min(axisV, faceV), thickHi = Math.max(axisV, faceV);
     if (this.backingDepth == null) return { lo: thickLo, hi: thickHi };
 
-    // finishSide 明示指定があれば優先する（CL偏芯の仕上げ面合わせで faceV===axisV となり
-    // sign(faceV-axisV) が破綻するケースの対策。7.1参照）。
-    const dir = this.finishSide ?? (Math.sign(faceV - axisV) || 1);
+    const dir = this.faceDir;
     const finBoundary = faceV - dir * (this.wallFinish ?? 0);
     const finLo = Math.min(finBoundary, faceV), finHi = Math.max(finBoundary, faceV);
     if (this.backingDepth === 0) return { lo: finLo, hi: finHi };

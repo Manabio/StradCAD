@@ -1030,7 +1030,7 @@ function readWall(bb, tablePos) {
     // 旧データ（フィールド未保存）は HAS_ フラグが立たず null になる（=現行対称描画へ後方互換）
     backingOffset: r.i8(WL.HAS_BACKING_OFFSET) !== 0 ? r.f64(WL.BACKING_OFFSET) : null,
     backingDepth:  r.i8(WL.HAS_BACKING_DEPTH)  !== 0 ? r.f64(WL.BACKING_DEPTH)  : null,
-    // 0 = 未設定（旧データ含む）→ null（従来どおり sign(faceV-axisV) から導出）
+    // 0 = 未設定（旧データ含む）→ null（Wall.faceDir が sign(axisOffset) から導出）
     finishSide:    r.i8(WL.FINISH_SIDE) || null,
   };
 }

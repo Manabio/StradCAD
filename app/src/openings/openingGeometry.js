@@ -57,16 +57,6 @@ export function findOpeningsOnWall(wall, graph) {
 }
 
 /**
- * 壁の仕上げ面が向く側（±1）。finishSide 明示指定があれば優先し、無ければ axisValue と
- * axisCL.effectiveValue の差の符号から導出する。差が0（CL上に面が一致するCL偏芯壁等）の
- * ときは fallback を返す。openingTagPlacement.js の roomSideDir・openingEdit.js の
- * swingSide既定決定で共有する（fallback値は呼び出し側の既存挙動に合わせて渡すこと）。
- */
-export function wallFaceDir(wall, fallback = 1) {
-  return wall.finishSide ?? (Math.sign(wall.axisValue - wall.axisCL.effectiveValue) || fallback);
-}
-
-/**
  * 開き戸が直交方向(perp)の指定側（±1。isVertical壁ならx、水平壁ならy）へ開くための
  * swingSide（±1）を返す。OpeningsLayer.jsx swingSymbol の開き角度式
  * （perpDir = (isVertical?1:-1) * swingSide * hingeSide）の逆解き。
@@ -94,7 +84,7 @@ export function swingSideTowardPerp(isVertical, hingeSide, perpDir) {
  * findNearestWall がpx→mm換算した thresholdWorld・inwardWorld（各 px/scale）を渡して使う。
  */
 export function isWallRadialHit(wall, perp, thresholdWorld, inwardWorld) {
-  const faceDir = wallFaceDir(wall);
+  const faceDir = wall.faceDir;
   const signedDist = (perp - wall.axisValue) * faceDir; // >=0: 部屋側, <0: 材側
   // toCL: 面線から軸CLまでの符号付き距離（faceDir方向を正とする）。
   // 通常( >=0 側から見て軸CLは材側): toCL < 0。CL偏芯で符号が食い違う異常系: toCL > 0（軸CLが部屋側）。
@@ -211,8 +201,8 @@ export function wallFaceRange(host, graph) {
  * 誤った区間の相手を拾う。
  */
 export function exteriorSideDir(wall, graph, along = null) {
-  if (wall.isExteriorWall) return wallFaceDir(wall);
+  if (wall.isExteriorWall) return wall.faceDir;
   const counterpart = findCounterpartWall(wall, graph, along);
-  if (counterpart?.isExteriorWall) return wallFaceDir(counterpart);
+  if (counterpart?.isExteriorWall) return counterpart.faceDir;
   return null;
 }

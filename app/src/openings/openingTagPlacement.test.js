@@ -88,7 +88,7 @@ test('openingTagAnchor: 内壁の窓は外壁と逆側（faceDirそのまま）�
 });
 
 // ================================================================
-// roomSideDir: wallFaceDir のフォールバック枝（QA指摘・前タスク未対応分の回帰）
+// roomSideDir: Wall.faceDirOr のフォールバック枝（QA指摘・前タスク未対応分の回帰）
 // ================================================================
 
 test('roomSideDir: finishSide明示指定はaxisOffsetのnaiveなsignより優先される（CL偏芯の仕上げ面合わせ）', () => {

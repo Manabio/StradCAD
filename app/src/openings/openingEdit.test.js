@@ -216,7 +216,7 @@ test('placeOpeningWithDefaults: 外壁は触れた側(worldPos)によらず常�
   // SWING機構(door)へ変えてから doorOpenSidePerp で測る（種別変更後も配置時のswingSideは保持される仕様）。
   runInAction(() => { touchedInside.opening.subType = 'door'; touchedOutside.opening.subType = 'door'; });
 
-  const exteriorDir = 1; // wallFaceDir: axisValue(75) - axisCL.effectiveValue(0) = +75 → +1（室外側）
+  const exteriorDir = 1; // Wall.faceDir: axisValue(75) - axisCL.effectiveValue(0) = +75 → +1（室外側）
   assert.equal(doorOpenSidePerp(touchedInside.opening, wallA, graphA), exteriorDir, '室内側(y=-500)を触れても室外側へ開くはず');
   assert.equal(doorOpenSidePerp(touchedOutside.opening, wallB, graphB), exteriorDir, '室外側(y=500)を触れても室外側へ開くはず');
 });

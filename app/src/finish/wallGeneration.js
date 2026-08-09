@@ -625,10 +625,9 @@ function splitWallByOwnership(graph, w, ownerWalls, { claimUncovered = true } = 
   }
   if (merged.length === 0) return null; // 区間が完全に消えた（到達しない想定の安全側）
 
-  // オーナー側フィールド（claimUncovered=true の既定式でのみ使う）。finishSide は既存値を
-  // 優先する——axisOffset===0（CL偏芯の仕上げ面合わせで面がCL上に一致したケース）では
-  // sign(axisOffset) が0になり側を導出できないため、既に確定済みの finishSide を壊さない。
-  const sign = w.finishSide ?? (Math.sign(w.axisOffset) || 1);
+  // オーナー側フィールド（claimUncovered=true の既定式でのみ使う）。sign は既存の finishSide を
+  // 優先する（axisOffset===0では側を導出できないため。導出はWall.faceDir参照）。
+  const sign = w.faceDir;
   const ownerBackingDepth = 2 * (Math.abs(w.axisOffset) - w.wallFinish);
   const fieldsFor = (covered) => claimUncovered
     ? { backingOffset: 0, backingDepth: covered ? 0 : ownerBackingDepth, finishSide: sign }
@@ -713,9 +712,8 @@ export function applyBackingOwnership(graph, ownerWalls, challengerWalls, { setO
       if (w.wallFinish == null) continue; // 手動壁等（生成時確定値が無い）は対象外
       w.backingOffset = 0;
       w.backingDepth  = 2 * (Math.abs(w.axisOffset) - w.wallFinish);
-      // finishSide は既存値を優先する（axisOffset===0＝CL偏芯の仕上げ面合わせでは
-      // sign(axisOffset)が0になり側を導出できないため、既に確定済みの値を壊さない）。
-      w.finishSide    = w.finishSide ?? (Math.sign(w.axisOffset) || 1);
+      // finishSide は既存値を優先する（既に確定済みの値を壊さない。導出はWall.faceDir参照）。
+      w.finishSide    = w.faceDir;
     }
   }
 
@@ -773,8 +771,8 @@ export function resolveBackingOwnership(graph, walls) {
         if (w.wallFinish == null) continue;
         w.backingOffset = 0;
         w.backingDepth  = 2 * (Math.abs(w.axisOffset) - w.wallFinish);
-        // finishSide は既存値を優先する（axisOffset===0では側を導出できないため）。
-        w.finishSide    = w.finishSide ?? (Math.sign(w.axisOffset) || 1);
+        // finishSide は既存値を優先する（既に確定済みの値を壊さない。導出はWall.faceDir参照）。
+        w.finishSide    = w.faceDir;
       }
       continue;
     }
