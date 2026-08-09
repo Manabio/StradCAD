@@ -9,6 +9,7 @@ import { Plane, PlanGraph, CenterLineType, Discipline, OpeningCategory } from '.
 import { undoManager } from '../undoManager.js';
 import { FITTING_CATALOG, defaultMaterialGlassFor } from './openingCatalog.js';
 import { openingTagOf, renumberOpenings } from './openingNumbering.js';
+import { openingTagAnchor } from './openingTagPlacement.js';
 import {
   placeOpeningWithDefaults, removeOpeningWithUndo, withOpeningUndo, pushOpeningUndo, snapshotOpening,
   materialGlassAfterFixtureChange, validateOpeningEdit,
@@ -20,17 +21,37 @@ function makePlaneGraph(planeId = 'p1') {
 }
 
 // 長さ length(mm) の水平壁を1本持つグラフを作る（既定は外壁）。
-function makeWallGraph(length = 3000, { isExteriorWall = true } = {}) {
+function makeWallGraph(length = 3000, { isExteriorWall = true, axisOffset = 75 } = {}) {
   const graph = makePlaneGraph();
   const axisCL  = graph.addCenterLine(CenterLineType.HORIZONTAL, 0,      { labeled: false, discipline: Discipline.ARCH });
   const clStart = graph.addCenterLine(CenterLineType.VERTICAL,   0,      { labeled: false, discipline: Discipline.ARCH });
   const clEnd   = graph.addCenterLine(CenterLineType.VERTICAL,   length, { labeled: false, discipline: Discipline.ARCH });
-  const wall = graph.addWall(axisCL, 75, false, clStart, 0, clEnd, 0, { isExteriorWall });
+  const wall = graph.addWall(axisCL, axisOffset, false, clStart, 0, clEnd, 0, { isExteriorWall });
+  return { graph, wall, axisCL, clStart, clEnd };
+}
+
+// 長さ length(mm) の垂直壁を1本持つグラフを作る（既定は内壁）。
+function makeVerticalWallGraph(length = 3000, { isExteriorWall = false, axisOffset = 75 } = {}) {
+  const graph = makePlaneGraph();
+  const axisCL  = graph.addCenterLine(CenterLineType.VERTICAL,   0,      { labeled: false, discipline: Discipline.ARCH });
+  const clStart = graph.addCenterLine(CenterLineType.HORIZONTAL, 0,      { labeled: false, discipline: Discipline.ARCH });
+  const clEnd   = graph.addCenterLine(CenterLineType.HORIZONTAL, length, { labeled: false, discipline: Discipline.ARCH });
+  const wall = graph.addWall(axisCL, axisOffset, true, clStart, 0, clEnd, 0, { isExteriorWall });
   return { graph, wall, axisCL, clStart, clEnd };
 }
 
 function makeProject() {
   return { openingNumberIndex: observable.map() };
+}
+
+// 開き戸(SWING)の記号丸アンカー（openingTagAnchor）の perp成分から、扉が実際に開いている側
+// （±1）を独立に読み取る。placeOpeningWithDefaults が保存した swingSide の算出式
+// （openingGeometry.js swingSideTowardPerp）とは別経路（openingTagPlacement.js swingGeometry）の
+// 計算のため、配置時の swingSide 決定が「意図した側に扉が実際に開くか」を裏付けるクロスチェックになる。
+function doorOpenSidePerp(opening, wall, graph) {
+  const anchor = openingTagAnchor(opening, wall, graph, { radiusMm: 100, gapMm: 20 });
+  const perp = wall.isVertical ? anchor.x : anchor.y;
+  return Math.sign(perp - wall.axisValue);
 }
 
 // ---- Finding 1 回帰: 編集確定の前進方向でもタグが即座に反映される ----
@@ -125,6 +146,143 @@ test('refCL.pendingDelta!=0（CL偏芯ドラッグ中）でも長押し位置(al
   assert.equal(error, null);
   assert.ok(opening);
   assert.equal(opening.centerCoord, 1500, '長押し位置(along=1500)にそのまま配置されるはず（refCL.valueに引きずられない）');
+});
+
+// ---- swingSideの既定値: 壁が面する側(faceDir)へ開く（内壁・水平） ----
+// QA指摘（材側許容の追加に伴う仕様の言い換え）: 壁ラジアルのヒット域には材側へのわずかな許容
+// （WALL_LINE_INWARD_PX）があるため、押下点(worldPos)の直交成分の符号ではなく、ヒットした壁
+// 自身が面する向き（faceDir）で開き方向が決まらなければならない——押下点の符号に依存すると、
+// 材側許容域を押したときに逆に開いてしまう（前回QA指摘の再発）。壁A(faceDir=+1)・壁B(faceDir=-1)
+// それぞれで、部屋側/材側どちらを押しても各壁のfaceDirどおりに開くことを確認する。
+test('placeOpeningWithDefaults: 内壁（水平）は壁が面する側(faceDir)へ扉が開く（押下点の直交成分に依存しない）', () => {
+  const { graph: graphA, wall: wallA } = makeWallGraph(3000, { isExteriorWall: false, axisOffset: 75 }); // faceDir=+1
+  const projectA = makeProject();
+  const roomSideA = placeOpeningWithDefaults(graphA, projectA, wallA, { x: 500, y: 500 }, OpeningCategory.FITTING);
+  assert.equal(roomSideA.error, null);
+  assert.equal(roomSideA.opening.subType, 'singleSwing', '内壁のFITTING既定はSWING機構(singleSwing)のはず');
+  assert.equal(doorOpenSidePerp(roomSideA.opening, wallA, graphA), 1, '部屋側(y=500)を押してもfaceDir(+1)へ開くはず');
+
+  const { graph: graphA2, wall: wallA2 } = makeWallGraph(3000, { isExteriorWall: false, axisOffset: 75 });
+  const projectA2 = makeProject();
+  const materialSideA = placeOpeningWithDefaults(graphA2, projectA2, wallA2, { x: 2000, y: 74 }, OpeningCategory.FITTING);
+  assert.equal(materialSideA.error, null);
+  assert.equal(doorOpenSidePerp(materialSideA.opening, wallA2, graphA2), 1, '材側許容域(y=74<axisValue=75)を押してもfaceDir(+1)へ開くはず（touchDirには依存しない）');
+
+  const { graph: graphB, wall: wallB } = makeWallGraph(3000, { isExteriorWall: false, axisOffset: -75 }); // faceDir=-1
+  const projectB = makeProject();
+  const roomSideB = placeOpeningWithDefaults(graphB, projectB, wallB, { x: 500, y: -500 }, OpeningCategory.FITTING);
+  assert.equal(roomSideB.error, null);
+  assert.equal(doorOpenSidePerp(roomSideB.opening, wallB, graphB), -1, '壁Bは部屋側を押してもfaceDir(-1)へ開くはず');
+});
+
+// ---- swingSideの既定値: 壁が面する側(faceDir)へ開く（内壁・垂直） ----
+test('placeOpeningWithDefaults: 内壁（垂直）は壁が面する側(faceDir)へ扉が開く（押下点の直交成分に依存しない）', () => {
+  const { graph: graphA, wall: wallA } = makeVerticalWallGraph(3000, { axisOffset: 75 }); // faceDir=+1
+  const projectA = makeProject();
+  const roomSideA = placeOpeningWithDefaults(graphA, projectA, wallA, { x: 500, y: 500 }, OpeningCategory.FITTING);
+  assert.equal(roomSideA.error, null);
+  assert.equal(doorOpenSidePerp(roomSideA.opening, wallA, graphA), 1, '部屋側(x=500)を押してもfaceDir(+1)へ開くはず');
+
+  const { graph: graphA2, wall: wallA2 } = makeVerticalWallGraph(3000, { axisOffset: 75 });
+  const projectA2 = makeProject();
+  const materialSideA = placeOpeningWithDefaults(graphA2, projectA2, wallA2, { x: 74, y: 2000 }, OpeningCategory.FITTING);
+  assert.equal(materialSideA.error, null);
+  assert.equal(doorOpenSidePerp(materialSideA.opening, wallA2, graphA2), 1, '材側許容域(x=74<axisValue=75)を押してもfaceDir(+1)へ開くはず（touchDirには依存しない）');
+
+  const { graph: graphB, wall: wallB } = makeVerticalWallGraph(3000, { axisOffset: -75 }); // faceDir=-1
+  const projectB = makeProject();
+  const roomSideB = placeOpeningWithDefaults(graphB, projectB, wallB, { x: -500, y: 2000 }, OpeningCategory.FITTING);
+  assert.equal(roomSideB.error, null);
+  assert.equal(doorOpenSidePerp(roomSideB.opening, wallB, graphB), -1, '壁Bは部屋側を押してもfaceDir(-1)へ開くはず');
+});
+
+// ---- swingSideの既定値: 外壁は触れた側によらず常に外開き ----
+// QA指摘（前タスク未対応分）: 従来は「2つのswingSideが等しい」ことしか見ておらず「室外側である」ことを
+// 検証していなかった。doorOpenSidePerp（openingTagAnchorを使った独立経路）で実際に開く側を確認する。
+test('placeOpeningWithDefaults: 外壁は触れた側(worldPos)によらず常に室外側へ開く', () => {
+  const { graph: graphA, wall: wallA } = makeWallGraph(3000, { isExteriorWall: true }); // axisValue=75
+  const projectA = makeProject();
+  const touchedInside  = placeOpeningWithDefaults(graphA, projectA, wallA, { x: 500, y: -500 }, OpeningCategory.FITTING);
+
+  const { graph: graphB, wall: wallB } = makeWallGraph(3000, { isExteriorWall: true });
+  const projectB = makeProject();
+  const touchedOutside = placeOpeningWithDefaults(graphB, projectB, wallB, { x: 500, y: 500 }, OpeningCategory.FITTING);
+
+  assert.equal(touchedInside.error, null);
+  assert.equal(touchedOutside.error, null);
+  assert.equal(touchedInside.opening.subType, 'sliding', '外壁のFITTING既定は引き戸(sliding、非SWING)のはず');
+
+  // 既定(sliding)はSWINGでなくswingSideが記号丸の実位置(openingTagAnchor)に反映されないため、
+  // SWING機構(door)へ変えてから doorOpenSidePerp で測る（種別変更後も配置時のswingSideは保持される仕様）。
+  runInAction(() => { touchedInside.opening.subType = 'door'; touchedOutside.opening.subType = 'door'; });
+
+  const exteriorDir = 1; // wallFaceDir: axisValue(75) - axisCL.effectiveValue(0) = +75 → +1（室外側）
+  assert.equal(doorOpenSidePerp(touchedInside.opening, wallA, graphA), exteriorDir, '室内側(y=-500)を触れても室外側へ開くはず');
+  assert.equal(doorOpenSidePerp(touchedOutside.opening, wallB, graphB), exteriorDir, '室外側(y=500)を触れても室外側へ開くはず');
+});
+
+// ---- swingSideの既定値: 外壁境界は「境界の反対側の壁」を見て判定する（回帰） ----
+// .claude/opening-model.md「1つの境界にWallは2枚」参照: 建物外周は室内向き壁(isExteriorWall:false)と
+// 外向きの外壁(isExteriorWall:true)の2枚で構成される。壁ラジアルのヒット域限定により実運用では
+// 室内向き壁がホストになる主要経路——host単体のisExteriorWallだけを見ると常にfalseになり
+// 「外壁の開き戸は外開き」が効かないバグの回帰テスト。
+function makeExteriorBoundaryGraph(length = 3000) {
+  const graph = makePlaneGraph();
+  const axisCL  = graph.addCenterLine(CenterLineType.HORIZONTAL, 0,      { labeled: false, discipline: Discipline.ARCH });
+  const clStart = graph.addCenterLine(CenterLineType.VERTICAL,   0,      { labeled: false, discipline: Discipline.ARCH });
+  const clEnd   = graph.addCenterLine(CenterLineType.VERTICAL,   length, { labeled: false, discipline: Discipline.ARCH });
+  const innerWall = graph.addWall(axisCL, 75,  false, clStart, 0, clEnd, 0, { isExteriorWall: false });
+  const outerWall = graph.addWall(axisCL, -75, false, clStart, 0, clEnd, 0, { isExteriorWall: true });
+  return { graph, innerWall, outerWall };
+}
+
+test('【回帰】placeOpeningWithDefaults: 室内向き壁(isExteriorWall:false)をホストにしても、外壁境界なら室外側へ開く', () => {
+  const { graph, innerWall } = makeExteriorBoundaryGraph();
+  const project = makeProject();
+  // innerWall自身の部屋側(y>75)を長押ししたと仮定。
+  const { opening, error } = placeOpeningWithDefaults(graph, project, innerWall, { x: 1500, y: 200 }, OpeningCategory.FITTING);
+  assert.equal(error, null);
+  assert.equal(opening.subType, 'singleSwing', '内壁のFITTING既定はSWING機構(singleSwing)のはず');
+
+  const exteriorDir = -1; // outerWall: axisValue(-75) - axisCL.effectiveValue(0) = -75 → -1（室外側）
+  assert.equal(
+    doorOpenSidePerp(opening, innerWall, graph), exteriorDir,
+    '室内向き壁をホストにしても、境界の反対側の外壁(outerWall)の面が向く側（室外側）へ開くはず',
+  );
+});
+
+test('placeOpeningWithDefaults: 外壁本体(isExteriorWall:true)をホストにしても室外側へ開く（従来どおり）', () => {
+  const { graph, outerWall } = makeExteriorBoundaryGraph();
+  const project = makeProject();
+  const { opening, error } = placeOpeningWithDefaults(graph, project, outerWall, { x: 1500, y: -200 }, OpeningCategory.FITTING);
+  assert.equal(error, null);
+  runInAction(() => { opening.subType = 'door'; }); // 外壁既定(sliding)はSWINGでないため測定用にSWINGへ変える
+
+  const exteriorDir = -1;
+  assert.equal(doorOpenSidePerp(opening, outerWall, graph), exteriorDir, '外壁本体をホストにしても室外側へ開くはず');
+});
+
+test('placeOpeningWithDefaults: 内壁同士の境界（両方isExteriorWall:false）はホスト壁が面する側へ開く', () => {
+  const graph = makePlaneGraph();
+  const axisCL  = graph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: false, discipline: Discipline.ARCH });
+  const clStart = graph.addCenterLine(CenterLineType.VERTICAL,   0,    { labeled: false, discipline: Discipline.ARCH });
+  const clEnd   = graph.addCenterLine(CenterLineType.VERTICAL,   3000, { labeled: false, discipline: Discipline.ARCH });
+  const wallA = graph.addWall(axisCL, 75,  false, clStart, 0, clEnd, 0, { isExteriorWall: false });
+  graph.addWall(axisCL, -75, false, clStart, 0, clEnd, 0, { isExteriorWall: false }); // 隣室側の壁（障害物のみ）
+  const project = makeProject();
+
+  const { opening, error } = placeOpeningWithDefaults(graph, project, wallA, { x: 1500, y: 200 }, OpeningCategory.FITTING);
+  assert.equal(error, null);
+  assert.equal(doorOpenSidePerp(opening, wallA, graph), 1, 'wallAの面が向く側(+1)へ開くはず（外壁境界ではないので触れた側どおり）');
+});
+
+// ---- swingSideの既定値: 長押し位置がちょうど壁面(axisValue)上（失敗経路）----
+test('【失敗系】placeOpeningWithDefaults: 長押し位置がちょうどaxisValue上(sign=0)でもswingSideは±1のいずれか（0/NaNにならない）', () => {
+  const { graph, wall } = makeWallGraph(3000, { isExteriorWall: false }); // axisValue=75
+  const project = makeProject();
+  const { opening, error } = placeOpeningWithDefaults(graph, project, wall, { x: 1500, y: 75 }, OpeningCategory.FITTING);
+  assert.equal(error, null);
+  assert.ok(opening.swingSide === 1 || opening.swingSide === -1, `swingSideは±1のはず（実際: ${opening.swingSide}）`);
 });
 
 // ---- placeOpeningWithDefaults: 新規配置時に記号既定の材料・ガラスが設定される ----

@@ -18,7 +18,7 @@ import { runInAction } from 'mobx';
 import { undoManager } from '../undoManager.js';
 import { OpeningCategory } from '../core.js';
 import { getFittingOptions, WINDOW_CATALOG, defaultFixtureSymbolFor, defaultOpeningHeight, defaultMaterialGlassFor } from './openingCatalog.js';
-import { findHostWall, validateOpeningPlacement } from './openingGeometry.js';
+import { findHostWall, validateOpeningPlacement, wallFaceDir, swingSideTowardPerp, exteriorSideDir } from './openingGeometry.js';
 import { renumberOpenings } from './openingNumbering.js';
 
 const EDITABLE = [
@@ -122,8 +122,22 @@ export function placeOpeningWithDefaults(graph, project, wall, worldPos, categor
   if (err) return { opening: null, error: err };
 
   const wallSide = Math.sign(wall.axisOffset) || 1;
+  // swingSideの既定値: 壁が面する側（faceDir）へ開く。壁ラジアルのヒット域には材側への
+  // わずかな許容があり（isWallRadialHit・WALL_LINE_INWARD_PX）、その範囲では押下点の直交成分の
+  // 符号が faceDir と逆になり得る——押下点(worldPos)の符号ではなく、ヒットした壁自身が
+  // 面する向き（faceDir）で開き方向を決めることで、材側許容を押しても逆に開かないようにする
+  // （前回QA指摘「材の中を触ると逆に開く」の再発防止。perpOf/touchDirは使わない）。
+  // ただし外壁境界（wallまたは境界の反対側の壁がisExteriorWall）は常に外開き——境界の反対側
+  // まで見るのは、室内向き壁（isExteriorWall:false）をホストに触れても外壁境界だと判定できる
+  // ようにするため（exteriorSideDir）。反対側の壁は実際に開口が置かれる位置(centerCoord)で
+  // 特定する——境界が長さ方向で外壁区間／隣室区間に分かれる（segmented）平面では、worldPos
+  // ではなく実配置位置で判定しないと誤った区間の相手を拾う。.claude/opening-model.md 参照。
+  const hingeSide = -1;
+  const faceDir = wallFaceDir(wall);
+  const openDir = exteriorSideDir(wall, graph, centerCoord) ?? faceDir;
+  const swingSide = swingSideTowardPerp(wall.isVertical, hingeSide, openDir);
   const opening = graph.addOpening(wall.axisCL, wallSide, wall.isVertical, refCL, refOffset, width, category, subType,
-    { hingeSide: -1, swingSide: 1, fixtureType, sillHeight, height, materialGlass });
+    { hingeSide, swingSide, fixtureType, sillHeight, height, materialGlass });
   undoManager.push(
     () => runInAction(() => { graph.removeShape(opening.id); renumberOpenings(graph, project); }),
     () => runInAction(() => { addOpeningFromSnapshot(graph, opening); renumberOpenings(graph, project); }),
