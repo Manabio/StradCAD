@@ -8,6 +8,7 @@ import { observable, runInAction, configure, autorun } from 'mobx';
 import { Plane, PlanGraph, CenterLineType, Discipline, OpeningCategory } from '../core.js';
 import { undoManager } from '../undoManager.js';
 import { FITTING_CATALOG, defaultMaterialGlassFor } from './openingCatalog.js';
+import { ERR_OPENING_OUT_OF_WALL, ERR_OPENING_OVERLAP } from '../error.js';
 import { openingTagOf, renumberOpenings } from './openingNumbering.js';
 import { openingTagAnchor } from './openingTagPlacement.js';
 import {
@@ -94,14 +95,62 @@ test('pushOpeningUndoが返すエントリのundo/redo双方でタグが確定�
   assert.equal(tagAfterRedo, tagAfterEdit, 'redoで編集直後と同じタグに戻る');
 });
 
-// ---- 失敗系: 壁長不足で幅が収まらない ----
-test('【失敗系】壁長1000mmに既定の引き違い窓(幅1690mm)は収まらず、opening:null・errorは非空文字列', () => {
+// ---- 壁長不足: 既定間口を壁長へクランプして配置する（エラーにしない） ----
+test('壁長1000mmに既定の引き違い窓(幅1690mm)は壁長1000mmへクランプされて配置される（error null）', () => {
   const { graph, wall } = makeWallGraph(1000);
   const project = makeProject();
   const { opening, error } = placeOpeningWithDefaults(graph, project, wall, { x: 500, y: 0 }, OpeningCategory.WINDOW);
+  assert.equal(error, null);
+  assert.ok(opening);
+  assert.equal(opening.width, 1000, '既定幅1690mmは壁長1000mmへクランプされるはず');
+});
+
+// ---- QA回帰（Finding 1）: 奇数スパンの壁でも中心座標の丸めズレでエラーにならない ----
+// 壁長1365mm（奇数）だと中央フォールバックの refOffset = Math.round(682.5) = 683 で中心が
+// 0.5mmずれる。幅を先に壁長だけでクランプする実装ではこのズレにより coord2>hi でNGになった
+// （修正前の実バグ）。中心確定後に maxOpeningWidthAt で幅を決めることで解消することを確認する。
+test('【QA回帰】壁長1365mm（奇数スパン）でも既定の引き違い窓(幅1690mm)がクランプされて配置される（error null）', () => {
+  const { graph, wall } = makeWallGraph(1365);
+  const project = makeProject();
+  const { opening, error } = placeOpeningWithDefaults(graph, project, wall, { x: 700, y: 0 }, OpeningCategory.WINDOW);
+  assert.equal(error, null);
+  assert.ok(opening);
+  assert.equal(opening.width, 1364, '中心683・半幅682で1364にクランプされるはず');
+  assert.ok(opening.coord1 >= 0 && opening.coord2 <= 1365, '恒久ガード: 配置結果は必ず壁範囲[0,1365]に収まる');
+});
+
+// ---- QA回帰（Finding 2）: スパン0の縮退壁は幅0クランプ後に別途弾く（配置成功への後退を防ぐ） ----
+test('【QA回帰】スパン0（縮退）の壁はopening:null・error===ERR_OPENING_OUT_OF_WALLを返す', () => {
+  const { graph, wall } = makeWallGraph(0);
+  const project = makeProject();
+  const { opening, error } = placeOpeningWithDefaults(graph, project, wall, { x: 0, y: 0 }, OpeningCategory.WINDOW);
   assert.equal(opening, null);
-  assert.equal(typeof error, 'string');
-  assert.ok(error.length > 0);
+  assert.equal(error, ERR_OPENING_OUT_OF_WALL);
+});
+
+// ---- QA回帰（Finding 3の恒久ガード）: 壁全体が既存開口で埋まっている場合はERR_OPENING_OVERLAP ----
+test('【QA回帰】壁全体が既存開口で埋まっている場合、opening:null・error===ERR_OPENING_OVERLAPを返す', () => {
+  const { graph, wall } = makeWallGraph(3000);
+  const project = makeProject();
+  // 壁3000mm全体(coord1=0,coord2=3000)を占有する既存開口を1件置く。
+  graph.addOpening(wall.axisCL, 1, false, wall.clStart, 1500, 3000, OpeningCategory.WINDOW, 'doubleSliding', {});
+  const { opening, error } = placeOpeningWithDefaults(graph, project, wall, { x: 1500, y: 0 }, OpeningCategory.WINDOW);
+  assert.equal(opening, null);
+  assert.equal(error, ERR_OPENING_OVERLAP);
+});
+
+// ---- QA最終ラウンド Finding A: 壁中央でちょうど接する2開口に埋まった壁はOUT_OF_WALLでなくOVERLAP ----
+// 幅0クランプ後のcoord1===coord2===1500は、隣接2開口(0..1500, 1500..3000)いずれとも厳密比較の
+// 重なり判定(coord1<o.coord2 && coord2>o.coord1)を素通りしてしまう（境界がちょうど接する点のため）。
+// 実態は「開口で埋まっている」ので、幅0ガードは壁上の既存開口の有無でエラーメッセージを選ぶ。
+test('【失敗系】placeOpeningWithDefaults: 壁中央で接する2開口で埋まっている壁はERR_OPENING_OVERLAPを返す', () => {
+  const { graph, wall } = makeWallGraph(3000);
+  const project = makeProject();
+  graph.addOpening(wall.axisCL, 1, false, wall.clStart, 750,  1500, OpeningCategory.WINDOW, 'doubleSliding', {}); // coord1=0,coord2=1500
+  graph.addOpening(wall.axisCL, 1, false, wall.clStart, 2250, 1500, OpeningCategory.WINDOW, 'doubleSliding', {}); // coord1=1500,coord2=3000
+  const { opening, error } = placeOpeningWithDefaults(graph, project, wall, { x: 1500, y: 0 }, OpeningCategory.WINDOW);
+  assert.equal(opening, null);
+  assert.equal(error, ERR_OPENING_OVERLAP, '幅0クランプ後coord1===coord2===1500は厳密比較の重なり判定を素通りするが、実態は開口で埋まっているのでOVERLAPのはず');
 });
 
 // ---- 失敗系: 壁外の長押し位置は壁中央へフォールバックする ----
@@ -314,19 +363,18 @@ test('materialGlassAfterFixtureChange: 現在値がnull（未入力）なら新�
   assert.equal(materialGlassAfterFixtureChange(null, oldSymbol, newSymbol), defaultMaterialGlassFor(newSymbol));
 });
 
-// ---- Finding 1 回帰: onEditDim の幅編集ガードが依拠する validateOpeningEdit の検証 ----
-// OpeningEditor.jsx の onEditDim は dim.target==='width' のとき validateOpeningEdit で
-// 事前検証し、NGなら opening.width を代入せず（commitEditを呼ばず）に return する。
-// このファイルの層（React未経由の純ロジック）でテストできるのは検証関数そのものの正しさまで——
-// 「代入しない」はJSの早期returnで機械的に保証される制御フローのため、ここでは検証関数の
-// 戻り値と、代入されていないこと（=呼び出し前後でwidthが不変）を確認する。
-test('【Finding 1 回帰】validateOpeningEdit: 壁長2000mmに幅5000mmはNGを返す（onEditDimの幅編集ガード）', () => {
+// ---- Finding 1 回帰: validateOpeningEdit の検証（OpeningEditor.jsx onOffsetBlur の位置編集ガードが依拠） ----
+// onEditDim の幅編集はもはや validateOpeningEdit を使わない（NGで弾く代わりに maxOpeningWidthAt で
+// クランプする仕様に変更済み——openingGeometry.test.js 参照）。validateOpeningEdit 自体は
+// onOffsetBlur（位置=refOffset の編集）のガードとして今も使われているため、検証関数そのものの
+// 正しさはここで確認する。
+test('【Finding 1 回帰】validateOpeningEdit: 壁長2000mmに幅5000mmはNGを返す', () => {
   const { graph, wall } = makeWallGraph(2000);
   const opening = graph.addOpening(wall.axisCL, 1, false, wall.clStart, 1000, 800, OpeningCategory.FITTING, 'singleSwing', {});
 
   const err = validateOpeningEdit(opening, graph, { width: 5000, refOffset: opening.refOffset });
   assert.ok(err, '壁長2000mmを超える幅5000mmはNGのはず');
-  assert.equal(opening.width, 800, 'validateOpeningEditは検証のみで代入しない（呼び出し側=onEditDimがガードしてwidthを据え置く前提）');
+  assert.equal(opening.width, 800, 'validateOpeningEditは検証のみで代入しない（呼び出し側が結果に応じて代入する前提）');
 });
 
 // ---- removeOpeningWithUndo: undoでfixtureType/sillHeight/heightが保持される ----

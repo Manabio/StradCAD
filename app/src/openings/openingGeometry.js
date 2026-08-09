@@ -144,6 +144,33 @@ export function validateOpeningPlacement(wall, coord1, coord2, graph, excludeId 
 }
 
 /**
+ * 中心 centerCoord を固定したまま対称に広げられる最大間口(mm、整数)を返す。境界は「壁の両端」と
+ * 「隣接する既存開口」（excludeId は自分自身を除外するためのもの）。
+ * placeOpeningWithDefaults（壁長不足時の既定間口クランプ）・OpeningEditor onEditDim（図上の
+ * 間口編集の上限クランプ）の両方から使う——「エラーで弾く」代わりに「収まる寸法へ丸める」ため、
+ * 呼び出し側は常にこの値を上限として Math.min するだけでよい。
+ * Math.floor で整数化してから返す——CL偏芯ドラッグ中（centerCoordが実効値ベースで小数になり得る）
+ * でも呼び出し側（配置時のクランプ・onEditDimのクランプ表示）に半端な小数mmが漏れないようにする
+ * ため。floorは常に壁範囲・隣接開口の内側に丸まる（外側には出ない）ので安全側。
+ * centerCoord が壁範囲外など収まる幅が無い場合は 0（負値にはしない）。呼び出し側は「0=そもそも
+ * 置けない（弾く）」「0<戻り値<希望幅=丸める」を区別する。
+ */
+export function maxOpeningWidthAt(wall, centerCoord, graph, excludeId = null) {
+  const lo = Math.min(wall.coord1, wall.coord2), hi = Math.max(wall.coord1, wall.coord2);
+  let loBound = lo, hiBound = hi;
+  for (const o of findOpeningsOnWall(wall, graph)) {
+    if (o.id === excludeId) continue;
+    // centerCoord自身が既存開口の内部にある（開口が中心をまたぐ）場合、その開口は「中心以下」
+    // でも「中心以上」でもないため下2行のどちらの条件にも掛からず取りこぼす——中心を含む
+    // 開口があれば対称に広げられる余地は無いので0を即返す。
+    if (o.coord1 < centerCoord && o.coord2 > centerCoord) return 0;
+    if (o.coord2 <= centerCoord) loBound = Math.max(loBound, o.coord2);
+    if (o.coord1 >= centerCoord) hiBound = Math.min(hiBound, o.coord1);
+  }
+  return Math.max(0, Math.floor(2 * Math.min(centerCoord - loBound, hiBound - centerCoord)));
+}
+
+/**
  * 壁の実材範囲（materialRange）× 長さ方向範囲（coord1/coord2）のワールド矩形。
  * finish/stair/stairUnderClip.js（2a壁クリップの障害物判定）・openings/openingTagPlacement.js
  * （建具記号丸の壁バンド回避）の両方から共有する単一実装。

@@ -3,7 +3,8 @@ import { observer } from 'mobx-react-lite';
 import { runInAction } from 'mobx';
 import { getFittingOptions, WINDOW_CATALOG, getFixtureSymbols, findCatalogEntry, defaultOpeningHeight, OpeningMechanism } from './openingCatalog.js';
 import { OpeningCategory } from '../core.js';
-import { findHostWall } from './openingGeometry.js';
+import { findHostWall, maxOpeningWidthAt, findOpeningsOnWall } from './openingGeometry.js';
+import { ERR_OPENING_OUT_OF_WALL, ERR_OPENING_OVERLAP } from '../error.js';
 import { buildOpeningElevation } from './openingElevationFigure.js';
 import { openingMountLocation } from './openingRoomLabel.js';
 import { AutoScaledFigure } from '../structural/sectionFigure/AutoScaledFigure.jsx';
@@ -67,10 +68,25 @@ export const OpeningEditor = observer(function OpeningEditor({ graph, project, o
 
   const onEditDim = (dim, value) => {
     if (!dim.target) return;
-    const v = dim.target === 'height' ? sanitizeHeightInput(value) : (Math.abs(value) || 0);
-    if (dim.target === 'width') {
-      const err = validateOpeningEdit(opening, graph, { width: v, refOffset: opening.refOffset });
-      if (err) { onToast?.(err); return; } // 代入しない＝undoエントリも積まない
+    let v = dim.target === 'height' ? sanitizeHeightInput(value) : (Math.abs(value) || 0);
+    // 幅編集は「丸められるときは丸める／そもそも置けないときは弾く」の二段構え（壁が引けない
+    // とき=findHostWallがnullのときは従来どおり幾何検証をスキップしてそのまま確定）。
+    // maxOpeningWidthAt自体が既にMath.floorで整数化して返すため、ここで重ねて丸めない
+    // （CL偏芯ドラッグ中でもクランプ後の値・トースト文言に半端な小数mmが出ない）。
+    if (dim.target === 'width' && wall) {
+      const centerCoord = opening.refCL.effectiveValue + opening.refOffset;
+      const maxWidth = maxOpeningWidthAt(wall, centerCoord, graph, opening.id);
+      if (maxWidth <= 0) {
+        // 上限0の真因が「壁自体に収まらない」か「隣接開口(自分以外)で埋まっている」かで
+        // トースト文言を分ける（openingEdit.js placeOpeningWithDefaults と同じ判定規約）。
+        const hasOtherOpenings = findOpeningsOnWall(wall, graph).some(o => o.id !== opening.id);
+        onToast?.(hasOtherOpenings ? ERR_OPENING_OVERLAP : ERR_OPENING_OUT_OF_WALL);
+        return; // 代入しない＝undoエントリも積まない
+      }
+      if (v > maxWidth) {
+        v = maxWidth;
+        onToast?.(`間口の上限 ${maxWidth}mm に丸めました`);
+      }
     }
     commitEdit(() => { runInAction(() => { opening[dim.target] = v; }); });
   };

@@ -18,8 +18,9 @@ import { runInAction } from 'mobx';
 import { undoManager } from '../undoManager.js';
 import { OpeningCategory } from '../core.js';
 import { getFittingOptions, WINDOW_CATALOG, defaultFixtureSymbolFor, defaultOpeningHeight, defaultMaterialGlassFor } from './openingCatalog.js';
-import { findHostWall, validateOpeningPlacement, swingSideTowardPerp, exteriorSideDir } from './openingGeometry.js';
+import { findHostWall, validateOpeningPlacement, maxOpeningWidthAt, findOpeningsOnWall, swingSideTowardPerp, exteriorSideDir } from './openingGeometry.js';
 import { renumberOpenings } from './openingNumbering.js';
+import { ERR_OPENING_OUT_OF_WALL, ERR_OPENING_OVERLAP } from '../error.js';
 
 const EDITABLE = [
   'refOffset', 'width', 'height', 'subType', 'hingeSide', 'swingSide', 'fixtureType', 'sillHeight',
@@ -87,8 +88,10 @@ export function endOpeningFieldUndo(graph, project, opening) {
 }
 
 /**
- * 壁の長押しメニュー「建具/窓」から呼ぶ既定値付き仮配置。配置検証NGなら壁中央へ
- * フォールバック（無言で壁外に置かない）。それでもNGなら配置せずエラーを返す。
+ * 壁の長押しメニュー「建具/窓」から呼ぶ既定値付き仮配置。既定間口が壁長・隣接開口に収まらない
+ * 場合は壁中央フォールバック時に maxOpeningWidthAt の上限へクランプしてから配置する——壁長不足
+ * だけを理由に配置失敗させない。それでも幅が0以下（スパン0の縮退壁等）・重なり等でNGなら
+ * 配置せずエラーを返す。
  * @returns {{ opening: object|null, error: string|null }}
  */
 export function placeOpeningWithDefaults(graph, project, wall, worldPos, category) {
@@ -98,7 +101,7 @@ export function placeOpeningWithDefaults(graph, project, wall, worldPos, categor
   if (!entry) return { opening: null, error: 'この壁に配置できる建具がありません' };
 
   const subType = entry.key;
-  const width = entry.defaultWidth;
+  let width = entry.defaultWidth;
   const height = defaultOpeningHeight(category, subType);
   const sillHeight = category === OpeningCategory.WINDOW ? 800 : null;
   const fixtureType = defaultFixtureSymbolFor(category, wallKind);
@@ -114,12 +117,26 @@ export function placeOpeningWithDefaults(graph, project, wall, worldPos, categor
   let err = validateOpeningPlacement(wall, centerCoord - width / 2, centerCoord + width / 2, graph, null);
 
   if (err) {
+    // 壁中央へフォールバックしても既定幅(width)がそのまま収まるとは限らない（壁長不足・
+    // 隣接開口との重なり）ため、中心確定後に maxOpeningWidthAt の上限へクランプして再検証する。
+    // 幅を先に壁長だけでクランプしない——Math.round による中心座標の丸め（奇数スパン等）で
+    // 中心と幅を別々に決めると依然 coord2>hi になり得るため、中心確定後に実際の上限で合わせる。
     const wallLo = Math.min(wall.coord1, wall.coord2), wallHi = Math.max(wall.coord1, wall.coord2);
     refOffset = Math.round((wallLo + wallHi) / 2 - refCL.effectiveValue);
     centerCoord = refCL.effectiveValue + refOffset;
+    width = Math.min(width, maxOpeningWidthAt(wall, centerCoord, graph, null));
     err = validateOpeningPlacement(wall, centerCoord - width / 2, centerCoord + width / 2, graph, null);
   }
   if (err) return { opening: null, error: err };
+  // 0幅は coord1===coord2 のため validateOpeningPlacement の範囲外／重なり判定を素通りしてしまう
+  // （境界チェックでは検知できない。例: 壁中央でちょうど接する2開口に埋まった壁は、幅0の点が
+  // どちらの開口とも厳密比較で重ならず判定を通過する）——クランプ後も幅が残らない場合は別途弾く。
+  // 壁上に既存開口が1つでもあれば「開口で埋まっている」のが真因なのでERR_OPENING_OVERLAPを返し、
+  // 既存開口が無ければ壁自体の範囲不足（スパン0の縮退壁等）なのでERR_OPENING_OUT_OF_WALLを返す。
+  if (width <= 0) {
+    const error = findOpeningsOnWall(wall, graph).length > 0 ? ERR_OPENING_OVERLAP : ERR_OPENING_OUT_OF_WALL;
+    return { opening: null, error };
+  }
 
   const wallSide = Math.sign(wall.axisOffset) || 1;
   // swingSideの既定値: 壁が面する側（faceDir）へ開く。壁ラジアルのヒット域には材側への

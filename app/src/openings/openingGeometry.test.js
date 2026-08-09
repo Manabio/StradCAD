@@ -7,8 +7,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Plane, PlanGraph, CenterLineType, Discipline } from '../core.js';
+import { OpeningCategory } from '../core.js';
 import {
   swingSideTowardPerp, isWallRadialHit, wallRadialHitDist, nearestWallHit, findCounterpartWall, exteriorSideDir,
+  maxOpeningWidthAt,
 } from './openingGeometry.js';
 
 function makeGraph(planeId = 'p1') {
@@ -324,4 +326,71 @@ test('wallRadialHitDist: alongが壁のspan外なら面線ちょうどでもnull
   assert.equal(wallRadialHitDist(wall, -500, 75, 8, 1, 1, 2), null, 'along=-500はspan外(0..3000未満)なのでnullのはず');
   assert.equal(wallRadialHitDist(wall, 0, 75, 8, 1, 1, 2), 0, 'along=0は端点として含む（閉区間）のでヒットするはず');
   assert.equal(wallRadialHitDist(wall, 3000, 75, 8, 1, 1, 2), 0, 'along=3000は端点として含む（閉区間）のでヒットするはず');
+});
+
+// ================================================================
+// maxOpeningWidthAt: 中心を固定したまま対称に広げられる最大間口
+// ================================================================
+
+test('maxOpeningWidthAt: 隣接開口が無ければ壁の両端までの狭い方×2が上限になる', () => {
+  const graph = makeGraph();
+  const { wall } = makeSingleHorizontalWall(graph); // span x=0..3000
+  // 中心1000: 左端まで1000, 右端まで2000 → 狭い方(1000)×2=2000
+  assert.equal(maxOpeningWidthAt(wall, 1000, graph), 2000);
+  // 中心1500(ちょうど中央): 両側1500ずつ → 3000（壁いっぱい）
+  assert.equal(maxOpeningWidthAt(wall, 1500, graph), 3000);
+});
+
+test('maxOpeningWidthAt: 隣接する既存開口があれば、その端までにクランプされる', () => {
+  const graph = makeGraph();
+  const { wall } = makeSingleHorizontalWall(graph); // span x=0..3000
+  // 中心2200寄りに既存開口(coord1=2000,coord2=2400)を置く → 右側は2000mmまでしか広げられない
+  graph.addOpening(wall.axisCL, 1, false, wall.clStart, 2200, 400, OpeningCategory.FITTING, 'singleSwing', {});
+  // 中心1000: 右側は既存開口の左端(2000)まで=1000、左側は壁端(0)まで=1000 → 狭い方(1000)×2=2000
+  assert.equal(maxOpeningWidthAt(wall, 1000, graph), 2000);
+});
+
+test('【失敗系】maxOpeningWidthAt: centerCoordが壁範囲外なら0を返す（負値にしない）', () => {
+  const graph = makeGraph();
+  const { wall } = makeSingleHorizontalWall(graph); // span x=0..3000
+  assert.equal(maxOpeningWidthAt(wall, -500, graph), 0, '壁範囲外(手前)は0のはず');
+  assert.equal(maxOpeningWidthAt(wall, 3500, graph), 0, '壁範囲外(先)は0のはず');
+});
+
+test('maxOpeningWidthAt: excludeIdを渡すと自分自身の開口を境界計算から除外する', () => {
+  const graph = makeGraph();
+  const { wall } = makeSingleHorizontalWall(graph); // span x=0..3000
+  const self = graph.addOpening(wall.axisCL, 1, false, wall.clStart, 1000, 800, OpeningCategory.FITTING, 'singleSwing', {});
+  // self: coord1=600, coord2=1400。centerCoord=500からは自分自身が右側の直近境界(600)になる。
+  // excludeId無しなら自分自身(coord1=600)が右側の境界として拾われ、左(500)より右(100)が狭く効く。
+  assert.equal(maxOpeningWidthAt(wall, 500, graph), 200, 'excludeId無し: 右側は自分自身(coord1=600)までの100×2=200にクランプされる');
+  // excludeIdで自分自身を除外すれば、壁端(0..3000)基準の本来の上限になる。
+  assert.equal(maxOpeningWidthAt(wall, 500, graph, self.id), 1000, 'excludeIdあり: 左端(0)までの500×2=1000が上限');
+});
+
+// ---- QA回帰（Finding 5）: 中心が既存開口の内部（両端をまたぐ）場合の取りこぼし ----
+test('【QA回帰】maxOpeningWidthAt: centerCoordが既存開口の内部にあれば0を返す（中心を含む開口は中央フォールバックのどちらの境界にも掛からず取りこぼされていた）', () => {
+  const graph = makeGraph();
+  const { wall } = makeSingleHorizontalWall(graph); // span x=0..3000
+  // 既存開口 coord1=600, coord2=1400。center=1300はその内部(600<1300<1400)。
+  graph.addOpening(wall.axisCL, 1, false, wall.clStart, 1000, 800, OpeningCategory.FITTING, 'singleSwing', {});
+  assert.equal(maxOpeningWidthAt(wall, 1300, graph), 0, '中心が既存開口の内部にあるので広げる余地は無いはず（修正前は2600を誤って返していた）');
+});
+
+test('maxOpeningWidthAt: centerCoordが壁端ちょうど(lo/hi)なら0', () => {
+  const graph = makeGraph();
+  const { wall } = makeSingleHorizontalWall(graph); // span x=0..3000
+  assert.equal(maxOpeningWidthAt(wall, 0, graph), 0, '左端ちょうどは対称に広げる余地が無いので0のはず');
+  assert.equal(maxOpeningWidthAt(wall, 3000, graph), 0, '右端ちょうどは対称に広げる余地が無いので0のはず');
+});
+
+test('maxOpeningWidthAt: 隣接開口の端とcenterCoordがちょうど接するケース', () => {
+  const graph = makeGraph();
+  const { wall } = makeSingleHorizontalWall(graph); // span x=0..3000
+  // 既存開口 coord1=500, coord2=1000（center=1000の左に隣接）。
+  graph.addOpening(wall.axisCL, 1, false, wall.clStart, 750, 500, OpeningCategory.FITTING, 'singleSwing', {});
+  // center=1000: 既存開口の右端ちょうどに接する → 左側の余地が0なので0。
+  assert.equal(maxOpeningWidthAt(wall, 1000, graph), 0, '既存開口の右端(1000)ちょうどに接する中心は広げる余地が無いはず');
+  // center=1500: 左は既存開口の右端(1000)まで=500、右は壁端(3000)まで=1500 → 狭い方(500)×2=1000。
+  assert.equal(maxOpeningWidthAt(wall, 1500, graph), 1000, '左側は既存開口(coord2=1000)までの500×2=1000にクランプされるはず');
 });
