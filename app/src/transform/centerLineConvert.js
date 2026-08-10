@@ -69,9 +69,16 @@ export function checkPromoteToGridGuards(graph, structGraph, cl) {
   if (cl.centerLineType !== CenterLineType.VERTICAL && cl.centerLineType !== CenterLineType.HORIZONTAL) {
     return ERR_CL_CONVERT_INVALID;
   }
-  // 直交通り芯が2本未満での昇格は片道切符になる（降格時のextent決定に直交通り芯2本が要る＝
-  // 降格ガードで戻れなくなる。往復不能を防ぐため）ため、要件どおり昇格側でも弾く。
-  if (!outermostGridExtentRefs(graph, cl)) return ERR_CL_CONVERT_NO_GRID;
+  // 直交通り芯の本数は昇格の技術的前提ではない（ユーザー判断で撤去。.claude/data-model.md参照）。
+  // adoptCenterLine→_createIntersectionsは直交labeled CLが0本でも0個の交点を作るだけで破綻せず、
+  // AddCLDialogで最初の通り芯を1本だけ追加する通常運用と同じコードパス。昇格はcl.trim=falseを
+  // 無条件設定するため、labeled CLの描画範囲（CenterLinesLayer.jsx clExtent）は常にgutterEdgeCoord
+  // （viewport/width/heightのみでgraphを取らない）側の枝を通り直交CLの値を参照しない
+  // （trim:true枝は直交labeled CLのmin/maxを読むがそちらへは入らない。仮に旧データで入っても
+  // null返却→ビューポート範囲フォールバックでクラッシュしない）。setCenterLineExtentRefでの
+  // extent無条件null化は描画のためではなく、シリアライズ状態を新規通り芯と揃えるため。結果、
+  // 直交通り芯2本未満のまま昇格したCLは直交側に通り芯を追加するまで降格できない（降格側の
+  // ガードは技術的必然のため維持。下記）が、これは仕様として許容する。
   if (attachedShapeExists(graph, graph, cl.id)) return ERR_CL_CONVERT_ATTACHED;
   // structGraphに同座標・同軸の通り芯が既にあれば拒否（centerLineOps.js の重複判定式と同型。
   // 通り芯化した瞬間に全階へ同じ座標のグリッド線が現れるため、同座標の既存通り芯と衝突させない）。

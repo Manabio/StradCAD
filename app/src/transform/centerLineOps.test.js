@@ -239,7 +239,8 @@ test('promoteCenterToGridWithUndo: 直交通り芯があれば通り芯化しund
 
 test('promoteCenterToGridWithUndo: 斜線が取り付いた中心線はtoast:ERR_CL_CONVERT_ATTACHEDでundoを積まない', async () => {
   const { project, graph } = makeProjectWithGraph();
-  // NO_GRIDガード（F4）を通過させ、ATTACHEDガードを狙って踏むため直交通り芯を2本用意する。
+  // 昇格は直交通り芯の本数を問わないため必須ではないが、実運用に近い状態（直交通り芯あり）でも
+  // ATTACHEDガードが正しく効くことを確認するため用意する。
   project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, -1000, { labeled: true, discipline: Discipline.STRUCT });
   project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 4000,  { labeled: true, discipline: Discipline.STRUCT });
   const cl = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
@@ -306,9 +307,16 @@ test('demoteGridToCenterWithUndo: discipline:STRUCTだがlabeled:falseの想定�
 
 // ---- N5: 同期ガードをIDB peekより先に評価する ----
 
-test('promoteCenterToGridWithUndo: 同期ガード（NO_GRID）で確実に失敗する場合はfindFloorsWithCounterpartCL（IDB peek）を呼ばない（N5）', async () => {
+// 昇格は直交通り芯の本数を問わないため（旧F4ガード撤去済み）、N5（同期ガード優先評価）の
+// 昇格側デモには別の同期ガード（ATTACHED）を使う——降格側は別の同期ガード（想定外の
+// discipline/labeled組合せ）で実演する（下記）。降格側のNO_GRID自体の先行評価は
+// さらに下のテストで別途実証する。
+test('promoteCenterToGridWithUndo: 同期ガード（ATTACHED）で確実に失敗する場合はfindFloorsWithCounterpartCL（IDB peek）を呼ばない（N5）', async () => {
   const { project, graph } = makeProjectWithGraph();
-  const cl = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH }); // 直交通り芯0本
+  const cl = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
+  const hOther = graph.addCenterLine(CenterLineType.HORIZONTAL, 500, { labeled: false, discipline: Discipline.ARCH });
+  const ix = graph.getOrCreateIntersection(cl, hOther);
+  graph.addDiagonalLine(ix, graph.addPoint(2000, 2000));
   const beforeTop = undoManager.peekUndo();
 
   const originalPeek = floorSwapManager.peek;
@@ -316,7 +324,7 @@ test('promoteCenterToGridWithUndo: 同期ガード（NO_GRID）で確実に失�
   try {
     const { toast } = await promoteCenterToGridWithUndo(graph, project, cl);
 
-    assert.equal(toast, ERR_CL_CONVERT_NO_GRID);
+    assert.equal(toast, ERR_CL_CONVERT_ATTACHED);
     assert.equal(undoManager.peekUndo(), beforeTop, 'undoは積まれない');
   } finally {
     floorSwapManager.peek = originalPeek;
@@ -335,6 +343,26 @@ test('demoteGridToCenterWithUndo: 同期ガード（想定外の discipline/labe
 
     assert.equal(typeof toast, 'string');
     assert.ok(toast.length > 0);
+    assert.equal(undoManager.peekUndo(), beforeTop, 'undoは積まれない');
+  } finally {
+    floorSwapManager.peek = originalPeek;
+  }
+});
+
+// 降格は直交通り芯2本必須のガードを維持する（昇格と非対称。旧F4ガード撤去済みなのは昇格側のみ）
+// ため、NO_GRID自体もIDB peekより先に評価されることを別途実証する。
+test('demoteGridToCenterWithUndo: 同期ガード（NO_GRID）で確実に失敗する場合はfindFloorsWithCounterpartCL（IDB peek）を呼ばない（N5）', async () => {
+  const { project, graph } = makeProjectWithGraph();
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0, { labeled: true, discipline: Discipline.STRUCT }); // 1本のみ
+  const cl = project.structGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: true, discipline: Discipline.STRUCT });
+  const beforeTop = undoManager.peekUndo();
+
+  const originalPeek = floorSwapManager.peek;
+  floorSwapManager.peek = async () => { throw new Error('同期ガードで弾かれるはずなのにpeekが呼ばれた'); };
+  try {
+    const { toast } = await demoteGridToCenterWithUndo(graph, project, cl);
+
+    assert.equal(toast, ERR_CL_CONVERT_NO_GRID);
     assert.equal(undoManager.peekUndo(), beforeTop, 'undoは積まれない');
   } finally {
     floorSwapManager.peek = originalPeek;

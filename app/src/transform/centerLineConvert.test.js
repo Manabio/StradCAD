@@ -81,23 +81,51 @@ test('applyPromoteToGrid異常系: structGraphに同座標・同軸の通り芯�
   assert.equal(cl.labeled, false);
 });
 
-test('applyPromoteToGrid異常系: 直交する通り芯が2本未満ならERR_CL_CONVERT_NO_GRIDで階グラフに残る（F4）', () => {
+// 直交通り芯の本数は昇格の技術的前提ではない（ユーザー判断で撤去。旧F4ガード）。
+// 昇格はextentを無条件null化するだけで直交CLの値を参照せず、AddCLDialogで最初の通り芯を
+// 1本だけ追加する通常運用と同じコードパス（adoptCenterLine→_createIntersectionsは
+// 直交labeled CLが0本でも0個の交点を作るだけ）。降格側の直交2本必須ガードは維持する
+// （extentLoRef/HiRefを最外郭通り芯2本へ張るのが降格の定義そのものという技術的必然のため）。
+test('applyPromoteToGrid: 直交する通り芯が0本でも昇格できる（旧F4ガードは撤去済み）', () => {
   const { project, graph } = makeProjectWithGraph();
-  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0, { labeled: true, discipline: Discipline.STRUCT }); // 1本のみ
+  // 直交(HORIZONTAL)通り芯を1本も用意しない。
   const cl = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
 
   const result = applyPromoteToGrid(graph, project.structGraph, cl);
 
-  assert.equal(result.error, ERR_CL_CONVERT_NO_GRID);
-  assert.equal(graph.shapeMap.has(cl.id), true, '階グラフに残ったまま（変換されない）');
-  assert.equal(project.structGraph.shapeMap.has(cl.id), false);
-  assert.equal(cl.discipline, Discipline.ARCH);
-  assert.equal(cl.labeled, false);
+  assert.deepEqual(result, {}, '直交通り芯0本でも昇格は成功する');
+  assert.equal(graph.shapeMap.has(cl.id), false, '階グラフから消滅');
+  assert.equal(project.structGraph.shapeMap.get(cl.id), cl, 'structGraphへ同一idで移籍');
+  assert.equal(cl.discipline, Discipline.STRUCT);
+  assert.equal(cl.labeled, true);
+});
+
+test('昇格→降格の非対称性: 直交通り芯2本未満のまま昇格したCLは降格できないが、直交側に通り芯を2本足せば降格できるようになる', () => {
+  const { project, graph } = makeProjectWithGraph();
+  const cl = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
+
+  assert.deepEqual(applyPromoteToGrid(graph, project.structGraph, cl), {}, '直交通り芯0本でも昇格は成功する');
+
+  // 直交通り芯が0本のままだと降格はNO_GRIDで拒否される（往復不能な期間。仕様として許容）。
+  const demoteBefore = applyDemoteToCenter(graph, project.structGraph, cl);
+  assert.equal(demoteBefore.error, ERR_CL_CONVERT_NO_GRID);
+  assert.equal(project.structGraph.shapeMap.has(cl.id), true, '降格は失敗し通り芯のまま残る');
+
+  // 直交(HORIZONTAL)通り芯を2本足せば降格できるようになる。
+  const y1 = project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+  const y2 = project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: true, discipline: Discipline.STRUCT });
+
+  const demoteAfter = applyDemoteToCenter(graph, project.structGraph, cl);
+  assert.equal(demoteAfter.error, undefined);
+  assert.equal(demoteAfter.loCL, y1);
+  assert.equal(demoteAfter.hiCL, y2);
+  assert.equal(graph.shapeMap.has(cl.id), true, '中心線として階グラフへ戻る');
 });
 
 test('applyPromoteToGrid異常系: 斜線が取り付いた中心線はERR_CL_CONVERT_ATTACHEDでグラフ無変更', () => {
   const { project, graph } = makeProjectWithGraph();
-  // NO_GRIDガード（F4）を通過させ、ATTACHEDガードを狙って踏むため直交通り芯を2本用意する。
+  // 昇格は直交通り芯の本数を問わないため必須ではないが、実運用に近い状態（直交通り芯あり）でも
+  // ATTACHEDガードが正しく効くことを確認するため用意する。
   project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, -1000, { labeled: true, discipline: Discipline.STRUCT });
   project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 4000,  { labeled: true, discipline: Discipline.STRUCT });
   const cl = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
