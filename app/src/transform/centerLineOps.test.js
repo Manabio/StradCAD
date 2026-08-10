@@ -6,6 +6,7 @@ import { Plane, PlanGraph, Project, CenterLineType, Discipline } from '../core.j
 import {
   ERR_CL_DUPLICATE, ERR_CL_CENTER_UPGRADED, ERR_CL_STRUCT_EXISTS,
   ERR_CL_CONVERT_ATTACHED, ERR_CL_CONVERT_NO_GRID, ERR_CL_CONVERT_DUP_FLOOR, ERR_CL_CONVERT_DUP_FLOOR_DEMOTE,
+  ERR_CL_DELETE_LAST_GRID,
 } from '../error.js';
 import { undoManager } from '../undoManager.js';
 import { floorSwapManager } from '../storage/FloorSwapManager.js';
@@ -119,6 +120,51 @@ test('deleteCenterLineWithUndo: 中心線削除はexcludedWallBeamAxesを変え�
 
   undoManager.undo();
   assert.ok(graph.shapeMap.has(beamCL.id), '直前の梁芯削除はundoで復元される');
+});
+
+// ---- deleteCenterLineWithUndo: 軸最後の通り芯ガード（ユーザー要望で新設。中心化ガードと同じ
+// isLastGridOnAxis判定を共有する多層防御——UIのグレー化を回避して呼ばれても最終的にここで拒否する）----
+
+test('deleteCenterLineWithUndo: 同軸に他の通り芯があれば（軸最後の1本ではない）通り芯の削除は従来どおり成功しtoast:null', () => {
+  const { project, graph } = makeProjectWithGraph();
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: true, discipline: Discipline.STRUCT });
+  const cl = project.structGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: true, discipline: Discipline.STRUCT });
+  project.structGraph.addCenterLine(CenterLineType.VERTICAL, 5000, { labeled: true, discipline: Discipline.STRUCT }); // 同軸に他の通り芯
+  const clId = cl.id;
+
+  const { toast } = deleteCenterLineWithUndo(graph, project, cl);
+
+  assert.equal(toast, null);
+  assert.equal(project.structGraph.shapeMap.has(clId), false, '削除される');
+
+  undoManager.undo();
+  assert.ok(project.structGraph.shapeMap.has(clId), 'undoで復元される');
+});
+
+test('deleteCenterLineWithUndo異常系: 軸最後の通り芯はtoast:ERR_CL_DELETE_LAST_GRIDで拒否されグラフ無変更・undoも積まれない', () => {
+  const { project, graph } = makeProjectWithGraph();
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: true, discipline: Discipline.STRUCT });
+  const cl = project.structGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: true, discipline: Discipline.STRUCT }); // VERTICAL軸唯一の通り芯
+  const beforeTop = undoManager.peekUndo();
+
+  const { toast } = deleteCenterLineWithUndo(graph, project, cl);
+
+  assert.equal(toast, ERR_CL_DELETE_LAST_GRID);
+  assert.equal(project.structGraph.shapeMap.has(cl.id), true, '削除されずstructGraphに残る');
+  assert.equal(undoManager.peekUndo(), beforeTop, 'undoは積まれない');
+});
+
+test('deleteCenterLineWithUndo: 中心線（非struct）の削除は同軸の通り芯本数に関係なく従来どおり成功する', () => {
+  const { project, graph } = makeProjectWithGraph();
+  // 直交・同軸とも通り芯を1本も用意しない（同軸の通り芯本数=0でも中心線の削除は無関係のはず）。
+  const cl = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
+
+  const { toast } = deleteCenterLineWithUndo(graph, project, cl);
+
+  assert.equal(toast, null, '中心線は軸最後ガードの対象外');
+  assert.equal(graph.shapeMap.has(cl.id), false, '削除される');
 });
 
 // ---- addCenterLineFromDialog ----
@@ -261,6 +307,8 @@ test('demoteGridToCenterWithUndo: 直交通り芯2本があれば中心線化し
   const y1 = project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
   const y2 = project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: true, discipline: Discipline.STRUCT });
   const cl = project.structGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: true, discipline: Discipline.STRUCT });
+  // isLastGridOnAxisガード対策: 同軸(VERTICAL)にclの他にもう1本必要。
+  project.structGraph.addCenterLine(CenterLineType.VERTICAL, 5000, { labeled: true, discipline: Discipline.STRUCT });
   const clId = cl.id;
 
   const { toast } = await demoteGridToCenterWithUndo(graph, project, cl);
@@ -405,6 +453,8 @@ test('demoteGridToCenterWithUndo: 他階（アクティブ階の移籍先では�
   project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
   project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: true, discipline: Discipline.STRUCT });
   const cl = project.structGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: true, discipline: Discipline.STRUCT });
+  // isLastGridOnAxisガード対策: 同軸(VERTICAL)にclの他にもう1本必要（このテストの主眼＝DUP_FLOORとは無関係）。
+  project.structGraph.addCenterLine(CenterLineType.VERTICAL, 5000, { labeled: true, discipline: Discipline.STRUCT });
   const beforeTop = undoManager.peekUndo();
 
   const originalPeek = floorSwapManager.peek;

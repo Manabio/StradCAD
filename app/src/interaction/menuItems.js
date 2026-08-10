@@ -63,15 +63,22 @@ export function getMenuItems(context, endpointState, clState, wallState) {
       // 生成されたINTERIOR_WALLエッジ分類は脱出後も保持されるため、移動可能なモード側の
       // 長押しメニューで扱う）。移動アイコンはスナップ移動の方向（線と直交）を指す両矢印。
       // 移動をサポートしないモード（clState.canMove が偽）では従来どおり削除のみ。
-      const { canMove, isVertical, hasInteriorWall, canToCenter } = clState ?? {};
-      if (!canMove) return [{ id: 'cl-del', label: '削除', icon: '✕' }];
+      const { canMove, isVertical, hasInteriorWall, canToCenter, isLastGridOnAxis } = clState ?? {};
+      // 軸最後の通り芯（isLastGridOnAxis）は削除もグレー化する（中心化と同じ多層防御。
+      // transform/centerLineOps.js deleteCenterLineWithUndoのERR_CL_DELETE_LAST_GRIDと対）。
+      // isLastGridOnAxisは呼び出し側でcenterLineKind(cl)==='struct'のときのみ算出される
+      // （非structのCLではundefined→!!undefined=falseで従来どおり削除可能）。
+      if (!canMove) return [{ id: 'cl-del', label: '削除', icon: '✕', disabled: !!isLastGridOnAxis }];
       const items = [
         { id: 'cl-move', label: '移動', icon: '⇄', iconRotate: isVertical ? 0 : 90, angle: -90 },
-        { id: 'cl-del',  label: '削除', icon: '✕', angle: 30 },
+        { id: 'cl-del',  label: '削除', icon: '✕', angle: 30, disabled: !!isLastGridOnAxis },
       ];
       if (hasInteriorWall) items.push({ id: 'cl-ecc', label: '偏芯', icon: '◨', angle: 150 });
-      // 通り芯の線上長押し: 平面モード限定で中心線化を提案する
-      if (canToCenter) items.push({ id: 'cl-to-center', label: '中心に', icon: '┄', angle: 90 });
+      // 通り芯の線上長押し: 平面モード限定で中心線化を提案する。軸最後の1本（isLastGridOnAxis）は
+      // 項目自体は出すがグレー化（disabled）して押せなくする——非表示にすると「押せる操作が
+      // ある」という期待自体を消してしまい、なぜ消えたか分かりにくいため（transform/centerLineConvert.js
+      // checkDemoteToCenterGuardsのERR_CL_CONVERT_LAST_GRIDと同じ判定式=isLastGridOnAxisを共有）。
+      if (canToCenter) items.push({ id: 'cl-to-center', label: '中心に', icon: '┄', angle: 90, disabled: !!isLastGridOnAxis });
       return items;
     }
     case CONTEXT.EMPTY:
@@ -109,14 +116,15 @@ export function getMenuItems(context, endpointState, clState, wallState) {
  * 操作は行わない）ため null を返す——呼び出し側はこれを合図にメニューを開かない。
  * canMove は「CL移動をサポートするモードか」（呼び出し側の modeRef.current?.startMove の有無）。
  * canExtend/canShorten（CL端点の延長/短縮可否）・hasInteriorWall（中心線に内壁指定があるか）・
- * wallEligible（腰壁・垂れ壁の適格性）・canToGrid/canToCenter（中心⇔通り芯の入替え可否。平面モード限定）は
+ * wallEligible（腰壁・垂れ壁の適格性）・canToGrid/canToCenter（中心⇔通り芯の入替え可否。平面モード限定）・
+ * isLastGridOnAxis（canToCenter=true時のみ意味を持つ。cl-to-center項目のグレー化判定）は
  * graph 依存のため呼び出し側（interaction/usePointerInteraction.js）が算出して渡す
  * （このモジュールを import ゼロに保つため。ファイル冒頭コメント参照）。
  * @returns {{context, items, endpointState, clState, wallState}|null}
  */
 export function buildMenuState(appMode, {
   snap, cl, clEndpoint, opening, wall, canMove, canExtend, canShorten, hasInteriorWall, wallEligible,
-  canToGrid, canToCenter,
+  canToGrid, canToCenter, isLastGridOnAxis,
 }) {
   const context = detectContext(snap, cl, opening, wall, clEndpoint);
   if (appMode === 'opening' && context !== CONTEXT.WALL && context !== CONTEXT.OPENING) return null;
@@ -133,6 +141,7 @@ export function buildMenuState(appMode, {
     isVertical: cl.centerLineType === 'X', // CenterLineType.VERTICAL
     hasInteriorWall,
     canToCenter,
+    isLastGridOnAxis,
   } : null;
   // 壁上メニュー: 腰壁・垂れ壁の適格性（2a壁は対象外）を渡す。
   const wallState = context === CONTEXT.WALL ? { eligible: wallEligible } : null;

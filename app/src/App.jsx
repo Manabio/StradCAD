@@ -1133,7 +1133,8 @@ const App = observer(() => {
       return;
     }
     if (item.id === 'cl-del')  {
-      deleteCenterLineWithUndo(graph, project, menu.cl);
+      const { toast } = deleteCenterLineWithUndo(graph, project, menu.cl);
+      if (toast) setToast({ msg: toast, key: Date.now() });
       return;
     }
     if (item.id === 'cl-ecc') {

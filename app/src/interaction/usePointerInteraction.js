@@ -23,6 +23,7 @@ import { inGutter as isInGutter } from '../layout.js';
 import { commitCLMoveOp, commitStretchWithUndo } from '../transform/centerLineOps.js';
 import { commitSiteTapLine } from '../transform/siteEdit.js';
 import { canExtendCenterLine, canShortenCenterLine } from '../transform/centerLineExtend.js';
+import { isLastGridOnAxis } from '../transform/centerLineConvert.js';
 import { interiorWallSpans } from '../finish/edgeClassify.js';
 import { isEligibleWallSpan } from '../finish/kneeDropWall.js';
 
@@ -134,6 +135,19 @@ export function usePointerInteraction({
           && centerLineKind(clEndpoint.cl) === 'center' && isPlanar(clEndpoint.cl),
         canToCenter: appMode === 'floorplan' && menuContext === CONTEXT.CENTER_LINE
           && centerLineKind(cl) === 'struct' && isPlanar(cl),
+        // cl-to-center・cl-delの両方のグレー化判定に使う共有値（降格ガードcheckDemoteToCenterGuardsの
+        // ERR_CL_CONVERT_LAST_GRID・削除ガードdeleteCenterLineWithUndoのERR_CL_DELETE_LAST_GRIDと
+        // 同じisLastGridOnAxis判定式）。cl-to-centerはappMode==='floorplan'限定だがcl-del（通り芯の
+        // 削除）はモードを問わないため、ここではappMode条件を付けない——struct(通り芯)以外に対して
+        // isLastGridOnAxisを呼ぶと同軸通り芯0本でtrueを返しかねないため、centerLineKind(cl)==='struct'
+        // のガードだけは必須（menuItems.jsのcl-to-center/cl-del双方がこの値をそのまま使う前提）。
+        // cl.labeledも明示的に要求する——処理側ガード（centerLineOps.js deleteCenterLineWithUndoの
+        // isStruct = discipline===STRUCT && labeled）と条件を揃え、discipline:STRUCTかつlabeled:false
+        // という現状は生成経路が無く到達不能な組合せ（将来demoteToAuxiliary相当が復活した場合の保険）でも
+        // UI側と処理側の判定が食い違わないようにする（canToCenterは降格ガードのERR_CL_CONVERT_INVALID
+        // 判定=centerLineKind(cl)==='struct'のみと整合させる必要があるため、こちらは変えない）。
+        isLastGridOnAxis: menuContext === CONTEXT.CENTER_LINE && centerLineKind(cl) === 'struct' && cl.labeled && isPlanar(cl)
+          ? isLastGridOnAxis(graph, cl) : undefined,
       });
       if (!state) return;
       // 移動を選ばれたときに備え、移動範囲の計算（他フロアのIDB読み込みを含む）を先読みしておく。

@@ -76,3 +76,82 @@ test('buildMenuState: canToCenter=false なら中心線上メニューに「中�
   assert.ok(state.items.some(i => i.id === 'cl-move'));
   assert.ok(state.items.some(i => i.id === 'cl-del'));
 });
+
+// ---- 軸最後の1本ガードのグレー化（isLastGridOnAxis。ユーザー要望で新設） ----
+// 判定式は transform/centerLineConvert.js の isLastGridOnAxis を呼び出し側
+// （interaction/usePointerInteraction.js）が算出して渡す共有ロジック——ここでは
+// buildMenuState/getMenuItems が isLastGridOnAxis の値をそのまま disabled へ渡すことだけを検証する。
+
+test('buildMenuState: canToCenter=true かつ isLastGridOnAxis=true なら「中心に」項目は出るがdisabled（表示条件自体は変えない）', () => {
+  const cl = { id: 'cl1', centerLineType: 'X' };
+  const state = buildMenuState('floorplan', {
+    snap: null, cl, clEndpoint: null, opening: null, wall: null,
+    canMove: true, canToCenter: true, isLastGridOnAxis: true,
+  });
+  const item = state.items.find(i => i.id === 'cl-to-center');
+  assert.ok(item, '軸最後の1本でも項目自体は非表示にしない（グレー化のみ）');
+  assert.equal(item.disabled, true);
+});
+
+test('buildMenuState: canToCenter=true かつ isLastGridOnAxis=false なら「中心に」項目は通常どおり押せる（disabledでない）', () => {
+  const cl = { id: 'cl1', centerLineType: 'X' };
+  const state = buildMenuState('floorplan', {
+    snap: null, cl, clEndpoint: null, opening: null, wall: null,
+    canMove: true, canToCenter: true, isLastGridOnAxis: false,
+  });
+  const item = state.items.find(i => i.id === 'cl-to-center');
+  assert.ok(item);
+  assert.equal(item.disabled, false);
+});
+
+// ---- 削除（cl-del）のグレー化（ユーザー要望で追加）。中心化ガードと同じisLastGridOnAxisを共有する ----
+
+test('buildMenuState: isLastGridOnAxis=true（軸最後の通り芯）なら「削除」もdisabledになる（canMove=trueの通常メニュー）', () => {
+  const cl = { id: 'cl1', centerLineType: 'X' };
+  const state = buildMenuState('floorplan', {
+    snap: null, cl, clEndpoint: null, opening: null, wall: null,
+    canMove: true, canToCenter: true, isLastGridOnAxis: true,
+  });
+  const item = state.items.find(i => i.id === 'cl-del');
+  assert.ok(item, '軸最後の1本でも削除項目自体は非表示にしない（グレー化のみ）');
+  assert.equal(item.disabled, true);
+});
+
+test('buildMenuState: isLastGridOnAxis=true（軸最後の通り芯）なら「削除」もdisabledになる（canMove=falseの削除のみメニュー）', () => {
+  const cl = { id: 'cl1', centerLineType: 'X' };
+  const state = buildMenuState('floorplan', {
+    snap: null, cl, clEndpoint: null, opening: null, wall: null,
+    canMove: false, isLastGridOnAxis: true,
+  });
+  const item = state.items.find(i => i.id === 'cl-del');
+  assert.ok(item);
+  assert.equal(item.disabled, true);
+});
+
+test('buildMenuState: isLastGridOnAxis=false（同軸に他の通り芯あり）なら「削除」は通常どおり押せる', () => {
+  const cl = { id: 'cl1', centerLineType: 'X' };
+  const state = buildMenuState('floorplan', {
+    snap: null, cl, clEndpoint: null, opening: null, wall: null,
+    canMove: true, isLastGridOnAxis: false,
+  });
+  const item = state.items.find(i => i.id === 'cl-del');
+  assert.ok(item);
+  assert.equal(item.disabled, false);
+});
+
+// 【回帰点】中心線（非struct）は呼び出し側（usePointerInteraction.js）がcenterLineKind(cl)==='struct'
+// のときのみisLastGridOnAxisを算出する契約——中心線に対しては常にundefinedが渡ってくるはずで、
+// その場合ここ（menuItems.js）が!!undefined=falseへ変換し「削除」をdisabledにしないことを固定する
+// （isLastGridOnAxis関数自体は同軸の通り芯本数だけを数えるため、非structのCLに対して誤って
+// 呼んでしまうと同軸通り芯0本でtrueを返しかねない——その誤りをここではなく呼び出し側で
+// 防ぐ設計になっていることの土台をこのテストで確認する）。
+test('buildMenuState: 中心線（isLastGridOnAxis未算出=undefined）は「削除」がdisabledにならない', () => {
+  const cl = { id: 'cl1', centerLineType: 'X' };
+  const state = buildMenuState('floorplan', {
+    snap: null, cl, clEndpoint: null, opening: null, wall: null,
+    canMove: true, isLastGridOnAxis: undefined,
+  });
+  const item = state.items.find(i => i.id === 'cl-del');
+  assert.ok(item);
+  assert.equal(item.disabled, false);
+});

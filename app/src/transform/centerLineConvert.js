@@ -19,11 +19,11 @@
 // 同期ガードの分離（checkPromoteToGridGuards/checkDemoteToCenterGuards）: apply*関数内で行う
 // 判定と同じロジックを外出しし、呼び出し側（centerLineOps.js）が階またぎ重複チェック
 // （findFloorsWithCounterpartCL・IDB peek を伴う）より先に評価できるようにする——同期的に
-// 判定可能な失敗（型不一致・直交通り芯不足・図形干渉・同グラフ内重複）で無駄なIDB読み込みが
+// 判定可能な失敗（型不一致・直交通り芯不足・軸最後の1本（降格のみ）・図形干渉・同グラフ内重複）で無駄なIDB読み込みが
 // 走り、本来と異なるトーストが先に出るのを防ぐ。
 import { runInAction } from 'mobx';
 import { CenterLine, CenterLineType, Discipline, centerLineKind, CL_OVERLAP_TOL_MM } from '@core';
-import { ERR_CL_CONVERT_NO_GRID, ERR_CL_CONVERT_ATTACHED, ERR_CL_DUPLICATE } from '../error.js';
+import { ERR_CL_CONVERT_NO_GRID, ERR_CL_CONVERT_LAST_GRID, ERR_CL_CONVERT_ATTACHED, ERR_CL_DUPLICATE } from '../error.js';
 
 // UIからは到達しない想定の防御的ガード（instanceof/kind/type 不一致）専用。menu が canToGrid/canToCenter
 // で事前に絞り込むため実運用では表示されないが、ガード契約（上記コメント）を満たすため文言を持つ。
@@ -38,6 +38,18 @@ export function outermostGridExtentRefs(graph, cl) {
   const structCLs = perp.filter(c => c.discipline === Discipline.STRUCT);
   if (structCLs.length < 2) return null;
   return { loCL: structCLs[0], hiCL: structCLs[structCLs.length - 1] };
+}
+
+// cl と同じ軸（centerLineType）の通り芯（labeled struct CL）が cl 自身しか無いか（＝その軸最後の1本）。
+// 全体で最後の1本は直交0本になるためoutermostGridExtentRefsのNO_GRIDで既にブロックされる——
+// このチェックが意味を持つのは「直交軸には2本以上あるが、自分の軸だけは自分1本」のケース。
+// 降格ガード（checkDemoteToCenterGuards）とメニューのグレー化判定
+// （interaction/usePointerInteraction.js の isLastGridOnAxis 算出）の両方がこの関数を共有する
+// （二重実装によるズレを防ぐ）。
+export function isLastGridOnAxis(graph, cl) {
+  const same = cl.centerLineType === CenterLineType.VERTICAL ? graph.gridXs : graph.gridYs;
+  const structCLs = same.filter(c => c.discipline === Discipline.STRUCT);
+  return structCLs.length <= 1;
 }
 
 // clId が関わる Intersection のいずれかに Shape（斜線・円弧等）が取り付いているか。
@@ -134,6 +146,9 @@ export function checkDemoteToCenterGuards(graph, structGraph, cl) {
     return ERR_CL_CONVERT_INVALID;
   }
   if (!outermostGridExtentRefs(graph, cl)) return ERR_CL_CONVERT_NO_GRID;
+  // 直交軸には2本以上あっても、自分の軸の通り芯が自分しか無ければ降格させない
+  // （軸最後の1本が消えるのを防ぐ。ユーザー要望で新設。全体最後は上のNO_GRIDで既にブロック済み）。
+  if (isLastGridOnAxis(graph, cl)) return ERR_CL_CONVERT_LAST_GRID;
   // structGraph側の当該CLの交点（走査元）に、アクティブ階グラフ（図形の照会先）の図形が
   // 取り付いていれば拒否（昇格側の attachedShapeExists と対称。Shape本体は常に階グラフ側にある）。
   if (attachedShapeExists(structGraph, graph, cl.id)) return ERR_CL_CONVERT_ATTACHED;

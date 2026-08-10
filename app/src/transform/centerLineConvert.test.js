@@ -4,9 +4,9 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Project, CenterLineType, Discipline } from '../core.js';
 import { serializeGraph, restoreGraph, serializeStructCLs, restoreStructCLs } from '../graphSnapshot.js';
-import { ERR_CL_CONVERT_NO_GRID, ERR_CL_CONVERT_ATTACHED, ERR_CL_DUPLICATE } from '../error.js';
+import { ERR_CL_CONVERT_NO_GRID, ERR_CL_CONVERT_LAST_GRID, ERR_CL_CONVERT_ATTACHED, ERR_CL_DUPLICATE } from '../error.js';
 import {
-  outermostGridExtentRefs, attachedShapeExists, applyPromoteToGrid, applyDemoteToCenter,
+  outermostGridExtentRefs, isLastGridOnAxis, attachedShapeExists, applyPromoteToGrid, applyDemoteToCenter,
 } from './centerLineConvert.js';
 
 // project.structGraph・graph._structGraph の連携が必要なテスト用。
@@ -111,9 +111,11 @@ test('昇格→降格の非対称性: 直交通り芯2本未満のまま昇格�
   assert.equal(demoteBefore.error, ERR_CL_CONVERT_NO_GRID);
   assert.equal(project.structGraph.shapeMap.has(cl.id), true, '降格は失敗し通り芯のまま残る');
 
-  // 直交(HORIZONTAL)通り芯を2本足せば降格できるようになる。
+  // 直交(HORIZONTAL)通り芯を2本足せば降格できるようになる（同軸(VERTICAL)にはclの他にもう1本
+  // 必要——isLastGridOnAxisガードに引っかからないように、cl以外のVERTICAL通り芯も用意する）。
   const y1 = project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
   const y2 = project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: true, discipline: Discipline.STRUCT });
+  project.structGraph.addCenterLine(CenterLineType.VERTICAL, 5000, { labeled: true, discipline: Discipline.STRUCT });
 
   const demoteAfter = applyDemoteToCenter(graph, project.structGraph, cl);
   assert.equal(demoteAfter.error, undefined);
@@ -153,6 +155,8 @@ test('applyDemoteToCenter: 階グラフへ移籍・extentLo/HiRefが最外郭通
   const y2 = project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 2000, { labeled: true, discipline: Discipline.STRUCT }); // 中間（最外郭ではない）
   const y3 = project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 4000, { labeled: true, discipline: Discipline.STRUCT });
   const cl = project.structGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: true, discipline: Discipline.STRUCT });
+  // isLastGridOnAxisガード対策: 同軸(VERTICAL)にclの他にもう1本必要（このテストの主眼＝extentRef決定とは無関係）。
+  project.structGraph.addCenterLine(CenterLineType.VERTICAL, 5000, { labeled: true, discipline: Discipline.STRUCT });
   const clId = cl.id;
   assert.ok(project.structGraph.intersectionMap.has(`${clId}:${y2.id}`)); // 前提: 交点が既に存在する
 
@@ -194,11 +198,64 @@ test('applyDemoteToCenter異常系: 直交する通り芯が1本しかなけれ�
   assert.equal(cl.labeled, true);
 });
 
+// ---- isLastGridOnAxis（軸最後の1本ガード。ユーザー要望で新設） ----
+// 「最後の通り芯」は軸ごとの解釈（X軸・Y軸それぞれの最後の1本）で確定——全体で最後の1本は
+// 直交0本になりNO_GRIDで既にブロックされるため、このガードが意味を持つのは「直交軸には
+// 2本以上あるが、自分の軸だけは自分1本」のケース。
+
+// 【注意点の固定】isLastGridOnAxisは「同軸のlabeled STRUCT CLが自分のみか」を数えるだけの純関数で、
+// cl自身がstructかどうかは見ない——非structのCL（中心線・補助線・梁芯）に対して呼ぶと、同軸に
+// 通り芯が0本（＝比較対象がcl自身でなくゼロ件）でも length<=1 が成立してtrueを返しうる。
+// このため呼び出し側（interaction/usePointerInteraction.js）は必ずcenterLineKind(cl)==='struct'を
+// 条件に含めてから呼ぶ設計になっている（menuItems.test.js の「中心線はdisabledにならない」テストと対）。
+test('isLastGridOnAxis: 非structのCL（中心線）に対して呼ぶと同軸の通り芯が0本でもtrueを返しうる（呼び出し側でstruct限定が必須な理由）', () => {
+  const { graph } = makeProjectWithGraph();
+  // 同軸(VERTICAL)の通り芯を1本も追加しない。
+  const centerCl = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
+
+  assert.equal(isLastGridOnAxis(graph, centerCl), true, '中心線に対して呼ぶと誤ってtrueになりうる（要struct限定ガード）');
+});
+
+test('applyDemoteToCenter異常系: 直交軸には2本以上あっても同軸(VERTICAL)がclだけ（軸最後の1本）ならERR_CL_CONVERT_LAST_GRIDでグラフ無変更', () => {
+  const { project, graph } = makeProjectWithGraph();
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: true, discipline: Discipline.STRUCT });
+  const cl = project.structGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: true, discipline: Discipline.STRUCT }); // VERTICAL軸唯一の通り芯
+
+  assert.equal(isLastGridOnAxis(graph, cl), true);
+
+  const result = applyDemoteToCenter(graph, project.structGraph, cl);
+
+  assert.equal(result.error, ERR_CL_CONVERT_LAST_GRID);
+  assert.equal(project.structGraph.shapeMap.has(cl.id), true, 'structGraphに残ったまま（変換されない）');
+  assert.equal(graph.shapeMap.has(cl.id), false);
+  assert.equal(cl.discipline, Discipline.STRUCT);
+  assert.equal(cl.labeled, true);
+});
+
+test('applyDemoteToCenter: 同軸(VERTICAL)に他の通り芯があれば（軸最後の1本ではない）従来どおり降格できる', () => {
+  const { project, graph } = makeProjectWithGraph();
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: true, discipline: Discipline.STRUCT });
+  const cl = project.structGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: true, discipline: Discipline.STRUCT });
+  project.structGraph.addCenterLine(CenterLineType.VERTICAL, 5000, { labeled: true, discipline: Discipline.STRUCT }); // 同軸に他の通り芯
+
+  assert.equal(isLastGridOnAxis(graph, cl), false);
+
+  const result = applyDemoteToCenter(graph, project.structGraph, cl);
+
+  assert.equal(result.error, undefined);
+  assert.equal(project.structGraph.shapeMap.has(cl.id), false, 'structGraphから消滅');
+  assert.equal(graph.shapeMap.has(cl.id), true, '階グラフへ移籍される');
+});
+
 test('applyDemoteToCenter異常系: 移籍先の階グラフに同座標・同軸の中心線が既にあればERR_CL_DUPLICATEでグラフ無変更（F3）', () => {
   const { project, graph } = makeProjectWithGraph();
   project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
   project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: true, discipline: Discipline.STRUCT });
   const cl = project.structGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: true, discipline: Discipline.STRUCT });
+  // isLastGridOnAxisガード対策: 同軸(VERTICAL)にclの他にもう1本必要（このテストの主眼＝DUPLICATEとは無関係）。
+  project.structGraph.addCenterLine(CenterLineType.VERTICAL, 5000, { labeled: true, discipline: Discipline.STRUCT });
   graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH }); // 移籍先に既存の中心線
 
   const result = applyDemoteToCenter(graph, project.structGraph, cl);
@@ -219,6 +276,8 @@ test('applyDemoteToCenter異常系: アクティブ階グラフ側に斜線が�
   const y1 = project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
   project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: true, discipline: Discipline.STRUCT });
   const x1 = project.structGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: true, discipline: Discipline.STRUCT });
+  // isLastGridOnAxisガード対策: 同軸(VERTICAL)にx1の他にもう1本必要（このテストの主眼＝ATTACHEDとは無関係）。
+  project.structGraph.addCenterLine(CenterLineType.VERTICAL, 5000, { labeled: true, discipline: Discipline.STRUCT });
   const ix = graph.getOrCreateIntersection(x1, y1);
   graph.addDiagonalLine(ix, graph.addPoint(3000, 3000));
 
@@ -236,6 +295,8 @@ test('applyDemoteToCenter: ネガティブコントロール（同構成で斜�
   const y1 = project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
   const y2 = project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: true, discipline: Discipline.STRUCT });
   const x1 = project.structGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: true, discipline: Discipline.STRUCT });
+  // isLastGridOnAxisガード対策: 同軸(VERTICAL)にx1の他にもう1本必要。
+  project.structGraph.addCenterLine(CenterLineType.VERTICAL, 5000, { labeled: true, discipline: Discipline.STRUCT });
 
   const result = applyDemoteToCenter(graph, project.structGraph, x1);
 
@@ -257,6 +318,9 @@ test('往復: 昇格→降格でarch/中心線の状態に戻り、シリアラ�
   const clId = cl.id;
 
   assert.deepEqual(applyPromoteToGrid(graph, project.structGraph, cl), {});
+  // isLastGridOnAxisガード対策: 昇格直後はclが同軸(VERTICAL)唯一の通り芯になるため、
+  // 降格できるよう他に1本用意する（このテストの主眼＝往復整合性とは無関係）。
+  project.structGraph.addCenterLine(CenterLineType.VERTICAL, 5000, { labeled: true, discipline: Discipline.STRUCT });
   const demoted = applyDemoteToCenter(graph, project.structGraph, cl);
   assert.equal(demoted.loCL, y1);
   assert.equal(demoted.hiCL, y2);

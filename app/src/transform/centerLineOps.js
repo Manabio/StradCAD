@@ -7,13 +7,14 @@ import { undoManager } from '../undoManager.js';
 import { serializeGraph, restoreGraph, serializeStructCLs, restoreStructCLs } from '../graphSnapshot.js';
 import {
   ERR_CL_DUPLICATE, ERR_CL_CENTER_UPGRADED, ERR_CL_STRUCT_EXISTS,
-  ERR_CL_CONVERT_DUP_FLOOR, ERR_CL_CONVERT_DUP_FLOOR_DEMOTE,
+  ERR_CL_CONVERT_DUP_FLOOR, ERR_CL_CONVERT_DUP_FLOOR_DEMOTE, ERR_CL_DELETE_LAST_GRID,
 } from '../error.js';
 import { findBracketingCLs, overhangMm } from '../snapGeometry.js';
 import { calcStep } from '../renderer/clMoveMath.js';
 import { mergeCenterLineChain, composeUndoWithMergeChain } from './centerLineMerge.js';
 import {
   applyPromoteToGrid, applyDemoteToCenter, checkPromoteToGridGuards, checkDemoteToCenterGuards,
+  isLastGridOnAxis,
 } from './centerLineConvert.js';
 import { resolveSecondaryBeamsForAxis } from '../structural/beamAxisMove.js';
 import { renumberMembers } from '../structural/memberNumbering.js';
@@ -126,9 +127,16 @@ export function commitStretchWithUndo(ss) {
 // 通り芯（discipline:STRUCT かつ labeled）は structGraph 経由でスナップショット方式のUndo、
 // それ以外（中心線・補助線・梁芯）は excludedWallBeamAxes 記録（梁芯のみ）＋removeCenterLine。
 // 呼び出し側（App.jsx）はメニューを閉じる等の setState を行う。
+// 戻り値 {toast}: 通り芯側のみ拒否がありうる（軸最後の1本）ため、promoteCenterToGridWithUndo等の
+// 変換系と同じ {toast: string|null} 契約に揃える——呼び出し側は toast があればトースト表示するだけでよい。
 export function deleteCenterLineWithUndo(graph, project, cl) {
   const isStruct = cl.discipline === Discipline.STRUCT && cl.labeled;
   if (isStruct) {
+    // 軸最後の通り芯は削除できない（ユーザー要望。中心線化ガードERR_CL_CONVERT_LAST_GRIDと同じ
+    // isLastGridOnAxis判定を共有——二重実装によるズレを防ぐ。UI側の長押しメニューのグレー化
+    // （interaction/usePointerInteraction.js・menuItems.js）はこの防御ガードの多層防御であり、
+    // グレー化を回避して呼ばれても最終的にここで拒否される）。
+    if (isLastGridOnAxis(graph, cl)) return { toast: ERR_CL_DELETE_LAST_GRID };
     // 通り芯の削除 — structGraph をスナップショット経由で Undo。
     // structGraph の teardown は階グラフの図形に届かないため、アクティブ階グラフ側の
     // 壁端・extent 参照を先に切り離す（端点ルール）。階グラフも Undo 対象に含める。
@@ -166,6 +174,7 @@ export function deleteCenterLineWithUndo(graph, project, cl) {
       () => restoreGraph(graph, after),
     );
   }
+  return { toast: null };
 }
 
 // ---- 中心⇔通り芯の入替え（平面モード限定・メニューの cl-to-grid / cl-to-center）----
