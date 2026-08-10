@@ -45,6 +45,11 @@ Intersection・Shape・Wall・Opening・構造部材はすべて自前の座標�
 ## CL端点の「端点ルール」（交点を失った端は固定・はねだし）
 中心線の端は通常、直交CLとの交点上に乗る（延長・短縮も交点間で動く）。線分編集で交点が失われた端（参照先CL削除・直交CLの短縮）は「端点」となり、(1)座標をその場に固定（削除時は`detachFromCenterLine`がextent参照を静的化）、(2)延長・短縮の対象外（`isEndpointAt`で導出判定。保存フラグは持たない——直交CLの短縮による端点化は参照が生きたまま起きるため、状態保存では追従できない）、(3)壁は端点ノードに壁があったと想定した分（下地偏芯量＋仕上げ厚＝`|axisOffset|`）だけはね出して止める。壁側の適用は3経路：CL削除時の既存壁の端繰り上げ（core/planGraph.js）、壁生成時の軸CL線分範囲クリップ（wallGeneration.js。交点消失後もセル分割は列全体を割り続けるため、生成セグメントが線分範囲を越え得る）、詳細LODの木口2重線（ShapesLayer.jsx）。補助線は静的端点（オーバーハング付き）が正規状態のため端点ルールの対象外。
 
+## 中心⇔通り芯の入替え（平面モード限定）はCenterLine実体をidごと移籍する
+昇格（中心→通り芯）・降格（通り芯→中心）とも、CenterLine実体を削除して作り直すのではなく`shapeMap`間で同一idのまま移籍する（`PlanGraph.adoptCenterLine`/`releaseCenterLine`、本体は`transform/centerLineConvert.js`）。壁・開口等はCenterLineをオブジェクト参照で保持する（core/wall.js）ため、id・オブジェクトidentityを保てば既存参照は書き換え不要で無傷のまま生き残る——既存の`promoteToGrid`/`demoteToAuxiliary`（同一グラフ内のlabeled切替のみ）を再利用しないのはこのため。**変換中は`_teardownCenterLine`を絶対に呼ばない**（`core/clQuery.js`経由でWall等が道連れ削除される）。降格時のextentは直交方向の最外郭通り芯2本へのref（「外側から外側まで」）にする。通り芯は全階共通だったため、降格後は非アクティブな全Plane（検討・屋根含む）へ同一idで複製する（`transform/centerLineFloorSync.js`の`propagateDemotedCenterLine`）——`findFloorsWithCounterpartCL`は昇格・降格の双方で使う（昇格は「他階に同座標の中心線があれば通り芯化後に座標が重複する」、降格は「片階だけ複製漏れすると壁参照が壊れる」ため、いずれも事前拒否・スキップ方式は不採用）。
+
+変換のガードには「往復可能性」という設計原則がある: refIdは階ローカルなCLへの参照であり全階共通のオブジェクトが持てないため、昇格時に参照先がstructGraph側に無ければ絶対値へベイクする（`_reparentChildCenterLines`のelse分岐と同型）。直交通り芯2本必要という降格側の制約（extent決定に要る）は昇格側にも課す——2本未満のまま昇格を許すと、後で降格しようとした際に戻れない片道切符になるため。同座標重複の拒否は昇格・降格どちらの移籍先グラフに対しても同じ判定式（`CL_OVERLAP_TOL_MM`）で行う。
+
 ## SiteLine.redPointIdは生成時に1度だけ決定する
 画面表示用の赤/青端点をviewport基準で都度再計算するとパン/ズームで入れ替わるため、線分生成時に固定し以後再計算しない。
 

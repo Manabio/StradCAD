@@ -62,7 +62,9 @@ import { extendCenterLine, shortenCenterLine } from './transform/centerLineExten
 import {
   deleteCenterLineWithUndo,
   shouldSuggestWoodStructure, addCenterLineFromDialog,
+  promoteCenterToGridWithUndo, demoteGridToCenterWithUndo,
 } from './transform/centerLineOps.js';
+import { ERR_CL_CONVERT_SYNC_FAILED } from './error.js';
 import { HamburgerMenu }       from './ui/HamburgerMenu.jsx';
 import { ModeBar }             from './ui/ModeBar.jsx';
 import { FloorDrum }           from './ui/FloorDrum.jsx';
@@ -1136,6 +1138,22 @@ const App = observer(() => {
     }
     if (item.id === 'cl-ecc') {
       setEccDialog({ cl: menu.cl });
+      return;
+    }
+    if (item.id === 'cl-to-grid' || item.id === 'cl-to-center') {
+      const target = menu.cl;
+      (async () => {
+        const fn = item.id === 'cl-to-grid' ? promoteCenterToGridWithUndo : demoteGridToCenterWithUndo;
+        const { toast } = await fn(graph, project, target);
+        if (toast) setToast({ msg: toast, key: Date.now() });
+        setFloorSyncTick(t => t + 1); // 連動先（他階）の複製・重複判定を反映させる（handleEccConfirmと同じ）
+      })().catch(err => {
+        // 階またぎ複製（propagateDemotedCenterLine）はIDB書込を含むため失敗しうる——途中まで
+        // 保存できた分は centerLineFloorSync.js の finally で既にundoエントリへ合成済みなので、
+        // ここでは失敗をトースト表示するだけでよい（cl-move等の既存async IIFEと同じ形）。
+        console.error(err);
+        setToast({ msg: ERR_CL_CONVERT_SYNC_FAILED, key: Date.now() });
+      });
       return;
     }
     if (item.id === 'del') {

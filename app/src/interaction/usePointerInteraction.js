@@ -17,7 +17,7 @@ import {
 import { useLongPress } from './useLongPress.js';
 import { findColumnAxisLabel, findGutterCL } from './gutterHitTest.js';
 import { CONTEXT, detectContext, buildMenuState } from './menuItems.js';
-import { centerLineKind } from '@core';
+import { centerLineKind, CenterLineType } from '@core';
 import { roundAbsToStep } from '../renderer/clMoveMath.js';
 import { inGutter as isInGutter } from '../layout.js';
 import { commitCLMoveOp, commitStretchWithUndo } from '../transform/centerLineOps.js';
@@ -120,6 +120,9 @@ export function usePointerInteraction({
       // context 判定・メニュー items 生成は menuItems.js に集約（建具モードは壁・開口以外は null）。
       // menuItems.js は import ゼロ（node:test対応）に保つため、graph 依存の判定値はここで算出して渡す。
       const menuContext = detectContext(snap, cl, opening, wall, clEndpoint);
+      // 中心⇔通り芯の入替え（平面モード限定）: RADIAL(R) は _createIntersections がV/H専用・
+      // findNearestCenterLine も対象外のため除外する（isPlanar）。
+      const isPlanar = (c) => c.centerLineType === CenterLineType.VERTICAL || c.centerLineType === CenterLineType.HORIZONTAL;
       const state = buildMenuState(appMode, {
         snap, cl, clEndpoint, opening, wall,
         canMove: typeof modeRef.current?.startMove === 'function',
@@ -127,6 +130,10 @@ export function usePointerInteraction({
         canShorten: clEndpoint ? canShortenCenterLine(graph, clEndpoint.cl, clEndpoint.side) : undefined,
         hasInteriorWall: menuContext === CONTEXT.CENTER_LINE ? interiorWallSpans(graph, cl.id).length > 0 : undefined,
         wallEligible:    menuContext === CONTEXT.WALL ? isEligibleWallSpan(wall, graph) : undefined,
+        canToGrid: appMode === 'floorplan' && !!clEndpoint
+          && centerLineKind(clEndpoint.cl) === 'center' && isPlanar(clEndpoint.cl),
+        canToCenter: appMode === 'floorplan' && menuContext === CONTEXT.CENTER_LINE
+          && centerLineKind(cl) === 'struct' && isPlanar(cl),
       });
       if (!state) return;
       // 移動を選ばれたときに備え、移動範囲の計算（他フロアのIDB読み込みを含む）を先読みしておく。

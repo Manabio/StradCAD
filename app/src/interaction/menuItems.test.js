@@ -36,3 +36,43 @@ test('buildMenuState: 非建具モードの中心線上は null にならず、c
   assert.equal(state.clState.isVertical, false); // 'Y' = CenterLineType.HORIZONTAL
   assert.ok(state.items.some(i => i.id === 'cl-ecc'), 'hasInteriorWall=true なら偏芯項目が出る');
 });
+
+// ---- 中心⇔通り芯の入替え（平面モード限定） ----
+
+test('buildMenuState: canToGrid=true なら CL端点メニューに「通り芯に」が出る', () => {
+  const clEndpoint = { cl: { id: 'cl1', centerLineType: 'X' }, side: 'lo' };
+  const state = buildMenuState('floorplan', {
+    snap: null, cl: null, clEndpoint, opening: null, wall: null,
+    canExtend: true, canShorten: true, canToGrid: true,
+  });
+  assert.equal(state.context, CONTEXT.CENTER_LINE_ENDPOINT);
+  assert.ok(state.items.some(i => i.id === 'cl-to-grid'), 'canToGrid=true なら通り芯化項目が出る');
+});
+
+test('buildMenuState: canToGrid=false なら CL端点メニューに「通り芯に」が出ない', () => {
+  const clEndpoint = { cl: { id: 'cl1', centerLineType: 'X' }, side: 'lo' };
+  const state = buildMenuState('floorplan', {
+    snap: null, cl: null, clEndpoint, opening: null, wall: null,
+    canExtend: true, canShorten: true, canToGrid: false,
+  });
+  assert.equal(state.items.some(i => i.id === 'cl-to-grid'), false);
+});
+
+test('buildMenuState: canToCenter=true なら中心線上メニューに「中心に」が出る', () => {
+  const cl = { id: 'cl1', centerLineType: 'X' };
+  const state = buildMenuState('floorplan', {
+    snap: null, cl, clEndpoint: null, opening: null, wall: null, canMove: true, canToCenter: true,
+  });
+  assert.equal(state.context, CONTEXT.CENTER_LINE);
+  assert.ok(state.items.some(i => i.id === 'cl-to-center'), 'canToCenter=true なら中心化項目が出る');
+});
+
+test('buildMenuState: canToCenter=false なら中心線上メニューに「中心に」が出ない（既存項目は維持）', () => {
+  const cl = { id: 'cl1', centerLineType: 'X' };
+  const state = buildMenuState('floorplan', {
+    snap: null, cl, clEndpoint: null, opening: null, wall: null, canMove: true, canToCenter: false,
+  });
+  assert.equal(state.items.some(i => i.id === 'cl-to-center'), false);
+  assert.ok(state.items.some(i => i.id === 'cl-move'));
+  assert.ok(state.items.some(i => i.id === 'cl-del'));
+});

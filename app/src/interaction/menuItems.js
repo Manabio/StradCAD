@@ -43,28 +43,35 @@ export function getMenuItems(context, endpointState, clState, wallState) {
         { id: 'del',   label: '削除',   icon: '✕' },
       ];
     case CONTEXT.CENTER_LINE_ENDPOINT: {
-      const { canExtend, canShorten, isVertical, side } = endpointState ?? {};
+      const { canExtend, canShorten, canToGrid, isVertical, side } = endpointState ?? {};
       const extendAngle  = extendIconAngle(isVertical, side);
       const shortenAngle = extendAngle + 180; // 短縮は延長と正反対（内向き）を指す
-      return [
+      const items = [
         { id: 'cl-extend',  label: '延長', icon: '→', iconRotate: extendAngle, disabled: !canExtend },
         canShorten
           ? { id: 'cl-shorten', label: '短縮', icon: '→', iconRotate: shortenAngle }
           : { id: 'cl-del',     label: '削除', icon: '✕' },
       ];
+      // 中心線のはね出し（CL端点）長押し: 平面モード限定で通り芯化を提案する。角度指定なし＝均等配置
+      // のまま維持する（延長/短縮|削除は固定角にしない）——canToGrid=trueで3項目化すると
+      // angleStep=120°に変わり既存2項目の表示位置も動くが、意図した挙動として許容する。
+      if (canToGrid) items.push({ id: 'cl-to-grid', label: '通り芯に', icon: '◎' });
+      return items;
     }
     case CONTEXT.CENTER_LINE: {
       // 12時=移動、4時=削除、8時=偏芯（内壁指定のあるCLのみ。仕上げモードでの部屋命名により
       // 生成されたINTERIOR_WALLエッジ分類は脱出後も保持されるため、移動可能なモード側の
       // 長押しメニューで扱う）。移動アイコンはスナップ移動の方向（線と直交）を指す両矢印。
       // 移動をサポートしないモード（clState.canMove が偽）では従来どおり削除のみ。
-      const { canMove, isVertical, hasInteriorWall } = clState ?? {};
+      const { canMove, isVertical, hasInteriorWall, canToCenter } = clState ?? {};
       if (!canMove) return [{ id: 'cl-del', label: '削除', icon: '✕' }];
       const items = [
         { id: 'cl-move', label: '移動', icon: '⇄', iconRotate: isVertical ? 0 : 90, angle: -90 },
         { id: 'cl-del',  label: '削除', icon: '✕', angle: 30 },
       ];
       if (hasInteriorWall) items.push({ id: 'cl-ecc', label: '偏芯', icon: '◨', angle: 150 });
+      // 通り芯の線上長押し: 平面モード限定で中心線化を提案する
+      if (canToCenter) items.push({ id: 'cl-to-center', label: '中心に', icon: '┄', angle: 90 });
       return items;
     }
     case CONTEXT.EMPTY:
@@ -102,18 +109,21 @@ export function getMenuItems(context, endpointState, clState, wallState) {
  * 操作は行わない）ため null を返す——呼び出し側はこれを合図にメニューを開かない。
  * canMove は「CL移動をサポートするモードか」（呼び出し側の modeRef.current?.startMove の有無）。
  * canExtend/canShorten（CL端点の延長/短縮可否）・hasInteriorWall（中心線に内壁指定があるか）・
- * wallEligible（腰壁・垂れ壁の適格性）は graph 依存のため呼び出し側（interaction/usePointerInteraction.js）が算出して渡す
+ * wallEligible（腰壁・垂れ壁の適格性）・canToGrid/canToCenter（中心⇔通り芯の入替え可否。平面モード限定）は
+ * graph 依存のため呼び出し側（interaction/usePointerInteraction.js）が算出して渡す
  * （このモジュールを import ゼロに保つため。ファイル冒頭コメント参照）。
  * @returns {{context, items, endpointState, clState, wallState}|null}
  */
 export function buildMenuState(appMode, {
   snap, cl, clEndpoint, opening, wall, canMove, canExtend, canShorten, hasInteriorWall, wallEligible,
+  canToGrid, canToCenter,
 }) {
   const context = detectContext(snap, cl, opening, wall, clEndpoint);
   if (appMode === 'opening' && context !== CONTEXT.WALL && context !== CONTEXT.OPENING) return null;
   const endpointState = clEndpoint ? {
     canExtend,
     canShorten,
+    canToGrid,
     isVertical: clEndpoint.cl.centerLineType === 'X', // CenterLineType.VERTICAL
     side:       clEndpoint.side,
   } : null;
@@ -122,6 +132,7 @@ export function buildMenuState(appMode, {
     canMove,
     isVertical: cl.centerLineType === 'X', // CenterLineType.VERTICAL
     hasInteriorWall,
+    canToCenter,
   } : null;
   // 壁上メニュー: 腰壁・垂れ壁の適格性（2a壁は対象外）を渡す。
   const wallState = context === CONTEXT.WALL ? { eligible: wallEligible } : null;

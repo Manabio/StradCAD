@@ -3,10 +3,15 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Plane, PlanGraph, Project, CenterLineType, Discipline } from '../core.js';
-import { ERR_CL_DUPLICATE, ERR_CL_CENTER_UPGRADED, ERR_CL_STRUCT_EXISTS } from '../error.js';
+import {
+  ERR_CL_DUPLICATE, ERR_CL_CENTER_UPGRADED, ERR_CL_STRUCT_EXISTS,
+  ERR_CL_CONVERT_ATTACHED, ERR_CL_CONVERT_NO_GRID, ERR_CL_CONVERT_DUP_FLOOR, ERR_CL_CONVERT_DUP_FLOOR_DEMOTE,
+} from '../error.js';
 import { undoManager } from '../undoManager.js';
+import { floorSwapManager } from '../storage/FloorSwapManager.js';
 import {
   shouldSuggestWoodStructure, commitCLMoveOp, deleteCenterLineWithUndo, addCenterLineFromDialog,
+  promoteCenterToGridWithUndo, demoteGridToCenterWithUndo,
 } from './centerLineOps.js';
 
 function makeGraph(planeId = 'p1') {
@@ -194,4 +199,196 @@ test('addCenterLineFromDialog: 既存中心線位置への通り芯追加は中�
   undoManager.undo();
   assert.ok(graph.shapeMap.has(centerId), 'undoで中心線が復元される');
   assert.equal(project.structGraph.centerLines.some(cl => cl.value === 1000), false, 'undoで通り芯は消える');
+});
+
+// ---- promoteCenterToGridWithUndo / demoteGridToCenterWithUndo ----
+// findFloorsWithCounterpartCL・propagateDemotedCenterLine は project.planeMap の「アクティブ以外の
+// 全Plane」を floorSwapManager.peek（IndexedDB経由）する。単一階の project では対象階が0件となり
+// peek は発生しないため、そのまま node:test で検証できる（下の大半のテスト）。複数階をまたぐ
+// シナリオ（重複ガード・複製伝播）は structural/wallBeamAxes.test.js:197-207 と同じ方式——
+// floorSwapManager.peek をテスト中だけ差し替え（try/finallyで必ず復元）、実IDBを経由せずに
+// ロジックだけを検証する。IDB不在を理由に断念しない。
+
+test('promoteCenterToGridWithUndo: 直交通り芯があれば通り芯化しundoで中心線に戻る', async () => {
+  const { project, graph } = makeProjectWithGraph();
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: true, discipline: Discipline.STRUCT });
+  const cl = graph.addCenterLine(CenterLineType.VERTICAL, 1000, {
+    labeled: false, discipline: Discipline.ARCH, extentLo: -500, extentHi: 3500,
+  });
+  const clId = cl.id;
+
+  const { toast } = await promoteCenterToGridWithUndo(graph, project, cl);
+
+  assert.equal(toast, null);
+  assert.equal(graph.shapeMap.has(clId), false);
+  assert.equal(project.structGraph.shapeMap.has(clId), true);
+  assert.equal(project.structGraph.shapeMap.get(clId).discipline, Discipline.STRUCT);
+
+  undoManager.undo();
+  assert.equal(graph.shapeMap.has(clId), true, 'undoで中心線に戻る');
+  assert.equal(project.structGraph.shapeMap.has(clId), false);
+  const restored = graph.shapeMap.get(clId);
+  assert.equal(restored.discipline, Discipline.ARCH);
+  assert.equal(restored.labeled, false);
+
+  undoManager.redo();
+  assert.equal(graph.shapeMap.has(clId), false);
+  assert.equal(project.structGraph.shapeMap.has(clId), true, 'redoで通り芯に戻る');
+});
+
+test('promoteCenterToGridWithUndo: 斜線が取り付いた中心線はtoast:ERR_CL_CONVERT_ATTACHEDでundoを積まない', async () => {
+  const { project, graph } = makeProjectWithGraph();
+  // NO_GRIDガード（F4）を通過させ、ATTACHEDガードを狙って踏むため直交通り芯を2本用意する。
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, -1000, { labeled: true, discipline: Discipline.STRUCT });
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 4000,  { labeled: true, discipline: Discipline.STRUCT });
+  const cl = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
+  const hOther = graph.addCenterLine(CenterLineType.HORIZONTAL, 500, { labeled: false, discipline: Discipline.ARCH });
+  const ix = graph.getOrCreateIntersection(cl, hOther);
+  graph.addDiagonalLine(ix, graph.addPoint(2000, 2000));
+  const beforeTop = undoManager.peekUndo();
+
+  const { toast } = await promoteCenterToGridWithUndo(graph, project, cl);
+
+  assert.equal(toast, ERR_CL_CONVERT_ATTACHED);
+  assert.equal(graph.shapeMap.has(cl.id), true, '変換されず階グラフに残る');
+  assert.equal(undoManager.peekUndo(), beforeTop, 'undoは積まれない');
+});
+
+test('demoteGridToCenterWithUndo: 直交通り芯2本があれば中心線化しundoで通り芯に戻る', async () => {
+  const { project, graph } = makeProjectWithGraph();
+  const y1 = project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+  const y2 = project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: true, discipline: Discipline.STRUCT });
+  const cl = project.structGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: true, discipline: Discipline.STRUCT });
+  const clId = cl.id;
+
+  const { toast } = await demoteGridToCenterWithUndo(graph, project, cl);
+
+  assert.equal(toast, null);
+  assert.equal(project.structGraph.shapeMap.has(clId), false);
+  assert.equal(graph.shapeMap.has(clId), true);
+  const demoted = graph.shapeMap.get(clId);
+  assert.equal(demoted.discipline, Discipline.ARCH);
+  assert.equal(demoted.labeled, false);
+  assert.deepEqual(demoted.extentLoRef, { clId: y1.id, offset: 0 });
+  assert.deepEqual(demoted.extentHiRef, { clId: y2.id, offset: 0 });
+
+  undoManager.undo();
+  assert.equal(graph.shapeMap.has(clId), false, 'undoで通り芯に戻る');
+  assert.equal(project.structGraph.shapeMap.has(clId), true);
+  assert.equal(project.structGraph.shapeMap.get(clId).labeled, true);
+});
+
+test('demoteGridToCenterWithUndo: 直交する通り芯が1本しかなければtoast:ERR_CL_CONVERT_NO_GRIDでundoを積まない', async () => {
+  const { project, graph } = makeProjectWithGraph();
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0, { labeled: true, discipline: Discipline.STRUCT }); // 1本のみ
+  const cl = project.structGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: true, discipline: Discipline.STRUCT });
+  const beforeTop = undoManager.peekUndo();
+
+  const { toast } = await demoteGridToCenterWithUndo(graph, project, cl);
+
+  assert.equal(toast, ERR_CL_CONVERT_NO_GRID);
+  assert.equal(project.structGraph.shapeMap.has(cl.id), true, '変換されずstructGraphに残る');
+  assert.equal(undoManager.peekUndo(), beforeTop, 'undoは積まれない');
+});
+
+test('demoteGridToCenterWithUndo: discipline:STRUCTだがlabeled:falseの想定外CLはtoastにエラーが入りundoも積まれず例外も出ない', async () => {
+  const { project, graph } = makeProjectWithGraph();
+  const cl = project.structGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.STRUCT });
+  const beforeTop = undoManager.peekUndo();
+
+  const { toast } = await demoteGridToCenterWithUndo(graph, project, cl);
+
+  assert.equal(typeof toast, 'string');
+  assert.ok(toast.length > 0, 'エラーメッセージがtoastに入る');
+  assert.equal(undoManager.peekUndo(), beforeTop, 'undoは積まれない');
+});
+
+// ---- N5: 同期ガードをIDB peekより先に評価する ----
+
+test('promoteCenterToGridWithUndo: 同期ガード（NO_GRID）で確実に失敗する場合はfindFloorsWithCounterpartCL（IDB peek）を呼ばない（N5）', async () => {
+  const { project, graph } = makeProjectWithGraph();
+  const cl = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH }); // 直交通り芯0本
+  const beforeTop = undoManager.peekUndo();
+
+  const originalPeek = floorSwapManager.peek;
+  floorSwapManager.peek = async () => { throw new Error('同期ガードで弾かれるはずなのにpeekが呼ばれた'); };
+  try {
+    const { toast } = await promoteCenterToGridWithUndo(graph, project, cl);
+
+    assert.equal(toast, ERR_CL_CONVERT_NO_GRID);
+    assert.equal(undoManager.peekUndo(), beforeTop, 'undoは積まれない');
+  } finally {
+    floorSwapManager.peek = originalPeek;
+  }
+});
+
+test('demoteGridToCenterWithUndo: 同期ガード（想定外の discipline/labeled 組合せ）で確実に失敗する場合はfindFloorsWithCounterpartCL（IDB peek）を呼ばない（N5）', async () => {
+  const { project, graph } = makeProjectWithGraph();
+  const cl = project.structGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.STRUCT });
+  const beforeTop = undoManager.peekUndo();
+
+  const originalPeek = floorSwapManager.peek;
+  floorSwapManager.peek = async () => { throw new Error('同期ガードで弾かれるはずなのにpeekが呼ばれた'); };
+  try {
+    const { toast } = await demoteGridToCenterWithUndo(graph, project, cl);
+
+    assert.equal(typeof toast, 'string');
+    assert.ok(toast.length > 0);
+    assert.equal(undoManager.peekUndo(), beforeTop, 'undoは積まれない');
+  } finally {
+    floorSwapManager.peek = originalPeek;
+  }
+});
+
+// ---- 複数階シナリオ（floorSwapManager.peek 差し替え方式） ----
+
+test('promoteCenterToGridWithUndo: 他階に同座標の中心線があればフロア名入りトーストで拒否され変換されない', async () => {
+  const project = new Project('proj', 'test');
+  const { graph: activeGraph } = project.addPlane(0, '1階', 'p1');
+  const { graph: otherGraph }  = project.addPlane(3000, '2階', 'p2');
+  otherGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: true, discipline: Discipline.STRUCT });
+  const cl = activeGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
+  const beforeTop = undoManager.peekUndo();
+
+  // floorSwapManager.peek はIndexedDBに依存するため、テスト用に一時的に差し替える
+  // （structural/wallBeamAxes.test.js:197-207 と同じ方式。floorSwapManagerはシングルトンインスタンス）。
+  const originalPeek = floorSwapManager.peek;
+  floorSwapManager.peek = async (plane) => (plane.id === otherGraph.plane.id ? otherGraph : null);
+  try {
+    const { toast } = await promoteCenterToGridWithUndo(activeGraph, project, cl);
+
+    assert.equal(toast, ERR_CL_CONVERT_DUP_FLOOR('2階'));
+    assert.equal(activeGraph.shapeMap.has(cl.id), true, '変換されず階グラフに残る');
+    assert.equal(project.structGraph.shapeMap.has(cl.id), false);
+    assert.equal(undoManager.peekUndo(), beforeTop, 'undoは積まれない');
+  } finally {
+    floorSwapManager.peek = originalPeek;
+  }
+});
+
+test('demoteGridToCenterWithUndo: 他階（アクティブ階の移籍先ではない階）に同座標の中心線があればフロア名入りトーストで拒否され変換されない（F3-2）', async () => {
+  const project = new Project('proj', 'test');
+  const { graph: activeGraph } = project.addPlane(0, '1階', 'p1');
+  const { graph: otherGraph }  = project.addPlane(3000, '2階', 'p2');
+  otherGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH }); // 他階に同座標の中心線
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: true, discipline: Discipline.STRUCT });
+  const cl = project.structGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: true, discipline: Discipline.STRUCT });
+  const beforeTop = undoManager.peekUndo();
+
+  const originalPeek = floorSwapManager.peek;
+  floorSwapManager.peek = async (plane) => (plane.id === otherGraph.plane.id ? otherGraph : null);
+  try {
+    const { toast } = await demoteGridToCenterWithUndo(activeGraph, project, cl);
+
+    assert.equal(toast, ERR_CL_CONVERT_DUP_FLOOR_DEMOTE('2階'), '降格専用の文言（「中心線にできません」）が使われる（N1）');
+    assert.equal(project.structGraph.shapeMap.has(cl.id), true, '変換されずstructGraphに残る（片階だけ複製漏れを防ぐ）');
+    assert.equal(activeGraph.shapeMap.has(cl.id), false);
+    assert.equal(undoManager.peekUndo(), beforeTop, 'undoは積まれない');
+  } finally {
+    floorSwapManager.peek = originalPeek;
+  }
 });

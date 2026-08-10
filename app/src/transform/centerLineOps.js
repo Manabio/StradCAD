@@ -5,10 +5,16 @@ import { runInAction } from 'mobx';
 import { CenterLineType, Discipline, centerLineKind, CL_OVERLAP_TOL_MM } from '@core';
 import { undoManager } from '../undoManager.js';
 import { serializeGraph, restoreGraph, serializeStructCLs, restoreStructCLs } from '../graphSnapshot.js';
-import { ERR_CL_DUPLICATE, ERR_CL_CENTER_UPGRADED, ERR_CL_STRUCT_EXISTS } from '../error.js';
+import {
+  ERR_CL_DUPLICATE, ERR_CL_CENTER_UPGRADED, ERR_CL_STRUCT_EXISTS,
+  ERR_CL_CONVERT_DUP_FLOOR, ERR_CL_CONVERT_DUP_FLOOR_DEMOTE,
+} from '../error.js';
 import { findBracketingCLs, overhangMm } from '../snapGeometry.js';
 import { calcStep } from '../renderer/clMoveMath.js';
 import { mergeCenterLineChain, composeUndoWithMergeChain } from './centerLineMerge.js';
+import {
+  applyPromoteToGrid, applyDemoteToCenter, checkPromoteToGridGuards, checkDemoteToCenterGuards,
+} from './centerLineConvert.js';
 import { resolveSecondaryBeamsForAxis } from '../structural/beamAxisMove.js';
 import { renumberMembers } from '../structural/memberNumbering.js';
 import { autoFillSecondaryBeams, autoFillBeamEccentricity } from '../structural/structuralAutoFill.js';
@@ -160,6 +166,89 @@ export function deleteCenterLineWithUndo(graph, project, cl) {
       () => restoreGraph(graph, after),
     );
   }
+}
+
+// ---- 中心⇔通り芯の入替え（平面モード限定・メニューの cl-to-grid / cl-to-center）----
+// グラフ変更本体（純粋部分）は transform/centerLineConvert.js。ここは undo 登録・階またぎ同期の
+// 呼び出しを担う（centerLineFloorSync.js は動的 import——IndexedDB(storage/db.js) に連鎖するため、
+// centerLineOps.js を node:test から静的 import できる現状を壊さないよう静的 import を避ける）。
+// 通り芯削除（deleteCenterLineWithUndo の isStruct 分岐）と同じ二重スナップショット方式のUndo。
+// 復元順序厳守: struct を先に戻してから階グラフを戻す（階グラフの CL 参照解決が structGraph を
+// 引くため——階グラフ側を先に戻すと一時的に参照先を失った状態を経由してしまう）。
+
+// ---- 中心線 → 通り芯 ----
+// 同期ガード（型・直交通り芯・図形干渉・同グラフ内重複）を先に評価してから、IDBを伴う
+// 他階重複チェック（findFloorsWithCounterpartCL）を呼ぶ——確実に失敗する同期ガードのために
+// 無駄な全階IDB読み込みが走り、本来と異なるトーストが先に出るのを防ぐ（N5）。
+// @returns {Promise<{ toast: string|null }>}
+export async function promoteCenterToGridWithUndo(graph, project, cl) {
+  const guardError = checkPromoteToGridGuards(graph, project.structGraph, cl);
+  if (guardError) return { toast: guardError };
+
+  const { findFloorsWithCounterpartCL } = await import('./centerLineFloorSync.js');
+  const dupFloors = await findFloorsWithCounterpartCL(project, graph, cl);
+  if (dupFloors.length > 0) {
+    return { toast: ERR_CL_CONVERT_DUP_FLOOR(dupFloors.map(p => p.name).join('・')) };
+  }
+
+  const beforeArch   = serializeGraph(graph);
+  const beforeStruct = serializeStructCLs(project.structGraph, project.structuralInfo, project.memberGroupLedger);
+  const { error } = applyPromoteToGrid(graph, project.structGraph, cl);
+  if (error) return { toast: error };
+  const afterArch   = serializeGraph(graph);
+  const afterStruct = serializeStructCLs(project.structGraph, project.structuralInfo, project.memberGroupLedger);
+  undoManager.push(
+    () => {
+      restoreStructCLs(project.structGraph, project.structuralInfo, beforeStruct, project.memberGroupLedger);
+      restoreGraph(graph, beforeArch);
+    },
+    () => {
+      restoreStructCLs(project.structGraph, project.structuralInfo, afterStruct, project.memberGroupLedger);
+      restoreGraph(graph, afterArch);
+    },
+  );
+  return { toast: null };
+}
+
+// ---- 通り芯 → 中心線 ----
+// 成功時は非アクティブ全階へ同一idで複製し（propagateDemotedCenterLine）、同一undoエントリへ合成する。
+// 同期ガードを先に評価してから（N5。promoteCenterToGridWithUndoと同じ理由）、変換前に他階の
+// 同座標重複もチェックする（スキップ方式は不採用——片階だけ複製漏れすると壁参照が壊れるため、
+// 1階でも重複していれば全体を拒否する）。
+// @returns {Promise<{ toast: string|null }>}
+export async function demoteGridToCenterWithUndo(graph, project, cl) {
+  const guardError = checkDemoteToCenterGuards(graph, project.structGraph, cl);
+  if (guardError) return { toast: guardError };
+
+  const { findFloorsWithCounterpartCL } = await import('./centerLineFloorSync.js');
+  const dupFloors = await findFloorsWithCounterpartCL(project, graph, cl);
+  if (dupFloors.length > 0) {
+    // 降格（通り芯→中心）専用の文言。ERR_CL_CONVERT_DUP_FLOOR（昇格用「…通り芯にできません」）を
+    // 流用すると方向が逆の誤表示になるため、DEMOTE専用の文言を使う（N1）。
+    return { toast: ERR_CL_CONVERT_DUP_FLOOR_DEMOTE(dupFloors.map(p => p.name).join('・')) };
+  }
+
+  const beforeArch   = serializeGraph(graph);
+  const beforeStruct = serializeStructCLs(project.structGraph, project.structuralInfo, project.memberGroupLedger);
+  const result = applyDemoteToCenter(graph, project.structGraph, cl);
+  if (result.error) return { toast: result.error };
+  const { loCL, hiCL } = result;
+  const afterArch   = serializeGraph(graph);
+  const afterStruct = serializeStructCLs(project.structGraph, project.structuralInfo, project.memberGroupLedger);
+  const entry = undoManager.push(
+    () => {
+      restoreStructCLs(project.structGraph, project.structuralInfo, beforeStruct, project.memberGroupLedger);
+      restoreGraph(graph, beforeArch);
+    },
+    () => {
+      restoreStructCLs(project.structGraph, project.structuralInfo, afterStruct, project.memberGroupLedger);
+      restoreGraph(graph, afterArch);
+    },
+  );
+
+  const { propagateDemotedCenterLine } = await import('./centerLineFloorSync.js');
+  await propagateDemotedCenterLine(project, graph, cl, { loCL, hiCL, undoEntry: entry });
+  return { toast: null };
 }
 
 // 木造（在来）の自動判定（問題.md）: 平面モードで主構造が未指定のとき、追加した通り芯が

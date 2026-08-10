@@ -162,6 +162,9 @@ export class PlanGraph {
       detachFromCenterLine: action,
       demoteToAuxiliary:   action,
       promoteToGrid:       action,
+      adoptCenterLine:     action,
+      releaseCenterLine:   action,
+      reparentChildCenterLines: action,
       addPoint:            action,
       removePoint:         action,
       addVerticalLine:        action,
@@ -987,12 +990,50 @@ export class PlanGraph {
     // 貫通孔（梁ホストのみ。スラブホストはcellKeyのみのCL非依存アンカーのため対象外、
     // Room/StructuralSlab と同様にteardown不要という設計）
     refs.sleeves.forEach(s => this.sleeveMap.delete(s.id));
+    this._removeIntersectionsFor(id);
+  }
+
+  // id の CenterLine が関わる Intersection を削除する（_teardownCenterLine から抽出。
+  // releaseCenterLine（中心⇔通り芯の入替え、Shape・構造材は道連れ削除しない）とも共有する）。
+  _removeIntersectionsFor(id) {
     [...this.intersectionMap.entries()]
       .filter(([, n]) => n.clVertical.id === id || n.clHorizontal.id === id)
       .forEach(([key, n]) => {
         this._graph.removeNode(n.id);
         this.intersectionMap.delete(key);
       });
+  }
+
+  /**
+   * 既存の CenterLine 実体をこのグラフへ迎え入れる（中心⇔通り芯の入替え専用）。
+   * delete+再生成ではなく shapeMap.set のみのため、壁・開口等の既存参照（オブジェクト参照）は
+   * 無傷のまま保たれる。labeled な場合は直交する labeled CenterLine との Intersection を生成する。
+   * 呼び出し側（transform/centerLineConvert.js）が discipline/labeled/trim を先に設定してから呼ぶこと。
+   */
+  adoptCenterLine(cl) {
+    this.shapeMap.set(cl.id, cl);
+    if (cl.labeled) this._createIntersections(cl);
+  }
+
+  /**
+   * 既存の CenterLine 実体をこのグラフから外す（中心⇔通り芯の入替え専用）。
+   * removeCenterLine と異なり Shape・構造材・端点参照の連鎖削除（_teardownCenterLine の道連れ削除）は
+   * 行わない——実体は削除されず移籍先グラフへ渡されるため、道連れ削除は不要かつ有害（壁が消える）。
+   * Intersection のみ切り離す（labeled 昇格側の交点は移籍先グラフが adoptCenterLine で再生成する）。
+   * @returns {CenterLine|null} 外した CenterLine（見つからなければ null）
+   */
+  releaseCenterLine(id) {
+    const cl = this.shapeMap.get(id);
+    if (!(cl instanceof CenterLine)) return null;
+    this._removeIntersectionsFor(id);
+    this.shapeMap.delete(id);
+    return cl;
+  }
+
+  /** _reparentChildCenterLines の薄い公開ラッパ（中心⇔通り芯の入替え専用）。id で対象 CL を指定する。 */
+  reparentChildCenterLines(id) {
+    const cl = this.shapeMap.get(id);
+    if (cl instanceof CenterLine) this._reparentChildCenterLines(cl);
   }
 
   // id の CenterLine を参照している構造材群（shapeMap一般Shape・柱・梁・耐力壁・基礎・梁ホストスリーブ）を

@@ -29,3 +29,13 @@ export const ERR_OPENING_OVERLAP     = '既存の開口と重なっています�
 
 // 構造モード突入時、構造情報パネルの主要構造が未指定（'未定'）の場合
 export const ERR_STRUCT_MAIN_UNSPECIFIED = '主要構造を指定してください。';
+
+// 中心⇔通り芯の入替え（transform/centerLineConvert.js・centerLineOps.js）
+export const ERR_CL_CONVERT_NO_GRID   = '直交する通り芯が2本必要です。';
+export const ERR_CL_CONVERT_ATTACHED  = 'この中心線には斜線・円弧が取り付いているため変換できません。';
+// 昇格（中心→通り芯）専用: 他階の同座標に中心線があるため通り芯化できない
+export const ERR_CL_CONVERT_DUP_FLOOR = (floors) => `${floors} の同じ位置に中心線があるため通り芯にできません。`;
+// 降格（通り芯→中心）専用: DUP_FLOORと逆方向のため文言を分ける（「通り芯にできません」の誤表示防止）
+export const ERR_CL_CONVERT_DUP_FLOOR_DEMOTE = (floors) => `${floors} の同じ位置に中心線があるため中心線にできません。`;
+// 中心⇔通り芯の入替え確定後、非アクティブ階への複製（propagateDemotedCenterLine）がIDB書込等で失敗した場合
+export const ERR_CL_CONVERT_SYNC_FAILED = '他階への反映に失敗しました。';
