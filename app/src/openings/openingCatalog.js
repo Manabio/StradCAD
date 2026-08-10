@@ -107,3 +107,13 @@ export function defaultOpeningHeight(category, subType) {
 export function defaultMaterialGlassFor(symbol) {
   return DEFAULT_MATERIALS[symbol] ?? null;
 }
+
+/**
+ * カテゴリ・機構に応じた「備考」欄の既定値。建具（fitting）×SWING機構（片開き戸等）はレバーハンドル
+ * が一般的なため既定値とする。窓（window）はSWING機構（開き窓等）でも金物としてのレバーハンドルは
+ * 想定しないため常にnull（defaultMaterialGlassForと同じ「唯一の定義箇所」規約。openingEdit.js の
+ * 配置経路・種別変更差し替え経路の両方がここを呼ぶ）。
+ */
+export function defaultNoteFor(category, mechanism) {
+  return category === 'fitting' && mechanism === OpeningMechanism.SWING ? 'レバーハンドル' : null;
+}

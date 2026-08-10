@@ -7,13 +7,13 @@ import assert from 'node:assert/strict';
 import { observable, runInAction, configure, autorun } from 'mobx';
 import { Plane, PlanGraph, CenterLineType, Discipline, OpeningCategory } from '../core.js';
 import { undoManager } from '../undoManager.js';
-import { FITTING_CATALOG, defaultMaterialGlassFor } from './openingCatalog.js';
+import { FITTING_CATALOG, defaultMaterialGlassFor, OpeningMechanism } from './openingCatalog.js';
 import { ERR_OPENING_OUT_OF_WALL, ERR_OPENING_OVERLAP } from '../error.js';
 import { openingTagOf, renumberOpenings } from './openingNumbering.js';
 import { openingTagAnchor } from './openingTagPlacement.js';
 import {
   placeOpeningWithDefaults, removeOpeningWithUndo, withOpeningUndo, pushOpeningUndo, snapshotOpening,
-  materialGlassAfterFixtureChange, validateOpeningEdit,
+  materialGlassAfterFixtureChange, validateOpeningEdit, noteAfterSubTypeChange,
 } from './openingEdit.js';
 
 function makePlaneGraph(planeId = 'p1') {
@@ -381,6 +381,64 @@ test('materialGlassAfterFixtureChange: ユーザーが編集済みの値は記�
 test('materialGlassAfterFixtureChange: 現在値がnull（未入力）なら新記号の初期値が入る', () => {
   const oldSymbol = 'AW', newSymbol = 'JW';
   assert.equal(materialGlassAfterFixtureChange(null, oldSymbol, newSymbol), defaultMaterialGlassFor(newSymbol));
+});
+
+// ---- placeOpeningWithDefaults: 建具(fitting)×SWING機構で備考欄に「レバーハンドル」が自動設定される ----
+test('placeOpeningWithDefaults: 建具×SWING機構で配置すると備考「レバーハンドル」が入る', () => {
+  const { graph, wall } = makeWallGraph(3000, { isExteriorWall: false }); // 内壁 → 片開き戸(SWING)が既定
+  const project = makeProject();
+  const { opening, error } = placeOpeningWithDefaults(graph, project, wall, { x: 1500, y: 75 }, OpeningCategory.FITTING);
+  assert.equal(error, null);
+  assert.equal(opening.note, 'レバーハンドル');
+});
+
+test('placeOpeningWithDefaults: 窓を配置しても備考欄は自動設定されない（null）', () => {
+  const { graph, wall } = makeWallGraph(3000);
+  const project = makeProject();
+  const { opening, error } = placeOpeningWithDefaults(graph, project, wall, { x: 1500, y: 0 }, OpeningCategory.WINDOW);
+  assert.equal(error, null);
+  assert.equal(opening.note, null);
+});
+
+// ---- 備考欄の種別（機構）変更時の差し替え規則 ----
+test('noteAfterSubTypeChange: 建具(fitting)で現在値が未編集(null)でSWINGへ変わるとレバーハンドルが入る', () => {
+  assert.equal(
+    noteAfterSubTypeChange(null, OpeningCategory.FITTING, OpeningMechanism.SLIDE_SINGLE, OpeningMechanism.SWING),
+    'レバーハンドル',
+  );
+});
+
+test('noteAfterSubTypeChange: 建具(fitting)で現在値が旧機構の初期値のままならSWING→引戸で外れてnullへ戻る', () => {
+  const current = 'レバーハンドル'; // SWINGの初期値＝未編集
+  assert.equal(
+    noteAfterSubTypeChange(current, OpeningCategory.FITTING, OpeningMechanism.SWING, OpeningMechanism.SLIDE_SINGLE),
+    null,
+  );
+});
+
+test('noteAfterSubTypeChange: 建具(fitting)でユーザーが編集済みの値は機構変更後も維持する', () => {
+  const edited = 'サムターン付きレバーハンドル'; // 初期値と異なる＝編集済み
+  assert.equal(
+    noteAfterSubTypeChange(edited, OpeningCategory.FITTING, OpeningMechanism.SWING, OpeningMechanism.SLIDE_SINGLE),
+    edited,
+  );
+});
+
+// ---- QA指摘1: 窓カテゴリはSWING機構（開き窓等）でも常にnull——FIX→開き窓で誤ってレバーハンドルが入らない ----
+test('noteAfterSubTypeChange: 窓(window)はFIX→SWING(開き窓)に変わっても備考はnullのまま（fittingと違い金物の既定値を持たない）', () => {
+  assert.equal(
+    noteAfterSubTypeChange(null, OpeningCategory.WINDOW, OpeningMechanism.FIXED, OpeningMechanism.SWING),
+    null,
+  );
+});
+
+// ---- QA指摘2: 窓で編集済みの備考は種別変更後も維持される ----
+test('noteAfterSubTypeChange: 窓(window)で編集済みの備考は種別変更後も維持される', () => {
+  const edited = '網戸付き';
+  assert.equal(
+    noteAfterSubTypeChange(edited, OpeningCategory.WINDOW, OpeningMechanism.FIXED, OpeningMechanism.SWING),
+    edited,
+  );
 });
 
 // ---- Finding 1 回帰: validateOpeningEdit の検証（OpeningEditor.jsx onOffsetBlur の位置編集ガードが依拠） ----

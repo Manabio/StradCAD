@@ -10,7 +10,7 @@ import { openingMountLocation } from './openingRoomLabel.js';
 import { AutoScaledFigure } from '../structural/sectionFigure/AutoScaledFigure.jsx';
 import {
   beginOpeningFieldUndo, endOpeningFieldUndo, withOpeningUndo, validateOpeningEdit, removeOpeningWithUndo,
-  materialGlassAfterFixtureChange,
+  materialGlassAfterFixtureChange, noteAfterSubTypeChange,
 } from './openingEdit.js';
 import { openingTagOf, fixtureSymbolOf } from './openingNumbering.js';
 
@@ -94,9 +94,15 @@ export const OpeningEditor = observer(function OpeningEditor({ graph, project, o
 
   const onSubTypeChange = (e) => commitEdit(() => {
     const key = e.target.value;
+    const oldEntry = entry;
     const en = findCatalogEntry(opening.category, key);
     runInAction(() => {
       opening.subType = key;
+      // 備考欄が旧機構の初期値のままなら新機構の初期値へ差し替える（編集済みの値は維持）。
+      // 初期値は category も加味する defaultNoteFor から引くため（openingCatalog.js）、窓カテゴリは
+      // SWING機構（開き窓等）でも常にnull——窓のFIX→開き窓のような変更でも誤って
+      // 'レバーハンドル' が入ることはない（category を渡さない実装だと機構だけで判定し混入する）。
+      opening.note = noteAfterSubTypeChange(opening.note, opening.category, oldEntry?.mechanism, en?.mechanism);
       if (en) {
         opening.width  = en.defaultWidth;
         opening.height = defaultOpeningHeight(opening.category, key);

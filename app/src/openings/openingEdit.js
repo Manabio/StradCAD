@@ -17,7 +17,7 @@
 import { runInAction } from 'mobx';
 import { undoManager } from '../undoManager.js';
 import { OpeningCategory } from '../core.js';
-import { getFittingOptions, WINDOW_CATALOG, defaultFixtureSymbolFor, defaultOpeningHeight, defaultMaterialGlassFor } from './openingCatalog.js';
+import { getFittingOptions, WINDOW_CATALOG, defaultFixtureSymbolFor, defaultOpeningHeight, defaultMaterialGlassFor, defaultNoteFor } from './openingCatalog.js';
 import { findHostWall, validateOpeningPlacement, maxOpeningWidthAt, findOpeningsOnWall, swingSideTowardPerp, exteriorSideDir } from './openingGeometry.js';
 import { renumberOpenings } from './openingNumbering.js';
 import { ERR_OPENING_OUT_OF_WALL, ERR_OPENING_OVERLAP } from '../error.js';
@@ -154,8 +154,10 @@ export function placeOpeningWithDefaults(graph, project, wall, worldPos, categor
   const faceDir = wall.faceDir;
   const openDir = exteriorSideDir(wall, graph, centerCoord) ?? faceDir;
   const swingSide = swingSideTowardPerp(wall.isVertical, hingeSide, openDir);
+  // 備考欄の初期値は defaultNoteFor が唯一の定義箇所（materialGlassと同じ規約）。
+  const note = defaultNoteFor(category, entry.mechanism);
   const opening = graph.addOpening(wall.axisCL, wallSide, wall.isVertical, refCL, refOffset, width, category, subType,
-    { hingeSide, swingSide, fixtureType, sillHeight, height, materialGlass });
+    { hingeSide, swingSide, fixtureType, sillHeight, height, materialGlass, note });
   undoManager.push(
     () => runInAction(() => { graph.removeShape(opening.id); renumberOpenings(graph, project); }),
     () => runInAction(() => { addOpeningFromSnapshot(graph, opening); renumberOpenings(graph, project); }),
@@ -194,4 +196,17 @@ export function validateOpeningEdit(o, graph, { width, refOffset }) {
 export function materialGlassAfterFixtureChange(currentValue, oldSymbol, newSymbol) {
   const isUnedited = currentValue == null || currentValue === defaultMaterialGlassFor(oldSymbol);
   return isUnedited ? defaultMaterialGlassFor(newSymbol) : currentValue;
+}
+
+/**
+ * 種別（機構）を変更したときの「備考」欄の差し替え規則: materialGlassAfterFixtureChange と同じ規則
+ * （現在値が未入力(null)、または旧機構の初期値のままなら新機構の初期値へ差し替える。ユーザーが
+ * 編集済みの値は上書きしない）。初期値は category も加味する defaultNoteFor から引く——窓
+ * カテゴリはSWING機構（開き窓等）でも常にnullのため、窓のFIX→開き窓のような変更では
+ * 新旧とも初期値がnullのまま＝現在値null以外は「編集済み」として保持され、誤って
+ * 'レバーハンドル' が入ることはない。
+ */
+export function noteAfterSubTypeChange(currentNote, category, oldMechanism, newMechanism) {
+  const isUnedited = currentNote == null || currentNote === defaultNoteFor(category, oldMechanism);
+  return isUnedited ? defaultNoteFor(category, newMechanism) : currentNote;
 }
