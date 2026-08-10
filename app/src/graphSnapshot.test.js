@@ -185,6 +185,44 @@ test('建具表の新規5フィールドは未設定（null）なら encode→de
   assert.equal(o2.note, null);
 });
 
+// ---- Opening.handleHeight の FlatBuffers 往復 ----
+test('Opening.handleHeight は FlatBuffers encode→decode で往復する', () => {
+  const { graph, opening } = makeGraphWithWindow({ fixtureType: 'AW', sillHeight: 800, handleHeight: 900 });
+
+  const bytes = serializeGraph(graph);
+  const restored = makeGraph();
+  restoreGraph(restored, bytes);
+
+  const o2 = restored.shapeMap.get(opening.id);
+  assert.ok(o2);
+  assert.equal(o2.handleHeight, 900);
+});
+
+test('Opening.handleHeight 未設定（null）は encode→decode 後も null のまま（既定値に化けない）', () => {
+  const { graph, opening } = makeGraphWithWindow({ fixtureType: 'AW', sillHeight: 800 });
+  assert.equal(opening.handleHeight, null, '未指定時はnullが既定');
+
+  const bytes = serializeGraph(graph);
+  const restored = makeGraph();
+  restoreGraph(restored, bytes);
+
+  const o2 = restored.shapeMap.get(opening.id);
+  assert.ok(o2);
+  assert.equal(o2.handleHeight, null);
+});
+
+test('Opening.handleHeight=0 は不正値として encode→decode 後は null に正規化される（heightと同じ規約）', () => {
+  const { graph, opening } = makeGraphWithWindow({ fixtureType: 'AW', sillHeight: 800, handleHeight: 0 });
+
+  const bytes = serializeGraph(graph);
+  const restored = makeGraph();
+  restoreGraph(restored, bytes);
+
+  const o2 = restored.shapeMap.get(opening.id);
+  assert.ok(o2);
+  assert.equal(o2.handleHeight, null);
+});
+
 // ---- frameDepth=0 は height と同じ規約で不正値としてnullに正規化される ----
 test('Opening.frameDepth=0 は不正値として encode→decode 後は null に正規化される', () => {
   const { graph, opening } = makeGraphWithWindow({ fixtureType: 'AW', sillHeight: 800, height: 1170, frameDepth: 0 });

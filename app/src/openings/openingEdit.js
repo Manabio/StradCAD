@@ -24,7 +24,7 @@ import { ERR_OPENING_OUT_OF_WALL, ERR_OPENING_OVERLAP } from '../error.js';
 
 const EDITABLE = [
   'refOffset', 'width', 'height', 'subType', 'hingeSide', 'swingSide', 'fixtureType', 'sillHeight',
-  'finish', 'materialGlass', 'frameDepth', 'hardware', 'note',
+  'finish', 'materialGlass', 'frameDepth', 'hardware', 'note', 'handleHeight',
 ];
 
 /** Opening の編集可能フィールドのみを持つ plain object スナップショット（refCL は id で保持）。 */
@@ -44,6 +44,7 @@ function addOpeningFromSnapshot(graph, o) {
     {
       hingeSide: o.hingeSide, swingSide: o.swingSide, fixtureType: o.fixtureType, sillHeight: o.sillHeight, height: o.height,
       finish: o.finish, materialGlass: o.materialGlass, frameDepth: o.frameDepth, hardware: o.hardware, note: o.note,
+      handleHeight: o.handleHeight,
     }, o.id);
 }
 

@@ -95,6 +95,26 @@ test('pushOpeningUndoが返すエントリのundo/redo双方でタグが確定�
   assert.equal(tagAfterRedo, tagAfterEdit, 'redoで編集直後と同じタグに戻る');
 });
 
+// ---- QA指摘3: handleHeight が EDITABLE から脱落していないことの回帰テスト（undo/redo往復） ----
+test('withOpeningUndo で handleHeight を変更すると undo/redo で値が正しく往復する（EDITABLE脱落検知ガード）', () => {
+  const { graph, wall } = makeWallGraph(3000, { isExteriorWall: false });
+  const project = makeProject();
+  const opening = graph.addOpening(wall.axisCL, 1, false, wall.clStart, 1000, 800, OpeningCategory.FITTING, 'singleSwing', {});
+  assert.equal(opening.handleHeight, null, '既定は未設定(null)');
+
+  const before = snapshotOpening(opening);
+  runInAction(() => { opening.handleHeight = 900; });
+  const cmd = pushOpeningUndo(graph, project, opening, before);
+  assert.ok(cmd, '差分があるので積まれるはず（handleHeightがEDITABLEに含まれていないとbefore===afterでnullになる）');
+  assert.equal(opening.handleHeight, 900);
+
+  cmd.undo();
+  assert.equal(opening.handleHeight, null, 'undoで未設定に戻る');
+
+  cmd.redo();
+  assert.equal(opening.handleHeight, 900, 'redoで再び900に戻る');
+});
+
 // ---- 壁長不足: 既定間口を壁長へクランプして配置する（エラーにしない） ----
 test('壁長1000mmに既定の引き違い窓(幅1690mm)は壁長1000mmへクランプされて配置される（error null）', () => {
   const { graph, wall } = makeWallGraph(1000);

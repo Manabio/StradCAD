@@ -152,9 +152,11 @@ function renderPrimitive(p, key, t, interactive) {
   switch (p.type) {
     case 'rect': {
       const x = t.tx(p.x), y = t.ty(p.y), w = t.sx(p.w), h = t.sx(p.h);
+      // rx(mm): 角丸半径（レバーハンドルのカプセル形等）。未指定時は従来どおり角丸なし。
+      const rx = p.rx != null ? t.sx(p.rx) : undefined;
       return (
         <g key={key}>
-          <rect x={x} y={y} width={w} height={h}
+          <rect x={x} y={y} width={w} height={h} rx={rx}
             fill={p.fill ?? 'none'} stroke={p.stroke ?? COLOR.stroke} strokeWidth={1} />
           {p.hatch === 'concrete' && concreteHatch(x, y, w, h, key)}
         </g>

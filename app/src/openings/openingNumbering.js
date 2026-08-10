@@ -49,6 +49,18 @@ export function effectiveHeight(opening) {
   return (h != null && h > 0) ? h : defaultOpeningHeight(opening.category, opening.subType);
 }
 
+/** レバーハンドル取付高さの既定値(mm、FLから)。 */
+export const DEFAULT_HANDLE_HEIGHT = 1050;
+
+/**
+ * opening.handleHeight（未設定・不正値なら DEFAULT_HANDLE_HEIGHT へフォールバック）。
+ * height<=0 が未設定扱いになる規約（effectiveHeight参照）をそのまま踏襲する。
+ */
+export function effectiveHandleHeight(opening) {
+  const h = opening.handleHeight;
+  return (h != null && h > 0) ? h : DEFAULT_HANDLE_HEIGHT;
+}
+
 function round(v) { return Math.round(v); }
 
 // signature の各項目に使う正規化（null/未入力は'-'、値ありはそのまま。文字列化して結合する）。

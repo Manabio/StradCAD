@@ -142,7 +142,7 @@ const CE = { CL_ID: 0, MODE: 1, VALUE: 2, SIDE: 3, BACKING: 4 };
 // KneeDropWall（腰壁・垂れ壁レコード）: 5 フィールド
 const KDW = { KEY: 0, HAS_KNEE: 1, KNEE_TOP: 2, HAS_DROP: 3, DROP_BOTTOM: 4 };
 
-// Opening: 24 フィールド（開口 — 建具・窓）
+// Opening: 25 フィールド（開口 — 建具・窓）
 const OP = {
   ID: 0, AXIS_CL: 1, WALL_SIDE: 2, IS_V: 3,
   REF_CL: 4, REF_OFF: 5, WIDTH: 6, CATEGORY: 7, SUB_TYPE: 8,
@@ -154,6 +154,7 @@ const OP = {
   FINISH: 19, MATERIAL_GLASS: 20, // 建具表: 仕上／材料・ガラス（自由入力文字列。空文字=未入力=null）
   FRAME_DEPTH: 21, // 見込み(mm)。0=未設定（heightと同じ規約。0mmの見込みは不正値のためhasフラグ不要）
   HARDWARE: 22, NOTE: 23, // 建具表: 金物／備考（自由入力文字列）
+  HANDLE_H: 24, // レバーハンドル取付高さ(mm)。0=未設定（heightと同じ規約）
 };
 
 // Opening.category 列挙値エンコード
@@ -402,7 +403,7 @@ function writeOpening(b, o) {
 
   const hasSillH = o.sillHeight != null;
 
-  b.startObject(24);
+  b.startObject(25);
   b.addFieldOffset(OP.ID,         sId,   0);
   b.addFieldOffset(OP.AXIS_CL,    sAxis, 0);
   b.addFieldInt8(OP.WALL_SIDE,    o.wallSide < 0 ? -1 : 1, 0);
@@ -427,6 +428,7 @@ function writeOpening(b, o) {
   b.addFieldFloat64(OP.FRAME_DEPTH,   o.frameDepth ?? 0, 0.0);
   b.addFieldOffset(OP.HARDWARE,       sHardware, 0);
   b.addFieldOffset(OP.NOTE,           sNote,     0);
+  b.addFieldFloat64(OP.HANDLE_H,      o.handleHeight ?? 0, 0.0);
   return b.endObject();
 }
 
@@ -1061,6 +1063,7 @@ function readOpening(bb, tablePos) {
     frameDepth:    r.f64(OP.FRAME_DEPTH)    || null,
     hardware:      r.str(OP.HARDWARE)       || null,
     note:          r.str(OP.NOTE)           || null,
+    handleHeight:  r.f64(OP.HANDLE_H)       || null,
   };
 }
 

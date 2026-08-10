@@ -161,6 +161,7 @@ export class Opening extends Shape {
     this.fixtureType = props?.fixtureType ?? null; // 建具記号 'AW'|'JW'|'SW'|'AD'|'SD'|'WD'|'WW'|null
     this.sillHeight  = props?.sillHeight  ?? null; // 窓台高さ(mm): FLからサッシ下端まで。窓カテゴリのみ意味を持つ
     this.height      = props?.height      ?? null; // 建具高さ(mm、開口下端から上端まで。null=未設定＝旧データ)
+    this.handleHeight = props?.handleHeight ?? null; // レバーハンドル取付高さ(mm、FLから。0以下/nullは未設定)
     this.finish        = props?.finish        ?? null; // 仕上（建具表の自由入力）
     this.materialGlass  = props?.materialGlass  ?? null; // 材料・ガラス（建具表の自由入力。記号別初期値あり）
     this.frameDepth     = props?.frameDepth     ?? null; // 見込み(mm、null=未設定)
@@ -178,6 +179,7 @@ export class Opening extends Shape {
       fixtureType: observable,
       sillHeight:  observable,
       height:      observable,
+      handleHeight: observable,
       finish:        observable,
       materialGlass: observable,
       frameDepth:    observable,

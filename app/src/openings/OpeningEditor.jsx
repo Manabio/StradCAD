@@ -15,9 +15,9 @@ import {
 import { openingTagOf, fixtureSymbolOf } from './openingNumbering.js';
 
 // 数値入力は絶対値化して確定する（幅・高さ・位置・窓台高さ共通の規約。図上のdim編集（onEditDim）・
-// numField の両方で使う）。height はさらに絶対値化後の0を不正値として未設定(null)に正規化する
-// （graphFbs.js OP.HEIGHT の「0=未設定」規約と統一。.claude/opening-model.md参照）。
-// 幅・高さ・窓台高さはフォームの数値入力欄を持たず、onEditDim（図上クリック編集）のみで編集する。
+// numField の両方で使う）。height/handleHeight はさらに絶対値化後の0を不正値として未設定(null)に
+// 正規化する（graphFbs.js OP.HEIGHT/OP.HANDLE_H の「0=未設定」規約と統一。.claude/opening-model.md参照）。
+// 幅・高さ・窓台高さ・レバーハンドル高さはフォームの数値入力欄を持たず、onEditDim（図上クリック編集）のみで編集する。
 function sanitizeHeightInput(v) {
   const n = Math.abs(v) || 0;
   return n === 0 ? null : n;
@@ -68,7 +68,8 @@ export const OpeningEditor = observer(function OpeningEditor({ graph, project, o
 
   const onEditDim = (dim, value) => {
     if (!dim.target) return;
-    let v = dim.target === 'height' ? sanitizeHeightInput(value) : (Math.abs(value) || 0);
+    let v = (dim.target === 'height' || dim.target === 'handleHeight')
+      ? sanitizeHeightInput(value) : (Math.abs(value) || 0);
     // 幅編集は「丸められるときは丸める／そもそも置けないときは弾く」の二段構え（壁が引けない
     // とき=findHostWallがnullのときは従来どおり幾何検証をスキップしてそのまま確定）。
     // maxOpeningWidthAt自体が既にMath.floorで整数化して返すため、ここで重ねて丸めない
@@ -154,8 +155,20 @@ export const OpeningEditor = observer(function OpeningEditor({ graph, project, o
 
   return (
     <div style={{ padding: 16, overflowY: 'auto' }}>
-      <div style={{ marginBottom: 12, border: '1px solid #e2e8f0', borderRadius: 4, padding: 4, display: 'flex', justifyContent: 'center', overflowX: 'auto' }}>
+      <div style={{ marginBottom: 12, border: '1px solid #e2e8f0', borderRadius: 4, padding: 4, position: 'relative', display: 'flex', justifyContent: 'center', overflowX: 'auto' }}>
         <AutoScaledFigure primitives={figure} onEditDim={onEditDim} {...FIGURE_FRAME} />
+        {entry?.mechanism === OpeningMechanism.SWING && (
+          <div style={{ position: 'absolute', top: 4, right: 4, display: 'flex', gap: 4 }}>
+            <button type="button" style={{ fontSize: 11, padding: '2px 6px' }}
+              onClick={() => commitEdit(() => runInAction(() => { opening.hingeSide = -opening.hingeSide; }))}>
+              吊元反転
+            </button>
+            <button type="button" style={{ fontSize: 11, padding: '2px 6px' }}
+              onClick={() => commitEdit(() => runInAction(() => { opening.swingSide = -opening.swingSide; }))}>
+              開く方向反転
+            </button>
+          </div>
+        )}
       </div>
 
       <div style={rowStyle}>
@@ -212,20 +225,6 @@ export const OpeningEditor = observer(function OpeningEditor({ graph, project, o
         <input type="number" style={inputStyle} value={opening.refOffset}
           onChange={numField('refOffset')} onFocus={onOffsetFocus} onBlur={onOffsetBlur} />
       </div>
-
-      {entry?.mechanism === OpeningMechanism.SWING && (
-        <div style={rowStyle}>
-          <span style={labelStyle}>開き方</span>
-          <button type="button" style={{ marginRight: 8 }}
-            onClick={() => commitEdit(() => runInAction(() => { opening.hingeSide = -opening.hingeSide; }))}>
-            ヒンジ反転
-          </button>
-          <button type="button"
-            onClick={() => commitEdit(() => runInAction(() => { opening.swingSide = -opening.swingSide; }))}>
-            開く方向反転
-          </button>
-        </div>
-      )}
 
       <button
         onClick={() => { removeOpeningWithUndo(graph, project, opening); mode.selectOpening(null); }}
