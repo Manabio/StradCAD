@@ -24,9 +24,10 @@
 ## height<=0（null/0/負値）は不正値としてカタログ既定にフォールバックする
 `Opening.height`は物理的に0mm以下があり得ない（窓台高さ`sillHeight`と違い、0mmが正当な値になるケースが無い）。FBS（`graphFbs.js` OP.HEIGHT）は「0=未設定」を既存の規約として持つため、この規約を負値にも広げてモデル層全体に一本化する——`openings/openingNumbering.js`の`effectiveHeight`は`h>0`を明示チェックし、UIを経由しない経路（復元データ・直接代入）からの負値混入でも姿図（rectの高さ）が壊れないよう防御する。入力側（`OpeningEditor.jsx`の幅・高さ・位置・図上dim編集）は数値入力を絶対値化して確定する。窓台高さ0mm=掃き出し窓とは異なりheightの0/負値は常に無効。`frameDepth`（見込み）も同じ理由・同じ規約（0=不正値=null）で扱う。
 
-## 建具表項目: 導出の「取付箇所」 vs 永続の5フィールド
+## 建具表項目: 導出の「取付箇所」 vs 永続の6フィールド
 建具表の項目のうち「取付箇所」（隣接部屋名）だけは**永続化しない導出値**——`openings/openingRoomLabel.js`の`openingMountLocation`が呼び出し時点のgraphトポロジー（`findHostWall`で得たホスト壁＋`finish/edgeClassify.js`の`buildCellToRoom`/`worldToCell`）から毎回計算する。部屋名や間取りが変わればOpening側は無編集のまま表示だけ追随する（採番の`project.openingNumberIndex`と同じ「導出は保存しない」思想）。隣接部屋の判定ロジックは`edgeGeometry`（境界エッジのサンプリング方式：軸直交方向へ±10mmの点をセル化→`cellToRoom`で引く）を踏襲し、新しい判定方式を作らない。
-一方`finish`/`materialGlass`/`frameDepth`/`hardware`/`note`はユーザー入力の**永続フィールド**（`Opening`本体・FBS末尾追加）。導出値と永続値を混在させないのは、モード境界のundo・全階反映の設計（上記「番号は導出のみ」節）と同じ理由——導出値をentityに書き戻すと、境界処理にgraph変更が紛れ込みundoエントリが必要になってしまう。
+一方`finish`/`materialGlass`/`frameDepth`/`hardware`/`note`/`handleHeight`はユーザー入力の**永続フィールド**（`Opening`本体・FBS末尾追加）。導出値と永続値を混在させないのは、モード境界のundo・全階反映の設計（上記「番号は導出のみ」節）と同じ理由——導出値をentityに書き戻すと、境界処理にgraph変更が紛れ込みundoエントリが必要になってしまう。
+`handleHeight`（レバーハンドル取付高さ）は`height`と同じ「0以下/null=未設定」規約で既定1050mmへフォールバックする。`note`（備考）は`openingCatalog.js`の`defaultNoteFor(category, mechanism)`（建具×SWINGのみ'レバーハンドル'、窓は常にnull）が唯一のマスタで、`materialGlass`と同じ「配置時に設定・種別変更時は未編集なら差し替え」規則（`noteAfterSubTypeChange`）で扱う。
 
 ## 記号丸の配置と採番の鮮度
 建具記号丸（円に直径横線・上段記号／下段採番）の配置計算は`openings/openingTagPlacement.js`が純関数で担い、`renderer/OpeningTagLayer.jsx`はviewport由来のpx→mm換算とKonva描画・クリック配線のみを行う。窓は壁面から室内側へオフセット、開き戸は動作扇形の重心に置く。反転（円弧同士が重なる場合の壁軸鏡映）は位置だけでなく退避方向（u/v基底）も一緒に鏡映する——位置だけ鏡映すると退避方向が元の（壁・扉側へ戻る）向きのままになるため。重なる場合は決定的な順序で退避先を探し、見つからなければ元の位置を返す（配置失敗を握りつぶさない）。障害物は壁の材範囲と開き戸自身の動作扇形のみ——部屋名・寸法・構造部材は対象外（今後の検討課題）。

@@ -9,6 +9,7 @@ import { observable } from 'mobx';
 import {
   collectFloorOpeningGroups, assignOpeningNumbers, applyOpeningTags, renumberOpenings,
   openingGroupsOnFloor, fixtureSymbolOf, openingTagOf, effectiveHeight, openingTagPartsOf,
+  effectiveHandleHeight, DEFAULT_HANDLE_HEIGHT, openingSignature,
 } from './openingNumbering.js';
 
 function tagOfOpeningId(groups, id) {
@@ -145,6 +146,35 @@ test('effectiveHeight: height=-500（負値）も不正値としてカタログ�
   const h = effectiveHeight(opening);
   assert.ok(h > 0, 'effectiveHeightは常に正値を返すはず');
   assert.equal(h, 1170, 'doubleSlidingのカタログ既定(1170)にフォールバックするはず');
+});
+
+// ---- effectiveHandleHeight: 未設定・不正値はDEFAULT_HANDLE_HEIGHTへフォールバックする ----
+test('effectiveHandleHeight: handleHeight未設定(null)ならDEFAULT_HANDLE_HEIGHT(1050)を返す', () => {
+  const opening = makeOpening('a', {});
+  assert.equal(effectiveHandleHeight(opening), DEFAULT_HANDLE_HEIGHT);
+});
+
+test('effectiveHandleHeight: handleHeightが設定されていればその値を返す', () => {
+  const opening = makeOpening('a', {});
+  opening.handleHeight = 900;
+  assert.equal(effectiveHandleHeight(opening), 900);
+});
+
+test('effectiveHandleHeight: handleHeight=-300（負値）も不正値としてDEFAULT_HANDLE_HEIGHTへフォールバックする', () => {
+  const opening = makeOpening('a', {});
+  opening.handleHeight = -300;
+  assert.equal(effectiveHandleHeight(opening), DEFAULT_HANDLE_HEIGHT);
+});
+
+// ---- 回帰: 吊元違いは同一グループ（採番同一）——openingSignatureはhingeSide/swingSideを含まない ----
+test('openingSignature: hingeSide/swingSideだけが異なる2つの開口はsignatureが一致する（吊元違いは同一グループ・採番同一）', () => {
+  const a = makeOpening('a', { category: 'fitting', subType: 'singleSwing', width: 800, height: 2000, sillHeight: null });
+  const b = makeOpening('b', { category: 'fitting', subType: 'singleSwing', width: 800, height: 2000, sillHeight: null });
+  a.hingeSide = -1; a.swingSide = 1;
+  b.hingeSide = 1;  b.swingSide = -1;
+
+  assert.equal(openingSignature(a), openingSignature(b),
+    'hingeSide/swingSideは採番signatureに含まれないため、吊元・開く方向が逆でも同一グループ（同一タグ）になるはず');
 });
 
 // ---- 失敗系: height=null（旧データ）はカタログ既定にフォールバックし、同値の明示データと同一グループ・同一タグになる ----
