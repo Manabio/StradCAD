@@ -612,7 +612,7 @@ export function usePointerInteraction({
   // ---- スナップ & 近傍CL/壁/開口 計算 ----
   // 候補解決は snap.js の resolvePointerTargets に一本化（App側は setState への反映のみ）。
   function updateSnap(clientX, clientY) {
-    const r = resolvePointerTargets(graph, viewport, clientX, clientY, { width: size.width, height: size.height, appMode });
+    const r = resolvePointerTargets(graph, viewport, clientX, clientY, { width: size.width, height: size.height, appMode, columnAxisMode });
     setSnapPoint(r.snap);
     setNearCL(r.nearCL);
     setNearCLEndpoint(r.nearCLEndpoint);

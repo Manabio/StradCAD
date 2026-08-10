@@ -6,7 +6,9 @@ import { DIMENSION_LINE_WEIGHT } from './dimensionStyle.js';
 import { gutterEdgeCoord, labelCircle, dimensionRow } from './gutterPrimitives.jsx';
 import { INSET } from '../layout.js';
 import {
-  gridLineBounds, offsetMm, columnAxisPush, buildColumnAxisAnchors, columnAxisLabelCoords,
+  gridLineBounds, columnAxisPush, buildColumnAxisAnchors, columnAxisLabelCoords,
+  NUM_FONT_PX, TEXT_GAP_PX,
+  drawingAreaBounds, isCenterDimensionTarget, rowDotIds, buildCenterRowAnchors,
 } from './gutterLabelHits.js';
 
 // ================================================================
@@ -136,7 +138,7 @@ const GridDimensions = observer(({ graph, viewport, width, height }) => {
 // 両方の境界に届く中心線の区間は両行に重複して出るため、TOP/LEFT を優先側として
 // BOTTOM/RIGHT 側では同一区間（起点・終点CLが同一）の数値表示を抑制する。
 // どちらの境界にも届かない中心線、または届いてはいるがその行の基準線（lineCoord）自体が
-// 描画エリア（ガター内側の論理範囲）の外に出てしまっている中心線（buildRowAnchors が
+// 描画エリア（ガター内側の論理範囲）の外に出てしまっている中心線（buildCenterRowAnchors が
 // areaBounds 外なら anchors を空にする → 同じ経路に合流）は、自身の中点付近に部屋内書き
 // フォールバックを表示する。連鎖した部屋内寸法の一部だけが倍率で消えると不自然なため、
 // LODに関わらず常時表示する。
@@ -146,11 +148,8 @@ const GridDimensions = observer(({ graph, viewport, width, height }) => {
 // 中心線自身の張り出し線分からの距離で計算することで、見た目上パターンが連続して見えるようにする。
 // ================================================================
 
-const MIN_GAP_CM         = 1; // 建物外端と寸法線の最小紙面距離。これを割ったら部屋内書きへ退避
 const DOT_RADIUS_PX      = 2;
-const NUM_FONT_PX        = 11;
 const FALLBACK_FONT_PX   = 10;
-const TEXT_GAP_PX        = 2;
 const LINE_COLOR         = '#000000';
 
 // 中心線自身の見た目（CenterLinesLayer の非ラベルCL描画と同じにする）
@@ -161,99 +160,13 @@ const CL_LEG_PERIOD  = CL_LEG_DASH.reduce((a, b) => a + b, 0);
 
 function positiveMod(n, m) { return ((n % m) + m) % m; }
 
-// 「実画面で1cm」相当のワールド距離（mm）。offsetMm（gutterLabelHits.js）と同じく scaleDenominator に比例し、
-// 画面px一定（ズーム非依存）。建物外端と寸法線の最小離隔の判定に使う。
-function minGapMm(viewport) {
-  return MIN_GAP_CM * 10 * viewport.scaleDenominator;
-}
-
-// 中心線寸法の基準線(lineCoord)を算出する単一の真実源。
-// - 通常域: 建物外5cm(offsetMm)を維持。
-// - クッションゾーン: ガター側へ最も近い要素（near=寸法値の外端 / far=寸法線そのもの）が
-//   ガター内端(areaBounds=INSET内端)から「寸法線↔寸法値の離れ」(reach)以上内側に留まるよう
-//   lineCoord をクランプする。クランプ境界は画面固定の INSET 由来なので、パンに自然に追従する
-//   （詰める量＝パンニング量依存）。
-// - 建物内移動: 建物外端(boundary)と lineCoord の距離が minGapMm を割ったら null を返し、
-//   呼び出し元はその行を捨てて部屋内書きフォールバックへ回す。
-function centerLineCoord(d, boundary, viewport, areaBounds) {
-  const isNear  = d.side === DimensionSide.TOP || d.side === DimensionSide.LEFT;
-  const rawLine = isNear ? boundary - offsetMm(viewport) : boundary + offsetMm(viewport);
-  const reach   = (NUM_FONT_PX + TEXT_GAP_PX) / viewport.scaleX; // 寸法線↔寸法値の離れ
-  const guInner = d.axis === 'X'
-    ? (isNear ? areaBounds.yMin : areaBounds.yMax)
-    : (isNear ? areaBounds.xMin : areaBounds.xMax);
-  // near は寸法値(lineCoord-reach)がガター側に出るため線をさらに reach 内側へ、
-  // far は寸法線自身がガター側のため reach 内側へクランプする。
-  const lineCoord = isNear
-    ? Math.max(rawLine, guInner + 2 * reach)
-    : Math.min(rawLine, guInner - reach);
-  if (Math.abs(boundary - lineCoord) < minGapMm(viewport)) return null;
-  return lineCoord;
-}
-
-// 梁芯（discipline:'fuse'）は中心線（discipline:'arch'）と同じ寸法処理を共用するが、構造モード
-// （appMode==='structure'）以外では対象外にする——CenterLinesLayer の描画スキップ（appMode限定表示）
-// と寸法行の出し分けを一致させ、非表示の線が寸法だけ出る食い違いを防ぐ。
-// 逆に構造モードでは意匠中心線（discipline:'arch'）を対象外にする——CenterLinesLayer が同モードで
-// 意匠CLの描画をスキップするのと対にする（非表示の線に寸法だけ出る食い違いを防ぐ、上と同じ理由の逆方向）。
-function isCenterDimensionTarget(cl, appMode) {
-  if (cl.labeled || cl.lineType === 'dashed') return false;
-  if (appMode === 'structure') return cl.discipline === Discipline.FUSE;
-  return cl.discipline === Discipline.ARCH;
-}
-
-function segKey(seg) { return `${seg.from.id}:${seg.to.id}`; }
-
-// 描画エリア（ガター内側・論理上の表示領域）のワールド座標範囲を返す。
-function drawingAreaBounds(viewport, width, height) {
-  const a = viewport.screenToWorld(INSET.left, INSET.top);
-  const b = viewport.screenToWorld(width - INSET.right, height - INSET.bottom);
-  return {
-    xMin: Math.min(a.x, b.x), xMax: Math.max(a.x, b.x),
-    yMin: Math.min(a.y, b.y), yMax: Math.max(a.y, b.y),
-  };
-}
-
-// gridLineBounds は renderer/gutterLabelHits.js（純関数レイヤ。react-konva非依存）へ移設済み。
-// GRID_LINE_INSET/GRID_NUM_INSET/GRID_B_LINE_INSET の値は同ファイルの内部定数と揃える必要がある
-// （GridDimensions の lineY/lineX と同じ式で使う。位置がずれるとクランプ後の見た目も狂うため）。
-
-// 1行（TOP/BOTTOM/LEFT/RIGHT）分のアンカー（通り芯CL + 境界に到達している中心線CL）を
-// value 昇順で返す。境界に到達しているかは clExtent（オーバーハング込み）で判定する。
-// この行の基準線（lineCoord）が描画エリアの外に出る場合は、外書き自体を諦めて
-// 中心線を部屋内書きフォールバックに回すため、アンカーを空にする。
-function buildRowAnchors(d, graph, viewport, areaBounds, appMode) {
-  // floorSwapManager.deactivate() がフロアを IDB にスワップアウトする際、
-  // activePlaneId 切替前の一瞬だけ graph.clearFloorData() 後の状態（CENTER 寸法行が0件）を
-  // 観測してしまうことがある（正規のスワップアウト動作）。d が無い場合は単に何も描かない。
-  if (!d) return { boundary: null, lineCoord: null, anchors: [] };
-  const boundary = d.centerBoundary;
-  if (boundary == null) return { boundary: null, lineCoord: null, anchors: [] };
-
-  const lineCoord = centerLineCoord(d, boundary, viewport, areaBounds);
-  if (lineCoord == null) return { boundary, lineCoord: null, anchors: [] };
-
-  const gridCLs = d.axis === 'X' ? graph.gridXs : graph.gridYs;
-  const myType  = d.axis === 'X' ? CenterLineType.VERTICAL : CenterLineType.HORIZONTAL;
-  const centerCLs = graph.centerLines.filter(cl => {
-    if (cl.centerLineType !== myType || !isCenterDimensionTarget(cl, appMode)) return false;
-    const ext = clExtent(cl, graph, viewport);
-    return !!ext && ext[0] <= boundary && boundary <= ext[1];
-  });
-  const anchors = [...gridCLs, ...centerCLs].sort((a, b) => a.value - b.value);
-  return { boundary, lineCoord, anchors };
-}
-
-// 隣接アンカー間のセグメント。両端が通り芯(labeled)のみの区間はGRID寸法に表示を委ねるため除外。
-function buildSegments(anchors) {
-  const segs = [];
-  for (let i = 0; i < anchors.length - 1; i++) {
-    const from = anchors[i], to = anchors[i + 1];
-    if (from.labeled && to.labeled) continue;
-    segs.push({ from, to, length: Math.round(to.effectiveValue - from.effectiveValue) });
-  }
-  return segs;
-}
+// minGapMm・drawingAreaBounds・centerLineCoord・isCenterDimensionTarget・buildRowAnchors
+// （旧名。→buildCenterRowAnchors）・rowDotIds（旧: buildSegments/segKey+dotIds算出）は
+// renderer/gutterLabelHits.js（純関数レイヤ。node:testからimport可能）へ移設済み——
+// snap.js（CENTER寸法「足」上のポインタヒット判定）と単一の真実源を共有するため。
+// gridLineBounds は同じ理由で以前から移設済み。GRID_LINE_INSET/GRID_NUM_INSET/GRID_B_LINE_INSET
+// の値は同ファイルの内部定数と揃える必要がある（GridDimensions の lineY/lineX と同じ式で使う。
+// 位置がずれるとクランプ後の見た目も狂うため）。
 
 // 中心線アンカー1本分の「足」(引出線) を、その中心線自身の張り出し線分パターンと
 // 位相が連続するように dashOffset を計算して返す。
@@ -268,14 +181,9 @@ function legDashOffset(cl, graph, viewport, boundary) {
 function buildRowElements(d, boundary, lineCoord, anchors, suppressKeys, viewport, graph) {
   if (!d || boundary == null || lineCoord == null || anchors.length === 0) return { elements: [], segKeys: new Set() };
 
-  const segs        = buildSegments(anchors);
-  const segKeys     = new Set(segs.map(segKey));
-  const visibleSegs = segs.filter(s => !suppressKeys.has(segKey(s)));
+  const { dotIds, segKeys, visibleSegs } = rowDotIds(anchors, suppressKeys);
   // 表示すべき区間が無い（中心線が1本も絡まない＝純グリッド区間のみ）場合は基準線も含めて何も描かない
   if (visibleSegs.length === 0) return { elements: [], segKeys };
-
-  const dotIds = new Set();
-  visibleSegs.forEach(s => { dotIds.add(s.from.id); dotIds.add(s.to.id); });
 
   const fontSize = NUM_FONT_PX / viewport.scaleX;
   const dotR     = DOT_RADIUS_PX / viewport.scaleX;
@@ -565,10 +473,10 @@ const CenterDimensions = observer(({ graph, viewport, width, height, columnAxisM
     ];
   }
 
-  const { boundary: topB,    lineCoord: topLC,    anchors: topA    } = buildRowAnchors(top,    graph, viewport, areaBounds, appMode);
-  const { boundary: bottomB, lineCoord: bottomLC, anchors: bottomA } = buildRowAnchors(bottom, graph, viewport, areaBounds, appMode);
-  const { boundary: leftB,   lineCoord: leftLC,   anchors: leftA   } = buildRowAnchors(left,   graph, viewport, areaBounds, appMode);
-  const { boundary: rightB,  lineCoord: rightLC,  anchors: rightA  } = buildRowAnchors(right,  graph, viewport, areaBounds, appMode);
+  const { boundary: topB,    lineCoord: topLC,    anchors: topA    } = buildCenterRowAnchors(top,    graph, viewport, areaBounds, appMode);
+  const { boundary: bottomB, lineCoord: bottomLC, anchors: bottomA } = buildCenterRowAnchors(bottom, graph, viewport, areaBounds, appMode);
+  const { boundary: leftB,   lineCoord: leftLC,   anchors: leftA   } = buildCenterRowAnchors(left,   graph, viewport, areaBounds, appMode);
+  const { boundary: rightB,  lineCoord: rightLC,  anchors: rightA  } = buildCenterRowAnchors(right,  graph, viewport, areaBounds, appMode);
 
   const topRes    = buildRowElements(top,    topB,    topLC,    topA,    new Set(),       viewport, graph);
   const bottomRes = buildRowElements(bottom, bottomB, bottomLC, bottomA, topRes.segKeys,  viewport, graph);

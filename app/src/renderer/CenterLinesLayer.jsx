@@ -1,7 +1,7 @@
 import { observer } from 'mobx-react-lite';
 import { Line, Circle } from 'react-konva';
 import { CenterLineType, DimensionSide, Discipline, centerLineKind } from '@core';
-import { overhangMm } from '../snap.js';
+import { nonLabeledClExtent } from '../snap.js';
 import { gutterEdgeCoord } from './gutterPrimitives.jsx';
 
 // ビューポートのワールド座標範囲 (フォールバック用)
@@ -34,18 +34,9 @@ export function clExtent(cl, graph, viewport, width, height) {
       ? [gutterEdgeCoord(viewport, width, height, DimensionSide.TOP),  gutterEdgeCoord(viewport, width, height, DimensionSide.BOTTOM)]
       : [gutterEdgeCoord(viewport, width, height, DimensionSide.LEFT), gutterEdgeCoord(viewport, width, height, DimensionSide.RIGHT)];
   } else {
-    // 中心線・補助線: 追加時に確定した extentLo/Hi を使用（既存CLは一切変更しない）
-    if (cl.extentLo == null || cl.extentHi == null) {
-      // extentLo/Hi 未設定（古いデータ等）→ labeled 直交CLのmin/maxにフォールバック
-      const vals = graph.centerLines
-        .filter(p => p.centerLineType === perpType && p.labeled)
-        .map(p => p.effectiveValue);
-      if (vals.length === 0) return null;
-      const overhang = overhangMm(viewport, cl.trim);
-      return [Math.min(...vals) - overhang, Math.max(...vals) + overhang];
-    }
-    const overhang = overhangMm(viewport, cl.trim);
-    return [cl.extentLo - overhang, cl.extentHi + overhang];
+    // 中心線・補助線: snapGeometry.js の nonLabeledClExtent へ委譲（重複実装を避ける。
+    // findNearestCenterLineEndpoint の「外寸法側」判定も同じ関数を使う）。
+    return nonLabeledClExtent(cl, graph, viewport);
   }
 }
 
