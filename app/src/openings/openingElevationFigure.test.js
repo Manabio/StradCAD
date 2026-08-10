@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { OpeningCategory } from '../core.js';
-import { findCatalogEntry } from './openingCatalog.js';
+import { findCatalogEntry, FITTING_CATALOG, WINDOW_CATALOG } from './openingCatalog.js';
 import { buildOpeningElevation } from './openingElevationFigure.js';
 
 // buildOpeningElevation は effectiveHeight(opening) 経由でしか height を読まないため、
@@ -228,4 +228,158 @@ test('buildOpeningElevation: handleHeight編集値がレバーハンドルの高
   const handleDim = primitives.find(p => p.type === 'dim' && p.target === 'handleHeight');
   assert.equal(handleDim.from, -900);
   assert.equal(handleDim.label, '900');
+});
+
+// ================================================================
+// 窓・扉バリエーション追加（実装仕様書 §6-c）: 新機構でもmechanismPrimitivesが例外を出さず、
+// 未対応の機構はラベル表示へフォールバックすることを確認する。
+// ================================================================
+
+// ---- (c) 全カタログエントリを総当たりし、buildOpeningElevationが例外を出さずプリミティブを返す ----
+test('buildOpeningElevation: FITTING_CATALOG/WINDOW_CATALOGの全エントリで例外を出さない', () => {
+  for (const entry of FITTING_CATALOG) {
+    const opening = makeOpening({
+      category: OpeningCategory.FITTING, subType: entry.key, width: entry.defaultWidth, height: entry.defaultHeight,
+      sillHeight: null, hingeSide: -1, swingSide: 1,
+    });
+    let primitives;
+    assert.doesNotThrow(() => { primitives = buildOpeningElevation(opening, { tag: null, entry }); }, `${entry.key}で例外`);
+    assert.ok(Array.isArray(primitives) && primitives.length > 0, `${entry.key}: 枠・寸法を含む最低限のプリミティブが返るはず`);
+  }
+  for (const entry of WINDOW_CATALOG) {
+    const opening = makeOpening({
+      category: OpeningCategory.WINDOW, subType: entry.key, width: entry.defaultWidth, height: entry.defaultHeight,
+      sillHeight: 800, hingeSide: -1, swingSide: 1,
+    });
+    let primitives;
+    assert.doesNotThrow(() => { primitives = buildOpeningElevation(opening, { tag: null, entry }); }, `${entry.key}で例外`);
+    assert.ok(Array.isArray(primitives) && primitives.length > 0, `${entry.key}: 枠・寸法を含む最低限のプリミティブが返るはず`);
+  }
+});
+
+// ---- 未実装機構(姿図)は種別ラベルのテキストへフォールバックする ----
+// §4実装完了によりFITTING_CATALOG/WINDOW_CATALOGの全エントリが姿図を持つため、フォールバック分岐
+// （mechanismPrimitives switchに一致しない機構）はカタログに存在しない合成entryで直接検証する。
+test('buildOpeningElevation: mechanismPrimitivesが未対応の機構は種別ラベルのテキストにフォールバックする', () => {
+  const entry = { key: 'yetToBeImplemented', label: '未実装種別', mechanism: 'notYetImplementedMechanism' };
+  const opening = makeOpening({ category: OpeningCategory.FITTING, subType: entry.key, width: 1600, height: 2000, sillHeight: null });
+  const primitives = buildOpeningElevation(opening, { tag: null, entry });
+  assert.ok(primitives.some(p => p.type === 'text' && p.text === entry.label));
+});
+
+// ---- 失敗系: 未知のsubType（entry=null）でも例外を出さず、枠・寸法のみ返す ----
+test('【失敗系】buildOpeningElevation: 未知のsubType（entry=null）でも例外を出さない', () => {
+  const opening = makeOpening({ category: OpeningCategory.WINDOW, subType: 'unknownType', width: 600, height: 900, sillHeight: 800 });
+  let primitives;
+  assert.doesNotThrow(() => { primitives = buildOpeningElevation(opening, { tag: null, entry: null }); });
+  assert.ok(primitives.some(p => p.type === 'rect'), '枠のrectは機構に関わらず描かれるはず');
+  assert.equal(primitives.filter(p => p.type === 'text').length, 0, 'entry=nullではラベルテキストも出ない（entry.labelが読めないため）・tagもnull');
+});
+
+// ================================================================
+// 窓・扉バリエーション追加 実装仕様書 §4（姿図）: 新機構の形状テスト
+// ================================================================
+
+// ---- 修正①: SLIDE_DOUBLE（引き違い窓）は召し合わせ縦線2本＋短い水平矢印2本（ガラス斜線なし） ----
+test('buildOpeningElevation: SLIDE_DOUBLE（引き違い窓）は召し合わせ框の縦線2本＋障子ごとの水平矢印2本を含む', () => {
+  const entry = findCatalogEntry('window', 'doubleSliding');
+  const opening = makeOpening({ width: 1690, height: 1170, sillHeight: 800, subType: 'doubleSliding' });
+  const primitives = buildOpeningElevation(opening, { tag: null, entry });
+
+  const verticalLines = primitives.filter(p => p.type === 'line' && p.x1 === p.x2);
+  assert.equal(verticalLines.length, 2, '召し合わせ框の縦線が2本あるはず');
+  assert.deepEqual(verticalLines.map(l => l.x1).sort((a, b) => a - b), [opening.width / 2 - 20, opening.width / 2 + 20]);
+
+  const arrows = primitives.filter(p => p.type === 'arrow');
+  assert.equal(arrows.length, 2, '障子ごとの水平矢印が2本あるはず');
+  assert.ok(arrows.every(a => a.y1 === a.y2), '矢印は水平のはず');
+
+  assert.equal(primitives.some(p => p.type === 'line' && p.x1 !== p.x2 && p.y1 !== p.y2), false, 'ガラス斜線は描かないはず');
+});
+
+// ---- TILT（内倒し窓）は破線Vで、apexが下辺中央 ----
+test('buildOpeningElevation: TILT（内倒し窓）は破線Vで頂点が下辺中央', () => {
+  const entry = findCatalogEntry('window', 'hopper');
+  const opening = makeOpening({ width: 600, height: 500, sillHeight: 800, subType: 'hopper' });
+  const primitives = buildOpeningElevation(opening, { tag: null, entry });
+
+  const veeLines = primitives.filter(p => p.type === 'line' && p.dash === 'dashed');
+  assert.equal(veeLines.length, 2, '破線Vの2本があるはず');
+  const sillTop = -opening.sillHeight;
+  assert.ok(veeLines.every(l => l.x2 === opening.width / 2 && l.y2 === sillTop), '頂点は下辺中央(width/2, sillTop)のはず');
+});
+
+// ---- SLIDE_LAYOUT: fixパネルには中央にFIXテキスト、可動パネルには水平矢印 ----
+test('buildOpeningElevation: SLIDE_LAYOUT(singleSliding片引き窓)はfixパネルに中央FIXテキスト・可動パネルに矢印', () => {
+  const entry = findCatalogEntry('window', 'singleSliding');
+  const opening = makeOpening({ width: 1235, height: 1170, sillHeight: 800, subType: 'singleSliding' });
+  const primitives = buildOpeningElevation(opening, { tag: null, entry });
+
+  const fixText = primitives.find(p => p.type === 'text' && p.text === 'FIX');
+  assert.ok(fixText, 'FIXテキストが存在するはず');
+  const panelWidth = opening.width / 2;
+  assert.equal(fixText.x, panelWidth * 1.5, 'fixパネル(2枚目)の中央に配置されるはず');
+
+  assert.ok(primitives.some(p => p.type === 'arrow'), '可動パネル(1枚目)に矢印があるはず');
+
+  const dividers = primitives.filter(p => p.type === 'line' && p.x1 === p.x2);
+  assert.equal(dividers.length, 1, 'パネル境界の縦線はpanels.length-1=1本のはず');
+  assert.equal(dividers[0].x1, panelWidth);
+});
+
+// ---- PIVOT（縦軸回転窓）は一点鎖線の縦軸を含む ----
+test('buildOpeningElevation: PIVOT（縦軸回転窓）はwidth/2に一点鎖線の縦軸を含む', () => {
+  const entry = findCatalogEntry('window', 'pivot');
+  const opening = makeOpening({ width: 600, height: 900, sillHeight: 800, subType: 'pivot' });
+  const primitives = buildOpeningElevation(opening, { tag: null, entry });
+
+  const axis = primitives.find(p => p.type === 'line' && p.dash === 'center' && p.x1 === p.x2);
+  assert.ok(axis, '一点鎖線の縦軸があるはず');
+  assert.equal(axis.x1, opening.width / 2);
+
+  const dashedLines = primitives.filter(p => p.type === 'line' && p.dash === 'dashed');
+  assert.equal(dashedLines.length, 4, '菱形を構成する破線Vが2組(4本)あるはず');
+});
+
+// ---- SWING_DOUBLE（両開き戸/窓）は中央縦線1本＋一点鎖線Vが左右両leafぶん(4本)ある ----
+test('buildOpeningElevation: SWING_DOUBLE（両開き戸）は中央縦線1本＋一点鎖線V4本（両leafぶん）', () => {
+  const entry = findCatalogEntry('fitting', 'doubleSwing');
+  const opening = makeOpening({ category: OpeningCategory.FITTING, width: 1600, height: 2000, sillHeight: null, subType: 'doubleSwing' });
+  const primitives = buildOpeningElevation(opening, { tag: null, entry });
+
+  const solidCenterLine = primitives.find(p => p.type === 'line' && p.dash == null && p.x1 === p.x2 && p.x1 === opening.width / 2);
+  assert.ok(solidCenterLine, '中央縦線(dashなし)があるはず');
+
+  const centerDashLines = primitives.filter(p => p.type === 'line' && p.dash === 'center');
+  assert.equal(centerDashLines.length, 4, '左右2leafぶんの一点鎖線Vで4本のはず');
+});
+
+// ---- FIRE_DOOR: fireLeaves:2はSWING_DOUBLEと同形（中央縦線＋一点鎖線4本）、1はSWINGと同形（一点鎖線2本） ----
+test('buildOpeningElevation: FIRE_DOOR(両開き)はSWING_DOUBLEと同形、(片開き)はSWINGと同形', () => {
+  const doubleEntry = findCatalogEntry('fitting', 'fireDoorDouble');
+  const doubleOpening = makeOpening({ category: OpeningCategory.FITTING, width: 1800, height: 2000, sillHeight: null, subType: 'fireDoorDouble' });
+  const doublePrims = buildOpeningElevation(doubleOpening, { tag: null, entry: doubleEntry });
+  assert.equal(doublePrims.filter(p => p.type === 'line' && p.dash === 'center').length, 4);
+  assert.ok(doublePrims.some(p => p.type === 'line' && p.dash == null && p.x1 === p.x2));
+
+  const singleEntry = findCatalogEntry('fitting', 'fireDoorSingle');
+  const singleOpening = makeOpening({ category: OpeningCategory.FITTING, width: 900, height: 2000, sillHeight: null, subType: 'fireDoorSingle', hingeSide: -1 });
+  const singlePrims = buildOpeningElevation(singleOpening, { tag: null, entry: singleEntry });
+  assert.equal(singlePrims.filter(p => p.type === 'line' && p.dash === 'center').length, 2);
+});
+
+// ---- FOLD/FIRE_FOLD: パネル分割縦線(n-1本)＋各パネルに破線V ----
+test('buildOpeningElevation: FOLD(折れ戸)は分割縦線1本、FIRE_FOLD(常時開放式防火折戸)は分割縦線3本', () => {
+  const foldEntry = findCatalogEntry('fitting', 'folding');
+  const foldOpening = makeOpening({ category: OpeningCategory.FITTING, width: 800, height: 2000, sillHeight: null, subType: 'folding' });
+  const foldPrims = buildOpeningElevation(foldOpening, { tag: null, entry: foldEntry });
+  const foldDividers = foldPrims.filter(p => p.type === 'line' && p.dash == null && p.x1 === p.x2);
+  assert.equal(foldDividers.length, 1);
+
+  const fireFoldEntry = findCatalogEntry('fitting', 'fireFold90');
+  const fireFoldOpening = makeOpening({ category: OpeningCategory.FITTING, width: 1600, height: 2000, sillHeight: null, subType: 'fireFold90' });
+  const fireFoldPrims = buildOpeningElevation(fireFoldOpening, { tag: null, entry: fireFoldEntry });
+  const fireFoldDividers = fireFoldPrims.filter(p => p.type === 'line' && p.dash == null && p.x1 === p.x2);
+  assert.equal(fireFoldDividers.length, 3);
+  assert.equal(fireFoldPrims.filter(p => p.type === 'line' && p.dash === 'dashed').length, 8, '4パネル×V2本=8本のはず');
 });

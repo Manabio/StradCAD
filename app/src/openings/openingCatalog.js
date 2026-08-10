@@ -13,40 +13,130 @@ export const OpeningMechanism = Object.freeze({
   FOLD:         'fold',        // 折れ戸・折りたたみ窓
   FREE:         'free',        // 自由扉（自由蝶番）
   FIXED:        'fixed',       // 開閉なし
-  HUNG:         'hung',
-  AWNING:       'awning',
-  TILT:         'tilt',
-  LOUVER:       'louver',
-  PIVOT:        'pivot',
+  HUNG:         'hung',        // 上げ下げ窓
+  AWNING:       'awning',      // 横すべり出し窓
+  TILT:         'tilt',        // 内倒し窓
+  LOUVER:       'louver',      // ガラスルーバー窓
+  PIVOT:        'pivot',       // 縦軸回転窓
+  SWING_DOUBLE: 'swingDouble',      // 両開き戸・両開き窓
+  SWING_CHILD:  'swingChild',       // 親子扉
+  SWING_IN:     'swingIn',          // 内開き窓
+  FREE_DOUBLE:  'freeDouble',       // 自由両開き扉
+  SHUTTER:      'shutter',          // シャッター
+  OVERHEAD:     'overhead',         // オーバーヘッドドア
+  EMERGENCY:    'emergency',        // 非常用進入口
+  FIRE_DOOR:    'fireDoor',         // 常時開放式防火戸
+  FIRE_FOLD:    'fireFold',         // 常時開放式防火折戸
+  SLIDE_LAYOUT: 'slideLayout',      // 片引き/引き分け/両袖片引き/自由片引き/多枚建て引違い
+  PROJECT_V:    'projectVertical',  // 縦すべり出し窓
+  PROJECT_OUT:  'projectOut',       // 突出し窓
+  TILT_OUT:     'tiltOut',          // 外倒し窓
+  PIVOT_H:      'pivotHorizontal',  // 横軸回転窓
+  DREH_KIPP:    'drehKipp',         // ドレーキップ窓
+  AWNING_MULTI: 'awningMulti',      // オーニング窓
+  GARARI:       'garari',           // ガラリ（固定）
+  GLASS_BLOCK:  'glassBlock',       // ガラスブロック
 });
 
-// このフェーズで実描画を実装する機構。他は壁開口（ギャップ）のみ描画し、記号は未実装。
+// 吊元(hingeSide)・開き勝手(swingSide)を持つ機構の集合（唯一の定義箇所）。OpeningEditor.jsx の
+// 「吊元反転/開く方向反転」ボタン表示条件、openingEdit.js の openDirForMechanism 再計算対象判定
+// （種別変更時）が参照する。
+export const HINGED_MECHANISMS = new Set([
+  OpeningMechanism.SWING,
+  OpeningMechanism.SWING_DOUBLE,
+  OpeningMechanism.SWING_CHILD,
+  OpeningMechanism.SWING_IN,
+  OpeningMechanism.FREE,
+  OpeningMechanism.FREE_DOUBLE,
+  OpeningMechanism.PROJECT_V,
+  OpeningMechanism.DREH_KIPP,
+  OpeningMechanism.FIRE_DOOR,
+  OpeningMechanism.FIRE_FOLD,
+]);
+
+// このフェーズで平面記号を実装する機構（姿図は別フェーズ。未実装の姿図はラベル表示へ
+// フォールバックする＝openingElevationFigure.js mechanismPrimitives の既定分岐）。
 export const IMPLEMENTED_MECHANISMS = new Set([
   OpeningMechanism.SWING,
   OpeningMechanism.SLIDE_DOUBLE,
+  OpeningMechanism.SLIDE_SINGLE,
+  OpeningMechanism.FOLD,
+  OpeningMechanism.FREE,
+  OpeningMechanism.FIXED,
+  OpeningMechanism.HUNG,
+  OpeningMechanism.AWNING,
+  OpeningMechanism.TILT,
+  OpeningMechanism.LOUVER,
+  OpeningMechanism.PIVOT,
+  OpeningMechanism.SWING_DOUBLE,
+  OpeningMechanism.SWING_CHILD,
+  OpeningMechanism.SWING_IN,
+  OpeningMechanism.FREE_DOUBLE,
+  OpeningMechanism.SHUTTER,
+  OpeningMechanism.OVERHEAD,
+  OpeningMechanism.EMERGENCY,
+  OpeningMechanism.FIRE_DOOR,
+  OpeningMechanism.FIRE_FOLD,
+  OpeningMechanism.SLIDE_LAYOUT,
+  OpeningMechanism.PROJECT_V,
+  OpeningMechanism.PROJECT_OUT,
+  OpeningMechanism.TILT_OUT,
+  OpeningMechanism.PIVOT_H,
+  OpeningMechanism.DREH_KIPP,
+  OpeningMechanism.AWNING_MULTI,
+  OpeningMechanism.GARARI,
+  OpeningMechanism.GLASS_BLOCK,
 ]);
 
 export const FITTING_CATALOG = [
-  { key: 'singleSwing',   label: '片開き戸',   mechanism: OpeningMechanism.SWING,        wallKinds: ['interior'],            defaultWidth: 800,  defaultHeight: 2000 },
-  { key: 'sliding',       label: '引き戸',     mechanism: OpeningMechanism.SLIDE_SINGLE, wallKinds: ['interior', 'exterior'], defaultWidth: 800,  defaultHeight: 2000 },
-  { key: 'doubleSliding', label: '引き違い戸', mechanism: OpeningMechanism.SLIDE_DOUBLE, wallKinds: ['interior', 'exterior'], defaultWidth: 1600, defaultHeight: 2000 },
-  { key: 'folding',       label: '折れ戸',     mechanism: OpeningMechanism.FOLD,         wallKinds: ['interior'],            defaultWidth: 800,  defaultHeight: 2000 },
-  { key: 'swingDoor',     label: '開き戸',     mechanism: OpeningMechanism.SWING,        wallKinds: ['interior'],            defaultWidth: 800,  defaultHeight: 2000 },
-  { key: 'door',          label: 'ドア',       mechanism: OpeningMechanism.SWING,        wallKinds: ['exterior'],            defaultWidth: 900,  defaultHeight: 2000 },
-  { key: 'swing',         label: '開き',       mechanism: OpeningMechanism.SWING,        wallKinds: ['exterior'],            defaultWidth: 900,  defaultHeight: 2000 },
-  { key: 'freeDoor',      label: '自由扉',     mechanism: OpeningMechanism.FREE,         wallKinds: ['exterior'],            defaultWidth: 900,  defaultHeight: 2000 },
+  { key: 'singleSwing',   label: '片開き戸',     mechanism: OpeningMechanism.SWING,        wallKinds: ['interior'],            defaultWidth: 800,  defaultHeight: 2000 },
+  { key: 'sliding',       label: '引き戸',       mechanism: OpeningMechanism.SLIDE_SINGLE, wallKinds: ['interior', 'exterior'], defaultWidth: 800,  defaultHeight: 2000 },
+  { key: 'doubleSliding', label: '引き違い戸',   mechanism: OpeningMechanism.SLIDE_DOUBLE, wallKinds: ['interior', 'exterior'], defaultWidth: 1600, defaultHeight: 2000 },
+  { key: 'folding',       label: '折れ戸',       mechanism: OpeningMechanism.FOLD,         wallKinds: ['interior'],            defaultWidth: 800,  defaultHeight: 2000 },
+  { key: 'swingDoor',     label: '開き戸',       mechanism: OpeningMechanism.SWING,        wallKinds: ['interior'],            defaultWidth: 800,  defaultHeight: 2000 },
+  { key: 'door',          label: 'ドア',         mechanism: OpeningMechanism.SWING,        wallKinds: ['exterior'],            defaultWidth: 900,  defaultHeight: 2000 },
+  { key: 'swing',         label: '開き',         mechanism: OpeningMechanism.SWING,        wallKinds: ['exterior'],            defaultWidth: 900,  defaultHeight: 2000 },
+  { key: 'freeDoor',      label: '自由片開き扉', mechanism: OpeningMechanism.FREE,         wallKinds: ['interior', 'exterior'], defaultWidth: 900,  defaultHeight: 2000 },
+  { key: 'doubleSwing',   label: '両開き戸',                     mechanism: OpeningMechanism.SWING_DOUBLE, wallKinds: ['interior', 'exterior'], defaultWidth: 1600, defaultHeight: 2000 },
+  { key: 'parentChild',   label: '親子扉',                       mechanism: OpeningMechanism.SWING_CHILD,  wallKinds: ['interior', 'exterior'], defaultWidth: 1200, defaultHeight: 2000, childRatio: 0.3 },
+  { key: 'freeDouble',    label: '自由両開き扉',                 mechanism: OpeningMechanism.FREE_DOUBLE,  wallKinds: ['interior'],             defaultWidth: 1400, defaultHeight: 2000 },
+  { key: 'shutter',       label: 'シャッター',                   mechanism: OpeningMechanism.SHUTTER,      wallKinds: ['exterior'],             defaultWidth: 2000, defaultHeight: 2200 },
+  { key: 'overheadDoor',  label: 'オーバーヘッドドア',           mechanism: OpeningMechanism.OVERHEAD,     wallKinds: ['exterior'],             defaultWidth: 2600, defaultHeight: 2200 },
+  { key: 'emergencyEntry',label: '非常用進入口',                 mechanism: OpeningMechanism.EMERGENCY,    wallKinds: ['exterior'],             defaultWidth: 750,  defaultHeight: 1200 },
+  { key: 'fireDoorDouble',      label: '常時開放式防火戸(両開き)',       mechanism: OpeningMechanism.FIRE_DOOR, wallKinds: ['interior'], defaultWidth: 1800, defaultHeight: 2000, fireLeaves: 2, fireAngle: 90  },
+  { key: 'fireDoorSingle',      label: '常時開放式防火戸(片開き)',       mechanism: OpeningMechanism.FIRE_DOOR, wallKinds: ['interior'], defaultWidth: 900,  defaultHeight: 2000, fireLeaves: 1, fireAngle: 90  },
+  { key: 'fireDoorDouble180',   label: '常時開放式防火戸(両開き180度)',  mechanism: OpeningMechanism.FIRE_DOOR, wallKinds: ['interior'], defaultWidth: 1800, defaultHeight: 2000, fireLeaves: 2, fireAngle: 180 },
+  { key: 'fireDoorSingle180',   label: '常時開放式防火戸(片開き180度)',  mechanism: OpeningMechanism.FIRE_DOOR, wallKinds: ['interior'], defaultWidth: 900,  defaultHeight: 2000, fireLeaves: 1, fireAngle: 180 },
+  { key: 'fireFold90',          label: '常時開放式防火折戸(90度)',       mechanism: OpeningMechanism.FIRE_FOLD, wallKinds: ['interior'], defaultWidth: 1600, defaultHeight: 2000, fireAngle: 90  },
+  { key: 'fireFold180',         label: '常時開放式防火折戸(180度)',      mechanism: OpeningMechanism.FIRE_FOLD, wallKinds: ['interior'], defaultWidth: 1600, defaultHeight: 2000, fireAngle: 180 },
 ];
 
 export const WINDOW_CATALOG = [
   { key: 'doubleSliding', label: '引き違い窓',                         mechanism: OpeningMechanism.SLIDE_DOUBLE, defaultWidth: 1690, defaultHeight: 1170 },
-  { key: 'casement',      label: '開き窓',                             mechanism: OpeningMechanism.SWING,        defaultWidth: 600,  defaultHeight: 900  },
+  { key: 'casement',      label: '外開き窓',                           mechanism: OpeningMechanism.SWING,        defaultWidth: 600,  defaultHeight: 900  },
   { key: 'doubleHung',    label: '上げ下げ窓',                         mechanism: OpeningMechanism.HUNG,         defaultWidth: 600,  defaultHeight: 900  },
   { key: 'awning',        label: 'すべり出し窓',                       mechanism: OpeningMechanism.AWNING,       defaultWidth: 600,  defaultHeight: 500  },
   { key: 'fixed',         label: 'フィックス窓（FIX窓）',               mechanism: OpeningMechanism.FIXED,        defaultWidth: 600,  defaultHeight: 600  },
-  { key: 'hopper',        label: '倒し窓',                             mechanism: OpeningMechanism.TILT,         defaultWidth: 600,  defaultHeight: 500  },
-  { key: 'louver',        label: 'ルーバー窓',                         mechanism: OpeningMechanism.LOUVER,       defaultWidth: 600,  defaultHeight: 900  },
+  { key: 'hopper',        label: '内倒し窓',                           mechanism: OpeningMechanism.TILT,         defaultWidth: 600,  defaultHeight: 500  },
+  { key: 'louver',        label: 'ガラスルーバー窓',                   mechanism: OpeningMechanism.LOUVER,       defaultWidth: 600,  defaultHeight: 900  },
   { key: 'foldingWindow', label: '折りたたみ窓（フォールディング窓）', mechanism: OpeningMechanism.FOLD,         defaultWidth: 1600, defaultHeight: 1800 },
-  { key: 'pivot',         label: '回転窓',                             mechanism: OpeningMechanism.PIVOT,        defaultWidth: 600,  defaultHeight: 900  },
+  { key: 'pivot',         label: '縦軸回転窓',                         mechanism: OpeningMechanism.PIVOT,        defaultWidth: 600,  defaultHeight: 900  },
+  { key: 'doubleSliding3',    label: '引き違い窓（3枚建て）', mechanism: OpeningMechanism.SLIDE_LAYOUT, defaultWidth: 2550, defaultHeight: 1170, slideLayout: { tracks: 3, panels: [{ arrow: 'neg' }, { arrow: 'both' }, { arrow: 'pos' }] } },
+  { key: 'doubleSliding4',    label: '引き違い窓（4枚建て）', mechanism: OpeningMechanism.SLIDE_LAYOUT, defaultWidth: 3370, defaultHeight: 1170, slideLayout: { tracks: 2, panels: [{ arrow: 'neg' }, { arrow: 'neg' }, { arrow: 'pos' }, { arrow: 'pos' }] } },
+  { key: 'singleSliding',     label: '片引き窓',              mechanism: OpeningMechanism.SLIDE_LAYOUT, defaultWidth: 1235, defaultHeight: 1170, slideLayout: { tracks: 2, panels: [{ arrow: 'pos' }, { fix: true }] } },
+  { key: 'splitSliding',      label: '引き分け窓',            mechanism: OpeningMechanism.SLIDE_LAYOUT, defaultWidth: 2600, defaultHeight: 1170, slideLayout: { tracks: 2, panels: [{ fix: true }, { arrow: 'neg' }, { arrow: 'pos' }, { fix: true }] } },
+  { key: 'flankSliding',      label: '両袖片引き窓',          mechanism: OpeningMechanism.SLIDE_LAYOUT, defaultWidth: 2550, defaultHeight: 1170, slideLayout: { tracks: 2, panels: [{ arrow: 'pos' }, { fix: true }, { arrow: 'neg' }] } },
+  { key: 'bypassSliding',     label: '自由片引き窓',          mechanism: OpeningMechanism.SLIDE_LAYOUT, defaultWidth: 2550, defaultHeight: 1170, slideLayout: { tracks: 2, panels: [{ fix: true }, { arrow: 'both' }, { fix: true }] } },
+  { key: 'casementProjected', label: '縦すべり出し窓',        mechanism: OpeningMechanism.PROJECT_V,   defaultWidth: 600,  defaultHeight: 1100 },
+  { key: 'doubleCasement',    label: '両開き窓',              mechanism: OpeningMechanism.SWING_DOUBLE, defaultWidth: 1200, defaultHeight: 900  },
+  { key: 'inswing',           label: '内開き窓',              mechanism: OpeningMechanism.SWING_IN,     defaultWidth: 600,  defaultHeight: 900  },
+  { key: 'drehKipp',          label: 'ドレーキップ窓',        mechanism: OpeningMechanism.DREH_KIPP,    defaultWidth: 600,  defaultHeight: 1100 },
+  { key: 'pivotHorizontal',   label: '横軸回転窓',            mechanism: OpeningMechanism.PIVOT_H,      defaultWidth: 900,  defaultHeight: 600  },
+  { key: 'projectedOut',      label: '突出し窓',              mechanism: OpeningMechanism.PROJECT_OUT,  defaultWidth: 600,  defaultHeight: 500  },
+  { key: 'tiltOut',           label: '外倒し窓',              mechanism: OpeningMechanism.TILT_OUT,     defaultWidth: 600,  defaultHeight: 500  },
+  { key: 'awningMulti',       label: 'オーニング窓',          mechanism: OpeningMechanism.AWNING_MULTI, defaultWidth: 600,  defaultHeight: 1100 },
+  { key: 'garari',            label: 'ガラリ（固定）',        mechanism: OpeningMechanism.GARARI,       defaultWidth: 600,  defaultHeight: 600  },
+  { key: 'glassBlock',        label: 'ガラスブロック',        mechanism: OpeningMechanism.GLASS_BLOCK,  defaultWidth: 600,  defaultHeight: 600  },
 ];
 
 // 建具記号（材質×種別）。マスタは1箇所のみ（fixtureType の意味拡張。.claude/opening-model.md）。

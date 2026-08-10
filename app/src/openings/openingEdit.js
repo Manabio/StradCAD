@@ -17,10 +17,36 @@
 import { runInAction } from 'mobx';
 import { undoManager } from '../undoManager.js';
 import { OpeningCategory } from '../core.js';
-import { getFittingOptions, WINDOW_CATALOG, defaultFixtureSymbolFor, defaultOpeningHeight, defaultMaterialGlassFor, defaultNoteFor } from './openingCatalog.js';
+import { getFittingOptions, WINDOW_CATALOG, defaultFixtureSymbolFor, defaultOpeningHeight, defaultMaterialGlassFor, defaultNoteFor, OpeningMechanism } from './openingCatalog.js';
 import { findHostWall, validateOpeningPlacement, maxOpeningWidthAt, findOpeningsOnWall, swingSideTowardPerp, exteriorSideDir } from './openingGeometry.js';
 import { renumberOpenings } from './openingNumbering.js';
 import { ERR_OPENING_OUT_OF_WALL, ERR_OPENING_OVERLAP } from '../error.js';
+
+// 内開き系機構（室内側へ開く特性を持つ）。placeOpeningWithDefaults の swingSide 既定計算で、
+// 外壁の「常に室外側へ開く」既定より機構特性を優先するために参照する。
+const INWARD_OPEN_MECHANISMS = new Set([OpeningMechanism.SWING_IN, OpeningMechanism.DREH_KIPP]);
+
+/** mechanism が内開き系（SWING_IN/DREH_KIPP）なら開き方向(openDir)を反転する。それ以外はそのまま。 */
+export function openDirForMechanism(openDir, mechanism) {
+  return INWARD_OPEN_MECHANISMS.has(mechanism) ? -openDir : openDir;
+}
+
+/**
+ * swingSide既定値の唯一の定義箇所（placeOpeningWithDefaults・OpeningEditor.jsx onSubTypeChange
+ * の両方がこれを呼ぶ。二重定義しない）。壁が面する側（faceDir）へ開くのが既定だが、外壁境界
+ * （wallまたは境界の反対側の壁がisExteriorWall）は常に外開き（exteriorSideDir）、さらに
+ * mechanismが内開き系（SWING_IN/DREH_KIPP）ならopenDirForMechanismで室内側へ反転する。
+ * @param {object} wall ホスト壁
+ * @param {object} graph
+ * @param {number} centerCoord 実際に開口が置かれる位置（境界のsegmented判定に使う。.claude/opening-model.md参照）
+ * @param {number} hingeSide ±1
+ * @param {string|undefined} mechanism openingCatalog.js OpeningMechanism
+ * @returns {number} swingSide ±1
+ */
+export function defaultSwingSideFor(wall, graph, centerCoord, hingeSide, mechanism) {
+  const openDir = openDirForMechanism(exteriorSideDir(wall, graph, centerCoord) ?? wall.faceDir, mechanism);
+  return swingSideTowardPerp(wall.isVertical, hingeSide, openDir);
+}
 
 const EDITABLE = [
   'refOffset', 'width', 'height', 'subType', 'hingeSide', 'swingSide', 'fixtureType', 'sillHeight',
@@ -151,9 +177,7 @@ export function placeOpeningWithDefaults(graph, project, wall, worldPos, categor
   // 特定する——境界が長さ方向で外壁区間／隣室区間に分かれる（segmented）平面では、worldPos
   // ではなく実配置位置で判定しないと誤った区間の相手を拾う。.claude/opening-model.md 参照。
   const hingeSide = -1;
-  const faceDir = wall.faceDir;
-  const openDir = exteriorSideDir(wall, graph, centerCoord) ?? faceDir;
-  const swingSide = swingSideTowardPerp(wall.isVertical, hingeSide, openDir);
+  const swingSide = defaultSwingSideFor(wall, graph, centerCoord, hingeSide, entry.mechanism);
   // 備考欄の初期値は defaultNoteFor が唯一の定義箇所（materialGlassと同じ規約）。
   const note = defaultNoteFor(category, entry.mechanism);
   const opening = graph.addOpening(wall.axisCL, wallSide, wall.isVertical, refCL, refOffset, width, category, subType,
@@ -209,4 +233,16 @@ export function materialGlassAfterFixtureChange(currentValue, oldSymbol, newSymb
 export function noteAfterSubTypeChange(currentNote, category, oldMechanism, newMechanism) {
   const isUnedited = currentNote == null || currentNote === defaultNoteFor(category, oldMechanism);
   return isUnedited ? defaultNoteFor(category, newMechanism) : currentNote;
+}
+
+/**
+ * 種別（機構）を変更したときの swingSide 差し替え規則: materialGlassAfterFixtureChange・
+ * noteAfterSubTypeChange と同じ規則（現在値が旧機構の既定値(defaultSwingSideFor)と一致する
+ * ＝未編集の場合のみ新機構の既定値へ差し替える。ユーザーが「開く方向反転」ボタン等で
+ * 手動編集した値＝旧既定と異なる値は種別変更後も維持する）。
+ */
+export function swingSideAfterSubTypeChange(currentSwingSide, wall, graph, centerCoord, hingeSide, oldMechanism, newMechanism) {
+  const oldDefault = defaultSwingSideFor(wall, graph, centerCoord, hingeSide, oldMechanism);
+  const isUnedited = currentSwingSide === oldDefault;
+  return isUnedited ? defaultSwingSideFor(wall, graph, centerCoord, hingeSide, newMechanism) : currentSwingSide;
 }

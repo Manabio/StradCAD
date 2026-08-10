@@ -34,10 +34,23 @@
 `project.openingNumberIndex`（採番キャッシュ）は建物状態から導出するため、平面モードでは`App.jsx`が`graph.openings`の署名（`openingSignature`の結合文字列）を`reaction`で監視し、変化のたびに`renumberOpenings`で自階の採番を再計算する——`autorun`ではなくreaction+`runInAction`にしているのは、effect内でindexを変異するとautorunは自己再入してしまうため。建具モード中はこの監視を止める（モード境界の全階収集と競合させない）。
 
 ## swingSideの既定値は配置時に決めて保存する——導出ではない
-`hingeSide`/`swingSide`（開き戸の蝶番・開く向き）は他の建具表項目と違い、配置後にホスト壁から毎回導出はしない（`findHostWall`が返す壁は仕上げモード往復で作り直されるため、蝶番位置基準の向きを導出し続けると再現性が崩れる）。壁の長押しメニューから配置する瞬間だけ、`placeOpeningWithDefaults`が`swingSide`を決めて`Opening`に固定保存する。開き方向は押下点(`worldPos`)の符号ではなく**ヒットした壁自身が面する向き（`Wall.faceDir`）**で決める——壁ラジアルのヒット域には材側へのわずかな許容があり（下記）、その範囲では押下点の直交成分の符号が面の向きと逆になり得るため、押下点の符号に依存すると材側許容域を押したときに逆に開いてしまう。ただし外壁境界は例外——常に室外側へ開く（外壁の開き戸は屋内から押し出す動作が一般的なため）。境界の判定は壁単体の`isExteriorWall`だけでは不十分——1つの境界にWallは2枚あり（下記参照）、壁ラジアルのヒット域限定により実運用では室内向き壁（`isExteriorWall:false`）がホストになるのが主要経路のため、`exteriorSideDir`が境界の反対側の壁（`findCounterpartWall`）まで見て「外壁境界か」を判定する。反対側の壁は**実際に開口が置かれる位置**（`worldPos`でなく`centerCoord`）で特定する——1本の境界の背後が途中まで屋外・途中から隣室（segmented）の平面では、押下位置と無関係な区間の壁を「反対側」と誤認しうるため。種別変更でSWING機構になっても、配置時に保存したこの値がそのまま使われる。
+`hingeSide`/`swingSide`（開き戸の蝶番・開く向き）は他の建具表項目と違い、配置後にホスト壁から毎回導出はしない（`findHostWall`が返す壁は仕上げモード往復で作り直されるため、蝶番位置基準の向きを導出し続けると再現性が崩れる）。壁の長押しメニューから配置する瞬間だけ、`placeOpeningWithDefaults`が`swingSide`を決めて`Opening`に固定保存する。開き方向は押下点(`worldPos`)の符号ではなく**ヒットした壁自身が面する向き（`Wall.faceDir`）**で決める——壁ラジアルのヒット域には材側へのわずかな許容があり（下記）、その範囲では押下点の直交成分の符号が面の向きと逆になり得るため、押下点の符号に依存すると材側許容域を押したときに逆に開いてしまう。ただし外壁境界は例外——常に室外側へ開く（外壁の開き戸は屋内から押し出す動作が一般的なため）。境界の判定は壁単体の`isExteriorWall`だけでは不十分——1つの境界にWallは2枚あり（下記参照）、壁ラジアルのヒット域限定により実運用では室内向き壁（`isExteriorWall:false`）がホストになるのが主要経路のため、`exteriorSideDir`が境界の反対側の壁（`findCounterpartWall`）まで見て「外壁境界か」を判定する。反対側の壁は**実際に開口が置かれる位置**（`worldPos`でなく`centerCoord`）で特定する——1本の境界の背後が途中まで屋外・途中から隣室（segmented）の平面では、押下位置と無関係な区間の壁を「反対側」と誤認しうるため。
+内開き系機構（`SWING_IN`/`DREH_KIPP`）は上記の「外壁=常に室外側」より機構特性を優先する。`openingEdit.js`の`defaultSwingSideFor(wall, graph, centerCoord, hingeSide, mechanism)`がswingSide既定値の**唯一の定義箇所**（`exteriorSideDir`→`openDirForMechanism`（機構が内開き系なら反転）→`swingSideTowardPerp`の順で合成）で、`placeOpeningWithDefaults`と`OpeningEditor.jsx`の`onSubTypeChange`の両方がこれを呼ぶ（二重定義しない）。種別変更時は`swingSideAfterSubTypeChange`が「現在値が旧機構の既定のままなら新既定へ差し替え、手動で『開く方向反転』した値は維持する」規則（`noteAfterSubTypeChange`と同じ規約）を判定する。
 
 ## 壁ラジアルメニューのヒット域は「壁線とその近傍」——壁線そのものを含む
 壁の長押しメニュー（建具・窓の配置、腰壁・垂れ壁、カーソルpointer表示——`snap.js`の`findNearestWall`を単一のヒット判定として共有するため用途によって挙動を分けない）は、壁の仕上げ面線（`axisValue`）近傍だけに反応する（`isWallRadialHit`）。壁線には描画上の太さがあるため、部屋側だけでなく材側（軸CL方向）にもわずかな許容を持つ——ただし壁の真ん中（通り芯＝軸CL位置）には決して届かないよう、材側許容は「面線〜軸CLの距離」でクランプする（薄壁でこの距離が許容値より小さい場合は届く直前で止まる）。壁の真ん中は通り芯側の長押しメニューに譲る。1つの境界にWallは2枚ある（部屋間の間仕切り＝両室がそれぞれ自室側に1枚ずつ／建物外周＝室内向き壁＋外向きの外壁）ため、境界にまたがる判定（外壁境界か等）は壁単体でなく`findCounterpartWall`で反対側の壁を見て行う——このとき単純にspanが重なる最初の1本を拾うと、境界が長さ方向で区間分けされた（segmented）平面ではWall登録順しだいで誤った相手を拾うため、押下位置（`along`）を自スパンに含む候補だけに絞る。
+
+## カタログエントリは平面記号のレンダリング用パラメータも運ぶ（Openingインスタンスへは持たせない）
+親子扉の`childRatio`・常時開放金物の`fireLeaves`/`fireAngle`・多枚建て引違いの`slideLayout`（`tracks`/`panels`）は、`Opening`本体のフィールドではなく`openingCatalog.js`のカタログエントリ側に持たせる（`OpeningsLayer.jsx`が`findCatalogEntry`経由で読む）。同一種別（`subType`）内でこれらの値がユーザー編集で分岐することは無い（サッシメーカーの型番のように種別が変われば形状も変わる）ため、Opening側に永続フィールドを増やさない——建具表項目（`finish`/`materialGlass`等）とは異なる「種別に固定された意匠パラメータ」という第三のカテゴリになる。
+
+## 平面記号（IMPLEMENTED_MECHANISMS）と姿図（mechanismPrimitives）の実装は独立
+`IMPLEMENTED_MECHANISMS`（`OpeningsLayer.jsx`が参照）と`openingElevationFigure.js`の`mechanismPrimitives`は別々に機構をカバーし、揃っている前提を作らない。平面のみ実装済みの機構は姿図側で`entry.label`のテキスト表示にフォールバックする（クラッシュはしない）——姿図側の未実装は`IMPLEMENTED_MECHANISMS`から見えないため、姿図を追加するときは`mechanismPrimitives`のswitchへ機構を足すだけでよく、平面側の変更は不要。
+
+## 平面記号の幾何計算はopeningPlanSymbolGeometry.jsへ抽出（react-konvaを引かない）
+`renderer/OpeningsLayer.jsx`は角度計算・leaf仕様決定・トラック配置等の純粋な数値計算を`openings/openingPlanSymbolGeometry.js`に切り出し（`openingTagPlacement.js`⇄`OpeningTagLayer.jsx`と同じ分離。node:testから単体importできる）、自身は`swingDoubleLeafSpecs`等が返すleaf仕様配列を`swingLeafSymbol`へ機械的に渡すだけにする——leafの回転センス（swingSide）の符号決定をOpeningsLayer.jsx側に残すと、レンダラの結線ミスがテストで検出できない（QA実測: 対向leafの符号反転を壊しても既存テストが緑のままだった）。**不変条件: 2枚leaf構成の対向leafはswingSide（回転センス）を反転して渡す——反転しないと2枚が壁の反対側へ開く。**
+
+## OVERHEAD/EMERGENCYの「外部側」判定はhost.axisOffsetの符号ではなくexteriorSideDir
+hostは長押しでユーザーが叩いた面の壁で、室内向き壁がhostになる経路（壁ラジアルのヒット域仕様。上記「壁ラジアルメニューのヒット域」節）やCL偏芯壁ではMath.sign(host.axisOffset)が実際の室外方向と一致しない。`openingPlanSymbolGeometry.js`の`openingExteriorDir`が`exteriorSideDir(host, graph, centerCoord) ?? host.faceDir`に一本化し、swingSideの既定値決定（`placeOpeningWithDefaults`）と同じ判定経路を平面記号（OVERHEADの跳ね上げ投影の向き・EMERGENCYの三角形の向き）でも共有する。
 
 ## 材料・ガラスの記号別初期値は「新規配置時に設定・記号変更時は未編集なら差し替え」
 `openingCatalog.js`の`DEFAULT_MATERIALS`（記号→初期値。AW/AD=アルミ、WD=ポリ合板フラッシュ戸+木製枠、WW=木製、JW=樹脂、SW/SD=スチール）が唯一のマスタ。`placeOpeningWithDefaults`が新規配置時に`materialGlass`へ設定する。エディタで記号（fixtureType）を変更したとき、`openingEdit.js`の`materialGlassAfterFixtureChange`は**現在値が旧記号の初期値と完全一致する場合のみ**新記号の初期値へ差し替える——文字列比較なので、ユーザーが少しでも手を入れた値（初期値と異なる文字列）は記号を変えても上書きされない。

@@ -7,13 +7,14 @@ import assert from 'node:assert/strict';
 import { observable, runInAction, configure, autorun } from 'mobx';
 import { Plane, PlanGraph, CenterLineType, Discipline, OpeningCategory } from '../core.js';
 import { undoManager } from '../undoManager.js';
-import { FITTING_CATALOG, defaultMaterialGlassFor, OpeningMechanism } from './openingCatalog.js';
+import { FITTING_CATALOG, WINDOW_CATALOG, findCatalogEntry, defaultMaterialGlassFor, OpeningMechanism } from './openingCatalog.js';
 import { ERR_OPENING_OUT_OF_WALL, ERR_OPENING_OVERLAP } from '../error.js';
 import { openingTagOf, renumberOpenings } from './openingNumbering.js';
 import { openingTagAnchor } from './openingTagPlacement.js';
 import {
   placeOpeningWithDefaults, removeOpeningWithUndo, withOpeningUndo, pushOpeningUndo, snapshotOpening,
-  materialGlassAfterFixtureChange, validateOpeningEdit, noteAfterSubTypeChange,
+  materialGlassAfterFixtureChange, validateOpeningEdit, noteAfterSubTypeChange, openDirForMechanism,
+  defaultSwingSideFor, swingSideAfterSubTypeChange,
 } from './openingEdit.js';
 
 function makePlaneGraph(planeId = 'p1') {
@@ -520,6 +521,120 @@ test('openingEdit: observer監視下でもrunInAction越しならMobX強制モ�
 
   const mobxWarnings = warnings.filter(w => w.includes('[MobX]'));
   assert.deepEqual(mobxWarnings, [], 'runInActionで包めばobserver監視下でも強制モード違反が出ないはず');
+});
+
+// ================================================================
+// swingSide既定値の機構による反転（.claude/opening-model.md、窓・扉バリエーション追加 §5）
+// ================================================================
+
+// ---- openDirForMechanism: 内開き系機構(SWING_IN/DREH_KIPP)は開き方向を反転する ----
+test('openDirForMechanism: SWING_IN / DREH_KIPP は openDir を反転する', () => {
+  assert.equal(openDirForMechanism(1, OpeningMechanism.SWING_IN), -1);
+  assert.equal(openDirForMechanism(-1, OpeningMechanism.SWING_IN), 1);
+  assert.equal(openDirForMechanism(1, OpeningMechanism.DREH_KIPP), -1);
+});
+
+test('openDirForMechanism: それ以外の機構（SWING等）は openDir をそのまま返す', () => {
+  assert.equal(openDirForMechanism(1, OpeningMechanism.SWING), 1);
+  assert.equal(openDirForMechanism(-1, OpeningMechanism.FIXED), -1);
+});
+
+// ================================================================
+// defaultSwingSideFor / swingSideAfterSubTypeChange（QA2巡目B・C）
+// swingSide既定値の唯一の定義箇所。placeOpeningWithDefaults・OpeningEditor.jsx onSubTypeChange の
+// 両方がこれを呼ぶ（二重定義しない）。
+// ================================================================
+
+// ---- 【QA指定テスト4】外壁: SWINGは室外側(faceDir)、SWING_IN/DREH_KIPPは室内側(faceDirの逆) ----
+test('defaultSwingSideFor: 外壁はSWINGが室外側、SWING_IN/DREH_KIPPは室内側（faceDirの逆）へ開く', () => {
+  const { graph, wall } = makeWallGraph(3000, { isExteriorWall: true, axisOffset: 75 }); // faceDir=+1
+  const centerCoord = 1500;
+  assert.equal(defaultSwingSideFor(wall, graph, centerCoord, -1, OpeningMechanism.SWING), 1, 'SWINGは室外側(faceDir=+1)へ開くはず');
+  assert.equal(defaultSwingSideFor(wall, graph, centerCoord, -1, OpeningMechanism.SWING_IN), -1, 'SWING_INは室内側(faceDirの逆)へ開くはず');
+  assert.equal(defaultSwingSideFor(wall, graph, centerCoord, -1, OpeningMechanism.DREH_KIPP), -1, 'DREH_KIPPは室内側(faceDirの逆)へ開くはず');
+});
+
+// ---- 【QA指定テスト5・失敗系】屋内境界（exteriorSideDirがnullを返す）はfaceDirへフォールバック ----
+// exteriorSideDirは「反対側の壁が無い、または反対側も非外壁」でnullを返す（openingGeometry.test.js
+// 参照）。ここでは対向壁の無い孤立した内壁でその条件を再現する。
+test('【失敗系】defaultSwingSideFor: 屋内境界（exteriorSideDirがnull）はhost.faceDirへフォールバックする', () => {
+  const { graph, wall } = makeWallGraph(3000, { isExteriorWall: false, axisOffset: 75 }); // faceDir=+1, 対向壁なし
+  const centerCoord = 1500;
+  assert.equal(defaultSwingSideFor(wall, graph, centerCoord, -1, OpeningMechanism.SWING), wall.faceDir);
+
+  const { graph: graphB, wall: wallB } = makeWallGraph(3000, { isExteriorWall: false, axisOffset: -75 }); // faceDir=-1
+  assert.equal(defaultSwingSideFor(wallB, graphB, centerCoord, -1, OpeningMechanism.SWING), wallB.faceDir);
+  assert.notEqual(wall.faceDir, wallB.faceDir, 'faceDirが壁ごとに違う（=本当にfaceDir依存のフォールバックであることの裏付け）');
+});
+
+// ---- 【QA指定テスト6】種別変更: 未編集なら新既定へ差し替え・手動反転済みなら維持 ----
+test('swingSideAfterSubTypeChange: 現在値が旧機構の既定のまま（未編集）なら新機構の既定へ差し替える', () => {
+  const { graph, wall } = makeWallGraph(3000, { isExteriorWall: true, axisOffset: 75 });
+  const centerCoord = 1500, hingeSide = -1;
+  const oldDefault = defaultSwingSideFor(wall, graph, centerCoord, hingeSide, OpeningMechanism.SWING);
+  const newDefault = defaultSwingSideFor(wall, graph, centerCoord, hingeSide, OpeningMechanism.SWING_IN);
+  const result = swingSideAfterSubTypeChange(oldDefault, wall, graph, centerCoord, hingeSide, OpeningMechanism.SWING, OpeningMechanism.SWING_IN);
+  assert.equal(result, newDefault, '未編集なら新機構の既定(室内側)へ差し替わるはず');
+  assert.notEqual(result, oldDefault, '新旧既定は実際に異なるはず（テストの前提確認）');
+});
+
+test('swingSideAfterSubTypeChange: 手動で「開く方向反転」した値（旧既定と異なる）は種別変更後も維持する', () => {
+  const { graph, wall } = makeWallGraph(3000, { isExteriorWall: true, axisOffset: 75 });
+  const centerCoord = 1500, hingeSide = -1;
+  const oldDefault = defaultSwingSideFor(wall, graph, centerCoord, hingeSide, OpeningMechanism.SWING);
+  const manuallyFlipped = -oldDefault; // ユーザーが「開く方向反転」ボタンで反転した状態を模す
+  const result = swingSideAfterSubTypeChange(manuallyFlipped, wall, graph, centerCoord, hingeSide, OpeningMechanism.SWING, OpeningMechanism.SWING_IN);
+  assert.equal(result, manuallyFlipped, '手動編集済みの値は種別変更後も維持されるはず（新既定に上書きされない）');
+});
+
+// ---- placeOpeningWithDefaults: 配置entryの機構がSWING_IN/DREH_KIPPなら室内側(faceDirの逆)へ開く ----
+// placeOpeningWithDefaults は常に catalog[0]（各カテゴリ・壁種別の先頭エントリ）を配置するため、
+// 実際の初期配置でSWING_IN/DREH_KIPPが選ばれる経路は無い（配置後にonSubTypeChangeで選び直す）。
+// ここではFITTING_CATALOGを一時的に空にしてカタログ欠如を再現する既存テスト（本ファイル上部）と
+// 同じ手法で、WINDOW_CATALOG先頭を一時的にSWING_IN機構へ差し替えて既定値計算そのものを検証する。
+// hingeSideは常に-1（placeOpeningWithDefaultsの固定既定）で水平壁のため、
+// swingSideTowardPerp(false, -1, openDir) = openDir と一致する（openingGeometry.js）。
+// 通常機構（openDir=faceDir=+1）との対比で、SWING_INのみ符号が反転することを確認する。
+test('placeOpeningWithDefaults: 配置entryの機構がSWING_INなら外壁でも室内側(faceDirの逆)へ開く', () => {
+  const inswingEntry = findCatalogEntry(OpeningCategory.WINDOW, 'inswing');
+  assert.ok(inswingEntry, 'inswingエントリが存在する前提');
+
+  // 対照: 通常機構(先頭=doubleSliding, faceDir=+1)を同条件の壁に配置した場合のswingSide。
+  const { graph: graphCtrl, wall: wallCtrl } = makeWallGraph(3000, { isExteriorWall: true, axisOffset: 75 });
+  const control = placeOpeningWithDefaults(graphCtrl, makeProject(), wallCtrl, { x: 1500, y: -500 }, OpeningCategory.WINDOW);
+  assert.equal(control.error, null);
+  assert.equal(control.opening.swingSide, 1, '通常機構はfaceDir(+1)どおりswingSide=1のはず');
+
+  const { graph, wall } = makeWallGraph(3000, { isExteriorWall: true, axisOffset: 75 }); // faceDir=+1（外壁は常に室外=faceDir側へ開く既定）
+  const project = makeProject();
+  const saved = WINDOW_CATALOG.splice(0, WINDOW_CATALOG.length);
+  try {
+    WINDOW_CATALOG.push(inswingEntry, ...saved.filter(e => e.key !== 'inswing'));
+    const { opening, error } = placeOpeningWithDefaults(graph, project, wall, { x: 1500, y: -500 }, OpeningCategory.WINDOW);
+    assert.equal(error, null);
+    assert.equal(opening.subType, 'inswing');
+    assert.equal(opening.hingeSide, -1);
+    assert.equal(opening.swingSide, -1, 'SWING_INは外壁でもfaceDir(+1)の逆=室内側(swingSide=-1)へ開くはず');
+  } finally {
+    WINDOW_CATALOG.splice(0, WINDOW_CATALOG.length, ...saved);
+  }
+});
+
+// ---- 種別変更（differing mechanismへの差し替え）が新機構でも壊れないことの回帰 ----
+test('【回帰】新機構(SWING_DOUBLE)へsubTypeを変更してもfindCatalogEntry/validateOpeningEdit/renumberOpeningsが例外を出さない', () => {
+  const { graph, wall } = makeWallGraph(3000, { isExteriorWall: true });
+  const project = makeProject();
+  const { opening, error } = placeOpeningWithDefaults(graph, project, wall, { x: 1500, y: -500 }, OpeningCategory.FITTING);
+  assert.equal(error, null);
+
+  assert.doesNotThrow(() => {
+    runInAction(() => { opening.subType = 'doubleSwing'; opening.width = 1600; });
+  });
+  const entry = findCatalogEntry(opening.category, opening.subType);
+  assert.equal(entry?.mechanism, OpeningMechanism.SWING_DOUBLE);
+
+  assert.equal(validateOpeningEdit(opening, graph, { width: opening.width, refOffset: opening.refOffset }), null);
+  assert.doesNotThrow(() => runInAction(() => renumberOpenings(graph, project)));
 });
 
 // ---- Finding B 回帰: OpeningEditor.jsx の textField は保存値もtrimするため、前後空白だけが

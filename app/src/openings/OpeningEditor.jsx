@@ -1,7 +1,7 @@
 import { useRef } from 'react';
 import { observer } from 'mobx-react-lite';
 import { runInAction } from 'mobx';
-import { getFittingOptions, WINDOW_CATALOG, getFixtureSymbols, findCatalogEntry, defaultOpeningHeight, OpeningMechanism } from './openingCatalog.js';
+import { getFittingOptions, WINDOW_CATALOG, getFixtureSymbols, findCatalogEntry, defaultOpeningHeight, HINGED_MECHANISMS } from './openingCatalog.js';
 import { OpeningCategory } from '../core.js';
 import { findHostWall, maxOpeningWidthAt, findOpeningsOnWall } from './openingGeometry.js';
 import { ERR_OPENING_OUT_OF_WALL, ERR_OPENING_OVERLAP } from '../error.js';
@@ -10,7 +10,7 @@ import { openingMountLocation } from './openingRoomLabel.js';
 import { AutoScaledFigure } from '../structural/sectionFigure/AutoScaledFigure.jsx';
 import {
   beginOpeningFieldUndo, endOpeningFieldUndo, withOpeningUndo, validateOpeningEdit, removeOpeningWithUndo,
-  materialGlassAfterFixtureChange, noteAfterSubTypeChange,
+  materialGlassAfterFixtureChange, noteAfterSubTypeChange, swingSideAfterSubTypeChange,
 } from './openingEdit.js';
 import { openingTagOf, fixtureSymbolOf } from './openingNumbering.js';
 
@@ -106,6 +106,15 @@ export const OpeningEditor = observer(function OpeningEditor({ graph, project, o
       if (en) {
         opening.width  = en.defaultWidth;
         opening.height = defaultOpeningHeight(opening.category, key);
+        // swingSideは「現在値が旧機構の既定値のままなら新機構の既定値へ差し替え、手動で
+        // 「開く方向反転」した値は種別変更後も維持する」規則（noteAfterSubTypeChangeと同じ規約。
+        // swingSideAfterSubTypeChangeが唯一の判定ロジック）。壁が引けない場合(wall=null)は
+        // 幾何情報が無いため変更しない。
+        if (wall) {
+          opening.swingSide = swingSideAfterSubTypeChange(
+            opening.swingSide, wall, graph, opening.centerCoord, opening.hingeSide, oldEntry?.mechanism, en.mechanism,
+          );
+        }
       }
     });
   });
@@ -163,7 +172,7 @@ export const OpeningEditor = observer(function OpeningEditor({ graph, project, o
     <div style={{ padding: 16, overflowY: 'auto' }}>
       <div style={{ marginBottom: 12, border: '1px solid #e2e8f0', borderRadius: 4, padding: 4, position: 'relative', display: 'flex', justifyContent: 'center', overflowX: 'auto' }}>
         <AutoScaledFigure primitives={figure} onEditDim={onEditDim} {...FIGURE_FRAME} />
-        {entry?.mechanism === OpeningMechanism.SWING && (
+        {entry?.mechanism && HINGED_MECHANISMS.has(entry.mechanism) && (
           <div style={{ position: 'absolute', top: 4, right: 4, display: 'flex', gap: 4 }}>
             <button type="button" style={{ fontSize: 11, padding: '2px 6px' }}
               onClick={() => commitEdit(() => runInAction(() => { opening.hingeSide = -opening.hingeSide; }))}>
