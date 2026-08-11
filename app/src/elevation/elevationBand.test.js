@@ -105,3 +105,51 @@ test('buildRoomBand: ctx.nameGapModelMmを変えるとbounds.maxYがその差分
   assert.ok(Math.abs((bandLarge.bounds.maxY - bandSmall.bounds.maxY) - (999 - 100)) < 1e-6,
     `nameGapModelMmの差分(899)だけbounds.maxYが変わるはず（実際差:${bandLarge.bounds.maxY - bandSmall.bounds.maxY}）`);
 });
+
+// ---- 項目9: 左三角＝天井高寸法線の外側にtriangleOffsetModelMm、右三角＝一番右の壁中心線の
+// 外側にtriangleOffsetModelMm ----
+test('【項目9】buildRoomBand: 留め三角はleftAnchorX=CH寸法線-offset、rightAnchorX=最右壁中心線+offsetに置かれる', () => {
+  const graph = makeGraph();
+  const room = makeRectRoom(graph, 0, 0, 4000, 3000);
+  const triangleOffsetModelMm = 234;
+
+  const band = buildRoomBand(room, graph, { triangleOffsetModelMm });
+  const chDim = band.primitives.find(p => p.type === 'dim' && p.dir === 'v');
+  assert.ok(chDim, '天井高寸法(縦dim)が見つからない');
+
+  const leftTriangle  = band.primitives.find(p => p.type === 'miterTriangle' && p.dir === 1);
+  const rightTriangle = band.primitives.find(p => p.type === 'miterTriangle' && p.dir === -1);
+  assert.ok(leftTriangle && rightTriangle);
+
+  assert.ok(Math.abs(leftTriangle.x - (chDim.at - triangleOffsetModelMm)) < 1e-6,
+    `左三角は天井高寸法線(at=${chDim.at})の外側にtriangleOffsetModelMm(${triangleOffsetModelMm})のはず（実際:${leftTriangle.x}）`);
+
+  // 一番右の壁中心線＝最終面の境界hi（faceBoundaryLocalXをband内絶対座標へ直したもの）。
+  const faces = buildRoomFaces(room, graph);
+  const lastFace = faces[faces.length - 1];
+  const lastBoundary = faceBoundaryLocalX(lastFace, graph);
+  const cutVerticals = band.primitives.filter(p => p.type === 'line' && p.weight === 'thick' && p.x1 === p.x2);
+  const lastFaceLocalMaxX = Math.max(...cutVerticals.map(p => p.x1)); // 最終面のrun側(hi)のCUT縦線x
+  const rightAnchorExpected = (lastFaceLocalMaxX - lastFace.run + lastBoundary.hi) + triangleOffsetModelMm;
+  assert.ok(Math.abs(rightTriangle.x - rightAnchorExpected) < 1e-6,
+    `右三角は一番右の壁中心線の外側にtriangleOffsetModelMm(${triangleOffsetModelMm})のはず（期待:${rightAnchorExpected}, 実際:${rightTriangle.x}）`);
+});
+
+// ---- 項目10: band.leftAnchorXが左三角の位置と一致する（帯の水平初期位置の既定値に使う） ----
+test('【項目10】buildRoomBand: band.leftAnchorXは左の留め三角のxと一致する', () => {
+  const graph = makeGraph();
+  const room = makeRectRoom(graph, 0, 0, 4000, 3000);
+
+  const band = buildRoomBand(room, graph, { triangleOffsetModelMm: 111 });
+  const leftTriangle = band.primitives.find(p => p.type === 'miterTriangle' && p.dir === 1);
+  assert.ok(leftTriangle);
+  assert.equal(band.leftAnchorX, leftTriangle.x);
+});
+
+// ---- 失敗系: 面が無い部屋はleftAnchorXがnull（例外にならない） ----
+test('【失敗系・項目10】buildRoomBand: 面が無い部屋はleftAnchorXがnull', () => {
+  const graph = makeGraph();
+  const room = graph.addRoom(new Set(), '空室');
+  const band = buildRoomBand(room, graph);
+  assert.equal(band.leftAnchorX, null);
+});

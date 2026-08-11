@@ -5,7 +5,7 @@ import { DEFAULT_WALL_BASE, DEFAULT_WALL_FINISH } from '../wallGeneration.js';
 import { faceRect } from '../wallFaces.js';
 
 const BREAK_HEIGHT = 1600;   // mm — 破れ縁の断面高さ（FL+1600）
-const MIN_LANDING  = 1200;   // mm — 踊り場の最小長さ（問題.md）
+export const MIN_LANDING = 1200;   // mm — 踊り場の最小長さ（問題.md）
 
 const seg  = (p, q) => ({ x1: p.x, y1: p.y, x2: q.x, y2: q.y, dashed: false });
 const line = (p, q) => ({ x1: p.x, y1: p.y, x2: q.x, y2: q.y });

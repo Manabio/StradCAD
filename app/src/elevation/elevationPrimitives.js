@@ -69,15 +69,21 @@ function miterTriangle(px, py, dir) {
  * primitives が空（面が1つも無い）ときは何もしない。buildRoomBand・buildStairBand共有。
  * @param {object[]} primitives
  * @param {string} roomName
- * @param {number} [nameGapModelMm] - 部屋名枠の上余白（モデルmm）。QA G5: 実画面
- *   NAME_GAP_BELOW_SCREEN_MM をElevationModeState.initがscreenMmToModelMmで換算した値を渡す
- *   （面間ギャップと同じ2パス方式）。未指定時はDEFAULT_NAME_GAP_MM（倍率決定用の1パス目・
- *   このモジュール単体テスト向けの仮値）。
+ * @param {{nameGapModelMm?:number, leftX?:number|null, rightX?:number|null}} [opts]
+ *   nameGapModelMm - 部屋名枠の上余白（モデルmm）。QA G5: 実画面NAME_GAP_BELOW_SCREEN_MMを
+ *   ElevationModeState.initがscreenMmToModelMmで換算した値を渡す。未指定時はDEFAULT_NAME_GAP_MM。
+ *   leftX/rightX - 左右の留め三角・引出線の水平アンカー（モデルmm。項目9: 左＝天井高寸法線の外側、
+ *   右＝一番右の壁中心線の外側、それぞれ実画面10mm）。呼び出し側(buildRoomBand/buildStairBand)が
+ *   算出して渡す。未指定時はfigureBounds(primitives)のminX/maxX（このモジュール単体テスト・
+ *   面0件以外の呼び出し向けフォールバック）。
  */
-export function appendRoomNameFrame(primitives, roomName, nameGapModelMm = DEFAULT_NAME_GAP_MM) {
+export function appendRoomNameFrame(primitives, roomName, opts = {}) {
   if (primitives.length === 0) return;
+  const nameGapModelMm = opts.nameGapModelMm ?? DEFAULT_NAME_GAP_MM;
   const preBounds = figureBounds(primitives);
-  const cx = (preBounds.minX + preBounds.maxX) / 2;
+  const leftX  = opts.leftX  ?? preBounds.minX;
+  const rightX = opts.rightX ?? preBounds.maxX;
+  const cx = (leftX + rightX) / 2;
   const boxW = Math.max(NAME_BOX_MIN_W_MM, (roomName?.length ?? 1) * NAME_BOX_CHAR_W_MM);
   const labelTop = preBounds.maxY + nameGapModelMm;
   const labelCY  = labelTop + NAME_BOX_H_MM / 2;
@@ -85,12 +91,12 @@ export function appendRoomNameFrame(primitives, roomName, nameGapModelMm = DEFAU
   primitives.push({ type: 'text', x: cx, y: labelCY, text: roomName, anchor: 'middle', baseline: 'middle' });
 
   const leaderWeight = weightForRole(ElevationLineRole.DETAIL);
-  if (preBounds.minX < cx - boxW / 2) {
-    primitives.push({ type: 'line', x1: preBounds.minX, y1: labelCY, x2: cx - boxW / 2, y2: labelCY, weight: leaderWeight });
-    primitives.push(miterTriangle(preBounds.minX, labelCY, 1));
+  if (leftX < cx - boxW / 2) {
+    primitives.push({ type: 'line', x1: leftX, y1: labelCY, x2: cx - boxW / 2, y2: labelCY, weight: leaderWeight });
+    primitives.push(miterTriangle(leftX, labelCY, 1));
   }
-  if (preBounds.maxX > cx + boxW / 2) {
-    primitives.push({ type: 'line', x1: cx + boxW / 2, y1: labelCY, x2: preBounds.maxX, y2: labelCY, weight: leaderWeight });
-    primitives.push(miterTriangle(preBounds.maxX, labelCY, -1));
+  if (rightX > cx + boxW / 2) {
+    primitives.push({ type: 'line', x1: cx + boxW / 2, y1: labelCY, x2: rightX, y2: labelCY, weight: leaderWeight });
+    primitives.push(miterTriangle(rightX, labelCY, -1));
   }
 }

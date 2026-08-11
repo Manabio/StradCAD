@@ -12,6 +12,7 @@ import {
 } from '../elevation/elevationLayout.js';
 import {
   DEFAULT_FACE_GAP_MM, FACE_GAP_SCREEN_MM, DEFAULT_NAME_GAP_MM, NAME_GAP_BELOW_SCREEN_MM,
+  DEFAULT_TRIANGLE_OFFSET_MM, TRIANGLE_OFFSET_SCREEN_MM,
 } from '../elevation/elevationStyle.js';
 // DEFAULT_PX_PER_MMはviewport.js（appViewport.jsとは別。window依存を持たない純モジュール
 // ——appViewport.jsのヘッダコメント参照）からのみ取得する。ElevationModeState.js自体は
@@ -86,23 +87,26 @@ export class ElevationModeState {
       const stairByRoomId = new Map(this.graph.stairs.map(s => [s.roomId, s]));
       const screenPxPerMm = this.screenPxPerMm;
 
-      const buildOne = (room, gapModelMm, nameGapModelMm) => {
-        const ctx = { project: this.project, materialMap, gridCLs, gapModelMm, nameGapModelMm };
+      const buildOne = (room, gapModelMm, nameGapModelMm, triangleOffsetModelMm) => {
+        const ctx = { project: this.project, materialMap, gridCLs, gapModelMm, nameGapModelMm, triangleOffsetModelMm };
         return room.feature === RoomFeature.STAIR
           ? buildStairBand(room, this.graph, upperGraph, { ...ctx, stair: stairByRoomId.get(room.id) ?? null })
           : buildRoomBand(room, this.graph, ctx);
       };
 
-      // パス1: 倍率決定用（ギャップ・名前枠余白は高さに影響しないため仮値でよい）。
-      const pass1 = buildBandsSafely(rooms, room => buildOne(room, DEFAULT_FACE_GAP_MM, DEFAULT_NAME_GAP_MM));
+      // パス1: 倍率決定用（ギャップ・名前枠余白・三角オフセットは高さに影響しないため仮値でよい）。
+      const pass1 = buildBandsSafely(rooms,
+        room => buildOne(room, DEFAULT_FACE_GAP_MM, DEFAULT_NAME_GAP_MM, DEFAULT_TRIANGLE_OFFSET_MM));
       const scale = chooseElevationScale(pass1.bands, this.viewSize ?? { width: 800, height: 600 });
-      const gapModelMm     = screenMmToModelMm(FACE_GAP_SCREEN_MM, screenPxPerMm, scale);
-      const nameGapModelMm = screenMmToModelMm(NAME_GAP_BELOW_SCREEN_MM, screenPxPerMm, scale);
+      const gapModelMm            = screenMmToModelMm(FACE_GAP_SCREEN_MM, screenPxPerMm, scale);
+      const nameGapModelMm        = screenMmToModelMm(NAME_GAP_BELOW_SCREEN_MM, screenPxPerMm, scale);
+      const triangleOffsetModelMm = screenMmToModelMm(TRIANGLE_OFFSET_SCREEN_MM, screenPxPerMm, scale);
 
-      // パス2: 確定した倍率でギャップ・名前枠余白を実画面mmへ正しく換算し、本番の帯を組み直す。
+      // パス2: 確定した倍率でギャップ・名前枠余白・三角オフセットを実画面mmへ正しく換算し、
+      // 本番の帯を組み直す。
       const { bands, failedRoomNames } = buildBandsSafely(
         rooms,
-        room => buildOne(room, gapModelMm, nameGapModelMm),
+        room => buildOne(room, gapModelMm, nameGapModelMm, triangleOffsetModelMm),
         (err, room) => console.error(`[elevation] 部屋「${room.name}」の帯構築に失敗:`, err),
       );
 
@@ -160,13 +164,16 @@ export class ElevationModeState {
 
   /**
    * 面（帯roomId）の水平スクロール量(mm)を、有効範囲へクランプした状態で返す。
-   * 既定値（未設定時）は band.bounds.minX（帯の実描画範囲の左端＝天井高寸法を含む）を
-   * clampFaceOffsetへ渡すため、「画面に収まるなら中央寄せ・収まらないなら帯の左端
-   * （天井高寸法込み）を左マージンへ」という初期値の規則が初回描画から成立する。
+   * 既定値（未設定時）は band.leftAnchorX（左の留め三角の位置。項目10）を clampFaceOffsetへ
+   * 渡すため、「画面に収まるなら中央寄せ・収まらないなら左三角の位置を左マージンへ」という
+   * 初期値の規則が初回描画から成立する——leftAnchorXは全帯が同じ規則（天井高寸法線の外側へ
+   * 実画面10mm）で決まるため、この既定値を使う限り帯を切り替えても左端の見え方が揃う
+   * （band.leftAnchorXが無い＝面0件の帯はband.bounds.minXへフォールバック）。
    */
   faceOffsetFor(band) {
     const viewWidthMm = (this.viewSize?.width ?? 800) / this.scale;
-    return clampFaceOffset(this.faceScroll.get(band.roomId) ?? band.bounds.minX, band, viewWidthMm);
+    const defaultOffset = band.leftAnchorX ?? band.bounds.minX;
+    return clampFaceOffset(this.faceScroll.get(band.roomId) ?? defaultOffset, band, viewWidthMm);
   }
 
   /**

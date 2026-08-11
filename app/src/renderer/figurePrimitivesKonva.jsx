@@ -1,5 +1,5 @@
 import { Line, Rect, Circle, Text, Group } from 'react-konva';
-import { miterTriangleVertices, verticalDimLabelBox } from '../elevation/elevationLayout.js';
+import { miterTriangleVertices, verticalDimLabelBox, horizontalDimLabelBox } from '../elevation/elevationLayout.js';
 import { TRIANGLE_HEIGHT_SCREEN_MM, TRIANGLE_ANGLE_DEG } from '../elevation/elevationStyle.js';
 
 // ================================================================
@@ -92,8 +92,10 @@ function renderDim(p, key, t) {
         text={String(p.label ?? '')} fontSize={11} fill={DIM_COLOR} listening={false} />,
     );
   } else {
+    // 横方向の寸法値: 建築図面の慣習どおり寸法線の上側に載せる（項目5）。
+    const box = horizontalDimLabelBox(midX, midY);
     nodes.push(
-      <Text key={`${key}-t`} x={midX - 40} y={midY - 7} width={80} align="center"
+      <Text key={`${key}-t`} {...box} align="center"
         text={String(p.label ?? '')} fontSize={11} fill={DIM_COLOR} listening={false} />,
     );
   }
@@ -104,9 +106,10 @@ function renderMiterTriangle(p, key, t, screenPxPerMm) {
   const anchorX = t.tx(p.x), anchorY = t.ty(p.y);
   const heightPx = TRIANGLE_HEIGHT_SCREEN_MM * (screenPxPerMm ?? 1);
   const { top, outer, inner } = miterTriangleVertices(anchorX, anchorY, p.dir, heightPx, TRIANGLE_ANGLE_DEG);
+  // 項目8: 塗りつぶさず輪郭線のみにする。
   return (
     <Line key={key} points={[...top, ...outer, ...inner]} closed
-      fill="#1e293b" stroke="#1e293b" strokeWidth={1} strokeScaleEnabled={false} listening={false} />
+      stroke="#1e293b" strokeWidth={1} strokeScaleEnabled={false} listening={false} />
   );
 }
 

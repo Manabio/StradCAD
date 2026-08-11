@@ -103,9 +103,11 @@ test('bandIdAtY: scrollYMm分だけ単純に平行移動した座標で判定す
 });
 
 // ---- clampFaceOffset ----
-test('clampFaceOffset: 帯幅が画面幅より狭ければ中央寄せの1点にクランプする', () => {
+// QA F1: 項目10「左三角揃え」のため、帯幅が画面に収まる場合の既定は「中央寄せ」(旧F9)ではなく
+// 「minX(=左三角の位置)にクランプ」に変更した（意図的変更。elevationLayout.jsのヘッダコメント参照）。
+test('【QA F1】clampFaceOffset: 帯幅が画面幅より狭ければminXにクランプする（中央寄せではない）', () => {
   const v = clampFaceOffset(9999, { widthMm: 3000 }, 5000);
-  assert.equal(v, -1000);
+  assert.equal(v, 0, 'bounds省略時のminXは0。収まる帯でも中央寄せせずminXへクランプする');
 });
 
 test('clampFaceOffset: 帯幅が画面幅より広ければ[0, widthMm-viewWidthMm]にクランプする', () => {
@@ -123,10 +125,13 @@ test('【QA F9】clampFaceOffset: bounds.minXが負（例:-330）でも、収ま
   assert.equal(clampFaceOffset(99999, band, 5000), 2670, 'maxX-viewWidthMmで頭打ち');
 });
 
-test('【QA F9】clampFaceOffset: 帯幅が画面に収まる場合は(minX+maxX)/2基準で中央寄せする', () => {
+// QA F1: 旧仕様（(minX+maxX)/2基準の中央寄せ）を項目10のため廃止し、収まる帯もminXに
+// クランプするよう変更した（意図的変更）。faceOffsetForはband.leftAnchorX（=通常minXと一致する
+// 左三角の位置）をoffsetMmとして渡すため、この分岐がminXを返すことで全帯の左揃えが成立する。
+test('【QA F1】clampFaceOffset: 帯幅が画面に収まる場合もminXにクランプする（中央寄せしない。項目10）', () => {
   const band = { bounds: { minX: -330, maxX: 2670 } }; // widthMm=3000
   const v = clampFaceOffset(0, band, 5000);
-  assert.equal(v, -330 - (5000 - 3000) / 2, 'minX基準の中央寄せになっているはず');
+  assert.equal(v, -330, '収まる帯でもminXへクランプされ、中央寄せの位置(旧仕様)にはならないはず');
 });
 
 // ---- QA F1: 帯の実描画範囲は placement.topMm..topMm+heightMm と一致し、連続帯の間隔は

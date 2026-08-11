@@ -6,7 +6,8 @@ import assert from 'node:assert/strict';
 import { Plane, PlanGraph, CenterLineType, Discipline } from '@core';
 import { generateRoomWallsFromOutline } from '../finish/wallGeneration.js';
 import { ElevationModeState } from './ElevationModeState.js';
-import { screenMmToModelMm } from '../elevation/elevationLayout.js';
+import { buildRoomBand } from '../elevation/elevationBand.js';
+import { chooseElevationScale, screenMmToModelMm } from '../elevation/elevationLayout.js';
 import { NAME_GAP_BELOW_SCREEN_MM } from '../elevation/elevationStyle.js';
 
 function makeGraph() {
@@ -89,32 +90,75 @@ test('【失敗系・QA G1】ElevationModeState.scrollBy: 過剰ドラッグ後�
 // ---- QA G5: 部屋名枠の上余白（実画面NAME_GAP_BELOW_SCREEN_MM）はscreenMmToModelMmで
 // モデルmmへ換算され、換算結果はscaleに連動する（elevationBand/elevationStair両方に効くことは
 // elevationBand.test.js/elevationStair.test.jsのctx.nameGapModelMm直接テストで確認済み。
-// ここではElevationModeState.init()が実際にこの換算式を使って配線していることをE2Eで確認する）----
-test('【QA G5】ElevationModeState.init: 部屋名枠の上余白はscreenPxPerMmに比例して変わる（screenMmToModelMm経由の配線確認）', async () => {
-  const pxPerMmA = 3.78; // 96dpi相当
-  const pxPerMmB = 7.56; // その2倍（校正値が変わった想定）
+// ここではElevationModeState.init()が実際にこの換算式を使って配線していることをE2Eで確認する）。
+// ElevationModeState.init()と同じ2パス（1パス目=既定値で帯を組み倍率確定、2パス目=その倍率で
+// screenMmToModelMm換算）をテスト側でも独立に再現し、実際のstate.bands[0]と突き合わせる
+// （state.scaleゲッターはpass2後の帯高さから再計算されるため、pass1で使った倍率とズレうる
+// ——nameGapModelMmが大きく効いてNICE_SCALESの桁が変わるケースがあるため、cross-check時は
+// pass1と同じ計算経路を使うこと）----
+test('【QA G5】ElevationModeState.init: 部屋名枠の上余白は実際にscreenMmToModelMm(scale連動)で換算した値が使われる', async () => {
+  const graph = makeGraph();
+  makeRectRoom(graph, 0, 0, 4000, 3000, 'LDK');
+  const screenPxPerMm = 5.5; // 96dpi相当や倍値と衝突しない値
+  const room = graph.rooms.find(r => r.name === 'LDK');
 
-  const makeState = async (screenPxPerMm) => {
-    const graph = makeGraph();
-    makeRectRoom(graph, 0, 0, 4000, 3000, 'LDK');
-    const state = new ElevationModeState(graph, null, { width: 1000, height: 800 }, screenPxPerMm);
-    await state.init();
-    return state;
+  // ElevationModeState.init()のパス1相当（既定値で帯を組み倍率を決める）を独立に再現する。
+  const pass1Band = buildRoomBand(room, graph, {});
+  const pass1Scale = chooseElevationScale([pass1Band], { width: 1000, height: 800 });
+  const expectedNameGapModelMm = screenMmToModelMm(NAME_GAP_BELOW_SCREEN_MM, screenPxPerMm, pass1Scale);
+  const reference = buildRoomBand(room, graph, { nameGapModelMm: expectedNameGapModelMm });
+
+  const state = new ElevationModeState(graph, null, { width: 1000, height: 800 }, screenPxPerMm);
+  await state.init();
+
+  assert.ok(Math.abs(state.bands[0].bounds.maxY - reference.bounds.maxY) < 1e-6,
+    `実際の帯のbounds.maxY(${state.bands[0].bounds.maxY})は、パス1と同じ倍率決定を経て` +
+    `screenMmToModelMmで計算したnameGapModelMmを使って独立に再構築した帯(${reference.bounds.maxY})` +
+    `と一致するはず`);
+});
+
+// ---- 項目10: 帯の水平初期位置(faceOffsetFor未設定時)はband.leftAnchorX（左三角の位置）基準になる ----
+test('【項目10】ElevationModeState.faceOffsetFor: 未設定時はband.leftAnchorXを既定値として使う', async () => {
+  const graph = makeGraph();
+  makeRectRoom(graph, 0, 0, 4000, 3000, 'LDK');
+  const state = new ElevationModeState(graph, null, { width: 1000, height: 800 });
+  await state.init();
+
+  // 実物のbuildRoomBand出力ではleftAnchorX===bounds.minXに一致してしまう（留め三角の引出線が
+  // 常にband内で最も左に来るため）ため、既定値の参照元（leftAnchorXかbounds.minXか）を
+  // 判別できない。合成バンド（leftAnchorXとbounds.minXをわざと分離）を使い、faceOffsetForが
+  // 実際にband.leftAnchorXを読んでいるかどうかを切り分ける。
+  const fakeBand = {
+    roomId: 'fake', leftAnchorX: -9999, bounds: { minX: -20000, maxX: 100000 }, widthMm: 120000,
   };
+  // 帯幅よりも十分狭いviewWidthに切り替え、clampFaceOffsetが「収まらない」分岐（offsetMmをそのまま
+  // 使う）を通るようにする——「画面に収まる場合は中央寄せ」分岐だと既定値がそのまま返らないため。
+  state.setViewSize({ width: 10, height: 800 });
 
-  const stateA = await makeState(pxPerMmA);
-  const stateB = await makeState(pxPerMmB);
+  assert.equal(state.faceOffsetFor(fakeBand), fakeBand.leftAnchorX,
+    'faceScroll未設定時はband.leftAnchorXがそのまま初期水平オフセットになるはず（bounds.minXではない）');
+});
 
-  // 前提: scale自体はscreenPxPerMmに依存しない（帯の高さ・viewSizeだけで決まる）ため、
-  // 同一のscaleでなければ以降の単純な比例計算が成立しない。
-  assert.equal(stateA.scale, stateB.scale, '前提: 同一viewSize/帯高さならscaleは一致するはず');
+// ---- QA F1: 画面に収まる帯（トイレ等の小部屋）も収まらない帯（広いLDK等）も、
+// 左三角の画面上位置が揃う（=leftAnchorXからfaceOffsetForまでの距離のpx換算が一致する）----
+test('【QA F1】ElevationModeState.faceOffsetFor: 画面に収まる狭い帯・収まらない広い帯のどちらも左三角の画面位置が揃う', async () => {
+  const graph = makeGraph();
+  makeRectRoom(graph, 0, 0, 1500, 1200, 'トイレ');   // 画面に収まる狭い帯
+  makeRectRoom(graph, 0, 5000, 8000, 10000, 'LDK'); // 画面に収まらない広い帯
+  const state = new ElevationModeState(graph, null, { width: 1000, height: 800 });
+  await state.init();
 
-  const gapA = screenMmToModelMm(NAME_GAP_BELOW_SCREEN_MM, pxPerMmA, stateA.scale);
-  const gapB = screenMmToModelMm(NAME_GAP_BELOW_SCREEN_MM, pxPerMmB, stateB.scale);
-  assert.ok(gapB > gapA, '前提: pxPerMmが大きいほど換算後のモデルmmも大きくなるはず');
+  const toilet = state.bands.find(b => b.roomName === 'トイレ');
+  const ldk    = state.bands.find(b => b.roomName === 'LDK');
+  assert.ok(toilet && ldk);
 
-  const maxYDelta = stateB.bands[0].bounds.maxY - stateA.bands[0].bounds.maxY;
-  assert.ok(Math.abs(maxYDelta - (gapB - gapA)) < 1e-6,
-    `帯のbounds.maxYの差はscreenMmToModelMmで換算したnameGapModelMmの差と一致するはず` +
-    `（期待:${gapB - gapA}, 実際:${maxYDelta}）`);
+  const viewWidthMm = 1000 / state.scale;
+  // 前提: 実際に「収まる帯」「収まらない帯」の両方が用意できていること。
+  assert.ok(toilet.bounds.maxX - toilet.bounds.minX <= viewWidthMm, '前提: トイレは画面に収まる帯のはず');
+  assert.ok(ldk.bounds.maxX - ldk.bounds.minX > viewWidthMm, '前提: LDKは画面に収まらない帯のはず');
+
+  const toiletOffsetPx = (toilet.leftAnchorX - state.faceOffsetFor(toilet)) * state.scale;
+  const ldkOffsetPx    = (ldk.leftAnchorX    - state.faceOffsetFor(ldk))    * state.scale;
+  assert.ok(Math.abs(toiletOffsetPx - ldkOffsetPx) < 1e-6,
+    `収まる帯・収まらない帯のどちらも左三角の画面位置(px)が揃うはず（トイレ:${toiletOffsetPx}px, LDK:${ldkOffsetPx}px）`);
 });

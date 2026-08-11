@@ -109,8 +109,13 @@ export function bandIdAtY(layout, scrollYMm, yMm) {
  * 帯の実測 bounds（minX/maxX）を基準にする——bounds.minX は 0 ではない（天井高寸法が
  * face[0]の左端よりさらに左＝負のmmへ張り出すため。QA F9: 旧実装は[0,widthMm]を仮定しており、
  * 帯が画面より広いとoffsetMmが0未満へ絶対に動けず、天井高寸法が常に画面外に切れていた）。
- * 帯の全幅(widthMm=maxX-minX)が画面幅(viewWidthMm)に収まる場合は中央寄せの1点に固定する
- * （ElevationModeState の初期値と同じ式——収まる帯はドラッグしても動かない）。
+ * 単一のクランプ式 [minX, max(minX, maxX-viewWidthMm)] に統合する（QA F1: 項目10「左三角揃え」
+ * のため、旧実装が持っていた「収まる帯は中央寄せの1点に固定」という別分岐（旧F9）は廃止した——
+ * その分岐は offsetMm（=faceOffsetForが渡すband.leftAnchorX＝左三角の位置）を握りつぶし、
+ * 画面に収まる帯（トイレ等の小部屋で頻出）だけ左三角が中央寄せ位置へズレて全帯の左揃えが崩れて
+ * いた）。帯が画面に収まる場合はレンジが[minX,minX]に潰れ、常にminX（=左三角の位置。
+ * band.leftAnchorXがminXと一致するよう組み立てられている）を返すため、結果的に全帯が左揃えになる。
+ * 帯が画面より広い場合の挙動は変更していない。
  * @param {number} offsetMm
  * @param {{bounds?:{minX:number,maxX:number}, widthMm:number}} band
  * @param {number} viewWidthMm
@@ -118,11 +123,7 @@ export function bandIdAtY(layout, scrollYMm, yMm) {
 export function clampFaceOffset(offsetMm, band, viewWidthMm) {
   const minX = band?.bounds?.minX ?? 0;
   const maxX = band?.bounds?.maxX ?? (minX + (band?.widthMm ?? 0));
-  const widthMm = maxX - minX;
-  if (widthMm <= viewWidthMm) {
-    return minX - (viewWidthMm - widthMm) / 2;
-  }
-  return Math.min(Math.max(offsetMm, minX), maxX - viewWidthMm);
+  return Math.min(Math.max(offsetMm, minX), Math.max(minX, maxX - viewWidthMm));
 }
 
 /**
@@ -192,5 +193,23 @@ export function verticalDimLabelBox(lineX, midY, boxLenPx = 80, thicknessPx = 14
     width: boxLenPx, height: thicknessPx,
     offsetX: boxLenPx / 2, offsetY: thicknessPx / 2,
     rotation: -90,
+  };
+}
+
+/**
+ * 横方向(dim dir='h')の寸法値ラベルの配置（壁芯間・通り芯間寸法。項目5「建築図面の慣習通り
+ * 寸法線の上側に値を載せる」）。ボックスの下端が寸法線からgapPxだけ上に来るようyを決める
+ * （中央に重ねていた旧実装から変更）。
+ * @param {number} midX - 寸法線の中点x（px）
+ * @param {number} midY - 寸法線のy（px）
+ * @param {number} [boxLenPx] - 寸法線方向の長さ
+ * @param {number} [thicknessPx] - 行の厚み
+ * @param {number} [gapPx] - 寸法線からの上オフセット
+ * @returns {{x:number, y:number, width:number, height:number}}
+ */
+export function horizontalDimLabelBox(midX, midY, boxLenPx = 80, thicknessPx = 14, gapPx = 2) {
+  return {
+    x: midX - boxLenPx / 2, y: midY - gapPx - thicknessPx,
+    width: boxLenPx, height: thicknessPx,
   };
 }

@@ -1,7 +1,7 @@
 // elevationStair.js の基本挙動テスト（.claude/elevation-model.md §3.3 I6 / §11）。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Plane, PlanGraph, CenterLineType, Discipline, StairType } from '@core';
+import { Plane, PlanGraph, CenterLineType, Discipline, StairType, RoomFeature } from '@core';
 import { generateRoomWallsFromOutline } from '../finish/wallGeneration.js';
 import { buildRoomFaces } from './elevationFaces.js';
 import { rotateFacesToStart, stairStartFaceLabel, buildStairBand } from './elevationStair.js';
@@ -115,4 +115,78 @@ test('buildStairBand: ctx.nameGapModelMmを変えるとbounds.maxYがその差�
   const bandLarge = buildStairBand(room, graph, null, { nameGapModelMm: 999 });
   assert.ok(Math.abs((bandLarge.bounds.maxY - bandSmall.bounds.maxY) - (999 - 100)) < 1e-6,
     `nameGapModelMmの差分(899)だけbounds.maxYが変わるはず（実際差:${bandLarge.bounds.maxY - bandSmall.bounds.maxY}）`);
+});
+
+// ---- 項目11: 階段帯の描画範囲は床→設置階の階高→さらに設置階上階の階高まで(縦2層分) ----
+test('【項目11】buildStairBand: 上階のそのまた階高が確定していれば、両端縦線が2層分(floorHeight+upperFloorHeight)まで延び、2層目のFL線も出る', () => {
+  const graph = makeGraph('p1');
+  const room = makeRectRoom(graph, 0, 0, 2000, 4000, '階段');
+
+  const upperGraph = makeGraph('p2');
+  upperGraph.plane.elevation = 3000; // floorHeight = 3000
+  const voidRoom = makeRectRoom(upperGraph, 0, 0, 2000, 4000, '吹抜け');
+  voidRoom.setFeature(RoomFeature.VOID);
+
+  const topPlane = new Plane('p3', 3000 + 2800, 'p3階', 1, 1); // upperFloorHeight = 2800
+  const project = { planes: [graph.plane, upperGraph.plane, topPlane] };
+
+  const band = buildStairBand(room, graph, upperGraph, { project });
+  const totalStairHeight = 3000 + 2800;
+
+  const extendedVerticals = band.primitives.filter(p =>
+    p.type === 'line' && p.weight === 'thick' && p.x1 === p.x2 && p.y2 === -totalStairHeight);
+  assert.ok(extendedVerticals.length >= 2, `両端縦線がtotalStairHeight(${totalStairHeight})まで延びていない`);
+
+  const secondFlLines = band.primitives.filter(p =>
+    p.type === 'line' && p.weight === 'thick' && p.y1 === p.y2 && p.y1 === -totalStairHeight);
+  assert.ok(secondFlLines.length > 0, '2層目のFL線が出ていない');
+});
+
+// ---- 失敗系: 3階分の情報が無い(上階のそのまた階高が不明)場合は1層分(floorHeight)までにとどまる ----
+test('【失敗系・項目11】buildStairBand: 上階のそのまた階高が不明なら2層目のFL線は出さず、両端縦線もfloorHeightまでで止まる', () => {
+  const graph = makeGraph('p1');
+  const room = makeRectRoom(graph, 0, 0, 2000, 4000, '階段');
+
+  const upperGraph = makeGraph('p2');
+  upperGraph.plane.elevation = 3000; // floorHeight = 3000
+  const voidRoom = makeRectRoom(upperGraph, 0, 0, 2000, 4000, '吹抜け');
+  voidRoom.setFeature(RoomFeature.VOID);
+
+  const project = { planes: [graph.plane, upperGraph.plane] }; // 3階目が無い
+
+  const band = buildStairBand(room, graph, upperGraph, { project });
+
+  const secondFlLines = band.primitives.filter(p =>
+    p.type === 'line' && p.weight === 'thick' && p.y1 === p.y2 && p.y1 < -3000);
+  assert.equal(secondFlLines.length, 0, '上階のそのまた階高が不明なら2層目のFL線は出ないはず');
+
+  const extendedVerticals = band.primitives.filter(p =>
+    p.type === 'line' && p.weight === 'thick' && p.x1 === p.x2 && p.y2 === -3000);
+  assert.ok(extendedVerticals.length >= 2, '両端縦線はfloorHeight(3000)までは延びるはず（1層分）');
+});
+
+// ---- 項目12: 折返し階段(SWITCHBACK)は断面プロファイル(polyline×2)を帯に含む ----
+test('【項目12】buildStairBand: SWITCHBACK階段は断面プロファイル(polyline)を含む', () => {
+  const graph = makeGraph('p1');
+  const room = makeRectRoom(graph, 0, 0, 2000, 4000, '階段');
+  const stair = graph.addStair({
+    type: StairType.SWITCHBACK, cells: new Set(), roomId: room.id,
+    totalSteps: 12, tread: 250, riser: null, sections: [6, 1, 6],
+  });
+
+  const band = buildStairBand(room, graph, null, { floorHeight: 2400, stair });
+  const polylines = band.primitives.filter(p => p.type === 'polyline');
+  assert.equal(polylines.length, 2, '往路・復路2本の断面プロファイルが出るはず');
+});
+
+// ---- 失敗系: STRAIGHT階段は断面プロファイルを含まない ----
+test('【失敗系・項目12】buildStairBand: STRAIGHT階段（対応スコープ外）は断面プロファイルを含まない', () => {
+  const graph = makeGraph('p1');
+  const room = makeRectRoom(graph, 0, 0, 2000, 4000, '階段');
+  const stair = graph.addStair({
+    type: StairType.STRAIGHT, cells: new Set(), roomId: room.id, totalSteps: 12, tread: 250,
+  });
+
+  const band = buildStairBand(room, graph, null, { floorHeight: 2400, stair });
+  assert.equal(band.primitives.filter(p => p.type === 'polyline').length, 0);
 });

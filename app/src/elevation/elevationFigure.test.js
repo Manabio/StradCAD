@@ -97,7 +97,10 @@ test('buildFaceFigure: アキは矩形＋対角2本(一点鎖線)＋「ア キ�
   const prims = buildFaceFigure(face, ctx);
 
   assert.equal(prims.filter(p => p.type === 'rect').length, 1);
-  assert.equal(prims.filter(p => p.type === 'line' && p.dash === 'center' && p.weight === 'thin').length, 2);
+  // アキの対角線は斜め(x1!==x2)。項目2で追加した壁中心線の落し線(縦線・x1===x2)と区別する。
+  const diagonalCenterLines = prims.filter(p =>
+    p.type === 'line' && p.dash === 'center' && p.weight === 'thin' && p.x1 !== p.x2);
+  assert.equal(diagonalCenterLines.length, 2);
   assert.ok(prims.some(p => p.type === 'text' && p.text === 'ア キ'));
 });
 
@@ -208,4 +211,52 @@ test('【QA G4】buildFaceFigure: 通り芯丸(circle)は通り芯間寸法(ROW2
     assert.notEqual(c.cy, gridDim.at, '通り芯丸のyは通り芯間寸法の行(at)と同じであってはいけない（別段。QA G4）');
     assert.ok(c.cy > gridDim.at, '通り芯丸は寸法行よりさらに下（yが大きい）はず');
   }
+});
+
+// ---- 項目2・6: 水平寸法（壁芯間・通り芯間）に寸法線足(dim.foot)を出さない ----
+test('【項目2・6】buildFaceFigure: 水平寸法(壁芯間・通り芯間)はdim.footを持たない', () => {
+  const gridCLs = [
+    { centerLineType: CenterLineType.VERTICAL, effectiveValue: 1000, label: '1' },
+    { centerLineType: CenterLineType.VERTICAL, effectiveValue: 3000, label: '2' },
+  ];
+  const face = makeFace();
+  const ctx = baseCtx({ gridCLs });
+  const prims = buildFaceFigure(face, ctx);
+  const horizontalDims = prims.filter(p => p.type === 'dim' && p.dir === 'h');
+  assert.ok(horizontalDims.length >= 2, '壁芯間・通り芯間の両方が出るはず');
+  for (const d of horizontalDims) {
+    assert.equal(d.foot, undefined, `水平寸法にdim.footが残っている: ${JSON.stringify(d)}`);
+    assert.equal(d.dot, true, '足の代わりに交点の塗り丸(dim.dot)が立つはず');
+  }
+});
+
+// ---- 項目2: 壁芯間寸法の位置に、壁中心線自体（一点鎖線）が床から下りてくる ----
+test('【項目2】buildFaceFigure: 壁芯間寸法の位置(boundary.lo/hi)まで壁中心線の一点鎖線が下りる', () => {
+  const shapes = new Map([['x0', { effectiveValue: -100 }], ['x1', { effectiveValue: 4100 }]]);
+  const face = makeFace();
+  const ctx = baseCtx({ graph: makeGraph({ shapes }) });
+  const prims = buildFaceFigure(face, ctx);
+  const wallDim = prims.find(p => p.type === 'dim' && p.dir === 'h' && p.from === -100 && p.to === 4100);
+  assert.ok(wallDim, '壁芯間寸法が見つからない');
+
+  const dropLines = prims.filter(p =>
+    p.type === 'line' && p.dash === 'center' && p.x1 === p.x2 && p.y1 === 0 && p.y2 === wallDim.at);
+  assert.equal(dropLines.length, 2, '両端の壁中心線が寸法線の位置まで下りる縦の一点鎖線が2本出るはず');
+  assert.ok(dropLines.some(l => l.x1 === -100));
+  assert.ok(dropLines.some(l => l.x1 === 4100));
+});
+
+// ---- 項目7・QA F3: 面ラベル(A/B/C/D等)は壁中心線で挟んだ幅の中心（run/2ではない）に出る ----
+test('【項目7・QA F3】buildFaceFigure: 面ラベル(face.label)は壁中心線基準の幅中心(boundary.lo/hiの中点)に描かれ、run/2とは一致しない', () => {
+  // 壁中心線(x0/x1)をface.lo/hi(0/4000)から非対称にずらし、run/2とboundary中心が
+  // 一致しない状況を作る（run/2に固定されていた旧実装ならこのテストで判別できる）。
+  const shapes = new Map([['x0', { effectiveValue: -100 }], ['x1', { effectiveValue: 4300 }]]);
+  const face = makeFace({ label: 'B1' });
+  const ctx = baseCtx({ graph: makeGraph({ shapes }) });
+  const prims = buildFaceFigure(face, ctx);
+  const label = prims.find(p => p.type === 'text' && p.text === 'B1');
+  assert.ok(label, '面ラベルのtextが出ない');
+  assert.notEqual(label.x, face.run / 2, '前提: run/2(2000)とboundary中心(2100)がズレているはず');
+  assert.equal(label.x, (-100 + 4300) / 2, '壁中心線で挟んだ幅の中心に配置されるはず');
+  assert.equal(label.anchor, 'middle');
 });

@@ -20,15 +20,19 @@ import {
   ElevationLineRole, weightForRole,
   WALL_LABEL_GAP_MM, WALL_LABEL_LINE_GAP_MM,
   OPENING_TAG_RADIUS_PX, DIM_ROW_GAP_MM, GRID_ROW_GAP_MM, GRID_TAG_RADIUS_PX, GRID_TAG_FONT_PX,
+  FACE_LABEL_GAP_MM, FACE_LABEL_FONT_PX,
 } from './elevationStyle.js';
 
-// 通り芯丸番号・寸法行のy（床線y=0からの下方向オフセット）。ユーザー仕様の段構成
+// 通り芯丸番号・寸法行・面ラベルのy（床線y=0からの下方向オフセット）。ユーザー仕様の段構成
 // 「③水平寸法線・寸法値 → ④通り芯丸」どおり、通り芯丸は寸法行(ROW2)とは別の3段目に分離する
-// （QA G4: 以前はROW2に同居させていたが仕様は別段を明記している）。
-// ROW1=壁芯間寸法（面ごとに1本）、ROW2=通り芯間寸法、GRID_CIRCLE_ROW=通り芯丸番号。
+// （QA G4: 以前はROW2に同居させていたが仕様は別段を明記している）。面ラベル(A/B/C/D)はさらに
+// その下の4段目（項目7。部屋名引出線より上のバランスの良い段、という指示にもとづく判断）。
+// ROW1=壁芯間寸法（面ごとに1本）、ROW2=通り芯間寸法、GRID_CIRCLE_ROW=通り芯丸番号、
+// FACE_LABEL_ROW=面ラベル。
 const DIM_ROW1_Y = DIM_ROW_GAP_MM;
 const DIM_ROW2_Y = DIM_ROW_GAP_MM + GRID_ROW_GAP_MM;
 const GRID_CIRCLE_ROW_Y = DIM_ROW2_Y + GRID_ROW_GAP_MM;
+const FACE_LABEL_ROW_Y = GRID_CIRCLE_ROW_Y + FACE_LABEL_GAP_MM;
 
 /**
  * 巾木文字列（自由入力。RoomFinish.baseboardHeight）から高さ(mm)を解釈する。
@@ -184,21 +188,26 @@ export function buildFaceFigure(face, ctx) {
     prims.push({ type: 'text', x: 0, y: labelY, text: wallFinishName, anchor: 'start' });
   }
 
-  // 壁芯間寸法（面の両端＝壁中心線。ROW1）。寸法線足(dim.foot)が床線(y=0)まで伸びる。
+  // 壁芯間寸法（面の両端＝壁中心線。ROW1）。項目2・6: 寸法線足(dim.foot)は廃止し、代わりに
+  // 壁中心線自体（一点鎖線）を寸法線の位置まで下ろし、交点に塗り丸(dim.dot)を置く。
   const boundary = faceBoundaryLocalX(face, graph);
+  prims.push({ type: 'line', x1: boundary.lo, y1: 0, x2: boundary.lo, y2: DIM_ROW1_Y, dash: 'center', weight: detailWeight });
+  prims.push({ type: 'line', x1: boundary.hi, y1: 0, x2: boundary.hi, y2: DIM_ROW1_Y, dash: 'center', weight: detailWeight });
   prims.push({
-    type: 'dim', dir: 'h', at: DIM_ROW1_Y, from: boundary.lo, to: boundary.hi, foot: 0,
+    type: 'dim', dir: 'h', at: DIM_ROW1_Y, from: boundary.lo, to: boundary.hi, dot: true,
     label: Math.round(boundary.hi - boundary.lo),
   });
 
-  // 通り芯間寸法（面を貫く通り芯同士。ROW2）
+  // 通り芯間寸法（面を貫く通り芯同士。ROW2）。項目2・6: こちらも足は出さない。通り芯自体の
+  // 一点鎖線（下のGRID_CIRCLE_ROW_Yまで伸びる縦線）が寸法線位置(DIM_ROW2_Y)を通過するため、
+  // その交点に塗り丸(dim.dot)を置くだけでよい。
   const gridPoints = gridCLsOnFace(face, gridCLs ?? [])
     .map(cl => ({ x: localXOf(face, cl.effectiveValue), label: cl.label }))
     .sort((a, b) => a.x - b.x);
 
   for (let i = 0; i + 1 < gridPoints.length; i++) {
     prims.push({
-      type: 'dim', dir: 'h', at: DIM_ROW2_Y, from: gridPoints[i].x, to: gridPoints[i + 1].x, foot: 0,
+      type: 'dim', dir: 'h', at: DIM_ROW2_Y, from: gridPoints[i].x, to: gridPoints[i + 1].x, dot: true,
       label: Math.round(gridPoints[i + 1].x - gridPoints[i].x),
     });
   }
@@ -211,6 +220,14 @@ export function buildFaceFigure(face, ctx) {
       anchor: 'middle', baseline: 'middle', size: GRID_TAG_FONT_PX,
     });
   }
+
+  // 面ラベル（A/B/C/D。L字はB1等）を面の幅中心・通り芯丸のさらに下の段に描く（項目7）。
+  // QA F3: run/2（仕上げ面基準の中心）ではなく、壁芯間寸法（項目2・9）と同じ壁中心線で挟んだ
+  // 幅の中心(boundary.lo/hiの中点)を使う——面ラベルの中心が壁芯間寸法の中心とズレないように。
+  prims.push({
+    type: 'text', x: (boundary.lo + boundary.hi) / 2, y: FACE_LABEL_ROW_Y, text: face.label,
+    anchor: 'middle', baseline: 'middle', size: FACE_LABEL_FONT_PX,
+  });
 
   return prims;
 }
