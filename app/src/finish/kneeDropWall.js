@@ -10,11 +10,12 @@
  * 腰壁＝床から天板上端までの寸法（topHeight）。垂れ壁＝天井から天板下端までの寸法（bottomHeight）。
  */
 
-import { edgeKey, DEFAULT_ROOM_CEILING_HEIGHT } from '@core';
+import { edgeKey } from '@core';
 import { worldToCell } from './gridCells.js';
 import { edgeGeometry, buildCellToRoom } from './edgeClassify.js';
 import { cellsBeyondBreak } from './stair/stairGeometry.js';
 import { stairUnderRoomsOf } from './stair/stairUnderRooms.js';
+import { roomCeilingHeight } from './roomMetrics.js';
 
 export const CAP_THICKNESS   = 20;   // mm — 天板厚
 export const CAP_OVERHANG    = 10;   // mm — 天板の壁仕上げ面からの出幅
@@ -134,7 +135,7 @@ export function effectiveCeilingHeight(graph, key, cellToRoom) {
   const heights = [];
   for (const room of [geo.roomNeg, geo.roomPos]) {
     if (!room) continue;
-    heights.push(room.getFinishInfo().ceilingHeight ?? graph.defaultCeilingHeight ?? DEFAULT_ROOM_CEILING_HEIGHT);
+    heights.push(roomCeilingHeight(graph, room).mm);
   }
   if (heights.length === 0) return null;
   return Math.min(...heights);
