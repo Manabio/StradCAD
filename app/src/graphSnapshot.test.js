@@ -235,3 +235,52 @@ test('Opening.frameDepth=0 は不正値として encode→decode 後は null に
   assert.ok(o2);
   assert.equal(o2.frameDepth, null, '0mmの見込みは物理的に無効な値のためnullへ丸められる（heightと同じ規約）');
 });
+
+// ---- QA G2: 巾木を""へクリアした部屋はFlatBuffers往復後も""のまま（既定値へ化けない） ----
+// graphSnapshot.js:620-622 は「新しいRoomを作ってから空でないフィールドだけ上書きする」実装
+// （if (val) room.finish.setField(...)）のため、RoomFinishコンストラクタの既定値が非空だと
+// ユーザーがクリアした""が復元のたびに既定値へ巻き戻ってしまう（回帰防止）。
+test('【失敗系・QA G2】Room.finish.baseboardMaterial/Heightを""にクリアした部屋はFlatBuffers往復後も""のまま', () => {
+  const graph = makeGraph();
+  const x0 = graph.addCenterLine(CenterLineType.VERTICAL,   0,    { labeled: false, discipline: Discipline.ARCH });
+  const x1 = graph.addCenterLine(CenterLineType.VERTICAL,   4000, { labeled: false, discipline: Discipline.ARCH });
+  const y0 = graph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: false, discipline: Discipline.ARCH });
+  const y1 = graph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: false, discipline: Discipline.ARCH });
+  const key = `${x0.id}:${y0.id}:${x1.id}:${y1.id}`;
+  const room = graph.addRoom(new Set([key]), 'LDK');
+  // 一度初期値を入れてから、ユーザーがクリアした状態を再現する。
+  room.finish.setField('baseboardMaterial', '木製出幅木');
+  room.finish.setField('baseboardHeight', 'h=60');
+  room.finish.setField('baseboardMaterial', '');
+  room.finish.setField('baseboardHeight', '');
+
+  const bytes = serializeGraph(graph);
+  const restored = makeGraph();
+  restoreGraph(restored, bytes);
+
+  const r2 = restored.roomMap.get(room.id);
+  assert.ok(r2, '復元後に同一IDの部屋が存在する');
+  assert.equal(r2.finish.baseboardMaterial, '', '空にクリアした巾木材が既定値へ化けてはいけない');
+  assert.equal(r2.finish.baseboardHeight, '', '空にクリアした巾木高さが既定値へ化けてはいけない');
+});
+
+// ---- 巾木に値がある場合は従来どおり往復する（G2修正の非破壊確認） ----
+test('Room.finish.baseboardMaterial/Heightに値がある場合はFlatBuffers往復で値のまま保持される', () => {
+  const graph = makeGraph();
+  const x0 = graph.addCenterLine(CenterLineType.VERTICAL,   0,    { labeled: false, discipline: Discipline.ARCH });
+  const x1 = graph.addCenterLine(CenterLineType.VERTICAL,   4000, { labeled: false, discipline: Discipline.ARCH });
+  const y0 = graph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: false, discipline: Discipline.ARCH });
+  const y1 = graph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: false, discipline: Discipline.ARCH });
+  const key = `${x0.id}:${y0.id}:${x1.id}:${y1.id}`;
+  const room = graph.addRoom(new Set([key]), 'LDK');
+  room.finish.setField('baseboardMaterial', 'タイル巾木');
+  room.finish.setField('baseboardHeight', 'h=100');
+
+  const bytes = serializeGraph(graph);
+  const restored = makeGraph();
+  restoreGraph(restored, bytes);
+
+  const r2 = restored.roomMap.get(room.id);
+  assert.equal(r2.finish.baseboardMaterial, 'タイル巾木');
+  assert.equal(r2.finish.baseboardHeight, 'h=100');
+});

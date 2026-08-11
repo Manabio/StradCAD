@@ -77,6 +77,15 @@ export class Edge {
 // ROOM (仕上げモード — 部屋領域 + 仕上げ情報)
 // ================================================================
 
+// 巾木の初期値（QA G2: ユーザーが新規にRoomを作成する経路でのみ適用する。RoomFinishの
+// コンストラクタでは絶対に設定しない——復元/デシリアライズ経路（graphSnapshot.js /
+// roomReinterpret.js の restoreRoomsState）は「新しいRoomインスタンスを作ってから空でない
+// フィールドだけ上書きする」実装のため、コンストラクタ既定値を非空にすると、ユーザーが
+// 巾木を''へクリアした部屋がundo/redo・再読込のたびに既定値へ勝手に戻ってしまう。
+// 適用箇所は applyDefaultBaseboard()（呼び出し元は仕上げモードの部屋新規指定確定処理のみ）。
+export const DEFAULT_BASEBOARD_MATERIAL = '木製出幅木';
+export const DEFAULT_BASEBOARD_HEIGHT   = 'h=60';
+
 // 自由文字列の仕上げフィールド。
 // 壁材（wallMaterial）・壁仕上げ（wallFinish）・天井高さ（ceilingHeight）は
 // 内装マスター（templateKey）+ customOverrides で管理するため、ここには持たない。
@@ -199,4 +208,18 @@ export class Room {
     if (!info.wallMaterial) info.wallMaterial = DEFAULT_WALL_MATERIAL;
     return info;
   }
+}
+
+/**
+ * 巾木の初期値を room.finish に適用する（QA G2）。呼び出してよいのは「ユーザー操作で
+ * Room が新規作成される経路」（仕上げモードの部屋指定確定処理。FinishModeState.js の
+ * graph.addRoom(...) 直後）だけ——復元・デシリアライズ経路（graphSnapshot.js /
+ * roomReinterpret.js の restoreRoomsState / schema/graphFbs.js 経由の読み込み）では
+ * 絶対に呼ばないこと（呼ぶと空文字クリアが往復不能になる。RoomFinishコンストラクタの
+ * コメント参照）。
+ * @param {Room} room
+ */
+export function applyDefaultBaseboard(room) {
+  room.finish.setField('baseboardMaterial', DEFAULT_BASEBOARD_MATERIAL);
+  room.finish.setField('baseboardHeight', DEFAULT_BASEBOARD_HEIGHT);
 }

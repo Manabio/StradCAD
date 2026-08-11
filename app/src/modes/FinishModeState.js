@@ -9,7 +9,7 @@ import { floorSwapManager } from '../storage/FloorSwapManager.js';
 import { snapshotFinishState, pushFinishUndo, withFinishUndo } from '../finish/finishUndo.js';
 import { FINISH_FIELDS } from '../finish/roomReinterpret.js';
 import { ERR_MATERIAL_MISMATCH } from '../error.js';
-import { RoomFeature, RoomKind } from '@core';
+import { RoomFeature, RoomKind, applyDefaultBaseboard } from '@core';
 
 function setsEqual(a, b) {
   if (a.size !== b.size) return false;
@@ -550,6 +550,7 @@ export class FinishModeState {
       // その他セル — 新規部分指定（cells = newCells ∩ その部屋の現在セル）
       const cells = new Set([...newCells].filter(c => cellsOf(owner).has(c)));
       const room = this.graph.addRoom(cells, '', crypto.randomUUID(), new Set([owner.id]));
+      applyDefaultBaseboard(room); // QA G2: ユーザー新規作成経路でのみ巾木初期値を適用
       this._pendingDialogUndo = undoBefore;
       this._openDialog(room.id, true, cellOrder);
       return;
@@ -562,6 +563,7 @@ export class FinishModeState {
     this.dragState = null;
     if (freeCells.size === 0) return;
     const room = this.graph.addRoom(freeCells);
+    applyDefaultBaseboard(room); // QA G2: ユーザー新規作成経路でのみ巾木初期値を適用
     this._pendingDialogUndo = undoBefore;
     this._openDialog(room.id, true, cellOrder);
   }

@@ -56,6 +56,7 @@ export { DimensionAnchor, HDimensionLine, VDimensionLine } from './core/dimensio
 
 export {
   WallBackingMaterial, edgeKey, Edge, RoomFinish, ExteriorFinishRow, Room,
+  applyDefaultBaseboard, DEFAULT_BASEBOARD_MATERIAL, DEFAULT_BASEBOARD_HEIGHT,
 } from './core/room.js';
 
 // ================================================================
