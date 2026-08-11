@@ -164,9 +164,17 @@ export function usePointerInteraction({
 
   // ---- ホイールズーム ----
   const handleWheel = (e) => {
-    // 展開モードはズームが存在しない（固定倍率）。viewport.zoomAtを封じる。
-    if (appMode === 'elevation') { e.evt.preventDefault(); return; }
     e.evt.preventDefault();
+    // 展開モードはズームが存在しない（固定倍率）。代わりにホイール上下を縦スクロールに
+    // 接続する（項目1）。deltaY>0（下スクロール）で下方向＝より下の帯が見える向き
+    // （一般的なスクロール可能領域の慣習。ドラッグ時の「コンテンツが指に追従する」向きとは
+    // 符号が逆になる——ドラッグはコンテンツをつまむ操作、ホイールは視点を動かす操作のため）。
+    // クランプはscrollBy内部（書き込み時クランプ。QA G1）にそのまま委ねる。
+    if (appMode === 'elevation') {
+      const scale = modeRef.current?.scale;
+      if (scale > 0) modeRef.current?.scrollBy(0, -e.evt.deltaY / scale, null);
+      return;
+    }
     const factor = e.evt.deltaY < 0 ? 1.1 : 1 / 1.1;
     viewport.zoomAt(e.evt.clientX, e.evt.clientY, factor);
     updateSnap(e.evt.clientX, e.evt.clientY);
