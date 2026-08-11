@@ -28,7 +28,8 @@ app/src/
 ├── floorNumber.js, calibration.js
 ├── ui/           ダイアログ・パネル
 ├── finish/       仕上げモード（部屋・材・境界）
-└── structural/   構造モード（部材・採番・自動補完）
+├── structural/   構造モード（部材・採番・自動補完）
+└── elevation/    展開モード（室内展開図。純モジュール）
 ```
 
 ## 用語集
@@ -48,6 +49,7 @@ app/src/
 | Undo/Redo（またぎ・スナップショット方式） | `.claude/undo-redo.md` |
 | FlatBuffersシリアライズ | `.claude/serialization-fbs.md` |
 | 実装方針（全体ルール） | `.claude/implementation-policy.md` |
+| 展開モード（室内展開図）の設計意図 | `.claude/elevation-model.md` |
 | 本番デプロイ | `.claude/deployment.md` |
 | **mdファイル自体を修正するときのルール** | `.claude/doc-policy.md` |
 
