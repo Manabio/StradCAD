@@ -376,7 +376,9 @@ export async function runFinishExitBoundary(graph, project, fmode, { goingToStru
     const captureBefore = (id, startOffset, endOffset) => {
       if (!touched.has(id)) touched.set(id, { before: { startOffset, endOffset } });
     };
-    const junctionSnaps = trimStairUnderJunctions(graph, step2aEntries);
+    // trimStairUnderJunctions は Wall.startOffset/endOffset を直接書き換えるため action で包む
+    // （MobX strict-mode。描画中の ShapesLayer が offset を観測している状態で走る）。
+    const junctionSnaps = runInAction(() => trimStairUnderJunctions(graph, step2aEntries));
     for (const snap of junctionSnaps) captureBefore(snap.wall.id, snap.startOffset, snap.endOffset);
     const trimChanges = [];
     for (const [id, rec] of touched) {
