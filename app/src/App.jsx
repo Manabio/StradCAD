@@ -194,7 +194,13 @@ const App = observer(() => {
                 openingSelectRef.current = null;
                 return s;
               })
-            : import('./modes/SiteModeState.js').then(m => new m.SiteModeState(project.site));
+            : appMode === 'elevation'
+              ? import('./modes/ElevationModeState.js').then(async m => {
+                  const s = new m.ElevationModeState(graph, project, size);
+                  await s.init(); // 材データの動的ロード・直上階のpeek・帯の一括構築
+                  return s;
+                })
+              : import('./modes/SiteModeState.js').then(m => new m.SiteModeState(project.site));
 
     loader.then(s => {
       if (cancelled) { s.dispose(); return; }
@@ -289,6 +295,11 @@ const App = observer(() => {
     window.addEventListener('resize', onResize);
     return () => window.removeEventListener('resize', onResize);
   }, []);
+
+  // 展開モード: 画面サイズ変化を伝える（固定倍率の再計算に使う。viewport.scaleX等は一切変更しない）。
+  useEffect(() => {
+    modeRef.current?.setViewSize?.(size);
+  }, [size, appMode]);
 
   // ---- モード・フロアまたぎ undo/redo ----
   // 各エントリは記録時のコンテキスト（モード・階）を持つ（undoManager.contextProvider）。
@@ -459,6 +470,18 @@ const App = observer(() => {
       // project.openingNumberIndex は observable.map のため収集完了後にパネルが自動再描画される。
       // 階切替（switchFloorKeepingMode）は常に完了を待つ（mode-system.mdの既定動作、フラグ不参照）。
       deferEnterOnModeChange: true,
+      enter: (graph) => collectOpeningNumbersAllFloors(graph),
+    },
+    elevation: {
+      // 突入: 建具記号丸のタグ表示に使うため、建具モードと同じ採番収集を行う。graphは変更しない
+      // （表示専用モード）ため exit・undoエントリは不要（openingモードと同じ論証）。
+      //
+      // openingモードとは異なりdeferEnterOnModeChangeを付けない（=完了を待つ）: 建具モードの
+      // タグレイヤは observer で project.openingNumberIndex を毎回読み直すため、採番が遅れて
+      // 確定しても後から自動的に再描画される。展開モードは突入時に帯（プリミティブ配列）を
+      // 一度だけ構築してスナップショット化する（ElevationModeState.bandsはobservable.refで
+      // reactionを持たない）ため、採番の確定を待たずに帯を組むと建具記号丸の番号が
+      // 恒久的に空欄のまま固まってしまう。
       enter: (graph) => collectOpeningNumbersAllFloors(graph),
     },
   };
@@ -1323,6 +1346,7 @@ const App = observer(() => {
                : isPanning        ? 'grabbing'
                : appMode === 'finish' ? (isDragging ? 'crosshair' : 'default')
                : appMode === 'site'   ? (mode?.siteDrawState ? 'crosshair' : 'default')
+               : appMode === 'elevation' ? 'grab'
                : appMode === 'opening' ? ((nearOpening || nearWall) ? 'pointer' : 'default')
                : isMoving         ? 'grab'
                : isDrawing        ? 'crosshair'
@@ -1610,8 +1634,8 @@ const App = observer(() => {
         </Stage>
       </div>
 
-      {/* 縮尺表示 / 入力 — 右下 */}
-      <ScaleIndicator width={size.width} height={size.height} />
+      {/* 縮尺表示 / 入力 — 右下（展開モードは自前の固定倍率ラベルをElevationLayerが描くため非表示） */}
+      {appMode !== 'elevation' && <ScaleIndicator width={size.width} height={size.height} />}
 
       {/* 仕上げモード: 部屋名入力ポップアップ */}
       {appMode === 'finish' && mode?.namingRoomId && (() => {

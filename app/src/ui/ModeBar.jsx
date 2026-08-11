@@ -9,6 +9,7 @@ const MODES = [
   { mode: 'finish',    label: '仕上げ' },
   { mode: 'structure', label: '構造' },
   { mode: 'site',      label: '敷地' },
+  { mode: 'elevation', label: '展開' },
 ];
 
 export function ModeBar({ appMode, onSelect, isLandscape }) {

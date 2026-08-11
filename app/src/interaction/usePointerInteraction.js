@@ -70,6 +70,7 @@ export function usePointerInteraction({
   const axisLabelRef      = useRef(null); // 柱芯ラベル長押し中: { cl, sx, sy }
   const finishDragDownRef = useRef(null); // 仕上げモード: pointerDown 座標
   const siteDrawDownRef   = useRef(null); // 敷地モード: ドラッグ開始スクリーン座標
+  const elevationDragRef  = useRef(null); // 展開モード: { x, y, axis:'h'|'v'|null, roomId }
 
   // ---- ガター通り芯 長押しフック ----
   // 長押し確定（500ms後）までの待ち時間を使い、押下直後（onStart）から移動範囲の
@@ -163,6 +164,8 @@ export function usePointerInteraction({
 
   // ---- ホイールズーム ----
   const handleWheel = (e) => {
+    // 展開モードはズームが存在しない（固定倍率）。viewport.zoomAtを封じる。
+    if (appMode === 'elevation') { e.evt.preventDefault(); return; }
     e.evt.preventDefault();
     const factor = e.evt.deltaY < 0 ? 1.1 : 1 / 1.1;
     viewport.zoomAt(e.evt.clientX, e.evt.clientY, factor);
@@ -174,6 +177,15 @@ export function usePointerInteraction({
     const { clientX, clientY } = e.evt;
     if (e.evt.touches) return;
     if (menu) return;
+
+    // ---- 展開モード ----
+    if (appMode === 'elevation') {
+      elevationDragRef.current = {
+        x: clientX, y: clientY, axis: null,
+        roomId: modeRef.current?.bandAtScreenY(clientY) ?? null,
+      };
+      return;
+    }
 
     // ---- 仕上げモード ----
     if (appMode === 'finish') {
@@ -244,6 +256,28 @@ export function usePointerInteraction({
   const handlePointerMove = (e) => {
     const { clientX, clientY } = e.evt;
     if (menu) return;
+
+    // ---- 展開モード ----
+    if (appMode === 'elevation') {
+      const drag = elevationDragRef.current;
+      if (!drag) return;
+      const dx = clientX - drag.x;
+      const dy = clientY - drag.y;
+      if (!drag.axis) {
+        if (Math.abs(dx) < 8 && Math.abs(dy) < 8) return; // 閾値未満はまだ軸ロックしない
+        drag.axis = Math.abs(dx) > Math.abs(dy) ? 'h' : 'v';
+      }
+      drag.x = clientX;
+      drag.y = clientY;
+      const scale = modeRef.current?.scale;
+      if (scale > 0) {
+        const dxMm = drag.axis === 'h' ? dx / scale : 0;
+        const dyMm = drag.axis === 'v' ? dy / scale : 0;
+        modeRef.current?.scrollBy(dxMm, dyMm, drag.roomId);
+      }
+      setIsPanning(true);
+      return;
+    }
 
     // ---- 仕上げモード ----
     if (appMode === 'finish') {
@@ -421,6 +455,13 @@ export function usePointerInteraction({
 
   // ---- ポインタ Up ----
   const handlePointerUp = (e) => {
+    // ---- 展開モード ----
+    if (appMode === 'elevation') {
+      elevationDragRef.current = null;
+      setIsPanning(false);
+      return;
+    }
+
     // ---- 仕上げモード ----
     if (appMode === 'finish') {
       if (finishDragDownRef.current && modeRef.current?.dragState) {
@@ -535,6 +576,11 @@ export function usePointerInteraction({
 
   // ---- ポインタ Leave (外アップ扱い) ----
   const handlePointerLeave = () => {
+    if (appMode === 'elevation') {
+      elevationDragRef.current = null;
+      setIsPanning(false);
+      return;
+    }
     if (appMode === 'finish') {
       modeRef.current?.cancelDrag();
       finishDragDownRef.current = null;
@@ -585,6 +631,8 @@ export function usePointerInteraction({
 
   // ---- タッチ: ピンチズーム ----
   const handleTouchMove = (e) => {
+    // 展開モードはズームが存在しない（固定倍率）。ピンチを封じる。
+    if (appMode === 'elevation') { e.evt.preventDefault(); return; }
     e.evt.preventDefault();
     const touches = e.evt.touches;
     if (touches.length >= 2) touchTapRef.current = null; // 動きあり → タップではない

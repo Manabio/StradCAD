@@ -21,6 +21,7 @@ import { DrawPreview } from './DrawPreview.jsx';
 import { CLAddPreview } from './CLAddPreview.jsx';
 import { WallRefIndicator } from './WallRefIndicator.jsx';
 import { SiteLinesLayer, SiteDrawPreview } from './SiteLinesLayer.jsx';
+import { ElevationLayer } from './ElevationLayer.jsx';
 
 // ================================================================
 // Stage 内の描画レイヤ束（world / overlay / ui の3 Layer）。
@@ -35,6 +36,12 @@ export const SceneLayers = observer(({
   setShowStructuralInfoDialog, setMemberFocusRequest, setStatusMenu,
   onOpeningTagClick,
 }) => {
+  // 展開モードは平面・通り芯・寸法を一切出さない専用画面（描画エリア＋ガター全域）。
+  // 既存レイヤ群（INSETクリップ・viewport Group等）は一切通らない。
+  if (appMode === 'elevation') {
+    return <Layer name="elevation"><ElevationLayer mode={mode} size={size} /></Layer>;
+  }
+
   return (
     <>
       <Layer name="world">
