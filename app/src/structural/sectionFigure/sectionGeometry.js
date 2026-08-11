@@ -8,11 +8,14 @@
 // 座標系: mm、y軸下向き正（CLAUDE.md準拠）。断面図では y が大きいほど下。
 //
 // プリミティブ（type 別フィールド。すべて mm 座標）:
-//   rect      { x, y, w, h, fill?, stroke?, hatch? }            矩形（hatch:'concrete'でRCハッチ）
+//   rect      { x, y, w, h, fill?, stroke?, hatch?, weight? }    矩形（hatch:'concrete'でRCハッチ。weightはline参照）
 //   circle    { cx, cy, r, rPx?, fill?, stroke? }                円（RC丸柱・丸形鋼管）。rPx指定時は
 //                                                               縮尺に関わらず常に同じpx半径（交点マーカー等の目印用、r は無視）。
-//   line      { x1, y1, x2, y2, dash?, stroke?, width? }        単純線
-//   polyline  { points:[[x,y]...], closed?, fill?, stroke? }    折れ線/多角形
+//   line      { x1, y1, x2, y2, dash?, stroke?, width?, weight? } 単純線（weight:'thick'|'medium'|'thin'は
+//                                                               展開モード専用。SVGレンダラAutoScaledFigure.jsx
+//                                                               はこのフィールドを無視しp.width??1を使う——
+//                                                               Konva版figurePrimitivesKonva.jsxだけが解釈する）
+//   polyline  { points:[[x,y]...], closed?, fill?, stroke?, weight? } 折れ線/多角形（weightはlineと同様）
 //   hSection  { x, y, w, h, web, flange, fill? }                H形鋼の実形状（x,y=左上, w=幅, h=成）
 //   text      { x, y, text, anchor?, baseline?, size? }         ラベル（size=px、既定12）
 //   axisV     { x, label }                                      縦の基準線（通り芯/柱芯。一点鎖線）
