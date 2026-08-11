@@ -1,4 +1,6 @@
 import { Line, Rect, Circle, Text, Group } from 'react-konva';
+import { miterTriangleVertices, verticalDimLabelBox } from '../elevation/elevationLayout.js';
+import { TRIANGLE_HEIGHT_SCREEN_MM, TRIANGLE_ANGLE_DEG } from '../elevation/elevationStyle.js';
 
 // ================================================================
 // 展開図（elevation/*.js）のプリミティブ語彙の Konva レンダラ。
@@ -81,14 +83,34 @@ function renderDim(p, key, t) {
     nodes.push(<Circle key={`${key}-d2`} x={x2} y={y2} radius={2} fill={DIM_COLOR} strokeScaleEnabled={false} listening={false} />);
   }
   const midX = (x1 + x2) / 2, midY = (y1 + y2) / 2;
-  nodes.push(
-    <Text key={`${key}-t`} x={midX - 40} y={midY - 7} width={80} align="center"
-      text={String(p.label ?? '')} fontSize={11} fill={DIM_COLOR} listening={false} />,
-  );
+  if (isV) {
+    // 天井高寸法など縦方向の寸法値: 寸法線の左側に、文字の天が左を向く縦書き回転
+    // （反時計回り90°。ユーザー仕様）。verticalDimLabelBoxが回転・オフセットを一括算出する。
+    const box = verticalDimLabelBox(x1, midY);
+    nodes.push(
+      <Text key={`${key}-t`} {...box} align="center"
+        text={String(p.label ?? '')} fontSize={11} fill={DIM_COLOR} listening={false} />,
+    );
+  } else {
+    nodes.push(
+      <Text key={`${key}-t`} x={midX - 40} y={midY - 7} width={80} align="center"
+        text={String(p.label ?? '')} fontSize={11} fill={DIM_COLOR} listening={false} />,
+    );
+  }
   return nodes;
 }
 
-function renderOne(p, i, t, lineWeightsPx) {
+function renderMiterTriangle(p, key, t, screenPxPerMm) {
+  const anchorX = t.tx(p.x), anchorY = t.ty(p.y);
+  const heightPx = TRIANGLE_HEIGHT_SCREEN_MM * (screenPxPerMm ?? 1);
+  const { top, outer, inner } = miterTriangleVertices(anchorX, anchorY, p.dir, heightPx, TRIANGLE_ANGLE_DEG);
+  return (
+    <Line key={key} points={[...top, ...outer, ...inner]} closed
+      fill="#1e293b" stroke="#1e293b" strokeWidth={1} strokeScaleEnabled={false} listening={false} />
+  );
+}
+
+function renderOne(p, i, t, lineWeightsPx, screenPxPerMm) {
   const key = `p${i}`;
   switch (p.type) {
     case 'line':
@@ -122,6 +144,8 @@ function renderOne(p, i, t, lineWeightsPx) {
       return renderTag(p, key, t);
     case 'dim':
       return renderDim(p, key, t);
+    case 'miterTriangle':
+      return renderMiterTriangle(p, key, t, screenPxPerMm);
     default:
       return null;
   }
@@ -131,12 +155,14 @@ function renderOne(p, i, t, lineWeightsPx) {
  * プリミティブ配列を Konva 要素配列へレンダリングする。
  * @param {object[]} primitives
  * @param {{tx:Function, ty:Function, sx:Function}} t - mm→px 変換器
- * @param {{lineWeightsPx?: {thin:number, medium:number, thick:number}}} [opts]
+ * @param {{lineWeightsPx?: {thin:number, medium:number, thick:number}, screenPxPerMm?: number}} [opts]
+ *   screenPxPerMm - 校正値（miterTriangleのスクリーン固定サイズ換算用。ElevationLayer.jsxが
+ *   viewportから渡す。tagのrPxとは異なりTRIANGLE_HEIGHT_SCREEN_MMが「実画面mm」基準のため必要）。
  * @returns {import('react').ReactNode[]}
  */
-export function renderFigurePrimitives(primitives, t, { lineWeightsPx } = {}) {
+export function renderFigurePrimitives(primitives, t, { lineWeightsPx, screenPxPerMm } = {}) {
   return primitives.flatMap((p, i) => {
-    const el = renderOne(p, i, t, lineWeightsPx);
+    const el = renderOne(p, i, t, lineWeightsPx, screenPxPerMm);
     return el == null ? [] : el;
   });
 }

@@ -29,12 +29,14 @@ export function weightForRole(role) {
 }
 
 // 天井高寸法の左オフセット・アキ注記等、mm単位の描画定数（単一情報源）。
-export const FACE_GAP_MM        = 200;  // 帯内で面同士を横に並べる際の隙間
-export const BAND_GAP_MM        = 600;  // 帯（部屋）同士の縦の隙間
-export const CH_DIM_OFFSET_MM   = 250;  // 天井高寸法の先頭面左端からのオフセット
-export const GRID_TAG_DROP_MM   = 300;  // 通り芯丸番号: 床線から下へのはね出し量
+export const DEFAULT_FACE_GAP_MM = 200;  // 面間隙間の仮値（倍率決定用の1パス目にのみ使う。QA点3参照）
+export const DEFAULT_NAME_GAP_MM = 500;  // 部屋名枠の上余白の仮値（倍率決定用の1パス目にのみ使う。QA G5と同じ2パス方式）
+export const BAND_GAP_MM         = 600;  // 帯（部屋）同士の縦の隙間
+export const CH_DIM_OFFSET_MM    = 250;  // 天井高寸法の先頭面境界CLからのオフセット
 export const WALL_LABEL_GAP_MM       = 250; // 壁材2段書き: 天井線からのオフセット（openingElevationFigure.jsのat:-250方式）
 export const WALL_LABEL_LINE_GAP_MM  = 150; // 壁材2段書き: 1段目と2段目の行間
+export const DIM_ROW_GAP_MM      = 300;  // 床線→水平寸法列（壁芯間・通り芯間）までの距離
+export const GRID_ROW_GAP_MM     = 300;  // 水平寸法列→通り芯丸の行までの距離
 
 // 記号丸のスクリーン上サイズ(px)。ズームが存在しない展開モードでも常にこの見た目サイズになる
 // （renderer/OpeningTagLayer.jsx の TAG_RADIUS_PX と同じ考え方）。
@@ -42,3 +44,13 @@ export const OPENING_TAG_RADIUS_PX = 16;
 export const OPENING_TAG_FONT_PX   = 11;
 export const GRID_TAG_RADIUS_PX    = 11;
 export const GRID_TAG_FONT_PX      = 11;
+
+// ---- 実画面mm基準（校正値 pxPerMm 換算）のスクリーン固定サイズ定数 ----
+// 展開図の縮尺（倍率）は面のモデル実寸だけで決まるため、これらは常にモデルmmへ
+// 換算してから配置する（screenMmToModelMm。elevationLayout.js）。
+export const FACE_GAP_SCREEN_MM      = 30; // 隣接展開図の壁芯間隔（実画面mm）
+export const TRIANGLE_HEIGHT_SCREEN_MM = 10; // 部屋範囲三角の高さ（実画面mm）
+export const TRIANGLE_ANGLE_DEG      = 60;   // 底辺と斜辺のなす角
+// 部屋名枠の上余白（実画面mm。QA G5）。通り芯丸のスクリーン固定半径(GRID_TAG_RADIUS_PX=11px
+// ≒3mm相当)の下半分と部屋名枠が重ならないよう、余裕を見て10mmにする。
+export const NAME_GAP_BELOW_SCREEN_MM = 10;

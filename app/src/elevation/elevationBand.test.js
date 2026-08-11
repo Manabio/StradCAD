@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { Plane, PlanGraph, CenterLineType, Discipline } from '@core';
 import { generateRoomWallsFromOutline } from '../finish/wallGeneration.js';
 import { buildRoomBand } from './elevationBand.js';
-import { FACE_GAP_MM } from './elevationStyle.js';
+import { buildRoomFaces, faceBoundaryLocalX } from './elevationFaces.js';
 
 function makeGraph() {
   const plane = new Plane('p1', 0, '1階', 1, 1);
@@ -33,39 +33,56 @@ test('buildRoomBand: 矩形部屋は4面ぶんのfaceCountを持つ', () => {
   assert.equal(band.roomName, 'LDK');
 });
 
-test('buildRoomBand: 天井高寸法(dim)は先頭面ぶん1本だけ出る', () => {
+test('buildRoomBand: 天井高寸法(縦dim)は先頭面ぶん1本だけ出る', () => {
   const graph = makeGraph();
   const room = makeRectRoom(graph, 0, 0, 4000, 3000);
 
   const band = buildRoomBand(room, graph);
-  const dims = band.primitives.filter(p => p.type === 'dim');
-  assert.equal(dims.length, 1);
-  assert.equal(dims[0].dot, true);
+  const chDims = band.primitives.filter(p => p.type === 'dim' && p.dir === 'v');
+  assert.equal(chDims.length, 1);
+  assert.equal(chDims[0].dot, true);
 });
 
-test('buildRoomBand: 部屋名テキストと引出線の留め三角(polyline)が出る', () => {
+// ---- 壁芯間寸法（横dim。ROW1）は面ごとに1本出る ----
+test('buildRoomBand: 壁芯間寸法(横dim)は面の数ぶん出る', () => {
+  const graph = makeGraph();
+  const room = makeRectRoom(graph, 0, 0, 4000, 3000);
+
+  const band = buildRoomBand(room, graph);
+  const wallDims = band.primitives.filter(p => p.type === 'dim' && p.dir === 'h');
+  assert.equal(wallDims.length, band.faceCount);
+});
+
+test('buildRoomBand: 部屋名テキストと引出線の留め三角(miterTriangle)が出る', () => {
   const graph = makeGraph();
   const room = makeRectRoom(graph, 0, 0, 4000, 3000, 'キッチン');
 
   const band = buildRoomBand(room, graph);
   assert.ok(band.primitives.some(p => p.type === 'text' && p.text === 'キッチン'));
-  assert.ok(band.primitives.some(p => p.type === 'polyline' && p.closed));
+  assert.ok(band.primitives.some(p => p.type === 'miterTriangle'));
 });
 
-test('buildRoomBand: 2面目以降はxCursor(前面のrun+FACE_GAP_MM)ぶんだけ右へずれる', () => {
+// ---- 面間ギャップは壁中心線(faceBoundaryLocalX)同士がgapModelMmになるよう配置する（ユーザー仕様） ----
+test('buildRoomBand: 隣接面は壁中心線同士がctx.gapModelMmだけ離れて配置される', () => {
   const graph = makeGraph();
   const room = makeRectRoom(graph, 0, 0, 4000, 3000);
+  const gapModelMm = 321;
 
-  const band = buildRoomBand(room, graph);
-  // CUT(太)の縦線(両端)から各面のローカルx範囲を復元する。
+  const band = buildRoomBand(room, graph, { gapModelMm });
+  const faces = buildRoomFaces(room, graph);
+  // CUT(太)の縦線(両端)から各面のローカルx範囲(帯内座標)を復元する。
+  // xs = [面0.lo(=0), 面0.hi(=run0), 面1.lo(=xCursor1), 面1.hi(=xCursor1+run1), ...]
   const cutVerticals = band.primitives.filter(p => p.type === 'line' && p.weight === 'thick' && p.x1 === p.x2);
   const xs = [...new Set(cutVerticals.map(p => p.x1))].sort((a, b) => a - b);
-  // 面0: [0, run0], 面1(B): [run0+GAP, run0+GAP+run1], ...
   assert.equal(xs[0], 0, '先頭面の左端は0');
-  // 面の境目にFACE_GAP_MM分のギャップがあるはず（隣接する2値の差がFACE_GAP_MMと一致する箇所が存在する）
-  const gaps = [];
-  for (let i = 1; i < xs.length; i++) gaps.push(xs[i] - xs[i - 1]);
-  assert.ok(gaps.some(g => Math.abs(g - FACE_GAP_MM) < 1e-6), `面間のギャップ${FACE_GAP_MM}が見つからない: ${gaps}`);
+
+  const boundary0 = faceBoundaryLocalX(faces[0], graph);
+  const boundary1 = faceBoundaryLocalX(faces[1], graph);
+  const xCursor1 = xs[2]; // 面1のローカルx=0が帯内で来る位置
+  const face0HiAbs = boundary0.hi;         // 面0の壁中心線(hi)の帯内絶対x（面0のxCursorは0）
+  const face1LoAbs = xCursor1 + boundary1.lo; // 面1の壁中心線(lo)の帯内絶対x
+  assert.ok(Math.abs(face1LoAbs - (face0HiAbs + gapModelMm)) < 1e-6,
+    `面1の壁中心線(lo=${face1LoAbs})は面0の壁中心線(hi=${face0HiAbs})+gapModelMm(${gapModelMm})のはず`);
 });
 
 // ---- 失敗系: セルの無い部屋は面0・帯は空のまま例外を投げない ----
@@ -76,4 +93,15 @@ test('【失敗系】buildRoomBand: セルが無い部屋はfaceCount=0・部屋
   const band = buildRoomBand(room, graph);
   assert.equal(band.faceCount, 0);
   assert.equal(band.primitives.length, 0);
+});
+
+// ---- QA G5: ctx.nameGapModelMmが部屋名枠の上余白（帯の下端=bounds.maxY）に効く ----
+test('buildRoomBand: ctx.nameGapModelMmを変えるとbounds.maxYがその差分だけ変わる', () => {
+  const graph = makeGraph();
+  const room = makeRectRoom(graph, 0, 0, 4000, 3000);
+
+  const bandSmall = buildRoomBand(room, graph, { nameGapModelMm: 100 });
+  const bandLarge = buildRoomBand(room, graph, { nameGapModelMm: 999 });
+  assert.ok(Math.abs((bandLarge.bounds.maxY - bandSmall.bounds.maxY) - (999 - 100)) < 1e-6,
+    `nameGapModelMmの差分(899)だけbounds.maxYが変わるはず（実際差:${bandLarge.bounds.maxY - bandSmall.bounds.maxY}）`);
 });

@@ -4,7 +4,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { edgeKey, OpeningCategory, CenterLineType } from '@core';
-import { buildFaceFigure, kneeDropGapsOnFace } from './elevationFigure.js';
+import { buildFaceFigure, kneeDropGapsOnFace, parseBaseboardHeightMm } from './elevationFigure.js';
 
 function makeFace(overrides = {}) {
   return {
@@ -19,8 +19,8 @@ function makeGraph({ openings = [], kneeDropWalls = new Map(), shapes = new Map(
   return { openings, kneeDropWalls, shapeMap: shapes };
 }
 
-function makeRoom(finishInfo = {}) {
-  return { getFinishInfo: () => finishInfo };
+function makeRoom(finishInfo = {}, finish = null) {
+  return { getFinishInfo: () => finishInfo, finish };
 }
 
 function baseCtx(overrides = {}) {
@@ -131,4 +131,81 @@ test('【失敗系】kneeDropGapsOnFace: faceのlo..hi範囲外の区間は無�
   const graph = makeGraph({ shapes, kneeDropWalls });
   const face = makeFace({ lo: 0, hi: 4000 });
   assert.deepEqual(kneeDropGapsOnFace(face, graph, 2400), []);
+});
+
+// ---- parseBaseboardHeightMm: "h=<数値>" 表記のみ解釈する ----
+test('parseBaseboardHeightMm: "h=60"/"H=60mm"は60を返す', () => {
+  assert.equal(parseBaseboardHeightMm('h=60'), 60);
+  assert.equal(parseBaseboardHeightMm('H=60mm'), 60);
+  assert.equal(parseBaseboardHeightMm('木製出幅木 h=60'), 60);
+});
+
+// ---- 失敗系: 解釈できない巾木文字列はnull（非描画） ----
+test('【失敗系】parseBaseboardHeightMm: "h="を含まない・非文字列は解釈できずnullを返す', () => {
+  assert.equal(parseBaseboardHeightMm('60'), null, '"h="が無い素の数値は対象外');
+  assert.equal(parseBaseboardHeightMm(''), null);
+  assert.equal(parseBaseboardHeightMm(null), null);
+  assert.equal(parseBaseboardHeightMm(undefined), null);
+});
+
+// ---- 巾木線: room.finish.baseboardHeightが解釈できる場合のみ、床上その高さに引かれる ----
+test('buildFaceFigure: 巾木(h=60)は床上60mmに引かれ、床まで達する開口の区間は途切れる', () => {
+  const doorOpening = {
+    id: 'op1', isVertical: false, axisCL: { id: 'axisY0' }, wallSide: 1,
+    centerCoord: 2000, width: 800, height: 2000, sillHeight: 0,
+    category: OpeningCategory.FITTING, subType: 'singleSwing', fixtureType: null,
+  };
+  const face = makeFace();
+  const ctx = baseCtx({
+    graph: makeGraph({ openings: [doorOpening] }),
+    room: makeRoom({}, { baseboardHeight: 'h=60' }),
+  });
+  const prims = buildFaceFigure(face, ctx);
+  const baseboardLines = prims.filter(p => p.type === 'line' && p.weight === 'thin' && p.y1 === -60 && p.y2 === -60);
+  // 開口(1600..2400)の左右2区間に分かれるはず（[0,1600], [2400,4000]）。
+  assert.equal(baseboardLines.length, 2, `巾木線は開口区間で途切れて2本になるはず（実際:${baseboardLines.length}）`);
+  assert.ok(baseboardLines.some(p => p.x1 === 0 && p.x2 === 1600));
+  assert.ok(baseboardLines.some(p => p.x1 === 2400 && p.x2 === 4000));
+});
+
+// ---- 失敗系: 巾木文字列が解釈できない場合は非描画 ----
+test('【失敗系】buildFaceFigure: baseboardHeightが解釈不能な文字列なら巾木線を描かない', () => {
+  const face = makeFace();
+  const ctx = baseCtx({ room: makeRoom({}, { baseboardHeight: '既製品' }) });
+  const prims = buildFaceFigure(face, ctx);
+  assert.ok(!prims.some(p => p.type === 'line' && p.weight === 'thin' && p.y1 === p.y2 && p.y1 < 0 && p.y1 > -100),
+    '解釈不能な巾木文字列では巾木線を描いてはいけない');
+});
+
+// ---- 壁芯間寸法（ROW1）: 面の両端＝壁中心線(faceBoundaryLocalX)で1本出る ----
+test('buildFaceFigure: 壁芯間寸法(横dim)がface.lo/hiではなく壁中心線(CL)基準で1本出る', () => {
+  const shapes = new Map([['x0', { effectiveValue: -100 }], ['x1', { effectiveValue: 4100 }]]);
+  const face = makeFace();
+  const ctx = baseCtx({ graph: makeGraph({ shapes }) });
+  const prims = buildFaceFigure(face, ctx);
+  const wallDims = prims.filter(p => p.type === 'dim' && p.dir === 'h');
+  assert.equal(wallDims.length, 1);
+  assert.equal(wallDims[0].from, -100);
+  assert.equal(wallDims[0].to, 4100);
+  assert.equal(wallDims[0].label, 4200);
+});
+
+// ---- QA G4: 通り芯間寸法(ROW2)と通り芯丸番号は別の段（同じyに同居させない） ----
+test('【QA G4】buildFaceFigure: 通り芯丸(circle)は通り芯間寸法(ROW2のdim)より、さらに下の段に分離される', () => {
+  const gridCLs = [
+    { centerLineType: CenterLineType.VERTICAL, effectiveValue: 1000, label: '1' },
+    { centerLineType: CenterLineType.VERTICAL, effectiveValue: 3000, label: '2' },
+  ];
+  const face = makeFace();
+  const ctx = baseCtx({ gridCLs });
+  const prims = buildFaceFigure(face, ctx);
+
+  const gridDim = prims.find(p => p.type === 'dim' && p.dir === 'h' && p.from === 1000 && p.to === 3000);
+  assert.ok(gridDim, '通り芯間寸法(1000→3000)が出るはず');
+  const circles = prims.filter(p => p.type === 'circle');
+  assert.equal(circles.length, 2);
+  for (const c of circles) {
+    assert.notEqual(c.cy, gridDim.at, '通り芯丸のyは通り芯間寸法の行(at)と同じであってはいけない（別段。QA G4）');
+    assert.ok(c.cy > gridDim.at, '通り芯丸は寸法行よりさらに下（yが大きい）はず');
+  }
 });

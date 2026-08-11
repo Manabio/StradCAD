@@ -1,59 +1,73 @@
 # 展開モード（室内展開図）設計意図
 
-`appMode==='elevation'`。アクティブ階の各部屋を「1段＝1帯」の固定倍率図として全画面
-（描画エリア＋ガター全域）に描く専用モード。平面・通り芯・寸法は一切出さず、
-`viewport.scaleX/offsetX`（ズーム）には一切触れない——展開図は独自の固定倍率
-（`elevation/elevationLayout.js` の `chooseElevationScale`）と縦横スクロール量
-（`ElevationModeState`）だけで完結し、平面へ戻ったときに元のビューが保たれることを
-保証するための不変条件。純モジュールは `app/src/elevation/` に置き、
-`store.js`/`snap.js`/`*.jsx`/`react-konva` を静的 import しない（node:test 単体実行のため）。
+`appMode==='elevation'`。アクティブ階の各部屋を「1段＝1帯」の固定倍率図として全画面に
+描く専用モード。平面・通り芯・寸法は一切出さず、`viewport.scaleX/offsetX`（ズーム）には
+一切触れない——独自の固定倍率（`chooseElevationScale`）とスクロール量（`ElevationModeState`）
+だけで完結し、平面へ戻ったときに元のビューが保たれることを保証する不変条件。純モジュールは
+`app/src/elevation/` に置き、`store.js`/`snap.js`/`*.jsx`/`react-konva`/`appViewport.js`
+（DOM依存の`window`参照を持つ）を静的 import しない（node:test 単体実行のため。校正値が
+要る箇所はDOM非依存の`viewport.js`から値を取るか、呼び出し側=`App.jsx`が解決して渡す）。
+
+縦横スクロールは**クランプ方式**（循環しない。上端＝先頭帯の最上端が画面上端、下端＝
+末尾帯の最下端が画面下端）。**書き込み時にクランプする**こと（`scrollBy`が読み出し側の
+`clampedScrollY`だけに頼ると、過剰ドラッグ分が内部状態に見えないスラックとして蓄積し、
+逆方向ドラッグがそのぶん効かないデッドゾーンになる。横方向`faceScroll`と同じ規律）。
 
 ## A/B/C/D の向きと不変条件
 A＝平面の上側（北）を室内から見た面、B=右（東）、C=下（南）、D=左（西）。時計回りに
-A→B→C→D。各面は `dirSign`（ローカルx+方向が指す世界座標の向き）と `originWorld`
-（ローカルx=0の世界座標）を持ち、隣接する面同士は同じ物理的な隅を世界座標で共有する
-（`buildRoomFaces` の最重要不変条件。テストは `elevationFaces.test.js` I2）。
+A→B→C→D。隣接する面同士は同じ物理的な隅を世界座標で共有する（`buildRoomFaces` の
+最重要不変条件。テストは `elevationFaces.test.js` I2）。
 
-L字部屋では同じletterが複数面に分かれる（例: B1/B2）。これは矩形の1角を欠くと
-必ず隣接する2方向（例: 北と東）がそれぞれ2分割され、実際の外周を歩くと
-A→B→A→B→C→D のように**letterが交互に現れる**ため——`buildRoomFaces` はletterで
-グループ化してから連結するのではなく、外周を実際に1周する順（隅=軸CLの一致で次面へ
-辿るチェーン）で面配列を組み立て、ラベル番号（B1/B2）はこの実周回順の出現順に振る。
-letterでグループ化して連結すると、L字の隅で隣接面が世界座標で一致しなくなる
-（過去の実装ミスとその修正過程は `elevationFaces.js` のコメント参照）。
+L字部屋では同じletterが複数面に分かれる（例: B1/B2）。letterでグループ化してから連結すると
+L字の隅で世界座標が一致しなくなるため、`buildRoomFaces` は外周を実際に1周する順（隅=軸CLの
+一致で次面へ辿るチェーン）で面配列を組み立て、ラベル番号はこの実周回順の出現順に振る。
 
 外周エッジは `computeExternalEdgeParams` の結果を **axisCLIdごとにグループ化してから**
-`mergeSegments` する（`wallGeneration.js` の各生成関数と同じ手順）。グループ化せず
-全エッジを一括で渡すと、`mergeSegments` が「終端CL id＝次の始端CL id」だけで結合判定する
-ため、L字の隅で別letterの面同士が誤って1本にマージされる。
+`mergeSegments` する。一括で渡すと「終端CL id＝次の始端CL id」だけで結合判定されるため、
+L字の隅で別letterの面同士が誤って1本にマージされる。
 
-## プリミティブ語彙と `tag` の逸脱
-既存の「図」プリミティブ語彙（`structural/sectionFigure/sectionGeometry.js`）を再利用し、
-`line`/`rect`/`polyline` に任意の `weight`（`thick`/`medium`/`thin`）を追加しただけ。
-唯一の逸脱は建具記号丸で、設計では circle+line+text×2 の4プリミティブ分解だったが、
-実装では `tag`（円+直径線+上下2段テキストの合成）という1プリミティブにした——記号丸は
-`rPx`（スクリーン固定px、ズーム非依存の見た目サイズ。`renderer/OpeningTagLayer.jsx` と
-同じ考え方）を使うため、線・テキストをmm座標のまま分解すると帯ごとに異なる倍率のもとで
-見た目サイズが一定にならない。`renderer/figurePrimitivesKonva.jsx` だけが解釈する
-（`AutoScaledFigure.jsx` は使わないため無視で問題ない）。
+## プリミティブ語彙と `tag`/`miterTriangle` の逸脱
+既存の「図」プリミティブ語彙を再利用し、`line`/`rect`/`polyline`に`weight`を追加しただけ。
+建具記号丸（`tag`）と部屋範囲の留め三角（`miterTriangle`）はスクリーン固定サイズ（ズーム非依存
+の見た目サイズ。`renderer/OpeningTagLayer.jsx`と同じ考え方）が必要なため、mm座標に焼き込まず
+アンカー点だけを持つ専用プリミティブにし、実際のpx幾何計算はレンダラ側で校正値
+（`screenPxPerMm`）を掛けて初めて行う——先にmm換算して焼き込むと、帯の初期化後にwindowが
+リサイズされ`scale`が変わったときに見た目サイズが狂う。
+
+## 面の配置・注記は「壁中心線」基準（`faceBoundaryLocalX`）
+帯内で面を横に並べる基準・壁芯間寸法は、`face.lo/hi`（壁の室内側仕上げ面）ではなく
+`faceBoundaryLocalX`（両端の壁中心線=CLのローカル位置）を使う（本体の壁面線=CUTは従来どおり
+仕上げ面基準）。面間ギャップ（実画面30mm相当）・部屋名枠の上余白（実画面10mm相当。通り芯丸の
+スクリーン固定半径と重ならない値）はどちらもモデルmmへ換算するのに倍率(scale)が要り、倍率は
+帯の高さ（ギャップ非依存）から決まるため、`ElevationModeState.init()`は2パス構築で循環参照を
+避ける（1パス目=仮値で倍率確定、2パス目=確定した倍率で実値を`screenMmToModelMm`換算）。
+
+床線から下へ①壁芯間寸法②通り芯間寸法③通り芯丸番号の順で3段に分ける（②③を同居させない。
+段を分けるのはユーザー仕様どおり）。天井高寸法（縦dim）のラベルだけ寸法線の左側で反時計回り
+90°回転する（`verticalDimLabelBox`。横方向の寸法は回転しない）。
 
 ## 帯の縦位置（画面mm空間）の不変条件
 `layoutBands` が返す `placement.topMm` は、帯のプリミティブ座標 y=0（床線）ではなく
-`band.bounds.minY`（帯の実描画範囲の上端）に対応する（`bandContentOriginMm`。唯一の消費者は
-`ElevationLayer.jsx`）。ここを取り違えると天井線・壁材ラベルが画面外へはみ出す。
+`band.bounds.minY`（帯の実描画範囲の上端）に対応する（`bandContentOriginMm`）。取り違えると
+天井線・壁材ラベルが画面外へはみ出す。
 
 ## 天井高さのフォールバック
-`finish/roomMetrics.js` の `roomCeilingHeight(graph, room)` が唯一の情報源。
-自由入力（傾斜天井のレンジ表記等）が数値化できないときは `graph.defaultCeilingHeight`
-で作図しつつ、ラベルには原文をそのまま出す。`finish/kneeDropWall.js` の
-`effectiveCeilingHeight` もこれに移行済み（`finish/FinishTable.jsx` の同型フォールバックは
-未移行——公開UIの表示崩れリスクがあるため今回のスコープ外）。
+`finish/roomMetrics.js` の `roomCeilingHeight(graph, room)` が唯一の情報源。数値化できない
+自由入力は `graph.defaultCeilingHeight` で作図しつつ、ラベルには原文をそのまま出す。
 
 ## 階段2層帯の簡略化
-`elevation/elevationStair.js` の直上階（吹抜けクリップ）表現は、上階FL線を重ねて引くだけの
-簡易実装にとどめている（複雑階段の上層クリップ精度はセル粒度で可、という合意の範囲内）。
+`elevationStair.js` の直上階（吹抜けクリップ）表現は、上階FL線を重ねて引くだけの簡易実装。
 直上階グラフの取得（`floorSwapManager.peek`）は純モジュールでは行えないため
-`ElevationModeState.init()` が非同期で解決し、`buildStairBand` へ引数で渡す構成にした。
+`ElevationModeState.init()` が非同期で解決し、`buildStairBand` へ引数で渡す。
+
+## 巾木の初期値・解釈
+初期値（`木製出幅木`/`h=60`）は**ユーザーがRoomを新規作成する経路でのみ**適用する
+（`applyDefaultBaseboard`。呼び出し元は`FinishModeState`の部屋指定確定処理のみ）。
+`RoomFinish`コンストラクタでは絶対に設定しない——復元/デシリアライズ経路は「新しいRoomを
+作ってから空でないフィールドだけ上書きする」実装のため、コンストラクタ既定値を非空にすると
+ユーザーがクリアした`''`が復元のたびに既定値へ巻き戻る（生きたデータ整合性バグ）。
+展開側は`parseBaseboardHeightMm`が`"h=<数値>"`表記だけを解釈し、解釈できなければ非描画
+（巾木は自由入力欄という既存の性格を壊さない）。床まで達する開口の区間は巾木線を途切れさせる。
 
 ## defer（未実装）
 傾斜天井の作図・開口の内法寸法線・巾木見切り目地・家具設備電気・屋外部屋・展開図上の編集・

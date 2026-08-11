@@ -84,15 +84,15 @@ test('【失敗系】buildStairBand: upperGraph=nullは1層のみ返し例外を
   assert.ok(band.primitives.length > 0);
 });
 
-// ---- QA F3: buildStairBandも部屋名枠（rect+text）＋留め三角（closed polyline）を出す ----
-test('【QA F3】buildStairBand: 部屋名の枠(rect+text)と留め三角(closed polyline)が出る（以前は階段帯だけ欠落）', () => {
+// ---- QA F3: buildStairBandも部屋名枠（rect+text）＋留め三角（miterTriangle）を出す ----
+test('【QA F3】buildStairBand: 部屋名の枠(rect+text)と留め三角(miterTriangle)が出る（以前は階段帯だけ欠落）', () => {
   const graph = makeGraph();
   const room = makeRectRoom(graph, 0, 0, 2000, 4000, '階段室');
   const band = buildStairBand(room, graph, null);
 
   assert.ok(band.primitives.some(p => p.type === 'rect'), '部屋名の枠(rect)が無い');
   assert.ok(band.primitives.some(p => p.type === 'text' && p.text === '階段室'), '部屋名テキストが無い');
-  assert.ok(band.primitives.some(p => p.type === 'polyline' && p.closed), '留め三角(closed polyline)が無い');
+  assert.ok(band.primitives.some(p => p.type === 'miterTriangle'), '留め三角(miterTriangle)が無い');
 });
 
 // ---- 失敗系: upperGraphはあるが重なるVOID/STAIR_VOID部屋が無い場合も1層のまま ----
@@ -104,4 +104,15 @@ test('【失敗系】buildStairBand: 直上階に重なる吹抜けが無けれ�
 
   const band = buildStairBand(room, graph, upperGraph, { project: { planes: [graph.plane, upperGraph.plane] } });
   assert.equal(band.faceCount, 4);
+});
+
+// ---- QA G5: ctx.nameGapModelMmが部屋名枠の上余白（帯の下端=bounds.maxY）に効く（階段帯も同様） ----
+test('buildStairBand: ctx.nameGapModelMmを変えるとbounds.maxYがその差分だけ変わる', () => {
+  const graph = makeGraph();
+  const room = makeRectRoom(graph, 0, 0, 2000, 4000, '階段');
+
+  const bandSmall = buildStairBand(room, graph, null, { nameGapModelMm: 100 });
+  const bandLarge = buildStairBand(room, graph, null, { nameGapModelMm: 999 });
+  assert.ok(Math.abs((bandLarge.bounds.maxY - bandSmall.bounds.maxY) - (999 - 100)) < 1e-6,
+    `nameGapModelMmの差分(899)だけbounds.maxYが変わるはず（実際差:${bandLarge.bounds.maxY - bandSmall.bounds.maxY}）`);
 });

@@ -1,9 +1,9 @@
 /**
- * 展開図: 固定倍率決定・帯（部屋）レイアウト・循環スクロール・mm→px変換器（純関数群）。
+ * 展開図: 固定倍率決定・帯（部屋）レイアウト・クランプスクロール・mm→px変換器（純関数群）。
  * 設計意図は .claude/elevation-model.md 参照。
  *
  * 展開モードにはズームが無いため、倍率は画面高さだけで決める（横幅は問わない）。
- * 縦（部屋帯）は循環スクロール、横（面）は帯ごと独立にクランプスクロールする。
+ * 縦（部屋帯）・横（面）ともクランプスクロール（循環しない。ユーザー指示により循環スクロールは廃止）。
  */
 import { chooseScale } from '../structural/sectionFigure/sectionGeometry.js';
 import { BAND_GAP_MM } from './elevationStyle.js';
@@ -25,10 +25,29 @@ export function chooseElevationScale(bands, { height }) {
 }
 
 /**
- * 帯群を縦に積んだレイアウト（帯間 BAND_GAP_MM）。周期 totalMm は最後の帯の下端＋帯間。
+ * 実画面mm（校正値ベース、ズーム非依存）をモデルmmへ換算する。
+ * 展開図の倍率(scale)は面のモデル実寸（高さ）だけで決まるため、この換算は倍率が
+ * 確定した後に行うこと——先に確定させてから使う側（ElevationModeState.init）が
+ * 「1パス目=倍率決定用の仮ギャップで帯を組む→倍率確定→2パス目=このscaleで実ギャップを
+ * 換算して帯を組み直す」という2段階の構成にすることで、倍率決定とギャップ換算の間の
+ * 循環参照を避ける（ユーザー指示の注意点）。
+ * @param {number} screenMm - 実画面上の物理mm
+ * @param {number} screenPxPerMm - 校正値（viewport.pxPerMmX/Yの平均等。物理mm→px）
+ * @param {number} scale - 展開図の倍率（モデルmm→px）
+ * @returns {number} モデルmm
+ */
+export function screenMmToModelMm(screenMm, screenPxPerMm, scale) {
+  if (!(scale > 0)) return 0;
+  return (screenMm * screenPxPerMm) / scale;
+}
+
+/**
+ * 帯群を縦に積んだレイアウト（帯間 BAND_GAP_MM）。
+ * contentHeightMm は最後の帯の下端（帯間の余白は含まない）——循環スクロールを廃止したため、
+ * 末尾の帯間ぶんの余白をスクロール可能範囲に含める理由が無い。
  * @param {Array<{roomId:string, heightMm:number}>} bands
  * @param {number} [gapMm]
- * @returns {{placements:Array<{roomId:string, topMm:number, heightMm:number}>, totalMm:number}}
+ * @returns {{placements:Array<{roomId:string, topMm:number, heightMm:number}>, contentHeightMm:number}}
  */
 export function layoutBands(bands, gapMm = BAND_GAP_MM) {
   const placements = [];
@@ -37,52 +56,49 @@ export function layoutBands(bands, gapMm = BAND_GAP_MM) {
     placements.push({ roomId: b.roomId, topMm: top, heightMm: b.heightMm });
     top += b.heightMm + gapMm;
   }
-  return { placements, totalMm: top };
-}
-
-/** offsetMm を [0, totalMm) へ正規化する。totalMm<=0 は 0 を返す（安全側）。 */
-export function wrapOffset(offsetMm, totalMm) {
-  if (!(totalMm > 0)) return 0;
-  return ((offsetMm % totalMm) + totalMm) % totalMm;
+  const last = placements[placements.length - 1];
+  const contentHeightMm = last ? last.topMm + last.heightMm : 0;
+  return { placements, contentHeightMm };
 }
 
 /**
- * 縦スクロール offsetMm・画面高さ viewHeightMm に対し、画面内に現れる帯の配置一覧を返す
- * （循環のため前後 ±totalMm の複製も候補に含める）。offsetMm は totalMm を法として周期的
- * （wrapOffset(o) === wrapOffset(o+totalMm)）。
+ * 縦スクロール scrollYMm を有効範囲へクランプする（循環しない）。
+ * 上端=0（最初の帯の天部が画面上端）、下端=contentHeightMm-viewHeightMm（最後の帯の底部が
+ * 画面下端）。全帯が画面に収まる場合（contentHeightMm<=viewHeightMm）はクランプ範囲が
+ * [0,0]に潰れ、スクロール不要になる。
+ * @param {number} scrollYMm
  * @param {ReturnType<typeof layoutBands>} layout
- * @param {number} offsetMm
+ * @param {number} viewHeightMm
+ */
+export function clampScrollY(scrollYMm, layout, viewHeightMm) {
+  const maxScroll = Math.max(0, layout.contentHeightMm - viewHeightMm);
+  return Math.min(Math.max(scrollYMm, 0), maxScroll);
+}
+
+/**
+ * 縦スクロール scrollYMm・画面高さ viewHeightMm に対し、画面内に現れる帯の配置一覧を返す
+ * （循環なし。呼び出し側が clampScrollY で正規化済みの scrollYMm を渡す想定だが、
+ * 未クランプの値を渡しても単に画面外へ出るだけで例外にはならない）。
+ * @param {ReturnType<typeof layoutBands>} layout
+ * @param {number} scrollYMm
  * @param {number} viewHeightMm
  * @returns {Array<{roomId:string, topMm:number, heightMm:number}>}
  */
-export function visibleBandPlacements(layout, offsetMm, viewHeightMm) {
-  const { placements, totalMm } = layout;
-  if (placements.length === 0 || !(totalMm > 0)) return [];
-  const wrapped = wrapOffset(offsetMm, totalMm);
+export function visibleBandPlacements(layout, scrollYMm, viewHeightMm) {
   const out = [];
-  for (const p of placements) {
-    // -totalMm候補: layoutBandsが「各帯の直後に必ずgapMm(>0)を積む」実装のため、
-    // 任意の帯についてtopMm+heightMm ≤ totalMm-gapMm < totalMm が常に成立し（最終帯は等号）、
-    // 現状の入力（gapMm>0前提）ではこの候補が単独で必要になることはない
-    // （QA F8: 削除はしないで残す＝将来layoutBandsの実装が変わった場合の対称性の保険。
-    // elevationLayout.test.js のコメントに数学的な証明を残す）。
-    for (const shift of [-totalMm, 0, totalMm]) {
-      const top = p.topMm - wrapped + shift;
-      if (top + p.heightMm > 0 && top < viewHeightMm) {
-        out.push({ roomId: p.roomId, topMm: top, heightMm: p.heightMm });
-      }
+  for (const p of layout.placements) {
+    const top = p.topMm - scrollYMm;
+    if (top + p.heightMm > 0 && top < viewHeightMm) {
+      out.push({ roomId: p.roomId, topMm: top, heightMm: p.heightMm });
     }
   }
   return out;
 }
 
-/** 画面上のy座標(mm、描画エリア原点基準)がどの帯に属するかを返す（無ければ null）。 */
-export function bandIdAtY(layout, offsetMm, yMm) {
-  const { placements, totalMm } = layout;
-  if (placements.length === 0 || !(totalMm > 0)) return null;
-  const wrapped = wrapOffset(offsetMm, totalMm);
-  const localY = (((yMm + wrapped) % totalMm) + totalMm) % totalMm;
-  for (const p of placements) {
+/** 画面上のy座標(mm、描画エリア原点基準)がどの帯に属するかを返す（無ければ null）。循環なし。 */
+export function bandIdAtY(layout, scrollYMm, yMm) {
+  const localY = yMm + scrollYMm;
+  for (const p of layout.placements) {
     if (localY >= p.topMm && localY < p.topMm + p.heightMm) return p.roomId;
   }
   return null;
@@ -133,5 +149,48 @@ export function makeElevationTransform(scale, originPxX, originPxY) {
     tx: mm => originPxX + mm * scale,
     ty: mm => originPxY + mm * scale,
     sx: mm => mm * scale,
+  };
+}
+
+// ---- スクリーン固定サイズの px 空間ジオメトリ（tag の rPx と同じ考え方。mm換算しない） ----
+
+/**
+ * 部屋範囲の留め三角（直角三角形）の3頂点をpx空間で返す。
+ * outer=(anchorPxX,anchorPxY)は引出線の端点（垂直辺の下端）、top はそこから真上へheightPxの点、
+ * inner は底辺沿いに dir 方向へ「heightPx/tan(angleDeg)」進んだ点（底辺と斜辺のなす角=angleDeg）。
+ * @param {number} anchorPxX
+ * @param {number} anchorPxY
+ * @param {1|-1} dir - 底辺が伸びる向き（+1=右へ、-1=左へ）
+ * @param {number} heightPx
+ * @param {number} angleDeg
+ * @returns {{outer:[number,number], top:[number,number], inner:[number,number]}}
+ */
+export function miterTriangleVertices(anchorPxX, anchorPxY, dir, heightPx, angleDeg) {
+  const basePx = heightPx / Math.tan((angleDeg * Math.PI) / 180);
+  return {
+    outer: [anchorPxX, anchorPxY],
+    top:   [anchorPxX, anchorPxY - heightPx],
+    inner: [anchorPxX + dir * basePx, anchorPxY],
+  };
+}
+
+/**
+ * 縦方向(dim dir='v')の寸法値ラベルの配置（天井高寸法。ユーザー仕様「寸法線の左側に、文字の天が
+ * 左を向く縦書き回転（反時計回り90°）」）。Konvaのrotationは時計回り正のため-90でCCW90°になる。
+ * ラベル本体（幅boxLenPx×厚みthicknessPx）を寸法線からgapPxだけ左にオフセットし、offsetX/offsetY
+ * を中心に取ることで (x,y) を「回転後の中心点」として扱える（回転前は寸法線に沿った横長ボックス）。
+ * @param {number} lineX - 寸法線のx（px）
+ * @param {number} midY - 寸法線の中点y（px）
+ * @param {number} [boxLenPx] - 寸法線方向の長さ
+ * @param {number} [thicknessPx] - 行の厚み
+ * @param {number} [gapPx] - 寸法線からの左オフセット
+ * @returns {{x:number, y:number, width:number, height:number, offsetX:number, offsetY:number, rotation:number}}
+ */
+export function verticalDimLabelBox(lineX, midY, boxLenPx = 80, thicknessPx = 14, gapPx = 8) {
+  return {
+    x: lineX - gapPx, y: midY,
+    width: boxLenPx, height: thicknessPx,
+    offsetX: boxLenPx / 2, offsetY: thicknessPx / 2,
+    rotation: -90,
   };
 }

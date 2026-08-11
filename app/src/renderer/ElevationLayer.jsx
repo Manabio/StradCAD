@@ -19,6 +19,7 @@ export const ElevationLayer = observer(({ mode, size }) => {
   const viewHeightMm = size.height / scale;
   const placements = mode.visibleBands(viewHeightMm);
   const bandsById = new Map(mode.bands.map(b => [b.roomId, b]));
+  const screenPxPerMm = (viewport.pxPerMmX + viewport.pxPerMmY) / 2;
 
   return (
     <>
@@ -33,7 +34,7 @@ export const ElevationLayer = observer(({ mode, size }) => {
         const t = makeElevationTransform(scale, -faceOffsetMm * scale, originMmY * scale);
         return (
           <Group key={`${pl.roomId}-${i}`}>
-            {renderFigurePrimitives(band.primitives, t, { lineWeightsPx: viewport.lineWeightsPx })}
+            {renderFigurePrimitives(band.primitives, t, { lineWeightsPx: viewport.lineWeightsPx, screenPxPerMm })}
           </Group>
         );
       })}

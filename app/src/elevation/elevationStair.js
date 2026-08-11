@@ -9,11 +9,11 @@ import { RoomFeature } from '@core';
 import { roomBounds } from '../finish/gridCells.js';
 import { stairPortEdges } from '../finish/stair/stairGeometry.js';
 import { floorHeightAbove } from '../finish/stair/stairDimensions.js';
-import { buildRoomFaces } from './elevationFaces.js';
+import { buildRoomFaces, faceBoundaryLocalX } from './elevationFaces.js';
 import { buildFaceFigure } from './elevationFigure.js';
 import { roomCeilingHeight } from '../finish/roomMetrics.js';
 import { figureBounds } from '../structural/sectionFigure/sectionGeometry.js';
-import { FACE_GAP_MM, CH_DIM_OFFSET_MM, ElevationLineRole, weightForRole } from './elevationStyle.js';
+import { DEFAULT_FACE_GAP_MM, CH_DIM_OFFSET_MM, ElevationLineRole, weightForRole } from './elevationStyle.js';
 import { translatePrimitive, collectGridCLs, appendRoomNameFrame } from './elevationPrimitives.js';
 
 const CORNER_EPS = 1; // mm — stairPortEdges(世界座標)とfaceのaxisCL一致判定の許容差
@@ -69,7 +69,8 @@ function findOverlappingVoidRoom(stairRoom, graph, upperGraph) {
  * @param {import('@core').Room} stairRoom
  * @param {object} graph - 設置階のgraph
  * @param {object|null} upperGraph - 直上階のgraph（floorSwapManager.peek済み。呼び出し側が解決する）
- * @param {{stair?:object, project?:object, materialMap?:Map, gridCLs?:object[], floorHeight?:number}} [ctx]
+ * @param {{stair?:object, project?:object, materialMap?:Map, gridCLs?:object[], floorHeight?:number,
+ *   gapModelMm?:number, nameGapModelMm?:number}} [ctx]
  * @returns {{roomId:string, roomName:string, primitives:object[], bounds:object,
  *   heightMm:number, widthMm:number, faceCount:number}}
  */
@@ -78,6 +79,8 @@ export function buildStairBand(stairRoom, graph, upperGraph, ctx = {}) {
   const project     = ctx.project ?? null;
   const materialMap = ctx.materialMap ?? null;
   const gridCLs     = ctx.gridCLs ?? collectGridCLs(graph);
+  const gapModelMm  = ctx.gapModelMm ?? DEFAULT_FACE_GAP_MM;
+  const nameGapModelMm = ctx.nameGapModelMm; // 未指定はappendRoomNameFrame既定(DEFAULT_NAME_GAP_MM)へ委ねる
 
   let faces = buildRoomFaces(stairRoom, graph);
   if (stair && faces.length > 0) {
@@ -92,16 +95,20 @@ export function buildStairBand(stairRoom, graph, upperGraph, ctx = {}) {
   const primitives = [];
   const faceRuns = [];
   let xCursor = 0;
+  let prevBoundaryHi = null; // 直前面の壁中心線(hi側)の帯内絶対x（buildRoomBandと同じ配置規則）
   faces.forEach((face, i) => {
+    const boundary = faceBoundaryLocalX(face, graph);
+    xCursor = i === 0 ? 0 : prevBoundaryHi + gapModelMm - boundary.lo;
+
     const faceCtx = { graph, project, room: stairRoom, ceilingHeight: CH, materialMap, gridCLs };
     for (const p of buildFaceFigure(face, faceCtx)) primitives.push(translatePrimitive(p, xCursor, 0));
     if (i === 0) {
       primitives.push({
-        type: 'dim', dir: 'v', at: -CH_DIM_OFFSET_MM, from: -CH, to: 0, foot: 0, dot: true, label: chInfo.raw,
+        type: 'dim', dir: 'v', at: boundary.lo - CH_DIM_OFFSET_MM, from: -CH, to: 0, foot: 0, dot: true, label: chInfo.raw,
       });
     }
     faceRuns.push({ face, xCursor });
-    xCursor += face.run + FACE_GAP_MM;
+    prevBoundaryHi = xCursor + boundary.hi;
   });
 
   // 上階（吹抜け部でクリップ）: 上階FL線（CUT）を同じ列位置に重ねて引くだけの簡易表現。
@@ -123,7 +130,7 @@ export function buildStairBand(stairRoom, graph, upperGraph, ctx = {}) {
   }
 
   // 部屋名枠＋左右引出線＋留め三角（buildRoomBandと共有。以前は階段帯だけ欠落していた）。
-  appendRoomNameFrame(primitives, stairRoom.name);
+  appendRoomNameFrame(primitives, stairRoom.name, nameGapModelMm);
 
   const floorOffset = graph.effectiveFloorLevel(stairRoom) - graph.floorDatum;
   const shifted = primitives.map(p => translatePrimitive(p, 0, -floorOffset));

@@ -196,7 +196,11 @@ const App = observer(() => {
               })
             : appMode === 'elevation'
               ? import('./modes/ElevationModeState.js').then(async m => {
-                  const s = new m.ElevationModeState(graph, project, size);
+                  // screenPxPerMm: 校正値（viewport.pxPerMmX/Yの平均）。ElevationModeState.js
+                  // 自体はDOM依存のviewport/appViewport.jsを静的importしない（node:test単体実行のため。
+                  // ElevationModeState.test.js参照）ため、呼び出し側のここで解決して渡す。
+                  const screenPxPerMm = (viewport.pxPerMmX + viewport.pxPerMmY) / 2;
+                  const s = new m.ElevationModeState(graph, project, size, screenPxPerMm);
                   await s.init(); // 材データの動的ロード・直上階のpeek・帯の一括構築
                   return s;
                 })

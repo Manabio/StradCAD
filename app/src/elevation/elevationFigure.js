@@ -14,13 +14,36 @@
  * OpeningTagLayer.jsx と同じ構成でGroup描画する）。
  */
 import { CenterLineType, OpeningCategory } from '@core';
-import { openingsOnFace } from './elevationFaces.js';
+import { openingsOnFace, faceBoundaryLocalX } from './elevationFaces.js';
 import { effectiveHeight, openingTagPartsOf } from '../openings/openingNumbering.js';
 import {
   ElevationLineRole, weightForRole,
   WALL_LABEL_GAP_MM, WALL_LABEL_LINE_GAP_MM,
-  OPENING_TAG_RADIUS_PX, GRID_TAG_DROP_MM, GRID_TAG_RADIUS_PX, GRID_TAG_FONT_PX,
+  OPENING_TAG_RADIUS_PX, DIM_ROW_GAP_MM, GRID_ROW_GAP_MM, GRID_TAG_RADIUS_PX, GRID_TAG_FONT_PX,
 } from './elevationStyle.js';
+
+// 通り芯丸番号・寸法行のy（床線y=0からの下方向オフセット）。ユーザー仕様の段構成
+// 「③水平寸法線・寸法値 → ④通り芯丸」どおり、通り芯丸は寸法行(ROW2)とは別の3段目に分離する
+// （QA G4: 以前はROW2に同居させていたが仕様は別段を明記している）。
+// ROW1=壁芯間寸法（面ごとに1本）、ROW2=通り芯間寸法、GRID_CIRCLE_ROW=通り芯丸番号。
+const DIM_ROW1_Y = DIM_ROW_GAP_MM;
+const DIM_ROW2_Y = DIM_ROW_GAP_MM + GRID_ROW_GAP_MM;
+const GRID_CIRCLE_ROW_Y = DIM_ROW2_Y + GRID_ROW_GAP_MM;
+
+/**
+ * 巾木文字列（自由入力。RoomFinish.baseboardHeight）から高さ(mm)を解釈する。
+ * "h=60"/"H=60mm" 等の "h=<数値>" 表記のみを対象とする——巾木は自由入力文字列のままで構わず
+ * （既存構造は変えない）、展開側は解釈できた場合だけ巾木線を足す（解釈不能なら非描画。ユーザー仕様）。
+ * @param {string} str
+ * @returns {number|null}
+ */
+export function parseBaseboardHeightMm(str) {
+  if (typeof str !== 'string') return null;
+  const m = str.match(/h\s*=\s*(\d+(?:\.\d+)?)/i);
+  if (!m) return null;
+  const v = Number(m[1]);
+  return Number.isFinite(v) && v > 0 ? v : null;
+}
 
 function getShape(graph, id) {
   return graph.shapeMap.get(id) ?? graph._structGraph?.shapeMap.get(id) ?? null;
@@ -113,7 +136,8 @@ export function buildFaceFigure(face, ctx) {
   }
 
   // 開口（内法矩形＋記号丸）
-  for (const o of openingsOnFace(face, graph)) {
+  const openings = openingsOnFace(face, graph);
+  for (const o of openings) {
     const localX = localXOf(face, o.centerCoord);
     const h = effectiveHeight(o);
     const sill = o.category === OpeningCategory.WINDOW ? (o.sillHeight ?? 0) : 0;
@@ -126,6 +150,25 @@ export function buildFaceFigure(face, ctx) {
       type: 'tag', cx: localX, cy: y + h / 2, rPx: OPENING_TAG_RADIUS_PX,
       top: symbol, bottom: number ?? '',
     });
+  }
+
+  // 巾木（h=<mm>と解釈できた場合のみ。床まで達する開口の区間は途切れさせる）
+  const baseboardH = parseBaseboardHeightMm(room.finish?.baseboardHeight);
+  if (baseboardH != null && baseboardH < CH) {
+    const floorGaps = openings
+      .filter(o => (o.category === OpeningCategory.WINDOW ? (o.sillHeight ?? 0) : 0) === 0)
+      .map(o => {
+        const localX = localXOf(face, o.centerCoord);
+        return [Math.max(0, localX - o.width / 2), Math.min(run, localX + o.width / 2)];
+      })
+      .sort((a, b) => a[0] - b[0]);
+    const y = -baseboardH;
+    let cursor = 0;
+    for (const [gLo, gHi] of floorGaps) {
+      if (gLo > cursor) prims.push({ type: 'line', x1: cursor, y1: y, x2: gLo, y2: y, weight: detailWeight });
+      cursor = Math.max(cursor, gHi);
+    }
+    if (cursor < run) prims.push({ type: 'line', x1: cursor, y1: y, x2: run, y2: y, weight: detailWeight });
   }
 
   // 「壁：<壁材>」「<壁仕上げ材>」2段書き（材が引けない行は描かない）
@@ -141,13 +184,30 @@ export function buildFaceFigure(face, ctx) {
     prims.push({ type: 'text', x: 0, y: labelY, text: wallFinishName, anchor: 'start' });
   }
 
-  // 通り芯縦一点鎖線＋丸番号（図の下側）
-  for (const cl of gridCLsOnFace(face, gridCLs ?? [])) {
-    const localX = localXOf(face, cl.effectiveValue);
-    prims.push({ type: 'line', x1: localX, y1: 0, x2: localX, y2: GRID_TAG_DROP_MM, dash: 'center', weight: detailWeight });
-    prims.push({ type: 'circle', cx: localX, cy: GRID_TAG_DROP_MM, rPx: GRID_TAG_RADIUS_PX });
+  // 壁芯間寸法（面の両端＝壁中心線。ROW1）。寸法線足(dim.foot)が床線(y=0)まで伸びる。
+  const boundary = faceBoundaryLocalX(face, graph);
+  prims.push({
+    type: 'dim', dir: 'h', at: DIM_ROW1_Y, from: boundary.lo, to: boundary.hi, foot: 0,
+    label: Math.round(boundary.hi - boundary.lo),
+  });
+
+  // 通り芯間寸法（面を貫く通り芯同士。ROW2）
+  const gridPoints = gridCLsOnFace(face, gridCLs ?? [])
+    .map(cl => ({ x: localXOf(face, cl.effectiveValue), label: cl.label }))
+    .sort((a, b) => a.x - b.x);
+
+  for (let i = 0; i + 1 < gridPoints.length; i++) {
     prims.push({
-      type: 'text', x: localX, y: GRID_TAG_DROP_MM, text: cl.label,
+      type: 'dim', dir: 'h', at: DIM_ROW2_Y, from: gridPoints[i].x, to: gridPoints[i + 1].x, foot: 0,
+      label: Math.round(gridPoints[i + 1].x - gridPoints[i].x),
+    });
+  }
+  // 通り芯縦一点鎖線＋丸番号（ROW2のさらに下＝GRID_CIRCLE_ROW_Y。QA G4: 寸法行とは別の段）
+  for (const g of gridPoints) {
+    prims.push({ type: 'line', x1: g.x, y1: 0, x2: g.x, y2: GRID_CIRCLE_ROW_Y, dash: 'center', weight: detailWeight });
+    prims.push({ type: 'circle', cx: g.x, cy: GRID_CIRCLE_ROW_Y, rPx: GRID_TAG_RADIUS_PX });
+    prims.push({
+      type: 'text', x: g.x, y: GRID_CIRCLE_ROW_Y, text: g.label,
       anchor: 'middle', baseline: 'middle', size: GRID_TAG_FONT_PX,
     });
   }

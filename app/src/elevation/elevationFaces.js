@@ -137,6 +137,24 @@ export function buildRoomFaces(room, graph) {
 }
 
 /**
+ * face の両端を挟む「壁中心線（CL）」のローカルx座標を返す。face.lo/hi（snapFaceEndsToCorners
+ * 済みの壁仕上げ面位置）とは別に、face.startCLId/endCLId が指す実際のCL（壁厚のぶんだけ
+ * face.lo/hiより外側にある）のローカル位置を求める——ユーザー仕様「面は両端の壁中心線で
+ * 挟まれる」の描画・帯レイアウト（面間ギャップの起点）の両方で使う単一情報源。
+ * 該当CLが解決できない場合はface.lo/hi（0/face.run）へフォールバックする。
+ * @param {object} face - buildRoomFaces の1件
+ * @param {object} graph
+ * @returns {{lo:number, hi:number}} ローカルx（loが小さい方。dirSignの向きに関わらず正規化する）
+ */
+export function faceBoundaryLocalX(face, graph) {
+  const startCL = getShape(graph, face.startCLId);
+  const endCL   = getShape(graph, face.endCLId);
+  const a = startCL ? (startCL.effectiveValue - face.originWorld) * face.dirSign : 0;
+  const b = endCL   ? (endCL.effectiveValue   - face.originWorld) * face.dirSign : face.run;
+  return { lo: Math.min(a, b), hi: Math.max(a, b) };
+}
+
+/**
  * face 上に乗る開口（建具・窓）を centerCoord 昇順で返す。findHostWall の規約踏襲
  * （openings/openingGeometry.js:22-35）だが Wall を経由せず face の軸情報のみで判定する。
  * wallSide===0（CL偏芯の仕上げ面合わせ等）は両側の面にマッチする。

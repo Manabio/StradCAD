@@ -5,7 +5,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Plane, PlanGraph, CenterLineType, Discipline, OpeningCategory } from '@core';
 import { generateRoomWallsFromOutline } from '../finish/wallGeneration.js';
-import { buildRoomFaces, openingsOnFace } from './elevationFaces.js';
+import { buildRoomFaces, openingsOnFace, faceBoundaryLocalX } from './elevationFaces.js';
 
 function makeGraph() {
   const plane = new Plane('p1', 0, '1階', 1, 1);
@@ -99,6 +99,18 @@ test('buildRoomFaces: 対向2面のrunの和は芯々寸法×2より小さい（
   const spanY = y1.effectiveValue - y0.effectiveValue;
   assert.ok(byLabel.A.run + byLabel.C.run < 2 * spanX, 'A+Cのrun和はX芯々寸法×2未満');
   assert.ok(byLabel.B.run + byLabel.D.run < 2 * spanY, 'B+Dのrun和はY芯々寸法×2未満');
+});
+
+// ---- faceBoundaryLocalX: 面は両端の壁中心線（CL）で挟まれる（壁面より外側） ----
+test('faceBoundaryLocalX: 境界はface.lo/hi(壁仕上げ面)よりさらに外側の壁中心線（CL）位置になる', () => {
+  const graph = makeGraph();
+  const { room } = makeRectRoom(graph, 0, 0, 4000, 3000);
+  const faces = buildRoomFaces(room, graph);
+  const a = faces.find(f => f.label === 'A');
+
+  const boundary = faceBoundaryLocalX(a, graph);
+  assert.ok(boundary.lo < 0, `境界loは面のローカル原点(0)より外側（負）のはず（実際:${boundary.lo}）`);
+  assert.ok(boundary.hi > a.run, `境界hiはface.run(${a.run})より外側のはず（実際:${boundary.hi}）`);
 });
 
 // ---- I4: L字で同letter2本・label B1/B2（群内ソート順） ----

@@ -1,9 +1,11 @@
-// elevationLayout.js の不変条件テスト（.claude/elevation-model.md §3.3 I7・I8）。
+// elevationLayout.js の不変条件テスト（.claude/elevation-model.md §3.3 I7 等）。
+// 循環スクロールはユーザー指示により廃止（クランプスクロールへ全面置き換え）。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  chooseElevationScale, layoutBands, wrapOffset, visibleBandPlacements, bandIdAtY, clampFaceOffset,
-  bandContentOriginMm,
+  chooseElevationScale, screenMmToModelMm, layoutBands, clampScrollY,
+  visibleBandPlacements, bandIdAtY, clampFaceOffset, bandContentOriginMm,
+  miterTriangleVertices, verticalDimLabelBox,
 } from './elevationLayout.js';
 import { BAND_GAP_MM } from './elevationStyle.js';
 
@@ -35,51 +37,69 @@ test('chooseElevationScale: 最も背の高い帯がbudgetPx(=height/2.2)に収�
   assert.ok(4000 * scale <= budgetPx + 1e-6, '最高帯がbudgetPxに収まっていない');
 });
 
-// ---- layoutBands / wrapOffset 基本 ----
-test('layoutBands: 帯を縦に積み、周期は最後の帯の下端＋帯間になる', () => {
+// ---- screenMmToModelMm: 実画面mm→モデルmm換算（倍率決定とギャップ換算の循環回避の要） ----
+test('screenMmToModelMm: 実画面mm×校正値(px/mm)÷倍率(px/mm)でモデルmmになる', () => {
+  // 校正値3.78px/mm(=96dpi相当)・倍率1/50(px/mm)で実画面30mmは 30*3.78/(1/50) = 5670mm
+  const v = screenMmToModelMm(30, 3.78, 1 / 50);
+  assert.ok(Math.abs(v - 5670) < 1e-6, `期待値5670に対し実際:${v}`);
+});
+
+test('【失敗系】screenMmToModelMm: scale<=0は0を返す（0除算にならない）', () => {
+  assert.equal(screenMmToModelMm(30, 3.78, 0), 0);
+  assert.equal(screenMmToModelMm(30, 3.78, -1), 0);
+});
+
+// ---- layoutBands ----
+test('layoutBands: 帯を縦に積み、contentHeightMmは最後の帯の下端（帯間の余白を含まない）', () => {
   const layout = layoutBands([{ roomId: 'a', heightMm: 1000 }, { roomId: 'b', heightMm: 2000 }], 100);
   assert.deepEqual(layout.placements, [
     { roomId: 'a', topMm: 0, heightMm: 1000 },
     { roomId: 'b', topMm: 1100, heightMm: 2000 },
   ]);
-  assert.equal(layout.totalMm, 3200);
+  assert.equal(layout.contentHeightMm, 3100, '最後の帯(topMm=1100,height=2000)の下端。末尾の帯間100は含まない');
 });
 
-test('wrapOffset: 負のオフセット・totalMmを超える値も[0,totalMm)へ正規化する', () => {
-  assert.equal(wrapOffset(-100, 1000), 900);
-  assert.equal(wrapOffset(1500, 1000), 500);
-  assert.equal(wrapOffset(500, 1000), 500);
+// ---- clampScrollY: 循環廃止後のクランプ仕様 ----
+test('clampScrollY: 上端は0、下端はcontentHeightMm-viewHeightMm', () => {
+  const layout = layoutBands([{ roomId: 'a', heightMm: 1000 }, { roomId: 'b', heightMm: 2000 }], 100);
+  // contentHeightMm=3100
+  assert.equal(clampScrollY(-500, layout, 1000), 0, '上端より上へは行けない');
+  assert.equal(clampScrollY(9999, layout, 1000), 2100, '下端(3100-1000)で頭打ち');
+  assert.equal(clampScrollY(1500, layout, 1000), 1500, '範囲内はそのまま');
 });
 
-// ---- I8: 周期性 visibleBandPlacements(l,o)===visibleBandPlacements(l,o+totalMm) ----
-test('visibleBandPlacements: offsetMmはtotalMmを法として周期的', () => {
+test('clampScrollY: 全帯が画面に収まる場合はクランプ範囲が[0,0]に潰れる（スクロール不要）', () => {
+  const layout = layoutBands([{ roomId: 'a', heightMm: 1000 }], 100);
+  // contentHeightMm=1000 <= viewHeightMm=2000
+  assert.equal(clampScrollY(9999, layout, 2000), 0);
+  assert.equal(clampScrollY(-9999, layout, 2000), 0);
+});
+
+// ---- visibleBandPlacements / bandIdAtY: 循環なし ----
+test('visibleBandPlacements: scrollYMm分だけ単純に平行移動する（循環しない）', () => {
   const layout = layoutBands([{ roomId: 'a', heightMm: 1000 }, { roomId: 'b', heightMm: 1000 }], 200);
-  const a = visibleBandPlacements(layout, 350, 1500);
-  const b = visibleBandPlacements(layout, 350 + layout.totalMm, 1500);
-  assert.deepEqual(a, b);
+  const result = visibleBandPlacements(layout, 300, 1500);
+  assert.deepEqual(result, [
+    { roomId: 'a', topMm: -300, heightMm: 1000 },
+    { roomId: 'b', topMm: 900, heightMm: 1000 },
+  ]);
 });
 
-test('visibleBandPlacements: 負オフセットも正しく処理する', () => {
+test('visibleBandPlacements: 画面範囲外の帯は含まれず、複製（±contentHeightMm等）も作らない', () => {
   const layout = layoutBands([{ roomId: 'a', heightMm: 1000 }, { roomId: 'b', heightMm: 1000 }], 200);
-  const a = visibleBandPlacements(layout, -layout.totalMm + 350, 1500);
-  const b = visibleBandPlacements(layout, 350, 1500);
-  assert.deepEqual(a, b);
+  // 下端いっぱいまでスクロールしても、先頭帯(a)の複製が下に現れてはいけない（循環廃止）。
+  const maxScroll = clampScrollY(9999, layout, 1000);
+  const result = visibleBandPlacements(layout, maxScroll, 1000);
+  assert.equal(result.filter(p => p.roomId === 'a').length, 0, '循環していれば先頭帯aが複製されて現れてしまう');
+  assert.equal(result.filter(p => p.roomId === 'b').length, 1);
 });
 
-test('visibleBandPlacements: o=totalMm-εでは先頭帯が画面下端付近に折り返して現れる', () => {
-  const layout = layoutBands([{ roomId: 'a', heightMm: 1000 }, { roomId: 'b', heightMm: 1000 }], 200);
-  const eps = 1;
-  const result = visibleBandPlacements(layout, layout.totalMm - eps, 2500);
-  const first = result.find(p => p.roomId === 'a' && p.topMm > 0);
-  assert.ok(first, '先頭帯(a)が正のtopMmで現れるはず');
-  assert.ok(Math.abs(first.topMm - eps) < 1e-6, `先頭帯は画面上端から${eps}mmの位置に来るはず（実際:${first?.topMm}）`);
-});
-
-test('bandIdAtY: 周期内の座標から所属する帯のroomIdを返す', () => {
+test('bandIdAtY: scrollYMm分だけ単純に平行移動した座標で判定する（循環しない）', () => {
   const layout = layoutBands([{ roomId: 'a', heightMm: 1000 }, { roomId: 'b', heightMm: 1000 }], 200);
   assert.equal(bandIdAtY(layout, 0, 500), 'a');
   assert.equal(bandIdAtY(layout, 0, 1300), 'b');
   assert.equal(bandIdAtY(layout, 0, 1100), null, '帯間のギャップはどの帯にも属さない');
+  assert.equal(bandIdAtY(layout, 0, 99999), null, '画面外（循環しない）はどの帯にも属さない');
 });
 
 // ---- clampFaceOffset ----
@@ -125,7 +145,7 @@ test('【QA F1】bandContentOriginMm: 実描画範囲(topMm+minY..topMm+maxY)が
   const renderedBottomA = originA + bandA.bounds.maxY;
   const renderedTopB = originB + bandB.bounds.minY;
 
-  // 現行ElevationLayer.jsx:29相当の「旧ロジック」（minYを無視してtopMmをそのままy=0に対応させる。
+  // 現行ElevationLayer.jsx相当の「旧ロジック」（minYを無視してtopMmをそのままy=0に対応させる。
   // ≒bandContentOriginMmをplacement.topMmだけ返す実装に戻すのと同義）だと、
   // renderedTopA===placA.topMm+bandA.bounds.minY!==placA.topMmとなり以下は赤になる
   // （本番シンボルbandContentOriginMmを直接呼んでいるため、この後退で確実に検出できる）。
@@ -137,26 +157,45 @@ test('【QA F1】bandContentOriginMm: 実描画範囲(topMm+minY..topMm+maxY)が
     `連続帯の実描画範囲の間隔はBAND_GAP_MM(${BAND_GAP_MM})ちょうどのはず（実際:${gap}。minYの違いに引きずられていないか）`);
 });
 
-// ---- QA F8: 描画上端が0より上・下端が0より下になるオフセットで帯がvisibleBandPlacementsに含まれる ----
-// 注: -totalMmシフト自体は、layoutBandsが「各帯の直後に必ずgapMm(>0)を積む」実装である限り
-// 数学的に到達不能（あらゆる帯についてtopMm+heightMm < totalMm-gapMm < totalMmが恒に成立するため、
-// shift=-totalMmの候補が[-heightMm,viewHeightMm)へ入ることは無い）。削除はせず(QA F8指示)、
-// 対称性の保険として残す。以下は要求された「上端が0より上・下端が0より下」のシナリオの回帰テスト
-// （-totalMm分岐固有ではなくshift=0で満たされる。数学的な証明ゆえ正直にそう記す）。
-test('【QA F8】visibleBandPlacements: 描画上端が0より上・下端が0より下になる帯が含まれる', () => {
-  const layout = layoutBands([{ roomId: 'a', heightMm: 1000 }, { roomId: 'b', heightMm: 1000 }], 200);
-  // 帯bの中央あたりに視点が来るようスクロールする（topMm=1200のbが画面をまたぐ）。
-  const offsetMm = 1200 + 500; // bの上端から500mm分スクロールし、bが上端0をまたぐ
-  const result = visibleBandPlacements(layout, offsetMm, 2000);
-  const b = result.find(p => p.roomId === 'b');
-  assert.ok(b, '帯bが可視配置に含まれるはず');
-  assert.ok(b.topMm < 0 && b.topMm + b.heightMm > 0, `帯bの描画範囲が0をまたぐはず（実際:top=${b.topMm}）`);
-});
-
 // ---- 失敗系: 帯が0件 ----
-test('【失敗系】layoutBands/visibleBandPlacements: 帯が0件なら空配列・totalMm=0で例外を投げない', () => {
+test('【失敗系】layoutBands/visibleBandPlacements/clampScrollY: 帯が0件なら空配列・contentHeightMm=0で例外を投げない', () => {
   const layout = layoutBands([]);
-  assert.equal(layout.totalMm, 0);
+  assert.equal(layout.contentHeightMm, 0);
   assert.deepEqual(visibleBandPlacements(layout, 0, 1000), []);
   assert.equal(bandIdAtY(layout, 0, 500), null);
+  assert.equal(clampScrollY(500, layout, 1000), 0);
+});
+
+// ---- miterTriangleVertices: 部屋範囲の留め三角（直角三角形）の頂点座標 ----
+test('miterTriangleVertices: outerからtopへ真上heightPx、innerへ底辺沿いdir方向にheightPx/tan(angle)進む', () => {
+  const heightPx = 10, angleDeg = 60;
+  const v = miterTriangleVertices(100, 200, 1, heightPx, angleDeg);
+  const expectedBase = heightPx / Math.tan((angleDeg * Math.PI) / 180);
+  assert.deepEqual(v.outer, [100, 200]);
+  assert.deepEqual(v.top, [100, 200 - heightPx], 'topはouterの真上(y減少)');
+  assert.ok(Math.abs(v.inner[0] - (100 + expectedBase)) < 1e-9, `innerのxはouter+底辺幅のはず（実際:${v.inner[0]}）`);
+  assert.equal(v.inner[1], 200, 'innerはouterと同じy（底辺=引出線上）');
+});
+
+test('miterTriangleVertices: dir=-1では底辺がouterから左（x減少方向）へ伸びる', () => {
+  const v = miterTriangleVertices(100, 200, -1, 10, 60);
+  assert.ok(v.inner[0] < 100, `dir=-1ではinner.xはouter.xより小さいはず（実際:${v.inner[0]}）`);
+});
+
+// ---- 失敗系: heightPx=0は退化三角形（3頂点が同一y）になるが例外を投げない ----
+test('【失敗系】miterTriangleVertices: heightPx=0でも例外を投げず、top/inner/outerが同じyになる', () => {
+  const v = miterTriangleVertices(0, 0, 1, 0, 60);
+  assert.equal(v.top[1], 0);
+  assert.equal(v.inner[1], 0);
+  assert.equal(v.inner[0], 0);
+});
+
+// ---- verticalDimLabelBox: 天井高寸法の縦書き回転（反時計回り90°）配置 ----
+test('verticalDimLabelBox: rotation=-90（CCW90°）・寸法線の左側（x<lineX）に配置される', () => {
+  const box = verticalDimLabelBox(500, 300);
+  assert.equal(box.rotation, -90);
+  assert.ok(box.x < 500, `寸法線(x=500)より左に配置されるはず（実際:${box.x}）`);
+  assert.equal(box.y, 300, '寸法線の中点yと同じ高さに配置される');
+  assert.equal(box.offsetX, box.width / 2);
+  assert.equal(box.offsetY, box.height / 2);
 });
