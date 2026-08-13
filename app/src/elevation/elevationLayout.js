@@ -45,7 +45,14 @@ export function screenMmToModelMm(screenMm, screenPxPerMm, scale) {
  * 帯群を縦に積んだレイアウト（帯間 BAND_GAP_MM）。
  * contentHeightMm は最後の帯の下端（帯間の余白は含まない）——循環スクロールを廃止したため、
  * 末尾の帯間ぶんの余白をスクロール可能範囲に含める理由が無い。
- * @param {Array<{roomId:string, heightMm:number}>} bands
+ *
+ * b.topMarginMm（省略時0）は、この帯を置く直前に追加で空ける距離（QA A2）。
+ * FL高さ差（floorOffset）のある部屋は、bounds.minY自体は変えずに（変えるとbandContentOriginMm
+ * 経由でfloorOffsetの見た目効果が打ち消される。elevationBand.js/elevationStair.jsのQA A2
+ * コメント参照）、この帯自身の上端がfloorOffsetぶん上へせり出しうる——topMarginMmでその分だけ
+ * 手前の帯との間を追加で空けることで、bounds.minYには一切触れずに重なりを防ぐ
+ * （b.heightMmへの加算＝この帯自身が下へせり出す分の対策と対になる。両方ともQA A2）。
+ * @param {Array<{roomId:string, heightMm:number, topMarginMm?:number}>} bands
  * @param {number} [gapMm]
  * @returns {{placements:Array<{roomId:string, topMm:number, heightMm:number}>, contentHeightMm:number}}
  */
@@ -53,8 +60,9 @@ export function layoutBands(bands, gapMm = BAND_GAP_MM) {
   const placements = [];
   let top = 0;
   for (const b of bands) {
-    placements.push({ roomId: b.roomId, topMm: top, heightMm: b.heightMm });
-    top += b.heightMm + gapMm;
+    const topMm = top + (b.topMarginMm ?? 0);
+    placements.push({ roomId: b.roomId, topMm, heightMm: b.heightMm });
+    top = topMm + b.heightMm + gapMm;
   }
   const last = placements[placements.length - 1];
   const contentHeightMm = last ? last.topMm + last.heightMm : 0;

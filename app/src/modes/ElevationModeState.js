@@ -13,6 +13,7 @@ import {
 import {
   DEFAULT_FACE_GAP_MM, FACE_GAP_SCREEN_MM, DEFAULT_NAME_GAP_MM, NAME_GAP_BELOW_SCREEN_MM,
   DEFAULT_TRIANGLE_OFFSET_MM, TRIANGLE_OFFSET_SCREEN_MM,
+  DEFAULT_FACE_LABEL_AVOID_THRESHOLD_MM, FACE_LABEL_AVOID_THRESHOLD_SCREEN_MM,
 } from '../elevation/elevationStyle.js';
 // DEFAULT_PX_PER_MMはviewport.js（appViewport.jsとは別。window依存を持たない純モジュール
 // ——appViewport.jsのヘッダコメント参照）からのみ取得する。ElevationModeState.js自体は
@@ -87,26 +88,33 @@ export class ElevationModeState {
       const stairByRoomId = new Map(this.graph.stairs.map(s => [s.roomId, s]));
       const screenPxPerMm = this.screenPxPerMm;
 
-      const buildOne = (room, gapModelMm, nameGapModelMm, triangleOffsetModelMm) => {
-        const ctx = { project: this.project, materialMap, gridCLs, gapModelMm, nameGapModelMm, triangleOffsetModelMm };
+      const buildOne = (room, gapModelMm, nameGapModelMm, triangleOffsetModelMm, faceLabelAvoidThresholdModelMm) => {
+        const ctx = {
+          project: this.project, materialMap, gridCLs, gapModelMm, nameGapModelMm, triangleOffsetModelMm,
+          faceLabelAvoidThresholdModelMm,
+        };
         return room.feature === RoomFeature.STAIR
           ? buildStairBand(room, this.graph, upperGraph, { ...ctx, stair: stairByRoomId.get(room.id) ?? null })
           : buildRoomBand(room, this.graph, ctx);
       };
 
-      // パス1: 倍率決定用（ギャップ・名前枠余白・三角オフセットは高さに影響しないため仮値でよい）。
+      // パス1: 倍率決定用（ギャップ・名前枠余白・三角オフセット・面ラベル退避閾値は高さに
+      // 影響しないため仮値でよい。QA B3: 面ラベル退避閾値も他の実画面mm値と同じ2パス方式）。
       const pass1 = buildBandsSafely(rooms,
-        room => buildOne(room, DEFAULT_FACE_GAP_MM, DEFAULT_NAME_GAP_MM, DEFAULT_TRIANGLE_OFFSET_MM));
+        room => buildOne(room, DEFAULT_FACE_GAP_MM, DEFAULT_NAME_GAP_MM, DEFAULT_TRIANGLE_OFFSET_MM,
+          DEFAULT_FACE_LABEL_AVOID_THRESHOLD_MM));
       const scale = chooseElevationScale(pass1.bands, this.viewSize ?? { width: 800, height: 600 });
       const gapModelMm            = screenMmToModelMm(FACE_GAP_SCREEN_MM, screenPxPerMm, scale);
       const nameGapModelMm        = screenMmToModelMm(NAME_GAP_BELOW_SCREEN_MM, screenPxPerMm, scale);
       const triangleOffsetModelMm = screenMmToModelMm(TRIANGLE_OFFSET_SCREEN_MM, screenPxPerMm, scale);
+      const faceLabelAvoidThresholdModelMm =
+        screenMmToModelMm(FACE_LABEL_AVOID_THRESHOLD_SCREEN_MM, screenPxPerMm, scale);
 
-      // パス2: 確定した倍率でギャップ・名前枠余白・三角オフセットを実画面mmへ正しく換算し、
-      // 本番の帯を組み直す。
+      // パス2: 確定した倍率でギャップ・名前枠余白・三角オフセット・面ラベル退避閾値を実画面mmへ
+      // 正しく換算し、本番の帯を組み直す。
       const { bands, failedRoomNames } = buildBandsSafely(
         rooms,
-        room => buildOne(room, gapModelMm, nameGapModelMm, triangleOffsetModelMm),
+        room => buildOne(room, gapModelMm, nameGapModelMm, triangleOffsetModelMm, faceLabelAvoidThresholdModelMm),
         (err, room) => console.error(`[elevation] 部屋「${room.name}」の帯構築に失敗:`, err),
       );
 

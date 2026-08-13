@@ -5,6 +5,9 @@ import { Plane, PlanGraph, CenterLineType, Discipline, StairType, RoomFeature } 
 import { generateRoomWallsFromOutline } from '../finish/wallGeneration.js';
 import { buildRoomFaces } from './elevationFaces.js';
 import { rotateFacesToStart, stairStartFaceLabel, buildStairBand } from './elevationStair.js';
+import { layoutBands, bandContentOriginMm } from './elevationLayout.js';
+import { figureBounds } from '../structural/sectionFigure/sectionGeometry.js';
+import { BAND_GAP_MM, BAND_TOP_MARGIN_MM } from './elevationStyle.js';
 
 function makeGraph(name = 'p1') {
   const plane = new Plane(name, 0, `${name}階`, 1, 1);
@@ -189,4 +192,97 @@ test('【失敗系・項目12】buildStairBand: STRAIGHT階段（対応スコー
 
   const band = buildStairBand(room, graph, null, { floorHeight: 2400, stair });
   assert.equal(band.primitives.filter(p => p.type === 'polyline').length, 0);
+});
+
+// ---- 調整項目6: 階段帯でもroom.floorLevel（FL高さ）が床線の見た目位置に反映される ----
+test('【調整項目6】buildStairBand: room.floorLevel（FL高さ）が床線の見た目位置(bounds.minYからの相対y)に反映される', () => {
+  const graphA = makeGraph('p1');
+  const roomA = makeRectRoom(graphA, 0, 0, 2000, 4000, '階段A');
+  const graphB = makeGraph('p1');
+  const roomB = makeRectRoom(graphB, 0, 0, 2000, 4000, '階段B');
+  roomB.setFloorLevel(150);
+
+  const bandA = buildStairBand(roomA, graphA, null);
+  const bandB = buildStairBand(roomB, graphB, null);
+
+  const floorY = (band) => {
+    const cutHorizontals = band.primitives.filter(p => p.type === 'line' && p.weight === 'thick' && p.y1 === p.y2);
+    return Math.max(...cutHorizontals.map(p => p.y1));
+  };
+  const relA = floorY(bandA) - bandA.bounds.minY;
+  const relB = floorY(bandB) - bandB.bounds.minY;
+  assert.ok(Math.abs((relA - relB) - 150) < 1e-6,
+    `FLが150mm高い階段部屋(B)は床線が150mm上に見えるはず（相対位置差: ${relA - relB}）`);
+});
+
+// ---- QA A2/B2: 階段帯でもfloorLevel差がBAND_GAP_MMを超える2帯で実描画範囲が重ならない ----
+// elevationBand.test.jsと同じ理由・同じ3ケース構成（elevationBand.test.jsのコメント参照）。
+function realGap(originUpper, rangeUpper, originLower, rangeLower) {
+  return (originLower + rangeLower.minY) - (originUpper + rangeUpper.maxY);
+}
+
+test('【QA A2/B2】buildStairBand+layoutBands: floorLevel差がBAND_GAP_MM(600)を超える2帯でも実描画範囲は重ならず、すき間はちょうど750mmになる', () => {
+  const graphA = makeGraph('p1');
+  const roomA = makeRectRoom(graphA, 0, 0, 2000, 4000, '階段A');
+  const graphB = makeGraph('p1');
+  const roomB = makeRectRoom(graphB, 0, 0, 2000, 4000, '階段B');
+  roomB.setFloorLevel(700); // Bが上へせり出す方向
+
+  const bandA = buildStairBand(roomA, graphA, null);
+  const bandB = buildStairBand(roomB, graphB, null);
+  const layout = layoutBands([bandA, bandB]);
+
+  const originA = bandContentOriginMm(layout.placements[0], bandA);
+  const originB = bandContentOriginMm(layout.placements[1], bandB);
+  const rangeA = figureBounds(bandA.primitives);
+  const rangeB = figureBounds(bandB.primitives);
+  const gap = realGap(originA, rangeA, originB, rangeB);
+
+  assert.ok(Math.abs(gap - (BAND_GAP_MM + BAND_TOP_MARGIN_MM)) < 1e-6,
+    `Bが上へせり出す方向(floorLevel=+700)では実すき間はちょうど${BAND_GAP_MM + BAND_TOP_MARGIN_MM}mmに固定されるはず（実際:${gap}）`);
+});
+
+// ---- QA B2: 「下へせり出す」方向はAとの実すき間を無駄に固定せず自然な間隔にする ----
+test('【QA B2】buildStairBand+layoutBands: floorLevel=-700（Bが下へせり出す）では、Aとの実すき間は無駄な過剰予約なしの1450mmになる', () => {
+  const graphA = makeGraph('p1');
+  const roomA = makeRectRoom(graphA, 0, 0, 2000, 4000, '階段A');
+  const graphB = makeGraph('p1');
+  const roomB = makeRectRoom(graphB, 0, 0, 2000, 4000, '階段B');
+  roomB.setFloorLevel(-700);
+
+  const bandA = buildStairBand(roomA, graphA, null);
+  const bandB = buildStairBand(roomB, graphB, null);
+  const layout = layoutBands([bandA, bandB]);
+
+  const originA = bandContentOriginMm(layout.placements[0], bandA);
+  const originB = bandContentOriginMm(layout.placements[1], bandB);
+  const rangeA = figureBounds(bandA.primitives);
+  const rangeB = figureBounds(bandB.primitives);
+  const gap = realGap(originA, rangeA, originB, rangeB);
+  const expected = BAND_GAP_MM + BAND_TOP_MARGIN_MM + 700;
+
+  assert.ok(Math.abs(gap - expected) < 1e-6,
+    `Bが下へせり出す方向(floorLevel=-700)ではA-B間は無駄な余白を含まない自然な間隔(${expected}mm)になるはず（実際:${gap}）`);
+});
+
+// ---- QA B2: 「下へせり出す」方向で本来守るべきなのは"次"の帯(C)とのすき間。ちょうど750mmになる ----
+test('【QA B2】buildStairBand+layoutBands: floorLevel=-700（Bが下へせり出す）でも、次の帯(C)との実すき間はちょうど750mmを維持する', () => {
+  const graphB = makeGraph('p1');
+  const roomB = makeRectRoom(graphB, 0, 0, 2000, 4000, '階段B');
+  roomB.setFloorLevel(-700);
+  const graphC = makeGraph('p1');
+  const roomC = makeRectRoom(graphC, 0, 0, 2000, 4000, '階段C');
+
+  const bandB = buildStairBand(roomB, graphB, null);
+  const bandC = buildStairBand(roomC, graphC, null);
+  const layout = layoutBands([bandB, bandC]);
+
+  const originB = bandContentOriginMm(layout.placements[0], bandB);
+  const originC = bandContentOriginMm(layout.placements[1], bandC);
+  const rangeB = figureBounds(bandB.primitives);
+  const rangeC = figureBounds(bandC.primitives);
+  const gap = realGap(originB, rangeB, originC, rangeC);
+
+  assert.ok(Math.abs(gap - (BAND_GAP_MM + BAND_TOP_MARGIN_MM)) < 1e-6,
+    `Bが下へせり出す方向(floorLevel=-700)ではB-C間の実すき間がちょうど${BAND_GAP_MM + BAND_TOP_MARGIN_MM}mmに固定されるはず（実際:${gap}）`);
 });

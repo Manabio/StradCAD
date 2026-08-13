@@ -20,19 +20,19 @@ import {
   ElevationLineRole, weightForRole,
   WALL_LABEL_GAP_MM, WALL_LABEL_LINE_GAP_MM,
   OPENING_TAG_RADIUS_PX, DIM_ROW_GAP_MM, GRID_ROW_GAP_MM, GRID_TAG_RADIUS_PX, GRID_TAG_FONT_PX,
-  FACE_LABEL_GAP_MM, FACE_LABEL_FONT_PX,
+  FACE_LABEL_FONT_PX, GRID_LINE_ABOVE_CH_MM, CANVAS_BG_COLOR, DEFAULT_FACE_LABEL_AVOID_THRESHOLD_MM,
 } from './elevationStyle.js';
 
 // 通り芯丸番号・寸法行・面ラベルのy（床線y=0からの下方向オフセット）。ユーザー仕様の段構成
 // 「③水平寸法線・寸法値 → ④通り芯丸」どおり、通り芯丸は寸法行(ROW2)とは別の3段目に分離する
-// （QA G4: 以前はROW2に同居させていたが仕様は別段を明記している）。面ラベル(A/B/C/D)はさらに
-// その下の4段目（項目7。部屋名引出線より上のバランスの良い段、という指示にもとづく判断）。
-// ROW1=壁芯間寸法（面ごとに1本）、ROW2=通り芯間寸法、GRID_CIRCLE_ROW=通り芯丸番号、
-// FACE_LABEL_ROW=面ラベル。
+// （QA G4: 以前はROW2に同居させていたが仕様は別段を明記している）。調整項目2: 通り芯丸(旧③)と
+// 面ラベル(旧④)は同じ段に統合する（水平位置はそれぞれ従来通り＝通り芯丸は通り芯位置、
+// 面ラベルは壁芯間中心のまま。縦位置だけ揃える）。
+// ROW1=壁芯間寸法（面ごとに1本）、ROW2=通り芯間寸法、GRID_CIRCLE_ROW=通り芯丸番号＋面ラベル。
 const DIM_ROW1_Y = DIM_ROW_GAP_MM;
 const DIM_ROW2_Y = DIM_ROW_GAP_MM + GRID_ROW_GAP_MM;
 const GRID_CIRCLE_ROW_Y = DIM_ROW2_Y + GRID_ROW_GAP_MM;
-const FACE_LABEL_ROW_Y = GRID_CIRCLE_ROW_Y + FACE_LABEL_GAP_MM;
+const FACE_LABEL_ROW_Y = GRID_CIRCLE_ROW_Y;
 
 /**
  * 巾木文字列（自由入力。RoomFinish.baseboardHeight）から高さ(mm)を解釈する。
@@ -56,6 +56,43 @@ function getShape(graph, id) {
 /** face のローカルx座標（世界座標→面基準の変換。openingsOnFace等の結果に対して使う）。 */
 export function localXOf(face, worldCoord) {
   return (worldCoord - face.originWorld) * face.dirSign;
+}
+
+/**
+ * 面ラベル(A/B/C/D等)のx（既定=壁芯間中心）を、通り芯丸との重なりを避けて返す（QA A1→B1改訂）。
+ * 項目2で面ラベルと通り芯丸番号を同じ段(y)に統合したため、通り芯が面の壁芯間中心付近にある
+ * （偶数モジュールスパン等でよくある）と面ラベルと通り芯丸が同座標で重なり両方判読不能になる。
+ *
+ * QA B1: 旧実装（衝突時に閾値の2倍ぶん一段だけシフト）は退避先を再チェックしないため、
+ * 910mm等間隔グリッド（住宅の標準モジュール）のように通り芯が密な面では、シフト後の位置が
+ * 「別の」通り芯丸に重なり直すことがあった（例: CLs=[0,910,1820,2730,3640]・run=3640で
+ * 面中心2620がX4=2730から110mmしか離れない）。
+ * 「最広ギャップの中点」方式に変更する: boundary.lo/hiで両端を挟んだ「通り芯＋両端」の並びを
+ * 昇順に見て、隣接2点間の間隔が最も広い区間の中点にラベルを置く——1回の走査で決まり
+ * （反復不要）、通り芯が0〜1本でも自然に劣化する（gridPointsが空なら候補区間は[lo,hi]の1つに
+ * なるだけ）。ただし面中心がそもそもどの通り芯とも衝突していなければ（衝突判定にのみ
+ * thresholdMmを使う）、動かさず面中心のままにする。
+ * @param {number} x - 面ラベルの既定x（ローカル座標。通常は壁芯間中心）
+ * @param {Array<{x:number}>} gridPoints - 通り芯（ローカルx）一覧
+ * @param {{lo:number, hi:number}} boundary - 面の壁中心線区間（最広ギャップ探索の両端）
+ * @param {number} [thresholdMm]
+ * @returns {number}
+ */
+export function avoidGridCollisionX(x, gridPoints, boundary, thresholdMm = DEFAULT_FACE_LABEL_AVOID_THRESHOLD_MM) {
+  const collides = gridPoints.some(g => Math.abs(g.x - x) <= thresholdMm);
+  if (!collides) return x;
+
+  const marks = [boundary.lo, ...gridPoints.map(g => g.x), boundary.hi].sort((a, b) => a - b);
+  let bestMid = x;
+  let bestGap = -Infinity;
+  for (let i = 0; i + 1 < marks.length; i++) {
+    const gap = marks[i + 1] - marks[i];
+    if (gap > bestGap) {
+      bestGap = gap;
+      bestMid = (marks[i] + marks[i + 1]) / 2;
+    }
+  }
+  return bestMid;
 }
 
 /**
@@ -114,11 +151,13 @@ function gridCLsOnFace(face, gridCLs) {
  * 壁面1枚 → プリミティブ配列。
  * @param {object} face - buildRoomFaces の1件
  * @param {{graph:object, project:object, room:import('@core').Room, ceilingHeight:number,
- *   materialMap:Map|null, gridCLs:object[]}} ctx
+ *   materialMap:Map|null, gridCLs:object[], faceLabelAvoidThresholdModelMm?:number}} ctx
+ *   faceLabelAvoidThresholdModelMm省略時はDEFAULT_FACE_LABEL_AVOID_THRESHOLD_MM（QA B3。
+ *   ElevationModeState.initが2パス目でscreenMmToModelMm換算した値を渡す）。
  * @returns {object[]}
  */
 export function buildFaceFigure(face, ctx) {
-  const { graph, project, room, ceilingHeight: CH, materialMap, gridCLs } = ctx;
+  const { graph, project, room, ceilingHeight: CH, materialMap, gridCLs, faceLabelAvoidThresholdModelMm } = ctx;
   const run = face.run;
   const prims = [];
 
@@ -211,21 +250,34 @@ export function buildFaceFigure(face, ctx) {
       label: Math.round(gridPoints[i + 1].x - gridPoints[i].x),
     });
   }
-  // 通り芯縦一点鎖線＋丸番号（ROW2のさらに下＝GRID_CIRCLE_ROW_Y。QA G4: 寸法行とは別の段）
+  // 通り芯縦一点鎖線＋丸番号（ROW2のさらに下＝GRID_CIRCLE_ROW_Y。QA G4: 寸法行とは別の段）。
+  // 調整項目3: 下端(GRID_CIRCLE_ROW_Y)だけでなく天井線(-CH)より上へも少し突き出す
+  // （y1=-CH-GRID_LINE_ABOVE_CH_MM。通り芯は本来、床から天井を貫通して続く線のため）。
   for (const g of gridPoints) {
-    prims.push({ type: 'line', x1: g.x, y1: 0, x2: g.x, y2: GRID_CIRCLE_ROW_Y, dash: 'center', weight: detailWeight });
-    prims.push({ type: 'circle', cx: g.x, cy: GRID_CIRCLE_ROW_Y, rPx: GRID_TAG_RADIUS_PX });
+    prims.push({
+      type: 'line', x1: g.x, y1: -CH - GRID_LINE_ABOVE_CH_MM, x2: g.x, y2: GRID_CIRCLE_ROW_Y,
+      dash: 'center', weight: detailWeight,
+    });
+    // 調整項目5: 丸は背景色で塗りつぶし、通り芯線より後（=手前）に描いて線を隠す
+    // （配列内で線→丸の順に積む。Konvaは配列順=手前優先で描画するため、この順序自体は
+    // 従来から保たれている。丸が塗りなし=透明だったため線が透けて見えていた点を修正）。
+    prims.push({ type: 'circle', cx: g.x, cy: GRID_CIRCLE_ROW_Y, rPx: GRID_TAG_RADIUS_PX, fill: CANVAS_BG_COLOR });
     prims.push({
       type: 'text', x: g.x, y: GRID_CIRCLE_ROW_Y, text: g.label,
       anchor: 'middle', baseline: 'middle', size: GRID_TAG_FONT_PX,
     });
   }
 
-  // 面ラベル（A/B/C/D。L字はB1等）を面の幅中心・通り芯丸のさらに下の段に描く（項目7）。
+  // 面ラベル（A/B/C/D。L字はB1等）を面の幅中心・通り芯丸と同じ段に描く（項目7・調整項目2）。
   // QA F3: run/2（仕上げ面基準の中心）ではなく、壁芯間寸法（項目2・9）と同じ壁中心線で挟んだ
   // 幅の中心(boundary.lo/hiの中点)を使う——面ラベルの中心が壁芯間寸法の中心とズレないように。
+  // QA A1: 通り芯丸と同じ段のため、通り芯が中心付近にあると重なる。avoidGridCollisionXで退避する
+  // （QA B1: 最広ギャップ中点方式。QA B3: 閾値はctx経由の換算済みモデルmm、未指定時は仮既定値）。
+  const faceLabelX = avoidGridCollisionX(
+    (boundary.lo + boundary.hi) / 2, gridPoints, boundary, faceLabelAvoidThresholdModelMm,
+  );
   prims.push({
-    type: 'text', x: (boundary.lo + boundary.hi) / 2, y: FACE_LABEL_ROW_Y, text: face.label,
+    type: 'text', x: faceLabelX, y: FACE_LABEL_ROW_Y, text: face.label,
     anchor: 'middle', baseline: 'middle', size: FACE_LABEL_FONT_PX,
   });
 

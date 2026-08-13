@@ -4,7 +4,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { edgeKey, OpeningCategory, CenterLineType } from '@core';
-import { buildFaceFigure, kneeDropGapsOnFace, parseBaseboardHeightMm } from './elevationFigure.js';
+import {
+  buildFaceFigure, kneeDropGapsOnFace, parseBaseboardHeightMm, avoidGridCollisionX,
+} from './elevationFigure.js';
+import { GRID_LINE_ABOVE_CH_MM, CANVAS_BG_COLOR, DEFAULT_FACE_LABEL_AVOID_THRESHOLD_MM } from './elevationStyle.js';
 
 function makeFace(overrides = {}) {
   return {
@@ -259,4 +262,118 @@ test('【項目7・QA F3】buildFaceFigure: 面ラベル(face.label)は壁中心
   assert.notEqual(label.x, face.run / 2, '前提: run/2(2000)とboundary中心(2100)がズレているはず');
   assert.equal(label.x, (-100 + 4300) / 2, '壁中心線で挟んだ幅の中心に配置されるはず');
   assert.equal(label.anchor, 'middle');
+});
+
+// ---- 調整項目2: 通り芯丸(circle)とA/B/C/D面ラベルは同じ高さ(y)に揃う ----
+test('【調整項目2】buildFaceFigure: 通り芯丸(circle)と面ラベル(face.label)は同じyに描かれる', () => {
+  const gridCLs = [{ centerLineType: CenterLineType.VERTICAL, effectiveValue: 1500, label: '1' }];
+  const face = makeFace({ label: 'A' });
+  const prims = buildFaceFigure(face, baseCtx({ gridCLs }));
+
+  const circle = prims.find(p => p.type === 'circle');
+  const label  = prims.find(p => p.type === 'text' && p.text === 'A');
+  assert.ok(circle && label, '通り芯丸・面ラベルの両方が出るはず');
+  assert.equal(circle.cy, label.y, '通り芯丸と面ラベルは同じ段(同じy)に揃うはず');
+  // 水平位置は従来通り別（通り芯丸=通り芯位置、面ラベル=壁芯間中心）で一致しないことも確認する。
+  assert.notEqual(circle.cx, label.x, '水平位置は従来どおり別のまま（通り芯位置と壁芯間中心）のはず');
+});
+
+// ---- 調整項目3: 通り芯の一点鎖線は天井線(-CH)より上へ少し突き出す ----
+test('【調整項目3】buildFaceFigure: 通り芯の一点鎖線はy1=-CH-GRID_LINE_ABOVE_CH_MMまで天井線より上に伸びる', () => {
+  const gridCLs = [{ centerLineType: CenterLineType.VERTICAL, effectiveValue: 1500, label: '1' }];
+  const CH = 2400;
+  const face = makeFace();
+  const prims = buildFaceFigure(face, baseCtx({ gridCLs, ceilingHeight: CH }));
+
+  const gridLine = prims.find(p => p.type === 'line' && p.dash === 'center' && p.x1 === 1500 && p.x1 === p.x2);
+  assert.ok(gridLine, '通り芯の一点鎖線が見つからない');
+  assert.equal(gridLine.y1, -CH - GRID_LINE_ABOVE_CH_MM,
+    `通り芯線の上端は-CH-GRID_LINE_ABOVE_CH_MM(${-CH - GRID_LINE_ABOVE_CH_MM})のはず（実際:${gridLine.y1}）`);
+  assert.ok(gridLine.y1 < -CH, '天井線(-CH)より上（より負のy）まで突き出しているはず');
+});
+
+// ---- 調整項目5: 通り芯丸(circle)は背景色で塗り、通り芯線より後（配列順で手前）に描く ----
+test('【調整項目5】buildFaceFigure: 通り芯丸(circle)はCANVAS_BG_COLORで塗りつぶされ、通り芯線より後に積まれる', () => {
+  const gridCLs = [{ centerLineType: CenterLineType.VERTICAL, effectiveValue: 1500, label: '1' }];
+  const prims = buildFaceFigure(makeFace(), baseCtx({ gridCLs }));
+
+  const lineIdx   = prims.findIndex(p => p.type === 'line' && p.dash === 'center' && p.x1 === 1500 && p.x1 === p.x2);
+  const circleIdx = prims.findIndex(p => p.type === 'circle');
+  assert.ok(lineIdx >= 0 && circleIdx >= 0);
+  const circle = prims[circleIdx];
+  assert.equal(circle.fill, CANVAS_BG_COLOR, '通り芯丸のfillは背景色(CANVAS_BG_COLOR)のはず（線を隠すため塗りつぶす）');
+  assert.ok(circleIdx > lineIdx, '通り芯丸は通り芯線より後（Konvaの描画順で手前）に積まれるはず');
+});
+
+// ---- 失敗系: 通り芯が無い面は丸・面ラベルの段が空でも例外を投げない（面ラベル自体は出る） ----
+test('【失敗系・調整項目2】buildFaceFigure: 通り芯が無い面でも面ラベルは出て例外にならない', () => {
+  const face = makeFace({ label: 'C' });
+  const prims = buildFaceFigure(face, baseCtx({ gridCLs: [] }));
+  assert.equal(prims.filter(p => p.type === 'circle').length, 0);
+  assert.ok(prims.some(p => p.type === 'text' && p.text === 'C'));
+});
+
+// ---- QA A1: 通り芯が面の壁芯間中心付近にあると、面ラベルと通り芯丸(同じ段=項目2)が重なる
+// ため、面ラベルを横へ退避させる ----
+test('【QA A1】buildFaceFigure: 通り芯が面中心にあるとき、面ラベルは同じ段のまま通り芯丸から閾値を超えて離れる', () => {
+  // QA実測の再現: CL 0/2000/4000・run=4000（壁芯間中心=2000）に通り芯も2000で衝突させる。
+  const shapes = new Map([['x0', { effectiveValue: 0 }], ['x1', { effectiveValue: 4000 }]]);
+  const gridCLs = [{ centerLineType: CenterLineType.VERTICAL, effectiveValue: 2000, label: '1' }];
+  const face = makeFace({ label: 'A' });
+  const prims = buildFaceFigure(face, baseCtx({ graph: makeGraph({ shapes }), gridCLs }));
+
+  const circle = prims.find(p => p.type === 'circle');
+  const label  = prims.find(p => p.type === 'text' && p.text === 'A');
+  assert.ok(circle && label, '通り芯丸・面ラベルの両方が出るはず');
+  assert.equal(label.y, circle.cy, '面ラベルは通り芯丸と同じ段(y)のまま（項目2の統合は維持する）');
+  assert.ok(Math.abs(label.x - circle.cx) > DEFAULT_FACE_LABEL_AVOID_THRESHOLD_MM,
+    `面ラベルは通り芯丸からDEFAULT_FACE_LABEL_AVOID_THRESHOLD_MM(${DEFAULT_FACE_LABEL_AVOID_THRESHOLD_MM})を超えて` +
+    `離れるはず（実際差: ${Math.abs(label.x - circle.cx)}）`);
+});
+
+// ---- 失敗系: 通り芯が面中心から十分離れていれば面ラベルは退避しない（既定の壁芯間中心のまま） ----
+test('【失敗系・QA A1】buildFaceFigure: 通り芯が面中心から十分離れていれば面ラベルは退避しない', () => {
+  const shapes = new Map([['x0', { effectiveValue: 0 }], ['x1', { effectiveValue: 4000 }]]);
+  const gridCLs = [{ centerLineType: CenterLineType.VERTICAL, effectiveValue: 3900, label: '1' }];
+  const face = makeFace({ label: 'A' });
+  const prims = buildFaceFigure(face, baseCtx({ graph: makeGraph({ shapes }), gridCLs }));
+  const label = prims.find(p => p.type === 'text' && p.text === 'A');
+  assert.equal(label.x, 2000, '衝突しなければ既定の壁芯間中心(2000)のまま退避しないはず');
+});
+
+// ---- QA B1: 910mm等間隔グリッド（住宅の標準モジュール。2間の部屋＝最頻ケース）で、旧「一段だけ
+// 固定シフト」実装は退避後の位置が別の通り芯丸に再度重なっていた。最広ギャップ中点方式なら、
+// 退避後のxが**全ての**通り芯丸から閾値以上離れることを確認する（1回の走査で決定的に解消）。----
+test('【QA B1】buildFaceFigure: 910グリッド(CLs=0/910/1820/2730/3640・run=3640)で面ラベルは全ての通り芯丸から閾値以上離れる', () => {
+  const shapes = new Map([['x0', { effectiveValue: 0 }], ['x1', { effectiveValue: 3640 }]]);
+  const gridCLs = [0, 910, 1820, 2730, 3640].map((v, i) =>
+    ({ centerLineType: CenterLineType.VERTICAL, effectiveValue: v, label: String(i + 1) }));
+  const face = makeFace({ label: 'A', lo: 0, hi: 3640, run: 3640 });
+  const prims = buildFaceFigure(face, baseCtx({ graph: makeGraph({ shapes }), gridCLs }));
+
+  const circles = prims.filter(p => p.type === 'circle');
+  const label   = prims.find(p => p.type === 'text' && p.text === 'A');
+  assert.equal(circles.length, 5, '通り芯丸は5個出るはず');
+  for (const c of circles) {
+    assert.ok(Math.abs(label.x - c.cx) >= DEFAULT_FACE_LABEL_AVOID_THRESHOLD_MM,
+      `面ラベル(x=${label.x})は通り芯丸(cx=${c.cx})から閾値(${DEFAULT_FACE_LABEL_AVOID_THRESHOLD_MM})以上` +
+      `離れるはず（実際差: ${Math.abs(label.x - c.cx)}）`);
+  }
+});
+
+// ---- avoidGridCollisionX 単体（QA B1）: 衝突時は最広ギャップの中点、非衝突時は元のxのまま ----
+test('avoidGridCollisionX: 衝突時（境界含む）は最広ギャップの中点へ、超えていれば退避しない', () => {
+  const boundary = { lo: 0, hi: 4000 };
+  // 通り芯2400のみ・衝突（距離400=閾値ちょうど）。区間は[0,2400](幅2400)と[2400,4000](幅1600)。
+  // より広い[0,2400]の中点=1200へ。
+  assert.equal(avoidGridCollisionX(2000, [{ x: 2400 }], boundary, 400), 1200, '距離=閾値ちょうどでも退避し、最も広い区間の中点になる');
+  // 通り芯2401のみ・非衝突（距離401>閾値400）→ 動かさない。
+  assert.equal(avoidGridCollisionX(2000, [{ x: 2401 }], boundary, 400), 2000, '距離が閾値を超えていれば退避しない');
+  // 通り芯2000のみ（面中心と同座標）・衝突。区間は[0,2000]と[2000,4000]で幅が等しい→先に見つかる側([0,2000])の中点=1000。
+  assert.equal(avoidGridCollisionX(2000, [{ x: 2000 }], boundary, 400), 1000, '幅が同点なら先に見つかった区間の中点になる');
+});
+
+// ---- 失敗系: gridPointsが空なら常に退避しない ----
+test('【失敗系】avoidGridCollisionX: gridPointsが空なら常に元のxを返す', () => {
+  assert.equal(avoidGridCollisionX(2000, [], { lo: 0, hi: 4000 }, 400), 2000);
 });

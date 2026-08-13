@@ -59,6 +59,30 @@ test('layoutBands: 帯を縦に積み、contentHeightMmは最後の帯の下端�
   assert.equal(layout.contentHeightMm, 3100, '最後の帯(topMm=1100,height=2000)の下端。末尾の帯間100は含まない');
 });
 
+// ---- QA A2: topMarginMmは「この帯を置く直前」に追加で空ける（topMmを押し下げる） ----
+test('【QA A2】layoutBands: topMarginMmは帯を置く直前に追加で空け、以降の帯もその分だけ後ろへずれる', () => {
+  const layout = layoutBands([
+    { roomId: 'a', heightMm: 1000 },
+    { roomId: 'b', heightMm: 1000, topMarginMm: 500 },
+    { roomId: 'c', heightMm: 1000 },
+  ], 100);
+  assert.deepEqual(layout.placements, [
+    { roomId: 'a', topMm: 0, heightMm: 1000 },
+    { roomId: 'b', topMm: 1100 + 500, heightMm: 1000 }, // aの下端(1000)+gap(100)+bのtopMarginMm(500)
+    { roomId: 'c', topMm: 1100 + 500 + 1000 + 100, heightMm: 1000 },
+  ]);
+});
+
+// ---- 失敗系: topMarginMm未指定は0扱い（既存の呼び出し元との後方互換） ----
+test('【失敗系・QA A2】layoutBands: topMarginMm未指定は0として扱われる（既存呼び出し元と同じ結果になる）', () => {
+  const withoutField = layoutBands([{ roomId: 'a', heightMm: 1000 }, { roomId: 'b', heightMm: 2000 }], 100);
+  const withZero = layoutBands([
+    { roomId: 'a', heightMm: 1000, topMarginMm: 0 },
+    { roomId: 'b', heightMm: 2000, topMarginMm: 0 },
+  ], 100);
+  assert.deepEqual(withoutField.placements, withZero.placements);
+});
+
 // ---- clampScrollY: 循環廃止後のクランプ仕様 ----
 test('clampScrollY: 上端は0、下端はcontentHeightMm-viewHeightMm', () => {
   const layout = layoutBands([{ roomId: 'a', heightMm: 1000 }, { roomId: 'b', heightMm: 2000 }], 100);
