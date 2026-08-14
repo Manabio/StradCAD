@@ -349,10 +349,23 @@ function leverHandlePrimitives(opening, width) {
 /**
  * 建具1件の姿図プリミティブを生成する。
  * @param {object} opening core.js の Opening（category/subType/width/hingeSide等）
- * @param {{ tag: string|null, entry: object|null }} extra tag=採番結果, entry=findCatalogEntry の結果
+ * @param {{ tag: string|null, entry: object|null, includeDims?: boolean,
+ *   includeMotionArrows?: boolean, includeLevelLine?: boolean }} extra
+ *   tag=採番結果, entry=findCatalogEntry の結果。
+ *   includeDims/includeMotionArrows/includeLevelLine（既定すべてtrue=従来どおり建具モードの
+ *   編集用姿図として使う）は展開モードでの再利用のための抑制オプション（項目1）。
+ *   - includeDims=false: 幅・高さ・窓台高さ・レバーハンドル高さの寸法(type:'dim')を出さない
+ *     （展開図側は編集用寸法を持たない。「レバーハンドルの高さ寸法、その他寸法類」は描かない仕様）。
+ *   - includeMotionArrows=false: 引違いの召し合わせ矢印・シャッター開閉矢印等の動作線(type:'arrow')
+ *     を出さない（「動作線（開き勝手の矢印）」は描かない仕様。開き戸の吊元V字(type:'line')は
+ *     動作線ではなく吊元表示のため対象外＝残す）。
+ *   - includeLevelLine=false: 建具単体の編集用FL基準線(type:'levelLine')を出さない
+ *     （展開図側は部屋自体のFL線を別途持つため重複・冗長になる）。
  * @returns {object[]} AutoScaledFigure が描くプリミティブ配列
  */
-export function buildOpeningElevation(opening, { tag, entry } = {}) {
+export function buildOpeningElevation(
+  opening, { tag, entry, includeDims = true, includeMotionArrows = true, includeLevelLine = true } = {},
+) {
   const width  = opening.width;
   const height = effectiveHeight(opening);
   // 建具（fitting）は窓台の概念を持たないため sill=0 扱い（core.js のコメント方針どおり）。
@@ -396,5 +409,11 @@ export function buildOpeningElevation(opening, { tag, entry } = {}) {
 
   if (tag) primitives.push({ type: 'text', x: 0, y: top - 450, text: tag, size: 12, anchor: 'start' });
 
-  return primitives;
+  // 抑制オプション（項目1）。既定値はすべてtrueのため、フィルタは常に配列を素通りし
+  // 従来の建具モード姿図パネル（OpeningEditor.jsx）の挙動は変わらない。
+  let result = primitives;
+  if (!includeDims)         result = result.filter(p => p.type !== 'dim');
+  if (!includeMotionArrows) result = result.filter(p => p.type !== 'arrow');
+  if (!includeLevelLine)    result = result.filter(p => p.type !== 'levelLine');
+  return result;
 }

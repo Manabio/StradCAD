@@ -383,3 +383,44 @@ test('buildOpeningElevation: FOLD(折れ戸)は分割縦線1本、FIRE_FOLD(常�
   assert.equal(fireFoldDividers.length, 3);
   assert.equal(fireFoldPrims.filter(p => p.type === 'line' && p.dash === 'dashed').length, 8, '4パネル×V2本=8本のはず');
 });
+
+// ---- 項目1: 展開図での再利用向け抑制オプション（includeDims/includeMotionArrows/includeLevelLine） ----
+test('【項目1】buildOpeningElevation: includeDims=falseで寸法(type:dim)が0本になり、レバーハンドル・吊元表示は残る', () => {
+  const opening = makeOpening({
+    category: OpeningCategory.FITTING, subType: 'singleSwing', width: 800, height: 2000, sillHeight: null,
+    hingeSide: -1,
+  });
+  const entry = findCatalogEntry(opening.category, opening.subType); // singleSwing = SWING機構
+  const primitives = buildOpeningElevation(opening, { tag: null, entry, includeDims: false });
+
+  assert.equal(primitives.filter(p => p.type === 'dim').length, 0, '寸法(width/height/handleHeight)が一切出ないはず');
+  assert.ok(primitives.some(p => p.type === 'rect' && p.rx != null), 'レバーハンドル（カプセル形rect）は残るはず');
+  assert.ok(primitives.some(p => p.type === 'line' && p.dash === 'center'), '吊元表示（一点鎖線V）は残るはず');
+});
+
+test('【項目1】buildOpeningElevation: includeMotionArrows=falseで動作線(type:arrow)が0本になり、召し合わせ框の縦線(機構表現)は残る', () => {
+  const opening = makeOpening({ category: OpeningCategory.FITTING, subType: 'doubleSliding', width: 1690, height: 2000, sillHeight: null });
+  const entry = findCatalogEntry(opening.category, opening.subType); // doubleSliding = SLIDE_DOUBLE機構
+  const primitives = buildOpeningElevation(opening, { tag: null, entry, includeMotionArrows: false });
+
+  assert.equal(primitives.filter(p => p.type === 'arrow').length, 0, '召し合わせの水平矢印(動作線)が出ないはず');
+  const meetingStiles = primitives.filter(p => p.type === 'line' && p.dash == null && p.x1 === p.x2);
+  assert.equal(meetingStiles.length, 2, '召し合わせ框の縦線2本（機構表現）は残るはず');
+});
+
+test('【項目1】buildOpeningElevation: includeLevelLine=falseでFL基準線(type:levelLine)が出ない', () => {
+  const opening = makeOpening();
+  const entry = findCatalogEntry(opening.category, opening.subType);
+  const primitives = buildOpeningElevation(opening, { tag: null, entry, includeLevelLine: false });
+  assert.ok(!primitives.some(p => p.type === 'levelLine'), 'levelLineが出ないはず');
+});
+
+test('【失敗系・項目1】buildOpeningElevation: 抑制オプション省略時（既定値）は従来どおり寸法・動作線・FL線をすべて含む', () => {
+  const opening = makeOpening({ category: OpeningCategory.FITTING, subType: 'doubleSliding', width: 1690, height: 2000, sillHeight: null });
+  const entry = findCatalogEntry(opening.category, opening.subType);
+  const primitives = buildOpeningElevation(opening, { tag: null, entry });
+
+  assert.ok(primitives.some(p => p.type === 'dim'), '既定値では寸法が出るはず（従来動作維持）');
+  assert.ok(primitives.some(p => p.type === 'arrow'), '既定値では動作線(arrow)が出るはず（従来動作維持）');
+  assert.ok(primitives.some(p => p.type === 'levelLine'), '既定値ではlevelLineが出るはず（従来動作維持）');
+});
