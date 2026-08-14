@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import {
   chooseElevationScale, screenMmToModelMm, layoutBands, clampScrollY,
   visibleBandPlacements, bandIdAtY, clampFaceOffset, bandContentOriginMm,
-  miterTriangleVertices, verticalDimLabelBox,
+  miterTriangleVertices, verticalDimLabelBox, horizontalDimLabelBox,
 } from './elevationLayout.js';
 import { BAND_GAP_MM } from './elevationStyle.js';
 
@@ -158,6 +158,25 @@ test('【QA F1】clampFaceOffset: 帯幅が画面に収まる場合もminXにク
   assert.equal(v, -330, '収まる帯でもminXへクランプされ、中央寄せの位置(旧仕様)にはならないはず');
 });
 
+// ---- 項目1: marginMm（左三角のさらに左に確保する余白）は下限側にだけ効く ----
+test('【項目1】clampFaceOffset: marginMm指定時は下限がminX-marginMmまで広がるが、上限はminXのまま', () => {
+  const band = { bounds: { minX: -330, maxX: 2670 } }; // widthMm=3000（画面に収まる想定）
+  // 下限を下回っていた値もminX-marginMmまでは許容される。
+  assert.equal(clampFaceOffset(-330 - 15, band, 5000, 15), -330 - 15,
+    'minX-marginMm ちょうどはクランプされずそのまま通るはず');
+  assert.equal(clampFaceOffset(-330 - 100, band, 5000, 15), -330 - 15,
+    'minX-marginMmを下回る値はminX-marginMmへクランプされるはず');
+  // 上限側はminMm=0のときと変わらずminXのまま（marginMmは下限にしか効かない）。
+  assert.equal(clampFaceOffset(9999, band, 5000, 15), -330,
+    '収まる帯の上限は従来どおりminXのまま（marginMmぶん広がらない）');
+});
+
+test('【失敗系・項目1】clampFaceOffset: marginMm省略時（既定0）は従来どおりの挙動になる', () => {
+  const band = { bounds: { minX: -330, maxX: 2670 } };
+  assert.equal(clampFaceOffset(-330 - 15, band, 5000), -330,
+    'marginMm省略時はminXが下限のまま（項目1以前の挙動を維持）');
+});
+
 // ---- QA F1: 帯の実描画範囲は placement.topMm..topMm+heightMm と一致し、連続帯の間隔は
 // bounds.minY の違い（天井高が異なる部屋同士）に関わらず正確にBAND_GAP_MMだけ空く ----
 test('【QA F1】bandContentOriginMm: 実描画範囲(topMm+minY..topMm+maxY)がスロットと一致し、連続帯の間隔はBAND_GAP_MMちょうど', () => {
@@ -227,4 +246,16 @@ test('verticalDimLabelBox: rotation=-90（CCW90°）・寸法線の左側（x<li
   assert.equal(box.y, 300, '寸法線の中点yと同じ高さに配置される');
   assert.equal(box.offsetX, box.width / 2);
   assert.equal(box.offsetY, box.height / 2);
+});
+
+// ---- 項目3: 寸法値と寸法線の離れ(gapPx)を旧値の半分にする ----
+test('【項目3】verticalDimLabelBox: 既定のgapPx（寸法線からの左オフセット）は旧値8pxの半分=4px', () => {
+  const box = verticalDimLabelBox(500, 300);
+  assert.equal(box.x, 500 - 4, '既定gapPxは4pxのはず（旧8pxの半分）');
+});
+
+test('【項目3】horizontalDimLabelBox: 既定のgapPx（寸法線からの上オフセット）は旧値2pxの半分=1px', () => {
+  const box = horizontalDimLabelBox(0, 300);
+  const thicknessPx = 14; // 既定値（変更なし）
+  assert.equal(box.y, 300 - 1 - thicknessPx, '既定gapPxは1pxのはず（旧2pxの半分）');
 });

@@ -16,6 +16,7 @@ import {
   DEFAULT_FACE_LABEL_AVOID_THRESHOLD_MM, FACE_LABEL_AVOID_THRESHOLD_SCREEN_MM,
   DEFAULT_OPENING_TAG_ROW_MM, OPENING_TAG_ROW_SCREEN_MM,
   DEFAULT_DIM_ROW_GAP_MM, DIM_ROW_GAP_SCREEN_MM, DEFAULT_GRID_ROW_GAP_MM, GRID_ROW_GAP_SCREEN_MM,
+  LEFT_MARGIN_SCREEN_MM,
 } from '../elevation/elevationStyle.js';
 // DEFAULT_PX_PER_MMはviewport.js（appViewport.jsとは別。window依存を持たない純モジュール
 // ——appViewport.jsのヘッダコメント参照）からのみ取得する。ElevationModeState.js自体は
@@ -185,18 +186,25 @@ export class ElevationModeState {
 
   setViewSize(size) { this.viewSize = size; }
 
+  /** 左三角のさらに左に確保する画面余白（モデルmm。項目1）。scale/screenPxPerMm連動の2パス換算。 */
+  get leftMarginModelMm() {
+    return screenMmToModelMm(LEFT_MARGIN_SCREEN_MM, this.screenPxPerMm, this.scale);
+  }
+
   /**
    * 面（帯roomId）の水平スクロール量(mm)を、有効範囲へクランプした状態で返す。
-   * 既定値（未設定時）は band.leftAnchorX（左の留め三角の位置。項目10）を clampFaceOffsetへ
-   * 渡すため、「画面に収まるなら中央寄せ・収まらないなら左三角の位置を左マージンへ」という
-   * 初期値の規則が初回描画から成立する——leftAnchorXは全帯が同じ規則（天井高寸法線の外側へ
-   * 実画面10mm）で決まるため、この既定値を使う限り帯を切り替えても左端の見え方が揃う
-   * （band.leftAnchorXが無い＝面0件の帯はband.bounds.minXへフォールバック）。
+   * 既定値（未設定時）は band.leftAnchorX（左の留め三角の位置。項目10）から leftMarginModelMm
+   * （項目1: 左三角が画面左端ぴったりに来ないよう実画面LEFT_MARGIN_SCREEN_MMぶん手前を既定に
+   * する）を引いた位置を clampFaceOffsetへ渡すため、「画面に収まるなら中央寄せ・収まらないなら
+   * 左三角の位置を左マージンへ」という初期値の規則が初回描画から成立する——leftAnchorXは全帯が
+   * 同じ規則（天井高寸法線の外側へ実画面10mm）で決まるため、この既定値を使う限り帯を切り替えても
+   * 左端の見え方が揃う（band.leftAnchorXが無い＝面0件の帯はband.bounds.minXへフォールバック）。
    */
   faceOffsetFor(band) {
     const viewWidthMm = (this.viewSize?.width ?? 800) / this.scale;
-    const defaultOffset = band.leftAnchorX ?? band.bounds.minX;
-    return clampFaceOffset(this.faceScroll.get(band.roomId) ?? defaultOffset, band, viewWidthMm);
+    const marginModelMm = this.leftMarginModelMm;
+    const defaultOffset = (band.leftAnchorX ?? band.bounds.minX) - marginModelMm;
+    return clampFaceOffset(this.faceScroll.get(band.roomId) ?? defaultOffset, band, viewWidthMm, marginModelMm);
   }
 
   /**
@@ -219,7 +227,7 @@ export class ElevationModeState {
       if (band) {
         const viewWidthMm = (this.viewSize?.width ?? 800) / this.scale;
         const cur = this.faceScroll.get(roomId) ?? 0;
-        this.faceScroll.set(roomId, clampFaceOffset(cur - dxMm, band, viewWidthMm));
+        this.faceScroll.set(roomId, clampFaceOffset(cur - dxMm, band, viewWidthMm, this.leftMarginModelMm));
       }
     }
   }

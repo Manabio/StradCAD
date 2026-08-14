@@ -72,6 +72,13 @@ export const NAME_GAP_BELOW_SCREEN_MM = 10;
 export const TRIANGLE_OFFSET_SCREEN_MM = 10;
 export const DEFAULT_TRIANGLE_OFFSET_MM = 300; // 倍率決定用の1パス目の仮値（高さに影響しないため仮値でよい）
 
+// 左三角(band.leftAnchorX)のさらに左に確保する画面余白（実画面mm。項目1）。TRIANGLE_OFFSET_SCREEN_MM
+// と違い、これは帯のプリミティブ座標（leftAnchorX自体）には一切乗せない——純粋にビューポートの
+// 横スクロール既定値・クランプ下限（ElevationModeState.faceOffsetFor/elevationLayout.js の
+// clampFaceOffset）だけに効く画面表示上の余白のため、buildRoomBand/buildFaceFigureのctxには
+// 通さない（band.leftAnchorX自体は従来どおり「天井高寸法線の外側」の位置を指し続ける）。
+export const LEFT_MARGIN_SCREEN_MM = 15;
+
 // ---- 注記帯の行位置（実画面mm。QA C1→D1/D2で全面改訂） ----
 // 建具記号丸(tag。半径16px)・通り芯丸(半径11px)・面ラベル(13px)は、どれもOPENING_TAG_RADIUS_PX/
 // GRID_TAG_RADIUS_PX等というスクリーン固定サイズを持つ。これらを載せる行の位置をモデルmm定数の
@@ -91,7 +98,12 @@ export const DEFAULT_TRIANGLE_OFFSET_MM = 300; // 倍率決定用の1パス目�
 // 採用値と新旧pxの比較は .claude/elevation-model.md 参照。
 export const OPENING_TAG_ROW_SCREEN_MM = 8;  // 床線→tag行。8mm×3.78≈30px（床から16px+14px余裕）
 export const DEFAULT_OPENING_TAG_ROW_MM = 300; // 倍率決定用の1パス目の仮値（旧OPENING_TAG_ROW_Yと同値）
-export const DIM_ROW_GAP_SCREEN_MM = 16; // 床線→ROW1。16mm×3.78≈60px（tag行から30px余裕）
+// 床線→ROW1（項目2で16→20に再修正）。ROW1の「線」自体だけでなく、線の上に載る寸法値テキスト
+// （horizontalDimLabelBox。項目3でgapPxを半分にしたが、それでも線からgapPx+thicknessPx=15px
+// ぶん床側=タグ行側へ張り出す）の上端がタグ丸の下端(tagRow_px+16px)と重ならないことまで含めて
+// 判定する必要がある——16mmのままだと実測クリアランスが負（テキストがタグ丸に食い込む）。
+// 20mm×3.78≈76pxなら、テキスト上端とタグ丸下端の間に約14pxの余裕が残る（既定校正値換算）。
+export const DIM_ROW_GAP_SCREEN_MM = 20;
 export const DEFAULT_DIM_ROW_GAP_MM = 600; // 倍率決定用の1パス目の仮値（旧DIM_ROW_GAP_MMと同値）
 export const GRID_ROW_GAP_SCREEN_MM = 6; // ROW1→ROW2、ROW2→通り芯丸+面ラベル行の共通ギャップ。
 // 6mm×3.78≈23px（通り芯丸の半径11px+12px余裕）

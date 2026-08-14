@@ -152,8 +152,10 @@ test('【項目10】ElevationModeState.faceOffsetFor: 未設定時はband.leftAn
   // 使う）を通るようにする——「画面に収まる場合は中央寄せ」分岐だと既定値がそのまま返らないため。
   state.setViewSize({ width: 10, height: 800 });
 
-  assert.equal(state.faceOffsetFor(fakeBand), fakeBand.leftAnchorX,
-    'faceScroll未設定時はband.leftAnchorXがそのまま初期水平オフセットになるはず（bounds.minXではない）');
+  // 項目1: 既定値はband.leftAnchorXそのものではなく、そこからleftMarginModelMmぶん手前
+  // （左三角の左に実画面LEFT_MARGIN_SCREEN_MMの余白を確保）になる。
+  assert.equal(state.faceOffsetFor(fakeBand), fakeBand.leftAnchorX - state.leftMarginModelMm,
+    'faceScroll未設定時はband.leftAnchorX-leftMarginModelMmが初期水平オフセットになるはず（bounds.minXではない）');
 });
 
 // ---- QA F1: 画面に収まる帯（トイレ等の小部屋）も収まらない帯（広いLDK等）も、

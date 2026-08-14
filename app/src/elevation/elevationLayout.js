@@ -124,14 +124,21 @@ export function bandIdAtY(layout, scrollYMm, yMm) {
  * いた）。帯が画面に収まる場合はレンジが[minX,minX]に潰れ、常にminX（=左三角の位置。
  * band.leftAnchorXがminXと一致するよう組み立てられている）を返すため、結果的に全帯が左揃えになる。
  * 帯が画面より広い場合の挙動は変更していない。
+ *
+ * marginMm（省略時0。項目1）は下限側にのみ効く「左三角のさらに左に確保する余白」——
+ * minX（=左三角の位置）そのものは動かさず、クランプの下限だけ minX-marginMm へ広げることで
+ * ElevationModeState.faceOffsetFor の既定オフセット（leftAnchorX-marginMm）がここで
+ * minXへ引き戻されずに済む（上限側はminXのまま＝画面に収まる帯は従来どおりminXで頭打ち。
+ * 上限まで広げると、収まる帯で右側に不要な余白ができてしまうため）。
  * @param {number} offsetMm
  * @param {{bounds?:{minX:number,maxX:number}, widthMm:number}} band
  * @param {number} viewWidthMm
+ * @param {number} [marginMm]
  */
-export function clampFaceOffset(offsetMm, band, viewWidthMm) {
+export function clampFaceOffset(offsetMm, band, viewWidthMm, marginMm = 0) {
   const minX = band?.bounds?.minX ?? 0;
   const maxX = band?.bounds?.maxX ?? (minX + (band?.widthMm ?? 0));
-  return Math.min(Math.max(offsetMm, minX), Math.max(minX, maxX - viewWidthMm));
+  return Math.min(Math.max(offsetMm, minX - marginMm), Math.max(minX, maxX - viewWidthMm));
 }
 
 /**
@@ -195,7 +202,8 @@ export function miterTriangleVertices(anchorPxX, anchorPxY, dir, heightPx, angle
  * @param {number} [gapPx] - 寸法線からの左オフセット
  * @returns {{x:number, y:number, width:number, height:number, offsetX:number, offsetY:number, rotation:number}}
  */
-export function verticalDimLabelBox(lineX, midY, boxLenPx = 80, thicknessPx = 14, gapPx = 8) {
+// 項目3: 寸法値と寸法線の離れ（gapPx）を旧値(8px)の半分にする（horizontalDimLabelBoxと同じ扱い）。
+export function verticalDimLabelBox(lineX, midY, boxLenPx = 80, thicknessPx = 14, gapPx = 4) {
   return {
     x: lineX - gapPx, y: midY,
     width: boxLenPx, height: thicknessPx,
@@ -215,7 +223,8 @@ export function verticalDimLabelBox(lineX, midY, boxLenPx = 80, thicknessPx = 14
  * @param {number} [gapPx] - 寸法線からの上オフセット
  * @returns {{x:number, y:number, width:number, height:number}}
  */
-export function horizontalDimLabelBox(midX, midY, boxLenPx = 80, thicknessPx = 14, gapPx = 2) {
+// 項目3: 寸法値と寸法線の離れ（gapPx）を旧値(2px)の半分にする（ユーザー仕様「現在の半分に」）。
+export function horizontalDimLabelBox(midX, midY, boxLenPx = 80, thicknessPx = 14, gapPx = 1) {
   return {
     x: midX - boxLenPx / 2, y: midY - gapPx - thicknessPx,
     width: boxLenPx, height: thicknessPx,
