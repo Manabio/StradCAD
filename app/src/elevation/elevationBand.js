@@ -5,6 +5,7 @@
 import { figureBounds } from '../structural/sectionFigure/sectionGeometry.js';
 import { buildRoomFaces, faceBoundaryLocalX } from './elevationFaces.js';
 import { buildFaceFigure } from './elevationFigure.js';
+import { wallAdjacentFloorSegments } from './elevationFloorProfile.js';
 import { roomCeilingHeight } from '../finish/roomMetrics.js';
 import {
   DEFAULT_FACE_GAP_MM, CH_DIM_OFFSET_MM, DEFAULT_TRIANGLE_OFFSET_MM, BAND_TOP_MARGIN_MM,
@@ -62,9 +63,12 @@ export function buildRoomBand(room, graph, ctx = {}) {
     // 発生しないが、念のためのガード）。
     const prevFace = faces.length >= 2 ? faces[(i - 1 + faces.length) % faces.length] : null;
     const nextFace = faces.length >= 2 ? faces[(i + 1) % faces.length] : null;
+    // 項目4: 部分指定（referenceRoomIds）が壁際の一部を占めfloorLevelが異なる区間があれば、
+    // 床線を段差付きにする（elevationFloorProfile.js。未該当なら常にフラット1区間を返す）。
+    const floorSegments = wallAdjacentFloorSegments(face, room, graph);
     const faceCtx = {
       graph, project, room, ceilingHeight: CH, materialMap, gridCLs, faceLabelAvoidThresholdModelMm,
-      prevFace, nextFace, openingTagRowModelMm, dimRowGapModelMm, gridRowGapModelMm,
+      prevFace, nextFace, openingTagRowModelMm, dimRowGapModelMm, gridRowGapModelMm, floorSegments,
     };
     for (const p of buildFaceFigure(face, faceCtx)) primitives.push(translatePrimitive(p, xCursor, 0));
     if (i === 0) {

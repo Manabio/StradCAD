@@ -322,3 +322,29 @@ test('【項目3・結合】buildRoomBand: D面隅の建具はA面(prevFace=D)�
   assert.equal(strip.length, 3, 'A面のx=0側に枠2断面＋扉1枚＝3本のrectが出るはず');
   assert.deepEqual(strip.map(r => r.weight).sort(), ['medium', 'thick', 'thick'].sort());
 });
+
+// ---- 項目4(結合): buildRoomBandがwallAdjacentFloorSegmentsを実際に配線し、部分指定の壁際に
+// 段差付きの床線が出る ----
+test('【項目4・結合】buildRoomBand: 部分指定（floorLevel+300）が右半分を占める面Aの床線は段差付きになる', () => {
+  const graph = makeGraph();
+  const x0   = graph.addCenterLine(CenterLineType.VERTICAL, 0,    { labeled: false, discipline: Discipline.ARCH });
+  const xMid = graph.addCenterLine(CenterLineType.VERTICAL, 2000, { labeled: false, discipline: Discipline.ARCH });
+  const x1   = graph.addCenterLine(CenterLineType.VERTICAL, 4000, { labeled: false, discipline: Discipline.ARCH });
+  const y0   = graph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: false, discipline: Discipline.ARCH });
+  const y1   = graph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: false, discipline: Discipline.ARCH });
+  const leftKey  = `${x0.id}:${y0.id}:${xMid.id}:${y1.id}`;
+  const rightKey = `${xMid.id}:${y0.id}:${x1.id}:${y1.id}`;
+  const room = graph.addRoom(new Set([leftKey, rightKey]), 'LDK');
+  generateRoomWallsFromOutline(graph, room);
+  const child = graph.addRoom(new Set([rightKey]), '小上がり', undefined, new Set([room.id]));
+  child.setFloorLevel(300);
+
+  const band = buildRoomBand(room, graph, { project: { openingNumberIndex: new Map() } });
+  const faceA = buildRoomFaces(room, graph).find(f => f.label === 'A');
+  const cutHorizontals = band.primitives.filter(p =>
+    p.type === 'line' && p.weight === 'thick' && p.y1 === p.y2 && p.x1 >= 0 && p.x2 <= faceA.run);
+  const floorHorizontals = cutHorizontals.filter(l => l.y1 !== -2400); // 天井線(y=-CH)を除外
+  assert.equal(floorHorizontals.length, 2, '面Aの床の水平CUT線は段差で2本に分かれるはず');
+  assert.ok(floorHorizontals.some(l => l.y1 === -300), '右区間の床線はy=-300にあるはず');
+  assert.ok(floorHorizontals.some(l => l.y1 === 0), '左区間の床線はy=0のままのはず');
+});

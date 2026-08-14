@@ -215,7 +215,8 @@ export function openingSectionPrimitives(o, x0, dir, cutWeight, silhouetteWeight
  * @param {{graph:object, project:object, room:import('@core').Room, ceilingHeight:number,
  *   materialMap:Map|null, gridCLs:object[], faceLabelAvoidThresholdModelMm?:number,
  *   prevFace?:object|null, nextFace?:object|null, openingTagRowModelMm?:number,
- *   dimRowGapModelMm?:number, gridRowGapModelMm?:number}} ctx
+ *   dimRowGapModelMm?:number, gridRowGapModelMm?:number,
+ *   floorSegments?:Array<{loX:number,hiX:number,floorDeltaMm:number}>}} ctx
  *   faceLabelAvoidThresholdModelMm省略時はDEFAULT_FACE_LABEL_AVOID_THRESHOLD_MM（QA B3。
  *   ElevationModeState.initが2パス目でscreenMmToModelMm換算した値を渡す）。
  *   prevFace/nextFace省略時（項目3非対応呼び出し・単体テスト等）は建具断面を描かない。
@@ -224,12 +225,15 @@ export function openingSectionPrimitives(o, x0, dir, cutWeight, silhouetteWeight
  *   2パス目でscreenMmToModelMm換算した値を渡す。3つとも独立したスクリーンmm予算から換算する
  *   ——QA D2: 「ROW1をタグ行の2倍として式で導出する」設計は値を機械的に押し上げ、ユーザーが
  *   調整済みの見た目を大きく踏み外したため撤回した）。
+ *   floorSegments省略時は床線1本のフラット区間（項目4。elevationFloorProfile.jsの
+ *   wallAdjacentFloorSegmentsをbuildRoomBand/buildStairBandが計算して渡す。単体テスト等
+ *   buildFaceFigureを直接呼ぶ場合は明示的に渡さない限りフラットになる）。
  * @returns {object[]}
  */
 export function buildFaceFigure(face, ctx) {
   const {
     graph, project, room, ceilingHeight: CH, materialMap, gridCLs, faceLabelAvoidThresholdModelMm,
-    prevFace, nextFace, openingTagRowModelMm, dimRowGapModelMm, gridRowGapModelMm,
+    prevFace, nextFace, openingTagRowModelMm, dimRowGapModelMm, gridRowGapModelMm, floorSegments,
   } = ctx;
   const run = face.run;
   const prims = [];
@@ -244,12 +248,32 @@ export function buildFaceFigure(face, ctx) {
   const gridCircleRowY = dimRow2Y + gridRowGapMm;
   const faceLabelRowY  = gridCircleRowY;
 
-  // 床線・天井線・両端縦線（切断面＝太）
+  // 床線・天井線・両端縦線（切断面＝太）。項目4: 部分指定（referenceRoomIds）が壁際の一部を占め
+  // floorLevelが親と異なる区間があれば、床線は一直線ではなく段差付きの階段状polylineになる
+  // （segs＝elevationFloorProfile.jsのwallAdjacentFloorSegments。buildRoomBand/buildStairBand
+  // がctx.floorSegmentsとして渡す。未指定時=単体テスト等はフラット1区間へフォールバックし、
+  // 常に従来どおりの床線1本になる）。天井線は項目5（部分指定のCHを段差ぶん増減して天井の絶対
+  // 高さを親と揃える）により水平のまま——ここでは一切変更しない。
   const cutWeight = weightForRole(ElevationLineRole.CUT);
-  prims.push({ type: 'line', x1: 0,   y1: 0,   x2: run, y2: 0,   weight: cutWeight });
+  const segs = floorSegments ?? [{ loX: 0, hiX: run, floorDeltaMm: 0 }];
+  // floorDeltaMm:0 を -0 にせずそのまま 0 として扱う（-0 は等値比較・テストの落とし穴になるため）。
+  const floorYOf = s => (s.floorDeltaMm ? -s.floorDeltaMm : 0);
+  for (const s of segs) {
+    const y = floorYOf(s);
+    prims.push({ type: 'line', x1: s.loX, y1: y, x2: s.hiX, y2: y, weight: cutWeight });
+  }
+  for (let i = 0; i + 1 < segs.length; i++) {
+    // 段差の縦線（明示指示により寸法線・寸法値は描かない）。
+    prims.push({
+      type: 'line', x1: segs[i].hiX, y1: floorYOf(segs[i]), x2: segs[i].hiX, y2: floorYOf(segs[i + 1]),
+      weight: cutWeight,
+    });
+  }
+  const floorYAtStart = floorYOf(segs[0]);
+  const floorYAtEnd   = floorYOf(segs[segs.length - 1]);
   prims.push({ type: 'line', x1: 0,   y1: -CH, x2: run, y2: -CH, weight: cutWeight });
-  prims.push({ type: 'line', x1: 0,   y1: -CH, x2: 0,   y2: 0,   weight: cutWeight });
-  prims.push({ type: 'line', x1: run, y1: -CH, x2: run, y2: 0,   weight: cutWeight });
+  prims.push({ type: 'line', x1: 0,   y1: -CH, x2: 0,   y2: floorYAtStart, weight: cutWeight });
+  prims.push({ type: 'line', x1: run, y1: -CH, x2: run, y2: floorYAtEnd,   weight: cutWeight });
 
   // アキ（腰壁＋垂れ壁の同時指定でできる四角い穴）
   const silhouetteWeight = weightForRole(ElevationLineRole.SILHOUETTE);

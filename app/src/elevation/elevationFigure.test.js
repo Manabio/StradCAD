@@ -13,7 +13,8 @@ import {
   DEFAULT_OPENING_TAG_ROW_MM, OPENING_TAG_ROW_SCREEN_MM, OPENING_TAG_RADIUS_PX,
   DIM_ROW_GAP_SCREEN_MM, GRID_ROW_GAP_SCREEN_MM, GRID_TAG_RADIUS_PX,
 } from './elevationStyle.js';
-import { screenMmToModelMm } from './elevationLayout.js';
+import { screenMmToModelMm, horizontalDimLabelBox } from './elevationLayout.js';
+import { DEFAULT_PX_PER_MM } from '../viewport.js';
 
 function makeFace(overrides = {}) {
   return {
@@ -46,6 +47,54 @@ test('buildFaceFigure: 床線1・天井線1・両端縦線2の計4本のCUT(太)
   const prims = buildFaceFigure(face, baseCtx());
   const cutLines = prims.filter(p => p.type === 'line' && p.weight === 'thick');
   assert.equal(cutLines.length, 4);
+});
+
+// ---- 項目4: floorSegmentsが段差を含む場合、床線は区間ごとの水平線＋段差の縦線になる ----
+test('【項目4】buildFaceFigure: floorSegmentsが2区間（段差あり）なら床線は水平線2本＋段差縦線1本になり、両端の縦線もその区間の床yに追従する', () => {
+  const CH = 2400;
+  const floorSegments = [
+    { loX: 0,    hiX: 2000, floorDeltaMm: 0 },
+    { loX: 2000, hiX: 4000, floorDeltaMm: 300 },
+  ];
+  const face = makeFace();
+  const ctx = baseCtx({ ceilingHeight: CH, floorSegments });
+  const prims = buildFaceFigure(face, ctx);
+
+  const cutLines = prims.filter(p => p.type === 'line' && p.weight === 'thick');
+  // 天井線1・床の水平線2（区間ごと）・段差縦線1・両端縦線2 = 計6本。
+  assert.equal(cutLines.length, 6, `CUT線は6本のはず（実際:${cutLines.length}）`);
+
+  const floorHorizontals = cutLines.filter(l => l.y1 === l.y2);
+  assert.equal(floorHorizontals.length, 3, '天井線1本+床の水平線2本=3本の水平CUT線のはず');
+  const seg0 = floorHorizontals.find(l => l.x1 === 0 && l.x2 === 2000);
+  const seg1 = floorHorizontals.find(l => l.x1 === 2000 && l.x2 === 4000);
+  assert.ok(seg0 && seg1, '両区間の水平線がそれぞれ見つかるはず');
+  assert.equal(seg0.y1, 0, '左区間(floorDeltaMm:0)はy=0のまま');
+  assert.equal(seg1.y1, -300, '右区間(floorDeltaMm:300)はy=-300へ上がるはず');
+
+  // 段差の縦線（x=2000でy=0→y=-300）。
+  const riser = cutLines.find(l => l.x1 === 2000 && l.x2 === 2000 && l.y1 === 0 && l.y2 === -300);
+  assert.ok(riser, '段差の縦線(x=2000, y:0→-300)が見つかるはず');
+  assert.equal(riser.weight, 'thick', '段差の縦線もCUTのはず');
+
+  // 段差の寸法線・寸法値は描かない（明示指示）。
+  assert.ok(!prims.some(p => p.type === 'dim' && p.at === 2000), '段差位置の寸法は描かないはず');
+
+  // 両端の縦線（x=0とx=run=4000）は、その位置の区間の床yまで伸びる。
+  const leftEnd  = cutLines.find(l => l.x1 === 0 && l.x2 === 0);
+  const rightEnd = cutLines.find(l => l.x1 === face.run && l.x2 === face.run);
+  assert.ok(leftEnd && rightEnd, '両端の縦線が見つかるはず');
+  assert.equal(leftEnd.y2, 0, '左端は左区間の床y(0)まで');
+  assert.equal(rightEnd.y2, -300, '右端は右区間の床y(-300)まで');
+});
+
+// ---- 失敗系: floorSegments省略時は従来どおり床線1本（フラット）になる ----
+test('【失敗系・項目4】buildFaceFigure: floorSegments省略時は床線1本のフラットな床のままになる', () => {
+  const face = makeFace();
+  const prims = buildFaceFigure(face, baseCtx());
+  const cutLines = prims.filter(p => p.type === 'line' && p.weight === 'thick');
+  const floorHorizontals = cutLines.filter(l => l.y1 === l.y2 && l.y1 === 0);
+  assert.equal(floorHorizontals.length, 1, '段差が無ければ床の水平線は1本のままのはず');
 });
 
 // ---- 開口 y=-(sill+h) ----
@@ -174,6 +223,38 @@ for (const scale of [1 / 20, 1 / 50, 1 / 100]) {
     const clearancePx = (circle.cy - row2Dim.at) * scale;
     assert.ok(clearancePx >= GRID_CLEARANCE_PX,
       `ROW2から通り芯丸までのクリアランス(${clearancePx}px)は${GRID_CLEARANCE_PX}px以上のはず`);
+  });
+
+  // ---- 項目2: タグ丸の縁とROW1寸法値テキスト上端が重ならない（線の上に値が乗る分も含めて判定）----
+  // screenPxPerMmは既定校正値(DEFAULT_PX_PER_MM)を使う——他のテスト(QA C1/D1)が使う5.5では
+  // 旧値(16mm)でも偶然クリアランスが正になってしまい、項目2で修正した不具合（既定校正値付近で
+  // 実際に発生していた重なり）を再現できない。
+  test(`【項目2】buildFaceFigure: scale=${scale}でも建具記号丸の縁とROW1寸法値テキスト上端が重ならない`, () => {
+    const screenPxPerMm = DEFAULT_PX_PER_MM;
+    const openingTagRowModelMm = screenMmToModelMm(OPENING_TAG_ROW_SCREEN_MM, screenPxPerMm, scale);
+    const dimRowGapModelMm     = screenMmToModelMm(DIM_ROW_GAP_SCREEN_MM, screenPxPerMm, scale);
+
+    const opening = {
+      id: 'op6', isVertical: false, axisCL: { id: 'axisY0' }, wallSide: 1,
+      centerCoord: 2000, width: 900, height: 2000, sillHeight: 500,
+      category: OpeningCategory.WINDOW, subType: 'singleSliding', fixtureType: null,
+    };
+    const face = makeFace();
+    const ctx = baseCtx({
+      graph: makeGraph({ openings: [opening] }), openingTagRowModelMm, dimRowGapModelMm,
+    });
+    const prims = buildFaceFigure(face, ctx);
+    const tag = prims.find(p => p.type === 'tag');
+    const wallDim = prims.find(p => p.type === 'dim' && p.dir === 'h' && p.from === 0 && p.to === 4000);
+    assert.ok(tag && wallDim, 'タグ・ROW1寸法の両方が見つかるはず');
+
+    // レンダラ(figurePrimitivesKonva.jsx)と同じ計算: dim.atをpx換算した位置がhorizontalDimLabelBox
+    // のmidYになり、テキスト上端はbox.y（線からgapPx+thicknessPxぶん上）。
+    const tagBottomPx  = tag.cy * scale + OPENING_TAG_RADIUS_PX;
+    const row1LabelBox = horizontalDimLabelBox(0, wallDim.at * scale);
+    const textTopPx    = row1LabelBox.y;
+    assert.ok(textTopPx >= tagBottomPx,
+      `ROW1寸法値テキスト上端(${textTopPx}px)はタグ丸の下端(${tagBottomPx}px)より下（重ならない）はず`);
   });
 }
 

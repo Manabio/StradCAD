@@ -11,6 +11,7 @@ import { stairPortEdges } from '../finish/stair/stairGeometry.js';
 import { floorHeightAbove } from '../finish/stair/stairDimensions.js';
 import { buildRoomFaces, faceBoundaryLocalX } from './elevationFaces.js';
 import { buildFaceFigure } from './elevationFigure.js';
+import { wallAdjacentFloorSegments } from './elevationFloorProfile.js';
 import { buildSwitchbackSectionPrimitives } from './elevationStairSection.js';
 import { roomCeilingHeight } from '../finish/roomMetrics.js';
 import { figureBounds } from '../structural/sectionFigure/sectionGeometry.js';
@@ -123,9 +124,12 @@ export function buildStairBand(stairRoom, graph, upperGraph, ctx = {}) {
     // 項目3: elevationBand.jsと同じ理由・同じガード（ヘッダコメント参照）。
     const prevFace = faces.length >= 2 ? faces[(i - 1 + faces.length) % faces.length] : null;
     const nextFace = faces.length >= 2 ? faces[(i + 1) % faces.length] : null;
+    // 項目4: elevationBand.jsと同じ（階段部屋が部分指定の親になることは通常無いが、
+    // wallAdjacentFloorSegmentsは該当が無ければ常にフラット1区間を返すため安全に共通化できる）。
+    const floorSegments = wallAdjacentFloorSegments(face, stairRoom, graph);
     const faceCtx = {
       graph, project, room: stairRoom, ceilingHeight: CH, materialMap, gridCLs, faceLabelAvoidThresholdModelMm,
-      prevFace, nextFace, openingTagRowModelMm, dimRowGapModelMm, gridRowGapModelMm,
+      prevFace, nextFace, openingTagRowModelMm, dimRowGapModelMm, gridRowGapModelMm, floorSegments,
     };
     for (const p of buildFaceFigure(face, faceCtx)) primitives.push(translatePrimitive(p, xCursor, 0));
     if (i === 0) {
