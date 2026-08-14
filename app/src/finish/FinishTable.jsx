@@ -3,6 +3,7 @@ import { useState, useEffect } from 'react';
 import { ConfirmDialog } from '../ui/ConfirmDialog.jsx';
 import { StairTab } from './stair/StairTab.jsx';
 import { withFinishUndo, beginFieldUndo, endFieldUndo } from './finishUndo.js';
+import { roomCeilingHeight } from './roomMetrics.js';
 import { RoomFeature, RoomKind, DEFAULT_ROOM_FLOOR_LEVEL, DEFAULT_ROOM_CEILING_HEIGHT } from '@core';
 
 // ---- 内部仕上げ表 ----
@@ -657,9 +658,12 @@ const FinishCell = observer(({ room, field, mode }) => {
   // 内装マスター管理フィールド（壁材・壁仕上げ・天井高さ）— getFinishInfo + setOverride
   if (field.source === 'master') {
     const info = room.getFinishInfo();
-    // CH はマスター・上書きとも未指定なら per-floor 既定（共通仕様タブの CH初期値）へフォールバック
+    // CH はマスター・上書きとも未指定なら roomCeilingHeight（項目5: 部分指定＋floorLevel差なら
+    // 親CHを段差調整、それ以外は従来どおり per-floor 既定=共通仕様タブのCH初期値）へフォールバック。
+    // info.ceilingHeight が設定済み（数値・傾斜天井レンジ表記いずれも）ならそのまま自由入力の
+    // 原文を表示する——roomCeilingHeight().mm は数値化専用のため、レンジ表記の原文保持には使わない。
     const value = field.key === 'ceilingHeight'
-      ? (info.ceilingHeight ?? graph?.defaultCeilingHeight ?? DEFAULT_ROOM_CEILING_HEIGHT)
+      ? (info.ceilingHeight ?? roomCeilingHeight(graph, room).mm)
       : info[field.key];
     // 空入力はポケットを空に戻す（= 内装マスター値／per-floor 既定へ復帰）
     const handle = v => (v === '' ? room.clearOverride(field.key) : room.setOverride(field.key, v));
@@ -696,7 +700,7 @@ const FinishCell = observer(({ room, field, mode }) => {
               if (cur != null && cur !== '' && chContainsZero(cur)) {
                 room.clearOverride('ceilingHeight');
                 const fallback = room.getFinishInfo().ceilingHeight
-                  ?? graph?.defaultCeilingHeight ?? DEFAULT_ROOM_CEILING_HEIGHT;
+                  ?? roomCeilingHeight(graph, room).mm;
                 setChError(chZeroError(fallback));
               }
               endFieldUndo(graph);
