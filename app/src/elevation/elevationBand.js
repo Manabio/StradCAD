@@ -27,7 +27,8 @@ import { translatePrimitive, collectGridCLs, appendRoomNameFrame } from './eleva
  * @param {object} graph
  * @param {{project?:object, materialMap?:Map, gridCLs?:object[], gapModelMm?:number,
  *   nameGapModelMm?:number, triangleOffsetModelMm?:number,
- *   faceLabelAvoidThresholdModelMm?:number}} [ctx]
+ *   faceLabelAvoidThresholdModelMm?:number, openingTagRowModelMm?:number,
+ *   dimRowGapModelMm?:number, gridRowGapModelMm?:number}} [ctx]
  * @returns {{roomId:string, roomName:string, primitives:object[], bounds:object,
  *   heightMm:number, widthMm:number, faceCount:number, leftAnchorX:number|null,
  *   topMarginMm:number}} heightMm/topMarginMmはどちらもbounds.heightそのものではない
@@ -41,6 +42,9 @@ export function buildRoomBand(room, graph, ctx = {}) {
   const nameGapModelMm = ctx.nameGapModelMm; // 未指定はappendRoomNameFrame既定(DEFAULT_NAME_GAP_MM)へ委ねる
   const triOffsetMm = ctx.triangleOffsetModelMm ?? DEFAULT_TRIANGLE_OFFSET_MM;
   const faceLabelAvoidThresholdModelMm = ctx.faceLabelAvoidThresholdModelMm; // 未指定はbuildFaceFigure既定(QA B3)
+  const openingTagRowModelMm = ctx.openingTagRowModelMm; // 未指定はbuildFaceFigure既定(QA C1)
+  const dimRowGapModelMm     = ctx.dimRowGapModelMm;      // 未指定はbuildFaceFigure既定(QA C1/D2)
+  const gridRowGapModelMm    = ctx.gridRowGapModelMm;     // 未指定はbuildFaceFigure既定(QA D1)
   const chInfo       = roomCeilingHeight(graph, room);
   const CH           = chInfo.mm;
 
@@ -53,7 +57,15 @@ export function buildRoomBand(room, graph, ctx = {}) {
     const boundary = faceBoundaryLocalX(face, graph);
     xCursor = i === 0 ? 0 : prevBoundaryHi + gapModelMm - boundary.lo;
 
-    const faceCtx = { graph, project, room, ceilingHeight: CH, materialMap, gridCLs, faceLabelAvoidThresholdModelMm };
+    // 項目3: 直交壁（隣・次の面）の建具が切断位置にかかる場合の断面描画用。faces.length<2は
+    // 自分自身が隣接面になってしまう退化ケースのため対象外にする（通常の閉じたループでは
+    // 発生しないが、念のためのガード）。
+    const prevFace = faces.length >= 2 ? faces[(i - 1 + faces.length) % faces.length] : null;
+    const nextFace = faces.length >= 2 ? faces[(i + 1) % faces.length] : null;
+    const faceCtx = {
+      graph, project, room, ceilingHeight: CH, materialMap, gridCLs, faceLabelAvoidThresholdModelMm,
+      prevFace, nextFace, openingTagRowModelMm, dimRowGapModelMm, gridRowGapModelMm,
+    };
     for (const p of buildFaceFigure(face, faceCtx)) primitives.push(translatePrimitive(p, xCursor, 0));
     if (i === 0) {
       chDimX = boundary.lo - CH_DIM_OFFSET_MM;

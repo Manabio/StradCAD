@@ -125,6 +125,7 @@ function renderOne(p, i, t, lineWeightsPx, screenPxPerMm) {
     case 'rect':
       return (
         <Rect key={key} x={t.tx(p.x)} y={t.ty(p.y)} width={t.sx(p.w)} height={t.sx(p.h)}
+          cornerRadius={p.rx != null ? t.sx(p.rx) : undefined}
           fill={p.fill} stroke={p.stroke ?? STROKE_COLOR} strokeWidth={weightPx(p, lineWeightsPx)}
           strokeScaleEnabled={false} listening={false} />
       );

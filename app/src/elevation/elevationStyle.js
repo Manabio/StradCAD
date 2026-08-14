@@ -32,19 +32,15 @@ export function weightForRole(role) {
 export const DEFAULT_FACE_GAP_MM = 200;  // 面間隙間の仮値（倍率決定用の1パス目にのみ使う。QA点3参照）
 export const DEFAULT_NAME_GAP_MM = 500;  // 部屋名枠の上余白の仮値（倍率決定用の1パス目にのみ使う。QA G5と同じ2パス方式）
 export const BAND_GAP_MM         = 600;  // 帯（部屋）同士の縦の隙間
-// 天井高寸法線・幅寸法線（壁芯間・通り芯間）を図から離す距離。ユーザー仕様「もっと離す」により
-// 旧値(250/300)からおよそ2倍にした（バランスは実装者判断。前回の項目3・4）。今回の調整項目1
-// （「寸法線・寸法値・展開図を通り芯ラベルに近づける」）では、この「図本体と幅寸法線の離隔」
-// （図と最も近い寸法行=DIM_ROW_GAP_MM）は前回の指示を尊重して戻し過ぎないよう据え置き、
-// 詰める対象は寸法行〜通り芯丸行の間隔（GRID_ROW_GAP_MM）に絞った。
 export const CH_DIM_OFFSET_MM    = 500;  // 天井高寸法の先頭面境界CLからのオフセット
 export const WALL_LABEL_GAP_MM       = 250; // 壁材2段書き: 天井線からのオフセット（openingElevationFigure.jsのat:-250方式）
 export const WALL_LABEL_LINE_GAP_MM  = 150; // 壁材2段書き: 1段目と2段目の行間
-export const DIM_ROW_GAP_MM      = 600;  // 床線→水平寸法列（壁芯間・通り芯間）までの距離
-// 水平寸法列(ROW1)→通り芯間寸法(ROW2)、ROW2→通り芯丸+面ラベルの行、までの距離。
-// 調整項目1: 前回2倍にした600から、旧値(300)へ戻す方向で再調整した（「寸法線・寸法値・
-// 展開図を通り芯ラベルに近づける」の主対象。DIM_ROW_GAP_MMは据え置き）。
-export const GRID_ROW_GAP_MM     = 300;
+// DIM_ROW_GAP_MM/GRID_ROW_GAP_MM（旧: モデルmm固定値）はQA D1/D2で廃止した。ROW1・ROW2・
+// 通り芯丸+面ラベル行は全て、通り芯丸(GRID_TAG_RADIUS_PX=11px)・面ラベル(FACE_LABEL_FONT_PX=13px)
+// というスクリーン固定サイズの要素を載せる行のため、床線→水平寸法列(ROW1)までの距離は
+// DEFAULT_DIM_ROW_GAP_MM/DIM_ROW_GAP_SCREEN_MM、ROW1→ROW2・ROW2→丸行の距離は
+// DEFAULT_GRID_ROW_GAP_MM/GRID_ROW_GAP_SCREEN_MMへ移した（下記「実画面mm基準」節参照。
+// QA D1: 旧GRID_ROW_GAP_MM=300固定は1/50で通り芯丸(半径11px)がROW2寸法線に重なっていた）。
 export const FACE_LABEL_FONT_PX  = 13;   // 面ラベルの文字サイズ(px)
 // 通り芯の一点鎖線を天井線より上へ突き出す量（調整項目3。「少し」なので小さめの値にする）。
 export const GRID_LINE_ABOVE_CH_MM = 150;
@@ -75,6 +71,31 @@ export const NAME_GAP_BELOW_SCREEN_MM = 10;
 // （ElevationModeState.init参照）。
 export const TRIANGLE_OFFSET_SCREEN_MM = 10;
 export const DEFAULT_TRIANGLE_OFFSET_MM = 300; // 倍率決定用の1パス目の仮値（高さに影響しないため仮値でよい）
+
+// ---- 注記帯の行位置（実画面mm。QA C1→D1/D2で全面改訂） ----
+// 建具記号丸(tag。半径16px)・通り芯丸(半径11px)・面ラベル(13px)は、どれもOPENING_TAG_RADIUS_PX/
+// GRID_TAG_RADIUS_PX等というスクリーン固定サイズを持つ。これらを載せる行の位置をモデルmm定数の
+// まま置くと、縮小側のスケール（例: 1/50・1/100）で床線・上下の寸法行に重なる（QA C1で建具タグ行
+// を先に2パス化したが、QA D1でROW2→通り芯丸行の間隔=GRID_ROW_GAP_MM固定300mmが同じ欠陥を
+// 抱えたまま残っていたことが発覚。1/50で6px・1/100で8px食い込みまで縮む実測あり）。そのため
+// 注記帯の行位置は全てここに集約し、他のスクリーン固定要素と同じ2パス機構
+// （screenMmToModelMm。ElevationModeState.init）でモデルmmへ換算する。
+//
+// QA D2: 「ROW1をタグ行の2倍として式で導出する」設計（QA C1で採用）は、値を機械的に押し上げ
+// ユーザーが2回にわたり調整した見た目（ROW1=600mm・GRID_ROW_GAP=300mm、いずれもモデルmm固定
+// 時代の値）を大きく踏み外した（1/20で600mm→30pxだった実測が、2倍導出後は105.8pxへ3.5倍化）。
+// 各行はそれぞれ独立したスクリーンmm定数にし、下記の不変条件を満たす最小限の値のうち、
+// 旧見た目（1/20想定）に最も近いものを選ぶ（既定校正値DEFAULT_PX_PER_MM≈3.78px/mmで換算）。
+//   tag行:        床線からもROW1からも16px+余裕のクリアランス
+//   ROW2→丸行:    11px+余裕のクリアランス
+// 採用値と新旧pxの比較は .claude/elevation-model.md 参照。
+export const OPENING_TAG_ROW_SCREEN_MM = 8;  // 床線→tag行。8mm×3.78≈30px（床から16px+14px余裕）
+export const DEFAULT_OPENING_TAG_ROW_MM = 300; // 倍率決定用の1パス目の仮値（旧OPENING_TAG_ROW_Yと同値）
+export const DIM_ROW_GAP_SCREEN_MM = 16; // 床線→ROW1。16mm×3.78≈60px（tag行から30px余裕）
+export const DEFAULT_DIM_ROW_GAP_MM = 600; // 倍率決定用の1パス目の仮値（旧DIM_ROW_GAP_MMと同値）
+export const GRID_ROW_GAP_SCREEN_MM = 6; // ROW1→ROW2、ROW2→通り芯丸+面ラベル行の共通ギャップ。
+// 6mm×3.78≈23px（通り芯丸の半径11px+12px余裕）
+export const DEFAULT_GRID_ROW_GAP_MM = 300; // 倍率決定用の1パス目の仮値（旧GRID_ROW_GAP_MMと同値）
 
 // 描画エリアの背景色（調整項目5）。index.css の `html, body, #root { background: #f5f5f0; }`
 // （製図用紙色）を映す——Konva Stage自体は透明で背景は#root越しに見えているため、これが

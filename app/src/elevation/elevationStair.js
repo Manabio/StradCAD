@@ -80,7 +80,8 @@ function findOverlappingVoidRoom(stairRoom, graph, upperGraph) {
  * @param {object|null} upperGraph - 直上階のgraph（floorSwapManager.peek済み。呼び出し側が解決する）
  * @param {{stair?:object, project?:object, materialMap?:Map, gridCLs?:object[], floorHeight?:number,
  *   gapModelMm?:number, nameGapModelMm?:number, triangleOffsetModelMm?:number,
- *   faceLabelAvoidThresholdModelMm?:number}} [ctx]
+ *   faceLabelAvoidThresholdModelMm?:number, openingTagRowModelMm?:number,
+ *   dimRowGapModelMm?:number, gridRowGapModelMm?:number}} [ctx]
  * @returns {{roomId:string, roomName:string, primitives:object[], bounds:object,
  *   heightMm:number, widthMm:number, faceCount:number, leftAnchorX:number|null}}
  */
@@ -93,6 +94,9 @@ export function buildStairBand(stairRoom, graph, upperGraph, ctx = {}) {
   const nameGapModelMm = ctx.nameGapModelMm; // 未指定はappendRoomNameFrame既定(DEFAULT_NAME_GAP_MM)へ委ねる
   const triOffsetMm = ctx.triangleOffsetModelMm ?? DEFAULT_TRIANGLE_OFFSET_MM;
   const faceLabelAvoidThresholdModelMm = ctx.faceLabelAvoidThresholdModelMm; // 未指定はbuildFaceFigure既定(QA B3)
+  const openingTagRowModelMm = ctx.openingTagRowModelMm; // 未指定はbuildFaceFigure既定(QA C1)
+  const dimRowGapModelMm     = ctx.dimRowGapModelMm;      // 未指定はbuildFaceFigure既定(QA C1/D2)
+  const gridRowGapModelMm    = ctx.gridRowGapModelMm;     // 未指定はbuildFaceFigure既定(QA D1)
 
   let faces = buildRoomFaces(stairRoom, graph);
   if (stair && faces.length > 0) {
@@ -116,8 +120,12 @@ export function buildStairBand(stairRoom, graph, upperGraph, ctx = {}) {
     const boundary = faceBoundaryLocalX(face, graph);
     xCursor = i === 0 ? 0 : prevBoundaryHi + gapModelMm - boundary.lo;
 
+    // 項目3: elevationBand.jsと同じ理由・同じガード（ヘッダコメント参照）。
+    const prevFace = faces.length >= 2 ? faces[(i - 1 + faces.length) % faces.length] : null;
+    const nextFace = faces.length >= 2 ? faces[(i + 1) % faces.length] : null;
     const faceCtx = {
       graph, project, room: stairRoom, ceilingHeight: CH, materialMap, gridCLs, faceLabelAvoidThresholdModelMm,
+      prevFace, nextFace, openingTagRowModelMm, dimRowGapModelMm, gridRowGapModelMm,
     };
     for (const p of buildFaceFigure(face, faceCtx)) primitives.push(translatePrimitive(p, xCursor, 0));
     if (i === 0) {

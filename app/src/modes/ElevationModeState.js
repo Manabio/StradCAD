@@ -14,6 +14,8 @@ import {
   DEFAULT_FACE_GAP_MM, FACE_GAP_SCREEN_MM, DEFAULT_NAME_GAP_MM, NAME_GAP_BELOW_SCREEN_MM,
   DEFAULT_TRIANGLE_OFFSET_MM, TRIANGLE_OFFSET_SCREEN_MM,
   DEFAULT_FACE_LABEL_AVOID_THRESHOLD_MM, FACE_LABEL_AVOID_THRESHOLD_SCREEN_MM,
+  DEFAULT_OPENING_TAG_ROW_MM, OPENING_TAG_ROW_SCREEN_MM,
+  DEFAULT_DIM_ROW_GAP_MM, DIM_ROW_GAP_SCREEN_MM, DEFAULT_GRID_ROW_GAP_MM, GRID_ROW_GAP_SCREEN_MM,
 } from '../elevation/elevationStyle.js';
 // DEFAULT_PX_PER_MMはviewport.js（appViewport.jsとは別。window依存を持たない純モジュール
 // ——appViewport.jsのヘッダコメント参照）からのみ取得する。ElevationModeState.js自体は
@@ -88,33 +90,46 @@ export class ElevationModeState {
       const stairByRoomId = new Map(this.graph.stairs.map(s => [s.roomId, s]));
       const screenPxPerMm = this.screenPxPerMm;
 
-      const buildOne = (room, gapModelMm, nameGapModelMm, triangleOffsetModelMm, faceLabelAvoidThresholdModelMm) => {
+      const buildOne = (
+        room, gapModelMm, nameGapModelMm, triangleOffsetModelMm, faceLabelAvoidThresholdModelMm,
+        openingTagRowModelMm, dimRowGapModelMm, gridRowGapModelMm,
+      ) => {
         const ctx = {
           project: this.project, materialMap, gridCLs, gapModelMm, nameGapModelMm, triangleOffsetModelMm,
-          faceLabelAvoidThresholdModelMm,
+          faceLabelAvoidThresholdModelMm, openingTagRowModelMm, dimRowGapModelMm, gridRowGapModelMm,
         };
         return room.feature === RoomFeature.STAIR
           ? buildStairBand(room, this.graph, upperGraph, { ...ctx, stair: stairByRoomId.get(room.id) ?? null })
           : buildRoomBand(room, this.graph, ctx);
       };
 
-      // パス1: 倍率決定用（ギャップ・名前枠余白・三角オフセット・面ラベル退避閾値は高さに
-      // 影響しないため仮値でよい。QA B3: 面ラベル退避閾値も他の実画面mm値と同じ2パス方式）。
+      // パス1: 倍率決定用（ギャップ・名前枠余白・三角オフセット・面ラベル退避閾値・建具タグ行/
+      // ROW1/ROW1〜ROW2行間は高さに影響しないため仮値でよい）。
       const pass1 = buildBandsSafely(rooms,
         room => buildOne(room, DEFAULT_FACE_GAP_MM, DEFAULT_NAME_GAP_MM, DEFAULT_TRIANGLE_OFFSET_MM,
-          DEFAULT_FACE_LABEL_AVOID_THRESHOLD_MM));
+          DEFAULT_FACE_LABEL_AVOID_THRESHOLD_MM, DEFAULT_OPENING_TAG_ROW_MM, DEFAULT_DIM_ROW_GAP_MM,
+          DEFAULT_GRID_ROW_GAP_MM));
       const scale = chooseElevationScale(pass1.bands, this.viewSize ?? { width: 800, height: 600 });
       const gapModelMm            = screenMmToModelMm(FACE_GAP_SCREEN_MM, screenPxPerMm, scale);
       const nameGapModelMm        = screenMmToModelMm(NAME_GAP_BELOW_SCREEN_MM, screenPxPerMm, scale);
       const triangleOffsetModelMm = screenMmToModelMm(TRIANGLE_OFFSET_SCREEN_MM, screenPxPerMm, scale);
       const faceLabelAvoidThresholdModelMm =
         screenMmToModelMm(FACE_LABEL_AVOID_THRESHOLD_SCREEN_MM, screenPxPerMm, scale);
+      // QA C1→D1/D2: 建具タグ行・ROW1・ROW1〜ROW2/ROW2〜通り芯丸行の行間はいずれもスクリーン
+      // 固定サイズの要素（タグ・通り芯丸・面ラベル）を載せる注記帯の行位置のため、他の実画面mm値
+      // と同じ2パス方式で換算する。QA D2: 以前はROW1をタグ行の2倍として式で導出していたが、
+      // ユーザーが調整済みの見た目を機械的な導出が踏み外したため、3つとも独立したスクリーンmm
+      // 定数（elevationStyle.js参照）から換算する形に改めた。
+      const openingTagRowModelMm = screenMmToModelMm(OPENING_TAG_ROW_SCREEN_MM, screenPxPerMm, scale);
+      const dimRowGapModelMm     = screenMmToModelMm(DIM_ROW_GAP_SCREEN_MM, screenPxPerMm, scale);
+      const gridRowGapModelMm    = screenMmToModelMm(GRID_ROW_GAP_SCREEN_MM, screenPxPerMm, scale);
 
-      // パス2: 確定した倍率でギャップ・名前枠余白・三角オフセット・面ラベル退避閾値を実画面mmへ
-      // 正しく換算し、本番の帯を組み直す。
+      // パス2: 確定した倍率でギャップ・名前枠余白・三角オフセット・面ラベル退避閾値・建具タグ行/
+      // ROW1/ROW1〜ROW2行間を実画面mmへ正しく換算し、本番の帯を組み直す。
       const { bands, failedRoomNames } = buildBandsSafely(
         rooms,
-        room => buildOne(room, gapModelMm, nameGapModelMm, triangleOffsetModelMm, faceLabelAvoidThresholdModelMm),
+        room => buildOne(room, gapModelMm, nameGapModelMm, triangleOffsetModelMm, faceLabelAvoidThresholdModelMm,
+          openingTagRowModelMm, dimRowGapModelMm, gridRowGapModelMm),
         (err, room) => console.error(`[elevation] 部屋「${room.name}」の帯構築に失敗:`, err),
       );
 

@@ -2,7 +2,7 @@
 // 壁を生成した部屋に対して帯を組み立てる（elevationFaces.test.js と同じ方針）。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Plane, PlanGraph, CenterLineType, Discipline } from '@core';
+import { Plane, PlanGraph, CenterLineType, Discipline, OpeningCategory } from '@core';
 import { generateRoomWallsFromOutline } from '../finish/wallGeneration.js';
 import { buildRoomBand } from './elevationBand.js';
 import { buildRoomFaces, faceBoundaryLocalX } from './elevationFaces.js';
@@ -163,10 +163,11 @@ test('【調整項目4】buildRoomBand: bounds.minYは実描画内容の最小y�
   const room = makeRectRoom(graph, 0, 0, 4000, 3000);
   const band = buildRoomBand(room, graph);
 
-  // primitivesの実際の最小y（マージンを含まない、素の描画内容の最上端）を、代表的な
-  // 天井線(CUT・水平線)から求める（figureBoundsを使わず独立に検算する）。
-  const cutHorizontals = band.primitives.filter(p => p.type === 'line' && p.weight === 'thick' && p.y1 === p.y2);
-  const contentMinY = Math.min(...cutHorizontals.map(p => p.y1));
+  // primitivesの実際の最小y（マージンを含まない、素の描画内容の最上端）。項目4で壁中心線も
+  // 通り芯線と同じ高さまで突き出すようになったため、天井線(CUT)を代表点にする従来の検算方法は
+  // 使えない（壁中心線の方がさらに上まで伸びる）——figureBoundsで独立に検算する
+  // （floorLevel未設定=floorOffset0のこの部屋ではband.primitivesがrawBoundsと同じ座標系のまま）。
+  const contentMinY = figureBounds(band.primitives).minY;
   assert.ok(Math.abs(band.bounds.minY - (contentMinY - BAND_TOP_MARGIN_MM)) < 1e-6,
     `bounds.minY(${band.bounds.minY})は実描画内容の最小y(${contentMinY})よりBAND_TOP_MARGIN_MM(${BAND_TOP_MARGIN_MM})だけ上のはず`);
 });
@@ -301,4 +302,23 @@ test('【失敗系・QA A2】buildRoomBand+layoutBands: floorLevel差が無け�
 
   assert.ok(Math.abs(gap - (BAND_GAP_MM + BAND_TOP_MARGIN_MM)) < 1e-6,
     `floorLevel差が無ければ余分な余白は乗らないはず（期待:${BAND_GAP_MM + BAND_TOP_MARGIN_MM}, 実際:${gap}）`);
+});
+
+// ---- 項目3(結合): buildRoomBandがprevFace/nextFaceを実際に配線し、隅の建具が隣接面の端に断面で出る ----
+test('【項目3・結合】buildRoomBand: D面隅の建具はA面(prevFace=D)のx=0側に枠2断面＋扉1枚の断面として出る', () => {
+  const graph = makeGraph();
+  const x0 = graph.addCenterLine(CenterLineType.VERTICAL, 0, { labeled: false, discipline: Discipline.ARCH });
+  const x1 = graph.addCenterLine(CenterLineType.VERTICAL, 4000, { labeled: false, discipline: Discipline.ARCH });
+  const y0 = graph.addCenterLine(CenterLineType.HORIZONTAL, 0, { labeled: false, discipline: Discipline.ARCH });
+  const y1 = graph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: false, discipline: Discipline.ARCH });
+  const key = `${x0.id}:${y0.id}:${x1.id}:${y1.id}`;
+  const room = graph.addRoom(new Set([key]), 'LDK');
+  generateRoomWallsFromOutline(graph, room);
+  // D面（x=0の壁）上、A面(y=0)との隅ぎりぎり（refOffset=100・width=800）に建具を置く。
+  graph.addOpening(x0, 1, true, y0, 100, 800, OpeningCategory.FITTING, 'singleSwing', {});
+
+  const band = buildRoomBand(room, graph, { project: { openingNumberIndex: new Map() } });
+  const strip = band.primitives.filter(p => p.type === 'rect' && p.x >= 0 && p.x + p.w <= 120 && p.weight != null);
+  assert.equal(strip.length, 3, 'A面のx=0側に枠2断面＋扉1枚＝3本のrectが出るはず');
+  assert.deepEqual(strip.map(r => r.weight).sort(), ['medium', 'thick', 'thick'].sort());
 });

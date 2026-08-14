@@ -42,18 +42,30 @@ mm座標に焼き込まずアンカー点だけを持つ専用プリミティブ
 水平寸法（壁芯間・通り芯間）は寸法線足を出さず、壁中心線・通り芯自体の一点鎖線を寸法線位置
 まで下ろして交点に塗り丸(`dim.dot`)を置く（CH寸法の足のみ従来どおり残す）。寸法値は寸法線の
 **上側**に載せる。通り芯の一点鎖線は天井線より上へも少し突き出す（`GRID_LINE_ABOVE_CH_MM`）。
-床線から下へ①壁芯間寸法②通り芯間寸法③通り芯丸番号＋面ラベル(A/B/C/D等、同じ段に統合)の順で
-3段に分ける。通り芯丸は背景色(`CANVAS_BG_COLOR`。index.cssの`#root`背景色と2箇所手動同期。
-変更時は両方更新すること)で塗り、一点鎖線より後に描いて線を隠す（建具記号丸=`tag`は対象外・
-背景透明のまま）。天井高寸法（縦dim）のラベルだけ寸法線の左側で反時計回り90°回転する。
+床線から下へ①建具記号丸(tag)②壁芯間寸法(ROW1)③通り芯間寸法(ROW2)④通り芯丸番号＋面ラベル
+(A/B/C/D等、同じ段に統合)の順で段に分ける。通り芯丸は背景色(`CANVAS_BG_COLOR`。index.cssの
+`#root`背景色と2箇所手動同期。変更時は両方更新すること)で塗り、一点鎖線より後に描いて線を隠す
+（建具記号丸=`tag`は対象外・背景透明のまま）。天井高寸法（縦dim）のラベルだけ寸法線の左側で
+反時計回り90°回転する。
+
+**注記帯の各段の位置は全てスクリーンmm基準（QA C1→D1/D2）。** tag(半径16px)・通り芯丸
+(半径11px)・面ラベル(13px)はスクリーン固定サイズのため、段位置をモデルmm定数のまま固定すると
+縮尺（例: 1/50・1/100）で床線・上下の寸法行に重なる。`OPENING_TAG_ROW_SCREEN_MM`(tag行)・
+`DIM_ROW_GAP_SCREEN_MM`(ROW1)・`GRID_ROW_GAP_SCREEN_MM`(ROW1→ROW2、ROW2→丸行の共通ギャップ)
+という3つの独立したスクリーンmm定数を他の実画面mm値と同じ2パス機構で換算し、`ctx`経由で
+`buildFaceFigure`へ渡す（`openingTagRowModelMm`/`dimRowGapModelMm`/`gridRowGapModelMm`。
+未指定時=単体テスト等はそれぞれ`DEFAULT_OPENING_TAG_ROW_MM`/`DEFAULT_DIM_ROW_GAP_MM`/
+`DEFAULT_GRID_ROW_GAP_MM`）。**3つは互いに独立**——一方をもう一方の倍数として式で導出する
+設計は一度採用したが（QA C1）、値を機械的に押し上げユーザーが調整済みの見た目を踏み外したため
+撤回した（QA D2）。値は「不変条件（各段がスクリーン固定要素の半径+余裕ぶん離れる。1/20・1/50・
+1/100で検証）を満たす最小限」かつ「旧承認済みの見た目（1/20換算でtag=15px/ROW1=30px/
+ROW2=45px/丸行=60px）にできるだけ近い」の両立点として選定した（実測: 新値はtag=30px/
+ROW1=60px/ROW2=83px/丸行=106px。旧比おおよそ1.8〜2倍。DEFAULT_PX_PER_MM≈3.78px/mm換算）。
 通り芯丸と面ラベルが同じ段になったため、通り芯が面の壁芯間中心付近にあると重なる——
-`avoidGridCollisionX`（buildFaceFigure内）が両者の距離を閾値（`ctx.faceLabelAvoidThresholdModelMm`。
-`FACE_LABEL_AVOID_THRESHOLD_SCREEN_MM`から他の実画面mm値と同じ2パスで換算。未指定時は
-`DEFAULT_FACE_LABEL_AVOID_THRESHOLD_MM`）以下で検出し、退避先を「通り芯＋面境界(boundary.lo/hi)
-を昇順に並べたときの最も広い区間の中点」に置く——1回の走査で決定的に決まり、再チェック不要
-（旧実装は衝突時に閾値の2倍ぶん一段だけ固定シフトしていたが、910mm等間隔グリッド等の密な
-通り芯では退避後に別の通り芯丸へ重なり直す不具合があった）。閾値自体は「動かすか否か」の
-衝突判定にのみ使い、退避先の座標計算には使わない。
+`avoidGridCollisionX`が両者の距離を閾値（`ctx.faceLabelAvoidThresholdModelMm`。他の実画面mm値と
+同じ2パスで換算）以下で検出し、退避先を「通り芯＋面境界(boundary.lo/hi)の並びで最も広い区間の
+中点」に置く（1回の走査で決定的・再チェック不要。旧実装の一段固定シフトは密な通り芯で別の
+通り芯丸に重なり直す不具合があった）。閾値は衝突判定にのみ使い、退避先の座標計算には使わない。
 
 帯の描画範囲の上端には`BAND_TOP_MARGIN_MM`ぶんの余白を確保する（`bounds.minY`をさらに
 上へ広げるだけ）。`layoutBands`が返す`placement.topMm`はこの`band.bounds.minY`（帯の実描画
@@ -83,18 +95,30 @@ topMarginMmを積むと、上には全くせり出していないのに手前の
 `finish/roomMetrics.js`の`roomCeilingHeight(graph, room)`が唯一の情報源。数値化できない自由入力は
 `graph.defaultCeilingHeight`で作図しつつ、ラベルには原文をそのまま出す。
 
-## 階段帯: 縦2層分の描画範囲・折返し階段の断面
-`elevationStair.js`の直上階（吹抜けクリップ）表現は上階FL線を重ねて引くだけの簡易実装。
-直上階グラフの取得（`floorSwapManager.peek`）は純モジュールでは行えないため
-`ElevationModeState.init()`が非同期で解決し引数で渡す。描画範囲は「床→設置階の階高→さらに
-設置階上階の階高」の縦2層分（`floorHeightAbove`を設置階・直上階のplaneそれぞれに呼ぶ。
-上階のそのまた階高が不明なら1層分にとどめる）。
+## 開口（建具）の展開図表現
+展開図の開口は`openings/openingElevationFigure.js`の`buildOpeningElevation`（建具モード編集用
+姿図と同一の純関数）を`includeDims:false, includeMotionArrows:false, includeLevelLine:false`で
+再利用し、枠・吊元表示・機構表現・レバーハンドルだけ残す（寸法・動作線=矢印・編集用FL基準線は
+出さない。両モジュールともFL=y0・上方向が負で座標系が一致するため、開口位置への配置は
+`(x, 0)`平行移動だけでよい）。建具記号丸(`tag`)は開口の中心ではなく、姿が見える図の下
+（tag行。位置の決め方はスクリーンmm基準——上の「面の配置・注記」節参照）へ描く。
 
-折返し階段（`StairType.SWITCHBACK`）は側面の断面プロファイルを`elevationStairSection.js`が
-生成する。区間長は`measureStairSpans`（finish/stair/stairClassify.js。実測優先・合成フォール
-バックはstair-model.mdと同じ規約）、往路・復路の段数は`stair.sections`の該当要素（無ければ
-totalStepsを均等2分と仮定）——プランビューの階段描画の内部形状は再利用せず、測定済みの長さと
-段数だけを使う独自生成である点に注意。SWITCHBACK以外（WINDING等）はスコープ外で空配列。
+直交壁（隣・次の面）の建具が切断位置（面端）にかかる場合、`openingsReachingCorner`（隣接面自身の
+隅=0/runに開口スパンが届いているかで判定。壁センターライン側では開口が届く条件が実質発生しない
+ため仕上げ面ベースの隅を使う）で対象を選び、`openingSectionPrimitives`が
+[枠(CUT)][扉(SILHOUETTE)][枠(CUT)]の3rectを面の両端の帯（`SECTION_STRIP_MM`幅）に描く
+（`buildRoomBand`/`buildStairBand`が`faces[(i∓1+n)%n]`をprevFace/nextFaceとしてctxに渡す）。
+壁中心線（面両端の落し線）も通り芯線と同じ`GRID_LINE_ABOVE_CH_MM`ぶん天井線より上まで延ばす。
+
+## 階段帯: 縦2層分の描画範囲・折返し階段の断面
+`elevationStair.js`の直上階（吹抜けクリップ）表現は上階FL線を重ねて引くだけの簡易実装。直上階
+グラフ（`floorSwapManager.peek`。純モジュールでは行えず`ElevationModeState.init()`が解決）を使い、
+描画範囲は「床→設置階の階高→さらに設置階上階の階高」の縦2層分（`floorHeightAbove`を設置階・
+直上階のplaneそれぞれに呼ぶ。上階のそのまた階高が不明なら1層分にとどめる）。
+
+折返し階段（`StairType.SWITCHBACK`）は側面の断面プロファイルを`elevationStairSection.js`が生成する
+（区間長=`measureStairSpans`、段数=`stair.sections`。プランビューの階段描画は再利用しない独自
+生成）。SWITCHBACK以外（WINDING等）はスコープ外で空配列。
 
 ## 巾木の初期値・解釈
 初期値（`木製出幅木`/`h=60`）は**ユーザーがRoomを新規作成する経路でのみ**適用する

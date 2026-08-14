@@ -6,8 +6,14 @@ import assert from 'node:assert/strict';
 import { edgeKey, OpeningCategory, CenterLineType } from '@core';
 import {
   buildFaceFigure, kneeDropGapsOnFace, parseBaseboardHeightMm, avoidGridCollisionX,
+  openingsReachingCorner,
 } from './elevationFigure.js';
-import { GRID_LINE_ABOVE_CH_MM, CANVAS_BG_COLOR, DEFAULT_FACE_LABEL_AVOID_THRESHOLD_MM } from './elevationStyle.js';
+import {
+  GRID_LINE_ABOVE_CH_MM, CANVAS_BG_COLOR, DEFAULT_FACE_LABEL_AVOID_THRESHOLD_MM,
+  DEFAULT_OPENING_TAG_ROW_MM, OPENING_TAG_ROW_SCREEN_MM, OPENING_TAG_RADIUS_PX,
+  DIM_ROW_GAP_SCREEN_MM, GRID_ROW_GAP_SCREEN_MM, GRID_TAG_RADIUS_PX,
+} from './elevationStyle.js';
+import { screenMmToModelMm } from './elevationLayout.js';
 
 function makeFace(overrides = {}) {
   return {
@@ -69,6 +75,162 @@ test('buildFaceFigure: 建具（窓以外）はsill=0扱いでy=-heightから始
   const prims = buildFaceFigure(face, ctx);
   const rect = prims.find(p => p.type === 'rect' && p.w === 800);
   assert.equal(rect.y, -2000);
+});
+
+// ---- 項目1: 開口は姿（枠・吊元表示・機構表現・レバーハンドル）を描き、寸法・動作線は出さない ----
+test('【項目1】buildFaceFigure: 建具(fitting)×SWINGは吊元表示(一点鎖線V)・レバーハンドルを描くが、寸法(editable)・動作線(arrow)は出さない', () => {
+  const opening = {
+    id: 'op3', isVertical: false, axisCL: { id: 'axisY0' }, wallSide: 1,
+    centerCoord: 2000, width: 900, height: 2000, sillHeight: null, hingeSide: -1,
+    category: OpeningCategory.FITTING, subType: 'singleSwing', fixtureType: null,
+  };
+  const face = makeFace();
+  const ctx = baseCtx({ graph: makeGraph({ openings: [opening] }) });
+  const prims = buildFaceFigure(face, ctx);
+
+  assert.ok(!prims.some(p => p.type === 'dim' && p.editable), '開口の編集用寸法(width/height/handleHeight)は出ないはず');
+  assert.ok(!prims.some(p => p.type === 'arrow'), '動作線(arrow)は出ないはず');
+  assert.ok(prims.some(p => p.type === 'line' && p.dash === 'center' && p.x1 !== p.x2), '吊元表示（斜めの一点鎖線V）は残るはず');
+  assert.ok(prims.some(p => p.type === 'rect' && p.rx != null), 'レバーハンドル（カプセル形rect）は残るはず');
+});
+
+// ---- 項目2: 建具記号丸(tag)は建具の中心ではなく、寸法行より図寄りの専用段へ描かれる ----
+test('【項目2】buildFaceFigure: 建具記号丸(tag)は開口の中心ではなく、床線と壁芯間寸法行の中間の段に描かれる', () => {
+  const opening = {
+    id: 'op4', isVertical: false, axisCL: { id: 'axisY0' }, wallSide: 1,
+    centerCoord: 2000, width: 900, height: 2000, sillHeight: 500,
+    category: OpeningCategory.WINDOW, subType: 'singleSliding', fixtureType: null,
+  };
+  const face = makeFace();
+  const ctx = baseCtx({ graph: makeGraph({ openings: [opening] }) });
+  const prims = buildFaceFigure(face, ctx);
+  const tag = prims.find(p => p.type === 'tag');
+  assert.ok(tag, '建具記号丸が見つからない');
+  assert.equal(tag.cx, 2000, 'xは開口中心のまま');
+  // ctx.openingTagRowModelMm未指定時はDEFAULT_OPENING_TAG_ROW_MMへフォールバックする（QA C1）。
+  assert.equal(tag.cy, DEFAULT_OPENING_TAG_ROW_MM, 'yは開口の縦中心ではなく専用段（床線とROW1の中間）のはず');
+  assert.notEqual(tag.cy, -(500 + 2000) / 2, '以前の仕様（開口の縦中心）には戻っていないはず');
+});
+
+// ---- QA C1: 建具記号丸(tag)はスクリーン固定サイズ(OPENING_TAG_RADIUS_PX)を持つため、行位置は
+// 2パス機構でscreenMmToModelMm換算した値を使わないと、低倍率(縮小)側で床線・ROW1に重なる。
+// ここでは1/20・1/50・1/100の3スケールで実際に換算した値をctx経由で渡し、タグ円が床線・ROW1
+// いずれからも半径+余裕ぶんの実画面px以上離れていることを確認する（変異=2パス換算を外すと赤）。
+// QA D2: dimRowGapModelMmはopeningTagRowModelMmの2倍として導出しない（独立したスクリーンmm
+// 予算=DIM_ROW_GAP_SCREEN_MMから換算する。ElevationModeState.initと同じ配線）。----
+const TAG_CLEARANCE_PX = OPENING_TAG_RADIUS_PX + 4; // 半径16px + 余裕4px
+// ---- QA D1: 通り芯丸(GRID_TAG_RADIUS_PX)もスクリーン固定サイズのため、ROW2寸法線からの
+// 行間（旧GRID_ROW_GAP_MM=300固定）が低倍率側で重なっていた。GRID_ROW_GAP_SCREEN_MMへ
+// 2パス化し、同じ3スケールで通り芯丸がROW2から半径+余裕ぶん離れていることを確認する
+// （変異=GRID_ROW_GAP_MMのモデルmm固定に戻すと赤。D1指摘の実測: 1/50で6px・1/100で8px食い込み）。
+const GRID_CLEARANCE_PX = GRID_TAG_RADIUS_PX + 4; // 半径11px + 余裕4px
+
+for (const scale of [1 / 20, 1 / 50, 1 / 100]) {
+  test(`【QA C1】buildFaceFigure: scale=${scale}でも建具記号丸は床線・ROW1のどちらからも半径+余裕ぶん実画面pxで離れる`, () => {
+    const screenPxPerMm = 5.5;
+    const openingTagRowModelMm = screenMmToModelMm(OPENING_TAG_ROW_SCREEN_MM, screenPxPerMm, scale);
+    const dimRowGapModelMm = screenMmToModelMm(DIM_ROW_GAP_SCREEN_MM, screenPxPerMm, scale);
+
+    const opening = {
+      id: 'op5', isVertical: false, axisCL: { id: 'axisY0' }, wallSide: 1,
+      centerCoord: 2000, width: 900, height: 2000, sillHeight: 500,
+      category: OpeningCategory.WINDOW, subType: 'singleSliding', fixtureType: null,
+    };
+    const face = makeFace();
+    const ctx = baseCtx({
+      graph: makeGraph({ openings: [opening] }), openingTagRowModelMm, dimRowGapModelMm,
+    });
+    const prims = buildFaceFigure(face, ctx);
+    const tag = prims.find(p => p.type === 'tag');
+    const wallDim = prims.find(p => p.type === 'dim' && p.dir === 'h' && p.from === 0 && p.to === 4000);
+    assert.ok(tag && wallDim, 'タグ・ROW1寸法の両方が見つかるはず');
+
+    const floorClearancePx = tag.cy * scale; // 床線(y=0)からタグ行までの実画面px
+    const row1ClearancePx  = (wallDim.at - tag.cy) * scale; // タグ行からROW1までの実画面px
+    assert.ok(floorClearancePx >= TAG_CLEARANCE_PX,
+      `床線からのクリアランス(${floorClearancePx}px)は${TAG_CLEARANCE_PX}px以上のはず`);
+    assert.ok(row1ClearancePx >= TAG_CLEARANCE_PX,
+      `ROW1までのクリアランス(${row1ClearancePx}px)は${TAG_CLEARANCE_PX}px以上のはず`);
+  });
+
+  test(`【QA D1】buildFaceFigure: scale=${scale}でも通り芯丸はROW2寸法線から半径+余裕ぶん実画面pxで離れる`, () => {
+    const screenPxPerMm = 5.5;
+    const dimRowGapModelMm  = screenMmToModelMm(DIM_ROW_GAP_SCREEN_MM, screenPxPerMm, scale);
+    const gridRowGapModelMm = screenMmToModelMm(GRID_ROW_GAP_SCREEN_MM, screenPxPerMm, scale);
+
+    const shapes = new Map([['x0', { effectiveValue: 0 }], ['x1', { effectiveValue: 4000 }]]);
+    const gridCLs = [
+      { centerLineType: CenterLineType.VERTICAL, effectiveValue: 1000, label: '1' },
+      { centerLineType: CenterLineType.VERTICAL, effectiveValue: 3000, label: '2' },
+    ];
+    const face = makeFace();
+    const ctx = baseCtx({ graph: makeGraph({ shapes }), gridCLs, dimRowGapModelMm, gridRowGapModelMm });
+    const prims = buildFaceFigure(face, ctx);
+
+    const row2Dim = prims.find(p => p.type === 'dim' && p.dir === 'h' && p.from === 1000 && p.to === 3000);
+    const circle  = prims.find(p => p.type === 'circle');
+    assert.ok(row2Dim && circle, 'ROW2寸法・通り芯丸の両方が見つかるはず');
+
+    const clearancePx = (circle.cy - row2Dim.at) * scale;
+    assert.ok(clearancePx >= GRID_CLEARANCE_PX,
+      `ROW2から通り芯丸までのクリアランス(${clearancePx}px)は${GRID_CLEARANCE_PX}px以上のはず`);
+  });
+}
+
+// ---- 項目3: 直交壁の建具が切断位置（面端）にかかる場合、その断面（枠2断面＋扉）を描く ----
+function makePerpFace(overrides = {}) {
+  return {
+    axisCL: { id: 'axisX_left' }, isVertical: true, inward: 1, faceValue: 0,
+    lo: 0, hi: 2000, run: 2000, dirSign: 1, originWorld: 0,
+    startCLId: 'py0', endCLId: 'py1',
+    ...overrides,
+  };
+}
+test('【項目3】buildFaceFigure: prevFace上の開口が隅(perpFace.run)まで届いていれば、面のx=0側に枠2断面＋扉1枚の断面が出る', () => {
+  const perpOpening = {
+    id: 'perp1', isVertical: true, axisCL: { id: 'axisX_left' }, wallSide: 1,
+    centerCoord: 1900, width: 800, height: 2000, sillHeight: null, // local span [1500,2300]。hi=2300>=run(2000)
+    category: OpeningCategory.FITTING, subType: 'singleSwing', fixtureType: null,
+  };
+  const face = makeFace(); // run=4000
+  const prevFace = makePerpFace();
+  const ctx = baseCtx({ graph: makeGraph({ openings: [perpOpening] }), prevFace, nextFace: null });
+  const prims = buildFaceFigure(face, ctx);
+
+  const strip = prims.filter(p => p.type === 'rect' && p.x >= 0 && p.x + p.w <= 120 && p.y === -2000 && p.h === 2000);
+  assert.equal(strip.length, 3, '枠2断面＋扉1枚＝3本のrectが面のx=0側の帯に出るはず');
+  const weights = strip.map(r => r.weight).sort();
+  assert.deepEqual(weights, ['medium', 'thick', 'thick'].sort(), '枠2本=CUT(thick)・扉1本=SILHOUETTE(medium)のはず');
+});
+
+test('【失敗系・項目3】buildFaceFigure: prevFace上の開口が隅から離れていれば断面を描かない', () => {
+  const perpOpening = {
+    id: 'perp2', isVertical: true, axisCL: { id: 'axisX_left' }, wallSide: 1,
+    centerCoord: 500, width: 800, height: 2000, sillHeight: null, // local span [100,900]。隅(2000)まで届かない
+    category: OpeningCategory.FITTING, subType: 'singleSwing', fixtureType: null,
+  };
+  const face = makeFace();
+  const prevFace = makePerpFace();
+  const ctx = baseCtx({ graph: makeGraph({ openings: [perpOpening] }), prevFace, nextFace: null });
+  const prims = buildFaceFigure(face, ctx);
+
+  const strip = prims.filter(p => p.type === 'rect' && p.x >= 0 && p.x + p.w <= 120 && p.y === -2000 && p.h === 2000);
+  assert.equal(strip.length, 0, '隅から離れた開口は断面を描かないはず');
+});
+
+test('【失敗系・項目3】buildFaceFigure: prevFace/nextFaceが未指定（省略）なら断面ロジックごと素通りし例外にならない', () => {
+  const face = makeFace();
+  assert.doesNotThrow(() => buildFaceFigure(face, baseCtx()));
+});
+
+test('openingsReachingCorner: 開口スパンが隅(0またはrun)に届いているものだけを返す', () => {
+  const perpFace = makePerpFace();
+  const reaching = { id: 'a', isVertical: true, axisCL: { id: 'axisX_left' }, wallSide: 1, centerCoord: 1900, width: 800, height: 2000, category: OpeningCategory.FITTING, subType: 'singleSwing' };
+  const notReaching = { id: 'b', isVertical: true, axisCL: { id: 'axisX_left' }, wallSide: 1, centerCoord: 500, width: 800, height: 2000, category: OpeningCategory.FITTING, subType: 'singleSwing' };
+  const graph = makeGraph({ openings: [reaching, notReaching] });
+
+  assert.deepEqual(openingsReachingCorner(perpFace, graph, 'end').map(o => o.id), ['a']);
+  assert.deepEqual(openingsReachingCorner(perpFace, graph, 'start').map(o => o.id), []);
 });
 
 // ---- アキ矩形高さ = CH - drop.bottomHeight - knee.topHeight ----
@@ -243,10 +405,26 @@ test('【項目2】buildFaceFigure: 壁芯間寸法の位置(boundary.lo/hi)ま�
   assert.ok(wallDim, '壁芯間寸法が見つからない');
 
   const dropLines = prims.filter(p =>
-    p.type === 'line' && p.dash === 'center' && p.x1 === p.x2 && p.y1 === 0 && p.y2 === wallDim.at);
+    p.type === 'line' && p.dash === 'center' && p.x1 === p.x2 && p.y2 === wallDim.at);
   assert.equal(dropLines.length, 2, '両端の壁中心線が寸法線の位置まで下りる縦の一点鎖線が2本出るはず');
   assert.ok(dropLines.some(l => l.x1 === -100));
   assert.ok(dropLines.some(l => l.x1 === 4100));
+});
+
+// ---- 項目4: 壁中心線（面両端）も通り芯線と同様、天井線より上まで突き出す ----
+test('【項目4】buildFaceFigure: 壁中心線の縦一点鎖線はy1=-CH-GRID_LINE_ABOVE_CH_MMまで天井線より上に伸びる', () => {
+  const CH = 2400;
+  const shapes = new Map([['x0', { effectiveValue: -100 }], ['x1', { effectiveValue: 4100 }]]);
+  const face = makeFace();
+  const ctx = baseCtx({ graph: makeGraph({ shapes }), ceilingHeight: CH });
+  const prims = buildFaceFigure(face, ctx);
+
+  const dropLines = prims.filter(p => p.type === 'line' && p.dash === 'center' && p.x1 === p.x2 && (p.x1 === -100 || p.x1 === 4100));
+  assert.equal(dropLines.length, 2);
+  for (const l of dropLines) {
+    assert.equal(l.y1, -CH - GRID_LINE_ABOVE_CH_MM,
+      `壁中心線(x=${l.x1})のy1は-CH-GRID_LINE_ABOVE_CH_MM(${-CH - GRID_LINE_ABOVE_CH_MM})のはず（実際:${l.y1}）`);
+  }
 });
 
 // ---- 項目7・QA F3: 面ラベル(A/B/C/D等)は壁中心線で挟んだ幅の中心（run/2ではない）に出る ----

@@ -8,7 +8,10 @@ import { generateRoomWallsFromOutline } from '../finish/wallGeneration.js';
 import { ElevationModeState } from './ElevationModeState.js';
 import { buildRoomBand } from '../elevation/elevationBand.js';
 import { chooseElevationScale, screenMmToModelMm } from '../elevation/elevationLayout.js';
-import { NAME_GAP_BELOW_SCREEN_MM } from '../elevation/elevationStyle.js';
+import {
+  NAME_GAP_BELOW_SCREEN_MM, DEFAULT_OPENING_TAG_ROW_MM, OPENING_TAG_ROW_SCREEN_MM,
+  DEFAULT_DIM_ROW_GAP_MM, DIM_ROW_GAP_SCREEN_MM, DEFAULT_GRID_ROW_GAP_MM, GRID_ROW_GAP_SCREEN_MM,
+} from '../elevation/elevationStyle.js';
 
 function makeGraph() {
   const plane = new Plane('p1', 0, '1階', 1, 1);
@@ -103,10 +106,24 @@ test('【QA G5】ElevationModeState.init: 部屋名枠の上余白は実際にsc
   const room = graph.rooms.find(r => r.name === 'LDK');
 
   // ElevationModeState.init()のパス1相当（既定値で帯を組み倍率を決める）を独立に再現する。
-  const pass1Band = buildRoomBand(room, graph, {});
+  // QA C1→D1/D2: openingTagRowModelMm/dimRowGapModelMm/gridRowGapModelMmは全て独立したスクリーン
+  // mm予算から2パス方式で換算されるため（機械的な倍数導出はQA D2で撤回済み）、パス1の仮値も
+  // 対応するDEFAULT_*_MMに揃えないとbounds.maxYがズレる（ROW1以降の段=ROW2・通り芯丸行・
+  // 部屋名枠は全てdimRowGapModelMm/gridRowGapModelMm起点で積み上がるため）。
+  const pass1Band = buildRoomBand(room, graph, {
+    openingTagRowModelMm: DEFAULT_OPENING_TAG_ROW_MM, dimRowGapModelMm: DEFAULT_DIM_ROW_GAP_MM,
+    gridRowGapModelMm: DEFAULT_GRID_ROW_GAP_MM,
+  });
   const pass1Scale = chooseElevationScale([pass1Band], { width: 1000, height: 800 });
   const expectedNameGapModelMm = screenMmToModelMm(NAME_GAP_BELOW_SCREEN_MM, screenPxPerMm, pass1Scale);
-  const reference = buildRoomBand(room, graph, { nameGapModelMm: expectedNameGapModelMm });
+  const expectedOpeningTagRowModelMm = screenMmToModelMm(OPENING_TAG_ROW_SCREEN_MM, screenPxPerMm, pass1Scale);
+  const expectedDimRowGapModelMm = screenMmToModelMm(DIM_ROW_GAP_SCREEN_MM, screenPxPerMm, pass1Scale);
+  const expectedGridRowGapModelMm = screenMmToModelMm(GRID_ROW_GAP_SCREEN_MM, screenPxPerMm, pass1Scale);
+  const reference = buildRoomBand(room, graph, {
+    nameGapModelMm: expectedNameGapModelMm,
+    openingTagRowModelMm: expectedOpeningTagRowModelMm, dimRowGapModelMm: expectedDimRowGapModelMm,
+    gridRowGapModelMm: expectedGridRowGapModelMm,
+  });
 
   const state = new ElevationModeState(graph, null, { width: 1000, height: 800 }, screenPxPerMm);
   await state.init();
