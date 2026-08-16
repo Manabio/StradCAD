@@ -339,11 +339,18 @@ export function buildFaceFigure(face, ctx) {
   // floorDeltaMm:0 を -0 にせずそのまま 0 として扱う（-0 は等値比較・テストの落とし穴になるため）。
   const floorYOf = s => (s.floorDeltaMm ? -s.floorDeltaMm : 0);
 
-  // 項目1・2: 隅に直交壁が無い面端（hasWallAtLocal0/hasWallAtLocalRun。elevationFaces.jsの
-  // snapFaceEndsToCorners参照。単体テスト等でface自体に無い場合はtrue=壁あり扱いにフォール
-  // バックし従来どおりの見た目を保つ）は「続きがある」ことを示すため床線・天井線を図の外側へ
-  // extendMmぶん延長し、端の縦線は描かない（壁が無い＝切断していないため。CUTは切断面の意味の
-  // はずなのに壁が無い端に縦線を描くのは矛盾——項目2の棚卸しで見つかった唯一の是正対象）。
+  const silhouetteWeight = weightForRole(ElevationLineRole.SILHOUETTE);
+  const detailWeight     = weightForRole(ElevationLineRole.DETAIL);
+
+  // 項目1・2・QA修正(5a): 面端は「壁のない端部」（hasWallAtLocal0/hasWallAtLocalRun=false。
+  // elevationFaces.jsのsnapFaceEndsToCorners参照。単体テスト等でface自体に無い場合はtrue=壁あり
+  // 扱いにフォールバックし従来どおりの見た目を保つ）と「出隅」（壁がある＝true。部屋の凸角で、
+  // 視線方向に壁が折れて向こうへ続く角）を区別して描く:
+  //   壁のない端部 … 「続きがある」ことを示すため床線・天井線を図の外側へextendMmぶん延長し、
+  //                   端の縦線は描かない（壁が無い＝切断していないため）。
+  //   出隅         … 縦線を描くが、切断面(CUT)ではなく見えがかりの折れ角のためSILHOUETTE
+  //                   （中線）で描く（QA修正。前回CUTのまま描いていたのを是正——出隅は壁が
+  //                   折れて向こうの面へ続くだけで、そこで部屋の断面が切れているわけではない）。
   const hasWallAtLocal0   = face.hasWallAtLocal0   ?? true;
   const hasWallAtLocalRun = face.hasWallAtLocalRun ?? true;
   const extendMm = wallLessEndExtendModelMm ?? DEFAULT_WALL_LESS_END_EXTEND_MM;
@@ -357,7 +364,8 @@ export function buildFaceFigure(face, ctx) {
     prims.push({ type: 'line', x1, y1: y, x2, y2: y, weight: cutWeight });
   }
   for (let i = 0; i + 1 < segs.length; i++) {
-    // 段差の縦線（明示指示により寸法線・寸法値は描かない）。
+    // 段差の縦線（明示指示により寸法線・寸法値は描かない）。床の段差そのものはCUT
+    // （切断面＝部屋の輪郭そのものという既存慣習のまま。出隅の縦線とは別物）。
     prims.push({
       type: 'line', x1: segs[i].hiX, y1: floorYOf(segs[i]), x2: segs[i].hiX, y2: floorYOf(segs[i + 1]),
       weight: cutWeight,
@@ -366,12 +374,10 @@ export function buildFaceFigure(face, ctx) {
   const floorYAtStart = floorYOf(segs[0]);
   const floorYAtEnd   = floorYOf(segs[segs.length - 1]);
   prims.push({ type: 'line', x1: drawnX0, y1: -CH, x2: drawnXRun, y2: -CH, weight: cutWeight });
-  if (hasWallAtLocal0)   prims.push({ type: 'line', x1: 0,   y1: -CH, x2: 0,   y2: floorYAtStart, weight: cutWeight });
-  if (hasWallAtLocalRun) prims.push({ type: 'line', x1: run, y1: -CH, x2: run, y2: floorYAtEnd,   weight: cutWeight });
+  if (hasWallAtLocal0)   prims.push({ type: 'line', x1: 0,   y1: -CH, x2: 0,   y2: floorYAtStart, weight: silhouetteWeight });
+  if (hasWallAtLocalRun) prims.push({ type: 'line', x1: run, y1: -CH, x2: run, y2: floorYAtEnd,   weight: silhouetteWeight });
 
   // アキ（腰壁＋垂れ壁の同時指定でできる四角い穴）
-  const silhouetteWeight = weightForRole(ElevationLineRole.SILHOUETTE);
-  const detailWeight     = weightForRole(ElevationLineRole.DETAIL);
   for (const gap of kneeDropGapsOnFace(face, graph, CH)) {
     prims.push({ type: 'rect', x: gap.x, y: gap.y, w: gap.w, h: gap.h, weight: silhouetteWeight });
     prims.push({ type: 'line', x1: gap.x,         y1: gap.y,         x2: gap.x + gap.w, y2: gap.y + gap.h, dash: 'center', weight: detailWeight });
@@ -395,10 +401,12 @@ export function buildFaceFigure(face, ctx) {
 
     // 建具記号丸（項目2）: 建具の中心ではなく、姿が見える図の下（注記帯側。寸法行より図寄りの
     // 専用段=openingTagRowY）へ置く。背景透明の仕様は不変（fill指定なし）。
+    // QA項目3: openingIdを持たせ、クリックで建具リストパネルを開けるようにする
+    // （figurePrimitivesKonva.jsxのrenderTagがopeningId有無でクリック可否を判定する）。
     const { symbol, number } = openingTagPartsOf(o, project);
     prims.push({
       type: 'tag', cx: localX, cy: openingTagRowY, rPx: OPENING_TAG_RADIUS_PX,
-      top: symbol, bottom: number ?? '',
+      top: symbol, bottom: number ?? '', openingId: o.id,
     });
   }
 
@@ -414,7 +422,12 @@ export function buildFaceFigure(face, ctx) {
     }
   }
 
-  // 巾木（h=<mm>と解釈できた場合のみ。段差追従＝項目7。床まで達する開口の区間は途切れさせる）
+  // 巾木（h=<mm>と解釈できた場合のみ。床まで達する開口の区間は途切れさせる）。
+  // 項目6: 床に段差がある場合、巾木は床断面線（区間水平線＋段差の縦線）をhだけ上へそのまま
+  // 平行移動した連続ポリラインとして描く（前回=項目7の「区間水平線＋段差縦線から水平にh離れた
+  // 位置の返し線」という表現を撤回し、水平方向にはオフセットしない素直な平行オフセットに変更。
+  // 区間の水平線は従来どおり開口で途切れさせ、段差の縦線も同じx位置のまま床側のy2点をhだけ
+  // 上へ平行移動する——開口がその段差位置をまたいでいれば同様に途切れさせる）。
   const baseboardH = parseBaseboardHeightMm(room.finish?.baseboardHeight);
   if (baseboardH != null && baseboardH < CH) {
     const floorGaps = openings
@@ -424,7 +437,6 @@ export function buildFaceFigure(face, ctx) {
         return [Math.max(0, localX - o.width / 2), Math.min(run, localX + o.width / 2)];
       })
       .sort((a, b) => a[0] - b[0]);
-    // 項目7: 巾木は一律ではなく各床区間自身のFL（floorYOf(s)）基準に線を引く（段差追従）。
     for (const s of segs) {
       const y = floorYOf(s) - baseboardH;
       let cursor = s.loX;
@@ -436,18 +448,13 @@ export function buildFaceFigure(face, ctx) {
       }
       if (cursor < s.hiX) prims.push({ type: 'line', x1: cursor, y1: y, x2: s.hiX, y2: y, weight: detailWeight });
     }
-    // 項目7: 段差の縦線にも巾木の側面（立ち上がり部）を表現する——「低い側」（floorYOfが
-    // 大きい方。yは上向き負のため数値が大きいほど物理的に低い）の巾木が、段差の隅で折れ返って
-    // 立ち上がり面を少し覆う様子として、段差縦線から低い側へ水平にhだけ離した位置に、低い側の
-    // 巾木高さぶん（floorY(低い側)からhだけ上まで）平行な縦線を描く（採った解釈。指示原文
-    // 「段差縦線から水平にh離した位置に平行の縦線」は方向・高さ範囲を明示しないため、返しの
-    // 見た目として最も自然な範囲=巾木高さぶんに限定した）。
     for (let i = 0; i + 1 < segs.length; i++) {
       const riserX = segs[i].hiX;
-      const yLeft = floorYOf(segs[i]), yRight = floorYOf(segs[i + 1]);
-      const lowerY = Math.max(yLeft, yRight);
-      const sideX = yLeft > yRight ? riserX - baseboardH : riserX + baseboardH;
-      prims.push({ type: 'line', x1: sideX, y1: lowerY, x2: sideX, y2: lowerY - baseboardH, weight: detailWeight });
+      if (floorGaps.some(([gLo, gHi]) => riserX > gLo && riserX < gHi)) continue; // 開口がまたぐ段差は途切れさせる
+      prims.push({
+        type: 'line', x1: riserX, y1: floorYOf(segs[i]) - baseboardH, x2: riserX, y2: floorYOf(segs[i + 1]) - baseboardH,
+        weight: detailWeight,
+      });
     }
   }
 
@@ -485,7 +492,10 @@ export function buildFaceFigure(face, ctx) {
       const totalLinesHeightMm = (wallLabelLines.length - 1) * WALL_LABEL_LINE_GAP_MM;
       let labelY = -CH / 2 - totalLinesHeightMm / 2;
       for (const line of wallLabelLines) {
-        prims.push({ type: 'text', x: labelX, y: labelY, text: line, anchor: 'middle' });
+        // QA修正(項目1): レンダラ(figurePrimitivesKonva.jsxのrenderText)はanchor==='middle'かつ
+        // baseline==='middle'の両方が揃って初めて字群幅を基準にした中央寄せ(Text align='center')に
+        // なる——anchorだけでは中央寄せの分岐に入らず左端合わせのまま描画されていた（不具合）。
+        prims.push({ type: 'text', x: labelX, y: labelY, text: line, anchor: 'middle', baseline: 'middle' });
         labelY += WALL_LABEL_LINE_GAP_MM;
       }
     }

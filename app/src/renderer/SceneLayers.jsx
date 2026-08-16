@@ -34,12 +34,16 @@ export const SceneLayers = observer(({
   structComposition, upperVoidCrosses,
   snapPoint, cursorWorld, clPreview, clDialog, wallDialog, menu,
   setShowStructuralInfoDialog, setMemberFocusRequest, setStatusMenu,
-  onOpeningTagClick,
+  onOpeningTagClick, onElevationOpeningClick,
 }) => {
   // 展開モードは平面・通り芯・寸法を一切出さない専用画面（描画エリア＋ガター全域）。
   // 既存レイヤ群（INSETクリップ・viewport Group等）は一切通らない。
   if (appMode === 'elevation') {
-    return <Layer name="elevation"><ElevationLayer mode={mode} size={size} /></Layer>;
+    return (
+      <Layer name="elevation">
+        <ElevationLayer mode={mode} size={size} onOpeningClick={onElevationOpeningClick} />
+      </Layer>
+    );
   }
   // 項目4: 建具モードは描画エリア（キャンバス）を描かない——右側の建具リストウィンドウ
   // (OpeningPanel.jsx)の表示とそのUIのみで完結する。

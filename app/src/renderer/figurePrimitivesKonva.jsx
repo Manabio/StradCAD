@@ -48,14 +48,20 @@ function renderText(p, key, t) {
   return <Text key={key} x={x} y={y} text={p.text} fontSize={fontSize} fill={p.fill ?? STROKE_COLOR} listening={false} />;
 }
 
-function renderTag(p, key, t) {
+// QA項目3: 展開図の建具記号丸（openingIdを持つtag）はクリック可能にし、onTagClickへ
+// openingIdを渡す（建具リストパネルを開いて選択状態にする。App.jsx参照）。structural側の
+// tag（openingIdを持たない）は従来どおりlistening=falseのまま——挙動変更なし。
+function renderTag(p, key, t, onTagClick) {
   const x = t.tx(p.cx), y = t.ty(p.cy);
   const r = p.rPx;
   const stroke = p.stroke ?? STROKE_COLOR;
   const fontSize = Math.max(9, r * 0.7);
+  const clickable = !!(onTagClick && p.openingId != null);
+  const handleClick = clickable ? () => onTagClick(p.openingId) : undefined;
   return (
-    <Group key={key} x={x} y={y}>
-      <Circle radius={r} stroke={stroke} strokeWidth={1} strokeScaleEnabled={false} listening={false} />
+    <Group key={key} x={x} y={y} onClick={handleClick} onTap={handleClick}>
+      <Circle radius={r} stroke={stroke} strokeWidth={1} strokeScaleEnabled={false}
+        listening={clickable} />
       <Line points={[-r, 0, r, 0]} stroke={stroke} strokeWidth={1} strokeScaleEnabled={false} listening={false} />
       <Text x={-r} y={-r} width={r * 2} height={r} align="center" verticalAlign="middle"
         text={p.top ?? ''} fontSize={fontSize} fill={stroke} listening={false} />
@@ -113,7 +119,7 @@ function renderMiterTriangle(p, key, t, screenPxPerMm) {
   );
 }
 
-function renderOne(p, i, t, lineWeightsPx, screenPxPerMm) {
+function renderOne(p, i, t, lineWeightsPx, screenPxPerMm, onTagClick) {
   const key = `p${i}`;
   switch (p.type) {
     case 'line':
@@ -145,7 +151,7 @@ function renderOne(p, i, t, lineWeightsPx, screenPxPerMm) {
     case 'text':
       return renderText(p, key, t);
     case 'tag':
-      return renderTag(p, key, t);
+      return renderTag(p, key, t, onTagClick);
     case 'dim':
       return renderDim(p, key, t);
     case 'miterTriangle':
@@ -159,14 +165,17 @@ function renderOne(p, i, t, lineWeightsPx, screenPxPerMm) {
  * プリミティブ配列を Konva 要素配列へレンダリングする。
  * @param {object[]} primitives
  * @param {{tx:Function, ty:Function, sx:Function}} t - mm→px 変換器
- * @param {{lineWeightsPx?: {thin:number, medium:number, thick:number}, screenPxPerMm?: number}} [opts]
+ * @param {{lineWeightsPx?: {thin:number, medium:number, thick:number}, screenPxPerMm?: number,
+ *   onTagClick?: (openingId:string)=>void}} [opts]
  *   screenPxPerMm - 校正値（miterTriangleのスクリーン固定サイズ換算用。ElevationLayer.jsxが
  *   viewportから渡す。tagのrPxとは異なりTRIANGLE_HEIGHT_SCREEN_MMが「実画面mm」基準のため必要）。
+ *   onTagClick - QA項目3。openingIdを持つtag（展開図の建具記号丸）のクリックで呼ぶ
+ *   （structural側のtag=openingId無しはクリック不可のまま）。
  * @returns {import('react').ReactNode[]}
  */
-export function renderFigurePrimitives(primitives, t, { lineWeightsPx, screenPxPerMm } = {}) {
+export function renderFigurePrimitives(primitives, t, { lineWeightsPx, screenPxPerMm, onTagClick } = {}) {
   return primitives.flatMap((p, i) => {
-    const el = renderOne(p, i, t, lineWeightsPx, screenPxPerMm);
+    const el = renderOne(p, i, t, lineWeightsPx, screenPxPerMm, onTagClick);
     return el == null ? [] : el;
   });
 }

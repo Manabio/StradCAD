@@ -1629,6 +1629,7 @@ const App = observer(() => {
             clPreview={clPreview}
             clDialog={clDialog}
             onOpeningTagClick={enterOpeningMode}
+            onElevationOpeningClick={id => modeRef.current?.selectOpening(id)}
             wallDialog={wallDialog}
             menu={menu}
             setShowStructuralInfoDialog={setShowStructuralInfoDialog}
@@ -1726,6 +1727,21 @@ const App = observer(() => {
           isLandscape={isLandscape}
           onToast={msg => setToast({ msg, key: Date.now() })}
           onClose={() => handleModeChange('floorplan')}
+        />
+      )}
+
+      {/* QA項目3: 展開モード中の建具記号丸クリックで開く建具リストパネル（建具モードと同じ
+          OpeningPanel.jsxを再利用。appModeは'elevation'のまま——モード切替は行わない）。
+          ×クリックはmode.selectOpening(null)でパネルを閉じるだけ（建具モードを抜けるのとは
+          違い、モードはelevationのまま）。 */}
+      {appMode === 'elevation' && mode && mode.selectedOpeningId && (
+        <OpeningPanel
+          graph={graph}
+          project={project}
+          mode={mode}
+          isLandscape={isLandscape}
+          onToast={msg => setToast({ msg, key: Date.now() })}
+          onClose={() => mode.selectOpening(null)}
         />
       )}
 

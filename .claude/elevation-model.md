@@ -85,18 +85,25 @@ mm座標に焼き込まずアンカー点だけを持つ専用プリミティブ
 巾木初期値（`木製出幅木`/`h=60`）は**ユーザーがRoomを新規作成する経路でのみ**適用する（`applyDefaultBaseboard`）。
 `RoomFinish`コンストラクタでは設定しない——復元経路は「新しいRoomを作ってから空でないフィールドだけ上書きする」実装のため、
 既定値を非空にするとクリア済み`''`が復元のたびに巻き戻る。展開側は`parseBaseboardHeightMm`が`"h=<数値>"`表記だけ解釈し、
-解釈不能なら非描画。床まで達する開口の区間は巾木線を途切れさせる。巾木は床の段差にも追従する——各区間自身のfloorYOf基準に線を引き、
-段差縦線には「低い側」（`Math.max(yLeft,yRight)`。yは上向き負）へ水平にh離した位置に、その巾木高さぶんの側面線（立ち上がり部の返し）を足す。
+解釈不能なら非描画。床まで達する開口の区間は巾木線を途切れさせる。**巾木は床の段差にも追従する**——床断面線（区間水平線＋段差縦線）を
+hだけ上へそのまま平行移動した連続ポリラインとして描く（水平方向にはオフセットしない。段差縦線を開口がまたぐ場合は床側同様に途切れさせる）。
 
 ## 面端の不変条件・壁2段書き
-面端に「壁のない」隅（`snapFaceEndsToCorners`が付与する`hasWallAtLocal0`/`hasWallAtLocalRun`）は「続きがある」建築表現として床線・天井線を
-`WALL_LESS_END_EXTEND_SCREEN_MM`（2パス換算）ぶん図の外側へ延長し、その端の縦線は描かない（CUT=部屋の輪郭そのものという役割上、切断
-していない端に縦線を描くのは矛盾するため）。**判定基準は「隅に直交面が存在するか」ではなく「その直交面に実壁(`graph.walls`)があるか」**
-（`buildRoomFaces`の`hasRealWall`。QA修正——閉じた部屋の面ループでは隅に直交面自体は必ず存在するため、面の有無だけでは常にtrueになり
-発動しない。実壁の有無は`innerWallFaceAt`のnullフォールバック＝faceValueがCL芯になったかで判定する）。実際に発動する典型例は階段の
-上り口辺・下り口辺——`generateRoomWallsFromOutline`の`stairOpenings`引数（`finishBoundary.js`が`stairPortEdges`を渡す）でその辺の壁生成
-自体がスキップされる。他のCUT用途（床線・天井線・壁のある端の縦線・段差の縦線・直交壁建具断面の枠）はいずれも部屋の輪郭または明示指示に
-基づくもので、棚卸しの結果この端部縦線以外に是正対象は無かった。
+面端は「壁のない端部」と「出隅」を区別する。**壁のない端部**（`snapFaceEndsToCorners`が付与する`hasWallAtLocal0`/`hasWallAtLocalRun`が
+false）は「続きがある」建築表現として床線・天井線を`WALL_LESS_END_EXTEND_SCREEN_MM`（2パス換算）ぶん図の外側へ延長し、縦線は描かない。
+**出隅**（hasWallAtLocal0/hasWallAtLocalRunがtrue＝壁がある通常の面端。部屋の凸角で、視線方向に壁が折れて向こうへ続く角）は縦線を
+SILHOUETTE（中線）で描く——切断面ではなく壁が折れて隣の面へ続くだけの見えがかりの角のため、CUT（太）は使わない（QA修正。床線・天井線・
+段差の縦線・直交壁建具断面の枠は部屋の輪郭そのもの／明示指示に基づくためCUTのまま）。
+**壁のない端部の判定基準は「隅に直交面が存在するか」ではなく「その直交面に実壁(`graph.walls`)があるか」**（`buildRoomFaces`の
+`hasRealWall`。QA修正——閉じた部屋の面ループでは隅に直交面自体は必ず存在するため、面の有無だけでは常にtrueになり発動しない。実壁の有無は
+`innerWallFaceAt`のnullフォールバック＝faceValueがCL芯になったかで判定する）。実際に発動する典型例は階段の上り口辺・下り口辺——
+`generateRoomWallsFromOutline`の`stairOpenings`引数（`finishBoundary.js`が`stairPortEdges`を渡す）でその辺の壁生成自体がスキップされる。
+
+**`buildRoomFaces`の隅マッチングは「同じaxisCLIdを持つ複数面」を区別する**（QA修正・根本原因）。張り出し（アルコーブ等）で1本の壁面が
+開口を挟み2区間以上に分かれると、両区間とも同じaxisCLId（壁の通り位置そのもの）を持つ——単純な`Map<axisCLId,Face>`は後勝ちで片方が
+消え、その面がchainに一切現れない「抽出漏れ」になる（張り出し脇の短い返し壁で典型的に発生）。`groupByAxisCLId`+`findCornerNeighbor`
+（`elevationFaces.js`）が「同じ壁通りの複数区間」から、隅を実際に共有する1件（候補のstartCLId/endCLIdが自分自身のaxisCLIdと一致する
+もの）だけを選ぶ。
 
 壁2段書き（壁材・壁仕上げ材の2行）は表示専用に`formatMaterialLabel`で言い換える（「せっこうボード」→「PB」、`t=<数値>`→`ア)<数値>`。
 材マスター自体は変更しない）。位置は原則、面の壁中心線区間の中心・天井高の中央(`-CH/2`)。開口・アキ・段差縦線と重なる場合は
@@ -110,5 +117,18 @@ scale未確定のため省略判定を行わない）。**テキスト幅概算�
 加味する（`faceWallLessExtents`。`buildRoomBand`/`buildStairBand`が共有する純関数）——延長された床線・天井線が隣の面と実間隔を
 詰めないようにするため（QA G2）。
 
+## ビュー位置の階別記憶・建具パネル連携
+`ElevationModeState`はモジュールレベルの`Map<floorId, {...}>`（セッション内のみ。IDB永続化なし）で階ごとのscrollY・faceScroll・
+表示中の部屋を記憶し、同じ階への再突入（`dispose()`→`init()`）で復元する。記憶した部屋が消滅していれば、記憶時点で1つ前だった部屋
+（`graph.rooms`順）の帯位置へフォールバックする。floorIdは構築時（`project.activePlane.id`）に一度だけキャプチャする——dispose()時点
+では`project.activePlane`が既に次の階を指している場合があるため。
+
+展開図の建具記号丸（`tag`プリミティブの`openingId`）はクリック可能——`ElevationModeState.selectedOpeningId`/`selectOpening()`は
+`OpeningModeState`と同じAPI名にしてあり、建具モードの`OpeningPanel.jsx`をそのままelevationモード中（appModeは切り替えない）でも
+再利用する。パネル表示中は展開図のドラッグ・ホイールスクロールを規制する（`usePointerInteraction.js`が`selectedOpeningId`を見る）。
+パネルでの編集はMobX reactionで`graph.openings`の各Openingの表示に効くフィールド（committed値。CLのようなpending/committed分離を
+持たないため確定のたびに1回だけ発火）を監視し、変更があれば帯を全再構築して即時反映する。クリック対象は建具記号丸のみ
+（姿図は現状複数の生プリミティブへ分解済みで個別の建具IDを持たないため対象外。defer）。
+
 defer（未実装）: 傾斜天井の作図・開口の内法寸法線・巾木見切り目地・家具設備電気・屋外部屋・展開図上の編集・印刷/PDF・
-SWITCHBACK以外の階段断面（WINDING/L_TURN/FLARED/OPEN_WELL）。
+SWITCHBACK以外の階段断面（WINDING/L_TURN/FLARED/OPEN_WELL）・展開図の建具「姿」クリックでのパネル連携（記号丸のみ対応）。

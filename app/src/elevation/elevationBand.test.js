@@ -73,10 +73,12 @@ test('buildRoomBand: 隣接面は壁中心線同士がctx.gapModelMmだけ離れ
 
   const band = buildRoomBand(room, graph, { gapModelMm });
   const faces = buildRoomFaces(room, graph);
-  // CUT(太)の縦線(両端)から各面のローカルx範囲(帯内座標)を復元する。
-  // xs = [面0.lo(=0), 面0.hi(=run0), 面1.lo(=xCursor1), 面1.hi(=xCursor1+run1), ...]
-  const cutVerticals = band.primitives.filter(p => p.type === 'line' && p.weight === 'thick' && p.x1 === p.x2);
-  const xs = [...new Set(cutVerticals.map(p => p.x1))].sort((a, b) => a - b);
+  // 面端(両端)の縦線から各面のローカルx範囲(帯内座標)を復元する。QA修正(5a): 出隅の縦線は
+  // SILHOUETTE(中線)で描くため、CUT(太)限定ではなくCUT/SILHOUETTE(太・中線)の縦線で拾う
+  // （DETAIL=中心線一点鎖線のdash付き縦線は除外する）。
+  const endVerticals = band.primitives.filter(p =>
+    p.type === 'line' && p.x1 === p.x2 && (p.weight === 'thick' || p.weight === 'medium'));
+  const xs = [...new Set(endVerticals.map(p => p.x1))].sort((a, b) => a - b);
   assert.equal(xs[0], 0, '先頭面の左端は0');
 
   const boundary0 = faceBoundaryLocalX(faces[0], graph);
@@ -131,8 +133,10 @@ test('【項目9】buildRoomBand: 留め三角はleftAnchorX=CH寸法線-offset�
   const faces = buildRoomFaces(room, graph);
   const lastFace = faces[faces.length - 1];
   const lastBoundary = faceBoundaryLocalX(lastFace, graph);
-  const cutVerticals = band.primitives.filter(p => p.type === 'line' && p.weight === 'thick' && p.x1 === p.x2);
-  const lastFaceLocalMaxX = Math.max(...cutVerticals.map(p => p.x1)); // 最終面のrun側(hi)のCUT縦線x
+  // QA修正(5a): 出隅の縦線はSILHOUETTE(中線)のため、CUT(太)限定ではなく縦線一般で拾う。
+  const endVerticals = band.primitives.filter(p =>
+    p.type === 'line' && p.x1 === p.x2 && (p.weight === 'thick' || p.weight === 'medium'));
+  const lastFaceLocalMaxX = Math.max(...endVerticals.map(p => p.x1)); // 最終面のrun側(hi)の縦線x
   const rightAnchorExpected = (lastFaceLocalMaxX - lastFace.run + lastBoundary.hi) + triangleOffsetModelMm;
   assert.ok(Math.abs(rightTriangle.x - rightAnchorExpected) < 1e-6,
     `右三角は一番右の壁中心線の外側にtriangleOffsetModelMm(${triangleOffsetModelMm})のはず（期待:${rightAnchorExpected}, 実際:${rightTriangle.x}）`);

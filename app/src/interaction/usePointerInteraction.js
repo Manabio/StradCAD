@@ -171,6 +171,8 @@ export function usePointerInteraction({
     // 符号が逆になる——ドラッグはコンテンツをつまむ操作、ホイールは視点を動かす操作のため）。
     // クランプはscrollBy内部（書き込み時クランプ。QA G1）にそのまま委ねる。
     if (appMode === 'elevation') {
+      // QA項目3: 建具リストパネル表示中はスクロールを規制する。
+      if (modeRef.current?.selectedOpeningId) return;
       const scale = modeRef.current?.scale;
       if (scale > 0) modeRef.current?.scrollBy(0, -e.evt.deltaY / scale, null);
       return;
@@ -188,6 +190,9 @@ export function usePointerInteraction({
 
     // ---- 展開モード ----
     if (appMode === 'elevation') {
+      // QA項目3: 建具リストパネル表示中はドラッグを規制する（別の建具記号丸のクリックは
+      // Konva側のonClickが別経路で処理するため、ここでのドラッグ開始だけを止めれば足りる）。
+      if (modeRef.current?.selectedOpeningId) return;
       elevationDragRef.current = {
         x: clientX, y: clientY, axis: null,
         roomId: modeRef.current?.bandAtScreenY(clientY) ?? null,

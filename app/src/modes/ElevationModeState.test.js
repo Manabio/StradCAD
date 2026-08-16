@@ -3,8 +3,10 @@
 // 遅延実行のため、project=null経由でpeekへ到達しない本テストでは発火しない）。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Plane, PlanGraph, CenterLineType, Discipline } from '@core';
+import { runInAction } from 'mobx';
+import { Plane, PlanGraph, CenterLineType, Discipline, OpeningCategory } from '@core';
 import { generateRoomWallsFromOutline } from '../finish/wallGeneration.js';
+import { placeOpeningWithDefaults } from '../openings/openingEdit.js';
 import { ElevationModeState } from './ElevationModeState.js';
 import { buildRoomBand } from '../elevation/elevationBand.js';
 import { chooseElevationScale, screenMmToModelMm } from '../elevation/elevationLayout.js';
@@ -134,6 +136,89 @@ test('【QA G5】ElevationModeState.init: 部屋名枠の上余白は実際にsc
     `と一致するはず`);
 });
 
+// ---- 項目2: 展開モード脱出時の表示位置（scrollY・faceScroll・表示中の部屋）を階IDごとに
+// 記憶し、同じ階への再突入で復元する（セッション内メモリのみ。IDB永続化なし） ----
+function fakeProject(floorId) {
+  return { activePlane: { id: floorId } };
+}
+
+test('【項目2】ElevationModeState: dispose時に記憶したscrollYを、同じ階への再突入時に復元する', async () => {
+  const graph = makeGraph();
+  makeRectRoom(graph, 0, 0, 4000, 3000, 'R1');
+  makeRectRoom(graph, 0, 5000, 4000, 8000, 'R2');
+  makeRectRoom(graph, 0, 10000, 4000, 13000, 'R3');
+  makeRectRoom(graph, 0, 15000, 4000, 18000, 'R4');
+  const project = fakeProject('floorA');
+
+  const state1 = new ElevationModeState(graph, project, { width: 1000, height: 800 });
+  await state1.init();
+  const viewHeightMm = 800 / state1.scale;
+  const maxScroll = Math.max(0, state1.layout.contentHeightMm - viewHeightMm);
+  assert.ok(maxScroll > 0, '前提: スクロール余地があるはず');
+  state1.scrollBy(0, -1000); // 下方向へ移動
+  const savedScrollY = state1.scrollY;
+  assert.ok(savedScrollY > 0, '前提: scrollYが0でない位置へ動いているはず');
+  state1.dispose(); // ここでsaveViewが呼ばれ、階IDキーで記憶される
+
+  const state2 = new ElevationModeState(graph, project, { width: 1000, height: 800 });
+  await state2.init();
+  assert.equal(state2.scrollY, savedScrollY, '同じ階への再突入で記憶したscrollYが復元されるはず');
+});
+
+// ---- 失敗系: 異なる階IDでは記憶が使われない（既定のscrollY=0のまま） ----
+test('【失敗系・項目2】ElevationModeState: 異なる階IDでは表示位置の記憶を復元しない', async () => {
+  const graph = makeGraph();
+  makeRectRoom(graph, 0, 0, 4000, 3000, 'R1');
+  makeRectRoom(graph, 0, 5000, 4000, 8000, 'R2');
+  makeRectRoom(graph, 0, 10000, 4000, 13000, 'R3');
+  makeRectRoom(graph, 0, 15000, 4000, 18000, 'R4');
+
+  const state1 = new ElevationModeState(graph, fakeProject('floorB1'), { width: 1000, height: 800 });
+  await state1.init();
+  state1.scrollBy(0, -1000);
+  assert.ok(state1.scrollY > 0, '前提: scrollYが0でない位置へ動いているはず');
+  state1.dispose();
+
+  const state2 = new ElevationModeState(graph, fakeProject('floorB2'), { width: 1000, height: 800 });
+  await state2.init();
+  assert.equal(state2.scrollY, 0, '別の階IDの記憶は使われず、既定のscrollY=0のままのはず');
+});
+
+// ---- 項目2: 記憶した対象部屋が消滅していた場合、記憶時点で1つ前だった部屋の帯位置へ
+// フォールバックする ----
+test('【項目2】ElevationModeState: 記憶した部屋が消滅していれば、記憶時点で1つ前だった部屋の帯位置へフォールバックする', async () => {
+  const graph = makeGraph();
+  // R0を先頭に置き、フォールバック先のR1のtopMmが0にならないようにする（0だと「何も復元しない」
+  // 変異でも既定値scrollY=0とたまたま一致し、変異テストで検出できなくなるため）。
+  makeRectRoom(graph, 0, -5000, 4000, -2000, 'R0');
+  const r1 = makeRectRoom(graph, 0, 0, 4000, 3000, 'R1');
+  const r2 = makeRectRoom(graph, 0, 5000, 4000, 8000, 'R2');
+  makeRectRoom(graph, 0, 10000, 4000, 13000, 'R3');
+  makeRectRoom(graph, 0, 15000, 4000, 18000, 'R4');
+  const project = fakeProject('floorC');
+
+  const state1 = new ElevationModeState(graph, project, { width: 1000, height: 800 });
+  await state1.init();
+  const viewHeightMm = 800 / state1.scale;
+  const maxScroll = state1.layout.contentHeightMm - viewHeightMm;
+  const r2Placement = state1.layout.placements.find(p => p.roomId === r2.id);
+  assert.ok(r2Placement, '前提: R2の帯位置が見つかるはず');
+  assert.ok(r2Placement.topMm > 0 && r2Placement.topMm <= maxScroll,
+    `前提: R2の帯位置(${r2Placement.topMm})はクランプ範囲内(0..${maxScroll})のはず`);
+  state1.scrollBy(0, -r2Placement.topMm); // scrollYをR2の帯先頭へ合わせる（表示中の部屋=R2にする）
+  assert.equal(state1.scrollY, r2Placement.topMm);
+  state1.dispose();
+
+  graph.removeRoom(r2.id); // R2を削除（記憶した部屋が消滅する状況を再現）
+
+  const state2 = new ElevationModeState(graph, project, { width: 1000, height: 800 });
+  await state2.init();
+  const r1Placement = state2.layout.placements.find(p => p.roomId === r1.id);
+  assert.ok(r1Placement, '前提: R1の帯位置が見つかるはず');
+  assert.equal(state2.scrollY, r1Placement.topMm,
+    'R2が消滅しているため、記憶時点で1つ前だったR1の帯位置へフォールバックするはず');
+});
+
 // ---- 項目10: 帯の水平初期位置(faceOffsetFor未設定時)はband.leftAnchorX（左三角の位置）基準になる ----
 test('【項目10】ElevationModeState.faceOffsetFor: 未設定時はband.leftAnchorXを既定値として使う', async () => {
   const graph = makeGraph();
@@ -180,4 +265,57 @@ test('【QA F1】ElevationModeState.faceOffsetFor: 画面に収まる狭い帯�
   const ldkOffsetPx    = (ldk.leftAnchorX    - state.faceOffsetFor(ldk))    * state.scale;
   assert.ok(Math.abs(toiletOffsetPx - ldkOffsetPx) < 1e-6,
     `収まる帯・収まらない帯のどちらも左三角の画面位置(px)が揃うはず（トイレ:${toiletOffsetPx}px, LDK:${ldkOffsetPx}px）`);
+});
+
+// ---- 項目3: 建具パネルAPI（OpeningPanel.jsxとの互換性） ----
+test('【項目3】ElevationModeState.selectOpening: selectedOpeningIdを設定・null復帰できる（OpeningPanel.jsxとの互換API）', async () => {
+  const graph = makeGraph();
+  makeRectRoom(graph, 0, 0, 4000, 3000, 'LDK');
+  const state = new ElevationModeState(graph, null, { width: 1000, height: 800 });
+  await state.init();
+
+  assert.equal(state.selectedOpeningId, null, '既定はnull（パネル非表示）のはず');
+  state.selectOpening('op1');
+  assert.equal(state.selectedOpeningId, 'op1');
+  state.selectOpening(null);
+  assert.equal(state.selectedOpeningId, null);
+});
+
+// ---- 項目3: 建具データの変更（reaction）で帯を全再構築し、展開図に即時反映する ----
+test('【項目3】ElevationModeState: 建具の幅を変更すると帯が再構築され、展開図の建具姿図に反映される', async () => {
+  const graph = makeGraph();
+  makeRectRoom(graph, 0, 0, 4000, 3000, 'LDK');
+  const project = { openingNumberIndex: new Map() };
+  const wall = [...graph.walls][0];
+  const { opening, error } = placeOpeningWithDefaults(
+    graph, project, wall,
+    { x: wall.isVertical ? 0 : 2000, y: wall.isVertical ? 1500 : 0 },
+    OpeningCategory.FITTING,
+  );
+  assert.ok(opening && !error, `前提: 開口を配置できるはず（実際のerror: ${error}）`);
+
+  const state = new ElevationModeState(graph, project, { width: 1000, height: 800 });
+  await state.init();
+  const rectBefore = state.bands[0].primitives.find(p => p.type === 'rect' && p.w === opening.width);
+  assert.ok(rectBefore, '前提: 変更前の幅で建具の姿(rect)が見つかるはず');
+  const bandsRefBefore = state.bands;
+
+  runInAction(() => { opening.width += 200; });
+
+  assert.notEqual(state.bands, bandsRefBefore, '帯（配列参照）が再構築されているはず');
+  const rectAfter = state.bands[0].primitives.find(p => p.type === 'rect' && p.w === opening.width);
+  assert.ok(rectAfter, '変更後の幅(+200)で建具の姿(rect)が見つかるはず（展開図への即時反映）');
+});
+
+// ---- 失敗系: 建具データと無関係な変更（部屋名等）では帯を再構築しない ----
+test('【失敗系・項目3】ElevationModeState: 建具データと無関係な変更ではreactionが発火せず、帯（配列参照）は変わらない', async () => {
+  const graph = makeGraph();
+  const room = makeRectRoom(graph, 0, 0, 4000, 3000, 'LDK');
+  const state = new ElevationModeState(graph, null, { width: 1000, height: 800 });
+  await state.init();
+  const bandsRefBefore = state.bands;
+
+  runInAction(() => { room.name = 'LDK(改)'; }); // 建具と無関係な変更
+
+  assert.equal(state.bands, bandsRefBefore, '建具データ以外の変更ではreactionが発火せず帯は再構築されないはず');
 });

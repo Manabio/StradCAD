@@ -11,7 +11,9 @@ import { renderFigurePrimitives } from './figurePrimitivesKonva.jsx';
 // のまま、という展開モードの不変条件）。lineWeightsPx（校正値ベースの固定px）だけは
 // viewport から借りる（ズーム非依存の値のため。.claude/elevation-model.md §8.3）。
 // ================================================================
-export const ElevationLayer = observer(({ mode, size }) => {
+// onOpeningClick: QA項目3。展開図の建具記号丸クリックで呼ぶ（openingIdを渡す。App.jsxが
+// mode.selectOpening(id)へつなぎ、建具リストパネルを開いて選択状態にする）。
+export const ElevationLayer = observer(({ mode, size, onOpeningClick }) => {
   if (!mode || mode.loading || !size) return null;
 
   const scale = mode.scale;
@@ -34,7 +36,9 @@ export const ElevationLayer = observer(({ mode, size }) => {
         const t = makeElevationTransform(scale, -faceOffsetMm * scale, originMmY * scale);
         return (
           <Group key={`${pl.roomId}-${i}`}>
-            {renderFigurePrimitives(band.primitives, t, { lineWeightsPx: viewport.lineWeightsPx, screenPxPerMm })}
+            {renderFigurePrimitives(band.primitives, t, {
+              lineWeightsPx: viewport.lineWeightsPx, screenPxPerMm, onTagClick: onOpeningClick,
+            })}
           </Group>
         );
       })}
