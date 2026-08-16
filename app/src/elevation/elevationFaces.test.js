@@ -5,7 +5,9 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Plane, PlanGraph, CenterLineType, Discipline, OpeningCategory } from '@core';
 import { generateRoomWallsFromOutline } from '../finish/wallGeneration.js';
-import { buildRoomFaces, openingsOnFace, faceBoundaryLocalX } from './elevationFaces.js';
+import {
+  buildRoomFaces, openingsOnFace, faceBoundaryLocalX, snapFaceEndsToCorners, faceWallLessExtents,
+} from './elevationFaces.js';
 
 function makeGraph() {
   const plane = new Plane('p1', 0, '1階', 1, 1);
@@ -99,6 +101,159 @@ test('buildRoomFaces: 対向2面のrunの和は芯々寸法×2より小さい（
   const spanY = y1.effectiveValue - y0.effectiveValue;
   assert.ok(byLabel.A.run + byLabel.C.run < 2 * spanX, 'A+Cのrun和はX芯々寸法×2未満');
   assert.ok(byLabel.B.run + byLabel.D.run < 2 * spanY, 'B+Dのrun和はY芯々寸法×2未満');
+});
+
+// ---- 項目1: snapFaceEndsToCornersが「対応する直交面が無い端」をhasWallAtLocal0/Runで公開する ----
+test('snapFaceEndsToCorners: 対応する直交面が無い端（壁のない端部）はhasWallAtLocal0/hasWallAtLocalRunがfalseになる', () => {
+  // faceA--faceB の2面チェーン（中間の隅=axAは繋がるが、両端=clStartDangling/clEndDanglingは
+  // どの面のaxisCLとも一致しない＝対応する直交面が無い「壁のない端部」）。dirSignは両方+1。
+  const faceA = { axisCL: { id: 'axA' }, startCLId: 'clStartDangling', endCLId: 'axB', dirSign: 1, lo: 0, hi: 4000, faceValue: 0 };
+  const faceB = { axisCL: { id: 'axB' }, startCLId: 'axA', endCLId: 'clEndDangling', dirSign: 1, lo: 0, hi: 3000, faceValue: 4000 };
+  const [outA, outB] = snapFaceEndsToCorners([faceA, faceB]);
+
+  assert.equal(outA.hasWallAtLocal0, false, 'faceAのstart側(clStartDangling)は対応する面が無いはず');
+  assert.equal(outA.hasWallAtLocalRun, true, 'faceAのend側(axB=faceB)は対応する面があるはず');
+  assert.equal(outB.hasWallAtLocal0, true, 'faceBのstart側(axA=faceA)は対応する面があるはず');
+  assert.equal(outB.hasWallAtLocalRun, false, 'faceBのend側(clEndDangling)は対応する面が無いはず');
+});
+
+// ---- 失敗系: dirSign<0の面はhasWallAtLocal0/Runの対応がstart/endに対して反転する ----
+test('【失敗系】snapFaceEndsToCorners: dirSign<0の面はhasWallAtLocal0がendCLId側・hasWallAtLocalRunがstartCLId側になる', () => {
+  const faceA = { axisCL: { id: 'axA' }, startCLId: 'clStartDangling', endCLId: 'axB', dirSign: -1, lo: 0, hi: 4000, faceValue: 0 };
+  const faceB = { axisCL: { id: 'axB' }, startCLId: 'axA', endCLId: 'clEndDangling', dirSign: -1, lo: 0, hi: 3000, faceValue: 4000 };
+  const [outA, outB] = snapFaceEndsToCorners([faceA, faceB]);
+
+  // dirSign<0: hasWallAtLocal0はhi側(endCLId)、hasWallAtLocalRunはlo側(startCLId)に対応する。
+  assert.equal(outA.hasWallAtLocal0, true, 'faceAはend側(axB)に対応する面があるためlocal0がtrueのはず');
+  assert.equal(outA.hasWallAtLocalRun, false, 'faceAはstart側(clStartDangling)に対応する面が無いためlocalRunがfalseのはず');
+  assert.equal(outB.hasWallAtLocal0, false);
+  assert.equal(outB.hasWallAtLocalRun, true);
+});
+
+// ---- QA G2: faceWallLessExtents（隣接面ギャップ算出用の壁のない端部延長オフセット） ----
+test('【QA G2】faceWallLessExtents: hasWallAtLocalRunがfalseの面はrightExtendMmにwallLessExtendMmが乗る', () => {
+  const face = { hasWallAtLocal0: true, hasWallAtLocalRun: false };
+  const { leftExtendMm, rightExtendMm } = faceWallLessExtents(face, 19); // 19=5screenMm@DEFAULT_PX_PER_MM換算相当の例
+  assert.equal(leftExtendMm, 0, '左端は壁ありのため延長0のはず');
+  assert.equal(rightExtendMm, 19, '右端は壁なしのためwallLessExtendMmがそのまま乗るはず');
+});
+
+test('【QA G2】faceWallLessExtents: hasWallAtLocal0がfalseの面はleftExtendMmにwallLessExtendMmが乗る', () => {
+  const face = { hasWallAtLocal0: false, hasWallAtLocalRun: true };
+  const { leftExtendMm, rightExtendMm } = faceWallLessExtents(face, 19);
+  assert.equal(leftExtendMm, 19);
+  assert.equal(rightExtendMm, 0);
+});
+
+// ---- 失敗系: 両端に壁があれば（フィールド省略時のフォールバック含む）延長は0 ----
+test('【失敗系・QA G2】faceWallLessExtents: 両端に壁がある（またはフィールド省略）面は延長0になる', () => {
+  assert.deepEqual(faceWallLessExtents({ hasWallAtLocal0: true, hasWallAtLocalRun: true }, 19),
+    { leftExtendMm: 0, rightExtendMm: 0 });
+  assert.deepEqual(faceWallLessExtents({}, 19), { leftExtendMm: 0, rightExtendMm: 0 },
+    'フィールド省略時はtrue(壁あり)扱い＝延長0（buildFaceFigureの`?? true`と同じ規約）');
+});
+
+// ---- QA G2 (buildRoomBandの実際の配置式を模擬): 壁なし端を挟む2面でも実間隔はgapModelMm
+// (実画面30mm相当)を維持する ----
+// buildRoomBandへ合成faceを注入する手段は無い（buildFaceFigureのように直接ctxへfaceを渡す
+// 設計ではないため）ので、elevationBand.js/elevationStair.jsのxCursor/prevRightExtent算出式を、
+// このfaceWallLessExtents（実装が共有する同一の純関数）を使ってそのまま2面ぶん模擬し、
+// 「前の面の右端が壁なし」→次面のxCursorがwallLessExtendMmぶん余分に押し出される、という
+// 修正後の性質を直接検証する（実グラフでの同等の検証はこの下・elevationFaces.jsのQA修正節、
+// および elevationBand.test.js の実グラフblack-boxテストを参照）。
+test('【QA G2】buildRoomBandの配置式を模擬: 前の面の右端が壁なしなら、次の面とのxCursor間隔がwallLessExtendMmぶん広がる', () => {
+  const gapModelMm = 113; // 実画面30mm相当の例（値そのものに意味は無い）
+  const wallLessExtendMm = 19; // 実画面5mm相当の例
+  const boundaryA = { lo: 0, hi: 4000 };
+  const boundaryB = { lo: 0, hi: 3000 };
+
+  const simulate = (faceA, faceB) => {
+    const extA = faceWallLessExtents(faceA, wallLessExtendMm);
+    const xCursorA = 0;
+    const prevBoundaryHiA = xCursorA + boundaryA.hi;
+    const prevRightExtent = prevBoundaryHiA + extA.rightExtendMm; // floorSegments段差なし想定
+    const extB = faceWallLessExtents(faceB, wallLessExtendMm);
+    const xCursorB = prevRightExtent + gapModelMm - boundaryB.lo + extB.leftExtendMm;
+    return xCursorB;
+  };
+
+  const bothWalled = simulate({ hasWallAtLocalRun: true }, { hasWallAtLocal0: true });
+  const aRightWallLess = simulate({ hasWallAtLocalRun: false }, { hasWallAtLocal0: true });
+  assert.equal(aRightWallLess, bothWalled + wallLessExtendMm,
+    '面Aの右端が壁なしなら、面Bのxカーソルはwallless延長ぶんさらに右へ押し出されるはず');
+
+  // 実間隔（面Aの右端の実描画=prevBoundaryHiA+rightExtendMm から 面Bの左端の実描画=xCursorB+
+  // (leftExtendMmが無ければboundaryB.lo、あればさらに手前)まで）は、どちらのケースでもgapModelMm
+  // ちょうどを維持する（G2修正前は壁なし側の延長ぶんだけ実間隔が縮んでいた）。
+  const realGap = (faceA, faceB, xCursorB) => {
+    const extA = faceWallLessExtents(faceA, wallLessExtendMm);
+    const drawnRightA = boundaryA.hi + extA.rightExtendMm;
+    const extB = faceWallLessExtents(faceB, wallLessExtendMm);
+    const drawnLeftB = xCursorB + boundaryB.lo - extB.leftExtendMm;
+    return drawnLeftB - drawnRightA;
+  };
+  assert.equal(
+    realGap({ hasWallAtLocalRun: true }, { hasWallAtLocal0: true }, bothWalled), gapModelMm);
+  assert.equal(
+    realGap({ hasWallAtLocalRun: false }, { hasWallAtLocal0: true }, aRightWallLess), gapModelMm);
+  assert.equal(
+    realGap({ hasWallAtLocalRun: true }, { hasWallAtLocal0: false }, simulate({ hasWallAtLocalRun: true }, { hasWallAtLocal0: false })),
+    gapModelMm);
+});
+
+// ---- QA修正（実グラフでの発動確認）: hasWallAtLocal0/hasWallAtLocalRunは「隅に直交面が存在する
+// か」ではなく「隅の直交面に実壁(graph.walls)があるか」で判定する ----
+// 閉じた部屋の外周は幾何的に必ず1周の閉ループになるため（隣接面の隅は必ず世界座標で一致する。
+// buildRoomFacesの不変条件）、隅に直交"面"（幾何セグメント）が存在しないケースは実グラフからは
+// 作れない。実際の「壁のない端部」（上り口等）は、generateRoomWallsFromOutlineのstairOpenings
+// 引数（finish/wallGeneration.js。finishBoundary.jsが階段の登り口・下り口辺=stairPortEdgesを
+// 渡し、その辺の壁生成をスキップする）で再現する——onStairOpeningが要求する形
+// {isVertical, value, lo, hi} を直接渡せば、実際のStair/階段室オブジェクトを組まなくても
+// 同じ「壁生成スキップ」経路を通せる（本物のStairが行うのと同じ入力形）。
+function makeRectRoomWithWallLessTop(graph, x0v, y0v, x1v, y1v, name = 'かいだん') {
+  const x0 = addCL(graph, CenterLineType.VERTICAL, x0v);
+  const x1 = addCL(graph, CenterLineType.VERTICAL, x1v);
+  const y0 = addCL(graph, CenterLineType.HORIZONTAL, y0v);
+  const y1 = addCL(graph, CenterLineType.HORIZONTAL, y1v);
+  const key = `${x0.id}:${y0.id}:${x1.id}:${y1.id}`;
+  const room = graph.addRoom(new Set([key]), name);
+  // A面（上辺=y0軸・isVertical:false）全体をstairOpening指定し、壁生成をスキップさせる。
+  const stairOpenings = [
+    { isVertical: false, value: y0.effectiveValue, lo: x0.effectiveValue - 1, hi: x1.effectiveValue + 1 },
+  ];
+  generateRoomWallsFromOutline(graph, room, {}, stairOpenings);
+  return room;
+}
+
+test('【QA修正】buildRoomFaces: 上り口辺（壁生成スキップ）に隣接する面の端はhasWallAtLocal0/Runがfalseになる', () => {
+  const graph = makeGraph();
+  const room = makeRectRoomWithWallLessTop(graph, 0, 0, 4000, 3000);
+  const faces = buildRoomFaces(room, graph);
+  const byLabel = Object.fromEntries(faces.map(f => [f.label, f]));
+
+  // A自身（壁の無い辺そのもの）はhasRealWallがfalse（faceValueがCL芯へフォールバック）。
+  assert.equal(byLabel.A.hasRealWall, false, 'A面自身は実壁が無いためhasRealWallがfalseのはず');
+  // A⇔B・A⇔D の隅は「隣の面(A)に実壁が無い」ため、B/D側の対応する端がfalseになる
+  // （A自身のhasWallAtLocal0/Runは「A自身の隣=B/Dに実壁があるか」の話なので、B/Dが実壁を
+  // 持つ通常の面である限りtrueのまま——false化されるのはB/D側）。
+  assert.equal(byLabel.B.hasWallAtLocal0, false, 'B面の始端(A隅)はAに実壁が無いためfalseのはず');
+  assert.equal(byLabel.D.hasWallAtLocalRun, false, 'D面の終端(A隅)はAに実壁が無いためfalseのはず');
+  // 他の端（実壁があるC・B/Dの反対側）はtrueのまま。
+  assert.equal(byLabel.B.hasWallAtLocalRun, true);
+  assert.equal(byLabel.D.hasWallAtLocal0, true);
+  assert.equal(byLabel.C.hasWallAtLocal0, true);
+  assert.equal(byLabel.C.hasWallAtLocalRun, true);
+});
+
+// ---- 失敗系: 全周壁のある矩形部屋は全面ともhasWallAtLocal0/Runがtrueになる ----
+test('【失敗系】buildRoomFaces: 全周壁のある矩形部屋は全面でhasWallAtLocal0/hasWallAtLocalRunがtrueになる', () => {
+  const graph = makeGraph();
+  const { room } = makeRectRoom(graph, 0, 0, 4000, 3000);
+  const faces = buildRoomFaces(room, graph);
+  for (const f of faces) {
+    assert.equal(f.hasWallAtLocal0, true, `${f.label}のhasWallAtLocal0はtrueのはず`);
+    assert.equal(f.hasWallAtLocalRun, true, `${f.label}のhasWallAtLocalRunはtrueのはず`);
+  }
 });
 
 // ---- faceBoundaryLocalX: 面は両端の壁中心線（CL）で挟まれる（壁面より外側） ----

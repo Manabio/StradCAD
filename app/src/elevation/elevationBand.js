@@ -3,12 +3,13 @@
  * 設計意図は .claude/elevation-model.md 参照。
  */
 import { figureBounds } from '../structural/sectionFigure/sectionGeometry.js';
-import { buildRoomFaces, faceBoundaryLocalX } from './elevationFaces.js';
+import { buildRoomFaces, faceBoundaryLocalX, faceWallLessExtents } from './elevationFaces.js';
 import { buildFaceFigure } from './elevationFigure.js';
 import { wallAdjacentFloorSegments } from './elevationFloorProfile.js';
 import { roomCeilingHeight } from '../finish/roomMetrics.js';
 import {
   DEFAULT_FACE_GAP_MM, CH_DIM_OFFSET_MM, DEFAULT_TRIANGLE_OFFSET_MM, BAND_TOP_MARGIN_MM,
+  DEFAULT_WALL_LESS_END_EXTEND_MM,
 } from './elevationStyle.js';
 import { translatePrimitive, collectGridCLs, appendRoomNameFrame } from './elevationPrimitives.js';
 
@@ -46,17 +47,31 @@ export function buildRoomBand(room, graph, ctx = {}) {
   const openingTagRowModelMm = ctx.openingTagRowModelMm; // 未指定はbuildFaceFigure既定(QA C1)
   const dimRowGapModelMm     = ctx.dimRowGapModelMm;      // 未指定はbuildFaceFigure既定(QA C1/D2)
   const gridRowGapModelMm    = ctx.gridRowGapModelMm;     // 未指定はbuildFaceFigure既定(QA D1)
+  const wallLessEndExtendModelMm = ctx.wallLessEndExtendModelMm; // 未指定はbuildFaceFigure既定(項目1)
+  const scale = ctx.scale; // 未指定はbuildFaceFigure既定=壁2段書き省略判定を行わない（項目4）
   const chInfo       = roomCeilingHeight(graph, room);
   const CH           = chInfo.mm;
 
   const faces = buildRoomFaces(room, graph);
   const primitives = [];
   let xCursor = 0;
-  let prevBoundaryHi = null; // 直前面の壁中心線(hi側)の帯内絶対x
+  let prevBoundaryHi = null; // 直前面の壁中心線(hi側)の帯内絶対x（rightAnchorXの起点。項目9はこちらのまま）
+  let prevRightExtent = null; // 直前面の寸法線類を含む右端の帯内絶対x（項目6のギャップ起点）
   let chDimX = null; // 天井高寸法線のx（先頭面のみ設定。項目9の左アンカー起点）
   faces.forEach((face, i) => {
     const boundary = faceBoundaryLocalX(face, graph);
-    xCursor = i === 0 ? 0 : prevBoundaryHi + gapModelMm - boundary.lo;
+    // QA G2: この面自身のhasWallAtLocal0（壁のない左端。項目1）が false なら、床線・天井線が
+    // 図の外側（boundary.loよりさらに左）へwallLessEndExtendModelMmぶん延長される（buildFaceFigure
+    // 側と同じ延長量。elevationFaces.jsのfaceWallLessExtents）。隣の面（prevRightExtent側）との
+    // 実間隔がgapModelMmを下回らないよう、この延長ぶんをxCursor算出に加味する。
+    const wallLessExtendMm = wallLessEndExtendModelMm ?? DEFAULT_WALL_LESS_END_EXTEND_MM;
+    const { leftExtendMm, rightExtendMm } = faceWallLessExtents(face, wallLessExtendMm);
+    // 項目6: 隣接面の間隔(gapModelMm)は壁中心線間ではなく、寸法線類（右のCH寸法を含む）の
+    // 描画範囲を基準にする——項目5で段差のある面に右CH寸法が付くと、その面のboundary.hiより
+    // さらにCH_DIM_OFFSET_MMぶん右まで描画物が伸びるため、そこを基準にしないと隣の面と重なる。
+    // 左端側（boundary.lo）は帯の先頭面（i===0）にしか左CH寸法が付かないため対象外
+    // （先頭面はそもそも「前の面」を持たずギャップ計算に登場しない）。
+    xCursor = i === 0 ? 0 : prevRightExtent + gapModelMm - boundary.lo + leftExtendMm;
 
     // 項目3: 直交壁（隣・次の面）の建具が切断位置にかかる場合の断面描画用。faces.length<2は
     // 自分自身が隣接面になってしまう退化ケースのため対象外にする（通常の閉じたループでは
@@ -69,6 +84,7 @@ export function buildRoomBand(room, graph, ctx = {}) {
     const faceCtx = {
       graph, project, room, ceilingHeight: CH, materialMap, gridCLs, faceLabelAvoidThresholdModelMm,
       prevFace, nextFace, openingTagRowModelMm, dimRowGapModelMm, gridRowGapModelMm, floorSegments,
+      wallLessEndExtendModelMm, scale,
     };
     for (const p of buildFaceFigure(face, faceCtx)) primitives.push(translatePrimitive(p, xCursor, 0));
     if (i === 0) {
@@ -78,6 +94,15 @@ export function buildRoomBand(room, graph, ctx = {}) {
       });
     }
     prevBoundaryHi = xCursor + boundary.hi;
+    // 項目5・6: この面に段差があれば右CH寸法（boundary.hi + CH_DIM_OFFSET_MM）ぶん右まで
+    // 描画物が伸びる（buildFaceFigure側の実装と同じ位置の式）。
+    // QA G2: この面自身のhasWallAtLocalRun（壁のない右端。項目1）が false なら、床線・天井線が
+    // さらにwallLessEndExtendModelMmぶん右へ延長される（rightExtendMm。上でleftExtendMmと
+    // 同時に算出済み）。項目5の右CH寸法とは独立（併発しうる）ため加算する（安全側＝実間隔が
+    // 縮む方向には効かない）。
+    prevRightExtent = prevBoundaryHi
+      + (floorSegments.length > 1 ? CH_DIM_OFFSET_MM : 0)
+      + rightExtendMm;
   });
 
   const leftAnchorX  = chDimX != null ? chDimX - triOffsetMm : null;

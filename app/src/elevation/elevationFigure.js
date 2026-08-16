@@ -21,11 +21,36 @@ import { buildOpeningElevation } from '../openings/openingElevationFigure.js';
 import { translatePrimitive } from './elevationPrimitives.js';
 import {
   ElevationLineRole, weightForRole,
-  WALL_LABEL_GAP_MM, WALL_LABEL_LINE_GAP_MM,
+  WALL_LABEL_LINE_GAP_MM,
   OPENING_TAG_RADIUS_PX, GRID_TAG_RADIUS_PX, GRID_TAG_FONT_PX,
   FACE_LABEL_FONT_PX, GRID_LINE_ABOVE_CH_MM, CANVAS_BG_COLOR, DEFAULT_FACE_LABEL_AVOID_THRESHOLD_MM,
   DEFAULT_OPENING_TAG_ROW_MM, DEFAULT_DIM_ROW_GAP_MM, DEFAULT_GRID_ROW_GAP_MM,
+  DEFAULT_WALL_LESS_END_EXTEND_MM, CH_DIM_OFFSET_MM,
 } from './elevationStyle.js';
+
+// 項目4: 壁2段書きの省略判定用テキスト幅概算。renderText（figurePrimitivesKonva.jsx）は
+// size省略時fontSize=12を使うため、ここでも同じ12pxを使う。
+// QA G1: 全角主体ラベル向けのVoidLayer.jsx方式（1文字=fontSize幅）を全文字一律で使うと、
+// 壁2段書きは「壁：PB ア)12.5」のように変換後は半角ASCII（記号・数値・アルファベット）が
+// 主体になるため幅を約1.5倍も過大概算し、通常サイズの面でも省略され気味になってしまう
+// （項目3の材名変換がほぼ描画されない事態）。文字クラス別に幅係数を分ける
+// （全角(CJK等)=1.0×fontSize、半角ASCII=0.5×fontSize）ことで、実際のグリフ幅に近い概算にする。
+const WALL_LABEL_FONT_PX = 12;
+const WALL_LABEL_HALF_WIDTH_RATIO = 0.5; // 半角ASCII(\x20-\x7e)の幅係数
+const WALL_LABEL_FULL_WIDTH_RATIO = 1.0; // 全角(CJK等。半角ASCII以外)の幅係数
+
+/**
+ * 壁2段書きラベルのテキスト幅概算(px)。文字クラス別（半角ASCII=0.5倍・それ以外(全角等)=1.0倍）に
+ * 積算する（QA G1。全角一律だと変換後の半角主体ラベルの幅を過大概算し過剰に省略されるため）。
+ * サロゲートペア文字（絵文字等）を1文字として数えるため配列展開([...text])を使う
+ * （文字コード上は想定しないが、文字数を過剰カウントしない安全側の実装として）。
+ * @param {string} text
+ * @returns {number}
+ */
+export function estimateWallLabelWidthPx(text) {
+  return [...text].reduce((w, ch) =>
+    w + (/[\x20-\x7e]/.test(ch) ? WALL_LABEL_HALF_WIDTH_RATIO : WALL_LABEL_FULL_WIDTH_RATIO), 0) * WALL_LABEL_FONT_PX;
+}
 
 // ROW1=壁芯間寸法（面ごとに1本）、ROW2=通り芯間寸法、GRID_CIRCLE_ROW=通り芯丸番号＋面ラベル、
 // OPENING_TAG_ROW=建具記号丸。ユーザー仕様の段構成「③水平寸法線・寸法値 → ④通り芯丸」どおり、
@@ -42,6 +67,19 @@ import {
 const SECTION_FRAME_W  = 40;  // 枠1本ぶんの見付幅(mm)
 const SECTION_LEAF_TH  = 40;  // 閉めた扉（断面）の厚み(mm)
 const SECTION_STRIP_MM = SECTION_FRAME_W * 2 + SECTION_LEAF_TH; // 断面帯の全幅(mm)
+
+/**
+ * 材名の展開図表示用言い換え（項目3。表示専用の変換——材マスター側のデータ（materialData.js）は
+ * 変更しない）。「せっこうボード」→「PB」（複合名「強化せっこうボード」等も部分一致で「強化PB」に
+ * なる。単純な文字列置換のため）、「t=<数値>」→「ア)<数値>」（せっこうボードに限らず全材共通。
+ * 仕様に略記の指定が無いためt=表記の変換のみ全材適用する）。
+ * @param {string} name
+ * @returns {string}
+ */
+export function formatMaterialLabel(name) {
+  if (typeof name !== 'string') return name;
+  return name.replace(/せっこうボード/g, 'PB').replace(/t=(\d+(?:\.\d+)?)/g, 'ア)$1');
+}
 
 /**
  * 巾木文字列（自由入力。RoomFinish.baseboardHeight）から高さ(mm)を解釈する。
@@ -102,6 +140,44 @@ export function avoidGridCollisionX(x, gridPoints, boundary, thresholdMm = DEFAU
     }
   }
   return bestMid;
+}
+
+/**
+ * ラベル（幅labelWidthMmの矩形とみなす）のxを、障害物区間（開口・アキ・段差縦線など）と
+ * 重ならない位置へ退避させる（項目4。avoidGridCollisionXと同系の最広ギャップ方式だが、
+ * 障害物が点ではなく幅を持つ区間である点が異なる——単純な点集合の間ではなく、区間同士を
+ * 併合してできる「空き区間」の中から最も広いものを選ぶ）。
+ * @param {number} defaultX - ラベル既定x（ローカル座標。通常は面中心）
+ * @param {Array<{lo:number, hi:number}>} obstacles - 障害物区間（ローカルx）一覧
+ * @param {{lo:number, hi:number}} boundary - 探索範囲の両端
+ * @param {number} labelWidthMm - ラベル自身の幅（衝突判定・空き区間探索の両方に使う）
+ * @returns {number}
+ */
+export function avoidObstacleRangesX(defaultX, obstacles, boundary, labelWidthMm) {
+  const halfW = labelWidthMm / 2;
+  const collides = obstacles.some(o => defaultX + halfW > o.lo && defaultX - halfW < o.hi);
+  if (!collides) return defaultX;
+
+  const sorted = [...obstacles].sort((a, b) => a.lo - b.lo);
+  const merged = [];
+  for (const o of sorted) {
+    const last = merged[merged.length - 1];
+    if (last && o.lo <= last.hi) last.hi = Math.max(last.hi, o.hi);
+    else merged.push({ ...o });
+  }
+
+  const gaps = [];
+  let cursor = boundary.lo;
+  for (const m of merged) {
+    if (m.lo > cursor) gaps.push({ lo: cursor, hi: m.lo });
+    cursor = Math.max(cursor, m.hi);
+  }
+  if (cursor < boundary.hi) gaps.push({ lo: cursor, hi: boundary.hi });
+  if (gaps.length === 0) return defaultX; // 空き区間が無ければ諦めて既定位置のまま
+
+  let best = gaps[0];
+  for (const g of gaps) if (g.hi - g.lo > best.hi - best.lo) best = g;
+  return (best.lo + best.hi) / 2;
 }
 
 /**
@@ -234,9 +310,13 @@ export function buildFaceFigure(face, ctx) {
   const {
     graph, project, room, ceilingHeight: CH, materialMap, gridCLs, faceLabelAvoidThresholdModelMm,
     prevFace, nextFace, openingTagRowModelMm, dimRowGapModelMm, gridRowGapModelMm, floorSegments,
+    wallLessEndExtendModelMm, scale,
   } = ctx;
   const run = face.run;
   const prims = [];
+  // 項目3・4: 壁2段書きの配置・省略判定でも面の壁中心線区間（boundary）が要るため、従来
+  // ROW1寸法線の直前にあった算出をここへ前倒しする（値はfaceとgraphのみに依存し不変）。
+  const boundary = faceBoundaryLocalX(face, graph);
 
   // QA C1→D1/D2: 建具記号丸(タグ)行・ROW1（壁芯間寸法行）の床線からの距離、ROW1→ROW2・
   // ROW2→通り芯丸行の行間。ctx未指定時（単体テスト等）はモジュール読み込み時に決め打ちできる
@@ -258,9 +338,23 @@ export function buildFaceFigure(face, ctx) {
   const segs = floorSegments ?? [{ loX: 0, hiX: run, floorDeltaMm: 0 }];
   // floorDeltaMm:0 を -0 にせずそのまま 0 として扱う（-0 は等値比較・テストの落とし穴になるため）。
   const floorYOf = s => (s.floorDeltaMm ? -s.floorDeltaMm : 0);
-  for (const s of segs) {
+
+  // 項目1・2: 隅に直交壁が無い面端（hasWallAtLocal0/hasWallAtLocalRun。elevationFaces.jsの
+  // snapFaceEndsToCorners参照。単体テスト等でface自体に無い場合はtrue=壁あり扱いにフォール
+  // バックし従来どおりの見た目を保つ）は「続きがある」ことを示すため床線・天井線を図の外側へ
+  // extendMmぶん延長し、端の縦線は描かない（壁が無い＝切断していないため。CUTは切断面の意味の
+  // はずなのに壁が無い端に縦線を描くのは矛盾——項目2の棚卸しで見つかった唯一の是正対象）。
+  const hasWallAtLocal0   = face.hasWallAtLocal0   ?? true;
+  const hasWallAtLocalRun = face.hasWallAtLocalRun ?? true;
+  const extendMm = wallLessEndExtendModelMm ?? DEFAULT_WALL_LESS_END_EXTEND_MM;
+  const drawnX0   = hasWallAtLocal0   ? 0   : -extendMm;
+  const drawnXRun = hasWallAtLocalRun ? run : run + extendMm;
+
+  for (const [i, s] of segs.entries()) {
     const y = floorYOf(s);
-    prims.push({ type: 'line', x1: s.loX, y1: y, x2: s.hiX, y2: y, weight: cutWeight });
+    const x1 = i === 0 ? drawnX0 : s.loX;
+    const x2 = i === segs.length - 1 ? drawnXRun : s.hiX;
+    prims.push({ type: 'line', x1, y1: y, x2, y2: y, weight: cutWeight });
   }
   for (let i = 0; i + 1 < segs.length; i++) {
     // 段差の縦線（明示指示により寸法線・寸法値は描かない）。
@@ -271,9 +365,9 @@ export function buildFaceFigure(face, ctx) {
   }
   const floorYAtStart = floorYOf(segs[0]);
   const floorYAtEnd   = floorYOf(segs[segs.length - 1]);
-  prims.push({ type: 'line', x1: 0,   y1: -CH, x2: run, y2: -CH, weight: cutWeight });
-  prims.push({ type: 'line', x1: 0,   y1: -CH, x2: 0,   y2: floorYAtStart, weight: cutWeight });
-  prims.push({ type: 'line', x1: run, y1: -CH, x2: run, y2: floorYAtEnd,   weight: cutWeight });
+  prims.push({ type: 'line', x1: drawnX0, y1: -CH, x2: drawnXRun, y2: -CH, weight: cutWeight });
+  if (hasWallAtLocal0)   prims.push({ type: 'line', x1: 0,   y1: -CH, x2: 0,   y2: floorYAtStart, weight: cutWeight });
+  if (hasWallAtLocalRun) prims.push({ type: 'line', x1: run, y1: -CH, x2: run, y2: floorYAtEnd,   weight: cutWeight });
 
   // アキ（腰壁＋垂れ壁の同時指定でできる四角い穴）
   const silhouetteWeight = weightForRole(ElevationLineRole.SILHOUETTE);
@@ -320,7 +414,7 @@ export function buildFaceFigure(face, ctx) {
     }
   }
 
-  // 巾木（h=<mm>と解釈できた場合のみ。床まで達する開口の区間は途切れさせる）
+  // 巾木（h=<mm>と解釈できた場合のみ。段差追従＝項目7。床まで達する開口の区間は途切れさせる）
   const baseboardH = parseBaseboardHeightMm(room.finish?.baseboardHeight);
   if (baseboardH != null && baseboardH < CH) {
     const floorGaps = openings
@@ -330,26 +424,71 @@ export function buildFaceFigure(face, ctx) {
         return [Math.max(0, localX - o.width / 2), Math.min(run, localX + o.width / 2)];
       })
       .sort((a, b) => a[0] - b[0]);
-    const y = -baseboardH;
-    let cursor = 0;
-    for (const [gLo, gHi] of floorGaps) {
-      if (gLo > cursor) prims.push({ type: 'line', x1: cursor, y1: y, x2: gLo, y2: y, weight: detailWeight });
-      cursor = Math.max(cursor, gHi);
+    // 項目7: 巾木は一律ではなく各床区間自身のFL（floorYOf(s)）基準に線を引く（段差追従）。
+    for (const s of segs) {
+      const y = floorYOf(s) - baseboardH;
+      let cursor = s.loX;
+      for (const [gLo, gHi] of floorGaps) {
+        const cgLo = Math.max(gLo, s.loX), cgHi = Math.min(gHi, s.hiX);
+        if (cgHi <= cgLo) continue; // この区間に重ならない開口
+        if (cgLo > cursor) prims.push({ type: 'line', x1: cursor, y1: y, x2: cgLo, y2: y, weight: detailWeight });
+        cursor = Math.max(cursor, cgHi);
+      }
+      if (cursor < s.hiX) prims.push({ type: 'line', x1: cursor, y1: y, x2: s.hiX, y2: y, weight: detailWeight });
     }
-    if (cursor < run) prims.push({ type: 'line', x1: cursor, y1: y, x2: run, y2: y, weight: detailWeight });
+    // 項目7: 段差の縦線にも巾木の側面（立ち上がり部）を表現する——「低い側」（floorYOfが
+    // 大きい方。yは上向き負のため数値が大きいほど物理的に低い）の巾木が、段差の隅で折れ返って
+    // 立ち上がり面を少し覆う様子として、段差縦線から低い側へ水平にhだけ離した位置に、低い側の
+    // 巾木高さぶん（floorY(低い側)からhだけ上まで）平行な縦線を描く（採った解釈。指示原文
+    // 「段差縦線から水平にh離した位置に平行の縦線」は方向・高さ範囲を明示しないため、返しの
+    // 見た目として最も自然な範囲=巾木高さぶんに限定した）。
+    for (let i = 0; i + 1 < segs.length; i++) {
+      const riserX = segs[i].hiX;
+      const yLeft = floorYOf(segs[i]), yRight = floorYOf(segs[i + 1]);
+      const lowerY = Math.max(yLeft, yRight);
+      const sideX = yLeft > yRight ? riserX - baseboardH : riserX + baseboardH;
+      prims.push({ type: 'line', x1: sideX, y1: lowerY, x2: sideX, y2: lowerY - baseboardH, weight: detailWeight });
+    }
   }
 
-  // 「壁：<壁材>」「<壁仕上げ材>」2段書き（材が引けない行は描かない）
+  // 「壁：<壁材>」「<壁仕上げ材>」2段書き（材が引けない行は描かない。項目3・4）。
+  // 項目3: 材名は表示専用にformatMaterialLabelで言い換える（材マスター自体は変更しない）。
+  // 項目4: 位置は原則、面の壁中心線区間の中心。開口・アキ・段差縦線と重なる場合は
+  // avoidObstacleRangesX（avoidGridCollisionXと同系の最広ギャップ方式。障害物が区間の版）で
+  // 最も広い空き区間へ退避する。巾木は対象外とした——巾木は面のほぼ全幅を覆う帯のため、
+  // 障害物に含めると「空いている場所」がほぼ無くなり退避が機能しなくなるため。
+  // 縦位置は天井線の上ではなく天井高の中央（-CH/2）に置く——避ける対象（開口・アキ等）は
+  // いずれも天井線より下にしかないため、天井線より上のままでは退避が意味を持たない。
+  // 省略: 壁中心線間の描画長さ(boundary.hi-boundary.lo)がラベル幅の2倍未満なら描画しない
+  // （狭い面での文字潰れを避ける。テキスト幅はestimateWallLabelWidthPx——文字クラス別の
+  // フォントサイズ概算（QA G1）。scale未指定＝倍率決定用の1パス目では省略判定を行わない
+  // =常に描画する。理由: 省略の有無がbounds/heightに与える影響は無視できる一方、1パス目で
+  // scaleそのものは未確定のため判定できないため）。
   const info = room.getFinishInfo();
-  const wallMaterialName = materialMap?.get(info.wallMaterial)?.name ?? null;
-  const wallFinishName   = materialMap?.get(info.wallFinish)?.name ?? null;
-  let labelY = -CH - WALL_LABEL_GAP_MM;
-  if (wallMaterialName) {
-    prims.push({ type: 'text', x: 0, y: labelY, text: `壁：${wallMaterialName}`, anchor: 'start' });
-    labelY -= WALL_LABEL_LINE_GAP_MM;
-  }
-  if (wallFinishName) {
-    prims.push({ type: 'text', x: 0, y: labelY, text: wallFinishName, anchor: 'start' });
+  const wallLabelLines = [
+    materialMap?.get(info.wallMaterial)?.name ? `壁：${formatMaterialLabel(materialMap.get(info.wallMaterial).name)}` : null,
+    materialMap?.get(info.wallFinish)?.name ? formatMaterialLabel(materialMap.get(info.wallFinish).name) : null,
+  ].filter(Boolean);
+  if (wallLabelLines.length > 0) {
+    const labelWidthPx = Math.max(...wallLabelLines.map(estimateWallLabelWidthPx));
+    const labelWidthMm = scale ? labelWidthPx / scale : 0;
+    if (boundary.hi - boundary.lo >= labelWidthMm * 2) {
+      const obstacles = [
+        ...openings.map(o => {
+          const localX = localXOf(face, o.centerCoord);
+          return { lo: localX - o.width / 2, hi: localX + o.width / 2 };
+        }),
+        ...kneeDropGapsOnFace(face, graph, CH).map(g => ({ lo: g.x, hi: g.x + g.w })),
+        ...segs.slice(0, -1).map(s => ({ lo: s.hiX, hi: s.hiX })), // 段差の縦線
+      ];
+      const labelX = avoidObstacleRangesX((boundary.lo + boundary.hi) / 2, obstacles, boundary, labelWidthMm);
+      const totalLinesHeightMm = (wallLabelLines.length - 1) * WALL_LABEL_LINE_GAP_MM;
+      let labelY = -CH / 2 - totalLinesHeightMm / 2;
+      for (const line of wallLabelLines) {
+        prims.push({ type: 'text', x: labelX, y: labelY, text: line, anchor: 'middle' });
+        labelY += WALL_LABEL_LINE_GAP_MM;
+      }
+    }
   }
 
   // 壁芯間寸法（面の両端＝壁中心線。ROW1）。項目2・6: 寸法線足(dim.foot)は廃止し、代わりに
@@ -357,7 +496,21 @@ export function buildFaceFigure(face, ctx) {
   // 項目4: 通り芯線（GRID_LINE_ABOVE_CH_MM）と同様、壁中心線も天井線より上まで突き出す
   // （y1=0ではなく-CH-GRID_LINE_ABOVE_CH_MMから始める。壁中心線も本来、床から天井を貫通して
   // 続く線のため。同じGRID_LINE_ABOVE_CH_MMを流用する）。
-  const boundary = faceBoundaryLocalX(face, graph);
+
+  // 項目5: 床に段差がある面（segs.length>1）は、図の右側にも天井高さ寸法を描く（左のCH寸法と
+  // 同じ様式=縦書き値・端部塗り丸。値は右端区間の実効CH=天井絶対高−右端区間FL）。左のCH寸法は
+  // 帯の先頭面だけに1本（elevationBand.js/elevationStair.js）だが、こちらは面ごとに判定する
+  // ——段差は面単位のプロファイルのため、段差がある面それぞれに必要になる。
+  if (segs.length > 1) {
+    const rightSeg = segs[segs.length - 1];
+    const rightChDimX = boundary.hi + CH_DIM_OFFSET_MM;
+    const rightFloorY = floorYOf(rightSeg);
+    prims.push({
+      type: 'dim', dir: 'v', at: rightChDimX, from: -CH, to: rightFloorY, foot: boundary.hi, dot: true,
+      label: Math.round(CH - rightSeg.floorDeltaMm),
+    });
+  }
+
   const centerLineTopY = -CH - GRID_LINE_ABOVE_CH_MM;
   prims.push({ type: 'line', x1: boundary.lo, y1: centerLineTopY, x2: boundary.lo, y2: dimRow1Y, dash: 'center', weight: detailWeight });
   prims.push({ type: 'line', x1: boundary.hi, y1: centerLineTopY, x2: boundary.hi, y2: dimRow1Y, dash: 'center', weight: detailWeight });

@@ -55,8 +55,10 @@ mm座標に焼き込まずアンカー点だけを持つ専用プリミティブ
 （`finish/gridCells.js`の`refreshCells`/`cellBoundsFromKey`を再利用）を壁沿いに拾い、部分指定のセル集合に含まれていればその
 `effectiveFloorLevel`差分、含まれなければ0を割り当てて区間配列にする（同値の隣接区間は結合）。`buildRoomBand`/`buildStairBand`が
 `ctx.floorSegments`として渡し（未指定時はフラット1区間）、床線は区間ごとの水平線＋段差の縦線（すべてCUT。寸法は描かない）になる。
-両端縦線も区間の床yへ追従、天井線は次節のCH調整により水平のまま。巾木・壁2段書き等は区間追従させず面全体で一律
-（面の主要区間基準。複雑化回避の意図的な割り切り）。
+両端縦線も区間の床yへ追従、天井線は次節のCH調整により水平のまま。段差がある面(`segs.length>1`)は図の右側にも左のCH寸法と同じ様式
+（縦書き値・端部塗り丸）でCH寸法を追加する（値=CH−右端区間floorDeltaMm）。これにより右へ`CH_DIM_OFFSET_MM`ぶん描画範囲が伸びるため、
+隣接面の間隔(`gapModelMm`)は壁中心線間ではなく「前の面の右CH寸法込みの右端」〜「次の面自身のboundary.lo」で確保する
+（`buildRoomBand`/`buildStairBand`の`prevRightExtent`。左側は帯先頭面にしか左CH寸法が付かないため対象外）。
 
 ## 天井高さの解決（フォールバック・部分指定の段差調整）
 `finish/roomMetrics.js`の`roomCeilingHeight(graph, room)`が仕上げ表・展開図共通の唯一の情報源。数値化できない自由入力
@@ -83,7 +85,30 @@ mm座標に焼き込まずアンカー点だけを持つ専用プリミティブ
 巾木初期値（`木製出幅木`/`h=60`）は**ユーザーがRoomを新規作成する経路でのみ**適用する（`applyDefaultBaseboard`）。
 `RoomFinish`コンストラクタでは設定しない——復元経路は「新しいRoomを作ってから空でないフィールドだけ上書きする」実装のため、
 既定値を非空にするとクリア済み`''`が復元のたびに巻き戻る。展開側は`parseBaseboardHeightMm`が`"h=<数値>"`表記だけ解釈し、
-解釈不能なら非描画。床まで達する開口の区間は巾木線を途切れさせる。
+解釈不能なら非描画。床まで達する開口の区間は巾木線を途切れさせる。巾木は床の段差にも追従する——各区間自身のfloorYOf基準に線を引き、
+段差縦線には「低い側」（`Math.max(yLeft,yRight)`。yは上向き負）へ水平にh離した位置に、その巾木高さぶんの側面線（立ち上がり部の返し）を足す。
+
+## 面端の不変条件・壁2段書き
+面端に「壁のない」隅（`snapFaceEndsToCorners`が付与する`hasWallAtLocal0`/`hasWallAtLocalRun`）は「続きがある」建築表現として床線・天井線を
+`WALL_LESS_END_EXTEND_SCREEN_MM`（2パス換算）ぶん図の外側へ延長し、その端の縦線は描かない（CUT=部屋の輪郭そのものという役割上、切断
+していない端に縦線を描くのは矛盾するため）。**判定基準は「隅に直交面が存在するか」ではなく「その直交面に実壁(`graph.walls`)があるか」**
+（`buildRoomFaces`の`hasRealWall`。QA修正——閉じた部屋の面ループでは隅に直交面自体は必ず存在するため、面の有無だけでは常にtrueになり
+発動しない。実壁の有無は`innerWallFaceAt`のnullフォールバック＝faceValueがCL芯になったかで判定する）。実際に発動する典型例は階段の
+上り口辺・下り口辺——`generateRoomWallsFromOutline`の`stairOpenings`引数（`finishBoundary.js`が`stairPortEdges`を渡す）でその辺の壁生成
+自体がスキップされる。他のCUT用途（床線・天井線・壁のある端の縦線・段差の縦線・直交壁建具断面の枠）はいずれも部屋の輪郭または明示指示に
+基づくもので、棚卸しの結果この端部縦線以外に是正対象は無かった。
+
+壁2段書き（壁材・壁仕上げ材の2行）は表示専用に`formatMaterialLabel`で言い換える（「せっこうボード」→「PB」、`t=<数値>`→`ア)<数値>`。
+材マスター自体は変更しない）。位置は原則、面の壁中心線区間の中心・天井高の中央(`-CH/2`)。開口・アキ・段差縦線と重なる場合は
+`avoidObstacleRangesX`（`avoidGridCollisionX`と同系の最広ギャップ方式。障害物が区間を持つ点だけが違う）で最も広い空き区間へ退避する
+（巾木は面のほぼ全幅を覆うため対象外）。壁中心線間の描画長さがラベル幅の概算×2未満なら描画自体を省略する（倍率決定用の1パス目は
+scale未確定のため省略判定を行わない）。**テキスト幅概算は文字クラス別**（`estimateWallLabelWidthPx`。半角ASCII=0.5×fontSize・
+全角(CJK等)=1.0×fontSize）——変換後ラベルは半角主体になるため、全角一律の概算だと幅を過大評価し通常サイズの面でも過剰に省略される
+（QA G1）。
+
+隣接面の間隔（`gapModelMm`）は、右CH寸法（前述）に加え、面自身の壁のない端（`hasWallAtLocal0/hasWallAtLocalRun`）の延長ぶんも
+加味する（`faceWallLessExtents`。`buildRoomBand`/`buildStairBand`が共有する純関数）——延長された床線・天井線が隣の面と実間隔を
+詰めないようにするため（QA G2）。
 
 defer（未実装）: 傾斜天井の作図・開口の内法寸法線・巾木見切り目地・家具設備電気・屋外部屋・展開図上の編集・印刷/PDF・
 SWITCHBACK以外の階段断面（WINDING/L_TURN/FLARED/OPEN_WELL）。

@@ -9,7 +9,7 @@ import { RoomFeature } from '@core';
 import { roomBounds } from '../finish/gridCells.js';
 import { stairPortEdges } from '../finish/stair/stairGeometry.js';
 import { floorHeightAbove } from '../finish/stair/stairDimensions.js';
-import { buildRoomFaces, faceBoundaryLocalX } from './elevationFaces.js';
+import { buildRoomFaces, faceBoundaryLocalX, faceWallLessExtents } from './elevationFaces.js';
 import { buildFaceFigure } from './elevationFigure.js';
 import { wallAdjacentFloorSegments } from './elevationFloorProfile.js';
 import { buildSwitchbackSectionPrimitives } from './elevationStairSection.js';
@@ -17,7 +17,7 @@ import { roomCeilingHeight } from '../finish/roomMetrics.js';
 import { figureBounds } from '../structural/sectionFigure/sectionGeometry.js';
 import {
   DEFAULT_FACE_GAP_MM, CH_DIM_OFFSET_MM, DEFAULT_TRIANGLE_OFFSET_MM, BAND_TOP_MARGIN_MM,
-  ElevationLineRole, weightForRole,
+  ElevationLineRole, weightForRole, DEFAULT_WALL_LESS_END_EXTEND_MM,
 } from './elevationStyle.js';
 import { translatePrimitive, collectGridCLs, appendRoomNameFrame } from './elevationPrimitives.js';
 
@@ -98,6 +98,8 @@ export function buildStairBand(stairRoom, graph, upperGraph, ctx = {}) {
   const openingTagRowModelMm = ctx.openingTagRowModelMm; // 未指定はbuildFaceFigure既定(QA C1)
   const dimRowGapModelMm     = ctx.dimRowGapModelMm;      // 未指定はbuildFaceFigure既定(QA C1/D2)
   const gridRowGapModelMm    = ctx.gridRowGapModelMm;     // 未指定はbuildFaceFigure既定(QA D1)
+  const wallLessEndExtendModelMm = ctx.wallLessEndExtendModelMm; // 未指定はbuildFaceFigure既定(項目1)
+  const scale = ctx.scale; // 未指定はbuildFaceFigure既定=壁2段書き省略判定を行わない（項目4）
 
   let faces = buildRoomFaces(stairRoom, graph);
   if (stair && faces.length > 0) {
@@ -116,10 +118,16 @@ export function buildStairBand(stairRoom, graph, upperGraph, ctx = {}) {
   const faceRuns = [];
   let xCursor = 0;
   let prevBoundaryHi = null; // 直前面の壁中心線(hi側)の帯内絶対x（buildRoomBandと同じ配置規則）
+  let prevRightExtent = null; // 直前面の寸法線類を含む右端の帯内絶対x（項目6。elevationBand.jsと同じ）
   let chDimX = null; // 天井高寸法線のx（先頭面のみ設定。項目9の左アンカー起点）
   faces.forEach((face, i) => {
     const boundary = faceBoundaryLocalX(face, graph);
-    xCursor = i === 0 ? 0 : prevBoundaryHi + gapModelMm - boundary.lo;
+    // QA G2: elevationBand.jsと同じ理由（ヘッダコメント参照）。壁のない左右端の延長ぶんを加味する
+    // （elevationFaces.jsのfaceWallLessExtents。elevationBand.jsと共有する純関数）。
+    const wallLessExtendMm = wallLessEndExtendModelMm ?? DEFAULT_WALL_LESS_END_EXTEND_MM;
+    const { leftExtendMm, rightExtendMm } = faceWallLessExtents(face, wallLessExtendMm);
+    // 項目6: elevationBand.jsと同じ理由（ヘッダコメント参照）。
+    xCursor = i === 0 ? 0 : prevRightExtent + gapModelMm - boundary.lo + leftExtendMm;
 
     // 項目3: elevationBand.jsと同じ理由・同じガード（ヘッダコメント参照）。
     const prevFace = faces.length >= 2 ? faces[(i - 1 + faces.length) % faces.length] : null;
@@ -130,6 +138,7 @@ export function buildStairBand(stairRoom, graph, upperGraph, ctx = {}) {
     const faceCtx = {
       graph, project, room: stairRoom, ceilingHeight: CH, materialMap, gridCLs, faceLabelAvoidThresholdModelMm,
       prevFace, nextFace, openingTagRowModelMm, dimRowGapModelMm, gridRowGapModelMm, floorSegments,
+      wallLessEndExtendModelMm, scale,
     };
     for (const p of buildFaceFigure(face, faceCtx)) primitives.push(translatePrimitive(p, xCursor, 0));
     if (i === 0) {
@@ -140,6 +149,9 @@ export function buildStairBand(stairRoom, graph, upperGraph, ctx = {}) {
     }
     faceRuns.push({ face, xCursor });
     prevBoundaryHi = xCursor + boundary.hi;
+    prevRightExtent = prevBoundaryHi
+      + (floorSegments.length > 1 ? CH_DIM_OFFSET_MM : 0)
+      + rightExtendMm;
   });
 
   // 上階（吹抜け部でクリップ）: 上階FL線（CUT）を重ねて引き、両端縦線をCHから

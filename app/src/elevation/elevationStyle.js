@@ -33,8 +33,8 @@ export const DEFAULT_FACE_GAP_MM = 200;  // 面間隙間の仮値（倍率決定
 export const DEFAULT_NAME_GAP_MM = 500;  // 部屋名枠の上余白の仮値（倍率決定用の1パス目にのみ使う。QA G5と同じ2パス方式）
 export const BAND_GAP_MM         = 600;  // 帯（部屋）同士の縦の隙間
 export const CH_DIM_OFFSET_MM    = 500;  // 天井高寸法の先頭面境界CLからのオフセット
-export const WALL_LABEL_GAP_MM       = 250; // 壁材2段書き: 天井線からのオフセット（openingElevationFigure.jsのat:-250方式）
-export const WALL_LABEL_LINE_GAP_MM  = 150; // 壁材2段書き: 1段目と2段目の行間
+export const WALL_LABEL_LINE_GAP_MM  = 150; // 壁材2段書き: 1段目と2段目の行間（項目4で天井線基準の
+// オフセット(WALL_LABEL_GAP_MM)は廃止——位置は面中心(-CH/2)基準＋障害物退避に変更した）
 // DIM_ROW_GAP_MM/GRID_ROW_GAP_MM（旧: モデルmm固定値）はQA D1/D2で廃止した。ROW1・ROW2・
 // 通り芯丸+面ラベル行は全て、通り芯丸(GRID_TAG_RADIUS_PX=11px)・面ラベル(FACE_LABEL_FONT_PX=13px)
 // というスクリーン固定サイズの要素を載せる行のため、床線→水平寸法列(ROW1)までの距離は
@@ -78,6 +78,12 @@ export const DEFAULT_TRIANGLE_OFFSET_MM = 300; // 倍率決定用の1パス目�
 // clampFaceOffset）だけに効く画面表示上の余白のため、buildRoomBand/buildFaceFigureのctxには
 // 通さない（band.leftAnchorX自体は従来どおり「天井高寸法線の外側」の位置を指し続ける）。
 export const LEFT_MARGIN_SCREEN_MM = 15;
+
+// 壁のない端部（隅に直交壁が無い面端。上り口・隣室への開放等）で床線・天井線を図の外側へ
+// 延長する量（実画面mm。項目1。「続きがある」ことを示す建築表現）。tag等と同じくスクリーン
+// 固定サイズの見た目を保つため2パス機構に乗せる。
+export const WALL_LESS_END_EXTEND_SCREEN_MM = 5;
+export const DEFAULT_WALL_LESS_END_EXTEND_MM = 150; // 倍率決定用の1パス目の仮値
 
 // ---- 注記帯の行位置（実画面mm。QA C1→D1/D2で全面改訂） ----
 // 建具記号丸(tag。半径16px)・通り芯丸(半径11px)・面ラベル(13px)は、どれもOPENING_TAG_RADIUS_PX/

@@ -38,8 +38,17 @@ const DIR_SIGN = { A: 1, B: 1, C: -1, D: -1 };
  * 各面の端座標を、同じ直交CL上にある直交面の faceValue（壁の室内側仕上げ面）へ詰める
  * （＝仕上げ面から仕上げ面までの有効長さにする）。対応する直交面が無い辺はCL芯のまま
  * （faces 由来の元の lo/hi を保持）。
- * @param {object[]} faces - letter/dirSign/faceValue/lo/hi/startCLId/endCLId/axisCL を持つ面リスト
- * @returns {object[]} lo/hi/run/originWorld を詰め直した新しい配列（他フィールドは同一参照）
+ *
+ * QA修正: 閉じた部屋の面ループでは隅に直交「面」（buildRoomFaces が返す幾何セグメント）は
+ * 常に存在する——「壁のない端部」（上り口・隣室への開放等）とは、隅に直交面が無いことではなく
+ * その直交面に**実壁（graph.walls）が無い**ことを指す（階段の上り口辺・壁生成がスキップされた
+ * 辺では、面自体は存在してもfaceValueがinnerWallFaceAtのnullフォールバックでCL芯になる。
+ * raw面のhasRealWallフィールド。buildRoomFaces参照）。そのため対応関係の判定は「直交面が存在し
+ * かつその直交面がhasRealWall」に変更した——hasWallAtLocal0/hasWallAtLocalRunとして面のローカル
+ * 座標系（0/run）向けに公開する。
+ * @param {object[]} faces - letter/dirSign/faceValue/hasRealWall/lo/hi/startCLId/endCLId/axisCL を持つ面リスト
+ * @returns {object[]} lo/hi/run/originWorld を詰め直し、hasWallAtLocal0/hasWallAtLocalRunを
+ *   追加した新しい配列（他フィールドは同一参照）
  */
 export function snapFaceEndsToCorners(faces) {
   const byAxisCLId = new Map();
@@ -50,7 +59,18 @@ export function snapFaceEndsToCorners(faces) {
     const endFace   = byAxisCLId.get(f.endCLId);
     const lo = startFace ? startFace.faceValue : f.lo;
     const hi = endFace   ? endFace.faceValue   : f.hi;
-    return { ...f, lo, hi, run: hi - lo, originWorld: f.dirSign > 0 ? lo : hi };
+    // startCLIdは常に世界座標loを、endCLIdは常に世界座標hiを決める（上のlo/hi代入と対）。
+    // ローカル座標0/runへの対応はdirSignの符号で反転する（dirSign>0: lo→0・hi→run、
+    // dirSign<0: hi→0・lo→run。originWorldの定義=`dirSign>0?lo:hi`と表裏の関係）。
+    // 「壁あり」＝対応する直交面が存在し、かつその面に実壁がある（hasRealWall。未設定なら
+    // trueへフォールバック——合成faceを使う既存の単体テスト後方互換のため）。
+    const hasWallAtLo = !!startFace && (startFace.hasRealWall ?? true);
+    const hasWallAtHi = !!endFace   && (endFace.hasRealWall   ?? true);
+    return {
+      ...f, lo, hi, run: hi - lo, originWorld: f.dirSign > 0 ? lo : hi,
+      hasWallAtLocal0:   f.dirSign > 0 ? hasWallAtLo : hasWallAtHi,
+      hasWallAtLocalRun: f.dirSign > 0 ? hasWallAtHi : hasWallAtLo,
+    };
   });
 }
 
@@ -59,14 +79,36 @@ export function snapFaceEndsToCorners(faces) {
 function exitCLId(f) { return f.dirSign > 0 ? f.endCLId : f.startCLId; }
 
 /**
+ * 隣接面ギャップ算出用: この面の「壁のない端部の延長」ぶんの左右オフセット(mm)（QA G2）。
+ * buildFaceFigureは面端に対応する直交壁が無ければ（hasWallAtLocal0/hasWallAtLocalRunがfalse）
+ * 床線・天井線をwallLessExtendMmぶん図の外側へ延長する（項目1）。buildRoomBand/buildStairBandは
+ * 隣接面との実間隔がgapModelMmを下回らないよう、xCursor・prevRightExtentの算出にこの延長ぶんを
+ * 加味する必要がある——本関数はその加味すべきオフセットだけを返す純関数（面自体もctxも
+ * 変更しない）。フィールドが無ければtrue（壁あり）扱いにフォールバックする
+ * （buildFaceFigureの`face.hasWallAtLocal0 ?? true`と同じ規約）。
+ * @param {{hasWallAtLocal0?:boolean, hasWallAtLocalRun?:boolean}} face
+ * @param {number} wallLessExtendMm
+ * @returns {{leftExtendMm:number, rightExtendMm:number}}
+ */
+export function faceWallLessExtents(face, wallLessExtendMm) {
+  return {
+    leftExtendMm:  (face.hasWallAtLocal0   ?? true) ? 0 : wallLessExtendMm,
+    rightExtendMm: (face.hasWallAtLocalRun ?? true) ? 0 : wallLessExtendMm,
+  };
+}
+
+/**
  * 部屋 → 壁面（A/B/C/D。L字は同letter複数面へ分割。ラベルはB1/B2方式）のリスト。
  * 返り値は実際の外周を時計回りに1周した順（L字で letter が interleave する場合も
  * 隣接要素が世界座標で隅を共有する＝buildRoomFaces の不変条件）。
  * @param {import('@core').Room} room
  * @param {object} graph
  * @returns {Array<{id:string, label:string, letter:string, isVertical:boolean, axisCL:object,
- *   inward:number, faceValue:number, lo:number, hi:number, run:number, dirSign:number,
- *   originWorld:number, startCLId:string, endCLId:string}>}
+ *   inward:number, faceValue:number, hasRealWall:boolean, lo:number, hi:number, run:number,
+ *   dirSign:number, originWorld:number, startCLId:string, endCLId:string,
+ *   hasWallAtLocal0:boolean, hasWallAtLocalRun:boolean}>} hasRealWallはこの面自身の軸区間に
+ *   実壁（graph.walls）があるか（無ければfaceValueはCL芯へフォールバック——階段の上り口辺等、
+ *   generateRoomWallsFromOutlineがstairOpenings指定で壁生成をスキップした辺はfalseになる）。
  */
 export function buildRoomFaces(room, graph) {
   // axisCLId ごとにグループ化してから mergeSegments する（wallGeneration.js の各生成関数と同じ
@@ -94,11 +136,17 @@ export function buildRoomFaces(room, graph) {
     const dirSign = DIR_SIGN[letter];
     const lo = Math.min(startCL.value, endCL.value);
     const hi = Math.max(startCL.value, endCL.value);
-    const faceValue = innerWallFaceAt(graph, axisCL, { isVertical: seg.isVertical, inward, spanLo: lo, spanHi: hi })
-      ?? axisCL.effectiveValue;
+    const innerFace = innerWallFaceAt(graph, axisCL, { isVertical: seg.isVertical, inward, spanLo: lo, spanHi: hi });
+    // QA修正: innerWallFaceAtがnull（この軸区間に実壁=graph.wallsが無い）でCL芯へ
+    // フォールバックしたかをhasRealWallとして記録する（wallFaces.jsのfaceRectのhasWallと
+    // 同じ考え方。stairOpenings指定でgenerateRoomWallsFromOutlineが壁生成をスキップした辺は
+    // ここが常にfalseになる）。snapFaceEndsToCornersがhasWallAtLocal0/hasWallAtLocalRunの
+    // 判定に使う。
+    const hasRealWall = innerFace != null;
+    const faceValue = innerFace ?? axisCL.effectiveValue;
 
     raw.push({
-      letter, dirSign, isVertical: seg.isVertical, axisCL, inward, faceValue,
+      letter, dirSign, isVertical: seg.isVertical, axisCL, inward, faceValue, hasRealWall,
       lo, hi, run: hi - lo, originWorld: dirSign > 0 ? lo : hi,
       startCLId: seg.startCLId, endCLId: seg.endCLId,
     });

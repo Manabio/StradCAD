@@ -8,7 +8,7 @@ import { buildRoomBand } from './elevationBand.js';
 import { buildRoomFaces, faceBoundaryLocalX } from './elevationFaces.js';
 import { layoutBands, bandContentOriginMm } from './elevationLayout.js';
 import { figureBounds } from '../structural/sectionFigure/sectionGeometry.js';
-import { BAND_TOP_MARGIN_MM, BAND_GAP_MM } from './elevationStyle.js';
+import { BAND_TOP_MARGIN_MM, BAND_GAP_MM, CH_DIM_OFFSET_MM } from './elevationStyle.js';
 
 function makeGraph() {
   const plane = new Plane('p1', 0, '1階', 1, 1);
@@ -347,4 +347,99 @@ test('【項目4・結合】buildRoomBand: 部分指定（floorLevel+300）が�
   assert.equal(floorHorizontals.length, 2, '面Aの床の水平CUT線は段差で2本に分かれるはず');
   assert.ok(floorHorizontals.some(l => l.y1 === -300), '右区間の床線はy=-300にあるはず');
   assert.ok(floorHorizontals.some(l => l.y1 === 0), '左区間の床線はy=0のままのはず');
+});
+
+// ---- 項目6(結合): 段差で右CH寸法が付く面は、その寸法込みの右端を基準に次の面とのギャップになる ----
+test('【項目6】buildRoomBand: 段差で右CH寸法が付く面Aは、寸法込みの右端を基準に面BとのギャップがgapModelMmになる', () => {
+  const graph = makeGraph();
+  // x0-xa-xb-x1(3列) × y0-y1(1行)。中央列だけを部分指定にすると、面A(上)・面C(下)だけが
+  // 3区間の段差を持ち、面B(右)・面D(左)は段差の影響を受けない（中央列はB/Dのどちらにも接しない）
+  // ため、面A→面Bのギャップだけを段差の影響下で単純に検証できる。
+  const x0 = graph.addCenterLine(CenterLineType.VERTICAL, 0,    { labeled: false, discipline: Discipline.ARCH });
+  const xa = graph.addCenterLine(CenterLineType.VERTICAL, 1500, { labeled: false, discipline: Discipline.ARCH });
+  const xb = graph.addCenterLine(CenterLineType.VERTICAL, 2500, { labeled: false, discipline: Discipline.ARCH });
+  const x1 = graph.addCenterLine(CenterLineType.VERTICAL, 4000, { labeled: false, discipline: Discipline.ARCH });
+  const y0 = graph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: false, discipline: Discipline.ARCH });
+  const y1 = graph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: false, discipline: Discipline.ARCH });
+  const leftKey  = `${x0.id}:${y0.id}:${xa.id}:${y1.id}`;
+  const midKey   = `${xa.id}:${y0.id}:${xb.id}:${y1.id}`;
+  const rightKey = `${xb.id}:${y0.id}:${x1.id}:${y1.id}`;
+  const room = graph.addRoom(new Set([leftKey, midKey, rightKey]), 'LDK');
+  generateRoomWallsFromOutline(graph, room);
+  const child = graph.addRoom(new Set([midKey]), '小上がり', undefined, new Set([room.id]));
+  child.setFloorLevel(300);
+
+  const gapModelMm = 321;
+  const band = buildRoomBand(room, graph, { gapModelMm });
+  const faces = buildRoomFaces(room, graph);
+  const faceA = faces.find(f => f.label === 'A');
+  const faceB = faces.find(f => f.label === 'B');
+  const boundaryA = faceBoundaryLocalX(faceA, graph);
+  const boundaryB = faceBoundaryLocalX(faceB, graph);
+
+  // ROW1寸法(dir:'h', dot:true)は面ごとに1本。帯内でband-space順に並ぶため、fromの昇順で
+  // 先頭2件が面A・面Bのものになる（面Aは先頭面=xCursor0のため、boundaryA.loそのものになるはず）。
+  const rowDims = band.primitives.filter(p => p.type === 'dim' && p.dir === 'h' && p.dot === true)
+    .sort((a, b) => a.from - b.from);
+  assert.ok(Math.abs(rowDims[0].from - boundaryA.lo) < 1e-6, '前提: 先頭のROW1寸法は面Aのものであるはず');
+  const xCursorB = rowDims[1].from - boundaryB.lo;
+
+  // 面Aの右CH寸法（項目5。dir:'v'のうち、左CH寸法(foot:0固定)ではない方=foot!==0で識別できる）。
+  const rightChDimA = band.primitives.find(p => p.type === 'dim' && p.dir === 'v' && p.foot !== 0);
+  assert.ok(rightChDimA, '面Aに右CH寸法（項目5）が付いているはず');
+
+  const expectedXCursorB = rightChDimA.at + gapModelMm - boundaryB.lo;
+  assert.ok(Math.abs(xCursorB - expectedXCursorB) < 1e-6,
+    `面Bのxカーソル(${xCursorB})は、面Aの右CH寸法込みの右端(${rightChDimA.at})基準のギャップ(${gapModelMm})から求まる値(${expectedXCursorB})と一致するはず`);
+
+  // 対比: 旧方式（壁中心線=boundaryA.hi基準）だったら、CH_DIM_OFFSET_MMぶん左（狭い側）に
+  // なっていたはず——実際はそれより右にあり、寸法込みの間隔が確保されていることを確認する。
+  const oldStyleXCursorB = boundaryA.hi + gapModelMm - boundaryB.lo;
+  assert.ok(Math.abs(xCursorB - oldStyleXCursorB - CH_DIM_OFFSET_MM) < 1e-6,
+    '新方式は旧方式(壁中心線基準)よりちょうどCH_DIM_OFFSET_MMぶん右にずれるはず');
+});
+
+// ---- QA G2（実グラフでのblack-box確認）: 壁のない端部（上り口辺）を挟む面同士でも、
+// buildRoomBandが実際にwallLessEndExtendModelMmぶんxカーソルを押し出すことを確認する ----
+// A面（上辺）の壁生成をstairOpenings指定でスキップした部屋と、そうでない通常の部屋とで
+// buildRoomBandの出力を比較する（同一ジオメトリ・同一ctx。壁生成の有無だけが違う）。
+// A⇔B隅がA面の実壁欠如でhasWallAtLocal0=false（B面）になるはずなので、面BのxカーソルはA面の
+// 通常時よりwallLessEndExtendModelMmぶん右へ押し出されるはず（buildRoomBand自体の配線=
+// faceWallLessExtents呼び出しを経由しないと再現しないため、内部の純関数呼び出しに依存しない
+// 完全なblack-boxテストになる）。
+function makeGraphAndRectRoom(wallLessTopEdge) {
+  const graph = makeGraph();
+  const x0 = graph.addCenterLine(CenterLineType.VERTICAL, 0,    { labeled: false, discipline: Discipline.ARCH });
+  const x1 = graph.addCenterLine(CenterLineType.VERTICAL, 4000, { labeled: false, discipline: Discipline.ARCH });
+  const y0 = graph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: false, discipline: Discipline.ARCH });
+  const y1 = graph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: false, discipline: Discipline.ARCH });
+  const key = `${x0.id}:${y0.id}:${x1.id}:${y1.id}`;
+  const room = graph.addRoom(new Set([key]), 'R');
+  const stairOpenings = wallLessTopEdge
+    ? [{ isVertical: false, value: y0.effectiveValue, lo: x0.effectiveValue - 1, hi: x1.effectiveValue + 1 }]
+    : [];
+  generateRoomWallsFromOutline(graph, room, {}, stairOpenings);
+  return { graph, room };
+}
+
+test('【QA G2・実グラフ】buildRoomBand: 上り口辺（壁生成スキップ）を挟む面Bのxカーソルは、通常時よりwallLessEndExtendModelMmぶん押し出される', () => {
+  const gapModelMm = 900, wallLessEndExtendModelMm = 150;
+  const normal   = makeGraphAndRectRoom(false);
+  const wallLess = makeGraphAndRectRoom(true);
+
+  const bandNormal   = buildRoomBand(normal.room,   normal.graph,   { gapModelMm, wallLessEndExtendModelMm });
+  const bandWallLess = buildRoomBand(wallLess.room, wallLess.graph, { gapModelMm, wallLessEndExtendModelMm });
+
+  // ROW1寸法(dir:'h', dot:true)は面ごとに1本、fromの昇順で面A→B→C→D。2番目=面Bのfromを比較する
+  // （面Bの寸法は常に描かれる=hasWallAtLocal0の影響を受けない。壁なしによる位置ズレだけを見る）。
+  const rowDimsNormal   = bandNormal.primitives.filter(p => p.type === 'dim' && p.dir === 'h' && p.dot === true)
+    .sort((a, b) => a.from - b.from);
+  const rowDimsWallLess = bandWallLess.primitives.filter(p => p.type === 'dim' && p.dir === 'h' && p.dot === true)
+    .sort((a, b) => a.from - b.from);
+  assert.equal(rowDimsNormal.length, 4);
+  assert.equal(rowDimsWallLess.length, 4);
+
+  const diff = rowDimsWallLess[1].from - rowDimsNormal[1].from;
+  assert.equal(diff, wallLessEndExtendModelMm,
+    `壁なし辺を挟む面Bのxカーソルは、通常時よりちょうどwallLessEndExtendModelMm(${wallLessEndExtendModelMm})ぶん右にずれるはず（実際の差: ${diff}）`);
 });

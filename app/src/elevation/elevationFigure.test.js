@@ -3,15 +3,18 @@
 // （純関数のロジック検証が目的で、graph実体の生成コストを避ける）。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { edgeKey, OpeningCategory, CenterLineType } from '@core';
+import { edgeKey, OpeningCategory, CenterLineType, Plane, PlanGraph, Discipline } from '@core';
+import { generateRoomWallsFromOutline } from '../finish/wallGeneration.js';
 import {
   buildFaceFigure, kneeDropGapsOnFace, parseBaseboardHeightMm, avoidGridCollisionX,
-  openingsReachingCorner,
+  openingsReachingCorner, formatMaterialLabel, avoidObstacleRangesX, estimateWallLabelWidthPx,
 } from './elevationFigure.js';
+import { buildRoomFaces as realBuildRoomFaces } from './elevationFaces.js';
 import {
   GRID_LINE_ABOVE_CH_MM, CANVAS_BG_COLOR, DEFAULT_FACE_LABEL_AVOID_THRESHOLD_MM,
   DEFAULT_OPENING_TAG_ROW_MM, OPENING_TAG_ROW_SCREEN_MM, OPENING_TAG_RADIUS_PX,
   DIM_ROW_GAP_SCREEN_MM, GRID_ROW_GAP_SCREEN_MM, GRID_TAG_RADIUS_PX,
+  DEFAULT_WALL_LESS_END_EXTEND_MM,
 } from './elevationStyle.js';
 import { screenMmToModelMm, horizontalDimLabelBox } from './elevationLayout.js';
 import { DEFAULT_PX_PER_MM } from '../viewport.js';
@@ -41,12 +44,150 @@ function baseCtx(overrides = {}) {
   };
 }
 
+// ---- 項目3: 材名の展開図表示用言い換え（表示専用。マスターデータは変更しない） ----
+test('formatMaterialLabel: 「せっこうボード」→「PB」、「t=<数値>」→「ア)<数値>」に変換する', () => {
+  // 各パターンを独立に置換するだけ（トークン間の空白はそのまま保持される）。
+  assert.equal(formatMaterialLabel('せっこうボード t=12.5'), 'PB ア)12.5');
+  assert.equal(formatMaterialLabel('強化せっこうボード t=15'), '強化PB ア)15');
+  assert.equal(formatMaterialLabel('RC壁 t=150'), 'RC壁 ア)150');
+});
+
+// ---- 失敗系: 対象パターンを含まない材名・非文字列はそのまま（変換対象が無ければ何もしない） ----
+test('【失敗系】formatMaterialLabel: t=表記もせっこうボードも含まない材名はそのまま返す', () => {
+  assert.equal(formatMaterialLabel('ラワン合板'), 'ラワン合板');
+  assert.equal(formatMaterialLabel(null), null);
+  assert.equal(formatMaterialLabel(undefined), undefined);
+});
+
+// ---- 項目4: 障害物区間を避けた最広ギャップへの退避 ----
+test('avoidObstacleRangesX: 既定xが障害物と重なれば、障害物区間を併合した最も広い空き区間の中心へ退避する', () => {
+  const boundary = { lo: 0, hi: 4000 };
+  // 既定x=2000(中心)が障害物[1800,2200]と重なる。空き区間は[0,1800](幅1800)と[2200,4000](幅1800)で
+  // 同点——avoidGridCollisionXと同じ「先に見つかった方」規則で[0,1800]の中心=900になるはず。
+  const obstacles = [{ lo: 1800, hi: 2200 }];
+  assert.equal(avoidObstacleRangesX(2000, obstacles, boundary, 100), 900);
+});
+
+test('avoidObstacleRangesX: 複数の重なる障害物は併合してから空き区間を探す', () => {
+  const boundary = { lo: 0, hi: 4000 };
+  // 障害物[1500,2200]と[2100,2600]は重なるため併合され[1500,2600]になる。既定x=2000はこれと重なる。
+  // 空き区間は[0,1500](幅1500)と[2600,4000](幅1400)——広い方[0,1500]の中心=750。
+  const obstacles = [{ lo: 1500, hi: 2200 }, { lo: 2100, hi: 2600 }];
+  assert.equal(avoidObstacleRangesX(2000, obstacles, boundary, 100), 750);
+});
+
+// ---- 失敗系: 既定xが障害物と重ならなければ動かさない ----
+test('【失敗系】avoidObstacleRangesX: 既定xが障害物と重ならなければ既定xのまま返す', () => {
+  const boundary = { lo: 0, hi: 4000 };
+  const obstacles = [{ lo: 0, hi: 500 }, { lo: 3500, hi: 4000 }];
+  assert.equal(avoidObstacleRangesX(2000, obstacles, boundary, 100), 2000);
+});
+
+// ---- 失敗系: 障害物が空なら常に既定xのまま ----
+test('【失敗系】avoidObstacleRangesX: 障害物が空なら常に既定xを返す', () => {
+  assert.equal(avoidObstacleRangesX(2000, [], { lo: 0, hi: 4000 }, 100), 2000);
+});
+
 // ---- CUT本数（床1天井1端2） ----
 test('buildFaceFigure: 床線1・天井線1・両端縦線2の計4本のCUT(太)線が出る', () => {
   const face = makeFace();
   const prims = buildFaceFigure(face, baseCtx());
   const cutLines = prims.filter(p => p.type === 'line' && p.weight === 'thick');
   assert.equal(cutLines.length, 4);
+});
+
+// ---- 項目1・2: 壁のない端部（hasWallAtLocal0/Run=false）は床線・天井線を延長し端の縦線は描かない ----
+test('【項目1】buildFaceFigure: hasWallAtLocal0=falseの面は左端の縦線を描かず、床線・天井線がx=-extendMmまで延長される', () => {
+  const face = makeFace({ hasWallAtLocal0: false, hasWallAtLocalRun: true });
+  const ctx = baseCtx({ wallLessEndExtendModelMm: 200 });
+  const prims = buildFaceFigure(face, ctx);
+  const cutLines = prims.filter(p => p.type === 'line' && p.weight === 'thick');
+
+  assert.equal(cutLines.length, 3, '左端の縦線が無いぶん3本のはず（右端の縦線は残る）');
+  assert.ok(!cutLines.some(l => l.x1 === 0 && l.x2 === 0), '左端(x=0)の縦線は描かないはず');
+  assert.ok(cutLines.some(l => l.x1 === face.run && l.x2 === face.run), '右端(x=run)の縦線は残るはず');
+  const floorLine = cutLines.find(l => l.y1 === l.y2 && l.y1 === 0);
+  const ceilLine  = cutLines.find(l => l.y1 === l.y2 && l.y1 === -2400);
+  assert.equal(floorLine.x1, -200, '床線の左端はx=-extendMm(-200)まで延長されるはず');
+  assert.equal(ceilLine.x1, -200, '天井線の左端はx=-extendMm(-200)まで延長されるはず');
+  assert.equal(floorLine.x2, face.run, '床線の右端は壁があるためrunのまま');
+  assert.equal(ceilLine.x2, face.run, '天井線の右端は壁があるためrunのまま');
+});
+
+test('【項目1】buildFaceFigure: hasWallAtLocalRun=falseの面は右端の縦線を描かず、床線・天井線がx=run+extendMmまで延長される', () => {
+  const face = makeFace({ hasWallAtLocal0: true, hasWallAtLocalRun: false });
+  const ctx = baseCtx({ wallLessEndExtendModelMm: 200 });
+  const prims = buildFaceFigure(face, ctx);
+  const cutLines = prims.filter(p => p.type === 'line' && p.weight === 'thick');
+
+  assert.equal(cutLines.length, 3);
+  assert.ok(!cutLines.some(l => l.x1 === face.run && l.x2 === face.run), '右端の縦線は描かないはず');
+  assert.ok(cutLines.some(l => l.x1 === 0 && l.x2 === 0), '左端の縦線は残るはず');
+  const floorLine = cutLines.find(l => l.y1 === l.y2 && l.y1 === 0);
+  assert.equal(floorLine.x2, face.run + 200, '床線の右端はx=run+extendMmまで延長されるはず');
+});
+
+test('【項目1】buildFaceFigure: 両端とも壁が無い面は縦線が0本、床線・天井線が両側とも延長される', () => {
+  const face = makeFace({ hasWallAtLocal0: false, hasWallAtLocalRun: false });
+  const ctx = baseCtx({ wallLessEndExtendModelMm: 200 });
+  const prims = buildFaceFigure(face, ctx);
+  const cutLines = prims.filter(p => p.type === 'line' && p.weight === 'thick');
+
+  assert.equal(cutLines.length, 2, '床線・天井線の2本だけのはず（縦線は0本）');
+  const floorLine = cutLines.find(l => l.y1 === l.y2 && l.y1 === 0);
+  assert.equal(floorLine.x1, -200);
+  assert.equal(floorLine.x2, face.run + 200);
+});
+
+// ---- 失敗系: wallLessEndExtendModelMm省略時はDEFAULT_WALL_LESS_END_EXTEND_MMへフォールバックする ----
+test('【失敗系・項目1】buildFaceFigure: wallLessEndExtendModelMm省略時はDEFAULT_WALL_LESS_END_EXTEND_MMを使う', () => {
+  const face = makeFace({ hasWallAtLocal0: false });
+  const prims = buildFaceFigure(face, baseCtx());
+  const floorLine = prims.find(p => p.type === 'line' && p.weight === 'thick' && p.y1 === p.y2 && p.y1 === 0);
+  assert.equal(floorLine.x1, -DEFAULT_WALL_LESS_END_EXTEND_MM);
+});
+
+// ---- 失敗系: hasWallAtLocal0/Run省略時（フィールド自体が無い）はtrue扱いで従来どおり4本 ----
+test('【失敗系・項目1】buildFaceFigure: faceにhasWallAtLocal0/hasWallAtLocalRunが無ければtrue扱い（従来どおり）', () => {
+  const face = makeFace(); // hasWallAtLocal0/hasWallAtLocalRun未設定
+  const prims = buildFaceFigure(face, baseCtx({ wallLessEndExtendModelMm: 200 }));
+  const cutLines = prims.filter(p => p.type === 'line' && p.weight === 'thick');
+  assert.equal(cutLines.length, 4, 'face側にフィールドが無ければ壁あり扱いで従来どおり4本のはず');
+});
+
+// ---- QA修正（実グラフでの発動確認）: buildRoomFaces由来の実faceでも続き表現が出る ----
+// このファイルは通常フェイクgraph/roomを使う方針だが、この1件だけは実Plane/PlanGraph+
+// 実finish/wallGeneration.jsを使う（elevationFaces.test.js/elevationBand.test.jsと同じ方針）
+// ——hasWallAtLocal0/Runが実グラフで実際にfalseになる経路（stairOpeningsによる壁生成スキップ）を
+// 経由したface自体を使わないと、「実アプリで発動するか」を検証したことにならないため。
+test('【QA修正】buildFaceFigure: 実グラフの上り口辺（壁生成スキップ）由来のfaceは続き表現（延長・端縦線省略）が実際に出る', () => {
+  const plane = new Plane('p1', 0, '1階', 1, 1);
+  const graph = new PlanGraph(plane);
+  const addCL = (type, value) => graph.addCenterLine(type, value, { labeled: false, discipline: Discipline.ARCH });
+  const x0 = addCL(CenterLineType.VERTICAL, 0);
+  const x1 = addCL(CenterLineType.VERTICAL, 4000);
+  const y0 = addCL(CenterLineType.HORIZONTAL, 0);
+  const y1 = addCL(CenterLineType.HORIZONTAL, 3000);
+  const key = `${x0.id}:${y0.id}:${x1.id}:${y1.id}`;
+  const room = graph.addRoom(new Set([key]), 'かいだん');
+  // A面（上辺）を階段の上り口相当としてstairOpenings指定し、壁生成をスキップさせる
+  // （finish/finishBoundary.jsが実際のStairに対して行うのと同じ入力形。onStairOpening参照）。
+  const stairOpenings = [{ isVertical: false, value: y0.effectiveValue, lo: -1, hi: 4001 }];
+  generateRoomWallsFromOutline(graph, room, {}, stairOpenings);
+
+  const faces = realBuildRoomFaces(room, graph);
+  const faceD = faces.find(f => f.label === 'D'); // D面の終端(hasWallAtLocalRun)がA隅＝壁なし
+  assert.equal(faceD.hasWallAtLocalRun, false, '前提: D面の終端は壁なしのはず（QA修正の発動確認）');
+
+  const prims = buildFaceFigure(faceD, {
+    graph, project: { openingNumberIndex: new Map() }, room, ceilingHeight: 2400,
+    materialMap: null, gridCLs: [], wallLessEndExtendModelMm: 150,
+  });
+  const cutVerticals = prims.filter(p => p.type === 'line' && p.weight === 'thick' && p.x1 === p.x2);
+  assert.equal(cutVerticals.length, 1, '壁なし側(run側)の縦線は描かれず、壁あり側(0側)の1本だけのはず');
+  assert.equal(cutVerticals[0].x1, 0, '残る縦線は壁のある0側のはず');
+  const floorLine = prims.find(p => p.type === 'line' && p.weight === 'thick' && p.y1 === p.y2 && p.y1 === 0);
+  assert.equal(floorLine.x2, faceD.run + 150, '床線はrunを超えてextendMm(150)ぶん外側へ延長されるはず');
 });
 
 // ---- 項目4: floorSegmentsが段差を含む場合、床線は区間ごとの水平線＋段差の縦線になる ----
@@ -95,6 +236,143 @@ test('【失敗系・項目4】buildFaceFigure: floorSegments省略時は床線1
   const cutLines = prims.filter(p => p.type === 'line' && p.weight === 'thick');
   const floorHorizontals = cutLines.filter(l => l.y1 === l.y2 && l.y1 === 0);
   assert.equal(floorHorizontals.length, 1, '段差が無ければ床の水平線は1本のままのはず');
+});
+
+// ---- 項目5: 床に段差がある面は右側にもCH寸法を描く（値=右端区間の実効CH） ----
+test('【項目5】buildFaceFigure: floorSegmentsが2区間（段差あり）なら右側にもCH寸法が出て、値は天井絶対高−右端区間FL', () => {
+  const CH = 2400;
+  const floorSegments = [
+    { loX: 0,    hiX: 2000, floorDeltaMm: 0 },
+    { loX: 2000, hiX: 4000, floorDeltaMm: 300 },
+  ];
+  const face = makeFace();
+  const ctx = baseCtx({ ceilingHeight: CH, floorSegments });
+  const prims = buildFaceFigure(face, ctx);
+
+  const vDims = prims.filter(p => p.type === 'dim' && p.dir === 'v');
+  assert.equal(vDims.length, 1, '左のCH寸法は帯レベル(elevationBand.js)で付くため、face単体では右のCH寸法1本だけのはず');
+  const rightChDim = vDims[0];
+  assert.equal(rightChDim.label, CH - 300, '値は天井絶対高(2400)−右端区間FL(300)=2100のはず');
+  assert.equal(rightChDim.from, -CH, '天井から');
+  assert.equal(rightChDim.to, -300, '右端区間の床y(-300)まで');
+  assert.equal(rightChDim.dot, true, '左のCH寸法と同じ様式（端部塗り丸）のはず');
+  assert.ok(rightChDim.at > face.run, '右側（面の右端より外側）に配置されるはず');
+});
+
+// ---- 失敗系: floorSegmentsが1区間（段差なし）なら右側のCH寸法は出さない ----
+test('【失敗系・項目5】buildFaceFigure: floorSegmentsが1区間（段差なし）なら右側のCH寸法は出さない', () => {
+  const face = makeFace();
+  const prims = buildFaceFigure(face, baseCtx());
+  const vDims = prims.filter(p => p.type === 'dim' && p.dir === 'v');
+  assert.equal(vDims.length, 0, '段差が無ければ右側のCH寸法は出ないはず');
+});
+
+// ---- 項目3・4: 壁2段書き（材名の言い換え・配置・省略） ----
+test('【項目3・4】buildFaceFigure: 壁2段書きは材名を言い換えて描画し、既定では面の壁中心線区間の中心に置かれる', () => {
+  const room = makeRoom({ wallMaterial: 'm1', wallFinish: 'm2' });
+  const materialMap = new Map([
+    ['m1', { name: 'せっこうボード t=12.5' }],
+    ['m2', { name: 'ビニルクロス' }],
+  ]);
+  const face = makeFace();
+  const prims = buildFaceFigure(face, baseCtx({ room, materialMap }));
+  const texts = prims.filter(p => p.type === 'text' && p.anchor === 'middle' &&
+    (p.text === '壁：PB ア)12.5' || p.text === 'ビニルクロス'));
+  assert.equal(texts.length, 2, '2段とも材名変換済みで描かれるはず');
+  for (const t of texts) assert.equal(t.x, 2000, '既定は面中心(boundary.lo=0..hi=4000の中点)のはず');
+});
+
+test('【項目4】buildFaceFigure: 開口が面中心にかかると壁2段書きは最も広い空き区間へ退避する', () => {
+  const room = makeRoom({ wallMaterial: 'm1' });
+  const materialMap = new Map([['m1', { name: 'ラワン合板' }]]);
+  const opening = {
+    id: 'op9', isVertical: false, axisCL: { id: 'axisY0' }, wallSide: 1,
+    centerCoord: 2000, width: 2000, height: 2000, sillHeight: 0,
+    category: OpeningCategory.FITTING, subType: 'singleSwing', fixtureType: null,
+  };
+  const face = makeFace();
+  const ctx = baseCtx({ room, materialMap, graph: makeGraph({ openings: [opening] }) });
+  const prims = buildFaceFigure(face, ctx);
+  const text = prims.find(p => p.type === 'text' && p.text === '壁：ラワン合板');
+  assert.ok(text, '材名の行が見つからない');
+  // 開口スパン[1000,3000]が面中心(2000)と重なる。空き区間[0,1000](幅1000)・[3000,4000](幅1000)は
+  // 同点——avoidObstacleRangesXは先に見つかった方[0,1000]を採るため中心=500になるはず。
+  assert.equal(text.x, 500);
+});
+
+// ---- QA G1: 壁2段書きの幅概算は文字クラス別（半角ASCII=0.5・全角等=1.0）に積算する ----
+test('【QA G1】estimateWallLabelWidthPx: 半角ASCIIは0.5倍・全角(CJK等)は1.0倍で積算する', () => {
+  // 全角4文字のみ: 4×1.0×12=48px
+  assert.equal(estimateWallLabelWidthPx('壁：ラワン'), 5 * 12); // '壁','：','ラ','ワ','ン'=5文字×1.0
+  // 半角ASCIIのみ: 5文字×0.5×12=30px
+  assert.equal(estimateWallLabelWidthPx('PB t=12'), 7 * 0.5 * 12);
+  // 混在「壁：PB ア)12.5」: 全角(壁,：,ア)=3×1.0、半角(P,B, ,),1,2,.,5)=8×0.5
+  assert.equal(estimateWallLabelWidthPx('壁：PB ア)12.5'), (3 * 1.0 + 8 * 0.5) * 12);
+});
+
+// ---- QA G1 probe: 変換後ラベルは半角主体になるため、旧・全角一律換算(×1.5相当の過大概算)より
+// 実際のグリフ幅に近い新換算のほうが、通常サイズの面で過剰に省略されないことを確認する ----
+test('【QA G1 probe】buildFaceFigure: 4m壁・1/20スケールでは壁2段書きが省略されずに描画される', () => {
+  const room = makeRoom({ wallMaterial: 'm1', wallFinish: 'm2' });
+  const materialMap = new Map([
+    ['m1', { name: 'せっこうボード t=12.5' }], // 「壁：PB ア)12.5」（QAが指摘した変換後ラベル）
+    ['m2', { name: 'ビニルクロス' }],
+  ]);
+  const face = makeFace({ run: 4000 }); // 4m壁
+  const prims = buildFaceFigure(face, baseCtx({ room, materialMap, scale: 1 / 20 }));
+  assert.ok(prims.some(p => p.type === 'text' && p.text === '壁：PB ア)12.5'),
+    '4m壁@1/20は省略されず描画されるはず（旧・全角一律換算では省略されていた）');
+});
+
+test('【QA G1 probe・失敗系】buildFaceFigure: 2m壁・1/20スケールは（新換算でも）狭すぎるため意図どおり省略される', () => {
+  const room = makeRoom({ wallMaterial: 'm1', wallFinish: 'm2' });
+  const materialMap = new Map([
+    ['m1', { name: 'せっこうボード t=12.5' }],
+    ['m2', { name: 'ビニルクロス' }],
+  ]);
+  const face = makeFace({ run: 2000 }); // 2m壁（意図的省略の負例）
+  const prims = buildFaceFigure(face, baseCtx({ room, materialMap, scale: 1 / 20 }));
+  assert.ok(!prims.some(p => p.type === 'text' && p.text === '壁：PB ア)12.5'),
+    '2m壁@1/20はラベル幅の2倍(3360mm)未満のため省略されるはず');
+});
+
+test('【QA G1 probe】buildFaceFigure: 1/50スケールでも、ラベル幅の2倍を満たす壁長（9m）なら省略されない', () => {
+  // 1/50は画面固定12pxフォントに対しモデルmmで見て1/20の2.5倍の面積が要る（screen-fixed要素の
+  // 性質上、縮尺が小さいほど同じ見た目サイズのラベルにより広い実寸が要る）。QAの「6m壁@1/50」
+  // 例はこの具体的な材名（11文字・半角主体）では幾何的に満たせない（必要run=8400mm）ため、
+  // 満たせる最小限に近い9mで動作を確認する（報告に6m@1/50が満たせない理由と併記する）。
+  const room = makeRoom({ wallMaterial: 'm1', wallFinish: 'm2' });
+  const materialMap = new Map([
+    ['m1', { name: 'せっこうボード t=12.5' }],
+    ['m2', { name: 'ビニルクロス' }],
+  ]);
+  const face = makeFace({ run: 9000 });
+  const prims = buildFaceFigure(face, baseCtx({ room, materialMap, scale: 1 / 50 }));
+  assert.ok(prims.some(p => p.type === 'text' && p.text === '壁：PB ア)12.5'),
+    '9m壁@1/50は省略されず描画されるはず');
+});
+
+test('【失敗系・項目3】buildFaceFigure: 材が引けない（materialMapに無い）場合は壁2段書きを描かない', () => {
+  const room = makeRoom({ wallMaterial: 'unknown', wallFinish: 'unknown2' });
+  const face = makeFace();
+  const prims = buildFaceFigure(face, baseCtx({ room }));
+  assert.ok(!prims.some(p => p.type === 'text' && p.anchor === 'middle' && /壁：/.test(p.text)));
+});
+
+test('【失敗系・項目4】buildFaceFigure: 壁中心線間の描画長さがラベル幅の2倍未満なら壁2段書きを描かない', () => {
+  const room = makeRoom({ wallMaterial: 'm1' });
+  const materialMap = new Map([['m1', { name: 'せっこうボード t=12.5' }]]); // 「壁：PB ア)12.5」
+  const face = makeFace({ run: 100 });
+  const prims = buildFaceFigure(face, baseCtx({ room, materialMap, scale: 1 }));
+  assert.ok(!prims.some(p => p.type === 'text' && /PB/.test(p.text)));
+});
+
+test('buildFaceFigure: scale未指定（倍率決定用パス1）は壁2段書きの省略判定を行わず常に描画する', () => {
+  const room = makeRoom({ wallMaterial: 'm1' });
+  const materialMap = new Map([['m1', { name: 'せっこうボード t=12.5' }]]);
+  const face = makeFace({ run: 10 });
+  const prims = buildFaceFigure(face, baseCtx({ room, materialMap })); // scale未指定
+  assert.ok(prims.some(p => p.type === 'text' && p.text === '壁：PB ア)12.5'));
 });
 
 // ---- 開口 y=-(sill+h) ----
@@ -415,6 +693,51 @@ test('buildFaceFigure: 巾木(h=60)は床上60mmに引かれ、床まで達す�
   assert.equal(baseboardLines.length, 2, `巾木線は開口区間で途切れて2本になるはず（実際:${baseboardLines.length}）`);
   assert.ok(baseboardLines.some(p => p.x1 === 0 && p.x2 === 1600));
   assert.ok(baseboardLines.some(p => p.x1 === 2400 && p.x2 === 4000));
+});
+
+// ---- 項目7: 巾木は床の段差に追従する ----
+test('【項目7】buildFaceFigure: floorSegmentsが段差を含む場合、巾木線は各区間自身の床Y基準になる', () => {
+  const floorSegments = [
+    { loX: 0,    hiX: 2000, floorDeltaMm: 0 },
+    { loX: 2000, hiX: 4000, floorDeltaMm: 300 },
+  ];
+  const face = makeFace();
+  const ctx = baseCtx({ floorSegments, room: makeRoom({}, { baseboardHeight: 'h=60' }) });
+  const prims = buildFaceFigure(face, ctx);
+  const baseboardLines = prims.filter(p => p.type === 'line' && p.weight === 'thin' && p.y1 === p.y2);
+  const seg0Line = baseboardLines.find(p => p.x1 === 0 && p.x2 === 2000);
+  const seg1Line = baseboardLines.find(p => p.x1 === 2000 && p.x2 === 4000);
+  assert.ok(seg0Line, '左区間(FL=0)の巾木線が見つからない');
+  assert.equal(seg0Line.y1, -60, '左区間はFL(0)から60上=-60のはず');
+  assert.ok(seg1Line, '右区間(FL=-300)の巾木線が見つからない');
+  assert.equal(seg1Line.y1, -360, '右区間はFL(-300)から60上=-360のはず');
+});
+
+test('【項目7】buildFaceFigure: 段差縦線には低い側へh離れた位置に巾木高さぶんの側面線が付く', () => {
+  const floorSegments = [
+    { loX: 0,    hiX: 2000, floorDeltaMm: 0 },
+    { loX: 2000, hiX: 4000, floorDeltaMm: 300 },
+  ];
+  const face = makeFace();
+  const ctx = baseCtx({ floorSegments, room: makeRoom({}, { baseboardHeight: 'h=60' }) });
+  const prims = buildFaceFigure(face, ctx);
+  // 低い側=左区間(FL=0)。段差縦線(x=2000)から低い側(左)へ60(h)離れたx=1940に、
+  // FL(0)からh上(-60)までの縦線が付くはず。
+  const sideLine = prims.find(p => p.type === 'line' && p.x1 === 1940 && p.x2 === 1940);
+  assert.ok(sideLine, '巾木の側面線(段差立ち上がり)が見つからない');
+  assert.equal(sideLine.y1, 0);
+  assert.equal(sideLine.y2, -60);
+});
+
+// ---- 失敗系: floorSegments省略（段差なし）なら巾木の側面線は付かず線も従来どおり1本 ----
+test('【失敗系・項目7】buildFaceFigure: floorSegments省略（段差なし）なら巾木の側面線は付かない', () => {
+  const face = makeFace();
+  const ctx = baseCtx({ room: makeRoom({}, { baseboardHeight: 'h=60' }) });
+  const prims = buildFaceFigure(face, ctx);
+  const baseboardLines = prims.filter(p => p.type === 'line' && p.weight === 'thin' && p.y1 === p.y2 && p.y1 === -60);
+  assert.equal(baseboardLines.length, 1, '段差が無ければ巾木線は1本のまま');
+  assert.equal(baseboardLines[0].x1, 0);
+  assert.equal(baseboardLines[0].x2, 4000);
 });
 
 // ---- 失敗系: 巾木文字列が解釈できない場合は非描画 ----

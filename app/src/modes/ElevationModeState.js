@@ -16,7 +16,7 @@ import {
   DEFAULT_FACE_LABEL_AVOID_THRESHOLD_MM, FACE_LABEL_AVOID_THRESHOLD_SCREEN_MM,
   DEFAULT_OPENING_TAG_ROW_MM, OPENING_TAG_ROW_SCREEN_MM,
   DEFAULT_DIM_ROW_GAP_MM, DIM_ROW_GAP_SCREEN_MM, DEFAULT_GRID_ROW_GAP_MM, GRID_ROW_GAP_SCREEN_MM,
-  LEFT_MARGIN_SCREEN_MM,
+  LEFT_MARGIN_SCREEN_MM, DEFAULT_WALL_LESS_END_EXTEND_MM, WALL_LESS_END_EXTEND_SCREEN_MM,
 } from '../elevation/elevationStyle.js';
 // DEFAULT_PX_PER_MMはviewport.js（appViewport.jsとは別。window依存を持たない純モジュール
 // ——appViewport.jsのヘッダコメント参照）からのみ取得する。ElevationModeState.js自体は
@@ -91,25 +91,28 @@ export class ElevationModeState {
       const stairByRoomId = new Map(this.graph.stairs.map(s => [s.roomId, s]));
       const screenPxPerMm = this.screenPxPerMm;
 
-      const buildOne = (
-        room, gapModelMm, nameGapModelMm, triangleOffsetModelMm, faceLabelAvoidThresholdModelMm,
-        openingTagRowModelMm, dimRowGapModelMm, gridRowGapModelMm,
-      ) => {
-        const ctx = {
-          project: this.project, materialMap, gridCLs, gapModelMm, nameGapModelMm, triangleOffsetModelMm,
-          faceLabelAvoidThresholdModelMm, openingTagRowModelMm, dimRowGapModelMm, gridRowGapModelMm,
-        };
+      // paramsは全て2パス機構で換算する実画面mm値（+scale。オブジェクトにまとめて渡す
+      // ——buildRoomBand/buildStairBandへそのまま展開できる形にしておく）。
+      const buildOne = (room, params) => {
+        const ctx = { project: this.project, materialMap, gridCLs, ...params };
         return room.feature === RoomFeature.STAIR
           ? buildStairBand(room, this.graph, upperGraph, { ...ctx, stair: stairByRoomId.get(room.id) ?? null })
           : buildRoomBand(room, this.graph, ctx);
       };
 
       // パス1: 倍率決定用（ギャップ・名前枠余白・三角オフセット・面ラベル退避閾値・建具タグ行/
-      // ROW1/ROW1〜ROW2行間は高さに影響しないため仮値でよい）。
-      const pass1 = buildBandsSafely(rooms,
-        room => buildOne(room, DEFAULT_FACE_GAP_MM, DEFAULT_NAME_GAP_MM, DEFAULT_TRIANGLE_OFFSET_MM,
-          DEFAULT_FACE_LABEL_AVOID_THRESHOLD_MM, DEFAULT_OPENING_TAG_ROW_MM, DEFAULT_DIM_ROW_GAP_MM,
-          DEFAULT_GRID_ROW_GAP_MM));
+      // ROW1/ROW1〜ROW2行間・壁のない端部の延長量は高さに影響しないため仮値でよい。scaleは
+      // まだ未確定のためnull=壁2段書きの省略判定を行わない=項目4は常に描く扱いにする
+      // ——省略の有無は帯の高さ(heightMm)にほぼ影響しないため、パス1をこの仮定にしても
+      // 倍率決定に実害は無い）。
+      const pass1 = buildBandsSafely(rooms, room => buildOne(room, {
+        gapModelMm: DEFAULT_FACE_GAP_MM, nameGapModelMm: DEFAULT_NAME_GAP_MM,
+        triangleOffsetModelMm: DEFAULT_TRIANGLE_OFFSET_MM,
+        faceLabelAvoidThresholdModelMm: DEFAULT_FACE_LABEL_AVOID_THRESHOLD_MM,
+        openingTagRowModelMm: DEFAULT_OPENING_TAG_ROW_MM, dimRowGapModelMm: DEFAULT_DIM_ROW_GAP_MM,
+        gridRowGapModelMm: DEFAULT_GRID_ROW_GAP_MM,
+        wallLessEndExtendModelMm: DEFAULT_WALL_LESS_END_EXTEND_MM, scale: null,
+      }));
       const scale = chooseElevationScale(pass1.bands, this.viewSize ?? { width: 800, height: 600 });
       const gapModelMm            = screenMmToModelMm(FACE_GAP_SCREEN_MM, screenPxPerMm, scale);
       const nameGapModelMm        = screenMmToModelMm(NAME_GAP_BELOW_SCREEN_MM, screenPxPerMm, scale);
@@ -124,13 +127,18 @@ export class ElevationModeState {
       const openingTagRowModelMm = screenMmToModelMm(OPENING_TAG_ROW_SCREEN_MM, screenPxPerMm, scale);
       const dimRowGapModelMm     = screenMmToModelMm(DIM_ROW_GAP_SCREEN_MM, screenPxPerMm, scale);
       const gridRowGapModelMm    = screenMmToModelMm(GRID_ROW_GAP_SCREEN_MM, screenPxPerMm, scale);
+      // 項目1: 壁のない端部の延長量も他の実画面mm値と同じ2パス方式で換算する。
+      const wallLessEndExtendModelMm = screenMmToModelMm(WALL_LESS_END_EXTEND_SCREEN_MM, screenPxPerMm, scale);
 
       // パス2: 確定した倍率でギャップ・名前枠余白・三角オフセット・面ラベル退避閾値・建具タグ行/
-      // ROW1/ROW1〜ROW2行間を実画面mmへ正しく換算し、本番の帯を組み直す。
+      // ROW1/ROW1〜ROW2行間・壁のない端部の延長量を実画面mmへ正しく換算し、scale自体もそのまま
+      // 渡して（項目4の壁2段書き省略判定に使う）本番の帯を組み直す。
       const { bands, failedRoomNames } = buildBandsSafely(
         rooms,
-        room => buildOne(room, gapModelMm, nameGapModelMm, triangleOffsetModelMm, faceLabelAvoidThresholdModelMm,
-          openingTagRowModelMm, dimRowGapModelMm, gridRowGapModelMm),
+        room => buildOne(room, {
+          gapModelMm, nameGapModelMm, triangleOffsetModelMm, faceLabelAvoidThresholdModelMm,
+          openingTagRowModelMm, dimRowGapModelMm, gridRowGapModelMm, wallLessEndExtendModelMm, scale,
+        }),
         (err, room) => console.error(`[elevation] 部屋「${room.name}」の帯構築に失敗:`, err),
       );
 
