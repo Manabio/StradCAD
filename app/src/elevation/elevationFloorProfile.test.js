@@ -99,6 +99,83 @@ test('wallAdjacentFloorSegments: dirSign=-1の面（C）でも区間が0..runを
   }
 });
 
+// ---- QA修正（項目2・3根本原因）: セル境界に極小(<1e-6mm)の隙間・重なりがあっても、
+// 「子→親(極小)→子」という見た目上の1往復（段差の抽出不良）を作らない。CL昇格/降格・
+// 再スナップ等で「同じ位置のはずの別CL」を参照するようになった場合に極小差が生じうる状況を、
+// 2つの子セルの間に極小の未登録セル（親扱いのスリバー）を挟む構成で再現する。
+// QA修正(J1): 以前はgap-fill判定・末尾判定にも別途epsilonを持たせていたが、そこで生成される
+// 極小区間は結局この下の「極小幅の区間を吸収する」処理で必ず除去されるため冗長と判明し撤去した
+// （elevationFloorProfile.jsのコメント参照）——epsilonはこの1箇所（極小幅の吸収）だけに残る。
+// 本テストはその唯一の許容差メカニズムを実際のRoom/セル経由で振る舞いとして検証する
+// （実装のtoString()等でソース文字列を照合する検証はしない）。 ----
+test('wallAdjacentFloorSegments: 2つの子区間の間に極小(<1e-6mm)の未登録セル(親扱い)を挟んでも1往復せず1区間に結合される', () => {
+  const graph = makeGraph();
+  const x0 = graph.addCenterLine(CenterLineType.VERTICAL, 0,          { labeled: false, discipline: Discipline.ARCH });
+  const x1 = graph.addCenterLine(CenterLineType.VERTICAL, 2000,       { labeled: false, discipline: Discipline.ARCH });
+  const xg1 = graph.addCenterLine(CenterLineType.VERTICAL, 2000.0000002, { labeled: false, discipline: Discipline.ARCH });
+  const xg2 = graph.addCenterLine(CenterLineType.VERTICAL, 2000.0000004, { labeled: false, discipline: Discipline.ARCH });
+  const x2 = graph.addCenterLine(CenterLineType.VERTICAL, 4000,       { labeled: false, discipline: Discipline.ARCH });
+  const y0 = graph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: false, discipline: Discipline.ARCH });
+  const y1 = graph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: false, discipline: Discipline.ARCH });
+  const leftKey    = `${x0.id}:${y0.id}:${x1.id}:${y1.id}`;
+  const childKey1  = `${x1.id}:${y0.id}:${xg1.id}:${y1.id}`; // 子1(壁際、xgapを挟んで子2と隣接するはず)
+  const gapKey     = `${xg1.id}:${y0.id}:${xg2.id}:${y1.id}`; // 極小(<1e-6mm)の未登録セル＝親扱いのスリバー
+  const childKey2  = `${xg2.id}:${y0.id}:${x2.id}:${y1.id}`; // 子2
+  const room = graph.addRoom(new Set([leftKey, childKey1, gapKey, childKey2]), 'LDK');
+  generateRoomWallsFromOutline(graph, room);
+  // 子はchildKey1・childKey2の2つに分かれて登録される（gapKeyは子に含めない＝親扱いのまま）。
+  const child = graph.addRoom(new Set([childKey1, childKey2]), '小上がり', undefined, new Set([room.id]));
+  child.setFloorLevel(300);
+
+  const faceA = buildRoomFaces(room, graph).find(f => f.label === 'A');
+  const segs = wallAdjacentFloorSegments(faceA, room, graph);
+
+  assert.equal(segs.length, 2, `極小スリバーは前後の子区間へ吸収され、左(親)・右(子)の2区間のはず（実際:${segs.length}区間 ${JSON.stringify(segs)}）`);
+  assert.equal(segs[0].floorDeltaMm, 0);
+  assert.equal(segs[1].floorDeltaMm, 300, '極小スリバーの左右は同じ子(floorDeltaMm=300)のまま連続しているはず（1往復しない）');
+  // 吸収後の区間位置も面の全域(0..run)を隙間なく覆っているはず（lengthとdeltaだけでは
+  // 「吸収先(segs[i-1])のhiXを正しくs.hiXへ広げているか」を見落とすため、位置も直接確認する）。
+  assert.equal(segs[0].loX, 0);
+  assert.ok(Math.abs(segs[0].hiX - segs[1].loX) < 1e-6, '吸収後の2区間は隙間なく連続しているはず');
+  assert.equal(segs[1].hiX, faceA.run);
+});
+
+// ---- 失敗系: 極小スリバーが面の先頭（前に他区間が無い状態）に来ても吸収先（次の区間）へ
+// 正しく吸収される（上のテストは中間の吸収=前の区間へ、こちらは先頭の吸収=次の区間への
+// 境界ケース）。面の先頭(face.lo)は直交壁の仕上げ面厚み分だけ壁中心線からずれた非キリの良い
+// 実数になるため、まず素直な部屋で一度faceを組んで実際のface.loを読み取り、その直後に極小幅の
+// スリバーが来るよう後からroom.cellsを差し替える（壁生成そのものに極小差を持ち込むと外周抽出
+// 自体が乱れるため。壁生成はfaceが確定する前に一度だけ行う）。 ----
+test('【失敗系】wallAdjacentFloorSegments: 極小スリバーが面の先頭に来ても（前の区間が無くても）次の区間へ吸収される', () => {
+  const graph = makeGraph();
+  const x0 = graph.addCenterLine(CenterLineType.VERTICAL, 0,    { labeled: false, discipline: Discipline.ARCH });
+  const x1 = graph.addCenterLine(CenterLineType.VERTICAL, 4000, { labeled: false, discipline: Discipline.ARCH });
+  const y0 = graph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: false, discipline: Discipline.ARCH });
+  const y1 = graph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: false, discipline: Discipline.ARCH });
+  const wholeKey = `${x0.id}:${y0.id}:${x1.id}:${y1.id}`;
+  const room = graph.addRoom(new Set([wholeKey]), 'LDK');
+  generateRoomWallsFromOutline(graph, room); // 極小差を持ち込む前に、素直な形で壁・面を確定させる
+
+  const faceA = buildRoomFaces(room, graph).find(f => f.label === 'A');
+  // face.lo（直交壁の仕上げ面＝面の先頭）ちょうどのところへ極小(2e-7mm)幅のスリバーを置く。
+  const xg1 = graph.addCenterLine(CenterLineType.VERTICAL, faceA.lo + 0.0000002, { labeled: false, discipline: Discipline.ARCH });
+  const gapKey   = `${x0.id}:${y0.id}:${xg1.id}:${y1.id}`;  // 極小の未登録セル＝親扱いのスリバー（面の先頭）
+  const childKey = `${xg1.id}:${y0.id}:${x1.id}:${y1.id}`;  // 子（面のほぼ全域）
+  room.setCells(new Set([gapKey, childKey])); // faceAは既に確定済みのためこの差し替えの影響を受けない
+  const child = graph.addRoom(new Set([childKey]), '小上がり', undefined, new Set([room.id]));
+  child.setFloorLevel(300);
+
+  const segs = wallAdjacentFloorSegments(faceA, room, graph);
+
+  assert.equal(segs.length, 1, `先頭の極小スリバーは唯一の吸収先(次の区間)へ吸収され1区間のはず（実際:${segs.length}区間 ${JSON.stringify(segs)}）`);
+  assert.equal(segs[0].floorDeltaMm, 300, '先頭の極小スリバー(親扱い)が子側へ吸収され、区間全体が子のfloorDeltaMmになるはず');
+  // 吸収後の区間位置そのものも面の全域(0..run)を正しく覆っているはず——lengthとdeltaだけでは
+  // 「吸収先(segs[i+1])のloXを正しくs.loXへ広げているか」を見落とす（widthのみ計算しているだけの
+  // 別解でも通ってしまう）ため、位置も直接確認する。
+  assert.equal(segs[0].loX, 0, '吸収後の区間は面の先頭(loX=0)から始まるはず');
+  assert.equal(segs[0].hiX, faceA.run, '吸収後の区間は面の末尾(hiX=run)まで届くはず');
+});
+
 // ---- QA指摘(b): 壁に接しない内側だけの部分指定では、その面はフラットのまま ----
 test('【失敗系】wallAdjacentFloorSegments: 壁に接しない内側だけの部分指定は面Aをフラットのままにする', () => {
   const graph = makeGraph();

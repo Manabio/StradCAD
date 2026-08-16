@@ -10,6 +10,7 @@ import {
   openingsReachingCorner, formatMaterialLabel, avoidObstacleRangesX, estimateWallLabelWidthPx,
 } from './elevationFigure.js';
 import { buildRoomFaces as realBuildRoomFaces } from './elevationFaces.js';
+import { wallAdjacentFloorSegments } from './elevationFloorProfile.js';
 import {
   GRID_LINE_ABOVE_CH_MM, CANVAS_BG_COLOR, DEFAULT_FACE_LABEL_AVOID_THRESHOLD_MM,
   DEFAULT_OPENING_TAG_ROW_MM, OPENING_TAG_ROW_SCREEN_MM, OPENING_TAG_RADIUS_PX,
@@ -202,6 +203,46 @@ test('【QA修正】buildFaceFigure: 実グラフの上り口辺（壁生成ス�
   assert.equal(silhouetteVerticals[0].x1, 0, '残る縦線は壁のある0側のはず');
   const floorLine = prims.find(p => p.type === 'line' && p.weight === 'thick' && p.y1 === p.y2 && p.y1 === 0);
   assert.equal(floorLine.x2, faceD.run + 150, '床線はrunを超えてextendMm(150)ぶん外側へ延長されるはず');
+});
+
+// ---- QA修正（項目1・3。項目2と同根）: 出隅の見えがかり縦線(SILHOUETTE)は、隅を挟む区間の
+// 「実際の床高さ」を正確に参照する。隅（出隅）に部分指定の床段差の境界が重なる実グラフで検証する
+// （elevationFloorProfile.test.jsのwallAdjacentFloorSegments単体テストで直した「極小区間の
+// 抽出不良」が、この出隅縦線のY座標（floorYAtStart/floorYAtEnd=segs[0]/segs[末尾]）にも
+// そのまま影響するため、根っこは同じ関数の不具合だった）。 ----
+test('【QA修正・項目1/3】buildFaceFigure: 出隅の縦線は、その隅に接する床区間の実際の高さ(floorDeltaMm)まで届く', () => {
+  const plane = new Plane('p1', 0, '1階', 1, 1);
+  const graph = new PlanGraph(plane);
+  const addCL = (type, value) => graph.addCenterLine(type, value, { labeled: false, discipline: Discipline.ARCH });
+  const x0 = addCL(CenterLineType.VERTICAL, 0);
+  const x1 = addCL(CenterLineType.VERTICAL, 2000);
+  const x2 = addCL(CenterLineType.VERTICAL, 4000);
+  const y0 = addCL(CenterLineType.HORIZONTAL, 0);
+  const y1 = addCL(CenterLineType.HORIZONTAL, 3000);
+  const cornerCell = `${x0.id}:${y0.id}:${x1.id}:${y1.id}`; // A面・D面が共有する左上の角セル
+  const otherCell  = `${x1.id}:${y0.id}:${x2.id}:${y1.id}`;
+  const room = graph.addRoom(new Set([cornerCell, otherCell]), 'LDK');
+  generateRoomWallsFromOutline(graph, room);
+  const child = graph.addRoom(new Set([cornerCell]), '小上がり', undefined, new Set([room.id]));
+  child.setFloorLevel(300);
+
+  const faces = realBuildRoomFaces(room, graph);
+  const faceA = faces.find(f => f.label === 'A');
+  const faceD = faces.find(f => f.label === 'D');
+  const segsA = wallAdjacentFloorSegments(faceA, room, graph);
+  const segsD = wallAdjacentFloorSegments(faceD, room, graph);
+
+  const ctxBase = { graph, project: { openingNumberIndex: new Map() }, room, ceilingHeight: 2400, materialMap: null, gridCLs: [] };
+  const primsA = buildFaceFigure(faceA, { ...ctxBase, floorSegments: segsA });
+  const primsD = buildFaceFigure(faceD, { ...ctxBase, floorSegments: segsD });
+
+  // A面のD側(x=0)・D面のA側(x=0)は同じ物理的な隅を指すため、どちらの縦線もy2=-300（子の床高さ）
+  // まで届くはず——中心線を挟んで床高が変わる出隅で、実際の高さを正確に参照できているかの確認。
+  const cornerVertA = primsA.find(p => p.type === 'line' && p.weight === 'medium' && p.x1 === 0 && p.x2 === 0);
+  const cornerVertD = primsD.find(p => p.type === 'line' && p.weight === 'medium' && p.x1 === 0 && p.x2 === 0);
+  assert.ok(cornerVertA && cornerVertD, '両面ともx=0の出隅縦線が見つかるはず');
+  assert.equal(cornerVertA.y2, -300, 'A面の出隅縦線は子の床高さ(-300)まで届くはず');
+  assert.equal(cornerVertD.y2, -300, 'D面の出隅縦線も同じ隅なので子の床高さ(-300)まで届くはず（両面で一致）');
 });
 
 // ---- 項目4: floorSegmentsが段差を含む場合、床線は区間ごとの水平線＋段差の縦線になる ----

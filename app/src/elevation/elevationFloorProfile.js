@@ -49,22 +49,44 @@ export function wallAdjacentFloorSegments(face, parentRoom, graph) {
   }
   touching.sort((a, b) => a.runLo - b.runLo);
 
+  // QA修正（項目2・3の根本原因）: 本来ぴったり隣接するはずの2セル境界が、CLの昇格/降格・
+  // 再スナップ等で「同じ位置のはずの別CL」を参照するようになった場合、cellBoundsFromKeyが
+  // 読む.valueに極小の誤差（浮動小数の丸め・別CLの僅差）が生じうる。この極小差がgap-fill
+  // （下のcursor↔t.runLoの隙間埋め）を素通りしてsegsに残ると、その区間自体がfloorDeltaMmの
+  // 異なる独立区間として扱われ、隣接区間の結合（delta一致マージ）では拾えない——
+  // delta不一致のまま「子→親(極小)→子」という見た目上の1往復（段差の抽出不良）になる。
+  // gap-fill判定自体にepsilonを持たせる案もあるが、生成された極小区間は結局すぐ下の
+  // 「極小幅の区間を吸収する」処理で必ず除去されるため冗長——物理的に意味を持たない極小幅の
+  // 区間をdeltaに関わらず一括で吸収する、この1箇所だけに許容差を持たせれば十分。
+  const GAP_EPS = 1e-6;
   const parentFL = graph.effectiveFloorLevel(parentRoom);
   const segs = [];
   let cursor = face.lo;
   for (const t of touching) {
     if (t.runLo > cursor) segs.push({ runLo: cursor, runHi: t.runLo, floorDeltaMm: 0 }); // 欠測=親扱い
     const floorDeltaMm = graph.effectiveFloorLevel(t.owner) - parentFL;
-    segs.push({ runLo: t.runLo, runHi: t.runHi, floorDeltaMm });
+    // 重なり（t.runLo が cursor より小さい）はcursorへスナップし、区間の逆転・二重描画を防ぐ。
+    const runLo = Math.max(t.runLo, cursor);
+    if (t.runHi > runLo) segs.push({ runLo, runHi: t.runHi, floorDeltaMm });
     cursor = Math.max(cursor, t.runHi);
   }
   if (cursor < face.hi) segs.push({ runLo: cursor, runHi: face.hi, floorDeltaMm: 0 });
+
+  // 物理的に意味を持たない極小幅(<GAP_EPS)の区間は、floorDeltaMmが前後と異なっていても
+  // 前（無ければ次）の区間へ吸収してから、通常のdelta一致マージへ進む（QA修正・上記コメント参照）。
+  for (let i = segs.length - 1; i >= 0 && segs.length > 1; i--) {
+    const s = segs[i];
+    if (s.runHi - s.runLo >= GAP_EPS) continue;
+    if (i > 0) segs[i - 1].runHi = s.runHi;
+    else segs[i + 1].runLo = s.runLo;
+    segs.splice(i, 1);
+  }
 
   // 隣接区間でfloorDeltaMmが同じなら結合する（不要な段差線を出さないため）。
   const merged = [];
   for (const s of segs) {
     const last = merged[merged.length - 1];
-    if (last && last.floorDeltaMm === s.floorDeltaMm && Math.abs(last.runHi - s.runLo) < 1e-6) {
+    if (last && last.floorDeltaMm === s.floorDeltaMm && Math.abs(last.runHi - s.runLo) < GAP_EPS) {
       last.runHi = s.runHi;
     } else {
       merged.push({ ...s });

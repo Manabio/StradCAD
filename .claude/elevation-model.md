@@ -54,12 +54,17 @@ mm座標に焼き込まずアンカー点だけを持つ専用プリミティブ
 部分指定Room（`referenceRoomIds`で親を参照。`.claude/glossary.md`）が親の壁際セルの一部を占め`floorLevel`が異なる場合、床線は段差付きの
 階段状polylineになる。`elevationFloorProfile.js`の`wallAdjacentFloorSegments(face, parentRoom, graph)`が、面に接する親自身のセル
 （`finish/gridCells.js`の`refreshCells`/`cellBoundsFromKey`を再利用）を壁沿いに拾い、部分指定のセル集合に含まれていればその
-`effectiveFloorLevel`差分、含まれなければ0を割り当てて区間配列にする（同値の隣接区間は結合）。`buildRoomBand`/`buildStairBand`が
-`ctx.floorSegments`として渡し（未指定時はフラット1区間）、床線は区間ごとの水平線＋段差の縦線（すべてCUT。寸法は描かない）になる。
-両端縦線も区間の床yへ追従、天井線は次節のCH調整により水平のまま。段差がある面(`segs.length>1`)は図の右側にも左のCH寸法と同じ様式
-（縦書き値・端部塗り丸）でCH寸法を追加する（値=CH−右端区間floorDeltaMm）。これにより右へ`CH_DIM_OFFSET_MM`ぶん描画範囲が伸びるため、
-隣接面の間隔(`gapModelMm`)は壁中心線間ではなく「前の面の右CH寸法込みの右端」〜「次の面自身のboundary.lo」で確保する
-（`buildRoomBand`/`buildStairBand`の`prevRightExtent`。左側は帯先頭面にしか左CH寸法が付かないため対象外）。
+`effectiveFloorLevel`差分、含まれなければ0を割り当てて区間配列にする（同値の隣接区間は結合）。**極小(<`GAP_EPS`=1e-6mm)幅の区間は
+floorDeltaMmが前後と異なっていても前（無ければ次）の区間へ強制的に吸収してから、通常のdelta一致マージへ進む**（QA修正）——CLの昇格/降格・
+再スナップ等で「同じ位置のはずの別CL」を参照するようになると、隣接セルの境界に極小の誤差が生じ、それが独立区間として残ってしまい
+「子→親(極小)→子」という見た目上の1往復（段差の抽出不良）になる。gap-fill（隙間埋め）・末尾判定の側にも同様のepsilonを持たせる案が
+あったが、そこで生成される極小区間は結局この吸収処理で必ず除去されるため冗長と判明し撤去した——epsilonはこの吸収処理1箇所に一本化した。
+`buildRoomBand`/`buildStairBand`が`ctx.floorSegments`として渡し（未指定時はフラット1区間）、床線は区間ごとの
+水平線＋段差の縦線（すべてCUT。寸法は描かない）になる。両端の出隅縦線（次節）もこの区間配列の先頭/末尾(`segs[0]`/`segs[末尾]`)から実際の
+床高さを読むため、抽出が正しいことが出隅縦線の高さの正しさに直結する。天井線は次節のCH調整により水平のまま。段差がある面(`segs.length>1`)
+は図の右側にも左のCH寸法と同じ様式（縦書き値・端部塗り丸）でCH寸法を追加する（値=CH−右端区間floorDeltaMm）。これにより右へ
+`CH_DIM_OFFSET_MM`ぶん描画範囲が伸びるため、隣接面の間隔(`gapModelMm`)は壁中心線間ではなく「前の面の右CH寸法込みの右端」〜「次の面自身の
+boundary.lo」で確保する（`buildRoomBand`/`buildStairBand`の`prevRightExtent`。左側は帯先頭面にしか左CH寸法が付かないため対象外）。
 
 ## 天井高さの解決（フォールバック・部分指定の段差調整）
 `finish/roomMetrics.js`の`roomCeilingHeight(graph, room)`が仕上げ表・展開図共通の唯一の情報源。数値化できない自由入力
@@ -90,8 +95,11 @@ mm座標に焼き込まずアンカー点だけを持つ専用プリミティブ
 hだけ上へそのまま平行移動した連続ポリラインとして描く（水平方向にはオフセットしない。段差縦線を開口がまたぐ場合は床側同様に途切れさせる）。
 
 ## 面端の不変条件・壁2段書き
-面端は「壁のない端部」と「出隅」を区別する。**壁のない端部**（`snapFaceEndsToCorners`が付与する`hasWallAtLocal0`/`hasWallAtLocalRun`が
-false）は「続きがある」建築表現として床線・天井線を`WALL_LESS_END_EXTEND_SCREEN_MM`（2パス換算）ぶん図の外側へ延長し、縦線は描かない。
+面端の縦線（見えがかりエッジ）は`x=0`/`run`（`face.lo/hi`＝直交壁の仕上げ面。`snapFaceEndsToCorners`の隅詰め結果）に描く——
+壁中心線（`faceBoundaryLocalX`の`boundary.lo/hi`。ROW1壁芯間寸法・通り芯一点鎖線が使う別の基準）とは異なる、既に正しい基準
+（QA調査で再確認・回帰テストで固定）。面端は「壁のない端部」と「出隅」を区別する。**壁のない端部**（`snapFaceEndsToCorners`が付与する
+`hasWallAtLocal0`/`hasWallAtLocalRun`がfalse）は「続きがある」建築表現として床線・天井線を`WALL_LESS_END_EXTEND_SCREEN_MM`（2パス換算）
+ぶん図の外側へ延長し、縦線は描かない。
 **出隅**（hasWallAtLocal0/hasWallAtLocalRunがtrue＝壁がある通常の面端。部屋の凸角で、視線方向に壁が折れて向こうへ続く角）は縦線を
 SILHOUETTE（中線）で描く——切断面ではなく壁が折れて隣の面へ続くだけの見えがかりの角のため、CUT（太）は使わない（QA修正。床線・天井線・
 段差の縦線・直交壁建具断面の枠は部屋の輪郭そのもの／明示指示に基づくためCUTのまま）。
