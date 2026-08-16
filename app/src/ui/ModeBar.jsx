@@ -3,9 +3,12 @@ import { TOP_BAR } from '../layout.js';
 // モード切替バー — 横長は上部中央、縦長は下部中央に常時表示。
 // 旧 HamburgerMenu のモード項目（平面/仕上げ/構造/敷地）を画面上に昇格したもの。
 // キーボード・タッチ共通で操作できるよう、通常の <button> で構成する。
+// 項目2: 「建具」ボタンはここから外す（建具モードへの突入は「平面モードで建具追加」
+// 「他モードでの建具ターゲットクリック」の2経路に一本化する）。モード自体・境界処理
+// （modeBoundaries.opening）・undo履歴ナビゲーションでの復元経路（switchHistoryContext）は
+// App.jsx にそのまま残っている——ここはボタンを配列から外すだけ。
 const MODES = [
   { mode: 'floorplan', label: '平面' },
-  { mode: 'opening',   label: '建具' },
   { mode: 'finish',    label: '仕上げ' },
   { mode: 'structure', label: '構造' },
   { mode: 'site',      label: '敷地' },

@@ -115,15 +115,13 @@ export const GRID_ROW_GAP_SCREEN_MM = 6; // ROW1→ROW2、ROW2→通り芯丸+�
 // 6mm×3.78≈23px（通り芯丸の半径11px+12px余裕）
 export const DEFAULT_GRID_ROW_GAP_MM = 300; // 倍率決定用の1パス目の仮値（旧GRID_ROW_GAP_MMと同値）
 
-// 描画エリアの背景色（調整項目5）。index.css の `html, body, #root { background: #f5f5f0; }`
-// （製図用紙色）を映す——Konva Stage自体は透明で背景は#root越しに見えているため、これが
-// 実質的な「キャンバス背景色」。通り芯丸(circle)のfillに使い、丸の内側で通り芯の一点鎖線を
+// 描画エリアの背景色（調整項目5）。通り芯丸(circle)のfillに使い、丸の内側で通り芯の一点鎖線を
 // 隠す（線より後に描く。circleがtag=建具記号丸とは別プリミティブである点に注意——建具丸は
 // 意図的に背景透明のため、このCANVAS_BG_COLORでは塗らない）。
-// QA A3: この値は index.css の `#root` の background と重複定義（1箇所に一本化できず2箇所
-// 手動同期になる既知のトレードオフ。index.css側はCSSでJSの定数を参照できないため）。
-// 値を変更するときは index.css の該当行も必ず一緒に更新すること。
-export const CANVAS_BG_COLOR = '#f5f5f0';
+// QA I2: 定義本体はrenderer/canvasStyle.js（展開モード以外からも参照する汎用値のため。
+// index.cssとの同期コメントもそちら参照）。ここでは既存参照（elevationFigure.js等）を
+// 壊さないようre-exportするだけ。
+export { CANVAS_BG_COLOR } from '../renderer/canvasStyle.js';
 
 // 面ラベル(A/B/C/D等)と通り芯丸番号の重なり回避（QA A1→B1/B3で改訂）。項目2で両者を同じ段(y)
 // に統合したため、通り芯が面の壁芯間中心付近にある（偶数モジュールスパン等でよくある）と

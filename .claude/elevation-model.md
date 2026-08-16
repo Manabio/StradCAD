@@ -28,7 +28,8 @@ mm座標に焼き込まずアンカー点だけを持つ専用プリミティブ
 
 水平寸法は寸法線足を出さず、壁中心線・通り芯自体の一点鎖線を寸法線位置まで下ろし交点に塗り丸(`dim.dot`)を置く（CH寸法の足のみ残す）。
 寸法値は寸法線の**上側**。床線から下へ①tag②ROW1(壁芯間)③ROW2(通り芯間)④通り芯丸+面ラベル(同じ段)の順。通り芯・壁中心線は天井線より上へも
-`GRID_LINE_ABOVE_CH_MM`突き出す。通り芯丸は背景色(`CANVAS_BG_COLOR`。index.cssの`#root`と2箇所手動同期)で塗り一点鎖線の上に描く
+`GRID_LINE_ABOVE_CH_MM`突き出す。通り芯丸は背景色(`CANVAS_BG_COLOR`。定義は`renderer/canvasStyle.js`——展開モード以外からも参照する
+汎用値のためrenderer/配下に置き、`elevationStyle.js`はre-export。index.cssの`#root`と2箇所手動同期)で塗り一点鎖線の上に描く
 （`tag`は背景透明のまま対象外）。CH寸法値だけ寸法線の左側で反時計回り90°回転する。
 
 **注記帯の全ての段位置はスクリーンmm基準の独立定数**（tag行/ROW1/ROW1〜ROW2〜丸行の3つ。tag・通り芯丸のスクリーン固定半径ぶん、
@@ -125,7 +126,7 @@ scale未確定のため省略判定を行わない）。**テキスト幅概算�
 
 展開図の建具記号丸（`tag`プリミティブの`openingId`）はクリック可能——`ElevationModeState.selectedOpeningId`/`selectOpening()`は
 `OpeningModeState`と同じAPI名にしてあり、建具モードの`OpeningPanel.jsx`をそのままelevationモード中（appModeは切り替えない）でも
-再利用する。パネル表示中は展開図のドラッグ・ホイールスクロールを規制する（`usePointerInteraction.js`が`selectedOpeningId`を見る）。
+再利用する。**パネル表示中も展開図のドラッグ・ホイールスクロールは自由に行える**（規制は一度入れたが撤廃した。QA修正）。
 パネルでの編集はMobX reactionで`graph.openings`の各Openingの表示に効くフィールド（committed値。CLのようなpending/committed分離を
 持たないため確定のたびに1回だけ発火）を監視し、変更があれば帯を全再構築して即時反映する。クリック対象は建具記号丸のみ
 （姿図は現状複数の生プリミティブへ分解済みで個別の建具IDを持たないため対象外。defer）。

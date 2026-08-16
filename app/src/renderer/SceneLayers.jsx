@@ -45,12 +45,10 @@ export const SceneLayers = observer(({
       </Layer>
     );
   }
-  // 項目4: 建具モードは描画エリア（キャンバス）を描かない——右側の建具リストウィンドウ
-  // (OpeningPanel.jsx)の表示とそのUIのみで完結する。
-  if (appMode === 'opening') {
-    return null;
-  }
-
+  // QA修正: 建具モードは平面図（描画エリア）を描き続ける——「建具モードはキャンバス非表示」は
+  // 誤解釈だった（当時の項目4の意図は「建具モード専用のUIはパネルのみで完結し、モード切替の
+  // ためだけの追加キャンバスUIは持たない」という意味で、平面描画そのものを消す指示ではなかった）。
+  // openingモード用の早期returnは持たず、floorplan等と同じ共有レイヤ群（下記）をそのまま通す。
   return (
     <>
       <Layer name="world">

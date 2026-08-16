@@ -43,7 +43,8 @@ export class ElevationModeState {
   // モードを問わず `if (s.materialError) setToast(...)` で汎用的に読むフィールド）。
   materialError = null;
   // 項目3: 展開図中の建具クリックで開く建具リストパネル用（OpeningModeStateと同じAPI名にして
-  // OpeningPanel.jsxをそのまま再利用する）。null=パネル非表示（=ドラッグ・スクロール規制なし）。
+  // OpeningPanel.jsxをそのまま再利用する）。null=パネル非表示。QA修正: パネル表示中も展開図の
+  // ドラッグ・スクロールは自由に行える（以前あった規制は撤廃した。usePointerInteraction.js参照）。
   selectedOpeningId = null;
 
   // screenPxPerMm: 校正値（viewport.pxPerMmX/Yの平均。実画面mm→px）。ElevationModeState.js自体は
@@ -77,8 +78,7 @@ export class ElevationModeState {
 
   /**
    * 項目3: 建具リストパネルに表示する建具を選択する（OpeningPanel.jsx/OpeningModeStateと
-   * 同じAPI名——OpeningPanel.jsxをそのまま再利用するため）。id=nullでパネルを閉じる
-   * （ドラッグ・スクロール規制も同時に解除される。usePointerInteraction.js参照）。
+   * 同じAPI名——OpeningPanel.jsxをそのまま再利用するため）。id=nullでパネルを閉じる。
    */
   selectOpening(id) { this.selectedOpeningId = id ?? null; }
 
