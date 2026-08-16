@@ -34,6 +34,31 @@ function letterOf(isVertical, axisOffset) {
 
 const DIR_SIGN = { A: 1, B: 1, C: -1, D: -1 };
 
+// QA修正（項目5b根本原因）: axisCLIdごとに面をグルーピングする（単純なMap<axisCLId,Face>だと
+// 後勝ちで片方が消える）。ノッチ・張り出し（アルコーブ等）で1本の壁面が開口を挟み2区間以上に
+// 分かれる場合、両区間とも同じaxisCLId（壁の通り位置そのもの）を持つ——例: 主室の右壁(B)に
+// 幅の狭い張り出しが付くと、張り出しを挟む2区間(B1・B2)は同じ壁通り(axisCLId)上にありながら
+// 隅を共有する相手（startCLId/endCLId）がそれぞれ異なる。
+function groupByAxisCLId(faces) {
+  const map = new Map();
+  for (const f of faces) {
+    if (!map.has(f.axisCL.id)) map.set(f.axisCL.id, []);
+    map.get(f.axisCL.id).push(f);
+  }
+  return map;
+}
+
+// axisCLId=neighborAxisCLId を軸に持つ候補群（groupByAxisCLIdの結果）から、隅を実際に共有する
+// 1件を選ぶ——候補のstartCLId/endCLIdがownAxisCLId（呼び出し元の面自身の軸）と一致する候補だけが
+// 正しい相手（同じ壁通り上の他区間は別の隅を指すため一致しない）。0件なら隅の相手なし
+// （壁のない端部・外周の端）、2件以上一致することは室の単純な閉ループ上では起こらない
+// （各隅はちょうど2面で共有されるため）。
+function findCornerNeighbor(byAxisCLId, ownAxisCLId, neighborAxisCLId) {
+  const candidates = byAxisCLId.get(neighborAxisCLId);
+  if (!candidates) return null;
+  return candidates.find(c => c.startCLId === ownAxisCLId || c.endCLId === ownAxisCLId) ?? null;
+}
+
 /**
  * 各面の端座標を、同じ直交CL上にある直交面の faceValue（壁の室内側仕上げ面）へ詰める
  * （＝仕上げ面から仕上げ面までの有効長さにする）。対応する直交面が無い辺はCL芯のまま
@@ -51,12 +76,11 @@ const DIR_SIGN = { A: 1, B: 1, C: -1, D: -1 };
  *   追加した新しい配列（他フィールドは同一参照）
  */
 export function snapFaceEndsToCorners(faces) {
-  const byAxisCLId = new Map();
-  for (const f of faces) byAxisCLId.set(f.axisCL.id, f);
+  const byAxisCLId = groupByAxisCLId(faces);
 
   return faces.map(f => {
-    const startFace = byAxisCLId.get(f.startCLId);
-    const endFace   = byAxisCLId.get(f.endCLId);
+    const startFace = findCornerNeighbor(byAxisCLId, f.axisCL.id, f.startCLId);
+    const endFace   = findCornerNeighbor(byAxisCLId, f.axisCL.id, f.endCLId);
     const lo = startFace ? startFace.faceValue : f.lo;
     const hi = endFace   ? endFace.faceValue   : f.hi;
     // startCLIdは常に世界座標loを、endCLIdは常に世界座標hiを決める（上のlo/hi代入と対）。
@@ -155,7 +179,12 @@ export function buildRoomFaces(room, graph) {
 
   // 外周を実際に1周する順（隅=axisCL.idの一致で次面へ辿る）。開始点はA(北)のうち最も左（lo最小）
   // ——単独のAならそのまま先頭になる（矩形部屋のI1: ['A','B','C','D']順と整合）。
-  const byAxisCLId = new Map(raw.map(f => [f.axisCL.id, f]));
+  // QA修正（項目5b根本原因）: 単純なMap<axisCLId,Face>だと、ノッチ・張り出しで同じ壁通り
+  // (axisCLId)が2区間以上に分かれる場合に後勝ちで片方が消え、その面がchainに一切現れず
+  // 「抽出漏れ」になる（張り出し(アルコーブ)付き部屋で確認・再現。elevationFaces.test.js参照）。
+  // groupByAxisCLId+findCornerNeighborで「同じ壁通りの複数区間」から隅を実際に共有する
+  // 1件だけを選ぶ。
+  const byAxisCLId = groupByAxisCLId(raw);
   const aSegs = raw.filter(f => f.letter === 'A').sort((a, b) => a.lo - b.lo);
   const start = aSegs[0] ?? raw[0];
 
@@ -165,7 +194,7 @@ export function buildRoomFaces(room, graph) {
   while (cur && !seen.has(cur)) {
     chain.push(cur);
     seen.add(cur);
-    const next = byAxisCLId.get(exitCLId(cur));
+    const next = findCornerNeighbor(byAxisCLId, cur.axisCL.id, exitCLId(cur));
     if (!next || next === start) break;
     cur = next;
   }

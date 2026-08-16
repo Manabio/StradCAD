@@ -103,6 +103,48 @@ test('buildRoomFaces: 対向2面のrunの和は芯々寸法×2より小さい（
   assert.ok(byLabel.B.run + byLabel.D.run < 2 * spanY, 'B+Dのrun和はY芯々寸法×2未満');
 });
 
+// ---- QA修正（項目5b根本原因）: 張り出し(アルコーブ)付き部屋で、同じ壁通り(axisCLId)が
+// 開口を挟み2区間に分かれても、両区間とも抽出漏れせずchainに現れる ----
+// 根本原因: buildRoomFacesのchain-walk・snapFaceEndsToCornersが、隅の相手探索に
+// Map<axisCLId, 単一face>を使っていたため、同じaxisCLIdを持つ複数面（張り出し・ノッチ等で
+// 1本の壁面が非連続な2区間以上に分かれる場合に発生）のうち後から登録された方で上書きされ、
+// 片方が事実上たどり着けなくなり出力から消えていた（ユーザー観察の「面のrunが1000以下で
+// 抽出漏れ」は、張り出しの両脇に残る短い返し壁（本テストでは幅1000のアルコーブの両脇＝
+// 約943mm）がこの上書きで消える典型パターンと一致する）。
+test('【QA修正・項目5b】buildRoomFaces: 張り出し(アルコーブ)付き部屋は、壁を挟む同じ壁通りの2区間とも抽出される（旧実装は片方が消えていた）', () => {
+  const graph = makeGraph();
+  // 主室(0,0)-(4000,3000)の右側面(x=4000)に、幅800(x方向)×高さ1000(y方向、y:1000..2000)の
+  // アルコーブが張り出す。主室の右壁(B)はアルコーブの開口を挟みB1(y:0..1000)・B3(y:2000..3000)の
+  // 2区間に分かれ、どちらも同じaxisCLId(x=4000)を持つ——これが本バグの発生条件。
+  const x0 = addCL(graph, CenterLineType.VERTICAL, 0);
+  const x1 = addCL(graph, CenterLineType.VERTICAL, 4000);
+  const x2 = addCL(graph, CenterLineType.VERTICAL, 4800);
+  const y0 = addCL(graph, CenterLineType.HORIZONTAL, 0);
+  const y1 = addCL(graph, CenterLineType.HORIZONTAL, 1000);
+  const y2 = addCL(graph, CenterLineType.HORIZONTAL, 2000);
+  const y3 = addCL(graph, CenterLineType.HORIZONTAL, 3000);
+  const cells = new Set([
+    `${x0.id}:${y0.id}:${x1.id}:${y3.id}`, // 主室
+    `${x1.id}:${y1.id}:${x2.id}:${y2.id}`, // アルコーブ
+  ]);
+  const room = graph.addRoom(cells, 'アルコーブ室');
+  generateRoomWallsFromOutline(graph, room);
+  const faces = buildRoomFaces(room, graph);
+
+  // 主室4辺(A/B/C/D。うちBはアルコーブ開口で分割)＋アルコーブ自身の3辺(奥・左右)＝計8面のはず。
+  assert.equal(faces.length, 8, `旧実装は同じ壁通りの上書きでアルコーブごと消え4面になっていた（実際:${faces.length}）`);
+  const byLabel = Object.fromEntries(faces.map(f => [f.label, f]));
+  assert.ok(byLabel.B1 && byLabel.B2 && byLabel.B3, 'Bは開口を挟みB1/B2/B3の3区間に分かれるはず');
+  // B1・B3（アルコーブ両脇の返し壁）はどちらも約943mm（run<=1000。ユーザー観察と一致）。
+  assert.ok(byLabel.B1.run <= 1000 && byLabel.B1.run > 0, `B1のrunが1000以下のはず（実際:${byLabel.B1.run}）`);
+  assert.ok(byLabel.B3.run <= 1000 && byLabel.B3.run > 0, `B3のrunが1000以下のはず（実際:${byLabel.B3.run}）`);
+  // 全面がhasWallAtLocal0/Run=true（すべて実壁ありの通常の出隅。壁のない端部は無い）。
+  for (const f of faces) {
+    assert.equal(f.hasWallAtLocal0, true, `${f.label}のhasWallAtLocal0はtrueのはず`);
+    assert.equal(f.hasWallAtLocalRun, true, `${f.label}のhasWallAtLocalRunはtrueのはず`);
+  }
+});
+
 // ---- 項目1: snapFaceEndsToCornersが「対応する直交面が無い端」をhasWallAtLocal0/Runで公開する ----
 test('snapFaceEndsToCorners: 対応する直交面が無い端（壁のない端部）はhasWallAtLocal0/hasWallAtLocalRunがfalseになる', () => {
   // faceA--faceB の2面チェーン（中間の隅=axAは繋がるが、両端=clStartDangling/clEndDanglingは
