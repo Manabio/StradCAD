@@ -41,6 +41,11 @@ export const SceneLayers = observer(({
   if (appMode === 'elevation') {
     return <Layer name="elevation"><ElevationLayer mode={mode} size={size} /></Layer>;
   }
+  // 項目4: 建具モードは描画エリア（キャンバス）を描かない——右側の建具リストウィンドウ
+  // (OpeningPanel.jsx)の表示とそのUIのみで完結する。
+  if (appMode === 'opening') {
+    return null;
+  }
 
   return (
     <>

@@ -17,7 +17,9 @@ function totalCountOf(group) {
 // 建具モード突入時に自動表示されるパネル。上段＝記号別採番リスト（アクティブ階のみ・
 // 採番は全階統一）、下段＝選択中建具の姿図＋フォーム（OpeningEditor）。
 // StructuralPanel.jsx / StairPanel.jsx と同じシェル分岐（横長=ModePanel／縦長=BottomSheet）。
-export const OpeningPanel = observer(function OpeningPanel({ graph, project, mode, isLandscape, onToast }) {
+// 項目4: パネルに「×」を追加し、クリックで建具モードを脱出する（脱出先は平面モード。
+// onCloseは呼び出し側=App.jsxがhandleModeChange('floorplan')を渡す）。
+export const OpeningPanel = observer(function OpeningPanel({ graph, project, mode, isLandscape, onToast, onClose }) {
   const groups = openingGroupsOnFloor(graph, project);
   const selectedId = mode.selectedOpeningId;
   const selectedOpening = selectedId ? graph.shapeMap.get(selectedId) : null;
@@ -66,6 +68,6 @@ export const OpeningPanel = observer(function OpeningPanel({ graph, project, mod
   );
 
   return isLandscape
-    ? <ModePanel title="建具">{inner}</ModePanel>
-    : <BottomSheet title="建具" initialSnap={0.5} raiseSignal={selectedId}>{inner}</BottomSheet>;
+    ? <ModePanel title="建具" onClose={onClose}>{inner}</ModePanel>
+    : <BottomSheet title="建具" initialSnap={0.5} raiseSignal={selectedId} onClose={onClose}>{inner}</BottomSheet>;
 });

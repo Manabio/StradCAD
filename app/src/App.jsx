@@ -1725,6 +1725,7 @@ const App = observer(() => {
           mode={mode}
           isLandscape={isLandscape}
           onToast={msg => setToast({ msg, key: Date.now() })}
+          onClose={() => handleModeChange('floorplan')}
         />
       )}
 
