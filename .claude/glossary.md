@@ -35,6 +35,16 @@
 ## 部分指定 / 参照元
 **部分指定**＝既存部屋の一部セルに別名を与えるRoom（`referenceRoomIds`で参照元＝親を指す。外周壁は親が担う）。**参照元**＝`referenceRoomIds`が空のRoom。親の削除は部分指定を道連れにする。
 
+## 段差見付け面（展開図）
+部屋**内部**（壁の無い境界）でFLの異なる区間がある箇所に、段差の見えがかり（見付け）を専用の面として展開図に挿入したもの
+（`elevation/elevationStepFace.js`。壁際の段差は`wallAdjacentFloorSegments`の床線プロファイルで別途表現する）。設計意図は
+`.claude/elevation-model.md`「面リストの合成」節。
+
+## 袖壁（展開図）
+面に直交し、面の仕上げ面へ到達して室内側へ一定量以上突き出し室内で終端する壁（外壁・自室外周生成壁・同軸壁は除く）。
+展開図では面をその位置で分割し、壁のない端部（`hasWallAtLocal0/Run=false`）として扱う（`elevation/elevationFaces.js`の
+`perpendicularWallsOnFace`。設計意図は`.claude/elevation-model.md`）。腰壁は同条件で`kneeDropWalls`にknee指定を持つもの。
+
 ## Edge（境界エッジ） / boundaryMaster
 仕上げモードの部屋境界。`boundaryMaster`はその層構成（壁の材構成）の既定値セット。
 

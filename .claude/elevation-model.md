@@ -51,6 +51,9 @@ mm座標に焼き込まずアンカー点だけを持つ専用プリミティブ
 （この`floorOffset`は部屋帯全体の階基準ズレで、次節の壁際の段差とは別物）。
 
 ## 床の段差プロファイル（部分指定）
+**`selectElevationRooms`は部分指定（`referenceRoomIds`非空）を対象から除外する**（QA修正）——部分指定は独自の展開図帯を持たず、
+親の帯の中で下記の段差プロファイルとして表現されるため。除外しないと親・部分指定の両方に同じ壁面が重複して展開されてしまう。
+
 部分指定Room（`referenceRoomIds`で親を参照。`.claude/glossary.md`）が親の壁際セルの一部を占め`floorLevel`が異なる場合、床線は段差付きの
 階段状polylineになる。`elevationFloorProfile.js`の`wallAdjacentFloorSegments(face, parentRoom, graph)`が、面に接する親自身のセル
 （`finish/gridCells.js`の`refreshCells`/`cellBoundsFromKey`を再利用）を壁沿いに拾い、部分指定のセル集合に含まれていればその
@@ -141,3 +144,47 @@ scale未確定のため省略判定を行わない）。**テキスト幅概算�
 
 defer（未実装）: 傾斜天井の作図・開口の内法寸法線・巾木見切り目地・家具設備電気・屋外部屋・展開図上の編集・印刷/PDF・
 SWITCHBACK以外の階段断面（WINDING/L_TURN/FLARED/OPEN_WELL）・展開図の建具「姿」クリックでのパネル連携（記号丸のみ対応）。
+
+## 面リストの合成（composeRoomFaces）・段差見付け面・ROW1寸法のCL分割
+`buildRoomFaces`（壁面ループ・隅共有不変条件）は変更せず、その上に新レイヤ`elevationFaceList.js`の`composeRoomFaces()`を
+面リストの唯一の供給源として重ねる（`buildRoomBand`/`buildStairBand`は`buildRoomFaces`ではなくこちらを呼ぶ）。合成順は
+「袖壁・腰壁の面分割 → 段差見付け面の挿入 → `labelFaces`再採番」で固定——段差見付け面の挿入位置判定は分割済みの面配列を
+前提にする。段差見付け面（`kind:'step'`）を挟んでも実質的な隣接関係は変わらないため、`prevFace`/`nextFace`の取得は
+`neighborWallFace(faces, i, dir)`（`kind!=='step'`の最初の面を返す）を使う。
+
+**段差見付け面（`elevationStepFace.js`）**: 部分指定の子Roomが親の壁際に接する箇所（`wallAdjacentFloorSegments`が担当）とは別に、
+**壁の無い部屋内部**の境界でFLが異なる区間には「段差の見えがかり（見付け）」を専用の面として挿入する。`stepRiserSegments`が
+親Room自身の未指定セル＋各部分指定の子をFLごとにグループ化し（`refreshCells`→owner索引）、各グループの外形
+（`finish/gridCells.js`の`cellBoundsList`→`outlineSegments`）から「自分より低い隣に接する区間」だけを抽出する
+（相手FL>=自分のFLは重複排除で捨てる＝低い側からは生成しない）。`buildStepFaces`が通常面と同じ`letterOf`/`DIR_SIGN`規則で
+面オブジェクト化し（`lo`/`hi`は両端の直交壁面の`faceValue`へ詰める。届かなければCL値のまま）、`insertStepFaces`が
+「見付け面の始点を含む壁面Wの直後」へ挿入する（Wが無ければ末尾）。`buildFaceFigure`は`kind==='step'`を早期分岐し、
+低い側床線・高い側床線（見付け上端）・両端縦線・天井線を全てCUTで描き、上部にアキ（`appendGapMark`。腰壁・垂れ壁の穴と共用）を
+乗せる——開口・巾木・壁2段書きはスキップし、注記帯（ROW1/ROW2/面ラベル）は`appendAnnotationRows`で通常面と共通合流する。
+
+**ROW1寸法のCL分割（`elevationDimSplit.js`）**: ROW1（壁芯間寸法）は`boundary.lo`〜`hi`を1本で通すのではなく、
+`collectRow1SplitPoints`が集める3源（段差CL=`floorSegments[i].hiCLId`／面へ到達する直交壁=`perpendicularWallsOnFace(face,graph,'far')`
+のaxisCL／面に届く非通り芯中心線）で分割した「寸法の鎖」にする。通り芯（labeled）はROW2と二重になるため対象外。
+分割点は`boundary.lo/hi`ちょうど（±`SPLIT_MERGE_EPS_MM`=1）を除外し、通り芯と同位置の一点鎖線は重複させない。
+
+**段差位置のCLオフセット（`elevationFloorProfile.js`）**: `wallAdjacentFloorSegments`のsegsは境界CLの実id
+（`loCLId`/`hiCLId`。ローカルx反転時は入れ替えて引き継ぐ）を持つ。段差の**描画位置**（区間水平床線の端x・段差縦線x・巾木・
+壁2段書きの障害物区間の4箇所）は、寸法・CL一点鎖線が使う`segs[i].hiX`（オフセット前）そのものではなく、`drawnRiserX(segs,i,halfWallMm)`
+が返す「床が低い側へ半壁厚(`halfWallThicknessMm(face)`)だけずらした位置」を使う——寸法線・CL一点鎖線と段差の実描画位置を
+意図的に別の値として持つ設計（両者が同じ線に重なって見づらくなるのを避ける）。
+
+**袖壁・腰壁の面分割（`elevationFaceList.js`の`splitFacesAtPartitionWalls(faces, room, graph)`）実装済み**——
+`perpendicularWallsOnFace(face, graph, 'near')`が返す袖壁を面のローカルx（昇順・`SPLIT_MERGE_EPS_MM`以内は併合）で並べ、
+面を断片化する（`kind:'step'`の見付け面は対象外のまま素通り）。各断片は元面のフィールドを継承しつつ、分割端だけ
+`startCLId/endCLId`=袖壁CLのid（隣接断片が同じCLを参照する＝`faceBoundaryLocalX`基準の境界が厳密に一致）・
+`lo/hi`=袖壁の仕上げ面（`Wall.materialRange`の該当端。断片は自分自身の`originWorld`を`dirSign>0?lo:hi`で持ち直す＝
+各断片が独立したローカル座標系(x=0起点)を持つ点に注意）・`hasWallAtLocal0/Run`=false（既存の「壁のない端部」処理＝
+床天井延長＋端の縦線なしをそのまま流用）・`partitionCutAtLocal0/Run`={thicknessMm, topHeightMm|null}
+（`kneeDropRecordFor`。`graph.kneeDropWalls`をaxisCLId一致＋スパン重なりで直読み。腰壁指定が無ければnull=天井まで）
+へ差し替える。`buildFaceFigure`は`partitionCutAtLocal0/Run`があれば分割端に`thicknessMm`幅・`0..-(topHeightMm??CH)`の
+CUT枠rectを重ねる。
+
+Round Fフィクスチャ（`.claude`配下の設計メモ・引き継ぎ参照）は`generateRoomWallsFromOutline`由来の外周壁24本のみで
+自立壁（`isRoomWall`/`isExteriorWall`とも false の袖壁候補）を1本も含まないため、本仕様の効果は確認できていない
+（`splitFacesAtPartitionWalls`自体は専用の実壁フィクスチャ（`elevationFaceList.test.js`）で分割・境界一致・幅合計不変・
+腰壁高さ・失敗系（未到達・突出不足）を検証済み）。
