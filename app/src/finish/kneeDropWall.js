@@ -42,6 +42,35 @@ function getShape(graph, id) {
 }
 
 /**
+ * axisCLId・区間[spanLo,spanHi]に重なる graph.kneeDropWalls のレコードを列挙する（QA修正L1）。
+ * key=edgeKey(axisCLId,startCLId,endCLId) の解読（key.split(':')→CL解決→lo/hi→スパン重なり判定）
+ * はこの関数のみで行う——キー形式を所有するこのファイルへ集約し、elevation/elevationFigure.js
+ * の kneeDropGapsOnFace・elevation/elevationFaceList.js の kneeDropRecordFor が消費者として使う
+ * （旧実装はそれぞれ独自にkey.split(':')以下を再実装しており、3箇所に同じ解読ロジックが
+ * 重複していた）。knee/drop指定の有無によるフィルタは呼び出し側の責務のまま（全レコードを返す）。
+ * @param {object} graph
+ * @param {string} axisCLId
+ * @param {number} spanLo
+ * @param {number} spanHi
+ * @returns {Array<{key:string, rec:object, lo:number, hi:number}>} スパンが重ならないものは含まない
+ */
+export function kneeDropRecordsOnAxis(graph, axisCLId, spanLo, spanHi) {
+  const out = [];
+  for (const [key, rec] of graph.kneeDropWalls) {
+    const [keyAxisCLId, startCLId, endCLId] = key.split(':');
+    if (keyAxisCLId !== axisCLId) continue;
+    const startCL = getShape(graph, startCLId);
+    const endCL   = getShape(graph, endCLId);
+    if (!startCL || !endCL) continue;
+    const lo = Math.min(startCL.value, endCL.value);
+    const hi = Math.max(startCL.value, endCL.value);
+    if (hi <= spanLo || lo >= spanHi) continue; // スパンが重ならない
+    out.push({ key, rec, lo, hi });
+  }
+  return out;
+}
+
+/**
  * 壁の押下位置（ワールド座標）から、腰壁・垂れ壁の対象区間キー（edgeKey）を解決する。
  * 壁の部屋側（axisOffsetの符号側）へ微小オフセットしてセルを解決し、壁の長さ方向のセル境界
  * CLペアをedgeKeyへ正規化する（computeNamedBoundaryEdges と同じ正規化規則）。

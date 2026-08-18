@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import { Plane, PlanGraph, CenterLineType, Discipline, edgeKey } from '@core';
 import { generateRoomWallsFromOutline } from './wallGeneration.js';
 import { edgeGeometry, buildCellToRoom } from './edgeClassify.js';
-import { effectiveCeilingHeight, validateKneeDropWall, ERR_CEILING_HEIGHT_UNRESOLVED } from './kneeDropWall.js';
+import { effectiveCeilingHeight, validateKneeDropWall, ERR_CEILING_HEIGHT_UNRESOLVED, kneeDropRecordsOnAxis } from './kneeDropWall.js';
 
 function makeGraph() {
   const plane = new Plane('p1', 0, '1階', 1, 1);
@@ -91,4 +91,40 @@ test('【失敗系】effectiveCeilingHeight: 片側が無名屋外（部屋な�
   const key = edgeKey(yMid.id, x0.id, x1.id);
   const cellToRoom = buildCellToRoom(graph);
   assert.equal(effectiveCeilingHeight(graph, key, cellToRoom), 2600);
+});
+
+// ==== QA修正L1: kneeDropRecordsOnAxis（key解読の共通化） ====
+
+test('kneeDropRecordsOnAxis: axisCLIdが一致しスパンが重なるレコードを{key,rec,lo,hi}で返す', () => {
+  const graph = makeGraph();
+  const { key } = makeSharedEdgeRooms(graph);
+  const rec = { knee: { topHeight: 900 } };
+  graph.setKneeDropWall(key, rec);
+
+  const [axisCLId] = key.split(':');
+  const found = kneeDropRecordsOnAxis(graph, axisCLId, 0, 4000);
+  assert.equal(found.length, 1);
+  assert.equal(found[0].key, key);
+  assert.deepEqual(found[0].rec, rec);
+  assert.equal(found[0].lo, 0);
+  assert.equal(found[0].hi, 4000);
+});
+
+// ---- 失敗系: axisCLIdが一致してもスパンが重ならなければ含めない ----
+test('【失敗系】kneeDropRecordsOnAxis: スパンが重ならなければ含めない', () => {
+  const graph = makeGraph();
+  const { key } = makeSharedEdgeRooms(graph);
+  graph.setKneeDropWall(key, { knee: { topHeight: 900 } });
+
+  const [axisCLId] = key.split(':');
+  // レコードのスパンは[0,4000]。問い合わせスパン[5000,6000]は重ならない。
+  assert.equal(kneeDropRecordsOnAxis(graph, axisCLId, 5000, 6000).length, 0);
+});
+
+// ---- 失敗系: axisCLIdが一致しなければ含めない ----
+test('【失敗系】kneeDropRecordsOnAxis: axisCLIdが一致しなければ含めない', () => {
+  const graph = makeGraph();
+  const { key } = makeSharedEdgeRooms(graph);
+  graph.setKneeDropWall(key, { knee: { topHeight: 900 } });
+  assert.equal(kneeDropRecordsOnAxis(graph, 'other-axis-cl-id', 0, 4000).length, 0);
 });
