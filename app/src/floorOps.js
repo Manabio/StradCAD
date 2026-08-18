@@ -99,6 +99,47 @@ export function resolveChipReorderTarget(plane, alts, planes, direction) {
   return { kind: 'floor', toZone: direction > 0 ? i + 2 : i - 1 };
 }
 
+// ---- plane一覧の復元差分計算（計算部）----
+// metas: decodePlanes(bytes) の戻り値 { planes, activePlaneId } | null（文書なしは null）
+// existingIds: 現在 project.planeMap に存在する plane.id の配列（起動直後は [bootPlaneId] のみのはず）
+// bootPlaneId: store.js 起動時にブートストラップとして既に project.addPlane 済みの plane.id
+//   （既存集合に念のため合流させる。呼び出し側が existingIds に含め忘れても bootPlaneId は
+//   必ず toUpdate/toRemove いずれかに分類される）
+//
+// - 参照先を失った検討階（referenceId が metas.planes 内に不在）は最終集合から除外する。
+//   判定は raw list（metas.planes）1段のみ——検討が別の検討を参照する多段構成は現行データ
+//   モデルに存在しないため、連鎖的な孤児判定（除外された検討をさらに参照する検討の再帰除外）は行わない。
+// - activePlaneId（metas.activePlaneId）が最終集合に不在、または最終集合内で isRoofPlane の
+//   plane を指す場合は、最下階（isAlternative/isRoofPlane を除く elevation 最小のplane。
+//   無ければ最終集合の先頭）へフォールバックする（屋根専用平面は構造モード専用の合成平面で
+//   平面モードの復帰導線を持たないため、通常のアクティブ階として復元してはならない。
+//   ただし plane 自体は最終集合から除外しない——構造モードの図面合成に必要）。
+// - 戻り値: { toAdd, toUpdate, toRemove, activePlaneId }。文書なし（metas が null または
+//   metas.planes が空/未定義）は null を返す。
+export function reconcilePlanes(metas, existingIds, bootPlaneId) {
+  if (!metas || !metas.planes || metas.planes.length === 0) return null;
+
+  // 参照先を失った検討階を除外
+  const finalMetas = metas.planes.filter(p =>
+    !p.isAlternative || metas.planes.some(q => q.id === p.referenceId));
+  const finalIds = new Set(finalMetas.map(p => p.id));
+
+  const existingSet = new Set([...(existingIds ?? []), bootPlaneId]);
+  const toAdd    = finalMetas.filter(p => !existingSet.has(p.id));
+  const toUpdate = finalMetas.filter(p => existingSet.has(p.id));
+  const toRemove = [...existingSet].filter(id => id != null && !finalIds.has(id));
+
+  const bottomCandidates = finalMetas
+    .filter(p => !p.isAlternative && !p.isRoofPlane)
+    .sort((a, b) => a.elevation - b.elevation);
+  const savedActive = finalMetas.find(p => p.id === metas.activePlaneId);
+  const activePlaneId = (savedActive && !savedActive.isRoofPlane)
+    ? savedActive.id
+    : (bottomCandidates[0]?.id ?? finalMetas[0]?.id ?? null);
+
+  return { toAdd, toUpdate, toRemove, activePlaneId };
+}
+
 // ---- 階変更（計算部）----
 // planes（elevation昇順の採用フロア一覧）内の planeId 以降の startFloor/elevation/name を
 // newStartFloor 起点で再採番する。適用不可（newStartFloor===0・planeId未検出）なら null。

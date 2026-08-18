@@ -9,6 +9,12 @@ export function readLocalAutosaveRaw() {
   return localStorage.getItem(AUTOSAVE_KEY);
 }
 
+// 自動保存データを消去する（「新規（全消去）」メニュー専用）。AUTOSAVE_KEY の唯一の所有者は
+// このモジュール——他モジュール（store.js 等）はキー文字列をハードコードしないこと。
+export function clearLocalAutosave() {
+  localStorage.removeItem(AUTOSAVE_KEY);
+}
+
 // 自動保存データ（base64=新形式 or JSON文字列=旧形式）を restoreGraph に渡せる形へパースする。
 // 不正な内容は例外を投げる（呼び出し側が catch して toast を出す）。
 export function parseAutosaveData(raw) {

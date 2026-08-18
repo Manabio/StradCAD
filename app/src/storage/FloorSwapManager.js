@@ -10,6 +10,11 @@
  *   peek(plane, structGraph)         — IDB から読み取り専用の一時グラフへ復元（非アクティブ化）
  *   disposeAll()                     — 全 auto-save 停止
  *
+ * ── 編集可能peek ──
+ *   startEditablePeek(plane, graph)  — デバウンス自動保存を開始
+ *   flushEditablePeek()              — autorunは止めず、保留中のデバウンス保存だけを確定する
+ *   stopEditablePeek()               — autorunを止め、保留中の保存を確定してから終了する
+ *
  * ── 通り芯・構造情報操作 ──
  *   setupStructGraph(structGraph, structuralInfo, projectId, ledger)
  *                                    — IDB から通り芯・構造情報・部材グループ台帳を復元 + auto-save 開始
@@ -25,7 +30,8 @@ import { markDirty } from '../dirtyState.js';
 export class FloorSwapManager {
   _cleanups    = new Map(); // planeId → cleanup fn
   _structCleanup = null;   // 通り芯 auto-save cleanup fn
-  _peekCleanup = null;     // 編集可能peek（下階）の auto-save cleanup fn
+  _peekCleanup = null;     // 編集可能peek（下階）の auto-save cleanup fn（disposeまで行う）
+  _peekFlush   = null;     // 編集可能peek（下階）の保留中デバウンス保存だけを確定するfn（disposeしない）
 
   // ----------------------------------------------------------------
   // フロア操作
@@ -78,17 +84,33 @@ export class FloorSwapManager {
     void this.stopEditablePeek();
     let initialized = false;
     let timer = null;
+    const flushPending = () => {
+      if (!timer) return Promise.resolve();
+      clearTimeout(timer);
+      timer = null;
+      return saveFloor(plane.id, serializeGraph(graph));
+    };
     const dispose = autorun(() => {
       void serializeGraph(graph); // シリアライズ対象の全observableを依存に取る
       if (!initialized) { initialized = true; return; }
       if (timer) clearTimeout(timer);
       timer = setTimeout(() => { timer = null; saveFloor(plane.id, serializeGraph(graph)); }, 400);
     });
+    this._peekFlush = flushPending;
     this._peekCleanup = () => {
       dispose();
-      if (timer) { clearTimeout(timer); return saveFloor(plane.id, serializeGraph(graph)); } // 保留中の編集を確定
-      return Promise.resolve();
+      return flushPending(); // 保留中の編集を確定
     };
+  }
+
+  /**
+   * autorun は止めずに、保留中のデバウンス保存だけを確定する（Promise を返す）。
+   * 明示保存（saveToIDB）の直前に呼ぶ——デバウンス分（最大400ms）の下階編集が
+   * floorsへ未反映のまま保存documentへコミットされる（取りこぼす）のを防ぐ。
+   * 保留中の保存が無ければ何もせず即座に解決する。
+   */
+  flushEditablePeek() {
+    return this._peekFlush ? this._peekFlush() : Promise.resolve();
   }
 
   /** 編集可能peekを停止し、保留中の編集の確定保存まで待てる Promise を返す。
@@ -96,6 +118,7 @@ export class FloorSwapManager {
   stopEditablePeek() {
     const flushed = this._peekCleanup?.() ?? Promise.resolve();
     this._peekCleanup = null;
+    this._peekFlush = null;
     return flushed;
   }
 

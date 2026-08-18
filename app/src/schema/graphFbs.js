@@ -58,6 +58,8 @@ const GS = {
   KNEE_DROP_WALLS: 43,
   // 壁由来の梁芯CL自動生成（structural/wallBeamAxes.js）の除外集合（per-floor、座標ベースキー）
   EXCLUDED_WALL_BEAM_AXES: 44,
+  // plane一覧（全階・検討・屋根平面のメタデータ）。project 単位の blob のみで使用
+  PLANES: 45, ACTIVE_PLANE_ID: 46,
 };
 
 // Stair: 15 フィールド
@@ -141,6 +143,12 @@ const WL = {
 const CE = { CL_ID: 0, MODE: 1, VALUE: 2, SIDE: 3, BACKING: 4 };
 // KneeDropWall（腰壁・垂れ壁レコード）: 5 フィールド
 const KDW = { KEY: 0, HAS_KNEE: 1, KNEE_TOP: 2, HAS_DROP: 3, DROP_BOTTOM: 4 };
+
+// Plane（plane一覧のメタデータ）: 10 フィールド
+const PLN = {
+  ID: 0, ELEV: 1, NAME: 2, START_FLOOR: 3, STORIES: 4,
+  IS_ALT: 5, REF_ID: 6, ALT_INDEX: 7, IS_ROOF: 8, ROOF_FOR: 9,
+};
 
 // Opening: 25 フィールド（開口 — 建具・窓）
 const OP = {
@@ -646,6 +654,26 @@ function writeKneeDropWall(b, kdw) {
   b.addFieldFloat64(KDW.KNEE_TOP,   kdw.kneeTop ?? 0, 0.0);
   b.addFieldInt8(KDW.HAS_DROP,      kdw.hasDrop ? 1 : 0, 0);
   b.addFieldFloat64(KDW.DROP_BOTTOM, kdw.dropBottom ?? 0, 0.0);
+  return b.endObject();
+}
+
+function writePlane(b, p) {
+  const sId      = b.createString(p.id ?? '');
+  const sName    = b.createString(p.name ?? '');
+  const sRefId   = b.createString(p.referenceId ?? '');
+  const sRoofFor = b.createString(p.roofForPlaneId ?? '');
+
+  b.startObject(10);
+  b.addFieldOffset(PLN.ID,           sId,   0);
+  b.addFieldFloat64(PLN.ELEV,        p.elevation ?? 0, 0.0);
+  b.addFieldOffset(PLN.NAME,         sName, 0);
+  b.addFieldFloat64(PLN.START_FLOOR, p.startFloor ?? 1, 0.0);
+  b.addFieldFloat64(PLN.STORIES,     p.stories ?? 1, 0.0);
+  b.addFieldInt8(PLN.IS_ALT,         p.isAlternative ? 1 : 0, 0);
+  b.addFieldOffset(PLN.REF_ID,       sRefId, 0);
+  b.addFieldFloat64(PLN.ALT_INDEX,   p.altIndex ?? 0, 0.0);
+  b.addFieldInt8(PLN.IS_ROOF,        p.isRoofPlane ? 1 : 0, 0);
+  b.addFieldOffset(PLN.ROOF_FOR,     sRoofFor, 0);
   return b.endObject();
 }
 
@@ -1237,6 +1265,22 @@ function readKneeDropWall(bb, tablePos) {
   };
 }
 
+function readPlane(bb, tablePos) {
+  const r = makeReader(bb, tablePos);
+  return {
+    id:             r.str(PLN.ID),
+    elevation:      r.f64(PLN.ELEV),
+    name:           r.str(PLN.NAME),
+    startFloor:     r.f64(PLN.START_FLOOR) || 1,
+    stories:        r.f64(PLN.STORIES)     || 1,
+    isAlternative:  r.i8(PLN.IS_ALT) !== 0,
+    referenceId:    r.str(PLN.REF_ID) || null,
+    altIndex:       r.f64(PLN.ALT_INDEX),
+    isRoofPlane:    r.i8(PLN.IS_ROOF) !== 0,
+    roofForPlaneId: r.str(PLN.ROOF_FOR) || null,
+  };
+}
+
 function readExteriorRow(bb, tablePos) {
   const r = makeReader(bb, tablePos);
   return {
@@ -1455,6 +1499,8 @@ export function encode(snapshot) {
   const columnAxisValsVec = writeStrVec(b, snapshot.columnAxisOffsetVals ?? []);
   const clEccVec = writeVec(b, snapshot.clEccentricities ?? [], writeClEcc);
   const kneeDropWallVec = writeVec(b, snapshot.kneeDropWalls ?? [], writeKneeDropWall);
+  const planesVec = writeVec(b, snapshot.planes ?? [], writePlane);
+  const sActivePlaneId = b.createString(snapshot.activePlaneId ?? '');
   const stairVec      = writeVec(b, snapshot.stairs ?? [], writeStair);
   const stairOrderVec = writeStrVec(b, snapshot.stairOrder ?? []);
   const exteriorRowsVec        = writeVec(b, snapshot.exteriorRows        ?? [], writeExteriorRow);
@@ -1467,7 +1513,7 @@ export function encode(snapshot) {
   const sStructureOverride = b.createString(snapshot.structureOverride ?? '');
   const structuralInfoOff  = writeStructuralInfo(b, snapshot.structuralInfo);
 
-  b.startObject(45);
+  b.startObject(47);
   b.addFieldOffset(GS.CLS,        clVec,        0);
   b.addFieldOffset(GS.PTS,        ptVec,        0);
   b.addFieldOffset(GS.WALLS,      wallVec,      0);
@@ -1512,6 +1558,8 @@ export function encode(snapshot) {
   b.addFieldOffset(GS.STRUCTURE_ROWS,        structureRowsVec,       0);
   b.addFieldOffset(GS.CL_ECCENTRICITIES,     clEccVec,               0);
   b.addFieldOffset(GS.KNEE_DROP_WALLS,       kneeDropWallVec,        0);
+  b.addFieldOffset(GS.PLANES,                planesVec,              0);
+  b.addFieldOffset(GS.ACTIVE_PLANE_ID,       sActivePlaneId,         0);
   const root = b.endObject();
 
   b.finish(root);
@@ -1572,5 +1620,7 @@ export function decode(bytes) {
     structureRows:       r.vec(GS.STRUCTURE_ROWS,        readExteriorRow),
     clEccentricities:    r.vec(GS.CL_ECCENTRICITIES,     readClEcc),
     kneeDropWalls:       r.vec(GS.KNEE_DROP_WALLS,       readKneeDropWall),
+    planes:              r.vec(GS.PLANES, readPlane),
+    activePlaneId:       r.str(GS.ACTIVE_PLANE_ID) || null,
   };
 }

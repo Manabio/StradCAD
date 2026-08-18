@@ -316,6 +316,27 @@ export function serializeStructCLs(structGraph, structuralInfo, ledger) {
 }
 
 // ----------------------------------------------------------------
+// シリアライズ / デシリアライズ: plane一覧（全階・検討・屋根平面のメタデータ）→ Uint8Array
+// buildStructCLs/restoreStructCLs（通り芯の undo スナップショット）とは無関係の独立チャネル。
+// ----------------------------------------------------------------
+export function serializePlanes(project) {
+  return encode({
+    planes: [...project.planeMap.values()].map(p => ({
+      id: p.id, elevation: p.elevation, name: p.name,
+      startFloor: p.startFloor, stories: p.stories,
+      isAlternative: p.isAlternative, referenceId: p.referenceId ?? null,
+      altIndex: p.altIndex, isRoofPlane: p.isRoofPlane, roofForPlaneId: p.roofForPlaneId ?? null,
+    })),
+    activePlaneId: project.activePlaneId ?? null,
+  });
+}
+
+export function decodePlanes(bytes) {
+  const { planes, activePlaneId } = decode(bytes);
+  return { planes, activePlaneId };
+}
+
+// ----------------------------------------------------------------
 // ノード解決ヘルパー
 // structGraph の CLId も参照できるよう _structGraph を考慮する
 // ----------------------------------------------------------------

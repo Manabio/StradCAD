@@ -4,6 +4,7 @@ const SITE_INFO_ITEM       = { id: 'site-info',       label: '敷地情報' };
 const BUILDING_INFO_ITEM   = { id: 'building-info',   label: '建築情報' };
 
 const FILE_ITEMS = [
+  { id: 'new',      label: '新規（全消去）' },
   { id: 'open',     label: '開く' },
   { id: 'save',     label: '保存' },
   { id: 'load',     label: '読込み' },

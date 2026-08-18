@@ -4,7 +4,7 @@ import { runInAction, reaction } from 'mobx';
 import { undoManager } from './undoManager.js';
 import { serializeGraph, restoreGraph } from './graphSnapshot.js';
 import { Stage } from 'react-konva';
-import { useStore, addFloor, switchFloor, saveToIDB, addAlternativeFloor, removeFloor } from './store.js';
+import { useStore, addFloor, switchFloor, saveToIDB, addAlternativeFloor, removeFloor, resetAll, bootReady } from './store.js';
 import { isDirty } from './dirtyState.js';
 import { viewport } from './appViewport.js';
 import {
@@ -169,6 +169,20 @@ const App = observer(() => {
     onUndo: performUndo,
     onRedo: performRedo,
   });
+
+  // 起動時IDB復元の完了をマウント時1回だけ待ち、activeFloorId をproject.activePlaneIdへ同期する。
+  // store.js の起動IIFEは非同期で、初回レンダリング後に restorePlanesFromIDB が
+  // project.activePlaneId を差し替え得るが、activeFloorId（useState、初期値はマウント時点の
+  // project.activePlaneId）は自動追従しないため（QA Finding 1）。
+  // 無条件の reaction にはしない——switchFloorKeepingMode のコメント（下記「境界処理前のグラフで
+  // モード状態が生成されてしまう」）が示すとおり、通常のフロア切替はモード境界処理→switchFloor→
+  // setActiveFloorId の順序を守る必要があり、activeFloorIdへの無条件追従はその経路と競合する。
+  // 起動直後の1回限りの同期はその経路の外（switchFloor系のどの関数も未実行の時点）なので安全。
+  useEffect(() => {
+    let cancelled = false;
+    bootReady.then(() => { if (!cancelled) setActiveFloorId(project.activePlaneId); }).catch(console.error);
+    return () => { cancelled = true; };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // モード切替: 旧モードを破棄してから新モジュールを動的ロード
   useEffect(() => {
@@ -1021,6 +1035,23 @@ const App = observer(() => {
 
   // ---- ハンバーガーメニュー ----
   function handleHamburgerSelect(id) {
+    if (id === 'new') {
+      setFloorConfirm({
+        message: '保存していない内容も含めてすべて消去します。よろしいですか？',
+        buttons: [
+          { label: '消去',      value: 'ok', primary: true, danger: true },
+          { label: 'キャンセル', value: 'cancel' },
+        ],
+        onSelect: (v) => {
+          setFloorConfirm(null);
+          if (v !== 'ok') return;
+          resetAll()
+            .then(() => window.location.reload())
+            .catch(() => setToast({ msg: '消去に失敗しました', key: Date.now() }));
+        },
+      });
+      return;
+    }
     if (id === 'site-info')      { setShowSiteDialog(true);       return; }
     if (id === 'building-info')  { setShowBuildingInfoDialog(true); return; }
     if (id === 'open') {

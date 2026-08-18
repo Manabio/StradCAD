@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   floorBytesEqual, computeFloorReorder, computeFloorChangeReorder, computeAltReorder, resolveChipReorderTarget,
+  reconcilePlanes,
 } from './floorOps.js';
 
 // ---- floorBytesEqual ----
@@ -137,4 +138,123 @@ test('resolveChipReorderTarget: 採用チップ（非isAlternative）は kind=fl
 
 test('resolveChipReorderTarget: plane が null（planeMapに無いid）は null', () => {
   assert.equal(resolveChipReorderTarget(null, [], [], 1), null);
+});
+
+// ---- reconcilePlanes（plane一覧の復元差分計算）----
+function makeMeta(overrides) {
+  return {
+    id: 'a', elevation: 0, name: '1階', startFloor: 1, stories: 1,
+    isAlternative: false, referenceId: null, altIndex: 0,
+    isRoofPlane: false, roofForPlaneId: null,
+    ...overrides,
+  };
+}
+
+test('reconcilePlanes: 正常系（複数階+検討階）— bootPlaneIdはtoUpdate、他はtoAdd、activePlaneIdはmetas通り', () => {
+  const metas = {
+    planes: [
+      makeMeta({ id: 'a', elevation: 0,    name: '1階' }),
+      makeMeta({ id: 'b', elevation: 3000, name: '2階' }),
+      makeMeta({ id: 'alt1', elevation: 0, name: '検討A', isAlternative: true, referenceId: 'a', altIndex: 0 }),
+    ],
+    activePlaneId: 'b',
+  };
+  const result = reconcilePlanes(metas, ['a'], 'a');
+  assert.deepEqual(result.toUpdate.map(p => p.id), ['a']);
+  assert.deepEqual(result.toAdd.map(p => p.id).sort(), ['alt1', 'b']);
+  assert.deepEqual(result.toRemove, []);
+  assert.equal(result.activePlaneId, 'b');
+});
+
+test('reconcilePlanes: 参照先を失った検討階（referenceIdが最終集合に不在）は破棄される', () => {
+  const metas = {
+    planes: [
+      makeMeta({ id: 'a', elevation: 0 }),
+      makeMeta({ id: 'alt1', isAlternative: true, referenceId: 'ghost', altIndex: 0 }), // 'ghost' はmetas.planesに不在
+    ],
+    activePlaneId: 'a',
+  };
+  const result = reconcilePlanes(metas, ['a'], 'a');
+  assert.deepEqual([...result.toAdd, ...result.toUpdate].map(p => p.id).sort(), ['a']);
+  assert.equal(result.toRemove.length, 0); // 孤児検討はtoAdd対象から除外されるだけ（既存集合には無いのでtoRemoveにも現れない）
+});
+
+test('reconcilePlanes: activePlaneIdが最終集合に不在なら最下階（elevation最小の採用フロア）へフォールバック', () => {
+  const metas = {
+    planes: [
+      makeMeta({ id: 'a', elevation: 0 }),
+      makeMeta({ id: 'b', elevation: 3000 }),
+    ],
+    activePlaneId: 'ghost', // 最終集合に無い
+  };
+  const result = reconcilePlanes(metas, ['a'], 'a');
+  assert.equal(result.activePlaneId, 'a'); // elevation最小
+});
+
+test('reconcilePlanes: bootPlaneIdがmetasに無ければtoRemoveに入る', () => {
+  const metas = {
+    planes: [makeMeta({ id: 'saved-1', elevation: 0 })],
+    activePlaneId: 'saved-1',
+  };
+  const result = reconcilePlanes(metas, ['boot-1'], 'boot-1');
+  assert.deepEqual(result.toAdd.map(p => p.id), ['saved-1']);
+  assert.deepEqual(result.toRemove, ['boot-1']);
+});
+
+test('reconcilePlanes: metasが空（文書なし）はnullを返す', () => {
+  assert.equal(reconcilePlanes(null, ['a'], 'a'), null);
+  assert.equal(reconcilePlanes({ planes: [], activePlaneId: null }, ['a'], 'a'), null);
+});
+
+// ---- QA Finding 2: activePlaneIdが屋根planeを指す場合は採用しない ----
+test('reconcilePlanes: activePlaneIdが屋根planeなら最下階（採用フロア）へフォールバックする', () => {
+  const metas = {
+    planes: [
+      makeMeta({ id: 'a', elevation: 0 }),
+      makeMeta({ id: 'b', elevation: 3000 }),
+      makeMeta({ id: 'roof1', elevation: 6000, name: '小屋伏', isRoofPlane: true, roofForPlaneId: 'b' }),
+    ],
+    activePlaneId: 'roof1', // 構造モードの小屋伏図表示中に保存したケース
+  };
+  const result = reconcilePlanes(metas, ['a'], 'a');
+  assert.equal(result.activePlaneId, 'a', '屋根planeではなく最下階（elevation最小の採用フロア）が採用される');
+});
+
+test('reconcilePlanes: 屋根planeはactiveに採用されないだけで最終集合（toAdd/toUpdate）には残る', () => {
+  const metas = {
+    planes: [
+      makeMeta({ id: 'a', elevation: 0 }),
+      makeMeta({ id: 'roof1', elevation: 6000, name: '小屋伏', isRoofPlane: true, roofForPlaneId: 'a' }),
+    ],
+    activePlaneId: 'roof1',
+  };
+  const result = reconcilePlanes(metas, ['a'], 'a');
+  const finalIds = [...result.toAdd, ...result.toUpdate].map(p => p.id).sort();
+  assert.deepEqual(finalIds, ['a', 'roof1'], '屋根planeは除外されず生き残る（構造モードの図面合成に必要）');
+  assert.deepEqual(result.toRemove, []);
+});
+
+// savedActive の解決は finalMetas（孤児検討階を除外した後の集合）から行う必要がある。
+// raw list（metas.planes）から解決すると、孤児検討階を指す activePlaneId をそのまま採用してしまい、
+// 当該 plane は planeMap に存在しない → activate(undefined, undefined) で起動が落ちる。
+test('reconcilePlanes: activePlaneIdが孤児検討階を指す場合も最下階へフォールバックする（activePlaneIdは必ず最終集合に存在する）', () => {
+  const metas = {
+    planes: [
+      makeMeta({ id: 'a', elevation: 0 }),
+      makeMeta({ id: 'orphan', isAlternative: true, referenceId: 'gone', altIndex: 0 }), // 親 'gone' は不在
+    ],
+    activePlaneId: 'orphan',
+  };
+  const result = reconcilePlanes(metas, ['a'], 'a');
+  assert.equal(result.activePlaneId, 'a');
+  assert.ok(
+    [...result.toAdd, ...result.toUpdate].some(p => p.id === result.activePlaneId),
+    'activePlaneId は必ず最終集合（planeMapに実在することになる集合）に含まれる',
+  );
+});
+
+// ---- 失敗パス: metas.planes が undefined（想定外の入力形状）----
+test('reconcilePlanes: metas.planesがundefined（想定外の入力）はnullを返し例外を投げない', () => {
+  assert.doesNotThrow(() => reconcilePlanes({ activePlaneId: 'a' }, ['a'], 'a'));
+  assert.equal(reconcilePlanes({ activePlaneId: 'a' }, ['a'], 'a'), null);
 });

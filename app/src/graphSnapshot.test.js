@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Plane, PlanGraph, CenterLineType, Discipline, OpeningCategory, Project } from './core.js';
-import { serializeGraph, restoreGraph, serializeStructCLs, restoreStructCLs } from './graphSnapshot.js';
+import { serializeGraph, restoreGraph, serializeStructCLs, restoreStructCLs, serializePlanes, decodePlanes } from './graphSnapshot.js';
 
 // wallBeamAxes.test.js と同じ方針: ダックタイピングでは effectiveValue 等の実挙動を
 // 再現できないため、実 core.js（Plane/PlanGraph）を使う。
@@ -347,4 +347,79 @@ test('restoreStructCLs は既存の structGraph 内容を置換し、既定通�
   assert.equal(dst.centerLines.length, 3, 'スナップショットの3本に置換され、既定分と重複しない');
   assert.equal(dst.shapeMap.has(defV.id), false, '既定通り芯（縦）は残らない');
   assert.equal(dst.shapeMap.has(defH.id), false, '既定通り芯（横）は残らない');
+});
+
+// ---- Ship A: plane一覧（serializePlanes/decodePlanes）の FlatBuffers 往復 ----
+test('serializePlanes → decodePlanes は plane一覧（通常階・検討階・屋根平面）を往復する', () => {
+  const project = new Project('proj', 'test');
+  project.addPlane(0,    '1階',   'p1', 1, 1);
+  project.addPlane(3000, '2階',   'p2', 2, 1);
+  project.addPlane(0,    '検討A', 'alt1', 1, 1, true, 'p1', 0);
+  project.addPlane(6000, '小屋伏', 'roof1', 2, 1, false, null, 0, true, 'p2');
+  project.activePlaneId = 'p2';
+
+  const bytes = serializePlanes(project);
+  const { planes, activePlaneId } = decodePlanes(bytes);
+
+  assert.equal(activePlaneId, 'p2');
+  assert.equal(planes.length, 4);
+
+  const byId = Object.fromEntries(planes.map(p => [p.id, p]));
+  assert.equal(byId.p1.elevation, 0);
+  assert.equal(byId.p1.name, '1階');
+  assert.equal(byId.p1.startFloor, 1);
+  assert.equal(byId.p1.stories, 1);
+  assert.equal(byId.p1.isAlternative, false);
+  assert.equal(byId.p1.referenceId, null, '検討でない階のreferenceIdはnullのまま戻る');
+  assert.equal(byId.p1.isRoofPlane, false);
+  assert.equal(byId.p1.roofForPlaneId, null);
+
+  assert.equal(byId.p2.elevation, 3000);
+  assert.equal(byId.p2.startFloor, 2);
+
+  assert.equal(byId.alt1.isAlternative, true);
+  assert.equal(byId.alt1.referenceId, 'p1');
+  assert.equal(byId.alt1.altIndex, 0);
+
+  assert.equal(byId.roof1.isRoofPlane, true);
+  assert.equal(byId.roof1.roofForPlaneId, 'p2');
+});
+
+test('serializePlanes → decodePlanes: activePlaneId 未設定（null）は往復後も null のまま', () => {
+  const project = new Project('proj', 'test');
+  project.addPlane(0, '1階', 'p1', 1, 1);
+  project.activePlaneId = null; // addPlane は初回のみ自動設定するため明示的に戻す
+
+  const bytes = serializePlanes(project);
+  const { activePlaneId } = decodePlanes(bytes);
+  assert.equal(activePlaneId, null);
+});
+
+// ---- QA指摘: readPlaneの "|| 1" フォールバック（旧データ用の既定値補完）に、有効な負値・非0値が
+// 巻き込まれて化けないことを確認する ----
+test('serializePlanes → decodePlanes: 地下階(startFloor:-1)・stories:2・altIndex:2 は "|| 1" フォールバックに巻き込まれず往復する', () => {
+  const project = new Project('proj', 'test');
+  project.addPlane(-3000, 'B1階', 'b1', -1, 2); // 地下階: startFloor=-1（addSkipZeroの符号規約）, 2層分
+  project.addPlane(0,     '1階',  'p1', 1, 1);
+  project.addPlane(0,     '検討C', 'alt1', 1, 1, true, 'p1', 2); // 3番目の検討（altIndex:2）
+
+  const bytes = serializePlanes(project);
+  const { planes } = decodePlanes(bytes);
+  const byId = Object.fromEntries(planes.map(p => [p.id, p]));
+
+  assert.equal(byId.b1.startFloor, -1, '負のstartFloor（地下階）は readPlane の "r.f64(START_FLOOR) || 1" フォールバックで1に化けない');
+  assert.equal(byId.b1.stories, 2, 'stories:2は "|| 1" フォールバックで1に化けない');
+  assert.equal(byId.alt1.altIndex, 2, 'altIndex:2は0扱いされず往復する');
+});
+
+// ---- 失敗パス: decodePlanesへの不正バイト列 ----
+test('decodePlanes: 不正なバイト列（他データの断片）を渡しても例外を投げず、planes:[]・activePlaneId:nullへグレースフルにフォールバックする', () => {
+  // graphFbs.js の手書きreaderはフィールド不在時にデフォルト値（空vec/空str）を返す設計のため、
+  // 構造化されていないバイト列でも例外にはならない（GS.PLANES/GS.ACTIVE_PLANE_IDが読めない
+  // ＝存在しないフィールド扱いになるだけ）。この挙動はdecode()共通で、planes専用の防御コードは無い。
+  const garbage = new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8]);
+  assert.doesNotThrow(() => decodePlanes(garbage));
+  const { planes, activePlaneId } = decodePlanes(garbage);
+  assert.deepEqual(planes, []);
+  assert.equal(activePlaneId, null);
 });
