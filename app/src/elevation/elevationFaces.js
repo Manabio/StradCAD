@@ -19,11 +19,17 @@ function getShape(graph, id) {
 /**
  * 展開図の対象部屋。屋内・有名・feature が null または STAIR（階段）のみ採用する
  * （STAIR_VOID・VOID・UNDEFINED・屋外は除外）。graph.rooms の登録順のまま返す。
+ * QA修正: 部分指定（`referenceRoomIds`が非空。親の壁際セルの一部を占め`floorLevel`等を上書き
+ * するRoom。`.claude/glossary.md`）は対象から除外する——部分指定は独自の展開図帯を持たず、
+ * 親の帯の中で`wallAdjacentFloorSegments`による床の段差プロファイルとして表現される
+ * （`elevation-model.md`「床の段差プロファイル」節）。除外しないと親と部分指定の両方に
+ * 全く同じ壁面が重複して展開されてしまう。
  */
 export function selectElevationRooms(graph) {
   return graph.rooms.filter(r =>
     r.kind === RoomKind.INTERIOR && r.name !== '' &&
-    (r.feature == null || r.feature === RoomFeature.STAIR));
+    (r.feature == null || r.feature === RoomFeature.STAIR) &&
+    !(r.referenceRoomIds?.size > 0));
 }
 
 // letter マップ（buildRoomFaces ヘッダ参照）。isVertical・axisOffset(inward)の符号だけで決まる。

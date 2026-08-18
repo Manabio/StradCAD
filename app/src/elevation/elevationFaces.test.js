@@ -417,3 +417,17 @@ test('【失敗系】selectElevationRooms: 屋外・無名・STAIR_VOID等は対
   assert.deepEqual(result.map(r => r.id), [named.id, stair.id]);
   void unnamed;
 });
+
+// ---- QA修正: 部分指定（referenceRoomIds非空）は独自の帯を持たず親の帯内で表現されるため、
+// selectElevationRoomsの対象から除外する（除外しないと親・部分指定の両方に同じ壁面が
+// 重複して展開されてしまう不具合があった） ----
+test('【QA修正】selectElevationRooms: 部分指定（referenceRoomIds非空）は対象外（親のみ対象）', async () => {
+  const { selectElevationRooms } = await import('./elevationFaces.js');
+  const graph = makeGraph();
+  const parent = graph.addRoom(new Set(), 'LDK');
+  const partial = graph.addRoom(new Set(), '小上がり', undefined, new Set([parent.id]));
+
+  const result = selectElevationRooms(graph);
+  assert.deepEqual(result.map(r => r.id), [parent.id], '部分指定は含まれず親だけが対象のはず');
+  void partial;
+});
