@@ -1,6 +1,11 @@
 /**
  * 展開図: 部屋1件 → 帯（面を横に並べ、天井高寸法・部屋名枠を付けた1段ぶんのプリミティブ）。
  * 設計意図は .claude/elevation-model.md 参照。
+ *
+ * R1: buildRoomBand（本ファイル）とbuildStairBand（elevationStair.js）はほぼ全域が重複していた
+ * ため、面配置ループを layoutBandFaces に、帯確定処理（部屋名枠・bounds・floorOffset）を
+ * finalizeBand に切り出し、両ファイルから共有する（elevationStair.jsはここからimportする。
+ * 逆方向のimportは無いため循環しない）。
  */
 import { figureBounds } from '../structural/sectionFigure/sectionGeometry.js';
 import { faceBoundaryLocalX, faceWallLessExtents } from './elevationFaces.js';
@@ -9,41 +14,34 @@ import { buildFaceFigure } from './elevationFigure.js';
 import { wallAdjacentFloorSegments } from './elevationFloorProfile.js';
 import { roomCeilingHeight } from '../finish/roomMetrics.js';
 import {
-  DEFAULT_FACE_GAP_MM, CH_DIM_OFFSET_MM, DEFAULT_TRIANGLE_OFFSET_MM, BAND_TOP_MARGIN_MM,
+  CH_DIM_OFFSET_MM, DEFAULT_FACE_GAP_MM, DEFAULT_TRIANGLE_OFFSET_MM, BAND_TOP_MARGIN_MM,
   DEFAULT_WALL_LESS_END_EXTEND_MM,
 } from './elevationStyle.js';
 import { translatePrimitive, collectGridCLs, appendRoomNameFrame } from './elevationPrimitives.js';
 
 /**
- * 部屋1件 → 帯（面を横に並べ、部屋名枠・天井高寸法を付ける）。
- * 隣接面は互いの壁中心線（faceBoundaryLocalX）が ctx.gapModelMm だけ離れるよう配置する
+ * 部屋1件ぶんの面配置ループ（buildRoomBand・buildStairBand共通。R1）。
+ * faces を帯内へ横に並べてbuildFaceFigureのプリミティブを積み、先頭面にだけ天井高寸法(縦dim)を
+ * 付ける。隣接面は互いの壁中心線（faceBoundaryLocalX）が ctx.gapModelMm だけ離れるよう配置する
  * （ユーザー仕様「隣接展開図の壁中心線同士が実画面で約30mmになるよう配置」。
  * ElevationModeState.init が screenMmToModelMm で換算した値を渡す。未指定時は
  * DEFAULT_FACE_GAP_MM＝倍率決定用の1パス目の仮値）。
- *
- * 部屋名枠の左右留め三角は、preBounds由来の座標ではなく明示的なアンカー
- * （leftAnchorX=天井高寸法線の外側、rightAnchorX=一番右の壁中心線の外側。それぞれ
- * ctx.triangleOffsetModelMmぶん）に置く（項目9）。leftAnchorXは帯の水平初期位置の既定値
- * としても返す（band.leftAnchorX。項目10: 全帯を左三角の位置で揃える。
- * ElevationModeState.faceOffsetFor参照）。
  * @param {import('@core').Room} room
  * @param {object} graph
+ * @param {object[]} faces - composeRoomFaces の結果（呼び出し側で回転等の前処理を済ませたもの）
  * @param {{project?:object, materialMap?:Map, gridCLs?:object[], gapModelMm?:number,
- *   nameGapModelMm?:number, triangleOffsetModelMm?:number,
  *   faceLabelAvoidThresholdModelMm?:number, openingTagRowModelMm?:number,
- *   dimRowGapModelMm?:number, gridRowGapModelMm?:number}} [ctx]
- * @returns {{roomId:string, roomName:string, primitives:object[], bounds:object,
- *   heightMm:number, widthMm:number, faceCount:number, leftAnchorX:number|null,
- *   topMarginMm:number}} heightMm/topMarginMmはどちらもbounds.heightそのものではない
- *   （QA A2。elevationLayout.jsのlayoutBandsが読む積み上げ専用の値。詳細は本体コメント参照）。
+ *   dimRowGapModelMm?:number, gridRowGapModelMm?:number, wallLessEndExtendModelMm?:number,
+ *   scale?:number}} [ctx]
+ * @returns {{primitives:object[], faceRuns:Array<{face:object, xCursor:number}>,
+ *   chDimX:number|null, prevBoundaryHi:number|null, CH:number, chInfo:object}}
+ *   faceRunsは常に収集する（buildStairBandの上階クリップ処理が使う。buildRoomBand側は未使用）。
  */
-export function buildRoomBand(room, graph, ctx = {}) {
+export function layoutBandFaces(room, graph, faces, ctx = {}) {
   const project     = ctx.project ?? null;
   const materialMap  = ctx.materialMap ?? null;
   const gridCLs      = ctx.gridCLs ?? collectGridCLs(graph);
   const gapModelMm   = ctx.gapModelMm ?? DEFAULT_FACE_GAP_MM;
-  const nameGapModelMm = ctx.nameGapModelMm; // 未指定はappendRoomNameFrame既定(DEFAULT_NAME_GAP_MM)へ委ねる
-  const triOffsetMm = ctx.triangleOffsetModelMm ?? DEFAULT_TRIANGLE_OFFSET_MM;
   const faceLabelAvoidThresholdModelMm = ctx.faceLabelAvoidThresholdModelMm; // 未指定はbuildFaceFigure既定(QA B3)
   const openingTagRowModelMm = ctx.openingTagRowModelMm; // 未指定はbuildFaceFigure既定(QA C1)
   const dimRowGapModelMm     = ctx.dimRowGapModelMm;      // 未指定はbuildFaceFigure既定(QA C1/D2)
@@ -53,8 +51,8 @@ export function buildRoomBand(room, graph, ctx = {}) {
   const chInfo       = roomCeilingHeight(graph, room);
   const CH           = chInfo.mm;
 
-  const faces = composeRoomFaces(room, graph);
   const primitives = [];
+  const faceRuns = [];
   let xCursor = 0;
   let prevBoundaryHi = null; // 直前面の壁中心線(hi側)の帯内絶対x（rightAnchorXの起点。項目9はこちらのまま）
   let prevRightExtent = null; // 直前面の寸法線類を含む右端の帯内絶対x（項目6のギャップ起点）
@@ -96,6 +94,7 @@ export function buildRoomBand(room, graph, ctx = {}) {
         type: 'dim', dir: 'v', at: chDimX, from: -CH, to: 0, foot: 0, dot: true, label: chInfo.raw,
       });
     }
+    faceRuns.push({ face, xCursor });
     prevBoundaryHi = xCursor + boundary.hi;
     // 項目5・6: この面に段差があれば右CH寸法（boundary.hi + CH_DIM_OFFSET_MM）ぶん右まで
     // 描画物が伸びる（buildFaceFigure側の実装と同じ位置の式）。
@@ -107,6 +106,31 @@ export function buildRoomBand(room, graph, ctx = {}) {
       + ((floorSegments?.length ?? 0) > 1 ? CH_DIM_OFFSET_MM : 0)
       + rightExtendMm;
   });
+
+  return { primitives, faceRuns, chDimX, prevBoundaryHi, CH, chInfo };
+}
+
+/**
+ * 帯確定処理（buildRoomBand・buildStairBand共通。R1）: 部屋名枠＋左右留め三角を追加し、
+ * floorOffsetの平行移動・bounds・heightMm/topMarginMmを算出して返却オブジェクトを組み立てる。
+ *
+ * 部屋名枠の左右留め三角は、preBounds由来の座標ではなく明示的なアンカー
+ * （leftAnchorX=天井高寸法線の外側、rightAnchorX=一番右の壁中心線の外側。それぞれ
+ * triOffsetMmぶん）に置く（項目9）。leftAnchorXは帯の水平初期位置の既定値としても返す
+ * （band.leftAnchorX。項目10: 全帯を左三角の位置で揃える。ElevationModeState.faceOffsetFor参照）。
+ * @param {import('@core').Room} room
+ * @param {object} graph
+ * @param {object[]} primitives - layoutBandFaces等が積んだプリミティブ（この関数がpushで追記する）
+ * @param {{faceCount:number, chDimX:number|null, prevBoundaryHi:number|null,
+ *   triOffsetMm?:number, nameGapModelMm?:number}} [opts]
+ * @returns {{roomId:string, roomName:string, primitives:object[], bounds:object,
+ *   heightMm:number, widthMm:number, faceCount:number, leftAnchorX:number|null,
+ *   topMarginMm:number}} heightMm/topMarginMmはどちらもbounds.heightそのものではない
+ *   （QA A2。elevationLayout.jsのlayoutBandsが読む積み上げ専用の値。詳細は下記コメント参照）。
+ */
+export function finalizeBand(room, graph, primitives, opts = {}) {
+  const { faceCount = 0, chDimX, prevBoundaryHi, nameGapModelMm } = opts;
+  const triOffsetMm = opts.triOffsetMm ?? DEFAULT_TRIANGLE_OFFSET_MM;
 
   const leftAnchorX  = chDimX != null ? chDimX - triOffsetMm : null;
   const rightAnchorX = prevBoundaryHi != null ? prevBoundaryHi + triOffsetMm : null;
@@ -147,7 +171,29 @@ export function buildRoomBand(room, graph, ctx = {}) {
 
   return {
     roomId: room.id, roomName: room.name, primitives: shifted, bounds,
-    heightMm: bounds.height + downwardSlackMm, widthMm: bounds.width, faceCount: faces.length,
+    heightMm: bounds.height + downwardSlackMm, widthMm: bounds.width, faceCount,
     leftAnchorX, topMarginMm: upwardSlackMm,
   };
+}
+
+/**
+ * 部屋1件 → 帯（面を横に並べ、部屋名枠・天井高寸法を付ける）。
+ * @param {import('@core').Room} room
+ * @param {object} graph
+ * @param {{project?:object, materialMap?:Map, gridCLs?:object[], gapModelMm?:number,
+ *   nameGapModelMm?:number, triangleOffsetModelMm?:number,
+ *   faceLabelAvoidThresholdModelMm?:number, openingTagRowModelMm?:number,
+ *   dimRowGapModelMm?:number, gridRowGapModelMm?:number, wallLessEndExtendModelMm?:number,
+ *   scale?:number}} [ctx]
+ * @returns {{roomId:string, roomName:string, primitives:object[], bounds:object,
+ *   heightMm:number, widthMm:number, faceCount:number, leftAnchorX:number|null,
+ *   topMarginMm:number}}
+ */
+export function buildRoomBand(room, graph, ctx = {}) {
+  const faces = composeRoomFaces(room, graph);
+  const { primitives, chDimX, prevBoundaryHi } = layoutBandFaces(room, graph, faces, ctx);
+  return finalizeBand(room, graph, primitives, {
+    faceCount: faces.length, chDimX, prevBoundaryHi,
+    triOffsetMm: ctx.triangleOffsetModelMm, nameGapModelMm: ctx.nameGapModelMm,
+  });
 }

@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Plane, PlanGraph, CenterLineType, Discipline, StairType, RoomFeature } from '@core';
 import { generateRoomWallsFromOutline } from '../finish/wallGeneration.js';
-import { buildRoomFaces } from './elevationFaces.js';
+import { buildRoomFaces, faceBoundaryLocalX } from './elevationFaces.js';
 import { rotateFacesToStart, stairStartFaceLabel, buildStairBand } from './elevationStair.js';
 import { layoutBands, bandContentOriginMm } from './elevationLayout.js';
 import { figureBounds } from '../structural/sectionFigure/sectionGeometry.js';
@@ -96,6 +96,34 @@ test('【QA F3】buildStairBand: 部屋名の枠(rect+text)と留め三角(miter
   assert.ok(band.primitives.some(p => p.type === 'rect'), '部屋名の枠(rect)が無い');
   assert.ok(band.primitives.some(p => p.type === 'text' && p.text === '階段室'), '部屋名テキストが無い');
   assert.ok(band.primitives.some(p => p.type === 'miterTriangle'), '留め三角(miterTriangle)が無い');
+});
+
+// ---- 面間ギャップは壁中心線(faceBoundaryLocalX)同士がgapModelMmになるよう配置する（ユーザー仕様。
+// elevationBand.test.jsの同名テストの階段帯版。buildStairBandもlayoutBandFacesを共有するため
+// 同じ配置規則になるはず） ----
+test('buildStairBand: 隣接面は壁中心線同士がctx.gapModelMmだけ離れて配置される', () => {
+  const graph = makeGraph();
+  const room = makeRectRoom(graph, 0, 0, 2000, 4000, '階段');
+  // CH_DIM_OFFSET_MM(=500)等の描画定数と同値だと、ギャップ項と定数項の取り違えを検知できない
+  // （elevationBand.test.jsの同名テストが奇数値321を使うのと同じ理由）。非丸めの値にする。
+  const gapModelMm = 437;
+
+  const band = buildStairBand(room, graph, null, { gapModelMm });
+  const faces = buildRoomFaces(room, graph);
+  // 面端(両端)の縦線から各面のローカルx範囲(帯内座標)を復元する（elevationBand.test.jsと同じ
+  // CUT/SILHOUETTE(太・中線)の縦線で拾う方針）。
+  const endVerticals = band.primitives.filter(p =>
+    p.type === 'line' && p.x1 === p.x2 && (p.weight === 'thick' || p.weight === 'medium'));
+  const xs = [...new Set(endVerticals.map(p => p.x1))].sort((a, b) => a - b);
+  assert.equal(xs[0], 0, '先頭面の左端は0');
+
+  const boundary0 = faceBoundaryLocalX(faces[0], graph);
+  const boundary1 = faceBoundaryLocalX(faces[1], graph);
+  const xCursor1 = xs[2]; // 面1のローカルx=0が帯内で来る位置
+  const face0HiAbs = boundary0.hi;         // 面0の壁中心線(hi)の帯内絶対x（面0のxCursorは0）
+  const face1LoAbs = xCursor1 + boundary1.lo; // 面1の壁中心線(lo)の帯内絶対x
+  assert.ok(Math.abs(face1LoAbs - (face0HiAbs + gapModelMm)) < 1e-6,
+    `面1の壁中心線(lo=${face1LoAbs})は面0の壁中心線(hi=${face0HiAbs})+gapModelMm(${gapModelMm})のはず`);
 });
 
 // ---- 失敗系: upperGraphはあるが重なるVOID/STAIR_VOID部屋が無い場合も1層のまま ----

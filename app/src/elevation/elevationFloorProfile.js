@@ -11,14 +11,14 @@
 import { CenterLineType } from '@core';
 import { refreshCells, cellBoundsFromKey, worldToCell } from '../finish/gridCells.js';
 import { DEFAULT_WALL_BASE, DEFAULT_WALL_FINISH } from '../finish/wallGeneration.js';
+import { GAP_EPS_MM as GAP_EPS, PROBE_EPS_MM } from './elevationStyle.js';
+// PROBE_EPS_MM: 自室セルの境界がface側で粗い（extent制限されたCLが該当行では無効域にあり
+// 分割されない）場合に、runの伸びる方向へ覗き込むプローブ距離（elevationOpenSpan.jsと共通。
+// elevationStyle.jsのR4共通定数）。
 
 // 実壁が引けない面（単体テスト等の合成face）向けの半壁厚フォールバック(mm)。
 // 既定壁下地厚(DEFAULT_WALL_BASE)の半分+既定仕上げ厚(DEFAULT_WALL_FINISH) = 45+12.5 = 57.5。
 const DEFAULT_HALF_WALL_MM = DEFAULT_WALL_BASE / 2 + DEFAULT_WALL_FINISH;
-
-// 自室セルの境界がface側で粗い（extent制限されたCLが該当行では無効域にあり分割されない）
-// 場合に、runの伸びる方向へ覗き込むプローブ距離(mm)。elevationOpenSpan.jsのPROBE_EPS_MMと同じ考え方。
-const PROBE_EPS_MM = 5;
 
 /**
  * [lo,hi] 区間を、run の伸びる方向と同じ向きのCL値で刻む（elevationStepFace.js の
@@ -48,6 +48,20 @@ export function findRunCLAt(graph, isVertical, value) {
 }
 
 /**
+ * セル矩形bの「面のnear側（inwardの向く側）の辺」がaxisValueに一致するか判定する（R5:
+ * wallAdjacentFloorSegments・elevationOpenSpan.jsのcollectNearCellSegmentsで共通利用する唯一の実装）。
+ * @param {object} face - isVertical・inwardを持つ面（buildRoomFacesの1件）
+ * @param {{x1:number,y1:number,x2:number,y2:number}} b - cellBoundsFromKey等の矩形
+ * @param {number} axisValue - face.axisCL.value
+ * @returns {boolean}
+ */
+export function cellNearSideOnFace(face, b, axisValue) {
+  return face.isVertical
+    ? (face.inward > 0 ? b.x1 === axisValue : b.x2 === axisValue)
+    : (face.inward > 0 ? b.y1 === axisValue : b.y2 === axisValue);
+}
+
+/**
  * touching（自室セルが軸に直接触れる区間）に欠測がある[lo,hi]区間を、runの伸びる方向のCLで
  * 刻んで区間ごとに個別プローブし、実際の所有Roomを求める（QA修正・項目6根本原因）。
  * 従来はこの欠測区間を無条件で「親扱い（floorDeltaMm:0）」にフォールバックしていたが、
@@ -68,7 +82,7 @@ function probeGapOwners(graph, face, ownerByCell, lo, hi) {
   const out = [];
   for (let i = 0; i + 1 < breaks.length; i++) {
     const runLo = breaks[i], runHi = breaks[i + 1];
-    if (runHi - runLo < 1e-6) continue;
+    if (runHi - runLo < GAP_EPS) continue; // R4: elevationStyle.jsのGAP_EPS_MMと同定数
     const mid = (runLo + runHi) / 2;
     const axisValue = face.axisCL.value;
     const px = face.isVertical ? axisValue + face.inward * PROBE_EPS_MM : mid;
@@ -132,10 +146,7 @@ export function wallAdjacentFloorSegments(face, parentRoom, graph) {
   for (const key of refreshCells(parentRoom.cells, graph)) {
     const b = cellBoundsFromKey(key, graph);
     if (!b) continue;
-    const nearOnWall = face.isVertical
-      ? (face.inward > 0 ? b.x1 === axisValue : b.x2 === axisValue)
-      : (face.inward > 0 ? b.y1 === axisValue : b.y2 === axisValue);
-    if (!nearOnWall) continue;
+    if (!cellNearSideOnFace(face, b, axisValue)) continue;
     const [runLo, runHi] = face.isVertical ? [b.y1, b.y2] : [b.x1, b.x2];
     if (runHi <= face.lo || runLo >= face.hi) continue; // この面の範囲外
     const owner = ownerByCell.get(key) ?? parentRoom;
@@ -158,8 +169,8 @@ export function wallAdjacentFloorSegments(face, parentRoom, graph) {
   // delta不一致のまま「子→親(極小)→子」という見た目上の1往復（段差の抽出不良）になる。
   // gap-fill判定自体にepsilonを持たせる案もあるが、生成された極小区間は結局すぐ下の
   // 「極小幅の区間を吸収する」処理で必ず除去されるため冗長——物理的に意味を持たない極小幅の
-  // 区間をdeltaに関わらず一括で吸収する、この1箇所だけに許容差を持たせれば十分。
-  const GAP_EPS = 1e-6;
+  // 区間をdeltaに関わらず一括で吸収する、この1箇所だけに許容差を持たせれば十分
+  // （GAP_EPSはelevationStyle.jsのGAP_EPS_MM。R4）。
   const parentFL = graph.effectiveFloorLevel(parentRoom);
   // QA修正（項目6根本原因）: 欠測区間（touchingがそのまま覆わない箇所）を無条件で
   // 「親扱い（floorDeltaMm:0）」にせず、probeGapOwnersで刻んで個別に所有者を求める

@@ -17,12 +17,12 @@
  * 誤って「壁あり」と拾い続けてしまうため採用しない（この方式で実際に不具合を確認・破棄した）。
  */
 import { refreshCells, cellBoundsFromKey, worldToCell } from '../finish/gridCells.js';
-import { roomOwnerByCell, runBoundaryCLIds, collectRunBreaks, findRunCLAt } from './elevationFloorProfile.js';
+import {
+  roomOwnerByCell, runBoundaryCLIds, collectRunBreaks, findRunCLAt, cellNearSideOnFace,
+} from './elevationFloorProfile.js';
 import { perpFaceAt } from './elevationFaces.js';
-import { MIN_FACE_RUN_MM } from './elevationStyle.js';
-
-const PROBE_EPS_MM = 5; // far側セルへ覗き込むプローブ距離
-const GAP_EPS = 1e-6;
+import { MIN_FACE_RUN_MM, GAP_EPS_MM as GAP_EPS, PROBE_EPS_MM } from './elevationStyle.js';
+// PROBE_EPS_MM: far側セルへ覗き込むプローブ距離（elevationStyle.jsのR4共通定数）。
 
 /**
  * near側セル・far側セルから、この区間を延長してよいか（isOpenSpanEligible）を判定する
@@ -50,10 +50,7 @@ function collectNearCellSegments(face, ownerByCell, room, graph) {
   for (const key of refreshCells(room.cells, graph)) {
     const b = cellBoundsFromKey(key, graph);
     if (!b) continue;
-    const nearOnWall = face.isVertical
-      ? (face.inward > 0 ? b.x1 === axisValue : b.x2 === axisValue)
-      : (face.inward > 0 ? b.y1 === axisValue : b.y2 === axisValue);
-    if (!nearOnWall) continue;
+    if (!cellNearSideOnFace(face, b, axisValue)) continue;
     const [cellRunLo, cellRunHi] = face.isVertical ? [b.y1, b.y2] : [b.x1, b.x2];
     const { loCLId: cellLoCLId, hiCLId: cellHiCLId } = runBoundaryCLIds(key, face.isVertical);
 
@@ -145,14 +142,15 @@ export function extendFaceWithOpenSpans(face, wallFaces, room, graph) {
   // 表す不変条件（snapFaceEndsToCornersのdocコメント参照）——loEndは常にface.startCLId/face.lo、
   // hiEndは常にface.endCLId/face.hiをフォールバックに使う（dirSignによる分岐は不要。これを
   // dirSignで分岐させていたのはQA修正: 実際にこの不具合でstartCLId/endCLIdが入れ替わり
-  // ROW1境界が誤った位置に出ていたのを発見・修正した）。「延長されたか」の判定だけは
-  // extendedAtLocal0/Run（ローカル空間のフィールド）とdirSignの対応を踏まえる必要がある。
+  // ROW1境界が誤った位置に出ていたのを発見・修正した）。「延長されたか」の判定は
+  // extendedAtLo/Hi（世界側lo/hiのフィールド。dirSignに関わらずそのまま使える）で行う。
   const origHasWallAtLo = face.dirSign > 0 ? (face.hasWallAtLocal0 ?? true) : (face.hasWallAtLocalRun ?? true);
   const origHasWallAtHi = face.dirSign > 0 ? (face.hasWallAtLocalRun ?? true) : (face.hasWallAtLocal0 ?? true);
-  const wasLoExtended = face.dirSign > 0 ? extendedAtLocal0 : extendedAtLocalRun;
-  const wasHiExtended = face.dirSign > 0 ? extendedAtLocalRun : extendedAtLocal0;
-  const loEnd = resolveEnd(face, wallFaces, runLo, face.startCLId, face.lo, wasLoExtended, origHasWallAtLo);
-  const hiEnd = resolveEnd(face, wallFaces, runHi, face.endCLId, face.hi, wasHiExtended, origHasWallAtHi);
+  // R3: wasLoExtended/wasHiExtended（dirSignで分岐してextendedAtLocal0/Runから逆算する値）は、
+  // 展開すると恒等的に extendedAtLo/extendedAtHi 自身と一致する（dirSignの両ケースで消える）ため、
+  // world側lo/hiの延長判定にはそのままextendedAtLo/extendedAtHiを渡す。
+  const loEnd = resolveEnd(face, wallFaces, runLo, face.startCLId, face.lo, extendedAtLo, origHasWallAtLo);
+  const hiEnd = resolveEnd(face, wallFaces, runHi, face.endCLId, face.hi, extendedAtHi, origHasWallAtHi);
 
   const newFace = {
     ...face,

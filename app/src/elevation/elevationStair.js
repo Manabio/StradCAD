@@ -9,18 +9,14 @@ import { RoomFeature } from '@core';
 import { roomBounds } from '../finish/gridCells.js';
 import { stairPortEdges } from '../finish/stair/stairGeometry.js';
 import { floorHeightAbove } from '../finish/stair/stairDimensions.js';
-import { faceBoundaryLocalX, faceWallLessExtents } from './elevationFaces.js';
-import { composeRoomFaces, neighborWallFace } from './elevationFaceList.js';
-import { buildFaceFigure } from './elevationFigure.js';
-import { wallAdjacentFloorSegments } from './elevationFloorProfile.js';
+import { composeRoomFaces } from './elevationFaceList.js';
 import { buildSwitchbackSectionPrimitives } from './elevationStairSection.js';
-import { roomCeilingHeight } from '../finish/roomMetrics.js';
-import { figureBounds } from '../structural/sectionFigure/sectionGeometry.js';
-import {
-  DEFAULT_FACE_GAP_MM, CH_DIM_OFFSET_MM, DEFAULT_TRIANGLE_OFFSET_MM, BAND_TOP_MARGIN_MM,
-  ElevationLineRole, weightForRole, DEFAULT_WALL_LESS_END_EXTEND_MM,
-} from './elevationStyle.js';
-import { translatePrimitive, collectGridCLs, appendRoomNameFrame } from './elevationPrimitives.js';
+import { ElevationLineRole, weightForRole } from './elevationStyle.js';
+import { translatePrimitive } from './elevationPrimitives.js';
+// R1: 面配置ループ・帯確定処理はelevationBand.jsのbuildRoomBandと全域が重複していたため、
+// layoutBandFaces（面配置）・finalizeBand（部屋名枠・bounds・floorOffset）へ共通化した
+// （elevationBand→elevationStairの逆importは無いため循環しない）。
+import { layoutBandFaces, finalizeBand } from './elevationBand.js';
 
 const CORNER_EPS = 1; // mm — stairPortEdges(世界座標)とfaceのaxisCL一致判定の許容差
 
@@ -88,19 +84,8 @@ function findOverlappingVoidRoom(stairRoom, graph, upperGraph) {
  *   heightMm:number, widthMm:number, faceCount:number, leftAnchorX:number|null}}
  */
 export function buildStairBand(stairRoom, graph, upperGraph, ctx = {}) {
-  const stair       = ctx.stair ?? [...graph.stairs].find(s => s.roomId === stairRoom.id) ?? null;
-  const project     = ctx.project ?? null;
-  const materialMap = ctx.materialMap ?? null;
-  const gridCLs     = ctx.gridCLs ?? collectGridCLs(graph);
-  const gapModelMm  = ctx.gapModelMm ?? DEFAULT_FACE_GAP_MM;
-  const nameGapModelMm = ctx.nameGapModelMm; // 未指定はappendRoomNameFrame既定(DEFAULT_NAME_GAP_MM)へ委ねる
-  const triOffsetMm = ctx.triangleOffsetModelMm ?? DEFAULT_TRIANGLE_OFFSET_MM;
-  const faceLabelAvoidThresholdModelMm = ctx.faceLabelAvoidThresholdModelMm; // 未指定はbuildFaceFigure既定(QA B3)
-  const openingTagRowModelMm = ctx.openingTagRowModelMm; // 未指定はbuildFaceFigure既定(QA C1)
-  const dimRowGapModelMm     = ctx.dimRowGapModelMm;      // 未指定はbuildFaceFigure既定(QA C1/D2)
-  const gridRowGapModelMm    = ctx.gridRowGapModelMm;     // 未指定はbuildFaceFigure既定(QA D1)
-  const wallLessEndExtendModelMm = ctx.wallLessEndExtendModelMm; // 未指定はbuildFaceFigure既定(項目1)
-  const scale = ctx.scale; // 未指定はbuildFaceFigure既定=壁2段書き省略判定を行わない（項目4）
+  const stair   = ctx.stair ?? [...graph.stairs].find(s => s.roomId === stairRoom.id) ?? null;
+  const project = ctx.project ?? null; // floorHeightAbove算出用（layoutBandFaces内とは別に、ここでも要る）
 
   let faces = composeRoomFaces(stairRoom, graph);
   if (stair && faces.length > 0) {
@@ -108,54 +93,13 @@ export function buildStairBand(stairRoom, graph, upperGraph, ctx = {}) {
     if (startLabel) faces = rotateFacesToStart(faces, startLabel);
   }
 
-  const chInfo = roomCeilingHeight(graph, stairRoom);
-  const CH = chInfo.mm;
+  // R1: 面配置ループはelevationBand.jsのlayoutBandFacesへ共通化（buildRoomBandと同じ配置規則）。
+  const { primitives, faceRuns, chDimX, prevBoundaryHi, CH } = layoutBandFaces(stairRoom, graph, faces, ctx);
+
   const floorHeight = ctx.floorHeight ?? floorHeightAbove(project, graph.plane);
   // 項目11: 設置階上階のそのまた階高。upperGraphが無い・peek未解決なら不明（1層のみ）。
   const upperFloorHeight = upperGraph ? floorHeightAbove(project, upperGraph.plane) : null;
   const totalStairHeight = floorHeight != null ? floorHeight + (upperFloorHeight ?? 0) : null;
-
-  const primitives = [];
-  const faceRuns = [];
-  let xCursor = 0;
-  let prevBoundaryHi = null; // 直前面の壁中心線(hi側)の帯内絶対x（buildRoomBandと同じ配置規則）
-  let prevRightExtent = null; // 直前面の寸法線類を含む右端の帯内絶対x（項目6。elevationBand.jsと同じ）
-  let chDimX = null; // 天井高寸法線のx（先頭面のみ設定。項目9の左アンカー起点）
-  faces.forEach((face, i) => {
-    const boundary = faceBoundaryLocalX(face, graph);
-    // QA G2: elevationBand.jsと同じ理由（ヘッダコメント参照）。壁のない左右端の延長ぶんを加味する
-    // （elevationFaces.jsのfaceWallLessExtents。elevationBand.jsと共有する純関数）。
-    const wallLessExtendMm = wallLessEndExtendModelMm ?? DEFAULT_WALL_LESS_END_EXTEND_MM;
-    const { leftExtendMm, rightExtendMm } = faceWallLessExtents(face, wallLessExtendMm);
-    // 項目6: elevationBand.jsと同じ理由（ヘッダコメント参照）。
-    xCursor = i === 0 ? 0 : prevRightExtent + gapModelMm - boundary.lo + leftExtendMm;
-
-    // 項目3: elevationBand.jsと同じ理由・同じガード（ヘッダコメント参照。新仕様のneighborWallFaceは
-    // 段差見付け面(kind==='step')をスキップする）。
-    const prevFace = neighborWallFace(faces, i, -1);
-    const nextFace = neighborWallFace(faces, i, 1);
-    // 項目4: elevationBand.jsと同じ（階段部屋が部分指定の親になることは通常無いが、
-    // wallAdjacentFloorSegmentsは該当が無ければ常にフラット1区間を返すため安全に共通化できる）。
-    // 新仕様: 段差見付け面自体にはfloorSegmentsを渡さない（elevationBand.jsと同じ）。
-    const floorSegments = face.kind === 'step' ? undefined : wallAdjacentFloorSegments(face, stairRoom, graph);
-    const faceCtx = {
-      graph, project, room: stairRoom, ceilingHeight: CH, materialMap, gridCLs, faceLabelAvoidThresholdModelMm,
-      prevFace, nextFace, openingTagRowModelMm, dimRowGapModelMm, gridRowGapModelMm, floorSegments,
-      wallLessEndExtendModelMm, scale,
-    };
-    for (const p of buildFaceFigure(face, faceCtx)) primitives.push(translatePrimitive(p, xCursor, 0));
-    if (i === 0) {
-      chDimX = boundary.lo - CH_DIM_OFFSET_MM;
-      primitives.push({
-        type: 'dim', dir: 'v', at: chDimX, from: -CH, to: 0, foot: 0, dot: true, label: chInfo.raw,
-      });
-    }
-    faceRuns.push({ face, xCursor });
-    prevBoundaryHi = xCursor + boundary.hi;
-    prevRightExtent = prevBoundaryHi
-      + ((floorSegments?.length ?? 0) > 1 ? CH_DIM_OFFSET_MM : 0)
-      + rightExtendMm;
-  });
 
   // 上階（吹抜け部でクリップ）: 上階FL線（CUT）を重ねて引き、両端縦線をCHから
   // totalStairHeight（2層分の階高）まで延長する簡易表現（項目11）。
@@ -193,31 +137,10 @@ export function buildStairBand(stairRoom, graph, upperGraph, ctx = {}) {
   // 折返し階段（SWITCHBACK）の断面プロファイルを起点面(xCursor=0)に重ねて描く（項目12）。
   for (const p of buildSwitchbackSectionPrimitives(stair, graph, floorHeight)) primitives.push(p);
 
-  const leftAnchorX  = chDimX != null ? chDimX - triOffsetMm : null;
-  const rightAnchorX = prevBoundaryHi != null ? prevBoundaryHi + triOffsetMm : null;
-  // 部屋名枠＋左右引出線＋留め三角（buildRoomBandと共有。以前は階段帯だけ欠落していた）。
-  appendRoomNameFrame(primitives, stairRoom.name, { nameGapModelMm, leftX: leftAnchorX, rightX: rightAnchorX });
-
-  // 調整項目6: boundsはfloorOffset適用前（基準。floorOffset=0のときの描画範囲）の座標系で
-  // 計算する（elevationBand.jsと同じ理由。ヘッダコメント・buildRoomBand参照）。段差高さの
-  // 寸法線は描かない。
-  const rawBounds = figureBounds(primitives);
-  const floorOffset = graph.effectiveFloorLevel(stairRoom) - graph.floorDatum;
-  const shifted = primitives.map(p => translatePrimitive(p, 0, -floorOffset));
-  // 調整項目4: 帯の描画範囲の上端にBAND_TOP_MARGIN_MMぶんの余白を確保する
-  // （boundsにfloorOffset由来の項を混ぜない理由はelevationBand.js参照。QA A2）。
-  const bounds = {
-    ...rawBounds, minY: rawBounds.minY - BAND_TOP_MARGIN_MM, height: rawBounds.height + BAND_TOP_MARGIN_MM,
-  };
-  // QA B2: heightMm・topMarginMmは互いに排他的な向きを守るため、floorOffsetの符号で
-  // 加算先を分ける（elevationBand.jsのコメント参照。両方に一律Math.abs(floorOffset)を
-  // 足すと使わない側が過剰予約になり実すき間が間延びする）。
-  const downwardSlackMm = Math.max(0, -floorOffset);
-  const upwardSlackMm   = Math.max(0, floorOffset);
-
-  return {
-    roomId: stairRoom.id, roomName: stairRoom.name, primitives: shifted, bounds,
-    heightMm: bounds.height + downwardSlackMm, widthMm: bounds.width, faceCount: faces.length,
-    leftAnchorX, topMarginMm: upwardSlackMm,
-  };
+  // R1: 部屋名枠＋左右引出線＋留め三角・bounds・floorOffset平行移動はelevationBand.jsの
+  // finalizeBandへ共通化（buildRoomBandと共有。以前は階段帯だけappendRoomNameFrameが欠落していた）。
+  return finalizeBand(stairRoom, graph, primitives, {
+    faceCount: faces.length, chDimX, prevBoundaryHi,
+    triOffsetMm: ctx.triangleOffsetModelMm, nameGapModelMm: ctx.nameGapModelMm,
+  });
 }

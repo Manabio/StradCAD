@@ -3,15 +3,13 @@
  * 「見えがかり（見付け）」を1枚の面として描くための抽出・合成）。設計意図は
  * .claude/elevation-model.md 参照。
  */
-import { CenterLineType } from '@core';
 import { cellBoundsList, outlineSegments, worldToCell } from '../finish/gridCells.js';
 import { letterOf, DIR_SIGN, perpFaceAt, CORNER_TOL_MM } from './elevationFaces.js';
-import { roomOwnerByCell } from './elevationFloorProfile.js';
-import { MIN_FACE_RUN_MM } from './elevationStyle.js';
-
-// 物理的に意味を持たない極小幅(mm)の許容差。elevationFloorProfile.jsのGAP_EPSと同水準
-// （CL昇格/降格・再スナップ由来のsub-micron誤差を吸収する目的）。
-const GAP_EPS = 1e-6;
+import { roomOwnerByCell, collectRunBreaks, findRunCLAt } from './elevationFloorProfile.js';
+import { MIN_FACE_RUN_MM, GAP_EPS_MM as GAP_EPS, PROBE_EPS_MM } from './elevationStyle.js';
+// GAP_EPS: 物理的に意味を持たない極小幅(mm)の許容差。CL昇格/降格・再スナップ由来の
+// sub-micron誤差を吸収する目的（elevationFloorProfile.js等と共通。R4）。
+// PROBE_EPS_MM: 輪郭線分から内側/外側へ覗き込むプローブ距離（R4共通定数）。
 
 /**
  * parentRoom（自身の未指定セル＋各部分指定の子）をFLの異なるゾーンごとにグループ化し、
@@ -47,11 +45,14 @@ export function stepRiserSegments(parentRoom, graph) {
     if (bounds.length === 0) continue;
 
     for (const seg of outlineSegments(bounds)) {
-      const breaks = collectAxisBreaks(graph, seg.isVertical, seg.lo, seg.hi);
+      // 線分自身の伸びる方向のCLで刻む（outlineSegmentsの線分は縦線(isVertical=true)ならy方向に、
+      // 横線ならx方向に伸びる——線分の伸びる方向と直交するCLではなく、線分自身と同じ向きの
+      // 中心線で刻む。elevationFloorProfile.jsのcollectRunBreaksと実装が完全同一のためR2で統合）。
+      const breaks = collectRunBreaks(graph, seg.isVertical, seg.lo, seg.hi);
       for (let i = 0; i + 1 < breaks.length; i++) {
         const lo = breaks[i], hi = breaks[i + 1];
         // QA修正: CL昇格/降格・再スナップ等で「同じ位置のはずの別CL」が極小差(sub-micron)で
-        // 隣接すると、collectAxisBreaksが物理的に意味を持たない極小幅の区間を作ることがある
+        // 隣接すると、collectRunBreaksが物理的に意味を持たない極小幅の区間を作ることがある
         // （elevationFloorProfile.jsのwallAdjacentFloorSegmentsで同種のバグを修正済み——
         // GAP_EPS吸収パス。ここは「常に全区間を覆う」制約が無くsegs単独で成立するため、
         // 吸収ではなく単純に読み飛ばす=幅0の見付け面を生成しない）。
@@ -76,22 +77,6 @@ export function stepRiserSegments(parentRoom, graph) {
     }
   }
   return mergeRiserSegments(out);
-}
-
-const PROBE_EPS_MM = 5; // 輪郭線分から内側/外側へ覗き込むプローブ距離
-
-// [lo,hi] 区間を、その区間内に厳密に含まれる（isVertical方向と直交する軸の）分割CL値で刻む。
-function collectAxisBreaks(graph, isVertical, lo, hi) {
-  // outlineSegments の線分は縦線(isVertical=true)ならy方向に、横線ならx方向に伸びる。
-  // その線分をさらに刻むのは「線分の伸びる方向と直交する」CLではなく、線分自身の伸びる
-  // 方向のCL（＝線分と同じ向きの中心線。例えば縦線分はY方向の水平CLで刻まれる）。
-  const type = isVertical ? CenterLineType.HORIZONTAL : CenterLineType.VERTICAL;
-  const values = new Set([lo, hi]);
-  for (const cl of graph.centerLines) {
-    if (cl.centerLineType !== type) continue;
-    if (cl.value > lo && cl.value < hi) values.add(cl.value);
-  }
-  return [...values].sort((a, b) => a - b);
 }
 
 // 同一value・inward・(highFL,lowFL)で隣接する区間を結合する。
@@ -155,9 +140,10 @@ export function buildStepFaces(seg, wallFaces, graph, parentFL) {
   };
 }
 
+// R6: axis方向（isVertical面ならVERTICAL）のCL探索は、findRunCLAt（run方向=axis方向の反転）に
+// isVerticalを反転して渡すのと等価なため委譲する（elevationFloorProfile.js）。
 function findAxisCL(graph, isVertical, value) {
-  const type = isVertical ? CenterLineType.VERTICAL : CenterLineType.HORIZONTAL;
-  return graph.centerLines.find(cl => cl.centerLineType === type && cl.value === value) ?? null;
+  return findRunCLAt(graph, !isVertical, value);
 }
 
 /**

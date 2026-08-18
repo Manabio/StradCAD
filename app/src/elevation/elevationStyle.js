@@ -142,6 +142,15 @@ export const DEFAULT_FACE_LABEL_AVOID_THRESHOLD_MM = 400; // 倍率決定用の1
 // 浮動小数の丸め程度を吸収する目的の小さな値（elevationDimSplit.jsのcollectRow1SplitPoints）。
 export const SPLIT_MERGE_EPS_MM = 1;
 
+// R4: 幾何epsilonの一元定義（旧: elevationOpenSpan.js・elevationStepFace.js・
+// elevationFloorProfile.jsにそれぞれ個別定義されていた）。
+// GAP_EPS_MM  … CL昇格/降格・再スナップ由来のsub-micron誤差や、物理的に意味を持たない極小幅の
+//               区間を吸収・除去するための許容差。
+// PROBE_EPS_MM… セル境界・輪郭線分を挟んで反対側（near/far、内側/外側）の所有Roomを1点プローブ
+//               で判定する際の覗き込み距離(mm)。
+export const GAP_EPS_MM   = 1e-6;
+export const PROBE_EPS_MM = 5;
+
 // QA修正（幅0の展開図バグ）: composeRoomFacesの最終段で、run（面の実効幅）がこの値未満の面を
 // 除去する安全網（elevationFaceList.js）。段差見付け面の隅スナップ・袖壁分割の境界計算等、
 // 個別の生成経路をそれぞれ堅牢化した上でも、未知の経路から幅0・極小幅の面が漏れ出た場合に
