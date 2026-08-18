@@ -246,6 +246,13 @@ test('【QA修正・項目1/3】buildFaceFigure: 出隅の縦線は、その隅�
 });
 
 // ---- 項目4: floorSegmentsが段差を含む場合、床線は区間ごとの水平線＋段差の縦線になる ----
+// 新仕様「段差位置のCLオフセット」: 内部境界（区間水平線の端x・段差縦線x）は寸法・CL位置
+// （segs[i].hiX=2000そのまま）ではなく、床が低い側（floorDeltaMmが小さい側＝この例ではseg0の
+// x<2000側）へ半壁厚(halfWallThicknessMm)だけずらした位置に描く。makeFace()はfaceValue=0・
+// axisCLにeffectiveValueが無いためhalfWallThicknessMmはDEFAULT_HALF_WALL_MM=57.5mmへ
+// フォールバックする——riserXは2000-57.5=1942.5になる（elevation-model.md参照）。
+const RISER_X_OFFSET_TESTS = 1942.5;
+
 test('【項目4】buildFaceFigure: floorSegmentsが2区間（段差あり）なら床線は水平線2本＋段差縦線1本になり、両端の縦線もその区間の床yに追従する', () => {
   const CH = 2400;
   const floorSegments = [
@@ -264,21 +271,22 @@ test('【項目4】buildFaceFigure: floorSegmentsが2区間（段差あり）な
 
   const floorHorizontals = cutLines.filter(l => l.y1 === l.y2);
   assert.equal(floorHorizontals.length, 3, '天井線1本+床の水平線2本=3本の水平CUT線のはず');
-  const seg0 = floorHorizontals.find(l => l.x1 === 0 && l.x2 === 2000);
-  const seg1 = floorHorizontals.find(l => l.x1 === 2000 && l.x2 === 4000);
-  assert.ok(seg0 && seg1, '両区間の水平線がそれぞれ見つかるはず');
+  const seg0 = floorHorizontals.find(l => l.x1 === 0 && l.x2 === RISER_X_OFFSET_TESTS);
+  const seg1 = floorHorizontals.find(l => l.x1 === RISER_X_OFFSET_TESTS && l.x2 === 4000);
+  assert.ok(seg0 && seg1, '両区間の水平線がそれぞれ見つかるはず（境界は新仕様のオフセット後の位置）');
   assert.equal(seg0.y1, 0, '左区間(floorDeltaMm:0)はy=0のまま');
   assert.equal(seg1.y1, -300, '右区間(floorDeltaMm:300)はy=-300へ上がるはず');
 
-  // 段差の縦線（x=2000でy=0→y=-300）。
-  const riser = cutLines.find(l => l.x1 === 2000 && l.x2 === 2000 && l.y1 === 0 && l.y2 === -300);
-  assert.ok(riser, '段差の縦線(x=2000, y:0→-300)が見つかるはず');
+  // 段差の縦線（オフセット後のx=1942.5でy=0→y=-300）。
+  const riser = cutLines.find(l => l.x1 === RISER_X_OFFSET_TESTS && l.x2 === RISER_X_OFFSET_TESTS && l.y1 === 0 && l.y2 === -300);
+  assert.ok(riser, '段差の縦線(x=1942.5, y:0→-300)が見つかるはず');
   assert.equal(riser.weight, 'thick', '段差の縦線もCUTのはず');
 
   // 段差の寸法線・寸法値は描かない（明示指示）。
-  assert.ok(!prims.some(p => p.type === 'dim' && p.at === 2000), '段差位置の寸法は描かないはず');
+  assert.ok(!prims.some(p => p.type === 'dim' && p.at === RISER_X_OFFSET_TESTS), '段差位置の寸法は描かないはず');
 
-  // 両端の縦線（x=0とx=run=4000。出隅=SILHOUETTE）は、その位置の区間の床yまで伸びる。
+  // 両端の縦線（x=0とx=run=4000。出隅=SILHOUETTE）は、その位置の区間の床yまで伸びる
+  // （面の外端はriserXAtの対象外＝オフセットの影響を受けない）。
   const leftEnd  = silhouetteLines.find(l => l.x1 === 0 && l.x2 === 0);
   const rightEnd = silhouetteLines.find(l => l.x1 === face.run && l.x2 === face.run);
   assert.ok(leftEnd && rightEnd, '両端の縦線が見つかるはず');
@@ -781,8 +789,10 @@ test('【項目7】buildFaceFigure: floorSegmentsが段差を含む場合、巾�
   const ctx = baseCtx({ floorSegments, room: makeRoom({}, { baseboardHeight: 'h=60' }) });
   const prims = buildFaceFigure(face, ctx);
   const baseboardLines = prims.filter(p => p.type === 'line' && p.weight === 'thin' && p.y1 === p.y2);
-  const seg0Line = baseboardLines.find(p => p.x1 === 0 && p.x2 === 2000);
-  const seg1Line = baseboardLines.find(p => p.x1 === 2000 && p.x2 === 4000);
+  // 新仕様「段差位置のCLオフセット」: 内部境界はオフセット後の位置(1942.5)になる（テストファイル
+  // 冒頭のRISER_X_OFFSET_TESTS参照）。
+  const seg0Line = baseboardLines.find(p => p.x1 === 0 && p.x2 === RISER_X_OFFSET_TESTS);
+  const seg1Line = baseboardLines.find(p => p.x1 === RISER_X_OFFSET_TESTS && p.x2 === 4000);
   assert.ok(seg0Line, '左区間(FL=0)の巾木線が見つからない');
   assert.equal(seg0Line.y1, -60, '左区間はFL(0)から60上=-60のはず');
   assert.ok(seg1Line, '右区間(FL=-300)の巾木線が見つからない');
@@ -790,7 +800,8 @@ test('【項目7】buildFaceFigure: floorSegmentsが段差を含む場合、巾�
 });
 
 // ---- 項目6: 段差床の巾木は床断面線（区間水平線＋段差縦線）をhだけ上へ平行移動した連続
-// ポリラインとして描く（水平方向にはオフセットしない） ----
+// ポリラインとして描く（水平方向にはオフセットしない＝床の段差縦線と同じx。新仕様でその
+// x自体がオフセット後の位置になった点はRISER_X_OFFSET_TESTS参照） ----
 test('【項目6】buildFaceFigure: 段差の縦線は水平方向にオフセットせず、同じx位置のままhだけ上へ平行移動して描かれる', () => {
   const floorSegments = [
     { loX: 0,    hiX: 2000, floorDeltaMm: 0 },
@@ -799,8 +810,8 @@ test('【項目6】buildFaceFigure: 段差の縦線は水平方向にオフセ�
   const face = makeFace();
   const ctx = baseCtx({ floorSegments, room: makeRoom({}, { baseboardHeight: 'h=60' }) });
   const prims = buildFaceFigure(face, ctx);
-  // 床の段差縦線(x=2000, y:0→-300)をそのままhだけ上へ平行移動した巾木縦線(x=2000, y:-60→-360)。
-  const riserLine = prims.find(p => p.type === 'line' && p.weight === 'thin' && p.x1 === 2000 && p.x2 === 2000);
+  // 床の段差縦線(x=1942.5, y:0→-300)をそのままhだけ上へ平行移動した巾木縦線(x=1942.5, y:-60→-360)。
+  const riserLine = prims.find(p => p.type === 'line' && p.weight === 'thin' && p.x1 === RISER_X_OFFSET_TESTS && p.x2 === RISER_X_OFFSET_TESTS);
   assert.ok(riserLine, '巾木の段差縦線（床断面の平行移動）が見つからない');
   assert.equal(riserLine.y1, -60, '左区間の床y(0)をhだけ上げた-60から始まるはず');
   assert.equal(riserLine.y2, -360, '右区間の床y(-300)をhだけ上げた-360まで届くはず');
@@ -1056,4 +1067,89 @@ test('avoidGridCollisionX: 衝突時（境界含む）は最広ギャップの�
 // ---- 失敗系: gridPointsが空なら常に退避しない ----
 test('【失敗系】avoidGridCollisionX: gridPointsが空なら常に元のxを返す', () => {
   assert.equal(avoidGridCollisionX(2000, [], { lo: 0, hi: 4000 }, 400), 2000);
+});
+
+// ---- 新仕様「段差見付け面」: kind==='step'の描画分岐 ----
+function makeStepFace(overrides = {}) {
+  return {
+    axisCL: { id: 'axisY0' }, isVertical: false, inward: 1, faceValue: 0,
+    lo: 0, hi: 1200, run: 1200, dirSign: 1, originWorld: 0,
+    startCLId: 'x0', endCLId: 'x1', label: 'C1',
+    kind: 'step', baseFloorDeltaMm: 0, stepHeightMm: 100,
+    ...overrides,
+  };
+}
+
+test('buildFaceFigure: kind===\'step\'の面は低い側床線・高い側床線(見付け上端)・両端縦線・天井線を全てCUTで描く', () => {
+  const face = makeStepFace();
+  const prims = buildFaceFigure(face, baseCtx());
+  const cutLines = prims.filter(p => p.type === 'line' && p.weight === 'thick');
+
+  const lowFloor  = cutLines.find(l => l.y1 === l.y2 && l.y1 === 0   && l.x1 === 0 && l.x2 === 1200);
+  const highFloor = cutLines.find(l => l.y1 === l.y2 && l.y1 === -100 && l.x1 === 0 && l.x2 === 1200);
+  const ceiling   = cutLines.find(l => l.y1 === l.y2 && l.y1 === -2400);
+  const leftEnd   = cutLines.find(l => l.x1 === 0    && l.x2 === 0    && l.y1 === 0 && l.y2 === -100);
+  const rightEnd  = cutLines.find(l => l.x1 === 1200 && l.x2 === 1200 && l.y1 === 0 && l.y2 === -100);
+
+  assert.ok(lowFloor,  `低い側床線(y=0=floorY)が見つかるはず（実際:${JSON.stringify(cutLines)}）`);
+  assert.ok(highFloor, '高い側床線(y=-100=見付け上端)が見つかるはず');
+  assert.ok(ceiling,   '天井線(y=-CH)が見つかるはず');
+  assert.ok(leftEnd && rightEnd, '両端縦線(floorY→topY)が見つかるはず');
+});
+
+// ---- 失敗系: kind==='step'の面は開口・巾木・壁2段書きを描かない ----
+test('【失敗系】buildFaceFigure: kind===\'step\'の面は開口・巾木・壁2段書きをスキップする', () => {
+  const opening = {
+    id: 'op1', isVertical: false, axisCL: { id: 'axisY0' }, wallSide: 1,
+    centerCoord: 600, width: 800, height: 2000, sillHeight: 0,
+    category: OpeningCategory.FITTING, subType: 'singleSwing', fixtureType: null,
+  };
+  const face = makeStepFace();
+  const ctx = baseCtx({
+    graph: makeGraph({ openings: [opening] }),
+    room: makeRoom({ wallMaterial: 'm1', wallFinish: 'm2' }, { baseboardHeight: 'h=60' }),
+    materialMap: new Map([['m1', { name: '石膏ボード' }], ['m2', { name: 'クロス' }]]),
+  });
+  const prims = buildFaceFigure(face, ctx);
+  assert.ok(!prims.some(p => p.type === 'tag'), '開口記号丸(tag)は描かれないはず');
+  assert.ok(!prims.some(p => p.type === 'line' && p.weight === 'thin' && p.y1 === p.y2 && p.y1 === -60),
+    '巾木線(y=-60)は描かれないはず');
+  assert.ok(!prims.some(p => p.type === 'text' && typeof p.text === 'string' && p.text.startsWith('壁：')),
+    '壁2段書きは描かれないはず');
+});
+
+// ---- kind==='step'でも注記帯（ROW1/ROW2/面ラベル）は通常面と共通合流する ----
+test('buildFaceFigure: kind===\'step\'の面でも面ラベル(face.label)は描かれる（注記帯は通常面と共通合流）', () => {
+  const face = makeStepFace();
+  const prims = buildFaceFigure(face, baseCtx());
+  assert.ok(prims.some(p => p.type === 'text' && p.text === 'C1'), '面ラベル"C1"が描かれるはず');
+});
+
+// ---- 新仕様「袖壁・腰壁の面分割」: partitionCutAtLocal0/Runの断面枠描画 ----
+test('buildFaceFigure: partitionCutAtLocal0/Runがあれば分割端にthicknessMm幅・0..-(topHeightMm??CH)のCUT枠rectを描く', () => {
+  const face = makeFace({
+    hasWallAtLocal0: false, hasWallAtLocalRun: true,
+    partitionCutAtLocal0: { thicknessMm: 90, topHeightMm: 900 }, // 腰壁=900までの低いCUT枠
+    partitionCutAtLocalRun: null,
+  });
+  const prims = buildFaceFigure(face, baseCtx());
+  const rect = prims.find(p => p.type === 'rect' && p.weight === 'thick' && p.x === 0 && p.w === 90);
+  assert.ok(rect, 'partitionCutAtLocal0のCUT枠rectが見つかるはず');
+  assert.equal(rect.y, -900, '腰壁の高さぶん上端はy=-900のはず');
+  assert.equal(rect.h, 900, '高さはtopHeightMm(900)そのもの（0..-900）のはず');
+});
+
+// ---- 失敗系: topHeightMm省略（null）は天井高(CH)までのCUT枠になる ----
+test('【失敗系】buildFaceFigure: partitionCutAtLocalRunのtopHeightMmがnullなら天井高(CH)までのCUT枠になる', () => {
+  const CH = 2400;
+  const face = makeFace({
+    hasWallAtLocal0: true, hasWallAtLocalRun: false,
+    partitionCutAtLocal0: null,
+    partitionCutAtLocalRun: { thicknessMm: 90, topHeightMm: null },
+  });
+  const prims = buildFaceFigure(face, baseCtx({ ceilingHeight: CH }));
+  const rect = prims.find(p => p.type === 'rect' && p.weight === 'thick' && p.x === face.run - 90 && p.w === 90);
+  assert.ok(rect, 'partitionCutAtLocalRunのCUT枠rectが見つかるはず');
+  assert.equal(rect.y, -CH, 'topHeightMm省略時は天井高(-CH)まで届くはず');
+  assert.equal(rect.h, CH);
 });

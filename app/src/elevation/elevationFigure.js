@@ -19,13 +19,16 @@ import { effectiveHeight, openingTagPartsOf } from '../openings/openingNumbering
 import { findCatalogEntry } from '../openings/openingCatalog.js';
 import { buildOpeningElevation } from '../openings/openingElevationFigure.js';
 import { translatePrimitive } from './elevationPrimitives.js';
+import { collectRow1SplitPoints } from './elevationDimSplit.js';
+import { drawnRiserX, halfWallThicknessMm } from './elevationFloorProfile.js';
+import { kneeDropRecordsOnAxis } from '../finish/kneeDropWall.js';
 import {
   ElevationLineRole, weightForRole,
   WALL_LABEL_LINE_GAP_MM,
   OPENING_TAG_RADIUS_PX, GRID_TAG_RADIUS_PX, GRID_TAG_FONT_PX,
   FACE_LABEL_FONT_PX, GRID_LINE_ABOVE_CH_MM, CANVAS_BG_COLOR, DEFAULT_FACE_LABEL_AVOID_THRESHOLD_MM,
   DEFAULT_OPENING_TAG_ROW_MM, DEFAULT_DIM_ROW_GAP_MM, DEFAULT_GRID_ROW_GAP_MM,
-  DEFAULT_WALL_LESS_END_EXTEND_MM, CH_DIM_OFFSET_MM,
+  DEFAULT_WALL_LESS_END_EXTEND_MM, CH_DIM_OFFSET_MM, SPLIT_MERGE_EPS_MM,
 } from './elevationStyle.js';
 
 // 項目4: 壁2段書きの省略判定用テキスト幅概算。renderText（figurePrimitivesKonva.jsx）は
@@ -94,10 +97,6 @@ export function parseBaseboardHeightMm(str) {
   if (!m) return null;
   const v = Number(m[1]);
   return Number.isFinite(v) && v > 0 ? v : null;
-}
-
-function getShape(graph, id) {
-  return graph.shapeMap.get(id) ?? graph._structGraph?.shapeMap.get(id) ?? null;
 }
 
 /** face のローカルx座標（世界座標→面基準の変換。openingsOnFace等の結果に対して使う）。 */
@@ -181,24 +180,31 @@ export function avoidObstacleRangesX(defaultX, obstacles, boundary, labelWidthMm
 }
 
 /**
+ * アキ（腰壁＋垂れ壁の同時指定でできる四角い穴）1件ぶんのプリミティブをprimsへ積む
+ * （新仕様: 通常面の腰壁・垂れ壁アキと段差見付け面(kind==='step')上部のアキで共用するため抽出）。
+ * 矩形(SILHOUETTE)＋対角線2本(一点鎖線・DETAIL)＋「ア キ」テキスト。
+ * @param {object[]} prims
+ * @param {{x:number, y:number, w:number, h:number}} gap
+ * @param {string} silhouetteWeight
+ * @param {string} detailWeight
+ */
+export function appendGapMark(prims, gap, silhouetteWeight, detailWeight) {
+  prims.push({ type: 'rect', x: gap.x, y: gap.y, w: gap.w, h: gap.h, weight: silhouetteWeight });
+  prims.push({ type: 'line', x1: gap.x,         y1: gap.y,         x2: gap.x + gap.w, y2: gap.y + gap.h, dash: 'center', weight: detailWeight });
+  prims.push({ type: 'line', x1: gap.x + gap.w, y1: gap.y,         x2: gap.x,         y2: gap.y + gap.h, dash: 'center', weight: detailWeight });
+  prims.push({ type: 'text', x: gap.x + gap.w / 2, y: gap.y + gap.h / 2, text: 'ア キ', anchor: 'middle', baseline: 'middle' });
+}
+
+/**
  * face 上のアキ（腰壁＋垂れ壁の同時指定でできる四角い穴）の矩形一覧（ローカル座標）。
- * graph.kneeDropWalls（finish/kneeDropWall.js）を面のaxisCLで絞り込み、区間をface.lo..hiへ
- * クランプしてローカル矩形へ変換する。
+ * kneeDropRecordsOnAxis（finish/kneeDropWall.js。QA修正L1でkey解読を集約）を面のaxisCL・
+ * face.lo..hiで絞り込み、区間をface.lo..hiへクランプしてローカル矩形へ変換する。
  * @returns {Array<{x:number, y:number, w:number, h:number}>}
  */
 export function kneeDropGapsOnFace(face, graph, ceilingHeightMm) {
   const out = [];
-  for (const [key, rec] of graph.kneeDropWalls) {
+  for (const { rec, lo, hi } of kneeDropRecordsOnAxis(graph, face.axisCL.id, face.lo, face.hi)) {
     if (!rec.knee || !rec.drop) continue; // アキ＝腰壁・垂れ壁の同時指定のみ
-    const [axisCLId, startCLId, endCLId] = key.split(':');
-    if (axisCLId !== face.axisCL.id) continue;
-    const startCL = getShape(graph, startCLId);
-    const endCL   = getShape(graph, endCLId);
-    if (!startCL || !endCL) continue;
-
-    const lo = Math.min(startCL.value, endCL.value);
-    const hi = Math.max(startCL.value, endCL.value);
-    if (hi <= face.lo || lo >= face.hi) continue; // faceと重ならない
     const clampedLo = Math.max(lo, face.lo);
     const clampedHi = Math.min(hi, face.hi);
 
@@ -328,6 +334,32 @@ export function buildFaceFigure(face, ctx) {
   const gridCircleRowY = dimRow2Y + gridRowGapMm;
   const faceLabelRowY  = gridCircleRowY;
 
+  // 新仕様「段差見付け面」: kind==='step'（elevationStepFace.jsのbuildStepFacesが作る面）は
+  // 通常面と描画分岐が異なる——低い側床線・高い側床線（=見付け上端）・両端縦線を全てCUTで描き、
+  // 天井線もCUTのまま揃える（他の面とy=-CHで同じ高さに並ぶよう）。上部にアキ（kneeDropWalls。
+  // 通常面と同じappendGapMark）。開口・巾木・壁2段書きはスキップし、注記帯（ROW1/ROW2/面ラベル）
+  // はappendAnnotationRowsで通常面と共通合流する（floorSegments未指定＝ROW1のS1段差CL源は無し）。
+  if (face.kind === 'step') {
+    const stepCutWeight = weightForRole(ElevationLineRole.CUT);
+    const stepSilhouetteWeight = weightForRole(ElevationLineRole.SILHOUETTE);
+    const stepDetailWeight = weightForRole(ElevationLineRole.DETAIL);
+    const floorY = -face.baseFloorDeltaMm;
+    const topY = -(face.baseFloorDeltaMm + face.stepHeightMm);
+    prims.push({ type: 'line', x1: 0, y1: floorY, x2: run, y2: floorY, weight: stepCutWeight }); // 低い側床線
+    prims.push({ type: 'line', x1: 0, y1: topY,   x2: run, y2: topY,   weight: stepCutWeight }); // 高い側床線(見付け上端)
+    prims.push({ type: 'line', x1: 0,   y1: floorY, x2: 0,   y2: topY, weight: stepCutWeight }); // 両端縦線
+    prims.push({ type: 'line', x1: run, y1: floorY, x2: run, y2: topY, weight: stepCutWeight });
+    prims.push({ type: 'line', x1: 0, y1: -CH, x2: run, y2: -CH, weight: stepCutWeight }); // 天井線
+    for (const gap of kneeDropGapsOnFace(face, graph, CH)) {
+      appendGapMark(prims, gap, stepSilhouetteWeight, stepDetailWeight);
+    }
+    appendAnnotationRows(prims, face, graph, {
+      boundary, floorSegments: undefined, gridCLs, dimRow1Y, dimRow2Y, gridCircleRowY, faceLabelRowY,
+      detailWeight: stepDetailWeight, faceLabelAvoidThresholdModelMm, CH,
+    });
+    return prims;
+  }
+
   // 床線・天井線・両端縦線（切断面＝太）。項目4: 部分指定（referenceRoomIds）が壁際の一部を占め
   // floorLevelが親と異なる区間があれば、床線は一直線ではなく段差付きの階段状polylineになる
   // （segs＝elevationFloorProfile.jsのwallAdjacentFloorSegments。buildRoomBand/buildStairBand
@@ -357,17 +389,24 @@ export function buildFaceFigure(face, ctx) {
   const drawnX0   = hasWallAtLocal0   ? 0   : -extendMm;
   const drawnXRun = hasWallAtLocalRun ? run : run + extendMm;
 
+  // 新仕様「段差位置のCLオフセット」: 内部境界（区間水平床線の端x・段差縦線x）は寸法・CL位置
+  // （segs[i].hiX＝オフセット前）そのものではなく、床が低い側へ半壁厚ぶんずらした位置
+  // （drawnRiserX）に描く——寸法線・CL一点鎖線側は従来どおりsegs[i].hiXのまま（elevation-model.md参照）。
+  const halfWallMm = halfWallThicknessMm(face);
+  const riserXAt = i => drawnRiserX(segs, i, halfWallMm);
+
   for (const [i, s] of segs.entries()) {
     const y = floorYOf(s);
-    const x1 = i === 0 ? drawnX0 : s.loX;
-    const x2 = i === segs.length - 1 ? drawnXRun : s.hiX;
+    const x1 = i === 0 ? drawnX0 : riserXAt(i - 1);
+    const x2 = i === segs.length - 1 ? drawnXRun : riserXAt(i);
     prims.push({ type: 'line', x1, y1: y, x2, y2: y, weight: cutWeight });
   }
   for (let i = 0; i + 1 < segs.length; i++) {
     // 段差の縦線（明示指示により寸法線・寸法値は描かない）。床の段差そのものはCUT
     // （切断面＝部屋の輪郭そのものという既存慣習のまま。出隅の縦線とは別物）。
+    const x = riserXAt(i);
     prims.push({
-      type: 'line', x1: segs[i].hiX, y1: floorYOf(segs[i]), x2: segs[i].hiX, y2: floorYOf(segs[i + 1]),
+      type: 'line', x1: x, y1: floorYOf(segs[i]), x2: x, y2: floorYOf(segs[i + 1]),
       weight: cutWeight,
     });
   }
@@ -377,12 +416,24 @@ export function buildFaceFigure(face, ctx) {
   if (hasWallAtLocal0)   prims.push({ type: 'line', x1: 0,   y1: -CH, x2: 0,   y2: floorYAtStart, weight: silhouetteWeight });
   if (hasWallAtLocalRun) prims.push({ type: 'line', x1: run, y1: -CH, x2: run, y2: floorYAtEnd,   weight: silhouetteWeight });
 
+  // 新仕様「袖壁・腰壁の面分割」: 袖壁で分割された端（hasWallAtLocal0/Run=falseで縦線を描かない
+  // 代わりに床・天井が延長される既存の「壁のない端部」表現の上に）、袖壁自身の断面（厚みthicknessMm・
+  // 高さ0..-(topHeightMm??CH)。腰壁ならtopHeightMm=knee.topHeightで低く、無ければ天井まで）を
+  // CUT枠として重ねる（openingSectionPrimitivesと同じ「面端から帯を起こす」慣習）。
+  if (face.partitionCutAtLocal0) {
+    const { thicknessMm, topHeightMm } = face.partitionCutAtLocal0;
+    const h = topHeightMm ?? CH;
+    prims.push({ type: 'rect', x: 0, y: -h, w: thicknessMm, h, weight: cutWeight });
+  }
+  if (face.partitionCutAtLocalRun) {
+    const { thicknessMm, topHeightMm } = face.partitionCutAtLocalRun;
+    const h = topHeightMm ?? CH;
+    prims.push({ type: 'rect', x: run - thicknessMm, y: -h, w: thicknessMm, h, weight: cutWeight });
+  }
+
   // アキ（腰壁＋垂れ壁の同時指定でできる四角い穴）
   for (const gap of kneeDropGapsOnFace(face, graph, CH)) {
-    prims.push({ type: 'rect', x: gap.x, y: gap.y, w: gap.w, h: gap.h, weight: silhouetteWeight });
-    prims.push({ type: 'line', x1: gap.x,         y1: gap.y,         x2: gap.x + gap.w, y2: gap.y + gap.h, dash: 'center', weight: detailWeight });
-    prims.push({ type: 'line', x1: gap.x + gap.w, y1: gap.y,         x2: gap.x,         y2: gap.y + gap.h, dash: 'center', weight: detailWeight });
-    prims.push({ type: 'text', x: gap.x + gap.w / 2, y: gap.y + gap.h / 2, text: 'ア キ', anchor: 'middle', baseline: 'middle' });
+    appendGapMark(prims, gap, silhouetteWeight, detailWeight);
   }
 
   // 開口（建具の姿＋記号丸。項目1・2）。姿図は openings/openingElevationFigure.js の
@@ -437,19 +488,22 @@ export function buildFaceFigure(face, ctx) {
         return [Math.max(0, localX - o.width / 2), Math.min(run, localX + o.width / 2)];
       })
       .sort((a, b) => a[0] - b[0]);
-    for (const s of segs) {
+    for (const [i, s] of segs.entries()) {
       const y = floorYOf(s) - baseboardH;
-      let cursor = s.loX;
+      // 新仕様「段差位置のCLオフセット」: 内部境界はriserXAt（床が低い側へ半壁厚ずらした位置）を使う。
+      const segLo = i === 0 ? s.loX : riserXAt(i - 1);
+      const segHi = i === segs.length - 1 ? s.hiX : riserXAt(i);
+      let cursor = segLo;
       for (const [gLo, gHi] of floorGaps) {
-        const cgLo = Math.max(gLo, s.loX), cgHi = Math.min(gHi, s.hiX);
+        const cgLo = Math.max(gLo, segLo), cgHi = Math.min(gHi, segHi);
         if (cgHi <= cgLo) continue; // この区間に重ならない開口
         if (cgLo > cursor) prims.push({ type: 'line', x1: cursor, y1: y, x2: cgLo, y2: y, weight: detailWeight });
         cursor = Math.max(cursor, cgHi);
       }
-      if (cursor < s.hiX) prims.push({ type: 'line', x1: cursor, y1: y, x2: s.hiX, y2: y, weight: detailWeight });
+      if (cursor < segHi) prims.push({ type: 'line', x1: cursor, y1: y, x2: segHi, y2: y, weight: detailWeight });
     }
     for (let i = 0; i + 1 < segs.length; i++) {
-      const riserX = segs[i].hiX;
+      const riserX = riserXAt(i);
       if (floorGaps.some(([gLo, gHi]) => riserX > gLo && riserX < gHi)) continue; // 開口がまたぐ段差は途切れさせる
       prims.push({
         type: 'line', x1: riserX, y1: floorYOf(segs[i]) - baseboardH, x2: riserX, y2: floorYOf(segs[i + 1]) - baseboardH,
@@ -486,7 +540,8 @@ export function buildFaceFigure(face, ctx) {
           return { lo: localX - o.width / 2, hi: localX + o.width / 2 };
         }),
         ...kneeDropGapsOnFace(face, graph, CH).map(g => ({ lo: g.x, hi: g.x + g.w })),
-        ...segs.slice(0, -1).map(s => ({ lo: s.hiX, hi: s.hiX })), // 段差の縦線
+        // 段差の縦線（新仕様「段差位置のCLオフセット」: riserXAt=床が低い側へ半壁厚ずらした位置）。
+        ...segs.slice(0, -1).map((s, i) => ({ lo: riserXAt(i), hi: riserXAt(i) })),
       ];
       const labelX = avoidObstacleRangesX((boundary.lo + boundary.hi) / 2, obstacles, boundary, labelWidthMm);
       const totalLinesHeightMm = (wallLabelLines.length - 1) * WALL_LABEL_LINE_GAP_MM;
@@ -506,6 +561,9 @@ export function buildFaceFigure(face, ctx) {
   // 項目4: 通り芯線（GRID_LINE_ABOVE_CH_MM）と同様、壁中心線も天井線より上まで突き出す
   // （y1=0ではなく-CH-GRID_LINE_ABOVE_CH_MMから始める。壁中心線も本来、床から天井を貫通して
   // 続く線のため。同じGRID_LINE_ABOVE_CH_MMを流用する）。
+  // 新仕様「ROW1寸法のCL分割」: boundary.lo〜hiを1本で通すのではなく、段差CL・面へ到達する
+  // 直交壁（袖壁等）・面に届く非通り芯中心線の3源（collectRow1SplitPoints）で分割した
+  // 「寸法の鎖」にする——marks=[boundary.lo,...分割x,boundary.hi]を区間ごとにdim(dot:true)で結ぶ。
 
   // 項目5: 床に段差がある面（segs.length>1）は、図の右側にも天井高さ寸法を描く（左のCH寸法と
   // 同じ様式=縦書き値・端部塗り丸。値は右端区間の実効CH=天井絶対高−右端区間FL）。左のCH寸法は
@@ -521,21 +579,59 @@ export function buildFaceFigure(face, ctx) {
     });
   }
 
-  const centerLineTopY = -CH - GRID_LINE_ABOVE_CH_MM;
-  prims.push({ type: 'line', x1: boundary.lo, y1: centerLineTopY, x2: boundary.lo, y2: dimRow1Y, dash: 'center', weight: detailWeight });
-  prims.push({ type: 'line', x1: boundary.hi, y1: centerLineTopY, x2: boundary.hi, y2: dimRow1Y, dash: 'center', weight: detailWeight });
-  prims.push({
-    type: 'dim', dir: 'h', at: dimRow1Y, from: boundary.lo, to: boundary.hi, dot: true,
-    label: Math.round(boundary.hi - boundary.lo),
+  appendAnnotationRows(prims, face, graph, {
+    boundary, floorSegments: segs, gridCLs, dimRow1Y, dimRow2Y, gridCircleRowY, faceLabelRowY,
+    detailWeight, faceLabelAvoidThresholdModelMm, CH,
   });
 
-  // 通り芯間寸法（面を貫く通り芯同士。ROW2）。項目2・6: こちらも足は出さない。通り芯自体の
-  // 一点鎖線（下のgridCircleRowYまで伸びる縦線）が寸法線位置(dimRow2Y)を通過するため、
-  // その交点に塗り丸(dim.dot)を置くだけでよい。
+  return prims;
+}
+
+/**
+ * 注記帯（ROW1鎖・ROW2通り芯間寸法・通り芯丸+ラベル・面ラベル）をprimsへ積む
+ * （新仕様。通常面・段差見付け面(kind==='step')の両方から共通で呼ぶ——見付け面は
+ * floorSegments未指定（S1の段差CL源が無い）で呼ばれる。開口・巾木・壁2段書きは対象外
+ * ＝呼び出し元がkind==='step'なら別途スキップする）。
+ * @param {object[]} prims
+ * @param {object} face
+ * @param {object} graph
+ * @param {{boundary:{lo:number,hi:number}, floorSegments?:Array, gridCLs?:object[],
+ *   dimRow1Y:number, dimRow2Y:number, gridCircleRowY:number, faceLabelRowY:number,
+ *   detailWeight:string, faceLabelAvoidThresholdModelMm?:number, CH:number}} opts
+ */
+function appendAnnotationRows(prims, face, graph, opts) {
+  const {
+    boundary, floorSegments, gridCLs, dimRow1Y, dimRow2Y, gridCircleRowY, faceLabelRowY,
+    detailWeight, faceLabelAvoidThresholdModelMm, CH,
+  } = opts;
+
+  // 通り芯間寸法（面を貫く通り芯同士。ROW2）より先にgridPointsを求める——ROW1の一点鎖線が
+  // 「通り芯と同位置なら重複させない」判定にgridPointsを使うため。
   const gridPoints = gridCLsOnFace(face, gridCLs ?? [])
     .map(cl => ({ x: localXOf(face, cl.effectiveValue), label: cl.label }))
     .sort((a, b) => a.x - b.x);
 
+  // 壁芯間寸法（面の両端＝壁中心線。ROW1）。新仕様「ROW1寸法のCL分割」: boundary.lo〜hiを
+  // 1本で通すのではなく、段差CL・面へ到達する直交壁（袖壁等）・面に届く非通り芯中心線の3源
+  // （collectRow1SplitPoints）で分割した「寸法の鎖」にする。
+  const centerLineTopY = -CH - GRID_LINE_ABOVE_CH_MM;
+  const row1SplitXs = collectRow1SplitPoints(face, graph, { floorSegments, boundary });
+  const row1Marks = [boundary.lo, ...row1SplitXs, boundary.hi];
+  for (const x of row1Marks) {
+    const onGrid = gridPoints.some(g => Math.abs(g.x - x) <= SPLIT_MERGE_EPS_MM);
+    if (onGrid) continue; // 通り芯の一点鎖線（ROW2側）と重複させない
+    prims.push({ type: 'line', x1: x, y1: centerLineTopY, x2: x, y2: dimRow1Y, dash: 'center', weight: detailWeight });
+  }
+  for (let i = 0; i + 1 < row1Marks.length; i++) {
+    prims.push({
+      type: 'dim', dir: 'h', at: dimRow1Y, from: row1Marks[i], to: row1Marks[i + 1], dot: true,
+      label: Math.round(row1Marks[i + 1] - row1Marks[i]),
+    });
+  }
+
+  // 通り芯間寸法（面を貫く通り芯同士。ROW2）。項目2・6: こちらも足は出さない。通り芯自体の
+  // 一点鎖線（下のgridCircleRowYまで伸びる縦線）が寸法線位置(dimRow2Y)を通過するため、
+  // その交点に塗り丸(dim.dot)を置くだけでよい。
   for (let i = 0; i + 1 < gridPoints.length; i++) {
     prims.push({
       type: 'dim', dir: 'h', at: dimRow2Y, from: gridPoints[i].x, to: gridPoints[i + 1].x, dot: true,
@@ -572,6 +668,4 @@ export function buildFaceFigure(face, ctx) {
     type: 'text', x: faceLabelX, y: faceLabelRowY, text: face.label,
     anchor: 'middle', baseline: 'middle', size: FACE_LABEL_FONT_PX,
   });
-
-  return prims;
 }

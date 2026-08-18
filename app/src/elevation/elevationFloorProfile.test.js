@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { Plane, PlanGraph, CenterLineType, Discipline } from '@core';
 import { generateRoomWallsFromOutline } from '../finish/wallGeneration.js';
 import { buildRoomFaces } from './elevationFaces.js';
-import { wallAdjacentFloorSegments } from './elevationFloorProfile.js';
+import { wallAdjacentFloorSegments, drawnRiserX, halfWallThicknessMm } from './elevationFloorProfile.js';
 
 function makeGraph() {
   const plane = new Plane('p1', 0, '1階', 1, 1);
@@ -199,4 +199,61 @@ test('【失敗系】wallAdjacentFloorSegments: 壁に接しない内側だけ�
   assert.equal(segs[0].floorDeltaMm, 0);
   assert.equal(segs[0].loX, 0);
   assert.equal(segs[0].hiX, faceA.run);
+});
+
+// ---- 新仕様「段差位置のCLオフセット」: loCLId/hiCLIdの実引継ぎ ----
+test('wallAdjacentFloorSegments: 段差境界のhiCLIdは実在するCLのidを指す（ROW1寸法のCL分割のS1源）', () => {
+  const graph = makeGraph();
+  const { room, xMid, rightKey } = makeSplitRoom(graph);
+  const child = graph.addRoom(new Set([rightKey]), '小上がり', undefined, new Set([room.id]));
+  child.setFloorLevel(300);
+
+  const faceA = buildRoomFaces(room, graph).find(f => f.label === 'A');
+  const segs = wallAdjacentFloorSegments(faceA, room, graph);
+
+  assert.equal(segs.length, 2);
+  assert.equal(segs[0].hiCLId, xMid.id, '左区間の終端CL idは内部境界のCL(xMid)のはず');
+  assert.equal(segs[1].loCLId, xMid.id, '右区間の始端CL idも同じCL(xMid)を指すはず（同じ境界の表裏）');
+});
+
+// ---- 失敗系: gap-fill区間（対応セルが見つからない=親扱い）のCL idはnull ----
+test('【失敗系】wallAdjacentFloorSegments: 部分指定が無ければ唯一の区間のloCLId/hiCLIdはnull（実在の境界CLが無いため）', () => {
+  const graph = makeGraph();
+  const { room } = makeSplitRoom(graph);
+  const faceA = buildRoomFaces(room, graph).find(f => f.label === 'A');
+  const segs = wallAdjacentFloorSegments(faceA, room, graph);
+  assert.equal(segs.length, 1);
+  assert.equal(segs[0].loCLId, null);
+  assert.equal(segs[0].hiCLId, null);
+});
+
+// ---- drawnRiserX: 床が低い側へ半壁厚だけずれる（オフセット前=hiXとは別の値） ----
+test('drawnRiserX: 段差の描画xは、floorDeltaMmが小さい（低い）側へhalfWallMmぶんずれる', () => {
+  const segs = [
+    { hiX: 2000, floorDeltaMm: 0 },
+    { hiX: 4000, floorDeltaMm: 300 },
+  ];
+  // segs[0]=0(低い)・segs[1]=300(高い)なので、低い側=segs[0]の方向（xが小さくなる方向）へずれる。
+  assert.equal(drawnRiserX(segs, 0, 57.5), 2000 - 57.5);
+});
+
+// ---- 失敗系: 逆向き（左が高い・右が低い）なら右方向へずれる ----
+test('【失敗系】drawnRiserX: floorDeltaMmが右側の方が低ければ、低い側(右)=xが大きくなる方向へずれる', () => {
+  const segs = [
+    { hiX: 2000, floorDeltaMm: 300 },
+    { hiX: 4000, floorDeltaMm: 0 },
+  ];
+  assert.equal(drawnRiserX(segs, 0, 57.5), 2000 + 57.5);
+});
+
+// ---- halfWallThicknessMm: |faceValue - axisCL.effectiveValue| ----
+test('halfWallThicknessMm: 面自身のfaceValueとaxisCL.effectiveValueの差（半壁厚）を返す', () => {
+  const face = { faceValue: 2057.5, axisCL: { effectiveValue: 2000 } };
+  assert.equal(halfWallThicknessMm(face), 57.5);
+});
+
+// ---- 失敗系: faceValue===axisCL.effectiveValue（差0）は既定値57.5へフォールバックする ----
+test('【失敗系】halfWallThicknessMm: 差が0（合成face等で不明）ならDEFAULT_HALF_WALL_MM(57.5)へフォールバックする', () => {
+  const face = { faceValue: 0, axisCL: { effectiveValue: 0 } };
+  assert.equal(halfWallThicknessMm(face), 57.5);
 });

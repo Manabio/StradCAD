@@ -381,12 +381,16 @@ test('【項目6】buildRoomBand: 段差で右CH寸法が付く面Aは、寸法�
   const boundaryA = faceBoundaryLocalX(faceA, graph);
   const boundaryB = faceBoundaryLocalX(faceB, graph);
 
-  // ROW1寸法(dir:'h', dot:true)は面ごとに1本。帯内でband-space順に並ぶため、fromの昇順で
-  // 先頭2件が面A・面Bのものになる（面Aは先頭面=xCursor0のため、boundaryA.loそのものになるはず）。
+  // ROW1寸法(dir:'h', dot:true)は帯内でband-space順に並ぶため、fromの昇順で先頭が面Aのものになる
+  // （面Aは先頭面=xCursor0のため、boundaryA.loそのものになるはず）。新仕様「ROW1寸法のCL分割」
+  // により面A自身が段差CLで分割され複数本のdimを持ちうるため、「面Bの最初のdim」は単純な
+  // rowDims[1]ではなく、面AのROW1鎖の終端(boundaryA.hi)以降で最小のfromを持つものを探す。
   const rowDims = band.primitives.filter(p => p.type === 'dim' && p.dir === 'h' && p.dot === true)
     .sort((a, b) => a.from - b.from);
   assert.ok(Math.abs(rowDims[0].from - boundaryA.lo) < 1e-6, '前提: 先頭のROW1寸法は面Aのものであるはず');
-  const xCursorB = rowDims[1].from - boundaryB.lo;
+  const faceBFirstDim = rowDims.find(d => d.from >= boundaryA.hi - 1e-6);
+  assert.ok(faceBFirstDim, '面BのROW1寸法が見つかるはず');
+  const xCursorB = faceBFirstDim.from - boundaryB.lo;
 
   // 面Aの右CH寸法（項目5。dir:'v'のうち、左CH寸法(foot:0固定)ではない方=foot!==0で識別できる）。
   const rightChDimA = band.primitives.find(p => p.type === 'dim' && p.dir === 'v' && p.foot !== 0);

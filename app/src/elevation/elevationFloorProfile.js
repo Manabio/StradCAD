@@ -9,6 +9,18 @@
  * セルキー集合であり、この対応関係を再実装しないため）。
  */
 import { refreshCells, cellBoundsFromKey } from '../finish/gridCells.js';
+import { DEFAULT_WALL_BASE, DEFAULT_WALL_FINISH } from '../finish/wallGeneration.js';
+
+// 実壁が引けない面（単体テスト等の合成face）向けの半壁厚フォールバック(mm)。
+// 既定壁下地厚(DEFAULT_WALL_BASE)の半分+既定仕上げ厚(DEFAULT_WALL_FINISH) = 45+12.5 = 57.5。
+const DEFAULT_HALF_WALL_MM = DEFAULT_WALL_BASE / 2 + DEFAULT_WALL_FINISH;
+
+// セルキー(leftId:topId:rightId:bottomId)から、face.isVertical に応じたrunLo/runHi側のCL idを返す。
+function runBoundaryCLIds(key, isVertical) {
+  const [leftId, topId, rightId, bottomId] = key.split(':');
+  // cellBoundsFromKeyの規約どおりtop<bottom・left<rightのため、runLo側は常にtop/left。
+  return isVertical ? { loCLId: topId, hiCLId: bottomId } : { loCLId: leftId, hiCLId: rightId };
+}
 
 /**
  * face（parentRoomの壁面1枚）に沿った実効FLの区間プロファイルを、face のローカルx（0..run。
@@ -45,7 +57,14 @@ export function wallAdjacentFloorSegments(face, parentRoom, graph) {
     const [runLo, runHi] = face.isVertical ? [b.y1, b.y2] : [b.x1, b.x2];
     if (runHi <= face.lo || runLo >= face.hi) continue; // この面の範囲外
     const owner = childOwnerByCell.get(key) ?? parentRoom;
-    touching.push({ runLo: Math.max(runLo, face.lo), runHi: Math.min(runHi, face.hi), owner });
+    const { loCLId, hiCLId } = runBoundaryCLIds(key, face.isVertical);
+    touching.push({
+      runLo: Math.max(runLo, face.lo), runHi: Math.min(runHi, face.hi), owner,
+      // クランプ（face.lo/hiでの切り詰め）が起きた端は、そのCLではなくfaceの端そのものが境界
+      // のため、クランプが働いた側のCL idはnull（=segsのgap-fillと同じ「不明」扱い）にする。
+      loCLId: runLo >= face.lo ? loCLId : null,
+      hiCLId: runHi <= face.hi ? hiCLId : null,
+    });
   }
   touching.sort((a, b) => a.runLo - b.runLo);
 
@@ -63,14 +82,14 @@ export function wallAdjacentFloorSegments(face, parentRoom, graph) {
   const segs = [];
   let cursor = face.lo;
   for (const t of touching) {
-    if (t.runLo > cursor) segs.push({ runLo: cursor, runHi: t.runLo, floorDeltaMm: 0 }); // 欠測=親扱い
+    if (t.runLo > cursor) segs.push({ runLo: cursor, runHi: t.runLo, floorDeltaMm: 0, loCLId: null, hiCLId: null }); // 欠測=親扱い
     const floorDeltaMm = graph.effectiveFloorLevel(t.owner) - parentFL;
     // 重なり（t.runLo が cursor より小さい）はcursorへスナップし、区間の逆転・二重描画を防ぐ。
     const runLo = Math.max(t.runLo, cursor);
-    if (t.runHi > runLo) segs.push({ runLo, runHi: t.runHi, floorDeltaMm });
+    if (t.runHi > runLo) segs.push({ runLo, runHi: t.runHi, floorDeltaMm, loCLId: t.loCLId, hiCLId: t.hiCLId });
     cursor = Math.max(cursor, t.runHi);
   }
-  if (cursor < face.hi) segs.push({ runLo: cursor, runHi: face.hi, floorDeltaMm: 0 });
+  if (cursor < face.hi) segs.push({ runLo: cursor, runHi: face.hi, floorDeltaMm: 0, loCLId: null, hiCLId: null });
 
   // 物理的に意味を持たない極小幅(<GAP_EPS)の区間は、floorDeltaMmが前後と異なっていても
   // 前（無ければ次）の区間へ吸収してから、通常のdelta一致マージへ進む（QA修正・上記コメント参照）。
@@ -88,6 +107,7 @@ export function wallAdjacentFloorSegments(face, parentRoom, graph) {
     const last = merged[merged.length - 1];
     if (last && last.floorDeltaMm === s.floorDeltaMm && Math.abs(last.runHi - s.runLo) < GAP_EPS) {
       last.runHi = s.runHi;
+      last.hiCLId = s.hiCLId;
     } else {
       merged.push({ ...s });
     }
@@ -96,11 +116,44 @@ export function wallAdjacentFloorSegments(face, parentRoom, graph) {
   // ローカルx（0..run）へ変換（dirSignが負の面はrunLo/runHiの大小が反転するため正規化する）。
   // worldCoord===face.originWorldのとき(0)*dirSignで-0になり得るため、+0で正規化する
   // （-0はJSでは0と数値的に等しいが、Object.is比較（assert.strict等）では区別され不便なため）。
+  // 仕様4: loCLId/hiCLIdはrunLo/runHiと同じ向き（dirSign<0のfaceではlocalのlo/hiがrunの
+  // hi/loと入れ替わるため、そちらもあわせて入れ替える）でsegsへ引き継ぐ——ROW1寸法のCL分割点
+  // （elevationDimSplit.jsのS1=segs[i].hiCLId）が指すのは常に「オフセット前の実際のCL」。
   const toLocal = worldCoord => (worldCoord - face.originWorld) * face.dirSign + 0;
   return merged
     .map(s => {
       const a = toLocal(s.runLo), b = toLocal(s.runHi);
-      return { loX: Math.min(a, b), hiX: Math.max(a, b), floorDeltaMm: s.floorDeltaMm };
+      const swapped = a > b;
+      return {
+        loX: Math.min(a, b), hiX: Math.max(a, b), floorDeltaMm: s.floorDeltaMm,
+        loCLId: swapped ? s.hiCLId : s.loCLId, hiCLId: swapped ? s.loCLId : s.hiCLId,
+      };
     })
     .sort((a, b) => a.loX - b.loX);
+}
+
+/**
+ * 段差の描画x（オフセット後）を返す（仕様4）。segs[i]・segs[i+1]の境界（segs[i].hiX。オフセット前）
+ * を、床が低い側へ半壁厚(halfWallMm)だけずらす——寸法・CL一点鎖線（オフセット前のsegs[i].hiXを
+ * そのまま使う）とは別の値として持つ設計（elevation-model.md参照）。
+ * @param {Array<{hiX:number, floorDeltaMm:number}>} segs
+ * @param {number} i - 境界の手前側のインデックス（segs[i]とsegs[i+1]の間の境界）
+ * @param {number} halfWallMm
+ * @returns {number}
+ */
+export function drawnRiserX(segs, i, halfWallMm) {
+  const towardLow = segs[i].floorDeltaMm > segs[i + 1].floorDeltaMm ? 1 : -1;
+  return segs[i].hiX + towardLow * halfWallMm;
+}
+
+/**
+ * face自身の壁厚の半分(mm)。|faceValue - axisCL.effectiveValue|（面自身の芯からのオフセット量＝
+ * 半壁厚）を返す。0（合成face等でfaceValueが不明・芯に一致する場合）はDEFAULT_HALF_WALL_MM
+ * （既定壁下地厚の半分+既定仕上げ厚=57.5mm）へフォールバックする。
+ * @param {object} face
+ * @returns {number}
+ */
+export function halfWallThicknessMm(face) {
+  const v = Math.abs((face.faceValue ?? face.axisCL?.effectiveValue ?? 0) - (face.axisCL?.effectiveValue ?? 0));
+  return v > 0 ? v : DEFAULT_HALF_WALL_MM;
 }

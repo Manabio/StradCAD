@@ -3,7 +3,8 @@
  * 設計意図は .claude/elevation-model.md 参照。
  */
 import { figureBounds } from '../structural/sectionFigure/sectionGeometry.js';
-import { buildRoomFaces, faceBoundaryLocalX, faceWallLessExtents } from './elevationFaces.js';
+import { faceBoundaryLocalX, faceWallLessExtents } from './elevationFaces.js';
+import { composeRoomFaces, neighborWallFace } from './elevationFaceList.js';
 import { buildFaceFigure } from './elevationFigure.js';
 import { wallAdjacentFloorSegments } from './elevationFloorProfile.js';
 import { roomCeilingHeight } from '../finish/roomMetrics.js';
@@ -52,7 +53,7 @@ export function buildRoomBand(room, graph, ctx = {}) {
   const chInfo       = roomCeilingHeight(graph, room);
   const CH           = chInfo.mm;
 
-  const faces = buildRoomFaces(room, graph);
+  const faces = composeRoomFaces(room, graph);
   const primitives = [];
   let xCursor = 0;
   let prevBoundaryHi = null; // 直前面の壁中心線(hi側)の帯内絶対x（rightAnchorXの起点。項目9はこちらのまま）
@@ -73,14 +74,16 @@ export function buildRoomBand(room, graph, ctx = {}) {
     // （先頭面はそもそも「前の面」を持たずギャップ計算に登場しない）。
     xCursor = i === 0 ? 0 : prevRightExtent + gapModelMm - boundary.lo + leftExtendMm;
 
-    // 項目3: 直交壁（隣・次の面）の建具が切断位置にかかる場合の断面描画用。faces.length<2は
-    // 自分自身が隣接面になってしまう退化ケースのため対象外にする（通常の閉じたループでは
-    // 発生しないが、念のためのガード）。
-    const prevFace = faces.length >= 2 ? faces[(i - 1 + faces.length) % faces.length] : null;
-    const nextFace = faces.length >= 2 ? faces[(i + 1) % faces.length] : null;
+    // 項目3: 直交壁（隣・次の面）の建具が切断位置にかかる場合の断面描画用。段差見付け面
+    // （kind==='step'）を挟んでも実質的な隣接関係は変わらないため、neighborWallFaceでスキップする
+    // （新仕様。elevationFaceList.js）。
+    const prevFace = neighborWallFace(faces, i, -1);
+    const nextFace = neighborWallFace(faces, i, 1);
     // 項目4: 部分指定（referenceRoomIds）が壁際の一部を占めfloorLevelが異なる区間があれば、
     // 床線を段差付きにする（elevationFloorProfile.js。未該当なら常にフラット1区間を返す）。
-    const floorSegments = wallAdjacentFloorSegments(face, room, graph);
+    // 新仕様: 段差見付け面（kind==='step'）自体は段差そのものを表す専用描画分岐を持つため
+    // floorSegmentsは渡さない（buildFaceFigure側がフラット1区間フォールバックする）。
+    const floorSegments = face.kind === 'step' ? undefined : wallAdjacentFloorSegments(face, room, graph);
     const faceCtx = {
       graph, project, room, ceilingHeight: CH, materialMap, gridCLs, faceLabelAvoidThresholdModelMm,
       prevFace, nextFace, openingTagRowModelMm, dimRowGapModelMm, gridRowGapModelMm, floorSegments,
@@ -101,7 +104,7 @@ export function buildRoomBand(room, graph, ctx = {}) {
     // 同時に算出済み）。項目5の右CH寸法とは独立（併発しうる）ため加算する（安全側＝実間隔が
     // 縮む方向には効かない）。
     prevRightExtent = prevBoundaryHi
-      + (floorSegments.length > 1 ? CH_DIM_OFFSET_MM : 0)
+      + ((floorSegments?.length ?? 0) > 1 ? CH_DIM_OFFSET_MM : 0)
       + rightExtendMm;
   });
 

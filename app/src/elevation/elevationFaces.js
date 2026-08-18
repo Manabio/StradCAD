@@ -33,12 +33,13 @@ export function selectElevationRooms(graph) {
 }
 
 // letter マップ（buildRoomFaces ヘッダ参照）。isVertical・axisOffset(inward)の符号だけで決まる。
-function letterOf(isVertical, axisOffset) {
+// 新仕様（elevationFaceList.js の composeRoomFaces）でも段差見付け面のletter算出に使うためexport。
+export function letterOf(isVertical, axisOffset) {
   if (!isVertical) return axisOffset > 0 ? 'A' : 'C';
   return axisOffset < 0 ? 'B' : 'D';
 }
 
-const DIR_SIGN = { A: 1, B: 1, C: -1, D: -1 };
+export const DIR_SIGN = { A: 1, B: 1, C: -1, D: -1 };
 
 // QA修正（項目5b根本原因）: axisCLIdごとに面をグルーピングする（単純なMap<axisCLId,Face>だと
 // 後勝ちで片方が消える）。ノッチ・張り出し（アルコーブ等）で1本の壁面が開口を挟み2区間以上に
@@ -205,18 +206,70 @@ export function buildRoomFaces(room, graph) {
     cur = next;
   }
 
-  // ラベル付与: letterごとの出現順（=時計回りに辿った順）にB1,B2,…を振る。単独ならletterのまま。
+  // ラベル付与: letterごとの出現順（=時計回りに辿った順）にB1,B2,…を振る（labelFaces。単独ならletterのまま）。
+  return snapFaceEndsToCorners(labelFaces(chain));
+}
+
+/**
+ * letterごとの出現順（配列順）にラベル(id/label)を振り直す（新仕様。elevationFaceList.js の
+ * composeRoomFaces が「袖壁分割→段差見付け面の挿入」で面配列を組み替えた後に呼ぶ）。
+ * buildRoomFaces内部で使っていた採番ロジックをそのまま抽出したもの——チェーンを辿る処理とは
+ * 独立しており、既に並び終わった配列を受け取ってlabel/idを付け替えるだけの純関数。
+ * 単独ならletterのまま、複数あればletter+出現順(B1,B2,…)。
+ * @param {object[]} faces - letter を持つ面配列（chain順）
+ * @returns {object[]} id/label を付け替えた新しい配列（他フィールドは同一参照）
+ */
+export function labelFaces(faces) {
   const totalByLetter = new Map();
-  for (const f of chain) totalByLetter.set(f.letter, (totalByLetter.get(f.letter) ?? 0) + 1);
+  for (const f of faces) totalByLetter.set(f.letter, (totalByLetter.get(f.letter) ?? 0) + 1);
   const seenIdx = new Map();
-  const labeled = chain.map(f => {
+  return faces.map(f => {
     const idx = (seenIdx.get(f.letter) ?? 0) + 1;
     seenIdx.set(f.letter, idx);
     const label = totalByLetter.get(f.letter) > 1 ? `${f.letter}${idx}` : f.letter;
     return { ...f, id: label, label };
   });
+}
 
-  return snapFaceEndsToCorners(labeled);
+// perpendicularWallsOnFace の許容差(mm)。新仕様「袖壁・腰壁の面分割」「ROW1寸法のCL分割」で使う。
+const PERP_TOUCH_TOL_MM = 150;      // 直交壁が到達したとみなす許容差（TOUCH_TOL）
+const PERP_MIN_PROJECTION_MM = 100; // 室内側への最小突出量（MIN_PROJECTION_MM）
+
+/**
+ * face に直交し、face の内側（face.lo〜face.hiの内側にaxisCLを持つ）へ突き出す壁の一覧
+ * （新仕様「袖壁・腰壁の面分割」「ROW1寸法のCL分割」の共通判定。純関数）。
+ * side='near': 面の仕上げ面(faceValue)へ到達し室内側へMIN_PROJECTION_MM以上突出する壁
+ *   （＝袖壁・腰壁として面を分割する対象。仕様2）。
+ * side='far': 面の壁中心線(axisCL.effectiveValue)へ到達し室内側へ突出する壁
+ *   （＝ROW1寸法のCL分割点として拾う対象。仕様1のS2。faceValueより緩い＝壁厚を貫通していなくても拾う）。
+ * 外壁（isExteriorWall）・自室外周生成壁（isRoomWall）・同軸壁（w.axisCL.id===face.axisCL.id）は除外する。
+ * @param {object} face - buildRoomFaces/composeRoomFaces の1件
+ * @param {object} graph
+ * @param {'near'|'far'} side
+ * @returns {import('@core').Wall[]}
+ */
+export function perpendicularWallsOnFace(face, graph, side) {
+  const av = face.axisCL.effectiveValue;
+  const fv = face.faceValue;
+  const inward = face.inward;
+  // graph.walls未定義（buildFaceFigure等の単体テストが使う最小限フェイクgraph）は「壁なし」として
+  // 空配列を返す（従来のctx.gridCLs ?? []等と同じ規約。real graphでは常に配列が返る）。
+  return (graph.walls ?? []).filter(w => {
+    if (w.isVertical === face.isVertical) return false; // 直交のみ
+    if (w.isExteriorWall || w.isRoomWall) return false;
+    if (w.axisCL.id === face.axisCL.id) return false; // 同軸壁除外
+    const wv = w.axisCL.effectiveValue;
+    if (!(wv > face.lo && wv < face.hi)) return false; // face.lo/hiの内側のみ
+    const wLo = Math.min(w.coord1, w.coord2), wHi = Math.max(w.coord1, w.coord2);
+    if (side === 'near') {
+      const reach   = inward > 0 ? wLo <= fv + PERP_TOUCH_TOL_MM      : wHi >= fv - PERP_TOUCH_TOL_MM;
+      const project = inward > 0 ? wHi >= fv + PERP_MIN_PROJECTION_MM : wLo <= fv - PERP_MIN_PROJECTION_MM;
+      return reach && project;
+    }
+    const reach   = inward > 0 ? wHi >= av - PERP_TOUCH_TOL_MM      : wLo <= av + PERP_TOUCH_TOL_MM;
+    const project = inward > 0 ? wLo <= av - PERP_MIN_PROJECTION_MM : wHi >= av + PERP_MIN_PROJECTION_MM;
+    return reach && project;
+  });
 }
 
 /**

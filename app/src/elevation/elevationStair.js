@@ -9,7 +9,8 @@ import { RoomFeature } from '@core';
 import { roomBounds } from '../finish/gridCells.js';
 import { stairPortEdges } from '../finish/stair/stairGeometry.js';
 import { floorHeightAbove } from '../finish/stair/stairDimensions.js';
-import { buildRoomFaces, faceBoundaryLocalX, faceWallLessExtents } from './elevationFaces.js';
+import { faceBoundaryLocalX, faceWallLessExtents } from './elevationFaces.js';
+import { composeRoomFaces, neighborWallFace } from './elevationFaceList.js';
 import { buildFaceFigure } from './elevationFigure.js';
 import { wallAdjacentFloorSegments } from './elevationFloorProfile.js';
 import { buildSwitchbackSectionPrimitives } from './elevationStairSection.js';
@@ -101,7 +102,7 @@ export function buildStairBand(stairRoom, graph, upperGraph, ctx = {}) {
   const wallLessEndExtendModelMm = ctx.wallLessEndExtendModelMm; // 未指定はbuildFaceFigure既定(項目1)
   const scale = ctx.scale; // 未指定はbuildFaceFigure既定=壁2段書き省略判定を行わない（項目4）
 
-  let faces = buildRoomFaces(stairRoom, graph);
+  let faces = composeRoomFaces(stairRoom, graph);
   if (stair && faces.length > 0) {
     const startLabel = stairStartFaceLabel(stair, faces, graph);
     if (startLabel) faces = rotateFacesToStart(faces, startLabel);
@@ -129,12 +130,14 @@ export function buildStairBand(stairRoom, graph, upperGraph, ctx = {}) {
     // 項目6: elevationBand.jsと同じ理由（ヘッダコメント参照）。
     xCursor = i === 0 ? 0 : prevRightExtent + gapModelMm - boundary.lo + leftExtendMm;
 
-    // 項目3: elevationBand.jsと同じ理由・同じガード（ヘッダコメント参照）。
-    const prevFace = faces.length >= 2 ? faces[(i - 1 + faces.length) % faces.length] : null;
-    const nextFace = faces.length >= 2 ? faces[(i + 1) % faces.length] : null;
+    // 項目3: elevationBand.jsと同じ理由・同じガード（ヘッダコメント参照。新仕様のneighborWallFaceは
+    // 段差見付け面(kind==='step')をスキップする）。
+    const prevFace = neighborWallFace(faces, i, -1);
+    const nextFace = neighborWallFace(faces, i, 1);
     // 項目4: elevationBand.jsと同じ（階段部屋が部分指定の親になることは通常無いが、
     // wallAdjacentFloorSegmentsは該当が無ければ常にフラット1区間を返すため安全に共通化できる）。
-    const floorSegments = wallAdjacentFloorSegments(face, stairRoom, graph);
+    // 新仕様: 段差見付け面自体にはfloorSegmentsを渡さない（elevationBand.jsと同じ）。
+    const floorSegments = face.kind === 'step' ? undefined : wallAdjacentFloorSegments(face, stairRoom, graph);
     const faceCtx = {
       graph, project, room: stairRoom, ceilingHeight: CH, materialMap, gridCLs, faceLabelAvoidThresholdModelMm,
       prevFace, nextFace, openingTagRowModelMm, dimRowGapModelMm, gridRowGapModelMm, floorSegments,
@@ -150,7 +153,7 @@ export function buildStairBand(stairRoom, graph, upperGraph, ctx = {}) {
     faceRuns.push({ face, xCursor });
     prevBoundaryHi = xCursor + boundary.hi;
     prevRightExtent = prevBoundaryHi
-      + (floorSegments.length > 1 ? CH_DIM_OFFSET_MM : 0)
+      + ((floorSegments?.length ?? 0) > 1 ? CH_DIM_OFFSET_MM : 0)
       + rightExtendMm;
   });
 
@@ -159,7 +162,7 @@ export function buildStairBand(stairRoom, graph, upperGraph, ctx = {}) {
   if (upperGraph && floorHeight != null) {
     const upperRoom = findOverlappingVoidRoom(stairRoom, graph, upperGraph);
     if (upperRoom) {
-      const upperFaces = buildRoomFaces(upperRoom, upperGraph);
+      const upperFaces = composeRoomFaces(upperRoom, upperGraph);
       const cutWeight = weightForRole(ElevationLineRole.CUT);
       for (const { face, xCursor: x0 } of faceRuns) {
         const upperFace = upperFaces.find(f =>

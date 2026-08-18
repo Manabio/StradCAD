@@ -137,3 +137,7 @@ export { CANVAS_BG_COLOR } from '../renderer/canvasStyle.js';
 // にフォールバックする。
 export const FACE_LABEL_AVOID_THRESHOLD_SCREEN_MM = 15; // 実画面mm（GRID_TAG_RADIUS_PX相当+余裕）
 export const DEFAULT_FACE_LABEL_AVOID_THRESHOLD_MM = 400; // 倍率決定用の1パス目の仮値（衝突判定のみに使うためレイアウト高さに影響せず、仮値のままでよい）
+
+// 新仕様「ROW1寸法のCL分割」: 分割点候補の併合・boundary端との同一視の許容差(mm)。
+// 浮動小数の丸め程度を吸収する目的の小さな値（elevationDimSplit.jsのcollectRow1SplitPoints）。
+export const SPLIT_MERGE_EPS_MM = 1;
