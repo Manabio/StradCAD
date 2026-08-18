@@ -23,6 +23,8 @@ mm座標に焼き込まずアンカー点だけを持つ専用プリミティブ
 
 ## 面の配置・注記帯
 面配置・壁芯間寸法は`face.lo/hi`（仕上げ面）ではなく`faceBoundaryLocalX`（壁中心線）基準（壁面線=CUTのみ仕上げ面基準）。
+`buildRoomBand`/`buildStairBand`の面配置ループ・帯確定処理は`elevationBand.js`の`layoutBandFaces`/`finalizeBand`へ一本化済み（2026-08リファクタ）
+——共有先を`elevationPrimitives.js`にしないのは、同ファイルが`elevationFigure.js`からimportされており`buildFaceFigure`を使う帯レイヤを置くと循環importになるため。
 **実画面mm指定の量（面間ギャップ・部屋名枠余白・留め三角アンカー・注記帯の各段位置・左スクロール余白）は倍率換算に2パス構築を要する**
 （1パス目=仮値で帯の高さ→倍率を確定、2パス目=`screenMmToModelMm`で実値換算。倍率決定が先でないと循環参照）。
 
