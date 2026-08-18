@@ -272,6 +272,41 @@ export function perpendicularWallsOnFace(face, graph, side) {
   });
 }
 
+// perpFaceAt の隅一致判定許容差(mm)。elevationStepFace.js（見付け面の隅スナップ・挿入位置探索）・
+// elevationOpenSpan.js（開放スパンの端の直交壁面スナップ）が共有する。
+export const CORNER_TOL_MM = 200;
+
+/**
+ * wallFaces（直交面の候補集合）のうち、指定した固定軸位置(targetAxisValue)がスパン内に収まり、
+ * かつ位置(pos)がCORNER_TOL_MM以内で最も近いものを返す（旧elevationStepFace.jsの
+ * nearestPerpFaceAtをexport化・汎用化。QA修正: 各消費者で個別実装されていたロジックを統合）。
+ * 直交面fはisVertical=falseなら自身の位置(axisCL)がY・スパン(lo/hi)がXという具合に、
+ * targetIsVertical側とは軸が入れ替わる——「targetAxisValueがfのスパン内か」（到達判定）と
+ * 「pos（target自身の伸びる方向の座標）とfの位置(axisCL)の近さ」（どちらが最寄りか）は
+ * 別の軸同士の比較になる点に注意。
+ * @param {object[]} wallFaces - buildRoomFaces/composeRoomFacesの面配列（隅探索用）
+ * @param {boolean} targetIsVertical - 探している対象自身のisVertical（直交面はこれと異なる）
+ * @param {number} targetAxisValue - 対象の固定軸位置（fのスパンに収まるか判定する値）
+ * @param {number} pos - 対象の伸びる方向の座標（fの位置との近さを測る値）
+ * @returns {object|null}
+ */
+export function perpFaceAt(wallFaces, targetIsVertical, targetAxisValue, pos) {
+  let best = null, bestDist = Infinity;
+  for (const f of wallFaces) {
+    if (f.kind === 'step') continue;
+    if (f.isVertical === targetIsVertical) continue; // 直交面のみ
+    if (!(targetAxisValue >= f.lo - CORNER_TOL_MM && targetAxisValue <= f.hi + CORNER_TOL_MM)) continue;
+    const dist = Math.abs(f.axisCL.effectiveValue - pos);
+    // 到達判定（上のif）だけではdistに上限が無く、真の隅から遠く離れた直交面でも「その時点で
+    // いちばん近い」というだけで採用してしまう（例: 部屋を貫通する上下の壁面は、targetAxisValueさえ
+    // 範囲内なら室内のどの位置からも「候補」に入ってしまう）。CORNER_TOL_MM以内でなければ
+    // 候補にしない——真に隅を共有する直交面が無ければ呼び出し側はフォールバック値を使うべき。
+    if (dist > CORNER_TOL_MM) continue;
+    if (dist < bestDist) { bestDist = dist; best = f; }
+  }
+  return best;
+}
+
 /**
  * face の両端を挟む「壁中心線（CL）」のローカルx座標を返す。face.lo/hi（snapFaceEndsToCorners
  * 済みの壁仕上げ面位置）とは別に、face.startCLId/endCLId が指す実際のCL（壁厚のぶんだけ

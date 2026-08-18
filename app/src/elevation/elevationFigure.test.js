@@ -1080,21 +1080,24 @@ function makeStepFace(overrides = {}) {
   };
 }
 
-test('buildFaceFigure: kind===\'step\'の面は低い側床線・高い側床線(見付け上端)・両端縦線・天井線を全てCUTで描く', () => {
+test('buildFaceFigure: kind===\'step\'の面は低い側床線・両端縦線(壁断面)・天井線をCUTで、高い側床線(見付け上端)をSILHOUETTE(中線)で描く', () => {
   const face = makeStepFace();
   const prims = buildFaceFigure(face, baseCtx());
   const cutLines = prims.filter(p => p.type === 'line' && p.weight === 'thick');
+  const silhouetteLines = prims.filter(p => p.type === 'line' && p.weight === 'medium');
 
   const lowFloor  = cutLines.find(l => l.y1 === l.y2 && l.y1 === 0   && l.x1 === 0 && l.x2 === 1200);
-  const highFloor = cutLines.find(l => l.y1 === l.y2 && l.y1 === -100 && l.x1 === 0 && l.x2 === 1200);
+  const highFloor = silhouetteLines.find(l => l.y1 === l.y2 && l.y1 === -100 && l.x1 === 0 && l.x2 === 1200);
   const ceiling   = cutLines.find(l => l.y1 === l.y2 && l.y1 === -2400);
-  const leftEnd   = cutLines.find(l => l.x1 === 0    && l.x2 === 0    && l.y1 === 0 && l.y2 === -100);
-  const rightEnd  = cutLines.find(l => l.x1 === 1200 && l.x2 === 1200 && l.y1 === 0 && l.y2 === -100);
+  // QA修正（ユーザー明示指示）: 両端縦線はtopY(-100)で止めず天井(-CH=-2400)まで描く
+  // （見付け上端はあくまで見えがかり線で、壁自体は天井まで続くため）。
+  const leftEnd   = cutLines.find(l => l.x1 === 0    && l.x2 === 0    && l.y1 === 0 && l.y2 === -2400);
+  const rightEnd  = cutLines.find(l => l.x1 === 1200 && l.x2 === 1200 && l.y1 === 0 && l.y2 === -2400);
 
   assert.ok(lowFloor,  `低い側床線(y=0=floorY)が見つかるはず（実際:${JSON.stringify(cutLines)}）`);
-  assert.ok(highFloor, '高い側床線(y=-100=見付け上端)が見つかるはず');
+  assert.ok(highFloor, `高い側床線(y=-100=見付け上端)はSILHOUETTE(中線)で見つかるはず（実際:${JSON.stringify(prims.filter(p => p.type === 'line' && p.y1 === p.y2 && p.y1 === -100))}）`);
   assert.ok(ceiling,   '天井線(y=-CH)が見つかるはず');
-  assert.ok(leftEnd && rightEnd, '両端縦線(floorY→topY)が見つかるはず');
+  assert.ok(leftEnd && rightEnd, `両端縦線(floorY→天井-CHまで。壁断面=CUT)が見つかるはず（実際:${JSON.stringify(cutLines)}）`);
 });
 
 // ---- 失敗系: kind==='step'の面は開口・巾木・壁2段書きを描かない ----

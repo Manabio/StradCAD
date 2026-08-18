@@ -4,8 +4,9 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Plane, PlanGraph, CenterLineType, Discipline } from '@core';
 import { generateRoomWallsFromOutline } from '../finish/wallGeneration.js';
+import { getCellsInRect } from '../finish/gridCells.js';
 import { buildRoomFaces } from './elevationFaces.js';
-import { stepRiserSegments, buildStepFaces, insertStepFaces } from './elevationStepFace.js';
+import { stepRiserSegments, buildStepFaces, insertStepFaces, subtractOpenSpanCoverage } from './elevationStepFace.js';
 
 function makeGraph() {
   const plane = new Plane('p1', 0, '1階', 1, 1);
@@ -93,6 +94,37 @@ test('【失敗系】buildStepFaces: 対応する直交壁面が見つからな�
   assert.equal(face.hi, seg.hi);
 });
 
+// ---- QA修正（幅0の展開図バグの根本原因）: 到達判定を満たすがCORNER_TOL_MMより遠い直交面は
+// 候補にしない（旧実装は「その時点でいちばん近い」というだけで採用し、部屋を貫通する遠い壁面へ
+// 幅0.5mmの極小段差の両端を誤って引き伸ばしていた）。実グラフ（高さ0.5mmの極小部分指定セル。
+// 左右の見付け面が壁面から遠く離れる）で検証する。 ----
+test('【失敗系】buildStepFaces: 到達判定を満たしてもCORNER_TOL_MMより遠い直交面は候補にせず、CL値のままフォールバックする', () => {
+  const graph = makeGraph();
+  graph.addCenterLine(CenterLineType.VERTICAL, 0,    { labeled: false, discipline: Discipline.ARCH });
+  graph.addCenterLine(CenterLineType.VERTICAL, 2000, { labeled: false, discipline: Discipline.ARCH });
+  graph.addCenterLine(CenterLineType.VERTICAL, 4000, { labeled: false, discipline: Discipline.ARCH });
+  graph.addCenterLine(CenterLineType.VERTICAL, 6000, { labeled: false, discipline: Discipline.ARCH });
+  graph.addCenterLine(CenterLineType.HORIZONTAL, 0,      { labeled: false, discipline: Discipline.ARCH });
+  graph.addCenterLine(CenterLineType.HORIZONTAL, 1500,   { labeled: false, discipline: Discipline.ARCH });
+  graph.addCenterLine(CenterLineType.HORIZONTAL, 1500.5, { labeled: false, discipline: Discipline.ARCH });
+  graph.addCenterLine(CenterLineType.HORIZONTAL, 3000,   { labeled: false, discipline: Discipline.ARCH });
+
+  const cells = getCellsInRect(0, 0, 6000, 3000, graph);
+  const narrowCell = cells.find(c => c.x1 === 2000 && c.x2 === 4000 && c.y1 === 1500 && c.y2 === 1500.5);
+  const room = graph.addRoom(new Set(cells.map(c => c.key)), 'LDK');
+  generateRoomWallsFromOutline(graph, room);
+  const child = graph.addRoom(new Set([narrowCell.key]), '極小部分指定', undefined, new Set([room.id]));
+  child.setFloorLevel(100);
+
+  const wallFaces = buildRoomFaces(room, graph); // A/Cは部屋を貫通しX方向に幅広（到達判定は満たす）がY方向には遠い
+  const parentFL = graph.effectiveFloorLevel(room);
+  const narrowSeg = stepRiserSegments(room, graph).find(s => s.isVertical && s.hi - s.lo < 1);
+  assert.ok(narrowSeg, '前提: 極小幅(<1mm)の見付け面候補が実在するはず');
+
+  const face = buildStepFaces(narrowSeg, wallFaces, graph, parentFL);
+  assert.ok(face.run < 1, `遠い壁面へ誤って引き伸ばされず、極小幅(run=${face.run})のまま保たれるはず`);
+});
+
 test('insertStepFaces: 見付け面の始点を含む壁面の直後に挿入され、以降の同letter面は繰り下がる', () => {
   const graph = makeGraph();
   const { room } = makeThreeColumnRoom(graph, 100);
@@ -120,4 +152,73 @@ test('【失敗系】insertStepFaces: 段差が無ければfacesをそのまま�
   generateRoomWallsFromOutline(graph, room);
   const faces = buildRoomFaces(room, graph);
   assert.equal(insertStepFaces(faces, room, graph), faces, '同じ配列参照がそのまま返るはず');
+});
+
+// ==== subtractOpenSpanCoverage（開放スパンとの相互排除） ====
+// riserSegs・facesとも実際にstepRiserSegments/composeRoomFacesが返すfieldだけを持つ最小限の
+// 合成オブジェクトで直接検証する（elevationFigure.test.jsのmakeFace()と同じ方針）。
+
+// lo/hi=面自身の描画範囲（世界座標。QA修正: subtractOpenSpanCoverageがriserをこの範囲へ
+// 丸めるようになったため、spansのopen区間[2000,3000]より広い[1000,3400]を既定にして
+// 「open区間の外だが面自身の範囲内」の残り区間を検証できるようにする）。
+function makeOpenSpanFace({ axisValue = 6000, inward = 1, originWorld = 3400, dirSign = -1, lo = 1000, hi = 3400 } = {}) {
+  return {
+    kind: 'wall', isVertical: true, axisCL: { value: axisValue }, inward, originWorld, dirSign, lo, hi,
+    spans: [
+      { loX: 0, hiX: 400, kind: 'wall' },
+      { loX: 400, hiX: 1400, kind: 'open', farFloorDeltaMm: -50 },
+    ],
+  };
+}
+
+test('subtractOpenSpanCoverage: riserが開放スパンの範囲に完全に重なる場合、その区間は差し引かれ0件になる', () => {
+  const riser = { isVertical: true, value: 6000, lo: 2000, hi: 3000, inward: 1, highFL: 0, lowFL: -50 };
+  const faces = [makeOpenSpanFace()];
+  const result = subtractOpenSpanCoverage([riser], faces);
+  assert.equal(result.length, 0, `open区間に完全に重なるriserは差し引かれ0件になるはず（実際:${JSON.stringify(result)}）`);
+});
+
+// ---- 失敗系: riserが開放スパンの範囲と重ならなければ、そのまま残る ----
+test('【失敗系】subtractOpenSpanCoverage: riserが開放スパンと重ならない（面平面外）場合はそのまま残る', () => {
+  const riser = { isVertical: true, value: 9999, lo: 2000, hi: 3000, inward: 1, highFL: 0, lowFL: -50 };
+  const faces = [makeOpenSpanFace()]; // axisValue=6000。riser.value=9999と一致する面が無い
+  const result = subtractOpenSpanCoverage([riser], faces);
+  assert.equal(result.length, 1, 'マッチする面が無ければriserはそのまま残るはず');
+  assert.equal(result[0].lo, 2000);
+  assert.equal(result[0].hi, 3000);
+});
+
+// ---- 失敗系: 部分的にしか重ならない場合は、重ならない残りだけが独立したriserとして残る ----
+test('【失敗系】subtractOpenSpanCoverage: riserが開放スパンと部分的にしか重ならない場合、残りの区間だけ独立したriserとして残る', () => {
+  // open区間の世界座標範囲は[2000,3000]（makeOpenSpanFace参照）。riserを[1500,3000]にすると、
+  // [1500,2000]の500mmぶんだけがopen区間の外＝差し引かれず残るはず。
+  const riser = { isVertical: true, value: 6000, lo: 1500, hi: 3000, inward: 1, highFL: 0, lowFL: -50 };
+  const faces = [makeOpenSpanFace()];
+  const result = subtractOpenSpanCoverage([riser], faces);
+  assert.equal(result.length, 1, '重ならない残り1区間だけになるはず');
+  assert.equal(result[0].lo, 1500);
+  assert.equal(result[0].hi, 2000);
+});
+
+// ---- 失敗系: 差し引いた残りの幅がMIN_FACE_RUN_MM未満なら捨てる ----
+test('【失敗系】subtractOpenSpanCoverage: 差し引いた残りの幅が極小(MIN_FACE_RUN_MM未満)なら捨てる', () => {
+  const riser = { isVertical: true, value: 6000, lo: 1999.5, hi: 3000, inward: 1, highFL: 0, lowFL: -50 };
+  const faces = [makeOpenSpanFace()];
+  const result = subtractOpenSpanCoverage([riser], faces);
+  assert.equal(result.length, 0, '残り0.5mm(<MIN_FACE_RUN_MM=1)は捨てられるはず');
+});
+
+// ---- QA修正: riserがmatchingFace自身の描画範囲(lo/hi)の外へはみ出す場合、その分は丸められる ----
+// riserは輪郭セルの生CL値基準で抽出されるが、matchingFaceのlo/hiは実壁の隅で仕上げ面基準に
+// スナップされた値——壁厚みぶん(数十mm)の差でriserがfaceの描画範囲をわずかに超えることがある。
+// このはみ出し部分はopen区間に届いていないのではなく、そもそも対応する面が描かれない位置
+// なので、差し引き前に面の描画範囲へ丸めて捨てる（幅0付近の見付け面が残るバグの修正）。
+test('【失敗系】subtractOpenSpanCoverage: riserがmatchingFaceの描画範囲(lo/hi)を壁厚みぶんはみ出す場合、はみ出し分は残らない', () => {
+  // face自身の描画範囲は[2000,3400]（open区間[2000,3000]と同じ下端）。riserがface.lo(2000)より
+  // さらに外側(1942.5)まではみ出すケース——このはみ出し57.5mmはopen区間で差し引かれる訳ではなく、
+  // face.loの外（対応する面が無い位置）なので丸めで消える。
+  const riser = { isVertical: true, value: 6000, lo: 1942.5, hi: 3000, inward: 1, highFL: 0, lowFL: -50 };
+  const faces = [makeOpenSpanFace({ lo: 2000, hi: 3400 })];
+  const result = subtractOpenSpanCoverage([riser], faces);
+  assert.equal(result.length, 0, 'riserの全区間がopen区間[2000,3000]に収まるため0件のはず（face.lo未満のはみ出し分は丸めで消える）');
 });

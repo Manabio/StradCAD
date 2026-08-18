@@ -5,8 +5,10 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Plane, PlanGraph, CenterLineType, Discipline, edgeKey } from '@core';
 import { generateRoomWallsFromOutline } from '../finish/wallGeneration.js';
+import { getCellsInRect } from '../finish/gridCells.js';
 import { buildRoomFaces, faceBoundaryLocalX } from './elevationFaces.js';
 import { composeRoomFaces, neighborWallFace, splitFacesAtPartitionWalls, kneeDropRecordFor } from './elevationFaceList.js';
+import { stepRiserSegments } from './elevationStepFace.js';
 
 function makeGraph() {
   const plane = new Plane('p1', 0, '1階', 1, 1);
@@ -74,6 +76,40 @@ test('composeRoomFaces: 内部（壁のない）段差があると段差見付�
   assert.ok(labels.includes('B1') && labels.includes('B2'), `既存B面が繰り下がるはず（実際:${labels}）`);
   const stepIdx = faces.findIndex(f => f.kind === 'step');
   assert.equal(faces[stepIdx].label, 'B1', '見付け面はB1として先頭に来るはず');
+});
+
+// ---- QA修正（幅0の展開図バグ）: MIN_FACE_RUN_MM未満の極小内部FLゾーンは面を生成しない ----
+// 段差見付け面の「run」は境界CLの伸びる方向（isVertical=trueなら軸に直交するY方向）の長さで
+// 決まる——子セル自体を細くする軸を間違えると再現しない（幅ではなく高さを細くする必要がある）。
+// 6000×3000の部屋の中央(x:2000-4000)に、高さ0.5mmだけの極小な部分指定セル(y:1500-1500.5)を
+// 埋め込むと、その左右の境界(x=2000・x=4000)の見付け面がrun=0.5mmの極小幅になる。
+test('【失敗系】composeRoomFaces: MIN_FACE_RUN_MM(1mm)未満の極小な内部FLゾーンは段差見付け面として出さない（幅0面ガード）', () => {
+  const graph = makeGraph();
+  graph.addCenterLine(CenterLineType.VERTICAL, 0,    { labeled: false, discipline: Discipline.ARCH });
+  graph.addCenterLine(CenterLineType.VERTICAL, 2000, { labeled: false, discipline: Discipline.ARCH });
+  graph.addCenterLine(CenterLineType.VERTICAL, 4000, { labeled: false, discipline: Discipline.ARCH });
+  graph.addCenterLine(CenterLineType.VERTICAL, 6000, { labeled: false, discipline: Discipline.ARCH });
+  graph.addCenterLine(CenterLineType.HORIZONTAL, 0,      { labeled: false, discipline: Discipline.ARCH });
+  graph.addCenterLine(CenterLineType.HORIZONTAL, 1500,   { labeled: false, discipline: Discipline.ARCH });
+  graph.addCenterLine(CenterLineType.HORIZONTAL, 1500.5, { labeled: false, discipline: Discipline.ARCH });
+  graph.addCenterLine(CenterLineType.HORIZONTAL, 3000,   { labeled: false, discipline: Discipline.ARCH });
+
+  const cells = getCellsInRect(0, 0, 6000, 3000, graph);
+  const narrowCell = cells.find(c => c.x1 === 2000 && c.x2 === 4000 && c.y1 === 1500 && c.y2 === 1500.5);
+  assert.ok(narrowCell, '前提: 高さ0.5mmの極小セルが1件見つかるはず');
+  const room = graph.addRoom(new Set(cells.map(c => c.key)), 'LDK');
+  generateRoomWallsFromOutline(graph, room);
+  const child = graph.addRoom(new Set([narrowCell.key]), '極小部分指定', undefined, new Set([room.id]));
+  child.setFloorLevel(100);
+
+  // 素の段差検出（stepRiserSegments）だけならrun=0.5の極小見付け面候補が実在する前提を確認
+  // （このガードが無ければcomposeRoomFacesの最終出力に漏れ出ることの裏取り）。
+  const rawRisers = stepRiserSegments(room, graph);
+  assert.ok(rawRisers.some(s => s.hi - s.lo < 1), '前提: 極小幅(<1mm)の見付け面候補がstepRiserSegments段階では実在するはず');
+
+  const faces = composeRoomFaces(room, graph);
+  const tinyFaces = faces.filter(f => f.run < 1);
+  assert.equal(tinyFaces.length, 0, `run<1mmの面は無いはず（実際:${JSON.stringify(faces.map(f => ({ label: f.label, run: f.run })))}）`);
 });
 
 // ---- 失敗系: neighborWallFaceは段差見付け面をスキップして実壁面を返す ----
@@ -224,4 +260,58 @@ test('【失敗系】kneeDropRecordFor: スパンが重ならなければnullを
   const y2500 = graph.addCenterLine(CenterLineType.HORIZONTAL, 2500, { labeled: false, discipline: Discipline.ARCH });
   graph.setKneeDropWall(edgeKey(sleeveAxis.id, y2000.id, y2500.id), { knee: { topHeight: 900 } });
   assert.equal(kneeDropRecordFor(wall, graph), null);
+});
+
+// ==== QA修正M1: 統合シームのテスト（clipSpans配線の検証） ====
+// 「他室(壁あり)→部分指定の子(壁なし・同室継続)」という開放スパンが出る形状に、面自身の軸CLから
+// 室内へ向かう袖壁（makeRoomWithSleeveWallと同じ安全なパターン。壁を交差させると自動トリムで
+// 座標がずれるため、面自身の軸CLを起点にする）を追加し、composeRoomFacesが返す各断片の
+// spansが断片自身のローカル座標系[0,run]へ正しくクリップ・再原点化されていることを検証する。
+test('composeRoomFaces: 開放スパンを持つ面が袖壁で分割されたとき、各断片のspansが断片自身の[0,run]へクリップ・再原点化される', () => {
+  const graph = makeGraph();
+  const x0 = graph.addCenterLine(CenterLineType.VERTICAL, 0,    { labeled: false, discipline: Discipline.ARCH });
+  const x1 = graph.addCenterLine(CenterLineType.VERTICAL, 2000, { labeled: false, discipline: Discipline.ARCH });
+  const x2 = graph.addCenterLine(CenterLineType.VERTICAL, 4000, { labeled: false, discipline: Discipline.ARCH });
+  const y0 = graph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: false, discipline: Discipline.ARCH });
+  const y1 = graph.addCenterLine(CenterLineType.HORIZONTAL, 1000, { labeled: false, discipline: Discipline.ARCH });
+  const y2 = graph.addCenterLine(CenterLineType.HORIZONTAL, 2000, { labeled: false, discipline: Discipline.ARCH });
+
+  const otherKey = `${x1.id}:${y0.id}:${x2.id}:${y1.id}`; // 上段右＝他室（実壁の原因）
+  const mainTopKey = `${x0.id}:${y0.id}:${x1.id}:${y1.id}`;
+  const mainBotLeftKey = `${x0.id}:${y1.id}:${x1.id}:${y2.id}`;
+  const mainBotRightKey = `${x1.id}:${y1.id}:${x2.id}:${y2.id}`; // 下段右＝部分指定の子（壁なし継続）
+  const other = graph.addRoom(new Set([otherKey]), '他室');
+  generateRoomWallsFromOutline(graph, other);
+  const room = graph.addRoom(new Set([mainTopKey, mainBotLeftKey, mainBotRightKey]), 'LDK');
+  generateRoomWallsFromOutline(graph, room);
+  const child = graph.addRoom(new Set([mainBotRightKey]), '部分指定', undefined, new Set([room.id]));
+  child.setFloorLevel(300);
+
+  // x=2000の面（wall区間y:0-1000, open区間y:1000-2000）に、面自身の軸CL(x1)から室内へ向かう
+  // 袖壁を追加する（makeRoomWithSleeveWallと同じ安全パターン）——wall区間の途中(y=500)で
+  // 面を分割する。
+  const ySleeve = graph.addCenterLine(CenterLineType.HORIZONTAL, 500,  { labeled: false, discipline: Discipline.ARCH });
+  const xInner  = graph.addCenterLine(CenterLineType.VERTICAL, 1800, { labeled: false, discipline: Discipline.ARCH });
+  graph.addWall(ySleeve, 0, false, x1, 0, xInner, 0, { isRoomWall: false, isExteriorWall: false });
+
+  const faces = composeRoomFaces(room, graph);
+  // 面自身の軸(x=2000)を持つ非step面（袖壁で分割された断片群）を集める。
+  const fragments = faces.filter(f => f.kind !== 'step' && f.isVertical && Math.abs(f.axisCL.value - 2000) < 1e-6);
+  assert.ok(fragments.length >= 2, `袖壁により2断片以上に分割されるはず（実際:${fragments.length}件）`);
+
+  for (const f of fragments) {
+    assert.ok(Array.isArray(f.spans) && f.spans.length > 0, `${f.label}はspansを持つはず`);
+    // 断片自身のローカル座標系[0,run]をspansが隙間なく・超過なく覆う。
+    assert.equal(f.spans[0].loX, 0, `${f.label}のspans先頭はloX=0のはず`);
+    assert.ok(Math.abs(f.spans[f.spans.length - 1].hiX - f.run) < 1e-6,
+      `${f.label}のspans末尾hiX(${f.spans[f.spans.length - 1].hiX})は断片自身のrun(${f.run})と一致するはず（親のrunへはみ出していないはず）`);
+    for (let i = 0; i + 1 < f.spans.length; i++) {
+      assert.equal(f.spans[i].hiX, f.spans[i + 1].loX, `${f.label}のspansは隙間なく連続するはず`);
+    }
+    for (const s of f.spans) {
+      assert.ok(s.loX >= 0 && s.hiX <= f.run + 1e-6, `${f.label}のspan[${s.loX},${s.hiX}]は断片の範囲[0,${f.run}]を超えないはず`);
+    }
+  }
+  // 少なくとも1断片はopen区間を持つ（開放スパンが分割後も残っていることの確認）。
+  assert.ok(fragments.some(f => f.spans.some(s => s.kind === 'open')), '少なくとも1断片はopen区間を持つはず');
 });

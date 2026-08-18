@@ -117,3 +117,36 @@ test('【失敗系】collectRow1SplitPoints: hiCLIdがnull（gap-fillの境界�
   const pts = collectRow1SplitPoints(faceA, graph, { floorSegments, boundary });
   assert.ok(!pts.includes(2000), 'hiCLId無しの境界はS1として拾わないはず');
 });
+
+// ---- S4: 開放スパンの内部境界（spans[i].hiCLId）は分割点になる ----
+// S1/S2/S3のいずれとも重ならない（graph.centerLinesを空にしてS3を、floorSegments未指定でS1を
+// それぞれ無効化する）ようにして、S4だけを単独で検証する——Round Fフィクスチャでの検証は
+// たまたまS3も同じ位置(中心3)を独立に検出してしまい、S4を無効化しても症状が隠れてしまうため
+// （実際にこの「隠れ」を発見し、単独検証の必要性に気づいた）。
+test('collectRow1SplitPoints: S4＝開放スパンの内部境界（spans[i].hiCLIdが実在する境界）は分割点になる', () => {
+  const graph = makeGraph(); // 中心線を追加しないためS3は該当なし
+  const room = makeRoom(graph);
+  const faceA = buildRoomFaces(room, graph).find(f => f.label === 'A');
+  const boundary = faceBoundaryLocalX(faceA, graph);
+
+  const spans = [
+    { loX: 0, hiX: 2000, kind: 'wall', hiCLX: 2000, hiCLId: 'someRealCL' },
+    { loX: 2000, hiX: faceA.run, kind: 'open', farFloorDeltaMm: -50, hiCLX: null, hiCLId: null },
+  ];
+  const pts = collectRow1SplitPoints(faceA, graph, { floorSegments: undefined, boundary, spans });
+  assert.ok(pts.includes(2000), `spans[0].hiCLXのx=2000は分割点になるはず（実際:${pts}）`);
+});
+
+// ---- 失敗系: spans[i].hiCLIdがnull（面端そのもの）はS4の対象外 ----
+test('【失敗系】collectRow1SplitPoints: spans[i].hiCLIdがnull（面端そのもの）はS4の対象外', () => {
+  const graph = makeGraph();
+  const room = makeRoom(graph);
+  const faceA = buildRoomFaces(room, graph).find(f => f.label === 'A');
+  const boundary = faceBoundaryLocalX(faceA, graph);
+
+  const spans = [
+    { loX: 0, hiX: faceA.run, kind: 'wall', hiCLX: null, hiCLId: null },
+  ];
+  const pts = collectRow1SplitPoints(faceA, graph, { floorSegments: undefined, boundary, spans });
+  assert.equal(pts.length, 0, '内部境界が無ければS4からの分割点は無いはず');
+});

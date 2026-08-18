@@ -4,10 +4,14 @@
  * .claude/elevation-model.md 参照。
  */
 import { CenterLineType } from '@core';
-import { refreshCells, cellBoundsList, outlineSegments, worldToCell } from '../finish/gridCells.js';
-import { letterOf, DIR_SIGN } from './elevationFaces.js';
+import { cellBoundsList, outlineSegments, worldToCell } from '../finish/gridCells.js';
+import { letterOf, DIR_SIGN, perpFaceAt, CORNER_TOL_MM } from './elevationFaces.js';
+import { roomOwnerByCell } from './elevationFloorProfile.js';
+import { MIN_FACE_RUN_MM } from './elevationStyle.js';
 
-const CORNER_TOL_MM = 200; // 見付け面の挿入位置判定（直交壁面のfaceValueとの最近接判定）許容差
+// 物理的に意味を持たない極小幅(mm)の許容差。elevationFloorProfile.jsのGAP_EPSと同水準
+// （CL昇格/降格・再スナップ由来のsub-micron誤差を吸収する目的）。
+const GAP_EPS = 1e-6;
 
 /**
  * parentRoom（自身の未指定セル＋各部分指定の子）をFLの異なるゾーンごとにグループ化し、
@@ -27,14 +31,9 @@ const CORNER_TOL_MM = 200; // 見付け面の挿入位置判定（直交壁面�
  *   highFL:number, lowFL:number, ownerRoom:import('@core').Room}>}
  */
 export function stepRiserSegments(parentRoom, graph) {
-  const children = graph.rooms.filter(r => r.referenceRoomIds?.has(parentRoom.id));
-
-  // 部屋全体をownerごとにグループ化する索引（子が親を上書き）。
-  const ownerByCell = new Map();
-  for (const key of refreshCells(parentRoom.cells, graph)) ownerByCell.set(key, parentRoom);
-  for (const child of children) {
-    for (const key of refreshCells(child.cells, graph)) ownerByCell.set(key, child);
-  }
+  // 部屋全体をownerごとにグループ化する索引（子が親を上書き。QA修正: elevationFloorProfile.js の
+  // roomOwnerByCellへ統合——elevationStepFace.js独自のownerByCell構築を廃止）。
+  const ownerByCell = roomOwnerByCell(parentRoom, graph);
   const groups = new Map(); // owner -> cellKey[]
   for (const [key, owner] of ownerByCell) {
     if (!groups.has(owner)) groups.set(owner, []);
@@ -51,7 +50,12 @@ export function stepRiserSegments(parentRoom, graph) {
       const breaks = collectAxisBreaks(graph, seg.isVertical, seg.lo, seg.hi);
       for (let i = 0; i + 1 < breaks.length; i++) {
         const lo = breaks[i], hi = breaks[i + 1];
-        if (hi <= lo) continue;
+        // QA修正: CL昇格/降格・再スナップ等で「同じ位置のはずの別CL」が極小差(sub-micron)で
+        // 隣接すると、collectAxisBreaksが物理的に意味を持たない極小幅の区間を作ることがある
+        // （elevationFloorProfile.jsのwallAdjacentFloorSegmentsで同種のバグを修正済み——
+        // GAP_EPS吸収パス。ここは「常に全区間を覆う」制約が無くsegs単独で成立するため、
+        // 吸収ではなく単純に読み飛ばす=幅0の見付け面を生成しない）。
+        if (hi - lo < GAP_EPS) continue;
         const mid = (lo + hi) / 2;
         for (const inward of [1, -1]) {
           const probe = inward * PROBE_EPS_MM;
@@ -123,16 +127,29 @@ export function buildStepFaces(seg, wallFaces, graph, parentFL) {
   const letter = letterOf(seg.isVertical, seg.inward);
   const dirSign = DIR_SIGN[letter];
   const axisCL = findAxisCL(graph, seg.isVertical, seg.value);
-  const loFace = nearestPerpFaceAt(wallFaces, seg.isVertical, seg.value, seg.lo);
-  const hiFace = nearestPerpFaceAt(wallFaces, seg.isVertical, seg.value, seg.hi);
-  const lo = loFace ? loFace.faceValue : seg.lo;
-  const hi = hiFace ? hiFace.faceValue : seg.hi;
+  const loFace = perpFaceAt(wallFaces, seg.isVertical, seg.value, seg.lo);
+  const hiFace = perpFaceAt(wallFaces, seg.isVertical, seg.value, seg.hi);
+  let lo = loFace ? loFace.faceValue : seg.lo;
+  let hi = hiFace ? hiFace.faceValue : seg.hi;
+  // QA修正（幅0の展開図バグ）: 元のseg自体が短い（隣接する2つの隅にごく近い）場合、両端の
+  // 隣接壁面のfaceValueへ個別に詰めるとスナップ後にlo>=hiへ反転・退化しうる（例: 短い見付け面の
+  // 両端が異なる方向へスナップされ交差する）。反転・退化したらスナップ前のCL値(seg.lo/hi)へ
+  // フォールバックする——それでも短い場合はcomposeRoomFaces最終段のMIN_FACE_RUN_MMガードが除去する。
+  if (hi - lo < GAP_EPS) { lo = seg.lo; hi = seg.hi; }
   const stepHeightMm = seg.highFL - seg.lowFL;
+  // QA修正（項目4根本原因）: startCLId/endCLIdへ段差自身のaxisCL.id（=面に直交する軸）を
+  // 両端とも詰めていたため、faceBoundaryLocalX（startCLId/endCLIdの位置差でROW1境界を求める）が
+  // 同一CLの差=0という退化した幅0の境界を返していた。通常面と同じ規約
+  // （startCLIdは世界座標loを・endCLIdは世界座標hiを決めるCLのid。elevationOpenSpan.jsの
+  // resolveEndのコメント参照）に合わせ、両端の直交壁面（loFace/hiFace）自身のaxisCL.idを使う
+  // ——見つからなければ段差自身のaxisCL.id（従来どおり。退化はするが少なくとも例外にはしない）。
+  const startCLId = loFace ? loFace.axisCL.id : (axisCL?.id ?? null);
+  const endCLId   = hiFace ? hiFace.axisCL.id : (axisCL?.id ?? null);
   return {
     letter, dirSign, isVertical: seg.isVertical, axisCL, inward: seg.inward,
     faceValue: seg.value, hasRealWall: true,
     lo, hi, run: hi - lo, originWorld: dirSign > 0 ? lo : hi,
-    startCLId: axisCL?.id ?? null, endCLId: axisCL?.id ?? null,
+    startCLId, endCLId,
     hasWallAtLocal0: true, hasWallAtLocalRun: true,
     kind: 'step', stepHeightMm, baseFloorDeltaMm: seg.lowFL - parentFL,
   };
@@ -143,34 +160,100 @@ function findAxisCL(graph, isVertical, value) {
   return graph.centerLines.find(cl => cl.centerLineType === type && cl.value === value) ?? null;
 }
 
-// wallFaces（直交面）のうち、この見付け面の端点に接するものを返す（CORNER_TOL_MM以内）。
-// 直交面fはisVertical=falseなら自身の位置(axisCL)がY・スパン(lo/hi)がXという具合に、段差面
-// (stepIsVertical)とは軸が入れ替わる——「段差の固定軸位置(stepAxisValue)がfのスパン内か」
-// （到達判定）と「段差の端点(pos。段差自身の伸びる方向の座標)とfの位置(axisCL)の近さ」
-// （どちらが最寄りか）は別の軸同士の比較になる点に注意。
-function nearestPerpFaceAt(wallFaces, stepIsVertical, stepAxisValue, pos) {
-  let best = null, bestDist = Infinity;
-  for (const f of wallFaces) {
-    if (f.kind === 'step') continue;
-    if (f.isVertical === stepIsVertical) continue; // 直交面のみ
-    if (!(stepAxisValue >= f.lo - CORNER_TOL_MM && stepAxisValue <= f.hi + CORNER_TOL_MM)) continue;
-    const dist = Math.abs(f.axisCL.effectiveValue - pos);
-    if (dist < bestDist) { bestDist = dist; best = f; }
+/**
+ * riserSegs（stepRiserSegmentsの結果。段差見付け面の候補）から、faces中の同一
+ * (isVertical, axisCL.value, inward) を持つ面の open スパンが覆う区間を差し引く（仕様3+開放
+ * スパンの相互排除）。開放スパン（elevationOpenSpan.js）は「壁のある区間の先に続く同室の
+ * 開放区間」を面自体の一部として描くため、その区間に段差見付け面を独立して重ねて描くと
+ * 二重表現になる——D1/B1のような「面平面上の段差」はopenスパン側の遠側床線・あきで表現し、
+ * 段差見付け面は「面平面の外（同一(isVertical,axisCL.value,inward)の面が存在しない位置）」の
+ * 内部段差だけを対象にする。
+ * 差し引いた残りの幅がMIN_FACE_RUN_MM未満の断片は捨てる（意味を持たない極小段差見付け面を
+ * 作らないため。elevationFaceList.jsの最終フィルタと同じ考え方）。
+ * @param {Array<{isVertical:boolean, value:number, lo:number, hi:number, inward:1|-1}>} riserSegs
+ * @param {object[]} faces - extendFacesWithOpenSpans適用後の面配列（spansを持つ）
+ * @returns {Array<{isVertical:boolean, value:number, lo:number, hi:number, inward:1|-1}>}
+ */
+// 区間配列を昇順に統合する（隣接・重複を1本化）。
+function unionRanges(ranges) {
+  const sorted = [...ranges].sort((a, b) => a[0] - b[0]);
+  const out = [];
+  for (const [lo, hi] of sorted) {
+    const last = out[out.length - 1];
+    if (last && lo <= last[1] + GAP_EPS) last[1] = Math.max(last[1], hi);
+    else out.push([lo, hi]);
   }
-  return best;
+  return out;
+}
+
+// segs（{lo,hi}[]）を、rangesのいずれかと重なる部分だけに丸める（積集合）。
+function clipToRanges(segs, ranges) {
+  const out = [];
+  for (const seg of segs) {
+    for (const [rlo, rhi] of ranges) {
+      const lo = Math.max(seg.lo, rlo), hi = Math.min(seg.hi, rhi);
+      if (hi - lo >= GAP_EPS) out.push({ lo, hi });
+    }
+  }
+  return out;
+}
+
+export function subtractOpenSpanCoverage(riserSegs, faces) {
+  const out = [];
+  for (const r of riserSegs) {
+    const matchingFaces = faces.filter(f =>
+      f.kind !== 'step' && f.isVertical === r.isVertical &&
+      f.axisCL.value === r.value && f.inward === r.inward);
+
+    let remaining = [{ lo: r.lo, hi: r.hi }];
+    if (matchingFaces.length > 0) {
+      // riserはセル輪郭の生CL値基準で抽出されるが、matchingFacesの[lo,hi]は実壁の隅で
+      // 仕上げ面基準にスナップされた描画範囲——両者は壁厚みぶん(数十mm)ズレることがある。
+      // riserの端がmatchingFacesの描画範囲の外（壁厚みの内側）にはみ出す部分は、対応する面が
+      // そもそも描かれない位置なので、先に面の合計描画範囲へ丸めておく（そうしないとopen区間の
+      // 外側にごく僅かな幅の見付け面が残ってしまう。実際にこの不具合で幅50mm前後の縮退した
+      // 見付け面が生成されるのを発見・修正した）。
+      const covered = unionRanges(matchingFaces.map(f => [Math.min(f.lo, f.hi), Math.max(f.lo, f.hi)]));
+      remaining = clipToRanges(remaining, covered);
+    }
+    for (const f of matchingFaces) {
+      if (!f.spans) continue;
+      for (const s of f.spans) {
+        if (s.kind !== 'open') continue;
+        const worldA = f.originWorld + s.loX * f.dirSign;
+        const worldB = f.originWorld + s.hiX * f.dirSign;
+        const openLo = Math.min(worldA, worldB), openHi = Math.max(worldA, worldB);
+        const next = [];
+        for (const seg of remaining) {
+          if (openHi <= seg.lo + GAP_EPS || openLo >= seg.hi - GAP_EPS) { next.push(seg); continue; } // 重ならない
+          if (openLo > seg.lo) next.push({ lo: seg.lo, hi: Math.min(openLo, seg.hi) });
+          if (openHi < seg.hi) next.push({ lo: Math.max(openHi, seg.lo), hi: seg.hi });
+        }
+        remaining = next.filter(seg => seg.hi - seg.lo >= GAP_EPS);
+      }
+    }
+    for (const seg of remaining) {
+      if (seg.hi - seg.lo < MIN_FACE_RUN_MM) continue; // 差し引いた残りが極小なら捨てる
+      out.push({ ...r, lo: seg.lo, hi: seg.hi });
+    }
+  }
+  return out;
 }
 
 /**
  * faces（袖壁分割済みの面配列）に段差見付け面を挿入する（仕様3）。
  * 挿入位置: 見付け面の始点（local x=0 の世界座標）を含む壁面W（直交・span内包・faceValue
  * 最近接。CORNER_TOL_MM）の直後。候補複数ならchain index最大。Wが無ければ末尾。
+ * 開放スパン（elevationOpenSpan.js）が同じ区間を面自体の一部として既に表現している場合は
+ * subtractOpenSpanCoverageで差し引き、独立した見付け面としては挿入しない（相互排除）。
  * @param {object[]} faces
  * @param {import('@core').Room} room
  * @param {object} graph
  * @returns {object[]}
  */
 export function insertStepFaces(faces, room, graph) {
-  const risers = stepRiserSegments(room, graph);
+  const rawRisers = stepRiserSegments(room, graph);
+  const risers = subtractOpenSpanCoverage(rawRisers, faces);
   if (risers.length === 0) return faces;
 
   const parentFL = graph.effectiveFloorLevel(room);
@@ -190,6 +273,11 @@ export function insertStepFaces(faces, room, graph) {
       if (f.isVertical === step.isVertical) continue; // 直交のみ
       if (!(step.faceValue >= f.lo - CORNER_TOL_MM && step.faceValue <= f.hi + CORNER_TOL_MM)) continue;
       const dist = Math.abs(f.axisCL.effectiveValue - startWorld);
+      // QA修正（幅0の展開図バグの調査で発見。nearestPerpFaceAtと同じ穴）: 到達判定（上のif）だけ
+      // ではdistに上限が無く、真に隅を共有しない遠い直交面でも「その時点でいちばん近い」という
+      // だけでW扱いにしてしまっていた。CORNER_TOL_MM以内でなければ候補にしない
+      // （「Wが無ければ末尾」というdocコメントの規則を実際に成立させる）。
+      if (dist > CORNER_TOL_MM) continue;
       if (dist <= bestDist) { bestDist = dist; insertAfter = i; } // 同着はindex最大を優先(<=)
     }
     if (insertAfter === -1) out.push(step);

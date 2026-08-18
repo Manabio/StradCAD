@@ -8,7 +8,8 @@
  */
 import { buildRoomFaces, labelFaces, perpendicularWallsOnFace } from './elevationFaces.js';
 import { insertStepFaces } from './elevationStepFace.js';
-import { SPLIT_MERGE_EPS_MM } from './elevationStyle.js';
+import { extendFacesWithOpenSpans, clipSpans } from './elevationOpenSpan.js';
+import { SPLIT_MERGE_EPS_MM, MIN_FACE_RUN_MM } from './elevationStyle.js';
 import { kneeDropRecordsOnAxis } from '../finish/kneeDropWall.js';
 
 /**
@@ -64,9 +65,11 @@ export function splitFacesAtPartitionWalls(faces, room, graph) {
   for (const face of faces) {
     if (face.kind === 'step') { out.push(face); continue; }
 
+    // QA修正（幅0の展開図バグ）: 袖壁の中心が面の端(0/run)にごく近い(SPLIT_MERGE_EPS_MM未満)場合、
+    // 分割しても意味の無い極小断片ができるため、単純な`>0`/`<run`ではなく許容差ぶん内側で切る。
     const sleeves = perpendicularWallsOnFace(face, graph, 'near')
       .map(w => ({ w, center: (w.axisCL.effectiveValue - face.originWorld) * face.dirSign }))
-      .filter(s => s.center > 0 && s.center < face.run)
+      .filter(s => s.center > SPLIT_MERGE_EPS_MM && s.center < face.run - SPLIT_MERGE_EPS_MM)
       .sort((a, b) => a.center - b.center);
     const merged = [];
     for (const s of sleeves) {
@@ -102,6 +105,11 @@ export function splitFacesAtPartitionWalls(faces, room, graph) {
       const endCLId   = face.dirSign > 0 ? p1.clId : p0.clId;
       const isFirst = i === 0;
       const isLast  = i + 2 === points.length;
+      // 親のspans（開放スパン）は親自身のローカル座標系（x=0起点）で持っているため、
+      // 断片自身のローカル範囲[p0.local,p1.local]でクリップ・再原点化する（clipSpans。
+      // これを忘れると断片のROW1・開放スパン描画が親の座標のままずれる——設計の最重要注意点）。
+      const loLocal = Math.min(p0.local, p1.local), hiLocal = Math.max(p0.local, p1.local);
+      const spans = face.spans ? clipSpans(face.spans, loLocal, hiLocal) : undefined;
       out.push({
         // 断片は自分自身のローカル座標系（x=0起点）を新たに持つ——buildFaceFigure等は
         // 「face.lo/hi(world)」「originWorld=dirSign>0?lo:hi」「run=hi-lo」の組から
@@ -113,6 +121,7 @@ export function splitFacesAtPartitionWalls(faces, room, graph) {
         hasWallAtLocalRun: isLast  ? (face.hasWallAtLocalRun ?? true) : false,
         partitionCutAtLocal0:   isFirst ? null : p0.cut,
         partitionCutAtLocalRun: isLast  ? null : p1.cut,
+        ...(spans ? { spans } : {}),
       });
     }
   }
@@ -127,8 +136,14 @@ export function splitFacesAtPartitionWalls(faces, room, graph) {
  */
 export function composeRoomFaces(room, graph) {
   let faces = buildRoomFaces(room, graph);
+  faces = extendFacesWithOpenSpans(faces, room, graph);
   faces = splitFacesAtPartitionWalls(faces, room, graph);
   faces = insertStepFaces(faces, room, graph);
+  // QA修正（幅0の展開図バグ）: 各生成経路（段差見付け面の隅スナップ・袖壁分割の境界計算等）を
+  // 個別に堅牢化した上でも、未知の経路から幅0・極小幅の面が漏れ出た場合の最後の砦として、
+  // run(実効幅)がMIN_FACE_RUN_MM未満の面をここで除去する。labelFacesより前に行う——除去後の
+  // 残存面だけでletterごとの出現順（A1/A2等）を数え直す必要があるため。
+  faces = faces.filter(f => f.run >= MIN_FACE_RUN_MM);
   return labelFaces(faces);
 }
 

@@ -8,18 +8,103 @@
  * （cellBoundsFromKey・refreshCells）をそのまま再利用する（Room.cells は中心線グリッドの
  * セルキー集合であり、この対応関係を再実装しないため）。
  */
-import { refreshCells, cellBoundsFromKey } from '../finish/gridCells.js';
+import { CenterLineType } from '@core';
+import { refreshCells, cellBoundsFromKey, worldToCell } from '../finish/gridCells.js';
 import { DEFAULT_WALL_BASE, DEFAULT_WALL_FINISH } from '../finish/wallGeneration.js';
 
 // 実壁が引けない面（単体テスト等の合成face）向けの半壁厚フォールバック(mm)。
 // 既定壁下地厚(DEFAULT_WALL_BASE)の半分+既定仕上げ厚(DEFAULT_WALL_FINISH) = 45+12.5 = 57.5。
 const DEFAULT_HALF_WALL_MM = DEFAULT_WALL_BASE / 2 + DEFAULT_WALL_FINISH;
 
+// 自室セルの境界がface側で粗い（extent制限されたCLが該当行では無効域にあり分割されない）
+// 場合に、runの伸びる方向へ覗き込むプローブ距離(mm)。elevationOpenSpan.jsのPROBE_EPS_MMと同じ考え方。
+const PROBE_EPS_MM = 5;
+
+/**
+ * [lo,hi] 区間を、run の伸びる方向と同じ向きのCL値で刻む（elevationStepFace.js の
+ * collectAxisBreaks・elevationOpenSpan.js の collectRunBreaks と同じ考え方。QA修正:
+ * wallAdjacentFloorSegments でも同じ「粗いセル境界」問題が起きるため、唯一の実装として
+ * ここへ統合し elevationOpenSpan.js から re-export する）。
+ * @param {object} graph
+ * @param {boolean} isVertical - 面のisVertical（runがY方向ならtrue）
+ * @param {number} lo
+ * @param {number} hi
+ * @returns {number[]}
+ */
+export function collectRunBreaks(graph, isVertical, lo, hi) {
+  const type = isVertical ? CenterLineType.HORIZONTAL : CenterLineType.VERTICAL;
+  const values = new Set([lo, hi]);
+  for (const cl of graph.centerLines) {
+    if (cl.centerLineType !== type) continue;
+    if (cl.value > lo && cl.value < hi) values.add(cl.value);
+  }
+  return [...values].sort((a, b) => a - b);
+}
+
+/** run方向のCL（isVertical面ならHORIZONTAL）のうち、value に一致するものを返す。 */
+export function findRunCLAt(graph, isVertical, value) {
+  const type = isVertical ? CenterLineType.HORIZONTAL : CenterLineType.VERTICAL;
+  return graph.centerLines.find(cl => cl.centerLineType === type && cl.value === value) ?? null;
+}
+
+/**
+ * touching（自室セルが軸に直接触れる区間）に欠測がある[lo,hi]区間を、runの伸びる方向のCLで
+ * 刻んで区間ごとに個別プローブし、実際の所有Roomを求める（QA修正・項目6根本原因）。
+ * 従来はこの欠測区間を無条件で「親扱い（floorDeltaMm:0）」にフォールバックしていたが、
+ * extent制限されたCL（例: Round Fフィクスチャの中心2/中心6）により自室セルの境界がface側で
+ * 粗い場合、実際には部分指定の子が所有する区間まで「親扱い」に丸めてしまい、本来存在しない
+ * 極小の段差（子→親(極小)→子）が生まれる——elevationOpenSpan.jsのcollectNearCellSegmentsで
+ * 既に修正済みの「粗いセル境界での1点プローブ誤分類」と同根の問題のため、同じ刻み+個別プローブ
+ * 方式で解決する。プローブしても所有者が見つからない（部屋外等）区間のみ、従来通り親扱いにする。
+ * @param {object} graph
+ * @param {object} face
+ * @param {Map<string, import('@core').Room>} ownerByCell
+ * @param {number} lo
+ * @param {number} hi
+ * @returns {Array<{runLo:number, runHi:number, owner:import('@core').Room|null}>}
+ */
+function probeGapOwners(graph, face, ownerByCell, lo, hi) {
+  const breaks = collectRunBreaks(graph, face.isVertical, lo, hi);
+  const out = [];
+  for (let i = 0; i + 1 < breaks.length; i++) {
+    const runLo = breaks[i], runHi = breaks[i + 1];
+    if (runHi - runLo < 1e-6) continue;
+    const mid = (runLo + runHi) / 2;
+    const axisValue = face.axisCL.value;
+    const px = face.isVertical ? axisValue + face.inward * PROBE_EPS_MM : mid;
+    const py = face.isVertical ? mid : axisValue + face.inward * PROBE_EPS_MM;
+    const cell = worldToCell(px, py, graph);
+    const owner = cell ? (ownerByCell.get(cell.key) ?? null) : null;
+    out.push({ runLo, runHi, owner });
+  }
+  return out;
+}
+
 // セルキー(leftId:topId:rightId:bottomId)から、face.isVertical に応じたrunLo/runHi側のCL idを返す。
-function runBoundaryCLIds(key, isVertical) {
+// elevationOpenSpan.jsもこの規約（cellBoundsFromKeyのtop<bottom・left<right）に依存するためexport。
+export function runBoundaryCLIds(key, isVertical) {
   const [leftId, topId, rightId, bottomId] = key.split(':');
   // cellBoundsFromKeyの規約どおりtop<bottom・left<rightのため、runLo側は常にtop/left。
   return isVertical ? { loCLId: topId, hiCLId: bottomId } : { loCLId: leftId, hiCLId: rightId };
+}
+
+/**
+ * room（自身の未指定セル）∪ 各部分指定の子のセル → 所有Roomの索引（子が親を上書き）。
+ * elevationFloorProfile.js（wallAdjacentFloorSegments）・elevationStepFace.js
+ * （stepRiserSegments）・elevationOpenSpan.js が共通で使う唯一の実装（QA修正: 3箇所の
+ * 独立実装を統合）。
+ * @param {import('@core').Room} room
+ * @param {object} graph
+ * @returns {Map<string, import('@core').Room>}
+ */
+export function roomOwnerByCell(room, graph) {
+  const map = new Map();
+  for (const key of refreshCells(room.cells, graph)) map.set(key, room);
+  for (const r of graph.rooms) {
+    if (!r.referenceRoomIds?.has(room.id)) continue;
+    for (const key of refreshCells(r.cells, graph)) map.set(key, r); // 子が親を上書き
+  }
+  return map;
 }
 
 /**
@@ -37,26 +122,23 @@ function runBoundaryCLIds(key, isVertical) {
  */
 export function wallAdjacentFloorSegments(face, parentRoom, graph) {
   const axisValue = face.axisCL.value; // finish/gridCells.js のセル境界も同じ.value基準
+  const ownerByCell = roomOwnerByCell(parentRoom, graph);
 
-  // 部分指定（parentRoomをreferenceRoomIdsで参照するRoom）の現在セル → 所有Room の索引。
-  const childOwnerByCell = new Map();
-  for (const r of graph.rooms) {
-    if (!r.referenceRoomIds?.has(parentRoom.id)) continue;
-    for (const key of refreshCells(r.cells, graph)) childOwnerByCell.set(key, r);
-  }
-
-  // parentRoom自身のセルのうち、この面（壁）に接しているものを壁沿いに拾う。
+  // parentRoom自身のセルのうち、この面（壁）の「室内側(near)」に接しているものを壁沿いに拾う。
+  // QA修正: 従来は`b.x1===axisValue || b.x2===axisValue`と面の両側（near/far）を拾っており、
+  // 面に接するセルが両側にある構成（凹んだ部屋形状等）で区間が重複しうる不具合があった。
+  // face.inward（室内へ向かう符号）で近い側の辺だけに限定する。
   const touching = [];
   for (const key of refreshCells(parentRoom.cells, graph)) {
     const b = cellBoundsFromKey(key, graph);
     if (!b) continue;
-    const onWall = face.isVertical
-      ? (b.x1 === axisValue || b.x2 === axisValue)
-      : (b.y1 === axisValue || b.y2 === axisValue);
-    if (!onWall) continue;
+    const nearOnWall = face.isVertical
+      ? (face.inward > 0 ? b.x1 === axisValue : b.x2 === axisValue)
+      : (face.inward > 0 ? b.y1 === axisValue : b.y2 === axisValue);
+    if (!nearOnWall) continue;
     const [runLo, runHi] = face.isVertical ? [b.y1, b.y2] : [b.x1, b.x2];
     if (runHi <= face.lo || runLo >= face.hi) continue; // この面の範囲外
-    const owner = childOwnerByCell.get(key) ?? parentRoom;
+    const owner = ownerByCell.get(key) ?? parentRoom;
     const { loCLId, hiCLId } = runBoundaryCLIds(key, face.isVertical);
     touching.push({
       runLo: Math.max(runLo, face.lo), runHi: Math.min(runHi, face.hi), owner,
@@ -79,17 +161,27 @@ export function wallAdjacentFloorSegments(face, parentRoom, graph) {
   // 区間をdeltaに関わらず一括で吸収する、この1箇所だけに許容差を持たせれば十分。
   const GAP_EPS = 1e-6;
   const parentFL = graph.effectiveFloorLevel(parentRoom);
+  // QA修正（項目6根本原因）: 欠測区間（touchingがそのまま覆わない箇所）を無条件で
+  // 「親扱い（floorDeltaMm:0）」にせず、probeGapOwnersで刻んで個別に所有者を求める
+  // （extent制限CLにより自室セルの境界がface側で粗い場合の誤分類を防ぐ。上部コメント参照）。
+  // それでも所有者が見つからない区間だけ、従来通り親扱いにフォールバックする。
+  const pushGap = (segs, lo, hi) => {
+    for (const g of probeGapOwners(graph, face, ownerByCell, lo, hi)) {
+      const floorDeltaMm = g.owner ? graph.effectiveFloorLevel(g.owner) - parentFL : 0;
+      segs.push({ runLo: g.runLo, runHi: g.runHi, floorDeltaMm, loCLId: null, hiCLId: null });
+    }
+  };
   const segs = [];
   let cursor = face.lo;
   for (const t of touching) {
-    if (t.runLo > cursor) segs.push({ runLo: cursor, runHi: t.runLo, floorDeltaMm: 0, loCLId: null, hiCLId: null }); // 欠測=親扱い
+    if (t.runLo > cursor) pushGap(segs, cursor, t.runLo);
     const floorDeltaMm = graph.effectiveFloorLevel(t.owner) - parentFL;
     // 重なり（t.runLo が cursor より小さい）はcursorへスナップし、区間の逆転・二重描画を防ぐ。
     const runLo = Math.max(t.runLo, cursor);
     if (t.runHi > runLo) segs.push({ runLo, runHi: t.runHi, floorDeltaMm, loCLId: t.loCLId, hiCLId: t.hiCLId });
     cursor = Math.max(cursor, t.runHi);
   }
-  if (cursor < face.hi) segs.push({ runLo: cursor, runHi: face.hi, floorDeltaMm: 0, loCLId: null, hiCLId: null });
+  if (cursor < face.hi) pushGap(segs, cursor, face.hi);
 
   // 物理的に意味を持たない極小幅(<GAP_EPS)の区間は、floorDeltaMmが前後と異なっていても
   // 前（無ければ次）の区間へ吸収してから、通常のdelta一致マージへ進む（QA修正・上記コメント参照）。

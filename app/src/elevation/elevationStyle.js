@@ -141,3 +141,10 @@ export const DEFAULT_FACE_LABEL_AVOID_THRESHOLD_MM = 400; // 倍率決定用の1
 // 新仕様「ROW1寸法のCL分割」: 分割点候補の併合・boundary端との同一視の許容差(mm)。
 // 浮動小数の丸め程度を吸収する目的の小さな値（elevationDimSplit.jsのcollectRow1SplitPoints）。
 export const SPLIT_MERGE_EPS_MM = 1;
+
+// QA修正（幅0の展開図バグ）: composeRoomFacesの最終段で、run（面の実効幅）がこの値未満の面を
+// 除去する安全網（elevationFaceList.js）。段差見付け面の隅スナップ・袖壁分割の境界計算等、
+// 個別の生成経路をそれぞれ堅牢化した上でも、未知の経路から幅0・極小幅の面が漏れ出た場合に
+// 展開図へ実際に描画されてしまう最後の砦として置く。1mm未満は図面上「幅がある」とは呼べない
+// 実務上の下限値。
+export const MIN_FACE_RUN_MM = 1;

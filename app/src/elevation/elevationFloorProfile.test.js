@@ -201,6 +201,52 @@ test('【失敗系】wallAdjacentFloorSegments: 壁に接しない内側だけ�
   assert.equal(segs[0].hiX, faceA.run);
 });
 
+// ---- QA修正: near側限定（旧実装は面の両側(near/far)を拾っていた） ----
+// 面のaxisCL上で、near側(面が向く方向)とfar側(反対側)の両方に自室セルがあり、かつ両者の
+// run方向range(y)が重なる構成を直接（buildRoomFacesを介さず）合成faceで作る——
+// 現実の部屋形状で純粋にこの条件だけを満たす最小構成を組むのが難しいため、
+// wallAdjacentFloorSegmentsが実際に読むfield（axisCL/isVertical/inward/lo/hi/dirSign/
+// originWorld）だけを持つ合成faceと、near/far両方に同室セルを持つroomを直接組み立てる。
+// near側のrunLo(200)をfar側(0)よりも大きくして非対称にする——旧実装の「両側拾う」バグは
+// runLo昇順ソート後のcursorクランプ機構により、near/farのrun範囲が完全一致する構成だと
+// far側がまるごとクランプされ症状が見えなくなる（既に検証済み）。非対称にすることで、
+// 先にソートされたfar側がcursorを専有し、後続のnear側が誤って消える／far側のFLが
+// 0..run全体に漏れ出る、という実害を確実に顕在化させる。
+test('【失敗系】wallAdjacentFloorSegments: 面のnear側(inwardの向く側)だけを拾い、far側の自室セルは無視して0..runを単調・無重複で被覆する', () => {
+  const graph = makeGraph();
+  const x1000 = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
+  const x2000 = graph.addCenterLine(CenterLineType.VERTICAL, 2000, { labeled: false, discipline: Discipline.ARCH });
+  const x3000 = graph.addCenterLine(CenterLineType.VERTICAL, 3000, { labeled: false, discipline: Discipline.ARCH });
+  const y0    = graph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: false, discipline: Discipline.ARCH });
+  const y200  = graph.addCenterLine(CenterLineType.HORIZONTAL, 200,  { labeled: false, discipline: Discipline.ARCH });
+  const y1000 = graph.addCenterLine(CenterLineType.HORIZONTAL, 1000, { labeled: false, discipline: Discipline.ARCH });
+
+  // near側: x:2000-3000×y:200-1000（b.x1===2000。face(axisCL=2000,inward=+1)の室内側）。
+  const nearKey = `${x2000.id}:${y200.id}:${x3000.id}:${y1000.id}`;
+  // far側: x:1000-2000×y:0-1000（b.x2===2000。旧実装は`b.x1===axisValue||b.x2===axisValue`で
+  // これも「面に接する」と誤判定していた——run方向(y)がnear側の範囲を包含する）。
+  const farKey = `${x1000.id}:${y0.id}:${x2000.id}:${y1000.id}`;
+  const room = graph.addRoom(new Set([nearKey, farKey]), 'LDK');
+  // far側だけ別FLの部分指定にし、もし旧実装のように誤って拾われれば区間・floorDeltaMmに
+  // 混入して即座に検出できるようにする。
+  const farChild = graph.addRoom(new Set([farKey]), 'far側の部分指定', undefined, new Set([room.id]));
+  farChild.setFloorLevel(500);
+
+  const face = {
+    axisCL: x2000, isVertical: true, inward: 1, faceValue: 2000,
+    lo: 0, hi: 1000, run: 1000, dirSign: 1, originWorld: 0,
+    startCLId: y0.id, endCLId: y1000.id,
+  };
+  const segs = wallAdjacentFloorSegments(face, room, graph);
+
+  // near側(y:200-1000)は自室(delta0)、near側が届かない先頭(y:0-200)はgap-fillで親扱い(delta0)——
+  // いずれにせよfar側のFL500が混入せず、全区間delta0で0..runを覆うはず。
+  assert.ok(segs.every(s => s.floorDeltaMm === 0), `far側の500が混入せず全区間delta0のはず（実際:${JSON.stringify(segs)}）`);
+  assert.equal(segs[0].loX, 0);
+  assert.equal(segs[segs.length - 1].hiX, 1000);
+  for (let i = 0; i + 1 < segs.length; i++) assert.equal(segs[i].hiX, segs[i + 1].loX, '隙間なく連続するはず');
+});
+
 // ---- 新仕様「段差位置のCLオフセット」: loCLId/hiCLIdの実引継ぎ ----
 test('wallAdjacentFloorSegments: 段差境界のhiCLIdは実在するCLのidを指す（ROW1寸法のCL分割のS1源）', () => {
   const graph = makeGraph();
