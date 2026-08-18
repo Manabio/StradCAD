@@ -45,6 +45,12 @@
 展開図では面をその位置で分割し、壁のない端部（`hasWallAtLocal0/Run=false`）として扱う（`elevation/elevationFaces.js`の
 `perpendicularWallsOnFace`。設計意図は`.claude/elevation-model.md`）。腰壁は同条件で`kneeDropWalls`にknee指定を持つもの。
 
+## 開放スパン（展開図）
+壁の無い部屋内部の境界を挟んで、同じ部屋の壁面（面）が「壁のある区間」から先へ連続して延長される区間
+（`elevation/elevationOpenSpan.js`のspans。`kind:'wall'|'open'`。openはその先に別の実効FLを持つセルが続き、そちらの床が
+見えがかりとして見えることを示す）。段差見付け面と異なり「面自体」を延長する仕組み。`composeRoomFaces`に配線済み。
+設計意図は`.claude/elevation-model.md`「開放スパン」節。
+
 ## Edge（境界エッジ） / boundaryMaster
 仕上げモードの部屋境界。`boundaryMaster`はその層構成（壁の材構成）の既定値セット。
 

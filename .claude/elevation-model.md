@@ -159,8 +159,18 @@ SWITCHBACK以外の階段断面（WINDING/L_TURN/FLARED/OPEN_WELL）・展開図
 （相手FL>=自分のFLは重複排除で捨てる＝低い側からは生成しない）。`buildStepFaces`が通常面と同じ`letterOf`/`DIR_SIGN`規則で
 面オブジェクト化し（`lo`/`hi`は両端の直交壁面の`faceValue`へ詰める。届かなければCL値のまま）、`insertStepFaces`が
 「見付け面の始点を含む壁面Wの直後」へ挿入する（Wが無ければ末尾）。`buildFaceFigure`は`kind==='step'`を早期分岐し、
-低い側床線・高い側床線（見付け上端）・両端縦線・天井線を全てCUTで描き、上部にアキ（`appendGapMark`。腰壁・垂れ壁の穴と共用）を
-乗せる——開口・巾木・壁2段書きはスキップし、注記帯（ROW1/ROW2/面ラベル）は`appendAnnotationRows`で通常面と共通合流する。
+低い側床線・両端縦線（壁断面）・天井線をCUTで、高い側床線（見付け上端。段差の向こうの床の見えがかり）を
+SILHOUETTE（中線）で描き（QA修正・ユーザー明示指示2026-08: 両端縦線は実際に切断される壁の断面のためCUT、
+見付け上端は見えがかりの線のため中線——旧実装は誤って全部CUTにしていた）、見付け上端〜天井には常に
+アキ（`appendGapMark`。x=0..run・y=-CH..topY。腰壁・垂れ壁の穴と共用）を乗せる（QA修正・
+ユーザー明示指示2026-08その4: 段差見付け面を新設したコミット5f8ec62の時点から、腰壁・垂れ壁の
+明示指定がある軸だけ`kneeDropGapsOnFace`経由でアキを描く実装しか無く、指定の無い通常の段差
+見付け面ではアキが一切描かれない欠落があった——本節冒頭の説明どおり「上部にアキを乗せる」が
+実装に反映されていなかった、後続のどのラウンドの変更にも起因しない当初からの欠落）。
+開口・巾木・壁2段書きはスキップし、注記帯（ROW1/ROW2/面ラベル）は
+`appendAnnotationRows`で通常面と共通合流する。両端縦線は`floorY`（低い側床）から天井(`-CH`)まで
+描く（QA修正・ユーザー明示指示2026-08その3: 旧実装は`topY`＝見付け上端で止めていたため天井まで
+届かない縦線になっていた——見付け上端はあくまで見えがかり線で、壁自体は天井まで続くため）。
 
 **ROW1寸法のCL分割（`elevationDimSplit.js`）**: ROW1（壁芯間寸法）は`boundary.lo`〜`hi`を1本で通すのではなく、
 `collectRow1SplitPoints`が集める3源（段差CL=`floorSegments[i].hiCLId`／面へ到達する直交壁=`perpendicularWallsOnFace(face,graph,'far')`
@@ -188,3 +198,91 @@ Round Fフィクスチャ（`.claude`配下の設計メモ・引き継ぎ参照�
 自立壁（`isRoomWall`/`isExteriorWall`とも false の袖壁候補）を1本も含まないため、本仕様の効果は確認できていない
 （`splitFacesAtPartitionWalls`自体は専用の実壁フィクスチャ（`elevationFaceList.test.js`）で分割・境界一致・幅合計不変・
 腰壁高さ・失敗系（未到達・突出不足）を検証済み）。
+
+## 開放スパン（elevationOpenSpan.js）— 完成・配線済み
+面の範囲を「壁のあるアウトラインエッジ」から「同一axisCL平面上でnear側に自室セルが連続する最大区間」へ拡張する仕組み
+（D1/B1のような「壁区間＋壁のない開放区間を1枚の連続面として描く」表現）。`composeRoomFaces`に配線済み
+（順序: `buildRoomFaces`→`extendFacesWithOpenSpans`→`splitFacesAtPartitionWalls`＋`clipSpans`→`insertStepFaces`→
+`filter(run>=MIN_FACE_RUN_MM)`→`labelFaces`）。
+
+**座標系（意図的な混在。統一しない）**: 既存の二重管理規約（描画x=仕上げ面基準、寸法x=CL基準。仕様4参照）をそのまま
+適用する——**描画**（床線・あき・エッジ縦線の位置）は実壁の隅=仕上げ面スナップ・壁のない内部境界=生CL値、
+**寸法（ROW1）**はboundary（面の壁芯間）とS4分割点（`spans[i].hiCLX`=CL位置）で構成する。このためD1の描画run
+（実測1285=342.5+942.5）とROW1の合計（1000+400=1400）は一致しない——これは既存仕様どおりの意図的な差である。
+
+**抽出**（`extendFaceWithOpenSpans`/`extendFacesWithOpenSpans`/`clipSpans`）: room自身の登録セル（`refreshCells`。
+extent解決は`worldToCell`に委譲し再実装しない）のうち面のnear側に接するもの全件を列挙し、各セルのfar側を1点
+プローブしてwall/open分類する（**微小刻みでface.lo/hiの外側へプローブする方式は、直交壁の厚み帯の内側を誤って
+「壁あり」と拾い続けるため採用しない**——実際にこの不具合を作り込み・発見・破棄した）。面自身の「既知区間」
+（face.lo/hi。実壁の隅で確定済み）を含む連続クラスタだけを採用し、延長した端だけ`perpFaceAt`で隅スナップする。
+延長していない端は元のhasWallAtLocal0/Runをそのまま引き継ぐ（stairOpenings等、開放スパンと無関係な理由で元々
+falseだった面を誤ってtrueへ書き換えない）。**QA修正**: `dirSign<0`の面はworld順とlocal順が反転するため、
+`spans[i].hiCLId`（内部境界のCL id）・「末尾（面端そのもの）はhiCLId=null」の判定は、ソート後のlocal順配列で
+行う必要がある（world順のまま判定すると誤った区間にhiCLIdが付き、ROW1に余計な分割点が出る不具合を実際に
+作り込み・発見・修正した）。
+
+**QA修正（実機不具合。room2/room3が同時に成立しない不具合）**: 3件の根本原因を特定・修正した。
+1. **他室区間を挟んだ延長の誤爆**: `collectNearCellSegments`はroom自身が所有するセル区間だけを列挙するため、
+   他室が間に挟まる箇所は配列上の要素そのものが欠落する（隣接インデックスでも値としては不連続）。従来は
+   「配列上ownIdxの前後を無条件に取り込む」実装だったため、他室領域を飛び越えて延長し、spansに他室領域ぶんの
+   穴（他室区間ぶんのopen/wallどちらの分類も付かない欠落区間）が空いていた。修正: `runHi===次のrunLo`で実際に
+   連続している範囲だけを延長対象にする（不連続ならそこで止める）。
+2. **見付け面の残差**: `subtractOpenSpanCoverage`のriserはセル輪郭の生CL値基準、matchingFacesの`lo/hi`は実壁の
+   隅で仕上げ面基準にスナップされた値——両者は壁厚みぶん（数十mm）ズレることがあり、riserがmatchingFacesの
+   描画範囲を壁厚み分はみ出す残差（対応する面がそもそも描かれない位置）がopen区間の外側にごく僅かな幅の
+   見付け面として残っていた。修正: 差し引き前にriserをmatchingFacesの合計描画範囲（lo/hiの和集合）へ丸める。
+3. **粗いセル境界での1点プローブ誤分類**: `collectNearCellSegments`は自室の登録セル1件につきfar側を1点だけ
+   プローブする。自室側のセル境界がfar側の部屋境界より粗い場合（例: extentLo/Hiで範囲制限されたCLが自室側の
+   行では有効域外にあり分割されない。Round Fの中心2＝室内側の行では無効・far側の行では有効、という構成）、
+   1点プローブでは区間全体（複数の他室にまたがりうる）を1つのkindへ丸ごと誤分類してしまう。修正:
+   `elevationStepFace.js`の`collectAxisBreaks`と同じ考え方でrunの伸びる方向のCLで刻み、区間ごとに個別
+   プローブする（`collectRunBreaks`/`findRunCLAt`）。
+これら3件は独立した規則の誤りだが、いずれも「開放スパンの区間境界の同定」という同じ土台の不備に由来し、
+room2/room3のどちらか一方だけを直すと他方が壊れる対症療法にはならない（3件とも同定ロジック自体の修正のため）。
+
+**描画**（`buildFaceFigure`のspans処理）: 通常面の床線・天井線・両端縦線の直後にopen区間ごと処理する。
+1. 遠側床線: `nearDeltaAt(x)`（floorSegmentsからxを含む区間のfloorDeltaMmを返す共通ヘルパ）で求めた近側の
+   床yと、`farFloorDeltaMm`が異なる場合だけSILHOUETTE水平線を追加する——Phase1の`wallAdjacentFloorSegments`
+   near側修正により、多くの場合floorSegments自体が既にopen区間と同じ高さのCUT線を描いているため、この分岐は
+   「floorSegmentsが（何らかの理由で）追従できていない場合の保険」として働く（重複描画は起きない）。
+2. 上部あき: `appendGapMark`（腰壁＋垂れ壁のアキと共用）で天井から遠側床までの矩形を描く
+   （QA修正・ユーザー差し戻し2026-08: 一度「アキ表現は開放スパンに不要」として全廃したが、
+   指示範囲外の拡大解釈だったとして復元——アキ廃止は今後、明示指示がある場合のみ行う）。
+3. 境界エッジ: open区間の両端のうち隣がwall側（区間 or 面端）ならSILHOUETTE縦線を引く。
+4. 巾木・壁2段書き障害物にopen区間を追加。`extendedAtLocal0/Run`端では隣接面由来の建具断面を描かない。
+
+**見下ろし方向は破線（QA修正・ユーザー明示指示2026-08）**: 開放先(far側)の床がnear側より低い
+（`farFloorDeltaMm < nearDelta`。見下ろす方向）場合、遠側床線・境界エッジの縦線を`dash:'dashed'`
+にする（見上げる方向・同じ高さは従来通り実線）。ユーザーが特定の面（room3 A2）で明示指示した
+形をそのまま一般規則化したもの——類似の他規則（面端の「壁のない端部」延長等）への拡張は
+明示指示が無い限り行わない。
+
+**段差床の抽出（`wallAdjacentFloorSegments`）欠測区間の誤フォールバック修正（QA修正・項目6）**:
+自室セルの境界がface側で粗い（extent制限されたCLが該当行では無効域にあり分割されない）場合、
+touching配列に欠測（cursor〜次のtouching.runLoの隙間）が生じる。従来はこの欠測区間を無条件で
+「親扱い（floorDeltaMm:0）」にフォールバックしていたが、実際には部分指定の子が所有する区間まで
+親扱いに丸めてしまい、本来存在しない極小の段差（子→親(極小)→子）が生まれていた
+（elevationOpenSpan.jsのcollectNearCellSegmentsで既に修正済みの「粗いセル境界での1点プローブ
+誤分類」と同根）。`probeGapOwners`（`collectRunBreaks`/`findRunCLAt`と共にelevationOpenSpan.jsから
+elevationFloorProfile.jsへ統合・re-export）が欠測区間をrunの伸びる方向のCLで刻んで個別に
+`worldToCell`プローブし、実際の所有Roomを求める——所有者が見つからない区間だけ従来通り親扱い。
+
+**段差見付け面のROW1境界退化バグ修正（`elevationStepFace.js`のbuildStepFaces。QA修正・項目4）**:
+`startCLId`/`endCLId`へ段差自身のaxisCL.id（面に直交する軸＝両端で同じ値）を両端とも詰めていたため、
+`faceBoundaryLocalX`（startCLId/endCLIdの位置差でROW1境界を求める）が同一CLの差=0という
+退化した幅0の境界を返していた。通常面と同じ規約（startCLIdは世界座標loを・endCLIdは世界座標hiを
+決めるCLのid）に合わせ、両端の直交壁面（`perpFaceAt`で求めたloFace/hiFace）自身のaxisCL.idを使う。
+
+**段差見付け面との相互排除**（`elevationStepFace.js`の`subtractOpenSpanCoverage`）: `stepRiserSegments`の候補
+から、同一`(isVertical, axisCL.value, inward)`の面のopenスパンが覆う区間を差し引く。差し引いた残りが
+`MIN_FACE_RUN_MM`未満なら捨てる。D1/B1のような「面平面上の段差」はopenスパン側が表現を担い、独立した段差見付け面
+（重複表現）にはならない。面平面の外（同一軸の面が存在しない内部段差）は従来どおり独立した見付け面のまま。
+
+**ROW1のS4**（`collectRow1SplitPoints`）: `spans[i].hiCLId`が非nullの内部境界を`spans[i].hiCLX`で分割点に追加
+する（S1と同形。既存の併合・端除外がそのまま効く）。
+
+**Round Fフィクスチャでの検証結果**: D1（room2）は`spans=[wall(400), open(-50)]`・ROW1=400+1000（中心1..中心3..
+中心7）が完全一致。B1（room3）はspans構造・farFloorDeltaMm(+100)は一致するが、ROW1は`[400,600,3000]`の3分割に
+なる——中心7（y=3400）がextent無制限のためS3（面に届く非通り芯中心線）の「reaches」判定に無条件で該当してしまう
+**既存・別件の仕様**（本ラウンドの変更対象外。中心7はB1の軸位置とは無関係だが、S3はCLの位置的近さではなく
+extentの有無だけで判定するため）。
