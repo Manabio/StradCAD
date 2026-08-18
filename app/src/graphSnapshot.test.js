@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Plane, PlanGraph, CenterLineType, Discipline, OpeningCategory } from './core.js';
-import { serializeGraph, restoreGraph } from './graphSnapshot.js';
+import { Plane, PlanGraph, CenterLineType, Discipline, OpeningCategory, Project } from './core.js';
+import { serializeGraph, restoreGraph, serializeStructCLs, restoreStructCLs } from './graphSnapshot.js';
 
 // wallBeamAxes.test.js と同じ方針: ダックタイピングでは effectiveValue 等の実挙動を
 // 再現できないため、実 core.js（Plane/PlanGraph）を使う。
@@ -283,4 +283,68 @@ test('Room.finish.baseboardMaterial/Heightに値がある場合はFlatBuffers往
   const r2 = restored.roomMap.get(room.id);
   assert.equal(r2.finish.baseboardMaterial, 'タイル巾木');
   assert.equal(r2.finish.baseboardHeight, 'h=100');
+});
+
+// ---- 起動時復元の順序不変条件（store.js 起動IIFE の回帰防止） ----
+// restoreGraph は壁の軸CL・端点CLを resolveCL（自グラフ → _structGraph の順）で解決し、
+// 解決できない壁を例外もログもなく捨てる。よって「通り芯（restoreStructCLs）→ フロア
+// （restoreGraph）」の順を守らないと、通り芯参照の壁が無音で失われる。
+
+// 通り芯を structGraph に持ち、それを参照する壁をフロアグラフに持つ Project を作る。
+function makeProjectWithStructWall() {
+  const project = new Project('proj', 'test');
+  const { graph } = project.addPlane(0, '1階'); // _structGraph = project.structGraph が自動配線される
+  const axisCL  = project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+  const clStart = project.structGraph.addCenterLine(CenterLineType.VERTICAL,   0,    { labeled: true, discipline: Discipline.STRUCT });
+  const clEnd   = project.structGraph.addCenterLine(CenterLineType.VERTICAL,   3000, { labeled: true, discipline: Discipline.STRUCT });
+  const wall = graph.addWall(axisCL, 75, false, clStart, 0, clEnd, 0, { isExteriorWall: true });
+  return { project, graph, axisCL, wall };
+}
+
+test('【失敗系】通り芯復元前に restoreGraph すると、通り芯参照の壁は例外なく無音で失われる（順序を誤った場合の挙動の固定）', () => {
+  const { project, graph, wall } = makeProjectWithStructWall();
+  const bytesFloor = serializeGraph(graph);
+  void project; // structGraph は復元しない（順序誤りを再現）
+
+  const project2 = new Project('proj2', 'test');
+  const { graph: graph2 } = project2.addPlane(0, '1階');
+  // project2.structGraph は空のまま（既定通り芯すら無い＝保存IDは解決不能）
+  assert.doesNotThrow(() => restoreGraph(graph2, bytesFloor));
+  assert.equal(graph2.shapeMap.has(wall.id), false, '軸CLを解決できない壁は復元されない');
+});
+
+test('通り芯（restoreStructCLs）→ フロア（restoreGraph）の順なら、壁が同一IDで復元され軸CLはstructGraph上のCLとオブジェクト同一', () => {
+  const { project, graph, axisCL, wall } = makeProjectWithStructWall();
+  const bytesFloor  = serializeGraph(graph);
+  const bytesStruct = serializeStructCLs(project.structGraph, project.structuralInfo, project.memberGroupLedger);
+
+  const project2 = new Project('proj2', 'test');
+  const { graph: graph2 } = project2.addPlane(0, '1階');
+  restoreStructCLs(project2.structGraph, project2.structuralInfo, bytesStruct, project2.memberGroupLedger);
+  restoreGraph(graph2, bytesFloor);
+
+  const w2 = graph2.shapeMap.get(wall.id);
+  assert.ok(w2, '復元後に同一IDの壁が存在する');
+  assert.equal(w2.axisCL, project2.structGraph.shapeMap.get(axisCL.id), '軸CLは復元後structGraphのCLをオブジェクトとして直接参照する');
+});
+
+test('restoreStructCLs は既存の structGraph 内容を置換し、既定通り芯を重複させない', () => {
+  const project = new Project('proj', 'test');
+  const src = project.structGraph;
+  src.addCenterLine(CenterLineType.VERTICAL,   0,    { labeled: true, discipline: Discipline.STRUCT });
+  src.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+  src.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: true, discipline: Discipline.STRUCT });
+  const bytes = serializeStructCLs(src, project.structuralInfo, project.memberGroupLedger);
+
+  // 復元先には store.js の起動時と同様の既定通り芯2本が先に入っている。
+  const project2 = new Project('proj2', 'test');
+  const dst = project2.structGraph;
+  const defV = dst.addCenterLine(CenterLineType.VERTICAL,   0, { labeled: true, discipline: Discipline.STRUCT });
+  const defH = dst.addCenterLine(CenterLineType.HORIZONTAL, 0, { labeled: true, discipline: Discipline.STRUCT });
+
+  restoreStructCLs(dst, project2.structuralInfo, bytes, project2.memberGroupLedger);
+
+  assert.equal(dst.centerLines.length, 3, 'スナップショットの3本に置換され、既定分と重複しない');
+  assert.equal(dst.shapeMap.has(defV.id), false, '既定通り芯（縦）は残らない');
+  assert.equal(dst.shapeMap.has(defH.id), false, '既定通り芯（横）は残らない');
 });

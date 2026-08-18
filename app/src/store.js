@@ -17,6 +17,7 @@ import { SpatialIndex } from './transform/SpatialIndex.js';
 // ----------------------------------------------------------------
 const PROJECT_ID_KEY = 'strad-project-id';
 const PLANE_ID_KEY   = 'strad-plane-0-id';
+const SAVED_FLAG_KEY = 'strad-saved';
 
 let savedProjectId = localStorage.getItem(PROJECT_ID_KEY);
 if (!savedProjectId) {
@@ -75,14 +76,19 @@ reaction(
 // ----------------------------------------------------------------
 // IndexedDB 起動時初期化 + auto-save 開始
 //
-// 起動時は常に全ストア（全階のフロアデータ・通り芯・構造情報など）を削除し、
-// 完全な初期状態（白紙）から作業を開始する。F5 リロードでも保持しない。
+// 明示保存（ハンバーガーメニューの「保存」）が一度も行われていない場合のみ、
+// 起動時に全ストア（全階のフロアデータ・通り芯・構造情報など）を削除して
+// 白紙から開始する。明示保存済みなら削除せず、直後の setupStructGraph /
+// activate が IDB の内容を復元する。
 // ----------------------------------------------------------------
 (async () => {
-  await clearAllStores();
-  floorSwapManager.setupStructGraph(project.structGraph, project.structuralInfo, savedProjectId, project.memberGroupLedger).catch(console.error);
-  floorSwapManager.activate(plane, graph).catch(console.error);
-})();
+  if (!localStorage.getItem(SAVED_FLAG_KEY)) await clearAllStores();
+  // 順序不変条件: 通り芯（structGraph）の復元を完了させてからフロアを復元すること。
+  // restoreGraph は壁の軸CL・端点CLを structGraph から解決し、解決できない壁を
+  // 無音で捨てるため、並行実行すると通り芯参照の壁・寸法線が失われる。
+  await floorSwapManager.setupStructGraph(project.structGraph, project.structuralInfo, savedProjectId, project.memberGroupLedger);
+  await floorSwapManager.activate(plane, graph);
+})().catch(console.error);
 
 // ----------------------------------------------------------------
 // フロア管理
@@ -198,10 +204,17 @@ export async function switchFloor(nextPlaneId) {
 }
 
 /**
- * 現在のフロアと通り芯を IndexedDB に明示的に保存し、dirty をリセットする。
+ * アクティブなフロアと通り芯を IndexedDB に明示的に保存し、dirty をリセットする。
+ * 非アクティブ階はスワップアウト時（deactivate）に明示保存の有無に関わらず
+ * 無条件保存されるため、IDB 上はこれで全階が揃う。
+ * 明示保存フラグを立て、次回起動時の白紙化をスキップして復元対象にする。
  */
 export async function saveToIDB() {
-  await floorSwapManager.saveNow(plane, graph, project.structGraph, project.structuralInfo, savedProjectId, project.memberGroupLedger);
+  const activePlane = project.activePlane;
+  const activeGraph = project.activeGraph;
+  if (!activePlane || !activeGraph) throw new Error('アクティブなフロアがありません');
+  await floorSwapManager.saveNow(activePlane, activeGraph, project.structGraph, project.structuralInfo, savedProjectId, project.memberGroupLedger);
+  localStorage.setItem(SAVED_FLAG_KEY, '1');
   clearDirty();
 }
 
