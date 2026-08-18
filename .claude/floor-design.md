@@ -3,7 +3,7 @@
 Planeのフィールド一覧・floorNumber.jsの関数シグネチャは`core/plane.js`/`floorNumber.js`を読めば分かるため省略する。
 
 ## データ帰属の境界線
-通り芯（labeled struct CL）のみ全階共通（`projects` IDBストア）。中心線・補助線・寸法線・壁・図形・部屋は階固有（`floors` IDBストア）。Planeメタデータ（startFloor/stories/name/isRoofPlane等）自体はIDB非永続——セッション内メモリのみで、リロード後は初期1階のみ復元される。
+通り芯（labeled struct CL）のみ全階共通（`projects` IDBストア）。中心線・補助線・寸法線・壁・図形・部屋は階固有（`floors`/`savedFloors` IDBストア）。Planeメタデータ（startFloor/stories/name/isRoofPlane等）一覧は`projects`ストアの別レコード（`graphSnapshot.js`のserializePlanes/decodePlanes）として明示保存（保存メニュー）時のみ永続化され、起動時に`floorOps.js`のreconcilePlanesで復元される——保存していないplaneの追加・削除・改名はリロードで失われる。
 
 ## elevation昇順 = startFloor昇順は不変条件
 採用フロアは常にこの対応が成立するよう、追加・削除・並び替え・階変更のたびに連鎖再計算する。崩れるとFloorTabsの表示順と階数表記が食い違う。
