@@ -84,6 +84,9 @@
 ## bake
 ドラッグ確定時に`pendingDelta`を`value`へ書き込み0に戻す操作（`bakeCLValue`）。
 
+## セッションロック
+Web Locks APIで1タブだけを編集セッションの持ち主にする排他制御（`storage/sessionLock.js`）。非オーナータブは`openDB()`が例外を投げIndexedDBに触れない。自動昇格なし・read-only編集や同期は提供しない。設計意図は`.claude/persistence-idb.md`。
+
 ## 履歴ナビゲーション（またぎundo）／amend
 **履歴ナビゲーション**＝undo/redo実行前に、エントリ記録時のコンテキスト（モード・階）へ表示を戻してから実行する仕組み。**amend**＝操作の後から非同期で確定した付随変更（階段変換後の上階自動設置等）を既存エントリへ合成する操作（`undoManager.amend`）。設計意図は`.claude/undo-redo.md`。
 
