@@ -46,3 +46,7 @@ export const ERR_CL_CONVERT_SYNC_FAILED = '他階への反映に失敗しまし�
 // 無い＝この通り芯が軸最後の1本の場合。ERR_CL_CONVERT_LAST_GRID（降格用）と判定式は共有するが、
 // 「削除できません」と方向が違うため文言は分ける。
 export const ERR_CL_DELETE_LAST_GRID = 'この軸の最後の通り芯のため削除できません。';
+
+// セッション排他ロック（storage/sessionLock.js）: 別タブが編集セッションを保持している場合、
+// storage/db.js の openDB() がこの文言で reject する。App.jsx は同じ文言を全画面案内に表示する。
+export const ERR_SESSION_LOCKED = 'このアプリは別のタブで開いています。編集できるのは1つのタブだけです。';

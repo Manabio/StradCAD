@@ -337,6 +337,64 @@ export function decodePlanes(bytes) {
 }
 
 // ----------------------------------------------------------------
+// シリアライズ / デシリアライズ: 敷地（project.site）→ Uint8Array
+// project 単位の独立チャネル（serializePlanes と同形）。
+// ----------------------------------------------------------------
+export function serializeSite(site) {
+  return encode({
+    site: {
+      points: site.points.map(p => ({ id: p.id, x: p.x, y: p.y })),
+      lines: site.lines.map(l => ({
+        id: l.id, startPointId: l.startPoint.id, endPointId: l.endPoint.id,
+        lineKind: l.lineKind, redPointId: l.redPointId,
+      })),
+      triangles: site.triangles.map(t => ({
+        id: t.id, baseLineId: t.baseLine.id, apexPointId: t.apexPoint.id, lineKind: t.lineKind,
+      })),
+      lineOrder: [...site.lineOrder],
+      history: [...site.history].map(h => ({ ...h })),
+    },
+  });
+}
+
+export function decodeSite(bytes) {
+  const { site } = decode(bytes);
+  return site;
+}
+
+/**
+ * 敷地（project.site）を snapshot データで作り直す。
+ *
+ * 不変条件: 起動時（bootReady）以外から呼んではならない。復元前の文書（旧敷地）に対して
+ * 記録された undo エントリを、別文書になった復元後の敷地へ適用すると意味が破綻するため
+ * （App.jsx「ファイルを開く」等に載せる場合は undo スタックのクリアが必須）。
+ */
+export function restoreSite(site, data) {
+  if (!data) return;
+  runInAction(() => {
+    site.clear();
+    for (const p of data.points ?? []) site.addPoint(p.x, p.y, p.id);
+    for (const d of data.lines ?? []) {
+      const sp = site.pointMap.get(d.startPointId);
+      const ep = site.pointMap.get(d.endPointId);
+      if (sp && ep) site.addLine(sp, ep, d.lineKind, d.id, d.redPointId ?? sp.id);
+    }
+    for (const d of data.triangles ?? []) {
+      const baseLine  = site.lineMap.get(d.baseLineId);
+      const apexPoint = site.pointMap.get(d.apexPointId);
+      if (baseLine && apexPoint) site.addTriangle(baseLine, apexPoint, d.lineKind, d.id);
+    }
+    // data.lineOrder に載っていない（破損データ等の）線分IDは lineMap には残るが、
+    // 下記の replace で lineOrder から漏れるため orderedLines（三斜タブ表示）には無音で
+    // 現れなくなる。正常系では起きない（addLine が必ず lineOrder へ push するため）——
+    // 末尾補完等のリカバリは行わず、破損データに対する現状の挙動として明示するのみ。
+    const order = data.lineOrder ?? [];
+    if (order.length > 0) site.lineOrder.replace(order.filter(id => site.lineMap.has(id)));
+    for (const h of data.history ?? []) site.history.push({ ...h });
+  });
+}
+
+// ----------------------------------------------------------------
 // ノード解決ヘルパー
 // structGraph の CLId も参照できるよう _structGraph を考慮する
 // ----------------------------------------------------------------

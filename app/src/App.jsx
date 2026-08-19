@@ -64,7 +64,8 @@ import {
   shouldSuggestWoodStructure, addCenterLineFromDialog,
   promoteCenterToGridWithUndo, demoteGridToCenterWithUndo,
 } from './transform/centerLineOps.js';
-import { ERR_CL_CONVERT_SYNC_FAILED } from './error.js';
+import { ERR_CL_CONVERT_SYNC_FAILED, ERR_SESSION_LOCKED } from './error.js';
+import { isSessionOwner } from './storage/sessionLock.js';
 import { HamburgerMenu }       from './ui/HamburgerMenu.jsx';
 import { ModeBar }             from './ui/ModeBar.jsx';
 import { FloorDrum }           from './ui/FloorDrum.jsx';
@@ -125,6 +126,8 @@ const App = observer(() => {
   const [structComposition, setStructComposition] = useState(null); // 構造モードの図面合成（自階床下材＋1つ下の階の柱）。各カテゴリの供給グラフを保持する
   // フロア切替時にモードを再ロードするためのトリガー
   const [activeFloorId,   setActiveFloorId]   = useState(project.activePlaneId);
+  // 排他セッションロック（storage/sessionLock.js）: 別タブが編集セッションを保持している場合 true。
+  const [lockedOut,       setLockedOut]       = useState(false);
   // 上階ビュー: 直下階の階段を peek して上階表現で描くための解決済みエントリ。
   // null=未解決（初回マウント・階/モード切替直後で peek 未完了）、配列=解決済み（空配列含む）。
   // 2a壁クリップ（stairUnderClips）の中間階ガードは null の間、安全側で判定不能扱いにする
@@ -180,7 +183,11 @@ const App = observer(() => {
   // 起動直後の1回限りの同期はその経路の外（switchFloor系のどの関数も未実行の時点）なので安全。
   useEffect(() => {
     let cancelled = false;
-    bootReady.then(() => { if (!cancelled) setActiveFloorId(project.activePlaneId); }).catch(console.error);
+    bootReady.then(() => {
+      if (cancelled) return;
+      setActiveFloorId(project.activePlaneId);
+      setLockedOut(!isSessionOwner());
+    }).catch(console.error);
     return () => { cancelled = true; };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -266,7 +273,7 @@ const App = observer(() => {
       if (cancelled) return;
       const floorHeight = active.elevation - below.elevation; // 直下階の階高
       setUpperStairEntries(buildUpperStairPeekEntries(temp, floorHeight));
-    })();
+    })().catch(console.error); // 非オーナータブでは peek → openDB が reject する（unhandled rejection防止）
     return () => { cancelled = true; };
   }, [appMode, activeFloorId, floorSyncTick]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -288,7 +295,7 @@ const App = observer(() => {
       const temp = await floorSwapManager.peek(above, project.structGraph);
       if (cancelled) return;
       setUpperVoidCrosses(computeVoidCrosses(temp));
-    })();
+    })().catch(console.error); // 非オーナータブでは peek → openDB が reject する（unhandled rejection防止）
     return () => { cancelled = true; };
   }, [appMode, activeFloorId, floorSyncTick]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -1424,6 +1431,19 @@ const App = observer(() => {
       appMode, viewport, upperStairEntriesPeek: upperStairEntries,
       stairBreakOverhangMm: overhangMm(viewport, false), // stairEntries.js は snap.js に依存しないため、ここで算出して渡す
     });
+
+  // 排他セッションロック: 別タブが編集セッションを保持している場合、全画面案内のみ表示する
+  // （同期・マージ・read-only編集は提供しない）。全hookの後・メインreturnの直前に置く
+  // （hookより前のreturnはreact-hooks lintが落ちるため）。
+  if (lockedOut) {
+    return (
+      <ConfirmDialog
+        message={ERR_SESSION_LOCKED}
+        buttons={[{ label: '再読み込み', value: 'reload', primary: true }]}
+        onSelect={() => window.location.reload()}
+      />
+    );
+  }
 
   return (
     <>

@@ -7,11 +7,13 @@ import {
 import { floorSwapManager } from './storage/FloorSwapManager.js';
 import {
   deleteFloor as dbDeleteFloor, clearAllStores, loadFloor, savePlanesMeta, loadPlanesMeta,
+  saveSiteData, loadSiteData,
   seedFloorsFromDocument, commitFloorsToDocument,
 } from './storage/db.js';
 import { clearDirty } from './dirtyState.js';
+import { acquireSessionLock } from './storage/sessionLock.js';
 import { SpatialIndex } from './transform/SpatialIndex.js';
-import { serializePlanes, decodePlanes } from './graphSnapshot.js';
+import { serializePlanes, decodePlanes, serializeSite, decodeSite, restoreSite } from './graphSnapshot.js';
 import { reconcilePlanes } from './floorOps.js';
 import { clearLocalAutosave } from './storage/localSnapshot.js';
 
@@ -153,6 +155,17 @@ async function restorePlanesFromIDB() {
 }
 
 /**
+ * 敷地（project.site）を IndexedDB から復元する。
+ * 保存文書が無ければ何もせず、起動時の初期状態（空の Site）のままにする。
+ * 不変条件: bootReady 以外から呼んではならない（restoreSite 参照）。
+ */
+async function restoreSiteFromIDB() {
+  const bytes = await loadSiteData(savedProjectId);
+  if (!bytes) return; // 文書なし
+  restoreSite(project.site, decodeSite(bytes));
+}
+
+/**
  * 起動時IDB初期化の完了を表すPromise。App.jsx がマウント時に一度だけ購読し、
  * 完了後の project.activePlaneId（restorePlanesFromIDB が差し替え得る）を
  * React state（activeFloorId）へ反映する（QA Finding 1）。
@@ -162,6 +175,9 @@ async function restorePlanesFromIDB() {
  * この行があっても bootReady 自体を await/`.then`する側の rejection 伝播は妨げられない）。
  */
 export const bootReady = (async () => {
+  // 排他セッションロック（storage/sessionLock.js）: 取得できなければこのタブは非セッション
+  // ——IDB の clearAllStores/seed/setup/restore/activate を一切実行しない。
+  if (!(await acquireSessionLock())) return;
   if (!localStorage.getItem(SAVED_FLAG_KEY)) {
     await clearAllStores();
   } else {
@@ -174,7 +190,9 @@ export const bootReady = (async () => {
   // 順序不変条件: 通り芯の後・フロアの activate 前に plane 一覧を復元すること。
   // activate は project.activePlane/activeGraph（復元後のアクティブ階）を読む。
   await restorePlanesFromIDB();
+  await restoreSiteFromIDB();
   await floorSwapManager.activate(project.activePlane, project.activeGraph);
+  floorSwapManager.startSiteDirtyTracking(project.site);
 })();
 bootReady.catch(console.error);
 
@@ -294,6 +312,8 @@ export async function saveToIDB() {
   await floorSwapManager.saveNow(activePlane, activeGraph, project.structGraph, project.structuralInfo, savedProjectId, project.memberGroupLedger);
   // ③ plane一覧のメタデータ
   await savePlanesMeta(savedProjectId, serializePlanes(project));
+  // ③.5 敷地（project.site）
+  await saveSiteData(savedProjectId, serializeSite(project.site));
   // ④ floors（作業領域）の現在値を保存ドキュメント（savedFloors）へ確定コピー。
   //    project.planeMap に無い（削除済みの）階は savedFloors からも消える。
   await commitFloorsToDocument([...project.planeMap.keys()]);

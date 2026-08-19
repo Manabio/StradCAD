@@ -25,7 +25,7 @@ const SIDE_DEC     = ['top', 'bottom', 'left', 'right'];
 // フィールドインデックス定数
 // ================================================================
 
-// GraphSnapshot (root): 35 フィールド
+// GraphSnapshot (root): 48 フィールド
 const GS = {
   CLS: 0, PTS: 1, WALLS: 2, DIAGS: 3, VLINES: 4, HLINES: 5, ARCS: 6, CIRCS: 7, DIMS: 8, ROOMS: 9, ROOM_ORDER: 10,
   // 11 は旧 INTERIOR_WALL_PANEL（内壁面材の per-floor 設定。部屋の壁材へ移行し廃止。slot 予約）
@@ -60,6 +60,8 @@ const GS = {
   EXCLUDED_WALL_BEAM_AXES: 44,
   // plane一覧（全階・検討・屋根平面のメタデータ）。project 単位の blob のみで使用
   PLANES: 45, ACTIVE_PLANE_ID: 46,
+  // 敷地（project.site）。project 単位の blob のみで使用（per-floor blob では常に不在）
+  SITE: 47,
 };
 
 // Stair: 15 フィールド
@@ -149,6 +151,23 @@ const PLN = {
   ID: 0, ELEV: 1, NAME: 2, START_FLOOR: 3, STORIES: 4,
   IS_ALT: 5, REF_ID: 6, ALT_INDEX: 7, IS_ROOF: 8, ROOF_FOR: 9,
 };
+
+// Site（敷地図全体）: 5 フィールド
+const SITE = { POINTS: 0, LINES: 1, TRIANGLES: 2, LINE_ORDER: 3, HISTORY: 4 };
+// SiteLine（敷地線分）: 5 フィールド
+const SLN = { ID: 0, START_PT: 1, END_PT: 2, KIND: 3, RED_PT: 4 };
+// SiteTriangle（三斜の三角形）: 4 フィールド
+const STRI = { ID: 0, BASE_LINE: 1, APEX_PT: 2, KIND: 3 };
+// SiteHistoryStep（三斜の作成手順）: 13 フィールド
+// TYPE: int8 0=base/1=triangle。base ステップは LINE_ID/LENGTH のみ、triangle ステップは残りを使用
+const SHS = {
+  TYPE: 0, LINE_ID: 1, LENGTH: 2, BASE_LINE_ID: 3, RED_LINE_ID: 4, RED_LEN: 5, RED_KIND: 6,
+  BLUE_LINE_ID: 7, BLUE_LEN: 8, BLUE_KIND: 9, TRIANGLE_ID: 10, TRIANGLE_KIND: 11, SIDE: 12,
+};
+
+// SiteLineKind 列挙値エンコード（core/constants.js の SiteLineKind と1対1）
+const SITE_KIND_ENC = { boundary: 0, road: 1, survey: 2, roadWidth: 3, other: 4 };
+const SITE_KIND_DEC = ['boundary', 'road', 'survey', 'roadWidth', 'other'];
 
 // Opening: 25 フィールド（開口 — 建具・窓）
 const OP = {
@@ -674,6 +693,76 @@ function writePlane(b, p) {
   b.addFieldFloat64(PLN.ALT_INDEX,   p.altIndex ?? 0, 0.0);
   b.addFieldInt8(PLN.IS_ROOF,        p.isRoofPlane ? 1 : 0, 0);
   b.addFieldOffset(PLN.ROOF_FOR,     sRoofFor, 0);
+  return b.endObject();
+}
+
+function writeSiteLine(b, l) {
+  const sId  = b.createString(l.id);
+  const sSp  = b.createString(l.startPointId);
+  const sEp  = b.createString(l.endPointId);
+  const sRed = b.createString(l.redPointId ?? l.startPointId);
+
+  b.startObject(5);
+  b.addFieldOffset(SLN.ID,       sId,  0);
+  b.addFieldOffset(SLN.START_PT, sSp,  0);
+  b.addFieldOffset(SLN.END_PT,   sEp,  0);
+  b.addFieldInt8(SLN.KIND,       SITE_KIND_ENC[l.lineKind] ?? 2, 0);
+  b.addFieldOffset(SLN.RED_PT,   sRed, 0);
+  return b.endObject();
+}
+
+function writeSiteTriangle(b, t) {
+  const sId   = b.createString(t.id);
+  const sBase = b.createString(t.baseLineId);
+  const sApex = b.createString(t.apexPointId);
+
+  b.startObject(4);
+  b.addFieldOffset(STRI.ID,        sId,   0);
+  b.addFieldOffset(STRI.BASE_LINE, sBase, 0);
+  b.addFieldOffset(STRI.APEX_PT,   sApex, 0);
+  b.addFieldInt8(STRI.KIND,        SITE_KIND_ENC[t.lineKind] ?? 2, 0);
+  return b.endObject();
+}
+
+function writeSiteHistoryStep(b, h) {
+  const isTriangle    = h.type === 'triangle';
+  const sLineId       = b.createString(h.lineId       ?? '');
+  const sBaseLineId   = b.createString(h.baseLineId   ?? '');
+  const sRedLineId    = b.createString(h.redLineId    ?? '');
+  const sBlueLineId   = b.createString(h.blueLineId   ?? '');
+  const sTriangleId   = b.createString(h.triangleId   ?? '');
+
+  b.startObject(13);
+  b.addFieldInt8(SHS.TYPE,          isTriangle ? 1 : 0, 0);
+  b.addFieldOffset(SHS.LINE_ID,     sLineId, 0);
+  b.addFieldFloat64(SHS.LENGTH,     h.length ?? 0, 0.0);
+  b.addFieldOffset(SHS.BASE_LINE_ID, sBaseLineId, 0);
+  b.addFieldOffset(SHS.RED_LINE_ID, sRedLineId, 0);
+  b.addFieldFloat64(SHS.RED_LEN,    h.redLen ?? 0, 0.0);
+  b.addFieldInt8(SHS.RED_KIND,      SITE_KIND_ENC[h.redKind] ?? 2, 0);
+  b.addFieldOffset(SHS.BLUE_LINE_ID, sBlueLineId, 0);
+  b.addFieldFloat64(SHS.BLUE_LEN,   h.blueLen ?? 0, 0.0);
+  b.addFieldInt8(SHS.BLUE_KIND,     SITE_KIND_ENC[h.blueKind] ?? 2, 0);
+  b.addFieldOffset(SHS.TRIANGLE_ID, sTriangleId, 0);
+  b.addFieldInt8(SHS.TRIANGLE_KIND, SITE_KIND_ENC[h.triangleLineKind] ?? 2, 0);
+  b.addFieldInt8(SHS.SIDE,          h.side < 0 ? -1 : 1, 0);
+  return b.endObject();
+}
+
+function writeSite(b, site) {
+  if (!site) return 0;
+  const pointsVec    = writeVec(b, site.points    ?? [], writePT);
+  const linesVec     = writeVec(b, site.lines     ?? [], writeSiteLine);
+  const trianglesVec = writeVec(b, site.triangles ?? [], writeSiteTriangle);
+  const lineOrderVec = writeStrVec(b, site.lineOrder ?? []);
+  const historyVec   = writeVec(b, site.history   ?? [], writeSiteHistoryStep);
+
+  b.startObject(5);
+  b.addFieldOffset(SITE.POINTS,     pointsVec,    0);
+  b.addFieldOffset(SITE.LINES,      linesVec,     0);
+  b.addFieldOffset(SITE.TRIANGLES,  trianglesVec, 0);
+  b.addFieldOffset(SITE.LINE_ORDER, lineOrderVec, 0);
+  b.addFieldOffset(SITE.HISTORY,    historyVec,   0);
   return b.endObject();
 }
 
@@ -1281,6 +1370,60 @@ function readPlane(bb, tablePos) {
   };
 }
 
+function readSiteLine(bb, tablePos) {
+  const r = makeReader(bb, tablePos);
+  return {
+    id:           r.str(SLN.ID),
+    startPointId: r.str(SLN.START_PT),
+    endPointId:   r.str(SLN.END_PT),
+    lineKind:     SITE_KIND_DEC[r.i8(SLN.KIND)] ?? 'survey',
+    redPointId:   r.str(SLN.RED_PT) || null,
+  };
+}
+
+function readSiteTriangle(bb, tablePos) {
+  const r = makeReader(bb, tablePos);
+  return {
+    id:          r.str(STRI.ID),
+    baseLineId:  r.str(STRI.BASE_LINE),
+    apexPointId: r.str(STRI.APEX_PT),
+    lineKind:    SITE_KIND_DEC[r.i8(STRI.KIND)] ?? 'survey',
+  };
+}
+
+function readSiteHistoryStep(bb, tablePos) {
+  const r = makeReader(bb, tablePos);
+  const isTriangle = r.i8(SHS.TYPE) === 1;
+  if (!isTriangle) {
+    return { type: 'base', lineId: r.str(SHS.LINE_ID), length: r.f64(SHS.LENGTH) };
+  }
+  return {
+    type:             'triangle',
+    baseLineId:       r.str(SHS.BASE_LINE_ID),
+    redLineId:        r.str(SHS.RED_LINE_ID),
+    redLen:           r.f64(SHS.RED_LEN),
+    redKind:          SITE_KIND_DEC[r.i8(SHS.RED_KIND)] ?? 'survey',
+    blueLineId:       r.str(SHS.BLUE_LINE_ID),
+    blueLen:          r.f64(SHS.BLUE_LEN),
+    blueKind:         SITE_KIND_DEC[r.i8(SHS.BLUE_KIND)] ?? 'survey',
+    triangleId:       r.str(SHS.TRIANGLE_ID),
+    triangleLineKind: SITE_KIND_DEC[r.i8(SHS.TRIANGLE_KIND)] ?? 'survey',
+    side:             r.i8(SHS.SIDE) < 0 ? -1 : 1,
+  };
+}
+
+function readSite(bb, tablePos) {
+  if (!tablePos) return null;
+  const r = makeReader(bb, tablePos);
+  return {
+    points:    r.vec(SITE.POINTS, readPT),
+    lines:     r.vec(SITE.LINES, readSiteLine),
+    triangles: r.vec(SITE.TRIANGLES, readSiteTriangle),
+    lineOrder: r.strVec(SITE.LINE_ORDER),
+    history:   r.vec(SITE.HISTORY, readSiteHistoryStep),
+  };
+}
+
 function readExteriorRow(bb, tablePos) {
   const r = makeReader(bb, tablePos);
   return {
@@ -1512,8 +1655,9 @@ export function encode(snapshot) {
   const sFloorBacking = b.createString(snapshot.floorBacking       ?? '');
   const sStructureOverride = b.createString(snapshot.structureOverride ?? '');
   const structuralInfoOff  = writeStructuralInfo(b, snapshot.structuralInfo);
+  const siteOff = writeSite(b, snapshot.site);
 
-  b.startObject(47);
+  b.startObject(48);
   b.addFieldOffset(GS.CLS,        clVec,        0);
   b.addFieldOffset(GS.PTS,        ptVec,        0);
   b.addFieldOffset(GS.WALLS,      wallVec,      0);
@@ -1560,6 +1704,7 @@ export function encode(snapshot) {
   b.addFieldOffset(GS.KNEE_DROP_WALLS,       kneeDropWallVec,        0);
   b.addFieldOffset(GS.PLANES,                planesVec,              0);
   b.addFieldOffset(GS.ACTIVE_PLANE_ID,       sActivePlaneId,         0);
+  b.addFieldOffset(GS.SITE,                  siteOff,                0);
   const root = b.endObject();
 
   b.finish(root);
@@ -1622,5 +1767,6 @@ export function decode(bytes) {
     kneeDropWalls:       r.vec(GS.KNEE_DROP_WALLS,       readKneeDropWall),
     planes:              r.vec(GS.PLANES, readPlane),
     activePlaneId:       r.str(GS.ACTIVE_PLANE_ID) || null,
+    site:                readSite(bb, r.nested(GS.SITE)),
   };
 }

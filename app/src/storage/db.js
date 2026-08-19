@@ -4,7 +4,8 @@
  * データベース:  strad  (バージョン 4)
  * オブジェクトストア:
  *   floors      — keyPath: planeId — フロアごとの FlatBuffers バイナリ（セッション作業領域）
- *   projects    — keyPath: projectId — 通り芯（全階共通）の FlatBuffers バイナリ
+ *   projects    — keyPath: projectId — 通り芯（全階共通）の FlatBuffers バイナリ。
+ *                 別レコード（`${projectId}:planes`/`${projectId}:site`）で plane一覧・敷地も同ストアに同居する
  *   savedFloors — keyPath: planeId — 明示保存された floors のスナップショット（保存ドキュメント本体）
  *
  * 公開 API:
@@ -16,12 +17,16 @@
  *   loadProject(projectId)          → Promise<Uint8Array | null>
  *   savePlanesMeta(projectId, bytes) → Promise<void>   （projects ストアの別レコード。キー: `${projectId}:planes`）
  *   loadPlanesMeta(projectId)        → Promise<Uint8Array | null>
+ *   saveSiteData(projectId, bytes)   → Promise<void>   （projects ストアの別レコード。キー: `${projectId}:site`）
+ *   loadSiteData(projectId)          → Promise<Uint8Array | null>
  *   seedFloorsFromDocument()         → Promise<void>   （floorsをclear→savedFloors全件をfloorsへput）
  *   commitFloorsToDocument(planeIds) → Promise<void>   （planeIds分をsavedFloorsへ反映＋含まれない分を削除）
  *   clearAllStores()                → Promise<void>
  */
 
 import { computeSavedFloorDiff } from './floorDocumentDiff.js';
+import { isSessionOwner } from './sessionLock.js';
+import { ERR_SESSION_LOCKED } from '../error.js';
 
 const DB_NAME    = 'strad';
 const DB_VERSION = 4;
@@ -35,6 +40,12 @@ const STORE_SAVED_FLOORS = 'savedFloors';
 let _dbPromise = null;
 
 function openDB() {
+  // 排他セッションロック（storage/sessionLock.js）を持たないタブは IDB を open しない。
+  // isSessionOwner() は pending（起動直後の未判定窓）を通す——この窓に openDB へ到達する
+  // 経路が無いことが前提（store.js の bootReady が acquireSessionLock 完了後にしか
+  // IDB アクセスを開始しないため）。blocked 確定後は全公開関数がこの openDB() 経由なので
+  // この1箇所で読み書きすべて塞がる。
+  if (!isSessionOwner()) throw new Error(ERR_SESSION_LOCKED);
   if (_dbPromise) return _dbPromise;
 
   _dbPromise = new Promise((resolve, reject) => {
@@ -198,6 +209,39 @@ export async function loadPlanesMeta(projectId) {
     }
     const tx  = db.transaction(STORE_PROJECTS, 'readonly');
     const req = tx.objectStore(STORE_PROJECTS).get(planesKey(projectId));
+    req.onsuccess = (e) => resolve(e.target.result?.bytes ?? null);
+    req.onerror   = (e) => reject(e.target.error);
+  });
+}
+
+// ----------------------------------------------------------------
+// 敷地（project.site）— projects ストアの別レコード
+// 内部キーは projectId とは衝突しない `${projectId}:site` を使う（同一ストア・別レコード）。
+// ----------------------------------------------------------------
+
+function siteKey(projectId) {
+  return `${projectId}:site`;
+}
+
+export async function saveSiteData(projectId, bytes) {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const tx  = db.transaction(STORE_PROJECTS, 'readwrite');
+    const req = tx.objectStore(STORE_PROJECTS).put({ projectId: siteKey(projectId), bytes });
+    req.onsuccess = () => resolve();
+    req.onerror   = (e) => reject(e.target.error);
+  });
+}
+
+export async function loadSiteData(projectId) {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    if (!db.objectStoreNames.contains(STORE_PROJECTS)) {
+      resolve(null);
+      return;
+    }
+    const tx  = db.transaction(STORE_PROJECTS, 'readonly');
+    const req = tx.objectStore(STORE_PROJECTS).get(siteKey(projectId));
     req.onsuccess = (e) => resolve(e.target.result?.bytes ?? null);
     req.onerror   = (e) => reject(e.target.error);
   });

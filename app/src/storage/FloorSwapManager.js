@@ -19,6 +19,10 @@
  *   setupStructGraph(structGraph, structuralInfo, projectId, ledger)
  *                                    — IDB から通り芯・構造情報・部材グループ台帳を復元 + auto-save 開始
  *   disposeStructGraph()             — 通り芯・構造情報 auto-save 停止
+ *
+ * ── 敷地（project.site）dirty追跡 ──
+ *   startSiteDirtyTracking(site)     — 敷地の変更を markDirty() する autorun を開始（保存自体は行わない）
+ *   disposeSiteDirtyTracking()       — 上記 autorun を停止
  */
 
 import { autorun } from 'mobx';
@@ -32,6 +36,7 @@ export class FloorSwapManager {
   _structCleanup = null;   // 通り芯 auto-save cleanup fn
   _peekCleanup = null;     // 編集可能peek（下階）の auto-save cleanup fn（disposeまで行う）
   _peekFlush   = null;     // 編集可能peek（下階）の保留中デバウンス保存だけを確定するfn（disposeしない）
+  _siteCleanup = null;     // 敷地（project.site）dirty追跡 cleanup fn
 
   // ----------------------------------------------------------------
   // フロア操作
@@ -68,6 +73,7 @@ export class FloorSwapManager {
     for (const cleanup of this._cleanups.values()) cleanup();
     this._cleanups.clear();
     this.disposeStructGraph();
+    this.disposeSiteDirtyTracking();
   }
 
   // ----------------------------------------------------------------
@@ -213,6 +219,39 @@ export class FloorSwapManager {
     });
 
     this._structCleanup = () => dispose();
+  }
+
+  // ----------------------------------------------------------------
+  // 敷地（project.site）dirty追跡
+  //
+  // 敷地は project.site として独立した永続化チャネル（graphSnapshot.js serializeSite）を持つが、
+  // 書き込みは saveToIDB（明示保存）でのみ行う。ここでは「敷地編集だけのセッションで
+  // beforeunload 警告が出ず無警告消失する」のを防ぐため、_startStructAutoSave と同じ
+  // initialized ガード方式で markDirty() のみ行う（構造部材の前例と同じ）。
+  // ----------------------------------------------------------------
+
+  startSiteDirtyTracking(site) {
+    this.disposeSiteDirtyTracking();
+    let initialized = false;
+
+    const dispose = autorun(() => {
+      void site.pointMap.size; void site.lineMap.size; void site.triangleMap.size;
+      void site.lineOrder.length; void site.history.length;
+      for (const p of site.pointMap.values())    { void p.x; void p.y; }
+      for (const l of site.lineMap.values())     { void l.lineKind; }
+      for (const t of site.triangleMap.values()) { void t.lineKind; }
+
+      if (!initialized) { initialized = true; return; }
+
+      markDirty();
+    });
+
+    this._siteCleanup = () => dispose();
+  }
+
+  disposeSiteDirtyTracking() {
+    this._siteCleanup?.();
+    this._siteCleanup = null;
   }
 
   // ----------------------------------------------------------------

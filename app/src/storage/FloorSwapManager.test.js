@@ -11,8 +11,10 @@
 // ことだけを検証する。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Plane, PlanGraph } from '../core.js';
+import { runInAction } from 'mobx';
+import { Plane, PlanGraph, Site, SiteLineKind } from '../core.js';
 import { FloorSwapManager } from './FloorSwapManager.js';
+import { isDirty, clearDirty } from '../dirtyState.js';
 
 function makeGraph(planeId = 'p1') {
   const plane = new Plane(planeId, 0, `${planeId}階`, 1, 1);
@@ -59,4 +61,99 @@ test('flushEditablePeek: 保留中のデバウンス保存があればsaveFloor�
   // 直後のstopEditablePeekは保留分の再送を試みず正常終了する）。
   assert.notEqual(mgr._peekCleanup, null);
   await assert.doesNotReject(mgr.stopEditablePeek());
+});
+
+// ----------------------------------------------------------------
+// startSiteDirtyTracking/disposeSiteDirtyTracking（敷地dirty追跡）
+//
+// mobx（autorun）+ core/site.js（Site）+ dirtyState.js（markDirty/isDirty）だけで完結し、
+// indexedDB を経由しないため node:test 環境で直接検証できる。dirtyState.js はモジュール
+// スコープの状態（_dirty）を持つため、各testは冒頭で clearDirty() して前testの汚染を断つ。
+// ----------------------------------------------------------------
+
+test('startSiteDirtyTracking: 開始直後（初回autorunの同期実行）はmarkDirtyしない', () => {
+  clearDirty();
+  const mgr  = new FloorSwapManager();
+  const site = new Site();
+
+  mgr.startSiteDirtyTracking(site);
+
+  assert.equal(isDirty(), false, '初回autorun実行はinitializedフラグを立てるだけでmarkDirtyしない');
+  mgr.disposeSiteDirtyTracking();
+});
+
+test('startSiteDirtyTracking: 点の座標だけが動く編集（辺長編集相当）でmarkDirtyする', () => {
+  clearDirty();
+  const mgr  = new FloorSwapManager();
+  const site = new Site();
+  const pt   = site.addPoint(0, 0);
+
+  mgr.startSiteDirtyTracking(site);
+  assert.equal(isDirty(), false, '前提: 開始直後はdirtyでない');
+
+  runInAction(() => { pt.x = 100; });
+
+  assert.equal(isDirty(), true, '点のx座標変更（p.x観測）でmarkDirtyされる（editSiteLineLength等の辺長編集相当）');
+  mgr.disposeSiteDirtyTracking();
+});
+
+test('startSiteDirtyTracking: lineKindだけが変わる編集でmarkDirtyする', () => {
+  clearDirty();
+  const mgr  = new FloorSwapManager();
+  const site = new Site();
+  const sp   = site.addPoint(0, 0);
+  const ep   = site.addPoint(1000, 0);
+  const line = site.addLine(sp, ep, SiteLineKind.SURVEY);
+
+  mgr.startSiteDirtyTracking(site);
+  assert.equal(isDirty(), false, '前提: 開始直後はdirtyでない');
+
+  runInAction(() => { line.lineKind = SiteLineKind.BOUNDARY; });
+
+  assert.equal(isDirty(), true, 'lineKind変更（l.lineKind観測）でmarkDirtyされる（cycleSiteLineKind相当）');
+  mgr.disposeSiteDirtyTracking();
+});
+
+test('startSiteDirtyTracking: history.push（三角形確定相当）でmarkDirtyする', () => {
+  clearDirty();
+  const mgr  = new FloorSwapManager();
+  const site = new Site();
+
+  mgr.startSiteDirtyTracking(site);
+  assert.equal(isDirty(), false, '前提: 開始直後はdirtyでない');
+
+  runInAction(() => { site.history.push({ type: 'base', lineId: 'dummy', length: 1000 }); });
+
+  assert.equal(isDirty(), true, 'history.length観測でmarkDirtyされる（confirmSiteTriangle等の三角形確定相当）');
+  mgr.disposeSiteDirtyTracking();
+});
+
+test('【失敗系】startSiteDirtyTracking: disposeSiteDirtyTracking後は変更してもmarkDirtyしない', () => {
+  clearDirty();
+  const mgr  = new FloorSwapManager();
+  const site = new Site();
+  const pt   = site.addPoint(0, 0);
+
+  mgr.startSiteDirtyTracking(site);
+  mgr.disposeSiteDirtyTracking();
+
+  runInAction(() => { pt.x = 999; });
+
+  assert.equal(isDirty(), false, 'disposeされたautorunは変更を観測しないためmarkDirtyされない');
+});
+
+test('startSiteDirtyTracking: 二重呼び出しでautorunが二重登録されない（2回呼び→1回dispose→変更→isDirty()===false）', () => {
+  clearDirty();
+  const mgr  = new FloorSwapManager();
+  const site = new Site();
+  const pt   = site.addPoint(0, 0);
+
+  mgr.startSiteDirtyTracking(site);
+  mgr.startSiteDirtyTracking(site); // 2回目（二重登録されていれば2本のautorunが生きてしまう）
+
+  mgr.disposeSiteDirtyTracking(); // 1回のdisposeで完全停止するはず
+
+  runInAction(() => { pt.x = 500; });
+
+  assert.equal(isDirty(), false, '二重登録されていれば1回のdisposeでは止まらずmarkDirtyされてしまう（多重登録ガードの検証）');
 });

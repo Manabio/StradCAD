@@ -1,7 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Plane, PlanGraph, CenterLineType, Discipline, OpeningCategory, Project } from './core.js';
-import { serializeGraph, restoreGraph, serializeStructCLs, restoreStructCLs, serializePlanes, decodePlanes } from './graphSnapshot.js';
+import { Plane, PlanGraph, CenterLineType, Discipline, OpeningCategory, Project, Site, SiteLineKind } from './core.js';
+import {
+  serializeGraph, restoreGraph, serializeStructCLs, restoreStructCLs, serializePlanes, decodePlanes,
+  serializeSite, decodeSite, restoreSite,
+} from './graphSnapshot.js';
+import { editSiteLineLength } from './transform/siteEdit.js';
 
 // wallBeamAxes.test.js と同じ方針: ダックタイピングでは effectiveValue 等の実挙動を
 // 再現できないため、実 core.js（Plane/PlanGraph）を使う。
@@ -422,4 +426,198 @@ test('decodePlanes: 不正なバイト列（他データの断片）を渡して
   const { planes, activePlaneId } = decodePlanes(garbage);
   assert.deepEqual(planes, []);
   assert.equal(activePlaneId, null);
+});
+
+// ---- 敷地（project.site）の FlatBuffers 往復（serializeSite/decodeSite/restoreSite）----
+
+test('serializeSite → restoreSite: 底辺+三角形1個の往復（id・座標・lineKind・redPointIdまで一致、実体同一性も保つ）', () => {
+  const site = new Site();
+  const sp = site.addPoint(0, 0);
+  const ep = site.addPoint(1000, 0);
+  // redPointId をあえて startPointId と異なる endPoint 側に設定（RED_PT の書き込みミス検出用）
+  const baseLine = site.addLine(sp, ep, SiteLineKind.SURVEY, undefined, ep.id);
+  site.history.push({ type: 'base', lineId: baseLine.id, length: baseLine.length });
+
+  const apexPt   = site.addPoint(640, 480);
+  const tri       = site.addTriangle(baseLine, apexPt, SiteLineKind.BOUNDARY);
+  const redLine   = site.addLine(sp, apexPt, SiteLineKind.BOUNDARY, undefined, sp.id);
+  const blueLine  = site.addLine(ep, apexPt, SiteLineKind.ROAD,     undefined, ep.id);
+  site.history.push({
+    type: 'triangle', baseLineId: baseLine.id,
+    redLineId: redLine.id, redLen: 800, redKind: SiteLineKind.BOUNDARY,
+    blueLineId: blueLine.id, blueLen: 600, blueKind: SiteLineKind.ROAD,
+    triangleId: tri.id, triangleLineKind: SiteLineKind.BOUNDARY, side: 1,
+  });
+
+  const bytes = serializeSite(site);
+  const data  = decodeSite(bytes);
+  const restored = new Site();
+  restoreSite(restored, data);
+
+  assert.equal(restored.points.length, 3);
+  assert.equal(restored.lines.length, 3);
+  assert.equal(restored.triangles.length, 1);
+  assert.equal(restored.lineOrder.length, 3);
+  assert.equal(restored.history.length, 2);
+
+  const rBase = restored.lineMap.get(baseLine.id);
+  assert.ok(rBase);
+  assert.equal(rBase.lineKind, SiteLineKind.SURVEY);
+  assert.equal(rBase.redPointId, ep.id, 'redPointId(endPoint側)がstartPointIdへ化けずに保持される');
+  assert.equal(rBase.startPoint, restored.pointMap.get(sp.id), '実体同一性: startPointは復元後pointMapの同一オブジェクト');
+  assert.equal(rBase.endPoint,   restored.pointMap.get(ep.id));
+
+  const rTri = restored.triangleMap.get(tri.id);
+  assert.ok(rTri);
+  assert.equal(rTri.apexPoint.x, 640);
+  assert.equal(rTri.apexPoint.y, 480);
+  assert.equal(rTri.lineKind, SiteLineKind.BOUNDARY);
+  assert.equal(rTri.baseLine, restored.lineMap.get(baseLine.id), '実体同一性: baseLineは復元後lineMapの同一オブジェクト');
+
+  assert.deepEqual([...restored.lineOrder], [baseLine.id, redLine.id, blueLine.id]);
+
+  assert.equal(restored.history[0].type, 'base');
+  assert.equal(restored.history[0].lineId, baseLine.id);
+  assert.equal(restored.history[0].length, 1000);
+  assert.equal(restored.history[1].type, 'triangle');
+  assert.equal(restored.history[1].redLineId, redLine.id);
+  assert.equal(restored.history[1].redLen, 800);
+  assert.equal(restored.history[1].blueLineId, blueLine.id);
+  assert.equal(restored.history[1].side, 1);
+});
+
+test('serializeSite → restoreSite: 復元後に editSiteLineLength(本番経路) が編集を継続できる', () => {
+  const site = new Site();
+  const sp = site.addPoint(0, 0);
+  const ep = site.addPoint(1000, 0);
+  const baseLine = site.addLine(sp, ep, SiteLineKind.SURVEY);
+  site.history.push({ type: 'base', lineId: baseLine.id, length: baseLine.length });
+
+  const bytes = serializeSite(site);
+  const restored = new Site();
+  restoreSite(restored, decodeSite(bytes));
+
+  const rLine = restored.lines[0];
+  const result = editSiteLineLength(restored, rLine.id, 2000);
+
+  assert.equal(result.ok, true, '復元データでも辺長編集が本番経路（editSiteLineLength）で継続できる');
+  assert.equal(rLine.endPoint.x, 2000);
+  assert.equal(restored.history[0].length, 2000);
+});
+
+test('serializeSite → restoreSite: side=-1の三角形往復でapex座標とhistory.sideの符号が保持される', () => {
+  const site = new Site();
+  const sp = site.addPoint(0, 0);
+  const ep = site.addPoint(1000, 0);
+  const baseLine = site.addLine(sp, ep, SiteLineKind.SURVEY);
+  site.history.push({ type: 'base', lineId: baseLine.id, length: baseLine.length });
+
+  const apexPt  = site.addPoint(500, -400); // 底辺の反対側（負のside相当）
+  const tri      = site.addTriangle(baseLine, apexPt, SiteLineKind.SURVEY);
+  const redLine  = site.addLine(sp, apexPt, SiteLineKind.SURVEY, undefined, sp.id);
+  const blueLine = site.addLine(ep, apexPt, SiteLineKind.SURVEY, undefined, ep.id);
+  site.history.push({
+    type: 'triangle', baseLineId: baseLine.id,
+    redLineId: redLine.id, redLen: redLine.length, redKind: SiteLineKind.SURVEY,
+    blueLineId: blueLine.id, blueLen: blueLine.length, blueKind: SiteLineKind.SURVEY,
+    triangleId: tri.id, triangleLineKind: SiteLineKind.SURVEY, side: -1,
+  });
+
+  const bytes = serializeSite(site);
+  const restored = new Site();
+  restoreSite(restored, decodeSite(bytes));
+
+  const rTri = restored.triangleMap.get(tri.id);
+  assert.equal(rTri.apexPoint.x, 500, 'apex座標のxが復元前と一致');
+  assert.equal(rTri.apexPoint.y, -400, 'apex座標のyが復元前と一致');
+  assert.equal(restored.history[1].side, -1, '負のsideが符号を保ったまま復元される');
+});
+
+test('serializeSite → restoreSite: SiteLineKind全種が往復する（Object.values参照のため種別追加時に自動で対象拡大する）', () => {
+  const site = new Site();
+  const kinds = Object.values(SiteLineKind);
+  const lineIds = kinds.map((kind, i) => {
+    const sp = site.addPoint(i * 1000, 0);
+    const ep = site.addPoint(i * 1000 + 500, 0);
+    return site.addLine(sp, ep, kind).id;
+  });
+
+  const bytes = serializeSite(site);
+  const restored = new Site();
+  restoreSite(restored, decodeSite(bytes));
+
+  kinds.forEach((kind, i) => {
+    assert.equal(restored.lineMap.get(lineIds[i]).lineKind, kind);
+  });
+});
+
+test('serializeSite → restoreSite: 空siteの往復は例外なく全コレクションが空のまま', () => {
+  const site = new Site();
+  const bytes = serializeSite(site);
+  const restored = new Site();
+
+  assert.doesNotThrow(() => restoreSite(restored, decodeSite(bytes)));
+  assert.equal(restored.points.length, 0);
+  assert.equal(restored.lines.length, 0);
+  assert.equal(restored.triangles.length, 0);
+  assert.equal(restored.lineOrder.length, 0);
+  assert.equal(restored.history.length, 0);
+});
+
+// ---- 失敗系: 参照解決できない敷地線分 ----
+test('【失敗系】serializeSite → restoreSite: 参照解決できない線分（存在しないpointIdを指す）は黙って捨てられ他は無傷', () => {
+  const site = new Site();
+  const sp = site.addPoint(0, 0);
+  const ep = site.addPoint(1000, 0);
+  const goodLine = site.addLine(sp, ep, SiteLineKind.SURVEY);
+
+  const bytes = serializeSite(site);
+  const data  = decodeSite(bytes);
+  // 参照解決できない線分をデータ破損として混入（存在しないpointIdを指す）
+  data.lines.push({ id: 'bad-line', startPointId: 'missing-1', endPointId: 'missing-2', lineKind: 'survey', redPointId: 'missing-1' });
+  data.lineOrder.push('bad-line');
+
+  const restored = new Site();
+  assert.doesNotThrow(() => restoreSite(restored, data));
+
+  assert.equal(restored.lines.length, 1, '解決できない線分は捨てられ、既存の線分だけが残る');
+  assert.ok(restored.lineMap.get(goodLine.id), '既存の線分は無傷');
+  assert.equal(restored.lineMap.has('bad-line'), false);
+  assert.deepEqual([...restored.lineOrder], [goodLine.id], 'lineOrderからも黙って除外される');
+});
+
+// ---- 失敗系: lineOrderに載っていない線分（破損データ）は無音でorderedLinesから消える ----
+// 注意: data.lineOrder が全体として空（length===0）の場合は restoreSite が
+// 「復元値なし＝addLineが自然に積んだ順序を維持」と解釈するため対象外（他の正常系テストで
+// カバー済み）。ここでは lineOrder が非空のまま、特定の1本だけが欠落したケースを再現する。
+test('【失敗系】serializeSite → restoreSite: lineOrderに載っていない線分はlineMapに残るがorderedLinesに現れない', () => {
+  const site = new Site();
+  const sp1 = site.addPoint(0, 0);
+  const ep1 = site.addPoint(1000, 0);
+  const line1 = site.addLine(sp1, ep1, SiteLineKind.SURVEY);
+  const sp2 = site.addPoint(0, 1000);
+  const ep2 = site.addPoint(1000, 1000);
+  const line2 = site.addLine(sp2, ep2, SiteLineKind.SURVEY);
+
+  const bytes = serializeSite(site);
+  const data  = decodeSite(bytes);
+  // lineOrderから line1 だけを意図的に落とす（データ破損の再現。lines/points側は健全なまま、
+  // lineOrder自体は非空を維持=line2は残す）
+  data.lineOrder = data.lineOrder.filter(id => id !== line1.id);
+  assert.deepEqual(data.lineOrder, [line2.id], '前提: lineOrderはline2だけを含む（空にはしない）');
+
+  const restored = new Site();
+  restoreSite(restored, data);
+
+  assert.ok(restored.lineMap.get(line1.id), 'lineMapには残る（実体は失われない）');
+  const orderedIds = restored.orderedLines.map(l => l.id);
+  assert.equal(orderedIds.includes(line1.id), false, 'lineOrderに無いため三斜タブ表示用のorderedLinesには現れない（現状挙動の固定。末尾補完はしない）');
+  assert.deepEqual(orderedIds, [line2.id], 'lineOrderに残った線分だけがorderedLinesに現れる');
+});
+
+// ---- 失敗パス: decodeSiteへの不正バイト列 ----
+test('decodeSite: 不正なバイト列（他データの断片）を渡しても例外を投げずnullへフォールバックする', () => {
+  const garbage = new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8]);
+  assert.doesNotThrow(() => decodeSite(garbage));
+  assert.equal(decodeSite(garbage), null, 'GS.SITEフィールドが読めない＝不在扱いでnull');
 });

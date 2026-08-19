@@ -88,6 +88,7 @@ export class Site {
       removeLine:    action,
       addTriangle:   action,
       removeTriangle: action,
+      clear:         action,
     });
   }
 
@@ -136,5 +137,14 @@ export class Site {
 
   removeTriangle(id) {
     this.triangleMap.delete(id);
+  }
+
+  // 全消去（起動時の復元 restoreSite 専用。undo スタックとは無関係に実体を作り直す）
+  clear() {
+    this.pointMap.clear();
+    this.lineMap.clear();
+    this.triangleMap.clear();
+    this.lineOrder.clear();
+    this.history.clear();
   }
 }
