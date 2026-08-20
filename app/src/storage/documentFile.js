@@ -1,4 +1,4 @@
-// .strad 文書ファイル（文書全体＝全階・plane一覧・通り芯/構造情報/採番台帳・敷地）の
+// .stq 文書ファイル（文書全体＝全階・plane一覧・通り芯/構造情報/採番台帳・敷地）の
 // エンベロープ構築・パース。IndexedDB・DOM に依存しない純モジュール
 // （node:test から単体 import 可能に保つこと）。
 //
@@ -6,7 +6,7 @@
 // JSON / FlatBuffers を判別する）を変えずに、旧形式（単一グラフ FlatBuffers・旧JSONスナップ
 // ショット）と共存させるため。旧JSONスナップショットとは format キーの有無で区別する。
 
-const FORMAT  = 'strad-document';
+const FORMAT  = 'stq-document';
 const VERSION = 1;
 
 // Uint8Array → base64。大容量でも引数上限に当たらない1文字ずつの変換方式
@@ -50,7 +50,7 @@ export function isDocumentEnvelope(data) {
  * 消さないため）。
  */
 export function parseDocumentEnvelope(data) {
-  if (!isDocumentEnvelope(data)) throw new Error('strad文書ファイルではありません');
+  if (!isDocumentEnvelope(data)) throw new Error('stq文書ファイルではありません');
   if (data.version !== VERSION) throw new Error(`未対応の文書バージョンです: ${data.version}`);
   if (!Array.isArray(data.floors)) throw new Error('文書のフロアデータが不正です');
   return {

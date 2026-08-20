@@ -52,7 +52,8 @@ import { recomputeStructuralComposition, runStructuralModeSetup, reflectStructur
 import { figureBindingManager } from './figure/FigureBindingManager.js';
 import { floorSwapManager } from './storage/FloorSwapManager.js';
 import { saveFloor, loadFloor } from './storage/db.js';
-import { readLocalAutosaveRaw, parseAutosaveData, writeLocalAutosave, parseOpenedFileBytes, downloadDocumentFile } from './storage/localSnapshot.js';
+import { readLocalAutosaveRaw, parseAutosaveData, writeLocalAutosave, parseOpenedFileBytes, downloadDocumentFile, defaultDocumentFileName } from './storage/localSnapshot.js';
+import { SaveFileDialog } from './ui/SaveFileDialog.jsx';
 import { isDocumentEnvelope } from './storage/documentFile.js';
 import { SiteInfoPanel }       from './ui/SiteInfoPanel.jsx';
 import {
@@ -120,6 +121,7 @@ const App = observer(() => {
   const [floorChangeDlg, setFloorChangeDlg] = useState(null); // { planeId }
   const [showCalibration, setShowCalibration] = useState(false);
   const [showSiteDialog,  setShowSiteDialog]  = useState(false);
+  const [saveDialogDefaultName, setSaveDialogDefaultName] = useState(null); // 非null=保存ファイル名ダイアログ表示中
   const [showBuildingInfoDialog, setShowBuildingInfoDialog] = useState(false);
   const [showStructuralInfoDialog, setShowStructuralInfoDialog] = useState(false);
   const [toast,           setToast]           = useState(null); // { msg, key }
@@ -1071,14 +1073,8 @@ const App = observer(() => {
       return;
     }
     if (id === 'save') {
-      // 文書全体（全階・plane一覧・通り芯/構造情報・敷地）を IDB へ明示保存で確定し、
-      // 同じ内容を .strad 文書ファイルとしてダウンロード書き出しする（「開く」と対）
-      exportDocument()
-        .then((json) => {
-          downloadDocumentFile(json);
-          setToast({ msg: '保存しました', key: Date.now() });
-        })
-        .catch(() => setToast({ msg: '保存に失敗しました', key: Date.now() }));
+      // まずファイル名指定ダイアログを開く（確定時に handleSaveConfirm が保存を実行する）
+      setSaveDialogDefaultName(defaultDocumentFileName());
       return;
     }
     if (id === 'load') {
@@ -1100,6 +1096,21 @@ const App = observer(() => {
     if (id === 'settings') {
       setShowCalibration(true);
     }
+  }
+
+  // 保存ファイル名ダイアログの確定。文書全体（全階・plane一覧・通り芯/構造情報・敷地）を
+  // IDB へ明示保存で確定し、同じ内容を .stq 文書ファイルとしてダウンロード書き出しする（「開く」と対）
+  function handleSaveConfirm(fileName) {
+    setSaveDialogDefaultName(null);
+    exportDocument()
+      .then((json) => {
+        downloadDocumentFile(json, fileName);
+        setToast({ msg: '保存しました', key: Date.now() });
+      })
+      .catch((e) => {
+        console.error('[保存] exportDocument failed:', e);
+        setToast({ msg: '保存に失敗しました', key: Date.now() });
+      });
   }
 
   function handleFileOpen(e) {
@@ -1518,7 +1529,7 @@ const App = observer(() => {
       <input
         ref={fileInputRef}
         type="file"
-        accept=".strad,application/json"
+        accept=".stq,application/json"
         style={{ display: 'none' }}
         onChange={handleFileOpen}
       />
@@ -1836,6 +1847,14 @@ const App = observer(() => {
         <div key={toast.key} className="cl-toast" onClick={() => setToast(null)}>
           {toast.msg}
         </div>
+      )}
+
+      {saveDialogDefaultName != null && (
+        <SaveFileDialog
+          defaultName={saveDialogDefaultName}
+          onConfirm={handleSaveConfirm}
+          onCancel={() => setSaveDialogDefaultName(null)}
+        />
       )}
 
       {showCalibration && (

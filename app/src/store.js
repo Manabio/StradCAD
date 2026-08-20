@@ -328,7 +328,7 @@ export async function saveToIDB() {
 }
 
 /**
- * 文書全体（全階・plane一覧・通り芯/構造情報/採番台帳・敷地）を .strad 文書ファイル用の
+ * 文書全体（全階・plane一覧・通り芯/構造情報/採番台帳・敷地）を .stq 文書ファイル用の
  * JSON文字列（エンベロープ）にして返す。まず saveToIDB で保存ドキュメントを確定してから
  * その確定内容（savedFloors/projects）を読み戻して包む——「ファイルの中身＝次回起動で
  * 復元される内容」を常に一致させるため。
@@ -345,7 +345,7 @@ export async function exportDocument() {
 }
 
 /**
- * .strad 文書ファイル（パース済みJSONエンベロープ）の内容で保存ドキュメントを丸ごと置き換える。
+ * .stq 文書ファイル（パース済みJSONエンベロープ）の内容で保存ドキュメントを丸ごと置き換える。
  * 検証（parseDocumentEnvelope）を通してから全ストアを消去する——不正ファイルで既存文書を
  * 消さないため。in-memory への反映は行わない（呼び出し側が location.reload() で再起動し、
  * 通常のブート復元経路をそのまま使うこと。module singleton・undoスタック等の取り残しを

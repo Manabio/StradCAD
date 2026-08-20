@@ -31,14 +31,20 @@ export function writeLocalAutosave(graph) {
   localStorage.setItem(AUTOSAVE_KEY, btoa(binary));
 }
 
-// 文書ファイル（JSONエンベロープ文字列。store.js の exportDocument が構築）を
-// .strad としてダウンロード書き出しする（「開く」が読める形式）。
-export function downloadDocumentFile(json) {
-  const blob = new Blob([json], { type: 'application/json' });
-  const url = URL.createObjectURL(blob);
+// 既定の文書ファイル名（拡張子なし・保存日時入り）。保存ダイアログの初期値に使う。
+export function defaultDocumentFileName() {
   const d = new Date();
   const pad = (n) => String(n).padStart(2, '0');
-  const name = `strad-${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}.strad`;
+  return `strad-${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}`;
+}
+
+// 文書ファイル（JSONエンベロープ文字列。store.js の exportDocument が構築）を
+// .stq としてダウンロード書き出しする（「開く」が読める形式）。
+// fileName は拡張子なしでも可（.stq を補う）。省略時は既定名。
+export function downloadDocumentFile(json, fileName = defaultDocumentFileName()) {
+  const blob = new Blob([json], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const name = fileName.endsWith('.stq') ? fileName : `${fileName}.stq`;
   const a = document.createElement('a');
   a.href = url;
   a.download = name;

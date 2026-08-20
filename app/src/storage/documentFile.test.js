@@ -48,11 +48,11 @@ test('null チャネル（struct/planes/site 未保存）と空floorsもラウ�
 test('isDocumentEnvelope: 旧JSONスナップショット（formatキーなし）はfalse', () => {
   assert.equal(isDocumentEnvelope({ nodes: [], links: [] }), false);
   assert.equal(isDocumentEnvelope(null), false);
-  assert.equal(isDocumentEnvelope('strad-document'), false);
+  assert.equal(isDocumentEnvelope('stq-document'), false);
 });
 
 test('【失敗系】parseDocumentEnvelope: 文書エンベロープでなければ例外を投げる', () => {
-  assert.throws(() => parseDocumentEnvelope({ nodes: [] }), /strad文書ファイルではありません/);
+  assert.throws(() => parseDocumentEnvelope({ nodes: [] }), /stq文書ファイルではありません/);
 });
 
 test('【失敗系】parseDocumentEnvelope: 未対応バージョンは例外を投げる（既存文書を消す前に検証で弾く）', () => {
