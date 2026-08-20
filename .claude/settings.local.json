@@ -12,7 +12,9 @@
       "mcp__browser-vision__list_pages",
       "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" http://localhost:5173/)",
       "Bash(node -e ' *)",
-      "mcp__browser-vision__fill"
+      "mcp__browser-vision__fill",
+      "PowerShell(.\\deploy.ps1)",
+      "PowerShell(cd d:\\tatsuya\\dev\\strad; .\\deploy.ps1)"
     ]
   },
   "autoMemoryDirectory": "./.claude/memory",
