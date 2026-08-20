@@ -89,6 +89,10 @@ boundary.lo」で確保する（`buildRoomBand`/`buildStairBand`の`prevRightExt
 平面記号`OpeningsLayer.jsx swingSymbol`の`hingeAlong`と同じ世界アンカー）のため、世界順とローカル順が反転する面
 （`dirSign<0`。裏側から見る面もここに含まれる）では`mirrorPrimitiveX`（`elevationPrimitives.js`）で左右反転してから置く——
 反転しないと吊元・親子扉の子・レバーハンドル等の非対称要素が逆端に描かれる。
+**床に高低差がある面（部分指定の段差＝`floorSegments`）では、建具・直交壁の建具断面ともその位置の実際の床に乗せる**——
+姿図はFL=y0（帯の親FL）基準のため、開口中心位置（断面は隅x=0/run）の区間の床yへ平行移動する（`floorDyAt`）。
+親FL基準のまま置くと段差区間の建具が床から浮く／めり込む。段差をまたぐ開口は開口中心位置の区間の床を採る。
+窓の`sillHeight`もこのシフトにより「その区間の床からの高さ」になる。
 直交壁（隣・次の面）の建具が切断位置（面端）にかかる場合、`openingsReachingCorner`（隣接面自身の隅=0/runに開口スパンが届くかで判定）で
 対象を選び、`openingSectionPrimitives`が[枠(CUT)][扉(SILHOUETTE)][枠(CUT)]の3rectを面の両端の帯に描く
 （`buildRoomBand`/`buildStairBand`が`faces[(i∓1+n)%n]`をprevFace/nextFaceとしてctxに渡す）。

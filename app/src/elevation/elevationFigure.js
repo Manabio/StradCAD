@@ -500,6 +500,23 @@ export function buildFaceFigure(face, ctx) {
   // 世界順とローカル順が反転する面（dirSign<0）では左右反転してから置く——反転しないと
   // 吊元・親子扉の子・レバーハンドル等の非対称要素が逆端に描かれる（裏側から見る面も
   // dirSign が逆になるため、この同じ反転で物理的に正しい見えがかりになる）。
+  // 床に高低差がある面（部分指定の段差＝floorSegments）では、建具はその位置の実際の床に
+  // 乗せる——姿図はFL=y0（帯の親FL）基準のため、開口中心位置の区間の床yへ平行移動する。
+  // 親FL基準のまま置くと、段差区間の建具が床から浮く／めり込む（例: 親FL+100の帯で
+  // 実効FL±0の部分指定区間にあるドアが1FL+100に描かれる）。段差をまたぐ開口は
+  // 開口中心位置の区間の床を採る。
+  // 区間の同定は論理境界（segs[i].hiX）ではなく描画上の段差線（riserXAt＝床が低い側へ
+  // 半壁厚ずらした位置。床線・巾木の区間端と同じ基準）で行う——論理境界で判定すると、
+  // 境界から半壁厚以内に中心がある建具だけが「描かれた床」と別の区間に判定され浮く。
+  // どの論理区間にも入らない欠測x（floorSegmentsの隙間）は親扱い（0）にフォールバックする。
+  const drawnDeltaAt = (x) => {
+    const idx = segs.findIndex(s => x >= s.loX - 1e-6 && x <= s.hiX + 1e-6);
+    if (idx === -1) return 0;
+    if (idx > 0 && x < riserXAt(idx - 1)) return segs[idx - 1].floorDeltaMm;
+    if (idx < segs.length - 1 && x > riserXAt(idx)) return segs[idx + 1].floorDeltaMm;
+    return segs[idx].floorDeltaMm;
+  };
+  const floorDyAt = x => { const d = drawnDeltaAt(x); return d ? -d : 0; };
   const openings = openingsOnFace(face, graph);
   for (const o of openings) {
     const localX = localXOf(face, o.centerCoord);
@@ -509,7 +526,7 @@ export function buildFaceFigure(face, ctx) {
       entry, includeDims: false, includeMotionArrows: false, includeLevelLine: false,
     });
     const oriented = face.dirSign < 0 ? figurePrims.map(p => mirrorPrimitiveX(p, o.width)) : figurePrims;
-    for (const p of oriented) prims.push(translatePrimitive(p, x, 0));
+    for (const p of oriented) prims.push(translatePrimitive(p, x, floorDyAt(localX)));
 
     // 建具記号丸（項目2）: 建具の中心ではなく、姿が見える図の下（注記帯側。寸法行より図寄りの
     // 専用段=openingTagRowY）へ置く。背景透明の仕様は不変（fill指定なし）。
@@ -525,14 +542,20 @@ export function buildFaceFigure(face, ctx) {
   // 直交壁の建具が切断位置にかかる場合、その断面（枠2断面＋扉1枚）を面の両端に描く（項目3）。
   // 新仕様「開放スパン」: extendedAtLocal0/Run=true（開放スパンで延長された端）はそもそも
   // 実在する隅ではない（prevFace/nextFaceの隅共有という前提が成立しない）ため、断面を描かない。
+  // 断面も姿図と同様、その隅の実際の床（floorSegments）に乗せる（隅は両面で床を共有するため、
+  // 自面の端x=0/runの床yを使えば隣接面側の実効FLと一致する）。
   if (prevFace && !face.extendedAtLocal0) {
+    const dy = floorDyAt(0);
     for (const o of openingsReachingCorner(prevFace, graph, 'end')) {
-      prims.push(...openingSectionPrimitives(o, 0, 1, cutWeight, silhouetteWeight));
+      prims.push(...openingSectionPrimitives(o, 0, 1, cutWeight, silhouetteWeight)
+        .map(p => translatePrimitive(p, 0, dy)));
     }
   }
   if (nextFace && !face.extendedAtLocalRun) {
+    const dy = floorDyAt(run);
     for (const o of openingsReachingCorner(nextFace, graph, 'start')) {
-      prims.push(...openingSectionPrimitives(o, run, -1, cutWeight, silhouetteWeight));
+      prims.push(...openingSectionPrimitives(o, run, -1, cutWeight, silhouetteWeight)
+        .map(p => translatePrimitive(p, 0, dy)));
     }
   }
 

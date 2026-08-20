@@ -580,6 +580,99 @@ test('buildFaceFigure: 共有壁の建具は配置時のクリック側と関係
   }
 });
 
+// ---- 床の段差（floorSegments）上の建具は、その区間の実際の床に乗る ----
+// 問題: 親FL+100の帯で実効FL±0の部分指定区間（floorDeltaMm=-100）にあるドアが、
+// 帯のFL基準（y=0）のまま置かれ 1FL+100 に浮いて描かれていた。
+const STEP_SEGS = [
+  { loX: 0, hiX: 2000, floorDeltaMm: -100 }, // 部分指定区間（親より100低い＝y=+100が床）
+  { loX: 2000, hiX: 4000, floorDeltaMm: 0 },
+];
+function stepOpening(centerCoord, id = 'op-step') {
+  return {
+    id, isVertical: false, axisCL: { id: 'axisY0' }, wallSide: 1,
+    centerCoord, width: 900, height: 2000, sillHeight: null, hingeSide: -1,
+    category: OpeningCategory.FITTING, subType: 'singleSwing', fixtureType: null,
+  };
+}
+
+test('buildFaceFigure: 床が低い区間（floorDeltaMm=-100）の建具は、その区間の床（y=+100）に乗る', () => {
+  const face = makeFace();
+  const ctx = baseCtx({ graph: makeGraph({ openings: [stepOpening(1000)] }), floorSegments: STEP_SEGS });
+  const prims = buildFaceFigure(face, ctx);
+  const rect = prims.find(p => p.type === 'rect' && p.w === 900);
+  assert.ok(rect, '開口の枠rectが見つからない');
+  assert.equal(rect.y, -2000 + 100, '開口上端は区間の床基準（+100シフト）のはず');
+  assert.equal(rect.y + rect.h, 100, '開口下端はその区間の実際の床（y=+100）に接するはず');
+});
+
+test('【失敗系】buildFaceFigure: 床が親FLどおりの区間（floorDeltaMm=0）の建具は従来どおりy=0の床に乗る', () => {
+  const face = makeFace();
+  const ctx = baseCtx({ graph: makeGraph({ openings: [stepOpening(3000)] }), floorSegments: STEP_SEGS });
+  const prims = buildFaceFigure(face, ctx);
+  const rect = prims.find(p => p.type === 'rect' && p.w === 900);
+  assert.equal(rect.y, -2000);
+  assert.equal(rect.y + rect.h, 0);
+});
+
+test('【失敗系】buildFaceFigure: floorSegmentsに隙間があり開口中心がどの区間にも入らない場合は親FL基準（y=0）へフォールバックする', () => {
+  const face = makeFace();
+  const ctx = baseCtx({
+    graph: makeGraph({ openings: [stepOpening(2000, 'op-gap')] }),
+    floorSegments: [
+      { loX: 0, hiX: 1000, floorDeltaMm: -100 },
+      { loX: 3000, hiX: 4000, floorDeltaMm: -100 }, // 中央 1000..3000 が欠測
+    ],
+  });
+  const prims = buildFaceFigure(face, ctx);
+  const rect = prims.find(p => p.type === 'rect' && p.w === 900);
+  assert.equal(rect.y + rect.h, 0, '欠測xの建具は親FL基準（y=0）に乗るはず（例外も出ない）');
+});
+
+test('buildFaceFigure: 窓のsillHeightは区間の床からの高さになる（段差区間では床とともにシフト）', () => {
+  const win = {
+    id: 'op-win-fl', isVertical: false, axisCL: { id: 'axisY0' }, wallSide: 1,
+    centerCoord: 1000, width: 900, height: 900, sillHeight: 800,
+    category: OpeningCategory.WINDOW, subType: 'singleSliding', fixtureType: null,
+  };
+  const face = makeFace();
+  const ctx = baseCtx({ graph: makeGraph({ openings: [win] }), floorSegments: STEP_SEGS });
+  const prims = buildFaceFigure(face, ctx);
+  const rect = prims.find(p => p.type === 'rect' && p.w === 900);
+  assert.equal(rect.y + rect.h, -800 + 100, '窓下端は「区間の床(+100) + sill(800)」＝y=-700のはず');
+});
+
+// 区間の同定は論理境界（hiX）ではなく描画上の段差線（riserXAt＝床が低い側へ半壁厚ずらした位置）
+// 基準——境界から半壁厚以内に中心がある建具が「描かれた床」と別の区間に乗って浮かないことを固定する。
+test('buildFaceFigure: 論理境界と描画段差線の間（半壁厚の帯）にある建具は「描かれた床」の側の区間に乗る', () => {
+  // makeFaceはfaceValue=軸値のためhalfWallThicknessMmはDEFAULT(57.5)へフォールバック。
+  // 段差線は論理境界2000から低い側（delta -100側＝左）へ57.5ずれた1942.5に描かれる。
+  // 中心1970は論理的にはseg0(-100)だが、描画上は段差線より右＝床y=0の側。
+  const face = makeFace();
+  const ctx = baseCtx({ graph: makeGraph({ openings: [stepOpening(1970, 'op-band')] }), floorSegments: STEP_SEGS });
+  const prims = buildFaceFigure(face, ctx);
+  const rect = prims.find(p => p.type === 'rect' && p.w === 900);
+  assert.equal(rect.y + rect.h, 0, '描画段差線(1942.5)より右の建具は床y=0の区間に乗るはず（+100に浮かない）');
+});
+
+test('buildFaceFigure: 面端の直交壁建具断面（枠・扉の3rect）も、その隅の床に乗る', () => {
+  // prevFace（直交壁）の 'end' 側の隅に届く開口。自面の x=0 の区間は床が100低い。
+  const perpOpening = {
+    id: 'op-perp-fl', isVertical: true, axisCL: { id: 'axisX_left' }, wallSide: 1,
+    centerCoord: 1900, width: 800, height: 2000, sillHeight: null,
+    category: OpeningCategory.FITTING, subType: 'singleSwing', fixtureType: null,
+  };
+  const prevFace = makeFace({
+    axisCL: { id: 'axisX_left' }, isVertical: true, lo: 0, hi: 2000, run: 2000,
+  });
+  const face = makeFace();
+  const ctx = baseCtx({
+    graph: makeGraph({ openings: [perpOpening] }), prevFace, floorSegments: STEP_SEGS,
+  });
+  const prims = buildFaceFigure(face, ctx);
+  const sections = prims.filter(p => p.type === 'rect' && p.h === 2000 && p.y === -2000 + 100);
+  assert.equal(sections.length, 3, '断面の[枠][扉][枠]3rectが隅の床基準（+100シフト）で描かれるはず');
+});
+
 // ---- 項目2: 建具記号丸(tag)は建具の中心ではなく、寸法行より図寄りの専用段へ描かれる ----
 test('【項目2】buildFaceFigure: 建具記号丸(tag)は開口の中心ではなく、床線と壁芯間寸法行の中間の段に描かれる', () => {
   const opening = {
