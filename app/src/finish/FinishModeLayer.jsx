@@ -1,6 +1,7 @@
 import { observer } from 'mobx-react-lite';
 import { Rect, Text, Line, Group, Shape } from 'react-konva';
-import { getAllCells, gridDividerSegments, cellBoundsFromKey, cellBoundsList, roomBounds, outlineSegments } from './gridCells.js';
+import { getAllCells, gridDividerSegments, cellBoundsList, outlineSegments } from './gridCells.js';
+import { roomNameAnchor } from './roomLabel.js';
 import { computeExteriorWallSegments } from './wallGeneration.js';
 import { RoomFeature } from '@core';
 
@@ -89,35 +90,17 @@ export const FinishModeLayer = observer(({
     }
 
     if (room.name) {
-      let cx, cy, refWidth;
-      if (room.namePosition) {
-        cx = room.namePosition.x;
-        cy = room.namePosition.y;
-        const bounds = roomBounds(room.cells, graph);
-        refWidth = isFinite(bounds.x1) ? bounds.x2 - bounds.x1 : null;
-      } else {
-        let largest = null, maxArea = 0;
-        for (const key of room.cells) {
-          const b = cellBoundsFromKey(key, graph);
-          if (!b) continue;
-          const area = (b.x2 - b.x1) * (b.y2 - b.y1);
-          if (area > maxArea) { maxArea = area; largest = b; }
-        }
-        if (largest) {
-          cx = (largest.x1 + largest.x2) / 2;
-          cy = (largest.y1 + largest.y2) / 2;
-          refWidth = largest.x2 - largest.x1;
-        }
-      }
+      // アンカー算出は roomLabel.js に集約（親は部分指定に奪われていないセルから選ぶ）
+      const anchor = roomNameAnchor(room, graph);
 
-      if (cx !== undefined) {
-        const fontSize = refWidth != null
-          ? Math.max(80, Math.min(200, refWidth / 5))
+      if (anchor) {
+        const fontSize = anchor.refWidth != null
+          ? Math.max(80, Math.min(200, anchor.refWidth / 5))
           : 80;
         roomRects.push(
           <Text
             key={`t${room.id}`}
-            x={cx} y={cy}
+            x={anchor.x} y={anchor.y}
             text={room.name}
             fontSize={fontSize}
             fill={isSelected ? '#1d4ed8' : '#374151'}

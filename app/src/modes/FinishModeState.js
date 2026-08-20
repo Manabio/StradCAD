@@ -7,7 +7,8 @@ import { stairUnderRoomsOf } from '../finish/stair/stairUnderRooms.js';
 import { floorHeightAbove } from '../finish/stair/stairDimensions.js';
 import { floorSwapManager } from '../storage/FloorSwapManager.js';
 import { snapshotFinishState, pushFinishUndo, withFinishUndo } from '../finish/finishUndo.js';
-import { FINISH_FIELDS } from '../finish/roomReinterpret.js';
+import { FINISH_FIELDS, normalizePartialDominance } from '../finish/roomReinterpret.js';
+import { roomNameAnchor } from '../finish/roomLabel.js';
 import { ERR_MATERIAL_MISMATCH } from '../error.js';
 import { RoomFeature, RoomKind, applyDefaultBaseboard } from '@core';
 
@@ -524,6 +525,8 @@ export class FinishModeState {
         for (const r of overlapping) {
           if (r.id !== dominant.id) this.graph.removeRoom(r.id);
         }
+        // 付け替えた部分指定が統合後の残余より大きい場合があるため親子を正規化する
+        normalizePartialDominance(this.graph);
         // 統合はダイアログをキャンセルしても確定したまま残るため、ここで即時 push する
         pushFinishUndo(this.graph, undoBefore);
         this._openDialog(dominant.id, false, cellOrder);
@@ -576,28 +579,14 @@ export class FinishModeState {
 
   /**
    * room の「名前セル」（名前の表示アンカーを worldToCell したセルキー）。無名部屋は null（＝名前セルなし扱い）。
-   * アンカー算出は FinishModeLayer.jsx の部屋名描画ロジックと同一
-   * （room.namePosition があればその座標、なければ room.cells 中の最大面積セル中心）。
+   * アンカー算出は FinishModeLayer.jsx の部屋名描画と同じ roomNameAnchor（roomLabel.js）を使う
+   * （namePosition 明示 > 最大面積セル中心。親は部分指定に奪われていないセルから選ぶ）。
    */
   _nameCellKeyOf(room) {
     if (!room.name) return null;
-    let cx, cy;
-    if (room.namePosition) {
-      cx = room.namePosition.x;
-      cy = room.namePosition.y;
-    } else {
-      let largest = null, maxArea = 0;
-      for (const key of room.cells) {
-        const b = cellBoundsFromKey(key, this.graph);
-        if (!b) continue;
-        const area = (b.x2 - b.x1) * (b.y2 - b.y1);
-        if (area > maxArea) { maxArea = area; largest = b; }
-      }
-      if (!largest) return null;
-      cx = (largest.x1 + largest.x2) / 2;
-      cy = (largest.y1 + largest.y2) / 2;
-    }
-    const cell = worldToCell(cx, cy, this.graph);
+    const anchor = roomNameAnchor(room, this.graph);
+    if (!anchor) return null;
+    const cell = worldToCell(anchor.x, anchor.y, this.graph);
     return cell ? cell.key : null;
   }
 
@@ -693,6 +682,9 @@ export class FinishModeState {
     this.namingCellOrder = null;
     // 確定時にのみ未定義Roomから該当セルを引き抜く（cancelNaming 時は未定義側を変更しないため安全）。
     this._subtractCellsFromUndefined(room.cells);
+    // 部分指定が親の残余面積を上回ったら親子を入れ替える（ラベル重なりの防止。
+    // 新規部分指定の確定＝この undo エントリ内で入れ替えまで一括して確定する）
+    normalizePartialDominance(this.graph);
     // 境界エッジの生成はモード境界の差分追跡で行う（フェーズ4）。命名時の即時生成は廃止。
     this.lastNamingUndoEntry = pushFinishUndo(this.graph, undoBefore);
     return convertedStair;

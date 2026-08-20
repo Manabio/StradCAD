@@ -15,7 +15,7 @@
 // ================================================================
 
 import { Room, RoomFeature } from '@core';
-import { lostSides, cellInteriorPoint, regionCellsAt, refreshCells } from './gridCells.js';
+import { lostSides, cellInteriorPoint, regionCellsAt, refreshCells, cellBoundsFromKey } from './gridCells.js';
 
 function isEarlierInOrder(graph, idA, idB) {
   const order = graph.roomOrder;
@@ -89,6 +89,98 @@ export function reinterpretRoomsOnEntry(graph) {
         // 2辺以上喪失 → 旧部屋名を削除し、親へ完全吸収
         graph.removeRoom(e.room.id);
       }
+    }
+  }
+}
+
+/**
+ * 部分指定の面積が親の残余面積（親セル − 全部分指定セル）を上回ったら親子を入れ替える。
+ * 部屋の主従は「支配的な方（面積の大きい方）が親」であるべきで、部分指定が残余を
+ * 上回ったまま放置すると、外周壁の帰属・天井高の継承・展開図の帯（いずれも親基準）が
+ * 小さい方の部屋にぶら下がり続けてしまう。
+ * なお部屋名ラベルの重なり防止そのものは配置ルール側が担う（roomLabel.js の
+ * roomNameAnchor: 親の自動配置は部分指定に奪われていないセルから選ぶ）。
+ *
+ * 入れ替えの内容（面積最大の部分指定が残余より大きい場合のみ。同値は現状維持）:
+ *   勝った子: 親の全セルを引き継いで参照元（referenceRoomIds 空）になる
+ *   旧親    : 残余セルだけの部分指定へ降格し、勝った子を参照する
+ *   他の子  : 参照先を旧親から勝った子へ付け替える
+ *   生成壁  : 外周壁は親が担う（glossary「部分指定」）ため帰属を入れ替える
+ *   表示順  : roomOrder 上の位置も入れ替える（部分指定は親の後に並ぶ挿入規則を保つ）
+ * 各セルの実効床レベルは「そのセルを持つ部分指定 ＞ 親」の優先で解決されるため、
+ * セル集合と参照方向を同時に入れ替えれば見た目・段差の意味は変わらない。
+ * @param {import('@core').FloorGraph} graph
+ */
+export function normalizePartialDominance(graph) {
+  const rooms = graph.rooms;
+  const parents = rooms.filter(r => r.referenceRoomIds.size === 0 && r.feature === null);
+  for (const parent of parents) {
+    const children = rooms.filter(r => r.referenceRoomIds.has(parent.id));
+    if (children.length === 0) continue;
+
+    const areaOf = (cells) => {
+      let area = 0;
+      for (const key of cells) {
+        const b = cellBoundsFromKey(key, graph);
+        if (b) area += (b.x2 - b.x1) * (b.y2 - b.y1);
+      }
+      return area;
+    };
+
+    const fullCells = refreshCells(parent.cells, graph);
+    const childCells = new Map(children.map(c => [c.id, refreshCells(c.cells, graph)]));
+    const remaining = new Set(fullCells);
+    for (const cells of childCells.values()) for (const key of cells) remaining.delete(key);
+    if (remaining.size === 0) continue; // 退化ケース（部分指定が親全域を覆う）は現状維持
+
+    // 入れ替え候補は通常の部分指定（feature なし・参照先が親のみ）に限る。
+    // 面積同値なら先勝ち（roomOrder 順）＝現親優先で入れ替えない。
+    let winner = null, winnerArea = areaOf(remaining);
+    for (const c of children) {
+      if (c.feature !== null || c.referenceRoomIds.size !== 1) continue;
+      const a = areaOf(childCells.get(c.id));
+      if (a > winnerArea) { winner = c; winnerArea = a; }
+    }
+    if (!winner) continue;
+
+    // 勝った子は親の全セルを引き継ぐ。自前の生キーも保持する——refreshCells 由来の
+    // 集合だけに置き換えると、親に含まれないセル（reinterpretRoomsOnEntry の
+    // 1辺喪失経路では 親⊉子 がありうる）や解決不能キーを黙って失う。
+    // 粒度の違う重複キーは使用側の refreshCells が正規化する。
+    winner.setCells(new Set([...winner.cells, ...fullCells]));
+    winner.referenceRoomIds.delete(parent.id);
+    // 旧親は残余セルの部分指定へ降格。解決不能な生キー（CL削除の退化ケース）は
+    // reinterpretRoomsOnEntry の現状維持方針に合わせて捨てずに残す。
+    const unresolved = [...parent.cells].filter(key => !cellBoundsFromKey(key, graph));
+    parent.setCells(new Set([...remaining, ...unresolved]));
+    parent.referenceRoomIds.add(winner.id);
+    for (const c of children) {
+      if (c.id === winner.id) continue;
+      c.referenceRoomIds.delete(parent.id);
+      c.referenceRoomIds.add(winner.id);
+    }
+
+    const demotedWalls = new Set(winner.generatedWallIds);
+    winner.generatedWallIds = new Set(parent.generatedWallIds);
+    parent.generatedWallIds = demotedWalls;
+
+    const order = [...graph.roomOrder];
+    const pi = order.indexOf(parent.id), wi = order.indexOf(winner.id);
+    if (pi >= 0 && wi >= 0) {
+      order[pi] = winner.id;
+      order[wi] = parent.id;
+      graph.reorderRooms(order);
+    }
+
+    // 明示ラベル位置が新しいセル集合の外に出た場合は自動配置へ戻す
+    for (const room of [parent, winner]) {
+      const p = room.namePosition;
+      if (!p) continue;
+      const inside = [...room.cells].some(key => {
+        const b = cellBoundsFromKey(key, graph);
+        return b && p.x >= b.x1 && p.x <= b.x2 && p.y >= b.y1 && p.y <= b.y2;
+      });
+      if (!inside) room.namePosition = null;
     }
   }
 }

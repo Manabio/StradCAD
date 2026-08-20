@@ -14,7 +14,10 @@ import {
   resolveBackingOwnership, applyBackingOwnership,
 } from './wallGeneration.js';
 import { snapshotEdges, restoreEdges, syncEdgesFromTopology, interiorWallSpans, buildCellToRoom } from './edgeClassify.js';
-import { reinterpretRoomsOnEntry, ensureStairRooms, snapshotRoomsState, restoreRoomsState } from './roomReinterpret.js';
+import {
+  reinterpretRoomsOnEntry, ensureStairRooms, normalizePartialDominance,
+  snapshotRoomsState, restoreRoomsState,
+} from './roomReinterpret.js';
 import { kneeDropWallGeometry } from './kneeDropWall.js';
 import { reflectStructuralAfterFinishExit } from '../structural/structuralOrchestration.js';
 // finish/clEccentricity.js は edgeComposition.js 経由で materials/materialData.js（材マスタ全件）を
@@ -35,6 +38,8 @@ export async function runFinishEntryBoundary(graph, project) {
   const stairRoomChanges = [];
   runInAction(() => {
     reinterpretRoomsOnEntry(graph);
+    // 再解釈（CL変更起因の部分指定化）で部分指定が親の残余より大きくなりうるため正規化する
+    normalizePartialDominance(graph);
     // roomIdなしStair（旧データ・上階自動設置分）へ階段Roomを補完（開くだけで修復）
     stairRoomChanges.push(...ensureStairRooms(graph));
   });
