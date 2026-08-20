@@ -77,8 +77,16 @@ export function resolveWallTJunctions(walls) {
         // どちらの端点もBの材に近くならないため、この判定だけで自然に除外される）
         if (coord < bRange.lo - TOUCH_TOLERANCE || coord > bRange.hi + TOUCH_TOLERANCE) continue;
 
-        // B側: Aの下地幅でBの仕上げ帯・仕上げ面線をカット
-        ensure(b.id).finishCuts.push([Math.min(aBacking.lo, aBacking.hi), Math.max(aBacking.lo, aBacking.hi)]);
+        // B側: Aの下地幅でBの仕上げ帯・仕上げ面線をカットする——ただしAの本体が
+        // Bの仕上げ面側にあるときだけ。反対側（軸〜下地側。例: 1部屋が複数部屋に
+        // 面する通し壁で、向かい側の部屋を区切る壁が軸CL位置へ突き当たるケース）から
+        // 触れるAはBの仕上げ層を貫通しないため、仕上げ面線は連続のまま残す
+        // （カットすると突き当たり位置で反対側の仕上げ材が分断されて見える）。
+        // bodySide===0（anchorがB軸上＝判定不能の退化）は従来どおりカットする。
+        const bodySide = Math.sign(anchor - b.axisCL.effectiveValue);
+        if (bodySide === 0 || bodySide === b.faceDir) {
+          ensure(b.id).finishCuts.push([Math.min(aBacking.lo, aBacking.hi), Math.max(aBacking.lo, aBacking.hi)]);
+        }
 
         // A側: Bの下地帯（bBacking）のうち、Aが接している側（bRangeのlo寄りかhi寄りか）の
         // 面を延長先にする
