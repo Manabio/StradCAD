@@ -84,6 +84,9 @@
 ## bake
 ドラッグ確定時に`pendingDelta`を`value`へ書き込み0に戻す操作（`bakeCLValue`）。
 
+## 文書ファイル（.strad）
+「保存」でダウンロードされる文書全体（全階・plane一覧・通り芯/構造情報/採番台帳・敷地）のファイル。保存ドキュメント（savedFloors/projects）の確定内容をIDBから読み戻してbase64で包んだJSONエンベロープ（`format:'strad-document'`、`storage/documentFile.js`）。「開く」で全ストア置換→reloadで完全復元する。旧形式（単一グラフFlatBuffers・旧JSONスナップショット）はアクティブ階のみ復元。設計意図は`.claude/persistence-idb.md`。
+
 ## セッションロック
 Web Locks APIで1タブだけを編集セッションの持ち主にする排他制御（`storage/sessionLock.js`）。非オーナータブは`openDB()`が例外を投げIndexedDBに触れない。自動昇格なし・read-only編集や同期は提供しない。設計意図は`.claude/persistence-idb.md`。
 
