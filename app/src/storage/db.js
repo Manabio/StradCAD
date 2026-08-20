@@ -19,6 +19,8 @@
  *   loadPlanesMeta(projectId)        → Promise<Uint8Array | null>
  *   saveSiteData(projectId, bytes)   → Promise<void>   （projects ストアの別レコード。キー: `${projectId}:site`）
  *   loadSiteData(projectId)          → Promise<Uint8Array | null>
+ *   saveProjectInfo(projectId, bytes) → Promise<void>  （projects ストアの別レコード。キー: `${projectId}:info`）
+ *   loadProjectInfo(projectId)        → Promise<Uint8Array | null>
  *   seedFloorsFromDocument()         → Promise<void>   （floorsをclear→savedFloors全件をfloorsへput）
  *   commitFloorsToDocument(planeIds) → Promise<void>   （planeIds分をsavedFloorsへ反映＋含まれない分を削除）
  *   loadAllSavedFloors()             → Promise<Array<{planeId, bytes}>>（文書ファイル書き出し用）
@@ -250,6 +252,39 @@ export async function loadSiteData(projectId) {
     }
     const tx  = db.transaction(STORE_PROJECTS, 'readonly');
     const req = tx.objectStore(STORE_PROJECTS).get(siteKey(projectId));
+    req.onsuccess = (e) => resolve(e.target.result?.bytes ?? null);
+    req.onerror   = (e) => reject(e.target.error);
+  });
+}
+
+// ----------------------------------------------------------------
+// 調査・計画情報（project.projectInfo）— projects ストアの別レコード
+// 内部キーは projectId とは衝突しない `${projectId}:info` を使う（同一ストア・別レコード）。
+// ----------------------------------------------------------------
+
+function infoKey(projectId) {
+  return `${projectId}:info`;
+}
+
+export async function saveProjectInfo(projectId, bytes) {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const tx  = db.transaction(STORE_PROJECTS, 'readwrite');
+    const req = tx.objectStore(STORE_PROJECTS).put({ projectId: infoKey(projectId), bytes });
+    req.onsuccess = () => resolve();
+    req.onerror   = (e) => reject(e.target.error);
+  });
+}
+
+export async function loadProjectInfo(projectId) {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    if (!db.objectStoreNames.contains(STORE_PROJECTS)) {
+      resolve(null);
+      return;
+    }
+    const tx  = db.transaction(STORE_PROJECTS, 'readonly');
+    const req = tx.objectStore(STORE_PROJECTS).get(infoKey(projectId));
     req.onsuccess = (e) => resolve(e.target.result?.bytes ?? null);
     req.onerror   = (e) => reject(e.target.error);
   });

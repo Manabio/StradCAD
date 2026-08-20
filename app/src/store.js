@@ -7,10 +7,11 @@ import {
 import { floorSwapManager } from './storage/FloorSwapManager.js';
 import {
   deleteFloor as dbDeleteFloor, clearAllStores, loadFloor, savePlanesMeta, loadPlanesMeta,
-  saveSiteData, loadSiteData, saveProject, loadProject,
+  saveSiteData, loadSiteData, saveProject, loadProject, saveProjectInfo, loadProjectInfo,
   seedFloorsFromDocument, commitFloorsToDocument, loadAllSavedFloors, saveSavedFloor,
 } from './storage/db.js';
 import { buildDocumentJson, parseDocumentEnvelope } from './storage/documentFile.js';
+import { encodeProjectInfo, decodeProjectInfo } from './storage/projectInfo.js';
 import { clearDirty } from './dirtyState.js';
 import { acquireSessionLock } from './storage/sessionLock.js';
 import { SpatialIndex } from './transform/SpatialIndex.js';
@@ -167,6 +168,20 @@ async function restoreSiteFromIDB() {
 }
 
 /**
+ * 調査・計画情報（project.projectInfo = 敷地情報／建築情報ダイアログの入力値）を
+ * IndexedDB から復元する。保存文書が無ければ何もせず、初期状態（null=未入力）のままにする。
+ */
+async function restoreProjectInfoFromIDB() {
+  const bytes = await loadProjectInfo(savedProjectId);
+  if (!bytes) return; // 文書なし
+  const info = decodeProjectInfo(bytes);
+  runInAction(() => {
+    project.setSiteInfo(info.siteInfo);
+    project.setBuildingInfo(info.buildingInfo);
+  });
+}
+
+/**
  * 起動時IDB初期化の完了を表すPromise。App.jsx がマウント時に一度だけ購読し、
  * 完了後の project.activePlaneId（restorePlanesFromIDB が差し替え得る）を
  * React state（activeFloorId）へ反映する（QA Finding 1）。
@@ -192,6 +207,7 @@ export const bootReady = (async () => {
   // activate は project.activePlane/activeGraph（復元後のアクティブ階）を読む。
   await restorePlanesFromIDB();
   await restoreSiteFromIDB();
+  await restoreProjectInfoFromIDB();
   await floorSwapManager.activate(project.activePlane, project.activeGraph);
   floorSwapManager.startSiteDirtyTracking(project.site);
 })();
@@ -315,6 +331,8 @@ export async function saveToIDB() {
   await savePlanesMeta(savedProjectId, serializePlanes(project));
   // ③.5 敷地（project.site）
   await saveSiteData(savedProjectId, serializeSite(project.site));
+  // ③.6 調査・計画情報（敷地情報／建築情報ダイアログの入力値）
+  await saveProjectInfo(savedProjectId, encodeProjectInfo(project.projectInfo));
   // ④ floors（作業領域）の現在値を保存ドキュメント（savedFloors）へ確定コピー。
   //    project.planeMap に無い（削除済みの）階は savedFloors からも消える。
   await commitFloorsToDocument([...project.planeMap.keys()]);
@@ -328,20 +346,23 @@ export async function saveToIDB() {
 }
 
 /**
- * 文書全体（全階・plane一覧・通り芯/構造情報/採番台帳・敷地）を .stq 文書ファイル用の
+ * 文書全体（全階・plane一覧・通り芯/構造情報/採番台帳・敷地・調査/計画情報）を .stq 文書ファイル用の
  * JSON文字列（エンベロープ）にして返す。まず saveToIDB で保存ドキュメントを確定してから
  * その確定内容（savedFloors/projects）を読み戻して包む——「ファイルの中身＝次回起動で
  * 復元される内容」を常に一致させるため。
  */
 export async function exportDocument() {
   await saveToIDB();
-  const [floors, struct, planes, site] = await Promise.all([
+  const [floors, struct, planes, site, infoBytes] = await Promise.all([
     loadAllSavedFloors(),
     loadProject(savedProjectId),
     loadPlanesMeta(savedProjectId),
     loadSiteData(savedProjectId),
+    loadProjectInfo(savedProjectId),
   ]);
-  return buildDocumentJson({ floors, struct, planes, site, bootPlaneId: project.planes[0]?.id ?? null });
+  // 調査・計画情報はプレーンJSONなので base64 にせずオブジェクトのまま包む（ファイルの可読性優先）
+  const info = infoBytes ? decodeProjectInfo(infoBytes) : null;
+  return buildDocumentJson({ floors, struct, planes, site, info, bootPlaneId: project.planes[0]?.id ?? null });
 }
 
 /**
@@ -358,6 +379,7 @@ export async function importDocument(envelope) {
   if (doc.struct) await saveProject(savedProjectId, doc.struct);
   if (doc.planes) await savePlanesMeta(savedProjectId, doc.planes);
   if (doc.site)   await saveSiteData(savedProjectId, doc.site);
+  if (doc.info)   await saveProjectInfo(savedProjectId, encodeProjectInfo(doc.info));
   // ブートplaneを文書の最下階採用planeへ。reconcilePlanes での無駄な削除・再生成を防ぐ
   // （saveToIDB の⑤と同じ理由）。
   if (doc.bootPlaneId) localStorage.setItem(PLANE_ID_KEY, doc.bootPlaneId);

@@ -24,6 +24,13 @@ export class Project {
     this.site = new Site();
     this.structuralInfo = new StructuralInfo();
 
+    // 調査・計画情報（敷地情報／建築情報ダイアログの入力値）。プレーンJSONオブジェクトを
+    // 丸ごと保持し、ダイアログを閉じるときに setSiteInfo/setBuildingInfo で全置換する
+    // （null=未入力。フィールド単位のobservable化はしない——編集はダイアログ内のReact stateで
+    // 完結し、モデル側はスナップショットだけ持てばよいため）。画像ファイルは対象外
+    // （バックエンド送信想定。ui/SiteDialog.jsx 参照）。
+    this.projectInfo = observable.object({ siteInfo: null, buildingInfo: null }, {}, { deep: false });
+
     // 部材グループ台帳（建物全体で共有。grp.spec:<gid>/grp.join:<gid>/grp.no:<gid>/grp.mergedInto:<gid> → 文字列）。
     // 分割・統合・手動採番というユーザーの明示操作だけを持つ（既定の集約は毎回 signature から導出する。
     // structural/memberGroups.js・memberNumbering.js 参照）。FBS の tagRegistryKeys/Vals チャネルへ
@@ -48,8 +55,13 @@ export class Project {
       removePlane:   action,
       clearMemberNumberIndex: action,
       clearOpeningNumberIndex: action,
+      setSiteInfo:     action,
+      setBuildingInfo: action,
     });
   }
+
+  setSiteInfo(info)     { this.projectInfo.siteInfo = info; }
+  setBuildingInfo(info) { this.projectInfo.buildingInfo = info; }
 
   clearMemberNumberIndex() { this.memberNumberIndex.clear(); }
   clearOpeningNumberIndex() { this.openingNumberIndex.clear(); }

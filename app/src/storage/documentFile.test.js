@@ -19,6 +19,7 @@ test('buildDocumentJson→parseDocumentEnvelope: 全チャネルがラウンド�
     struct: new Uint8Array([10, 20]),
     planes: new Uint8Array([30]),
     site:   new Uint8Array([40, 50, 60]),
+    info:   { siteInfo: { address: '東京都', useDistricts: ['未確認'] }, buildingInfo: { mainUse: '未定' } },
     bootPlaneId: 'p1',
   };
   const parsed = parseDocumentEnvelope(JSON.parse(buildDocumentJson(doc)));
@@ -26,6 +27,7 @@ test('buildDocumentJson→parseDocumentEnvelope: 全チャネルがラウンド�
   assert.deepEqual(parsed.struct, doc.struct);
   assert.deepEqual(parsed.planes, doc.planes);
   assert.deepEqual(parsed.site, doc.site);
+  assert.deepEqual(parsed.info, doc.info);
   assert.deepEqual(parsed.floors, doc.floors);
 });
 
@@ -34,13 +36,14 @@ test('buildDocumentJson: JSONは先頭が"{"（parseOpenedFileBytesのJSON判別
   assert.equal(json[0], '{');
 });
 
-test('null チャネル（struct/planes/site 未保存）と空floorsもラウンドトリップする', () => {
+test('null チャネル（struct/planes/site/info 未保存）と空floorsもラウンドトリップする', () => {
   const parsed = parseDocumentEnvelope(JSON.parse(
-    buildDocumentJson({ floors: [], struct: null, planes: null, site: null, bootPlaneId: null }),
+    buildDocumentJson({ floors: [], struct: null, planes: null, site: null, info: null, bootPlaneId: null }),
   ));
   assert.equal(parsed.struct, null);
   assert.equal(parsed.planes, null);
   assert.equal(parsed.site, null);
+  assert.equal(parsed.info, null);
   assert.equal(parsed.bootPlaneId, null);
   assert.deepEqual(parsed.floors, []);
 });

@@ -5,7 +5,7 @@ import { undoManager } from './undoManager.js';
 import { serializeGraph, restoreGraph } from './graphSnapshot.js';
 import { Stage } from 'react-konva';
 import { useStore, addFloor, switchFloor, addAlternativeFloor, removeFloor, resetAll, bootReady, exportDocument, importDocument } from './store.js';
-import { isDirty } from './dirtyState.js';
+import { isDirty, markDirty } from './dirtyState.js';
 import { viewport } from './appViewport.js';
 import {
   findBracketingCLs,
@@ -1098,7 +1098,7 @@ const App = observer(() => {
     }
   }
 
-  // 保存ファイル名ダイアログの確定。文書全体（全階・plane一覧・通り芯/構造情報・敷地）を
+  // 保存ファイル名ダイアログの確定。文書全体（全階・plane一覧・通り芯/構造情報・敷地・調査/計画情報）を
   // IDB へ明示保存で確定し、同じ内容を .stq 文書ファイルとしてダウンロード書き出しする（「開く」と対）
   function handleSaveConfirm(fileName) {
     setSaveDialogDefaultName(null);
@@ -1865,11 +1865,28 @@ const App = observer(() => {
       )}
 
       {showSiteDialog && (
-        <SiteDialog onClose={() => setShowSiteDialog(false)} />
+        <SiteDialog
+          initial={project.projectInfo.siteInfo}
+          onClose={(form) => {
+            // 画像ファイル（File オブジェクト）はバックエンド送信想定のため永続化しない
+            const rest = { ...form };
+            delete rest.siteImageFile;
+            project.setSiteInfo(rest);
+            markDirty();
+            setShowSiteDialog(false);
+          }}
+        />
       )}
 
       {showBuildingInfoDialog && (
-        <BuildingInfoDialog onClose={() => setShowBuildingInfoDialog(false)} />
+        <BuildingInfoDialog
+          initial={project.projectInfo.buildingInfo}
+          onClose={(form) => {
+            project.setBuildingInfo(form);
+            markDirty();
+            setShowBuildingInfoDialog(false);
+          }}
+        />
       )}
 
       {showStructuralInfoDialog && (

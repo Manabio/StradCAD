@@ -129,15 +129,22 @@ function CheckboxGroup({ label, options, selected, onToggle }) {
  * 敷地モード — 敷地・環境・道路・法規制の調査情報を入力するダイアログ。
  *
  * 名称は「敷地モード」だが、実装は他モードと切替不要なダイアログ形式とする。
- * 入力内容（画像含む）はバックエンドへの送信を想定したものでアプリ内には永続化しない
- * （バックエンド連携は後続タスク）。
+ * initial: 前回コミットしたフォーム値（project.projectInfo.siteInfo。null=未入力）。
+ * onClose(form): どの閉じ口（閉じるボタン・背景タップ・ESC）でも現在のフォーム値を渡す
+ * ——呼び出し側（App.jsx）がモデルへコミットして永続化する。画像ファイルだけは
+ * バックエンド送信想定のため永続化対象外（コミット時に呼び出し側が除外する）。
  */
-export function SiteDialog({ onClose }) {
-  const [form, setForm] = useState(createInitialForm);
+export function SiteDialog({ initial, onClose }) {
+  // 保存済みフォームに無い新規フィールドは既定値で補う（調査票の項目は今後も増えるため）
+  const [form, setForm] = useState(() => ({ ...createInitialForm(), ...(initial ?? {}) }));
   const fileInputRef = useRef(null);
 
   function set(key, value) {
     setForm(f => ({ ...f, [key]: value }));
+  }
+
+  function close() {
+    onClose(form);
   }
 
   function handleImagePick() {
@@ -176,11 +183,11 @@ export function SiteDialog({ onClose }) {
   }
 
   function handleKeyDown(e) {
-    if (e.key === 'Escape') { e.stopPropagation(); onClose(); }
+    if (e.key === 'Escape') { e.stopPropagation(); close(); }
   }
 
   return (
-    <div className="site-dialog-backdrop" onPointerDown={e => { if (e.target === e.currentTarget) onClose(); }}>
+    <div className="site-dialog-backdrop" onPointerDown={e => { if (e.target === e.currentTarget) close(); }}>
       <div className="site-dialog" onKeyDown={handleKeyDown}>
         <div className="site-dialog-header">敷地情報の入力</div>
 
@@ -313,7 +320,7 @@ export function SiteDialog({ onClose }) {
         </div>
 
         <div className="site-dialog-footer">
-          <button className="site-dialog-btn" onClick={onClose}>閉じる</button>
+          <button className="site-dialog-btn" onClick={close}>閉じる</button>
         </div>
       </div>
     </div>

@@ -23,11 +23,13 @@ export function base64ToBytes(str) {
 
 /**
  * 文書エンベロープの JSON 文字列を構築する。
+ * info（調査・計画情報）だけはFBSバイト列ではなくプレーンJSONのため base64 にせず
+ * オブジェクトのまま持つ（storage/projectInfo.js 参照）。
  * @param {{ floors: Array<{planeId: string, bytes: Uint8Array}>,
  *           struct: Uint8Array|null, planes: Uint8Array|null, site: Uint8Array|null,
- *           bootPlaneId: string|null }} doc
+ *           info: object|null, bootPlaneId: string|null }} doc
  */
-export function buildDocumentJson({ floors, struct, planes, site, bootPlaneId }) {
+export function buildDocumentJson({ floors, struct, planes, site, info, bootPlaneId }) {
   return JSON.stringify({
     format:  FORMAT,
     version: VERSION,
@@ -35,6 +37,7 @@ export function buildDocumentJson({ floors, struct, planes, site, bootPlaneId })
     struct: struct ? bytesToBase64(struct) : null,
     planes: planes ? bytesToBase64(planes) : null,
     site:   site   ? bytesToBase64(site)   : null,
+    info:   info ?? null,
     floors: floors.map(f => ({ planeId: f.planeId, bytes: bytesToBase64(f.bytes) })),
   });
 }
@@ -58,6 +61,7 @@ export function parseDocumentEnvelope(data) {
     struct: data.struct ? base64ToBytes(data.struct) : null,
     planes: data.planes ? base64ToBytes(data.planes) : null,
     site:   data.site   ? base64ToBytes(data.site)   : null,
+    info:   (data.info && typeof data.info === 'object') ? data.info : null,
     floors: data.floors.map(f => {
       if (typeof f?.planeId !== 'string' || typeof f?.bytes !== 'string') {
         throw new Error('文書のフロアデータが不正です');

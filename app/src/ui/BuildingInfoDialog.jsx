@@ -79,23 +79,29 @@ function AutoCalcRowWithNote({ label, id, unit, note }) {
  * 建築情報の入力ダイアログ。
  *
  * レイアウトフォーマットは SiteDialog（敷地情報）を継承する。
+ * initial: 前回コミットしたフォーム値（project.projectInfo.buildingInfo。null=未入力）。
+ * onClose(form): どの閉じ口でも現在のフォーム値を渡す（SiteDialog と同じコミット方式）。
  * 「階層・高さ」「敷地・面積情報」は図面からの自動算出項目だが、
  * 算出ロジックは未実装のため、外部から id 経由で書き込み可能な
- * 読み取り専用プレースホルダ（初期値 0）として置くのみとする。
+ * 読み取り専用プレースホルダ（初期値 0）として置くのみとする（フォーム値ではないため永続化対象外）。
  */
-export function BuildingInfoDialog({ onClose }) {
-  const [form, setForm] = useState(createInitialForm);
+export function BuildingInfoDialog({ initial, onClose }) {
+  const [form, setForm] = useState(() => ({ ...createInitialForm(), ...(initial ?? {}) }));
 
   function set(key, value) {
     setForm(f => ({ ...f, [key]: value }));
   }
 
+  function close() {
+    onClose(form);
+  }
+
   function handleKeyDown(e) {
-    if (e.key === 'Escape') { e.stopPropagation(); onClose(); }
+    if (e.key === 'Escape') { e.stopPropagation(); close(); }
   }
 
   return (
-    <div className="site-dialog-backdrop" onPointerDown={e => { if (e.target === e.currentTarget) onClose(); }}>
+    <div className="site-dialog-backdrop" onPointerDown={e => { if (e.target === e.currentTarget) close(); }}>
       <div className="site-dialog" onKeyDown={handleKeyDown}>
         <div className="site-dialog-header">建築情報の入力</div>
 
@@ -134,7 +140,7 @@ export function BuildingInfoDialog({ onClose }) {
         </div>
 
         <div className="site-dialog-footer">
-          <button className="site-dialog-btn" onClick={onClose}>閉じる</button>
+          <button className="site-dialog-btn" onClick={close}>閉じる</button>
         </div>
       </div>
     </div>
