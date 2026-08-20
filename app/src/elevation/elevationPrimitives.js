@@ -15,10 +15,15 @@ const NAME_BOX_H_MM      = 400;
 const NAME_BOX_CHAR_W_MM = 350;
 const NAME_BOX_MIN_W_MM  = 1200;
 
-/** 帯内の全プリミティブ種を一律 (dx,dy) だけ平行移動する（xCursor配置・floorOffset適用の共通処理）。 */
+/**
+ * 帯内の全プリミティブ種を一律 (dx,dy) だけ平行移動する（xCursor配置・floorOffset適用の共通処理）。
+ * mirrorPrimitiveX と対を成す幾何変換——両関数は同じプリミティブ型集合を扱うこと
+ * （片方にだけ型を追加すると、その型だけ移動/反転されない無言バグになる）。
+ */
 export function translatePrimitive(p, dx, dy) {
   switch (p.type) {
     case 'line':
+    case 'arrow':
       return { ...p, x1: p.x1 + dx, y1: p.y1 + dy, x2: p.x2 + dx, y2: p.y2 + dy };
     case 'rect':
       return { ...p, x: p.x + dx, y: p.y + dy };
@@ -35,6 +40,47 @@ export function translatePrimitive(p, dx, dy) {
       return p.dir === 'h'
         ? { ...p, from: p.from + dx, to: p.to + dx, at: p.at + dy, foot: p.foot != null ? p.foot + dy : p.foot }
         : { ...p, from: p.from + dy, to: p.to + dy, at: p.at + dx, foot: p.foot != null ? p.foot + dx : p.foot };
+    default:
+      return p;
+  }
+}
+
+/**
+ * プリミティブを x=0..width の範囲内で左右反転する（x → width − x。yは不変）。
+ * 開口の姿図（openings/openingElevationFigure.js）は「世界座標昇順＝図のx昇順」の
+ * 正準向きで生成される（吊元 hingeSide<0＝coord1側＝図のx=0。平面記号
+ * renderer/OpeningsLayer.jsx swingSymbol の hingeAlong と同じ世界アンカー）ため、
+ * 世界順とローカル順が反転する面（dirSign<0）ではこの反転を掛けてから配置する——
+ * 掛けないと吊元・親子扉の子・レバーハンドル等の非対称要素が逆端に描かれる。
+ * translatePrimitive と対を成す幾何変換——両関数は同じプリミティブ型集合を扱うこと。
+ * @param {object} p - 姿図プリミティブ（line/arrow/rect/text/polyline/circle/tag/miterTriangle/dim）
+ * @param {number} width - 反転の基準幅（開口幅）
+ */
+export function mirrorPrimitiveX(p, width) {
+  const m = (x) => width - x;
+  switch (p.type) {
+    case 'line':
+    case 'arrow':
+      return { ...p, x1: m(p.x1), x2: m(p.x2) };
+    case 'rect':
+      return { ...p, x: m(p.x + p.w) };
+    case 'text': {
+      const anchor = p.anchor === 'start' ? 'end' : p.anchor === 'end' ? 'start' : p.anchor;
+      return { ...p, x: m(p.x), anchor };
+    }
+    case 'circle':
+    case 'tag':
+      return { ...p, cx: m(p.cx) };
+    case 'miterTriangle':
+      return { ...p, x: m(p.x), dir: -p.dir };
+    case 'polyline':
+      return { ...p, points: p.points.map(([x, y]) => [m(x), y]) };
+    case 'dim':
+      // 水平dimは区間[from,to]を反転、縦dimはat（x位置）と補助線foot（同じくx位置）を反転する
+      // （translatePrimitive の縦dimが at/foot 両方を平行移動するのと同じ対応関係）
+      return p.dir === 'h'
+        ? { ...p, from: m(p.to), to: m(p.from) }
+        : { ...p, at: m(p.at), foot: p.foot != null ? m(p.foot) : p.foot };
     default:
       return p;
   }

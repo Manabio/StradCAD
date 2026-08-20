@@ -326,9 +326,14 @@ export function faceBoundaryLocalX(face, graph) {
 }
 
 /**
- * face 上に乗る開口（建具・窓）を centerCoord 昇順で返す。findHostWall の規約踏襲
- * （openings/openingGeometry.js:22-35）だが Wall を経由せず face の軸情報のみで判定する。
- * wallSide===0（CL偏芯の仕上げ面合わせ等）は両側の面にマッチする。
+ * face 上に乗る開口（建具・窓）を centerCoord 昇順で返す。Wall を経由せず face の
+ * 軸情報のみで判定する。1つの開口は物理的にその場所の壁すべてを貫通するため、
+ * wallSide（配置時にどちら側の壁をホストにしたか）では絞らない——共有壁の建具は
+ * 両側の部屋の展開図に出る（findOpeningsOnWall——openings/openingGeometry.js——と
+ * 同じ考え方。旧実装は wallSide の符号一致を要求しており、反対側の部屋の展開図に
+ * 建具が一切描かれなかった）。裏側から見る面での姿図の左右反転は描画側が担う
+ * （elevationFigure.js: 姿図は世界座標昇順が図のx昇順という正準向きのため、
+ * dirSign<0 の面では左右反転して置く）。
  * @param {object} face - buildRoomFaces の1件
  * @param {object} graph
  * @returns {import('@core').Opening[]}
@@ -336,7 +341,6 @@ export function faceBoundaryLocalX(face, graph) {
 export function openingsOnFace(face, graph) {
   return graph.openings
     .filter(o => o.isVertical === face.isVertical && o.axisCL.id === face.axisCL.id)
-    .filter(o => o.wallSide === 0 || Math.sign(o.wallSide) === face.inward)
     .filter(o => o.centerCoord >= face.lo && o.centerCoord <= face.hi)
     .sort((a, b) => a.centerCoord - b.centerCoord);
 }

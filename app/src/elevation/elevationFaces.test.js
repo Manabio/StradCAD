@@ -334,8 +334,11 @@ test('buildRoomFaces: L字部屋は同letterが複数面に分かれB1/B2のラ�
   assert.ok(bFaces[0].lo < bFaces[1].lo, 'B1はB2より上(y小)側');
 });
 
-// ---- I5: 開口が対向2面に二重に出ない（wallSide符号判定を外すと赤） ----
-test('openingsOnFace: 隣接2部屋が共有する壁の開口は片方の面にしか出ない', () => {
+// ---- 開口は壁を貫通するため、共有壁では両側の部屋の面に出る ----
+// （旧I5仕様「片方の面にしか出ない」は撤回: wallSide＝配置時にクリックした側で表示先が
+// 決まってしまい、反対側の部屋の展開図に建具が一切描かれない実機不具合の原因だった。
+// 裏側から見る面の左右反転は elevationFigure.js の dirSign 反転が担う）
+test('openingsOnFace: 隣接2部屋が共有する壁の開口は両側の部屋の面に出る（壁を貫通するため）', () => {
   const graph = makeGraph();
   // 上室(0,0)-(4000,2000) と 下室(0,2000)-(4000,5000) が y=2000 のCLを共有する。
   const x0 = addCL(graph, CenterLineType.VERTICAL, 0);
@@ -360,9 +363,10 @@ test('openingsOnFace: 隣接2部屋が共有する壁の開口は片方の面に
   const lowerA = lowerFaces.find(f => f.letter === 'A');
   assert.ok(upperC && lowerA, '前提: 共有壁は上室C面・下室A面として存在する');
 
-  assert.equal(openingsOnFace(upperC, graph).length, 1, '上室C面にはこの開口が乗る');
-  assert.equal(openingsOnFace(lowerA, graph).length, 0, '下室A面には乗らない（wallSideが逆）');
+  assert.equal(openingsOnFace(upperC, graph).length, 1, '上室C面にこの開口が乗る');
+  assert.equal(openingsOnFace(lowerA, graph).length, 1, '下室A面にも乗る（クリック側と逆でも貫通するため描く）');
   assert.equal(openingsOnFace(upperC, graph)[0].id, opening.id);
+  assert.equal(openingsOnFace(lowerA, graph)[0].id, opening.id);
 });
 
 // ---- QA F4テスト4: wallSide===0 の開口は対向2面の両方に出る（CL偏芯の仕上げ面合わせ等） ----

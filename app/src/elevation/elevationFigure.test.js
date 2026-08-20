@@ -505,6 +505,81 @@ test('【項目1】buildFaceFigure: 建具(fitting)×SWINGは吊元表示(一点
   assert.ok(prims.some(p => p.type === 'rect' && p.rx != null), 'レバーハンドル（カプセル形rect）は残るはず');
 });
 
+// ---- 姿図の左右反転: 正準向き（世界座標昇順＝図のx昇順）に対し dirSign<0 の面では反転する ----
+// 吊元 hingeSide=-1 は世界座標 coord1 側（平面記号 swingSymbol の hingeAlong と同じアンカー）。
+// SWING の吊元表示（一点鎖線V）の頂点xが、面のローカル座標で「世界coord1の位置」に来ることを固定する。
+test('buildFaceFigure: dirSign=-1の面では姿図が左右反転され、吊元が正しい世界端に描かれる', () => {
+  const opening = {
+    id: 'op-mirror', isVertical: false, axisCL: { id: 'axisY0' }, wallSide: 1,
+    centerCoord: 2000, width: 900, height: 2000, sillHeight: null, hingeSide: -1,
+    category: OpeningCategory.FITTING, subType: 'singleSwing', fixtureType: null,
+  };
+  const ctx = () => baseCtx({ graph: makeGraph({ openings: [opening] }) });
+  // 吊元の世界座標 = coord1 = 2000 - 450 = 1550
+  // dirSign=+1（originWorld=0）: ローカルx = 1550
+  const fwd = buildFaceFigure(makeFace({ dirSign: 1, originWorld: 0 }), ctx());
+  const fwdVee = fwd.filter(p => p.type === 'line' && p.dash === 'center' && p.x1 !== p.x2);
+  assert.ok(fwdVee.length >= 2, '前提: 吊元表示のVが描かれる');
+  assert.ok(fwdVee.every(p => p.x2 === 1550), 'dirSign=+1: V頂点（吊元）はローカルx=1550のはず');
+
+  // dirSign=-1（originWorld=4000）: 同じ世界座標1550 → ローカルx = 4000-1550 = 2450
+  const rev = buildFaceFigure(makeFace({ dirSign: -1, originWorld: 4000 }), ctx());
+  const revVee = rev.filter(p => p.type === 'line' && p.dash === 'center' && p.x1 !== p.x2);
+  assert.ok(revVee.length >= 2, '前提: 吊元表示のVが描かれる');
+  assert.ok(revVee.every(p => p.x2 === 2450),
+    'dirSign=-1: 姿図が反転され、V頂点（吊元）は世界coord1に対応するローカルx=2450のはず（反転なしだと1550+900-900=1550側に残る）');
+});
+
+// ---- 姿図の左右反転（非対称機構その2）: 親子扉の子扉分割線も世界座標どおりの端に来る ----
+test('buildFaceFigure: dirSign=-1の面では親子扉の子扉（分割線）が世界座標どおりの端に来る', () => {
+  const opening = {
+    id: 'op-pc', isVertical: false, axisCL: { id: 'axisY0' }, wallSide: 1,
+    centerCoord: 2000, width: 1200, height: 2000, sillHeight: null, hingeSide: -1,
+    category: OpeningCategory.FITTING, subType: 'parentChild', fixtureType: null,
+  };
+  const ctx = () => baseCtx({ graph: makeGraph({ openings: [opening] }) });
+  // 分割線の世界座標 = coord1(1400) + width×(1-childRatio=0.7) = 1400 + 840 = 2240
+  // （hingeSide=-1: 親の吊元=coord1側、子扉は反対側の枠端）
+  const isDivider = (p) => p.type === 'line' && p.x1 === p.x2 && p.dash == null && p.y1 === -2000 && p.y2 === 0;
+
+  const fwd = buildFaceFigure(makeFace({ dirSign: 1, originWorld: 0 }), ctx());
+  const fwdDiv = fwd.filter(isDivider);
+  assert.equal(fwdDiv.length, 1, '前提: 子扉の分割線が1本描かれる');
+  assert.equal(fwdDiv[0].x1, 2240, 'dirSign=+1: 分割線はローカルx=2240のはず');
+
+  const rev = buildFaceFigure(makeFace({ dirSign: -1, originWorld: 4000 }), ctx());
+  const revDiv = rev.filter(isDivider);
+  assert.equal(revDiv.length, 1);
+  assert.equal(revDiv[0].x1, 4000 - 2240, 'dirSign=-1: 同じ世界位置（2240）に対応するローカルx=1760のはず');
+});
+
+// ---- E2E: 実面・実壁経由で、共有壁の建具が両部屋の面の展開図に描かれる（問題.mdの症状そのもの） ----
+// wallSide=+1（下室側の壁をホストにして配置）の建具が、反対側の上室C面にも描かれることを固定する。
+test('buildFaceFigure: 共有壁の建具は配置時のクリック側と関係なく両部屋の面に描かれる', () => {
+  const graph = new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
+  const opts = { labeled: false, discipline: Discipline.ARCH };
+  const x0 = graph.addCenterLine(CenterLineType.VERTICAL, 0, opts);
+  const x1 = graph.addCenterLine(CenterLineType.VERTICAL, 4000, opts);
+  const y0 = graph.addCenterLine(CenterLineType.HORIZONTAL, 0, opts);
+  const yMid = graph.addCenterLine(CenterLineType.HORIZONTAL, 2000, opts);
+  const y2 = graph.addCenterLine(CenterLineType.HORIZONTAL, 5000, opts);
+  const upper = graph.addRoom(new Set([`${x0.id}:${y0.id}:${x1.id}:${yMid.id}`]), '上室');
+  const lower = graph.addRoom(new Set([`${x0.id}:${yMid.id}:${x1.id}:${y2.id}`]), '下室');
+  generateRoomWallsFromOutline(graph, upper);
+  generateRoomWallsFromOutline(graph, lower);
+  graph.addOpening(yMid, 1, false, x0, 1500, 900, OpeningCategory.FITTING, 'singleSwing', { hingeSide: -1 });
+
+  const upperC = realBuildRoomFaces(upper, graph).find(f => f.letter === 'C');
+  const lowerA = realBuildRoomFaces(lower, graph).find(f => f.letter === 'A');
+  assert.ok(upperC && lowerA, '前提: 共有壁は上室C面・下室A面として存在する');
+
+  for (const [label, face, room] of [['上室C', upperC, upper], ['下室A', lowerA, lower]]) {
+    const prims = buildFaceFigure(face, baseCtx({ graph, room }));
+    assert.ok(prims.some(p => p.type === 'rect' && p.w === 900), `${label}面に建具の枠rectが描かれるはず`);
+    assert.ok(prims.some(p => p.type === 'tag'), `${label}面に建具記号丸が描かれるはず`);
+  }
+});
+
 // ---- 項目2: 建具記号丸(tag)は建具の中心ではなく、寸法行より図寄りの専用段へ描かれる ----
 test('【項目2】buildFaceFigure: 建具記号丸(tag)は開口の中心ではなく、床線と壁芯間寸法行の中間の段に描かれる', () => {
   const opening = {

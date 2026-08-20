@@ -18,7 +18,7 @@ import { openingsOnFace, faceBoundaryLocalX } from './elevationFaces.js';
 import { effectiveHeight, openingTagPartsOf } from '../openings/openingNumbering.js';
 import { findCatalogEntry } from '../openings/openingCatalog.js';
 import { buildOpeningElevation } from '../openings/openingElevationFigure.js';
-import { translatePrimitive } from './elevationPrimitives.js';
+import { translatePrimitive, mirrorPrimitiveX } from './elevationPrimitives.js';
 import { collectRow1SplitPoints } from './elevationDimSplit.js';
 import { drawnRiserX, halfWallThicknessMm } from './elevationFloorProfile.js';
 import { kneeDropRecordsOnAxis } from '../finish/kneeDropWall.js';
@@ -495,6 +495,11 @@ export function buildFaceFigure(face, ctx) {
   // buildOpeningElevation を編集用寸法・動作線・FL基準線を抑制したうえで再利用する
   // （枠・吊元表示・レバーハンドル・機構表現は残す）。座標系は両モジュールともFL=y0・
   // 上方向が負で共通のため、(x, 0)の平行移動だけで面のローカル座標へそのまま乗る。
+  // 姿図の正準向きは「世界座標昇順＝図のx昇順」（吊元 hingeSide<0＝coord1側＝図のx=0。
+  // 平面記号 OpeningsLayer.jsx swingSymbol の hingeAlong と同じ世界アンカー）のため、
+  // 世界順とローカル順が反転する面（dirSign<0）では左右反転してから置く——反転しないと
+  // 吊元・親子扉の子・レバーハンドル等の非対称要素が逆端に描かれる（裏側から見る面も
+  // dirSign が逆になるため、この同じ反転で物理的に正しい見えがかりになる）。
   const openings = openingsOnFace(face, graph);
   for (const o of openings) {
     const localX = localXOf(face, o.centerCoord);
@@ -503,7 +508,8 @@ export function buildFaceFigure(face, ctx) {
     const figurePrims = buildOpeningElevation(o, {
       entry, includeDims: false, includeMotionArrows: false, includeLevelLine: false,
     });
-    for (const p of figurePrims) prims.push(translatePrimitive(p, x, 0));
+    const oriented = face.dirSign < 0 ? figurePrims.map(p => mirrorPrimitiveX(p, o.width)) : figurePrims;
+    for (const p of oriented) prims.push(translatePrimitive(p, x, 0));
 
     // 建具記号丸（項目2）: 建具の中心ではなく、姿が見える図の下（注記帯側。寸法行より図寄りの
     // 専用段=openingTagRowY）へ置く。背景透明の仕様は不変（fill指定なし）。

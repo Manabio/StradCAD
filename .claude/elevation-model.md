@@ -83,6 +83,12 @@ boundary.lo」で確保する（`buildRoomBand`/`buildStairBand`の`prevRightExt
 開口は`openings/openingElevationFigure.js`の`buildOpeningElevation`（建具モード編集用姿図と同一の純関数）を
 `includeDims:false, includeMotionArrows:false, includeLevelLine:false`で再利用し、枠・吊元表示・機構表現・レバーハンドルだけ残す
 （両モジュールともFL=y0・上方向負で座標系が一致するため配置は`(x,0)`平行移動のみ）。建具記号丸は開口の中心ではなく姿が見える図の下（tag行）へ。
+**`openingsOnFace`は`wallSide`で絞らない**——開口は物理的にその場所の壁すべてを貫通するため、共有壁の建具は両側の部屋の面に出る
+（旧仕様「配置時にクリックした側の面にのみ表示」は、反対側の部屋の展開図に建具が一切出ない実機不具合の原因だったため撤回。
+`findOpeningsOnWall`と同じ考え方）。**姿図の正準向きは「世界座標昇順＝図のx昇順」**（吊元`hingeSide<0`＝`coord1`側＝図のx=0。
+平面記号`OpeningsLayer.jsx swingSymbol`の`hingeAlong`と同じ世界アンカー）のため、世界順とローカル順が反転する面
+（`dirSign<0`。裏側から見る面もここに含まれる）では`mirrorPrimitiveX`（`elevationPrimitives.js`）で左右反転してから置く——
+反転しないと吊元・親子扉の子・レバーハンドル等の非対称要素が逆端に描かれる。
 直交壁（隣・次の面）の建具が切断位置（面端）にかかる場合、`openingsReachingCorner`（隣接面自身の隅=0/runに開口スパンが届くかで判定）で
 対象を選び、`openingSectionPrimitives`が[枠(CUT)][扉(SILHOUETTE)][枠(CUT)]の3rectを面の両端の帯に描く
 （`buildRoomBand`/`buildStairBand`が`faces[(i∓1+n)%n]`をprevFace/nextFaceとしてctxに渡す）。
