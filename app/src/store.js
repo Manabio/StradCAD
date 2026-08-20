@@ -7,9 +7,10 @@ import {
 import { floorSwapManager } from './storage/FloorSwapManager.js';
 import {
   deleteFloor as dbDeleteFloor, clearAllStores, loadFloor, savePlanesMeta, loadPlanesMeta,
-  saveSiteData, loadSiteData,
-  seedFloorsFromDocument, commitFloorsToDocument,
+  saveSiteData, loadSiteData, saveProject, loadProject,
+  seedFloorsFromDocument, commitFloorsToDocument, loadAllSavedFloors, saveSavedFloor,
 } from './storage/db.js';
+import { buildDocumentJson, parseDocumentEnvelope } from './storage/documentFile.js';
 import { clearDirty } from './dirtyState.js';
 import { acquireSessionLock } from './storage/sessionLock.js';
 import { SpatialIndex } from './transform/SpatialIndex.js';
@@ -322,6 +323,44 @@ export async function saveToIDB() {
   // project.planes[0] が無い（採用フロアが1件も無い）ことは通常起きないが、undefined を
   // そのまま setItem すると文字列 "undefined" が書かれ次回起動を汚染するためガードする。
   if (project.planes[0]) localStorage.setItem(PLANE_ID_KEY, project.planes[0].id);
+  localStorage.setItem(SAVED_FLAG_KEY, '1');
+  clearDirty();
+}
+
+/**
+ * 文書全体（全階・plane一覧・通り芯/構造情報/採番台帳・敷地）を .strad 文書ファイル用の
+ * JSON文字列（エンベロープ）にして返す。まず saveToIDB で保存ドキュメントを確定してから
+ * その確定内容（savedFloors/projects）を読み戻して包む——「ファイルの中身＝次回起動で
+ * 復元される内容」を常に一致させるため。
+ */
+export async function exportDocument() {
+  await saveToIDB();
+  const [floors, struct, planes, site] = await Promise.all([
+    loadAllSavedFloors(),
+    loadProject(savedProjectId),
+    loadPlanesMeta(savedProjectId),
+    loadSiteData(savedProjectId),
+  ]);
+  return buildDocumentJson({ floors, struct, planes, site, bootPlaneId: project.planes[0]?.id ?? null });
+}
+
+/**
+ * .strad 文書ファイル（パース済みJSONエンベロープ）の内容で保存ドキュメントを丸ごと置き換える。
+ * 検証（parseDocumentEnvelope）を通してから全ストアを消去する——不正ファイルで既存文書を
+ * 消さないため。in-memory への反映は行わない（呼び出し側が location.reload() で再起動し、
+ * 通常のブート復元経路をそのまま使うこと。module singleton・undoスタック等の取り残しを
+ * 避ける resetAll と同じ理由）。projectId は現行タブのものを使い続ける（ファイルへは保存しない）。
+ */
+export async function importDocument(envelope) {
+  const doc = parseDocumentEnvelope(envelope);
+  await clearAllStores();
+  for (const { planeId, bytes } of doc.floors) await saveSavedFloor(planeId, bytes);
+  if (doc.struct) await saveProject(savedProjectId, doc.struct);
+  if (doc.planes) await savePlanesMeta(savedProjectId, doc.planes);
+  if (doc.site)   await saveSiteData(savedProjectId, doc.site);
+  // ブートplaneを文書の最下階採用planeへ。reconcilePlanes での無駄な削除・再生成を防ぐ
+  // （saveToIDB の⑤と同じ理由）。
+  if (doc.bootPlaneId) localStorage.setItem(PLANE_ID_KEY, doc.bootPlaneId);
   localStorage.setItem(SAVED_FLAG_KEY, '1');
   clearDirty();
 }

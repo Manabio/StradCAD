@@ -21,6 +21,8 @@
  *   loadSiteData(projectId)          → Promise<Uint8Array | null>
  *   seedFloorsFromDocument()         → Promise<void>   （floorsをclear→savedFloors全件をfloorsへput）
  *   commitFloorsToDocument(planeIds) → Promise<void>   （planeIds分をsavedFloorsへ反映＋含まれない分を削除）
+ *   loadAllSavedFloors()             → Promise<Array<{planeId, bytes}>>（文書ファイル書き出し用）
+ *   saveSavedFloor(planeId, bytes)   → Promise<void>   （文書ファイル読み込み用）
  *   clearAllStores()                → Promise<void>
  */
 
@@ -277,6 +279,32 @@ export async function seedFloorsFromDocument() {
 
     tx.oncomplete = () => resolve();
     tx.onerror    = (e) => reject(e.target.error);
+  });
+}
+
+/** savedFloors の全レコード（保存ドキュメント本体）を返す。文書ファイル書き出し用。 */
+export async function loadAllSavedFloors() {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    if (!db.objectStoreNames.contains(STORE_SAVED_FLOORS)) {
+      resolve([]);
+      return;
+    }
+    const tx  = db.transaction(STORE_SAVED_FLOORS, 'readonly');
+    const req = tx.objectStore(STORE_SAVED_FLOORS).getAll();
+    req.onsuccess = (e) => resolve(e.target.result);
+    req.onerror   = (e) => reject(e.target.error);
+  });
+}
+
+/** savedFloors へ1レコード直接書き込む。文書ファイル読み込み（importDocument）専用。 */
+export async function saveSavedFloor(planeId, bytes) {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const tx  = db.transaction(STORE_SAVED_FLOORS, 'readwrite');
+    const req = tx.objectStore(STORE_SAVED_FLOORS).put({ planeId, bytes });
+    req.onsuccess = () => resolve();
+    req.onerror   = (e) => reject(e.target.error);
   });
 }
 

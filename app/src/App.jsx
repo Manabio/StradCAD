@@ -4,7 +4,7 @@ import { runInAction, reaction } from 'mobx';
 import { undoManager } from './undoManager.js';
 import { serializeGraph, restoreGraph } from './graphSnapshot.js';
 import { Stage } from 'react-konva';
-import { useStore, addFloor, switchFloor, saveToIDB, addAlternativeFloor, removeFloor, resetAll, bootReady } from './store.js';
+import { useStore, addFloor, switchFloor, addAlternativeFloor, removeFloor, resetAll, bootReady, exportDocument, importDocument } from './store.js';
 import { isDirty } from './dirtyState.js';
 import { viewport } from './appViewport.js';
 import {
@@ -52,7 +52,8 @@ import { recomputeStructuralComposition, runStructuralModeSetup, reflectStructur
 import { figureBindingManager } from './figure/FigureBindingManager.js';
 import { floorSwapManager } from './storage/FloorSwapManager.js';
 import { saveFloor, loadFloor } from './storage/db.js';
-import { readLocalAutosaveRaw, parseAutosaveData, writeLocalAutosave, parseOpenedFileBytes } from './storage/localSnapshot.js';
+import { readLocalAutosaveRaw, parseAutosaveData, writeLocalAutosave, parseOpenedFileBytes, downloadDocumentFile } from './storage/localSnapshot.js';
+import { isDocumentEnvelope } from './storage/documentFile.js';
 import { SiteInfoPanel }       from './ui/SiteInfoPanel.jsx';
 import {
   confirmSiteLineLen, confirmSiteTriangle, cycleSiteLineKind,
@@ -1066,8 +1067,13 @@ const App = observer(() => {
       return;
     }
     if (id === 'save') {
-      saveToIDB()
-        .then(() => setToast({ msg: '保存しました', key: Date.now() }))
+      // 文書全体（全階・plane一覧・通り芯/構造情報・敷地）を IDB へ明示保存で確定し、
+      // 同じ内容を .strad 文書ファイルとしてダウンロード書き出しする（「開く」と対）
+      exportDocument()
+        .then((json) => {
+          downloadDocumentFile(json);
+          setToast({ msg: '保存しました', key: Date.now() });
+        })
         .catch(() => setToast({ msg: '保存に失敗しました', key: Date.now() }));
       return;
     }
@@ -1098,9 +1104,35 @@ const App = observer(() => {
     e.target.value = '';
     const reader = new FileReader();
     reader.onload = (ev) => {
+      let parsed;
       try {
-        const bytes = new Uint8Array(ev.target.result);
-        restoreGraph(graph, parseOpenedFileBytes(bytes));
+        parsed = parseOpenedFileBytes(new Uint8Array(ev.target.result));
+      } catch {
+        setToast({ msg: 'ファイルの読み込みに失敗しました', key: Date.now() });
+        return;
+      }
+      // 文書ファイル（全階・plane一覧・通り芯/構造情報・敷地）: 保存ドキュメントを丸ごと
+      // 置き換えて reload（通常のブート復元経路をそのまま使う。resetAll と同じ理由）
+      if (isDocumentEnvelope(parsed)) {
+        setFloorConfirm({
+          message: '文書ファイルを開きます。現在の内容（保存していない編集を含む）は置き換えられます。よろしいですか？',
+          buttons: [
+            { label: '開く',       value: 'ok', primary: true },
+            { label: 'キャンセル', value: 'cancel' },
+          ],
+          onSelect: (v) => {
+            setFloorConfirm(null);
+            if (v !== 'ok') return;
+            importDocument(parsed)
+              .then(() => window.location.reload())
+              .catch(() => setToast({ msg: 'ファイルの読み込みに失敗しました', key: Date.now() }));
+          },
+        });
+        return;
+      }
+      // 旧形式（単一グラフ FlatBuffers / 旧JSONスナップショット）: アクティブ階へ復元
+      try {
+        restoreGraph(graph, parsed);
         setToast({ msg: 'ファイルを開きました', key: Date.now() });
       } catch {
         setToast({ msg: 'ファイルの読み込みに失敗しました', key: Date.now() });

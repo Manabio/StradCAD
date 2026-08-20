@@ -31,6 +31,23 @@ export function writeLocalAutosave(graph) {
   localStorage.setItem(AUTOSAVE_KEY, btoa(binary));
 }
 
+// 文書ファイル（JSONエンベロープ文字列。store.js の exportDocument が構築）を
+// .strad としてダウンロード書き出しする（「開く」が読める形式）。
+export function downloadDocumentFile(json) {
+  const blob = new Blob([json], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const d = new Date();
+  const pad = (n) => String(n).padStart(2, '0');
+  const name = `strad-${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}.strad`;
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
 // 「ファイルを開く」で読み込んだバイト列（JSON=旧形式 or FlatBuffers=新形式）を
 // restoreGraph に渡せる形へパースする。不正な内容は例外を投げる。
 export function parseOpenedFileBytes(bytes) {
