@@ -1,7 +1,7 @@
 /**
  * IndexedDB アクセス層
  *
- * データベース:  strad  (バージョン 4)
+ * データベース:  strad  (バージョン 5)
  * オブジェクトストア:
  *   floors      — keyPath: planeId — フロアごとの FlatBuffers バイナリ（セッション作業領域）
  *   projects    — keyPath: projectId — 通り芯（全階共通）の FlatBuffers バイナリ。
@@ -31,7 +31,10 @@ import { isSessionOwner } from './sessionLock.js';
 import { ERR_SESSION_LOCKED } from '../error.js';
 
 const DB_NAME    = 'strad';
-const DB_VERSION = 4;
+// v5: バージョンのみ4に上がりストアが欠損したDB（開発中の中間状態コードで開かれたもの）を
+// 自己修復するための再アップグレード。onupgradeneeded は同一バージョンでは二度と走らないため、
+// ストア欠損は必ずバージョンを上げて修復する（clearAllStores が NotFoundError で失敗する実害があった）。
+const DB_VERSION = 5;
 const STORE_FLOORS       = 'floors';
 const STORE_PROJECTS     = 'projects';
 const STORE_SAVED_FLOORS = 'savedFloors';
@@ -61,15 +64,18 @@ function openDB() {
       if (!db.objectStoreNames.contains(STORE_PROJECTS)) {
         db.createObjectStore(STORE_PROJECTS, { keyPath: 'projectId' });
       }
-      if (!db.objectStoreNames.contains(STORE_SAVED_FLOORS)) {
+      const savedFloorsCreated = !db.objectStoreNames.contains(STORE_SAVED_FLOORS);
+      if (savedFloorsCreated) {
         db.createObjectStore(STORE_SAVED_FLOORS, { keyPath: 'planeId' });
       }
-      // migration: savedFloors 新設以前（バージョン1〜3）からのアップグレード時、
-      // その時点の floors の内容を savedFloors へコピーする。v3 でも deactivate（階切替の
-      // スワップアウト）は複数階を無条件に floors へ書いていたため「常に1階分のみ」ではない
-      // ——参照されなくなった孤児レコードもここでは区別せず一旦コピーされるが、初回の明示保存
-      // （commitFloorsToDocument が project.planeMap に無い分を削除する）で掃除される。
-      if (e.oldVersion >= 1 && e.oldVersion < 4) {
+      // migration: savedFloors を今回のアップグレードで新設した場合（バージョン1〜3からの
+      // アップグレード、およびストア欠損のままバージョンだけ4になっていた修復対象DB）、
+      // その時点の floors の内容を savedFloors へコピーする。空の savedFloors のまま起動すると
+      // seedFloorsFromDocument が floors を白紙化しデータロスになるため。v3 でも deactivate
+      // （階切替のスワップアウト）は複数階を無条件に floors へ書いていたため「常に1階分のみ」
+      // ではない——参照されなくなった孤児レコードもここでは区別せず一旦コピーされるが、
+      // 初回の明示保存（commitFloorsToDocument が project.planeMap に無い分を削除する）で掃除される。
+      if (savedFloorsCreated && e.oldVersion >= 1) {
         const tx = e.target.transaction;
         const floorsStore = tx.objectStore(STORE_FLOORS);
         const savedStore  = tx.objectStore(STORE_SAVED_FLOORS);

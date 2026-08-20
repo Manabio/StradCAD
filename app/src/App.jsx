@@ -1055,7 +1055,11 @@ const App = observer(() => {
           if (v !== 'ok') return;
           resetAll()
             .then(() => window.location.reload())
-            .catch(() => setToast({ msg: '消去に失敗しました', key: Date.now() }));
+            .catch((e) => {
+              // 失敗の実体は握りつぶさずコンソールへ残す（環境依存の失敗の調査用）
+              console.error('[新規] resetAll failed:', e);
+              setToast({ msg: '消去に失敗しました', key: Date.now() });
+            });
         },
       });
       return;
