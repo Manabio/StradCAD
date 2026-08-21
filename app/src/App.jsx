@@ -1745,6 +1745,13 @@ const App = observer(() => {
         const room = graph.roomMap.get(mode.namingRoomId);
         return room ? (
           <RoomNameInput
+            // 部屋が変わったら必ず再マウントして、各値（部屋名・屋内外・階段/吹抜け）の初期値を
+            // その部屋の元指定の値にする。key が無いと、namingRoomId が null を経由せず
+            // 別の部屋へ切り替わる経路（例: ダイアログを開いたまま階段セルをクリック→
+            // startDrag が同一アクション内で閉じて開く）で React がコンポーネントを再利用し、
+            // useState の初期化が走らず前の部屋の値・入力途中の値が残る（ユーザー指摘2026-08:
+            // 新規追加以外のケースの各値の初期値は元指定の値）。
+            key={room.id}
             room={room}
             graph={graph}
             viewport={viewport}
