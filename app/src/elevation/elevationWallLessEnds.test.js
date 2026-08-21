@@ -166,6 +166,71 @@ test('壁のない端部: 壁断面を描かない端には直交壁の建具断
     '壁のない端には建具断面の[枠][扉][枠]rectを描かないはず');
 });
 
+// ---- 床断面より下にある向こう側の断面は細線の破線（ユーザー明示指示2026-08） ----
+// 「3」のA2面（中心4の壁をf側から見た面）の1200区間＝g領域の開放スパン（far床が100低い）。
+test('開放スパン: 床断面より下の遠側床線と端部の縦線は細線の破線で、角が交点で接続する', () => {
+  const { graph, room3p } = buildFixture();
+  const faces = composeRoomFaces(room3p, graph);
+  const a2 = faces.find(f => f.label === 'A2');
+  const gSpan = a2.spans.find(s => s.kind === 'open' && s.farFloorDeltaMm === -100);
+  assert.ok(gSpan, '前提: A2にg領域の開放スパン（far床-100）がある');
+
+  const prims = buildFaceFigure(a2, {
+    graph, project: { openingNumberIndex: new Map() },
+    room: room3p, ceilingHeight: 2400, materialMap: new Map(), gridCLs: [],
+    wallLessEndExtendModelMm: 150,
+  });
+
+  // 遠側床線（y=+100=床断面より下）: 細線の破線が「1本だけ」（QA指摘: アキ矩形の実線が
+  // 同座標に重なると細破線が覆われて見えなくなるため、重複描画がないことまで固定する）
+  const farLines = prims.filter(p => p.type === 'line' && p.y1 === 100 && p.y2 === 100 && p.x2 - p.x1 > 100);
+  assert.equal(farLines.length, 1, '床断面下の遠側床線は1本だけのはず（重複描画なし）');
+  const farLine = farLines[0];
+  assert.equal(farLine.weight, 'thin', '床断面より下の遠側床線は細線のはず');
+  assert.equal(farLine.dash, 'dashed', '床断面より下の遠側床線は破線のはず');
+  assert.equal(farLine.x1, gSpan.loX);
+  assert.equal(farLine.x2, gSpan.hiX);
+
+  // アキ矩形は近側床（床断面=y0）まで（far床まで伸ばすと外形の実線が細破線を覆う）
+  const gapRect = prims.find(p => p.type === 'rect' && p.x === gSpan.loX && p.y === -2400);
+  assert.ok(gapRect, 'アキ矩形が見つからない');
+  assert.equal(gapRect.y + gapRect.h, 0, 'アキ矩形の下辺は近側床（床断面）までのはず');
+
+  // 端部の縦線（far床+100〜床断面0）: 同じ細線の破線が両端にあり、遠側床線と角で交わる。
+  // 始点は角（far床側）——破線の位相が角から始まり「破線同士の角は必ず破線の交点」になる
+  for (const x of [gSpan.loX, gSpan.hiX]) {
+    const edge = prims.find(p =>
+      p.type === 'line' && p.x1 === x && p.x2 === x && p.y1 === 100 && p.y2 === 0);
+    assert.ok(edge, `x=${x} に床断面下の縦線（角起点）が見つからない`);
+    assert.equal(edge.weight, 'thin', '床断面下の縦線は細線のはず');
+    assert.equal(edge.dash, 'dashed', '床断面下の縦線は破線のはず');
+    // 角の接続: 縦線の始点(y1=100)が遠側床線のyと厳密に一致（破線同士の角＝交点）
+    assert.equal(edge.y1, farLine.y1);
+  }
+});
+
+test('開放スパン: 床〜天井の間に見える遠側床線（見上げ方向）は従来どおり中線の実線のまま', () => {
+  const { graph, room2p } = buildFixture();
+  const faces = composeRoomFaces(room2p, graph);
+  const c2 = faces.find(f => f.label === 'C2'); // b領域の開放スパン（far床+50=見上げ方向）
+  const bSpan = c2.spans.find(s => s.kind === 'open' && s.farFloorDeltaMm === 50);
+  assert.ok(bSpan, '前提: C2にb領域の開放スパン（far床+50）がある');
+
+  const prims = buildFaceFigure(c2, {
+    graph, project: { openingNumberIndex: new Map() },
+    room: room2p, ceilingHeight: 2400, materialMap: new Map(), gridCLs: [],
+    wallLessEndExtendModelMm: 150,
+  });
+  const farLine = prims.find(p => p.type === 'line' && p.y1 === -50 && p.y2 === -50 && p.x2 - p.x1 > 100);
+  assert.ok(farLine, '遠側床線が見つからない');
+  assert.equal(farLine.weight, 'medium', '見上げ方向の遠側床線は中線のまま');
+  assert.equal(farLine.dash, undefined, '見上げ方向の遠側床線は実線のまま');
+  // 床断面下の細線縦線は見上げ方向には出ない
+  assert.ok(!prims.some(p => p.type === 'line' && p.weight === 'thin' && p.dash === 'dashed'
+    && p.x1 === p.x2 && (p.x1 === bSpan.loX || p.x1 === bSpan.hiX) && p.y2 === -50),
+    '見上げ方向には床断面下の縦線を描かないはず');
+});
+
 test('壁のない端部: 開放スパンの延長端も同じ規則（横切らない直交壁は壁なし・横切る壁あり）で判定される', () => {
   const { graph, room2p } = buildFixture();
   const f2 = byLabel(composeRoomFaces(room2p, graph));

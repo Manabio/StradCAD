@@ -469,11 +469,16 @@ export function buildFaceFigure(face, ctx) {
   // 壁の無い開放区間の描画。壁区間はここまでの床線・天井線・両端縦線で既に表現済みのため、
   // ここではopen区間（kind==='open'）だけを追加で描く。
   //   1. 遠側床線: near側（segs＝wallAdjacentFloorSegments）の床yと開放先(farFloorDeltaMm)の
-  //      床yが異なる場合だけ、開放先の床の高さで水平線（SILHOUETTE＝見えがかり）を引く。
-  //      far側の方が低ければ（見下ろす方向）破線にする（QA修正・ユーザー明示指示）。
+  //      床yが異なる場合だけ、開放先の床の高さで水平線を引く。far側の方が低い（見下ろす方向＝
+  //      床断面より下にある向こう側の断面）場合は細線の破線（ユーザー明示指示2026-08:
+  //      「床断面より下、または天井断面より上にある展開面の向こう側の断面は、細線の破線」。
+  //      見上げる方向・床〜天井の間に見える線は従来どおりSILHOUETTE実線）。
   //   2. 上部あき: `appendGapMark`（腰壁＋垂れ壁のアキと共用）で天井から遠側床までの矩形を描く。
   //   3. 境界エッジ: open区間の両端のうち隣がwall側（区間 or 面端）ならSILHOUETTE縦線を引く
-  //      （far側の方が低ければ破線。ユーザー明示指示）。
+  //      （far側の方が低ければ破線。ユーザー明示指示）。床断面より下の部分（near床〜far床）は
+  //      1と同じ細線の破線で継ぎ足す——端点をfar床線と厳密に一致させ、破線同士の角が必ず
+  //      交点で接続するようにする（ユーザー明示指示: 「端部の縦線共（破線同士の角は必ず
+  //      破線の交点）」）。
   const spans = face.spans ?? [];
   for (let i = 0; i < spans.length; i++) {
     const s = spans[i];
@@ -484,20 +489,39 @@ export function buildFaceFigure(face, ctx) {
     // 境界縦線を破線にする（見えがかりの隠れ線表現）。従来の一律SILHOUETTE実線から変更。
     const looksDown = farDelta < nearDelta;
     const dashOpt = looksDown ? { dash: 'dashed' } : {};
+    // near床のy（-0を0へ正規化。floorYOfと同じ規約——-0は等値比較・テストの落とし穴になるため）
+    const nearFloorYAt = x => { const d = nearDeltaAt(x); return d ? -d : 0; };
     if (farDelta !== nearDelta) {
-      prims.push({ type: 'line', x1: s.loX, y1: -farDelta, x2: s.hiX, y2: -farDelta, weight: silhouetteWeight, ...dashOpt });
+      // 床断面（near床）より下に見える遠側床線は細線（見上げ方向は従来どおり中線）
+      prims.push({
+        type: 'line', x1: s.loX, y1: -farDelta, x2: s.hiX, y2: -farDelta,
+        weight: looksDown ? detailWeight : silhouetteWeight, ...dashOpt,
+      });
     }
-    const gapH = CH - farDelta;
+    // アキ矩形は近側床（床断面）までにクランプする（QA指摘: far床まで伸ばすと矩形の実線の
+    // 外形線が、床断面下の細破線＝遠側床線・床下縦線と完全に同座標で重なり覆ってしまう。
+    // 建築的にも、あき＝壁面の抜けは立っている近側の床までで、その下は床の落差の見えがかり）。
+    // 見上げ方向は従来どおりfar床まで（far床の方が高い＝あきはそこで終わる）。
+    const gapH = CH - Math.max(farDelta, nearDelta);
     if (gapH > 0) {
       appendGapMark(prims, { x: s.loX, y: -CH, w: s.hiX - s.loX, h: gapH }, silhouetteWeight, detailWeight);
     }
     const prevIsWall = i > 0 ? spans[i - 1].kind === 'wall' : hasWallAtLocal0;
     const nextIsWall = i < spans.length - 1 ? spans[i + 1].kind === 'wall' : hasWallAtLocalRun;
+    // 床断面より下の縦線（far床〜near床。遠側床線と同じ細線の破線）。角＝far床側を始点に
+    // することで、破線の位相が角から始まり「破線同士の角は必ず破線の交点」になる
+    // （破線パターンは線の始点から刻まれるため、角を始点にしないと線長次第で角がギャップに落ちる）。
+    const belowFloorEdge = (x) => ({
+      type: 'line', x1: x, y1: -farDelta, x2: x, y2: nearFloorYAt(x),
+      weight: detailWeight, dash: 'dashed',
+    });
     if (prevIsWall) {
-      prims.push({ type: 'line', x1: s.loX, y1: -nearDeltaAt(s.loX), x2: s.loX, y2: -CH, weight: silhouetteWeight, ...dashOpt });
+      prims.push({ type: 'line', x1: s.loX, y1: nearFloorYAt(s.loX), x2: s.loX, y2: -CH, weight: silhouetteWeight, ...dashOpt });
+      if (looksDown) prims.push(belowFloorEdge(s.loX));
     }
     if (nextIsWall) {
-      prims.push({ type: 'line', x1: s.hiX, y1: -nearDeltaAt(s.hiX), x2: s.hiX, y2: -CH, weight: silhouetteWeight, ...dashOpt });
+      prims.push({ type: 'line', x1: s.hiX, y1: nearFloorYAt(s.hiX), x2: s.hiX, y2: -CH, weight: silhouetteWeight, ...dashOpt });
+      if (looksDown) prims.push(belowFloorEdge(s.hiX));
     }
   }
 
