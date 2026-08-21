@@ -10,8 +10,8 @@
 import { figureBounds } from '../structural/sectionFigure/sectionGeometry.js';
 import { faceBoundaryLocalX, faceWallLessExtents } from './elevationFaces.js';
 import { composeRoomFaces, neighborWallFace } from './elevationFaceList.js';
-import { buildFaceFigure } from './elevationFigure.js';
-import { wallAdjacentFloorSegments } from './elevationFloorProfile.js';
+import { buildFaceFigure, segEndProfile } from './elevationFigure.js';
+import { wallAdjacentFloorSegments, familyCeilingSegments } from './elevationFloorProfile.js';
 import { roomCeilingHeight } from '../finish/roomMetrics.js';
 import {
   CH_DIM_OFFSET_MM, DEFAULT_FACE_GAP_MM, DEFAULT_TRIANGLE_OFFSET_MM, BAND_TOP_MARGIN_MM,
@@ -57,6 +57,12 @@ export function layoutBandFaces(room, graph, faces, ctx = {}) {
   let prevBoundaryHi = null; // 直前面の壁中心線(hi側)の帯内絶対x（rightAnchorXの起点。項目9はこちらのまま）
   let prevRightExtent = null; // 直前面の寸法線類を含む右端の帯内絶対x（項目6のギャップ起点）
   let chDimX = null; // 天井高寸法線のx（先頭面のみ設定。項目9の左アンカー起点）
+  // 問題修正2026-08その4改（ユーザー明示指示: 「B1の右側の床は+100、つづくC1の左側の床は+0。
+  // 床の起点高さが変わるので、C1の左側に天井高さの寸法線が必要」「次のA2も同様」）:
+  // 直前の面の右端区間の床・天井の起点（segEndProfile）を持ち回り、次の面の左端区間と
+  // 異なればその面の左側にCH寸法（左端区間の実際の床〜天井・値=実効CH）を描く。
+  // 段差見付け面（floorSegments未指定）は実質的な隣接関係を変えないため持ち回りを更新しない。
+  let prevRightProfile = null;
   faces.forEach((face, i) => {
     const boundary = faceBoundaryLocalX(face, graph);
     // QA G2: この面自身のhasWallAtLocal0（壁のない左端。項目1）が false なら、床線・天井線が
@@ -65,37 +71,82 @@ export function layoutBandFaces(room, graph, faces, ctx = {}) {
     // 実間隔がgapModelMmを下回らないよう、この延長ぶんをxCursor算出に加味する。
     const wallLessExtendMm = wallLessEndExtendModelMm ?? DEFAULT_WALL_LESS_END_EXTEND_MM;
     const { leftExtendMm, rightExtendMm } = faceWallLessExtents(face, wallLessExtendMm);
+    // 項目4: 部分指定（referenceRoomIds）が壁際の一部を占めfloorLevelが異なる区間があれば、
+    // 床線を段差付きにする（elevationFloorProfile.js。未該当なら常にフラット1区間を返す）。
+    // 新仕様: 段差見付け面（kind==='step'）自体は段差そのものを表す専用描画分岐を持つため
+    // floorSegmentsは渡さない（buildFaceFigure側がフラット1区間フォールバックする）。
+    const floorSegments = face.kind === 'step' ? undefined : wallAdjacentFloorSegments(face, room, graph);
+    // 問題修正2026-08その3改: 「壁の向こう側にある部分指定関係の部屋の天井」の破線描画用
+    // （far側プローブ。familyCeilingSegments）。
+    const beyondCeilings = face.kind === 'step' ? undefined : familyCeilingSegments(face, room, graph);
+
+    // 問題修正2026-08その4改: 直前の面の右端と、この面の左端で床・天井の起点が変われば、
+    // この面の左側にCH寸法を描く（下のhasLeftChDimブロック）。
+    // 問題修正2026-08その6: 段差見付け面（kind==='step'。実機の「C1」）も参加する——
+    // 見付け面の床=低い側床(baseFloorDeltaMm)・天井=低い側エリアの天井(ceilAbsMm)で、
+    // 直前の面（例: B1の右端の床+100）と床の起点が変わればその左側にCH寸法が要る
+    // （ユーザー明示指示「つづくC1の1200の左側の床は1FL+0…C1の左側に天井高さの寸法線が必要」。
+    // 旧実装は見付け面を継ぎ目判定から除外しており、実機でC1の寸法が一切出なかった根本原因）。
+    const stepProfile = face.kind === 'step'
+      ? { floorDeltaMm: face.baseFloorDeltaMm, ceilAbsMm: face.ceilAbsMm ?? CH }
+      : null;
+    const leftProfile = stepProfile ?? segEndProfile(floorSegments, CH, 'first');
+    const hasLeftChDim = i > 0 && prevRightProfile != null && leftProfile != null &&
+      (leftProfile.floorDeltaMm !== prevRightProfile.floorDeltaMm ||
+       leftProfile.ceilAbsMm !== prevRightProfile.ceilAbsMm);
+
     // 項目6: 隣接面の間隔(gapModelMm)は壁中心線間ではなく、寸法線類（右のCH寸法を含む）の
     // 描画範囲を基準にする——項目5で段差のある面に右CH寸法が付くと、その面のboundary.hiより
     // さらにCH_DIM_OFFSET_MMぶん右まで描画物が伸びるため、そこを基準にしないと隣の面と重なる。
-    // 左端側（boundary.lo）は帯の先頭面（i===0）にしか左CH寸法が付かないため対象外
-    // （先頭面はそもそも「前の面」を持たずギャップ計算に登場しない）。
-    xCursor = i === 0 ? 0 : prevRightExtent + gapModelMm - boundary.lo + leftExtendMm;
+    // 問題修正2026-08その4改: この面の左側にCH寸法が付く場合も、そのぶん（CH_DIM_OFFSET_MM）
+    // 左端側の描画物が伸びるため加味する。
+    xCursor = i === 0 ? 0 : prevRightExtent + gapModelMm - boundary.lo + leftExtendMm
+      + (hasLeftChDim ? CH_DIM_OFFSET_MM : 0);
 
     // 項目3: 直交壁（隣・次の面）の建具が切断位置にかかる場合の断面描画用。段差見付け面
     // （kind==='step'）を挟んでも実質的な隣接関係は変わらないため、neighborWallFaceでスキップする
     // （新仕様。elevationFaceList.js）。
     const prevFace = neighborWallFace(faces, i, -1);
     const nextFace = neighborWallFace(faces, i, 1);
-    // 項目4: 部分指定（referenceRoomIds）が壁際の一部を占めfloorLevelが異なる区間があれば、
-    // 床線を段差付きにする（elevationFloorProfile.js。未該当なら常にフラット1区間を返す）。
-    // 新仕様: 段差見付け面（kind==='step'）自体は段差そのものを表す専用描画分岐を持つため
-    // floorSegmentsは渡さない（buildFaceFigure側がフラット1区間フォールバックする）。
-    const floorSegments = face.kind === 'step' ? undefined : wallAdjacentFloorSegments(face, room, graph);
     const faceCtx = {
       graph, project, room, ceilingHeight: CH, materialMap, gridCLs, faceLabelAvoidThresholdModelMm,
       prevFace, nextFace, openingTagRowModelMm, dimRowGapModelMm, gridRowGapModelMm, floorSegments,
-      wallLessEndExtendModelMm, scale,
+      beyondCeilings, wallLessEndExtendModelMm, scale,
     };
     for (const p of buildFaceFigure(face, faceCtx)) primitives.push(translatePrimitive(p, xCursor, 0));
     if (i === 0) {
       chDimX = boundary.lo - CH_DIM_OFFSET_MM;
+      // 問題修正2026-08(QA F1): 左CH寸法も右CH寸法（buildFaceFigure側）と同じく「左端区間の
+      // 実際の床〜天井」に追従させる——帯CH固定のままだと、先頭面の左端区間に明示CHの部分指定が
+      // あるとき天井線に届かない線＋食い違う値になる。左端区間が帯自身（親と同じ床・天井）の
+      // ときは従来どおりchInfo.raw（傾斜天井のレンジ表記等の原文ラベル）を保つ。
+      const leftSeg = floorSegments?.[0];
+      const leftDelta = leftSeg?.floorDeltaMm ?? 0;
+      const leftCeilAbs = leftSeg?.chMm != null ? leftDelta + leftSeg.chMm : CH;
+      const isBandOwn = leftDelta === 0 && leftCeilAbs === CH;
+      const leftFloorY = leftDelta ? -leftDelta : 0;
       primitives.push({
-        type: 'dim', dir: 'v', at: chDimX, from: -CH, to: 0, foot: 0, dot: true, label: chInfo.raw,
+        type: 'dim', dir: 'v', at: chDimX, from: -leftCeilAbs, to: leftFloorY, foot: 0, dot: true,
+        label: isBandOwn ? chInfo.raw : Math.round(leftCeilAbs - leftDelta),
       });
+    } else if (hasLeftChDim) {
+      // 問題修正2026-08その4改（ユーザー明示指示）: 床の起点高さが直前の面から変わった面の
+      // 左側にCH寸法（この面の左端区間の実際の床〜天井・値=実効CH）。様式は先頭面の左CH寸法・
+      // 右CH寸法と同じ（縦書き値・端部塗り丸）。
+      const leftFloorY = leftProfile.floorDeltaMm ? -leftProfile.floorDeltaMm : 0;
+      primitives.push(translatePrimitive({
+        type: 'dim', dir: 'v', at: boundary.lo - CH_DIM_OFFSET_MM,
+        from: -leftProfile.ceilAbsMm, to: leftFloorY, foot: 0, dot: true,
+        label: Math.round(leftProfile.ceilAbsMm - leftProfile.floorDeltaMm),
+      }, xCursor, 0));
     }
     faceRuns.push({ face, xCursor });
     prevBoundaryHi = xCursor + boundary.hi;
+    // 問題修正2026-08その6: 段差見付け面も持ち回りを更新する（見付け面の床・天井は
+    // baseFloorDeltaMm/ceilAbsMmで一様。次の面（例: A2）との継ぎ目判定に使う——
+    // 「次のA2の床は1FL+100…A2の左側に天井高さの寸法線が必要」）。
+    const rightProfile = stepProfile ?? segEndProfile(floorSegments, CH, 'last');
+    if (rightProfile != null) prevRightProfile = rightProfile;
     // 項目5・6: この面に段差があれば右CH寸法（boundary.hi + CH_DIM_OFFSET_MM）ぶん右まで
     // 描画物が伸びる（buildFaceFigure側の実装と同じ位置の式）。
     // QA G2: この面自身のhasWallAtLocalRun（壁のない右端。項目1）が false なら、床線・天井線が

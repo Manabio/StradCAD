@@ -451,3 +451,173 @@ test('【QA G2・実グラフ】buildRoomBand: 上り口辺（壁生成スキッ
   assert.equal(diff, wallLessEndExtendModelMm,
     `壁なし辺を挟む面Bのxカーソルは、通常時よりちょうどwallLessEndExtendModelMm(${wallLessEndExtendModelMm})ぶん右にずれるはず（実際の差: ${diff}）`);
 });
+
+// ---- 問題修正2026-08(QA F1): 左CH寸法は先頭面の左端区間の実際の床〜天井に追従する ----
+// 右CH寸法（buildFaceFigure側）だけを区間追従にすると、左端区間に明示CHの部分指定がある帯で
+// 左右のCH寸法が別基準になり、左は天井線に届かない線＋食い違う値になる——左も同じ基準に揃える。
+test('【問題修正2026-08】buildRoomBand: 先頭面の左端区間に明示CHの部分指定があるとき、左CH寸法はその区間の実際の天井まで届き値も一致する', () => {
+  const graph = makeGraph();
+  const x0   = graph.addCenterLine(CenterLineType.VERTICAL, 0,    { labeled: false, discipline: Discipline.ARCH });
+  const xMid = graph.addCenterLine(CenterLineType.VERTICAL, 2000, { labeled: false, discipline: Discipline.ARCH });
+  const x1   = graph.addCenterLine(CenterLineType.VERTICAL, 4000, { labeled: false, discipline: Discipline.ARCH });
+  const y0   = graph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: false, discipline: Discipline.ARCH });
+  const y1   = graph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: false, discipline: Discipline.ARCH });
+  const leftKey  = `${x0.id}:${y0.id}:${xMid.id}:${y1.id}`;
+  const rightKey = `${xMid.id}:${y0.id}:${x1.id}:${y1.id}`;
+  const room = graph.addRoom(new Set([leftKey, rightKey]), 'LDK');
+  generateRoomWallsFromOutline(graph, room);
+  room.setOverride('ceilingHeight', '2400');
+  const child = graph.addRoom(new Set([leftKey]), '天井高エリア', undefined, new Set([room.id]));
+  child.setOverride('ceilingHeight', '2600'); // FLは親と同じ・天井だけ明示指定（先頭面Aの左端区間）
+
+  const band = buildRoomBand(room, graph);
+  // 左CH寸法＝縦dimのうち最も左（atが最小）のもの（右CH寸法は各面のboundary.hiより右に出る）。
+  const vDims = band.primitives.filter(p => p.type === 'dim' && p.dir === 'v');
+  const leftChDim = vDims.reduce((a, b) => (a.at <= b.at ? a : b));
+  assert.equal(leftChDim.from, -2600, '左CH寸法は左端区間（明示CH2600）の実際の天井まで届くはず');
+  assert.equal(leftChDim.label, 2600, '値も左端区間の実際のCH(2600)のはず');
+  assert.equal(leftChDim.to, 0, 'FLは親と同じため床は0のまま');
+});
+
+// ---- 失敗系: 左端区間が帯自身（親と同じ床・天井）なら従来どおりchInfo.raw（原文ラベル）を保つ ----
+test('【失敗系・問題修正2026-08】buildRoomBand: 左端区間が帯自身ならレンジ表記等の原文ラベルを保つ', () => {
+  const graph = makeGraph();
+  const room = makeRectRoom(graph, 0, 0, 4000, 3000);
+  room.setOverride('ceilingHeight', '2300〜3500'); // 傾斜天井のレンジ表記（defaultCeilingHeightで作図）
+
+  const band = buildRoomBand(room, graph);
+  const vDims = band.primitives.filter(p => p.type === 'dim' && p.dir === 'v');
+  assert.equal(vDims.length, 1);
+  assert.equal(vDims[0].label, '2300〜3500', '原文ラベルのまま保たれるはず');
+  assert.equal(vDims[0].from, -graph.defaultCeilingHeight, '作図はdefaultCeilingHeightのはず');
+});
+
+// ---- 問題修正2026-08その5: 破線は「壁の向こう側に部分指定関係のある部屋がある展開図」のみ ----
+// 1列×2行・全セルを親が登録し下段を子が上書きする部屋では、どの外周面も壁の向こう側は部屋外
+// ＝部分指定関係のある部屋は無い → 破線は一切出ない。旧・全セル投影方式は「部屋内の別エリアが
+// run座標上で重なるだけ」でA1/B1/D2相当の面にも破線を出していた——その門番。
+test('【問題修正2026-08その5】buildRoomBand: 外周壁の向こう側に部分指定関係の部屋が無ければ、部屋内に別天井のエリアがあっても破線は出ない', () => {
+  const graph = makeGraph();
+  const x0 = graph.addCenterLine(CenterLineType.VERTICAL, 0,    { labeled: false, discipline: Discipline.ARCH });
+  const x1 = graph.addCenterLine(CenterLineType.VERTICAL, 4000, { labeled: false, discipline: Discipline.ARCH });
+  const y0 = graph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: false, discipline: Discipline.ARCH });
+  const yMid = graph.addCenterLine(CenterLineType.HORIZONTAL, 1500, { labeled: false, discipline: Discipline.ARCH });
+  const y1 = graph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: false, discipline: Discipline.ARCH });
+  const topKey = `${x0.id}:${y0.id}:${x1.id}:${yMid.id}`;
+  const botKey = `${x0.id}:${yMid.id}:${x1.id}:${y1.id}`;
+  const room = graph.addRoom(new Set([topKey, botKey]), 'LDK');
+  generateRoomWallsFromOutline(graph, room);
+  room.setOverride('ceilingHeight', '2400');
+  const child = graph.addRoom(new Set([botKey]), '土間', undefined, new Set([room.id]));
+  child.setFloorLevel(-100);
+  child.setOverride('ceilingHeight', '2400'); // 天井絶対高さ2300（部屋内の別エリア）
+
+  const band = buildRoomBand(room, graph);
+  const dashedHoriz = band.primitives.filter(p =>
+    p.type === 'line' && p.dash === 'dashed' && p.weight === 'thin' && p.y1 === p.y2);
+  // 問題修正2026-08その6: 段差見付け面（子/親境界の見付けそのもの＝「またぐ面」）には
+  // 高い側（親）の天井の破線が出る——外周面（A/B/C/D）には出ない、が本テストの主眼。
+  assert.equal(dashedHoriz.length, 1,
+    `破線は段差見付け面の1本だけで、外周面には出ないはず（実際:${JSON.stringify(dashedHoriz)}）`);
+  assert.equal(dashedHoriz[0].y1, -2400, '見付け面の破線は高い側（親）の天井(-2400)＝天井断面(-2300)の上+100のはず');
+});
+
+// ---- 問題修正2026-08その5: 壁の向こう側に部分指定の子がある面には、その天井の破線が出る ----
+// 親の登録セルを上段だけにし、下段を「親を参照する子」が所有する構成——上段の南側の壁の
+// 向こう側（下段）に部分指定関係の部屋（子。天井絶対高さ100+2400=2500 > 親CH2400）がある。
+// 面Cは開放スパン（far側=ファミリー）扱いになり、far天井線として天井断面(-2400)より上の
+// -2500に細線の破線が出る。他の面（向こう側=部屋外）には出ない。
+test('【問題修正2026-08その5】buildRoomBand: 壁の向こう側に部分指定関係の子がある面だけに、その天井の破線が出る', () => {
+  const graph = makeGraph();
+  const x0 = graph.addCenterLine(CenterLineType.VERTICAL, 0,    { labeled: false, discipline: Discipline.ARCH });
+  const x1 = graph.addCenterLine(CenterLineType.VERTICAL, 4000, { labeled: false, discipline: Discipline.ARCH });
+  const y0 = graph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: false, discipline: Discipline.ARCH });
+  const yMid = graph.addCenterLine(CenterLineType.HORIZONTAL, 1500, { labeled: false, discipline: Discipline.ARCH });
+  const y1 = graph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: false, discipline: Discipline.ARCH });
+  const topKey = `${x0.id}:${y0.id}:${x1.id}:${yMid.id}`;
+  const botKey = `${x0.id}:${yMid.id}:${x1.id}:${y1.id}`;
+  const room = graph.addRoom(new Set([topKey]), 'LDK'); // 親は上段のみ
+  generateRoomWallsFromOutline(graph, room);
+  room.setOverride('ceilingHeight', '2400');
+  const child = graph.addRoom(new Set([botKey]), '小上がり', undefined, new Set([room.id]));
+  child.setFloorLevel(100);
+  child.setOverride('ceilingHeight', '2400'); // 天井絶対高さ100+2400=2500（親より100高い）
+
+  const band = buildRoomBand(room, graph);
+  const dashedHoriz = band.primitives.filter(p =>
+    p.type === 'line' && p.dash === 'dashed' && p.weight === 'thin' && p.y1 === p.y2);
+  assert.ok(dashedHoriz.length >= 1, `向こう側=子の面に破線が出るはず（実際:${JSON.stringify(dashedHoriz)}）`);
+  assert.ok(dashedHoriz.every(l => l.y1 === -2500),
+    `破線はすべて子の天井の高さ(-2500)＝天井断面(-2400)の上+100のはず（実際:${JSON.stringify(dashedHoriz)}）`);
+});
+
+// ---- 問題修正2026-08その4改・その6: 床の起点高さが直前の面から変わる面の左側にCH寸法 ----
+// ユーザーの平面（3'のB1右=+100→C1左=+0→A2左=+100）に対応する「張り出し（アルコーブ）型の
+// 部分指定」フィクスチャ: 親の1行（x0..x1×y0..ym）の南へ、中央（xa..xb）だけ張り出した
+// 部分指定の子（FL−100・明示CH2400＝床+100・天井2300）。
+// QA K2訂正: 壁面同士の継ぎ目は隅のセルを共有して床が連続するため発火しない——実際に
+// 発火するのは「段差見付け面（kind='step'）の前後」: 直前の壁面（親・床0）→見付け面
+// （低い側=子・床+100・天井2300）で1本目（from=-2300,to=100,label=2400）、見付け面→
+// 次の壁面（親・床0）で2本目（from=-2400,to=0）が出る（実機のB1→C1→A2と同じ構図）。
+// 注: 張り出しの両脇CLは張り出し範囲へextent制限（実データ同様）——貫通CLだと開放スパン
+// 延長の面結合で構成が変わる（QA J1）。
+test('【問題修正2026-08その4改】buildRoomBand: 床の起点高さが直前の面から変わる継ぎ目の面の左側にCH寸法が出る', () => {
+  const graph = makeGraph();
+  const x0 = graph.addCenterLine(CenterLineType.VERTICAL, 0,    { labeled: false, discipline: Discipline.ARCH });
+  const xa = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH, extentLo: 1500, extentHi: 3000 });
+  const xb = graph.addCenterLine(CenterLineType.VERTICAL, 2000, { labeled: false, discipline: Discipline.ARCH, extentLo: 1500, extentHi: 3000 });
+  const x1 = graph.addCenterLine(CenterLineType.VERTICAL, 4000, { labeled: false, discipline: Discipline.ARCH });
+  const y0 = graph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: false, discipline: Discipline.ARCH });
+  const ym = graph.addCenterLine(CenterLineType.HORIZONTAL, 1500, { labeled: false, discipline: Discipline.ARCH });
+  const y1 = graph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: false, discipline: Discipline.ARCH });
+  const main   = `${x0.id}:${y0.id}:${x1.id}:${ym.id}`;   // 本体1行（xa/xbはextent制限で本体を分割しない）
+  const alcove = `${xa.id}:${ym.id}:${xb.id}:${y1.id}`;   // 南への張り出し
+  const room = graph.addRoom(new Set([main, alcove]), 'LDK');
+  generateRoomWallsFromOutline(graph, room);
+  room.setOverride('ceilingHeight', '2400');
+  const child = graph.addRoom(new Set([alcove]), '土間', undefined, new Set([room.id]));
+  child.setFloorLevel(-100);
+  child.setOverride('ceilingHeight', '2400'); // 床+100（ローカル）・天井2300
+
+  const band = buildRoomBand(room, graph);
+  // 左側配置の縦寸法＝at<foot（右CH寸法はat>foot）。帯先頭の左CH寸法＋継ぎ目の左CH寸法2本。
+  const leftDims = band.primitives.filter(p => p.type === 'dim' && p.dir === 'v' && p.at < p.foot);
+  assert.equal(leftDims.length, 3,
+    `帯先頭1本＋継ぎ目2本（親→子・子→親）の計3本のはず（実際:${JSON.stringify(band.primitives.filter(p => p.type === 'dim' && p.dir === 'v'))}）`);
+  const intoChild = leftDims.filter(d => d.from === -2300 && d.to === 100 && d.label === 2400);
+  assert.equal(intoChild.length, 1, '親→子の継ぎ目（アルコーブ東壁の左側）にfrom=-2300,to=100,label=2400が1本のはず');
+  const backToParent = leftDims.filter(d => d.from === -2400 && d.to === 0);
+  assert.equal(backToParent.length, 2, '帯先頭＋子→親の継ぎ目の計2本（from=-2400,to=0）のはず');
+});
+
+// ---- 矩形＋下段の子: 壁面同士の継ぎ目では床の起点が連続し左CH寸法は出ない。
+// 出るのは段差見付け面（床=低い側0abs・天井=低い側の天井）の左だけ（問題修正2026-08その6）。
+// 縦寸法=帯の左CH寸法1本＋段差面（B/D）の右CH寸法2本＋見付け面の左CH寸法1本の計4本。
+test('【問題修正2026-08その4改・その6】buildRoomBand: 壁面同士の継ぎ目では左CH寸法が出ず、床の起点が変わる段差見付け面の左にだけ出る', () => {
+  const graph = makeGraph();
+  const x0 = graph.addCenterLine(CenterLineType.VERTICAL, 0,    { labeled: false, discipline: Discipline.ARCH });
+  const x1 = graph.addCenterLine(CenterLineType.VERTICAL, 4000, { labeled: false, discipline: Discipline.ARCH });
+  const y0 = graph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: false, discipline: Discipline.ARCH });
+  const yMid = graph.addCenterLine(CenterLineType.HORIZONTAL, 1500, { labeled: false, discipline: Discipline.ARCH });
+  const y1 = graph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: false, discipline: Discipline.ARCH });
+  const topKey = `${x0.id}:${y0.id}:${x1.id}:${yMid.id}`;
+  const botKey = `${x0.id}:${yMid.id}:${x1.id}:${y1.id}`;
+  const room = graph.addRoom(new Set([topKey, botKey]), 'LDK');
+  generateRoomWallsFromOutline(graph, room);
+  room.setOverride('ceilingHeight', '2400');
+  const child = graph.addRoom(new Set([botKey]), '土間', undefined, new Set([room.id]));
+  child.setFloorLevel(-100);
+  child.setOverride('ceilingHeight', '2400');
+
+  const band = buildRoomBand(room, graph);
+  const vDims = band.primitives.filter(p => p.type === 'dim' && p.dir === 'v');
+  assert.equal(vDims.length, 4,
+    `帯の左1本＋右CH寸法2本(B/D)＋見付け面の左1本の計4本のはず（実際:${JSON.stringify(vDims)}）`);
+  // 壁面同士の継ぎ目由来の左寸法は無く、追加の左寸法は見付け面の1本だけ
+  // （床=低い側+100・天井=低い側の天井-2300・値=低い側の実効CH2400）。
+  const leftDims = vDims.filter(d => d.at < d.foot);
+  assert.equal(leftDims.length, 2, '左配置は帯先頭＋見付け面の2本のはず');
+  const stepLeft = leftDims.find(d => d.from === -2300 && d.to === 100);
+  assert.ok(stepLeft, '見付け面の左CH寸法(from=-2300,to=100)が見つかるはず');
+  assert.equal(stepLeft.label, 2400, '値は低い側エリアの実効CH(2400)のはず');
+});

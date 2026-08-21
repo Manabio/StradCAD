@@ -76,6 +76,9 @@ test('extendFaceWithOpenSpans: 実壁区間の先で同室内部が壁なしで�
   assert.ok(wallSpan, 'wall区間が見つかるはず');
   assert.ok(openSpan, 'open区間が見つかるはず');
   assert.equal(openSpan.farFloorDeltaMm, 300, '開放先(子部屋)のFL差がfarFloorDeltaMmに反映されるはず');
+  // 問題修正2026-08その2: 開放先の天井絶対高さ。子は自CH指定なし→roomCeilingHeightの調整で
+  // 親CH(default2400)−300=2100 → farCeilAbsMm=300+2100=2400（親の天井と揃う）。
+  assert.equal(openSpan.farCeilAbsMm, 2400, '自CH指定なしの子は天井絶対高さが親と揃うはず');
 
   // spansは0..runを隙間なく単調に覆う。
   assert.equal(extended.spans[0].loX, 0);
@@ -83,6 +86,64 @@ test('extendFaceWithOpenSpans: 実壁区間の先で同室内部が壁なしで�
   for (let i = 0; i + 1 < extended.spans.length; i++) {
     assert.equal(extended.spans[i].hiX, extended.spans[i + 1].loX, '隙間なく連続するはず');
   }
+});
+
+// ---- 問題修正2026-08その2: 開放先が明示CHを持つ場合、farCeilAbsMmにそのCHが反映される ----
+test('extendFaceWithOpenSpans: 開放先の子が明示CHを持てばfarCeilAbsMm=子FL+子CH（親と天井が揃わない）になる', () => {
+  const graph = makeGraph();
+  const { room } = makeWallThenOpenRoom(graph, 300);
+  const child = graph.rooms.find(r => r.name === '部分指定');
+  child.setOverride('ceilingHeight', '2400'); // 明示CH → 天井絶対高さ300+2400=2700（親2400と異なる）
+
+  const faces = buildRoomFaces(room, graph);
+  const face = faces.find(f => f.isVertical && Math.abs(f.axisCL.value - 2000) < 1e-6);
+  const extended = extendFaceWithOpenSpans(face, faces, room, graph);
+  const openSpan = extended.spans.find(s => s.kind === 'open');
+  assert.ok(openSpan, 'open区間が見つかるはず');
+  assert.equal(openSpan.farCeilAbsMm, 2700, '開放先の天井絶対高さ=子FL(300)+明示CH(2400)のはず');
+  const wallSpan = extended.spans.find(s => s.kind === 'wall');
+  assert.equal(wallSpan.farCeilAbsMm, undefined, 'wall区間にはfarCeilAbsMmを付けない');
+});
+
+// ---- 失敗系: farFloorDeltaMmが同じでもfarCeilAbsMmが異なる隣接open区間は結合しない ----
+// mergeSameKindの結合条件にfarCeilAbsMmを加えたことの門番——FLが同じ（farFloorDeltaMm同一）で
+// 明示CHだけ異なる2つの開放先が隣接する場合、旧条件（kind+farFloorDeltaMm）だと1区間へ誤結合され、
+// far天井線が片方のCHで全域に引かれてしまう。
+test('【失敗系】extendFaceWithOpenSpans: FLが同じで明示CHだけ異なる2つの開放先は、open区間が結合されず2区間のまま残る', () => {
+  const graph = makeGraph();
+  const x0 = graph.addCenterLine(CenterLineType.VERTICAL, 0,    { labeled: false, discipline: Discipline.ARCH });
+  const x1 = graph.addCenterLine(CenterLineType.VERTICAL, 2000, { labeled: false, discipline: Discipline.ARCH });
+  const x2 = graph.addCenterLine(CenterLineType.VERTICAL, 4000, { labeled: false, discipline: Discipline.ARCH });
+  const y0 = graph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: false, discipline: Discipline.ARCH });
+  const y1 = graph.addCenterLine(CenterLineType.HORIZONTAL, 1000, { labeled: false, discipline: Discipline.ARCH });
+  const yMid = graph.addCenterLine(CenterLineType.HORIZONTAL, 1500, { labeled: false, discipline: Discipline.ARCH });
+  const y2 = graph.addCenterLine(CenterLineType.HORIZONTAL, 2000, { labeled: false, discipline: Discipline.ARCH });
+
+  const otherKey       = `${x1.id}:${y0.id}:${x2.id}:${y1.id}`;   // 上段右＝他室（実壁の元）
+  const mainTopKey     = `${x0.id}:${y0.id}:${x1.id}:${y1.id}`;   // 上段左＝自室
+  const mainBotLeftA   = `${x0.id}:${y1.id}:${x1.id}:${yMid.id}`; // 下段左上＝自室
+  const mainBotLeftB   = `${x0.id}:${yMid.id}:${x1.id}:${y2.id}`; // 下段左下＝自室
+  const farAKey        = `${x1.id}:${y1.id}:${x2.id}:${yMid.id}`; // 開放先A
+  const farBKey        = `${x1.id}:${yMid.id}:${x2.id}:${y2.id}`; // 開放先B
+
+  const other = graph.addRoom(new Set([otherKey]), '他室');
+  generateRoomWallsFromOutline(graph, other);
+  const room = graph.addRoom(new Set([mainTopKey, mainBotLeftA, mainBotLeftB, farAKey, farBKey]), 'LDK');
+  generateRoomWallsFromOutline(graph, room);
+  const childA = graph.addRoom(new Set([farAKey]), '子A', undefined, new Set([room.id]));
+  const childB = graph.addRoom(new Set([farBKey]), '子B', undefined, new Set([room.id]));
+  childA.setOverride('ceilingHeight', '2500'); // FLは親と同じ（farFloorDeltaMm=0）・CHだけ異なる
+  childB.setOverride('ceilingHeight', '2600');
+
+  const faces = buildRoomFaces(room, graph);
+  const face = faces.find(f => f.isVertical && Math.abs(f.axisCL.value - 2000) < 1e-6);
+  assert.ok(face, 'x=2000の縦の面が見つかるはず');
+  const extended = extendFaceWithOpenSpans(face, faces, room, graph);
+
+  const openSpans = extended.spans.filter(s => s.kind === 'open');
+  assert.equal(openSpans.length, 2, `CHの異なる開放先はopen区間が結合されず2区間のはず（実際:${JSON.stringify(extended.spans)}）`);
+  assert.ok(openSpans.every(s => s.farFloorDeltaMm === 0), 'FLは親と同じ（farFloorDeltaMm=0同士でも結合されない）');
+  assert.deepEqual(openSpans.map(s => s.farCeilAbsMm).sort((a, b) => a - b), [2500, 2600]);
 });
 
 // ---- 失敗系: 延長先が無ければ（矩形の閉じた部屋）面は実質不変（spansはwall1区間のみ） ----

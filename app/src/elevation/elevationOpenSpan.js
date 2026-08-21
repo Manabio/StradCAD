@@ -17,6 +17,7 @@
  * 誤って「壁あり」と拾い続けてしまうため採用しない（この方式で実際に不具合を確認・破棄した）。
  */
 import { refreshCells, cellBoundsFromKey, worldToCell } from '../finish/gridCells.js';
+import { roomCeilingHeight } from '../finish/roomMetrics.js';
 import {
   roomOwnerByCell, runBoundaryCLIds, collectRunBreaks, findRunCLAt, cellNearSideOnFace,
 } from './elevationFloorProfile.js';
@@ -46,6 +47,13 @@ export function isOpenSpanEligible(nearCell, farCell, graph) {
 // 修正した）。
 function collectNearCellSegments(face, ownerByCell, room, graph) {
   const axisValue = face.axisCL.value;
+  // QA G5: roomCeilingHeightは内部でgraph.rooms.findを回すため、セル×刻み毎に呼び直さず
+  // Roomごとにメモ化する（elevationFloorProfile.jsのchByRoomと同じパターン）。
+  const chByRoom = new Map();
+  const chOf = r => {
+    if (!chByRoom.has(r.id)) chByRoom.set(r.id, roomCeilingHeight(graph, r).mm);
+    return chByRoom.get(r.id);
+  };
   const segs = [];
   for (const key of refreshCells(room.cells, graph)) {
     const b = cellBoundsFromKey(key, graph);
@@ -63,27 +71,31 @@ function collectNearCellSegments(face, ownerByCell, room, graph) {
       const farY = face.isVertical ? mid : axisValue - face.inward * PROBE_EPS_MM;
       const farCell = worldToCell(farX, farY, graph);
 
-      let kind = 'wall', farFloorDeltaMm;
+      let kind = 'wall', farFloorDeltaMm, farCeilAbsMm;
       if (farCell && ownerByCell.has(farCell.key) && isOpenSpanEligible({ key }, farCell, graph)) {
         const farOwner = ownerByCell.get(farCell.key);
         kind = 'open';
         farFloorDeltaMm = graph.effectiveFloorLevel(farOwner) - graph.effectiveFloorLevel(room);
+        // 問題修正2026-08その2: 開放先の天井の絶対高さ（band部屋FL基準。far床＋far所有Roomの
+        // 解決済みCH）——描画側が「開放先の天井の見えがかり線」を引くのに使う。
+        farCeilAbsMm = farFloorDeltaMm + chOf(farOwner);
       }
       const loCLId = runLo === cellRunLo ? cellLoCLId : (findRunCLAt(graph, face.isVertical, runLo)?.id ?? null);
       const hiCLId = runHi === cellRunHi ? cellHiCLId : (findRunCLAt(graph, face.isVertical, runHi)?.id ?? null);
-      segs.push({ runLo, runHi, kind, farFloorDeltaMm, loCLId, hiCLId });
+      segs.push({ runLo, runHi, kind, farFloorDeltaMm, farCeilAbsMm, loCLId, hiCLId });
     }
   }
   segs.sort((a, b) => a.runLo - b.runLo);
   return segs;
 }
 
-// 隣接する同種区間（kind・farFloorDeltaMmが同じ、かつrunHi===次のrunLo）を結合する。
+// 隣接する同種区間（kind・farFloorDeltaMm・farCeilAbsMmが同じ、かつrunHi===次のrunLo）を結合する。
 function mergeSameKind(segs) {
   const merged = [];
   for (const s of segs) {
     const last = merged[merged.length - 1];
     if (last && last.kind === s.kind && last.farFloorDeltaMm === s.farFloorDeltaMm &&
+        last.farCeilAbsMm === s.farCeilAbsMm &&
         Math.abs(last.runHi - s.runLo) < GAP_EPS) {
       last.runHi = s.runHi;
       last.hiCLId = s.hiCLId;
@@ -198,6 +210,7 @@ export function extendFaceWithOpenSpans(face, wallFaces, room, graph) {
     return {
       loX: Math.min(a, b), hiX: Math.max(a, b), kind: s.kind,
       farFloorDeltaMm: s.kind === 'open' ? s.farFloorDeltaMm : undefined,
+      farCeilAbsMm: s.kind === 'open' ? s.farCeilAbsMm : undefined,
       hiCLId: swapped ? s.loCLId : s.hiCLId,
     };
   }).sort((x, y) => x.loX - y.loX);
@@ -250,6 +263,7 @@ export function clipSpans(spans, loLocal, hiLocal) {
     const keepsBoundary = s.hiCLId != null && Math.abs(hi - s.hiX) < GAP_EPS;
     out.push({
       loX: lo - loLocal, hiX: hi - loLocal, kind: s.kind, farFloorDeltaMm: s.farFloorDeltaMm,
+      farCeilAbsMm: s.farCeilAbsMm,
       hiCLX: keepsBoundary ? hi - loLocal : null,
       hiCLId: keepsBoundary ? s.hiCLId : null,
     });

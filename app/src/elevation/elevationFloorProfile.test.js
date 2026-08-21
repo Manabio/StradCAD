@@ -5,7 +5,10 @@ import assert from 'node:assert/strict';
 import { Plane, PlanGraph, CenterLineType, Discipline } from '@core';
 import { generateRoomWallsFromOutline } from '../finish/wallGeneration.js';
 import { buildRoomFaces } from './elevationFaces.js';
-import { wallAdjacentFloorSegments, drawnRiserX, halfWallThicknessMm } from './elevationFloorProfile.js';
+import {
+  wallAdjacentFloorSegments, drawnRiserX, drawnCeilingRiserX, halfWallThicknessMm,
+  familyCeilingSegments,
+} from './elevationFloorProfile.js';
 
 function makeGraph() {
   const plane = new Plane('p1', 0, '1階', 1, 1);
@@ -271,6 +274,148 @@ test('【失敗系】wallAdjacentFloorSegments: 部分指定が無ければ唯�
   assert.equal(segs.length, 1);
   assert.equal(segs[0].loCLId, null);
   assert.equal(segs[0].hiCLId, null);
+});
+
+// ---- 問題修正2026-08: 区間ごとの天井高さ(chMm)の引き継ぎ ----
+test('【問題修正2026-08】wallAdjacentFloorSegments: 明示CH指定を持つ部分指定（FLは親と同一）はchMmだけ異なる2区間に分かれる', () => {
+  const graph = makeGraph();
+  const { room, rightKey } = makeSplitRoom(graph);
+  room.setOverride('ceilingHeight', '2400');
+  const child = graph.addRoom(new Set([rightKey]), '天井高エリア', undefined, new Set([room.id]));
+  child.setOverride('ceilingHeight', '2600'); // FLは親と同じ・天井だけ明示指定
+
+  const faceA = buildRoomFaces(room, graph).find(f => f.label === 'A');
+  const segs = wallAdjacentFloorSegments(faceA, room, graph);
+
+  assert.equal(segs.length, 2, '床が同一FLでもchMmが異なれば区間は結合されないはず');
+  assert.equal(segs[0].floorDeltaMm, 0);
+  assert.equal(segs[1].floorDeltaMm, 0);
+  assert.equal(segs[0].chMm, 2400, '左区間は親のCH');
+  assert.equal(segs[1].chMm, 2600, '右区間は部分指定の明示CH');
+});
+
+// ---- 失敗系: 自CH指定なしの部分指定はroomCeilingHeightの調整により天井絶対高さが親と揃う ----
+test('【失敗系・問題修正2026-08】wallAdjacentFloorSegments: 自CH指定なし+FL差ありの部分指定はchMm=親CH−FL差（天井絶対高さが揃う）', () => {
+  const graph = makeGraph();
+  const { room, rightKey } = makeSplitRoom(graph);
+  room.setOverride('ceilingHeight', '2400');
+  const child = graph.addRoom(new Set([rightKey]), '小上がり', undefined, new Set([room.id]));
+  child.setFloorLevel(300);
+
+  const faceA = buildRoomFaces(room, graph).find(f => f.label === 'A');
+  const segs = wallAdjacentFloorSegments(faceA, room, graph);
+
+  assert.equal(segs.length, 2);
+  assert.equal(segs[1].chMm, 2100, '子のchMmは親CH(2400)−FL差(300)＝天井絶対高さが親と揃う値のはず');
+  assert.equal(segs[0].floorDeltaMm + segs[0].chMm, segs[1].floorDeltaMm + segs[1].chMm,
+    '両区間の天井絶対高さ(FL+CH)は一致するはず（天井段差は描かれない）');
+});
+
+// ---- 問題修正2026-08その5: familyCeilingSegments（壁の向こう側=far側のファミリーセルのプローブ） ----
+// 2行部屋（親が両行を登録・下行を子が上書き）の中間CL(yM)上に合成faceを置き、near=上行・
+// far=下行(子)としてプローブする——「壁の向こう側に部分指定関係のある部屋がある」ケースの機構検証。
+function makeTwoRowFamily(graph, { splitBottom = false } = {}) {
+  const x0 = graph.addCenterLine(CenterLineType.VERTICAL, 0,    { labeled: false, discipline: Discipline.ARCH });
+  const xm = splitBottom ? graph.addCenterLine(CenterLineType.VERTICAL, 2000, { labeled: false, discipline: Discipline.ARCH }) : null;
+  const x1 = graph.addCenterLine(CenterLineType.VERTICAL, 4000, { labeled: false, discipline: Discipline.ARCH });
+  const y0 = graph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: false, discipline: Discipline.ARCH });
+  const yM = graph.addCenterLine(CenterLineType.HORIZONTAL, 1500, { labeled: false, discipline: Discipline.ARCH });
+  const y1 = graph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: false, discipline: Discipline.ARCH });
+  const topKey = `${x0.id}:${y0.id}:${x1.id}:${yM.id}`;
+  const botKeys = splitBottom
+    ? [`${x0.id}:${yM.id}:${xm.id}:${y1.id}`, `${xm.id}:${yM.id}:${x1.id}:${y1.id}`]
+    : [`${x0.id}:${yM.id}:${x1.id}:${y1.id}`];
+  const room = graph.addRoom(new Set([topKey, ...botKeys]), 'LDK');
+  generateRoomWallsFromOutline(graph, room);
+  room.setOverride('ceilingHeight', '2400');
+  return { room, yM, botKeys };
+}
+
+test('familyCeilingSegments: 面の向こう側(far側)に部分指定の子セルがあれば、その天井絶対高さの区間を返す', () => {
+  const graph = makeGraph();
+  const { room, yM, botKeys } = makeTwoRowFamily(graph);
+  const child = graph.addRoom(new Set(botKeys), '小上がり', undefined, new Set([room.id]));
+  child.setFloorLevel(-100);
+  child.setOverride('ceilingHeight', '2400'); // 天井絶対高さ=−100+2400=2300
+
+  // 中間CL上の合成face: inward=-1（near=上行）→ far側プローブ=下行（子）。
+  const face = { axisCL: yM, isVertical: false, inward: -1, lo: 0, hi: 4000, originWorld: 0, dirSign: 1 };
+  const segs = familyCeilingSegments(face, room, graph);
+
+  assert.equal(segs.length, 1, `向こう側=子の1区間のはず（実際:${JSON.stringify(segs)}）`);
+  assert.equal(segs[0].ceilAbsMm, 2300, '子の天井絶対高さ(−100+2400=2300)のはず');
+  assert.equal(segs[0].loX, 0);
+  assert.equal(segs[0].hiX, 4000);
+});
+
+// ---- 失敗系: 外周壁（向こう側が部屋外）の面は空——A1/B1/D2の誤検出（旧・全セル投影方式）の門番 ----
+test('【失敗系・問題修正2026-08その5】familyCeilingSegments: 向こう側が部屋外の外周面は空を返す（部屋内の別エリアが同じrun座標にあっても拾わない）', () => {
+  const graph = makeGraph();
+  const { room, botKeys } = makeTwoRowFamily(graph);
+  const child = graph.addRoom(new Set(botKeys), '小上がり', undefined, new Set([room.id]));
+  child.setFloorLevel(-100);
+  child.setOverride('ceilingHeight', '2400'); // 天井2300（部屋内の別エリア）
+
+  // 外周面すべて: 壁の向こう側は部屋外＝部分指定関係のある部屋は無い → 破線の元データは空。
+  for (const face of buildRoomFaces(room, graph)) {
+    const segs = familyCeilingSegments(face, room, graph);
+    assert.deepEqual(segs, [], `外周面${face.label}は空のはず（実際:${JSON.stringify(segs)}）`);
+  }
+});
+
+// ---- 失敗系: face.lo/hiの外はプローブしない（クランプ） ----
+test('【失敗系】familyCeilingSegments: face.lo/hiの範囲だけをプローブし、ローカルxへクランプされる', () => {
+  const graph = makeGraph();
+  const { room, yM, botKeys } = makeTwoRowFamily(graph);
+  const child = graph.addRoom(new Set(botKeys), '小上がり', undefined, new Set([room.id]));
+  child.setFloorLevel(-100);
+  child.setOverride('ceilingHeight', '2400');
+
+  const face = { axisCL: yM, isVertical: false, inward: -1, lo: 100, hi: 1800, originWorld: 100, dirSign: 1 };
+  const segs = familyCeilingSegments(face, room, graph);
+
+  assert.equal(segs.length, 1);
+  assert.equal(segs[0].loX, 0, '区間はface.loでクランプされるはず');
+  assert.equal(segs[0].hiX, 1700, '区間はface.hiでクランプされるはず（1800-100=ローカル1700）');
+});
+
+// ---- dirSign<0の面でもローカルx（loX<hiX）へ正しく反転する ----
+test('familyCeilingSegments: dirSign=-1の面では世界座標が反転してもloX<hiXの正規化済み区間になる', () => {
+  const graph = makeGraph();
+  const { room, yM, botKeys } = makeTwoRowFamily(graph, { splitBottom: true });
+  // 下行左(0..2000)だけ子（天井2300）、下行右(2000..4000)は親のまま（天井2400）。
+  const child = graph.addRoom(new Set([botKeys[0]]), '小上がり', undefined, new Set([room.id]));
+  child.setFloorLevel(-100);
+  child.setOverride('ceilingHeight', '2400');
+
+  const face = { axisCL: yM, isVertical: false, inward: -1, lo: 0, hi: 4000, originWorld: 4000, dirSign: -1 };
+  const segs = familyCeilingSegments(face, room, graph);
+
+  const at2300 = segs.find(s => s.ceilAbsMm === 2300);
+  const at2400 = segs.find(s => s.ceilAbsMm === 2400);
+  assert.ok(at2300 && at2400, `子(2300)・親(2400)の両区間が見つかるはず（実際:${JSON.stringify(segs)}）`);
+  assert.ok(segs.every(s => s.loX < s.hiX), '全区間がloX<hiXへ正規化されているはず');
+  assert.equal(at2300.loX, 2000, '子(世界0..2000)はローカル2000..4000へ反転するはず');
+  assert.equal(at2300.hiX, 4000);
+  assert.equal(at2400.loX, 0, '親(世界2000..4000)はローカル0..2000へ反転するはず');
+  assert.equal(at2400.hiX, 2000);
+});
+
+// ---- drawnCeilingRiserX: 天井段差の描画xは「低い方からみてCLの向こう側」＝高い側へ半壁厚ずれる ----
+test('drawnCeilingRiserX: 天井の絶対高さが高い側へhalfWallMmぶんずれる（床のdrawnRiserXと逆向きの規約）', () => {
+  const segs = [
+    { hiX: 2000, floorDeltaMm: 0, chMm: 2400 },
+    { hiX: 4000, floorDeltaMm: 0, chMm: 2600 }, // 右が高い
+  ];
+  assert.equal(drawnCeilingRiserX(segs, 0, 57.5), 2000 + 57.5, '低い方(左)からみてCLの向こう側=右へずれる');
+});
+
+test('【失敗系】drawnCeilingRiserX: 左の天井が高ければ左方向へずれる。床段差込みの絶対高さ(FL+CH)で比較する', () => {
+  const segs = [
+    { hiX: 2000, floorDeltaMm: 300, chMm: 2400 }, // 絶対高さ2700（高い）
+    { hiX: 4000, floorDeltaMm: 0,   chMm: 2500 }, // 絶対高さ2500（低い）
+  ];
+  assert.equal(drawnCeilingRiserX(segs, 0, 57.5), 2000 - 57.5, 'chMm単体ではなくFL+CHの絶対高さで比較し、高い側(左)へずれるはず');
 });
 
 // ---- drawnRiserX: 床が低い側へ半壁厚だけずれる（オフセット前=hiXとは別の値） ----

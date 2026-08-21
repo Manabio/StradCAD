@@ -11,6 +11,7 @@
 import { CenterLineType } from '@core';
 import { refreshCells, cellBoundsFromKey, worldToCell } from '../finish/gridCells.js';
 import { DEFAULT_WALL_BASE, DEFAULT_WALL_FINISH } from '../finish/wallGeneration.js';
+import { roomCeilingHeight } from '../finish/roomMetrics.js';
 import { GAP_EPS_MM as GAP_EPS, PROBE_EPS_MM } from './elevationStyle.js';
 // PROBE_EPS_MM: 自室セルの境界がface側で粗い（extent制限されたCLが該当行では無効域にあり
 // 分割されない）場合に、runの伸びる方向へ覗き込むプローブ距離（elevationOpenSpan.jsと共通。
@@ -128,15 +129,22 @@ export function roomOwnerByCell(room, graph) {
  * @param {object} face - buildRoomFaces の1件
  * @param {import('@core').Room} parentRoom - この面を持つ部屋（壁を所有する側。部分指定の親）
  * @param {object} graph
- * @returns {Array<{loX:number, hiX:number, floorDeltaMm:number}>}
+ * @returns {Array<{loX:number, hiX:number, floorDeltaMm:number, chMm:number}>}
  *   floorDeltaMm = graph.effectiveFloorLevel(owner) - graph.effectiveFloorLevel(parentRoom)。
+ *   chMm = 区間の所有Roomの解決済み天井高さ（roomCeilingHeight。問題修正2026-08:
+ *   天井断面線は区間（エリア）の床断面からそのエリアのCHの距離に描くため、床と対で持つ）。
  *   0..face.run（ローカル座標）を隙間なく覆う（対応セルが見つからない区間は
- *   parentRoom扱い＝floorDeltaMm:0 にフォールバックする）。隣接区間でfloorDeltaMmが同じなら
- *   結合し、区間が1つ（floorDeltaMm:0 のみ）なら「段差なし」を意味する。
+ *   parentRoom扱い＝floorDeltaMm:0 にフォールバックする）。隣接区間でfloorDeltaMm・chMmが
+ *   ともに同じなら結合し、区間が1つなら「床・天井とも段差なし」を意味する。
  */
 export function wallAdjacentFloorSegments(face, parentRoom, graph) {
   const axisValue = face.axisCL.value; // finish/gridCells.js のセル境界も同じ.value基準
   const ownerByCell = roomOwnerByCell(parentRoom, graph);
+  const chByRoom = new Map();
+  const chOf = r => {
+    if (!chByRoom.has(r.id)) chByRoom.set(r.id, roomCeilingHeight(graph, r).mm);
+    return chByRoom.get(r.id);
+  };
 
   // parentRoom自身のセルのうち、この面（壁）の「室内側(near)」に接しているものを壁沿いに拾う。
   // QA修正: 従来は`b.x1===axisValue || b.x2===axisValue`と面の両側（near/far）を拾っており、
@@ -152,7 +160,7 @@ export function wallAdjacentFloorSegments(face, parentRoom, graph) {
     const owner = ownerByCell.get(key) ?? parentRoom;
     const { loCLId, hiCLId } = runBoundaryCLIds(key, face.isVertical);
     touching.push({
-      runLo: Math.max(runLo, face.lo), runHi: Math.min(runHi, face.hi), owner,
+      runLo: Math.max(runLo, face.lo), runHi: Math.min(runHi, face.hi), owner, chMm: chOf(owner),
       // クランプ（face.lo/hiでの切り詰め）が起きた端は、そのCLではなくfaceの端そのものが境界
       // のため、クランプが働いた側のCL idはnull（=segsのgap-fillと同じ「不明」扱い）にする。
       loCLId: runLo >= face.lo ? loCLId : null,
@@ -179,7 +187,10 @@ export function wallAdjacentFloorSegments(face, parentRoom, graph) {
   const pushGap = (segs, lo, hi) => {
     for (const g of probeGapOwners(graph, face, ownerByCell, lo, hi)) {
       const floorDeltaMm = g.owner ? graph.effectiveFloorLevel(g.owner) - parentFL : 0;
-      segs.push({ runLo: g.runLo, runHi: g.runHi, floorDeltaMm, loCLId: null, hiCLId: null });
+      segs.push({
+        runLo: g.runLo, runHi: g.runHi, floorDeltaMm, chMm: chOf(g.owner ?? parentRoom),
+        loCLId: null, hiCLId: null,
+      });
     }
   };
   const segs = [];
@@ -189,7 +200,7 @@ export function wallAdjacentFloorSegments(face, parentRoom, graph) {
     const floorDeltaMm = graph.effectiveFloorLevel(t.owner) - parentFL;
     // 重なり（t.runLo が cursor より小さい）はcursorへスナップし、区間の逆転・二重描画を防ぐ。
     const runLo = Math.max(t.runLo, cursor);
-    if (t.runHi > runLo) segs.push({ runLo, runHi: t.runHi, floorDeltaMm, loCLId: t.loCLId, hiCLId: t.hiCLId });
+    if (t.runHi > runLo) segs.push({ runLo, runHi: t.runHi, floorDeltaMm, chMm: t.chMm, loCLId: t.loCLId, hiCLId: t.hiCLId });
     cursor = Math.max(cursor, t.runHi);
   }
   if (cursor < face.hi) pushGap(segs, cursor, face.hi);
@@ -204,11 +215,13 @@ export function wallAdjacentFloorSegments(face, parentRoom, graph) {
     segs.splice(i, 1);
   }
 
-  // 隣接区間でfloorDeltaMmが同じなら結合する（不要な段差線を出さないため）。
+  // 隣接区間でfloorDeltaMm・chMmがともに同じなら結合する（不要な段差線を出さないため。
+  // 問題修正2026-08: 床が同じ高さでも天井高さ(chMm)が異なる境界は天井断面線の段差＝縦線に
+  // なるため、chMmが異なる区間は結合しない）。
   const merged = [];
   for (const s of segs) {
     const last = merged[merged.length - 1];
-    if (last && last.floorDeltaMm === s.floorDeltaMm && Math.abs(last.runHi - s.runLo) < GAP_EPS) {
+    if (last && last.floorDeltaMm === s.floorDeltaMm && last.chMm === s.chMm && Math.abs(last.runHi - s.runLo) < GAP_EPS) {
       last.runHi = s.runHi;
       last.hiCLId = s.hiCLId;
     } else {
@@ -228,7 +241,7 @@ export function wallAdjacentFloorSegments(face, parentRoom, graph) {
       const a = toLocal(s.runLo), b = toLocal(s.runHi);
       const swapped = a > b;
       return {
-        loX: Math.min(a, b), hiX: Math.max(a, b), floorDeltaMm: s.floorDeltaMm,
+        loX: Math.min(a, b), hiX: Math.max(a, b), floorDeltaMm: s.floorDeltaMm, chMm: s.chMm,
         loCLId: swapped ? s.hiCLId : s.loCLId, hiCLId: swapped ? s.loCLId : s.hiCLId,
       };
     })
@@ -247,6 +260,74 @@ export function wallAdjacentFloorSegments(face, parentRoom, graph) {
 export function drawnRiserX(segs, i, halfWallMm) {
   const towardLow = segs[i].floorDeltaMm > segs[i + 1].floorDeltaMm ? 1 : -1;
   return segs[i].hiX + towardLow * halfWallMm;
+}
+
+/**
+ * 面の壁の「向こう側（far側）」にある部屋ファミリー（親＋部分指定の子＝部分指定関係のある部屋）
+ * のセルを面のrun軸で刻んでプローブした「天井の絶対高さ区間」一覧（問題修正2026-08その3改）。
+ * 展開図の「天井断面より上の向こう側の天井」を破線（かくれ線）で描くための入力。
+ *
+ * 問題修正2026-08その5（原因特定）: 旧実装は「ファミリー全セルを面のrun軸へ投影」しており、
+ * 壁の向こう側に部分指定関係の部屋が無い面（外周壁のA1/B1/D2等）でも、部屋内の別エリアが
+ * run座標上で重なるだけで破線が出ていた。破線は「壁の向こう側に部分指定関係のある部屋がある
+ * 展開図（またぐ面）のみ」（ユーザー明示指示）のため、開放スパンのfarプローブと同じ要領で
+ * axisCLのfar側を区間ごとに worldToCell プローブし、ファミリー所有セルがある区間だけを返す。
+ * @param {object} face - buildRoomFaces/composeRoomFacesの1件
+ * @param {import('@core').Room} parentRoom
+ * @param {object} graph
+ * @returns {Array<{loX:number, hiX:number, ceilAbsMm:number}>} ローカルx・同一天井高さの隣接区間は結合済み
+ */
+export function familyCeilingSegments(face, parentRoom, graph) {
+  const ownerByCell = roomOwnerByCell(parentRoom, graph);
+  const parentFL = graph.effectiveFloorLevel(parentRoom);
+  const chByRoom = new Map();
+  const chOf = r => {
+    if (!chByRoom.has(r.id)) chByRoom.set(r.id, roomCeilingHeight(graph, r).mm);
+    return chByRoom.get(r.id);
+  };
+  const axisValue = face.axisCL.value;
+  const breaks = collectRunBreaks(graph, face.isVertical, face.lo, face.hi);
+  const found = []; // 世界run座標の {lo, hi, ceilAbsMm}
+  for (let i = 0; i + 1 < breaks.length; i++) {
+    const lo = breaks[i], hi = breaks[i + 1];
+    if (hi - lo < GAP_EPS) continue;
+    const mid = (lo + hi) / 2;
+    const px = face.isVertical ? axisValue - face.inward * PROBE_EPS_MM : mid;
+    const py = face.isVertical ? mid : axisValue - face.inward * PROBE_EPS_MM;
+    const cell = worldToCell(px, py, graph);
+    const owner = cell ? (ownerByCell.get(cell.key) ?? null) : null;
+    if (!owner) continue; // 向こう側が部屋外・部分指定関係のない部屋 → 破線の対象外
+    const ceilAbsMm = (graph.effectiveFloorLevel(owner) - parentFL) + chOf(owner);
+    const last = found[found.length - 1];
+    if (last && last.ceilAbsMm === ceilAbsMm && Math.abs(last.hi - lo) < GAP_EPS) last.hi = hi;
+    else found.push({ lo, hi, ceilAbsMm });
+  }
+  const toLocal = w => (w - face.originWorld) * face.dirSign + 0;
+  return found
+    .map(s => {
+      const a = toLocal(s.lo), b = toLocal(s.hi);
+      return { loX: Math.min(a, b), hiX: Math.max(a, b), ceilAbsMm: s.ceilAbsMm };
+    })
+    .sort((a, b) => a.loX - b.loX || a.ceilAbsMm - b.ceilAbsMm);
+}
+
+/**
+ * 天井段差の描画x（オフセット後）を返す（問題修正2026-08）。CLをまたいで天井高さ
+ * （天井の絶対高さ=floorDeltaMm+chMm）が異なる境界（segs[i].hiX。オフセット前）を、
+ * 「低い方からみてCLの向こう側の壁厚」＝天井が高い側へ半壁厚(halfWallMm)だけずらす
+ * （床のdrawnRiserX＝低い側へずらす、と対になる規約。寸法・CL一点鎖線側はオフセット前の
+ * segs[i].hiXのまま）。
+ * @param {Array<{hiX:number, floorDeltaMm:number, chMm?:number}>} segs
+ * @param {number} i - 境界の手前側のインデックス（segs[i]とsegs[i+1]の間の境界）
+ * @param {number} halfWallMm
+ * @param {number} fallbackCeilAbsMm - chMm未指定の区間の天井絶対高さ（帯のCH）。両区間が
+ *   chMmを持つ場合のみ省略可——chMm未指定の区間を含む呼び出しで省略すると比較が壊れる。
+ * @returns {number}
+ */
+export function drawnCeilingRiserX(segs, i, halfWallMm, fallbackCeilAbsMm) {
+  const ceilAbs = s => (s.chMm != null ? s.floorDeltaMm + s.chMm : fallbackCeilAbsMm);
+  const towardHigh = ceilAbs(segs[i + 1]) > ceilAbs(segs[i]) ? 1 : -1;
+  return segs[i].hiX + towardHigh * halfWallMm;
 }
 
 /**

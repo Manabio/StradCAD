@@ -8,6 +8,7 @@ import { generateRoomWallsFromOutline } from '../finish/wallGeneration.js';
 import {
   buildFaceFigure, kneeDropGapsOnFace, parseBaseboardHeightMm, avoidGridCollisionX,
   openingsReachingCorner, formatMaterialLabel, avoidObstacleRangesX, estimateWallLabelWidthPx,
+  segEndProfile,
 } from './elevationFigure.js';
 import { buildRoomFaces as realBuildRoomFaces } from './elevationFaces.js';
 import { wallAdjacentFloorSegments } from './elevationFloorProfile.js';
@@ -330,6 +331,412 @@ test('【失敗系・項目5】buildFaceFigure: floorSegmentsが1区間（段差
   const prims = buildFaceFigure(face, baseCtx());
   const vDims = prims.filter(p => p.type === 'dim' && p.dir === 'v');
   assert.equal(vDims.length, 0, '段差が無ければ右側のCH寸法は出ないはず');
+});
+
+// ---- 問題修正2026-08その6: segEndProfileは素の端区間（描かれるままの先頭/末尾）を読む ----
+// 実機修正: 入隅の面端に挟まる半壁厚程度のgap-fill区間も実際に床として描かれる——
+// 「B1の右側の床は1FL+100」（=右端の親スリバーの床）と次の面の左端の床の不一致こそが
+// 継ぎ目＝CH寸法を出す箇所のため、読み飛ばさない（一時導入した幅閾値方式は撤回）。
+test('segEndProfile: 素の先頭/末尾区間（入隅スリバー含む）の床・天井を返す', () => {
+  const segs = [
+    { loX: 0,   hiX: 57.5, floorDeltaMm: 0,    chMm: 2400 }, // 入隅スリバー（描かれる実床）
+    { loX: 57.5, hiX: 4000, floorDeltaMm: -100, chMm: 2400 },
+  ];
+  assert.deepEqual(segEndProfile(segs, 2400, 'first'), { floorDeltaMm: 0, ceilAbsMm: 2400 },
+    '先頭はスリバーであっても描かれるままの床・天井を返すはず');
+  assert.deepEqual(segEndProfile(segs, 2400, 'last'), { floorDeltaMm: -100, ceilAbsMm: 2300 });
+  assert.equal(segEndProfile(undefined, 2400, 'first'), null, 'segs未指定はnull');
+});
+
+// ---- 問題修正2026-08その6: 段差見付け面の天井断面は低い側エリアの天井、向こう側の天井は破線 ----
+// ユーザー明示指示（実機の「C1」=段差見付け面）: 3'の帯のC1=3の展開図。天井断面は3の天井
+// （ceilAbsMm=2300→-2300）、その上+100に3'の天井を表す破線（beyondCeilAbsMm=2400→-2400）。
+test('【問題修正2026-08その6】buildFaceFigure: 段差見付け面の天井断面はceilAbsMm（低い側の天井）に描かれ、beyondCeilAbsMm（高い側の天井）が細線の破線で出る', () => {
+  const face = makeFace({
+    kind: 'step', baseFloorDeltaMm: -100, stepHeightMm: 100,
+    ceilAbsMm: 2300, beyondCeilAbsMm: 2400, run: 1200, hi: 1200,
+  });
+  const prims = buildFaceFigure(face, baseCtx({ ceilingHeight: 2400 }));
+
+  const cutLines = prims.filter(p => p.type === 'line' && p.weight === 'thick');
+  const ceil = cutLines.find(l => l.y1 === l.y2 && l.y1 === -2300);
+  assert.ok(ceil, '天井断面線は低い側エリアの天井(-2300)に描かれるはず');
+  assert.ok(!cutLines.some(l => l.y1 === l.y2 && l.y1 === -2400), '帯CH(-2400)には天井断面を描かないはず');
+  const leftEnd  = cutLines.find(l => l.x1 === 0    && l.x2 === 0);
+  const rightEnd = cutLines.find(l => l.x1 === 1200 && l.x2 === 1200);
+  assert.equal(leftEnd.y2, -2300, '両端縦線は低い側の天井まで');
+  assert.equal(rightEnd.y2, -2300);
+
+  const beyond = prims.find(p =>
+    p.type === 'line' && p.weight === 'thin' && p.dash === 'dashed' && p.y1 === p.y2 && p.y1 === -2400);
+  assert.ok(beyond, '高い側（向こう側）の天井を表す細線の破線(y=-2400)が出るはず');
+  assert.equal(beyond.x1, 0);
+  assert.equal(beyond.x2, 1200);
+
+  const gap = prims.find(p => p.type === 'rect');
+  assert.equal(gap.y, -2300, 'アキの上端は低い側の天井のはず');
+  assert.equal(gap.h, 2300, 'アキは見付け上端(topY=0)から天井(-2300)までのはず');
+});
+
+// ---- 失敗系: ceilAbsMm未指定の段差見付け面（旧経路・合成face）は従来どおり帯CHの天井 ----
+test('【失敗系・問題修正2026-08その6】buildFaceFigure: ceilAbsMm未指定の段差見付け面は従来どおり帯CH(-CH)の天井で破線も出ない', () => {
+  const face = makeFace({ kind: 'step', baseFloorDeltaMm: 0, stepHeightMm: 100, run: 1200, hi: 1200 });
+  const prims = buildFaceFigure(face, baseCtx({ ceilingHeight: 2400 }));
+  const cutLines = prims.filter(p => p.type === 'line' && p.weight === 'thick');
+  assert.ok(cutLines.some(l => l.y1 === l.y2 && l.y1 === -2400), '天井断面は帯CH(-2400)のはず');
+  assert.ok(!prims.some(p => p.type === 'line' && p.dash === 'dashed' && p.y1 === p.y2),
+    'beyondCeilAbsMm未指定なら破線は出ないはず');
+});
+
+// ---- 問題修正2026-08その4改: 一様な別FL面のCH寸法は面の左側＝帯レイアウトの担当 ----
+// ユーザー明示指示: 「B1の右側の床は+100、つづくC1の左側の床は+0。床の起点高さが変わるので、
+// C1の左側に天井高さの寸法線が必要」——面単体（buildFaceFigure）は従来どおり段差のある面の
+// 右CH寸法だけを描き、一様な別FL面の左CH寸法はelevationBand.jsのlayoutBandFaces
+// （直前の面の右端との比較）が描く。
+test('【問題修正2026-08その4改】buildFaceFigure: 一様な別FL区間の面は、面単体では右CH寸法を出さない（左CH寸法は帯レイアウトが担当）', () => {
+  const CH = 2400;
+  const floorSegments = [{ loX: 0, hiX: 4000, floorDeltaMm: -100, chMm: 2400 }];
+  const face = makeFace();
+  const prims = buildFaceFigure(face, baseCtx({ ceilingHeight: CH, floorSegments }));
+  assert.equal(prims.filter(p => p.type === 'dim' && p.dir === 'v').length, 0,
+    '段差の無い面は面単体では縦寸法を出さないはず（左CH寸法は帯レイアウト側）');
+});
+
+// ---- 失敗系: 一様で床・天井とも帯基準どおり（chMm=CH・FL同一）ならCH寸法は出さない ----
+test('【失敗系・問題修正2026-08その4】buildFaceFigure: 唯一の区間の床・天井が帯基準と同じならCH寸法は出さない', () => {
+  const CH = 2400;
+  const floorSegments = [{ loX: 0, hiX: 4000, floorDeltaMm: 0, chMm: 2400 }];
+  const face = makeFace();
+  const prims = buildFaceFigure(face, baseCtx({ ceilingHeight: CH, floorSegments }));
+  assert.equal(prims.filter(p => p.type === 'dim' && p.dir === 'v').length, 0,
+    '帯基準どおりの面には従来どおりCH寸法を出さないはず');
+});
+
+// ---- 問題修正2026-08: 天井断面線は区間（エリア）ごとに「床断面から天井高さ(chMm)の距離」に描く ----
+// CLをまたいで天井の絶対高さが異なる境界は段差＝縦線になり、その描画xは「低い方からみて
+// CLの向こう側」＝天井が高い側へ半壁厚(makeFaceはDEFAULT_HALF_WALL_MM=57.5へフォールバック)
+// ずらした位置（drawnCeilingRiserX。床のdrawnRiserX=低い側へ、と対になる規約）。
+test('【問題修正2026-08】buildFaceFigure: chMmが異なる2区間（床は同一FL）は天井線が2本＋天井段差の縦線になり、床の段差縦線は出ない', () => {
+  const CH = 2400;
+  const floorSegments = [
+    { loX: 0,    hiX: 2000, floorDeltaMm: 0, chMm: 2400 },
+    { loX: 2000, hiX: 4000, floorDeltaMm: 0, chMm: 2600 }, // 明示CH指定で天井だけ高いエリア
+  ];
+  const face = makeFace();
+  const prims = buildFaceFigure(face, baseCtx({ ceilingHeight: CH, floorSegments }));
+
+  const cutLines = prims.filter(p => p.type === 'line' && p.weight === 'thick');
+  const ceilRiserX = 2000 + 57.5; // 低い方(左)からみてCLの向こう側＝天井が高い側(右)へ半壁厚
+  const ceil0 = cutLines.find(l => l.y1 === l.y2 && l.y1 === -2400 && l.x1 === 0);
+  const ceil1 = cutLines.find(l => l.y1 === l.y2 && l.y1 === -2600);
+  assert.ok(ceil0, '左区間の天井線(y=-2400)が見つかるはず');
+  assert.ok(ceil1, '右区間の天井線(y=-2600)が見つかるはず');
+  assert.equal(ceil0.x2, ceilRiserX, '左区間の天井線は天井段差の描画x(2057.5)まで');
+  assert.equal(ceil1.x1, ceilRiserX, '右区間の天井線は天井段差の描画xから');
+  assert.equal(ceil1.x2, 4000, '右区間の天井線は面の右端まで');
+
+  const ceilRiser = cutLines.find(l => l.x1 === ceilRiserX && l.x2 === ceilRiserX);
+  assert.ok(ceilRiser, '天井段差の縦線が見つかるはず');
+  assert.deepEqual([Math.min(ceilRiser.y1, ceilRiser.y2), Math.max(ceilRiser.y1, ceilRiser.y2)], [-2600, -2400],
+    '天井段差の縦線は低い天井(-2400)と高い天井(-2600)を結ぶはず');
+
+  // 床は同一FLのため、床の水平線は分割されても段差の縦線は出ない（y=0同士の長さ0の線を残さない）。
+  assert.ok(!cutLines.some(l => l.x1 === l.x2 && l.y1 === 0 && l.y2 === 0), '床の段差縦線（長さ0）は出ないはず');
+
+  // 両端の縦線（SILHOUETTE）はその端の区間の実際の天井まで届く。
+  const silhouetteLines = prims.filter(p => p.type === 'line' && p.weight === 'medium');
+  const leftEnd  = silhouetteLines.find(l => l.x1 === 0 && l.x2 === 0);
+  const rightEnd = silhouetteLines.find(l => l.x1 === 4000 && l.x2 === 4000);
+  assert.equal(leftEnd.y1, -2400, '左端の縦線は左区間の天井(-2400)から');
+  assert.equal(rightEnd.y1, -2600, '右端の縦線は右区間の天井(-2600)から');
+
+  // 右CH寸法は右端区間の実際の床〜天井（値=そのエリアのCH=2600）。
+  const rightChDim = prims.find(p => p.type === 'dim' && p.dir === 'v');
+  assert.ok(rightChDim, '区間が2つに分かれるため右CH寸法が出るはず');
+  assert.equal(rightChDim.label, 2600, '値は右端区間の実際のCH(2600)のはず');
+  assert.equal(rightChDim.from, -2600, '右端区間の天井から');
+  assert.equal(rightChDim.to, 0, '右端区間の床まで');
+});
+
+test('【問題修正2026-08】buildFaceFigure: 床段差＋同一chMmの2区間は天井も段差になる（天井絶対高さ=FL+CHが変わるため）', () => {
+  const CH = 2400;
+  const floorSegments = [
+    { loX: 0,    hiX: 2000, floorDeltaMm: 0,   chMm: 2400 },
+    { loX: 2000, hiX: 4000, floorDeltaMm: 300, chMm: 2400 }, // 小上がりに明示CH2400（天井も+300）
+  ];
+  const face = makeFace();
+  const prims = buildFaceFigure(face, baseCtx({ ceilingHeight: CH, floorSegments }));
+
+  const cutLines = prims.filter(p => p.type === 'line' && p.weight === 'thick');
+  // 床の段差縦線は低い側(左)へ半壁厚=1942.5、天井の段差縦線は高い側(右)へ半壁厚=2057.5。
+  assert.ok(cutLines.some(l => l.x1 === 1942.5 && l.x2 === 1942.5 && Math.min(l.y1, l.y2) === -300),
+    '床の段差縦線(x=1942.5)が見つかるはず');
+  const ceilRiser = cutLines.find(l => l.x1 === 2057.5 && l.x2 === 2057.5);
+  assert.ok(ceilRiser, '天井の段差縦線(x=2057.5)が見つかるはず');
+  assert.deepEqual([Math.min(ceilRiser.y1, ceilRiser.y2), Math.max(ceilRiser.y1, ceilRiser.y2)], [-2700, -2400],
+    '天井は-2400から-2700(FL300+CH2400)へ上がるはず');
+});
+
+// ---- 問題修正2026-08その3: 天井断面より上の別エリアの天井（beyondCeilings）は細線の破線で描く ----
+// ユーザー明示指示（「3'」のC1）: 親FL−100・CH2400の部分指定（天井絶対高さ2300）が壁際を占め、
+// その向こうに親（天井2400）が実在する面では、天井断面(-2300)の上+100に「3'」の天井を表す
+// 破線(-2400)が出る。「床断面より下・天井断面より上の向こう側の断面は細線の破線」（その2）の天井側。
+test('【問題修正2026-08その3】buildFaceFigure: 天井断面より上の別エリアの天井（beyondCeilings）は細線の破線で描かれる', () => {
+  const CH = 2400;
+  const floorSegments = [{ loX: 0, hiX: 4000, floorDeltaMm: -100, chMm: 2400 }]; // 天井断面2300
+  const face = makeFace();
+  const prims = buildFaceFigure(face, baseCtx({
+    ceilingHeight: CH, floorSegments,
+    beyondCeilings: [{ loX: 0, hiX: 4000, ceilAbsMm: 2400 }], // 向こう側に親（天井2400）が実在
+  }));
+
+  const cutLines = prims.filter(p => p.type === 'line' && p.weight === 'thick');
+  const ceilSection = cutLines.find(l => l.y1 === l.y2 && l.y1 === -2300);
+  assert.ok(ceilSection, '天井断面線は区間の天井(-2300)に描かれるはず');
+
+  const dashed = prims.filter(p =>
+    p.type === 'line' && p.weight === 'thin' && p.dash === 'dashed' && p.y1 === p.y2 && p.y1 === -2400);
+  assert.equal(dashed.length, 1, '親の天井を表す細線の破線(y=-2400)が1本見つかるはず');
+  assert.equal(dashed[0].x1, 0, '破線は面の実範囲[0,run]（延長なし）のはず');
+  assert.equal(dashed[0].x2, 4000);
+});
+
+// ---- 失敗系: beyondCeilings未指定、または断面と同じ高さ・断面より下のエリアには破線を描かない ----
+// A1/B1/D2の誤検出（旧ヒューリスティック: 帯CH比較だけで面全域に線を引いていた）の門番——
+// 当該エリアが向こう側に実在しない（beyondCeilingsに無い/断面と同じ高さしか無い）面には出ない。
+test('【失敗系・問題修正2026-08その3】buildFaceFigure: beyondCeilingsが無い・断面と同高・断面より下のエリアには破線を描かない', () => {
+  const CH = 2400;
+  const floorSegments = [{ loX: 0, hiX: 4000, floorDeltaMm: -100, chMm: 2400 }]; // 天井断面2300
+  const face = makeFace();
+  const horizDashed = prims => prims.filter(p =>
+    p.type === 'line' && p.weight === 'thin' && p.dash === 'dashed' && p.y1 === p.y2);
+
+  // beyondCeilings未指定（旧実装は帯CH2400≠断面2300というだけで面全域に線を出していた）
+  const prims1 = buildFaceFigure(face, baseCtx({ ceilingHeight: CH, floorSegments }));
+  assert.equal(horizDashed(prims1).length, 0, 'beyondCeilings未指定なら破線は出ないはず');
+
+  // 断面と同じ高さ(2300)・断面より下(2200)のエリアのみ → いずれも対象外
+  const prims2 = buildFaceFigure(face, baseCtx({
+    ceilingHeight: CH, floorSegments,
+    beyondCeilings: [{ loX: 0, hiX: 4000, ceilAbsMm: 2300 }, { loX: 0, hiX: 4000, ceilAbsMm: 2200 }],
+  }));
+  assert.equal(horizDashed(prims2).length, 0, '断面と同高・断面より下のエリアには破線を描かないはず（明示指示の範囲外）');
+});
+
+// ---- 問題修正2026-08その2: 開放スパンの向こう側の天井線 ----
+// ユーザー明示指示（「3'」のA2, 1200）: 開放先の天井が近側の天井断面より低ければ、床〜天井の間に
+// 見える見えがかりとしてSILHOUETTE実線（中線）で描く。アキはfar天井までにクランプする。
+test('【問題修正2026-08その2】buildFaceFigure: 開放先の天井が低い開放スパンは、far天井の見えがかり線（中線実線）が出てアキもそこまでにクランプされる', () => {
+  const CH = 2400;
+  const face = makeFace({
+    spans: [
+      { loX: 0,    hiX: 2800, kind: 'wall' },
+      { loX: 2800, hiX: 4000, kind: 'open', farFloorDeltaMm: -100, farCeilAbsMm: 2300 },
+    ],
+  });
+  const prims = buildFaceFigure(face, baseCtx({ ceilingHeight: CH }));
+
+  // QA G2: far天井の見えがかりはアキ矩形の上辺（同座標・同weightのSILHOUETTE）が担うため、
+  // 線primitiveを二重に積まない。
+  const farCeilLines = prims.filter(p =>
+    p.type === 'line' && p.y1 === p.y2 && p.y1 === -2300 && p.x1 === 2800 && p.x2 === 4000);
+  assert.equal(farCeilLines.length, 0, 'far天井線はアキ矩形の上辺と二重に積まないはず（QA G2）');
+
+  const gapRect = prims.find(p => p.type === 'rect' && p.x === 2800);
+  assert.ok(gapRect, 'アキ矩形が見つかるはず');
+  assert.equal(gapRect.y, -2300, 'アキの上端＝far天井の見えがかり線はfar天井(-2300)までにクランプされるはず');
+  assert.equal(gapRect.h, 2300, 'アキの高さはfar天井(2300)−床(max(-100,0)=0)のはず');
+  assert.equal(gapRect.weight, 'medium', '上辺がfar天井の見えがかり（中線）を兼ねるはず');
+});
+
+// ---- 問題修正2026-08その2: 開放先の天井が高い場合は「天井断面より上の向こう側」＝細線の破線＋端部縦線 ----
+test('【問題修正2026-08その2】buildFaceFigure: 開放先の天井が天井断面より高い開放スパンは、far天井線が細線の破線になり端部縦線（near天井〜far天井）を継ぎ足す', () => {
+  const CH = 2400;
+  const face = makeFace({
+    spans: [
+      { loX: 0,    hiX: 2800, kind: 'wall' },
+      { loX: 2800, hiX: 4000, kind: 'open', farFloorDeltaMm: 0, farCeilAbsMm: 2600 },
+    ],
+  });
+  const prims = buildFaceFigure(face, baseCtx({ ceilingHeight: CH }));
+
+  const farCeil = prims.find(p => p.type === 'line' && p.y1 === p.y2 && p.y1 === -2600);
+  assert.ok(farCeil, 'far天井線(y=-2600)が見つかるはず');
+  assert.equal(farCeil.weight, 'thin', '天井断面より上の向こう側の断面のため細線のはず');
+  assert.equal(farCeil.dash, 'dashed', '破線のはず');
+
+  // 端部縦線（far天井-2600〜near天井-2400。角=far天井側を始点にした細線の破線）が両端に出る。
+  const edges = prims.filter(p =>
+    p.type === 'line' && p.x1 === p.x2 && p.weight === 'thin' && p.dash === 'dashed' &&
+    p.y1 === -2600 && p.y2 === -2400);
+  assert.equal(edges.length, 2, `x=2800とx=4000の両端に縦線が出るはず（実際:${JSON.stringify(edges)}）`);
+  assert.deepEqual(edges.map(e => e.x1).sort((a, b) => a - b), [2800, 4000]);
+
+  const gapRect = prims.find(p => p.type === 'rect' && p.x === 2800);
+  assert.equal(gapRect.y, -2400, 'far天井が高い場合、アキの上端は近側の天井断面(-2400)までのはず');
+});
+
+// ---- QA H1: bc破線が最上位の水平線になる面では、注記の一点鎖線がその上へ突き出す ----
+test('【QA H1】buildFaceFigure: beyondCeilingsの破線より上へ注記の一点鎖線が突き出す', () => {
+  const CH = 2400;
+  const floorSegments = [{ loX: 0, hiX: 4000, floorDeltaMm: 0, chMm: 2300 }];
+  const face = makeFace();
+  const prims = buildFaceFigure(face, baseCtx({
+    ceilingHeight: CH, floorSegments,
+    beyondCeilings: [{ loX: 0, hiX: 4000, ceilAbsMm: 2800 }], // 奥のエリアの高い天井
+  }));
+
+  const centerLines = prims.filter(p => p.type === 'line' && p.dash === 'center' && p.x1 === p.x2);
+  assert.ok(centerLines.length > 0, '壁中心線の一点鎖線があるはず');
+  for (const l of centerLines) {
+    assert.equal(l.y1, -2800 - GRID_LINE_ABOVE_CH_MM,
+      `一点鎖線はbc破線(-2800)より上へ突き出すはず（実際:${l.y1}）`);
+  }
+});
+
+// ---- QA H2: 天井が同じで床だけ違う隣接区間の上では、bc破線が1本に結合される（破線位相の分割防止） ----
+test('【QA H2】buildFaceFigure: 天井が同じで床だけ違う隣接区間の上では、beyondCeilingsの破線が1本に結合される', () => {
+  const CH = 2400;
+  const floorSegments = [
+    { loX: 0,    hiX: 2000, floorDeltaMm: 0,    chMm: 2400 }, // 天井絶対高さ2400
+    { loX: 2000, hiX: 4000, floorDeltaMm: -200, chMm: 2600 }, // 天井絶対高さ2400（床だけ違う）
+  ];
+  const face = makeFace();
+  const prims = buildFaceFigure(face, baseCtx({
+    ceilingHeight: CH, floorSegments,
+    beyondCeilings: [{ loX: 0, hiX: 4000, ceilAbsMm: 2800 }],
+  }));
+
+  const dashed = prims.filter(p =>
+    p.type === 'line' && p.weight === 'thin' && p.dash === 'dashed' && p.y1 === p.y2 && p.y1 === -2800);
+  assert.equal(dashed.length, 1, `座標が連続する断片は1本にマージされるはず（実際:${JSON.stringify(dashed)}）`);
+  assert.equal(dashed[0].x1, 0);
+  assert.equal(dashed[0].x2, 4000);
+});
+
+// ---- QA H3: 開放スパンの向こう側にさらに高いファミリー天井があれば、開放スパン上にも描く ----
+test('【失敗系・QA H3】buildFaceFigure: 開放スパンで差し引くのは同じ高さのfar天井線だけで、さらに高いbcの破線は開放スパン上にも描かれる', () => {
+  const CH = 2400;
+  const face = makeFace({
+    spans: [
+      { loX: 0,    hiX: 2800, kind: 'wall' },
+      { loX: 2800, hiX: 4000, kind: 'open', farFloorDeltaMm: 0, farCeilAbsMm: 2600 },
+    ],
+  });
+  const prims = buildFaceFigure(face, baseCtx({
+    ceilingHeight: CH,
+    beyondCeilings: [
+      { loX: 2800, hiX: 4000, ceilAbsMm: 2600 }, // 開放先セル自身の天井＝far天井線と同高（差し引かれる）
+      { loX: 0,    hiX: 4000, ceilAbsMm: 2800 }, // さらに奥の高い天井＝開放スパン上にも描く
+    ],
+  }));
+
+  const at2600 = prims.filter(p =>
+    p.type === 'line' && p.weight === 'thin' && p.dash === 'dashed' && p.y1 === p.y2 && p.y1 === -2600);
+  assert.equal(at2600.length, 1, '-2600はfar天井線の1本だけ（bc側は差し引かれ二重にならない）はず');
+  assert.equal(at2600[0].x1, 2800);
+  assert.equal(at2600[0].x2, 4000);
+
+  const at2800 = prims.filter(p =>
+    p.type === 'line' && p.weight === 'thin' && p.dash === 'dashed' && p.y1 === p.y2 && p.y1 === -2800);
+  assert.equal(at2800.length, 1, '-2800のbc破線は開放スパンに差し引かれず面全域の1本のはず');
+  assert.equal(at2800[0].x1, 0);
+  assert.equal(at2800[0].x2, 4000);
+});
+
+// ---- QA G1改: 開放スパン区間はfar天井線の管轄のため、beyondCeilingsの破線から差し引く ----
+test('【QA G1】buildFaceFigure: beyondCeilingsの破線は開放スパン区間を差し引いた壁区間だけに引かれ、far天井線と二重にならない', () => {
+  const CH = 2400;
+  const floorSegments = [{ loX: 0, hiX: 4000, floorDeltaMm: 0, chMm: 2300 }]; // 近側の天井2300(<CH)
+  const face = makeFace({
+    spans: [
+      { loX: 0,    hiX: 2800, kind: 'wall' },
+      { loX: 2800, hiX: 4000, kind: 'open', farFloorDeltaMm: 0, farCeilAbsMm: 2400 }, // 開放先=親の天井
+    ],
+  });
+  const prims = buildFaceFigure(face, baseCtx({
+    ceilingHeight: CH, floorSegments,
+    beyondCeilings: [{ loX: 0, hiX: 4000, ceilAbsMm: 2400 }],
+  }));
+
+  const thinDashed = prims.filter(p =>
+    p.type === 'line' && p.y1 === p.y2 && p.y1 === -2400 && p.weight === 'thin' && p.dash === 'dashed');
+  assert.equal(thinDashed.length, 2, `壁区間(beyond)とopen区間(far天井線)で別々の1本ずつ＝計2本のはず（実際:${JSON.stringify(thinDashed)}）`);
+  const sorted = [...thinDashed].sort((a, b) => a.x1 - b.x1);
+  assert.equal(sorted[0].x1, 0);
+  assert.equal(sorted[0].x2, 2800, 'beyondの破線は開放スパンの手前(2800)で止まるはず（同区間の二重描画をしない）');
+  assert.equal(sorted[1].x1, 2800, 'open区間はfar天井線が担うはず');
+  assert.equal(sorted[1].x2, 4000);
+});
+
+// ---- QA G3: 区間天井が帯CHより低い面でも、注記一点鎖線は見えがかり線(-CH)より上へ突き出す ----
+test('【QA G3】buildFaceFigure: 区間の天井が帯CHより低くても、注記の一点鎖線は帯CH（見えがかり線の高さ）より上へ突き出す', () => {
+  const CH = 2500;
+  const floorSegments = [{ loX: 0, hiX: 4000, floorDeltaMm: 0, chMm: 2200 }];
+  const face = makeFace();
+  const prims = buildFaceFigure(face, baseCtx({ ceilingHeight: CH, floorSegments }));
+
+  const centerLines = prims.filter(p => p.type === 'line' && p.dash === 'center' && p.x1 === p.x2);
+  assert.ok(centerLines.length > 0, '壁中心線の一点鎖線があるはず');
+  for (const l of centerLines) {
+    assert.equal(l.y1, -CH - GRID_LINE_ABOVE_CH_MM,
+      `一点鎖線の上端は帯CH基準(-CH-GRID_LINE_ABOVE_CH_MM=${-CH - GRID_LINE_ABOVE_CH_MM})のはず（実際:${l.y1}）`);
+  }
+});
+
+// ---- 天井段差のある複数runで、beyondCeilingsの破線は「断面より上」になるrunの範囲だけに引かれCUT天井と重ならない ----
+test('buildFaceFigure: 天井段差のある複数runでは、beyondCeilingsの破線は天井断面がそれより低いrunの範囲だけに引かれる', () => {
+  const CH = 2400;
+  const floorSegments = [
+    { loX: 0,    hiX: 2000, floorDeltaMm: 0, chMm: 2300 }, // 天井断面2300（破線の対象）
+    { loX: 2000, hiX: 4000, floorDeltaMm: 0, chMm: 2400 }, // 天井断面2400（同高＝対象外）
+  ];
+  const face = makeFace();
+  const prims = buildFaceFigure(face, baseCtx({
+    ceilingHeight: CH, floorSegments,
+    beyondCeilings: [{ loX: 0, hiX: 4000, ceilAbsMm: 2400 }],
+  }));
+
+  // 天井段差の描画x: 高い側(右)へ半壁厚 → 2000+57.5。
+  const dashedAt2400 = prims.filter(p =>
+    p.type === 'line' && p.weight === 'thin' && p.dash === 'dashed' && p.y1 === p.y2 && p.y1 === -2400);
+  assert.equal(dashedAt2400.length, 1, '破線は左run（断面2300）の範囲だけのはず');
+  assert.equal(dashedAt2400[0].x1, 0);
+  // 論理境界(2000)で止める——描画済みrun範囲（段差x=2057.5）基準にすると、bcの論理境界と
+  // 一致する面で半壁厚ぶんの偽スリバーが生じるため（実装コメント参照）。
+  assert.equal(dashedAt2400[0].x2, 2000, '破線は論理境界(2000)まで＝右runのCUT天井(-2400)と重ならないはず');
+});
+
+// ---- 問題修正2026-08(QA F2): 袖壁断面（topHeightMm省略=天井まで）は端の区間の実際の天井まで届く ----
+test('【失敗系・問題修正2026-08】buildFaceFigure: partitionCutAtLocal0のtopHeightMm省略時は端の区間の実際の天井(chMm)まで届く', () => {
+  const CH = 2400;
+  const floorSegments = [{ loX: 0, hiX: 4000, floorDeltaMm: 0, chMm: 2600 }];
+  const face = makeFace({ hasWallAtLocal0: false, partitionCutAtLocal0: { thicknessMm: 120, topHeightMm: null } });
+  const prims = buildFaceFigure(face, baseCtx({ ceilingHeight: CH, floorSegments }));
+
+  const rect = prims.find(p => p.type === 'rect' && p.x === 0 && p.w === 120);
+  assert.ok(rect, '袖壁断面のCUT枠が見つかるはず');
+  assert.equal(rect.y, -2600, '帯CH(-2400)ではなく端の区間の実際の天井(-2600)まで届くはず');
+  assert.equal(rect.h, 2600);
+});
+
+// ---- 失敗系: 自CH指定なしの部分指定（roomCeilingHeightの調整でchMm=親CH−FL差）は天井が水平1本のまま ----
+test('【失敗系・問題修正2026-08】buildFaceFigure: 天井絶対高さが揃う2区間（chMm=親CH−FL差）は天井線1本のままで天井段差は出ない', () => {
+  const CH = 2400;
+  const floorSegments = [
+    { loX: 0,    hiX: 2000, floorDeltaMm: 0,   chMm: 2400 },
+    { loX: 2000, hiX: 4000, floorDeltaMm: 300, chMm: 2100 }, // 自CH指定なし→親と天井が揃う
+  ];
+  const face = makeFace();
+  const prims = buildFaceFigure(face, baseCtx({ ceilingHeight: CH, floorSegments }));
+
+  const cutLines = prims.filter(p => p.type === 'line' && p.weight === 'thick');
+  const ceilLines = cutLines.filter(l => l.y1 === l.y2 && l.y1 === -2400);
+  assert.equal(ceilLines.length, 1, '天井絶対高さが同じなら天井線は1本に結合されるはず');
+  assert.equal(ceilLines[0].x1, 0);
+  assert.equal(ceilLines[0].x2, 4000);
+  // CUT線は天井1＋床2＋床段差縦線1の計4本（天井段差の縦線は出ない）。
+  assert.equal(cutLines.length, 4, `天井段差の縦線は出ないはず（実際:${JSON.stringify(cutLines)}）`);
 });
 
 // ---- 項目3・4: 壁2段書き（材名の言い換え・配置・省略） ----

@@ -6,6 +6,7 @@
 import { cellBoundsList, outlineSegments, worldToCell } from '../finish/gridCells.js';
 import { letterOf, DIR_SIGN, perpFaceAt, CORNER_TOL_MM } from './elevationFaces.js';
 import { roomOwnerByCell, collectRunBreaks, findRunCLAt } from './elevationFloorProfile.js';
+import { roomCeilingHeight } from '../finish/roomMetrics.js';
 import { MIN_FACE_RUN_MM, GAP_EPS_MM as GAP_EPS, PROBE_EPS_MM } from './elevationStyle.js';
 // GAP_EPS: 物理的に意味を持たない極小幅(mm)の許容差。CL昇格/降格・再スナップ由来の
 // sub-micron誤差を吸収する目的（elevationFloorProfile.js等と共通。R4）。
@@ -71,6 +72,9 @@ export function stepRiserSegments(parentRoom, graph) {
           out.push({
             isVertical: seg.isVertical, value: seg.value, lo, hi, inward,
             highFL: ownerFL, lowFL: otherFL, ownerRoom: owner,
+            // 問題修正2026-08その6: 低い側（見付けの先に見えるエリア）の所有Room。見付け面の
+            // 天井断面（=低い側エリアの天井）の解決に使う。
+            lowOwnerRoom: otherOwner,
           });
         }
       }
@@ -79,7 +83,8 @@ export function stepRiserSegments(parentRoom, graph) {
   return mergeRiserSegments(out);
 }
 
-// 同一value・inward・(highFL,lowFL)で隣接する区間を結合する。
+// 同一value・inward・(highFL,lowFL)・両側の所有Roomで隣接する区間を結合する
+// （問題修正2026-08その6: 所有Roomが異なるとFLが同じでも天井高さ(CH)が異なりうるため結合しない）。
 function mergeRiserSegments(segs) {
   const sorted = [...segs].sort((a, b) =>
     a.isVertical - b.isVertical || a.value - b.value || a.inward - b.inward || a.lo - b.lo);
@@ -87,7 +92,8 @@ function mergeRiserSegments(segs) {
   for (const s of sorted) {
     const last = merged[merged.length - 1];
     if (last && last.isVertical === s.isVertical && last.value === s.value && last.inward === s.inward &&
-        last.highFL === s.highFL && last.lowFL === s.lowFL && last.hi === s.lo) {
+        last.highFL === s.highFL && last.lowFL === s.lowFL &&
+        last.ownerRoom === s.ownerRoom && last.lowOwnerRoom === s.lowOwnerRoom && last.hi === s.lo) {
       last.hi = s.hi;
     } else {
       merged.push({ ...s });
@@ -130,6 +136,15 @@ export function buildStepFaces(seg, wallFaces, graph, parentFL) {
   // ——見つからなければ段差自身のaxisCL.id（従来どおり。退化はするが少なくとも例外にはしない）。
   const startCLId = loFace ? loFace.axisCL.id : (axisCL?.id ?? null);
   const endCLId   = hiFace ? hiFace.axisCL.id : (axisCL?.id ?? null);
+  // 問題修正2026-08その6（ユーザー明示指示。実機の「C1」=この見付け面）: 見付け面は
+  // 「低い側エリア（例: 部屋3）を見込む展開図」——天井断面はその低い側エリア自身の天井
+  // （ceilAbsMm=低い側FL+低い側の解決済みCH）。高い側エリア（親3'等）の天井は
+  // 「向こう側の天井」としてbeyondCeilAbsMmに持ち、天井断面より上なら細線の破線で描く
+  // （「C1の天井断面上+100に3'の天井を表す破線」）。lowOwnerRoom未設定（旧経路）は
+  // 低い側FL+帯CHへフォールバック。
+  const lowCeilAbsMm = (seg.lowFL - parentFL) +
+    roomCeilingHeight(graph, seg.lowOwnerRoom ?? seg.ownerRoom).mm;
+  const highCeilAbsMm = (seg.highFL - parentFL) + roomCeilingHeight(graph, seg.ownerRoom).mm;
   return {
     letter, dirSign, isVertical: seg.isVertical, axisCL, inward: seg.inward,
     faceValue: seg.value, hasRealWall: true,
@@ -140,6 +155,7 @@ export function buildStepFaces(seg, wallFaces, graph, parentFL) {
     // 通常面の壁のない端部判定（perpWallCrossesFacePlane）は通さない。
     hasWallAtLocal0: true, hasWallAtLocalRun: true,
     kind: 'step', stepHeightMm, baseFloorDeltaMm: seg.lowFL - parentFL,
+    ceilAbsMm: lowCeilAbsMm, beyondCeilAbsMm: highCeilAbsMm,
   };
 }
 
