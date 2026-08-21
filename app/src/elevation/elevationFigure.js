@@ -425,8 +425,18 @@ export function buildFaceFigure(face, ctx) {
   const floorYAtStart = floorYOf(segs[0]);
   const floorYAtEnd   = floorYOf(segs[segs.length - 1]);
   prims.push({ type: 'line', x1: drawnX0, y1: -CH, x2: drawnXRun, y2: -CH, weight: cutWeight });
-  if (hasWallAtLocal0)   prims.push({ type: 'line', x1: 0,   y1: -CH, x2: 0,   y2: floorYAtStart, weight: silhouetteWeight });
-  if (hasWallAtLocalRun) prims.push({ type: 'line', x1: run, y1: -CH, x2: run, y2: floorYAtEnd,   weight: silhouetteWeight });
+  // 端の縦線（中線）: 壁がある端（出隅・入隅）に加え、見えがかりエッジ（edgeAtLocal0/Run＝
+  // 実壁が切断面を横切らず向こう側へ折れて続く凹み角。ユーザー明示指示2026-08）にも描く——
+  // 壁断面は無いが角のエッジ自体は見えるため。エッジ端は壁のない端部でもあるので、
+  // 床・天井線の延長（drawnX0/drawnXRun）はそのまま併用される（縦線の外側へ続きがある表現）。
+  const edgeAtLocal0   = face.edgeAtLocal0   ?? false;
+  const edgeAtLocalRun = face.edgeAtLocalRun ?? false;
+  if (hasWallAtLocal0 || edgeAtLocal0) {
+    prims.push({ type: 'line', x1: 0,   y1: -CH, x2: 0,   y2: floorYAtStart, weight: silhouetteWeight });
+  }
+  if (hasWallAtLocalRun || edgeAtLocalRun) {
+    prims.push({ type: 'line', x1: run, y1: -CH, x2: run, y2: floorYAtEnd,   weight: silhouetteWeight });
+  }
 
   // 新仕様「袖壁・腰壁の面分割」: 袖壁で分割された端（hasWallAtLocal0/Run=falseで縦線を描かない
   // 代わりに床・天井が延長される既存の「壁のない端部」表現の上に）、袖壁自身の断面（厚みthicknessMm・
@@ -542,16 +552,19 @@ export function buildFaceFigure(face, ctx) {
   // 直交壁の建具が切断位置にかかる場合、その断面（枠2断面＋扉1枚）を面の両端に描く（項目3）。
   // 新仕様「開放スパン」: extendedAtLocal0/Run=true（開放スパンで延長された端）はそもそも
   // 実在する隅ではない（prevFace/nextFaceの隅共有という前提が成立しない）ため、断面を描かない。
+  // 壁のない端部（hasWallAtLocal0/Run=false。直交壁が切断面を横切らない凹み角等）も同様——
+  // 壁の切断面自体を描かない端に建具の断面だけ残すと「ここに切断面がある」と誤読される
+  // （QA指摘: 隅共有の前提が凹み角で崩れたのに合わせてガードを拡張）。
   // 断面も姿図と同様、その隅の実際の床（floorSegments）に乗せる（隅は両面で床を共有するため、
   // 自面の端x=0/runの床yを使えば隣接面側の実効FLと一致する）。
-  if (prevFace && !face.extendedAtLocal0) {
+  if (prevFace && !face.extendedAtLocal0 && (face.hasWallAtLocal0 ?? true)) {
     const dy = floorDyAt(0);
     for (const o of openingsReachingCorner(prevFace, graph, 'end')) {
       prims.push(...openingSectionPrimitives(o, 0, 1, cutWeight, silhouetteWeight)
         .map(p => translatePrimitive(p, 0, dy)));
     }
   }
-  if (nextFace && !face.extendedAtLocalRun) {
+  if (nextFace && !face.extendedAtLocalRun && (face.hasWallAtLocalRun ?? true)) {
     const dy = floorDyAt(run);
     for (const o of openingsReachingCorner(nextFace, graph, 'start')) {
       prims.push(...openingSectionPrimitives(o, run, -1, cutWeight, silhouetteWeight)

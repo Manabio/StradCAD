@@ -66,6 +66,30 @@ function findCornerNeighbor(byAxisCLId, ownAxisCLId, neighborAxisCLId) {
   return candidates.find(c => c.startCLId === ownAxisCLId || c.endCLId === ownAxisCLId) ?? null;
 }
 
+// 直交面の実壁が「この面の切断面（仕上げ面の平面）を室内側へ横切っている」とみなす最小
+// 進入量(mm)。横切りの正例は数百mm以上・負例（壁が面の向こう側で終わる）は仕上げ面〜芯の
+// 数十mm手前で止まるため、丸め誤差だけを吸収する小さい値でよい。
+export const PLANE_CROSS_EPS_MM = 1;
+
+/**
+ * 面端の直交面（perpFace）の壁が、face の切断面（faceValue の平面）を室内側へ横切って
+ * いるか。横切っていれば図の端部にその壁の断面（返し）が現れる＝通常の隅。横切っていない
+ * （壁が面の向こう側だけにあり、こちら側では図の端部に壁断面が現れない）端は
+ * 「壁断面のない中心線」＝壁のない端部として扱う（続きがある表現＝床・天井線の延長）。
+ * perpFace.lo/hi は face の奥行き方向に沿った直交面のスパン。
+ * @param {{lo:number, hi:number}} perpFace
+ * @param {{faceValue:number, inward:number}} face
+ * @returns {boolean}
+ */
+export function perpWallCrossesFacePlane(perpFace, face) {
+  // inward不明（幾何を持たない合成face＝既存単体テストの後方互換）は判定不能のため
+  // 従来どおり「横切っている＝壁あり」へフォールバックする（hasRealWall ?? true と同じ規約）。
+  if (face.inward !== 1 && face.inward !== -1) return true;
+  return face.inward > 0
+    ? perpFace.hi > face.faceValue + PLANE_CROSS_EPS_MM
+    : perpFace.lo < face.faceValue - PLANE_CROSS_EPS_MM;
+}
+
 /**
  * 各面の端座標を、同じ直交CL上にある直交面の faceValue（壁の室内側仕上げ面）へ詰める
  * （＝仕上げ面から仕上げ面までの有効長さにする）。対応する直交面が無い辺はCL芯のまま
@@ -75,9 +99,13 @@ function findCornerNeighbor(byAxisCLId, ownAxisCLId, neighborAxisCLId) {
  * 常に存在する——「壁のない端部」（上り口・隣室への開放等）とは、隅に直交面が無いことではなく
  * その直交面に**実壁（graph.walls）が無い**ことを指す（階段の上り口辺・壁生成がスキップされた
  * 辺では、面自体は存在してもfaceValueがinnerWallFaceAtのnullフォールバックでCL芯になる。
- * raw面のhasRealWallフィールド。buildRoomFaces参照）。そのため対応関係の判定は「直交面が存在し
- * かつその直交面がhasRealWall」に変更した——hasWallAtLocal0/hasWallAtLocalRunとして面のローカル
- * 座標系（0/run）向けに公開する。
+ * raw面のhasRealWallフィールド。buildRoomFaces参照）。
+ * さらに（ユーザー明示指示2026-08）実壁があっても、その壁がこの面の切断面を室内側へ
+ * 横切っていない（perpWallCrossesFacePlane=false。壁が面の向こう側だけにある——例:
+ * L字部屋の入隅の先や、上端短縮されたCLの壁が視点側の帯に存在しない場合）端は、図の端部に
+ * 壁断面が現れないため壁のない端部として扱い、端座標も直交面へ詰めずCL芯のまま残す
+ * （「図の端部が壁断面のない中心線の場合は、図の外側まで床と天井断面をのばす」）。
+ * 判定結果は hasWallAtLocal0/hasWallAtLocalRun として面のローカル座標系（0/run）向けに公開する。
  * @param {object[]} faces - letter/dirSign/faceValue/hasRealWall/lo/hi/startCLId/endCLId/axisCL を持つ面リスト
  * @returns {object[]} lo/hi/run/originWorld を詰め直し、hasWallAtLocal0/hasWallAtLocalRunを
  *   追加した新しい配列（他フィールドは同一参照）
@@ -88,19 +116,33 @@ export function snapFaceEndsToCorners(faces) {
   return faces.map(f => {
     const startFace = findCornerNeighbor(byAxisCLId, f.axisCL.id, f.startCLId);
     const endFace   = findCornerNeighbor(byAxisCLId, f.axisCL.id, f.endCLId);
-    const lo = startFace ? startFace.faceValue : f.lo;
-    const hi = endFace   ? endFace.faceValue   : f.hi;
+    // 「壁あり」＝対応する直交面が存在し、その面に実壁があり（hasRealWall。未設定なら
+    // trueへフォールバック——合成faceを使う既存の単体テスト後方互換のため）、かつその壁が
+    // この面の切断面を室内側へ横切っている（perpWallCrossesFacePlane）。
+    const realAtLo = !!startFace && (startFace.hasRealWall ?? true);
+    const realAtHi = !!endFace   && (endFace.hasRealWall   ?? true);
+    const hasWallAtLo = realAtLo && perpWallCrossesFacePlane(startFace, f);
+    const hasWallAtHi = realAtHi && perpWallCrossesFacePlane(endFace, f);
+    // 見えがかりエッジ＝実壁はあるが切断面を横切らない端（凹み角）。壁断面は描かないが、
+    // 壁が折れて向こうへ続く角のエッジ自体は見えるため、縦線（中線）を描く対象として公開する
+    // （ユーザー明示指示2026-08。直交面や実壁自体が無い端＝階段上り口等は従来どおり縦線なし）。
+    const edgeAtLo = realAtLo && !hasWallAtLo;
+    const edgeAtHi = realAtHi && !hasWallAtHi;
+    // 端座標: 壁あり・見えがかりエッジとも直交面のfaceValueへ詰める（＝この面の壁の実端。
+    // 凹み角では相手の壁面に突き当たる位置）。エッジ縦線・延長の起点は壁の実端に立てる
+    // （ユーザー確認2026-08: 中心線位置ではなく壁の実端。これにより隣接面の隅共有の
+    // 不変条件も従来どおり保たれる）。直交面や実壁自体が無い端のみCL芯のまま。
+    const lo = (hasWallAtLo || edgeAtLo) ? startFace.faceValue : f.lo;
+    const hi = (hasWallAtHi || edgeAtHi) ? endFace.faceValue   : f.hi;
     // startCLIdは常に世界座標loを、endCLIdは常に世界座標hiを決める（上のlo/hi代入と対）。
     // ローカル座標0/runへの対応はdirSignの符号で反転する（dirSign>0: lo→0・hi→run、
     // dirSign<0: hi→0・lo→run。originWorldの定義=`dirSign>0?lo:hi`と表裏の関係）。
-    // 「壁あり」＝対応する直交面が存在し、かつその面に実壁がある（hasRealWall。未設定なら
-    // trueへフォールバック——合成faceを使う既存の単体テスト後方互換のため）。
-    const hasWallAtLo = !!startFace && (startFace.hasRealWall ?? true);
-    const hasWallAtHi = !!endFace   && (endFace.hasRealWall   ?? true);
     return {
       ...f, lo, hi, run: hi - lo, originWorld: f.dirSign > 0 ? lo : hi,
       hasWallAtLocal0:   f.dirSign > 0 ? hasWallAtLo : hasWallAtHi,
       hasWallAtLocalRun: f.dirSign > 0 ? hasWallAtHi : hasWallAtLo,
+      edgeAtLocal0:      f.dirSign > 0 ? edgeAtLo : edgeAtHi,
+      edgeAtLocalRun:    f.dirSign > 0 ? edgeAtHi : edgeAtLo,
     };
   });
 }

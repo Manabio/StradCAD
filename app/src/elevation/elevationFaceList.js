@@ -119,6 +119,10 @@ export function splitFacesAtPartitionWalls(faces, room, graph) {
         ...face, startCLId, endCLId, lo, hi, run: hi - lo, originWorld: face.dirSign > 0 ? lo : hi,
         hasWallAtLocal0:   isFirst ? (face.hasWallAtLocal0   ?? true) : false,
         hasWallAtLocalRun: isLast  ? (face.hasWallAtLocalRun ?? true) : false,
+        // 見えがかりエッジ（edgeAtLocal0/Run）は元の面端にのみ引き継ぐ。分割端（袖壁側）は
+        // 袖壁自身の断面rect（partitionCutAtLocal0/Run）が端の表現を担うため常にfalse。
+        edgeAtLocal0:      isFirst ? (face.edgeAtLocal0   ?? false) : false,
+        edgeAtLocalRun:    isLast  ? (face.edgeAtLocalRun ?? false) : false,
         partitionCutAtLocal0:   isFirst ? null : p0.cut,
         partitionCutAtLocalRun: isLast  ? null : p1.cut,
         ...(spans ? { spans } : {}),

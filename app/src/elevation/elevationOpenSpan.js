@@ -20,7 +20,7 @@ import { refreshCells, cellBoundsFromKey, worldToCell } from '../finish/gridCell
 import {
   roomOwnerByCell, runBoundaryCLIds, collectRunBreaks, findRunCLAt, cellNearSideOnFace,
 } from './elevationFloorProfile.js';
-import { perpFaceAt } from './elevationFaces.js';
+import { perpFaceAt, perpWallCrossesFacePlane } from './elevationFaces.js';
 import { MIN_FACE_RUN_MM, GAP_EPS_MM as GAP_EPS, PROBE_EPS_MM } from './elevationStyle.js';
 // PROBE_EPS_MM: far側セルへ覗き込むプローブ距離（elevationStyle.jsのR4共通定数）。
 
@@ -146,11 +146,13 @@ export function extendFaceWithOpenSpans(face, wallFaces, room, graph) {
   // extendedAtLo/Hi（世界側lo/hiのフィールド。dirSignに関わらずそのまま使える）で行う。
   const origHasWallAtLo = face.dirSign > 0 ? (face.hasWallAtLocal0 ?? true) : (face.hasWallAtLocalRun ?? true);
   const origHasWallAtHi = face.dirSign > 0 ? (face.hasWallAtLocalRun ?? true) : (face.hasWallAtLocal0 ?? true);
+  const origEdgeAtLo    = face.dirSign > 0 ? (face.edgeAtLocal0 ?? false) : (face.edgeAtLocalRun ?? false);
+  const origEdgeAtHi    = face.dirSign > 0 ? (face.edgeAtLocalRun ?? false) : (face.edgeAtLocal0 ?? false);
   // R3: wasLoExtended/wasHiExtended（dirSignで分岐してextendedAtLocal0/Runから逆算する値）は、
   // 展開すると恒等的に extendedAtLo/extendedAtHi 自身と一致する（dirSignの両ケースで消える）ため、
   // world側lo/hiの延長判定にはそのままextendedAtLo/extendedAtHiを渡す。
-  const loEnd = resolveEnd(face, wallFaces, runLo, face.startCLId, face.lo, extendedAtLo, origHasWallAtLo);
-  const hiEnd = resolveEnd(face, wallFaces, runHi, face.endCLId, face.hi, extendedAtHi, origHasWallAtHi);
+  const loEnd = resolveEnd(face, wallFaces, runLo, face.startCLId, face.lo, extendedAtLo, origHasWallAtLo, origEdgeAtLo);
+  const hiEnd = resolveEnd(face, wallFaces, runHi, face.endCLId, face.hi, extendedAtHi, origHasWallAtHi, origEdgeAtHi);
 
   const newFace = {
     ...face,
@@ -160,6 +162,8 @@ export function extendFaceWithOpenSpans(face, wallFaces, room, graph) {
     endCLId:   face.dirSign > 0 ? hiEnd.clId : loEnd.clId,
     hasWallAtLocal0:   face.dirSign > 0 ? loEnd.hasWall : hiEnd.hasWall,
     hasWallAtLocalRun: face.dirSign > 0 ? hiEnd.hasWall : loEnd.hasWall,
+    edgeAtLocal0:      face.dirSign > 0 ? loEnd.edge : hiEnd.edge,
+    edgeAtLocalRun:    face.dirSign > 0 ? hiEnd.edge : loEnd.edge,
     extendedAtLocal0, extendedAtLocalRun,
   };
 
@@ -205,17 +209,26 @@ export function extendFaceWithOpenSpans(face, wallFaces, room, graph) {
 
 // face の端（lo側 or hi側）を確定する。延長した場合は直交壁面のfaceValueへスナップ
 // （perpFaceAt。見つかれば真の隅＝hasWall:true、無ければCL値のまま・hasWall:false）。
+// ユーザー明示指示2026-08: 直交面が見つかっても、その実壁がこの面の切断面を室内側へ
+// 横切っていない（perpWallCrossesFacePlane=false＝壁が面の向こう側だけにあり、図の端部に
+// 壁断面が現れない）場合は壁のない端部として扱う——値もスナップせずCL値のまま
+// （「図の端部が壁断面のない中心線の場合は、図の外側まで床と天井断面をのばす」）。
 // 延長していない場合は元の値・元のhasWallをそのまま使う（実壁の隅・stairOpenings等の
 // 壁のない端部いずれも、開放スパンとは無関係に既に正しい状態のため触らない）。
-function resolveEnd(face, wallFaces, runCoord, origCLId, origValue, wasExtended, origHasWall) {
+function resolveEnd(face, wallFaces, runCoord, origCLId, origValue, wasExtended, origHasWall, origEdge = false) {
   if (!wasExtended) {
-    return { value: origValue, clId: origCLId, hasWall: origHasWall };
+    return { value: origValue, clId: origCLId, hasWall: origHasWall, edge: origEdge };
   }
   const perp = perpFaceAt(wallFaces, face.isVertical, face.axisCL.value, runCoord);
-  if (perp) {
-    return { value: perp.faceValue, clId: perp.axisCL.id, hasWall: true };
+  const perpReal = !!perp && (perp.hasRealWall ?? true);
+  if (perpReal) {
+    // 実壁あり: 横切っていれば通常の隅（壁あり）、横切っていなければ見えがかりエッジ。
+    // どちらも端座標は直交面のfaceValue（壁の実端）へ詰める（snapFaceEndsToCornersと同じ規約。
+    // ユーザー確認2026-08: エッジ縦線・延長の起点は中心線位置ではなく壁の実端）。
+    const crosses = perpWallCrossesFacePlane(perp, face);
+    return { value: perp.faceValue, clId: perp.axisCL.id, hasWall: crosses, edge: !crosses };
   }
-  return { value: runCoord, clId: null, hasWall: false };
+  return { value: runCoord, clId: perp?.axisCL.id ?? null, hasWall: false, edge: false };
 }
 
 /**

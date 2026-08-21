@@ -71,7 +71,7 @@ test('buildRoomFaces: 矩形部屋の隣接面の隅が世界座標で一致す�
   assertCornersMatch(buildRoomFaces(room, graph), '矩形');
 });
 
-test('buildRoomFaces: L字部屋の隣接面の隅が世界座標で一致する', () => {
+test('buildRoomFaces: L字部屋の隣接面の隅が世界座標で一致する（壁が向こう側へ折れる入隅の対を除く）', () => {
   const graph = makeGraph();
   // L字: 大矩形(0,0)-(6000,4000)から右上(3000,0)-(6000,2000)の角を欠いた形。
   const x0 = addCL(graph, CenterLineType.VERTICAL, 0);
@@ -87,7 +87,18 @@ test('buildRoomFaces: L字部屋の隣接面の隅が世界座標で一致する
   const room = graph.addRoom(cells, 'L字室');
   generateRoomWallsFromOutline(graph, room);
 
-  assertCornersMatch(buildRoomFaces(room, graph), 'L字');
+  const faces = buildRoomFaces(room, graph);
+  const byLabel = Object.fromEntries(faces.map(f => [f.label, f]));
+  // 凹み角(3000,2000)の対（B1終端↔A2始端）は、相手の壁がこの面の切断面を横切らず向こう側へ
+  // 折れて続く＝図の端部に壁断面が現れない（ユーザー明示指示2026-08）。壁のない端部
+  // （床・天井線の延長対象）だが見えがかりエッジとして縦線（中線）は立つ。端座標は
+  // 壁の実端（直交面のfaceValue）へ詰める（ユーザー確認: 中心線位置ではなく実端）ため、
+  // 隅共有の不変条件は凹み角でも保たれる（assertCornersMatchが全対を検証）。
+  assert.equal(byLabel.B1.hasWallAtLocalRun, false, 'B1終端(凹み角)は壁断面が現れないためfalseのはず');
+  assert.equal(byLabel.B1.edgeAtLocalRun, true, 'B1終端は見えがかりエッジ（縦線=中線の対象）のはず');
+  assert.equal(byLabel.A2.hasWallAtLocal0, false, 'A2始端(凹み角)は壁断面が現れないためfalseのはず');
+  assert.equal(byLabel.A2.edgeAtLocal0, true, 'A2始端は見えがかりエッジのはず');
+  assertCornersMatch(faces, 'L字');
 });
 
 // ---- I3: 対向2面の run の和 < 芯々寸法×2（faceValueでなくeffectiveValueを使うと赤） ----
@@ -138,10 +149,15 @@ test('【QA修正・項目5b】buildRoomFaces: 張り出し(アルコーブ)付�
   // B1・B3（アルコーブ両脇の返し壁）はどちらも約943mm（run<=1000。ユーザー観察と一致）。
   assert.ok(byLabel.B1.run <= 1000 && byLabel.B1.run > 0, `B1のrunが1000以下のはず（実際:${byLabel.B1.run}）`);
   assert.ok(byLabel.B3.run <= 1000 && byLabel.B3.run > 0, `B3のrunが1000以下のはず（実際:${byLabel.B3.run}）`);
-  // 全面がhasWallAtLocal0/Run=true（すべて実壁ありの通常の出隅。壁のない端部は無い）。
+  // アルコーブ開口の2隅を挟む4端（B1終端・アルコーブ天面A2始端・アルコーブ底面C1終端・B3始端）は
+  // 相手の壁が切断面を横切らず開口の向こうへ折れて続くため壁のない端部（ユーザー明示指示2026-08:
+  // 壁断面のない中心線＝続きがある表現）。それ以外の端は従来どおり壁あり。
+  const wallLess = new Set(['B1:run', 'A2:0', 'C1:run', 'B3:0']);
   for (const f of faces) {
-    assert.equal(f.hasWallAtLocal0, true, `${f.label}のhasWallAtLocal0はtrueのはず`);
-    assert.equal(f.hasWallAtLocalRun, true, `${f.label}のhasWallAtLocalRunはtrueのはず`);
+    assert.equal(f.hasWallAtLocal0, !wallLess.has(`${f.label}:0`),
+      `${f.label}のhasWallAtLocal0が期待と異なる`);
+    assert.equal(f.hasWallAtLocalRun, !wallLess.has(`${f.label}:run`),
+      `${f.label}のhasWallAtLocalRunが期待と異なる`);
   }
 });
 

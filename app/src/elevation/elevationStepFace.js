@@ -135,6 +135,9 @@ export function buildStepFaces(seg, wallFaces, graph, parentFL) {
     faceValue: seg.value, hasRealWall: true,
     lo, hi, run: hi - lo, originWorld: dirSign > 0 ? lo : hi,
     startCLId, endCLId,
+    // 見付け面は常に壁あり端扱い（意図的）: 両端縦線は「実際に切断される壁の断面」として
+    // 常にCUTで描く仕様（elevation-model.md「段差見付け面」節・ユーザー明示指示）のため、
+    // 通常面の壁のない端部判定（perpWallCrossesFacePlane）は通さない。
     hasWallAtLocal0: true, hasWallAtLocalRun: true,
     kind: 'step', stepHeightMm, baseFloorDeltaMm: seg.lowFL - parentFL,
   };
