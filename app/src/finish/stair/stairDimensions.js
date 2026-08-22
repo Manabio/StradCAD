@@ -11,6 +11,19 @@ export function floorHeightAbove(project, plane) {
   return planes[idx + 1].elevation - plane.elevation;
 }
 
+/**
+ * graph.plane の直下の採用フロアとの階高(mm)を返す（floorHeightAboveの鏡像）。下階が無ければ null。
+ * @param {object} project
+ * @param {object} plane - 基準となる設置階の Plane
+ */
+export function floorHeightBelow(project, plane) {
+  if (!project || !plane) return null;
+  const planes = project.planes; // elevation 昇順
+  const idx = planes.findIndex(p => p.id === plane.id);
+  if (idx <= 0) return null;
+  return plane.elevation - planes[idx - 1].elevation;
+}
+
 // 基準法上の寸法制限（問題.md より）
 export const STAIR_LIMITS = {
   residential:    { minWidth: 750, maxRiser: 230, minTread: 150 }, // 住宅

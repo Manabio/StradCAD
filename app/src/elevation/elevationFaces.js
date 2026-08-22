@@ -17,8 +17,10 @@ function getShape(graph, id) {
 }
 
 /**
- * 展開図の対象部屋。屋内・有名・feature が null または STAIR（階段）のみ採用する
- * （STAIR_VOID・VOID・UNDEFINED・屋外は除外）。graph.rooms の登録順のまま返す。
+ * 展開図の対象部屋。屋内・有名・feature が null または STAIR（階段）または VOID（吹抜け。WP-V1）
+ * のみ採用する（STAIR_VOID・UNDEFINED・屋外は除外）。graph.rooms の登録順のまま返す。
+ * STAIR_VOID（最上階の屋内階段footprintへ自動指定される描画・操作対象外の自動管理Room）は
+ * 追加しない——自動管理・無名のため `r.name !== ''` で既に落ちるが、意図を明示するコメント。
  * QA修正: 部分指定（`referenceRoomIds`が非空。親の壁際セルの一部を占め`floorLevel`等を上書き
  * するRoom。`.claude/glossary.md`）は対象から除外する——部分指定は独自の展開図帯を持たず、
  * 親の帯の中で`wallAdjacentFloorSegments`による床の段差プロファイルとして表現される
@@ -28,7 +30,7 @@ function getShape(graph, id) {
 export function selectElevationRooms(graph) {
   return graph.rooms.filter(r =>
     r.kind === RoomKind.INTERIOR && r.name !== '' &&
-    (r.feature == null || r.feature === RoomFeature.STAIR) &&
+    (r.feature == null || r.feature === RoomFeature.STAIR || r.feature === RoomFeature.VOID) &&
     !(r.referenceRoomIds?.size > 0));
 }
 

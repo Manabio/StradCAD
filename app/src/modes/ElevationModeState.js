@@ -4,11 +4,13 @@ import { floorSwapManager } from '../storage/FloorSwapManager.js';
 import { selectElevationRooms } from '../elevation/elevationFaces.js';
 import { buildRoomBand } from '../elevation/elevationBand.js';
 import { buildStairBand } from '../elevation/elevationStair.js';
+import { buildVoidBand } from '../elevation/elevationVoid.js';
+import { floorHeightBelow } from '../finish/stair/stairDimensions.js';
 import { collectGridCLs } from '../elevation/elevationPrimitives.js';
 import { buildBandsSafely } from '../elevation/elevationRooms.js';
 import {
   chooseElevationScale, screenMmToModelMm, layoutBands, clampScrollY,
-  visibleBandPlacements, bandIdAtY, clampFaceOffset,
+  visibleBandPlacements, bandIdAtY, clampFaceOffset, normalizeBandHeightUnits,
 } from '../elevation/elevationLayout.js';
 import {
   DEFAULT_FACE_GAP_MM, FACE_GAP_SCREEN_MM, DEFAULT_NAME_GAP_MM, NAME_GAP_BELOW_SCREEN_MM,
@@ -104,14 +106,19 @@ export class ElevationModeState {
       if (this._disposed) return { ok: true, error: null };
 
       const materialMap = new Map(matMod.MATERIALS.map(m => [m.code, m]));
-      const upperGraph = await this._peekAboveGraph();
+      // WP-V1: 直上階（階段の吹抜けクリップ用）・直下階（吹抜けの2層帯用）を並行して解決する。
+      const [upperGraph, lowerGraph] = await Promise.all([
+        this._peekAboveGraph(),
+        this._peekBelowGraph(),
+      ]);
       if (this._disposed) return { ok: true, error: null };
 
-      // 項目3: 建具データの変更（OpeningEditor経由）で帯を再構築できるよう、材データ・直上階
-      // peek結果をインスタンスへ保持する（_rebuildBandsが再利用する。async処理はinit()内で
+      // 項目3: 建具データの変更（OpeningEditor経由）で帯を再構築できるよう、材データ・直上階/
+      // 直下階peek結果をインスタンスへ保持する（_rebuildBandsが再利用する。async処理はinit()内で
       // 一度だけ行い、reactionハンドラは同期の再構築だけを行う）。
       this._materialMap = materialMap;
       this._upperGraph  = upperGraph;
+      this._lowerGraph  = lowerGraph;
 
       const { bands, error } = this._buildBands();
       runInAction(() => {
@@ -153,6 +160,18 @@ export class ElevationModeState {
     return this._disposed ? null : temp;
   }
 
+  /** activePlaneの直下の採用フロアをpeekして返す（無ければnull）。_peekAboveGraphの鏡像（WP-V1）。 */
+  async _peekBelowGraph() {
+    const project = this.project;
+    const planes = project?.planes ?? [];
+    const active = project?.activePlane;
+    const idx = planes.findIndex(p => p.id === active?.id);
+    const below = idx > 0 ? planes[idx - 1] : null;
+    if (!below) return null;
+    const temp = await floorSwapManager.peek(below, project.structGraph);
+    return this._disposed ? null : temp;
+  }
+
   /**
    * 帯を一括構築する（同期。init()の初回構築・項目3のreactionによる再構築の両方から呼ぶ）。
    * this._materialMap/this._upperGraph（init()がasyncで解決済み）を使う。
@@ -161,18 +180,27 @@ export class ElevationModeState {
   _buildBands() {
     const materialMap = this._materialMap;
     const upperGraph   = this._upperGraph;
+    const lowerGraph   = this._lowerGraph;
     const gridCLs = collectGridCLs(this.graph);
     const rooms = selectElevationRooms(this.graph);
     const stairByRoomId = new Map(this.graph.stairs.map(s => [s.roomId, s]));
     const screenPxPerMm = this.screenPxPerMm;
 
     // paramsは全て2パス機構で換算する実画面mm値（+scale。オブジェクトにまとめて渡す
-    // ——buildRoomBand/buildStairBandへそのまま展開できる形にしておく）。
+    // ——buildRoomBand/buildStairBand/buildVoidBandへそのまま展開できる形にしておく）。
     const buildOne = (room, params) => {
       const ctx = { project: this.project, materialMap, gridCLs, ...params };
-      return room.feature === RoomFeature.STAIR
-        ? buildStairBand(room, this.graph, upperGraph, { ...ctx, stair: stairByRoomId.get(room.id) ?? null })
-        : buildRoomBand(room, this.graph, ctx);
+      if (room.feature === RoomFeature.STAIR) {
+        return buildStairBand(room, this.graph, upperGraph, { ...ctx, stair: stairByRoomId.get(room.id) ?? null });
+      }
+      if (room.feature === RoomFeature.VOID) {
+        // WP-V1: 吹抜け帯の下げ量算出に使う「設置階下階との階高」。floorHeightAboveの呼び出し
+        // （buildStairBand内。buildBandsSafelyの per-room try/catch で保護される）と同じ位置づけ
+        // ——ここで求めることで、project.planes欠落等の異常も他部屋の帯構築を巻き込まない。
+        const floorHeightBelowMm = floorHeightBelow(this.project, this.graph.plane);
+        return buildVoidBand(room, this.graph, lowerGraph, { ...ctx, floorHeightBelowMm });
+      }
+      return buildRoomBand(room, this.graph, ctx);
     };
 
     // パス1: 倍率決定用（ギャップ・名前枠余白・三角オフセット・面ラベル退避閾値・建具タグ行/
@@ -188,7 +216,10 @@ export class ElevationModeState {
       gridRowGapModelMm: DEFAULT_GRID_ROW_GAP_MM,
       wallLessEndExtendModelMm: DEFAULT_WALL_LESS_END_EXTEND_MM, scale: null,
     }));
-    const scale = chooseElevationScale(pass1.bands, this.viewSize ?? { width: 800, height: 600 });
+    // WP-0: 縮尺決定・帯の積み上げ高さの両方とも、帯高さの整数倍切り上げ（2層帯の帯スロット
+    // 高さを標準帯高さの整数倍に揃える）を経てから使う——チェックする値はどのパスでも同じ
+    // normalizeBandHeightUnitsを通すことで、パス1の縮尺決定とパス2の最終bandsで基準がずれない。
+    const scale = chooseElevationScale(normalizeBandHeightUnits(pass1.bands), this.viewSize ?? { width: 800, height: 600 });
     const gapModelMm            = screenMmToModelMm(FACE_GAP_SCREEN_MM, screenPxPerMm, scale);
     const nameGapModelMm        = screenMmToModelMm(NAME_GAP_BELOW_SCREEN_MM, screenPxPerMm, scale);
     const triangleOffsetModelMm = screenMmToModelMm(TRIANGLE_OFFSET_SCREEN_MM, screenPxPerMm, scale);
@@ -220,7 +251,9 @@ export class ElevationModeState {
     const error = failedRoomNames.length > 0
       ? `展開図の構築に失敗した部屋があります: ${failedRoomNames.join('、')}`
       : null;
-    return { bands, error };
+    // WP-0: パス2の最終bandsも同じ切り上げを通してから返す（2層帯の帯スロット高さを
+    // 標準帯高さの整数倍に揃える。1層帯のみの構成ではheightUnits=1のため常に無効=現行同値）。
+    return { bands: normalizeBandHeightUnits(bands), error };
   }
 
   /** 項目3: 建具データ変更のreactionハンドラ。帯を全再構築するだけ（scrollY等のビュー状態は保つ）。 */

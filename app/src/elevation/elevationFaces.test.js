@@ -451,3 +451,29 @@ test('【QA修正】selectElevationRooms: 部分指定（referenceRoomIds非空�
   assert.deepEqual(result.map(r => r.id), [parent.id], '部分指定は含まれず親だけが対象のはず');
   void partial;
 });
+
+// ---- WP-V1: selectElevationRooms は feature===VOID（吹抜け・ユーザー指定）も採用する ----
+test('【WP-V1】selectElevationRooms: feature===VOID（吹抜け）も対象に含まれる', async () => {
+  const { RoomFeature } = await import('@core');
+  const { selectElevationRooms } = await import('./elevationFaces.js');
+  const graph = makeGraph();
+  const named = graph.addRoom(new Set(), 'LDK');
+  const voidRoom = graph.addRoom(new Set(), '吹抜け');
+  voidRoom.setFeature(RoomFeature.VOID);
+
+  const result = selectElevationRooms(graph);
+  assert.deepEqual(result.map(r => r.id), [named.id, voidRoom.id]);
+});
+
+// ---- WP-V1: STAIR_VOID（自動管理・描画対象外）は有名でも除外される ----
+test('【失敗系・WP-V1】selectElevationRooms: STAIR_VOIDは名前を付けても対象外のまま', async () => {
+  const { RoomFeature } = await import('@core');
+  const { selectElevationRooms } = await import('./elevationFaces.js');
+  const graph = makeGraph();
+  const named = graph.addRoom(new Set(), 'LDK');
+  const stairVoid = graph.addRoom(new Set(), '階段吹抜け'); // 本来は自動管理・無名だが、除外条件を明示するため有名にする
+  stairVoid.setFeature(RoomFeature.STAIR_VOID);
+
+  const result = selectElevationRooms(graph);
+  assert.deepEqual(result.map(r => r.id), [named.id], 'STAIR_VOIDは有名でもfeature軸で除外されるはず');
+});
