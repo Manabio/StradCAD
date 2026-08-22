@@ -40,19 +40,20 @@ export function stairRunProfile(n, riserMm, runLengthMm, startX, startY, dir = 1
 }
 
 /**
- * 折返し階段（SWITCHBACK）の断面プロファイル一式（往路・踊り場・復路）をローカル座標で返す。
- * SWITCHBACK以外・floorHeight未確定の場合は空配列（非対応タイプは項目12のスコープ外。
- * WINDING等の回り階段は扇形の段になり同じ直進プロファイルが使えないため今回は対応しない）。
- * 線種: 踏面のジグザグ(見え掛かりの段)=SILHOUETTE、踊り場の床線(区間を画す面)=CUT
- * （ユーザー仕様「切断面=太、見え掛かりの段は中を基本に」の解釈。踊り場は上階側へ抜ける
- * 床の切断とみなしCUT扱いにした）。
+ * 折返し階段（SWITCHBACK）の断面計算パラメータ（区間長・段数・蹴上）を単一ソース化する（WP-S1）。
+ * buildSwitchbackSectionPrimitives（本ファイル）と elevationStairSequence.js（歩行順面シーケンス）が
+ * 共有する——両者とも「往路n1・復路n2の段数」「実測優先・合成フォールバックの区間長」という
+ * 同じ計算を必要とするため、既存のbuildSwitchbackSectionPrimitives内にあった計算をここへ抽出した
+ * （既存exportの挙動・出力は一切変えない。抽出のみ）。
+ * SWITCHBACK以外・floorHeight未確定の場合はnull。
  * @param {import('@core').Stair} stair
  * @param {object} graph
  * @param {number|null} floorHeight - 設置階〜上階の階高(mm)
- * @returns {object[]} プリミティブ配列（x=0起点。呼び出し側でxCursor分translateする）
+ * @returns {{totalSteps:number, riser:number, n1:number, n2:number,
+ *   len1:number, landingLen:number, len2:number}|null}
  */
-export function buildSwitchbackSectionPrimitives(stair, graph, floorHeight) {
-  if (!stair || stair.type !== StairType.SWITCHBACK || floorHeight == null) return [];
+export function resolveSwitchbackParams(stair, graph, floorHeight) {
+  if (!stair || stair.type !== StairType.SWITCHBACK || floorHeight == null) return null;
 
   const totalSteps = Math.max(2, stair.totalSteps ?? 2);
   const riser = stair.riser ?? floorHeight / totalSteps;
@@ -69,6 +70,26 @@ export function buildSwitchbackSectionPrimitives(stair, graph, floorHeight) {
     tread * Math.max(1, n2 - 1),
   ];
 
+  return { totalSteps, riser, n1, n2, len1, landingLen, len2 };
+}
+
+/**
+ * 折返し階段（SWITCHBACK）の断面プロファイル一式（往路・踊り場・復路）をローカル座標で返す。
+ * SWITCHBACK以外・floorHeight未確定の場合は空配列（非対応タイプは項目12のスコープ外。
+ * WINDING等の回り階段は扇形の段になり同じ直進プロファイルが使えないため今回は対応しない）。
+ * 線種: 踏面のジグザグ(見え掛かりの段)=SILHOUETTE、踊り場の床線(区間を画す面)=CUT
+ * （ユーザー仕様「切断面=太、見え掛かりの段は中を基本に」の解釈。踊り場は上階側へ抜ける
+ * 床の切断とみなしCUT扱いにした）。
+ * @param {import('@core').Stair} stair
+ * @param {object} graph
+ * @param {number|null} floorHeight - 設置階〜上階の階高(mm)
+ * @returns {object[]} プリミティブ配列（x=0起点。呼び出し側でxCursor分translateする）
+ */
+export function buildSwitchbackSectionPrimitives(stair, graph, floorHeight) {
+  const params = resolveSwitchbackParams(stair, graph, floorHeight);
+  if (!params) return [];
+  const { n1, n2, riser, len1, landingLen, len2 } = params;
+
   const cutWeight = weightForRole(ElevationLineRole.CUT);
   const silhouetteWeight = weightForRole(ElevationLineRole.SILHOUETTE);
   const prims = [];
@@ -84,4 +105,59 @@ export function buildSwitchbackSectionPrimitives(stair, graph, floorHeight) {
   prims.push({ type: 'polyline', points: run2.points, weight: silhouetteWeight });
 
   return prims;
+}
+
+// ---- WP-S1: 歩行順面シーケンス（elevationStairSequence.js）向けの追加部品 ----
+
+// 鉄骨階段のささら（側桁）の桁成（断面の見付幅。mm）。Stairモデルに桁成フィールドが無いため、
+// 作図上の既定値としてローカル定数に持つ（将来 Stair 側にフィールド化する余地を残すコメント）。
+export const STEEL_STRINGER_DEPTH_MM = 200;
+
+/**
+ * 段鼻高さごとの水平「梯子状」細線一式（ユーザー仕様「階段直進部上を正面または踊り場から
+ * 見返りで見た展開は、踏面を梯子状に細線」）。baseAbsMm（この区間の下端の絶対高さ。設置階FL=0
+ * 基準）から riserMm 刻みで steps 段ぶん、[loX,hiX] の全幅に水平線を引く。
+ * dashed=true（踊り場より下等、見えがかりが破線になる区間）は 'dashed' の line として返す
+ * （破線は必ず line プリミティブで出す——レンダラの polyline 分岐は dash 非対応のため）。
+ * @param {{loX:number, hiX:number, riserMm:number, steps:number, baseAbsMm:number, dashed?:boolean}} p
+ * @returns {object[]}
+ */
+export function treadLadderLines({ loX, hiX, riserMm, steps, baseAbsMm, dashed = false }) {
+  const weight = weightForRole(ElevationLineRole.DETAIL);
+  const n = Math.max(0, Math.round(steps));
+  const out = [];
+  for (let k = 1; k <= n; k++) {
+    const y = -(baseAbsMm + k * riserMm);
+    out.push({
+      type: 'line', x1: loX, y1: y, x2: hiX, y2: y, weight,
+      ...(dashed ? { dash: 'dashed' } : {}),
+    });
+  }
+  return out;
+}
+
+/**
+ * 鉄骨階段のささら（側桁）プロファイル: profilePoints（stairRunProfile等が返す蹴上・踏面の
+ * ジグザグ点列）の段鼻（凸点列＝奇数index。蹴上通過直後・踏面通過前の点。等ピッチの階段では
+ * 一直線に並ぶ）を結ぶ直線から、法線方向へ depthMm ぶん下げた平行線を作り、両端を閉じた
+ * 1本の polyline（CUT）として返す。
+ * @param {Array<[number,number]>} profilePoints - stairRunProfile(...).points 等のジグザグ点列
+ * @param {number} depthMm - ささらの桁成（見付幅）
+ * @returns {object[]} 0または1件のpolylineプリミティブ配列
+ */
+export function stringerPrimitives(profilePoints, depthMm) {
+  const nosings = profilePoints.filter((_, i) => i % 2 === 1);
+  if (nosings.length < 2) return [];
+  const [x1, y1] = nosings[0];
+  const [x2, y2] = nosings[nosings.length - 1];
+  const dx = x2 - x1, dy = y2 - y1;
+  const len = Math.hypot(dx, dy) || 1;
+  // 法線（下方向=yが増える側を正にする。階段の下＝ささら側という前提）。
+  let nx = -dy / len, ny = dx / len;
+  if (ny < 0) { nx = -nx; ny = -ny; }
+  const ox = nx * depthMm, oy = ny * depthMm;
+  const points = [
+    [x1, y1], [x2, y2], [x2 + ox, y2 + oy], [x1 + ox, y1 + oy], [x1, y1],
+  ];
+  return [{ type: 'polyline', points, weight: weightForRole(ElevationLineRole.CUT) }];
 }

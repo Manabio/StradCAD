@@ -2,7 +2,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { StairType } from '@core';
-import { stairRunProfile, buildSwitchbackSectionPrimitives } from './elevationStairSection.js';
+import {
+  stairRunProfile, buildSwitchbackSectionPrimitives, resolveSwitchbackParams,
+  treadLadderLines, stringerPrimitives, STEEL_STRINGER_DEPTH_MM,
+} from './elevationStairSection.js';
 import { ElevationLineRole, weightForRole } from './elevationStyle.js';
 
 // ---- stairRunProfile: n段のジグザグ線（蹴上→踏面の繰り返し） ----
@@ -119,4 +122,75 @@ test('【QA F2】buildSwitchbackSectionPrimitives: stair.riser未指定はriser=
         `各段の蹴上はfloorHeight/totalSteps(${expectedRiser})ちょうどのはず（実際:${y1 - y2}）`);
     }
   }
+});
+
+// ---- WP-S1: resolveSwitchbackParams（buildSwitchbackSectionPrimitivesの計算を抽出した単一ソース） ----
+test('resolveSwitchbackParams: sections指定時はn1/n2/riserをそのまま返す', () => {
+  const stair = baseCtx({ sections: [6, 1, 6], totalSteps: 12, riser: 200 });
+  const params = resolveSwitchbackParams(stair, makeGraph(), 2400);
+  assert.equal(params.n1, 6);
+  assert.equal(params.n2, 6);
+  assert.equal(params.riser, 200);
+  assert.equal(params.totalSteps, 12);
+});
+
+// ---- 失敗系: resolveSwitchbackParamsもbuildSwitchbackSectionPrimitivesと同じ条件でnull ----
+test('【失敗系】resolveSwitchbackParams: SWITCHBACK以外・floorHeight未確定・stair未指定はnull', () => {
+  assert.equal(resolveSwitchbackParams(baseCtx({ type: StairType.STRAIGHT }), makeGraph(), 2400), null);
+  assert.equal(resolveSwitchbackParams(baseCtx(), makeGraph(), null), null);
+  assert.equal(resolveSwitchbackParams(null, makeGraph(), 2400), null);
+});
+
+// ---- WP-S1: treadLadderLines（見返り展開の梯子状踏面線） ----
+test('treadLadderLines: steps段ぶんの水平細線をriser刻みで返す', () => {
+  const lines = treadLadderLines({ loX: 0, hiX: 1000, riserMm: 200, steps: 3, baseAbsMm: 0, dashed: false });
+  assert.equal(lines.length, 3, 'steps=3段ぶん出るはず');
+  assert.equal(lines[0].weight, weightForRole(ElevationLineRole.DETAIL), '細線(DETAIL)のはず');
+  assert.deepEqual(lines.map(l => l.y1), [-200, -400, -600], 'yはriser刻みのはず');
+  for (const l of lines) {
+    assert.equal(l.x1, 0); assert.equal(l.x2, 1000);
+    assert.equal(l.y1, l.y2, '水平線のはず');
+    assert.equal(l.dash, undefined, 'dashed=falseはdash未指定のはず');
+  }
+});
+
+test('treadLadderLines: baseAbsMmぶん基準高さがずれる', () => {
+  const lines = treadLadderLines({ loX: 0, hiX: 500, riserMm: 200, steps: 2, baseAbsMm: 1000, dashed: false });
+  assert.deepEqual(lines.map(l => l.y1), [-1200, -1400]);
+});
+
+test('treadLadderLines: dashed=trueはline型でdash:"dashed"を持つ（polylineはdash非対応のため）', () => {
+  const lines = treadLadderLines({ loX: 0, hiX: 500, riserMm: 200, steps: 1, baseAbsMm: 0, dashed: true });
+  assert.equal(lines[0].type, 'line');
+  assert.equal(lines[0].dash, 'dashed');
+});
+
+// ---- 失敗系: steps=0は空配列（例外を投げない） ----
+test('【失敗系】treadLadderLines: steps=0は空配列', () => {
+  assert.deepEqual(treadLadderLines({ loX: 0, hiX: 500, riserMm: 200, steps: 0, baseAbsMm: 0 }), []);
+});
+
+// ---- WP-S1: stringerPrimitives（鉄骨ささら。段鼻を結ぶ直線を法線方向へdepthMmオフセット） ----
+test('stringerPrimitives: 段鼻点列（奇数index）を結ぶ直線からdepthMmオフセットした閉じたpolyline(CUT)を返す', () => {
+  // stairRunProfile(2,200,600,0,0,1) 相当のジグザグ: 段鼻(奇数index)は(0,-200),(300,-400)
+  const profile = stairRunProfile(2, 200, 600, 0, 0, 1).points;
+  const prims = stringerPrimitives(profile, STEEL_STRINGER_DEPTH_MM);
+  assert.equal(prims.length, 1);
+  assert.equal(prims[0].type, 'polyline');
+  assert.equal(prims[0].weight, weightForRole(ElevationLineRole.CUT));
+  assert.equal(prims[0].points[0][0], 0);
+  assert.equal(prims[0].points[0][1], -200);
+  assert.equal(prims[0].points[1][0], 300);
+  assert.equal(prims[0].points[1][1], -400);
+  // オフセット辺（法線方向にdepthMmぶん）: 段鼻を結ぶ直線からの垂直距離がdepthMmになるはず
+  const [x1, y1] = prims[0].points[0];
+  const [x2, y2] = prims[0].points[3]; // 1本目のオフセット側の点
+  const dist = Math.hypot(x2 - x1, y2 - y1);
+  assert.ok(Math.abs(dist - STEEL_STRINGER_DEPTH_MM) < 1e-9, `オフセット距離はdepthMm(${STEEL_STRINGER_DEPTH_MM})のはず（実際:${dist}）`);
+});
+
+// ---- 失敗系: 段鼻点が1点以下（区間が短すぎる）なら空配列 ----
+test('【失敗系】stringerPrimitives: 段鼻点が2点未満なら空配列', () => {
+  assert.deepEqual(stringerPrimitives([[0, 0]], 200), []);
+  assert.deepEqual(stringerPrimitives([], 200), []);
 });

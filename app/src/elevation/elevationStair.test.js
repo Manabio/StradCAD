@@ -7,7 +7,7 @@ import { buildRoomFaces, faceBoundaryLocalX } from './elevationFaces.js';
 import { rotateFacesToStart, stairStartFaceLabel, buildStairBand } from './elevationStair.js';
 import { layoutBands, bandContentOriginMm } from './elevationLayout.js';
 import { figureBounds } from '../structural/sectionFigure/sectionGeometry.js';
-import { BAND_GAP_MM, BAND_TOP_MARGIN_MM } from './elevationStyle.js';
+import { BAND_GAP_MM, BAND_TOP_MARGIN_MM, GRID_LINE_ABOVE_CH_MM } from './elevationStyle.js';
 
 function makeGraph(name = 'p1') {
   const plane = new Plane(name, 0, `${name}階`, 1, 1);
@@ -148,33 +148,37 @@ test('buildStairBand: ctx.nameGapModelMmを変えるとbounds.maxYがその差�
     `nameGapModelMmの差分(899)だけbounds.maxYが変わるはず（実際差:${bandLarge.bounds.maxY - bandSmall.bounds.maxY}）`);
 });
 
-// ---- 項目11: 階段帯の描画範囲は床→設置階の階高→さらに設置階上階の階高まで(縦2層分) ----
-test('【項目11】buildStairBand: 上階のそのまた階高が確定していれば、両端縦線が2層分(floorHeight+upperFloorHeight)まで延び、2層目のFL線も出る', () => {
+// ---- WP-S3（項目11の書き換え。書き換え理由: 旧仕様「上階のそのまた階高まで」を
+// 「上階の天井高さ(CH_upper)まで」へ変更したため。旧「2層目のFL線」概念（さらに上の階の
+// FL線）は廃止し、3階目の情報が実在しても出ないことを確認する ----
+test('【WP-S3・項目11】buildStairBand: 両端縦線はfloorHeight+CH_upper（上階天井高さ）まで延び、3階目の情報があっても「2層目のFL線」は出ない', () => {
   const graph = makeGraph('p1');
   const room = makeRectRoom(graph, 0, 0, 2000, 4000, '階段');
 
   const upperGraph = makeGraph('p2');
   upperGraph.plane.elevation = 3000; // floorHeight = 3000
   const voidRoom = makeRectRoom(upperGraph, 0, 0, 2000, 4000, '吹抜け');
-  voidRoom.setFeature(RoomFeature.VOID);
+  voidRoom.setFeature(RoomFeature.VOID); // CH明示指定なし → upperGraph.defaultCeilingHeight(2400)
 
-  const topPlane = new Plane('p3', 3000 + 2800, 'p3階', 1, 1); // upperFloorHeight = 2800
+  const topPlane = new Plane('p3', 3000 + 2800, 'p3階', 1, 1); // 3階目の情報があっても無視されるはず
   const project = { planes: [graph.plane, upperGraph.plane, topPlane] };
 
   const band = buildStairBand(room, graph, upperGraph, { project });
-  const totalStairHeight = 3000 + 2800;
+  const chUpperAbsMm = 3000 + upperGraph.defaultCeilingHeight; // 5400
 
   const extendedVerticals = band.primitives.filter(p =>
-    p.type === 'line' && p.weight === 'thick' && p.x1 === p.x2 && p.y2 === -totalStairHeight);
-  assert.ok(extendedVerticals.length >= 2, `両端縦線がtotalStairHeight(${totalStairHeight})まで延びていない`);
+    p.type === 'line' && p.weight === 'thick' && p.x1 === p.x2 && p.y2 === -chUpperAbsMm);
+  assert.ok(extendedVerticals.length >= 2, `両端縦線がfloorHeight+CH_upper(${chUpperAbsMm})まで延びていない`);
 
-  const secondFlLines = band.primitives.filter(p =>
-    p.type === 'line' && p.weight === 'thick' && p.y1 === p.y2 && p.y1 === -totalStairHeight);
-  assert.ok(secondFlLines.length > 0, '2層目のFL線が出ていない');
+  const flLikeLines = band.primitives.filter(p =>
+    p.type === 'line' && p.weight === 'thick' && p.y1 === p.y2 && p.y1 < -3000);
+  assert.equal(flLikeLines.length, 0, '旧「2層目のFL線」概念は廃止——上階天井より上に水平線は出ないはず');
 });
 
-// ---- 失敗系: 3階分の情報が無い(上階のそのまた階高が不明)場合は1層分(floorHeight)までにとどまる ----
-test('【失敗系・項目11】buildStairBand: 上階のそのまた階高が不明なら2層目のFL線は出さず、両端縦線もfloorHeightまでで止まる', () => {
+// ---- WP-S3（失敗系・項目11の書き換え。書き換え理由: 旧仕様は3階目の情報(project)が
+// 無いと1層のみにとどまっていたが、新仕様のCH_upperはproject 3階目に依存しない
+// （直上階Room自身の天井高さだけで解決する）ため、3階目の情報が無くても2層目まで延びる ----
+test('【WP-S3・失敗系・項目11】buildStairBand: 3階目の情報(project)が無くても、上階Room自身の天井高さまで延びる（旧仕様は1層止まりだった）', () => {
   const graph = makeGraph('p1');
   const room = makeRectRoom(graph, 0, 0, 2000, 4000, '階段');
 
@@ -182,18 +186,18 @@ test('【失敗系・項目11】buildStairBand: 上階のそのまた階高が�
   upperGraph.plane.elevation = 3000; // floorHeight = 3000
   const voidRoom = makeRectRoom(upperGraph, 0, 0, 2000, 4000, '吹抜け');
   voidRoom.setFeature(RoomFeature.VOID);
+  voidRoom.setOverride('ceilingHeight', '2600'); // 明示指定（defaultCeilingHeightの2400とは異なる値）
 
   const project = { planes: [graph.plane, upperGraph.plane] }; // 3階目が無い
 
   const band = buildStairBand(room, graph, upperGraph, { project });
-
-  const secondFlLines = band.primitives.filter(p =>
-    p.type === 'line' && p.weight === 'thick' && p.y1 === p.y2 && p.y1 < -3000);
-  assert.equal(secondFlLines.length, 0, '上階のそのまた階高が不明なら2層目のFL線は出ないはず');
+  const chUpperAbsMm = 3000 + 2600; // 5600（旧仕様なら3階目情報なし=1層止まり=3000までしか延びなかった）
 
   const extendedVerticals = band.primitives.filter(p =>
-    p.type === 'line' && p.weight === 'thick' && p.x1 === p.x2 && p.y2 === -3000);
-  assert.ok(extendedVerticals.length >= 2, '両端縦線はfloorHeight(3000)までは延びるはず（1層分）');
+    p.type === 'line' && p.weight === 'thick' && p.x1 === p.x2 && p.y2 === -chUpperAbsMm);
+  assert.ok(extendedVerticals.length >= 2,
+    `3階目の情報が無くても両端縦線はfloorHeight+上階Room自身のCH(${chUpperAbsMm})まで延びるはず`);
+  assert.equal(band.heightUnits, 2, '直上階の情報が解決できているためheightUnits=2のはず');
 });
 
 // ---- 項目12: 折返し階段(SWITCHBACK)は断面プロファイル(polyline×2)を帯に含む ----
@@ -313,4 +317,177 @@ test('【QA B2】buildStairBand+layoutBands: floorLevel=-700（Bが下へせり�
 
   assert.ok(Math.abs(gap - (BAND_GAP_MM + BAND_TOP_MARGIN_MM)) < 1e-6,
     `Bが下へせり出す方向(floorLevel=-700)ではB-C間の実すき間がちょうど${BAND_GAP_MM + BAND_TOP_MARGIN_MM}mmに固定されるはず（実際:${gap}）`);
+});
+
+// ---- WP-S3: SWITCHBACK+直上階解決時はelevationStairSequence.jsの歩行順面シーケンス経路を使い、
+// 帯上端はfloorHeight+CH_upperに達し、heightUnits=2になる ----
+test('【WP-S3】buildStairBand: SWITCHBACKは歩行順面シーケンス経路を使い、帯上端≈-(floorHeight+CH_upper)・heightUnits=2', () => {
+  const graph = makeGraph('p1');
+  // 折返し階段の3セル構成（elevationStairSequence.test.jsと同じ形。踊り場(全幅・y:[0,1500])＋
+  // 往路レーン(左列・x:[0,1000])＋復路レーン(右列・x:[1000,2000])、いずれもy:[1500,4500]）。
+  const x0 = graph.addCenterLine(CenterLineType.VERTICAL, 0,    { labeled: false, discipline: Discipline.ARCH });
+  const xm = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
+  const x1 = graph.addCenterLine(CenterLineType.VERTICAL, 2000, { labeled: false, discipline: Discipline.ARCH });
+  const y0 = graph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: false, discipline: Discipline.ARCH });
+  const ym = graph.addCenterLine(CenterLineType.HORIZONTAL, 1500, { labeled: false, discipline: Discipline.ARCH });
+  const y1 = graph.addCenterLine(CenterLineType.HORIZONTAL, 4500, { labeled: false, discipline: Discipline.ARCH });
+  const landingKey  = `${x0.id}:${y0.id}:${x1.id}:${ym.id}`;
+  const outboundKey = `${x0.id}:${ym.id}:${xm.id}:${y1.id}`;
+  const returnKey   = `${xm.id}:${ym.id}:${x1.id}:${y1.id}`;
+  const cells = new Set([landingKey, outboundKey, returnKey]);
+  const room = graph.addRoom(cells, '階段');
+  generateRoomWallsFromOutline(graph, room);
+  const stair = graph.addStair({
+    type: StairType.SWITCHBACK, cells, roomId: room.id,
+    sections: [6, 1, 6], riser: null, upDirection: 'up', flip: false,
+  });
+
+  const upperGraph = makeGraph('p2');
+  upperGraph.plane.elevation = 2400; // floorHeight = 2400
+  const voidRoom = makeRectRoom(upperGraph, 0, 0, 2000, 4500, '吹抜け');
+  voidRoom.setFeature(RoomFeature.VOID); // CH明示指定なし → upperGraph.defaultCeilingHeight
+
+  const band = buildStairBand(room, graph, upperGraph, { stair, floorHeight: 2400 });
+  const chUpperAbsMm = 2400 + upperGraph.defaultCeilingHeight; // 4800
+
+  assert.equal(band.heightUnits, 2, '直上階が解決できているためheightUnits=2のはず');
+  // 注記一点鎖線（壁中心線ROW1）の突き出し上端は「面内最高天井基準+GRID_LINE_ABOVE_CH_MM」
+  // （elevation-model.md「注記一点鎖線の突き出し上端」節。既存の帯共通仕様がそのまま効く）。
+  const expectedMinY = -chUpperAbsMm - GRID_LINE_ABOVE_CH_MM - BAND_TOP_MARGIN_MM;
+  assert.ok(Math.abs(band.bounds.minY - expectedMinY) < 1e-6,
+    `帯上端(bounds.minY)は-(floorHeight+CH_upper)-GRID_LINE_ABOVE_CH_MM-BAND_TOP_MARGIN_MM(${expectedMinY})のはず（実際:${band.bounds.minY}）`);
+  // 歩行順面シーケンス経路: 断面プロファイル(踏面のジグザグ=SILHOUETTE)がpolylineとして出る。
+  assert.ok(band.primitives.some(p => p.type === 'polyline'), '断面プロファイルのpolylineが出るはず');
+});
+
+// ---- QA修正1: 往路面(seq2)の勾配天井は本番設定（wallLessEndExtendModelMm未指定=既定150mm付近が
+// 常に効く）でもCUT polylineとして描かれる（旧実装は端部延長で描画範囲がceilingProfileの範囲を
+// わずかに超え、「範囲を覆っていること」条件が常に偽になり黙ってフラット天井へフォールバックして
+// いた——elevationFigure.jsのceilAbsAtX/hasCeilingProfileの修正で解消。既存の
+// `some(p=>p.type==='polyline')`だけの確認は踏面ジグザグで常に真になるトートロジーのため、
+// このテストで天井polyline自体のy範囲・水平フォールバック不在を実効的に固定する） ----
+test('【WP-S3・QA修正1】buildStairBand: 往路面の天井は勾配のCUT polyline（wallLessEndExtendModelMm既定でも描かれる）', () => {
+  const graph = makeGraph('p1');
+  const x0 = graph.addCenterLine(CenterLineType.VERTICAL, 0,    { labeled: false, discipline: Discipline.ARCH });
+  const xm = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
+  const x1 = graph.addCenterLine(CenterLineType.VERTICAL, 2000, { labeled: false, discipline: Discipline.ARCH });
+  const y0 = graph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: false, discipline: Discipline.ARCH });
+  const ym = graph.addCenterLine(CenterLineType.HORIZONTAL, 1500, { labeled: false, discipline: Discipline.ARCH });
+  const y1 = graph.addCenterLine(CenterLineType.HORIZONTAL, 4500, { labeled: false, discipline: Discipline.ARCH });
+  const landingKey  = `${x0.id}:${y0.id}:${x1.id}:${ym.id}`;
+  const outboundKey = `${x0.id}:${ym.id}:${xm.id}:${y1.id}`;
+  const returnKey   = `${xm.id}:${ym.id}:${x1.id}:${y1.id}`;
+  const cells = new Set([landingKey, outboundKey, returnKey]);
+  const room = graph.addRoom(cells, '階段');
+  generateRoomWallsFromOutline(graph, room);
+  const stair = graph.addStair({
+    type: StairType.SWITCHBACK, cells, roomId: room.id,
+    sections: [6, 1, 6], riser: null, upDirection: 'up', flip: false,
+  });
+
+  const upperGraph = makeGraph('p2');
+  upperGraph.plane.elevation = 2400; // floorHeight = 2400
+  const voidRoom = makeRectRoom(upperGraph, 0, 0, 2000, 4500, '吹抜け');
+  voidRoom.setFeature(RoomFeature.VOID); // CH明示指定なし → upperGraph.defaultCeilingHeight
+
+  // 3階目ありのproject（isTopFloor=falseにしてupperCeilCappedを発生させない）。
+  const topPlane = new Plane('p3', 2400 + 2800, 'p3階', 1, 1);
+  const project = { planes: [graph.plane, upperGraph.plane, topPlane] };
+
+  // wallLessEndExtendModelMm は渡さない（buildFaceFigure既定のDEFAULT_WALL_LESS_END_EXTEND_MM
+  // ≈150mmが本番同様に常に効く状態を再現する）。
+  const band = buildStairBand(room, graph, upperGraph, { stair, floorHeight: 2400, project });
+  const chLowerMm = 2400; // stairRoom自身のCH（既定）
+  const chUpperAbsMm = 2400 + upperGraph.defaultCeilingHeight; // 4800
+
+  const thickPolylines = band.primitives.filter(p => p.type === 'polyline' && p.weight === 'thick');
+  const gradient = thickPolylines.find(p => {
+    const ys = p.points.map(pt => pt[1]);
+    return Math.abs(Math.min(...ys) - (-chUpperAbsMm)) < 1e-6 && Math.abs(Math.max(...ys) - (-chLowerMm)) < 1e-6;
+  });
+  assert.ok(gradient, `往路面の勾配天井polyline（y範囲が-chLower(${-chLowerMm})..-chUpperAbs(${-chUpperAbsMm})）が見つからない`);
+
+  const flatCeilAtChLower = band.primitives.filter(p =>
+    p.type === 'line' && p.weight === 'thick' && p.y1 === p.y2 && p.y1 === -chLowerMm);
+  assert.equal(flatCeilAtChLower.length, 0,
+    'y=-CHの水平CUT線（旧フォールバック時の症状）は出ないはず');
+});
+
+// ---- ユーザー明示指示（「2FL 寸法線はここで分ける」）: 階段帯のseq1（帯先頭面）の左CH寸法が
+// 2FL(floorHeight)で「踊り場床→2FL」「2FL→2F天井」の2本に分割される ----
+test('【階段帯・2FL分割】buildStairBand: seq1(帯先頭面)の左CH寸法が2FL(floorHeight)で2本に分割される', () => {
+  const graph = makeGraph('p1');
+  const x0 = graph.addCenterLine(CenterLineType.VERTICAL, 0,    { labeled: false, discipline: Discipline.ARCH });
+  const xm = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
+  const x1 = graph.addCenterLine(CenterLineType.VERTICAL, 2000, { labeled: false, discipline: Discipline.ARCH });
+  const y0 = graph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: false, discipline: Discipline.ARCH });
+  const ym = graph.addCenterLine(CenterLineType.HORIZONTAL, 1500, { labeled: false, discipline: Discipline.ARCH });
+  const y1 = graph.addCenterLine(CenterLineType.HORIZONTAL, 4500, { labeled: false, discipline: Discipline.ARCH });
+  const landingKey  = `${x0.id}:${y0.id}:${x1.id}:${ym.id}`;
+  const outboundKey = `${x0.id}:${ym.id}:${xm.id}:${y1.id}`;
+  const returnKey   = `${xm.id}:${ym.id}:${x1.id}:${y1.id}`;
+  const cells = new Set([landingKey, outboundKey, returnKey]);
+  const room = graph.addRoom(cells, '階段');
+  generateRoomWallsFromOutline(graph, room);
+  const stair = graph.addStair({
+    type: StairType.SWITCHBACK, cells, roomId: room.id,
+    sections: [6, 1, 6], riser: null, upDirection: 'up', flip: false,
+  });
+
+  const upperGraph = makeGraph('p2');
+  upperGraph.plane.elevation = 2400; // floorHeight = 2400
+  const voidRoom = makeRectRoom(upperGraph, 0, 0, 2000, 4500, '吹抜け');
+  voidRoom.setFeature(RoomFeature.VOID);
+
+  const band = buildStairBand(room, graph, upperGraph, { stair, floorHeight: 2400 });
+  const n1 = 6, riser = 2400 / 12;
+  const landingAbs = n1 * riser; // 1200
+  const chUpperAbsMm = 2400 + upperGraph.defaultCeilingHeight; // 4800
+  const floorHeight = 2400;
+
+  // seq1（帯先頭面。xCursor=0）のfoot=0で一意に絞り込む——at<footだけだと、他面（seq2等）の
+  // 継ぎ目CH寸法（hasLeftChDim）も含まれてしまう（それらはxCursor>0のためfoot>0で区別できる）。
+  const leftChDims = band.primitives.filter(p => p.type === 'dim' && p.dir === 'v' && p.at < p.foot && p.foot === 0);
+  assert.equal(leftChDims.length, 2, 'seq1の左CH寸法は[踊り場床→2FL][2FL→2F天井]の2本になるはず');
+
+  const lower = leftChDims.find(d => Math.abs(d.to - (-landingAbs)) < 1e-6);
+  assert.ok(lower, '下側の寸法(踊り場床→2FL。to=-landingAbs)が見つからない');
+  assert.ok(Math.abs(lower.from - (-floorHeight)) < 1e-6, '下側の寸法のfromは-2FL(-floorHeight)のはず');
+
+  const upper = leftChDims.find(d => Math.abs(d.from - (-chUpperAbsMm)) < 1e-6);
+  assert.ok(upper, '上側の寸法(2FL→2F天井。from=-chUpperAbsMm)が見つからない');
+  assert.ok(Math.abs(upper.to - (-floorHeight)) < 1e-6, '上側の寸法のtoは-2FL(-floorHeight)のはず');
+});
+
+// ---- WP-S3: SWITCHBACK以外（フォールバック経路）は従来どおりcomposeRoomFaces+
+// rotateFacesToStartの面順のまま、2層枠（上階FL線・両端縦線の延長）を描く ----
+test('【WP-S3】buildStairBand: フォールバック経路(STRAIGHT)は従来どおりの面順のまま2層枠を描く', () => {
+  const graph = makeGraph('p1');
+  const room = makeRectRoom(graph, 0, 0, 2000, 4000, '階段');
+  const stair = graph.addStair({
+    type: StairType.STRAIGHT, cells: new Set(), roomId: room.id, totalSteps: 12, tread: 250,
+  });
+
+  const upperGraph = makeGraph('p2');
+  upperGraph.plane.elevation = 3000; // floorHeight = 3000
+  const voidRoom = makeRectRoom(upperGraph, 0, 0, 2000, 4000, '吹抜け');
+  voidRoom.setFeature(RoomFeature.VOID);
+
+  const band = buildStairBand(room, graph, upperGraph, { stair, floorHeight: 3000 });
+  const chUpperAbsMm = 3000 + upperGraph.defaultCeilingHeight; // 5400
+
+  assert.equal(band.heightUnits, 2);
+  const extendedVerticals = band.primitives.filter(p =>
+    p.type === 'line' && p.weight === 'thick' && p.x1 === p.x2 && p.y2 === -chUpperAbsMm);
+  assert.ok(extendedVerticals.length >= 2, 'フォールバック経路でも2層枠の両端縦線が出るはず');
+  // STRAIGHT（stairFaceSequence対象外。stair.cellsも空）は断面プロファイル(polyline)を含まない。
+  assert.equal(band.primitives.filter(p => p.type === 'polyline').length, 0);
+});
+
+// ---- 失敗系: upperGraph=nullはheightUnits=1（1層）のまま ----
+test('【失敗系】buildStairBand: upperGraph=nullはheightUnits=1（1層）のまま', () => {
+  const graph = makeGraph('p1');
+  const room = makeRectRoom(graph, 0, 0, 2000, 4000, '階段');
+  const band = buildStairBand(room, graph, null);
+  assert.equal(band.heightUnits, 1);
 });
