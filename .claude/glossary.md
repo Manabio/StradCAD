@@ -116,6 +116,22 @@ Web Locks APIで1タブだけを編集セッションの持ち主にする排他
 室内から見た面（時計回り・12/3/6/9時対応）。L字部屋では同じletterが複数面に分かれ
 `B1`/`B2`のように連番が付く。設計意図は`.claude/elevation-model.md`。
 
+## 階段帯の面シーケンス（展開図）
+階段部屋の展開図を、A/B/C/Dの部屋一周順ではなく「階段を上っていく順番」で並べたもの
+（`elevation/elevationStairSequence.js`の`stairFaceSequence`。SWITCHBACK=1〜5(+2.5/4.5)、
+STRAIGHT/STRAIGHT_LANDING=1〜4(+踊り場壁)。中身は下記「2.5D断面エンジン」が組み立てる。
+WINDING/L_TURN/FLARED/OPEN_WELLは対象外＝従来面順へフォールバック）。設計意図は
+`.claude/elevation-model.md`「階をまたぐ2層帯」節。
+
+## 切断定義（SectionCut） / 2.5D断面エンジン
+**切断定義（SectionCut）**＝階段帯の1枚の面が「どこを・どちらを向いて・どう切るか」を表す薄いデータ
+（切断線・視線方向・図のx昇順対応・高さ範囲・第3層Flight/Landingへの参照）。タイプ別の表（`elevation/section/cuts/`
+配下の`switchbackCuts.js`/`straightCuts.js`/`fanCuts.js`）が組み立てる。**2.5D断面エンジン**＝そのSectionCutを
+受け取り、レイキャストで壁・アキ・階段のジグザグ／梯子／床CUT線を導出するタイプ非依存の処理一式
+（`elevation/section/`配下。`sectionProbe.js`＝レイキャスト、`sectionEmit.js`＝線種、`sectionEngine.js`＝
+列の統合、`sectionStair.js`＝階段幾何）。手書きのタイプ別シーケンスを置き換えたもの。設計意図は
+`.claude/elevation-model.md`「階をまたぐ2層帯」節。
+
 ## ドレーキップ窓・常時開放式防火戸/防火折戸・オーバーヘッドドア・非常用進入口・ガラリ
 **ドレーキップ窓**＝すべり出し（開き）と内倒しを兼ねる窓（`DREH_KIPP`）。**常時開放式防火戸/防火折戸**＝平常時は開放したまま火災時に自動閉鎖する防火設備（`FIRE_DOOR`/`FIRE_FOLD`。枚数・開放角度はcatalogエントリの`fireLeaves`/`fireAngle`で持つ）。**オーバーヘッドドア**＝天井方向へ跳ね上げる大型建具（`OVERHEAD`）。**非常用進入口**＝消防隊が外部から進入するための開口（`EMERGENCY`）。**ガラリ**＝通気用のルーバー開口（`GARARI`、固定のみ）。いずれも`openingCatalog.js`のFITTING_CATALOG/WINDOW_CATALOGエントリで、機構(`OpeningMechanism`)ごとに平面記号（`renderer/OpeningsLayer.jsx`）・姿図（`openings/openingElevationFigure.js`）を描く。設計意図は`.claude/opening-model.md`。
 

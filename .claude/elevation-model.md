@@ -129,11 +129,92 @@ defer: 天井高さが異なる内部境界（壁の無い部屋内部）の
 対象を選び、`openingSectionPrimitives`が[枠(CUT)][扉(SILHOUETTE)][枠(CUT)]の3rectを面の両端の帯に描く
 （`buildRoomBand`/`buildStairBand`が`faces[(i∓1+n)%n]`をprevFace/nextFaceとしてctxに渡す）。
 
-## 階段帯・巾木・defer
-`elevationStair.js`の直上階（吹抜けクリップ）表現は上階FL線を重ねて引くだけの簡易実装。直上階グラフ（`floorSwapManager.peek`。
-純モジュールでは行えず`ElevationModeState.init()`が解決）を使い、描画範囲は「床→設置階の階高→さらに上階の階高」の縦2層分
-（上階のそのまた階高が不明なら1層分）。折返し階段は側面の断面プロファイルを`elevationStairSection.js`が独自生成する
-（プランビューの階段描画は再利用しない）。SWITCHBACK以外（WINDING等）はスコープ外で空配列。
+## 階をまたぐ2層帯（階段・吹抜け。問題修正2026-08その7）
+**共通基盤**: 多層帯は`finalizeBand`の`heightUnits`（既定1）で宣言し、`normalizeBandHeightUnits`（`elevationLayout.js`）が
+帯スロット高さを「全帯中の最大unitHeightMm×整数」へ切り上げる——**1層帯（heightUnits<2）は一切動かさない**（リード裁定:
+天井高の異なる階で1層帯まで最大帯高へ引き上がる副作用を実害と判定）。`chooseElevationScale`の予算基準は`unitHeightMm ?? heightMm`
+（2層帯が混ざっても縮尺は1層基準のまま）。boundsには触れない（QA A2の打ち消し問題再発防止）。
+`layoutBandFaces`の`ctx.faceOverride(face,i,defaults)`はfaceCtxへの差し込みフックで、**`hasLeftChDim`の継ぎ目判定より前に
+適用する**（後だと階段帯の面ごとCH寸法が出ない）。`buildFaceFigure`の`ctx.ceilingProfile`（区分線形`[[localX,ceilAbsMm],..]`）は
+天井解決を`ceilAbsAtX`に集約して勾配天井をCUTのpolyline1本で描く（天井追従4箇所=端縦線上端・袖壁断面・アキ上端・注記突き出しも
+追従）。範囲外のxは端点値へクランプし、カバレッジ条件は持たない（QA修正: 旧「描画範囲を覆わなければフォールバック」契約は、
+壁のない端部の延長で描画範囲が広がるだけで勾配天井が本番設定で常にフラット化するバグの原因だった）。**レンダラのpolyline分岐はdash非対応のため、破線が要る線は必ずlineプリミティブで出す**（レンダラは改修しない）。
+
+**吹抜け帯**（`elevationVoid.js`の`buildVoidBand`。`selectElevationRooms`がfeature=VOIDを採用）: 「設置階下階のFLから設置階の
+天井高さまで」を、**自階の面を下へ延長する**方式で描く（下階の面リストを積まない——吹抜けの壁は下階FL〜設置階天井まで連続し
+設置階FL位置に床断面は現れないため）。faceOverrideでsegsを`floorDeltaMm-=drop, chMm+=drop`（drop=`floorHeightBelow`＋下階
+対応RoomのFL差）と変換すると`ceilAbs=floorDelta+chMm`不変で床だけ下がり、端縦線・左CH寸法・建具床合わせが既存機構のまま
+自動追従する。世界座標は全階共通のためCLは自動的に揃う。`lowerGraph`/`floorHeightBelow`（`stairDimensions.js`。
+`_peekBelowGraph`は`_peekAboveGraph`の鏡像）が無ければ1層フォールバック（例外を投げない）。
+
+**階段帯（2.5D断面エンジン方式）**: 階段帯の面コンテンツは「切断定義（薄い表）＋タイプ非依存の断面エンジン」の3層構成
+（`app/src/elevation/section/`）で組み立てる。`elevationStair.js`/`elevationBand.js`はエンジン導入で変わらない
+（`elevationStair.js`の`faceOverride`が各entryを`layoutBandFaces`へ差し込むだけ。後述のfloorSpanXフックのみ例外）。
+描画範囲は設置階FL(y=0)〜上階天井`-(floorHeight+CH_upper)`。CH_upperの解決優先順=
+(a)`stairPortEdges(['arrival'])`辺中点のfar側`worldToCell`所有Roomの`roomCeilingHeight` (b)重なるVOID/STAIR_VOID Room
+(c)`upperGraph.defaultCeilingHeight`。
+
+1. **第1層 切断定義（`section/cuts/`）**: タイプ別に「どこを・どちらを向いて・どう切るか」の表だけを持つ。
+   `switchbackCuts.js`（SWITCHBACK。往路・復路の2レーン＋踊り場）・`straightCuts.js`（STRAIGHT/STRAIGHT_LANDING。
+   単一レーン＋任意の踊り場）・`fanCuts.js`（WINDING/L_TURN/FLARED/OPEN_WELL。扇形レーン・回り段・矩折コーナーは
+   第3層Flightの区分線形モデルで表現できないため常にnull）。返り値は`SectionCut[]`（切断線・視線方向・図のx昇順
+   対応・高さ範囲・第3層Flight/Landingへの参照）。往復間の壁・踊り場壁のような「区間を横断する実壁」は
+   `graph.walls`をレーン間/踊り場位置のCL座標で直読みして検出し、実在しなければ該当seqを挿入しない（合成面
+   `kind:'stairMid'`。壁厚は`wall.materialRange`から求め、ハードコードしない）。往復間の壁は2F（`opts.upperGraph`。
+   純モジュール不変条件維持のためoptsで素通しする。未指定時は設置階`graph`へフォールバック）の壁を見る。
+   `SWITCHBACK以外・stair.cellsが空・floorHeight未確定・面分類不能`はnullを返し、呼び出し側
+   （`elevationStair.js`の`buildStairBand`）は従来の`composeRoomFaces`+`rotateFacesToStart`面順＋2層枠へ
+   フォールバックする（フォールバック契約自体は不変。対象外タイプが増えただけ）。
+2. **第2層 断面エンジン（`sectionProbe.js`/`sectionEmit.js`/`sectionEngine.js`）**: SectionCutを受けて、run方向に
+   レイキャスト列（`collectCutBreaks`→`probeColumn`）を作り、各列のz区間を「切断壁(cut)／同一直線上に縦断された
+   壁(cutAlong)／見えがかり壁面(wall)／アキ(open)／床スラブ(slab・非描画)」へオクルージョン優先順位
+   （cut/cutAlong＝最前面 > wallは距離最小 > 無ければ視線先の床天井位置でslab/openを判定）で分類する。
+   `isRoomWall`（部屋の外周壁）はcutAlong判定から除外する——cutAlongは「往復間の壁」のような自立した内部間仕切りが
+   対象で、面自身の壁までcutAlong扱いにすると`isSightlineShape`の意図的な自壁除外（面の向こうに空間が無いと
+   誤判定される）が壊れるため。線種は`sectionEmit.js`の表が唯一の情報源（切断壁の縁=open側CUT/塞がれ側
+   SILHOUETTE、cutAlongは天井際CUT水平線＋両端CUT縦線の3線＝塗り無しの輪郭のみ、アキのXはbaseFloorZより
+   上=一点鎖線・床断面より下=破線）。**「断面より下・向こう側は細破線」への最終降格は`emitLine`1箇所だけで適用する**
+   （各所に個別の破線判定を持たせない）。開口は描画を貫通させないが、そのz範囲だけ`ZBand.openingPassThrough`として
+   アキの連結性判定にのみ参加する——開口が上階のアキ等へ連続する場合、分割された複数のXではなく対角頂点を結ぶ
+   1つの大きなXになる。
+3. **第3層 階段幾何（`sectionStair.js`）**: 階段の3D的な寄与を、タイプ非依存の区分線形モデル
+   （Flight[]＝直進区間・Landing[]＝踊り場。h(t)を関数で持たず区間ごとの直線で表す）で表す。第1層がどの区間を
+   渡すかを決め、第2層は「切断線がレーンを縦断＝段鼻のジグザグ」「レーンを横切る＝正面視の梯子」「踊り場を縦断＝
+   床のCUT水平線」を切断線とFlight/Landingの幾何関係だけから導出する（タイプに一切依存しない）。鉄骨
+   （`structure===STEEL`）は各ジグザグから`STEEL_STRINGER_DEPTH_MM=200`（作図既定値。モデルに桁成フィールドなし）
+   下げたささらを追加する。
+
+**ゴールデンゲート**: 通常部屋帯（`buildRoomBand`）・吹抜け帯（`buildVoidBand`）はエンジン導入の影響を一切受けない
+（`elevationSectionGolden.test.js`が出力プリミティブの正規化JSON完全一致で固定・常に緑必須）。階段帯は一般規則を
+優先し、手書き出力との一致度は問わない——ただしユーザーが実機で確認した意味論（歩行順1〜5・見返りの梯子破線・
+往復間の壁の断面・アキXの配置・B/D面の鏡像関係・2FLの中線・CH寸法の2FL分割・踊り場床CUT線など）は
+`elevationStairSequence.test.js`の意味論アサーション（座標の逐一一致ではなく「〜な線が存在する」「順序関係」）が
+保存する——落ちたときにユーザーが実機で見て困る変化かどうかが仕分けの基準。
+
+**帯の縦CH寸法線を2FLで分割**: `layoutBandFaces`（`elevationBand.js`）のi===0（帯先頭面）ブロックに`faceOverride`
+経由の`chDimSplitAbsYs?:number[]`（分割する絶対高さの配列。床基準・正=床上）フックがある。未指定時（既定）は
+現行どおり1本のまま。SWITCHBACKのseq1（歩行順シーケンスの先頭=帯先頭面）は`chDimSplitAbsYs:[floorHeight]`
+（=2FL）を設定し、結果として左CH寸法が「踊り場床→2FL」「2FL→2F天井」の2本になる。
+
+**腰壁越しに向こう側の床・天井断面線を壁位置で打ち切るフック（defer解決・§7 D2）**: `buildFaceFigure`に
+`ctx.floorSpanX?:{lo,hi}`（既定=現行の`drawnX0`/`drawnXRun`。未指定時は出力不変＝ゴールデンゲートで担保）を
+追加した。往復間の壁・踊り場壁が腰壁のときseq2/4系へ値を供給する配線は実機確認前提のため今回は未接続
+（フック自体は`elevationStair.js`の`faceOverride`が透過する準備済み）。
+
+**意図的差分（設計判断として保持）**: 往復間の壁・踊り場壁の断面表現は塗り矩形(rect)から3線（天井際CUT水平線＋
+両端CUT縦線の輪郭のみ）へ変更した。SWITCHBACKのseq1/seq3は同一の踊り場前縁切断線W(tRun,0→1)を共有する
+（wLandingを「距離のある見えがかり候補」として一般規則から自然に検出させるため）。最上階かつ上階CHが非明示
+（`isFallback`）なら往路上の天井を水平キャップするが、その境界の縦線は描かない（面が独立してクリップされる
+ため——実機フィードバックの解釈で報告済みの逸脱）。seq1の壁2縁の線種（旧手書き仕様「wallZone側=太・
+ladderZone側=中」という位置基準）は一般規則（§5.6: 縁が接する側がopenならCUT・塞がれていればSILHOUETTE）に
+置換した——実機構成（往路・復路レーン上に2F床が無く、往復間の壁の向こう側が2F吹抜け＝open）では一般規則から
+同じ見た目（開いた側の縁=CUT）が自動再現される。対称に両側とも塞がれた構成（2F側に床がある）では両縁とも
+SILHOUETTEになる。
+
+**修正済み**: `buildMidWallFace`（合成面）の`lo/hi`は`loWorld/hiWorld`の大小関係に関わらず（呼び出し側は歩行方向の
+都合で渡すため`travelSign<0`だと`loWorld>hiWorld`になりうる）、`elevationFaceList.js`の断片化レシピと同じ
+`Math.min/max`で正規化する（対応するCLId=`startCLId/endCLId`も入れ替える）。旧実装は未ソートのまま代入しており
+`run`が負値になるバグがあった。
 
 巾木初期値（`木製出幅木`/`h=60`）は**ユーザーがRoomを新規作成する経路でのみ**適用する（`applyDefaultBaseboard`）。
 `RoomFinish`コンストラクタでは設定しない——復元経路は「新しいRoomを作ってから空でないフィールドだけ上書きする」実装のため、
@@ -195,7 +276,8 @@ scale未確定のため省略判定を行わない）。**テキスト幅概算�
 （姿図は現状複数の生プリミティブへ分解済みで個別の建具IDを持たないため対象外。defer）。
 
 defer（未実装）: 傾斜天井の作図・開口の内法寸法線・巾木見切り目地・家具設備電気・屋外部屋・展開図上の編集・印刷/PDF・
-SWITCHBACK以外の階段断面（WINDING/L_TURN/FLARED/OPEN_WELL）・展開図の建具「姿」クリックでのパネル連携（記号丸のみ対応）。
+SWITCHBACK以外の階段断面（WINDING/L_TURN/FLARED/OPEN_WELL）・展開図の建具「姿」クリックでのパネル連携（記号丸のみ対応）・
+他階の建具の2層帯への描画（吹抜け帯の下階建具・階段帯の上階建具）・最上階キャップ時の天井境界CUT縦線。
 
 ## 面リストの合成（composeRoomFaces）・段差見付け面・ROW1寸法のCL分割
 `buildRoomFaces`（壁面ループ・隅共有不変条件）は変更せず、その上に新レイヤ`elevationFaceList.js`の`composeRoomFaces()`を
