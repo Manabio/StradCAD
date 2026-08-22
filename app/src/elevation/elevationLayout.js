@@ -14,14 +14,52 @@ const VISIBLE_BANDS = 2.2;
 /**
  * 帯群の中でもっとも背の高い帯が画面に収まるよう、建築標準スケール(px/mm)を選ぶ。
  * bands=[] のときは NICE_SCALES 内の妥当な既定値を返す（chooseScale(0,0,...)と同じ扱い）。
- * @param {Array<{heightMm:number}>} bands
+ * WP-0: 予算基準は b.heightMm ではなく b.unitHeightMm（未指定時はb.heightMmへフォールバック
+ * ＝1層帯は従来と同値）を使う——2層帯（吹抜け帯・階段帯）のheightMmは1層帯のほぼ2倍になるため、
+ * heightMmのまま基準にすると2層帯が混ざるだけで全体の縮尺が半減してしまう。unitHeightMm
+ * （elevationBand.jsのfinalizeBand。1層あたりの高さ）を基準にすることで、2層帯が混ざっても
+ * 縮尺は1層基準のまま決まる。
+ * @param {Array<{heightMm:number, unitHeightMm?:number}>} bands
  * @param {{width:number, height:number}} viewSize
  * @returns {number} px/mm
  */
 export function chooseElevationScale(bands, { height }) {
-  const tallestMm = bands.reduce((max, b) => Math.max(max, b.heightMm), 0);
+  // QA修正7: unitHeightMm===0（縮退帯）を??では0のまま採用してしまう（0は「未指定」ではない
+  // ため意図的に||で「偽値ならheightMmへフォールバック」にする）。
+  const tallestMm = bands.reduce((max, b) => Math.max(max, b.unitHeightMm || b.heightMm), 0);
   const budgetPx = height / VISIBLE_BANDS;
   return chooseScale(0, tallestMm, Infinity, budgetPx);
+}
+
+/**
+ * 多層帯（heightUnits>=2。吹抜け帯・階段帯）の帯スロット高さ（heightMm）を、標準帯高さ
+ * （1層あたりのunitHeightMm）の整数倍へ切り上げる（WP-0。ユーザー仕様「描画高さに合わせて、
+ * 帯高さを整数倍する」）。
+ *
+ * リード裁定（クロス帯副作用の修正）: 設計意図は「多層帯のスロット高さを標準帯高さの整数倍へ
+ * 切り上げる」ことであり、1層帯（heightUnits省略またはheightUnits<2）の高さを引き上げることでは
+ * ない——1層帯は他の帯のunitHeightMmに関わらず常に無変更でそのまま返す（heightMmは一切いじらない）。
+ * 切り上げ式（Math.max(heightMm, heightUnits*unitMm)）を適用するのはheightUnits>=2の帯のみ。
+ * unitMmの算出（全帯中の最大unitHeightMm。未指定の帯はheightMmで代用）自体は、1層帯を含む
+ * 全帯を対象にしたまま——多層帯が基準にする「標準帯高さ」は、あくまでフロア全体で共有する
+ * 1層分の高さでなければならないため。
+ *
+ * bounds には一切触れない（bandContentOriginMmの打ち消し問題＝QA A2の再発防止。
+ * elevationLayout.js:157のbandContentOriginMmコメント・elevationBand.jsのQA A2コメント参照
+ * ——boundsをheightMmに連動させて動かすと、帯の実描画位置をtopMmへ再アンカーする仕組みが
+ * この切り上げ効果を打ち消してしまう）。
+ * @param {Array<{heightMm:number, unitHeightMm?:number, heightUnits?:number}>} bands
+ * @returns {object[]} 新しい配列（bandsは変更しない）。heightUnits省略/1の帯は同一参照のまま
+ *   （heightMmを含め一切変更しない）。heightUnits>=2の帯だけheightMmが切り上がりうる。
+ */
+export function normalizeBandHeightUnits(bands) {
+  // QA修正7: chooseElevationScaleと同じ理由でunitHeightMm===0を||でheightMmへフォールバックする。
+  const unitMm = bands.reduce((max, b) => Math.max(max, b.unitHeightMm || b.heightMm), 0);
+  return bands.map(b => {
+    const heightUnits = b.heightUnits ?? 1;
+    if (heightUnits < 2) return b; // 1層帯は他帯のunitHeightMmに関わらず無変更（リード裁定）
+    return { ...b, heightMm: Math.max(b.heightMm, heightUnits * unitMm) };
+  });
 }
 
 /**

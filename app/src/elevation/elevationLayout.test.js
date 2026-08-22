@@ -6,6 +6,7 @@ import {
   chooseElevationScale, screenMmToModelMm, layoutBands, clampScrollY,
   visibleBandPlacements, bandIdAtY, clampFaceOffset, bandContentOriginMm,
   miterTriangleVertices, verticalDimLabelBox, horizontalDimLabelBox,
+  normalizeBandHeightUnits,
 } from './elevationLayout.js';
 import { BAND_GAP_MM } from './elevationStyle.js';
 
@@ -258,4 +259,91 @@ test('【項目3】horizontalDimLabelBox: 既定のgapPx（寸法線からの上
   const box = horizontalDimLabelBox(0, 300);
   const thicknessPx = 14; // 既定値（変更なし）
   assert.equal(box.y, 300 - 1 - thicknessPx, '既定gapPxは1pxのはず（旧2pxの半分）');
+});
+
+// ---- WP-0: normalizeBandHeightUnits（2層帯の帯スロット高さを標準帯高さの整数倍へ切り上げる） ----
+test('【WP-0】normalizeBandHeightUnits: heightUnits:2の帯は最大unitHeightMmの2倍へ切り上がる', () => {
+  const bands = [
+    { roomId: 'a', heightMm: 2900, unitHeightMm: 2900 },
+    // 2層帯: heightMm(3000)はunitMm(2900)×2=5800未満のため切り上がるはず
+    { roomId: 'b', heightMm: 3000, unitHeightMm: 1500, heightUnits: 2 },
+  ];
+  const normalized = normalizeBandHeightUnits(bands);
+  assert.equal(normalized[0].heightMm, 2900, '1層帯（heightUnits省略=1）は現行のままのはず');
+  assert.equal(normalized[1].heightMm, 5800, '2層帯はunitMm(2900)×heightUnits(2)=5800へ切り上がるはず');
+});
+
+test('【WP-0】normalizeBandHeightUnits: unitHeightMm未指定の単独帯（1件のみ）はheightMmが現行同値のまま', () => {
+  // 帯が1件だけの場合、unitMm=自身のheightMm（フォールバック）になるため、
+  // Math.max(heightMm, 1*unitMm)は常に自分自身のheightMmと一致し現行同値になる。
+  const bands = [{ roomId: 'a', heightMm: 3000 }];
+  const normalized = normalizeBandHeightUnits(bands);
+  assert.equal(normalized[0].heightMm, 3000);
+});
+
+test('【WP-0】normalizeBandHeightUnits: 全帯が同じ高さ（同一CHのフロア相当）ならheightMmは現行同値のまま', () => {
+  const bands = [{ roomId: 'a', heightMm: 3000 }, { roomId: 'b', heightMm: 3000 }];
+  const normalized = normalizeBandHeightUnits(bands);
+  assert.deepEqual(normalized.map(b => b.heightMm), [3000, 3000],
+    '全帯が既にunitMmと同じ高さなら切り上げの効果は無く現行同値のまま');
+});
+
+// ---- リード裁定（クロス帯副作用の修正）の回帰テスト: 1層帯（heightUnits省略/1）は、他の帯の
+// unitHeightMmが自分より大きくても無変更のまま——多層帯（heightUnits>=2）だけが切り上げの
+// 対象であり、1層帯の高さを引き上げるのは設計意図に反する ----
+test('【WP-0・リード裁定】normalizeBandHeightUnits: heightUnits省略（=1）の帯は、他の帯のunitHeightMmが自分より大きくても無変更（heightMmを一切いじらない）', () => {
+  const bands = [
+    { roomId: 'a', heightMm: 3000, unitHeightMm: 3000 },
+    { roomId: 'b', heightMm: 2000, unitHeightMm: 2000 }, // unitMm=3000（aが最大）に引きずられてはいけない
+  ];
+  const normalized = normalizeBandHeightUnits(bands);
+  assert.equal(normalized[0].heightMm, 3000, '最大unitHeightMmを持つ帯自身は現行のまま');
+  assert.equal(normalized[1].heightMm, 2000,
+    '1層帯(b)は他帯(a)のunitHeightMm(3000)に引きずられず、現行のheightMm(2000)のまま変わらないはず');
+  assert.strictEqual(normalized[1], bands[1], '1層帯は同一参照のままそのまま返るはず（heightMm以外も一切変更しない）');
+});
+
+// ---- 同じ回帰を混合構成（1層帯＋多層帯が同時にある）でも確認する ----
+test('【WP-0・リード裁定】normalizeBandHeightUnits: 多層帯（heightUnits:2）が混ざっていても、1層帯は無変更のまま', () => {
+  const bands = [
+    { roomId: 'a', heightMm: 2000, unitHeightMm: 2000 }, // 1層帯（低い方）
+    { roomId: 'b', heightMm: 3000, unitHeightMm: 1500, heightUnits: 2 }, // 多層帯: unitMm(2000)×2=4000へ切り上げ
+  ];
+  const normalized = normalizeBandHeightUnits(bands);
+  assert.equal(normalized[0].heightMm, 2000, '1層帯(a)は多層帯(b)のunitHeightMmに関わらず無変更のはず');
+  assert.equal(normalized[1].heightMm, 4000, '多層帯(b)はunitMm(2000)×heightUnits(2)=4000へ切り上がるはず');
+});
+
+test('【WP-0】normalizeBandHeightUnits: boundsには一切触れない（QA A2の打ち消し問題の再発防止）', () => {
+  const bounds = { minY: -2400, maxY: 500 };
+  const bands = [{ roomId: 'a', heightMm: 2900, unitHeightMm: 2900, bounds }];
+  const normalized = normalizeBandHeightUnits(bands);
+  assert.strictEqual(normalized[0].bounds, bounds, 'boundsは同一参照のまま変更されないはず');
+});
+
+// ---- 失敗系: 帯が0件でも例外を投げない ----
+test('【失敗系・WP-0】normalizeBandHeightUnits: 帯が0件なら空配列を返す', () => {
+  assert.deepEqual(normalizeBandHeightUnits([]), []);
+});
+
+// ---- WP-0: chooseElevationScaleはunitHeightMm基準（2層帯が全体の縮尺を半減させない） ----
+test('【WP-0】chooseElevationScale: 2層帯（unitHeightMm=1層基準の半分のheightMm）が混ざっても倍率は1層基準のまま', () => {
+  const viewSize = { width: 1000, height: 1200 };
+  const singleLayerOnly = [{ heightMm: 2900, unitHeightMm: 2900 }];
+  const withTwoLayerBand = [
+    { heightMm: 2900, unitHeightMm: 2900 },
+    { heightMm: 5800, unitHeightMm: 2900 }, // 2層帯: heightMmは1層帯の約2倍だがunitHeightMmは同じ
+  ];
+  const scaleSingle = chooseElevationScale(singleLayerOnly, viewSize);
+  const scaleWithTwoLayer = chooseElevationScale(withTwoLayerBand, viewSize);
+  assert.equal(scaleWithTwoLayer, scaleSingle,
+    '2層帯が混ざってもunitHeightMm基準のため倍率は変わらないはず');
+
+  // 対比: もしheightMmをそのまま基準にしていたら（旧方式）、2層帯のheightMm(5800)に
+  // 引きずられて倍率がより小さくなっていたはず——unitHeightMm基準への変更の効果を確認する。
+  const scaleIfHeightMmBased = chooseElevationScale(
+    withTwoLayerBand.map(b => ({ heightMm: b.heightMm })), viewSize,
+  );
+  assert.ok(scaleIfHeightMmBased <= scaleSingle,
+    '旧方式（heightMm基準）なら2層帯に引きずられて倍率が下がっていたはず（新方式との対比）');
 });

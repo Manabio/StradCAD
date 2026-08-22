@@ -322,9 +322,20 @@ export function openingSectionPrimitives(o, x0, dir, cutWeight, silhouetteWeight
  *   prevFace?:object|null, nextFace?:object|null, openingTagRowModelMm?:number,
  *   dimRowGapModelMm?:number, gridRowGapModelMm?:number,
  *   floorSegments?:Array<{loX:number,hiX:number,floorDeltaMm:number,chMm?:number}>,
- *   beyondCeilings?:Array<{loX:number,hiX:number,ceilAbsMm:number}>}} ctx
+ *   beyondCeilings?:Array<{loX:number,hiX:number,ceilAbsMm:number}>,
+ *   ceilingProfile?:Array<[number,number]>, skipBaseboard?:boolean, skipWallLabel?:boolean,
+ *   floorSpanX?:{lo:number,hi:number}}} ctx
  *   beyondCeilings省略時（単体テスト等）は別エリアの天井の破線を描かない
  *   （elevationFloorProfile.jsのfamilyCeilingSegmentsをlayoutBandFacesが計算して渡す）。
+ *   ceilingProfile（WP-2。[[localX,ceilAbsMm],...]・昇順の区分線形の天井。面の描画範囲を
+ *   覆う必要はない——QA修正: 旧「覆わなければフォールバック」契約は、壁のない端部の延長で
+ *   描画範囲が広がるだけで勾配天井が丸ごとフラット化する本番バグの原因だったため撤廃。
+ *   省略時（空配列・1点のみを含む）は現行の水平天井（区間別のchMmベース）へフォールバック
+ *   する（例外を投げない）。指定時（2点以上）は範囲外のxを端点値へクランプして常にprofile
+ *   から解決し、天井の水平線群＋段差縦線の代わりに
+ *   1本のpolyline（CUT）で描き、beyondCeilingsの破線処理は対象外（スキップ）になる。
+ *   skipBaseboard/skipWallLabel（WP-2。既定false）はそれぞれ巾木・壁2段書きの描画を省略する
+ *   （階段帯等、これらの表現が不要な帯からの呼び出し用）。
  *   faceLabelAvoidThresholdModelMm省略時はDEFAULT_FACE_LABEL_AVOID_THRESHOLD_MM（QA B3。
  *   ElevationModeState.initが2パス目でscreenMmToModelMm換算した値を渡す）。
  *   prevFace/nextFace省略時（項目3非対応呼び出し・単体テスト等）は建具断面を描かない。
@@ -336,19 +347,46 @@ export function openingSectionPrimitives(o, x0, dir, cutWeight, silhouetteWeight
  *   floorSegments省略時は床線1本のフラット区間（項目4。elevationFloorProfile.jsの
  *   wallAdjacentFloorSegmentsをbuildRoomBand/buildStairBandが計算して渡す。単体テスト等
  *   buildFaceFigureを直接呼ぶ場合は明示的に渡さない限りフラットになる）。
+ *   floorSpanX（WP-E7・defer D2）省略時は現行のdrawnX0/drawnXRun（壁のない端部延長込み）を
+ *   そのまま使う（通常部屋帯・吹抜け帯は無指定のため出力が完全一致＝WP-G0ゲートで担保）。
+ *   指定時はdrawnX0/drawnXRunをMath.max/minでこの範囲へクランプする——階段の腰壁越しに
+ *   見える向こう側の床線・天井線を、cutAlong壁（往復間の壁）の実位置で打ち切るためのフック。
  * @returns {object[]}
  */
 export function buildFaceFigure(face, ctx) {
   const {
     graph, project, room, ceilingHeight: CH, materialMap, gridCLs, faceLabelAvoidThresholdModelMm,
     prevFace, nextFace, openingTagRowModelMm, dimRowGapModelMm, gridRowGapModelMm, floorSegments,
-    wallLessEndExtendModelMm, scale,
+    wallLessEndExtendModelMm, scale, ceilingProfile, skipBaseboard, skipWallLabel, floorSpanX,
   } = ctx;
   const run = face.run;
   const prims = [];
   // 項目3・4: 壁2段書きの配置・省略判定でも面の壁中心線区間（boundary）が要るため、従来
   // ROW1寸法線の直前にあった算出をここへ前倒しする（値はfaceとgraphのみに依存し不変）。
   const boundary = faceBoundaryLocalX(face, graph);
+
+  // WP-2: ctx.ceilingProfile（[[localX, ceilAbsMm], ...]。昇順の区分線形の天井。階段勾配天井用の
+  // フック）が指定されていれば線形補間した天井絶対高さを返す。未指定（空配列含む）はfallbackAbsMm
+  // （呼び出し側が既に算出済みの現行の値）をそのまま返す——未指定時に現行出力と完全一致させる
+  // ため、呼び出し側は必ず既存の計算式の結果そのものをfallbackAbsMmへ渡すこと（例外は投げない）。
+  // QA修正: 指定時、xが範囲外（面の壁のない端部延長=wallLessEndExtendMm分などでprofile自体の
+  // 範囲を超える）でもfallbackAbsMmへ黙って戻さず、範囲の端点値へクランプして常にprofileから
+  // 解決する——旧実装は「範囲を覆っていなければ丸ごとフォールバック」だったため、本番設定
+  // （wallLessEndExtendModelMm≈150が常に渡る）では描画範囲がprofile範囲よりわずかに広がり、
+  // 勾配天井が一度も描かれない不具合があった。
+  const ceilAbsAtX = (x, fallbackAbsMm) => {
+    if (!Array.isArray(ceilingProfile) || ceilingProfile.length === 0) return fallbackAbsMm;
+    const first = ceilingProfile[0], last = ceilingProfile[ceilingProfile.length - 1];
+    const cx = Math.min(Math.max(x, first[0]), last[0]); // 範囲外は端点値へクランプ
+    for (let i = 0; i + 1 < ceilingProfile.length; i++) {
+      const [x1, y1] = ceilingProfile[i];
+      const [x2, y2] = ceilingProfile[i + 1];
+      if (cx >= x1 - 1e-6 && cx <= x2 + 1e-6) {
+        return x2 === x1 ? y2 : y1 + ((cx - x1) / (x2 - x1)) * (y2 - y1);
+      }
+    }
+    return last[1];
+  };
 
   // QA C1→D1/D2: 建具記号丸(タグ)行・ROW1（壁芯間寸法行）の床線からの距離、ROW1→ROW2・
   // ROW2→通り芯丸行の行間。ctx未指定時（単体テスト等）はモジュール読み込み時に決め打ちできる
@@ -442,8 +480,12 @@ export function buildFaceFigure(face, ctx) {
   const hasWallAtLocal0   = face.hasWallAtLocal0   ?? true;
   const hasWallAtLocalRun = face.hasWallAtLocalRun ?? true;
   const extendMm = wallLessEndExtendModelMm ?? DEFAULT_WALL_LESS_END_EXTEND_MM;
-  const drawnX0   = hasWallAtLocal0   ? 0   : -extendMm;
-  const drawnXRun = hasWallAtLocalRun ? run : run + extendMm;
+  // WP-E7 defer D2: ctx.floorSpanX（既定=未指定=現行の値そのまま）で床線・天井線の描画範囲を
+  // クランプする。未指定時はMath.max/min自体が素通りするため現行と完全一致する。
+  const drawnX0   = floorSpanX ? Math.max(hasWallAtLocal0   ? 0   : -extendMm, floorSpanX.lo)
+                                : (hasWallAtLocal0   ? 0   : -extendMm);
+  const drawnXRun = floorSpanX ? Math.min(hasWallAtLocalRun ? run : run + extendMm, floorSpanX.hi)
+                                : (hasWallAtLocalRun ? run : run + extendMm);
 
   // 新仕様「段差位置のCLオフセット」: 内部境界（区間水平床線の端x・段差縦線x）は寸法・CL位置
   // （segs[i].hiX＝オフセット前）そのものではなく、床が低い側へ半壁厚ぶんずらした位置
@@ -483,81 +525,100 @@ export function buildFaceFigure(face, ctx) {
   // roomCeilingHeightが調整済み＝段差は明示CH指定時のみ現れる）を与える。
   const ceilAbsOf = s => (s.chMm != null ? s.floorDeltaMm + s.chMm : CH);
   const ceilYOf = s => -ceilAbsOf(s);
-  const ceilRiserXAt = i => drawnCeilingRiserX(segs, i, halfWallMm, CH);
-  // 天井の絶対高さが同じ隣接区間は1本の水平線に結合する（床だけの段差では天井線を分割しない）。
-  const ceilRuns = [];
-  for (const [i, s] of segs.entries()) {
-    const y = ceilYOf(s);
-    const last = ceilRuns[ceilRuns.length - 1];
-    if (last && last.y === y) last.endIdx = i;
-    else ceilRuns.push({ y, startIdx: i, endIdx: i });
-  }
-  // 問題修正2026-08その3（ユーザー明示指示: C1の天井断面上+100に「3'」の天井を表す破線。
-  // A1/B1/D2には不要）: 天井断面より上に見える「別エリアの天井」（親の天井等。境界の
-  // 下がり壁の縁）は、その面のrun軸に投影した実セル範囲（ctx.beyondCeilings＝
-  // familyCeilingSegments）と天井断面が実際に重なる区間だけへ、細線の破線で描く——
-  // 「床断面より下・天井断面より上の向こう側の断面は細線の破線」（その2）の既存規則の天井側。
-  // 旧実装（その2）の「帯CHと区間CHの比較だけで面全域にy=-CHの中線実線を引く」ヒューリス
-  // ティックは、当該エリアが実際にはその面の向こうに無い面（A1/B1/D2）へも誤って線を出し、
-  // 線種も既存規則（細線の破線）に反していたため撤回した。開放スパン区間はfar天井線
-  // （spansのfarCeilAbsMm）の管轄のため差し引く。天井断面と同じ高さ・断面より下のエリアは
-  // 描かない（明示指示の範囲外——類似規則への拡張は明示指示がある場合のみ行う既存方針）。
-  const beyondCeilings = ctx.beyondCeilings ?? [];
-  const openRangesForCeil = (face.spans ?? []).filter(s => s.kind === 'open').sort((a, b) => a.loX - b.loX);
-  // QA H3: 差し引くのは「同じ高さのfar天井線（またはアキ矩形の上辺）が既に描かれる」開放
-  // スパンだけ——開放先のさらに奥にある、より高いファミリー天井(bc)は開放スパン上にも描く
-  // （壁区間との情報量の非対称を作らない）。farCeilAbsMm未指定（旧形式spans）はfar天井線
-  // 自体が描かれないため差し引かない（二重描画の回避だけが差し引きの目的）。
-  const subtractOpenRanges = (lo, hi, ceilAbsMm) => {
-    const pieces = [];
-    let cursor = lo;
-    for (const o of openRangesForCeil) {
-      if (o.farCeilAbsMm !== ceilAbsMm) continue;
-      if (o.hiX <= lo || o.loX >= hi) continue;
-      if (o.loX > cursor) pieces.push([cursor, Math.min(o.loX, hi)]);
-      cursor = Math.max(cursor, o.hiX);
-    }
-    if (cursor < hi) pieces.push([cursor, hi]);
-    return pieces;
-  };
-  for (const [ri, r] of ceilRuns.entries()) {
-    const x1 = ri === 0 ? drawnX0 : ceilRiserXAt(r.startIdx - 1);
-    const x2 = ri === ceilRuns.length - 1 ? drawnXRun : ceilRiserXAt(r.endIdx);
-    prims.push({ type: 'line', x1, y1: r.y, x2, y2: r.y, weight: cutWeight });
-  }
-  // 別エリア天井の破線は「論理区間（segs）」基準で天井断面と比較する——描画済みrun範囲
-  // （天井段差の描画x＝±半壁厚オフセット後）と比較すると、bcの境界（論理CL値）と天井段差の
-  // 論理境界が一致する面（縦面のB/D等）で、オフセット差ぶん（半壁厚≒57.5mm）の偽の破線
-  // スリバーが必ず生じるため（実際に発生・修正した）。
-  // QA H2: bcごとに断片を集めて「接する区間」をマージしてから1本ずつ積む——segs境界（天井が
-  // 同じで床だけ違う隣接区間）で分割したまま積むと、座標は連続でも破線パターンの位相が中間で
-  // 再スタートし「破線同士の角は必ず破線の交点」の既存配慮（belowFloorEdge参照）に反する。
-  // QA H1: 実際に描いたbcの最大天井高さを控え、注記一点鎖線の突き出し基準に含める。
+  // QA H1: 実際に描いたbeyondCeilings(bc)破線の最大天井高さを控え、注記一点鎖線の突き出し
+  // 基準に含める（ceilingProfile有りの面ではbeyondCeilingsを描かないため-Infinityのまま）。
   let maxDrawnBcCeilAbs = -Infinity;
-  for (const bc of beyondCeilings) {
-    const pieces = [];
-    for (const seg of segs) {
-      if (bc.ceilAbsMm <= ceilAbsOf(seg)) continue;
-      const lo = Math.max(bc.loX, seg.loX, 0);
-      const hi = Math.min(bc.hiX, seg.hiX, run); // 壁のない端部の延長は対象外
-      if (hi - lo <= 0) continue;
-      pieces.push(...subtractOpenRanges(lo, hi, bc.ceilAbsMm));
+  // WP-2: ctx.ceilingProfileが（2点以上）指定されていれば、天井の水平線群＋天井段差縦線の
+  // 代わりに1本のpolyline（CUT）で描く——beyondCeilings（別エリアの天井の破線）の処理は
+  // ceilingProfile有りの面では対象外（スキップ）。profile未指定（空配列含む）の場合のみ現行の
+  // 水平天井（区間別のchMmベース）へフォールバックする（例外を投げない）。
+  // QA修正: 従来は「profileが面の描画範囲(drawnX0..drawnXRun)を覆っていること」も条件にしていたが、
+  // 壁のない端部延長（wallLessEndExtendMm）で描画範囲がprofile範囲よりわずかに広がる本番設定では
+  // 常にこの条件が偽になり勾配天井が一度も描かれない不具合があったため撤去した（範囲外はceilAbsAtX
+  // 側のクランプで解決する）。
+  const hasCeilingProfile = Array.isArray(ceilingProfile) && ceilingProfile.length >= 2;
+  if (hasCeilingProfile) {
+    const points = [[drawnX0, -ceilAbsAtX(drawnX0, CH)]];
+    for (const [x, y] of ceilingProfile) {
+      if (x > drawnX0 + 1e-6 && x < drawnXRun - 1e-6) points.push([x, -y]);
     }
-    pieces.sort((a, b) => a[0] - b[0]);
-    const mergedPieces = [];
-    for (const [a, b] of pieces) {
-      const last = mergedPieces[mergedPieces.length - 1];
-      if (last && a <= last[1] + 1e-9) last[1] = Math.max(last[1], b);
-      else mergedPieces.push([a, b]);
+    points.push([drawnXRun, -ceilAbsAtX(drawnXRun, CH)]);
+    prims.push({ type: 'polyline', points, weight: cutWeight });
+  } else {
+    const ceilRiserXAt = i => drawnCeilingRiserX(segs, i, halfWallMm, CH);
+    // 天井の絶対高さが同じ隣接区間は1本の水平線に結合する（床だけの段差では天井線を分割しない）。
+    const ceilRuns = [];
+    for (const [i, s] of segs.entries()) {
+      const y = ceilYOf(s);
+      const last = ceilRuns[ceilRuns.length - 1];
+      if (last && last.y === y) last.endIdx = i;
+      else ceilRuns.push({ y, startIdx: i, endIdx: i });
     }
-    for (const [a, b] of mergedPieces) {
-      prims.push({ type: 'line', x1: a, y1: -bc.ceilAbsMm, x2: b, y2: -bc.ceilAbsMm, weight: detailWeight, dash: 'dashed' });
-      maxDrawnBcCeilAbs = Math.max(maxDrawnBcCeilAbs, bc.ceilAbsMm);
+    // 問題修正2026-08その3（ユーザー明示指示: C1の天井断面上+100に「3'」の天井を表す破線。
+    // A1/B1/D2には不要）: 天井断面より上に見える「別エリアの天井」（親の天井等。境界の
+    // 下がり壁の縁）は、その面のrun軸に投影した実セル範囲（ctx.beyondCeilings＝
+    // familyCeilingSegments）と天井断面が実際に重なる区間だけへ、細線の破線で描く——
+    // 「床断面より下・天井断面より上の向こう側の断面は細線の破線」（その2）の既存規則の天井側。
+    // 旧実装（その2）の「帯CHと区間CHの比較だけで面全域にy=-CHの中線実線を引く」ヒューリス
+    // ティックは、当該エリアが実際にはその面の向こうに無い面（A1/B1/D2）へも誤って線を出し、
+    // 線種も既存規則（細線の破線）に反していたため撤回した。開放スパン区間はfar天井線
+    // （spansのfarCeilAbsMm）の管轄のため差し引く。天井断面と同じ高さ・断面より下のエリアは
+    // 描かない（明示指示の範囲外——類似規則への拡張は明示指示がある場合のみ行う既存方針）。
+    const beyondCeilings = ctx.beyondCeilings ?? [];
+    const openRangesForCeil = (face.spans ?? []).filter(s => s.kind === 'open').sort((a, b) => a.loX - b.loX);
+    // QA H3: 差し引くのは「同じ高さのfar天井線（またはアキ矩形の上辺）が既に描かれる」開放
+    // スパンだけ——開放先のさらに奥にある、より高いファミリー天井(bc)は開放スパン上にも描く
+    // （壁区間との情報量の非対称を作らない）。farCeilAbsMm未指定（旧形式spans）はfar天井線
+    // 自体が描かれないため差し引かない（二重描画の回避だけが差し引きの目的）。
+    const subtractOpenRanges = (lo, hi, ceilAbsMm) => {
+      const pieces = [];
+      let cursor = lo;
+      for (const o of openRangesForCeil) {
+        if (o.farCeilAbsMm !== ceilAbsMm) continue;
+        if (o.hiX <= lo || o.loX >= hi) continue;
+        if (o.loX > cursor) pieces.push([cursor, Math.min(o.loX, hi)]);
+        cursor = Math.max(cursor, o.hiX);
+      }
+      if (cursor < hi) pieces.push([cursor, hi]);
+      return pieces;
+    };
+    for (const [ri, r] of ceilRuns.entries()) {
+      const x1 = ri === 0 ? drawnX0 : ceilRiserXAt(r.startIdx - 1);
+      const x2 = ri === ceilRuns.length - 1 ? drawnXRun : ceilRiserXAt(r.endIdx);
+      prims.push({ type: 'line', x1, y1: r.y, x2, y2: r.y, weight: cutWeight });
     }
-  }
-  for (let ri = 0; ri + 1 < ceilRuns.length; ri++) {
-    const x = ceilRiserXAt(ceilRuns[ri].endIdx);
-    prims.push({ type: 'line', x1: x, y1: ceilRuns[ri].y, x2: x, y2: ceilRuns[ri + 1].y, weight: cutWeight });
+    // 別エリア天井の破線は「論理区間（segs）」基準で天井断面と比較する——描画済みrun範囲
+    // （天井段差の描画x＝±半壁厚オフセット後）と比較すると、bcの境界（論理CL値）と天井段差の
+    // 論理境界が一致する面（縦面のB/D等）で、オフセット差ぶん（半壁厚≒57.5mm）の偽の破線
+    // スリバーが必ず生じるため（実際に発生・修正した）。
+    // QA H2: bcごとに断片を集めて「接する区間」をマージしてから1本ずつ積む——segs境界（天井が
+    // 同じで床だけ違う隣接区間）で分割したまま積むと、座標は連続でも破線パターンの位相が中間で
+    // 再スタートし「破線同士の角は必ず破線の交点」の既存配慮（belowFloorEdge参照）に反する。
+    for (const bc of beyondCeilings) {
+      const pieces = [];
+      for (const seg of segs) {
+        if (bc.ceilAbsMm <= ceilAbsOf(seg)) continue;
+        const lo = Math.max(bc.loX, seg.loX, 0);
+        const hi = Math.min(bc.hiX, seg.hiX, run); // 壁のない端部の延長は対象外
+        if (hi - lo <= 0) continue;
+        pieces.push(...subtractOpenRanges(lo, hi, bc.ceilAbsMm));
+      }
+      pieces.sort((a, b) => a[0] - b[0]);
+      const mergedPieces = [];
+      for (const [a, b] of pieces) {
+        const last = mergedPieces[mergedPieces.length - 1];
+        if (last && a <= last[1] + 1e-9) last[1] = Math.max(last[1], b);
+        else mergedPieces.push([a, b]);
+      }
+      for (const [a, b] of mergedPieces) {
+        prims.push({ type: 'line', x1: a, y1: -bc.ceilAbsMm, x2: b, y2: -bc.ceilAbsMm, weight: detailWeight, dash: 'dashed' });
+        maxDrawnBcCeilAbs = Math.max(maxDrawnBcCeilAbs, bc.ceilAbsMm);
+      }
+    }
+    for (let ri = 0; ri + 1 < ceilRuns.length; ri++) {
+      const x = ceilRiserXAt(ceilRuns[ri].endIdx);
+      prims.push({ type: 'line', x1: x, y1: ceilRuns[ri].y, x2: x, y2: ceilRuns[ri + 1].y, weight: cutWeight });
+    }
   }
   // 端の縦線（中線）: 壁がある端（出隅・入隅）に加え、見えがかりエッジ（edgeAtLocal0/Run＝
   // 実壁が切断面を横切らず向こう側へ折れて続く凹み角。ユーザー明示指示2026-08）にも描く——
@@ -566,12 +627,13 @@ export function buildFaceFigure(face, ctx) {
   const edgeAtLocal0   = face.edgeAtLocal0   ?? false;
   const edgeAtLocalRun = face.edgeAtLocalRun ?? false;
   // 問題修正2026-08: 端の縦線の上端は帯のCH固定ではなく、その端の区間の実際の天井y
-  // （ceilYOf。天井断面線と同じ基準）まで描く。
+  // （ceilYOf。天井断面線と同じ基準）まで描く。WP-2: ceilingProfile有りの面ではceilAbsAtXが
+  // 補間値を返す（未指定・範囲外はceilYOf(segs[0]/segs[last])のまま＝現行同値）。
   if (hasWallAtLocal0 || edgeAtLocal0) {
-    prims.push({ type: 'line', x1: 0,   y1: ceilYOf(segs[0]), x2: 0,   y2: floorYAtStart, weight: silhouetteWeight });
+    prims.push({ type: 'line', x1: 0,   y1: -ceilAbsAtX(0, ceilAbsOf(segs[0])), x2: 0,   y2: floorYAtStart, weight: silhouetteWeight });
   }
   if (hasWallAtLocalRun || edgeAtLocalRun) {
-    prims.push({ type: 'line', x1: run, y1: ceilYOf(segs[segs.length - 1]), x2: run, y2: floorYAtEnd, weight: silhouetteWeight });
+    prims.push({ type: 'line', x1: run, y1: -ceilAbsAtX(run, ceilAbsOf(segs[segs.length - 1])), x2: run, y2: floorYAtEnd, weight: silhouetteWeight });
   }
 
   // 新仕様「袖壁・腰壁の面分割」: 袖壁で分割された端（hasWallAtLocal0/Run=falseで縦線を描かない
@@ -581,14 +643,17 @@ export function buildFaceFigure(face, ctx) {
   // 問題修正2026-08(QA F2): topHeightMm省略（腰壁指定なし=天井まで）の高さは帯CH固定ではなく、
   // その端の区間の実際の天井（端の縦線と同じ基準）まで——固定のままだと端の区間の天井が高い
   // とき袖壁の頭と天井線の間に隙間が開く。
+  // WP-2: topHeightMm省略（腰壁指定なし=天井まで）の高さもceilAbsAtX経由——ceilingProfile
+  // 未指定・範囲外はceilAbsOf(segs[0]/segs[last])のまま（現行同値）。topHeightMm自体（腰壁の
+  // 明示指定高さ）はceilingProfileに関わらず不変。
   if (face.partitionCutAtLocal0) {
     const { thicknessMm, topHeightMm } = face.partitionCutAtLocal0;
-    const h = topHeightMm ?? ceilAbsOf(segs[0]);
+    const h = topHeightMm ?? ceilAbsAtX(0, ceilAbsOf(segs[0]));
     prims.push({ type: 'rect', x: 0, y: -h, w: thicknessMm, h, weight: cutWeight });
   }
   if (face.partitionCutAtLocalRun) {
     const { thicknessMm, topHeightMm } = face.partitionCutAtLocalRun;
-    const h = topHeightMm ?? ceilAbsOf(segs[segs.length - 1]);
+    const h = topHeightMm ?? ceilAbsAtX(run, ceilAbsOf(segs[segs.length - 1]));
     prims.push({ type: 'rect', x: run - thicknessMm, y: -h, w: thicknessMm, h, weight: cutWeight });
   }
 
@@ -645,7 +710,10 @@ export function buildFaceFigure(face, ctx) {
     // 問題修正2026-08その2: 開放先の天井(farCeilAbsMm)が近側の天井より低い場合、あき＝壁面の
     // 抜けとして見えるのは開放先の天井まで（その上は境界の下がり壁の見えがかり）のため、
     // far天井へもクランプする（床側の「近側床までにクランプ」と対の規約）。
-    const spanCeilAbs = nearCeilAbsAt((s.loX + s.hiX) / 2);
+    // WP-2: アキ上端（近側天井）もceilAbsAtX経由——ceilingProfile未指定・範囲外は
+    // nearCeilAbsAtの値のまま（現行同値）。
+    const spanMidX = (s.loX + s.hiX) / 2;
+    const spanCeilAbs = ceilAbsAtX(spanMidX, nearCeilAbsAt(spanMidX));
     const farCeilAbs = s.farCeilAbsMm ?? spanCeilAbs; // 未指定（単体テスト等）は近側と同じ＝従来挙動
     const gapTop = Math.min(spanCeilAbs, farCeilAbs);
     const gapH = gapTop - Math.max(farDelta, nearDelta);
@@ -776,7 +844,9 @@ export function buildFaceFigure(face, ctx) {
   // 区間の水平線は従来どおり開口で途切れさせ、段差の縦線も同じx位置のまま床側のy2点をhだけ
   // 上へ平行移動する——開口がその段差位置をまたいでいれば同様に途切れさせる）。
   const baseboardH = parseBaseboardHeightMm(room.finish?.baseboardHeight);
-  if (baseboardH != null && baseboardH < CH) {
+  // WP-2: ctx.skipBaseboard（既定false）指定時は巾木ブロック自体を実行しない（階段帯等、
+  // 巾木表現が不要な帯からの呼び出し用）。
+  if (!skipBaseboard && baseboardH != null && baseboardH < CH) {
     // 新仕様「開放スパン」: open区間は壁が無い＝巾木も存在しないため、開口と同じ「途切れさせる
     // 区間」として扱う（既存floorGapsへ足すだけ）。
     const floorGaps = [
@@ -831,7 +901,8 @@ export function buildFaceFigure(face, ctx) {
     materialMap?.get(info.wallMaterial)?.name ? `壁：${formatMaterialLabel(materialMap.get(info.wallMaterial).name)}` : null,
     materialMap?.get(info.wallFinish)?.name ? formatMaterialLabel(materialMap.get(info.wallFinish).name) : null,
   ].filter(Boolean);
-  if (wallLabelLines.length > 0) {
+  // WP-2: ctx.skipWallLabel（既定false）指定時は壁2段書きブロック自体を実行しない。
+  if (!skipWallLabel && wallLabelLines.length > 0) {
     const labelWidthPx = Math.max(...wallLabelLines.map(estimateWallLabelWidthPx));
     const labelWidthMm = scale ? labelWidthPx / scale : 0;
     if (boundary.hi - boundary.lo >= labelWidthMm * 2) {
@@ -897,10 +968,13 @@ export function buildFaceFigure(face, ctx) {
   // QA H1: 実際に描いた別エリア天井の破線（beyondCeilings）の最大も含める——bc破線が
   // 最上位の水平線になる面で、一点鎖線が線より下で止まらないようにする（描かなかったbcまで
   // 含めると余白が過剰になるため、pushループで控えた実描画の最大値=maxDrawnBcCeilAbsを使う）。
+  // WP-2: ceilingProfile自体の最大天井高さも候補に含める（未指定時は-Infinityのため無効=現行同値）。
+  const ceilProfileMaxAbs = Array.isArray(ceilingProfile) && ceilingProfile.length > 0
+    ? Math.max(...ceilingProfile.map(p => p[1])) : -Infinity;
   appendAnnotationRows(prims, face, graph, {
     boundary, floorSegments: segs, gridCLs, dimRow1Y, dimRow2Y, gridCircleRowY, faceLabelRowY,
     detailWeight, faceLabelAvoidThresholdModelMm,
-    CH: Math.max(CH, ...segs.map(ceilAbsOf), maxDrawnBcCeilAbs),
+    CH: Math.max(CH, ...segs.map(ceilAbsOf), maxDrawnBcCeilAbs, ceilProfileMaxAbs),
   });
 
   return prims;

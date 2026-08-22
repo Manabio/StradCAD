@@ -32,7 +32,18 @@ import { translatePrimitive, collectGridCLs, appendRoomNameFrame } from './eleva
  * @param {{project?:object, materialMap?:Map, gridCLs?:object[], gapModelMm?:number,
  *   faceLabelAvoidThresholdModelMm?:number, openingTagRowModelMm?:number,
  *   dimRowGapModelMm?:number, gridRowGapModelMm?:number, wallLessEndExtendModelMm?:number,
- *   scale?:number}} [ctx]
+ *   scale?:number, faceOverride?:(face:object, i:number,
+ *     defaults:{floorSegments:object[]|undefined, beyondCeilings:object[]|undefined, CH:number})
+ *     => object|null}} [ctx]
+ *   WP-1: ctx.faceOverride（未指定時は現行と完全同一）は面ごとにfloorSegments/beyondCeilings
+ *   を計算した直後・hasLeftChDimの継ぎ目判定より前に呼ばれる（階段帯の勾配天井等、後続WP用の
+ *   フック）。返り値（null/undefinedなら無効）はbuildFaceFigureへ渡すfaceCtxへ浅くマージする
+ *   ——floorSegments/beyondCeilings自体を差し替えられる他、任意の追加フィールド（ceilingProfile
+ *   等）もfaceCtxへそのまま乗る。継ぎ目判定（hasLeftChDim）・左CH寸法（i===0のfloorSegments[0]
+ *   参照）もoverride後のfloorSegmentsを見る。i===0の返り値が`chDimSplitAbsYs:number[]`
+ *   （分割する絶対高さの配列。床基準・正=床上）を持てば、帯先頭面の左CH寸法を
+ *   [床,...chDimSplitAbsYs,天井]の隣接ペアごとに複数本へ分割する（ユーザー明示指示。階段帯の
+ *   2FL分割で使用）。未指定時（既定）は現行どおり1本のまま。
  * @returns {{primitives:object[], faceRuns:Array<{face:object, xCursor:number}>,
  *   chDimX:number|null, prevBoundaryHi:number|null, CH:number, chInfo:object}}
  *   faceRunsは常に収集する（buildStairBandの上階クリップ処理が使う。buildRoomBand側は未使用）。
@@ -75,10 +86,18 @@ export function layoutBandFaces(room, graph, faces, ctx = {}) {
     // 床線を段差付きにする（elevationFloorProfile.js。未該当なら常にフラット1区間を返す）。
     // 新仕様: 段差見付け面（kind==='step'）自体は段差そのものを表す専用描画分岐を持つため
     // floorSegmentsは渡さない（buildFaceFigure側がフラット1区間フォールバックする）。
-    const floorSegments = face.kind === 'step' ? undefined : wallAdjacentFloorSegments(face, room, graph);
+    const rawFloorSegments = face.kind === 'step' ? undefined : wallAdjacentFloorSegments(face, room, graph);
     // 問題修正2026-08その3改: 「壁の向こう側にある部分指定関係の部屋の天井」の破線描画用
     // （far側プローブ。familyCeilingSegments）。
-    const beyondCeilings = face.kind === 'step' ? undefined : familyCeilingSegments(face, room, graph);
+    const rawBeyondCeilings = face.kind === 'step' ? undefined : familyCeilingSegments(face, room, graph);
+    // WP-1: ctx.faceOverride（後続WPの階段勾配天井フック）は floorSegments/beyondCeilings を
+    // 計算した直後・hasLeftChDimの継ぎ目判定より前に適用する——順序を誤ると継ぎ目判定・faceCtx
+    // どちらかがoverride前のfloorSegmentsを見てしまい、面ごとCH寸法の継ぎ目判定が狂う。
+    const faceOverride = ctx.faceOverride?.(
+      face, i, { floorSegments: rawFloorSegments, beyondCeilings: rawBeyondCeilings, CH },
+    ) ?? null;
+    const floorSegments  = faceOverride?.floorSegments  ?? rawFloorSegments;
+    const beyondCeilings = faceOverride?.beyondCeilings ?? rawBeyondCeilings;
 
     // 問題修正2026-08その4改: 直前の面の右端と、この面の左端で床・天井の起点が変われば、
     // この面の左側にCH寸法を描く（下のhasLeftChDimブロック）。
@@ -108,10 +127,13 @@ export function layoutBandFaces(room, graph, faces, ctx = {}) {
     // （新仕様。elevationFaceList.js）。
     const prevFace = neighborWallFace(faces, i, -1);
     const nextFace = neighborWallFace(faces, i, 1);
+    // WP-1: faceOverrideの返り値をfaceCtxへ浅くマージする——floorSegments/beyondCeilings自体
+    // （既にfloorSegments/beyondCeilings変数へ反映済みのため実質同じ値を上書くだけ）に加え、
+    // 任意の追加フィールド（後続WPのceilingProfile等）もそのままbuildFaceFigureへ渡る。
     const faceCtx = {
       graph, project, room, ceilingHeight: CH, materialMap, gridCLs, faceLabelAvoidThresholdModelMm,
       prevFace, nextFace, openingTagRowModelMm, dimRowGapModelMm, gridRowGapModelMm, floorSegments,
-      beyondCeilings, wallLessEndExtendModelMm, scale,
+      beyondCeilings, wallLessEndExtendModelMm, scale, ...(faceOverride ?? {}),
     };
     for (const p of buildFaceFigure(face, faceCtx)) primitives.push(translatePrimitive(p, xCursor, 0));
     if (i === 0) {
@@ -125,10 +147,27 @@ export function layoutBandFaces(room, graph, faces, ctx = {}) {
       const leftCeilAbs = leftSeg?.chMm != null ? leftDelta + leftSeg.chMm : CH;
       const isBandOwn = leftDelta === 0 && leftCeilAbs === CH;
       const leftFloorY = leftDelta ? -leftDelta : 0;
-      primitives.push({
-        type: 'dim', dir: 'v', at: chDimX, from: -leftCeilAbs, to: leftFloorY, foot: 0, dot: true,
-        label: isBandOwn ? chInfo.raw : Math.round(leftCeilAbs - leftDelta),
-      });
+      // ユーザー明示指示（階段帯・2FLで寸法線を分ける）: faceOverrideがchDimSplitAbsYs
+      // （分割する絶対高さの配列。床基準・正=床上。例: 階段帯seq1のfloorHeight=2FL）を返せば、
+      // [床, ...分割点, 天井]の隣接ペアごとに複数本のdimへ分割する。未指定時は現行の1本のまま
+      // （既存挙動完全不変。この節はfaceOverride側が明示的に配列を返した場合にのみ発動する）。
+      const splitAbsYs = faceOverride?.chDimSplitAbsYs;
+      if (Array.isArray(splitAbsYs) && splitAbsYs.length > 0) {
+        const marks = [leftDelta, ...splitAbsYs, leftCeilAbs].sort((a, b) => a - b);
+        for (let k = 0; k + 1 < marks.length; k++) {
+          const lo = marks[k], hi = marks[k + 1];
+          if (hi - lo <= 0) continue; // 分割点が床・天井と同値等、退化した区間は描かない
+          primitives.push({
+            type: 'dim', dir: 'v', at: chDimX, from: -hi, to: lo ? -lo : 0, foot: 0, dot: true,
+            label: Math.round(hi - lo),
+          });
+        }
+      } else {
+        primitives.push({
+          type: 'dim', dir: 'v', at: chDimX, from: -leftCeilAbs, to: leftFloorY, foot: 0, dot: true,
+          label: isBandOwn ? chInfo.raw : Math.round(leftCeilAbs - leftDelta),
+        });
+      }
     } else if (hasLeftChDim) {
       // 問題修正2026-08その4改（ユーザー明示指示）: 床の起点高さが直前の面から変わった面の
       // 左側にCH寸法（この面の左端区間の実際の床〜天井・値=実効CH）。様式は先頭面の左CH寸法・
@@ -169,19 +208,27 @@ export function layoutBandFaces(room, graph, faces, ctx = {}) {
  * （leftAnchorX=天井高寸法線の外側、rightAnchorX=一番右の壁中心線の外側。それぞれ
  * triOffsetMmぶん）に置く（項目9）。leftAnchorXは帯の水平初期位置の既定値としても返す
  * （band.leftAnchorX。項目10: 全帯を左三角の位置で揃える。ElevationModeState.faceOffsetFor参照）。
+ *
+ * WP-0: opts.heightUnits（既定1。整数）は「この帯が標準帯高さの何層分か」を表す（吹抜け帯・
+ * 階段帯の2層帯用）。unitHeightMm=bounds.height/heightUnitsは「1層あたりの高さ」——
+ * chooseElevationScaleが縮尺の予算基準にこちらを使うことで、2層帯が全体の縮尺を半減させない
+ * （1層帯はheightUnits=1のためunitHeightMm===bounds.heightで従来と同値）。heightMm/topMarginMm/
+ * boundsの既存の意味・値はheightUnits指定の有無に関わらず一切変えない。
  * @param {import('@core').Room} room
  * @param {object} graph
  * @param {object[]} primitives - layoutBandFaces等が積んだプリミティブ（この関数がpushで追記する）
  * @param {{faceCount:number, chDimX:number|null, prevBoundaryHi:number|null,
- *   triOffsetMm?:number, nameGapModelMm?:number}} [opts]
+ *   triOffsetMm?:number, nameGapModelMm?:number, heightUnits?:number}} [opts]
  * @returns {{roomId:string, roomName:string, primitives:object[], bounds:object,
  *   heightMm:number, widthMm:number, faceCount:number, leftAnchorX:number|null,
- *   topMarginMm:number}} heightMm/topMarginMmはどちらもbounds.heightそのものではない
+ *   topMarginMm:number, heightUnits:number, unitHeightMm:number}}
+ *   heightMm/topMarginMmはどちらもbounds.heightそのものではない
  *   （QA A2。elevationLayout.jsのlayoutBandsが読む積み上げ専用の値。詳細は下記コメント参照）。
  */
 export function finalizeBand(room, graph, primitives, opts = {}) {
   const { faceCount = 0, chDimX, prevBoundaryHi, nameGapModelMm } = opts;
   const triOffsetMm = opts.triOffsetMm ?? DEFAULT_TRIANGLE_OFFSET_MM;
+  const heightUnits = opts.heightUnits ?? 1;
 
   const leftAnchorX  = chDimX != null ? chDimX - triOffsetMm : null;
   const rightAnchorX = prevBoundaryHi != null ? prevBoundaryHi + triOffsetMm : null;
@@ -224,6 +271,7 @@ export function finalizeBand(room, graph, primitives, opts = {}) {
     roomId: room.id, roomName: room.name, primitives: shifted, bounds,
     heightMm: bounds.height + downwardSlackMm, widthMm: bounds.width, faceCount,
     leftAnchorX, topMarginMm: upwardSlackMm,
+    heightUnits, unitHeightMm: bounds.height / heightUnits,
   };
 }
 

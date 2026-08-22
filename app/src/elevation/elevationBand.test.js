@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Plane, PlanGraph, CenterLineType, Discipline, OpeningCategory } from '@core';
 import { generateRoomWallsFromOutline } from '../finish/wallGeneration.js';
-import { buildRoomBand } from './elevationBand.js';
+import { buildRoomBand, layoutBandFaces, finalizeBand } from './elevationBand.js';
 import { buildRoomFaces, faceBoundaryLocalX } from './elevationFaces.js';
 import { layoutBands, bandContentOriginMm } from './elevationLayout.js';
 import { figureBounds } from '../structural/sectionFigure/sectionGeometry.js';
@@ -620,4 +620,153 @@ test('【問題修正2026-08その4改・その6】buildRoomBand: 壁面同士�
   const stepLeft = leftDims.find(d => d.from === -2300 && d.to === 100);
   assert.ok(stepLeft, '見付け面の左CH寸法(from=-2300,to=100)が見つかるはず');
   assert.equal(stepLeft.label, 2400, '値は低い側エリアの実効CH(2400)のはず');
+});
+
+// ==== WP-1: layoutBandFaces の ctx.faceOverride フック ====
+
+// ---- faceOverride未指定はprimitivesが従来と完全一致する ----
+test('【WP-1】buildRoomBand: ctx.faceOverride未指定と、常にnullを返すfaceOverride指定は完全に同じprimitivesになる', () => {
+  const graph = makeGraph();
+  const room = makeRectRoom(graph, 0, 0, 4000, 3000);
+
+  const withoutOverride = buildRoomBand(room, graph);
+  const withNoopOverride = buildRoomBand(room, graph, { faceOverride: () => null });
+  assert.deepEqual(withNoopOverride.primitives, withoutOverride.primitives,
+    'faceOverrideがnullを返す場合は現行と完全同一のprimitivesになるはず（未指定時に現行出力と完全一致する要件）');
+});
+
+// ---- faceOverrideでfloorSegmentsを差し替えると床線が変わる ----
+test('【WP-1】buildRoomBand: ctx.faceOverrideでfloorSegmentsを差し替えると、その面の床線が段差付きになる', () => {
+  const graph = makeGraph();
+  const room = makeRectRoom(graph, 0, 0, 4000, 3000);
+
+  const withoutOverride = buildRoomBand(room, graph);
+  const withOverride = buildRoomBand(room, graph, {
+    faceOverride: (face, i, defaults) => {
+      if (face.label !== 'A') return null; // 面Aだけ差し替える
+      const run = defaults.floorSegments[0].hiX; // defaults＝override前のwallAdjacentFloorSegments結果
+      return {
+        floorSegments: [
+          { loX: 0, hiX: run / 2, floorDeltaMm: 0 },
+          { loX: run / 2, hiX: run, floorDeltaMm: 300 },
+        ],
+      };
+    },
+  });
+
+  const floorLineYs = (band) => band.primitives
+    .filter(p => p.type === 'line' && p.weight === 'thick' && p.y1 === p.y2 && p.y1 !== -2400)
+    .map(p => p.y1);
+  assert.deepEqual(floorLineYs(withoutOverride), [0, 0, 0, 0], '未指定時は4面とも床y=0のフラット床線のはず');
+  assert.ok(floorLineYs(withOverride).includes(-300),
+    'faceOverrideで差し替えた区間の床線y=-300が現れるはず（現行と異なる出力になる）');
+});
+
+// ---- 失敗系: faceOverrideが例外相当（undefined）を返しても現行のまま ----
+test('【失敗系・WP-1】buildRoomBand: faceOverrideがundefinedを返す面は現行どおりに描画される', () => {
+  const graph = makeGraph();
+  const room = makeRectRoom(graph, 0, 0, 4000, 3000);
+
+  const withoutOverride = buildRoomBand(room, graph);
+  const withUndefinedOverride = buildRoomBand(room, graph, { faceOverride: () => undefined });
+  assert.deepEqual(withUndefinedOverride.primitives, withoutOverride.primitives);
+});
+
+// ---- QA修正3: faceOverrideはhasLeftChDim判定（継ぎ目の左CH寸法）より前に適用される不変条件
+// （layoutBandFacesのJSDoc「floorSegments/beyondCeilingsを計算した直後・hasLeftChDimの継ぎ目判定
+// より前に呼ばれる」）。適用位置を後ろへずらすと、override面の左に継ぎ目CH寸法が出なくなり
+// このテストが赤くなる ----
+test('【QA修正3】layoutBandFaces: faceOverrideはhasLeftChDim判定より前に適用され、override面の左にCH寸法（to=override後の床高さ）が現れる', () => {
+  const graph = makeGraph();
+  const room = makeRectRoom(graph, 0, 0, 4000, 3000);
+
+  const withoutOverride = buildRoomBand(room, graph);
+  const overrideFloorDeltaMm = 250;
+  const withOverride = buildRoomBand(room, graph, {
+    faceOverride: (face, i) => {
+      if (i !== 1) return null; // 2枚目の面(index=1)だけ床の起点高さを変える
+      return { floorSegments: [{ loX: 0, hiX: face.run, floorDeltaMm: overrideFloorDeltaMm }] };
+    },
+  });
+
+  const leftChDims = band => band.primitives.filter(p => p.type === 'dim' && p.dir === 'v' && p.at < p.foot);
+  assert.equal(leftChDims(withoutOverride).length, 1, 'override無しは帯先頭面の左CH寸法1本だけのはず');
+  assert.ok(leftChDims(withoutOverride).every(d => Math.abs(d.to - (-overrideFloorDeltaMm)) > 1e-9),
+    'override無しにはoverride後の床高さに一致する寸法は無いはず');
+
+  // override面(i=1)の床が変わることで、直前面(i=0)との継ぎ目・直後面(i=2)との継ぎ目の
+  // 両方が不一致になる——帯先頭(常時1本)＋override面自身の左(i=1)＋その次の面の左(i=2)＝3本。
+  const overriddenLeftDims = leftChDims(withOverride);
+  assert.equal(overriddenLeftDims.length, 3,
+    'override有りは帯先頭＋override面(i=1)の左＋次の面(i=2)の左＝計3本の左CH寸法になるはず（faceOverrideがhasLeftChDim判定より前に効いている証拠）');
+  const stepDim = overriddenLeftDims.find(d => Math.abs(d.to - (-overrideFloorDeltaMm)) < 1e-9);
+  assert.ok(stepDim, `override面(i=1)の左CH寸法のtoはoverride後の床高さ(${-overrideFloorDeltaMm})と一致するはず`);
+});
+
+// ---- ユーザー明示指示（階段帯「2FL 寸法線はここで分ける」）: faceOverrideがchDimSplitAbsYs
+// （分割する絶対高さの配列。床基準・正=床上）を返すと、帯先頭面(i===0)の左CH寸法が
+// [床,...chDimSplitAbsYs,天井]の隣接ペアごとに複数本へ分割される ----
+test('【階段帯・2FL分割】layoutBandFaces: faceOverrideがchDimSplitAbsYsを返すと、帯先頭面の左CH寸法が指定高さで複数本に分割される', () => {
+  const graph = makeGraph();
+  const room = makeRectRoom(graph, 0, 0, 4000, 3000);
+  const CH = 2400; // DEFAULT_ROOM_CEILING_HEIGHT（明示指定なしの既定値）
+  const splitAbsY = 1500; // 床(0)〜天井(CH)の間の分割点
+
+  const band = buildRoomBand(room, graph, {
+    faceOverride: (face, i) => (i === 0 ? { chDimSplitAbsYs: [splitAbsY] } : null),
+  });
+
+  const leftChDims = band.primitives.filter(p => p.type === 'dim' && p.dir === 'v' && p.at < p.foot);
+  assert.equal(leftChDims.length, 2, 'chDimSplitAbsYs指定時は左CH寸法が[床→分割点][分割点→天井]の2本になるはず');
+
+  const lower = leftChDims.find(d => d.to === 0);
+  assert.ok(lower, '下側の寸法(床→分割点。to=0)が見つからない');
+  assert.equal(lower.from, -splitAbsY, '下側の寸法のfromは-分割点のはず');
+  assert.equal(lower.label, splitAbsY, '下側の寸法のlabelは実距離(splitAbsY-0)のはず');
+
+  const upper = leftChDims.find(d => d.from === -CH);
+  assert.ok(upper, '上側の寸法(分割点→天井。from=-CH)が見つからない');
+  assert.equal(upper.to, -splitAbsY, '上側の寸法のtoは-分割点のはず');
+  assert.equal(upper.label, CH - splitAbsY, '上側の寸法のlabelは実距離(CH-splitAbsY)のはず');
+});
+
+// ---- 失敗系: chDimSplitAbsYs未指定（既定）は現行どおり1本のまま（既存挙動完全不変） ----
+test('【失敗系・階段帯2FL分割】layoutBandFaces: chDimSplitAbsYs未指定はfaceOverride指定なしと完全に同じprimitivesになる', () => {
+  const graph = makeGraph();
+  const room = makeRectRoom(graph, 0, 0, 4000, 3000);
+
+  const withoutOverride = buildRoomBand(room, graph);
+  const withNoopChDimSplit = buildRoomBand(room, graph, {
+    faceOverride: (face, i) => (i === 0 ? { chDimSplitAbsYs: undefined } : null),
+  });
+  assert.deepEqual(withNoopChDimSplit.primitives, withoutOverride.primitives,
+    'chDimSplitAbsYs未指定はfaceOverride省略時と完全同一のprimitivesになるはず（既存挙動不変の要件）');
+});
+
+// ==== WP-0: finalizeBand の heightUnits/unitHeightMm ====
+
+test('【WP-0】buildRoomBand: heightUnits省略時（既定1）はunitHeightMm===bounds.height', () => {
+  const graph = makeGraph();
+  const room = makeRectRoom(graph, 0, 0, 4000, 3000);
+  const band = buildRoomBand(room, graph);
+  assert.equal(band.heightUnits, 1);
+  assert.equal(band.unitHeightMm, band.bounds.height);
+});
+
+test('【WP-0】finalizeBand: heightUnits指定時はunitHeightMm=bounds.height/heightUnitsで、bounds/heightMmは変わらない', () => {
+  const graph = makeGraph();
+  const room = makeRectRoom(graph, 0, 0, 4000, 3000);
+  const faces = buildRoomFaces(room, graph);
+  const { primitives, chDimX, prevBoundaryHi } = layoutBandFaces(room, graph, faces);
+
+  const band1 = finalizeBand(room, graph, [...primitives], { faceCount: faces.length, chDimX, prevBoundaryHi });
+  const band2 = finalizeBand(room, graph, [...primitives], {
+    faceCount: faces.length, chDimX, prevBoundaryHi, heightUnits: 2,
+  });
+
+  assert.equal(band2.heightUnits, 2);
+  assert.ok(Math.abs(band2.unitHeightMm - band1.bounds.height / 2) < 1e-9,
+    'unitHeightMmはbounds.height/heightUnitsのはず');
+  assert.deepEqual(band2.bounds, band1.bounds, 'boundsはheightUnits指定に関わらず不変のはず');
+  assert.equal(band2.heightMm, band1.heightMm, 'heightMmもheightUnits指定に関わらず不変のはず（WP-0は既存の意味を変えない）');
 });

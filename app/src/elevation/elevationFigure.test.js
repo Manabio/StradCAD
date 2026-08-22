@@ -152,6 +152,32 @@ test('【項目1】buildFaceFigure: 両端とも壁が無い面は縦線が0本�
   assert.equal(floorLine.x2, face.run + 200);
 });
 
+// ---- WP-E7 defer D2: ctx.floorSpanXで床線・天井線の描画範囲をクランプする ----
+test('【WP-E7・D2】buildFaceFigure: floorSpanX指定時は床線・天井線・端点のceilAbsAtXクランプがMath.max/minで打ち切られる', () => {
+  const face = makeFace({ hasWallAtLocal0: false, hasWallAtLocalRun: false });
+  const ctx = baseCtx({ wallLessEndExtendModelMm: 200, floorSpanX: { lo: -50, hi: 3900 } });
+  const prims = buildFaceFigure(face, ctx);
+  const cutLines = prims.filter(p => p.type === 'line' && p.weight === 'thick');
+  const floorLine = cutLines.find(l => l.y1 === l.y2 && l.y1 === 0);
+  const ceilLine  = cutLines.find(l => l.y1 === l.y2 && l.y1 === -2400);
+  // 壁のない端部延長は-200/+200(face.run+200=4200)まで届くはずだが、floorSpanXの
+  // [-50,3900]でMath.max/minクランプされ、それより内側で打ち切られる。
+  assert.equal(floorLine.x1, -50, '床線の左端はfloorSpanX.loで打ち切られるはず（延長分の-200より内側）');
+  assert.equal(floorLine.x2, 3900, '床線の右端はfloorSpanX.hiで打ち切られるはず（延長分の4200より内側）');
+  assert.equal(ceilLine.x1, -50);
+  assert.equal(ceilLine.x2, 3900);
+});
+
+test('【失敗系・WP-E7・D2】buildFaceFigure: floorSpanX省略時は現行のdrawnX0/drawnXRun（壁のない端部延長込み）と完全一致する', () => {
+  const face = makeFace({ hasWallAtLocal0: false, hasWallAtLocalRun: false });
+  const ctxBase = baseCtx({ wallLessEndExtendModelMm: 200 });
+  const baseline = buildFaceFigure(face, ctxBase);
+  // floorSpanXが自然範囲(-200..face.run+200)を覆っていれば、指定してもMath.max/minが素通りし
+  // 省略時と完全一致するはず（WP-G0ゲート＝通常部屋帯・吹抜け帯は無指定なので出力不変の担保）。
+  const withWideSpan = buildFaceFigure(face, { ...ctxBase, floorSpanX: { lo: -200, hi: face.run + 200 } });
+  assert.deepEqual(withWideSpan, baseline);
+});
+
 // ---- 失敗系: wallLessEndExtendModelMm省略時はDEFAULT_WALL_LESS_END_EXTEND_MMへフォールバックする ----
 test('【失敗系・項目1】buildFaceFigure: wallLessEndExtendModelMm省略時はDEFAULT_WALL_LESS_END_EXTEND_MMを使う', () => {
   const face = makeFace({ hasWallAtLocal0: false });
@@ -1730,4 +1756,118 @@ test('【失敗系】buildFaceFigure: partitionCutAtLocalRunのtopHeightMmがnul
   assert.ok(rect, 'partitionCutAtLocalRunのCUT枠rectが見つかるはず');
   assert.equal(rect.y, -CH, 'topHeightMm省略時は天井高(-CH)まで届くはず');
   assert.equal(rect.h, CH);
+});
+
+// ==== WP-2: ctx.ceilingProfile（区分線形の天井） ====
+
+test('【WP-2】buildFaceFigure: ceilingProfileが面の範囲を覆っていれば天井は1本のpolylineになり、端縦線の上端も補間値に追従する', () => {
+  const face = makeFace(); // run=4000
+  const ceilingProfile = [[0, 2200], [4000, 3000]]; // 左端2200→右端3000の勾配天井
+  const prims = buildFaceFigure(face, baseCtx({ ceilingProfile }));
+
+  const polylines = prims.filter(p => p.type === 'polyline');
+  assert.equal(polylines.length, 1, '天井は1本のpolylineになるはず');
+  assert.equal(polylines[0].weight, 'thick', 'CUT(太)で描かれるはず');
+  assert.deepEqual(polylines[0].points[0], [0, -2200], '左端は左端の天井高(-2200)のはず');
+  assert.deepEqual(polylines[0].points[polylines[0].points.length - 1], [4000, -3000], '右端は右端の天井高(-3000)のはず');
+
+  // 従来の水平天井CUT線は出ない（polylineに一本化される）——床線(y=0)だけがCUT水平線として残る。
+  const flatHorizontalCutLines = prims.filter(p => p.type === 'line' && p.weight === 'thick' && p.y1 === p.y2);
+  assert.equal(flatHorizontalCutLines.length, 1, '水平のCUT線は床線1本だけのはず（天井はpolylineに置き換わる）');
+  assert.equal(flatHorizontalCutLines[0].y1, 0);
+
+  // 端の縦線（出隅=SILHOUETTE）の上端もceilAbsAtX経由で補間値に追従する。
+  const endVerticals = prims.filter(p => p.type === 'line' && p.weight === 'medium' && p.x1 === p.x2);
+  const leftEdge = endVerticals.find(p => p.x1 === 0);
+  const rightEdge = endVerticals.find(p => p.x1 === face.run);
+  assert.ok(leftEdge && rightEdge, '両端の縦線(SILHOUETTE)が見つかるはず');
+  assert.equal(leftEdge.y1, -2200, '左端縦線の上端は補間天井高(-2200)のはず');
+  assert.equal(rightEdge.y1, -3000, '右端縦線の上端は補間天井高(-3000)のはず');
+});
+
+// ---- 失敗系: ceilingProfileが空配列なら現行の水平天井へフォールバックする ----
+test('【失敗系・WP-2】buildFaceFigure: ceilingProfileが空配列なら従来の水平天井(CUT)へフォールバックする', () => {
+  const CH = 2400;
+  const face = makeFace();
+  const prims = buildFaceFigure(face, baseCtx({ ceilingHeight: CH, ceilingProfile: [] }));
+  const flatCeilLines = prims.filter(p =>
+    p.type === 'line' && p.weight === 'thick' && p.y1 === p.y2 && p.y1 === -CH);
+  assert.equal(flatCeilLines.length, 1, '空配列は現行の水平天井（CH）へフォールバックするはず');
+  assert.equal(prims.filter(p => p.type === 'polyline').length, 0, 'polylineは描かれないはず');
+});
+
+// ---- QA修正: ceilingProfileが面の描画範囲(drawnX0..drawnXRun)を覆っていなくても、フォールバック
+// せずprofileの端点値へクランプして常にpolylineで描く（旧実装は「範囲を覆っていること」も条件に
+// していたため、壁のない端部延長で描画範囲がprofile範囲よりわずかに広がる本番設定
+// （wallLessEndExtendModelMm≈150が常に渡る）では常にこの条件が偽になり、勾配天井が
+// 一度も描かれない不具合があった。書き換え理由: この不具合を修正したための仕様変更） ----
+test('【QA修正・WP-2】buildFaceFigure: ceilingProfileが面の描画範囲を覆っていなくても、フォールバックせず端点値へクランプしてpolylineで描く', () => {
+  const CH = 2400;
+  const face = makeFace(); // run=4000（壁ありのため延長なし=drawnX0..drawnXRun=0..4000）
+  const ceilingProfile = [[500, 2200], [3500, 3000]]; // 面の範囲[0,4000]を覆っていない
+  const prims = buildFaceFigure(face, baseCtx({ ceilingHeight: CH, ceilingProfile }));
+
+  const polylines = prims.filter(p => p.type === 'polyline');
+  assert.equal(polylines.length, 1, 'profile未満の範囲でもpolylineで描かれるはず（フォールバックしない）');
+  assert.equal(polylines[0].weight, 'thick', 'CUT(太)で描かれるはず');
+  assert.deepEqual(polylines[0].points[0], [0, -2200], '左端(x=0)はprofile左端点値(-2200)へクランプされるはず');
+  assert.deepEqual(polylines[0].points[polylines[0].points.length - 1], [4000, -3000],
+    '右端(x=4000)はprofile右端点値(-3000)へクランプされるはず');
+
+  const flatCeilLines = prims.filter(p =>
+    p.type === 'line' && p.weight === 'thick' && p.y1 === p.y2 && p.y1 === -CH);
+  assert.equal(flatCeilLines.length, 0, '水平天井(CH)へのフォールバックは起きないはず');
+});
+
+// ---- 未指定時（ctx.ceilingProfile省略）は現行出力と完全一致する ----
+test('【失敗系・WP-2】buildFaceFigure: ctx.ceilingProfile省略時は指定なしの既存呼び出しと完全に同じprimitivesになる', () => {
+  const face = makeFace();
+  const withoutProfile = buildFaceFigure(face, baseCtx());
+  const withUndefinedProfile = buildFaceFigure(face, baseCtx({ ceilingProfile: undefined }));
+  assert.deepEqual(withUndefinedProfile, withoutProfile);
+});
+
+// ==== WP-2: ctx.skipBaseboard / ctx.skipWallLabel ====
+
+test('【WP-2】buildFaceFigure: ctx.skipBaseboard指定時は巾木線が描かれない', () => {
+  const face = makeFace();
+  const room = makeRoom({}, { baseboardHeight: 'h=60' });
+  const withoutSkip = buildFaceFigure(face, baseCtx({ room }));
+  const withSkip = buildFaceFigure(face, baseCtx({ room, skipBaseboard: true }));
+
+  const baseboardLines = (prims) => prims.filter(p =>
+    p.type === 'line' && p.weight === 'thin' && p.y1 === p.y2 && p.y1 === -60);
+  assert.equal(baseboardLines(withoutSkip).length, 1, '前提: skipBaseboard未指定なら巾木線が出る');
+  assert.equal(baseboardLines(withSkip).length, 0, 'skipBaseboard指定時は巾木線が描かれないはず');
+});
+
+test('【WP-2】buildFaceFigure: ctx.skipWallLabel指定時は壁2段書き（壁材・仕上げ材のテキスト）が描かれない', () => {
+  const face = makeFace();
+  const room = makeRoom({ wallMaterial: 'm1', wallFinish: 'm2' });
+  const materialMap = new Map([
+    ['m1', { name: 'せっこうボード t=12.5' }],
+    ['m2', { name: 'ビニルクロス' }],
+  ]);
+  const withoutSkip = buildFaceFigure(face, baseCtx({ room, materialMap }));
+  const withSkip = buildFaceFigure(face, baseCtx({ room, materialMap, skipWallLabel: true }));
+
+  const wallLabelTexts = (prims) => prims.filter(p =>
+    p.type === 'text' && (p.text === '壁：PB ア)12.5' || p.text === 'ビニルクロス'));
+  assert.equal(wallLabelTexts(withoutSkip).length, 2, '前提: skipWallLabel未指定なら壁2段書きが出る');
+  assert.equal(wallLabelTexts(withSkip).length, 0, 'skipWallLabel指定時は壁2段書きが描かれないはず');
+});
+
+// ---- 失敗系: skipBaseboard/skipWallLabel省略時（既定false）は現行出力と完全一致する ----
+test('【失敗系・WP-2】buildFaceFigure: skipBaseboard/skipWallLabel省略時は指定なしの既存呼び出しと完全に同じprimitivesになる', () => {
+  const room = makeRoom({ wallMaterial: 'm1', wallFinish: 'm2' }, { baseboardHeight: 'h=60' });
+  const materialMap = new Map([
+    ['m1', { name: 'せっこうボード t=12.5' }],
+    ['m2', { name: 'ビニルクロス' }],
+  ]);
+  const face = makeFace();
+  const withoutOpts = buildFaceFigure(face, baseCtx({ room, materialMap }));
+  const withFalseOpts = buildFaceFigure(face, baseCtx({
+    room, materialMap, skipBaseboard: false, skipWallLabel: false,
+  }));
+  assert.deepEqual(withFalseOpts, withoutOpts);
 });
