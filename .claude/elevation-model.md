@@ -180,9 +180,53 @@ defer: 天井高さが異なる内部境界（壁の無い部屋内部）の
 3. **第3層 階段幾何（`sectionStair.js`）**: 階段の3D的な寄与を、タイプ非依存の区分線形モデル
    （Flight[]＝直進区間・Landing[]＝踊り場。h(t)を関数で持たず区間ごとの直線で表す）で表す。第1層がどの区間を
    渡すかを決め、第2層は「切断線がレーンを縦断＝段鼻のジグザグ」「レーンを横切る＝正面視の梯子」「踊り場を縦断＝
-   床のCUT水平線」を切断線とFlight/Landingの幾何関係だけから導出する（タイプに一切依存しない）。鉄骨
-   （`structure===STEEL`）は各ジグザグから`STEEL_STRINGER_DEPTH_MM=200`（作図既定値。モデルに桁成フィールドなし）
-   下げたささらを追加する。
+   床のCUT水平線」を切断線とFlight/Landingの幾何関係だけから導出する（タイプに一切依存しない）。
+
+**鉄骨階段のささら（ささら桁。`structure===STEEL`限定）**: 出典
+[鉄骨階段のささら解説](http://kentiku-kouzou.jp/struc-sasara.html)。段板（踏み板）を両側から支える斜め梁で、
+一般的にプレート（最低12mm厚・せい250〜300mm程度）を使う。この記事のとおり寸法を展開図へ反映した:
+- **寸法**: 板厚`STEEL_STRINGER_THICKNESS_MM=12`mm・せい`STEEL_STRINGER_DEPTH_MM=300`mm（250〜300の上限を採用。
+  Stairモデルに桁成フィールドは無いため作図既定値。`elevationStairSection.js`）。
+
+**切断線の位置（ユーザー実機フィードバック2026-08-23で全面訂正）**: SWITCHBACKのseq2/2.5/4/4.5の
+切断線は「往復間のレーン境界（100mmあきの中）」ではなく**往路レーンの中央**（`acrossCoordAt(0.25)`）、
+seq5は**復路レーンの中央**（`acrossCoordAt(0.75)`）——実機で「往路と復路の間に壁が無ければ復路直進部の
+ささらが見える」ため、切断線はレーンの中を通り視線はもう一方のレーン側へ向く、という指摘に基づく
+（`switchbackCuts.js`の`outboundLaneLine`/`inboundLaneLine`・`towardS1`/`towardS0`）。seq2/2.5は
+視線が復路側（`towardS1`）、seq4/4.5は視線が往路の外側（`towardS0`）——4つとも同じ`outboundLaneLine`を
+共有し向きだけが逆になる。この結果、往復間の壁（実在すれば）は「切断線と同一直線上＝cutAlong」では
+なく通常の見えがかり壁（`wall`。距離のある側面。SILHOUETTE=中線）として検出されるようになった
+（旧仕様はcutAlongの3線輪郭＝CUT太線だった。腰壁のz範囲キャップ自体はcutAlong/wall共通のため維持）。
+
+- **側面視（切断面が実際にFlightの中を縦断する）**: 段部の踏面はその切断線で文字通り切られているため、
+  段鼻のジグザグ自体をCUT（太線）で描く（DWD立面図でも踏板は断面として描かれている）。手前側
+  （切断面と視線の間）のささらは切り取られるため描かず、**切断面の向こう側にある自レーン自身の
+  ささら**の輪郭（段鼻を結ぶ勾配線から`STEEL_STRINGER_DEPTH_MM`ぶん下げた`stringerPrimitives`）を
+  DETAIL（細線）で重ねて描く（ユーザー指示「ささらの見えかがりは細線、断面は太線」は維持）。
+  さらに視線前方にもう一方のレーン（他レーン）があり、往復間に見えがかり壁（cutAlong/wall）が
+  無ければ、その**他レーンの近い側（こちら向き）のささら**も同じDETAILの輪郭で重ねて描く
+  （`contribution.secondaryFlights`。seq2のみ設定——seq4は視線が外壁側で他レーンを見ないため
+  不要）。壁があれば`isBlockedByWall`（`columns`のband種別と切断線からの距離で判定）が遮り描かない。
+- **正面視（切断面がFlightに直交＝レーンを横切る）**: ささら自体が切断されるため、両側（acrossLo側・
+  acrossHi側。LANE_GAPが往路・復路間にあれば内側のみ半分ぶん詰める＝梯子と同じ幅を使う）に
+  `STEEL_STRINGER_THICKNESS_MM`×`STEEL_STRINGER_DEPTH_MM`の断面矩形（`flightStringerFrontPrimitives`）を
+  CUT（太線）で描く（ユーザー指示「断面は太線」）。z位置はcut位置での勾配線上の高さ
+  （`flightElevationAt`。継続的な直線補間）で、`baseFloorZ`より下に出る部分は`emitLine`の§5.6最終フィルタで
+  自動的にDETAIL＋破線へ降格する（他の要素と同じ機構）。
+- 木造（`structure!==STEEL`）は変化なし（ささら無し・段部のジグザグをそのまま描く）。
+
+**踊り場回りのささらの連続表現（ユーザー実機フィードバック2026-08-23）**: 踊り場桁枠のうちside辺
+（走行軸に平行＝直進部のささらと同じ位置関係で連続する辺）は、`landing.z`基準の帯ではなく
+「踊り場床断面線+巾木高さ」を上端、そこから`landingFrameDepthMm`(300)下げた線を下端とする帯で描く
+（`RoomFinish.baseboardHeight`を`parseBaseboardHeightMm`で解釈。未設定・解釈不能ならASSUMED既定値
+`DEFAULT_BASEBOARD_HEIGHT`='h=60'＝60mmへフォールバック）。flight（直進部）側の端には縦の閉じ線を
+描かない——直進部のささら自身がその位置に輪郭を持つため、続けて描くことで見た目上連続した1本の帯に
+見える。踊り場床断面線（CUT。`landingCutPrimitives`）自体は変更しない（上下に細線の水平線が加わる形）。
+front/back辺（走行軸に直交）の帯は`landing.z`基準のまま変更しない。
+
+**1層＝1溶接ユニット（StairUnit）**: 鉄骨階段は「両側ささら＋踊り場周囲の桁枠＋上下FLでの躯体取り合い」を1つの溶接ユニットとして扱う（実機の納まり）。`stairContribution`が返す`unit`（板厚12mm・ささら成300mm・踊り場桁枠成300mm＝ささらと同値・`anchorZs`＝躯体と取り合う高さ`[0, floorHeight]+踊り場z`の単一情報源）を`landingFramePrimitives`/`clipStringerToAnchors`が共有する。ささらの点列（段鼻ジグザグ由来）は`clipStringerToAnchors`で始端・終端のyを`anchorZs`（登り口FL・下り口FL）ちょうどへ強制する——ジグザグ生成側の実装詳細に依存せず「ささらは必ずFLで水平に終わる」契約を独立に守る。**踊り場桁枠**（`landing.frame.edges`。front=レーンに接する側／back=反対／side=走行軸に平行な残り2辺）は鉄骨・RC造階段（`hasLandingFrame`）が対象——RC階段はプレート状のささらは持たないが受け梁のコンクリート桁枠は持つため、桁枠だけささらと独立にSTEEL/RC両方が対象になる。側面視・正面視のどちら向きで見るか（broadside=帯輪郭／end-on=断面矩形）は「cut.lineの向きが辺の向きと一致=lengthwise、不一致=crosses」という第2層の一般規則をそのまま踊り場全体に適用して決める（§3.2表）。
+
+**構造梁の加算レイヤ（`section/sectionStructure.js`。WP-C）**: 踊り場受け梁（`structural-model.md`「踊り場受け梁」節）を含む構造梁を、第3層（階段幾何）と並ぶ別の寄与源として展開図へ足す。`cut.layers`（自階・上階のgraph参照＋floorZMm）の各`graph.beams`をそのまま拾い、`topZ=floorZMm+beam.levelOffset`で高さを決める——構造梁は「その梁が実際に立つ階のgraph」に帰属するため、伏図と同じ帰属をそのまま展開図の高さへ投影するだけで正しい階の梁が正しい高さに出る。切断線と直交＝断面矩形（CUT太線）、平行かつ幅の帯内＝上端・下端・両端縦線（DETAIL細線）——階段のささら・踊り場桁枠と同じ「cut.lineとの向き関係」の一般規則。**遮蔽はしない**（純粋な加算レイヤ。レイキャストの塞ぎ判定には参加しない。defer）。baseFloorZより下・天井より上は`emitLine`の既存フィルタで自動的に細破線へ降格する（新規の破線判定は持たない）。`elevationStairSequence.js`の`contentForCut`から`stairPrimitivesForCut`と並べて1回呼ぶだけで配線される——`sectionEngine.js`の`buildSectionFigure`（STRAIGHT/STRAIGHT_LANDING系）には配線していない（スコープ外）。
 
 **ゴールデンゲート**: 通常部屋帯（`buildRoomBand`）・吹抜け帯（`buildVoidBand`）はエンジン導入の影響を一切受けない
 （`elevationSectionGolden.test.js`が出力プリミティブの正規化JSON完全一致で固定・常に緑必須）。階段帯は一般規則を
@@ -200,6 +244,35 @@ defer: 天井高さが異なる内部境界（壁の無い部屋内部）の
 `ctx.floorSpanX?:{lo,hi}`（既定=現行の`drawnX0`/`drawnXRun`。未指定時は出力不変＝ゴールデンゲートで担保）を
 追加した。往復間の壁・踊り場壁が腰壁のときseq2/4系へ値を供給する配線は実機確認前提のため今回は未接続
 （フック自体は`elevationStair.js`の`faceOverride`が透過する準備済み）。
+
+**dirSignは部屋のコンパス向きではなく階段自身の歩行方向から導出する（`reorientFace`。QA実機フィードバック修正）**:
+`classifyFaces`が返す`wEntry`/`wLanding`/`wOut1`/`wOut2`（延いては`cut.dirSign`）は素のままだと`composeRoomFaces`の
+A/B/C/D向き（部屋の絶対的な世界座標の向き）で決まり、「上り口→踊り場が図の左→右」という階段の歩行方向とは
+無関係——部屋の向き次第で一致も不一致もありうる（テスト用の矩形室では偶然一致し不具合が長らく検出されなかった）。
+`switchbackCuts.js`/`straightCuts.js`は`reorientFace(face, desiredDirSign)`で全ての面をこの歩行方向基準へ
+明示的に再正規化してから使う——`desiredDirSign`はwEntry/wLanding=幅方向(s=0→s=1)、wOut1(seq2)=走行方向
+(上り口t=0→踊り場t=tRun)、wOut2(seq4)=SWITCHBACKはseq2の鏡像・STRAIGHTはseq2と同一、から独立に導出する。
+floorSegments/ceilingProfile（face基準）とcontent（cut.dirSign基準）の両方が同じ基準になるよう、必ず両方に
+同じ`desiredDirSign`を使うこと（片方だけ直すと左右が食い違う）。SWITCHBACKのseq4は往路(outbound)の鏡像
+（`stairCut`は`flights[0]`）であり復路(inbound)ではない——踊り場側が低く上り口側が高くなる復路をそのまま
+描くと「左から右へ下る」という実機の見え方と矛盾するため。
+
+**stairContributionのacrossLo/acrossHiもflipを反映する（QA実機フィードバック修正R2）**: `sectionStair.js`の
+`stairContribution`は往路(outbound)・復路(inbound)のacrossLo/acrossHiを`stair.flip`を無視して
+`roomBounds`から直接求めていたため（`makeFrame`の`acrossAt(s)`はflip===trueでs反転(ss=1-s)するが、旧実装は
+それを反映しない別経路だった）、flip===trueの実機データでは往路の梯子・ジグザグが幅方向で逆側に描かれた。
+`f.pt(0,s)`（switchbackCuts.jsの`acrossCoordAt`と同じ導出）でs=0/s=1の世界座標を直接求めてから
+outbound/inboundのacrossLo/acrossHiを組み立てる——`reorientFace`と同種の「向きに関する値は必ずmakeFrame
+経由で導出し、部屋のbounds等から直接計算しない」という不変条件を明文化する。
+
+**階段の断面ジグザグの向こうに見える壁の輪郭線は後処理で除去する（QA実機フィードバック修正R2）**:
+レイキャスト（`probeColumn`/`emitColumns`）は壁・開口の位置しか知らず、階段自体（段板・ささら）の占有形状を
+知らないため、壁が無い（またはレーンの延長上に部屋自身の壁がある）実機構成では、seq2/seq4のレーン区間で
+「階段の向こうに見える壁」のz=0(設置階FL)の輪郭線が、断面ジグザグと無関係に全幅で描かれてしまう。
+`elevationStairSequence.js`の`contentForCut`が`clipWallFloorEdgeUnderZigzag`で、断面ジグザグ
+（`stairPrimitivesForCut`が返すpolylineのx範囲）と重なるz=0の壁縁線を後処理として取り除く——
+レイキャスト自体を階段形状で塞ぐ一般化（本質的な解決）ではなく、既知の症状（z=0の水平線）に限定した
+対症療法である点に注意（蹴上に面材がある場合の遮蔽全般はモデル拡張が必要・別途defer）。
 
 **意図的差分（設計判断として保持）**: 往復間の壁・踊り場壁の断面表現は塗り矩形(rect)から3線（天井際CUT水平線＋
 両端CUT縦線の輪郭のみ）へ変更した。SWITCHBACKのseq1/seq3は同一の踊り場前縁切断線W(tRun,0→1)を共有する

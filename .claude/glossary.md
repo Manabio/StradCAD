@@ -64,7 +64,7 @@
 **出幅**＝通り芯から柱外面までの距離。柱芯・偏芯量の真実値で、**1構造×1通り芯**（`structuralInfo.columnFaceProjections`）で持つ。図のX/Y出幅寸法、または描画エリアの○「柱芯」ラベルのロングタップで編集する。設計意図は`.claude/structural-model.md`。
 
 ## role（構造部材のrole）
-柱=`standard`/`foundation`、梁=`primary`/`secondary`/`foundation`/`eaves`/`roof`。伏図の慣習（基礎伏図に柱なし等）に対応する。
+柱=`standard`/`foundation`、梁=`primary`/`secondary`/`foundation`/`eaves`/`roof`/`landing`（踊り場受け梁。記号`LG`）。伏図の慣習（基礎伏図に柱なし等）に対応する。
 
 ## memberNo（部材番号・タグ）
 構造部材の採番結果のキャッシュ（`記号+順位`。導出結果を実体へ書き戻したもので、真実は毎回の採番）。設計意図は`.claude/structural-model.md`。
@@ -131,6 +131,9 @@ WINDING/L_TURN/FLARED/OPEN_WELLは対象外＝従来面順へフォールバッ�
 （`elevation/section/`配下。`sectionProbe.js`＝レイキャスト、`sectionEmit.js`＝線種、`sectionEngine.js`＝
 列の統合、`sectionStair.js`＝階段幾何）。手書きのタイプ別シーケンスを置き換えたもの。設計意図は
 `.claude/elevation-model.md`「階をまたぐ2層帯」節。
+
+## ささら（ささら桁） / 踊り場受け梁
+**ささら（ささら桁）**＝鉄骨階段で段板（踏み板）を両側から支える斜め梁（プレート。板厚12mm・成300mm程度。段部はささらの横に付く「横付け」納まりが一般的で、段部の木口はささらに隠れて見えない）。展開図では側面視＝段鼻から成ぶん下げた輪郭（DETAIL細線）、正面視＝断面矩形（CUT太線）で表す（`elevation/elevationStairSection.js`/`elevation/section/sectionStair.js`）。**踊り場受け梁**＝鉄骨階段・RC造階段の踊り場（せいのある帯として1層1ユニットを構成する要素の一つ）を支える下地鉄骨。構造モードで`role:'landing'`（記号`LG`）の梁として踊り場の壁側1辺（直進部レーンと反対側）に自動生成され、梁天端レベル（`levelOffset`。FL基準・上が正）を編集できる。設計意図は`.claude/structural-model.md`「踊り場受け梁」節・`.claude/elevation-model.md`「階をまたぐ2層帯」節参照。
 
 ## ドレーキップ窓・常時開放式防火戸/防火折戸・オーバーヘッドドア・非常用進入口・ガラリ
 **ドレーキップ窓**＝すべり出し（開き）と内倒しを兼ねる窓（`DREH_KIPP`）。**常時開放式防火戸/防火折戸**＝平常時は開放したまま火災時に自動閉鎖する防火設備（`FIRE_DOOR`/`FIRE_FOLD`。枚数・開放角度はcatalogエントリの`fireLeaves`/`fireAngle`で持つ）。**オーバーヘッドドア**＝天井方向へ跳ね上げる大型建具（`OVERHEAD`）。**非常用進入口**＝消防隊が外部から進入するための開口（`EMERGENCY`）。**ガラリ**＝通気用のルーバー開口（`GARARI`、固定のみ）。いずれも`openingCatalog.js`のFITTING_CATALOG/WINDOW_CATALOGエントリで、機構(`OpeningMechanism`)ごとに平面記号（`renderer/OpeningsLayer.jsx`）・姿図（`openings/openingElevationFigure.js`）を描く。設計意図は`.claude/opening-model.md`。
