@@ -41,6 +41,8 @@ import { makeProbeContext } from './section/sectionProbe.js';
 import { buildColumns, buildSectionFigure } from './section/sectionEngine.js';
 import { emitColumns, emitOpenGapMarks } from './section/sectionEmit.js';
 import { stairPrimitivesForCut } from './section/sectionStair.js';
+import { structuralContribution, structuralPrimitivesForCut } from './section/sectionStructure.js';
+import { GAP_EPS_MM as GAP_EPS } from './elevationStyle.js';
 
 function flatFloorSegments(run, floorDeltaMm, chMm) {
   return [{ loX: 0, hiX: run, floorDeltaMm, chMm }];
@@ -59,15 +61,37 @@ function outboundCeilingProfile(run, ceilLowAbs, ceilTopAbs, upperCeilCapped) {
 // face/floorSegments/ceilingProfileはswitchbackCuts供給の現行方式のまま——本関数はcontentだけを
 // 返す。cutがnull（例: seq3。§6.1表「階段寄与: なし」）はstairPrimitivesForCutにnullを渡す
 // （contribution=null契約で空配列を返す）。
+// QA実機フィードバック修正: 階段の断面ジグザグ(stairPrimitivesForCutが返すpolyline)が占める
+// x範囲では、その向こうに見える壁の輪郭線（emitColumnsが一般規則で描く見えがかり壁の
+// z=0=設置階FL位置の縁）は、実際には階段自体（段板・ささら）に隠れて見えないはず
+// （「設置階FLは階段断面に出会ったらそこが終点」の一般化）。一般規則のレイキャスト
+// （probeColumn/emitColumns）は階段自体の占有形状を知らず、壁の見えがかりだけで塞ぎ判定する
+// ため、この重なりだけは切断定義の出力側で後処理として取り除く。
+function clipWallFloorEdgeUnderZigzag(wallContent, stairContent) {
+  const zigzagXRanges = stairContent
+    .filter(p => p.type === 'polyline')
+    .map(p => ({
+      lo: Math.min(...p.points.map(pt => pt[0])),
+      hi: Math.max(...p.points.map(pt => pt[0])),
+    }));
+  if (zigzagXRanges.length === 0) return wallContent;
+  return wallContent.filter(p => {
+    if (p.type !== 'line' || p.y1 !== p.y2 || p.y1 !== 0) return true; // 設置階FL(z=0)の水平線のみ対象
+    const xLo = Math.min(p.x1, p.x2), xHi = Math.max(p.x1, p.x2);
+    return !zigzagXRanges.some(r => xLo < r.hi - GAP_EPS && xHi > r.lo + GAP_EPS);
+  });
+}
+
 function contentForCut(cut, probeCtx) {
   if (!cut) return [];
   const columns = buildColumns(cut, probeCtx);
   const emitCtx = { ceilZ: cut.zRange?.hiZ };
-  return [
-    ...emitColumns(columns, cut, emitCtx),
-    ...emitOpenGapMarks(columns, cut, emitCtx),
-    ...stairPrimitivesForCut(cut.stairCut ?? null, cut, columns),
-  ];
+  const wallContent = [...emitColumns(columns, cut, emitCtx), ...emitOpenGapMarks(columns, cut, emitCtx)];
+  const stairContent = stairPrimitivesForCut(cut.stairCut ?? null, cut, columns);
+  // WP-C: 構造梁（踊り場受け梁等）の加算寄与。stairContentと独立の別レイヤのため、
+  // clipWallFloorEdgeUnderZigzag（階段ジグザグの向こうの壁縁除去）の対象には含めない。
+  const structuralContent = structuralPrimitivesForCut(structuralContribution(cut.layers), cut, columns);
+  return [...clipWallFloorEdgeUnderZigzag(wallContent, stairContent), ...stairContent, ...structuralContent];
 }
 
 /**
@@ -140,7 +164,12 @@ export function stairFaceSequence(stair, faces, graph, opts = {}) {
       seqNo: '2', face: outFace2,
       floorSegments: laneLenOnFace > 0
         ? [
-            { loX: 0, hiX: laneLenOnFace, floorDeltaMm: 0, chMm: ceilLowAbs },
+            // QA実機フィードバック修正: レーン区間(floorDeltaMm:0)の床線(z=0)は、段鼻の断面
+            // ジグザグ(stairCutのcontent)が既にその区間の輪郭を表しているため、床の水平線が
+            // ジグザグの下を素通りして踊り場側の隅まで貫通してしまう（「階段設置階FLは階段断面
+            // に出会ったらそこが終点」）——hideFlatLine:trueでこの区間だけ床線を描かない
+            // （elevationFigure.jsのbuildFaceFigure参照。段差縦線・注記等の他の処理は不変）。
+            { loX: 0, hiX: laneLenOnFace, floorDeltaMm: 0, chMm: ceilLowAbs, hideFlatLine: true },
             { loX: laneLenOnFace, hiX: outFace2.run, floorDeltaMm: landingAbs, chMm: ceilTopAbs - landingAbs },
           ]
         : [{ loX: 0, hiX: outFace2.run, floorDeltaMm: landingAbs, chMm: ceilTopAbs - landingAbs }],
@@ -181,7 +210,9 @@ export function stairFaceSequence(stair, faces, graph, opts = {}) {
       floorSegments: landingHi4 < outFace4.run
         ? [
             { loX: 0, hiX: landingHi4, floorDeltaMm: landingAbs, chMm: ceilTopAbs - landingAbs },
-            { loX: landingHi4, hiX: outFace4.run, floorDeltaMm: 0, chMm: ceilLowAbs },
+            // QA実機フィードバック修正: seq2と同じ理由でレーン区間の床線を描かない（seq4は
+            // 踊り場が左・レーンが右の鏡像構成のため、こちらは第2区間がレーンにあたる）。
+            { loX: landingHi4, hiX: outFace4.run, floorDeltaMm: 0, chMm: ceilLowAbs, hideFlatLine: true },
           ]
         : [{ loX: 0, hiX: outFace4.run, floorDeltaMm: landingAbs, chMm: ceilTopAbs - landingAbs }],
       ceilingProfile: upperCeilCapped

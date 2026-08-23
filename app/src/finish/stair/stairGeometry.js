@@ -1,11 +1,12 @@
 import { StairType, totalStepsFromSections } from '@core';
 import { cellBoundsFromKey, roomBounds, cellBoundsList, outlineSegments, refreshCells } from '../gridCells.js';
-import { measureStairSpans, detectUTurn } from './stairClassify.js';
+import { measureStairSpans, detectUTurn, MIN_LANDING } from './stairClassify.js';
 import { DEFAULT_WALL_BASE, DEFAULT_WALL_FINISH } from '../wallGeneration.js';
 import { faceRect } from '../wallFaces.js';
 
+export { MIN_LANDING }; // WP-A1: 定義はstairClassify.js（循環import回避）。既存importパスは維持。
+
 const BREAK_HEIGHT = 1600;   // mm — 破れ縁の断面高さ（FL+1600）
-export const MIN_LANDING = 1200;   // mm — 踊り場の最小長さ（問題.md）
 
 const seg  = (p, q) => ({ x1: p.x, y1: p.y, x2: q.x, y2: q.y, dashed: false });
 const line = (p, q) => ({ x1: p.x, y1: p.y, x2: q.x, y2: q.y });

@@ -171,13 +171,18 @@ test('【失敗系】treadLadderLines: steps=0は空配列', () => {
 });
 
 // ---- WP-S1: stringerPrimitives（鉄骨ささら。段鼻を結ぶ直線を法線方向へdepthMmオフセット） ----
-test('stringerPrimitives: 段鼻点列（奇数index）を結ぶ直線からdepthMmオフセットした閉じたpolyline(CUT)を返す', () => {
+// 期待値更新（ユーザー指示「ささらの見えかがりは細線、断面は太線」対応。出典:
+// http://kentiku-kouzou.jp/struc-sasara.html「段部はササラの横につく（横付け）のが一般的」）:
+// このpolylineは側面視（レーンを縦断する切断）の見えがかり輪郭であり、太線(CUT)ではなく
+// 細線(DETAIL)が正しい——太線は正面視の断面（sectionStair.jsのflightStringerFrontPrimitives）
+// 側に割り当てた。旧テストはCUTを期待していたが意味論を保ったまま更新する。
+test('stringerPrimitives: 段鼻点列（奇数index）を結ぶ直線からdepthMmオフセットした閉じたpolyline(DETAIL・見えがかりの細線)を返す', () => {
   // stairRunProfile(2,200,600,0,0,1) 相当のジグザグ: 段鼻(奇数index)は(0,-200),(300,-400)
   const profile = stairRunProfile(2, 200, 600, 0, 0, 1).points;
   const prims = stringerPrimitives(profile, STEEL_STRINGER_DEPTH_MM);
   assert.equal(prims.length, 1);
   assert.equal(prims[0].type, 'polyline');
-  assert.equal(prims[0].weight, weightForRole(ElevationLineRole.CUT));
+  assert.equal(prims[0].weight, weightForRole(ElevationLineRole.DETAIL));
   assert.equal(prims[0].points[0][0], 0);
   assert.equal(prims[0].points[0][1], -200);
   assert.equal(prims[0].points[1][0], 300);

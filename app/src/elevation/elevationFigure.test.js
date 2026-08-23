@@ -330,6 +330,49 @@ test('【失敗系・項目4】buildFaceFigure: floorSegments省略時は床線1
   assert.equal(floorHorizontals.length, 1, '段差が無ければ床の水平線は1本のままのはず');
 });
 
+// ---- QA実機フィードバック修正: floorSegments[].hideFlatLine===trueの区間は床の水平線を描かない
+// （階段のレーン区間で段鼻の断面ジグザグが既に境界を表しているため、床線が素通りして
+// 反対側の隅まで貫通してしまう不具合の修正）----
+test('【QA修正・実機フィードバック】buildFaceFigure: floorSegments[].hideFlatLine===trueの区間は床の水平線を描かない（段差縦線・両端縦線は不変）', () => {
+  const CH = 2400;
+  const floorSegments = [
+    { loX: 0, hiX: 2000, floorDeltaMm: 0, hideFlatLine: true },
+    { loX: 2000, hiX: 4000, floorDeltaMm: 300 },
+  ];
+  const face = makeFace();
+  const ctx = baseCtx({ ceilingHeight: CH, floorSegments });
+  const prims = buildFaceFigure(face, ctx);
+
+  const cutLines = prims.filter(p => p.type === 'line' && p.weight === 'thick');
+  const floorHorizontals = cutLines.filter(l => l.y1 === l.y2 && l.y1 !== -CH);
+  assert.equal(floorHorizontals.length, 1, 'hideFlatLineの区間の床線は描かれず、残る区間の床線1本だけのはず');
+  assert.equal(floorHorizontals[0].x1, RISER_X_OFFSET_TESTS, '残った床線は段差位置(オフセット後)から始まるはず');
+  assert.equal(floorHorizontals[0].x2, 4000);
+
+  // 段差縦線（区間間のriser）はhideFlatLineの影響を受けず、従来どおり描かれるはず。
+  const riser = cutLines.find(l => l.x1 === RISER_X_OFFSET_TESTS && l.x2 === RISER_X_OFFSET_TESTS && l.y1 === 0 && l.y2 === -300);
+  assert.ok(riser, '段差縦線はhideFlatLineの影響を受けず描かれるはず');
+
+  // 両端縦線（出隅。SILHOUETTE）もhideFlatLineの影響を受けない。
+  const silhouetteLines = prims.filter(p => p.type === 'line' && p.weight === 'medium');
+  const leftEnd = silhouetteLines.find(l => l.x1 === 0 && l.x2 === 0);
+  assert.ok(leftEnd, '左端の縦線はhideFlatLineの影響を受けず描かれるはず');
+  assert.equal(leftEnd.y2, 0, '左端縦線はhideFlatLineの区間でも自身の区間の床y(0)まで届くはず');
+});
+
+test('【失敗系・QA修正・実機フィードバック】buildFaceFigure: hideFlatLine未指定(既定)は従来どおり全区間の床線を描く', () => {
+  const CH = 2400;
+  const floorSegments = [
+    { loX: 0, hiX: 2000, floorDeltaMm: 0 },
+    { loX: 2000, hiX: 4000, floorDeltaMm: 300 },
+  ];
+  const face = makeFace();
+  const prims = buildFaceFigure(face, baseCtx({ ceilingHeight: CH, floorSegments }));
+  const cutLines = prims.filter(p => p.type === 'line' && p.weight === 'thick');
+  const floorHorizontals = cutLines.filter(l => l.y1 === l.y2 && l.y1 !== -CH);
+  assert.equal(floorHorizontals.length, 2, 'hideFlatLine未指定なら両区間とも床線が描かれるはず（既存挙動）');
+});
+
 // ---- 項目5: 床に段差がある面は右側にもCH寸法を描く（値=右端区間の実効CH） ----
 test('【項目5】buildFaceFigure: floorSegmentsが2区間（段差あり）なら右側にもCH寸法が出て、値は天井絶対高−右端区間FL', () => {
   const CH = 2400;

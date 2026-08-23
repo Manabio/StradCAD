@@ -10,9 +10,7 @@
  *
  * ローカル座標は elevationFigure.js と同じ（x=0起点、yは上向き負・床=0）。
  */
-import { StairType } from '@core';
-import { measureStairSpans } from '../finish/stair/stairClassify.js';
-import { MIN_LANDING } from '../finish/stair/stairGeometry.js';
+import { resolveSwitchbackSpanLengths } from '../finish/stair/stairClassify.js';
 import { ElevationLineRole, weightForRole } from './elevationStyle.js';
 
 /**
@@ -46,6 +44,9 @@ export function stairRunProfile(n, riserMm, runLengthMm, startX, startY, dir = 1
  * 同じ計算を必要とするため、既存のbuildSwitchbackSectionPrimitives内にあった計算をここへ抽出した
  * （既存exportの挙動・出力は一切変えない。抽出のみ）。
  * SWITCHBACK以外・floorHeight未確定の場合はnull。
+ * WP-A1: floorHeightに依存しない区間長・段数の算出自体は finish/stair/stairClassify.js の
+ * resolveSwitchbackSpanLengths（本関数とfinish/stair/stairLanding.jsのlandingRectが共有する
+ * 単一情報源）へ抽出した。本関数はそこへfloorHeight由来のriserを合成するだけ（挙動不変）。
  * @param {import('@core').Stair} stair
  * @param {object} graph
  * @param {number|null} floorHeight - 設置階〜上階の階高(mm)
@@ -53,24 +54,11 @@ export function stairRunProfile(n, riserMm, runLengthMm, startX, startY, dir = 1
  *   len1:number, landingLen:number, len2:number}|null}
  */
 export function resolveSwitchbackParams(stair, graph, floorHeight) {
-  if (!stair || stair.type !== StairType.SWITCHBACK || floorHeight == null) return null;
-
-  const totalSteps = Math.max(2, stair.totalSteps ?? 2);
-  const riser = stair.riser ?? floorHeight / totalSteps;
-  const sections = Array.isArray(stair.sections) && stair.sections.length === 3 ? stair.sections : null;
-  // sections未指定（旧データ・上階自動設置分）は対称な折返しと仮定して均等2分する（解釈の判断）。
-  const n1 = sections ? Math.max(1, sections[0]) : Math.round(totalSteps / 2);
-  const n2 = sections ? Math.max(1, sections[2]) : totalSteps - n1;
-
-  const spans = measureStairSpans(stair, graph);
-  const tread = stair.tread > 0 ? stair.tread : 250;
-  const [len1, landingLen, len2] = spans?.lengths ?? [
-    tread * Math.max(1, n1 - 1),
-    Math.max(4 * tread, MIN_LANDING),
-    tread * Math.max(1, n2 - 1),
-  ];
-
-  return { totalSteps, riser, n1, n2, len1, landingLen, len2 };
+  if (floorHeight == null) return null;
+  const spanInfo = resolveSwitchbackSpanLengths(stair, graph);
+  if (!spanInfo) return null;
+  const riser = stair.riser ?? floorHeight / spanInfo.totalSteps;
+  return { ...spanInfo, riser };
 }
 
 /**
@@ -109,9 +97,20 @@ export function buildSwitchbackSectionPrimitives(stair, graph, floorHeight) {
 
 // ---- WP-S1: 歩行順面シーケンス（elevationStairSequence.js）向けの追加部品 ----
 
-// 鉄骨階段のささら（側桁）の桁成（断面の見付幅。mm）。Stairモデルに桁成フィールドが無いため、
+// 鉄骨階段のささら（ささら桁）の板厚・せい（成）。Stairモデルに桁成フィールドが無いため、
 // 作図上の既定値としてローカル定数に持つ（将来 Stair 側にフィールド化する余地を残すコメント）。
-export const STEEL_STRINGER_DEPTH_MM = 200;
+// 出典: http://kentiku-kouzou.jp/struc-sasara.html「最低でも12mm厚で、プレートのせいは
+// 250～300程度」——せいは上限の300mmを採用（変形・強度に余裕を持たせる側の値）。
+// STEEL_STRINGER_DEPTH_MMは旧実装（WP-S1〜WP-E5b時点）ではCUT表現時代の作図上の仮値200mmだった
+// ものを、ページ記載の実寸法へ更新した（挙動変更。ユーザー指示「ささらを展開に反映」対応）。
+export const STEEL_STRINGER_DEPTH_MM = 300;
+// ささら（プレート）の板厚。正面視（切断面がFlightに直交する見返り）で見える12mm×せいの
+// 矩形断面の横幅に使う（sectionStair.js）。側面視のstringerPrimitivesは板厚を使わない
+// （輪郭は段鼻を結ぶ線とその平行線の2本だけで表現するため）。
+export const STEEL_STRINGER_THICKNESS_MM = 12;
+// 踊り場桁枠（front/back/side桁）のせい（WP-A2。ユーザー裁定2026-08-23で250→300へ変更——
+// ささら（斜め部。STEEL_STRINGER_DEPTH_MM=300）と同値。板厚12共通）。
+export const STEEL_LANDING_FRAME_DEPTH_MM = 300;
 
 /**
  * 段鼻高さごとの水平「梯子状」細線一式（ユーザー仕様「階段直進部上を正面または踊り場から
@@ -137,10 +136,16 @@ export function treadLadderLines({ loX, hiX, riserMm, steps, baseAbsMm, dashed =
 }
 
 /**
- * 鉄骨階段のささら（側桁）プロファイル: profilePoints（stairRunProfile等が返す蹴上・踏面の
+ * 鉄骨階段のささら（ささら桁）プロファイル: profilePoints（stairRunProfile等が返す蹴上・踏面の
  * ジグザグ点列）の段鼻（凸点列＝奇数index。蹴上通過直後・踏面通過前の点。等ピッチの階段では
  * 一直線に並ぶ）を結ぶ直線から、法線方向へ depthMm ぶん下げた平行線を作り、両端を閉じた
- * 1本の polyline（CUT）として返す。
+ * 1本の polyline（DETAIL＝見えがかりの細線）として返す。
+ * ユーザー指示「ささらの見えかがりは細線、断面は太線」対応: 段部はささらの横に付く（横付け）の
+ * が一般的（出典ページ「段部はササラの横につく納まりが一般的」）ため、段鼻を結ぶ上縁から下は
+ * 段板の木口がささらに隠れて見えない——側面視（レーンを縦断する切断）でこの輪郭を見た目どおり
+ * DETAIL（細線）で描く。太線(CUT)はささらが実際に切断される正面視（レーンを横切る切断）側
+ * （sectionStair.jsのflightStringerFrontPrimitives）に割り当てた。旧実装（WP-S1〜WP-E5b）は
+ * このpolyline自体をCUTにしていた——側面視の見えがかりを太線扱いしていた誤りを本対応で修正する。
  * @param {Array<[number,number]>} profilePoints - stairRunProfile(...).points 等のジグザグ点列
  * @param {number} depthMm - ささらの桁成（見付幅）
  * @returns {object[]} 0または1件のpolylineプリミティブ配列
@@ -159,5 +164,5 @@ export function stringerPrimitives(profilePoints, depthMm) {
   const points = [
     [x1, y1], [x2, y2], [x2 + ox, y2 + oy], [x1 + ox, y1 + oy], [x1, y1],
   ];
-  return [{ type: 'polyline', points, weight: weightForRole(ElevationLineRole.CUT) }];
+  return [{ type: 'polyline', points, weight: weightForRole(ElevationLineRole.DETAIL) }];
 }

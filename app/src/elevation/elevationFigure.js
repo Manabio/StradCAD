@@ -494,6 +494,12 @@ export function buildFaceFigure(face, ctx) {
   const riserXAt = i => drawnRiserX(segs, i, halfWallMm);
 
   for (const [i, s] of segs.entries()) {
+    // QA実機フィードバック修正: 区間の床線は既定で描くが、`s.hideFlatLine===true`の区間だけは
+    // 描かない（段差縦線・注記等の他の処理には影響しない。既定値undefined=falsyのため
+    // floorSegments未指定・既存呼び出しは完全無変化）。階段帯のレーン区間（段鼻の断面
+    // ジグザグが同じ高さを既に表現している区間）で、床の水平線がジグザグの下を素通りして
+    // 面の遠端まで貫通してしまう実機不具合の修正に使う（elevationStairSequence.js参照）。
+    if (s.hideFlatLine) continue;
     const y = floorYOf(s);
     const x1 = i === 0 ? drawnX0 : riserXAt(i - 1);
     const x2 = i === segs.length - 1 ? drawnXRun : riserXAt(i);

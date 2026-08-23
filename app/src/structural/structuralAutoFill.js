@@ -7,6 +7,8 @@ import { floorSwapManager } from '../storage/FloorSwapManager.js';
 import { isRigidFrameStructure, structureHasMemberKind, memberKindOf, MEMBER_KIND } from './structuralClassification.js';
 import { buildExteriorSide, footprintCellKeys } from './wallGate.js';
 import { autoFillWallBeamAxes } from './wallBeamAxes.js';
+import { landingEdgeCLs, landingZ } from '../finish/stair/stairLanding.js';
+import { floorHeightAbove } from '../finish/stair/stairDimensions.js';
 
 // 構造モード突入時に呼ばれる、構造体トポロジー（構造グリッド）から未定義の柱・梁・基礎を検出して
 // デフォルト材料・断面で自動生成する純関数群。finish/edgeClassify.js の選定・差分同期パターンを流用する。
@@ -276,6 +278,66 @@ export function autoFillRoofBeamSizes(graph) {
   return updated;
 }
 
+// 踊り場受け梁（role:'landing', symbol 'LG'）の生成対象材料（鉄骨・RC階段限定。ユーザー裁定
+// 2026-08-23 §9-D。木造は階段自体が構造体のため下地鉄骨が不要で対象外）。
+const LANDING_BEAM_STRUCTURES = new Set([StructuralMaterialType.STEEL, StructuralMaterialType.RC]);
+
+// 踊り場桁枠のせい(mm)。elevation/section/sectionStair.jsのSTEEL_LANDING_FRAME_DEPTH_MMと同値
+// （ユーザー裁定2026-08-23 §9-A＝ささらと同じ300）。ここへ複製するのは finish/stair/ →
+// elevation/section/ へのimportを避けるため（finish/stair/stairLanding.jsのファイル冒頭コメント
+// 「finish/stair/ 配下は elevation/ に依存しない」参照。structural/もelevation/を直接引かない）。
+const LANDING_FRAME_DEPTH_MM = 300;
+// 踊り場桁枠の下端から梁天端までの追加下がり(mm。ユーザー裁定2026-08-23 §9-C）。
+const LANDING_BEAM_DROP_MM = 10;
+
+// landingEdgeCLs（stairLanding.js）が返すCL id文字列から実CLオブジェクトを解決する。踊り場外周の
+// 境界壁は階固有CL・通り芯CLのどちらもあり得るため、両方をマージ済みの graph.centerLines
+// （core/planGraph.js）から引く（見つからなければnull。手動で通り芯を削除した直後などの防御）。
+function resolveCLById(graph, id) {
+  return graph.centerLines.find(cl => String(cl.id) === String(id)) ?? null;
+}
+
+/** 鉄骨・RC階段の踊り場を支える受け梁（role:'landing', symbol 'LG'）を、踊り場の壁側1辺
+ *  （landingEdgeCLsのkind:'back'＝直進部レーンと反対側の外周辺。ユーザー裁定2026-08-23 §9-B。
+ *  side辺には生成しない）へ自動生成する（除外集合のスロット・既存梁との重複はスキップ。WP-B2。
+ *  architect承認済み実装指示書§4(b)）。
+ *  対象は stair.structure（階段自身の材質。フロアの主構造とは独立の値）がSTEEL・RCの階段のみ
+ *  （§9-D）。既定の梁天端(levelOffset) = 踊り場桁枠の下端から10mm下
+ *  = landingZ − LANDING_FRAME_DEPTH_MM − LANDING_BEAM_DROP_MM（§9-C）。
+ *  wallGateは適用しない——階段のRoom（STAIR）はフットプリントの権威を確立しない
+ *  （structural-model.md「属性Roomはフットプリントの権威を確立しない」）ため、ゲートに掛けると
+ *  常に「範囲外」判定になり生成されなくなってしまう。 */
+export function autoFillStairLandingBeams(graph, project, wallGate = null) {
+  void wallGate; // 意図的に未使用（理由は上記コメント）。他のautoFill*と引数構成を揃えるためだけに受け取る。
+  const floorHeight = floorHeightAbove(project, graph.plane);
+  const existing = new Set(graph.beams.map(b => spanKey(b.axisCL, b.clStart, b.clEnd)));
+  const created = [];
+  for (const stair of graph.stairs) {
+    if (!LANDING_BEAM_STRUCTURES.has(stair.structure)) continue;
+    const z = landingZ(stair, graph, floorHeight);
+    if (z == null) continue;
+    const edges = landingEdgeCLs(stair, graph);
+    if (!edges) continue;
+    const backEdge = edges.find(e => e.kind === 'back');
+    if (!backEdge) continue;
+    const axisCL = resolveCLById(graph, backEdge.axisCL);
+    const clStart = resolveCLById(graph, backEdge.clStart);
+    const clEnd = resolveCLById(graph, backEdge.clEnd);
+    if (!axisCL || !clStart || !clEnd) continue;
+    const key = spanKey(axisCL, clStart, clEnd);
+    if (existing.has(key) || graph.excludedBeamSlots.has(key)) continue;
+    const materialType = stair.structure;
+    const levelOffset = z - LANDING_FRAME_DEPTH_MM - LANDING_BEAM_DROP_MM;
+    created.push(graph.addBeam(
+      materialType, DEFAULT_BEAM_SECTION_BY_MATERIAL[materialType],
+      axisCL, backEdge.isVertical, clStart, clEnd,
+      { role: 'landing', levelOffset },
+    ));
+    existing.add(key);
+  }
+  return created;
+}
+
 /** 構造モード突入時に呼ぶ統合エントリポイント。柱・梁・基礎（フーチング）が対象（耐力壁・スラブは対象外）。
  *  柱はどの実体平面でも自階分を生成する（基礎伏図=最下階も自階の柱を生成する）。屋根専用平面（isRoofPlane）
  *  では柱を生成しない（柱の立つ階ではないため）。基礎伏図（isFoundationPlane）では床下に独立フーチングを
@@ -305,11 +367,14 @@ export function autoFillStructuralGrid(graph, project, belowMainStructure, wallG
   const newRoofBeams = (isRoof && belowMainStructure !== UNSPECIFIED_STRUCTURE) ? autoFillRoofBeams(graph, project, belowMainStructure, wallGate) : [];
   // 壁由来の梁芯CL自動生成。大梁生成後・小梁生成直前に呼ぶ（生成順序: 大梁 → 梁芯 → 小梁）。
   const newWallBeamAxes = autoFillWallBeamAxes(graph, wallSources);
+  // 踊り場受け梁（role:'landing'）。鉄骨・RC階段の踊り場辺（壁側1辺）へ自動生成する（WP-B2）。
+  // 通り芯グリッドとは無関係の生成源のため、小梁生成の直前という以外の順序上の制約はない。
+  const newLandingBeams = autoFillStairLandingBeams(graph, project, wallGate);
   // 梁芯CL（discipline:'fuse'）ごとの小梁自動生成。wallGate は直接引かない
   // （直交大梁に挟まれている＝大梁のフットプリント判定を継承するため。上のnewBeams生成後に呼ぶ）。
   // 出自を問わず全梁芯が対象のため、壁由来の梁芯（newWallBeamAxes）もそのまま拾う。
   const newSecondaryBeams = autoFillSecondaryBeams(graph, project);
-  return { newColumns, newFootings, newBeams: [...newBeams, ...newRoofBeams, ...newWallBeamAxes, ...newSecondaryBeams] };
+  return { newColumns, newFootings, newBeams: [...newBeams, ...newRoofBeams, ...newWallBeamAxes, ...newLandingBeams, ...newSecondaryBeams] };
 }
 
 /** 主要構造（実効値）と異なる材種の既存柱・梁を、新しい材種のサブクラスへ変換する。

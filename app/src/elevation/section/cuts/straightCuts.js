@@ -18,7 +18,7 @@ import { StairType } from '@core';
 import { roomBounds } from '../../../finish/gridCells.js';
 import { makeFrame, MIN_LANDING } from '../../../finish/stair/stairGeometry.js';
 import { measureStairSpans } from '../../../finish/stair/stairClassify.js';
-import { classifyFaces, buildMidWallFace } from './switchbackCuts.js';
+import { classifyFaces, buildMidWallFace, reorientFace } from './switchbackCuts.js';
 
 // findLandingWall（本ファイル）の許容差(mm)。findMidWall（switchbackCuts.js）と同じ考え方
 // （壁厚程度の許容差）で、値も揃えている。
@@ -100,8 +100,8 @@ export function straightCuts(stair, faces, graph, opts = {}) {
 
   const b = roomBounds(stair.cells, graph);
   const f = makeFrame(stair, b);
-  const { wEntry, wLanding, wOut1, wOut2 } = classifyFaces(faces, f);
-  if (!wEntry || !wLanding || !wOut1 || !wOut2) return null;
+  const rawFaces = classifyFaces(faces, f);
+  if (!rawFaces.wEntry || !rawFaces.wLanding || !rawFaces.wOut1 || !rawFaces.wOut2) return null;
 
   const layers = [{ graph, floorZMm: 0, role: 'self' }];
   if (opts.upperGraph) layers.push({ graph: opts.upperGraph, floorZMm: floorHeight, role: 'above' });
@@ -113,6 +113,19 @@ export function straightCuts(stair, faces, graph, opts = {}) {
   const midAcross = acrossCoordAt(0.5);
   const acrossLo = Math.min(acrossCoordAt(0), acrossCoordAt(1));
   const acrossHi = Math.max(acrossCoordAt(0), acrossCoordAt(1));
+
+  // QA実機フィードバック修正（switchbackCuts.jsと同根の不具合）: dirSignは部屋のコンパス向き
+  // （wEntry.dirSign等・letterOf基準）ではなく、階段自身の歩行方向（幅方向=s=0→s=1、
+  // 走行方向=上り口(t=0)→到達端(t=1)）が「ローカルx昇順」になるよう独立に導出する
+  // （reorientFace。switchbackCuts.js冒頭のコメント参照）。直進階段はseq4もseq2と同じ向き
+  // （視線が折り返さないため。§6.2）——wOut2もwOut1と同じseq2DirSignへ正規化する
+  // （switchbackCutsの鏡像とは異なる点に注意）。
+  const widthDirSign = Math.sign(acrossCoordAt(1) - acrossCoordAt(0)) || 1;
+  const seq2DirSign = Math.sign(travelCoordAt(1) - travelCoordAt(0)) || 1;
+  const wEntry   = reorientFace(rawFaces.wEntry, widthDirSign);
+  const wLanding = reorientFace(rawFaces.wLanding, widthDirSign);
+  const wOut1    = reorientFace(rawFaces.wOut1, seq2DirSign);
+  const wOut2    = reorientFace(rawFaces.wOut2, seq2DirSign);
 
   // ---- 第3層（Flight/Landing。sectionStair.jsの型と同じ形。§5.7・§6.2）----
   // 直進階段は往路・復路が並走しないため、switchbackCuts.jsのような「同じ世界run区間を
@@ -159,7 +172,8 @@ export function straightCuts(stair, faces, graph, opts = {}) {
   const laneLine = { isVertical: wOut1.isVertical, axisValue: midAcross, lo: wOut1.lo, hi: wOut1.hi };
   const seq2ViewSign = -(Math.sign(acrossCoordAt(0) - midAcross) || 1); // s=0側
   const seq4ViewSign = Math.sign(acrossCoordAt(1) - midAcross) || 1;    // s=1側
-  const seq2DirSign = wOut1.dirSign; // 「上り口→上階が左→右」
+  // seq2DirSignは上でreorientFace用に導出済み（wOut1/wOut2は既にその向きへ再正規化されている
+  // ため、wOut1.dirSign===wOut2.dirSign===seq2DirSignが構築上常に成り立つ）。
 
   const cuts = [
     {
@@ -180,7 +194,7 @@ export function straightCuts(stair, faces, graph, opts = {}) {
     const wallGraph = opts.upperGraph ?? graph; // 往復間の壁と同じ探索対象層規約（switchbackCuts.js参照）
     const landingWall = findLandingWall(wallGraph, wEntry, landingWorld, acrossLo, acrossHi);
     if (landingWall) {
-      const landingFace = buildMidWallFace(landingWall, wEntry.inward, acrossLo, acrossHi, faces);
+      const landingFace = reorientFace(buildMidWallFace(landingWall, wEntry.inward, acrossLo, acrossHi, faces), widthDirSign);
       const seq3Line = { isVertical: wEntry.isVertical, axisValue: landingWorld, lo: wEntry.lo, hi: wEntry.hi };
       const seq3ViewSign = Math.sign(travelCoordAt(0) - landingWorld) || 1; // 見返り(−t)
       cuts.push({

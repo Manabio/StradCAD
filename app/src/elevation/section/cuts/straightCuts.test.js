@@ -161,3 +161,24 @@ test('【失敗系・WP-E6】straightCuts: opts.floorHeightがnullはnullを返�
 
   assert.equal(straightCuts(stair, faces, graph, { chUpperAbsMm: 4800 }), null);
 });
+
+// ==== QA実機フィードバック修正: dirSignは部屋のコンパス向き（letterOf基準）ではなく階段自身の
+// 歩行方向（上り口(t=0)→到達端(t=1)）から独立に導出する（reorientFace。switchbackCuts.js参照）。
+// 既存のmakeStraightFixture（upDirection='up'）はたまたま部屋の向きと歩行方向が一致し不具合が
+// 顕在化しないため、upDirection='down'（同じ部屋形状で歩行方向だけ反転）で検証する。====
+test('【QA修正・実機フィードバック】straightCuts: seq2の面は上り口(entryWorld)がローカルx=0側になる（部屋のコンパス向きに関わらず）', () => {
+  const graph = makeGraph();
+  const { room, stair } = makeStraightFixture(graph, { type: StairType.STRAIGHT });
+  stair.setField('upDirection', 'down'); // 部屋の向きは変えず歩行方向だけ反転する
+  const faces = composeRoomFaces(room, graph);
+
+  const result = straightCuts(stair, faces, graph, OPTS);
+  assert.ok(result);
+  const seq2 = result.cuts.find(c => c.seqNo === '2');
+  const entryWorld = 0;    // upDirection='down'はcoordAt(t)=b.y1+t*(b.y2-b.y1)なのでt=0はb.y1=0
+  const arrivalWorld = 3000;
+  const localXOfEntry = (entryWorld - seq2.face.originWorld) * seq2.face.dirSign;
+  const localXOfArrival = (arrivalWorld - seq2.face.originWorld) * seq2.face.dirSign;
+  assert.ok(localXOfEntry < localXOfArrival,
+    `上り口がローカルx=0側(左)・到達端が右側のはず（上り口局所x=${localXOfEntry}, 到達端局所x=${localXOfArrival}）`);
+});

@@ -188,9 +188,10 @@ export class StructuralBeam extends StructuralEntity {
     // eccentricity は派生値: s*((梁幅-既定柱幅)/2 + faceGap)。s=外周側符号。structuralAutoFill.autoBeamEccentricity 参照。
     this.faceGap         = props.faceGap ?? 0;
     this.jointCondition  = props.jointCondition ?? { start: 'RIGID', end: 'RIGID' }; // 剛接合=ラーメン既定
-    // 小梁・基礎梁・軒桁・母屋・垂木はサブクラスを増やさず role + 既定値の組み合わせで表現する。
-    this.role             = props.role             ?? 'primary'; // primary/secondary/foundation/eaves/roof
-    this.levelOffset      = props.levelOffset      ?? 0; // 梁全体の基準レベル(mm、floorDatum基準)
+    // 小梁・基礎梁・軒桁・母屋・垂木・踊り場受け梁はサブクラスを増やさず role + 既定値の組み合わせで表現する。
+    this.role             = props.role             ?? 'primary'; // primary/secondary/foundation/eaves/roof/landing
+    // 梁天端レベル（floorDatum=FL基準・上が正。WP-B3で意味を確定。structural-model.md参照）。
+    this.levelOffset      = props.levelOffset      ?? 0;
     this.startLevelOffset = props.startLevelOffset ?? 0; // levelOffsetからの始端追加オフセット（屋根部材の勾配用）
     this.endLevelOffset   = props.endLevelOffset   ?? 0; // levelOffsetからの終端追加オフセット
     // 梁幅b・梁成D（mm）。基礎梁(role:'foundation')のみ自動算定対象（structural/memberSizing.js）。

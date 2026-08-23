@@ -4,6 +4,11 @@ import { StairType, totalStepsFromSections } from '@core';
 // 直進階段の標準比率ヒント（踏面方向:走行長 ≒ 3:14）。段数推定の妥当性チェック用。
 export const STRAIGHT_RATIO = 14 / 3;
 
+// mm — 踊り場の最小長さ（問題.md）。stairGeometry.jsが本ファイルをimportするため
+// （measureStairSpans/detectUTurn）、循環import回避のため定義側は本ファイルに置き、
+// stairGeometry.jsはre-exportする（WP-A1: resolveSwitchbackSpanLengthsが必要とするため）。
+export const MIN_LANDING = 1200;
+
 const DEFAULT_TREAD = 250; // mm（段数推定用。確定値は寸法フェーズで上書きされる）
 const MAX_RISER = 230;     // mm（住宅の蹴上上限。必要段数 = ceil(階高/MAX_RISER)）
 
@@ -466,4 +471,34 @@ export function measureStairSpans(stair, graph) {
     default:
       return null;
   }
+}
+
+/**
+ * SWITCHBACK階段の区間長（往路len1・踊り場landingLen・復路len2）と段数（n1・n2・totalSteps）を
+ * 実測優先（measureStairSpans）・合成フォールバック（tread×マス数）で解決する。floorHeightに
+ * 依存しない部分のみを切り出したもの——elevationStairSection.jsのresolveSwitchbackParams（本関数＋
+ * floorHeightから算出するriserを合成）とfinish/stair/stairLanding.jsのlandingRect（踊り場矩形の
+ * 単一情報源。floorHeight不要）が共有する（WP-A1: 挙動不変のリファクタ抽出）。
+ * SWITCHBACK以外はnull。
+ * @param {import('@core').Stair} stair
+ * @param {object} graph
+ * @returns {{totalSteps:number, n1:number, n2:number, len1:number, landingLen:number, len2:number}|null}
+ */
+export function resolveSwitchbackSpanLengths(stair, graph) {
+  if (!stair || stair.type !== StairType.SWITCHBACK) return null;
+
+  const totalSteps = Math.max(2, stair.totalSteps ?? 2);
+  const sections = Array.isArray(stair.sections) && stair.sections.length === 3 ? stair.sections : null;
+  const n1 = sections ? Math.max(1, sections[0]) : Math.round(totalSteps / 2);
+  const n2 = sections ? Math.max(1, sections[2]) : totalSteps - n1;
+
+  const spans = measureStairSpans(stair, graph);
+  const tread = stair.tread > 0 ? stair.tread : 250;
+  const [len1, landingLen, len2] = spans?.lengths ?? [
+    tread * Math.max(1, n1 - 1),
+    Math.max(4 * tread, MIN_LANDING),
+    tread * Math.max(1, n2 - 1),
+  ];
+
+  return { totalSteps, n1, n2, len1, landingLen, len2 };
 }
