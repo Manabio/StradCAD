@@ -108,6 +108,36 @@ test('【失敗系・WP-E2・最終フィルタ】emitLine: 片端だけがbaseF
   assert.equal(prim.dash, undefined);
 });
 
+// ---- 実機フィードバック第3弾C: neverDowngrade（CUT断面・ささらの見えがかり帯は降格しない） ----
+
+test('【実機フィードバック第3弾C】emitLine: neverDowngrade:trueは両端がbaseFloorZ未満でも降格せずroleそのまま', () => {
+  const cut = makeCut({ baseFloorZ: 500, zRange: { loZ: 0, hiZ: 2400 } });
+  const prim = emitLine(cut, 0, 100, 0, 400, 'cut', { neverDowngrade: true });
+  assert.equal(prim.weight, 'thick', 'CUT断面はbaseFloorZより下でも太線実線のまま(降格しない)のはず');
+  assert.equal(prim.dash, undefined, 'dashは付かないはず');
+});
+
+test('【実機フィードバック第3弾C】emitLine: neverDowngrade:trueは天井断面より上でも降格せずDETAILのroleそのまま', () => {
+  const cut = makeCut({ baseFloorZ: 0, zRange: { loZ: 0, hiZ: 2000 } });
+  const prim = emitLine(cut, 0, 2100, 0, 2400, 'detail', { ceilZ: 2000, neverDowngrade: true });
+  assert.equal(prim.weight, 'thin', 'DETAIL(ささらの見えがかり)は天井断面より上でも細線実線のまま(降格しない)のはず');
+  assert.equal(prim.dash, undefined, 'dashは付かないはず');
+});
+
+test('【失敗系・実機フィードバック第3弾C】emitLine: neverDowngrade:trueでもforceDash単体では降格しない（既定falseと違いforceDashも無効化される）', () => {
+  const cut = makeCut({ baseFloorZ: 0, zRange: { loZ: 0, hiZ: 2400 } });
+  const prim = emitLine(cut, 0, 100, 1000, 100, 'cut', { forceDash: true, neverDowngrade: true });
+  assert.equal(prim.weight, 'thick', 'neverDowngrade:trueはforceDashも含め降格判定そのものを無効化するはず');
+  assert.equal(prim.dash, undefined);
+});
+
+test('【失敗系・実機フィードバック第3弾C】emitLine: neverDowngrade未指定(既定false)は従来どおり降格する（回帰ガード）', () => {
+  const cut = makeCut({ baseFloorZ: 500, zRange: { loZ: 0, hiZ: 2400 } });
+  const prim = emitLine(cut, 0, 100, 0, 400, 'cut');
+  assert.equal(prim.weight, 'thin', '既存呼び出し(neverDowngrade省略)は従来どおり降格するはず');
+  assert.equal(prim.dash, 'dashed');
+});
+
 // ---- QA最終検証・修正3: 境界単体テスト（水平線でz===baseFloorZちょうどの通常の床線）----
 // isDegenerate分岐の`z1 < baseFloorZ - GAP_EPS`はstrict `<`でなければならない——`<=`に変異すると
 // 「ちょうどbaseFloorZの通常の床線」まで誤って向こう側(降格)扱いになる。既存の統合テスト

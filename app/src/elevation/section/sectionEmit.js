@@ -19,8 +19,15 @@ import { zToY } from './sectionTypes.js';
  * @param {number} x2
  * @param {number} z2
  * @param {string} role - ElevationLineRoleの値
- * @param {{dash?:string, ceilZ?:number}} [opts] - ceilZ未指定はcut.zRange.hiZへフォールバック
- *   （§5.6「天井断面」＝この列で見えている天井——通常はzRange上端と一致するため、これを既定にする）。
+ * @param {{dash?:string, ceilZ?:number, neverDowngrade?:boolean}} [opts] - ceilZ未指定は
+ *   cut.zRange.hiZへフォールバック（§5.6「天井断面」＝この列で見えている天井——通常はzRange
+ *   上端と一致するため、これを既定にする）。neverDowngrade:true（実機フィードバック第3弾C。
+ *   リード裁定で契約変更を承認済み）は本関数のbeyond/forceDash判定を丸ごと無効化し、
+ *   渡されたrole・dashをそのまま使う——CUT断面（ささら12×300矩形・踊り場床CUT線・踊り場桁断面）
+ *   はbaseFloorZより下でも太線実線のまま、ささらの見えがかり帯（DETAIL）は同じくbaseFloorZより
+ *   下でも細線実線のまま、という「降格が残るのは踏面梯子(正面視)と壁断面の見えがかりだけ」という
+ *   線種裁定を呼び出し側（sectionStair.js）から明示的に選択できるようにするフラグ
+ *   （既定false＝既存呼び出しは無変更）。
  * @returns {object} lineプリミティブ（y=zToY(z)変換済み）
  */
 export function emitLine(cut, x1, z1, x2, z2, role, opts = {}) {
@@ -39,7 +46,7 @@ export function emitLine(cut, x1, z1, x2, z2, role, opts = {}) {
     ? (z1 < baseFloorZ - GAP_EPS || z1 > ceilZ + GAP_EPS)
     : (Math.max(z1, z2) <= baseFloorZ + GAP_EPS || Math.min(z1, z2) >= ceilZ - GAP_EPS);
   const forced = opts.forceDash === true;
-  const downgrade = beyond || forced;
+  const downgrade = !opts.neverDowngrade && (beyond || forced);
   const finalRole = downgrade ? ElevationLineRole.DETAIL : role;
   const finalDash = downgrade ? 'dashed' : (opts.dash ?? undefined);
   const prim = { type: 'line', x1, y1: zToY(z1), x2, y2: zToY(z2), weight: weightForRole(finalRole) };

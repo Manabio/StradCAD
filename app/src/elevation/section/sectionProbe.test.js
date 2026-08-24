@@ -4,7 +4,7 @@
 // 設計意図はarchitect承認済みの実装指示書§5・WP-E1完了条件参照。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Plane, PlanGraph, CenterLineType, Discipline, edgeKey, OpeningCategory } from '@core';
+import { Plane, PlanGraph, CenterLineType, Discipline, edgeKey, OpeningCategory, RoomFeature } from '@core';
 import { generateRoomWallsFromOutline } from '../../finish/wallGeneration.js';
 import { makeProbeContext, collectCutBreaks, probeColumn } from './sectionProbe.js';
 import { emitOpenGapMarks } from './sectionEmit.js';
@@ -25,6 +25,17 @@ function makeRectRoom(graph, x0v, y0v, x1v, y1v, name = 'LDK') {
   const room = graph.addRoom(new Set([key]), name);
   generateRoomWallsFromOutline(graph, room);
   return room;
+}
+
+// 実機フィードバック第3弾G用: 壁を一切生成しない矩形室（自層に候補壁が無い状態を作り、
+// probeColumnを「self天井より上はabove層の実Room有無で判定する」分岐まで到達させる）。
+function makeRectRoomNoWalls(graph, x0v, y0v, x1v, y1v, name = 'LDK') {
+  const x0 = graph.addCenterLine(CenterLineType.VERTICAL, x0v, { labeled: false, discipline: Discipline.ARCH });
+  const x1 = graph.addCenterLine(CenterLineType.VERTICAL, x1v, { labeled: false, discipline: Discipline.ARCH });
+  const y0 = graph.addCenterLine(CenterLineType.HORIZONTAL, y0v, { labeled: false, discipline: Discipline.ARCH });
+  const y1 = graph.addCenterLine(CenterLineType.HORIZONTAL, y1v, { labeled: false, discipline: Discipline.ARCH });
+  const key = `${x0.id}:${y0.id}:${x1.id}:${y1.id}`;
+  return graph.addRoom(new Set([key]), name);
 }
 
 // 「上り口(y=0)に立ってy増加方向(部屋の奥=y=3000の壁)を見る」矩形室4000x3000のcut.lineを作る。
@@ -399,4 +410,112 @@ test('【WP-E7・D1統合】開口が天井際まで届き2Fアキ相当のopen�
   ];
   const prims = emitOpenGapMarks(columns, cut);
   assert.equal(prims.length, 2, `開口が両隣のopen列と橋渡しするため1組の大きなX(2本)のはず（実際:${prims.length}本）`);
+});
+
+// ---- 実機フィードバック第3弾A2: 見えがかり壁のz上限は「上階に実Roomがあるか」で決める ----
+// 上が吹抜け（VOID/STAIR_VOID）の階段室では、壁の輪郭は自層CH（1F天井高さ）で水平キャップされず
+// 上階天井まで続くべき（根本原因: probeColumnのwall候補がinfo.ceilZ=自層CHで無条件に切っていた）。
+function twoLayerCut(selfGraph, aboveGraph, aboveFloorZMm, hiZMm) {
+  return {
+    seqNo: '1',
+    line: { isVertical: false, axisValue: 0, lo: 0, hi: 4000 },
+    viewSign: 1,
+    dirSign: 1,
+    layers: [
+      { graph: selfGraph, floorZMm: 0, role: 'self' },
+      { graph: aboveGraph, floorZMm: aboveFloorZMm, role: 'above' },
+    ],
+    zRange: { loZ: 0, hiZ: hiZMm },
+    baseFloorZ: 0,
+  };
+}
+
+test('【実機フィードバック第3弾A2】probeColumn: 上階に実Roomがあれば見えがかり壁は従来どおり自層CHでキャップされる（回帰ガード）', () => {
+  const selfGraph = makeGraph();
+  makeRectRoom(selfGraph, 0, 0, 4000, 3000, '階段室');
+  const aboveGraph = new PlanGraph(new Plane('p2', 2900, '2階', 1, 1));
+  makeRectRoom(aboveGraph, 0, 0, 4000, 3000, '洋室'); // feature未設定=実Room。footprintは自層と同一
+
+  const cut = twoLayerCut(selfGraph, aboveGraph, 2900, 5300);
+  const probeCtx = makeProbeContext(cut.layers);
+  const bands = probeColumn(cut, 2000, probeCtx);
+
+  const wallZ1Max = Math.max(...bands.filter(b => b.kind === 'wall' && b.layerRole === 'self').map(b => b.z1));
+  assert.equal(wallZ1Max, CH, `上階に実Roomがある通常構成では従来どおり自層CH(${CH})でキャップされるはず（実際:${wallZ1Max}）`);
+});
+
+test('【実機フィードバック第3弾A2】probeColumn: 上階が吹抜け(VOID)なら見えがかり壁は自層CHで水平キャップされず上階天井まで続く', () => {
+  const selfGraph = makeGraph();
+  makeRectRoom(selfGraph, 0, 0, 4000, 3000, '階段室');
+  const aboveGraph = new PlanGraph(new Plane('p2', 2900, '2階', 1, 1));
+  const voidRoom = makeRectRoom(aboveGraph, 0, 0, 4000, 3000, '吹抜け');
+  voidRoom.setFeature(RoomFeature.VOID); // footprintは自層と同一・実床なし
+
+  const cut = twoLayerCut(selfGraph, aboveGraph, 2900, 5300);
+  const probeCtx = makeProbeContext(cut.layers);
+  const bands = probeColumn(cut, 2000, probeCtx);
+
+  const wallZ1Max = Math.max(...bands.filter(b => b.kind === 'wall' && b.layerRole === 'self').map(b => b.z1));
+  assert.equal(wallZ1Max, 5300, `上階が吹抜けなら自層CH(${CH})で止まらず上階天井(5300)まで続くはず（実際:${wallZ1Max}）`);
+  assert.ok(!bands.some(b => b.kind === 'wall' && b.layerRole === 'self' && Math.abs(b.z1 - CH) < 1e-6 && b.z0 < CH),
+    '1F天井高さちょうどで終わる自層の壁帯（誤った水平キャップ線の元）が残っていないはず');
+});
+
+test('【失敗系・実機フィードバック第3弾A2】probeColumn: above層が無い（最上階等）なら従来どおり自層CHでキャップされる', () => {
+  const selfGraph = makeGraph();
+  makeRectRoom(selfGraph, 0, 0, 4000, 3000, '階段室');
+  const cut = frontCut(selfGraph, { zRange: { loZ: 0, hiZ: CH } }); // layers=[self]のみ（既存のfrontCut）
+  const probeCtx = makeProbeContext(cut.layers);
+  const bands = probeColumn(cut, 2000, probeCtx);
+
+  const wallZ1Max = Math.max(...bands.filter(b => b.kind === 'wall' && b.layerRole === 'self').map(b => b.z1));
+  assert.equal(wallZ1Max, CH, `above層が無ければ判定不能のため自層CH(${CH})のまま（実際:${wallZ1Max}）`);
+});
+
+// ---- 実機フィードバック第3弾G: above層の床端(slab/open境界=2FL水平線)はabove.roomが実Room（VOID/STAIR_VOID以外）のときだけ'slab'にする ----
+test('【実機フィードバック第3弾G】probeColumn: self天井より上でabove層に実Roomがあれば従来どおりslab(非描画)になる（回帰ガード）', () => {
+  const selfGraph = makeGraph();
+  makeRectRoomNoWalls(selfGraph, 0, 0, 4000, 3000, '階段室'); // 自層に候補壁なし
+  const aboveGraph = new PlanGraph(new Plane('p2', 2900, '2階', 1, 1));
+  makeRectRoomNoWalls(aboveGraph, 0, 0, 4000, 3000, '洋室'); // feature未設定=実Room・above層にも壁を作らない（above自身のwall候補が横取りしないように）
+
+  const cut = {
+    seqNo: '1', line: { isVertical: false, axisValue: 0, lo: 0, hi: 4000 },
+    viewSign: 1, dirSign: 1,
+    layers: [
+      { graph: selfGraph, floorZMm: 0, role: 'self' },
+      { graph: aboveGraph, floorZMm: 2900, role: 'above' },
+    ],
+    zRange: { loZ: 0, hiZ: 5300 }, baseFloorZ: 0,
+  };
+  const probeCtx = makeProbeContext(cut.layers);
+  const bands = probeColumn(cut, 2000, probeCtx);
+
+  const aboveSlab = bands.find(b => b.kind === 'slab' && b.z0 >= 2900 - 1e-6);
+  assert.ok(aboveSlab, 'self天井より上にslab帯があるはず（above層に実Roomがあるため）');
+});
+
+test('【実機フィードバック第3弾G】probeColumn: self天井より上でabove層がVOID(実Room以外)ならslabではなくopenになる（2FL水平線を誤って出さない）', () => {
+  const selfGraph = makeGraph();
+  makeRectRoomNoWalls(selfGraph, 0, 0, 4000, 3000, '階段室'); // 自層に候補壁なし
+  const aboveGraph = new PlanGraph(new Plane('p2', 2900, '2階', 1, 1));
+  const voidRoom = makeRectRoomNoWalls(aboveGraph, 0, 0, 4000, 3000, '吹抜け');
+  voidRoom.setFeature(RoomFeature.VOID);
+
+  const cut = {
+    seqNo: '1', line: { isVertical: false, axisValue: 0, lo: 0, hi: 4000 },
+    viewSign: 1, dirSign: 1,
+    layers: [
+      { graph: selfGraph, floorZMm: 0, role: 'self' },
+      { graph: aboveGraph, floorZMm: 2900, role: 'above' },
+    ],
+    zRange: { loZ: 0, hiZ: 5300 }, baseFloorZ: 0,
+  };
+  const probeCtx = makeProbeContext(cut.layers);
+  const bands = probeColumn(cut, 2000, probeCtx);
+
+  const aboveSlab = bands.find(b => b.kind === 'slab' && b.z0 >= 2900 - 1e-6);
+  assert.equal(aboveSlab, undefined, 'above層がVOID(実床なし)ならslabにならないはず');
+  const aboveOpen = bands.find(b => b.kind === 'open' && b.z0 >= 2900 - 1e-6);
+  assert.ok(aboveOpen, 'above層がVOIDならopen帯になるはず（2FL水平線=slab/open境界を誤って出さないため）');
 });

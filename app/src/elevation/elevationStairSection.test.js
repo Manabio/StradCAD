@@ -199,3 +199,39 @@ test('【失敗系】stringerPrimitives: 段鼻点が2点未満なら空配列',
   assert.deepEqual(stringerPrimitives([[0, 0]], 200), []);
   assert.deepEqual(stringerPrimitives([], 200), []);
 });
+
+// ---- 実機フィードバック第3弾B: オフセット後多角形をz=baseZ/z=baseZ+steps×riserの水平面でクリップ ----
+// stairRunProfile(2,200,600,0,0,1)の段鼻は(0,-200)・(300,-400)（上と同じフィクスチャ）。
+// 法線オフセット(depthMm=300)は段鼻を結ぶ線の下方向(y増加側)へ押し出すため、flight自身が
+// z=0(y=0)始まりの場合、オフセット後の1つの頂点がy>0（FLより下）へ突き出す。
+// zBounds={yLo:-400,yHi:0}（2段×riser200=400の全上りぶん・baseZ=0）でクリップすると、
+// y>0の突き出しが消える。
+test('【実機フィードバック第3弾B】stringerPrimitives: zBounds指定時はオフセット後の突き出しがFL(yHi)を超えないようクリップされる', () => {
+  const profile = stairRunProfile(2, 200, 600, 0, 0, 1).points;
+  const unclipped = stringerPrimitives(profile, STEEL_STRINGER_DEPTH_MM);
+  const unclippedMaxY = Math.max(...unclipped[0].points.map(p => p[1]));
+  assert.ok(unclippedMaxY > 1e-6, 'zBounds無しの前提: FL(y=0)を超えて突き出すはず');
+
+  const clipped = stringerPrimitives(profile, STEEL_STRINGER_DEPTH_MM, { yLo: -400, yHi: 0 });
+  assert.equal(clipped.length, 1);
+  const ys = clipped[0].points.map(p => p[1]);
+  assert.ok(Math.max(...ys) <= 1e-6, 'クリップ後はyHi(0)を超えないはず');
+  assert.ok(Math.min(...ys) >= -400 - 1e-6, 'クリップ後はyLo(-400)を下回らないはず');
+  const first = clipped[0].points[0], last = clipped[0].points[clipped[0].points.length - 1];
+  assert.ok(Math.abs(first[0] - last[0]) < 1e-9 && Math.abs(first[1] - last[1]) < 1e-9,
+    'クリップ後も閉じた多角形（始点===終点）のはず');
+});
+
+test('【失敗系・実機フィードバック第3弾B】stringerPrimitives: zBounds未指定は従来どおりクリップしない（挙動不変）', () => {
+  const profile = stairRunProfile(2, 200, 600, 0, 0, 1).points;
+  const prims = stringerPrimitives(profile, STEEL_STRINGER_DEPTH_MM);
+  assert.equal(prims.length, 1);
+  const maxY = Math.max(...prims[0].points.map(p => p[1]));
+  assert.ok(maxY > 1e-6, 'zBounds省略時はFL(y=0)を超えて突き出したままのはず（既存挙動）');
+});
+
+test('【失敗系・実機フィードバック第3弾B】stringerPrimitives: zBoundsが多角形と全く重ならなければ空配列（例外を投げない）', () => {
+  const profile = stairRunProfile(2, 200, 600, 0, 0, 1).points;
+  const prims = stringerPrimitives(profile, STEEL_STRINGER_DEPTH_MM, { yLo: 1000, yHi: 2000 });
+  assert.deepEqual(prims, []);
+});

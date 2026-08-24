@@ -11,7 +11,7 @@
  * ローカル座標は elevationFigure.js と同じ（x=0起点、yは上向き負・床=0）。
  */
 import { resolveSwitchbackSpanLengths } from '../finish/stair/stairClassify.js';
-import { ElevationLineRole, weightForRole } from './elevationStyle.js';
+import { ElevationLineRole, weightForRole, GAP_EPS_MM as GAP_EPS } from './elevationStyle.js';
 
 /**
  * 直進区間1本ぶんの踏面プロファイル（蹴上→踏面を段数ぶん繰り返すジグザグ線）をローカル座標で作る。
@@ -150,7 +150,7 @@ export function treadLadderLines({ loX, hiX, riserMm, steps, baseAbsMm, dashed =
  * @param {number} depthMm - ささらの桁成（見付幅）
  * @returns {object[]} 0または1件のpolylineプリミティブ配列
  */
-export function stringerPrimitives(profilePoints, depthMm) {
+export function stringerPrimitives(profilePoints, depthMm, zBounds) {
   const nosings = profilePoints.filter((_, i) => i % 2 === 1);
   if (nosings.length < 2) return [];
   const [x1, y1] = nosings[0];
@@ -164,5 +164,56 @@ export function stringerPrimitives(profilePoints, depthMm) {
   const points = [
     [x1, y1], [x2, y2], [x2 + ox, y2 + oy], [x1 + ox, y1 + oy], [x1, y1],
   ];
-  return [{ type: 'polyline', points, weight: weightForRole(ElevationLineRole.DETAIL) }];
+  // 実機フィードバック第3弾B: オフセット後の多角形は、法線オフセット(ox,oy)ぶん元のnosing線
+  // （flightの端の1つ内側のnosingを結ぶ線。flight自身の始端・終端ちょうどではない）よりFL側へ
+  // はみ出すことがある（せいdepthMmぶん下げる方向＝階段の下＝floorへ向かう方向のため）。
+  // z=baseZ・z=baseZ+steps×riser（ローカルy=zBounds.yHi/yLo。flightZBoundsと同じ規約）の
+  // 水平面でSutherland–Hodgman相当の単純な半平面クリップを行い、FLを超えた突き出しを切る
+  // （clipStringerToAnchors「ジグザグ点列の端点をFLへ強制的に揃える」対応の、オフセット後
+  // 多角形版）。zBounds未指定（既存呼び出し）は挙動不変。
+  const clippedPoints = zBounds ? clipPolygonToYRange(points, zBounds.yLo, zBounds.yHi) : points;
+  if (clippedPoints.length < 3) return [];
+  return [{ type: 'polyline', points: clippedPoints, weight: weightForRole(ElevationLineRole.DETAIL) }];
+}
+
+// [x,y]の閉多角形（points[0]===points[末尾]の重複終点あり・無し両対応）を、y<=yHi・y>=yLo
+// の2つの半平面でSutherland–Hodgman法によりクリップする（実機フィードバック第3弾B）。
+// yLo/yHiのいずれかがnullなら該当する側の半平面クリップを省略する。
+function clipPolygonToYRange(points, yLo, yHi) {
+  let poly = points;
+  if (poly.length > 1) {
+    const [fx, fy] = poly[0], [lx, ly] = poly[poly.length - 1];
+    if (Math.abs(fx - lx) < GAP_EPS && Math.abs(fy - ly) < GAP_EPS) poly = poly.slice(0, -1); // 重複終点を除去
+  }
+  if (yHi != null) poly = clipHalfPlaneY(poly, y => y <= yHi + GAP_EPS, yHi);
+  if (yLo != null) poly = clipHalfPlaneY(poly, y => y >= yLo - GAP_EPS, yLo);
+  if (poly.length === 0) return [];
+  return [...poly, poly[0]]; // 閉多角形として再度終点を閉じる（呼び出し側の既存出力形と揃える）
+}
+
+// Sutherland–Hodgman法の1半平面ぶんのクリップ（keepFn(y)がtrueの頂点を保持し、境界を跨ぐ辺には
+// 交点(x, boundaryY)を挿入する）。
+function clipHalfPlaneY(poly, keepFn, boundaryY) {
+  if (poly.length === 0) return poly;
+  const out = [];
+  const n = poly.length;
+  for (let i = 0; i < n; i++) {
+    const curr = poly[i];
+    const prev = poly[(i - 1 + n) % n];
+    const currIn = keepFn(curr[1]);
+    const prevIn = keepFn(prev[1]);
+    if (currIn) {
+      if (!prevIn) out.push(intersectAtY(prev, curr, boundaryY));
+      out.push(curr);
+    } else if (prevIn) {
+      out.push(intersectAtY(prev, curr, boundaryY));
+    }
+  }
+  return out;
+}
+
+function intersectAtY(a, b, boundaryY) {
+  const [ax, ay] = a, [bx, by] = b;
+  const t = Math.abs(by - ay) < GAP_EPS ? 0 : (boundaryY - ay) / (by - ay);
+  return [ax + t * (bx - ax), boundaryY];
 }

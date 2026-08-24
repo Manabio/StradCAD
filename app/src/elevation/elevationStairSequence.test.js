@@ -1,11 +1,11 @@
 // elevationStairSequence.js（階段=SWITCHBACKの歩行順面シーケンス。WP-S2）のテスト。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Plane, PlanGraph, CenterLineType, Discipline, StairType, StructuralMaterialType, edgeKey } from '@core';
+import { Plane, PlanGraph, CenterLineType, Discipline, StairType, StructuralMaterialType, RoomFeature, edgeKey } from '@core';
 import { generateRoomWallsFromOutline } from '../finish/wallGeneration.js';
 import { measureStairSpans } from '../finish/stair/stairClassify.js';
 import { composeRoomFaces } from './elevationFaceList.js';
-import { stairFaceSequence } from './elevationStairSequence.js';
+import { stairFaceSequence, kneeWallCapContent } from './elevationStairSequence.js';
 import { resolveSwitchbackParams } from './elevationStairSection.js';
 import { ElevationLineRole, weightForRole } from './elevationStyle.js';
 
@@ -234,6 +234,45 @@ test('stairFaceSequence: seq1(wall実在時)は厚みぶん離れた2本の壁�
   }
 });
 
+// ---- 実機フィードバック第3弾E: seq1（見返り）で踊り場より下の往路レーンにささらの端面(縦の細破線) ----
+// 往路flightのacrossLo/acrossHiのうち外側（部屋の実際の外縁）は面端(x=0/run)の壁輪郭縦線
+// （既存の別テストで検証済み・降格して同じ高さ範囲にDETAIL破線で現れる）とx位置が一致しうる
+// ため、位置では絞らずSTEEL/WOODの本数差（増分2本）で検証する。
+test('【実機フィードバック第3弾E】stairFaceSequence: 鉄骨階段のseq1は木造より踊り場より下のDETAIL破線縦線が2本多い（往路ささらの端面ぶん）', () => {
+  const n1 = 6, riser = OPTS.floorHeight / 12;
+  const landingAbs = n1 * riser;
+  const detailWeight = weightForRole(ElevationLineRole.DETAIL);
+  const countEndCapLikeLines = (structure) => {
+    const graph = makeGraph();
+    const { room, stair } = makeSwitchbackFixture(graph);
+    if (structure) stair.setField('structure', structure);
+    const faces = composeRoomFaces(room, graph);
+    const entries = stairFaceSequence(stair, faces, graph, OPTS);
+    const seq1 = entries.find(e => e.seqNo === '1');
+    return seq1.content.filter(p =>
+      p.type === 'line' && p.x1 === p.x2 && p.dash === 'dashed' && p.weight === detailWeight &&
+      Math.abs(p.y1 - 0) < 1e-9 && Math.abs(p.y2 - (-landingAbs)) < 1e-9).length;
+  };
+  const woodCount = countEndCapLikeLines(null);
+  const steelCount = countEndCapLikeLines(StructuralMaterialType.STEEL);
+  assert.equal(steelCount - woodCount, 2,
+    `STEELは往路ささらの端面(acrossLo/acrossHi)ぶん2本多いはず（wood=${woodCount}・steel=${steelCount}）`);
+});
+
+test('【失敗系・実機フィードバック第3弾E】stairFaceSequence: 木造(既定)のseq1はcut.baseFloorZが0の面(seq2)にはささらの端面の破線を出さない', () => {
+  const graph = makeGraph();
+  const { room, stair } = makeSwitchbackFixture(graph);
+  stair.setField('structure', StructuralMaterialType.STEEL);
+  const faces = composeRoomFaces(room, graph);
+  const entries = stairFaceSequence(stair, faces, graph, OPTS);
+  const seq2 = entries.find(e => e.seqNo === '2'); // baseFloorZ:0（踊り場より下という概念自体が無い面）
+  const detailWeight = weightForRole(ElevationLineRole.DETAIL);
+  const anyDashedVertical = seq2.content.some(p =>
+    p.type === 'line' && p.x1 === p.x2 && p.dash === 'dashed' && p.weight === detailWeight && p.y1 === 0);
+  assert.equal(anyDashedVertical, false,
+    'seq2はbaseFloorZ=0のため「踊り場より下」区間が無く、端面の破線(z=0起点)は出ないはず');
+});
+
 test('stairFaceSequence: seq1(wall実在時)は壁の見え側に1階天井線(中線)、往路レーン側に2FL(中線)を描く', () => {
   const graph = makeGraph();
   const { room, stair } = makeSwitchbackFixture(graph, { withMidWall: true });
@@ -254,47 +293,47 @@ test('stairFaceSequence: seq1(wall実在時)は壁の見え側に1階天井線(�
   assert.ok(secondFlLine, '往路レーン側の2FL線(中線・水平)が見つからない');
 });
 
-// ---- WP-E5b書き換え: 「2FLの中線」は一般規則では「above層の床スラブ端（slabとopenの境界）」
-// として現れる（§5.6）——2Fが踊り場部分にしか床を持たない（往路・復路レーンの上は吹抜け）
-// 現実的な構成でなければ、above層は常にslab（非描画）のままとなりopen自体が生じない。
-// そのため本テストはupperLandingOnly構成のupperGraph fixtureを使い、floorHeight(2FL)を
-// 自室の天井高さ(既定CH)とは別の値にして、両者の位置が別々に現れることを固定する ----
-test('stairFaceSequence: seq1はabove層の床端(2FL)にSILHOUETTE水平線を描き、1F天井線とは別位置になる', () => {
+// ---- 実機フィードバック第3弾A2で書き換え: WP-E5b時点の一般規則は「見えがかり壁の上端は
+// 常に自層(1F階段室)のCHで水平キャップする」実装だったため、above層が実際にはslab
+// （非描画・視線を遮る実体なし）であっても、往路・復路レーン上に「1F天井線」と「2FL線
+// （above層の床端）」という2本の水平線が別々に現れていた——しかしupperLandingOnly構成
+// （2F床=踊り場のみ、レーン上は吹抜け）では、レーン上に立つ壁（entry壁）はそもそも
+// 1F天井高さで途切れる理由が無く、物理的には上階天井まで連続しているのが正しい
+// （sectionProbe.jsのresolveWallCapZ・根本原因: probeColumnがwall候補の上端をinfo.ceilZ
+// ＝自層CHで無条件に切っていた）。修正後は「1F天井高さ(-chLowerMm)ちょうどの水平キャップ線」
+// が消え、壁は上階天井(-chUpperAbsMm)まで届く1本の水平キャップになる。
+test('【実機フィードバック第3弾A2】stairFaceSequence: seq1の壁は2Fレーン上に床が無ければ1F天井高さで水平キャップされず、上階天井まで連続する', () => {
   const graph = makeGraph('p1');
   const upperGraph = makeGraph('p2');
   const { room, stair } = makeSwitchbackFixture(graph, { withMidWall: true, midWallGraph: upperGraph, upperLandingOnly: true });
   const faces = composeRoomFaces(room, graph);
-  // floorHeight(2FL)を自室の既定天井高さ(2400)とは別の値にして、2FL線と1F天井線が別位置に
-  // 現れることを固定する（QA指摘: floorHeight===chLowerMmだと両者の取り違えを検知できない）。
+  // floorHeight(2FL)を自室の既定天井高さ(2400)とは別の値にして、両者の取り違えを検知できる
+  // ようにする（旧テストのQA指摘を踏襲）。
   const localOpts = { floorHeight: 2600, chUpperAbsMm: 5000, chLowerMm: 2400 };
 
   const entries = stairFaceSequence(stair, faces, graph, { ...localOpts, upperGraph });
   const seq1 = entries.find(e => e.seqNo === '1');
   const silhouetteWeight = weightForRole(ElevationLineRole.SILHOUETTE);
 
-  const firstFloorCeilLine = seq1.content.find(p =>
+  const wrongCapLine = seq1.content.find(p =>
     p.type === 'line' && p.y1 === p.y2 && p.dash === undefined && p.weight === silhouetteWeight &&
-    Math.abs(p.y1 - (-2400)) < 1e-6); // 自室(1F階段室)の既定天井高さ(DEFAULT_ROOM_CEILING_HEIGHT)
-  assert.ok(firstFloorCeilLine, '1F天井線(中線・水平・-2400)が見つからない');
+    Math.abs(p.y1 - (-localOpts.chLowerMm)) < 1e-6);
+  assert.equal(wrongCapLine, undefined,
+    '上階(レーン)に床が無いため、1F天井高さ(-chLowerMm)ちょうどの誤った水平キャップ線は無いはず');
 
-  const secondFlLine = seq1.content.find(p =>
+  const topCapLine = seq1.content.find(p =>
     p.type === 'line' && p.y1 === p.y2 && p.dash === undefined && p.weight === silhouetteWeight &&
-    Math.abs(p.y1 - (-localOpts.floorHeight)) < 1e-6);
-  assert.ok(secondFlLine, '2FL線(above層の床端・中線・水平・-floorHeight)が見つからない');
-  assert.notEqual(firstFloorCeilLine.y1, secondFlLine.y1, '1F天井線と2FL線は別位置のはず');
+    Math.abs(p.y1 - (-localOpts.chUpperAbsMm)) < 1e-6);
+  assert.ok(topCapLine, '壁の輪郭は上階天井(-chUpperAbsMm)まで届くはず');
 });
 
-// ---- WP-E5b書き換え: 「アキのバツ」は一般規則では、above層に所有Roomが見つからない
-// （slabではなくopenと判定される）z区間に現れる（§5.6・emitOpenGapMarks）。baseFloorZ
-// （=landingAbs）より上のopen帯には一点鎖線(center)の対角線2本が出ることを固定する。
-// QA修正（sectionProbe.jsのfallbackCeilZ）で書き換え: この構成（往復間の壁midWallが実在し
-// upperLandingOnly=true）は、旧実装のバグ（視線方向に所有Roomが無い層の壁候補を丸ごと捨てる）
-// では往路・復路レーンの区別なくopen領域全体が1本の連続X（対角線2本）に見えていたが、
-// fallbackCeilZ修正後はmidWall自体が'cut'帯として正しく検出されるため、その左右（往路側・
-// 復路側）は別々の連結成分になり、それぞれ独立した1組ずつ＝計2組（対角線4本）のアキXになる
-// のが正しい（壁で仕切られた向こう側同士は視覚的に連続しないため。旧assert(2本)はバグを
-// 固定していた回帰値だった）----
-test('stairFaceSequence: seq1はabove層に床が無い(open)区間に一点鎖線(center)の対角線を描く（midWallの両側で別々のアキXになる）', () => {
+// ---- 実機フィードバック第3弾A2で書き換え: 「アキのバツ」はabove層に所有Roomが見つからない
+// （壁候補も存在しない）z区間にのみ現れる（§5.6・emitOpenGapMarks）。A2修正前は
+// entry壁の上端が誤って1F天井高さで打ち切られていたため、レーン上のその先（1F天井〜2F天井）
+// が「壁の無いopen区間」に見え、そこにアキXが出ていた。修正後はentry壁自体が上階天井まで
+// 連続して見えがかりを塞ぐため、往路・復路レーンいずれの向きにもopen区間が残らず、
+// アキXは1本も出ない（壁が実際にその方向の視界を塞いでいる以上、正しい結果）。----
+test('【実機フィードバック第3弾A2】stairFaceSequence: seq1は往復レーン上を壁が上階天井まで塞ぐため、その区間にアキXは出ない', () => {
   const graph = makeGraph('p1');
   const upperGraph = makeGraph('p2');
   const { room, stair } = makeSwitchbackFixture(graph, { withMidWall: true, midWallGraph: upperGraph, upperLandingOnly: true });
@@ -303,22 +342,11 @@ test('stairFaceSequence: seq1はabove層に床が無い(open)区間に一点鎖�
   const entries = stairFaceSequence(stair, faces, graph, { ...OPTS, upperGraph });
   const seq1 = entries.find(e => e.seqNo === '1');
   const detailWeight = weightForRole(ElevationLineRole.DETAIL);
-  const n1 = 6, riser = OPTS.floorHeight / 12;
-  const landingAbs = n1 * riser;
 
-  const diagonalLines = seq1.content.filter(p =>
-    p.type === 'line' && p.x1 !== p.x2 && p.y1 !== p.y2 && p.weight === detailWeight);
-  const centerDiagonals = diagonalLines.filter(p => p.dash === 'center');
-  assert.equal(centerDiagonals.length, 4,
-    'midWallの両側(往路・復路)それぞれに1組ずつ、計2組(対角線4本)のアキXのはず');
-  for (const p of centerDiagonals) {
-    const yNear = Math.max(p.y1, p.y2), yFar = Math.min(p.y1, p.y2);
-    assert.ok(yNear <= -landingAbs + 1e-6, `アキXはbaseFloorZ(-landingAbs)より上にあるはず（yNear=${yNear}）`);
-    assert.ok(yFar <= yNear, 'yFarはyNear以下のはず');
-  }
-  // baseFloorZより上のdash:'dashed'（本来床断面より下=破線の対象）は無いはず。
-  assert.equal(diagonalLines.filter(p => p.dash === 'dashed' && Math.min(p.y1, p.y2) >= -landingAbs).length, 0,
-    'baseFloorZより上に破線の対角線は無いはず');
+  const centerDiagonals = seq1.content.filter(p =>
+    p.type === 'line' && p.x1 !== p.x2 && p.y1 !== p.y2 && p.weight === detailWeight && p.dash === 'center');
+  assert.equal(centerDiagonals.length, 0,
+    '壁が上階天井まで連続して塞ぐため、往路・復路レーン上にアキXは出ないはず');
 });
 
 // ==== QA最終検証・修正1: sectionProbe.jsのfallbackCeilZ（往復間の壁がupperLandingOnly=true構成
@@ -330,7 +358,7 @@ test('stairFaceSequence: seq1はabove層に床が無い(open)区間に一点鎖�
 // 互いに排他的なfixtureだったため、この壁を丸ごと消す不具合を構造的に検出できなかった）。
 // 以下2本は「upperLandingOnly=true（2F床=踊り場のみ）」で両方を同一fixtureで同時に固定する。
 
-test('【QA修正1】stairFaceSequence: 2Fが踊り場のみ床（実機で最も普通の構成）でも、seq1に往復間の壁の2縁とアキXが同時に出る', () => {
+test('【QA修正1・実機フィードバック第3弾A2で一部書き換え】stairFaceSequence: 2Fが踊り場のみ床（実機で最も普通の構成）でも、seq1に往復間の壁の2縁が出る（隣接するentry壁が上階天井まで塞ぐためSILHOUETTE・アキXは無し）', () => {
   const graph = makeGraph('p1');
   const upperGraph = makeGraph('p2');
   const { room, stair, midWall } = makeSwitchbackFixture(
@@ -339,7 +367,6 @@ test('【QA修正1】stairFaceSequence: 2Fが踊り場のみ床（実機で最�
 
   const entries = stairFaceSequence(stair, faces, graph, { ...OPTS, upperGraph });
   const seq1 = entries.find(e => e.seqNo === '1');
-  const cutWeight = weightForRole(ElevationLineRole.CUT);
   const detailWeight = weightForRole(ElevationLineRole.DETAIL);
   const mr = midWall.materialRange;
   const thicknessMm = Math.abs(mr.hi - mr.lo);
@@ -358,22 +385,31 @@ test('【QA修正1】stairFaceSequence: 2Fが踊り場のみ床（実機で最�
   assert.ok(Math.abs((edgeXs[1] - edgeXs[0]) - thicknessMm) < 1e-6,
     `2本の間隔(${edgeXs[1] - edgeXs[0]})は壁厚(${thicknessMm})に一致するはず`);
 
-  // 両縁とも weight=CUT(thick) のはず（§5.6一般規則: 縁が接する側がopenならCUT。この構成は
-  // 往路・復路レーンとも2F側がopenなので両縁ともCUTになる——旧手書き仕様「wallZone側=太・
-  // ladderZone側=中」の位置基準ではなく、一般規則の「接する側の状態」基準で自動的に同じ
-  // 結果を再現する）。
+  // 両縁とも weight=SILHOUETTE(medium) のはず（§5.6一般規則: 縁が接する側がopenならCUT・
+  // 塞がれていればSILHOUETTE。実機フィードバック第3弾A2で書き換え: A2修正前は隣接列
+  // （往路・復路のentry壁）が1F天井高さで誤って途切れ「open」に見えていたためCUTだったが、
+  // A2修正後はentry壁が上階天井まで連続して見えがかりを塞ぐため、隣接列は「open」ではなく
+  // 「wall」——一般規則どおり塞がれた側としてSILHOUETTEになるのが正しい）。
   for (const edge of fullHeightEdges) {
-    assert.equal(edge.weight, cutWeight, `x=${edge.x1}の縁は両側openのためCUT(thick)のはず`);
+    assert.equal(edge.weight, weightForRole(ElevationLineRole.SILHOUETTE),
+      `x=${edge.x1}の縁は両側とも壁で塞がれているためSILHOUETTE(medium)のはず`);
   }
 
-  // アキX: 壁の左右（往路側・復路側）はそれぞれ独立した連結成分になるため、1組ずつ計2組
-  // （対角線4本）になる（壁で仕切られた向こう側同士は視覚的に連続しないため）。
+  // アキX: 実機フィードバック第3弾A2で書き換え。A2修正前はentry壁が1F天井高さで途切れ、
+  // その先（レーン上・1F天井〜2F天井）がopen区間に見えていたためアキXが出ていたが、
+  // A2修正後はentry壁自体が上階天井まで連続して視界を塞ぐため、往路・復路レーンいずれにも
+  // open区間が残らずアキXは出ない。
   const centerDiagonals = seq1.content.filter(p =>
     p.type === 'line' && p.x1 !== p.x2 && p.y1 !== p.y2 && p.weight === detailWeight && p.dash === 'center');
-  assert.equal(centerDiagonals.length, 4, '壁の両側それぞれに1組ずつ、計2組(対角線4本)のアキXのはず');
+  assert.equal(centerDiagonals.length, 0, '壁が上階天井まで連続して塞ぐため、アキXは出ないはず');
 });
 
-test('【QA修正1】stairFaceSequence: 同構成（2F=踊り場のみ床）で腰壁(topHeight=900)指定時、seq1の壁上端がfloorHeight+topHeightでキャップされる', () => {
+// 実機フィードバック第3弾Fで書き換え: seq1の腰壁表現は「両端縦線が上端でキャップされる」
+// 一般規則ではなく、「上端水平線のみ・両端縦線なし」という専用のkneeWallCapContent表現へ
+// 差し替えた（コーディネーター裁定）。旧アサーション（縦線2本がtopHeightでキャップされる）は
+// この専用表現の導入前の一般規則をそのまま固定していた回帰値だったため、新しい表現を検証する
+// テストへ置き換える。
+test('【QA修正1・実機フィードバック第3弾Fで書き換え】stairFaceSequence: 同構成（2F=踊り場のみ床）で腰壁(topHeight=900)指定時、seq1は上端水平線のみで両端縦線は無い', () => {
   const graph = makeGraph('p1');
   const upperGraph = makeGraph('p2');
   const { room, stair, midWall } = makeSwitchbackFixture(
@@ -391,26 +427,23 @@ test('【QA修正1】stairFaceSequence: 同構成（2F=踊り場のみ床）で�
   const expectedTopAbs = OPTS.floorHeight + topHeight; // = 2400+900 = 3300
   const mr = midWall.materialRange;
   const thicknessMm = Math.abs(mr.hi - mr.lo);
+  const cutWeight = weightForRole(ElevationLineRole.CUT);
 
-  // 面ローカルxはハードコードせず、「上端がfloorHeight+topHeightでキャップされた縦線が
-  // 壁厚ぶん離れて2本」という構造で検証する（旧実装のバグではこの層の壁候補が丸ごと
-  // 捨てられ、腰壁の高さ自体が反映されなかった＝0本になっていた）。
-  const cappedEdges = seq1.content.filter(p =>
-    p.type === 'line' && p.x1 === p.x2 && Math.abs(Math.min(p.y1, p.y2) - (-expectedTopAbs)) < 1e-6);
-  const edgeXs = [...new Set(cappedEdges.map(p => p.x1))].sort((a, b) => a - b);
-  assert.equal(edgeXs.length, 2,
-    `上端がfloorHeight+topHeight(-${expectedTopAbs})でキャップされた縦線が2本見つからないはず` +
-    `（実際:${JSON.stringify(cappedEdges)}）`);
-  assert.ok(Math.abs((edgeXs[1] - edgeXs[0]) - thicknessMm) < 1e-6,
-    `2本の間隔(${edgeXs[1] - edgeXs[0]})は壁厚(${thicknessMm})に一致するはず`);
+  // 上端水平線: z=expectedTopAbsのCUT水平線が1本、幅=壁厚のはず。
+  const topLines = seq1.content.filter(p =>
+    p.type === 'line' && p.y1 === p.y2 && p.weight === cutWeight &&
+    Math.abs(p.y1 - (-expectedTopAbs)) < 1e-6);
+  assert.equal(topLines.length, 1, '上端水平線(CUT)が1本あるはず');
+  assert.ok(Math.abs(Math.abs(topLines[0].x1 - topLines[0].x2) - thicknessMm) < 1e-6,
+    `上端水平線の幅(${Math.abs(topLines[0].x1 - topLines[0].x2)})は壁厚(${thicknessMm})に一致するはず`);
 
-  // キャップ高さより上には同じx位置の壁縁(CUT/SILHOUETTE)は無い（腰壁の上はrayが抜ける）。
-  for (const x of edgeXs) {
-    const aboveCap = seq1.content.some(p =>
-      p.type === 'line' && p.x1 === p.x2 && Math.abs(p.x1 - x) < 1e-6 &&
-      Math.max(p.y1, p.y2) > -expectedTopAbs + 1e-6 && Math.min(p.y1, p.y2) < -expectedTopAbs - 1e-6);
-    assert.ok(!aboveCap, `x=${x}の壁縁はキャップ高さを超えて連続しないはず`);
-  }
+  // 両端縦線: z=floorHeight〜expectedTopAbsちょうどの縦線は無いはず（一般規則の'cut'両端縦線を
+  // 上端水平線へ差し替えたため）。
+  const wallEdges = seq1.content.filter(p =>
+    p.type === 'line' && p.x1 === p.x2 &&
+    Math.abs(Math.min(p.y1, p.y2) - (-expectedTopAbs)) < 1e-6 &&
+    Math.abs(Math.max(p.y1, p.y2) - (-OPTS.floorHeight)) < 1e-6);
+  assert.equal(wallEdges.length, 0, '腰壁の両端縦線(floorHeight〜topHeight)は無いはず');
 });
 
 // ---- ユーザー実機指示（往路断面=B面=seq2）: 項目4-7 ----
@@ -649,7 +682,9 @@ test('【失敗系】stairFaceSequence: opts.upperGraph未指定なら従来ど�
 // （sectionProbe.js probeColumn内、kneeDropZRangeAtの呼び出し箇所を参照）ため、
 // 「壁の上端がfloorHeight+topHeightでキャップされる」という意味論はseq1・seq2とも維持される
 // （線種と輪郭の組み方だけがcutAlong→wallへ変わる）。 ----
-test('stairFaceSequence: 腰壁(knee.topHeight)を指定すると、seq1・seq2とも壁上端がfloorHeight+topHeightでキャップされる（seq2は今はwall=SILHOUETTEの帯。cutAlongではない）', () => {
+// 実機フィードバック第3弾Fで書き換え: seq1側のアサーションのみ「上端水平線のみ・両端縦線
+// なし」の専用表現へ更新する（seq2側は一般規則のままのため不変）。
+test('stairFaceSequence: 腰壁(knee.topHeight)を指定すると、seq1は上端水平線のみ・seq2は壁上端がfloorHeight+topHeightでキャップされる（seq2は今はwall=SILHOUETTEの帯。cutAlongではない）', () => {
   const graph = makeGraph('p1');
   const upperGraph = makeGraph('p2');
   const { room, stair, midWall } = makeSwitchbackFixture(graph, { withMidWall: true, midWallGraph: upperGraph });
@@ -667,10 +702,15 @@ test('stairFaceSequence: 腰壁(knee.topHeight)を指定すると、seq1・seq2�
   const silhouetteWeight = weightForRole(ElevationLineRole.SILHOUETTE);
   const expectedTopAbs = OPTS.floorHeight + topHeight; // = 2400+900 = 3300（chUpperAbsMm=4800より低い）
 
+  const cappedTopLine = seq1.content.find(p =>
+    p.type === 'line' && p.y1 === p.y2 && p.weight === cutWeight &&
+    Math.abs(p.y1 - (-expectedTopAbs)) < 1e-6);
+  assert.ok(cappedTopLine, `seq1に上端水平CUT線(-${expectedTopAbs})があるはず`);
   const cappedEdge = seq1.content.find(p =>
-    p.type === 'line' && p.x1 === p.x2 && (p.weight === cutWeight || p.weight === silhouetteWeight) &&
-    Math.abs(Math.min(p.y1, p.y2) - (-expectedTopAbs)) < 1e-6); // y上向き負のためtop=min(y1,y2)
-  assert.ok(cappedEdge, `壁の縦線の上端はfloorHeight+topHeight(-${expectedTopAbs})でキャップされるはず`);
+    p.type === 'line' && p.x1 === p.x2 &&
+    Math.abs(Math.min(p.y1, p.y2) - (-expectedTopAbs)) < 1e-6 &&
+    Math.abs(Math.max(p.y1, p.y2) - (-OPTS.floorHeight)) < 1e-6);
+  assert.equal(cappedEdge, undefined, 'seq1は両端縦線(floorHeight〜topHeight)を持たないはず');
 
   // seq2は今はcutAlongではなく通常の見えがかり壁（'wall'。SILHOUETTE=中線）——上端の水平線が
   // knee高さでキャップされ、1F天井(chLowerMm)〜キャップ高さのSILHOUETTE縦線が出る。
@@ -1062,4 +1102,289 @@ test('【失敗系・WP-C】stairFaceSequence: 構造梁が無い階段は従来
   const entries = stairFaceSequence(stair, faces, graph, OPTS);
   assert.deepEqual(entries.map(e => e.seqNo), ['1', '2', '3', '4', '5']);
   for (const e of entries) assert.ok(Array.isArray(e.content));
+});
+
+// ==== ユーザー実機フィードバック2026-08-23第3弾・項目A ====
+// 階段室の上が吹抜け（上階に床が無い）区間は1F天井線・2F床線を描かない（天井断面は上階天井まで
+// 一気に抜ける）。原因: 旧実装はseq2/4のfloorSegments/ceilingProfileを「レーン区間=chMm:
+// ceilLowAbs固定／踊り場区間=ceilTopAbs固定」というlaneLenOnFace基準の決め打ちで構築しており、
+// 上階に実際にRoomがあるか一切確認していなかった（しかも実際には物理的に逆——upperLandingOnly
+// 構成では踊り場の真上にこそ2F実床があるため1F天井高さで止まるべきで、レーン側が吹抜けで
+// 上階天井まで抜けるべきだった）。buildLaneFloorAndCeilingがaboveLayerの実Room有無で判定する。
+test('stairFaceSequence: 上階(2F)の実Roomが踊り場のみ(upperLandingOnly)のとき、seq2/4のレーン区間ceilingProfileは' +
+  '上階天井(chUpperAbsMm)まで抜け、踊り場区間は1F天井(chLowerMm)で止まる', () => {
+  const graph = makeGraph();
+  const upperGraph = makeGraph('p2');
+  const { room, stair } = makeSwitchbackFixture(graph, { withMidWall: true, midWallGraph: upperGraph, upperLandingOnly: true });
+  const faces = composeRoomFaces(room, graph);
+  const entries = stairFaceSequence(stair, faces, graph, { ...OPTS, upperGraph });
+  const seq2 = entries.find(e => e.seqNo === '2');
+  const seq4 = entries.find(e => e.seqNo === '4');
+
+  // seq2: レーン(floorDeltaMm:0)は吹抜け→上階天井(chUpperAbsMm)まで抜けるはず。
+  const laneSeg2 = seq2.floorSegments.find(s => s.floorDeltaMm === 0);
+  assert.ok(laneSeg2, 'seq2にレーン区間(floorDeltaMm:0)があるはず');
+  assert.equal(laneSeg2.floorDeltaMm + laneSeg2.chMm, OPTS.chUpperAbsMm,
+    'レーン区間（上階に床が無い＝吹抜け）は上階天井まで抜けるはず');
+  // 踊り場の面端（x=face.run側）は実Room有り→1F天井高さ(chLowerMm)で止まるはず。
+  const landingEdgeSeg2 = seq2.floorSegments.find(s => Math.abs(s.hiX - seq2.face.run) < 1e-6);
+  assert.equal(landingEdgeSeg2.floorDeltaMm + landingEdgeSeg2.chMm, OPTS.chLowerMm,
+    '踊り場区間（上階に実Room有り）は1F天井高さで止まるはず');
+
+  assert.equal(seq2.ceilingProfile[0][1], OPTS.chUpperAbsMm, 'ceilingProfile冒頭(レーン側)は上階天井のはず');
+  assert.equal(seq2.ceilingProfile[seq2.ceilingProfile.length - 1][1], OPTS.chLowerMm,
+    'ceilingProfile末尾(踊り場側)は1F天井のはず');
+
+  // seq4はseq2の鏡像（踊り場が左=x=0側、レーンが右）。
+  assert.equal(seq4.ceilingProfile[0][1], OPTS.chLowerMm, 'seq4冒頭(踊り場側)は1F天井のはず');
+  assert.equal(seq4.ceilingProfile[seq4.ceilingProfile.length - 1][1], OPTS.chUpperAbsMm,
+    'seq4末尾(レーン側)は上階天井のはず');
+});
+
+test('【失敗系・ユーザー実機フィードバック2026-08-23第3弾・項目A】stairFaceSequence: 上階(2F)にRoomが無い(upperGraph自体無指定)' +
+  '場合は例外を投げず、既存のlaneLenOnFace基準フォールバックのまま動く', () => {
+  const graph = makeGraph();
+  const { room, stair } = makeSwitchbackFixture(graph);
+  const faces = composeRoomFaces(room, graph);
+  const entries = stairFaceSequence(stair, faces, graph, OPTS); // upperGraph未指定
+  const seq2 = entries.find(e => e.seqNo === '2');
+  assert.ok(Array.isArray(seq2.ceilingProfile) && seq2.ceilingProfile.length >= 2, '例外を投げず既存の形のceilingProfileを返すはず');
+});
+
+// ---- 実機フィードバック第3弾D: seq1で「復路ささらの外側(壁側)〜壁」×「z=0〜1F天井」にアキX ----
+// stair.cellsが室の全幅をカバーしない構成（stairwell内に階段以外の空きがある実機構成）を
+// 独自フィクスチャで再現する: 室(room)はx:[0,2600]の単純矩形（踊り場列・復路列とも
+// x=2000〜2600ぶん幅を追加）だが、stair.cells自体は従来どおりx:[0,2000]の3セルのまま
+// （階段の構造は室の右端まで届かない＝復路レーンの外側と壁の間に600mmの空きができる）。
+test('【実機フィードバック第3弾D】stairFaceSequence: 室が階段の構造(stair.cells)より広ければseq1の壁側にアキXが出る（踊り場線で上=一点鎖線・下=破線に分割）', () => {
+  const graph = makeGraph();
+  const x0 = graph.addCenterLine(CenterLineType.VERTICAL, 0,    { labeled: false, discipline: Discipline.ARCH });
+  const xm = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
+  const x1 = graph.addCenterLine(CenterLineType.VERTICAL, 2000, { labeled: false, discipline: Discipline.ARCH });
+  const x2 = graph.addCenterLine(CenterLineType.VERTICAL, 2600, { labeled: false, discipline: Discipline.ARCH });
+  const y0 = graph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: false, discipline: Discipline.ARCH });
+  const ym = graph.addCenterLine(CenterLineType.HORIZONTAL, 1500, { labeled: false, discipline: Discipline.ARCH });
+  const y1 = graph.addCenterLine(CenterLineType.HORIZONTAL, 4500, { labeled: false, discipline: Discipline.ARCH });
+
+  const landingKey = `${x0.id}:${y0.id}:${x1.id}:${ym.id}`;
+  const landingExtraKey = `${x1.id}:${y0.id}:${x2.id}:${ym.id}`;
+  const outboundKey = `${x0.id}:${ym.id}:${xm.id}:${y1.id}`;
+  const returnKey = `${xm.id}:${ym.id}:${x1.id}:${y1.id}`;
+  const returnExtraKey = `${x1.id}:${ym.id}:${x2.id}:${y1.id}`;
+
+  const stairCells = new Set([landingKey, outboundKey, returnKey]);
+  const roomCells = new Set([landingKey, landingExtraKey, outboundKey, returnKey, returnExtraKey]);
+  const room = graph.addRoom(roomCells, '階段');
+  generateRoomWallsFromOutline(graph, room);
+
+  const stair = graph.addStair({
+    type: StairType.SWITCHBACK, cells: stairCells, roomId: room.id,
+    sections: [6, 1, 6], riser: null, upDirection: 'up', flip: false, structure: StructuralMaterialType.STEEL,
+  });
+
+  const faces = composeRoomFaces(room, graph);
+  const entries = stairFaceSequence(stair, faces, graph, OPTS);
+  const seq1 = entries.find(e => e.seqNo === '1');
+  const n1 = 6, riser = OPTS.floorHeight / 12;
+  const landingAbs = n1 * riser;
+
+  const centerDiagonals = seq1.content.filter(p =>
+    p.type === 'line' && p.x1 !== p.x2 && p.y1 !== p.y2 && p.dash === 'center');
+  const dashedDiagonals = seq1.content.filter(p =>
+    p.type === 'line' && p.x1 !== p.x2 && p.y1 !== p.y2 && p.dash === 'dashed');
+  assert.equal(centerDiagonals.length, 2, '踊り場線より上(landingAbs〜1F天井)に一点鎖線のXが1組(2本)出るはず');
+  assert.equal(dashedDiagonals.length, 2, '踊り場線より下(0〜landingAbs)に破線のXが1組(2本)出るはず');
+  for (const p of [...centerDiagonals, ...dashedDiagonals]) {
+    assert.ok(Math.abs(p.x1 - seq1.face.run) < 1e-6 || Math.abs(p.x2 - seq1.face.run) < 1e-6,
+      'Xの一端は面端(壁の位置。x=face.run)にあるはず');
+  }
+  for (const p of centerDiagonals) {
+    assert.ok(Math.max(-p.y1, -p.y2) <= OPTS.chLowerMm + 1e-6 && Math.min(-p.y1, -p.y2) >= landingAbs - 1e-6,
+      '一点鎖線のXはlandingAbs〜chLowerMmの範囲のはず');
+  }
+});
+
+test('【失敗系・実機フィードバック第3弾D】stairFaceSequence: 室の全幅が階段の構造とちょうど一致するfixtureはseq1に壁側のアキXが出ない（回帰）', () => {
+  const graph = makeGraph();
+  const { room, stair } = makeSwitchbackFixture(graph);
+  stair.setField('structure', StructuralMaterialType.STEEL);
+  const faces = composeRoomFaces(room, graph);
+  const entries = stairFaceSequence(stair, faces, graph, OPTS);
+  const seq1 = entries.find(e => e.seqNo === '1');
+  const wallGapDiagonals = seq1.content.filter(p =>
+    p.type === 'line' && p.x1 !== p.x2 && p.y1 !== p.y2 &&
+    (Math.abs(p.x1 - seq1.face.run) < 1e-6 || Math.abs(p.x2 - seq1.face.run) < 1e-6 ||
+     Math.abs(p.x1 - 0) < 1e-6 || Math.abs(p.x2 - 0) < 1e-6));
+  assert.equal(wallGapDiagonals.length, 0, '室が階段の構造ちょうどに収まるfixtureでは壁側のアキXは出ないはず');
+});
+
+// ---- 実機フィードバック第3弾F: kneeWallCapContent（2F腰壁の上端水平線+L字アキ合成） ----
+const F_CUT = { seqNo: '1', line: { isVertical: false, axisValue: 0, lo: 0, hi: 2000 }, viewSign: 1, dirSign: 1, zRange: { loZ: 0, hiZ: 4800 }, baseFloorZ: 0 };
+const F_FLOOR_HEIGHT = 2400, F_TOP_HEIGHT = 900, F_CEIL_TOP_ABS = 4800;
+const F_KNEE_DROP = { knee: { topHeight: F_TOP_HEIGHT } };
+
+test('【失敗系・実機フィードバック第3弾F】kneeWallCapContent: kneeDropが無ければcontentをそのまま返す', () => {
+  const content = [{ type: 'line', x1: 0, y1: 0, x2: 100, y2: 0, weight: 'thick' }];
+  assert.deepEqual(kneeWallCapContent(content, F_CUT, null, F_FLOOR_HEIGHT, F_CEIL_TOP_ABS), content);
+});
+
+test('【実機フィードバック第3弾F】kneeWallCapContent: 壁の両端縦線を上端水平線(CUT)へ差し替える（隣接するアキが無ければ壁自身の範囲だけでX）', () => {
+  const wallEdge1 = { type: 'line', x1: 1000, y1: -2400, x2: 1000, y2: -3300, weight: 'medium' };
+  const wallEdge2 = { type: 'line', x1: 1050, y1: -2400, x2: 1050, y2: -3300, weight: 'thick' };
+  const other = { type: 'line', x1: 0, y1: 0, x2: 500, y2: 0, weight: 'thick' };
+  const content = [other, wallEdge1, wallEdge2];
+  const result = kneeWallCapContent(content, F_CUT, F_KNEE_DROP, F_FLOOR_HEIGHT, F_CEIL_TOP_ABS);
+
+  assert.ok(result.includes(other), '無関係な線はそのまま残るはず');
+  assert.equal(result.includes(wallEdge1) || result.includes(wallEdge2), false, '壁の両端縦線は除去されるはず');
+
+  const topLine = result.find(p => p.type === 'line' && p.y1 === p.y2 && Math.abs(p.y1 - (-3300)) < 1e-6);
+  assert.ok(topLine, '上端水平線(z=3300)があるはず');
+  assert.ok(Math.abs(Math.abs(topLine.x1 - topLine.x2) - 50) < 1e-6, '上端水平線の幅は壁厚(50)のはず');
+
+  const centerDiagonals = result.filter(p => p.dash === 'center');
+  assert.equal(centerDiagonals.length, 2, 'X(2本)が1組あるはず');
+  const xs = centerDiagonals.flatMap(p => [p.x1, p.x2]);
+  assert.ok(Math.min(...xs) >= 1000 - 1e-6 && Math.max(...xs) <= 1050 + 1e-6,
+    '隣接するアキが無ければXは壁自身のx範囲(1000〜1050)のままのはず');
+});
+
+test('【実機フィードバック第3弾F】kneeWallCapContent: 隣接する既存のアキX(dash:center)を壁の上のXと合成し、1組の大きなXにする', () => {
+  const wallEdge1 = { type: 'line', x1: 1000, y1: -2400, x2: 1000, y2: -3300, weight: 'medium' };
+  const wallEdge2 = { type: 'line', x1: 1050, y1: -2400, x2: 1050, y2: -3300, weight: 'thick' };
+  // 隣接するアキX（壁のhiX=1050にちょうど接し、z範囲もtopZ(3300)〜ceilTopAbs(4800)と一致）。
+  const adjX1 = { type: 'line', x1: 1050, y1: -3300, x2: 1400, y2: -4800, weight: 'thin', dash: 'center' };
+  const adjX2 = { type: 'line', x1: 1050, y1: -4800, x2: 1400, y2: -3300, weight: 'thin', dash: 'center' };
+  const content = [wallEdge1, wallEdge2, adjX1, adjX2];
+  const result = kneeWallCapContent(content, F_CUT, F_KNEE_DROP, F_FLOOR_HEIGHT, F_CEIL_TOP_ABS);
+
+  const centerDiagonals = result.filter(p => p.dash === 'center');
+  assert.equal(centerDiagonals.length, 2, '合成後もX(2本)は1組のはず（隣接する別のXにはならない）');
+  const xs = centerDiagonals.flatMap(p => [p.x1, p.x2]);
+  assert.ok(Math.abs(Math.min(...xs) - 1000) < 1e-6 && Math.abs(Math.max(...xs) - 1400) < 1e-6,
+    `合成後のXはx=1000〜1400（壁+隣接アキの結合範囲）のはず（実際:${JSON.stringify(centerDiagonals)}）`);
+});
+
+test('【失敗系・実機フィードバック第3弾F】kneeWallCapContent: 該当する壁の両端縦線が見つからなければcontentをそのまま返す', () => {
+  const content = [{ type: 'line', x1: 0, y1: 0, x2: 100, y2: 0, weight: 'thick' }];
+  const result = kneeWallCapContent(content, F_CUT, F_KNEE_DROP, F_FLOOR_HEIGHT, F_CEIL_TOP_ABS);
+  assert.deepEqual(result, content);
+});
+
+// ---- 実機フィードバック第3弾B・再現確認: 実機相当（幅1500+1500・直進2500・踊り場1000・
+// sections=[11,1,11]・STEEL）でupDirection×flipの4通り×self/secondaryをパラメトリックに検証する。
+// stringerPrimitivesのzBoundsクリップ（実機フィードバック第3弾B）が、seq2/seq4のthin(DETAIL)
+// polylineの各点のy範囲を必ず[-(baseZ+steps*riser), -baseZ]（flightZBoundsと同じ規約）に
+// 収めることを固定する——自flight(self)・他レーンの見えがかり(secondary)の両方が対象。 ----
+function makeRealisticSwitchbackFixture(upDirection, flip) {
+  const graph = makeGraph();
+  const x0 = graph.addCenterLine(CenterLineType.VERTICAL, 0,    { labeled: false, discipline: Discipline.ARCH });
+  const xm = graph.addCenterLine(CenterLineType.VERTICAL, 1500, { labeled: false, discipline: Discipline.ARCH });
+  const x1 = graph.addCenterLine(CenterLineType.VERTICAL, 3000, { labeled: false, discipline: Discipline.ARCH });
+  const y0 = graph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: false, discipline: Discipline.ARCH });
+  const ym = graph.addCenterLine(CenterLineType.HORIZONTAL, 1000, { labeled: false, discipline: Discipline.ARCH });
+  const y1 = graph.addCenterLine(CenterLineType.HORIZONTAL, 3500, { labeled: false, discipline: Discipline.ARCH });
+  const landingKey = `${x0.id}:${y0.id}:${x1.id}:${ym.id}`;
+  const outboundKey = `${x0.id}:${ym.id}:${xm.id}:${y1.id}`;
+  const returnKey = `${xm.id}:${ym.id}:${x1.id}:${y1.id}`;
+  const cells = new Set([landingKey, outboundKey, returnKey]);
+  const room = graph.addRoom(cells, '階段');
+  generateRoomWallsFromOutline(graph, room);
+  const stair = graph.addStair({
+    type: StairType.SWITCHBACK, cells, roomId: room.id,
+    sections: [11, 1, 11], riser: null, upDirection, flip, structure: StructuralMaterialType.STEEL,
+  });
+  const faces = composeRoomFaces(room, graph);
+  return { graph, stair, faces };
+}
+
+for (const upDirection of ['up', 'down']) {
+  for (const flip of [false, true]) {
+    test(`【実機フィードバック第3弾B・再現確認】stairFaceSequence: 実機相当fixture(upDirection=${upDirection}・flip=${flip})でseq2/seq4のthin(DETAIL)ポリラインはself/secondaryともflightのFL範囲を超えて突き出さない`, () => {
+      const REAL_OPTS = { floorHeight: 3000, chUpperAbsMm: 5400, chLowerMm: 2400 };
+      const { stair, faces, graph } = makeRealisticSwitchbackFixture(upDirection, flip);
+      const entries = stairFaceSequence(stair, faces, graph, REAL_OPTS);
+      assert.ok(entries, 'entriesがnullにならないはず');
+      const contribution = { outbound: { baseZ: 0, steps: 11, riserMm: REAL_OPTS.floorHeight / 22 },
+        inbound: { baseZ: 11 * (REAL_OPTS.floorHeight / 22), steps: 11, riserMm: REAL_OPTS.floorHeight / 22 } };
+      const bounds = (f) => ({ yLo: -(f.baseZ + f.steps * f.riserMm), yHi: f.baseZ === 0 ? 0 : -f.baseZ });
+      const outboundB = bounds(contribution.outbound), inboundB = bounds(contribution.inbound);
+
+      let checked = 0;
+      for (const seqNo of ['2', '4']) {
+        const entry = entries.find(e => e.seqNo === seqNo);
+        if (!entry) continue;
+        const thinPolylines = entry.content.filter(p => p.type === 'polyline' && p.weight === weightForRole(ElevationLineRole.DETAIL));
+        for (const poly of thinPolylines) {
+          const ys = poly.points.map(p => p[1]);
+          const minY = Math.min(...ys), maxY = Math.max(...ys);
+          // このpolylineがself(outbound)由来かsecondary(inbound)由来かをyの位置で判定し、
+          // 対応するflightのFL範囲(yLo〜yHi)を超えていないことを確認する。
+          const inOutboundRange = maxY <= outboundB.yHi + 1e-6 && minY >= outboundB.yLo - 1e-6;
+          const inInboundRange = maxY <= inboundB.yHi + 1e-6 && minY >= inboundB.yLo - 1e-6;
+          assert.ok(inOutboundRange || inInboundRange,
+            `seq${seqNo}のthin polyline(y=${minY.toFixed(2)}〜${maxY.toFixed(2)})はoutbound範囲` +
+            `(${outboundB.yLo}〜${outboundB.yHi})にもinbound範囲(${inboundB.yLo}〜${inboundB.yHi})にも収まらず突き出しているはず`);
+          checked++;
+        }
+      }
+      assert.ok(checked > 0, `seq2/seq4に少なくとも1本はthin(DETAIL)ポリラインがあるはず（STEEL鉄骨階段のため。実際:${checked}本）`);
+    });
+  }
+}
+
+// ---- 実機フィードバック第3弾（続報）: 上階がSTAIR_VOID（最上階の階段footprintに自動指定される
+// 無名Room。elevationStair.jsのfindOverlappingVoidRoomと同じ判定対象）なら、seq1/seq2に
+// y=-(1F天井=chLowerMm)の水平CUT線（「上階に実Roomがある」ときにのみ出るべき壁キャップ線）が
+// 出ないことを固定する——isRealRoom（A2のresolveWallCapZ・Gのslab/open判定と共有）がVOIDだけで
+// なくSTAIR_VOIDも正しく除外できているかの確認。 ----
+test('【実機フィードバック第3弾・続報】stairFaceSequence: 上階がSTAIR_VOID（最上階の自動配置Room）ならseq1に1F天井高さの水平キャップ線は出ない', () => {
+  const graph = makeGraph('p1');
+  const upperGraph = makeGraph('p2');
+  const { room, stair } = makeSwitchbackFixture(graph);
+  // stair.cellsと同じ全幅footprintを覆うSTAIR_VOID Roomを上階に置く（findOverlappingVoidRoomと
+  // 同じ「stairRoomのfootprintと重なるVOID/STAIR_VOID Room」の構図）。
+  const ux0 = upperGraph.addCenterLine(CenterLineType.VERTICAL, 0,    { labeled: false, discipline: Discipline.ARCH });
+  const ux1 = upperGraph.addCenterLine(CenterLineType.VERTICAL, 2000, { labeled: false, discipline: Discipline.ARCH });
+  const uy0 = upperGraph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: false, discipline: Discipline.ARCH });
+  const uy1 = upperGraph.addCenterLine(CenterLineType.HORIZONTAL, 4500, { labeled: false, discipline: Discipline.ARCH });
+  const uKey = `${ux0.id}:${uy0.id}:${ux1.id}:${uy1.id}`;
+  const stairVoidRoom = upperGraph.addRoom(new Set([uKey]), '階段吹抜け');
+  stairVoidRoom.setFeature(RoomFeature.STAIR_VOID);
+
+  const faces = composeRoomFaces(room, graph);
+  const entries = stairFaceSequence(stair, faces, graph, { ...OPTS, upperGraph });
+  const seq1 = entries.find(e => e.seqNo === '1');
+  const seq2 = entries.find(e => e.seqNo === '2');
+  const silhouetteWeight = weightForRole(ElevationLineRole.SILHOUETTE);
+
+  for (const [label, entry] of [['seq1', seq1], ['seq2', seq2]]) {
+    const wrongCapLine = entry.content.find(p =>
+      p.type === 'line' && p.y1 === p.y2 && p.dash === undefined && p.weight === silhouetteWeight &&
+      Math.abs(p.y1 - (-OPTS.chLowerMm)) < 1e-6);
+    assert.equal(wrongCapLine, undefined,
+      `${label}: 上階がSTAIR_VOID(実床なし)のため1F天井高さ(-${OPTS.chLowerMm})の水平キャップ線は出ないはず`);
+  }
+});
+
+test('【失敗系・実機フィードバック第3弾・続報】stairFaceSequence: 上階に実Room(feature未設定)があればseq1に1F天井高さの水平キャップ線が出る（回帰ガード）', () => {
+  const graph = makeGraph('p1');
+  const upperGraph = makeGraph('p2');
+  const { room, stair } = makeSwitchbackFixture(graph);
+  const ux0 = upperGraph.addCenterLine(CenterLineType.VERTICAL, 0,    { labeled: false, discipline: Discipline.ARCH });
+  const ux1 = upperGraph.addCenterLine(CenterLineType.VERTICAL, 2000, { labeled: false, discipline: Discipline.ARCH });
+  const uy0 = upperGraph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: false, discipline: Discipline.ARCH });
+  const uy1 = upperGraph.addCenterLine(CenterLineType.HORIZONTAL, 4500, { labeled: false, discipline: Discipline.ARCH });
+  const uKey = `${ux0.id}:${uy0.id}:${ux1.id}:${uy1.id}`;
+  upperGraph.addRoom(new Set([uKey]), '洋室'); // feature未設定=実Room
+
+  const faces = composeRoomFaces(room, graph);
+  const entries = stairFaceSequence(stair, faces, graph, { ...OPTS, upperGraph });
+  const seq1 = entries.find(e => e.seqNo === '1');
+  const silhouetteWeight = weightForRole(ElevationLineRole.SILHOUETTE);
+
+  const capLine = seq1.content.find(p =>
+    p.type === 'line' && p.y1 === p.y2 && p.dash === undefined && p.weight === silhouetteWeight &&
+    Math.abs(p.y1 - (-OPTS.chLowerMm)) < 1e-6);
+  assert.ok(capLine, '上階に実Roomがあれば1F天井高さの水平キャップ線が出るはず');
 });

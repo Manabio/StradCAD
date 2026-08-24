@@ -5,7 +5,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Plane, PlanGraph, CenterLineType, Discipline, StairType, StructuralMaterialType } from '@core';
 import { generateRoomWallsFromOutline } from '../../finish/wallGeneration.js';
-import { stairContribution, stairPrimitivesForCut, clipStringerToAnchors, landingFramePrimitives } from './sectionStair.js';
+import { stairContribution, stairPrimitivesForCut, clipStringerToAnchors, landingFramePrimitives, stairWallGapZones } from './sectionStair.js';
 
 function makeGraph(name = 'p1') {
   const plane = new Plane(name, 0, `${name}階`, 1, 1);
@@ -139,6 +139,42 @@ test('【WP-E3】stairPrimitivesForCut: 踊り場を縦断する切断はCUTの�
   assert.equal(prims[0].y2, -c.landings[0].z);
 });
 
+// ---- 実機フィードバック第3弾C: CUT断面（踊り場床CUT線）はbaseFloorZより下でも降格しない ----
+test('【実機フィードバック第3弾C】stairPrimitivesForCut: 踊り場床CUT線はcut.baseFloorZより下でも太線実線のまま（neverDowngrade）', () => {
+  const graph = makeGraph();
+  const { stair } = makeSwitchbackFixture(graph);
+  const c = stairContribution(stair, graph, FLOOR_HEIGHT);
+  const landingZ = c.landings[0].z;
+  const cut = {
+    seqNo: '2', line: { isVertical: true, axisValue: 500, lo: 0, hi: 1500 },
+    viewSign: 1, dirSign: 1, layers: [], zRange: { loZ: 0, hiZ: 3000 },
+    baseFloorZ: landingZ + 1, // 踊り場床より上を基準床にする＝踊り場床線は「向こう側」になる
+  };
+  const columns = [{ x0: 0, x1: 1500, worldLo: 0, worldHi: 1500, bands: [] }];
+  const prims = stairPrimitivesForCut(c, cut, columns);
+  assert.equal(prims.length, 1);
+  assert.equal(prims[0].weight, 'thick',
+    'baseFloorZより下でもCUT断面(踊り場床線)は太線実線のまま降格しないはず');
+  assert.equal(prims[0].dash, undefined, 'dashは付かないはず');
+});
+
+// ---- 実機フィードバック第3弾C: CUT断面（ささら正面視矩形）もbaseFloorZより下で降格しない ----
+test('【実機フィードバック第3弾C】stairPrimitivesForCut: ささら正面視矩形(CUT)はbaseFloorZより下でも太線実線のまま（neverDowngrade）', () => {
+  const graph = makeGraph();
+  const { stair } = makeSwitchbackFixture(graph, StructuralMaterialType.STEEL);
+  const c = stairContribution(stair, graph, FLOOR_HEIGHT);
+  const cut = {
+    seqNo: '1', line: { isVertical: false, axisValue: 3000, lo: 0, hi: 2000 },
+    viewSign: 1, dirSign: 1, layers: [], zRange: { loZ: 0, hiZ: 3000 },
+    baseFloorZ: 3000, // 全高より高いbaseFloorZにして、ささら矩形を強制的に「向こう側」にする
+  };
+  const columns = [{ x0: 0, x1: 1000, worldLo: 0, worldHi: 1000, bands: [] }];
+  const prims = stairPrimitivesForCut(c, cut, columns);
+  const cutLines = prims.filter(p => p.type === 'line' && p.weight === 'thick');
+  assert.equal(cutLines.length, 8, 'baseFloorZより下でも8本ともCUT(thick)のまま降格しないはず');
+  for (const p of cutLines) assert.equal(p.dash, undefined, 'dashは付かないはず');
+});
+
 // ---- ささらはSTEELのみ（失敗系WOODで0本） ----
 // 期待値更新（ユーザー実機フィードバック2026-08-23。switchbackCuts.jsの切断線再定義で
 // 切断線が実際に往路/復路レーンの中を縦断するようになったため）: 「段部はササラの横に付く
@@ -165,6 +201,29 @@ test('【WP-E3】stairPrimitivesForCut: structure=STEELならレーン縦断（�
   assert.equal(stringer.type, 'polyline');
 });
 
+// ---- 実機フィードバック第3弾B: DETAILのささら見えがかり（stringerPrimitives経由）はflight自身のFL(baseZ/baseZ+steps*riser)を超えて突き出さない ----
+test('【実機フィードバック第3弾B】stairPrimitivesForCut: 側面視のささら見えがかり(DETAIL)はflightのFL範囲(baseZ〜baseZ+steps*riser)を超えて突き出さない', () => {
+  const graph = makeGraph();
+  const { stair } = makeSwitchbackFixture(graph, StructuralMaterialType.STEEL);
+  const c = stairContribution(stair, graph, FLOOR_HEIGHT);
+  const outbound = c.flights[0];
+  const cut = {
+    seqNo: '2', line: { isVertical: true, axisValue: 500, lo: 1500, hi: 4500 },
+    viewSign: 1, dirSign: 1, layers: [], zRange: { loZ: 0, hiZ: 3000 }, baseFloorZ: 0,
+  };
+  const columns = [{ x0: 0, x1: 3000, worldLo: 1500, worldHi: 4500, bands: [] }];
+  const prims = stairPrimitivesForCut(c, cut, columns);
+  const stringer = prims.find(p => p.weight === 'thin');
+  assert.ok(stringer, 'ささらの見えがかり(DETAIL)が見つからない');
+  const yHi = outbound.baseZ === 0 ? 0 : -outbound.baseZ;
+  const yLo = -(outbound.baseZ + outbound.steps * outbound.riserMm);
+  const ys = stringer.points.map(p => p[1]);
+  assert.ok(Math.max(...ys) <= yHi + 1e-6,
+    `ささらの見えがかりはFL上端(y=${yHi})を超えて突き出さないはず（実際max=${Math.max(...ys)}）`);
+  assert.ok(Math.min(...ys) >= yLo - 1e-6,
+    `ささらの見えがかりはFL下端(y=${yLo})を下回らないはず（実際min=${Math.min(...ys)}）`);
+});
+
 // ---- ささら正面視（レーンを横切る切断）: 両側に12mm厚×せい300mmのCUT矩形 ----
 test('【WP-E3】stairPrimitivesForCut: structure=STEELならレーンを横切る切断（正面視）は両側にささらのCUT矩形(太線)を追加する', () => {
   const graph = makeGraph();
@@ -188,6 +247,60 @@ test('【WP-E3】stairPrimitivesForCut: structure=STEELならレーンを横切�
     if (p.x1 === p.x2) assert.ok(Math.abs(h - 300) < 1e-6, `せいは300mmのはず（実際:${h}）`);
     else assert.ok(w >= 0);
   }
+});
+
+// ---- 実機フィードバック第3弾E: 踊り場より下まで達するレーンの端面（縦の細破線） ----
+test('【実機フィードバック第3弾E】stairPrimitivesForCut: 踊り場より下まで達する往路レーンはacrossLo/acrossHiに縦の細破線(ささらの端面)が出る', () => {
+  const graph = makeGraph();
+  const { stair } = makeSwitchbackFixture(graph, StructuralMaterialType.STEEL);
+  const c = stairContribution(stair, graph, FLOOR_HEIGHT);
+  const landingAbs = 1200; // n1=6・riser=200(=2400/12)の往路総上り＝踊り場高さ
+  const cut = {
+    seqNo: '1', line: { isVertical: false, axisValue: 3000, lo: 0, hi: 2000 },
+    viewSign: 1, dirSign: 1, layers: [], zRange: { loZ: 0, hiZ: 3000 }, baseFloorZ: landingAbs,
+  };
+  const columns = [{ x0: 0, x1: 2000, worldLo: 0, worldHi: 2000, bands: [] }];
+  const prims = stairPrimitivesForCut(c, cut, columns);
+  const dashedThin = prims.filter(p =>
+    p.type === 'line' && p.weight === 'thin' && p.dash === 'dashed' && p.x1 === p.x2);
+  assert.equal(dashedThin.length, 2, '往路レーンのacrossLo/acrossHiに縦の細破線2本があるはず');
+  const xs = [...new Set(dashedThin.map(p => p.x1))].sort((a, b) => a - b);
+  assert.equal(xs.length, 2, '2本は異なるx位置(acrossLo/acrossHi)にあるはず');
+  for (const p of dashedThin) {
+    assert.ok(Math.abs(Math.min(p.y1, p.y2) - (-landingAbs)) < 1e-6, `上端はz=landingAbs(y=-${landingAbs})のはず`);
+    assert.ok(Math.abs(Math.max(p.y1, p.y2) - 0) < 1e-6, '下端はz=0(y=0)のはず');
+  }
+});
+
+test('【失敗系・実機フィードバック第3弾E】stairPrimitivesForCut: cut.baseFloorZ=0（踊り場より下が存在しない）なら端面の破線は出ない', () => {
+  const graph = makeGraph();
+  const { stair } = makeSwitchbackFixture(graph, StructuralMaterialType.STEEL);
+  const c = stairContribution(stair, graph, FLOOR_HEIGHT);
+  const cut = {
+    seqNo: '1', line: { isVertical: false, axisValue: 3000, lo: 0, hi: 2000 },
+    viewSign: 1, dirSign: 1, layers: [], zRange: { loZ: 0, hiZ: 3000 }, baseFloorZ: 0,
+  };
+  const columns = [{ x0: 0, x1: 2000, worldLo: 0, worldHi: 2000, bands: [] }];
+  const prims = stairPrimitivesForCut(c, cut, columns);
+  const dashedThin = prims.filter(p =>
+    p.type === 'line' && p.weight === 'thin' && p.dash === 'dashed' && p.x1 === p.x2);
+  assert.equal(dashedThin.length, 0,
+    'flight.baseZ(0)がcut.baseFloorZ(0)未満でない（踊り場より下が無い）ため端面の破線は出ないはず');
+});
+
+test('【失敗系・実機フィードバック第3弾E】stairPrimitivesForCut: WOOD(木造)はささら自体が無いため端面の破線も出ない', () => {
+  const graph = makeGraph();
+  const { stair } = makeSwitchbackFixture(graph); // 既定=WOOD
+  const c = stairContribution(stair, graph, FLOOR_HEIGHT);
+  const cut = {
+    seqNo: '1', line: { isVertical: false, axisValue: 3000, lo: 0, hi: 2000 },
+    viewSign: 1, dirSign: 1, layers: [], zRange: { loZ: 0, hiZ: 3000 }, baseFloorZ: 1200,
+  };
+  const columns = [{ x0: 0, x1: 2000, worldLo: 0, worldHi: 2000, bands: [] }];
+  const prims = stairPrimitivesForCut(c, cut, columns);
+  const dashedThin = prims.filter(p =>
+    p.type === 'line' && p.weight === 'thin' && p.dash === 'dashed' && p.x1 === p.x2);
+  assert.equal(dashedThin.length, 0, 'WOODはささら自体が無いため端面の破線も出ないはず');
 });
 
 // ---- ささら正面視矩形もLANE_GAP(100mm)ぶん往路・復路間にあきができる（梯子と同じ横幅を使う） ----
@@ -498,4 +611,57 @@ test('【WP-A2】stairPrimitivesForCut: RC(鉄筋コンクリート造)も踊り
   const zigzagPrims = stairPrimitivesForCut(c, zigzagCut, zigzagColumns);
   assert.ok(zigzagPrims.some(p => p.type === 'polyline' && p.weight === 'medium'),
     'RCは段部のジグザグ本体(SILHOUETTE)がそのまま描かれる（ささら横付け隠しはSTEEL限定）のはず');
+});
+
+// ---- 実機フィードバック第3弾D: stairWallGapZones（壁側の空き検出） ----
+function makeFlightD(overrides) {
+  return { isVertical: true, runLo: 0, runHi: 3000, travelSign: 1, acrossLo: 0, acrossHi: 1000,
+    baseZ: 0, riserMm: 200, steps: 6, lengthMm: 1200, ...overrides };
+}
+
+test('【実機フィードバック第3弾D】stairWallGapZones: 復路レーンの外側(壁側)に室の空きがあれば壁までの区間を返す', () => {
+  const outbound = makeFlightD({ acrossLo: 0, acrossHi: 1000, baseZ: 0 });
+  const inbound = makeFlightD({ acrossLo: 1000, acrossHi: 2000, baseZ: 1200 });
+  const contribution = { flights: [outbound, inbound], landings: [], structure: null };
+  const cut = { line: { isVertical: false, axisValue: 1500, lo: 0, hi: 2400 }, dirSign: 1 };
+  const zones = stairWallGapZones(contribution, cut);
+  assert.equal(zones.length, 1, '復路側(x=2000〜2400)だけに壁側の空きがあるはず');
+  assert.ok(Math.abs(zones[0].loX - 2000) < 1e-6 && Math.abs(zones[0].hiX - 2400) < 1e-6,
+    `zoneはx=2000〜2400のはず（実際:${JSON.stringify(zones[0])}）`);
+});
+
+test('【実機フィードバック第3弾D】stairWallGapZones: 両側に壁側の空きがあれば2区間返す', () => {
+  const outbound = makeFlightD({ acrossLo: 0, acrossHi: 1000, baseZ: 0 });
+  const inbound = makeFlightD({ acrossLo: 1000, acrossHi: 2000, baseZ: 1200 });
+  const contribution = { flights: [outbound, inbound], landings: [], structure: null };
+  const cut = { line: { isVertical: false, axisValue: 1500, lo: -400, hi: 2400 }, dirSign: 1 };
+  const zones = stairWallGapZones(contribution, cut);
+  assert.equal(zones.length, 2, '往路側(x=-400〜0)・復路側(x=2000〜2400)の2区間があるはず');
+});
+
+test('【失敗系・実機フィードバック第3弾D】stairWallGapZones: 壁厚のズレ相当(150mm未満)の差は空きとみなさない', () => {
+  const outbound = makeFlightD({ acrossLo: 0, acrossHi: 1000, baseZ: 0 });
+  const inbound = makeFlightD({ acrossLo: 1000, acrossHi: 2000, baseZ: 1200 });
+  const contribution = { flights: [outbound, inbound], landings: [], structure: null };
+  // 壁面は半壁厚(57.5mm)ぶんだけ内側——WALL_GAP_MIN_MM(150)未満のため空き扱いしない。
+  const cut = { line: { isVertical: false, axisValue: 1500, lo: 57.5, hi: 1942.5 }, dirSign: 1 };
+  const zones = stairWallGapZones(contribution, cut);
+  assert.equal(zones.length, 0, '半壁厚程度のズレは空きとみなさないはず');
+});
+
+test('【失敗系・実機フィードバック第3弾D】stairWallGapZones: WOOD(isSteel=false)でもレーン同士の内側境界は壁側と誤判定しない（回帰）', () => {
+  // isSteel=false（structure未指定）はladderAcrossRangeを適用しないため、往路flightの
+  // acrossHi(=1000。復路との内側境界)をそのまま使う——これを誤って壁側(cut.line.hi)と
+  // 比較すると、内側境界〜壁までの区間を誤検出してしまう不具合があった（実装時に発見・修正）。
+  const outbound = makeFlightD({ acrossLo: 0, acrossHi: 1000, baseZ: 0 });
+  const inbound = makeFlightD({ acrossLo: 1000, acrossHi: 2000, baseZ: 1200 });
+  const contribution = { flights: [outbound, inbound], landings: [], structure: null }; // WOOD相当
+  const cut = { line: { isVertical: false, axisValue: 1500, lo: 0, hi: 2000 }, dirSign: 1 }; // 壁=室の真の外縁とちょうど一致
+  const zones = stairWallGapZones(contribution, cut);
+  assert.equal(zones.length, 0, '内側境界(x=1000)を壁側と誤判定して空きを作らないはず');
+});
+
+test('【失敗系・実機フィードバック第3弾D】stairWallGapZones: contribution=nullは例外を投げず空配列', () => {
+  const cut = { line: { isVertical: false, axisValue: 1500, lo: 0, hi: 2000 }, dirSign: 1 };
+  assert.deepEqual(stairWallGapZones(null, cut), []);
 });
