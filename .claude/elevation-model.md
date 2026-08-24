@@ -295,6 +295,76 @@ SILHOUETTEになる。
 解釈不能なら非描画。床まで達する開口の区間は巾木線を途切れさせる。**巾木は床の段差にも追従する**——床断面線（区間水平線＋段差縦線）を
 hだけ上へそのまま平行移動した連続ポリラインとして描く（水平方向にはオフセットしない。段差縦線を開口がまたぐ場合は床側同様に途切れさせる）。
 
+**実機フィードバック第3弾（鉄骨階段）の一連の修正**: いずれも`.claude/elevation-model.md`本節の
+2.5D断面エンジン（`app/src/elevation/section/`）を対象とする。根本原因はA2（他は全てA2の周辺・派生）。
+
+- **A2（根本原因）: 見えがかり壁のz上限は「上階に実Roomがあるか」で決める**。`sectionProbe.js`の
+  `probeColumn`が`kind:'wall'`候補のz上限を、常に自層（self）の視線方向所有RoomのCHで無条件に
+  切っていたため、上が吹抜け（上階に実Room=VOID/STAIR_VOID以外が無い）でも1F天井高さの水平
+  キャップ線が誤って出ていた。`resolveWallCapZ`が、selfレイヤーの壁候補についてのみ、壁の実位置
+  （axisCL.effectiveValue×worldMid。probeOwnerRoomと同じ`-viewSign*PROBE_EPS_MM`オフセットで
+  境界セルの不安定性を回避）でabove層を1点プローブし、実Room（`isRealRoom`。VOID/STAIR_VOID以外）
+  があれば従来どおり自層CHでキャップ、無ければabove層の天井（無ければ`cut.zRange.hiZ`）まで
+  拡張する。above/belowレイヤー自身の壁候補・cutAlong/cut（切断壁）は対象外（壁自身のkneeDrop/
+  実存在範囲のまま）。この拡張により同一の壁がabove層のfloorZ/ceilZ由来の余分なzBreaksで
+  内部分割されることがあるため、`mergeAdjacentZBands`（z方向の隣接band併合。x方向の
+  `mergeColumns`と対）で実体（kind/wall参照/distMm/layerRole等）が同じ隣接band同士を1本へ戻す
+  ——ただし`cut.baseFloorZ`の境界だけは併合しない（emitLineの§5.6最終フィルタが
+  「band全体がbaseFloorZ以下か」で降格を決めるため、そこを併合すると「下側だけ破線」が
+  再現できなくなる）。
+- **B: ささらのオフセット後多角形をFLでクリップ**。`stringerPrimitives`（elevationStairSection.js）の
+  段鼻を結ぶ直線からのオフセットは、flightがz=baseZ(登り口FL)始まりの場合、オフセット先の頂点が
+  FLを超えて突き出すことがある（法線が下方向＝FL側を向くため）。`zBounds:{yLo,yHi}`（省略時は
+  挙動不変）を追加し、Sutherland–Hodgman法の単純な半平面クリップ（`clipPolygonToYRange`/
+  `clipHalfPlaneY`）でz=baseZ・z=baseZ+steps×riserの水平面を超えないよう切る。呼び出し側
+  （`sectionStair.js`）は`flightZBounds(flight)`（`clipStringerToAnchors`と共有する単一情報源）を
+  各stringerPrimitives呼び出しへ渡す。
+- **C: emitLineにneverDowngradeオプションを追加（リード裁定で契約変更を承認）**。
+  `emitLine(cut,x1,z1,x2,z2,role,{neverDowngrade})`——既定false（既存呼び出しは無変更）。trueは
+  §5.6最終フィルタ（baseFloorZ以下/天井断面より上→DETAIL+dashedへ強制降格）を丸ごと無効化し、
+  渡されたrole・dashをそのまま使う。**CUT断面**（ささら12×300矩形=`stringerRectLines`・踊り場床
+  CUT線=`landingCutPrimitives`・踊り場桁の見返り矩形=`landingFramePrimitives`のend-on分岐）は
+  neverDowngrade:trueでbaseFloorZより下でも太線実線のまま。**ささらの見えがかり帯**
+  （`landingFramePrimitives`のbroadside分岐＝踊り場桁枠のside/front/back帯）も同様に
+  neverDowngrade:trueで細線実線のまま（`stringerPrimitives`自体は元々rawなpolylineでemitLineを
+  経由しないため元から降格対象外）。**降格が残るのは踏面梯子（正面視。`flightLadderPrimitives`が
+  `flight.baseZ<cut.baseFloorZ`のとき明示的にdash指定）と壁断面の見えがかり（一般規則の
+  'wall'/'cut'/'cutAlong'。sectionEmit.js）だけ**、という裁定。
+- **D: ささらの外側(壁側)〜壁の空きにアキX**。`stairWallGapZones`（sectionStair.js。新規export）が、
+  crossesFlightする各flightについて、ladderAcross（LANE_GAP調整済み。isSteel=falseはflight自身の
+  境界をそのまま使う）の「室の真の外縁trueAcrossLo/Hiに一致する側」だけをcut.line.lo/hi（壁）と
+  比較し、`WALL_GAP_MIN_MM`（=150。ASSUMED既定値）を明確に上回る差があれば空き区間を返す
+  ——`stairContribution`のroomBounds由来acrossLo/Hi（生のCL境界）とcut.line.lo/hi（壁仕上げ面へ
+  スナップ済み）は階段が室の全幅を占める通常構成でも半壁厚ぶんズレるため（既存の
+  `computeFlightZigzagPoints`コメント参照）、閾値未満は無視する。`elevationStairSequence.js`の
+  `wallGapXMarks`が、seq1エントリでこのゾーンへ`cut.baseFloorZ`で上下分割したアキX
+  （上=一点鎖線dash:'center'・下=破線。emitOpenGapMarksと同じ様式）を明示的に合成する
+  （ceilLowAbs=1F天井はsectionStair.js側では未知の値のためelevationStairSequence.js側で受け取る）。
+- **E: 踊り場より下まで達するレーンにささらの端面（縦の細破線）**。`sectionStair.js`の
+  `stringerEndCapPrimitives`は、`crossesFlight`かつ`flight.baseZ<cut.baseFloorZ`（このレーンが
+  見返りの基準床=踊り場より下まで達する）の場合、そのレーンのacrossLo/acrossHi
+  （LANE_GAP調整済みladderAcross）にz=flight.baseZ〜min(cut.baseFloorZ, flight.baseZ+steps×riser)の
+  縦線を追加する——emitLineの通常の§5.6最終フィルタで両端ともbaseFloorZ以下になるため自動的に
+  DETAIL+dashedになる（neverDowngrade指定は不要）。STEEL限定。seq1では往路(outbound.baseZ=0)は
+  該当・復路(inbound.baseZ=landingAbs=cut.baseFloorZ)は非該当になり、「往路梯子限定」という
+  実機指示をこの条件だけで自然に満たす。
+- **F: 2F腰壁（往復間の壁がkneeDrop.knee指定）はseq1で上端水平線のみ・両端縦線なし**。
+  一般規則（'cut'kind＝両端の縦線2本のみ描く。水平の上端線は無し）を、seq1に限り
+  `kneeWallCapContent`（elevationStairSequence.js。post-hocでcontentを書き換える）が専用表現へ
+  差し替える: z=floorHeight〜floorHeight+topHeightちょうどの縦線2本（'cut'kindの両端縁）を検出・
+  除去し、その上端(topZ)にCUT水平線を1本足す。腰壁の上（topZ〜2F天井）と横（腰壁の無い側）の
+  L字アキは、既存のアキX（dash:'center'の対角線ペア）のうちz範囲がtopZ〜ceilTopAbsと重なり
+  x範囲が壁のどちらかの辺に隣接するものを探して1組の大きなXへ合成する（無ければ壁自身の
+  x範囲だけで1組描く。ASSUMED: raw columns情報はcontentForCutの外へ出てこないため、生のbands
+  同士の厳密な連結成分計算ではなく、生成済みプリミティブ同士のpost-hoc吸収で実装した）。
+- **G: 2FL水平線（above層の床端=slab/open境界）は上階に実Roomが無ければ描かない**。
+  `sectionProbe.js`の`probeColumn`は「self天井より上でabove層に所有Roomがあるか」を
+  `above.room`の有無だけで判定していたため、above.roomがVOID/STAIR_VOID（実床の無いRoom）でも
+  'slab'（非描画の実床構造）とみなし、emitColumnsの「slab⇄openの境界=2FL水平線
+  （SILHOUETTE）」規則が誤って発火していた。A2の`resolveWallCapZ`と同じ判定基準を
+  `isRealRoom(room)`（VOID/STAIR_VOID以外）として共有ヘルパ化し、`above.room`の判定にも適用する
+  ——above.roomがVOID/STAIR_VOIDなら'open'（アキX判定の対象）として扱う。
+
 ## 面端の不変条件・壁2段書き
 面端の縦線（見えがかりエッジ）は`x=0`/`run`（`face.lo/hi`＝直交壁の仕上げ面。`snapFaceEndsToCorners`の隅詰め結果）に描く——
 壁中心線（`faceBoundaryLocalX`の`boundary.lo/hi`。ROW1壁芯間寸法・通り芯一点鎖線が使う別の基準）とは異なる、既に正しい基準
