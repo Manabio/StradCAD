@@ -43,6 +43,7 @@ import { emitColumns, emitOpenGapMarks, emitLine } from './section/sectionEmit.j
 import { stairPrimitivesForCut, stairWallGapZones } from './section/sectionStair.js';
 import { structuralContribution, structuralPrimitivesForCut } from './section/sectionStructure.js';
 import { worldToCell } from '../finish/gridCells.js';
+import { labelFaces } from './elevationFaces.js';
 import { collectRunBreaks } from './elevationFloorProfile.js';
 import { ElevationLineRole, GAP_EPS_MM as GAP_EPS, PROBE_EPS_MM } from './elevationStyle.js';
 
@@ -513,5 +514,11 @@ export function stairFaceSequence(stair, faces, graph, opts = {}) {
     });
   }
 
-  return entries;
+  // 展開記号の採番（ユーザー実機指摘2026-08「階段は、のぼり方で作図順が決まるので、展開記号は
+  // ケースバイケース」）: 各面のletterは既に`reorientFace`が歩行方向基準のdirSignから引き直して
+  // いる（`letterForDirSign`）。ここでは**歩行順に**同letterの連番を振り直す——部屋のface配列で
+  // 採番済みのlabel（コンパス順のB1/B2…）をそのまま使うと、reorient後のletterと食い違ううえ
+  // 並び順とも合わないため。labelFacesは「letterごとの出現順」で採番する既存の純関数をそのまま使う。
+  const relabeled = labelFaces(entries.map(e => e.face));
+  return entries.map((e, i) => ({ ...e, face: relabeled[i] }));
 }

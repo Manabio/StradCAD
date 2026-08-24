@@ -112,3 +112,19 @@ export function centerLineKind(cl) {
   if (cl.discipline === Discipline.FUSE) return 'beam';
   return 'center';
 }
+
+/**
+ * 「通り芯（丸ナンバーを持つグリッド軸）か」の唯一の判定。
+ *
+ * **`cl.labeled` だけで判定してはいけない**——UI経路（transform/centerLineOps.js の
+ * addCenterLineAt）で作られる中心線(kind:'center')は `labeled:true`（CenterLineコンストラクタの
+ * 既定値）かつ `discipline:ARCH` になるため、`labeled` だけでは中心線まで通り芯扱いになる。
+ * `_labeledCLs`（core/clQuery.js の系統A＝グリッド軸として交点を張る対象。discipline不問）とは
+ * 別物である点に注意——系統Aは「交点を持つ軸か」、本関数は「通り芯として作図・採番される軸か」。
+ * ラベル自動採番（_relabelCenterLines）・ガターの丸ラベル・展開図の通り芯丸は全てこちら。
+ * @param {import('./centerLine.js').CenterLine} cl
+ * @returns {boolean}
+ */
+export function isGridCenterLine(cl) {
+  return !!cl.labeled && centerLineKind(cl) === 'struct';
+}

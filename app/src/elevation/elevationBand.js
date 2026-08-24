@@ -133,7 +133,8 @@ export function layoutBandFaces(room, graph, faces, ctx = {}) {
     const faceCtx = {
       graph, project, room, ceilingHeight: CH, materialMap, gridCLs, faceLabelAvoidThresholdModelMm,
       prevFace, nextFace, openingTagRowModelMm, dimRowGapModelMm, gridRowGapModelMm, floorSegments,
-      beyondCeilings, wallLessEndExtendModelMm, scale, ...(faceOverride ?? {}),
+      beyondCeilings, wallLessEndExtendModelMm, scale, solids: ctx.solids ?? null,
+      ...(faceOverride ?? {}),
     };
     for (const p of buildFaceFigure(face, faceCtx)) primitives.push(translatePrimitive(p, xCursor, 0));
     if (i === 0) {
@@ -283,7 +284,9 @@ export function finalizeBand(room, graph, primitives, opts = {}) {
  *   nameGapModelMm?:number, triangleOffsetModelMm?:number,
  *   faceLabelAvoidThresholdModelMm?:number, openingTagRowModelMm?:number,
  *   dimRowGapModelMm?:number, gridRowGapModelMm?:number, wallLessEndExtendModelMm?:number,
- *   scale?:number}} [ctx]
+ *   scale?:number, solids?:{upperGraph?:object|null, floorHeightMm?:number|null}|null}} [ctx]
+ *   solids（追加仕様2026-08）指定時のみ、各面へ2.5D立体の加算レイヤ（構造柱の柱型・梁型。
+ *   elevationSolids.js）を重ねる。未指定なら出力は従来と完全同一（ゴールデンゲートで担保）。
  * @returns {{roomId:string, roomName:string, primitives:object[], bounds:object,
  *   heightMm:number, widthMm:number, faceCount:number, leftAnchorX:number|null,
  *   topMarginMm:number}}

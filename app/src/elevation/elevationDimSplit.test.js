@@ -24,8 +24,11 @@ function makeRoom(graph) {
   return room;
 }
 
-// ---- S3: 面に直交し面まで届く非通り芯中心線は分割点になる ----
-test('collectRow1SplitPoints: S3＝面に直交しextentが面まで届く非通り芯中心線は分割点になる', () => {
+// ---- 廃止仕様の固定（ユーザー実機指摘2026-08）: 中心線は分割点にしない ----
+// 旧S3（面に届く非通り芯の中心線で寸法を割る）は撤去した——階段室「6」Bで、あるべき「2500」が
+// 中心線1本で「1500+1000」へ割れる実機不良の原因だったため。中心線は壁を伴わない作図補助であり、
+// 分割は実体（段差・直交壁・開放境界）と通り芯だけが担う。
+test('collectRow1SplitPoints: 面に届く中心線があっても分割点にしない（旧S3の撤去）', () => {
   const graph = makeGraph();
   const room = makeRoom(graph);
   const faceA = buildRoomFaces(room, graph).find(f => f.label === 'A');
@@ -35,14 +38,22 @@ test('collectRow1SplitPoints: S3＝面に直交しextentが面まで届く非通
   graph.addCenterLine(CenterLineType.VERTICAL, 2000, { labeled: false, discipline: Discipline.ARCH });
 
   const pts = collectRow1SplitPoints(faceA, graph, { floorSegments: undefined, boundary });
-  // 面Aのローカル原点(originWorld)は仕上げ面基準でCLのvalue(0)そのものではない（壁厚ぶんずれる）
-  // ため、期待値も同じ変換式（world-originWorld）*dirSignで求める。
-  const expectedX = (2000 - faceA.originWorld) * faceA.dirSign;
-  assert.ok(pts.some(x => Math.abs(x - expectedX) < 1e-6), `x=2000相当の分割点が見つかるはず（実際:${pts}, 期待:${expectedX}）`);
+  assert.equal(pts.length, 0, `中心線は分割点にならないはず（実際:${pts}）`);
 });
 
-// ---- 失敗系: 通り芯（labeled）は除外する（ROW2と二重になるため） ----
-test('【失敗系】collectRow1SplitPoints: 通り芯（labeled）はROW2と二重になるため分割点に含めない', () => {
+// ---- S5: 面を貫く通り芯は分割点になる（旧ROW2＝通り芯間寸法の統合先） ----
+test('collectRow1SplitPoints: S5＝呼び出し側が渡す通り芯のローカルxが分割点になる', () => {
+  const graph = makeGraph();
+  const room = makeRoom(graph);
+  const faceA = buildRoomFaces(room, graph).find(f => f.label === 'A');
+  const boundary = faceBoundaryLocalX(faceA, graph);
+
+  const pts = collectRow1SplitPoints(faceA, graph, { boundary, gridXs: [1500, 2500] });
+  assert.deepEqual(pts, [1500, 2500], '通り芯のローカルxがそのまま鎖の分割点になるはず');
+});
+
+// ---- 失敗系: 通り芯はgraph走査では拾わない（S5＝呼び出し側のgridXsだけが源） ----
+test('【失敗系】collectRow1SplitPoints: gridXs未指定なら通り芯は分割点に含めない', () => {
   const graph = makeGraph();
   const room = makeRoom(graph);
   const faceA = buildRoomFaces(room, graph).find(f => f.label === 'A');
@@ -51,25 +62,7 @@ test('【失敗系】collectRow1SplitPoints: 通り芯（labeled）はROW2と二
   graph.addCenterLine(CenterLineType.VERTICAL, 2000, { labeled: true, discipline: Discipline.STRUCT });
 
   const pts = collectRow1SplitPoints(faceA, graph, { floorSegments: undefined, boundary });
-  assert.ok(!pts.some(x => Math.abs(x - 2000) < 1e-6), '通り芯由来の点は含まれないはず');
-});
-
-// ---- 失敗系: extentが面（axisCLの位置）まで届かない中心線は分割点にしない ----
-test('【失敗系】collectRow1SplitPoints: extentが面まで届かない中心線は分割点にならない', () => {
-  const graph = makeGraph();
-  const room = makeRoom(graph);
-  const faceA = buildRoomFaces(room, graph).find(f => f.label === 'A');
-  const boundary = faceBoundaryLocalX(faceA, graph);
-
-  const y1000 = graph.addCenterLine(CenterLineType.HORIZONTAL, 1000, { labeled: false, discipline: Discipline.ARCH });
-  const y2000 = graph.addCenterLine(CenterLineType.HORIZONTAL, 2000, { labeled: false, discipline: Discipline.ARCH });
-  const cl = graph.addCenterLine(CenterLineType.VERTICAL, 2000, { labeled: false, discipline: Discipline.ARCH });
-  // extentを[1000,2000]に短縮——面A(axisCL.effectiveValue=0)には届かない。
-  graph.setCenterLineExtentRef(cl, 'lo', { clId: y1000.id, offset: 0 });
-  graph.setCenterLineExtentRef(cl, 'hi', { clId: y2000.id, offset: 0 });
-
-  const pts = collectRow1SplitPoints(faceA, graph, { floorSegments: undefined, boundary });
-  assert.ok(!pts.some(x => Math.abs(x - 2000) < 1e-6), 'extentが面まで届かないため分割点にならないはず');
+  assert.ok(!pts.some(x => Math.abs(x - 2000) < 1e-6), 'gridXs未指定なら通り芯由来の点は出ないはず');
 });
 
 // ---- 失敗系: boundary.lo/hiちょうど（許容差内）の点は除外する ----
@@ -149,4 +142,28 @@ test('【失敗系】collectRow1SplitPoints: spans[i].hiCLIdがnull（面端そ�
   ];
   const pts = collectRow1SplitPoints(faceA, graph, { floorSegments: undefined, boundary, spans });
   assert.equal(pts.length, 0, '内部境界が無ければS4からの分割点は無いはず');
+});
+
+// ---- 不良修正2026-08（実機「6」B）: UI経路の中心線でも寸法は割らない ----
+// 実アプリ経路（transform/centerLineOps.js の addCenterLineAt。kind='center'）で作られる
+// 中心線は labeled:true（CenterLineの既定値）・discipline:ARCH になる。この生成でも分割点が
+// 出ないこと＝旧S3の撤去が実データ条件でも効いていることを固定する（フィクスチャはこれまで
+// 中心線を明示的に labeled:false で作っており、実アプリの既定値と食い違っていた）。
+test('【不良修正】collectRow1SplitPoints: UI経路の中心線（labeled既定=true・ARCH）でも寸法を割らない', () => {
+  const graph = makeGraph();
+  // 通り芯（kind='struct'相当）で囲った部屋。
+  const x0 = graph.addCenterLine(CenterLineType.VERTICAL, 0,    { discipline: Discipline.STRUCT });
+  const x1 = graph.addCenterLine(CenterLineType.VERTICAL, 4000, { discipline: Discipline.STRUCT });
+  const y0 = graph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { discipline: Discipline.STRUCT });
+  const y1 = graph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { discipline: Discipline.STRUCT });
+  // 中心線（kind='center'）= propsなし。実アプリと同じ既定値になる。
+  const mid = graph.addCenterLine(CenterLineType.VERTICAL, 2000, {});
+  assert.equal(mid.labeled, true, '前提: UI経路の中心線はlabeled:trueになる');
+
+  const room = graph.addRoom(new Set([`${x0.id}:${y0.id}:${x1.id}:${y1.id}`]), 'LDK');
+  generateRoomWallsFromOutline(graph, room);
+  const faceA = buildRoomFaces(room, graph).find(f => f.label === 'A');
+  const boundary = faceBoundaryLocalX(faceA, graph);
+  assert.equal(collectRow1SplitPoints(faceA, graph, { boundary }).length, 0,
+    '中心線は寸法の鎖を割らない（実機「6」Bの1500+1000の原因）');
 });

@@ -21,6 +21,7 @@ import { buildOpeningElevation } from '../openings/openingElevationFigure.js';
 import { translatePrimitive, mirrorPrimitiveX } from './elevationPrimitives.js';
 import { collectRow1SplitPoints } from './elevationDimSplit.js';
 import { drawnRiserX, drawnCeilingRiserX, halfWallThicknessMm } from './elevationFloorProfile.js';
+import { solidPrimitivesForFace } from './elevationSolids.js';
 import { kneeDropRecordsOnAxis } from '../finish/kneeDropWall.js';
 import {
   ElevationLineRole, weightForRole,
@@ -251,14 +252,46 @@ export function kneeDropGapsOnFace(face, graph, ceilingHeightMm) {
  * の真偽値比較がisVertical=trueの面(B/D。wantVertical=false)側でtrueになり、
  * 放射CLのeffectiveValue（角度deg）がたまたまface.lo..hiに収まると偽の通り芯として
  * 描かれてしまう。QA F6対応）。
+ *
+ * 不良修正2026-08（「通り芯の丸ナンバーが描画されない場合がある」）: 範囲は face.lo..hi
+ * （＝直交壁の**室内側仕上げ面**へ詰めた端。snapFaceEndsToCorners）ではなく、呼び出し側が渡す
+ * worldRange（＝面の両端の**壁中心線**＝faceBoundaryLocalXのboundaryを世界座標へ戻したもの）で
+ * 判定する——面端の通り芯は必ず壁中心線に乗るため、face.lo..hi基準だと半壁厚＋仕上げ厚ぶん
+ * 外側にあり常に除外され、「両端だけに通り芯がある面」では通り芯丸・ROW2寸法が1つも描かれない
+ * （実グラフの単純な矩形部屋で全4面とも丸0個になることを検証済み）。ROW1側に「通り芯と同位置の
+ * 一点鎖線は重複させない」判定（appendAnnotationRowsのonGrid。marksにboundary.lo/hiを含む）が
+ * ある事実が、元々この範囲を意図していたことを示している。
+ * worldRange未指定（単体テスト等の直接呼び出し）は従来どおりface.lo..hi。
  */
-function gridCLsOnFace(face, gridCLs) {
+function gridCLsOnFace(face, gridCLs, worldRange) {
   // isVertical=falseの面(A/C)は面軸に直交する垂直CL、isVertical=trueの面(B/D)は水平CLを表示する。
   const wantVertical = !face.isVertical;
+  const lo = worldRange?.lo ?? face.lo;
+  const hi = worldRange?.hi ?? face.hi;
   return gridCLs.filter(cl =>
     cl.centerLineType !== CenterLineType.RADIAL &&
     (cl.centerLineType === CenterLineType.VERTICAL) === wantVertical &&
-    cl.effectiveValue >= face.lo && cl.effectiveValue <= face.hi);
+    cl.effectiveValue >= lo - SPLIT_MERGE_EPS_MM && cl.effectiveValue <= hi + SPLIT_MERGE_EPS_MM);
+}
+
+/**
+ * gridCLsOnFace へ渡す世界座標範囲。face.lo..hi（仕上げ面基準）と boundary（壁中心線基準）の
+ * 和集合を返す——boundaryはローカルxのため originWorld/dirSign で世界座標へ戻す。
+ * originWorld/dirSign を持たない合成face（既存単体テストの後方互換）はnullを返し、
+ * gridCLsOnFace側が従来どおりface.lo..hiへフォールバックする。
+ * @param {object} face
+ * @param {{lo:number, hi:number}} boundary - faceBoundaryLocalX の結果（ローカルx）
+ * @returns {{lo:number, hi:number}|null}
+ */
+function gridWorldRange(face, boundary) {
+  if (!Number.isFinite(face.originWorld) || (face.dirSign !== 1 && face.dirSign !== -1)) return null;
+  const a = face.originWorld + boundary.lo * face.dirSign;
+  const b = face.originWorld + boundary.hi * face.dirSign;
+  // 範囲は face.lo/hi と boundary の**和集合ちょうど**にとどめる。一度「面端の壁の半厚ぶん外へ
+  // 広げる」拡張を入れたが、その根拠にした実機報告（「1」のB右/D左のY1が出ない）はユーザーの
+  // 指示ミスで、実際には正しく描かれていた——確認済みの根拠が無い一般化は入れない
+  // （このモジュールの既存方針: 類似規則への拡張は明示指示がある場合のみ）。
+  return { lo: Math.min(face.lo, a, b), hi: Math.max(face.hi, a, b) };
 }
 
 /**
@@ -347,6 +380,10 @@ export function openingSectionPrimitives(o, x0, dir, cutWeight, silhouetteWeight
  *   floorSegments省略時は床線1本のフラット区間（項目4。elevationFloorProfile.jsの
  *   wallAdjacentFloorSegmentsをbuildRoomBand/buildStairBandが計算して渡す。単体テスト等
  *   buildFaceFigureを直接呼ぶ場合は明示的に渡さない限りフラットになる）。
+ *   solids（追加仕様2026-08。{upperGraph?, floorHeightMm?}）指定時のみ、2.5D立体の加算レイヤ
+ *   （構造柱の柱型・梁型。elevationSolids.js）を重ねる。省略時（既定・階段帯・単体テスト）は
+ *   出力完全不変——階段帯は自前の断面エンジン経路（elevationStairSequence.jsのcontentForCut）で
+ *   既に構造梁を描くため、ここで重ねると二重描画になる。
  *   floorSpanX（WP-E7・defer D2）省略時は現行のdrawnX0/drawnXRun（壁のない端部延長込み）を
  *   そのまま使う（通常部屋帯・吹抜け帯は無指定のため出力が完全一致＝WP-G0ゲートで担保）。
  *   指定時はdrawnX0/drawnXRunをMath.max/minでこの範囲へクランプする——階段の腰壁越しに
@@ -358,6 +395,7 @@ export function buildFaceFigure(face, ctx) {
     graph, project, room, ceilingHeight: CH, materialMap, gridCLs, faceLabelAvoidThresholdModelMm,
     prevFace, nextFace, openingTagRowModelMm, dimRowGapModelMm, gridRowGapModelMm, floorSegments,
     wallLessEndExtendModelMm, scale, ceilingProfile, skipBaseboard, skipWallLabel, floorSpanX,
+    solids,
   } = ctx;
   const run = face.run;
   const prims = [];
@@ -394,8 +432,10 @@ export function buildFaceFigure(face, ctx) {
   const openingTagRowY = openingTagRowModelMm ?? DEFAULT_OPENING_TAG_ROW_MM;
   const dimRow1Y       = dimRowGapModelMm ?? DEFAULT_DIM_ROW_GAP_MM;
   const gridRowGapMm   = gridRowGapModelMm ?? DEFAULT_GRID_ROW_GAP_MM;
-  const dimRow2Y       = dimRow1Y + gridRowGapMm;
-  const gridCircleRowY = dimRow2Y + gridRowGapMm;
+  // ユーザー明示指示2026-08「展開図に寸法2段書きは不要」: 旧ROW2（通り芯間寸法の独立行）を
+  // 廃止したぶん、通り芯丸の段を1行ぶん（gridRowGapMm）繰り上げる——寸法行と丸行の間隔は
+  // 従来と同じgridRowGapMmのまま保つ（この値はユーザー調整済みの独立定数。倍数で導出しない）。
+  const gridCircleRowY = dimRow1Y + gridRowGapMm;
   const faceLabelRowY  = gridCircleRowY;
 
   // 新仕様「段差見付け面」: kind==='step'（elevationStepFace.jsのbuildStepFacesが作る面）は
@@ -445,7 +485,7 @@ export function buildFaceFigure(face, ctx) {
       appendGapMark(prims, gap, stepSilhouetteWeight, stepDetailWeight);
     }
     appendAnnotationRows(prims, face, graph, {
-      boundary, floorSegments: undefined, gridCLs, dimRow1Y, dimRow2Y, gridCircleRowY, faceLabelRowY,
+      boundary, floorSegments: undefined, gridCLs, dimRow1Y, gridCircleRowY, faceLabelRowY,
       detailWeight: stepDetailWeight, faceLabelAvoidThresholdModelMm,
       // 注記一点鎖線の突き出し基準: この面で実際に描く最上位の水平線（天井断面・向こう側の破線）。
       CH: Math.max(face.ceilAbsMm ?? CH, face.beyondCeilAbsMm ?? -Infinity),
@@ -939,6 +979,14 @@ export function buildFaceFigure(face, ctx) {
     }
   }
 
+  // 追加仕様2026-08「2.5D仕様の展開ロジックを全ての展開図に適用」: 2.5D立体の加算レイヤ
+  // （構造柱の柱型・梁型。elevationSolids.js）。ctx.solids未指定（既定＝階段帯・単体テスト・
+  // ゴールデンゲート）は空配列のため出力は完全に不変。注記帯より前に積むのは、注記帯の
+  // 一点鎖線・寸法・丸番号を構造材の線で隠さないため（Konvaは配列の後ろほど手前）。
+  if (solids) {
+    for (const p of solidPrimitivesForFace(face, { graph, ceilingHeight: CH, ...solids })) prims.push(p);
+  }
+
   // 壁芯間寸法（面の両端＝壁中心線。ROW1）。項目2・6: 寸法線足(dim.foot)は廃止し、代わりに
   // 壁中心線自体（一点鎖線）を寸法線の位置まで下ろし、交点に塗り丸(dim.dot)を置く。
   // 項目4: 通り芯線（GRID_LINE_ABOVE_CH_MM）と同様、壁中心線も天井線より上まで突き出す
@@ -978,7 +1026,7 @@ export function buildFaceFigure(face, ctx) {
   const ceilProfileMaxAbs = Array.isArray(ceilingProfile) && ceilingProfile.length > 0
     ? Math.max(...ceilingProfile.map(p => p[1])) : -Infinity;
   appendAnnotationRows(prims, face, graph, {
-    boundary, floorSegments: segs, gridCLs, dimRow1Y, dimRow2Y, gridCircleRowY, faceLabelRowY,
+    boundary, floorSegments: segs, gridCLs, dimRow1Y, gridCircleRowY, faceLabelRowY,
     detailWeight, faceLabelAvoidThresholdModelMm,
     CH: Math.max(CH, ...segs.map(ceilAbsOf), maxDrawnBcCeilAbs, ceilProfileMaxAbs),
   });
@@ -987,7 +1035,7 @@ export function buildFaceFigure(face, ctx) {
 }
 
 /**
- * 注記帯（ROW1鎖・ROW2通り芯間寸法・通り芯丸+ラベル・面ラベル）をprimsへ積む
+ * 注記帯（寸法の鎖1行・通り芯丸+ラベル・面ラベル）をprimsへ積む
  * （新仕様。通常面・段差見付け面(kind==='step')の両方から共通で呼ぶ——見付け面は
  * floorSegments未指定（S1の段差CL源が無い）で呼ばれる。開口・巾木・壁2段書きは対象外
  * ＝呼び出し元がkind==='step'なら別途スキップする）。
@@ -995,30 +1043,33 @@ export function buildFaceFigure(face, ctx) {
  * @param {object} face
  * @param {object} graph
  * @param {{boundary:{lo:number,hi:number}, floorSegments?:Array, gridCLs?:object[],
- *   dimRow1Y:number, dimRow2Y:number, gridCircleRowY:number, faceLabelRowY:number,
+ *   dimRow1Y:number, gridCircleRowY:number, faceLabelRowY:number,
  *   detailWeight:string, faceLabelAvoidThresholdModelMm?:number, CH:number}} opts
  */
 function appendAnnotationRows(prims, face, graph, opts) {
   const {
-    boundary, floorSegments, gridCLs, dimRow1Y, dimRow2Y, gridCircleRowY, faceLabelRowY,
+    boundary, floorSegments, gridCLs, dimRow1Y, gridCircleRowY, faceLabelRowY,
     detailWeight, faceLabelAvoidThresholdModelMm, CH,
   } = opts;
 
-  // 通り芯間寸法（面を貫く通り芯同士。ROW2）より先にgridPointsを求める——ROW1の一点鎖線が
-  // 「通り芯と同位置なら重複させない」判定にgridPointsを使うため。
-  const gridPoints = gridCLsOnFace(face, gridCLs ?? [])
+  // 面を貫く通り芯（寸法の鎖の分割点＝S5・一点鎖線・丸番号の共通の源）。
+  const gridPoints = gridCLsOnFace(face, gridCLs ?? [], gridWorldRange(face, boundary))
     .map(cl => ({ x: localXOf(face, cl.effectiveValue), label: cl.label }))
     .sort((a, b) => a.x - b.x);
 
-  // 壁芯間寸法（面の両端＝壁中心線。ROW1）。新仕様「ROW1寸法のCL分割」: boundary.lo〜hiを
-  // 1本で通すのではなく、段差CL・面へ到達する直交壁（袖壁等）・面に届く非通り芯中心線・
-  // 開放スパンの内部境界の4源（collectRow1SplitPoints）で分割した「寸法の鎖」にする。
+  // 寸法行（1行のみ。ユーザー明示指示2026-08「展開図に寸法2段書きは不要」——旧ROW2＝通り芯間
+  // 寸法の独立行は廃止し、通り芯を鎖の分割点（S5）として取り込んだ。「壁幅が通り芯をまたぐ場合は
+  // 通り芯から」も、両端が壁中心線・内部の分割点が通り芯というこの鎖1本で満たされる）。
+  // 分割源は段差CL・面へ到達する直交壁（袖壁等）・開放スパンの内部境界・通り芯の4源
+  // （collectRow1SplitPoints）。
   const centerLineTopY = -CH - GRID_LINE_ABOVE_CH_MM;
-  const row1SplitXs = collectRow1SplitPoints(face, graph, { floorSegments, boundary, spans: face.spans });
-  const row1Marks = [boundary.lo, ...row1SplitXs, boundary.hi];
+  const dimSplitXs = collectRow1SplitPoints(face, graph, {
+    floorSegments, boundary, spans: face.spans, gridXs: gridPoints.map(g => g.x),
+  });
+  const row1Marks = [boundary.lo, ...dimSplitXs, boundary.hi];
   for (const x of row1Marks) {
     const onGrid = gridPoints.some(g => Math.abs(g.x - x) <= SPLIT_MERGE_EPS_MM);
-    if (onGrid) continue; // 通り芯の一点鎖線（ROW2側）と重複させない
+    if (onGrid) continue; // 通り芯の一点鎖線（下のループ）と重複させない
     prims.push({ type: 'line', x1: x, y1: centerLineTopY, x2: x, y2: dimRow1Y, dash: 'center', weight: detailWeight });
   }
   for (let i = 0; i + 1 < row1Marks.length; i++) {
@@ -1028,16 +1079,7 @@ function appendAnnotationRows(prims, face, graph, opts) {
     });
   }
 
-  // 通り芯間寸法（面を貫く通り芯同士。ROW2）。項目2・6: こちらも足は出さない。通り芯自体の
-  // 一点鎖線（下のgridCircleRowYまで伸びる縦線）が寸法線位置(dimRow2Y)を通過するため、
-  // その交点に塗り丸(dim.dot)を置くだけでよい。
-  for (let i = 0; i + 1 < gridPoints.length; i++) {
-    prims.push({
-      type: 'dim', dir: 'h', at: dimRow2Y, from: gridPoints[i].x, to: gridPoints[i + 1].x, dot: true,
-      label: Math.round(gridPoints[i + 1].x - gridPoints[i].x),
-    });
-  }
-  // 通り芯縦一点鎖線＋丸番号（ROW2のさらに下＝gridCircleRowY。QA G4: 寸法行とは別の段）。
+  // 通り芯縦一点鎖線＋丸番号（寸法行のさらに下＝gridCircleRowY。QA G4: 寸法行とは別の段）。
   // 調整項目3: 下端(gridCircleRowY)だけでなく天井線(-CH)より上へも少し突き出す
   // （y1=-CH-GRID_LINE_ABOVE_CH_MM。通り芯は本来、床から天井を貫通して続く線のため）。
   for (const g of gridPoints) {

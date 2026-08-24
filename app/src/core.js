@@ -41,7 +41,7 @@ export { Wall, Opening } from './core/wall.js';
 // CENTER LINE (中心線) — core/centerLine.js。
 // ================================================================
 
-export { CenterLine, centerLineKind } from './core/centerLine.js';
+export { CenterLine, centerLineKind, isGridCenterLine } from './core/centerLine.js';
 
 // ================================================================
 // DIMENSION (寸法線) — core/dimension.js。DimensionLine は StructuralEntity と

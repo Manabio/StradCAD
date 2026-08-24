@@ -7,7 +7,7 @@
  * 抜ける・片方だけ部屋名枠を組み立てない、といった分岐が生じていた。両ビルダーはこのファイルの
  * 実装だけを使う。
  */
-import { CenterLineType, Discipline } from '@core';
+import { CenterLineType, isGridCenterLine } from '@core';
 import { figureBounds } from '../structural/sectionFigure/sectionGeometry.js';
 import { ElevationLineRole, weightForRole, DEFAULT_NAME_GAP_MM } from './elevationStyle.js';
 
@@ -90,10 +90,12 @@ export function mirrorPrimitiveX(p, width) {
  * 面軸に直交するグリッド通り芯（labeled struct CL）表示用に、graph全体の通り芯一覧を集める。
  * RADIAL（放射CL。value=角度deg）は座標軸を持たずgeometry未対応のため除外する
  * （structural/structuralAutoFill.js の secondaryBeamSpansFor と同じガード）。
+ * 通り芯かどうかの判定は`isGridCenterLine`（core/centerLine.js）へ一本化する
+ * ——`labeled`だけでは中心線（UI経路の既定でlabeled:true）まで拾ってしまう。
  */
 export function collectGridCLs(graph) {
   return graph.centerLines.filter(cl =>
-    cl.labeled && cl.discipline === Discipline.STRUCT && cl.centerLineType !== CenterLineType.RADIAL);
+    isGridCenterLine(cl) && cl.centerLineType !== CenterLineType.RADIAL);
 }
 
 /**

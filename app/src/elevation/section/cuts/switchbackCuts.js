@@ -21,7 +21,7 @@
 import { StairType, StructuralMaterialType } from '@core';
 import { roomBounds } from '../../../finish/gridCells.js';
 import { makeFrame } from '../../../finish/stair/stairGeometry.js';
-import { letterOf, DIR_SIGN, perpFaceAt } from '../../elevationFaces.js';
+import { letterOf, letterForDirSign, DIR_SIGN, perpFaceAt } from '../../elevationFaces.js';
 import { kneeDropRecordFor } from '../../elevationFaceList.js';
 import { localXOf as localXOfFace } from '../../elevationFigure.js';
 import { resolveSwitchbackParams } from '../../elevationStairSection.js';
@@ -119,19 +119,29 @@ export function clipFaceToWorldRange(face, worldA, worldB) {
  * hasWallAtLocal0/Runを暗黙の前提にした「区間0=上り口側」のハードコード順）は
  * face自身のdirSignのままズレて残るため、content（cut.dirSign経由）とfloorSegments
  * （face.dirSign経由）が食い違う——face自体をここで再正規化し、両方が同じ歩行方向基準に
- * 揃うようにする。lo/hi/run/letter/axisCL/faceValue/inward/isVertical/hasRealWall/kindは
+ * 揃うようにする。lo/hi/run/axisCL/faceValue/inward/isVertical/hasRealWall/kindは
  * 同じ物理壁を指す不変な性質のためそのまま維持し、「ローカルxの向き」に関する対の属性
  * （hasWallAtLocal0/Run・edgeAtLocal0/Run・startCLId/endCLId・partitionCutAtLocal0/Run）だけ
  * 入れ替える。face.dirSignが既にdesiredDirSignと一致するなら何もしない（他の部屋向きでは
  * 現行どおりの経路のまま＝無変更で緑必須のゴールデン・非階段テストに影響しない）。
+ *
+ * **letter（展開記号）はdirSignに従って引き直す**（ユーザー実機指摘2026-08。旧実装は
+ * 「同じ物理壁を指す不変な性質」としてletterを据え置いており、`DIR_SIGN[letter]===dirSign`
+ * という面の不変条件が破れていた）——記号A/B/C/Dは視線の向き＝図の左→右がどちらの世界方向かで
+ * 決まるため、ローカルxの向きを歩行方向へ倒した時点で記号も入れ替わる（B⇄D・A⇄C）。
+ * 実機の症状は「左手に登り口・右が踊り場＝9時方向を見ている図なのに記号がB（3時）」。
+ * labelは呼び出し側（elevationStairSequence.js）が歩行順で採番し直すため、ここでは
+ * letterと同値へ落とす（採番前の暫定値。据え置くと旧letterの連番が残って食い違う）。
  * @param {object|null} face
  * @param {1|-1} desiredDirSign
  * @returns {object|null}
  */
 export function reorientFace(face, desiredDirSign) {
   if (!face || face.dirSign === desiredDirSign) return face;
+  const letter = letterForDirSign(face.isVertical, desiredDirSign);
   return {
     ...face,
+    letter, label: letter, id: letter,
     dirSign: desiredDirSign,
     originWorld: desiredDirSign > 0 ? face.lo : face.hi,
     hasWallAtLocal0:   face.hasWallAtLocalRun,
@@ -166,7 +176,10 @@ export function buildMidWallFace(wall, inward, loWorld, hiWorld, faces) {
   const startCLId = (swapped ? hiFace : loFace)?.axisCL.id ?? null;
   const endCLId   = (swapped ? loFace : hiFace)?.axisCL.id ?? null;
   return {
-    letter, dirSign, isVertical: wall.isVertical, axisCL: wall.axisCL, inward,
+    // labelは歩行順の採番（elevationStairSequence.js）で上書きされる暫定値。合成面にも
+    // 展開記号は要る（実機ではこれも1枚の展開図として並ぶ）ため未設定のままにしない。
+    letter, label: letter, id: letter,
+    dirSign, isVertical: wall.isVertical, axisCL: wall.axisCL, inward,
     faceValue: wall.axisCL.effectiveValue, hasRealWall: true,
     lo, hi, run: hi - lo, originWorld: dirSign > 0 ? lo : hi,
     startCLId, endCLId, hasWallAtLocal0: true, hasWallAtLocalRun: true,

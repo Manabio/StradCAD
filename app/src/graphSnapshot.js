@@ -1,13 +1,15 @@
 import { runInAction } from 'mobx';
-import { ShapeType, CenterLine, HDimensionLine, VDimensionLine, DimensionAnchor, DimensionKind, DimensionSide, Discipline, Room, RoomKind, RoomFeature, IndependentFooting, ExteriorFinishRow } from '@core';
+import { ShapeType, CenterLine, isGridCenterLine, HDimensionLine, VDimensionLine, DimensionAnchor, DimensionKind, DimensionSide, Room, RoomKind, RoomFeature, IndependentFooting, ExteriorFinishRow } from '@core';
 import { encode, decode } from './schema/graphFbs.js';
 import { packExtraFields, unpackExtraFields } from './structural/fieldPacking.js';
 
 // ----------------------------------------------------------------
 // 共通: 通り芯かどうかの判定
 // ----------------------------------------------------------------
+// 判定本体は core/centerLine.js の isGridCenterLine へ一本化する（同じ述語がここ・
+// elevationPrimitives.js・GutterLayer.jsx に散在していた。不良修正2026-08）。
 function isStructCL(s) {
-  return s instanceof CenterLine && s.discipline === Discipline.STRUCT && s.labeled;
+  return s instanceof CenterLine && isGridCenterLine(s);
 }
 
 // ----------------------------------------------------------------

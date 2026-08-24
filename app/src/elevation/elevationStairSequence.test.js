@@ -8,6 +8,7 @@ import { composeRoomFaces } from './elevationFaceList.js';
 import { stairFaceSequence, kneeWallCapContent } from './elevationStairSequence.js';
 import { resolveSwitchbackParams } from './elevationStairSection.js';
 import { ElevationLineRole, weightForRole } from './elevationStyle.js';
+import { DIR_SIGN } from './elevationFaces.js';
 
 function makeGraph(name = 'p1') {
   const plane = new Plane(name, 0, `${name}階`, 1, 1);
@@ -1387,4 +1388,40 @@ test('【失敗系・実機フィードバック第3弾・続報】stairFaceSequ
     p.type === 'line' && p.y1 === p.y2 && p.dash === undefined && p.weight === silhouetteWeight &&
     Math.abs(p.y1 - (-OPTS.chLowerMm)) < 1e-6);
   assert.ok(capLine, '上階に実Roomがあれば1F天井高さの水平キャップ線が出るはず');
+});
+
+// ---- 実機指摘2026-08（展開記号）: 歩行方向へ倒したdirSignとletterが食い違っていた ----
+// 症状「左手に登り口・右が踊り場＝9時方向を見ている図なのに記号がB（3時）」。展開記号A/B/C/Dは
+// 視線の向き＝図の左→右がどちらの世界方向かで決まるため、`DIR_SIGN[letter] === face.dirSign` は
+// 面の不変条件。reorientFaceが歩行方向へdirSignだけ倒してletterを据え置いていたのが原因。
+test('【実機指摘】stairFaceSequence: 全エントリでDIR_SIGN[letter]===face.dirSign（展開記号は視線の向きと一致する）', () => {
+  const graph = makeGraph();
+  const { room, stair } = makeSwitchbackFixture(graph, { withMidWall: true });
+  const faces = composeRoomFaces(room, graph);
+  const entries = stairFaceSequence(stair, faces, graph, OPTS);
+  assert.ok(entries);
+  for (const e of entries) {
+    assert.equal(DIR_SIGN[e.face.letter], e.face.dirSign,
+      `seq${e.seqNo}: 記号${e.face.letter}(DIR_SIGN=${DIR_SIGN[e.face.letter]})とdirSign=${e.face.dirSign}が食い違う`);
+    assert.equal(e.face.isVertical, e.face.letter === 'B' || e.face.letter === 'D',
+      `seq${e.seqNo}: 記号${e.face.letter}は壁の軸向き(isVertical=${e.face.isVertical})と整合しないはず`);
+  }
+});
+
+// ---- 実機指摘2026-08: 展開記号は歩行順に採番し直す（部屋のコンパス順の連番を持ち込まない） ----
+test('【実機指摘】stairFaceSequence: 展開記号のラベルは歩行順に採番される（同記号は出現順に連番）', () => {
+  const graph = makeGraph();
+  const { room, stair } = makeSwitchbackFixture(graph, { withMidWall: true });
+  const faces = composeRoomFaces(room, graph);
+  const entries = stairFaceSequence(stair, faces, graph, OPTS);
+  const labels = entries.map(e => e.face.label);
+  assert.equal(labels.length, new Set(labels).size, `ラベルは重複しないはず（実際:${labels}）`);
+  // letterごとに、出現順で 1,2,3... の連番（単独ならletterのみ）になっている。
+  const seen = new Map();
+  for (const e of entries) {
+    const n = (seen.get(e.face.letter) ?? 0) + 1;
+    seen.set(e.face.letter, n);
+    const total = entries.filter(x => x.face.letter === e.face.letter).length;
+    assert.equal(e.face.label, total > 1 ? `${e.face.letter}${n}` : e.face.letter);
+  }
 });

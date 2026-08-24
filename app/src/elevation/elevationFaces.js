@@ -43,6 +43,24 @@ export function letterOf(isVertical, axisOffset) {
 
 export const DIR_SIGN = { A: 1, B: 1, C: -1, D: -1 };
 
+/**
+ * 「軸の向き × 図のローカルx方向」から展開記号を逆引きする（`DIR_SIGN`の逆写像）。
+ *
+ * 展開記号A/B/C/Dは**視線の向き**（A=12時/B=3時/C=6時/D=9時）を表し、図の左→右がどちらの
+ * 世界方向かで一意に決まる——だから`DIR_SIGN[letter] === face.dirSign`は面の不変条件である。
+ * 階段帯は「上り口→踊り場」という歩行方向で作図順（＝ローカルx方向）が決まるため
+ * （`reorientFace`）、部屋のコンパス向き由来のletterをそのまま残すとこの不変条件が破れ、
+ * 実機で「9時方向を見ている図にBの記号が付く」（ユーザー実機指摘2026-08）ことになる。
+ * 階段の展開記号がケースバイケースで変わるのはこの逆引きの結果であり、例外規則ではない。
+ * @param {boolean} isVertical - 面（壁）が垂直軸に沿うか
+ * @param {1|-1} dirSign - 図のローカルx昇順が指す世界方向の符号
+ * @returns {'A'|'B'|'C'|'D'}
+ */
+export function letterForDirSign(isVertical, dirSign) {
+  if (!isVertical) return dirSign > 0 ? 'A' : 'C';
+  return dirSign > 0 ? 'B' : 'D';
+}
+
 // QA修正（項目5b根本原因）: axisCLIdごとに面をグルーピングする（単純なMap<axisCLId,Face>だと
 // 後勝ちで片方が消える）。ノッチ・張り出し（アルコーブ等）で1本の壁面が開口を挟み2区間以上に
 // 分かれる場合、両区間とも同じaxisCLId（壁の通り位置そのもの）を持つ——例: 主室の右壁(B)に

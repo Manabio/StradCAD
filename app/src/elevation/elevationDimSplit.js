@@ -1,34 +1,34 @@
 /**
- * 展開図: ROW1（壁芯間寸法）の分割点抽出（純関数）。設計意図は .claude/elevation-model.md 参照。
+ * 展開図: 寸法行の分割点抽出（純関数）。設計意図は .claude/elevation-model.md 参照。
  *
- * ROW1は「面の壁中心線間（boundary.lo〜hi）を1本の寸法で通す」のではなく、床の段差CL・
- * 内部の直交壁（袖壁・腰壁）・面に到達する非通り芯の中心線、の3源で分割した「寸法の鎖」にする
- * （通り芯自体はROW2が別途担当するため、S3からは除外する）。
+ * 寸法は**1行**（ユーザー明示指示2026-08「展開図に寸法2段書きは不要」）。旧ROW2（通り芯間寸法の
+ * 独立行）は廃止し、通り芯をこの鎖の分割点（S5）として取り込む——面の壁中心線間を1本で通すのでは
+ * なく、床の段差CL・内部の直交壁（袖壁・腰壁）・開放スパン境界・通り芯で分割した「寸法の鎖」。
  */
-import { CenterLineType, Discipline } from '@core';
 import { perpendicularWallsOnFace } from './elevationFaces.js';
 import { SPLIT_MERGE_EPS_MM } from './elevationStyle.js';
 
 /**
- * face のROW1寸法の分割点（ローカルx。boundary.lo/hiそのものは含まない）を昇順・重複除去で返す。
+ * face の寸法行の分割点（ローカルx。boundary.lo/hiそのものは含まない）を昇順・重複除去で返す。
  * 4源:
  *   S1 = 段差CL（floorSegments[i].hiCLId が実在するCLを指す境界。floorSegments[i].hiX を使う）
  *   S2 = perpendicularWallsOnFace(face, graph, 'far') の壁のaxisCL
- *   S3 = 非labeled・非破線・discipline=ARCHの中心線で、face軸に直交し face.lo<v<face.hi、
- *        かつ extent が面（壁）まで到達しているもの（cl.extentLo==null か、
- *        cl.extentLo<=av<=cl.extentHi。av=face.axisCL.effectiveValue）
  *   S4 = 開放スパンの内部境界（spans[i].hiCLId が実在するCLを指す境界。spans[i].hiCLX を使う。
  *        elevationOpenSpan.jsのextendFaceWithOpenSpansが既にローカルx換算済みのため localXOf不要）
+ *   S5 = 面を貫く通り芯（呼び出し側が算出済みのローカルx配列 gridXs）
+ * **旧S3（面に届く非通り芯の中心線）は廃止した**（ユーザー実機指摘2026-08: 階段室「6」Bの
+ * 寸法が「2500」であるべきところ中心線1本で「1500+1000」へ割れた。中心線は壁を伴わない
+ * 作図補助であり、展開図の寸法をそこで割る必然性が無い——分割は実体（段差・直交壁・開放境界）と
+ * 通り芯だけが担う）。
  * boundary.lo/hiとほぼ同位置（±SPLIT_MERGE_EPS_MM）の点は除外する（marks配列側で改めて両端に足すため）。
  * @param {object} face - buildRoomFaces/composeRoomFacesの1件
  * @param {object} graph
  * @param {{floorSegments?:Array<{hiX:number, hiCLId:?string}>, boundary:{lo:number, hi:number},
- *   spans?:Array<{hiCLX:number|null, hiCLId:?string}>}} opts
+ *   spans?:Array<{hiCLX:number|null, hiCLId:?string}>, gridXs?:number[]}} opts
  * @returns {number[]}
  */
-export function collectRow1SplitPoints(face, graph, { floorSegments, boundary, spans }) {
+export function collectRow1SplitPoints(face, graph, { floorSegments, boundary, spans, gridXs }) {
   const localXOf = worldCoord => (worldCoord - face.originWorld) * face.dirSign;
-  const av = face.axisCL.effectiveValue;
   const raw = [];
 
   // S1: 段差CL（gap-fillで生まれた境界=hiCLIdなしは対象外——実在するCLの位置ではないため）。
@@ -50,19 +50,10 @@ export function collectRow1SplitPoints(face, graph, { floorSegments, boundary, s
     raw.push(localXOf(w.axisCL.effectiveValue));
   }
 
-  // S3: 面に直交する非通り芯の中心線（extentが面まで届いているもののみ）。
-  // graph.centerLines未定義（最小限フェイクgraphを使う単体テスト）は「中心線なし」として扱う。
-  const perpType = face.isVertical ? CenterLineType.HORIZONTAL : CenterLineType.VERTICAL;
-  for (const cl of graph.centerLines ?? []) {
-    if (cl.centerLineType !== perpType) continue;
-    if (cl.labeled) continue; // 通り芯はROW2が担当するため除外
-    if (cl.lineType === 'dashed') continue;
-    if (cl.discipline !== Discipline.ARCH) continue;
-    if (!(cl.value > face.lo && cl.value < face.hi)) continue;
-    const reaches = cl.extentLo == null || (cl.extentLo <= av && av <= cl.extentHi);
-    if (!reaches) continue;
-    raw.push(localXOf(cl.value));
-  }
+  // S5: 面を貫く通り芯（ユーザー明示指示2026-08「展開図に寸法2段書きは不要」「壁幅が通り芯を
+  // またぐ場合は通り芯から」）。旧ROW2（通り芯間寸法の独立行）を廃止し、寸法の鎖1本へ統合した
+  // ——呼び出し側（elevationFigure.jsのappendAnnotationRows）が既に算出済みのローカルxを渡す。
+  for (const x of gridXs ?? []) raw.push(x);
 
   const filtered = raw.filter(x =>
     Math.abs(x - boundary.lo) > SPLIT_MERGE_EPS_MM && Math.abs(x - boundary.hi) > SPLIT_MERGE_EPS_MM);

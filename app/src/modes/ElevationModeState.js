@@ -5,7 +5,7 @@ import { selectElevationRooms } from '../elevation/elevationFaces.js';
 import { buildRoomBand } from '../elevation/elevationBand.js';
 import { buildStairBand } from '../elevation/elevationStair.js';
 import { buildVoidBand } from '../elevation/elevationVoid.js';
-import { floorHeightBelow } from '../finish/stair/stairDimensions.js';
+import { floorHeightAbove, floorHeightBelow } from '../finish/stair/stairDimensions.js';
 import { collectGridCLs } from '../elevation/elevationPrimitives.js';
 import { buildBandsSafely } from '../elevation/elevationRooms.js';
 import {
@@ -185,6 +185,11 @@ export class ElevationModeState {
     const rooms = selectElevationRooms(this.graph);
     const stairByRoomId = new Map(this.graph.stairs.map(s => [s.roomId, s]));
     const screenPxPerMm = this.screenPxPerMm;
+    // 追加仕様2026-08: 2.5D立体の加算レイヤ（梁型）が上階梁の高さ（天端=自FL+階高）を求めるのに
+    // 使う階高。planes未整備のprojectフェイク（単体テスト）でも例外を投げずnull＝上階レイヤ無しへ
+    // 落とす（buildVoidBandがlowerGraph欠落時に1層フォールバックするのと同じ規約）。
+    const floorHeightMm = Array.isArray(this.project?.planes)
+      ? floorHeightAbove(this.project, this.graph.plane) : null;
 
     // paramsは全て2パス機構で換算する実画面mm値（+scale。オブジェクトにまとめて渡す
     // ——buildRoomBand/buildStairBand/buildVoidBandへそのまま展開できる形にしておく）。
@@ -200,7 +205,11 @@ export class ElevationModeState {
         const floorHeightBelowMm = floorHeightBelow(this.project, this.graph.plane);
         return buildVoidBand(room, this.graph, lowerGraph, { ...ctx, floorHeightBelowMm });
       }
-      return buildRoomBand(room, this.graph, ctx);
+      // 追加仕様2026-08「2.5D仕様の展開ロジックを全ての展開図に適用」: 通常部屋帯へ
+      // 2.5D立体の加算レイヤ（構造柱の柱型・上階梁の梁型。elevation/elevationSolids.js）を
+      // 有効化する。階段帯は自前の断面エンジン経路で既に構造梁を描くため渡さない（二重描画防止）。
+      // 吹抜け帯は「自階の面を下へ延長する」特殊な高さ基準（帯FL≠断面の床）のため今回は対象外。
+      return buildRoomBand(room, this.graph, { ...ctx, solids: { upperGraph, floorHeightMm } });
     };
 
     // パス1: 倍率決定用（ギャップ・名前枠余白・三角オフセット・面ラベル退避閾値・建具タグ行/
