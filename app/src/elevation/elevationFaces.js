@@ -91,6 +91,102 @@ function findCornerNeighbor(byAxisCLId, ownAxisCLId, neighborAxisCLId) {
 // 数十mm手前で止まるため、丸め誤差だけを吸収する小さい値でよい。
 export const PLANE_CROSS_EPS_MM = 1;
 
+// 隅の実壁プローブが室内側へ探る窓の奥行(mm)。perpendicularWallsOnFaceの
+// PERP_MIN_PROJECTION_MM と同値——「隅で室内側へこの程度は突き出していて初めて壁として見える」
+// という同じ尺度を2箇所で共有する。
+const CORNER_PROBE_DEPTH_MM = 100;
+
+/**
+ * face f の端の隅（perpFaceが乗る直交CL上）に、**実際に壁材があるか**を局所プローブする。
+ *
+ * ユーザー実機指摘2026-08「C1のX2上に線はなく、C1からC2へ至る間にもエッジはない。比較的単純な
+ * プローブに思う。判定方法をよく確認してみて」の対応。**旧実装は直交面の面全体のフラグ
+ * （`perpFace.hasRealWall`＝`innerWallFaceAt`が面のスパン全域で壁を1本でも見つけたか）を隅の
+ * 判定に流用していた**ため、直交面の遠い側にだけ壁がある構成では「隅に壁がある」と誤判定し、
+ * 実際には何も無い隅に見えがかりエッジの縦線が描かれていた（実機の症状: 連続する外壁面が
+ * C1/C2に分かれ、その継ぎ目に無いはずの縦線が出る）。
+ *
+ * 正しい判定は「**その隅の周りに**壁材があるか」という局所の問い——`innerWallFaceAt`へ渡す
+ * スパンを、面全体ではなく**この面の仕上げ面を挟む±CORNER_PROBE_DEPTH_MMの窓**に絞るだけでよい
+ * （壁の同定・inward判定は既存の`innerWallFaceAt`をそのまま使う。判定の二重管理を増やさない）。
+ *
+ * **窓は面の両側に取る**——「実壁が向こう側へ折れて続く角」（＝室内側へは横切らないが角の
+ * エッジは見える。ユーザー明示指示で見えがかりエッジとして縦線を描く対象）を落とさないため。
+ * 室内側だけの片側窓にすると、まさにその確認済みケース（Round Fの2 C2右・3 B1右・3 D1左）が
+ * エッジごと消える（実際にそう実装してテストで検出した）。室内へ横切るか否かの区別は
+ * この関数ではなく`perpWallCrossesFacePlane`が担う——役割を混ぜない。
+ *
+ * graph未指定（合成faceを使う既存の単体テスト）は従来どおり面全体のフラグへフォールバックする。
+ * @param {object} f - 対象の面
+ * @param {object} perpFace - 隅を共有する直交面
+ * @param {object|null} graph
+ * @returns {boolean}
+ */
+function realWallAtCorner(f, perpFace, graph) {
+  const fallback = perpFace.hasRealWall ?? true;
+  if (!graph?.walls || !perpFace.axisCL) return fallback;
+  if (perpFace.inward !== 1 && perpFace.inward !== -1) return fallback;
+  if (!Number.isFinite(f.faceValue)) return fallback;
+  // 直交壁のスパン軸は f の軸方向（Cなら壁のcoord1/coord2はY・f.faceValueもY）。
+  return innerWallFaceAt(graph, perpFace.axisCL, {
+    isVertical: perpFace.isVertical, inward: perpFace.inward,
+    spanLo: f.faceValue - CORNER_PROBE_DEPTH_MM, spanHi: f.faceValue + CORNER_PROBE_DEPTH_MM,
+  }) != null;
+}
+
+/**
+ * 開放スパンの内部境界の**描画x**（ローカル）。CL位置そのものではなく、
+ * **その境界に立つ直交壁の「開放側の面」**を返す。
+ *
+ * ユーザー実機指摘2026-08（5/C2の400CL・10/D1の400CL・10/C2の800CL・10/B2の1000CL・11'/A2の
+ * 1600の両側）: 開放スパンの境界の縦線が、いずれも「壁厚×1/2だけ開放側」へずれるべきだった。
+ * 境界に立つ壁は中心線に対して厚みを持つため、**実際の抜け（クリアな開口）は壁の面から始まる**
+ * ——CL位置で切ると壁の半厚ぶん開口を広く描いてしまう。
+ *
+ * 「当該壁厚・偏芯を確認し、加味する」（同指摘）ため、半壁厚の決め打ちではなく`innerWallFaceAt`で
+ * **実壁の面**（`Wall.axisValue`＝偏芯込みの仕上げ面）を引く。**境界に実壁が無ければオフセットは
+ * しない**——ずらす根拠になる壁厚がそこに存在しないため、CL位置がそのまま正しい境界になる
+ * （半壁厚の決め打ちでフォールバックすると、壁の無い境界まで一律にずれる。実際そう実装して
+ * 既存テストで検出した）。
+ * 寸法・CL一点鎖線は従来どおりオフセット前の値（`spans[i].hiCLX`）を使う——描画位置と寸法位置を
+ * 意図的に別に持つ既存規約（`drawnRiserX`と同じ）。
+ * @param {object} face
+ * @param {object} graph
+ * @param {number} localX - 境界のローカルx（オフセット前）
+ * @param {?string} clId - 境界のCL id（`spans[i].hiCLId`）
+ * @param {1|-1} localSign - 開放側へ動かす向き（ローカルx基準。+1=大きい側）
+ * @returns {number}
+ */
+export function drawnSpanBoundaryX(face, graph, localX, clId, localSign) {
+  if (!graph?.walls || !clId) return localX;
+  const cl = getShape(graph, clId);
+  if (!cl || !Number.isFinite(face.faceValue) || (face.dirSign !== 1 && face.dirSign !== -1)) return localX;
+  const faceValue = innerWallFaceAt(graph, cl, {
+    isVertical: !face.isVertical,
+    inward: localSign * face.dirSign, // 開放側の世界方向
+    spanLo: face.faceValue - CORNER_PROBE_DEPTH_MM, spanHi: face.faceValue + CORNER_PROBE_DEPTH_MM,
+  });
+  if (faceValue == null) return localX;
+  return (faceValue - face.originWorld) * face.dirSign;
+}
+
+/**
+ * face.spans の各区間の**描画範囲**（ローカルx）。内部境界だけを`drawnSpanBoundaryX`でずらし、
+ * 面端（先頭のlo・末尾のhi）は`snapFaceEndsToCorners`が既に直交壁の仕上げ面へ詰め済みのため
+ * そのまま使う（二重にずらさない）。描画側（`buildFaceFigure`）と検証側（テスト）が同じ関数を
+ * 使うための単一情報源。
+ * @param {object} face
+ * @param {object} graph
+ * @returns {Array<{loX:number, hiX:number}>} spansと同じ長さ・同じ順
+ */
+export function drawnSpanRanges(face, graph) {
+  const spans = face.spans ?? [];
+  return spans.map((s, i) => ({
+    loX: i === 0 ? s.loX : drawnSpanBoundaryX(face, graph, s.loX, spans[i - 1].hiCLId, 1),
+    hiX: i === spans.length - 1 ? s.hiX : drawnSpanBoundaryX(face, graph, s.hiX, s.hiCLId, -1),
+  }));
+}
+
 /**
  * 面端の直交面（perpFace）の壁が、face の切断面（faceValue の平面）を室内側へ横切って
  * いるか。横切っていれば図の端部にその壁の断面（返し）が現れる＝通常の隅。横切っていない
@@ -130,17 +226,16 @@ export function perpWallCrossesFacePlane(perpFace, face) {
  * @returns {object[]} lo/hi/run/originWorld を詰め直し、hasWallAtLocal0/hasWallAtLocalRunを
  *   追加した新しい配列（他フィールドは同一参照）
  */
-export function snapFaceEndsToCorners(faces) {
+export function snapFaceEndsToCorners(faces, graph = null) {
   const byAxisCLId = groupByAxisCLId(faces);
 
   return faces.map(f => {
     const startFace = findCornerNeighbor(byAxisCLId, f.axisCL.id, f.startCLId);
     const endFace   = findCornerNeighbor(byAxisCLId, f.axisCL.id, f.endCLId);
-    // 「壁あり」＝対応する直交面が存在し、その面に実壁があり（hasRealWall。未設定なら
-    // trueへフォールバック——合成faceを使う既存の単体テスト後方互換のため）、かつその壁が
-    // この面の切断面を室内側へ横切っている（perpWallCrossesFacePlane）。
-    const realAtLo = !!startFace && (startFace.hasRealWall ?? true);
-    const realAtHi = !!endFace   && (endFace.hasRealWall   ?? true);
+    // 「壁あり」＝対応する直交面が存在し、**その隅に実壁があり**（realWallAtCorner）、
+    // かつその壁がこの面の切断面を室内側へ横切っている（perpWallCrossesFacePlane）。
+    const realAtLo = !!startFace && realWallAtCorner(f, startFace, graph);
+    const realAtHi = !!endFace   && realWallAtCorner(f, endFace, graph);
     const hasWallAtLo = realAtLo && perpWallCrossesFacePlane(startFace, f);
     const hasWallAtHi = realAtHi && perpWallCrossesFacePlane(endFace, f);
     // 見えがかりエッジ＝実壁はあるが切断面を横切らない端（凹み角）。壁断面は描かないが、
@@ -269,7 +364,7 @@ export function buildRoomFaces(room, graph) {
   }
 
   // ラベル付与: letterごとの出現順（=時計回りに辿った順）にB1,B2,…を振る（labelFaces。単独ならletterのまま）。
-  return snapFaceEndsToCorners(labelFaces(chain));
+  return snapFaceEndsToCorners(labelFaces(chain), graph);
 }
 
 /**

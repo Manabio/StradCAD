@@ -3,6 +3,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Plane, PlanGraph, CenterLineType, Discipline, StairType, RoomFeature } from '@core';
 import { generateRoomWallsFromOutline } from '../finish/wallGeneration.js';
+import { cellsBeyondBreak } from '../finish/stair/stairGeometry.js';
 import { buildRoomFaces, faceBoundaryLocalX } from './elevationFaces.js';
 import { rotateFacesToStart, stairStartFaceLabel, buildStairBand } from './elevationStair.js';
 import { layoutBands, bandContentOriginMm } from './elevationLayout.js';
@@ -439,6 +440,12 @@ test('【階段帯・2FL分割】buildStairBand: seq1(帯先頭面)の左CH寸�
   const voidRoom = makeRectRoom(upperGraph, 0, 0, 2000, 4500, '吹抜け');
   voidRoom.setFeature(RoomFeature.VOID);
 
+  // 実機確認済みの表現（踊り場が基準床＝左CH寸法の起点）は「階段下に部屋がある場合」
+  // （実機指摘2026-08）。前提をフィクスチャ側で明示する。
+  {
+    const beyond = cellsBeyondBreak(stair, graph, stair.riser ?? null);
+    if (beyond.size > 0) graph.addRoom(new Set(beyond), '階段下');
+  }
   const band = buildStairBand(room, graph, upperGraph, { stair, floorHeight: 2400 });
   const n1 = 6, riser = 2400 / 12;
   const landingAbs = n1 * riser; // 1200

@@ -5,6 +5,7 @@ import { Plane, PlanGraph, CenterLineType, Discipline, StairType, StructuralMate
 import { generateRoomWallsFromOutline } from '../../../finish/wallGeneration.js';
 import { composeRoomFaces } from '../../elevationFaceList.js';
 import { switchbackCuts } from './switchbackCuts.js';
+import { cellsBeyondBreak } from '../../../finish/stair/stairGeometry.js';
 
 function makeGraph(name = 'p1') {
   const plane = new Plane(name, 0, `${name}階`, 1, 1);
@@ -12,7 +13,7 @@ function makeGraph(name = 'p1') {
 }
 
 // elevationStairSequence.test.jsのmakeSwitchbackFixtureと同一構成。
-function makeSwitchbackFixture(graph, { withMidWall = false, midWallGraph = null } = {}) {
+function makeSwitchbackFixture(graph, { withMidWall = false, midWallGraph = null, withRoomUnder = true } = {}) {
   const x0 = graph.addCenterLine(CenterLineType.VERTICAL, 0,    { labeled: false, discipline: Discipline.ARCH });
   const xm = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
   const x1 = graph.addCenterLine(CenterLineType.VERTICAL, 2000, { labeled: false, discipline: Discipline.ARCH });
@@ -53,6 +54,11 @@ function makeSwitchbackFixture(graph, { withMidWall = false, midWallGraph = null
     type: StairType.SWITCHBACK, cells, roomId: room.id,
     sections: [6, 1, 6], riser: null, upDirection: 'up', flip: false,
   });
+  // withRoomUnder（既定true）: 実機確認済みの表現（踊り場が基準床）は「階段下に部屋がある場合」。
+  if (withRoomUnder) {
+    const beyond = cellsBeyondBreak(stair, graph, stair.riser ?? null);
+    if (beyond.size > 0) graph.addRoom(new Set(beyond), '階段下');
+  }
   return { room, stair, midWall };
 }
 

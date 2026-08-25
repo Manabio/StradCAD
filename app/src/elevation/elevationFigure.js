@@ -14,7 +14,7 @@
  * OpeningTagLayer.jsx と同じ構成でGroup描画する）。
  */
 import { CenterLineType, OpeningCategory } from '@core';
-import { openingsOnFace, faceBoundaryLocalX } from './elevationFaces.js';
+import { openingsOnFace, faceBoundaryLocalX, drawnSpanRanges } from './elevationFaces.js';
 import { effectiveHeight, openingTagPartsOf } from '../openings/openingNumbering.js';
 import { findCatalogEntry } from '../openings/openingCatalog.js';
 import { buildOpeningElevation } from '../openings/openingElevationFigure.js';
@@ -730,8 +730,15 @@ export function buildFaceFigure(face, ctx) {
   //      交点で接続するようにする（ユーザー明示指示: 「端部の縦線共（破線同士の角は必ず
   //      破線の交点）」）。
   const spans = face.spans ?? [];
+  // ユーザー実機指摘2026-08: 開放スパンの**内部**境界の描画xは、CL位置ではなくその境界に立つ
+  // 直交壁の「開放側の面」（壁厚×1/2ぶん開放側。偏芯込み＝drawnSpanBoundaryX）。実際の抜けは
+  // 壁の面から始まるため、CLで切ると開口を半壁厚ぶん広く描いてしまう。
+  // **面端（i===0のlo・最終spanのhi）はオフセットしない**——そこは既にsnapFaceEndsToCornersが
+  // 直交壁の仕上げ面へ詰め済みで、二重にずらすことになる（実機で指摘のあった5箇所は
+  // すべて内部境界だった）。
+  const drawnSpans = drawnSpanRanges(face, graph);
   for (let i = 0; i < spans.length; i++) {
-    const s = spans[i];
+    const s = { ...spans[i], ...drawnSpans[i] };
     if (s.kind !== 'open') continue;
     const farDelta = s.farFloorDeltaMm ?? 0;
     const nearDelta = nearDeltaAt((s.loX + s.hiX) / 2);
@@ -763,7 +770,19 @@ export function buildFaceFigure(face, ctx) {
     const farCeilAbs = s.farCeilAbsMm ?? spanCeilAbs; // 未指定（単体テスト等）は近側と同じ＝従来挙動
     const gapTop = Math.min(spanCeilAbs, farCeilAbs);
     const gapH = gapTop - Math.max(farDelta, nearDelta);
-    if (gapH > 0) {
+    // ユーザー実機指摘2026-08（「5」C2: X2上のエッジ線・アキ・バツが不要／床天井の延長はこのままで
+    // 良い）: **開放スパンが「壁のない端部」に接している場合はアキ標記を描かない**。
+    // その端は既に床線・天井線の延長で「続きがある」ことを表しており、同じ場所へアキを重ねると
+    // 二重表現になる。加えて`appendGapMark`は矩形（中線の輪郭）も積むため、その矩形の辺が
+    // 面端ちょうどに縦線として現れ、実機では「X2上のエッジ線」に見えていた
+    // （エッジ線とアキ・バツは別々の不具合ではなく、この1個のアキ標記が正体）。
+    // 反対側が壁で閉じている開放スパン（室が自分自身へ回り込む内部の抜け等）は従来どおり
+    // アキを描く——実機の他の面（10/B2・10/C2・10/D1・11'/A2・5/D1）はすべてこちらで、
+    // 診断ログでもアキが壁のない端部に接するのは指摘のあった面だけだった。
+    const touchesWallLessEnd =
+      (!hasWallAtLocal0 && Math.abs(s.loX) < SPLIT_MERGE_EPS_MM) ||
+      (!hasWallAtLocalRun && Math.abs(s.hiX - run) < SPLIT_MERGE_EPS_MM);
+    if (gapH > 0 && !touchesWallLessEnd) {
       appendGapMark(prims, { x: s.loX, y: -gapTop, w: s.hiX - s.loX, h: gapH }, silhouetteWeight, detailWeight);
     }
     const prevIsWall = i > 0 ? spans[i - 1].kind === 'wall' : hasWallAtLocal0;

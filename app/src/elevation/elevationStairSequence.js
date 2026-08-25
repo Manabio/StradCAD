@@ -381,7 +381,7 @@ export function stairFaceSequence(stair, faces, graph, opts = {}) {
   if (!cutTable) return null; // フォールバック契約: switchbackCutsのnull条件をそのまま延長する
 
   const {
-    cuts, wEntry, wLanding, wOut1, wOut2, landingAbs,
+    cuts, wEntry, wLanding, wOut1, wOut2, underFloorZ,
     ceilTopAbs, ceilLowAbs, upperCeilCapped, contribution, kneeDrop,
   } = cutTable;
   const { landingLen } = cutTable.params;
@@ -401,7 +401,7 @@ export function stairFaceSequence(stair, faces, graph, opts = {}) {
   // ---- 1: 踊り場前縁（見返り・全幅） ----
   entries.push({
     seqNo: '1', face: wEntry,
-    floorSegments: flatFloorSegments(wEntry.run, landingAbs, ceilTopAbs - landingAbs),
+    floorSegments: flatFloorSegments(wEntry.run, underFloorZ, ceilTopAbs - underFloorZ),
     chDimSplitAbsYs: [floorHeight],
     // 実機フィードバック第3弾D: ささらの外側(壁側)〜壁の空きにアキXを足す（wallGapXMarks参照）。
     // 実機フィードバック第3弾F: 往復間の壁が2F腰壁（kneeDrop.knee）なら両端縦線を上端水平線
@@ -425,9 +425,9 @@ export function stairFaceSequence(stair, faces, graph, opts = {}) {
     const floorDeltaSegs2 = laneLenOnFace > 0
       ? [
           { loX: 0, hiX: laneLenOnFace, floorDeltaMm: 0, hideFlatLine: true },
-          { loX: laneLenOnFace, hiX: outFace2.run, floorDeltaMm: landingAbs },
+          { loX: laneLenOnFace, hiX: outFace2.run, floorDeltaMm: underFloorZ },
         ]
-      : [{ loX: 0, hiX: outFace2.run, floorDeltaMm: landingAbs }];
+      : [{ loX: 0, hiX: outFace2.run, floorDeltaMm: underFloorZ }];
     // 項目A: floorSegments/ceilingProfileはbuildLaneFloorAndCeiling（above層の実Room有無）で
     // 決める——laneLenOnFace境界だけの決め打ちだった旧実装を置き換える。fallbackCeilingProfile2
     // はaboveLayer未指定時に使う旧来のリテラル（挙動不変）。
@@ -460,7 +460,7 @@ export function stairFaceSequence(stair, faces, graph, opts = {}) {
   // ---- 3: W_landing（全幅。階段の重ね描きなし） ----
   entries.push({
     seqNo: '3', face: wLanding,
-    floorSegments: flatFloorSegments(wLanding.run, landingAbs, ceilTopAbs - landingAbs),
+    floorSegments: flatFloorSegments(wLanding.run, underFloorZ, ceilTopAbs - underFloorZ),
     content: contentForCut(cutOf('3'), probeCtx), skipBaseboard: true, skipWallLabel: true,
   });
 
@@ -473,10 +473,10 @@ export function stairFaceSequence(stair, faces, graph, opts = {}) {
     // 踊り場が左・レーンが右の鏡像構成のため、こちらは第2区間がレーンにあたる）。
     const floorDeltaSegs4 = landingHi4 < outFace4.run
       ? [
-          { loX: 0, hiX: landingHi4, floorDeltaMm: landingAbs },
+          { loX: 0, hiX: landingHi4, floorDeltaMm: underFloorZ },
           { loX: landingHi4, hiX: outFace4.run, floorDeltaMm: 0, hideFlatLine: true },
         ]
-      : [{ loX: 0, hiX: outFace4.run, floorDeltaMm: landingAbs }];
+      : [{ loX: 0, hiX: outFace4.run, floorDeltaMm: underFloorZ }];
     // 項目A: seq2と同じくbuildLaneFloorAndCeilingで決める（fallbackCeilingProfile4は
     // aboveLayer未指定時に使う旧来のリテラル。挙動不変）。
     const fallbackCeilingProfile4 = upperCeilCapped
@@ -499,7 +499,7 @@ export function stairFaceSequence(stair, faces, graph, opts = {}) {
     const midRetFace = cutOf('4.5').face;
     entries.push({
       seqNo: '4.5', face: midRetFace,
-      floorSegments: flatFloorSegments(midRetFace.run, landingAbs, ceilTopAbs - landingAbs),
+      floorSegments: flatFloorSegments(midRetFace.run, underFloorZ, ceilTopAbs - underFloorZ),
       content: contentForCut(cutOf('4.5'), probeCtx), skipBaseboard: true, skipWallLabel: true,
     });
   }
@@ -509,7 +509,7 @@ export function stairFaceSequence(stair, faces, graph, opts = {}) {
     const outFace5 = cutOf('5').face;
     entries.push({
       seqNo: '5', face: outFace5,
-      floorSegments: flatFloorSegments(outFace5.run, landingAbs, ceilTopAbs - landingAbs),
+      floorSegments: flatFloorSegments(outFace5.run, underFloorZ, ceilTopAbs - underFloorZ),
       content: contentForCut(cutOf('5'), probeCtx), skipBaseboard: true, skipWallLabel: true,
     });
   }

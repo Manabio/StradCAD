@@ -4,8 +4,10 @@ import assert from 'node:assert/strict';
 import { Plane, PlanGraph, CenterLineType, Discipline, StairType, StructuralMaterialType, RoomFeature, edgeKey } from '@core';
 import { generateRoomWallsFromOutline } from '../finish/wallGeneration.js';
 import { measureStairSpans } from '../finish/stair/stairClassify.js';
+import { cellsBeyondBreak } from '../finish/stair/stairGeometry.js';
 import { composeRoomFaces } from './elevationFaceList.js';
 import { stairFaceSequence, kneeWallCapContent } from './elevationStairSequence.js';
+import { buildFaceFigure } from './elevationFigure.js';
 import { resolveSwitchbackParams } from './elevationStairSection.js';
 import { ElevationLineRole, weightForRole } from './elevationStyle.js';
 import { DIR_SIGN } from './elevationFaces.js';
@@ -20,7 +22,11 @@ function makeGraph(name = 'p1') {
 // になるため generateRoomWallsFromOutline は通常の4面矩形の壁を生成する。
 // upDirection='up'（t=0がy=4500=下端=上り口、t=1がy=0=上端=踊り場）・flip=false
 // （s=0が左列=往路、s=1が右列=復路）で makeFrame の走行方向と一致させる。
-function makeSwitchbackFixture(graph, { withMidWall = false, midWallGraph = null, upperLandingOnly = false } = {}) {
+// withRoomUnder（既定true）: 階段下（破れ線先セル）に部屋を指定する。ユーザー実機確認済みの
+// 表現（踊り場が基準床・その下は別室＝向こう側なので細破線）は「下に部屋がある場合」のものなので
+// （実機指摘2026-08「現時点の描画は下に部屋がある場合」）、既存テストの前提をフィクスチャ側で
+// 明示する。falseにすると「下に部屋がない」＝1FLが基準床の表現になる（専用テストで検証）。
+function makeSwitchbackFixture(graph, { withMidWall = false, midWallGraph = null, upperLandingOnly = false, withRoomUnder = true } = {}) {
   const x0 = graph.addCenterLine(CenterLineType.VERTICAL, 0,    { labeled: false, discipline: Discipline.ARCH });
   const xm = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
   const x1 = graph.addCenterLine(CenterLineType.VERTICAL, 2000, { labeled: false, discipline: Discipline.ARCH });
@@ -71,6 +77,10 @@ function makeSwitchbackFixture(graph, { withMidWall = false, midWallGraph = null
     type: StairType.SWITCHBACK, cells, roomId: room.id,
     sections: [6, 1, 6], riser: null, upDirection: 'up', flip: false,
   });
+  if (withRoomUnder) {
+    const beyond = cellsBeyondBreak(stair, graph, stair.riser ?? null);
+    if (beyond.size > 0) graph.addRoom(new Set(beyond), '階段下');
+  }
   return { room, stair, midWall };
 }
 
@@ -930,6 +940,8 @@ function makeUserDimsFixture(graph, upDirection = 'up', flip = false) {
     type: StairType.SWITCHBACK, cells, roomId: room.id,
     sections: [10, 1, 10], riser: null, upDirection, flip,
   });
+  { const beyond = cellsBeyondBreak(stair, graph, stair.riser ?? null);
+    if (beyond.size > 0) graph.addRoom(new Set(beyond), '階段下'); } // 実機確認済みの表現は「下に部屋がある場合」
   return { room, stair };
 }
 
@@ -1182,6 +1194,11 @@ test('【実機フィードバック第3弾D】stairFaceSequence: 室が階段�
     type: StairType.SWITCHBACK, cells: stairCells, roomId: room.id,
     sections: [6, 1, 6], riser: null, upDirection: 'up', flip: false, structure: StructuralMaterialType.STEEL,
   });
+  { // 実機確認済みの表現は「階段下に部屋がある場合」（実機指摘2026-08）。前提を明示する
+    // ——この検証（踊り場線でアキXが上=一点鎖線・下=破線に分かれる）は踊り場が基準床の表現。
+    const beyond = cellsBeyondBreak(stair, graph, stair.riser ?? null);
+    if (beyond.size > 0) graph.addRoom(new Set(beyond), '階段下');
+  }
 
   const faces = composeRoomFaces(room, graph);
   const entries = stairFaceSequence(stair, faces, graph, OPTS);
@@ -1295,6 +1312,10 @@ function makeRealisticSwitchbackFixture(upDirection, flip) {
     type: StairType.SWITCHBACK, cells, roomId: room.id,
     sections: [11, 1, 11], riser: null, upDirection, flip, structure: StructuralMaterialType.STEEL,
   });
+  { // 実機確認済みの表現は「階段下に部屋がある場合」（実機指摘2026-08）。前提を明示する。
+    const beyond = cellsBeyondBreak(graph.stairs[0], graph, stair.riser ?? null);
+    if (beyond.size > 0) graph.addRoom(new Set(beyond), '階段下');
+  }
   const faces = composeRoomFaces(room, graph);
   return { graph, stair, faces };
 }
@@ -1424,4 +1445,49 @@ test('【実機指摘】stairFaceSequence: 展開記号のラベルは歩行順�
     const total = entries.filter(x => x.face.letter === e.face.letter).length;
     assert.equal(e.face.label, total > 1 ? `${e.face.letter}${n}` : e.face.letter);
   }
+});
+
+// ---- 実機指摘2026-08: 階段・踊り場下の描画は「下に部屋がある/ない」で異なる ----
+// 「階段下に部屋がない場合は、1FL断面線を描画／左右の壁断面線を1FLまで延長」。
+// 下に部屋があるとき（既定fixture）は従来どおり踊り場が基準床。
+test('【実機指摘】stairFaceSequence: 階段下に部屋が無ければ帯の床・基準床が1FL(0)になる', () => {
+  const graph = makeGraph();
+  const { room, stair } = makeSwitchbackFixture(graph, { withRoomUnder: false });
+  const entries = stairFaceSequence(stair, composeRoomFaces(room, graph), graph, OPTS);
+  const seq1 = entries.find(e => e.seqNo === '1');
+  const seq3 = entries.find(e => e.seqNo === '3');
+  for (const [no, e] of [['1', seq1], ['3', seq3]]) {
+    assert.equal(e.floorSegments.length, 1, `seq${no}は全幅1区間のはず`);
+    assert.equal(e.floorSegments[0].floorDeltaMm, 0, `seq${no}の床は1FL(0)のはず`);
+  }
+});
+
+test('【実機指摘】stairFaceSequence: 階段下に部屋があれば従来どおり踊り場が帯の床（回帰）', () => {
+  const graph = makeGraph();
+  const { room, stair } = makeSwitchbackFixture(graph); // withRoomUnder既定true
+  const entries = stairFaceSequence(stair, composeRoomFaces(room, graph), graph, OPTS);
+  const seq1 = entries.find(e => e.seqNo === '1');
+  assert.ok(seq1.floorSegments[0].floorDeltaMm > 0, '踊り場の高さが帯の床になるはず');
+});
+
+// 「左右の壁断面線を1FLまで延長」: 面端の縦線が床(=1FL)まで届く。
+test('【実機指摘】stairFaceSequence: 階段下に部屋が無ければseq1の面端縦線が1FLまで延びる', () => {
+  const graph = makeGraph();
+  const withUnder = makeGraph('pU');
+  const a = makeSwitchbackFixture(graph, { withRoomUnder: false });
+  const b = makeSwitchbackFixture(withUnder); // 下に部屋あり
+  const seqOf = (g, f) => stairFaceSequence(f.stair, composeRoomFaces(f.room, g), g, OPTS)
+    .find(e => e.seqNo === '1');
+  const bottomOf = (g, f) => {
+    const e = seqOf(g, f);
+    const prims = buildFaceFigure(e.face, {
+      graph: g, project: { openingNumberIndex: new Map() }, room: f.room, ceilingHeight: 2400,
+      materialMap: null, gridCLs: [], floorSegments: e.floorSegments,
+      skipBaseboard: true, skipWallLabel: true,
+    });
+    const verts = prims.filter(p => p.type === 'line' && p.x1 === p.x2 && p.weight !== 'thin');
+    return Math.max(...verts.map(p => Math.max(p.y1, p.y2))); // yは上向き負。最大=最も下
+  };
+  assert.equal(bottomOf(graph, a), 0, '部屋が無ければ面端縦線は1FL(y=0)まで届くはず');
+  assert.ok(bottomOf(withUnder, b) < 0, '部屋があれば従来どおり踊り場で止まるはず');
 });

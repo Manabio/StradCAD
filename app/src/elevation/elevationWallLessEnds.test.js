@@ -10,6 +10,7 @@ import { Plane, PlanGraph, CenterLineType, Discipline, OpeningCategory } from '@
 import { generateRoomWallsFromOutline, resolveBackingOwnership } from '../finish/wallGeneration.js';
 import { worldToCell } from '../finish/gridCells.js';
 import { composeRoomFaces } from './elevationFaceList.js';
+import { drawnSpanRanges } from './elevationFaces.js';
 import { buildFaceFigure } from './elevationFigure.js';
 
 const ARCH = { labeled: false, discipline: Discipline.ARCH };
@@ -172,7 +173,9 @@ test('開放スパン: 床断面より下の遠側床線と端部の縦線は細
   const { graph, room3p } = buildFixture();
   const faces = composeRoomFaces(room3p, graph);
   const a2 = faces.find(f => f.label === 'A2');
-  const gSpan = a2.spans.find(s => s.kind === 'open' && s.farFloorDeltaMm === -100);
+  // 描画位置は内部境界を「壁厚×1/2だけ開放側」へずらした値（drawnSpanRanges。ユーザー実機指摘2026-08）。
+  const gIdx = a2.spans.findIndex(s => s.kind === 'open' && s.farFloorDeltaMm === -100);
+  const gSpan = gIdx < 0 ? null : { ...a2.spans[gIdx], ...drawnSpanRanges(a2, graph)[gIdx] };
   assert.ok(gSpan, '前提: A2にg領域の開放スパン（far床-100）がある');
 
   const prims = buildFaceFigure(a2, {
@@ -242,4 +245,126 @@ test('壁のない端部: 開放スパンの延長端も同じ規則（横切ら
   // C2は開放スパンで東へ延長され、X2の壁（横切る）で終わる → 壁あり
   assert.equal(f2.C2.extendedAtLocal0, true, '前提: C2は開放スパンで東へ延長される');
   assert.equal(f2.C2.hasWallAtLocal0, true, 'C2の延長端はX2の壁が横切るため壁あり');
+});
+
+// ---- 実機指摘2026-08「C1のX2上に線はなく、C1からC2へ至る間にもエッジはない。
+// 比較的単純なプローブに思う。判定方法をよく確認してみて」 ----
+// 根本原因: 隅の「実壁あり」判定に、直交面の**面全体**のフラグ（hasRealWall＝面のスパン全域で
+// 壁を1本でも見つけたか）を流用していた。直交面の遠い側にだけ壁がある構成では、何も無い隅が
+// 「壁あり」と誤判定され、線が描かれていた。判定を隅の周り±100mmの局所プローブへ改める。
+function buildFarWallFixture() {
+  const graph = new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
+  const add = (type, value) => graph.addCenterLine(type, value, ARCH);
+  const x0 = add(CenterLineType.VERTICAL, 0);
+  const x1 = add(CenterLineType.VERTICAL, 4000);
+  const y0 = add(CenterLineType.HORIZONTAL, 0);
+  const yMid = add(CenterLineType.HORIZONTAL, 2000);
+  const y1 = add(CenterLineType.HORIZONTAL, 3000);
+  const room = graph.addRoom(new Set([`${x0.id}:${y0.id}:${x1.id}:${y1.id}`]), 'いま');
+  // 壁は手で置く（外周自動生成だと全辺フル長になり、この構成を作れない）。
+  graph.addWall(y0, 57.5, false, x0, 0, x1, 0, {});   // A（上辺）フル長
+  graph.addWall(y1, -57.5, false, x0, 0, x1, 0, {});  // C（下辺）フル長
+  graph.addWall(x1, -57.5, true, y0, 0, y1, 0, {});   // B（右辺）フル長
+  // D（左辺）は yMid〜y1 だけ＝A面との隅（y≈0）には壁材が無い。
+  graph.addWall(x0, 57.5, true, yMid, 0, y1, 0, {});
+  return { graph, room, x0, y0, yMid, y1 };
+}
+
+test('【実機指摘】隅の実壁判定は局所プローブ: 直交面の遠い側にだけ壁がある隅は「壁なし」になる', () => {
+  const { graph, room } = buildFarWallFixture();
+  const faces = byLabel(composeRoomFaces(room, graph));
+  const faceA = faces.A;
+  assert.ok(faceA, 'A面が得られるはず');
+  // A面の左隅（x=0＝D面の軸）にはD壁が届いていない。
+  assert.equal(faceA.hasWallAtLocal0, false, 'A面の左隅は壁断面なしのはず');
+  assert.equal(faceA.edgeAtLocal0, false,
+    'A面の左隅は見えがかりエッジでもない（壁材がそもそも隅に無い）はず');
+  // 図としても縦線が出ない（床・天井の延長だけ）。
+  const prims = buildFaceFigure(faceA, {
+    graph, project: { openingNumberIndex: new Map() }, room, ceilingHeight: 2400,
+    materialMap: null, gridCLs: [], wallLessEndExtendModelMm: 150,
+  });
+  const leftVerticals = prims.filter(p =>
+    p.type === 'line' && p.x1 === p.x2 && Math.abs(p.x1) < 1e-6 && p.weight !== 'thin');
+  assert.equal(leftVerticals.length, 0, '隅に壁が無ければ縦線は描かれないはず');
+});
+
+test('【失敗系・実機指摘】同じ構成でも隅まで壁が届いていれば従来どおり壁ありになる', () => {
+  const { graph, room, x0, y0, y1 } = buildFarWallFixture();
+  // D壁を隅（y=0）まで届く長さへ置き換える。
+  for (const w of graph.walls.filter(w => w.isVertical && w.axisCL.id === x0.id)) graph.removeShape(w.id);
+  graph.addWall(x0, 57.5, true, y0, 0, y1, 0, {});
+  const faceA = byLabel(composeRoomFaces(room, graph)).A;
+  assert.equal(faceA.hasWallAtLocal0, true, '隅まで壁が届けば従来どおり壁断面ありのはず');
+});
+
+// ---- 実機指摘2026-08「「5」C2：X2上にエッジ線が消えていない／アキ・バツも残っている」 ----
+// 実機の診断ログで確定した原因: 5/C2 は `hw0=F`（壁のない端部）に開放スパン(0..400)が接しており、
+// そこへ appendGapMark が矩形（中線の輪郭）＋対角線2本＋「ア キ」を積んでいた。矩形の左辺が
+// 面端ちょうどの縦線として現れ、「X2上のエッジ線」に見えていた（エッジ線とアキは同一の標記）。
+// 壁のない端部は床・天井の延長で既に「続きがある」ことを表しているため、アキは重ねない。
+// 実機5/C2と同じ入力（hw0=F の端に接する開放スパン）を面へ直接与えて描画規則を固定する。
+// 面のトポロジー（なぜhw0=Fになるか）は本ファイルの他のテストが別途固定しているため、
+// ここは「その入力のときアキを描かない」という描画側の規則だけを対象にする。
+function faceWithOpenSpanAtWallLessEnd(overrides = {}) {
+  return {
+    axisCL: { id: 'axisY0', effectiveValue: 0 }, isVertical: false, inward: -1, faceValue: 0,
+    lo: 0, hi: 3142.5, run: 3142.5, dirSign: -1, originWorld: 3142.5,
+    startCLId: 'x0', endCLId: 'x1', label: 'C2',
+    hasWallAtLocal0: false, hasWallAtLocalRun: true,
+    edgeAtLocal0: false, edgeAtLocalRun: false,
+    spans: [
+      { kind: 'open', loX: 0, hiX: 400, farFloorDeltaMm: 0 },
+      { kind: 'wall', loX: 400, hiX: 3142.5 },
+    ],
+    ...overrides,
+  };
+}
+
+const FIG_CTX = {
+  graph: { openings: [], walls: [], kneeDropWalls: new Map(), shapeMap: new Map(), centerLines: [] },
+  project: { openingNumberIndex: new Map() },
+  room: { getFinishInfo: () => ({}), finish: null },
+  ceilingHeight: 2400, materialMap: null, gridCLs: [], wallLessEndExtendModelMm: 150,
+};
+
+test('【実機指摘】開放スパンが壁のない端部に接する面では、アキ（矩形・バツ・「ア キ」）を描かない', () => {
+  const prims = buildFaceFigure(faceWithOpenSpanAtWallLessEnd(), FIG_CTX);
+  assert.equal(prims.filter(p => p.type === 'text' && p.text === 'ア キ').length, 0,
+    'アキの文字は描かれないはず');
+  assert.equal(prims.filter(p => p.type === 'line' && p.x1 !== p.x2 && p.y1 !== p.y2 && p.dash === 'center').length, 0,
+    'アキのバツ（対角線）は描かれないはず');
+  assert.equal(prims.filter(p => p.type === 'rect').length, 0,
+    'アキ矩形（その辺が面端の縦線に見える）も描かれないはず');
+  // 床・天井の延長は従来どおり残る（ユーザー「天井と床の延長は、このままで良い」）。
+  const floorLine = prims.find(p => p.type === 'line' && p.weight === 'thick' && p.y1 === p.y2 && p.y1 === 0);
+  assert.ok(floorLine && Math.min(floorLine.x1, floorLine.x2) === -150,
+    '壁のない端部の延長(150mm)は残るはず');
+});
+
+test('【失敗系・実機指摘】同じ面でもその端に壁があれば従来どおりアキを描く', () => {
+  const prims = buildFaceFigure(faceWithOpenSpanAtWallLessEnd({ hasWallAtLocal0: true }), FIG_CTX);
+  assert.equal(prims.filter(p => p.type === 'text' && p.text === 'ア キ').length, 1,
+    '端が壁で閉じていればアキは従来どおり描かれるはず');
+});
+
+test('【失敗系・実機指摘】開放スパンの両端が壁で閉じていれば従来どおりアキを描く', () => {
+  const { graph, room } = buildFixture(); // Round F（10/B2・11'/A2等と同型: 端に壁がある開放スパン）
+  const withGap = [];
+  for (const r of [room, ...[]]) void r;
+  for (const rm of graph.rooms) {
+    for (const f of composeRoomFaces(rm, graph)) {
+      const open = (f.spans ?? []).find(s => s.kind === 'open');
+      if (!open) continue;
+      const touchesWallLess = (!f.hasWallAtLocal0 && Math.abs(open.loX) < 1) ||
+        (!f.hasWallAtLocalRun && Math.abs(open.hiX - f.run) < 1);
+      if (touchesWallLess) continue;
+      const prims = buildFaceFigure(f, {
+        graph, project: { openingNumberIndex: new Map() }, room: rm, ceilingHeight: 2400,
+        materialMap: null, gridCLs: [],
+      });
+      if (prims.some(p => p.type === 'text' && p.text === 'ア キ')) withGap.push(`${rm.name}/${f.label}`);
+    }
+  }
+  assert.ok(withGap.length > 0, `端が壁で閉じた開放スパンではアキが残るはず（実際:${withGap}）`);
 });

@@ -186,3 +186,64 @@ test('【失敗系】solidPrimitivesForFace: beams/columnsを持たないgraph�
     graph, ceilingHeight: CH, upperGraph: null, floorHeightMm: null,
   }), []);
 });
+
+// ---- 実機指摘2026-08「2階床の構造材梁断面は、壁の中なら描画しない」 ----
+test('【実機指摘】structuralContribution: 壁の材厚に収まる梁は寄与から落とす（壁に隠れて見えない）', () => {
+  const { graph, x0, x1, y0 } = makeGridRoom();
+  // y=0上に厚さ200mmの壁（axisOffset=200 → materialRange {lo:0, hi:200}）。
+  graph.addWall(y0, 200, false, x0, 0, x1, 0, {});
+  const beam = graph.addBeam(StructuralMaterialType.WOOD, 'WOOD-105x105', y0, false, x0, x1,
+    { role: 'primary', levelOffset: 0, eccentricity: 100 }); // 材芯y=100 → 幅帯[47.5,152.5]
+  assert.ok(beam.sectionWidth < 200, "前提: 梁幅が壁厚200より細いこと");
+  assert.equal(structuralContribution([{ graph, floorZMm: 0, role: 'self' }]).length, 0,
+    '壁の材厚に完全に収まる梁は寄与に含めない');
+});
+
+test('【失敗系・実機指摘】structuralContribution: 壁からはみ出す梁は落とさない（室内へ現れるため）', () => {
+  const { graph, x0, x1, y0 } = makeGridRoom();
+  graph.addWall(y0, 60, false, x0, 0, x1, 0, {}); // 厚さ60mm
+  graph.addBeam(StructuralMaterialType.WOOD, 'WOOD-105x105', y0, false, x0, x1,
+    { role: 'primary', levelOffset: 0, eccentricity: 30 }); // 幅105 > 壁厚60
+  assert.equal(structuralContribution([{ graph, floorZMm: 0, role: 'self' }]).length, 1,
+    '壁より太い梁は一部が見えるため寄与に残す');
+});
+
+test('【失敗系・実機指摘】structuralContribution: 壁とスパンがずれる梁は落とさない（端が見える）', () => {
+  const { graph, x0, x1, y0 } = makeGridRoom();
+  const xMid = graph.addCenterLine(CenterLineType.VERTICAL, 2000, { labeled: false, discipline: Discipline.ARCH });
+  graph.addWall(y0, 200, false, x0, 0, xMid, 0, {}); // 壁は面の半分までしか無い（許容(壁厚200)を大きく超える）
+  graph.addBeam(StructuralMaterialType.WOOD, 'WOOD-105x105', y0, false, x0, x1,
+    { role: 'primary', levelOffset: 0, eccentricity: 100 });
+  assert.equal(structuralContribution([{ graph, floorZMm: 0, role: 'self' }]).length, 1,
+    '壁が梁のスパンを覆っていなければ端が見えるため残す');
+});
+
+test('【失敗系・実機指摘】structuralContribution: 向きの違う壁は梁を隠さない', () => {
+  const { graph, x0, y0, y1 } = makeGridRoom();
+  graph.addBeam(StructuralMaterialType.WOOD, 'WOOD-105x105', x0, true, y0, y1,
+    { role: 'primary', levelOffset: 0 });
+  assert.equal(structuralContribution([{ graph, floorZMm: 0, role: 'self' }]).length, 1,
+    '直交する壁は梁を丸ごとは隠せない');
+});
+
+// ---- 実機指摘2026-08「「5」C2：X2上にエッジ線が消えていない」 ----
+// 通り芯の交点には自動補完で柱が立つため、外壁の中に納まる管柱まで柱型として描くと、
+// 連続した壁面の途中に実在しない縦線2本が出る。梁と同じ「壁の中なら描画しない」を柱にも適用する。
+test('【実機指摘】structuralColumnContribution: 壁の材厚に収まる柱は柱型として描かない', () => {
+  const { graph, x0, x1, y0 } = makeGridRoom();
+  graph.addWall(y0, 200, false, x0, 0, x1, 0, {}); // 厚さ200mmの壁
+  const xm = graph.addCenterLine(CenterLineType.VERTICAL, 2000, { labeled: false, discipline: Discipline.ARCH });
+  // 105角の管柱を壁の中（材芯y=100）へ。
+  graph.addColumn(StructuralMaterialType.WOOD, 'WOOD-105x105', xm, y0, { eccentricity: { x: 0, y: 100 } });
+  assert.equal(structuralColumnContribution([{ graph, floorZMm: 0, role: 'self' }]).length, 0,
+    '壁の材厚に収まる柱は寄与に含めない');
+});
+
+test('【失敗系・実機指摘】structuralColumnContribution: 壁より太い柱は柱型として残す', () => {
+  const { graph, x0, x1, y0 } = makeGridRoom();
+  graph.addWall(y0, 120, false, x0, 0, x1, 0, {}); // 厚さ120mm
+  const xm = graph.addCenterLine(CenterLineType.VERTICAL, 2000, { labeled: false, discipline: Discipline.ARCH });
+  graph.addColumn(StructuralMaterialType.RC, 'RC-300x300', xm, y0, { eccentricity: { x: 0, y: 60 } });
+  assert.equal(structuralColumnContribution([{ graph, floorZMm: 0, role: 'self' }]).length, 1,
+    '壁より太い柱は室内へ出るため柱型として描く');
+});

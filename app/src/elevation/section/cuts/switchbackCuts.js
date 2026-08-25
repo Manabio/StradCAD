@@ -20,7 +20,8 @@
  */
 import { StairType, StructuralMaterialType } from '@core';
 import { roomBounds } from '../../../finish/gridCells.js';
-import { makeFrame } from '../../../finish/stair/stairGeometry.js';
+import { makeFrame, cellsBeyondBreak } from '../../../finish/stair/stairGeometry.js';
+import { stairUnderRoomsOf } from '../../../finish/stair/stairUnderRooms.js';
 import { letterOf, letterForDirSign, DIR_SIGN, perpFaceAt } from '../../elevationFaces.js';
 import { kneeDropRecordFor } from '../../elevationFaceList.js';
 import { localXOf as localXOfFace } from '../../elevationFigure.js';
@@ -28,6 +29,26 @@ import { resolveSwitchbackParams } from '../../elevationStairSection.js';
 import { stairContribution } from '../sectionStair.js';
 
 const MID_WALL_TOL_MM = 300; // 壁厚程度の許容差（往路・復路間の壁の実在判定。既存実装と同値）
+
+/**
+ * 階段下（破れ線先セル）に部屋が指定されているか。判定は仕上げモード側と同じ単一情報源
+ * （`cellsBeyondBreak` × `stairUnderRoomsOf`）に委譲する——展開図が独自判定を持つと
+ * 階段下壁の生成（`stairUnderWalls.js`）と食い違うため。
+ *
+ * **判定不能なら true（＝現行表現を保つ）へ倒す**——graph未整備・破れ線先セルを導出できない
+ * （`cellsBeyondBreak`が空。U字構造として認識できない構成等）場合は「階段下が開いている」と
+ * 積極的に言えないため、ユーザー実機確認済みの表現（踊り場が基準床）をそのまま使う。
+ * 逆に倒すと、判定できないだけの階段まで描画が変わってしまう。
+ * @param {import('@core').Stair} stair
+ * @param {object} graph
+ * @returns {boolean}
+ */
+function hasRoomUnderStair(stair, graph) {
+  if (!stair || !graph?.rooms) return true;
+  const beyond = cellsBeyondBreak(stair, graph, stair.riser ?? null);
+  if (beyond.size === 0) return true;
+  return stairUnderRoomsOf(stair, graph, beyond).length > 0;
+}
 
 // ---- elevationStairSequence.js から移設（挙動不変。§9でstairFaceSequence側からは削除する）----
 
@@ -216,6 +237,13 @@ export function switchbackCuts(stair, faces, graph, opts = {}) {
   const { n1, riser, landingLen } = params;
   const landingAbs = n1 * riser;
   const isSteel = stair.structure === StructuralMaterialType.STEEL;
+  // ユーザー実機指摘2026-08「階段・踊り場下の描画方法は、下に部屋がある・なしで異なる。
+  // 現時点の描画は下に部屋がある場合」: 階段下に部屋が**無い**なら、踊り場の下は同じ空間として
+  // 設置階FL(=0)まで開いている——この帯の「床」も§5.6の基準床(baseFloorZ)も1FLになる。
+  // 部屋が有る場合は従来どおり踊り場が基準床（その下は別室＝向こう側なので細破線へ降格）。
+  // 判定は階段下部屋の唯一の情報源（stairUnderRoomsOf × cellsBeyondBreak）をそのまま使う
+  // ——展開図が独自の判定を持つと、壁生成（stairUnderWalls.js）との食い違いが生まれるため。
+  const underFloorZ = hasRoomUnderStair(stair, graph) ? landingAbs : 0;
 
   const b = roomBounds(stair.cells, graph);
   const f = makeFrame(stair, b);
@@ -322,7 +350,7 @@ export function switchbackCuts(stair, faces, graph, opts = {}) {
   const cuts = [
     {
       seqNo: '1', face: wEntry, line: seq13Line, viewSign: seq1ViewSign, dirSign: wEntry.dirSign,
-      layers, zRange: zRangeUpper, baseFloorZ: landingAbs, chDimSplitAbsYs: [floorHeight],
+      layers, zRange: zRangeUpper, baseFloorZ: underFloorZ, chDimSplitAbsYs: [floorHeight],
       stairCut: contribution, // 往路・復路とも正面梯子として重なるため両方渡す（§6.1「往路=正面梯子(下)／復路=正面梯子(上)」）
     },
     {
@@ -342,7 +370,7 @@ export function switchbackCuts(stair, faces, graph, opts = {}) {
   }
   cuts.push({
     seqNo: '3', face: wLanding, line: seq13Line, viewSign: seq3ViewSign, dirSign: wLanding.dirSign,
-    layers, zRange: zRangeUpper, baseFloorZ: landingAbs, stairCut: null, // §6.1表「階段寄与: なし」
+    layers, zRange: zRangeUpper, baseFloorZ: underFloorZ, stairCut: null, // §6.1表「階段寄与: なし」
   });
   cuts.push({
     // QA実機フィードバック修正: seq4のstairCutは復路(inbound)ではなく往路(outbound)——
@@ -351,13 +379,13 @@ export function switchbackCuts(stair, faces, graph, opts = {}) {
     // 低く上り口側が高くなり「左から右へ下る」という実機の見え方と矛盾する
     // （往路の断面をwOut1側からwOut2側へ鏡映しただけ、と捉えると整合する）。
     seqNo: '4', face: wOut2, line: outboundLaneLine, viewSign: towardS0, dirSign: seq4DirSign,
-    layers, zRange: zRangeUpper, baseFloorZ: landingAbs, stairCut: outboundWithLanding,
+    layers, zRange: zRangeUpper, baseFloorZ: underFloorZ, stairCut: outboundWithLanding,
   });
   if (wall) {
     const midRetFace = reorientFace(buildMidWallFace(wall, wOut1.inward, landingStartWorld, entryWorld, faces), seq4DirSign);
     cuts.push({
       seqNo: '4.5', face: midRetFace, line: outboundLaneLine, viewSign: towardS0, dirSign: seq4DirSign,
-      layers, zRange: zRangeUpper, baseFloorZ: landingAbs, stairCut: inboundOnly,
+      layers, zRange: zRangeUpper, baseFloorZ: underFloorZ, stairCut: inboundOnly,
     });
   }
   {
@@ -367,12 +395,12 @@ export function switchbackCuts(stair, faces, graph, opts = {}) {
     const outFace5 = clipFaceToWorldRange(wOut2, landingStartWorld, entryWorld);
     cuts.push({
       seqNo: '5', face: outFace5, line: inboundLaneLine, viewSign: towardS1, dirSign: outFace5.dirSign,
-      layers, zRange: zRangeUpper, baseFloorZ: landingAbs, stairCut: inboundOnly,
+      layers, zRange: zRangeUpper, baseFloorZ: underFloorZ, stairCut: inboundOnly,
     });
   }
 
   return {
-    cuts, wEntry, wLanding, wOut1, wOut2, wall, kneeDrop, params, landingAbs, isSteel, contribution,
+    cuts, wEntry, wLanding, wOut1, wOut2, wall, kneeDrop, params, landingAbs, underFloorZ, isSteel, contribution,
     ceilTopAbs, ceilLowAbs, upperCeilCapped, entryWorld, landingStartWorld,
   };
 }

@@ -42,16 +42,55 @@ const FOUNDATION_ROLE = 'foundation';
  */
 
 /**
+ * 梁の平面占有帯が、いずれかの壁の材厚（`Wall.materialRange`）の中に完全に収まり、かつ
+ * その壁のスパンが梁のスパンを覆っているか（＝壁に隠れて見えない梁か）。
+ *
+ * 壁厚を`materialRange`から求める規約は`switchbackCuts.js`の往復間の壁検出と同じ
+ * （壁厚をハードコードしない）。厚み方向は**完全に収まる**ことを要求する——壁より太い梁は
+ * 一部が室内へ現れるため隠さない。
+ *
+ * スパン方向は「壁厚ぶんの食い違い」を許容する（完全被覆を要求しない）——梁はCLからCLまで
+ * 張るのに対し、壁は隅で隣接壁と取り合うため`chamferWalls`がstart/endOffsetを半壁厚ほど
+ * 詰める。完全被覆を要求すると、実データでは壁に埋まった梁でも常に「はみ出している」と
+ * 判定され、この規則が一度も発動しない（実際にそう作り込んで検出した）。許容量を壁厚
+ * そのものにしているのは、隅の詰めが隣接壁の半厚程度に収まるため——それを大きく超えて
+ * 伸びる梁（隣のスパンまで通る梁）は端が見えるので隠さない。
+ * @param {object} beam - graph.beams の1件
+ * @param {object[]} walls
+ * @returns {boolean}
+ */
+function isInsideWall(beam, walls) {
+  const halfW = (beam.sectionWidth ?? 0) / 2;
+  const bLo = beam.axisValue - halfW, bHi = beam.axisValue + halfW;
+  const bSpanLo = Math.min(beam.coord1, beam.coord2), bSpanHi = Math.max(beam.coord1, beam.coord2);
+  for (const wall of walls) {
+    if (wall.isVertical !== beam.isVertical) continue; // 同じ向きの壁だけが梁を丸ごと隠せる
+    const mr = wall.materialRange;
+    if (!mr) continue;
+    if (!(bLo >= mr.lo - GAP_EPS && bHi <= mr.hi + GAP_EPS)) continue;
+    const tol = Math.abs(mr.hi - mr.lo); // 隅の取り合い（chamferWalls）ぶんの許容
+    const wLo = Math.min(wall.coord1, wall.coord2), wHi = Math.max(wall.coord1, wall.coord2);
+    if (bSpanLo >= wLo - tol - GAP_EPS && bSpanHi <= wHi + tol + GAP_EPS) return true;
+  }
+  return false;
+}
+
+/**
  * cut.layers（SectionCut.layers。自階・上階のgraph参照＋floorZMm）から、各層のgraph.beamsを
  * BeamSolid[]へ変換する。layers・beamsが空なら空配列（例外なし）。
  * @param {Array<{graph:object, floorZMm:number, role:string}>} layers
  * @returns {BeamSolid[]}
  */
 export function structuralContribution(layers) {
+  // ユーザー実機指摘2026-08「2階床の構造材梁断面は、壁の中なら描画しない」: 壁の材厚の中に
+  // 収まる梁は壁に隠れて見えないため寄与から落とす。壁は全レイヤー（自階・上階）から集める
+  // ——2階床梁は1階の壁の上に乗る（自階の壁が隠す）ことも、2階の壁の中に入ることもあるため。
+  const walls = (layers ?? []).flatMap(l => l.graph?.walls ?? []);
   const result = [];
   for (const layer of layers ?? []) {
     for (const beam of layer.graph?.beams ?? []) {
       if (beam.role === FOUNDATION_ROLE) continue; // 追加仕様2026-08: 基礎梁は展開図に描かない
+      if (isInsideWall(beam, walls)) continue;
       const depthMm = findSectionEntry(beam.sectionDefId)?.height ?? beam.beamDepth ?? DEFAULT_DEPTH_MM;
       result.push({
         isVertical: beam.isVertical,
@@ -81,6 +120,11 @@ export function structuralContribution(layers) {
  * @returns {ColumnSolid[]}
  */
 export function structuralColumnContribution(layers) {
+  // 梁と同じ「壁の中なら描画しない」規則を柱にも適用する（ユーザー実機指摘2026-08。
+  // 通り芯の交点には自動補完で柱が立つため、外壁の中に納まる管柱まで柱型として描くと
+  // 壁面の途中に実在しない縦線2本が出る＝実機の「C2のX2上のエッジ線」の正体）。
+  // 壁より太い柱は室内へ出るため従来どおり柱型として描く（架構としての柱型は正しい表現）。
+  const walls = (layers ?? []).flatMap(l => l.graph?.walls ?? []);
   const result = [];
   for (const layer of layers ?? []) {
     for (const column of layer.graph?.columns ?? []) {
@@ -90,14 +134,39 @@ export function structuralColumnContribution(layers) {
       let h = sec?.height ?? DEFAULT_DEPTH_MM;
       const rot = (((column.rotation ?? 0) % 360) + 360) % 360;
       if (Math.abs(rot - 90) < 1 || Math.abs(rot - 270) < 1) { const t = w; w = h; h = t; }
-      result.push({
+      const solid = {
         xLo: column.x - w / 2, xHi: column.x + w / 2,
         yLo: column.y - h / 2, yHi: column.y + h / 2,
         baseZ: layer.floorZMm,
-      });
+      };
+      if (isColumnInsideWall(solid, walls)) continue;
+      result.push(solid);
     }
   }
   return result;
+}
+
+/**
+ * 柱の平面占有矩形が、いずれかの壁の材厚に収まり（厚み方向は完全に）、かつその壁のスパンに
+ * 収まっているか（＝壁に隠れて見えない柱か）。判定の考え方・許容量は`isInsideWall`（梁）と同じ。
+ * @param {ColumnSolid} solid
+ * @param {object[]} walls
+ * @returns {boolean}
+ */
+function isColumnInsideWall(solid, walls) {
+  for (const wall of walls) {
+    const mr = wall.materialRange;
+    if (!mr) continue;
+    // 壁の材厚方向は isVertical=true なら X・false なら Y。スパンはその直交軸。
+    const [acrossLo, acrossHi, spanLo, spanHi] = wall.isVertical
+      ? [solid.xLo, solid.xHi, solid.yLo, solid.yHi]
+      : [solid.yLo, solid.yHi, solid.xLo, solid.xHi];
+    if (!(acrossLo >= mr.lo - GAP_EPS && acrossHi <= mr.hi + GAP_EPS)) continue;
+    const tol = Math.abs(mr.hi - mr.lo); // 隅の取り合い（chamferWalls）ぶんの許容。isInsideWall参照
+    const wLo = Math.min(wall.coord1, wall.coord2), wHi = Math.max(wall.coord1, wall.coord2);
+    if (spanLo >= wLo - tol - GAP_EPS && spanHi <= wHi + tol + GAP_EPS) return true;
+  }
+  return false;
 }
 
 /**

@@ -10,7 +10,7 @@ import { Plane, PlanGraph, CenterLineType, Discipline } from '@core';
 import { generateRoomWallsFromOutline } from '../finish/wallGeneration.js';
 import { getCellsInRect } from '../finish/gridCells.js';
 import { composeRoomFaces } from './elevationFaceList.js';
-import { faceBoundaryLocalX } from './elevationFaces.js';
+import { faceBoundaryLocalX, drawnSpanRanges } from './elevationFaces.js';
 import { collectRow1SplitPoints } from './elevationDimSplit.js';
 import { buildFaceFigure } from './elevationFigure.js';
 import { wallAdjacentFloorSegments } from './elevationFloorProfile.js';
@@ -109,7 +109,10 @@ test('Round Fフィクスチャ: D1のbuildFaceFigureは遠側床線を重複さ
   const CH = 2400;
   const prims = buildFaceFigure(d1, { graph, project: null, room: room2, ceilingHeight: CH, materialMap: null, gridCLs: [], floorSegments });
 
-  const openSpan = d1.spans.find(s => s.kind === 'open');
+  // 描画位置は内部境界を「壁厚×1/2だけ開放側」へずらした値（drawnSpanRanges。ユーザー実機指摘
+  // 2026-08）。寸法・CL側は従来どおり raw の spans[i].hiCLX を使うため、両者は意図的に別値。
+  const openIdx = d1.spans.findIndex(s => s.kind === 'open');
+  const openSpan = { ...d1.spans[openIdx], ...drawnSpanRanges(d1, graph)[openIdx] };
   // 前提: D1はPhase1のnear側修正により、wallAdjacentFloorSegments（segs）自体が既に
   // open区間と同じ高さ(y=50=-(-50))のCUT(太)水平線を描いている（near側セルの延長がsegsにも
   // 反映されるため）。この場合、開放スパン側の「遠側床線」はfarDelta===nearDeltaとなり、
@@ -227,7 +230,8 @@ test('新規指示: room3のA2の「1200」開放区間（見下ろし方向）�
   const CH = 2400;
   const prims = buildFaceFigure(a2, { graph, project: null, room: room3, ceilingHeight: CH, materialMap: null, gridCLs: [], floorSegments });
 
-  const span = a2.spans[0]; // open(g側。farFloorDeltaMm:0)。near(segsのdelta100)より低い＝見下ろし方向。
+  // 描画位置は内部境界を「壁厚×1/2だけ開放側」へずらした値（drawnSpanRanges）。
+  const span = { ...a2.spans[0], ...drawnSpanRanges(a2, graph)[0] }; // open(g側。farFloorDeltaMm:0)。near(segsのdelta100)より低い＝見下ろし方向。
   assert.equal(span.kind, 'open');
   assert.equal(span.farFloorDeltaMm, 0);
 
@@ -302,4 +306,44 @@ test('ユーザー報告item6: room3のD1は床の高低差が無く、floorSegm
   assert.equal(floorSegments[0].floorDeltaMm, 100);
   assert.equal(floorSegments[0].loX, 0);
   assert.equal(floorSegments[0].hiX, d1.run);
+});
+
+// ---- 実機指摘2026-08: 開放スパンの内部境界は「壁厚×1/2だけ開放側」へずらす ----
+// 実機5例（5/C2の400CL=左・10/D1の400CL=右・10/C2の800CL=左・10/B2の1000CL=左・
+// 11'/A2の1600の両側=外）はすべて「境界は開放側へ半壁厚」で説明できた。境界に立つ壁は中心線に
+// 対して厚みを持つため、実際の抜けは壁の面から始まる（CLで切ると開口を半壁厚ぶん広く描く）。
+// 「当該壁厚・偏芯を加味する」ため、決め打ちではなくinnerWallFaceAtで実壁の面を引く。
+test('【実機指摘】drawnSpanRanges: 開放スパンの内部境界は開放側へ、実壁の面ぶんずれる', () => {
+  const { graph, room2, room3 } = buildRoundFFixture();
+
+  // D1: spans=[wall, open] → openのlo境界（内部）はwall側から見て「開放側=+x」へずれる。
+  const d1 = composeRoomFaces(room2, graph).find(f => f.label === 'D1');
+  const dRanges = drawnSpanRanges(d1, graph);
+  const dOpen = d1.spans.findIndex(s => s.kind === 'open');
+  assert.ok(dOpen > 0, '前提: D1のopenは内部境界を持つ（先頭ではない）');
+  assert.ok(dRanges[dOpen].loX > d1.spans[dOpen].loX,
+    `openのlo境界は開放側(+x)へずれるはず（raw=${d1.spans[dOpen].loX} → drawn=${dRanges[dOpen].loX}）`);
+  assert.equal(dRanges[dOpen].hiX, d1.spans[dOpen].hiX, '面端(hi)はずらさないはず');
+
+  // A2: spans=[open, wall, ...] → openのhi境界（内部）は「開放側=-x」へずれる。
+  const a2 = composeRoomFaces(room3, graph).find(f => f.label === 'A2');
+  const aRanges = drawnSpanRanges(a2, graph);
+  assert.equal(a2.spans[0].kind, 'open');
+  assert.equal(aRanges[0].loX, a2.spans[0].loX, '面端(lo)はずらさないはず');
+  assert.ok(aRanges[0].hiX < a2.spans[0].hiX,
+    `openのhi境界は開放側(-x)へずれるはず（raw=${a2.spans[0].hiX} → drawn=${aRanges[0].hiX}）`);
+  // ずれ量は半壁厚（この実CLに立つ壁の実寸。決め打ちではなくinnerWallFaceAt由来）。
+  assert.equal(Math.round(a2.spans[0].hiX - aRanges[0].hiX), 58,
+    '実壁の面までのずれ量（≒半壁厚57.5）になるはず');
+});
+
+test('【失敗系・実機指摘】drawnSpanRanges: 境界に実壁が無ければオフセットしない', () => {
+  const { graph, room2 } = buildRoundFFixture();
+  const d1 = composeRoomFaces(room2, graph).find(f => f.label === 'D1');
+  // graphを渡さなければ（＝壁を確認できなければ）rawのまま。
+  const ranges = drawnSpanRanges(d1, null);
+  d1.spans.forEach((s, i) => {
+    assert.equal(ranges[i].loX, s.loX);
+    assert.equal(ranges[i].hiX, s.hiX);
+  });
 });
