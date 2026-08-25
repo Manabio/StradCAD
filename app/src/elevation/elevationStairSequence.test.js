@@ -7,10 +7,10 @@ import { measureStairSpans } from '../finish/stair/stairClassify.js';
 import { cellsBeyondBreak } from '../finish/stair/stairGeometry.js';
 import { composeRoomFaces } from './elevationFaceList.js';
 import { stairFaceSequence, kneeWallCapContent } from './elevationStairSequence.js';
+import { switchbackCuts } from './section/cuts/switchbackCuts.js';
 import { buildFaceFigure } from './elevationFigure.js';
 import { resolveSwitchbackParams } from './elevationStairSection.js';
 import { ElevationLineRole, weightForRole } from './elevationStyle.js';
-import { DIR_SIGN } from './elevationFaces.js';
 
 function makeGraph(name = 'p1') {
   const plane = new Plane(name, 0, `${name}階`, 1, 1);
@@ -1246,7 +1246,7 @@ test('【失敗系・実機フィードバック第3弾F】kneeWallCapContent: k
   assert.deepEqual(kneeWallCapContent(content, F_CUT, null, F_FLOOR_HEIGHT, F_CEIL_TOP_ABS), content);
 });
 
-test('【実機フィードバック第3弾F】kneeWallCapContent: 壁の両端縦線を上端水平線(CUT)へ差し替える（隣接するアキが無ければ壁自身の範囲だけでX）', () => {
+test('【実機フィードバック第3弾F→2026-08で天端の担当を移管】kneeWallCapContent: 壁の両端縦線を除去する（天端の水平線はemitColumns側が描く。隣接するアキが無ければ壁自身の範囲だけでX）', () => {
   const wallEdge1 = { type: 'line', x1: 1000, y1: -2400, x2: 1000, y2: -3300, weight: 'medium' };
   const wallEdge2 = { type: 'line', x1: 1050, y1: -2400, x2: 1050, y2: -3300, weight: 'thick' };
   const other = { type: 'line', x1: 0, y1: 0, x2: 500, y2: 0, weight: 'thick' };
@@ -1256,9 +1256,10 @@ test('【実機フィードバック第3弾F】kneeWallCapContent: 壁の両端�
   assert.ok(result.includes(other), '無関係な線はそのまま残るはず');
   assert.equal(result.includes(wallEdge1) || result.includes(wallEdge2), false, '壁の両端縦線は除去されるはず');
 
+  // 天端のCUT水平線はemitColumnsの`cutWallTopEdges`（cut帯から壁ごとに1本）が描くようになったため、
+  // 本関数は描かない——両方で描くと同じ線が2本になる（seq1の統合テストで検出される）。
   const topLine = result.find(p => p.type === 'line' && p.y1 === p.y2 && Math.abs(p.y1 - (-3300)) < 1e-6);
-  assert.ok(topLine, '上端水平線(z=3300)があるはず');
-  assert.ok(Math.abs(Math.abs(topLine.x1 - topLine.x2) - 50) < 1e-6, '上端水平線の幅は壁厚(50)のはず');
+  assert.equal(topLine, undefined, '上端水平線はここでは描かない（emitColumns側の担当）');
 
   const centerDiagonals = result.filter(p => p.dash === 'center');
   assert.equal(centerDiagonals.length, 2, 'X(2本)が1組あるはず');
@@ -1411,22 +1412,39 @@ test('【失敗系・実機フィードバック第3弾・続報】stairFaceSequ
   assert.ok(capLine, '上階に実Roomがあれば1F天井高さの水平キャップ線が出るはず');
 });
 
-// ---- 実機指摘2026-08（展開記号）: 歩行方向へ倒したdirSignとletterが食い違っていた ----
-// 症状「左手に登り口・右が踊り場＝9時方向を見ている図なのに記号がB（3時）」。展開記号A/B/C/Dは
-// 視線の向き＝図の左→右がどちらの世界方向かで決まるため、`DIR_SIGN[letter] === face.dirSign` は
-// 面の不変条件。reorientFaceが歩行方向へdirSignだけ倒してletterを据え置いていたのが原因。
-test('【実機指摘】stairFaceSequence: 全エントリでDIR_SIGN[letter]===face.dirSign（展開記号は視線の向きと一致する）', () => {
+// ---- 実機指摘2026-08（展開記号）: 記号は「切断の視線の向き」だけで決まる ----
+// 症状「左手に登り口・右が踊り場＝9時方向を見ている図なのに記号がB（3時）」「「6」B2はDが正解」。
+// 展開記号A/B/C/Dは視線の向きで決まるので、不変条件は `DIR_SIGN[letter] === -cut.viewSign`。
+// **`face.dirSign`ではない**——dirSignは歩行方向で決まる作図順であって視線ではなく、実機では
+// seq2とseq5が同じ向きを見ている（どちらもD）のにdirSignが違う。旧版はこの不変条件を
+// `=== face.dirSign` と書いており、記号を視線基準へ直した時点で前提が失効した。
+test('【実機指摘】stairFaceSequence: 展開記号は切断の視線の向き(-viewSign)で決まる（歩行方向のdirSignではない）', () => {
   const graph = makeGraph();
   const { room, stair } = makeSwitchbackFixture(graph, { withMidWall: true });
   const faces = composeRoomFaces(room, graph);
   const entries = stairFaceSequence(stair, faces, graph, OPTS);
-  assert.ok(entries);
+  const table = switchbackCuts(stair, faces, graph, OPTS);
+  assert.ok(entries && table);
+  // 実装の式をそのまま写経しても契約の検証にならないので、ユーザーの言葉どおりの性質で見る:
+  // 「同じ世界方向を見ている切断どうしは同じ記号」「向きが違えば違う記号」。
+  // 歩行方向のdirSignで決めていた旧実装はこれを満たせなかった（seq2とseq5は同じ向きを見るのに
+  // dirSignが違うため別記号になっていた＝実機指摘の症状そのもの）。
+  const letterByView = new Map();
+  let checked = 0;
   for (const e of entries) {
-    assert.equal(DIR_SIGN[e.face.letter], e.face.dirSign,
-      `seq${e.seqNo}: 記号${e.face.letter}(DIR_SIGN=${DIR_SIGN[e.face.letter]})とdirSign=${e.face.dirSign}が食い違う`);
-    assert.equal(e.face.isVertical, e.face.letter === 'B' || e.face.letter === 'D',
-      `seq${e.seqNo}: 記号${e.face.letter}は壁の軸向き(isVertical=${e.face.isVertical})と整合しないはず`);
+    const cut = table.cuts.find(c => c.seqNo === e.seqNo);
+    if (!cut?.line) continue;
+    checked++;
+    const key = `${cut.line.isVertical}|${cut.viewSign}`;
+    if (!letterByView.has(key)) letterByView.set(key, e.face.letter);
+    assert.equal(e.face.letter, letterByView.get(key),
+      `seq${e.seqNo}: 同じ視線(${key})なら同じ記号のはず（実際は${e.face.letter}）`);
+    assert.equal(cut.line.isVertical, e.face.letter === 'B' || e.face.letter === 'D',
+      `seq${e.seqNo}: 記号${e.face.letter}は切断線の軸向き(isVertical=${cut.line.isVertical})と整合しないはず`);
   }
+  assert.ok(checked > 0, '検証対象のcutが1つも無いのはおかしい');
+  assert.equal(new Set(letterByView.values()).size, letterByView.size,
+    '視線の向きが違えば記号も違うはず');
 });
 
 // ---- 実機指摘2026-08: 展開記号は歩行順に採番し直す（部屋のコンパス順の連番を持ち込まない） ----

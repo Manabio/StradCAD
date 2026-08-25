@@ -10,7 +10,7 @@
  */
 import { OpeningCategory, RoomFeature } from '@core';
 import { buildCellToRoom } from '../../finish/edgeClassify.js';
-import { worldToCell } from '../../finish/gridCells.js';
+import { worldToCell, roomBounds } from '../../finish/gridCells.js';
 import { roomCeilingHeight } from '../../finish/roomMetrics.js';
 import { kneeDropRecordsOnAxis } from '../../finish/kneeDropWall.js';
 import { effectiveHeight } from '../../openings/openingNumbering.js';
@@ -149,13 +149,50 @@ function isCutAlongWall(wall, line) {
  * @returns {import('@core').Room|null}
  */
 function probeOwnerRoom(cut, worldMid, layer, probeCtx, sign) {
+  return ownerRoomAtOffset(cut, worldMid, layer, probeCtx, sign * PROBE_EPS_MM);
+}
+
+// 切断線から視線方向へoffsetMm進んだ位置の所有Room（probeOwnerRoomの一般形）。
+function ownerRoomAtOffset(cut, worldMid, layer, probeCtx, offsetMm) {
   const { line } = cut;
-  const px = line.isVertical ? line.axisValue + sign * PROBE_EPS_MM : worldMid;
-  const py = line.isVertical ? worldMid : line.axisValue + sign * PROBE_EPS_MM;
+  const px = line.isVertical ? line.axisValue + offsetMm : worldMid;
+  const py = line.isVertical ? worldMid : line.axisValue + offsetMm;
   const cell = worldToCell(px, py, layer.graph);
   if (!cell) return null;
   const map = probeCtx.cellToRoomFor(layer);
   return map.get(cell.key) ?? null;
+}
+
+/**
+ * 見えがかり壁の候補が「この切断が見ている部屋の中」に収まっているか
+ * （ユーザー実機指摘2026-08「6」C・裁定A案）。
+ * 視線方向の所有Room（info.room）を出た**先**にある壁は、この帯の作図対象ではなく
+ * 見えがかり壁として描かない——描かれないz区間は`open`帯になり、`emitOpenGapMarks`が
+ * アキ（一点鎖線のバツ）を描く。実機症状: 6/Cの1F部分(z0..2400)が6m先の別室の壁(d6000)を
+ * 拾って見えがかり壁になっており、「3500の面を表す…四角にアキ・バツ」が出ていなかった。
+ * 判定は**帯そのもののRoom（`cut.bandRoom`＝階段帯なら階段室）の包絡矩形**（`roomBounds`）の
+ * 中に壁の手前側の面が収まっているか。ユーザーの言う「3500の面」＝その部屋自身の広がりの端。
+ * *試して却下した案2つ*:
+ * ① 壁の手前の1点プローブで**所有Roomが同一か**——階段帯では「階段」室から「階段下」室のような
+ *    隣接Roomを見通すのが正常なので、部屋を跨いだ時点で全て消え、確認済みテスト（seq2の面端の
+ *    壁の縁）が落ちた。
+ * ② **視線方向の所有Room**（`info.room`）の包絡矩形——列ごとに所有Roomが「階段」「階段下」と
+ *    入れ替わり、狭い方の矩形で切ってしまうため、面の分類（往復間の壁の検出）まで巻き添えで
+ *    変わった（展開記号の回帰テストが落ちた）。帯のRoomは列によらず一定でなければならない。
+ * 壁は部屋境界のCL上に載るため、許容は壁厚ぶん（`materialRange`の幅）とする。
+ * cut.bandRoom・materialRange・包絡矩形が取れないときは従来どおり制限しない。
+ */
+function withinViewRoom(cut, worldMid, info, probeCtx, wall) {
+  if (!cut.bandRoom) return true;
+  const mr = wall.materialRange;
+  if (!mr) return true;
+  const b = probeCtx.boundsOf?.(cut.bandRoom, info.layer.graph);
+  if (!b || !Number.isFinite(b.x1) || !Number.isFinite(b.x2)) return true;
+  const nearFace = cut.viewSign > 0 ? Math.min(mr.lo, mr.hi) : Math.max(mr.lo, mr.hi);
+  const tol = Math.abs(mr.hi - mr.lo) + GAP_EPS;
+  // cut.lineがisVertical（縦の切断線）なら視線＝X方向、そうでなければY方向。
+  const [lo, hi] = cut.line.isVertical ? [b.x1, b.x2] : [b.y1, b.y2];
+  return nearFace >= lo - tol && nearFace <= hi + tol;
 }
 
 /**
@@ -309,6 +346,16 @@ export function makeProbeContext(layers) {
   }
   for (const layer of layers ?? []) cellToRoomFor(layer);
 
+  const boundsCacheByGraph = new Map(); // graph -> Map<room.id, {x1,y1,x2,y2}>
+  // Roomの包絡矩形（`withinViewRoom`が「視線がこの部屋を出た先の壁か」を判定するのに使う）。
+  function boundsOf(room, graph) {
+    if (!room) return null;
+    let cache = boundsCacheByGraph.get(graph);
+    if (!cache) { cache = new Map(); boundsCacheByGraph.set(graph, cache); }
+    if (!cache.has(room.id)) cache.set(room.id, roomBounds(room.cells, graph));
+    return cache.get(room.id);
+  }
+
   function chOf(room, graph) {
     if (!room) return null;
     let cache = chCacheByGraph.get(graph);
@@ -323,7 +370,7 @@ export function makeProbeContext(layers) {
     return layer.floorZMm + graph.effectiveFloorLevel(room) - graph.floorDatum;
   }
 
-  return { cellToRoomByLayer, cellToRoomFor, chOf, floorZOf };
+  return { cellToRoomByLayer, cellToRoomFor, boundsOf, chOf, floorZOf };
 }
 
 /**
@@ -346,12 +393,21 @@ export function makeProbeContext(layers) {
 export function collectCutBreaks(cut, probeCtx) {
   const line = cut.line;
   const layers = cut.layers ?? [];
-  const values = new Set([line.lo, line.hi]);
-  const addIfInside = v => { if (v > line.lo + GAP_EPS && v < line.hi - GAP_EPS) values.add(v); };
+  // 探査範囲は切断線そのもの[lo,hi]だけでなく、**壁のない端部の外側**（probeExtendLo/HiMm。
+  // ユーザー実機指摘2026-08「6」D／裁定A案）も含む——面の端で切れている壁・床スラブ・天井は
+  // 「そこで終わる」のではなく面の外へ続いており、その取り合い（腰壁の外側面・隣室の1F天井・
+  // 2FL床）を作図するには、外側にも実データの列が要るため。x=0の起点（cutOriginWorld）は
+  // line.lo/hiのままで動かさないので、既存のローカルx座標は一切ずれない。
+  const probeLo = line.lo - (line.probeExtendLoMm ?? 0);
+  const probeHi = line.hi + (line.probeExtendHiMm ?? 0);
+  const values = new Set([probeLo, probeHi]);
+  const addIfInside = v => { if (v > probeLo + GAP_EPS && v < probeHi - GAP_EPS) values.add(v); };
+  // 面の端そのものは常に列境界にする（延長した場合、面の内と外を1列に融合させない）。
+  addIfInside(line.lo); addIfInside(line.hi);
 
   for (const layer of layers) {
     probeCtx?.cellToRoomFor?.(layer); // ウォームアップ（後続のprobeColumn呼び出しのキャッシュ寄与）
-    for (const v of collectRunBreaks(layer.graph, line.isVertical, line.lo, line.hi)) values.add(v);
+    for (const v of collectRunBreaks(layer.graph, line.isVertical, probeLo, probeHi)) values.add(v);
     for (const w of layer.graph.walls ?? []) {
       if (isCutWall(w, line)) {
         const mr = w.materialRange;
@@ -426,6 +482,7 @@ export function probeColumn(cut, worldMid, probeCtx) {
         const c1 = Math.min(w.coord1, w.coord2), c2 = Math.max(w.coord1, w.coord2);
         if (worldMid < c1 - GAP_EPS || worldMid > c2 + GAP_EPS) continue;
         const distMm = Math.abs(w.axisCL.effectiveValue - line.axisValue);
+        if (!withinViewRoom(cut, worldMid, info, probeCtx, w)) continue; // 部屋の外の壁は描かない
         // A2: selfレイヤーの壁だけ、上限（info.ceilZ）をabove層の実Room有無で解決し直す
         // （resolveWallCapZ参照。above/belowレイヤー自身の壁は従来どおりinfo.ceilZのまま
         // ——本WPの対象はselfレイヤーの視界に立つ壁の水平キャップ位置のみ）。

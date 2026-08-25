@@ -395,7 +395,7 @@ export function buildFaceFigure(face, ctx) {
     graph, project, room, ceilingHeight: CH, materialMap, gridCLs, faceLabelAvoidThresholdModelMm,
     prevFace, nextFace, openingTagRowModelMm, dimRowGapModelMm, gridRowGapModelMm, floorSegments,
     wallLessEndExtendModelMm, scale, ceilingProfile, skipBaseboard, skipWallLabel, floorSpanX,
-    solids,
+    solids, extraCenterLineXs,
   } = ctx;
   const run = face.run;
   const prims = [];
@@ -1046,7 +1046,7 @@ export function buildFaceFigure(face, ctx) {
     ? Math.max(...ceilingProfile.map(p => p[1])) : -Infinity;
   appendAnnotationRows(prims, face, graph, {
     boundary, floorSegments: segs, gridCLs, dimRow1Y, gridCircleRowY, faceLabelRowY,
-    detailWeight, faceLabelAvoidThresholdModelMm,
+    detailWeight, faceLabelAvoidThresholdModelMm, extraCenterLineXs,
     CH: Math.max(CH, ...segs.map(ceilAbsOf), maxDrawnBcCeilAbs, ceilProfileMaxAbs),
   });
 
@@ -1068,7 +1068,7 @@ export function buildFaceFigure(face, ctx) {
 function appendAnnotationRows(prims, face, graph, opts) {
   const {
     boundary, floorSegments, gridCLs, dimRow1Y, gridCircleRowY, faceLabelRowY,
-    detailWeight, faceLabelAvoidThresholdModelMm, CH,
+    detailWeight, faceLabelAvoidThresholdModelMm, CH, extraCenterLineXs,
   } = opts;
 
   // 面を貫く通り芯（寸法の鎖の分割点＝S5・一点鎖線・丸番号の共通の源）。
@@ -1096,6 +1096,19 @@ function appendAnnotationRows(prims, face, graph, opts) {
       type: 'dim', dir: 'h', at: dimRow1Y, from: row1Marks[i], to: row1Marks[i + 1], dot: true,
       label: Math.round(row1Marks[i + 1] - row1Marks[i]),
     });
+  }
+
+  // 呼び出し側が明示指定する追加の中心線（ローカルx）。**一点鎖線だけを描き、寸法の鎖は分割しない**
+  // （ユーザー実機指摘2026-08「6」C「1500の一点鎖線が出ていない」）。
+  // 用途: 階段帯の往復間の壁の芯——この壁は切断線から見て**面の裏側**へ伸びるため、
+  // `collectRow1SplitPoints`の直交壁検出（室内側へMIN_PROJECTION_MM以上突出する袖壁が対象）に
+  // 掛からず、一点鎖線の源が1つも無かった。寸法を分割しないのは、以前「1500と1000の間のCLは
+  // どこからきたのか」と指摘された寸法鎖への副作用を避けるため（線だけという明示指示に従う）。
+  for (const x of extraCenterLineXs ?? []) {
+    const dup = gridPoints.some(g => Math.abs(g.x - x) <= SPLIT_MERGE_EPS_MM)
+      || row1Marks.some(m => Math.abs(m - x) <= SPLIT_MERGE_EPS_MM);
+    if (dup) continue;
+    prims.push({ type: 'line', x1: x, y1: centerLineTopY, x2: x, y2: dimRow1Y, dash: 'center', weight: detailWeight });
   }
 
   // 通り芯縦一点鎖線＋丸番号（寸法行のさらに下＝gridCircleRowY。QA G4: 寸法行とは別の段）。

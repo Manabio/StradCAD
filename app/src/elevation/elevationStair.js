@@ -124,24 +124,24 @@ export function buildStairBand(stairRoom, graph, upperGraph, ctx = {}) {
   // CH_upper解決: upperGraph・floorHeightの両方が確定していなければ2層表現自体を行わない
   // （従来の「upperGraph=null/floorHeight未確定は1層のみ」と同じガード）。
   let chUpperAbsMm = null;
-  let upperCeilCapped = false;
   if (upperGraph && floorHeight != null) {
-    const chUpperInfo = resolveUpperCeilingHeight(stair, stairRoom, graph, upperGraph);
-    chUpperAbsMm = floorHeight + chUpperInfo.mm;
-    // 最上階キャップ: 設置階上階が最上階（さらに上の階が無い）かつ、上階側Roomの天井高さが
-    // 明示指定でない（isFallback===true。既定値へのフォールバック＝実質未指定）場合。
-    // QA注記6: floorHeightAbove(project, ...)はproject===nullでもnull（最上階と同一視）を返す
-    // ため、project未指定の呼び出し（単体テスト等）は常に「最上階扱い」になる。本番の呼び出し
-    // （App.jsx/ElevationModeState.js経由）は必ずproject（現在のPlanGraphの所属project）を渡す
-    // 前提のため、この同一視は実害が無い——ここでの分岐追加は不要（呼び出し側の契約で担保する）。
-    upperCeilCapped = floorHeightAbove(project, upperGraph.plane) === null && chUpperInfo.isFallback === true;
+    chUpperAbsMm = floorHeight + resolveUpperCeilingHeight(stair, stairRoom, graph, upperGraph).mm;
   }
+  // 【廃止】最上階キャップ（upperCeilCapped）: 「上階が最上階かつ上階CHが非明示(isFallback)なら
+  // 往路上の天井をceilLowAbsで水平にキャップする」という分岐を持っていたが、成立条件が弱い推測
+  // （設計メモにもASSUMEDと明記）で、実機（「6」D。floorHeight=3000/chLower=2400/chUpper絶対5400）
+  // では階段室の上まで1F天井が貫通し、同じ面のcontent（レイキャストが描く2F天井5400）と食い違って
+  // いた。ユーザー実機指摘2026-08「2FL天井断面線は、3500左CLの外へ延長して終わる」により削除。
+  // 天井は常にchUpperAbsMmに揃える（他の描画も既にchUpperAbsMmを使っており、そちらと一貫する）。
 
   const composedFaces = composeRoomFaces(stairRoom, graph);
   const sequence = (stair && composedFaces.length > 0 && chUpperAbsMm != null)
     ? stairFaceSequence(stair, composedFaces, graph, {
-        floorHeight, chUpperAbsMm, chLowerMm: roomCeilingHeight(graph, stairRoom).mm, upperCeilCapped,
+        floorHeight, chUpperAbsMm, chLowerMm: roomCeilingHeight(graph, stairRoom).mm,
         upperGraph,
+        // content側の「壁のない端部」延長量。図形側（layoutBandFaces→buildFaceFigure）へ渡すのと
+        // 同じctxの値をそのまま使い、同じ端で図形とcontentの線の長さを揃える。
+        wallLessEndExtendModelMm: ctx.wallLessEndExtendModelMm,
       })
     : null;
 
@@ -162,6 +162,8 @@ export function buildStairBand(stairRoom, graph, upperGraph, ctx = {}) {
         // chDimSplitAbsYsを持てば、elevationBand.jsのlayoutBandFacesがそれを見て左CH寸法を
         // 分割する（elevationBand.jsのchDimSplitAbsYsフック参照）。他entryは未設定=現行1本のまま。
         chDimSplitAbsYs: sequence[i].chDimSplitAbsYs,
+        // 往復間の壁の芯の一点鎖線（ユーザー実機指摘2026-08「6」C。elevationFigure.js参照）。
+        extraCenterLineXs: sequence[i].extraCenterLineXs,
         skipBaseboard: true, skipWallLabel: true,
       }),
     });

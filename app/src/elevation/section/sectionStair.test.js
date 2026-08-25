@@ -100,7 +100,10 @@ test('【WP-E3】stairPrimitivesForCut: 往路レーンを縦断する切断はS
   assert.equal(prims.length, 1);
   assert.equal(prims[0].type, 'polyline');
   assert.equal(prims[0].weight, 'medium', 'ジグザグはSILHOUETTE(medium)のはず');
-  assert.equal(prims[0].points.length, 1 + 2 * 6, '往路の段数(6)ぶんの蹴上・踏面点があるはず');
+  // 最終段の踏面は次区間（踊り場）の床が兼ねるため出さない。蹴上は蹴込ぶん傾いた斜線1本
+  // なので、蹴込の有無に関わらず 起点1+蹴上6+踏面5。
+  assert.equal(prims[0].points.length, 1 + 6 + 5,
+    '往路の段数(6)ぶんの蹴上6点＋踏面5点＋起点があるはず');
 });
 
 // ---- 横切る→梯子（段数=steps） ----
@@ -173,6 +176,34 @@ test('【実機フィードバック第3弾C】stairPrimitivesForCut: ささら�
   const cutLines = prims.filter(p => p.type === 'line' && p.weight === 'thick');
   assert.equal(cutLines.length, 8, 'baseFloorZより下でも8本ともCUT(thick)のまま降格しないはず');
   for (const p of cutLines) assert.equal(p.dash, undefined, 'dashは付かないはず');
+});
+
+// ---- ユーザー実機指摘2026-08「6」: 面の描画範囲の外に断面矩形を出さない ----
+// 実機ではささら・踊り場桁枠の12×300矩形が、面が0..2885なのに x=-57.5..-45.5 や
+// x=2942.5..2954.5（半壁厚ぶん外）に、seq2では x=3500..3512（run=3442.5の外）に出ていた。
+// 梁の断面と同じ規則（sectionTypes.jsのcutDrawRange）でstringerRectLinesの入口で落とす。
+test('【実機指摘】stairPrimitivesForCut: 面の描画範囲の外にある断面矩形は描かない', () => {
+  const graph = makeGraph();
+  const { stair } = makeSwitchbackFixture(graph, StructuralMaterialType.STEEL);
+  const c = stairContribution(stair, graph, FLOOR_HEIGHT);
+  const columns = [{ x0: 0, x1: 1000, worldLo: 0, worldHi: 1000, bands: [] }];
+  const base = {
+    seqNo: '1', line: { isVertical: false, axisValue: 3000, lo: 0, hi: 2000 },
+    viewSign: 1, dirSign: 1, layers: [], zRange: { loZ: 0, hiZ: 3000 }, baseFloorZ: 0,
+  };
+  const inRange = stairPrimitivesForCut(c, base, columns)
+    .filter(p => p.type === 'line' && p.weight === 'thick');
+  assert.ok(inRange.length > 0, '前提: 通常の範囲では断面矩形が出る');
+  for (const p of inRange) {
+    assert.ok(Math.min(p.x1, p.x2) <= 2000 + 1e-6 && Math.max(p.x1, p.x2) >= -1e-6,
+      `断面矩形が描画範囲(0..2000)の外にある: x=${p.x1}..${p.x2}`);
+  }
+
+  // 描画範囲をレーンの外（world 5000..6000）へずらすと、断面矩形は1本も出ない。
+  const outside = { ...base, line: { ...base.line, lo: 5000, hi: 6000 } };
+  const outLines = stairPrimitivesForCut(c, outside, columns)
+    .filter(p => p.type === 'line' && p.weight === 'thick');
+  assert.equal(outLines.length, 0, '描画範囲の外の断面矩形は1本も出ないはず');
 });
 
 // ---- ささらはSTEELのみ（失敗系WOODで0本） ----

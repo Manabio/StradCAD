@@ -3,6 +3,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Plane, PlanGraph, CenterLineType, Discipline, StructuralMaterialType } from '@core';
 import { structuralContribution, structuralPrimitivesForCut } from './sectionStructure.js';
+import { cutDrawRange } from './sectionTypes.js';
 
 function makeGraph(name = 'p1') {
   const plane = new Plane(name, 0, `${name}階`, 1, 1);
@@ -71,6 +72,47 @@ test('【WP-C】structuralPrimitivesForCut: 切断線が梁を横切る（直交
   }
   const xs = prims.flatMap(p => [p.x1, p.x2]);
   assert.ok(Math.min(...xs) <= 950 + 1e-6 && Math.max(...xs) >= 1050 - 1e-6, '幅100mm分(1000±50)の断面幅のはず');
+});
+
+// ---- ユーザー実機指摘2026-08「壁の中にある2階床梁の断面 描画不要」----
+// 実機「6」では面の描画範囲がx=0..2885／-285..3442.5なのに、梁の断面矩形がx=-6882.5..-6782.5や
+// x=-3325..-3225（＝別スパンの梁）に描かれていた。docコメントは元から「梁の位置(axisWorld)が
+// 切断線の範囲(lo..hi)内」を契約としていたが、その判定の実装が抜けていた。
+test('【実機指摘】structuralPrimitivesForCut: 梁の位置が切断線の描画範囲の外なら断面矩形を描かない', () => {
+  const graph = makeGraph();
+  addHorizontalBeam(graph, 500); // 梁の軸はworld y=1000
+  const contribution = structuralContribution([{ graph, floorZMm: 0, role: 'self' }]);
+  // 切断線はx=1000上の縦線だが、描画範囲は y=4000..6000（梁の軸y=1000は範囲外）。
+  const cut = {
+    seqNo: 'x', line: { isVertical: true, axisValue: 1000, lo: 4000, hi: 6000 },
+    viewSign: 1, dirSign: 1, layers: [], zRange: { loZ: -500, hiZ: 3000 }, baseFloorZ: 0,
+  };
+  assert.deepEqual(structuralPrimitivesForCut(contribution, cut, []), [],
+    '面のはるか外にある梁は描かないはず');
+});
+
+test('【実機指摘】cutDrawRange: 壁のない端部の探査延長ぶんも描画範囲に含む', () => {
+  const cut = {
+    seqNo: 'x', line: { isVertical: true, axisValue: 0, lo: 0, hi: 2000, probeExtendLoMm: 150 },
+    viewSign: 1, dirSign: 1, layers: [], zRange: { loZ: 0, hiZ: 2400 }, baseFloorZ: 0,
+  };
+  assert.deepEqual(cutDrawRange(cut), { lo: -150, hi: 2000 });
+  const plain = { ...cut, line: { isVertical: true, axisValue: 0, lo: 0, hi: 2000 } };
+  assert.deepEqual(cutDrawRange(plain), { lo: 0, hi: 2000 });
+});
+
+test('【失敗系・実機指摘】structuralPrimitivesForCut: 範囲の端の通り芯上に乗る梁は半壁厚ぶんの許容で描かれる', () => {
+  const graph = makeGraph();
+  addHorizontalBeam(graph, 500); // 梁の軸はworld y=1000
+  const contribution = structuralContribution([{ graph, floorZMm: 0, role: 'self' }]);
+  // 描画範囲の端(lo=1057.5)が、梁の乗る通り芯(y=1000)より半壁厚(57.5)ぶん内側に詰まっている構成。
+  const cut = {
+    seqNo: 'x', line: { isVertical: true, axisValue: 1000, lo: 1057.5, hi: 3000 },
+    viewSign: 1, dirSign: 1, layers: [], zRange: { loZ: -500, hiZ: 3000 }, baseFloorZ: 0,
+    face: { faceValue: 1057.5, axisCL: { effectiveValue: 1000 } }, // halfWallThicknessMm=57.5
+  };
+  assert.equal(structuralPrimitivesForCut(contribution, cut, []).length, 4,
+    'CL上の梁は取りこぼさないはず（梁の半幅＋半壁厚の許容）');
 });
 
 test('【WP-C】structuralPrimitivesForCut: 切断線が梁に平行かつ幅の帯内・spanが重なると上端/下端/両端縦線(4本・DETAIL細線)を出す', () => {

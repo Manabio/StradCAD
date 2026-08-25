@@ -218,8 +218,7 @@ export function buildMidWallFace(wall, inward, loWorld, hiWorld, faces) {
  * @param {import('@core').Stair} stair
  * @param {object[]} faces - composeRoomFaces(stairRoom, graph) の結果
  * @param {object} graph - 設置階のgraph
- * @param {{floorHeight:number, chUpperAbsMm:number, chLowerMm:number, upperGraph?:object,
- *   upperCeilCapped?:boolean}} opts
+ * @param {{floorHeight:number, chUpperAbsMm:number, chLowerMm:number, upperGraph?:object}} opts
  * @returns {{cuts:object[], wEntry:object, wLanding:object, wOut1:object, wOut2:object,
  *   wall:import('@core').Wall|null, kneeDrop:object|null, params:object, landingAbs:number,
  *   isSteel:boolean, contribution:object|null}|null}
@@ -243,7 +242,8 @@ export function switchbackCuts(stair, faces, graph, opts = {}) {
   // 部屋が有る場合は従来どおり踊り場が基準床（その下は別室＝向こう側なので細破線へ降格）。
   // 判定は階段下部屋の唯一の情報源（stairUnderRoomsOf × cellsBeyondBreak）をそのまま使う
   // ——展開図が独自の判定を持つと、壁生成（stairUnderWalls.js）との食い違いが生まれるため。
-  const underFloorZ = hasRoomUnderStair(stair, graph) ? landingAbs : 0;
+  const hasRoomUnder = hasRoomUnderStair(stair, graph);
+  const underFloorZ = hasRoomUnder ? landingAbs : 0;
 
   const b = roomBounds(stair.cells, graph);
   const f = makeFrame(stair, b);
@@ -281,7 +281,6 @@ export function switchbackCuts(stair, faces, graph, opts = {}) {
 
   const ceilTopAbs = opts.chUpperAbsMm;
   const ceilLowAbs = opts.chLowerMm;
-  const upperCeilCapped = opts.upperCeilCapped === true;
 
   const travelSign = Math.sign(wLanding.faceValue - wEntry.faceValue) || 1;
   const landingStartWorld = wLanding.faceValue - travelSign * landingLen;
@@ -400,7 +399,7 @@ export function switchbackCuts(stair, faces, graph, opts = {}) {
   }
 
   return {
-    cuts, wEntry, wLanding, wOut1, wOut2, wall, kneeDrop, params, landingAbs, underFloorZ, isSteel, contribution,
-    ceilTopAbs, ceilLowAbs, upperCeilCapped, entryWorld, landingStartWorld,
+    cuts, wEntry, wLanding, wOut1, wOut2, wall, kneeDrop, params, landingAbs, underFloorZ, hasRoomUnder, isSteel, contribution,
+    ceilTopAbs, ceilLowAbs, entryWorld, landingStartWorld,
   };
 }

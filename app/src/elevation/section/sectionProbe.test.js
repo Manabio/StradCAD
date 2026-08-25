@@ -197,6 +197,35 @@ test('【WP-E1】collectCutBreaks: 切断線のrun方向にある間仕切りCL�
   assert.ok(breaks.length >= 2);
 });
 
+// ---- ユーザー裁定2026-08 A案: 壁のない端部では探査範囲そのものを外側へ広げる ----
+test('【裁定A案】collectCutBreaks: probeExtendLo/HiMmで探査範囲が外側へ広がり、面の端も列境界として残る', () => {
+  const graph = makeGraph();
+  makeRectRoom(graph, 0, 0, 4000, 3000, 'LDK');
+  const base = frontCut(graph);
+  const probeCtx = makeProbeContext(base.layers);
+
+  const plain = collectCutBreaks(base, probeCtx);
+  assert.equal(Math.min(...plain), 0, '既定では探査範囲はline.loから');
+  assert.equal(Math.max(...plain), 4000, '既定では探査範囲はline.hiまで');
+
+  const extended = collectCutBreaks(
+    { ...base, line: { ...base.line, probeExtendLoMm: 150, probeExtendHiMm: 200 } }, probeCtx);
+  assert.equal(Math.min(...extended), -150, 'lo側が150外へ広がるはず');
+  assert.equal(Math.max(...extended), 4200, 'hi側が200外へ広がるはず');
+  assert.ok(extended.includes(0) && extended.includes(4000),
+    '面の端(0/4000)は列境界として残るはず（面の内と外が1列に融合しない）');
+});
+
+test('【失敗系・裁定A案】collectCutBreaks: probeExtend未指定は現行と完全一致（既定0）', () => {
+  const graph = makeGraph();
+  makeRectRoom(graph, 0, 0, 4000, 3000, 'LDK');
+  const base = frontCut(graph);
+  const probeCtx = makeProbeContext(base.layers);
+  assert.deepEqual(
+    collectCutBreaks({ ...base, line: { ...base.line, probeExtendLoMm: 0, probeExtendHiMm: 0 } }, probeCtx),
+    collectCutBreaks(base, probeCtx));
+});
+
 // ---- 失敗系: collectCutBreaksもlayers=[]で例外なし ----
 test('【失敗系・WP-E1】collectCutBreaks: layers=[]でも例外を投げず両端だけの配列を返す', () => {
   const cut = {

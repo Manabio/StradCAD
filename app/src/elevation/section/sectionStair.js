@@ -78,12 +78,12 @@ import { roomBounds, refreshCells } from '../../finish/gridCells.js';
 import { makeFrame, LANE_GAP } from '../../finish/stair/stairGeometry.js';
 import { landingRect } from '../../finish/stair/stairLanding.js';
 import {
-  resolveSwitchbackParams, stairRunProfile, stringerPrimitives,
+  resolveSwitchbackParams, stairRunProfile, stringerPrimitives, stringerBandGeometry,
   STEEL_STRINGER_DEPTH_MM, STEEL_STRINGER_THICKNESS_MM, STEEL_LANDING_FRAME_DEPTH_MM,
 } from '../elevationStairSection.js';
 import { ElevationLineRole, weightForRole, GAP_EPS_MM as GAP_EPS } from '../elevationStyle.js';
 import { parseBaseboardHeightMm } from '../elevationFigure.js';
-import { localXOf } from './sectionTypes.js';
+import { localXOf, cutDrawRange } from './sectionTypes.js';
 import { emitLine } from './sectionEmit.js';
 
 /**
@@ -139,7 +139,7 @@ export function stairContribution(stair, graph, floorHeight) {
     runLo: Math.min(coordAt0, coordAtRun), runHi: Math.max(coordAt0, coordAtRun),
     travelSign: coordAtRun >= coordAt0 ? 1 : -1,
     acrossLo: Math.min(s0World, acrossMid), acrossHi: Math.max(s0World, acrossMid),
-    baseZ: 0, riserMm: riser, steps: n1, lengthMm: len1,
+    baseZ: 0, riserMm: riser, steps: n1, lengthMm: len1, nosingMm: stair.nosing ?? 0,
   };
   const landingZ = n1 * riser;
   // WP-E5b修正: makeFrameのt軸は「往路(t:0→tRun)＋踊り場(t:tRun→1)」の1往復ぶんの長さしか
@@ -152,7 +152,7 @@ export function stairContribution(stair, graph, floorHeight) {
     runLo: outbound.runLo, runHi: outbound.runHi,
     travelSign: -outbound.travelSign,
     acrossLo: Math.min(s1World, acrossMid), acrossHi: Math.max(s1World, acrossMid),
-    baseZ: landingZ, riserMm: riser, steps: n2, lengthMm: len2,
+    baseZ: landingZ, riserMm: riser, steps: n2, lengthMm: len2, nosingMm: stair.nosing ?? 0,
   };
 
   // WP-A1: 踊り場の世界矩形は finish/stair/stairLanding.js の landingRect（単一情報源）へ載せ替え
@@ -288,13 +288,60 @@ function fullColumnsXRange(columns) {
 // 決めるため、flight自身がcut.lineの内側にあるかどうかとは無関係に計算できる（ゲート無しに
 // した理由）。
 function computeFlightZigzagPoints(flight, cut, columns) {
+  return computeFlightProfile(flight, cut, columns).points;
+}
+
+
+// ユーザー実機指摘2026-08「直進部の斜めささらと踊り場ささら（上下共）は、トリム結合して取り合う」:
+// flightのどちらの端が踊り場に接するかを返す（stairRunProfileの点列は歩行順なので、
+// 段鼻列の先頭=flight.baseZ・末尾=baseZ+steps*riser）。往路は末尾が踊り場、復路は先頭が踊り場。
+// 接する端だけを、踊り場桁枠の下端（＝上端+桁成）の水平線でトリムする。
+function landingMitreOpts(flight, landings, unit) {
+  const D = unit?.landingFrameDepthMm;
+  if (D == null || !landings?.length) return {};
+  const startZ = flight.baseZ;
+  const endZ = flight.baseZ + flight.steps * flight.riserMm;
+  const near = z => landings.some(l => Math.abs(l.z - z) < GAP_EPS);
+  return { mitreDepthMm: D, mitreStart: near(startZ), mitreEnd: near(endZ) };
+}
+
+
+// トリム結合の下端側: この切断で描かれる斜めささらのうち、この踊り場に接する側の
+// 下端の角（ミトレ済み）のローカルxを返す。踊り場桁枠の下端はここから描き始める
+// （それより手前は斜めささらの下端が外形）。ささらは鉄骨のみのため呼び出し側でSTEEL限定。
+function landingSideMitreX(contribution, landing, cut, columns) {
+  const unit = contribution.unit;
+  if (!unit?.landingFrameDepthMm) return null;
+  for (const flight of contribution.flights ?? []) {
+    if (!isLengthwiseCut(flight.isVertical, flight.acrossLo, flight.acrossHi, flight.runLo, flight.runHi, cut)) continue;
+    const startZ = flight.baseZ;
+    const endZ = flight.baseZ + flight.steps * flight.riserMm;
+    const atStart = Math.abs(landing.z - startZ) < GAP_EPS;
+    const atEnd = Math.abs(landing.z - endZ) < GAP_EPS;
+    if (!atStart && !atEnd) continue;
+    const band = stringerBandGeometry(computeFlightProfile(flight, cut, columns).noses, STEEL_STRINGER_DEPTH_MM, {
+      baseboardMm: unit.baseboardHeightMm ?? 0,
+      mitreDepthMm: unit.landingFrameDepthMm, mitreStart: atStart, mitreEnd: atEnd,
+    });
+    if (!band) continue;
+    return atEnd ? band.bottom[1][0] : band.bottom[0][0];
+  }
+  return null;
+}
+
+// ジグザグ点列と段鼻列をまとめて返す（同じクランプを両方へ適用する単一実装）。段鼻は
+// ささらの上端線の起点——点列のindexの偶奇からは拾えない（蹴込>0で刻みが変わる）ため、
+// stairRunProfileが返す明示的な段鼻列をそのまま持ち回る。
+function computeFlightProfile(flight, cut, columns) {
   const worldStart = flight.travelSign > 0 ? flight.runLo : flight.runHi;
   const localDir = flight.travelSign * cut.dirSign; // ローカルx方向の歩行方向
   const startX = localXOf(cut, worldStart);
   const runLengthMm = flight.lengthMm ?? (flight.runHi - flight.runLo);
-  const { points } = stairRunProfile(flight.steps, flight.riserMm, runLengthMm, startX, -flight.baseZ, localDir);
+  const { points, noses } = stairRunProfile(
+    flight.steps, flight.riserMm, runLengthMm, startX, -flight.baseZ, localDir, flight.nosingMm ?? 0);
   const { loX, hiX } = fullColumnsXRange(columns);
-  return points.map(([x, y]) => [Math.min(hiX, Math.max(loX, x)), y]);
+  const clamp = ([x, y]) => [Math.min(hiX, Math.max(loX, x)), y];
+  return { points: points.map(clamp), noses: noses.map(clamp) };
 }
 
 // レーン縦断: 段鼻のジグザグ本体（SILHOUETTE。WOOD向け。isLengthwiseCutで縦断対象かを判定）。
@@ -388,6 +435,38 @@ function flightLadderPrimitives(flight, cut, columns, ladderAcross) {
   return prims;
 }
 
+/**
+ * この切断で**手前に階段が描かれる**領域（正面視＝レーンを横切る切断でのflightの見付け範囲）を
+ * 矩形で返す（ユーザー実機指摘2026-08「6」C「階段に隠れる部分は破線」）。
+ * アキのバツ（`emitOpenGapMarks`の対角線）のうちこの矩形に入る区間だけを破線へ落とすために使う
+ * ——プリミティブから領域を逆算するのではなく、flight自身の見付け幅（梯子と同じ`ladderAcrossRange`
+ * 調整済み）と昇り切り高さ（baseZ〜baseZ+steps*riserMm）というモデルの値から直接組み立てる。
+ * レーン縦断（側面視）の切断は対象外——その場合レーンは切断線の中を通っており「手前に見える
+ * 階段」ではないため（`crossesFlight`がfalse）。
+ * @param {ReturnType<typeof stairContribution>|null} contribution
+ * @param {import('./sectionTypes.js').SectionCut} cut
+ * @returns {Array<{xLo:number, xHi:number, zLo:number, zHi:number}>}
+ */
+export function stairOccluderRects(contribution, cut) {
+  if (!contribution || !cut?.line) return [];
+  const isSteel = contribution.structure === StructuralMaterialType.STEEL;
+  const acrossExtents = [...(contribution.flights ?? []), ...(contribution.landings ?? [])];
+  if (acrossExtents.length === 0) return [];
+  const trueAcrossLo = Math.min(...acrossExtents.map(e => e.acrossLo));
+  const trueAcrossHi = Math.max(...acrossExtents.map(e => e.acrossHi));
+  const rects = [];
+  for (const flight of contribution.flights ?? []) {
+    if (!crossesFlight(flight, cut)) continue;
+    const across = isSteel ? ladderAcrossRange(flight, trueAcrossLo, trueAcrossHi, LANE_GAP) : flight;
+    const a = localXOf(cut, across.acrossLo), b = localXOf(cut, across.acrossHi);
+    rects.push({
+      xLo: Math.min(a, b), xHi: Math.max(a, b),
+      zLo: flight.baseZ, zHi: flight.baseZ + flight.steps * flight.riserMm,
+    });
+  }
+  return rects;
+}
+
 // cut.lineがflightを横切っているか（flightLadderPrimitivesと同じ判定。ささら正面視・梯子で共有）。
 function crossesFlight(flight, cut) {
   return cut.line.isVertical !== flight.isVertical &&
@@ -414,6 +493,12 @@ function flightElevationAt(flight, runCoord) {
 // （neverDowngrade:true）——降格（細破線）が残るのは踏面梯子(正面視)と壁断面の見えがかりだけ、
 // という線種裁定のため。
 function stringerRectLines(cut, xLo, xHi, zTop, depthMm) {
+  // **面の描画範囲の外にある断面矩形は描かない**（ユーザー実機指摘2026-08「6」。踊り場桁枠・
+  // ささらの断面が面の外（例: 面が0..2885なのにx=-57.5..-45.5やx=2942.5..2954.5、seq2では
+  // x=3500..3512）に出ていた。梁の断面と同じ規則＝sectionTypes.jsのcutDrawRangeが単一情報源）。
+  // 完全に範囲外のときだけ落とす（端に接する・一部だけかかる矩形は従来どおり描く）。
+  const draw = cutDrawRange(cut);
+  if (Math.max(xLo, xHi) < draw.lo - GAP_EPS || Math.min(xLo, xHi) > draw.hi + GAP_EPS) return [];
   const zBot = zTop - depthMm;
   const opts = { neverDowngrade: true };
   return [
@@ -527,7 +612,7 @@ function hasLandingFrame(structure) {
  * @param {StairUnit} unit
  * @returns {object[]}
  */
-export function landingFramePrimitives(landing, cut, columns, unit) {
+export function landingFramePrimitives(landing, cut, columns, unit, mitreX = null) {
   const edges = landing?.frame?.edges;
   if (!edges || edges.length === 0 || !hasLandingFrame(unit?.structure)) return [];
   const stairIsVertical = edges.find(e => e.kind === 'side')?.isVertical;
@@ -567,7 +652,13 @@ export function landingFramePrimitives(landing, cut, columns, unit) {
         // （§実施2）。踊り場床断面線自体(landing.z)はlandingCutPrimitivesが既にCUTで描画
         // 済みのため重複させない。front（flight）側の端には縦線を出さない（続き扱い）。
         prims.push(emitLine(cut, loX, sideTop, hiX, sideTop, ElevationLineRole.DETAIL, { neverDowngrade: true }));
-        prims.push(emitLine(cut, loX, sideBot, hiX, sideBot, ElevationLineRole.DETAIL, { neverDowngrade: true }));
+        // トリム結合の下端側（ユーザー実機指摘2026-08）: 斜めささらの下端は法線オフセット・
+        // 桁枠の下端は鉛直せいのため交差角が付く。斜め側は既に交点までミトレ済み
+        // （landingMitreOpts→stringerBandGeometry）なので、桁枠側もその交点から描き始める
+        // ——交点までの区間は斜めささらの下端が外形になっており、そこへ桁枠の下端も引くと
+        // 帯の内側に線が1本余る。交点は同じ`stringerBandGeometry`から取る（単一情報源）。
+        const botLo = mitreX != null ? Math.max(loX, Math.min(hiX, mitreX)) : loX;
+        prims.push(emitLine(cut, botLo, sideBot, hiX, sideBot, ElevationLineRole.DETAIL, { neverDowngrade: true }));
         const isFrontX = (x) => frontX != null && Math.abs(x - frontX) < GAP_EPS;
         if (!isFrontX(loX)) prims.push(emitLine(cut, loX, sideTop, loX, sideBot, ElevationLineRole.DETAIL, { neverDowngrade: true }));
         if (!isFrontX(hiX)) prims.push(emitLine(cut, hiX, sideTop, hiX, sideBot, ElevationLineRole.DETAIL, { neverDowngrade: true }));
@@ -648,14 +739,20 @@ export function stairPrimitivesForCut(contribution, cut, columns) {
   if (isSteel) {
     for (const secondary of contribution.secondaryFlights ?? []) {
       if (isBlockedByWall(columns, cut, secondary)) continue;
-      const points = clipStringerToAnchors(computeFlightZigzagPoints(secondary, cut, columns), contribution.unit, secondary);
-      prims.push(...stringerPrimitives(points, STEEL_STRINGER_DEPTH_MM, flightZBounds(secondary)));
+      const prof = computeFlightProfile(secondary, cut, columns);
+      const points = clipStringerToAnchors(prof.points, contribution.unit, secondary);
+      prims.push(...stringerPrimitives(points, STEEL_STRINGER_DEPTH_MM, flightZBounds(secondary),
+        { noses: prof.noses, baseboardMm: contribution.unit?.baseboardHeightMm ?? 0,
+          ...landingMitreOpts(secondary, contribution.landings, contribution.unit) }));
     }
   }
   for (const landing of contribution.landings ?? []) {
     prims.push(...landingCutPrimitives(landing, stairIsVertical, cut, columns));
     // WP-A2: 踊り場の桁枠（front/back/side桁。STEEL・RCが対象。ユーザー裁定2026-08-23）。
-    if (hasFrame) prims.push(...landingFramePrimitives(landing, cut, columns, contribution.unit));
+    if (hasFrame) {
+      const mitreX = isSteel ? landingSideMitreX(contribution, landing, cut, columns) : null;
+      prims.push(...landingFramePrimitives(landing, cut, columns, contribution.unit, mitreX));
+    }
   }
   // ささら側面視（鉄骨のみ。§6「鉄骨階段のみ」）: 各レーンのジグザグ点列ごとに桁成ぶん下げた
   // 輪郭（DETAIL＝切断面の向こう側にあるこのレーン自身のささら）を追加する。ユーザー指示
@@ -663,7 +760,10 @@ export function stairPrimitivesForCut(contribution, cut, columns) {
   // CUTとして見えるようになったため、これは踏面のCUTに重ねて描く追加の輪郭になる）。
   if (isSteel) {
     for (const { points, flight } of zigzagEntries) {
-      prims.push(...stringerPrimitives(points, STEEL_STRINGER_DEPTH_MM, flightZBounds(flight)));
+      prims.push(...stringerPrimitives(points, STEEL_STRINGER_DEPTH_MM, flightZBounds(flight),
+        { noses: computeFlightProfile(flight, cut, columns).noses,
+          baseboardMm: contribution.unit?.baseboardHeightMm ?? 0,
+          ...landingMitreOpts(flight, contribution.landings, contribution.unit) }));
     }
   }
   return prims;

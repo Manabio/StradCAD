@@ -39,25 +39,26 @@ import { straightCuts } from './section/cuts/straightCuts.js';
 import { UNSUPPORTED_FAN_LANE_TYPES, fanLaneCuts } from './section/cuts/fanCuts.js';
 import { makeProbeContext } from './section/sectionProbe.js';
 import { buildColumns, buildSectionFigure } from './section/sectionEngine.js';
-import { emitColumns, emitOpenGapMarks, emitLine } from './section/sectionEmit.js';
-import { stairPrimitivesForCut, stairWallGapZones } from './section/sectionStair.js';
+import { emitColumns, emitOpenGapMarks, emitLine, splitGapMarksByStair } from './section/sectionEmit.js';
+import { stairPrimitivesForCut, stairWallGapZones, stairOccluderRects } from './section/sectionStair.js';
 import { structuralContribution, structuralPrimitivesForCut } from './section/sectionStructure.js';
 import { worldToCell } from '../finish/gridCells.js';
-import { labelFaces } from './elevationFaces.js';
+import { labelFaces, letterOf } from './elevationFaces.js';
 import { collectRunBreaks } from './elevationFloorProfile.js';
-import { ElevationLineRole, GAP_EPS_MM as GAP_EPS, PROBE_EPS_MM } from './elevationStyle.js';
+import {
+  ElevationLineRole, GAP_EPS_MM as GAP_EPS, PROBE_EPS_MM, DEFAULT_WALL_LESS_END_EXTEND_MM,
+} from './elevationStyle.js';
 
 function flatFloorSegments(run, floorDeltaMm, chMm) {
   return [{ loX: 0, hiX: run, floorDeltaMm, chMm }];
 }
 
-// 往路（entry→landing）の勾配天井プロファイル。upperCeilCappedなら往路上はceilLowAbsで水平のまま
-// （リード裁定の解釈で、最上階キャップ時の踊り場側との段差の縦線は本WPでは描画しない。
-// .claude/elevation-model.mdの階段帯節・完了条件の「逸脱＋理由」参照）。
-function outboundCeilingProfile(run, ceilLowAbs, ceilTopAbs, upperCeilCapped) {
-  return upperCeilCapped
-    ? [[0, ceilLowAbs], [run, ceilLowAbs]]
-    : [[0, ceilLowAbs], [run, ceilTopAbs]];
+// 往路（entry→landing）の勾配天井プロファイル。上り口側は1F天井（ceilLowAbs）、踊り場側は
+// 上階天井（ceilTopAbs）。かつてupperCeilCapped時は全区間ceilLowAbsで水平にする短絡が
+// あったが、ユーザー実機指摘2026-08（「2FL天井断面線は、3500左CLの外へ延長して終わる」）で
+// 廃止した（buildLaneFloorAndCeilingのコメント参照）。
+function outboundCeilingProfile(run, ceilLowAbs, ceilTopAbs) {
+  return [[0, ceilLowAbs], [run, ceilTopAbs]];
 }
 
 // ==== ユーザー実機フィードバック2026-08-23第3弾 項目A ====
@@ -149,7 +150,7 @@ function stepCeilingProfile(segs) {
  * seq2は[レーン,踊り場]の順・seq4は鏡像で[踊り場,レーン]の順になる——どちらの順でも
  * 正しく組み立てられるようfloorDeltaMm===0かどうかだけで判定する）、aboveLayerがあれば
  * 実Room有無で1F天井高さ(ceilLowAbs)／上階天井(ceilTopAbs)を区間ごとに割り当てる。
- * aboveLayer無し・upperCeilCapped時は現行の決め打ち（floorSegmentsはfloorDeltaSegsの区分
+ * aboveLayer無し時は現行の決め打ち（floorSegmentsはfloorDeltaSegsの区分
  * そのまま。レーン区間=ceilLowAbs・踊り場区間=ceilTopAbs／ceilingProfileは呼び出し側が渡す
  * fallbackCeilingProfileをそのまま使う）のまま（挙動不変のフォールバック——旧seq2/seq4の
  * ceilingProfileは「レーンから踊り場へ向けて勾配で立ち上がる」非対称な式で、floorDeltaSegsの
@@ -160,34 +161,36 @@ function stepCeilingProfile(segs) {
  * @param {ReturnType<typeof makeProbeContext>} probeCtx
  * @param {number} ceilLowAbs
  * @param {number} ceilTopAbs
- * @param {boolean} upperCeilCapped
  * @param {Array<[number,number]>} fallbackCeilingProfile - aboveLayer無し時に使う既存の
  *   ceilingProfileリテラル（挙動不変のため）。
  * @returns {{floorSegments:object[], ceilingProfile:Array<[number,number]>}}
  */
 function buildLaneFloorAndCeiling(
-  face, floorDeltaSegs, aboveLayer, probeCtx, ceilLowAbs, ceilTopAbs, upperCeilCapped, fallbackCeilingProfile,
+  face, floorDeltaSegs, aboveLayer, probeCtx, ceilLowAbs, ceilTopAbs, fallbackCeilingProfile,
 ) {
   const run = face.run;
-  if (upperCeilCapped) {
-    // 最上階キャップ時は現行どおり全区間ceilLowAbsで水平（不変。ASSUMED: 項目Aは
-    // 「above層の実Room有無」の話であり、最上階（above層自体が存在しない）は対象外）。
-    return {
-      floorSegments: floorDeltaSegs.map(s => ({ ...s, chMm: ceilLowAbs - s.floorDeltaMm })),
-      ceilingProfile: [[0, ceilLowAbs], [run, ceilLowAbs]],
-    };
-  }
+  // **最上階キャップ（upperCeilCapped）による「全区間ceilLowAbsで水平」の短絡は廃止した**（ユーザー実機指摘2026-08
+  // 「2FL天井断面線は、3500左CLの外へ延長して終わる」）——実機データ（floorHeight=3000・
+  // chLower=2400・chUpperAbs=5400・upperCeilCapped=true）で、この短絡が天井プロファイルを
+  // フラット2400にし、階段室の上まで1F天井が貫通していた。一方でcontent（レイキャスト）は
+  // 同じ面に2F天井(5400)を描いており、**図形とcontentが食い違っていた**。
+  // upperCeilCappedは「上階が最上階かつCHが明示指定でない（既定値へフォールバック）」という
+  // 弱い条件で立つ推測（設計メモにもASSUMEDと明記）であり、実機の指摘と矛盾する。
+  // chUpperAbsMm自体は他の描画で既に使われているため、天井もそれに揃える方が一貫する。
   const aboveSegs = aboveRoomSegmentsOnFace(face, aboveLayer, probeCtx);
-  // フォールバック（挙動不変）が働く条件: aboveLayer未指定（判定不能）、または上階の実Room有無が
-  // face全体で一様（全区間hasRoom同じ値）——一様な場合は「レーン/踊り場のどちらかにだけ床が
-  // ある」という項目Aが対象とする区別自体が発生しないため、既存の勾配天井（旧「QA修正1」で
-  // 検証済みの、全面吹抜けの階段室を正面ドア付近=通常天井高さ→奥の吹抜け=上階天井高さへ
-  // 徐々に開けていく作図表現）をそのまま使う（挙動不変。既存テスト
-  // 「往路面の天井は勾配のCUT polyline」参照）。項目Aが対象とするのは「上階の床が階段室の
-  // 一部（例: 踊り場の真上）にだけある」という非一様なケースに限る。
-  const isUniform = aboveSegs && aboveSegs.length > 0
-    && aboveSegs.every(s => s.hasRoom === aboveSegs[0].hasRoom);
-  if (!aboveSegs || aboveSegs.length === 0 || isUniform) {
+  // フォールバック（呼び出し側の勾配天井リテラル）が働く条件は**aboveLayerが無く判定できない
+  // ときだけ**。
+  // 旧実装は「上階の実Room有無がface全体で一様なら実測を捨ててフォールバックへ戻す」という
+  // 短絡も持っていた（コード上も「挙動不変のASSUMED判断」と明記）が、ユーザー実機指摘2026-08
+  // 「6」D／B1（「2FL天井断面線は3500左CLの外へ延長して終わる」「B1はDの反転が正解」）で
+  // 誤りと判明したため削除した——実機の階段室は往路面の全長にわたって上階に床が無い
+  // （全面吹抜け。列ダンプでseq2の全列がwall/cutのみでslab無し）ため一様と判定され、
+  // 「測れているのに測定結果を捨てる」動作になっていた。結果、天井が
+  // PL[-285,2400 → 0,2400 → 2442.5,5400 → 3442.5,5400]という斜めの勾配になり、
+  // 上階天井(5400)の断面線が壁のない端まで届かなかった。
+  // 一様でも実測どおり（hasRoom無し＝全区間ceilTopAbsで水平／有り＝全区間ceilLowAbsで水平）に
+  // 割り当てるのが正しい。フォールバックの勾配は「判定不能時の作図上の便法」として残す。
+  if (!aboveSegs || aboveSegs.length === 0) {
     const floorSegments = floorDeltaSegs.map(s => ({
       ...s, chMm: (s.floorDeltaMm === 0 ? ceilLowAbs : ceilTopAbs) - s.floorDeltaMm,
     }));
@@ -257,7 +260,10 @@ export function kneeWallCapContent(content, cut, kneeDrop, floorHeight, ceilTopA
   const wallLoX = wallXs[0], wallHiX = wallXs[wallXs.length - 1];
   const rest = content.filter(p => !wallEdges.includes(p));
 
-  const topLine = emitLine(cut, wallLoX, topZ, wallHiX, topZ, ElevationLineRole.CUT);
+  // 天端のCUT水平線はここでは描かない: `emitColumns`の`cutWallTopEdges`が「見えている天井より
+  // 下で終わる切断壁」の天端を壁ごとに1本描くようになったため（ユーザー実機指摘2026-08「6」D）。
+  // ここでも描くと同じ線が2本になる（seq1の既存テスト「上端水平線が1本」で検出される）。
+  // 本関数に残る役割は「'cut'両端縦線の除去」と「腰壁の上＋横のL字アキの合成」の2つ。
 
   // 腰壁の上(topZ〜ceilTopAbs)〜横（腰壁の無い側）のL字アキ: 既存のアキX（dash:'center'の
   // 対角線ペア）のうちz範囲が[topZ,ceilTopAbs]と重なり、x範囲が壁の左右いずれかに隣接する
@@ -285,7 +291,7 @@ export function kneeWallCapContent(content, cut, kneeDrop, floorHeight, ceilTopA
     emitLine(cut, mergedLoX, mergedZLo, mergedHiX, mergedZHi, ElevationLineRole.DETAIL, { dash: 'center' }),
     emitLine(cut, mergedLoX, mergedZHi, mergedHiX, mergedZLo, ElevationLineRole.DETAIL, { dash: 'center' }),
   ];
-  return [...remaining, topLine, ...xMark];
+  return [...remaining, ...xMark];
 }
 
 // dash:'center'の対角線配列を2本ずつ(X字1組)にまとめる（emitOpenGapMarksは常に2本1組で
@@ -329,11 +335,45 @@ function clipWallFloorEdgeUnderZigzag(wallContent, stairContent) {
   });
 }
 
-function contentForCut(cut, probeCtx) {
+/**
+ * 壁のない端部（face.hasWallAtLocal0/Runがfalse）の外側へ、レイキャストの探査範囲を
+ * endExtendMmぶん広げたcutのクローンを返す（ユーザー裁定2026-08 A案）。
+ * 面の端で切れている壁・床スラブ・天井は「そこで終わる」のではなく面の外へ続いており、
+ * その取り合い（腰壁の外側面・隣室の1F天井断面・2FL床断面）を作図するには外側の実データが要る
+ * ——旧案の「出来上がった水平線プリミティブを後から引き伸ばす」では、外側面の位置（＝壁厚）が
+ * そもそも探査されていないため腰壁のZ字プロファイルを作れなかった（列ダンプで確認）。
+ * cut.line.lo/hi自体は変えない＝x=0の起点（cutOriginWorld）が動かないため既存座標はずれない。
+ * ローカルx=0側／run側のどちらがworldのlo側かはdirSignで決まる。
+ */
+function withProbeExtension(cut, endExtendMm, bandRoom = null) {
+  const openLo = cut.face?.hasWallAtLocal0 === false;
+  const openHi = cut.face?.hasWallAtLocalRun === false;
+  const localLoIsWorldLo = cut.dirSign > 0;
+  const extend = !!endExtendMm && (openLo || openHi);
+  // bandRoom: 見えがかり壁の探索を帯自身の部屋の広がりに限る（sectionProbe.jsのwithinViewRoom）。
+  return { ...cut, bandRoom, line: !extend ? cut.line : { ...cut.line,
+    probeExtendLoMm: (localLoIsWorldLo ? openLo : openHi) ? endExtendMm : 0,
+    probeExtendHiMm: (localLoIsWorldLo ? openHi : openLo) ? endExtendMm : 0 } };
+}
+
+function contentForCut(cut, probeCtx, endExtendMm = 0, bandRoom = null) {
   if (!cut) return [];
-  const columns = buildColumns(cut, probeCtx);
-  const emitCtx = { ceilZ: cut.zRange?.hiZ };
-  const wallContent = [...emitColumns(columns, cut, emitCtx), ...emitOpenGapMarks(columns, cut, emitCtx)];
+  const columns = buildColumns(withProbeExtension(cut, endExtendMm, bandRoom), probeCtx);
+  // openEndLo/Hi: この面の端に壁が無い（壁面がその先へ続く）なら、描画範囲の端に凹み側面線を
+  // 出さない（ユーザー実機指摘2026-08「3500左CLにエッジはない」。sectionEmit.js参照）。
+  // cut.face（switchbackCuts.jsが各cutへ載せる面記述子）のhasWallAtLocal0/Runがそのまま
+  // ローカルx=0/run側の端に対応する（cut.dirSignとfaceのdirSignはreorientFaceで揃えてある）。
+  const emitCtx = {
+    ceilZ: cut.zRange?.hiZ,
+    openEndLo: cut.face?.hasWallAtLocal0 === false,
+    openEndHi: cut.face?.hasWallAtLocalRun === false,
+  };
+  // アキのバツは、手前に階段が描かれる区間だけ破線へ落とす（ユーザー実機指摘2026-08「6」C
+  // 「但し、階段に隠れる部分は破線」）。隠れる範囲はプリミティブからの逆算ではなくflight自身の
+  // 見付け矩形（stairOccluderRects）から求める。
+  const gapMarks = splitGapMarksByStair(
+    emitOpenGapMarks(columns, cut, emitCtx), stairOccluderRects(cut.stairCut ?? null, cut));
+  const wallContent = [...emitColumns(columns, cut, emitCtx), ...gapMarks];
   const stairContent = stairPrimitivesForCut(cut.stairCut ?? null, cut, columns);
   // WP-C: 構造梁（踊り場受け梁等）の加算寄与。stairContentと独立の別レイヤのため、
   // clipWallFloorEdgeUnderZigzag（階段ジグザグの向こうの壁縁除去）の対象には含めない。
@@ -363,7 +403,7 @@ function buildStraightFaceSequence(stair, faces, graph, opts) {
  * @param {import('@core').Stair} stair
  * @param {object[]} faces - composeRoomFaces(stairRoom, graph) の結果
  * @param {object} graph - 設置階のgraph
- * @param {{floorHeight:number, chUpperAbsMm:number, chLowerMm:number, upperCeilCapped?:boolean}} opts
+ * @param {{floorHeight:number, chUpperAbsMm:number, chLowerMm:number}} opts
  *   chUpperAbsMm … 上階天井の絶対高さ（floorHeight+CH_upper。呼び出し側で計算済みの値をそのまま使う）。
  *   chLowerMm … 設置階の天井高さ（CH。絶対高さそのもの＝設置階FL=0基準）。
  * @returns {Array<{seqNo:string, face:object, floorSegments:object[], ceilingProfile?:Array<[number,number]>,
@@ -381,13 +421,29 @@ export function stairFaceSequence(stair, faces, graph, opts = {}) {
   if (!cutTable) return null; // フォールバック契約: switchbackCutsのnull条件をそのまま延長する
 
   const {
-    cuts, wEntry, wLanding, wOut1, wOut2, underFloorZ,
-    ceilTopAbs, ceilLowAbs, upperCeilCapped, contribution, kneeDrop,
+    cuts, wEntry, wLanding, wOut1, wOut2, underFloorZ, hasRoomUnder,
+    ceilTopAbs, ceilLowAbs, contribution, kneeDrop,
   } = cutTable;
   const { landingLen } = cutTable.params;
   const floorHeight = opts.floorHeight;
   const hasCut = seqNo => cuts.some(c => c.seqNo === seqNo);
   const cutOf = seqNo => cuts.find(c => c.seqNo === seqNo);
+  // 壁のない端部の延長量（content側。図形側elevationFigure.jsのdrawnX0/drawnXRunと同じ値を使い、
+  // 同じ端で線の長さを揃える）。倍率決定の1パス目は未指定＝既定の仮値（elevationStyle.js）。
+  const endExtendMm = opts.wallLessEndExtendModelMm ?? DEFAULT_WALL_LESS_END_EXTEND_MM;
+  // 帯自身の部屋（階段室）。見えがかり壁の探索範囲をこの部屋の広がりに限る
+  // （sectionProbe.jsのwithinViewRoom。ユーザー実機指摘2026-08「6」C・裁定A案）。
+  const bandRoom = [...(graph.rooms ?? [])].find(r => r.id === stair.roomId) ?? null;
+  // 往復間の壁の芯を一点鎖線で示す（ユーザー実機指摘2026-08「6」C「1500の一点鎖線が出ていない」）。
+  // この壁は切断線から見て**面の裏側**へ伸びるため、elevationFigure.jsの直交壁検出
+  // （室内側へ突出する袖壁が対象）に掛からず、一点鎖線の源が1つも無かった。
+  // 面に直交し、かつ芯が面の範囲内にある面にだけ載せる（面と平行なB/D側には出ない）。
+  const midWall = cutTable.wall ?? null;
+  const midWallCLXs = face => {
+    if (!midWall || !face || midWall.isVertical === face.isVertical) return undefined;
+    const x = (midWall.axisCL.effectiveValue - face.originWorld) * face.dirSign;
+    return (x > GAP_EPS && x < face.run - GAP_EPS) ? [x] : undefined;
+  };
 
   // WP-E5b: content生成はエンジン経由（makeProbeContext→cutごとにcontentForCut）。
   // 全cutが同一のlayers参照を共有する（switchbackCuts.js参照）ため、probeCtxは1回だけ作る。
@@ -407,7 +463,7 @@ export function stairFaceSequence(stair, faces, graph, opts = {}) {
     // 実機フィードバック第3弾F: 往復間の壁が2F腰壁（kneeDrop.knee）なら両端縦線を上端水平線
     // へ差し替え、腰壁の上＋横のL字アキに一点鎖線Xを合成する（kneeWallCapContent参照）。
     content: [
-      ...kneeWallCapContent(contentForCut(cutOf('1'), probeCtx), cutOf('1'), kneeDrop, floorHeight, ceilTopAbs),
+      ...kneeWallCapContent(contentForCut(cutOf('1'), probeCtx, endExtendMm, bandRoom), cutOf('1'), kneeDrop, floorHeight, ceilTopAbs),
       ...wallGapXMarks(cutOf('1'), contribution, ceilLowAbs),
     ],
     skipBaseboard: true, skipWallLabel: true,
@@ -424,25 +480,25 @@ export function stairFaceSequence(stair, faces, graph, opts = {}) {
     // （elevationFigure.jsのbuildFaceFigure参照。段差縦線・注記等の他の処理は不変）。
     const floorDeltaSegs2 = laneLenOnFace > 0
       ? [
-          { loX: 0, hiX: laneLenOnFace, floorDeltaMm: 0, hideFlatLine: true },
+          { loX: 0, hiX: laneLenOnFace, floorDeltaMm: 0, hideFlatLine: hasRoomUnder },
           { loX: laneLenOnFace, hiX: outFace2.run, floorDeltaMm: underFloorZ },
         ]
       : [{ loX: 0, hiX: outFace2.run, floorDeltaMm: underFloorZ }];
     // 項目A: floorSegments/ceilingProfileはbuildLaneFloorAndCeiling（above層の実Room有無）で
     // 決める——laneLenOnFace境界だけの決め打ちだった旧実装を置き換える。fallbackCeilingProfile2
     // はaboveLayer未指定時に使う旧来のリテラル（挙動不変）。
-    const fallbackCeilingProfile2 = upperCeilCapped
-      ? [[0, ceilLowAbs], [outFace2.run, ceilLowAbs]]
-      : laneLenOnFace > 0
+    // 最上階キャップの分岐は廃止（buildLaneFloorAndCeiling参照）。フォールバックも常に
+    // 「上り口側=1F天井 → 奥の吹抜け=上階天井」の形にする。
+    const fallbackCeilingProfile2 = laneLenOnFace > 0
         ? [[0, ceilLowAbs], [laneLenOnFace, ceilTopAbs], [outFace2.run, ceilTopAbs]]
         : [[0, ceilTopAbs], [outFace2.run, ceilTopAbs]];
     const { floorSegments: floorSegments2, ceilingProfile: ceilingProfile2 } = buildLaneFloorAndCeiling(
-      outFace2, floorDeltaSegs2, aboveLayer, probeCtx, ceilLowAbs, ceilTopAbs, upperCeilCapped, fallbackCeilingProfile2);
+      outFace2, floorDeltaSegs2, aboveLayer, probeCtx, ceilLowAbs, ceilTopAbs, fallbackCeilingProfile2);
     entries.push({
       seqNo: '2', face: outFace2,
       floorSegments: floorSegments2,
       ceilingProfile: ceilingProfile2,
-      content: contentForCut(cutOf('2'), probeCtx), skipBaseboard: true, skipWallLabel: true,
+      content: contentForCut(cutOf('2'), probeCtx, endExtendMm, bandRoom), skipBaseboard: true, skipWallLabel: true,
     });
   }
 
@@ -452,8 +508,8 @@ export function stairFaceSequence(stair, faces, graph, opts = {}) {
     entries.push({
       seqNo: '2.5', face: midOutFace,
       floorSegments: flatFloorSegments(midOutFace.run, 0, ceilLowAbs),
-      ceilingProfile: outboundCeilingProfile(midOutFace.run, ceilLowAbs, ceilTopAbs, upperCeilCapped),
-      content: contentForCut(cutOf('2.5'), probeCtx), skipBaseboard: true, skipWallLabel: true,
+      ceilingProfile: outboundCeilingProfile(midOutFace.run, ceilLowAbs, ceilTopAbs),
+      content: contentForCut(cutOf('2.5'), probeCtx, endExtendMm, bandRoom), skipBaseboard: true, skipWallLabel: true,
     });
   }
 
@@ -461,7 +517,7 @@ export function stairFaceSequence(stair, faces, graph, opts = {}) {
   entries.push({
     seqNo: '3', face: wLanding,
     floorSegments: flatFloorSegments(wLanding.run, underFloorZ, ceilTopAbs - underFloorZ),
-    content: contentForCut(cutOf('3'), probeCtx), skipBaseboard: true, skipWallLabel: true,
+    content: contentForCut(cutOf('3'), probeCtx, endExtendMm, bandRoom), skipBaseboard: true, skipWallLabel: true,
   });
 
   // ---- 4: W_out2（seq2の鏡像構成） ----
@@ -474,23 +530,21 @@ export function stairFaceSequence(stair, faces, graph, opts = {}) {
     const floorDeltaSegs4 = landingHi4 < outFace4.run
       ? [
           { loX: 0, hiX: landingHi4, floorDeltaMm: underFloorZ },
-          { loX: landingHi4, hiX: outFace4.run, floorDeltaMm: 0, hideFlatLine: true },
+          { loX: landingHi4, hiX: outFace4.run, floorDeltaMm: 0, hideFlatLine: hasRoomUnder },
         ]
       : [{ loX: 0, hiX: outFace4.run, floorDeltaMm: underFloorZ }];
     // 項目A: seq2と同じくbuildLaneFloorAndCeilingで決める（fallbackCeilingProfile4は
     // aboveLayer未指定時に使う旧来のリテラル。挙動不変）。
-    const fallbackCeilingProfile4 = upperCeilCapped
-      ? [[0, ceilLowAbs], [outFace4.run, ceilLowAbs]]
-      : landingHi4 < outFace4.run
+    const fallbackCeilingProfile4 = landingHi4 < outFace4.run
         ? [[0, ceilTopAbs], [landingHi4, ceilTopAbs], [outFace4.run, ceilLowAbs]]
         : [[0, ceilTopAbs], [outFace4.run, ceilTopAbs]];
     const { floorSegments: floorSegments4, ceilingProfile: ceilingProfile4 } = buildLaneFloorAndCeiling(
-      outFace4, floorDeltaSegs4, aboveLayer, probeCtx, ceilLowAbs, ceilTopAbs, upperCeilCapped, fallbackCeilingProfile4);
+      outFace4, floorDeltaSegs4, aboveLayer, probeCtx, ceilLowAbs, ceilTopAbs, fallbackCeilingProfile4);
     entries.push({
       seqNo: '4', face: outFace4,
       floorSegments: floorSegments4,
       ceilingProfile: ceilingProfile4,
-      content: contentForCut(cutOf('4'), probeCtx), skipBaseboard: true, skipWallLabel: true,
+      content: contentForCut(cutOf('4'), probeCtx, endExtendMm, bandRoom), skipBaseboard: true, skipWallLabel: true,
     });
   }
 
@@ -500,7 +554,7 @@ export function stairFaceSequence(stair, faces, graph, opts = {}) {
     entries.push({
       seqNo: '4.5', face: midRetFace,
       floorSegments: flatFloorSegments(midRetFace.run, underFloorZ, ceilTopAbs - underFloorZ),
-      content: contentForCut(cutOf('4.5'), probeCtx), skipBaseboard: true, skipWallLabel: true,
+      content: contentForCut(cutOf('4.5'), probeCtx, endExtendMm, bandRoom), skipBaseboard: true, skipWallLabel: true,
     });
   }
 
@@ -510,15 +564,30 @@ export function stairFaceSequence(stair, faces, graph, opts = {}) {
     entries.push({
       seqNo: '5', face: outFace5,
       floorSegments: flatFloorSegments(outFace5.run, underFloorZ, ceilTopAbs - underFloorZ),
-      content: contentForCut(cutOf('5'), probeCtx), skipBaseboard: true, skipWallLabel: true,
+      content: contentForCut(cutOf('5'), probeCtx, endExtendMm, bandRoom), skipBaseboard: true, skipWallLabel: true,
     });
   }
 
-  // 展開記号の採番（ユーザー実機指摘2026-08「階段は、のぼり方で作図順が決まるので、展開記号は
-  // ケースバイケース」）: 各面のletterは既に`reorientFace`が歩行方向基準のdirSignから引き直して
-  // いる（`letterForDirSign`）。ここでは**歩行順に**同letterの連番を振り直す——部屋のface配列で
-  // 採番済みのlabel（コンパス順のB1/B2…）をそのまま使うと、reorient後のletterと食い違ううえ
-  // 並び順とも合わないため。labelFacesは「letterごとの出現順」で採番する既存の純関数をそのまま使う。
-  const relabeled = labelFaces(entries.map(e => e.face));
-  return entries.map((e, i) => ({ ...e, face: relabeled[i] }));
+  // 展開記号（ユーザー実機指摘2026-08「階段は、のぼり方で作図順が決まるので、展開記号は
+  // ケースバイケース」「「6」B2：Dが正解。先のDは往路階段で切断して…このDは、復路階段で切断して、
+  // 「5」D1と同面の壁を見ている」）:
+  // **記号は切断の「視線の向き」だけで決まる**——`cut.viewSign`は視線が向く世界方向
+  // （`isSightlineShape`の契約: 見えがかり候補は line から+viewSign側にある）なので、
+  // 面の規約（`letterOf(isVertical, inward)`。inwardは視線と逆向き）へは`-viewSign`を渡す。
+  // 旧実装は`reorientFace`が倒したdirSignから引いていたが、**dirSignは歩行方向で決まる作図順**
+  // であって視線ではない——実機で seq2 と seq5 は同じ towardS1（＝同じ向きを見る）なのに
+  // dirSignが違うため別記号になっていた（ユーザー指摘: どちらもD）。seq4だけが towardS0＝逆向きで
+  // B になる（前ラウンドのご指摘とも一致）。
+  // labelは歩行順に採番し直す（`labelFaces`。部屋のコンパス順の連番を持ち込まない）。
+  const relabeled = labelFaces(entries.map(e => {
+    const cut = cutOf(e.seqNo);
+    if (!cut?.line) return e.face;
+    return { ...e.face, letter: letterOf(cut.line.isVertical, -cut.viewSign) };
+  }));
+  return entries.map((e, i) => ({
+    ...e, face: relabeled[i],
+    // 往復間の壁の芯（一点鎖線のみ。寸法の鎖は分割しない）。elevationStair.jsのfaceOverride経由で
+    // buildFaceFigureのextraCenterLineXsへ渡る。
+    extraCenterLineXs: midWallCLXs(relabeled[i]),
+  }));
 }

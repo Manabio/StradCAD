@@ -645,6 +645,35 @@ test('【問題修正2026-08その2】buildFaceFigure: 開放先の天井が天�
   assert.equal(gapRect.y, -2400, 'far天井が高い場合、アキの上端は近側の天井断面(-2400)までのはず');
 });
 
+// ---- ユーザー実機指摘2026-08「6」C「1500の一点鎖線が出ていない」 ----
+// 階段帯の往復間の壁は切断線から見て面の裏側へ伸びるため、直交壁の検出（室内側へ突出する袖壁が
+// 対象）に掛からず一点鎖線の源が無かった。呼び出し側が明示指定できるctx.extraCenterLineXsを追加。
+test('【実機指摘】buildFaceFigure: extraCenterLineXsの位置に一点鎖線を描き、寸法の鎖は分割しない', () => {
+  const face = makeFace();
+  const dimsOf = prims => prims.filter(p => p.type === 'dim' && p.dir === 'h')
+    .map(p => [p.from, p.to]);
+  const centersOf = prims => prims.filter(p => p.type === 'line' && p.dash === 'center' && p.x1 === p.x2)
+    .map(p => p.x1).sort((a, b) => a - b);
+
+  const before = buildFaceFigure(face, baseCtx({}));
+  const after = buildFaceFigure(face, baseCtx({ extraCenterLineXs: [1500] }));
+
+  assert.ok(!centersOf(before).includes(1500), '前提: 既定では1500に一点鎖線は無い');
+  assert.ok(centersOf(after).includes(1500), 'extraCenterLineXsの位置に一点鎖線が出るはず');
+  assert.deepEqual(dimsOf(after), dimsOf(before), '寸法の鎖は変わらないはず（線だけ追加する）');
+});
+
+test('【失敗系・実機指摘】buildFaceFigure: 既に一点鎖線がある位置のextraCenterLineXsは重複して描かない', () => {
+  const face = makeFace();
+  const centersAt = (prims, x) => prims.filter(p =>
+    p.type === 'line' && p.dash === 'center' && p.x1 === p.x2 && Math.abs(p.x1 - x) < 1e-6).length;
+  const base = buildFaceFigure(face, baseCtx({}));
+  const existing = base.filter(p => p.type === 'line' && p.dash === 'center' && p.x1 === p.x2)[0];
+  assert.ok(existing, '前提: 既定でも一点鎖線が1本はある');
+  const dup = buildFaceFigure(face, baseCtx({ extraCenterLineXs: [existing.x1] }));
+  assert.equal(centersAt(dup, existing.x1), centersAt(base, existing.x1), '同じ位置に2本目は出ないはず');
+});
+
 // ---- QA H1: bc破線が最上位の水平線になる面では、注記の一点鎖線がその上へ突き出す ----
 test('【QA H1】buildFaceFigure: beyondCeilingsの破線より上へ注記の一点鎖線が突き出す', () => {
   const CH = 2400;

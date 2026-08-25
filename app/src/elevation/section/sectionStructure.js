@@ -20,7 +20,8 @@
  */
 import { findSectionEntry } from '../../structural/sectionCatalog.js';
 import { ElevationLineRole, GAP_EPS_MM as GAP_EPS } from '../elevationStyle.js';
-import { localXOf } from './sectionTypes.js';
+import { localXOf, cutDrawRange } from './sectionTypes.js';
+import { halfWallThicknessMm } from '../elevationFloorProfile.js';
 import { emitLine } from './sectionEmit.js';
 
 // 断面成(depthMm)のフォールバック既定値（sectionDefIdがカタログに無く・beamDepthも未設定の
@@ -73,6 +74,23 @@ function isInsideWall(beam, walls) {
     if (bSpanLo >= wLo - tol - GAP_EPS && bSpanHi <= wHi + tol + GAP_EPS) return true;
   }
   return false;
+}
+
+/**
+ * 断面ローカルx（＋許容はみ出しtolMm）が、その切断の描画範囲（cut.line.lo..hi。壁のない端部の
+ * 探査延長probeExtendLo/HiMmを含む）に掛かっているか。
+ * @param {import('./sectionTypes.js').SectionCut} cut
+ * @param {number} x
+ * @param {number} tolMm
+ * @returns {boolean}
+ */
+function withinCutDrawRange(cut, x, tolMm = 0) {
+  const { lo, hi } = cutDrawRange(cut);
+  // 切断線の範囲は**壁の仕上げ面基準**で、室境界の壁芯（CL）より半壁厚ぶん内側に詰まっている。
+  // 梁はCLからCLまで張るため、CL上に乗る梁を取りこぼさないよう半壁厚を許容に加える
+  // （`drawnSpanBoundaryX`等と同じ`halfWallThicknessMm`を使う。数値のハードコードはしない）。
+  const tol = tolMm + (cut.face ? halfWallThicknessMm(cut.face) : 0);
+  return x + tol >= lo - GAP_EPS && x - tol <= hi + GAP_EPS;
 }
 
 /**
@@ -252,6 +270,12 @@ export function structuralPrimitivesForCut(contribution, cut, columns) {
       cut.line.axisValue >= beam.spanLo - GAP_EPS && cut.line.axisValue <= beam.spanHi + GAP_EPS;
     if (crosses) {
       const x = localXOf(cut, beam.axisWorld);
+      // **梁の位置が切断線の描画範囲内であること**（上のdocコメントの契約。実装が抜けており、
+      // 面のはるか外——実機「6」では x=-6882.5 や x=-3325、面は 0..2885／-285..3442.5——にある
+      // 別スパンの梁の断面まで描いていた。ユーザー実機指摘2026-08「壁の中にある2階床梁の断面
+      // 描画不要」）。梁が室境界の壁芯（CL）に乗る場合を取りこぼさないよう、梁の半幅ぶんの
+      // はみ出しは許容する。壁のない端部の探査延長（probeExtendLo/HiMm）も範囲に含める。
+      if (!withinCutDrawRange(cut, x, halfW)) continue;
       prims.push(...rectLines(cut, x - halfW, x + halfW, beam.topZ, beam.depthMm));
       continue;
     }

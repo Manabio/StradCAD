@@ -4,18 +4,34 @@ import assert from 'node:assert/strict';
 import { StairType } from '@core';
 import {
   stairRunProfile, buildSwitchbackSectionPrimitives, resolveSwitchbackParams,
-  treadLadderLines, stringerPrimitives, STEEL_STRINGER_DEPTH_MM,
+  treadLadderLines, stringerPrimitives, stringerBandGeometry, STEEL_STRINGER_DEPTH_MM,
 } from './elevationStairSection.js';
 import { ElevationLineRole, weightForRole } from './elevationStyle.js';
 
 // ---- stairRunProfile: n段のジグザグ線（蹴上→踏面の繰り返し） ----
-test('stairRunProfile: n段ぶんの蹴上・踏面を繰り返し、終点はstartYからn*riser上がった位置になる', () => {
-  const n = 3, riser = 200, runLength = 900; // tread = 300/段
+test('stairRunProfile: n段ぶんの蹴上とn-1枚の踏面を繰り返し、終点はstartYからn*riser上がった位置になる', () => {
+  const n = 3, riser = 200, runLength = 900; // tread = 900/(3-1) = 450/段
   const { points, endX, endY } = stairRunProfile(n, riser, runLength, 0, 0, 1);
 
-  assert.equal(points.length, 1 + 2 * n, '起点1つ+段数ぶんの(蹴上,踏面)2点＝1+2n点のはず');
+  // 最終段の踏面は次区間（踊り場・上階床）の床が兼ねるため出さない＝1(起点)+n(蹴上)+(n-1)(踏面)。
+  assert.equal(points.length, 1 + n + (n - 1), '起点1つ+蹴上n点+踏面(n-1)点のはず');
   assert.equal(endY, -n * riser, `終点yは-n*riser(${-n * riser})のはず（実際:${endY}）`);
   assert.ok(Math.abs(endX - runLength) < 1e-6, `終点xはrunLength(${runLength})のはず（実際:${endX}）`);
+});
+
+// ---- ユーザー実機検算2026-08（「6」D）: 「3500左CLの上が1段目踏面、右へ2500いったところが
+// 踊り場高さ、かつ11段目」＝ 区間長2500・11段 → 踏面は 2500/(11-1) = 250 ----
+test('【実機検算】stairRunProfile: 区間長2500・11段なら踏面250・1段目踏面が起点・11段目で踊り場高さ', () => {
+  const n = 11, riser = 200, runLength = 2500;
+  const { points, endX, endY } = stairRunProfile(n, riser, runLength, 0, 0, 1);
+
+  // 段鼻（蹴上を上がり切った点）は奇数index。1段目の踏面が起点(x=0)から始まる。
+  const nosings = points.filter((_, i) => i % 2 === 1);
+  assert.equal(nosings.length, n, `段鼻はn(${n})点のはず（実際:${nosings.length}）`);
+  assert.equal(nosings[0][0], 0, '1段目踏面は起点（3500左CL）の上のはず');
+  assert.equal(nosings[1][0] - nosings[0][0], 250, '踏面ピッチは250のはず');
+  assert.equal(endX, 2500, '11段目（踊り場）は起点から右へ2500のはず');
+  assert.equal(endY, -n * riser, '11段目で踊り場高さに達するはず');
 });
 
 test('stairRunProfile: dir=-1では水平方向が左に進む', () => {
@@ -25,9 +41,11 @@ test('stairRunProfile: dir=-1では水平方向が左に進む', () => {
 
 // ---- 失敗系: n<1相当（0や負）はMath.max(1,...)で1段扱いになり例外を投げない ----
 test('【失敗系】stairRunProfile: n=0以下でも例外を投げず1段として扱う', () => {
-  const { points, endY } = stairRunProfile(0, 200, 600, 0, 0, 1);
-  assert.equal(points.length, 3); // 1(起点)+2(1段)
+  const { points, endY, endX } = stairRunProfile(0, 200, 600, 0, 0, 1);
+  // 1段（＝蹴上1本）だけの退化区間は踏面を持たない（唯一の踏面＝次区間の床が兼ねる）。
+  assert.equal(points.length, 2); // 1(起点)+1(蹴上)
   assert.equal(endY, -200);
+  assert.equal(endX, 0, '踏面が無いため水平には進まない（退化区間）');
 });
 
 function baseCtx(overrides = {}) {
@@ -177,7 +195,8 @@ test('【失敗系】treadLadderLines: steps=0は空配列', () => {
 // 細線(DETAIL)が正しい——太線は正面視の断面（sectionStair.jsのflightStringerFrontPrimitives）
 // 側に割り当てた。旧テストはCUTを期待していたが意味論を保ったまま更新する。
 test('stringerPrimitives: 段鼻点列（奇数index）を結ぶ直線からdepthMmオフセットした閉じたpolyline(DETAIL・見えがかりの細線)を返す', () => {
-  // stairRunProfile(2,200,600,0,0,1) 相当のジグザグ: 段鼻(奇数index)は(0,-200),(300,-400)
+  // stairRunProfile(2,200,600,0,0,1) 相当のジグザグ: 踏面ピッチ=600/(2-1)=600なので
+  // 段鼻(奇数index)は(0,-200),(600,-400)
   const profile = stairRunProfile(2, 200, 600, 0, 0, 1).points;
   const prims = stringerPrimitives(profile, STEEL_STRINGER_DEPTH_MM);
   assert.equal(prims.length, 1);
@@ -185,7 +204,7 @@ test('stringerPrimitives: 段鼻点列（奇数index）を結ぶ直線からdept
   assert.equal(prims[0].weight, weightForRole(ElevationLineRole.DETAIL));
   assert.equal(prims[0].points[0][0], 0);
   assert.equal(prims[0].points[0][1], -200);
-  assert.equal(prims[0].points[1][0], 300);
+  assert.equal(prims[0].points[1][0], 600);
   assert.equal(prims[0].points[1][1], -400);
   // オフセット辺（法線方向にdepthMmぶん）: 段鼻を結ぶ直線からの垂直距離がdepthMmになるはず
   const [x1, y1] = prims[0].points[0];
@@ -234,4 +253,106 @@ test('【失敗系・実機フィードバック第3弾B】stringerPrimitives: z
   const profile = stairRunProfile(2, 200, 600, 0, 0, 1).points;
   const prims = stringerPrimitives(profile, STEEL_STRINGER_DEPTH_MM, { yLo: 1000, yHi: 2000 });
   assert.deepEqual(prims, []);
+});
+
+// ---- ユーザー実機指摘2026-08（「6」D）: 「階段の蹴上、踏面に加え、蹴込を20で描画」 ----
+// 蹴込は Stair.nosing（core/stair.js に `nosing = 30, // 蹴込(mm)`）をそのまま使う。
+// 蹴上を蹴込ぶん奥へ引っ込め、段鼻の出を1本の水平セグメントとして点列へ挟む。
+test('【実機指摘】stairRunProfile: 蹴込>0なら蹴上が斜めの断面になり、最終段（踊り場への上り）も同じ', () => {
+  const n = 3, riser = 200, runLength = 500, k = 20; // 踏面 = 500/2 = 250
+  const { points, noses, endX, endY } = stairRunProfile(n, riser, runLength, 0, 0, 1, k);
+
+  // 蹴上は斜線1本なので点数は蹴込0のときと同じ＝起点1 + 蹴上n + 踏面(n-1)。
+  assert.equal(points.length, 1 + n + (n - 1));
+  assert.equal(noses.length, n, '段鼻はn点');
+  assert.deepEqual(noses, points.filter((_, i) => i % 2 === 1),
+    '蹴上が斜線1本なので段鼻は従来どおり奇数indexに戻る');
+  // 起点（上り口の床）は蹴上の足元＝段鼻から蹴込ぶん奥。
+  assert.deepEqual(points[0], [k, 0]);
+  // 1段目の蹴上は (k,0)→(0,-riser) の斜線（水平にkだけ戻りながら上がる）。
+  assert.deepEqual(points[1], [0, -riser]);
+  // 踏面は段鼻から次の蹴上の足元まで＝踏面ピッチ+蹴込。
+  assert.deepEqual(points[2], [250 + k, -riser]);
+  // 最終段（踊り場への上り）も同じく斜め: 足元(250+k,-2*riser) → 段鼻(250? ) の形になる。
+  const lastNose = noses[noses.length - 1];
+  const beforeLast = points[points.length - 2];
+  assert.ok(beforeLast[0] !== lastNose[0] && beforeLast[1] !== lastNose[1],
+    '最終段の蹴上も水平・垂直ではなく斜めのはず');
+  assert.equal(lastNose[1], -n * riser, '最終段の段鼻は踊り場高さ');
+  assert.equal(endX, runLength);
+  assert.equal(endY, -n * riser);
+});
+
+test('【失敗系・実機指摘】stairRunProfile: 蹴込0（既定）なら点列も段鼻も従来どおり', () => {
+  const a = stairRunProfile(4, 200, 900, 0, 0, 1);        // 蹴込省略
+  const b = stairRunProfile(4, 200, 900, 0, 0, 1, 0);     // 明示的に0
+  assert.deepEqual(a.points, b.points);
+  assert.deepEqual(a.noses, a.points.filter((_, i) => i % 2 === 1),
+    '蹴込0なら段鼻は従来どおり奇数indexの点と一致するはず');
+});
+
+test('【失敗系・実機指摘】stairRunProfile: 蹴込が踏面を超えても輪郭が自己交差しない（踏面でクランプ）', () => {
+  const { noses, points } = stairRunProfile(3, 200, 500, 0, 0, 1, 9999);
+  // 蹴込は踏面(250)でクランプされ、蹴上の足元は段鼻から高々踏面ぶんしか奥へ行かない。
+  assert.equal(points[0][0] - noses[0][0], 250);
+});
+
+// ---- ユーザー実機指摘2026-08: 「鉄骨階段ささらの上端は、踏面先端で巾木同寸」 ----
+// 上端線を段鼻の勾配線から巾木高さぶん上へ上げることで、踊り場桁枠side辺の上端
+// （landing.z + baseboardHeightMm。sectionStair.jsのlandingFramePrimitives）と踊り場の縁で
+// ちょうど一致する＝「直進部の斜めささらと踊り場ささらが取り合う」の上端側が成立する。
+test('【実機指摘】stringerPrimitives: 上端線は段鼻から巾木高さぶん上（踊り場桁枠の上端と揃う）', () => {
+  const { points, noses } = stairRunProfile(3, 200, 500, 0, 0, 1, 20);
+  const baseboardMm = 60;
+  const withBb = stringerPrimitives(points, STEEL_STRINGER_DEPTH_MM, undefined, { noses, baseboardMm });
+  const without = stringerPrimitives(points, STEEL_STRINGER_DEPTH_MM, undefined, { noses });
+  assert.equal(withBb.length, 1);
+  // yは上向き負。巾木ぶん上＝yが小さくなる。
+  assert.equal(withBb[0].points[0][1], without[0].points[0][1] - baseboardMm);
+  assert.equal(withBb[0].points[1][1], without[0].points[1][1] - baseboardMm);
+  // 最終段の段鼻の高さ＝踊り場高さ(-3*200)。その上端は「踊り場高さ+巾木」に一致する。
+  assert.equal(withBb[0].points[1][1], -(3 * 200) - baseboardMm,
+    '上端の終点は「踊り場床＋巾木高さ」＝踊り場桁枠side辺の上端と同じ高さのはず');
+});
+
+test('【失敗系・実機指摘】stringerPrimitives: nosesを渡さなければ従来どおり奇数indexで段鼻を拾う', () => {
+  const { points } = stairRunProfile(3, 200, 900, 0, 0, 1); // 蹴込なし＝偶奇が成立する形
+  const explicitNoses = stringerPrimitives(points, STEEL_STRINGER_DEPTH_MM, undefined,
+    { noses: points.filter((_, i) => i % 2 === 1) });
+  const heuristic = stringerPrimitives(points, STEEL_STRINGER_DEPTH_MM);
+  assert.deepEqual(heuristic, explicitNoses);
+});
+
+// ---- ユーザー実機指摘2026-08: 「直進部の斜めささらと踊り場ささら（上下共）はトリム結合して取り合う」 ----
+// 上端は段鼻+巾木で踊り場桁枠の上端と元々一致する。下端は「斜め＝法線オフセット」対
+// 「桁枠＝鉛直せい」で交差角が付くため、交点でミトレする。
+test('【実機指摘】stringerBandGeometry: mitreEndで下端の角が「上端+桁成」の水平線上へ移る', () => {
+  const { noses } = stairRunProfile(4, 200, 750, 0, 0, 1, 20); // 踏面250
+  const D = 300, bb = 60;
+  const plain = stringerBandGeometry(noses, STEEL_STRINGER_DEPTH_MM, { baseboardMm: bb });
+  const mitred = stringerBandGeometry(noses, STEEL_STRINGER_DEPTH_MM, {
+    baseboardMm: bb, mitreDepthMm: D, mitreEnd: true,
+  });
+  // 上端は変わらない（＝踊り場桁枠side辺の上端と一致したまま）。
+  assert.deepEqual(mitred.top, plain.top);
+  // 下端の終点は「上端の終点y + 桁成」ちょうど＝踊り場桁枠の下端の高さ。
+  assert.ok(Math.abs(mitred.bottom[1][1] - (mitred.top[1][1] + D)) < 1e-9,
+    `ミトレ後の下端終点yは上端終点+桁成(${D})のはず（実際:${mitred.bottom[1][1] - mitred.top[1][1]}）`);
+  // 法線オフセットのままではその高さに来ない（＝トリムが実際に効いている）。
+  assert.ok(Math.abs(plain.bottom[1][1] - (plain.top[1][1] + D)) > 1,
+    '法線オフセットのままでは桁枠の下端高さと一致しない（ミトレが必要な状況であること）');
+  // 始端側は触らない。
+  assert.deepEqual(mitred.bottom[0], plain.bottom[0]);
+});
+
+test('【失敗系・実機指摘】stringerBandGeometry: mitreDepthMm未指定なら従来どおり法線オフセットのまま', () => {
+  const { noses } = stairRunProfile(4, 200, 750, 0, 0, 1, 20);
+  const a = stringerBandGeometry(noses, STEEL_STRINGER_DEPTH_MM, { baseboardMm: 60 });
+  const b = stringerBandGeometry(noses, STEEL_STRINGER_DEPTH_MM, { baseboardMm: 60, mitreEnd: true });
+  assert.deepEqual(a, b, 'mitreDepthMmが無ければmitreEndだけでは何も起きない');
+});
+
+test('【失敗系・実機指摘】stringerBandGeometry: 段鼻が1点以下ならnull（描画側は空配列）', () => {
+  assert.equal(stringerBandGeometry([[0, 0]], 300, {}), null);
+  assert.equal(stringerBandGeometry(null, 300, {}), null);
 });

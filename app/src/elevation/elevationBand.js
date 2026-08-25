@@ -136,7 +136,8 @@ export function layoutBandFaces(room, graph, faces, ctx = {}) {
       beyondCeilings, wallLessEndExtendModelMm, scale, solids: ctx.solids ?? null,
       ...(faceOverride ?? {}),
     };
-    for (const p of buildFaceFigure(face, faceCtx)) primitives.push(translatePrimitive(p, xCursor, 0));
+    const facePrims = buildFaceFigure(face, faceCtx);
+    for (const p of facePrims) primitives.push(translatePrimitive(p, xCursor, 0));
     if (i === 0) {
       chDimX = boundary.lo - CH_DIM_OFFSET_MM;
       // 問題修正2026-08(QA F1): 左CH寸法も右CH寸法（buildFaceFigure側）と同じく「左端区間の

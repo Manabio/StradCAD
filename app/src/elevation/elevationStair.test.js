@@ -367,7 +367,7 @@ test('【WP-S3】buildStairBand: SWITCHBACKは歩行順面シーケンス経路�
 // いた——elevationFigure.jsのceilAbsAtX/hasCeilingProfileの修正で解消。既存の
 // `some(p=>p.type==='polyline')`だけの確認は踏面ジグザグで常に真になるトートロジーのため、
 // このテストで天井polyline自体のy範囲・水平フォールバック不在を実効的に固定する） ----
-test('【WP-S3・QA修正1】buildStairBand: 往路面の天井は勾配のCUT polyline（wallLessEndExtendModelMm既定でも描かれる）', () => {
+test('【WP-S3・QA修正1→実機仕様変更】buildStairBand: 上階が全面吹抜けなら往路面の天井は上階天井で水平のCUT polyline', () => {
   const graph = makeGraph('p1');
   const x0 = graph.addCenterLine(CenterLineType.VERTICAL, 0,    { labeled: false, discipline: Discipline.ARCH });
   const xm = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
@@ -401,17 +401,65 @@ test('【WP-S3・QA修正1】buildStairBand: 往路面の天井は勾配のCUT p
   const chLowerMm = 2400; // stairRoom自身のCH（既定）
   const chUpperAbsMm = 2400 + upperGraph.defaultCeilingHeight; // 4800
 
+  // ユーザー実機指摘2026-08で仕様変更: 上階の実Room有無を実測できる（aboveLayerがある）以上、
+  // 結果が面全体で一様でも実測どおりに割り当てる。本fixtureは階段室の上が全面VOID（吹抜け）
+  // なので、往路面の天井は**全区間が上階天井(chUpperAbs)で水平**が正解——旧「勾配のCUT polyline」
+  // （上り口側=chLower→踊り場側=chUpperAbsへ斜めに開く表現）は判定不能時のフォールバック専用に
+  // 後退した。`.claude/elevation-model.md`の階段帯節参照。
   const thickPolylines = band.primitives.filter(p => p.type === 'polyline' && p.weight === 'thick');
-  const gradient = thickPolylines.find(p => {
-    const ys = p.points.map(pt => pt[1]);
-    return Math.abs(Math.min(...ys) - (-chUpperAbsMm)) < 1e-6 && Math.abs(Math.max(...ys) - (-chLowerMm)) < 1e-6;
-  });
-  assert.ok(gradient, `往路面の勾配天井polyline（y範囲が-chLower(${-chLowerMm})..-chUpperAbs(${-chUpperAbsMm})）が見つからない`);
+  const flatTop = thickPolylines.find(p => p.points.every(pt => Math.abs(pt[1] - (-chUpperAbsMm)) < 1e-6));
+  assert.ok(flatTop, `往路面の天井polylineが全点-chUpperAbs(${-chUpperAbsMm})で水平になっていない`);
 
-  const flatCeilAtChLower = band.primitives.filter(p =>
-    p.type === 'line' && p.weight === 'thick' && p.y1 === p.y2 && p.y1 === -chLowerMm);
-  assert.equal(flatCeilAtChLower.length, 0,
-    'y=-CHの水平CUT線（旧フォールバック時の症状）は出ないはず');
+  const anyAtChLower = band.primitives.filter(p =>
+    p.weight === 'thick' && p.type === 'line' && p.y1 === p.y2 && p.y1 === -chLowerMm);
+  assert.equal(anyAtChLower.length, 0,
+    'y=-CH（1F天井高さ）の水平CUT線は出ないはず（上階に床が無いため天井は上階天井まで抜ける）');
+});
+
+// ---- ユーザー実機フィードバック2026-08（「6」D：2FL天井断面線は3500左CLの外へ延長して終わる）----
+// 旧「最上階キャップ（upperCeilCapped）」——上階が最上階かつ上階CHが非明示なら往路上の天井を
+// 1F天井高さで水平にキャップする——を廃止した回帰テスト。上のQA修正1テストと同一のモデルで
+// project側から3階目を外し（＝上階が最上階）、上階Roomも CH 未指定（defaultCeilingHeightへ
+// フォールバック）にした、旧実装がキャップを発動させた条件そのもの。
+test('【最上階キャップ廃止】buildStairBand: 上階が最上階かつ上階CH非明示でも往路天井は上階天井まで勾配で上がる', () => {
+  const graph = makeGraph('p1');
+  const x0 = graph.addCenterLine(CenterLineType.VERTICAL, 0,    { labeled: false, discipline: Discipline.ARCH });
+  const xm = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
+  const x1 = graph.addCenterLine(CenterLineType.VERTICAL, 2000, { labeled: false, discipline: Discipline.ARCH });
+  const y0 = graph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: false, discipline: Discipline.ARCH });
+  const ym = graph.addCenterLine(CenterLineType.HORIZONTAL, 1500, { labeled: false, discipline: Discipline.ARCH });
+  const y1 = graph.addCenterLine(CenterLineType.HORIZONTAL, 4500, { labeled: false, discipline: Discipline.ARCH });
+  const landingKey  = `${x0.id}:${y0.id}:${x1.id}:${ym.id}`;
+  const outboundKey = `${x0.id}:${ym.id}:${xm.id}:${y1.id}`;
+  const returnKey   = `${xm.id}:${ym.id}:${x1.id}:${y1.id}`;
+  const cells = new Set([landingKey, outboundKey, returnKey]);
+  const room = graph.addRoom(cells, '階段');
+  generateRoomWallsFromOutline(graph, room);
+  const stair = graph.addStair({
+    type: StairType.SWITCHBACK, cells, roomId: room.id,
+    sections: [6, 1, 6], riser: null, upDirection: 'up', flip: false,
+  });
+
+  const upperGraph = makeGraph('p2');
+  upperGraph.plane.elevation = 2400;
+  const voidRoom = makeRectRoom(upperGraph, 0, 0, 2000, 4500, '吹抜け');
+  voidRoom.setFeature(RoomFeature.VOID); // CH明示指定なし＝isFallback:true（旧キャップの条件）
+
+  // 3階目なし＝upperGraph.planeが最上階（旧キャップのもう一方の条件）。
+  const project = { planes: [graph.plane, upperGraph.plane] };
+  const band = buildStairBand(room, graph, upperGraph, { stair, floorHeight: 2400, project });
+  const chLowerMm = 2400;
+  const chUpperAbsMm = 2400 + upperGraph.defaultCeilingHeight; // 4800
+
+  const ceil = band.primitives.filter(p => p.type === 'polyline' && p.weight === 'thick')
+    .find(p => p.points.every(pt => Math.abs(pt[1] - (-chUpperAbsMm)) < 1e-6));
+  assert.ok(ceil, `最上階でも往路面の天井は-chUpperAbs(${-chUpperAbsMm})まで上がるはず`);
+
+  const anyAtChLower = band.primitives.filter(p =>
+    p.weight === 'thick' && (p.type === 'line' ? (p.y1 === p.y2 && p.y1 === -chLowerMm)
+      : p.points.some(pt => Math.abs(pt[1] - (-chLowerMm)) < 1e-6)));
+  assert.equal(anyAtChLower.length, 0,
+    '旧キャップが復活すると往路上の天井がy=-chLower（1F天井が階段室を貫通する症状）になる');
 });
 
 // ---- ユーザー明示指示（「2FL 寸法線はここで分ける」）: 階段帯のseq1（帯先頭面）の左CH寸法が

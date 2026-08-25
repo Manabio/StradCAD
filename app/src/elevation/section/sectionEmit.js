@@ -73,6 +73,90 @@ function matchingBand(col, z0, z1, kind) {
   return col.bands.find(b => b.kind === kind && overlapsZ(b, { z0, z1 })) ?? null;
 }
 
+/**
+ * 背景側の水平線（見えがかり壁の上下端縁・スラブ端）が、**手前の切断壁の断面線でトリムされる**か
+ * （ユーザー実機指摘2026-08「6」D1・B「1F天井断面が2階袖壁断面線とトリムされていない」）。
+ * その列に切断壁(cut)があり、水平線がその壁の天端以下なら、線は壁の断面線の手前で終わる＝
+ * その列には描かない。天端より上（例: 腰壁・袖壁の上を通る上階天井）は壁に遮られないので対象外。
+ */
+function trimmedByCutWall(col, z) {
+  return col.bands.some(b => b.kind === 'cut' && z <= b.z1 + GAP_EPS);
+}
+
+/**
+ * 連続する列にまたがる同一の帯を1つのrun（x範囲）へまとめる（キーが一致し、かつ列が隣接する
+ * 場合のみ連結する）。
+ * @param {object[]} columns
+ * @param {string} kind
+ * @param {(band:object)=>*} keyOf - 同一性のキー（cut帯は壁参照、slab帯はz範囲）
+ */
+function bandRuns(columns, kind, keyOf) {
+  const runs = [];
+  columns.forEach((col, i) => {
+    for (const b of col.bands) {
+      if (b.kind !== kind) continue;
+      const key = keyOf(b);
+      const open = runs.find(r => r.key === key && r.lastIndex === i - 1);
+      if (open) { open.x1 = col.x1; open.lastIndex = i; }
+      else runs.push({ key, band: b, x0: col.x0, x1: col.x1, lastIndex: i });
+    }
+  });
+  return runs;
+}
+
+/**
+ * 切断壁（`cut`帯）の天端のCUT水平線。腰壁のように**見えている天井より下で終わる**切断壁は、
+ * その上端が切断面の一部（そこで断面が閉じる）なので水平線を描く
+ * （ユーザー実機指摘2026-08「6」D「腰壁断面線は、天端で曲がり、壁厚だけ左に進み」。
+ * `cutAlong`の上端エッジと同じ扱い）。列ごとではなく**壁ごとに1本**描く——列は壁と無関係な
+ * 断点でも分割されるため、列ごとに描くと同じ天端が複数本になる（seq1の既存テストが
+ * 「上端水平線は1本・幅=壁厚」を固定している）。下端は描かない: 壁が載っている床
+ * （スラブ端・床断面線）が既に描いており、同指摘のプロファイルも天端→外側面→2FL床と回って
+ * 壁の下を通らない。
+ */
+function cutWallTopEdges(columns, cut, ceilZ) {
+  const topZ = ceilZ ?? cut.zRange?.hiZ ?? null;
+  if (topZ == null) return [];
+  return cutWallRuns(columns)
+    .filter(r => r.band.z1 < topZ - GAP_EPS)
+    .map(r => emitLine(cut, r.x0, r.band.z1, r.x1, r.band.z1, ElevationLineRole.CUT, { ceilZ }));
+}
+
+// 切断壁の断面をz範囲で（壁参照ではなく）まとめる。**壁は片面ずつのWallオブジェクトとして
+// 持つデータモデル**のため、実機の袖壁1枚が2つのWallに分かれており（列ダンプでx=45に境界）、
+// 壁参照でまとめると同じ断面が2つのrunに割れてしまう——同じz範囲で連続する列は1枚の壁の
+// 断面とみなす。
+function cutWallRuns(columns) {
+  return bandRuns(columns, 'cut', b => `${b.z0}|${b.z1}`);
+}
+
+/**
+ * 上階床スラブの端に**切断壁が載っている**（袖壁・腰壁）ときの取り合い
+ * （ユーザー実機指摘2026-08「6」D1・B「CL内側まで進んで、上を向いて2階袖壁の階段側断面線と
+ * トリム／1FL天井から2FL床までの上へ向かう線分がない」）。
+ * スラブは吹抜けの開口縁（CL）で終わるが、袖壁はそのCLに芯を合わせて左右へ張り出す。作図は
+ *   下階天井(slab.z0) …→ 袖壁の反対側の面 → そこを**上へ**立ち上げて 上階床(slab.z1) へ
+ * とつなぎ、袖壁の断面線と交点で取り合わせる。この立上りが無いと天井線が宙で終わる。
+ * 上階床側（slab.z1）の水平線は袖壁の手前の面で止まる（`trimmedByCutWall`）——同指摘の
+ * 「2FL床断面まで下りる、再度CLの外へ延長して終わる」どおり、壁の下は通らない。
+ */
+function slabEdgeCutWallJunction(columns, cut, ceilZ) {
+  const prims = [];
+  const slabs = bandRuns(columns, 'slab', b => `${b.z0}|${b.z1}`);
+  for (const c of cutWallRuns(columns)) {
+    for (const s of slabs) {
+      if (Math.abs(s.band.z1 - c.band.z0) > GAP_EPS) continue; // 壁がこのスラブの上に載っている
+      // スラブが伸びている側の反対＝袖壁の「向こう側」の面。実機ではそれが階段側になる。
+      const slabOnLoSide = s.x0 < c.x0 - GAP_EPS;
+      const nearX = slabOnLoSide ? c.x0 : c.x1;
+      const farX  = slabOnLoSide ? c.x1 : c.x0;
+      prims.push(emitLine(cut, nearX, s.band.z0, farX, s.band.z0, ElevationLineRole.SILHOUETTE, { ceilZ }));
+      prims.push(emitLine(cut, farX, s.band.z0, farX, s.band.z1, ElevationLineRole.SILHOUETTE, { ceilZ }));
+    }
+  }
+  return prims;
+}
+
 // col（SectionColumn|null）の[z0,z1]範囲が「アキ扱い」（kind==='open' または
 // openingPassThrough:true）で完全に覆われているか（凹み判定・cut縁のopen判定に使う）。
 // 列が無い（範囲外）場合はopen扱い（画面の外は常に開放）。
@@ -87,12 +171,16 @@ function isOpenSideAt(col, z0, z1) {
  * ——slabは非描画のまま、AMBIGUITY F）。
  * @param {import('./sectionTypes.js').SectionColumn[]} columns
  * @param {import('./sectionTypes.js').SectionCut} cut
- * @param {{ceilZ?:number}} [emitCtx]
+ * @param {{ceilZ?:number, openEndLo?:boolean, openEndHi?:boolean}} [emitCtx]
  * @returns {object[]}
  */
 export function emitColumns(columns, cut, emitCtx = {}) {
   const prims = [];
   const ceilZ = emitCtx.ceilZ;
+  // 注: 「壁のない端部で線を図の外側へ延長する」処理はここには無い。プリミティブを後から
+  // 引き伸ばすのではなく、**探査範囲そのものを外へ広げる**（sectionProbe.jsの
+  // probeExtendLo/HiMm。ユーザー裁定2026-08 A案）——面の外の列も実データとして生成されるため、
+  // 延長ぶんの線は通常の帯の縁として自然に出る。両方やると二重に伸びるので、ここでは何もしない。
   columns.forEach((col, i) => {
     const prev = columns[i - 1] ?? null;
     const next = columns[i + 1] ?? null;
@@ -107,27 +195,63 @@ export function emitColumns(columns, cut, emitCtx = {}) {
         // を満たすには、'wall'・'cutAlong'等どの種類であれ何らかの実体があれば「塞がれている」
         // とみなす必要がある——isOpenSideAtは`kind==='open'`（または開口貫通）だけをopenと
         // みなすため、そのままの結果を使えばよい）。
-        const leftOpen  = isOpenSideAt(prev, band.z0, band.z1);
-        const rightOpen = isOpenSideAt(next, band.z0, band.z1);
-        prims.push(emitLine(cut, col.x0, band.z0, col.x0, band.z1,
-          leftOpen ? ElevationLineRole.CUT : ElevationLineRole.SILHOUETTE, { ceilZ }));
-        prims.push(emitLine(cut, col.x1, band.z0, col.x1, band.z1,
-          rightOpen ? ElevationLineRole.CUT : ElevationLineRole.SILHOUETTE, { ceilZ }));
+        // **同じ壁のcut帯が隣接列にも続いていれば、その境界は壁の内部なので線を描かない**
+        // （ユーザー実機指摘2026-08「6」D。腰壁の断面がx=-57.5..57.5の1枚なのに、列が
+        // x-57.5..0/0..45/45..57.5へ分割されていたため、内部にV x0・V x45の縦線が出ていた）。
+        // cutAlongの端部縦線と同じ「隣接列に同じ壁が続くか」のパターン。壁の同一性は
+        // band.wall参照で見る——両側にwallが載っている場合だけ抑止し、載っていない
+        // （単体テストの手書き列など）場合は従来どおり描く。
+        const sameWall = b => !!b && !!b.wall && !!band.wall && b.wall === band.wall;
+        if (!sameWall(matchingBand(prev, band.z0, band.z1, 'cut'))) {
+          prims.push(emitLine(cut, col.x0, band.z0, col.x0, band.z1,
+            isOpenSideAt(prev, band.z0, band.z1) ? ElevationLineRole.CUT : ElevationLineRole.SILHOUETTE,
+            { ceilZ }));
+        }
+        if (!sameWall(matchingBand(next, band.z0, band.z1, 'cut'))) {
+          prims.push(emitLine(cut, col.x1, band.z0, col.x1, band.z1,
+            isOpenSideAt(next, band.z0, band.z1) ? ElevationLineRole.CUT : ElevationLineRole.SILHOUETTE,
+            { ceilZ }));
+        }
       } else if (band.kind === 'wall') {
         // 見えがかり壁面の輪郭（上端・下端）。水平線（縮退）はemitLineの単独判定では
         // 「ちょうどbaseFloorZ/ceilZに触れるだけ」を向こう側と見なさないため、band全体が
         // baseFloorZ以下／ceilZ以上ならforceDashで明示的に降格する（WP-E5b: sectionProbe.jsが
         // cut.baseFloorZをzBreaksに割り込ませることで生じる、内部分割されたband用の対応）。
         const beyondBand = bandFullyBeyond(cut, band, ceilZ);
-        prims.push(emitLine(cut, col.x0, band.z0, col.x1, band.z0, ElevationLineRole.SILHOUETTE, { ceilZ, forceDash: beyondBand }));
-        prims.push(emitLine(cut, col.x0, band.z1, col.x1, band.z1, ElevationLineRole.SILHOUETTE, { ceilZ, forceDash: beyondBand }));
+        // **手前の切断壁でこの帯が切られただけの縁は描かない**（ユーザー実機指摘2026-08「6」D）。
+        // 同じ列で切断壁(cut)の上端/下端とちょうど一致する縁は、見えがかり壁の実際の端ではなく
+        // 「手前の腰壁に遮られてそこで見えなくなった」だけの遮蔽境界で、壁自体はその裏へ続いている
+        // （実機症状: 腰壁の内側半分x0..57.5の下に、遠い壁の天端としてH z3000が出ていた）。
+        // 腰壁の天端側はcut帯自身がCUT水平線として描くので、線が失われることはない。
+        if (!trimmedByCutWall(col, band.z0)) {
+          prims.push(emitLine(cut, col.x0, band.z0, col.x1, band.z0, ElevationLineRole.SILHOUETTE, { ceilZ, forceDash: beyondBand }));
+        }
+        if (!trimmedByCutWall(col, band.z1)) {
+          prims.push(emitLine(cut, col.x0, band.z1, col.x1, band.z1, ElevationLineRole.SILHOUETTE, { ceilZ, forceDash: beyondBand }));
+        }
         // 凹み: 隣接列で同一z区間のwallのdistMmが変化した境界にSILHOUETTE縦線（§5.5）。
+        // 凹み側面線。**列の外側の端（prev/nextが無い＝描画範囲の端）では、その端に壁が
+        // 無ければ描かない**（ユーザー実機指摘2026-08「3500左CLにエッジはない」）——
+        // 隣接列が無いことは「そこで壁が終わる」ことを意味しない。範囲外は単に未探査であり、
+        // 面が「壁のない端部」だと分かっている側（emitCtx.openEndLo/openEndHi）では
+        // 壁面はその先へ続いている。旧実装は`!prevWall`だけで判定していたため、
+        // 先頭列・末尾列には常に縦線が出ていた（全パネルの端に出る症状）。
+        // **凹みは同じ層(layerRole)の壁どうしでしか成立しない**（ユーザー実機指摘2026-08「6」D。
+        // 実機症状: 左CL上のz3800..5400に縦線が出ていた——隣は上階側の遠い壁(d7250 above)、
+        // こちらは設置階の壁(d2250 self)で、距離が変わるのは「1枚の壁面が凹んだ」からではなく
+        // **見えている壁が別の層のものへ入れ替わった**だけ。連続面の折れ角ではないので描かない）。
+        // 隣接列に見えがかり壁が無い場合は従来どおり「そこで壁が終わる」＝描く。
+        const isRecessAgainst = nb => {
+          if (!nb) return true;                                // 壁がそこで終わる
+          if (nb.layerRole !== band.layerRole) return false;    // 層が入れ替わっただけ
+          return nb.distMm !== band.distMm;
+        };
         const prevWall = matchingBand(prev, band.z0, band.z1, 'wall');
-        if (!prevWall || prevWall.distMm !== band.distMm) {
+        if ((prev ? isRecessAgainst(prevWall) : !emitCtx.openEndLo)) {
           prims.push(emitLine(cut, col.x0, band.z0, col.x0, band.z1, ElevationLineRole.SILHOUETTE, { ceilZ }));
         }
         const nextWall = matchingBand(next, band.z0, band.z1, 'wall');
-        if (!nextWall || nextWall.distMm !== band.distMm) {
+        if ((next ? isRecessAgainst(nextWall) : !emitCtx.openEndHi)) {
           prims.push(emitLine(cut, col.x1, band.z0, col.x1, band.z1, ElevationLineRole.SILHOUETTE, { ceilZ }));
         }
       } else if (band.kind === 'cutAlong') {
@@ -161,10 +285,14 @@ export function emitColumns(columns, cut, emitCtx = {}) {
       const aIsFloorEdge = (a.kind === 'slab' || a.kind === 'open');
       const bIsFloorEdge = (b.kind === 'slab' || b.kind === 'open');
       if (aIsFloorEdge && bIsFloorEdge && a.kind !== b.kind) {
-        prims.push(emitLine(cut, col.x0, a.z1, col.x1, a.z1, ElevationLineRole.SILHOUETTE, { ceilZ }));
+        if (!trimmedByCutWall(col, a.z1)) {
+          prims.push(emitLine(cut, col.x0, a.z1, col.x1, a.z1, ElevationLineRole.SILHOUETTE, { ceilZ }));
+        }
       }
     }
   });
+  prims.push(...cutWallTopEdges(columns, cut, ceilZ));
+  prims.push(...slabEdgeCutWallJunction(columns, cut, ceilZ));
   return dedupeLines(prims);
 }
 
@@ -182,6 +310,76 @@ function dedupeLines(prims) {
     if (key && seen.has(key)) continue;
     if (key) seen.add(key);
     out.push(p);
+  }
+  return out;
+}
+
+// 線分(x1,y1)-(x2,y2)が軸並行矩形の内側にある媒介変数区間[t0,t1]（Liang-Barsky。交わらなければ
+// null）。矩形はz→y変換済み（yLo<=yHi）で渡す。
+function segmentInsideRect(x1, y1, x2, y2, r) {
+  const dx = x2 - x1, dy = y2 - y1;
+  const ps = [-dx, dx, -dy, dy];
+  const qs = [x1 - r.xLo, r.xHi - x1, y1 - r.yLo, r.yHi - y1];
+  let t0 = 0, t1 = 1;
+  for (let i = 0; i < 4; i++) {
+    const p = ps[i], q = qs[i];
+    if (Math.abs(p) < 1e-9) { if (q < 0) return null; continue; }
+    const t = q / p;
+    if (p < 0) { if (t > t1) return null; if (t > t0) t0 = t; }
+    else { if (t < t0) return null; if (t < t1) t1 = t; }
+  }
+  return t1 - t0 > 1e-9 ? [t0, t1] : null;
+}
+
+// 媒介変数区間の集合を昇順・非重複へ統合する。
+function mergeIntervals(list) {
+  const sorted = [...list].sort((a, b) => a[0] - b[0]);
+  const out = [];
+  for (const iv of sorted) {
+    const last = out[out.length - 1];
+    if (last && iv[0] <= last[1] + 1e-9) last[1] = Math.max(last[1], iv[1]);
+    else out.push([...iv]);
+  }
+  return out;
+}
+
+/**
+ * アキのバツ（`emitOpenGapMarks`が出す一点鎖線の対角線）のうち、**手前の階段に隠れる区間だけを
+ * 破線へ落とす**（ユーザー実機指摘2026-08「6」C「但し、階段に隠れる部分は破線」）。
+ * 対象は`dash:'center'`の斜め線だけ——既に`dashed`のもの（床断面より下のアキ）や水平・垂直線は
+ * そのまま通す。区間ごとに線分を分割して積み直すため、1本のバツが複数の線分になる。
+ * @param {object[]} prims - emitOpenGapMarksの出力（他のプリミティブが混ざっていてもよい）
+ * @param {Array<{xLo:number, xHi:number, zLo:number, zHi:number}>} rects - 階段の見付け矩形
+ * @returns {object[]}
+ */
+export function splitGapMarksByStair(prims, rects) {
+  if (!rects?.length) return prims;
+  const boxes = rects.map(r => ({
+    xLo: Math.min(r.xLo, r.xHi), xHi: Math.max(r.xLo, r.xHi),
+    yLo: zToY(Math.max(r.zLo, r.zHi)), yHi: zToY(Math.min(r.zLo, r.zHi)),
+  }));
+  const out = [];
+  for (const p of prims) {
+    const isDiagonal = p.type === 'line' && p.dash === 'center'
+      && Math.abs(p.x1 - p.x2) > GAP_EPS && Math.abs(p.y1 - p.y2) > GAP_EPS;
+    if (!isDiagonal) { out.push(p); continue; }
+    const hidden = mergeIntervals(boxes
+      .map(b => segmentInsideRect(p.x1, p.y1, p.x2, p.y2, b))
+      .filter(Boolean));
+    if (hidden.length === 0) { out.push(p); continue; }
+    const at = t => ({ x: p.x1 + (p.x2 - p.x1) * t, y: p.y1 + (p.y2 - p.y1) * t });
+    const push = (t0, t1, dash) => {
+      if (t1 - t0 <= 1e-9) return;
+      const a = at(t0), b = at(t1);
+      out.push({ ...p, x1: a.x, y1: a.y, x2: b.x, y2: b.y, dash });
+    };
+    let cursor = 0;
+    for (const [h0, h1] of hidden) {
+      push(cursor, h0, 'center');   // 見えている区間
+      push(h0, h1, 'dashed');       // 階段に隠れる区間
+      cursor = h1;
+    }
+    push(cursor, 1, 'center');
   }
   return out;
 }

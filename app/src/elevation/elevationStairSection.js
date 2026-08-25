@@ -23,18 +23,43 @@ import { ElevationLineRole, weightForRole, GAP_EPS_MM as GAP_EPS } from './eleva
  * @param {number} startX
  * @param {number} startY - 区間開始時点の高さ（y、上向き負）
  * @param {1|-1} dir - 歩行方向（+1=右へ、-1=左へ）
- * @returns {{points:Array<[number,number]>, endX:number, endY:number}}
+ * @param {number} [nosingMm] - 蹴込(mm。`Stair.nosing`)。0（既定）なら従来どおり蹴上＝段鼻の
+ *   真下で、点列・その並び（段鼻＝奇数index）は一切変わらない。>0なら蹴上を蹴込ぶん奥へ引っ込め、
+ *   段鼻の出を1本の水平セグメントとして点列へ挟む（ユーザー実機指摘2026-08「階段の蹴上、踏面に
+ *   加え、蹴込を20で描画」）。
+ * @returns {{points:Array<[number,number]>, noses:Array<[number,number]>, endX:number, endY:number}}
+ *   noses は段鼻（各段の踏面の先端）。蹴込を入れると点列の刻みが1段2点→3点に変わるため、
+ *   **消費側がindexの偶奇から段鼻を推測できなくなる**——ここで明示的に返す（ささらの上端線は
+ *   この段鼻列から作る。stringerPrimitives参照）。
  */
-export function stairRunProfile(n, riserMm, runLengthMm, startX, startY, dir = 1) {
+export function stairRunProfile(n, riserMm, runLengthMm, startX, startY, dir = 1, nosingMm = 0) {
   const steps = Math.max(1, Math.round(n));
-  const treadMm = runLengthMm / steps;
-  const points = [[startX, startY]];
-  let x = startX, y = startY;
+  // 踏面（段鼻〜段鼻のピッチ）は **区間長 ÷ (段数−1)**（ユーザー実機検算2026-08「3500左CLの上が
+  // 1段目踏面、右へ2500いったところが踊り場高さ、かつ11段目」＝10ピッチ×250）。区間長は
+  // 「1段目の位置〜次区間（踊り場・上階床）の床の位置」であり、その間に現れる踏面はsteps−1枚
+  // ——最終段の踏面は次区間の床が兼ねる（本関数のヘッダの既存仕様）。
+  // 旧実装は `runLengthMm / steps` で割っており、踏面が1枚ぶん細く・最終段の踏面も余分に描いていた。
+  const treadMm = steps > 1 ? runLengthMm / (steps - 1) : runLengthMm;
+  // 蹴込は踏面を超えない（超えると蹴上が前段の段鼻より手前へ回り込み、輪郭が自己交差する）。
+  const k = Math.max(0, Math.min(nosingMm || 0, treadMm));
+  const points = [];
+  const noses = [];
+  let x = startX, y = startY; // x は「現在の段の段鼻」の位置（蹴上の足元は x+dir*k）
+  points.push([x + dir * k, y]); // 上り口の床は蹴上の足元（段鼻から蹴込ぶん奥）で階段に接する
   for (let i = 0; i < steps; i++) {
-    y -= riserMm;      points.push([x, y]); // 蹴上（垂直）
-    x += dir * treadMm; points.push([x, y]); // 踏面（水平）
+    y -= riserMm;
+    // 蹴上は**斜めの断面**（ユーザー実機指摘2026-08「踊り場への上り、最後の蹴上面も蹴込つけて
+    // 斜め断面に」）——足元(x+dir*k)から段鼻(x)へ1本の斜線で上がる。蹴込0なら垂直になり
+    // 従来と完全に同一（点列も同じ）。**最終段（踊り場への上り）も同じループで処理する**ので
+    // 例外扱いは要らない。
+    points.push([x, y]);
+    noses.push([x, y]);
+    // 最終段の踏面は描かない（次区間の床が兼ねる）。区間の総走行長は (steps-1)*treadMm =
+    // runLengthMm のままなので endX は従来と同じ＝呼び出し側の配置は不変。
+    // 踏面は段鼻から次の蹴上の足元まで＝踏面ピッチ＋蹴込ぶんの水平線。
+    if (i < steps - 1) { x += dir * treadMm; points.push([x + dir * k, y]); }
   }
-  return { points, endX: x, endY: y };
+  return { points, noses, endX: x, endY: y };
 }
 
 /**
@@ -150,20 +175,67 @@ export function treadLadderLines({ loX, hiX, riserMm, steps, baseAbsMm, dashed =
  * @param {number} depthMm - ささらの桁成（見付幅）
  * @returns {object[]} 0または1件のpolylineプリミティブ配列
  */
-export function stringerPrimitives(profilePoints, depthMm, zBounds) {
-  const nosings = profilePoints.filter((_, i) => i % 2 === 1);
-  if (nosings.length < 2) return [];
-  const [x1, y1] = nosings[0];
-  const [x2, y2] = nosings[nosings.length - 1];
-  const dx = x2 - x1, dy = y2 - y1;
+/**
+ * ささらの帯（上端線・下端線）の幾何を返す。`stringerPrimitives`（描画）と
+ * `sectionStair.js`（踊り場桁枠の下端をこの帯とのトリム点で切る）が**同じ交点を共有する**ための
+ * 単一情報源——別々に計算すると1本の取り合いが2つの位置に分裂する。
+ *
+ * 上端 = 段鼻の勾配線を巾木高さぶん上げた線。下端 = 上端を法線方向へ`depthMm`（ささらのせい）
+ * 平行移動した線。
+ *
+ * **トリム結合（ユーザー実機指摘2026-08「直進部の斜めささらと踊り場ささら（上下共）は、
+ * トリム結合して取り合う」）**: `opts.mitreDepthMm`（踊り場桁枠のせい）を渡すと、その端の
+ * 下端の角を「上端のその端の高さ＋mitreDepthMm」の**水平線との交点**へ移す。踊り場桁枠の
+ * 下端はこの水平線そのもの（桁枠は鉛直にせいを取る）なので、斜めささらの法線オフセットとの
+ * 交差角がここで解消し、2本の下端が1点で継がる。上端は元々この端で一致している（段鼻の
+ * 最終点＝踊り場床）ため、上下とも取り合う。
+ * @param {Array<[number,number]>} nosings - 段鼻列（昇順・2点以上）
+ * @param {number} depthMm
+ * @param {{baseboardMm?:number, mitreDepthMm?:number, mitreStart?:boolean, mitreEnd?:boolean}} [opts]
+ * @returns {{top:[[number,number],[number,number]], bottom:[[number,number],[number,number]]}|null}
+ */
+export function stringerBandGeometry(nosings, depthMm, opts = {}) {
+  if (!nosings || nosings.length < 2) return null;
+  const lift = Math.max(0, opts.baseboardMm ?? 0);
+  const p1 = [nosings[0][0], nosings[0][1] - lift];
+  const p2 = [nosings[nosings.length - 1][0], nosings[nosings.length - 1][1] - lift];
+  const dx = p2[0] - p1[0], dy = p2[1] - p1[1];
   const len = Math.hypot(dx, dy) || 1;
   // 法線（下方向=yが増える側を正にする。階段の下＝ささら側という前提）。
   let nx = -dy / len, ny = dx / len;
   if (ny < 0) { nx = -nx; ny = -ny; }
   const ox = nx * depthMm, oy = ny * depthMm;
-  const points = [
-    [x1, y1], [x2, y2], [x2 + ox, y2 + oy], [x1 + ox, y1 + oy], [x1, y1],
-  ];
+  let b1 = [p1[0] + ox, p1[1] + oy];
+  let b2 = [p2[0] + ox, p2[1] + oy];
+  const mitreD = opts.mitreDepthMm;
+  // 下端線（方向(dx,dy)）と水平線 y=targetY の交点。dy===0（水平なささら＝あり得ない）は素通し。
+  const mitreTo = (b, targetY) => {
+    if (Math.abs(dy) < GAP_EPS) return b;
+    const t = (targetY - b[1]) / dy;
+    return [b[0] + t * dx, targetY];
+  };
+  if (mitreD != null && opts.mitreStart) b1 = mitreTo(b1, p1[1] + mitreD);
+  if (mitreD != null && opts.mitreEnd)   b2 = mitreTo(b2, p2[1] + mitreD);
+  return { top: [p1, p2], bottom: [b1, b2] };
+}
+
+export function stringerPrimitives(profilePoints, depthMm, zBounds, opts = {}) {
+  // 段鼻列は呼び出し側が明示的に渡す（stairRunProfile(...).noses）。未指定時のみ従来の
+  // 「奇数index＝段鼻」ヒューリスティックへフォールバックする——蹴込>0では1段の点列が
+  // 2点→3点になり偶奇では拾えないため（elevationStairSection.jsのstairRunProfile参照）。
+  const nosings = opts.noses ?? profilePoints.filter((_, i) => i % 2 === 1);
+  if (nosings.length < 2) return [];
+  // ユーザー実機指摘2026-08「鉄骨階段ささらの上端は、踏面先端で巾木同寸」: 上端線は段鼻を
+  // 結ぶ勾配線そのものではなく、そこから**巾木高さぶん上**（yは上向き負なので減算）。
+  // これにより上端が踊り場桁枠side辺の上端（`landing.z + baseboardHeightMm`。sectionStair.jsの
+  // landingFramePrimitives）と**踊り場の縁でちょうど一致**する——最後の段鼻の高さが
+  // landing.zそのものだから。「直進部の斜めささらと踊り場ささらはトリム結合して取り合う」の
+  // 上端側はこれで自動的に成立する（下端側は勾配の法線オフセットと踊り場の鉛直せいが
+  // 交差するため、別途トリムが要る。未対応=defer）。
+  const band = stringerBandGeometry(nosings, depthMm, opts);
+  if (!band) return [];
+  const { top: [[x1, y1], [x2, y2]], bottom: [b1, b2] } = band;
+  const points = [[x1, y1], [x2, y2], b2, b1, [x1, y1]];
   // 実機フィードバック第3弾B: オフセット後の多角形は、法線オフセット(ox,oy)ぶん元のnosing線
   // （flightの端の1つ内側のnosingを結ぶ線。flight自身の始端・終端ちょうどではない）よりFL側へ
   // はみ出すことがある（せいdepthMmぶん下げる方向＝階段の下＝floorへ向かう方向のため）。

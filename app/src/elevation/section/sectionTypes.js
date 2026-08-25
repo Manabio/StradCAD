@@ -83,6 +83,21 @@ export function worldOf(cut, localX) {
 }
 
 /**
+ * その切断の描画範囲（断面ローカルx。`cut.line.lo..hi` ＋ 壁のない端部の探査延長
+ * `probeExtendLo/HiMm`）。**面の外に断面（梁・ささら・踊り場桁枠の矩形）を描かない**ための
+ * 共通判定の単一情報源（ユーザー実機指摘2026-08「6」。面が0..2885なのに x=-57.5 や x=2942.5、
+ * さらに別スパンの梁が x=-6882.5 に描かれていた）。
+ * @param {SectionCut} cut
+ * @returns {{lo:number, hi:number}}
+ */
+export function cutDrawRange(cut) {
+  const line = cut.line;
+  const a = localXOf(cut, line.lo - (line.probeExtendLoMm ?? 0));
+  const b = localXOf(cut, line.hi + (line.probeExtendHiMm ?? 0));
+  return { lo: Math.min(a, b), hi: Math.max(a, b) };
+}
+
+/**
  * 絶対z（上が正）→ 描画y（下向き正のy=-z。展開図の既存プリミティブ座標系）。
  * プリミティブ化の最後（sectionEmit.js）にのみ使う（§2項目6。エンジン内部はzのまま扱う）。
  * @param {number} z

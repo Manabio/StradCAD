@@ -23,7 +23,7 @@ export class Stair {
     totalSteps  = 15,
     tread       = 250,     // 踏面(mm)
     riser       = null,    // 蹴上(mm) null=階高/totalSteps で自動
-    nosing      = 30,      // 蹴込(mm)
+    nosing      = 20,      // 蹴込(mm。ユーザー指示2026-08で既定30→20）
     width       = 900,     // 階段幅(mm)
     upDirection = 'right', // 昇り方向 'up'|'down'|'left'|'right'（向き推定結果）
     flip        = false,
