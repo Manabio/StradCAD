@@ -544,9 +544,14 @@ const MemberCard = observer(({
   const representative = (group.mapName === 'beamMap'
     ? members.find(m => (graph.columnAxisOffsets.get(m.axisCL?.id) ?? 0) !== 0)
     : null) ?? members[0];
+  // 伏図に表示される柱集合（構造モードは1つ下の階）。梁の接合2択のグレー化判定（柱に取りつくか）に使う——
+  // 描画（StructuralLayer.jsx）と同じ composition 解決を通し、自階graphの柱で判定してズレるのを防ぐ。
+  const displayedColumns = composition?.graphForCategory('columnMap')?.columns ?? graph.columns;
+  const fieldCtx = { columns: displayedColumns };
   // 図上で編集する寸法フィールドはフォームから除外（断面図の editable dim と二重入力になるため）。
+  // when を持つフィールド（接合方法＝鉄骨の梁のみ）は条件を満たすときだけ出す。
   const allFields = (FIELD_DEFS_BY_CATEGORY[group.category] ?? [])
-    .filter(f => f.key in representative && !FIGURE_DIM_KEYS.has(f.key));
+    .filter(f => f.key in representative && !FIGURE_DIM_KEYS.has(f.key) && (!f.when || f.when(representative)));
   // 木造の基礎梁は断面が構造算定（b×D・常にRC）で決まり、断面マスター選択は意味を持たないため「断面」を隠す（問題.md）。
   const structure = graph?.structureOverride ?? project?.structuralInfo?.mainStructure;
   const isWoodFoundationBeam = group.mapName === 'beamMap' && representative.role === 'foundation'
@@ -1013,7 +1018,8 @@ const MemberCard = observer(({
                 <div style={cardInputWrapStyle}>
                   <MemberFieldInput
                     members={members} fieldDef={fieldDef} graph={graph} group={group} project={project}
-                    readOnly={readOnly} onCommit={commitScopedEdit}
+                    readOnly={readOnly || !!fieldDef.disabledWhen?.(representative, fieldCtx)}
+                    onCommit={commitScopedEdit}
                     autoFocus={isFocusTarget && focusRequest?.fieldKey === fieldDef.key}
                     focusToken={focusRequest}
                   />
@@ -1127,7 +1133,8 @@ const MemberFieldInput = observer(({ members, fieldDef, graph, group, project, r
         disabled={readOnly}
         style={{ ...cellInputStyle, cursor: 'pointer' }}
       >
-        {fieldDef.options.map(opt => <option key={opt} value={opt}>{opt}</option>)}
+        {/* optionLabels を持つフィールド（接合方法）は内部値と表示名を分ける。無ければ従来どおり値をそのまま表示。 */}
+        {fieldDef.options.map(opt => <option key={opt} value={opt}>{fieldDef.optionLabels?.[opt] ?? opt}</option>)}
       </select>
     );
   }

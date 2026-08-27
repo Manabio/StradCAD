@@ -148,7 +148,14 @@ export class RcColumn extends StructuralColumn {
 }
 
 // 小梁（role:'secondary'）の端部クリアランス(mm)。host（取りつく大梁）の縁からこの分だけ離して止める。
+// ピン接合（jointType:'PIN'）に指定した鉄骨の大梁も同じ値で母材（柱・大梁）の面から離す。
 export const SECONDARY_BEAM_CLEARANCE_MM = 50;
+
+// 剛接合（鉄骨・水平方向）の継手位置(mm)。構造芯から梁の内側へこの距離の位置で母材を切断し、
+// プレートで補強する（実務の一般的な仕口位置）。切断幅そのもの（10mm）は描画には使わない
+// ——伏図では継手を線記号で表すため、詳細描画の2本線の間隔は描画側の定数で持つ
+// （renderer/StructuralLayer.jsx RIGID_JOINT_DETAIL_GAP_MM）。
+export const RIGID_JOINT_OFFSET_MM = 900;
 
 // host大梁の跨ぎ判定の座標許容誤差(mm)。生成条件（structuralAutoFill.autoFillSecondaryBeams）と
 // 端部クリアランス（StructuralBeam.spanForHostBeams）が同じ値を共有する。
@@ -190,6 +197,11 @@ export class StructuralBeam extends StructuralEntity {
     this.jointCondition  = props.jointCondition ?? { start: 'RIGID', end: 'RIGID' }; // 剛接合=ラーメン既定
     // 小梁・基礎梁・軒桁・母屋・垂木・踊り場受け梁はサブクラスを増やさず role + 既定値の組み合わせで表現する。
     this.role             = props.role             ?? 'primary'; // primary/secondary/foundation/eaves/roof/landing
+    // 接合方法（'RIGID'=剛接合 / 'PIN'=ピン接合）。鉄骨の梁でのみ意味を持つ（isPinJoint/hasRigidJoint 参照）。
+    // 既定は剛接合。ただし梁芯CL追加で自動生成される小梁（role:'secondary'）だけはピン接合を初期値にする
+    // ——生成側（structuralAutoFill/beamAxisMove）ではなくここで既定を決めることで、生成経路が増えても
+    // 初期値が食い違わない。旧データ（jointType未保存）もこの既定に落ちるため移行処理を持たない。
+    this.jointType        = props.jointType ?? (this.role === 'secondary' ? 'PIN' : 'RIGID');
     // 梁天端レベル（floorDatum=FL基準・上が正。WP-B3で意味を確定。structural-model.md参照）。
     this.levelOffset      = props.levelOffset      ?? 0;
     this.startLevelOffset = props.startLevelOffset ?? 0; // levelOffsetからの始端追加オフセット（屋根部材の勾配用）
@@ -211,6 +223,7 @@ export class StructuralBeam extends StructuralEntity {
       eccentricity:     observable,
       faceGap:          observable,
       jointCondition:   observable,
+      jointType:        observable,
       role:             observable,
       levelOffset:      observable,
       startLevelOffset: observable,
@@ -222,7 +235,21 @@ export class StructuralBeam extends StructuralEntity {
       coord1:    computed,
       coord2:    computed,
       sectionWidth: computed,
+      isPinJoint:    computed,
+      hasRigidJoint: computed,
     });
+  }
+  // ピン接合として描くか。鉄骨は jointType が権威、木造・RCは従来どおり role（小梁のみピン）で決まる
+  // ——木造梁は jointCondition/jointType の既定がピン寄りで、鉄骨以外まで jointType を見ると
+  // 既存の木造大梁の端部処理まで変わってしまうため、材種で権威を分ける。
+  get isPinJoint() {
+    return this.materialType === StructuralMaterialType.STEEL
+      ? this.jointType === 'PIN'
+      : this.role === 'secondary';
+  }
+  // 剛接合の継手記号を描く対象か（鉄骨の梁のみ。用語「接合＝鉄骨の構造部材同士が取り合う場所」に従う）。
+  get hasRigidJoint() {
+    return this.materialType === StructuralMaterialType.STEEL && this.jointType === 'RIGID';
   }
   // axisValue = 通り芯 + 柱芯オフセット（columnAxisOffsets。ラーメン系のみ非0） + 個別偏心量
   get axisValue() {
@@ -284,12 +311,39 @@ export class StructuralBeam extends StructuralEntity {
   // opts.diaphragm=true（詳細描画）なら鋼管柱はダイヤフラム端で止める（梁はダイヤフラムまで）。
   // 小梁（role:'secondary'）は柱ではなく取りつく大梁の縁で止まるため、渡された columns を使わず
   // spanForHostBeams に委譲する（coord1/coord2 getter・StructuralLayer.jsx の両方が自動でトリム後座標になる）。
+  // ピン接合（isPinJoint）に指定された鉄骨の大梁も「母材から離して終える」——ただし母材は柱なので
+  // spanForHostBeams ではなく柱基準のまま、両端に同じクリアランスを足して手前で止める
+  // （小梁の host 基準経路をそのまま流用すると、host大梁の無い端がCL位置まで伸びて柱を突き抜ける）。
   spanForColumns(columns, { diaphragm = false } = {}) {
-    if (this.role === 'secondary') return this.spanForHostBeams(this._planGraph?.beams ?? []);
+    if (this.role === 'secondary' && this.isPinJoint) return this.spanForHostBeams(this._planGraph?.beams ?? []);
+    const clearance = this.isPinJoint ? SECONDARY_BEAM_CLEARANCE_MM : 0;
     const a = this._endCenterAndHalfWidth(this.clStart, columns, diaphragm);
     const b = this._endCenterAndHalfWidth(this.clEnd, columns, diaphragm);
     const dir = Math.sign(b.center - a.center) || 1;
-    return { coord1: a.center + dir * a.half, coord2: b.center - dir * b.half };
+    return { coord1: a.center + dir * (a.half + clearance), coord2: b.center - dir * (b.half + clearance) };
+  }
+  // 端部の少なくとも一方が柱に取りつくか（＝接合方法を選べる梁か）。梁にしか取りつかない梁（小梁）は
+  // 構造リストの接合2択をグレー化する判定に使う（ユーザー指示: 柱に接合する梁のみ選択可）。
+  // columns 省略時は自階graphの柱。構造モードの伏図は1つ下の階の柱を表示するため、UI側は
+  // 表示中の柱集合（composition解決）を渡すこと。
+  joinsColumn(columns = this._planGraph?.columns ?? []) {
+    return !!this._columnAtEnd(this.clStart, columns) || !!this._columnAtEnd(this.clEnd, columns);
+  }
+  // 剛接合の継手位置（両端の構造芯から RIGID_JOINT_OFFSET_MM だけ梁の内側）。along軸の座標配列を返す。
+  // 短スパンでは何も返さない: 2箇所の継手が入れ替わる（始端側の継手が終端側を追い越す）スパンでは
+  // 記号として意味を成さないため両方落とす。追い越さない場合も、実際に描かれる区間
+  // （spanForColumns）の外へ出るものは個別に除外する。
+  rigidJointCoords(columns, { diaphragm = false } = {}) {
+    if (!this.hasRigidJoint) return [];
+    const a = this._endCenterAndHalfWidth(this.clStart, columns, diaphragm);
+    const b = this._endCenterAndHalfWidth(this.clEnd, columns, diaphragm);
+    const dir = Math.sign(b.center - a.center) || 1;
+    const startJoint = a.center + dir * RIGID_JOINT_OFFSET_MM;
+    const endJoint   = b.center - dir * RIGID_JOINT_OFFSET_MM;
+    if (dir * (endJoint - startJoint) <= 0) return [];
+    const { coord1, coord2 } = this.spanForColumns(columns, { diaphragm });
+    const lo = Math.min(coord1, coord2), hi = Math.max(coord1, coord2);
+    return [startJoint, endJoint].filter(v => v > lo && v < hi);
   }
   // coord1/coord2 = 柱がある端部は柱の断面手前（柱の中心ではなく断面まで）、無ければCL位置まで（自階graphの柱基準）。
   get coord1() { return this.spanForColumns(this._planGraph?.columns ?? []).coord1; }

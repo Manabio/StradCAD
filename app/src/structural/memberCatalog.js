@@ -153,6 +153,13 @@ export const FIELD_DEFS_BY_CATEGORY = {
   ],
   [MEMBER_CATEGORY.ROD]: [
     { key: 'sectionDefId',     label: '断面',   kind: 'section' },
+    // 接合方法（鉄骨の梁のみ）。when=表示条件、disabledWhen=グレー化条件（値は見せるが変更させない）。
+    // 柱に取りつかない梁＝梁に接合する梁（小梁）はピン接合で固定のため選択させない（ユーザー指示）。
+    // materialType は 'STEEL'（core.js を import しない方針のため文字列リテラル。ファイル冒頭の注意参照）。
+    { key: 'jointType', label: '接合', kind: 'select', options: ['RIGID', 'PIN'],
+      optionLabels: { RIGID: '剛接合', PIN: 'ピン接合' },
+      when:        e => e.materialType === 'STEEL',
+      disabledWhen: (e, ctx) => !e.joinsColumn?.(ctx?.columns) },
     { key: 'levelOffset',      label: '天端レベル（FL基準）', kind: 'number' },
     { key: 'startLevelOffset', label: '始端オフセット', kind: 'number' },
     { key: 'endLevelOffset',   label: '終端オフセット', kind: 'number' },

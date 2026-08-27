@@ -18,6 +18,25 @@ export const COLOR_BY_MATERIAL = {
 const COLUMN_SIZE_MM = 120; // 柱のフォールバック（カタログ未登録時）の辺長
 const BEAM_WIDTH_MM  = 30;  // 梁の簡易表示の幅
 
+// 剛接合（鉄骨）の継手記号。位置は構造芯から RIGID_JOINT_OFFSET_MM（core側の定数）内側で、
+// 梁を横断する線として描く。略図・標準は1本、詳細は実寸 RIGID_JOINT_DETAIL_GAP_MM だけ離した2本
+// （母材を切って突き合わせる継手の見え方。切断幅そのものではなく作図上の離れ）。
+const RIGID_JOINT_DETAIL_GAP_MM = 0.5;
+
+// 継手記号1箇所ぶんの Konva 要素。along=梁に沿う座標、half=記号の半長（梁の見付き幅の半分）。
+function jointMarkLines(keyBase, beam, along, half, color, strokeWidth, detail) {
+  const offsets = detail ? [-RIGID_JOINT_DETAIL_GAP_MM / 2, RIGID_JOINT_DETAIL_GAP_MM / 2] : [0];
+  return offsets.map((d, i) => {
+    const a = along + d;
+    const points = beam.isVertical
+      ? [beam.axisValue - half, a, beam.axisValue + half, a]
+      : [a, beam.axisValue - half, a, beam.axisValue + half];
+    return (
+      <Line key={`${keyBase}:${i}`} points={points} stroke={color} strokeWidth={strokeWidth} listening={false} />
+    );
+  });
+}
+
 // 柱の実描画サイズ(mm)。LODに依らず常にsectionDefIdのカタログ実寸（矩形等で幅・高さが異なる場合は
 // 大きい方、カタログ未登録はCOLUMN_SIZE_MM）。StructuralLayer.jsx・MemberTagLayer.jsxの両方が
 // これだけを参照する単一の実装。
@@ -250,22 +269,31 @@ export const StructuralLayer = observer(({ composition, viewport, project }) => 
           const p1 = b.isVertical ? { x: b.axisValue, y: coord1 } : { x: coord1, y: b.axisValue };
           const p2 = b.isVertical ? { x: b.axisValue, y: coord2 } : { x: coord2, y: b.axisValue };
           const width = beamRenderWidth(b, lod);
+          // 剛接合（鉄骨）の継手記号。記号の長さは描画中の帯幅に合わせる（単線LODは実断面幅を使う）。
+          const jointMarks = b.rigidJointCoords(displayedColumns, { diaphragm: lod === LodLevel.DETAIL })
+            .flatMap((along, i) => jointMarkLines(`joint:${b.id}:${i}`, b, along, (width ?? b.sectionWidth) / 2,
+              color, medium, lod === LodLevel.DETAIL));
           if (width == null) {
             return [
               <Line key={b.id} points={[p1.x, p1.y, p2.x, p2.y]} stroke={color} strokeWidth={thin} dash={beamDash} listening={false} />,
+              ...jointMarks,
             ];
           }
           const lo = Math.min(coord1, coord2), hi = Math.max(coord1, coord2);
-          // 小梁（role:'secondary'）は端部が大梁の縁+クリアランスで止まる（通しで描く大梁・基礎梁・軒桁とは
-          // 異なり端が構造物に突き当たらない）ため、開いた2本線のままだと切りっぱなしに見える。
-          // 端を横断する線分で閉じ、閉矩形（口の字）で描く（bandRect は foundation の帯と共通の実装）。
-          if (b.role === 'secondary') {
+          // ピン接合の梁（小梁、およびピン指定した鉄骨の大梁）は端部が母材の縁+クリアランスで止まる
+          // （通しで描く剛接合の梁・基礎梁・軒桁とは異なり端が構造物に突き当たらない）ため、開いた2本線の
+          // ままだと切りっぱなしに見える。端を横断する線分で閉じ、閉矩形（口の字）で描く
+          // （bandRect は foundation の帯と共通の実装）。
+          if (b.isPinJoint) {
             return [
               <Rect key={b.id} {...bandRect(b, lo, hi, width / 2)}
                 stroke={color} strokeWidth={medium} dash={beamDash} listening={false} />,
             ];
           }
-          return bandLines(`beam:${b.id}`, b.isVertical, b.axisValue, width / 2, [[lo, hi]], color, medium, beamDash);
+          return [
+            ...bandLines(`beam:${b.id}`, b.isVertical, b.axisValue, width / 2, [[lo, hi]], color, medium, beamDash),
+            ...jointMarks,
+          ];
         })}
       </Group>
       <Group {...groupPropsForStyle(slab?.spec.style)}>

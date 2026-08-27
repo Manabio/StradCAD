@@ -178,7 +178,10 @@ function buildSnapshot(graph) {
     beams: graph.beams.map(bm => {
       const [extraKeys, extraVals] = packExtraFields(bm,
         ['beamType', 'isCambered', 'stiffenerCount', 'topMainBars', 'bottomMainBars', 'stirrupBars', 'dimensionStatus',
-          'beamWidth', 'beamDepth', 'faceGap', 'foundationSection', 'numberGroupId']);
+          'beamWidth', 'beamDepth', 'faceGap', 'foundationSection', 'numberGroupId',
+          // 接合方法（剛/ピン）。専用フィールド（jointStart/jointEnd）ではなく extra 側に載せる——
+          // 旧データにはキーが無いので構造体側の既定（小梁=ピン/その他=剛）へ自然に落ち、移行処理が要らない。
+          'jointType']);
       return {
         id: bm.id, materialType: bm.materialType, sectionDefId: bm.sectionDefId,
         axisCLId: bm.axisCL.id, isVertical: bm.isVertical,
