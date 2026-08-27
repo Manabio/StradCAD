@@ -27,6 +27,35 @@ test('buildMenuState: 建具モードでも開口上の長押しは null にな�
   assert.equal(state.context, CONTEXT.OPENING);
 });
 
+// ---- 構造モードの壁上メニュー抑止（ユーザー要望。壁・建具を描画しないモードのため） ----
+
+test('buildMenuState: 構造モード（appMode=structure）の壁上の長押しは null（建具・窓・腰/垂壁を出さない）', () => {
+  const wall = { id: 'w1' };
+  const state = buildMenuState('structure', {
+    snap: null, cl: null, clEndpoint: null, opening: null, wall, wallEligible: true,
+  });
+  assert.equal(state, null);
+});
+
+test('buildMenuState: 構造モードでも壁以外（梁芯の中心線上）の長押しは従来どおりメニューを出す', () => {
+  const cl = { id: 'cl1', centerLineType: 'X' };
+  const state = buildMenuState('structure', {
+    snap: null, cl, clEndpoint: null, opening: null, wall: null, canMove: true,
+  });
+  assert.notEqual(state, null);
+  assert.equal(state.context, CONTEXT.CENTER_LINE);
+  assert.ok(state.items.some(i => i.id === 'cl-move'));
+});
+
+test('buildMenuState: 非構造モード（平面）の壁上メニューは従来どおり建具・窓・腰/垂壁を持つ', () => {
+  const wall = { id: 'w1' };
+  const state = buildMenuState('floorplan', {
+    snap: null, cl: null, clEndpoint: null, opening: null, wall, wallEligible: true,
+  });
+  assert.equal(state.context, CONTEXT.WALL);
+  assert.deepEqual(state.items.map(i => i.id), ['add-fitting', 'add-window', 'knee-drop-wall']);
+});
+
 test('buildMenuState: 非建具モードの中心線上は null にならず、canMove/hasInteriorWall を反映する', () => {
   const cl = { id: 'cl1', centerLineType: 'Y' };
   const state = buildMenuState('floorplan', {
