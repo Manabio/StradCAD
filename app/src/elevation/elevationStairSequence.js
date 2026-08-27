@@ -39,10 +39,16 @@ import { straightCuts } from './section/cuts/straightCuts.js';
 import { UNSUPPORTED_FAN_LANE_TYPES, fanLaneCuts } from './section/cuts/fanCuts.js';
 import { makeProbeContext } from './section/sectionProbe.js';
 import { buildColumns, buildSectionFigure } from './section/sectionEngine.js';
-import { emitColumns, emitOpenGapMarks, emitLine, splitGapMarksByStair } from './section/sectionEmit.js';
-import { stairPrimitivesForCut, stairWallGapZones, stairOccluderRects } from './section/sectionStair.js';
+import { cutDrawRange } from './section/sectionTypes.js';
+import {
+  emitColumns, emitOpenGapMarks, emitLine, splitGapMarksByStair, dashHorizontalsBehindStair,
+  joinToStairProfile, clipStairDetailInSlabBand,
+} from './section/sectionEmit.js';
+import {
+  stairPrimitivesForCut, stairWallGapZones, stairOccluderRects,
+} from './section/sectionStair.js';
 import { structuralContribution, structuralPrimitivesForCut } from './section/sectionStructure.js';
-import { worldToCell } from '../finish/gridCells.js';
+import { worldToCell, roomBounds } from '../finish/gridCells.js';
 import { labelFaces, letterOf } from './elevationFaces.js';
 import { collectRunBreaks } from './elevationFloorProfile.js';
 import {
@@ -345,20 +351,23 @@ function clipWallFloorEdgeUnderZigzag(wallContent, stairContent) {
  * cut.line.lo/hi自体は変えない＝x=0の起点（cutOriginWorld）が動かないため既存座標はずれない。
  * ローカルx=0側／run側のどちらがworldのlo側かはdirSignで決まる。
  */
-function withProbeExtension(cut, endExtendMm, bandRoom = null) {
+function withProbeExtension(cut, endExtendMm, bandRoomBounds = null) {
   const openLo = cut.face?.hasWallAtLocal0 === false;
   const openHi = cut.face?.hasWallAtLocalRun === false;
   const localLoIsWorldLo = cut.dirSign > 0;
   const extend = !!endExtendMm && (openLo || openHi);
   // bandRoom: 見えがかり壁の探索を帯自身の部屋の広がりに限る（sectionProbe.jsのwithinViewRoom）。
-  return { ...cut, bandRoom, line: !extend ? cut.line : { ...cut.line,
+  return { ...cut, bandRoomBounds, line: !extend ? cut.line : { ...cut.line,
     probeExtendLoMm: (localLoIsWorldLo ? openLo : openHi) ? endExtendMm : 0,
     probeExtendHiMm: (localLoIsWorldLo ? openHi : openLo) ? endExtendMm : 0 } };
 }
 
-function contentForCut(cut, probeCtx, endExtendMm = 0, bandRoom = null) {
+function contentForCut(cut, probeCtx, endExtendMm = 0, bandRoomBounds = null, zRef = null) {
   if (!cut) return [];
-  const columns = buildColumns(withProbeExtension(cut, endExtendMm, bandRoom), probeCtx);
+  // 拡張済みcut（探査延長＋帯の部屋の包絡矩形つき）はレイキャストだけでなく構造材の判定でも使う
+  // ——「室内を空中で横断する梁の見えがかり」がbandRoomBoundsを見るため（sectionStructure.js）。
+  const pcut = withProbeExtension(cut, endExtendMm, bandRoomBounds);
+  const columns = buildColumns(pcut, probeCtx);
   // openEndLo/Hi: この面の端に壁が無い（壁面がその先へ続く）なら、描画範囲の端に凹み側面線を
   // 出さない（ユーザー実機指摘2026-08「3500左CLにエッジはない」。sectionEmit.js参照）。
   // cut.face（switchbackCuts.jsが各cutへ載せる面記述子）のhasWallAtLocal0/Runがそのまま
@@ -371,14 +380,32 @@ function contentForCut(cut, probeCtx, endExtendMm = 0, bandRoom = null) {
   // アキのバツは、手前に階段が描かれる区間だけ破線へ落とす（ユーザー実機指摘2026-08「6」C
   // 「但し、階段に隠れる部分は破線」）。隠れる範囲はプリミティブからの逆算ではなくflight自身の
   // 見付け矩形（stairOccluderRects）から求める。
-  const gapMarks = splitGapMarksByStair(
-    emitOpenGapMarks(columns, cut, emitCtx), stairOccluderRects(cut.stairCut ?? null, cut));
-  const wallContent = [...emitColumns(columns, cut, emitCtx), ...gapMarks];
-  const stairContent = stairPrimitivesForCut(cut.stairCut ?? null, cut, columns);
+  // 階段の見付けシルエット（手前に実体がある範囲）。アキのバツ・見えがかり水平線の
+  // どちらの破線判定にも同じ集合を使う。
+  const occluders = stairOccluderRects(cut.stairCut ?? null, cut);
+  const gapMarks = splitGapMarksByStair(emitOpenGapMarks(columns, cut, emitCtx), occluders);
+  // 見えがかりの水平線のうち階段の背後に入る区間は破線（同指摘「その先は袋階段に隠れて
+  // 見えなくなるが、アキ・バツのために破線で右側壁断面線まで」）。
+  const wallContent = [
+    ...dashHorizontalsBehindStair(
+      emitColumns(columns, cut, emitCtx), occluders),
+    ...gapMarks,
+  ];
+  // 下ささらの見えがかりは下階天井〜上階床の帯（床構造の中）でカットする
+  // （ユーザー実機指摘2026-08「6」D2。sectionEmit.js参照）。
+  const stairContent = zRef
+    ? clipStairDetailInSlabBand(
+        stairPrimitivesForCut(cut.stairCut ?? null, cut, columns), zRef.ceilLowAbs, zRef.floorHeight)
+    : stairPrimitivesForCut(cut.stairCut ?? null, cut, columns);
   // WP-C: 構造梁（踊り場受け梁等）の加算寄与。stairContentと独立の別レイヤのため、
   // clipWallFloorEdgeUnderZigzag（階段ジグザグの向こうの壁縁除去）の対象には含めない。
-  const structuralContent = structuralPrimitivesForCut(structuralContribution(cut.layers), cut, columns);
-  return [...clipWallFloorEdgeUnderZigzag(wallContent, stairContent), ...stairContent, ...structuralContent];
+  const structuralContent = structuralPrimitivesForCut(structuralContribution(cut.layers), pcut, columns);
+  // 階段の断面プロファイルとの取り合い（ユーザー実機指摘2026-08「6」D2。sectionEmit.js参照）。
+  const joined = zRef
+    ? joinToStairProfile(wallContent, stairContent, pcut,
+      { ...zRef, drawLo: cutDrawRange(pcut).lo, drawHi: cutDrawRange(pcut).hi })
+    : wallContent;
+  return [...clipWallFloorEdgeUnderZigzag(joined, stairContent), ...stairContent, ...structuralContent];
 }
 
 /**
@@ -434,6 +461,8 @@ export function stairFaceSequence(stair, faces, graph, opts = {}) {
   // 帯自身の部屋（階段室）。見えがかり壁の探索範囲をこの部屋の広がりに限る
   // （sectionProbe.jsのwithinViewRoom。ユーザー実機指摘2026-08「6」C・裁定A案）。
   const bandRoom = [...(graph.rooms ?? [])].find(r => r.id === stair.roomId) ?? null;
+  // 包絡矩形は世界座標の箱なので**自階graphで一度だけ**求め、全レイヤーで使う。
+  const bandRoomBounds = bandRoom ? roomBounds(bandRoom.cells, graph) : null;
   // 往復間の壁の芯を一点鎖線で示す（ユーザー実機指摘2026-08「6」C「1500の一点鎖線が出ていない」）。
   // この壁は切断線から見て**面の裏側**へ伸びるため、elevationFigure.jsの直交壁検出
   // （室内側へ突出する袖壁が対象）に掛からず、一点鎖線の源が1つも無かった。
@@ -463,7 +492,7 @@ export function stairFaceSequence(stair, faces, graph, opts = {}) {
     // 実機フィードバック第3弾F: 往復間の壁が2F腰壁（kneeDrop.knee）なら両端縦線を上端水平線
     // へ差し替え、腰壁の上＋横のL字アキに一点鎖線Xを合成する（kneeWallCapContent参照）。
     content: [
-      ...kneeWallCapContent(contentForCut(cutOf('1'), probeCtx, endExtendMm, bandRoom), cutOf('1'), kneeDrop, floorHeight, ceilTopAbs),
+      ...kneeWallCapContent(contentForCut(cutOf('1'), probeCtx, endExtendMm, bandRoomBounds, { ceilLowAbs, floorHeight }), cutOf('1'), kneeDrop, floorHeight, ceilTopAbs),
       ...wallGapXMarks(cutOf('1'), contribution, ceilLowAbs),
     ],
     skipBaseboard: true, skipWallLabel: true,
@@ -498,7 +527,7 @@ export function stairFaceSequence(stair, faces, graph, opts = {}) {
       seqNo: '2', face: outFace2,
       floorSegments: floorSegments2,
       ceilingProfile: ceilingProfile2,
-      content: contentForCut(cutOf('2'), probeCtx, endExtendMm, bandRoom), skipBaseboard: true, skipWallLabel: true,
+      content: contentForCut(cutOf('2'), probeCtx, endExtendMm, bandRoomBounds, { ceilLowAbs, floorHeight }), skipBaseboard: true, skipWallLabel: true,
     });
   }
 
@@ -509,7 +538,7 @@ export function stairFaceSequence(stair, faces, graph, opts = {}) {
       seqNo: '2.5', face: midOutFace,
       floorSegments: flatFloorSegments(midOutFace.run, 0, ceilLowAbs),
       ceilingProfile: outboundCeilingProfile(midOutFace.run, ceilLowAbs, ceilTopAbs),
-      content: contentForCut(cutOf('2.5'), probeCtx, endExtendMm, bandRoom), skipBaseboard: true, skipWallLabel: true,
+      content: contentForCut(cutOf('2.5'), probeCtx, endExtendMm, bandRoomBounds, { ceilLowAbs, floorHeight }), skipBaseboard: true, skipWallLabel: true,
     });
   }
 
@@ -517,7 +546,7 @@ export function stairFaceSequence(stair, faces, graph, opts = {}) {
   entries.push({
     seqNo: '3', face: wLanding,
     floorSegments: flatFloorSegments(wLanding.run, underFloorZ, ceilTopAbs - underFloorZ),
-    content: contentForCut(cutOf('3'), probeCtx, endExtendMm, bandRoom), skipBaseboard: true, skipWallLabel: true,
+    content: contentForCut(cutOf('3'), probeCtx, endExtendMm, bandRoomBounds, { ceilLowAbs, floorHeight }), skipBaseboard: true, skipWallLabel: true,
   });
 
   // ---- 4: W_out2（seq2の鏡像構成） ----
@@ -544,7 +573,7 @@ export function stairFaceSequence(stair, faces, graph, opts = {}) {
       seqNo: '4', face: outFace4,
       floorSegments: floorSegments4,
       ceilingProfile: ceilingProfile4,
-      content: contentForCut(cutOf('4'), probeCtx, endExtendMm, bandRoom), skipBaseboard: true, skipWallLabel: true,
+      content: contentForCut(cutOf('4'), probeCtx, endExtendMm, bandRoomBounds, { ceilLowAbs, floorHeight }), skipBaseboard: true, skipWallLabel: true,
     });
   }
 
@@ -554,7 +583,7 @@ export function stairFaceSequence(stair, faces, graph, opts = {}) {
     entries.push({
       seqNo: '4.5', face: midRetFace,
       floorSegments: flatFloorSegments(midRetFace.run, underFloorZ, ceilTopAbs - underFloorZ),
-      content: contentForCut(cutOf('4.5'), probeCtx, endExtendMm, bandRoom), skipBaseboard: true, skipWallLabel: true,
+      content: contentForCut(cutOf('4.5'), probeCtx, endExtendMm, bandRoomBounds, { ceilLowAbs, floorHeight }), skipBaseboard: true, skipWallLabel: true,
     });
   }
 
@@ -564,7 +593,7 @@ export function stairFaceSequence(stair, faces, graph, opts = {}) {
     entries.push({
       seqNo: '5', face: outFace5,
       floorSegments: flatFloorSegments(outFace5.run, underFloorZ, ceilTopAbs - underFloorZ),
-      content: contentForCut(cutOf('5'), probeCtx, endExtendMm, bandRoom), skipBaseboard: true, skipWallLabel: true,
+      content: contentForCut(cutOf('5'), probeCtx, endExtendMm, bandRoomBounds, { ceilLowAbs, floorHeight }), skipBaseboard: true, skipWallLabel: true,
     });
   }
 

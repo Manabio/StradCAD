@@ -64,7 +64,9 @@ test('【WP-C】structuralPrimitivesForCut: 切断線が梁を横切る（直交
     viewSign: 1, dirSign: 1, layers: [], zRange: { loZ: -500, hiZ: 3000 }, baseFloorZ: 0,
   };
   const prims = structuralPrimitivesForCut(contribution, cut, []);
-  assert.equal(prims.length, 4, '断面矩形4辺のはず');
+  // 期待値更新（ユーザー実機指摘2026-08「断面形状を指定構造材に合わせて」）: STEEL-H200x100は
+  // H形鋼なのでフランジ・ウェブの実形状＝12辺の閉じた輪郭になる（矩形4辺ではない）。
+  assert.equal(prims.length, 12, 'H形鋼の断面輪郭は12辺のはず');
   for (const p of prims) {
     assert.equal(p.type, 'line');
     assert.equal(p.weight, 'thick', '断面はCUT(太線)のはず');
@@ -111,8 +113,31 @@ test('【失敗系・実機指摘】structuralPrimitivesForCut: 範囲の端の�
     viewSign: 1, dirSign: 1, layers: [], zRange: { loZ: -500, hiZ: 3000 }, baseFloorZ: 0,
     face: { faceValue: 1057.5, axisCL: { effectiveValue: 1000 } }, // halfWallThicknessMm=57.5
   };
-  assert.equal(structuralPrimitivesForCut(contribution, cut, []).length, 4,
-    'CL上の梁は取りこぼさないはず（梁の半幅＋半壁厚の許容）');
+  assert.equal(structuralPrimitivesForCut(contribution, cut, []).length, 12,
+    'CL上の梁は取りこぼさないはず（梁の半幅＋半壁厚の許容。H形鋼なので12辺）');
+});
+
+// ---- ユーザー実機指摘2026-08「6」「Y2の壁際、2FL床高付近に謎の構造材断面」 ----
+// 実機の2階床梁はspan=-7625..-3290のように建物を貫いて走るため、既定の「壁の中なら描画しない」
+// （梁の全スパンを1枚の壁が覆うことを要求）が一度も発動しない。断面は切断線と交わる**一点**で
+// 描かれるので、判定もその位置で行う。
+test('【実機指摘】structuralPrimitivesForCut: 切断位置で壁の中に納まる梁の断面は描かない', () => {
+  const graph = makeGraph();
+  const beam = addHorizontalBeam(graph, 500); // 通り芯y=1000に沿ってx=0〜2000・幅100
+  // 梁芯と同じy=1000に、梁より短い壁（x=800〜1200）を置く。全スパンは覆わないが切断位置は覆う。
+  const wall = { isVertical: false, materialRange: { lo: 940, hi: 1060 }, coord1: 800, coord2: 1200 };
+  const contribution = structuralContribution([{ graph, floorZMm: 0, role: 'self' }]);
+  assert.equal(contribution.length, 1, '前提: 全スパン基準の既定フィルタでは落ちない');
+  const cutAt = axisValue => ({
+    seqNo: 'x', line: { isVertical: true, axisValue, lo: 0, hi: 2000 },
+    viewSign: 1, dirSign: 1, layers: [{ graph: { walls: [wall] }, floorZMm: 0, role: 'self' }],
+    zRange: { loZ: -500, hiZ: 3000 }, baseFloorZ: 0,
+  });
+  assert.deepEqual(structuralPrimitivesForCut(contribution, cutAt(1000), []), [],
+    '壁が覆う位置(x=1000)で切ると断面は描かないはず');
+  assert.equal(structuralPrimitivesForCut(contribution, cutAt(1800), []).length, 12,
+    '壁の無い位置(x=1800)で切れば従来どおり断面を描くはず（H形鋼なので12辺）');
+  void beam;
 });
 
 test('【WP-C】structuralPrimitivesForCut: 切断線が梁に平行かつ幅の帯内・spanが重なると上端/下端/両端縦線(4本・DETAIL細線)を出す', () => {
@@ -143,7 +168,7 @@ test('【WP-C】structuralPrimitivesForCut: baseFloorZより下の梁は既存�
     viewSign: 1, dirSign: 1, layers: [], zRange: { loZ: -1000, hiZ: 3000 }, baseFloorZ: 0,
   };
   const prims = structuralPrimitivesForCut(contribution, cut, []);
-  assert.equal(prims.length, 4);
+  assert.equal(prims.length, 12, 'H形鋼の断面輪郭は12辺のはず');
   for (const p of prims) {
     assert.equal(p.weight, 'thin', 'baseFloorZより下はDETAILへ降格するはず');
     assert.equal(p.dash, 'dashed');

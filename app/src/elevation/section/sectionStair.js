@@ -447,6 +447,39 @@ function flightLadderPrimitives(flight, cut, columns, ladderAcross) {
  * @param {import('./sectionTypes.js').SectionCut} cut
  * @returns {Array<{xLo:number, xHi:number, zLo:number, zHi:number}>}
  */
+/**
+ * 往路・復路レーンの間の空き（LANE_GAP=100）のローカルx範囲。踊り場桁枠の下端をここだけに
+ * 絞るのに使う（ユーザー実機指摘2026-08「6」C「踊り場のささら下端は、内側の100の部分のみ」）。
+ * レーンが2本無い・内側が定まらない構成はnull（呼び出し側は従来どおり全幅）。
+ */
+function laneGapLocalX(contribution, cut, trueAcrossLo, trueAcrossHi, isSteel) {
+  const crossing = (contribution.flights ?? []).filter(f => crossesFlight(f, cut));
+  if (crossing.length < 2) return null;
+  const inners = [];
+  for (const flight of crossing) {
+    const side = innerAcrossWorld(flight, trueAcrossLo, trueAcrossHi);
+    if (!side) return null;
+    const across = isSteel ? ladderAcrossRange(flight, trueAcrossLo, trueAcrossHi, LANE_GAP) : flight;
+    inners.push(localXOf(cut, side === 'lo' ? across.acrossLo : across.acrossHi));
+  }
+  const loX = Math.min(...inners), hiX = Math.max(...inners);
+  return hiX - loX > GAP_EPS ? { loX, hiX } : null;
+}
+
+/**
+ * この切断で**手前に実体として描かれる階段**の見付け矩形（正面視のシルエット）。
+ * アキのバツ・見えがかりの水平線のうち、この範囲に入る区間を破線にするのに使う
+ * （ユーザー実機指摘2026-08「6」C「階段に隠れる部分は破線」＋撤回後の再指示
+ * 「想定したバツに対して描画面+所定距離までレイキャストして、隠れた部分を破線にする」）。
+ * 内訳:
+ *   - 各flight（レーンを横切る＝正面視の切断のみ）: 見付け幅（梯子と同じ`ladderAcrossRange`
+ *     調整済み。STEEL時）× 昇り切り高さ（`baseZ`〜`baseZ+steps*riserMm`）。
+ *   - 各landing: 桁枠の帯（`landing.z-landingFrameDepthMm`〜`landing.z`）を全幅で。
+ * *却下した規則*: 「内側のささらより右（z全域）」を対角線ごとに割り当てる案——ユーザーが
+ * 「バツも破線範囲は、何かの基準線の左右では決まらない」として撤回した。深さ方向の限定
+ * （「描画面+所定距離まで」）は、階段のflightが帯自身の部屋（`bandRoom`）の中にしか存在せず
+ * 描画面より手前であることが構成上保証されるため、追加の判定を持たない（ASSUMED）。
+ */
 export function stairOccluderRects(contribution, cut) {
   if (!contribution || !cut?.line) return [];
   const isSteel = contribution.structure === StructuralMaterialType.STEEL;
@@ -454,15 +487,22 @@ export function stairOccluderRects(contribution, cut) {
   if (acrossExtents.length === 0) return [];
   const trueAcrossLo = Math.min(...acrossExtents.map(e => e.acrossLo));
   const trueAcrossHi = Math.max(...acrossExtents.map(e => e.acrossHi));
-  const rects = [];
-  for (const flight of contribution.flights ?? []) {
-    if (!crossesFlight(flight, cut)) continue;
+  const rects = (contribution.flights ?? []).filter(f => crossesFlight(f, cut)).map(flight => {
     const across = isSteel ? ladderAcrossRange(flight, trueAcrossLo, trueAcrossHi, LANE_GAP) : flight;
     const a = localXOf(cut, across.acrossLo), b = localXOf(cut, across.acrossHi);
-    rects.push({
+    return {
       xLo: Math.min(a, b), xHi: Math.max(a, b),
       zLo: flight.baseZ, zHi: flight.baseZ + flight.steps * flight.riserMm,
-    });
+    };
+  });
+  const depth = contribution.unit?.landingFrameDepthMm ?? 0;
+  if (depth > 0) {
+    for (const landing of contribution.landings ?? []) {
+      const a = localXOf(cut, landing.acrossLo), b = localXOf(cut, landing.acrossHi);
+      rects.push({
+        xLo: Math.min(a, b), xHi: Math.max(a, b), zLo: landing.z - depth, zHi: landing.z,
+      });
+    }
   }
   return rects;
 }
@@ -512,13 +552,16 @@ function stringerRectLines(cut, xLo, xHi, zTop, depthMm) {
 // レーンを横切る（正面視）: ささらの断面矩形を両側（acrossLo側・acrossHi側）に描く（STEEL限定。
 // ユーザー指示「断面は太線」対応）。ladderAcrossはflightLadderPrimitivesと同じLANE_GAP調整済み
 // 幅（columnsXRangeOverlappingでlocal x範囲へ変換）を再利用する——見返りの梯子と同じ横幅に揃える。
-function flightStringerFrontPrimitives(flight, cut, columns, ladderAcross, depthMm, thicknessMm) {
+function flightStringerFrontPrimitives(flight, cut, columns, ladderAcross, depthMm, thicknessMm, baseboardMm = 0) {
   if (!crossesFlight(flight, cut)) return [];
   const { acrossLo, acrossHi } = ladderAcross ?? flight;
   const range = columnsXRangeOverlapping(columns, cut, acrossLo, acrossHi);
   if (!range) return [];
   const { loX, hiX } = range;
-  const zTop = flightElevationAt(flight, cut.line.axisValue);
+  // 上端は段鼻の高さそのものではなく**巾木高さぶん上**（ユーザー実機指摘2026-08「6」C
+  // 「両側のささら断面上端高さは、踊り場面+巾木」。既定の裁定「ささらの上端は踏面先端で
+  // 巾木同寸」＝側面視のstringerBandGeometryと同じ基準を正面視の断面矩形にも揃える）。
+  const zTop = flightElevationAt(flight, cut.line.axisValue) + baseboardMm;
   return [
     ...stringerRectLines(cut, loX, loX + thicknessMm, zTop, depthMm),
     ...stringerRectLines(cut, hiX - thicknessMm, hiX, zTop, depthMm),
@@ -548,12 +591,54 @@ function stringerEndCapPrimitives(flight, cut, ladderAcross) {
   ];
 }
 
+/**
+ * flightの「内側」（平面で折返し階段を見たときの内側＝もう一方のレーンに接する側。
+ * ユーザー実機指摘2026-08「6」C「梯子状の壁断面のない方の端」）のacross世界座標。
+ * 部屋の実外縁(trueAcrossLo/Hi)と一致しない側が内側——`ladderAcrossRange`がLANE_GAPを
+ * 片側だけ詰めるのと同じ判定基準（単一情報源）。両端とも外縁なら内側は無い（null）。
+ */
+function innerAcrossWorld(flight, trueAcrossLo, trueAcrossHi) {
+  if (flight.acrossLo > trueAcrossLo + GAP_EPS) return 'lo';
+  if (flight.acrossHi < trueAcrossHi - GAP_EPS) return 'hi';
+  return null;
+}
+
+/**
+ * 内側のささらの見えがかり（正面視の縦線1本。ユーザー実機指摘2026-08「6」C
+ * 「往路が1FLから踊り場まで、復路は踊り場断面から2FLまで」）。
+ * 既存の`stringerEndCapPrimitives`（第3弾E）は「踊り場より下まで達するレーン」限定で両端に
+ * 端面の細破線を描くもので、踊り場**より上**の復路には一切出なかった——そちらの契約は変えず、
+ * ここでは端面規則の対象外（baseZ>=baseFloorZ）のレーンについて内側の縦線だけを補う。
+ */
+function innerStringerSilhouette(flight, cut, ladderAcross, trueAcrossLo, trueAcrossHi) {
+  if (!crossesFlight(flight, cut)) return [];
+  if (flight.baseZ < (cut.baseFloorZ ?? 0) - GAP_EPS) return []; // 端面規則(第3弾E)の担当
+  const side = innerAcrossWorld(flight, trueAcrossLo, trueAcrossHi);
+  if (!side) return [];
+  const across = ladderAcross ?? flight;
+  const x = localXOf(cut, side === 'lo' ? across.acrossLo : across.acrossHi);
+  const topZ = flight.baseZ + flight.steps * flight.riserMm;
+  return [emitLine(cut, x, flight.baseZ, x, topZ, ElevationLineRole.DETAIL, { neverDowngrade: true })];
+}
+
 // 踊り場のレーン縦断: 床のCUT水平線1本（columns中、踊り場のrun範囲と重なる列のx範囲のみ）。
 // 実機フィードバック第3弾C: 踊り場床CUT線もCUT断面のためneverDowngrade:true
 // （baseFloorZより下でも太線実線のまま。stringerRectLines冒頭コメント参照）。
 function landingCutPrimitives(landing, stairIsVertical, cut, columns) {
-  if (!isLengthwiseCut(stairIsVertical, landing.acrossLo, landing.acrossHi, landing.runLo, landing.runHi, cut)) return [];
-  const range = columnsXRangeOverlapping(columns, cut, landing.runLo, landing.runHi);
+  const lengthwise = isLengthwiseCut(
+    stairIsVertical, landing.acrossLo, landing.acrossHi, landing.runLo, landing.runHi, cut);
+  // 正面視（レーンを横切る切断＝seq1の踊り場前縁）でも踊り場の床は切断されている
+  // （ユーザー実機指摘2026-08「6」C「踊り場断面線を太線に」）。旧実装はlengthwiseのときしか
+  // 描かず、正面視では踊り場桁枠のfront/back辺の**帯の上端**（DETAIL細線）が踊り場床の高さに
+  // 見えているだけだった。x範囲は走行方向ではなく**across（壁から壁までの全幅）**で取る
+  // （同指摘「踊場床断面と壁との取り合い…幅」）。
+  const crossing = !lengthwise && cut.line.isVertical !== stairIsVertical
+    && cut.line.axisValue >= landing.runLo - GAP_EPS && cut.line.axisValue <= landing.runHi + GAP_EPS;
+  if (!lengthwise && !crossing) return [];
+  const [spanLo, spanHi] = lengthwise
+    ? [landing.runLo, landing.runHi]
+    : [landing.acrossLo, landing.acrossHi];
+  const range = columnsXRangeOverlapping(columns, cut, spanLo, spanHi);
   if (!range) return [];
   return [emitLine(cut, range.loX, landing.z, range.hiX, landing.z, ElevationLineRole.CUT, { neverDowngrade: true })];
 }
@@ -612,7 +697,7 @@ function hasLandingFrame(structure) {
  * @param {StairUnit} unit
  * @returns {object[]}
  */
-export function landingFramePrimitives(landing, cut, columns, unit, mitreX = null) {
+export function landingFramePrimitives(landing, cut, columns, unit, mitreX = null, laneGapX = null) {
   const edges = landing?.frame?.edges;
   if (!edges || edges.length === 0 || !hasLandingFrame(unit?.structure)) return [];
   const stairIsVertical = edges.find(e => e.kind === 'side')?.isVertical;
@@ -624,7 +709,6 @@ export function landingFramePrimitives(landing, cut, columns, unit, mitreX = nul
   if (!lengthwise && !crossing) return [];
 
   const prims = [];
-  const zTop = landing.z, zBot = landing.z - unit.landingFrameDepthMm;
   // ユーザー実機フィードバック2026-08-23「ささらの線は踊り場回りも一続き」対応: side辺
   // （走行軸に平行＝直進部のささらと同じ位置関係で連続する辺）の帯は、front/back辺の
   // landing.z基準（床断面線そのもの）ではなく「踊り場床断面線+巾木高さ」を上端基準にし、
@@ -657,20 +741,54 @@ export function landingFramePrimitives(landing, cut, columns, unit, mitreX = nul
         // （landingMitreOpts→stringerBandGeometry）なので、桁枠側もその交点から描き始める
         // ——交点までの区間は斜めささらの下端が外形になっており、そこへ桁枠の下端も引くと
         // 帯の内側に線が1本余る。交点は同じ`stringerBandGeometry`から取る（単一情報源）。
-        const botLo = mitreX != null ? Math.max(loX, Math.min(hiX, mitreX)) : loX;
-        prims.push(emitLine(cut, botLo, sideBot, hiX, sideBot, ElevationLineRole.DETAIL, { neverDowngrade: true }));
+        // ミトレ結合の下端側: 交点(mitreX)までは斜めささらの下端が外形になっているので、桁枠側は
+        // **交点から見て階段と反対側**だけを描く。旧実装は常に[mitreX, hiX]を描いており、階段が
+        // hi側にある構成（実機「6」B）では踊り場のほぼ全長が消えていた——交点は階段側の端の近くに
+        // 来るので、mitreXがどちらの端に近いかで描く側を決める（ユーザー実機指摘2026-08「6」B
+        // 「踊り場の下ささら見えがかりが描画されていない」）。
+        let botLo = loX, botHi = hiX;
+        if (mitreX != null) {
+          const m = Math.max(loX, Math.min(hiX, mitreX));
+          if (Math.abs(m - hiX) < Math.abs(m - loX)) botHi = m; else botLo = m;
+        }
+        if (botHi - botLo > GAP_EPS) {
+          prims.push(emitLine(cut, botLo, sideBot, botHi, sideBot, ElevationLineRole.DETAIL, { neverDowngrade: true }));
+        }
         const isFrontX = (x) => frontX != null && Math.abs(x - frontX) < GAP_EPS;
         if (!isFrontX(loX)) prims.push(emitLine(cut, loX, sideTop, loX, sideBot, ElevationLineRole.DETAIL, { neverDowngrade: true }));
         if (!isFrontX(hiX)) prims.push(emitLine(cut, hiX, sideTop, hiX, sideBot, ElevationLineRole.DETAIL, { neverDowngrade: true }));
       } else {
-        // front/back辺: せいlandingFrameDepthMmの帯輪郭（上端・下端の2線。§3.2「帯輪郭」）。
-        prims.push(emitLine(cut, loX, zTop, hiX, zTop, ElevationLineRole.DETAIL, { neverDowngrade: true }));
-        prims.push(emitLine(cut, loX, zBot, hiX, zBot, ElevationLineRole.DETAIL, { neverDowngrade: true }));
+        // front/back辺: せいlandingFrameDepthMmの帯輪郭。上端(zTop===landing.z)は
+        // `landingCutPrimitives`が踊り場床の断面線としてCUTで描くので**ここでは描かない**
+        // （ユーザー実機指摘2026-08「6」C「踊り場断面線を太線に」。side辺と同じ扱いに揃えた）。
+        // 下端は**往路・復路レーンの間の空き（LANE_GAP=100）に見える部分だけ**（同指摘
+        // 「踊り場のささら下端は、内側の100の部分のみ。あとは、不要。過去指示、間違いのため修正」）
+        // ——それ以外の区間はレーンのささら・踏面の裏に隠れて見えない。laneGapX未指定
+        // （レーンが1本＝間の空きが無い構成）は従来どおり全幅。
+        // 上端は**踊り場床の断面線(landing.z)ではなく「踊り場面+巾木」(sideTop)**——桁枠はささらの
+        // 続きで、上端の基準は側面視の裁定「ささらの上端は踏面先端で巾木同寸」と同じ
+        // （ユーザー実機指摘2026-08「6」A「上下にささらの見えがかり（横線2本）」。踊り場床の
+        // 断面線はlandingCutPrimitivesがCUTで別に描くので、重複ではなく上下2本になる）。
+        prims.push(emitLine(cut, loX, sideTop, hiX, sideTop, ElevationLineRole.DETAIL, { neverDowngrade: true }));
+        const botLo2 = laneGapX ? Math.max(loX, laneGapX.loX) : loX;
+        const botHi2 = laneGapX ? Math.min(hiX, laneGapX.hiX) : hiX;
+        if (botHi2 - botLo2 > GAP_EPS) {
+          prims.push(emitLine(cut, botLo2, sideBot, botHi2, sideBot, ElevationLineRole.DETAIL, { neverDowngrade: true }));
+        }
       }
     } else {
       // end-on（見返り）: 12mm厚×landingFrameDepthMmの断面矩形をCUTで描く。
+      // 桁枠の辺は**部屋の通り芯（landing.acrossLo/Hi）上**にあるため、面の端（壁の仕上げ面）より
+      // 外へ出ることがある——その場合は面の内側へ寄せて壁と取り合わせる（ユーザー実機指摘2026-08
+      // 「6」A「その左右壁との取り合いに（折返し階段外回りの）ささら断面」。旧実装では面の外に
+      // 落ちて`stringerRectLines`の描画範囲チェックで丸ごと消えていた）。
+      const t = unit.stringerThicknessMm;
+      const draw = cutDrawRange(cut);
       const x = localXOf(cut, edge.axisWorld);
-      prims.push(...stringerRectLines(cut, x, x + unit.stringerThicknessMm, zTop, unit.landingFrameDepthMm));
+      let recLo = Math.min(x, x + t), recHi = Math.max(x, x + t);
+      if (recLo < draw.lo - GAP_EPS) { recLo = draw.lo; recHi = draw.lo + t; }
+      if (recHi > draw.hi + GAP_EPS) { recHi = draw.hi; recLo = draw.hi - t; }
+      prims.push(...stringerRectLines(cut, recLo, recHi, sideTop, unit.landingFrameDepthMm));
     }
   }
   return prims;
@@ -687,7 +805,14 @@ export function landingFramePrimitives(landing, cut, columns, unit, mitreX = nul
 export function stairPrimitivesForCut(contribution, cut, columns) {
   if (!contribution) return [];
   const prims = [];
-  const stairIsVertical = contribution.flights[0]?.isVertical ?? cut.line.isVertical;
+  // 階段の走行軸の向き。**flightsが空でも踊り場から取れる**ようにする（ユーザー実機指摘2026-08
+  // 「6」A）——seq3は「段の重ね描きなし」でflights:[]の寄与を受け取るため、旧実装の
+  // `flights[0] ?? cut.line.isVertical`だと切断線自身の向きへフォールバックし、
+  // isLengthwiseCut/crossingの判定が反転して踊り場の断面・桁枠がほとんど出なかった。
+  // 踊り場のside辺（走行軸に平行な辺）の向きが階段の向きそのもの（landingFramePrimitivesと同じ導出）。
+  const stairIsVertical = contribution.flights[0]?.isVertical
+    ?? contribution.landings?.[0]?.frame?.edges?.find(e => e.kind === 'side')?.isVertical
+    ?? cut.line.isVertical;
   const isSteel = contribution.structure === StructuralMaterialType.STEEL;
   // WP-A2: 踊り場桁枠の生成対象（STEEL・RC。ユーザー裁定2026-08-23）。ささら本体(isSteel)とは
   // 独立したゲート——RC階段はささらを持たないがコンクリート桁枠は持つ。
@@ -724,10 +849,13 @@ export function stairPrimitivesForCut(contribution, cut, columns) {
     // DEPTH_MMの断面矩形をCUT（太線）で描く。ユーザー指示「断面は太線」対応。
     if (isSteel) {
       prims.push(...flightStringerFrontPrimitives(
-        flight, cut, columns, ladderAcross, STEEL_STRINGER_DEPTH_MM, STEEL_STRINGER_THICKNESS_MM));
+        flight, cut, columns, ladderAcross, STEEL_STRINGER_DEPTH_MM, STEEL_STRINGER_THICKNESS_MM,
+        contribution.unit?.baseboardHeightMm ?? 0));
       // 実機フィードバック第3弾E: 踊り場より下（flight.baseZ<cut.baseFloorZ）まで達するレーンは
       // ささらの端面（縦の細破線）も追加する。
       prims.push(...stringerEndCapPrimitives(flight, cut, ladderAcross));
+      // 内側のささらの見えがかり（同上の縦線1本。端面規則の対象外レーン＝復路を補う）。
+      prims.push(...innerStringerSilhouette(flight, cut, ladderAcross, trueAcrossLo, trueAcrossHi));
     }
   }
   // WP-2026-08-23実機フィードバック「「1」Bでは、往路と復路の間に壁はないので、復路直進部の
@@ -751,7 +879,8 @@ export function stairPrimitivesForCut(contribution, cut, columns) {
     // WP-A2: 踊り場の桁枠（front/back/side桁。STEEL・RCが対象。ユーザー裁定2026-08-23）。
     if (hasFrame) {
       const mitreX = isSteel ? landingSideMitreX(contribution, landing, cut, columns) : null;
-      prims.push(...landingFramePrimitives(landing, cut, columns, contribution.unit, mitreX));
+      prims.push(...landingFramePrimitives(landing, cut, columns, contribution.unit, mitreX,
+        laneGapLocalX(contribution, cut, trueAcrossLo, trueAcrossHi, isSteel)));
     }
   }
   // ささら側面視（鉄骨のみ。§6「鉄骨階段のみ」）: 各レーンのジグザグ点列ごとに桁成ぶん下げた

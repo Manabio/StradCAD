@@ -142,6 +142,59 @@ test('【WP-E3】stairPrimitivesForCut: 踊り場を縦断する切断はCUTの�
   assert.equal(prims[0].y2, -c.landings[0].z);
 });
 
+// ---- ユーザー実機指摘2026-08「6」C「踊り場断面線を太線に」 ----
+// 正面視（踊り場を横切る切断＝踊り場前縁の見返り）でも踊り場の床は切断されている。旧実装は
+// レーン縦断のときしか床線を描かず、踊り場桁枠front/back辺の帯の上端（DETAIL細線）が
+// 踊り場床の高さに見えているだけだった。x範囲は走行方向ではなくacross（壁から壁までの全幅）。
+test('【実機指摘】stairPrimitivesForCut: 正面視でも踊り場の床断面線をCUTで全幅に描く', () => {
+  const graph = makeGraph();
+  const { stair } = makeSwitchbackFixture(graph, StructuralMaterialType.STEEL);
+  const c = stairContribution(stair, graph, FLOOR_HEIGHT);
+  const landing = c.landings[0];
+  const cut = {
+    seqNo: '1', line: { isVertical: false, axisValue: 700, lo: 0, hi: 2000 },
+    viewSign: 1, dirSign: 1, layers: [], zRange: { loZ: 0, hiZ: 3000 }, baseFloorZ: 0,
+  };
+  const columns = [{ x0: 0, x1: 2000, worldLo: 0, worldHi: 2000, bands: [] }];
+  const prims = stairPrimitivesForCut(c, cut, columns);
+  const fullWidth = landing.acrossHi - landing.acrossLo;
+  const thickHoriz = prims.filter(p => p.type === 'line' && p.weight === 'thick'
+    && Math.abs(p.y1 - p.y2) < 1e-6);
+  const floorLine = thickHoriz.find(p => Math.abs(p.y1 - (-landing.z)) < 1e-6
+    && Math.abs(Math.abs(p.x2 - p.x1) - fullWidth) < 1e-6);
+  assert.ok(floorLine, '踊り場床の断面線が z=' + landing.z + ' に全幅(' + fullWidth
+    + ')のCUT(太線)で出るはず（実際の太線水平: '
+    + thickHoriz.map(p => `z${-p.y1}:${p.x1}..${p.x2}`).join(' / ') + '）');
+});
+
+// ---- ユーザー実機指摘2026-08「6」C「ささら断面上端高さは、踊り場面+巾木」 ----
+// 側面視の裁定「ささらの上端は踏面先端で巾木同寸」と同じ基準を、正面視の断面矩形にも揃える。
+test('【実機指摘】stairPrimitivesForCut: ささら正面視の断面矩形の上端は段鼻+巾木高さ', () => {
+  const graph = makeGraph();
+  const { stair } = makeSwitchbackFixture(graph, StructuralMaterialType.STEEL);
+  const c = stairContribution(stair, graph, FLOOR_HEIGHT);
+  const f = c.flights[0];
+  const axisValue = (f.runLo + f.runHi) / 2;
+  const cut = {
+    seqNo: '1', line: { isVertical: false, axisValue, lo: f.acrossLo, hi: f.acrossHi },
+    viewSign: 1, dirSign: 1, layers: [], zRange: { loZ: 0, hiZ: 3000 }, baseFloorZ: 0,
+  };
+  const columns = [{ x0: 0, x1: f.acrossHi - f.acrossLo, worldLo: f.acrossLo, worldHi: f.acrossHi, bands: [] }];
+  const prims = stairPrimitivesForCut(c, cut, columns);
+  const worldStart = f.travelSign > 0 ? f.runLo : f.runHi;
+  const worldEnd   = f.travelSign > 0 ? f.runHi : f.runLo;
+  const noseZ = f.baseZ + ((axisValue - worldStart) / (worldEnd - worldStart)) * f.steps * f.riserMm;
+  const baseboard = c.unit.baseboardHeightMm;
+  assert.ok(baseboard > 0, '前提: 巾木高さが0でない');
+
+  const tops = prims.filter(p => p.type === 'line' && p.weight === 'thick' && Math.abs(p.y1 - p.y2) < 1e-6)
+    .map(p => -p.y1);
+  assert.ok(tops.some(z => Math.abs(z - (noseZ + baseboard)) < 1e-6),
+    `ささら断面の上端が段鼻+巾木(${noseZ + baseboard})に無い（実際:${[...new Set(tops)].join(',')}）`);
+  assert.ok(!tops.some(z => Math.abs(z - noseZ) < 1e-6),
+    '巾木ぶんを足さない段鼻ちょうどの上端は残らないはず');
+});
+
 // ---- 実機フィードバック第3弾C: CUT断面（踊り場床CUT線）はbaseFloorZより下でも降格しない ----
 test('【実機フィードバック第3弾C】stairPrimitivesForCut: 踊り場床CUT線はcut.baseFloorZより下でも太線実線のまま（neverDowngrade）', () => {
   const graph = makeGraph();
@@ -557,8 +610,22 @@ test('【WP-A2】landingFramePrimitives: 正面視(踊り場を横切る切断)�
 
   const detail = prims.filter(p => p.weight === 'thin');
   const cutLines = prims.filter(p => p.weight === 'thick');
+  // 期待値更新（ユーザー実機指摘2026-08「6」A「上下にささらの見えがかり（横線2本）」）:
+  // 桁枠の帯の基準は**踊り場面+巾木**（sideTop）で統一した——踊り場床の断面線(landing.z)は
+  // landingCutPrimitivesがCUTで別に描くので、帯の上下2本とは重複しない。
+  const sideTop = landing.z + c.unit.baseboardHeightMm;
+  const sideBot = sideTop - c.unit.landingFrameDepthMm;
   assert.equal(detail.length, 4, 'front/back桁2本×(上端+下端)=4本のDETAILのはず');
   assert.equal(cutLines.length, 8, 'side桁2本×矩形4辺=8本のCUTのはず');
+  for (const p of detail) {
+    const z = -p.y1;
+    assert.ok(Math.abs(z - sideTop) < 1e-6 || Math.abs(z - sideBot) < 1e-6,
+      `DETAILは帯の上端(${sideTop})か下端(${sideBot})のはず（実際:${z}）`);
+  }
+  for (const p of cutLines) {
+    assert.ok(-p.y1 <= sideTop + 1e-6 && -p.y1 >= sideBot - 1e-6,
+      `side桁の断面矩形も帯と同じz範囲(${sideBot}..${sideTop})のはず（実際:${-p.y1}）`);
+  }
 });
 
 test('【失敗系・WP-A2】landingFramePrimitives: WOOD(木造)は桁枠なし・RC(鉄筋コンクリート造)はあり' +

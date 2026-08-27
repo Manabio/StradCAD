@@ -2,7 +2,10 @@
 // を直接検証する（§9新規テスト方針）。line/z座標のyへの変換はzToY(z)=-z（sectionTypes.js）。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { emitLine, emitColumns, emitOpenGapMarks, splitGapMarksByStair } from './sectionEmit.js';
+import {
+  emitLine, emitColumns, emitOpenGapMarks, splitGapMarksByStair, dashHorizontalsBehindStair,
+  joinToStairProfile, clipStairDetailInSlabBand,
+} from './sectionEmit.js';
 
 function makeCut(overrides = {}) {
   return { seqNo: '1', line: { isVertical: false, axisValue: 0, lo: 0, hi: 3000 },
@@ -268,6 +271,137 @@ test('【失敗系・実機指摘】emitColumns: 内部の凹み境界はopenEnd
   assert.ok(seam.length >= 1, '内部の凹み境界（x=500）は従来どおり出るはず');
 });
 
+// ---- ユーザー実機指摘2026-08「6」D2: 階段断面プロファイルとの取り合い ----
+test('【実機指摘】joinToStairProfile: 1F天井断面線を階段断面との交点まで伸ばし、2FLから床線を張り出す', () => {
+  const cut = { line: { isVertical: true, axisValue: 0, lo: 0, hi: 3000 }, dirSign: 1,
+    zRange: { loZ: 0, hiZ: 5400 }, baseFloorZ: 0 };
+  // 階段断面: 左端(x=500)で2FL(3000)、右へ下って(x=2500)で踊り場(1500)。z2400はx=1000で横切る。
+  const profile = { type: 'polyline', weight: 'thick',
+    points: [[500, -3000], [2500, -1500]] };
+  const ceiling = { type: 'line', x1: -285, y1: -2400, x2: 0, y2: -2400, weight: 'medium' };
+  const out = joinToStairProfile([ceiling], [profile], cut,
+    { ceilLowAbs: 2400, floorHeight: 3000, drawLo: -285, drawHi: 3000 });
+
+  const ceil2 = out.find(p => p.type === 'line' && Math.abs(-p.y1 - 2400) < 1e-6);
+  assert.ok(ceil2);
+  assert.ok(Math.abs(Math.max(ceil2.x1, ceil2.x2) - 1300) < 1e-6,
+    `1F天井断面線は階段断面との交点(x=1300)まで伸びるはず（実際:${Math.max(ceil2.x1, ceil2.x2)}）`);
+
+  const slab = out.find(p => p.type === 'line' && Math.abs(-p.y1 - 3000) < 1e-6);
+  assert.ok(slab, '2FLの床断面線が張り出すはず');
+  const xs = [slab.x1, slab.x2].sort((a, b) => a - b);
+  assert.deepEqual(xs, [-285, 500], '階段の上り切り(x=500)から近い側の端(-285)へ張り出すはず');
+});
+
+test('【実機指摘】clipStairDetailInSlabBand: 下ささらだけを帯で切り、上ささらは残す', () => {
+  // ささらの見えがかりは上端・下端の2本1組。z1000→z4000へ上がり、天井2400〜床3000の帯を通過する。
+  const lower = { type: 'polyline', weight: 'thin', points: [[0, -1000], [3000, -4000]] };
+  const upper = { type: 'polyline', weight: 'thin', points: [[0, -1300], [3000, -4300]] }; // 300上
+  const profile = { type: 'polyline', weight: 'thick', points: [[0, -1000], [3000, -4000]] };
+  const out = clipStairDetailInSlabBand([lower, upper, profile], 2400, 3000);
+
+  assert.ok(out.includes(profile), 'CUT(太線)の断面プロファイルは対象外で素通しのはず');
+  assert.ok(out.includes(upper), '上ささらは見えるのでそのまま残るはず');
+  assert.ok(!out.includes(lower), '下ささらは帯で切られるはず');
+  const parts = out.filter(p => p.weight === 'thin' && p !== upper);
+  assert.equal(parts.length, 2, '下ささらは帯の下側・上側の2本に分かれるはず');
+  const zsOf = p => p.points.map(([, y]) => -y);
+  assert.ok(parts.some(p => Math.max(...zsOf(p)) <= 2400 + 1e-6), '帯より下の区間が残るはず');
+  assert.ok(parts.some(p => Math.min(...zsOf(p)) >= 3000 - 1e-6), '帯より上の区間が残るはず');
+});
+
+test('【失敗系・実機指摘】clipStairDetailInSlabBand: 帯に掛からない・帯が退化していれば素通し', () => {
+  const below = { type: 'polyline', weight: 'thin', points: [[0, -100], [1000, -2000]] };
+  assert.deepEqual(clipStairDetailInSlabBand([below], 2400, 3000), [below]);
+  assert.deepEqual(clipStairDetailInSlabBand([below], 3000, 3000), [below]);
+});
+
+test('【失敗系・実機指摘】joinToStairProfile: 階段断面が無ければ何も変えない', () => {
+  const cut = { line: { isVertical: true, axisValue: 0, lo: 0, hi: 3000 }, dirSign: 1,
+    zRange: { loZ: 0, hiZ: 5400 }, baseFloorZ: 0 };
+  const ceiling = { type: 'line', x1: -285, y1: -2400, x2: 0, y2: -2400, weight: 'medium' };
+  const out = joinToStairProfile([ceiling], [], cut,
+    { ceilLowAbs: 2400, floorHeight: 3000, drawLo: -285, drawHi: 3000 });
+  assert.deepEqual(out, [ceiling]);
+});
+
+// ---- ユーザー実機指摘2026-08「6」C（第2弾）----
+test('【実機指摘】emitColumns: 床スラブの上に直に載る腰壁との境界線は描かない（同面のため）', () => {
+  const cut = { line: { isVertical: true, axisValue: 0, lo: 0, hi: 2000 }, dirSign: 1,
+    zRange: { loZ: 0, hiZ: 5400 }, baseFloorZ: 0 };
+  const knee = [
+    { kind: 'slab', z0: 2400, z1: 3000 },
+    { kind: 'wall', z0: 3000, z1: 3800, distMm: 2500, layerRole: 'above', isKneeDrop: true },
+  ];
+  const far = [
+    { kind: 'slab', z0: 2400, z1: 3000 },
+    { kind: 'wall', z0: 3000, z1: 5400, distMm: 6000, layerRole: 'above' }, // 腰壁ではない
+  ];
+  const columns = [
+    { x0: 0, x1: 1000, worldLo: 0, worldHi: 1000, bands: knee },
+    { x0: 1000, x1: 2000, worldLo: 1000, worldHi: 2000, bands: far },
+  ];
+  const at3000 = emitColumns(columns, cut, { ceilZ: 5400 })
+    .filter(p => Math.abs(p.y1 - p.y2) < 1e-6 && Math.abs(p.y1 - (-3000)) < 1e-6);
+  const xs = at3000.flatMap(p => [p.x1, p.x2]);
+  assert.ok(xs.length > 0, '腰壁でない側(x=1000..2000)のスラブ小口の線は残るはず');
+  assert.equal(Math.min(...xs), 1000, '腰壁の載る区間(x=0..1000)には2FLの線を出さないはず');
+});
+
+test('【失敗系・実機指摘】emitColumns: スラブが無ければ腰壁の下端線は従来どおり描く', () => {
+  const cut = { line: { isVertical: true, axisValue: 0, lo: 0, hi: 1000 }, dirSign: 1,
+    zRange: { loZ: 0, hiZ: 5400 }, baseFloorZ: 0 };
+  const columns = [{ x0: 0, x1: 1000, worldLo: 0, worldHi: 1000, bands: [
+    { kind: 'open', z0: 0, z1: 3000 },
+    { kind: 'wall', z0: 3000, z1: 3800, distMm: 2500, layerRole: 'above', isKneeDrop: true },
+  ] }];
+  const at3000 = emitColumns(columns, cut, { ceilZ: 5400 })
+    .filter(p => Math.abs(p.y1 - p.y2) < 1e-6 && Math.abs(p.y1 - (-3000)) < 1e-6);
+  assert.ok(at3000.length > 0, 'スラブに載っていない腰壁の下端は同面判定にならず描くはず');
+});
+
+test('【実機指摘】emitOpenGapMarks: バツは腰壁と交差する区間をクリップする（腰壁でない壁では切らない）', () => {
+  const cut = { line: { isVertical: true, axisValue: 0, lo: 0, hi: 2000 }, dirSign: 1,
+    zRange: { loZ: 0, hiZ: 4000 }, baseFloorZ: 0 };
+  const makeCols = kneeFlag => ([
+    { x0: 0, x1: 1000, worldLo: 0, worldHi: 1000, bands: [
+      { kind: 'open', z0: 0, z1: 4000 }] },
+    { x0: 1000, x1: 2000, worldLo: 1000, worldHi: 2000, bands: [
+      { kind: 'open', z0: 0, z1: 1000 },
+      { kind: 'wall', z0: 1000, z1: 2000, distMm: 500, layerRole: 'above', isKneeDrop: kneeFlag },
+      { kind: 'open', z0: 2000, z1: 4000 }] },
+  ]);
+  const withKnee = emitOpenGapMarks(makeCols(true), cut);
+  const withPlain = emitOpenGapMarks(makeCols(false), cut);
+  assert.equal(withPlain.length, 2, '腰壁でなければ従来どおり1組のX(2本)のはず');
+  assert.ok(withKnee.length > 2, '腰壁と交差する区間で切られ、線分が増えるはず');
+  for (const p of withKnee) {
+    const zs = [-p.y1, -p.y2].sort((a, b) => a - b);
+    const xs = [p.x1, p.x2].sort((a, b) => a - b);
+    const insideKnee = xs[0] > 1000 - 1e-6 && zs[0] > 1000 + 1e-6 && zs[1] < 2000 - 1e-6;
+    assert.ok(!insideKnee, `腰壁の内側に線分が残っている: x${xs} z${zs}`);
+  }
+});
+
+test('【実機指摘】dashHorizontalsBehindStair: 階段の見付け範囲に入る水平線は破線へ分割される', () => {
+  const line = { type: 'line', x1: 0, y1: -2400, x2: 2885, y2: -2400, weight: 'medium' };
+  const rects = [{ xLo: 1492.5, xHi: 2885, zLo: 1500, zHi: 3000 }]; // 復路の見付け矩形
+  const out = dashHorizontalsBehindStair([line], rects);
+  assert.equal(out.length, 2, '実線＋破線の2本に分かれるはず');
+  const solid = out.find(p => !p.dash), dashed = out.find(p => p.dash === 'dashed');
+  assert.ok(solid && dashed);
+  assert.deepEqual([solid.x1, solid.x2], [0, 1492.5], '復路のささらまでは実線');
+  assert.deepEqual([dashed.x1, dashed.x2], [1492.5, 2885], 'その先は破線で右端まで');
+});
+
+test('【失敗系・実機指摘】dashHorizontalsBehindStair: 矩形のz端にちょうど載る線・対象外の線は分割しない', () => {
+  const rects = [{ xLo: 0, xHi: 1000, zLo: 1500, zHi: 3000 }];
+  const onEdge = { type: 'line', x1: 0, y1: -3000, x2: 2000, y2: -3000, weight: 'medium' };
+  const thick  = { type: 'line', x1: 0, y1: -2400, x2: 2000, y2: -2400, weight: 'thick' };
+  const already = { type: 'line', x1: 0, y1: -2400, x2: 2000, y2: -2400, weight: 'medium', dash: 'dashed' };
+  assert.deepEqual(dashHorizontalsBehindStair([onEdge, thick, already], rects), [onEdge, thick, already]);
+});
+
 // ---- ユーザー実機指摘2026-08「6」C「但し、階段に隠れる部分は破線」 ----
 test('【実機指摘】splitGapMarksByStair: アキのバツのうち階段の見付け矩形に入る区間だけ破線になる', () => {
   // x=0..1000・z=0..1000 の対角線（y=-z）。階段は x=0..400 / z=0..400 の矩形に居る。
@@ -282,6 +416,56 @@ test('【実機指摘】splitGapMarksByStair: アキのバツのうち階段の�
     `階段の矩形内(x=0..400)が破線のはず（実際:${dashed[0].x1}..${dashed[0].x2}）`);
   assert.ok(Math.abs(center[0].x1 - 400) < 1e-6 && Math.abs(center[0].x2 - 1000) < 1e-6,
     `矩形の外(x=400..1000)は一点鎖線のままのはず（実際:${center[0].x1}..${center[0].x2}）`);
+});
+
+// ---- ユーザー実機指摘2026-08「6」C「バツの４点は、空き面の最も大きい対角を頂点とする」 ----
+// 「2Fのアキ・バツ左下点は、左側壁断面と腰壁上端の交点へ移動」＝L字のアキで、外接矩形の隅
+// （腰壁の中）ではなく**その端での実際のアキの隅**を頂点にする。
+test('【実機指摘】emitOpenGapMarks: L字のアキではバツの頂点が外接矩形の隅ではなく実際の隅になる', () => {
+  const cut = { line: { isVertical: true, axisValue: 0, lo: 0, hi: 2885 }, dirSign: 1,
+    zRange: { loZ: 0, hiZ: 5400 }, baseFloorZ: 0 };
+  // 左列は腰壁(3000..3800)に食われてアキが3800から、右列は3000からアキ。
+  const columns = [
+    { x0: 0, x1: 1442.5, worldLo: 0, worldHi: 1442.5, bands: [
+      { kind: 'wall', z0: 3000, z1: 3800, distMm: 2500, layerRole: 'above', isKneeDrop: true },
+      { kind: 'open', z0: 3800, z1: 5400 }] },
+    { x0: 1442.5, x1: 2885, worldLo: 1442.5, worldHi: 2885, bands: [
+      { kind: 'open', z0: 3000, z1: 5400 }] },
+  ];
+  const prims = emitOpenGapMarks(columns, cut);
+  const ends = prims.map(p => [[p.x1, -p.y1], [p.x2, -p.y2]]);
+  const has = (x, z) => ends.some(e => e.some(([px, pz]) => Math.abs(px - x) < 1e-6 && Math.abs(pz - z) < 1e-6));
+  assert.ok(has(0, 3800), '左下点は腰壁の天端(z=3800)のはず（外接矩形の3000ではない）');
+  assert.ok(has(0, 5400), '左上点は天井(z=5400)');
+  assert.ok(has(2885, 3000), '右下点は右列の実際のアキ下端(z=3000)');
+  assert.ok(has(2885, 5400), '右上点は天井(z=5400)');
+  assert.ok(!has(0, 3000), '外接矩形の左下隅(0,3000)は腰壁の中なので頂点にならないはず');
+});
+
+// ---- ユーザー実機指摘2026-08「6」C（撤回・再指示）: 破線範囲は基準線の左右では決まらない ----
+// 旧実装は「内側のささらより右（z全域）」を対角線ごとに割り当てていた（裁定「(あ)」）が、
+// ユーザーが撤回し「想定したバツに対して描画面+所定距離までレイキャストして、隠れた部分を
+// 破線にする」と再指示——渡す矩形は手前に実体がある範囲そのもの（stairOccluderRects）になり、
+// 対角線ごとの割り当ては無くなった。
+test('【実機指摘・撤回後】splitGapMarksByStair: 矩形は対角線を選ばず、両方に同じように効く', () => {
+  const low  = { type: 'line', x1: 0, y1: 0, x2: 1000, y2: -1000, weight: 'thin', dash: 'center' };
+  const high = { type: 'line', x1: 0, y1: -1000, x2: 1000, y2: 0, weight: 'thin', dash: 'center' };
+  const rects = [{ xLo: 400, xHi: 1000, zLo: 0, zHi: 1000 }];
+  const out = splitGapMarksByStair([low, high], rects);
+  assert.ok(!out.includes(low) && !out.includes(high), '両方とも分割されるはず');
+  assert.equal(out.filter(p => p.dash === 'dashed').length, 2, '各対角線に破線区間が1つずつのはず');
+  for (const p of out.filter(q => q.dash === 'dashed')) {
+    assert.ok(Math.min(p.x1, p.x2) >= 400 - 1e-6, `破線は矩形の中だけのはず（実際:${p.x1}..${p.x2}）`);
+  }
+});
+
+test('【実機指摘】splitGapMarksByStair: startsLow未指定の矩形（踊り場の帯）は両方の対角線に効く', () => {
+  const low  = { type: 'line', x1: 0, y1: 0, x2: 1000, y2: -1000, weight: 'thin', dash: 'center' };
+  const high = { type: 'line', x1: 0, y1: -1000, x2: 1000, y2: 0, weight: 'thin', dash: 'center' };
+  const rects = [{ xLo: -1e9, xHi: 1e9, zLo: 400, zHi: 600 }]; // 踊り場桁枠の帯に相当
+  const out = splitGapMarksByStair([low, high], rects);
+  assert.ok(!out.includes(low) && !out.includes(high), '両方とも分割されるはず');
+  assert.equal(out.filter(p => p.dash === 'dashed').length, 2, '各対角線に破線区間が1つずつのはず');
 });
 
 test('【失敗系・実機指摘】splitGapMarksByStair: 矩形が無い・交わらない・対象外の線は素通しする', () => {
@@ -344,11 +528,13 @@ test('【実機指摘・6D(a)】emitColumns: 1F天井断面線は袖壁の階段
   assert.equal(riser.length, 1, '袖壁の階段側の面に z2400→3000 の立上りが1本出るはず');
 });
 
-test('【実機指摘・6D(b)】emitColumns: 2FL床断面線も袖壁の断面線でトリムされ、袖壁の天端はCUTで出る', () => {
+test('【実機指摘・6D(b)】emitColumns: 2FL床断面線は袖壁の外側面から外へ張り出し、袖壁の天端はCUTで出る', () => {
   const prims = emitColumns(kneeAtOpenEndColumns(), kneeCut, { ceilZ: 5400, openEndLo: true });
   const xs = horizAt(prims, 3000).flatMap(p => [p.x1, p.x2]);
-  assert.equal(Math.min(...xs), -285, '2FL床断面線は外側の列まで出るはず');
-  assert.equal(Math.max(...xs), -57.5, '2FL床断面線も袖壁の外側面(x=-57.5)で止まるはず');
+  // ユーザー実機指摘2026-08「6」D1「2F腰壁断面が2FLまで下りたあと、左を向いて2FL床断面線はりだし」:
+  // この線はスラブ自身から描く（遠い壁の下端縁に頼らない——その壁は帯の部屋の外だと探索対象外）。
+  assert.equal(Math.min(...xs), -285, '2FL床断面線は外側の列まで張り出すはず');
+  assert.equal(Math.max(...xs), -57.5, '袖壁の外側面(x=-57.5)から外側へ向かう線のはず');
   // 袖壁の天端(3800)はcut帯から壁ごとに1本、全幅で出る（トリムの対象外）。
   const top = horizAt(prims, 3800);
   assert.equal(top.length, 1, '天端は壁ごとに1本のはず');

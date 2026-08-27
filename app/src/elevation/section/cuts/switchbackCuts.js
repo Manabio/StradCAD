@@ -334,7 +334,20 @@ export function switchbackCuts(stair, faces, graph, opts = {}) {
   const outboundWithLanding = outboundFlight
     ? { flights: [outboundFlight], landings: contribution.landings, structure: contribution.structure, unit: contribution.unit } : null;
   const inboundOnly = inboundFlight ? { flights: [inboundFlight], landings: [], structure: contribution.structure, unit: contribution.unit } : null;
-  // inboundWithLanding（復路+踊り場）はQA修正でseq4がoutboundWithLandingを使うようになったため
+  // seq3（踊り場の壁。W_landing）用: 踊り場だけを渡す。旧実装は§6.1表の「階段寄与: なし」を
+  // そのままstairCut:nullにしていたが、ユーザー実機指摘2026-08「6」A「踊り場断面線、その左右壁
+  // との取り合いに（折返し階段外回りの）ささら断面、上下にささらの見えがかり（横線2本）」——
+  // 「階段（段）の重ね描きなし」であって、踊り場そのものの断面・桁枠は必要だった。
+  // flightsは空のまま＝段の梯子・ジグザグは出ない（表の意図は維持する）。
+  const landingOnly = (contribution.landings ?? []).length > 0
+    ? { flights: [], landings: contribution.landings, structure: contribution.structure, unit: contribution.unit }
+    : null;
+  // 復路+踊り場。seq5（D2＝復路レーンから外側の壁を見る面）が使う——ユーザー実機指摘2026-08
+  // 「踊場断面は図の右側、階段断面は左側に現れる」。
+  const inboundWithLanding = inboundFlight
+    ? { flights: [inboundFlight], landings: contribution.landings, structure: contribution.structure, unit: contribution.unit }
+    : null;
+  // （旧コメント）QA修正でseq4がoutboundWithLandingを使うようになったため
   // 未使用——seq2.5/4.5/5はoutboundOnly/inboundOnlyのみ使う（踊り場は各々のフルフェイス側
   // （seq2/seq4）だけが持てば十分なため）。
   // WP-2026-08-23実機フィードバック「往路と復路の間に壁が無ければ復路直進部のささらが見える」
@@ -369,7 +382,8 @@ export function switchbackCuts(stair, faces, graph, opts = {}) {
   }
   cuts.push({
     seqNo: '3', face: wLanding, line: seq13Line, viewSign: seq3ViewSign, dirSign: wLanding.dirSign,
-    layers, zRange: zRangeUpper, baseFloorZ: underFloorZ, stairCut: null, // §6.1表「階段寄与: なし」
+    // §6.1表「階段寄与: なし」＝段の重ね描きなし。踊り場の断面・桁枠は描く（landingOnly参照）。
+    layers, zRange: zRangeUpper, baseFloorZ: underFloorZ, stairCut: landingOnly,
   });
   cuts.push({
     // QA実機フィードバック修正: seq4のstairCutは復路(inbound)ではなく往路(outbound)——
@@ -388,13 +402,18 @@ export function switchbackCuts(stair, faces, graph, opts = {}) {
     });
   }
   {
-    // QA修正: outFace5はwOut2（既にseq4DirSignへ再正規化済み）を切り出したものなので、
-    // cut.dirSignもface自身のdirSign(=seq4DirSign)に揃える——旧実装はseq2DirSignのまま
-    // だったため、face（floorSegments側）とcut（content側）の向きが食い違っていた。
-    const outFace5 = clipFaceToWorldRange(wOut2, landingStartWorld, entryWorld);
+    // ==== ユーザー実機指摘2026-08「6」D2（面の取り違え）====
+    // seq5は「復路レーンの中を切って9時方向＝復路が接している外側の壁（wOut2）を見る」面。
+    // 旧実装は`clipFaceToWorldRange(wOut2, landingStartWorld, entryWorld)`で**レーン区間だけに
+    // 切り詰めた**面を使っていた（実機で run=2442.5・両端とも壁なし）ため、踊り場ぶんが figure に
+    // 入らず「Y2が3500の右」「踊場断面は図の右側・階段断面は左側」という構図にならなかった。
+    // 面は**wOut2の全長**（踊り場ぶんを含む）を使い、向きはseq2側（踊り場が右・上り口が左）に
+    // 揃える——ユーザー指定「踊場断面は図の右側、階段断面は左側に現れる」。
+    // stairCutも復路だけ（inboundOnly）では踊り場の断面が出ないため、踊り場を含めて渡す。
+    const retFace5 = reorientFace(wOut2, seq2DirSign);
     cuts.push({
-      seqNo: '5', face: outFace5, line: inboundLaneLine, viewSign: towardS1, dirSign: outFace5.dirSign,
-      layers, zRange: zRangeUpper, baseFloorZ: underFloorZ, stairCut: inboundOnly,
+      seqNo: '5', face: retFace5, line: inboundLaneLine, viewSign: towardS1, dirSign: seq2DirSign,
+      layers, zRange: zRangeUpper, baseFloorZ: underFloorZ, stairCut: inboundWithLanding,
     });
   }
 

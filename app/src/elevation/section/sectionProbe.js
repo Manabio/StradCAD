@@ -10,7 +10,7 @@
  */
 import { OpeningCategory, RoomFeature } from '@core';
 import { buildCellToRoom } from '../../finish/edgeClassify.js';
-import { worldToCell, roomBounds } from '../../finish/gridCells.js';
+import { worldToCell } from '../../finish/gridCells.js';
 import { roomCeilingHeight } from '../../finish/roomMetrics.js';
 import { kneeDropRecordsOnAxis } from '../../finish/kneeDropWall.js';
 import { effectiveHeight } from '../../openings/openingNumbering.js';
@@ -183,10 +183,13 @@ function ownerRoomAtOffset(cut, worldMid, layer, probeCtx, offsetMm) {
  * cut.bandRoom・materialRange・包絡矩形が取れないときは従来どおり制限しない。
  */
 function withinViewRoom(cut, worldMid, info, probeCtx, wall) {
-  if (!cut.bandRoom) return true;
   const mr = wall.materialRange;
   if (!mr) return true;
-  const b = probeCtx.boundsOf?.(cut.bandRoom, info.layer.graph);
+  // 包絡矩形は**世界座標の箱**なので層に依らず1つ。`cut.bandRoomBounds`として呼び出し側が
+  // 自階graphで一度だけ求めて渡す——旧実装は層ごとのgraphで引き直しており、上階レイヤーでは
+  // 自階Roomのセルキーが解決できずbounds不定→制限なしになっていた（実機「6」Cで上階の
+  // 6m先の壁(d6000)がz3800..5400に残り、アキにならなかった）。
+  const b = cut.bandRoomBounds;
   if (!b || !Number.isFinite(b.x1) || !Number.isFinite(b.x2)) return true;
   const nearFace = cut.viewSign > 0 ? Math.min(mr.lo, mr.hi) : Math.max(mr.lo, mr.hi);
   const tol = Math.abs(mr.hi - mr.lo) + GAP_EPS;
@@ -346,15 +349,7 @@ export function makeProbeContext(layers) {
   }
   for (const layer of layers ?? []) cellToRoomFor(layer);
 
-  const boundsCacheByGraph = new Map(); // graph -> Map<room.id, {x1,y1,x2,y2}>
-  // Roomの包絡矩形（`withinViewRoom`が「視線がこの部屋を出た先の壁か」を判定するのに使う）。
-  function boundsOf(room, graph) {
-    if (!room) return null;
-    let cache = boundsCacheByGraph.get(graph);
-    if (!cache) { cache = new Map(); boundsCacheByGraph.set(graph, cache); }
-    if (!cache.has(room.id)) cache.set(room.id, roomBounds(room.cells, graph));
-    return cache.get(room.id);
-  }
+
 
   function chOf(room, graph) {
     if (!room) return null;
@@ -370,7 +365,7 @@ export function makeProbeContext(layers) {
     return layer.floorZMm + graph.effectiveFloorLevel(room) - graph.floorDatum;
   }
 
-  return { cellToRoomByLayer, cellToRoomFor, boundsOf, chOf, floorZOf };
+  return { cellToRoomByLayer, cellToRoomFor, chOf, floorZOf };
 }
 
 /**
@@ -490,11 +485,14 @@ export function probeColumn(cut, worldMid, probeCtx) {
           ? resolveWallCapZ(w, worldMid, info.ceilZ, layerInfo.find(li => li.layer.role === 'above'), zHi, cut.viewSign, probeCtx)
           : info.ceilZ;
         const { z0, z1 } = kneeDropZRangeAt(layer.graph, w, worldMid, info.floorZ, capZ);
+        // 腰壁・垂れ壁指定で高さが制限された壁か（アキのバツのクリップ対象。sectionEmit.jsの
+        // obstructionRects。ユーザー実機指摘2026-08「6」C「バツが腰壁と交差する場合はクリップ」）。
+        const isKneeDrop = z0 > info.floorZ + GAP_EPS || z1 < capZ - GAP_EPS;
         // WP-E7 D1: この壁（見えがかり壁面）に重なる開口のz範囲を候補へ添える
         // （openingPassThroughRangesForはz0/z1へクランプ済み）。band選択後、選ばれたz区間が
         // そのいずれかに含まれれば ZBand.openingPassThrough:true を付与する（下記参照）。
         const openRanges = openingPassThroughRangesFor(w, layer.graph, worldMid, info.floorZ, z0, z1);
-        candidates.push({ kind: 'wall', wall: w, layer, distMm, z0, z1, openRanges });
+        candidates.push({ kind: 'wall', wall: w, layer, distMm, z0, z1, openRanges, isKneeDrop });
       }
     }
   }
@@ -547,7 +545,7 @@ export function probeColumn(cut, worldMid, probeCtx) {
       .filter(c => c.kind === 'wall')
       .sort((a, b) => a.distMm - b.distMm || roleRank(a.layer.role) - roleRank(b.layer.role))[0];
     if (wallMatch) {
-      const band = { kind: 'wall', z0, z1, wall: wallMatch.wall, layerRole: wallMatch.layer.role, distMm: wallMatch.distMm };
+      const band = { kind: 'wall', z0, z1, wall: wallMatch.wall, layerRole: wallMatch.layer.role, distMm: wallMatch.distMm, isKneeDrop: wallMatch.isKneeDrop === true };
       // WP-E7 D1: このz区間(zm)が選ばれたwallMatchの開口z範囲のいずれかに含まれれば
       // openingPassThroughを付与する（描画は貫通させない=kindは'wall'のまま。§5.4）。
       if ((wallMatch.openRanges ?? []).some(r => zm > r.z0 - GAP_EPS && zm < r.z1 + GAP_EPS)) {

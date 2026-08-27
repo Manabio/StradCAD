@@ -77,6 +77,48 @@ function isInsideWall(beam, walls) {
 }
 
 /**
+ * 梁の**切断位置での断面**が壁の中に納まっているか（＝そこでは壁に隠れて見えないか）。
+ * `isInsideWall`（梁の全スパンを1枚の壁が覆うことを要求）との違いが要点——実機の2階床梁は
+ * span=-7625..-3290のように建物を貫いて走るため、どの壁セグメントでも全スパンを覆えず
+ * あの規則が一度も発動しない。断面は**切断線と交わる一点**で描かれるのだから、判定も
+ * その位置（`atCoord`＝梁の長さ方向の座標＝`cut.line.axisValue`）で行う
+ * （ユーザー実機指摘2026-08「6」「Y2の壁際、2FL床高付近に謎の構造材断面」の原因）。
+ * 厚み方向は`isInsideWall`と同じく**完全に収まる**ことを要求する（壁より太い梁は室内へ出る）。
+ * @param {object} beam - BeamSolid
+ * @param {object[]} walls
+ * @param {number} atCoord
+ * @returns {boolean}
+ */
+function isBeamInWallAt(beam, walls, atCoord) {
+  const halfW = (beam.widthMm ?? 0) / 2;
+  const bLo = beam.axisWorld - halfW, bHi = beam.axisWorld + halfW;
+  for (const wall of walls) {
+    if (wall.isVertical !== beam.isVertical) continue;
+    const mr = wall.materialRange;
+    if (!mr) continue;
+    if (!(bLo >= mr.lo - GAP_EPS && bHi <= mr.hi + GAP_EPS)) continue;
+    const tol = Math.abs(mr.hi - mr.lo); // 隅の取り合い（chamferWalls）ぶんの許容。isInsideWall参照
+    const wLo = Math.min(wall.coord1, wall.coord2), wHi = Math.max(wall.coord1, wall.coord2);
+    if (atCoord >= wLo - tol - GAP_EPS && atCoord <= wHi + tol + GAP_EPS) return true;
+  }
+  return false;
+}
+
+// 梁の芯が帯自身の部屋の広がり（cut.bandRoomBounds。世界座標の箱）の中にあるか。
+// 未設定（部屋が特定できない呼び出し）は制限しない。
+function withinBandRoom(cut, axisWorld) {
+  const b = cut.bandRoomBounds;
+  if (!b || !Number.isFinite(b.x1) || !Number.isFinite(b.x2)) return true;
+  const [lo, hi] = cut.line.isVertical ? [b.x1, b.x2] : [b.y1, b.y2];
+  return axisWorld >= lo - GAP_EPS && axisWorld <= hi + GAP_EPS;
+}
+
+// cutの全レイヤーの壁（自階・上階）。梁が壁の中かの判定に使う。
+function wallsOf(cut) {
+  return (cut.layers ?? []).flatMap(l => l.graph?.walls ?? []);
+}
+
+/**
  * 断面ローカルx（＋許容はみ出しtolMm）が、その切断の描画範囲（cut.line.lo..hi。壁のない端部の
  * 探査延長probeExtendLo/HiMmを含む）に掛かっているか。
  * @param {import('./sectionTypes.js').SectionCut} cut
@@ -109,8 +151,10 @@ export function structuralContribution(layers) {
     for (const beam of layer.graph?.beams ?? []) {
       if (beam.role === FOUNDATION_ROLE) continue; // 追加仕様2026-08: 基礎梁は展開図に描かない
       if (isInsideWall(beam, walls)) continue;
-      const depthMm = findSectionEntry(beam.sectionDefId)?.height ?? beam.beamDepth ?? DEFAULT_DEPTH_MM;
+      const entry = findSectionEntry(beam.sectionDefId);
+      const depthMm = entry?.height ?? beam.beamDepth ?? DEFAULT_DEPTH_MM;
       result.push({
+        section: entry ?? null, // 断面形状（H形鋼のフランジ・ウェブ等）を作図で使う
         isVertical: beam.isVertical,
         axisWorld: beam.axisValue,
         spanLo: Math.min(beam.coord1, beam.coord2),
@@ -239,6 +283,59 @@ function rectLines(cut, xLo, xHi, zTop, depthMm) {
   ];
 }
 
+// 閉じた点列（[x,z]の並び）をCUTの線分列にする。
+function closedOutline(cut, pts) {
+  const out = [];
+  for (let i = 0; i < pts.length; i++) {
+    const [x1, z1] = pts[i], [x2, z2] = pts[(i + 1) % pts.length];
+    out.push(emitLine(cut, x1, z1, x2, z2, ElevationLineRole.CUT));
+  }
+  return out;
+}
+
+/**
+ * 部材の断面形状を、指定構造材（カタログのshape/webThickness/flangeThickness/wallThickness）に
+ * 合わせて描く（ユーザー実機指摘2026-08「6」「断面形状を指定構造材に合わせて」）。
+ * 矩形（木角材・RC）は従来どおり外形4本。H形鋼はフランジ・ウェブの実形状（12辺の閉じた輪郭）。
+ * 角形鋼管・丸形鋼管は外形＋肉厚ぶん内側の輪郭。丸（RC丸柱）はプリミティブに円弧が無いため
+ * 外接矩形のまま（既知の単純化。defer）。
+ * @param {import('./sectionTypes.js').SectionCut} cut
+ * @param {number} xLo - 見付け幅の左端（ローカルx）
+ * @param {number} xHi - 同 右端
+ * @param {number} zTop - 断面の上端（絶対z）
+ * @param {number} depthMm - 断面の成
+ * @param {object|null} entry - findSectionEntryの結果（未指定・未知形状は矩形）
+ */
+function sectionOutline(cut, xLo, xHi, zTop, depthMm, entry) {
+  const zBot = zTop - depthMm;
+  const shape = entry?.shape;
+  if (shape === 'hSection') {
+    // 実寸のフランジ幅・成に対する比でローカル寸法へ換算する（見付け幅xHi-xLoは梁のwidth、
+    // depthMmはheightに対応する——どちらもカタログ値そのものだが、将来の縮尺差に備えて比で持つ）。
+    const w = xHi - xLo, h = depthMm;
+    const tf = (entry.flangeThickness ?? 0) * (h / (entry.height || h));
+    const tw = (entry.webThickness ?? 0) * (w / (entry.width || w));
+    if (tf > 0 && tw > 0 && 2 * tf < h && tw < w) {
+      const xc = (xLo + xHi) / 2, wl = xc - tw / 2, wr = xc + tw / 2;
+      return closedOutline(cut, [
+        [xLo, zTop], [xHi, zTop], [xHi, zTop - tf], [wr, zTop - tf],
+        [wr, zBot + tf], [xHi, zBot + tf], [xHi, zBot], [xLo, zBot],
+        [xLo, zBot + tf], [wl, zBot + tf], [wl, zTop - tf], [xLo, zTop - tf],
+      ]);
+    }
+  }
+  if (shape === 'squarePipe' || shape === 'roundPipe') {
+    const t = entry.wallThickness ?? 0;
+    if (t > 0 && 2 * t < xHi - xLo && 2 * t < depthMm) {
+      return [
+        ...rectLines(cut, xLo, xHi, zTop, depthMm),
+        ...rectLines(cut, xLo + t, xHi - t, zTop - t, depthMm - 2 * t),
+      ];
+    }
+  }
+  return rectLines(cut, xLo, xHi, zTop, depthMm);
+}
+
 /**
  * BeamSolid[]（structuralContributionの結果）を、1つの切断（cut）に対する断面プリミティブへ
  * 変換する（columnsは他の第3層関数とシグネチャを揃えるためだけに受け取り、x範囲のクランプには
@@ -276,7 +373,33 @@ export function structuralPrimitivesForCut(contribution, cut, columns) {
       // 描画不要」）。梁が室境界の壁芯（CL）に乗る場合を取りこぼさないよう、梁の半幅ぶんの
       // はみ出しは許容する。壁のない端部の探査延長（probeExtendLo/HiMm）も範囲に含める。
       if (!withinCutDrawRange(cut, x, halfW)) continue;
-      prims.push(...rectLines(cut, x - halfW, x + halfW, beam.topZ, beam.depthMm));
+      // **切断位置で壁の中に納まる梁は描かない**（isBeamInWallAt参照）。
+      if (isBeamInWallAt(beam, wallsOf(cut), cut.line.axisValue)) continue;
+      prims.push(...sectionOutline(cut, x - halfW, x + halfW, beam.topZ, beam.depthMm, beam.section));
+      continue;
+    }
+    // **室内を空中で横断する梁の見えがかり**（ユーザー実機指摘2026-08「6」A「材が空中に
+    // 横断しているので、『A』に中線で鋼材の天地に線を描画」）。切断線と平行だが芯が離れている梁は
+    // 旧`parallel`判定（切断線が梁の幅の帯を通ることを要求）に入らず、一切描かれなかった
+    // ——実機の梁はY2の通り芯から225mm室内側にあり、面Aから見ると空中を横切って見える。
+    // 天地（上端・下端）の2本だけをSILHOUETTE（中線）で描く（輪郭の縦線は持たせない——
+    // 梁は面の端から端まで通っており、視界の中で端部が見えるわけではない）。
+    const airborne = cut.line.isVertical === beam.isVertical
+      && (beam.axisWorld - cut.line.axisValue) * (cut.viewSign ?? 1) > GAP_EPS
+      && withinBandRoom(cut, beam.axisWorld)
+      && rangesOverlap(cut.line.lo, cut.line.hi, beam.spanLo, beam.spanHi)
+      && !(cut.line.axisValue >= beam.axisWorld - halfW - GAP_EPS
+        && cut.line.axisValue <= beam.axisWorld + halfW + GAP_EPS); // 芯上は下のparallelが担当
+    if (airborne) {
+      const { lo: drawLo, hi: drawHi } = cutDrawRange(cut);
+      const xa = localXOf(cut, beam.spanLo), xb = localXOf(cut, beam.spanHi);
+      const loX = Math.max(drawLo, Math.min(xa, xb));
+      const hiX = Math.min(drawHi, Math.max(xa, xb));
+      if (hiX - loX > GAP_EPS) {
+        prims.push(emitLine(cut, loX, beam.topZ, hiX, beam.topZ, ElevationLineRole.SILHOUETTE));
+        prims.push(emitLine(cut, loX, beam.topZ - beam.depthMm, hiX, beam.topZ - beam.depthMm,
+          ElevationLineRole.SILHOUETTE));
+      }
       continue;
     }
     const parallel = cut.line.isVertical === beam.isVertical &&

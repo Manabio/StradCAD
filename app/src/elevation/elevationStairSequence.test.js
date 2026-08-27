@@ -1097,15 +1097,31 @@ test('【WP-C】stairFaceSequence: 踊り場back辺に置いたrole:landing梁�
   // 同じでも切断ごとのbaseFloorZが異なるため見え方が変わるのは既存仕様どおり（新規判定は
   // 追加していない）。ここでは「4本増える」ことと降格の有無だけを検証し、増分の絶対的な
   // weightは断定しない。
+  // 期待値更新（ユーザー実機指摘2026-08「断面形状を指定構造材に合わせて」）: STEEL-H200x100は
+  // H形鋼なので断面輪郭は12辺（矩形4辺ではない）。
   for (const seqNo of ['2', '4', '5']) {
     const grew = afterBySeq[seqNo].content.length - beforeLens[seqNo];
-    assert.equal(grew, 4, `seq${seqNo}は断面矩形4本ぶん増えるはず`);
+    assert.equal(grew, 12, `seq${seqNo}はH形鋼の断面輪郭12本ぶん増えるはず`);
   }
   const seq2Added = afterBySeq['2'].content.filter(p => p.weight === 'thick' && p.type === 'line');
-  assert.ok(seq2Added.length >= 4, 'seq2はbaseFloorZ(0)より梁が上のためCUT(太線)のままのはず');
+  assert.ok(seq2Added.length >= 12, 'seq2はbaseFloorZ(0)より梁が上のためCUT(太線)のままのはず');
 
   assert.equal(afterBySeq['1'].content.length, beforeLens['1'], 'seq1（正面視・back辺と平行でない）は変化しないはず');
-  assert.equal(afterBySeq['3'].content.length, beforeLens['3'], 'seq3（踊り場CUT水平線のみ）は変化しないはず');
+  // 期待値更新（ユーザー実機指摘2026-08「6」A「材が空中に横断しているので、『A』に中線で
+  // 鋼材の天地に線を描画」）: seq3（踊り場の壁を見る面）は、切断線と平行で室内を横切る梁の
+  // 天地2本をSILHOUETTE（中線）で描くようになった。
+  const seq3Grew = afterBySeq['3'].content.length - beforeLens['3'];
+  assert.equal(seq3Grew, 2, 'seq3は空中を横断する梁の天地2本ぶん増えるはず');
+  // 線種は§5.6の最終フィルタに従う——このfixtureの梁(topZ=890)はseq3のbaseFloorZ(踊り場)より
+  // 下にあるため中線ではなく細破線へ降格する。ここで固定したいのは「天地の2本が出ること」なので
+  // 位置(z)で確認する（中線のまま出るのは梁がbaseFloorZより上にある実機構成。emitLineの契約）。
+  const horizAt = (entry, z) => entry.content.filter(p =>
+    p.type === 'line' && Math.abs(p.y1 - p.y2) < 1e-6 && Math.abs(-p.y1 - z) < 1e-6).length;
+  const seq3Before = before.find(e => e.seqNo === '3');
+  for (const z of [890, 690]) { // 梁の天(topZ=levelOffset)と地(topZ-成200)
+    assert.equal(horizAt(seq3Before, z), 0, `前提: 梁を置く前はz=${z}に線が無い`);
+    assert.equal(horizAt(afterBySeq['3'], z), 1, `z=${z}に鋼材の天地の線が1本出るはず`);
+  }
 });
 
 test('【失敗系・WP-C】stairFaceSequence: 構造梁が無い階段は従来どおり（contentForCutへの配線があっても出力が変わらない）', () => {
@@ -1410,6 +1426,30 @@ test('【失敗系・実機フィードバック第3弾・続報】stairFaceSequ
     p.type === 'line' && p.y1 === p.y2 && p.dash === undefined && p.weight === silhouetteWeight &&
     Math.abs(p.y1 - (-OPTS.chLowerMm)) < 1e-6);
   assert.ok(capLine, '上階に実Roomがあれば1F天井高さの水平キャップ線が出るはず');
+});
+
+// ---- ユーザー実機指摘2026-08「6」D2: seq5の面がレーン区間に切り詰められていた ----
+// seq5は「復路レーンの中を切って外側の壁(wOut2)を見る」面。旧実装はwOut2をレーン区間だけに
+// 切り詰めていたため踊り場ぶんがfigureに入らず、「踊場断面は図の右側・階段断面は左側」という
+// 構図にならなかった。面はwOut2の全長で、向きはseq2側（踊り場が右）に揃える。
+test('【実機指摘】stairFaceSequence: seq5の面はwOut2の全長で、seq4とは逆向き（seq2と同じ向き）', () => {
+  const graph = makeGraph();
+  const { room, stair } = makeSwitchbackFixture(graph, { withMidWall: true });
+  const faces = composeRoomFaces(room, graph);
+  const table = switchbackCuts(stair, faces, graph, OPTS);
+  assert.ok(table);
+  const seq5 = table.cuts.find(c => c.seqNo === '5');
+  const seq4 = table.cuts.find(c => c.seqNo === '4');
+  const seq2 = table.cuts.find(c => c.seqNo === '2');
+  assert.ok(seq5 && seq4 && seq2);
+
+  assert.ok(Math.abs(seq5.face.run - table.wOut2.run) < 1e-6,
+    `seq5の面はwOut2の全長(${table.wOut2.run})のはず（実際:${seq5.face.run}）`);
+  assert.equal(seq5.dirSign, seq2.dirSign, 'seq5の向きはseq2側（踊り場が右）のはず');
+  assert.equal(seq5.dirSign, -seq4.dirSign, 'seq5はseq4とは逆向きのはず');
+  assert.ok((seq5.stairCut?.landings ?? []).length > 0,
+    'seq5は踊り場の断面も描くため踊り場を含む寄与を受け取るはず');
+  assert.equal(seq5.stairCut.flights.length, 1, '段は復路の1本だけのはず');
 });
 
 // ---- 実機指摘2026-08（展開記号）: 記号は「切断の視線の向き」だけで決まる ----
