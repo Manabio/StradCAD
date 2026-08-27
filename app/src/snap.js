@@ -235,8 +235,13 @@ export function resolvePointerTargets(graph, viewport, clientX, clientY, opts = 
   let cl = null, opening = null, wall = null;
   if (!snap) {
     const clCand      = findNearestCenterLine(graph, world.x, world.y, CL_THRESHOLD_PX, viewport.scaleX, viewport.scaleY, viewport, clKindFilter);
-    const openingCand = findOpeningAt(graph, world.x, world.y, WALL_THRESHOLD_PX, viewport.scaleX, viewport.scaleY);
-    const wallCand    = findNearestWall(graph, world.x, world.y, WALL_THRESHOLD_PX, viewport.scaleX, viewport.scaleY);
+    // 構造モードは壁・建具を一切描画しない（renderer/SceneLayers.jsx）ため、候補解決の段階で
+    // 平面要素（壁・開口）を丸ごと対象外にする——部材ごとにメニュー項目を間引く方式では、
+    // 柱の上の長押しで建具ラジアルが出る等の取りこぼしが残り、カーソルの pointer 表示（App.jsx）も
+    // 見えない壁に反応してしまう。モード単位の一箇所で塞ぐのがこの規律の単一の真実源。
+    const planTargets = appMode !== 'structure';
+    const openingCand = planTargets ? findOpeningAt(graph, world.x, world.y, WALL_THRESHOLD_PX, viewport.scaleX, viewport.scaleY) : null;
+    const wallCand    = planTargets ? findNearestWall(graph, world.x, world.y, WALL_THRESHOLD_PX, viewport.scaleX, viewport.scaleY) : null;
     const candidates = [];
     if (clCand) {
       const isV = clCand.centerLineType === CenterLineType.VERTICAL;

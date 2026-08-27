@@ -114,7 +114,6 @@ export function getMenuItems(context, endpointState, clState, wallState) {
  * 長押しメニューの状態組立（context 判定＋items 生成）。interaction/usePointerInteraction.js longPress の onFire から抽出。
  * appMode==='opening'（建具モード）は壁・開口以外の長押しメニューを出さない（CL移動等の平面編集
  * 操作は行わない）ため null を返す——呼び出し側はこれを合図にメニューを開かない。
- * appMode==='structure'（構造モード）は逆に壁上のメニューだけ出さない（壁・建具を描画しないモードのため）。
  * canMove は「CL移動をサポートするモードか」（呼び出し側の modeRef.current?.startMove の有無）。
  * canExtend/canShorten（CL端点の延長/短縮可否）・hasInteriorWall（中心線に内壁指定があるか）・
  * wallEligible（腰壁・垂れ壁の適格性）・canToGrid/canToCenter（中心⇔通り芯の入替え可否。平面モード限定）・
@@ -129,11 +128,9 @@ export function buildMenuState(appMode, {
 }) {
   const context = detectContext(snap, cl, opening, wall, clEndpoint);
   if (appMode === 'opening' && context !== CONTEXT.WALL && context !== CONTEXT.OPENING) return null;
-  // 構造モードは壁上の長押しメニュー（建具・窓・腰壁/垂れ壁）を出さない——同モードは壁・建具を
-  // 描画しないため（renderer/SceneLayers.jsx）、見えていない壁に対して意匠側の追加操作だけが
-  // 反応する状態になっていた。壁の候補解決（snap.js）自体はモード非依存のまま残し、
-  // メニューを開かない合図（null）としてここで塞ぐ。
-  if (appMode === 'structure' && context === CONTEXT.WALL) return null;
+  // 構造モードの壁・開口メニュー抑止はここでは行わない——snap.js resolvePointerTargets が同モードでは
+  // 壁・開口の候補解決自体をスキップするため、context が WALL/OPENING になること自体がない
+  // （部材ごとの間引きではなくモード単位の一箇所で塞ぐ規律。.claude/structural-model.md 参照）。
   const endpointState = clEndpoint ? {
     canExtend,
     canShorten,
