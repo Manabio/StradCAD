@@ -1,6 +1,7 @@
 import { observer } from 'mobx-react-lite';
 import { useState, useEffect } from 'react';
 import { ConfirmDialog } from '../ui/ConfirmDialog.jsx';
+import { useScrollIntoViewWhenActive } from '../ui/useScrollIntoViewWhenActive.js';
 import { StairTab } from './stair/StairTab.jsx';
 import { withFinishUndo, beginFieldUndo, endFieldUndo } from './finishUndo.js';
 import { roomCeilingHeight } from './roomMetrics.js';
@@ -495,9 +496,14 @@ const InteriorTable = observer(({ graph, mode, selectedRoomId, onSelectRoom, flo
 });
 
 // 部屋1件分のカード。折りたたみ時はヘッダのみ、展開時はセクション群を表示する。
+// 展開＝選択（selectedRoomId）で、図面上の部屋タップからも立つため、可視域へ寄せる
+// （構造の部材カード・建具の一覧行と共通のフック）。
 const RoomCard = observer(({ room, mode, isExpanded, isDragging, isOver,
-  onToggle, onDragStart, onDragOver, onDrop, onDragEnd, onRequestDelete }) => (
+  onToggle, onDragStart, onDragOver, onDrop, onDragEnd, onRequestDelete }) => {
+  const cardRef = useScrollIntoViewWhenActive(isExpanded);
+  return (
   <div
+    ref={cardRef}
     style={{
       ...cardContainerStyle,
       opacity: isDragging ? 0.4 : 1,
@@ -547,7 +553,8 @@ const RoomCard = observer(({ room, mode, isExpanded, isDragging, isOver,
       </div>
     )}
   </div>
-));
+  );
+});
 
 // セクション内の1行（左右2列。leftKey/rightKeyはINTERIOR_FIELDSのキー、nullなら空セル）
 const FieldRow = observer(({ leftKey, rightKey, room, mode }) => (

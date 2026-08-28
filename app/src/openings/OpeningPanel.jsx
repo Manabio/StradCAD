@@ -1,11 +1,32 @@
 import { observer } from 'mobx-react-lite';
 import { ModePanel } from '../ui/ModePanel.jsx';
 import { BottomSheet } from '../ui/BottomSheet.jsx';
+import { useScrollIntoViewWhenActive } from '../ui/useScrollIntoViewWhenActive.js';
 import { OpeningEditor } from './OpeningEditor.jsx';
 import { openingGroupsOnFloor, effectiveHeight } from './openingNumbering.js';
 import { findCatalogEntry } from './openingCatalog.js';
 
 function round(v) { return Math.round(v); }
+
+// 一覧の1行（建具1本）。選択は図面上のタップからも立つため、選択された行を可視域へ寄せる
+// （構造の部材カード・仕上げの部屋カードと共通のフック）。行ごとにフックを呼ぶため
+// map 内のインライン JSX ではなく小コンポーネントに切り出している。
+const OpeningRow = observer(function OpeningRow({ opening, selected, onSelect }) {
+  const rowRef = useScrollIntoViewWhenActive(selected);
+  return (
+    <div
+      ref={rowRef}
+      onClick={onSelect}
+      style={{
+        fontSize: 12, padding: '4px 8px', marginTop: 2, cursor: 'pointer', borderRadius: 4,
+        background: selected ? '#eff6ff' : 'transparent',
+        color: selected ? '#2563eb' : '#475569',
+      }}
+    >
+      {opening.refCL?.label ?? '?'} {opening.refOffset >= 0 ? '+' : ''}{round(opening.refOffset)}
+    </div>
+  );
+});
 
 function totalCountOf(group) {
   if (!group) return 0;
@@ -47,17 +68,7 @@ export const OpeningPanel = observer(function OpeningPanel({ graph, project, mod
                 </span>
               </div>
               {openings.map(o => (
-                <div
-                  key={o.id}
-                  onClick={() => mode.selectOpening(o.id)}
-                  style={{
-                    fontSize: 12, padding: '4px 8px', marginTop: 2, cursor: 'pointer', borderRadius: 4,
-                    background: o.id === selectedId ? '#eff6ff' : 'transparent',
-                    color: o.id === selectedId ? '#2563eb' : '#475569',
-                  }}
-                >
-                  {o.refCL?.label ?? '?'} {o.refOffset >= 0 ? '+' : ''}{round(o.refOffset)}
-                </div>
+                <OpeningRow key={o.id} opening={o} selected={o.id === selectedId} onSelect={() => mode.selectOpening(o.id)} />
               ))}
             </div>
           );
