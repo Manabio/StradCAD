@@ -3,6 +3,7 @@ import { Line, Rect, Circle, Group } from 'react-konva';
 import { StructuralMaterialType, LINE_WEIGHT_MM } from '../core.js';
 import { cellBoundsFromKey } from '../finish/gridCells.js';
 import { findSectionEntry, diaphragmProjection } from '../structural/sectionCatalog.js';
+import { columnWrapSolids } from '../finish/columnWrap.js';
 import { LodLevel, resolveStrokeWidth } from '../viewport.js';
 import { ColumnSymbol } from './ColumnSymbol.jsx';
 import { groupPropsForStyle, dashForStyle } from '../figure/figureStyle.js';
@@ -153,18 +154,82 @@ function columnDiaphragmSize(column) {
   return { w: sec.width + 2 * e, h: sec.height + 2 * e };
 }
 
+/**
+ * 柱の仕上げ包み（柱壁）の線。ユーザー指示2026-08「柱回りにも壁下地材、壁仕上げ材を描画」
+ * 「干渉した壁と柱壁は取り合う。壁仕上げ材は互いにトリム」。
+ * 層は柱（フランジ含む）→ 下地材 → 仕上げ材の順で、外形＝仕上げ面・内側境界＝下地／仕上げ境界。
+ *
+ * **どちらの線も、壁へトリムで接続した辺では描かない**（ユーザー実機指摘2026-08「壁仕上げ線2本の
+ * 内、柱側の1本が柱を一周している。正しくは、壁仕上げ材の内側にある1本と柱内側の1本が取り合う」）
+ * ——その位置には壁の同じ層の線が続いており、柱側でも描くと線が重なるうえ、内側境界線が柱を
+ * 一周してしまう。描かないことで壁の面線→柱壁の外形、壁のfin線→柱壁の内側境界、がそれぞれ
+ * 1本に連続する（壁側は `columnWallCuts` が層ごとの区間で切る）。
+ * 内側境界の辺は**両端をその向きの仕上げ厚ぶん詰める**——壁側のfin線の切り欠き幅（`fin`区間）と
+ * 端を一致させ、取り合い部で段差なくつなぐため。
+ * @returns {Array} Konva要素
+ */
+function columnWrapLines(column, wrap, color, strokeWidth, detail) {
+  const els = [];
+  const { xLo, xHi, yLo, yHi } = wrap;
+  const f = wrap.finishes ?? {};
+  const skip = key => wrap.trimmed?.[key]; // 壁と取り合う辺は壁側の線に任せる
+  for (const [key, pts] of [
+    ['xLo', [xLo, yLo, xLo, yHi]], ['xHi', [xHi, yLo, xHi, yHi]],
+    ['yLo', [xLo, yLo, xHi, yLo]], ['yHi', [xLo, yHi, xHi, yHi]],
+  ]) {
+    if (skip(key)) continue;
+    els.push(<Line key={`wrap:${column.id}:${key}`} points={pts}
+      stroke={color} strokeWidth={strokeWidth} listening={false} />);
+  }
+  if (!detail) return els;
+  // 仕上げ材と下地材の境界（外形から仕上げ厚ぶん内側）。壁の fin 線と同じ位置づけ。
+  const ixLo = xLo + (f.xLo ?? 0), ixHi = xHi - (f.xHi ?? 0);
+  const iyLo = yLo + (f.yLo ?? 0), iyHi = yHi - (f.yHi ?? 0);
+  if (!(ixHi - ixLo > 0 && iyHi - iyLo > 0)) return els; // 仕上げ厚で潰れる小さな包み
+  for (const [key, pts] of [
+    ['xLo', [ixLo, iyLo, ixLo, iyHi]], ['xHi', [ixHi, iyLo, ixHi, iyHi]],
+    ['yLo', [ixLo, iyLo, ixHi, iyLo]], ['yHi', [ixLo, iyHi, ixHi, iyHi]],
+  ]) {
+    if (skip(key) || !(f[key] > 0)) continue; // 仕上げ材が無い辺は境界線も無い
+    els.push(<Line key={`wrapfin:${column.id}:${key}`} points={pts}
+      stroke={color} strokeWidth={strokeWidth} listening={false} />);
+  }
+  return els;
+}
+
 // 柱のみの描画。構造モードでは全LODで実断面形状（ColumnSymbol）を実寸表示する。
 // STANDARDだけは塗りなし（輪郭線のみ。中実断面が重なる範囲を確認しやすくするため）。
 // diaphragm=true（構造モード×詳細描画）のとき、鋼管柱は断面の外側にダイヤフラム外形（四角）を描く。
-export const ColumnsLayer = observer(({ graph, viewport, diaphragm = false }) => {
+// finishWrap=true（平面モード）のとき、柱断面を太線で描き（ユーザー指示2026-08「平面では、柱断面を
+// 太線」）、仕上げ包み（柱壁）の下地材・仕上げ材を細線で重ねる——包み厚の算出は展開図の柱型と同じ
+// finish/columnWrap.js（単一の情報源）。構造モードには渡さない：伏図は躯体の図なので仕上げは載せない。
+export const ColumnsLayer = observer(({ graph, viewport, diaphragm = false, finishWrap = false }) => {
   if (!graph) return null;
   const scale   = Math.min(viewport.scaleX, viewport.scaleY);
-  const outline = viewport.lodLevel === LodLevel.STANDARD;
-  const outlineStrokeWidth = resolveStrokeWidth(LINE_WEIGHT_MM.medium, scale);
+  // 平面では柱断面を太線の輪郭で描く（塗りではなく断面線で示す）。構造モードは従来どおり。
+  const outline = finishWrap || viewport.lodLevel === LodLevel.STANDARD;
+  const outlineStrokeWidth = resolveStrokeWidth(
+    finishWrap ? LINE_WEIGHT_MM.thick : LINE_WEIGHT_MM.medium, scale);
   const diaStrokeWidth = resolveStrokeWidth(LINE_WEIGHT_MM.thin, scale);
+  // 柱壁（仕上げ包み）の線は**壁と同じ太さ**にする（ユーザー指示2026-08）——壁の Shape 既定
+  // lineWeight が medium（core/shapeBase.js）で、取り合う相手と太さが揃っていないと1本の線として
+  // 連続して見えないため。
+  const wrapStrokeWidth = resolveStrokeWidth(LINE_WEIGHT_MM.medium, scale);
+  // 壁に完全に埋まる柱は包みを持たない（columnWrap.js参照）。
+  const wrapByColumnId = finishWrap
+    ? new Map(columnWrapSolids(graph)
+      .filter(w => !w.hidden && Object.values(w.wrapped.covers).some(v => v > 0))
+      .map(w => [w.column.id, w.wrapped]))
+    : null;
   return graph.columns.flatMap(column => {
     const color = COLOR_BY_MATERIAL[column.materialType];
     const els = [];
+    // 仕上げ包み（柱壁）。軸並行なので rotation は持たない——包みは向き合う壁の向きで決まる。
+    const wrap = wrapByColumnId?.get(column.id);
+    if (wrap) {
+      els.push(...columnWrapLines(column, wrap, color, wrapStrokeWidth,
+        viewport.lodLevel === LodLevel.DETAIL));
+    }
     // ダイヤフラム外形（断面の背面に四角の輪郭）。詳細描画かつ鋼管のみ。
     const d = diaphragm ? columnDiaphragmSize(column) : null;
     if (d) {

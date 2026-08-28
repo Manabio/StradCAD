@@ -19,6 +19,9 @@
  * 対象外（graph.beams/graph.columnsしか読まない）ため、追加の除外は要らない。
  */
 import { findSectionEntry } from '../../structural/sectionCatalog.js';
+// 柱の仕上げ包みの幾何は平面図（renderer/StructuralLayer.jsx）と共有する単一の情報源から取る
+// ——同じ柱が図面ごとに違う太さで描かれないため（finish/columnWrap.js のヘッダ参照）。
+import { bareColumnRect, isColumnInsideWall, wrapColumnWithFinish } from '../../finish/columnWrap.js';
 import { ElevationLineRole, GAP_EPS_MM as GAP_EPS } from '../elevationStyle.js';
 import { localXOf, cutDrawRange } from './sectionTypes.js';
 import { halfWallThicknessMm } from '../elevationFloorProfile.js';
@@ -37,9 +40,14 @@ const FOUNDATION_ROLE = 'foundation';
  */
 
 /**
- * @typedef {{xLo:number, xHi:number, yLo:number, yHi:number, baseZ:number}} ColumnSolid
- *   平面の占有矩形（軸並行）＋足元の絶対z。柱は「その階の床から天井まで立つ」ものとして扱い、
- *   上端zは持たない（下記 structuralColumnPrimitivesForCut の設計判断を参照）。
+ * @typedef {{xLo:number, xHi:number, yLo:number, yHi:number, baseZ:number,
+ *   covers:object, trimmed:object,
+ *   wallAxes:Array<{isVertical:boolean, axisValue:number}>}} ColumnSolid
+ *   平面の占有矩形（軸並行。**ダイヤフラム出・仕上げ包みを含んだ外形**。`finish/columnWrap.js`）
+ *   ＋足元の絶対z。covers/trimmed は4面それぞれの包み厚とトリム有無（内訳の記録。描画は矩形だけを
+ *   使う）。wallAxes は接続した壁の軸CL値＝「この柱がどの面に現れるか」の索引
+ *   （下記 structuralColumnPrimitivesForCut 参照）。柱は「その階の床から天井まで立つ」ものとして
+ *   扱い、上端zは持たない（同関数の設計判断を参照）。
  */
 
 /**
@@ -178,6 +186,8 @@ export function structuralContribution(layers) {
  * width/height を入れ替える。それ以外の角度（ASSUMED: 実データでは稀）は軸並行の外接矩形として
  * 扱わず、回転前の寸法をそのまま使う——展開図は軸並行の切断面しか持たないため、斜め柱の正確な
  * 見付け幅は本レイヤの対象外（defer）。
+ * 鋼管柱はダイヤフラム出（`diaphragmProjection`。構造モードの平面描画・断面図・梁端の停止位置と
+ * 同一実装）を外形に含める＝柱の外面はダイヤフラムの外面。
  * @param {Array<{graph:object, floorZMm:number, role:string}>} layers
  * @returns {ColumnSolid[]}
  */
@@ -191,50 +201,28 @@ export function structuralColumnContribution(layers) {
   for (const layer of layers ?? []) {
     for (const column of layer.graph?.columns ?? []) {
       if (column.role === FOUNDATION_ROLE) continue; // 杭は展開図に描かない
-      const sec = findSectionEntry(column.sectionDefId);
-      let w = sec?.width ?? DEFAULT_DEPTH_MM;
-      let h = sec?.height ?? DEFAULT_DEPTH_MM;
-      const rot = (((column.rotation ?? 0) % 360) + 360) % 360;
-      if (Math.abs(rot - 90) < 1 || Math.abs(rot - 270) < 1) { const t = w; w = h; h = t; }
-      const solid = {
-        xLo: column.x - w / 2, xHi: column.x + w / 2,
-        yLo: column.y - h / 2, yHi: column.y + h / 2,
-        baseZ: layer.floorZMm,
-      };
-      if (isColumnInsideWall(solid, walls)) continue;
-      result.push(solid);
+      const bare = bareColumnRect(column, layer.floorZMm);
+      if (isColumnInsideWall(bare, walls)) continue;
+      result.push(wrapColumnWithFinish(bare, walls));
     }
   }
   return result;
 }
 
 /**
- * 柱の平面占有矩形が、いずれかの壁の材厚に収まり（厚み方向は完全に）、かつその壁のスパンに
- * 収まっているか（＝壁に隠れて見えない柱か）。判定の考え方・許容量は`isInsideWall`（梁）と同じ。
- * @param {ColumnSolid} solid
- * @param {object[]} walls
- * @returns {boolean}
- */
-function isColumnInsideWall(solid, walls) {
-  for (const wall of walls) {
-    const mr = wall.materialRange;
-    if (!mr) continue;
-    // 壁の材厚方向は isVertical=true なら X・false なら Y。スパンはその直交軸。
-    const [acrossLo, acrossHi, spanLo, spanHi] = wall.isVertical
-      ? [solid.xLo, solid.xHi, solid.yLo, solid.yHi]
-      : [solid.yLo, solid.yHi, solid.xLo, solid.xHi];
-    if (!(acrossLo >= mr.lo - GAP_EPS && acrossHi <= mr.hi + GAP_EPS)) continue;
-    const tol = Math.abs(mr.hi - mr.lo); // 隅の取り合い（chamferWalls）ぶんの許容。isInsideWall参照
-    const wLo = Math.min(wall.coord1, wall.coord2), wHi = Math.max(wall.coord1, wall.coord2);
-    if (spanLo >= wLo - tol - GAP_EPS && spanHi <= wHi + tol + GAP_EPS) return true;
-  }
-  return false;
-}
-
-/**
- * ColumnSolid[] → 1つの切断（cut）に対するプリミティブ。柱の平面矩形が切断線をまたぎ、かつ
- * run方向の見付け区間が切断線の範囲と重なるものだけを、**見付け幅の両端の縦線2本**（CUT太線）で
- * 描く（＝室内展開図の「柱型」）。
+ * ColumnSolid[] → 1つの切断（cut）に対するプリミティブ。その面に現れる柱を、**見付け幅の両端の
+ * 縦線2本**（CUT太線）で描く（＝室内展開図の「柱型」）。
+ *
+ * **「その面に現れるか」は柱が干渉した壁の軸CL（`wallAxes`）と面の軸CLの照合で決める**
+ * （実機フィードバック修正2026-08「平面で柱芯を動かしても展開に表れない」の根本原因）——
+ * 旧実装は「柱の断面が切断線をまたぐか」で判定していたが、切断線は面の**壁芯CL**である一方、
+ * 実データの壁は下地オーナー壁＋仕上げ薄壁方式のため材厚が壁芯から数十mm室内側にある
+ * （実機ログ: 面の壁芯 -7000 に対し干渉壁の材厚は[-6955,-6942.5]、柱の外面は-6975）。
+ * 柱芯オフセット（ラーメン系では常態）と重なると、壁を貫いて室内へ出ている柱＝まさに覆う対象が
+ * 一本残らず落ちていた。**壁と干渉している柱はその壁の面に現れる**——これが柱と面を結ぶ本来の
+ * 関係で、壁芯を跨ぐかどうかは実データでは成り立たない代理条件だった。
+ * 柱の断面が切断線を実際にまたぐ場合（壁を持たない位置の柱・単体テストのフェイク）は従来どおり
+ * 描く。どちらも成り立たない独立柱は描かない（面より手前に立つ独立柱の見えがかりは defer のまま）。
  *
  * 設計判断（ASSUMED・報告済み）: 上下端の水平線は描かない。StructuralColumn.topLevel は既定0で
  * 実データでは未編集のまま（＝高さの信頼できる情報源が無い）一方、柱は床から天井まで通しで
@@ -252,15 +240,29 @@ export function structuralColumnPrimitivesForCut(contribution, cut) {
   for (const col of contribution ?? []) {
     const z0 = Math.max(col.baseZ, loZ);
     if (z0 >= hiZ - GAP_EPS) continue; // 上階の柱等、この帯の描画範囲に掛からない
-    // 切断線（line.isVertical=true なら固定X・Y方向に伸びる）をまたぐか＋run方向の重なり。
-    const [acrossLo, acrossHi, runLo, runHi] = cut.line.isVertical
-      ? [col.xLo, col.xHi, col.yLo, col.yHi]
-      : [col.yLo, col.yHi, col.xLo, col.xHi];
-    const straddles = cut.line.axisValue >= acrossLo - GAP_EPS && cut.line.axisValue <= acrossHi + GAP_EPS;
-    if (!straddles || !rangesOverlap(cut.line.lo, cut.line.hi, runLo, runHi)) continue;
+    // ①この面の壁と接続しているか（軸CLの照合。上記参照）②または断面が実際に切断線をまたぐか。
+    const onFaceWall = (col.wallAxes ?? []).some(a =>
+      a.isVertical === cut.line.isVertical && Math.abs(a.axisValue - cut.line.axisValue) <= GAP_EPS);
+    const axis = cut.line.axisValue;
+    const [acrossLo, acrossHi] = cut.line.isVertical
+      ? [col.xLo, col.xHi] : [col.yLo, col.yHi];
+    const straddles = axis >= acrossLo - GAP_EPS && axis <= acrossHi + GAP_EPS;
+    if (!onFaceWall && !straddles) continue;
+    // **柱が面の室内側（視線側）にあること**（ユーザー実機指摘2026-08「展開図「4」B：「4」の中から
+    // 柱型は見えないが、エッジ線が出ている」）——同じ壁を共有する2部屋のうち、柱は壁のどちらか
+    // 一方の側にしか出っ張らない。軸CLの照合だけだと壁の向こう側に立つ柱まで両室の面へ出る。
+    const viewSign = cut.viewSign === -1 ? -1 : 1;
+    const onNearSide = viewSign > 0 ? acrossHi > axis + GAP_EPS : acrossLo < axis - GAP_EPS;
+    if (!onNearSide) continue;
+    // run方向（見付け方向）は覆い込み後の区間で、面の描画範囲と重なることを要求する。
+    const [runLo, runHi] = cut.line.isVertical
+      ? [col.yLo, col.yHi] : [col.xLo, col.xHi];
+    if (!rangesOverlap(cut.line.lo, cut.line.hi, runLo, runHi)) continue;
     const xA = localXOf(cut, runLo), xB = localXOf(cut, runHi);
-    prims.push(emitLine(cut, xA, z0, xA, hiZ, ElevationLineRole.CUT));
-    prims.push(emitLine(cut, xB, z0, xB, hiZ, ElevationLineRole.CUT));
+    // 線種は中線（SILHOUETTE。ユーザー指示2026-08「展開図の柱型は中線」）——柱型は切断面では
+    // なく「室内に出っ張った仕上げ面の見えがかり」であり、床線・天井線と同じ太線では強すぎる。
+    prims.push(emitLine(cut, xA, z0, xA, hiZ, ElevationLineRole.SILHOUETTE));
+    prims.push(emitLine(cut, xB, z0, xB, hiZ, ElevationLineRole.SILHOUETTE));
   }
   return prims;
 }

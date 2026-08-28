@@ -11,7 +11,7 @@ import { buildFaceFigure } from './elevationFigure.js';
 import { collectGridCLs } from './elevationPrimitives.js';
 import { solidPrimitivesForFace, faceSectionCut } from './elevationSolids.js';
 import {
-  structuralContribution, structuralColumnContribution,
+  structuralContribution, structuralColumnContribution, structuralColumnPrimitivesForCut,
 } from './section/sectionStructure.js';
 
 const CH = 2400;
@@ -90,8 +90,12 @@ test('【追加仕様】structuralColumnContribution: 杭(role:foundation)は寄
   assert.equal(solids.length, 0, '杭は柱型として描かれてはいけない');
 });
 
-// ---- 追加仕様: 柱型（切断線をまたぐ柱の見付け幅の両端縦線・CUT） ----
-test('【追加仕様】solidPrimitivesForFace: A面の壁上に立つ柱は見付け幅の両端縦線（太線）で描かれる', () => {
+// ---- 追加仕様: 柱型（その面の壁に接続した柱の、見付け幅の両端縦線・中線） ----
+// 追加仕様2026-08「柱を仕上げ材で覆い展開図に反映」により、柱の見付け幅は「下地材＋壁仕上げ材」
+// ぶん左右に広がる（既定の壁: 下地90＋仕上げ12.5＝片側102.5mm）。
+const COVER_MM = 90 + 12.5;
+
+test('【追加仕様】solidPrimitivesForFace: A面の壁上に立つ柱は仕上げで覆った見付け幅の両端縦線（中線）で描かれる', () => {
   const { graph, room, x1, y0 } = makeGridRoom();
   // A面（y=0の壁）の途中、x=2000に300角のRC柱。
   const xm = graph.addCenterLine(CenterLineType.VERTICAL, 2000, { labeled: false, discipline: Discipline.ARCH });
@@ -100,14 +104,179 @@ test('【追加仕様】solidPrimitivesForFace: A面の壁上に立つ柱は見�
 
   const faceA = buildRoomFaces(room, graph).find(f => f.label === 'A');
   const prims = solidPrimitivesForFace(faceA, { graph, ceilingHeight: CH });
-  const verticals = prims.filter(p => p.type === 'line' && p.x1 === p.x2 && p.weight === 'thick');
-  assert.equal(verticals.length, 2, '柱型の両端縦線2本が描かれるはず');
+  // ユーザー指示2026-08「展開図の柱型は中線」。
+  const verticals = prims.filter(p => p.type === 'line' && p.x1 === p.x2 && p.weight === 'medium');
+  assert.equal(verticals.length, 2, '柱型の両端縦線2本が中線で描かれるはず');
+  assert.equal(prims.filter(p => p.weight === 'thick').length, 0, '柱型に太線を使ってはいけない');
   const xs = verticals.map(p => p.x1).sort((a, b) => a - b);
-  assert.equal(Math.round(xs[1] - xs[0]), 300, '見付け幅は断面幅300mmのはず');
+  assert.equal(Math.round(xs[1] - xs[0]), 300 + 2 * COVER_MM,
+    '見付け幅は断面幅300mm＋左右の仕上げ包み（下地90＋仕上げ12.5）のはず');
   for (const v of verticals) {
     assert.equal(Math.min(v.y1, v.y2), -CH, '柱型は天井まで届くはず');
     assert.equal(Math.max(v.y1, v.y2), 0, '柱型は床から立つはず');
   }
+});
+
+test('【追加仕様】structuralColumnContribution: 鉄骨角形鋼管柱はダイヤフラム出も含めて覆われる', () => {
+  const { graph, y0 } = makeGridRoom();
+  const xm = graph.addCenterLine(CenterLineType.VERTICAL, 2000, { labeled: false, discipline: Discipline.ARCH });
+  // □-200×200×9.0（板厚9<28 → ダイヤフラム出e=25。構造モードの平面描画・断面図と同一実装）。
+  graph.addColumn(StructuralMaterialType.STEEL, 'STEEL-SQ200x200x9.0', xm, y0, {});
+  const solids = structuralColumnContribution([{ graph, floorZMm: 0, role: 'self' }]);
+  assert.equal(solids.length, 1);
+  assert.equal(Math.round(solids[0].xHi - solids[0].xLo), 200 + 2 * 25 + 2 * COVER_MM,
+    '見付け幅は断面200＋ダイヤフラム出25×2＋仕上げ包み102.5×2のはず');
+  assert.equal(solids[0].covers.xLo, COVER_MM, '見付け方向の包み厚が面ごとに記録されるはず');
+  assert.equal(solids[0].covers.xHi, COVER_MM);
+});
+
+// ---- 実機フィードバック2026-08「平面で柱芯を動かすと展開に表れない」 ----
+// 切断線＝面の壁芯CL。柱芯オフセット（ラーメン系では常態）で柱の外面が壁芯を越えると、
+// 断面基準のstraddle判定では柱型が丸ごと消えていた（覆い厚は計算済みなのに描画側で捨てられる）。
+test('【実機修正】solidPrimitivesForFace: 柱芯が室内側へずれ壁芯をまたがなくなっても、壁と干渉していれば柱型を描く', () => {
+  const { graph, room, y0 } = makeGridRoom();
+  const xm = graph.addCenterLine(CenterLineType.VERTICAL, 2000, { labeled: false, discipline: Discipline.ARCH });
+  // A面の壁（材厚 y=0..57.5）に掛かるが、柱の外面(y=1)は壁芯(y=0)を越えている位置。
+  graph.addColumn(StructuralMaterialType.RC, 'RC-300x300', xm, y0, { eccentricity: { x: 0, y: 151 } });
+  const faceA = buildRoomFaces(room, graph).find(f => f.label === 'A');
+  const verticals = solidPrimitivesForFace(faceA, { graph, ceilingHeight: CH })
+    .filter(p => p.type === 'line' && p.x1 === p.x2 && p.weight === 'medium');
+  assert.equal(verticals.length, 2, '壁と干渉する柱は壁芯をまたがなくても柱型として描かれるはず');
+  const xs = verticals.map(p => p.x1).sort((a, b) => a - b);
+  assert.equal(Math.round(xs[1] - xs[0]), 300 + 2 * COVER_MM, '見付け幅は覆い込み後のはず');
+});
+
+// 実機ログ（2階・□-200×200×9.0）の再現: 仕上げ薄壁は材厚が壁芯から45mm室内側にあるため、
+// 「柱の断面が壁芯をまたぐか」では壁を貫いて室内へ出ている柱まで落ちていた。
+// 面の壁芯 -7000 / 干渉壁の材厚 [-6955,-6942.5] / 柱の外面 -6975 という実データの関係を固定する。
+test('【実機修正】structuralColumnPrimitivesForCut: 材厚が壁芯から離れた薄壁でも、その壁に干渉する柱は面に出る', () => {
+  const wall = {
+    isVertical: false, materialRange: { lo: -6955, hi: -6942.5 }, coord1: -7942, coord2: -3057,
+    backingRange: null, wallFinish: 12.5, axisCL: { effectiveValue: -7000 },
+  };
+  const column = { role: 'primary', sectionDefId: 'STEEL-SQ200x200x9.0', x: -7850, y: -6850, rotation: 0 };
+  const solids = structuralColumnContribution([
+    { graph: { walls: [wall], columns: [column] }, floorZMm: 0, role: 'self' },
+  ]);
+  assert.equal(solids.length, 1);
+  assert.ok(solids[0].yLo < -6955 && solids[0].yHi > -6942.5, '前提: 柱は壁の材厚を貫いて室内へ出ている');
+  assert.ok(solids[0].yLo > -7000, '前提: 柱の外面は壁芯(-7000)まで届いていない');
+
+  const cut = {
+    seqNo: 'a', line: { isVertical: false, axisValue: -7000, lo: -7942, hi: -3057 },
+    viewSign: 1, dirSign: 1, layers: [], zRange: { loZ: 0, hiZ: 2400 }, baseFloorZ: 0,
+  };
+  const prims = structuralColumnPrimitivesForCut(solids, cut);
+  assert.equal(prims.length, 2, '干渉している壁の面には柱型が出るはず');
+  const xs = prims.map(p => p.x1).sort((a, b) => a - b);
+  // この構成では見付け方向（x）に向き合う壁がフェイクに存在しないため包みは付かない
+  // ——包み厚は「その面に向き合う壁の層構成」から来る（columnWrap.js の規約1）。
+  assert.equal(Math.round(xs[1] - xs[0]), 250, '見付けは断面200＋ダイヤフラム出25×2');
+});
+
+// 実機ログ（2階・柱が壁から42.5mm離れて立つ構成）の再現: 柱が壁と重なっていなくても、
+// 隙間が150mm以下なら壁の仕上げ面までトリムして接続し、その面に柱型が出る。
+test('【実機修正】structuralColumnPrimitivesForCut: 壁から42.5mm離れた柱もトリムで接続し面に出る', () => {
+  const wall = {
+    isVertical: false, materialRange: { lo: -6955, hi: -6942.5 }, coord1: -7942, coord2: -3057,
+    backingRange: null, wallFinish: 12.5, axisCL: { effectiveValue: -7000 },
+  };
+  const column = { role: 'primary', sectionDefId: 'STEEL-SQ200x200x9.0', x: -7775, y: -6775, rotation: 0 };
+  const solids = structuralColumnContribution([
+    { graph: { walls: [wall], columns: [column] }, floorZMm: 0, role: 'self' },
+  ]);
+  assert.equal(solids.length, 1);
+  assert.equal(solids[0].covers.yLo, 42.5, '壁の仕上げ面(-6942.5)まで42.5mm伸ばすはず');
+  assert.equal(solids[0].trimmed.yLo, true);
+  assert.equal(solids[0].yLo, -6942.5, '包みの面が壁の仕上げ面と揃うはず');
+
+  const cut = {
+    seqNo: 'a', line: { isVertical: false, axisValue: -7000, lo: -7942, hi: -3057 },
+    viewSign: 1, dirSign: 1, layers: [], zRange: { loZ: 0, hiZ: 2400 }, baseFloorZ: 0,
+  };
+  const prims = structuralColumnPrimitivesForCut(solids, cut);
+  assert.equal(prims.length, 2, 'トリムで接続した壁の面には柱型が出るはず');
+  for (const p of prims) assert.equal(p.weight, 'medium', '柱型は中線のはず');
+});
+
+// 実機指摘2026-08「展開図「4」B：「4」の中から柱型は見えないが、エッジ線が出ている」。
+// 壁を共有する2部屋のうち、柱は片側にしか出っ張らない。軸CLの照合だけでは壁の向こう側の
+// 部屋の面にも柱型が出てしまう。
+test('【実機修正】structuralColumnPrimitivesForCut: 壁の向こう側に立つ柱はその部屋の面に出さない', () => {
+  const wall = {
+    isVertical: true, materialRange: { lo: -3400, hi: -3387.5 }, coord1: -1000, coord2: 1000,
+    backingRange: null, wallFinish: 12.5, axisCL: { effectiveValue: -3400 },
+  };
+  const column = { role: 'primary', sectionDefId: 'RC-300x300', x: -3190, y: 0, rotation: 0 };
+  const solids = structuralColumnContribution([
+    { graph: { walls: [wall], columns: [column] }, floorZMm: 0, role: 'self' },
+  ]);
+  assert.equal(solids.length, 1);
+  assert.ok(solids[0].wallAxes.some(a => a.isVertical && a.axisValue === -3400),
+    '前提: 柱はこの壁とトリムで接続している');
+
+  const base = {
+    seqNo: 'x', line: { isVertical: true, axisValue: -3400, lo: -1000, hi: 1000 },
+    dirSign: 1, layers: [], zRange: { loZ: 0, hiZ: 2400 }, baseFloorZ: 0,
+  };
+  // 室内が +X 側の部屋（柱はこちら側に出っ張る）→ 描く。
+  assert.equal(structuralColumnPrimitivesForCut(solids, { ...base, viewSign: 1 }).length, 2,
+    '柱が出っ張っている側の部屋の面には柱型が出るはず');
+  // 室内が -X 側の部屋（壁の向こう側）→ 描かない。
+  assert.deepEqual(structuralColumnPrimitivesForCut(solids, { ...base, viewSign: -1 }), [],
+    '壁の向こう側の部屋からは柱型は見えないはず');
+});
+
+test('【失敗系・実機修正】structuralColumnPrimitivesForCut: 干渉していない別軸の面には出ない', () => {
+  const wall = {
+    isVertical: false, materialRange: { lo: -6955, hi: -6942.5 }, coord1: -7942, coord2: -3057,
+    backingRange: null, wallFinish: 12.5, axisCL: { effectiveValue: -7000 },
+  };
+  const column = { role: 'primary', sectionDefId: 'STEEL-SQ200x200x9.0', x: -7850, y: -6850, rotation: 0 };
+  const solids = structuralColumnContribution([
+    { graph: { walls: [wall], columns: [column] }, floorZMm: 0, role: 'self' },
+  ]);
+  // 同じ向きだが軸が違う面（別の壁芯）。
+  const cut = {
+    seqNo: 'b', line: { isVertical: false, axisValue: 0, lo: -7942, hi: -3057 },
+    viewSign: 1, dirSign: 1, layers: [], zRange: { loZ: 0, hiZ: 2400 }, baseFloorZ: 0,
+  };
+  assert.deepEqual(structuralColumnPrimitivesForCut(solids, cut), [],
+    '干渉していない壁の面へ柱型を出してはいけない');
+});
+
+test('【追加仕様】solidPrimitivesForFace: 壁から92.5mm離れた柱も150以下なのでトリムで接続し面に出る', () => {
+  const { graph, room, y0 } = makeGridRoom();
+  const xm = graph.addCenterLine(CenterLineType.VERTICAL, 2000, { labeled: false, discipline: Discipline.ARCH });
+  // 柱の外面(y=150)は壁の材厚上端(57.5)から92.5mm離れている＝重なっていないがトリム範囲内。
+  graph.addColumn(StructuralMaterialType.RC, 'RC-300x300', xm, y0, { eccentricity: { x: 0, y: 300 } });
+  const faceA = buildRoomFaces(room, graph).find(f => f.label === 'A');
+  const verticals = solidPrimitivesForFace(faceA, { graph, ceilingHeight: CH })
+    .filter(p => p.type === 'line' && p.x1 === p.x2);
+  assert.equal(verticals.length, 2, '150mm以内で向き合う壁にはトリムで接続するはず');
+});
+
+test('【失敗系・追加仕様】solidPrimitivesForFace: 150を超えて離れた柱は面に出さない（見えがかりはdefer）', () => {
+  const { graph, room, y0 } = makeGridRoom();
+  const xm = graph.addCenterLine(CenterLineType.VERTICAL, 2000, { labeled: false, discipline: Discipline.ARCH });
+  // 柱の外面(y=250)は壁の材厚上端(57.5)から192.5mm離れている＝トリム閾値150超。
+  graph.addColumn(StructuralMaterialType.RC, 'RC-300x300', xm, y0, { eccentricity: { x: 0, y: 400 } });
+  const faceA = buildRoomFaces(room, graph).find(f => f.label === 'A');
+  assert.deepEqual(solidPrimitivesForFace(faceA, { graph, ceilingHeight: CH }), [],
+    '壁から離れて立つ柱の見えがかりは対象外（defer）のはず');
+});
+
+test('【追加仕様】structuralColumnContribution: 部屋の中央に立つ独立柱も原則覆う（ただし壁とは接続しない）', () => {
+  const { graph } = makeGridRoom();
+  // 部屋の中央（どの壁からも150mmを大きく超えて離れている位置）に立つ柱。
+  const xm = graph.addCenterLine(CenterLineType.VERTICAL, 2000, { labeled: false, discipline: Discipline.ARCH });
+  const ym = graph.addCenterLine(CenterLineType.HORIZONTAL, 1500, { labeled: false, discipline: Discipline.ARCH });
+  graph.addColumn(StructuralMaterialType.RC, 'RC-300x300', xm, ym, {});
+  const solids = structuralColumnContribution([{ graph, floorZMm: 0, role: 'self' }]);
+  assert.equal(solids.length, 1);
+  assert.equal(solids[0].xHi - solids[0].xLo, 300 + 2 * COVER_MM,
+    'ユーザー指示2026-08「柱は原則、仕上げ材で覆う」——独立柱も部屋の層構成で覆われるはず');
+  assert.deepEqual(solids[0].wallAxes, [], 'どの壁とも接続しない＝展開図の面には出ない');
 });
 
 test('【追加仕様】solidPrimitivesForFace: 直交する面（B面）の壁上の柱はその面には描かれない', () => {
@@ -246,4 +415,17 @@ test('【失敗系・実機指摘】structuralColumnContribution: 壁より太�
   graph.addColumn(StructuralMaterialType.RC, 'RC-300x300', xm, y0, { eccentricity: { x: 0, y: 60 } });
   assert.equal(structuralColumnContribution([{ graph, floorZMm: 0, role: 'self' }]).length, 1,
     '壁より太い柱は室内へ出るため柱型として描く');
+});
+
+test('【失敗系・追加仕様】structuralColumnContribution: 寸法の判らない手動壁は柱を覆わない（固定値で代用しない）', () => {
+  // wallFinish/backingRange を持たない壁（手動壁）だけが干渉する構成。実グラフの部屋は必ず
+  // 生成壁（wallFinish=12.5）を持つため、ここは層をフェイクで直接与える。
+  const wall = { isVertical: false, materialRange: { lo: 0, hi: 120 }, backingRange: null,
+    wallFinish: null, coord1: 0, coord2: 4000 };
+  const column = { role: 'primary', sectionDefId: 'RC-300x300', x: 2000, y: 60, rotation: 0 };
+  const solids = structuralColumnContribution([
+    { graph: { walls: [wall], columns: [column] }, floorZMm: 0, role: 'self' },
+  ]);
+  assert.equal(solids.length, 1, '壁より太い柱は柱型として残るはず');
+  assert.equal(solids[0].xHi - solids[0].xLo, 300, '覆い厚が判らない壁では素の断面幅のままのはず');
 });

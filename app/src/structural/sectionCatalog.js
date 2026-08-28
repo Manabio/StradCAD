@@ -81,10 +81,17 @@ export function findSectionEntry(sectionDefId) {
   return SECTION_CATALOG.find(s => s.key === sectionDefId) ?? null;
 }
 
+// ダイヤフラム出寸法 e の既定値（mm）。スキンプレート厚 t の境界 28mm で切り替える。
+// 定数として括り出してあるのは調整の口を1箇所にするため——構造モードの平面描画・断面図・
+// 梁端の停止位置に加え、展開図の柱の仕上げ包み（elevation/section/sectionStructure.js）も
+// この値を通る（値を変えると4者が同時に追従する）。
+export const DIAPHRAGM_PROJECTION_MM = Object.freeze({ thin: 25, thick: 30, thicknessBoundary: 28 });
+
 // CFT柱（鋼管＝角形/丸形）のダイヤフラム出寸法 e（柱外面から外側への飛び出し量, mm）。
-// スキンプレート厚 t（＝鋼管の板厚 wallThickness）に応じる（問題.md）：t<28 で 25、それ以外 30。
+// スキンプレート厚 t（＝鋼管の板厚 wallThickness）に応じる：t<28 で 25、それ以外 30。
 // 鋼管以外は 0（ダイヤフラムを持たない）。断面図・描画域・梁端の停止位置の三者が同じ e を使う単一実装。
 export function diaphragmProjection(section) {
   if (!section || (section.shape !== SectionShape.SQUARE_PIPE && section.shape !== SectionShape.ROUND_PIPE)) return 0;
-  return (section.wallThickness ?? 0) < 28 ? 25 : 30;
+  const { thin, thick, thicknessBoundary } = DIAPHRAGM_PROJECTION_MM;
+  return (section.wallThickness ?? 0) < thicknessBoundary ? thin : thick;
 }

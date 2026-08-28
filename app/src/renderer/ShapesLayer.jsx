@@ -7,6 +7,7 @@ import { LodLevel, resolveStrokeWidth } from '../viewport.js';
 import { subtractIntervals } from '../finish/stair/stairGeometry.js';
 import { resolveWallTJunctions } from './wallJunctionResolve.js';
 import { resolveKneeDropOverlays } from '../finish/kneeDropWall.js';
+import { columnWallCuts } from '../finish/columnWrap.js';
 
 const DASH = {
   solid:     undefined,
@@ -99,6 +100,13 @@ export const ShapesLayer = observer(({ graph, viewport, stairUnderClips = null }
   // 腰壁・垂れ壁の描画オーバーレイ（毎レンダー解決。resolveWallTJunctions と同型）。
   // 略図LOD（単線）では特別描画なし。
   const kneeDropOverlays = lodLevel !== LodLevel.SCHEMATIC ? resolveKneeDropOverlays(graph) : null;
+
+  // 柱の仕上げ包み（柱壁）と取り合う区間（ユーザー指示2026-08「壁仕上げ材は互いにトリム。
+  // 不要になった壁下地材は削除」）。柱壁がその場所を占めるため、壁側は仕上げ面線・仕上げ境界線・
+  // 下地（間柱）をこの区間だけ落とす。柱を描かないモード（仕上げ・敷地）でも壁の見た目は
+  // 「柱に取られた区間」を反映してよい——柱は実在するため（描画の有無とは独立）。
+  // wallJunctions と同じ毎レンダー解決（このファイルの既存慣習）。
+  const columnCuts = lodLevel !== LodLevel.SCHEMATIC ? columnWallCuts(graph) : null;
 
   return graph.generalShapes.map((shape) => {
     const sp = strokeProps(shape, scaleX, scaleY);
@@ -208,8 +216,14 @@ export const ShapesLayer = observer(({ graph, viewport, stairUnderClips = null }
         // 仕上げ面線・仕上げ境界線（fin線）専用のセグメント: 直交する通し壁側からの
         // finishCuts があれば、その区間だけ切り欠く（cap線・下地には適用しない——
         // cap線は自壁の物理端点の断面、下地は baseExtend で別途扱う）。
-        const finishSegments = finishCuts.length === 0 ? segments
-          : segments.flatMap(([a, b]) => subtractIntervals(a, b, finishCuts));
+        // 柱の仕上げ包み（柱壁）が占める区間も同じ切り欠きとして扱う（columnWallCuts）。
+        // **層ごとに区間が違う**——仕上げ面線は柱壁の外形幅、仕上げ境界線・下地は内側境界の幅で
+        // 切る（同じ区間で切ると柱側の境界線と端が食い違い、柱を一周して見える）。
+        const colCuts = columnCuts?.get(shape.id) ?? null;
+        const cutBy = extra => (finishCuts.length === 0 && extra.length === 0) ? segments
+          : segments.flatMap(([a, b]) => subtractIntervals(a, b, [...finishCuts, ...extra]));
+        const finishSegments   = cutBy(colCuts?.face ?? []); // 仕上げ面線
+        const finBoundarySegs  = cutBy(colCuts?.fin ?? []);  // 仕上げ／下地の境界線
 
         const faceLines = finishSegments.map(([a, b], i) => (
           <Line
@@ -268,7 +282,7 @@ export const ShapesLayer = observer(({ graph, viewport, stairUnderClips = null }
         const dir      = shape.faceDir;
         const boundary = faceV - dir * shape.wallFinish;
         if (shape.wallFinish > 0 && boundary >= capLo && boundary <= capHi && Math.abs(boundary - axisV) > ENDPOINT_EPS) {
-          elems.push(...finishSegments.map(([a, b], i) => (
+          elems.push(...finBoundarySegs.map(([a, b], i) => (
             <Line
               key={`${shape.id}:fin:${i}`}
               points={shape.isVertical
@@ -314,10 +328,16 @@ export const ShapesLayer = observer(({ graph, viewport, stairUnderClips = null }
           const backingDepth = backingBand.hi - backingBand.lo;
           const halfDepth = backingDepth / 2, halfWidth = WALL_STUD_WIDTH / 2;
           const backingCenterV = (backingBand.lo + backingBand.hi) / 2;
-          const backingSegments = segments.map(([a, b], i, arr) => [
+          const extended = segments.map(([a, b], i, arr) => [
             i === 0 && baseExtend.lo != null ? Math.min(a, baseExtend.lo) : a,
             i === arr.length - 1 && baseExtend.hi != null ? Math.max(b, baseExtend.hi) : b,
           ]);
+          // 柱壁に取られた区間の下地は削除する（ユーザー指示2026-08「不要になった壁下地材は削除」）。
+          // ただし**その下地に乗る仕上げ材が他に残っていれば削除しない**（反対側の部屋の壁など。
+          // 判定は columnWallCuts の canRemoveBacking が持ち、`backing` として区間を返す）。
+          const studCuts = colCuts?.backing ?? [];
+          const backingSegments = studCuts.length === 0 ? extended
+            : extended.flatMap(([a, b]) => subtractIntervals(a, b, studCuts));
           for (const [a, b] of backingSegments) {
             let p = lo + Math.ceil((a - lo) / WALL_BACKING_PITCH) * WALL_BACKING_PITCH;
             if (p - halfWidth < a) p += WALL_BACKING_PITCH;

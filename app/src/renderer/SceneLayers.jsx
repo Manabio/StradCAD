@@ -115,7 +115,9 @@ export const SceneLayers = observer(({
             {appMode !== 'structure' && <OpeningsLayer graph={graph} viewport={viewport} selectedId={appMode === 'opening' ? mode?.selectedOpeningId : null} />}
             {/* 平面モードでは自階の柱（構造モードで生成・保存済み）を表示する。構造モードの伏図と違い
                 1つ下の階ではなく自階graphの柱を描く（その階の平面に立つ柱はその階のもの）。 */}
-            {appMode === 'floorplan' && <ColumnsLayer graph={graph} viewport={viewport} />}
+            {/* 追加仕様2026-08: 平面では壁と干渉する柱に仕上げ包みの外形を重ねる（finishWrap）。
+                展開図の柱型と同じ finish/columnWrap.js から厚みを取る。 */}
+            {appMode === 'floorplan' && <ColumnsLayer graph={graph} viewport={viewport} finishWrap />}
             {appMode === 'structure' && <StructuralLayer composition={structComposition} viewport={viewport} project={project} />}
             {appMode === 'structure' && (
               <MemberTagLayer
