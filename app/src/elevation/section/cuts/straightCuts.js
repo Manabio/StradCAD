@@ -19,6 +19,7 @@ import { roomBounds } from '../../../finish/gridCells.js';
 import { makeFrame, MIN_LANDING } from '../../../finish/stair/stairGeometry.js';
 import { measureStairSpans } from '../../../finish/stair/stairClassify.js';
 import { classifyFaces, buildMidWallFace, reorientFace } from './switchbackCuts.js';
+import { graphList } from '../../../graphReadScope.js';
 
 // findLandingWall（本ファイル）の許容差(mm)。findMidWall（switchbackCuts.js）と同じ考え方
 // （壁厚程度の許容差）で、値も揃えている。
@@ -67,7 +68,7 @@ function resolveStraightParams(stair, graph, floorHeight) {
  */
 function findLandingWall(wallGraph, wEntry, worldValue, acrossLo, acrossHi) {
   if (!wEntry || !wallGraph) return null;
-  for (const w of wallGraph.walls ?? []) {
+  for (const w of graphList(wallGraph, 'walls') ?? []) {
     if (w.isVertical !== wEntry.isVertical) continue;
     if (Math.abs(w.axisCL.effectiveValue - worldValue) > LANDING_WALL_TOL_MM) continue;
     const wLo = Math.min(w.coord1, w.coord2), wHi = Math.max(w.coord1, w.coord2);

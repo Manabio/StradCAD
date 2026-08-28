@@ -1,4 +1,68 @@
 import { CenterLineType, Discipline } from '@core';
+import { scopedValue, graphList } from '../graphReadScope.js';
+
+// ================================================================
+// グリッド索引（分割格子のスナップショット）
+// ================================================================
+//
+// worldToCell / getCellsInRect / refreshCells は「全 CL を filter+sort して分割格子を組む」
+// 処理を呼び出しのたびに繰り返していた。graph.centerLines は MobX の computed だが観測者の
+// いない文脈では読み出しのたびに再計算されるため（graphReadScope.js のヘッダ参照）、
+// 「部屋×面×セル」の三重ループから引くとこれだけで支配的なコストになる。
+//
+// そこで分割格子をプレーンオブジェクト（POJO）のスナップショットとして組み、
+// withGraphReadScope（graphReadScope.js）のスコープ内ではそれを使い回す。
+// スコープ外で呼ばれた場合は従来どおり毎回組み直す（挙動は完全に同じ・遅いだけ）。
+const GRID_INDEX_KEY = 'gridCells:index';
+
+// CL の分割判定に必要な値だけを持つ POJO。ホットループから MobX の observable 読み出し
+// （cl.value / cl.extentLo は computed）を取り除くために確定値としてコピーする。
+function snapshotCL(cl) {
+  return {
+    id: cl.id, value: cl.value, labeled: cl.labeled, discipline: cl.discipline,
+    lineType: cl.lineType, extentLo: cl.extentLo, extentHi: cl.extentHi,
+    centerLineType: cl.centerLineType,
+    // 実CLへの参照。スナップショットに無いフィールド（effectiveValue 等）を要する
+    // 公開APIは、返り値としてこちらを返す（dividerCLsBetween）。
+    cl,
+  };
+}
+
+function buildGridIndex(graph) {
+  const verticals = [], horizontals = [], all = [], clById = new Map();
+  for (const cl of graphList(graph, 'centerLines') ?? []) {
+    const s = snapshotCL(cl);
+    all.push(s);
+    clById.set(s.id, s);
+    if (!isDividerCL(s)) continue;
+    if (s.centerLineType === CenterLineType.VERTICAL) verticals.push(s);
+    else if (s.centerLineType === CenterLineType.HORIZONTAL) horizontals.push(s);
+  }
+  verticals.sort((a, b) => a.value - b.value);
+  horizontals.sort((a, b) => a.value - b.value);
+  const xValues = [...new Set(verticals.map(v => v.value))];
+  const yValues = [...new Set(horizontals.map(h => h.value))];
+  // allXValues/allYValues は「分割CLに限らない全CLの座標値」（展開図の区間刻み
+  // ＝elevationFloorProfile.js の collectRunBreaks が使う。分割格子とは別の集合）。
+  const valuesOfType = t => [...new Set(all.filter(c => c.centerLineType === t).map(c => c.value))]
+    .sort((a, b) => a - b);
+  return {
+    verticals, horizontals, xValues, yValues, all, clById,
+    allXValues: valuesOfType(CenterLineType.VERTICAL),
+    allYValues: valuesOfType(CenterLineType.HORIZONTAL),
+    xIndex: new Map(xValues.map((v, i) => [v, i])),
+    yIndex: new Map(yValues.map((v, i) => [v, i])),
+  };
+}
+
+/**
+ * 分割格子の索引（スナップショット）を返す。読み取りスコープ内なら使い回す。
+ * 返り値の CL は POJO（id/value/labeled/discipline/lineType/extentLo/extentHi/centerLineType/cl）
+ * ——実 CL と同じフィールド名のため isDividerCL / isActiveAcrossRange はそのまま使える。
+ */
+export function gridIndexOf(graph) {
+  return scopedValue(graph, GRID_INDEX_KEY, () => buildGridIndex(graph));
+}
 
 // ================================================================
 // 内部ヘルパー
@@ -20,10 +84,11 @@ export function isActiveAcrossRange(cl, rangeLo, rangeHi) {
 
 // 区間 [lo, hi] 内に存在する全 CL 値をブレークポイントとして収集
 function collectBreaks(graph, centerLineType, lo, hi) {
+  const g = gridIndexOf(graph);
   const values = new Set([lo, hi]);
-  graph.centerLines
-    .filter(cl => cl.centerLineType === centerLineType && isDividerCL(cl))
-    .forEach(cl => { if (cl.value > lo && cl.value < hi) values.add(cl.value); });
+  const src = centerLineType === CenterLineType.VERTICAL ? g.xValues
+    : centerLineType === CenterLineType.HORIZONTAL ? g.yValues : [];
+  for (const v of src) { if (v > lo && v < hi) values.add(v); }
   return [...values].sort((a, b) => a - b);
 }
 
@@ -33,9 +98,10 @@ function collectBreaks(graph, centerLineType, lo, hi) {
  * （隣接セルが別部屋・未割当に分かれる境界）もサンプリング候補に含めるために使う。
  */
 export function dividerCLsBetween(graph, centerLineType, lo, hi) {
-  return graph.centerLines
-    .filter(cl => cl.centerLineType === centerLineType && isDividerCL(cl) && cl.value > lo && cl.value < hi)
-    .sort((a, b) => a.value - b.value);
+  const g = gridIndexOf(graph);
+  const src = centerLineType === CenterLineType.VERTICAL ? g.verticals
+    : centerLineType === CenterLineType.HORIZONTAL ? g.horizontals : [];
+  return src.filter(s => s.value > lo && s.value < hi).map(s => s.cl); // 既に value 昇順
 }
 
 // ================================================================
@@ -91,15 +157,14 @@ function columnPiece(horizontals, colLo, colHi, wy) {
  *   分割位置に接する辺では、その区間で非アクティブなCLが識別子として使われる）
  */
 export function worldToCell(wx, wy, graph) {
-  const verticals = graph.centerLines
-    .filter(cl => cl.centerLineType === CenterLineType.VERTICAL && isDividerCL(cl))
-    .sort((a, b) => a.value - b.value);
-  const horizontals = graph.centerLines
-    .filter(cl => cl.centerLineType === CenterLineType.HORIZONTAL && isDividerCL(cl))
-    .sort((a, b) => a.value - b.value);
+  // 同じ点への再問い合わせが多い（面ごと・区間ごとのプローブ）ためスコープ内でmemo化する。
+  return scopedValue(graph, `gridCells:p:${wx},${wy}`, () => _worldToCell(wx, wy, graph));
+}
+
+function _worldToCell(wx, wy, graph) {
+  const { verticals, horizontals, xValues, xIndex } = gridIndexOf(graph);
   if (verticals.length < 2 || horizontals.length < 2) return null;
 
-  const xValues = [...new Set(verticals.map(v => v.value))];
   const col = microInterval(xValues, wx);
   if (!col) return null;
   const piece = columnPiece(horizontals, col[0], col[1], wy);
@@ -107,8 +172,8 @@ export function worldToCell(wx, wy, graph) {
   const { top, bottom } = piece;
 
   // 同一縦区間 [top, bottom] が続く限り、非分割の列境界を越えて左右へ結合する
-  let loIdx = xValues.indexOf(col[0]);
-  let hiIdx = xValues.indexOf(col[1]);
+  let loIdx = xIndex.get(col[0]);
+  let hiIdx = xIndex.get(col[1]);
   while (!isSeparatingAt(verticals, xValues[loIdx], top, bottom)) {
     if (loIdx === 0) return null; // 左境界CLなし（領域が格子外へ抜ける）
     const p = columnPiece(horizontals, xValues[loIdx - 1], xValues[loIdx], wy);
@@ -153,14 +218,7 @@ export function regionCellsAt(wx, wy, graph) {
   const start = worldToCell(wx, wy, graph);
   if (!start) return [];
 
-  const verticals = graph.centerLines
-    .filter(cl => cl.centerLineType === CenterLineType.VERTICAL && isDividerCL(cl))
-    .sort((a, b) => a.value - b.value);
-  const horizontals = graph.centerLines
-    .filter(cl => cl.centerLineType === CenterLineType.HORIZONTAL && isDividerCL(cl))
-    .sort((a, b) => a.value - b.value);
-  const xValues = [...new Set(verticals.map(cl => cl.value))];
-  const yValues = [...new Set(horizontals.map(cl => cl.value))];
+  const { verticals, horizontals, xValues, yValues } = gridIndexOf(graph);
 
   const cells = new Map([[start.key, start]]);
   const queue = [start];
@@ -227,12 +285,7 @@ export function getCellsInRect(xMin, yMin, xMax, yMax, graph) {
  * グラフ全体の全有効セルを列挙する（FinishModeLayer のグリッド背景描画用）。
  */
 export function getAllCells(graph) {
-  const allXs = graph.centerLines
-    .filter(cl => cl.centerLineType === CenterLineType.VERTICAL   && isDividerCL(cl))
-    .sort((a, b) => a.value - b.value);
-  const allYs = graph.centerLines
-    .filter(cl => cl.centerLineType === CenterLineType.HORIZONTAL && isDividerCL(cl))
-    .sort((a, b) => a.value - b.value);
+  const { verticals: allXs, horizontals: allYs } = gridIndexOf(graph);
   if (allXs.length < 2 || allYs.length < 2) return [];
   return getCellsInRect(
     allXs[0].value, allYs[0].value,
@@ -250,12 +303,7 @@ export function getAllCells(graph) {
  * @returns {Array<{ key, isVertical, value, lo, hi }>}
  */
 export function gridDividerSegments(graph) {
-  const verticals = graph.centerLines
-    .filter(cl => cl.centerLineType === CenterLineType.VERTICAL && isDividerCL(cl))
-    .sort((a, b) => a.value - b.value);
-  const horizontals = graph.centerLines
-    .filter(cl => cl.centerLineType === CenterLineType.HORIZONTAL && isDividerCL(cl))
-    .sort((a, b) => a.value - b.value);
+  const { verticals, horizontals } = gridIndexOf(graph);
   if (verticals.length < 2 || horizontals.length < 2) return [];
 
   const xMin = verticals[0].value,   xMax = verticals[verticals.length - 1].value;
@@ -325,8 +373,18 @@ export function outlineSegments(boundsList) {
  * CL の value は MobX computed なので CLが動いたとき自動追従する。
  */
 export function cellBoundsFromKey(key, graph) {
+  // 同じキーを何度も引く（部屋×面×区間）ためスコープ内でmemo化する。
+  // **返り値は読み取り専用**（同じオブジェクトが使い回される）。
+  return scopedValue(graph, `gridCells:b:${key}`, () => _cellBoundsFromKey(key, graph));
+}
+
+function _cellBoundsFromKey(key, graph) {
   const [leftId, topId, rightId, bottomId] = key.split(':');
-  const getCL = (id) => graph.shapeMap.get(id) ?? graph._structGraph?.shapeMap.get(id) ?? null;
+  // 索引（graph.centerLines のスナップショット。structGraph 分も含む）を先に引く。
+  // 見つからない id だけ shapeMap へ問い合わせる（CL 以外の shape・削除済み id）。
+  const clById = gridIndexOf(graph).clById;
+  const getCL = (id) =>
+    clById.get(id) ?? graph.shapeMap.get(id) ?? graph._structGraph?.shapeMap.get(id) ?? null;
   const leftCL   = getCL(leftId);
   const topCL    = getCL(topId);
   const rightCL  = getCL(rightId);
@@ -409,6 +467,12 @@ export function cellInteriorPoint(key, graph) {
  * 正規化する（分割されていなければ実質そのまま返る）。
  */
 export function refreshCells(cells, graph) {
+  // 同じ Room.cells に対して面ごと・部屋ごとに何度も呼ばれるためスコープ内でmemo化する
+  // （キーは Set の同一性。スコープ内で cells を変更しないことが前提）。
+  return scopedValue(graph, cells, () => _refreshCells(cells, graph));
+}
+
+function _refreshCells(cells, graph) {
   const result = new Set();
   for (const key of cells) {
     const b = cellBoundsFromKey(key, graph);

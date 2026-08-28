@@ -22,6 +22,7 @@ import { computeNamedBoundaryEdges, edgeGeometry, buildCellToRoom } from './edge
 import { worldToCell, dividerCLsBetween } from './gridCells.js';
 import { DEFAULT_WALL_BASE, DEFAULT_WALL_FINISH } from './wallGeneration.js';
 import { subtractIntervals } from './stair/stairGeometry.js';
+import { graphList } from '../graphReadScope.js';
 
 // 断面プロファイルの張り出し長（軸CLから左右へ。mm）
 export const STEP_SECTION_RUN_MM = 300;
@@ -60,11 +61,11 @@ function getShape(graph, id) {
  */
 function openSubIntervals(graph, axisCLId, isVertical, lo, hi) {
   const covers = [];
-  for (const w of graph.walls) {
+  for (const w of graphList(graph, 'walls') ?? []) {
     if (w.isVertical !== isVertical || w.axisCL.id !== axisCLId) continue;
     covers.push([Math.min(w.coord1, w.coord2), Math.max(w.coord1, w.coord2)]);
   }
-  for (const o of graph.openings) {
+  for (const o of graphList(graph, 'openings') ?? []) {
     if (o.isVertical !== isVertical || o.axisCL.id !== axisCLId) continue;
     covers.push([Math.min(o.coord1, o.coord2), Math.max(o.coord1, o.coord2)]);
   }
@@ -74,7 +75,7 @@ function openSubIntervals(graph, axisCLId, isVertical, lo, hi) {
 // 間口端に直交壁があるかを判定する（段差線を壁の仕上げ面で止めるため）。
 // endVal = 間口端の座標（境界の伸び方向）、acrossPos = 境界軸の座標。
 function hasCrossWallAt(graph, endVal, isVertical, acrossPos) {
-  return graph.walls.some(w =>
+  return (graphList(graph, 'walls') ?? []).some(w =>
     w.isVertical !== isVertical &&
     Math.abs(w.axisCL.effectiveValue - endVal) < WALL_AXIS_EPS &&
     Math.min(w.coord1, w.coord2) - WALL_AXIS_EPS <= acrossPos &&

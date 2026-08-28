@@ -9,9 +9,10 @@
  * セルキー集合であり、この対応関係を再実装しないため）。
  */
 import { CenterLineType } from '@core';
-import { refreshCells, cellBoundsFromKey, worldToCell } from '../finish/gridCells.js';
+import { refreshCells, cellBoundsFromKey, worldToCell, gridIndexOf } from '../finish/gridCells.js';
 import { DEFAULT_WALL_BASE, DEFAULT_WALL_FINISH } from '../finish/wallGeneration.js';
 import { roomCeilingHeight } from '../finish/roomMetrics.js';
+import { graphList, scopedValue } from '../graphReadScope.js';
 import { GAP_EPS_MM as GAP_EPS, PROBE_EPS_MM } from './elevationStyle.js';
 // PROBE_EPS_MM: 自室セルの境界がface側で粗い（extent制限されたCLが該当行では無効域にあり
 // 分割されない）場合に、runの伸びる方向へ覗き込むプローブ距離（elevationOpenSpan.jsと共通。
@@ -33,11 +34,11 @@ const DEFAULT_HALF_WALL_MM = DEFAULT_WALL_BASE / 2 + DEFAULT_WALL_FINISH;
  * @returns {number[]}
  */
 export function collectRunBreaks(graph, isVertical, lo, hi) {
-  const type = isVertical ? CenterLineType.HORIZONTAL : CenterLineType.VERTICAL;
+  // 全CLの座標値（分割CLに限らない）はグリッド索引が持つ——スコープ内なら組み直さない。
+  const g = gridIndexOf(graph);
   const values = new Set([lo, hi]);
-  for (const cl of graph.centerLines) {
-    if (cl.centerLineType !== type) continue;
-    if (cl.value > lo && cl.value < hi) values.add(cl.value);
+  for (const v of (isVertical ? g.allYValues : g.allXValues)) {
+    if (v > lo && v < hi) values.add(v);
   }
   return [...values].sort((a, b) => a - b);
 }
@@ -45,7 +46,7 @@ export function collectRunBreaks(graph, isVertical, lo, hi) {
 /** run方向のCL（isVertical面ならHORIZONTAL）のうち、value に一致するものを返す。 */
 export function findRunCLAt(graph, isVertical, value) {
   const type = isVertical ? CenterLineType.HORIZONTAL : CenterLineType.VERTICAL;
-  return graph.centerLines.find(cl => cl.centerLineType === type && cl.value === value) ?? null;
+  return (graphList(graph, 'centerLines') ?? []).find(cl => cl.centerLineType === type && cl.value === value) ?? null;
 }
 
 /**
@@ -113,9 +114,15 @@ export function runBoundaryCLIds(key, isVertical) {
  * @returns {Map<string, import('@core').Room>}
  */
 export function roomOwnerByCell(room, graph) {
+  // 面ごと（wallAdjacentFloorSegments / familyCeilingSegments / stepRiserSegments 等）に
+  // 同じ部屋で何度も呼ばれるためスコープ内でmemo化する。**返り値は読み取り専用**。
+  return scopedValue(graph, room, () => _roomOwnerByCell(room, graph));
+}
+
+function _roomOwnerByCell(room, graph) {
   const map = new Map();
   for (const key of refreshCells(room.cells, graph)) map.set(key, room);
-  for (const r of graph.rooms) {
+  for (const r of graphList(graph, 'rooms') ?? []) {
     if (!r.referenceRoomIds?.has(room.id)) continue;
     for (const key of refreshCells(r.cells, graph)) map.set(key, r); // 子が親を上書き
   }

@@ -8,6 +8,7 @@ import { buildVoidBand } from '../elevation/elevationVoid.js';
 import { floorHeightAbove, floorHeightBelow } from '../finish/stair/stairDimensions.js';
 import { collectGridCLs } from '../elevation/elevationPrimitives.js';
 import { buildBandsSafely } from '../elevation/elevationRooms.js';
+import { withGraphReadScope } from '../graphReadScope.js';
 import {
   chooseElevationScale, screenMmToModelMm, layoutBands, clampScrollY,
   visibleBandPlacements, bandIdAtY, clampFaceOffset, normalizeBandHeightUnits,
@@ -178,6 +179,17 @@ export class ElevationModeState {
    * @returns {{bands:object[], error:string|null}}
    */
   _buildBands() {
+    // 帯構築は graph を一切変更しない読み取り専用処理のため、graph 由来の派生値
+    // （MobX の computed・分割格子の索引・worldToCell の結果）を構築中だけキャッシュして
+    // 使い回す（graphReadScope.js 参照）。これが無いと観測者のいない computed が読み出しの
+    // たびに再計算され、部屋数・CL数に対して超線形に効いてくる——実機12室で 14.2秒→0.4秒。
+    // 階段帯・吹抜け帯が参照する直上階/直下階のグラフも同じスコープに入れる。
+    return withGraphReadScope(this.graph, () =>
+      withGraphReadScope(this._upperGraph, () =>
+        withGraphReadScope(this._lowerGraph, () => this._buildBandsInner())));
+  }
+
+  _buildBandsInner() {
     const materialMap = this._materialMap;
     const upperGraph   = this._upperGraph;
     const lowerGraph   = this._lowerGraph;

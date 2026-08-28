@@ -6,6 +6,24 @@
  * 取り合わせるために使う。壁が無い辺は cl.effectiveValue（芯）へフォールバックする
  * ——生成前・削除後でも常に何らかの矩形が得られる。
  */
+import { graphList, scopedValue } from '../graphReadScope.js';
+
+// axisCL.id → その軸上の壁。innerWallFaceAt は「部屋×面の端」ごとに呼ばれるため、
+// 毎回 graph.walls を全走査すると O(面数×壁数) になる。読み取りスコープ内では索引を使い回す
+// （スコープ外は従来どおり毎回組む＝全走査と同じオーダー）。
+function wallsOnAxisCL(graph, axisCLId) {
+  const byAxis = scopedValue(graph, 'wallFaces:byAxisCL', () => {
+    const m = new Map();
+    for (const w of graphList(graph, 'walls') ?? []) {
+      const id = w.axisCL?.id;
+      if (id == null) continue;
+      const list = m.get(id);
+      if (list) list.push(w); else m.set(id, [w]);
+    }
+    return m;
+  });
+  return byAxis.get(axisCLId) ?? [];
+}
 
 // 壁面の inward 判定に使う許容差(mm)
 const FACE_EPS = 1e-6;
@@ -48,8 +66,8 @@ export function footprintBoundaryCLs(cells, graph) {
  */
 export function innerWallFaceAt(graph, cl, { isVertical, inward, spanLo, spanHi }) {
   let best = null;
-  for (const w of graph.walls) {
-    if (w.isVertical !== isVertical || w.axisCL.id !== cl.id) continue;
+  for (const w of wallsOnAxisCL(graph, cl.id)) {
+    if (w.isVertical !== isVertical) continue;
     const wLo = Math.min(w.coord1, w.coord2), wHi = Math.max(w.coord1, w.coord2);
     if (Math.min(wHi, spanHi) - Math.max(wLo, spanLo) <= SPAN_OVERLAP_EPS) continue;
     if (inward * (w.axisValue - cl.effectiveValue) <= -FACE_EPS) continue;

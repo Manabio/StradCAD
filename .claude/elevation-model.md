@@ -5,6 +5,10 @@
 平面へ戻ると元のビューが保たれる不変条件。純モジュールは`app/src/elevation/`に置き、`store.js`/`snap.js`/`*.jsx`/`react-konva`/`appViewport.js`
 （DOM依存）を静的importしない（node:test単体実行のため。校正値は`viewport.js`から取るか呼び出し側=`App.jsx`が渡す）。
 
+突入時の帯の一括構築（`_buildBands`。自階＋直上階／直下階のgraph）は`withGraphReadScope`で囲む——graphを一切変更しない
+読み取り専用処理であり、囲まないとMobXのcomputedが観測者ゼロで毎回再計算され突入に十数秒かかる
+（実機12室で14.2秒→0.52秒。`.claude/implementation-policy.md` 方針8）。
+
 縦横スクロールは**クランプ方式**（循環しない・画面に収まる帯もminXへクランプし中央寄せしない——全帯を左三角の位置で揃えるため）で
 **書き込み時にクランプする**（読み出し側だけだと過剰ドラッグ分がスラックとして蓄積しデッドゾーンになる）。横スクロールの既定位置は
 左三角(`band.leftAnchorX`)から`LEFT_MARGIN_SCREEN_MM`（2パス換算）ぶん手前——`clampFaceOffset`の下限だけを`minX-marginMm`へ広げて実現する

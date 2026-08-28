@@ -10,6 +10,7 @@
 import { CenterLineType, isGridCenterLine } from '@core';
 import { figureBounds } from '../structural/sectionFigure/sectionGeometry.js';
 import { ElevationLineRole, weightForRole, DEFAULT_NAME_GAP_MM } from './elevationStyle.js';
+import { graphList } from '../graphReadScope.js';
 
 const NAME_BOX_H_MM      = 400;
 const NAME_BOX_CHAR_W_MM = 350;
@@ -94,7 +95,7 @@ export function mirrorPrimitiveX(p, width) {
  * ——`labeled`だけでは中心線（UI経路の既定でlabeled:true）まで拾ってしまう。
  */
 export function collectGridCLs(graph) {
-  return graph.centerLines.filter(cl =>
+  return (graphList(graph, 'centerLines') ?? []).filter(cl =>
     isGridCenterLine(cl) && cl.centerLineType !== CenterLineType.RADIAL);
 }
 

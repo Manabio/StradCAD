@@ -27,6 +27,7 @@ import { kneeDropRecordFor } from '../../elevationFaceList.js';
 import { localXOf as localXOfFace } from '../../elevationFigure.js';
 import { resolveSwitchbackParams } from '../../elevationStairSection.js';
 import { stairContribution } from '../sectionStair.js';
+import { graphList } from '../../../graphReadScope.js';
 
 const MID_WALL_TOL_MM = 300; // 壁厚程度の許容差（往路・復路間の壁の実在判定。既存実装と同値）
 
@@ -101,7 +102,7 @@ export function findMidWall(wallGraph, wEntry, wLanding, landingLen, f) {
   const landingStartWorld = wLanding.faceValue - travelSign * landingLen;
   const lo = Math.min(wEntry.faceValue, landingStartWorld);
   const hi = Math.max(wEntry.faceValue, landingStartWorld);
-  for (const w of wallGraph.walls ?? []) {
+  for (const w of graphList(wallGraph, 'walls') ?? []) {
     if (w.isVertical !== f.vertical) continue;
     if (Math.abs(w.axisCL.effectiveValue - midCoord) > MID_WALL_TOL_MM) continue;
     const wLo = Math.min(w.coord1, w.coord2), wHi = Math.max(w.coord1, w.coord2);

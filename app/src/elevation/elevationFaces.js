@@ -10,6 +10,7 @@
 import { RoomKind, RoomFeature } from '@core';
 import { computeExternalEdgeParams, mergeSegments } from '../finish/wallGeneration.js';
 import { innerWallFaceAt } from '../finish/wallFaces.js';
+import { graphList } from '../graphReadScope.js';
 
 // struct CL は graph._structGraph.shapeMap に格納されるため両方を検索する（finish/*.js と同じ規約）。
 function getShape(graph, id) {
@@ -28,7 +29,7 @@ function getShape(graph, id) {
  * 全く同じ壁面が重複して展開されてしまう。
  */
 export function selectElevationRooms(graph) {
-  return graph.rooms.filter(r =>
+  return (graphList(graph, 'rooms') ?? []).filter(r =>
     r.kind === RoomKind.INTERIOR && r.name !== '' &&
     (r.feature == null || r.feature === RoomFeature.STAIR || r.feature === RoomFeature.VOID) &&
     !(r.referenceRoomIds?.size > 0));
@@ -411,7 +412,7 @@ export function perpendicularWallsOnFace(face, graph, side) {
   const inward = face.inward;
   // graph.walls未定義（buildFaceFigure等の単体テストが使う最小限フェイクgraph）は「壁なし」として
   // 空配列を返す（従来のctx.gridCLs ?? []等と同じ規約。real graphでは常に配列が返る）。
-  return (graph.walls ?? []).filter(w => {
+  return (graphList(graph, 'walls') ?? []).filter(w => {
     if (w.isVertical === face.isVertical) return false; // 直交のみ
     if (w.isExteriorWall || w.isRoomWall) return false;
     if (w.axisCL.id === face.axisCL.id) return false; // 同軸壁除外
@@ -496,7 +497,7 @@ export function faceBoundaryLocalX(face, graph) {
  * @returns {import('@core').Opening[]}
  */
 export function openingsOnFace(face, graph) {
-  return graph.openings
+  return (graphList(graph, 'openings') ?? [])
     .filter(o => o.isVertical === face.isVertical && o.axisCL.id === face.axisCL.id)
     .filter(o => o.centerCoord >= face.lo && o.centerCoord <= face.hi)
     .sort((a, b) => a.centerCoord - b.centerCoord);

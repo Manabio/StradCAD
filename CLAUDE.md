@@ -16,7 +16,7 @@ React19+Vite / react-konva(Konva.js) / MobX6 / ngraph.graph(マルチグラフ) 
 ```
 app/src/
 ├── core.js, core/, store.js, App.jsx              ドメインモデル・MobXストア・メイン
-├── viewport.js, appViewport.js, snap.js, snapGeometry.js, undoManager.js, graphSnapshot.js, floorOps.js, error.js
+├── viewport.js, appViewport.js, snap.js, snapGeometry.js, undoManager.js, graphSnapshot.js, graphReadScope.js, floorOps.js, error.js
 ├── modes/        モード状態（MobX、切替時に動的ロード・破棄）
 ├── schema/       FlatBuffers encode/decode
 ├── storage/      IndexedDB永続化

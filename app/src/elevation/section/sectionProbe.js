@@ -16,6 +16,7 @@ import { kneeDropRecordsOnAxis } from '../../finish/kneeDropWall.js';
 import { effectiveHeight } from '../../openings/openingNumbering.js';
 import { collectRunBreaks } from '../elevationFloorProfile.js';
 import { GAP_EPS_MM as GAP_EPS, PROBE_EPS_MM } from '../elevationStyle.js';
+import { graphList } from '../../graphReadScope.js';
 
 // kneeDropRecordsOnAxis（区間重なり判定）への点クエリ用の微小幅(mm)。GAP_EPSより大きく
 // PROBE_EPS_MMより小さい値にして、区間境界ちょうどのレコードも安定して拾えるようにする。
@@ -308,7 +309,7 @@ function openingAbsZRange(o, floorZ) {
  */
 function openingPassThroughRangesFor(wall, graph, worldMid, floorZ, z0, z1) {
   const ranges = [];
-  for (const o of graph.openings ?? []) {
+  for (const o of graphList(graph, 'openings') ?? []) {
     if (o.isVertical !== wall.isVertical || o.axisCL.id !== wall.axisCL.id) continue;
     const c1 = Math.min(o.coord1, o.coord2), c2 = Math.max(o.coord1, o.coord2);
     if (worldMid < c1 - GAP_EPS || worldMid > c2 + GAP_EPS) continue;
@@ -403,7 +404,7 @@ export function collectCutBreaks(cut, probeCtx) {
   for (const layer of layers) {
     probeCtx?.cellToRoomFor?.(layer); // ウォームアップ（後続のprobeColumn呼び出しのキャッシュ寄与）
     for (const v of collectRunBreaks(layer.graph, line.isVertical, probeLo, probeHi)) values.add(v);
-    for (const w of layer.graph.walls ?? []) {
+    for (const w of graphList(layer.graph, 'walls') ?? []) {
       if (isCutWall(w, line)) {
         const mr = w.materialRange;
         addIfInside(mr.lo); addIfInside(mr.hi);
@@ -415,7 +416,7 @@ export function collectCutBreaks(cut, probeCtx) {
         addIfInside(c1); addIfInside(c2);
       }
     }
-    for (const o of layer.graph.openings ?? []) {
+    for (const o of graphList(layer.graph, 'openings') ?? []) {
       if (!isSightlineShape(o, line, cut.viewSign)) continue;
       addIfInside(o.coord1); addIfInside(o.coord2);
     }
@@ -459,7 +460,7 @@ export function probeColumn(cut, worldMid, probeCtx) {
   for (const info of layerInfo) {
     const { layer } = info;
     if (info.ceilZ == null) continue; // 防御的ガード（fallbackCeilZにより通常到達しない）
-    for (const w of layer.graph.walls ?? []) {
+    for (const w of graphList(layer.graph, 'walls') ?? []) {
       if (isCutWall(w, line)) {
         const mr = w.materialRange;
         if (worldMid < mr.lo - GAP_EPS || worldMid > mr.hi + GAP_EPS) continue;

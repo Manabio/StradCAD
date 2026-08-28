@@ -54,6 +54,7 @@ import { collectRunBreaks } from './elevationFloorProfile.js';
 import {
   ElevationLineRole, GAP_EPS_MM as GAP_EPS, PROBE_EPS_MM, DEFAULT_WALL_LESS_END_EXTEND_MM,
 } from './elevationStyle.js';
+import { graphList } from '../graphReadScope.js';
 
 function flatFloorSegments(run, floorDeltaMm, chMm) {
   return [{ loX: 0, hiX: run, floorDeltaMm, chMm }];
@@ -460,7 +461,7 @@ export function stairFaceSequence(stair, faces, graph, opts = {}) {
   const endExtendMm = opts.wallLessEndExtendModelMm ?? DEFAULT_WALL_LESS_END_EXTEND_MM;
   // 帯自身の部屋（階段室）。見えがかり壁の探索範囲をこの部屋の広がりに限る
   // （sectionProbe.jsのwithinViewRoom。ユーザー実機指摘2026-08「6」C・裁定A案）。
-  const bandRoom = [...(graph.rooms ?? [])].find(r => r.id === stair.roomId) ?? null;
+  const bandRoom = (graphList(graph, 'rooms') ?? []).find(r => r.id === stair.roomId) ?? null;
   // 包絡矩形は世界座標の箱なので**自階graphで一度だけ**求め、全レイヤーで使う。
   const bandRoomBounds = bandRoom ? roomBounds(bandRoom.cells, graph) : null;
   // 往復間の壁の芯を一点鎖線で示す（ユーザー実機指摘2026-08「6」C「1500の一点鎖線が出ていない」）。

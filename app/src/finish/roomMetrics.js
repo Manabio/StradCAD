@@ -7,6 +7,7 @@
  * ラベル表示には原文をそのまま使う（.claude/elevation-model.md 確定仕様7）。
  */
 import { DEFAULT_ROOM_CEILING_HEIGHT } from '@core';
+import { graphList } from '../graphReadScope.js';
 
 /**
  * @param {object} graph
@@ -41,7 +42,7 @@ export function roomCeilingHeight(graph, room, _depth = 0) {
   // 親CHへの揃えを諦めdefaultCeilingHeightへフォールバックする（正常な部分指定の入れ子が
   // 8世代を超えることは現実的に無い前提。QA F7）。
   const parent = !hasOwnCH && _depth < 8 && room.referenceRoomIds?.size > 0 && graph
-    ? graph.rooms?.find(r => room.referenceRoomIds.has(r.id))
+    ? graphList(graph, 'rooms')?.find(r => room.referenceRoomIds.has(r.id))
     : null;
   if (parent) {
     const parentFL = graph.effectiveFloorLevel(parent);
