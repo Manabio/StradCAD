@@ -3,6 +3,7 @@ import { runInAction } from 'mobx';
 import { useState, useEffect, useRef } from 'react';
 import { StructuralMaterialType } from '../core.js';
 import { ConfirmDialog } from '../ui/ConfirmDialog.jsx';
+import { useScrollIntoViewWhenActive } from '../ui/useScrollIntoViewWhenActive.js';
 import {
   cardContainerStyle, cardHeaderStyle, cardBodyStyle,
   cardRowStyle, cardFieldStyle, cardLabelStyle, cardInputWrapStyle,
@@ -383,6 +384,7 @@ export const MemberListTab = observer(({ composition, project, focusRequest, onT
               readOnly={readOnly}
               expandedKey={expandedKey}
               onToggle={key => setExpandedKey(key === expandedKey ? null : key)}
+              onExpandKey={setExpandedKey}
               onRequestDelete={(ids, label) => setDeleteConfirm({ mapName: group.mapName, ids, label })}
               focusRequest={focusRequest}
               onToast={onToast}
@@ -465,7 +467,7 @@ const FoundationTypeSelect = observer(({ project, structure }) => {
 // 同一形状＝同一タグ（部材番号）であるため、リストはタグ（ラベル）単位で1行のみ表示する
 // （同じラベルの部材は複数あっても重複表示しない。件数はカード見出しに表示）。
 const MemberGroupSection = observer(({
-  group, graph, composition, project, structure, figureType, readOnly, expandedKey, onToggle, onRequestDelete, focusRequest, onToast,
+  group, graph, composition, project, structure, figureType, readOnly, expandedKey, onToggle, onExpandKey, onRequestDelete, focusRequest, onToast,
   mergeModeActiveAnywhere, mergeActive, mergeAnchorTag, mergeAnchorMaterialType, mergeSelectedTags, onStartMerge, onToggleMergeTag,
 }) => {
   // 構造種別が持たない部材種別（×）の個体は一覧から除外する（footing→ベース/柱脚、beam→梁/基礎梁を role で割る）。
@@ -515,6 +517,7 @@ const MemberGroupSection = observer(({
             readOnly={readOnly}
             isExpanded={key === expandedKey}
             onToggle={() => onToggle(key)}
+            onExpandKey={onExpandKey}
             onDelete={() => onRequestDelete(members.map(m => m.id), `${tag} ${group.label}（${members.length}件）`)}
             focusRequest={focusRequest}
             onToast={onToast}
@@ -536,7 +539,7 @@ const MemberGroupSection = observer(({
 // タグ（ラベル）1件分のアコーディオンカード（finish/FinishTable.jsx の RoomCard と同型）。
 // members は同一タグを共有する全部材（同一形状のため、フィールド編集は全員に伝播する）。
 const MemberCard = observer(({
-  members, group, graph, composition, project, readOnly, isExpanded, onToggle, onDelete, focusRequest, onToast,
+  members, group, graph, composition, project, readOnly, isExpanded, onToggle, onExpandKey, onDelete, focusRequest, onToast,
   mergeModeActiveAnywhere, mergeActive, isMergeAnchor, isMergeSelected, mergeAnchorMaterialType, onToggleMerge, onStartMerge,
 }) => {
   // 梁は同一ラベルに内部梁・両外周梁が混在する。図には偏芯量を編集できる外周梁（柱芯オフセット≠0）を
@@ -625,6 +628,10 @@ const MemberCard = observer(({
     if (!targetMembers.length) return;
     const before = serializeGraph(graph);
     const ledgerBefore = snapshotLedger(project);
+    // 編集「前」の署名。署名フィールド以外（接合方法・天端レベル等）の編集で分割すると新旧の署名が
+    // 一致し、grp.join を書くと conformToLedger が残り部材を新gidへ吸収して分割が元へ戻る。
+    // splitGroup がこの値で join の要否を判定する（memberGroups.js splitGroup のコメント参照）。
+    const splitFromSignature = memberSignature(representative, group.mapName);
     mutateFn(targetMembers);
     const preview = computeSplitPreview(targetMembers);
     const scopeLabel = scope === 'entity' ? 'この部材' : floorLabel;
@@ -638,7 +645,7 @@ const MemberCard = observer(({
       ),
       onConfirm: () => {
         runInAction(() => {
-          splitGroup(project, group.mapName, targetMembers);
+          splitGroup(project, group.mapName, targetMembers, { splitFromSignature });
           renumberMembers(graph, project, group.mapName);
         });
         const after = serializeGraph(graph);
@@ -653,6 +660,10 @@ const MemberCard = observer(({
             restoreGraph(graph, after);
           },
         );
+        // 分割で追加された新番号のカードへ開き直す（一覧の再計算は memberNo/numberGroupId が
+        // observable なのでMobXが行う）。旧番号のカードを開いたままにすると、編集した値がそこには
+        // 無い＝「編集が戻った」ように見えるため、必ず分割後の部材側を開く。
+        onExpandKey?.(`${group.mapName}:${targetMembers[0].memberNo ?? '(未採番)'}`);
         onToast?.(`「${targetMembers[0].memberNo}」として分割しました（${targetMembers.length}本）`);
         setSplitConfirm(null);
       },
@@ -843,8 +854,12 @@ const MemberCard = observer(({
   // チェックボックス自体を出さず、タップも無効化する（isMergeSelectable=false。統合できない組み合わせのため）。
   const mergeChecked = isMergeAnchor || isMergeSelected;
   const headerOnClick = mergeActive ? ((isMergeAnchor || !isMergeSelectable) ? undefined : onToggleMerge) : onToggle;
+  // 展開されたカードを可視域へ寄せる（分割で追加された新番号のカード＝マウント時点で展開済み、
+  // および図面上の部材タグタップ（focusRequest）で開いた場合の両方が対象）。
+  const cardRef = useScrollIntoViewWhenActive(isExpanded, focusRequest);
   return (
     <div
+      ref={cardRef}
       style={{
         ...cardContainerStyle,
         outline: mergeActive

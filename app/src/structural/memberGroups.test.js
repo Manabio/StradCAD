@@ -267,3 +267,51 @@ test('renumberMembers: observer監視下でも runInAction 越しならMobX強�
   assert.equal(beams[0].memberNo, 'G1');
   assert.equal(g.beamMap.get('e3').memberNo, 'G1', '新規追加分も同じグループとして即座に採番される');
 });
+
+// ---- 【回帰点】署名フィールド以外での分割（実機報告: 分割しても新しい番号のカードが現れない） ----
+// SIGNATURE_FIELDS_BY_MAP に含まれないフィールド（梁の接合方法 jointType・天端レベル等）を編集して
+// 分割すると、新グループの署名は分割元と同一になる。このとき grp.join を書くと、直後の
+// conformToLedger（renumberMembers の第1パス）が「gid未設定かつ同署名」の残り部材を新gidへ吸収し、
+// 分割が即座に元へ戻る＝一覧に新カードが出ず「（予定）」表示だけが残る。
+test('splitGroup: 署名に含まれないフィールドでの分割は grp.join を書かず、残り部材を吸収し返さない', () => {
+  const project = makeProject([{ id: 'p1', startFloor: 1 }]);
+  const beams = [makeBeam('b1', 'STEEL-H200x100'), makeBeam('b2', 'STEEL-H200x100'), makeBeam('b3', 'STEEL-H200x100')];
+  for (const b of beams) b.jointType = 'RIGID';
+  const g = makeGraph('p1', { beamMap: beams });
+
+  renumberMembers(g, project, 'beamMap');
+  assert.deepEqual(beams.map(b => b.memberNo), ['G1', 'G1', 'G1'], '同材寸なので全て同じ番号');
+
+  const target = beams[0];
+  const splitFromSignature = memberSignature(target, 'beamMap');
+  target.setField('jointType', 'PIN'); // 署名フィールドではない＝署名は変わらない
+  assert.equal(memberSignature(target, 'beamMap'), splitFromSignature, '前提: この編集では署名が変わらない');
+
+  const gid = splitGroup(project, 'beamMap', [target], { splitFromSignature });
+  assert.equal(getGroupJoin(project.memberGroupLedger, gid), null, '同署名の分割では grp.join を書かない');
+
+  renumberMembers(g, project, 'beamMap');
+  assert.equal(beams[1].numberGroupId, null, '残り部材が新gidへ吸収されていないこと');
+  assert.equal(beams[2].numberGroupId, null);
+  assert.equal(target.numberGroupId, gid);
+  assert.notEqual(target.memberNo, beams[1].memberNo, '分割後は別の番号になる（＝一覧に新カードが出る）');
+  assert.equal(beams[1].memberNo, beams[2].memberNo, '残り2本は同じ番号のまま');
+});
+
+// splitFromSignature 省略（手動採番からの materialize 等、編集を伴わない呼び出し）と、
+// 署名が実際に変わる分割は従来どおり grp.join を書く（他階の同材寸を吸収する経路を保つ）。
+test('splitGroup: 署名が変わる分割・splitFromSignature省略時は従来どおり grp.join を書く', () => {
+  const project = makeProject([{ id: 'p1', startFloor: 1 }]);
+  const beams = [makeBeam('b1', 'STEEL-H200x100'), makeBeam('b2', 'STEEL-H200x100')];
+  const g = makeGraph('p1', { beamMap: beams });
+  renumberMembers(g, project, 'beamMap');
+
+  const target = beams[0];
+  const splitFromSignature = memberSignature(target, 'beamMap');
+  target.setField('sectionDefId', 'STEEL-H300x150'); // 署名フィールド
+  const gid = splitGroup(project, 'beamMap', [target], { splitFromSignature });
+  assert.equal(typeof getGroupJoin(project.memberGroupLedger, gid), 'string');
+
+  const gid2 = splitGroup(project, 'beamMap', [beams[1]]); // splitFromSignature 省略
+  assert.equal(typeof getGroupJoin(project.memberGroupLedger, gid2), 'string');
+});

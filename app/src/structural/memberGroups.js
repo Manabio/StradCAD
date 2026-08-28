@@ -155,11 +155,14 @@ function nextGroupSeq(ledger, symbol) {
 /**
  * signature に対応する新規 gid を発行し、台帳へ spec/join を書き込む（split/merge の共通ヘルパー）。
  * splitGroup（Phase B）・mergeGroups（Phase C）から呼ばれる。
+ *
+ * join=false は grp.join を書かない（＝同署名の他部材を吸収しない孤立グループにする）。
+ * 署名フィールド以外の編集で分割したときに指定する（splitGroup の該当節を参照）。
  */
-export function materializeGroup(ledger, symbol, signature, specString) {
+export function materializeGroup(ledger, symbol, signature, specString, { join = true } = {}) {
   const gid = `${symbol}#${nextGroupSeq(ledger, symbol)}`;
   setGroupSpec(ledger, gid, specString);
-  setGroupJoin(ledger, gid, signature);
+  if (join) setGroupJoin(ledger, gid, signature);
   return gid;
 }
 
@@ -170,15 +173,27 @@ export function materializeGroup(ledger, symbol, signature, specString) {
  * 値の編集（entity.setField 等）は呼び出し側が本関数の「前」に適用しておくこと——grp.spec/grp.join は
  * 呼び出し時点の（編集後の）材寸から作る。分割プレビュー（MemberListTab.jsx）が「編集後の値で採番したら
  * 何番になるか」を示すのはこの前提のため。
+ *
+ * **⚠署名フィールド以外の編集で分割するときは splitFromSignature（編集前の署名）を必ず渡すこと。**
+ * 署名（SIGNATURE_FIELDS_BY_MAP）に含まれないフィールド——梁なら接合方法(jointType)・天端レベル・
+ * 始端/終端オフセット——を編集して分割すると、新グループの署名は分割元と同一になる。このとき
+ * grp.join を書くと、直後の conformToLedger が「gid未設定かつ同署名」の部材（自階に残した分・
+ * 他階の同材寸）をまとめて新gidへ吸収し、分割が即座に元へ戻る＝一覧に新しい番号のカードが
+ * 現れず、分割前の「（予定）」表示だけが残る（実機報告のバグ）。署名が変わらない分割では
+ * grp.join を書かず、孤立グループとして切り出す。
+ *
+ * @param {string} [options.splitFromSignature] 編集前の署名。これと一致する場合 grp.join を書かない。
+ *   省略時は従来どおり常に書く（手動採番からの materialize など、編集を伴わない呼び出し用）。
  * @returns {string|null} 発行した gid（対象0件なら null）
  */
-export function splitGroup(project, mapName, targetMembers) {
+export function splitGroup(project, mapName, targetMembers, { splitFromSignature = null } = {}) {
   if (!targetMembers.length) return null;
   const rep = targetMembers[0];
   const symbol = memberSymbol(rep, mapName);
   const signature = memberSignature(rep, mapName);
   const spec = memberSpecString(rep, mapName);
-  const gid = materializeGroup(project.memberGroupLedger, symbol, signature, spec);
+  const join = splitFromSignature == null || signature !== splitFromSignature;
+  const gid = materializeGroup(project.memberGroupLedger, symbol, signature, spec, { join });
   for (const m of targetMembers) m.setNumberGroupId(gid);
   return gid;
 }
