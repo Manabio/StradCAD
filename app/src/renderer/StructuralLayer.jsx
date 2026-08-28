@@ -19,13 +19,19 @@ const COLUMN_SIZE_MM = 120; // 柱のフォールバック（カタログ未登�
 const BEAM_WIDTH_MM  = 30;  // 梁の簡易表示の幅
 
 // 剛接合（鉄骨）の継手記号。位置は構造芯から RIGID_JOINT_OFFSET_MM（core側の定数）内側で、
-// 梁を横断する線として描く。略図・標準は1本、詳細は実寸 RIGID_JOINT_DETAIL_GAP_MM だけ離した2本
-// （母材を切って突き合わせる継手の見え方。切断幅そのものではなく作図上の離れ）。
-const RIGID_JOINT_DETAIL_GAP_MM = 0.5;
+// 梁を横断する線として描く。略図・標準は1本、詳細は2本（母材を切って突き合わせる継手の見え方。
+// 切断幅そのものではなく作図上の離れ）。
+// 2本の離れは「画面（紙面）上の実寸1mm」——モデル空間の1mmではない。ワールド距離へは
+// scaleDenominator を掛けて換算し、ズームに依らず画面px一定にする（gutterLabelHits.js の
+// offsetMm「実画面で5cm」と同じ換算。モデル1mmのままだと 1/scaleDenominator 実mm＝1/60でも
+// 0.06px程度にしかならず、倍率で伸縮する見えない線になる）。
+const RIGID_JOINT_DETAIL_GAP_MM = 1;
+function jointDetailGapWorld(viewport) { return RIGID_JOINT_DETAIL_GAP_MM * viewport.scaleDenominator; }
 
-// 継手記号1箇所ぶんの Konva 要素。along=梁に沿う座標、half=記号の半長（梁の見付き幅の半分）。
-function jointMarkLines(keyBase, beam, along, half, color, strokeWidth, detail) {
-  const offsets = detail ? [-RIGID_JOINT_DETAIL_GAP_MM / 2, RIGID_JOINT_DETAIL_GAP_MM / 2] : [0];
+// 継手記号1箇所ぶんの Konva 要素。along=梁に沿う座標、half=記号の半長（梁の見付き幅の半分）、
+// gap=2本線の離れ（ワールドmm。0なら1本）。
+function jointMarkLines(keyBase, beam, along, half, color, strokeWidth, gap) {
+  const offsets = gap > 0 ? [-gap / 2, gap / 2] : [0];
   return offsets.map((d, i) => {
     const a = along + d;
     const points = beam.isVertical
@@ -269,10 +275,14 @@ export const StructuralLayer = observer(({ composition, viewport, project }) => 
           const p1 = b.isVertical ? { x: b.axisValue, y: coord1 } : { x: coord1, y: b.axisValue };
           const p2 = b.isVertical ? { x: b.axisValue, y: coord2 } : { x: coord2, y: b.axisValue };
           const width = beamRenderWidth(b, lod);
-          // 剛接合（鉄骨）の継手記号。記号の長さは描画中の帯幅に合わせる（単線LODは実断面幅を使う）。
+          // 剛接合（鉄骨）の継手記号。記号の長さはLODに依らず常に実断面幅（sectionWidth）にする——
+          // 描画中の帯幅（beamRenderWidth）に合わせると、標準LODだけ仮幅30mmの半分＝画面0.8px程度に
+          // 潰れて「省略では見えるのに一般では見えない」非対称になる（実機指摘）。LODで変えるのは
+          // 本数（省略・一般=1本／詳細=2本）だけに揃える。
+          const jointGap = lod === LodLevel.DETAIL ? jointDetailGapWorld(viewport) : 0;
           const jointMarks = b.rigidJointCoords(displayedColumns, { diaphragm: lod === LodLevel.DETAIL })
-            .flatMap((along, i) => jointMarkLines(`joint:${b.id}:${i}`, b, along, (width ?? b.sectionWidth) / 2,
-              color, medium, lod === LodLevel.DETAIL));
+            .flatMap((along, i) => jointMarkLines(`joint:${b.id}:${i}`, b, along, b.sectionWidth / 2,
+              color, medium, jointGap));
           if (width == null) {
             return [
               <Line key={b.id} points={[p1.x, p1.y, p2.x, p2.y]} stroke={color} strokeWidth={thin} dash={beamDash} listening={false} />,
