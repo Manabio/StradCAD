@@ -537,9 +537,12 @@ function buildSwitchback(stair, b, { view, detail, spans, laneGapMm = 0, breakOv
     treadLine: (mm) => lineS(tAt(mm), 0, sA),
     labelPt:   (mm) => f.pt(tAt(mm), NUM_OUT),        // 外側 s=0 寄せ
   }, { detail });
-  // 踊場（両レーンをまたぐ平場）: 前縁境界（往路側・復路側）と番号
-  out.treads.push(lineS(tRun, 0, 0.5));
-  out.treads.push(lineS(tRun, 0.5, 1));
+  // 踊場（両レーンをまたぐ平場）: 前縁境界（往路側・復路側）と番号。
+  // あき（LANE_GAP）の閉じ辺＝内側ささらが取りつく踊り場線は、ささらと同じ太さで描く（heavy）。
+  // あき0のとき sA===sB===0.5 で閉じ辺は生まれず、従来どおり 0..0.5 / 0.5..1 の2本になる。
+  out.treads.push(lineS(tRun, 0, sA));
+  if (halfGap > 0) out.treads.push({ ...lineS(tRun, sA, sB), heavy: true });
+  out.treads.push(lineS(tRun, sB, 1));
   const tMid = (tRun + 1) / 2;
   // 初段=下手側（往路runA）と同じ幅方向位置（NUM_OUT）・同じ離れ（pitchA基準）で入口境界線近くに置く
   emitTurn(out, land, { entryPt: () => f.pt(tAt(laneLen + NUM_GAP * pitchA), NUM_OUT) }, { detail });
@@ -629,8 +632,10 @@ function buildWinding(stair, b, { view, detail, spans, laneGapMm = 0, breakOverh
   // 周回部（扇形）: 入口・出口境界と、pivot から外周（s0辺→奥t1辺→s1辺）へ放射するマス。
   // pivot はあき幅（sA..sB）のうち段数が低い方＝往路の内側端（tRun, sA）に置く。
   // 出口境界はあき部の閉じ辺（sA..sB）と連続して sA→1 で描く（pivot への放射と同一直線）。
+  // 閉じ辺＝内側ささらが取りつく踊り場線だけ、ささらと同じ太さで描く（heavy）。
   out.treads.push(lineS(tRun, 0, sA));    // 入口境界（往路側）
-  out.treads.push(lineS(tRun, sA, 1));    // あき閉じ辺＋出口境界（復路側）
+  if (halfGap > 0) out.treads.push({ ...lineS(tRun, sA, sB), heavy: true }); // あき閉じ辺
+  out.treads.push(lineS(tRun, sB, 1));    // 出口境界（復路側）
   const P = f.pt(tRun, sA);
   const perim = (u) => {
     if (u <= 1 / 3) { const k = u / (1 / 3);           return f.pt(tRun + k * (1 - tRun), 0); }
@@ -1052,10 +1057,11 @@ function buildOpenWell(stair, b, { view, detail, riser, breakOverhangMm = 0 }) {
  *   graph … 指定時、insetStairBounds が faceRect(stair.cells, graph) の実壁面へ取り合う
  *   （CL偏芯で壁位置が変わっても追従。機能1）。未指定は従来どおり固定 WALL_INSET。
  * @returns {{
- *   treads:{x1,y1,x2,y2}[], outline:{x1,y1,x2,y2,dashed,thin?,port?,side?}[],
+ *   treads:{x1,y1,x2,y2,heavy?}[], outline:{x1,y1,x2,y2,dashed,thin?,port?,side?}[],
  *   arrows:{x1,y1,x2,y2,labelX,labelY,label}[], breakLine:{x1,y1,x2,y2}[]|null,
  *   stepNumbers:{x,y,text}[],
  * }}
+ *   treads の heavy … レーンあきの閉じ辺（内側ささらが取りつく踊り場線）。ささらと同じ太さで描く。
  *   outline の port … 'entry'=区画初段（上り口）／'arrival'=設置階上階への到達辺（下り口）。
  *   thin な線分にのみ付く（stairPortEdges が開口辺の特定に使う）。
  *   outline の side … footprint 境界に沿う側面線（壁が実在する区間があれば描画対象から除く。
@@ -1064,7 +1070,10 @@ function buildOpenWell(stair, b, { view, detail, riser, breakOverhangMm = 0 }) {
  *   resolveStairSideLines が snapToFootprintEdge の許容差を動的に決めるのに使う（F2）。
  */
 export function buildStairGeometry(stair, b, opts) {
-  const { sideInsetMm, ...bi } = insetStairBounds(stair, b, opts.view, opts.graph ?? null);
+  // insetView … 設置枠の逃がし規則だけ別ビューのものを使う（既定は view と同じ）。
+  // install の破れ線から先を upper ジオメトリで描き足すとき、登り口辺の逃がしが view で
+  // 食い違うと実線（install）と点線（描き足し）が同一辺上で段差になるため、そこだけ揃える。
+  const { sideInsetMm, ...bi } = insetStairBounds(stair, b, opts.insetView ?? opts.view, opts.graph ?? null);
   let geom;
   if (stair.type === StairType.STRAIGHT_LANDING) geom = buildStraightLanding(stair, bi, opts);
   else if (stair.type === StairType.SWITCHBACK)  geom = buildSwitchback(stair, bi, opts);

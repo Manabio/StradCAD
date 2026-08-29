@@ -50,9 +50,11 @@ export function buildUpperStairPeekEntries(belowGraph, floorHeight) {
  * @param {Array|null} opts.upperStairEntriesPeek 直下階peekの解決結果（App.jsx state。null=未解決）
  * @param {number} opts.stairBreakOverhangMm 破れ線の見た目端部のはり出し量（App.jsx が
  *   overhangMm(viewport, false)（snap.js）で算出して渡す。本モジュールはsnap.jsに依存しない）
+ * @param {Array|null} [opts.upperSlabOpenings] 直上階のスラブ開口矩形（slabOpening.js）。
+ *   破れ線から先を点線で描くときの可視範囲。null=上階なし／未解決（クリップしない）
  * @returns {{ isStairMode, installEntries, upperEntries, stairLaneGapMm, stairBreakOverhangMm, stairUnderClips }}
  */
-export function buildStairEntries(graph, project, { appMode, viewport, upperStairEntriesPeek, stairBreakOverhangMm }) {
+export function buildStairEntries(graph, project, { appMode, viewport, upperStairEntriesPeek, upperSlabOpenings = null, stairBreakOverhangMm }) {
   // isStairMode: site・structure モードでは階段を描画しないため、cellsBeyondBreak・
   // refreshCells・measureStairSpans 等の無駄な計算と observable 購読（graph.stairs等）を
   // 空配列で止める（QA指摘）。stairUnderClips のゲートも同じ変数で揃える。
@@ -63,6 +65,7 @@ export function buildStairEntries(graph, project, { appMode, viewport, upperStai
     // 破れ線先セルはヒット領域から除外する（下階階段の見下げクリック・階段下エリアの
     // 部屋ドラッグは startDrag に一本化されているため、ここでは自階階段の onClick を発火させない）。
     const beyond = cellsBeyondBreak(s, graph, riser);
+    const beyondRects = cellBoundsList(beyond, graph);
     const refreshed = refreshCells(s.cells, graph);
     const hitCells = beyond.size > 0
       ? new Set([...refreshed].filter(k => !beyond.has(k)))
@@ -74,7 +77,12 @@ export function buildStairEntries(graph, project, { appMode, viewport, upperStai
       bounds: roomBounds(s.cells, graph),
       cellBounds: cellBoundsList(s.cells, graph), // 実セル占有（L字等の選択枠用）
       hitCellBounds: cellBoundsList(hitCells, graph), // クリックヒット領域（破れ線先セル除外）
-      beyondBreakBounds: cellBoundsList(beyond, graph), // 破れ線先セルのワールド矩形（重なるupperの踏面間引きに使う）
+      beyondBreakBounds: beyondRects, // 破れ線先セルのワールド矩形（重なるupperの踏面間引きに使う）
+      // 破れ線から先を点線で描き足すときの可視範囲（直上階のスラブ開口）。null=クリップしない。
+      // 「空配列」も「この階段の破れ先とまったく重ならない」も安全側で制約なしとして扱う——
+      // 階段の上には必ず開口があるはずで、どちらも上階モデルの事実ではなく導出失敗を意味する
+      // （このまま採用すると点線が丸ごと消え、破れ先が無表現に戻ってしまう）。
+      slabOpeningBounds: anyCellBoundsOverlap(upperSlabOpenings, beyondRects) ? upperSlabOpenings : null,
       riser,
       spans: measureStairSpans(s, graph), // セル実測の区間長（区間長指定の反映）
       view: 'install',

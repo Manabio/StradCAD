@@ -35,7 +35,7 @@ export function stairFigurePrimitives(stair, b, { riser = null, scale = null, sp
   }
   // 踏み面
   for (const s of geom.treads) {
-    prims.push({ type: 'line', x1: s.x1, y1: s.y1, x2: s.x2, y2: s.y2, stroke: '#000000', width: 1 });
+    prims.push({ type: 'line', x1: s.x1, y1: s.y1, x2: s.x2, y2: s.y2, stroke: '#000000', width: s.heavy ? 1.5 : 1 });
   }
   // 破断線（upper では通常出ないが念のため写像）
   for (const s of geom.breakLine ?? []) {

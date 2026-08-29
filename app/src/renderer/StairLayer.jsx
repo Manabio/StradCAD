@@ -1,83 +1,20 @@
 import { observer } from 'mobx-react-lite';
 import { Group, Line, Text, Shape, Circle } from 'react-konva';
 import { buildStairGeometry, resolveStairSideLines, LABEL_OUT } from '../finish/stair/stairGeometry.js';
+import {
+  clipSegmentsBeyondBreak, reversePointPairs, trimBreakOverhang,
+  clipPolylineStartAtBreak, clipPolylineEndAtBreak,
+} from '../finish/stair/beyondBreakClip.js';
+import { pointInRects, clipSegmentsToRects } from '../finish/stair/segmentClip.js';
+import { trimOpeningEdgesAgainstStair } from '../finish/stair/slabOpening.js';
 import { outlineSegments } from '../finish/gridCells.js';
+import { LodLevel } from '../viewport.js';
 
 const STAIR_STROKE = '#1e293b';
 const CHEVRON_ANGLE = Math.PI / 7; // 矢じり(^)の開き角
-const CLIP_EPS = 1e-6; // 交点パラメータ(t/u)の許容誤差
-
-// 線分 p1-p2 と p3-p4 の交点を返す（区間内でなければ null）。t は p1-p2 上のパラメータ(0..1)。
-function segIntersect(p1x, p1y, p2x, p2y, p3x, p3y, p4x, p4y) {
-  const d1x = p2x - p1x, d1y = p2y - p1y;
-  const d2x = p4x - p3x, d2y = p4y - p3y;
-  const denom = d1x * d2y - d1y * d2x;
-  if (Math.abs(denom) < 1e-9) return null;
-  const t = ((p3x - p1x) * d2y - (p3y - p1y) * d2x) / denom;
-  const u = ((p3x - p1x) * d1y - (p3y - p1y) * d1x) / denom;
-  if (t < -CLIP_EPS || t > 1 + CLIP_EPS || u < -CLIP_EPS || u > 1 + CLIP_EPS) return null;
-  return { x: p1x + d1x * t, y: p1y + d1y * t, t };
-}
-
-// 矢印の経路 pts（フラット [x,y,x,y,...]。始点→終点の歩行順）を、始点側から順に
-// clipSegs（自階 install 階段の破れ線。複数線分の配列）との最初の交点でクリップする。
-// 交点以降（終点側）はそのまま残す。型（直進/U字/L字等）に依存しない汎用ロジック。
-// 交点が見つからなければ null（呼び出し側は安全側で元の矢印のまま描く）。
-function clipArrowStartAtBreak(pts, clipSegs) {
-  if (!clipSegs || clipSegs.length === 0) return null;
-  for (let i = 0; i <= pts.length - 4; i += 2) {
-    const p1x = pts[i], p1y = pts[i + 1], p2x = pts[i + 2], p2y = pts[i + 3];
-    let best = null;
-    for (const seg of clipSegs) {
-      const ip = segIntersect(p1x, p1y, p2x, p2y, seg.x1, seg.y1, seg.x2, seg.y2);
-      if (ip && (!best || ip.t < best.t)) best = ip;
-    }
-    if (best) return [best.x, best.y, ...pts.slice(i + 2)];
-  }
-  return null;
-}
-
-// 矢印の経路 pts を、始点側から順に clipSegs との最初の交点でクリップし、
-// [開始点…交点] を返す（終端側を切り捨てる。始点側＝到達点側はそのまま残す）。
-// 交点が見つからなければ null。
-function clipArrowEndAtBreak(pts, clipSegs) {
-  if (!clipSegs || clipSegs.length === 0) return null;
-  for (let i = 0; i <= pts.length - 4; i += 2) {
-    const p1x = pts[i], p1y = pts[i + 1], p2x = pts[i + 2], p2y = pts[i + 3];
-    let best = null;
-    for (const seg of clipSegs) {
-      const ip = segIntersect(p1x, p1y, p2x, p2y, seg.x1, seg.y1, seg.x2, seg.y2);
-      if (ip && (!best || ip.t < best.t)) best = ip;
-    }
-    if (best) return [...pts.slice(0, i + 2), best.x, best.y];
-  }
-  return null;
-}
-
-// フラット点列 [x,y,x,y,...] を (x,y) ペア単位で逆順にする。
-function reversePointPairs(pts) {
-  const rev = [];
-  for (let i = pts.length - 2; i >= 0; i -= 2) rev.push(pts[i], pts[i + 1]);
-  return rev;
-}
-
-// 点 (px,py) が矩形群（cellsBeyondBreak の破れ線先セルを cellBoundsList 相当で解決した
-// ワールド矩形の配列）のいずれかに含まれるか。
-function pointInBounds(boundsList, px, py) {
-  return boundsList.some(cb => cb.x1 <= px && px <= cb.x2 && cb.y1 <= py && py <= cb.y2);
-}
-
-// 踏面線分 s が breakSegs（install の破れ線。複数線分の Z 字ジョグ）のいずれかと交差する
-// 最初の交点を返す（s.x1,y1 側から見て最も近いもの）。交差しなければ null。
-function findBreakCrossing(s, breakSegs) {
-  if (!breakSegs || breakSegs.length === 0) return null;
-  let best = null;
-  for (const seg of breakSegs) {
-    const ip = segIntersect(s.x1, s.y1, s.x2, s.y2, seg.x1, seg.y1, seg.x2, seg.y2);
-    if (ip && (!best || ip.t < best.t)) best = ip;
-  }
-  return best;
-}
+// 破れ線から先＝自階スラブの開口越しに見下ろす下階階段の「見えがかり線」の線種（スクリーンpx）。
+// 見えがかりは点線という作図規約に合わせ、ズーム非依存の細かい点線にする。
+const DOWNVIEW_DASH_PX = [3, 3];
 
 // 終点の矢じりを、黒三角ではなく鋭く尖った "^"（開いた山形）の2点で返す。
 // pts は矢印本体の points 配列（[x1,y1,x2,y2,...]）。終点側の進行方向へ向けて尖らせる。
@@ -108,11 +45,23 @@ function chevronPoints(pts, len) {
  *   では peek した下階グラフ）。省略時は側面線の壁有無判定をせず常時描画する（安全側）。
  *   installOverlap/clipAgainstId/beyondBreakBounds は、footprint が自階 install 階段と重なる
  *   upper エントリ（下階階段の見下げが自階の自動設置階段と同じ位置に表示される場合)に
- *   App.jsx が付与する。可視判定はプリミティブ別に独立（共有ゲートを持たない）:
+ *   App.jsx が付与する。
+ *
+ *   ■ 破れ線から先＝見下げの表現
+ *   installOverlap 付き upper エントリが描くのは「自階スラブの開口越しに見下ろす下階階段」で、
+ *   実体は当該平面より下にある。そのため見えがかり線（踏面線・外周線）は点線
+ *   （DOWNVIEW_DASH_PX）で描く。矢印・段数字は見えがかり線ではなく記号のため実線のまま。
+ *   描かれる範囲＝自階スラブの開口は「install 階段の破れ線より先」で、線の終点は当該平面の
+ *   実線（footprint 境界＝壁面線・到達辺）になる。開口を狭める2要素は別の層が担当し、
+ *   ここでは合成しない: 上階階段のとりつき部（破れ線手前側＝スラブが残る側）は破れ線クリップが、
+ *   天井高さに達する壁は resolveStairSideLines の壁スパン差し引きが受け持つ。
+ *
+ *   可視判定はプリミティブ別に独立（共有ゲートを持たない）:
  *   矢印は clipAgainstId が指す install エントリの破れ線（実 polyline）でクリップして
- *   到達点側だけを残す。踏面線は beyondBreakBounds（install 階段の cellsBeyondBreak を
- *   ワールド矩形へ解決したもの。stairGeometry.js で全タイプ単一ソース判定済み）に中点が
- *   入るものだけ残す（破れ線を跨ぐ踏面は破れ線交点で部分線分にクリップする）。段数字は
+ *   到達点側だけを残す。踏面線・外周線は線分プリミティブとして clipSegmentsBeyondBreak
+ *   （beyondBreakClip.js）でクリップする——破れ線を跨ぐ線分は交点で切り、跨がない線分は
+ *   中点が beyondBreakBounds（install 階段の cellsBeyondBreak をワールド矩形へ解決したもの。
+ *   stairGeometry.js で全タイプ単一ソース判定済み）に入るかで採否を決める。段数字は
  *   点のためアンカー点が beyondBreakBounds（破れ先）に入る番号だけ残す（下階階段の
  *   踏面番号・矢印先端・重複踏面が破れ線手前に残って見える不良の対策）。
  * install/upper の両ビュー（設置階・設置上階）を同じ経路で描く。
@@ -124,10 +73,14 @@ export const StairLayer = observer(({
   detail = false,
   laneGapMm = 0,
   breakOverhangMm = 0,
+  slabOpeningEdges = [],
   selectedStairId = null,
   onSelectStair = null,
 }) => {
   const px = (w) => w / viewport.scaleX; // ズーム非依存の線幅
+  const downviewDash = DOWNVIEW_DASH_PX.map(px); // 見下げ（破れ線から先）の点線パターン
+  // 省略LODでは開口の縁（見上げ破線）を描かず、破れ先の破線だけ細線で残す（ユーザー決定）。
+  const schematic = viewport.lodLevel === LodLevel.SCHEMATIC;
 
   // laneGapMm（折返し階段の往路・復路の間のあき）・breakOverhangMm（破れ線の見た目端部の
   // はり出し量）は呼び出し側（App.jsx）で1度だけ算出して渡す（2a壁の描画クリップ計算
@@ -142,16 +95,34 @@ export const StairLayer = observer(({
     if (!b || ![b.x1, b.y1, b.x2, b.y2].every(Number.isFinite) || b.x2 <= b.x1 || b.y2 <= b.y1) {
       return null;
     }
+    const resolve = (g) => (graph ? resolveStairSideLines(stair, graph, g) : g);
     const built = buildStairGeometry(stair, b, { view, detail, riser, spans, laneGapMm, breakOverhangMm, graph });
-    return { e, geom: graph ? resolveStairSideLines(stair, graph, built) : built };
+    // install エントリは、破れ線から先（＝切断高より上に続く上り部分）を点線で描き足すため、
+    // 破断のない全段ジオメトリ（upper ビュー）も併せて作る。実際に描くのは破れ先だけで、
+    // 段数字・矢印は install 側が既に持つため使わない（線分プリミティブのみ流用する）。
+    const beyondBuilt = view === 'install'
+      ? buildStairGeometry(stair, b, { view: 'upper', insetView: 'install', detail, riser, spans, laneGapMm, breakOverhangMm, graph })
+      : null;
+    return { e, geom: resolve(built), beyondGeom: beyondBuilt ? resolve(beyondBuilt) : null };
   });
   const installGeomById = new Map(
     resolved.filter(r => r && r.e.view === 'install').map(r => [r.e.id, r.geom]),
   );
 
+  // 開口の縁を切るための、実際に描いた破れ先破線と破れ先セル矩形。
+  const beyondSegsAll = [];
+  const beyondBoundsAll = [];
+
+  // 破れ線から先を「見下げ（下階階段）」として点線で描くエントリがある install の id 集合。
+  // その install は自分の上り部分を重ねて描かない（同一 footprint・同一形状で完全に重なるため）。
+  const coveredByDownView = new Set(
+    resolved.filter(r => r && r.e.installOverlap && r.e.beyondBreakBounds?.length > 0)
+      .map(r => r.e.clipAgainstId),
+  );
+
   const groups = resolved.map((r) => {
     if (!r) return null;
-    const { e, geom } = r;
+    const { e, geom, beyondGeom } = r;
     const { id, bounds: b, view, selectable, cellBounds, hitCellBounds } = e;
     const isSel = id === selectedStairId;
 
@@ -163,62 +134,83 @@ export const StairLayer = observer(({
     const installGeom = e.installOverlap && e.clipAgainstId
       ? installGeomById.get(e.clipAgainstId)
       : null;
-    const installBreakLine = installGeom?.breakLine;
+    // クリップにはり出しを含んだ破れ線を使うと、内側の通り芯を越えて反対レーンの側線まで
+    // 切ってしまう（往路のささらが途中から点線化する不良）。はり出しは見た目のみ——実端点で切る。
+    const installBreakLine = trimBreakOverhang(installGeom?.breakLine, breakOverhangMm);
+    // 見下げ（＝破れ線から先を、自階スラブの開口越しに見下ろす表現）として描くエントリか。
+    // install エントリ自身も beyondBreakBounds を持つ（重なる upper へ渡すため）ので、
+    // installOverlap でガードしないと自階の手前側まで間引き・点線化されてしまう。
+    const isDownView = !!e.installOverlap && e.beyondBreakBounds?.length > 0;
+
+    // install エントリ側: 自分の破れ線から先（＝切断高より上に続く上り部分）を点線で描き足す。
+    // 破れ先が導出できない（beyondBreakBounds が空）／破れ線が無い場合は従来どおり何も足さない。
+    const ownBreakLine = view === 'install' ? trimBreakOverhang(geom.breakLine, breakOverhangMm) : null;
+    const beyondDrawable = ownBreakLine?.length > 0 && e.beyondBreakBounds?.length > 0;
+    // 破れ先を「見下げ」として別エントリが点線で描く場合は、同じ形が二重に走るのでこちらは描かない。
+    const drawOwnBeyond = beyondDrawable && !!beyondGeom && !coveredByDownView.has(id);
+    // 描き足すのは外周線（ささら・到達辺）だけで、踏面線は描かない——破れ線から先の段は
+    // 切断面より上にあり、平面図には見えがかりの範囲だけを示せば足りる（ユーザー決定）。
+    // 可視範囲は直上階のスラブ開口で「切る」（中点で採否するフィルタでは、境界をまたぐ線分が
+    // 全長そのまま残って開口の縁を突き抜ける——過去の不良）。上階の階段とりつき部＝スラブが
+    // 残る側は開口に含まれないため、ここで自動的に除かれる。範囲不明なら安全側で切らない。
+    const beyondOutlineSegs = drawOwnBeyond
+      ? clipSegmentsToRects(
+          clipSegmentsBeyondBreak(beyondGeom.outline, ownBreakLine, e.beyondBreakBounds),
+          e.slabOpeningBounds,
+        )
+      : [];
+    if (beyondOutlineSegs.length > 0) {
+      beyondSegsAll.push(...beyondOutlineSegs);
+      beyondBoundsAll.push(...e.beyondBreakBounds);
+    }
 
     // 踏み面は線種の共通定義（LINE_WEIGHT_MM）の thin を参照する。
-    // 重なる upper エントリ（installOverlap 付き）は、install の破れ線先セル（beyondBreakBounds。
-    // cellsBeyondBreak で全タイプ単一ソース判定済み）に中点が入る踏面だけを残し、install が描く
-    // 手前側と重複する踏面を間引く。install エントリ自身も beyondBreakBounds を持つ（重なる upper
-    // へ渡すため）ので、installOverlap でガードしないと自階の手前踏面まで間引かれてしまう。
-    // 破れ線（install の実 polyline）を跨ぐ踏面は「破れ線交点〜先側端点」の部分線分にクリップして
-    // 破れ線どまりにする。先側の判定はセル粒度の beyondBreakBounds 内外では決められない
-    // （破れ線は斜めにセル内へ食い込むため、破れ線際の踏面は両端点とも先セル内になり、
-    // 全幅のまま破れ線を突き抜ける過去の不良）。破れ線の弦（ジョグを無視した両端点の直線）に
-    // 対する側で判定し、「先側」の符号は先セル群の重心が弦のどちら側かで決める。
-    // 交差しない踏面は従来どおり中点判定のまま（弦を無限直線として遠方の踏面に適用すると
-    // L字等で誤判定するため、弦の側判定は交差する＝破れ線際の踏面に限る）。
-    // beyondBreakBounds が空/未提供（cellsBeyondBreak が導出不能で空 Set を返した場合を含む）
-    // なら安全側でフィルタなし（現状どおり全描画。二重線は残るが破綻しない）。
-    let breakChord = null;
-    if (installBreakLine?.length > 0 && e.beyondBreakBounds?.length > 0) {
-      const a = installBreakLine[0];
-      const z = installBreakLine[installBreakLine.length - 1];
-      const ox = a.x1, oy = a.y1, dx = z.x2 - ox, dy = z.y2 - oy;
-      const side = (x, y) => Math.sign(dx * (y - oy) - dy * (x - ox));
-      let cx = 0, cy = 0;
-      for (const bb of e.beyondBreakBounds) { cx += (bb.x1 + bb.x2) / 2; cy += (bb.y1 + bb.y2) / 2; }
-      const beyondSign = side(cx / e.beyondBreakBounds.length, cy / e.beyondBreakBounds.length);
-      if (beyondSign !== 0) breakChord = { side, beyondSign };
-    }
-    const treadSegs = e.installOverlap && e.beyondBreakBounds?.length > 0
-      ? geom.treads.reduce((acc, s) => {
-          const crossing = findBreakCrossing(s, installBreakLine);
-          if (crossing && breakChord) {
-            const s1 = breakChord.side(s.x1, s.y1);
-            const s2 = breakChord.side(s.x2, s.y2);
-            if (s1 !== s2) {
-              if (s1 === breakChord.beyondSign) acc.push({ ...s, x2: crossing.x, y2: crossing.y });
-              else if (s2 === breakChord.beyondSign) acc.push({ ...s, x1: crossing.x, y1: crossing.y });
-              // どちらの端点も先側でない（弦上の退化）→ 全体が破れ手前＝描かない
-              return acc;
-            }
-            // 両端点が同じ側（ジョグ突起だけを掠めた交差等）→ 中点判定へフォールバック（下に続く）
-          }
-          const mx = (s.x1 + s.x2) / 2, my = (s.y1 + s.y2) / 2;
-          if (pointInBounds(e.beyondBreakBounds, mx, my)) acc.push(s);
-          return acc;
-        }, [])
+    // 見下げエントリは clipSegmentsBeyondBreak（beyondBreakClip.js）で破れ先だけに絞る:
+    // 破れ線を跨ぐ踏面は交点で切って破れ線どまりにし、跨がない踏面は中点が beyondBreakBounds
+    // （install 階段の cellsBeyondBreak を解決したワールド矩形。全タイプ単一ソース判定済み）に
+    // 入るかで採否を決める。beyondBreakBounds が空/未提供（cellsBeyondBreak が導出不能で
+    // 空 Set を返した場合を含む）なら安全側でフィルタなし（＝isDownView が false。従来どおり
+    // 全描画で、二重線は残るが破綻しない）。
+    const treadSegs = isDownView
+      ? clipSegmentsBeyondBreak(geom.treads, installBreakLine, e.beyondBreakBounds)
       : geom.treads;
     const treads = treadSegs.map((s, i) => (
-      <Line key={`t${i}`} points={[s.x1, s.y1, s.x2, s.y2]} {...lineProps} stroke="#000000" strokeWidth={viewport.lineWeightsPx.thin} />
+      <Line
+        key={`t${i}`} points={[s.x1, s.y1, s.x2, s.y2]} {...lineProps}
+        stroke="#000000"
+        strokeWidth={s.heavy ? px(2) : viewport.lineWeightsPx.thin}
+        dash={isDownView ? downviewDash : undefined}
+      />
     ));
-    const outline = geom.outline.map((s, i) => (
+    // 外周線も踏面線と同じ「線分」プリミティブとして破れ先へクリップする。クリップしないと
+    // 下階階段の側面線・上り口の辺が破れ線の手前側（install が実線で描く区間）まで二重に走り、
+    // 点線化した見下げ線が実線の上に重なる。「破れ線から出発した線の終点＝当該平面の実線」は、
+    // footprint 境界（＝壁面線・到達辺）で止まる外周線がそのまま満たす。
+    // 天井高さに達する壁ぶんの差し引きは resolveStairSideLines（壁スパンの区間差し引き）が
+    // 既に済ませているため、ここでは重ねて判定しない。
+    // install 側の外周は逆に破れ手前へクリップする。全タイプで外周は view 非依存に全長生成される
+    // ため、クリップしないと破れ先を点線で描き直した区間に実線が重なって点線が消えて見える。
+    const outlineSegs = isDownView
+      ? clipSegmentsBeyondBreak(geom.outline, installBreakLine, e.beyondBreakBounds)
+      : beyondDrawable
+        ? clipSegmentsBeyondBreak(geom.outline, ownBreakLine, e.beyondBreakBounds, { keep: 'near' })
+        : geom.outline;
+    const outlineWeight = (s) => (s.thin ? viewport.lineWeightsPx.thin : s.medium ? viewport.lineWeightsPx.medium : px(2));
+    const outline = outlineSegs.map((s, i) => (
       <Line
         key={`o${i}`}
         points={[s.x1, s.y1, s.x2, s.y2]}
         {...lineProps}
-        strokeWidth={s.thin ? viewport.lineWeightsPx.thin : s.medium ? viewport.lineWeightsPx.medium : px(2)}
-        dash={s.dashed ? [px(40), px(30)] : undefined}
+        strokeWidth={outlineWeight(s)}
+        dash={isDownView ? downviewDash : s.dashed ? [px(40), px(30)] : undefined}
+      />
+    ));
+    // 破れ線から先（上り部分）の外周線の点線。
+    const beyondLines = beyondOutlineSegs.map((s, i) => (
+      <Line
+        key={`bo${i}`} points={[s.x1, s.y1, s.x2, s.y2]} {...lineProps}
+        strokeWidth={schematic ? viewport.lineWeightsPx.thin : outlineWeight(s)}
+        dash={downviewDash}
       />
     ));
     const breakLine = (geom.breakLine ?? []).map((s, i) => (
@@ -236,16 +228,16 @@ export const StairLayer = observer(({
       if (!installBreakLine?.length) return a;
       const pts = a.points ?? [a.x1, a.y1, a.x2, a.y2];
       const bounds = e.beyondBreakBounds;
-      const startIsBeyond = !(bounds?.length > 0) || pointInBounds(bounds, pts[0], pts[1]);
-      const endIsBeyond = bounds?.length > 0 && pointInBounds(bounds, pts[pts.length - 2], pts[pts.length - 1]);
+      const startIsBeyond = !(bounds?.length > 0) || pointInRects(bounds, pts[0], pts[1]);
+      const endIsBeyond = bounds?.length > 0 && pointInRects(bounds, pts[pts.length - 2], pts[pts.length - 1]);
       let clippedPts;
       if (!startIsBeyond && endIsBeyond) {
         // このタイプは終点側が到達点（先側）→ 始点側をクリップしてから反転する
-        const clipped = clipArrowStartAtBreak(pts, installBreakLine);
+        const clipped = clipPolylineStartAtBreak(pts, installBreakLine);
         clippedPts = clipped ? reversePointPairs(clipped) : null;
       } else {
         // 既定: 始点が到達点（先側）→ 終端側だけをクリップする（反転不要）
-        clippedPts = clipArrowEndAtBreak(pts, installBreakLine);
+        clippedPts = clipPolylineEndAtBreak(pts, installBreakLine);
       }
       if (!clippedPts) return a; // 交点なし → 安全側でフル矢印のまま
       const [nx, ny, nx2, ny2] = clippedPts;
@@ -290,7 +282,7 @@ export const StairLayer = observer(({
     // 重複させない。領域が導出不能（空/未提供）なら従来どおり安全側で全抑止する。
     const visibleNumbers = e.installOverlap
       ? (e.beyondBreakBounds?.length > 0
-          ? geom.stepNumbers.filter((n) => pointInBounds(e.beyondBreakBounds, n.x, n.y))
+          ? geom.stepNumbers.filter((n) => pointInRects(e.beyondBreakBounds, n.x, n.y))
           : [])
       : geom.stepNumbers;
     const stepNumbers = visibleNumbers.map((n, i) => (
@@ -338,6 +330,7 @@ export const StairLayer = observer(({
         ))}
         {treads}
         {outline}
+        {beyondLines}
         {breakLine}
         {arrows}
         {stepNumbers}
@@ -345,5 +338,22 @@ export const StairLayer = observer(({
     );
   });
 
-  return <Group>{groups}</Group>;
+  // 直上階スラブ開口の縁（見上げ破線）。階段エントリ単位ではなく開口単位で1度だけ描く
+  // （複数の階段が同じ開口を共有しても二重に描かない）。当該階の壁に覆われた区間は
+  // 呼び出し側（slabOpeningEdges）で既に差し引かれている。さらに、階段のとりつき部では階段側の
+  // 破線が縁を担うので、直交する破れ先破線との交点で切って落とす（残りと合わせてL字になる）。
+  // 破れ先破線側は既に開口の縁でクリップ済み——切る向きは双方向で、片方だけでは
+  // 「縁が破線を突き抜ける」か「縁が切られずL字にならない」のどちらかになる（過去の不良）。
+  const trimmedOpeningEdges = schematic
+    ? []
+    : trimOpeningEdgesAgainstStair(slabOpeningEdges, beyondSegsAll, beyondBoundsAll);
+  const openingEdges = trimmedOpeningEdges.map((s, i) => (
+    <Line
+      key={`so${i}`} points={[s.x1, s.y1, s.x2, s.y2]}
+      stroke={STAIR_STROKE} strokeWidth={px(2)} // 破れ先破線（階段外周）と同じ太さに揃える
+      dash={downviewDash} listening={false}
+    />
+  ));
+
+  return <Group>{openingEdges}{groups}</Group>;
 });

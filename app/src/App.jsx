@@ -22,6 +22,7 @@ import { FinishSidebar }   from './finish/FinishSidebar.jsx';
 import { FinishHalfModal } from './finish/FinishHalfModal.jsx';
 import { floorHeightAbove } from './finish/stair/stairDimensions.js';
 import { buildStairEntries, buildUpperStairPeekEntries } from './finish/stair/stairEntries.js';
+import { slabOpeningRects, slabOpeningFrames, slabOpeningEdges } from './finish/stair/slabOpening.js';
 import { runFinishEntryBoundary, runFinishExitBoundary } from './finish/finishBoundary.js';
 import { computeVoidCrosses } from './finish/voidGeometry.js';
 import { MemberStatusMenu } from './ui/MemberStatusMenu.jsx';
@@ -138,6 +139,11 @@ const App = observer(() => {
   const [upperStairEntries, setUpperStairEntries] = useState(null);
   // 直上階の吹抜け（feature=VOID）を peek して直下階（自階）へ投影表示するための×座標
   const [upperVoidCrosses, setUpperVoidCrosses] = useState([]);
+  // 直上階のスラブ開口（＝上階に床が無い領域）のワールド矩形。破れ線から先の階段を点線で
+  // 描くときの可視範囲に使う。null=上階が無い／未解決（クリップしない＝安全側）。
+  const [upperSlabOpenings, setUpperSlabOpenings] = useState(null);
+  // 同じ開口の「境界CL矩形＋描画用の壁面矩形」。見上げ破線（開口の縁）を描くのに使う。
+  const [upperSlabFrames, setUpperSlabFrames] = useState(null);
   // CL偏芯の階またぎ連動（他階のIDBを直接更新）後に、直上階peek系のstateを再計算させるトリガー
   const [floorSyncTick, setFloorSyncTick] = useState(0);
   // 構造モードのスライダーで選択中の図面スロット key（`slotType:planeId`）。1平面に複数スロットが
@@ -255,8 +261,13 @@ const App = observer(() => {
     );
   }, [appMode, activeFloorId]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // 採用フロアの構成（追加・削除・並べ替え）が変わったら上下階 peek を作り直すためのキー。
+  // 階を追加しても activeFloorId は変わらないため、これを deps に入れないと「表示中の階の
+  // 直上・直下」が新しくできても前の解決結果（多くは null＝上階なし）が残り続ける。
+  const planesKey = project.planes.map(p => p.id).join(',');
+
   // 上階ビュー: 直下階（elevation が1つ下の採用フロア）の階段を peek し、
-  // 上階表現（全段）の描画用エントリへ解決する。階切替・モード切替で再計算する。
+  // 上階表現（全段）の描画用エントリへ解決する。階切替・モード切替・階構成の変化で再計算する。
   // CL偏芯の階またぎ連動（floorSyncTick）でも再計算する——連動先の壁面位置が変わりうるため。
   useEffect(() => {
     let cancelled = false;
@@ -278,7 +289,7 @@ const App = observer(() => {
       setUpperStairEntries(buildUpperStairPeekEntries(temp, floorHeight));
     })().catch(console.error); // 非オーナータブでは peek → openDB が reject する（unhandled rejection防止）
     return () => { cancelled = true; };
-  }, [appMode, activeFloorId, floorSyncTick]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [appMode, activeFloorId, floorSyncTick, planesKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // 吹抜け直下の階ビュー: 直上階（elevation が1つ上の採用フロア）を peek し、その吹抜け
   // （feature=VOID）の×座標を自階へ投影表示する（世界座標は全階共通のため peek 結果の座標を
@@ -293,14 +304,23 @@ const App = observer(() => {
       const above = idx >= 0 && idx + 1 < planes.length ? planes[idx + 1] : null;
       if (!above || !active || (appMode !== 'finish' && appMode !== 'floorplan')) {
         setUpperVoidCrosses([]);
+        setUpperSlabOpenings(null); // 上階なし＝スラブ開口は判定不能（クリップしない）
+        setUpperSlabFrames(null);
         return;
       }
       const temp = await floorSwapManager.peek(above, project.structGraph);
       if (cancelled) return;
       setUpperVoidCrosses(computeVoidCrosses(temp));
+      // 上階スラブの開口（吹抜け・階段吹抜けRoom＋上階階段の破れ先セル）。上階階段の破れ位置は
+      // その階の蹴上で決まるため、上階のさらに上との階高から riser を解決して渡す。
+      const aboveFh = floorHeightAbove(project, above);
+      const riserOf = (s) => s.riser ?? (aboveFh != null ? aboveFh / Math.max(1, s.totalSteps) : null);
+      const openings = slabOpeningRects(temp, { riserOf });
+      setUpperSlabOpenings(openings);
+      setUpperSlabFrames(slabOpeningFrames(temp, { riserOf }));
     })().catch(console.error); // 非オーナータブでは peek → openDB が reject する（unhandled rejection防止）
     return () => { cancelled = true; };
-  }, [appMode, activeFloorId, floorSyncTick]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [appMode, activeFloorId, floorSyncTick, planesKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (!toast) return;
@@ -1475,9 +1495,11 @@ const App = observer(() => {
   // 階・モード切替直後の1フレームは null（未解決。該当useEffect参照）。
   const { isStairMode, installEntries, upperEntries, stairLaneGapMm, stairBreakOverhangMm, stairUnderClips } =
     buildStairEntries(graph, project, {
-      appMode, viewport, upperStairEntriesPeek: upperStairEntries,
+      appMode, viewport, upperStairEntriesPeek: upperStairEntries, upperSlabOpenings,
       stairBreakOverhangMm: overhangMm(viewport, false), // stairEntries.js は snap.js に依存しないため、ここで算出して渡す
     });
+  // 直上階スラブ開口の縁（見上げ破線）。当該階の壁に覆われた区間は既に実線があるので描かない。
+  const stairSlabOpeningEdges = isStairMode ? slabOpeningEdges(upperSlabFrames, graph) : [];
 
   // 排他セッションロック: 別タブが編集セッションを保持している場合、全画面案内のみ表示する
   // （同期・マージ・read-only編集は提供しない）。全hookの後・メインreturnの直前に置く
@@ -1719,6 +1741,7 @@ const App = observer(() => {
             upperEntries={upperEntries}
             stairLaneGapMm={stairLaneGapMm}
             stairBreakOverhangMm={stairBreakOverhangMm}
+            stairSlabOpeningEdges={stairSlabOpeningEdges}
             stairUnderClips={stairUnderClips}
             structComposition={structComposition}
             upperVoidCrosses={upperVoidCrosses}
