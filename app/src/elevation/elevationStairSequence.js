@@ -448,8 +448,10 @@ export function stairFaceSequence(stair, faces, graph, opts = {}) {
   const cutTable = switchbackCuts(stair, faces, graph, opts);
   if (!cutTable) return null; // フォールバック契約: switchbackCutsのnull条件をそのまま延長する
 
+  // wOut1/wOut2は**取り出さない**——面の選択はcuts表が唯一の情報源で、ここで独自に選び直すと
+  // 「その切断が見ている面」との食い違いが再発する（ユーザー明示指示2026-08その11。seq2/seq4参照）。
   const {
-    cuts, wEntry, wLanding, wOut1, wOut2, underFloorZ, hasRoomUnder,
+    cuts, wEntry, wLanding, underFloorZ, hasRoomUnder,
     ceilTopAbs, ceilLowAbs, contribution, kneeDrop,
   } = cutTable;
   const { landingLen } = cutTable.params;
@@ -499,8 +501,13 @@ export function stairFaceSequence(stair, faces, graph, opts = {}) {
     skipBaseboard: true, skipWallLabel: true,
   });
 
-  // ---- 2: W_out1（実際の壁面。クリップ廃止） ----
-  const outFace2 = wOut1;
+  // ---- 2: 往路レーンから見る面（往復レーンの境界＝中心1） ----
+  // ユーザー明示指示2026-08その11「A,B,C,Dの抽出と、順番決めロジックがごっちゃになっている」
+  // 「展開の向きは絶対。後から順番」: **面は切断定義表（switchbackCuts.js）が持つ「その切断が
+  // 見ている面」をそのまま使う**——ここで`wOut1`（＝視線の背後の壁）を独自に選び直していたため、
+  // 図の向きと面の幾何が食い違い、面由来の寸法・向こう側判定が反対側を向いていた
+  // （実機「6」D1が、向こうに壁の無いはずの面で1500+2000に割れた）。
+  const outFace2 = cutOf('2').face;
   {
     const laneLenOnFace = Math.max(0, outFace2.run - landingLen);
     // QA実機フィードバック修正: レーン区間(floorDeltaMm:0)の床線(z=0)は、段鼻の断面
@@ -550,8 +557,9 @@ export function stairFaceSequence(stair, faces, graph, opts = {}) {
     content: contentForCut(cutOf('3'), probeCtx, endExtendMm, bandRoomBounds, { ceilLowAbs, floorHeight }), skipBaseboard: true, skipWallLabel: true,
   });
 
-  // ---- 4: W_out2（seq2の鏡像構成） ----
-  const outFace4 = wOut2;
+  // ---- 4: 往路外側の壁を復路側から見る面（seq2の鏡像構成） ----
+  // seq2と同じく、面は切断定義表が持つ「その切断が見ている面」を使う（上のコメント参照）。
+  const outFace4 = cutOf('4').face;
   {
     const laneLenOnFace4 = Math.max(0, outFace4.run - landingLen);
     const landingHi4 = outFace4.run - laneLenOnFace4;

@@ -18,7 +18,7 @@
  * （壁面ベース）を疎結合に保てる利点がある（WP-E5bリスク3として報告済み）。
  * @module
  */
-import { StairType, StructuralMaterialType } from '@core';
+import { StairType, StructuralMaterialType, CenterLineType } from '@core';
 import { roomBounds } from '../../../finish/gridCells.js';
 import { makeFrame, cellsBeyondBreak } from '../../../finish/stair/stairGeometry.js';
 import { stairUnderRoomsOf } from '../../../finish/stair/stairUnderRooms.js';
@@ -185,7 +185,7 @@ export function laneRangesOnEntry(wEntry, wOut1, midCoord) {
     : { outbound: [midLocal, wEntry.run], returnRange: [0, midLocal] };
 }
 
-export function buildMidWallFace(wall, inward, loWorld, hiWorld, faces) {
+export function buildMidWallFace(wall, inward, loWorld, hiWorld, faces, hasRealWall = true) {
   const letter = letterOf(wall.isVertical, inward);
   const dirSign = DIR_SIGN[letter];
   const loFace = perpFaceAt(faces, wall.isVertical, wall.axisCL.effectiveValue, loWorld);
@@ -202,9 +202,9 @@ export function buildMidWallFace(wall, inward, loWorld, hiWorld, faces) {
     // 展開記号は要る（実機ではこれも1枚の展開図として並ぶ）ため未設定のままにしない。
     letter, label: letter, id: letter,
     dirSign, isVertical: wall.isVertical, axisCL: wall.axisCL, inward,
-    faceValue: wall.axisCL.effectiveValue, hasRealWall: true,
+    faceValue: wall.axisCL.effectiveValue, hasRealWall,
     lo, hi, run: hi - lo, originWorld: dirSign > 0 ? lo : hi,
-    startCLId, endCLId, hasWallAtLocal0: true, hasWallAtLocalRun: true,
+    startCLId, endCLId, hasWallAtLocal0: hasRealWall, hasWallAtLocalRun: hasRealWall,
     kind: 'stairMid',
   };
 }
@@ -278,6 +278,12 @@ export function switchbackCuts(stair, faces, graph, opts = {}) {
 
   const wallGraph = opts.upperGraph ?? graph;
   const wall = findMidWall(wallGraph, wEntry, wLanding, landingLen, f);
+  // 往復レーンの境界（実機の「中心1」）。実壁があればその壁のCL、無ければ同位置の中心線を軸にする
+  // ——seq2はこの面を見る（下の`face`の割り当てコメント参照）ため、壁の有無に関わらず面が要る。
+  const midAcross = acrossCoordAt(0.5);
+  const midCLType = wOut1.isVertical ? CenterLineType.VERTICAL : CenterLineType.HORIZONTAL;
+  const midCL = wall?.axisCL ?? (graphList(graph, 'centerLines') ?? []).find(cl =>
+    cl.centerLineType === midCLType && Math.abs(cl.effectiveValue - midAcross) <= MID_WALL_TOL_MM) ?? null;
   const kneeDrop = wall ? kneeDropRecordFor(wall, wallGraph) : null;
 
   const ceilTopAbs = opts.chUpperAbsMm;
@@ -360,6 +366,24 @@ export function switchbackCuts(stair, faces, graph, opts = {}) {
   const outboundWithLandingSeq2 = outboundWithLanding && inboundFlight
     ? { ...outboundWithLanding, secondaryFlights: [inboundFlight] } : outboundWithLanding;
 
+  // QA修正: buildMidWallFaceが内部で導くdirSign（letterOf由来のコンパス基準）も部屋の向きに
+  // 依存するため、reorientFaceでseq2DirSignへ再正規化する（wEntry/wOut1等と同じ理由）。
+  // seq2が見る面（往復レーンの境界＝中心1）。**描画枠はwOut1のまま**（lo/hi/run/originWorld/
+  // dirSign/端の状態）にして、面の**同定**（どの平面をどちら側から見ているか＝axisCL・faceValue・
+  // inward・letter）だけを中心1のものへ差し替える——contentもfloorSegments/ceilingProfileも
+  // 走行方向の全長（上り口〜踊り場奥）を前提に組まれており、範囲を変えると座標がずれるため。
+  // これで「図の向き（西向き＝D）」と「面の幾何」が一致し、面由来の寸法・向こう側判定が
+  // 正しい側を向く。
+  const midOutFace = midCL ? {
+    ...wOut1,
+    axisCL: midCL, faceValue: midCL.effectiveValue, inward: wOut2.inward,
+    letter: letterOf(wOut1.isVertical, wOut2.inward),
+    hasRealWall: !!wall, kind: 'stairMid',
+  } : null;
+  const midOutFlightFace = wall
+    ? reorientFace(buildMidWallFace(wall, wOut2.inward, entryWorld, landingStartWorld, faces), seq2DirSign)
+    : null;
+
   const cuts = [
     {
       seqNo: '1', face: wEntry, line: seq13Line, viewSign: seq1ViewSign, dirSign: wEntry.dirSign,
@@ -367,17 +391,22 @@ export function switchbackCuts(stair, faces, graph, opts = {}) {
       stairCut: contribution, // 往路・復路とも正面梯子として重なるため両方渡す（§6.1「往路=正面梯子(下)／復路=正面梯子(上)」）
     },
     {
-      seqNo: '2', face: wOut1, line: outboundLaneLine, viewSign: towardS1, dirSign: seq2DirSign,
+      // ==== ユーザー明示指示2026-08その11（面と切断の食い違い）====
+      // 「A,B,C,Dの抽出と、順番決めロジックがごっちゃになっている」「展開の向きは絶対。後から順番」
+      // 「D1を東向きと解釈するロジックに間違いがある」。
+      // **cutのfaceは「その切断が見ている面」でなければならない**——seq2は往路レーンの中を切って
+      // towardS1（＝往復レーンの境界＝中心1の側）を見る面なので、面も中心1のものになる。
+      // 旧実装はここに`wOut1`（＝視線の**背後**にある往路外側の壁）を結び付けていたため、
+      // 図の向き（西向き=D）と面の幾何（東向きの壁）が食い違い、面由来の寸法・向こう側判定が
+      // 反対側を向いていた（実機「6」D1が、向こうに壁の無いはずの面で1500+2000に割れた）。
+      // 中心1のCLが引けない構成では従来どおりwOut1へフォールバックする。
+      seqNo: '2', face: midOutFace ?? wOut1, line: outboundLaneLine, viewSign: towardS1, dirSign: seq2DirSign,
       layers, zRange: zRangeUpper, baseFloorZ: 0, stairCut: outboundWithLandingSeq2,
     },
   ];
   if (wall) {
-    // QA修正: buildMidWallFaceが内部で導くdirSign（letterOf(wall.isVertical,inward)由来の
-    // コンパス基準）も部屋の向きに依存するため、reorientFaceでseq2DirSignへ再正規化する
-    // （wEntry/wOut1等と同じ理由。ファイル冒頭のreorientFaceコメント参照）。
-    const midOutFace = reorientFace(buildMidWallFace(wall, wOut2.inward, entryWorld, landingStartWorld, faces), seq2DirSign);
     cuts.push({
-      seqNo: '2.5', face: midOutFace, line: outboundLaneLine, viewSign: towardS1, dirSign: seq2DirSign,
+      seqNo: '2.5', face: midOutFlightFace, line: outboundLaneLine, viewSign: towardS1, dirSign: seq2DirSign,
       layers, zRange: zRangeUpper, baseFloorZ: 0, stairCut: outboundOnly,
     });
   }
@@ -392,7 +421,9 @@ export function switchbackCuts(stair, faces, graph, opts = {}) {
     // （dirSignがseq2の逆＝踊り場が左・上り口が右になる)、復路をここに描くと踊り場側が
     // 低く上り口側が高くなり「左から右へ下る」という実機の見え方と矛盾する
     // （往路の断面をwOut1側からwOut2側へ鏡映しただけ、と捉えると整合する）。
-    seqNo: '4', face: wOut2, line: outboundLaneLine, viewSign: towardS0, dirSign: seq4DirSign,
+    // 面はseq2と同じ規則で「見ている側」——seq4はtowardS0（往路外側）を見るのでwOut1になる
+    // （旧実装はwOut2＝視線の背後の壁だった。上のseq2のコメント参照）。
+    seqNo: '4', face: reorientFace(wOut1, seq4DirSign), line: outboundLaneLine, viewSign: towardS0, dirSign: seq4DirSign,
     layers, zRange: zRangeUpper, baseFloorZ: underFloorZ, stairCut: outboundWithLanding,
   });
   if (wall) {

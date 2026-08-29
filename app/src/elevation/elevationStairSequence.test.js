@@ -6,6 +6,7 @@ import { generateRoomWallsFromOutline } from '../finish/wallGeneration.js';
 import { measureStairSpans } from '../finish/stair/stairClassify.js';
 import { cellsBeyondBreak } from '../finish/stair/stairGeometry.js';
 import { composeRoomFaces } from './elevationFaceList.js';
+import { letterOf } from './elevationFaces.js';
 import { stairFaceSequence, kneeWallCapContent } from './elevationStairSequence.js';
 import { switchbackCuts } from './section/cuts/switchbackCuts.js';
 import { buildFaceFigure } from './elevationFigure.js';
@@ -1548,4 +1549,51 @@ test('【実機指摘】stairFaceSequence: 階段下に部屋が無ければseq1
   };
   assert.equal(bottomOf(graph, a), 0, '部屋が無ければ面端縦線は1FL(y=0)まで届くはず');
   assert.ok(bottomOf(withUnder, b) < 0, '部屋があれば従来どおり踊り場で止まるはず');
+});
+
+
+// ---- ユーザー明示指示2026-08その11: 面は「その切断が見ている面」 ----
+// 「A,B,C,Dの抽出と、順番決めロジックがごっちゃになっている」「展開の向きは絶対。後から順番」
+// 「D1を東向きと解釈するロジックに間違いがある」。
+// 旧実装は、切断（cut）が towardS1（＝往復レーンの境界側）を見ているのに、面には視線の**背後**の
+// 壁（wOut1）を結び付けていた。図の向き（D＝西向き）と面の幾何（東向きの壁）が食い違うため、
+// 面由来の寸法・向こう側判定が反対側を向き、実機「6」D1が「向こうに壁が無いはずの面」で
+// 1500+2000に割れていた。面と切断の向きが一致していることを不変条件として固定する。
+test('【明示指示】stairFaceSequence: 各面の幾何(inward)は、その切断の視線(-viewSign)と一致する', () => {
+  for (const withMidWall of [false, true]) {
+    const graph = makeGraph();
+    const { room, stair } = makeSwitchbackFixture(graph, { withMidWall });
+    const faces = composeRoomFaces(room, graph);
+    const entries = stairFaceSequence(stair, faces, graph, OPTS);
+    const table = switchbackCuts(stair, faces, graph, OPTS);
+    assert.ok(entries && table);
+    let checked = 0;
+    for (const e of entries) {
+      const cut = table.cuts.find(c => c.seqNo === e.seqNo);
+      if (!cut?.line) continue;
+      checked++;
+      assert.equal(letterOf(e.face.isVertical, e.face.inward), letterOf(cut.line.isVertical, -cut.viewSign),
+        `withMidWall=${withMidWall} seq${e.seqNo}: 面の向きと切断の視線が一致するはず（記号${e.face.label}）`);
+    }
+    assert.ok(checked > 0);
+  }
+});
+
+test('【明示指示】stairFaceSequence: seq2は往復レーンの境界を見る面・seq4は往路外側の壁を見る面', () => {
+  const graph = makeGraph();
+  const { room, stair } = makeSwitchbackFixture(graph, { withMidWall: false });
+  const faces = composeRoomFaces(room, graph);
+  const entries = stairFaceSequence(stair, faces, graph, OPTS);
+  const table = switchbackCuts(stair, faces, graph, OPTS);
+  const axisOf = e => entries.find(x => x.seqNo === e).face.axisCL.effectiveValue;
+  const laneBoundary = (table.wOut1.axisCL.effectiveValue + table.wOut2.axisCL.effectiveValue) / 2;
+
+  assert.equal(axisOf('2'), laneBoundary,
+    'seq2は往路レーンから往復境界（中心1）を見る面のはず（往路外側の壁ではない）');
+  assert.equal(axisOf('4'), table.wOut1.axisCL.effectiveValue,
+    'seq4は往路外側の壁を復路側から見る面のはず');
+  assert.equal(axisOf('5'), table.wOut2.axisCL.effectiveValue,
+    'seq5は復路外側の壁を見る面のはず（従来どおり）');
+  // 中心1に実壁が無くても面は作られる（壁の有無はhasRealWallで表す）。
+  assert.equal(entries.find(e => e.seqNo === '2').face.hasRealWall, false);
 });
