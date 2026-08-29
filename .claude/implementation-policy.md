@@ -1,6 +1,6 @@
 # 実装方針（全体ルール）
 
-このプロジェクトで必ず遵守する8つの方針。
+このプロジェクトで必ず遵守する9つの方針。
 
 1. **データ入替えはFlatBuffersのみ**（JSON.stringify/parse禁止）。Uint8Arrayのまま保存・undo・転送する。詳細: `.claude/serialization-fbs.md`。単発操作のundoスナップショット（plain object往復・JSON差分比較）はデータ入替えに該当せず対象外（`.claude/undo-redo.md`）
 2. **非アクティブフロアはIndexedDBにスワップアウト**し、アクティブフロアのみメモリに展開する。詳細: `.claude/persistence-idb.md`
@@ -20,3 +20,16 @@
    算術的な重複計算も畳む。**キャッシュ寿命をスコープの実行中に限定するのが要点**——無効化の問題が
    原理的に起きず、keepAlive computedのようなリーク（peekで作る一時グラフのcomputedが共有structGraphの
    observerとして残る）も生じない。スコープ内で返る配列・Map・boundsは**読み取り専用**。
+9. **平面レンダラの「毎レンダー派生値」は`graphComputed`（`src/renderer/graphDerived.js`）に載せる**——
+   `renderer/`のレイヤーはすべて`observer`で、パン・ズーム・ポインタ移動のたびに再レンダーする。
+   壁のT字取り合い・柱の仕上げ包み・壁ごとの開口といった**graphだけで決まる派生値**をレンダー本体で
+   総当たりすると、1レンダーで60fpsの予算（16.7ms）を使い切る（実測: 壁224本・柱64本で約30ms＝
+   平面モードのカクつきの主因）。`graphComputed`はgraph単位・キー単位のMobX computedで、
+   observerが読み続ける限りキャッシュされ、graphのobservableが変わったときだけ再計算される。
+   - **キーに依存値をすべて符号化する**（LODレベル等）。キーに現れない値をcomputeへ閉じ込めると古い結果が返る。
+   - **observableを書き換える処理は載せない**（MobXのcomputedの規約。`refreshCells`を含む階段エントリ構築等）。
+   - 返り値は**読み取り専用**（複数レンダーで同じインスタンスを共有する）。
+   - 方針8（`withGraphReadScope`）とは住み分ける: 8は**観測者ゼロの一括処理**をその場限りの追跡下に置く
+     もの、9は**観測者がいるレンダー**の結果をレンダー間で持ち越すもの。
+   - 派生値そのものは`.jsx`に書かず純モジュール（`renderer/wallDrawPlan.js`等）へ出す
+     ——`.jsx`はreact-konvaを静的importするためnodeから実行できず、コストを単体で測れない。

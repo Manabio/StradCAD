@@ -2,7 +2,8 @@ import { Fragment } from 'react';
 import { observer } from 'mobx-react-lite';
 import { Line, Rect, Path } from 'react-konva';
 import { OpeningCategory } from '../core.js';
-import { findHostWall, wallFaceRange } from '../openings/openingGeometry.js';
+import { buildHostWallByOpening, wallFaceRange } from '../openings/openingGeometry.js';
+import { graphComputed } from './graphDerived.js';
 import { findCatalogEntry, IMPLEMENTED_MECHANISMS, OpeningMechanism } from '../openings/openingCatalog.js';
 import {
   DOOR_OPEN_ANGLE_DEG, closedAngleFor, leafOpenAngle, angleVectors,
@@ -591,8 +592,12 @@ export const OpeningsLayer = observer(({ graph, viewport, selectedId = null }) =
   if (!graph) return null;
   const { scaleX, scaleY, lodLevel } = viewport;
 
+  // 開口ごとのホスト壁は graph が変わらない限り同じ——パン・ズームの再レンダーで
+  // 引き直さないよう graph 単位にキャッシュする（graphDerived.js）。
+  const hostByOpening = graphComputed(graph, 'hostWallByOpening', () => buildHostWallByOpening(graph));
+
   return graph.openings.map((opening) => {
-    const host = findHostWall(opening, graph);
+    const host = hostByOpening.get(opening.id) ?? null;
     if (!host) return null; // ホスト壁が見つからない開口は描画しない（壁の削除・トリム後の縮退仕様）
 
     const entry = findCatalogEntry(opening.category, opening.subType);

@@ -4,6 +4,7 @@ import { StructuralMaterialType, LINE_WEIGHT_MM } from '../core.js';
 import { cellBoundsFromKey } from '../finish/gridCells.js';
 import { findSectionEntry, diaphragmProjection } from '../structural/sectionCatalog.js';
 import { columnWrapSolids } from '../finish/columnWrap.js';
+import { graphComputed } from './graphDerived.js';
 import { LodLevel, resolveStrokeWidth } from '../viewport.js';
 import { ColumnSymbol } from './ColumnSymbol.jsx';
 import { groupPropsForStyle, dashForStyle } from '../figure/figureStyle.js';
@@ -216,10 +217,12 @@ export const ColumnsLayer = observer(({ graph, viewport, diaphragm = false, fini
   // 連続して見えないため。
   const wrapStrokeWidth = resolveStrokeWidth(LINE_WEIGHT_MM.medium, scale);
   // 壁に完全に埋まる柱は包みを持たない（columnWrap.js参照）。
+  // 包みの解決は柱×壁の総当たり。graph が変わらない限り同じ結果なので graph 単位に
+  // キャッシュする（graphDerived.js。パン・ズームの再レンダーで引き直さない）。
   const wrapByColumnId = finishWrap
-    ? new Map(columnWrapSolids(graph)
+    ? graphComputed(graph, 'columnWrapByColumnId', () => new Map(columnWrapSolids(graph)
       .filter(w => !w.hidden && Object.values(w.wrapped.covers).some(v => v > 0))
-      .map(w => [w.column.id, w.wrapped]))
+      .map(w => [w.column.id, w.wrapped])))
     : null;
   return graph.columns.flatMap(column => {
     const color = COLOR_BY_MATERIAL[column.materialType];

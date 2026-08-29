@@ -139,3 +139,9 @@ WINDING/L_TURN/FLARED/OPEN_WELLは対象外＝従来面順へフォールバッ�
 **ドレーキップ窓**＝すべり出し（開き）と内倒しを兼ねる窓（`DREH_KIPP`）。**常時開放式防火戸/防火折戸**＝平常時は開放したまま火災時に自動閉鎖する防火設備（`FIRE_DOOR`/`FIRE_FOLD`。枚数・開放角度はcatalogエントリの`fireLeaves`/`fireAngle`で持つ）。**オーバーヘッドドア**＝天井方向へ跳ね上げる大型建具（`OVERHEAD`）。**非常用進入口**＝消防隊が外部から進入するための開口（`EMERGENCY`）。**ガラリ**＝通気用のルーバー開口（`GARARI`、固定のみ）。いずれも`openingCatalog.js`のFITTING_CATALOG/WINDOW_CATALOGエントリで、機構(`OpeningMechanism`)ごとに平面記号（`renderer/OpeningsLayer.jsx`）・姿図（`openings/openingElevationFigure.js`）を描く。設計意図は`.claude/opening-model.md`。
 
 
+
+## 壁ビュー（POJOスナップショット）
+**壁ビュー**＝`materialRange`/`coord1,2`/`backingRange`/`faceDir`など壁のcomputedを1回だけ読んで
+コピーしたPOJO（`finish/columnWrap.js`・`renderer/wallJunctionResolve.js`）。柱×壁・壁×壁の
+総当たりループからMobXの読み出しを取り除くための手口で、`finish/gridCells.js`の分割格子
+スナップショットと同じ考え方。公開関数の引数・返り値は変えず、入口でビューを組むだけ。

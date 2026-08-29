@@ -233,3 +233,77 @@ export function exteriorSideDir(wall, graph, along = null) {
   if (counterpart?.isExteriorWall) return counterpart.faceDir;
   return null;
 }
+
+// ================================================================
+// 軸CL索引（描画ホットパス用）
+//
+// findHostWall / findOpeningsOnWall は「壁1本・開口1件」ごとに graph.walls /
+// graph.openings を総当たりする。平面の1レンダーで全開口・全壁に対して呼ぶと
+// O(壁 × 開口) になり、ポインタ移動のたびの再レンダーで支配的なコストになる
+// ポインタ移動のたびの再レンダーで支配的なコストになる。同じ判定条件を「軸CL・向き」で先に束ねた
+// 索引を1回だけ組み、そこから引き直せば実質 O(壁 + 開口) になる。
+//
+// **判定条件は上の2関数と共有する**（下の *Indexed 版は候補集合が違うだけで
+// 述語は同一）。条件を変えるときは対になる関数を必ず両方直すこと。
+// ================================================================
+
+/** 軸CL・向きの複合キー。索引の構築と参照で共有する。 */
+function axisKey(isVertical, axisCLId) {
+  return `${isVertical ? 'V' : 'H'}:${axisCLId}`;
+}
+
+/**
+ * shapes（壁または開口）を「軸CL・向き」で束ねた索引を組む。
+ * @param {Array<{isVertical:boolean, axisCL:{id:string}}>} shapes
+ * @returns {Map<string, any[]>}
+ */
+export function indexByAxis(shapes) {
+  const index = new Map();
+  for (const s of shapes) {
+    const k = axisKey(s.isVertical, s.axisCL.id);
+    const bucket = index.get(k);
+    if (bucket) bucket.push(s);
+    else index.set(k, [s]);
+  }
+  return index;
+}
+
+/** findOpeningsOnWall の索引版（openingIndex は indexByAxis(graph.openings)）。 */
+export function findOpeningsOnWallIndexed(wall, openingIndex) {
+  const bucket = openingIndex.get(axisKey(wall.isVertical, wall.axisCL.id));
+  if (!bucket) return [];
+  const lo = Math.min(wall.coord1, wall.coord2), hi = Math.max(wall.coord1, wall.coord2);
+  return bucket.filter(o => o.coord1 >= lo && o.coord2 <= hi);
+}
+
+/** findHostWall の索引版（wallIndex は indexByAxis(graph.walls)）。同点解決の規則も同じ。 */
+export function findHostWallIndexed(opening, wallIndex) {
+  const bucket = wallIndex.get(axisKey(opening.isVertical, opening.axisCL.id));
+  if (!bucket) return null;
+  let best = null, bestAbs = Infinity;
+  for (const w of bucket) {
+    const wSign = Math.sign(w.axisOffset);
+    if (wSign !== 0 && wSign !== opening.wallSide) continue;
+    const lo = Math.min(w.coord1, w.coord2), hi = Math.max(w.coord1, w.coord2);
+    if (opening.coord1 < lo || opening.coord2 > hi) continue;
+    if (Math.abs(w.axisOffset) < bestAbs) { bestAbs = Math.abs(w.axisOffset); best = w; }
+  }
+  return best;
+}
+
+/**
+ * 全開口 → ホスト壁の対応表を1回で組む（1レンダー分。OpeningsLayer / OpeningTagLayer 用）。
+ * 開口ごとに findHostWall を呼ぶと O(壁 × 開口) になるため、軸CL索引を共有して引く。
+ * 返り値は読み取り専用として扱うこと。
+ * @param {object} graph
+ * @returns {Map<string, object>} 開口id → ホスト壁（見つからない開口は登録しない）
+ */
+export function buildHostWallByOpening(graph) {
+  const wallIndex = indexByAxis(graph.walls);
+  const map = new Map();
+  for (const opening of graph.openings) {
+    const host = findHostWallIndexed(opening, wallIndex);
+    if (host) map.set(opening.id, host);
+  }
+  return map;
+}

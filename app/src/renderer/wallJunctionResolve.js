@@ -37,8 +37,24 @@ const TOUCH_TOLERANCE = 30; // mm
 // 除外範囲を一致させる（トリムがコーナー処理した壁を、ここでT字として誤検出しないため）。
 const CORNER_EXCLUSION = 150; // mm
 
-function wallLenRange(w) {
-  return [Math.min(w.coord1, w.coord2), Math.max(w.coord1, w.coord2)];
+// 壁1本分のビュー（POJO スナップショット）。
+// この解決は壁の総当たり（O(壁²)）で、内側で読む `materialRange` / `backingRange` /
+// `axisValue` / `coord1,2` / `faceDir` はすべて MobX の computed。実データ規模だとこの
+// 読み出し自体が支配的なコストになる（実測）ため、値を1回だけ
+// コピーして二重ループはそれを見る（finish/columnWrap.js の壁ビューと同じ手口）。
+function makeView(w) {
+  const backing = w.backingRange;
+  return {
+    id: w.id,
+    isVertical: w.isVertical,
+    lenLo: Math.min(w.coord1, w.coord2), lenHi: Math.max(w.coord1, w.coord2),
+    axisValue: w.axisValue,
+    axisCLValue: w.axisCL?.effectiveValue,
+    faceDir: w.faceDir,
+    materialRange: w.materialRange,
+    backingLo: backing ? Math.min(backing.lo, backing.hi) : null,
+    backingHi: backing ? Math.max(backing.lo, backing.hi) : null,
+  };
 }
 
 /**
@@ -53,53 +69,56 @@ export function resolveWallTJunctions(walls) {
     return result.get(id);
   };
 
-  for (const a of walls) {
-    if (a.wallFinish == null) continue; // 仕上げ厚不明（手動壁で寸法未確定）は対象外
-    const aBacking = a.backingRange;
-    if (!aBacking) continue; // Aが薄壁（下地なし）は対象外
-    const [alo, ahi] = wallLenRange(a);
+  // 対象壁（仕上げ厚確定かつ下地あり）だけをビュー化し、向きで二分する——AとBは常に
+  // 直交するため、同じ向きの組み合わせは元から候補にならない（結果は総当たりと同一）。
+  const verticals = [], horizontals = [];
+  for (const w of walls) {
+    if (w.wallFinish == null) continue; // 仕上げ厚不明（手動壁で寸法未確定）は対象外
+    if (!w.backingRange) continue;      // 薄壁（下地なし）は対象外
+    const view = makeView(w);
+    (view.isVertical ? verticals : horizontals).push(view);
+  }
 
-    for (const b of walls) {
-      if (b === a || b.isVertical === a.isVertical || b.wallFinish == null) continue;
-      const bBacking = b.backingRange;
-      if (!bBacking) continue; // Bが薄壁（下地なし）は対象外（貫通先の下地が無い）
+  for (const [sameDir, crossDir] of [[verticals, horizontals], [horizontals, verticals]]) {
+    for (const a of sameDir) {
+      const alo = a.lenLo, ahi = a.lenHi;
+      const aBackingLo = a.backingLo, aBackingHi = a.backingHi;
 
-      const [blo, bhi] = wallLenRange(b);
-      const aAxisPos = a.axisValue; // Aの厚み方向位置 = Bの長さ方向での占有位置
+      for (const b of crossDir) {
+        const blo = b.lenLo, bhi = b.lenHi;
+        const aAxisPos = a.axisValue; // Aの厚み方向位置 = Bの長さ方向での占有位置
 
-      // コーナー除外: Aの直交位置がBの両端の近く（CORNER_EXCLUSION以内）ならコーナー扱い
-      if (aAxisPos <= blo + CORNER_EXCLUSION || aAxisPos >= bhi - CORNER_EXCLUSION) continue;
+        // コーナー除外: Aの直交位置がBの両端の近く（CORNER_EXCLUSION以内）ならコーナー扱い
+        if (aAxisPos <= blo + CORNER_EXCLUSION || aAxisPos >= bhi - CORNER_EXCLUSION) continue;
 
-      const bRange = b.materialRange;
+        const bRange = b.materialRange;
 
-      for (const [end, coord, anchor] of [['lo', alo, ahi], ['hi', ahi, alo]]) {
-        // Aのこの端点がBの材(materialRange)に触れているか（X字＝Aが素通りする場合は
-        // どちらの端点もBの材に近くならないため、この判定だけで自然に除外される）
-        if (coord < bRange.lo - TOUCH_TOLERANCE || coord > bRange.hi + TOUCH_TOLERANCE) continue;
+        for (const [end, coord, anchor] of [['lo', alo, ahi], ['hi', ahi, alo]]) {
+          // Aのこの端点がBの材(materialRange)に触れているか（X字＝Aが素通りする場合は
+          // どちらの端点もBの材に近くならないため、この判定だけで自然に除外される）
+          if (coord < bRange.lo - TOUCH_TOLERANCE || coord > bRange.hi + TOUCH_TOLERANCE) continue;
 
-        // B側: Aの下地幅でBの仕上げ帯・仕上げ面線をカットする——ただしAの本体が
-        // Bの仕上げ面側にあるときだけ。反対側（軸〜下地側。例: 1部屋が複数部屋に
-        // 面する通し壁で、向かい側の部屋を区切る壁が軸CL位置へ突き当たるケース）から
-        // 触れるAはBの仕上げ層を貫通しないため、仕上げ面線は連続のまま残す
-        // （カットすると突き当たり位置で反対側の仕上げ材が分断されて見える）。
-        // bodySide===0（anchorがB軸上＝判定不能の退化）は従来どおりカットする。
-        const bodySide = Math.sign(anchor - b.axisCL.effectiveValue);
-        if (bodySide === 0 || bodySide === b.faceDir) {
-          ensure(b.id).finishCuts.push([Math.min(aBacking.lo, aBacking.hi), Math.max(aBacking.lo, aBacking.hi)]);
-        }
+          // B側: Aの下地幅でBの仕上げ帯・仕上げ面線をカットする——ただしAの本体が
+          // Bの仕上げ面側にあるときだけ。反対側（軸〜下地側。例: 1部屋が複数部屋に
+          // 面する通し壁で、向かい側の部屋を区切る壁が軸CL位置へ突き当たるケース）から
+          // 触れるAはBの仕上げ層を貫通しないため、仕上げ面線は連続のまま残す
+          // （カットすると突き当たり位置で反対側の仕上げ材が分断されて見える）。
+          // bodySide===0（anchorがB軸上＝判定不能の退化）は従来どおりカットする。
+          const bodySide = Math.sign(anchor - b.axisCLValue);
+          if (bodySide === 0 || bodySide === b.faceDir) {
+            ensure(b.id).finishCuts.push([aBackingLo, aBackingHi]);
+          }
 
-        // A側: Bの下地帯（bBacking）のうち、Aが接している側（bRangeのlo寄りかhi寄りか）の
-        // 面を延長先にする
-        const fromLoSide = Math.abs(coord - bRange.lo) <= Math.abs(coord - bRange.hi);
-        const target = fromLoSide
-          ? Math.min(bBacking.lo, bBacking.hi)
-          : Math.max(bBacking.lo, bBacking.hi);
+          // A側: Bの下地帯のうち、Aが接している側（bRangeのlo寄りかhi寄りか）の面を延長先にする
+          const fromLoSide = Math.abs(coord - bRange.lo) <= Math.abs(coord - bRange.hi);
+          const target = fromLoSide ? b.backingLo : b.backingHi;
 
-        // target が現端点(coord)よりさらに外側（anchorの反対方向）にある場合のみ延長する
-        // （既にBの下地近位面を超えている等のケースでは縮めない＝現状維持）
-        const dir = Math.sign(coord - anchor) || 1;
-        if (dir * (target - coord) > 0) {
-          ensure(a.id).baseExtend[end] = target;
+          // target が現端点(coord)よりさらに外側（anchorの反対方向）にある場合のみ延長する
+          // （既にBの下地近位面を超えている等のケースでは縮めない＝現状維持）
+          const dir = Math.sign(coord - anchor) || 1;
+          if (dir * (target - coord) > 0) {
+            ensure(a.id).baseExtend[end] = target;
+          }
         }
       }
     }

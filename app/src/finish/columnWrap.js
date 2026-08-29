@@ -45,6 +45,49 @@ function rangesOverlap(aLo, aHi, bLo, bHi) {
   return aLo < bHi - GAP_EPS && aHi > bLo + GAP_EPS;
 }
 
+// ================================================================
+// 壁ビュー（描画ホットパス用の POJO スナップショット）
+//
+// このモジュールの主要な入口（columnWrapSolids / columnWallCuts）は「柱1本×壁全件」を
+// 6周ほど回す（面の包み4面・壁埋まり判定・食い込み判定）。内側で読む
+// `wall.materialRange` / `coord1` / `coord2` / `backingRange` はすべて MobX の computed で、
+// 実データ規模（壁200本・柱60本）だとこの読み出し自体が支配的なコストになる
+// （実測）。そこで判定に必要な値だけを 1 回だけコピーした
+// POJO を組み、内側のループはそれを見る（finish/gridCells.js の分割格子スナップショットと同じ手口）。
+// 公開関数の引数（生の wall 配列）・戻り値は変えない——入口でビューを組むだけ。
+// ================================================================
+
+/** 壁1本分のビュー。mr は materialRange（null 可）、backingMm は下地帯の厚み（null=下地なし）。 */
+function makeWallView(wall) {
+  const mr = wall.materialRange ?? null;
+  const br = wall.backingRange ?? null;
+  const c1 = wall.coord1, c2 = wall.coord2;
+  return {
+    wall,
+    isVertical: wall.isVertical,
+    mr,
+    spanLo: Math.min(c1, c2), spanHi: Math.max(c1, c2),
+    wallFinish: wall.wallFinish ?? 0,
+    backingMm: br ? Math.abs(br.hi - br.lo) : null,
+    axisId: wall.axisCL?.id ?? null,
+  };
+}
+
+/** 壁配列 → ビュー集合（向き別・軸CL別の束ね込みを含む）。 */
+function makeWallSet(walls) {
+  const all = [], vertical = [], horizontal = [], byAxis = new Map();
+  for (const wall of walls ?? []) {
+    const view = makeWallView(wall);
+    all.push(view);
+    (view.isVertical ? vertical : horizontal).push(view);
+    if (view.axisId == null) continue;
+    const bucket = byAxis.get(view.axisId);
+    if (bucket) bucket.push(view);
+    else byAxis.set(view.axisId, [view]);
+  }
+  return { all, vertical, horizontal, byAxis };
+}
+
 /**
  * 柱の素の平面外形（カタログ断面＋鋼管のダイヤフラム出）。仕上げ包みは含まない
  * ——壁埋まり判定・包みの起点はこの外形。
@@ -79,21 +122,15 @@ export function bareColumnRect(column, baseZ = 0) {
  * @param {object[]} [walls] - 同一graphの壁（薄壁のオーナー探索用。省略時は探索しない）
  * @returns {number}
  */
-function wallBackingMm(wall, walls) {
-  const br = wall.backingRange;
-  if (br) return Math.abs(br.hi - br.lo);
-  const axisId = wall.axisCL?.id;
-  if (axisId == null) return 0;
-  const wLo = Math.min(wall.coord1, wall.coord2), wHi = Math.max(wall.coord1, wall.coord2);
+function wallBackingMm(view, set) {
+  if (view.backingMm != null) return view.backingMm;
+  if (view.axisId == null) return 0;
   let backing = 0;
-  for (const other of walls ?? []) {
-    if (other === wall || other.isVertical !== wall.isVertical) continue;
-    if (other.axisCL?.id !== axisId) continue;      // 同じ軸CLのペアだけ
-    const obr = other.backingRange;
-    if (!obr) continue;
-    const oLo = Math.min(other.coord1, other.coord2), oHi = Math.max(other.coord1, other.coord2);
-    if (!rangesOverlap(wLo, wHi, oLo, oHi)) continue; // 別の場所のオーナー壁は拾わない
-    backing = Math.max(backing, Math.abs(obr.hi - obr.lo));
+  for (const other of set.byAxis.get(view.axisId) ?? []) { // 同じ軸CLのペアだけ
+    if (other.wall === view.wall || other.isVertical !== view.isVertical) continue;
+    if (other.backingMm == null) continue;
+    if (!rangesOverlap(view.spanLo, view.spanHi, other.spanLo, other.spanHi)) continue; // 別の場所のオーナー壁は拾わない
+    backing = Math.max(backing, other.backingMm);
   }
   return backing;
 }
@@ -109,7 +146,7 @@ function wallBackingMm(wall, walls) {
  * @returns {number}
  */
 export function wallFinishCoverMm(wall, walls) {
-  return wallBackingMm(wall, walls) + (wall.wallFinish ?? 0);
+  return wallBackingMm(makeWallView(wall), makeWallSet(walls)) + (wall.wallFinish ?? 0);
 }
 
 /**
@@ -119,13 +156,17 @@ export function wallFinishCoverMm(wall, walls) {
  * @returns {boolean}
  */
 export function columnMeetsWall(rect, wall) {
-  const mr = wall.materialRange;
+  return columnMeetsWallView(rect, makeWallView(wall));
+}
+
+function columnMeetsWallView(rect, view) {
+  const mr = view.mr;
   if (!mr) return false;
-  const [acrossLo, acrossHi, spanLo, spanHi] = wall.isVertical
+  const [acrossLo, acrossHi, spanLo, spanHi] = view.isVertical
     ? [rect.xLo, rect.xHi, rect.yLo, rect.yHi]
     : [rect.yLo, rect.yHi, rect.xLo, rect.xHi];
-  const wLo = Math.min(wall.coord1, wall.coord2), wHi = Math.max(wall.coord1, wall.coord2);
-  return rangesOverlap(acrossLo, acrossHi, mr.lo, mr.hi) && rangesOverlap(spanLo, spanHi, wLo, wHi);
+  return rangesOverlap(acrossLo, acrossHi, mr.lo, mr.hi)
+      && rangesOverlap(spanLo, spanHi, view.spanLo, view.spanHi);
 }
 
 /**
@@ -138,16 +179,19 @@ export function columnMeetsWall(rect, wall) {
  * @returns {boolean}
  */
 export function isColumnInsideWall(rect, walls) {
-  for (const wall of walls ?? []) {
-    const mr = wall.materialRange;
+  return isColumnInsideWallSet(rect, makeWallSet(walls));
+}
+
+function isColumnInsideWallSet(rect, set) {
+  for (const view of set.all) {
+    const mr = view.mr;
     if (!mr) continue;
-    const [acrossLo, acrossHi, spanLo, spanHi] = wall.isVertical
+    const [acrossLo, acrossHi, spanLo, spanHi] = view.isVertical
       ? [rect.xLo, rect.xHi, rect.yLo, rect.yHi]
       : [rect.yLo, rect.yHi, rect.xLo, rect.xHi];
     if (!(acrossLo >= mr.lo - GAP_EPS && acrossHi <= mr.hi + GAP_EPS)) continue;
     const tol = Math.abs(mr.hi - mr.lo); // 隅の取り合い（chamferWalls）ぶんの許容
-    const wLo = Math.min(wall.coord1, wall.coord2), wHi = Math.max(wall.coord1, wall.coord2);
-    if (spanLo >= wLo - tol - GAP_EPS && spanHi <= wHi + tol + GAP_EPS) return true;
+    if (spanLo >= view.spanLo - tol - GAP_EPS && spanHi <= view.spanHi + tol + GAP_EPS) return true;
   }
   return false;
 }
@@ -169,39 +213,37 @@ export function isColumnInsideWall(rect, walls) {
  * @returns {{coverMm:number, finishMm:number, wall:object|null, trimmed:boolean, inWall:boolean}}
  *   finishMm はその面の仕上げ材の厚み（包みの残りが下地材）。平面図が包みを2層で描くのに使う。
  */
-function resolveSideCover(rect, walls, axis, side, trimGapMm) {
+function resolveSideCover(rect, set, axis, side, trimGapMm) {
   const facingVertical = axis === 'x'; // x方向の面と向き合うのは垂直壁（厚み方向がX）
   const face = axis === 'x' ? (side < 0 ? rect.xLo : rect.xHi) : (side < 0 ? rect.yLo : rect.yHi);
   const [spanLo, spanHi] = axis === 'x' ? [rect.yLo, rect.yHi] : [rect.xLo, rect.xHi];
-  let nearest = null;      // {gapMm, wall} — 面の外側にある最も近い壁
+  let nearest = null;      // {gapMm, view} — 面の外側にある最も近い壁
   let fallbackCover = 0;   // 向き合う壁は在るが遠い場合に使う層構成
-  for (const wall of walls ?? []) {
-    if (wall.isVertical !== facingVertical) continue;
-    const mr = wall.materialRange;
+  for (const view of facingVertical ? set.vertical : set.horizontal) {
+    const mr = view.mr;
     if (!mr) continue;
-    const wLo = Math.min(wall.coord1, wall.coord2), wHi = Math.max(wall.coord1, wall.coord2);
-    if (!rangesOverlap(spanLo, spanHi, wLo, wHi)) continue;
+    if (!rangesOverlap(spanLo, spanHi, view.spanLo, view.spanHi)) continue;
     // 面が材厚の中＝壁内。この面は覆わない（規約3）。
     if (face > mr.lo + GAP_EPS && face < mr.hi - GAP_EPS) {
-      return { coverMm: 0, finishMm: 0, wall, trimmed: false, inWall: true };
+      return { coverMm: 0, finishMm: 0, wall: view.wall, trimmed: false, inWall: true };
     }
     const gapMm = side < 0 ? face - mr.hi : mr.lo - face;
     if (gapMm < -GAP_EPS) continue; // その壁は面の反対側にある
-    if (!nearest || gapMm < nearest.gapMm) nearest = { gapMm, wall };
+    if (!nearest || gapMm < nearest.gapMm) nearest = { gapMm, view };
   }
-  if (nearest) fallbackCover = wallFinishCoverMm(nearest.wall, walls);
+  if (nearest) fallbackCover = wallBackingMm(nearest.view, set) + nearest.view.wallFinish;
   // 仕上げ材の厚み。包みの残りが下地材（平面図はこの2層を描き分ける）。包みが仕上げ厚より
   // 薄い（トリム量が小さい）場合は全部を仕上げ材とみなす——下地を入れる余地が無いため。
-  const finishOf = (wall, coverMm) => Math.min(wall?.wallFinish ?? 0, coverMm);
+  const finishOf = (view, coverMm) => Math.min(view?.wallFinish ?? 0, coverMm);
   if (nearest && nearest.gapMm <= trimGapMm + GAP_EPS) {
     // 隙間を塞いで壁の仕上げ面と揃える（規約2）。隙間0＝既に接している場合も接続扱い。
     return {
-      coverMm: nearest.gapMm, finishMm: finishOf(nearest.wall, nearest.gapMm),
-      wall: nearest.wall, trimmed: true, inWall: false,
+      coverMm: nearest.gapMm, finishMm: finishOf(nearest.view, nearest.gapMm),
+      wall: nearest.view.wall, trimmed: true, inWall: false,
     };
   }
   return {
-    coverMm: fallbackCover, finishMm: finishOf(nearest?.wall, fallbackCover),
+    coverMm: fallbackCover, finishMm: finishOf(nearest?.view, fallbackCover),
     wall: null, trimmed: false, inWall: false,
   };
 }
@@ -220,6 +262,10 @@ function resolveSideCover(rect, walls, axis, side, trimGapMm) {
  *   wallAxes:Array<{isVertical:boolean, axisValue:number}>}}
  */
 export function wrapColumnWithFinish(rect, walls, opts = {}) {
+  return wrapColumnWithFinishSet(rect, makeWallSet(walls), opts);
+}
+
+function wrapColumnWithFinishSet(rect, set, opts = {}) {
   const trimGapMm = opts.trimGapMm ?? TRIM_GAP_MM;
   const covers = {}, finishes = {}, trimmed = {}, wallAxes = [];
   const pushAxis = wall => {
@@ -229,7 +275,7 @@ export function wrapColumnWithFinish(rect, walls, opts = {}) {
     wallAxes.push({ isVertical: wall.isVertical, axisValue });
   };
   for (const [axis, side, key] of [['x', -1, 'xLo'], ['x', 1, 'xHi'], ['y', -1, 'yLo'], ['y', 1, 'yHi']]) {
-    const r = resolveSideCover(rect, walls, axis, side, trimGapMm);
+    const r = resolveSideCover(rect, set, axis, side, trimGapMm);
     covers[key] = r.coverMm;
     finishes[key] = r.finishMm;
     trimmed[key] = r.trimmed;
@@ -237,7 +283,7 @@ export function wrapColumnWithFinish(rect, walls, opts = {}) {
     if (r.trimmed || r.inWall) pushAxis(r.wall);
   }
   // 柱に食い込まれている壁（面が壁内でなくても柱が壁を貫いている構成）も接続扱いにする。
-  for (const wall of walls ?? []) if (columnMeetsWall(rect, wall)) pushAxis(wall);
+  for (const view of set.all) if (columnMeetsWallView(rect, view)) pushAxis(view.wall);
   return {
     ...rect,
     xLo: rect.xLo - covers.xLo, xHi: rect.xHi + covers.xHi,
@@ -265,21 +311,22 @@ export function wrapColumnWithFinish(rect, walls, opts = {}) {
  *   backing:Array<[number,number]>}>} 壁id → 層ごとの、壁の長さ方向で落とす区間（複数可）
  */
 export function columnWallCuts(graph, opts = {}) {
-  const walls = graph?.walls ?? [];
+  const set = makeWallSet(graph?.walls ?? []);
   const cuts = new Map();
-  for (const { wrapped, hidden } of columnWrapSolids(graph, opts)) {
+  for (const { wrapped, hidden } of columnWrapSolidsSet(graph, set, opts)) {
     if (hidden) continue; // 壁に完全に埋まる柱は壁の描画を変えない
     const f = wrapped.finishes ?? {};
     // この柱が接する壁の集合。下地を消してよいかの判定（canRemoveBacking）に使う。
-    const touched = walls.filter(w => wallTouchedByColumn(wrapped, w));
-    for (const wall of touched) {
+    const touched = set.all.filter(v => wallTouchedByColumn(wrapped, v));
+    const touchedSet = new Set(touched);
+    for (const view of touched) {
+      const wall = view.wall;
       if (wall.id == null) continue;
-      const [spanLo, spanHi, finLo, finHi] = wall.isVertical
+      const [spanLo, spanHi, finLo, finHi] = view.isVertical
         ? [wrapped.yLo, wrapped.yHi, f.yLo ?? 0, f.yHi ?? 0]
         : [wrapped.xLo, wrapped.xHi, f.xLo ?? 0, f.xHi ?? 0];
-      const wLo = Math.min(wall.coord1, wall.coord2), wHi = Math.max(wall.coord1, wall.coord2);
       const clip = (lo, hi) => {
-        const a = Math.max(lo, wLo), b = Math.min(hi, wHi);
+        const a = Math.max(lo, view.spanLo), b = Math.min(hi, view.spanHi);
         return b - a > GAP_EPS ? [a, b] : null;
       };
       const face = clip(spanLo, spanHi);
@@ -289,22 +336,21 @@ export function columnWallCuts(graph, opts = {}) {
       const entry = cuts.get(wall.id);
       if (face) entry.face.push(face);
       if (fin) entry.fin.push(fin);
-      if (fin && canRemoveBacking(wall, walls, touched)) entry.backing.push(fin);
+      if (fin && canRemoveBacking(view, set, touchedSet)) entry.backing.push(fin);
     }
   }
   return cuts;
 }
 
 /** 柱の包みが壁の材厚と重なる、または接するか（トリムで面が揃うと重なり0になるため接触も含む）。 */
-function wallTouchedByColumn(wrapped, wall) {
-  const mr = wall.materialRange;
+function wallTouchedByColumn(wrapped, view) {
+  const mr = view.mr;
   if (!mr) return false;
-  const [acrossLo, acrossHi, spanLo, spanHi] = wall.isVertical
+  const [acrossLo, acrossHi, spanLo, spanHi] = view.isVertical
     ? [wrapped.xLo, wrapped.xHi, wrapped.yLo, wrapped.yHi]
     : [wrapped.yLo, wrapped.yHi, wrapped.xLo, wrapped.xHi];
   if (acrossHi < mr.lo - GAP_EPS || acrossLo > mr.hi + GAP_EPS) return false;
-  const wLo = Math.min(wall.coord1, wall.coord2), wHi = Math.max(wall.coord1, wall.coord2);
-  return rangesOverlap(spanLo, spanHi, wLo, wHi);
+  return rangesOverlap(spanLo, spanHi, view.spanLo, view.spanHi);
 }
 
 /**
@@ -321,17 +367,13 @@ function wallTouchedByColumn(wrapped, wall) {
  * @param {object[]} touched - この柱が接している壁
  * @returns {boolean}
  */
-function canRemoveBacking(wall, walls, touched) {
-  const axisId = wall.axisCL?.id;
-  if (axisId == null) return true;
-  const wLo = Math.min(wall.coord1, wall.coord2), wHi = Math.max(wall.coord1, wall.coord2);
-  for (const other of walls ?? []) {
-    if (other.isVertical !== wall.isVertical) continue;
-    if (other.axisCL?.id !== axisId) continue;   // この下地に乗りうるのは同じ軸CLの壁だけ
+function canRemoveBacking(view, set, touchedSet) {
+  if (view.axisId == null) return true;
+  for (const other of set.byAxis.get(view.axisId) ?? []) { // この下地に乗りうるのは同じ軸CLの壁だけ
+    if (other.isVertical !== view.isVertical) continue;
     if (!(other.wallFinish > 0)) continue;       // 仕上げ材を持たない壁は下地を必要としない
-    const oLo = Math.min(other.coord1, other.coord2), oHi = Math.max(other.coord1, other.coord2);
-    if (!rangesOverlap(wLo, wHi, oLo, oHi)) continue;
-    if (!touched.includes(other)) return false;  // 柱に置き換えられない仕上げ材が残っている
+    if (!rangesOverlap(view.spanLo, view.spanHi, other.spanLo, other.spanHi)) continue;
+    if (!touchedSet.has(other)) return false;    // 柱に置き換えられない仕上げ材が残っている
   }
   return true;
 }
@@ -345,15 +387,18 @@ function canRemoveBacking(wall, walls, touched) {
  * @returns {Array<{column:object, bare:ColumnRect, wrapped:object, hidden:boolean}>}
  */
 export function columnWrapSolids(graph, opts = {}) {
-  const walls = graph?.walls ?? [];
+  return columnWrapSolidsSet(graph, makeWallSet(graph?.walls ?? []), opts);
+}
+
+function columnWrapSolidsSet(graph, set, opts) {
   const out = [];
   for (const column of graph?.columns ?? []) {
     if (column.role === FOUNDATION_ROLE) continue;
     const bare = bareColumnRect(column);
     out.push({
       column, bare,
-      wrapped: wrapColumnWithFinish(bare, walls, opts),
-      hidden: isColumnInsideWall(bare, walls),
+      wrapped: wrapColumnWithFinishSet(bare, set, opts),
+      hidden: isColumnInsideWallSet(bare, set),
     });
   }
   return out;

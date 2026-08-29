@@ -1,13 +1,11 @@
 import { observer } from 'mobx-react-lite';
 import { Group, Line, Rect, Circle, Path } from 'react-konva';
 import { ShapeType } from '@core';
-import { findOpeningsOnWall } from '../openings/openingGeometry.js';
 import { isEndpointAt } from '../transform/centerLineExtend.js';
 import { LodLevel, resolveStrokeWidth } from '../viewport.js';
 import { subtractIntervals } from '../finish/stair/stairGeometry.js';
-import { resolveWallTJunctions } from './wallJunctionResolve.js';
-import { resolveKneeDropOverlays } from '../finish/kneeDropWall.js';
-import { columnWallCuts } from '../finish/columnWrap.js';
+import { buildWallDrawPlan } from './wallDrawPlan.js';
+import { graphComputed } from './graphDerived.js';
 
 const DASH = {
   solid:     undefined,
@@ -65,48 +63,14 @@ export const ShapesLayer = observer(({ graph, viewport, stairUnderClips = null }
   if (!graph) return null;
   const { scaleX, scaleY, lodLevel } = viewport;
 
-  // 下地（間柱）描画の重複防止: 同一axisCL上で範囲が重なる正負オフセットの壁ペア
-  // （部屋境界の内外両側）は通り芯上の同じ構造材を指すため、正(+)側のみ描画する。
-  // 偏芯壁（backingOffset指定あり）は下地帯が通り芯に対して対称でない＝相手側と共有する構造材
-  // ではないため、この重複防止の対象外（自分の下地は常に描画・相手側の判定にも使わない）。
-  // 新モデル（finish/wallGeneration.js の resolveBackingOwnership/applyBackingOwnership）で
-  // 生成された壁は backingOffset を必ず明示（オーナーは0・非オーナーは薄壁でbackingDepth=0）
-  // するため、この判定（backingOffset==null）の対象に自然に入らない——ここは旧データ
-  // （backingOffset未設定の対称壁ペア）の表示互換のためのフォールバックとして残す。
-  const deferredBackingIds = new Set();
-  if (lodLevel === LodLevel.DETAIL) {
-    const wallShapes = graph.generalShapes.filter(s =>
-      s.type === ShapeType.WALL && s.wallFinish != null && s.backingOffset == null);
-    for (const w of wallShapes) {
-      if (w.axisOffset >= 0) continue;
-      const wLo = Math.min(w.coord1, w.coord2), wHi = Math.max(w.coord1, w.coord2);
-      const hasPositiveOverlap = wallShapes.some(o =>
-        o !== w && o.axisCL === w.axisCL && o.axisOffset > 0 &&
-        Math.min(o.coord1, o.coord2) < wHi && Math.max(o.coord1, o.coord2) > wLo,
-      );
-      if (hasPositiveOverlap) deferredBackingIds.add(w.id);
-    }
-  }
-
-  // 壁のT字取り合い（突き当たり）解決: 詳細LODでのみ、ジオメトリを変えずに描画時だけ反映する
-  // （wallJunctionResolve.js。resolveStairSideLines と同じ「描画ルールを幾何モジュールに
-  // 集約しレンダラは写像するだけ」というパターン）。壁全般が対象——手動壁・部屋壁・外壁・
-  // 階段下壁を区別しない。
-  // 上の deferredBackingIds と同様、useMemo 等の追加メモ化はせず壁配列を毎レンダー走査する
-  // （このファイルの既存慣習に合わせる。過剰最適化はしない——壁数が増えて気になる場合は
-  // 将来 useMemo 化を検討）。
-  const wallJunctions = lodLevel === LodLevel.DETAIL ? resolveWallTJunctions(graph.walls) : null;
-
-  // 腰壁・垂れ壁の描画オーバーレイ（毎レンダー解決。resolveWallTJunctions と同型）。
-  // 略図LOD（単線）では特別描画なし。
-  const kneeDropOverlays = lodLevel !== LodLevel.SCHEMATIC ? resolveKneeDropOverlays(graph) : null;
-
-  // 柱の仕上げ包み（柱壁）と取り合う区間（ユーザー指示2026-08「壁仕上げ材は互いにトリム。
-  // 不要になった壁下地材は削除」）。柱壁がその場所を占めるため、壁側は仕上げ面線・仕上げ境界線・
-  // 下地（間柱）をこの区間だけ落とす。柱を描かないモード（仕上げ・敷地）でも壁の見た目は
-  // 「柱に取られた区間」を反映してよい——柱は実在するため（描画の有無とは独立）。
-  // wallJunctions と同じ毎レンダー解決（このファイルの既存慣習）。
-  const columnCuts = lodLevel !== LodLevel.SCHEMATIC ? columnWallCuts(graph) : null;
+  // 壁をまたぐ派生値（下地の重複防止・T字取り合い・腰壁垂れ壁・柱の仕上げ包み・壁ごとの開口）は
+  // wallDrawPlan.js に集約し、graphComputed で graph 単位にキャッシュする。これらは graph が変わらない
+  // 限り同じ結果だが、このレイヤーは observer なのでパン・ズーム・ポインタ移動のたびに再レンダー
+  // される——毎回総当たりし直すと実測約30ms/レンダーで、60fps の予算を一回で使い切る
+  // （平面モードのカクつきの主因）。
+  // LOD ごとに結果が違うため lodLevel をキーに含める（graphDerived.js の約束）。
+  const { deferredBackingIds, wallJunctions, kneeDropOverlays, columnCuts, openingsByWall } =
+    graphComputed(graph, `wallDrawPlan:${lodLevel}`, () => buildWallDrawPlan(graph, lodLevel));
 
   return graph.generalShapes.map((shape) => {
     const sp = strokeProps(shape, scaleX, scaleY);
@@ -146,8 +110,8 @@ export const ShapesLayer = observer(({ graph, viewport, stairUnderClips = null }
         // （破れ線より階段踏面側の部分を描かない。.claude/stair-model.md 参照）。
         const out = (() => {
         // ホストされた開口がある区間を除いた複数の区間に分割する
-        const openings = findOpeningsOnWall(shape, graph)
-          .slice().sort((a, b) => a.coord1 - b.coord1);
+        // （openingsByWall は coord1 昇順で解決済み・読み取り専用。wallDrawPlan.js 参照）
+        const openings = openingsByWall.get(shape.id) ?? [];
         const lo = Math.min(shape.coord1, shape.coord2), hi = Math.max(shape.coord1, shape.coord2);
         const segments = [];
         let cursor = lo;
