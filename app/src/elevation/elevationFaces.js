@@ -414,7 +414,17 @@ export function perpendicularWallsOnFace(face, graph, side) {
   // 空配列を返す（従来のctx.gridCLs ?? []等と同じ規約。real graphでは常に配列が返る）。
   return (graphList(graph, 'walls') ?? []).filter(w => {
     if (w.isVertical === face.isVertical) return false; // 直交のみ
-    if (w.isExteriorWall || w.isRoomWall) return false;
+    if (w.isExteriorWall) return false;
+    // 外周生成壁（isRoomWall）の扱いはsideで分ける。
+    // near（袖壁＝面を分割する自立壁）では除外する——部屋の外周生成壁は面自身とその隅を作る壁で
+    // あり、袖壁ではない。
+    // far（寸法の分割点。面の**向こう側**に立つ壁）では**除外しない**——向こう側の壁は定義上
+    // どこかの部屋の外周生成壁であり、一律に除外すると分割点が1本も取れない（実機データでは
+    // 全ての壁がisRoomWall=trueで、この源が常に空だった。ユーザー実機指摘2026-08その9:
+    // 「22」Bは向こう側の3500の壁で3500+3500・「22」C2は向こう側の2600の壁で2600+2400が正解）。
+    // 自室の壁が誤って混ざらないのは下のreach/project判定が担う——自室の壁は面の位置で終わり、
+    // 向こう側へMIN_PROJECTION_MM以上突き出さないため落ちる。
+    if (side === 'near' && w.isRoomWall) return false;
     if (w.axisCL.id === face.axisCL.id) return false; // 同軸壁除外
     const wv = w.axisCL.effectiveValue;
     if (!(wv > face.lo && wv < face.hi)) return false; // face.lo/hiの内側のみ

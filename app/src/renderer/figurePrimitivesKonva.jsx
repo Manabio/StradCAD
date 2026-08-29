@@ -1,4 +1,5 @@
 import { Line, Rect, Circle, Text, Group } from 'react-konva';
+import { DASH_CENTER, DASH_DASHED, centerDashOffsetPx } from './dashPhase.js';
 import { miterTriangleVertices, verticalDimLabelBox, horizontalDimLabelBox } from '../elevation/elevationLayout.js';
 import { TRIANGLE_HEIGHT_SCREEN_MM, TRIANGLE_ANGLE_DEG } from '../elevation/elevationStyle.js';
 
@@ -17,8 +18,17 @@ import { TRIANGLE_HEIGHT_SCREEN_MM, TRIANGLE_ANGLE_DEG } from '../elevation/elev
 
 const STROKE_COLOR = '#1e293b';
 const DIM_COLOR    = '#2563eb';
-const DASH_CENTER  = [16, 4, 4, 4]; // 一点鎖線
-const DASH_DASHED  = [8, 4];
+/**
+ * 一点鎖線の位相合わせ（`dashPhase.js`。`dashAnchor`＝線の伸びる軸上の座標＝展開図では寸法行を
+ * 長い破線の中央へ合わせる）。指定が無ければ従来どおり既定位相。
+ */
+function centerDashOffset(p, t) {
+  if (p.dash !== 'center' || p.dashAnchor == null) return undefined;
+  const x1 = t.tx(p.x1), y1 = t.ty(p.y1), x2 = t.tx(p.x2), y2 = t.ty(p.y2);
+  const isVertical = Math.abs(y2 - y1) >= Math.abs(x2 - x1);
+  const anchor = isVertical ? t.ty(p.dashAnchor) : t.tx(p.dashAnchor);
+  return centerDashOffsetPx(Math.abs(anchor - (isVertical ? y1 : x1)));
+}
 
 function weightPx(p, lineWeightsPx) {
   if (p.weight && lineWeightsPx?.[p.weight] != null) return lineWeightsPx[p.weight];
@@ -126,7 +136,8 @@ function renderOne(p, i, t, lineWeightsPx, screenPxPerMm, onTagClick) {
       return (
         <Line key={key} points={[t.tx(p.x1), t.ty(p.y1), t.tx(p.x2), t.ty(p.y2)]}
           stroke={p.stroke ?? STROKE_COLOR} strokeWidth={weightPx(p, lineWeightsPx)}
-          dash={dashArray(p.dash)} strokeScaleEnabled={false} listening={false} />
+          dash={dashArray(p.dash)} dashOffset={centerDashOffset(p, t)}
+          strokeScaleEnabled={false} listening={false} />
       );
     case 'rect':
       return (

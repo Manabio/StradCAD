@@ -64,6 +64,26 @@ export function cellNearSideOnFace(face, b, axisValue) {
 }
 
 /**
+ * セル矩形bが面の切断面（axisValue）を**跨いでいる**か（＝面の両側に同じセルが広がる）。
+ * `cellNearSideOnFace`（near側の辺がaxisValueに一致する）と対になる述語。面のあるCLがその位置
+ * まで延長されていない場合、自室のセルはそこで分割されず1枚のまま面を跨ぐ——このセルは
+ * 「軸に接していない」ため`cellNearSideOnFace`では拾えないが、near側は確かに自室が占めている。
+ * 開放スパンの近側セル列挙（`collectNearCellSegments`）だけがこの述語を併用する
+ * （床の段差プロファイルは「軸に接する辺」の高さを問う処理のため対象外——役割を混ぜない）。
+ * 実機2階の室22では、Y=-3500のCLがx=0..1000には延びておらずこの帯のセルが上下に割れないため、
+ * A1（Y=-3500の壁）がX3..X4の抜けを開放区間として描けなかった（問題修正2026-08その9）。
+ * @param {object} face - isVerticalを持つ面
+ * @param {{x1:number,y1:number,x2:number,y2:number}} b
+ * @param {number} axisValue - face.axisCL.value
+ * @returns {boolean}
+ */
+export function cellStraddlesFace(face, b, axisValue) {
+  return face.isVertical
+    ? (b.x1 < axisValue && axisValue < b.x2)
+    : (b.y1 < axisValue && axisValue < b.y2);
+}
+
+/**
  * touching（自室セルが軸に直接触れる区間）に欠測がある[lo,hi]区間を、runの伸びる方向のCLで
  * 刻んで区間ごとに個別プローブし、実際の所有Roomを求める（QA修正・項目6根本原因）。
  * 従来はこの欠測区間を無条件で「親扱い（floorDeltaMm:0）」にフォールバックしていたが、

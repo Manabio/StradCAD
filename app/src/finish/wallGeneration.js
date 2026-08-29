@@ -6,7 +6,7 @@
  */
 
 import { RoomKind } from '@core';
-import { worldToCell, dividerCLsBetween } from './gridCells.js';
+import { worldToCell, dividerCLsBetween, isActiveAcrossRange } from './gridCells.js';
 import { buildCellToRoom } from './edgeClassify.js';
 
 export const DEFAULT_WALL_BASE   = 90;    // mm
@@ -33,9 +33,10 @@ function getShape(graph, id) {
  * @param {string} endId
  * @param {{L: string, R: string}[]} adjacentSpans - 隣接セルのスパン（{L, R} は CL ID）
  * @param {object} graph
+ * @param {number|null} axisValue - この辺が乗る軸CLの位置（同値CLの選別に使う。不明ならnull）
  * @returns {[string, string][]} 外部サブ区間の [startId, endId] ペアの配列
  */
-function externalSubIntervals(startId, endId, adjacentSpans, graph) {
+function externalSubIntervals(startId, endId, adjacentSpans, graph, axisValue = null) {
   const startCL = getShape(graph, startId);
   const endCL   = getShape(graph, endId);
   if (!startCL || !endCL) return [];
@@ -54,8 +55,23 @@ function externalSubIntervals(startId, endId, adjacentSpans, graph) {
       if (cl && cl.value > startVal && cl.value < endVal) cutMap.set(cl.value, id);
     }
   }
+  // 【重要】ここでセルキー由来のid（端点・隣接スパン＝実際にセルを画しているCL）を上書きしては
+  // ならない。同じ値に複数のCLが存在しうる（延長だけを分けて同位置に置いたCL）ため、上書きすると
+  // 隅が「その位置には届いていない別CL」のidを指し、buildRoomFacesのチェーン探索
+  // （findCornerNeighborはCLのidで隣の面へ辿る）が繋がらなくなる——実機2階の室22では
+  // Y=-3500に延長違いの2本があり、A面はaxis=延長(-8000..0)側・D面はend=延長(1000..7000)側という
+  // 別idを指したため、チェーンが1面で切れて展開図が「Aのみ」になっていた（問題修正2026-08その9）。
+  // 同値の候補が複数ある場合は「この辺の軸位置まで延長が届いているCL」を優先する（届いていない
+  // CLはそもそもこの位置に隅を作れない）。判定は既存のisActiveAcrossRangeへ委譲する
+  // （通り芯＝常に有効・延長未設定＝常に有効という規約を二重管理しない）。軸位置ちょうどで
+  // 接する場合も届いているとみなすため、±1mmの窓で問う（隅はまさに端点で接する）。
+  const reachesAxis = cl => axisValue == null || !cl ||
+    isActiveAcrossRange(cl, axisValue - 1, axisValue + 1);
+  const fromCells = new Set(cutMap.keys());
   for (const cl of dividerCLsBetween(graph, startCL.centerLineType, startVal, endVal)) {
-    cutMap.set(cl.value, cl.id);
+    if (fromCells.has(cl.value)) continue; // セルキー由来は権威。上書きしない
+    const cur = cutMap.get(cl.value);
+    if (cur == null || (!reachesAxis(getShape(graph, cur)) && reachesAxis(cl))) cutMap.set(cl.value, cl.id);
   }
 
   const sorted = [...cutMap.entries()].sort((a, b) => a[0] - b[0]);
@@ -109,28 +125,30 @@ export function computeExternalEdgeParams(room, offset, graph) {
   }
 
   const results = [];
+  // 辺が乗る軸CLの位置（externalSubIntervalsが同値CLの選別に使う）。
+  const valueOf = id => getShape(graph, id)?.value ?? null;
 
   for (const cellKey of room.cells) {
     const [L, T, R, B] = cellKey.split(':');
 
     // 上辺: セルはTの下側。Tの上側（bottomCL=T）の隣接セルでカバーされない部分が外周
     // 室内は下(y大) → axisOffset = +offset
-    for (const [sId, eId] of externalSubIntervals(L, R, byBottomCL.get(T) || [], graph)) {
+    for (const [sId, eId] of externalSubIntervals(L, R, byBottomCL.get(T) || [], graph, valueOf(T))) {
       results.push({ axisCLId: T, startCLId: sId, endCLId: eId, isVertical: false, axisOffset: +offset });
     }
     // 下辺: セルはBの上側。Bの下側（topCL=B）の隣接セルでカバーされない部分が外周
     // 室内は上(y小) → axisOffset = -offset
-    for (const [sId, eId] of externalSubIntervals(L, R, byTopCL.get(B) || [], graph)) {
+    for (const [sId, eId] of externalSubIntervals(L, R, byTopCL.get(B) || [], graph, valueOf(B))) {
       results.push({ axisCLId: B, startCLId: sId, endCLId: eId, isVertical: false, axisOffset: -offset });
     }
     // 左辺: セルはLの右側。Lの左側（rightCL=L）の隣接セルでカバーされない部分が外周
     // 室内は右(x大) → axisOffset = +offset
-    for (const [sId, eId] of externalSubIntervals(T, B, byRightCL.get(L) || [], graph)) {
+    for (const [sId, eId] of externalSubIntervals(T, B, byRightCL.get(L) || [], graph, valueOf(L))) {
       results.push({ axisCLId: L, startCLId: sId, endCLId: eId, isVertical: true,  axisOffset: +offset });
     }
     // 右辺: セルはRの左側。Rの右側（leftCL=R）の隣接セルでカバーされない部分が外周
     // 室内は左(x小) → axisOffset = -offset
-    for (const [sId, eId] of externalSubIntervals(T, B, byLeftCL.get(R) || [], graph)) {
+    for (const [sId, eId] of externalSubIntervals(T, B, byLeftCL.get(R) || [], graph, valueOf(R))) {
       results.push({ axisCLId: R, startCLId: sId, endCLId: eId, isVertical: true,  axisOffset: -offset });
     }
   }

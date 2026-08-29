@@ -921,7 +921,13 @@ export function buildFaceFigure(face, ctx) {
           const localX = localXOf(face, o.centerCoord);
           return [Math.max(0, localX - o.width / 2), Math.min(run, localX + o.width / 2)];
         }),
-      ...spans.filter(s => s.kind === 'open').map(s => [s.loX, s.hiX]),
+      // 巾木は**描画**要素のため、open区間の範囲もCL基準(spans)ではなく描画基準
+      // （drawnSpans＝境界に立つ実壁の「開放側の面」。床線・境界エッジと同じ）を使う
+      // ——CL基準だと巾木がCLで切れ、CLと壁面の間（半壁厚）に巾木の無い隙間ができる
+      // （ユーザー実機指摘2026-08その9:「22」A1のX3・「22」D2の2000CLとも
+      // 「CL右側の壁まで」＝壁の面まで巾木を伸ばすのが正）。
+      ...spans.map((s, i) => ({ ...s, ...drawnSpans[i] }))
+        .filter(s => s.kind === 'open').map(s => [s.loX, s.hiX]),
     ].sort((a, b) => a[0] - b[0]);
     for (const [i, s] of segs.entries()) {
       const y = floorYOf(s) - baseboardH;
@@ -1089,7 +1095,7 @@ function appendAnnotationRows(prims, face, graph, opts) {
   for (const x of row1Marks) {
     const onGrid = gridPoints.some(g => Math.abs(g.x - x) <= SPLIT_MERGE_EPS_MM);
     if (onGrid) continue; // 通り芯の一点鎖線（下のループ）と重複させない
-    prims.push({ type: 'line', x1: x, y1: centerLineTopY, x2: x, y2: dimRow1Y, dash: 'center', weight: detailWeight });
+    prims.push({ type: 'line', x1: x, y1: centerLineTopY, x2: x, y2: dimRow1Y, dash: 'center', weight: detailWeight, dashAnchor: dimRow1Y });
   }
   for (let i = 0; i + 1 < row1Marks.length; i++) {
     prims.push({
@@ -1108,17 +1114,25 @@ function appendAnnotationRows(prims, face, graph, opts) {
     const dup = gridPoints.some(g => Math.abs(g.x - x) <= SPLIT_MERGE_EPS_MM)
       || row1Marks.some(m => Math.abs(m - x) <= SPLIT_MERGE_EPS_MM);
     if (dup) continue;
-    prims.push({ type: 'line', x1: x, y1: centerLineTopY, x2: x, y2: dimRow1Y, dash: 'center', weight: detailWeight });
+    prims.push({ type: 'line', x1: x, y1: centerLineTopY, x2: x, y2: dimRow1Y, dash: 'center', weight: detailWeight, dashAnchor: dimRow1Y });
   }
 
   // 通り芯縦一点鎖線＋丸番号（寸法行のさらに下＝gridCircleRowY。QA G4: 寸法行とは別の段）。
   // 調整項目3: 下端(gridCircleRowY)だけでなく天井線(-CH)より上へも少し突き出す
   // （y1=-CH-GRID_LINE_ABOVE_CH_MM。通り芯は本来、床から天井を貫通して続く線のため）。
   for (const g of gridPoints) {
+    // 通り芯の縦線は**寸法行を境に2本へ分ける**（ユーザー明示指示2026-08その10）。
+    //   上（天井上〜寸法行）: 一点鎖線。dashAnchorで位相を寸法行へ合わせ、寸法線との交点に
+    //     必ずインクが乗るようにする（figurePrimitivesKonva.js / dashPhase.js 参照）。
+    //   下（寸法行〜丸番号）: **実線**。ここを一点鎖線のまま通すと、(a)寸法行が破線の
+    //     すき間に当たって交点が消える (b)丸の手前で破線が切れて「丸とCLが離れて見える」
+    //     の2つが起きる。丸の位置（gridCircleRowY）は変えず、線分の描き方だけで解決する
+    //     ——丸は背景色で塗って線の上に重なるため、実線を丸の中心まで引けば丸の縁に接する。
     prims.push({
-      type: 'line', x1: g.x, y1: -CH - GRID_LINE_ABOVE_CH_MM, x2: g.x, y2: gridCircleRowY,
-      dash: 'center', weight: detailWeight,
+      type: 'line', x1: g.x, y1: -CH - GRID_LINE_ABOVE_CH_MM, x2: g.x, y2: dimRow1Y,
+      dash: 'center', weight: detailWeight, dashAnchor: dimRow1Y,
     });
+    prims.push({ type: 'line', x1: g.x, y1: dimRow1Y, x2: g.x, y2: gridCircleRowY, weight: detailWeight });
     // 調整項目5: 丸は背景色で塗りつぶし、通り芯線より後（=手前）に描いて線を隠す
     // （配列内で線→丸の順に積む。Konvaは配列順=手前優先で描画するため、この順序自体は
     // 従来から保たれている。丸が塗りなし=透明だったため線が透けて見えていた点を修正）。

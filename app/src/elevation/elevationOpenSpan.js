@@ -20,9 +20,13 @@ import { refreshCells, cellBoundsFromKey, worldToCell } from '../finish/gridCell
 import { roomCeilingHeight } from '../finish/roomMetrics.js';
 import {
   roomOwnerByCell, runBoundaryCLIds, collectRunBreaks, findRunCLAt, cellNearSideOnFace,
+  cellStraddlesFace,
 } from './elevationFloorProfile.js';
 import { perpFaceAt, perpWallCrossesFacePlane } from './elevationFaces.js';
 import { MIN_FACE_RUN_MM, GAP_EPS_MM as GAP_EPS, PROBE_EPS_MM } from './elevationStyle.js';
+
+// 跨ぎ由来の「アキだけ（情報ゼロ）の区間」が図全体に占めてよい上限比（ユーザー基準2026-08その9）。
+const MAX_VOID_SPAN_RATIO = 1 / 4;
 // PROBE_EPS_MM: far側セルへ覗き込むプローブ距離（elevationStyle.jsのR4共通定数）。
 
 /**
@@ -58,7 +62,14 @@ function collectNearCellSegments(face, ownerByCell, room, graph) {
   for (const key of refreshCells(room.cells, graph)) {
     const b = cellBoundsFromKey(key, graph);
     if (!b) continue;
-    if (!cellNearSideOnFace(face, b, axisValue)) continue;
+    // near側の辺が軸に一致するセルに加え、軸を跨ぐセル（面のCLがその位置まで延長されておらず
+    // 分割されなかったセル）も対象にする——どちらも near 側は自室が占めており、跨ぐ場合は
+    // far側も同じセル＝抜けている（open）。跨ぎを拾わないと、CLが届いていない帯の抜けが
+    // 開放区間として描かれない（問題修正2026-08その9。実機2階の室22 A1のX3..X4）。
+    // 跨ぎ由来の区間は「そこには境界線が1本も無い＝完全な空白」であり、取り込みすぎると図が
+    // アキだらけになるため、延長の可否はstraddleフラグを見てextendFaceWithOpenSpansが決める。
+    const touching = cellNearSideOnFace(face, b, axisValue);
+    if (!touching && !cellStraddlesFace(face, b, axisValue)) continue;
     const [cellRunLo, cellRunHi] = face.isVertical ? [b.y1, b.y2] : [b.x1, b.x2];
     const { loCLId: cellLoCLId, hiCLId: cellHiCLId } = runBoundaryCLIds(key, face.isVertical);
 
@@ -71,7 +82,7 @@ function collectNearCellSegments(face, ownerByCell, room, graph) {
       const farY = face.isVertical ? mid : axisValue - face.inward * PROBE_EPS_MM;
       const farCell = worldToCell(farX, farY, graph);
 
-      let kind = 'wall', farFloorDeltaMm, farCeilAbsMm;
+      let kind = 'wall', farFloorDeltaMm, farCeilAbsMm, informative = false;
       if (farCell && ownerByCell.has(farCell.key) && isOpenSpanEligible({ key }, farCell, graph)) {
         const farOwner = ownerByCell.get(farCell.key);
         kind = 'open';
@@ -79,26 +90,39 @@ function collectNearCellSegments(face, ownerByCell, room, graph) {
         // 問題修正2026-08その2: 開放先の天井の絶対高さ（band部屋FL基準。far床＋far所有Roomの
         // 解決済みCH）——描画側が「開放先の天井の見えがかり線」を引くのに使う。
         farCeilAbsMm = farFloorDeltaMm + chOf(farOwner);
+        // informative（問題修正2026-08その8）: この区間が展開図として**情報を持つ**か。
+        // near側とfar側でFLも天井高も同じなら、そこに描かれるのはアキ（バツ）だけ＝情報ゼロ。
+        // FL差・CH差があれば遠側床線／遠側天井線という実体のある見えがかりが現れる。
+        // 「入口側の隅」を越える延長を許すかの判定に使う（extendFaceWithOpenSpans）。
+        const nearOwner = ownerByCell.get(key) ?? room;
+        const nearFloorDeltaMm = graph.effectiveFloorLevel(nearOwner) - graph.effectiveFloorLevel(room);
+        informative = farFloorDeltaMm !== nearFloorDeltaMm ||
+          farCeilAbsMm !== nearFloorDeltaMm + chOf(nearOwner);
       }
       const loCLId = runLo === cellRunLo ? cellLoCLId : (findRunCLAt(graph, face.isVertical, runLo)?.id ?? null);
       const hiCLId = runHi === cellRunHi ? cellHiCLId : (findRunCLAt(graph, face.isVertical, runHi)?.id ?? null);
-      segs.push({ runLo, runHi, kind, farFloorDeltaMm, farCeilAbsMm, loCLId, hiCLId });
+      segs.push({ runLo, runHi, kind, farFloorDeltaMm, farCeilAbsMm, informative, straddle: !touching, loCLId, hiCLId });
     }
   }
   segs.sort((a, b) => a.runLo - b.runLo);
   return segs;
 }
 
-// 隣接する同種区間（kind・farFloorDeltaMm・farCeilAbsMmが同じ、かつrunHi===次のrunLo）を結合する。
+// 隣接する同種区間（kind・farFloorDeltaMm・farCeilAbsMm・straddleが同じ、かつrunHi===次のrunLo）を
+// 結合する。**straddleを結合キーに含める**のは、軸に接するセル由来の区間と跨ぎ由来（その位置に
+// 境界線が1本も無い空白）の区間が地続きになったとき、1本に融合させないため——融合すると小さな
+// 正当な開放区間まで巨大な空白と一体で取捨判定され、丸ごと落ちる（実機1階5/C2で、生の400の
+// 開放区間が跨ぎ由来の2942と融合し55%扱いになって消えるのを確認・修正。問題修正2026-08その9）。
 function mergeSameKind(segs) {
   const merged = [];
   for (const s of segs) {
     const last = merged[merged.length - 1];
     if (last && last.kind === s.kind && last.farFloorDeltaMm === s.farFloorDeltaMm &&
-        last.farCeilAbsMm === s.farCeilAbsMm &&
+        last.farCeilAbsMm === s.farCeilAbsMm && !!last.straddle === !!s.straddle &&
         Math.abs(last.runHi - s.runLo) < GAP_EPS) {
       last.runHi = s.runHi;
       last.hiCLId = s.hiCLId;
+      last.informative = last.informative || s.informative; // 結合キーには含めない（既存の結合を変えない）
     } else {
       merged.push({ ...s });
     }
@@ -134,22 +158,12 @@ export function extendFaceWithOpenSpans(face, wallFaces, room, graph) {
   // そのため「配列上ownIdxの前後を無条件に取り込む」のではなく、runHi===次のrunLoで
   // 実際に連続している範囲だけを延長対象にする（不連続なら他室領域を挟んでいるのでそこで止める。
   // 実際にこの不具合でC2/B2等の面のspansに他室領域ぶんの穴が空くのを発見・修正した）。
+  const entrySideIsLo = face.dirSign > 0;
   let loBound = ownIdx, hiBound = ownIdx;
   while (loBound > 0 && Math.abs(merged[loBound - 1].runHi - merged[loBound].runLo) < GAP_EPS) loBound--;
   while (hiBound < merged.length - 1 && Math.abs(merged[hiBound].runHi - merged[hiBound + 1].runLo) < GAP_EPS) hiBound++;
-  const spans = merged.slice(loBound, hiBound + 1).map(s => ({ ...s }));
-  const extendedAtLo = loBound < ownIdx;
-  const extendedAtHi = hiBound > ownIdx;
 
-  const runLo = spans[0].runLo, runHi = spans[spans.length - 1].runHi;
-  const extendedAtLocal0   = face.dirSign > 0 ? extendedAtLo : extendedAtHi;
-  const extendedAtLocalRun = face.dirSign > 0 ? extendedAtHi : extendedAtLo;
-
-  // 延長した端の隅を、通常面と同じ規則（直交壁面のfaceValueへスナップ）で確定する。
-  // 延長していない端は元のface.lo/hi・startCLId/endCLIdのまま（壁の実隅で既に正しい）——
-  // このときhasWallも面自身の元の値（hasWallAtLocal0/Run）をそのまま引き継ぐ。stairOpenings等
-  // 開放スパンとは無関係な理由で元々false（壁のない端部）だった面を、延長が起きていないのに
-  // trueへ書き換えてしまわないため（QA修正: 実際にこの不具合を確認・修正）。
+  // 端の座標を確定するのに使う「元の面の端の状態」（延長しない端はそのまま引き継ぐ）。
   // 重要: face.lo/hi・startCLId/endCLIdは常に「世界座標のlo/hi」（dirSignに関わらずlo<=hi）を
   // 表す不変条件（snapFaceEndsToCornersのdocコメント参照）——loEndは常にface.startCLId/face.lo、
   // hiEndは常にface.endCLId/face.hiをフォールバックに使う（dirSignによる分岐は不要。これを
@@ -160,11 +174,51 @@ export function extendFaceWithOpenSpans(face, wallFaces, room, graph) {
   const origHasWallAtHi = face.dirSign > 0 ? (face.hasWallAtLocalRun ?? true) : (face.hasWallAtLocal0 ?? true);
   const origEdgeAtLo    = face.dirSign > 0 ? (face.edgeAtLocal0 ?? false) : (face.edgeAtLocalRun ?? false);
   const origEdgeAtHi    = face.dirSign > 0 ? (face.edgeAtLocalRun ?? false) : (face.edgeAtLocal0 ?? false);
-  // R3: wasLoExtended/wasHiExtended（dirSignで分岐してextendedAtLocal0/Runから逆算する値）は、
-  // 展開すると恒等的に extendedAtLo/extendedAtHi 自身と一致する（dirSignの両ケースで消える）ため、
-  // world側lo/hiの延長判定にはそのままextendedAtLo/extendedAtHiを渡す。
-  const loEnd = resolveEnd(face, wallFaces, runLo, face.startCLId, face.lo, extendedAtLo, origHasWallAtLo, origEdgeAtLo);
-  const hiEnd = resolveEnd(face, wallFaces, runHi, face.endCLId, face.hi, extendedAtHi, origHasWallAtHi, origEdgeAtHi);
+
+  // さらに（問題修正2026-08その8/その9。ユーザー期待図「2階22」＋明示指示「情報を全く持って
+  // いないところ（アキ・バツだけの区間）が描画延長の1/4を超えたら延長しない」）、取り込んだ
+  // **端の区間**を次の規則で取捨する。落とした端は従来どおり「壁断面のない端部」（床・天井線を
+  // 図の外へ延長して続きがあることを示す表現）で終わる。
+  //   1. informative（near/farでFLか天井高が違う＝遠側床線・遠側天井線という実体が現れる）区間は
+  //      常に残す。RoundFの2 C2(b側+50)・3 A2(g側-100)がこれ。
+  //   2. 情報ゼロ（アキだけ）でも、**出口側の隅**（ローカルrun端＝chainで次の面へ渡る隅。
+  //      dirSign>0ならworld hi・dirSign<0ならworld lo。originWorld=`dirSign>0?lo:hi`の裏返し）を
+  //      越える延長で、かつ近側セルが軸に**接している**（＝その位置に境界線が実在する）なら残す。
+  //      入隅は必ず2面で共有されるため、見通しそのものは出口側の面だけが担えば過不足がない。
+  //      実機「2階22」のD2（段差CLの隅が出口側）がこれ。
+  //   3. それ以外（入口側 or 跨ぎ由来＝その位置に境界線が1本も無い完全な空白）は、区間長が
+  //      図全体の1/4以下のときだけ残す。
+  // **比は「実際に描かれる長さ」で採る**——延長した端はresolveEndが直交壁の仕上げ面へ詰めるため、
+  // 生のセル区間長とは大きく異なることがある（実機1階5/C2は生3400に対し描かれるアキは400。
+  // 生の長さで判定すると、ユーザー確認済みの開放スパンまで落ちる）。そのため端の確定
+  // （resolveEnd）を取捨ループの内側で行い、詰め後の値で比を採る。
+  // 実機で確認: 残る=1階5/C2(400/3143=13%)・10/C2(743/3600=21%)・10/B2(943/4885=19%)・
+  // 2階22のA1(942/8885=11%。跨ぎ)・2階22のD2(規則2)／落ちる=2階22のD1(3443/6885=50%。入口側で
+  // Y1まで伸び図の半分がアキだった)・1階5/D1(1943/3443=56%)・壁のない端部フィクスチャの
+  // 2' C2(49%。跨ぎ)・3' B1(75%。跨ぎ)。
+  let loEnd, hiEnd;
+  for (;;) {
+    loEnd = resolveEnd(face, wallFaces, merged[loBound].runLo, face.startCLId, face.lo,
+      loBound < ownIdx, origHasWallAtLo, origEdgeAtLo);
+    hiEnd = resolveEnd(face, wallFaces, merged[hiBound].runHi, face.endCLId, face.hi,
+      hiBound > ownIdx, origHasWallAtHi, origEdgeAtHi);
+    const total = hiEnd.value - loEnd.value;
+    const dropEnd = (i, isEntrySide, drawnLen) => {
+      const g = merged[i];
+      if (g.informative) return false;                // 規則1
+      if (!isEntrySide && !g.straddle) return false;  // 規則2
+      return drawnLen > total * MAX_VOID_SPAN_RATIO;  // 規則3
+    };
+    if (loBound < ownIdx && dropEnd(loBound, entrySideIsLo, merged[loBound].runHi - loEnd.value)) { loBound++; continue; }
+    if (hiBound > ownIdx && dropEnd(hiBound, !entrySideIsLo, hiEnd.value - merged[hiBound].runLo)) { hiBound--; continue; }
+    break;
+  }
+  const spans = merged.slice(loBound, hiBound + 1).map(s => ({ ...s }));
+  const extendedAtLo = loBound < ownIdx;
+  const extendedAtHi = hiBound > ownIdx;
+
+  const extendedAtLocal0   = face.dirSign > 0 ? extendedAtLo : extendedAtHi;
+  const extendedAtLocalRun = face.dirSign > 0 ? extendedAtHi : extendedAtLo;
 
   const newFace = {
     ...face,
@@ -300,3 +354,4 @@ export function extendFacesWithOpenSpans(faces, room, graph) {
   }
   return out;
 }
+
