@@ -301,8 +301,19 @@ function landingMitreOpts(flight, landings, unit) {
   if (D == null || !landings?.length) return {};
   const startZ = flight.baseZ;
   const endZ = flight.baseZ + flight.steps * flight.riserMm;
-  const near = z => landings.some(l => Math.abs(l.z - z) < GAP_EPS);
-  return { mitreDepthMm: D, mitreStart: near(startZ), mitreEnd: near(endZ) };
+  const at = z => landings.find(l => Math.abs(l.z - z) < GAP_EPS) ?? null;
+  const s = at(startZ), e = at(endZ);
+  // トリム端の上端が届くべき高さ＝踊り場桁枠の上端（踊り場床+巾木）。ユーザー明示指示
+  // 2026-08その15「「6」D1: 復路のささら上見えがかりは踊り場のささら上まで／下見えがかりは
+  // 踊り場の左側ささら下端まで」——復路は最初の段鼻が踊り場より1リザー上にあるため、
+  // 段鼻列だけで帯を作ると桁枠に1リザーぶん届かない。勾配に沿ってここまで伸ばす
+  // （下端はミトレで「上端+せい」へ寄るので、上端を合わせれば下端も桁枠の下端に揃う）。
+  const lift = unit?.baseboardHeightMm ?? 0;
+  return {
+    mitreDepthMm: D, mitreStart: !!s, mitreEnd: !!e,
+    mitreStartTopY: s ? -(s.z + lift) : undefined,
+    mitreEndTopY: e ? -(e.z + lift) : undefined,
+  };
 }
 
 
@@ -327,6 +338,64 @@ function landingSideMitreX(contribution, landing, cut, columns) {
     return atEnd ? band.bottom[1][0] : band.bottom[0][0];
   }
   return null;
+}
+
+
+// ---- 見えがかりのレイキャスト: 手前のレーンのささらによる遮蔽（ユーザー明示指示2026-08その16
+// 「「6」D1: 復路ささら下、踊り場側は、往路ささら上まで／復路ささらは、往路ささらより奥にある」）----
+// 切断は往路レーンの中を通り、視線の手前には**往路レーンのささら**（レーン境界側）がある。
+// その上端より下は、ささら本体（せい300の帯）と、その先の踊り場桁枠に隠れて復路のささらは見えない。
+// 遮蔽の外形は「往路ささらの上端線」——その端から先（踊り場側）は端点の高さで水平に延長する。
+// 往路ささらの上端は既にミトレで踊り場桁枠の上端へ揃えてあるので、この水平延長がそのまま
+// 踊り場桁枠の上端の外形になる（単一の折れ線として扱える）。
+// 旧実装は`isBlockedByWall`（往復間の壁の有無）しか見ておらず、手前のささら自身による遮蔽を
+// 判定していなかったため、復路のささら下端が往路ささらを突き抜けて踊り場まで描かれていた。
+
+// 遮蔽外形のxにおける高さ（線分の外側は端点のyで水平に延長）。
+function occluderYAt(seg, x) {
+  const [[ax, ay], [bx, by]] = seg;
+  const [loX, loY, hiX, hiY] = ax <= bx ? [ax, ay, bx, by] : [bx, by, ax, ay];
+  if (x <= loX) return loY;
+  if (x >= hiX) return hiY;
+  return loY + (x - loX) * (hiY - loY) / (hiX - loX);
+}
+
+// 折れ線を「遮蔽外形より上（yは上向き負なのでy<=外形y）」の区間だけへ切る。
+// 外形の折れ点（線分の両端x）で一旦分割してから解くことで、区間内は両方とも1次になり交点が閉形式で解ける。
+function clipPolylineAboveOccluder(points, seg) {
+  if (!seg || points.length < 2) return [points];
+  const breaks = [seg[0][0], seg[1][0]].sort((a, b) => a - b);
+  const above = p => p[1] - occluderYAt(seg, p[0]) <= GAP_EPS;
+  const paths = [];
+  let cur = null;
+  const push = p => { if (!cur) cur = []; if (cur.length === 0 || Math.hypot(p[0] - cur[cur.length - 1][0], p[1] - cur[cur.length - 1][1]) > GAP_EPS) cur.push(p); };
+  const end = () => { if (cur && cur.length >= 2) paths.push(cur); cur = null; };
+  for (let i = 0; i + 1 < points.length; i++) {
+    // 外形の折れ点で分割した小区間ごとに処理する
+    const [p, q] = [points[i], points[i + 1]];
+    const ts = [0, 1];
+    for (const bx of breaks) {
+      const dx = q[0] - p[0];
+      if (Math.abs(dx) < GAP_EPS) continue;
+      const t = (bx - p[0]) / dx;
+      if (t > GAP_EPS && t < 1 - GAP_EPS) ts.push(t);
+    }
+    ts.sort((a, b) => a - b);
+    const at = t => [p[0] + (q[0] - p[0]) * t, p[1] + (q[1] - p[1]) * t];
+    for (let k = 0; k + 1 < ts.length; k++) {
+      const a = at(ts[k]), b = at(ts[k + 1]);
+      const av = above(a), bv = above(b);
+      if (av && bv) { push(a); push(b); continue; }
+      if (!av && !bv) { end(); continue; }
+      // 交点: 区間内では点のyも外形のyも1次なので、差の線形補間で解ける
+      const da = a[1] - occluderYAt(seg, a[0]), db = b[1] - occluderYAt(seg, b[0]);
+      const t = da / (da - db);
+      const x = [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
+      if (av) { push(a); push(x); end(); } else { end(); push(x); push(b); }
+    }
+  }
+  end();
+  return paths;
 }
 
 // ジグザグ点列と段鼻列をまとめて返す（同じクランプを両方へ適用する単一実装）。段鼻は
@@ -776,6 +845,13 @@ export function landingFramePrimitives(landing, cut, columns, unit, mitreX = nul
           prims.push(emitLine(cut, botLo2, sideBot, botHi2, sideBot, ElevationLineRole.DETAIL, { neverDowngrade: true }));
         }
       }
+    } else if (edge.kind === 'front') {
+      // ユーザー明示指示2026-08その15「踊り場と階段取り合い部にささら断面は描画不要」
+      // （「6」D1・Bで確認）: front辺は踊り場が直進部と取り合う辺そのもの。折返し階段の
+      // 内側の踊り場ささらは往路・復路の間（100）だけにあり、直進部のささらが来るこの位置には
+      // 踊り場側のささらが無い——断面（12mm厚×せい300のCUT矩形）を描かない。
+      // 直進部のささら自身がこの位置に輪郭を持つため、取り合いは既に表現されている。
+      continue;
     } else {
       // end-on（見返り）: 12mm厚×landingFrameDepthMmの断面矩形をCUTで描く。
       // 桁枠の辺は**部屋の通り芯（landing.acrossLo/Hi）上**にあるため、面の端（壁の仕上げ面）より
@@ -865,13 +941,29 @@ export function stairPrimitivesForCut(contribution, cut, columns) {
   // 途中に見えがかり壁（cutAlong/wall。往復間の壁）が無ければ、そのレーンの近い側の
   // ささらだけが見えがかり細線として視界に入る。STEEL限定（ささら自体がSTEEL限定のため）。
   if (isSteel) {
+    // 手前（この切断が縦断するレーン）のささらの上端線＝遮蔽の外形。secondaryはこれより奥にある。
+    const nearTopSeg = (() => {
+      for (const flight of contribution.flights ?? []) {
+        if (!isLengthwiseCut(flight.isVertical, flight.acrossLo, flight.acrossHi, flight.runLo, flight.runHi, cut)) continue;
+        const band = stringerBandGeometry(computeFlightProfile(flight, cut, columns).noses, STEEL_STRINGER_DEPTH_MM, {
+          baseboardMm: contribution.unit?.baseboardHeightMm ?? 0,
+          ...landingMitreOpts(flight, contribution.landings, contribution.unit),
+        });
+        if (band) return band.top;
+      }
+      return null;
+    })();
     for (const secondary of contribution.secondaryFlights ?? []) {
       if (isBlockedByWall(columns, cut, secondary)) continue;
       const prof = computeFlightProfile(secondary, cut, columns);
       const points = clipStringerToAnchors(prof.points, contribution.unit, secondary);
-      prims.push(...stringerPrimitives(points, STEEL_STRINGER_DEPTH_MM, flightZBounds(secondary),
+      for (const prim of stringerPrimitives(points, STEEL_STRINGER_DEPTH_MM, flightZBounds(secondary),
         { noses: prof.noses, baseboardMm: contribution.unit?.baseboardHeightMm ?? 0,
-          ...landingMitreOpts(secondary, contribution.landings, contribution.unit) }));
+          ...landingMitreOpts(secondary, contribution.landings, contribution.unit) })) {
+        for (const seg of clipPolylineAboveOccluder(prim.points, nearTopSeg)) {
+          prims.push({ ...prim, points: seg });
+        }
+      }
     }
   }
   for (const landing of contribution.landings ?? []) {

@@ -8,7 +8,7 @@ import { buildRoomFaces, faceBoundaryLocalX } from './elevationFaces.js';
 import { rotateFacesToStart, stairStartFaceLabel, buildStairBand } from './elevationStair.js';
 import { layoutBands, bandContentOriginMm } from './elevationLayout.js';
 import { figureBounds } from '../structural/sectionFigure/sectionGeometry.js';
-import { BAND_GAP_MM, BAND_TOP_MARGIN_MM, GRID_LINE_ABOVE_CH_MM } from './elevationStyle.js';
+import { BAND_GAP_MM, BAND_TOP_MARGIN_MM, GRID_LINE_ABOVE_CH_MM, CH_DIM_OFFSET_MM } from './elevationStyle.js';
 
 function makeGraph(name = 'p1') {
   const plane = new Plane(name, 0, `${name}階`, 1, 1);
@@ -500,9 +500,12 @@ test('【階段帯・2FL分割】buildStairBand: seq1(帯先頭面)の左CH寸�
   const chUpperAbsMm = 2400 + upperGraph.defaultCeilingHeight; // 4800
   const floorHeight = 2400;
 
-  // seq1（帯先頭面。xCursor=0）のfoot=0で一意に絞り込む——at<footだけだと、他面（seq2等）の
-  // 継ぎ目CH寸法（hasLeftChDim）も含まれてしまう（それらはxCursor>0のためfoot>0で区別できる）。
-  const leftChDims = band.primitives.filter(p => p.type === 'dim' && p.dir === 'v' && p.at < p.foot && p.foot === 0);
+  // seq1（帯先頭面。xCursor=0）は帯の最も左にあるため、左向きCH寸法のうちatが最小のものだけを取る
+  // ——at<footだけだと他面（seq2等）の左CH寸法も含まれてしまう（それらはxCursor>0でatが大きい）。
+  // 足の終点は「CLから実画面3mm手前」（ユーザー明示指示2026-08その13）のためfoot===0では絞れない。
+  const leftAll = band.primitives.filter(p => p.type === 'dim' && p.dir === 'v' && p.at < p.foot);
+  const minAt = Math.min(...leftAll.map(p => p.at));
+  const leftChDims = leftAll.filter(p => Math.abs(p.at - minAt) < 1e-6);
   assert.equal(leftChDims.length, 2, 'seq1の左CH寸法は[踊り場床→2FL][2FL→2F天井]の2本になるはず');
 
   const lower = leftChDims.find(d => Math.abs(d.to - (-landingAbs)) < 1e-6);
@@ -545,4 +548,57 @@ test('【失敗系】buildStairBand: upperGraph=nullはheightUnits=1（1層）�
   const room = makeRectRoom(graph, 0, 0, 2000, 4000, '階段');
   const band = buildStairBand(room, graph, null);
   assert.equal(band.heightUnits, 1);
+});
+
+
+// ---- 階段の高さ寸法記入ルール（ユーザー明示指示2026-08その12）の帯レベル配線 ----
+// stairChDimChains（規則そのものはelevationStairSequence.test.js）が決めた鎖を、
+// layoutBandFacesが左右の端へ描き、buildFaceFigureの面ごと右CH寸法は描かない、という配線の確認。
+test('【明示指示】buildStairBand: 階段下に部屋が無ければ高さ寸法が[1FL→踊り場][踊り場→2F天井]と通常断面の計10本になる', () => {
+  const graph = makeGraph('p1');
+  const x0 = graph.addCenterLine(CenterLineType.VERTICAL, 0,    { labeled: false, discipline: Discipline.ARCH });
+  const xm = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
+  const x1 = graph.addCenterLine(CenterLineType.VERTICAL, 2000, { labeled: false, discipline: Discipline.ARCH });
+  const y0 = graph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: false, discipline: Discipline.ARCH });
+  const ym = graph.addCenterLine(CenterLineType.HORIZONTAL, 1500, { labeled: false, discipline: Discipline.ARCH });
+  const y1 = graph.addCenterLine(CenterLineType.HORIZONTAL, 4500, { labeled: false, discipline: Discipline.ARCH });
+  const cells = new Set([
+    `${x0.id}:${y0.id}:${x1.id}:${ym.id}`,
+    `${x0.id}:${ym.id}:${xm.id}:${y1.id}`,
+    `${xm.id}:${ym.id}:${x1.id}:${y1.id}`,
+  ]);
+  const room = graph.addRoom(cells, '階段');
+  generateRoomWallsFromOutline(graph, room);
+  const stair = graph.addStair({
+    type: StairType.SWITCHBACK, cells, roomId: room.id,
+    sections: [6, 1, 6], riser: null, upDirection: 'up', flip: false,
+  });
+  const upperGraph = makeGraph('p2');
+  upperGraph.plane.elevation = 2400;
+  const voidRoom = makeRectRoom(upperGraph, 0, 0, 2000, 4500, '吹抜け');
+  voidRoom.setFeature(RoomFeature.VOID);
+  // 階段下の部屋は作らない（＝1FLから踊り場断面の指示が効くケース）。
+
+  const band = buildStairBand(room, graph, upperGraph, { stair, floorHeight: 2400 });
+  const landingAbs = 6 * (2400 / 12); // 1200
+  const chUpper = 2400 + upperGraph.defaultCeilingHeight; // 4800
+
+  const vdims = band.primitives.filter(p => p.type === 'dim' && p.dir === 'v');
+  assert.equal(vdims.length, 10, `高さ寸法は5箇所×2本=10本のはず（実際:${vdims.length}）`);
+  const pairs = vdims.map(d => [Math.round(-d.to), Math.round(-d.from)]);
+  const count = target => pairs.filter(x => x[0] === target[0] && x[1] === target[1]).length;
+  assert.equal(count([0, landingAbs]), 3, '1FL→踊り場が3本（C左・D1右・D2右）のはず');
+  assert.equal(count([landingAbs, chUpper]), 3, '踊り場→2F天井が3本のはず');
+  assert.equal(count([0, 2400]), 2, '1FL→1F天井が2本（D1左・B右）のはず');
+  assert.equal(count([2400, chUpper]), 2, '2FL→2F天井が2本のはず');
+  // 旧挙動（段差のある面ごとの右CH寸法＝床から天井まで1本）が混ざっていないこと。
+  assert.equal(count([0, chUpper]), 0, '床〜天井を1本で通す旧CH寸法は残らないはず');
+
+  // ユーザー明示指示2026-08その13「階段展開図については、反対側のCLまで伸ばさない」:
+  // 足は自分側のCLの手前で止まる＝長さは(CH寸法オフセット−隙間)で、面幅（3000超）には決してならない。
+  const gap = 90; // dimFootGapModelMm未指定＝1パス目の仮値
+  for (const d of vdims) {
+    assert.equal(Math.round(Math.abs(d.foot - d.at)), CH_DIM_OFFSET_MM - gap,
+      `足は自分側のCLの手前で止まるはず（実際の長さ:${Math.abs(d.foot - d.at)}）`);
+  }
 });

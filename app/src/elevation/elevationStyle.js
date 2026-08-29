@@ -115,6 +115,13 @@ export const GRID_ROW_GAP_SCREEN_MM = 6; // ROW1→ROW2、ROW2→通り芯丸+�
 // 6mm×3.78≈23px（通り芯丸の半径11px+12px余裕）
 export const DEFAULT_GRID_ROW_GAP_MM = 300; // 倍率決定用の1パス目の仮値（旧GRID_ROW_GAP_MMと同値）
 
+// 寸法線の足（CH寸法の引出線）を壁中心線から離す量（実画面mm。ユーザー明示指示2026-08その13
+// 「展開図の寸法線の足：CLから画面上実寸3mmぐらい離す（展開図で統一）」）。足はCLに触れず、
+// CLの手前で止める——階段展開図で「反対側のCLまで伸ばさない」もこの規則で自動的に満たされる
+// （足の終点は必ずその寸法自身の側のCLの手前になるため）。他の実画面mm量と同じ2パス換算に乗せる。
+export const DIM_FOOT_GAP_SCREEN_MM = 3;
+export const DEFAULT_DIM_FOOT_GAP_MM = 90; // 倍率決定用の1パス目の仮値（WALL_LESS_END_EXTENDと同率）
+
 // 描画エリアの背景色（調整項目5）。通り芯丸(circle)のfillに使い、丸の内側で通り芯の一点鎖線を
 // 隠す（線より後に描く。circleがtag=建具記号丸とは別プリミティブである点に注意——建具丸は
 // 意図的に背景透明のため、このCANVAS_BG_COLORでは塗らない）。

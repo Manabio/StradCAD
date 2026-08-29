@@ -162,6 +162,10 @@ export function buildStairBand(stairRoom, graph, upperGraph, ctx = {}) {
         // chDimSplitAbsYsを持てば、elevationBand.jsのlayoutBandFacesがそれを見て左CH寸法を
         // 分割する（elevationBand.jsのchDimSplitAbsYsフック参照）。他entryは未設定=現行1本のまま。
         chDimSplitAbsYs: sequence[i].chDimSplitAbsYs,
+        // 階段の高さ寸法（ユーザー明示指示2026-08その12）: 面の左右の端ごとの寸法の鎖。
+        // stairChDimChainsが「端のプロファイルが前の端から変わったときだけ記入」まで決めており、
+        // layoutBandFacesは渡されたものをそのまま描く（既定の先頭面CH寸法・継ぎ目判定は無効化）。
+        chDimChains: sequence[i].chDimChains,
         // 往復間の壁の芯の一点鎖線（ユーザー実機指摘2026-08「6」C。elevationFigure.js参照）。
         extraCenterLineXs: sequence[i].extraCenterLineXs,
         skipBaseboard: true, skipWallLabel: true,

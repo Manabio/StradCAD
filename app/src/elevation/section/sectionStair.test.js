@@ -302,9 +302,17 @@ test('【実機フィードバック第3弾B】stairPrimitivesForCut: 側面視�
   const yHi = outbound.baseZ === 0 ? 0 : -outbound.baseZ;
   const yLo = -(outbound.baseZ + outbound.steps * outbound.riserMm);
   const ys = stringer.points.map(p => p[1]);
-  assert.ok(Math.max(...ys) <= yHi + 1e-6,
+  // 突き出しの許容は**踊り場側の端だけ**（ユーザー明示指示2026-08その14「ささら上同士、
+  // ささら下同士トリム」: 踊り場桁枠と取り合うため、ささらはその端で踊り場側へ食い込む。
+  // 上限は桁枠のせい=300）。FL側は従来どおり厳格——本テストが塞いだ法線オフセットぶんの
+  // 突き出しはFL側で起きるため、この形なら再発を見逃さない。
+  const landingY = -(outbound.baseZ + outbound.steps * outbound.riserMm);
+  const MITRE_TOL = 300 + 1e-6, STRICT = 1e-6;
+  const tolHi = Math.abs(yHi - landingY) < 1e-6 ? MITRE_TOL : STRICT;
+  const tolLo = Math.abs(yLo - landingY) < 1e-6 ? MITRE_TOL : STRICT;
+  assert.ok(Math.max(...ys) <= yHi + tolHi,
     `ささらの見えがかりはFL上端(y=${yHi})を超えて突き出さないはず（実際max=${Math.max(...ys)}）`);
-  assert.ok(Math.min(...ys) >= yLo - 1e-6,
+  assert.ok(Math.min(...ys) >= yLo - tolLo,
     `ささらの見えがかりはFL下端(y=${yLo})を下回らないはず（実際min=${Math.min(...ys)}）`);
 });
 
@@ -572,7 +580,10 @@ test('【WP-A2・ユーザー実機フィードバック2026-08-23】landingFram
 
   const detail = prims.filter(p => p.weight === 'thin');
   const cutLines = prims.filter(p => p.weight === 'thick');
-  assert.equal(cutLines.length, 8, 'front/back桁2本×矩形4辺=8本のCUTのはず');
+  // ユーザー明示指示2026-08その15「踊り場と階段取り合い部にささら断面は描画不要」:
+  // front辺（踊り場が直進部と取り合う辺）の断面矩形は描かない——折返し階段の内側の踊り場ささらは
+  // 往路・復路の間（100）だけにあり、直進部のささらが来るこの位置には踊り場側のささらが無い。
+  assert.equal(cutLines.length, 4, 'back桁1本×矩形4辺=4本のCUTのはず（front桁は取り合い部なので描かない）');
   // side桁: 上端(1)+下端(1)+片端縦線(1、front側は続き扱いで出さない)=3本×2辺=6本。
   assert.equal(detail.length, 6, 'side桁2本×(上端1+下端1+片端縦線1)=6本のDETAILのはず');
   // 巾木未設定のfixtureはDEFAULT_BASEBOARD_HEIGHT('h=60')へフォールバックするはず（ASSUMED既定値。報告参照）。
@@ -670,7 +681,7 @@ test('【WP-A2】stairPrimitivesForCut: STEELは踊り場を縦断する切断�
   };
   const columns = [{ x0: 0, x1: 1500, worldLo: 0, worldHi: 1500, bands: [] }];
   const prims = stairPrimitivesForCut(c, cut, columns);
-  assert.equal(prims.length, 1 + 14, '床CUT線1本＋side桁DETAIL6本＋front/back桁CUT8本のはず');
+  assert.equal(prims.length, 1 + 10, '床CUT線1本＋side桁DETAIL6本＋back桁CUT4本のはず（front桁は取り合い部なので描かない。2026-08その15）');
 });
 
 test('【失敗系・WP-A2】stairPrimitivesForCut: WOOD(木造)は同じ切断でも桁枠プリミティブが加わらない（従来どおり床CUT線1本のみ）', () => {
@@ -697,8 +708,8 @@ test('【WP-A2】stairPrimitivesForCut: RC(鉄筋コンクリート造)も踊り
   };
   const columns = [{ x0: 0, x1: 1500, worldLo: 0, worldHi: 1500, bands: [] }];
   const prims = stairPrimitivesForCut(c, cut, columns);
-  // 床CUT線1本＋side桁DETAIL6本＋front/back桁CUT8本=15本（STEELと同数。桁枠自体はSTEEL/RC同型）。
-  assert.equal(prims.length, 1 + 14, 'RCもSTEELと同じ15本（踊り場桁枠あり）のはず');
+  // 床CUT線1本＋side桁DETAIL6本＋back桁CUT4本=11本（STEELと同数。桁枠自体はSTEEL/RC同型）。
+  assert.equal(prims.length, 1 + 10, 'RCもSTEELと同じ11本（踊り場桁枠あり。front桁の断面は描かない）のはず');
   // ささら本体（stringerPrimitivesのDETAIL輪郭）はSTEEL限定のまま——RCの往路ジグザグは
   // WOOD同様、段部そのもの(SILHOUETTEのpolyline)が描かれるはず（isSteel限定分岐に入らない）。
   const zigzagCut = {

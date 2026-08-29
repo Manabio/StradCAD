@@ -20,6 +20,7 @@ import {
   DEFAULT_OPENING_TAG_ROW_MM, OPENING_TAG_ROW_SCREEN_MM,
   DEFAULT_DIM_ROW_GAP_MM, DIM_ROW_GAP_SCREEN_MM, DEFAULT_GRID_ROW_GAP_MM, GRID_ROW_GAP_SCREEN_MM,
   LEFT_MARGIN_SCREEN_MM, DEFAULT_WALL_LESS_END_EXTEND_MM, WALL_LESS_END_EXTEND_SCREEN_MM,
+  DEFAULT_DIM_FOOT_GAP_MM, DIM_FOOT_GAP_SCREEN_MM,
 } from '../elevation/elevationStyle.js';
 // DEFAULT_PX_PER_MMはviewport.js（appViewport.jsとは別。window依存を持たない純モジュール
 // ——appViewport.jsのヘッダコメント参照）からのみ取得する。ElevationModeState.js自体は
@@ -235,7 +236,8 @@ export class ElevationModeState {
       faceLabelAvoidThresholdModelMm: DEFAULT_FACE_LABEL_AVOID_THRESHOLD_MM,
       openingTagRowModelMm: DEFAULT_OPENING_TAG_ROW_MM, dimRowGapModelMm: DEFAULT_DIM_ROW_GAP_MM,
       gridRowGapModelMm: DEFAULT_GRID_ROW_GAP_MM,
-      wallLessEndExtendModelMm: DEFAULT_WALL_LESS_END_EXTEND_MM, scale: null,
+      wallLessEndExtendModelMm: DEFAULT_WALL_LESS_END_EXTEND_MM,
+      dimFootGapModelMm: DEFAULT_DIM_FOOT_GAP_MM, scale: null,
     }));
     // WP-0: 縮尺決定・帯の積み上げ高さの両方とも、帯高さの整数倍切り上げ（2層帯の帯スロット
     // 高さを標準帯高さの整数倍に揃える）を経てから使う——チェックする値はどのパスでも同じ
@@ -256,6 +258,8 @@ export class ElevationModeState {
     const gridRowGapModelMm    = screenMmToModelMm(GRID_ROW_GAP_SCREEN_MM, screenPxPerMm, scale);
     // 項目1: 壁のない端部の延長量も他の実画面mm値と同じ2パス方式で換算する。
     const wallLessEndExtendModelMm = screenMmToModelMm(WALL_LESS_END_EXTEND_SCREEN_MM, screenPxPerMm, scale);
+    // ユーザー明示指示2026-08その13: 寸法線の足はCLから実画面3mm離す（展開図で統一）。
+    const dimFootGapModelMm = screenMmToModelMm(DIM_FOOT_GAP_SCREEN_MM, screenPxPerMm, scale);
 
     // パス2: 確定した倍率でギャップ・名前枠余白・三角オフセット・面ラベル退避閾値・建具タグ行/
     // ROW1/ROW1〜ROW2行間・壁のない端部の延長量を実画面mmへ正しく換算し、scale自体もそのまま
@@ -264,7 +268,8 @@ export class ElevationModeState {
       rooms,
       room => buildOne(room, {
         gapModelMm, nameGapModelMm, triangleOffsetModelMm, faceLabelAvoidThresholdModelMm,
-        openingTagRowModelMm, dimRowGapModelMm, gridRowGapModelMm, wallLessEndExtendModelMm, scale,
+        openingTagRowModelMm, dimRowGapModelMm, gridRowGapModelMm, wallLessEndExtendModelMm,
+        dimFootGapModelMm, scale,
       }),
       (err, room) => console.error(`[elevation] 部屋「${room.name}」の帯構築に失敗:`, err),
     );

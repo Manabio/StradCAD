@@ -15,7 +15,7 @@ import { wallAdjacentFloorSegments, familyCeilingSegments } from './elevationFlo
 import { roomCeilingHeight } from '../finish/roomMetrics.js';
 import {
   CH_DIM_OFFSET_MM, DEFAULT_FACE_GAP_MM, DEFAULT_TRIANGLE_OFFSET_MM, BAND_TOP_MARGIN_MM,
-  DEFAULT_WALL_LESS_END_EXTEND_MM,
+  DEFAULT_WALL_LESS_END_EXTEND_MM, DEFAULT_DIM_FOOT_GAP_MM,
 } from './elevationStyle.js';
 import { translatePrimitive, collectGridCLs, appendRoomNameFrame } from './elevationPrimitives.js';
 
@@ -59,6 +59,9 @@ export function layoutBandFaces(room, graph, faces, ctx = {}) {
   const gridRowGapModelMm    = ctx.gridRowGapModelMm;     // 未指定はbuildFaceFigure既定(QA D1)
   const wallLessEndExtendModelMm = ctx.wallLessEndExtendModelMm; // 未指定はbuildFaceFigure既定(項目1)
   const scale = ctx.scale; // 未指定はbuildFaceFigure既定=壁2段書き省略判定を行わない（項目4）
+  // ユーザー明示指示2026-08その13: 寸法線の足はCLから実画面3mm離す（展開図で統一）。
+  // 未指定（単体テスト等）は1パス目の仮値。
+  const dimFootGapMm = ctx.dimFootGapModelMm ?? DEFAULT_DIM_FOOT_GAP_MM;
   const chInfo       = roomCeilingHeight(graph, room);
   const CH           = chInfo.mm;
 
@@ -76,6 +79,11 @@ export function layoutBandFaces(room, graph, faces, ctx = {}) {
   let prevRightProfile = null;
   faces.forEach((face, i) => {
     const boundary = faceBoundaryLocalX(face, graph);
+    // 寸法線の足の終点: CLからdimFootGapMmだけ寸法線側へ離した位置（CLには触れない）。
+    // 寸法線(at)を越えない範囲にクランプする（極端な小縮尺で足が反転しないように）。
+    const footBefore = (clX, sign) => (sign < 0
+      ? Math.max(clX - dimFootGapMm, clX - CH_DIM_OFFSET_MM)
+      : Math.min(clX + dimFootGapMm, clX + CH_DIM_OFFSET_MM));
     // QA G2: この面自身のhasWallAtLocal0（壁のない左端。項目1）が false なら、床線・天井線が
     // 図の外側（boundary.loよりさらに左）へwallLessEndExtendModelMmぶん延長される（buildFaceFigure
     // 側と同じ延長量。elevationFaces.jsのfaceWallLessExtents）。隣の面（prevRightExtent側）との
@@ -110,9 +118,16 @@ export function layoutBandFaces(room, graph, faces, ctx = {}) {
       ? { floorDeltaMm: face.baseFloorDeltaMm, ceilAbsMm: face.ceilAbsMm ?? CH }
       : null;
     const leftProfile = stepProfile ?? segEndProfile(floorSegments, CH, 'first');
-    const hasLeftChDim = i > 0 && prevRightProfile != null && leftProfile != null &&
-      (leftProfile.floorDeltaMm !== prevRightProfile.floorDeltaMm ||
-       leftProfile.ceilAbsMm !== prevRightProfile.ceilAbsMm);
+    // 階段の高さ寸法（ユーザー明示指示2026-08その12）: faceOverrideがchDimChains
+    // （{left,right}: [lo,hi]の配列。床基準の絶対高さ）を返す帯では、CH寸法の判断を
+    // **すべて呼び出し側（elevationStairSequence.jsのstairChDimChains）へ委ねる**
+    // ——「断面から断面まで」「前の端と高さが変わったときだけ記入」という規則は面の床・天井の
+    // 継ぎ目だけでは決まらず（踊り場スラブ・壁の向こうの部屋の断面が要る）、この場では判定できない。
+    const chDimChains = faceOverride?.chDimChains ?? null;
+    const hasLeftChDim = chDimChains ? (chDimChains.left?.length ?? 0) > 0
+      : (i > 0 && prevRightProfile != null && leftProfile != null &&
+        (leftProfile.floorDeltaMm !== prevRightProfile.floorDeltaMm ||
+         leftProfile.ceilAbsMm !== prevRightProfile.ceilAbsMm));
 
     // 項目6: 隣接面の間隔(gapModelMm)は壁中心線間ではなく、寸法線類（右のCH寸法を含む）の
     // 描画範囲を基準にする——項目5で段差のある面に右CH寸法が付くと、その面のboundary.hiより
@@ -134,11 +149,26 @@ export function layoutBandFaces(room, graph, faces, ctx = {}) {
       graph, project, room, ceilingHeight: CH, materialMap, gridCLs, faceLabelAvoidThresholdModelMm,
       prevFace, nextFace, openingTagRowModelMm, dimRowGapModelMm, gridRowGapModelMm, floorSegments,
       beyondCeilings, wallLessEndExtendModelMm, scale, solids: ctx.solids ?? null,
+      dimFootGapModelMm: dimFootGapMm,
       ...(faceOverride ?? {}),
     };
     const facePrims = buildFaceFigure(face, faceCtx);
     for (const p of facePrims) primitives.push(translatePrimitive(p, xCursor, 0));
-    if (i === 0) {
+    if (chDimChains) {
+      // 渡された鎖をそのまま左右へ描く（様式は既存のCH寸法と同じ: 縦書き値・足0・端部塗り丸）。
+      const emit = (chain, atX, footX) => {
+        for (const [lo, hi] of chain ?? []) {
+          primitives.push(translatePrimitive({
+            type: 'dim', dir: 'v', at: atX, from: -hi, to: lo ? -lo : 0, foot: footX, dot: true,
+            label: Math.round(hi - lo),
+          }, xCursor, 0));
+        }
+      };
+      // 足はその寸法自身の側のCLの手前で止める（＝反対側のCLまで伸ばさない）。
+      emit(chDimChains.left,  boundary.lo - CH_DIM_OFFSET_MM, footBefore(boundary.lo, -1));
+      emit(chDimChains.right, boundary.hi + CH_DIM_OFFSET_MM, footBefore(boundary.hi, +1));
+      if (i === 0) chDimX = boundary.lo - CH_DIM_OFFSET_MM; // 部屋名枠の左アンカー起点は従来どおり
+    } else if (i === 0) {
       chDimX = boundary.lo - CH_DIM_OFFSET_MM;
       // 問題修正2026-08(QA F1): 左CH寸法も右CH寸法（buildFaceFigure側）と同じく「左端区間の
       // 実際の床〜天井」に追従させる——帯CH固定のままだと、先頭面の左端区間に明示CHの部分指定が
@@ -160,13 +190,13 @@ export function layoutBandFaces(room, graph, faces, ctx = {}) {
           const lo = marks[k], hi = marks[k + 1];
           if (hi - lo <= 0) continue; // 分割点が床・天井と同値等、退化した区間は描かない
           primitives.push({
-            type: 'dim', dir: 'v', at: chDimX, from: -hi, to: lo ? -lo : 0, foot: 0, dot: true,
+            type: 'dim', dir: 'v', at: chDimX, from: -hi, to: lo ? -lo : 0, foot: footBefore(boundary.lo, -1), dot: true,
             label: Math.round(hi - lo),
           });
         }
       } else {
         primitives.push({
-          type: 'dim', dir: 'v', at: chDimX, from: -leftCeilAbs, to: leftFloorY, foot: 0, dot: true,
+          type: 'dim', dir: 'v', at: chDimX, from: -leftCeilAbs, to: leftFloorY, foot: footBefore(boundary.lo, -1), dot: true,
           label: isBandOwn ? chInfo.raw : Math.round(leftCeilAbs - leftDelta),
         });
       }
@@ -177,7 +207,7 @@ export function layoutBandFaces(room, graph, faces, ctx = {}) {
       const leftFloorY = leftProfile.floorDeltaMm ? -leftProfile.floorDeltaMm : 0;
       primitives.push(translatePrimitive({
         type: 'dim', dir: 'v', at: boundary.lo - CH_DIM_OFFSET_MM,
-        from: -leftProfile.ceilAbsMm, to: leftFloorY, foot: 0, dot: true,
+        from: -leftProfile.ceilAbsMm, to: leftFloorY, foot: footBefore(boundary.lo, -1), dot: true,
         label: Math.round(leftProfile.ceilAbsMm - leftProfile.floorDeltaMm),
       }, xCursor, 0));
     }

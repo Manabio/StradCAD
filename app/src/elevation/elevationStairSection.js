@@ -197,9 +197,21 @@ export function treadLadderLines({ loX, hiX, riserMm, steps, baseAbsMm, dashed =
 export function stringerBandGeometry(nosings, depthMm, opts = {}) {
   if (!nosings || nosings.length < 2) return null;
   const lift = Math.max(0, opts.baseboardMm ?? 0);
-  const p1 = [nosings[0][0], nosings[0][1] - lift];
-  const p2 = [nosings[nosings.length - 1][0], nosings[nosings.length - 1][1] - lift];
-  const dx = p2[0] - p1[0], dy = p2[1] - p1[1];
+  const p1raw = [nosings[0][0], nosings[0][1] - lift];
+  const p2raw = [nosings[nosings.length - 1][0], nosings[nosings.length - 1][1] - lift];
+  const dx = p2raw[0] - p1raw[0], dy = p2raw[1] - p1raw[1];
+  // トリム端は、上端を勾配に沿って踊り場桁枠の上端（opts.mitre*TopY）まで伸ばす
+  // ——復路は最初の段鼻が踊り場より1リザー上にあり、段鼻列だけの帯では桁枠に届かない
+  // （ユーザー明示指示2026-08その15「復路のささら上見えがかりは踊り場のささら上まで」）。
+  // 方向(dx,dy)は線上の移動なので不変。下端はこの後のミトレで「上端+せい」へ寄るため、
+  // 上端を合わせれば下端も自動的に桁枠の下端（＝踊り場の左側ささら下端）に揃う。
+  const slideTo = (p, targetY) => {
+    if (targetY == null || Math.abs(dy) < GAP_EPS) return p;
+    const t = (targetY - p[1]) / dy;
+    return [p[0] + t * dx, targetY];
+  };
+  const p1 = opts.mitreStart ? slideTo(p1raw, opts.mitreStartTopY) : p1raw;
+  const p2 = opts.mitreEnd ? slideTo(p2raw, opts.mitreEndTopY) : p2raw;
   const len = Math.hypot(dx, dy) || 1;
   // 法線（下方向=yが増える側を正にする。階段の下＝ささら側という前提）。
   let nx = -dy / len, ny = dx / len;
@@ -243,9 +255,69 @@ export function stringerPrimitives(profilePoints, depthMm, zBounds, opts = {}) {
   // 水平面でSutherland–Hodgman相当の単純な半平面クリップを行い、FLを超えた突き出しを切る
   // （clipStringerToAnchors「ジグザグ点列の端点をFLへ強制的に揃える」対応の、オフセット後
   // 多角形版）。zBounds未指定（既存呼び出し）は挙動不変。
-  const clippedPoints = zBounds ? clipPolygonToYRange(points, zBounds.yLo, zBounds.yHi) : points;
+  // トリム結合する端では、z範囲のクリップを巾木ぶん緩める（ユーザー明示指示2026-08その14
+  // 「ささら上同士、ささら下同士トリム」）——上端は段鼻線を巾木高さぶん**上**へ上げた線で、
+  // 踊り場桁枠の上端（踊り場床+巾木）と同じ高さにある。flightのz範囲（baseZ〜baseZ+steps×riser）で
+  // そのまま切ると上端が踊り場の床高さで切られ、桁枠の上端まで届かず取り合いが切れる
+  // （実機「6」D1で、切られた端が「ささら上とささら下を結ぶ線」として残っていた）。
+  let zb = zBounds;
+  if (zb && (opts.mitreStart || opts.mitreEnd)) {
+    let { yLo, yHi } = zb;
+    // トリム結合する端で、ささらが占めるy区間 [上端, 上端+ミトレ深さ] を範囲へ含める。
+    // 上端＝段鼻線を巾木ぶん上げた線・下端＝ミトレで踊り場桁枠の下端の高さへ寄せた点。
+    // flightのz範囲そのままだと、往路側は上端が・復路側は下端が範囲外になって切られる。
+    const cover = top => {
+      const bot = top + (opts.mitreDepthMm ?? 0);
+      if (yLo != null) yLo = Math.min(yLo, top, bot);
+      if (yHi != null) yHi = Math.max(yHi, top, bot);
+    };
+    if (opts.mitreStart) cover(band.top[0][1]);
+    if (opts.mitreEnd) cover(band.top[1][1]);
+    zb = { yLo, yHi };
+  }
+  const clippedPoints = zb ? clipPolygonToYRange(points, zb.yLo, zb.yHi) : points;
   if (clippedPoints.length < 3) return [];
-  return [{ type: 'polyline', points: clippedPoints, weight: weightForRole(ElevationLineRole.DETAIL) }];
+  // トリム結合した端では**ささらの端の縦線を描かない**（ユーザー明示指示2026-08その14
+  // 「ささら上同士、ささら下同士トリム／300の線は不要」）——上端は踊り場桁枠の上端へ、下端は
+  // 同じく下端へそれぞれ継がるため、端を閉じるとせい(depthMm=300)ぶんの線が1本余る。
+  // 端を落とすと輪郭は開いたパスになる（両端をトリムした場合は上端・下端の2本に分かれる）。
+  const dropEdges = [];
+  if (opts.mitreStart) dropEdges.push([band.top[0], band.bottom[0]]);
+  if (opts.mitreEnd)   dropEdges.push([band.top[1], band.bottom[1]]);
+  const paths = dropEdges.length === 0 ? [clippedPoints] : splitRingAtEdges(clippedPoints, dropEdges);
+  return paths.filter(pts => pts.length >= 2)
+    .map(pts => ({ type: 'polyline', points: pts, weight: weightForRole(ElevationLineRole.DETAIL) }));
+}
+
+// 閉パス（先頭==末尾）から、dropEdges（端点ペア）に一致する辺を取り除き、残りを連続する
+// 開パスの配列へまとめる。座標一致はGAP_EPSで見る（クリップで新しい頂点が挿入されても、
+// トリム端の角自体は範囲内にあるため残る——万一残らなければ辺は落とせず従来どおり閉じる）。
+function splitRingAtEdges(ring, dropEdges) {
+  const pts = ring.length > 1 &&
+    Math.abs(ring[0][0] - ring[ring.length - 1][0]) < GAP_EPS &&
+    Math.abs(ring[0][1] - ring[ring.length - 1][1]) < GAP_EPS ? ring.slice(0, -1) : ring;
+  const n = pts.length;
+  if (n < 3) return [ring];
+  const same = (a, b) => Math.abs(a[0] - b[0]) < GAP_EPS && Math.abs(a[1] - b[1]) < GAP_EPS;
+  const dropped = i => {
+    const a = pts[i], b = pts[(i + 1) % n];
+    return dropEdges.some(([p, q]) => (same(a, p) && same(b, q)) || (same(a, q) && same(b, p)));
+  };
+  const keep = [];
+  for (let i = 0; i < n; i++) keep.push(!dropped(i));
+  if (keep.every(Boolean)) return [ring];
+  const start = keep.findIndex(k => !k);
+  const paths = [];
+  let cur = null;
+  for (let k = 1; k <= n; k++) {
+    const i = (start + k) % n;
+    if (keep[i]) {
+      if (!cur) cur = [pts[i]];
+      cur.push(pts[(i + 1) % n]);
+    } else if (cur) { paths.push(cur); cur = null; }
+  }
+  if (cur) paths.push(cur);
+  return paths;
 }
 
 // [x,y]の閉多角形（points[0]===points[末尾]の重複終点あり・無し両対応）を、y<=yHi・y>=yLo

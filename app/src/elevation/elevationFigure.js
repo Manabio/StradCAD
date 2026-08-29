@@ -29,7 +29,7 @@ import {
   OPENING_TAG_RADIUS_PX, GRID_TAG_RADIUS_PX, GRID_TAG_FONT_PX,
   FACE_LABEL_FONT_PX, GRID_LINE_ABOVE_CH_MM, CANVAS_BG_COLOR, DEFAULT_FACE_LABEL_AVOID_THRESHOLD_MM,
   DEFAULT_OPENING_TAG_ROW_MM, DEFAULT_DIM_ROW_GAP_MM, DEFAULT_GRID_ROW_GAP_MM,
-  DEFAULT_WALL_LESS_END_EXTEND_MM, CH_DIM_OFFSET_MM, SPLIT_MERGE_EPS_MM,
+  DEFAULT_WALL_LESS_END_EXTEND_MM, CH_DIM_OFFSET_MM, SPLIT_MERGE_EPS_MM, DEFAULT_DIM_FOOT_GAP_MM,
 } from './elevationStyle.js';
 
 // 項目4: 壁2段書きの省略判定用テキスト幅概算。renderText（figurePrimitivesKonva.jsx）は
@@ -1028,14 +1028,19 @@ export function buildFaceFigure(face, ctx) {
   // 問題修正2026-08その4改: 「床側起点高さが変わる面のCH寸法」は面の左側＝帯レイアウト
   // （elevationBand.jsのlayoutBandFaces。直前の面の右端と比較）が担当する。ここ（右側）は
   // 従来どおり段差のある面（segs.length>1）のみ。
-  if (segs.length > 1) {
+  // 階段帯（ユーザー明示指示2026-08その12）: chDimChainsを渡す帯ではCH寸法の判断を
+  // 呼び出し側（stairChDimChains）が一括で持つため、ここでの面ごとの右CH寸法は描かない
+  // ——段差の有無ではなく「端の断面プロファイルが前の端から変わったか」で決まるため。
+  if (segs.length > 1 && !ctx.chDimChains) {
     const rightSeg = segs[segs.length - 1];
     const rightChDimX = boundary.hi + CH_DIM_OFFSET_MM;
     const rightFloorY = floorYOf(rightSeg);
     // 問題修正2026-08: 値・上端は「右端区間の実際の床〜天井」（天井断面線と同じ基準）。
     // chMm未指定のフラット天井では従来どおり天井絶対高(CH)−右端区間FLになる。
     prims.push({
-      type: 'dim', dir: 'v', at: rightChDimX, from: ceilYOf(rightSeg), to: rightFloorY, foot: boundary.hi, dot: true,
+      // 足はCLに触れず手前で止める（ユーザー明示指示2026-08その13。展開図で統一）。
+      type: 'dim', dir: 'v', at: rightChDimX, from: ceilYOf(rightSeg), to: rightFloorY,
+      foot: boundary.hi + Math.min(ctx.dimFootGapModelMm ?? DEFAULT_DIM_FOOT_GAP_MM, CH_DIM_OFFSET_MM), dot: true,
       label: Math.round(ceilAbsOf(rightSeg) - rightSeg.floorDeltaMm),
     });
   }

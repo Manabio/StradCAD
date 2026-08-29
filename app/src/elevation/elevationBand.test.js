@@ -770,3 +770,36 @@ test('【WP-0】finalizeBand: heightUnits指定時はunitHeightMm=bounds.height/
   assert.deepEqual(band2.bounds, band1.bounds, 'boundsはheightUnits指定に関わらず不変のはず');
   assert.equal(band2.heightMm, band1.heightMm, 'heightMmもheightUnits指定に関わらず不変のはず（WP-0は既存の意味を変えない）');
 });
+
+
+// ---- 寸法線の足（ユーザー明示指示2026-08その13） ----
+// 「展開図の寸法線の足：CLから画面上実寸3mmぐらい離す（展開図で統一）」
+// 「階段展開図については、反対側のCLまで伸ばさない」
+// 足の終点はその寸法自身の側のCLの手前（dimFootGapModelMm）で止める。寸法線はCLから
+// CH_DIM_OFFSET_MM離れているので、足の長さは常に(CH_DIM_OFFSET_MM - 隙間)で統一される
+// ——旧実装は左CH寸法がfoot:0（面のローカル原点＝反対側へ向かって横断）だった。
+test('【明示指示】layoutBandFaces: CH寸法の足はCLの手前で止まり、長さが図全体で統一される', () => {
+  const graph = makeGraph();
+  const room = makeRectRoom(graph, 0, 0, 4000, 3000);
+  const gap = 120;
+  const band = buildRoomBand(room, graph, { dimFootGapModelMm: gap });
+  const vdims = band.primitives.filter(p => p.type === 'dim' && p.dir === 'v');
+  assert.ok(vdims.length > 0, '前提: 縦のCH寸法がある');
+  for (const d of vdims) {
+    assert.equal(Math.round(Math.abs(d.foot - d.at)), CH_DIM_OFFSET_MM - gap,
+      `足の長さは(CH寸法オフセット−隙間)で統一されるはず（実際:${Math.abs(d.foot - d.at)}）`);
+    // 足は寸法線からCL側へ向かい、CLを越えない（越えると反対側へ横断してしまう）。
+    assert.ok(Math.abs(d.foot - d.at) < CH_DIM_OFFSET_MM, '足がCLに触れない（隙間が正）はず');
+  }
+});
+
+test('【失敗系】layoutBandFaces: dimFootGapModelMm未指定でも足はCLの手前で止まる（既定の仮値）', () => {
+  const graph = makeGraph();
+  const room = makeRectRoom(graph, 0, 0, 4000, 3000);
+  const band = buildRoomBand(room, graph, {});
+  const vdims = band.primitives.filter(p => p.type === 'dim' && p.dir === 'v');
+  for (const d of vdims) {
+    assert.ok(Math.abs(d.foot - d.at) > 0 && Math.abs(d.foot - d.at) < CH_DIM_OFFSET_MM,
+      '既定でも0<足<CH寸法オフセットのはず');
+  }
+});

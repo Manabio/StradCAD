@@ -7,7 +7,7 @@ import { measureStairSpans } from '../finish/stair/stairClassify.js';
 import { cellsBeyondBreak } from '../finish/stair/stairGeometry.js';
 import { composeRoomFaces } from './elevationFaceList.js';
 import { letterOf } from './elevationFaces.js';
-import { stairFaceSequence, kneeWallCapContent } from './elevationStairSequence.js';
+import { stairFaceSequence, kneeWallCapContent, stairChDimChains } from './elevationStairSequence.js';
 import { switchbackCuts } from './section/cuts/switchbackCuts.js';
 import { buildFaceFigure } from './elevationFigure.js';
 import { resolveSwitchbackParams } from './elevationStairSection.js';
@@ -1360,8 +1360,16 @@ for (const upDirection of ['up', 'down']) {
           const minY = Math.min(...ys), maxY = Math.max(...ys);
           // このpolylineがself(outbound)由来かsecondary(inbound)由来かをyの位置で判定し、
           // 対応するflightのFL範囲(yLo〜yHi)を超えていないことを確認する。
-          const inOutboundRange = maxY <= outboundB.yHi + 1e-6 && minY >= outboundB.yLo - 1e-6;
-          const inInboundRange = maxY <= inboundB.yHi + 1e-6 && minY >= inboundB.yLo - 1e-6;
+          // 突き出しの許容は**踊り場側の端だけ**（ユーザー明示指示2026-08その14「ささら上同士、
+          // ささら下同士トリム」: 踊り場桁枠と取り合うため、ささらはその端で踊り場側へ食い込む。
+          // 上限は桁枠のせい=300）。FL側は従来どおり厳格に見る——第3弾Bで塞いだ「法線オフセット
+          // ぶんの突き出し」はFL側で起きるため、この形なら再発を見逃さない。
+          const landingY = -(contribution.outbound.steps * contribution.outbound.riserMm);
+          const MITRE_TOL = 300 + 1e-6, STRICT = 1e-6;
+          const within = b => maxY <= b.yHi + (Math.abs(b.yHi - landingY) < 1e-6 ? MITRE_TOL : STRICT)
+            && minY >= b.yLo - (Math.abs(b.yLo - landingY) < 1e-6 ? MITRE_TOL : STRICT);
+          const inOutboundRange = within(outboundB);
+          const inInboundRange = within(inboundB);
           assert.ok(inOutboundRange || inInboundRange,
             `seq${seqNo}のthin polyline(y=${minY.toFixed(2)}〜${maxY.toFixed(2)})はoutbound範囲` +
             `(${outboundB.yLo}〜${outboundB.yHi})にもinbound範囲(${inboundB.yLo}〜${inboundB.yHi})にも収まらず突き出しているはず`);
@@ -1596,4 +1604,85 @@ test('【明示指示】stairFaceSequence: seq2は往復レーンの境界を見
     'seq5は復路外側の壁を見る面のはず（従来どおり）');
   // 中心1に実壁が無くても面は作られる（壁の有無はhasRealWallで表す）。
   assert.equal(entries.find(e => e.seqNo === '2').face.hasRealWall, false);
+});
+
+
+// ---- 階段の高さ寸法記入ルール（ユーザー明示指示2026-08その12） ----
+// 「床断面、踊り場断面、天井断面いずれかの断面から断面までの寸法記入」
+// 「前の展開断面と高さが変わる場合、新たな断面間寸法を記入」
+// 実機「6」の指定（1FL=0・踊り場=1500・1F天井=2400・2FL=3000・2F天井=5400、階段下に部屋なし）:
+//   C:左に[1FL→踊り場][踊り場→2F天井]、右なし ／ D1:左に[1FL→1F天井][2FL→2F天井]、右に踊り場側
+//   A:なし ／ B:左なし・右に通常断面 ／ D2:左なし・右に踊り場側
+test('【明示指示】stairChDimChains: 実機「6」の高さ寸法が指定どおりの左右・本数になる', () => {
+  const entries = ['1', '2', '3', '4', '5'].map(seqNo => ({ seqNo }));
+  const chains = stairChDimChains(entries, {
+    landingAbs: 1500, hasRoomUnder: false, chLowerMm: 2400, floorHeight: 3000, chUpperAbsMm: 5400,
+  });
+  const P = [[0, 1500], [1500, 5400]];  // 踊り場側の端
+  const Q = [[0, 2400], [3000, 5400]];  // 踊り場が切れない端（壁の向こうの通常断面）
+  assert.deepEqual(chains, [
+    { left: P,    right: null }, // C
+    { left: Q,    right: P },    // D1
+    { left: null, right: null }, // A
+    { left: null, right: Q },    // B
+    { left: null, right: P },    // D2
+  ]);
+});
+
+test('stairChDimChains: 階段下に部屋があれば踊り場側は[踊り場→2FL][2FL→2F天井]になる', () => {
+  const chains = stairChDimChains([{ seqNo: '1' }], {
+    landingAbs: 1200, hasRoomUnder: true, chLowerMm: 2400, floorHeight: 2400, chUpperAbsMm: 4800,
+  });
+  // 踊り場より下は別室のため帯の床が踊り場になる（既存の受け入れ済み挙動を保つ）。
+  assert.deepEqual(chains[0].left, [[1200, 2400], [2400, 4800]]);
+});
+
+test('【失敗系】stairChDimChains: 退化した区間（高さ0）は寸法にしない', () => {
+  // 踊り場が2F天井と同じ高さ（=上の区間が0）になる退化ケース。
+  const chains = stairChDimChains([{ seqNo: '2' }], {
+    landingAbs: 3000, hasRoomUnder: false, chLowerMm: 2400, floorHeight: 3000, chUpperAbsMm: 3000,
+  });
+  assert.deepEqual(chains[0].right, [[0, 3000]], '高さ0の区間は落ちるはず');
+});
+
+
+// ---- 見えがかりのレイキャスト: 手前のささらによる遮蔽（ユーザー明示指示2026-08その16） ----
+// 「「6」D1: 復路ささら下、踊り場側は、往路ささら上まで／復路ささらは、往路ささらより奥にある」。
+// 切断は往路レーンの中を通るので、視線の手前には往路レーンのささらがある。その上端より下は
+// ささら本体（せい300）とその先の踊り場桁枠に隠れ、奥の復路のささらは見えない。
+// 旧実装は往復間の壁の有無（isBlockedByWall）しか見ておらず、復路のささら下端が往路ささらを
+// 突き抜けて踊り場まで描かれていた。
+test('【明示指示】stairFaceSequence: seq2の復路ささら見えがかりは、手前（往路）のささら上端より下へ出ない', () => {
+  const REAL_OPTS = { floorHeight: 3000, chUpperAbsMm: 5400, chLowerMm: 2400 };
+  const { stair, faces, graph } = makeRealisticSwitchbackFixture('up', false);
+  const entries = stairFaceSequence(stair, faces, graph, REAL_OPTS);
+  const entry = entries.find(e => e.seqNo === '2');
+  assert.ok(entry, '前提: seq2がある');
+  const thin = entry.content.filter(p => p.type === 'polyline' && p.weight === weightForRole(ElevationLineRole.DETAIL));
+  // 手前=往路（FL0〜踊り場）・奥=復路（踊り場〜2FL）。yは上向き負なので、最も下（yが大）に
+  // 届くのが往路側。
+  const landingY = -(11 * (REAL_OPTS.floorHeight / 22)); // -1500
+  // 往路はFL(y=0)に接し、復路は2FL(y=-floorHeight)に接する——この2点で確実に見分ける。
+  const self = thin.find(p => p.points.some(q => Math.abs(q[1]) < 1));
+  const secondary = thin.find(p => p !== self && p.points.some(q => Math.abs(q[1] + REAL_OPTS.floorHeight) < 1));
+  assert.ok(self && secondary, `前提: 往路・復路のささらが両方描かれる（実際:${thin.length}本）`);
+
+  // 往路ささらの上端線＝開いた輪郭の最後の1辺（端の縦線を落としたため、末尾が上端で終わる）。
+  const pts = self.points;
+  const seg = [pts[pts.length - 2], pts[pts.length - 1]];
+  const yAt = x => {
+    const [[ax, ay], [bx, by]] = seg;
+    const [loX, loY, hiX, hiY] = ax <= bx ? [ax, ay, bx, by] : [bx, by, ax, ay];
+    if (x <= loX) return loY;
+    if (x >= hiX) return hiY;
+    return loY + (x - loX) * (hiY - loY) / (hiX - loX);
+  };
+  for (const [x, y] of secondary.points) {
+    assert.ok(y <= yAt(x) + 1e-6,
+      `復路のささらは往路ささらの上端(${Math.round(yAt(x))})より下(${Math.round(y)})へ出ないはず（x=${Math.round(x)}）`);
+  }
+  // 旧挙動（踊り場桁枠の下端まで突き抜ける）に戻っていないこと。
+  const frameBot = landingY + 300 - 60; // 踊り場床+巾木-せい = 桁枠の下端
+  assert.ok(Math.max(...secondary.points.map(q => q[1])) < frameBot - 1,
+    '復路のささらが踊り場桁枠の下端まで達してはいけない');
 });

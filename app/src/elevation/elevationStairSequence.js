@@ -622,10 +622,63 @@ export function stairFaceSequence(stair, faces, graph, opts = {}) {
     if (!cut?.line) return e.face;
     return { ...e.face, letter: letterOf(cut.line.isVertical, -cut.viewSign) };
   }));
+  const chDimChains = stairChDimChains(entries, {
+    landingAbs: cutTable.landingAbs, hasRoomUnder, chLowerMm: ceilLowAbs, floorHeight, chUpperAbsMm: ceilTopAbs,
+  });
   return entries.map((e, i) => ({
     ...e, face: relabeled[i],
     // 往復間の壁の芯（一点鎖線のみ。寸法の鎖は分割しない）。elevationStair.jsのfaceOverride経由で
     // buildFaceFigureのextraCenterLineXsへ渡る。
     extraCenterLineXs: midWallCLXs(relabeled[i]),
+    chDimChains: chDimChains[i],
   }));
+}
+
+// 面の左右の端で「踊り場スラブが切れる」のはどちら側か。
+//   - 幅方向に横断する面（seq1=上り口・seq3=踊り場の壁）は面の全長で踊り場を横切る＝両端とも踊り場側。
+//   - 走行方向の面（seq2/2.5/5は上り口が左・踊り場が右、seq4/4.5はその鏡像）は片側だけ。
+// 走行方向の面のもう一方の端（上り口側）は、壁の向こうの通常の部屋の断面（1F天井・2FL）が現れる。
+const LANDING_END_BY_SEQ = { '1': 'both', '2': 'right', '2.5': 'right', '3': 'both', '4': 'left', '4.5': 'left', '5': 'right' };
+
+/**
+ * 階段帯の高さ寸法（CH寸法）の鎖を面ごと・左右の端ごとに決める（ユーザー明示指示2026-08その12）。
+ *
+ * 規則:
+ *   - 寸法は「床断面・踊り場断面・天井断面のいずれかから、いずれかまで」を1本とする。
+ *   - 端ごとに断面のプロファイルが決まる。踊り場スラブが切れる端は
+ *     `[1FL→踊り場][踊り場→上階天井]`（階段下に部屋があるときは踊り場より下は別室なので
+ *     `[踊り場→上階天井]`の1本）、切れない端は壁の向こうの通常断面
+ *     `[1FL→1F天井][2FL→2F天井]`。
+ *   - **帯の左から端を順に見て、前の端とプロファイルが変わったときだけ記入する**
+ *     （「前の展開断面と高さが変わる場合、新たな断面間寸法を記入」）。先頭の端は必ず記入する。
+ * 実機「6」: C左=踊り場側(記入)→C右=同じ(なし)→D1左=通常(記入)→D1右=踊り場側(記入)→
+ * A左/A右/B左=同じ(なし)→B右=通常(記入)→D2左=同じ(なし)→D2右=踊り場側(記入)。
+ * @param {Array<{seqNo:string}>} entries
+ * @param {{landingAbs:number, hasRoomUnder:boolean, chLowerMm:number, floorHeight:number, chUpperAbsMm:number}} h
+ * @returns {Array<{left:Array<[number,number]>|null, right:Array<[number,number]>|null}>}
+ */
+export function stairChDimChains(entries, h) {
+  // 踊り場側の端の断面。階段下に部屋があるときは踊り場より下は別室のため帯の床が踊り場になり、
+  // 上の断面は2FL・2F天井（ユーザー明示指示「2FL 寸法線はここで分ける」＝既存の受け入れ済み挙動）。
+  // 部屋が無ければ1FLから踊り場・踊り場から2F天井（今回の指示）。
+  const landing = h.hasRoomUnder
+    ? [[h.landingAbs, h.floorHeight], [h.floorHeight, h.chUpperAbsMm]]
+    : [[0, h.landingAbs], [h.landingAbs, h.chUpperAbsMm]];
+  const normal = [[0, h.chLowerMm], [h.floorHeight, h.chUpperAbsMm]];
+  const valid = chain => chain.filter(([lo, hi]) => hi - lo > GAP_EPS);
+  const key = chain => JSON.stringify(chain);
+
+  const out = [];
+  let prevKey = null;
+  for (const e of entries) {
+    const side = LANDING_END_BY_SEQ[e.seqNo] ?? 'both';
+    const leftChain  = valid(side === 'left'  || side === 'both' ? landing : normal);
+    const rightChain = valid(side === 'right' || side === 'both' ? landing : normal);
+    const left  = key(leftChain)  !== prevKey ? leftChain  : null;
+    prevKey = key(leftChain);
+    const right = key(rightChain) !== prevKey ? rightChain : null;
+    prevKey = key(rightChain);
+    out.push({ left, right });
+  }
+  return out;
 }
