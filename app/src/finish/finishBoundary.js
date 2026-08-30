@@ -11,7 +11,7 @@ import {
 } from './stair/stairUnderWalls.js';
 import {
   generateRoomWallsFromOutline, generateExteriorWalls, snapshotWall, restoreWallsFromSnapshots,
-  resolveBackingOwnership, applyBackingOwnership,
+  resolveBackingOwnership, applyBackingOwnership, closeConvexCorners,
 } from './wallGeneration.js';
 import { snapshotEdges, restoreEdges, syncEdgesFromTopology, interiorWallSpans, buildCellToRoom } from './edgeClassify.js';
 import {
@@ -238,13 +238,19 @@ export async function runFinishExitBoundary(graph, project, fmode, { goingToStru
 
   // 所有権解決: 同一CL上の下地を1本に統一する。分割で生じた新壁は wallIdToRoom へ
   // 反映し、旧壁IDを新壁群に張り替える（generatedWallIds も同様に張り替える）。
+  // 所有権解決・CL偏芯・外壁オーナー化は Wall のフィールド（backingOffset 等）を**直接**
+  // 書き換える。graph.addWall/removeShape は action だが直接代入はそうではないため、
+  // runFinishExitBoundary が action の外で走る以上ここを包まないとMobX strict-modeの
+  // 警告が出る（既に描画で観測済みの壁を書き換えるため。ステップ3.5/3.6と同じ理由・同じ手当て）。
   const allNewInteriorWalls = processedRooms.flatMap(r => roomWallLists.get(r));
-  for (const [oldId, newWalls] of resolveBackingOwnership(graph, allNewInteriorWalls)) {
-    const room = wallIdToRoom.get(oldId);
-    if (!room) continue;
-    room.generatedWallIds.delete(oldId);
-    for (const nw of newWalls) { room.generatedWallIds.add(nw.id); wallIdToRoom.set(nw.id, room); }
-  }
+  runInAction(() => {
+    for (const [oldId, newWalls] of resolveBackingOwnership(graph, allNewInteriorWalls)) {
+      const room = wallIdToRoom.get(oldId);
+      if (!room) continue;
+      room.generatedWallIds.delete(oldId);
+      for (const nw of newWalls) { room.generatedWallIds.add(nw.id); wallIdToRoom.set(nw.id, room); }
+    }
+  });
 
   // ステップ2b: CL偏芯の適用（内壁指定のあるCLに設定された偏芯仕様を対象壁へ反映する。
   // spec と現材から毎回フル再計算する冪等処理——脱出のたびに材変更を偏芯壁へ反映させる）。
@@ -255,16 +261,18 @@ export async function runFinishExitBoundary(graph, project, fmode, { goingToStru
   if (graph.clEccentricities.size > 0 && fmode?.materialMap) {
     const { applyCLEccentricity } = await import('./clEccentricity.js');
     const eccTouched = new Map(); // wallId -> 変更前スナップショット（初回遭遇時点）
-    for (const clId of graph.clEccentricities.keys()) {
-      for (const c of applyCLEccentricity(graph, clId, { materialMap: fmode?.materialMap })) {
-        if (!eccTouched.has(c.wall.id)) {
-          eccTouched.set(c.wall.id, {
-            axisOffset: c.axisOffset, wallFinish: c.wallFinish, backingOffset: c.backingOffset,
-            backingDepth: c.backingDepth, finishSide: c.finishSide, startOffset: c.startOffset, endOffset: c.endOffset,
-          });
+    runInAction(() => {
+      for (const clId of graph.clEccentricities.keys()) {
+        for (const c of applyCLEccentricity(graph, clId, { materialMap: fmode?.materialMap })) {
+          if (!eccTouched.has(c.wall.id)) {
+            eccTouched.set(c.wall.id, {
+              axisOffset: c.axisOffset, wallFinish: c.wallFinish, backingOffset: c.backingOffset,
+              backingDepth: c.backingDepth, finishSide: c.finishSide, startOffset: c.startOffset, endOffset: c.endOffset,
+            });
+          }
         }
       }
-    }
+    });
     if (eccTouched.size > 0) {
       const eccChanges = [];
       for (const [id, before] of eccTouched) {
@@ -278,13 +286,13 @@ export async function runFinishExitBoundary(graph, project, fmode, { goingToStru
           },
         });
       }
-      const applyFields = (id, f) => {
+      const applyFields = (id, f) => runInAction(() => {
         const w = graph.shapeMap.get(id);
         if (!w) return;
         w.axisOffset = f.axisOffset; w.wallFinish = f.wallFinish;
         w.backingOffset = f.backingOffset; w.backingDepth = f.backingDepth;
         w.finishSide = f.finishSide; w.startOffset = f.startOffset; w.endOffset = f.endOffset;
-      };
+      });
       // 実行時は常に no-op になる想定の undo/redo（F7。動作自体は正しいので削除しない）:
       // ここで触れる壁は必ず「ステップ2（内周壁生成＋所有権解決）」の対象Room
       // （generatedWallIds）に属する——applyCLEccentricity の対象抽出・コーナー追従が
@@ -322,12 +330,14 @@ export async function runFinishExitBoundary(graph, project, fmode, { goingToStru
   // undo/redo（ステップ2の所有権解決結果に、このステップ3の追加分割を合流させたもの）へ
   // 含める——ここより後に内周壁の undo/redo をまとめて push するのはそのため。
   const currentInteriorWalls = [...wallIdToRoom.keys()].map(id => graph.shapeMap.get(id)).filter(Boolean);
-  for (const [oldId, newWalls] of applyBackingOwnership(graph, newExteriorWalls, currentInteriorWalls, { setOwnerFields: false, claimUncovered: false })) {
-    const room = wallIdToRoom.get(oldId);
-    if (!room) continue;
-    room.generatedWallIds.delete(oldId);
-    for (const nw of newWalls) { room.generatedWallIds.add(nw.id); wallIdToRoom.set(nw.id, room); }
-  }
+  runInAction(() => {
+    for (const [oldId, newWalls] of applyBackingOwnership(graph, newExteriorWalls, currentInteriorWalls, { setOwnerFields: false, claimUncovered: false })) {
+      const room = wallIdToRoom.get(oldId);
+      if (!room) continue;
+      room.generatedWallIds.delete(oldId);
+      for (const nw of newWalls) { room.generatedWallIds.add(nw.id); wallIdToRoom.set(nw.id, room); }
+    }
+  });
 
   const newExteriorSnapshots = newExteriorWalls.map(snapshotWall);
   if (oldExteriorSnapshots.length > 0 || newExteriorSnapshots.length > 0) {
@@ -395,21 +405,47 @@ export async function runFinishExitBoundary(graph, project, fmode, { goingToStru
       }
     }
     if (trimChanges.length > 0) {
-      undoFns.push(() => {
+      const applyTrim = (key) => () => runInAction(() => {
         for (const c of trimChanges) {
           const w = graph.shapeMap.get(c.id);
-          if (w) { w.startOffset = c.before.startOffset; w.endOffset = c.before.endOffset; }
+          if (w) { w.startOffset = c[key].startOffset; w.endOffset = c[key].endOffset; }
         }
       });
-      redoFns.push(() => {
-        for (const c of trimChanges) {
-          const w = graph.shapeMap.get(c.id);
-          if (w) { w.startOffset = c.after.startOffset; w.endOffset = c.after.endOffset; }
-        }
-      });
+      undoFns.push(applyTrim('before'));
+      redoFns.push(applyTrim('after'));
     }
   }
-  } // if (fmode) — 壁導出ブロック（ステップ1〜3.5）はここまで（F2）
+  // ステップ3.6: 出隅（外側に凸な角）の取り合いを閉じる（closeConvexCorners。wallGeneration.js）。
+  // ステップ3.5と同じ理由でここに置く——自室壁・隣接部屋壁・外壁・階段下壁が出そろい、
+  // CL偏芯（2b）も反映済みのこの時点でなければ「相手の材の外面」が確定しない。
+  // 角を挟む2枚が別々の部屋の輪郭から生成されると生成時のコーナーマップでは解決できず、
+  // 角の外側に壁厚ぶんの欠けが残る（ユーザー実機指摘2026-08「21」のX2×Y2+3500の出隅）。
+  // undo/redo は3.5と同じ id ベースの before/after 差分方式。
+  {
+    const before = new Map();
+    for (const w of graph.walls) before.set(w.id, { startOffset: w.startOffset, endOffset: w.endOffset });
+    runInAction(() => closeConvexCorners([...graph.walls]));
+    const cornerChanges = [];
+    for (const w of graph.walls) {
+      const b = before.get(w.id);
+      if (!b) continue;
+      if (b.startOffset !== w.startOffset || b.endOffset !== w.endOffset) {
+        cornerChanges.push({ id: w.id, before: b, after: { startOffset: w.startOffset, endOffset: w.endOffset } });
+      }
+    }
+    if (cornerChanges.length > 0) {
+      const apply = (key) => () => runInAction(() => {
+        for (const c of cornerChanges) {
+          const w = graph.shapeMap.get(c.id);
+          if (w) { w.startOffset = c[key].startOffset; w.endOffset = c[key].endOffset; }
+        }
+      });
+      undoFns.push(apply('before'));
+      redoFns.push(apply('after'));
+    }
+  }
+
+  } // if (fmode) — 壁導出ブロック（ステップ1〜3.6）はここまで（F2）
 
   // ステップ4: 境界エッジのトポロジー差分同期（脱出時に確定・永続化）
   const edgeBefore = snapshotEdges(graph);
@@ -477,13 +513,13 @@ export async function runFinishExitBoundary(graph, project, fmode, { goingToStru
           },
         });
       }
-      const applyFields = (id, f) => {
+      const applyFields = (id, f) => runInAction(() => {
         const w = graph.shapeMap.get(id);
         if (!w) return;
         w.axisOffset = f.axisOffset; w.wallFinish = f.wallFinish;
         w.backingOffset = f.backingOffset; w.backingDepth = f.backingDepth;
         w.finishSide = f.finishSide; w.startOffset = f.startOffset; w.endOffset = f.endOffset;
-      };
+      });
       undoFns.push(() => eccChanges.forEach(c => applyFields(c.id, c.before)));
       redoFns.push(() => eccChanges.forEach(c => applyFields(c.id, c.after)));
     }

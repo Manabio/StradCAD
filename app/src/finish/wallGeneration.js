@@ -845,3 +845,84 @@ export function restoreWallsFromSnapshots(graph, snapshots) {
   }
   return walls;
 }
+
+/**
+ * 出隅（外側に凸な角）の取り合いを閉じる。
+ *
+ * コーナーマップ（generateRoomWallsFromOutline）は**1つの部屋の輪郭の中**でしか角を解決
+ * できない。角を挟む2枚が別々の部屋の輪郭から生成されると（例: 一方が階段吹抜けの西壁、
+ * 他方が隣室の北壁）、どちらも相手の軸CLでちょうど止まる＝互いの材が届かず、角の外側に
+ * 壁厚ぶんの四角い欠けが残る（ユーザー実機指摘2026-08「21」のX2×Y2+3500の出隅）。
+ *
+ * ここでは「**互いの軸CLで終端し合っている**2枚」＝角であることが確実な組み合わせだけを
+ * 対象にし、各々の端を相手の材の外面（相手のaxisValue）まで伸ばす。T字（相手が通り抜ける）・
+ * X字は片側しか終端しないため対象外——T字の取り合いはrenderer/wallJunctionResolve.jsの担当。
+ * 入隅側（コーナーマップが既に相手の外面まで伸ばしている端）と、伸ばすと逆に短くなる向きの
+ * 組み合わせは「外側へ伸びるときだけ」の条件で自然に除外される。
+ *
+ * 判定は全ペアぶんまとめてから適用する（先に書き換えた端点が後続の判定に混ざらないよう、
+ * 決定と適用を分ける）。
+ * @param {import('@core').Wall[]} walls
+ * @returns {number} 端点を伸ばした箇所の数
+ */
+const CORNER_EPS = 1e-6;
+
+export function closeConvexCorners(walls) {
+  const verticals = [], horizontals = [];
+  for (const w of walls) {
+    if (w.wallFinish == null) continue; // 仕上げ厚不明（手動壁）は対象外
+    (w.isVertical ? verticals : horizontals).push(w);
+  }
+  // wallの端a（'start'|'end'）が相手の軸CLで終端しているか。
+  const endAt = (w, cl) => (w.clStart === cl ? 'start' : w.clEnd === cl ? 'end' : null);
+  // 端aの外向き符号（その端がどちらへ伸びれば「長くなる」か）。
+  const outward = (w, a) => Math.sign(a === 'end' ? w.coord2 - w.coord1 : w.coord1 - w.coord2) || 1;
+
+  // 「wの端aは相手CL(clValue)で**本当に終わっている**か」——同じ軸CL・同じ面(axisValue)の
+  // 別壁がその先へ隣接して続いていれば、それは通し壁が直交壁の位置で分割されているだけの
+  // T字であり角ではない（T字の取り合いはrenderer/wallJunctionResolve.jsの担当）。
+  // 「隣接」の許容差は同モジュールのコーナー判定(150mm)と揃える。
+  const CONTINUE_TOL = 150;
+  const sameFace = w => (w.isVertical ? verticals : horizontals)
+    .filter(o => o !== w && o.axisCL === w.axisCL && Math.abs(o.axisValue - w.axisValue) < CORNER_EPS);
+  const continuesPast = (w, a, clValue) => {
+    const d = outward(w, a);
+    return sameFace(w).some(o => {
+      const near = d > 0 ? Math.min(o.coord1, o.coord2) : Math.max(o.coord1, o.coord2);
+      return (near - clValue) * d >= -CORNER_EPS && Math.abs(near - clValue) <= CONTINUE_TOL;
+    });
+  };
+
+  const plans = [];
+  for (const v of verticals) {
+    for (const h of horizontals) {
+      const va = endAt(v, h.axisCL), ha = endAt(h, v.axisCL);
+      if (!va || !ha) continue; // 互いに終端し合っていない＝T字・X字
+      // 欠けが生じるのは**互いの仕上げ面が向いている側**の象限だけ（そこが出隅）。
+      // 各々が「相手の材が張り出している向き」へ終端していることを両方向で確かめる
+      // ——片側でも一致しなければ入隅側・別の壁厚の組み合わせであり、伸ばすと相手の材を
+      // 突き抜ける（実機: 外壁と内壁が同じ通りで終端し合う角で、内壁が外壁の外面まで
+      // 伸びてしまう）。
+      if (outward(v, va) !== h.faceDir || outward(h, ha) !== v.faceDir) continue;
+      const clH = h.axisCL.effectiveValue, clV = v.axisCL.effectiveValue;
+      if (continuesPast(v, va, clH) || continuesPast(h, ha, clV)) continue; // T字（分割された通し壁）
+      for (const [w, a, target] of [[v, va, h.axisValue], [h, ha, v.axisValue]]) {
+        const cur = a === 'end' ? w.coord2 : w.coord1;
+        if ((target - cur) * outward(w, a) <= 0) continue; // 外側へ伸びるときだけ
+        plans.push({ wall: w, at: a, offset: target - (a === 'end' ? w.clEnd : w.clStart).effectiveValue });
+      }
+    }
+  }
+  // 同じ端が複数の相手と組んだときは**最も外側**の延長を採る（角に薄壁と下地オーナー壁が
+  // 並ぶ場合、両方が候補になりうるため。書き込み順に結果が左右されないようにする）。
+  const best = new Map();
+  for (const p of plans) {
+    const key = `${p.wall.id}:${p.at}`;
+    const prev = best.get(key);
+    if (!prev || (p.offset - prev.offset) * outward(p.wall, p.at) > 0) best.set(key, p);
+  }
+  for (const p of best.values()) {
+    if (p.at === 'end') p.wall.endOffset = p.offset; else p.wall.startOffset = p.offset;
+  }
+  return best.size;
+}
