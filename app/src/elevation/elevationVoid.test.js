@@ -94,7 +94,11 @@ test('buildVoidBand: 下階に重なる通常部屋が無ければFL差0扱い�
   const voidRoom = makeRectRoom(graph, 0, 0, 4000, 3000, '吹抜け');
   voidRoom.setFeature(RoomFeature.VOID);
 
-  const lowerGraph = makeGraph('p0', 0); // 下階に重なる部屋を一切置かない
+  const lowerGraph = makeGraph('p0', 0);
+  // 下階に重なる「通常部屋」は無い（feature!==nullなのでfindLowerRoomは見つけられない）が、
+  // 壁は同じCL上に実在する——下へ延長する条件（下階の壁の実在）は満たしつつ、FL差の
+  // フォールバックだけを検証する。
+  makeRectRoom(lowerGraph, 0, 0, 4000, 3000, '階段').setFeature(RoomFeature.STAIR);
 
   const floorHeightBelowMm = 2900;
   const band = buildVoidBand(voidRoom, graph, lowerGraph, { floorHeightBelowMm });
@@ -191,4 +195,38 @@ test('【失敗系】buildVoidBand: ctx.floorHeightBelowMm未指定(null)はdrop
   assert.equal(floorY, 0);
   assert.equal(ceilY, -CH);
   assert.equal(band.heightUnits, 1);
+});
+
+
+// ---- 下階に壁が無い区間は下へ延長しない（ユーザー実機指摘2026-08その17。階段帯「6」D2と同構造） ----
+// 「自階の面を下へ延長する」方式は、下階に同じ壁があることを暗黙の前提にしていた。
+// 下階にその壁が無ければ、実在しない壁の輪郭が1FLまで描かれてしまう。
+test('【実機指摘】buildVoidBand: 下階に同じ壁が無い面は下へ延長せず、設置階の床のまま残る', () => {
+  const graph = makeGraph('p1', 2900);
+  const voidRoom = makeRectRoom(graph, 0, 0, 4000, 3000, '吹抜け');
+  voidRoom.setFeature(RoomFeature.VOID);
+
+  // 下階の部屋はx方向に広く、吹抜けのx=0の面（西側）に対応する壁が下階には無い。
+  const lowerGraph = makeGraph('p0', 0);
+  makeRectRoom(lowerGraph, -4000, 0, 4000, 3000, 'LDK');
+
+  const band = buildVoidBand(voidRoom, graph, lowerGraph, { floorHeightBelowMm: 2900 });
+  const floors = band.primitives
+    .filter(p => p.type === 'line' && p.weight === 'thick' && p.y1 === p.y2).map(p => p.y1);
+  assert.ok(floors.includes(2900), '下階に壁がある面（x=4000側・y方向の面）は従来どおり+2900まで下がるはず');
+  assert.ok(floors.includes(0), `下階に壁が無いx=0の面は設置階の床(y=0)のまま残るはず（実際:${JSON.stringify([...new Set(floors)])}）`);
+});
+
+test('【失敗系】buildVoidBand: 下階に全ての面の壁が揃っていれば、床線は全て+dropに下がる', () => {
+  const graph = makeGraph('p1', 2900);
+  const voidRoom = makeRectRoom(graph, 0, 0, 4000, 3000, '吹抜け');
+  voidRoom.setFeature(RoomFeature.VOID);
+
+  const lowerGraph = makeGraph('p0', 0);
+  makeRectRoom(lowerGraph, 0, 0, 4000, 3000, 'LDK');
+
+  const band = buildVoidBand(voidRoom, graph, lowerGraph, { floorHeightBelowMm: 2900 });
+  const floors = [...new Set(band.primitives
+    .filter(p => p.type === 'line' && p.weight === 'thick' && p.y1 === p.y2).map(p => p.y1))];
+  assert.deepEqual(floors.filter(y => y > 0), [2900], '床線は+2900の1種類だけのはず');
 });

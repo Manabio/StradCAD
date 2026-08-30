@@ -6,8 +6,10 @@
  * 同じ世界座標で自動的にCLが揃う。下階の面リストを別に組んで縦に積む必要は無い。ctx.faceOverride
  * （elevationBand.jsのlayoutBandFacesが公開するフック）で各面のfloorSegmentsを下へずらすだけで
  * 実現する（床が下がる・天井は動かない＝ceilAbs=floorDelta+chMmが不変になるよう変換する）。
+ * ただし下へ延長してよいのは**下階に同じ壁が実在する区間だけ**（lowerCoverLocal）。
  */
 import { roomBounds } from '../finish/gridCells.js';
+import { graphList } from '../graphReadScope.js';
 import { composeRoomFaces } from './elevationFaceList.js';
 import { layoutBandFaces, finalizeBand } from './elevationBand.js';
 
@@ -45,6 +47,82 @@ function findLowerRoom(voidRoom, graph, lowerGraph) {
   return findOverlappingRoom(bounds, lowerGraph, r => r.feature == null);
 }
 
+// 面の軸CLと下階の壁を同一視する世界座標の許容差(mm)。CLは階ごとに別オブジェクトのため、
+// idではなく世界座標で突き合わせる（section層のisSightlineShapeと同じ規約）。
+const LOWER_AXIS_EPS_MM = 1;
+// 分割で生じる極小区間を捨てる下限(mm)。
+const MIN_SUB_SEG_MM = 1e-6;
+
+// 世界範囲の配列を昇順に整列・結合する。
+function mergeRanges(ranges) {
+  const sorted = [...ranges].sort((a, b) => a.lo - b.lo);
+  const out = [];
+  for (const r of sorted) {
+    const last = out[out.length - 1];
+    if (last && r.lo <= last.hi) last.hi = Math.max(last.hi, r.hi);
+    else out.push({ ...r });
+  }
+  return out;
+}
+
+/**
+ * face と同じ位置（軸CLの世界座標・向きが一致）の壁が lowerGraph に実在する世界範囲。
+ * 吹抜けの2層帯は「自階の面を下へ延長する」方式のため、下階に壁が無い区間まで延長すると
+ * 実在しない壁の輪郭が1FLまで描かれてしまう（ユーザー実機指摘2026-08その17と同じ構造の不具合。
+ * 階段帯はsection層で層ごとに壁を拾うが、吹抜け帯は面をそのまま引き伸ばすだけだった）。
+ * @param {object} face
+ * @param {object} lowerGraph
+ * @returns {{lo:number,hi:number}[]} 世界座標の範囲（結合済み）
+ */
+function lowerWallWorldRanges(face, lowerGraph) {
+  const axis = face.axisCL?.effectiveValue;
+  if (axis == null) return [];
+  const ranges = [];
+  for (const w of graphList(lowerGraph, 'walls') ?? []) {
+    if (!w.isVertical !== !face.isVertical) continue;
+    const wAxis = w.axisCL?.effectiveValue;
+    if (wAxis == null || Math.abs(wAxis - axis) > LOWER_AXIS_EPS_MM) continue;
+    ranges.push({ lo: Math.min(w.coord1, w.coord2), hi: Math.max(w.coord1, w.coord2) });
+  }
+  return mergeRanges(ranges);
+}
+
+/**
+ * lowerWallWorldRangesを面のローカルx（0..run）へ写した被覆範囲。
+ * world = originWorld + dirSign * localX（snapFaceEndsToCornersの規約）。
+ */
+function lowerCoverLocal(face, lowerGraph) {
+  const world = lowerWallWorldRanges(face, lowerGraph);
+  const sign = face.dirSign > 0 ? 1 : -1;
+  const local = world.map(r => {
+    const a = sign * (r.lo - face.originWorld), b = sign * (r.hi - face.originWorld);
+    return { lo: Math.min(a, b), hi: Math.max(a, b) };
+  });
+  return mergeRanges(local);
+}
+
+/**
+ * 1つのfloorSegmentを被覆範囲(cover)で切り分ける。返り値は元の[loX,hiX]を隙間なく覆う
+ * 小区間の並び（covered=下階に壁があるので下へ延長してよい区間）。
+ */
+function splitSegByCover(seg, cover) {
+  const cuts = [seg.loX];
+  for (const c of cover) {
+    if (c.lo > seg.loX && c.lo < seg.hiX) cuts.push(c.lo);
+    if (c.hi > seg.loX && c.hi < seg.hiX) cuts.push(c.hi);
+  }
+  cuts.push(seg.hiX);
+  cuts.sort((a, b) => a - b);
+  const parts = [];
+  for (let i = 0; i + 1 < cuts.length; i++) {
+    const loX = cuts[i], hiX = cuts[i + 1];
+    if (hiX - loX <= MIN_SUB_SEG_MM) continue;
+    const mid = (loX + hiX) / 2;
+    parts.push({ loX, hiX, covered: cover.some(c => mid > c.lo && mid < c.hi) });
+  }
+  return parts;
+}
+
 /**
  * 吹抜け部屋の帯（設置階下階のFLから設置階の天井高さまでの2層帯。CLを合わせて描画）。
  * lowerGraph・ctx.floorHeightBelowMm のどちらかが無ければ drop なしの1層帯（buildRoomBand相当・
@@ -78,15 +156,25 @@ export function buildVoidBand(voidRoom, graph, lowerGraph, ctx = {}) {
     // 0でクランプする（クランプせず負値のまま使うと、床が天井より上に来る空白の2層帯になる）。
     dropMm = Math.max(0, floorHeightBelowMm + flDiffMm);
     // ceilAbs = floorDelta + chMm が不変（天井は動かず床だけ下がる）。
+    // 下へ延長するのは**下階に同じ壁が実在する区間だけ**（lowerCoverLocal）。壁の無い区間は
+    // 設置階の床（2FL）のまま残し、その境界は既存の段差床線の仕組みで縦の折れとして出る
+    // ——延長しない＝「下階はこの面では壁が無い（アキ）」という表現。
     faceOverride = (face, i, defaults) => {
       if (!defaults.floorSegments) return null; // 段差見付け面（kind==='step'）は対象外
-      return {
-        floorSegments: defaults.floorSegments.map(seg => ({
-          ...seg,
-          floorDeltaMm: seg.floorDeltaMm - dropMm,
-          chMm: (seg.chMm ?? defaults.CH) + dropMm,
-        })),
-      };
+      const cover = lowerCoverLocal(face, lowerGraph);
+      const out = [];
+      for (const seg of defaults.floorSegments) {
+        for (const part of splitSegByCover(seg, cover)) {
+          // hiCLIdは元の区間の右端に達する小区間だけが引き継ぐ（分割で生じた内側の境界は
+          // 段差CLではないため、ROW1寸法の分割点にしてはいけない）。
+          const hiCLId = part.hiX === seg.hiX ? seg.hiCLId : null;
+          out.push(part.covered
+            ? { ...seg, loX: part.loX, hiX: part.hiX, hiCLId,
+                floorDeltaMm: seg.floorDeltaMm - dropMm, chMm: (seg.chMm ?? defaults.CH) + dropMm }
+            : { ...seg, loX: part.loX, hiX: part.hiX, hiCLId });
+        }
+      }
+      return { floorSegments: out };
     };
   }
 

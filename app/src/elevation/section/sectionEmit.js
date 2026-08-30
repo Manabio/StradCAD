@@ -73,6 +73,59 @@ function matchingBand(col, z0, z1, kind) {
   return col.bands.find(b => b.kind === kind && overlapsZ(b, { z0, z1 })) ?? null;
 }
 
+// 2つの帯が「同じ壁面」を見ているか。壁オブジェクトは通り芯位置で分割されるため参照一致では
+// 見分けられず、軸CL（同一graph内の同一オブジェクト）と材の面位置で比較する。層が違えば
+// graphも違うため軸CLが一致せず、自動的にfalseになる。
+function sameWallFace(a, b) {
+  return !!a.wall && !!b.wall && a.wall.axisCL === b.wall.axisCL
+    && Math.abs(a.wall.axisValue - b.wall.axisValue) < GAP_EPS;
+}
+
+/**
+ * band の [z0,z1] のうち、隣接列 col で**同じ壁面が続いていない**z区間（＝側縁の縦線を描くべき
+ * 範囲）を返す。col が null（探査範囲外）なら全区間を返す。
+ *
+ * 「続いていない（＝縦線を描く）」のは、隣接列の壁帯が **同じ層(layerRole)で距離(distMm)だけが
+ * 違う**場合＝1枚の面が折れた凹みで側面が見えるときだけ。層が変わっただけ（見えている壁が
+ * 別階のものへ入れ替わった）のは連続面の折れ角ではないので描かない（ユーザー実機指摘2026-08
+ * 「6」D。実機症状: 左CL上のz3800..5400に縦線が出ていた）。
+ *
+ * 旧実装は `matchingBand`（重なる帯を1つ見つけたら連続とみなす）でband全体を一括判定していたため、
+ * **隣接列の壁が途中までしか無い**ケースで側縁が丸ごと消えていた（ユーザー実機指摘2026-08その17
+ * 「「6」D2: 2階X2通りの壁を見ているので、3500左CLの2階に壁エッジ」——手前列は上が吹抜けで
+ * 壁がz0..5400まで続くのに対し隣接列は1F天井までの0..2400しか無く、その差分2400..5400が
+ * 壁面の実際の終端であるにもかかわらず縦線が出ていなかった）。
+ * @param {object|null} col
+ * @param {object} band
+ * @returns {{z0:number,z1:number}[]}
+ */
+function uncoveredZRanges(col, band) {
+  if (!col) return [{ z0: band.z0, z1: band.z1 }];
+  let ranges = [{ z0: band.z0, z1: band.z1 }];
+  for (const nb of col.bands) {
+    // 覆う（＝縦線を出さない）のは「同層・同距離＝そのまま続く壁」と「別層＝見えている壁が
+    // 入れ替わっただけ」の2通り。残る「同層・別距離」だけが凹みの側面として縦線になる。
+    if (nb.kind !== 'wall') continue;
+    if (nb.layerRole === band.layerRole && nb.distMm !== band.distMm) continue;
+    if (!overlapsZ(nb, band)) continue;
+    // 同じ壁面がキャップ（天井高さ・上階セルの有無）の違いだけで高さを変えている境界は、
+    // 壁が途切れたわけではないので**帯全体**を覆う＝縦線を出さない（ユーザー明示指示
+    // 2026-08その18「セル境界は描画対象としない」。実機症状: 上階のセルが部屋⇄吹抜けで
+    // 切り替わる位置＝CL上に、1階壁のキャップ差ぶんの縦線が出ていた——キャップはセル境界で
+    // 切り替わるため、この線は必ずCL（一点鎖線）に重なる）。
+    // 腰壁・垂れ壁で実際に高さが制限された帯（isKneeDrop）は実体の高さ差なので対象外。
+    if (!nb.isKneeDrop && !band.isKneeDrop && sameWallFace(nb, band)) return [];
+    const rest = [];
+    for (const r of ranges) {
+      if (!overlapsZ(nb, r)) { rest.push(r); continue; }
+      if (nb.z0 > r.z0 + GAP_EPS) rest.push({ z0: r.z0, z1: nb.z0 });
+      if (nb.z1 < r.z1 - GAP_EPS) rest.push({ z0: nb.z1, z1: r.z1 });
+    }
+    ranges = rest;
+  }
+  return ranges.filter(r => r.z1 - r.z0 > GAP_EPS);
+}
+
 /**
  * 背景側の水平線（見えがかり壁の上下端縁・スラブ端）が、**手前の切断壁の断面線でトリムされる**か
  * （ユーザー実機指摘2026-08「6」D1・B「1F天井断面が2階袖壁断面線とトリムされていない」）。
@@ -256,18 +309,25 @@ export function emitColumns(columns, cut, emitCtx = {}) {
         // こちらは設置階の壁(d2250 self)で、距離が変わるのは「1枚の壁面が凹んだ」からではなく
         // **見えている壁が別の層のものへ入れ替わった**だけ。連続面の折れ角ではないので描かない）。
         // 隣接列に見えがかり壁が無い場合は従来どおり「そこで壁が終わる」＝描く。
-        const isRecessAgainst = nb => {
-          if (!nb) return true;                                // 壁がそこで終わる
-          if (nb.layerRole !== band.layerRole) return false;    // 層が入れ替わっただけ
-          return nb.distMm !== band.distMm;
-        };
-        const prevWall = matchingBand(prev, band.z0, band.z1, 'wall');
-        if ((prev ? isRecessAgainst(prevWall) : !emitCtx.openEndLo)) {
-          prims.push(emitLine(cut, col.x0, band.z0, col.x0, band.z1, ElevationLineRole.SILHOUETTE, { ceilZ }));
-        }
-        const nextWall = matchingBand(next, band.z0, band.z1, 'wall');
-        if ((next ? isRecessAgainst(nextWall) : !emitCtx.openEndHi)) {
-          prims.push(emitLine(cut, col.x1, band.z0, col.x1, band.z1, ElevationLineRole.SILHOUETTE, { ceilZ }));
+        // **手前の切断壁に切られてこの列だけ分割された帯の側縁も描かない**（ユーザー明示指示
+        // 2026-08その17「「6」D1・B: 腰壁上のエッジは不要」）。腰壁の天端(z0)で始まる帯は、
+        // その列で腰壁に遮られたぶんだけ下端が持ち上がった**同じ壁の続き**であり、隣接列では
+        // 1本の大きな帯（あるいは別の見え方）になる。ここで側縁を描くと、腰壁の上に壁の切れ目が
+        // 無いのに縦線が出る。水平線側は既に`trimmedByCutWall`で同じ理由から抑止しており
+        // （上のz0/z1の水平線）、縦線だけが取り残されていた——これが過去に同種の指摘
+        // （左CL上のz3800..5400の縦線）をlayerRole一致で塞いだのに再発した理由。
+        // 根本は「遮蔽で分割された帯かどうか」を縦線側が見ていなかったこと。
+        const splitByCutWall = trimmedByCutWall(col, band.z0);
+        if (!splitByCutWall) {
+          const wholeBand = [{ z0: band.z0, z1: band.z1 }];
+          const loRanges = prev ? uncoveredZRanges(prev, band) : (emitCtx.openEndLo ? [] : wholeBand);
+          for (const r of loRanges) {
+            prims.push(emitLine(cut, col.x0, r.z0, col.x0, r.z1, ElevationLineRole.SILHOUETTE, { ceilZ }));
+          }
+          const hiRanges = next ? uncoveredZRanges(next, band) : (emitCtx.openEndHi ? [] : wholeBand);
+          for (const r of hiRanges) {
+            prims.push(emitLine(cut, col.x1, r.z0, col.x1, r.z1, ElevationLineRole.SILHOUETTE, { ceilZ }));
+          }
         }
       } else if (band.kind === 'cutAlong') {
         // cutAlong（縦断された壁。WP-E5リード裁定・§6.1）: 見付面自体は塗らず輪郭のみ描く。

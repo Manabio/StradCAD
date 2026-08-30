@@ -627,3 +627,152 @@ test('【裁定A案】emitColumns: 外側まで列が伸びていれば、スラ
     .flatMap(p => [p.x1, p.x2]);
   assert.equal(Math.min(...xs), -150, '外側の列(x=-150..0)のスラブ端線がそのまま出るはず');
 });
+
+
+// ---- 腰壁の上の縦線（ユーザー明示指示2026-08その17。再発した不具合の根本対策） ----
+// 「「6」D1・B: 腰壁上のエッジは不要」。腰壁(cut)に遮られてこの列だけ下端が持ち上がった
+// 見えがかり壁の帯は、**同じ壁の続き**であって「そこで壁が終わった」わけではない。
+// 側縁の縦線を描くと、腰壁の上に壁の切れ目が無いのに縦線が出る（実機症状: 左CL上のz3800..5400）。
+// 水平線側は`trimmedByCutWall`で既に抑止されており、縦線だけが取り残されていた。
+test('【明示指示】emitColumns: 手前の腰壁で分割された見えがかり壁の帯には側縁の縦線を描かない', () => {
+  const cut = makeCut({ zRange: { loZ: 0, hiZ: 5400 } });
+  const columns = [
+    // 隣接列: 腰壁が無く、上部は別の見え方（slab）になっている＝厳密一致では壁が見つからない
+    { x0: 0, x1: 500, worldLo: 0, worldHi: 500,
+      bands: [{ kind: 'wall', z0: 0, z1: 2400, distMm: 2250, layerRole: 'self' },
+              { kind: 'slab', z0: 2400, z1: 3000 }, { kind: 'cut', z0: 3000, z1: 3800 },
+              { kind: 'slab', z0: 3800, z1: 5400 }] },
+    // 腰壁の列: 腰壁(cut z3000..3800)に切られて見えがかり壁がz3800..5400へ分割されている
+    { x0: 500, x1: 1000, worldLo: 500, worldHi: 1000,
+      bands: [{ kind: 'wall', z0: 0, z1: 3000, distMm: 2250, layerRole: 'self' },
+              { kind: 'cut', z0: 3000, z1: 3800 },
+              { kind: 'wall', z0: 3800, z1: 5400, distMm: 2250, layerRole: 'self' }] },
+  ];
+  const prims = emitColumns(columns, cut);
+  const kneeTopEdges = prims.filter(p => p.x1 === p.x2 &&
+    Math.abs(Math.max(p.y1, p.y2) - (-3800)) < 1e-6 && Math.abs(Math.min(p.y1, p.y2) - (-5400)) < 1e-6);
+  assert.equal(kneeTopEdges.length, 0,
+    `腰壁の上(z3800..5400)には側縁の縦線を描かないはず（実際:${JSON.stringify(kneeTopEdges)}）`);
+});
+
+test('【失敗系】emitColumns: 手前に腰壁が無ければ、壁が終わる列境界の縦線は従来どおり描く', () => {
+  const cut = makeCut({ zRange: { loZ: 0, hiZ: 5400 } });
+  const columns = [
+    { x0: 0, x1: 500, worldLo: 0, worldHi: 500, bands: [{ kind: 'open', z0: 0, z1: 5400 }] },
+    { x0: 500, x1: 1000, worldLo: 500, worldHi: 1000,
+      bands: [{ kind: 'wall', z0: 3800, z1: 5400, distMm: 2250, layerRole: 'self' }] },
+  ];
+  const prims = emitColumns(columns, cut);
+  const edges = prims.filter(p => p.x1 === p.x2 &&
+    Math.abs(Math.max(p.y1, p.y2) - (-3800)) < 1e-6 && Math.abs(Math.min(p.y1, p.y2) - (-5400)) < 1e-6);
+  assert.ok(edges.length > 0, '腰壁(cut)が無い列では、壁が終わる境界の縦線は従来どおり出るはず');
+});
+
+
+// ---- 隣接列の壁が途中までしか無い境界の縦線（ユーザー実機指摘2026-08その17「6」D2） ----
+// 「2階X2通りの壁を見ているので、3500左CLの2階に壁エッジ」。手前列は上が吹抜けのため
+// 見えがかり壁がz0..5400まで続くのに対し、隣接列は1F天井までの0..2400しか壁が無い。
+// その差分(2400..5400)は壁面の実際の終端なので縦線が要る。旧実装は「重なる壁帯が1つでもあれば
+// 連続」と band 全体を一括判定していたため、側縁が丸ごと消えていた。
+test('【実機指摘】emitColumns: 隣接列の壁が途中までのとき、はみ出したz区間だけに側縁の縦線を描く', () => {
+  const cut = makeCut({ zRange: { loZ: 0, hiZ: 5400 } });
+  const columns = [
+    // 上が吹抜けで壁が全高続く列
+    { x0: 0, x1: 500, worldLo: 0, worldHi: 500,
+      bands: [{ kind: 'wall', z0: 0, z1: 5400, distMm: 750, layerRole: 'self' }] },
+    // 隣接列: 同じ壁面(距離750)だが1F天井までしか無い
+    { x0: 500, x1: 1000, worldLo: 500, worldHi: 1000,
+      bands: [{ kind: 'wall', z0: 0, z1: 2400, distMm: 750, layerRole: 'self' },
+              { kind: 'slab', z0: 2400, z1: 5400 }] },
+  ];
+  const verts = emitColumns(columns, cut).filter(p => p.x1 === p.x2 && p.x1 === 500)
+    .map(p => [Math.min(-p.y1, -p.y2), Math.max(-p.y1, -p.y2)]);
+  assert.deepEqual(verts, [[2400, 5400]],
+    `境界x=500にはz2400..5400の縦線が1本だけ出るはず（実際:${JSON.stringify(verts)}）`);
+});
+
+test('【失敗系】emitColumns: 隣接列の壁が同じz範囲を覆っていれば境界に縦線は出ない', () => {
+  const cut = makeCut({ zRange: { loZ: 0, hiZ: 5400 } });
+  const bands = [{ kind: 'wall', z0: 0, z1: 5400, distMm: 750, layerRole: 'self' }];
+  const columns = [
+    { x0: 0, x1: 500, worldLo: 0, worldHi: 500, bands },
+    { x0: 500, x1: 1000, worldLo: 500, worldHi: 1000, bands },
+  ];
+  const verts = emitColumns(columns, cut).filter(p => p.x1 === p.x2 && p.x1 === 500);
+  assert.equal(verts.length, 0, '壁面が連続する境界には縦線を描かないはず');
+});
+
+test('【実機指摘】emitColumns: 隣接列の壁が別層のものへ入れ替わっただけの境界には縦線を描かない', () => {
+  const cut = makeCut({ zRange: { loZ: 0, hiZ: 5400 } });
+  const columns = [
+    // 上階側にだけ出隅の角の塊が見える列（自階の壁は1F天井で切れ、その上は床スラブ帯）
+    { x0: 0, x1: 500, worldLo: 0, worldHi: 500,
+      bands: [{ kind: 'wall', z0: 0, z1: 2400, distMm: 750, layerRole: 'self' },
+              { kind: 'slab', z0: 2400, z1: 3000 },
+              { kind: 'wall', z0: 3000, z1: 5400, distMm: 750, layerRole: 'above' }] },
+    // 同じ面が自階の壁として全高見えている列
+    { x0: 500, x1: 1000, worldLo: 500, worldHi: 1000,
+      bands: [{ kind: 'wall', z0: 0, z1: 5400, distMm: 750, layerRole: 'self' }] },
+  ];
+  const verts = emitColumns(columns, cut).filter(p => p.x1 === p.x2 && p.x1 === 500)
+    .map(p => [Math.min(-p.y1, -p.y2), Math.max(-p.y1, -p.y2)]);
+  assert.deepEqual(verts, [[2400, 3000]],
+    `2階側(z3000..5400)は層が入れ替わっただけなので縦線を描かず、自階の壁が実際に途切れる`
+    + `スラブ帯(z2400..3000)だけが縦線になるはず（実際:${JSON.stringify(verts)}）`);
+});
+
+
+// ---- セル境界は描画対象としない（ユーザー明示指示2026-08その18） ----
+// 上階のセルが部屋⇄吹抜けで切り替わる位置では、同じ壁面のz上限（天井キャップ）だけが変わる。
+// キャップの切り替わりはセル境界＝CL上に必ず来るため、そこに縦線を出すと一点鎖線に重なる。
+// 壁が途切れたわけではないので描かない。
+const wallFace = (axisCL, axisValue) => ({ axisCL, axisValue });
+
+test('【明示指示】emitColumns: 同じ壁面のキャップ差（上階セルの切り替わり）では縦線を描かない', () => {
+  const cut = makeCut({ zRange: { loZ: 0, hiZ: 5400 } });
+  const cl = { id: 'clA' };
+  const face = wallFace(cl, -2942.5);
+  const columns = [
+    // 上が吹抜け＝1階壁が2階天井まで見えている列
+    { x0: 0, x1: 500, worldLo: 0, worldHi: 500,
+      bands: [{ kind: 'wall', z0: 0, z1: 5400, distMm: 750, layerRole: 'self', wall: face }] },
+    // 上が部屋＝同じ壁面が1階天井で切られている列
+    { x0: 500, x1: 1000, worldLo: 500, worldHi: 1000,
+      bands: [{ kind: 'wall', z0: 0, z1: 2400, distMm: 750, layerRole: 'self', wall: face },
+              { kind: 'slab', z0: 2400, z1: 5400 }] },
+  ];
+  const verts = emitColumns(columns, cut).filter(p => p.x1 === p.x2 && p.x1 === 500);
+  assert.equal(verts.length, 0,
+    `同じ壁面のキャップ差には縦線を描かないはず（実際:${JSON.stringify(verts)}）`);
+});
+
+test('【失敗系】emitColumns: 別の壁面なら、はみ出したz区間に従来どおり縦線を描く', () => {
+  const cut = makeCut({ zRange: { loZ: 0, hiZ: 5400 } });
+  const clA = { id: 'clA' }, clB = { id: 'clB' };
+  const columns = [
+    { x0: 0, x1: 500, worldLo: 0, worldHi: 500,
+      bands: [{ kind: 'wall', z0: 0, z1: 5400, distMm: 750, layerRole: 'self', wall: wallFace(clA, -2942.5) }] },
+    { x0: 500, x1: 1000, worldLo: 500, worldHi: 1000,
+      bands: [{ kind: 'wall', z0: 0, z1: 2400, distMm: 750, layerRole: 'self', wall: wallFace(clB, -2942.5) },
+              { kind: 'slab', z0: 2400, z1: 5400 }] },
+  ];
+  const verts = emitColumns(columns, cut).filter(p => p.x1 === p.x2 && p.x1 === 500)
+    .map(p => [Math.min(-p.y1, -p.y2), Math.max(-p.y1, -p.y2)]);
+  assert.deepEqual(verts, [[2400, 5400]], '別の壁面ならはみ出した区間に縦線が出るはず');
+});
+
+test('【失敗系】emitColumns: 腰壁で実際に高さが制限された帯（isKneeDrop）はキャップ差扱いにしない', () => {
+  const cut = makeCut({ zRange: { loZ: 0, hiZ: 5400 } });
+  const cl = { id: 'clA' };
+  const face = wallFace(cl, -2942.5);
+  const columns = [
+    { x0: 0, x1: 500, worldLo: 0, worldHi: 500,
+      bands: [{ kind: 'wall', z0: 0, z1: 5400, distMm: 750, layerRole: 'self', wall: face }] },
+    { x0: 500, x1: 1000, worldLo: 500, worldHi: 1000,
+      bands: [{ kind: 'wall', z0: 0, z1: 800, distMm: 750, layerRole: 'self', wall: face, isKneeDrop: true },
+              { kind: 'open', z0: 800, z1: 5400 }] },
+  ];
+  const verts = emitColumns(columns, cut).filter(p => p.x1 === p.x2 && p.x1 === 500)
+    .map(p => [Math.min(-p.y1, -p.y2), Math.max(-p.y1, -p.y2)]);
+  assert.deepEqual(verts, [[800, 5400]], '腰壁の実体の高さ差には縦線が出るはず');
+});
