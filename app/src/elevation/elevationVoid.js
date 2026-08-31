@@ -9,8 +9,14 @@
  * ただし下へ延長してよいのは**下階に同じ壁が実在する区間だけ**（lowerCoverLocal）。
  */
 import { roomBounds } from '../finish/gridCells.js';
+import { roomCeilingHeight } from '../finish/roomMetrics.js';
 import { graphList } from '../graphReadScope.js';
 import { composeRoomFaces } from './elevationFaceList.js';
+import { findRunCLAt } from './elevationFloorProfile.js';
+import { makeProbeContext } from './section/sectionProbe.js';
+import { buildColumns } from './section/sectionEngine.js';
+import { emitColumns } from './section/sectionEmit.js';
+import { translatePrimitive } from './elevationPrimitives.js';
 import { layoutBandFaces, finalizeBand } from './elevationBand.js';
 
 // 2つのワールド矩形が重なるか（面積0の接触は重なりに含めない）。
@@ -186,4 +192,196 @@ export function buildVoidBand(voidRoom, graph, lowerGraph, ctx = {}) {
     // heightUnits=1にする（hasLowerだけを見ると2層予約されたままになってしまう）。
     heightUnits: hasLower && dropMm > 0 ? 2 : 1,
   });
+}
+
+/**
+ * 「上部吹抜け」を、それが落ちている下階Roomの帯に多層書きする（ユーザー明示指示2026-08）。
+ *
+ * 吹抜けの展開を独立した帯として並べるのではなく、**下階の部屋の展開と同じ帯**へ積む。
+ * 同じ面（軸CLの世界座標・見る向きが同じ）なら、走り方向の範囲が下階の面と食い違って
+ * いても1枚の面として一緒に描く（ユーザー明示指示: 吹抜けA面の下に1階壁は無いが、
+ * X2の左に同一面が続くので一緒に描画。D面も同様）。
+ *
+ * **吹抜けには天井断面まで水平断面が無い**（ユーザー明示指示2026-08。見えがかりは存在する）
+ * ——吹抜けの範囲でも床断面は下階のFLのまま1本で通り、上階の床位置に断面線は立たない。
+ * したがって区間ごとの高さは「吹抜けの範囲外＝下階の床〜天井」「吹抜けの範囲＝下階の床〜
+ * 上階の天井」の2通りだけになる。下階にその面の壁があるかどうかは断面の有無を左右しない
+ * （実機症状: 吹抜け側の区間だけ床を2FLへ上げていたため、1F床断面が面の端まで届かず
+ * 「5」A1でX3の壁断面と、D1でY1の壁断面と取り合わなかった）。
+ * @param {import('@core').Room} room - 下階の部屋（吹抜けが落ちている部屋）
+ * @param {object} graph - 下階のgraph
+ * @param {import('@core').Room} voidRoom - 直上階の吹抜けRoom
+ * @param {object} upperGraph - 直上階のgraph
+ * @param {object} [ctx] - buildRoomBandと同じctx＋floorHeightAboveMm（下階→上階の階高）
+ * @returns {object} finalizeBandの戻り（heightUnits=2）
+ */
+export function buildRoomBandWithVoidAbove(room, graph, voidRoom, upperGraph, ctx = {}) {
+  const floorHeightMm = ctx.floorHeightAboveMm ?? null;
+  const baseFaces = composeRoomFaces(room, graph);
+  if (floorHeightMm == null || !upperGraph) {
+    // 階高が解決できなければ多層書きしない（下階の帯そのまま。例外は投げない）。
+    const { primitives, chDimX, prevBoundaryHi } = layoutBandFaces(room, graph, baseFaces, ctx);
+    return finalizeBand(room, graph, primitives, {
+      faceCount: baseFaces.length, chDimX, prevBoundaryHi,
+      triOffsetMm: ctx.triangleOffsetModelMm, nameGapModelMm: ctx.nameGapModelMm,
+    });
+  }
+  const voidCH = roomCeilingHeight(upperGraph, voidRoom).mm;
+  const voidFaces = composeRoomFaces(voidRoom, upperGraph).filter(f => f.kind !== 'step');
+
+  // 面の対応付け: 軸CLの世界座標と見る向き（isVertical×inward）が同じなら同一面とみなす。
+  const samePlane = (a, b) => !a.isVertical === !b.isVertical
+    && Math.sign(a.inward) === Math.sign(b.inward)
+    && Math.abs((a.axisCL?.effectiveValue ?? NaN) - (b.axisCL?.effectiveValue ?? NaN)) <= LOWER_AXIS_EPS_MM;
+
+  const used = new Set();
+  const faces = baseFaces.map(f => {
+    if (f.kind === 'step') return f;
+    const mates = voidFaces.filter(v => samePlane(f, v));
+    if (mates.length === 0) return f;
+    mates.forEach(v => used.add(v));
+    const lo = Math.min(f.lo, ...mates.map(v => v.lo));
+    const hi = Math.max(f.hi, ...mates.map(v => v.hi));
+    return withVoidRanges({ ...f, lo, hi }, f, mates, graph, upperGraph);
+  });
+  // 下階に同じ面が無い吹抜けの面は、上段だけの面として単独で足す。
+  for (const v of voidFaces) {
+    if (!used.has(v)) faces.push(withVoidRanges({ ...v }, v, [v], graph, upperGraph));
+  }
+
+  const faceOverride = (face, i, defaults) => {
+    const plan = face.voidAbove;
+    if (!plan) return null;
+    const base = defaults.floorSegments ?? [{ loX: 0, hiX: face.run, floorDeltaMm: 0 }];
+    const out = [];
+    for (const seg of coverFullRun(base, face.run)) {
+      for (const part of splitSegByCover(seg, plan.voidLocal)) {
+        if (!part.covered) { out.push({ ...seg, loX: part.loX, hiX: part.hiX }); continue; }
+        // 吹抜けの区間: 床はそのまま（水平断面を挟まない）、天井だけ上階の天井まで伸ばす。
+        const delta = seg.floorDeltaMm ?? 0;
+        out.push({ ...seg, loX: part.loX, hiX: part.hiX, hiCLId: null, chMm: floorHeightMm + voidCH - delta });
+      }
+    }
+    return { floorSegments: out };
+  };
+
+  const layout = layoutBandFaces(room, graph, faces, { ...ctx, faceOverride });
+  const primitives = [...layout.primitives];
+
+  // 壁断面・見えがかりは**階段展開とまったく同じ2.5D断面エンジン**に任せる（ユーザー明示指示
+  // 2026-08「処理共有のこと」）。面ごとにSectionCutを1本立て、buildColumns→emitColumnsの
+  // 同じ経路を通す——これで吹抜けの区間にも1階天井の見えがかり・上階の壁（腰壁・垂れ壁）の
+  // 断面／見えがかりが、階段帯と同じ規則で出る。
+  // 床線・天井線・端の縦線・幅木・建具はbuildFaceFigure側の責務のまま（役割分担は階段帯と同じ）。
+  const hiZ = floorHeightMm + voidCH;
+  const layers = [
+    { graph, floorZMm: 0, role: 'self' },
+    { graph: upperGraph, floorZMm: floorHeightMm, role: 'above' },
+  ];
+  const probeCtx = makeProbeContext(layers);
+  const bandRoomBounds = roomBounds(room.cells, graph);
+  layout.faceRuns.forEach(({ xCursor }, i) => {
+    const face = faces[i];
+    if (!face?.voidAbove) return; // 吹抜けの無い面は従来どおり（断面エンジンを通さない）
+    const cut = {
+      seqNo: String(i), dirSign: face.dirSign,
+      // 視線は室内から壁を見る向き＝面のinwardの逆（elevationStairSequence.jsの
+      // `letterOf(isVertical, -cut.viewSign)`と対の規約）。
+      viewSign: face.inward > 0 ? -1 : 1,
+      line: {
+        isVertical: face.isVertical, axisValue: face.axisCL.effectiveValue, lo: face.lo, hi: face.hi,
+        // 直交壁はこの面の壁に突き当たって室内側の面で終わる（CL上の切断線までは届かない）。
+        // 面の壁の半厚ぶんを許容してその断面を拾う（sectionProbe.jsのisCutWall参照）。
+        buttToleranceMm: Math.abs((face.faceValue ?? face.axisCL.effectiveValue) - face.axisCL.effectiveValue),
+      },
+      layers, zRange: { loZ: 0, hiZ }, baseFloorZ: 0, bandRoomBounds,
+    };
+    for (const p of emitColumns(buildColumns(cut, probeCtx), cut, { ceilZ: hiZ })) {
+      primitives.push(translatePrimitive(p, xCursor, 0));
+    }
+  });
+
+  return finalizeBand(room, graph, primitives, {
+    faceCount: faces.length, chDimX: layout.chDimX, prevBoundaryHi: layout.prevBoundaryHi,
+    triOffsetMm: ctx.triangleOffsetModelMm, nameGapModelMm: ctx.nameGapModelMm,
+    heightUnits: 2,
+  });
+}
+
+// 面の走り方向の世界範囲をローカルx（0..run）へ写す（world = originWorld + dirSign*localX）。
+function toLocal(face, ranges) {
+  const sign = face.dirSign > 0 ? 1 : -1;
+  return mergeRanges(ranges.map(r => {
+    const a = sign * (r.lo - face.originWorld), b = sign * (r.hi - face.originWorld);
+    return { lo: Math.min(a, b), hi: Math.max(a, b) };
+  }));
+}
+
+/**
+ * 走り範囲を広げた面に、吹抜けの範囲（ローカルx）と端の情報を付ける。
+ * 端の「壁あり/見えがかりエッジ」は、その端の世界座標を実際に持っている元の面から引き継ぐ
+ * （伸ばした側の端は吹抜けの面が持っている）。
+ */
+function withVoidRanges(merged, ownFace, voidMates, graph, upperGraph) {
+  const dirSign = ownFace.dirSign;
+  const face = {
+    ...merged, dirSign, run: merged.hi - merged.lo,
+    originWorld: dirSign > 0 ? merged.lo : merged.hi,
+  };
+  const owners = [ownFace, ...voidMates];
+  // 端のCL: startCLIdは常に世界座標lo・endCLIdは常にhiを決める（snapFaceEndsToCornersの規約）。
+  // 伸ばした端は上階の面が持つCL idなので、そのままでは下階graphで引けず faceBoundaryLocalX が
+  // フォールバックして帯のパネル幅が狂う（隣の面と重なる）。世界座標は全階共通なので、同値の
+  // 下階CLへ引き直す。
+  // start/end のどちらのスロットがlo側かは元の面によってまちまちなので、**値の近さ**で選び、
+  // 文書化された不変条件（startCLId=世界座標lo・endCLId=hi。elevationOpenSpan.js参照）で
+  // 詰め直す。faceBoundaryLocalXはmin/maxを取るためスロットの入れ替わりは境界に影響しない。
+  const clOf = (g, id) => g?.shapeMap?.get(id) ?? g?._structGraph?.shapeMap?.get(id) ?? null;
+  const clIdNear = (world) => {
+    const owner = owners.find(o => Math.abs(o.lo - world) <= MIN_SUB_SEG_MM
+      || Math.abs(o.hi - world) <= MIN_SUB_SEG_MM) ?? ownFace;
+    const cands = [owner.startCLId, owner.endCLId]
+      .map(id => ({ id, cl: clOf(upperGraph, id) ?? clOf(graph, id) }))
+      .filter(c => c.cl != null)
+      .sort((a, b) => Math.abs(a.cl.effectiveValue - world) - Math.abs(b.cl.effectiveValue - world));
+    const best = cands[0];
+    if (!best) return null;
+    // 上階の面が持つCL idは下階graphでは引けない。世界座標は全階共通なので同値の下階CLへ移す
+    // （引き直せないと faceBoundaryLocalX がフォールバックし、帯のパネル幅が狂って隣の面と重なる）。
+    return clOf(graph, best.id) ? best.id
+      : (findRunCLAt(graph, face.isVertical, best.cl.value)?.id ?? best.id);
+  };
+  face.startCLId = clIdNear(merged.lo) ?? ownFace.startCLId;
+  face.endCLId   = clIdNear(merged.hi) ?? ownFace.endCLId;
+  const endFlags = (world) => {
+    const atLo = owners.find(o => Math.abs(o.lo - world) <= MIN_SUB_SEG_MM);
+    const atHi = owners.find(o => Math.abs(o.hi - world) <= MIN_SUB_SEG_MM);
+    const o = atLo ?? atHi ?? ownFace;
+    const useLo = !!atLo;
+    return {
+      hasWall: (useLo ? (o.dirSign > 0 ? o.hasWallAtLocal0 : o.hasWallAtLocalRun)
+        : (o.dirSign > 0 ? o.hasWallAtLocalRun : o.hasWallAtLocal0)) ?? true,
+      edge: (useLo ? (o.dirSign > 0 ? o.edgeAtLocal0 : o.edgeAtLocalRun)
+        : (o.dirSign > 0 ? o.edgeAtLocalRun : o.edgeAtLocal0)) ?? false,
+    };
+  };
+  const at0 = endFlags(dirSign > 0 ? merged.lo : merged.hi);
+  const atRun = endFlags(dirSign > 0 ? merged.hi : merged.lo);
+  face.hasWallAtLocal0 = at0.hasWall; face.edgeAtLocal0 = at0.edge;
+  face.hasWallAtLocalRun = atRun.hasWall; face.edgeAtLocalRun = atRun.edge;
+  face.voidAbove = { voidLocal: toLocal(face, voidMates.map(v => ({ lo: v.lo, hi: v.hi }))) };
+  return face;
+}
+
+// segsが面の全長[0,run]を覆うよう、隙間を親（floorDeltaMm=0）の区間で埋める。
+function coverFullRun(segs, run) {
+  const sorted = [...segs].sort((a, b) => a.loX - b.loX);
+  const out = [];
+  let x = 0;
+  for (const s of sorted) {
+    if (s.loX > x + MIN_SUB_SEG_MM) out.push({ loX: x, hiX: s.loX, floorDeltaMm: 0 });
+    out.push(s); x = Math.max(x, s.hiX);
+  }
+  if (run > x + MIN_SUB_SEG_MM) out.push({ loX: x, hiX: run, floorDeltaMm: 0 });
+  return out;
 }

@@ -100,7 +100,13 @@ function isCutWall(wall, line) {
   const av = wall.axisCL.effectiveValue;
   if (!(av >= line.lo - GAP_EPS && av <= line.hi + GAP_EPS)) return false;
   const c1 = Math.min(wall.coord1, wall.coord2), c2 = Math.max(wall.coord1, wall.coord2);
-  return line.axisValue >= c1 - GAP_EPS && line.axisValue <= c2 + GAP_EPS;
+  // buttToleranceMm: 切断線が「面自身の壁の中」を通る用法（部屋の展開）向けの許容差。
+  // 直交壁は面の壁に**突き当たって**その室内側の面で終わるため、CL上に立てた切断線までは
+  // 届かない——素の判定では実在する直交壁（腰壁・垂れ壁を含む）の断面が丸ごと落ちる。
+  // 面の壁の半厚を渡すと、その厚みの中で終わる壁を「切断線を横切る」とみなす。
+  // 階段帯は未指定＝0のため従来と完全同値（ユーザー明示指示2026-08「処理共有のこと」）。
+  const tol = (line.buttToleranceMm ?? 0) + GAP_EPS;
+  return line.axisValue >= c1 - tol && line.axisValue <= c2 + tol;
 }
 
 /**

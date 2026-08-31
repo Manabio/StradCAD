@@ -4,7 +4,8 @@ import { floorSwapManager } from '../storage/FloorSwapManager.js';
 import { selectElevationRooms } from '../elevation/elevationFaces.js';
 import { buildRoomBand } from '../elevation/elevationBand.js';
 import { buildStairBand } from '../elevation/elevationStair.js';
-import { buildVoidBand } from '../elevation/elevationVoid.js';
+import { buildVoidBand, buildRoomBandWithVoidAbove, findOverlappingRoom } from '../elevation/elevationVoid.js';
+import { roomBounds } from '../finish/gridCells.js';
 import { floorHeightAbove, floorHeightBelow } from '../finish/stair/stairDimensions.js';
 import { collectGridCLs } from '../elevation/elevationPrimitives.js';
 import { buildBandsSafely } from '../elevation/elevationRooms.js';
@@ -195,7 +196,27 @@ export class ElevationModeState {
     const upperGraph   = this._upperGraph;
     const lowerGraph   = this._lowerGraph;
     const gridCLs = collectGridCLs(this.graph);
-    const rooms = selectElevationRooms(this.graph);
+    // ユーザー明示指示2026-08「吹抜けの展開は、床断面のある階の展開に描画する」「上部吹抜けが
+    // 落ちている部屋の展開と一緒に多層書き」: 吹抜けRoomは床の無い上階に置くが、その展開は
+    // **直下階の、吹抜けが落ちている部屋の帯へ多層書き**する（独立した帯にはしない）。
+    // 自階の吹抜けは直下階の展開図が担当するのでここでは外す——ただし直下階が無い
+    // （最下階の吹抜け）場合は担当する階が他に無いため、従来どおり自階に帯として残す
+    // （buildVoidBandのlowerGraph欠落フォールバック）。
+    const voidRoomsAbove = upperGraph
+      ? selectElevationRooms(upperGraph).filter(r => r.feature === RoomFeature.VOID) : [];
+    // 直上階の吹抜け → それが落ちている自階の部屋。落ちる先が見つからない吹抜けは
+    // 引き受け手が無いため、従来どおり独立した2層帯として自階に並べる。
+    const ownRooms = selectElevationRooms(this.graph)
+      .filter(r => r.feature !== RoomFeature.VOID || !lowerGraph);
+    const ownRoomIds = new Set(ownRooms.map(r => r.id));
+    const voidByRoomId = new Map();
+    const orphanVoids = [];
+    for (const v of voidRoomsAbove) {
+      const host = findOverlappingRoom(roomBounds(v.cells, upperGraph), this.graph, r => r.feature == null);
+      // 落ちる先が帯として出ない部屋（無名・部分指定）なら引き受け手にできない＝独立帯へ回す。
+      if (host && ownRoomIds.has(host.id)) voidByRoomId.set(host.id, v); else orphanVoids.push(v);
+    }
+    const rooms = [...ownRooms, ...orphanVoids];
     const stairByRoomId = new Map(this.graph.stairs.map(s => [s.roomId, s]));
     const screenPxPerMm = this.screenPxPerMm;
     // 追加仕様2026-08: 2.5D立体の加算レイヤ（梁型）が上階梁の高さ（天端=自FL+階高）を求めるのに
@@ -215,13 +236,24 @@ export class ElevationModeState {
         // WP-V1: 吹抜け帯の下げ量算出に使う「設置階下階との階高」。floorHeightAboveの呼び出し
         // （buildStairBand内。buildBandsSafelyの per-room try/catch で保護される）と同じ位置づけ
         // ——ここで求めることで、project.planes欠落等の異常も他部屋の帯構築を巻き込まない。
-        const floorHeightBelowMm = floorHeightBelow(this.project, this.graph.plane);
-        return buildVoidBand(room, this.graph, lowerGraph, { ...ctx, floorHeightBelowMm });
+        // 直上階の吹抜け（上記voidRoomsAbove）なら、その部屋のgraphは上階・直下階は自階になり、
+        // 下げ量の階高は「上階から見た下階との階高」＝自階の階高（floorHeightMm）と同値。
+        const fromAbove = orphanVoids.includes(room);
+        return fromAbove
+          ? buildVoidBand(room, upperGraph, this.graph, { ...ctx, floorHeightBelowMm: floorHeightMm })
+          : buildVoidBand(room, this.graph, lowerGraph,
+            { ...ctx, floorHeightBelowMm: floorHeightBelow(this.project, this.graph.plane) });
       }
       // 追加仕様2026-08「2.5D仕様の展開ロジックを全ての展開図に適用」: 通常部屋帯へ
       // 2.5D立体の加算レイヤ（構造柱の柱型・上階梁の梁型。elevation/elevationSolids.js）を
       // 有効化する。階段帯は自前の断面エンジン経路で既に構造梁を描くため渡さない（二重描画防止）。
       // 吹抜け帯は「自階の面を下へ延長する」特殊な高さ基準（帯FL≠断面の床）のため今回は対象外。
+      const voidAbove = voidByRoomId.get(room.id);
+      if (voidAbove) {
+        // 上部吹抜けを持つ部屋は多層書き（elevationVoid.jsのbuildRoomBandWithVoidAbove）。
+        return buildRoomBandWithVoidAbove(room, this.graph, voidAbove, upperGraph,
+          { ...ctx, floorHeightAboveMm: floorHeightMm });
+      }
       return buildRoomBand(room, this.graph, { ...ctx, solids: { upperGraph, floorHeightMm } });
     };
 
