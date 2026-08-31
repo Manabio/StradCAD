@@ -6,7 +6,7 @@
  * §5.6「線種テーブル」の唯一の情報源。破線は必ずlineプリミティブで出す
  * （レンダラのpolyline分岐はdash非対応。.claude/elevation-model.md）。
  */
-import { ElevationLineRole, weightForRole, GAP_EPS_MM as GAP_EPS } from '../elevationStyle.js';
+import { ElevationLineRole, weightForRole, GAP_EPS_MM as GAP_EPS, KNEE_CAP_FACE_MM } from '../elevationStyle.js';
 import { zToY } from './sectionTypes.js';
 
 /**
@@ -191,7 +191,25 @@ function cutWallTopEdges(columns, cut, ceilZ) {
   if (topZ == null) return [];
   return cutWallRuns(columns)
     .filter(r => r.band.z1 < topZ - GAP_EPS)
-    .map(r => emitLine(cut, r.x0, r.band.z1, r.x1, r.band.z1, ElevationLineRole.CUT, { ceilZ }));
+    .flatMap(r => [
+      emitLine(cut, r.x0, r.band.z1, r.x1, r.band.z1, ElevationLineRole.CUT, { ceilZ }),
+      ...kneeCapUnderline(cut, r.x0, r.x1, r.band.z1, ceilZ),
+    ]);
+}
+
+/**
+ * 腰壁の天端の帯の**下端**（細線）。天端そのもの（上端）は呼び出し側が既に描いているので、
+ * ここは帯の下端1本だけを返す（仕様2026-08「展開図 中線＝天端／細線＝その下」）。
+ * 見付は実厚（finish/kneeDropWall.js の CAP_THICKNESS）ではなく作図上の KNEE_CAP_FACE_MM
+ * ——実厚のままだと2本線が縮尺で潰れて読めない（elevationStyle.js 参照）。
+ * 帯が壁の高さに収まらない（天端が見付より低い）退化ケースは描かない。
+ * @returns {object[]} 0本 or 1本
+ */
+function kneeCapUnderline(cut, x0, x1, topZ, ceilZ) {
+  const z = topZ - KNEE_CAP_FACE_MM;
+  const floorZ = cut.baseFloorZ ?? 0;
+  if (z <= floorZ + GAP_EPS) return [];
+  return [emitLine(cut, x0, z, x1, z, ElevationLineRole.DETAIL, { ceilZ })];
 }
 
 // 切断壁の断面をz範囲で（壁参照ではなく）まとめる。**壁は片面ずつのWallオブジェクトとして
@@ -408,6 +426,11 @@ export function emitColumns(columns, cut, emitCtx = {}) {
         if (!trimmedByCutWall(col, band.z1) && !atSectionLevel(band.z1)
             && ownsBoundary(band, neighborBandAt(col, band.z1, +1))) {
           prims.push(emitLine(cut, col.x0, band.z1, col.x1, band.z1, role, { ceilZ, forceDash: beyondBand }));
+          // 腰壁の天端（仕様2026-08）: 見えがかりでも天端の帯は見えるので下端を細線で足す。
+          // 天端の水平線を実際に描いた場合だけ——遮蔽で消した縁の下に帯だけ残ると嘘になる。
+          if (band.isKneeDrop && band.z1 < (col.ceilZ ?? ceilZ ?? Infinity) - GAP_EPS) {
+            prims.push(...kneeCapUnderline(cut, col.x0, col.x1, band.z1, ceilZ));
+          }
         }
         // 凹み: 隣接列で同一z区間のwallのdistMmが変化した境界にSILHOUETTE縦線（§5.5）。
         // 凹み側面線。**列の外側の端（prev/nextが無い＝描画範囲の端）では、その端に壁が
@@ -448,6 +471,11 @@ export function emitColumns(columns, cut, emitCtx = {}) {
         // （band全体がbaseFloorZ以下なら降格。'wall'と同じforceDash判定）。
         prims.push(emitLine(cut, col.x0, band.z1, col.x1, band.z1, ElevationLineRole.CUT,
           { ceilZ, forceDash: bandFullyBeyond(cut, band, ceilZ) }));
+        // 腰壁の天端（仕様2026-08）: 上端が天井より下で終わる＝天端が露出している帯だけ、
+        // 帯の下端を細線で足す（垂れ壁は下端が露出するので z1 は天井に一致し、ここは通らない）。
+        if (band.isKneeDrop && band.z1 < (col.ceilZ ?? ceilZ ?? Infinity) - GAP_EPS) {
+          prims.push(...kneeCapUnderline(cut, col.x0, col.x1, band.z1, ceilZ));
+        }
         // 端部縦線: 壁のx方向の実際の端（隣接列に同じcutAlong壁が続かない側）にCUT縦線
         // （壁の実端の断面。§5.5の凹み側面線と同じ「隣接列と比較」パターンだが、cutAlongは
         // 塗り分けを持たないため常にCUT——壁が存在しない側=open端という区別を線種に反映する

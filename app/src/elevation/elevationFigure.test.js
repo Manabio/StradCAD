@@ -6,10 +6,11 @@ import assert from 'node:assert/strict';
 import { edgeKey, OpeningCategory, CenterLineType, Plane, PlanGraph, Discipline } from '@core';
 import { generateRoomWallsFromOutline } from '../finish/wallGeneration.js';
 import {
-  buildFaceFigure, kneeDropGapsOnFace, parseBaseboardHeightMm, avoidGridCollisionX,
+  buildFaceFigure, kneeDropGapsOnFace, kneeCapMarksOnFace, parseBaseboardHeightMm, avoidGridCollisionX,
   openingsReachingCorner, formatMaterialLabel, avoidObstacleRangesX, estimateWallLabelWidthPx,
   segEndProfile,
 } from './elevationFigure.js';
+import { KNEE_CAP_FACE_MM } from './elevationStyle.js';
 import { buildRoomFaces as realBuildRoomFaces } from './elevationFaces.js';
 import { wallAdjacentFloorSegments } from './elevationFloorProfile.js';
 import {
@@ -1942,4 +1943,85 @@ test('【失敗系・WP-2】buildFaceFigure: skipBaseboard/skipWallLabel省略�
     room, materialMap, skipBaseboard: false, skipWallLabel: false,
   }));
   assert.deepEqual(withFalseOpts, withoutOpts);
+});
+
+// ================================================================
+// 新仕様2026-08「腰壁の天端・端部」（kneeCapMarksOnFace）
+// 天端＝壁の上端から下への帯（実厚CAP_THICKNESS）。展開図では見付をKNEE_CAP_FACE_MM（作図値）
+// として上端を中線・下端を細線で描く。天端の出は厚み方向だけなので端部は壁端に立つ。
+// ================================================================
+
+// 腰壁だけを指定した最小graph（区間 1000..3000 の腰壁 topHeight=900）。
+function makeKneeGraph({ topHeight = 900, lo = 1000, hi = 3000, walls = [] } = {}) {
+  const shapes = new Map([['s', { value: lo }], ['e', { value: hi }]]);
+  const kneeDropWalls = new Map([[edgeKey('axisY0', 's', 'e'), { knee: { topHeight } }]]);
+  return { ...makeGraph({ kneeDropWalls, shapes }), walls };
+}
+
+test('kneeCapMarksOnFace: 天端は上端が中線・KNEE_CAP_FACE_MM下が細線の水平2本になる', () => {
+  const prims = kneeCapMarksOnFace(makeFace(), makeKneeGraph(), 'medium', 'thin');
+  const top = prims.find(p => p.weight === 'medium' && p.y1 === p.y2);
+  const cap = prims.find(p => p.weight === 'thin'   && p.y1 === p.y2);
+  assert.ok(top, '天端の中線が見つかるはず');
+  assert.equal(top.y1, -900, '天端はtopHeightの高さ');
+  assert.ok(cap, '天端下端の細線が見つかるはず');
+  assert.equal(cap.y1, -(900 - KNEE_CAP_FACE_MM), `天端の下端はtopHeight-${KNEE_CAP_FACE_MM}`);
+  assert.deepEqual([top.x1, top.x2], [1000, 3000], '区間の範囲に引かれるはず');
+});
+
+test('kneeCapMarksOnFace: 面内で終わり先に壁が無い端には端部抑え（縦の中線＋内側KNEE_CAP_FACE_MMの細線）を描く', () => {
+  const prims = kneeCapMarksOnFace(makeFace(), makeKneeGraph(), 'medium', 'thin');
+  const verticals = prims.filter(p => p.x1 === p.x2);
+  // 両端（x=1000, x=3000）に中線＋細線の2本ずつ＝計4本
+  assert.equal(verticals.length, 4, '両端ぶんの縦線4本が出るはず');
+  const xs = verticals.map(p => p.x1).sort((a, b) => a - b);
+  assert.deepEqual(xs, [1000, 1000 + KNEE_CAP_FACE_MM, 3000 - KNEE_CAP_FACE_MM, 3000], '細線は端から内側へKNEE_CAP_FACE_MM');
+  assert.ok(verticals.every(p => p.y1 === -900 && p.y2 === 0), '端部抑えは天端から床まで');
+});
+
+test('【失敗系】kneeCapMarksOnFace: 端の先に同じ面の壁が続く（連続する壁）なら端部の縦線は描かない', () => {
+  // 区間の先（x=3000〜4000）に同軸の壁が続く＝同面で連続するため縦線を描かない
+  const cont = { axisCL: { id: 'axisY0' }, isVertical: false, coord1: 3000, coord2: 4000 };
+  const prims = kneeCapMarksOnFace(makeFace(), makeKneeGraph({ walls: [cont] }), 'medium', 'thin');
+  const verticals = prims.filter(p => p.x1 === p.x2);
+  assert.deepEqual(verticals.map(p => p.x1).sort((a, b) => a - b), [1000, 1000 + KNEE_CAP_FACE_MM],
+    '連続する側(x=3000)には縦線が出ず、自由端(x=1000)だけに出るはず');
+});
+
+test('【失敗系】kneeCapMarksOnFace: 面の端まで届く区間（直交壁との取り合い）には端部を描かない', () => {
+  // 区間が face.lo(0)〜face.hi(4000) いっぱい＝両端とも隅の取り合い
+  const prims = kneeCapMarksOnFace(makeFace(), makeKneeGraph({ lo: 0, hi: 4000 }), 'medium', 'thin');
+  assert.equal(prims.filter(p => p.x1 === p.x2).length, 0, '面端では端部抑えを描かないはず');
+  assert.equal(prims.length, 2, '天端の水平2本だけになるはず');
+});
+
+test('【失敗系】kneeCapMarksOnFace: 垂れ壁だけの区間には天端を描かない', () => {
+  const shapes = new Map([['s', { value: 1000 }], ['e', { value: 3000 }]]);
+  const kneeDropWalls = new Map([[edgeKey('axisY0', 's', 'e'), { drop: { bottomHeight: 400 } }]]);
+  const graph = { ...makeGraph({ kneeDropWalls, shapes }), walls: [] };
+  assert.deepEqual(kneeCapMarksOnFace(makeFace(), graph, 'medium', 'thin'), []);
+});
+
+test('buildFaceFigure: 腰壁指定のある断面枠（partitionCut）は枠内に天端下端の細線を持つ', () => {
+  const face = makeFace({
+    hasWallAtLocal0: false, hasWallAtLocalRun: true,
+    partitionCutAtLocal0: { thicknessMm: 90, topHeightMm: 900 },
+    partitionCutAtLocalRun: null,
+  });
+  const prims = buildFaceFigure(face, baseCtx());
+  const cap = prims.find(p => p.type === 'line' && p.weight === 'thin'
+    && p.y1 === -(900 - KNEE_CAP_FACE_MM) && p.y1 === p.y2 && p.x1 === 0 && p.x2 === 90);
+  assert.ok(cap, '断面枠の幅ぶんに天端下端の細線が引かれるはず');
+});
+
+test('【失敗系】buildFaceFigure: 天井までの袖壁（topHeightMm=null）の断面枠には天端の細線を描かない', () => {
+  const face = makeFace({
+    hasWallAtLocal0: false, hasWallAtLocalRun: true,
+    partitionCutAtLocal0: { thicknessMm: 90, topHeightMm: null },
+    partitionCutAtLocalRun: null,
+  });
+  const prims = buildFaceFigure(face, baseCtx());
+  const cap = prims.find(p => p.type === 'line' && p.weight === 'thin'
+    && p.y1 === p.y2 && p.x1 === 0 && p.x2 === 90 && p.y1 < 0);
+  assert.equal(cap, undefined, '天端が無い袖壁には細線を足さないはず');
 });

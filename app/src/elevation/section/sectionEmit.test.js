@@ -6,6 +6,7 @@ import {
   emitLine, emitColumns, emitOpenGapMarks, splitGapMarksByStair, dashHorizontalsBehindStair,
   joinToStairProfile, clipStairDetailInSlabBand,
 } from './sectionEmit.js';
+import { KNEE_CAP_FACE_MM } from '../elevationStyle.js';
 
 function makeCut(overrides = {}) {
   return { seqNo: '1', line: { isVertical: false, axisValue: 0, lo: 0, hi: 3000 },
@@ -940,4 +941,52 @@ test('【失敗系】emitColumns: 腰壁で実際に高さが制限された帯�
   const verts = emitColumns(columns, cut).filter(p => p.x1 === p.x2 && p.x1 === 500)
     .map(p => [Math.min(-p.y1, -p.y2), Math.max(-p.y1, -p.y2)]);
   assert.deepEqual(verts, [[800, 5400]], '腰壁の実体の高さ差には縦線が出るはず');
+});
+
+// ================================================================
+// 新仕様2026-08「腰壁の天端」: 天端が露出した帯（isKneeDrop）の上端の下へ、見付ぶんの
+// 細線を1本足す。見付は実厚ではなく作図値 KNEE_CAP_FACE_MM（elevationStyle.js）。
+// ================================================================
+
+const capY = topZ => -(topZ - KNEE_CAP_FACE_MM); // zToY(z) = -z
+
+test('emitColumns: cutAlongの腰壁（天端が天井より下）は天端の下に見付ぶんの細線を足す', () => {
+  const cut = makeCut();
+  const columns = [{ x0: 0, x1: 500, worldLo: 0, worldHi: 500,
+    bands: [{ kind: 'cutAlong', z0: 0, z1: 800, isKneeDrop: true }] }];
+  const prims = emitColumns(columns, cut, { ceilZ: 2400 });
+  const top = prims.find(p => p.y1 === -800 && p.y1 === p.y2);
+  const cap = prims.find(p => p.y1 === capY(800) && p.y1 === p.y2);
+  assert.ok(top, '天端そのもの（CUT水平線）があるはず');
+  assert.equal(top.weight, 'thick');
+  assert.ok(cap, `天端の${KNEE_CAP_FACE_MM}mm下に細線があるはず`);
+  assert.equal(cap.weight, 'thin');
+  assert.deepEqual([cap.x1, cap.x2], [0, 500], '天端と同じx範囲のはず');
+});
+
+test('【失敗系】emitColumns: 天井まで立つcutAlong（腰壁でない）には天端の細線を足さない', () => {
+  const cut = makeCut();
+  const columns = [{ x0: 0, x1: 500, worldLo: 0, worldHi: 500,
+    bands: [{ kind: 'cutAlong', z0: 0, z1: 2400 }] }];
+  const prims = emitColumns(columns, cut, { ceilZ: 2400 });
+  assert.equal(prims.filter(p => p.weight === 'thin' && p.y1 === p.y2).length, 0,
+    '天端が無い壁には細線を足さないはず');
+});
+
+test('emitColumns: 見えがかり（wall）の腰壁も天端の下に細線を足す', () => {
+  const cut = makeCut();
+  const columns = [{ x0: 0, x1: 500, worldLo: 0, worldHi: 500,
+    bands: [{ kind: 'wall', z0: 0, z1: 800, distMm: 1000, layerRole: 'self', isKneeDrop: true }] }];
+  const prims = emitColumns(columns, cut, { ceilZ: 2400 });
+  const cap = prims.find(p => p.y1 === capY(800) && p.y1 === p.y2 && p.weight === 'thin');
+  assert.ok(cap, '見えがかりの腰壁にも天端の細線が出るはず');
+});
+
+test('【失敗系】emitColumns: 天端が見付より低い退化した腰壁には細線を足さない（床線と重なる）', () => {
+  const cut = makeCut();
+  const columns = [{ x0: 0, x1: 500, worldLo: 0, worldHi: 500,
+    bands: [{ kind: 'cutAlong', z0: 0, z1: KNEE_CAP_FACE_MM, isKneeDrop: true }] }];
+  const prims = emitColumns(columns, cut, { ceilZ: 2400 });
+  assert.equal(prims.filter(p => p.y1 === 0 && p.y2 === 0 && p.weight === 'thin').length, 0,
+    '床(z=0)に重なる細線は出さないはず');
 });

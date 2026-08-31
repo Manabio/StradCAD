@@ -6,8 +6,10 @@
  * ——腰壁・垂れ壁は「天板」の追加描画（ShapesLayer.jsx）と、平面切断高さ以下の腰壁のみ
  * 通常の壁帯描画を天板輪郭に差し替える表示上の分岐であり、壁自体の材構成は変えない。
  *
- * 天板: 厚CAP_THICKNESS・壁仕上げ面から外側へCAP_OVERHANGだけ出た板。
- * 腰壁＝床から天板上端までの寸法（topHeight）。垂れ壁＝天井から天板下端までの寸法（bottomHeight）。
+ * 天端: 壁の仕上げ面と**同面**（幅＝12+壁の層厚+12＝壁厚そのもの）で、壁の上端から厚
+ * CAP_THICKNESS ぶんの帯（仕様2026-08の断面図）。腰壁＝床から天端までの寸法（topHeight）。
+ * 垂れ壁＝天井から下端までの寸法（bottomHeight。天端の対称扱い）。帯は壁の高さの**内側**に
+ * あり、topHeight/bottomHeight を増やさない。
  */
 
 import { edgeKey } from '@core';
@@ -17,8 +19,12 @@ import { cellsBeyondBreak } from './stair/stairGeometry.js';
 import { stairUnderRoomsOf } from './stair/stairUnderRooms.js';
 import { roomCeilingHeight } from './roomMetrics.js';
 
-export const CAP_THICKNESS   = 20;   // mm — 天板厚
-export const CAP_OVERHANG    = 10;   // mm — 天板の壁仕上げ面からの出幅
+export const CAP_THICKNESS   = 30;   // mm — 天端の帯の厚さ（仕様2026-08。壁上端から下へ）
+// mm — 天端の**壁仕上げ面**からの出幅（仕様2026-08「天端幅 = 12 + 壁の層厚 + 12」の12。
+// 壁の層厚＝仕上げ面から仕上げ面までの壁厚で、12はその外側への出。仕上げ材の厚みではない）。
+// 出るのは**厚み方向だけ**——長さ方向は壁端で止まる（ユーザー確定2026-08）ため、平面の天端は
+// 壁のスパンをそのまま使い capLo/capHi（厚み方向）にだけこの出幅を足す。
+export const CAP_OVERHANG    = 12;
 export const PLAN_CUT_HEIGHT = 1500; // mm — 平面切断高さ
 
 // 天井高さが解決できない（区間の両側とも部屋がない）ときのエラーメッセージ。

@@ -85,6 +85,12 @@ export const LEFT_MARGIN_SCREEN_MM = 15;
 export const WALL_LESS_END_EXTEND_SCREEN_MM = 5;
 export const DEFAULT_WALL_LESS_END_EXTEND_MM = 150; // 倍率決定用の1パス目の仮値
 
+// 展開図での腰壁天端の見付(mm)。実際の天端厚（finish/kneeDropWall.js の CAP_THICKNESS=30）の
+// ままだと天端の2本線が縮尺で潰れて読めないため、**作図上だけ**広げて描く（ユーザー明示指示
+// 2026-08「見付30のまま2本線だと見えないので50で書いて」）。モデルの寸法（天端の実厚・
+// 腰壁高さ）はCAP_THICKNESS側のまま変えない——ここは見えがかりの表現専用の値。
+export const KNEE_CAP_FACE_MM = 50;
+
 // ---- 注記帯の行位置（実画面mm。QA C1→D1/D2で全面改訂） ----
 // 建具記号丸(tag。半径16px)・通り芯丸(半径11px)・面ラベル(13px)は、どれもOPENING_TAG_RADIUS_PX/
 // GRID_TAG_RADIUS_PX等というスクリーン固定サイズを持つ。これらを載せる行の位置をモデルmm定数の
