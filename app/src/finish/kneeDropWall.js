@@ -29,9 +29,15 @@ export const ERR_CEILING_HEIGHT_UNRESOLVED = '天井高さを解決できませ�
 const MIN_HEIGHT  = 20; // mm — 腰H・垂れHの下限（天井高さ上限側のマージンも同値）
 const BOTH_MARGIN = 20; // mm — 両方指定時の上限式 (腰H+垂れH <= 天井高さ - 2*BOTH_MARGIN) に使う
 
-// 壁スパンと区間の重なりを「有意」とみなす下限(mm)。stairUnderWalls.js の SKIP_OVERLAP_EPS・
-// clEccentricity.js の SPAN_OVERLAP_EPS と同水準。
-const SPAN_OVERLAP_EPS = 5; // mm
+// 壁スパンと区間の重なりを「有意」とみなす下限(mm)。
+// 隅の取り合いで壁端は**隣の区間へ半壁厚ぶん食い込む**——コーナーマップも closeConvexCorners
+// （wallGeneration.js）も、角では相手壁の仕上げ面（軸CLから ±(wallBase/2+wallFinish)）まで
+// 端点を伸ばすため。ここを微小値（5mm等）にすると「隣の区間の壁が57.5mmはみ出しただけ」を
+// 区間の構成壁として拾ってしまい、その壁が**全長にわたって**腰壁天板の輪郭で描き替えられる
+// （実機2026-08「21」2階 X2×Y2+3500: 隣室側の壁に天板線が増え、通常の壁帯が消えた）。
+// 値は隅の取り合いの許容差（core/wallChamfer.js chamferWalls・renderer/wallJunctionResolve.js
+// の CORNER_EXCLUSION・closeConvexCorners の CONTINUE_TOL）と揃えた 150mm。
+const SPAN_OVERLAP_EPS = 150; // mm
 
 // 押下位置から部屋側セルを解決する際のオフセット(mm)。edgeClassify.js の ADJACENT_SAMPLE_EPS と同水準。
 const PRESS_SIDE_EPS = 10; // mm
@@ -68,6 +74,23 @@ export function kneeDropRecordsOnAxis(graph, axisCLId, spanLo, spanHi) {
     out.push({ key, rec, lo, hi });
   }
   return out;
+}
+
+/**
+ * 「1本の壁」に対応する腰壁・垂れ壁レコードを返す（該当が複数あっても先頭）。
+ * kneeDropRecordsOnAxis との違いは**隅の取り合いぶんのはみ出しを重なりとみなさない**こと
+ * （SPAN_OVERLAP_EPS の説明参照）。素の重なり判定は sectionProbe の点クエリ
+ * （kneeDropZRangeAt。幅1mm）が使うため kneeDropRecordsOnAxis 側は変えられない——
+ * 「壁がその区間の構成壁か」を問う経路だけがこちらを通る（平面の kneeDropWallGeometry と同じ判定）。
+ * @param {object} graph
+ * @param {string} axisCLId
+ * @param {number} wLo 壁スパンの下側
+ * @param {number} wHi 壁スパンの上側
+ * @returns {{key:string, rec:object, lo:number, hi:number}|null}
+ */
+export function kneeDropRecordForWallSpan(graph, axisCLId, wLo, wHi) {
+  return kneeDropRecordsOnAxis(graph, axisCLId, wLo, wHi)
+    .find(r => Math.min(r.hi, wHi) - Math.max(r.lo, wLo) > SPAN_OVERLAP_EPS) ?? null;
 }
 
 /**

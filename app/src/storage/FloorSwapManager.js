@@ -25,9 +25,10 @@
  *   disposeSiteDirtyTracking()       — 上記 autorun を停止
  */
 
-import { autorun } from 'mobx';
+import { autorun, runInAction } from 'mobx';
 import { PlanGraph } from '@core';
 import { serializeGraph, restoreGraph, serializeStructCLs, restoreStructCLs } from '../graphSnapshot.js';
+import { closeConvexCorners } from '../finish/wallGeneration.js';
 import { saveFloor, loadFloor, saveProject, loadProject } from './db.js';
 import { markDirty } from '../dirtyState.js';
 
@@ -42,10 +43,29 @@ export class FloorSwapManager {
   // フロア操作
   // ----------------------------------------------------------------
 
+  /**
+   * 読み込んだグラフの「導出済み幾何」を復元する（IDBから読んだ直後に必ず通す）。
+   *
+   * 出隅の取り合い（closeConvexCorners）は仕上げモード脱出時に壁の端点へ**焼き込む**導出結果
+   * のため、そのロジックより古い保存データには反映されていない——そして壁は仕上げモードを
+   * 出直すまで再生成されないので、平面も展開図も欠けたまま何度読み直しても直らなかった
+   * （ユーザー実機指摘2026-08「21」の2階 X2×Y2+3500）。読み込み経路（activate/peek）で
+   * 一度閉じ直すことで、データの世代に関係なく常に閉じた状態から始まる。
+   * ここは冪等（角のマスが空いているときだけ伸ばす）なので既に閉じたデータには何もしない。
+   * auto-save 開始**前**に呼ぶ: 開いただけの修復で dirty にして未保存警告を出さないため
+   * （壁の端点は _startAutoSave の autorun の観測対象でもないが、順序で意図を示す）。
+   */
+  _healDerivedGeometry(graph) {
+    runInAction(() => closeConvexCorners([...graph.walls]));
+  }
+
   async activate(plane, graph) {
     this._stopAutoSave(plane.id);
     const bytes = await loadFloor(plane.id);
-    if (bytes) restoreGraph(graph, bytes);
+    if (bytes) {
+      restoreGraph(graph, bytes);
+      this._healDerivedGeometry(graph);
+    }
     this._startAutoSave(plane, graph);
   }
 
@@ -64,7 +84,12 @@ export class FloorSwapManager {
     const bytes = await loadFloor(plane.id);
     const tempGraph = new PlanGraph(plane);
     tempGraph._structGraph = structGraph;
-    if (bytes) restoreGraph(tempGraph, bytes);
+    if (bytes) {
+      restoreGraph(tempGraph, bytes);
+      // アクティブ階と同じ見た目にする（展開図・図面合成は他階を peek で読むため、
+      // ここを揃えないと平面だけ角が閉じて展開図は欠けたまま、という食い違いが出る）
+      this._healDerivedGeometry(tempGraph);
+    }
     return tempGraph;
   }
 

@@ -855,10 +855,12 @@ export function restoreWallsFromSnapshots(graph, snapshots) {
  * 壁厚ぶんの四角い欠けが残る（ユーザー実機指摘2026-08「21」のX2×Y2+3500の出隅）。
  *
  * ここでは「**互いの軸CLで終端し合っている**2枚」＝角であることが確実な組み合わせだけを
- * 対象にし、各々の端を相手の材の外面（相手のaxisValue）まで伸ばす。T字（相手が通り抜ける）・
- * X字は片側しか終端しないため対象外——T字の取り合いはrenderer/wallJunctionResolve.jsの担当。
- * 入隅側（コーナーマップが既に相手の外面まで伸ばしている端）と、伸ばすと逆に短くなる向きの
- * 組み合わせは「外側へ伸びるときだけ」の条件で自然に除外される。
+ * 対象にし、**角のマスが実際に空いているときだけ**各々を相手の材の外面まで伸ばす。
+ * 角のマス＝「vの材幅×hの材幅」がつくる矩形で、どちらか一方でも相手の材幅を跨いで
+ * 通り過ぎていればマスはその壁で埋まっている＝欠けはない（コーナーマップが既に片側を
+ * 伸ばして解決した角がこれに当たる。ここで伸ばすと相手の領域へ突き出す）。
+ * T字（相手が通り抜ける）・X字は片側しか終端しないため対象外——T字の取り合いは
+ * renderer/wallJunctionResolve.jsの担当。
  *
  * 判定は全ペアぶんまとめてから適用する（先に書き換えた端点が後続の判定に混ざらないよう、
  * 決定と適用を分ける）。
@@ -877,6 +879,9 @@ export function closeConvexCorners(walls) {
   const endAt = (w, cl) => (w.clStart === cl ? 'start' : w.clEnd === cl ? 'end' : null);
   // 端aの外向き符号（その端がどちらへ伸びれば「長くなる」か）。
   const outward = (w, a) => Math.sign(a === 'end' ? w.coord2 - w.coord1 : w.coord1 - w.coord2) || 1;
+  // 壁wの材（下地帯∪仕上げ帯）のうち、向きdの側の外面。仕上げ面合わせ等で下地が仕上げ面より
+  // 外へ張り出す偏芯壁でも「材の外面」を正しく指す（axisValue＝仕上げ面だけでは足りない）。
+  const farFace = (w, d) => (d > 0 ? w.materialRange.hi : w.materialRange.lo);
 
   // 「wの端aは相手CL(clValue)で**本当に終わっている**か」——同じ軸CL・同じ面(axisValue)の
   // 別壁がその先へ隣接して続いていれば、それは通し壁が直交壁の位置で分割されているだけの
@@ -903,12 +908,18 @@ export function closeConvexCorners(walls) {
       // ——片側でも一致しなければ入隅側・別の壁厚の組み合わせであり、伸ばすと相手の材を
       // 突き抜ける（実機: 外壁と内壁が同じ通りで終端し合う角で、内壁が外壁の外面まで
       // 伸びてしまう）。
-      if (outward(v, va) !== h.faceDir || outward(h, ha) !== v.faceDir) continue;
+      const dv = outward(v, va), dh = outward(h, ha);
+      if (dv !== h.faceDir || dh !== v.faceDir) continue;
       const clH = h.axisCL.effectiveValue, clV = v.axisCL.effectiveValue;
       if (continuesPast(v, va, clH) || continuesPast(h, ha, clV)) continue; // T字（分割された通し壁）
-      for (const [w, a, target] of [[v, va, h.axisValue], [h, ha, v.axisValue]]) {
-        const cur = a === 'end' ? w.coord2 : w.coord1;
-        if ((target - cur) * outward(w, a) <= 0) continue; // 外側へ伸びるときだけ
+      // 角のマスが空いているか。各々の端が「相手の材の外面」に届いていなければ空いている
+      // ——片方でも届いていれば、その壁がマスを埋めきっている＝欠けはないので何もしない。
+      // 届いている＝伸ばす必要がない、でもあるため「外側へ伸びるときだけ」の判定を兼ねる。
+      const vTarget = farFace(h, dv), hTarget = farFace(v, dh);
+      const cv = va === 'end' ? v.coord2 : v.coord1;
+      const ch = ha === 'end' ? h.coord2 : h.coord1;
+      if ((cv - vTarget) * dv >= -CORNER_EPS || (ch - hTarget) * dh >= -CORNER_EPS) continue;
+      for (const [w, a, target] of [[v, va, vTarget], [h, ha, hTarget]]) {
         plans.push({ wall: w, at: a, offset: target - (a === 'end' ? w.clEnd : w.clStart).effectiveValue });
       }
     }

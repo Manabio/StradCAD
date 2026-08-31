@@ -12,7 +12,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { runInAction } from 'mobx';
-import { Plane, PlanGraph, Site, SiteLineKind } from '../core.js';
+import { Plane, PlanGraph, Site, SiteLineKind, CenterLineType, Discipline } from '../core.js';
 import { FloorSwapManager } from './FloorSwapManager.js';
 import { isDirty, clearDirty } from '../dirtyState.js';
 
@@ -156,4 +156,45 @@ test('startSiteDirtyTracking: 二重呼び出しでautorunが二重登録され�
   runInAction(() => { pt.x = 500; });
 
   assert.equal(isDirty(), false, '二重登録されていれば1回のdisposeでは止まらずmarkDirtyされてしまう（多重登録ガードの検証）');
+});
+
+// ----------------------------------------------------------------
+// _healDerivedGeometry（読み込み経路の導出幾何の復元）
+//
+// activate/peek は indexedDB.open に到達するためここでは呼べないが、その両方が
+// restoreGraph の直後に通す _healDerivedGeometry 自体は純粋な壁操作のため直接検証できる。
+// 「出隅の取り合いは仕上げモード脱出でしか閉じない」ままだと、そのロジックより古い保存
+// データは何度読み直しても欠けたまま残る（実機指摘2026-08「21」の2階 X2×Y2+3500）。
+// ----------------------------------------------------------------
+
+test('_healDerivedGeometry: 読み込んだグラフの開いたままの出隅を閉じ直す（古い保存データの自己修復）', () => {
+  const mgr = new FloorSwapManager();
+  const { graph } = makeGraph();
+  const cl = (type, v) => graph.addCenterLine(type, v, { labeled: false, discipline: Discipline.ARCH });
+  const x0 = cl(CenterLineType.VERTICAL, 0), xW = cl(CenterLineType.VERTICAL, -6000);
+  const y0 = cl(CenterLineType.HORIZONTAL, 0), yN = cl(CenterLineType.HORIZONTAL, -6000);
+  // 保存データ相当: 角を挟む2枚が互いの軸CL上（=材の中心）でちょうど止まっている＝欠けた状態
+  const v = graph.addWall(x0, 57.5, true, yN, 0, y0, 0, { isRoomWall: true, wallFinish: 12.5 });
+  const h = graph.addWall(y0, 57.5, false, xW, 0, x0, 0, { isRoomWall: true, wallFinish: 12.5 });
+
+  mgr._healDerivedGeometry(graph);
+
+  assert.equal(v.coord2, 57.5, '垂直壁が水平壁の材の外面まで伸びるはず');
+  assert.equal(h.coord2, 57.5, '水平壁が垂直壁の材の外面まで伸びるはず');
+});
+
+test('【失敗系】_healDerivedGeometry: 既に閉じているデータには何もしない（冪等。読み込みのたびに動かない）', () => {
+  const mgr = new FloorSwapManager();
+  const { graph } = makeGraph();
+  const cl = (type, v) => graph.addCenterLine(type, v, { labeled: false, discipline: Discipline.ARCH });
+  const x0 = cl(CenterLineType.VERTICAL, 0), xW = cl(CenterLineType.VERTICAL, -6000);
+  const y0 = cl(CenterLineType.HORIZONTAL, 0), yN = cl(CenterLineType.HORIZONTAL, -6000);
+  const v = graph.addWall(x0, 57.5, true, yN, 0, y0, 57.5, { isRoomWall: true, wallFinish: 12.5 });
+  const h = graph.addWall(y0, 57.5, false, xW, 0, x0, 57.5, { isRoomWall: true, wallFinish: 12.5 });
+
+  mgr._healDerivedGeometry(graph);
+  mgr._healDerivedGeometry(graph);
+
+  assert.equal(v.coord2, 57.5);
+  assert.equal(h.coord2, 57.5);
 });

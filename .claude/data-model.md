@@ -26,8 +26,26 @@ Intersection・Shape・Wall・Opening・構造部材はすべて自前の座標�
 2枚だけを相手の材の外面まで伸ばす。同じ面の別壁がその先へ隣接して続く場合（通し壁が直交壁の
 位置で分割されているだけ）はT字であり対象外——T字の取り合いは描画側（renderer/
 wallJunctionResolve.js）の担当という既存の分担をここでも保つ。
+伸ばすかどうかは**角のマス（互いの材幅がつくる矩形）が実際に空いているか**だけで決める。
+片方でも相手の材幅を跨いで通り過ぎていればマスはその壁で埋まっている＝欠けはないので何もしない
+——位置と向きの一致だけを条件にすると、コーナーマップが既に片側を伸ばして解決済みの角まで
+「もう一方も相手の外面まで」伸ばしてしまい、薄壁の仕上げ線が隣室側へ壁厚ぶん突き出す。
 この結果は壁の端点そのもの（startOffset/endOffset）なので、平面だけでなく展開図の見えがかりにも
-そのまま効く（壁の実端が角の外面まで届く）。
+そのまま効く（壁の実端が角の外面まで届く）。逆に言えば端点への焼き込みであり、壁は仕上げモードを
+出直すまで再生成されない——つまり**このパスより古い保存データは何度読み直しても欠けたまま**に
+なる。そのため読み込み経路（`storage/FloorSwapManager.js`の`activate`/`peek`が`restoreGraph`の
+直後に通す`_healDerivedGeometry`）で同じパスを1回かけ、データの世代に依らず常に閉じた状態から
+始める。冪等なので既に閉じたデータには何もせず、auto-save開始前に呼ぶので開いただけでdirtyにも
+しない。peekも通すのは、他階を読む展開図・図面合成だけ角が欠ける食い違いを避けるため。
+
+## 「壁がその区間の構成壁か」は隅の取り合いぶんを除いて判定する
+腰壁・垂れ壁（`kneeDropWalls`）は交点から交点の1区間に指定するが、**壁の端は隅の取り合いで
+隣の区間へ半壁厚ぶん食い込む**（上記の出隅処理もコーナーマップも相手の仕上げ面まで伸ばすため）。
+重なりを微小値で判定すると隣の区間の壁まで構成壁として拾い、その壁が全長にわたって腰壁天板の
+輪郭へ描き替えられる（通常の壁帯が消え、天板の出幅ぶん外側に線が増える）。判定のしきい値は
+隅の取り合いの許容差（`chamferWalls`・`wallJunctionResolve.js`の`CORNER_EXCLUSION`）と揃える。
+ただし`kneeDropRecordsOnAxis`は断面エンジンが**点クエリ**（幅1mm）にも使うため素の重なり判定の
+ままにし、「壁→区間の帰属」を問う経路だけ`kneeDropRecordForWallSpan`／`kneeDropWallGeometry`を通す。
 
 ## CL偏芯（clEccentricities）はレコードと導出結果を分離する
 `PlanGraph.clEccentricities`（clId→`{mode:'value'|'face', value, side, backing}`）は「何を指定したか」だけを保持し、Wall側（axisOffset/wallFinish/backingOffset/backingDepth/finishSide）へは`finish/clEccentricity.js`の`applyCLEccentricity`が導出した結果のみを書き込む——値を直接Wallへ書くと下地材変更時に再計算できず不整合が固定化する。`backing=''`は「per-floor既定（`interiorWallBacking`）に従う」という明示的なフォールバック合図であり、未指定と同義に扱わない。適用点は操作確定時とモード境界（`runFinishExitBoundary`ステップ2b）の両方で、前回の適用結果に依存せず現在のspecと現材から毎回フル再計算する（冪等）——材未ロード・下地コード未解決時は黙って既定値へ潰さず適用自体をスキップする。
