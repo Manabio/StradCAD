@@ -269,8 +269,11 @@ export function buildRoomBandWithVoidAbove(room, graph, voidRoom, upperGraph, ct
       for (const part of splitSegByCover(seg, plan.voidLocal)) {
         if (!part.covered) { out.push({ ...seg, loX: part.loX, hiX: part.hiX }); continue; }
         // 吹抜けの区間: 床はそのまま（水平断面を挟まない）、天井だけ上階の天井まで伸ばす。
+        // ceilFloorZMm: この区間の**天井が属する階の床レベル**（帯の床基準）。天井断面線を
+        // 「階の異なる天井どうしは結ばない」と判断するための唯一の情報源（elevationFigure.js）。
         const delta = seg.floorDeltaMm ?? 0;
-        out.push({ ...seg, loX: part.loX, hiX: part.hiX, hiCLId: null, chMm: floorHeightMm + voidCH - delta });
+        out.push({ ...seg, loX: part.loX, hiX: part.hiX, hiCLId: null,
+          chMm: floorHeightMm + voidCH - delta, ceilFloorZMm: floorHeightMm });
       }
     }
     return { floorSegments: out };

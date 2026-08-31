@@ -600,13 +600,24 @@ export function buildFaceFigure(face, ctx) {
   } else {
     const ceilRiserXAt = i => drawnCeilingRiserX(segs, i, halfWallMm, CH);
     // 天井の絶対高さが同じ隣接区間は1本の水平線に結合する（床だけの段差では天井線を分割しない）。
+    // 新仕様（ユーザー明示指示）: **高低差のある、階の異なる水平な天井断面線は結ばない**。
+    // 区間ごとの`ceilFloorZMm`（その区間の天井が属する階の床レベル。既定=0＝自階。上部吹抜けの
+    // 多層書きだけが上階の値を入れる。elevationVoid.js）が違う隣り合う天井線は、段差の縦線で
+    // 繋がずそれぞれ独立した断面線として描く——別の階の天井どうしを1本の輪郭で結ぶと、実際には
+    // その境界に立っている壁の断面（断面エンジンが描く）と二重の縦線になり、しかも壁厚を持たない
+    // 1本線なので「何の線か」が図から読み取れなくなる。
+    const ceilStoreyOf = s => s.ceilFloorZMm ?? 0;
     const ceilRuns = [];
     for (const [i, s] of segs.entries()) {
-      const y = ceilYOf(s);
+      const y = ceilYOf(s), storey = ceilStoreyOf(s);
       const last = ceilRuns[ceilRuns.length - 1];
-      if (last && last.y === y) last.endIdx = i;
-      else ceilRuns.push({ y, startIdx: i, endIdx: i });
+      if (last && last.y === y && last.storey === storey) last.endIdx = i;
+      else ceilRuns.push({ y, storey, startIdx: i, endIdx: i });
     }
+    // 隣り合う天井線が別の階のものなら、段差の縦線を描かず、境界の描画xも半壁厚ずらさない
+    // （ずらす規約は段差の縦線を「低い方からみてCLの向こう側」へ置くためのもの。縦線を描かない
+    // なら区間の境界そのもの＝その位置に立つ壁の面で終わらせる）。
+    const crossesStorey = ri => ri + 1 < ceilRuns.length && ceilRuns[ri].storey !== ceilRuns[ri + 1].storey;
     // 問題修正2026-08その3（ユーザー明示指示: C1の天井断面上+100に「3'」の天井を表す破線。
     // A1/B1/D2には不要）: 天井断面より上に見える「別エリアの天井」（親の天井等。境界の
     // 下がり壁の縁）は、その面のrun軸に投影した実セル範囲（ctx.beyondCeilings＝
@@ -635,9 +646,10 @@ export function buildFaceFigure(face, ctx) {
       if (cursor < hi) pieces.push([cursor, hi]);
       return pieces;
     };
+    const ceilBoundaryX = ri => (crossesStorey(ri) ? segs[ceilRuns[ri].endIdx].hiX : ceilRiserXAt(ceilRuns[ri].endIdx));
     for (const [ri, r] of ceilRuns.entries()) {
-      const x1 = ri === 0 ? drawnX0 : ceilRiserXAt(r.startIdx - 1);
-      const x2 = ri === ceilRuns.length - 1 ? drawnXRun : ceilRiserXAt(r.endIdx);
+      const x1 = ri === 0 ? drawnX0 : ceilBoundaryX(ri - 1);
+      const x2 = ri === ceilRuns.length - 1 ? drawnXRun : ceilBoundaryX(ri);
       prims.push({ type: 'line', x1, y1: r.y, x2, y2: r.y, weight: cutWeight });
     }
     // 別エリア天井の破線は「論理区間（segs）」基準で天井断面と比較する——描画済みrun範囲
@@ -669,6 +681,7 @@ export function buildFaceFigure(face, ctx) {
       }
     }
     for (let ri = 0; ri + 1 < ceilRuns.length; ri++) {
+      if (crossesStorey(ri)) continue; // 階の異なる天井断面線は結ばない（上記の新仕様）
       const x = ceilRiserXAt(ceilRuns[ri].endIdx);
       prims.push({ type: 'line', x1: x, y1: ceilRuns[ri].y, x2: x, y2: ceilRuns[ri + 1].y, weight: cutWeight });
     }

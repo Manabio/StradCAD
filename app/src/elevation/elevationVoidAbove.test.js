@@ -130,3 +130,74 @@ test('【失敗系】buildRoomBandWithVoidAbove: 腰壁指定が無ければ天�
     && Math.abs(p.y1 - (-(FLOOR_HEIGHT + 800))) < 1e-6);
   assert.equal(tops.length, 0, '腰壁が無ければ天端の線は出ないはず');
 });
+
+// ================================================================
+// 新仕様（ユーザー明示指示）: 高低差のある、階の異なる水平な天井断面線は結ばない。
+// 併せて、その境界に立つ2階の壁の断面が抽出されること（実機「5」A: 2階X2通りの壁が
+// 断面抽出から丸ごと漏れていた——列の天井で打ち切る処理が落としていた）。
+// ================================================================
+
+// 下階は南北に広く、吹抜けは北半分だけ＝東西の面（走り6000）の途中で天井の高さが変わる。
+function makeHalfVoidBand() {
+  const g1 = makeGraph('1階', 0);
+  const room = makeRectRoom(g1, 0, 0, 4000, 6000, 'LDK');
+  const g2 = makeGraph('2階', FLOOR_HEIGHT);
+  const voidRoom = makeRectRoom(g2, 0, 0, 4000, 3000, '吹抜け');
+  voidRoom.setFeature(RoomFeature.VOID);
+  return buildRoomBandWithVoidAbove(room, g1, voidRoom, g2, { floorHeightAboveMm: FLOOR_HEIGHT });
+}
+const vLines = band => band.primitives.filter(p =>
+  p.type === 'line' && !p.dash && Math.abs(p.x1 - p.x2) < 1e-6);
+
+test('【新仕様】buildRoomBandWithVoidAbove: 階の異なる天井断面線（1F天井と2F天井）は縦線で結ばない', () => {
+  const band = makeHalfVoidBand();
+  const joins = vLines(band).filter(p =>
+    p.weight === 'thick'
+    && Math.abs(Math.min(-p.y1, -p.y2) - CH) < 1e-6
+    && Math.abs(Math.max(-p.y1, -p.y2) - (FLOOR_HEIGHT + CH)) < 1e-6);
+  // この位置に出てよいのは境界に立つ壁の断面（2本＝壁厚の両縁）だけで、
+  // 「2本の天井線を1本で結ぶ線」は出ない——結ぶと壁厚を持たない線になり、実際にそこに
+  // 立っている壁の断面と二重になる。
+  const xs = [...new Set(joins.map(p => p.x1))];
+  assert.equal(xs.length % 2, 0, `壁厚の両縁で必ず偶数本になるはず（実際:${JSON.stringify(xs)}）`);
+  for (const x of xs) {
+    assert.ok(joins.filter(p => Math.abs(p.x1 - x) < 1e-6).every(p => p.__o === 'cutEdgeLo' || p.__o === 'cutEdgeHi'),
+      `x=${x}の縦線は壁断面の縁であるはず（天井線どうしを結ぶ線ではない）`);
+  }
+});
+
+test('【実機「5」A】buildRoomBandWithVoidAbove: 天井の高さが変わる境界に立つ2階の壁が、1F天井から2F天井まで断面として出る', () => {
+  const band = makeHalfVoidBand();
+  const edges = vLines(band).filter(p => p.__o === 'cutEdgeLo' || p.__o === 'cutEdgeHi');
+  assert.ok(edges.length >= 2, `境界の壁の断面（壁厚の両縁）が出るはず（実際:${JSON.stringify(edges)}）`);
+  for (const p of edges) {
+    assert.equal(p.weight, 'thick', '壁の断面の縁は太線(CUT)');
+    assert.equal(Math.min(-p.y1, -p.y2), CH, '低い側の天井（1F天井）から始まるはず——壁の実体は2FLからだが、その間は上階の床構造で断面は連続する');
+    assert.equal(Math.max(-p.y1, -p.y2), FLOOR_HEIGHT + CH, '高い側の天井（2F天井）まで');
+  }
+});
+
+test('【失敗系・実機「5」A面左3200】buildRoomBandWithVoidAbove: 左右とも1F天井の区間に立つ2階の壁は、天井に隠れるので断面を出さない', () => {
+  // 吹抜けを面の中央だけにし、「2階の間仕切りを吹抜けの外（左右とも1F天井の区間）へ足しても
+  // 断面が1本も増えない」ことで確かめる——増えないこと自体が「天井に隠れている」の意味。
+  const build = withPartition => {
+    const g1 = makeGraph('1階', 0);
+    const room = makeRectRoom(g1, 0, 0, 4000, 9000, 'LDK');
+    const g2 = makeGraph('2階', FLOOR_HEIGHT);
+    const voidRoom = makeRectRoom(g2, 0, 3000, 4000, 6000, '吹抜け');
+    voidRoom.setFeature(RoomFeature.VOID);
+    if (withPartition) {
+      const yMid = g2.addCenterLine(CenterLineType.HORIZONTAL, 7500, { labeled: false, discipline: Discipline.ARCH });
+      const xW = g2.centerLines.find(cl => cl.centerLineType === CenterLineType.VERTICAL && cl.value === 0);
+      const xE = g2.centerLines.find(cl => cl.centerLineType === CenterLineType.VERTICAL && cl.value === 4000);
+      g2.addWall(yMid, 57.5, false, xW, 0, xE, 0, { isRoomWall: false, isExteriorWall: false, wallFinish: 12.5 });
+      g2.addWall(yMid, -57.5, false, xW, 0, xE, 0, { isRoomWall: false, isExteriorWall: false, wallFinish: 12.5 });
+    }
+    return buildRoomBandWithVoidAbove(room, g1, voidRoom, g2, { floorHeightAboveMm: FLOOR_HEIGHT });
+  };
+  const edgesOf = band => vLines(band)
+    .filter(p => p.__o === 'cutEdgeLo' || p.__o === 'cutEdgeHi')
+    .map(p => `${p.x1}|${p.y1}|${p.y2}`).sort();
+  assert.deepEqual(edgesOf(build(true)), edgesOf(build(false)),
+    '吹抜けの外（天井が1F天井のままの区間）に立つ2階の間仕切りは断面を増やさないはず');
+});
