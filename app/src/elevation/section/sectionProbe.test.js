@@ -459,7 +459,7 @@ function twoLayerCut(selfGraph, aboveGraph, aboveFloorZMm, hiZMm) {
   };
 }
 
-test('【実機フィードバック第3弾A2】probeColumn: 上階に実Roomがあれば見えがかり壁は従来どおり自層CHでキャップされる（回帰ガード）', () => {
+test('【A2／点4で書き換え】probeColumn: 上階に実床があれば見えがかり壁は上階FLまで（天井裏も壁）', () => {
   const selfGraph = makeGraph();
   makeRectRoom(selfGraph, 0, 0, 4000, 3000, '階段室');
   const aboveGraph = new PlanGraph(new Plane('p2', 2900, '2階', 1, 1));
@@ -470,7 +470,10 @@ test('【実機フィードバック第3弾A2】probeColumn: 上階に実Roomが
   const bands = probeColumn(cut, 2000, probeCtx);
 
   const wallZ1Max = Math.max(...bands.filter(b => b.kind === 'wall' && b.layerRole === 'self').map(b => b.z1));
-  assert.equal(wallZ1Max, CH, `上階に実Roomがある通常構成では従来どおり自層CH(${CH})でキャップされるはず（実際:${wallZ1Max}）`);
+  // ユーザー明示指示2026-08の点4: 天井（2400）から上階FL（2900）までの天井裏も同じ壁。
+  assert.equal(wallZ1Max, 2900, `上階FL(2900)まで続くはず（自層CH=${CH}で切らない。実際:${wallZ1Max}）`);
+  assert.ok(!bands.some(b => b.kind === 'wall' && Math.abs(b.z1 - CH) < 1e-6),
+    'CH(=天井)で終わる壁帯は無い＝CHに見えがかり線が立たない（断面線のみ）');
 });
 
 test('【実機フィードバック第3弾A2】probeColumn: 上階が吹抜け(VOID)なら見えがかり壁は自層CHで水平キャップされず上階天井まで続く', () => {

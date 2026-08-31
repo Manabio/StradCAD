@@ -26,7 +26,9 @@ test('【WP-E2・線種テーブル】emitColumns: cut縁が接する側がopen�
   assert.equal(rightEdge.weight, 'thick', 'open側に接する縁はCUT(thick)のはず');
 });
 
-test('【WP-E2・線種テーブル】emitColumns: cut縁が塞がれていれば(隣もcut)SILHOUETTE', () => {
+// ユーザー明示指示2026-08「切断壁の縁は降格しない／『切断壁の縁は太線』が正」で規則変更。
+// 旧規則（縁の隣がアキならCUT・塞がれていればSILHOUETTE）は撤回した——断面は隣に何があっても断面。
+test('【明示指示2026-08】emitColumns: cut縁は隣が塞がれていても太線のまま（降格しない）', () => {
   const cut = makeCut();
   const columns = [
     { x0: 0, x1: 500, worldLo: 0, worldHi: 500, bands: [{ kind: 'cut', z0: 0, z1: 2400 }] },
@@ -35,7 +37,153 @@ test('【WP-E2・線種テーブル】emitColumns: cut縁が塞がれていれ�
   const prims = emitColumns(columns, cut);
   const rightEdge = prims.find(p => p.x1 === 500 && p.x2 === 500 && p.y1 === 0);
   assert.ok(rightEdge);
-  assert.equal(rightEdge.weight, 'medium', '隣もcut(塞がれている)側の縁はSILHOUETTE(medium)のはず');
+  assert.equal(rightEdge.weight, 'thick', '隣もcut(塞がれている)側の縁もCUT(thick)のはず');
+});
+
+// ---- ユーザー明示指示2026-08「その他の見えがかりの線を直近を中線、それ以外を細線で分類」 ----
+test('【明示指示2026-08】emitColumns: 見えがかりは直近が中線・それより奥は細線', () => {
+  const cut = makeCut();
+  const columns = [
+    { x0: 0, x1: 500, worldLo: 0, worldHi: 500,
+      bands: [{ kind: 'wall', z0: 0, z1: 2400, distMm: 1000, layerRole: 'self' }] },
+    { x0: 500, x1: 1000, worldLo: 500, worldHi: 1000,
+      bands: [{ kind: 'wall', z0: 0, z1: 2400, distMm: 4000, layerRole: 'self' }] },
+  ];
+  const prims = emitColumns(columns, cut, { ceilZ: 3000 }); // 天井は2400より上（CHの線は描かないため）
+  const nearTop = prims.find(p => p.x1 === 0 && p.x2 === 500 && p.y1 === p.y2 && p.y1 === -2400);
+  const farTop  = prims.find(p => p.x1 === 500 && p.x2 === 1000 && p.y1 === p.y2 && p.y1 === -2400);
+  assert.equal(nearTop.weight, 'medium', '直近(d=1000)の見えがかりは中線');
+  assert.equal(farTop.weight, 'thin', '奥(d=4000)の見えがかりは細線');
+});
+
+test('【明示指示2026-08】emitColumns:「直近」は列ごとではなく切断（図）全体で決める', () => {
+  const cut = makeCut();
+  // 単独で見れば各列の最前面だが、図全体で最も手前なのは d=1000 の列だけ。
+  const columns = [
+    { x0: 0, x1: 500, worldLo: 0, worldHi: 500,
+      bands: [{ kind: 'wall', z0: 0, z1: 2400, distMm: 4000, layerRole: 'self' }] },
+    { x0: 500, x1: 1000, worldLo: 500, worldHi: 1000,
+      bands: [{ kind: 'wall', z0: 0, z1: 2400, distMm: 1000, layerRole: 'self' }] },
+  ];
+  const prims = emitColumns(columns, cut, { ceilZ: 3000 }); // 天井は2400より上（CHの線は描かないため）
+  const farTop = prims.find(p => p.x1 === 0 && p.x2 === 500 && p.y1 === p.y2 && p.y1 === -2400);
+  assert.equal(farTop.weight, 'thin',
+    'その列では最前面でも、図全体では奥なので細線（列ごとに最小を取ると奥行きの表現が失われる）');
+});
+
+// ---- ユーザー明示指示2026-08「FLの見えがかりは描画しない」「仮想断面からの距離が変わるところに
+// 垂直、水平、または、斜めの見えがかり線を描画」 ----
+test('【明示指示2026-08】emitColumns: FL（床レベル）には見えがかりの水平線を描かない', () => {
+  const cut = { ...makeCut(), baseFloorZ: 0, layers: [{ floorZMm: 0 }] };
+  const columns = [
+    { x0: 0, x1: 500, worldLo: 0, worldHi: 500,
+      bands: [{ kind: 'wall', z0: 0, z1: 2400, distMm: 58, layerRole: 'self' }] },
+  ];
+  const prims = emitColumns(columns, cut, { ceilZ: 2400 });
+  const atFL = prims.filter(p => p.y1 === p.y2 && Math.abs(p.y1) < 1e-6);
+  assert.equal(atFL.length, 0,
+    `FLには床断面線（太線）が別に描かれるため、見えがかりの水平線は出さない（実際:${atFL.length}本）`);
+});
+
+test('【明示指示2026-08】emitColumns: 上階のFL（層のfloorZMm）にも見えがかりの水平線を描かない', () => {
+  const cut = { ...makeCut(), baseFloorZ: 0, zRange: { loZ: 0, hiZ: 5400 },
+    layers: [{ floorZMm: 0 }, { floorZMm: 3000 }] };
+  const columns = [
+    { x0: 0, x1: 500, worldLo: 0, worldHi: 500, bands: [
+      { kind: 'wall', z0: 0, z1: 2400, distMm: 58, layerRole: 'self' },
+      { kind: 'open', z0: 2400, z1: 3000 },
+      { kind: 'wall', z0: 3000, z1: 5400, distMm: 58, layerRole: 'above' }] },
+  ];
+  const prims = emitColumns(columns, cut, { ceilZ: 5400 });
+  const at2FL = prims.filter(p => p.y1 === p.y2 && Math.abs(p.y1 - -3000) < 1e-6);
+  assert.equal(at2FL.length, 0, `2FLにも見えがかりの水平線は出さない（実際:${at2FL.length}本）`);
+  // 1階天井（2400。FLではない）には距離が変わる境界として線が出る。
+  assert.equal(prims.filter(p => p.y1 === p.y2 && Math.abs(p.y1 - -2400) < 1e-6).length, 1);
+});
+
+// ユーザー明示指示2026-08（CHの扱い・4点）:
+//   1 CHの上が天井裏なら描画不要（断面線のみ）
+//   2 CH下の壁までの距離とCH上の壁までの距離が等しければ描画しない（同一面）
+//   3 CH下がアキ、上が壁なら見えがかり
+//   4 天井から上階FLまでの間にある面も「壁」扱い
+// 4は`sectionProbe`側（`resolveSightlineTopZ`が上階FLまで壁を伸ばす）で満たし、その結果
+// 1・2は本ファイルの一般規則（距離が変わるところにだけ描く）から自動的に従う。3は下記。
+test('【明示指示2026-08・点3】emitColumns: CH下がアキ・上が壁なら、その境界に見えがかり線を描く', () => {
+  const cut = { ...makeCut(), baseFloorZ: -1000, zRange: { loZ: -1000, hiZ: 4000 } };
+  const columns = [
+    { x0: 0, x1: 500, worldLo: 0, worldHi: 500, bands: [
+      { kind: 'open', z0: 0, z1: 2400 },
+      { kind: 'wall', z0: 2400, z1: 3600, distMm: 900, layerRole: 'self' }] },
+  ];
+  const prims = emitColumns(columns, cut, { ceilZ: 4000 });
+  const atCH = prims.filter(p => p.y1 === p.y2 && Math.abs(p.y1 - -2400) < 1e-6);
+  assert.equal(atCH.length, 1, `アキ→壁の境界には見えがかり線が1本出るはず（実際:${atCH.length}本）`);
+  assert.equal(atCH[0].weight, 'medium', 'その切断で最も手前の面なので中線');
+});
+
+test('【明示指示2026-08・点1,2】emitColumns: CHの上下が同じ距離の壁（＝天井裏へ続く同一面）なら描かない', () => {
+  const cut = { ...makeCut(), baseFloorZ: -1000, zRange: { loZ: -1000, hiZ: 4000 } };
+  const columns = [
+    { x0: 0, x1: 500, worldLo: 0, worldHi: 500, bands: [
+      { kind: 'wall', z0: 0, z1: 2400, distMm: 900, layerRole: 'self' },
+      { kind: 'wall', z0: 2400, z1: 3600, distMm: 900, layerRole: 'self' }] },
+  ];
+  const prims = emitColumns(columns, cut, { ceilZ: 4000 });
+  assert.equal(prims.filter(p => p.y1 === p.y2 && Math.abs(p.y1 - -2400) < 1e-6).length, 0,
+    'CHの上下が同一面なら線は無い（天井断面線のみ）');
+});
+
+test('【明示指示2026-08】emitColumns: CH（帯の天井）にも見えがかりの水平線を描かない', () => {
+  const cut = { ...makeCut(), baseFloorZ: -1000, zRange: { loZ: -1000, hiZ: 2400 } };
+  const columns = [
+    { x0: 0, x1: 500, worldLo: 0, worldHi: 500,
+      bands: [{ kind: 'wall', z0: 0, z1: 2400, distMm: 58, layerRole: 'self' }] },
+  ];
+  assert.equal(emitColumns(columns, cut, { ceilZ: 2400 })
+    .filter(p => p.y1 === p.y2 && Math.abs(p.y1 - -2400) < 1e-6).length, 0,
+  'CHには天井断面線（太線）が別に描かれるため、見えがかりの水平線は出さない');
+  // 天井がもっと上にあれば、同じ壁の上端は「距離が変わるところ」として描かれる（対照）。
+  assert.equal(emitColumns(columns, cut, { ceilZ: 3000 })
+    .filter(p => p.y1 === p.y2 && Math.abs(p.y1 - -2400) < 1e-6).length, 1);
+});
+
+test('【明示指示2026-08】emitColumns: 距離が変わらない境界には水平線を描かない', () => {
+  const cut = { ...makeCut(), baseFloorZ: -1000, zRange: { loZ: -1000, hiZ: 2400 } };
+  const columns = [
+    { x0: 0, x1: 500, worldLo: 0, worldHi: 500, bands: [
+      { kind: 'wall', z0: 0, z1: 1200, distMm: 58, layerRole: 'self' },
+      { kind: 'wall', z0: 1200, z1: 2400, distMm: 58, layerRole: 'self' }] },
+  ];
+  const prims = emitColumns(columns, cut, { ceilZ: 2400 });
+  assert.equal(prims.filter(p => p.y1 === p.y2 && Math.abs(p.y1 - -1200) < 1e-6).length, 0,
+    '同じ距離が続く境界は1枚の連続面なので線は無い');
+});
+
+test('【明示指示2026-08】emitColumns: 距離が変わる境界には線を1本だけ描き、線種は手前の面が決める', () => {
+  const cut = { ...makeCut(), baseFloorZ: -1000, zRange: { loZ: -1000, hiZ: 2400 } };
+  const columns = [
+    { x0: 0, x1: 500, worldLo: 0, worldHi: 500, bands: [
+      { kind: 'wall', z0: 0, z1: 1200, distMm: 58, layerRole: 'self' },
+      { kind: 'wall', z0: 1200, z1: 2400, distMm: 3000, layerRole: 'self' }] },
+  ];
+  const prims = emitColumns(columns, cut, { ceilZ: 2400 });
+  const atBoundary = prims.filter(p => p.y1 === p.y2 && Math.abs(p.y1 - -1200) < 1e-6);
+  assert.equal(atBoundary.length, 1, `境界の水平線は1本だけのはず（実際:${atBoundary.length}本）`);
+  assert.equal(atBoundary[0].weight, 'medium', '手前(d=58)の面の輪郭なので直近＝中線');
+});
+
+test('【明示指示2026-08】emitColumns: 手前に切断壁がある境界には見えがかりの凹み縦線を出さない（断面の縁と二重になる）', () => {
+  const cut = makeCut();
+  const columns = [
+    { x0: 0, x1: 500, worldLo: 0, worldHi: 500,
+      bands: [{ kind: 'wall', z0: 0, z1: 2400, distMm: 1000, layerRole: 'self' }] },
+    { x0: 500, x1: 1000, worldLo: 500, worldHi: 1000,
+      bands: [{ kind: 'cut', z0: 0, z1: 2400, wall: { id: 'w1' } }] },
+  ];
+  const prims = emitColumns(columns, cut);
+  const atBoundary = prims.filter(p => p.x1 === 500 && p.x2 === 500);
+  assert.equal(atBoundary.length, 1, `境界の縦線は切断壁の断面縁1本だけのはず（実際:${atBoundary.length}本）`);
+  assert.equal(atBoundary[0].weight, 'thick', 'その1本は断面＝太線');
 });
 
 test('【WP-E2・線種テーブル・§5.5】emitColumns: 隣接列でwallのdistMmが変化した境界にSILHOUETTE縦線(凹み)が出る', () => {
@@ -542,8 +690,10 @@ test('【実機指摘・6D(b)】emitColumns: 2FL床断面線は袖壁の外側�
   assert.deepEqual([top[0].x1, top[0].x2].sort((a, b) => a - b), [-57.5, 57.5], '天端は壁の全幅のはず');
 });
 
-test('【失敗系・実機指摘・6D】emitColumns: 袖壁の天端より上を通る線（上階天井z5400）はトリムされない', () => {
-  const prims = emitColumns(kneeAtOpenEndColumns(), kneeCut, { ceilZ: 5400, openEndLo: true });
+test('【失敗系・実機指摘・6D】emitColumns: 袖壁の天端より上を通る線（z5400）はトリムされない', () => {
+  // ceilZは5400より上に置く——z5400ちょうどを帯の天井にすると「CHの見えがかりは描画しない」
+  // （ユーザー明示指示2026-08）で線が消え、本テストの主題（切断壁によるトリム）を検証できない。
+  const prims = emitColumns(kneeAtOpenEndColumns(), kneeCut, { ceilZ: 6000, openEndLo: true });
   const xs = horizAt(prims, 5400).flatMap(p => [p.x1, p.x2]);
   assert.equal(Math.min(...xs), -285);
   assert.equal(Math.max(...xs), 3442.5, '天端(3800)より上の線は壁に遮られず端まで通るはず');

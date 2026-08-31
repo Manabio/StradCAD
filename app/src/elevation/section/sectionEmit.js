@@ -81,6 +81,17 @@ function sameWallFace(a, b) {
     && Math.abs(a.wall.axisValue - b.wall.axisValue) < GAP_EPS;
 }
 
+// z区間の配列から1つの帯のz範囲を引く（uncoveredZRangesの内部ヘルパ）。
+function subtractZ(ranges, nb) {
+  const rest = [];
+  for (const r of ranges) {
+    if (!overlapsZ(nb, r)) { rest.push(r); continue; }
+    if (nb.z0 > r.z0 + GAP_EPS) rest.push({ z0: r.z0, z1: nb.z0 });
+    if (nb.z1 < r.z1 - GAP_EPS) rest.push({ z0: nb.z1, z1: r.z1 });
+  }
+  return rest;
+}
+
 /**
  * band の [z0,z1] のうち、隣接列 col で**同じ壁面が続いていない**z区間（＝側縁の縦線を描くべき
  * 範囲）を返す。col が null（探査範囲外）なら全区間を返す。
@@ -103,8 +114,22 @@ function uncoveredZRanges(col, band) {
   if (!col) return [{ z0: band.z0, z1: band.z1 }];
   let ranges = [{ z0: band.z0, z1: band.z1 }];
   for (const nb of col.bands) {
-    // 覆う（＝縦線を出さない）のは「同層・同距離＝そのまま続く壁」と「別層＝見えている壁が
-    // 入れ替わっただけ」の2通り。残る「同層・別距離」だけが凹みの側面として縦線になる。
+    // 覆う（＝縦線を出さない）のは「同層・同距離＝そのまま続く壁」「別層＝見えている壁が
+    // 入れ替わっただけ」、そして**隣接列の手前に切断壁がある**の3通り。残る「同層・別距離」
+    // だけが凹みの側面として縦線になる。
+    //
+    // 切断壁(cut)を覆う側に数えるのは、**壁はその裏へ続いており凹んでいない**ため
+    // ——境界に立つ縦線は切断壁自身の断面縁（CUT・太線）が描くので、見えがかり側で重ねて
+    // 描くと同じ位置に2本出る。水平線側は`trimmedByCutWall`が同じ理由で既に抑止しており
+    // （「手前の切断壁でこの帯が切られただけの縁は描かない」）、縦線側だけが取り残されていた。
+    // 従来はこの重複が**線種が同じ（どちらもSILHOUETTE）ゆえに`dedupeLines`で消えていた**だけで、
+    // 線種を「切断壁の縁=太線／見えがかり=中線・細線」へ分けた時点（ユーザー明示指示2026-08）に
+    // 重複が表面化した——偶然の重複除去に頼らず、描かない理由の側で決める。
+    if (nb.kind === 'cut') {
+      if (!overlapsZ(nb, band)) continue;
+      ranges = subtractZ(ranges, nb);
+      continue;
+    }
     if (nb.kind !== 'wall') continue;
     if (nb.layerRole === band.layerRole && nb.distMm !== band.distMm) continue;
     if (!overlapsZ(nb, band)) continue;
@@ -115,13 +140,7 @@ function uncoveredZRanges(col, band) {
     // 切り替わるため、この線は必ずCL（一点鎖線）に重なる）。
     // 腰壁・垂れ壁で実際に高さが制限された帯（isKneeDrop）は実体の高さ差なので対象外。
     if (!nb.isKneeDrop && !band.isKneeDrop && sameWallFace(nb, band)) return [];
-    const rest = [];
-    for (const r of ranges) {
-      if (!overlapsZ(nb, r)) { rest.push(r); continue; }
-      if (nb.z0 > r.z0 + GAP_EPS) rest.push({ z0: r.z0, z1: nb.z0 });
-      if (nb.z1 < r.z1 - GAP_EPS) rest.push({ z0: nb.z1, z1: r.z1 });
-    }
-    ranges = rest;
+    ranges = subtractZ(ranges, nb);
   }
   return ranges.filter(r => r.z1 - r.z0 > GAP_EPS);
 }
@@ -218,12 +237,96 @@ function slabEdgeCutWallJunction(columns, cut, ceilZ) {
   return prims;
 }
 
-// col（SectionColumn|null）の[z0,z1]範囲が「アキ扱い」（kind==='open' または
-// openingPassThrough:true）で完全に覆われているか（凹み判定・cut縁のopen判定に使う）。
-// 列が無い（範囲外）場合はopen扱い（画面の外は常に開放）。
-function isOpenSideAt(col, z0, z1) {
-  if (!col) return true;
-  return col.bands.some(b => (b.kind === 'open' || b.openingPassThrough) && overlapsZ(b, { z0, z1 }));
+/**
+ * 見えがかりの線種は**奥行き**で決まる（ユーザー明示指示2026-08「切断壁の縁は太線が正で、その他の
+ * 見えがかりの線を直近を中線、それ以外を細線で分類」）。この切断で見えている最も手前の壁面までの
+ * 距離を返す（見えがかり壁が1枚も無ければInfinity）。
+ *
+ * 「直近」は列ごとではなく**その切断（＝その1枚の図）全体**で決める——列ごとに最小を取ると、
+ * 奥まった凹みもその列では最前面なので中線になり、面の中で奥行きの表現が失われる。図全体で
+ * 最も手前＝その面自身の壁面（`sectionCutPlane.js`で下げたぶんの距離）が中線、そこから奥は
+ * 全て細線、という深度の階調になる。
+ * @param {import('./sectionTypes.js').SectionColumn[]} columns
+ * @returns {number}
+ */
+function nearestSightlineDistMm(columns) {
+  let min = Infinity;
+  for (const col of columns ?? []) {
+    for (const band of col.bands) {
+      if (band.kind === 'wall' && Number.isFinite(band.distMm)) min = Math.min(min, band.distMm);
+    }
+  }
+  return min;
+}
+
+/**
+ * その帯が見せている「仮想断面からの距離」。open/slabは**何も見えていない**のでnull。
+ * 見えがかり線を描くかどうかは、隣り合う帯どうしでこの値が変わるかだけで決まる
+ * （ユーザー明示指示2026-08「仮想断面からの距離が変わるところに垂直、水平、または、斜めの
+ * 見えがかり線を描画」）——同じ距離が続いていればそこは1枚の連続面であり、線は存在しない。
+ * @param {object|null|undefined} band
+ * @returns {number|null}
+ */
+function visibleDepthMm(band) {
+  if (!band) return null;
+  if (band.kind === 'wall') return Number.isFinite(band.distMm) ? band.distMm : null;
+  if (band.kind === 'cut' || band.kind === 'cutAlong') return 0; // 切断面は距離0
+  return null; // open/slab
+}
+
+// 列の中で、指定zにz方向で隣接する帯（dir=-1なら下側・+1なら上側）。範囲外はundefined。
+function neighborBandAt(col, z, dir) {
+  return col.bands.find(b => (dir < 0
+    ? Math.abs(b.z1 - z) < GAP_EPS
+    : Math.abs(b.z0 - z) < GAP_EPS));
+}
+
+/**
+ * その帯が、隣（z方向）との境界の見えがかり線を**描く側か**。
+ * 距離が変わらなければ線は無い（1枚の連続面）。変わるときは**手前の面**がその輪郭を持つ
+ * ——両方が描くと同じ位置に線種の違う線が2本出る（奥行きで線種を分けた結果、以前は同一線種
+ * ゆえに`dedupeLines`が消していた重複が表面化する）。相手が何も見えていない側（アキ・床スラブ・
+ * 範囲外）なら、この面の輪郭としてこちらが描く。
+ * @param {object} band
+ * @param {object|null|undefined} neighbor
+ * @returns {boolean}
+ */
+function ownsBoundary(band, neighbor) {
+  const a = visibleDepthMm(band);
+  if (a === null) return false;
+  const b = visibleDepthMm(neighbor);
+  if (b === null) return true;
+  return a < b;
+}
+
+/**
+ * その列で「床断面線・天井断面線が既にある高さ」とみなすz。**FL・CHの見えがかりは描画しない**
+ * （ユーザー明示指示2026-08）——床と天井はその位置に断面線（CUT・太線）を持っており、壁がそこに
+ * 接する線を見えがかりとして重ねると同じ位置に2本出る（線種を奥行きで分けた結果、太線と
+ * 中線・細線が重なって見える）。
+ *
+ * FL: 帯自身のFL（baseFloorZ）・各層のFL（floorZMm）・その列の床スラブのFL。
+ * CH: **帯自身が描く天井（emitCtx.ceilZ、無ければcut.zRange.hiZ）だけ**——天井高さは層の属性では
+ * なく部屋・区間ごとに違うため、層スタックからは一意に決まらない。「上階が実部屋なので壁が
+ * 1階天井でキャップされる」ような**帯の天井とは別の高さの天井の見えがかり**（階段帯のキャップ線・
+ * 吹抜け越しに見える下階天井）は本来の見えがかりであり、ここで消してはいけない。
+ * @param {import('./sectionTypes.js').SectionCut} cut
+ * @param {import('./sectionTypes.js').SectionColumn} col
+ * @param {number|undefined} ceilZ - emitCtx.ceilZ
+ * @returns {number[]}
+ */
+function sectionLevelZs(cut, col, ceilZ) {
+  const zs = [];
+  if (Number.isFinite(cut.baseFloorZ)) zs.push(cut.baseFloorZ);
+  for (const layer of cut.layers ?? []) {
+    if (Number.isFinite(layer?.floorZMm)) zs.push(layer.floorZMm);
+  }
+  for (const band of col.bands) {
+    if (band.kind === 'slab' && Number.isFinite(band.floorZ)) zs.push(band.floorZ);
+  }
+  const chZ = ceilZ ?? cut.zRange?.hiZ;
+  if (Number.isFinite(chZ)) zs.push(chZ);
+  return zs;
 }
 
 /**
@@ -238,6 +341,10 @@ function isOpenSideAt(col, z0, z1) {
 export function emitColumns(columns, cut, emitCtx = {}) {
   const prims = [];
   const ceilZ = emitCtx.ceilZ;
+  // 見えがかりの線種（直近=中線／それ以外=細線）。nearestSightlineDistMm参照。
+  const nearestDistMm = nearestSightlineDistMm(columns);
+  const sightRole = distMm => (Number.isFinite(distMm) && distMm <= nearestDistMm + GAP_EPS
+    ? ElevationLineRole.SILHOUETTE : ElevationLineRole.DETAIL);
   // 注: 「壁のない端部で線を図の外側へ延長する」処理はここには無い。プリミティブを後から
   // 引き伸ばすのではなく、**探査範囲そのものを外へ広げる**（sectionProbe.jsの
   // probeExtendLo/HiMm。ユーザー裁定2026-08 A案）——面の外の列も実データとして生成されるため、
@@ -264,14 +371,10 @@ export function emitColumns(columns, cut, emitCtx = {}) {
         // （単体テストの手書き列など）場合は従来どおり描く。
         const sameWall = b => !!b && !!b.wall && !!band.wall && b.wall === band.wall;
         if (!sameWall(matchingBand(prev, band.z0, band.z1, 'cut'))) {
-          prims.push(emitLine(cut, col.x0, band.z0, col.x0, band.z1,
-            isOpenSideAt(prev, band.z0, band.z1) ? ElevationLineRole.CUT : ElevationLineRole.SILHOUETTE,
-            { ceilZ }));
+          prims.push(Object.assign(emitLine(cut, col.x0, band.z0, col.x0, band.z1, ElevationLineRole.CUT, { ceilZ }),{__o:'cutEdgeLo'}));
         }
         if (!sameWall(matchingBand(next, band.z0, band.z1, 'cut'))) {
-          prims.push(emitLine(cut, col.x1, band.z0, col.x1, band.z1,
-            isOpenSideAt(next, band.z0, band.z1) ? ElevationLineRole.CUT : ElevationLineRole.SILHOUETTE,
-            { ceilZ }));
+          prims.push(Object.assign(emitLine(cut, col.x1, band.z0, col.x1, band.z1, ElevationLineRole.CUT, { ceilZ }),{__o:'cutEdgeHi'}));
         }
       } else if (band.kind === 'wall') {
         // 見えがかり壁面の輪郭（上端・下端）。水平線（縮退）はemitLineの単独判定では
@@ -291,11 +394,18 @@ export function emitColumns(columns, cut, emitCtx = {}) {
         // 遠くの壁は同面ではないので、スラブ小口の線はそのまま出る（実機の右半分がこれ）。
         const flushOnSlab = band.isKneeDrop
           && col.bands.some(b => b.kind === 'slab' && Math.abs(b.z1 - band.z0) < GAP_EPS);
-        if (!flushOnSlab && !trimmedByCutWall(col, band.z0)) {
-          prims.push(emitLine(cut, col.x0, band.z0, col.x1, band.z0, ElevationLineRole.SILHOUETTE, { ceilZ, forceDash: beyondBand }));
+        const role = sightRole(band.distMm);
+        // 見えがかりの水平線は「仮想断面からの距離が変わるところ」だけに描き、FL・CHには描かない
+        // （ユーザー明示指示2026-08。visibleDepthMm / sectionLevelZs 参照）。
+        const sectionZs = sectionLevelZs(cut, col, ceilZ);
+        const atSectionLevel = z => sectionZs.some(f => Math.abs(z - f) < GAP_EPS);
+        if (!flushOnSlab && !trimmedByCutWall(col, band.z0) && !atSectionLevel(band.z0)
+            && ownsBoundary(band, neighborBandAt(col, band.z0, -1))) {
+          prims.push(emitLine(cut, col.x0, band.z0, col.x1, band.z0, role, { ceilZ, forceDash: beyondBand }));
         }
-        if (!trimmedByCutWall(col, band.z1)) {
-          prims.push(emitLine(cut, col.x0, band.z1, col.x1, band.z1, ElevationLineRole.SILHOUETTE, { ceilZ, forceDash: beyondBand }));
+        if (!trimmedByCutWall(col, band.z1) && !atSectionLevel(band.z1)
+            && ownsBoundary(band, neighborBandAt(col, band.z1, +1))) {
+          prims.push(emitLine(cut, col.x0, band.z1, col.x1, band.z1, role, { ceilZ, forceDash: beyondBand }));
         }
         // 凹み: 隣接列で同一z区間のwallのdistMmが変化した境界にSILHOUETTE縦線（§5.5）。
         // 凹み側面線。**列の外側の端（prev/nextが無い＝描画範囲の端）では、その端に壁が
@@ -322,11 +432,11 @@ export function emitColumns(columns, cut, emitCtx = {}) {
           const wholeBand = [{ z0: band.z0, z1: band.z1 }];
           const loRanges = prev ? uncoveredZRanges(prev, band) : (emitCtx.openEndLo ? [] : wholeBand);
           for (const r of loRanges) {
-            prims.push(emitLine(cut, col.x0, r.z0, col.x0, r.z1, ElevationLineRole.SILHOUETTE, { ceilZ }));
+            prims.push(Object.assign(emitLine(cut, col.x0, r.z0, col.x0, r.z1, role, { ceilZ }),{__o:'recessLo'}));
           }
           const hiRanges = next ? uncoveredZRanges(next, band) : (emitCtx.openEndHi ? [] : wholeBand);
           for (const r of hiRanges) {
-            prims.push(emitLine(cut, col.x1, r.z0, col.x1, r.z1, ElevationLineRole.SILHOUETTE, { ceilZ }));
+            prims.push(Object.assign(emitLine(cut, col.x1, r.z0, col.x1, r.z1, role, { ceilZ }),{__o:'recessHi'}));
           }
         }
       } else if (band.kind === 'cutAlong') {
@@ -342,11 +452,11 @@ export function emitColumns(columns, cut, emitCtx = {}) {
         // 必要が無い、壁の実端そのものを示す線のため）。
         const prevAlong = matchingBand(prev, band.z0, band.z1, 'cutAlong');
         if (!prevAlong) {
-          prims.push(emitLine(cut, col.x0, band.z0, col.x0, band.z1, ElevationLineRole.CUT, { ceilZ }));
+          prims.push(Object.assign(emitLine(cut, col.x0, band.z0, col.x0, band.z1, ElevationLineRole.CUT, { ceilZ }),{__o:'cutEdgeLo'}));
         }
         const nextAlong = matchingBand(next, band.z0, band.z1, 'cutAlong');
         if (!nextAlong) {
-          prims.push(emitLine(cut, col.x1, band.z0, col.x1, band.z1, ElevationLineRole.CUT, { ceilZ }));
+          prims.push(Object.assign(emitLine(cut, col.x1, band.z0, col.x1, band.z1, ElevationLineRole.CUT, { ceilZ }),{__o:'cutEdgeHi'}));
         }
       }
       // open/slabの帯自体はここでは描かない（AMBIGUITY F）。ただしslab→openの境界（＝above層の

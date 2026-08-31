@@ -38,10 +38,11 @@ import { switchbackCuts } from './section/cuts/switchbackCuts.js';
 import { straightCuts } from './section/cuts/straightCuts.js';
 import { UNSUPPORTED_FAN_LANE_TYPES, fanLaneCuts } from './section/cuts/fanCuts.js';
 import { makeProbeContext } from './section/sectionProbe.js';
-import { buildColumns, buildSectionFigure } from './section/sectionEngine.js';
+import { buildSectionFigure } from './section/sectionEngine.js';
+import { buildCutContent } from './section/sectionContent.js';
 import { cutDrawRange } from './section/sectionTypes.js';
 import {
-  emitColumns, emitOpenGapMarks, emitLine, splitGapMarksByStair, dashHorizontalsBehindStair,
+  emitLine, splitGapMarksByStair, dashHorizontalsBehindStair,
   joinToStairProfile, clipStairDetailInSlabBand,
 } from './section/sectionEmit.js';
 import {
@@ -352,44 +353,25 @@ function clipWallFloorEdgeUnderZigzag(wallContent, stairContent) {
  * cut.line.lo/hi自体は変えない＝x=0の起点（cutOriginWorld）が動かないため既存座標はずれない。
  * ローカルx=0側／run側のどちらがworldのlo側かはdirSignで決まる。
  */
-function withProbeExtension(cut, endExtendMm, bandRoomBounds = null) {
-  const openLo = cut.face?.hasWallAtLocal0 === false;
-  const openHi = cut.face?.hasWallAtLocalRun === false;
-  const localLoIsWorldLo = cut.dirSign > 0;
-  const extend = !!endExtendMm && (openLo || openHi);
-  // bandRoom: 見えがかり壁の探索を帯自身の部屋の広がりに限る（sectionProbe.jsのwithinViewRoom）。
-  return { ...cut, bandRoomBounds, line: !extend ? cut.line : { ...cut.line,
-    probeExtendLoMm: (localLoIsWorldLo ? openLo : openHi) ? endExtendMm : 0,
-    probeExtendHiMm: (localLoIsWorldLo ? openHi : openLo) ? endExtendMm : 0 } };
-}
-
 function contentForCut(cut, probeCtx, endExtendMm = 0, bandRoomBounds = null, zRef = null) {
   if (!cut) return [];
   // 拡張済みcut（探査延長＋帯の部屋の包絡矩形つき）はレイキャストだけでなく構造材の判定でも使う
   // ——「室内を空中で横断する梁の見えがかり」がbandRoomBoundsを見るため（sectionStructure.js）。
-  const pcut = withProbeExtension(cut, endExtendMm, bandRoomBounds);
-  const columns = buildColumns(pcut, probeCtx);
-  // openEndLo/Hi: この面の端に壁が無い（壁面がその先へ続く）なら、描画範囲の端に凹み側面線を
-  // 出さない（ユーザー実機指摘2026-08「3500左CLにエッジはない」。sectionEmit.js参照）。
-  // cut.face（switchbackCuts.jsが各cutへ載せる面記述子）のhasWallAtLocal0/Runがそのまま
-  // ローカルx=0/run側の端に対応する（cut.dirSignとfaceのdirSignはreorientFaceで揃えてある）。
-  const emitCtx = {
-    ceilZ: cut.zRange?.hiZ,
-    openEndLo: cut.face?.hasWallAtLocal0 === false,
-    openEndHi: cut.face?.hasWallAtLocalRun === false,
-  };
+  // 共通経路（section/sectionContent.js）: 探査延長・端の凹み側面線の抑制・壁断面／見えがかり・
+  // アキのバツまでは吹抜けの多層帯とまったく同じ処理を通る。ここから下が階段固有の後段加工。
+  const { cut: pcut, columns, wallPrims, gapMarks: rawGapMarks } =
+    buildCutContent(cut, probeCtx, { endExtendMm, bandRoomBounds });
   // アキのバツは、手前に階段が描かれる区間だけ破線へ落とす（ユーザー実機指摘2026-08「6」C
   // 「但し、階段に隠れる部分は破線」）。隠れる範囲はプリミティブからの逆算ではなくflight自身の
   // 見付け矩形（stairOccluderRects）から求める。
   // 階段の見付けシルエット（手前に実体がある範囲）。アキのバツ・見えがかり水平線の
   // どちらの破線判定にも同じ集合を使う。
   const occluders = stairOccluderRects(cut.stairCut ?? null, cut);
-  const gapMarks = splitGapMarksByStair(emitOpenGapMarks(columns, cut, emitCtx), occluders);
+  const gapMarks = splitGapMarksByStair(rawGapMarks, occluders);
   // 見えがかりの水平線のうち階段の背後に入る区間は破線（同指摘「その先は袋階段に隠れて
   // 見えなくなるが、アキ・バツのために破線で右側壁断面線まで」）。
   const wallContent = [
-    ...dashHorizontalsBehindStair(
-      emitColumns(columns, cut, emitCtx), occluders),
+    ...dashHorizontalsBehindStair(wallPrims, occluders),
     ...gapMarks,
   ];
   // 下ささらの見えがかりは下階天井〜上階床の帯（床構造の中）でカットする

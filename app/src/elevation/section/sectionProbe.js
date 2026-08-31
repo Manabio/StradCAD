@@ -8,7 +8,7 @@
  * 既存の純関数（collectRunBreaks・buildCellToRoom・worldToCell・kneeDropRecordsOnAxis・
  * roomCeilingHeight）をそのまま再利用する。
  */
-import { OpeningCategory, RoomFeature } from '@core';
+import { OpeningCategory } from '@core';
 import { buildCellToRoom } from '../../finish/edgeClassify.js';
 import { worldToCell } from '../../finish/gridCells.js';
 import { roomCeilingHeight } from '../../finish/roomMetrics.js';
@@ -17,6 +17,10 @@ import { effectiveHeight } from '../../openings/openingNumbering.js';
 import { collectRunBreaks } from '../elevationFloorProfile.js';
 import { GAP_EPS_MM as GAP_EPS, PROBE_EPS_MM } from '../elevationStyle.js';
 import { graphList } from '../../graphReadScope.js';
+import {
+  isRealRoom, orderLayerStack, baseLayerOf, layerOwningZ,
+  compareLayerPriority, resolveSightlineTopZ,
+} from './sectionLayerStack.js';
 
 // kneeDropRecordsOnAxis（区間重なり判定）への点クエリ用の微小幅(mm)。GAP_EPSより大きく
 // PROBE_EPS_MMより小さい値にして、区間境界ちょうどのレコードも安定して拾えるようにする。
@@ -27,17 +31,9 @@ const POINT_QUERY_EPS_MM = 0.5;
 // サブミリ〜数mm程度の誤差を吸収する目的の小さな値（PROBE_EPS_MMと同水準）。
 const COINCIDENT_TOL_MM = PROBE_EPS_MM;
 
-// 層のroleの優先順位（同距離・cut候補同士のタイブレークに使う。§5.2 step4(3)）。
-const ROLE_ORDER = { self: 0, above: 1, below: 2 };
-function roleRank(role) { return ROLE_ORDER[role] ?? 9; }
-
-// VOID/STAIR_VOID（吹抜け・階段吹抜け）featureのRoomは「実床が無い」ことを表現するために
-// Room化されているだけ（CH解決等の都合）——実床が有ると誤判定しないよう除外する
-// （A2のresolveWallCapZ・Gの2FL線ownerRoom判定で共有する単一情報源。
-// elevationStairSequence.jsのaboveRoomSegmentsOnFaceと同じ判定基準）。
-function isRealRoom(room) {
-  return !!room && room.feature !== RoomFeature.VOID && room.feature !== RoomFeature.STAIR_VOID;
-}
+// 層に関する判断（優先順位・所有層・上位層・実Room判定）は sectionLayerStack.js の一般規則へ
+// 集約した——role名（'self'/'above'/'below'）と配列順に依存した旧実装が、多層の展開図で
+// 壊れる構造的な原因だったため（同モジュール冒頭参照）。
 
 // z区間が隣接し同一の実体（同じwall/room・同じ距離）を表すband同士を1本へ統合する
 // （実機フィードバック第3弾A2）。probeColumnのzBreaksは複数の目的（cut/cutAlong/wall候補の
@@ -252,38 +248,24 @@ function fallbackCeilZ(layer, floorZ, cut) {
 }
 
 /**
- * 見えがかり壁（kind:'wall'候補）のz上限（§5.6・実機フィードバック第3弾A2・根本原因）。
- * 従来はselfレイヤーの視線方向所有RoomのCH（selfCeilZ）で無条件に切っていたため、その壁の
- * 直上（above層）が吹抜け（VOID/STAIR_VOID。実床が無い）であっても、そこに実際の天井が
- * あるかのような水平キャップ線（自層CH位置の壁の輪郭上辺）が出ていた——実機は「上が吹抜けなら
- * 壁は上階の天井までそのまま続く」ため、キャップ位置は物理的に誤り。
- * 本関数はwallの実位置（axisCL.effectiveValue×worldMid）を室内側（-viewSign方向。壁の
- * ちょうど中心線上は境界セルで所有Roomが不安定なため、probeOwnerRoomと同じ手法でPROBE_EPS_MMだけ
- * 逃がす）でabove層を1点プローブし、実Room（VOID/STAIR_VOID以外）があればselfCeilZのまま、
- * 無ければ上階の天井（aboveInfo.ceilZ。above層自体が無ければcutHiZ）まで拡張する。
- * cutAlong/cut（切断壁）はこの関数の対象外の別コード経路のまま（壁自身のkneeDrop/実存在範囲を
- * 維持。呼び出し側でkind:'wall'のときだけ使う）。
+ * 壁の実位置（axisCL.effectiveValue × worldMid）を室内側へ`PROBE_EPS_MM`だけ逃がした点で、
+ * 指定層の所有Roomを1点プローブする（`resolveSightlineTopZ`へ渡す`roomAtLayer`の実体）。
+ * 壁のちょうど中心線上は境界セルで所有Roomが不安定なため、probeOwnerRoomと同じ手法で逃がす
+ * ——壁は line から見て+viewSign側にあるので、-viewSign側が壁の手前＝室内側になる。
  * @param {import('@core').Wall} wall
  * @param {number} worldMid
- * @param {number} selfCeilZ
- * @param {{layer:{graph:object}, ceilZ:number}|undefined} aboveInfo - layerInfoから拾った
- *   role:'above'の要素（無ければ判定不能＝selfCeilZのまま）
- * @param {number} cutHiZ - aboveInfoは有るがceilZが求まらない防御的ケースの最終フォールバック
- * @param {1|-1} viewSign - このwall候補を見つけたisSightlineShape判定と同じ視線方向
- *   （wallは line から見て+viewSign側にあるため、-viewSign側へ逃がすと壁の手前=室内側になる）
+ * @param {1|-1} viewSign
  * @param {ReturnType<typeof makeProbeContext>} probeCtx
- * @returns {number}
+ * @returns {(upper:{layer:{graph:object}})=>object|null}
  */
-function resolveWallCapZ(wall, worldMid, selfCeilZ, aboveInfo, cutHiZ, viewSign, probeCtx) {
-  if (!aboveInfo) return selfCeilZ; // above層が無い（最上階等）は従来どおり
-  const aboveGraph = aboveInfo.layer.graph;
+function roomAtWallPosition(wall, worldMid, viewSign, probeCtx) {
   const offset = -viewSign * PROBE_EPS_MM;
   const px = wall.isVertical ? wall.axisCL.effectiveValue + offset : worldMid;
   const py = wall.isVertical ? worldMid : wall.axisCL.effectiveValue + offset;
-  const cell = worldToCell(px, py, aboveGraph);
-  const map = probeCtx.cellToRoomFor(aboveInfo.layer);
-  const room = cell ? (map.get(cell.key) ?? null) : null;
-  return isRealRoom(room) ? selfCeilZ : (aboveInfo.ceilZ ?? cutHiZ);
+  return upper => {
+    const cell = worldToCell(px, py, upper.layer.graph);
+    return cell ? (probeCtx.cellToRoomFor(upper.layer).get(cell.key) ?? null) : null;
+  };
 }
 
 /**
@@ -430,6 +412,12 @@ export function collectCutBreaks(cut, probeCtx) {
   return [...values].sort((a, b) => a - b);
 }
 
+// LayerInfo（層ごとの床天井）→ 非描画のslab ZBand。床構造・天井懐・上階床のどれであっても
+// 「その高さを所有する層の床天井」を持たせる、という一点だけが分類の情報源。
+function slabBandOf(info, z0, z1) {
+  return { kind: 'slab', z0, z1, ownerRoom: info.room, floorZ: info.floorZ, ceilZ: info.ceilZ };
+}
+
 /**
  * 1本のx列（world run座標 worldMid。collectCutBreaksが返す隣接ペアの中点を渡す想定）の
  * z区間分割・オクルージョン解決（§5.2）。層0件・切断線が部屋外・壁ゼロのいずれでも例外を
@@ -452,18 +440,20 @@ export function probeColumn(cut, worldMid, probeCtx) {
   // （視線方向=自分が向かっている方向にある空間＝その候補壁の高さの基準になる部屋、という
   // 解釈。壁面自身の位置＝cut.line.axisValueぴったりのprobeでも、+viewSign*PROBE_EPS_MMだけ
   // 視線方向へ逃がせば単純な矩形室では正しく自室を拾える）。
-  const layerInfo = layers.map(layer => {
+  // orderLayerStackでfloorZMm昇順へ整列してから使う——以降の層の判断（所有層・上位層・優先順位）は
+  // 全て並びの上で答えるため、呼び出し側がcut.layersをどの順で渡しても結果は変わらない。
+  const layerStack = orderLayerStack(layers.map(layer => {
     const room = probeOwnerRoom(cut, worldMid, layer, probeCtx, cut.viewSign);
     const floorZ = probeCtx.floorZOf(room, layer);
     // QA修正: room=nullでも壁候補は諦めない（fallbackCeilZ参照）。ceilZが実質nullになるのは
     // layer.graph自体が無い等の防御的ケースのみ。
     const ceilZ = room ? floorZ + probeCtx.chOf(room, layer.graph) : fallbackCeilZ(layer, floorZ, cut);
     return { layer, room, floorZ, ceilZ };
-  });
+  }));
 
   // 候補壁の収集（層ごと。§5.2 step1）。
   const candidates = [];
-  for (const info of layerInfo) {
+  for (const info of layerStack) {
     const { layer } = info;
     if (info.ceilZ == null) continue; // 防御的ガード（fallbackCeilZにより通常到達しない）
     for (const w of graphList(layer.graph, 'walls') ?? []) {
@@ -485,12 +475,12 @@ export function probeColumn(cut, worldMid, probeCtx) {
         if (worldMid < c1 - GAP_EPS || worldMid > c2 + GAP_EPS) continue;
         const distMm = Math.abs(w.axisCL.effectiveValue - line.axisValue);
         if (!withinViewRoom(cut, worldMid, info, probeCtx, w)) continue; // 部屋の外の壁は描かない
-        // A2: selfレイヤーの壁だけ、上限（info.ceilZ）をabove層の実Room有無で解決し直す
-        // （resolveWallCapZ参照。above/belowレイヤー自身の壁は従来どおりinfo.ceilZのまま
-        // ——本WPの対象はselfレイヤーの視界に立つ壁の水平キャップ位置のみ）。
-        const capZ = info.layer.role === 'self'
-          ? resolveWallCapZ(w, worldMid, info.ceilZ, layerInfo.find(li => li.layer.role === 'above'), zHi, cut.viewSign, probeCtx)
-          : info.ceilZ;
+        // A2の一般化: 上限（info.ceilZ）を「上が吹抜けなら上階の天井まで延ばす」規則で解決し直す
+        // （sectionLayerStack.jsのresolveSightlineTopZ）。旧実装はself層の壁だけを対象に
+        // 上階1段しか見ていなかったが、規則自体は層の役割にも段数にも依存しない。
+        const capZ = resolveSightlineTopZ(
+          layerStack, info, roomAtWallPosition(w, worldMid, cut.viewSign, probeCtx), zHi,
+        );
         const { z0, z1 } = kneeDropZRangeAt(layer.graph, w, worldMid, info.floorZ, capZ);
         // 腰壁・垂れ壁指定で高さが制限された壁か（アキのバツのクリップ対象。sectionEmit.jsの
         // obstructionRects。ユーザー実機指摘2026-08「6」C「バツが腰壁と交差する場合はクリップ」）。
@@ -518,7 +508,7 @@ export function probeColumn(cut, worldMid, probeCtx) {
     // 部分だけにopeningPassThroughを付与できるようにするため）。
     for (const r of c.openRanges ?? []) { zSet.add(clamp(r.z0, zLo, zHi)); zSet.add(clamp(r.z1, zLo, zHi)); }
   }
-  for (const info of layerInfo) {
+  for (const info of layerStack) {
     if (info.floorZ != null) zSet.add(clamp(info.floorZ, zLo, zHi));
     if (info.ceilZ  != null) zSet.add(clamp(info.ceilZ,  zLo, zHi));
   }
@@ -538,7 +528,7 @@ export function probeColumn(cut, worldMid, probeCtx) {
       .filter(c => c.kind === 'cut' || c.kind === 'cutAlong')
       .sort((a, b) =>
         (a.kind === b.kind ? 0 : a.kind === 'cut' ? -1 : 1) ||
-        roleRank(a.layer.role) - roleRank(b.layer.role))[0];
+        compareLayerPriority(a, b))[0];
     if (frontMatch) {
       const mr = frontMatch.wall.materialRange;
       bands.push({
@@ -550,7 +540,7 @@ export function probeColumn(cut, worldMid, probeCtx) {
 
     const wallMatch = covering
       .filter(c => c.kind === 'wall')
-      .sort((a, b) => a.distMm - b.distMm || roleRank(a.layer.role) - roleRank(b.layer.role))[0];
+      .sort((a, b) => a.distMm - b.distMm || compareLayerPriority(a, b))[0];
     if (wallMatch) {
       const band = { kind: 'wall', z0, z1, wall: wallMatch.wall, layerRole: wallMatch.layer.role, distMm: wallMatch.distMm, isKneeDrop: wallMatch.isKneeDrop === true };
       // WP-E7 D1: このz区間(zm)が選ばれたwallMatchの開口z範囲のいずれかに含まれれば
@@ -562,33 +552,28 @@ export function probeColumn(cut, worldMid, probeCtx) {
       continue;
     }
 
-    // 視線先空間のfloorZ未満・ceilZ超 → slab（非描画。§5.2 step4(5)）。selfレイヤ優先、
-    // 無ければ最初のレイヤの視線方向所有Roomで判定する。
-    const primary = layerInfo.find(info => info.layer.role === 'self') ?? layerInfo[0];
-    if (primary?.room && z1 <= primary.floorZ + GAP_EPS) {
-      bands.push({ kind: 'slab', z0, z1, ownerRoom: primary.room, floorZ: primary.floorZ, ceilZ: primary.ceilZ });
+    // 壁が1枚も無いz区間の分類（§5.2 step4(5)）。**帯自身の階に所有Roomがある列でのみ**
+    // 床スラブ・天井懐を主張する（室外の列は従来どおり全てopen＝アキX判定の対象。ユーザーの
+    // 「壁の無い辺は面にしない」規則と同根の保守的な境界であり、意図して残している）。
+    const baseInfo = baseLayerOf(layerStack);
+    if (baseInfo?.room && z1 <= baseInfo.floorZ + GAP_EPS) {
+      bands.push(slabBandOf(baseInfo, z0, z1)); // 帯のFLより下＝自階の床構造
       continue;
     }
-    if (primary?.room && z0 >= primary.ceilZ - GAP_EPS) {
-      // WP-E5b追加: self天井より上は、selfより上位の層（role!=='self'。通常はabove）のうち
-      // このzに床を持つものを順に確認する——所有Roomがあれば実床構造とみなしslab（非描画）、
-      // 所有Roomが見つからなければ（吹抜け・階段の縦穴が上階以降も続く）open（アキX判定の対象。
-      // §5.6「2FLのSILHOUETTE水平線＝above層の床端」の前提となる区別）。該当する上位層が
-      // 無ければ（1層構成等）従来どおりselfの天井で覆われるものとしてslab扱いのまま
-      // （通常部屋帯・吹抜け帯は既存経路を使うため本分岐が新たに関与することはない）。
-      const above = layerInfo.find(info => info.layer.role !== 'self' && info.layer.floorZMm <= zm + GAP_EPS);
-      if (above) {
-        // 実機フィードバック第3弾G: above.roomがVOID/STAIR_VOID（実床の無いRoom）なら'slab'
-        // ではなく'open'扱いにする——A2のresolveWallCapZと同じ判定基準（isRealRoom）を
-        // 「above層の床端(slab/openの境界＝2FL水平線)」の判定にも適用する。旧実装は
-        // above.roomの有無だけを見ており、VOID/STAIR_VOIDでも'slab'（実床構造）とみなして
-        // しまい、above層に実Roomが無い（吹抜け）にもかかわらず誤って2FL水平線が出ていた。
-        bands.push(isRealRoom(above.room)
-          ? { kind: 'slab', z0, z1, ownerRoom: above.room, floorZ: above.floorZ, ceilZ: above.ceilZ }
-          : { kind: 'open', z0, z1 });
-        continue;
+    if (baseInfo?.room && z0 >= baseInfo.ceilZ - GAP_EPS) {
+      // 帯の天井より上は「その高さを所有する層」で決める（layerOwningZ＝floorZMmがzm以下で
+      // 最も高い層）。旧実装は`role!=='self' && floorZMm<=zm`の**配列順で最初の一致**を
+      // 拾っており、層が3つ以上あるとzmを含まない階の層を掴みえた。
+      //   - 所有層が帯自身の階のまま = 天井と上階の床の間の懐 → slab（非描画）
+      //   - 所有層に実Roomがある = 上階の実床構造 → slab（境界がSILHOUETTEの2FL水平線になる）
+      //   - 所有層が吹抜け（VOID/STAIR_VOID）または所有Room無し → open（アキX判定の対象）
+      //     ……実機フィードバック第3弾G。実Roomの判定基準はresolveSightlineTopZと共有する。
+      const owner = layerOwningZ(layerStack, zm);
+      if (!owner || owner === baseInfo) {
+        bands.push(slabBandOf(baseInfo, z0, z1));
+      } else {
+        bands.push(isRealRoom(owner.room) ? slabBandOf(owner, z0, z1) : { kind: 'open', z0, z1 });
       }
-      bands.push({ kind: 'slab', z0, z1, ownerRoom: primary.room, floorZ: primary.floorZ, ceilZ: primary.ceilZ });
       continue;
     }
 

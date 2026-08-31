@@ -333,10 +333,17 @@ test('【実機フィードバック第3弾A2】stairFaceSequence: seq1の壁は
   assert.equal(wrongCapLine, undefined,
     '上階(レーン)に床が無いため、1F天井高さ(-chLowerMm)ちょうどの誤った水平キャップ線は無いはず');
 
-  const topCapLine = seq1.content.find(p =>
-    p.type === 'line' && p.y1 === p.y2 && p.dash === undefined && p.weight === silhouetteWeight &&
-    Math.abs(p.y1 - (-localOpts.chUpperAbsMm)) < 1e-6);
-  assert.ok(topCapLine, '壁の輪郭は上階天井(-chUpperAbsMm)まで届くはず');
+  // 上階天井そのものには**見えがかりの水平線を描かない**（ユーザー明示指示2026-08「CHの
+  // 見えがかりも描画しない」——そこには天井断面線(CUT)が別に描かれるため）。「壁が上階天井まで
+  // 続いている」ことは、壁の縁の縦線が上階天井まで達しているかで見る。
+  const topReaching = seq1.content.find(p =>
+    p.type === 'line' && p.x1 === p.x2 &&
+    Math.abs(Math.min(p.y1, p.y2) - (-localOpts.chUpperAbsMm)) < 1e-6);
+  assert.ok(topReaching, '壁の縁の縦線は上階天井(-chUpperAbsMm)まで達するはず');
+  assert.equal(seq1.content.filter(p => p.type === 'line' && p.y1 === p.y2
+    && p.weight === silhouetteWeight
+    && Math.abs(p.y1 - (-localOpts.chUpperAbsMm)) < 1e-6).length, 0,
+  'CH（上階天井）には見えがかりの水平線を描かない');
 });
 
 // ---- 実機フィードバック第3弾A2で書き換え: 「アキのバツ」はabove層に所有Roomが見つからない
@@ -370,7 +377,7 @@ test('【実機フィードバック第3弾A2】stairFaceSequence: seq1は往復
 // 互いに排他的なfixtureだったため、この壁を丸ごと消す不具合を構造的に検出できなかった）。
 // 以下2本は「upperLandingOnly=true（2F床=踊り場のみ）」で両方を同一fixtureで同時に固定する。
 
-test('【QA修正1・実機フィードバック第3弾A2で一部書き換え】stairFaceSequence: 2Fが踊り場のみ床（実機で最も普通の構成）でも、seq1に往復間の壁の2縁が出る（隣接するentry壁が上階天井まで塞ぐためSILHOUETTE・アキXは無し）', () => {
+test('【QA修正1・A2/線種規則2026-08で書き換え】stairFaceSequence: 2Fが踊り場のみ床（実機で最も普通の構成）でも、seq1に往復間の壁の2縁が出る（切断壁の縁はCUT・アキXは無し）', () => {
   const graph = makeGraph('p1');
   const upperGraph = makeGraph('p2');
   const { room, stair, midWall } = makeSwitchbackFixture(
@@ -397,14 +404,12 @@ test('【QA修正1・実機フィードバック第3弾A2で一部書き換え�
   assert.ok(Math.abs((edgeXs[1] - edgeXs[0]) - thicknessMm) < 1e-6,
     `2本の間隔(${edgeXs[1] - edgeXs[0]})は壁厚(${thicknessMm})に一致するはず`);
 
-  // 両縁とも weight=SILHOUETTE(medium) のはず（§5.6一般規則: 縁が接する側がopenならCUT・
-  // 塞がれていればSILHOUETTE。実機フィードバック第3弾A2で書き換え: A2修正前は隣接列
-  // （往路・復路のentry壁）が1F天井高さで誤って途切れ「open」に見えていたためCUTだったが、
-  // A2修正後はentry壁が上階天井まで連続して見えがかりを塞ぐため、隣接列は「open」ではなく
-  // 「wall」——一般規則どおり塞がれた側としてSILHOUETTEになるのが正しい）。
+  // 両縁とも weight=CUT(thick)（ユーザー明示指示2026-08「切断壁の縁は降格しない／『切断壁の縁は
+  // 太線』が正」で規則変更。旧規則「縁が接する側がopenならCUT・塞がれていればSILHOUETTE」は撤回
+  // ——断面は隣に何が見えていようと断面であり、線種は隣接列の状態で変わらない）。
   for (const edge of fullHeightEdges) {
-    assert.equal(edge.weight, weightForRole(ElevationLineRole.SILHOUETTE),
-      `x=${edge.x1}の縁は両側とも壁で塞がれているためSILHOUETTE(medium)のはず`);
+    assert.equal(edge.weight, weightForRole(ElevationLineRole.CUT),
+      `x=${edge.x1}の縁は切断壁の断面なのでCUT(thick)のはず`);
   }
 
   // アキX: 実機フィードバック第3弾A2で書き換え。A2修正前はentry壁が1F天井高さで途切れ、
@@ -1429,10 +1434,14 @@ test('【失敗系・実機フィードバック第3弾・続報】stairFaceSequ
   const faces = composeRoomFaces(room, graph);
   const entries = stairFaceSequence(stair, faces, graph, { ...OPTS, upperGraph });
   const seq1 = entries.find(e => e.seqNo === '1');
-  const silhouetteWeight = weightForRole(ElevationLineRole.SILHOUETTE);
 
+  // 線種は奥行きで決まる（ユーザー明示指示2026-08「直近を中線、それ以外を細線」）ため、この
+  // キャップ線がSILHOUETTE(medium)かDETAIL(thin)かはその切断で何が最も手前かに依る——本テストの
+  // 主張は「上階に実Roomがあればキャップ線が**出る**」ことなので、線種は実線であることだけ見る。
   const capLine = seq1.content.find(p =>
-    p.type === 'line' && p.y1 === p.y2 && p.dash === undefined && p.weight === silhouetteWeight &&
+    p.type === 'line' && p.y1 === p.y2 && p.dash === undefined &&
+    (p.weight === weightForRole(ElevationLineRole.SILHOUETTE)
+      || p.weight === weightForRole(ElevationLineRole.DETAIL)) &&
     Math.abs(p.y1 - (-OPTS.chLowerMm)) < 1e-6);
   assert.ok(capLine, '上階に実Roomがあれば1F天井高さの水平キャップ線が出るはず');
 });
