@@ -430,7 +430,11 @@ function makeGraphAndRectRoom(wallLessTopEdge) {
   return { graph, room };
 }
 
-test('【QA G2・実グラフ】buildRoomBand: 上り口辺（壁生成スキップ）を挟む面Bのxカーソルは、通常時よりwallLessEndExtendModelMmぶん押し出される', () => {
+// ユーザー実機指摘2026-08「「5」A2：ここに壁はない」で仕様変更: 壁が1本も生成されていない辺
+// （階段の上り口等、generateRoomWallsFromOutlineがstairOpeningsでスキップした辺）は、
+// 部屋の輪郭には現れるが**展開図の面としては採用しない**。隣の面の端が「壁なし」として
+// 床線・天井線を外側へ延長する挙動自体は変わらない（「壁のない端部」の各テストが担保）。
+test('【実機指摘】buildRoomBand: 壁の生成をスキップした辺の面は帯に描かない', () => {
   const gapModelMm = 900, wallLessEndExtendModelMm = 150;
   const normal   = makeGraphAndRectRoom(false);
   const wallLess = makeGraphAndRectRoom(true);
@@ -444,12 +448,9 @@ test('【QA G2・実グラフ】buildRoomBand: 上り口辺（壁生成スキッ
     .sort((a, b) => a.from - b.from);
   const rowDimsWallLess = bandWallLess.primitives.filter(p => p.type === 'dim' && p.dir === 'h' && p.dot === true)
     .sort((a, b) => a.from - b.from);
-  assert.equal(rowDimsNormal.length, 4);
-  assert.equal(rowDimsWallLess.length, 4);
-
-  const diff = rowDimsWallLess[1].from - rowDimsNormal[1].from;
-  assert.equal(diff, wallLessEndExtendModelMm,
-    `壁なし辺を挟む面Bのxカーソルは、通常時よりちょうどwallLessEndExtendModelMm(${wallLessEndExtendModelMm})ぶん右にずれるはず（実際の差: ${diff}）`);
+  assert.equal(rowDimsNormal.length, 4, '通常は4面');
+  assert.equal(rowDimsWallLess.length, 3,
+    `壁の無い辺の面は展開図に出ないはず（実際:${rowDimsWallLess.length}面）`);
 });
 
 // ---- 問題修正2026-08(QA F1): 左CH寸法は先頭面の左端区間の実際の床〜天井に追従する ----

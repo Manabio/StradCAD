@@ -138,7 +138,7 @@ export function splitFacesAtPartitionWalls(faces, room, graph) {
  * @param {object} graph
  * @returns {object[]}
  */
-export function composeRoomFaces(room, graph) {
+export function composeRoomFaces(room, graph, opts = {}) {
   let faces = buildRoomFaces(room, graph);
   faces = extendFacesWithOpenSpans(faces, room, graph);
   faces = splitFacesAtPartitionWalls(faces, room, graph);
@@ -148,6 +148,15 @@ export function composeRoomFaces(room, graph) {
   // run(実効幅)がMIN_FACE_RUN_MM未満の面をここで除去する。labelFacesより前に行う——除去後の
   // 残存面だけでletterごとの出現順（A1/A2等）を数え直す必要があるため。
   faces = faces.filter(f => f.run >= MIN_FACE_RUN_MM);
+  // ユーザー実機指摘2026-08「「5」A2：ここに壁はない」: 部屋の輪郭の辺は、そこに壁が生成されて
+  // いなくても面として作られる（階段の上り口・下り口のように壁生成を意図的にスキップした辺）。
+  // `hasRealWall=false`はその判定結果そのもの（buildRoomFacesのinnerWallFaceAtがnull＝この軸区間に
+  // 実壁が1本も無くCL芯へフォールバックした）なので、**展開図の面としては採用しない**——壁が無い
+  // ところに壁面の展開を描くのは誤り。隅のスナップ（snapFaceEndsToCorners）・開放スパンの延長・
+  // 袖壁分割はすべて全面が揃った状態で済ませてから落とすので、残る面の端の情報は変わらない。
+  // keepWallLessFaces: 階段帯だけは例外。上り口の面（壁なし）をレーン範囲の算出（switchbackCuts.js
+  // のwEntry）に使うため、面リストから落とすと切断表そのものが組めなくなる。
+  if (!opts.keepWallLessFaces) faces = faces.filter(f => f.kind === 'step' || f.hasRealWall !== false);
   return labelFaces(faces);
 }
 

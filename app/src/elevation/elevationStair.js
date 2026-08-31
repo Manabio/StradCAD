@@ -134,7 +134,12 @@ export function buildStairBand(stairRoom, graph, upperGraph, ctx = {}) {
   // いた。ユーザー実機指摘2026-08「2FL天井断面線は、3500左CLの外へ延長して終わる」により削除。
   // 天井は常にchUpperAbsMmに揃える（他の描画も既にchUpperAbsMmを使っており、そちらと一貫する）。
 
-  const composedFaces = composeRoomFaces(stairRoom, graph);
+  // 壁の無い辺の面（上り口・下り口）は**幾何の入力としてだけ**要る（switchbackCutsのwEntryが
+  // レーン範囲の算出に使う）。描画に回す面リストからは落とす——壁が無いところに壁面の展開を
+  // 描かない、という原則は階段帯のフォールバック経路でも同じ（ユーザー実機指摘2026-08
+  // 「展開描画において平面照合なしで描画する経路がないか」）。
+  const composedFaces = composeRoomFaces(stairRoom, graph, { keepWallLessFaces: true });
+  const drawableFaces = composedFaces.filter(f => f.kind === 'step' || f.hasRealWall !== false);
   const sequence = (stair && composedFaces.length > 0 && chUpperAbsMm != null)
     ? stairFaceSequence(stair, composedFaces, graph, {
         floorHeight, chUpperAbsMm, chLowerMm: roomCeilingHeight(graph, stairRoom).mm,
@@ -179,7 +184,7 @@ export function buildStairBand(stairRoom, graph, upperGraph, ctx = {}) {
     faceCount = sequence.length;
   } else {
     // フォールバック経路: 従来どおりcomposeRoomFaces+rotateFacesToStartの面順。
-    let faces = composedFaces;
+    let faces = drawableFaces;
     if (stair && faces.length > 0) {
       const startLabel = stairStartFaceLabel(stair, faces, graph);
       if (startLabel) faces = rotateFacesToStart(faces, startLabel);
