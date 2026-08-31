@@ -22,7 +22,7 @@
  *     自身はfinish/stair側の詳細を知らない——第3層との結合点はこの1箇所に閉じる）。
  */
 import { GAP_EPS_MM as GAP_EPS } from '../elevationStyle.js';
-import { localXOf } from './sectionTypes.js';
+import { localXOf, worldOf } from './sectionTypes.js';
 import { collectCutBreaks, probeColumn } from './sectionProbe.js';
 import { faceFromCut } from './sectionFace.js';
 import { emitColumns, emitOpenGapMarks } from './sectionEmit.js';
@@ -47,6 +47,71 @@ function bandsEqual(a, b) {
 }
 
 /**
+ * `cut.ceilProfile`の区間境界を列の分割点へ足す（world座標・昇順）。
+ * 天井の高さが変わる位置は列の境界でなければならない——境界をまたぐ1本の列は中点で1つの天井しか
+ * 持てず、区間の片側が誤った天井で打ち切られる（実データでは境界にCLや壁があって偶然分かれるが、
+ * それに依存してはいけない）。
+ * @param {import('./sectionTypes.js').SectionCut} cut
+ * @param {number[]} breaks - collectCutBreaksの結果（world昇順）
+ * @returns {number[]}
+ */
+function withCeilProfileBreaks(cut, breaks) {
+  const prof = cut.ceilProfile;
+  if (!Array.isArray(prof) || prof.length === 0) return breaks;
+  const lo = breaks[0], hi = breaks[breaks.length - 1];
+  const values = new Set(breaks);
+  for (const seg of prof) {
+    for (const localX of [seg.loX, seg.hiX]) {
+      const w = worldOf(cut, localX);
+      if (w > lo + GAP_EPS && w < hi - GAP_EPS) values.add(w);
+    }
+  }
+  return [...values].sort((a, b) => a - b);
+}
+
+/**
+ * `cut.ceilProfile`（区間ごとの天井断面の高さ。断面ローカルx）から、xを含む区間の天井を引く。
+ * profileが無ければnull＝打ち切らない（階段帯など、区間の天井を持たない呼び出し側は従来どおり）。
+ * @param {import('./sectionTypes.js').SectionCut} cut
+ * @param {number} x0
+ * @param {number} x1
+ * @returns {number|null}
+ */
+function ceilZAt(cut, x0, x1) {
+  const prof = cut.ceilProfile;
+  if (!Array.isArray(prof) || prof.length === 0) return null;
+  const mid = (x0 + x1) / 2;
+  const hit = prof.find(s => mid >= s.loX - GAP_EPS && mid <= s.hiX + GAP_EPS);
+  return hit && Number.isFinite(hit.ceilZ) ? hit.ceilZ : null;
+}
+
+/**
+ * 列の帯を、その列の天井断面（ceilZ）で打ち切る（buildColumns参照）。天井より上の帯は落とし、
+ * またぐ帯は天井で切る。ceilZがnull（判定不能）なら何もしない。
+ *
+ * **唯一の例外: 天端または下端が露出した切断壁（腰壁・垂れ壁。`isKneeDrop`）は打ち切らない**
+ * （ユーザー明示指示2026-08・案A）——露出した縁は吹抜け側の空間に面していて実際に見えるため、
+ * 天井の向こうにあっても断面を描く。実機「5」D1の「2階Y1から2000＝2FL+800の腰壁断面」が
+ * 消えていた不具合の修正。上下いっぱいに立つ切断壁は隣室との仕切りで天井に隠れるため従来どおり
+ * 落とす（同「5」A面左3200の2階壁・C1面右400の2階X2壁）。
+ * **見えがかり（'wall'）には例外を適用しない**——腰壁でも、天井の向こうにあれば見えないから。
+ * @param {import('./sectionTypes.js').ZBand[]} bands
+ * @param {number|null} ceilZ
+ * @returns {import('./sectionTypes.js').ZBand[]}
+ */
+function clipBandsToCeil(bands, ceilZ) {
+  if (!Number.isFinite(ceilZ)) return bands;
+  const exempt = b => (b.kind === 'cut' || b.kind === 'cutAlong') && b.isKneeDrop === true;
+  const out = [];
+  for (const band of bands) {
+    if (exempt(band)) { out.push(band); continue; }
+    if (band.z0 >= ceilZ - GAP_EPS) continue;
+    out.push(band.z1 > ceilZ ? { ...band, z1: ceilZ } : band);
+  }
+  return out;
+}
+
+/**
  * 隣接する列のbandsが完全一致すれば1列へ統合する（§4「同一分類の隣接併合」）。
  * @param {import('./sectionTypes.js').SectionColumn[]} columns - x0昇順
  * @returns {import('./sectionTypes.js').SectionColumn[]}
@@ -55,7 +120,9 @@ export function mergeColumns(columns) {
   const merged = [];
   for (const col of columns) {
     const last = merged[merged.length - 1];
-    if (last && Math.abs(last.x1 - col.x0) < GAP_EPS && bandsEqual(last.bands, col.bands)) {
+    // ceilZ（列ごとの天井断面高さ）が違う列は統合しない——天井の高さが変わる境界そのものだから。
+    const sameCeil = (last?.ceilZ ?? null) === (col.ceilZ ?? null);
+    if (last && sameCeil && Math.abs(last.x1 - col.x0) < GAP_EPS && bandsEqual(last.bands, col.bands)) {
       last.x1 = col.x1;
       // WP-E5b修正: dirSign<0のcutではbuildColumnsがraw列をworld昇順で作った後、local x昇順へ
       // 並べ替える（このmergeColumnsへの入力順はlocal x昇順）ため、world順はlocal順と逆転する。
@@ -127,16 +194,24 @@ function ceilingProfileFromColumns(columns, cut, face) {
  * @returns {import('./sectionTypes.js').SectionColumn[]}
  */
 export function buildColumns(cut, probeCtx) {
-  const breaks = collectCutBreaks(cut, probeCtx);
+  const breaks = withCeilProfileBreaks(cut, collectCutBreaks(cut, probeCtx));
   const rawColumns = [];
   for (let i = 0; i + 1 < breaks.length; i++) {
     const worldLo = breaks[i], worldHi = breaks[i + 1];
     if (worldHi - worldLo < GAP_EPS) continue;
     const worldMid = (worldLo + worldHi) / 2;
-    const bands = probeColumn(cut, worldMid, probeCtx);
     const localA = localXOf(cut, worldLo), localB = localXOf(cut, worldHi);
+    // **展開図では断面の中は描画しない**（ユーザー明示指示2026-08）: 描けるのは床断面線と
+    // 天井断面線に挟まれた範囲だけで、天井の向こう（天井裏・上階の躯体）には何も描かない。
+    // 天井断面の高さは区間ごとに違う（吹抜けの区間だけ上階天井まで上がる）ため、**天井断面線を
+    // 実際に引いている値そのもの**を`cut.ceilProfile`で受け取り、その高さで帯を打ち切る
+    // ——エンジン側で天井の有無を推測すると階段帯の見え方まで変わるため、区間の天井を知っている
+    // 呼び出し側（elevationVoid.js）から渡す。probeColumn自体はzRange全域を返す契約のまま
+    // （不変条件テストが依存）で、描画対象の切り出しはここで行う。
+    const ceilZ = ceilZAt(cut, Math.min(localA, localB), Math.max(localA, localB));
+    const bands = clipBandsToCeil(probeColumn(cut, worldMid, probeCtx), ceilZ);
     rawColumns.push({
-      x0: Math.min(localA, localB), x1: Math.max(localA, localB), worldLo, worldHi, bands,
+      x0: Math.min(localA, localB), x1: Math.max(localA, localB), worldLo, worldHi, bands, ceilZ,
     });
   }
   rawColumns.sort((a, b) => a.x0 - b.x0); // dirSign<0だとworld昇順とlocal昇順が逆転するため並べ替える

@@ -251,6 +251,10 @@ export function buildRoomBandWithVoidAbove(room, graph, voidRoom, upperGraph, ct
     if (!used.has(v)) faces.push(withVoidRanges({ ...v }, v, [v], graph, upperGraph));
   }
 
+  // 面ごとの確定区間（floorSegments）。**天井断面線を実際に引いている値**をそのまま
+  // 断面エンジンの`cut.ceilProfile`へ渡すため保持する（「断面の中は描画しない」の単一情報源。
+  // layoutBandFacesは面ごとにfaceOverrideを1回呼ぶので、下のcut生成時には必ず埋まっている）。
+  const segsByFace = new Map();
   const faceOverride = (face, i, defaults) => {
     const plan = face.voidAbove;
     if (!plan) return null;
@@ -264,8 +268,14 @@ export function buildRoomBandWithVoidAbove(room, graph, voidRoom, upperGraph, ct
         out.push({ ...seg, loX: part.loX, hiX: part.hiX, hiCLId: null, chMm: floorHeightMm + voidCH - delta });
       }
     }
+    segsByFace.set(face, out);
     return { floorSegments: out };
   };
+
+  // 区間 → 天井断面の絶対高さ（elevationFigure.jsの規約 ceilAbs = floorDeltaMm + chMm）。
+  const ceilProfileOf = face => (segsByFace.get(face) ?? [])
+    .filter(s => Number.isFinite(s.chMm))
+    .map(s => ({ loX: s.loX, hiX: s.hiX, ceilZ: (s.floorDeltaMm ?? 0) + s.chMm }));
 
   const layout = layoutBandFaces(room, graph, faces, { ...ctx, faceOverride });
   const primitives = [...layout.primitives];
@@ -296,6 +306,8 @@ export function buildRoomBandWithVoidAbove(room, graph, voidRoom, upperGraph, ct
       // 壁芯ちょうどに置くと切断面が壁の中を通り、見えがかり候補も所有Roomも取れない。
       line: faceCutLine(face, cutPlaneOffsetMm(face, layers, { columnSolids })),
       layers, zRange: { loZ: 0, hiZ }, baseFloorZ: 0,
+      // 断面の中（天井の向こう）は描かない。区間ごとの天井断面高さで打ち切る（sectionEngine.js）。
+      ceilProfile: ceilProfileOf(face),
     };
     const { content } = buildCutContent(cut, probeCtx, { endExtendMm, bandRoomBounds });
     for (const p of content) primitives.push(translatePrimitive(p, xCursor, 0));

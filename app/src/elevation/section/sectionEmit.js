@@ -306,10 +306,9 @@ function ownsBoundary(band, neighbor) {
  * 中線・細線が重なって見える）。
  *
  * FL: 帯自身のFL（baseFloorZ）・各層のFL（floorZMm）・その列の床スラブのFL。
- * CH: **帯自身が描く天井（emitCtx.ceilZ、無ければcut.zRange.hiZ）だけ**——天井高さは層の属性では
- * なく部屋・区間ごとに違うため、層スタックからは一意に決まらない。「上階が実部屋なので壁が
- * 1階天井でキャップされる」ような**帯の天井とは別の高さの天井の見えがかり**（階段帯のキャップ線・
- * 吹抜け越しに見える下階天井）は本来の見えがかりであり、ここで消してはいけない。
+ * CH: **その列の天井断面（`col.ceilZ`。無ければ帯の天井 emitCtx.ceilZ／cut.zRange.hiZ）**。
+ * 天井高さは層の属性ではなく部屋・区間ごとに違うため層スタックからは一意に決まらず、区間の天井を
+ * 知っている呼び出し側から`cut.ceilProfile`で受け取る（sectionEngine.js）。
  * @param {import('./sectionTypes.js').SectionCut} cut
  * @param {import('./sectionTypes.js').SectionColumn} col
  * @param {number|undefined} ceilZ - emitCtx.ceilZ
@@ -397,7 +396,10 @@ export function emitColumns(columns, cut, emitCtx = {}) {
         const role = sightRole(band.distMm);
         // 見えがかりの水平線は「仮想断面からの距離が変わるところ」だけに描き、FL・CHには描かない
         // （ユーザー明示指示2026-08。visibleDepthMm / sectionLevelZs 参照）。
-        const sectionZs = sectionLevelZs(cut, col, ceilZ);
+        // 天井断面の高さは列ごとに違う（区間ごとの天井。sectionEngine.jsのceilProfile）ため、
+        // その列の天井を優先して使う——帯の天井(emitCtx.ceilZ)だけを見ると、天井の低い区間で
+        // 天井断面線と見えがかりの水平線が重なる。
+        const sectionZs = sectionLevelZs(cut, col, col.ceilZ ?? ceilZ);
         const atSectionLevel = z => sectionZs.some(f => Math.abs(z - f) < GAP_EPS);
         if (!flushOnSlab && !trimmedByCutWall(col, band.z0) && !atSectionLevel(band.z0)
             && ownsBoundary(band, neighborBandAt(col, band.z0, -1))) {

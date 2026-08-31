@@ -225,6 +225,24 @@ function kneeDropZRangeAt(graph, wall, pointCoord, floorZ, ceilZ) {
 }
 
 /**
+ * その壁のz範囲が、その層の床天井いっぱいではない＝**天端または下端が露出している**
+ * （腰壁・垂れ壁の類）か。
+ *
+ * 「展開図では断面の中は描画しない」の**唯一の例外**を決める（ユーザー明示指示2026-08・案A）:
+ * 天井の向こうにある切断壁でも、天端が見える壁（腰壁）・下端が見える壁（垂れ壁）は描く
+ * ——その露出した縁は吹抜け側の空間に面していて実際に見えるため。上下いっぱいに立つ壁は
+ * 隣室との仕切りであり天井の向こうに隠れるので描かない（実機「5」A面左3200・C1面右400）。
+ * `sectionEngine.js`の`clipBandsToCeil`が本フラグを見る。
+ * @param {number} z0
+ * @param {number} z1
+ * @param {{floorZ:number, ceilZ:number}} info - その壁が属する層の床天井
+ * @returns {boolean}
+ */
+function isKneeDropRange(z0, z1, info) {
+  return z0 > info.floorZ + GAP_EPS || z1 < info.ceilZ - GAP_EPS;
+}
+
+/**
  * 視線方向に所有Roomが見つからない層のceilZフォールバック（QA指摘・WP-E7bで修正）。
  * 実機で最も普通の構成（2F床=踊り場のみ・レーン上は吹抜け）では、往復間の壁(midWall)が
  * 属する'above'層の視線方向プローブがレーン上（吹抜け＝所有Room無し）で失敗しceilZ==nullに
@@ -412,6 +430,30 @@ export function collectCutBreaks(cut, probeCtx) {
   return [...values].sort((a, b) => a - b);
 }
 
+/**
+ * 1本の列（worldMid）における層スタック（層ごとの「視線方向の自室」と、その層でのfloorZ/ceilZ）。
+ *
+ * 層ごとに視線方向へ1点プローブする（§5.2「層の床天井」・step5）——階段のような複数layer構成では
+ * 層ごとに異なるgraphを同じ位置で引く必要があるため。壁面自身の位置＝cut.line.axisValueぴったりの
+ * probeでも、+viewSign*PROBE_EPS_MMだけ視線方向へ逃がせば単純な矩形室では正しく自室を拾える。
+ * orderLayerStackでfloorZMm昇順へ整列して返す——以降の層の判断（所有層・上位層・優先順位）は
+ * 全て並びの上で答えるため、呼び出し側がcut.layersをどの順で渡しても結果は変わらない。
+ * @param {import('./sectionTypes.js').SectionCut} cut
+ * @param {number} worldMid
+ * @param {ReturnType<typeof makeProbeContext>} probeCtx
+ * @returns {Array<{layer:object, room:object|null, floorZ:number, ceilZ:number}>}
+ */
+function buildLayerStack(cut, worldMid, probeCtx) {
+  return orderLayerStack((cut.layers ?? []).map(layer => {
+    const room = probeOwnerRoom(cut, worldMid, layer, probeCtx, cut.viewSign);
+    const floorZ = probeCtx.floorZOf(room, layer);
+    // QA修正: room=nullでも壁候補は諦めない（fallbackCeilZ参照）。ceilZが実質nullになるのは
+    // layer.graph自体が無い等の防御的ケースのみ。
+    const ceilZ = room ? floorZ + probeCtx.chOf(room, layer.graph) : fallbackCeilZ(layer, floorZ, cut);
+    return { layer, room, floorZ, ceilZ };
+  }));
+}
+
 // LayerInfo（層ごとの床天井）→ 非描画のslab ZBand。床構造・天井懐・上階床のどれであっても
 // 「その高さを所有する層の床天井」を持たせる、という一点だけが分類の情報源。
 function slabBandOf(info, z0, z1) {
@@ -428,7 +470,6 @@ function slabBandOf(info, z0, z1) {
  * @returns {import('./sectionTypes.js').ZBand[]}
  */
 export function probeColumn(cut, worldMid, probeCtx) {
-  const layers = cut.layers ?? [];
   const line = cut.line;
   const zLo = cut.zRange?.loZ ?? 0;
   const zHi = cut.zRange?.hiZ ?? 0;
@@ -442,14 +483,7 @@ export function probeColumn(cut, worldMid, probeCtx) {
   // 視線方向へ逃がせば単純な矩形室では正しく自室を拾える）。
   // orderLayerStackでfloorZMm昇順へ整列してから使う——以降の層の判断（所有層・上位層・優先順位）は
   // 全て並びの上で答えるため、呼び出し側がcut.layersをどの順で渡しても結果は変わらない。
-  const layerStack = orderLayerStack(layers.map(layer => {
-    const room = probeOwnerRoom(cut, worldMid, layer, probeCtx, cut.viewSign);
-    const floorZ = probeCtx.floorZOf(room, layer);
-    // QA修正: room=nullでも壁候補は諦めない（fallbackCeilZ参照）。ceilZが実質nullになるのは
-    // layer.graph自体が無い等の防御的ケースのみ。
-    const ceilZ = room ? floorZ + probeCtx.chOf(room, layer.graph) : fallbackCeilZ(layer, floorZ, cut);
-    return { layer, room, floorZ, ceilZ };
-  }));
+  const layerStack = buildLayerStack(cut, worldMid, probeCtx);
 
   // 候補壁の収集（層ごと。§5.2 step1）。
   const candidates = [];
@@ -461,7 +495,8 @@ export function probeColumn(cut, worldMid, probeCtx) {
         const mr = w.materialRange;
         if (worldMid < mr.lo - GAP_EPS || worldMid > mr.hi + GAP_EPS) continue;
         const { z0, z1 } = kneeDropZRangeAt(layer.graph, w, line.axisValue, info.floorZ, info.ceilZ);
-        candidates.push({ kind: 'cut', wall: w, layer, distMm: 0, z0, z1 });
+        candidates.push({ kind: 'cut', wall: w, layer, distMm: 0, z0, z1,
+          isKneeDrop: isKneeDropRange(z0, z1, info) });
       } else if (isCutAlongWall(w, line)) {
         // cutAlong（縦断された壁。§6.1「切断線がその中を通る→全幅の断面」）: x範囲=壁スパン
         // [coord1,coord2]∩切断線範囲、z範囲=kneeDropRecordsOnAxisによる実存在範囲
@@ -469,7 +504,8 @@ export function probeColumn(cut, worldMid, probeCtx) {
         const c1 = Math.min(w.coord1, w.coord2), c2 = Math.max(w.coord1, w.coord2);
         if (worldMid < c1 - GAP_EPS || worldMid > c2 + GAP_EPS) continue;
         const { z0, z1 } = kneeDropZRangeAt(layer.graph, w, worldMid, info.floorZ, info.ceilZ);
-        candidates.push({ kind: 'cutAlong', wall: w, layer, distMm: 0, z0, z1 });
+        candidates.push({ kind: 'cutAlong', wall: w, layer, distMm: 0, z0, z1,
+          isKneeDrop: isKneeDropRange(z0, z1, info) });
       } else if (isSightlineShape(w, line, cut.viewSign)) {
         const c1 = Math.min(w.coord1, w.coord2), c2 = Math.max(w.coord1, w.coord2);
         if (worldMid < c1 - GAP_EPS || worldMid > c2 + GAP_EPS) continue;
@@ -484,7 +520,7 @@ export function probeColumn(cut, worldMid, probeCtx) {
         const { z0, z1 } = kneeDropZRangeAt(layer.graph, w, worldMid, info.floorZ, capZ);
         // 腰壁・垂れ壁指定で高さが制限された壁か（アキのバツのクリップ対象。sectionEmit.jsの
         // obstructionRects。ユーザー実機指摘2026-08「6」C「バツが腰壁と交差する場合はクリップ」）。
-        const isKneeDrop = z0 > info.floorZ + GAP_EPS || z1 < capZ - GAP_EPS;
+        const isKneeDrop = isKneeDropRange(z0, z1, { floorZ: info.floorZ, ceilZ: capZ });
         // WP-E7 D1: この壁（見えがかり壁面）に重なる開口のz範囲を候補へ添える
         // （openingPassThroughRangesForはz0/z1へクランプ済み）。band選択後、選ばれたz区間が
         // そのいずれかに含まれれば ZBand.openingPassThrough:true を付与する（下記参照）。
@@ -533,7 +569,7 @@ export function probeColumn(cut, worldMid, probeCtx) {
       const mr = frontMatch.wall.materialRange;
       bands.push({
         kind: frontMatch.kind, z0, z1, wall: frontMatch.wall, layerRole: frontMatch.layer.role,
-        thicknessMm: Math.abs(mr.hi - mr.lo),
+        thicknessMm: Math.abs(mr.hi - mr.lo), isKneeDrop: frontMatch.isKneeDrop === true,
       });
       continue;
     }

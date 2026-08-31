@@ -11,11 +11,12 @@
 // 再現し続ける**（git履歴を辿らなくても、位置を戻せば壊れることが読んで分かる）。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Plane, PlanGraph, CenterLineType, Discipline, RoomFeature } from '@core';
+import { Plane, PlanGraph, CenterLineType, Discipline, RoomFeature, edgeKey } from '@core';
 import { generateRoomWallsFromOutline } from '../../finish/wallGeneration.js';
 import { roomBounds } from '../../finish/gridCells.js';
 import { composeRoomFaces } from '../elevationFaceList.js';
 import { makeProbeContext, probeColumn, collectCutBreaks } from './sectionProbe.js';
+import { buildColumns } from './sectionEngine.js';
 import { cutPlaneOffsetMm, faceCutLine, faceViewSign } from './sectionCutPlane.js';
 
 const CH = 2400;
@@ -107,4 +108,103 @@ test('【回帰ガード】切断線を室内側へ下げても、面のロー�
     assert.equal(line.lo, face.lo, `${face.label}: 走り方向の下限は動かない`);
     assert.equal(line.hi, face.hi, `${face.label}: 走り方向の上限は動かない`);
   }
+});
+
+// ---- ユーザー明示指示2026-08「展開図では、断面の中は描画しない」（実機「5」A面の左3200エリア）----
+// 天井断面線の向こう（天井裏・上階の躯体）には何も描かない。天井断面の高さは区間ごとに違うので、
+// 天井断面線を実際に引いている値（cut.ceilProfile）で列を打ち切る。
+test('【明示指示2026-08】buildColumns: 天井の低い区間では、その天井より上の帯を持たない', () => {
+  const fx = fixture();
+  const faceA = facesOf(fx).find(f => f.letter === 'A');
+  const base = {
+    seqNo: 'A', dirSign: faceA.dirSign, face: faceA, viewSign: faceViewSign(faceA),
+    line: faceCutLine(faceA, cutPlaneOffsetMm(faceA, fx.layers)),
+    layers: fx.layers, zRange: { loZ: 0, hiZ: TOP_Z }, baseFloorZ: 0,
+    bandRoomBounds: fx.bandRoomBounds,
+  };
+  const probeCtx = makeProbeContext(fx.layers);
+  // 面の左半分は天井2400・右半分は吹抜けで上階天井5400、という区間構成。
+  const half = faceA.run / 2;
+  const withProfile = buildColumns({ ...base, ceilProfile: [
+    { loX: 0, hiX: half, ceilZ: CH }, { loX: half, hiX: faceA.run, ceilZ: TOP_Z },
+  ] }, probeCtx);
+
+  const left = withProfile.filter(c => (c.x0 + c.x1) / 2 < half);
+  assert.ok(left.length > 0, `左半分に列があるはず（実際の列:${JSON.stringify(withProfile.map(c => [c.x0, c.x1]))}）`);
+  assert.ok(left.every(c => c.bands.every(b => b.z1 <= CH + 1e-6)),
+    `天井2400の区間に、天井より上の帯が残っている（実際:${JSON.stringify(left.flatMap(c => c.bands.map(b => [b.kind, b.z0, b.z1])))}）`);
+  const right = withProfile.filter(c => (c.x0 + c.x1) / 2 > half);
+  assert.ok(right.some(c => c.bands.some(b => b.z1 > CH + 1e-6)),
+    '吹抜けの区間は上階天井まで残る');
+});
+
+test('【失敗系】buildColumns: ceilProfile未指定（階段帯など）は従来どおり打ち切らない', () => {
+  const fx = fixture();
+  const faceA = facesOf(fx).find(f => f.letter === 'A');
+  const cut = {
+    seqNo: 'A', dirSign: faceA.dirSign, face: faceA, viewSign: faceViewSign(faceA),
+    line: faceCutLine(faceA, cutPlaneOffsetMm(faceA, fx.layers)),
+    layers: fx.layers, zRange: { loZ: 0, hiZ: TOP_Z }, baseFloorZ: 0,
+    bandRoomBounds: fx.bandRoomBounds,
+  };
+  const cols = buildColumns(cut, makeProbeContext(fx.layers));
+  assert.ok(cols.some(c => c.bands.some(b => b.z1 > CH + 1e-6)),
+    'ceilProfileが無ければzRange全域のまま（既存の呼び出し側の挙動を変えない）');
+});
+
+// ---- 案A（ユーザー承認2026-08）: 天端・下端が露出した切断壁は天井の打ち切りの例外 ----
+// 「断面の中は描画しない」の唯一の例外。腰壁の天端・垂れ壁の下端は吹抜け側の空間に面していて
+// 実際に見えるため、天井の向こうにあっても断面を描く。上下いっぱいに立つ切断壁は隣室との
+// 仕切りで天井に隠れるので従来どおり落とす（実機「5」A面左3200・C1面右400）。
+// 実機「5」D1の「2階Y1から2000＝2FL+800の腰壁断面」が消えていた不具合の修正。
+
+// 2階の y=3000 の壁に腰壁/垂れ壁を指定した構成で、B面（東の壁を見る面）の列を作る。
+function kneeFixture(spec) {
+  const fx = fixture();
+  const wall = fx.g2.walls.find(w => !w.isVertical && Math.abs(w.axisCL.effectiveValue - 3000) < 1e-6);
+  assert.ok(wall, '2階のy=3000の壁があること（フィクスチャの前提）');
+  fx.g2.setKneeDropWall(edgeKey(wall.axisCL.id, wall.clStart.id, wall.clEnd.id), spec);
+  return fx;
+}
+
+// 面Bの切断を、y=3000（腰壁の位置）が「天井2400の区間」に入るceilProfileで作る。
+function bColumnsWithLowCeilAtWall(fx) {
+  const faceB = facesOf(fx).find(f => f.letter === 'B');
+  const wallLocalX = Math.abs(3000 - Math.abs(faceB.originWorld)); // 面ローカルでの壁位置の目安
+  const cut = {
+    seqNo: 'B', dirSign: faceB.dirSign, face: faceB, viewSign: faceViewSign(faceB),
+    line: faceCutLine(faceB, cutPlaneOffsetMm(faceB, fx.layers)),
+    layers: fx.layers, zRange: { loZ: 0, hiZ: TOP_Z }, baseFloorZ: 0,
+    bandRoomBounds: fx.bandRoomBounds,
+    // 壁より手前（吹抜け側）だけ天井5400・以降は2400。壁は天井2400の側に入る。
+    ceilProfile: [
+      { loX: 0, hiX: wallLocalX - 200, ceilZ: TOP_Z },
+      { loX: wallLocalX - 200, hiX: faceB.run, ceilZ: CH },
+    ],
+  };
+  return buildColumns(cut, makeProbeContext(fx.layers));
+}
+
+test('【承認2026-08・案A】buildColumns: 腰壁（天端が露出）の切断壁は天井の打ち切りから除外される', () => {
+  const cols = bColumnsWithLowCeilAtWall(kneeFixture({ knee: { topHeight: 800 }, drop: null }));
+  const kneeCuts = cols.flatMap(c => c.bands.filter(b => b.kind === 'cut' && b.isKneeDrop));
+  assert.ok(kneeCuts.length > 0, '腰壁の断面が残るはず（天井2400の区間にあっても）');
+  assert.ok(kneeCuts.every(b => Math.abs(b.z1 - (FLOOR_HEIGHT + 800)) < 1e-6),
+    `天端は2FL+800のはず（実際:${JSON.stringify(kneeCuts.map(b => [b.z0, b.z1]))}）`);
+});
+
+test('【承認2026-08・案A】buildColumns: 垂れ壁（下端が露出）の切断壁も打ち切られない', () => {
+  const cols = bColumnsWithLowCeilAtWall(kneeFixture({ knee: null, drop: { bottomHeight: 700 } }));
+  const dropCuts = cols.flatMap(c => c.bands.filter(b => b.kind === 'cut' && b.isKneeDrop));
+  assert.ok(dropCuts.length > 0, '垂れ壁の断面が残るはず');
+  assert.ok(dropCuts.every(b => b.z0 > FLOOR_HEIGHT + 1e-6),
+    `下端は2FLより上（宙に浮く）はず（実際:${JSON.stringify(dropCuts.map(b => [b.z0, b.z1]))}）`);
+});
+
+test('【失敗系・承認2026-08・案A】buildColumns: 上下いっぱいに立つ切断壁は従来どおり打ち切られる', () => {
+  const cols = bColumnsWithLowCeilAtWall(fixture()); // 腰壁・垂れ壁の指定なし
+  const above = cols.flatMap(c => (c.ceilZ === CH ? c.bands : []))
+    .filter(b => b.z1 > CH + 1e-6);
+  assert.equal(above.length, 0,
+    `天井2400の区間に、天井より上の帯が残っている（実際:${JSON.stringify(above.map(b => [b.kind, b.z0, b.z1]))}）`);
 });
