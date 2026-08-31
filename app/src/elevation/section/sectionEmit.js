@@ -6,7 +6,9 @@
  * §5.6「線種テーブル」の唯一の情報源。破線は必ずlineプリミティブで出す
  * （レンダラのpolyline分岐はdash非対応。.claude/elevation-model.md）。
  */
-import { ElevationLineRole, weightForRole, GAP_EPS_MM as GAP_EPS, kneeCapBottomMm } from '../elevationStyle.js';
+import {
+  ElevationLineRole, weightForRole, GAP_EPS_MM as GAP_EPS, kneeCapBottomMm, KNEE_CAP_FACE_MM,
+} from '../elevationStyle.js';
 import { zToY } from './sectionTypes.js';
 
 /**
@@ -195,6 +197,37 @@ function cutWallTopEdges(columns, cut, ceilZ) {
       emitLine(cut, r.x0, r.band.z1, r.x1, r.band.z1, ElevationLineRole.CUT, { ceilZ }),
       ...kneeCapUnderline(cut, r.x0, r.x1, r.band.z1, r.band.z0, ceilZ),
     ]);
+}
+
+/**
+ * 腰壁の端部抑えの**内側の細線**（`emitColumns`の見えがかり壁の分岐から呼ぶ）。
+ *
+ * 天端の帯（`kneeCapUnderline`が下端を描く帯）は、壁がそこで終わる端では**端面**としても
+ * 見える。端の中線（帯の外形の外側1本）は凹み側面線が既に描いているので、ここは帯の見付ぶん
+ * 内側の細線だけを足す。見付と退化ガードは`kneeCapBottomMm`（elevationStyle.js）へ委ねる
+ * ——面図側（elevationFigure.jsの旧kneeCapMarksOnFace）と同じ規則を1箇所に置くため。
+ * @param {object[]} prims 積み先
+ * @param {import('./sectionTypes.js').SectionCut} cut
+ * @param {object} col
+ * @param {object} band 見えがかり壁の帯（isKneeDrop以外は無視する）
+ * @param {{prev:object|null, next:object|null, loRanges:object[], hiRanges:object[], ceilZ:number|undefined}} ctx
+ */
+function appendKneeCapEndFaces(prims, cut, col, band, ctx) {
+  if (!band.isKneeDrop) return;
+  const top = (col.ceilZ ?? ctx.ceilZ ?? Infinity);
+  if (!(band.z1 < top - GAP_EPS)) return; // 天井まで届く壁＝天端が露出していない
+  if (kneeCapBottomMm(band.z1 - band.z0) == null) return; // 見付に満たない退化指定
+  const coversWholeBand = ranges => ranges.length === 1
+    && Math.abs(ranges[0].z0 - band.z0) < GAP_EPS && Math.abs(ranges[0].z1 - band.z1) < GAP_EPS;
+  // 内側へ寄せる向きは列の内側（lo端なら+、hi端なら−）。
+  if (ctx.prev && coversWholeBand(ctx.loRanges)) {
+    const x = col.x0 + KNEE_CAP_FACE_MM;
+    prims.push(emitLine(cut, x, band.z0, x, band.z1, ElevationLineRole.DETAIL, { ceilZ: ctx.ceilZ }));
+  }
+  if (ctx.next && coversWholeBand(ctx.hiRanges)) {
+    const x = col.x1 - KNEE_CAP_FACE_MM;
+    prims.push(emitLine(cut, x, band.z0, x, band.z1, ElevationLineRole.DETAIL, { ceilZ: ctx.ceilZ }));
+  }
 }
 
 /**
@@ -387,7 +420,16 @@ export function emitColumns(columns, cut, emitCtx = {}) {
         // cutAlongの端部縦線と同じ「隣接列に同じ壁が続くか」のパターン。壁の同一性は
         // band.wall参照で見る——両側にwallが載っている場合だけ抑止し、載っていない
         // （単体テストの手書き列など）場合は従来どおり描く。
-        const sameWall = b => !!b && !!b.wall && !!band.wall && b.wall === band.wall;
+        // **壁は片面ずつのWallオブジェクト**（cutWallRuns参照。実機の袖壁1枚が2つのWallに
+        // 分かれる）ため、参照一致だけで見ると1枚の袖壁の**内部**＝軸CL上にその境界の縦線が
+        // 出る。**同じ軸CLに載っていて同じz範囲の切断壁は、1枚の壁の表裏**とみなす
+        // ——切断線は壁を厚み方向に横切るので、同一軸CLの切断壁が隣接列で接するのは
+        // 「同じ壁の反対の面」以外にありえない（別々の壁が接するなら軸CLが違う）。
+        // 天端の水平線を1本にまとめている`cutWallRuns`と同じ「1枚の壁」の見方をそろえたもの。
+        const sameWall = b => !!b && !!b.wall && !!band.wall
+          && (b.wall === band.wall
+            || (!!b.wall.axisCL && b.wall.axisCL === band.wall.axisCL
+              && Math.abs(b.z0 - band.z0) < GAP_EPS && Math.abs(b.z1 - band.z1) < GAP_EPS));
         if (!sameWall(matchingBand(prev, band.z0, band.z1, 'cut'))) {
           prims.push(Object.assign(emitLine(cut, col.x0, band.z0, col.x0, band.z1, ElevationLineRole.CUT, { ceilZ }),{__o:'cutEdgeLo'}));
         }
@@ -464,6 +506,17 @@ export function emitColumns(columns, cut, emitCtx = {}) {
           for (const r of hiRanges) {
             prims.push(Object.assign(emitLine(cut, col.x1, r.z0, col.x1, r.z1, role, { ceilZ }),{__o:'recessHi'}));
           }
+          // 腰壁の端部抑え（仕様2026-08「追加したい腰壁の仕様」）: 天端の帯は壁が終わる端でも
+          // 見えるので、その端に**帯の見付ぶん内側の細線**を足す（端の中線は上の凹み側面線が
+          // 既に描いている＝帯の外形2本のうち内側の1本だけがここの責務。天端の水平線と
+          // その下端＝kneeCapUnderline と対になる）。
+          // 描く端は「その壁がそこで実際に終わる端」だけ——隣接列が有る（＝探査範囲の内側）
+          // かつ帯の全高が覆われていない端。次の2つは対象外で、どちらも条件から自然に落ちる:
+          //   - 面の端（隣接列が無い）… そこは直交壁との取り合いで、腰壁は相手の壁表面まで
+          //     行って終わる。その位置の縦線は端部処理が描くため二重にしない。
+          //   - 同じ軸上に壁が続く端 … 連続する壁は同じ偏芯・同じ厚みで同面のため
+          //     （uncoveredZRangesが空を返す）。
+          appendKneeCapEndFaces(prims, cut, col, band, { prev, next, loRanges, hiRanges, ceilZ });
         }
       } else if (band.kind === 'cutAlong') {
         // cutAlong（縦断された壁。WP-E5リード裁定・§6.1）: 見付面自体は塗らず輪郭のみ描く。
@@ -817,7 +870,11 @@ export function emitOpenGapMarks(columns, cut, emitCtx = {}) {
   columns.forEach((col, colIndex) => {
     for (const b of col.bands) {
       if (b.kind === 'open' || b.openingPassThrough) {
-        cells.push({ colIndex, x0: col.x0, x1: col.x1, z0: b.z0, z1: b.z1 });
+        // viaOpening: 建具の開口として抜けている区間。**アキ標記（矩形＋「ア キ」）は付けない**
+        // ——そこは建具の姿図が描く場所であり「アキ」ではない（バツは従来どおり出す。
+        // 「開口が2階アキと連続する場合は1組の大きなX」の確認済み仕様を壊さないため）。
+        cells.push({ colIndex, x0: col.x0, x1: col.x1, z0: b.z0, z1: b.z1,
+          viaOpening: b.kind !== 'open' || b.openingPassThrough === true });
       }
     }
   });
@@ -867,6 +924,20 @@ export function emitOpenGapMarks(columns, cut, emitCtx = {}) {
     // ——「アキのセルの和」でクリップすると、開口と上階アキがL字に連結する構成で
     // 「1組の大きなX」（WP-E7 D1の確認済み仕様）が細切れになるため採らない。
     const blockers = obstructionRects(columns, x0, x1, z0, z1);
+    // アキ標記の矩形と「ア キ」（旧 elevationFigure.js の appendGapMark から移設）。次の3条件を
+    // すべて満たす連結成分にだけ付ける:
+    //   - 建具の開口を含まない（viaOpening）… そこは建具の姿図の場所で「アキ」ではない
+    //   - 外接矩形そのもの（全セルが同じz範囲）… L字に食い込んだ成分では外接矩形の輪郭が
+    //     アキでない場所を囲ってしまう（「バツの4点は空き面の実際の隅」と同じ理由）
+    //   - 床断面より上（dash==='center'）… 床断面より下の抜けは「向こう側の断面＝細線の破線」で、
+    //     実線の輪郭で囲うのは線種の規則に反する
+    const isRect = g.every(c => Math.abs(c.z0 - z0) < GAP_EPS && Math.abs(c.z1 - z1) < GAP_EPS);
+    if (!g.some(c => c.viaOpening) && isRect && dash === 'center') {
+      prims.push({ type: 'rect', x: x0, y: zToY(z1), w: x1 - x0, h: z1 - z0,
+        weight: weightForRole(ElevationLineRole.SILHOUETTE) });
+      prims.push({ type: 'text', x: (x0 + x1) / 2, y: zToY((z0 + z1) / 2),
+        text: 'ア キ', anchor: 'middle', baseline: 'middle' });
+    }
     for (const [a, b] of [[[x0, L.lo], [x1, R.hi]], [[x0, L.hi], [x1, R.lo]]]) {
       const line = emitLine(cut, a[0], a[1], b[0], b[1], ElevationLineRole.DETAIL, { dash, ceilZ });
       prims.push(...subtractRectsFromLine(line, blockers));

@@ -420,7 +420,9 @@ test('【失敗系・WP-E7・D1統合】開口なし: 中央の壁が両隣のop
     { x0: 1500, x1: 2500, worldLo: 1500, worldHi: 2500, bands: probeColumn(cut, 2000, probeCtx) },
     { x0: 2500, x1: 4000, worldLo: 2500, worldHi: 4000, bands: probeColumn(cut, 3250, probeCtx) },
   ];
-  const prims = emitOpenGapMarks(columns, cut);
+  // アキ標記は矩形＋「ア キ」＋バツ2本（移行の項目3で appendGapMark から移設）。
+  // ここで数えるのは連結成分の個数なので、バツ（線プリミティブ）だけを見る。
+  const prims = emitOpenGapMarks(columns, cut).filter(p => p.type === 'line');
   assert.equal(prims.length, 4, `中央の壁(開口なし)は両隣のopen列を橋渡ししないため2組のX(4本)のはず（実際:${prims.length}本）`);
 });
 

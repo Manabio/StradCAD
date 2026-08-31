@@ -17,6 +17,47 @@ const NAME_BOX_CHAR_W_MM = 350;
 const NAME_BOX_MIN_W_MM  = 1200;
 
 /**
+ * 帯の中で**同じ位置・同じ線種の線が2本以上ある**とき1本にまとめる（先勝ち）。
+ *
+ * 1枚の帯には`buildFaceFigure`（図面の体裁＋端の縦線）と断面エンジン（壁の輪郭）の
+ * 2経路からプリミティブが流れ込む。両者が同じ実体の縁を別の理由で描くこと自体は正常
+ * （例: 面端の縦線は体裁としての「端の縦線」であり、同時に壁断面の縁でもある）——
+ * 見た目は完全に同じなので、残しても描画結果は変わらないが、
+ *   - 視覚回帰スナップショットに「経路が増えただけ」の差分が乗って本当の変化を隠す
+ *   - 同じ線が2本あると、以後どちらを消してよいか判断できない
+ * ため、帯を確定する1箇所（`finalizeBand`）で畳む。`section/sectionEmit.js`の`dedupeLines`と
+ * 同じ考え方を、2経路の合流点へ広げたもの。
+ *
+ * **破線・一点鎖線は端点の順序まで一致する場合しか畳まない**——破線の位相は線の始点から
+ * 刻まれるため、端点が逆向きの2本は同じ線分でも見た目が違う（「破線同士の角は必ず破線の
+ * 交点」の既存配慮を壊さない）。実線は向きが見た目に出ないので順序を正規化して比較する。
+ * 線以外のプリミティブ（rect/text/dim等）は対象外——同じ位置に重なること自体が意味を持つ
+ * （アキの矩形と壁の縁など）ため、機械的に消すと情報が落ちる。
+ * @param {object[]} primitives
+ * @returns {object[]}
+ */
+export function dedupeCoincidentLines(primitives) {
+  const seen = new Set();
+  const out = [];
+  for (const p of primitives) {
+    if (p.type !== 'line') { out.push(p); continue; }
+    const dash = p.dash ?? '';
+    const ends = dash
+      ? [p.x1, p.y1, p.x2, p.y2, p.dashAnchor ?? '']
+      : [Math.min(p.x1, p.x2), Math.min(p.y1, p.y2), Math.max(p.x1, p.x2), Math.max(p.y1, p.y2)];
+    // 実線側は端点を昇順へ正規化するが、それだけでは (x1,y1)-(x2,y2) と (x1,y2)-(x2,y1)
+    // （同じ外接矩形の別の対角線。アキのバツがまさにこれ）が同一視されてしまうため、
+    // 傾きの符号も鍵に含める。
+    const slopeSign = dash ? '' : Math.sign((p.x2 - p.x1) * (p.y2 - p.y1));
+    const key = `${dash}|${p.weight ?? ''}|${slopeSign}|${ends.join(',')}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(p);
+  }
+  return out;
+}
+
+/**
  * 帯内の全プリミティブ種を一律 (dx,dy) だけ平行移動する（xCursor配置・floorOffset適用の共通処理）。
  * mirrorPrimitiveX と対を成す幾何変換——両関数は同じプリミティブ型集合を扱うこと
  * （片方にだけ型を追加すると、その型だけ移動/反転されない無言バグになる）。

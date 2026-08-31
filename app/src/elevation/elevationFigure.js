@@ -30,7 +30,6 @@ import {
   FACE_LABEL_FONT_PX, GRID_LINE_ABOVE_CH_MM, CANVAS_BG_COLOR, DEFAULT_FACE_LABEL_AVOID_THRESHOLD_MM,
   DEFAULT_OPENING_TAG_ROW_MM, DEFAULT_DIM_ROW_GAP_MM, DEFAULT_GRID_ROW_GAP_MM,
   DEFAULT_WALL_LESS_END_EXTEND_MM, CH_DIM_OFFSET_MM, SPLIT_MERGE_EPS_MM, DEFAULT_DIM_FOOT_GAP_MM,
-  KNEE_CAP_FACE_MM, kneeCapBottomMm,
 } from './elevationStyle.js';
 
 // 項目4: 壁2段書きの省略判定用テキスト幅概算。renderText（figurePrimitivesKonva.jsx）は
@@ -224,6 +223,13 @@ export function appendGapMark(prims, gap, silhouetteWeight, detailWeight) {
  * face 上のアキ（腰壁＋垂れ壁の同時指定でできる四角い穴）の矩形一覧（ローカル座標）。
  * kneeDropRecordsOnAxis（finish/kneeDropWall.js。QA修正L1でkey解読を集約）を面のaxisCL・
  * face.lo..hiで絞り込み、区間をface.lo..hiへクランプしてローカル矩形へ変換する。
+ *
+ * **通常面のアキの標記はここでは描かない**（断面エンジンのemitOpenGapMarksへ移行済み）
+ * ——「指定があるか」しか見ない面図側と違い、実際に抜けているかは他階・遮蔽まで見ないと
+ * 決まらないため。この関数が残るのは次の2つだけ:
+ *   - 段差見付け面（kind==='step'）の上部のアキ。断面エンジンに対応概念が無い専用描画。
+ *   - 壁2段書きラベルの回避範囲。描画ではなく**配置の都合**（エンジンの出力は
+ *     buildFaceFigureの後に積まれるため、ここからは見えない）。
  * @returns {Array<{x:number, y:number, w:number, h:number}>}
  */
 export function kneeDropGapsOnFace(face, graph, ceilingHeightMm) {
@@ -243,73 +249,6 @@ export function kneeDropGapsOnFace(face, graph, ceilingHeightMm) {
     out.push({ x, y, w, h });
   }
   return out;
-}
-
-// 「腰壁区間の端の先に、同じ面の壁が続いているか」を見る探査距離(mm)。端点そのものだと
-// 隣接壁の端と接して常に真になるため、わずかに外側を突く。
-const KNEE_END_PROBE_MM = 1;
-
-/**
- * face 上の腰壁の天端・端部の見えがかりプリミティブ（仕様2026-08「追加したい腰壁の仕様」）。
- *
- * 天端は壁の上端から下への帯（実厚は finish/kneeDropWall.js の CAP_THICKNESS）。展開図では
- * その帯の上端＝天端を**中線**、下端＝天端の見込み線を**細線**で描く。端部（端部抑え）も
- * 同じ帯の見え方になるので、端に縦の中線＋帯ぶん内側の縦細線を描く。
- * 見付は実厚ではなく KNEE_CAP_FACE_MM（作図上の見付。実厚のままだと2本線が縮尺で潰れる）。
- * 天端の出（CAP_OVERHANG）は**厚み方向だけ**で長さ方向には出ないため、端部の中線は壁端
- * そのものに立つ（ユーザー確定2026-08）。
- *
- * ただし次の2つの端には端部を描かない（仕様「腰壁と壁の取り合い」）:
- *   - **面の端（face.lo/hiでクランプされた端）**: そこは直交壁との取り合いで、腰壁は相手の
- *     壁表面まで行って終わる（「天井までいく壁同士が取り合った後、壁表面まで腰壁がいく」）。
- *     その位置の縦線は既存の端部処理（hasWallAtLocal0/Run）が描くため二重にしない。
- *   - **同じ軸上に壁が続く端**: 連続する壁は同じ偏芯・同じ厚みで同面のため
- *     （「同面なので展開図の壁に縦線はない」）。
- *
- * 垂れ壁（drop）は対象外——天端・端部抑えは腰壁固有の見えがかり。
- * @param {object} face
- * @param {object} graph
- * @param {string} silhouetteWeight 中線
- * @param {string} detailWeight 細線
- * @returns {object[]} line プリミティブ（ローカル座標。y は上が負）
- */
-export function kneeCapMarksOnFace(face, graph, silhouetteWeight, detailWeight) {
-  const prims = [];
-  // 端の先へ同じ面の壁が続いているか（連続する壁＝同面なので端部を描かない）。
-  // walls を持たない合成graph（単体テストの最小graph）は「続く壁なし」として扱う。
-  const walls = graph.walls ?? [];
-  const wallContinuesAt = world => walls.some(w =>
-    w.axisCL.id === face.axisCL.id && w.isVertical === face.isVertical &&
-    Math.min(w.coord1, w.coord2) <= world && Math.max(w.coord1, w.coord2) >= world);
-
-  for (const { rec, lo, hi } of kneeDropRecordsOnAxis(graph, face.axisCL, face.lo, face.hi)) {
-    if (!rec.knee) continue;
-    const capBottom = kneeCapBottomMm(rec.knee.topHeight);
-    if (capBottom == null) continue; // 天端の見付に満たない腰壁（退化指定）は帯にならない
-    const topY = -rec.knee.topHeight, capBottomY = -capBottom;
-
-    const clampedLo = Math.max(lo, face.lo), clampedHi = Math.min(hi, face.hi);
-    const a = localXOf(face, clampedLo), b = localXOf(face, clampedHi);
-    const x0 = Math.min(a, b), x1 = Math.max(a, b);
-    if (x1 - x0 <= 0) continue;
-
-    prims.push({ type: 'line', x1: x0, y1: topY,       x2: x1, y2: topY,       weight: silhouetteWeight });
-    prims.push({ type: 'line', x1: x0, y1: capBottomY, x2: x1, y2: capBottomY, weight: detailWeight });
-
-    // 端部抑え: 面内で終わり、かつその先に壁が続かない端だけ。inward は帯を内側へ描く向き。
-    for (const [world, outward] of [[lo, -1], [hi, +1]]) {
-      if (world <= face.lo + SPLIT_MERGE_EPS_MM || world >= face.hi - SPLIT_MERGE_EPS_MM) continue;
-      if (wallContinuesAt(world + outward * KNEE_END_PROBE_MM)) continue;
-      const endX = localXOf(face, world);
-      const inward = endX <= (x0 + x1) / 2 ? 1 : -1;
-      prims.push({ type: 'line', x1: endX, y1: topY, x2: endX, y2: 0, weight: silhouetteWeight });
-      prims.push({
-        type: 'line', x1: endX + inward * KNEE_CAP_FACE_MM, y1: topY,
-        x2: endX + inward * KNEE_CAP_FACE_MM, y2: 0, weight: detailWeight,
-      });
-    }
-  }
-  return prims;
 }
 
 /**
@@ -750,44 +689,11 @@ export function buildFaceFigure(face, ctx) {
     prims.push({ type: 'line', x1: run, y1: -ceilAbsAtX(run, ceilAbsOf(segs[segs.length - 1])), x2: run, y2: floorYAtEnd, weight: silhouetteWeight });
   }
 
-  // 新仕様「袖壁・腰壁の面分割」: 袖壁で分割された端（hasWallAtLocal0/Run=falseで縦線を描かない
-  // 代わりに床・天井が延長される既存の「壁のない端部」表現の上に）、袖壁自身の断面（厚みthicknessMm・
-  // 高さ0..-(topHeightMm??CH)。腰壁ならtopHeightMm=knee.topHeightで低く、無ければ天井まで）を
-  // CUT枠として重ねる（openingSectionPrimitivesと同じ「面端から帯を起こす」慣習）。
-  // 問題修正2026-08(QA F2): topHeightMm省略（腰壁指定なし=天井まで）の高さは帯CH固定ではなく、
-  // その端の区間の実際の天井（端の縦線と同じ基準）まで——固定のままだと端の区間の天井が高い
-  // とき袖壁の頭と天井線の間に隙間が開く。
-  // WP-2: topHeightMm省略（腰壁指定なし=天井まで）の高さもceilAbsAtX経由——ceilingProfile
-  // 未指定・範囲外はceilAbsOf(segs[0]/segs[last])のまま（現行同値）。topHeightMm自体（腰壁の
-  // 明示指定高さ）はceilingProfileに関わらず不変。
-  // 天端（仕様2026-08）: 腰壁指定のある断面枠は上端から KNEE_CAP_FACE_MM（作図上の見付）が
-  // 天端の帯になる。枠の上辺（＝天端）は断面線のままで、帯の下端だけを細線で足す
-  // （天端の出は枠＝断面の幅には効かない。長さ方向に出ないため）。
-  // 天井までの袖壁（topHeightMm=null）には天端が無い。
-  const appendPartitionCut = (cut, x, ceilAbs) => {
-    const { thicknessMm, topHeightMm } = cut;
-    const h = topHeightMm ?? ceilAbs;
-    prims.push({ type: 'rect', x, y: -h, w: thicknessMm, h, weight: cutWeight });
-    if (topHeightMm != null && topHeightMm > KNEE_CAP_FACE_MM) {
-      const y = -(topHeightMm - KNEE_CAP_FACE_MM);
-      prims.push({ type: 'line', x1: x, y1: y, x2: x + thicknessMm, y2: y, weight: detailWeight });
-    }
-  };
-  if (face.partitionCutAtLocal0) {
-    appendPartitionCut(face.partitionCutAtLocal0, 0, ceilAbsAtX(0, ceilAbsOf(segs[0])));
-  }
-  if (face.partitionCutAtLocalRun) {
-    const { thicknessMm } = face.partitionCutAtLocalRun;
-    appendPartitionCut(face.partitionCutAtLocalRun, run - thicknessMm, ceilAbsAtX(run, ceilAbsOf(segs[segs.length - 1])));
-  }
-
-  // アキ（腰壁＋垂れ壁の同時指定でできる四角い穴）
-  for (const gap of kneeDropGapsOnFace(face, graph, CH)) {
-    appendGapMark(prims, gap, silhouetteWeight, detailWeight);
-  }
-  // 腰壁の天端・端部の見えがかり（この面自身が腰壁の場合。仕様2026-08）
-  prims.push(...kneeCapMarksOnFace(face, graph, silhouetteWeight, detailWeight));
-
+  // アキ（腰壁＋垂れ壁の同時指定でできる四角い穴）の標記は**断面エンジンの責務**へ移した
+  // （section/sectionEmit.js の emitOpenGapMarks）——面図側は「腰壁・垂れ壁の指定がある区間」
+  // しか知らないが、実際に抜けているかは他階・遮蔽まで見ないと決まらない。
+  // 下の壁2段書きの回避範囲だけは、描画ではなく**配置の都合**として指定を読み続ける
+  // （エンジンの出力はこの関数の後に積まれるため、ここからは見えない）。
   // face.lo/hiの位置(x)を含むfloorSegments（segs）の区間のfloorDeltaMm・天井絶対高さを返す
   // （無ければ親扱い=0/帯のCH。開放スパンの遠側床線・境界エッジ・アキ描画が「近側の床・天井の
   // 高さ」を求めるのに使う共通ヘルパ）。

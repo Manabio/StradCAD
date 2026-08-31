@@ -96,8 +96,10 @@ export const KNEE_CAP_FACE_MM = 50;
  * （面図なら topHeight、断面エンジンなら band.z1）なので、ここは下端だけを答える。
  *
  * 帯が壁の高さに収まらない（天端が見付以下）の退化指定では **null** を返す——このガードを
- * 各所で書くと片方だけ抜けて床線の下へ線が出る。展開図側の唯一の情報源として集約する
- * （消費者: elevationFigure.js の kneeCapMarksOnFace、section/sectionEmit.js の kneeCapUnderline）。
+ * 各所で書くと片方だけ抜けて床線の下へ線が出る。展開図側の唯一の情報源として集約する。
+ * 消費者は **断面エンジンだけ**（section/sectionEmit.js の kneeCapUnderline・
+ * appendKneeCapEndFaces）——腰壁の天端・端部は壁の実体に属する表現なので、面図側
+ * （elevationFigure.js）は持たない。
  * @param {number} topMm 天端の高さ（その壁の足元からの相対値）
  * @returns {number|null}
  */

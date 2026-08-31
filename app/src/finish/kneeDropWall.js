@@ -72,9 +72,13 @@ function sameAxisLine(a, b) {
 /**
  * 軸CL（と同じ通り）・区間[spanLo,spanHi]に重なる graph.kneeDropWalls のレコードを列挙する。
  * key=edgeKey(axisCLId,startCLId,endCLId) の解読（key.split(':')→CL解決→lo/hi→スパン重なり判定）
- * はこの関数のみで行う——キー形式を所有するこのファイルへ集約し、elevation/elevationFigure.js
- * の kneeDropGapsOnFace/kneeCapMarksOnFace・elevation/elevationFaceList.js の kneeDropRecordFor・
- * elevation/section/sectionProbe.js の kneeDropZRangeAt が消費者として使う。
+ * はこの関数のみで行う——キー形式を所有するこのファイルへ集約し、次の3つが消費者として使う:
+ *   - elevation/section/sectionProbe.js の kneeDropZRangesAt … 腰壁・垂れ壁の**実体**
+ *     （壁のz存在範囲）。展開図に現れる腰壁の断面・天端・端部・アキの標記はすべてここが源。
+ *   - elevation/elevationFaceList.js の kneeDropRecordFor … 面分割（袖壁の高さ）。
+ *   - elevation/elevationFigure.js の kneeDropGapsOnFace … **描画ではなく配置の都合**。
+ *     段差見付け面（kind==='step'。断面エンジンに対応概念が無い専用描画）と、壁2段書き
+ *     ラベルの回避範囲（エンジンの出力は buildFaceFigure の後に積まれるため見えない）。
  * knee/drop指定の有無によるフィルタは呼び出し側の責務のまま（全レコードを返す）。
  * @param {object} graph
  * @param {import('@core').CenterLine} axisCL 壁・面の軸CL（idではなく座標で照合する。sameAxisLine）

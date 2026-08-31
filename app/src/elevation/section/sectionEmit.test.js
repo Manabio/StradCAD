@@ -230,7 +230,9 @@ test('【WP-E2・線種テーブル】emitOpenGapMarks: baseFloorZより上の�
   const columns = [
     { x0: 0, x1: 1000, worldLo: 0, worldHi: 1000, bands: [{ kind: 'open', z0: 500, z1: 2400 }] },
   ];
-  const prims = emitOpenGapMarks(columns, cut);
+  // アキ標記は矩形＋「ア キ」＋バツ2本（移行の項目3で appendGapMark から移設）。
+  // 本テストの対象はバツの線種なので、線プリミティブだけを見る。
+  const prims = emitOpenGapMarks(columns, cut).filter(p => p.type === 'line');
   assert.equal(prims.length, 2, 'X=対角線2本のはず');
   for (const p of prims) assert.equal(p.dash, 'center');
 });
@@ -240,7 +242,7 @@ test('【WP-E2・線種テーブル】emitOpenGapMarks: 床断面より下のア
   const columns = [
     { x0: 0, x1: 1000, worldLo: 0, worldHi: 1000, bands: [{ kind: 'open', z0: 0, z1: 400 }] },
   ];
-  const prims = emitOpenGapMarks(columns, cut);
+  const prims = emitOpenGapMarks(columns, cut).filter(p => p.type === 'line');
   assert.equal(prims.length, 2);
   for (const p of prims) assert.equal(p.dash, 'dashed');
 });
@@ -330,7 +332,8 @@ test('【WP-E2・D1】emitOpenGapMarks: 隣接列のopenPassThrough帯とopen帯
       bands: [{ kind: 'open', z0: 1800, z1: 2400 }] },
   ];
   const prims = emitOpenGapMarks(columns, cut);
-  assert.equal(prims.length, 2, '連結成分が1つなら対角線2本(=1組のX)のはず（実際:' + prims.length + '本）');
+  assert.equal(prims.filter(p => p.type === 'line').length, 2,
+    '連結成分が1つなら対角線2本(=1組のX)のはず（実際:' + prims.length + '本）');
 });
 
 test('【失敗系・WP-E2・D1】emitOpenGapMarks: z範囲が重ならなければ連結せず2組のX(4本)になる', () => {
@@ -342,7 +345,8 @@ test('【失敗系・WP-E2・D1】emitOpenGapMarks: z範囲が重ならなけれ
       bands: [{ kind: 'open', z0: 1800, z1: 2400 }] },
   ];
   const prims = emitOpenGapMarks(columns, cut);
-  assert.equal(prims.length, 4, 'z範囲が重ならなければ連結されず、2組のX(4本)のはず');
+  assert.equal(prims.filter(p => p.type === 'line').length, 4,
+    'z範囲が重ならなければ連結されず、2組のX(4本)のはず');
 });
 
 test('【失敗系・WP-E2・D1】emitOpenGapMarks: openingPassThroughが無いkind:wall帯はアキ扱いにならず連結しない', () => {
@@ -354,7 +358,8 @@ test('【失敗系・WP-E2・D1】emitOpenGapMarks: openingPassThroughが無いk
       bands: [{ kind: 'open', z0: 1800, z1: 2400 }] },
   ];
   const prims = emitOpenGapMarks(columns, cut);
-  assert.equal(prims.length, 2, 'wall帯自体はアキ扱いにならないため、open帯単独の1組(2本)のみのはず');
+  assert.equal(prims.filter(p => p.type === 'line').length, 2,
+    'wall帯自体はアキ扱いにならないため、open帯単独の1組(2本)のみのはず');
 });
 
 // ==== WP-E5リード裁定: cutAlongの描画規則（上端エッジCUT・端部縦線） ====
@@ -989,4 +994,187 @@ test('【失敗系】emitColumns: 天端が見付より低い退化した腰壁�
   const prims = emitColumns(columns, cut, { ceilZ: 2400 });
   assert.equal(prims.filter(p => p.y1 === 0 && p.y2 === 0 && p.weight === 'thin').length, 0,
     '床(z=0)に重なる細線は出さないはず');
+});
+
+// ================================================================
+// 腰壁の端部抑え（仕様2026-08「腰壁の天端・端部」）
+// 面図側（elevationFigure.js の kneeCapMarksOnFace）から移し替えた規則。
+// 天端＝壁の上端から下への帯。展開図では見付を KNEE_CAP_FACE_MM（作図値）として
+// 上端を中線・下端を細線で描き、**壁がそこで終わる端**にだけ端面の細線を足す。
+// ================================================================
+
+// 見えがかりの腰壁（isKneeDrop・天端が天井より下）を真ん中の列に置き、両隣を指定できる最小構成。
+function kneeCapColumns({ leftBands = [], rightBands = [] } = {}) {
+  return [
+    { x0: 0, x1: 1000, worldLo: 0, worldHi: 1000, bands: leftBands },
+    { x0: 1000, x1: 3000, worldLo: 1000, worldHi: 3000,
+      bands: [{ kind: 'wall', z0: 0, z1: 900, distMm: 500, layerRole: 'self', isKneeDrop: true }] },
+    { x0: 3000, x1: 4000, worldLo: 3000, worldHi: 4000, bands: rightBands },
+  ];
+}
+
+test('【移行・腰壁の端部】emitColumns: 壁がそこで終わる端に端面の細線（内側KNEE_CAP_FACE_MM）を描く', () => {
+  const prims = emitColumns(kneeCapColumns(), makeCut(), { ceilZ: 2400 });
+  const verticals = prims.filter(p => p.x1 === p.x2 && p.y1 === 0 && p.y2 === -900);
+  const xs = [...new Set(verticals.map(p => p.x1))].sort((a, b) => a - b);
+  assert.deepEqual(xs, [1000, 1000 + KNEE_CAP_FACE_MM, 3000 - KNEE_CAP_FACE_MM, 3000],
+    `両端の中線＋内側の細線で計4本のはず（実際:${JSON.stringify(verticals)}）`);
+  const inner = verticals.filter(p => p.x1 === 1000 + KNEE_CAP_FACE_MM || p.x1 === 3000 - KNEE_CAP_FACE_MM);
+  assert.ok(inner.every(p => p.weight === 'thin'), '内側の端面は細線のはず');
+});
+
+test('【失敗系・移行】emitColumns: 同じ壁面が隣の列へ続く端には端面の細線を描かない', () => {
+  // 隣接列に同じ距離・同じ層の壁が続く＝連続する壁面（凹んでいない）。
+  const cont = [{ kind: 'wall', z0: 0, z1: 900, distMm: 500, layerRole: 'self', isKneeDrop: true }];
+  const prims = emitColumns(kneeCapColumns({ rightBands: cont }), makeCut(), { ceilZ: 2400 });
+  const xs = prims.filter(p => p.x1 === p.x2 && p.y1 === 0 && p.y2 === -900).map(p => p.x1);
+  assert.ok(!xs.includes(3000 - KNEE_CAP_FACE_MM), `続く側(x=3000)に端面が出てはいけない（実際:${xs}）`);
+  assert.ok(xs.includes(1000 + KNEE_CAP_FACE_MM), '自由端(x=1000)には端面が出るはず');
+});
+
+test('【失敗系・移行】emitColumns: 描画範囲の端（隣接列が無い）には端面の細線を描かない', () => {
+  // 面の端は直交壁との取り合いで、腰壁は相手の壁表面まで行って終わる——その位置の縦線は
+  // 端部処理（buildFaceFigure の端の縦線）が描くため二重にしない。
+  const columns = [{ x0: 1000, x1: 3000, worldLo: 1000, worldHi: 3000,
+    bands: [{ kind: 'wall', z0: 0, z1: 900, distMm: 500, layerRole: 'self', isKneeDrop: true }] }];
+  const prims = emitColumns(columns, makeCut(), { ceilZ: 2400 });
+  const xs = prims.filter(p => p.x1 === p.x2).map(p => p.x1);
+  assert.ok(!xs.includes(1000 + KNEE_CAP_FACE_MM) && !xs.includes(3000 - KNEE_CAP_FACE_MM),
+    `描画範囲の端に端面が出てはいけない（実際:${xs}）`);
+});
+
+test('【失敗系・移行】emitColumns: 天端の見付に満たない低い腰壁には端面の細線を描かない', () => {
+  const columns = [
+    { x0: 0, x1: 1000, worldLo: 0, worldHi: 1000, bands: [] },
+    { x0: 1000, x1: 3000, worldLo: 1000, worldHi: 3000,
+      bands: [{ kind: 'wall', z0: 0, z1: KNEE_CAP_FACE_MM - 10, distMm: 500, layerRole: 'self', isKneeDrop: true }] },
+    { x0: 3000, x1: 4000, worldLo: 3000, worldHi: 4000, bands: [] },
+  ];
+  const prims = emitColumns(columns, makeCut(), { ceilZ: 2400 });
+  const xs = prims.filter(p => p.x1 === p.x2).map(p => p.x1);
+  assert.ok(!xs.includes(1000 + KNEE_CAP_FACE_MM), `退化指定では端面を描かない（実際:${xs}）`);
+});
+
+test('【失敗系・移行】emitColumns: 天井まで届く壁（天端が露出していない）には端面の細線を描かない', () => {
+  const columns = [
+    { x0: 0, x1: 1000, worldLo: 0, worldHi: 1000, bands: [] },
+    { x0: 1000, x1: 3000, worldLo: 1000, worldHi: 3000,
+      bands: [{ kind: 'wall', z0: 0, z1: 2400, distMm: 500, layerRole: 'self', isKneeDrop: true }] },
+    { x0: 3000, x1: 4000, worldLo: 3000, worldHi: 4000, bands: [] },
+  ];
+  const prims = emitColumns(columns, makeCut(), { ceilZ: 2400 });
+  const xs = prims.filter(p => p.x1 === p.x2).map(p => p.x1);
+  assert.ok(!xs.includes(1000 + KNEE_CAP_FACE_MM), `天端が露出していなければ端面は無い（実際:${xs}）`);
+});
+
+// ================================================================
+// 袖壁・腰壁の断面（旧 elevationFigure.js の partitionCutAtLocal0/Run → appendPartitionCut）
+// 面図側は「面の端に厚みthicknessMmの枠を起こす」近似だったが、実体の位置・幅・高さを知って
+// いるのはエンジンだけ——袖壁で2断片に分かれた面では、同じ1枚の袖壁を両断片が別々の近似で
+// 描いていた。移行後は cut 帯の縁（cutEdgeLo/Hi）＋天端（cutWallTopEdges）＋天端下端
+// （kneeCapUnderline）が唯一の表現。
+// ================================================================
+
+// 袖壁1枚（軸CLを挟む2つのWallオブジェクト）が中央3列を占める最小構成。
+function sleeveColumns({ topZ = 900, axisCL = { id: 'sleeve' } } = {}) {
+  const near = { axisCL, axisValue: -57.5 };
+  const far = { axisCL, axisValue: 57.5 };
+  return [
+    { x0: 0, x1: 1000, worldLo: 0, worldHi: 1000, bands: [{ kind: 'open', z0: 0, z1: 2400 }] },
+    { x0: 1000, x1: 1057.5, worldLo: 1000, worldHi: 1057.5,
+      bands: [{ kind: 'cut', z0: 0, z1: topZ, wall: near, isKneeDrop: topZ < 2400 }] },
+    { x0: 1057.5, x1: 1115, worldLo: 1057.5, worldHi: 1115,
+      bands: [{ kind: 'cut', z0: 0, z1: topZ, wall: far, isKneeDrop: topZ < 2400 }] },
+    { x0: 1115, x1: 2000, worldLo: 1115, worldHi: 2000, bands: [{ kind: 'open', z0: 0, z1: 2400 }] },
+  ];
+}
+
+test('【移行・袖壁の断面】emitColumns: 袖壁の断面は外縁2本＋天端の水平線になり、内部（軸CL）に縦線を出さない', () => {
+  const prims = emitColumns(sleeveColumns(), makeCut(), { ceilZ: 2400 });
+  const verts = [...new Set(prims.filter(p => p.x1 === p.x2 && p.weight === 'thick').map(p => p.x1))]
+    .sort((a, b) => a - b);
+  assert.deepEqual(verts, [1000, 1115],
+    `外縁2本だけのはず（軸CL x=1057.5 は1枚の壁の内部。実際:${verts}）`);
+  const top = prims.find(p => p.y1 === p.y2 && p.y1 === -900 && p.weight === 'thick');
+  assert.ok(top, '天端のCUT水平線があるはず');
+  assert.deepEqual([top.x1, top.x2], [1000, 1115], '天端は袖壁の実幅いっぱいに1本だけ引かれるはず');
+});
+
+test('【移行・袖壁の断面】emitColumns: 腰壁の袖壁には天端下端の細線が付く', () => {
+  const prims = emitColumns(sleeveColumns(), makeCut(), { ceilZ: 2400 });
+  const cap = prims.find(p => p.y1 === p.y2 && p.y1 === -(900 - KNEE_CAP_FACE_MM) && p.weight === 'thin');
+  assert.ok(cap, `天端下端の細線があるはず（実際:${JSON.stringify(prims.filter(p => p.weight === 'thin'))}）`);
+  assert.deepEqual([cap.x1, cap.x2], [1000, 1115], '天端下端も袖壁の実幅ぶん');
+});
+
+test('【失敗系・移行】emitColumns: 天井まで届く袖壁には天端も天端下端も描かない', () => {
+  const prims = emitColumns(sleeveColumns({ topZ: 2400 }), makeCut(), { ceilZ: 2400 });
+  assert.equal(prims.find(p => p.y1 === p.y2 && p.y1 === -2400 && p.weight === 'thick'), undefined,
+    '天井と同じ高さで終わる壁の上端は断面の一部ではない（天井線が描く）');
+  assert.equal(prims.find(p => p.weight === 'thin' && p.y1 === p.y2), undefined,
+    '天端が無い袖壁には細線を足さないはず');
+});
+
+test('【失敗系・移行】emitColumns: 軸CLが違う（＝別々の）切断壁が接する境界には縦線を描く', () => {
+  const columns = sleeveColumns();
+  columns[2].bands[0].wall = { axisCL: { id: 'other' }, axisValue: 57.5 };
+  const verts = [...new Set(emitColumns(columns, makeCut(), { ceilZ: 2400 })
+    .filter(p => p.x1 === p.x2 && p.weight === 'thick').map(p => p.x1))].sort((a, b) => a - b);
+  assert.deepEqual(verts, [1000, 1057.5, 1057.5, 1115].filter((v, i, a) => a.indexOf(v) === i),
+    `別の壁同士の境界(x=1057.5)には縦線が出るはず（実際:${verts}）`);
+});
+
+// ================================================================
+// アキの標記（旧 elevationFigure.js の kneeDropGapsOnFace ＋ appendGapMark）
+// 面図側は「腰壁・垂れ壁の指定がある区間」しか知らなかったが、実際に抜けているかは他階・
+// 遮蔽まで見ないと決まらない。移行後は emitOpenGapMarks が矩形＋バツ＋「ア キ」を出す。
+// ================================================================
+
+const gapRect = prims => prims.find(p => p.type === 'rect');
+const gapText = prims => prims.find(p => p.type === 'text' && p.text === 'ア キ');
+const gapDiagonals = prims => prims.filter(p => p.type === 'line');
+
+test('【移行・アキ】emitOpenGapMarks: 矩形（中線）＋対角2本（一点鎖線）＋「ア キ」を出す', () => {
+  const columns = [{ x0: 1000, x1: 3000, worldLo: 1000, worldHi: 3000,
+    bands: [{ kind: 'open', z0: 600, z1: 2000 }] }];
+  const prims = emitOpenGapMarks(columns, makeCut({ baseFloorZ: 0 }));
+  const rect = gapRect(prims);
+  assert.ok(rect, 'アキの矩形があるはず');
+  assert.deepEqual([rect.x, rect.y, rect.w, rect.h], [1000, -2000, 2000, 1400],
+    '矩形は抜けの範囲そのもの（y=zToY(z1)・h=z1-z0）');
+  assert.equal(rect.weight, 'medium', '矩形の輪郭は中線');
+  assert.equal(gapDiagonals(prims).length, 2, 'バツは対角2本');
+  assert.ok(gapDiagonals(prims).every(p => p.dash === 'center'), '床断面より上のバツは一点鎖線');
+  const text = gapText(prims);
+  assert.ok(text, '「ア キ」があるはず');
+  assert.deepEqual([text.x, text.y], [2000, -1300], 'テキストは抜けの中心');
+});
+
+test('【失敗系・移行・アキ】emitOpenGapMarks: 建具の開口を含む成分には矩形・テキストを付けない（バツのみ）', () => {
+  const columns = [{ x0: 1000, x1: 3000, worldLo: 1000, worldHi: 3000,
+    bands: [{ kind: 'wall', z0: 600, z1: 2000, distMm: 500, openingPassThrough: true }] }];
+  const prims = emitOpenGapMarks(columns, makeCut({ baseFloorZ: 0 }));
+  assert.equal(gapRect(prims), undefined, '建具の姿図が描く場所を「アキ」で囲ってはいけない');
+  assert.equal(gapText(prims), undefined);
+  assert.equal(gapDiagonals(prims).length, 2, 'バツ自体は従来どおり出る');
+});
+
+test('【失敗系・移行・アキ】emitOpenGapMarks: 床断面より下の抜けには矩形・テキストを付けない', () => {
+  const columns = [{ x0: 1000, x1: 3000, worldLo: 1000, worldHi: 3000,
+    bands: [{ kind: 'open', z0: 0, z1: 400 }] }];
+  const prims = emitOpenGapMarks(columns, makeCut({ baseFloorZ: 500 }));
+  assert.equal(gapRect(prims), undefined, '床断面より下は「向こう側の断面＝細線の破線」で実線の輪郭は出さない');
+  assert.equal(gapText(prims), undefined);
+  assert.ok(gapDiagonals(prims).every(p => p.dash === 'dashed'));
+});
+
+test('【失敗系・移行・アキ】emitOpenGapMarks: L字（外接矩形と食い違う）成分には矩形・テキストを付けない', () => {
+  const columns = [
+    { x0: 0, x1: 1000, worldLo: 0, worldHi: 1000, bands: [{ kind: 'open', z0: 600, z1: 2000 }] },
+    { x0: 1000, x1: 2000, worldLo: 1000, worldHi: 2000, bands: [{ kind: 'open', z0: 1200, z1: 2000 }] },
+  ];
+  const prims = emitOpenGapMarks(columns, makeCut({ baseFloorZ: 0 }));
+  assert.equal(gapRect(prims), undefined, '外接矩形はアキでない場所（腰壁の上）まで囲ってしまう');
+  assert.equal(gapText(prims), undefined);
+  assert.equal(gapDiagonals(prims).length, 2, 'バツは「空き面の実際の隅」を結ぶ従来どおりの2本');
 });

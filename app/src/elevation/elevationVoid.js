@@ -13,13 +13,7 @@ import { roomCeilingHeight } from '../finish/roomMetrics.js';
 import { graphList } from '../graphReadScope.js';
 import { composeRoomFaces } from './elevationFaceList.js';
 import { findRunCLAt } from './elevationFloorProfile.js';
-import { makeProbeContext } from './section/sectionProbe.js';
-import { buildCutContent } from './section/sectionContent.js';
-import { cutPlaneOffsetMm, faceCutLine, faceViewSign } from './section/sectionCutPlane.js';
-import { structuralColumnContribution } from './section/sectionStructure.js';
-import { DEFAULT_WALL_LESS_END_EXTEND_MM } from './elevationStyle.js';
-import { translatePrimitive } from './elevationPrimitives.js';
-import { layoutBandFaces, finalizeBand } from './elevationBand.js';
+import { layoutBandFaces, finalizeBand, appendBandCutContent } from './elevationBand.js';
 
 // 2つのワールド矩形が重なるか（面積0の接触は重なりに含めない）。
 // elevationStair.jsのfindOverlappingVoidRoomと同じ実装（R: 矩形重なり探索部を共有ヘルパへ切り出し）。
@@ -186,9 +180,19 @@ export function buildVoidBand(voidRoom, graph, lowerGraph, ctx = {}) {
     };
   }
 
-  const { primitives, chDimX, prevBoundaryHi } = layoutBandFaces(voidRoom, graph, faces, { ...ctx, faceOverride });
+  const layout = layoutBandFaces(voidRoom, graph, faces, { ...ctx, faceOverride });
+  const primitives = [...layout.primitives];
+  // 壁の輪郭は全4種の帯で共通の唯一の経路（appendBandCutContent→buildCutContent）。
+  // 層スタックは設置階＋直下階——面を下へ延長する方式（このファイル冒頭）でも、下階の壁は
+  // 下階のgraphからしか読めないため、下階を層として積まないと1FL付近の断面・見えがかりが
+  // 一切出ない（面の引き伸ばしは床線・天井線の話で、壁の実体の話ではない）。
+  appendBandCutContent(primitives, voidRoom, graph, layout,
+    hasLower && dropMm > 0
+      ? [{ graph, floorZMm: 0, role: 'self' }, { graph: lowerGraph, floorZMm: -dropMm, role: 'below' }]
+      : [{ graph, floorZMm: 0, role: 'self' }],
+    { endExtendMm: ctx.wallLessEndExtendModelMm });
   return finalizeBand(voidRoom, graph, primitives, {
-    faceCount: faces.length, chDimX, prevBoundaryHi,
+    faceCount: faces.length, chDimX: layout.chDimX, prevBoundaryHi: layout.prevBoundaryHi,
     triOffsetMm: ctx.triangleOffsetModelMm, nameGapModelMm: ctx.nameGapModelMm,
     // QA修正: dropMmが0にクランプされた（下階FL差で相殺された）場合は実質1層と同じ表現のため
     // heightUnits=1にする（hasLowerだけを見ると2層予約されたままになってしまう）。
@@ -222,9 +226,14 @@ export function buildRoomBandWithVoidAbove(room, graph, voidRoom, upperGraph, ct
   const baseFaces = composeRoomFaces(room, graph);
   if (floorHeightMm == null || !upperGraph) {
     // 階高が解決できなければ多層書きしない（下階の帯そのまま。例外は投げない）。
-    const { primitives, chDimX, prevBoundaryHi } = layoutBandFaces(room, graph, baseFaces, ctx);
-    return finalizeBand(room, graph, primitives, {
-      faceCount: baseFaces.length, chDimX, prevBoundaryHi,
+    // 壁の輪郭は**この経路でも共通経路を通す**（自階1層＝buildRoomBandと同じ）——通さないと、
+    // 階高が解決できない図面だけ壁断面・見えがかり・アキが丸ごと欠ける（例外もログも出ない）。
+    const layout = layoutBandFaces(room, graph, baseFaces, ctx);
+    const prims = [...layout.primitives];
+    appendBandCutContent(prims, room, graph, layout, [{ graph, floorZMm: 0, role: 'self' }],
+      { endExtendMm: ctx.wallLessEndExtendModelMm });
+    return finalizeBand(room, graph, prims, {
+      faceCount: baseFaces.length, chDimX: layout.chDimX, prevBoundaryHi: layout.prevBoundaryHi,
       triOffsetMm: ctx.triangleOffsetModelMm, nameGapModelMm: ctx.nameGapModelMm,
     });
   }
@@ -251,10 +260,6 @@ export function buildRoomBandWithVoidAbove(room, graph, voidRoom, upperGraph, ct
     if (!used.has(v)) faces.push(withVoidRanges({ ...v }, v, [v], graph, upperGraph));
   }
 
-  // 面ごとの確定区間（floorSegments）。**天井断面線を実際に引いている値**をそのまま
-  // 断面エンジンの`cut.ceilProfile`へ渡すため保持する（「断面の中は描画しない」の単一情報源。
-  // layoutBandFacesは面ごとにfaceOverrideを1回呼ぶので、下のcut生成時には必ず埋まっている）。
-  const segsByFace = new Map();
   const faceOverride = (face, i, defaults) => {
     const plan = face.voidAbove;
     if (!plan) return null;
@@ -268,49 +273,22 @@ export function buildRoomBandWithVoidAbove(room, graph, voidRoom, upperGraph, ct
         out.push({ ...seg, loX: part.loX, hiX: part.hiX, hiCLId: null, chMm: floorHeightMm + voidCH - delta });
       }
     }
-    segsByFace.set(face, out);
     return { floorSegments: out };
   };
-
-  // 区間 → 天井断面の絶対高さ（elevationFigure.jsの規約 ceilAbs = floorDeltaMm + chMm）。
-  const ceilProfileOf = face => (segsByFace.get(face) ?? [])
-    .filter(s => Number.isFinite(s.chMm))
-    .map(s => ({ loX: s.loX, hiX: s.hiX, ceilZ: (s.floorDeltaMm ?? 0) + s.chMm }));
 
   const layout = layoutBandFaces(room, graph, faces, { ...ctx, faceOverride });
   const primitives = [...layout.primitives];
 
-  // 壁断面・見えがかりは**階段展開とまったく同じ共通経路**（section/sectionContent.jsの
-  // buildCutContent）へ任せる（ユーザー明示指示2026-08「処理共有のこと」）——探査延長・端の
-  // 凹み側面線の抑制・アキのバツまで階段帯と同じ処理を通る。旧実装はemitColumnsだけを直接
+  // 壁の輪郭は**全4種の帯で共通の唯一の経路**（elevationBand.jsのappendBandCutContent→
+  // section/sectionContent.jsのbuildCutContent）へ任せる——探査延長・端の凹み側面線の抑制・
+  // アキのバツまで通常の部屋帯・階段帯と同じ処理を通る。旧実装はemitColumnsだけを直接
   // 呼んでおり、この3つが丸ごと欠けていた（ユーザー指摘「「6」は正しく「5」は誤った出力」）。
-  // 床線・天井線・端の縦線・幅木・建具はbuildFaceFigure側の責務のまま（役割分担は階段帯と同じ）。
-  const hiZ = floorHeightMm + voidCH;
-  const layers = [
+  // 床線・天井線・端の縦線・幅木・建具はbuildFaceFigure側の責務のまま。
+  appendBandCutContent(primitives, room, graph, layout, [
     { graph, floorZMm: 0, role: 'self' },
     { graph: upperGraph, floorZMm: floorHeightMm, role: 'above' },
-  ];
-  const probeCtx = makeProbeContext(layers);
-  const bandRoomBounds = roomBounds(room.cells, graph);
-  const endExtendMm = ctx.wallLessEndExtendModelMm ?? DEFAULT_WALL_LESS_END_EXTEND_MM;
-  // 柱型は全層ぶんを一度だけ求めて全面で使い回す（仮想断面位置の決定に使う。層ごとに引き直すと
-  // 面の数×層の数だけ全柱を走査することになる）。
-  const columnSolids = structuralColumnContribution(layers);
-  layout.faceRuns.forEach(({ xCursor }, i) => {
-    const face = faces[i];
-    if (!face?.voidAbove) return; // 吹抜けの無い面は従来どおり（断面エンジンを通さない）
-    const cut = {
-      seqNo: String(i), dirSign: face.dirSign, face,
-      viewSign: faceViewSign(face),
-      // 仮想断面線は面の壁芯ではなく**室内側へ下がった位置**（section/sectionCutPlane.js）。
-      // 壁芯ちょうどに置くと切断面が壁の中を通り、見えがかり候補も所有Roomも取れない。
-      line: faceCutLine(face, cutPlaneOffsetMm(face, layers, { columnSolids })),
-      layers, zRange: { loZ: 0, hiZ }, baseFloorZ: 0,
-      // 断面の中（天井の向こう）は描かない。区間ごとの天井断面高さで打ち切る（sectionEngine.js）。
-      ceilProfile: ceilProfileOf(face),
-    };
-    const { content } = buildCutContent(cut, probeCtx, { endExtendMm, bandRoomBounds });
-    for (const p of content) primitives.push(translatePrimitive(p, xCursor, 0));
+  ], {
+    endExtendMm: ctx.wallLessEndExtendModelMm,
   });
 
   return finalizeBand(room, graph, primitives, {

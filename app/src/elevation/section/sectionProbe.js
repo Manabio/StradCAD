@@ -94,7 +94,14 @@ function clamp(z, lo, hi) { return Math.max(lo, Math.min(hi, z)); }
 function isCutWall(wall, line) {
   if (wall.isVertical === line.isVertical) return false;
   const av = wall.axisCL.effectiveValue;
-  if (!(av >= line.lo - GAP_EPS && av <= line.hi + GAP_EPS)) return false;
+  // 走り方向の範囲は**探査延長を含めた範囲**で見る（cutProbeRange）。line.lo/hiだけで見ると、
+  // 壁のない端部のすぐ外に立つ直交壁（＝その面を分割した袖壁そのもの）が丸ごと落ちる——袖壁で
+  // 2断片に分かれた面では、袖壁の軸CLは一方の断片のlo/hiの内側だが**他方の断片では範囲の外**に
+  // なるため、同じ1枚の袖壁の断面が片方の断片にだけ出て他方には出ない（実測）。
+  // collectCutBreaksが同じ延長込みの範囲で列を切っている以上、候補判定も同じ範囲でなければ
+  // 「列はあるのに中身が無い」帯になる。
+  const { lo, hi } = cutProbeRange(line);
+  if (!(av >= lo - GAP_EPS && av <= hi + GAP_EPS)) return false;
   const c1 = Math.min(wall.coord1, wall.coord2), c2 = Math.max(wall.coord1, wall.coord2);
   // buttToleranceMm: 切断線が「面自身の壁の中」を通る用法（部屋の展開）向けの許容差。
   // 直交壁は面の壁に**突き当たって**その室内側の面で終わるため、CL上に立てた切断線までは
@@ -103,6 +110,20 @@ function isCutWall(wall, line) {
   // 階段帯は未指定＝0のため従来と完全同値（ユーザー明示指示2026-08「処理共有のこと」）。
   const tol = (line.buttToleranceMm ?? 0) + GAP_EPS;
   return line.axisValue >= c1 - tol && line.axisValue <= c2 + tol;
+}
+
+/**
+ * 切断線の走り方向の探査範囲（`line.lo..hi` ＋ 壁のない端部の探査延長 `probeExtendLo/HiMm`）。
+ * `collectCutBreaks`（列の切り方）と `isCutWall`（候補の拾い方）が**同じ範囲**を見るための
+ * 単一実装——片方だけ延長を見ると「列はあるのに中身が無い」帯ができる。
+ * @param {import('./sectionTypes.js').CutLine} line
+ * @returns {{lo:number, hi:number}}
+ */
+function cutProbeRange(line) {
+  return {
+    lo: line.lo - (line.probeExtendLoMm ?? 0),
+    hi: line.hi + (line.probeExtendHiMm ?? 0),
+  };
 }
 
 /**
@@ -202,26 +223,39 @@ function withinViewRoom(cut, worldMid, info, probeCtx, wall) {
 }
 
 /**
- * 腰壁・垂れ壁指定を反映したwallのz存在範囲（§5.2 step2）。
- * 指定なし=[floorZ,ceilZ]（全高）。腰壁指定時=[floorZ,floorZ+topHeight]、垂れ壁指定時=
- * [ceilZ-bottomHeight,ceilZ]（設計書§5.2の記述どおり、両方同時指定は腰壁を優先するif/elseで
- * 読む——両方同時のケースはこのエンジンの対象外・既知の単純化として報告する）。
+ * 腰壁・垂れ壁指定を反映したwallのz存在**範囲の並び**（§5.2 step2）。
+ * 指定なし=[[floorZ,ceilZ]]（全高）。腰壁指定=[[floorZ,floorZ+topHeight]]、垂れ壁指定=
+ * [[ceilZ-bottomHeight,ceilZ]]。
+ *
+ * **両方同時指定（＝アキ）は2つの範囲を返す**（腰壁の帯と垂れ壁の帯）。旧実装は「腰壁優先の
+ * if/else」で垂れ壁側を捨てており、その結果アキの上を塞ぐ垂れ壁が実体として存在しないことに
+ * なって、`open`帯が腰壁の天端から**天井まで**伸びていた（アキ＝四角い穴にならない）。
+ * アキの表現をエンジンへ一本化するにはここが実体を正しく持っていなければならない。
+ * 退化（腰壁と垂れ壁が接する／重なる）した指定は1本へ潰す——穴が無いなら壁は連続した1枚。
  * @param {object} graph
  * @param {import('@core').Wall} wall
  * @param {number} pointCoord - kneeDropRecordsOnAxisへの点クエリ位置（wall自身の長さ方向座標）
  * @param {number} floorZ
  * @param {number} ceilZ
- * @returns {{z0:number, z1:number}}
+ * @returns {Array<{z0:number, z1:number}>} 1件 or 2件（z0昇順）
  */
-function kneeDropZRangeAt(graph, wall, pointCoord, floorZ, ceilZ) {
+function kneeDropZRangesAt(graph, wall, pointCoord, floorZ, ceilZ) {
   const records = kneeDropRecordsOnAxis(
     graph, wall.axisCL, pointCoord - POINT_QUERY_EPS_MM, pointCoord + POINT_QUERY_EPS_MM,
   );
   for (const { rec } of records) {
-    if (rec.knee) return { z0: floorZ, z1: floorZ + rec.knee.topHeight };
-    if (rec.drop) return { z0: ceilZ - rec.drop.bottomHeight, z1: ceilZ };
+    if (!rec.knee && !rec.drop) continue;
+    const kneeTop  = rec.knee ? floorZ + rec.knee.topHeight : null;
+    const dropBase = rec.drop ? ceilZ - rec.drop.bottomHeight : null;
+    if (kneeTop != null && dropBase != null) {
+      // アキ（四角い穴）: 腰壁 [floorZ, kneeTop] と垂れ壁 [dropBase, ceilZ]。
+      if (dropBase <= kneeTop + GAP_EPS) return [{ z0: floorZ, z1: ceilZ }]; // 穴が潰れる指定
+      return [{ z0: floorZ, z1: kneeTop }, { z0: dropBase, z1: ceilZ }];
+    }
+    if (kneeTop != null) return [{ z0: floorZ, z1: kneeTop }];
+    return [{ z0: dropBase, z1: ceilZ }];
   }
-  return { z0: floorZ, z1: ceilZ };
+  return [{ z0: floorZ, z1: ceilZ }];
 }
 
 /**
@@ -400,8 +434,7 @@ export function collectCutBreaks(cut, probeCtx) {
   // 「そこで終わる」のではなく面の外へ続いており、その取り合い（腰壁の外側面・隣室の1F天井・
   // 2FL床）を作図するには、外側にも実データの列が要るため。x=0の起点（cutOriginWorld）は
   // line.lo/hiのままで動かさないので、既存のローカルx座標は一切ずれない。
-  const probeLo = line.lo - (line.probeExtendLoMm ?? 0);
-  const probeHi = line.hi + (line.probeExtendHiMm ?? 0);
+  const { lo: probeLo, hi: probeHi } = cutProbeRange(line);
   const values = new Set([probeLo, probeHi]);
   const addIfInside = v => { if (v > probeLo + GAP_EPS && v < probeHi - GAP_EPS) values.add(v); };
   // 面の端そのものは常に列境界にする（延長した場合、面の内と外を1列に融合させない）。
@@ -494,18 +527,21 @@ export function probeColumn(cut, worldMid, probeCtx) {
       if (isCutWall(w, line)) {
         const mr = w.materialRange;
         if (worldMid < mr.lo - GAP_EPS || worldMid > mr.hi + GAP_EPS) continue;
-        const { z0, z1 } = kneeDropZRangeAt(layer.graph, w, line.axisValue, info.floorZ, info.ceilZ);
-        candidates.push({ kind: 'cut', wall: w, layer, distMm: 0, z0, z1,
-          isKneeDrop: isKneeDropRange(z0, z1, info) });
+        // アキ（腰壁＋垂れ壁）は2つの帯になる（kneeDropZRangesAt）ため、候補も範囲ごとに積む。
+        for (const { z0, z1 } of kneeDropZRangesAt(layer.graph, w, line.axisValue, info.floorZ, info.ceilZ)) {
+          candidates.push({ kind: 'cut', wall: w, layer, distMm: 0, z0, z1,
+            isKneeDrop: isKneeDropRange(z0, z1, info) });
+        }
       } else if (isCutAlongWall(w, line)) {
         // cutAlong（縦断された壁。§6.1「切断線がその中を通る→全幅の断面」）: x範囲=壁スパン
         // [coord1,coord2]∩切断線範囲、z範囲=kneeDropRecordsOnAxisによる実存在範囲
         // （pointCoord=worldMid。壁自身の長さ方向＝cutのrun方向と一致するためwallと同じ規約）。
         const c1 = Math.min(w.coord1, w.coord2), c2 = Math.max(w.coord1, w.coord2);
         if (worldMid < c1 - GAP_EPS || worldMid > c2 + GAP_EPS) continue;
-        const { z0, z1 } = kneeDropZRangeAt(layer.graph, w, worldMid, info.floorZ, info.ceilZ);
-        candidates.push({ kind: 'cutAlong', wall: w, layer, distMm: 0, z0, z1,
-          isKneeDrop: isKneeDropRange(z0, z1, info) });
+        for (const { z0, z1 } of kneeDropZRangesAt(layer.graph, w, worldMid, info.floorZ, info.ceilZ)) {
+          candidates.push({ kind: 'cutAlong', wall: w, layer, distMm: 0, z0, z1,
+            isKneeDrop: isKneeDropRange(z0, z1, info) });
+        }
       } else if (isSightlineShape(w, line, cut.viewSign)) {
         const c1 = Math.min(w.coord1, w.coord2), c2 = Math.max(w.coord1, w.coord2);
         if (worldMid < c1 - GAP_EPS || worldMid > c2 + GAP_EPS) continue;
@@ -517,15 +553,16 @@ export function probeColumn(cut, worldMid, probeCtx) {
         const capZ = resolveSightlineTopZ(
           layerStack, info, roomAtWallPosition(w, worldMid, cut.viewSign, probeCtx), zHi,
         );
-        const { z0, z1 } = kneeDropZRangeAt(layer.graph, w, worldMid, info.floorZ, capZ);
-        // 腰壁・垂れ壁指定で高さが制限された壁か（アキのバツのクリップ対象。sectionEmit.jsの
-        // obstructionRects。ユーザー実機指摘2026-08「6」C「バツが腰壁と交差する場合はクリップ」）。
-        const isKneeDrop = isKneeDropRange(z0, z1, { floorZ: info.floorZ, ceilZ: capZ });
-        // WP-E7 D1: この壁（見えがかり壁面）に重なる開口のz範囲を候補へ添える
-        // （openingPassThroughRangesForはz0/z1へクランプ済み）。band選択後、選ばれたz区間が
-        // そのいずれかに含まれれば ZBand.openingPassThrough:true を付与する（下記参照）。
-        const openRanges = openingPassThroughRangesFor(w, layer.graph, worldMid, info.floorZ, z0, z1);
-        candidates.push({ kind: 'wall', wall: w, layer, distMm, z0, z1, openRanges, isKneeDrop });
+        for (const { z0, z1 } of kneeDropZRangesAt(layer.graph, w, worldMid, info.floorZ, capZ)) {
+          // 腰壁・垂れ壁指定で高さが制限された壁か（アキのバツのクリップ対象。sectionEmit.jsの
+          // obstructionRects。ユーザー実機指摘2026-08「6」C「バツが腰壁と交差する場合はクリップ」）。
+          const isKneeDrop = isKneeDropRange(z0, z1, { floorZ: info.floorZ, ceilZ: capZ });
+          // WP-E7 D1: この壁（見えがかり壁面）に重なる開口のz範囲を候補へ添える
+          // （openingPassThroughRangesForはz0/z1へクランプ済み）。band選択後、選ばれたz区間が
+          // そのいずれかに含まれれば ZBand.openingPassThrough:true を付与する（下記参照）。
+          const openRanges = openingPassThroughRangesFor(w, layer.graph, worldMid, info.floorZ, z0, z1);
+          candidates.push({ kind: 'wall', wall: w, layer, distMm, z0, z1, openRanges, isKneeDrop });
+        }
       }
     }
   }

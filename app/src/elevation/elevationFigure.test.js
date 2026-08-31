@@ -6,11 +6,10 @@ import assert from 'node:assert/strict';
 import { edgeKey, OpeningCategory, CenterLineType, Plane, PlanGraph, Discipline } from '@core';
 import { generateRoomWallsFromOutline } from '../finish/wallGeneration.js';
 import {
-  buildFaceFigure, kneeDropGapsOnFace, kneeCapMarksOnFace, parseBaseboardHeightMm, avoidGridCollisionX,
+  buildFaceFigure, kneeDropGapsOnFace, parseBaseboardHeightMm, avoidGridCollisionX,
   openingsReachingCorner, formatMaterialLabel, avoidObstacleRangesX, estimateWallLabelWidthPx,
   segEndProfile,
 } from './elevationFigure.js';
-import { KNEE_CAP_FACE_MM } from './elevationStyle.js';
 import { buildRoomFaces as realBuildRoomFaces } from './elevationFaces.js';
 import { wallAdjacentFloorSegments } from './elevationFloorProfile.js';
 import {
@@ -812,19 +811,6 @@ test('buildFaceFigure: 天井段差のある複数runでは、beyondCeilingsの�
   assert.equal(dashedAt2400[0].x2, 2000, '破線は論理境界(2000)まで＝右runのCUT天井(-2400)と重ならないはず');
 });
 
-// ---- 問題修正2026-08(QA F2): 袖壁断面（topHeightMm省略=天井まで）は端の区間の実際の天井まで届く ----
-test('【失敗系・問題修正2026-08】buildFaceFigure: partitionCutAtLocal0のtopHeightMm省略時は端の区間の実際の天井(chMm)まで届く', () => {
-  const CH = 2400;
-  const floorSegments = [{ loX: 0, hiX: 4000, floorDeltaMm: 0, chMm: 2600 }];
-  const face = makeFace({ hasWallAtLocal0: false, partitionCutAtLocal0: { thicknessMm: 120, topHeightMm: null } });
-  const prims = buildFaceFigure(face, baseCtx({ ceilingHeight: CH, floorSegments }));
-
-  const rect = prims.find(p => p.type === 'rect' && p.x === 0 && p.w === 120);
-  assert.ok(rect, '袖壁断面のCUT枠が見つかるはず');
-  assert.equal(rect.y, -2600, '帯CH(-2400)ではなく端の区間の実際の天井(-2600)まで届くはず');
-  assert.equal(rect.h, 2600);
-});
-
 // ---- 失敗系: 自CH指定なしの部分指定（roomCeilingHeightの調整でchMm=親CH−FL差）は天井が水平1本のまま ----
 test('【失敗系・問題修正2026-08】buildFaceFigure: 天井絶対高さが揃う2区間（chMm=親CH−FL差）は天井線1本のままで天井段差は出ない', () => {
   const CH = 2400;
@@ -1376,21 +1362,11 @@ test('kneeDropGapsOnFace: アキの矩形高さはCH-drop.bottomHeight-knee.topH
   assert.equal(gaps[0].w, 2000);
 });
 
-test('buildFaceFigure: アキは矩形＋対角2本(一点鎖線)＋「ア キ」テキストを出す', () => {
-  const shapes = new Map([['s', { value: 1000 }], ['e', { value: 3000 }]]);
-  const key = edgeKey('axisY0', 's', 'e');
-  const kneeDropWalls = new Map([[key, { knee: { topHeight: 600 }, drop: { bottomHeight: 400 } }]]);
-  const face = makeFace();
-  const ctx = baseCtx({ graph: makeGraph({ kneeDropWalls, shapes }) });
-  const prims = buildFaceFigure(face, ctx);
-
-  assert.equal(prims.filter(p => p.type === 'rect').length, 1);
-  // アキの対角線は斜め(x1!==x2)。項目2で追加した壁中心線の落し線(縦線・x1===x2)と区別する。
-  const diagonalCenterLines = prims.filter(p =>
-    p.type === 'line' && p.dash === 'center' && p.weight === 'thin' && p.x1 !== p.x2);
-  assert.equal(diagonalCenterLines.length, 2);
-  assert.ok(prims.some(p => p.type === 'text' && p.text === 'ア キ'));
-});
+// アキの標記（矩形＋バツ＋「ア キ」）を実際に描くのは断面エンジン（emitOpenGapMarks）へ移した
+// ため、そのテストは section/sectionEmit.test.js へ移設した（移行の項目3）。
+// kneeDropGapsOnFace 自体は残る——段差見付け面（kind==='step'。断面エンジンに対応概念が無い）の
+// 専用描画と、壁2段書きラベルの回避範囲（描画ではなく配置の都合。エンジンの出力は
+// buildFaceFigure の後に積まれるためここからは見えない）が読むため。
 
 // ---- 失敗系: knee/dropのどちらか片方だけの指定はアキにならない ----
 test('【失敗系】kneeDropGapsOnFace: 腰壁のみ・垂れ壁のみの片側指定はアキを作らない', () => {
@@ -1808,34 +1784,10 @@ test('buildFaceFigure: kind===\'step\'の面でも面ラベル(face.label)は描
   assert.ok(prims.some(p => p.type === 'text' && p.text === 'C1'), '面ラベル"C1"が描かれるはず');
 });
 
-// ---- 新仕様「袖壁・腰壁の面分割」: partitionCutAtLocal0/Runの断面枠描画 ----
-test('buildFaceFigure: partitionCutAtLocal0/Runがあれば分割端にthicknessMm幅・0..-(topHeightMm??CH)のCUT枠rectを描く', () => {
-  const face = makeFace({
-    hasWallAtLocal0: false, hasWallAtLocalRun: true,
-    partitionCutAtLocal0: { thicknessMm: 90, topHeightMm: 900 }, // 腰壁=900までの低いCUT枠
-    partitionCutAtLocalRun: null,
-  });
-  const prims = buildFaceFigure(face, baseCtx());
-  const rect = prims.find(p => p.type === 'rect' && p.weight === 'thick' && p.x === 0 && p.w === 90);
-  assert.ok(rect, 'partitionCutAtLocal0のCUT枠rectが見つかるはず');
-  assert.equal(rect.y, -900, '腰壁の高さぶん上端はy=-900のはず');
-  assert.equal(rect.h, 900, '高さはtopHeightMm(900)そのもの（0..-900）のはず');
-});
-
-// ---- 失敗系: topHeightMm省略（null）は天井高(CH)までのCUT枠になる ----
-test('【失敗系】buildFaceFigure: partitionCutAtLocalRunのtopHeightMmがnullなら天井高(CH)までのCUT枠になる', () => {
-  const CH = 2400;
-  const face = makeFace({
-    hasWallAtLocal0: true, hasWallAtLocalRun: false,
-    partitionCutAtLocal0: null,
-    partitionCutAtLocalRun: { thicknessMm: 90, topHeightMm: null },
-  });
-  const prims = buildFaceFigure(face, baseCtx({ ceilingHeight: CH }));
-  const rect = prims.find(p => p.type === 'rect' && p.weight === 'thick' && p.x === face.run - 90 && p.w === 90);
-  assert.ok(rect, 'partitionCutAtLocalRunのCUT枠rectが見つかるはず');
-  assert.equal(rect.y, -CH, 'topHeightMm省略時は天井高(-CH)まで届くはず');
-  assert.equal(rect.h, CH);
-});
+// 「袖壁・腰壁の面分割」の断面枠（旧 partitionCutAtLocal0/Run → appendPartitionCut）の
+// テストは、規則ごと断面エンジンへ移したため section/sectionEmit.test.js へ移設した
+// （移行の項目1）。面図側は袖壁の実体（位置・厚み・高さ）を知らず「面の端に枠を起こす」近似
+// しか書けない——袖壁で2断片に分かれた面では、同じ1枚の袖壁を両断片が別々の近似で描いていた。
 
 // ==== WP-2: ctx.ceilingProfile（区分線形の天井） ====
 
@@ -1951,90 +1903,8 @@ test('【失敗系・WP-2】buildFaceFigure: skipBaseboard/skipWallLabel省略�
   assert.deepEqual(withFalseOpts, withoutOpts);
 });
 
-// ================================================================
-// 新仕様2026-08「腰壁の天端・端部」（kneeCapMarksOnFace）
-// 天端＝壁の上端から下への帯（実厚CAP_THICKNESS）。展開図では見付をKNEE_CAP_FACE_MM（作図値）
-// として上端を中線・下端を細線で描く。天端の出は厚み方向だけなので端部は壁端に立つ。
-// ================================================================
+// 新仕様2026-08「腰壁の天端・端部」（旧 kneeCapMarksOnFace）のテストは、規則ごと断面エンジンへ
+// 移したため section/sectionEmit.test.js へ移設した（「壁の輪郭を断面エンジンへ一本化」移行の項目2）。
+// 面図側は腰壁の実体を知らない（ctx.graph の kneeDropWalls を読み直すしかない）——実体に属する
+// 表現はエンジンが1箇所で持つ。
 
-// 腰壁だけを指定した最小graph（区間 1000..3000 の腰壁 topHeight=900）。
-function makeKneeGraph({ topHeight = 900, lo = 1000, hi = 3000, walls = [] } = {}) {
-  const shapes = new Map([['s', { value: lo }], ['e', { value: hi }]]);
-  const kneeDropWalls = new Map([[edgeKey('axisY0', 's', 'e'), { knee: { topHeight } }]]);
-  return { ...makeGraph({ kneeDropWalls, shapes }), walls };
-}
-
-test('kneeCapMarksOnFace: 天端は上端が中線・KNEE_CAP_FACE_MM下が細線の水平2本になる', () => {
-  const prims = kneeCapMarksOnFace(makeFace(), makeKneeGraph(), 'medium', 'thin');
-  const top = prims.find(p => p.weight === 'medium' && p.y1 === p.y2);
-  const cap = prims.find(p => p.weight === 'thin'   && p.y1 === p.y2);
-  assert.ok(top, '天端の中線が見つかるはず');
-  assert.equal(top.y1, -900, '天端はtopHeightの高さ');
-  assert.ok(cap, '天端下端の細線が見つかるはず');
-  assert.equal(cap.y1, -(900 - KNEE_CAP_FACE_MM), `天端の下端はtopHeight-${KNEE_CAP_FACE_MM}`);
-  assert.deepEqual([top.x1, top.x2], [1000, 3000], '区間の範囲に引かれるはず');
-});
-
-test('kneeCapMarksOnFace: 面内で終わり先に壁が無い端には端部抑え（縦の中線＋内側KNEE_CAP_FACE_MMの細線）を描く', () => {
-  const prims = kneeCapMarksOnFace(makeFace(), makeKneeGraph(), 'medium', 'thin');
-  const verticals = prims.filter(p => p.x1 === p.x2);
-  // 両端（x=1000, x=3000）に中線＋細線の2本ずつ＝計4本
-  assert.equal(verticals.length, 4, '両端ぶんの縦線4本が出るはず');
-  const xs = verticals.map(p => p.x1).sort((a, b) => a - b);
-  assert.deepEqual(xs, [1000, 1000 + KNEE_CAP_FACE_MM, 3000 - KNEE_CAP_FACE_MM, 3000], '細線は端から内側へKNEE_CAP_FACE_MM');
-  assert.ok(verticals.every(p => p.y1 === -900 && p.y2 === 0), '端部抑えは天端から床まで');
-});
-
-test('【失敗系】kneeCapMarksOnFace: 端の先に同じ面の壁が続く（連続する壁）なら端部の縦線は描かない', () => {
-  // 区間の先（x=3000〜4000）に同軸の壁が続く＝同面で連続するため縦線を描かない
-  const cont = { axisCL: { id: 'axisY0' }, isVertical: false, coord1: 3000, coord2: 4000 };
-  const prims = kneeCapMarksOnFace(makeFace(), makeKneeGraph({ walls: [cont] }), 'medium', 'thin');
-  const verticals = prims.filter(p => p.x1 === p.x2);
-  assert.deepEqual(verticals.map(p => p.x1).sort((a, b) => a - b), [1000, 1000 + KNEE_CAP_FACE_MM],
-    '連続する側(x=3000)には縦線が出ず、自由端(x=1000)だけに出るはず');
-});
-
-test('【失敗系】kneeCapMarksOnFace: 面の端まで届く区間（直交壁との取り合い）には端部を描かない', () => {
-  // 区間が face.lo(0)〜face.hi(4000) いっぱい＝両端とも隅の取り合い
-  const prims = kneeCapMarksOnFace(makeFace(), makeKneeGraph({ lo: 0, hi: 4000 }), 'medium', 'thin');
-  assert.equal(prims.filter(p => p.x1 === p.x2).length, 0, '面端では端部抑えを描かないはず');
-  assert.equal(prims.length, 2, '天端の水平2本だけになるはず');
-});
-
-test('【失敗系】kneeCapMarksOnFace: 天端の見付に満たない低い腰壁には帯を描かない（床線の下へ出さない）', () => {
-  // 退化指定（topHeight < 見付）。帯の下端が床より下へ回るため、帯自体を描かない
-  // ——判定は kneeCapBottomMm（elevationStyle.js）に集約し、断面エンジン側と同じ規則にしている。
-  const prims = kneeCapMarksOnFace(makeFace(), makeKneeGraph({ topHeight: KNEE_CAP_FACE_MM - 10 }), 'medium', 'thin');
-  assert.deepEqual(prims, []);
-});
-
-test('【失敗系】kneeCapMarksOnFace: 垂れ壁だけの区間には天端を描かない', () => {
-  const shapes = new Map([['s', { value: 1000 }], ['e', { value: 3000 }]]);
-  const kneeDropWalls = new Map([[edgeKey('axisY0', 's', 'e'), { drop: { bottomHeight: 400 } }]]);
-  const graph = { ...makeGraph({ kneeDropWalls, shapes }), walls: [] };
-  assert.deepEqual(kneeCapMarksOnFace(makeFace(), graph, 'medium', 'thin'), []);
-});
-
-test('buildFaceFigure: 腰壁指定のある断面枠（partitionCut）は枠内に天端下端の細線を持つ', () => {
-  const face = makeFace({
-    hasWallAtLocal0: false, hasWallAtLocalRun: true,
-    partitionCutAtLocal0: { thicknessMm: 90, topHeightMm: 900 },
-    partitionCutAtLocalRun: null,
-  });
-  const prims = buildFaceFigure(face, baseCtx());
-  const cap = prims.find(p => p.type === 'line' && p.weight === 'thin'
-    && p.y1 === -(900 - KNEE_CAP_FACE_MM) && p.y1 === p.y2 && p.x1 === 0 && p.x2 === 90);
-  assert.ok(cap, '断面枠の幅ぶんに天端下端の細線が引かれるはず');
-});
-
-test('【失敗系】buildFaceFigure: 天井までの袖壁（topHeightMm=null）の断面枠には天端の細線を描かない', () => {
-  const face = makeFace({
-    hasWallAtLocal0: false, hasWallAtLocalRun: true,
-    partitionCutAtLocal0: { thicknessMm: 90, topHeightMm: null },
-    partitionCutAtLocalRun: null,
-  });
-  const prims = buildFaceFigure(face, baseCtx());
-  const cap = prims.find(p => p.type === 'line' && p.weight === 'thin'
-    && p.y1 === p.y2 && p.x1 === 0 && p.x2 === 90 && p.y1 < 0);
-  assert.equal(cap, undefined, '天端が無い袖壁には細線を足さないはず');
-});
