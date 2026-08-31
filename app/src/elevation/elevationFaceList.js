@@ -24,7 +24,7 @@ import { kneeDropRecordForWallSpan } from '../finish/kneeDropWall.js';
  */
 export function kneeDropRecordFor(wall, graph) {
   const wLo = Math.min(wall.coord1, wall.coord2), wHi = Math.max(wall.coord1, wall.coord2);
-  const found = kneeDropRecordForWallSpan(graph, wall.axisCL.id, wLo, wHi);
+  const found = kneeDropRecordForWallSpan(graph, wall.axisCL, wLo, wHi);
   return found ? found.rec : null;
 }
 

@@ -24,15 +24,21 @@ import { DEFAULT_PX_PER_MM } from '../viewport.js';
 
 function makeFace(overrides = {}) {
   return {
-    axisCL: { id: 'axisY0' }, isVertical: false, inward: 1, faceValue: 0,
+    axisCL: AXIS_Y0, isVertical: false, inward: 1, faceValue: 0,
     lo: 0, hi: 4000, run: 4000, dirSign: 1, originWorld: 0,
     startCLId: 'x0', endCLId: 'x1',
     ...overrides,
   };
 }
 
+// 面の軸CL実体。腰壁レコードの軸照合は id ではなく「通り（向き＋座標）」で行う
+// （finish/kneeDropWall.js の sameAxisLine）ため、合成graphにも実体を置く必要がある。
+const AXIS_Y0 = { id: 'axisY0', centerLineType: CenterLineType.HORIZONTAL, effectiveValue: 0, value: 0 };
+
 function makeGraph({ openings = [], kneeDropWalls = new Map(), shapes = new Map() } = {}) {
-  return { openings, kneeDropWalls, shapeMap: shapes };
+  const shapeMap = new Map(shapes);
+  if (!shapeMap.has(AXIS_Y0.id)) shapeMap.set(AXIS_Y0.id, AXIS_Y0);
+  return { openings, kneeDropWalls, shapeMap };
 }
 
 function makeRoom(finishInfo = {}, finish = null) {
@@ -1746,7 +1752,7 @@ test('【失敗系】avoidGridCollisionX: gridPointsが空なら常に元のxを
 // ---- 新仕様「段差見付け面」: kind==='step'の描画分岐 ----
 function makeStepFace(overrides = {}) {
   return {
-    axisCL: { id: 'axisY0' }, isVertical: false, inward: 1, faceValue: 0,
+    axisCL: AXIS_Y0, isVertical: false, inward: 1, faceValue: 0,
     lo: 0, hi: 1200, run: 1200, dirSign: 1, originWorld: 0,
     startCLId: 'x0', endCLId: 'x1', label: 'C1',
     kind: 'step', baseFloorDeltaMm: 0, stepHeightMm: 100,
@@ -1993,6 +1999,13 @@ test('【失敗系】kneeCapMarksOnFace: 面の端まで届く区間（直交壁
   const prims = kneeCapMarksOnFace(makeFace(), makeKneeGraph({ lo: 0, hi: 4000 }), 'medium', 'thin');
   assert.equal(prims.filter(p => p.x1 === p.x2).length, 0, '面端では端部抑えを描かないはず');
   assert.equal(prims.length, 2, '天端の水平2本だけになるはず');
+});
+
+test('【失敗系】kneeCapMarksOnFace: 天端の見付に満たない低い腰壁には帯を描かない（床線の下へ出さない）', () => {
+  // 退化指定（topHeight < 見付）。帯の下端が床より下へ回るため、帯自体を描かない
+  // ——判定は kneeCapBottomMm（elevationStyle.js）に集約し、断面エンジン側と同じ規則にしている。
+  const prims = kneeCapMarksOnFace(makeFace(), makeKneeGraph({ topHeight: KNEE_CAP_FACE_MM - 10 }), 'medium', 'thin');
+  assert.deepEqual(prims, []);
 });
 
 test('【失敗系】kneeCapMarksOnFace: 垂れ壁だけの区間には天端を描かない', () => {

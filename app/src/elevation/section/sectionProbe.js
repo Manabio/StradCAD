@@ -215,7 +215,7 @@ function withinViewRoom(cut, worldMid, info, probeCtx, wall) {
  */
 function kneeDropZRangeAt(graph, wall, pointCoord, floorZ, ceilZ) {
   const records = kneeDropRecordsOnAxis(
-    graph, wall.axisCL.id, pointCoord - POINT_QUERY_EPS_MM, pointCoord + POINT_QUERY_EPS_MM,
+    graph, wall.axisCL, pointCoord - POINT_QUERY_EPS_MM, pointCoord + POINT_QUERY_EPS_MM,
   );
   for (const { rec } of records) {
     if (rec.knee) return { z0: floorZ, z1: floorZ + rec.knee.topHeight };

@@ -54,23 +54,40 @@ function getShape(graph, id) {
 }
 
 /**
- * axisCLId・区間[spanLo,spanHi]に重なる graph.kneeDropWalls のレコードを列挙する（QA修正L1）。
+ * 軸CLの一致判定: **id ではなく世界座標（向き＋位置）で見る**。
+ *
+ * 同じ通りに別々のCLが2本ある図面が実在する（実機「21」2階の`5d54f984@-3500`と
+ * `faaf4c30@-3500`。片方はY2からの相対、片方は絶対で作られたもの）。id一致で照合すると、
+ * 面や壁が持つCLと腰壁レコードが持つCLが食い違って**指定が無いことになる**——出隅処理で
+ * 同型の不具合を踏んでいる（`.claude/data-model.md`「出隅の取り合い」）。同じ向き・同じ位置の
+ * CLは空間的に同じ通りなので、座標で照合する方が厳密に頑健で、階をまたぐ参照にもそのまま効く
+ * （断面エンジンは他階のグラフを世界座標で読む）。
+ */
+const AXIS_MATCH_EPS = 0.5; // mm
+function sameAxisLine(a, b) {
+  return !!a && !!b && a.centerLineType === b.centerLineType
+    && Math.abs(a.effectiveValue - b.effectiveValue) <= AXIS_MATCH_EPS;
+}
+
+/**
+ * 軸CL（と同じ通り）・区間[spanLo,spanHi]に重なる graph.kneeDropWalls のレコードを列挙する。
  * key=edgeKey(axisCLId,startCLId,endCLId) の解読（key.split(':')→CL解決→lo/hi→スパン重なり判定）
  * はこの関数のみで行う——キー形式を所有するこのファイルへ集約し、elevation/elevationFigure.js
- * の kneeDropGapsOnFace・elevation/elevationFaceList.js の kneeDropRecordFor が消費者として使う
- * （旧実装はそれぞれ独自にkey.split(':')以下を再実装しており、3箇所に同じ解読ロジックが
- * 重複していた）。knee/drop指定の有無によるフィルタは呼び出し側の責務のまま（全レコードを返す）。
+ * の kneeDropGapsOnFace/kneeCapMarksOnFace・elevation/elevationFaceList.js の kneeDropRecordFor・
+ * elevation/section/sectionProbe.js の kneeDropZRangeAt が消費者として使う。
+ * knee/drop指定の有無によるフィルタは呼び出し側の責務のまま（全レコードを返す）。
  * @param {object} graph
- * @param {string} axisCLId
+ * @param {import('@core').CenterLine} axisCL 壁・面の軸CL（idではなく座標で照合する。sameAxisLine）
  * @param {number} spanLo
  * @param {number} spanHi
  * @returns {Array<{key:string, rec:object, lo:number, hi:number}>} スパンが重ならないものは含まない
  */
-export function kneeDropRecordsOnAxis(graph, axisCLId, spanLo, spanHi) {
+export function kneeDropRecordsOnAxis(graph, axisCL, spanLo, spanHi) {
   const out = [];
+  if (!axisCL) return out;
   for (const [key, rec] of graph.kneeDropWalls) {
     const [keyAxisCLId, startCLId, endCLId] = key.split(':');
-    if (keyAxisCLId !== axisCLId) continue;
+    if (!sameAxisLine(getShape(graph, keyAxisCLId), axisCL)) continue;
     const startCL = getShape(graph, startCLId);
     const endCL   = getShape(graph, endCLId);
     if (!startCL || !endCL) continue;
@@ -89,13 +106,13 @@ export function kneeDropRecordsOnAxis(graph, axisCLId, spanLo, spanHi) {
  * （kneeDropZRangeAt。幅1mm）が使うため kneeDropRecordsOnAxis 側は変えられない——
  * 「壁がその区間の構成壁か」を問う経路だけがこちらを通る（平面の kneeDropWallGeometry と同じ判定）。
  * @param {object} graph
- * @param {string} axisCLId
+ * @param {import('@core').CenterLine} axisCL 壁の軸CL
  * @param {number} wLo 壁スパンの下側
  * @param {number} wHi 壁スパンの上側
  * @returns {{key:string, rec:object, lo:number, hi:number}|null}
  */
-export function kneeDropRecordForWallSpan(graph, axisCLId, wLo, wHi) {
-  return kneeDropRecordsOnAxis(graph, axisCLId, wLo, wHi)
+export function kneeDropRecordForWallSpan(graph, axisCL, wLo, wHi) {
+  return kneeDropRecordsOnAxis(graph, axisCL, wLo, wHi)
     .find(r => Math.min(r.hi, wHi) - Math.max(r.lo, wLo) > SPAN_OVERLAP_EPS) ?? null;
 }
 
@@ -146,7 +163,9 @@ export function kneeDropWallGeometry(graph, key, cellToRoom) {
   let faceLo = Infinity, faceHi = -Infinity;
   const walls = [];
   for (const w of graph.walls) {
-    if (w.axisCL.id !== axisCL.id || w.isVertical !== isVertical) continue;
+    // 軸の一致は id ではなく通り（向き＋座標）で見る（sameAxisLine。同じ通りに別CLが2本ある
+    // 図面があり、id一致だと区間の構成壁を取りこぼす）。
+    if (!sameAxisLine(w.axisCL, axisCL) || w.isVertical !== isVertical) continue;
     const wLo = Math.min(w.coord1, w.coord2), wHi = Math.max(w.coord1, w.coord2);
     if (Math.min(wHi, hi) - Math.max(wLo, lo) <= SPAN_OVERLAP_EPS) continue;
     const mr = w.materialRange;

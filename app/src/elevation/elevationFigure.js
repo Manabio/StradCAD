@@ -30,7 +30,7 @@ import {
   FACE_LABEL_FONT_PX, GRID_LINE_ABOVE_CH_MM, CANVAS_BG_COLOR, DEFAULT_FACE_LABEL_AVOID_THRESHOLD_MM,
   DEFAULT_OPENING_TAG_ROW_MM, DEFAULT_DIM_ROW_GAP_MM, DEFAULT_GRID_ROW_GAP_MM,
   DEFAULT_WALL_LESS_END_EXTEND_MM, CH_DIM_OFFSET_MM, SPLIT_MERGE_EPS_MM, DEFAULT_DIM_FOOT_GAP_MM,
-  KNEE_CAP_FACE_MM,
+  KNEE_CAP_FACE_MM, kneeCapBottomMm,
 } from './elevationStyle.js';
 
 // 項目4: 壁2段書きの省略判定用テキスト幅概算。renderText（figurePrimitivesKonva.jsx）は
@@ -228,7 +228,7 @@ export function appendGapMark(prims, gap, silhouetteWeight, detailWeight) {
  */
 export function kneeDropGapsOnFace(face, graph, ceilingHeightMm) {
   const out = [];
-  for (const { rec, lo, hi } of kneeDropRecordsOnAxis(graph, face.axisCL.id, face.lo, face.hi)) {
+  for (const { rec, lo, hi } of kneeDropRecordsOnAxis(graph, face.axisCL, face.lo, face.hi)) {
     if (!rec.knee || !rec.drop) continue; // アキ＝腰壁・垂れ壁の同時指定のみ
     const clampedLo = Math.max(lo, face.lo);
     const clampedHi = Math.min(hi, face.hi);
@@ -282,11 +282,11 @@ export function kneeCapMarksOnFace(face, graph, silhouetteWeight, detailWeight) 
     w.axisCL.id === face.axisCL.id && w.isVertical === face.isVertical &&
     Math.min(w.coord1, w.coord2) <= world && Math.max(w.coord1, w.coord2) >= world);
 
-  for (const { rec, lo, hi } of kneeDropRecordsOnAxis(graph, face.axisCL.id, face.lo, face.hi)) {
+  for (const { rec, lo, hi } of kneeDropRecordsOnAxis(graph, face.axisCL, face.lo, face.hi)) {
     if (!rec.knee) continue;
-    const topY = -rec.knee.topHeight;
-    const capBottomY = -(rec.knee.topHeight - KNEE_CAP_FACE_MM);
-    if (capBottomY <= topY) continue; // 天端の見付に満たない腰壁（退化指定）は帯にならない
+    const capBottom = kneeCapBottomMm(rec.knee.topHeight);
+    if (capBottom == null) continue; // 天端の見付に満たない腰壁（退化指定）は帯にならない
+    const topY = -rec.knee.topHeight, capBottomY = -capBottom;
 
     const clampedLo = Math.max(lo, face.lo), clampedHi = Math.min(hi, face.hi);
     const a = localXOf(face, clampedLo), b = localXOf(face, clampedHi);

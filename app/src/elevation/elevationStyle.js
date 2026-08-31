@@ -91,6 +91,21 @@ export const DEFAULT_WALL_LESS_END_EXTEND_MM = 150; // 倍率決定用の1パス
 // 腰壁高さ）はCAP_THICKNESS側のまま変えない——ここは見えがかりの表現専用の値。
 export const KNEE_CAP_FACE_MM = 50;
 
+/**
+ * 腰壁の天端の帯の**下端**（床からの高さmm）。天端の上端は呼び出し側が既に描いている位置
+ * （面図なら topHeight、断面エンジンなら band.z1）なので、ここは下端だけを答える。
+ *
+ * 帯が壁の高さに収まらない（天端が見付以下）の退化指定では **null** を返す——このガードを
+ * 各所で書くと片方だけ抜けて床線の下へ線が出る。展開図側の唯一の情報源として集約する
+ * （消費者: elevationFigure.js の kneeCapMarksOnFace、section/sectionEmit.js の kneeCapUnderline）。
+ * @param {number} topMm 天端の高さ（その壁の足元からの相対値）
+ * @returns {number|null}
+ */
+export function kneeCapBottomMm(topMm) {
+  const bottom = topMm - KNEE_CAP_FACE_MM;
+  return bottom > GAP_EPS_MM ? bottom : null;
+}
+
 // ---- 注記帯の行位置（実画面mm。QA C1→D1/D2で全面改訂） ----
 // 建具記号丸(tag。半径16px)・通り芯丸(半径11px)・面ラベル(13px)は、どれもOPENING_TAG_RADIUS_PX/
 // GRID_TAG_RADIUS_PX等というスクリーン固定サイズを持つ。これらを載せる行の位置をモデルmm定数の

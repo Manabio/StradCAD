@@ -93,16 +93,16 @@ test('【失敗系】effectiveCeilingHeight: 片側が無名屋外（部屋な�
   assert.equal(effectiveCeilingHeight(graph, key, cellToRoom), 2600);
 });
 
-// ==== QA修正L1: kneeDropRecordsOnAxis（key解読の共通化） ====
+// ==== kneeDropRecordsOnAxis（key解読の共通化・軸は通りで照合） ====
 
-test('kneeDropRecordsOnAxis: axisCLIdが一致しスパンが重なるレコードを{key,rec,lo,hi}で返す', () => {
+test('kneeDropRecordsOnAxis: 同じ通り（向き＋座標）でスパンが重なるレコードを{key,rec,lo,hi}で返す', () => {
   const graph = makeGraph();
   const { key } = makeSharedEdgeRooms(graph);
   const rec = { knee: { topHeight: 900 } };
   graph.setKneeDropWall(key, rec);
 
-  const [axisCLId] = key.split(':');
-  const found = kneeDropRecordsOnAxis(graph, axisCLId, 0, 4000);
+  const axisCL = graph.shapeMap.get(key.split(':')[0]);
+  const found = kneeDropRecordsOnAxis(graph, axisCL, 0, 4000);
   assert.equal(found.length, 1);
   assert.equal(found[0].key, key);
   assert.deepEqual(found[0].rec, rec);
@@ -116,17 +116,38 @@ test('【失敗系】kneeDropRecordsOnAxis: スパンが重ならなければ含
   const { key } = makeSharedEdgeRooms(graph);
   graph.setKneeDropWall(key, { knee: { topHeight: 900 } });
 
-  const [axisCLId] = key.split(':');
+  const axisCL = graph.shapeMap.get(key.split(':')[0]);
   // レコードのスパンは[0,4000]。問い合わせスパン[5000,6000]は重ならない。
-  assert.equal(kneeDropRecordsOnAxis(graph, axisCLId, 5000, 6000).length, 0);
+  assert.equal(kneeDropRecordsOnAxis(graph, axisCL, 5000, 6000).length, 0);
 });
 
-// ---- 失敗系: axisCLIdが一致しなければ含めない ----
-test('【失敗系】kneeDropRecordsOnAxis: axisCLIdが一致しなければ含めない', () => {
+// ---- 失敗系: 別の通り（座標違い・向き違い）は含めない ----
+test('【失敗系】kneeDropRecordsOnAxis: 座標の違う通りのCLでは含めない', () => {
   const graph = makeGraph();
   const { key } = makeSharedEdgeRooms(graph);
   graph.setKneeDropWall(key, { knee: { topHeight: 900 } });
-  assert.equal(kneeDropRecordsOnAxis(graph, 'other-axis-cl-id', 0, 4000).length, 0);
+  const other = addCL(graph, CenterLineType.HORIZONTAL, 3000); // 記録は y=2000
+  assert.equal(kneeDropRecordsOnAxis(graph, other, 0, 4000).length, 0);
+});
+
+test('【失敗系】kneeDropRecordsOnAxis: 座標が同じでも向きが違うCLでは含めない', () => {
+  const graph = makeGraph();
+  const { key } = makeSharedEdgeRooms(graph);
+  graph.setKneeDropWall(key, { knee: { topHeight: 900 } });
+  const vertical = addCL(graph, CenterLineType.VERTICAL, 2000); // 記録は HORIZONTAL の y=2000
+  assert.equal(kneeDropRecordsOnAxis(graph, vertical, 0, 4000).length, 0);
+});
+
+// ---- 実機2026-08「21」: 同じ通りにCLが2本ある図面でも取りこぼさない ----
+test('【実機指摘】kneeDropRecordsOnAxis: 同じ通りの別CL（同座標・同向き）でも該当する', () => {
+  const graph = makeGraph();
+  const { key } = makeSharedEdgeRooms(graph);
+  graph.setKneeDropWall(key, { knee: { topHeight: 900 } });
+  // 記録は y=2000 のCL。面や壁が持つのが「同じ y=2000 の別CL」でも同じ通りなので該当する。
+  const twin = addCL(graph, CenterLineType.HORIZONTAL, 2000);
+  assert.notEqual(twin.id, key.split(':')[0], '別のCLであること（前提の確認）');
+  assert.equal(kneeDropRecordsOnAxis(graph, twin, 0, 4000).length, 1,
+    'id違いでも同じ通りなら該当するはず（id一致だと指定が無いことになる）');
 });
 
 // ==== 隅の取り合いぶんのはみ出しを「区間の壁」と誤認しない（実機2026-08「21」2階 X2×Y2+3500）====
@@ -162,11 +183,11 @@ test('【失敗系】kneeDropRecordForWallSpan: 隅の取り合いぶんの重�
   const { key } = makeSharedEdgeRooms(graph);
   graph.setKneeDropWall(key, { knee: { topHeight: 900 } });
 
-  const [axisCLId] = key.split(':');
+  const axisCL = graph.shapeMap.get(key.split(':')[0]);
   // レコードのスパンは[0,4000]。左隣の壁スパン[-4000,57.5]は 57.5mm しか重ならない。
-  assert.equal(kneeDropRecordForWallSpan(graph, axisCLId, -4000, 57.5), null);
+  assert.equal(kneeDropRecordForWallSpan(graph, axisCL, -4000, 57.5), null);
   // 区間を実際に走る壁スパン（[0,4000]）はこれまでどおり拾う。
-  assert.equal(kneeDropRecordForWallSpan(graph, axisCLId, 0, 4000)?.key, key);
+  assert.equal(kneeDropRecordForWallSpan(graph, axisCL, 0, 4000)?.key, key);
   // 素の重なり判定（点クエリ用。sectionProbe が使う）は従来どおり拾う——両者を混同しない。
-  assert.equal(kneeDropRecordsOnAxis(graph, axisCLId, 1999.5, 2000.5).length, 1);
+  assert.equal(kneeDropRecordsOnAxis(graph, axisCL, 1999.5, 2000.5).length, 1);
 });
