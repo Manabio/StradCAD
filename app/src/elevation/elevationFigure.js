@@ -203,16 +203,18 @@ export function avoidObstacleRangesX(defaultX, obstacles, boundary, labelWidthMm
 }
 
 /**
- * アキ（腰壁＋垂れ壁の同時指定でできる四角い穴）1件ぶんのプリミティブをprimsへ積む
- * （新仕様: 通常面の腰壁・垂れ壁アキと段差見付け面(kind==='step')上部のアキで共用するため抽出）。
- * 矩形(SILHOUETTE)＋対角線2本(一点鎖線・DETAIL)＋「ア キ」テキスト。
+ * アキ1件ぶんのプリミティブをprimsへ積む（段差見付け面(kind==='step')上部のアキと開放スパンの
+ * 上部あきで共用）。対角線2本(一点鎖線・DETAIL)＋「ア キ」テキスト。
+ *
+ * **輪郭の矩形は描かない**（ユーザー明示指示「矩形をやめて」）——アキの輪郭は定義上つねに周囲の
+ * 実体（壁の断面・床/天井の断面線・腰壁の天端・面端の縦線）と一致するため、矩形として独立に
+ * 描くと必ず二重になる。しかも矩形は中線なので、後から重なって**断面＝太線という線種の情報を
+ * 上書きしてしまう**。断面エンジン側のアキ標記（emitOpenGapMarks）と同じ規則。
  * @param {object[]} prims
  * @param {{x:number, y:number, w:number, h:number}} gap
- * @param {string} silhouetteWeight
- * @param {string} detailWeight
+ * @param {string} detailWeight - 対角線・一点鎖線の線種
  */
-export function appendGapMark(prims, gap, silhouetteWeight, detailWeight) {
-  prims.push({ type: 'rect', x: gap.x, y: gap.y, w: gap.w, h: gap.h, weight: silhouetteWeight });
+export function appendGapMark(prims, gap, detailWeight) {
   prims.push({ type: 'line', x1: gap.x,         y1: gap.y,         x2: gap.x + gap.w, y2: gap.y + gap.h, dash: 'center', weight: detailWeight });
   prims.push({ type: 'line', x1: gap.x + gap.w, y1: gap.y,         x2: gap.x,         y2: gap.y + gap.h, dash: 'center', weight: detailWeight });
   prims.push({ type: 'text', x: gap.x + gap.w / 2, y: gap.y + gap.h / 2, text: 'ア キ', anchor: 'middle', baseline: 'middle' });
@@ -487,9 +489,9 @@ export function buildFaceFigure(face, ctx) {
     // 垂れ壁の明示指定がある軸だけ）にしか頼っておらず、指定が無い通常の段差見付け面では
     // アキが一切描かれない欠落があった（コミット5f8ec62で段差見付け面を新設した時点から
     // 一貫してこの欠落があり、後続のどのラウンドの変更にも起因しない）。
-    appendGapMark(prims, { x: 0, y: stepCeilY, w: run, h: -stepCeilY + topY }, stepSilhouetteWeight, stepDetailWeight);
+    appendGapMark(prims, { x: 0, y: stepCeilY, w: run, h: -stepCeilY + topY }, stepDetailWeight);
     for (const gap of kneeDropGapsOnFace(face, graph, CH)) {
-      appendGapMark(prims, gap, stepSilhouetteWeight, stepDetailWeight);
+      appendGapMark(prims, gap, stepDetailWeight);
     }
     appendAnnotationRows(prims, face, graph, {
       boundary, floorSegments: undefined, gridCLs, dimRow1Y, gridCircleRowY, faceLabelRowY,
@@ -630,7 +632,7 @@ export function buildFaceFigure(face, ctx) {
     // 描かない（明示指示の範囲外——類似規則への拡張は明示指示がある場合のみ行う既存方針）。
     const beyondCeilings = ctx.beyondCeilings ?? [];
     const openRangesForCeil = (face.spans ?? []).filter(s => s.kind === 'open').sort((a, b) => a.loX - b.loX);
-    // QA H3: 差し引くのは「同じ高さのfar天井線（またはアキ矩形の上辺）が既に描かれる」開放
+    // QA H3: 差し引くのは「同じ高さのfar天井線が既に描かれる」開放
     // スパンだけ——開放先のさらに奥にある、より高いファミリー天井(bc)は開放スパン上にも描く
     // （壁区間との情報量の非対称を作らない）。farCeilAbsMm未指定（旧形式spans）はfar天井線
     // 自体が描かれないため差し引かない（二重描画の回避だけが差し引きの目的）。
@@ -722,7 +724,8 @@ export function buildFaceFigure(face, ctx) {
   //      床断面より下にある向こう側の断面）場合は細線の破線（ユーザー明示指示2026-08:
   //      「床断面より下、または天井断面より上にある展開面の向こう側の断面は、細線の破線」。
   //      見上げる方向・床〜天井の間に見える線は従来どおりSILHOUETTE実線）。
-  //   2. 上部あき: `appendGapMark`（腰壁＋垂れ壁のアキと共用）で天井から遠側床までの矩形を描く。
+  //   2. 上部あき: `appendGapMark`（段差見付け面のアキと共用）で天井から遠側床までの範囲へ
+  //      バツと「ア キ」を描く（輪郭の矩形は描かない。appendGapMarkのヘッダ参照）。
   //   3. 境界エッジ: open区間の両端のうち隣がwall側（区間 or 面端）ならSILHOUETTE縦線を引く
   //      （far側の方が低ければ破線。ユーザー明示指示）。床断面より下の部分（near床〜far床）は
   //      1と同じ細線の破線で継ぎ足す——端点をfar床線と厳密に一致させ、破線同士の角が必ず
@@ -754,9 +757,9 @@ export function buildFaceFigure(face, ctx) {
         weight: looksDown ? detailWeight : silhouetteWeight, ...dashOpt,
       });
     }
-    // アキ矩形は近側床（床断面）までにクランプする（QA指摘: far床まで伸ばすと矩形の実線の
-    // 外形線が、床断面下の細破線＝遠側床線・床下縦線と完全に同座標で重なり覆ってしまう。
-    // 建築的にも、あき＝壁面の抜けは立っている近側の床までで、その下は床の落差の見えがかり）。
+    // アキ標記の範囲は近側床（床断面）までにクランプする——建築的に、あき＝壁面の抜けは
+    // 立っている近側の床までで、その下は床の落差の見えがかりだから（far床まで伸ばすと、
+    // 床断面下の細破線＝遠側床線・床下縦線の領域までバツが入り込む）。
     // 見上げ方向は従来どおりfar床まで（far床の方が高い＝あきはそこで終わる）。
     // 問題修正2026-08: 上端は帯のCH固定ではなく、その区間の実際の天井（天井断面線と同じ基準）。
     // 問題修正2026-08その2: 開放先の天井(farCeilAbsMm)が近側の天井より低い場合、あき＝壁面の
@@ -772,9 +775,9 @@ export function buildFaceFigure(face, ctx) {
     // ユーザー実機指摘2026-08（「5」C2: X2上のエッジ線・アキ・バツが不要／床天井の延長はこのままで
     // 良い）: **開放スパンが「壁のない端部」に接している場合はアキ標記を描かない**。
     // その端は既に床線・天井線の延長で「続きがある」ことを表しており、同じ場所へアキを重ねると
-    // 二重表現になる。加えて`appendGapMark`は矩形（中線の輪郭）も積むため、その矩形の辺が
-    // 面端ちょうどに縦線として現れ、実機では「X2上のエッジ線」に見えていた
-    // （エッジ線とアキ・バツは別々の不具合ではなく、この1個のアキ標記が正体）。
+    // 二重表現になる（かつては`appendGapMark`が矩形も積んでいたため、その辺が面端ちょうどに
+    // 縦線として現れ、実機では「X2上のエッジ線」に見えていた——矩形は後に廃止したが、
+    // 「壁のない端部にアキを重ねない」というこの判定自体は今も要る）。
     // 反対側が壁で閉じている開放スパン（室が自分自身へ回り込む内部の抜け等）は従来どおり
     // アキを描く——実機の他の面（10/B2・10/C2・10/D1・11'/A2・5/D1）はすべてこちらで、
     // 診断ログでもアキが壁のない端部に接するのは指摘のあった面だけだった。
@@ -782,7 +785,7 @@ export function buildFaceFigure(face, ctx) {
       (!hasWallAtLocal0 && Math.abs(s.loX) < SPLIT_MERGE_EPS_MM) ||
       (!hasWallAtLocalRun && Math.abs(s.hiX - run) < SPLIT_MERGE_EPS_MM);
     if (gapH > 0 && !touchesWallLessEnd) {
-      appendGapMark(prims, { x: s.loX, y: -gapTop, w: s.hiX - s.loX, h: gapH }, silhouetteWeight, detailWeight);
+      appendGapMark(prims, { x: s.loX, y: -gapTop, w: s.hiX - s.loX, h: gapH }, detailWeight);
     }
     const prevIsWall = i > 0 ? spans[i - 1].kind === 'wall' : hasWallAtLocal0;
     const nextIsWall = i < spans.length - 1 ? spans[i + 1].kind === 'wall' : hasWallAtLocalRun;
@@ -794,16 +797,13 @@ export function buildFaceFigure(face, ctx) {
     // （床側のbelowFloorEdgeと同じく、角=far天井側を始点にして破線同士の角を交点にする）。
     if (farCeilAbs !== spanCeilAbs) {
       const aboveCeil = farCeilAbs > spanCeilAbs;
-      // QA G2: far天井が低くアキ矩形が出る場合、矩形の上辺が既に同座標・同weight（SILHOUETTE）の
-      // 線になっているため、far天井線を別primitiveとして二重に積まない（アキが出ない場合のみ
-      // 線で描く）。
-      const coveredByGapTop = !aboveCeil && gapH > 0 && gapTop === farCeilAbs;
-      if (!coveredByGapTop) {
-        prims.push({
-          type: 'line', x1: s.loX, y1: -farCeilAbs, x2: s.hiX, y2: -farCeilAbs,
-          weight: aboveCeil ? detailWeight : silhouetteWeight, ...(aboveCeil ? { dash: 'dashed' } : {}),
-        });
-      }
+      // 旧QA G2は「far天井が低くアキ矩形が出る場合、矩形の上辺が同座標・同weightの線になるため
+      // far天井線を積まない」という抑止だったが、アキ標記から矩形を廃止した（ユーザー明示指示
+      // 「矩形をやめて」）ため撤回する——抑止を残すとfar天井の見えがかり線が誰にも描かれない。
+      prims.push({
+        type: 'line', x1: s.loX, y1: -farCeilAbs, x2: s.hiX, y2: -farCeilAbs,
+        weight: aboveCeil ? detailWeight : silhouetteWeight, ...(aboveCeil ? { dash: 'dashed' } : {}),
+      });
       if (aboveCeil) {
         const aboveCeilEdge = x => ({
           type: 'line', x1: x, y1: -farCeilAbs, x2: x, y2: -nearCeilAbsAt(x),

@@ -12,8 +12,16 @@ import { roomBounds } from '../finish/gridCells.js';
 import { roomCeilingHeight } from '../finish/roomMetrics.js';
 import { graphList } from '../graphReadScope.js';
 import { composeRoomFaces } from './elevationFaceList.js';
+import { selectElevationRooms } from './elevationFaces.js';
+import { parseBaseboardHeightMm, formatMaterialLabel, estimateWallLabelWidthPx } from './elevationFigure.js';
+import { ElevationLineRole, weightForRole, WALL_LABEL_LINE_GAP_MM, CH_DIM_OFFSET_MM } from './elevationStyle.js';
 import { findRunCLAt } from './elevationFloorProfile.js';
 import { layoutBandFaces, finalizeBand, appendBandCutContent } from './elevationBand.js';
+import { translatePrimitive } from './elevationPrimitives.js';
+import { makeProbeContext } from './section/sectionProbe.js';
+import { buildCutContent } from './section/sectionContent.js';
+import { cutPlaneOffsetMm, faceCutLine, faceViewSign } from './section/sectionCutPlane.js';
+import { structuralColumnContribution } from './section/sectionStructure.js';
 
 // 2つのワールド矩形が重なるか（面積0の接触は重なりに含めない）。
 // elevationStair.jsのfindOverlappingVoidRoomと同じ実装（R: 矩形重なり探索部を共有ヘルパへ切り出し）。
@@ -87,6 +95,177 @@ function lowerWallWorldRanges(face, lowerGraph) {
     ranges.push({ lo: Math.min(w.coord1, w.coord2), hi: Math.max(w.coord1, w.coord2) });
   }
   return mergeRanges(ranges);
+}
+
+/**
+ * **その面の平面が上階に存在する範囲**（ローカルx）。ユーザー確定の方針C
+ * 「その面（の通り）に2階の壁・アキが実在する範囲だけ上階まで描く」の実装。
+ *
+ * 同じ通りに上階の壁が1枚でもあれば、**最初の壁の始まりから最後の壁の終わりまで**を1つの範囲に
+ * する——壁と壁のあいだの隙間は「その面のアキ」（壁が無く見通せる）であって、面の平面としては
+ * 連続しているため。壁が1枚も無ければ空（その面は上階に存在しない＝上階を描かない）。
+ * @param {object} face
+ * @param {object} upperGraph
+ * @returns {{lo:number,hi:number}[]} 0件 or 1件
+ */
+function upperPlaneLocal(face, upperGraph) {
+  const world = lowerWallWorldRanges(face, upperGraph); // 同じ通りの壁（向き＋座標で照合）
+  if (world.length === 0) return [];
+  const lo = Math.max(Math.min(...world.map(r => r.lo)), face.lo);
+  const hi = Math.min(Math.max(...world.map(r => r.hi)), face.hi);
+  if (hi - lo <= MIN_SUB_SEG_MM) return [];
+  return toLocal(face, [{ lo, hi }]);
+}
+
+/** ranges から subtract を引いた残り（どちらもローカルx・昇順マージ済み）。 */
+function subtractRanges(ranges, subtract) {
+  let out = ranges.map(r => ({ ...r }));
+  for (const s of subtract) {
+    const next = [];
+    for (const r of out) {
+      if (s.hi <= r.lo + MIN_SUB_SEG_MM || s.lo >= r.hi - MIN_SUB_SEG_MM) { next.push(r); continue; }
+      if (s.lo > r.lo + MIN_SUB_SEG_MM) next.push({ lo: r.lo, hi: s.lo });
+      if (s.hi < r.hi - MIN_SUB_SEG_MM) next.push({ lo: s.hi, hi: r.hi });
+    }
+    out = next;
+  }
+  return out;
+}
+
+/**
+ * **上階ぶんの展開を、同じ帯へ床高さぶん持ち上げて重ねる**（ユーザー確定の方針C）。
+ *
+ * 吹抜けの範囲は下の断面が既に上階天井まで描いているので、ここが担当するのは
+ * 「その面の平面が上階に存在するが吹抜けではない範囲」＝**上階に床がある側**。
+ * 上階を**それ自身が自階である1層の断面**として組むのが要点——そうすることで、上階の壁・アキ・
+ * エッジがすべて通常の1層帯とまったく同じ処理で出る（「上に実在の部屋がある高さを非描画の
+ * 床構造とみなす」分類に手を入れずに済む）。
+ *
+ * 断面ローカルxは cut ごとに `line.lo/hi` から決まるため、面ローカルxへ戻す平行移動を掛ける
+ * （面の x=0 と cut の x=0 は一致しない）。
+ * @param {object[]} primitives 積み先
+ * @param {ReturnType<typeof layoutBandFaces>} layout
+ * @param {object} upperGraph
+ * @param {{floorHeightMm:number, upperCH:number, roomBoundsRect:object|null, endExtendMm:number|undefined}} opts
+ */
+function appendUpperStoreyOutline(primitives, layout, upperGraph, opts) {
+  const { floorHeightMm, upperCH, roomBoundsRect, endExtendMm } = opts;
+  const layers = [{ graph: upperGraph, floorZMm: floorHeightMm, role: 'self' }];
+  const probeCtx = makeProbeContext(layers);
+  const columnSolids = structuralColumnContribution(layers);
+  const hiZ = floorHeightMm + upperCH;
+  for (const { face, xCursor } of layout.faceRuns) {
+    const plan = face.voidAbove;
+    if (!plan) continue;
+    for (const seg of subtractRanges(upperPlaneLocal(face, upperGraph), plan.voidLocal)) {
+      if (seg.hi - seg.lo <= MIN_SUB_SEG_MM) continue;
+      // ローカルx範囲 → 世界範囲（world = originWorld + dirSign * localX）
+      const wa = face.originWorld + face.dirSign * seg.lo;
+      const wb = face.originWorld + face.dirSign * seg.hi;
+      const lo = Math.min(wa, wb), hi = Math.max(wa, wb);
+      const offsetMm = cutPlaneOffsetMm(face, layers, { columnSolids });
+      const cut = {
+        seqNo: `${face.label}^`, dirSign: face.dirSign, face,
+        viewSign: faceViewSign(face),
+        line: faceCutLine({ ...face, lo, hi }, offsetMm),
+        layers, baseFloorZ: floorHeightMm,
+        zRange: { loZ: floorHeightMm, hiZ },
+        ceilProfile: [{ loX: 0, hiX: hi - lo, ceilZ: hiZ }],
+      };
+      const { content } = buildCutContent(cut, probeCtx, { endExtendMm, bandRoomBounds: roomBoundsRect });
+      // cutのローカルx=0は line.lo/hi 側。面ローカルxへ戻す。
+      const cutOriginWorld = face.dirSign > 0 ? lo : hi;
+      const dx = xCursor + (cutOriginWorld - face.originWorld) * face.dirSign;
+      for (const p of content) primitives.push(translatePrimitive(p, dx, 0));
+    }
+  }
+}
+
+/**
+ * 上階の面（同じ通り・同じ向き）を持つ2階のRoomと、その面がローカルxで占める範囲。
+ * 巾木・壁2段書きは**その位置の2階の部屋**の設定から引く必要があるため、範囲と部屋を対にして返す
+ * （1階の値を2階へ転用しない、というのがこの関数が存在する理由）。
+ * @param {object} face - 帯の面（1階側。ローカルxの基準）
+ * @param {object} upperGraph
+ * @returns {Array<{room:object, lo:number, hi:number}>} ローカルx
+ */
+function upperFaceRooms(face, upperGraph) {
+  const axis = face.axisCL?.effectiveValue;
+  if (axis == null) return [];
+  const out = [];
+  for (const room of selectElevationRooms(upperGraph)) {
+    for (const f of composeRoomFaces(room, upperGraph)) {
+      if (f.kind === 'step') continue;
+      if (!f.isVertical !== !face.isVertical) continue;
+      if (Math.sign(f.inward) !== Math.sign(face.inward)) continue;
+      if (Math.abs((f.axisCL?.effectiveValue ?? NaN) - axis) > LOWER_AXIS_EPS_MM) continue;
+      const local = toLocal(face, [{ lo: f.lo, hi: f.hi }]);
+      if (local.length === 0) continue;
+      out.push({ room, lo: local[0].lo, hi: local[0].hi });
+    }
+  }
+  return out;
+}
+
+/**
+ * 上階ぶんの**図面の体裁**（天井線・巾木・壁2段書き・天井高寸法）を帯へ積む。
+ *
+ * 輪郭（壁・アキ）は`appendUpperStoreyOutline`（断面エンジン）が描く。ここが描くのは面図側の
+ * 要素で、**値の出どころはすべて2階の部屋**——1階の巾木高さ・壁材を2階へ転用しない。
+ * 横方向の寸法（壁芯間・通り芯丸・面ラベル）は上下階で同じ通り芯・同じ位置なので増やさない
+ * （重ねても完全に同じ場所へ重なるだけ。ユーザー確認済み）。
+ */
+function appendUpperStoreyTrim(primitives, layout, upperGraph, opts) {
+  const { floorHeightMm, upperCH, materialMap, scale } = opts;
+  const hiZ = floorHeightMm + upperCH;
+  const cutWeight = weightForRole(ElevationLineRole.CUT);
+  const detailWeight = weightForRole(ElevationLineRole.DETAIL);
+  let chDimDone = false;
+  for (const { face, xCursor } of layout.faceRuns) {
+    const plan = face.voidAbove;
+    if (!plan) continue;
+    const segs = subtractRanges(upperPlaneLocal(face, upperGraph), plan.voidLocal);
+    if (segs.length === 0) continue;
+    for (const seg of segs) {
+      // 上階の天井断面線（この範囲の上端。これが無いとアキ・壁の上が宙で終わる）。
+      primitives.push({ type: 'line', x1: xCursor + seg.lo, y1: -hiZ, x2: xCursor + seg.hi, y2: -hiZ,
+        weight: cutWeight });
+    }
+    // 巾木・壁2段書きは「その位置の2階の部屋」の面がある範囲だけ。壁が無い区間（アキ）には
+    // そもそも巾木も壁材も存在しない。
+    for (const { room, lo, hi } of upperFaceRooms(face, upperGraph)) {
+      for (const seg of segs) {
+        const a = Math.max(lo, seg.lo), b = Math.min(hi, seg.hi);
+        if (b - a <= MIN_SUB_SEG_MM) continue;
+        const h = parseBaseboardHeightMm(room.finish?.baseboardHeight);
+        if (h != null && h < upperCH) {
+          primitives.push({ type: 'line', x1: xCursor + a, y1: -(floorHeightMm + h),
+            x2: xCursor + b, y2: -(floorHeightMm + h), weight: detailWeight });
+        }
+        const info = room.getFinishInfo?.();
+        const lines = [
+          materialMap?.get(info?.wallMaterial)?.name ? `壁：${formatMaterialLabel(materialMap.get(info.wallMaterial).name)}` : null,
+          materialMap?.get(info?.wallFinish)?.name ? formatMaterialLabel(materialMap.get(info.wallFinish).name) : null,
+        ].filter(Boolean);
+        if (lines.length > 0) {
+          const widthPx = Math.max(...lines.map(estimateWallLabelWidthPx));
+          const widthMm = scale ? widthPx / scale : 0;
+          if (b - a >= widthMm * 2) {
+            const cx = xCursor + (a + b) / 2, cy = -(floorHeightMm + upperCH / 2);
+            lines.forEach((text, k) => primitives.push({ type: 'text', x: cx,
+              y: cy + (k - (lines.length - 1) / 2) * WALL_LABEL_LINE_GAP_MM,
+              text, anchor: 'middle', baseline: 'middle' }));
+          }
+        }
+      }
+    }
+    // 上階の天井高寸法（階ごとに値が違うので、下階のぶんとは別に1本だけ足す）。
+    if (!chDimDone && layout.chDimX != null) {
+      chDimDone = true;
+      primitives.push({ type: 'dim', dir: 'v', at: layout.chDimX, from: -hiZ, to: -floorHeightMm,
+        foot: layout.chDimX + CH_DIM_OFFSET_MM, dot: true, label: Math.round(upperCH) });
+    }
+  }
 }
 
 /**
@@ -292,6 +471,17 @@ export function buildRoomBandWithVoidAbove(room, graph, voidRoom, upperGraph, ct
     { graph: upperGraph, floorZMm: floorHeightMm, role: 'above' },
   ], {
     endExtendMm: ctx.wallLessEndExtendModelMm,
+  });
+  // 上階ぶんの輪郭（方針C）: 吹抜けではないが上階にその面の平面がある範囲へ、上階を自階とする
+  // 1層の断面をもう1本重ねる。
+  appendUpperStoreyOutline(primitives, layout, upperGraph, {
+    floorHeightMm, upperCH: voidCH,
+    roomBoundsRect: roomBounds(room.cells, graph),
+    endExtendMm: ctx.wallLessEndExtendModelMm,
+  });
+  // 上階ぶんの図面の体裁（天井線・巾木・壁2段書き・天井高寸法）。値の出どころはすべて2階の部屋。
+  appendUpperStoreyTrim(primitives, layout, upperGraph, {
+    floorHeightMm, upperCH: voidCH, materialMap: ctx.materialMap ?? null, scale: ctx.scale,
   });
 
   return finalizeBand(room, graph, primitives, {

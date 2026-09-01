@@ -7,6 +7,7 @@ import {
   joinToStairProfile, clipStairDetailInSlabBand,
 } from './sectionEmit.js';
 import { KNEE_CAP_FACE_MM } from '../elevationStyle.js';
+import { buildColumns } from './sectionEngine.js';
 
 function makeCut(overrides = {}) {
   return { seqNo: '1', line: { isVertical: false, axisValue: 0, lo: 0, hi: 3000 },
@@ -540,8 +541,9 @@ test('【実機指摘】emitOpenGapMarks: バツは腰壁と交差する区間�
       { kind: 'wall', z0: 1000, z1: 2000, distMm: 500, layerRole: 'above', isKneeDrop: kneeFlag },
       { kind: 'open', z0: 2000, z1: 4000 }] },
   ]);
-  const withKnee = emitOpenGapMarks(makeCols(true), cut);
-  const withPlain = emitOpenGapMarks(makeCols(false), cut);
+  // アキ標記は「ア キ」テキストも積むため、バツの本数は線プリミティブで数える。
+  const withKnee = emitOpenGapMarks(makeCols(true), cut).filter(p => p.type === 'line');
+  const withPlain = emitOpenGapMarks(makeCols(false), cut).filter(p => p.type === 'line');
   assert.equal(withPlain.length, 2, '腰壁でなければ従来どおり1組のX(2本)のはず');
   assert.ok(withKnee.length > 2, '腰壁と交差する区間で切られ、線分が増えるはず');
   for (const p of withKnee) {
@@ -1134,15 +1136,13 @@ const gapRect = prims => prims.find(p => p.type === 'rect');
 const gapText = prims => prims.find(p => p.type === 'text' && p.text === 'ア キ');
 const gapDiagonals = prims => prims.filter(p => p.type === 'line');
 
-test('【移行・アキ】emitOpenGapMarks: 矩形（中線）＋対角2本（一点鎖線）＋「ア キ」を出す', () => {
+test('【移行・アキ】emitOpenGapMarks: 対角2本（一点鎖線）＋「ア キ」を出し、輪郭の矩形は描かない', () => {
   const columns = [{ x0: 1000, x1: 3000, worldLo: 1000, worldHi: 3000,
     bands: [{ kind: 'open', z0: 600, z1: 2000 }] }];
   const prims = emitOpenGapMarks(columns, makeCut({ baseFloorZ: 0 }));
-  const rect = gapRect(prims);
-  assert.ok(rect, 'アキの矩形があるはず');
-  assert.deepEqual([rect.x, rect.y, rect.w, rect.h], [1000, -2000, 2000, 1400],
-    '矩形は抜けの範囲そのもの（y=zToY(z1)・h=z1-z0）');
-  assert.equal(rect.weight, 'medium', '矩形の輪郭は中線');
+  // 輪郭は必ず周囲の実体（壁の断面・床/天井の断面線）が描くため、矩形を足すと必ず二重になり、
+  // 中線が断面（太線）を上書きしてしまう（ユーザー明示指示「矩形をやめて」）。
+  assert.equal(gapRect(prims), undefined, 'アキの輪郭の矩形は描かないはず');
   assert.equal(gapDiagonals(prims).length, 2, 'バツは対角2本');
   assert.ok(gapDiagonals(prims).every(p => p.dash === 'center'), '床断面より上のバツは一点鎖線');
   const text = gapText(prims);
@@ -1154,8 +1154,7 @@ test('【失敗系・移行・アキ】emitOpenGapMarks: 建具の開口を含�
   const columns = [{ x0: 1000, x1: 3000, worldLo: 1000, worldHi: 3000,
     bands: [{ kind: 'wall', z0: 600, z1: 2000, distMm: 500, openingPassThrough: true }] }];
   const prims = emitOpenGapMarks(columns, makeCut({ baseFloorZ: 0 }));
-  assert.equal(gapRect(prims), undefined, '建具の姿図が描く場所を「アキ」で囲ってはいけない');
-  assert.equal(gapText(prims), undefined);
+  assert.equal(gapText(prims), undefined, '建具の姿図が描く場所を「アキ」と書いてはいけない');
   assert.equal(gapDiagonals(prims).length, 2, 'バツ自体は従来どおり出る');
 });
 
@@ -1163,18 +1162,77 @@ test('【失敗系・移行・アキ】emitOpenGapMarks: 床断面より下の�
   const columns = [{ x0: 1000, x1: 3000, worldLo: 1000, worldHi: 3000,
     bands: [{ kind: 'open', z0: 0, z1: 400 }] }];
   const prims = emitOpenGapMarks(columns, makeCut({ baseFloorZ: 500 }));
-  assert.equal(gapRect(prims), undefined, '床断面より下は「向こう側の断面＝細線の破線」で実線の輪郭は出さない');
-  assert.equal(gapText(prims), undefined);
+  assert.equal(gapText(prims), undefined, '床断面より下は「向こう側の断面＝細線の破線」で実線の標記は出さない');
   assert.ok(gapDiagonals(prims).every(p => p.dash === 'dashed'));
 });
 
-test('【失敗系・移行・アキ】emitOpenGapMarks: L字（外接矩形と食い違う）成分には矩形・テキストを付けない', () => {
+test('【失敗系・移行・アキ】emitOpenGapMarks: L字（外接矩形と食い違う）成分には「ア キ」を付けない', () => {
   const columns = [
     { x0: 0, x1: 1000, worldLo: 0, worldHi: 1000, bands: [{ kind: 'open', z0: 600, z1: 2000 }] },
     { x0: 1000, x1: 2000, worldLo: 1000, worldHi: 2000, bands: [{ kind: 'open', z0: 1200, z1: 2000 }] },
   ];
   const prims = emitOpenGapMarks(columns, makeCut({ baseFloorZ: 0 }));
-  assert.equal(gapRect(prims), undefined, '外接矩形はアキでない場所（腰壁の上）まで囲ってしまう');
-  assert.equal(gapText(prims), undefined);
+  assert.equal(gapText(prims), undefined, '外接矩形の中心はアキでない場所（腰壁の上）に落ちるため文字を置かない');
   assert.equal(gapDiagonals(prims).length, 2, 'バツは「空き面の実際の隅」を結ぶ従来どおりの2本');
+});
+
+// ================================================================
+// 切断壁による帯の分割判定（ユーザー実機指摘: 実機「5」A「1階X2右側に壁エッジ（中線）がない」）
+// 「切断壁に切られて下端が持ち上がった帯」＝**帯の下端が切断壁の天端にちょうど一致する**帯。
+// 旧実装は「天端が帯の下端以上の切断壁がこの列にあるか」で見ており、切断壁より**下**にある
+// 帯まで巻き込んで側縁を消していた。
+// ================================================================
+
+test('【実機「5」A】emitColumns: 切断壁より下にある見えがかり帯の側縁は消さない', () => {
+  const cut = makeCut({ zRange: { loZ: 0, hiZ: 5400 } });
+  const columns = [
+    // 手前の列: 1階の壁（z0..2400）だけ。天井より上には何も無い。
+    { x0: 0, x1: 1000, worldLo: 0, worldHi: 1000,
+      bands: [{ kind: 'wall', z0: 0, z1: 2400, distMm: 58, layerRole: 'self', wall: { axisCL: { id: 'A' }, axisValue: 0 } }] },
+    // 壁の端の列: 同じ1階の壁に加えて、その**上**に2階の壁の断面（z2400..5400）が立つ。
+    { x0: 1000, x1: 2000, worldLo: 1000, worldHi: 2000,
+      bands: [{ kind: 'wall', z0: 0, z1: 2400, distMm: 58, layerRole: 'self', wall: { axisCL: { id: 'A' }, axisValue: 0 } },
+              { kind: 'cut', z0: 2400, z1: 5400, wall: { axisCL: { id: 'X2' }, axisValue: 57.5 } }] },
+    // その先: 1階の壁は無い（抜け）＝x=2000で壁面が終わる。
+    { x0: 2000, x1: 3000, worldLo: 2000, worldHi: 3000, bands: [{ kind: 'open', z0: 0, z1: 5400 }] },
+  ];
+  const edge = emitColumns(columns, cut, { ceilZ: 5400 }).find(p =>
+    p.x1 === p.x2 && p.x1 === 2000 && Math.min(-p.y1, -p.y2) === 0 && Math.max(-p.y1, -p.y2) === 2400);
+  assert.ok(edge, '1階の壁が終わる位置の側縁が出るはず（上に立つ切断壁は下の帯を遮らない）');
+  assert.equal(edge.weight, 'medium', '直近の見えがかりなので中線');
+});
+
+test('【失敗系・実機「6」D1】emitColumns: 切断壁の天端で下端が持ち上がった帯の側縁は従来どおり消す', () => {
+  const cut = makeCut({ zRange: { loZ: 0, hiZ: 5400 } });
+  const columns = [
+    { x0: 0, x1: 1000, worldLo: 0, worldHi: 1000,
+      bands: [{ kind: 'wall', z0: 0, z1: 2400, distMm: 2250, layerRole: 'self' },
+              { kind: 'slab', z0: 2400, z1: 3000 }, { kind: 'cut', z0: 3000, z1: 3800 },
+              { kind: 'slab', z0: 3800, z1: 5400 }] },
+    { x0: 1000, x1: 2000, worldLo: 1000, worldHi: 2000,
+      bands: [{ kind: 'cut', z0: 3000, z1: 3800 },
+              // 下端(3800)が切断壁の天端(3800)にちょうど一致＝腰壁に切られて持ち上がった帯
+              { kind: 'wall', z0: 3800, z1: 5400, distMm: 2250, layerRole: 'self' }] },
+  ];
+  const edges = emitColumns(columns, cut, { ceilZ: 5400 }).filter(p =>
+    p.x1 === p.x2 && Math.min(-p.y1, -p.y2) === 3800 && Math.max(-p.y1, -p.y2) === 5400);
+  assert.equal(edges.length, 0, `腰壁の上には側縁を描かないはず（実際:${JSON.stringify(edges)}）`);
+});
+
+test('【実機「5」】buildColumns: 探査延長で面の外にできる列も、端の区間の天井で打ち切る', () => {
+  // ceilProfileは面の範囲(0..2000)しか持たない。壁のない端部の探査延長で作られる x<0 の列が
+  // 打ち切られないと、描かれている天井線より上の帯がそこだけ残る。
+  const cut = {
+    seqNo: 'x', dirSign: 1, viewSign: 1,
+    line: { isVertical: false, axisValue: 0, lo: 0, hi: 2000, probeExtendLoMm: 150 },
+    layers: [], zRange: { loZ: 0, hiZ: 5400 }, baseFloorZ: 0,
+    ceilProfile: [{ loX: 0, hiX: 2000, ceilZ: 2400 }],
+  };
+  const probeCtxStub = { cellToRoomFor: () => new Map(), chOf: () => 2400, floorZOf: () => 0 };
+  const cols = buildColumns(cut, probeCtxStub);
+  assert.ok(cols.length > 0, '列が返るはず');
+  for (const c of cols) {
+    assert.equal(c.ceilZ, 2400,
+      `面の外の列(x=${c.x0}..${c.x1})も端の区間の天井(2400)へクランプされるはず（実際:${c.ceilZ}）`);
+  }
 });

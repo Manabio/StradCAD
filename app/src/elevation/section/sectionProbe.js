@@ -494,6 +494,32 @@ function slabBandOf(info, z0, z1) {
 }
 
 /**
+ * その列で、**帯の天井より上に上階の床が実在するか**——実在すればその床のz（その層のfloorZ）、
+ * しなければnull。`sectionEmit.js`の`ceilStepSlabSection`が「上階の床の断面」を描いてよいかの
+ * 判定に使う。
+ *
+ * 上に部屋が無い（吹抜けがそのまま続く）位置に床の断面線を描いてはいけない
+ * （ユーザー確定「吹抜けには天井断面まで水平断面が無い」）。帯の形（上階のFLで帯が切り替わるか）
+ * から推測すると、**上階の壁の断面**が同じFLで始まるだけの位置まで拾ってしまうため、
+ * 層スタックの所有Roomを直接見る。
+ * @param {import('./sectionTypes.js').SectionCut} cut
+ * @param {number} worldMid
+ * @param {ReturnType<typeof makeProbeContext>} probeCtx
+ * @returns {number|null}
+ */
+export function upperFloorZAt(cut, worldMid, probeCtx) {
+  const stack = buildLayerStack(cut, worldMid, probeCtx); // floorZMm昇順
+  const base = baseLayerOf(stack);
+  if (!base || !Number.isFinite(base.ceilZ)) return null;
+  for (const upper of stack) {
+    if (upper === base) continue;
+    if (!Number.isFinite(upper.floorZ) || upper.floorZ <= base.ceilZ + GAP_EPS) continue;
+    if (isRealRoom(upper.room)) return upper.floorZ;
+  }
+  return null;
+}
+
+/**
  * 1本のx列（world run座標 worldMid。collectCutBreaksが返す隣接ペアの中点を渡す想定）の
  * z区間分割・オクルージョン解決（§5.2）。層0件・切断線が部屋外・壁ゼロのいずれでも例外を
  * 投げず、候補が1つも無ければ zRange 全域を1本の open ZBand として返す。

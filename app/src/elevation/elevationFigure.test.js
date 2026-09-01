@@ -448,9 +448,12 @@ test('【問題修正2026-08その6】buildFaceFigure: 段差見付け面の天�
   assert.equal(beyond.x1, 0);
   assert.equal(beyond.x2, 1200);
 
-  const gap = prims.find(p => p.type === 'rect');
-  assert.equal(gap.y, -2300, 'アキの上端は低い側の天井のはず');
-  assert.equal(gap.h, 2300, 'アキは見付け上端(topY=0)から天井(-2300)までのはず');
+  // アキ標記は矩形を持たない（ユーザー明示指示「矩形をやめて」）。範囲はバツ（対角2本）で見る。
+  const diag = prims.filter(p => p.type === 'line' && p.dash === 'center' && p.x1 !== p.x2);
+  assert.equal(diag.length, 2, 'アキのバツ（対角2本）が出るはず');
+  const ys = [...new Set(diag.flatMap(p => [p.y1, p.y2]))].sort((a, b) => a - b);
+  assert.deepEqual(ys, [-2300, 0], 'アキは見付け上端(0)から低い側の天井(-2300)までのはず');
+  assert.equal(prims.filter(p => p.type === 'rect').length, 0, 'アキの矩形は描かないはず');
 });
 
 // ---- 失敗系: ceilAbsMm未指定の段差見付け面（旧経路・合成face）は従来どおり帯CHの天井 ----
@@ -611,17 +614,20 @@ test('【問題修正2026-08その2】buildFaceFigure: 開放先の天井が低�
   });
   const prims = buildFaceFigure(face, baseCtx({ ceilingHeight: CH }));
 
-  // QA G2: far天井の見えがかりはアキ矩形の上辺（同座標・同weightのSILHOUETTE）が担うため、
-  // 線primitiveを二重に積まない。
+  // アキ標記から矩形を廃止した（ユーザー明示指示「矩形をやめて」）ため、far天井の見えがかり線は
+  // 線primitiveとして描く（旧QA G2の「矩形の上辺が兼ねるので積まない」は撤回。抑止を残すと
+  // この線が誰にも描かれない）。
   const farCeilLines = prims.filter(p =>
     p.type === 'line' && p.y1 === p.y2 && p.y1 === -2300 && p.x1 === 2800 && p.x2 === 4000);
-  assert.equal(farCeilLines.length, 0, 'far天井線はアキ矩形の上辺と二重に積まないはず（QA G2）');
+  assert.equal(farCeilLines.length, 1, 'far天井の見えがかり線(y=-2300)が1本出るはず');
+  assert.equal(farCeilLines[0].weight, 'medium', '床〜天井断面の間に見える向こう側の断面は中線');
 
-  const gapRect = prims.find(p => p.type === 'rect' && p.x === 2800);
-  assert.ok(gapRect, 'アキ矩形が見つかるはず');
-  assert.equal(gapRect.y, -2300, 'アキの上端＝far天井の見えがかり線はfar天井(-2300)までにクランプされるはず');
-  assert.equal(gapRect.h, 2300, 'アキの高さはfar天井(2300)−床(max(-100,0)=0)のはず');
-  assert.equal(gapRect.weight, 'medium', '上辺がfar天井の見えがかり（中線）を兼ねるはず');
+  // アキの範囲はバツ（対角2本）で見る。上端はfar天井(-2300)までクランプされる。
+  const diag = prims.filter(p => p.type === 'line' && p.dash === 'center' && p.x1 !== p.x2);
+  assert.equal(diag.length, 2, 'アキのバツ（対角2本）が出るはず');
+  const ys = [...new Set(diag.flatMap(p => [p.y1, p.y2]))].sort((a, b) => a - b);
+  assert.deepEqual(ys, [-2300, 0], 'アキはfar天井(-2300)から床(max(-100,0)=0)までのはず');
+  assert.equal(prims.filter(p => p.type === 'rect').length, 0, 'アキの矩形は描かないはず');
 });
 
 // ---- 問題修正2026-08その2: 開放先の天井が高い場合は「天井断面より上の向こう側」＝細線の破線＋端部縦線 ----
@@ -647,8 +653,9 @@ test('【問題修正2026-08その2】buildFaceFigure: 開放先の天井が天�
   assert.equal(edges.length, 2, `x=2800とx=4000の両端に縦線が出るはず（実際:${JSON.stringify(edges)}）`);
   assert.deepEqual(edges.map(e => e.x1).sort((a, b) => a - b), [2800, 4000]);
 
-  const gapRect = prims.find(p => p.type === 'rect' && p.x === 2800);
-  assert.equal(gapRect.y, -2400, 'far天井が高い場合、アキの上端は近側の天井断面(-2400)までのはず');
+  const diag = prims.filter(p => p.type === 'line' && p.dash === 'center' && p.x1 !== p.x2);
+  const topY = Math.min(...diag.flatMap(p => [p.y1, p.y2]));
+  assert.equal(topY, -2400, 'far天井が高い場合、アキの上端は近側の天井断面(-2400)までのはず');
 });
 
 // ---- ユーザー実機指摘2026-08「6」C「1500の一点鎖線が出ていない」 ----

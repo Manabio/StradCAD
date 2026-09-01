@@ -127,10 +127,15 @@ test('Round Fフィクスチャ: D1のbuildFaceFigureは遠側床線を重複さ
     p.x1 === openSpan.loX && p.x2 === openSpan.hiX);
   assert.equal(silhouetteFarLine, undefined, 'segsと同じ高さのSILHOUETTE遠側床線は重複して描かれないはず');
 
-  // 上部あき（appendGapMark。rect＋対角2本＋「ア キ」テキスト。ユーザー差し戻し2026-08で復元）。
-  const gapRect = prims.find(p => p.type === 'rect' && p.x === openSpan.loX && p.y === -CH);
-  assert.ok(gapRect, '上部あきのrectが見つかるはず');
-  assert.equal(gapRect.h, CH - openSpan.farFloorDeltaMm, 'あきの高さはCH-farFloorDeltaMm(2400-(-50)=2450)のはず');
+  // 上部あき（appendGapMark。対角2本＋「ア キ」テキスト。輪郭の矩形は描かない——アキの輪郭は
+  // つねに周囲の実体と一致するため、矩形にすると必ず二重になる。ユーザー明示指示「矩形をやめて」）。
+  assert.equal(prims.filter(p => p.type === 'rect').length, 0, 'アキの輪郭の矩形は描かないはず');
+  const gapDiag = prims.filter(p => p.type === 'line' && p.dash === 'center'
+    && p.x1 === openSpan.loX && p.x2 === openSpan.hiX);
+  assert.ok(gapDiag.length >= 1, '上部あきのバツ（対角線）が見つかるはず');
+  const gapYs = [...new Set(gapDiag.flatMap(p => [p.y1, p.y2]))].sort((a, b) => a - b);
+  assert.deepEqual(gapYs, [-CH, -openSpan.farFloorDeltaMm],
+    'あきは天井(-CH)〜開放先の床(-farFloorDeltaMm=50)のはず');
   assert.ok(prims.some(p => p.type === 'text' && p.text === 'ア キ'), '「ア キ」テキストが見つかるはず');
 
   // 境界エッジ: open区間のloX側（隣がwall区間）にSILHOUETTE縦線。
@@ -280,7 +285,7 @@ test('新規指示: room3のC1（段差見付け面）は両端縦線=CUT（壁�
 // のアキ（矩形＋対角線＋「ア キ」テキスト）が必要——旧実装はkneeDropGapsOnFace（腰壁・垂れ壁の
 // 明示指定がある軸だけ）にしか依存しておらず、指定の無い通常の段差見付け面ではアキが一切
 // 描かれない欠落があった（段差見付け面を新設したコミット5f8ec62の時点から一貫した欠落）。
-test('新規指示: room3のC1（段差見付け面）は見付け上端〜天井にアキ（矩形＋「ア キ」）を描く', () => {
+test('新規指示: room3のC1（段差見付け面）は見付け上端〜天井にアキ（バツ＋「ア キ」）を描く', () => {
   const { graph, room3 } = buildRoundFFixture();
   const faces = composeRoomFaces(room3, graph);
   const c1 = faces.find(f => f.label === 'C1');
@@ -289,9 +294,13 @@ test('新規指示: room3のC1（段差見付け面）は見付け上端〜天�
   const prims = buildFaceFigure(c1, { graph, project: null, room: room3, ceilingHeight: CH, materialMap: null, gridCLs: [] });
 
   const topY = -(c1.baseFloorDeltaMm + c1.stepHeightMm);
-  const gapRect = prims.find(p => p.type === 'rect' && p.x === 0 && p.y === -CH && p.w === c1.run);
-  assert.ok(gapRect, `アキの矩形（x=0,y=-CH,w=run）が見つかるはず（実際のrect:${JSON.stringify(prims.filter(p => p.type === 'rect'))}）`);
-  assert.equal(gapRect.h, CH + topY, 'あきの高さは天井(-CH)〜見付け上端(topY)の距離のはず');
+  // 輪郭の矩形は描かない（ユーザー明示指示「矩形をやめて」）。範囲はバツ（対角線）で見る。
+  assert.equal(prims.filter(p => p.type === 'rect').length, 0, 'アキの輪郭の矩形は描かないはず');
+  const gapDiag = prims.filter(p => p.type === 'line' && p.dash === 'center'
+    && Math.min(p.x1, p.x2) === 0 && Math.max(p.x1, p.x2) === c1.run);
+  assert.ok(gapDiag.length >= 1, `アキのバツが見つかるはず（実際:${JSON.stringify(prims.filter(p => p.dash === 'center'))}）`);
+  const gapYs = [...new Set(gapDiag.flatMap(p => [p.y1, p.y2]))].sort((a, b) => a - b);
+  assert.deepEqual(gapYs, [-CH, topY], 'あきは天井(-CH)〜見付け上端(topY)のはず');
   assert.ok(prims.some(p => p.type === 'text' && p.text === 'ア キ'), '「ア キ」テキストが見つかるはず');
 });
 

@@ -9,7 +9,7 @@
 import {
   ElevationLineRole, weightForRole, GAP_EPS_MM as GAP_EPS, kneeCapBottomMm, KNEE_CAP_FACE_MM,
 } from '../elevationStyle.js';
-import { zToY } from './sectionTypes.js';
+import { zToY, cutDrawRange } from './sectionTypes.js';
 
 /**
  * §5.6最終フィルタの唯一の適用箇所（emitLine(x1,z1,x2,z2,role)の1箇所だけで適用する、という
@@ -255,6 +255,63 @@ function cutWallRuns(columns) {
 }
 
 /**
+ * **天井断面の高さが変わる境界に立つ、上階の床構造（スラブ）の断面**（ユーザー明示指示の図形）。
+ *
+ * 低い側の天井（1階天井）と上階の床（2FL）に挟まれた区間は、**断面の中**＝建物の躯体で、
+ * その中には何も描かない。描くのはその**輪郭**だけ:
+ * ```
+ *   ...吹抜け側...   |          ← 小口（低い側の天井 → 上階の床）
+ *                    +--------  ← 上階の床の断面線（低い天井の側へ走る）
+ *                       a       ← 断面の中（何も描かない）
+ *   -----------------+--------  ← 低い側の天井の断面線（既に描かれている）
+ * ```
+ * この輪郭が無いと、1階天井の線と2階天井の線が繋がらないまま宙で終わる。
+ * 境界に壁が立つ場合（腰壁・袖壁）は、その壁の断面がこの床の上に載る形になる——壁の帯自体は
+ * 実体のz範囲のまま（`sectionEngine.js`の`clipBandsToCeil`）で、下へ引き伸ばさない。
+ *
+ * 上階の床レベルは層スタックから取る（低い側の天井より上・高い側の天井より下にある層のFL）。
+ * 該当する層が無い＝同じ階の中の天井段差なので、この規則の対象外（何も描かない）。
+ * @param {import('./sectionTypes.js').SectionColumn[]} columns - x0昇順
+ * @param {import('./sectionTypes.js').SectionCut} cut
+ * @param {number|undefined} ceilZ
+ * @returns {object[]}
+ */
+function ceilStepSlabSection(columns, cut, ceilZ) {
+  const prims = [];
+  const range = cutDrawRange(cut);
+  for (let i = 0; i + 1 < columns.length; i++) {
+    const a = columns[i], b = columns[i + 1];
+    if (!Number.isFinite(a.ceilZ) || !Number.isFinite(b.ceilZ)) continue;
+    if (Math.abs(a.ceilZ - b.ceilZ) < GAP_EPS) continue;
+    const zLow = Math.min(a.ceilZ, b.ceilZ), zHigh = Math.max(a.ceilZ, b.ceilZ);
+    // 低い天井の側が「上階の床が実在する」と言っている場合だけ描く（sectionEngine.jsの
+    // upperFloorZ）。上に部屋が無い＝床が無い境界に床の断面線を描いてはいけない
+    // （ユーザー確定「吹抜けには天井断面まで水平断面が無い」）。
+    // 境界のすぐ隣の列は**まだ吹抜けのセルの中**でありうる（天井段差の位置は壁の手前の面、
+    // 上階の床が始まるのは壁の向こうの面で、半壁厚ずれる）ため、低い天井が続くあいだ
+    // 外側へ走査して最初に見つかった値を使う。
+    const step = a.ceilZ < b.ceilZ ? -1 : +1; // 低い天井の側へ進む向き
+    let floorZ = null;
+    for (let k = a.ceilZ < b.ceilZ ? i : i + 1; k >= 0 && k < columns.length; k += step) {
+      if (Math.abs((columns[k].ceilZ ?? NaN) - zLow) > GAP_EPS) break;
+      if (Number.isFinite(columns[k].upperFloorZ)) { floorZ = columns[k].upperFloorZ; break; }
+    }
+    if (!Number.isFinite(floorZ) || floorZ <= zLow + GAP_EPS || floorZ >= zHigh - GAP_EPS) continue;
+    const x = a.x1;
+    // 小口（低い側の天井 → 上階の床）。境界そのものなので必ず1本。
+    prims.push(emitLine(cut, x, zLow, x, floorZ, ElevationLineRole.CUT, { ceilZ }));
+    // 上階の床の断面線は**低い天井の側**へ走る（高い側は吹抜けで床が無い）。
+    // 端は面の描画範囲の端（壁のない端部のはね出しを含む）——ユーザー明示指示
+    // 「1500CLの右側はね出しまで」。
+    const outX = a.ceilZ < b.ceilZ ? range.lo : range.hi;
+    if (Math.abs(outX - x) > GAP_EPS) {
+      prims.push(emitLine(cut, x, floorZ, outX, floorZ, ElevationLineRole.CUT, { ceilZ }));
+    }
+  }
+  return prims;
+}
+
+/**
  * 上階床スラブの端に**切断壁が載っている**（袖壁・腰壁）ときの取り合い
  * （ユーザー実機指摘2026-08「6」D1・B「CL内側まで進んで、上を向いて2階袖壁の階段側断面線と
  * トリム／1FL天井から2FL床までの上へ向かう線分がない」）。
@@ -430,10 +487,15 @@ export function emitColumns(columns, cut, emitCtx = {}) {
           && (b.wall === band.wall
             || (!!b.wall.axisCL && b.wall.axisCL === band.wall.axisCL
               && Math.abs(b.z0 - band.z0) < GAP_EPS && Math.abs(b.z1 - band.z1) < GAP_EPS));
-        if (!sameWall(matchingBand(prev, band.z0, band.z1, 'cut'))) {
+        // `exposedSide`（sectionEngine.jsのclipBandsToCeil）が付いた帯は、**天井の高さが変わる
+        // 境界に立っていて片側からしか見えない壁**。見えるのはその側の面だけで、反対側の面は
+        // 低い天井の裏に隠れている——両縁を描くと壁厚が図に出てしまう（ユーザー明示指示:
+        // 実機「5」A「X2の右側が断面線なら、左側は壁の中になり、描画しないが正解」）。
+        const hidden = band.exposedSide ?? null;
+        if (hidden !== 'hi' && !sameWall(matchingBand(prev, band.z0, band.z1, 'cut'))) {
           prims.push(Object.assign(emitLine(cut, col.x0, band.z0, col.x0, band.z1, ElevationLineRole.CUT, { ceilZ }),{__o:'cutEdgeLo'}));
         }
-        if (!sameWall(matchingBand(next, band.z0, band.z1, 'cut'))) {
+        if (hidden !== 'lo' && !sameWall(matchingBand(next, band.z0, band.z1, 'cut'))) {
           prims.push(Object.assign(emitLine(cut, col.x1, band.z0, col.x1, band.z1, ElevationLineRole.CUT, { ceilZ }),{__o:'cutEdgeHi'}));
         }
       } else if (band.kind === 'wall') {
@@ -487,15 +549,20 @@ export function emitColumns(columns, cut, emitCtx = {}) {
         // こちらは設置階の壁(d2250 self)で、距離が変わるのは「1枚の壁面が凹んだ」からではなく
         // **見えている壁が別の層のものへ入れ替わった**だけ。連続面の折れ角ではないので描かない）。
         // 隣接列に見えがかり壁が無い場合は従来どおり「そこで壁が終わる」＝描く。
-        // **手前の切断壁に切られてこの列だけ分割された帯の側縁も描かない**（ユーザー明示指示
-        // 2026-08その17「「6」D1・B: 腰壁上のエッジは不要」）。腰壁の天端(z0)で始まる帯は、
+        // **手前の切断壁に切られてこの列だけ分割された帯の側縁は描かない**（ユーザー明示指示
+        // 2026-08その17「「6」D1・B: 腰壁上のエッジは不要」）。腰壁の天端で始まる帯は、
         // その列で腰壁に遮られたぶんだけ下端が持ち上がった**同じ壁の続き**であり、隣接列では
         // 1本の大きな帯（あるいは別の見え方）になる。ここで側縁を描くと、腰壁の上に壁の切れ目が
-        // 無いのに縦線が出る。水平線側は既に`trimmedByCutWall`で同じ理由から抑止しており
-        // （上のz0/z1の水平線）、縦線だけが取り残されていた——これが過去に同種の指摘
-        // （左CL上のz3800..5400の縦線）をlayerRole一致で塞いだのに再発した理由。
-        // 根本は「遮蔽で分割された帯かどうか」を縦線側が見ていなかったこと。
-        const splitByCutWall = trimmedByCutWall(col, band.z0);
+        // 無いのに縦線が出る。
+        //
+        // 判定は「**帯の下端が、その列の切断壁の天端にちょうど一致する**」——それが「切断壁に
+        // 切られて持ち上がった」ということの定義そのもの。以前は`trimmedByCutWall(col, band.z0)`
+        // ＝「天端が帯の下端以上の切断壁がこの列にあるか」で見ていたが、これは**切断壁より下に
+        // ある帯まで巻き込む**（実機「5」A: 1階の壁の帯z0..2400が、その上に立つ2階X2壁の断面
+        // z2400..5400のせいで「切られた」と判定され、X2右側の壁エッジが丸ごと消えていた）。
+        // 切断壁はそれ自身のz範囲でしか遮らない。
+        const splitByCutWall = col.bands.some(b =>
+          b.kind === 'cut' && Math.abs(b.z1 - band.z0) < GAP_EPS);
         if (!splitByCutWall) {
           const wholeBand = [{ z0: band.z0, z1: band.z1 }];
           const loRanges = prev ? uncoveredZRanges(prev, band) : (emitCtx.openEndLo ? [] : wholeBand);
@@ -561,7 +628,17 @@ export function emitColumns(columns, cut, emitCtx = {}) {
     }
   });
   prims.push(...cutWallTopEdges(columns, cut, ceilZ));
-  prims.push(...slabEdgeCutWallJunction(columns, cut, ceilZ));
+  // 上階の床との取り合いは、**区間ごとの天井を持つ帯（cut.ceilProfileあり＝通常の部屋帯・
+  // 吹抜け帯）は ceilStepSlabSection、持たない帯（階段帯）は slabEdgeCutWallJunction** が担当する。
+  // 両方走らせると同じ取り合いを別々の作図で二重に描く——前者は「天井の高さが変わる境界」を
+  // 起点に低い天井の側へ床の断面線を伸ばし、後者は「スラブ帯の外端」を起点に反対側へ伸ばす。
+  // 通常の部屋帯では 1F天井〜2FL が吹抜けの側でも天井懐(slab)に分類されるため、後者は床の
+  // 断面線を吹抜けの側（床が無い側）へ引いてしまう。
+  if (Array.isArray(cut.ceilProfile) && cut.ceilProfile.length > 0) {
+    prims.push(...ceilStepSlabSection(columns, cut, ceilZ));
+  } else {
+    prims.push(...slabEdgeCutWallJunction(columns, cut, ceilZ));
+  }
   return dedupeLines(prims);
 }
 
@@ -924,17 +1001,21 @@ export function emitOpenGapMarks(columns, cut, emitCtx = {}) {
     // ——「アキのセルの和」でクリップすると、開口と上階アキがL字に連結する構成で
     // 「1組の大きなX」（WP-E7 D1の確認済み仕様）が細切れになるため採らない。
     const blockers = obstructionRects(columns, x0, x1, z0, z1);
-    // アキ標記の矩形と「ア キ」（旧 elevationFigure.js の appendGapMark から移設）。次の3条件を
+    // アキ標記の「ア キ」（旧 elevationFigure.js の appendGapMark から移設）。次の3条件を
     // すべて満たす連結成分にだけ付ける:
     //   - 建具の開口を含まない（viaOpening）… そこは建具の姿図の場所で「アキ」ではない
-    //   - 外接矩形そのもの（全セルが同じz範囲）… L字に食い込んだ成分では外接矩形の輪郭が
-    //     アキでない場所を囲ってしまう（「バツの4点は空き面の実際の隅」と同じ理由）
+    //   - 外接矩形そのもの（全セルが同じz範囲）… L字に食い込んだ成分では外接矩形の中心が
+    //     アキでない場所（腰壁の上等）に落ち、文字が実体の上に乗る
     //   - 床断面より上（dash==='center'）… 床断面より下の抜けは「向こう側の断面＝細線の破線」で、
-    //     実線の輪郭で囲うのは線種の規則に反する
+    //     そこへ実線の標記を足すのは線種の規則に反する
+    //
+    // **輪郭の矩形は描かない**（ユーザー明示指示「矩形をやめて」）——アキの輪郭は定義上つねに
+    // 周囲の実体（壁の断面・床/天井の断面線・腰壁の天端・面端の縦線）と一致するため、矩形として
+    // 独立に描くと必ず二重になる。しかも矩形は中線なので、後から重なって**断面＝太線という
+    // 線種の情報を上書きしてしまう**（実機「5」A: X2通りの壁の断面（太線）の上に、アキ矩形の
+    // 左辺（中線）が重なっていた）。抜けの範囲はバツと「ア キ」で足りる。
     const isRect = g.every(c => Math.abs(c.z0 - z0) < GAP_EPS && Math.abs(c.z1 - z1) < GAP_EPS);
     if (!g.some(c => c.viaOpening) && isRect && dash === 'center') {
-      prims.push({ type: 'rect', x: x0, y: zToY(z1), w: x1 - x0, h: z1 - z0,
-        weight: weightForRole(ElevationLineRole.SILHOUETTE) });
       prims.push({ type: 'text', x: (x0 + x1) / 2, y: zToY((z0 + z1) / 2),
         text: 'ア キ', anchor: 'middle', baseline: 'middle' });
     }

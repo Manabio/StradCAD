@@ -23,7 +23,7 @@
  */
 import { GAP_EPS_MM as GAP_EPS } from '../elevationStyle.js';
 import { localXOf, worldOf } from './sectionTypes.js';
-import { collectCutBreaks, probeColumn } from './sectionProbe.js';
+import { collectCutBreaks, probeColumn, upperFloorZAt } from './sectionProbe.js';
 import { faceFromCut } from './sectionFace.js';
 import { emitColumns, emitOpenGapMarks } from './sectionEmit.js';
 import { stairPrimitivesForCut } from './sectionStair.js';
@@ -72,6 +72,12 @@ function withCeilProfileBreaks(cut, breaks) {
 /**
  * `cut.ceilProfile`（区間ごとの天井断面の高さ。断面ローカルx）から、xを含む区間の天井を引く。
  * profileが無ければnull＝打ち切らない（階段帯など、区間の天井を持たない呼び出し側は従来どおり）。
+ *
+ * **profileの範囲外（壁のない端部の探査延長で作られる面の外の列）は端の区間の値へクランプする**
+ * ——面図側が天井線を`drawnX0..drawnXRun`（延長込み）まで端の区間の高さで引き延ばしている
+ * （`elevationFigure.js`の`ceilAbsAtX`と同じ規約）以上、打ち切り高さもそこまで同じ値でなければ
+ * ならない。nullを返すと**その列だけ打ち切りが効かず**、描かれている天井線より上の帯の側縁が
+ * 面の端に出る（実測: 実機「5」で面の左端に z2400..3000 の中線が出た）。
  * @param {import('./sectionTypes.js').SectionCut} cut
  * @param {number} x0
  * @param {number} x1
@@ -81,7 +87,8 @@ function ceilZAt(cut, x0, x1) {
   const prof = cut.ceilProfile;
   if (!Array.isArray(prof) || prof.length === 0) return null;
   const mid = (x0 + x1) / 2;
-  const hit = prof.find(s => mid >= s.loX - GAP_EPS && mid <= s.hiX + GAP_EPS);
+  const hit = prof.find(s => mid >= s.loX - GAP_EPS && mid <= s.hiX + GAP_EPS)
+    ?? (mid < prof[0].loX ? prof[0] : prof[prof.length - 1]);
   return hit && Number.isFinite(hit.ceilZ) ? hit.ceilZ : null;
 }
 
@@ -111,28 +118,31 @@ function sameCutWall(a, b) {
  * **天井が終わっている面そのもの**で、天井の高い側から実際に見える——列自身の天井で打ち切ると
  * 壁ごと消える（実機「5」A: X2通りの2階壁が断面抽出から丸ごと漏れていた根本原因）。
  * そこで、その壁が占める列の連なりを左右へたどり、**連なりの外側の列**の天井のうち高い方を
- * 「見える上限」として返す。
+ * 「見える上限」として返す。併せて**どちら側から見えているか**（'lo'=左／'hi'=右）も返す
+ * ——見えるのはその側の面だけで、反対側の面は低い天井の裏に隠れたままだから
+ * （ユーザー明示指示: 実機「5」A「X2の右側が断面線なら、左側は壁の中になり、描画しないが正解」）。
  *
  * 連なりの外側だけを見るのが要点——壁自身が乗る列の天井は低い側のままなので、隣接1列だけを
  * 見ると壁厚が2列に割れている場合（壁は片面ずつのWallオブジェクト）に片側だけ生き残る。
  * 左右とも同じ高さの天井なら戻り値は列自身の天井と等しく、従来どおり打ち切られる
- * （隣室との仕切りで天井に隠れる壁。実機「5」A面左3200の2階壁・C1面右400の2階X2壁）。
+ * （隣室との仕切りで天井に隠れる壁。実機「5」A面左3200の2階壁）。
  * @param {object[]} columns - x0昇順。bandsは未クリップ
  * @param {number} i
- * @returns {number|null}
+ * @returns {{ceilZ:number|null, side:'lo'|'hi'|null}}
  */
 function exposedCeilZAt(columns, i) {
   const col = columns[i];
   const cuts = col.bands.filter(b => isCutBand(b) && b.wall);
-  if (cuts.length === 0) return col.ceilZ;
+  if (cuts.length === 0) return { ceilZ: col.ceilZ, side: null };
   const shares = j => !!columns[j]?.bands.some(b => isCutBand(b) && cuts.some(a => sameCutWall(a, b)));
   let lo = i; while (shares(lo - 1)) lo--;
   let hi = i; while (shares(hi + 1)) hi++;
-  let max = col.ceilZ;
-  for (const n of [columns[lo - 1], columns[hi + 1]]) {
-    if (n && Number.isFinite(n.ceilZ) && (!Number.isFinite(max) || n.ceilZ > max)) max = n.ceilZ;
+  let best = { ceilZ: col.ceilZ, side: null };
+  for (const [n, side] of [[columns[lo - 1], 'lo'], [columns[hi + 1], 'hi']]) {
+    if (!n || !Number.isFinite(n.ceilZ)) continue;
+    if (!Number.isFinite(best.ceilZ) || n.ceilZ > best.ceilZ) best = { ceilZ: n.ceilZ, side };
   }
-  return max;
+  return best;
 }
 
 /**
@@ -155,21 +165,32 @@ function exposedCeilZAt(columns, i) {
  * ——例外2により**描かれる**ようになった（ユーザー指示「2階X2通りの壁が断面抽出から漏れた
  * 原因を特定して根本的に修正」）。
  * **見えがかり（'wall'）にはどちらの例外も適用しない**——腰壁でも、天井の向こうにあれば見えない。
+ * **見える側の面だけを描く**: 例外2で残した帯には`exposedSide`（'lo'|'hi'）を付ける。壁の反対側の
+ * 面は低い天井の裏に隠れているので、断面の縁はその1本だけになる（`sectionEmit.js`のemitColumns）。
  * @param {import('./sectionTypes.js').ZBand[]} bands
  * @param {number|null} ceilZ
- * @param {number|null} [exposedCeilZ] - 省略時はceilZ（例外2を使わない）
+ * @param {{ceilZ:number|null, side:'lo'|'hi'|null}} [exposed] - 省略時は例外2を使わない
  * @returns {import('./sectionTypes.js').ZBand[]}
  */
-function clipBandsToCeil(bands, ceilZ, exposedCeilZ = ceilZ) {
+function clipBandsToCeil(bands, ceilZ, exposed = { ceilZ, side: null }) {
   if (!Number.isFinite(ceilZ)) return bands;
-  const exposed = Number.isFinite(exposedCeilZ) && exposedCeilZ > ceilZ + GAP_EPS;
+  const useExposed = Number.isFinite(exposed?.ceilZ) && exposed.ceilZ > ceilZ + GAP_EPS;
   const out = [];
   for (const band of bands) {
-    if (isCutBand(band) && band.isKneeDrop === true) { out.push(band); continue; }
-    if (isCutBand(band) && exposed && band.z1 > ceilZ + GAP_EPS) {
-      out.push({ ...band, z0: Math.min(band.z0, ceilZ), z1: Math.min(band.z1, exposedCeilZ) });
+    // **例外2を例外1より先に見る**——境界に立つ壁は腰壁でも残す必要がある。
+    // 帯のz範囲は**壁の実体のまま**にする（低い天井まで下ろさない）——1階天井〜上階FLの区間は
+    // 壁ではなく**上階の床構造**で、その断面は`sectionEmit.js`の`ceilStepSlabSection`が
+    // 境界の小口として描く。ここで壁の帯を引き伸ばすと、壁の**向こう側の面**まで低い天井まで
+    // 下りてしまい、「断面の中」（ユーザー提示の図のa）に線が入る。
+    if (isCutBand(band) && useExposed && band.z1 > ceilZ + GAP_EPS) {
+      out.push({ ...band, z1: Math.min(band.z1, exposed.ceilZ),
+        // 隠れ側の面を落とすのは**上下いっぱいに立つ壁**だけ。腰壁・垂れ壁は天端／下端が
+        // 露出していて、その縁が壁厚ぶんの見付として実際に見える（ユーザー確定「腰壁断面線は、
+        // 天端で曲がり、壁厚だけ左に進み」）——片面だけにすると天端の線が宙で終わる。
+        exposedSide: band.isKneeDrop === true ? null : exposed.side });
       continue;
     }
+    if (isCutBand(band) && band.isKneeDrop === true) { out.push(band); continue; }
     if (band.z0 >= ceilZ - GAP_EPS) continue;
     out.push(band.z1 > ceilZ ? { ...band, z1: ceilZ } : band);
   }
@@ -282,8 +303,18 @@ export function buildColumns(cut, probeCtx) {
   rawColumns.sort((a, b) => a.x0 - b.x0); // dirSign<0だとworld昇順とlocal昇順が逆転するため並べ替える
   // 天井での打ち切りは**全列を揃えてから**行う（clipBandsToCeilの例外2が左右の列の天井を見る
   // ため。列ごとにその場で打ち切ると、まだ作られていない隣の列を参照できない）。
+  // さらに**露出の判定を先に全列ぶん済ませてから**打ち切る——exposedCeilZAtは「同じ壁が続く列」を
+  // z範囲の一致で追うので、打ち切りながら進めると**既に打ち切った隣の列のz範囲が変わっていて
+  // 同じ壁と認識できず**、壁厚が2列に割れている壁の片側だけが処理から漏れる
+  // （実機「5」D1: 腰壁の手前半分だけ1F天井まで下り、残り半分が2FLのままで内部に縦線が出た）。
+  const exposedList = rawColumns.map((_, i) => exposedCeilZAt(rawColumns, i));
+  // 天井より上に**上階の床が実在するか**を層スタックから直接引いておく（sectionEmit.jsの
+  // ceilStepSlabSectionが「上階の床の断面」を描いてよいかの判定に使う）。
+  for (const col of rawColumns) {
+    col.upperFloorZ = upperFloorZAt(cut, (col.worldLo + col.worldHi) / 2, probeCtx);
+  }
   for (let i = 0; i < rawColumns.length; i++) {
-    rawColumns[i].bands = clipBandsToCeil(rawColumns[i].bands, rawColumns[i].ceilZ, exposedCeilZAt(rawColumns, i));
+    rawColumns[i].bands = clipBandsToCeil(rawColumns[i].bands, rawColumns[i].ceilZ, exposedList[i]);
   }
   return mergeColumns(rawColumns);
 }

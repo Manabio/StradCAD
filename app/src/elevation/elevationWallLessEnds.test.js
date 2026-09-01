@@ -184,8 +184,9 @@ test('開放スパン: 床断面より下の遠側床線と端部の縦線は細
     wallLessEndExtendModelMm: 150,
   });
 
-  // 遠側床線（y=+100=床断面より下）: 細線の破線が「1本だけ」（QA指摘: アキ矩形の実線が
-  // 同座標に重なると細破線が覆われて見えなくなるため、重複描画がないことまで固定する）
+  // 遠側床線（y=+100=床断面より下）: 細線の破線が「1本だけ」（重複描画がないことまで固定する。
+  // かつてはアキ矩形の実線が同座標に重なると細破線が覆われて見えなくなる問題があった——
+  // 矩形は後に廃止したが、重複を作らないという要求自体は変わらない）
   const farLines = prims.filter(p => p.type === 'line' && p.y1 === 100 && p.y2 === 100 && p.x2 - p.x1 > 100);
   assert.equal(farLines.length, 1, '床断面下の遠側床線は1本だけのはず（重複描画なし）');
   const farLine = farLines[0];
@@ -194,10 +195,14 @@ test('開放スパン: 床断面より下の遠側床線と端部の縦線は細
   assert.equal(farLine.x1, gSpan.loX);
   assert.equal(farLine.x2, gSpan.hiX);
 
-  // アキ矩形は近側床（床断面=y0）まで（far床まで伸ばすと外形の実線が細破線を覆う）
-  const gapRect = prims.find(p => p.type === 'rect' && p.x === gSpan.loX && p.y === -2400);
-  assert.ok(gapRect, 'アキ矩形が見つからない');
-  assert.equal(gapRect.y + gapRect.h, 0, 'アキ矩形の下辺は近側床（床断面）までのはず');
+  // アキ標記の範囲は近側床（床断面=y0）まで（far床まで伸ばすとバツが床断面下の細破線の領域へ
+  // 入り込む）。輪郭の矩形は描かない（ユーザー明示指示「矩形をやめて」）のでバツで見る。
+  assert.equal(prims.filter(p => p.type === 'rect').length, 0, 'アキの輪郭の矩形は描かないはず');
+  const gapDiag = prims.filter(p => p.type === 'line' && p.dash === 'center'
+    && Math.min(p.x1, p.x2) === gSpan.loX && Math.max(p.x1, p.x2) === gSpan.hiX);
+  assert.ok(gapDiag.length >= 1, 'アキのバツが見つからない');
+  const gapYs = [...new Set(gapDiag.flatMap(p => [p.y1, p.y2]))].sort((a, b) => a - b);
+  assert.deepEqual(gapYs, [-2400, 0], 'アキは天井(-2400)〜近側床（床断面=0）までのはず');
 
   // 端部の縦線（far床+100〜床断面0）: 同じ細線の破線が両端にあり、遠側床線と角で交わる。
   // 始点は角（far床側）——破線の位相が角から始まり「破線同士の角は必ず破線の交点」になる
