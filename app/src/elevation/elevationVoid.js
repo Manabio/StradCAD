@@ -21,6 +21,8 @@ import { translatePrimitive } from './elevationPrimitives.js';
 import { makeProbeContext } from './section/sectionProbe.js';
 import { buildCutContent } from './section/sectionContent.js';
 import { cutPlaneOffsetMm, faceCutLine, faceViewSign } from './section/sectionCutPlane.js';
+import { reachableLocalRanges } from './section/sectionVisibility.js';
+import { buildColumns } from './section/sectionEngine.js';
 import { structuralColumnContribution } from './section/sectionStructure.js';
 
 // 2つのワールド矩形が重なるか（面積0の接触は重なりに含めない）。
@@ -132,6 +134,75 @@ function subtractRanges(ranges, subtract) {
   return out;
 }
 
+/** ranges と other の共通部分（どちらもローカルx・昇順マージ済み）。 */
+function intersectRanges(ranges, other) {
+  const out = [];
+  for (const r of ranges) {
+    for (const o of other) {
+      const lo = Math.max(r.lo, o.lo), hi = Math.min(r.hi, o.hi);
+      if (hi - lo > MIN_SUB_SEG_MM) out.push({ lo, hi });
+    }
+  }
+  return mergeRanges(out);
+}
+
+/**
+ * **上階ぶんを描いてよいローカルx範囲**（方針C＋「断面の中は描画しない」）。
+ *
+ * 2つの条件の積で決まる:
+ *   (1) その面の平面が上階に存在し、吹抜けではない範囲（`upperPlaneLocal` − 吹抜け）
+ *   (2) その範囲の上階の空気が、**吹抜けを通って**下階の空間とつながっている範囲
+ *
+ * (2)が無かったのが実機「5」A・C1の不具合の根本——(1)は「上階にその通りの壁が在るか」という
+ * **平面の存在確認**であって可視判定ではないため、1階天井に蓋をされた上階（＝断面の中）まで
+ * 描いていた。吹抜けの境界に上階の壁が立っていればそこで連結が切れて範囲は空になり、
+ * 壁が無い／腰壁で天端の上が抜けていれば連結して従来どおり描かれる。
+ * 判定の実体は`section/sectionVisibility.js`（空気セルの連結成分）。
+ * @param {object} face
+ * @param {object} upperGraph
+ * @param {{layers:object[], probeCtx:object, columnSolids:object[], floorHeightMm:number, hiZ:number}} ctx
+ * @returns {{lo:number,hi:number}[]} ローカルx
+ */
+function upperStoreySegments(face, upperGraph, ctx) {
+  const plan = face.voidAbove;
+  if (!plan) return [];
+  const base = subtractRanges(upperPlaneLocal(face, upperGraph), plan.voidLocal);
+  if (base.length === 0) return [];
+  const { layers, probeCtx, columnSolids, floorHeightMm, hiZ } = ctx;
+  // 面の全長を1本の切断として立てる（**ceilProfileは渡さない**——空気の判定には打ち切り前の
+  // 実体が要る）。断面ローカルxは面ローカルxと同値（originWorldの規約が一致する）。
+  const cut = {
+    seqNo: `${face.label}^?`, dirSign: face.dirSign, face,
+    viewSign: faceViewSign(face),
+    line: faceCutLine(face, cutPlaneOffsetMm(face, layers, { columnSolids })),
+    layers, baseFloorZ: floorHeightMm,
+    zRange: { loZ: floorHeightMm, hiZ },
+  };
+  // cutにceilProfileを渡していない＝列の帯は打ち切られないので、そのまま空気の判定に使える。
+  const reach = reachableLocalRanges(buildColumns(cut, probeCtx),
+    { loZ: floorHeightMm, ceilOf: () => hiZ }, plan.voidLocal);
+  return intersectRanges(base, reach);
+}
+
+/**
+ * 上階ぶんの2パス（輪郭・体裁）が共有する層スタック・プローブ・描画範囲を1度だけ組む。
+ * 範囲を2箇所で別々に計算すると輪郭と体裁が食い違う（片方だけ描かれる）ため、面ごとに
+ * 1つのMapで持つ。
+ */
+function makeUpperStoreyContext(layout, upperGraph, floorHeightMm, upperCH) {
+  const layers = [{ graph: upperGraph, floorZMm: floorHeightMm, role: 'self' }];
+  const probeCtx = makeProbeContext(layers);
+  const columnSolids = structuralColumnContribution(layers);
+  const hiZ = floorHeightMm + upperCH;
+  const segsByFace = new Map();
+  for (const { face } of layout.faceRuns) {
+    if (!face.voidAbove) continue;
+    segsByFace.set(face,
+      upperStoreySegments(face, upperGraph, { layers, probeCtx, columnSolids, floorHeightMm, hiZ }));
+  }
+  return { layers, probeCtx, columnSolids, hiZ, segsByFace };
+}
+
 /**
  * **上階ぶんの展開を、同じ帯へ床高さぶん持ち上げて重ねる**（ユーザー確定の方針C）。
  *
@@ -145,19 +216,14 @@ function subtractRanges(ranges, subtract) {
  * （面の x=0 と cut の x=0 は一致しない）。
  * @param {object[]} primitives 積み先
  * @param {ReturnType<typeof layoutBandFaces>} layout
- * @param {object} upperGraph
- * @param {{floorHeightMm:number, upperCH:number, roomBoundsRect:object|null, endExtendMm:number|undefined}} opts
+ * @param {ReturnType<typeof makeUpperStoreyContext>} upper - 層スタック・プローブ・描画範囲
+ * @param {{floorHeightMm:number, roomBoundsRect:object|null, endExtendMm:number|undefined}} opts
  */
-function appendUpperStoreyOutline(primitives, layout, upperGraph, opts) {
-  const { floorHeightMm, upperCH, roomBoundsRect, endExtendMm } = opts;
-  const layers = [{ graph: upperGraph, floorZMm: floorHeightMm, role: 'self' }];
-  const probeCtx = makeProbeContext(layers);
-  const columnSolids = structuralColumnContribution(layers);
-  const hiZ = floorHeightMm + upperCH;
+function appendUpperStoreyOutline(primitives, layout, upper, opts) {
+  const { floorHeightMm, roomBoundsRect, endExtendMm } = opts;
+  const { layers, probeCtx, columnSolids, hiZ, segsByFace } = upper;
   for (const { face, xCursor } of layout.faceRuns) {
-    const plan = face.voidAbove;
-    if (!plan) continue;
-    for (const seg of subtractRanges(upperPlaneLocal(face, upperGraph), plan.voidLocal)) {
+    for (const seg of segsByFace.get(face) ?? []) {
       if (seg.hi - seg.lo <= MIN_SUB_SEG_MM) continue;
       // ローカルx範囲 → 世界範囲（world = originWorld + dirSign * localX）
       const wa = face.originWorld + face.dirSign * seg.lo;
@@ -215,16 +281,14 @@ function upperFaceRooms(face, upperGraph) {
  * 横方向の寸法（壁芯間・通り芯丸・面ラベル）は上下階で同じ通り芯・同じ位置なので増やさない
  * （重ねても完全に同じ場所へ重なるだけ。ユーザー確認済み）。
  */
-function appendUpperStoreyTrim(primitives, layout, upperGraph, opts) {
+function appendUpperStoreyTrim(primitives, layout, upperGraph, upper, opts) {
   const { floorHeightMm, upperCH, materialMap, scale } = opts;
-  const hiZ = floorHeightMm + upperCH;
+  const { hiZ, segsByFace } = upper;
   const cutWeight = weightForRole(ElevationLineRole.CUT);
   const detailWeight = weightForRole(ElevationLineRole.DETAIL);
   let chDimDone = false;
   for (const { face, xCursor } of layout.faceRuns) {
-    const plan = face.voidAbove;
-    if (!plan) continue;
-    const segs = subtractRanges(upperPlaneLocal(face, upperGraph), plan.voidLocal);
+    const segs = segsByFace.get(face) ?? [];
     if (segs.length === 0) continue;
     for (const seg of segs) {
       // 上階の天井断面線（この範囲の上端。これが無いとアキ・壁の上が宙で終わる）。
@@ -466,21 +530,25 @@ export function buildRoomBandWithVoidAbove(room, graph, voidRoom, upperGraph, ct
   // アキのバツまで通常の部屋帯・階段帯と同じ処理を通る。旧実装はemitColumnsだけを直接
   // 呼んでおり、この3つが丸ごと欠けていた（ユーザー指摘「「6」は正しく「5」は誤った出力」）。
   // 床線・天井線・端の縦線・幅木・建具はbuildFaceFigure側の責務のまま。
+  // 上階を描いてよい範囲（＝「断面の中」でない範囲）は**主cutより先に**求める——上階の床の
+  // 断面線は主cutのceilStepSlabSectionが描くため、そちらにも同じ範囲を渡す必要がある。
+  const upper = makeUpperStoreyContext(layout, upperGraph, floorHeightMm, voidCH);
   appendBandCutContent(primitives, room, graph, layout, [
     { graph, floorZMm: 0, role: 'self' },
     { graph: upperGraph, floorZMm: floorHeightMm, role: 'above' },
   ], {
     endExtendMm: ctx.wallLessEndExtendModelMm,
+    aboveCeilVisibleRangesOf: face => upper.segsByFace.get(face),
   });
-  // 上階ぶんの輪郭（方針C）: 吹抜けではないが上階にその面の平面がある範囲へ、上階を自階とする
-  // 1層の断面をもう1本重ねる。
-  appendUpperStoreyOutline(primitives, layout, upperGraph, {
-    floorHeightMm, upperCH: voidCH,
+  // 上階ぶんの輪郭・体裁（方針C）: 吹抜けを通して下階の空間とつながっている範囲へ、上階を
+  // 自階とする1層の断面をもう1本重ねる。範囲は輪郭・体裁で共有する（食い違うと片方だけ出る）。
+  appendUpperStoreyOutline(primitives, layout, upper, {
+    floorHeightMm,
     roomBoundsRect: roomBounds(room.cells, graph),
     endExtendMm: ctx.wallLessEndExtendModelMm,
   });
-  // 上階ぶんの図面の体裁（天井線・巾木・壁2段書き・天井高寸法）。値の出どころはすべて2階の部屋。
-  appendUpperStoreyTrim(primitives, layout, upperGraph, {
+  // 値の出どころはすべて2階の部屋。
+  appendUpperStoreyTrim(primitives, layout, upperGraph, upper, {
     floorHeightMm, upperCH: voidCH, materialMap: ctx.materialMap ?? null, scale: ctx.scale,
   });
 

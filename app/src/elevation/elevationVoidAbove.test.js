@@ -324,9 +324,13 @@ function makeHalfVoidNoWallBand() {
   const voidRoom = makeRectRoom(g2, 0, 0, 4000, 3000, '吹抜け');
   voidRoom.setFeature(RoomFeature.VOID);
   makeRectRoom(g2, 0, 3000, 4000, 6000, '21');
+  // removeShapeは**id**を取る（オブジェクトを渡すと何も消えない）。壁が消えていないと
+  // 「境界に壁が無い」というこのフィクスチャの前提が成立しない。
   for (const w of [...g2.walls]) {
-    if (!w.isVertical && Math.abs(w.axisCL.effectiveValue - 3000) < 1) g2.removeShape(w);
+    if (!w.isVertical && Math.abs(w.axisCL.effectiveValue - 3000) < 1) g2.removeShape(w.id);
   }
+  assert.equal([...g2.walls].filter(w => !w.isVertical
+    && Math.abs(w.axisCL.effectiveValue - 3000) < 1).length, 0, '前提: 境界(y=3000)に壁が無いこと');
   return buildRoomBandWithVoidAbove(room, g1, voidRoom, g2, { floorHeightAboveMm: FLOOR_HEIGHT });
 }
 
@@ -371,7 +375,12 @@ test('【失敗系・断面の中】buildRoomBandWithVoidAbove: 上に部屋が�
 // ================================================================
 
 // 吹抜けは面の北半分。南は実在の2階の部屋で、1階と違う巾木高さを持たせる。
-function makeUpperStoreyBand({ upperBaseboard = 'h=120', lowerBaseboard = 'h=60' } = {}) {
+// boundary: 吹抜けと2階の部屋の境界(y=3000)に立つ壁の形。
+//   'drop' … 垂れ壁（下端800まで空く）＝下階の空間と2階の空気が**つながる**ので上階を描く
+//   'wall' … 上下いっぱいの壁＝そこで連結が切れるので上階は「断面の中」になり描かない
+// （可視判定を入れる前は boundary に関わらず常に描いていた。elevationVoid.jsのupperStoreySegments）
+function makeUpperStoreyBand({ upperBaseboard = 'h=120', lowerBaseboard = 'h=60',
+  boundary = 'drop' } = {}) {
   const g1 = makeGraph('1階', 0);
   const room = makeRectRoom(g1, 0, 0, 4000, 6000, 'LDK');
   room.finish.setField('baseboardHeight', lowerBaseboard);
@@ -380,6 +389,13 @@ function makeUpperStoreyBand({ upperBaseboard = 'h=120', lowerBaseboard = 'h=60'
   voidRoom.setFeature(RoomFeature.VOID);
   const upper = makeRectRoom(g2, 0, 3000, 4000, 6000, '21');
   upper.finish.setField('baseboardHeight', upperBaseboard);
+  if (boundary === 'drop') {
+    const cls = [...g2.centerLines];
+    const hCL = cls.find(c => c.centerLineType === CenterLineType.HORIZONTAL && c.effectiveValue === 3000);
+    const v0 = cls.find(c => c.centerLineType === CenterLineType.VERTICAL && c.effectiveValue === 0);
+    const v1 = cls.find(c => c.centerLineType === CenterLineType.VERTICAL && c.effectiveValue === 4000);
+    g2.setKneeDropWall(`${hCL.id}:${v0.id}:${v1.id}`, { knee: null, drop: { bottomHeight: 800 } });
+  }
   return buildRoomBandWithVoidAbove(room, g1, voidRoom, g2, { floorHeightAboveMm: FLOOR_HEIGHT });
 }
 const hLines = (band, z) => band.primitives.filter(p => p.type === 'line' && !p.dash
@@ -415,4 +431,76 @@ test('【方針C】buildRoomBandWithVoidAbove: 上階の天井高寸法を1本�
   assert.equal(upperDim.label, CH, '値は2階の天井高');
   assert.equal(vdims.filter(p => Math.abs(-p.from - (FLOOR_HEIGHT + CH)) < 1e-6
     && Math.abs(-p.to - FLOOR_HEIGHT) < 1e-6).length, 1, '帯につき1本だけ');
+});
+
+// ================================================================
+// 「展開図では断面の中は描画しない」の一般規則（ユーザー明示指示2026-08。実機「5」A・C1）
+// 「断面の中」＝連続した断面線で切り取られた向こう側全て。多層帯では断面線が図を左右に
+// 分割するので、**分割されたどちら側が中なのか**を空気セルの連結成分で決める
+// （section/sectionVisibility.js）。
+// 構成: 1階は0..6600の1室。2階はX2(=3200)で分かれ、左が部屋・右が吹抜け。
+// ================================================================
+
+function makeSplitUpperBand({ kneeTopMm = null } = {}) {
+  const g1 = makeGraph('1階', 0);
+  const room = makeRectRoom(g1, 0, 0, 6600, 3000, 'LDK');
+  const g2 = makeGraph('2階', FLOOR_HEIGHT);
+  makeRectRoom(g2, 0, 0, 3200, 3000, '21');
+  const voidRoom = makeRectRoom(g2, 3200, 0, 6600, 3000, '吹抜け');
+  voidRoom.setFeature(RoomFeature.VOID);
+  if (kneeTopMm != null) {
+    // X2の2階壁を腰壁にする（吹抜けまわりの手すり壁）。天端の上で左右の空気がつながる。
+    const cls = [...g2.centerLines];
+    const vCL = cls.find(c => c.centerLineType === CenterLineType.VERTICAL && c.effectiveValue === 3200);
+    const h0 = cls.find(c => c.centerLineType === CenterLineType.HORIZONTAL && c.effectiveValue === 0);
+    const h1 = cls.find(c => c.centerLineType === CenterLineType.HORIZONTAL && c.effectiveValue === 3000);
+    g2.setKneeDropWall(`${vCL.id}:${h0.id}:${h1.id}`, { knee: { topHeight: kneeTopMm }, drop: null });
+  }
+  return buildRoomBandWithVoidAbove(room, g1, voidRoom, g2, { floorHeightAboveMm: FLOOR_HEIGHT });
+}
+
+// 帯の先頭面（A面。xCursor=0・X2は面ローカル3142.5）で、1階天井(-2400)より完全に上にあり、
+// かつX2より左に載るプリミティブ。破線（通り芯・壁中心線の一点鎖線）は作図補助なので除く。
+const X2_LOCAL = 3142.5;
+function aboveCeilLeftOfX2(band) {
+  const xs = p => (p.type === 'line' ? [p.x1, p.x2] : p.type === 'dim' ? [p.at, p.at] : [p.x, p.x]);
+  const ys = p => (p.type === 'line' ? [p.y1, p.y2] : p.type === 'dim' ? [p.from, p.to] : [p.y, p.y]);
+  return band.primitives.filter(p => {
+    if (p.dash) return false;
+    if (!['line', 'dim', 'text'].includes(p.type)) return false;
+    const y = ys(p), x = xs(p);
+    if (Math.max(...y) > -CH - 1e-6) return false;          // 1階天井より上に完全に収まるものだけ
+    return (x[0] + x[1]) / 2 < X2_LOCAL - 1e-6;             // かつX2より左
+  });
+}
+
+test('【明示指示・実機「5」A】上下いっぱいの2階壁の向こう（左3200の1階天井より上）には何も描かない', () => {
+  const band = makeSplitUpperBand();
+  const inside = aboveCeilLeftOfX2(band);
+  assert.deepEqual(inside, [],
+    `X2の2階壁で分割された左側は「断面の中」なので何も描かない（実際:${JSON.stringify(inside)}）`);
+  // 見える側（吹抜け側）は従来どおり: 2F天井断面線が吹抜けの範囲に立つこと。
+  const top = band.primitives.filter(p => p.type === 'line' && !p.dash
+    && Math.abs(p.y1 - p.y2) < 1e-6 && Math.abs(-p.y1 - (FLOOR_HEIGHT + CH)) < 1e-6
+    && (p.x1 + p.x2) / 2 > X2_LOCAL);
+  assert.ok(top.length > 0, '吹抜け側の2F天井断面線は残るはず');
+});
+
+test('【明示指示・実機「5」A】断面の中には壁の“見えない側”の面も描かない（壁の中は描画対象外）', () => {
+  const band = makeSplitUpperBand();
+  // X2の2階壁は世界3142.5..3257.5＝面ローカル3085..3200。左の面(3085)は断面の中を向いている。
+  const verticalsAt = x => band.primitives.filter(p => p.type === 'line' && !p.dash
+    && Math.abs(p.x1 - p.x2) < 1e-6 && Math.abs(p.x1 - x) < 1e-6
+    && Math.min(-p.y1, -p.y2) > CH + 1e-6);
+  assert.deepEqual(verticalsAt(3085), [], '壁の左（断面の中）側の面は描かない');
+  assert.ok(verticalsAt(3200).length > 0, '壁の右（吹抜け＝見える）側の面は描く');
+});
+
+test('【明示指示】境界が腰壁なら天端の上で空気がつながるので、その向こうの上階を描く', () => {
+  const band = makeSplitUpperBand({ kneeTopMm: 800 });
+  const top = band.primitives.filter(p => p.type === 'line' && !p.dash
+    && Math.abs(p.y1 - p.y2) < 1e-6 && Math.abs(-p.y1 - (FLOOR_HEIGHT + CH)) < 1e-6
+    && (p.x1 + p.x2) / 2 < X2_LOCAL);
+  assert.ok(top.length > 0,
+    '腰壁越しに見えるので、X2より左にも2F天井断面線が立つはず（可視判定は「壁の有無」ではなく連結性で決まる）');
 });

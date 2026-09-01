@@ -27,6 +27,7 @@ import { collectCutBreaks, probeColumn, upperFloorZAt } from './sectionProbe.js'
 import { faceFromCut } from './sectionFace.js';
 import { emitColumns, emitOpenGapMarks } from './sectionEmit.js';
 import { stairPrimitivesForCut } from './sectionStair.js';
+import { reachableAirByColumn } from './sectionVisibility.js';
 
 // bands配列が（kind・z0/z1・wall参照・distMm・layerRole・openingPassThrough）まで完全一致するか
 // （mergeColumns用）。WP-E7 D1: openingPassThroughも比較対象に含める——比較しないと、開口の
@@ -112,91 +113,84 @@ function sameCutWall(a, b) {
 }
 
 /**
- * 列iに立つ切断壁の断面が、**どの高さまで見えるか**。
+ * 列iに立つ切断壁の帯が、**自分の天井断面より上でも見えるか**——見えるのは
+ * 「その帯のz範囲を覆う空気が、**隣の列に到達可能な形で**在る」側だけ。
  *
  * 天井断面の高さが変わる境界は必ず壁が受けている。その壁の断面は「天井の向こう」ではなく
  * **天井が終わっている面そのもの**で、天井の高い側から実際に見える——列自身の天井で打ち切ると
  * 壁ごと消える（実機「5」A: X2通りの2階壁が断面抽出から丸ごと漏れていた根本原因）。
- * そこで、その壁が占める列の連なりを左右へたどり、**連なりの外側の列**の天井のうち高い方を
- * 「見える上限」として返す。併せて**どちら側から見えているか**（'lo'=左／'hi'=右）も返す
- * ——見えるのはその側の面だけで、反対側の面は低い天井の裏に隠れたままだから
- * （ユーザー明示指示: 実機「5」A「X2の右側が断面線なら、左側は壁の中になり、描画しないが正解」）。
+ * 逆に見えない側の面まで描くと壁厚が図に出てしまう（同「5」A面左3200・C1面右400。
+ * ユーザー明示指示「X2の右側が断面線なら、左側は壁の中になり、描画しないが正解」）。
  *
- * 連なりの外側だけを見るのが要点——壁自身が乗る列の天井は低い側のままなので、隣接1列だけを
- * 見ると壁厚が2列に割れている場合（壁は片面ずつのWallオブジェクト）に片側だけ生き残る。
- * 左右とも同じ高さの天井なら戻り値は列自身の天井と等しく、従来どおり打ち切られる
- * （隣室との仕切りで天井に隠れる壁。実機「5」A面左3200の2階壁）。
+ * **壁が占める列の連なりの外側**を見るのが要点——壁は片面ずつのWallオブジェクトなので壁厚が
+ * 複数列に割れており、隣接1列だけを見ると片側だけが生き残る。判定に使うのは隣の列の
+ * **天井の高さ**ではなく**到達可能な空気**（`sectionVisibility.js`）——その列にも別の切断壁が
+ * 立っていれば、天井が高くてもその高さに空気は無いため。
  * @param {object[]} columns - x0昇順。bandsは未クリップ
+ * @param {Array<Array<{z0:number,z1:number}>>} air - 列ごとの到達可能な空気区間
  * @param {number} i
- * @returns {{ceilZ:number|null, side:'lo'|'hi'|null}}
+ * @param {import('./sectionTypes.js').ZBand} band
+ * @returns {{side:'lo'|'hi'|null, topZ:number}} side===null なら天井より上は見えない
  */
-function exposedCeilZAt(columns, i) {
+function exposedAboveCeil(columns, air, i, band) {
   const col = columns[i];
+  const ceilZ = col.ceilZ;
+  let best = { side: null, topZ: ceilZ };
   const cuts = col.bands.filter(b => isCutBand(b) && b.wall);
-  if (cuts.length === 0) return { ceilZ: col.ceilZ, side: null };
+  if (cuts.length === 0) return best;
   const shares = j => !!columns[j]?.bands.some(b => isCutBand(b) && cuts.some(a => sameCutWall(a, b)));
   let lo = i; while (shares(lo - 1)) lo--;
   let hi = i; while (shares(hi + 1)) hi++;
-  let best = { ceilZ: col.ceilZ, side: null };
-  for (const [n, side] of [[columns[lo - 1], 'lo'], [columns[hi + 1], 'hi']]) {
-    if (!n || !Number.isFinite(n.ceilZ)) continue;
-    if (!Number.isFinite(best.ceilZ) || n.ceilZ > best.ceilZ) best = { ceilZ: n.ceilZ, side };
+  for (const [j, side] of [[lo - 1, 'lo'], [hi + 1, 'hi']]) {
+    for (const iv of air[j] ?? []) {
+      if (iv.z1 <= ceilZ + GAP_EPS) continue;                                 // 自分の天井より上を覆うか
+      if (iv.z1 <= band.z0 + GAP_EPS || iv.z0 >= band.z1 - GAP_EPS) continue; // 帯のz範囲と重なるか
+      if (!Number.isFinite(best.topZ) || iv.z1 > best.topZ) best = { side, topZ: iv.z1 };
+    }
   }
   return best;
 }
 
 /**
- * 列の帯を、その列の天井断面（ceilZ）で打ち切る（buildColumns参照）。天井より上の帯は落とし、
- * またぐ帯は天井で切る。ceilZがnull（判定不能）なら何もしない。
+ * 列iの帯を**見えている範囲**だけに切る（「展開図では断面の中は描画しない」）。
  *
- * **例外1: 天端または下端が露出した切断壁（腰壁・垂れ壁。`isKneeDrop`）は打ち切らない**
- * （ユーザー明示指示2026-08・案A）——露出した縁は吹抜け側の空間に面していて実際に見えるため、
- * 天井の向こうにあっても断面を描く。実機「5」D1の「2階Y1から2000＝2FL+800の腰壁断面」が
- * 消えていた不具合の修正。
- * **例外2: 天井断面の高さが変わる境界に立つ切断壁**（`exposedCeilZ`が列自身の天井より高い）は、
- * **低い側の天井から高い側の天井まで**を1つの断面として描く（ユーザー明示指示: 実機「5」A
- * 「X2通り、1F天井から2FLまでも、同断面が続く」）——その間は上階の床構造で、切断面では壁と
- * 一体の連続した断面になる。壁の実体のz範囲（2FL〜2F天井）で始めると、1F天井線とのあいだに
- * 説明のつかない隙間が空く。
- * 上下いっぱいに立つ切断壁で左右とも天井が同じ高さのものは、隣室との仕切りで天井に隠れるため
- * 従来どおり落とす（実機「5」A面左3200の2階壁）。
- * 注: 「5」C1面右400の2階X2壁は、以前は「落とす」側の例として挙げられていたが、A面から見る
- * のと同じ1枚のX2通りの壁を反対側から見たもので、同じく天井の高さが変わる境界に立っている
- * ——例外2により**描かれる**ようになった（ユーザー指示「2階X2通りの壁が断面抽出から漏れた
- * 原因を特定して根本的に修正」）。
- * **見えがかり（'wall'）にはどちらの例外も適用しない**——腰壁でも、天井の向こうにあれば見えない。
- * **見える側の面だけを描く**: 例外2で残した帯には`exposedSide`（'lo'|'hi'）を付ける。壁の反対側の
- * 面は低い天井の裏に隠れているので、断面の縁はその1本だけになる（`sectionEmit.js`のemitColumns）。
- * @param {import('./sectionTypes.js').ZBand[]} bands
- * @param {number|null} ceilZ
- * @param {{ceilZ:number|null, side:'lo'|'hi'|null}} [exposed] - 省略時は例外2を使わない
+ * 基本はその列の天井断面（`col.ceilZ`）で打ち切る。例外は1つだけ——**天井より上でも、隣の列の
+ * 到達可能な空気に面している切断壁**は、その空気の上端まで描く（`exposedAboveCeil`）。
+ * 段違い天井の境界に立つ壁も、吹抜けに面した腰壁の天端も、この1つの規則から出る
+ * （かつては「段違い天井の壁」「腰壁・垂れ壁」の2つの例外に分かれており、後者は隣に空気が
+ * あるかを見ずに無条件で残していた＝吹抜けに面していない腰壁まで天井の裏に描いていた）。
+ *
+ * 帯のz範囲は**壁の実体のまま**にする（低い天井まで下ろさない）——1階天井〜上階FLの区間は
+ * 壁ではなく上階の床構造で、その断面は`sectionEmit.js`の`ceilStepSlabSection`が境界の小口として
+ * 描く。ここで引き伸ばすと壁の**向こう側の面**まで下りて「断面の中」に線が入る。
+ * **見える側の面だけを描く**ため`exposedSide`を付ける（`sectionEmit.js`のemitColumns）。ただし
+ * 腰壁・垂れ壁（`isKneeDrop`）は天端／下端が露出していて壁厚ぶんの見付が実際に見えるので両縁を
+ * 描く（片面だけにすると天端の線が宙で終わる）。
+ * **見えがかり（'wall'）には例外を適用しない**——腰壁でも、天井の向こうにあれば見えない。
+ * @param {object[]} columns - bandsは未クリップ（この関数は破壊しない）
+ * @param {Array<Array<{z0:number,z1:number}>>} air
+ * @param {number} i
  * @returns {import('./sectionTypes.js').ZBand[]}
  */
-function clipBandsToCeil(bands, ceilZ, exposed = { ceilZ, side: null }) {
-  if (!Number.isFinite(ceilZ)) return bands;
-  const useExposed = Number.isFinite(exposed?.ceilZ) && exposed.ceilZ > ceilZ + GAP_EPS;
+function clipBandsToVisible(columns, air, i) {
+  const col = columns[i];
+  const ceilZ = col.ceilZ;
+  if (!Number.isFinite(ceilZ)) return col.bands;
   const out = [];
-  for (const band of bands) {
-    // **例外2を例外1より先に見る**——境界に立つ壁は腰壁でも残す必要がある。
-    // 帯のz範囲は**壁の実体のまま**にする（低い天井まで下ろさない）——1階天井〜上階FLの区間は
-    // 壁ではなく**上階の床構造**で、その断面は`sectionEmit.js`の`ceilStepSlabSection`が
-    // 境界の小口として描く。ここで壁の帯を引き伸ばすと、壁の**向こう側の面**まで低い天井まで
-    // 下りてしまい、「断面の中」（ユーザー提示の図のa）に線が入る。
-    if (isCutBand(band) && useExposed && band.z1 > ceilZ + GAP_EPS) {
-      out.push({ ...band, z1: Math.min(band.z1, exposed.ceilZ),
-        // 隠れ側の面を落とすのは**上下いっぱいに立つ壁**だけ。腰壁・垂れ壁は天端／下端が
-        // 露出していて、その縁が壁厚ぶんの見付として実際に見える（ユーザー確定「腰壁断面線は、
-        // 天端で曲がり、壁厚だけ左に進み」）——片面だけにすると天端の線が宙で終わる。
-        exposedSide: band.isKneeDrop === true ? null : exposed.side });
-      continue;
+  for (const band of col.bands) {
+    if (isCutBand(band) && band.z1 > ceilZ + GAP_EPS) {
+      const exposed = exposedAboveCeil(columns, air, i, band);
+      if (exposed.side) {
+        out.push({ ...band, z1: Math.min(band.z1, exposed.topZ),
+          exposedSide: band.isKneeDrop === true ? null : exposed.side });
+        continue;
+      }
     }
-    if (isCutBand(band) && band.isKneeDrop === true) { out.push(band); continue; }
     if (band.z0 >= ceilZ - GAP_EPS) continue;
     out.push(band.z1 > ceilZ ? { ...band, z1: ceilZ } : band);
   }
   return out;
 }
-
 /**
  * 隣接する列のbandsが完全一致すれば1列へ統合する（§4「同一分類の隣接併合」）。
  * @param {import('./sectionTypes.js').SectionColumn[]} columns - x0昇順
@@ -301,21 +295,22 @@ export function buildColumns(cut, probeCtx) {
     });
   }
   rawColumns.sort((a, b) => a.x0 - b.x0); // dirSign<0だとworld昇順とlocal昇順が逆転するため並べ替える
-  // 天井での打ち切りは**全列を揃えてから**行う（clipBandsToCeilの例外2が左右の列の天井を見る
-  // ため。列ごとにその場で打ち切ると、まだ作られていない隣の列を参照できない）。
-  // さらに**露出の判定を先に全列ぶん済ませてから**打ち切る——exposedCeilZAtは「同じ壁が続く列」を
-  // z範囲の一致で追うので、打ち切りながら進めると**既に打ち切った隣の列のz範囲が変わっていて
-  // 同じ壁と認識できず**、壁厚が2列に割れている壁の片側だけが処理から漏れる
-  // （実機「5」D1: 腰壁の手前半分だけ1F天井まで下り、残り半分が2FLのままで内部に縦線が出た）。
-  const exposedList = rawColumns.map((_, i) => exposedCeilZAt(rawColumns, i));
+  // 可視領域の判定・打ち切りは**全列を揃えてから**行い、判定は必ず**打ち切り前の実体**で行う
+  // ——打ち切りながら進めると、既に打ち切った隣の列のz範囲が変わっていて同じ壁と認識できず、
+  // 壁厚が2列に割れている壁の片側だけが処理から漏れる（実機「5」D1: 腰壁の手前半分だけ
+  // 1F天井まで下り、残り半分が2FLのままで内部に縦線が出た）。
+  // `air` は列ごとの到達可能な空気区間（床断面〜天井断面のうち切断壁が占めない範囲の連結成分。
+  // sectionVisibility.js）＝「断面の中は描画しない」の判定の一次情報。列へは持たせない
+  // ——打ち切り後のbandsとは対応しない中間値で、外へ出すと「どちらが正か」が二重管理になる。
+  const air = reachableAirByColumn(rawColumns,
+    { loZ: cut.zRange?.loZ ?? 0, ceilOf: c => c.ceilZ ?? cut.zRange?.hiZ ?? 0 });
   // 天井より上に**上階の床が実在するか**を層スタックから直接引いておく（sectionEmit.jsの
   // ceilStepSlabSectionが「上階の床の断面」を描いてよいかの判定に使う）。
   for (const col of rawColumns) {
     col.upperFloorZ = upperFloorZAt(cut, (col.worldLo + col.worldHi) / 2, probeCtx);
   }
-  for (let i = 0; i < rawColumns.length; i++) {
-    rawColumns[i].bands = clipBandsToCeil(rawColumns[i].bands, rawColumns[i].ceilZ, exposedList[i]);
-  }
+  const clipped = rawColumns.map((_, i) => clipBandsToVisible(rawColumns, air, i));
+  rawColumns.forEach((col, i) => { col.bands = clipped[i]; });
   return mergeColumns(rawColumns);
 }
 

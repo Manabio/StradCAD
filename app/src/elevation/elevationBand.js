@@ -386,6 +386,9 @@ export function appendBandCutContent(primitives, room, graph, layout, layers, op
       zRange: { loZ: floorZ, hiZ: Math.max(...ceilProfile.map(s => s.ceilZ)) },
       // 断面の中（天井の向こう）は描かない。区間ごとの天井断面高さで打ち切る（sectionEngine.js）。
       ceilProfile,
+      // 天井断面より上で描画してよい範囲（面ローカルx＝断面ローカルx）。省略＝制限しない。
+      // 多層帯（上部吹抜け）だけが渡す（elevationVoid.jsのupperStoreySegments）。
+      aboveCeilVisibleRanges: opts.aboveCeilVisibleRangesOf?.(face),
     };
     const { content } = buildCutContent(cut, probeCtx, { endExtendMm, bandRoomBounds });
     for (const p of content) primitives.push(translatePrimitive(p, xCursor, 0));

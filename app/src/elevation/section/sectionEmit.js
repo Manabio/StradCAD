@@ -122,7 +122,7 @@ function uncoveredZRanges(col, band) {
     //
     // 切断壁(cut)を覆う側に数えるのは、**壁はその裏へ続いており凹んでいない**ため
     // ——境界に立つ縦線は切断壁自身の断面縁（CUT・太線）が描くので、見えがかり側で重ねて
-    // 描くと同じ位置に2本出る。水平線側は`trimmedByCutWall`が同じ理由で既に抑止しており
+    // 描くと同じ位置に2本出る。水平線側は`hiddenByCutWall`が同じ理由で既に抑止しており
     // （「手前の切断壁でこの帯が切られただけの縁は描かない」）、縦線側だけが取り残されていた。
     // 従来はこの重複が**線種が同じ（どちらもSILHOUETTE）ゆえに`dedupeLines`で消えていた**だけで、
     // 線種を「切断壁の縁=太線／見えがかり=中線・細線」へ分けた時点（ユーザー明示指示2026-08）に
@@ -148,13 +148,18 @@ function uncoveredZRanges(col, band) {
 }
 
 /**
- * 背景側の水平線（見えがかり壁の上下端縁・スラブ端）が、**手前の切断壁の断面線でトリムされる**か
+ * 背景側の水平線（見えがかり壁の上下端縁・スラブ端）が、**手前の切断壁に隠される**か
  * （ユーザー実機指摘2026-08「6」D1・B「1F天井断面が2階袖壁断面線とトリムされていない」）。
- * その列に切断壁(cut)があり、水平線がその壁の天端以下なら、線は壁の断面線の手前で終わる＝
- * その列には描かない。天端より上（例: 腰壁・袖壁の上を通る上階天井）は壁に遮られないので対象外。
+ *
+ * 判定は「その高さが、この列の**空気ではない**（切断壁の実体が占めている）か」——
+ * 「断面の中は描画しない」の一般則をこの列の高さ方向へ適用したもので、
+ * `sectionVisibility.js`の空気区間と同じ見方をする（旧実装は「切断壁の天端以下ならすべて」で、
+ * 床に立たない壁＝垂れ壁の**下**まで巻き込んで隠していた）。天端より上（腰壁・袖壁の上を通る
+ * 上階天井）は壁に遮られないので、従来どおり対象外。
  */
-function trimmedByCutWall(col, z) {
-  return col.bands.some(b => b.kind === 'cut' && z <= b.z1 + GAP_EPS);
+function hiddenByCutWall(col, z) {
+  return col.bands.some(b => b.kind === 'cut'
+    && z >= b.z0 - GAP_EPS && z <= b.z1 + GAP_EPS);
 }
 
 /**
@@ -276,6 +281,29 @@ function cutWallRuns(columns) {
  * @param {number|undefined} ceilZ
  * @returns {object[]}
  */
+/**
+ * [xa,xb]のうち`cut.aboveCeilVisibleRanges`（天井断面より上で描画してよい断面ローカルxの範囲。
+ * 「断面の中は描画しない」の判定結果。省略＝制限しない）に入る部分。向きは元のまま保つ。
+ *
+ * 現状は呼び出し側（`elevationVoid.js`の`upperStoreySegments`）が空気セルの連結成分から求めて
+ * 渡す。段階2でエンジン自身が全帯について求めるようになったら、この入力は不要になる。
+ * @param {import('./sectionTypes.js').SectionCut} cut
+ * @param {number} xa
+ * @param {number} xb
+ * @returns {Array<[number,number]>}
+ */
+function aboveCeilVisibleSpans(cut, xa, xb) {
+  const ranges = cut.aboveCeilVisibleRanges;
+  if (!Array.isArray(ranges)) return [[xa, xb]];
+  const lo = Math.min(xa, xb), hi = Math.max(xa, xb);
+  const out = [];
+  for (const r of ranges) {
+    const s = Math.max(lo, r.lo), e = Math.min(hi, r.hi);
+    if (e - s > GAP_EPS) out.push(xa <= xb ? [s, e] : [e, s]);
+  }
+  return out;
+}
+
 function ceilStepSlabSection(columns, cut, ceilZ) {
   const prims = [];
   const range = cutDrawRange(cut);
@@ -305,7 +333,11 @@ function ceilStepSlabSection(columns, cut, ceilZ) {
     // 「1500CLの右側はね出しまで」。
     const outX = a.ceilZ < b.ceilZ ? range.lo : range.hi;
     if (Math.abs(outX - x) > GAP_EPS) {
-      prims.push(emitLine(cut, x, floorZ, outX, floorZ, ElevationLineRole.CUT, { ceilZ }));
+      // 上階の床の断面線は**低い天井の断面線より上**に載る＝その区間の上階が見えているときだけ
+      // 描いてよい（見えていなければ「断面の中」で、上階の床は天井裏の躯体になる）。
+      for (const [sx, ex] of aboveCeilVisibleSpans(cut, x, outX)) {
+        prims.push(emitLine(cut, sx, floorZ, ex, floorZ, ElevationLineRole.CUT, { ceilZ }));
+      }
     }
   }
   return prims;
@@ -318,7 +350,7 @@ function ceilStepSlabSection(columns, cut, ceilZ) {
  * スラブは吹抜けの開口縁（CL）で終わるが、袖壁はそのCLに芯を合わせて左右へ張り出す。作図は
  *   下階天井(slab.z0) …→ 袖壁の反対側の面 → そこを**上へ**立ち上げて 上階床(slab.z1) へ
  * とつなぎ、袖壁の断面線と交点で取り合わせる。この立上りが無いと天井線が宙で終わる。
- * 上階床側（slab.z1）の水平線は袖壁の手前の面で止まる（`trimmedByCutWall`）——同指摘の
+ * 上階床側（slab.z1）の水平線は袖壁の手前の面で止まる（`hiddenByCutWall`）——同指摘の
  * 「2FL床断面まで下りる、再度CLの外へ延長して終わる」どおり、壁の下は通らない。
  */
 function slabEdgeCutWallJunction(columns, cut, ceilZ) {
@@ -524,11 +556,11 @@ export function emitColumns(columns, cut, emitCtx = {}) {
         // 天井断面線と見えがかりの水平線が重なる。
         const sectionZs = sectionLevelZs(cut, col, col.ceilZ ?? ceilZ);
         const atSectionLevel = z => sectionZs.some(f => Math.abs(z - f) < GAP_EPS);
-        if (!flushOnSlab && !trimmedByCutWall(col, band.z0) && !atSectionLevel(band.z0)
+        if (!flushOnSlab && !hiddenByCutWall(col, band.z0) && !atSectionLevel(band.z0)
             && ownsBoundary(band, neighborBandAt(col, band.z0, -1))) {
           prims.push(emitLine(cut, col.x0, band.z0, col.x1, band.z0, role, { ceilZ, forceDash: beyondBand }));
         }
-        if (!trimmedByCutWall(col, band.z1) && !atSectionLevel(band.z1)
+        if (!hiddenByCutWall(col, band.z1) && !atSectionLevel(band.z1)
             && ownsBoundary(band, neighborBandAt(col, band.z1, +1))) {
           prims.push(emitLine(cut, col.x0, band.z1, col.x1, band.z1, role, { ceilZ, forceDash: beyondBand }));
           // 腰壁の天端（仕様2026-08）: 見えがかりでも天端の帯は見えるので下端を細線で足す。
@@ -556,7 +588,7 @@ export function emitColumns(columns, cut, emitCtx = {}) {
         // 無いのに縦線が出る。
         //
         // 判定は「**帯の下端が、その列の切断壁の天端にちょうど一致する**」——それが「切断壁に
-        // 切られて持ち上がった」ということの定義そのもの。以前は`trimmedByCutWall(col, band.z0)`
+        // 切られて持ち上がった」ということの定義そのもの。以前は`hiddenByCutWall(col, band.z0)`
         // ＝「天端が帯の下端以上の切断壁がこの列にあるか」で見ていたが、これは**切断壁より下に
         // ある帯まで巻き込む**（実機「5」A: 1階の壁の帯z0..2400が、その上に立つ2階X2壁の断面
         // z2400..5400のせいで「切られた」と判定され、X2右側の壁エッジが丸ごと消えていた）。
@@ -621,7 +653,7 @@ export function emitColumns(columns, cut, emitCtx = {}) {
       const aIsFloorEdge = (a.kind === 'slab' || a.kind === 'open');
       const bIsFloorEdge = (b.kind === 'slab' || b.kind === 'open');
       if (aIsFloorEdge && bIsFloorEdge && a.kind !== b.kind) {
-        if (!trimmedByCutWall(col, a.z1)) {
+        if (!hiddenByCutWall(col, a.z1)) {
           prims.push(emitLine(cut, col.x0, a.z1, col.x1, a.z1, ElevationLineRole.SILHOUETTE, { ceilZ }));
         }
       }
