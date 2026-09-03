@@ -101,7 +101,7 @@ test('Round Fフィクスチャ: room3のB1はspans=[wall 400, open(+100)]にな
   assert.equal(b1.spans[1].farFloorDeltaMm, 100, '開放先(3\')のFL差+100が伝わるはず');
 });
 
-test('Round Fフィクスチャ: D1のbuildFaceFigureは遠側床線を重複させず（wallAdjacentFloorSegmentsが既に同じ高さのCUT線を描くため）・上部あき・境界エッジを描く', () => {
+test('Round Fフィクスチャ: D1のbuildFaceFigureは遠側床線を重複させず（wallAdjacentFloorSegmentsが既に同じ高さのCUT線を描くため）・境界エッジを描く', () => {
   const { graph, room2 } = buildRoundFFixture();
   const faces = composeRoomFaces(room2, graph);
   const d1 = faces.find(f => f.label === 'D1');
@@ -127,16 +127,12 @@ test('Round Fフィクスチャ: D1のbuildFaceFigureは遠側床線を重複さ
     p.x1 === openSpan.loX && p.x2 === openSpan.hiX);
   assert.equal(silhouetteFarLine, undefined, 'segsと同じ高さのSILHOUETTE遠側床線は重複して描かれないはず');
 
-  // 上部あき（appendGapMark。対角2本＋「ア キ」テキスト。輪郭の矩形は描かない——アキの輪郭は
-  // つねに周囲の実体と一致するため、矩形にすると必ず二重になる。ユーザー明示指示「矩形をやめて」）。
+  // 上部あき（バツ・「ア キ」）は2026-09に断面エンジンへ一本化した（二重描画の解消）。
+  // buildFaceFigureは開放スパンのアキを描かない——ここでは「描かない」ことだけを固定し、
+  // アキ自体の位置・高低差への追従は帯レベル（elevationWallLessEnds.test.js）で固定する。
   assert.equal(prims.filter(p => p.type === 'rect').length, 0, 'アキの輪郭の矩形は描かないはず');
-  const gapDiag = prims.filter(p => p.type === 'line' && p.dash === 'center'
-    && p.x1 === openSpan.loX && p.x2 === openSpan.hiX);
-  assert.ok(gapDiag.length >= 1, '上部あきのバツ（対角線）が見つかるはず');
-  const gapYs = [...new Set(gapDiag.flatMap(p => [p.y1, p.y2]))].sort((a, b) => a - b);
-  assert.deepEqual(gapYs, [-CH, -openSpan.farFloorDeltaMm],
-    'あきは天井(-CH)〜開放先の床(-farFloorDeltaMm=50)のはず');
-  assert.ok(prims.some(p => p.type === 'text' && p.text === 'ア キ'), '「ア キ」テキストが見つかるはず');
+  assert.deepEqual(prims.filter(p => p.type === 'text' && p.text === 'ア キ'), [],
+    '開放スパンのアキは図側では描かないはず（唯一の情報源は断面エンジン）');
 
   // 境界エッジ: open区間のloX側（隣がwall区間）にSILHOUETTE縦線。
   const edge = prims.find(p => p.type === 'line' && p.weight === 'medium' && p.x1 === openSpan.loX && p.x2 === openSpan.loX && p.y2 === -CH);

@@ -12,6 +12,7 @@ import { worldToCell } from '../finish/gridCells.js';
 import { composeRoomFaces } from './elevationFaceList.js';
 import { drawnSpanRanges } from './elevationFaces.js';
 import { buildFaceFigure } from './elevationFigure.js';
+import { buildRoomBand } from './elevationBand.js';
 
 const ARCH = { labeled: false, discipline: Discipline.ARCH };
 
@@ -199,14 +200,11 @@ test('開放スパン: 床断面より下の遠側床線と端部の縦線は細
   assert.equal(farLine.x1, gSpan.loX);
   assert.equal(farLine.x2, gSpan.hiX);
 
-  // アキ標記の範囲は近側床（床断面=y0）まで（far床まで伸ばすとバツが床断面下の細破線の領域へ
-  // 入り込む）。輪郭の矩形は描かない（ユーザー明示指示「矩形をやめて」）のでバツで見る。
+  // アキ（バツ・「ア キ」）は2026-09に断面エンジンへ一本化したため、図側には出ない
+  // （高低差への追従＝下端は遠側床、はエンジン側の規約。下の帯レベルのテストで固定する）。
   assert.equal(prims.filter(p => p.type === 'rect').length, 0, 'アキの輪郭の矩形は描かないはず');
-  const gapDiag = prims.filter(p => p.type === 'line' && p.dash === 'center'
-    && Math.min(p.x1, p.x2) === gSpan.loX && Math.max(p.x1, p.x2) === gSpan.hiX);
-  assert.ok(gapDiag.length >= 1, 'アキのバツが見つからない');
-  const gapYs = [...new Set(gapDiag.flatMap(p => [p.y1, p.y2]))].sort((a, b) => a - b);
-  assert.deepEqual(gapYs, [-2400, 0], 'アキは天井(-2400)〜近側床（床断面=0）までのはず');
+  assert.deepEqual(prims.filter(p => p.type === 'line' && p.dash === 'center' && p.x1 !== p.x2), [],
+    '開放スパンのアキは図側では描かないはず');
 
   // 端部の縦線（far床+100〜床断面0）: 同じ細線の破線が両端にあり、遠側床線と角で交わる。
   // 始点は角（far床側）——破線の位相が角から始まり「破線同士の角は必ず破線の交点」になる
@@ -353,29 +351,123 @@ test('【実機指摘】開放スパンが壁のない端部に接する面で�
     '壁のない端部の延長(150mm)は残るはず');
 });
 
-test('【失敗系・実機指摘】同じ面でもその端に壁があれば従来どおりアキを描く', () => {
-  const prims = buildFaceFigure(faceWithOpenSpanAtWallLessEnd({ hasWallAtLocal0: true }), FIG_CTX);
-  assert.equal(prims.filter(p => p.type === 'text' && p.text === 'ア キ').length, 1,
-    '端が壁で閉じていればアキは従来どおり描かれるはず');
+test('【実機修正2026-09】buildFaceFigure: 端が壁で閉じていても、開放スパンのアキは図側では描かない', () => {
+  // 旧実装は「壁のない端部に接するときだけ描かない」（touchesWallLessEnd）という条件付き抑止
+  // だったが、同じ範囲を断面エンジンも描いており二重になっていた（「10」D1・「11'」A2）。
+  // 図側は**無条件で描かない**——2経路のどちらを描くかを面ごとに切り替える第2の機構を残さない。
+  for (const hasWallAtLocal0 of [false, true]) {
+    const prims = buildFaceFigure(faceWithOpenSpanAtWallLessEnd({ hasWallAtLocal0 }), FIG_CTX);
+    assert.deepEqual(prims.filter(p => p.type === 'text' && p.text === 'ア キ'), [],
+      `hasWallAtLocal0=${hasWallAtLocal0}: 図側はアキの文字を描かないはず`);
+    assert.deepEqual(prims.filter(p => p.type === 'line' && p.dash === 'center' && p.x1 !== p.x2), [],
+      `hasWallAtLocal0=${hasWallAtLocal0}: 図側はアキのバツを描かないはず`);
+  }
 });
 
-test('【失敗系・実機指摘】開放スパンの両端が壁で閉じていれば従来どおりアキを描く', () => {
-  const { graph, room } = buildFixture(); // Round F（10/B2・11'/A2等と同型: 端に壁がある開放スパン）
-  const withGap = [];
-  for (const r of [room, ...[]]) void r;
-  for (const rm of graph.rooms) {
-    for (const f of composeRoomFaces(rm, graph)) {
-      const open = (f.spans ?? []).find(s => s.kind === 'open');
-      if (!open) continue;
-      const touchesWallLess = (!f.hasWallAtLocal0 && Math.abs(open.loX) < 1) ||
-        (!f.hasWallAtLocalRun && Math.abs(open.hiX - f.run) < 1);
-      if (touchesWallLess) continue;
-      const prims = buildFaceFigure(f, {
-        graph, project: { openingNumberIndex: new Map() }, room: rm, ceilingHeight: 2400,
-        materialMap: null, gridCLs: [],
-      });
-      if (prims.some(p => p.type === 'text' && p.text === 'ア キ')) withGap.push(`${rm.name}/${f.label}`);
-    }
-  }
-  assert.ok(withGap.length > 0, `端が壁で閉じた開放スパンではアキが残るはず（実際:${withGap}）`);
+// 帯レベル（断面エンジンが唯一の描画者）でのアキ。図側を止めたことで二重が消え、
+// ユーザー裁定2026-09「高低差」（バツの床は遠側床に着く）がそのまま出る。
+// このフィクスチャの room3p は段差見付け面（step面。appendGapMark 経路は残す）も持つため、
+// **開放スパンのパネルの範囲に絞って**数える。
+function openSpanGapMarks() {
+  const { graph, room3p } = buildFixture();
+  const a2 = composeRoomFaces(room3p, graph).find(f => f.label === 'A2');
+  const span = a2.spans.find(sp => sp.kind === 'open' && sp.farFloorDeltaMm === -100);
+  assert.ok(span, '前提: A2にfar床-100の開放スパンがある');
+  const band = buildRoomBand(room3p, graph, { project: { openingNumberIndex: new Map() } });
+  // 遠側床線（図側に残す表現。床断面より下＝細線の破線）＝この開放スパンが描かれている帯内xの範囲。
+  // 描画xはdrawnSpanRanges（境界に立つ実壁の開放側の面）基準なのでspan.loX/hiXとは一致しない。
+  const farFloors = band.primitives.filter(p => p.type === 'line' && p.weight === 'thin'
+    && p.dash === 'dashed' && Math.abs(p.y1 - p.y2) < 1e-6
+    && Math.abs(p.x2 - p.x1) > 100);
+  assert.equal(farFloors.length, 1, `前提: 遠側床線（図側）が1本残っている（実際:${farFloors.length}）`);
+  const farFloor = farFloors[0];
+  const [lo, hi] = [Math.min(farFloor.x1, farFloor.x2), Math.max(farFloor.x1, farFloor.x2)];
+  const inSpan = p => Math.min(p.x1, p.x2) >= lo - 1 && Math.max(p.x1, p.x2) <= hi + 1;
+  return {
+    farFloor,
+    texts: band.primitives.filter(p => p.type === 'text' && p.text === 'ア キ' && p.x >= lo && p.x <= hi),
+    diag: band.primitives.filter(p => p.type === 'line' && p.x1 !== p.x2 && p.y1 !== p.y2 && inSpan(p)),
+    band,
+  };
+}
+
+test('【実機修正2026-09】帯: 開放スパンのアキはバツ2本・「ア キ」1つだけ（図側と断面エンジンの二重描画が消える）', () => {
+  const { texts, diag } = openSpanGapMarks();
+  assert.equal(diag.length, 2, `バツは対角2本だけのはず（実際:${diag.length}）`);
+  assert.equal(texts.length, 1, `「ア キ」は1つだけのはず（実際:${texts.length}）`);
+  // 端点順序違いの同座標ペア（dedupeCoincidentLinesが破線を畳まないため残っていた症状）が無いこと。
+  // 端点の順序だけを正規化する（対角2本は互いに別物なので、点の集合としては区別される）。
+  const key = p => [[p.x1, p.y1], [p.x2, p.y2]]
+    .map(([x, y]) => `${Math.round(x * 10) / 10}:${Math.round(y * 10) / 10}`).sort().join('|');
+  assert.equal(new Set(diag.map(key)).size, 2, '同じ対角が2組重なっていないはず');
+});
+
+test('【裁定2026-09・11ダッシュ型】帯: 遠側床が帯の床より低い開放スパンでは、下端を遠側床まで下げない', () => {
+  // ユーザー裁定「一段違う床の線」——その位置の床は探査が既に見つけている。遠側床（一段下）まで
+  // 下げると、実機「11'」A2左で下端が床から浮く（裁定前の不具合）。
+  const { farFloor, diag } = openSpanGapMarks();
+  const ys = [...new Set(diag.flatMap(p => [p.y1, p.y2]))].sort((a, b) => a - b);
+  assert.ok(!ys.includes(farFloor.y1),
+    `下端を遠側床線(y=${farFloor.y1})まで下げてはいけない（実際:${JSON.stringify(ys)}）`);
+  assert.deepEqual(ys, [-2500, -200], '探査が見つけた床(y=-200)〜天井(y=-2500)のままのはず');
+  // 上端は近側/遠側の天井の低い方＝この構成では天井断面線と同じ高さ。
+  const ceilLine = openSpanGapMarks().band.primitives.find(p => p.type === 'line'
+    && p.weight === 'thick' && Math.abs(p.y1 - p.y2) < 1e-6 && Math.abs(p.y1 - ys[0]) < 1e-6);
+  assert.ok(ceilLine, `バツの上端(y=${ys[0]})は天井断面線と同じ高さのはず`);
+});
+
+// ================================================================
+// 実機欠陥2026-09（目視で検出）:「「10」D1・「11'」A2 のバツの下端が帯の床に張り付く」。
+// 実データ相当（親＋部分指定のFL差）で組むと、開放スパンの far 側が**親＝帯の部屋と同じFL**
+// （farFloorDeltaMm=0）でありながら、その位置の**近側の床が部分指定で下がっている**構成が現れる。
+// 探査は下がった床（z=-50）まで空気を見つけているのに、far値0でクランプすると下端がz=0へ
+// 引き上げられていた。値が0でも「帯の床と断定して引き上げる」ことはしない、が回帰ゲート。
+// ================================================================
+function makePartialFloorRoom({ partialCells }) {
+  const graph = new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
+  const V = v => graph.centerLines.find(c => c.centerLineType === CenterLineType.VERTICAL && c.value === v)
+    ?? graph.addCenterLine(CenterLineType.VERTICAL, v, ARCH);
+  const H = v => graph.centerLines.find(c => c.centerLineType === CenterLineType.HORIZONTAL && c.value === v)
+    ?? graph.addCenterLine(CenterLineType.HORIZONTAL, v, ARCH);
+  const key = (x0, y0, x1, y1) => `${V(x0).id}:${H(y0).id}:${V(x1).id}:${H(y1).id}`;
+  // 2×2の田の字のうち3セルがL字の室10（内部境界は壁が無い＝開放スパン）。
+  const room = graph.addRoom(new Set([[0, 0, 2000, 2000], [2000, 0, 4000, 2000], [0, 2000, 2000, 4000]]
+    .map(c => key(...c))), '10');
+  generateRoomWallsFromOutline(graph, room);
+  const sub = graph.addRoom(new Set(partialCells.map(c => key(...c))), "10'", undefined, new Set([room.id]));
+  sub.setFloorLevel(-50);
+  return { graph, room, sub };
+}
+const gapDiagOf = band => band.primitives.filter(p => p.type === 'line' && p.x1 !== p.x2 && p.y1 !== p.y2);
+
+test('【実機修正2026-09・回帰】帯: 遠側床が帯の床と同値でも、近側の床が下がっていればバツの下端はその床まで下りる', () => {
+  // 部分指定＝左下セル: 開放スパンの far 側は親（FL差0）だが、その位置の床は-50。
+  const { graph, room } = makePartialFloorRoom({ partialCells: [[0, 0, 2000, 2000]] });
+  const opens = composeRoomFaces(room, graph)
+    .flatMap(f => (f.spans ?? []).filter(s => s.kind === 'open'));
+  assert.ok(opens.length > 0 && opens.every(s => s.farFloorDeltaMm === 0),
+    `前提: この構成の開放スパンは farFloorDeltaMm=0（実データで実際に現れる値）`);
+  const band = buildRoomBand(room, graph, { project: { openingNumberIndex: new Map() } });
+  const ys = [...new Set(gapDiagOf(band).flatMap(p => [p.y1, p.y2]))].sort((a, b) => a - b);
+  assert.equal(Math.max(...ys), 50,
+    `バツの下端は下がった床(y=+50)まで下りるはず——far値0で帯の床へ引き上げてはいけない（実際:${JSON.stringify(ys)}）`);
+  // 線と文字が食い違わないこと（実機では下端0に対しtextの中心が-1175だった）。
+  const text = band.primitives.find(p => p.type === 'text' && p.text === 'ア キ');
+  assert.ok(text, '「ア キ」があるはず');
+  assert.equal(text.y, (Math.max(...ys) + Math.min(...ys)) / 2,
+    `「ア キ」はバツと同じ範囲の中心にあるはず（実際:${text.y}）`);
+});
+
+test('【裁定2026-09・失敗系】帯: 遠側床が下がっていても、下端は遠側床まで下げない（探査どおり）', () => {
+  // 部分指定＝右下セル: 面の far 側が部分指定（FL-50）＝ farFloorDeltaMm=-50 が引ける構成。
+  const { graph, room } = makePartialFloorRoom({ partialCells: [[2000, 0, 4000, 2000]] });
+  const far = composeRoomFaces(room, graph)
+    .flatMap(f => (f.spans ?? []).filter(s => s.kind === 'open'))
+    .find(s => s.farFloorDeltaMm === -50);
+  assert.ok(far, '前提: farFloorDeltaMm=-50 の開放スパンがある');
+  const band = buildRoomBand(room, graph, { project: { openingNumberIndex: new Map() } });
+  const bottoms = [...new Set(gapDiagOf(band).map(p => Math.max(p.y1, p.y2)))];
+  assert.ok(!bottoms.includes(-far.farFloorDeltaMm),
+    `遠側床(y=${-far.farFloorDeltaMm})まで下げてはいけない（実際:${JSON.stringify(bottoms)}）`);
+  assert.deepEqual(bottoms, [0], 'その位置の床（探査どおり=帯の床）に着くはず');
 });

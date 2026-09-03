@@ -1114,6 +1114,32 @@ export function emitOpenGapMarks(columns, cut, emitCtx = {}) {
     };
     const L = edgeZ(x0 + GAP_EPS, z0, z1);
     const R = edgeZ(x1 - GAP_EPS, z0, z1);
+    // **開放スパンのアキは高低差に追従する**（ユーザー裁定2026-09「高低差」＝バツの床は遠側床に
+    // 着く）——下端は遠側の床、上端は近側/遠側の天井の低い方（既存の「開放先の天井が低ければ
+    // そこまで」と同じ規約）。判定材料（遠側のFL/CH）は探査では得られないため、呼び出し側が
+    // `cut.openSpans`（値の出どころは face.spans）で渡す。該当しないアキ（探査で見つかる通常の
+    // 壁なし区間）は従来どおり探査どおりのz範囲のまま。
+    // **far値が引けないときはクランプしない**（＝探査どおりのz。「値が無いのに帯の床と断定する」
+    // のは安全側ではない——実機で下端が帯の床へ引き上げられる不具合になった）。
+    // 連結成分に複数の開放スパンが掛かりうるため、**重なりが最大のもの**を採る
+    // （最初の1件だと、端が僅かに掛かっただけの別スパンのfar値を使ってしまう）。
+    const span = (cut.openSpans ?? [])
+      .map(sp => ({ sp, ov: Math.min(sp.hiX, x1) - Math.max(sp.loX, x0) }))
+      .filter(c => c.ov > GAP_EPS)
+      .sort((a, b) => b.ov - a.ov)[0]?.sp;
+    const farFloorZ = span && Number.isFinite(span.farFloorZ) ? span.farFloorZ : null;
+    const farCeilZ = span && Number.isFinite(span.farCeilZ) ? span.farCeilZ : null;
+    // 下端（ユーザー裁定2026-09の3点で確定）: **遠側床が帯の床より高いときだけ**そこまで持ち上げる
+    // ——その下は遠側の床スラブで塞がれていてアキではない。それ以外（遠側が帯の床と同じ／低い）は
+    // **探査が見つけた床のまま**にする。探査はその位置の実際の床（部分指定の段差・遠側の一段違う床）を
+    // 既に見つけており、far値で上書きすると必ずどちらかの実機ケースが壊れる:
+    //   「11'」A2左（far=-100・遠側が一段上の床）→ 探査どおり（遠側床まで下げない）
+    //   「10」D1（far=0・近側の床が下がっている）→ 探査どおり（帯の床へ引き上げない）
+    //   遠側床が帯の床より高い構成 → 遠側床まで持ち上げる
+    const spanLoZ = z => (farFloorZ != null && farFloorZ > GAP_EPS ? farFloorZ : z);
+    const spanHiZ = z => (farCeilZ == null ? z : Math.min(z, farCeilZ));
+    const LC = { lo: spanLoZ(L.lo), hi: spanHiZ(L.hi) };
+    const RC = { lo: spanLoZ(R.lo), hi: spanHiZ(R.hi) };
     // §5.6: baseFloorZより上=一点鎖線(center)、床断面より下=破線(dashed)。連結成分がbaseFloorZを
     // またぐ（D1の「開口+上階アキ」等）場合は、床断面より下へ到達している時点でdashedを選ぶ
     // （ASSUMED: 設計書はこの併合時の様式を明記していないため、より弱い表現＝dashedを安全側の
@@ -1125,7 +1151,8 @@ export function emitOpenGapMarks(columns, cut, emitCtx = {}) {
     // 差し引くのは**実体の帯だけ**（wall/cut/cutAlong。ただし開口貫通は成分の一部なので除く）
     // ——「アキのセルの和」でクリップすると、開口と上階アキがL字に連結する構成で
     // 「1組の大きなX」（WP-E7 D1の確認済み仕様）が細切れになるため採らない。
-    const blockers = obstructionRects(columns, x0, x1, z0, z1);
+    const blockers = obstructionRects(columns, x0, x1,
+      Math.min(z0, LC.lo, RC.lo), Math.max(z1, LC.hi, RC.hi));
     // アキ標記の「ア キ」（旧 elevationFigure.js の appendGapMark から移設）。次の3条件を
     // すべて満たす連結成分にだけ付ける:
     //   - 建具の開口を含まない（viaOpening）… そこは建具の姿図の場所で「アキ」ではない
@@ -1141,10 +1168,12 @@ export function emitOpenGapMarks(columns, cut, emitCtx = {}) {
     // 左辺（中線）が重なっていた）。抜けの範囲はバツと「ア キ」で足りる。
     const isRect = g.every(c => Math.abs(c.z0 - z0) < GAP_EPS && Math.abs(c.z1 - z1) < GAP_EPS);
     if (!g.some(c => c.viaOpening) && isRect && dash === 'center') {
-      prims.push({ type: 'text', x: (x0 + x1) / 2, y: zToY((z0 + z1) / 2),
+      // 中心はクランプ後のz範囲（バツと同じ範囲）で採る——線と文字が食い違わないため。
+      const tLo = Math.min(LC.lo, RC.lo), tHi = Math.max(LC.hi, RC.hi);
+      prims.push({ type: 'text', x: (x0 + x1) / 2, y: zToY((tLo + tHi) / 2),
         text: 'ア キ', anchor: 'middle', baseline: 'middle' });
     }
-    for (const [a, b] of [[[x0, L.lo], [x1, R.hi]], [[x0, L.hi], [x1, R.lo]]]) {
+    for (const [a, b] of [[[x0, LC.lo], [x1, RC.hi]], [[x0, LC.hi], [x1, RC.lo]]]) {
       const line = emitLine(cut, a[0], a[1], b[0], b[1], ElevationLineRole.DETAIL, { dash, ceilZ });
       prims.push(...subtractRectsFromLine(line, blockers));
     }

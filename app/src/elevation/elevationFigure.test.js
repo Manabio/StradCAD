@@ -604,7 +604,7 @@ test('【失敗系・問題修正2026-08その3】buildFaceFigure: beyondCeiling
 // ---- 問題修正2026-08その2: 開放スパンの向こう側の天井線 ----
 // ユーザー明示指示（「3'」のA2, 1200）: 開放先の天井が近側の天井断面より低ければ、床〜天井の間に
 // 見える見えがかりとしてSILHOUETTE実線（中線）で描く。アキはfar天井までにクランプする。
-test('【問題修正2026-08その2】buildFaceFigure: 開放先の天井が低い開放スパンは、far天井の見えがかり線（中線実線）が出てアキもそこまでにクランプされる', () => {
+test('【問題修正2026-08その2】buildFaceFigure: 開放先の天井が低い開放スパンは、far天井の見えがかり線（中線実線）が出る', () => {
   const CH = 2400;
   const face = makeFace({
     spans: [
@@ -622,11 +622,9 @@ test('【問題修正2026-08その2】buildFaceFigure: 開放先の天井が低�
   assert.equal(farCeilLines.length, 1, 'far天井の見えがかり線(y=-2300)が1本出るはず');
   assert.equal(farCeilLines[0].weight, 'medium', '床〜天井断面の間に見える向こう側の断面は中線');
 
-  // アキの範囲はバツ（対角2本）で見る。上端はfar天井(-2300)までクランプされる。
-  const diag = prims.filter(p => p.type === 'line' && p.dash === 'center' && p.x1 !== p.x2);
-  assert.equal(diag.length, 2, 'アキのバツ（対角2本）が出るはず');
-  const ys = [...new Set(diag.flatMap(p => [p.y1, p.y2]))].sort((a, b) => a - b);
-  assert.deepEqual(ys, [-2300, 0], 'アキはfar天井(-2300)から床(max(-100,0)=0)までのはず');
+  // アキ（バツ・「ア キ」）は2026-09に断面エンジンへ一本化（図側では描かない）。
+  assert.deepEqual(prims.filter(p => p.type === 'line' && p.dash === 'center' && p.x1 !== p.x2), [],
+    'アキのバツは図側では描かないはず');
   assert.equal(prims.filter(p => p.type === 'rect').length, 0, 'アキの矩形は描かないはず');
 });
 
@@ -653,9 +651,10 @@ test('【問題修正2026-08その2】buildFaceFigure: 開放先の天井が天�
   assert.equal(edges.length, 2, `x=2800とx=4000の両端に縦線が出るはず（実際:${JSON.stringify(edges)}）`);
   assert.deepEqual(edges.map(e => e.x1).sort((a, b) => a - b), [2800, 4000]);
 
-  const diag = prims.filter(p => p.type === 'line' && p.dash === 'center' && p.x1 !== p.x2);
-  const topY = Math.min(...diag.flatMap(p => [p.y1, p.y2]));
-  assert.equal(topY, -2400, 'far天井が高い場合、アキの上端は近側の天井断面(-2400)までのはず');
+  // アキの上端（近側/遠側の天井の低い方）は断面エンジンの管轄になったため、ここでは
+  // 図側がアキを描かないことだけを固定する（2026-09）。
+  assert.deepEqual(prims.filter(p => p.type === 'line' && p.dash === 'center' && p.x1 !== p.x2), [],
+    'アキのバツは図側では描かないはず');
 });
 
 // ---- ユーザー実機指摘2026-08「6」C「1500の一点鎖線が出ていない」 ----

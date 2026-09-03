@@ -756,8 +756,8 @@ export function buildFaceFigure(face, ctx) {
   //      床断面より下にある向こう側の断面）場合は細線の破線（ユーザー明示指示2026-08:
   //      「床断面より下、または天井断面より上にある展開面の向こう側の断面は、細線の破線」。
   //      見上げる方向・床〜天井の間に見える線は従来どおりSILHOUETTE実線）。
-  //   2. 上部あき: `appendGapMark`（段差見付け面のアキと共用）で天井から遠側床までの範囲へ
-  //      バツと「ア キ」を描く（輪郭の矩形は描かない。appendGapMarkのヘッダ参照）。
+  //   2. 上部あき（バツ・「ア キ」）: **ここでは描かない**。断面エンジン（emitOpenGapMarks）が
+  //      唯一の情報源で、高低差への追従もそちらが行う（2026-09。二重描画の解消）。
   //   3. 境界エッジ: open区間の両端のうち隣がwall側（区間 or 面端）ならSILHOUETTE縦線を引く
   //      （far側の方が低ければ破線。ユーザー明示指示）。床断面より下の部分（near床〜far床）は
   //      1と同じ細線の破線で継ぎ足す——端点をfar床線と厳密に一致させ、破線同士の角が必ず
@@ -789,36 +789,18 @@ export function buildFaceFigure(face, ctx) {
         weight: looksDown ? detailWeight : silhouetteWeight, ...dashOpt,
       });
     }
-    // アキ標記の範囲は近側床（床断面）までにクランプする——建築的に、あき＝壁面の抜けは
-    // 立っている近側の床までで、その下は床の落差の見えがかりだから（far床まで伸ばすと、
-    // 床断面下の細破線＝遠側床線・床下縦線の領域までバツが入り込む）。
-    // 見上げ方向は従来どおりfar床まで（far床の方が高い＝あきはそこで終わる）。
-    // 問題修正2026-08: 上端は帯のCH固定ではなく、その区間の実際の天井（天井断面線と同じ基準）。
-    // 問題修正2026-08その2: 開放先の天井(farCeilAbsMm)が近側の天井より低い場合、あき＝壁面の
-    // 抜けとして見えるのは開放先の天井まで（その上は境界の下がり壁の見えがかり）のため、
-    // far天井へもクランプする（床側の「近側床までにクランプ」と対の規約）。
     // WP-2: アキ上端（近側天井）もceilAbsAtX経由——ceilingProfile未指定・範囲外は
     // nearCeilAbsAtの値のまま（現行同値）。
     const spanMidX = (s.loX + s.hiX) / 2;
     const spanCeilAbs = ceilAbsAtX(spanMidX, nearCeilAbsAt(spanMidX));
     const farCeilAbs = s.farCeilAbsMm ?? spanCeilAbs; // 未指定（単体テスト等）は近側と同じ＝従来挙動
-    const gapTop = Math.min(spanCeilAbs, farCeilAbs);
-    const gapH = gapTop - Math.max(farDelta, nearDelta);
-    // ユーザー実機指摘2026-08（「5」C2: X2上のエッジ線・アキ・バツが不要／床天井の延長はこのままで
-    // 良い）: **開放スパンが「壁のない端部」に接している場合はアキ標記を描かない**。
-    // その端は既に床線・天井線の延長で「続きがある」ことを表しており、同じ場所へアキを重ねると
-    // 二重表現になる（かつては`appendGapMark`が矩形も積んでいたため、その辺が面端ちょうどに
-    // 縦線として現れ、実機では「X2上のエッジ線」に見えていた——矩形は後に廃止したが、
-    // 「壁のない端部にアキを重ねない」というこの判定自体は今も要る）。
-    // 反対側が壁で閉じている開放スパン（室が自分自身へ回り込む内部の抜け等）は従来どおり
-    // アキを描く——実機の他の面（10/B2・10/C2・10/D1・11'/A2・5/D1）はすべてこちらで、
-    // 診断ログでもアキが壁のない端部に接するのは指摘のあった面だけだった。
-    const touchesWallLessEnd =
-      (!hasWallAtLocal0 && Math.abs(s.loX) < SPLIT_MERGE_EPS_MM) ||
-      (!hasWallAtLocalRun && Math.abs(s.hiX - run) < SPLIT_MERGE_EPS_MM);
-    if (gapH > 0 && !touchesWallLessEnd) {
-      appendGapMark(prims, { x: s.loX, y: -gapTop, w: s.hiX - s.loX, h: gapH }, detailWeight);
-    }
+    // **開放スパンのアキ標記（バツ・「ア キ」）はここでは描かない**（ユーザー実機指摘2026-09
+    // 「「10」D1・「11'」A2: バツが2重」）——同じ範囲を断面エンジン（section/sectionEmit.jsの
+    // emitOpenGapMarks）も描いており、2つの描画者が同じ標記を出していた（帯の床へ着く側と
+    // 遠側床へ着く側で、床に高低差があるとずれて見える）。**アキの標記はすべてsection/が
+    // 唯一の情報源**（.claude/elevation-model.mdの担当境界）に一本化し、高低差への追従
+    // （下端=遠側床・上端=低い方の天井）はエンジン側でcut.openSpansから行う。
+    // ここで残すのは図側の表現（遠側床線・遠側天井線・境界エッジ）だけ。
     const prevIsWall = i > 0 ? spans[i - 1].kind === 'wall' : hasWallAtLocal0;
     const nextIsWall = i < spans.length - 1 ? spans[i + 1].kind === 'wall' : hasWallAtLocalRun;
     // 問題修正2026-08その2（ユーザー明示指示: 「3'」のA2, 1200の天井に「3」の天井の見えがかり線

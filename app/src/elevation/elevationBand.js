@@ -420,6 +420,20 @@ export function appendBandCutContent(primitives, room, graph, layout, layers, op
       // 天井断面より上で描画してよい範囲（面ローカルx＝断面ローカルx）。省略＝制限しない。
       // 多層帯（上部吹抜け）だけが渡す（elevationVoid.jsのupperStoreySegments）。
       aboveCeilVisibleRanges: opts.aboveCeilVisibleRangesOf?.(face),
+      // 開放スパン（face.spans の kind==='open'）の遠側の床・天井（帯FL基準のz）。アキ（バツ）の
+      // 下端を遠側床へ着け、上端を近側/遠側の天井の低い方で止めるためにエンジンが使う
+      // （ユーザー裁定2026-09「高低差」）。判定材料が主cutに無いものは呼び出し側から渡す、という
+      // aboveCeilVisibleRangesと同じ形。**値の単一情報源はface.spans**——図側に残る遠側床線と
+      // 同じ値から出るので、線とアキの下端が食い違わない。
+      openSpans: (face.spans ?? []).filter(sp => sp.kind === 'open').map(sp => ({
+        loX: sp.loX, hiX: sp.hiX,
+        // **?? 0 で埋めない**——引けない値を「帯の床」と断定するとアキの下端が引き上げられる
+        // （エンジン側は非有限なら「クランプしない」へ倒す）。**閾値と埋め方は対で意味を持つ**:
+        // 現ルールは`farFloorZ > GAP_EPS`のときだけクランプするため0で埋めても観測上は同じだが、
+        // クランプ条件を広げるならfar値の欠損時の扱いをここで再検討すること。
+        farFloorZ: sp.farFloorDeltaMm,
+        farCeilZ: sp.farCeilAbsMm,
+      })),
     };
     const { content } = buildCutContent(cut, probeCtx, { endExtendMm, bandRoomBounds, scale: opts.scale });
     for (const p of content) primitives.push(translatePrimitive(p, xCursor, 0));
