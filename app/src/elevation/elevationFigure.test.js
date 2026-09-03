@@ -10,7 +10,7 @@ import {
   openingsReachingCorner, formatMaterialLabel, avoidObstacleRangesX, estimateWallLabelWidthPx,
   segEndProfile,
 } from './elevationFigure.js';
-import { buildRoomFaces as realBuildRoomFaces } from './elevationFaces.js';
+import { buildRoomFaces as realBuildRoomFaces, faceBoundaryLocalX, drawnSpanRanges } from './elevationFaces.js';
 import { wallAdjacentFloorSegments } from './elevationFloorProfile.js';
 import {
   GRID_LINE_ABOVE_CH_MM, CANVAS_BG_COLOR, DEFAULT_FACE_LABEL_AVOID_THRESHOLD_MM,
@@ -2036,4 +2036,143 @@ test('【実機修正2026-09】buildFaceFigure: 段差と壁のない端部が�
     '壁のない端部でも巾木の区間は面の範囲(0..run)のままで、内部境界も動かないはず');
   assert.equal(allSpans(plain)[0][0], 0, '左端は面の端(0)');
   assert.equal(allSpans(plain).at(-1)[1], 4000, '右端は面の端(run=4000)＝はね出さない');
+});
+
+// ================================================================
+// 壁2段書きは「壁の実体がある区間ごとに1つ・その区間の中央」（ユーザー実機指摘2026-09
+// 「壁仕上げは壁の中央に書く。図中、壁が2つに分かれていたら、それぞれの壁の中央に書く」）。
+// 区間 = boundary ∩ 壁の実体がある範囲（= spans の wall ∩ selfLocal）。
+// **開口・床の段差は区間を割らない**（従来どおり「避ける障害物」のまま）。
+// ================================================================
+const WALL_ROOM = { wallMaterial: 'm1' };
+const WALL_MAP = new Map([['m1', { name: 'ラワン合板' }]]);
+const wallLabelXs = prims => prims
+  .filter(p => p.type === 'text' && p.text === '壁：ラワン合板').map(p => p.x).sort((a, b) => a - b);
+const wallLabelCtx = extra => baseCtx({ room: makeRoom(WALL_ROOM), materialMap: WALL_MAP, ...extra });
+
+test('【実機修正2026-09・室10 B2型】buildFaceFigure: 面の一部が開放スパンなら、壁区間の中央に置く', () => {
+  // open[0..1000] + wall[1000..4000]。boundary=[0,4000]（makeFaceの既定）。
+  const face = makeFace({ spans: [
+    { loX: 0, hiX: 1000, kind: 'open', farFloorDeltaMm: 0 },
+    { loX: 1000, hiX: 4000, kind: 'wall' },
+  ] });
+  assert.deepEqual(wallLabelXs(buildFaceFigure(face, wallLabelCtx())), [2500],
+    '壁区間(1000..4000)の中央=2500のはず（面中心2000ではない）');
+});
+
+test('【実機修正2026-09・室11ダッシュ A2型】buildFaceFigure: open+wall+open でも壁区間の中央に1つ', () => {
+  // **左右非対称**にする（壁区間の中央2000 ≠ 面/boundaryの中央2250）——対称だと「面ごとに1つ」の
+  // 旧実装でも同じ座標になり、規則の変更を検知できない（qa指摘2026-09）。
+  const face = makeFace({ lo: 0, hi: 4500, run: 4500, spans: [
+    { loX: 0, hiX: 1000, kind: 'open', farFloorDeltaMm: 0 },
+    { loX: 1000, hiX: 3000, kind: 'wall' },
+    { loX: 3000, hiX: 4500, kind: 'open', farFloorDeltaMm: 0 },
+  ] });
+  assert.deepEqual(wallLabelXs(buildFaceFigure(face, wallLabelCtx())), [2000],
+    '壁区間(1000..3000)の中央=2000のはず（boundary中央2250ではない）');
+});
+
+test('【実機修正2026-09・室5 A型】buildFaceFigure: 多層合成で延長された範囲には置かない（自階の壁の中央）', () => {
+  const face = makeFace({ voidAbove: { voidLocal: [], selfLocal: [{ lo: 0, hi: 1600 }] } });
+  assert.deepEqual(wallLabelXs(buildFaceFigure(face, wallLabelCtx())), [800],
+    '自階の壁(0..1600)の中央=800のはず（面中心2000ではない）');
+});
+
+test('【実機修正2026-09・規則の核】buildFaceFigure: 壁が2つに分かれていれば、それぞれの中央に1つずつ', () => {
+  const face = makeFace({ spans: [
+    { loX: 0, hiX: 1000, kind: 'wall' },
+    { loX: 1000, hiX: 2000, kind: 'open', farFloorDeltaMm: 0 },
+    { loX: 2000, hiX: 4000, kind: 'wall' },
+  ] });
+  assert.deepEqual(wallLabelXs(buildFaceFigure(face, wallLabelCtx())), [500, 3000],
+    '2区間それぞれの中央(500と3000)に1つずつのはず');
+});
+
+test('【失敗系・実機修正2026-09】buildFaceFigure: 狭い壁区間だけラベルを省略する（区間ごとの判定）', () => {
+  const face = makeFace({ spans: [
+    { loX: 0, hiX: 400, kind: 'wall' },          // 狭い区間
+    { loX: 400, hiX: 1000, kind: 'open', farFloorDeltaMm: 0 },
+    { loX: 1000, hiX: 4000, kind: 'wall' },      // 広い区間
+  ] });
+  // scale=0.01（1mm=0.01px）→ ラベル幅は 5文字×12px/0.01 = 6000mm ではなく、実寸で効く値にする。
+  const wide = buildFaceFigure(face, wallLabelCtx({ scale: 0.2 }));   // 幅 60/0.2=300mm
+  assert.deepEqual(wallLabelXs(wide), [2500], '狭い区間(400)は落ち、広い区間(1000..4000)だけ残るはず');
+  const none = buildFaceFigure(face, wallLabelCtx({ scale: 0.01 }));  // 幅 60/0.01=6000mm
+  assert.deepEqual(wallLabelXs(none), [], '全区間が狭ければ0個のはず');
+});
+
+test('【失敗系・解釈の固定】buildFaceFigure: 開口は壁区間を割らない（1つのまま・退避だけ効く）', () => {
+  const opening = {
+    id: 'opW', isVertical: false, axisCL: { id: 'axisY0' }, wallSide: 1,
+    centerCoord: 2000, width: 2000, height: 2000, sillHeight: 0,
+    category: OpeningCategory.FITTING, subType: 'singleSwing', fixtureType: null,
+  };
+  const prims = buildFaceFigure(makeFace(), wallLabelCtx({
+    graph: makeGraph({ openings: [opening] }), scale: 0.2,
+  }));
+  const xs = wallLabelXs(prims);
+  assert.equal(xs.length, 1, '開口で壁が割れてラベルが2つになってはいけない（開口は壁に開いた穴）');
+  assert.ok(xs[0] < 1000 || xs[0] > 3000, `開口(1000..3000)を避けた位置のはず（実際:${xs[0]}）`);
+});
+
+test('【失敗系・実機修正2026-09】buildFaceFigure: 上階だけの面（selfLocal空）には自階の壁2段書きを置かない', () => {
+  const face = makeFace({ voidAbove: { voidLocal: [{ lo: 0, hi: 4000 }], selfLocal: [] } });
+  assert.deepEqual(wallLabelXs(buildFaceFigure(face, wallLabelCtx())), [],
+    '自階の壁が1mmも無い面には置かない（巾木と同じ述語・同じ理由）');
+});
+
+test('【不変ゲート・実機修正2026-09】全面が壁の面のラベル座標は boundary の中心のまま（run基準へ寄らない）', () => {
+  // **boundaryが面の範囲[0,run]と一致しない面**で固定する（実データでは壁中心線は面端より
+  // 半壁厚外側にあり、片端が壁のない端部だと非対称になる）。基準をrunへ変えると座標が動き、
+  // 全面の既存ラベル＝ゴールデン全面差分になる。
+  const CL_LO = { id: 'clLo', centerLineType: CenterLineType.VERTICAL, effectiveValue: -100, value: -100 };
+  const CL_HI = { id: 'clHi', centerLineType: CenterLineType.VERTICAL, effectiveValue: 4300, value: 4300 };
+  const face = makeFace({ startCLId: 'clLo', endCLId: 'clHi' });
+  const graph = makeGraph({ shapes: new Map([[CL_LO.id, CL_LO], [CL_HI.id, CL_HI]]) });
+  const boundary = faceBoundaryLocalX(face, graph);
+  assert.deepEqual([boundary.lo, boundary.hi], [-100, 4300], '前提: boundaryは[0,run]と一致しない');
+  assert.deepEqual(wallLabelXs(buildFaceFigure(face, wallLabelCtx({ graph, scale: 0.2 }))), [2100],
+    'boundaryの中心(2100)のまま——面の範囲(0..4000)の中心2000へ寄ってはいけない');
+});
+
+test('【不変ゲート】buildFaceFigure: scale未指定なら省略判定を行わない（狭い壁区間にも置く）', () => {
+  const face = makeFace({ spans: [
+    { loX: 0, hiX: 400, kind: 'wall' },
+    { loX: 400, hiX: 4000, kind: 'open', farFloorDeltaMm: 0 },
+  ] });
+  assert.deepEqual(wallLabelXs(buildFaceFigure(face, wallLabelCtx())), [200],
+    'scale未指定は従来どおり幅判定なし＝狭い区間にも置くはず');
+});
+
+test('【失敗系・実機修正2026-09】buildFaceFigure: 開放スパンは障害物に積まない（CL基準の値で壁区間の端を食わない）', () => {
+  // 開放スパンの描画基準(drawnSpanRanges)は「境界に立つ実壁の**開放側の面**」で、CL基準より
+  // **狭い**（drawn open ⊂ CL open。elevationFaces.jsのdrawnSpanBoundaryX）。よってCL基準の
+  // open区間は壁区間の端へ半壁厚ぶん食い込む——障害物に積むと、その食い込みぶんラベルが寄る。
+  // 食い込みが効くのは壁区間が狭いときだけなので、そういう構成で固定する。
+  const clB = { id: 'clB', centerLineType: CenterLineType.VERTICAL, effectiveValue: 1000, value: 1000 };
+  const clC = { id: 'clC', centerLineType: CenterLineType.VERTICAL, effectiveValue: 1200, value: 1200 };
+  // 境界に立つ直交壁（垂直）。開放側の面はCLから左右非対称にずらす（左100・右50）。
+  const wallAt = (cl, axisValue) => ({
+    isVertical: true, axisCL: cl, axisValue, coord1: -500, coord2: 500,
+    materialRange: { lo: axisValue - 1, hi: axisValue + 1 },
+  });
+  const graph = {
+    openings: [], kneeDropWalls: new Map(), centerLines: [clB, clC],
+    walls: [wallAt(clB, 900), wallAt(clC, 1250)],
+    shapeMap: new Map([[clB.id, clB], [clC.id, clC]]),
+  };
+  const face = makeFace({ spans: [
+    { loX: 0, hiX: 1000, kind: 'open', farFloorDeltaMm: 0, hiCLId: 'clB' },
+    { loX: 1000, hiX: 1200, kind: 'wall', hiCLId: 'clC' },
+    { loX: 1200, hiX: 4000, kind: 'open', farFloorDeltaMm: 0 },
+  ] });
+  const drawn = drawnSpanRanges(face, graph);
+  assert.deepEqual([drawn[0].hiX, drawn[2].loX], [900, 1250],
+    '前提: 描画基準の壁区間は900..1250（CL基準の1000..1200より広い＝CL側が食い込む側）');
+  // ラベル幅161.5mm（=84px/0.52。'壁：ラワン合板'は全角7文字）: 壁区間350mmには収まる
+  // （省略判定 350>=2W を満たす）が、CL基準の食い込みを障害物に積むと中央1075で衝突し、
+  // 空き区間(1000..1200)の中央1100へ寄ってしまう。
+  const xs = wallLabelXs(buildFaceFigure(face, wallLabelCtx({ graph, scale: 0.52 })));
+  assert.deepEqual(xs, [1075],
+    '壁区間(900..1250)の中央1075のはず——開放スパンを障害物に積むと1100へ寄る');
 });

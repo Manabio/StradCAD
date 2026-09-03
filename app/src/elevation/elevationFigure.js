@@ -357,32 +357,63 @@ export function openingSectionPrimitives(o, x0, dir, cutWeight, silhouetteWeight
 }
 
 /**
- * 「自階の面が実在しない区間」（多層帯の合成で延長された範囲）をローカルxの区間配列で返す。
- * `selfLocal` が undefined（合成を通っていない面）なら空配列＝呼び出し側の挙動は完全に不変。
+ * **その面の平面に壁の実体が無いローカルx区間**（＝開放スパン＋多層合成で延長された範囲）。
+ * 「その面のどこに壁があるか」の**単一の述語**で、巾木（壁のないところに巾木はない）と
+ * 壁2段書き（壁仕上げは壁の中央に書く）の両方がここから出す——二重管理を作らない
+ * （ユーザー実機指摘2026-09「壁が2つに分かれていたらそれぞれの壁の中央に書く」）。
  *
- * 補集合は**面自身のローカル範囲[0, run]の中**で採り、その端に自階の面が無い側だけ
- * 描画端（drawnX0/drawnXRun）まで広げる——壁のない端部のはね出しは「図の外へ続く」表現で、
- * 自階の面が届いている端では従来どおり残さなければならない（ユーザー確定挙動）。逆に
- * 面の内部境界（延長範囲との境目）では、はね出させずに自階の面の端ちょうどで切る。
- * @param {Array<{lo:number,hi:number}>|undefined} selfLocal - 昇順・結合済み（elevationVoid.js）
+ * - 開放スパンは**描画基準**（`drawnSpans`＝境界に立つ実壁の開放側の面）で採る。CL基準は
+ *   これより半壁厚ぶん**広い**ため、そのまま使うと巾木がCLで切れたり（CLと壁面の間に隙間）、
+ *   壁区間の端が実際より狭く出たりする。
+ * - 多層合成の延長は `voidAbove.selfLocal`（自階の面が実在する範囲）の補集合。
+ *   `selfLocal` が無い面（通常帯・階段帯・単体テスト）はこの項が空＝出力完全不変。
+ * - **面の端に接する区間は外側へ開いたまま返す**（±Infinity）——呼び出し側は自分の基準
+ *   （巾木は[0,run]、壁2段書きは壁中心線区間boundary）でクリップする。閉じた値を返すと、
+ *   boundary が面の端より外側にある通常の面で、端に幅半壁厚の偽の「壁区間」が生まれる。
+ * @param {Array<object>} spans - face.spans（CL基準）
+ * @param {Array<object>} drawnSpans - drawnSpanRanges の結果（描画基準。spans と同じ並び）
+ * @param {Array<{lo:number,hi:number}>|undefined} selfLocal - face.voidAbove?.selfLocal
  * @param {number} run
- * @param {number} drawnX0
- * @param {number} drawnXRun
- * @returns {Array<[number,number]>}
+ * @returns {Array<{lo:number,hi:number}>} 昇順・結合済み
  */
-function selfLessRanges(selfLocal, run, drawnX0, drawnXRun) {
-  if (!Array.isArray(selfLocal)) return [];
-  const out = [];
-  let cursor = 0;
-  for (const r of [...selfLocal].sort((a, b) => a.lo - b.lo)) {
-    if (r.lo > cursor + SPLIT_MERGE_EPS_MM) out.push([cursor, Math.min(r.lo, run)]);
-    cursor = Math.max(cursor, r.hi);
+function wallLessRunsOnFace(spans, drawnSpans, selfLocal, run) {
+  const out = (spans ?? []).map((sp, i) => ({ ...sp, ...(drawnSpans?.[i] ?? {}) }))
+    .filter(sp => sp.kind === 'open').map(sp => ({ lo: sp.loX, hi: sp.hiX }));
+  if (Array.isArray(selfLocal)) {
+    let cursor = 0;
+    for (const r of [...selfLocal].sort((a, b) => a.lo - b.lo)) {
+      if (r.lo > cursor + SPLIT_MERGE_EPS_MM) out.push({ lo: cursor, hi: Math.min(r.lo, run) });
+      cursor = Math.max(cursor, r.hi);
+    }
+    if (cursor < run - SPLIT_MERGE_EPS_MM) out.push({ lo: cursor, hi: run });
   }
-  if (cursor < run - SPLIT_MERGE_EPS_MM) out.push([cursor, run]);
-  return out.filter(([lo, hi]) => hi > lo + SPLIT_MERGE_EPS_MM).map(([lo, hi]) => [
-    lo <= SPLIT_MERGE_EPS_MM ? Math.min(lo, drawnX0) : lo,
-    hi >= run - SPLIT_MERGE_EPS_MM ? Math.max(hi, drawnXRun) : hi,
-  ]);
+  const sorted = out.filter(r => r.hi > r.lo + SPLIT_MERGE_EPS_MM).sort((a, b) => a.lo - b.lo);
+  const merged = [];
+  for (const r of sorted) {
+    const last = merged[merged.length - 1];
+    if (last && r.lo <= last.hi + SPLIT_MERGE_EPS_MM) last.hi = Math.max(last.hi, r.hi);
+    else merged.push({ ...r });
+  }
+  // 面の端に接する区間は外側へ開く（呼び出し側が自分の基準でクリップする）。
+  return merged.map(r => ({
+    lo: r.lo <= SPLIT_MERGE_EPS_MM ? -Infinity : r.lo,
+    hi: r.hi >= run - SPLIT_MERGE_EPS_MM ? Infinity : r.hi,
+  }));
+}
+
+// base（1区間）から holes を差し引いた区間列。壁の実体がある区間＝「壁2段書きを置く単位」。
+function subtractRuns(base, holes) {
+  let out = [{ ...base }];
+  for (const h of holes) {
+    const next = [];
+    for (const r of out) {
+      if (h.hi <= r.lo + SPLIT_MERGE_EPS_MM || h.lo >= r.hi - SPLIT_MERGE_EPS_MM) { next.push(r); continue; }
+      if (h.lo > r.lo + SPLIT_MERGE_EPS_MM) next.push({ lo: r.lo, hi: h.lo });
+      if (h.hi < r.hi - SPLIT_MERGE_EPS_MM) next.push({ lo: h.hi, hi: r.hi });
+    }
+    out = next;
+  }
+  return out.filter(r => r.hi > r.lo + SPLIT_MERGE_EPS_MM);
 }
 
 /**
@@ -921,6 +952,8 @@ export function buildFaceFigure(face, ctx) {
   // 位置の返し線」という表現を撤回し、水平方向にはオフセットしない素直な平行オフセットに変更。
   // 区間の水平線は従来どおり開口で途切れさせ、段差の縦線も同じx位置のまま床側のy2点をhだけ
   // 上へ平行移動する——開口がその段差位置をまたいでいれば同様に途切れさせる）。
+  // その面の平面に壁の実体が無い区間（巾木・壁2段書きの共通の述語）。
+  const wallLessRuns = wallLessRunsOnFace(spans, drawnSpans, face.voidAbove?.selfLocal, run);
   const baseboardH = parseBaseboardHeightMm(room.finish?.baseboardHeight);
   // WP-2: ctx.skipBaseboard（既定false）指定時は巾木ブロック自体を実行しない（階段帯等、
   // 巾木表現が不要な帯からの呼び出し用）。
@@ -934,19 +967,12 @@ export function buildFaceFigure(face, ctx) {
           const localX = localXOf(face, o.centerCoord);
           return [Math.max(0, localX - o.width / 2), Math.min(run, localX + o.width / 2)];
         }),
-      // 巾木は**描画**要素のため、open区間の範囲もCL基準(spans)ではなく描画基準
-      // （drawnSpans＝境界に立つ実壁の「開放側の面」。床線・境界エッジと同じ）を使う
-      // ——CL基準だと巾木がCLで切れ、CLと壁面の間（半壁厚）に巾木の無い隙間ができる
-      // （ユーザー実機指摘2026-08その9:「22」A1のX3・「22」D2の2000CLとも
-      // 「CL右側の壁まで」＝壁の面まで巾木を伸ばすのが正）。
-      ...spans.map((s, i) => ({ ...s, ...drawnSpans[i] }))
-        .filter(s => s.kind === 'open').map(s => [s.loX, s.hiX]),
-      // 多層帯（elevationVoid.jsの吹抜け合成）で走り範囲が延長された区間には自階の壁が無い
-      // ＝巾木も無い（ユーザー実機指摘2026-09「壁のないところに巾木はない」）。自階の面が
-      // 実在する範囲（voidAbove.selfLocal。合成後の座標系）の補集合を足す。**この経路に足す**
-      // ことで、区間水平線のクリップと段差縦線（riser）の抑止の両方が自動的に効く。
-      // voidAboveを持たない面（通常帯・階段帯・吹抜け帯・単体テスト）は undefined ＝ 何も足さない。
-      ...selfLessRanges(face.voidAbove?.selfLocal, run, drawnX0, drawnXRun),
+      // **壁の実体が無い区間**（開放スパン＝描画基準＋多層合成で延長された範囲）。壁が無ければ
+      // 巾木も無い（ユーザー実機指摘2026-09「壁のないところに巾木はない」）。壁2段書きと
+      // **同じ述語**（wallLessRunsOnFace）から出す——「その面のどこに壁があるか」の二重管理を
+      // 作らない。**この経路（floorGaps）に足す**ことで、区間水平線のクリップと段差縦線
+      // （riser）の抑止の両方が自動的に効く。
+      ...wallLessRuns.map(r => [r.lo, r.hi]),
     ].sort((a, b) => a[0] - b[0]);
     for (const [i, s] of segs.entries()) {
       const y = floorYOf(s) - baseboardH;
@@ -1005,22 +1031,34 @@ export function buildFaceFigure(face, ctx) {
   if (!skipWallLabel && wallLabelLines.length > 0) {
     const labelWidthPx = Math.max(...wallLabelLines.map(estimateWallLabelWidthPx));
     const labelWidthMm = scale ? labelWidthPx / scale : 0;
-    if (boundary.hi - boundary.lo >= labelWidthMm * 2) {
-      const obstacles = [
-        ...openings.map(o => {
-          const localX = localXOf(face, o.centerCoord);
-          return { lo: localX - o.width / 2, hi: localX + o.width / 2 };
-        }),
-        ...kneeDropGapsOnFace(face, graph, CH).map(g => ({ lo: g.x, hi: g.x + g.w })),
-        // 段差の縦線（新仕様「段差位置のCLオフセット」: riserXAt=床が低い側へ半壁厚ずらした位置）。
-        // 問題修正2026-08(QA F4): 床段差の無い（chMmだけ異なる）境界には縦線が描かれないため
-        // 障害物にも積まない（積むと存在しない線を避けてラベルが偏る）。
-        ...segs.slice(0, -1).flatMap((s, i) =>
-          floorYOf(segs[i]) === floorYOf(segs[i + 1]) ? [] : [{ lo: riserXAt(i), hi: riserXAt(i) }]),
-        // 新仕様「開放スパン」: open区間には壁材そのものが無いため、2段書きラベルを置かない。
-        ...spans.filter(s => s.kind === 'open').map(s => ({ lo: s.loX, hi: s.hiX })),
-      ];
-      const labelX = avoidObstacleRangesX((boundary.lo + boundary.hi) / 2, obstacles, boundary, labelWidthMm);
+    // **壁の実体がある区間ごとに1つ・その区間の中央**（ユーザー実機指摘2026-09「壁仕上げは壁の
+    // 中央に書く。図中、壁が2つに分かれていたら、それぞれの壁の中央に書く」）。
+    // 基準は**壁中心線区間(boundary)のまま**で、壁の無い区間（開放スパン・多層合成の延長。
+    // 巾木と共通の述語 wallLessRunsOnFace）を差し引く——全面が壁の面ではクリップが効かず
+    // ラベル座標が1mmも変わらない（run基準へ変えると全面の既存ラベルが半壁厚動く）。
+    // **開口・床の段差は区間を割らない**（開口は壁に開いた穴。従来どおり「避ける障害物」のまま）。
+    const labelRuns = subtractRuns({ lo: boundary.lo, hi: boundary.hi }, wallLessRuns);
+    const obstacles = [
+      ...openings.map(o => {
+        const localX = localXOf(face, o.centerCoord);
+        return { lo: localX - o.width / 2, hi: localX + o.width / 2 };
+      }),
+      ...kneeDropGapsOnFace(face, graph, CH).map(g => ({ lo: g.x, hi: g.x + g.w })),
+      // 段差の縦線（新仕様「段差位置のCLオフセット」: riserXAt=床が低い側へ半壁厚ずらした位置）。
+      // 問題修正2026-08(QA F4): 床段差の無い（chMmだけ異なる）境界には縦線が描かれないため
+      // 障害物にも積まない（積むと存在しない線を避けてラベルが偏る）。
+      ...segs.slice(0, -1).flatMap((s, i) =>
+        floorYOf(segs[i]) === floorYOf(segs[i + 1]) ? [] : [{ lo: riserXAt(i), hi: riserXAt(i) }]),
+      // 開放スパンは**障害物には積まない**——区間の境界そのものだから。積むと、CL基準の
+      // open（描画基準より**半壁厚ぶん広い**。drawnSpanBoundaryXは境界に立つ実壁の開放側の面
+      // ＝CLより内側を返すため、drawn open ⊂ CL open）が壁区間の両端へ食い込み、狭い壁区間
+      // （食い込み2つぶんの余りがラベル幅を下回る幅）でラベルが中央から寄る。
+    ];
+    for (const runRange of labelRuns) {
+      // 省略判定も区間ごと（狭い区間だけ落ち、全区間狭ければ0個）。
+      if (runRange.hi - runRange.lo < labelWidthMm * 2) continue;
+      const inRange = obstacles.filter(o => o.hi > runRange.lo && o.lo < runRange.hi);
+      const labelX = avoidObstacleRangesX((runRange.lo + runRange.hi) / 2, inRange, runRange, labelWidthMm);
       const totalLinesHeightMm = (wallLabelLines.length - 1) * WALL_LABEL_LINE_GAP_MM;
       let labelY = -CH / 2 - totalLinesHeightMm / 2;
       for (const line of wallLabelLines) {

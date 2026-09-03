@@ -406,3 +406,23 @@ test('【実機修正2026-09・A型】多層帯: hi側へ延長された面の�
   assert.deepEqual(base[0], [0, a1.run],
     `1階の壁がある0..${a1.run}だけに巾木が引かれ、延長された先には引かれないはず（実際:${JSON.stringify(base[0])}）`);
 });
+
+// ================================================================
+// 壁2段書き（ユーザー実機指摘2026-09「壁が2つに分かれていたらそれぞれの壁の中央に書く」）の
+// 統合Cパネルにおける不変ゲート——パネルのメンバーごとに buildFaceFigure が呼ばれるので
+// **メンバーごとに1つ**（面ラベル"C"が1つなのとは別の量）。この量は今回の変更で変わらない。
+// ================================================================
+test('【不変ゲート2026-09】統合Cパネル: 壁2段書きはメンバーごとに1つずつ（各メンバーの壁の中央）', () => {
+  const { g1, g2, room, voidRoom } = makeRoom5();
+  const info = room.getFinishInfo();
+  const materialMap = new Map([[info.wallMaterial, { name: 'ラワン合板' }]]);
+  const band = buildRoomBandWithVoidAbove(room, g1, voidRoom, g2,
+    { floorHeightAboveMm: FLOOR_HEIGHT, materialMap, scale: 0.2 });
+  const labels = band.primitives.filter(p => p.type === 'text' && p.text === '壁：ラワン合板')
+    .map(p => p.x).sort((a, b) => a - b);
+  // Cパネルは 18500..24585（C1: 18500..21785 / C2: 21785..24585）。各メンバーの中央に1つずつ。
+  const inC = labels.filter(x => x > 18000 && x < 25000);
+  assert.equal(inC.length, 2, `Cパネルにはメンバーごとに1つ＝2つのはず（実際:${JSON.stringify(inC)}）`);
+  assert.ok(inC[0] > 18500 && inC[0] < 21785, `1枚目はC1の中に（実際:${inC[0]}）`);
+  assert.ok(inC[1] > 21785 && inC[1] < 24585, `2枚目はC2の中に（実際:${inC[1]}）`);
+});
