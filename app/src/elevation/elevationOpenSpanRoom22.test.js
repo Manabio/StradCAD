@@ -183,6 +183,93 @@ test('巾木: 描画される巾木線がCLではなく壁の面まで伸びる�
 });
 
 
+// ==== 実機再現「2階22・西側void」（問題修正2026-09。D1がA1へ重なり負の寸法-1500が出る不具合） ====
+// 上のbuildRoom22Fixtureが固定化した旧モデルの後、実機ではx=0(X3)の西側が
+//   y-2000..0=吹抜けRoom「部屋」／y-3500..-2000=室22自身（内部・壁なし）／y-7000..-3500=stairVoid
+// に変わり、x=0に南北2枚の別々の壁が立つ構成になった。旧実装では:
+//   - 南面(y-2000..0)の延長が規則2（出口側は無条件keep）で開放区間の先の**北壁まで**呑み、
+//     lo=-6942.5の6885面になる（→規則0で修正）
+//   - 南北が重なり、旧包絡が北面のlo/hiだけ広げてspans(wall 0..3500)を据え置き、spansがrunを
+//     覆わない面ができてROW1に負の寸法-1500が出ていた（→dedupeOverlappingFacesの包含限定化で修正）
+// フィクスチャの罠は上と同じ: 通り芯はGRID（labeled+STRUCT）・無名CLにはextentを与える。
+function buildRoom22WestVoidFixture() {
+  const graph = new PlanGraph(new Plane('p2', 3000, '2階', 2, 1));
+  const V = (v, o) => graph.addCenterLine(CenterLineType.VERTICAL, v, o);
+  const H = (v, o) => graph.addCenterLine(CenterLineType.HORIZONTAL, v, o);
+  V(-8000, GRID); V(-3000, GRID); V(0, GRID);            // X1, X2, X3
+  V(1000, { ...ARCH, extentLo: -7000, extentHi: 0 });    // X4
+  H(-7000, GRID);                                        // Y2
+  H(-3500, { ...ARCH, extentLo: -8000, extentHi: 0 });
+  H(-2000, { ...ARCH, extentLo: -8000, extentHi: 0 });
+  H(0, GRID);                                            // Y1
+
+  const key = (x, y) => worldToCell(x, y, graph).key;
+  const room = graph.addRoom(new Set([
+    key(-5500, -2750), // X1..X2 × -3500..-2000
+    key(-1500, -2750), // X2..X3 × -3500..-2000
+    key(500, -3000),   // X3..X4 × -7000..0（Y=-3500/-2000では割れない1セル）
+  ]), '22');
+  const heya = graph.addRoom(new Set([key(-1500, -1000)]), '部屋');          // 2F void（吹抜け）
+  const stairVoid = graph.addRoom(new Set([key(-1500, -5000)]), 'stairVoid');
+  for (const r of [room, heya, stairVoid]) generateRoomWallsFromOutline(graph, r);
+  return { graph, room };
+}
+
+// spans被覆の検算: spansがface.runを隙間なくちょうど覆う（.claude/elevation-model.mdの不変条件）。
+function assertSpansCoverRun(face) {
+  assert.ok(Array.isArray(face.spans) && face.spans.length > 0, `${face.label}: spansがあるはず`);
+  assert.ok(Math.abs(face.spans[0].loX) < 1e-6, `${face.label}: spans先頭はloX=0のはず`);
+  assert.ok(Math.abs(face.spans[face.spans.length - 1].hiX - face.run) < 1e-6,
+    `${face.label}: spans末尾はhiX=run(${face.run})のはず（実際:${JSON.stringify(face.spans)}）`);
+  for (let i = 0; i + 1 < face.spans.length; i++) {
+    assert.ok(Math.abs(face.spans[i].hiX - face.spans[i + 1].loX) < 1e-6,
+      `${face.label}: spansは隙間なく連続するはず（実際:${JSON.stringify(face.spans)}）`);
+  }
+}
+
+test('西側void: x=0・inward=+1の面は南北2枚に分かれ、世界範囲が重ならない（旧: 包絡で1枚の6885面に潰れていた）', () => {
+  const { graph, room } = buildRoom22WestVoidFixture();
+  const faces = composeRoomFaces(room, graph)
+    .filter(f => f.isVertical && Math.abs(f.axisCL.value) < 1e-6 && f.inward === 1)
+    .sort((a, b) => a.lo - b.lo);
+  assert.equal(faces.length, 2, `x=0の面は北面・南面の2枚のはず（実際:${JSON.stringify(faces.map(f => f.label))}）`);
+  const [north, south] = faces;
+  assert.deepEqual([north.lo, north.hi], [-6942.5, -3442.5], '北面(D1)は素のY2..-3500の壁ぶんのはず');
+  assert.deepEqual([south.lo, south.hi], [-3442.5, -57.5],
+    '南面(D2)は自壁＋開放区間（規則2）まで。北壁は規則0で呑まないはず');
+  assert.ok(north.hi <= south.lo + 1e-6, '両面の世界範囲は重ならないはず');
+  assert.equal(north.label, 'D1');
+  assert.equal(south.label, 'D2');
+});
+
+test('西側void: 北面(D1)は両端とも延長されず、world-hi端は壁のない端部（Y2から3500CLのはね出し）', () => {
+  const { graph, room } = buildRoom22WestVoidFixture();
+  const d1 = composeRoomFaces(room, graph).find(f => f.label === 'D1');
+  assert.equal(d1.run, 3500);
+  assert.equal(d1.extendedAtLocal0, false);
+  assert.equal(d1.extendedAtLocalRun, false);
+  const hasWallAtWorldHi = d1.dirSign > 0 ? d1.hasWallAtLocalRun : d1.hasWallAtLocal0;
+  assert.equal(hasWallAtWorldHi, false, 'world-hi端(-3442.5)は壁断面のない端部＝はね出し表現のはず');
+  assert.deepEqual(d1.spans.map(s => s.kind), ['wall']);
+});
+
+test('西側void: 南面(D2)は開放区間をwall+openで持ち、北壁側の端は壁のない端部で終わる', () => {
+  const { graph, room } = buildRoom22WestVoidFixture();
+  const d2 = composeRoomFaces(room, graph).find(f => f.label === 'D2');
+  assert.deepEqual(d2.spans.map(s => s.kind), ['wall', 'open']);
+  const hasWallAtWorldLo = d2.dirSign > 0 ? d2.hasWallAtLocal0 : d2.hasWallAtLocalRun;
+  assert.equal(hasWallAtWorldLo, false, 'world-lo端(-3442.5)＝規則0で止めた側は壁断面のない端部のはず');
+});
+
+test('西側void: 全面でspansがrunをちょうど覆い、ROW1の寸法鎖に負値が出ない（旧: D1にdims=[-1500,5000]が出ていた）', () => {
+  const { graph, room } = buildRoom22WestVoidFixture();
+  for (const f of composeRoomFaces(room, graph)) {
+    assertSpansCoverRun(f);
+    const dims = dimsOf(f, graph);
+    assert.ok(dims.every(d => d > 0), `${f.label}: 寸法鎖に0以下の値が出てはいけない（実際:${JSON.stringify(dims)}）`);
+  }
+});
+
 // ---- 通り芯の縦線は寸法行で分ける（ユーザー明示指示2026-08その10） ----
 // 「構造芯ラベルの丸とCLが離れている。丸の位置はそのまま、線分を調整」「通り芯の一点鎖線が
 // からむと再度、寸法線が交点を持たない可能性があるので、寸法線から丸までは実線描画」。

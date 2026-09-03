@@ -5,8 +5,11 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Plane, PlanGraph, CenterLineType, Discipline } from '@core';
 import { generateRoomWallsFromOutline } from '../finish/wallGeneration.js';
+import { worldToCell } from '../finish/gridCells.js';
 import { buildRoomFaces } from './elevationFaces.js';
-import { extendFaceWithOpenSpans, extendFacesWithOpenSpans, clipSpans } from './elevationOpenSpan.js';
+import {
+  extendFaceWithOpenSpans, extendFacesWithOpenSpans, dedupeOverlappingFaces, clipSpans,
+} from './elevationOpenSpan.js';
 
 function makeGraph() {
   const plane = new Plane('p1', 0, '1階', 1, 1);
@@ -312,10 +315,10 @@ test('【失敗系】clipSpans: クリップ範囲に重ならないspanは除�
 // B1とB3は同一(axisCL.id=x=4000, inward)を持ち、どちらも張り出し内部（同室・壁なし）へ開放
 // スパンとして延長される——延長後の範囲が重なるため、extendFacesWithOpenSpansの統合ロジックで
 // 1面(B1)へ統合され、面数は7になるはず。
-function makeAlcoveRoom(graph) {
+function makeAlcoveRoom(graph, depthMm = 800) {
   const x0 = graph.addCenterLine(CenterLineType.VERTICAL, 0,    { labeled: false, discipline: Discipline.ARCH });
   const x1 = graph.addCenterLine(CenterLineType.VERTICAL, 4000, { labeled: false, discipline: Discipline.ARCH });
-  const x2 = graph.addCenterLine(CenterLineType.VERTICAL, 4800, { labeled: false, discipline: Discipline.ARCH });
+  const x2 = graph.addCenterLine(CenterLineType.VERTICAL, 4000 + depthMm, { labeled: false, discipline: Discipline.ARCH });
   const y0 = graph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: false, discipline: Discipline.ARCH });
   const y1 = graph.addCenterLine(CenterLineType.HORIZONTAL, 1000, { labeled: false, discipline: Discipline.ARCH });
   const y2 = graph.addCenterLine(CenterLineType.HORIZONTAL, 2000, { labeled: false, discipline: Discipline.ARCH });
@@ -347,4 +350,152 @@ test('extendFacesWithOpenSpans: 同一(axisCL.id, inward)で範囲が重なる�
     'spans末尾は統合後の面のrunと一致するはず（範囲の欠落が無いことの確認）');
   const totalCovered = merged.spans.reduce((sum, s) => sum + (s.hiX - s.loX), 0);
   assert.ok(Math.abs(totalCovered - merged.run) < 1e-6, 'spansの幅合計は統合後のrunと一致するはず（重複・隙間が無いことの確認）');
+  // 不変条件ゲート（問題修正2026-09）: 統合後の全面でspansがrunを隙間なくちょうど覆う。
+  for (const f of extended) assertSpansCoverRun(f);
+});
+
+// spans被覆の検算: spansがface.runを隙間なくちょうど覆う（.claude/elevation-model.mdの不変条件。
+// composeRoomFaces出力までの規約——elevationVoid.jsの多層合成後は対象外）。
+function assertSpansCoverRun(face) {
+  assert.ok(Array.isArray(face.spans) && face.spans.length > 0, `${face.label}: spansがあるはず`);
+  assert.ok(Math.abs(face.spans[0].loX) < 1e-6, `${face.label}: spans先頭はloX=0のはず`);
+  assert.ok(Math.abs(face.spans[face.spans.length - 1].hiX - face.run) < 1e-6,
+    `${face.label}: spans末尾はhiX=run(${face.run})のはず（実際:${JSON.stringify(face.spans)}）`);
+  for (let i = 0; i + 1 < face.spans.length; i++) {
+    assert.ok(Math.abs(face.spans[i].hiX - face.spans[i + 1].loX) < 1e-6,
+      `${face.label}: spansは隙間なく連続するはず（実際:${JSON.stringify(face.spans)}）`);
+  }
+}
+
+// ---- 規則0の境界（問題修正2026-09）: 奥行き800のアルコーブは統合される（上のM1）が、 ----
+// ---- 800を超える（=1200）と「同じ壁面の凹み」ではなく別の空間＝wall区間を呑まず2枚のまま ----
+test('規則0: 奥行き1200のアルコーブはB1/B3が統合されず8面のまま（wall区間を呑まない）', () => {
+  const graph = makeGraph();
+  const room = makeAlcoveRoom(graph, 1200);
+  const raw = buildRoomFaces(room, graph);
+  assert.equal(raw.length, 8, '前提: buildRoomFacesは8面のはず');
+
+  const extended = extendFacesWithOpenSpans(raw, room, graph);
+  assert.equal(extended.length, 8,
+    `奥行き>800では開放区間の先の壁を呑まず8面のままのはず（実際:${extended.length}件、labels=${JSON.stringify(extended.map(f => f.label))}）`);
+  const atAxis = extended.filter(f => f.isVertical && Math.abs(f.axisCL.value - 4000) < 1e-6 && f.inward < 0)
+    .sort((a, b) => a.lo - b.lo);
+  assert.equal(atAxis.length, 2, 'x=4000の面は2枚のままのはず');
+  assert.ok(atAxis[0].hi <= atAxis[1].lo + 1e-6, '2枚の世界範囲は重ならないはず');
+  for (const f of extended) assertSpansCoverRun(f);
+});
+
+// ---- 規則0の跨ぎ条件: 開放区間が「跨ぎ由来」なら、たとえ≤800の奥の平行面に覆われていても ----
+// ---- nicheと見なさない（境界線が1本も無い以上「同じ壁面の凹み」とは言えない） ----
+// 構成はアルコーブの変形: x=4000のCLをアルコーブの口の帯(y:1000..2000)に届かせない
+// （同値・別延長の2本に分ける。無名CLにextentを与える既知の罠の遵守も兼ねる）。
+// 中帯のセルはx:0..4800の1枚となりx=4000を跨ぐ＝straddle。その先はB2(x=4800。奥行きちょうど800)が
+// 覆うため、跨ぎ条件を落とすとniche扱いになってB1が中帯＋下帯のwall区間まで呑み、B1/B3は
+// axisCL.idが異なる（同値・別延長）ためdedupeも掛からず世界範囲が重なったまま残る。
+function makeStraddleNicheRoom(graph) {
+  const GRID = { labeled: true, discipline: Discipline.STRUCT };
+  const V = (v, o) => graph.addCenterLine(CenterLineType.VERTICAL, v, o);
+  const H = (v, o) => graph.addCenterLine(CenterLineType.HORIZONTAL, v, o);
+  V(0, GRID);
+  V(4000, { labeled: false, discipline: Discipline.ARCH, extentLo: 0, extentHi: 1000 });    // 上帯だけ
+  V(4000, { labeled: false, discipline: Discipline.ARCH, extentLo: 2000, extentHi: 3000 }); // 下帯だけ
+  V(4800, GRID);
+  H(0, GRID); H(1000, GRID); H(2000, GRID); H(3000, GRID);
+  const key = (x, y) => worldToCell(x, y, graph).key;
+  const room = graph.addRoom(new Set([
+    key(2000, 500),   // x:0..4000 × y:0..1000
+    key(2000, 1500),  // x:0..4800 × y:1000..2000（x=4000を跨ぐ）
+    key(2000, 2500),  // x:0..4000 × y:2000..3000
+  ]), 'ストラドル');
+  generateRoomWallsFromOutline(graph, room);
+  return room;
+}
+
+test('規則0: 跨ぎ由来の開放区間はnicheと見なさずwall区間を呑まない', () => {
+  const graph = makeGraph();
+  const room = makeStraddleNicheRoom(graph);
+  const raw = buildRoomFaces(room, graph);
+  assert.equal(raw.length, 8, '前提: アルコーブ変形で8面のはず');
+
+  const extended = extendFacesWithOpenSpans(raw, room, graph);
+  const atAxis = extended.filter(f => f.isVertical && Math.abs(f.axisCL.value - 4000) < 1e-6 && f.inward < 0)
+    .sort((a, b) => a.lo - b.lo);
+  assert.equal(atAxis.length, 2, 'x=4000の面は2枚のはず');
+  for (const f of atAxis) {
+    assert.deepEqual(f.spans.map(s => s.kind), ['wall'],
+      `${f.label}: 跨ぎのopenはnicheでない＝規則0がwall区間を呑ませないはず（実際:${JSON.stringify(f.spans)}）`);
+  }
+  assert.ok(atAxis[0].hi <= atAxis[1].lo + 1e-6,
+    `2枚の世界範囲は重ならないはず（実際:[${atAxis[0].lo},${atAxis[0].hi}]と[${atAxis[1].lo},${atAxis[1].hi}]）`);
+});
+
+// ==== dedupeOverlappingFaces単体（問題修正2026-09: 包含関係に限定した重複解消） ====
+// 旧実装は片側のlo/hiだけを広げてspansを据え置く「包絡」で、spansがrunを覆わない面ができていた。
+function mkDedupeFace(lo, hi, extra = {}) {
+  const spans = extra.spans ?? [{ loX: 0, hiX: hi - lo, kind: 'wall', hiCLX: null, hiCLId: null }];
+  return {
+    label: extra.label ?? 'F', axisCL: { id: extra.axisId ?? 'clx' }, inward: extra.inward ?? 1,
+    lo, hi, run: hi - lo, dirSign: 1, originWorld: lo, spans, ...extra,
+  };
+}
+
+test('dedupeOverlappingFaces: 完全一致は後勝ちせずスキップされる（chain順最先を残す）', () => {
+  const a = mkDedupeFace(0, 3000, { label: 'first' });
+  const b = mkDedupeFace(0, 3000, { label: 'second' });
+  const out = dedupeOverlappingFaces([a, b]);
+  assert.equal(out.length, 1);
+  assert.equal(out[0], a, 'chain順最先の面オブジェクトがそのまま残るはず');
+});
+
+test('dedupeOverlappingFaces: o⊇f（先行が包含）は後発をスキップし、先行のlo/hi/spansを一切編集しない', () => {
+  const big = mkDedupeFace(0, 5000, { label: 'big' });
+  const spansBefore = JSON.stringify(big.spans);
+  const small = mkDedupeFace(1000, 2000, { label: 'small' });
+  const out = dedupeOverlappingFaces([big, small]);
+  assert.deepEqual(out, [big]);
+  assert.equal(JSON.stringify(big.spans), spansBefore, 'spansは据え置きでも編集でもなく不変のはず');
+  assert.equal(big.run, 5000);
+});
+
+test('dedupeOverlappingFaces: f⊇o（後発が包含）はcontainerを丸ごと採用し、位置はchain順最先のまま', () => {
+  const first = mkDedupeFace(1000, 2000, { label: 'first' });
+  const container = mkDedupeFace(0, 5000, { label: 'container' });
+  const tail = mkDedupeFace(0, 1000, { label: 'tail', axisId: 'other' });
+  const out = dedupeOverlappingFaces([first, tail, container]);
+  assert.equal(out.length, 2);
+  assert.equal(out[0], container, 'containerがfirstの位置(先頭)を引き継ぐはず');
+  assert.equal(out[1], tail);
+  // 置換後もspansがrunをちょうど覆う（containerのspansを個別に触っていないことの確認）。
+  assert.equal(out[0].spans[0].loX, 0);
+  assert.equal(out[0].spans[out[0].spans.length - 1].hiX, out[0].run);
+});
+
+test('dedupeOverlappingFaces: 部分重なりはマージせず両方残す（spansの座標変換合成なしに片側を再利用しない）', () => {
+  const a = mkDedupeFace(0, 3000, { label: 'a' });
+  const b = mkDedupeFace(2000, 5000, { label: 'b' });
+  const out = dedupeOverlappingFaces([a, b]);
+  assert.deepEqual(out, [a, b], '部分重なりは両方そのまま残るはず');
+  assert.equal(a.run, 3000);
+  assert.equal(b.run, 3000);
+});
+
+// ---- 失敗系: spansを持たない面（cellSegs空のearly return経路）がdedupeを素通りし壊れない ----
+test('【失敗系】extendFacesWithOpenSpans: near側に自室セルが無い合成face（spansなし）はそのまま素通りする', () => {
+  const graph = makeGraph();
+  const { room } = makeWallThenOpenRoom(graph, 300);
+  const faces = buildRoomFaces(room, graph);
+  // near側に自室セルが1つも無い軸に立つ合成face相当（collectNearCellSegmentsが空→early return）。
+  const synthetic = {
+    label: 'SYN', kind: undefined, isVertical: true, inward: 1, dirSign: 1,
+    axisCL: { id: 'syn-cl', value: 99999, effectiveValue: 99999 },
+    lo: 0, hi: 1000, run: 1000, originWorld: 0,
+  };
+  const out = extendFacesWithOpenSpans([...faces, synthetic], room, graph);
+  const syn = out.find(f => f.label === 'SYN');
+  assert.equal(syn, synthetic, 'spansを持たないままの同一オブジェクトが素通りするはず');
+  assert.equal(syn.spans, undefined);
+  for (const f of out) {
+    if (f === syn) continue;
+    assert.ok(Array.isArray(f.spans), `${f.label}: 他の面は通常どおりspansを持つはず`);
+  }
 });

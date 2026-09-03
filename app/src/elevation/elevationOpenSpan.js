@@ -23,7 +23,9 @@ import {
   cellStraddlesFace,
 } from './elevationFloorProfile.js';
 import { perpFaceAt, perpWallCrossesFacePlane, CORNER_TOL_MM } from './elevationFaces.js';
-import { MIN_FACE_RUN_MM, GAP_EPS_MM as GAP_EPS, PROBE_EPS_MM } from './elevationStyle.js';
+import {
+  MIN_FACE_RUN_MM, GAP_EPS_MM as GAP_EPS, PROBE_EPS_MM, SIGHTLINE_DEPTH_LIMIT_MM,
+} from './elevationStyle.js';
 
 // 跨ぎ由来の「アキだけ（情報ゼロ）の区間」が図全体に占めてよい上限比（ユーザー基準2026-08その9）。
 const MAX_VOID_SPAN_RATIO = 1 / 4;
@@ -136,12 +138,18 @@ function mergeSameKind(segs) {
  * その平面の面（＝奥の面）が同じ区間を実体として描く。判定材料は延長前の面配列だけで足りる
  * （graph参照を増やさない）。許容差はCORNER_TOL_MM——隅の仕上げ面ぶん(57.5等)の食い違いで
  * 「覆っていない」と誤判定しないため。
+ * maxDepthMmを指定すると「奥行きがmaxDepthMm以内の面」だけを対象にする（規則0のniche判定用）。
+ * 比較は`<=`——「1枚のパネルとして繋げてよい凹みか」の問いであり、既存M1フィクスチャ
+ * （アルコーブ奥行きちょうど800）が「統合される」確定挙動のため。sectionEngine.jsの
+ * 「見えがかりとして描くか」（`<`800）とは別の問いなので、将来`<`へ"統一"してはいけない
+ * （統一するとM1が落ちる）。
  * @param {object} face
  * @param {object[]} wallFaces - 延長前の面配列（buildRoomFacesの結果）
  * @param {{runLo:number, runHi:number, kind:string}} seg
+ * @param {number} [maxDepthMm] - 奥の面までの深さの上限（省略時∞＝規則2.5の従来挙動）
  * @returns {boolean}
  */
-function coveredByDeeperParallelFace(face, wallFaces, seg) {
+function coveredByDeeperParallelFace(face, wallFaces, seg, maxDepthMm = Infinity) {
   if (seg.kind !== 'open') return false; // 壁の区間は「アキ」ではないので対象外
   const fa = face.axisCL?.effectiveValue;
   if (!Number.isFinite(fa)) return false;
@@ -152,7 +160,8 @@ function coveredByDeeperParallelFace(face, wallFaces, seg) {
     const ha = h.axisCL?.effectiveValue;
     if (!Number.isFinite(ha)) return false;
     // faceから見てhが奥にあるか（符号付き。手前の面には掛からない＝相互に打ち消さない）。
-    if (!((ha - fa) * -Math.sign(face.inward) > MIN_FACE_RUN_MM)) return false;
+    const depth = (ha - fa) * -Math.sign(face.inward);
+    if (!(depth > MIN_FACE_RUN_MM && depth <= maxDepthMm)) return false;
     // hがfaceの**続き**であること＝走り範囲が並走していないこと。これが無いと、部屋の
     // 反対側の壁（例: RoundF room2のD1(x=6000)に対するD2(x=0)。同じ向きで6000奥・D1の
     // 走り範囲を丸ごと含む）まで「覆っている」と見なして正当な開放区間を落としてしまう。
@@ -211,6 +220,14 @@ export function extendFaceWithOpenSpans(face, wallFaces, room, graph) {
   // いないところ（アキ・バツだけの区間）が描画延長の1/4を超えたら延長しない」）、取り込んだ
   // **端の区間**を次の規則で取捨する。落とした端は従来どおり「壁断面のない端部」（床・天井線を
   // 図の外へ延長して続きがあることを示す表現）で終わる。
+  //   0. **wall区間**は、ownIdxからそこまでの間にある全てのopen区間が「niche」（跨ぎでなく、
+  //      SIGHTLINE_DEPTH_LIMIT_MM以内の奥の同向き平行面が覆う凹み＝アルコーブ）のときだけ
+  //      規則1〜3の取捨に進む。1つでもnicheでなければその壁は取り込まない（drop）。
+  //      原理: 「800以上奥は同じ壁面の凹みではなく別の空間」（elevation-model.md）——凹みを挟む
+  //      2枚の壁は1枚の壁（呑んで統合。M1アルコーブ）、別の空間への開口を挟む2枚は別々の壁。
+  //      これが無いと、規則2（出口側は無条件keep）がwall区間まで呑み、開放区間の先に立つ
+  //      **別の壁**を丸ごと取り込んだ巨大な面ができて同じ壁の別の面と重なる
+  //      （実機2階22のx=0: 南面が開放区間＋北壁を呑んで6885の面になり北面と重なった）。
   //   1. informative（near/farでFLか天井高が違う＝遠側床線・遠側天井線という実体が現れる）区間は
   //      常に残す。RoundFの2 C2(b側+50)・3 A2(g側-100)がこれ。
   //   2. 情報ゼロ（アキだけ）でも、**出口側の隅**（ローカルrun端＝chainで次の面へ渡る隅。
@@ -237,9 +254,12 @@ export function extendFaceWithOpenSpans(face, wallFaces, room, graph) {
   // 生の長さで判定すると、ユーザー確認済みの開放スパンまで落ちる）。そのため端の確定
   // （resolveEnd）を取捨ループの内側で行い、詰め後の値で比を採る。
   // 実機で確認: 残る=1階5/C2(400/3143=13%)・10/C2(743/3600=21%)・10/B2(943/4885=19%)・
-  // 2階22のA1(942/8885=11%。跨ぎ)・2階22のD2(規則2)／落ちる=2階22のD1(3443/6885=50%。入口側で
-  // Y1まで伸び図の半分がアキだった)・1階5/D1(1943/3443=56%)・壁のない端部フィクスチャの
-  // 2' C2(49%。跨ぎ)・3' B1(75%。跨ぎ)。
+  // 2階22のA1(942/8885=11%。跨ぎ)・2階22のD2(規則2)／落ちる=1階5/D1(1943/3443=56%)・
+  // 壁のない端部フィクスチャの2' C2(49%。跨ぎ)・3' B1(75%。跨ぎ)。
+  // 2階22のD1は、旧モデル（2F voidの「部屋」追加前。x=0の面が1枚）では単一開放区間
+  // 3443/6885=50%が規則3で落ちていた。現モデル（x=0に南北2枚の壁）では、北面(D1)の入口側
+  // 開放区間は規則2.5で落ち、南面の延長は開放区間（規則2で残る）の先の北壁を規則0が呑まずに
+  // 止まる——両面が重ならず包絡も発火しない。
   let loEnd, hiEnd;
   for (;;) {
     loEnd = resolveEnd(face, wallFaces, merged[loBound].runLo, face.startCLId, face.lo,
@@ -249,6 +269,15 @@ export function extendFaceWithOpenSpans(face, wallFaces, room, graph) {
     const total = hiEnd.value - loEnd.value;
     const dropEnd = (i, isEntrySide, drawnLen) => {
       const g = merged[i];
+      if (g.kind === 'wall') {                        // 規則0
+        const [jLo, jHi] = i < ownIdx ? [i + 1, ownIdx - 1] : [ownIdx + 1, i - 1];
+        for (let j = jLo; j <= jHi; j++) {
+          const s = merged[j];
+          if (s.kind !== 'open') continue;
+          if (s.straddle ||
+              !coveredByDeeperParallelFace(face, wallFaces, s, SIGHTLINE_DEPTH_LIMIT_MM)) return true;
+        }
+      }
       if (g.informative) return false;                // 規則1
       if (!isEntrySide && !g.straddle) return false;  // 規則2
       if (!g.straddle && coveredByDeeperParallelFace(face, wallFaces, g)) return true; // 規則2.5(A)
@@ -371,17 +400,19 @@ export function clipSpans(spans, loLocal, hiLocal) {
 }
 
 /**
- * faces（buildRoomFacesの結果）全件へ開放スパンを適用し、同一(axisCL.id, inward)で範囲が
- * 重なる面はchain順で最先のものを残して包絡する。
- * @param {object[]} faces
- * @param {import('@core').Room} room
- * @param {object} graph
+ * 同一(axisCL.id, inward)で範囲(lo..hi)が重なる面の重複解消（**包含関係に限定**）。
+ * どの分岐も面のlo/hi/run/spans/extendedAt/originWorldを一切編集しない——「spansを持つ面は
+ * spansがrunをちょうど覆う」不変条件（.claude/elevation-model.md）を構成的に保つため。
+ * 旧実装は片側のlo/hiだけを広げてspansを据え置く「包絡」だったため、spansがrunを覆わない面が
+ * でき、ROW1に負の寸法が出た（実機2階22のD1。規則0の導入で通常は重なり自体が生じなくなった）。
+ *  - o ⊇ f（完全一致含む）→ fをスキップ（oのspansはrunを覆っている。アルコーブM1はこの分岐）
+ *  - f ⊇ o → containerのfを丸ごと採用（chain上の位置はoのまま）
+ *  - 部分重なり → マージしない（両方残す。spansの座標変換合成なしに片側のspansを再利用する
+ *    正当な方法は存在しないため）
+ * @param {object[]} extended - extendFaceWithOpenSpans適用後の面配列
  * @returns {object[]}
  */
-export function extendFacesWithOpenSpans(faces, room, graph) {
-  const extended = faces.map(f => extendFaceWithOpenSpans(f, faces, room, graph));
-
-  // 同一(axisCL.id, inward)で範囲(lo..hi)が重なる面はchain順最先を残し、他は包絡へ吸収して除去する。
+export function dedupeOverlappingFaces(extended) {
   const out = [];
   for (const f of extended) {
     if (f.kind === 'step') { out.push(f); continue; }
@@ -390,13 +421,22 @@ export function extendFacesWithOpenSpans(faces, room, graph) {
       f.lo < o.hi - GAP_EPS && f.hi > o.lo + GAP_EPS);
     if (dupIdx === -1) { out.push(f); continue; }
     const o = out[dupIdx];
-    if (Math.abs(f.lo - o.lo) < GAP_EPS && Math.abs(f.hi - o.hi) < GAP_EPS) continue; // 完全一致は単純にスキップ
-    // 包絡: 既存側(chain順最先)の範囲を広げる（lo/hi・run。spansは既存側のまま——延長経路が
-    // 同じ開放スパン判定を通っているため通常は同一の内容になる）。
-    const lo = Math.min(o.lo, f.lo), hi = Math.max(o.hi, f.hi);
-    o.lo = lo; o.hi = hi; o.run = hi - lo;
-    o.originWorld = o.dirSign > 0 ? lo : hi;
+    if (o.lo <= f.lo + GAP_EPS && o.hi >= f.hi - GAP_EPS) continue; // o ⊇ f
+    if (f.lo <= o.lo + GAP_EPS && f.hi >= o.hi - GAP_EPS) { out[dupIdx] = f; continue; } // f ⊇ o
+    out.push(f); // 部分重なり
   }
   return out;
+}
+
+/**
+ * faces（buildRoomFacesの結果）全件へ開放スパンを適用し、同一(axisCL.id, inward)で範囲が
+ * 重なる面を重複解消する（dedupeOverlappingFaces。包含関係のみ・chain順で最先の位置を保つ）。
+ * @param {object[]} faces
+ * @param {import('@core').Room} room
+ * @param {object} graph
+ * @returns {object[]}
+ */
+export function extendFacesWithOpenSpans(faces, room, graph) {
+  return dedupeOverlappingFaces(faces.map(f => extendFaceWithOpenSpans(f, faces, room, graph)));
 }
 
