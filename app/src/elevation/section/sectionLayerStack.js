@@ -132,11 +132,18 @@ export function compareLayerPriority(a, b) {
 export function resolveSightlineTopZ(stack, info, roomAtLayer, fallbackZ) {
   let topZ = info.ceilZ;
   for (const upper of layersAboveOf(stack, info)) {
-    // 天井裏（自層の天井〜上階FL）も壁。上階に実床があればそこで止まる。
-    const upperFloorZ = Number.isFinite(upper.floorZ) ? upper.floorZ : upper.layer.floorZMm;
-    if (Number.isFinite(upperFloorZ) && upperFloorZ > topZ) topZ = upperFloorZ;
+    // **上階に実床があれば、その手前の天井で見えがかりは終わる**（ユーザー実機指摘2026-08
+    // 「「5」D1: 1F天井見えがかり（細線）が…1FL天井断面に衝突するまで」）——天井裏（自層の
+    // 天井〜上階FL）にも壁の実体はあるが、**見えがかりは見えるものだけ**で、天井に隠れて
+    // 見えない。旧実装は上階に実床がある場合でも上階FLまで伸ばしており、列の描画範囲が
+    // 天井より高い（吹抜けを通して上まで描く列）と、その天井裏ぶんまで壁面が続いて見え、
+    // 天井の見えがかり線が出なかった。区間2400..3000は`probeColumn`が天井懐（slab・非描画）に
+    // 分類する。
     if (isRealRoom(roomAtLayer(upper))) break;
-    topZ = upper.ceilZ ?? fallbackZ;
+    // 上が吹抜けなら壁はそのまま上階の天井まで続く（天井裏ぶんも含めて見える）。
+    const upperFloorZ = Number.isFinite(upper.floorZ) ? upper.floorZ : upper.layer.floorZMm;
+    topZ = Math.max(topZ, Number.isFinite(upperFloorZ) ? upperFloorZ : topZ,
+      upper.ceilZ ?? fallbackZ);
   }
   return topZ;
 }

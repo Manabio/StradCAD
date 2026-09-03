@@ -63,13 +63,17 @@ test('壁のない端部: 報告された3箇所（2 C2右・3 B1右・3 D1左�
   const f2 = byLabel(composeRoomFaces(room2p, graph));
   const f3 = byLabel(composeRoomFaces(room3p, graph));
 
-  // 「2」C2（中心3の壁をdM側から見た面）の右端＝中心2: 中心2の壁はy3000..7000で
+  // 注: 中心7（y=3400・x6000..7000）の面は、その手前の中心3（y=3000）の面に**見えがかりとして
+  // 取り込まれる**ため面リストから落ちる（ユーザー明示指示2026-08「見えがかりに取り込まれた面は
+  // 常に落とす」。elevationFaceList.jsのdropFacesSeenAsSightline）。その結果、中心3の面のletter内
+  // 採番はC2→C1へ繰り上がっている。
+  // 「2」C1（中心3の壁をdM側から見た面）の右端＝中心2: 中心2の壁はy3000..7000で
   // 視点側(y<3000)へ続かない＝切断面を横切らない → 壁のない端部（延長対象）。
   // 実壁自体はある（向こう側へ折れて続く）ため見えがかりエッジ＝縦線（中線）の対象で、
   // 端座標は壁の実端（直交面のfaceValue。ユーザー確認: 中心線位置ではなく実端）へ詰める。
-  assert.equal(f2.C2.hasWallAtLocalRun, false, '2のC2右端は壁断面のない端のはず');
-  assert.equal(f2.C2.edgeAtLocalRun, true, '2のC2右端は見えがかりエッジ（縦線=中線の対象）のはず');
-  assert.equal(f2.C2.lo, 3342.5, 'C2の端は壁の実端（中心2の壁の向こう側面）のはず');
+  assert.equal(f2.C1.hasWallAtLocalRun, false, '2のC1右端は壁断面のない端のはず');
+  assert.equal(f2.C1.edgeAtLocalRun, true, '2のC1右端は見えがかりエッジ（縦線=中線の対象）のはず');
+  assert.equal(f2.C1.lo, 3342.5, 'C1の端は壁の実端（中心2の壁の向こう側面）のはず');
 
   // 「3」B1（中心5の壁をg側から見た面）の右端＝中心4: f|h壁はx4600..6000で面の向こう側のみ
   assert.equal(f3.B1.hasWallAtLocalRun, false, '3のB1右端は壁断面のない端のはず');
@@ -220,9 +224,11 @@ test('開放スパン: 床断面より下の遠側床線と端部の縦線は細
 test('開放スパン: 床〜天井の間に見える遠側床線（見上げ方向）は従来どおり中線の実線のまま', () => {
   const { graph, room2p } = buildFixture();
   const faces = composeRoomFaces(room2p, graph);
-  const c2 = faces.find(f => f.label === 'C2'); // b領域の開放スパン（far床+50=見上げ方向）
+  // 中心3（y=3000）の面。中心7の面が見えがかりに取り込まれて落ちるためC1へ繰り上がっている
+  // （dropFacesSeenAsSightline）。
+  const c2 = faces.find(f => f.label === 'C1'); // b領域の開放スパン（far床+50=見上げ方向）
   const bSpan = c2.spans.find(s => s.kind === 'open' && s.farFloorDeltaMm === 50);
-  assert.ok(bSpan, '前提: C2にb領域の開放スパン（far床+50）がある');
+  assert.ok(bSpan, '前提: この面にb領域の開放スパン（far床+50）がある');
 
   const prims = buildFaceFigure(c2, {
     graph, project: { openingNumberIndex: new Map() },
@@ -247,9 +253,9 @@ test('壁のない端部: 開放スパンの延長端も同じ規則（横切ら
   // で終わる → 壁あり
   assert.equal(f2.B2.extendedAtLocal0, true, '前提: B2は開放スパンで北へ延長される');
   assert.equal(f2.B2.hasWallAtLocal0, true, 'B2の延長端は中心1の壁が横切るため壁あり');
-  // C2は開放スパンで東へ延長され、X2の壁（横切る）で終わる → 壁あり
-  assert.equal(f2.C2.extendedAtLocal0, true, '前提: C2は開放スパンで東へ延長される');
-  assert.equal(f2.C2.hasWallAtLocal0, true, 'C2の延長端はX2の壁が横切るため壁あり');
+  // 中心3の面（C1へ繰り上がり）は開放スパンで東へ延長され、X2の壁（横切る）で終わる → 壁あり
+  assert.equal(f2.C1.extendedAtLocal0, true, '前提: この面は開放スパンで東へ延長される');
+  assert.equal(f2.C1.hasWallAtLocal0, true, 'その延長端はX2の壁が横切るため壁あり');
 });
 
 // ---- 実機指摘2026-08「C1のX2上に線はなく、C1からC2へ至る間にもエッジはない。

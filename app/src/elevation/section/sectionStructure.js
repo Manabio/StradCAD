@@ -22,10 +22,10 @@ import { findSectionEntry } from '../../structural/sectionCatalog.js';
 // 柱の仕上げ包みの幾何は平面図（renderer/StructuralLayer.jsx）と共有する単一の情報源から取る
 // ——同じ柱が図面ごとに違う太さで描かれないため（finish/columnWrap.js のヘッダ参照）。
 import { bareColumnRect, isColumnInsideWall, wrapColumnWithFinish } from '../../finish/columnWrap.js';
-import { ElevationLineRole, GAP_EPS_MM as GAP_EPS } from '../elevationStyle.js';
+import { ElevationLineRole, GAP_EPS_MM as GAP_EPS, SIGHTLINE_DEPTH_LIMIT_MM } from '../elevationStyle.js';
 import { localXOf, cutDrawRange } from './sectionTypes.js';
 import { halfWallThicknessMm } from '../elevationFloorProfile.js';
-import { emitLine } from './sectionEmit.js';
+import { emitLine, nearestSightlineDistMm } from './sectionEmit.js';
 
 // 断面成(depthMm)のフォールバック既定値（sectionDefIdがカタログに無く・beamDepthも未設定の
 // 場合の保険。木造既定断面WOOD-105x105と同値）。
@@ -356,8 +356,12 @@ function sectionOutline(cut, xLo, xHi, zTop, depthMm, entry) {
  * @returns {object[]}
  */
 export function structuralPrimitivesForCut(contribution, cut, columns) {
-  void columns; // 意図的に未使用（他の第3層関数とシグネチャを揃えるためだけに受け取る。上記コメント参照）。
   const prims = [];
+  // 見えがかりの奥行き判定は壁と共通（ユーザー明示指示2026-08「既存の構造材見えがかり処理経路も
+  // 含める」）——その切断で最も手前の壁面から上限以上奥にある材は、別の空間のものなので描かない。
+  const nearestMm = nearestSightlineDistMm(columns);
+  const withinSightDepth = (depthMm) => !Number.isFinite(nearestMm)
+    || depthMm - nearestMm < SIGHTLINE_DEPTH_LIMIT_MM;
   for (const beam of contribution ?? []) {
     const halfW = beam.widthMm / 2;
     // crosses（直交）: sectionStair.jsのcrossesFlightと同じ規約——cut.line自身の描画範囲
@@ -389,6 +393,7 @@ export function structuralPrimitivesForCut(contribution, cut, columns) {
     const airborne = cut.line.isVertical === beam.isVertical
       && (beam.axisWorld - cut.line.axisValue) * (cut.viewSign ?? 1) > GAP_EPS
       && withinBandRoom(cut, beam.axisWorld)
+      && withinSightDepth((beam.axisWorld - cut.line.axisValue) * (cut.viewSign ?? 1) - halfW)
       && rangesOverlap(cut.line.lo, cut.line.hi, beam.spanLo, beam.spanHi)
       && !(cut.line.axisValue >= beam.axisWorld - halfW - GAP_EPS
         && cut.line.axisValue <= beam.axisWorld + halfW + GAP_EPS); // 芯上は下のparallelが担当

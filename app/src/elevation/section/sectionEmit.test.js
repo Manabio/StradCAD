@@ -1236,3 +1236,58 @@ test('【実機「5」】buildColumns: 探査延長で面の外にできる列�
       `面の外の列(x=${c.x0}..${c.x1})も端の区間の天井(2400)へクランプされるはず（実際:${c.ceilZ}）`);
   }
 });
+
+// ---- 床断面の延長端にはアキを描かない（ユーザー明示指示2026-08） ----
+test('【明示指示】emitOpenGapMarks: 壁のない端部のはね出し（探査延長）にはアキを描かない', () => {
+  // line.lo/hi は面自身の範囲（0..3000）。probeExtendLoMm=150 は「線を図の外へ延ばす」ための
+  // 探査延長で、そこは面の外——アキ（その面に壁が無いことの標記）を出す場所ではない。
+  const cut = makeCut({ line: { isVertical: false, axisValue: 0, lo: 0, hi: 3000, probeExtendLoMm: 150 } });
+  const columns = [
+    { x0: -150, x1: 0, worldLo: -150, worldHi: 0, bands: [{ kind: 'open', z0: 0, z1: 2400 }] },
+    { x0: 0, x1: 1000, worldLo: 0, worldHi: 1000, bands: [{ kind: 'open', z0: 0, z1: 2400 }] },
+  ];
+  const prims = emitOpenGapMarks(columns, cut, { ceilZ: 2400 });
+  const diag = prims.filter(p => p.type === 'line' && p.x1 !== p.x2 && p.y1 !== p.y2);
+  assert.equal(diag.length, 2, `バツは2本（実際:${diag.length}本）`);
+  for (const d of diag) {
+    assert.ok(Math.min(d.x1, d.x2) >= -1e-6,
+      `バツは面の内側(0以上)から始まるはず——延長ぶん(-150..0)には出さない（実際:${Math.min(d.x1, d.x2)}）`);
+  }
+});
+
+test('【失敗系】emitOpenGapMarks: 面の内側だけの列は従来どおり列の端から端まで描く', () => {
+  const cut = makeCut(); // 探査延長なし＝列は全て面の内側
+  const columns = [
+    { x0: 0, x1: 1000, worldLo: 0, worldHi: 1000, bands: [{ kind: 'open', z0: 0, z1: 2400 }] },
+    { x0: 1000, x1: 3000, worldLo: 1000, worldHi: 3000, bands: [{ kind: 'open', z0: 0, z1: 2400 }] },
+  ];
+  const diag = emitOpenGapMarks(columns, cut, { ceilZ: 2400 })
+    .filter(p => p.type === 'line' && p.x1 !== p.x2 && p.y1 !== p.y2);
+  assert.equal(diag.length, 2, 'バツは2本');
+  const xs = diag.flatMap(d => [d.x1, d.x2]);
+  assert.equal(Math.min(...xs), 0, '左端は0のまま');
+  assert.equal(Math.max(...xs), 3000, '右端は3000のまま（面の内側は切らない）');
+});
+
+// ---- 実画面で「ア キ」を置けない幅の区間はアキ標記ごと省略（ユーザー明示指示2026-08） ----
+test('【明示指示】emitOpenGapMarks: 実画面で標記を置けない幅の区間はアキ・バツごと省略する', () => {
+  const cut = makeCut();
+  const narrow = [{ x0: 0, x1: 342.5, worldLo: 0, worldHi: 342.5, bands: [{ kind: 'open', z0: 0, z1: 2400 }] }];
+  // scale=0.0667px/mm のとき「ア キ」(=30px相当)は約450mm必要。342.5mmには置けない。
+  assert.deepEqual(emitOpenGapMarks(narrow, cut, { ceilZ: 2400, scale: 0.0667 }), []);
+});
+
+test('【失敗系】emitOpenGapMarks: 標記が収まる幅なら従来どおり描く', () => {
+  const cut = makeCut();
+  const wide = [{ x0: 0, x1: 3000, worldLo: 0, worldHi: 3000, bands: [{ kind: 'open', z0: 0, z1: 2400 }] }];
+  const prims = emitOpenGapMarks(wide, cut, { ceilZ: 2400, scale: 0.0667 });
+  assert.ok(prims.some(p => p.type === 'text' && p.text === 'ア キ'), '「ア キ」が出る');
+  assert.equal(prims.filter(p => p.type === 'line').length, 2, 'バツ2本');
+});
+
+test('【失敗系】emitOpenGapMarks: scale未指定（単体テスト・ゴールデン）では省略判定を行わない', () => {
+  const cut = makeCut();
+  const narrow = [{ x0: 0, x1: 342.5, worldLo: 0, worldHi: 342.5, bands: [{ kind: 'open', z0: 0, z1: 2400 }] }];
+  assert.ok(emitOpenGapMarks(narrow, cut, { ceilZ: 2400 }).length > 0,
+    'scaleが無ければ実画面幅を判定できないので従来どおり描く');
+});

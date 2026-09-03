@@ -7,6 +7,8 @@
  * は buildRoomFaces ではなくこの composeRoomFaces を唯一の面リスト供給源として使う。
  */
 import { buildRoomFaces, labelFaces, perpendicularWallsOnFace } from './elevationFaces.js';
+import { SIGHTLINE_DEPTH_LIMIT_MM } from './elevationStyle.js';
+import { graphList } from '../graphReadScope.js';
 import { insertStepFaces } from './elevationStepFace.js';
 import { extendFacesWithOpenSpans, clipSpans } from './elevationOpenSpan.js';
 import { SPLIT_MERGE_EPS_MM, MIN_FACE_RUN_MM } from './elevationStyle.js';
@@ -158,7 +160,45 @@ export function composeRoomFaces(room, graph, opts = {}) {
   // keepWallLessFaces: 階段帯だけは例外。上り口の面（壁なし）をレーン範囲の算出（switchbackCuts.js
   // のwEntry）に使うため、面リストから落とすと切断表そのものが組めなくなる。
   if (!opts.keepWallLessFaces) faces = faces.filter(f => f.kind === 'step' || f.hasRealWall !== false);
-  return labelFaces(faces);
+  return labelFaces(dropFacesSeenAsSightline(faces, graph));
+}
+
+// 面gが面fを「見えがかりとして取り込む」か（下記dropFacesSeenAsSightlineの述語）。
+function absorbsAsSightline(g, f, walls) {
+  if (g === f || g.kind === 'step' || f.kind === 'step') return false;
+  if (!!g.isVertical !== !!f.isVertical) return false;              // 平行な面どうしだけ
+  if (Math.sign(g.inward) !== Math.sign(f.inward)) return false;    // 同じ向きを見ている面だけ
+  const ga = g.axisCL?.effectiveValue, fa = f.axisCL?.effectiveValue;
+  if (!Number.isFinite(ga) || !Number.isFinite(fa)) return false;
+  // fがgの視線方向にあり、見えがかりとして描かれる奥行きに収まっているか
+  // （上限はsectionEngine.jsの見えがかり判定と同じSIGHTLINE_DEPTH_LIMIT_MM）。
+  const depth = (fa - ga) * -Math.sign(g.inward);
+  if (!(depth > MIN_FACE_RUN_MM && depth < SIGHTLINE_DEPTH_LIMIT_MM)) return false;
+  // gの走り範囲がfを覆っていること＝fの全長がgの図の中に見えていること。
+  if (!(g.lo <= f.lo + MIN_FACE_RUN_MM && g.hi >= f.hi - MIN_FACE_RUN_MM)) return false;
+  // **gの平面にfの走り範囲と重なる壁があれば、fはgの図に現れない**（自壁に隠れる）。
+  // 一部でも隠れれば「丸ごと取り込まれた」とは言えないので、重なりがあれば取り込みとしない。
+  return !(walls ?? []).some(w => !!w.isVertical === !!g.isVertical
+    && Math.abs((w.axisCL?.effectiveValue ?? NaN) - ga) <= MIN_FACE_RUN_MM
+    && Math.min(w.coord1, w.coord2) < f.hi - MIN_FACE_RUN_MM
+    && Math.max(w.coord1, w.coord2) > f.lo + MIN_FACE_RUN_MM);
+}
+
+/**
+ * **他の面の見えがかりとして描かれる面は、独立したパネルにしない**（ユーザー明示指示2026-08
+ * 「見えがかりに取り込まれた面は常に落とす」「「5」D1に描画済なのでD2パネルを削除」）。
+ *
+ * 同じ向きを見ている平行な面のうち、手前の面の走り範囲に全長が収まり、かつ見えがかりとして
+ * 描かれる奥行き（`SIGHTLINE_DEPTH_LIMIT_MM`未満）にある奥の面が対象——その面は手前の面の図に
+ * 丸ごと現れているので、同じ壁面を2枚のパネルに描くことになる。
+ * 奥行きは符号付きなので相互に取り込み合うことはない（片方向だけが正になる）。
+ * @param {object[]} faces
+ * @param {object} graph
+ * @returns {object[]}
+ */
+export function dropFacesSeenAsSightline(faces, graph) {
+  const walls = graphList(graph, 'walls') ?? [];
+  return faces.filter(f => !faces.some(g => absorbsAsSightline(g, f, walls)));
 }
 
 /**

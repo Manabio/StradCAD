@@ -82,19 +82,23 @@ test('【多層】probeColumn: 吹抜けは通り抜け、実床のある層のF
   const bands = probeColumn(cut, 2000, makeProbeContext(layers));
 
   const wallTop = Math.max(...bands.filter(b => b.kind === 'wall').map(b => b.z1));
-  assert.equal(wallTop, FLOOR_HEIGHT * 2,
-    `2階は吹抜けなので通り抜け、実床のある3階のFL(${FLOOR_HEIGHT * 2})まで続くはず（実際:${wallTop}）`);
+  assert.equal(wallTop, FLOOR_HEIGHT + CH,
+    `2階は吹抜けなので通り抜けるが、その天井(${FLOOR_HEIGHT + CH})より上は3階の床に隠れる（実際:${wallTop}）`);
 });
 
-test('【多層】probeColumn: 直上に実床があれば上階FLまで（天井裏も壁。CHでは切らない）', () => {
+test('【多層・明示指示2026-08で更新】probeColumn: 直上に実床があれば自階の天井で切れる', () => {
   const layers = threeLayers({ aboveFeature: null, above2Feature: RoomFeature.VOID });
   const cut = stackedCut(layers, TOP_Z);
   const bands = probeColumn(cut, 2000, makeProbeContext(layers));
 
   const wallTop = Math.max(...bands.filter(b => b.kind === 'wall').map(b => b.z1));
-  assert.equal(wallTop, FLOOR_HEIGHT, `上階FL(${FLOOR_HEIGHT})まで（自階CH=${CH}で切らない。実際:${wallTop}）`);
-  assert.ok(!bands.some(b => b.kind === 'wall' && Math.abs(b.z1 - CH) < GAP_EPS),
-    'CH（天井）で終わる壁帯は無い＝CHに見えがかり線が立たない（断面線のみ）');
+  // 上階に実床があれば、その手前の**自層の天井**で見えがかりは終わる（ユーザー実機指摘2026-08
+  // 「「5」D1: 1F天井見えがかり（細線）が…1FL天井断面に衝突するまで」）。天井裏にも壁の実体は
+  // あるが、見えがかりは**見えるもの**だけで、天井に隠れて見えない。点4「天井裏も壁」は
+  // 上が吹抜けで壁が実際に見え続ける場合の規則としてそのまま残る（下のVOIDのテスト）。
+  assert.equal(wallTop, CH, `自階の天井(${CH})まで（実際:${wallTop}）`);
+  assert.ok(bands.some(b => b.kind === 'slab' && Math.abs(b.z0 - CH) < GAP_EPS),
+    '天井〜上階FLは天井懐(slab・非描画)になる');
 });
 
 // ---- slab/open の所有層: 「その高さを所有する層」で決める ----

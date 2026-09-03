@@ -6,7 +6,8 @@
  * なく、床の段差CL・内部の直交壁（袖壁・腰壁）・開放スパン境界・通り芯で分割した「寸法の鎖」。
  */
 import { perpendicularWallsOnFace } from './elevationFaces.js';
-import { SPLIT_MERGE_EPS_MM } from './elevationStyle.js';
+import { graphList } from '../graphReadScope.js';
+import { SPLIT_MERGE_EPS_MM, SIGHTLINE_DEPTH_LIMIT_MM } from './elevationStyle.js';
 
 /**
  * face の寸法行の分割点（ローカルx。boundary.lo/hiそのものは含まない）を昇順・重複除去で返す。
@@ -48,6 +49,38 @@ export function collectRow1SplitPoints(face, graph, { floorSegments, boundary, s
   // S2: 面の中心線へ到達する直交壁（袖壁・腰壁を含む。近接=faceValueまでは届かなくてよい）。
   for (const w of perpendicularWallsOnFace(face, graph, 'far')) {
     raw.push(localXOf(w.axisCL.effectiveValue));
+  }
+
+  // S6: **見えがかりの奥行きが変わる位置**（ユーザー明示指示2026-08「「5」D1: Y1から2000の
+  // 寸法線を見えがかりに合わせて(1000と1000に)分ける」）。面の平面に壁が無い区間では、その先の
+  // 壁が見えがかりとして描かれ、壁の端に見えがかりの縦線が立つ——図に線がある位置なので寸法も
+  // そこで割る（分割を担うのは実体、という既存の方針そのもの）。
+  // 対象は「面の平面より視線方向にあり、見えがかりとして描かれる奥行き
+  // （SIGHTLINE_DEPTH_LIMIT_MM未満。sectionEngine.jsの判定と同じ上限）の**平行な**壁」。
+  // 割る位置は壁の実体の端ではなく**その端の中心線**——寸法の分割点は常にCL、という既存の規約
+  // （面の両端＝壁中心線・内部の分割点＝通り芯と同じ）。**面自身の平面に壁がある位置は対象外**
+  // ——そこは自壁に隠れて見えがかりが存在しない（`face.spans`は合成前の面のもので、吹抜けと
+  // 合成して伸ばした区間を持たないため、面の軸上の壁を直接引いて判定する）。
+  const faceAxis = face.axisCL?.effectiveValue;
+  if (Number.isFinite(faceAxis)) {
+    const walls = graphList(graph, 'walls') ?? [];
+    const sameAxis = w => !!w.isVertical === !!face.isVertical
+      && Math.abs((w.axisCL?.effectiveValue ?? NaN) - faceAxis) <= SPLIT_MERGE_EPS_MM;
+    const ownWallAt = world => walls.some(w => sameAxis(w)
+      && world > Math.min(w.coord1, w.coord2) + SPLIT_MERGE_EPS_MM
+      && world < Math.max(w.coord1, w.coord2) - SPLIT_MERGE_EPS_MM);
+    const view = -Math.sign(face.inward || 1);
+    for (const w of walls) {
+      if (!!w.isVertical !== !!face.isVertical) continue;
+      const depth = ((w.axisCL?.effectiveValue ?? NaN) - faceAxis) * view;
+      if (!(depth > SPLIT_MERGE_EPS_MM && depth < SIGHTLINE_DEPTH_LIMIT_MM)) continue;
+      for (const cl of [w.clStart, w.clEnd]) {
+        const v = cl?.effectiveValue;
+        if (!Number.isFinite(v) || ownWallAt(v)) continue;
+        const x = localXOf(v);
+        if (x > boundary.lo + SPLIT_MERGE_EPS_MM && x < boundary.hi - SPLIT_MERGE_EPS_MM) raw.push(x);
+      }
+    }
   }
 
   // S5: 面を貫く通り芯（ユーザー明示指示2026-08「展開図に寸法2段書きは不要」「壁幅が通り芯を

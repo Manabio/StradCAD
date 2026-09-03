@@ -931,8 +931,12 @@ export function buildFaceFigure(face, ctx) {
     for (const [i, s] of segs.entries()) {
       const y = floorYOf(s) - baseboardH;
       // 新仕様「段差位置のCLオフセット」: 内部境界はriserXAt（床が低い側へ半壁厚ずらした位置）を使う。
-      const segLo = i === 0 ? s.loX : riserXAt(i - 1);
-      const segHi = i === segs.length - 1 ? s.hiX : riserXAt(i);
+      // **面の端は床線と同じ描画基準（drawnX0/drawnXRun）を使う**——壁のない端部では床線・
+      // 天井線と同じだけ図の外へはね出す（ユーザー実機指摘2026-08「「5」D1・B1: 1階巾木、
+      // CLで終わらず、開いている壁にはね出し」）。s.loX/s.hiX は論理境界（CL）なので、
+      // そのまま使うと巾木だけがCLで止まり、はね出した床線との間に段が付く。
+      const segLo = i === 0 ? drawnX0 : riserXAt(i - 1);
+      const segHi = i === segs.length - 1 ? drawnXRun : riserXAt(i);
       let cursor = segLo;
       for (const [gLo, gHi] of floorGaps) {
         const cgLo = Math.max(gLo, segLo), cgHi = Math.min(gHi, segHi);

@@ -91,11 +91,15 @@ test('compareLayerPriority: 帯自身の階→上階→下階の順（旧ROLE_OR
 // ユーザー明示指示2026-08の点4「天井から上階FLまでの間にある面も『壁』扱い」で規則変更。
 // 上限は自層の天井ではなく**上階のFL**——天井裏の壁も同じ面として続くため、CHに見えがかり線が
 // 立たなくなる（emitColumnsの「距離が変わるところにだけ描く」一般規則が自動的にそう導く）。
-test('resolveSightlineTopZ: 上階に実床があれば上階のFLまで（天井裏も壁）', () => {
+test('resolveSightlineTopZ: 上階に実床があれば自層の天井まで（天井裏は見えない）', () => {
   const self = info(0), above = info(2900, { room: realRoom });
   const stack = orderLayerStack([self, above]);
-  assert.equal(resolveSightlineTopZ(stack, self, () => realRoom, 9999), 2900,
-    '自層の天井(2400)ではなく上階FL(2900)まで——天井裏(2400〜2900)も壁');
+  // 上階に実床があれば、その手前の**自層の天井**で見えがかりは終わる（ユーザー実機指摘2026-08
+  // 「「5」D1: 1F天井見えがかり（細線）が…1FL天井断面に衝突するまで」）。天井裏にも壁の実体は
+  // あるが、見えがかりは**見えるもの**だけで、天井に隠れて見えない。点4「天井裏も壁」は
+  // 上が吹抜けで壁が実際に見え続ける場合の規則としてそのまま残る（下のVOIDのテスト）。
+  assert.equal(resolveSightlineTopZ(stack, self, () => realRoom, 9999), 2400,
+    '自層の天井(2400)で終わる——天井裏(2400〜2900)は天井に隠れて見えない');
 });
 
 test('resolveSightlineTopZ: 上が吹抜けなら上階の天井まで延びる', () => {
@@ -110,12 +114,12 @@ test('resolveSightlineTopZ: 吹抜けが続く限り何層でも登る（多層�
   assert.equal(resolveSightlineTopZ(stack, self, () => voidRoom, 9999), 8200);
 });
 
-test('resolveSightlineTopZ: 実床のある層のFLで止まる（吹抜けは通り抜ける）', () => {
+test('resolveSightlineTopZ: 吹抜けは通り抜け、その上に実床があればその階の天井で止まる', () => {
   const self = info(0), above = info(2900), above2 = info(5800);
   const stack = orderLayerStack([self, above, above2]);
   const roomAt = upper => (upper.layer.floorZMm === 2900 ? voidRoom : realRoom);
-  assert.equal(resolveSightlineTopZ(stack, self, roomAt, 9999), 5800,
-    '2階は吹抜けなので通り抜け、実床のある3階のFL(5800)まで壁が続く');
+  assert.equal(resolveSightlineTopZ(stack, self, roomAt, 9999), 5300,
+    '2階は吹抜けなので通り抜けるが、その天井(5300)より上は3階の床に隠れて見えない');
 });
 
 test('resolveSightlineTopZ: 上階側の層の壁にも同じ規則が適用される（旧実装はself層限定だった）', () => {

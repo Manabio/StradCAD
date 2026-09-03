@@ -11,10 +11,12 @@
 import { roomBounds } from '../finish/gridCells.js';
 import { roomCeilingHeight } from '../finish/roomMetrics.js';
 import { graphList } from '../graphReadScope.js';
-import { composeRoomFaces } from './elevationFaceList.js';
-import { selectElevationRooms } from './elevationFaces.js';
+import { composeRoomFaces, dropFacesSeenAsSightline } from './elevationFaceList.js';
+import { labelFaces } from './elevationFaces.js';
+import { selectElevationRooms, faceWallLessExtents } from './elevationFaces.js';
 import { parseBaseboardHeightMm, formatMaterialLabel, estimateWallLabelWidthPx } from './elevationFigure.js';
-import { ElevationLineRole, weightForRole, WALL_LABEL_LINE_GAP_MM, CH_DIM_OFFSET_MM } from './elevationStyle.js';
+import { ElevationLineRole, weightForRole, WALL_LABEL_LINE_GAP_MM, CH_DIM_OFFSET_MM,
+  DEFAULT_WALL_LESS_END_EXTEND_MM } from './elevationStyle.js';
 import { findRunCLAt } from './elevationFloorProfile.js';
 import { layoutBandFaces, finalizeBand, appendBandCutContent } from './elevationBand.js';
 import { translatePrimitive } from './elevationPrimitives.js';
@@ -220,7 +222,7 @@ function makeUpperStoreyContext(layout, upperGraph, floorHeightMm, upperCH) {
  * @param {{floorHeightMm:number, roomBoundsRect:object|null, endExtendMm:number|undefined}} opts
  */
 function appendUpperStoreyOutline(primitives, layout, upper, opts) {
-  const { floorHeightMm, roomBoundsRect, endExtendMm } = opts;
+  const { floorHeightMm, roomBoundsRect, endExtendMm, scale } = opts;
   const { layers, probeCtx, columnSolids, hiZ, segsByFace } = upper;
   for (const { face, xCursor } of layout.faceRuns) {
     for (const seg of segsByFace.get(face) ?? []) {
@@ -238,7 +240,8 @@ function appendUpperStoreyOutline(primitives, layout, upper, opts) {
         zRange: { loZ: floorHeightMm, hiZ },
         ceilProfile: [{ loX: 0, hiX: hi - lo, ceilZ: hiZ }],
       };
-      const { content } = buildCutContent(cut, probeCtx, { endExtendMm, bandRoomBounds: roomBoundsRect });
+      const { content } = buildCutContent(cut, probeCtx,
+        { endExtendMm, bandRoomBounds: roomBoundsRect, scale });
       // cutのローカルx=0は line.lo/hi 側。面ローカルxへ戻す。
       const cutOriginWorld = face.dirSign > 0 ? lo : hi;
       const dx = xCursor + (cutOriginWorld - face.originWorld) * face.dirSign;
@@ -283,16 +286,25 @@ function upperFaceRooms(face, upperGraph) {
  */
 function appendUpperStoreyTrim(primitives, layout, upperGraph, upper, opts) {
   const { floorHeightMm, upperCH, materialMap, scale } = opts;
+  const wallLessExtendMm = opts.wallLessEndExtendMm ?? DEFAULT_WALL_LESS_END_EXTEND_MM;
   const { hiZ, segsByFace } = upper;
   const cutWeight = weightForRole(ElevationLineRole.CUT);
   const detailWeight = weightForRole(ElevationLineRole.DETAIL);
   let chDimDone = false;
-  for (const { face, xCursor } of layout.faceRuns) {
+  for (const { face, xCursor, boundary } of layout.faceRuns) {
     const segs = segsByFace.get(face) ?? [];
     if (segs.length === 0) continue;
+    // **壁のない端部では上階の天井断面線も図の外へ延ばす**（1階の床線・天井線と同じ規則＝
+    // elevationFaces.jsのfaceWallLessExtents。ユーザー実機指摘2026-08「「5」D1: 2階天井線は、
+    // Y1から3500CLの右側はね出しが正解」「「5」B: …左側はね出しが正解」）——延ばすのは面の端に
+    // 一致する側だけで、区間の内側の境界（吹抜けとの境目）は動かさない。
+    // 上階ぶんだけこの規則から漏れており、1階の天井線は延びるのに2階の天井線はCLで止まっていた。
+    const { leftExtendMm, rightExtendMm } = faceWallLessExtents(face, wallLessExtendMm);
     for (const seg of segs) {
+      const lo = seg.lo - (Math.abs(seg.lo) < MIN_SUB_SEG_MM ? leftExtendMm : 0);
+      const hi = seg.hi + (Math.abs(seg.hi - face.run) < MIN_SUB_SEG_MM ? rightExtendMm : 0);
       // 上階の天井断面線（この範囲の上端。これが無いとアキ・壁の上が宙で終わる）。
-      primitives.push({ type: 'line', x1: xCursor + seg.lo, y1: -hiZ, x2: xCursor + seg.hi, y2: -hiZ,
+      primitives.push({ type: 'line', x1: xCursor + lo, y1: -hiZ, x2: xCursor + hi, y2: -hiZ,
         weight: cutWeight });
     }
     // 巾木・壁2段書きは「その位置の2階の部屋」の面がある範囲だけ。壁が無い区間（アキ）には
@@ -324,10 +336,17 @@ function appendUpperStoreyTrim(primitives, layout, upperGraph, upper, opts) {
       }
     }
     // 上階の天井高寸法（階ごとに値が違うので、下階のぶんとは別に1本だけ足す）。
-    if (!chDimDone && layout.chDimX != null) {
+    // **置くのは「その端に上階の断面がある面」の左**——帯の先頭面の左に上階が描かれていなければ、
+    // そこには対応する断面が無い（ユーザー実機指摘2026-08「「5」A: 2階左側の天井高さ2400は、
+    // 図中、該当する断面がないので描画不要」。先頭面の左が吹抜けだと、その位置の上階は
+    // 「断面の中」で何も描かれていない）。1階の左CH寸法が「左端**区間**の実際の床〜天井」を
+    // 測るのと同じ規約を、上階ぶんにも適用する。左端が吹抜けの面は自身の左CH寸法が
+    // 1FL〜2階天井（例:5400）を測っているので、この規約なら寸法どうしが重ならない。
+    if (!chDimDone && boundary && segs.some(s => Math.abs(s.lo) < MIN_SUB_SEG_MM)) {
       chDimDone = true;
-      primitives.push({ type: 'dim', dir: 'v', at: layout.chDimX, from: -hiZ, to: -floorHeightMm,
-        foot: layout.chDimX + CH_DIM_OFFSET_MM, dot: true, label: Math.round(upperCH) });
+      const at = xCursor + boundary.lo - CH_DIM_OFFSET_MM;
+      primitives.push({ type: 'dim', dir: 'v', at, from: -hiZ, to: -floorHeightMm,
+        foot: at + CH_DIM_OFFSET_MM, dot: true, label: Math.round(upperCH) });
     }
   }
 }
@@ -433,7 +452,7 @@ export function buildVoidBand(voidRoom, graph, lowerGraph, ctx = {}) {
     hasLower && dropMm > 0
       ? [{ graph, floorZMm: 0, role: 'self' }, { graph: lowerGraph, floorZMm: -dropMm, role: 'below' }]
       : [{ graph, floorZMm: 0, role: 'self' }],
-    { endExtendMm: ctx.wallLessEndExtendModelMm });
+    { endExtendMm: ctx.wallLessEndExtendModelMm, scale: ctx.scale });
   return finalizeBand(voidRoom, graph, primitives, {
     faceCount: faces.length, chDimX: layout.chDimX, prevBoundaryHi: layout.prevBoundaryHi,
     triOffsetMm: ctx.triangleOffsetModelMm, nameGapModelMm: ctx.nameGapModelMm,
@@ -474,7 +493,7 @@ export function buildRoomBandWithVoidAbove(room, graph, voidRoom, upperGraph, ct
     const layout = layoutBandFaces(room, graph, baseFaces, ctx);
     const prims = [...layout.primitives];
     appendBandCutContent(prims, room, graph, layout, [{ graph, floorZMm: 0, role: 'self' }],
-      { endExtendMm: ctx.wallLessEndExtendModelMm });
+      { endExtendMm: ctx.wallLessEndExtendModelMm, scale: ctx.scale });
     return finalizeBand(room, graph, prims, {
       faceCount: baseFaces.length, chDimX: layout.chDimX, prevBoundaryHi: layout.prevBoundaryHi,
       triOffsetMm: ctx.triangleOffsetModelMm, nameGapModelMm: ctx.nameGapModelMm,
@@ -489,7 +508,7 @@ export function buildRoomBandWithVoidAbove(room, graph, voidRoom, upperGraph, ct
     && Math.abs((a.axisCL?.effectiveValue ?? NaN) - (b.axisCL?.effectiveValue ?? NaN)) <= LOWER_AXIS_EPS_MM;
 
   const used = new Set();
-  const faces = baseFaces.map(f => {
+  let faces = baseFaces.map(f => {
     if (f.kind === 'step') return f;
     const mates = voidFaces.filter(v => samePlane(f, v));
     if (mates.length === 0) return f;
@@ -502,6 +521,11 @@ export function buildRoomBandWithVoidAbove(room, graph, voidRoom, upperGraph, ct
   for (const v of voidFaces) {
     if (!used.has(v)) faces.push(withVoidRanges({ ...v }, v, [v], graph, upperGraph));
   }
+  // **見えがかりに取り込まれた面を落とすのは合成の後**（ユーザー明示指示2026-08「「5」D1に
+  // 描画済なのでD2パネルを削除」）——取り込む側の面は吹抜けと合成して走り範囲が伸びた後の
+  // 姿でなければ、奥の面を覆えない（実機「5」のD1は合成前だと1557.5しかなく、D2の範囲に
+  // 届かない）。落とした結果でletter内の採番をやり直す。
+  faces = labelFaces(dropFacesSeenAsSightline(faces, graph));
 
   const faceOverride = (face, i, defaults) => {
     const plan = face.voidAbove;
@@ -537,7 +561,7 @@ export function buildRoomBandWithVoidAbove(room, graph, voidRoom, upperGraph, ct
     { graph, floorZMm: 0, role: 'self' },
     { graph: upperGraph, floorZMm: floorHeightMm, role: 'above' },
   ], {
-    endExtendMm: ctx.wallLessEndExtendModelMm,
+    endExtendMm: ctx.wallLessEndExtendModelMm, scale: ctx.scale,
     aboveCeilVisibleRangesOf: face => upper.segsByFace.get(face),
   });
   // 上階ぶんの輪郭・体裁（方針C）: 吹抜けを通して下階の空間とつながっている範囲へ、上階を
@@ -545,11 +569,12 @@ export function buildRoomBandWithVoidAbove(room, graph, voidRoom, upperGraph, ct
   appendUpperStoreyOutline(primitives, layout, upper, {
     floorHeightMm,
     roomBoundsRect: roomBounds(room.cells, graph),
-    endExtendMm: ctx.wallLessEndExtendModelMm,
+    endExtendMm: ctx.wallLessEndExtendModelMm, scale: ctx.scale,
   });
   // 値の出どころはすべて2階の部屋。
   appendUpperStoreyTrim(primitives, layout, upperGraph, upper, {
     floorHeightMm, upperCH: voidCH, materialMap: ctx.materialMap ?? null, scale: ctx.scale,
+    wallLessEndExtendMm: ctx.wallLessEndExtendModelMm,
   });
 
   return finalizeBand(room, graph, primitives, {

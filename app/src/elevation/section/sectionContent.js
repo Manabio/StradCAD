@@ -66,7 +66,7 @@ export function emitCtxForCut(cut) {
  * ささら・構造材の生成へ渡す）。
  * @param {import('./sectionTypes.js').SectionCut} cut
  * @param {ReturnType<typeof import('./sectionProbe.js').makeProbeContext>} probeCtx
- * @param {{endExtendMm?:number, bandRoomBounds?:object|null}} [opts]
+ * @param {{endExtendMm?:number, bandRoomBounds?:object|null, scale?:number}} [opts]
  * @returns {{cut:object, columns:object[], emitCtx:object,
  *   wallPrims:object[], gapMarks:object[], content:object[]}}
  *   cut … 探査延長・包絡矩形を載せた後の cut（後段の階段・構造材もこれを使う）。
@@ -76,7 +76,8 @@ export function buildCutContent(cut, probeCtx, opts = {}) {
     cut, opts.endExtendMm ?? 0, opts.bandRoomBounds ?? cut.bandRoomBounds ?? null,
   );
   const columns = buildColumns(pcut, probeCtx);
-  const emitCtx = emitCtxForCut(pcut);
+  // scale（px/mm）はアキ標記の省略判定に使う（sectionEmit.jsのemitOpenGapMarks）。
+  const emitCtx = { ...emitCtxForCut(pcut), scale: opts.scale };
   const wallPrims = emitColumns(columns, pcut, emitCtx);
   const gapMarks = emitOpenGapMarks(columns, pcut, emitCtx);
   return { cut: pcut, columns, emitCtx, wallPrims, gapMarks, content: [...wallPrims, ...gapMarks] };

@@ -7,7 +7,8 @@ import { Plane, PlanGraph, CenterLineType, Discipline, edgeKey } from '@core';
 import { generateRoomWallsFromOutline } from '../finish/wallGeneration.js';
 import { getCellsInRect } from '../finish/gridCells.js';
 import { buildRoomFaces, faceBoundaryLocalX } from './elevationFaces.js';
-import { composeRoomFaces, neighborWallFace, splitFacesAtPartitionWalls, kneeDropRecordFor } from './elevationFaceList.js';
+import { composeRoomFaces, neighborWallFace, splitFacesAtPartitionWalls, kneeDropRecordFor,
+  dropFacesSeenAsSightline } from './elevationFaceList.js';
 import { stepRiserSegments } from './elevationStepFace.js';
 
 function makeGraph() {
@@ -314,4 +315,41 @@ test('composeRoomFaces: 開放スパンを持つ面が袖壁で分割された�
   }
   // 少なくとも1断片はopen区間を持つ（開放スパンが分割後も残っていることの確認）。
   assert.ok(fragments.some(f => f.spans.some(s => s.kind === 'open')), '少なくとも1断片はopen区間を持つはず');
+});
+
+// ---- 見えがかりに取り込まれた面は落とす（ユーザー明示指示2026-08） ----
+// 「「5」D1に描画済なのでD2パネルを削除」——同じ壁面を2枚のパネルに描かないための規則。
+const sightFace = (axis, lo, hi) => ({
+  isVertical: true, inward: 1, axisCL: { effectiveValue: axis }, lo, hi, letter: 'D',
+});
+
+test('【明示指示】dropFacesSeenAsSightline: 手前の面に丸ごと見えている奥の面は落とす', () => {
+  const near = sightFace(-3000, -3500, -57.5);   // 実機「5」D1（吹抜けと合成後の走り範囲）
+  const far = sightFace(-3400, -1057.5, -57.5);  // 実機「5」D2（400奥・全長が手前の面に収まる）
+  assert.deepEqual(dropFacesSeenAsSightline([near, far], { walls: [] }), [near]);
+});
+
+test('【失敗系】dropFacesSeenAsSightline: 見えがかりの奥行きを超える面は落とさない', () => {
+  const near = sightFace(-3000, -3500, -57.5);
+  const far = sightFace(-6200, -1942.5, -1057.5); // 3200奥＝アキになる距離なので見えていない
+  assert.deepEqual(dropFacesSeenAsSightline([near, far], { walls: [] }).length, 2);
+});
+
+test('【失敗系】dropFacesSeenAsSightline: 走り範囲がはみ出す面は落とさない', () => {
+  const near = sightFace(-3000, -3500, -2000);
+  const far = sightFace(-3400, -1057.5, -57.5);  // 手前の面の外にある＝その図に現れない
+  assert.equal(dropFacesSeenAsSightline([near, far], { walls: [] }).length, 2);
+});
+
+test('【失敗系】dropFacesSeenAsSightline: 手前の面に壁があれば奥は隠れるので落とさない', () => {
+  const near = sightFace(-3000, -3500, -57.5);
+  const far = sightFace(-3400, -1057.5, -57.5);
+  const walls = [{ isVertical: true, axisCL: { effectiveValue: -3000 }, coord1: -1500, coord2: 0 }];
+  assert.equal(dropFacesSeenAsSightline([near, far], { walls }).length, 2);
+});
+
+test('【失敗系】dropFacesSeenAsSightline: 逆向きの面（背中合わせ）は取り込みにならない', () => {
+  const near = sightFace(-3000, -3500, -57.5);
+  const far = { ...sightFace(-3400, -1057.5, -57.5), inward: -1 };
+  assert.equal(dropFacesSeenAsSightline([near, far], { walls: [] }).length, 2);
 });

@@ -21,11 +21,11 @@
  *   - cut.stairCutは「事前計算済みのstairContribution結果」を直接指す想定（sectionEngine.js
  *     自身はfinish/stair側の詳細を知らない——第3層との結合点はこの1箇所に閉じる）。
  */
-import { GAP_EPS_MM as GAP_EPS } from '../elevationStyle.js';
+import { GAP_EPS_MM as GAP_EPS, SIGHTLINE_DEPTH_LIMIT_MM } from '../elevationStyle.js';
 import { localXOf, worldOf } from './sectionTypes.js';
 import { collectCutBreaks, probeColumn, upperFloorZAt } from './sectionProbe.js';
 import { faceFromCut } from './sectionFace.js';
-import { emitColumns, emitOpenGapMarks } from './sectionEmit.js';
+import { emitColumns, emitOpenGapMarks, nearestSightlineDistMm } from './sectionEmit.js';
 import { stairPrimitivesForCut } from './sectionStair.js';
 import { reachableAirByColumn } from './sectionVisibility.js';
 
@@ -295,6 +295,19 @@ export function buildColumns(cut, probeCtx) {
     });
   }
   rawColumns.sort((a, b) => a.x0 - b.x0); // dirSign<0だとworld昇順とlocal昇順が逆転するため並べ替える
+  // **見えがかりの奥行き判定**（ユーザー明示指示2026-08。elevationStyle.jsのSIGHTLINE_DEPTH_LIMIT_MM）:
+  // その切断で最も手前の壁面（＝主な描画対象）から測って上限以上奥にある壁面は、同じ壁面の凹みでは
+  // なく**別の空間**なので、見えがかりにせずアキ（open）にする。旧実装の上限は`withinViewRoom`
+  // （帯の部屋の包絡矩形）だけで、部屋の中でありさえすれば何m先の壁でも細線で描いていた
+  // （実機「5」D1: 面の平面から3200奥の壁が見えがかりになり、アキが出ていなかった）。
+  const nearestMm = nearestSightlineDistMm(rawColumns);
+  if (Number.isFinite(nearestMm)) {
+    for (const col of rawColumns) {
+      col.bands = col.bands.map(b => (b.kind === 'wall' && Number.isFinite(b.distMm)
+        && b.distMm - nearestMm >= SIGHTLINE_DEPTH_LIMIT_MM)
+        ? { kind: 'open', z0: b.z0, z1: b.z1 } : b);
+    }
+  }
   // 可視領域の判定・打ち切りは**全列を揃えてから**行い、判定は必ず**打ち切り前の実体**で行う
   // ——打ち切りながら進めると、既に打ち切った隣の列のz範囲が変わっていて同じ壁と認識できず、
   // 壁厚が2列に割れている壁の片側だけが処理から漏れる（実機「5」D1: 腰壁の手前半分だけ

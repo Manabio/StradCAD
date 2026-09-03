@@ -7,9 +7,10 @@
  * （レンダラのpolyline分岐はdash非対応。.claude/elevation-model.md）。
  */
 import {
+  GAP_LABEL_WIDTH_PX,
   ElevationLineRole, weightForRole, GAP_EPS_MM as GAP_EPS, kneeCapBottomMm, KNEE_CAP_FACE_MM,
 } from '../elevationStyle.js';
-import { zToY, cutDrawRange } from './sectionTypes.js';
+import { zToY, cutDrawRange, localXOf } from './sectionTypes.js';
 
 /**
  * §5.6最終フィルタの唯一の適用箇所（emitLine(x1,z1,x2,z2,role)の1箇所だけで適用する、という
@@ -141,7 +142,19 @@ function uncoveredZRanges(col, band) {
     // 切り替わる位置＝CL上に、1階壁のキャップ差ぶんの縦線が出ていた——キャップはセル境界で
     // 切り替わるため、この線は必ずCL（一点鎖線）に重なる）。
     // 腰壁・垂れ壁で実際に高さが制限された帯（isKneeDrop）は実体の高さ差なので対象外。
-    if (!nb.isKneeDrop && !band.isKneeDrop && sameWallFace(nb, band)) return [];
+    if (!nb.isKneeDrop && !band.isKneeDrop && sameWallFace(nb, band)) {
+      // **ただし、その境界に切断壁が立っているならセル境界ではない**——上階の壁はその壁に
+      // 突き当たって実際に終わっており、切断壁の天端より上は実体の終わりなので縦線が要る
+      // （ユーザー実機指摘2026-08「「5」B: 2階Y1から2000と3500のCLにエッジが描画されない」）。
+      // 天端より下は切断壁自身の断面が境界を示すので、そこまでは従来どおり抑止する。
+      // 「必ずCL（一点鎖線）に重なる」というその18の根拠は、境界に実体が無い場合の話である。
+      const cutTop = Math.max(...col.bands.filter(b => b.kind === 'cut').map(b => b.z1));
+      if (!Number.isFinite(cutTop)) return [];
+      // 天端までは「セル境界」として覆う。**その上は隣の壁面自身（nb）の被覆で決める**
+      // ——隣で同じ壁面が天端の上まで続いていれば消え（袖壁の上に縦線を出さない＝その17）、
+      // 続いていなければ残る（「5」B: 上階の壁が腰壁で終わっている）。
+      ranges = subtractZ(ranges, { z0: band.z0, z1: cutTop });
+    }
     ranges = subtractZ(ranges, nb);
   }
   return ranges.filter(r => r.z1 - r.z0 > GAP_EPS);
@@ -160,6 +173,35 @@ function uncoveredZRanges(col, band) {
 function hiddenByCutWall(col, z) {
   return col.bands.some(b => b.kind === 'cut'
     && z >= b.z0 - GAP_EPS && z <= b.z1 + GAP_EPS);
+}
+
+/**
+ * 見えがかり壁の帯の**側縁を立てるx**。
+ *
+ * 原則は列の境界（fallbackX）。ただし**その区間が隣接列の切断壁の天端から始まる**とき、つまり
+ * 見えがかり壁の面が切断壁の上で終わっているとき、縦線は切断壁の**向こう側の面**へ送る
+ * （ユーザー実機指摘2026-08「「5」D1: 2階Y1から2000のCL左側の腰壁の上から2階天井までの線は、
+ * 同じCL右側が正解」）。
+ *
+ * 理由は平面にある——腰壁が突き当たる隅では壁の実体は連続しており、壁面が無くなる（アキになる）のは
+ * その切断壁の**向こう側**から。手前の面に立てると、線が切断壁の断面の手前の縁から生えて見え、
+ * 断面の厚みの中が壁なのかアキなのか図から読み取れなくなる（＝断面の厚みの中に、その厚みに
+ * 属さない情報が入る）。切断壁は片面ずつのWallオブジェクトで複数列に割れるため、同じ天端を持つ
+ * 切断壁の列が続くあいだ送り続ける。
+ * @param {object[]} columns
+ * @param {number} i - 見えがかり帯が乗る列
+ * @param {-1|1} dir - -1=lo側 / +1=hi側
+ * @param {number} z0 - この区間の下端
+ * @param {number} fallbackX
+ * @returns {number}
+ */
+function wallEndXAt(columns, i, dir, z0, fallbackX) {
+  let x = fallbackX;
+  for (let j = i + dir; columns[j]; j += dir) {
+    if (!columns[j].bands.some(b => b.kind === 'cut' && Math.abs(b.z1 - z0) < GAP_EPS)) break;
+    x = dir > 0 ? columns[j].x1 : columns[j].x0;
+  }
+  return x;
 }
 
 /**
@@ -331,11 +373,21 @@ function ceilStepSlabSection(columns, cut, ceilZ) {
     // 上階の床の断面線は**低い天井の側**へ走る（高い側は吹抜けで床が無い）。
     // 端は面の描画範囲の端（壁のない端部のはね出しを含む）——ユーザー明示指示
     // 「1500CLの右側はね出しまで」。
+    // 上階の床の断面線は、境界に立つ切断壁（腰壁・袖壁）の**断面の中**を通ってはいけない
+    // ——上階の床と、その上に載る壁は1つの連続した切断面で、その内部にこの線を引くと
+    // 「展開図では断面の中は描画しない」に反する（ユーザー明示指示2026-08「「5」D1: CL右側の
+    // 腰壁天端から2FLまでの断面線と2FL断面が取り合うのが正解」——壁の向こう側の面で
+    // 床の断面線へ折れるのが1本の輪郭）。壁の列を越えた位置＝壁の向こう側の面から描き始める。
+    let startX = x;
+    for (let k = step > 0 ? i + 1 : i; columns[k]; k += step) {
+      if (!columns[k].bands.some(bd => bd.kind === 'cut' && Math.abs(bd.z0 - floorZ) < GAP_EPS)) break;
+      startX = step > 0 ? columns[k].x1 : columns[k].x0;
+    }
     const outX = a.ceilZ < b.ceilZ ? range.lo : range.hi;
-    if (Math.abs(outX - x) > GAP_EPS) {
+    if (Math.abs(outX - startX) > GAP_EPS) {
       // 上階の床の断面線は**低い天井の断面線より上**に載る＝その区間の上階が見えているときだけ
       // 描いてよい（見えていなければ「断面の中」で、上階の床は天井裏の躯体になる）。
-      for (const [sx, ex] of aboveCeilVisibleSpans(cut, x, outX)) {
+      for (const [sx, ex] of aboveCeilVisibleSpans(cut, startX, outX)) {
         prims.push(emitLine(cut, sx, floorZ, ex, floorZ, ElevationLineRole.CUT, { ceilZ }));
       }
     }
@@ -390,7 +442,7 @@ function slabEdgeCutWallJunction(columns, cut, ceilZ) {
  * @param {import('./sectionTypes.js').SectionColumn[]} columns
  * @returns {number}
  */
-function nearestSightlineDistMm(columns) {
+export function nearestSightlineDistMm(columns) {
   let min = Infinity;
   for (const col of columns ?? []) {
     for (const band of col.bands) {
@@ -560,9 +612,19 @@ export function emitColumns(columns, cut, emitCtx = {}) {
             && ownsBoundary(band, neighborBandAt(col, band.z0, -1))) {
           prims.push(emitLine(cut, col.x0, band.z0, col.x1, band.z0, role, { ceilZ, forceDash: beyondBand }));
         }
+        // **その空間の天井の縁は、仮想断面から最も近い面（＝主な描画対象）と同格なので中線**
+        // （ユーザー明示指示2026-08「追加した1階天井見えがかり：仮想断面から最も近い壁
+        // （=主な描画対象）と同じ面のエッジなので中線を選択する」）——天井は切断面のすぐ手前から
+        // 奥へ広がる面で、その縁までの奥行きは0であり、見えている壁までの距離（この帯のdistMm）
+        // ではない。天井懐(slab)がすぐ上に接し、その層の天井(ceilZ)がこの高さに一致することで
+        // 「この境界は空間の天井である」と判定する（slab/openの境界側と同じ見方）。
+        const upperBand = neighborBandAt(col, band.z1, +1);
+        const atSpaceCeil = upperBand?.kind === 'slab' && Number.isFinite(upperBand.ceilZ)
+          && Math.abs(upperBand.ceilZ - band.z1) < GAP_EPS;
+        const topRole = atSpaceCeil ? ElevationLineRole.SILHOUETTE : role;
         if (!hiddenByCutWall(col, band.z1) && !atSectionLevel(band.z1)
             && ownsBoundary(band, neighborBandAt(col, band.z1, +1))) {
-          prims.push(emitLine(cut, col.x0, band.z1, col.x1, band.z1, role, { ceilZ, forceDash: beyondBand }));
+          prims.push(emitLine(cut, col.x0, band.z1, col.x1, band.z1, topRole, { ceilZ, forceDash: beyondBand }));
           // 腰壁の天端（仕様2026-08）: 見えがかりでも天端の帯は見えるので下端を細線で足す。
           // 天端の水平線を実際に描いた場合だけ——遮蔽で消した縁の下に帯だけ残ると嘘になる。
           if (band.isKneeDrop && band.z1 < (col.ceilZ ?? ceilZ ?? Infinity) - GAP_EPS) {
@@ -595,15 +657,25 @@ export function emitColumns(columns, cut, emitCtx = {}) {
         // 切断壁はそれ自身のz範囲でしか遮らない。
         const splitByCutWall = col.bands.some(b =>
           b.kind === 'cut' && Math.abs(b.z1 - band.z0) < GAP_EPS);
-        if (!splitByCutWall) {
+        // **ただし隣接列がアキ（open）なら、そこで壁面は本当に終わっている**——「切られて
+        // 持ち上がっただけ」と言えるのは、その先で壁面が何らかの形で続いているとき。アキは
+        // 「その面の平面に壁が無い」ことそのものなので、境界の縦線が要る（ユーザー実機指摘
+        // 2026-08「「5」B: 2階Y1から2000と3500のCLにエッジが描画されない」）。
+        // 隣接列がスラブ等の別の見え方になるだけの場合は従来どおり抑止する（その17「6」D1）。
+        const endsAtGap = nb => !!nb && nb.bands.some(x => x.kind === 'open' && overlapsZ(x, band));
+        {
           const wholeBand = [{ z0: band.z0, z1: band.z1 }];
-          const loRanges = prev ? uncoveredZRanges(prev, band) : (emitCtx.openEndLo ? [] : wholeBand);
+          const loRanges = (splitByCutWall && !endsAtGap(prev)) ? []
+            : prev ? uncoveredZRanges(prev, band) : (emitCtx.openEndLo ? [] : wholeBand);
           for (const r of loRanges) {
-            prims.push(Object.assign(emitLine(cut, col.x0, r.z0, col.x0, r.z1, role, { ceilZ }),{__o:'recessLo'}));
+            const x = wallEndXAt(columns, i, -1, r.z0, col.x0);
+            prims.push(Object.assign(emitLine(cut, x, r.z0, x, r.z1, role, { ceilZ }),{__o:'recessLo'}));
           }
-          const hiRanges = next ? uncoveredZRanges(next, band) : (emitCtx.openEndHi ? [] : wholeBand);
+          const hiRanges = (splitByCutWall && !endsAtGap(next)) ? []
+            : next ? uncoveredZRanges(next, band) : (emitCtx.openEndHi ? [] : wholeBand);
           for (const r of hiRanges) {
-            prims.push(Object.assign(emitLine(cut, col.x1, r.z0, col.x1, r.z1, role, { ceilZ }),{__o:'recessHi'}));
+            const x = wallEndXAt(columns, i, +1, r.z0, col.x1);
+            prims.push(Object.assign(emitLine(cut, x, r.z0, x, r.z1, role, { ceilZ }),{__o:'recessHi'}));
           }
           // 腰壁の端部抑え（仕様2026-08「追加したい腰壁の仕様」）: 天端の帯は壁が終わる端でも
           // 見えるので、その端に**帯の見付ぶん内側の細線**を足す（端の中線は上の凹み側面線が
@@ -975,14 +1047,34 @@ export function joinToStairProfile(wallContent, stairContent, cut, ref) {
  */
 export function emitOpenGapMarks(columns, cut, emitCtx = {}) {
   const ceilZ = emitCtx.ceilZ;
+  // **床断面の延長端（壁のない端部のはね出し）にはアキを描かない**（ユーザー明示指示2026-08
+  // 「床断面延長端に『アキ・バツ』は描画不要」）——延長は「線を図の外へ延ばす」ために探査範囲を
+  // 広げたぶんで、そこは面の外。面の外に「その面に壁が無い」という標記を出す意味がない。
+  // 面自身の範囲は`cut.line.lo/hi`（探査延長`probeExtendLo/HiMm`を含まない値）で決まる。
+  // **実画面で「ア キ」を置けない幅の区間には、アキ標記そのものを出さない**（ユーザー実機指摘
+  // 2026-08「「5」C2: 1階400の『アキ・バツ』が省略されない」）——壁2段書きの省略判定と同じ考え方。
+  // scale（px/mm）未指定（単体テスト・ゴールデン）では判定せず従来どおり全て描く。
+  const minGapWidthMm = emitCtx.scale ? GAP_LABEL_WIDTH_PX / emitCtx.scale : 0;
+  const endA = localXOf(cut, cut.line.lo), endB = localXOf(cut, cut.line.hi);
+  const faceLoX = Math.min(endA, endB), faceHiX = Math.max(endA, endB);
   const cells = [];
   columns.forEach((col, colIndex) => {
     for (const b of col.bands) {
-      if (b.kind === 'open' || b.openingPassThrough) {
+      // **切断壁（面を横切る壁）の天端の上の空気は「その面のアキ」ではない**——アキはその面の
+      // 平面に壁が無い範囲の標記であって、直交する壁を越えた先の空間はこの面の穴ではない。
+      // これを混ぜると、連結成分が腰壁の断面の厚みの中へ食い込み、バツの端点が壁の断面の
+      // 手前の縁×天端の位置に落ちる（ユーザー実機指摘2026-08「「5」D1: 2階のバツが、
+      // Y1から2000CL側、開口端部を正しく拾っていない」）。
+      // **面の平面にある腰壁の天端の上（＝本当のアキ）は下が'wall'帯なので影響しない**
+      // ——「6」Cの「バツ左下点は左側壁断面と腰壁上端の交点へ」はそちらの構成で、従来どおり。
+      const overCutWall = col.bands.some(x => x.kind === 'cut' && Math.abs(x.z1 - b.z0) < GAP_EPS);
+      if ((b.kind === 'open' || b.openingPassThrough) && !overCutWall) {
         // viaOpening: 建具の開口として抜けている区間。**アキ標記（矩形＋「ア キ」）は付けない**
         // ——そこは建具の姿図が描く場所であり「アキ」ではない（バツは従来どおり出す。
         // 「開口が2階アキと連続する場合は1組の大きなX」の確認済み仕様を壊さないため）。
-        cells.push({ colIndex, x0: col.x0, x1: col.x1, z0: b.z0, z1: b.z1,
+        const x0 = Math.max(col.x0, faceLoX), x1 = Math.min(col.x1, faceHiX);
+        if (x1 - x0 <= GAP_EPS) continue; // 面の外（延長ぶん）だけの列
+        cells.push({ colIndex, x0, x1, z0: b.z0, z1: b.z1,
           viaOpening: b.kind !== 'open' || b.openingPassThrough === true });
       }
     }
@@ -1006,6 +1098,7 @@ export function emitOpenGapMarks(columns, cut, emitCtx = {}) {
   for (const g of groups) {
     const x0 = Math.min(...g.map(c => c.x0));
     const x1 = Math.max(...g.map(c => c.x1));
+    if (x1 - x0 < minGapWidthMm) continue; // 標記を置けない幅＝アキ・バツごと省略
     const z0 = Math.min(...g.map(c => c.z0));
     const z1 = Math.max(...g.map(c => c.z1));
     // **バツの4点は空き面の実際の隅**（ユーザー実機指摘2026-08「6」C「バツの４点は、空き面の

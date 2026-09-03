@@ -89,19 +89,21 @@ test('【修正】切断線を室内側へ下げると、A面（真上が吹抜�
     '上が吹抜けなので壁は1階天井でキャップされず上階天井まで続く（見えがかり1本）');
 });
 
-test('【修正・点4】上階に実床がある側の面では、壁が天井で切れず1FLから上階天井まで通しで抽出される', () => {
+test('【明示指示2026-08で更新】上階に実床がある側の面では、見えがかり壁は自階の天井で終わる', () => {
   const fx = fixture();
   // B/D面（東西の壁）は南北に走るので、北半分＝吹抜け・南半分＝実部屋の両方に跨る。
   const faceB = facesOf(fx).find(f => f.letter === 'B');
   const bands = bandsAt(faceB, fx, cutPlaneOffsetMm(faceB, fx.layers));
   const kinds = bands.map(b => b.kind);
   assert.ok(kinds.includes('wall'), `1階の壁が見えがかりとして出るはず（実際:${JSON.stringify(kinds)}）`);
-  // 点4「天井から上階FLまでの間にある面も『壁』扱い」により、天井裏はslabではなく壁になり、
-  // CH（1階天井=2400）で終わる帯が無い＝CHに見えがかり線が立たない（断面線のみ）。
-  assert.ok(!bands.some(b => b.kind === 'slab' && Math.abs(b.z1 - FLOOR_HEIGHT) < 1e-6),
-    '天井裏は床構造(slab)ではなく壁として扱われる');
-  assert.ok(!bands.some(b => Math.abs(b.z1 - CH) < 1e-6),
-    `CH(${CH})で終わる帯は無いはず（実際:${JSON.stringify(bands.map(b => [b.kind, b.z0, b.z1]))}）`);
+  // 旧・点4は「天井から上階FLまでの間にある面も『壁』扱い」だったが、ユーザー実機指摘2026-08
+  // 「「5」D1: 1F天井見えがかり（細線）が…1FL天井断面に衝突するまで」で更新した——天井裏にも
+  // 壁の実体はあるが、**見えがかりは見えるものだけ**で、天井に隠れて見えない。上が吹抜けで
+  // 壁が実際に見え続ける場合は従来どおり上階天井まで続く（上の【修正】A面のテスト）。
+  assert.ok(bands.some(b => b.kind === 'wall' && Math.abs(b.z1 - CH) < 1e-6),
+    `自階の天井(${CH})で終わる壁帯があるはず（実際:${JSON.stringify(bands.map(b => [b.kind, b.z0, b.z1]))}）`);
+  assert.ok(bands.some(b => b.kind === 'slab' && Math.abs(b.z0 - CH) < 1e-6),
+    '天井〜上階FLは天井懐(slab・非描画)になる');
   assert.ok(bands.some(b => b.z1 > FLOOR_HEIGHT), '上階ぶんの帯があるはず');
 });
 

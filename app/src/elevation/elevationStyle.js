@@ -85,6 +85,22 @@ export const LEFT_MARGIN_SCREEN_MM = 15;
 export const WALL_LESS_END_EXTEND_SCREEN_MM = 5;
 export const DEFAULT_WALL_LESS_END_EXTEND_MM = 150; // 倍率決定用の1パス目の仮値
 
+// 見えがかりとして描く**奥行きの上限**(mm)。ユーザー明示指示2026-08: 「仮想断面から最も近い壁
+// （＝主な描画対象）までの距離から、確認対象の壁までの距離を引いた値が800未満なら見えがかり、
+// 800以上ならアキ」。同じ壁面の凹み（ニッチ・袖壁の脇）はこの範囲に収まり、それを越えて奥に
+// あるものは**別の空間**なので、その面の図には現れずアキになる。
+// 判定の基準は列ごとではなく**その切断（＝その1枚の図）全体で最も手前の壁面**
+// （section/sectionEmit.js の nearestSightlineDistMm。線種の階調と同じ基準）。
+export const SIGHTLINE_DEPTH_LIMIT_MM = 800;
+
+// アキ標記「ア キ」の概算テキスト幅(px)。全角2文字＋半角空白1つ＝(1.0+0.5+1.0)×12px
+// （elevationFigure.jsのestimateWallLabelWidthPxと同じ文字クラス別の係数。section/から
+// そちらをimportすると層をまたぐため、この1件だけ定数として持つ）。
+// 実画面でこの幅に満たない区間には**アキ標記そのものを出さない**——壁2段書きの省略判定と
+// 同じ考え方で、letterできない幅に標記を置いても図が汚れるだけ（ユーザー実機指摘2026-08
+// 「「5」C2: 1階400の『アキ・バツ』が省略されない」）。
+export const GAP_LABEL_WIDTH_PX = 30;
+
 // 展開図での腰壁天端の見付(mm)。実際の天端厚（finish/kneeDropWall.js の CAP_THICKNESS=30）の
 // ままだと天端の2本線が縮尺で潰れて読めないため、**作図上だけ**広げて描く（ユーザー明示指示
 // 2026-08「見付30のまま2本線だと見えないので50で書いて」）。モデルの寸法（天端の実厚・

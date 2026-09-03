@@ -223,7 +223,9 @@ export function layoutBandFaces(room, graph, faces, ctx = {}) {
     // 断面エンジン（buildCutContent）へ渡す天井の区間情報は、**天井断面線を実際に引いている値**
     // そのもの＝ここで確定したfloorSegmentsから作る（「断面の中は描画しない」の単一情報源）。
     // faceOverride適用後の値を返すこと（吹抜けの多層書きは上階天井まで伸ばした区間を持つ）。
-    faceRuns.push({ face, xCursor, floorSegments });
+    // boundary（面の両端の壁中心線。ローカルx）も渡す——上階ぶんのCH寸法を「その端に上階の
+    // 断面がある面」の左へ置くために要る（elevationVoid.jsのappendUpperStoreyTrim）。
+    faceRuns.push({ face, xCursor, floorSegments, boundary });
     prevBoundaryHi = xCursor + boundary.hi;
     // 問題修正2026-08その6: 段差見付け面も持ち回りを更新する（見付け面の床・天井は
     // baseFloorDeltaMm/ceilAbsMmで一様。次の面（例: A2）との継ぎ目判定に使う——
@@ -390,7 +392,7 @@ export function appendBandCutContent(primitives, room, graph, layout, layers, op
       // 多層帯（上部吹抜け）だけが渡す（elevationVoid.jsのupperStoreySegments）。
       aboveCeilVisibleRanges: opts.aboveCeilVisibleRangesOf?.(face),
     };
-    const { content } = buildCutContent(cut, probeCtx, { endExtendMm, bandRoomBounds });
+    const { content } = buildCutContent(cut, probeCtx, { endExtendMm, bandRoomBounds, scale: opts.scale });
     for (const p of content) primitives.push(translatePrimitive(p, xCursor, 0));
   });
 }

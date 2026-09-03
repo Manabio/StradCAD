@@ -461,7 +461,7 @@ function twoLayerCut(selfGraph, aboveGraph, aboveFloorZMm, hiZMm) {
   };
 }
 
-test('【A2／点4で書き換え】probeColumn: 上階に実床があれば見えがかり壁は上階FLまで（天井裏も壁）', () => {
+test('【明示指示2026-08で更新】probeColumn: 上階に実床があれば見えがかり壁は自層の天井まで', () => {
   const selfGraph = makeGraph();
   makeRectRoom(selfGraph, 0, 0, 4000, 3000, '階段室');
   const aboveGraph = new PlanGraph(new Plane('p2', 2900, '2階', 1, 1));
@@ -472,10 +472,13 @@ test('【A2／点4で書き換え】probeColumn: 上階に実床があれば見�
   const bands = probeColumn(cut, 2000, probeCtx);
 
   const wallZ1Max = Math.max(...bands.filter(b => b.kind === 'wall' && b.layerRole === 'self').map(b => b.z1));
-  // ユーザー明示指示2026-08の点4: 天井（2400）から上階FL（2900）までの天井裏も同じ壁。
-  assert.equal(wallZ1Max, 2900, `上階FL(2900)まで続くはず（自層CH=${CH}で切らない。実際:${wallZ1Max}）`);
-  assert.ok(!bands.some(b => b.kind === 'wall' && Math.abs(b.z1 - CH) < 1e-6),
-    'CH(=天井)で終わる壁帯は無い＝CHに見えがかり線が立たない（断面線のみ）');
+  // 上階に実床があれば、その手前の**自層の天井**で見えがかりは終わる（ユーザー実機指摘2026-08
+  // 「「5」D1: 1F天井見えがかり（細線）が…1FL天井断面に衝突するまで」）。天井裏にも壁の実体は
+  // あるが、見えがかりは**見えるもの**だけで、天井に隠れて見えない。点4「天井裏も壁」は
+  // 上が吹抜けで壁が実際に見え続ける場合の規則としてそのまま残る（下のVOIDのテスト）。
+  assert.equal(wallZ1Max, CH, `自層の天井(${CH})で終わるはず（実際:${wallZ1Max}）`);
+  assert.ok(bands.some(b => b.kind === 'slab' && Math.abs(b.z0 - CH) < 1e-6),
+    '天井〜上階FLは天井懐(slab・非描画)になる');
 });
 
 test('【実機フィードバック第3弾A2】probeColumn: 上階が吹抜け(VOID)なら見えがかり壁は自層CHで水平キャップされず上階天井まで続く', () => {
