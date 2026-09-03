@@ -1972,8 +1972,8 @@ test('【実機修正2026-09】buildFaceFigure: 開放スパンとの二重適�
     'selfLocal内の途切れは位置も本数も既存と同じで、延長範囲(3000..4000)だけが増えて消えるはず');
 });
 
-test('【実機修正2026-09】buildFaceFigure: 外端のはね出しは残し、内部境界（延長範囲との境目）でははね出させない', () => {
-  // lo側が延長された面（自階の面は1500..4000）で、run端は「壁のない端部」＝はね出す端。
+test('【実機修正2026-09】buildFaceFigure: 巾木は内部境界でも外端でもはね出さず、面の範囲で止まる', () => {
+  // lo側が延長された面（自階の面は1500..4000）で、run端は「壁のない端部」＝床線がはね出す端。
   const face = makeFace({
     hasWallAtLocalRun: false,
     voidAbove: { voidLocal: [], selfLocal: [{ lo: 1500, hi: 4000 }] },
@@ -1981,9 +1981,14 @@ test('【実機修正2026-09】buildFaceFigure: 外端のはね出しは残し�
   const prims = buildFaceFigure(face, baseCtx({
     room: makeRoom({}, BB), wallLessEndExtendModelMm: 150,
   }));
-  assert.deepEqual(baseboardSpans(prims), [[1500, 4150]],
-    '巾木は自階の面の端(1500)ちょうどから始まり（内部境界でははね出さない）、'
-    + '外端では床線と同じだけはね出す(4000+150)はず');
+  assert.deepEqual(baseboardSpans(prims), [[1500, 4000]],
+    '巾木は自階の面の端(1500)から面の端(run=4000)まで——壁のない端部のはね出し(4150)へは'
+    + '伸ばさない（ユーザー実機指摘2026-09「巾木は壁のある所にしかない」）');
+  // 床線のはね出しは従来どおり（この主張は変えない）。
+  const floor = prims.filter(p => p.type === 'line' && p.weight === 'thick'
+    && p.y1 === p.y2 && p.y1 === 0);
+  assert.equal(Math.max(...floor.map(p => Math.max(p.x1, p.x2))), 4150,
+    '床線は従来どおり150mmはね出すはず');
 });
 
 test('【実機修正2026-09】buildFaceFigure: lo側が延長かつlocal0端が壁なしでも、延長範囲の外に巾木の切れ端を残さない', () => {
@@ -1999,4 +2004,36 @@ test('【実機修正2026-09】buildFaceFigure: lo側が延長かつlocal0端が
   }));
   assert.deepEqual(baseboardSpans(prims), [[1500, 4000]],
     'はね出し区間(-150..0)にも延長範囲(0..1500)にも巾木は残らないはず');
+});
+
+test('【不変ゲート・実機修正2026-09】buildFaceFigure: 壁のある端では巾木の出力は完全に不変', () => {
+  // hasWallAtLocal0/Run とも既定(true) ＝ drawnX0=0・drawnXRun=run。Math.max/min は効かない。
+  const prims = buildFaceFigure(makeFace(), baseCtx({ room: makeRoom({}, BB), wallLessEndExtendModelMm: 150 }));
+  assert.deepEqual(baseboardSpans(prims), [[0, 4000]], '壁のある端では従来どおり面の全幅のはず');
+});
+
+test('【実機修正2026-09】buildFaceFigure: 階段帯のfloorSpanXクランプ（狭める方向）は巾木でも効いたまま', () => {
+  // floorSpanX は drawnX0/drawnXRun をさらに内側へ狭めるフック。Math.max/min はこれを壊さない。
+  const prims = buildFaceFigure(makeFace({ hasWallAtLocal0: false, hasWallAtLocalRun: false }),
+    baseCtx({ room: makeRoom({}, BB), wallLessEndExtendModelMm: 150, floorSpanX: { lo: 500, hi: 3000 } }));
+  assert.deepEqual(baseboardSpans(prims), [[500, 3000]], 'floorSpanXの範囲まで狭まるはず');
+});
+
+test('【実機修正2026-09】buildFaceFigure: 段差と壁のない端部が併発しても、端の区間だけ短くなり内部境界は不変', () => {
+  const floorSegments = [
+    { loX: 0, hiX: 2000, floorDeltaMm: 0 },
+    { loX: 2000, hiX: 4000, floorDeltaMm: 300 },
+  ];
+  const ctx = baseCtx({ floorSegments, room: makeRoom({}, BB), wallLessEndExtendModelMm: 150 });
+  const plain = buildFaceFigure(makeFace(), ctx);
+  const wallLess = buildFaceFigure(makeFace({ hasWallAtLocal0: false, hasWallAtLocalRun: false }), ctx);
+  // 内部境界（riserXAt）は両者で同じ位置のまま。端だけが面の範囲で止まる（はね出さない）。
+  // 段差があるので巾木は2つの高さ(-60/-360)に分かれる。高さを問わず全区間で比較する。
+  const allSpans = prims => prims
+    .filter(p => p.type === 'line' && p.weight === 'thin' && p.y1 === p.y2 && p.y1 < 0)
+    .map(p => [Math.min(p.x1, p.x2), Math.max(p.x1, p.x2)]).sort((a, b) => a[0] - b[0]);
+  assert.deepEqual(allSpans(plain), allSpans(wallLess),
+    '壁のない端部でも巾木の区間は面の範囲(0..run)のままで、内部境界も動かないはず');
+  assert.equal(allSpans(plain)[0][0], 0, '左端は面の端(0)');
+  assert.equal(allSpans(plain).at(-1)[1], 4000, '右端は面の端(run=4000)＝はね出さない');
 });

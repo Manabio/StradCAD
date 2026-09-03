@@ -556,3 +556,49 @@ test('【実機フィードバック第3弾G】probeColumn: self天井より上�
   const aboveOpen = bands.find(b => b.kind === 'open' && b.z0 >= 2900 - 1e-6);
   assert.ok(aboveOpen, 'above層がVOIDならopen帯になるはず（2FL水平線=slab/open境界を誤って出さないため）');
 });
+
+// ================================================================
+// 帯のz原点の基準（ユーザー実機指摘2026-09「「11'」B1/A2に不要な中線」の根本原因）。
+// **帯のローカル z=0 ≡ その帯の部屋の実効FL**（elevationBand.js の bandFloorOffsetMm。
+// finalizeBand の平行移動と対）。プローブの床解決は階のdatum基準なので、その差を渡して
+// 差し引かせる。渡さなければ従来どおり（floorOffset=0 の帯では出力完全不変）。
+// ================================================================
+function makeFloorBasisFixture() {
+  const graph = makeGraph();
+  const room = makeRectRoom(graph, 0, 0, 4000, 3000, '11d');
+  room.setFloorLevel(100);                       // 帯の部屋（実効FL=100・floorOffset=100）
+  const other = makeRectRoom(graph, 0, 3000, 4000, 6000, '11');  // 隣室（実効FL=0＝1FL）
+  return { graph, room, other };
+}
+
+test('【実機修正2026-09・基準是正】makeProbeContext: 床zは「帯の部屋の実効FL」基準で解決する', () => {
+  const { graph, room, other } = makeFloorBasisFixture();
+  const layer = { graph, floorZMm: 0, role: 'self' };
+  const ctx = makeProbeContext([layer], { floorOffsetMm: 100 }); // = bandFloorOffsetMm(room, graph)
+  assert.equal(ctx.floorZOf(room, layer), 0, '帯の部屋自身の床は z=0（帯のz原点）のはず');
+  assert.equal(ctx.floorZOf(other, layer), -100,
+    '1FL(実効FL=0)の隣室の床は帯の部屋から見て100下＝z=-100のはず'
+    + '（階のdatum基準のままだと0になり、最終yで-200＝床から浮いた中線になる）');
+  assert.equal(ctx.floorZOf(null, layer), -100, '部屋外のフォールバックも同じ基準へ揃うはず');
+});
+
+test('【不変ゲート】makeProbeContext: floorOffsetMm未指定なら従来どおり階のdatum基準のまま', () => {
+  const { graph, room, other } = makeFloorBasisFixture();
+  const layer = { graph, floorZMm: 0, role: 'self' };
+  const ctx = makeProbeContext([layer]);
+  assert.equal(ctx.floorZOf(room, layer), 100, '未指定＝従来の値（datum基準）のはず');
+  assert.equal(ctx.floorZOf(other, layer), 0);
+  assert.equal(ctx.floorZOf(null, layer), 0);
+});
+
+test('【実機修正2026-09・多層帯】makeProbeContext: above層の床zも帯の部屋の実効FL基準になる', () => {
+  const { graph } = makeFloorBasisFixture();
+  const upper = new PlanGraph(new Plane('p2', 3000, '2階', 2, 1));
+  const upperRoom = makeRectRoom(upper, 0, 0, 4000, 3000, '21');
+  const layers = [{ graph, floorZMm: 0, role: 'self' },
+    { graph: upper, floorZMm: 3000, role: 'above' }];
+  const ctx = makeProbeContext(layers, { floorOffsetMm: 100 });
+  assert.equal(ctx.floorZOf(upperRoom, layers[1]), 2900,
+    '上階の床は階高3000から帯の部屋のFL(100)を引いた z=2900 のはず'
+    + '（layer.floorZMm は階のdatum差のまま＝触らない）');
+});

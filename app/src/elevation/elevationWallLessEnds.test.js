@@ -402,14 +402,27 @@ test('【実機修正2026-09】帯: 開放スパンのアキはバツ2本・「�
   assert.equal(new Set(diag.map(key)).size, 2, '同じ対角が2組重なっていないはず');
 });
 
-test('【裁定2026-09・11ダッシュ型】帯: 遠側床が帯の床より低い開放スパンでは、下端を遠側床まで下げない', () => {
-  // ユーザー裁定「一段違う床の線」——その位置の床は探査が既に見つけている。遠側床（一段下）まで
-  // 下げると、実機「11'」A2左で下端が床から浮く（裁定前の不具合）。
+test('【実機修正2026-09・指摘2/3】帯: FL≠0の部屋の帯に、床断面線と重ならない中線が出ない', () => {
+  // 実機「11'」B1「1000CL右に不要な中線」・A2「1200間FL上に不要な中線」の正体は、断面エンジンの
+  // 床解決だけが階のdatum基準で、帯のz原点（部屋の実効FL）とfloorOffsetぶんズレていたもの
+  // （FL=100の部屋で最終y=-200＝床断面線y=-100/y=0のどちらとも重ならない位置）。
+  const { graph, room3p } = buildFixture();
+  const band = buildRoomBand(room3p, graph, { project: { openingNumberIndex: new Map() } });
+  const horizontals = band.primitives.filter(p => p.type === 'line' && Math.abs(p.y1 - p.y2) < 1e-6);
+  const floorYs = new Set(horizontals.filter(p => p.weight === 'thick' || p.dash === 'dashed').map(p => p.y1));
+  const strays = horizontals.filter(p => p.weight === 'medium' && !floorYs.has(p.y1)
+    && p.y1 > -2000);  // 天井まわり（見付け上端等）は対象外＝床まわりだけを見る
+  assert.deepEqual(strays, [],
+    `床の断面線と重ならない中線が残ってはいけない（実際:${JSON.stringify(strays.map(p => [p.y1, p.x1, p.x2]))}）`);
+});
+
+test('【裁定2026-09・11ダッシュ型】帯: FL≠0の部屋でも、アキの下端は遠側床線（1FLの破線）に一致する', () => {
+  // ユーザー実機指摘2026-09「バツは指示どおり破線(=1FL)まで」。この部屋はFL=100（floorOffset=100）で、
+  // 基準是正（sectionProbe.jsの床解決を帯の部屋基準へ）の前は下端が-200＝床から浮いていた。
   const { farFloor, diag } = openSpanGapMarks();
   const ys = [...new Set(diag.flatMap(p => [p.y1, p.y2]))].sort((a, b) => a - b);
-  assert.ok(!ys.includes(farFloor.y1),
-    `下端を遠側床線(y=${farFloor.y1})まで下げてはいけない（実際:${JSON.stringify(ys)}）`);
-  assert.deepEqual(ys, [-2500, -200], '探査が見つけた床(y=-200)〜天井(y=-2500)のままのはず');
+  assert.equal(Math.max(...ys), farFloor.y1,
+    `バツの下端は遠側床線(y=${farFloor.y1}＝1FLの破線)と一致するはず（実際:${JSON.stringify(ys)}）`);
   // 上端は近側/遠側の天井の低い方＝この構成では天井断面線と同じ高さ。
   const ceilLine = openSpanGapMarks().band.primitives.find(p => p.type === 'line'
     && p.weight === 'thick' && Math.abs(p.y1 - p.y2) < 1e-6 && Math.abs(p.y1 - ys[0]) < 1e-6);
@@ -458,7 +471,7 @@ test('【実機修正2026-09・回帰】帯: 遠側床が帯の床と同値で�
     `「ア キ」はバツと同じ範囲の中心にあるはず（実際:${text.y}）`);
 });
 
-test('【裁定2026-09・失敗系】帯: 遠側床が下がっていても、下端は遠側床まで下げない（探査どおり）', () => {
+test('【裁定2026-09】帯: 遠側床が下がっていれば、下端は遠側床（実際に描かれる遠側床線）に着く', () => {
   // 部分指定＝右下セル: 面の far 側が部分指定（FL-50）＝ farFloorDeltaMm=-50 が引ける構成。
   const { graph, room } = makePartialFloorRoom({ partialCells: [[2000, 0, 4000, 2000]] });
   const far = composeRoomFaces(room, graph)
@@ -467,7 +480,6 @@ test('【裁定2026-09・失敗系】帯: 遠側床が下がっていても、�
   assert.ok(far, '前提: farFloorDeltaMm=-50 の開放スパンがある');
   const band = buildRoomBand(room, graph, { project: { openingNumberIndex: new Map() } });
   const bottoms = [...new Set(gapDiagOf(band).map(p => Math.max(p.y1, p.y2)))];
-  assert.ok(!bottoms.includes(-far.farFloorDeltaMm),
-    `遠側床(y=${-far.farFloorDeltaMm})まで下げてはいけない（実際:${JSON.stringify(bottoms)}）`);
-  assert.deepEqual(bottoms, [0], 'その位置の床（探査どおり=帯の床）に着くはず');
+  assert.ok(bottoms.includes(-far.farFloorDeltaMm),
+    `遠側床(y=${-far.farFloorDeltaMm})に着くバツがあるはず（実際:${JSON.stringify(bottoms)}）`);
 });

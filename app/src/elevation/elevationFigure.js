@@ -955,8 +955,14 @@ export function buildFaceFigure(face, ctx) {
       // 天井線と同じだけ図の外へはね出す（ユーザー実機指摘2026-08「「5」D1・B1: 1階巾木、
       // CLで終わらず、開いている壁にはね出し」）。s.loX/s.hiX は論理境界（CL）なので、
       // そのまま使うと巾木だけがCLで止まり、はね出した床線との間に段が付く。
-      const segLo = i === 0 ? drawnX0 : riserXAt(i - 1);
-      const segHi = i === segs.length - 1 ? drawnXRun : riserXAt(i);
+      // **巾木は面自身の範囲(0..run)で止める**（ユーザー実機指摘2026-09「「11'」B1: 1000CL右の
+      // 壁エッジ外に巾木の線が出ている。巾木は壁のある所にしかない」）——壁のない端部のはね出し
+      // （床線・天井線が図の外へ続くことを示す表現）には壁が無いので巾木も無い。
+      // **CL（segs[i].loX/hiX）へ戻してはいけない**——巾木がCLで止まり、はね出した床線との間に
+      // 段が付く旧不具合の再発（2026-08の指摘）。否定されたのは「はね出しへ伸ばす」部分だけ。
+      // Math.max/minなのは階段帯のfloorSpanXクランプ（狭める方向）を壊さないため。
+      const segLo = i === 0 ? Math.max(drawnX0, 0) : riserXAt(i - 1);
+      const segHi = i === segs.length - 1 ? Math.min(drawnXRun, run) : riserXAt(i);
       let cursor = segLo;
       for (const [gLo, gHi] of floorGaps) {
         const cgLo = Math.max(gLo, segLo), cgHi = Math.min(gHi, segHi);

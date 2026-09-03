@@ -1129,14 +1129,16 @@ export function emitOpenGapMarks(columns, cut, emitCtx = {}) {
       .sort((a, b) => b.ov - a.ov)[0]?.sp;
     const farFloorZ = span && Number.isFinite(span.farFloorZ) ? span.farFloorZ : null;
     const farCeilZ = span && Number.isFinite(span.farCeilZ) ? span.farCeilZ : null;
-    // 下端（ユーザー裁定2026-09の3点で確定）: **遠側床が帯の床より高いときだけ**そこまで持ち上げる
-    // ——その下は遠側の床スラブで塞がれていてアキではない。それ以外（遠側が帯の床と同じ／低い）は
-    // **探査が見つけた床のまま**にする。探査はその位置の実際の床（部分指定の段差・遠側の一段違う床）を
-    // 既に見つけており、far値で上書きすると必ずどちらかの実機ケースが壊れる:
-    //   「11'」A2左（far=-100・遠側が一段上の床）→ 探査どおり（遠側床まで下げない）
-    //   「10」D1（far=0・近側の床が下がっている）→ 探査どおり（帯の床へ引き上げない）
-    //   遠側床が帯の床より高い構成 → 遠側床まで持ち上げる
-    const spanLoZ = z => (farFloorZ != null && farFloorZ > GAP_EPS ? farFloorZ : z);
+    // 下端 = **その位置で実際に描かれている遠側床の断面線**（ユーザー裁定2026-09「バツは破線=1FL
+    // まで」。実機の3点で確定）。遠側床が帯の床と**異なる**ときだけ遠側床へ着ける——同値なら
+    // 遠側床線はそもそも描かれないので、探査が見つけた床（部分指定の段差等）のままにする。
+    //   「11'」A2左（far=-100。1FLの破線が引かれている）→ far（＝その破線の高さ）
+    //   「10」D1（far=0。遠側床線は無い・近側の床が下がっている）→ 探査どおり
+    //   遠側床が帯の床より高い構成（far=+300）→ far（その下は遠側スラブで塞がれている）
+    // **二重補正は無い**: face.spans の far 値は元から帯の部屋基準
+    // （effectiveFloorLevel(farOwner) - effectiveFloorLevel(room)）で、プローブ側も
+    // sectionProbe.js の基準是正で帯の部屋基準に揃った（elevationBand.jsのbandFloorOffsetMm）。
+    const spanLoZ = z => (farFloorZ != null && Math.abs(farFloorZ) > GAP_EPS ? farFloorZ : z);
     const spanHiZ = z => (farCeilZ == null ? z : Math.min(z, farCeilZ));
     const LC = { lo: spanLoZ(L.lo), hi: spanHiZ(L.hi) };
     const RC = { lo: spanLoZ(R.lo), hi: spanHiZ(R.hi) };

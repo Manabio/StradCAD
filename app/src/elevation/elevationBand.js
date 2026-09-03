@@ -27,6 +27,21 @@ import {
 } from './elevationPrimitives.js';
 
 /**
+ * 帯のローカルy/z原点と階のdatumのズレ（mm）。**帯のローカル z=0 ≡ その帯の部屋の実効FL**という
+ * 不変条件の単一情報源で、`finalizeBand`の平行移動量と、断面エンジンの床解決
+ * （`section/sectionProbe.js`の`floorZOf`。階のdatum基準で解決した値からこれを差し引く）の両方が
+ * ここを参照する——2箇所に式が分かれていたため、実効FL≠0の部屋（実機「11'」FL=100）だけ
+ * エンジンの床zがfloorOffsetぶん過大になり、床断面線と重ならない中線・アキの誤った下端として
+ * 現れていた（ユーザー実機指摘2026-09「「11'」B1/A2に不要な中線」）。
+ * @param {import('@core').Room} room
+ * @param {object} graph
+ * @returns {number}
+ */
+export function bandFloorOffsetMm(room, graph) {
+  return graph.effectiveFloorLevel(room) - graph.floorDatum;
+}
+
+/**
  * 部屋1件ぶんの面配置ループ（buildRoomBand・buildStairBand共通。R1）。
  * faces を帯内へ横に並べてbuildFaceFigureのプリミティブを積み、先頭面にだけ天井高寸法(縦dim)を
  * 付ける。隣接面は互いの壁中心線（faceBoundaryLocalX）が ctx.gapModelMm だけ離れるよう配置する
@@ -321,7 +336,7 @@ export function finalizeBand(room, graph, primitives, opts = {}) {
   // bounds.minX/maxX/widthはfloorOffsetがy方向のみのシフトのため適用前後で不変）。
   // 段差高さそのものの寸法線は描かない（指示どおり）。
   const rawBounds = figureBounds(prims);
-  const floorOffset = graph.effectiveFloorLevel(room) - graph.floorDatum;
+  const floorOffset = bandFloorOffsetMm(room, graph);
   const shifted = prims.map(p => translatePrimitive(p, 0, -floorOffset));
   // 調整項目4: 帯の描画範囲の上端（天井線・通り芯突き出しの上）にBAND_TOP_MARGIN_MMぶんの
   // 余白を確保する（minYをさらに上へ広げるだけ。他の辺は変えない）。boundsはbandContentOriginMm
@@ -392,7 +407,9 @@ export function ceilProfileFromSegments(segs, run, CH) {
 export function appendBandCutContent(primitives, room, graph, layout, layers, opts = {}) {
   const endExtendMm = opts.endExtendMm ?? DEFAULT_WALL_LESS_END_EXTEND_MM;
   const includeFace = opts.includeFace ?? (() => true);
-  const probeCtx = makeProbeContext(layers);
+  // 帯のz原点は**この帯の部屋の実効FL**（finalizeBandの平行移動と対）。プローブの床解決は階の
+  // datum基準なので、その差を渡して差し引かせる（floorOffset=0の帯では出力完全不変）。
+  const probeCtx = makeProbeContext(layers, { floorOffsetMm: bandFloorOffsetMm(room, graph) });
   const bandRoomBounds = roomBounds(room.cells, graph);
   // 柱型は全層ぶんを一度だけ求めて全面で使い回す（仮想断面位置の決定に使う。層ごとに引き直すと
   // 面の数×層の数だけ全柱を走査することになる）。

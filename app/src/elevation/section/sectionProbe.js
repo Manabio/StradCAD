@@ -372,7 +372,10 @@ function openingPassThroughRangesFor(wall, graph, worldMid, floorZ, z0, z1) {
  *   chOf:(room:object|null, graph:object)=>number|null,
  *   floorZOf:(room:object|null, layer:object)=>number}}
  */
-export function makeProbeContext(layers) {
+export function makeProbeContext(layers, opts = {}) {
+  // 帯のz原点（その帯の部屋の実効FL）と階のdatumのズレ。呼び出し側（elevationBand.jsの
+  // bandFloorOffsetMm）が単一情報源。未指定＝0＝従来どおり階のdatum基準。
+  const floorOffsetMm = opts.floorOffsetMm ?? 0;
   const cellToRoomByLayer = new Map(); // layer -> Map<cellKey, Room>（呼び出し側から参照可能に公開）
   const cellToRoomByGraph = new Map(); // graph -> Map<cellKey, Room>（実体はgraph単位で共有）
   const chCacheByGraph = new Map();    // graph -> Map<room.id, mm>
@@ -400,10 +403,15 @@ export function makeProbeContext(layers) {
     return cache.get(room.id);
   }
 
+  // **帯のローカル z=0 ≡ その帯の部屋の実効FL**（elevationBand.jsのbandFloorOffsetMm。
+  // finalizeBandの平行移動と対の不変条件）。ここを階のdatum基準のままにすると、実効FL≠0の
+  // 部屋の帯だけエンジンの床zがfloorOffsetぶんズレ、床断面線と重ならない中線やアキの誤った
+  // 下端として現れる（ユーザー実機指摘2026-09「「11'」B1/A2の不要な中線」）。
+  // layer.floorZMm 自体は触らない——壁・断面のzまで動くため。
   function floorZOf(room, layer) {
-    if (!room) return layer.floorZMm; // 部屋外（所有Room不明）はlayer自身の基準面へフォールバック
+    if (!room) return layer.floorZMm - floorOffsetMm; // 部屋外（所有Room不明）はlayer自身の基準面へ
     const graph = layer.graph;
-    return layer.floorZMm + graph.effectiveFloorLevel(room) - graph.floorDatum;
+    return layer.floorZMm + graph.effectiveFloorLevel(room) - graph.floorDatum - floorOffsetMm;
   }
 
   return { cellToRoomByLayer, cellToRoomFor, chOf, floorZOf };
