@@ -378,6 +378,9 @@ export function openingSectionPrimitives(o, x0, dir, cutWeight, silhouetteWeight
  *   1本のpolyline（CUT）で描き、beyondCeilingsの破線処理は対象外（スキップ）になる。
  *   skipBaseboard/skipWallLabel（WP-2。既定false）はそれぞれ巾木・壁2段書きの描画を省略する
  *   （階段帯等、これらの表現が不要な帯からの呼び出し用）。
+ *   skipFaceLabel/faceLabelBoundary（規則B。既定false/未指定＝現行と完全同一）はパネル統合
+ *   （elevationFaceList.jsのmergeSteppedFacesIntoPanel）用: 面ラベルをパネルで1つにするため、
+ *   2枚目以降は描かず、先頭メンバーはパネル全幅の境界の中心へ置く。
  *   faceLabelAvoidThresholdModelMm省略時はDEFAULT_FACE_LABEL_AVOID_THRESHOLD_MM（QA B3。
  *   ElevationModeState.initが2パス目でscreenMmToModelMm換算した値を渡す）。
  *   prevFace/nextFace省略時（項目3非対応呼び出し・単体テスト等）は建具断面を描かない。
@@ -404,7 +407,7 @@ export function buildFaceFigure(face, ctx) {
     graph, project, room, ceilingHeight: CH, materialMap, gridCLs, faceLabelAvoidThresholdModelMm,
     prevFace, nextFace, openingTagRowModelMm, dimRowGapModelMm, gridRowGapModelMm, floorSegments,
     wallLessEndExtendModelMm, scale, ceilingProfile, skipBaseboard, skipWallLabel, floorSpanX,
-    solids, extraCenterLineXs,
+    solids, extraCenterLineXs, skipFaceLabel, faceLabelBoundary,
   } = ctx;
   const run = face.run;
   const prims = [];
@@ -1061,6 +1064,7 @@ export function buildFaceFigure(face, ctx) {
   appendAnnotationRows(prims, face, graph, {
     boundary, floorSegments: segs, gridCLs, dimRow1Y, gridCircleRowY, faceLabelRowY,
     detailWeight, faceLabelAvoidThresholdModelMm, extraCenterLineXs,
+    skipFaceLabel, faceLabelBoundary,
     CH: Math.max(CH, ...segs.map(ceilAbsOf), maxDrawnBcCeilAbs, ceilProfileMaxAbs),
   });
 
@@ -1083,6 +1087,7 @@ function appendAnnotationRows(prims, face, graph, opts) {
   const {
     boundary, floorSegments, gridCLs, dimRow1Y, gridCircleRowY, faceLabelRowY,
     detailWeight, faceLabelAvoidThresholdModelMm, CH, extraCenterLineXs,
+    skipFaceLabel, faceLabelBoundary,
   } = opts;
 
   // 面を貫く通り芯（寸法の鎖の分割点＝S5・一点鎖線・丸番号の共通の源）。
@@ -1156,11 +1161,18 @@ function appendAnnotationRows(prims, face, graph, opts) {
   // 幅の中心(boundary.lo/hiの中点)を使う——面ラベルの中心が壁芯間寸法の中心とズレないように。
   // QA A1: 通り芯丸と同じ段のため、通り芯が中心付近にあると重なる。avoidGridCollisionXで退避する
   // （QA B1: 最広ギャップ中点方式。QA B3: 閾値はctx経由の換算済みモデルmm、未指定時は仮既定値）。
-  const faceLabelX = avoidGridCollisionX(
-    (boundary.lo + boundary.hi) / 2, gridPoints, boundary, faceLabelAvoidThresholdModelMm,
-  );
-  prims.push({
-    type: 'text', x: faceLabelX, y: faceLabelRowY, text: face.label,
-    anchor: 'middle', baseline: 'middle', size: FACE_LABEL_FONT_PX,
-  });
+  // 規則B（パネル統合）: パネルの2枚目以降はラベルを描かない（skipFaceLabel）。先頭メンバーは
+  // パネル全幅（faceLabelBoundary。自分の境界を越えて隣のメンバーまで含む）の中心へ置く
+  // ——1枚の壁に1つのラベル、という意味づけ。どちらも未指定なら現行と完全同一。
+  if (!skipFaceLabel) {
+    const labelBoundary = faceLabelBoundary ?? boundary;
+    const faceLabelX = avoidGridCollisionX(
+      (labelBoundary.lo + labelBoundary.hi) / 2, gridPoints, labelBoundary,
+      faceLabelAvoidThresholdModelMm,
+    );
+    prims.push({
+      type: 'text', x: faceLabelX, y: faceLabelRowY, text: face.label,
+      anchor: 'middle', baseline: 'middle', size: FACE_LABEL_FONT_PX,
+    });
+  }
 }

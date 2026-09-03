@@ -22,7 +22,7 @@ import {
   roomOwnerByCell, runBoundaryCLIds, collectRunBreaks, findRunCLAt, cellNearSideOnFace,
   cellStraddlesFace,
 } from './elevationFloorProfile.js';
-import { perpFaceAt, perpWallCrossesFacePlane } from './elevationFaces.js';
+import { perpFaceAt, perpWallCrossesFacePlane, CORNER_TOL_MM } from './elevationFaces.js';
 import { MIN_FACE_RUN_MM, GAP_EPS_MM as GAP_EPS, PROBE_EPS_MM } from './elevationStyle.js';
 
 // 跨ぎ由来の「アキだけ（情報ゼロ）の区間」が図全体に占めてよい上限比（ユーザー基準2026-08その9）。
@@ -131,6 +131,38 @@ function mergeSameKind(segs) {
 }
 
 /**
+ * 開放区間 seg の先を「同室の平行・同向き・より奥の壁面」が覆っているか（上の取捨規則2.5＝規則Aの述語）。
+ * 覆っていれば、その区間に描かれるのはこの面のアキではなく**別の平面に続く同じ向きの壁**で、
+ * その平面の面（＝奥の面）が同じ区間を実体として描く。判定材料は延長前の面配列だけで足りる
+ * （graph参照を増やさない）。許容差はCORNER_TOL_MM——隅の仕上げ面ぶん(57.5等)の食い違いで
+ * 「覆っていない」と誤判定しないため。
+ * @param {object} face
+ * @param {object[]} wallFaces - 延長前の面配列（buildRoomFacesの結果）
+ * @param {{runLo:number, runHi:number, kind:string}} seg
+ * @returns {boolean}
+ */
+function coveredByDeeperParallelFace(face, wallFaces, seg) {
+  if (seg.kind !== 'open') return false; // 壁の区間は「アキ」ではないので対象外
+  const fa = face.axisCL?.effectiveValue;
+  if (!Number.isFinite(fa)) return false;
+  return (wallFaces ?? []).some(h => {
+    if (h === face || h.kind === 'step') return false;
+    if (!!h.isVertical !== !!face.isVertical) return false;           // 平行な面だけ
+    if (Math.sign(h.inward) !== Math.sign(face.inward)) return false; // 同じ向きの面だけ
+    const ha = h.axisCL?.effectiveValue;
+    if (!Number.isFinite(ha)) return false;
+    // faceから見てhが奥にあるか（符号付き。手前の面には掛からない＝相互に打ち消さない）。
+    if (!((ha - fa) * -Math.sign(face.inward) > MIN_FACE_RUN_MM)) return false;
+    // hがfaceの**続き**であること＝走り範囲が並走していないこと。これが無いと、部屋の
+    // 反対側の壁（例: RoundF room2のD1(x=6000)に対するD2(x=0)。同じ向きで6000奥・D1の
+    // 走り範囲を丸ごと含む）まで「覆っている」と見なして正当な開放区間を落としてしまう。
+    // 同じ向きで並走する面は同じ壁の続きではなく別の壁であり、この面のアキを描かない。
+    if (!(h.hi <= face.lo + CORNER_TOL_MM || h.lo >= face.hi - CORNER_TOL_MM)) return false;
+    return h.lo <= seg.runLo + CORNER_TOL_MM && h.hi >= seg.runHi - CORNER_TOL_MM;
+  });
+}
+
+/**
  * face を開放スパンぶん延長し、spans/extendedAtLocal0/extendedAtLocalRun/lo/hi/run/
  * startCLId/endCLId/hasWallAtLocal0/hasWallAtLocalRun を差し替えた新しい面オブジェクトを返す。
  * kind==='step'の面はそのまま素通りする（対象外）。
@@ -186,6 +218,18 @@ export function extendFaceWithOpenSpans(face, wallFaces, room, graph) {
   //      越える延長で、かつ近側セルが軸に**接している**（＝その位置に境界線が実在する）なら残す。
   //      入隅は必ず2面で共有されるため、見通しそのものは出口側の面だけが担えば過不足がない。
   //      実機「2階22」のD2（段差CLの隅が出口側）がこれ。
+  //   2.5（規則A）. その先を**同室の平行・同向き・より奥の壁面**が覆っている開放区間は取り込まない
+  //      （coveredByDeeperParallelFace）。それはこの面のアキではなく、自分と同じ向きの壁が別の
+  //      平面で続いているだけで、その平面の面が同じ区間を壁として描く——取り込むと同じ場所が
+  //      「壁」と「アキ」で二重に描かれる（実機1階5/C2の400。C1(y=0)が同じ世界xを描いている）。
+  //      落とした端は規則3で落ちた端と同じ「壁断面のない端部」になり、規則B（パネル統合。
+  //      elevationFaceList.jsのmergeSteppedFacesIntoPanel）で相手の面と隙間なく接する。
+  //      **規則1・2で「残す」と決まった端には掛けない**（この順序である理由。実測で確認）:
+  //        - informative（規則1）: far側のFL/CHが違えば実体のある見えがかりが現れるため対象外。
+  //        - 出口側の隅（規則2）: 「見通しは出口側の面が担う」という役割分担を覆さない
+  //          （RoundF room2の中心3面のd側。奥のC3(y=7000)が覆うが従来どおり残す）。
+  //        - 跨ぎ由来（straddle）: その位置に境界線が1本も無い＝別の平面へ「続いている」とは
+  //          言えないので対象外（実機2階22のA1のX3..X4。従来どおり残す）。
   //   3. それ以外（入口側 or 跨ぎ由来＝その位置に境界線が1本も無い完全な空白）は、区間長が
   //      図全体の1/4以下のときだけ残す。
   // **比は「実際に描かれる長さ」で採る**——延長した端はresolveEndが直交壁の仕上げ面へ詰めるため、
@@ -207,6 +251,7 @@ export function extendFaceWithOpenSpans(face, wallFaces, room, graph) {
       const g = merged[i];
       if (g.informative) return false;                // 規則1
       if (!isEntrySide && !g.straddle) return false;  // 規則2
+      if (!g.straddle && coveredByDeeperParallelFace(face, wallFaces, g)) return true; // 規則2.5(A)
       return drawnLen > total * MAX_VOID_SPAN_RATIO;  // 規則3
     };
     if (loBound < ownIdx && dropEnd(loBound, entrySideIsLo, merged[loBound].runHi - loEnd.value)) { loBound++; continue; }

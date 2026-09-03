@@ -11,7 +11,7 @@
 import { roomBounds } from '../finish/gridCells.js';
 import { roomCeilingHeight } from '../finish/roomMetrics.js';
 import { graphList } from '../graphReadScope.js';
-import { composeRoomFaces, dropFacesSeenAsSightline } from './elevationFaceList.js';
+import { composeRoomFaces, dropFacesSeenAsSightline, mergeSteppedFacesIntoPanel } from './elevationFaceList.js';
 import { labelFaces } from './elevationFaces.js';
 import { selectElevationRooms, faceWallLessExtents } from './elevationFaces.js';
 import { parseBaseboardHeightMm, formatMaterialLabel, estimateWallLabelWidthPx } from './elevationFigure.js';
@@ -525,7 +525,7 @@ export function buildRoomBandWithVoidAbove(room, graph, voidRoom, upperGraph, ct
   // 描画済なのでD2パネルを削除」）——取り込む側の面は吹抜けと合成して走り範囲が伸びた後の
   // 姿でなければ、奥の面を覆えない（実機「5」のD1は合成前だと1557.5しかなく、D2の範囲に
   // 届かない）。落とした結果でletter内の採番をやり直す。
-  faces = labelFaces(dropFacesSeenAsSightline(faces, graph));
+  faces = labelFaces(mergeSteppedFacesIntoPanel(dropFacesSeenAsSightline(faces, graph)));
 
   const faceOverride = (face, i, defaults) => {
     const plan = face.voidAbove;

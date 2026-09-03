@@ -86,8 +86,28 @@ export function layoutBandFaces(room, graph, faces, ctx = {}) {
   // 異なればその面の左側にCH寸法（左端区間の実際の床〜天井・値=実効CH）を描く。
   // 段差見付け面（floorSegments未指定）は実質的な隣接関係を変えないため持ち回りを更新しない。
   let prevRightProfile = null;
+  // 規則B（パネル統合。elevationFaceList.jsのmergeSteppedFacesIntoPanel）: 同じpanelIdを持つ
+  // 連続した面は「段差でしか分かれていない1枚の壁」なので、2枚目以降はギャップ・壁のない端部の
+  // 延長・CH寸法オフセットを**使わず世界x整合**で置く（面のあいだに返し壁ぶんの隙間を作らない。
+  // 展開図は正投影なので返し壁は見付けの線1本になり、幅を持たない）。面ラベルはパネルで1つ
+  // ——先頭メンバーがパネル全幅の中心に描き、2枚目以降はskipFaceLabelで描かない。
+  const boundaries = faces.map(f => faceBoundaryLocalX(f, graph));
+  const inPanelWithPrev = faces.map((f, i) =>
+    i > 0 && f.panelId != null && faces[i - 1].panelId === f.panelId);
+  // 先頭メンバーのindex → パネル全幅の境界（先頭メンバーのローカルx系。2枚以上のときだけ）。
+  const panelLabelBoundary = new Map();
+  faces.forEach((f, i) => {
+    if (inPanelWithPrev[i]) return;
+    let hi = boundaries[i].hi, offset = 0;
+    for (let j = i + 1; j < faces.length && inPanelWithPrev[j]; j++) {
+      offset += (faces[j].originWorld - faces[j - 1].originWorld) * faces[j].dirSign;
+      hi = Math.max(hi, offset + boundaries[j].hi);
+    }
+    if (hi > boundaries[i].hi) panelLabelBoundary.set(i, { lo: boundaries[i].lo, hi });
+  });
   faces.forEach((face, i) => {
-    const boundary = faceBoundaryLocalX(face, graph);
+    const boundary = boundaries[i];
+    const prevXCursor = xCursor; // 直前の面の配置x（パネル内の世界x整合の起点）
     // 寸法線の足の終点: CLからdimFootGapMmだけ寸法線側へ離した位置（CLには触れない）。
     // 寸法線(at)を越えない範囲にクランプする（極端な小縮尺で足が反転しないように）。
     const footBefore = (clX, sign) => (sign < 0
@@ -133,7 +153,10 @@ export function layoutBandFaces(room, graph, faces, ctx = {}) {
     // ——「断面から断面まで」「前の端と高さが変わったときだけ記入」という規則は面の床・天井の
     // 継ぎ目だけでは決まらず（踊り場スラブ・壁の向こうの部屋の断面が要る）、この場では判定できない。
     const chDimChains = faceOverride?.chDimChains ?? null;
-    const hasLeftChDim = chDimChains ? (chDimChains.left?.length ?? 0) > 0
+    // パネル内の継ぎ目にはCH寸法を立てない（立つとCH_DIM_OFFSET_MMぶんの隙間が入り、
+    // 世界x整合＝壁芯間の鎖・通り芯の世界位置が壊れる。規則B）。
+    const hasLeftChDim = inPanelWithPrev[i] ? false
+      : chDimChains ? (chDimChains.left?.length ?? 0) > 0
       : (i > 0 && prevRightProfile != null && leftProfile != null &&
         (leftProfile.floorDeltaMm !== prevRightProfile.floorDeltaMm ||
          leftProfile.ceilAbsMm !== prevRightProfile.ceilAbsMm));
@@ -143,8 +166,12 @@ export function layoutBandFaces(room, graph, faces, ctx = {}) {
     // さらにCH_DIM_OFFSET_MMぶん右まで描画物が伸びるため、そこを基準にしないと隣の面と重なる。
     // 問題修正2026-08その4改: この面の左側にCH寸法が付く場合も、そのぶん（CH_DIM_OFFSET_MM）
     // 左端側の描画物が伸びるため加味する。
-    xCursor = i === 0 ? 0 : prevRightExtent + gapModelMm - boundary.lo + leftExtendMm
-      + (hasLeftChDim ? CH_DIM_OFFSET_MM : 0);
+    xCursor = i === 0 ? 0
+      : inPanelWithPrev[i]
+        // 規則B: パネル内2枚目以降は世界x整合（同letterなのでdirSignは共通）。
+        ? prevXCursor + (face.originWorld - faces[i - 1].originWorld) * face.dirSign
+        : prevRightExtent + gapModelMm - boundary.lo + leftExtendMm
+          + (hasLeftChDim ? CH_DIM_OFFSET_MM : 0);
 
     // 項目3: 直交壁（隣・次の面）の建具が切断位置にかかる場合の断面描画用。段差見付け面
     // （kind==='step'）を挟んでも実質的な隣接関係は変わらないため、neighborWallFaceでスキップする
@@ -159,6 +186,8 @@ export function layoutBandFaces(room, graph, faces, ctx = {}) {
       prevFace, nextFace, openingTagRowModelMm, dimRowGapModelMm, gridRowGapModelMm, floorSegments,
       beyondCeilings, wallLessEndExtendModelMm, scale, solids: ctx.solids ?? null,
       dimFootGapModelMm: dimFootGapMm,
+      // 規則B: 面ラベルはパネルで1つ（2枚目以降は描かず、先頭はパネル全幅の中心へ）。
+      skipFaceLabel: inPanelWithPrev[i], faceLabelBoundary: panelLabelBoundary.get(i),
       ...(faceOverride ?? {}),
     };
     const facePrims = buildFaceFigure(face, faceCtx);

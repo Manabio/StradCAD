@@ -6,7 +6,7 @@
  * 段差見付け面の挿入位置判定は分割済みの面配列を前提にする）。elevationBand.js/elevationStair.js
  * は buildRoomFaces ではなくこの composeRoomFaces を唯一の面リスト供給源として使う。
  */
-import { buildRoomFaces, labelFaces, perpendicularWallsOnFace } from './elevationFaces.js';
+import { buildRoomFaces, labelFaces, perpendicularWallsOnFace, CORNER_TOL_MM } from './elevationFaces.js';
 import { SIGHTLINE_DEPTH_LIMIT_MM } from './elevationStyle.js';
 import { graphList } from '../graphReadScope.js';
 import { insertStepFaces } from './elevationStepFace.js';
@@ -160,7 +160,11 @@ export function composeRoomFaces(room, graph, opts = {}) {
   // keepWallLessFaces: 階段帯だけは例外。上り口の面（壁なし）をレーン範囲の算出（switchbackCuts.js
   // のwEntry）に使うため、面リストから落とすと切断表そのものが組めなくなる。
   if (!opts.keepWallLessFaces) faces = faces.filter(f => f.kind === 'step' || f.hasRealWall !== false);
-  return labelFaces(dropFacesSeenAsSightline(faces, graph));
+  const dropped = dropFacesSeenAsSightline(faces, graph);
+  // 規則B（パネル統合）は見えがかりの除去の**後**・採番の**前**（下記mergeSteppedFacesIntoPanel
+  // のdocコメント参照）。階段帯（keepWallLessFaces）では適用しない——switchbackCutsが面を
+  // 並べ替えるため、帯の並び順に依存するこの規則は成立しない。
+  return labelFaces(opts.keepWallLessFaces ? dropped : mergeSteppedFacesIntoPanel(dropped));
 }
 
 // 面gが面fを「見えがかりとして取り込む」か（下記dropFacesSeenAsSightlineの述語）。
@@ -199,6 +203,103 @@ function absorbsAsSightline(g, f, walls) {
 export function dropFacesSeenAsSightline(faces, graph) {
   const walls = graphList(graph, 'walls') ?? [];
   return faces.filter(f => !faces.some(g => absorbsAsSightline(g, f, walls)));
+}
+
+// 世界座標worldに近い方の端（'lo'|'hi'）と、それに対応するローカル端のキー（'0'|'Run'）。
+// ローカル0側の世界座標はoriginWorld=（dirSign>0 ? lo : hi）という不変条件の裏返し。
+function localEndKeyAt(face, world) {
+  const side = Math.abs(face.lo - world) <= Math.abs(face.hi - world) ? 'lo' : 'hi';
+  return (side === 'lo') === (face.dirSign > 0) ? '0' : 'Run';
+}
+
+// 接合端の天井の起点が「上階の吹抜けに抜けているか」（voidAbove。elevationVoid.jsが書き込む）。
+// 抜けているかどうかで天井の絶対高さ（自階天井 or 上階天井）が変わるため、接合端で食い違えば
+// 1枚のパネルとして天井線を通せない。
+//
+// **床の起点（FL差）は評価しない**（決定2026-09。QA指摘への回答）——面オブジェクトはFLを
+// 持たない（`floorDeltaMm`は`wallAdjacentFloorSegments`がgraphから作る**床区間**のフィールドで、
+// 面が持つのは段差見付け面だけの`baseFloorDeltaMm`）。graphを引数に足して実際の床区間から引く案は、
+// モデルに該当ケースが無く検証できないうえ、この純関数の引数面を広げるため採らない。
+// 帰結: 部分指定でFLが変わる段差でも統合される。各メンバーは自分の`floorSegments`で床を描くので、
+// 段差は継ぎ目に段として現れる（描き落ちにはならない）。
+function panelJointVoidAtEnd(face, key) {
+  const ranges = face.voidAbove?.voidLocal ?? [];
+  return key === '0'
+    ? ranges.some(r => r.lo <= MIN_FACE_RUN_MM && r.hi > MIN_FACE_RUN_MM)
+    : ranges.some(r => r.hi >= face.run - MIN_FACE_RUN_MM && r.lo < face.run - MIN_FACE_RUN_MM);
+}
+
+/**
+ * 面リスト上で連続する2枚 f→g が「壁面の段差でしか分かれていない同じ壁」か（規則Bの述語）。
+ * 満たすなら接合部の情報（両面のローカル端キー）を返す。
+ * @returns {{fKey:'0'|'Run', gKey:'0'|'Run'}|null}
+ */
+function steppedPanelJoint(f, g) {
+  if (!f || !g || f.kind === 'step' || g.kind === 'step') return null;          // 条件1
+  if (!!f.isVertical !== !!g.isVertical) return null;                          // 条件1
+  if (Math.sign(f.inward) !== Math.sign(g.inward)) return null;                 // 条件1
+  const fa = f.axisCL?.effectiveValue, ga = g.axisCL?.effectiveValue;
+  if (!Number.isFinite(fa) || !Number.isFinite(ga)) return null;
+  if (Math.abs(fa - ga) <= MIN_FACE_RUN_MM) return null;                        // 条件2（奥行き≠0）
+  // 条件3: 世界範囲が重ならず、隙間 <= CORNER_TOL_MM で接する（どちらが lo 側でもよい）。
+  const gapLoHi = g.lo - f.hi, gapHiLo = f.lo - g.hi;
+  const gap = Math.max(gapLoHi, gapHiLo);
+  if (!(gap >= -MIN_FACE_RUN_MM && gap <= CORNER_TOL_MM)) return null;
+  const jointWorld = gapLoHi >= gapHiLo ? (f.hi + g.lo) / 2 : (f.lo + g.hi) / 2;
+  const fKey = localEndKeyAt(f, jointWorld), gKey = localEndKeyAt(g, jointWorld);
+  // 接合の向き: 2枚目は必ず1枚目の**+ローカルx側**へ続いていること。帯の配置式（elevationBand.js
+  // のlayoutBandFaces）とパネル全幅の算出は「2枚目が先頭メンバーの右へ続く」前提で組んでおり、
+  // 逆向き（2枚目が左へ戻る）を受理すると配置とラベル幅が壊れる。
+  if (!(fKey === 'Run' && gKey === '0')) return null;
+  if (panelJointVoidAtEnd(f, fKey) !== panelJointVoidAtEnd(g, gKey)) return null;         // 条件5
+  // 条件6: 接合部にどちらか一方の壁断面がある（返し壁が実在しない開放的な段差を弾く）。
+  if (!((f[`hasWallAtLocal${fKey}`] ?? true) || (g[`hasWallAtLocal${gKey}`] ?? true))) return null;
+  return { fKey, gKey };
+}
+
+/**
+ * **壁面の段差でしか分かれていない同letterの面を1枚のパネルにまとめる**（規則B。ユーザー実機
+ * 指摘2026-08「「5」C1とC2は1枚の壁」）。純関数（graph不要）。
+ *
+ * 室の境界が段差を1つ挟んで一続きになっている場合（実機1階5の南側: x -6200..-3400 が y=-1000、
+ * x -3400..0 が y=0）、面は平面ごとに分かれるが**壁としては1枚**であり、2つのパネルに割ると
+ * 同じ壁が2回・別々のラベルで現れる。ここでは面を1枚に合成せず（face は axisCL/faceValue/
+ * inward を各1つ持つ前提が openingsOnFace・elevationVoid.samePlane 等の全域にあるため）、
+ * 共通の `panelId` と**接合端のフラグ2つ**（`hasWallAtLocal*`=true / `edgeAtLocal*`=false）だけを
+ * 書き込む。この1点で「はね出しの停止」「断面エンジンの探査延長の停止（section/sectionContent.js
+ * のwithProbeExtension）」「接合部の縦線が相手の壁断面の縁と一致してdedupeCoincidentLinesで
+ * 1本に畳まれる」の3つが同時に正しくなる——面の端に壁断面が現れるかを面単位ではなく
+ * **パネル単位**で評価する、という意味づけ。
+ *
+ * 呼ぶ位置は `dropFacesSeenAsSightline` の後・`labelFaces` の前（この順序固定）。前者の後で
+ * なければ、あいだに残った見えがかり面のせいで「面リスト上の隣接」が成立しない（実機「5」は
+ * 旧D2(x=-3400)がD1へ取り込まれて初めてC1とC2が隣り合う）。後者の前でなければ、パネル単位の
+ * 採番（labelFacesがpanelIdを見る）ができない。
+ *
+ * **面リスト上で隣接する2枚だけを見る**のが暴発の安全弁（条件4）。これが無いと、室の反対側
+ * どうし（実機「5」のD1とD3のように平行・同向き・端どうしが接する組）が1枚になる。
+ * 3枚以上は連鎖で拡張する。
+ * @param {object[]} faces - dropFacesSeenAsSightlineの結果（帯の並び順）
+ * @returns {object[]} 統合が1件も起きなければ引数の配列をそのまま返す
+ */
+export function mergeSteppedFacesIntoPanel(faces) {
+  if (!Array.isArray(faces) || faces.length < 2) return faces;
+  const joints = [];
+  for (let i = 0; i + 1 < faces.length; i++) {
+    const joint = steppedPanelJoint(faces[i], faces[i + 1]);
+    if (joint) joints.push({ i, ...joint });
+  }
+  if (joints.length === 0) return faces; // 現行と完全同一（同一参照で返す）
+  const out = faces.map(f => ({ ...f }));
+  let seq = 0;
+  for (const { i, fKey, gKey } of joints) {
+    const f = out[i], g = out[i + 1];
+    const panelId = f.panelId ?? `${f.letter}${++seq}`;
+    f.panelId = panelId; g.panelId = panelId;
+    f[`hasWallAtLocal${fKey}`] = true; f[`edgeAtLocal${fKey}`] = false;
+    g[`hasWallAtLocal${gKey}`] = true; g[`edgeAtLocal${gKey}`] = false;
+  }
+  return out;
 }
 
 /**

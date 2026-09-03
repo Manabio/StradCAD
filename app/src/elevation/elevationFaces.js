@@ -374,16 +374,34 @@ export function buildRoomFaces(room, graph) {
  * buildRoomFaces内部で使っていた採番ロジックをそのまま抽出したもの——チェーンを辿る処理とは
  * 独立しており、既に並び終わった配列を受け取ってlabel/idを付け替えるだけの純関数。
  * 単独ならletterのまま、複数あればletter+出現順(B1,B2,…)。
+ *
+ * **数えるのは面ではなくパネル**（規則B。elevationFaceList.jsのmergeSteppedFacesIntoPanel）。
+ * 同じ `panelId` を持つ面は1枚の壁を段差で割っただけなので、まとめて1つと数え、同じラベルを
+ * 与える（実機「5」の南面はC1+C2ではなく1枚の「C」）。`panelId` を持たない面は1面＝1パネル
+ * ＝現行と完全に同じ採番になる（後方互換）。
  * @param {object[]} faces - letter を持つ面配列（chain順）
  * @returns {object[]} id/label を付け替えた新しい配列（他フィールドは同一参照）
  */
 export function labelFaces(faces) {
+  const panelKey = (f, i) => (f.panelId != null ? `p:${f.panelId}` : `f:${i}`);
   const totalByLetter = new Map();
-  for (const f of faces) totalByLetter.set(f.letter, (totalByLetter.get(f.letter) ?? 0) + 1);
+  const counted = new Set();
+  faces.forEach((f, i) => {
+    const key = panelKey(f, i);
+    if (counted.has(key)) return;
+    counted.add(key);
+    totalByLetter.set(f.letter, (totalByLetter.get(f.letter) ?? 0) + 1);
+  });
   const seenIdx = new Map();
-  return faces.map(f => {
-    const idx = (seenIdx.get(f.letter) ?? 0) + 1;
-    seenIdx.set(f.letter, idx);
+  const idxByPanel = new Map();
+  return faces.map((f, i) => {
+    const key = panelKey(f, i);
+    let idx = idxByPanel.get(key);
+    if (idx == null) {
+      idx = (seenIdx.get(f.letter) ?? 0) + 1;
+      seenIdx.set(f.letter, idx);
+      idxByPanel.set(key, idx);
+    }
     const label = totalByLetter.get(f.letter) > 1 ? `${f.letter}${idx}` : f.letter;
     return { ...f, id: label, label };
   });
