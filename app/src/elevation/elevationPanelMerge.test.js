@@ -379,3 +379,30 @@ test('【2026-09】帯では柱型の片縁が接合部の端の縦線と畳ま�
   assert.equal(after.filter(x => Math.abs(x - jointX) < 1e-6).length, 1,
     '柱型を足しても接合部xの縦線は1本のまま（dedupeCoincidentLinesが畳む）');
 });
+
+// ================================================================
+// 多層帯の巾木（ユーザー実機指摘2026-09「壁のないところに巾木はない」）のうち、
+// **hi側へ延長された面（実機「5」A）**の検証。開放スパンに邪魔されず「合成による延長範囲」
+// だけを見るため、実機と同じCL延長を持つこのフィクスチャで固定する。
+// ================================================================
+test('【実機修正2026-09・A型】多層帯: hi側へ延長された面の巾木は、自階の壁がある範囲だけになる', () => {
+  const { g1, g2, room, voidRoom } = makeRoom5();
+  room.finish.setField('baseboardHeight', 'h=60');
+  const a1 = faceAt(composeRoomFaces(room, g1), -2000, false, 1);
+  assert.deepEqual((a1.spans ?? []).map(s => s.kind), ['wall'],
+    '前提: この面に開放スパンは無い（＝巾木の途切れは合成による延長だけに由来する）');
+  const band = buildRoomBandWithVoidAbove(room, g1, voidRoom, g2, { floorHeightAboveMm: FLOOR_HEIGHT });
+  const level = z => band.primitives.filter(p => p.type === 'line' && !p.dash
+    && Math.abs(p.y1 - p.y2) < 1e-6 && Math.abs(-p.y1 - z) < 1e-6)
+    .map(p => [Math.min(p.x1, p.x2), Math.max(p.x1, p.x2)]).sort((a, b) => a[0] - b[0]);
+  const chains = segs => segs.reduce((out, [lo, hi]) => {
+    const last = out[out.length - 1];
+    if (last && Math.abs(last[1] - lo) < 1e-6) last[1] = hi; else out.push([lo, hi]);
+    return out;
+  }, []);
+  const floor = chains(level(0)), base = chains(level(60));
+  // A1は帯の先頭パネル（xCursor=0）。合成で 3200 → 6085 へ延長されている。
+  assert.deepEqual(floor[0], [0, 6085], '前提: A1パネルは合成で6085へ延長されている');
+  assert.deepEqual(base[0], [0, a1.run],
+    `1階の壁がある0..${a1.run}だけに巾木が引かれ、延長された先には引かれないはず（実際:${JSON.stringify(base[0])}）`);
+});

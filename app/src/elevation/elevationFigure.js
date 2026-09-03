@@ -357,6 +357,35 @@ export function openingSectionPrimitives(o, x0, dir, cutWeight, silhouetteWeight
 }
 
 /**
+ * 「自階の面が実在しない区間」（多層帯の合成で延長された範囲）をローカルxの区間配列で返す。
+ * `selfLocal` が undefined（合成を通っていない面）なら空配列＝呼び出し側の挙動は完全に不変。
+ *
+ * 補集合は**面自身のローカル範囲[0, run]の中**で採り、その端に自階の面が無い側だけ
+ * 描画端（drawnX0/drawnXRun）まで広げる——壁のない端部のはね出しは「図の外へ続く」表現で、
+ * 自階の面が届いている端では従来どおり残さなければならない（ユーザー確定挙動）。逆に
+ * 面の内部境界（延長範囲との境目）では、はね出させずに自階の面の端ちょうどで切る。
+ * @param {Array<{lo:number,hi:number}>|undefined} selfLocal - 昇順・結合済み（elevationVoid.js）
+ * @param {number} run
+ * @param {number} drawnX0
+ * @param {number} drawnXRun
+ * @returns {Array<[number,number]>}
+ */
+function selfLessRanges(selfLocal, run, drawnX0, drawnXRun) {
+  if (!Array.isArray(selfLocal)) return [];
+  const out = [];
+  let cursor = 0;
+  for (const r of [...selfLocal].sort((a, b) => a.lo - b.lo)) {
+    if (r.lo > cursor + SPLIT_MERGE_EPS_MM) out.push([cursor, Math.min(r.lo, run)]);
+    cursor = Math.max(cursor, r.hi);
+  }
+  if (cursor < run - SPLIT_MERGE_EPS_MM) out.push([cursor, run]);
+  return out.filter(([lo, hi]) => hi > lo + SPLIT_MERGE_EPS_MM).map(([lo, hi]) => [
+    lo <= SPLIT_MERGE_EPS_MM ? Math.min(lo, drawnX0) : lo,
+    hi >= run - SPLIT_MERGE_EPS_MM ? Math.max(hi, drawnXRun) : hi,
+  ]);
+}
+
+/**
  * 壁面1枚 → プリミティブ配列。
  * @param {object} face - buildRoomFaces の1件
  * @param {{graph:object, project:object, room:import('@core').Room, ceilingHeight:number,
@@ -930,6 +959,12 @@ export function buildFaceFigure(face, ctx) {
       // 「CL右側の壁まで」＝壁の面まで巾木を伸ばすのが正）。
       ...spans.map((s, i) => ({ ...s, ...drawnSpans[i] }))
         .filter(s => s.kind === 'open').map(s => [s.loX, s.hiX]),
+      // 多層帯（elevationVoid.jsの吹抜け合成）で走り範囲が延長された区間には自階の壁が無い
+      // ＝巾木も無い（ユーザー実機指摘2026-09「壁のないところに巾木はない」）。自階の面が
+      // 実在する範囲（voidAbove.selfLocal。合成後の座標系）の補集合を足す。**この経路に足す**
+      // ことで、区間水平線のクリップと段差縦線（riser）の抑止の両方が自動的に効く。
+      // voidAboveを持たない面（通常帯・階段帯・吹抜け帯・単体テスト）は undefined ＝ 何も足さない。
+      ...selfLessRanges(face.voidAbove?.selfLocal, run, drawnX0, drawnXRun),
     ].sort((a, b) => a[0] - b[0]);
     for (const [i, s] of segs.entries()) {
       const y = floorYOf(s) - baseboardH;

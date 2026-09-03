@@ -512,7 +512,7 @@ test('【明示指示】境界が腰壁なら天端の上で空気がつなが�
 // 境界の通りに天端800の腰壁が立つ。
 // ================================================================
 
-function makeKneeBoundaryBand() {
+function makeKneeBoundaryBand({ baseboardHeight } = {}) {
   const cellKey = (g, x0, y0, x1, y1) => [
     clOf(g, CenterLineType.VERTICAL, x0).id, clOf(g, CenterLineType.HORIZONTAL, y0).id,
     clOf(g, CenterLineType.VERTICAL, x1).id, clOf(g, CenterLineType.HORIZONTAL, y1).id].join(':');
@@ -525,6 +525,7 @@ function makeKneeBoundaryBand() {
   const g1 = makeGraph('1階', 0);
   const room = addRoom(g1, [[-6200, -2000, -3000, -1000], [-3400, -1000, -3000, 0],
     [-3000, -3500, 0, 0]], '5');
+  if (baseboardHeight) room.finish.setField('baseboardHeight', baseboardHeight);
   const g2 = makeGraph('2階', FLOOR_HEIGHT);
   const voidRoom = addRoom(g2, [[-3000, -2000, 0, 0]], '吹抜け', RoomFeature.VOID);
   addRoom(g2, [[-8000, -3500, 1000, -2000]], '22');       // 通りx=-3000をまたぐ＝この面は壁が無い
@@ -688,12 +689,26 @@ test('【明示指示・実機「5」D1/B1】巾木は壁のない端部で床�
   const spans = z => band.primitives.filter(p => p.type === 'line' && !p.dash
     && Math.abs(p.y1 - p.y2) < 1e-6 && Math.abs(-p.y1 - z) < 1e-6)
     .map(p => [Math.min(p.x1, p.x2), Math.max(p.x1, p.x2)]);
-  const ends = ls => [Math.min(...ls.map(l => l[0])), Math.max(...ls.map(l => l[1]))];
-  const floor = spans(0), base = spans(60);
+  // 端が接する線分どうしを1本の鎖へ連結する（パネル1枚ぶんが1鎖になる）。
+  const chains = ls => {
+    const out = [];
+    for (const [lo, hi] of [...ls].sort((a, b) => a[0] - b[0])) {
+      const last = out[out.length - 1];
+      if (last && Math.abs(last[1] - lo) < 1e-6) last[1] = hi; else out.push([lo, hi]);
+    }
+    return out;
+  };
+  const floor = chains(spans(0)), base = chains(spans(60));
   assert.ok(floor.length > 0 && base.length > 0, '床線と巾木の両方が出るはず（フィクスチャの前提）');
-  assert.deepEqual(ends(base), ends(floor),
-    `巾木の端は床線の端と揃うはず——CLで止めると、はね出した床線との間に段が付く` +
-    `（床線:${JSON.stringify(ends(floor))} / 巾木:${JSON.stringify(ends(base))}）`);
+  // **帯全体のmin/maxでは比べない**——2026-09仕様で「上階だけの面」（このフィクスチャのA面＝
+  // 1階に対応する面が無い＝1階の壁が無い）は自階の巾木を持たなくなったため、帯の右端は床線だけが
+  // 伸びる。巾木がある面については従来どおり端が床線と揃うことを、鎖ごとに突き合わせる。
+  for (const b of base) {
+    assert.ok(floor.some(f => Math.abs(f[0] - b[0]) < 1e-6 && Math.abs(f[1] - b[1]) < 1e-6),
+      `巾木の端は床線の端と揃うはず——CLで止めると、はね出した床線との間に段が付く` +
+      `（床線:${JSON.stringify(floor)} / 巾木:${JSON.stringify(base)}）`);
+  }
+  assert.equal(base[0][0], floor[0][0], '壁のない端部のはね出しぶんが巾木にも残るはず');
 });
 
 test('【明示指示・実機「5」A】上階の天井高寸法は、その端に上階の断面がある面の左に立つ', () => {
@@ -794,4 +809,82 @@ test('【明示指示・実機「5」D1】壁の無い区間の寸法は、見�
   // 面に自壁がある区間（D1の右1500）は見えがかりが存在しないので割れない。
   const right = hdims.find(d => Math.abs(d.lo - 8842.5) < 1e-6);
   assert.equal(right?.label, 1500, `自壁のある区間は1本のまま（実際:${JSON.stringify(right)}）`);
+});
+
+// ================================================================
+// 多層帯の巾木（ユーザー実機指摘2026-09「壁のないところに巾木はない」）。
+// 吹抜け合成は lo=min/hi=max で走り範囲を伸ばすが、伸びた先に自階の壁があるとは限らない
+// ——実機「5」ではA面（hi側へ延長）とD1面（lo側へ延長。旧D2を見えがかりとして吸収した範囲）に
+// 壁の無い区間ができ、そこにも巾木が引かれていた。
+// ================================================================
+
+// A型（hi側へ延長された面）の検証は elevationPanelMerge.test.js の makeRoom5（実機と同じCL延長を
+// 持つフィクスチャ）で行う——このフィクスチャはCL延長が無く、A1面に開放スパンが立つため、
+// 巾木が同じ位置で先に途切れてしまい「延長範囲に描かない」ことの検出力を持たない（実測で確認）。
+
+// 帯の水平線を「端が接するものどうし」で連結した鎖。z=0が床線、z=60が巾木。
+function levelChains(band, z) {
+  const segs = band.primitives.filter(p => p.type === 'line' && !p.dash
+    && Math.abs(p.y1 - p.y2) < 1e-6 && Math.abs(-p.y1 - z) < 1e-6)
+    .map(p => [Math.min(p.x1, p.x2), Math.max(p.x1, p.x2)]).sort((a, b) => a[0] - b[0]);
+  const out = [];
+  for (const [lo, hi] of segs) {
+    const last = out[out.length - 1];
+    if (last && Math.abs(last[1] - lo) < 1e-6) last[1] = hi; else out.push([lo, hi]);
+  }
+  return out;
+}
+// 面ラベルのxを含む鎖（＝そのパネルの範囲）。
+const panelOf = (band, chains, label) => {
+  const t = band.primitives.find(p => p.type === 'text' && p.text === label);
+  assert.ok(t, `面ラベル"${label}"があるはず`);
+  return chains.find(([lo, hi]) => t.x >= lo && t.x <= hi);
+};
+
+test('【実機修正2026-09・D1型】多層帯: lo側へ延長された面の巾木は、合成後の座標で自階の壁の範囲だけになる', () => {
+  const band = makeKneeBoundaryBand({ baseboardHeight: 'h=60' });
+  const floor = levelChains(band, 0), base = levelChains(band, 60);
+  const panel = panelOf(band, floor, 'D1');
+  assert.deepEqual(panel, [6900, 10285], '前提: D1パネルは合成でlo側へ延長されている');
+  const inPanel = base.filter(([lo]) => lo >= panel[0] - 1e-6 && lo < panel[1]);
+  // 自階の面は合成後の座標系でローカル1885..3385（＝帯x 8785..10285）。
+  // **旧座標（合成前のoriginWorld）で作ると0..1500＝帯x 6900..8400になり、ここがずれる**。
+  assert.deepEqual(inPanel, [[8785, 10285]],
+    '延長されたlo側（帯x 6900..8785）には巾木を引かないはず');
+  assert.equal(base.some(([lo]) => Math.abs(lo - 6900) < 1e-6), false,
+    'パネル先頭から巾木が始まってはいけない（旧座標でselfLocalを作った場合の症状）');
+});
+
+test('【実機修正2026-09・C1型（回帰ゲート）】多層帯: 吹抜けの下でも自階の壁が全幅にある面の巾木は1本も消えない', () => {
+  const band = makeKneeBoundaryBand({ baseboardHeight: 'h=60' });
+  const floor = levelChains(band, 0), base = levelChains(band, 60);
+  // B（x=0）は吹抜けの下（voidLocalが掛かる）だが、1階の壁が全幅にある＝合成で走り範囲が動かない面。
+  // 「吹抜けの下」をギャップにする誤実装だと、ここの巾木が消える。
+  for (const label of ['B', 'A2', 'C', 'D2']) {
+    const panel = panelOf(band, floor, label);
+    assert.ok(base.some(([lo, hi]) => Math.abs(lo - panel[0]) < 1e-6 && Math.abs(hi - panel[1]) < 1e-6),
+      `${label}パネル(${JSON.stringify(panel)})の巾木は床線と同じ全幅で残るはず（実際:${JSON.stringify(base)}）`);
+  }
+});
+
+test('【実機修正2026-09】多層帯: 上階だけの面（自階に対応する壁が無い）には自階の巾木を1本も描かない', () => {
+  const cellKey = (g, x0, y0, x1, y1) => [
+    clOf(g, CenterLineType.VERTICAL, x0).id, clOf(g, CenterLineType.HORIZONTAL, y0).id,
+    clOf(g, CenterLineType.VERTICAL, x1).id, clOf(g, CenterLineType.HORIZONTAL, y1).id].join(':');
+  const g1 = makeGraph('1階', 0);
+  const room = g1.addRoom(new Set([cellKey(g1, -3000, -3500, 0, 0)]), '5');
+  room.finish.setField('baseboardHeight', 'h=60');
+  generateRoomWallsFromOutline(g1, room);
+  const g2 = makeGraph('2階', FLOOR_HEIGHT);
+  const voidRoom = g2.addRoom(new Set([cellKey(g2, -3000, -2000, 0, 0)]), '吹抜け');
+  voidRoom.setFeature(RoomFeature.VOID);
+  generateRoomWallsFromOutline(g2, voidRoom);
+  const band = buildRoomBandWithVoidAbove(room, g1, voidRoom, g2, { floorHeightAboveMm: FLOOR_HEIGHT });
+  const floor = levelChains(band, 0), base = levelChains(band, 60);
+  // 吹抜けのA面（y=-2000）は1階に対応する面が無い＝上階だけの面（1階のA面はy=-3500のA1）。
+  // 床線は下階FLで通る（確定仕様）が、自階の壁が無いので巾木は無い。
+  const panel = panelOf(band, floor, 'A2');
+  assert.ok(panel, '前提: 上階だけのA面のパネルがあるはず');
+  assert.deepEqual(base.filter(([lo, hi]) => lo >= panel[0] - 1e-6 && hi <= panel[1] + 1e-6), [],
+    '上階だけの面に自階の巾木を描いてはいけない（上階ぶんはappendUpperStoreyTrimの管轄）');
 });

@@ -1915,3 +1915,89 @@ test('【失敗系・WP-2】buildFaceFigure: skipBaseboard/skipWallLabel省略�
 // 面図側は腰壁の実体を知らない（ctx.graph の kneeDropWalls を読み直すしかない）——実体に属する
 // 表現はエンジンが1箇所で持つ。
 
+
+// ================================================================
+// 多層帯の合成で延長された範囲には自階の壁が無い＝巾木も無い
+// （ユーザー実機指摘2026-09「壁のないところに巾木はない」。voidAbove.selfLocal の補集合を
+// 既存の floorGaps へ足すだけの実装。elevationVoid.js が selfLocal を載せる）。
+// ================================================================
+const BB = { baseboardHeight: 'h=60' };
+const baseboardSpans = prims => prims
+  .filter(p => p.type === 'line' && p.weight === 'thin' && p.y1 === p.y2 && p.y1 === -60)
+  .map(p => [Math.min(p.x1, p.x2), Math.max(p.x1, p.x2)]).sort((a, b) => a[0] - b[0]);
+
+test('【実機修正2026-09】buildFaceFigure: 自階の面が無い区間（voidAbove.selfLocalの補集合）に巾木を描かない', () => {
+  const face = makeFace({ voidAbove: { voidLocal: [{ lo: 0, hi: 4000 }], selfLocal: [{ lo: 0, hi: 1500 }] } });
+  const prims = buildFaceFigure(face, baseCtx({ room: makeRoom({}, BB) }));
+  assert.deepEqual(baseboardSpans(prims), [[0, 1500]],
+    '自階の面がある0..1500だけに巾木が引かれるはず');
+});
+
+test('【不変ゲート】buildFaceFigure: voidAboveを持たない面・selfLocalが全幅の面は従来どおり全幅に巾木を引く', () => {
+  const plain = buildFaceFigure(makeFace(), baseCtx({ room: makeRoom({}, BB) }));
+  assert.deepEqual(baseboardSpans(plain), [[0, 4000]], 'voidAbove無しは現行と完全同一のはず');
+  // C1型（吹抜けの範囲と自階の実壁範囲が重なるだけで走り範囲が動かない面）の回帰ゲート:
+  // 「吹抜けの下」をギャップにする誤実装だとここで巾木が消える。
+  const c1 = makeFace({ voidAbove: { voidLocal: [{ lo: 500, hi: 3500 }], selfLocal: [{ lo: 0, hi: 4000 }] } });
+  assert.deepEqual(baseboardSpans(buildFaceFigure(c1, baseCtx({ room: makeRoom({}, BB) }))), [[0, 4000]],
+    '自階の壁が全幅にある面は、吹抜けの下でも巾木が1本も消えてはいけない');
+});
+
+test('【実機修正2026-09】buildFaceFigure: 延長範囲に床段差の境界が来ても、巾木の段差縦線を描かない', () => {
+  // 段差の境界(2000)は延長範囲(1500..4000)の中。floorGaps経由なので縦線の抑止も自動。
+  const floorSegments = [
+    { loX: 0, hiX: 2000, floorDeltaMm: 0 },
+    { loX: 2000, hiX: 4000, floorDeltaMm: 300 },
+  ];
+  const face = makeFace({ voidAbove: { voidLocal: [], selfLocal: [{ lo: 0, hi: 1500 }] } });
+  const prims = buildFaceFigure(face, baseCtx({ floorSegments, room: makeRoom({}, BB) }));
+  assert.deepEqual(baseboardSpans(prims), [[0, 1500]], '延長範囲には巾木を引かないはず');
+  const risers = prims.filter(p => p.type === 'line' && p.weight === 'thin'
+    && Math.abs(p.x1 - p.x2) < 1e-6 && Math.min(p.y1, p.y2) >= -400 && Math.max(p.y1, p.y2) <= -60);
+  assert.deepEqual(risers, [], '延長範囲の中の段差には巾木の縦線も描かれないはず');
+});
+
+test('【実機修正2026-09】buildFaceFigure: 開放スパンとの二重適用でも、巾木の途切れは既存と同じ位置・本数になる', () => {
+  // selfLocal(0..3000)の中に開放スパン(1000..2000)がある構図。
+  const spans = [
+    { loX: 0, hiX: 1000, kind: 'wall', hiCLId: null },
+    { loX: 1000, hiX: 2000, kind: 'open', hiCLId: null },
+    { loX: 2000, hiX: 4000, kind: 'wall', hiCLId: null },
+  ];
+  const ctx = baseCtx({ room: makeRoom({}, BB) });
+  const withVoid = buildFaceFigure(makeFace({ spans, voidAbove: { voidLocal: [], selfLocal: [{ lo: 0, hi: 3000 }] } }), ctx);
+  const plain = buildFaceFigure(makeFace({ spans }), ctx);
+  assert.deepEqual(baseboardSpans(plain), [[0, 1000], [2000, 4000]],
+    '前提: 開放スパンは従来どおり巾木を途切れさせる');
+  assert.deepEqual(baseboardSpans(withVoid), [[0, 1000], [2000, 3000]],
+    'selfLocal内の途切れは位置も本数も既存と同じで、延長範囲(3000..4000)だけが増えて消えるはず');
+});
+
+test('【実機修正2026-09】buildFaceFigure: 外端のはね出しは残し、内部境界（延長範囲との境目）でははね出させない', () => {
+  // lo側が延長された面（自階の面は1500..4000）で、run端は「壁のない端部」＝はね出す端。
+  const face = makeFace({
+    hasWallAtLocalRun: false,
+    voidAbove: { voidLocal: [], selfLocal: [{ lo: 1500, hi: 4000 }] },
+  });
+  const prims = buildFaceFigure(face, baseCtx({
+    room: makeRoom({}, BB), wallLessEndExtendModelMm: 150,
+  }));
+  assert.deepEqual(baseboardSpans(prims), [[1500, 4150]],
+    '巾木は自階の面の端(1500)ちょうどから始まり（内部境界でははね出さない）、'
+    + '外端では床線と同じだけはね出す(4000+150)はず');
+});
+
+test('【実機修正2026-09】buildFaceFigure: lo側が延長かつlocal0端が壁なしでも、延長範囲の外に巾木の切れ端を残さない', () => {
+  // 上の「外端のはね出し」テストの鏡像。自階の面は1500..4000で、local0端は壁のない端部
+  // （＝床線はdrawnX0=-150まではね出す）。延長範囲(0..1500)だけでなく、その外側の
+  // はね出し区間(-150..0)にも自階の壁は無いので巾木は1本も出てはいけない。
+  const face = makeFace({
+    hasWallAtLocal0: false,
+    voidAbove: { voidLocal: [], selfLocal: [{ lo: 1500, hi: 4000 }] },
+  });
+  const prims = buildFaceFigure(face, baseCtx({
+    room: makeRoom({}, BB), wallLessEndExtendModelMm: 150,
+  }));
+  assert.deepEqual(baseboardSpans(prims), [[1500, 4000]],
+    'はね出し区間(-150..0)にも延長範囲(0..1500)にも巾木は残らないはず');
+});

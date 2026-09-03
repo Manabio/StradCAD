@@ -515,11 +515,13 @@ export function buildRoomBandWithVoidAbove(room, graph, voidRoom, upperGraph, ct
     mates.forEach(v => used.add(v));
     const lo = Math.min(f.lo, ...mates.map(v => v.lo));
     const hi = Math.max(f.hi, ...mates.map(v => v.hi));
-    return withVoidRanges({ ...f, lo, hi }, f, mates, graph, upperGraph);
+    return withVoidRanges({ ...f, lo, hi }, f, mates, graph, upperGraph, [{ lo: f.lo, hi: f.hi }]);
   });
   // 下階に同じ面が無い吹抜けの面は、上段だけの面として単独で足す。
   for (const v of voidFaces) {
-    if (!used.has(v)) faces.push(withVoidRanges({ ...v }, v, [v], graph, upperGraph));
+    // 上階だけの面は**自階の面が1mmも無い**——selfLocalは空配列を明示的に渡す
+    // （ownFaceは上階の面そのものなので、そこから推論させてはいけない）。
+    if (!used.has(v)) faces.push(withVoidRanges({ ...v }, v, [v], graph, upperGraph, []));
   }
   // **見えがかりに取り込まれた面を落とすのは合成の後**（ユーザー明示指示2026-08「「5」D1に
   // 描画済なのでD2パネルを削除」）——取り込む側の面は吹抜けと合成して走り範囲が伸びた後の
@@ -598,7 +600,7 @@ function toLocal(face, ranges) {
  * 端の「壁あり/見えがかりエッジ」は、その端の世界座標を実際に持っている元の面から引き継ぐ
  * （伸ばした側の端は吹抜けの面が持っている）。
  */
-function withVoidRanges(merged, ownFace, voidMates, graph, upperGraph) {
+function withVoidRanges(merged, ownFace, voidMates, graph, upperGraph, selfWorld) {
   const dirSign = ownFace.dirSign;
   const face = {
     ...merged, dirSign, run: merged.hi - merged.lo,
@@ -645,7 +647,19 @@ function withVoidRanges(merged, ownFace, voidMates, graph, upperGraph) {
   const atRun = endFlags(dirSign > 0 ? merged.hi : merged.lo);
   face.hasWallAtLocal0 = at0.hasWall; face.edgeAtLocal0 = at0.edge;
   face.hasWallAtLocalRun = atRun.hasWall; face.edgeAtLocalRun = atRun.edge;
-  face.voidAbove = { voidLocal: toLocal(face, voidMates.map(v => ({ lo: v.lo, hi: v.hi }))) };
+  // selfLocal: **自階の面が実在する範囲**（合成後の座標系のローカルx）。合成は lo=min/hi=max で
+  // 走り範囲を伸ばすが、伸びた先に自階の壁があるとは限らない——その区間には巾木が無い
+  // （ユーザー実機指摘2026-09「壁のないところに巾木はない」。elevationFigure.jsの巾木ブロックが
+  // この補集合を「途切れさせる区間」に足す）。**必ず合成後の座標系で作ること**——withVoidRangesは
+  // originWorldを貼り替えるため、旧座標のまま載せると lo 側が延長された面（実機「5」D1）で
+  // 範囲が丸ごとずれる。上階だけの面は呼び出し側が空配列を渡す＝補集合が全幅＝自階の巾木0本。
+  face.voidAbove = {
+    voidLocal: toLocal(face, voidMates.map(v => ({ lo: v.lo, hi: v.hi }))),
+    // selfWorld 未指定（将来の呼び出し漏れ）は**selfLocalを載せない**——空配列を既定にすると
+    // 「自階の面が1mmも無い」＝その面の巾木が全幅で消える方向に倒れる。載せなければ
+    // 「合成を通っていない面」と同じ扱い＝従来どおり全幅、という安全側になる。
+    ...(Array.isArray(selfWorld) ? { selfLocal: toLocal(face, selfWorld) } : {}),
+  };
   return face;
 }
 
