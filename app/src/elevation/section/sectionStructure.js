@@ -127,6 +127,30 @@ function wallsOf(cut) {
 }
 
 /**
+ * cutの層のうち、**足元がこの切断の描画z範囲の中にある層**の壁だけ（＝描かれる高さで実際に
+ * 立ちはだかりうる壁）。上階の壁は帯の天井より上にしか無いので、下階の面から見た遮蔽物には
+ * ならない。
+ *
+ * **これは「遮蔽」用の壁集合であって「埋没」用ではない**——`isInsideWall`/`isBeamInWallAt`
+ * （部材が壁の materialRange に納まって見えないかの判定）は**全層のままが正しく、同じに
+ * 揃えてはいけない**。2階の床梁は2階の壁に埋まることも1階の壁の上に乗ることもあり、
+ * z範囲で層を落とすとその埋没判定が壊れる（＝壁の中の梁断面が室内に出る）。
+ *
+ * 足元zは「その層の壁が帯の描画z範囲に立っているか」の**プロキシ**（層は「床レベル」しか
+ * 持たず、壁の実高さを持たないため）。`below`層（下階）をこの経路へ足す日が来たら、
+ * 「足元が下」だけでは上端がz範囲に届くとは限らないので再検討すること。
+ *
+ * 実機「5」D1で柱の接続（`wallAxes`）を作っているのは**2階**の壁（x=-3000・y -1942.5..-57.5）
+ * であり、全層で数えるとその2階の壁自身が条件4を潰して柱型が出ない（帯レベルで実測: 追加0本）。
+ * 自階の壁だけで判定すると設計の期待結果（D1に柱型2本）になる。
+ */
+function wallsBlockingCut(cut) {
+  const hiZ = cut.zRange?.hiZ ?? Infinity;
+  return (cut.layers ?? []).filter(l => (l.floorZMm ?? 0) < hiZ - GAP_EPS)
+    .flatMap(l => l.graph?.walls ?? []);
+}
+
+/**
  * 断面ローカルx（＋許容はみ出しtolMm）が、その切断の描画範囲（cut.line.lo..hi。壁のない端部の
  * 探査延長probeExtendLo/HiMmを含む）に掛かっているか。
  * @param {import('./sectionTypes.js').SectionCut} cut
@@ -233,6 +257,53 @@ export function structuralColumnContribution(layers) {
  * @param {import('./sectionTypes.js').SectionCut} cut
  * @returns {object[]}
  */
+/**
+ * far側（面の向こう側）の柱でも室内から実際に見えるか（上記 onNearSide の例外。ユーザー実機指摘
+ * 2026-09「「5」D1: 1階天井見えがかりの下にY1-X2の柱型がない」）。
+ *
+ * **onNearSide は「そこに壁が在る」ことを前提にした除外**（「4」B: 壁を共有する2部屋のうち柱は
+ * 片側にしか出っ張らない）。その前提が崩れる区間——**その面の通りに、柱のrun範囲と重なる壁が
+ * 1枚も無い区間**——では柱は素通しで見えるため除外しない。実機「5」D1では、面の通り(x=-3000)の
+ * y -1000..-57.5 に壁が無く（同室のセルへ抜けている。旧D2面がdropFacesSeenAsSightlineでD1へ
+ * 吸収された範囲）、柱は1階天井見えがかりの下に実際に見える。
+ *
+ * 判定は次を全て満たすとき（保守側）:
+ *  - 切断面からの奥行きが正で、見えがかりとして描く上限（SIGHTLINE_DEPTH_LIMIT_MM）未満。
+ *    基準は「切断面からの**絶対**奥行き」——加算レイヤは遮蔽判定を持たない方針
+ *    （nearestSightlineDistMmは使わない）を崩さない
+ *  - 面の通りに、柱のrun範囲と正の幅で重なる壁が1枚も無い（`wallsBlockingCut`。**一部でも
+ *    重なれば描かない**——柱型は見付け幅の両端の縦線2本で、片側が壁に隠れた柱を2本で描くと
+ *    見付け寸法が嘘になる）
+ *
+ * 通りの比較基準は `cut.face?.axisCL?.effectiveValue ?? cut.line.axisValue`。**現在の呼び出し元
+ * （`faceSectionCut`）はcutにfaceを積まないため常にfallback側が使われる**——室内側へオフセット
+ * 済みのcut（`cutPlaneOffsetMm`を経た切断線）が将来この経路へ来たときのための防御。
+ * 既知の限界（defer）: 向こう側の空間の天井が違っても縦線はcut.zRangeで引く／入口条件
+ * （onFaceWall||straddles）に掛からない独立柱は向こう側に見えても描かない。
+ * @param {import('./sectionTypes.js').SectionCut} cut
+ * @param {ColumnSolid} col
+ * @param {number} axis - cut.line.axisValue
+ * @param {1|-1} viewSign
+ * @param {number} acrossLo - 厚み方向（面に垂直）の柱の範囲
+ * @param {number} acrossHi
+ * @returns {boolean}
+ */
+function visibleAcrossWallGap(cut, col, axis, viewSign, acrossLo, acrossHi) {
+  // 層そのものが無いcut（壁データを渡さない単体テスト・フェイク）は「壁の有無を判断できない」
+  // ため、保守側＝従来どおり描かないへ倒す。壁が1枚も無いgraphを持つ層は「壁が無い」という
+  // 情報なので対象（layers自体が空のときだけの既定）。
+  if ((cut.layers ?? []).length === 0) return false;
+  const nearEdge = viewSign > 0 ? acrossHi : acrossLo;
+  const depthNear = (axis - nearEdge) * viewSign;
+  if (!(depthNear > GAP_EPS && depthNear < SIGHTLINE_DEPTH_LIMIT_MM)) return false;
+  const faceAxis = cut.face?.axisCL?.effectiveValue ?? cut.line.axisValue;
+  if (!Number.isFinite(faceAxis)) return false;
+  const [runLo, runHi] = cut.line.isVertical ? [col.yLo, col.yHi] : [col.xLo, col.xHi];
+  return !wallsBlockingCut(cut).some(w => !!w.isVertical === !!cut.line.isVertical
+    && Math.abs((w.axisCL?.effectiveValue ?? NaN) - faceAxis) <= GAP_EPS
+    && rangesOverlap(Math.min(w.coord1, w.coord2), Math.max(w.coord1, w.coord2), runLo, runHi));
+}
+
 export function structuralColumnPrimitivesForCut(contribution, cut) {
   const prims = [];
   const loZ = cut.zRange?.loZ ?? 0;
@@ -253,7 +324,7 @@ export function structuralColumnPrimitivesForCut(contribution, cut) {
     // 一方の側にしか出っ張らない。軸CLの照合だけだと壁の向こう側に立つ柱まで両室の面へ出る。
     const viewSign = cut.viewSign === -1 ? -1 : 1;
     const onNearSide = viewSign > 0 ? acrossHi > axis + GAP_EPS : acrossLo < axis - GAP_EPS;
-    if (!onNearSide) continue;
+    if (!onNearSide && !visibleAcrossWallGap(cut, col, axis, viewSign, acrossLo, acrossHi)) continue;
     // run方向（見付け方向）は覆い込み後の区間で、面の描画範囲と重なることを要求する。
     const [runLo, runHi] = cut.line.isVertical
       ? [col.yLo, col.yHi] : [col.xLo, col.xHi];

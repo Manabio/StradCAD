@@ -251,8 +251,11 @@ export class ElevationModeState {
       const voidAbove = voidByRoomId.get(room.id);
       if (voidAbove) {
         // 上部吹抜けを持つ部屋は多層書き（elevationVoid.jsのbuildRoomBandWithVoidAbove）。
+        // 加算レイヤは通常帯と同じく渡す（ユーザー実機指摘2026-09「「5」D1に柱型が無い」の主因は
+        // ここでの渡し漏れ。多層帯だけ柱型・梁型が一切出ていなかった）。zRangeは帯の自階CHのまま
+        // ＝吹抜け範囲の上階の柱・梁は対象外（defer。上階ぶんはappendUpperStoreyOutlineの管轄）。
         return buildRoomBandWithVoidAbove(room, this.graph, voidAbove, upperGraph,
-          { ...ctx, floorHeightAboveMm: floorHeightMm });
+          { ...ctx, floorHeightAboveMm: floorHeightMm, solids: { upperGraph, floorHeightMm } });
       }
       return buildRoomBand(room, this.graph, { ...ctx, solids: { upperGraph, floorHeightMm } });
     };

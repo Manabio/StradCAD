@@ -4,11 +4,14 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { runInAction } from 'mobx';
-import { Plane, PlanGraph, CenterLineType, Discipline, OpeningCategory } from '@core';
+import { Plane, PlanGraph, CenterLineType, Discipline, OpeningCategory, RoomFeature, StructuralMaterialType } from '@core';
 import { generateRoomWallsFromOutline } from '../finish/wallGeneration.js';
 import { placeOpeningWithDefaults } from '../openings/openingEdit.js';
 import { ElevationModeState } from './ElevationModeState.js';
+import { floorSwapManager } from '../storage/FloorSwapManager.js';
 import { buildRoomBand } from '../elevation/elevationBand.js';
+import { buildRoomFaces } from '../elevation/elevationFaces.js';
+import { structuralColumnContribution } from '../elevation/section/sectionStructure.js';
 import { chooseElevationScale, screenMmToModelMm } from '../elevation/elevationLayout.js';
 import {
   NAME_GAP_BELOW_SCREEN_MM, DEFAULT_OPENING_TAG_ROW_MM, OPENING_TAG_ROW_SCREEN_MM,
@@ -318,4 +321,74 @@ test('【失敗系・項目3】ElevationModeState: 建具データと無関係�
   runInAction(() => { room.name = 'LDK(改)'; }); // 建具と無関係な変更
 
   assert.equal(state.bands, bandsRefBefore, '建具データ以外の変更ではreactionが発火せず帯は再構築されないはず');
+});
+
+// ================================================================
+// 配線（ユーザー実機指摘2026-09「「5」D1に柱型が無い」の主因）: 多層帯
+// （buildRoomBandWithVoidAbove）へも2.5D加算レイヤ（ctx.solids）を渡すこと。
+// 渡し漏れていた頃は、上部吹抜けのある部屋の展開図にだけ柱型・梁型が一切出なかった。
+// ================================================================
+
+// 直上階に吹抜け（RoomFeature.VOID）を持つ1階の部屋。withColumn=trueならA面(y=0)の壁上に柱1本。
+function makeVoidAboveProject({ withColumn }) {
+  const lower = new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
+  const room = makeRectRoom(lower, 0, 0, 4000, 3000, 'LDK');
+  if (withColumn) {
+    const xm = lower.addCenterLine(CenterLineType.VERTICAL, 2000, { labeled: false, discipline: Discipline.ARCH });
+    const y0 = lower.centerLines.find(cl => cl.centerLineType === CenterLineType.HORIZONTAL && cl.value === 0);
+    lower.addColumn(StructuralMaterialType.RC, 'RC-300x300', xm, y0, {});
+  }
+  const upper = new PlanGraph(new Plane('p2', 3000, '2階', 2, 1));
+  const voidRoom = makeRectRoom(upper, 0, 0, 4000, 3000, '吹抜け');
+  voidRoom.setFeature(RoomFeature.VOID);
+  const project = {
+    planes: [lower.plane, upper.plane], activePlane: lower.plane,
+    structGraph: null, openingNumberIndex: new Map(),
+  };
+  return { lower, upper, room, project };
+}
+
+// 直上階の解決はIDB（floorSwapManager.peek）経由のため、テストではその1点だけ差し替える。
+async function bandsWithUpper({ withColumn }) {
+  const { lower, upper, room, project } = makeVoidAboveProject({ withColumn });
+  const origPeek = floorSwapManager.peek;
+  floorSwapManager.peek = async plane => (plane.id === upper.plane.id ? upper : null);
+  try {
+    const state = new ElevationModeState(lower, project, { width: 1000, height: 800 });
+    const result = await state.init();
+    assert.equal(result.ok, true, '帯が構築できるはず');
+    return state.bands.find(b => b.roomId === room.id);
+  } finally {
+    floorSwapManager.peek = origPeek;
+  }
+}
+
+const mediumVerticals = band => band.primitives
+  .filter(p => p.type === 'line' && p.weight === 'medium' && Math.abs(p.x1 - p.x2) < 1e-6);
+
+test('【実機修正2026-09】ElevationModeState.init: 上部吹抜けのある部屋の多層帯にも2.5D加算レイヤ（柱型）が渡る', async () => {
+  const withCol = await bandsWithUpper({ withColumn: true });
+  const withoutCol = await bandsWithUpper({ withColumn: false });
+  // 前提: 通常帯へフォールバックしていないこと（フォールバックすると配線の有無を検知できない）。
+  assert.equal(withCol.heightUnits, 2, '前提: 上部吹抜けの多層帯として組まれているはず');
+  assert.equal(withoutCol.heightUnits, 2);
+  const added = mediumVerticals(withCol).length - mediumVerticals(withoutCol).length;
+  assert.equal(added, 2,
+    `柱型の両端縦線2本が多層帯にも増えるはず（実際の差:${added}）`);
+});
+
+test('【失敗系】ElevationModeState.init: 柱の無い同構成では、柱型が立つはずの帯内xに縦線が出ない', async () => {
+  const withCol = await bandsWithUpper({ withColumn: true });
+  const withoutCol = await bandsWithUpper({ withColumn: false });
+  // 柱型が立つ帯内x（＝A面のローカルx。A面は帯の先頭でxCursor=0）を、帯の差分からではなく
+  // **モデルから独立に**求める——帯どうしを比べるだけの主張は常に真になり検出力を持たない。
+  const { lower, room } = makeVoidAboveProject({ withColumn: true });
+  const faceA = buildRoomFaces(room, lower).find(f => f.label === 'A');
+  const col = structuralColumnContribution([{ graph: lower, floorZMm: 0, role: 'self' }])[0];
+  const xs = [col.xLo, col.xHi].map(w => (w - faceA.originWorld) * faceA.dirSign);
+  const hasAt = (band, x) => mediumVerticals(band).some(p => Math.abs(p.x1 - x) < 1e-6);
+  for (const x of xs) {
+    assert.equal(hasAt(withCol, x), true, `柱ありの帯には柱型の縦線が x=${x} に立つはず`);
+    assert.equal(hasAt(withoutCol, x), false, `柱の無い同構成では x=${x} に縦線は立たないはず`);
+  }
 });

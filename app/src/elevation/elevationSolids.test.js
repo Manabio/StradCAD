@@ -4,12 +4,14 @@
 // フェイクfaceでは再現できないため。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Plane, PlanGraph, CenterLineType, Discipline, StructuralMaterialType } from '@core';
+import { Plane, PlanGraph, CenterLineType, Discipline, StructuralMaterialType, RoomFeature } from '@core';
 import { generateRoomWallsFromOutline } from '../finish/wallGeneration.js';
 import { buildRoomFaces } from './elevationFaces.js';
 import { buildFaceFigure } from './elevationFigure.js';
 import { collectGridCLs } from './elevationPrimitives.js';
 import { solidPrimitivesForFace, faceSectionCut } from './elevationSolids.js';
+import { cutPlaneOffsetMm } from './section/sectionCutPlane.js';
+import { buildRoomBandWithVoidAbove } from './elevationVoid.js';
 import {
   structuralContribution, structuralColumnContribution, structuralColumnPrimitivesForCut,
 } from './section/sectionStructure.js';
@@ -428,4 +430,151 @@ test('【失敗系・追加仕様】structuralColumnContribution: 寸法の判�
   ]);
   assert.equal(solids.length, 1, '壁より太い柱は柱型として残るはず');
   assert.equal(solids[0].xHi - solids[0].xLo, 300, '覆い厚が判らない壁では素の断面幅のままのはず');
+});
+
+// ================================================================
+// ユーザー実機指摘2026-09「「5」D1: 1階天井見えがかりの下に Y1-X2 の柱型がない」
+// onNearSide は「そこに壁が在る」ことを前提にした除外（上の「4」B）。その前提が崩れる区間——
+// 面の通りに、柱のrun範囲と重なる壁が1枚も無い区間——では far側の柱も実際に見える。
+// ================================================================
+
+// 実機「5」D1と同じ構図を最小で組む（面の通りx=-3400・柱は向こう側＝+X）。
+//   - 柱の接続（wallAxes）を作るのは**上階の壁**（実機では2階の吹抜け西側の壁 x=-3000。
+//     1階の同じ通りには柱のrun範囲を跨ぐ壁が無い）。上階の壁は帯の天井より上に立つので、
+//     下階の面から見た遮蔽物にはならない。
+//   - 自階の壁（selfWallSpan）だけを変えて、「柱のrun範囲を覆うか」で挙動を見る。
+function farSideCase({ selfWallSpan, viewSign = -1 }) {
+  const wallAt = (span) => ({
+    isVertical: true, materialRange: { lo: -3400, hi: -3387.5 },
+    coord1: span[0], coord2: span[1],
+    backingRange: null, wallFinish: 12.5, axisCL: { effectiveValue: -3400 },
+  });
+  const connectWall = wallAt([-1000, 1000]); // 柱と接続する（上階の）壁
+  const column = { role: 'primary', sectionDefId: 'RC-300x300', x: -3190, y: 0, rotation: 0 };
+  const solids = structuralColumnContribution([
+    { graph: { walls: [connectWall], columns: [column] }, floorZMm: 0, role: 'self' },
+  ]);
+  const cut = {
+    seqNo: 'x', line: { isVertical: true, axisValue: -3400, lo: -1000, hi: 1000 },
+    viewSign, dirSign: 1,
+    layers: [
+      { graph: { walls: selfWallSpan ? [wallAt(selfWallSpan)] : [] }, floorZMm: 0, role: 'self' },
+      { graph: { walls: [connectWall] }, floorZMm: 3000, role: 'above' },
+    ],
+    zRange: { loZ: 0, hiZ: CH }, baseFloorZ: 0,
+  };
+  return { solids, cut, column };
+}
+
+test('【実機修正2026-09】structuralColumnPrimitivesForCut: 面の通りに壁が無い区間では、向こう側の柱も柱型として描く', () => {
+  // 壁は面の通りに在るが、柱のrun範囲（y -252.5..252.5）から外れた y 600..1000 だけ。
+  const { solids, cut } = farSideCase({ selfWallSpan: [600, 1000] });
+  const prims = structuralColumnPrimitivesForCut(solids, cut);
+  assert.equal(prims.length, 2, '素通しで見える柱は見付け幅の両端2本で描かれるはず');
+  assert.ok(prims.every(p => p.weight === 'medium'), '線種は従来どおり中線（SILHOUETTE）のはず');
+  const xs = prims.map(p => p.x1).sort((a, b) => a - b);
+  assert.equal(Math.round(xs[1] - xs[0]), Math.round(solids[0].yHi - solids[0].yLo),
+    '見付け幅は柱の包み外形どおりのはず');
+});
+
+test('【最重要回帰・「4」B型】structuralColumnPrimitivesForCut: 柱のrun範囲を覆う壁があれば向こう側の柱は描かない', () => {
+  // 壁が柱のrun範囲（y -252.5..252.5）を丸ごと覆う＝「4」Bそのもの。
+  const { solids, cut } = farSideCase({ selfWallSpan: [-1000, 1000] });
+  assert.deepEqual(structuralColumnPrimitivesForCut(solids, cut), [],
+    '壁の向こう側の柱は見えない（「4」Bの承認済み挙動）');
+});
+
+test('【失敗系】structuralColumnPrimitivesForCut: 壁が柱のrun範囲を半分だけ覆う場合も描かない（見付け寸法を偽らない）', () => {
+  // y 0..1000 の壁は柱のrun範囲(-252.5..252.5)の上半分だけを覆う。
+  const { solids, cut } = farSideCase({ selfWallSpan: [0, 1000] });
+  assert.deepEqual(structuralColumnPrimitivesForCut(solids, cut), [],
+    '片側が壁に隠れた柱を両端2本で描くと見付け寸法が嘘になるため、一部でも重なれば描かない');
+});
+
+test('【失敗系】structuralColumnPrimitivesForCut: 向こう側でも奥行きが見えがかりの上限以上なら描かない', () => {
+  const { cut } = farSideCase({ selfWallSpan: [600, 1000] });
+  // 面の通り(-3400)に接続しているが、切断面から800以上奥にある柱（実機ではRCの厚壁の向こう等）。
+  const far = [{
+    xLo: -2500, xHi: -2200, yLo: -150, yHi: 150, baseZ: 0,
+    wallAxes: [{ isVertical: true, axisValue: -3400 }],
+  }];
+  assert.deepEqual(structuralColumnPrimitivesForCut(far, cut), [],
+    '奥行き800以上は別の空間のものとして描かない');
+});
+
+test('【失敗系】structuralColumnPrimitivesForCut: 入口条件（接続壁・またぎ）に掛からない独立柱は向こう側では描かない', () => {
+  const { cut } = farSideCase({ selfWallSpan: [600, 1000] });
+  const lone = [{ xLo: -3300, xHi: -3000, yLo: -150, yHi: 150, baseZ: 0, wallAxes: [] }];
+  assert.deepEqual(structuralColumnPrimitivesForCut(lone, cut), [],
+    '独立柱の見えがかりは従来どおり対象外（defer）');
+});
+
+test('【回帰】structuralColumnPrimitivesForCut: 手前側（near）の柱は壁の有無に関わらず従来どおり描く', () => {
+  // viewSign=+1＝室内が+X側＝柱が出っ張っている側。柱のrun範囲を覆う壁があっても描く。
+  const covered = farSideCase({ selfWallSpan: [-1000, 1000], viewSign: 1 });
+  assert.equal(structuralColumnPrimitivesForCut(covered.solids, covered.cut).length, 2,
+    '手前側の柱型は従来どおり2本');
+  const bare = farSideCase({ selfWallSpan: [600, 1000], viewSign: 1 });
+  assert.equal(structuralColumnPrimitivesForCut(bare.solids, bare.cut).length, 2,
+    '壁の有無で手前側の挙動は変わらない');
+});
+
+test('【符号固定】faceSectionCut の viewSign は室内側を正に採る（sectionCutPlane.faceViewSignとは逆）', () => {
+  const face = {
+    isVertical: true, inward: 1, dirSign: 1, lo: 0, hi: 3000,
+    axisCL: { effectiveValue: 0 },
+  };
+  assert.equal(faceSectionCut(face, { graph: { walls: [], columns: [] }, ceilingHeight: CH }).viewSign, 1,
+    'inward=+1（室内が+方向）ならviewSign=+1。反転させると「4」BのonNearSideが壊れる');
+  assert.equal(faceSectionCut({ ...face, inward: -1 }, { graph: { walls: [], columns: [] }, ceilingHeight: CH }).viewSign, -1);
+});
+
+test('【回帰】cutPlaneOffsetMm: 面の向こう側の柱は仮想断面線の下げ量を動かさない', () => {
+  const { graph, room, y0 } = makeGridRoom();
+  void y0;
+  const faceA = buildRoomFaces(room, graph).find(f => f.label === 'A');
+  const layers = [{ graph, floorZMm: 0, role: 'self' }];
+  const baseMm = cutPlaneOffsetMm(faceA, layers, { columnSolids: [] });
+  // A面（y=0・inward=+1＝室内は+y側）の向こう側（y<0）に出っ張る柱。
+  const farCol = [{
+    xLo: 1000, xHi: 1300, yLo: -400, yHi: -100, baseZ: 0,
+    wallAxes: [{ isVertical: false, axisValue: 0 }],
+  }];
+  assert.equal(cutPlaneOffsetMm(faceA, layers, { columnSolids: farCol }), baseMm,
+    '室外側へ出る柱はinwardProjectionが0へ丸めるため下げ量は変わらないはず');
+});
+
+// ---- 配線（原因1）: 多層帯（buildRoomBandWithVoidAbove）へも加算レイヤを渡す ----
+// ユーザー実機指摘2026-09の主因。ElevationModeState.jsが多層帯にだけctx.solidsを渡しておらず、
+// 上部吹抜けのある部屋の展開図には柱型・梁型が一切出ていなかった。
+function makeVoidAboveCase() {
+  const { graph, room, x0, x1, y0 } = makeGridRoom();
+  const upper = new PlanGraph(new Plane('p2', 3000, '2階', 2, 1));
+  const uAdd = (type, value) => upper.addCenterLine(type, value, { labeled: true, discipline: Discipline.STRUCT });
+  const ux0 = uAdd(CenterLineType.VERTICAL, 0), ux1 = uAdd(CenterLineType.VERTICAL, 4000);
+  const uy0 = uAdd(CenterLineType.HORIZONTAL, 0), uy1 = uAdd(CenterLineType.HORIZONTAL, 3000);
+  const voidRoom = upper.addRoom(new Set([`${ux0.id}:${uy0.id}:${ux1.id}:${uy1.id}`]), '吹抜け');
+  voidRoom.setFeature(RoomFeature.VOID);
+  generateRoomWallsFromOutline(upper, voidRoom);
+  // A面（y=0）の壁の上に立つ柱（手前側＝室内に出っ張る）。
+  const xm = graph.addCenterLine(CenterLineType.VERTICAL, 2000, { labeled: false, discipline: Discipline.ARCH });
+  graph.addColumn(StructuralMaterialType.RC, 'RC-300x300', xm, y0, {});
+  void x0; void x1;
+  return { graph, room, upper, voidRoom };
+}
+const primKey = p => `${p.type}|${p.x1}|${p.y1}|${p.x2}|${p.y2}|${p.weight}|${p.dash ?? ''}|${p.text ?? ''}`;
+
+test('【実機修正2026-09】buildRoomBandWithVoidAbove: solids指定時だけ柱型が増え、未指定時の出力は1本も変わらない', () => {
+  const { graph, room, upper, voidRoom } = makeVoidAboveCase();
+  const opts = { floorHeightAboveMm: 3000 };
+  const without = buildRoomBandWithVoidAbove(room, graph, voidRoom, upper, opts);
+  const with_ = buildRoomBandWithVoidAbove(room, graph, voidRoom, upper,
+    { ...opts, solids: { upperGraph: upper, floorHeightMm: 3000 } });
+  const before = without.primitives.map(primKey);
+  const after = with_.primitives.map(primKey);
+  assert.deepEqual(before.filter(k => !after.includes(k)), [],
+    'solidsを渡しても既存のプリミティブは1本も消えない・変わらないはず');
+  const added = after.filter(k => !before.includes(k));
+  assert.equal(added.length, 2, `柱型の両端縦線2本だけが増えるはず（実際:${JSON.stringify(added)}）`);
+  assert.ok(added.every(k => k.includes('|medium|')), '柱型は中線（SILHOUETTE）のはず');
 });

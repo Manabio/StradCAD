@@ -24,15 +24,18 @@
 //   重なるため規則Bの条件3も満たさない。実機と同じく統合は起きない。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Plane, PlanGraph, CenterLineType, Discipline, RoomFeature } from '@core';
+import { Plane, PlanGraph, CenterLineType, Discipline, RoomFeature, StructuralMaterialType } from '@core';
 import { generateRoomWallsFromOutline } from '../finish/wallGeneration.js';
 import { composeRoomFaces, mergeSteppedFacesIntoPanel } from './elevationFaceList.js';
 import { labelFaces } from './elevationFaces.js';
 import { layoutBandFaces } from './elevationBand.js';
 import { buildRoomBandWithVoidAbove } from './elevationVoid.js';
+import { solidPrimitivesForFace } from './elevationSolids.js';
+import { structuralColumnContribution } from './section/sectionStructure.js';
 
 const FLOOR_HEIGHT = 3000;
 const ARCH = { labeled: false, discipline: Discipline.ARCH };
+const ARCH_CL = ARCH;   // 柱位置の無名CL（分割CLとしての意味は持たせない）
 const GRID = { labeled: true, discipline: Discipline.STRUCT };
 
 // 実機1階・室「5」（3セルのL字）＋直上階の吹抜け。
@@ -314,4 +317,65 @@ test('【失敗系】規則B: 統合が1件も起きない面リストは、pane
     ['A1', -6142.5, -2942.5], ['D1', -3442.5, -1942.5], ['A2', -2942.5, -57.5],
     ['B', -3442.5, -57.5], ['D2', -1057.5, -57.5], ['D3', -1942.5, -1057.5],
   ]);
+});
+
+// ================================================================
+// 統合パネルの接合部と柱型の取り合い（2026-09。2.5D加算レイヤの調査で確定した経緯の固定）。
+// パネルの接合部（世界x=-3400の返し壁）に柱が立つと、柱型の片縁は接合部と同じ位置に来る。
+// 見付け幅の2本は**両方emitされており**、帯で片方が接合部の端の縦線（同じmedium）と
+// 完全一致して dedupeCoincidentLines に畳まれる——「1本しか描かれない＝片縁が欠けている」
+// のではない。clampPrimsToRun は run端ちょうどの縦線を動かさないので落ちもしない。
+// ================================================================
+
+function makeRoom5WithColumn() {
+  const s = makeRoom5();
+  const cx = s.g1.addCenterLine(CenterLineType.VERTICAL, -3190, ARCH_CL);
+  const cy = s.g1.addCenterLine(CenterLineType.HORIZONTAL, -200, ARCH_CL);
+  // C1面（y=0の壁）とx=-3400の壁の両方へ150mm以内で接続する位置に立つ柱。
+  s.g1.addColumn(StructuralMaterialType.WOOD, 'WOOD-105x105', cx, cy, {});
+  return s;
+}
+
+// 面のローカルx（世界→面）。lo/hi・originWorld・dirSignの規約はbuildRoomFacesと同じ。
+const toLocalX = (face, world) => (world - face.originWorld) * face.dirSign;
+
+test('【2026-09】柱型は接合部でも両縁2本がemitされる（solidPrimitivesForFace単体）', () => {
+  const { g1, room } = makeRoom5WithColumn();
+  const c1 = faceAt(composeRoomFaces(room, g1), 0, false, -1);
+  const col = structuralColumnContribution([{ graph: g1, floorZMm: 0, role: 'self' }])[0];
+  assert.ok(col, '前提: 柱の包み外形が作れているはず');
+  const verticals = solidPrimitivesForFace(c1, { graph: g1, ceilingHeight: 2400 })
+    .filter(p => p.type === 'line' && Math.abs(p.x1 - p.x2) < 1e-6 && p.weight === 'medium');
+  const xs = verticals.map(p => p.x1).sort((a, b) => a - b);
+  assert.equal(verticals.length, 2, `柱型は両縁2本のはず（実際:${JSON.stringify(xs)}）`);
+  // 見付け幅の両端＝柱の包み外形の両縁。lo側の縁はちょうどrun端（＝パネルの接合部）に来る。
+  assert.deepEqual(xs, [toLocalX(c1, col.xHi), toLocalX(c1, col.xLo)].sort((a, b) => a - b),
+    '両縁とも柱の包み外形どおりの位置のはず');
+  assert.equal(xs[1], c1.run, 'run端ちょうどの縦線もクランプで落ちずに残るはず');
+});
+
+test('【2026-09】帯では柱型の片縁が接合部の端の縦線と畳まれ、接合部xの縦線は1本のままになる', () => {
+  const { g1, g2, room, voidRoom } = makeRoom5WithColumn();
+  const opts = { floorHeightAboveMm: FLOOR_HEIGHT };
+  const without = buildRoomBandWithVoidAbove(room, g1, voidRoom, g2, opts);
+  const with_ = buildRoomBandWithVoidAbove(room, g1, voidRoom, g2,
+    { ...opts, solids: { upperGraph: g2, floorHeightMm: FLOOR_HEIGHT } });
+  const mediumVerticalXs = band => band.primitives
+    .filter(p => p.type === 'line' && p.weight === 'medium' && Math.abs(p.x1 - p.x2) < 1e-6
+      && Math.abs(Math.min(p.y1, p.y2) + 2400) < 1e-6 && Math.abs(Math.max(p.y1, p.y2)) < 1e-6)
+    .map(p => p.x1);
+  const before = mediumVerticalXs(without), after = mediumVerticalXs(with_);
+  const added = after.filter(x => !before.includes(x));
+  assert.equal(added.length, 1, `帯に増える縦線は1本だけのはず（実際:${JSON.stringify(added)}）`);
+  // 増えた1本は柱型の内側の縁（C1ローカル3000）。もう片方は接合部（ローカル3285）にあり、
+  // solids無しの帯にも既に同じ線がある＝畳まれた相手。
+  const c1 = faceAt(composeRoomFaces(room, g1), 0, false, -1);
+  const col = structuralColumnContribution([
+    { graph: g1, floorZMm: 0, role: 'self' },
+    { graph: g2, floorZMm: FLOOR_HEIGHT, role: 'above' }])[0];
+  const jointX = added[0] + (toLocalX(c1, col.xLo) - toLocalX(c1, col.xHi));
+  assert.equal(before.filter(x => Math.abs(x - jointX) < 1e-6).length, 1,
+    '接合部の端の縦線はsolids無しでも1本ある（柱型の片縁と同一位置・同一線種）');
+  assert.equal(after.filter(x => Math.abs(x - jointX) < 1e-6).length, 1,
+    '柱型を足しても接合部xの縦線は1本のまま（dedupeCoincidentLinesが畳む）');
 });

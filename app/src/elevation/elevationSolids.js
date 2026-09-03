@@ -52,6 +52,11 @@ export function faceSectionCut(face, opts) {
   return {
     seqNo: 'face',
     line: { isVertical: face.isVertical, axisValue, lo: face.lo, hi: face.hi },
+    // **ここのviewSignは`sectionCutPlane.js`の`faceViewSign`とは逆の意味**（室内側＝視線の
+    // 手前側を正に採る。あちらは「壁を見る向き」＝室内から壁へ向かう世界方向で符号が反対）。
+    // 二重定義だが**統一しない**——`faceViewSign`へ差し替えると加算レイヤの`onNearSide`
+    // （柱が面のどちら側に出っ張るか）が反転し、ユーザー確認済みの「4」Bの挙動が壊れる。
+    // 統合の是非は別件（報告済み）。符号は elevationSolids.test.js の符号固定テストで留める。
     viewSign: face.inward === -1 ? -1 : 1,
     dirSign: face.dirSign,
     layers,
