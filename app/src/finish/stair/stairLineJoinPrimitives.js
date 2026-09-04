@@ -16,10 +16,11 @@
  * strokeScaleEnabledを指定していない＝既定true）ため、現行のstrokeWidth値
  * （lineWeightsPx.thin/medium、またはpx(2)=2/viewport.scaleX）は「世界mm相当値」であり
  * 実スクリーンpxではない。figureLineJoin.jsのL字判定・延長量計算は実スクリーンpx基準のため、
- * ここでは①viewport.scaleXを掛けて実px化した値をresolvePlanLinePointsMmへ渡し、
- * ②戻ってきたwidthを再びscaleXで割って元のstrokeWidth値へ戻す
- * （v -> v*scaleX -> (v*scaleX)/scaleX は可逆——最終的な<Line>のstrokeWidthは不変に保つ。
- *   「それ以外のpxは動かさない」という要求を、往復の外側で満たす）。
+ * ①viewport.scaleXを掛けて実px化→②join解決→③戻り値をscaleXで割って世界mm相当へ戻す、という
+ * 往復が必要になる（最終的な<Line>のstrokeWidthは不変に保つ）。この往復自体は
+ * renderer/planLineJoin.jsの姉妹関数`resolvePlanLinePointsMmScaledStroke`（第6弾）へ委譲する
+ * （2026-09移行）——本ファイルはbuildStairJoinPrimitivesがprimitivesのwidthを**世界mm相当値のまま**
+ * （実px化しない）供給する側に回り、往復そのものは持たない。
  *
  * L字結合はエントリ単位で解決する（QA指摘2026-09）: 複数の階段（installOverlapで
  * footprintが重なるupperエントリを含む）が別々のentryとして渡されても、他エントリの端点とは
@@ -28,7 +29,7 @@
  * ——変更前（各エントリを個別にresolved.mapでJSX化していた描画単位）と同じ範囲に保つ。別々の階段の
  * 端点が偶然一致しても互いに影響しない。
  */
-import { resolvePlanLinePointsMm } from '../../renderer/planLineJoin.js';
+import { resolvePlanLinePointsMmScaledStroke } from '../../renderer/planLineJoin.js';
 
 // 見下げ（isDownView）の点線パターン（スクリーンpx）。旧StairLayer.jsx内蔵定数を移設——
 // dash判定の唯一の供給源をここに一本化する。
@@ -60,12 +61,13 @@ export function stairDownviewDashPx(scaleX) {
 }
 
 /**
- * 階段1エントリぶんの踏面線・外周線を、renderer/planLineJoin.jsのresolvePlanLinePointsMmへ
- * 渡すprimitives配列（実px幅つき）へ写像する。複数エントリを渡してもよいが、各エントリの
- * primitivesは呼び出し側（resolveStairLinePointsMm）で必ずエントリごとに分けて
- * resolvePlanLinePointsMmへ渡すこと（ここでは写像だけを行い、結合範囲の制御はしない）。
+ * 階段1エントリぶんの踏面線・外周線を、renderer/planLineJoin.jsのresolvePlanLinePointsMmScaledStroke
+ * （姉妹関数。第6弾）へ渡すprimitives配列（**世界mm相当**のwidthつき。実px化は姉妹関数側に任せる）へ
+ * 写像する。複数エントリを渡してもよいが、各エントリのprimitivesは呼び出し側
+ * （resolveStairLinePointsMm）で必ずエントリごとに分けて渡すこと（ここでは写像だけを行い、
+ * 結合範囲の制御はしない）。
  * @param {{view:string, id:string, treadSegs:{x1,y1,x2,y2,heavy?}[], outlineSegs:{x1,y1,x2,y2,thin?,medium?,dashed?}[], isDownView:boolean}[]} entries
- * @param {number} scaleX - viewport.scaleX（strokeWidthの世界mm相当値を実pxへ換算する）
+ * @param {number} scaleX - viewport.scaleX（treadStrokeWidth/outlineStrokeWidthの既定値計算にのみ使う）
  * @param {{thin?:number, medium?:number}} lineWeightsPx
  * @returns {{key:string, x1:number,y1:number,x2:number,y2:number, width:number, dash?:true}[]}
  */
@@ -77,7 +79,7 @@ export function buildStairJoinPrimitives(entries, scaleX, lineWeightsPx) {
       prims.push({
         key: stairTreadKey(view, id, i),
         x1: s.x1, y1: s.y1, x2: s.x2, y2: s.y2,
-        width: treadStrokeWidth(s, scaleX, lineWeightsPx) * scaleX,
+        width: treadStrokeWidth(s, scaleX, lineWeightsPx),
         dash: isDownView || undefined,
       });
     });
@@ -85,7 +87,7 @@ export function buildStairJoinPrimitives(entries, scaleX, lineWeightsPx) {
       prims.push({
         key: stairOutlineKey(view, id, i),
         x1: s.x1, y1: s.y1, x2: s.x2, y2: s.y2,
-        width: outlineStrokeWidth(s, scaleX, lineWeightsPx) * scaleX,
+        width: outlineStrokeWidth(s, scaleX, lineWeightsPx),
         dash: (isDownView || s.dashed) || undefined,
       });
     });
@@ -94,10 +96,9 @@ export function buildStairJoinPrimitives(entries, scaleX, lineWeightsPx) {
 }
 
 /**
- * buildStairJoinPrimitives→resolvePlanLinePointsMmの実px往復を行い、戻り値のwidthを
- * scaleXで割って元のstrokeWidth値（世界mm相当）へ戻す。
+ * buildStairJoinPrimitives→resolvePlanLinePointsMmScaledStroke（実px往復。姉妹関数）を呼び出す。
  * L字結合はエントリ単位で解決する——entriesに複数要素を渡しても、
- * resolvePlanLinePointsMmはエントリごとに個別に呼び出し、他エントリの線分とは混ぜない。
+ * resolvePlanLinePointsMmScaledStrokeはエントリごとに個別に呼び出し、他エントリの線分とは混ぜない。
  * @param {Parameters<typeof buildStairJoinPrimitives>[0]} entries
  * @param {{worldToScreen, screenToWorld, scaleX:number}} viewportLike
  * @param {{thin?:number, medium?:number}} lineWeightsPx
@@ -107,12 +108,12 @@ export function resolveStairLinePointsMm(entries, viewportLike, lineWeightsPx) {
   const result = new Map();
   for (const entry of entries) {
     const prims = buildStairJoinPrimitives([entry], viewportLike.scaleX, lineWeightsPx);
-    // prims はwidthを実px指定済み（weightフィールドを持たない）ため、lineWeightsPx（weight表）は
-    // 参照されない——weightPx(figureLineJoin.js)はp.weightが無ければp.widthへフォールバックする。
-    // それを呼び出し側にも明示するため、ここではlineWeightsPxをundefinedで渡す。
-    const joined = resolvePlanLinePointsMm(prims, undefined, viewportLike);
+    // prims はwidthを世界mm相当のまま渡す（weightフィールドを持たない）ため、lineWeightsPx（weight表）は
+    // 参照されない——resolvePlanLinePointsMmScaledStroke内部のresolvePlanLinePointsMm呼び出しは
+    // lineWeightsPx未指定で行われる。
+    const joined = resolvePlanLinePointsMmScaledStroke(prims, viewportLike);
     for (const [key, v] of joined) {
-      result.set(key, { points: v.points, width: v.width / viewportLike.scaleX });
+      result.set(key, v);
     }
   }
   return result;

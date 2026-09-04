@@ -1,8 +1,8 @@
-// finish/stair/stairLineJoinPrimitives.js（階段レイヤの外周線・踏面線→L字結合primitives写像・
-// 実px往復）の回帰テスト。renderer/StairLayer.jsxのstrokeWidthはKonvaの親Groupのscaleを
+// finish/stair/stairLineJoinPrimitives.js（階段レイヤの外周線・踏面線→L字結合primitives写像）の
+// 回帰テスト。renderer/StairLayer.jsxのstrokeWidthはKonvaの親Groupのscaleを
 // 継承する（strokeScaleEnabled既定true）ため、strokeWidth値は「世界mm相当」——resolveStair
-// LinePointsMmは実pxへ換算してjoinを解決し、戻りのwidthをscaleXで割って元のstrokeWidth値
-// （旧: outlineWeight関数・treadsのheavy三項演算と同じ数値）へ戻す。統合テストは常に
+// LinePointsMmは実pxへ換算してjoinを解決し、戻りのwidthを元のstrokeWidth値へ戻す（往復自体は
+// renderer/planLineJoin.js の resolvePlanLinePointsMmScaledStroke へ委譲。2026-09移行）。統合テストは常に
 // 非恒等（offset/scale≠1）のfakeViewportを使う（site/renderer側の既存方針と同じ）。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -26,15 +26,17 @@ function fakeViewport(scaleX, scaleY = scaleX, offsetX = 37, offsetY = -52) {
 
 // 期待値はWEIGHTS/リテラルの2から直接計算する（SUTの関数を呼び直して比較すると、
 // 太さ判定を壊す変異（例: 全部thin扱いにする）が素通りするトートロジーになる——team-lessons指摘）。
+// widthは世界mm相当値（実px化はresolvePlanLinePointsMmScaledStroke委譲後、2026-09移行）——
+// heavy(px2)は実2px相当を世界mm相当で表すため2/SCALE_Xになる（scale依存）。
 test('写像: 外周線の辺ごとの幅は描画幅（旧outlineWeight）と同じ供給源から出る', () => {
   const thinSeg = { x1: 0, y1: 0, x2: 100, y2: 0, thin: true };
   const mediumSeg = { x1: 0, y1: 0, x2: 100, y2: 0, medium: true };
   const heavySeg = { x1: 0, y1: 0, x2: 100, y2: 0 };
   const entries = [{ view: 'install', id: 's1', outlineSegs: [thinSeg, mediumSeg, heavySeg], isDownView: false }];
   const prims = buildStairJoinPrimitives(entries, SCALE_X, WEIGHTS);
-  assert.ok(Math.abs(prims[0].width - WEIGHTS.thin * SCALE_X) < 1e-9, 'thin');
-  assert.ok(Math.abs(prims[1].width - WEIGHTS.medium * SCALE_X) < 1e-9, 'medium');
-  assert.ok(Math.abs(prims[2].width - 2) < 1e-9, 'heavy(px2)は常に実2px相当');
+  assert.ok(Math.abs(prims[0].width - WEIGHTS.thin) < 1e-9, 'thin');
+  assert.ok(Math.abs(prims[1].width - WEIGHTS.medium) < 1e-9, 'medium');
+  assert.ok(Math.abs(prims[2].width - 2 / SCALE_X) < 1e-9, 'heavy(px2)は常に実2px相当（世界mm相当では2/SCALE_X）');
 });
 
 test('写像: 踏面線の幅は描画幅（旧treads三項演算）と同じ供給源から出る', () => {
@@ -42,8 +44,8 @@ test('写像: 踏面線の幅は描画幅（旧treads三項演算）と同じ供
   const heavySeg = { x1: 0, y1: 0, x2: 100, y2: 0, heavy: true };
   const entries = [{ view: 'install', id: 's1', treadSegs: [thinSeg, heavySeg], isDownView: false }];
   const prims = buildStairJoinPrimitives(entries, SCALE_X, WEIGHTS);
-  assert.ok(Math.abs(prims[0].width - WEIGHTS.thin * SCALE_X) < 1e-9, 'thin(既定)');
-  assert.ok(Math.abs(prims[1].width - 2) < 1e-9, 'heavy(px2)は常に実2px相当');
+  assert.ok(Math.abs(prims[0].width - WEIGHTS.thin) < 1e-9, 'thin(既定)');
+  assert.ok(Math.abs(prims[1].width - 2 / SCALE_X) < 1e-9, 'heavy(px2)は常に実2px相当（世界mm相当では2/SCALE_X）');
 });
 
 test('写像: 見下げ(isDownView)の踏面線・外周線はdash扱いになる（対象外の唯一の情報源）', () => {

@@ -26,16 +26,17 @@
  * Konva の親 Group（viewport.scaleX/scaleY を継承）がストロークもスケールする——渡している
  * strokeWidth（`resolveStrokeWidth`の戻り値）は「世界mm相当値」であり実スクリーンpxではない
  * （finish/stair/stairLineJoinPrimitives.js と同じ状況）。figureLineJoin.js のしきい値判定・
- * 延長量計算は実スクリーンpx前提のため、①viewportLike.scaleXを掛けて実px化した値を
- * resolvePlanLinePointsMmへ渡し、②戻ってきたwidthを再びscaleXで割って元のstrokeWidth値へ
- * 戻す（v -> v*scaleX -> (v*scaleX)/scaleX は可逆——最終的な<Line>のstrokeWidthは不変に保つ）。
+ * 延長量計算は実スクリーンpx前提のため①実px化→②join解決→③世界mm相当へ戻す、という往復が
+ * 必要になる（最終的な<Line>のstrokeWidthは不変に保つ）。この往復自体は
+ * renderer/planLineJoin.js の姉妹関数 `resolvePlanLinePointsMmScaledStroke`（第6弾）へ委譲する
+ * （2026-09移行）。
  *
  * L字結合は柱単位で解決する——複数の柱の包み辺が渡されても、他の柱の端点とは一切マージしない
  * （finish/stair/stairLineJoinPrimitives.js のエントリ単位解決と同じ考え方）。
- * columnWrapRenderProps は柱ごとに個別に resolvePlanLinePointsMm を呼び出す（複数柱ぶんの
- * primitivesを1回のresolveJoinedLinePoints呼び出しへ混ぜない）。
+ * columnWrapRenderProps は柱ごとに個別に resolvePlanLinePointsMmScaledStroke を呼び出す
+ * （複数柱ぶんのprimitivesを1回のresolveJoinedLinePoints呼び出しへ混ぜない）。
  */
-import { resolvePlanLinePointsMm } from '../renderer/planLineJoin.js';
+import { resolvePlanLinePointsMmScaledStroke } from '../renderer/planLineJoin.js';
 import { resolveStrokeWidth } from '../viewport.js';
 import { LINE_WEIGHT_MM } from '../core.js';
 
@@ -121,22 +122,21 @@ export function columnWrapEdgePrimitives(column, wrap, detail) {
  * @returns {{key:string, points:[number,number,number,number], strokeWidth:number, color:string}[]}
  *
  * lineWeightsPx（site/stairのresolve*系と引数順を揃える受け口）は持たない——本モジュールは
- * primitivesのwidthを常に実px直指定するため（resolvePlanLinePointsMmのJSDoc参照）、
- * weight表を引く経路が存在せず、渡しても不使用（旧シグネチャで実際に不使用だったため削除）。
+ * primitivesのwidthを常に世界mm相当で直指定するため（resolvePlanLinePointsMmScaledStrokeの
+ * JSDoc参照）、weight表を引く経路が存在せず、渡しても不使用（旧シグネチャで実際に不使用だった
+ * ため削除）。
  */
 export function columnWrapRenderProps(wraps, viewportLike) {
-  const scaleX = viewportLike.scaleX;
   const out = [];
   for (const { column, wrap, color, strokeWidth, detail } of wraps ?? []) {
     const prims = columnWrapEdgePrimitives(column, wrap, detail);
     if (prims.length === 0) continue;
-    const widthPx = strokeWidth * scaleX;
-    const keyed = prims.map(p => ({ ...p, width: widthPx }));
+    const keyed = prims.map(p => ({ ...p, width: strokeWidth }));
     // 柱単位で個別に解決する——他の柱のprimitivesとは混ぜない（コメント冒頭参照）。
-    const joined = resolvePlanLinePointsMm(keyed, undefined, viewportLike);
+    const joined = resolvePlanLinePointsMmScaledStroke(keyed, viewportLike);
     for (const p of prims) {
       const j = joined.get(p.key);
-      out.push({ key: p.key, points: j.points, strokeWidth: j.width / scaleX, color });
+      out.push({ key: p.key, points: j.points, strokeWidth: j.width, color });
     }
   }
   return out;

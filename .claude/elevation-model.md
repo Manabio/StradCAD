@@ -388,7 +388,9 @@ width1.5px以上の線は`finish/stair/stairFigure.js`の外形と`memberFigures
 世界mm相当strokeWidthを実px化してjoin解決し、世界mm相当へ戻す）は3例目にして姉妹関数
 `renderer/planLineJoin.js`の`resolvePlanLinePointsMmScaledStroke`として切り出した（呼び分け:
 strokeScaleEnabled未指定のレイヤはこちら、実px直指定`strokeScaleEnabled={false}`のレイヤは
-`resolvePlanLinePointsMm`）。既存2例（階段・柱包み）の自前往復は未移行——移行は別途判断。
+`resolvePlanLinePointsMm`）。既存2例（階段・柱包み）の自前往復も2026-09に姉妹関数へ移行済み。
+階段側は写像関数`buildStairJoinPrimitives`が返すprimitivesのwidth契約を「実px」から「世界mm相当
+（姉妹関数に×÷scaleXを委ねる）」へ変更した。最終描画props（points/strokeWidth）はビット一致で不変。
 
 ## 面の配置・注記帯
 面配置・壁芯間寸法は`face.lo/hi`（仕上げ面）ではなく`faceBoundaryLocalX`（壁中心線）基準（壁面線=CUTのみ仕上げ面基準）。

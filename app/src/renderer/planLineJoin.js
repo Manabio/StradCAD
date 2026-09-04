@@ -18,7 +18,7 @@
  *   - dash: truthyならL字結合の対象外（破線除外はfigureLineJoin.js側の規約）
  * @param {{thin?:number, medium?:number, thick?:number, ultraThick?:number}} [lineWeightsPx]
  *   - 全prims が weight未指定（width直指定のみ）なら参照されない——省略・undefinedで渡してよい
- *     （finish/stair/stairLineJoinPrimitives.js は width を実px指定するためweight表を使わない）。
+ *     （姉妹関数 resolvePlanLinePointsMmScaledStroke 経由の呼び出しは width 直指定のためweight表を使わない）。
  * @param {{worldToScreen:(x:number,y:number)=>{x:number,y:number}, screenToWorld:(x:number,y:number)=>{x:number,y:number}}} viewportLike
  * @returns {Map<*, {points:[number,number,number,number], width:number}>}
  */
@@ -60,7 +60,7 @@ export function resolvePlanLinePointsMm(prims, lineWeightsPx, viewportLike) {
  * （`resolvePlanLinePointsMmScaledStroke`）。実px直指定（`strokeScaleEnabled={false}`）の
  * レイヤは`resolvePlanLinePointsMm`をそのまま使う。
  *
- * prims[].widthは常に実px直指定として扱われる（`weight`表を引く経路は持たない——
+ * prims[].widthは常にwidth直指定として扱われる（`weight`表を引く経路は持たない——
  * columnWrapLineJoin.jsと同じ理由。呼び出し側が太さの判断をすでに済ませているため）。
  *
  * @param {{key, x1:number,y1:number,x2:number,y2:number, width:number, dash?:*}[]} prims
