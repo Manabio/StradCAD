@@ -106,9 +106,9 @@ export function kneeDropRecordsOnAxis(graph, axisCL, spanLo, spanHi) {
 /**
  * 「1本の壁」に対応する腰壁・垂れ壁レコードを返す（該当が複数あっても先頭）。
  * kneeDropRecordsOnAxis との違いは**隅の取り合いぶんのはみ出しを重なりとみなさない**こと
- * （SPAN_OVERLAP_EPS の説明参照）。素の重なり判定は sectionProbe の点クエリ
- * （kneeDropZRangeAt。幅1mm）が使うため kneeDropRecordsOnAxis 側は変えられない——
- * 「壁がその区間の構成壁か」を問う経路だけがこちらを通る（平面の kneeDropWallGeometry と同じ判定）。
+ * （SPAN_OVERLAP_EPS の説明参照）。素の重なり判定（kneeDropRecordsOnAxis）は面単位の列挙
+ * （elevationFigure の kneeDropGapsOnFace）が使うため変えない——「壁がその区間の構成壁か」を
+ * 問う経路はこちらか kneeDropRecordsAtPointOnWall を通る（平面の kneeDropWallGeometry と同じ判定）。
  * @param {object} graph
  * @param {import('@core').CenterLine} axisCL 壁の軸CL
  * @param {number} wLo 壁スパンの下側
@@ -117,7 +117,35 @@ export function kneeDropRecordsOnAxis(graph, axisCL, spanLo, spanHi) {
  */
 export function kneeDropRecordForWallSpan(graph, axisCL, wLo, wHi) {
   return kneeDropRecordsOnAxis(graph, axisCL, wLo, wHi)
-    .find(r => Math.min(r.hi, wHi) - Math.max(r.lo, wLo) > SPAN_OVERLAP_EPS) ?? null;
+    .find(r => isConstituentWall(r, wLo, wHi)) ?? null;
+}
+
+// 壁スパン[wLo,wHi]がレコード区間の構成壁か。重なりが SPAN_OVERLAP_EPS を超えるか、壁全体が
+// 区間に収まる（150mm未満の短い壁も構成壁。閾値で切ると短い腰壁が全高で描かれる）。
+function isConstituentWall(r, wLo, wHi) {
+  const overlap = Math.min(r.hi, wHi) - Math.max(r.lo, wLo);
+  return overlap > SPAN_OVERLAP_EPS || overlap >= (wHi - wLo) - 1e-6;
+}
+
+/**
+ * 壁の長さ方向の1点（幅±eps）に掛かる腰壁・垂れ壁レコードのうち、**その壁が区間の構成壁である**
+ * ものだけを返す（断面エンジン sectionProbe.js の kneeDropZRangesAt 用）。
+ * 点クエリだけだと、隅の取り合いで隣区間へ半壁厚ぶん食い込んだ壁端（57.5mm）が隣区間の
+ * 腰壁指定を拾い、その壁端だけが腰壁の高さで描かれる（実機2026-09「22」2階 A1×X2: 全高の
+ * 壁の端57.5mmだけが腰壁800の残骸になり、壁の見えがかりエッジが壁端＝CL右側ではなくCL上に
+ * 立った）。平面の resolveKneeDropOverlays が同じ隅を同じ閾値で除外しており、両者を揃える。
+ * 1本の壁が複数区間にまたがる（mergeSegments で結合された壁）場合は、点の掛かる区間ごとに
+ * 従来どおり指定が切り替わる——区間との重なりが有意なら構成壁だから。
+ * @param {object} graph
+ * @param {import('@core').Wall} wall
+ * @param {number} pointCoord 壁の長さ方向の世界座標
+ * @param {number} eps 点クエリの半幅(mm)
+ * @returns {Array<{key:string, rec:object, lo:number, hi:number}>}
+ */
+export function kneeDropRecordsAtPointOnWall(graph, wall, pointCoord, eps) {
+  const wLo = Math.min(wall.coord1, wall.coord2), wHi = Math.max(wall.coord1, wall.coord2);
+  return kneeDropRecordsOnAxis(graph, wall.axisCL, pointCoord - eps, pointCoord + eps)
+    .filter(r => isConstituentWall(r, wLo, wHi));
 }
 
 /**

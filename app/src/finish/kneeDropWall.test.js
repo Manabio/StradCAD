@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import { Plane, PlanGraph, CenterLineType, Discipline, edgeKey } from '@core';
 import { generateRoomWallsFromOutline } from './wallGeneration.js';
 import { edgeGeometry, buildCellToRoom } from './edgeClassify.js';
-import { effectiveCeilingHeight, validateKneeDropWall, ERR_CEILING_HEIGHT_UNRESOLVED, kneeDropRecordsOnAxis, resolveKneeDropOverlays, kneeDropRecordForWallSpan } from './kneeDropWall.js';
+import { effectiveCeilingHeight, validateKneeDropWall, ERR_CEILING_HEIGHT_UNRESOLVED, kneeDropRecordsOnAxis, resolveKneeDropOverlays, kneeDropRecordForWallSpan, kneeDropRecordsAtPointOnWall } from './kneeDropWall.js';
 
 function makeGraph() {
   const plane = new Plane('p1', 0, '1階', 1, 1);
@@ -188,6 +188,41 @@ test('【失敗系】kneeDropRecordForWallSpan: 隅の取り合いぶんの重�
   assert.equal(kneeDropRecordForWallSpan(graph, axisCL, -4000, 57.5), null);
   // 区間を実際に走る壁スパン（[0,4000]）はこれまでどおり拾う。
   assert.equal(kneeDropRecordForWallSpan(graph, axisCL, 0, 4000)?.key, key);
-  // 素の重なり判定（点クエリ用。sectionProbe が使う）は従来どおり拾う——両者を混同しない。
+  // 素の重なり判定（面単位の列挙用）は従来どおり拾う——両者を混同しない。
   assert.equal(kneeDropRecordsOnAxis(graph, axisCL, 1999.5, 2000.5).length, 1);
+});
+
+// ==== 実機2026-09「22」2階 A1×X2: 断面エンジンの点クエリも「構成壁」だけを拾う ====
+test('kneeDropRecordsAtPointOnWall: 隅の取り合いぶん(57.5mm)だけ食い込む隣区間の壁は、その食い込み内の点でも拾わない', () => {
+  const graph = makeGraph();
+  const { key } = makeSharedEdgeRooms(graph);
+  graph.setKneeDropWall(key, { knee: { topHeight: 800 } });
+  const [axisCLId, startCLId] = key.split(':');
+  const yMid = graph.shapeMap.get(axisCLId), x0 = graph.shapeMap.get(startCLId);
+  const overhang = addCornerOverhangWall(graph, yMid, x0); // スパン[-4000,57.5]
+  assert.deepEqual(kneeDropRecordsAtPointOnWall(graph, overhang, 30, 0.5), [],
+    '食い込み部（x=30）の点でも隣区間のレコードは拾わないはず');
+  // 区間本来の壁は同じ点で従来どおり拾う
+  const own = [...graph.walls].find(w => !w.isVertical && w.axisCL === yMid && w !== overhang);
+  assert.equal(kneeDropRecordsAtPointOnWall(graph, own, 30, 0.5).length, 1);
+});
+
+test('kneeDropRecordsAtPointOnWall: 区間に丸ごと収まる150mm未満の短い壁は構成壁として拾う（閾値で落とさない）', () => {
+  const graph = makeGraph();
+  const { key } = makeSharedEdgeRooms(graph);
+  graph.setKneeDropWall(key, { knee: { topHeight: 800 } });
+  const [axisCLId, startCLId] = key.split(':');
+  const yMid = graph.shapeMap.get(axisCLId), x0 = graph.shapeMap.get(startCLId);
+  const short = graph.addWall(yMid, 57.5, false, x0, 100, x0, 200, { isRoomWall: true }); // スパン[100,200]
+  assert.equal(kneeDropRecordsAtPointOnWall(graph, short, 150, 0.5).length, 1);
+});
+
+test('【失敗系】kneeDropRecordsAtPointOnWall: 点が区間外なら構成壁でも拾わない', () => {
+  const graph = makeGraph();
+  const { key } = makeSharedEdgeRooms(graph);
+  graph.setKneeDropWall(key, { knee: { topHeight: 800 } });
+  const [axisCLId] = key.split(':');
+  const yMid = graph.shapeMap.get(axisCLId);
+  const own = [...graph.walls].find(w => !w.isVertical && w.axisCL === yMid);
+  assert.deepEqual(kneeDropRecordsAtPointOnWall(graph, own, 4500, 0.5), []);
 });

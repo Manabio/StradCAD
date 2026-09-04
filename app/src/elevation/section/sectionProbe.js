@@ -12,7 +12,7 @@ import { OpeningCategory } from '@core';
 import { buildCellToRoom } from '../../finish/edgeClassify.js';
 import { worldToCell } from '../../finish/gridCells.js';
 import { roomCeilingHeight } from '../../finish/roomMetrics.js';
-import { kneeDropRecordsOnAxis } from '../../finish/kneeDropWall.js';
+import { kneeDropRecordsAtPointOnWall } from '../../finish/kneeDropWall.js';
 import { effectiveHeight } from '../../openings/openingNumbering.js';
 import { collectRunBreaks } from '../elevationFloorProfile.js';
 import { GAP_EPS_MM as GAP_EPS, PROBE_EPS_MM } from '../elevationStyle.js';
@@ -22,7 +22,7 @@ import {
   compareLayerPriority, resolveSightlineTopZ,
 } from './sectionLayerStack.js';
 
-// kneeDropRecordsOnAxis（区間重なり判定）への点クエリ用の微小幅(mm)。GAP_EPSより大きく
+// kneeDropRecordsAtPointOnWall（区間重なり判定）への点クエリ用の微小幅(mm)。GAP_EPSより大きく
 // PROBE_EPS_MMより小さい値にして、区間境界ちょうどのレコードも安定して拾えるようにする。
 const POINT_QUERY_EPS_MM = 0.5;
 
@@ -234,15 +234,16 @@ function withinViewRoom(cut, worldMid, info, probeCtx, wall) {
  * 退化（腰壁と垂れ壁が接する／重なる）した指定は1本へ潰す——穴が無いなら壁は連続した1枚。
  * @param {object} graph
  * @param {import('@core').Wall} wall
- * @param {number} pointCoord - kneeDropRecordsOnAxisへの点クエリ位置（wall自身の長さ方向座標）
+ * 点クエリに掛かるレコードでも、**wall自身がその区間の構成壁でなければ無視する**
+ * （kneeDropRecordsAtPointOnWall）。隅の取り合いで隣区間へ食い込んだ壁端が隣区間の腰壁指定を
+ * 拾うと、全高の壁の端だけが腰壁の高さになる（実機2026-09「22」2階 A1×X2の「腰壁の残骸」）。
+ * @param {number} pointCoord - 点クエリ位置（wall自身の長さ方向座標）
  * @param {number} floorZ
  * @param {number} ceilZ
  * @returns {Array<{z0:number, z1:number}>} 1件 or 2件（z0昇順）
  */
 function kneeDropZRangesAt(graph, wall, pointCoord, floorZ, ceilZ) {
-  const records = kneeDropRecordsOnAxis(
-    graph, wall.axisCL, pointCoord - POINT_QUERY_EPS_MM, pointCoord + POINT_QUERY_EPS_MM,
-  );
+  const records = kneeDropRecordsAtPointOnWall(graph, wall, pointCoord, POINT_QUERY_EPS_MM);
   for (const { rec } of records) {
     if (!rec.knee && !rec.drop) continue;
     const kneeTop  = rec.knee ? floorZ + rec.knee.topHeight : null;
