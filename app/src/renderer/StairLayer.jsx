@@ -9,12 +9,12 @@ import { pointInRects, clipSegmentsToRects } from '../finish/stair/segmentClip.j
 import { trimOpeningEdgesAgainstStair } from '../finish/stair/slabOpening.js';
 import { outlineSegments } from '../finish/gridCells.js';
 import { LodLevel } from '../viewport.js';
+import {
+  stairLineRenderProps, stairDownviewDashPx, outlineStrokeWidth,
+} from '../finish/stair/stairLineJoinPrimitives.js';
 
 const STAIR_STROKE = '#1e293b';
 const CHEVRON_ANGLE = Math.PI / 7; // 矢じり(^)の開き角
-// 破れ線から先＝自階スラブの開口越しに見下ろす下階階段の「見えがかり線」の線種（スクリーンpx）。
-// 見えがかりは点線という作図規約に合わせ、ズーム非依存の細かい点線にする。
-const DOWNVIEW_DASH_PX = [3, 3];
 
 // 終点の矢じりを、黒三角ではなく鋭く尖った "^"（開いた山形）の2点で返す。
 // pts は矢印本体の points 配列（[x1,y1,x2,y2,...]）。終点側の進行方向へ向けて尖らせる。
@@ -78,7 +78,9 @@ export const StairLayer = observer(({
   onSelectStair = null,
 }) => {
   const px = (w) => w / viewport.scaleX; // ズーム非依存の線幅
-  const downviewDash = DOWNVIEW_DASH_PX.map(px); // 見下げ（破れ線から先）の点線パターン
+  // 見下げ（破れ線から先）の点線パターン。踏面線・外周線のdashはstairLineRenderProps側で
+  // 解決するため、ここではbeyondLines・openingEdges（L字結合を経由しない常時点線）用にのみ使う。
+  const downviewDash = stairDownviewDashPx(viewport.scaleX);
   // 省略LODでは開口の縁（見上げ破線）を描かず、破れ先の破線だけ細線で残す（ユーザー決定）。
   const schematic = viewport.lodLevel === LodLevel.SCHEMATIC;
 
@@ -120,7 +122,13 @@ export const StairLayer = observer(({
       .map(r => r.e.clipAgainstId),
   );
 
-  const groups = resolved.map((r) => {
+  // 2パス目: 各エントリの外周線・踏面線（破線でない実線）以外のJSXと、L字結合の対象となる
+  // 線分列（treadSegs/outlineSegs）・isDownViewを算出する。外周線・踏面線のJSX自体は3パス目
+  // （エントリ単位でL字結合を解決した後）で組み立てる——
+  // どの線分を対象にし、どの太さで扱うかの判断は finish/stair/stairLineJoinPrimitives.js
+  // （L字の角の外角閉じ。renderer/planLineJoin.js経由）に一本化し、ここでは判断結果
+  // （stairLineRenderPropsのpoints/strokeWidth/dash）を<Line>へ渡すだけにする。
+  const entryCtx = resolved.map((r) => {
     if (!r) return null;
     const { e, geom, beyondGeom } = r;
     const { id, bounds: b, view, selectable, cellBounds, hitCellBounds } = e;
@@ -174,14 +182,6 @@ export const StairLayer = observer(({
     const treadSegs = isDownView
       ? clipSegmentsBeyondBreak(geom.treads, installBreakLine, e.beyondBreakBounds)
       : geom.treads;
-    const treads = treadSegs.map((s, i) => (
-      <Line
-        key={`t${i}`} points={[s.x1, s.y1, s.x2, s.y2]} {...lineProps}
-        stroke="#000000"
-        strokeWidth={s.heavy ? px(2) : viewport.lineWeightsPx.thin}
-        dash={isDownView ? downviewDash : undefined}
-      />
-    ));
     // 外周線も踏面線と同じ「線分」プリミティブとして破れ先へクリップする。クリップしないと
     // 下階階段の側面線・上り口の辺が破れ線の手前側（install が実線で描く区間）まで二重に走り、
     // 点線化した見下げ線が実線の上に重なる。「破れ線から出発した線の終点＝当該平面の実線」は、
@@ -195,21 +195,12 @@ export const StairLayer = observer(({
       : beyondDrawable
         ? clipSegmentsBeyondBreak(geom.outline, ownBreakLine, e.beyondBreakBounds, { keep: 'near' })
         : geom.outline;
-    const outlineWeight = (s) => (s.thin ? viewport.lineWeightsPx.thin : s.medium ? viewport.lineWeightsPx.medium : px(2));
-    const outline = outlineSegs.map((s, i) => (
-      <Line
-        key={`o${i}`}
-        points={[s.x1, s.y1, s.x2, s.y2]}
-        {...lineProps}
-        strokeWidth={outlineWeight(s)}
-        dash={isDownView ? downviewDash : s.dashed ? [px(40), px(30)] : undefined}
-      />
-    ));
-    // 破れ線から先（上り部分）の外周線の点線。
+    // 破れ線から先（上り部分）の外周線の点線。常時点線＝L字結合の対象外のため、
+    // stairLineRenderPropsを経由せずoutlineStrokeWidth（外周線の太さの唯一の供給源）を直接呼ぶ。
     const beyondLines = beyondOutlineSegs.map((s, i) => (
       <Line
         key={`bo${i}`} points={[s.x1, s.y1, s.x2, s.y2]} {...lineProps}
-        strokeWidth={schematic ? viewport.lineWeightsPx.thin : outlineWeight(s)}
+        strokeWidth={schematic ? viewport.lineWeightsPx.thin : outlineStrokeWidth(s, viewport.scaleX, viewport.lineWeightsPx)}
         dash={downviewDash}
       />
     ));
@@ -303,37 +294,83 @@ export const StairLayer = observer(({
     // ここで自階階段の onClick を発火させない）。未指定時は選択枠と同じ領域を使う。
     const hitBounds = hitCellBounds?.length > 0 ? hitCellBounds : outlineBounds;
 
+    return {
+      id, view, isDownView, treadSegs, outlineSegs, lineProps,
+      // 描画順は元のJSXと同じ並びを保つため、treads/outline（3パス目でL字結合を解決してから
+      // 組み立てる）の前後2つに分けて持ち回る。
+      beforeJsx: (
+        <>
+          {selectable && onSelectStair && (
+            <Shape
+              sceneFunc={(ctx, shape) => {
+                ctx.beginPath();
+                for (const cb of hitBounds) ctx.rect(cb.x1, cb.y1, cb.x2 - cb.x1, cb.y2 - cb.y1);
+                ctx.fillStrokeShape(shape);
+              }}
+              fill={isSel ? 'rgba(37,99,235,0.10)' : 'transparent'}
+              onClick={() => onSelectStair(id)}
+              onTap={() => onSelectStair(id)}
+            />
+          )}
+          {isSel && outlineSegments(outlineBounds).map(seg => (
+            <Line
+              key={`sel${seg.isVertical ? 'v' : 'h'}${seg.value}:${seg.lo}`}
+              points={seg.isVertical
+                ? [seg.value, seg.lo, seg.value, seg.hi]
+                : [seg.lo, seg.value, seg.hi, seg.value]}
+              stroke="#2563eb"
+              strokeWidth={px(2)}
+              listening={false}
+            />
+          ))}
+        </>
+      ),
+      afterJsx: (
+        <>
+          {beyondLines}
+          {breakLine}
+          {arrows}
+          {stepNumbers}
+        </>
+      ),
+    };
+  });
+
+  // 3パス目: エントリ単位でL字結合を解決し（QA指摘2026-09。他エントリの端点とは混ぜない）、
+  // 解決済みprops（points/strokeWidth/dash）を<Line>へそのまま渡すだけでJSXを組み立てる。
+  // 「どの線分を対象にし、どの太さ・dashで扱うか」はfinish/stair/stairLineJoinPrimitives.jsが
+  // 唯一の供給源——ここに判断は残さない。
+  const groups = entryCtx.map((ctx) => {
+    if (!ctx) return null;
+    const { id, view, isDownView, treadSegs, outlineSegs, lineProps, beforeJsx, afterJsx } = ctx;
+    const renderProps = stairLineRenderProps(
+      { view, id, treadSegs, outlineSegs, isDownView },
+      viewport,
+      viewport.lineWeightsPx,
+    );
+    const treads = renderProps.treads.map((p) => (
+      <Line
+        key={p.key} points={p.points} {...lineProps}
+        stroke="#000000"
+        strokeWidth={p.strokeWidth}
+        dash={p.dash}
+      />
+    ));
+    const outline = renderProps.outline.map((p) => (
+      <Line
+        key={p.key}
+        points={p.points}
+        {...lineProps}
+        strokeWidth={p.strokeWidth}
+        dash={p.dash}
+      />
+    ));
     return (
       <Group key={`${view}:${id}`}>
-        {selectable && onSelectStair && (
-          <Shape
-            sceneFunc={(ctx, shape) => {
-              ctx.beginPath();
-              for (const cb of hitBounds) ctx.rect(cb.x1, cb.y1, cb.x2 - cb.x1, cb.y2 - cb.y1);
-              ctx.fillStrokeShape(shape);
-            }}
-            fill={isSel ? 'rgba(37,99,235,0.10)' : 'transparent'}
-            onClick={() => onSelectStair(id)}
-            onTap={() => onSelectStair(id)}
-          />
-        )}
-        {isSel && outlineSegments(outlineBounds).map(seg => (
-          <Line
-            key={`sel${seg.isVertical ? 'v' : 'h'}${seg.value}:${seg.lo}`}
-            points={seg.isVertical
-              ? [seg.value, seg.lo, seg.value, seg.hi]
-              : [seg.lo, seg.value, seg.hi, seg.value]}
-            stroke="#2563eb"
-            strokeWidth={px(2)}
-            listening={false}
-          />
-        ))}
+        {beforeJsx}
         {treads}
         {outline}
-        {beyondLines}
-        {breakLine}
-        {arrows}
-        {stepNumbers}
+        {afterJsx}
       </Group>
     );
   });
