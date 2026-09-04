@@ -2,9 +2,9 @@
   "mcpServers": {
     "browser-vision": {
       "command": "npx",
-      "args": ["chrome-devtools-mcp@latest"]
+      "args": ["-y", "chrome-devtools-mcp@latest"]
     },
-  
+
     "project-context": {
       "command": "npx",
       "args": [
