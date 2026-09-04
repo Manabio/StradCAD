@@ -182,6 +182,40 @@ test('巾木: 描画される巾木線がCLではなく壁の面まで伸びる�
   assert.ok(!ends.includes(7943), '旧挙動（CL位置7943で途切れる）に戻っていないこと');
 });
 
+// ---- 回帰ゲート（QA指摘）: wallCoverageGapsOnFaceの合流後もA1以外の全面（既存の開放スパン・
+// 寸法鎖・複数隣室境界を持つ実機フィクスチャ）で巾木区間・壁2段書きラベル位置が変わらないこと ----
+// D2もA1と同じ'wall'+'open'構成（出口側の隅を越える開放区間）を持つが、wallCoverageGapsOnFace
+// が独立に検出する隙間は既存の'open'スパン区間と完全に一致するため出力は不変
+// （node --testで実測して固定した値。D1/A2/B/C1/C2/D3は元々全幅が実壁のためgapsは常に空）。
+test('回帰ゲート: A1以外の全面（D1/A2/B/C1/D2/C2/D3）は実壁の被覆の隙間を合流しても巾木・壁2段書きラベルが不変', () => {
+  const { graph, room } = buildRoom22Fixture();
+  room.finish.setField('baseboardHeight', 'h=60');
+  room.setOverride('wallMaterial', 'm1');
+  const faces = composeRoomFaces(room, graph);
+  const ctx = {
+    graph, project: { openingNumberIndex: new Map() }, room, ceilingHeight: 2400,
+    materialMap: new Map([['m1', { name: 'ラワン合板' }]]), gridCLs: [], scale: 0.3,
+  };
+  const expected = {
+    D1: { baseboard: [[0, 3500]], labels: [1807.5] },
+    A2: { baseboard: [[0, 885]], labels: [442.5] },
+    B:  { baseboard: [[0, 6885]], labels: [3442.5] },
+    C1: { baseboard: [[0, 3885]], labels: [1942.5] },
+    D2: { baseboard: [[0, 2000]], labels: [971.25] },
+    C2: { baseboard: [[0, 5000]], labels: [2557.5] },
+    D3: { baseboard: [[0, 1385]], labels: [692.5] },
+  };
+  for (const [label, want] of Object.entries(expected)) {
+    const face = faces.find(f => f.label === label);
+    const prims = buildFaceFigure(face, ctx);
+    const baseboard = prims
+      .filter(p => p.type === 'line' && p.weight === 'thin' && p.y1 === p.y2 && p.y1 === -60)
+      .map(p => [Math.min(p.x1, p.x2), Math.max(p.x1, p.x2)]).sort((a, b) => a[0] - b[0]);
+    const labelXs = prims.filter(p => p.type === 'text' && p.text === '壁：ラワン合板').map(p => p.x);
+    assert.deepEqual(baseboard, want.baseboard, `${label}の巾木区間が変わってはいけない`);
+    assert.deepEqual(labelXs, want.labels, `${label}の壁2段書きラベル位置が変わってはいけない`);
+  }
+});
 
 // ==== 実機再現「2階22・西側void」（問題修正2026-09。D1がA1へ重なり負の寸法-1500が出る不具合） ====
 // 上のbuildRoom22Fixtureが固定化した旧モデルの後、実機ではx=0(X3)の西側が

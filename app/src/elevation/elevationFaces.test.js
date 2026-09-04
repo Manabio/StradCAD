@@ -7,6 +7,7 @@ import { Plane, PlanGraph, CenterLineType, Discipline, OpeningCategory } from '@
 import { generateRoomWallsFromOutline } from '../finish/wallGeneration.js';
 import {
   buildRoomFaces, openingsOnFace, faceBoundaryLocalX, snapFaceEndsToCorners, faceWallLessExtents,
+  wallCoverageGapsOnFace,
 } from './elevationFaces.js';
 
 function makeGraph() {
@@ -476,4 +477,147 @@ test('【失敗系・WP-V1】selectElevationRooms: STAIR_VOIDは名前を付け�
 
   const result = selectElevationRooms(graph);
   assert.deepEqual(result.map(r => r.id), [named.id], 'STAIR_VOIDは有名でもfeature軸で除外されるはず');
+});
+
+// ================================================================
+// wallCoverageGapsOnFace: 実壁（graph.walls）の被覆から「壁の実体が無いローカルx区間」を出す
+// （ユーザー実機指摘2026-09「22」2階A1・階段の下り口。elevation-model.md「実壁の被覆の隙間」節）。
+// face自体は面座標の実挙動が問題にならないため軸CLだけ実体（addCL）を使う最小フェイクで足りる。
+// ================================================================
+function makeAxisFace(axisCL, overrides = {}) {
+  return { axisCL, isVertical: false, originWorld: 0, dirSign: 1, run: 4000, ...overrides };
+}
+
+test('wallCoverageGapsOnFace: 全面に実壁がある面は空配列', () => {
+  const graph = makeGraph();
+  const axis = addCL(graph, CenterLineType.HORIZONTAL, 100);
+  const xLo = addCL(graph, CenterLineType.VERTICAL, 0);
+  const xHi = addCL(graph, CenterLineType.VERTICAL, 4000);
+  graph.addWall(axis, 0, false, xLo, 0, xHi, 0, {});
+  assert.deepEqual(wallCoverageGapsOnFace(makeAxisFace(axis), graph), []);
+});
+
+test('wallCoverageGapsOnFace: 中央に実壁の無い区間があれば、その区間を返す（実機「22」A1の階段口相当）', () => {
+  const graph = makeGraph();
+  const axis = addCL(graph, CenterLineType.HORIZONTAL, 100);
+  const xA = addCL(graph, CenterLineType.VERTICAL, 0);
+  const xB = addCL(graph, CenterLineType.VERTICAL, 1000);
+  const xC = addCL(graph, CenterLineType.VERTICAL, 3000);
+  const xD = addCL(graph, CenterLineType.VERTICAL, 4000);
+  graph.addWall(axis, 0, false, xA, 0, xB, 0, {});
+  graph.addWall(axis, 0, false, xC, 0, xD, 0, {});
+  assert.deepEqual(wallCoverageGapsOnFace(makeAxisFace(axis), graph), [{ lo: 1000, hi: 3000 }]);
+});
+
+test('wallCoverageGapsOnFace: 隅の取り合いで壁が57.5mm重なって延びていても隙間にしない（重なり自体が連続の根拠。1mmの許容差で繋げているのではない）', () => {
+  const graph = makeGraph();
+  const axis = addCL(graph, CenterLineType.HORIZONTAL, 100);
+  const xA = addCL(graph, CenterLineType.VERTICAL, 0);
+  const xMid1 = addCL(graph, CenterLineType.VERTICAL, 2057.5);
+  const xMid2 = addCL(graph, CenterLineType.VERTICAL, 2000);
+  const xD = addCL(graph, CenterLineType.VERTICAL, 4000);
+  graph.addWall(axis, 0, false, xA, 0, xMid1, 0, {}); // 0..2057.5
+  graph.addWall(axis, 0, false, xMid2, 0, xD, 0, {}); // 2000..4000（57.5mm重複＝隅の取り合いの延び）
+  assert.deepEqual(wallCoverageGapsOnFace(makeAxisFace(axis), graph), [],
+    '2区間は実際に重なっている（2000<=2057.5）ため、どんな許容差でも連続した被覆として結合されるはず');
+});
+
+test('wallCoverageGapsOnFace: 同じ通りに突き合わせで115mm離れた2本の壁は、間の115mmを隙間として報告する', () => {
+  // SPLIT_MERGE_EPS_MM(=1mm)は重なり・ほぼ接触の判定にしか使わない値で、115mmという実距離の
+  // 隔たりを埋める許容差ではない——ここでの被覆の途切れは「同室の壁がmergeSegmentsで1本に
+  // 結合されない」＝物理的に別の壁である証拠であり、正しく隙間として報告されるはず。
+  const graph = makeGraph();
+  const axis = addCL(graph, CenterLineType.HORIZONTAL, 100);
+  const xA = addCL(graph, CenterLineType.VERTICAL, 0);
+  const xB = addCL(graph, CenterLineType.VERTICAL, 1942.5);
+  const xC = addCL(graph, CenterLineType.VERTICAL, 2057.5);
+  const xD = addCL(graph, CenterLineType.VERTICAL, 4000);
+  graph.addWall(axis, 0, false, xA, 0, xB, 0, {}); // 0..1942.5
+  graph.addWall(axis, 0, false, xC, 0, xD, 0, {}); // 2057.5..4000
+  assert.deepEqual(wallCoverageGapsOnFace(makeAxisFace(axis), graph), [{ lo: 1942.5, hi: 2057.5 }]);
+});
+
+test('【失敗系】wallCoverageGapsOnFace: graph.wallsが無い（単体テストの最小graph）なら空配列', () => {
+  const axis = { id: 'axisFake', centerLineType: CenterLineType.HORIZONTAL, effectiveValue: 100, value: 100 };
+  assert.deepEqual(wallCoverageGapsOnFace(makeAxisFace(axis), { shapeMap: new Map() }), []);
+});
+
+test('【失敗系】wallCoverageGapsOnFace: 同じ通りに一致する壁が1本も無ければ空配列（壁ありとみなすフォールバック）', () => {
+  const graph = makeGraph();
+  const axis = addCL(graph, CenterLineType.HORIZONTAL, 100);
+  const otherAxis = addCL(graph, CenterLineType.HORIZONTAL, 999); // 別の通り
+  const xA = addCL(graph, CenterLineType.VERTICAL, 0);
+  const xB = addCL(graph, CenterLineType.VERTICAL, 4000);
+  graph.addWall(otherAxis, 0, false, xA, 0, xB, 0, {}); // face自身の通りには壁が無い
+  assert.deepEqual(wallCoverageGapsOnFace(makeAxisFace(axis), graph), []);
+});
+
+test('wallCoverageGapsOnFace: 同じ位置・向きの別CL実体（id違い）の壁もidではなく座標で同じ通りとして拾う', () => {
+  const graph = makeGraph();
+  const axis = addCL(graph, CenterLineType.HORIZONTAL, 100);
+  // 同じ向き・同じ座標の別CL実体（実機「21」2階のように相対/絶対で別々に作られたCLを想定。
+  // finish/kneeDropWall.js の sameAxisLine の規約）。
+  const axisDup = graph.addCenterLine(CenterLineType.HORIZONTAL, 100, { labeled: false, discipline: Discipline.ARCH });
+  const xA = addCL(graph, CenterLineType.VERTICAL, 0);
+  const xMid = addCL(graph, CenterLineType.VERTICAL, 2000);
+  const xB = addCL(graph, CenterLineType.VERTICAL, 4000);
+  assert.notEqual(axis.id, axisDup.id, '前提: 別CL実体（id違い）');
+  // axis自体の壁は前半(0..2000)だけ・後半(2000..4000)はaxisDup（別id・同座標）に付く。
+  // idだけで照合すると後半がface自身の壁として拾えず、2000..4000が誤って隙間になる。
+  graph.addWall(axis,    0, false, xA,   0, xMid, 0, {});
+  graph.addWall(axisDup, 0, false, xMid, 0, xB,   0, {});
+  assert.deepEqual(wallCoverageGapsOnFace(makeAxisFace(axis), graph), [],
+    'id不一致でも座標一致なら両方とも壁ありと見なし、全面が壁ありになるはず');
+});
+
+test('【不変ゲート】wallCoverageGapsOnFace: 壁のある端（hasWallAtLocal0/Run省略=true）は端に接する隙間もそのまま報告する', () => {
+  const graph = makeGraph();
+  const axis = addCL(graph, CenterLineType.HORIZONTAL, 100);
+  const xB = addCL(graph, CenterLineType.VERTICAL, 1000);
+  const xD = addCL(graph, CenterLineType.VERTICAL, 4000);
+  graph.addWall(axis, 0, false, xB, 0, xD, 0, {}); // 1000..4000のみ（先頭0..1000は壁なし）
+  assert.deepEqual(wallCoverageGapsOnFace(makeAxisFace(axis), graph), [{ lo: 0, hi: 1000 }]);
+});
+
+test('【失敗系】wallCoverageGapsOnFace: 壁のない端部(hasWallAtLocal0=false)で幅57.5mm（隅の取り合い相当）の隙間は報告しない', () => {
+  // 壁のない端部では面の境界(local 0)が壁中心線(CL)のまま残り、実壁の仕上げ面はそこから
+  // 半壁厚ぶん内側から始まるため、見かけの隙間（概ね57.5mm）が必ず生じる。これは巾木を
+  // 面の端(0/run)でクランプする既存規則（buildFaceFigure内のMath.max(drawnX0,0)/
+  // Math.min(drawnXRun,run)）と二重になるだけなので報告しない（END_ARTIFACT_TOL_MM=150以下）。
+  const graph = makeGraph();
+  const axis = addCL(graph, CenterLineType.HORIZONTAL, 100);
+  const xB = addCL(graph, CenterLineType.VERTICAL, 57.5);
+  const xD = addCL(graph, CenterLineType.VERTICAL, 4000);
+  graph.addWall(axis, 0, false, xB, 0, xD, 0, {}); // 57.5..4000のみ
+  assert.deepEqual(wallCoverageGapsOnFace(makeAxisFace(axis, { hasWallAtLocal0: false }), graph), [],
+    '幅がEND_ARTIFACT_TOL_MM(150)以下の端の隙間は隅の取り合いの見かけと見なし報告しない');
+});
+
+test('wallCoverageGapsOnFace: 壁のない端部でも幅がEND_ARTIFACT_TOL_MM(150)を超える隙間（階段口・大開口相当）は報告する', () => {
+  const graph = makeGraph();
+  const axis = addCL(graph, CenterLineType.HORIZONTAL, 100);
+  const xB = addCL(graph, CenterLineType.VERTICAL, 1000);
+  const xD = addCL(graph, CenterLineType.VERTICAL, 4000);
+  graph.addWall(axis, 0, false, xB, 0, xD, 0, {}); // 1000..4000のみ（先頭0..1000は実在する欠落）
+  assert.deepEqual(wallCoverageGapsOnFace(makeAxisFace(axis, { hasWallAtLocal0: false }), graph),
+    [{ lo: 0, hi: 1000 }],
+    '幅1000mmは隅の取り合いの見かけではなく実在する欠落なので、壁のない端部でも報告するはず');
+});
+
+// ---- dirSign=-1（C/D面。世界座標降順がローカルx昇順になる面）でも被覆の写像が正しく反転する ----
+// 世界座標[0,1000]の壁はローカル[3000,4000]へ、世界座標[3000,4000]の壁はローカル[0,1000]へ写像
+// されるため、被覆はローカル[0,1000]∪[3000,4000]となり、間のローカル[1000,3000]が隙間になる
+// （`node --test`で実行し確認済みの値。1000..3000という「世界座標と同じ見た目の隙間位置」に
+// なるのは、この壁配置がx=2000を軸に対称なため——非対称な配置ならローカル位置は世界座標と
+// 一致しない、という反転の効果自体は下のfaceBoundaryLocalX等の別テストが検証済み）。
+test('wallCoverageGapsOnFace: dirSign=-1の面でも世界座標→ローカルxの写像が正しく反転する', () => {
+  const axis = { id: 'axDirSign', centerLineType: CenterLineType.HORIZONTAL, effectiveValue: 100, value: 100 };
+  const face = { axisCL: axis, isVertical: false, originWorld: 4000, dirSign: -1, run: 4000 };
+  const graph = {
+    walls: [
+      { isVertical: false, axisCL: axis, coord1: 0,    coord2: 1000 }, // world[0,1000]→local[3000,4000]
+      { isVertical: false, axisCL: axis, coord1: 3000, coord2: 4000 }, // world[3000,4000]→local[0,1000]
+    ],
+  };
+  assert.deepEqual(wallCoverageGapsOnFace(face, graph), [{ lo: 1000, hi: 3000 }]);
 });

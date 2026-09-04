@@ -14,7 +14,7 @@
  * OpeningTagLayer.jsx と同じ構成でGroup描画する）。
  */
 import { CenterLineType, OpeningCategory } from '@core';
-import { openingsOnFace, faceBoundaryLocalX, drawnSpanRanges } from './elevationFaces.js';
+import { openingsOnFace, faceBoundaryLocalX, drawnSpanRanges, wallCoverageGapsOnFace } from './elevationFaces.js';
 import { effectiveHeight, openingTagPartsOf } from '../openings/openingNumbering.js';
 import { findCatalogEntry } from '../openings/openingCatalog.js';
 import { buildOpeningElevation } from '../openings/openingElevationFigure.js';
@@ -357,26 +357,33 @@ export function openingSectionPrimitives(o, x0, dir, cutWeight, silhouetteWeight
 }
 
 /**
- * **その面の平面に壁の実体が無いローカルx区間**（＝開放スパン＋多層合成で延長された範囲）。
- * 「その面のどこに壁があるか」の**単一の述語**で、巾木（壁のないところに巾木はない）と
- * 壁2段書き（壁仕上げは壁の中央に書く）の両方がここから出す——二重管理を作らない
- * （ユーザー実機指摘2026-09「壁が2つに分かれていたらそれぞれの壁の中央に書く」）。
+ * **その面の平面に壁の実体が無いローカルx区間**（＝開放スパン＋多層合成で延長された範囲＋
+ * 実壁の被覆の隙間）。「その面のどこに壁があるか」の**単一の述語**で、巾木（壁のないところに
+ * 巾木はない）と壁2段書き（壁仕上げは壁の中央に書く）の両方がここから出す——二重管理を
+ * 作らない（ユーザー実機指摘2026-09「壁が2つに分かれていたらそれぞれの壁の中央に書く」）。
  *
  * - 開放スパンは**描画基準**（`drawnSpans`＝境界に立つ実壁の開放側の面）で採る。CL基準は
  *   これより半壁厚ぶん**広い**ため、そのまま使うと巾木がCLで切れたり（CLと壁面の間に隙間）、
  *   壁区間の端が実際より狭く出たりする。
  * - 多層合成の延長は `voidAbove.selfLocal`（自階の面が実在する範囲）の補集合。
  *   `selfLocal` が無い面（通常帯・階段帯・単体テスト）はこの項が空＝出力完全不変。
+ * - **実壁（graph.walls）の被覆の隙間**（`wallCoverageGapsOnFace`。elevationFaces.js）。
+ *   `face.spans`の'wall'区間は開放スパン解析（部屋の連続性）由来のため、その内側に「壁が
+ *   生成されていない区間」（階段の下り口等）があっても'wall'のまま——実機指摘2026-09
+ *   「22」2階A1: X2の右側・腰壁のエッジまでの区間（階段の下り口）に壁が無いのに巾木が
+ *   描かれていた。`wallGaps`が空（単体テストの最小graph＝graph.walls無し）の面は
+ *   出力完全不変。
  * - **面の端に接する区間は外側へ開いたまま返す**（±Infinity）——呼び出し側は自分の基準
  *   （巾木は[0,run]、壁2段書きは壁中心線区間boundary）でクリップする。閉じた値を返すと、
  *   boundary が面の端より外側にある通常の面で、端に幅半壁厚の偽の「壁区間」が生まれる。
  * @param {Array<object>} spans - face.spans（CL基準）
  * @param {Array<object>} drawnSpans - drawnSpanRanges の結果（描画基準。spans と同じ並び）
  * @param {Array<{lo:number,hi:number}>|undefined} selfLocal - face.voidAbove?.selfLocal
+ * @param {Array<{lo:number,hi:number}>} wallGaps - wallCoverageGapsOnFace(face, graph) の結果
  * @param {number} run
  * @returns {Array<{lo:number,hi:number}>} 昇順・結合済み
  */
-function wallLessRunsOnFace(spans, drawnSpans, selfLocal, run) {
+function wallLessRunsOnFace(spans, drawnSpans, selfLocal, wallGaps, run) {
   const out = (spans ?? []).map((sp, i) => ({ ...sp, ...(drawnSpans?.[i] ?? {}) }))
     .filter(sp => sp.kind === 'open').map(sp => ({ lo: sp.loX, hi: sp.hiX }));
   if (Array.isArray(selfLocal)) {
@@ -387,6 +394,7 @@ function wallLessRunsOnFace(spans, drawnSpans, selfLocal, run) {
     }
     if (cursor < run - SPLIT_MERGE_EPS_MM) out.push({ lo: cursor, hi: run });
   }
+  out.push(...(wallGaps ?? []));
   const sorted = out.filter(r => r.hi > r.lo + SPLIT_MERGE_EPS_MM).sort((a, b) => a.lo - b.lo);
   const merged = [];
   for (const r of sorted) {
@@ -953,7 +961,8 @@ export function buildFaceFigure(face, ctx) {
   // 区間の水平線は従来どおり開口で途切れさせ、段差の縦線も同じx位置のまま床側のy2点をhだけ
   // 上へ平行移動する——開口がその段差位置をまたいでいれば同様に途切れさせる）。
   // その面の平面に壁の実体が無い区間（巾木・壁2段書きの共通の述語）。
-  const wallLessRuns = wallLessRunsOnFace(spans, drawnSpans, face.voidAbove?.selfLocal, run);
+  const wallLessRuns = wallLessRunsOnFace(
+    spans, drawnSpans, face.voidAbove?.selfLocal, wallCoverageGapsOnFace(face, graph), run);
   const baseboardH = parseBaseboardHeightMm(room.finish?.baseboardHeight);
   // WP-2: ctx.skipBaseboard（既定false）指定時は巾木ブロック自体を実行しない（階段帯等、
   // 巾木表現が不要な帯からの呼び出し用）。

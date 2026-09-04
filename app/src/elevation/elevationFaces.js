@@ -10,7 +10,9 @@
 import { RoomKind, RoomFeature } from '@core';
 import { computeExternalEdgeParams, mergeSegments } from '../finish/wallGeneration.js';
 import { innerWallFaceAt } from '../finish/wallFaces.js';
+import { sameAxisLine } from '../finish/kneeDropWall.js';
 import { graphList } from '../graphReadScope.js';
+import { SPLIT_MERGE_EPS_MM } from './elevationStyle.js';
 
 // struct CL は graph._structGraph.shapeMap に格納されるため両方を検索する（finish/*.js と同じ規約）。
 function getShape(graph, id) {
@@ -456,6 +458,93 @@ export function perpendicularWallsOnFace(face, graph, side) {
     const project = inward > 0 ? wLo <= av - PERP_MIN_PROJECTION_MM : wHi >= av + PERP_MIN_PROJECTION_MM;
     return reach && project;
   });
+}
+
+// wallCoverageGapsOnFace: 壁のない端部(hasWallAtLocal0/Run===false)に接する隙間を、
+// 「隅の取り合いのCL-仕上げ面の食い違いによる見かけの隙間」とみなして無視する幅の上限(mm)。
+// PERP_TOUCH_TOL_MM・finish/kneeDropWall.js の SPAN_OVERLAP_EPS と同じ、隅の取り合いの
+// 許容差を流用する（食い違いの実測は概ね半壁厚=57.5mm程度で、この値を大きく超える幅は
+// 隅の取り合いではなく階段口・大開口等の実在する欠落）。
+const END_ARTIFACT_TOL_MM = 150;
+
+/**
+ * その面の軸と**同じ通り**（sameAxisLine。idではなく向き＋座標一致——finish/kneeDropWall.js
+ * の規約）にある実壁（graph.walls）の被覆から、[0, run]の**壁の実体が無いローカルx区間**を返す
+ * （ユーザー実機指摘2026-09「22」2階A1・階段の下り口: face.spansは開放スパン解析（部屋の連続性）
+ * 由来で、'wall'区間の内側に「壁が生成されていない区間」（階段の下り口）があっても'wall'のまま
+ * ——巾木・壁2段書きの述語(elevationFigure.jsのwallLessRunsOnFace)には実壁の被覆という
+ * 第3の源が要る。階段帯のsequence経路——elevationStair.jsがcomposedFaces経由で
+ * hasRealWall=falseを含む面を流す——でも同様に壁の欠落を検出する必要があり、この関数は
+ * 単体テストの最小graphだけでなく本番のその経路でも保険として働く）。
+ * 壁の偏芯側は問わない（同じ通りにどちら向きの壁でもあれば壁あり）。壁はcoord1/coord2
+ * （壁の長さ方向の世界座標。core/wall.js）をローカルxへ写像して和集合を取る——同室内の
+ * 連続した壁は生成時に`mergeSegments`（finish/wallGeneration.js）で1本のWallへ結合される
+ * ため通常は面の全幅が1本の被覆になり、複数のWallに分かれるのは(a)隅で隣室側の壁が
+ * 仕上げ面まで食い込んで**重なる**場合（例: 57.5mm重複。この重なりそのものが連続の根拠で
+ * あり、SPLIT_MERGE_EPS_MM(=1mm)という小さな許容差が57.5mmの隔たりを埋めているわけではない
+ * ——重なっている2区間はどんな許容差でも結合される）と、(b)階段口のように**実際に壁が
+ * 途切れている**場合の2通りで、後者だけがここで隙間として報告される。
+ * graph.walls が無い（単体テストの最小graph）場合は空配列を返す（既存呼び出しの出力不変）。
+ * 同じ通りに一致する壁が1本も見つからない場合も**空配列**を返す（「情報が無い」＝従来どおり
+ * 全面を壁ありと見なすフォールバック）。これは単体テスト（他の直交壁だけを積んだ最小graphで、
+ * face自身の壁が定義されていないケースを「壁が皆無」と誤認して面全体を巾木無しにしないため）
+ * だけでなく、**本番の階段帯sequence経路（`elevationStair.js`の`hasRealWall=false`の面）でも
+ * 保険として働く**——そうした面はそもそもこの軸に実壁が1本も無いことが前提のため、隙間扱いに
+ * せず「情報が無い」まま呼び出し側（`kind==='step'`の別描画分岐等）に委ねる。部分的に欠けている
+ * 区間（同じ通りに壁が1本以上あるが、その被覆に穴がある場合）だけを隙間として報告する用途に
+ * 限定する。
+ * **面の端(0/run)に接する側の隙間は、その端が壁のある端(`hasWallAtLocal0`/`hasWallAtLocalRun`
+ * ===true。省略時も既定true)なら報告し、壁のない端部(===false)では幅が`END_ARTIFACT_TOL_MM`
+ * 以下なら報告しない**（幅がそれを超える場合は壁のない端部でも報告する）——壁のない
+ * 端部では面の境界(`face.lo/hi`由来のローカル0/run)が壁中心線(CL)のまま残り、実壁の仕上げ面は
+ * そこから半壁厚ぶん内側から始まるため、幅わずか（概ね57.5mm）の**見かけの隙間**が必ず生じる。
+ * この見かけの隙間は、巾木を面の端(0/run)でクランプする既存規則
+ * （`elevationFigure.js`の`buildFaceFigure`内`Math.max(drawnX0,0)`/`Math.min(drawnXRun,run)`）が
+ * 既に面の端で止めているため、ここでも報告すると同じ抑制を二重に行うだけで意味を持たない。
+ * 一方、階段口・大開口のように幅が`END_ARTIFACT_TOL_MM`を超える隙間は、たとえ壁のない端部に
+ * 接していても実在する欠落なので報告する。
+ * @param {object} face - buildRoomFaces/composeRoomFacesの1件（axisCL/isVertical/originWorld/dirSign/run/
+ *   hasWallAtLocal0/hasWallAtLocalRun。両方省略時=true=壁ありの端 扱い。既存の規約と同じ）
+ * @param {object} graph
+ * @returns {Array<{lo:number,hi:number}>} 昇順・結合済み（[0,run]内にクリップ済み）
+ */
+export function wallCoverageGapsOnFace(face, graph) {
+  const walls = graphList(graph, 'walls');
+  if (!Array.isArray(walls)) return [];
+  const run = face.run;
+  const covered = walls
+    .filter(w => w.isVertical === face.isVertical && sameAxisLine(w.axisCL, face.axisCL))
+    .map(w => {
+      const a = (w.coord1 - face.originWorld) * face.dirSign;
+      const b = (w.coord2 - face.originWorld) * face.dirSign;
+      return { lo: Math.max(0, Math.min(a, b)), hi: Math.min(run, Math.max(a, b)) };
+    })
+    .filter(r => r.hi > r.lo)
+    .sort((a, b) => a.lo - b.lo);
+  if (covered.length === 0) return [];
+  const merged = [];
+  for (const r of covered) {
+    const last = merged[merged.length - 1];
+    if (last && r.lo <= last.hi + SPLIT_MERGE_EPS_MM) last.hi = Math.max(last.hi, r.hi);
+    else merged.push({ ...r });
+  }
+  const hasWallAtLocal0   = face.hasWallAtLocal0   ?? true;
+  const hasWallAtLocalRun = face.hasWallAtLocalRun ?? true;
+  const gaps = [];
+  let cursor = 0;
+  merged.forEach((r, i) => {
+    if (r.lo > cursor + SPLIT_MERGE_EPS_MM) {
+      const hi = Math.min(r.lo, run);
+      const isEndArtifact = i === 0 && !hasWallAtLocal0 && (hi - cursor) <= END_ARTIFACT_TOL_MM;
+      if (!isEndArtifact) gaps.push({ lo: cursor, hi });
+    }
+    cursor = Math.max(cursor, r.hi);
+  });
+  if (cursor < run - SPLIT_MERGE_EPS_MM) {
+    const isEndArtifact = !hasWallAtLocalRun && (run - cursor) <= END_ARTIFACT_TOL_MM;
+    if (!isEndArtifact) gaps.push({ lo: cursor, hi: run });
+  }
+  return gaps.filter(g => g.hi > g.lo + SPLIT_MERGE_EPS_MM);
 }
 
 // perpFaceAt の隅一致判定許容差(mm)。elevationStepFace.js（見付け面の隅スナップ・挿入位置探索）・

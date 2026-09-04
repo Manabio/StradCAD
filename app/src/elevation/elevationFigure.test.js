@@ -3,7 +3,7 @@
 // （純関数のロジック検証が目的で、graph実体の生成コストを避ける）。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { edgeKey, OpeningCategory, CenterLineType, Plane, PlanGraph, Discipline } from '@core';
+import { edgeKey, OpeningCategory, CenterLineType, Plane, PlanGraph, Discipline, RoomFeature } from '@core';
 import { generateRoomWallsFromOutline } from '../finish/wallGeneration.js';
 import {
   buildFaceFigure, kneeDropGapsOnFace, parseBaseboardHeightMm, avoidGridCollisionX,
@@ -11,6 +11,7 @@ import {
   segEndProfile,
 } from './elevationFigure.js';
 import { buildRoomFaces as realBuildRoomFaces, faceBoundaryLocalX, drawnSpanRanges } from './elevationFaces.js';
+import { composeRoomFaces } from './elevationFaceList.js';
 import { wallAdjacentFloorSegments } from './elevationFloorProfile.js';
 import {
   GRID_LINE_ABOVE_CH_MM, CANVAS_BG_COLOR, DEFAULT_FACE_LABEL_AVOID_THRESHOLD_MM,
@@ -2175,4 +2176,98 @@ test('【失敗系・実機修正2026-09】buildFaceFigure: 開放スパンは�
   const xs = wallLabelXs(buildFaceFigure(face, wallLabelCtx({ graph, scale: 0.52 })));
   assert.deepEqual(xs, [1075],
     '壁区間(900..1250)の中央1075のはず——開放スパンを障害物に積むと1100へ寄る');
+});
+
+// ================================================================
+// 実機修正2026-09「22」2階A1: 階段の下り口（stairOpeningsで壁生成がスキップされた区間）に
+// 巾木が描かれる不具合。face.spansは開放スパン解析（部屋の連続性）由来で、'wall'区間の内側に
+// 「壁が生成されていない区間」があっても'wall'のまま——wallCoverageGapsOnFace（実壁の被覆の
+// 隙間）をwallLessRunsOnFaceへ合流させたことで、巾木・壁2段書きの両方がこの区間を避けるように
+// なる。sectionProbeKneeCorner.test.jsのbuildFixture()を参考に、実際に部屋の輪郭を閉じた
+// フル構成（realBuildRoomFacesではなくcomposeRoomFaces経由。腰壁の分割・spans組成を経る）で
+// 固定する。
+// ================================================================
+test('【実機修正2026-09】buildFaceFigure: 階段の下り口区間（壁の実体なし）に巾木を描かず、壁2段書きラベルは壁区間ごとの中央へ移る', () => {
+  const CH = 2400;
+  const plane = new Plane('p2', 3000, '2階', 2, 1);
+  const graph = new PlanGraph(plane);
+  const ARCH = { labeled: false, discipline: Discipline.ARCH };
+  const V = v => graph.addCenterLine(CenterLineType.VERTICAL, v, ARCH);
+  const H = v => graph.addCenterLine(CenterLineType.HORIZONTAL, v, ARCH);
+  const X1 = V(-8000), X2 = V(-3000), X3 = V(0);
+  const Y2 = H(-7000), Ym = H(-3500), Y1 = H(-2000);
+  const cell = (x0, y0, x1, y1) => `${x0.id}:${y0.id}:${x1.id}:${y1.id}`;
+  // 室22（実機相当）: X1..X3、Ym..Y1の矩形。北面(Ym)はX1..X2の壁a1とX2..X3の腰壁の2本のみで
+  // X2..-1500（階段の下り口）は壁が無い（実機「22」2階A1×階段の構成）。
+  const room22 = graph.addRoom(new Set([cell(X1, Ym, X2, Y1), cell(X2, Ym, X3, Y1)]), '22');
+  room22.finish.setField('baseboardHeight', 'h=60');
+  room22.setOverride('wallMaterial', 'm1');
+  graph.addRoom(new Set([cell(X2, Y2, X3, Ym)]), '').setFeature(RoomFeature.STAIR_VOID);
+  graph.addRoom(new Set([cell(X1, Y2, X2, Ym)]), '21');
+  const opts = { isRoomWall: true, wallFinish: 12.5, backingDepth: 90 };
+  graph.addWall(Ym, 57.5, false, X1, 57.5, X2, 57.5, opts);   // a1壁（X1..X2）
+  graph.addWall(Ym, 57.5, false, X2, 1500, X3, 57.5, opts);   // 腰壁（-1500..X3。X2..-1500は壁なし）
+  graph.addWall(X2, 57.5, true, Y2, 57.5, Ym, 57.5, opts);    // 階段吹抜け側のX2壁
+  graph.addWall(X1, 57.5, true, Ym, 57.5, Y1, 57.5, opts);    // 室22西壁（D）
+  graph.addWall(X3, -57.5, true, Ym, 57.5, Y1, 57.5, opts);   // 室22東壁（B）
+  graph.addWall(Y1, -57.5, false, X1, 57.5, X3, 57.5, opts);  // 室22南壁（C）
+  graph.setKneeDropWall(edgeKey(Ym.id, X2.id, X3.id), { knee: { topHeight: 800 }, drop: null });
+
+  const faces = composeRoomFaces(room22, graph);
+  const faceA = faces.find(f => !f.isVertical && f.axisCL.effectiveValue === Ym.effectiveValue);
+  // 前提: 実機どおりA面はX1..X3の全幅（局所run=7885）を1枚のfaceとして持つ
+  // （spansは'wall'のまま。壁の実体の隙間は別の源=wallCoverageGapsOnFaceでしか分からない）。
+  assert.equal(faceA.run, 7885, '前提: A面はX1..X3の全幅1枚のはず');
+
+  const prims = buildFaceFigure(faceA, {
+    graph, project: { openingNumberIndex: new Map() }, room: room22, ceilingHeight: CH,
+    materialMap: new Map([['m1', { name: 'ラワン合板' }]]), gridCLs: [], scale: 0.3,
+  });
+
+  // 巾木線（y=床-巾木高=-60）: 階段の下り口区間(local 5000..6442.5。世界座標X2+57.5..-1500)を
+  // 覆わず、a1壁の区間(0..5000)と腰壁の区間(6442.5..7885)にだけ引かれるはず。
+  const baseboardSpans = prims
+    .filter(p => p.type === 'line' && p.weight === 'thin' && p.y1 === p.y2 && p.y1 === -60)
+    .map(p => [Math.min(p.x1, p.x2), Math.max(p.x1, p.x2)]).sort((a, b) => a[0] - b[0]);
+  assert.deepEqual(baseboardSpans, [[0, 5000], [6442.5, 7885]],
+    '階段の下り口区間には巾木を描かず、実壁のある2区間にだけ引かれるはず');
+
+  // 壁2段書きラベル（見た目が変わる点。壁区間ごとの中央へ移る——従来は全面1区間の中央だった）。
+  const wallLabelXs = prims.filter(p => p.type === 'text' && p.text === '壁：ラワン合板').map(p => p.x);
+  assert.deepEqual(wallLabelXs, [2471.25, 7192.5],
+    '壁2段書きは壁区間ごと（a1壁区間・腰壁区間）の中央2箇所に移るはず');
+});
+
+// ---- 失敗系: 開放スパンと壁の被覆の隙間が同じ区間に重なっても、巾木の途切れは1区間のまま
+// （二重に数えられない） ----
+// QA注記: このテストは「開放スパン(kind==='open')」だけでも同じ巾木の途切れ方(結果的に
+// [[0,1000],[2000,4000]])になるため、wallGaps（wallCoverageGapsOnFace由来の隙間）を
+// wallLessRunsOnFaceへ合流させる新コード自体はゲートしていない（合流させなくても本テストは
+// 緑のまま——`out.push(...(wallGaps ?? []))`を無効化して確認済み）。あくまで「2つの源が
+// 同じ区間を指しても壊れない（重複しない）」という**併存時の不変条件**の固定であり、
+// 新コードの単体ゲートは`elevationFaces.test.js`の`wallCoverageGapsOnFace`テスト群と、
+// 本ファイルの「階段の下り口区間」テスト（wallGaps由来の隙間が'open'スパンに現れない
+// 純粋なケース）が担う。
+test('【失敗系・実機修正2026-09】buildFaceFigure: 開放スパンと壁の被覆の隙間が重なる区間でも、巾木の途切れは重複しない', () => {
+  const clMid = { id: 'clMid', centerLineType: CenterLineType.HORIZONTAL, effectiveValue: 0, value: 0 };
+  const graph = {
+    openings: [], kneeDropWalls: new Map(), shapeMap: new Map([[clMid.id, clMid]]),
+    // face自身の通り(clMid)の壁は1000..2000区間に無い——open区間(1000..2000)と完全一致する
+    // 壁の被覆の隙間を作る（二重適用の回帰確認）。
+    walls: [
+      { isVertical: false, axisCL: clMid, coord1: 0, coord2: 1000 },
+      { isVertical: false, axisCL: clMid, coord1: 2000, coord2: 4000 },
+    ],
+  };
+  const face = makeFace({
+    axisCL: clMid,
+    spans: [
+      { loX: 0, hiX: 1000, kind: 'wall', hiCLId: null },
+      { loX: 1000, hiX: 2000, kind: 'open', farFloorDeltaMm: 0, hiCLId: null },
+      { loX: 2000, hiX: 4000, kind: 'wall', hiCLId: null },
+    ],
+  });
+  const prims = buildFaceFigure(face, baseCtx({ graph, room: makeRoom({}, BB) }));
+  assert.deepEqual(baseboardSpans(prims), [[0, 1000], [2000, 4000]],
+    '開放スパンと壁の被覆の隙間が同じ区間を指しても、巾木の途切れは1個所のまま重複しないはず');
 });

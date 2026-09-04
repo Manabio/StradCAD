@@ -64,7 +64,9 @@ function getShape(graph, id) {
  * （断面エンジンは他階のグラフを世界座標で読む）。
  */
 const AXIS_MATCH_EPS = 0.5; // mm
-function sameAxisLine(a, b) {
+// export: elevation/elevationFaces.js の wallCoverageGapsOnFace（面の軸と同じ通りの実壁を
+// 拾う判定）も同じ規約を要る——通り一致は常にid比較ではなく座標で見る、という決定を1箇所に置く。
+export function sameAxisLine(a, b) {
   return !!a && !!b && a.centerLineType === b.centerLineType
     && Math.abs(a.effectiveValue - b.effectiveValue) <= AXIS_MATCH_EPS;
 }
