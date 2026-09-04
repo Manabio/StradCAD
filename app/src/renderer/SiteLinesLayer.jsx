@@ -2,6 +2,7 @@ import { observer } from 'mobx-react-lite';
 import { Line, Circle, Group, Text } from 'react-konva';
 import { SiteLineKind } from '@core';
 import { getSiteLineRedBlue } from '../site/siteGeometry.js';
+import { resolveSiteLinePointsMm } from '../site/siteLineJoinPrimitives.js';
 
 // ---- 描画中プレビュー ----
 export const SiteDrawPreview = observer(({ mode }) => {
@@ -67,6 +68,11 @@ export const SiteLinesLayer = observer(({ site, viewport, selectedLineId, onSele
   }
   const intersectionPoints = site.points.filter(p => (pointHitCount.get(p.id) ?? 0) >= 2);
 
+  // L字の角の外角を閉じる延長（site/siteLineJoinPrimitives.js。展開図と同じ規則を境界線へ適用。
+  // 詳細は同モジュール冒頭コメント・.claude/elevation-model.md「L字の角の外角を閉じる」節）。
+  // 幅（thick/ultraThick）の判断もこの関数が唯一の供給源——.jsx側でisSelectedから幅を再導出しない。
+  const resolvedLines = resolveSiteLinePointsMm(site.lines, selectedLineId, viewport.lineWeightsPx, viewport);
+
   return (
     <>
       {/* 線分・端点マーカー */}
@@ -74,17 +80,15 @@ export const SiteLinesLayer = observer(({ site, viewport, selectedLineId, onSele
         const isSelected = line.id === selectedLineId;
         const color = KIND_COLOR[line.lineKind] ?? KIND_COLOR[SiteLineKind.OTHER];
         const { red, blue } = getSiteLineRedBlue(line);
+        const resolved = resolvedLines.get(line.id);
 
         return [
           // 線分
           <Line
             key={`l-${line.id}`}
-            points={[
-              line.startPoint.x, line.startPoint.y,
-              line.endPoint.x,   line.endPoint.y,
-            ]}
+            points={resolved.points}
             stroke={isSelected ? '#1e293b' : color}
-            strokeWidth={isSelected ? viewport.lineWeightsPx.ultraThick : viewport.lineWeightsPx.thick}
+            strokeWidth={resolved.width}
             strokeScaleEnabled={false}
             hitStrokeWidth={lineHitWidth(line, viewport)}
             onClick={() => onSelectLine?.(line.id)}
