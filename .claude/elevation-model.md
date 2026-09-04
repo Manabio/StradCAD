@@ -339,6 +339,48 @@ A＝平面の上側（北）を室内から見た面、B=右、C=下、D=左。�
 mm座標に焼き込まずアンカー点だけを持つ専用プリミティブにし、pxはレンダラ側で校正値（`screenPxPerMm`）を掛けて算出する
 （焼き込むとscale変化で見た目サイズが狂う）。
 
+### L字の角の外角を閉じる（`renderer/figureLineJoin.js`。案2・第1弾）
+canvasのlineCapはbutt（未指定）のままにし、Konvaへ渡す直前のpx座標だけを角の2点に限って動かして
+すき間を閉じる——モデルmm座標・ゴールデンテスト（`elevationSectionGolden.test.js`）は一切触らない。
+対象はモデルmmの端点が厳密一致する「ちょうど2本」の角のみ（3本以上・T字・破線・同一直線上・
+細線同士は対象外）。角度・延長量の計算はpx変換後の座標で行う（変換にy反転や不等倍がありうるため、
+mm座標の符号をそのまま使うと向きを誤る）。
+
+第2弾で敷地モードの境界線（`renderer/SiteLinesLayer.jsx`）にも同じモジュールを再利用。
+このレイヤはKonvaの親GroupのscaleX/scaleY/offsetXYへ世界→スクリーン変換を委ねる方式
+（展開図のような手動t.tx/ty変換ではない）ため、join計算は実スクリーンpx空間で行う必要がある
+（THIN_PXしきい値・延長量の算式が実スクリーンpx前提のため、mm換算した幅を渡すとズーム倍率次第で
+しきい値判定が狂う）。往復（worldToScreen→join→screenToWorld）と幅の決定は
+`site/siteLineJoinPrimitives.js`の`resolveSiteLinePointsMm`に一本化し、レイヤは返り値のmm座標と
+幅を`<Line>`へ渡すだけにする——判断をレンダラに残すと変異テストで守れない（QA指摘で2度是正）。
+
+第3弾で往復（worldToScreen→join→screenToWorld）部分を敷地非依存の`renderer/planLineJoin.js`
+（`resolvePlanLinePointsMm`）へ切り出し、`resolveSiteLinePointsMm`もこれを呼ぶ形にした。
+階段レイヤ（`renderer/StairLayer.jsx`）の外周線・踏面線にも同じ仕組みを適用する
+（`finish/stair/stairLineJoinPrimitives.js`）。ただしStairLayerの`<Line>`は`strokeScaleEnabled`
+未指定（既定true）でKonvaの親GroupのscaleX/scaleYを継承するため、strokeWidth値は実pxではなく
+世界mm相当——join計算に必要な実pxとの間をviewport.scaleXで往復換算し、最終的な
+strokeWidth（既存の見た目）は変えない。
+
+第4弾で構造レイヤの柱の仕上げ包み（柱壁。`renderer/StructuralLayer.jsx`の`ColumnsLayer`）にも
+同じ仕組みを適用する（`structural/columnWrapLineJoin.js`）。柱単位で個別に解決し、他の柱の包み辺
+とはマージしない（階段のエントリ単位解決と同じ考え方）。strokeWidthは階段と同じくviewport
+親Groupのscale継承（世界mm相当）のためscaleXで往復換算する。壁と取り合う辺（`trimmed`）は壁側の
+線に任せて対象外にする。線の太さ自体は壁のLOD仕様（`resolveStrokeWidth(shape.lineWeight, scale)`）
+と同じ関数・同じ引数系で決まり、既定の校正値では scale<=4（scaleDenominator>=1＝1/100〜1/1）で
+実スクリーン1.0pxに floor されるため、「細線同士は延長しない」規則により柱壁のL字延長は既定ズームでは
+発火しない。`viewport.js`の`zoomAt`はscaleXを20まで許すので、1/1より拡大した scale>4 ではpx幅が
+1を超えて延長が発火する（延長量は相手半幅＝0.125mm固定）。ユーザー決定2026-09: この挙動のまま受け入れる。
+
+第5弾でSVGレンダラ`structural/sectionFigure/AutoScaledFigure.jsx`（構造断面図・建具姿図・階段模式図等
+共通）にも適用する。SVG側はweight語彙を解釈せず常に`p.width??1`を幅にする（`sectionGeometry.js`ヘッダ
+規約）ため、`svgFigureLineJoin.js`の`resolveSvgFigureLinePoints(primitives, t)`が
+`resolveJoinedLinePoints`をlineWeightsPx無しで呼び、primitivesと1:1対応する配列（line以外はnull）を
+返す——`.jsx`はどの配列を渡すか・indexをどう引くかを判断せず`linePts[i]`で読むだけにする。実機で
+width1.5px以上の線は`finish/stair/stairFigure.js`の外形と`memberFigures.js`のブレース×線の2箇所。
+後者は交差する2本の4端点が互いに相異なり「ちょうど2本が集まる角」にならないため対象外——
+効果は階段模式図に限られる。
+
 ## 面の配置・注記帯
 面配置・壁芯間寸法は`face.lo/hi`（仕上げ面）ではなく`faceBoundaryLocalX`（壁中心線）基準（壁面線=CUTのみ仕上げ面基準）。
 `buildRoomBand`/`buildStairBand`の面配置ループ・帯確定処理は`elevationBand.js`の`layoutBandFaces`/`finalizeBand`へ一本化済み（2026-08リファクタ）

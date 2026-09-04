@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { figureBounds, chooseScale, scaleLabel, makeTransform } from './sectionGeometry.js';
 import { NumPad } from '../../ui/NumPad.jsx';
 import { LABEL_ID_SUFFIX } from './layoutStudy.js';
+import { resolveSvgFigureLinePoints } from './svgFigureLineJoin.js';
 
 // 2つの figureBounds を内包する和（配置検討で欄外へ逃げた要素もキャンバスに収めるため）。
 function unionBounds(a, b) {
@@ -82,11 +83,16 @@ export function AutoScaledFigure({ primitives, boundsPrimitives, maxWidth = 320,
     }
   }); // 毎レンダー（選択・移動の都度）追従
 
+  // L字の角の外角を閉じる延長（svgFigureLineJoin.js。primitivesと1:1対応する配列を1回だけ
+  // 計算し、case 'line'はindexで読むだけにする——「どの配列を渡すか／indexをどう引くか」の
+  // 配線判断を.jsxに残さない）。
+  const linePts = resolveSvgFigureLinePoints(primitives, t);
+
   const figureBody = (
     <div style={{ position: 'relative', width: t.pxWidth, height: t.pxHeight }}>
       <svg width={t.pxWidth} height={t.pxHeight} style={{ display: 'block' }}>
         {primitives.map((p, i) => {
-          const el = renderPrimitive(p, i, t, interactive);
+          const el = renderPrimitive(p, i, t, interactive, linePts);
           if (study && p.layoutId) {
             const sel = p.layoutId === study.selectedId;
             return (
@@ -148,42 +154,46 @@ function dimLabelHandles(primitives, t, study) {
   });
 }
 
-function renderPrimitive(p, key, t, interactive) {
+function renderPrimitive(p, i, t, interactive, linePts) {
   switch (p.type) {
     case 'rect': {
       const x = t.tx(p.x), y = t.ty(p.y), w = t.sx(p.w), h = t.sx(p.h);
       // rx(mm): 角丸半径（レバーハンドルのカプセル形等）。未指定時は従来どおり角丸なし。
       const rx = p.rx != null ? t.sx(p.rx) : undefined;
       return (
-        <g key={key}>
+        <g key={i}>
           <rect x={x} y={y} width={w} height={h} rx={rx}
             fill={p.fill ?? 'none'} stroke={p.stroke ?? COLOR.stroke} strokeWidth={1} />
-          {p.hatch === 'concrete' && concreteHatch(x, y, w, h, key)}
+          {p.hatch === 'concrete' && concreteHatch(x, y, w, h, i)}
         </g>
       );
     }
     case 'circle':
       // rPx指定時は縮尺に関わらず常に同じpx半径で描く（交点マーカー等の目印用。実寸の丸はrをmmで指定）。
-      return <circle key={key} cx={t.tx(p.cx)} cy={t.ty(p.cy)} r={p.rPx ?? t.sx(p.r)}
+      return <circle key={i} cx={t.tx(p.cx)} cy={t.ty(p.cy)} r={p.rPx ?? t.sx(p.r)}
         fill={p.fill ?? 'none'} stroke={p.stroke ?? COLOR.stroke} strokeWidth={1} />;
-    case 'line':
-      return <line key={key} x1={t.tx(p.x1)} y1={t.ty(p.y1)} x2={t.tx(p.x2)} y2={t.ty(p.y2)}
+    case 'line': {
+      // L字の角の外角閉じ（svgFigureLineJoin.js）を反映済みのpx座標。indexで引くだけ
+      // （linePointsPxの呼び出し・joinedの参照は resolveSvgFigureLinePoints 側に一本化済み）。
+      const [x1, y1, x2, y2] = linePts[i];
+      return <line key={i} x1={x1} y1={y1} x2={x2} y2={y2}
         stroke={p.stroke ?? COLOR.stroke} strokeWidth={p.width ?? 1}
         strokeDasharray={p.dash === 'center' ? AXIS_DASH : p.dash === 'dashed' ? '4 3' : undefined} />;
+    }
     case 'polyline':
-      return <polyline key={key} points={p.points.map(([x, y]) => `${t.tx(x)},${t.ty(y)}`).join(' ')}
+      return <polyline key={i} points={p.points.map(([x, y]) => `${t.tx(x)},${t.ty(y)}`).join(' ')}
         fill={p.closed ? (p.fill ?? 'none') : 'none'} stroke={p.stroke ?? COLOR.stroke} strokeWidth={1} />;
     case 'hSection':
-      return renderHSection(p, key, t);
+      return renderHSection(p, i, t);
     case 'text':
-      return <text key={key} x={t.tx(p.x)} y={t.ty(p.y)} fontSize={p.size ?? 11}
+      return <text key={i} x={t.tx(p.x)} y={t.ty(p.y)} fontSize={p.size ?? 11}
         textAnchor={p.anchor ?? 'middle'} dominantBaseline={p.baseline ?? 'alphabetic'} fill={p.fill ?? '#1e293b'}>{p.text}</text>;
     case 'arrow': {
       // 走行矢印（始点丸＋線／折れ線＋矢じり＋ラベル）。階段の模式図で U/D の昇り方向を示す。
       // points があれば折れ線U字矢印（折返し/回り階段）。なければ x1,y1→x2,y2 の直線。
       const flat = p.points ?? [p.x1, p.y1, p.x2, p.y2];
       const sx = [], sy = [];
-      for (let i = 0; i < flat.length; i += 2) { sx.push(t.tx(flat[i])); sy.push(t.ty(flat[i + 1])); }
+      for (let k = 0; k < flat.length; k += 2) { sx.push(t.tx(flat[k])); sy.push(t.ty(flat[k + 1])); }
       const last = sx.length - 1;
       const x1 = sx[0], y1 = sy[0], x2 = sx[last], y2 = sy[last];
       const dx = x2 - sx[last - 1], dy = y2 - sy[last - 1], len = Math.hypot(dx, dy) || 1; // 最終区間で矢じり向き
@@ -192,11 +202,11 @@ function renderPrimitive(p, key, t, interactive) {
       const HEAD = 6, SPREAD = 3;                  // 矢じり長・広がり(px)
       const hx = x2 - ux * HEAD, hy = y2 - uy * HEAD;
       const stroke = p.stroke ?? COLOR.stroke;
-      const linePts = sx.map((x, i) => `${x},${sy[i]}`).join(' ');
+      const linePolylinePts = sx.map((x, k) => `${x},${sy[k]}`).join(' ');
       return (
-        <g key={key} stroke={stroke} fill={stroke}>
+        <g key={i} stroke={stroke} fill={stroke}>
           <circle cx={x1} cy={y1} r={1.6} />
-          <polyline points={linePts} fill="none" strokeWidth={1} />
+          <polyline points={linePolylinePts} fill="none" strokeWidth={1} />
           <line x1={x2} y1={y2} x2={hx + nx * SPREAD} y2={hy + ny * SPREAD} strokeWidth={1} />
           <line x1={x2} y1={y2} x2={hx - nx * SPREAD} y2={hy - ny * SPREAD} strokeWidth={1} />
           {p.label && <text x={t.tx(p.labelX)} y={t.ty(p.labelY)} fontSize={10}
@@ -209,7 +219,7 @@ function renderPrimitive(p, key, t, interactive) {
       // （px固定だと変位寸法と重なるため。位置制御を geometry 側へ委ねる）。
       const x = t.tx(p.x);
       return (
-        <g key={key}>
+        <g key={i}>
           <line x1={x} y1={2} x2={x} y2={t.pxHeight} stroke={COLOR.axis} strokeWidth={1} strokeDasharray={AXIS_DASH} />
           {p.label && <text x={x} y={9} fontSize={10} textAnchor="middle" fill="#94a3b8">{p.label}</text>}
         </g>
@@ -218,7 +228,7 @@ function renderPrimitive(p, key, t, interactive) {
     case 'levelLine': {
       const y = t.ty(p.y);
       return (
-        <g key={key}>
+        <g key={i}>
           <line x1={FIGURE_X0} y1={y} x2={t.pxWidth} y2={y} stroke={COLOR.axis} strokeWidth={1} />
           {/* noLabel: ラベルを別の text プリミティブで持つ場合（GLを通り芯のように独立移動させる）は描かない。
               below: 線の下側から押さえるレベル記号（△CH等。既定は線の上側から▽）。 */}
@@ -229,7 +239,7 @@ function renderPrimitive(p, key, t, interactive) {
       );
     }
     case 'dim':
-      return renderDim(p, key, t, interactive);
+      return renderDim(p, i, t, interactive);
     default:
       return null;
   }
