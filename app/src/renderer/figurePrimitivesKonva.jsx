@@ -1,5 +1,6 @@
 import { Line, Rect, Circle, Text, Group } from 'react-konva';
 import { DASH_CENTER, DASH_DASHED, centerDashOffsetPx } from './dashPhase.js';
+import { weightPx, resolveJoinedLinePoints, linePointsPx } from './figureLineJoin.js';
 import { miterTriangleVertices, verticalDimLabelBox, horizontalDimLabelBox } from '../elevation/elevationLayout.js';
 import { TRIANGLE_HEIGHT_SCREEN_MM, TRIANGLE_ANGLE_DEG } from '../elevation/elevationStyle.js';
 
@@ -28,11 +29,6 @@ function centerDashOffset(p, t) {
   const isVertical = Math.abs(y2 - y1) >= Math.abs(x2 - x1);
   const anchor = isVertical ? t.ty(p.dashAnchor) : t.tx(p.dashAnchor);
   return centerDashOffsetPx(Math.abs(anchor - (isVertical ? y1 : x1)));
-}
-
-function weightPx(p, lineWeightsPx) {
-  if (p.weight && lineWeightsPx?.[p.weight] != null) return lineWeightsPx[p.weight];
-  return p.width ?? 1;
 }
 
 function dashArray(dash) {
@@ -129,16 +125,18 @@ function renderMiterTriangle(p, key, t, screenPxPerMm) {
   );
 }
 
-function renderOne(p, i, t, lineWeightsPx, screenPxPerMm, onTagClick) {
+function renderOne(p, i, t, lineWeightsPx, screenPxPerMm, onTagClick, joined) {
   const key = `p${i}`;
   switch (p.type) {
-    case 'line':
+    case 'line': {
+      const points = linePointsPx(p, i, t, joined);
       return (
-        <Line key={key} points={[t.tx(p.x1), t.ty(p.y1), t.tx(p.x2), t.ty(p.y2)]}
+        <Line key={key} points={points}
           stroke={p.stroke ?? STROKE_COLOR} strokeWidth={weightPx(p, lineWeightsPx)}
           dash={dashArray(p.dash)} dashOffset={centerDashOffset(p, t)}
           strokeScaleEnabled={false} listening={false} />
       );
+    }
     case 'rect':
       return (
         <Rect key={key} x={t.tx(p.x)} y={t.ty(p.y)} width={t.sx(p.w)} height={t.sx(p.h)}
@@ -185,8 +183,10 @@ function renderOne(p, i, t, lineWeightsPx, screenPxPerMm, onTagClick) {
  * @returns {import('react').ReactNode[]}
  */
 export function renderFigurePrimitives(primitives, t, { lineWeightsPx, screenPxPerMm, onTagClick } = {}) {
+  // L字の角の外角を閉じる延長（figureLineJoin.js。px座標のみを角の2点に限って動かす）。
+  const joined = resolveJoinedLinePoints(primitives, t, lineWeightsPx);
   return primitives.flatMap((p, i) => {
-    const el = renderOne(p, i, t, lineWeightsPx, screenPxPerMm, onTagClick);
+    const el = renderOne(p, i, t, lineWeightsPx, screenPxPerMm, onTagClick, joined);
     return el == null ? [] : el;
   });
 }
