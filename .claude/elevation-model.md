@@ -381,6 +381,15 @@ width1.5px以上の線は`finish/stair/stairFigure.js`の外形と`memberFigures
 後者は交差する2本の4端点が互いに相異なり「ちょうど2本が集まる角」にならないため対象外——
 効果は階段模式図に限られる。
 
+第6弾で平面図モードの段差断面レイヤ（`renderer/StepSectionLayer.jsx`）の断面線3本（上段床→蹴上げ→
+下段床のZ字）の2つの角にも適用する（`finish/stepSectionLineJoin.js`）。段差線・ハッチ・寸法・引出線は
+対象外。角は常に直角・両側とも同じ太さ（thick）のため、既定の校正値（thick=3px）では各角が実1.5px
+（相手半幅）ずつ外側へ閉じる（ズーム非依存）。往復（strokeScaleEnabled未指定＝Group拡縮継承レイヤの
+世界mm相当strokeWidthを実px化してjoin解決し、世界mm相当へ戻す）は3例目にして姉妹関数
+`renderer/planLineJoin.js`の`resolvePlanLinePointsMmScaledStroke`として切り出した（呼び分け:
+strokeScaleEnabled未指定のレイヤはこちら、実px直指定`strokeScaleEnabled={false}`のレイヤは
+`resolvePlanLinePointsMm`）。既存2例（階段・柱包み）の自前往復は未移行——移行は別途判断。
+
 ## 面の配置・注記帯
 面配置・壁芯間寸法は`face.lo/hi`（仕上げ面）ではなく`faceBoundaryLocalX`（壁中心線）基準（壁面線=CUTのみ仕上げ面基準）。
 `buildRoomBand`/`buildStairBand`の面配置ループ・帯確定処理は`elevationBand.js`の`layoutBandFaces`/`finalizeBand`へ一本化済み（2026-08リファクタ）

@@ -47,3 +47,35 @@ export function resolvePlanLinePointsMm(prims, lineWeightsPx, viewportLike) {
   });
   return result;
 }
+
+/**
+ * resolvePlanLinePointsMmの姉妹関数（第6弾）。呼び出し元のレイヤーが`strokeScaleEnabled`を
+ * 指定していない（既定true。Konvaの親GroupのscaleX/scaleYを継承する）場合、`<Line>`へ渡す
+ * strokeWidthは実スクリーンpxではなく「世界mm相当値」になる（finish/stair/stairLineJoinPrimitives.js・
+ * structural/columnWrapLineJoin.jsが個別に持っていた往復と同じ状況）。本関数はその往復
+ * （①viewportLike.scaleXを掛けて実px化→②resolvePlanLinePointsMmへ委譲→③戻り値のwidthを
+ * 再びscaleXで割って世界mm相当へ戻す）を一本化したもの。
+ *
+ * **呼び分け**: `strokeScaleEnabled`未指定（Group拡縮継承）のレイヤはこちら
+ * （`resolvePlanLinePointsMmScaledStroke`）。実px直指定（`strokeScaleEnabled={false}`）の
+ * レイヤは`resolvePlanLinePointsMm`をそのまま使う。
+ *
+ * prims[].widthは常に実px直指定として扱われる（`weight`表を引く経路は持たない——
+ * columnWrapLineJoin.jsと同じ理由。呼び出し側が太さの判断をすでに済ませているため）。
+ *
+ * @param {{key, x1:number,y1:number,x2:number,y2:number, width:number, dash?:*}[]} prims
+ *   - width: 世界mm相当値（呼び出し側の`strokeWidth`値そのもの。実pxではない）
+ * @param {{worldToScreen, screenToWorld, scaleX:number}} viewportLike
+ * @returns {Map<*, {points:[number,number,number,number], width:number}>} widthは世界mm相当
+ */
+export function resolvePlanLinePointsMmScaledStroke(prims, viewportLike) {
+  const scaleX = viewportLike.scaleX;
+  const scaledPrims = prims.map(p => ({ ...p, width: p.width * scaleX }));
+  const joined = resolvePlanLinePointsMm(scaledPrims, undefined, viewportLike);
+  const result = new Map();
+  for (const p of prims) {
+    const j = joined.get(p.key);
+    result.set(p.key, { points: j.points, width: j.width / scaleX });
+  }
+  return result;
+}

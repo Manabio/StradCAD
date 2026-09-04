@@ -2,6 +2,7 @@ import { observer } from 'mobx-react-lite';
 import { Group, Line, Text, Circle } from 'react-konva';
 import { LodLevel } from '../viewport.js';
 import { computeStepSections } from '../finish/stepSection.js';
+import { stepSectionProfileRenderProps } from '../finish/stepSectionLineJoin.js';
 
 const STEP_SECTION_STROKE = '#1e293b'; // 断面線の色（StairLayerの階段断面と同系）
 const HATCH_COLOR         = '#94a3b8'; // ハッチ線色
@@ -38,9 +39,8 @@ export const StepSectionLayer = observer(({ graph, viewport }) => {
   const isSchematic = viewport.lodLevel === LodLevel.SCHEMATIC;
   const showDetail  = viewport.lodLevel === LodLevel.DETAIL;
   // 段差線: 略図＝細線 / 標準・詳細＝中線。断面線は太線、ハッチ・寸法は細線。
-  const stepStroke    = px(isSchematic ? weights.thin : weights.medium);
-  const profileStroke = px(weights.thick);
-  const thinStroke    = px(weights.thin);
+  const stepStroke = px(isSchematic ? weights.thin : weights.medium);
+  const thinStroke = px(weights.thin);
 
   const sections = computeStepSections(graph);
 
@@ -60,12 +60,12 @@ export const StepSectionLayer = observer(({ graph, viewport }) => {
           strokeWidth={stepStroke}
           listening={false}
         />
-        {showDetail && s.profileSegs.map((seg, i) => (
+        {showDetail && stepSectionProfileRenderProps(s, viewport, weights).map(p => (
           <Line
-            key={`p${i}`}
-            points={[seg.x1, seg.y1, seg.x2, seg.y2]}
+            key={p.key}
+            points={p.points}
             stroke={STEP_SECTION_STROKE}
-            strokeWidth={profileStroke}
+            strokeWidth={p.strokeWidth}
             listening={false}
           />
         ))}

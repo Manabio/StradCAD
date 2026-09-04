@@ -4,12 +4,13 @@
 // テストで守られていることを示すため（site/siteLineJoinPrimitives.test.jsと同じ方針）。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { resolvePlanLinePointsMm } from './planLineJoin.js';
+import { resolvePlanLinePointsMm, resolvePlanLinePointsMmScaledStroke } from './planLineJoin.js';
 
 const WEIGHTS = { thin: 1, medium: 2, thick: 3, ultraThick: 4 };
 
 function fakeViewport(scaleX, scaleY = scaleX, offsetX = 37, offsetY = -52) {
   return {
+    scaleX, scaleY,
     worldToScreen: (x, y) => ({ x: x * scaleX + offsetX, y: y * scaleY + offsetY }),
     screenToWorld: (x, y) => ({ x: (x - offsetX) / scaleX, y: (y - offsetY) / scaleY }),
   };
@@ -124,4 +125,58 @@ test('失敗系: 長さ0の線分 → 座標不変', () => {
   assert.ok(Math.abs(y1 - 50) < 1e-6);
   assert.ok(Math.abs(x2 - 50) < 1e-6);
   assert.ok(Math.abs(y2 - 50) < 1e-6);
+});
+
+// ---- resolvePlanLinePointsMmScaledStroke（strokeScaleEnabled未指定＝Group拡縮継承レイヤ向け姉妹関数。第6弾） ----
+// widthは世界mm相当値（実pxではない）で渡す。往復（×scaleX→resolvePlanLinePointsMm→÷scaleX）を
+// 通しても、延長量は「実px基準」で決まる（世界mm相当ぶんではない）ことを確認する。
+
+test('世界mm相当widthを渡すと、延長量は実px基準で決まる（延長mm×scaleがscale∈{0.0378,0.001,20}で一定）', () => {
+  const results = [0.0378, 0.001, 20].map(scaleX => {
+    const vp = fakeViewport(scaleX);
+    // width=3/scaleX（世界mm相当）は常に実3pxに相当する（Group拡縮継承の想定どおり）。
+    const prims = [
+      { key: 'a', x1: 0, y1: 0, x2: 100, y2: 0, width: 3 / scaleX },
+      { key: 'b', x1: 100, y1: 0, x2: 100, y2: 100, width: 3 / scaleX },
+    ];
+    const resolved = resolvePlanLinePointsMmScaledStroke(prims, vp);
+    const [, , ax2] = resolved.get('a').points;
+    return (ax2 - 100) * scaleX;
+  });
+  assert.ok(Math.abs(results[0] - results[1]) < 1e-9, `期待:一定, 実際:${results}`);
+  assert.ok(Math.abs(results[0] - results[2]) < 1e-9, `期待:一定, 実際:${results}`);
+});
+
+// (v*s)/s === v は一般には1ULPずれ得るが、本番形状（width = thick/scaleX）では往復がビット一致する
+// （QA実測: thick∈{3..12}×scaleX∈[0.001,20] の200万点で不一致0）。ここでは本番形状で固定する。
+test('返り値widthは本番形状（thick/scaleX）で往復ビット一致し、非等方ズームでもscaleX基準', () => {
+  for (const [sx, sy] of [[2.6, 2.6], [0.0378, 0.05]]) {
+    const vp = fakeViewport(sx, sy);
+    const width = 3 / vp.scaleX;
+    const prims = [
+      { key: 'a', x1: 0, y1: 0, x2: 100, y2: 0, width },
+      { key: 'b', x1: 100, y1: 0, x2: 100, y2: 100, width },
+    ];
+    const resolved = resolvePlanLinePointsMmScaledStroke(prims, vp);
+    assert.equal(resolved.get('a').width, width, `scale=${sx}/${sy}`);
+    assert.equal(resolved.get('b').width, width, `scale=${sx}/${sy}`);
+  }
+});
+
+test('実px関数(resolvePlanLinePointsMm)との等価性: width×scaleXを実px関数へ渡した結果とpointsが一致する', () => {
+  const vp = fakeViewport(2.6);
+  const prims = [
+    { key: 'a', x1: 0, y1: 0, x2: 100, y2: 0, width: 5 },
+    { key: 'b', x1: 100, y1: 0, x2: 100, y2: 100, width: 7 },
+  ];
+  const scaled = resolvePlanLinePointsMmScaledStroke(prims, vp);
+  const scaledPrims = prims.map(p => ({ ...p, width: p.width * vp.scaleX }));
+  const rawPx = resolvePlanLinePointsMm(scaledPrims, undefined, vp);
+  for (const p of prims) {
+    assert.deepEqual(scaled.get(p.key).points, rawPx.get(p.key).points);
+  }
+});
+
+test('失敗系(ScaledStroke): 空配列 → 空Map', () => {
+  assert.equal(resolvePlanLinePointsMmScaledStroke([], fakeViewport(0.0378)).size, 0);
 });
