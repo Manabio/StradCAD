@@ -1,0 +1,214 @@
+// wallDrawPlan（壁描画の1レンダー分の派生値解決）のテスト。
+//
+// resolveWallLines は ShapesLayer.jsx が下していた判断（仕上げ面線・内側線をどこで切るか、
+// キャップ線を描くか）を集約した純関数——.jsx はその返り値を <Line> へ写すだけになった。
+// これを純関数として抽出しただけでは「.jsx が正しい引数を渡すか」は検証されない
+// （QA指摘2026-09: isCapSuppressedへ空のcapSuppressを渡す・resolveWallFinSegmentsの戻り値を
+// 無視する・仕上げ面線をfinCuts側の区間で切る、の3種の変異がいずれもフルスイート緑のまま
+// だった）。本ファイルは実Wallインスタンス（PlanGraphで生成）を使い、
+// resolveWallLines／buildWallDrawPlan の呼び出し結果そのものを固定する。
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { Plane, PlanGraph, CenterLineType, Discipline } from '@core';
+import { LodLevel } from '../viewport.js';
+import { resolveWallTJunctions } from './wallJunctionResolve.js';
+import { buildWallDrawPlan, resolveWallLines } from './wallDrawPlan.js';
+
+const vCL = (g, v) => g.addCenterLine(CenterLineType.VERTICAL, v, { labeled: false, discipline: Discipline.ARCH });
+const hCL = (g, v) => g.addCenterLine(CenterLineType.HORIZONTAL, v, { labeled: false, discipline: Discipline.ARCH });
+// 部屋壁と同じ寸法（wallBase=90 / wallFinish=12.5 → axisOffset=±57.5。wallCorner.test.js と同じ）。
+const wall = (g, axisCL, axisOffset, isVertical, clS, offS, clE, offE, props = {}) =>
+  g.addWall(axisCL, axisOffset, isVertical, clS, offS, clE, offE, { isRoomWall: true, wallFinish: 12.5, ...props });
+
+// ---- 入隅（concave）フィクスチャ: wallJunctionResolve.test.js の実測T字コーナー
+// （垂直壁CL x=2500 が水平壁CL y=-5000 へ北側から突き当たる隅）を実Wallで再現する。
+function buildConcaveGraph() {
+  const g = new PlanGraph(new Plane('p', 0, '1階', 1, 1));
+  const xAxis = vCL(g, 2500), yAxis = hCL(g, -5000);
+  const yFar = hCL(g, -11900), xWestFar = vCL(g, 57.5), xEastFar = vCL(g, 4442.5);
+
+  const vThin  = wall(g, xAxis, -57.5, true, yFar, 0, yAxis, -57.5, { backingDepth: 0, finishSide: -1 });
+  const vOwner = wall(g, xAxis, 57.5, true, yFar, 0, yAxis, -57.5, { backingOffset: 0, backingDepth: 90, finishSide: 1 });
+  const hLeft  = wall(g, yAxis, -57.5, false, xWestFar, 0, xAxis, -57.5, { backingDepth: 0, finishSide: -1 });
+  const hRight = wall(g, yAxis, -57.5, false, xAxis, 57.5, xEastFar, 0, { backingDepth: 0, finishSide: -1 });
+
+  return { g, vThin, vOwner, hLeft, hRight };
+}
+
+// ---- 出隅（convex）フィクスチャ: wallCorner.test.js の【実機指摘】closeConvexCorners
+// テストと同じ数値（closeConvexCorners適用後の状態を直接組み立てる）。
+function buildConvexGraph() {
+  const g = new PlanGraph(new Plane('p', 0, '1階', 1, 1));
+  const x0 = vCL(g, 0), y0 = hCL(g, 0);
+  const yFar = hCL(g, -6000), xFar = vCL(g, -6000);
+  const v = wall(g, x0, 57.5, true, yFar, 0, y0, 57.5);
+  const h = wall(g, y0, 57.5, false, xFar, 0, x0, 57.5);
+  return { g, v, h };
+}
+
+// ---- T字（貫通）フィクスチャ: wallJunctionResolve.test.js の
+// 「faceCutsはAの全材幅…finCutsはAの下地幅になる」合成フィクスチャを実Wallで再現する
+// （wallBase=100・wallFinish=12.5 → axisOffset=±75。B=通し壁(下地オーナー)、
+// aOwner+aThin=Aの所有権ペア）。faceSegments/finSegmentsが異なる区間で切られることを
+// 実Wall経由で固定する——ここが薄いと「仕上げ面線をfinCuts側の区間で切る」変異を
+// 検出できない（QA指摘）。
+function buildThroughWallGraph() {
+  const g = new PlanGraph(new Plane('p', 0, '1階', 1, 1));
+  const xAxis = vCL(g, 2500), yAxis = hCL(g, 2000);
+  const xWest = vCL(g, 0), xEast = vCL(g, 7000), yTop = hCL(g, 0);
+
+  const b = g.addWall(yAxis, -75, false, xWest, 0, xEast, 0,
+    { isRoomWall: true, wallFinish: 12.5, backingOffset: 0, backingDepth: 125, finishSide: -1 });
+  const aOwner = g.addWall(xAxis, 75, true, yTop, 0, yAxis, -75,
+    { isRoomWall: true, wallFinish: 12.5, backingOffset: 0, backingDepth: 125, finishSide: 1 });
+  const aThin = g.addWall(xAxis, -75, true, yTop, 0, yAxis, -75,
+    { isRoomWall: true, wallFinish: 12.5, backingDepth: 0, finishSide: -1 });
+
+  return { g, b, aOwner, aThin };
+}
+
+test('resolveWallLines: 通し壁（実Wall）はfaceSegmentsがAの全材幅・finSegmentsがAの下地幅で別々に切られる', () => {
+  const { g, b } = buildThroughWallGraph();
+  const junctions = resolveWallTJunctions([...g.walls]);
+
+  const bLines = resolveWallLines(b, { junction: junctions.get(b.id) });
+  assert.deepEqual(bLines.segments, [[0, 7000]]);
+  assert.deepEqual(bLines.faceSegments, [[0, 2425], [2575, 7000]],
+    '仕上げ面線はAの全材幅（所有権ペア込み・2425〜2575）で切られるはず');
+  assert.deepEqual(bLines.finSegments, [[0, 2437.5], [2562.5, 7000]],
+    '内側線はAの下地幅（2437.5〜2562.5）で切られるはず——faceSegmentsとは異なる区間');
+});
+
+test('resolveWallLines: 入隅側の壁（実Wall）はfinSegments末尾が相手の内側線平面まで延び、cap抑止が立つ', () => {
+  const { g, vThin, hLeft } = buildConcaveGraph();
+  const junctions = resolveWallTJunctions([...g.walls]);
+
+  const hLeftLines = resolveWallLines(hLeft, { junction: junctions.get(hLeft.id) });
+  assert.deepEqual(hLeftLines.segments, [[57.5, 2442.5]]);
+  assert.deepEqual(hLeftLines.finSegments, [[57.5, 2455]],
+    'fin線の末尾がVthinの内側線位置(2455)まで延びるはず');
+  assert.equal(hLeftLines.capHiSuppressed, true, '入隅側のhi端はcap抑止が立つはず');
+  assert.equal(hLeftLines.capLoSuppressed, false, '自由端(lo)は変化しないはず');
+
+  const vThinLines = resolveWallLines(vThin, { junction: junctions.get(vThin.id) });
+  assert.deepEqual(vThinLines.finSegments, [[-11900, -5045]],
+    '対称側（Vthin）もHleftの内側線位置(-5045)まで延びるはず');
+  assert.equal(vThinLines.capHiSuppressed, true);
+});
+
+// ---- capLoSuppressedの配線検証（QA指摘: 既存テストがcapLoSuppressedについて
+// 「falseであること」しか主張しておらず、`capLoSuppressed:` を`false`固定に変異しても
+// 全緑になっていた）。右の隅（H-right/V-owner）はlo端が入隅、hi端が自由端という
+// 左の隅と非対称な構成のため、capLoSuppressedが実際にtrueになる経路を固定できる ----
+test('resolveWallLines: 右の隅（実Wall）はH-rightのlo端でcapLoSuppressedがtrueになる', () => {
+  const { g, hRight } = buildConcaveGraph();
+  const junctions = resolveWallTJunctions([...g.walls]);
+
+  const hRightLines = resolveWallLines(hRight, { junction: junctions.get(hRight.id) });
+  assert.deepEqual(hRightLines.segments, [[2557.5, 4442.5]]);
+  assert.deepEqual(hRightLines.finSegments, [[2545, 4442.5]],
+    'fin線の先頭がVownerの内側線位置(2545)まで延びるはず');
+  assert.equal(hRightLines.capLoSuppressed, true, '入隅側のlo端はcap抑止が立つはず');
+  assert.equal(hRightLines.capHiSuppressed, false, '自由端(hi)は変化しないはず');
+});
+
+test('resolveWallLines: 4枚一括の解決でVownerのhi端もfinSegments/capHiSuppressedが正しく解決される', () => {
+  const { g, vOwner } = buildConcaveGraph();
+  const junctions = resolveWallTJunctions([...g.walls]); // 4枚（vThin/vOwner/hLeft/hRight）一括
+
+  const vOwnerLines = resolveWallLines(vOwner, { junction: junctions.get(vOwner.id) });
+  assert.deepEqual(vOwnerLines.finSegments, [[-11900, -5045]],
+    'VownerのfinSegmentsのhi端はHrightの内側線位置(-5045)まで延びるはず');
+  assert.equal(vOwnerLines.capHiSuppressed, true);
+});
+
+// ---- 2026-09追記: buildConvexGraphのv/hはprops未指定＝対称壁（backingDepth既定式）のため
+// 実際にはbackingRangeを持つ（軸±45。core/wall.js「対称(backingDepth未指定)」枝）。
+// fin線をVownerの内側線位置(45)まで短縮しただけでは、そこがちょうど相手(h)の下地帯
+// [-45,45]の内側に収まってしまい、fin線が相手の下地帯を横切ったまま（角のblock内に
+// fin線が残る）——wallJunctionResolve.jsパス3（fin線の直交壁下地貫通防止）により、
+// 相手の下地帯ぶんさらに短縮され-45で終わるのが正しい（ユーザー確定仕様「fin線は
+// 直交する壁の下地を横切る区間を描かない」）。 ----
+test('resolveWallLines: 出隅側の壁（実Wall）はfinSegmentsが相手の下地帯ぶんさらに短縮され、cap抑止は立たない', () => {
+  const { g, v, h } = buildConvexGraph();
+  const junctions = resolveWallTJunctions([...g.walls]);
+
+  const vLines = resolveWallLines(v, { junction: junctions.get(v.id) });
+  assert.deepEqual(vLines.segments, [[-6000, 57.5]]);
+  assert.deepEqual(vLines.finSegments, [[-6000, -45]],
+    'fin線は相手(h)の内側線位置(45)まで短縮した上、さらに相手の下地帯[-45,45]を横切らず-45で終わるはず');
+  assert.equal(vLines.capHiSuppressed, false,
+    '出隅ではcap抑止は立たない（キャップの扱いは現状維持というユーザー確定仕様）');
+
+  const hLines = resolveWallLines(h, { junction: junctions.get(h.id) });
+  assert.deepEqual(hLines.finSegments, [[-6000, -45]]);
+  assert.equal(hLines.capHiSuppressed, false);
+});
+
+// ---- 実バグ再現（2026-09 QA指摘）: |axisOffset|===wallFinish の薄壁は内側線が軸CL上に
+// 潰れる（finVisible=false）。finish/stair/stairUnderWalls.jsのルール2（階段下部屋の
+// 外側仕上げ薄壁。axisOffset:-sign*outerFinish, wallFinish:outerFinish, backingDepth:0,
+// finishSideを渡さないためfaceDir=sign(axisOffset)で厳密に成立）が実際に生成する形状を
+// 実Wallで再現する。旧コード（wallFinish>0だけを見る）では、この壁がcapSuppressを
+// 立てるのにfin線自体は描かれず、端にcap・fin線がともに無くなる回帰があった。
+function buildCollapsedFinGraph() {
+  const g = new PlanGraph(new Plane('p', 0, '1階', 1, 1));
+  const xAxis = vCL(g, 1000), yAxis = hCL(g, 0);
+  const yFar = hCL(g, -5000), xWestFar = vCL(g, 0);
+
+  // collapsedV: axisOffset(-12.5) と wallFinish(12.5) の絶対値が等しく、finBoundaryが
+  // 軸CL(x=1000)上に潰れる（finVisible=false）。
+  const collapsedV = g.addWall(xAxis, -12.5, true, yFar, 0, yAxis, -12.5,
+    { isRoomWall: true, wallFinish: 12.5, backingDepth: 0, finishSide: -1 });
+  // hLeft: 通常の薄壁（finVisible=true）。collapsedVの面(x=987.5)で終端する。
+  const hLeft = g.addWall(yAxis, -12.5, false, xWestFar, 0, xAxis, -12.5,
+    { isRoomWall: true, wallFinish: 12.5, backingDepth: 0, finishSide: -1 });
+
+  return { g, collapsedV, hLeft };
+}
+
+test('【失敗系】buildWallDrawPlan: 内側線が軸CL上に潰れる薄壁（実Wall）はcapHiSuppressedがfalseのまま', () => {
+  const { g, hLeft } = buildCollapsedFinGraph();
+  const plan = buildWallDrawPlan(g, LodLevel.DETAIL);
+
+  const hLeftLines = plan.wallLines.get(hLeft.id);
+  assert.deepEqual(hLeftLines.finSegments, [[0, 987.5]],
+    '内側線が潰れた壁は延長先として採られないため、fin線は物理端のままのはず');
+  assert.equal(hLeftLines.capHiSuppressed, false,
+    '内側線が潰れた壁にキャップだけが抑止される回帰が起きていないはず（修正前はtrueになる）');
+});
+
+test('buildWallDrawPlan: 詳細LODでwallLinesが入隅・出隅の両方を実グラフ経由で正しく解決する', () => {
+  const concave = buildConcaveGraph();
+  const concavePlan = buildWallDrawPlan(concave.g, LodLevel.DETAIL);
+  assert.deepEqual(concavePlan.wallLines.get(concave.hLeft.id).finSegments, [[57.5, 2455]]);
+  assert.equal(concavePlan.wallLines.get(concave.hLeft.id).capHiSuppressed, true);
+
+  const convex = buildConvexGraph();
+  const convexPlan = buildWallDrawPlan(convex.g, LodLevel.DETAIL);
+  assert.deepEqual(convexPlan.wallLines.get(convex.v.id).finSegments, [[-6000, -45]],
+    '相手(h)の下地帯[-45,45]ぶんさらに短縮される（パス3。上のresolveWallLinesテスト参照）');
+  assert.equal(convexPlan.wallLines.get(convex.v.id).capHiSuppressed, false);
+});
+
+// ---- 失敗系: 標準LOD（wallJunctions=null）ではfinEnd/capSuppressが一切効かない
+// （T字取り合い解決は詳細LOD限定という既存仕様——標準・略図の描画を変えない）----
+test('【失敗系】buildWallDrawPlan: 標準LODではwallJunctionsがnullのままfinSegmentsは無変更', () => {
+  const { g, hLeft } = buildConcaveGraph();
+  const plan = buildWallDrawPlan(g, LodLevel.STANDARD);
+
+  assert.equal(plan.wallJunctions, null);
+  assert.deepEqual(plan.wallLines.get(hLeft.id).finSegments, [[57.5, 2442.5]],
+    '標準LODでは入隅の延長が効かず、fin線は物理端のままのはず');
+  assert.equal(plan.wallLines.get(hLeft.id).capHiSuppressed, false);
+});
+
+// ---- 失敗系: 自由端（相手がいない壁単体）はfinSegments/capSuppressedが無変更 ----
+test('【失敗系】resolveWallLines: 相手がいない壁（junctionなし）はfinSegments/capSuppressedが無変更', () => {
+  const { hLeft } = buildConcaveGraph();
+  const lines = resolveWallLines(hLeft, { junction: undefined });
+
+  assert.deepEqual(lines.finSegments, [[57.5, 2442.5]]);
+  assert.equal(lines.capLoSuppressed, false);
+  assert.equal(lines.capHiSuppressed, false);
+});

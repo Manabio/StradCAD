@@ -5,6 +5,7 @@ import { isEndpointAt } from '../transform/centerLineExtend.js';
 import { LodLevel, resolveStrokeWidth } from '../viewport.js';
 import { subtractIntervals } from '../finish/stair/stairGeometry.js';
 import { buildWallDrawPlan } from './wallDrawPlan.js';
+import { ENDPOINT_EPS } from './wallJunctionResolve.js';
 import { graphComputed } from './graphDerived.js';
 
 const DASH = {
@@ -19,8 +20,6 @@ const WALL_BACKING_PITCH = 450;
 // 壁下地の角材を通り芯方向に描く際の見かけ幅(mm)。実材の長手方向寸法は壁データに
 // 持たないため、間柱の標準的な厚み（□-90×45 の 45 側）を描画上の固定値として使う。
 const WALL_STUD_WIDTH = 45;
-// 端点はねだし判定の座標許容誤差(mm)
-const ENDPOINT_EPS = 0.5;
 
 function strokeProps(shape, scaleX, scaleY) {
   return {
@@ -69,7 +68,7 @@ export const ShapesLayer = observer(({ graph, viewport, stairUnderClips = null }
   // される——毎回総当たりし直すと実測約30ms/レンダーで、60fps の予算を一回で使い切る
   // （平面モードのカクつきの主因）。
   // LOD ごとに結果が違うため lodLevel をキーに含める（graphDerived.js の約束）。
-  const { deferredBackingIds, wallJunctions, kneeDropOverlays, columnCuts, openingsByWall } =
+  const { deferredBackingIds, wallJunctions, kneeDropOverlays, columnCuts, wallLines } =
     graphComputed(graph, `wallDrawPlan:${lodLevel}`, () => buildWallDrawPlan(graph, lodLevel));
 
   return graph.generalShapes.map((shape) => {
@@ -109,17 +108,13 @@ export const ShapesLayer = observer(({ graph, viewport, stairUnderClips = null }
         // 2a壁（階段下部屋の偏芯壁）は末尾で1回だけ描画クリップ（stairUnderClips）を適用する
         // （破れ線より階段踏面側の部分を描かない。.claude/stair-model.md 参照）。
         const out = (() => {
-        // ホストされた開口がある区間を除いた複数の区間に分割する
-        // （openingsByWall は coord1 昇順で解決済み・読み取り専用。wallDrawPlan.js 参照）
-        const openings = openingsByWall.get(shape.id) ?? [];
+        // 壁1本分の描画ライン（開口分割・仕上げ面線・内側線・キャップ抑止）は
+        // wallDrawPlan.js の resolveWallLines に判断を集約済み——ここは写像するだけ
+        // （そちらのJSDoc参照。開口・T字/コーナー取り合い・柱の仕上げ包みを
+        // buildWallDrawPlan内でまとめて解決している）。
+        const plan = wallLines.get(shape.id);
+        const { segments, faceSegments, finSegments, finBoundary, finVisible, capLoSuppressed, capHiSuppressed } = plan;
         const lo = Math.min(shape.coord1, shape.coord2), hi = Math.max(shape.coord1, shape.coord2);
-        const segments = [];
-        let cursor = lo;
-        for (const o of openings) {
-          if (o.coord1 > cursor) segments.push([cursor, o.coord1]);
-          cursor = Math.max(cursor, o.coord2);
-        }
-        if (cursor < hi) segments.push([cursor, hi]);
 
         if (lodLevel === LodLevel.SCHEMATIC) {
           // 略図: 軸オフセット位置の単線（厚み表現なし）
@@ -158,9 +153,8 @@ export const ShapesLayer = observer(({ graph, viewport, stairUnderClips = null }
         }
 
         // 標準・詳細: 軸CL(柱芯) 〜 face(仕上げ面) の帯で実厚を表現
-        // 中心線(axisV)は CenterLinesLayer が別途描画するため、ここでは重複させない
+        // 中心線は CenterLinesLayer が別途描画するため、ここでは重複させない
         // （仕上げ面の長辺 + 両端の妻線のみを描き、軸CL上の長辺は描かない）
-        const axisV = shape.axisCL.effectiveValue;
         const faceV = shape.axisValue;
 
         // 妻線(cap)・端点はねだし部木口(ecap)の描画範囲: 既定（backingDepth未指定=null）は
@@ -171,25 +165,7 @@ export const ShapesLayer = observer(({ graph, viewport, stairUnderClips = null }
         // （階段下壁のコーナートリム stairUnderWalls.js でも同じ式を使う）。
         const { lo: capLo, hi: capHi } = shape.materialRange;
 
-        // 壁のT字取り合い（wallJunctionResolve.js）: 自壁が「突き当たり側（A）」の場合は
-        // baseExtend、「通し壁（B）」の場合は finishCuts が入る（両方同時に持つ壁もありうる）。
-        // 詳細LOD以外（wallJunctions=null）は常に空——標準・略図の描画は一切変えない。
-        const junction    = wallJunctions?.get(shape.id);
-        const baseExtend  = junction?.baseExtend ?? {};
-        const finishCuts  = junction?.finishCuts ?? [];
-        // 仕上げ面線・仕上げ境界線（fin線）専用のセグメント: 直交する通し壁側からの
-        // finishCuts があれば、その区間だけ切り欠く（cap線・下地には適用しない——
-        // cap線は自壁の物理端点の断面、下地は baseExtend で別途扱う）。
-        // 柱の仕上げ包み（柱壁）が占める区間も同じ切り欠きとして扱う（columnWallCuts）。
-        // **層ごとに区間が違う**——仕上げ面線は柱壁の外形幅、仕上げ境界線・下地は内側境界の幅で
-        // 切る（同じ区間で切ると柱側の境界線と端が食い違い、柱を一周して見える）。
-        const colCuts = columnCuts?.get(shape.id) ?? null;
-        const cutBy = extra => (finishCuts.length === 0 && extra.length === 0) ? segments
-          : segments.flatMap(([a, b]) => subtractIntervals(a, b, [...finishCuts, ...extra]));
-        const finishSegments   = cutBy(colCuts?.face ?? []); // 仕上げ面線
-        const finBoundarySegs  = cutBy(colCuts?.fin ?? []);  // 仕上げ／下地の境界線
-
-        const faceLines = finishSegments.map(([a, b], i) => (
+        const faceLines = faceSegments.map(([a, b], i) => (
           <Line
             key={`${shape.id}:face:${i}`}
             points={shape.isVertical
@@ -199,13 +175,13 @@ export const ShapesLayer = observer(({ graph, viewport, stairUnderClips = null }
             {...sp}
           />
         ));
-        // cap線（妻線）: 自壁がT字の突き当たり側（A）としてその端で baseExtend を持つ場合、
-        // その端は下地がB内部へ食い込む取り合いになり、そこで壁が「終わる」断面線は不要
-        // なため描画を抑止する（自壁の物理両端＝最初のセグメントのa・最後のセグメントのb
-        // でのみ判定。開口で分割された中間セグメント境界は対象外）。
+        // cap線（妻線）: 抑止するかどうかの判断（capLoSuppressed/capHiSuppressed）は
+        // wallDrawPlan.js の resolveWallLines に集約済み——ここは自壁の物理両端
+        // （最初のセグメントのa＝lo端／最後のセグメントのb＝hi端）でのみ適用して写像するだけ
+        // （開口で分割された中間セグメント境界は対象外）。
         const capLines = segments.flatMap(([a, b], i) => {
           const line = [];
-          if (!(i === 0 && baseExtend.lo != null)) {
+          if (!(i === 0 && capLoSuppressed)) {
             line.push(
               <Line
                 key={`${shape.id}:capA:${i}`}
@@ -214,7 +190,7 @@ export const ShapesLayer = observer(({ graph, viewport, stairUnderClips = null }
               />,
             );
           }
-          if (!(i === segments.length - 1 && baseExtend.hi != null)) {
+          if (!(i === segments.length - 1 && capHiSuppressed)) {
             line.push(
               <Line
                 key={`${shape.id}:capB:${i}`}
@@ -235,23 +211,18 @@ export const ShapesLayer = observer(({ graph, viewport, stairUnderClips = null }
 
         const elems = [...rects];
 
-        // dir: 仕上げ面が向く側（Wall.faceDir に集約。finishSide優先／axisOffset===0はfallback）。
-        // 境界判定は axisV〜faceV の対称範囲（axisOffset===0で潰れる）ではなく、実際に材が
-        // 存在する範囲 materialRange（capLo/capHi。backingDepth等の偏芯を反映）で行う。
-        // 境界の等号は含める（<= / >=）: backingDepth===0（下地なし＝仕上げのみの薄壁。階段下
-        // レーン間薄壁・CL偏芯の非オーナー薄壁）は capLo===boundary または capHi===boundary に
-        // ちょうど一致するため、厳密不等号だと線が消える（QA回帰）。ただし axisV に一致する
-        // （=下地帯が無い対称壁で仕上げ厚が壁厚と同値になる退化ケース）は境界線として無意味なため
-        // ENDPOINT_EPS で除外する。
-        const dir      = shape.faceDir;
-        const boundary = faceV - dir * shape.wallFinish;
-        if (shape.wallFinish > 0 && boundary >= capLo && boundary <= capHi && Math.abs(boundary - axisV) > ENDPOINT_EPS) {
-          elems.push(...finBoundarySegs.map(([a, b], i) => (
+        // 内側線（fin線）の位置(finBoundary)と可視性(finVisible)は wallJunctionResolve.js の
+        // resolveFinVisibility（唯一の供給源。パス2の候補判定=makeViewと同じ関数）が
+        // wallDrawPlan.js経由で解決済み——ここは写像するだけ（旧: capLo/capHi/axisVを使う
+        // 同じ式をこの.jsx側にも重複して持っており、ENDPOINT_EPSの定義ドリフトを含め
+        // 実バグの一因だった）。
+        if (finVisible) {
+          elems.push(...finSegments.map(([a, b], i) => (
             <Line
               key={`${shape.id}:fin:${i}`}
               points={shape.isVertical
-                ? [boundary, a, boundary, b]
-                : [a, boundary, b, boundary]
+                ? [finBoundary, a, finBoundary, b]
+                : [a, finBoundary, b, finBoundary]
               }
               {...sp}
             />
@@ -286,7 +257,11 @@ export const ShapesLayer = observer(({ graph, viewport, stairUnderClips = null }
         // 共有する（backingRange===null は「下地なし＝仕上げのみの薄壁」で描画しない）。
         // T字取り合いで自壁が突き当たり側（A）の場合、baseExtend の端まで下地の描画範囲を
         // 延ばす（通し壁の仕上げ層を貫通して相手の下地近位面まで到達する見た目にする。
-        // 仕上げ関連要素＝finishSegments とは独立に扱う）。
+        // 仕上げ関連要素＝faceSegments とは独立に扱う。baseExtend/colCuts.backing は
+        // resolveWallLines の対象外——下地断面はfin/face線とは別の描画要素のため、
+        // ここは従来どおりwallJunctions/columnCutsを直接参照する）。
+        const baseExtend = wallJunctions?.get(shape.id)?.baseExtend ?? {};
+        const colCuts = columnCuts?.get(shape.id) ?? null;
         const backingBand = shape.backingRange;
         if (backingBand && !deferredBackingIds.has(shape.id)) {
           const backingDepth = backingBand.hi - backingBand.lo;

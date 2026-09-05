@@ -1,7 +1,8 @@
 /**
  * 平面の壁描画に必要な「壁をまたぐ派生値」を1レンダー分まとめて解決する純モジュール。
  * ShapesLayer.jsx の描画前準備（下地の重複防止・T字取り合い・腰壁垂れ壁・柱の仕上げ包み・
- * 壁ごとの開口）をレンダラから切り出したもの。挙動は切り出し前と同じ。
+ * 壁ごとの開口・壁ごとの面線/内側線/キャップ抑止の解決＝resolveWallLines）をレンダラから
+ * 切り出したもの。挙動は切り出し前と同じ。
  *
  * 切り出した理由は2つ:
  *   1. **メモ化の継ぎ目**——これらは graph が変わらない限り同じ結果を返すのに、
@@ -11,10 +12,33 @@
  *      実行できず、コストを単体で測れなかった。
  *
  * 純モジュール（node:test / node 直実行から単体 import 可能。store.js・*.jsx を静的に引かない）。
+ *
+ * ## ShapesLayer.jsx に残る未検証ロジック（構造的な残余。2026-09時点）
+ * このモジュールへ「判断」を寄せたが、`.jsx` 側にはまだ react-konva を静的 import するために
+ * node から検証できないロジックが残る——site/stair/柱包みの各レイヤーと同じ扱いで、これらは
+ * **写像であって判断ではない**（対象の型・座標をどのKonvaノードへどう対応付けるかという
+ * 描画特有の関心事）と整理した上で意図的に残している:
+ *   - `wallLines.get(shape.id)` の取り出しと各フィールドへの分配
+ *   - `faceSegments`/`finSegments` と実際の描画座標（`faceV`/`plan.finBoundary`、
+ *     `shape.isVertical`による軸の振り分け）との対応付け
+ *   - cap 抑止フラグ（`capLoSuppressed`/`capHiSuppressed`）を「最初のセグメントの始点」
+ *     「最後のセグメントの終点」にのみ適用するインデックス条件（`i===0`/`i===length-1`）
+ *   - 下地（間柱）描画の `extended`（`baseExtend`適用）・`studCuts`（柱カット）による
+ *     セグメント調整とピッチ配置
+ *   - 端点はねだし部の木口（ecap）の描画可否判定・座標計算
+ *   - SCHEMATIC/腰壁・垂れ壁/標準・詳細の分岐そのもの（どのKonvaコンポーネントを使うか）
+ *   - 腰壁・垂れ壁の`Rect`座標変換
+ *   - 2a壁（階段下部屋）の描画クリップ（`stairUnderClips`）適用
+ *   - `key`/`listening`/`fill`等のKonva props・配列内の描画順
+ * これらをさらに純関数へ追い出す設計（`resolveWallLines`を描画スペック配列
+ * `{kind,points}[]`まで進めて`.jsx`を完全な写像にする案）も検討したが、cap/ecap/下地
+ * スタッド/腰壁Rectまで移す大改修になり回帰リスクが見合わないため今回は見送る
+ * （2026-09 QA協議）。
  */
 import { ShapeType } from '@core';
 import { LodLevel } from '../viewport.js';
-import { resolveWallTJunctions } from './wallJunctionResolve.js';
+import { subtractIntervals } from '../finish/stair/stairGeometry.js';
+import { resolveWallTJunctions, resolveWallFinSegments, isCapSuppressed, resolveFinVisibility } from './wallJunctionResolve.js';
 import { resolveKneeDropOverlays } from '../finish/kneeDropWall.js';
 import { columnWallCuts } from '../finish/columnWrap.js';
 import { indexByAxis, findOpeningsOnWallIndexed } from '../openings/openingGeometry.js';
@@ -61,6 +85,76 @@ export function resolveDeferredBackingIds(generalShapes) {
 }
 
 /**
+ * 壁1本分の描画ライン（開口分割・仕上げ面線・内側線・キャップ抑止）を解決する純関数。
+ * ShapesLayer.jsx が下していた判断（面線・内側線をどこで切るか、キャップを描くか）を
+ * ここへ集約し、.jsx は返り値を `<Line>` へ写すだけにする——以前はこの判断が.jsx内に
+ * インラインで書かれており、呼び出し側が正しい引数を渡すかを検証するテストが0本だった
+ * （`isCapSuppressed`へ空のcapSuppressを渡す・`resolveWallFinSegments`の戻り値を無視する・
+ * 仕上げ面線をfinCuts側の区間で切る、のいずれの変異もフルスイートが緑のままだった＝
+ * QA指摘）。wallDrawPlan.test.js が実Wallインスタンスでこの関数の呼び出し結果を検証する。
+ *
+ * @param {import('@core').Wall} wall
+ * @param {{openings?:object[], junction?:object, colCuts?:object}} [deps]
+ *   junction: wallJunctions.get(wall.id)（resolveWallTJunctionsの結果）
+ *   colCuts: columnCuts.get(wall.id)（columnWallCutsの結果。face/fin/backingの3区間を持つ）
+ * @returns {{
+ *   segments:[number,number][],
+ *   faceSegments:[number,number][],
+ *   finSegments:[number,number][],
+ *   finBoundary:number,
+ *   finVisible:boolean,
+ *   capLoSuppressed:boolean,
+ *   capHiSuppressed:boolean,
+ * }}
+ */
+export function resolveWallLines(wall, { openings = [], junction, colCuts } = {}) {
+  // 開口がある区間を除いた複数の区間に分割する（openingsはcoord1昇順が前提）。
+  const lo = Math.min(wall.coord1, wall.coord2), hi = Math.max(wall.coord1, wall.coord2);
+  const segments = [];
+  let cursor = lo;
+  for (const o of openings) {
+    if (o.coord1 > cursor) segments.push([cursor, o.coord1]);
+    cursor = Math.max(cursor, o.coord2);
+  }
+  if (cursor < hi) segments.push([cursor, hi]);
+
+  const baseExtend  = junction?.baseExtend ?? {};
+  const faceCuts    = junction?.faceCuts ?? [];
+  const finCuts     = junction?.finCuts ?? [];
+  const finEnd      = junction?.finEnd ?? {};
+  const capSuppress = junction?.capSuppress ?? {};
+
+  // 仕上げ面線・仕上げ境界線（fin線）専用のセグメント: 直交する通し壁側からのカットが
+  // あれば、その区間だけ切り欠く。柱の仕上げ包み（柱壁）が占める区間も同じ切り欠きとして
+  // 扱う（columnWallCuts）。**層ごとに区間が違う**——仕上げ面線は柱壁の外形幅・T字通し壁の
+  // 全材幅（faceCuts）、仕上げ境界線は内側境界の幅・T字通し壁の下地幅（finCuts）で切る
+  // （同じ区間で切ると柱側の境界線と端が食い違い、柱を一周して見える）。
+  const cutBy = (baseCuts, extra) => (baseCuts.length === 0 && extra.length === 0) ? segments
+    : segments.flatMap(([a, b]) => subtractIntervals(a, b, [...baseCuts, ...extra]));
+  const faceSegments = cutBy(faceCuts, colCuts?.face ?? []);
+  const finSegments = resolveWallFinSegments({
+    segments, lo, hi, finEnd, finCuts, columnFinCuts: colCuts?.fin ?? [],
+  });
+
+  // cap線（妻線）抑止判定は自壁の物理両端（最初のセグメントの始点＝lo端／最後のセグメントの
+  // 終点＝hi端）でのみ意味を持つ（開口で分割された中間セグメント境界は対象外）。
+  const segCount = segments.length;
+  // fin線（仕上げ／下地の境界線）の位置・可視性は壁単体の性質（他壁との取り合いを見ない）
+  // ——resolveFinVisibility が唯一の供給源（wallJunctionResolve.js のパス2候補判定
+  // ＝makeView と同じ関数）。ShapesLayer.jsx はこれを読むだけにする。
+  const { finBoundary, finVisible } = resolveFinVisibility(wall);
+  return {
+    segments,
+    faceSegments,
+    finSegments,
+    finBoundary,
+    finVisible,
+    capLoSuppressed: segCount > 0 && isCapSuppressed('lo', 0, segCount, { baseExtend, capSuppress }),
+    capHiSuppressed: segCount > 0 && isCapSuppressed('hi', segCount - 1, segCount, { baseExtend, capSuppress }),
+  };
+}
+
+/**
  * 1レンダー分の壁描画準備をまとめて解決する。
  * @param {object} graph
  * @param {string} lodLevel - viewport.lodLevel（LodLevel）
@@ -69,16 +163,19 @@ export function resolveDeferredBackingIds(generalShapes) {
  *   wallJunctions: Map<string, object>|null,
  *   kneeDropOverlays: Map<string, object>|null,
  *   columnCuts: Map<string, object>|null,
- *   openingsByWall: Map<string, object[]>,
+ *   wallLines: Map<string, object>,
  * }}
  */
 export function buildWallDrawPlan(graph, lodLevel) {
   const detail = lodLevel === LodLevel.DETAIL;
+  const schematic = lodLevel === LodLevel.SCHEMATIC;
   const walls = graph.walls;
 
   // 壁ごとの開口（開口位置で壁線にギャップを入れるための区間分割）。従来は壁1本ごとに
-  // graph.openings を総当たりしていた（O(壁 × 開口)）。coord1 昇順は ShapesLayer の
-  // 区間分割が前提にしているためここで確定させる。
+  // graph.openings を総当たりしていた（O(壁 × 開口)）。coord1 昇順は resolveWallLines の
+  // 区間分割が前提にしているためここで確定させる。openingsByWall自体は resolveWallLines
+  // へ渡すためだけの中間値で、外部消費者はいない（ShapesLayer.jsxはwallLines経由でしか
+  // segmentsを読まない）ため返り値には含めない。
   const openingIndex = indexByAxis(graph.openings);
   const openingsByWall = new Map();
   for (const wall of walls) {
@@ -86,18 +183,34 @@ export function buildWallDrawPlan(graph, lodLevel) {
     if (found.length > 0) openingsByWall.set(wall.id, found.sort((a, b) => a.coord1 - b.coord1));
   }
 
+  // 壁のT字取り合い（突き当たり）解決: 詳細LODでのみ、ジオメトリを変えずに描画時だけ反映する
+  // （wallJunctionResolve.js。resolveStairSideLines と同じ「描画ルールを幾何モジュールに
+  // 集約しレンダラは写像するだけ」というパターン）。壁全般が対象——手動壁・部屋壁・外壁・
+  // 階段下壁を区別しない。
+  const wallJunctions = detail ? resolveWallTJunctions(walls) : null;
+  // 柱の仕上げ包み（柱壁）と取り合う区間。柱を描かないモード（仕上げ・敷地）でも
+  // 壁の見た目は「柱に取られた区間」を反映してよい——柱は実在するため。
+  const columnCuts = schematic ? null : columnWallCuts(graph);
+
+  // 壁ごとの描画ライン（開口分割・仕上げ面線・内側線・キャップ抑止）をここでまとめて解決する
+  // （resolveWallLines。ShapesLayer.jsx は返り値を写像するだけにする）。SCHEMATIC では
+  // wallJunctions/columnCuts がともにnullのため、面線・内側線・キャップ抑止は自然に
+  // 無変更（segmentsのみが単線描画に使われる）になる。
+  const wallLines = new Map();
+  for (const wall of walls) {
+    wallLines.set(wall.id, resolveWallLines(wall, {
+      openings: openingsByWall.get(wall.id),
+      junction: wallJunctions?.get(wall.id),
+      colCuts: columnCuts?.get(wall.id),
+    }));
+  }
+
   return {
     deferredBackingIds: detail ? resolveDeferredBackingIds(graph.generalShapes) : EMPTY_SET,
-    // 壁のT字取り合い（突き当たり）解決: 詳細LODでのみ、ジオメトリを変えずに描画時だけ反映する
-    // （wallJunctionResolve.js。resolveStairSideLines と同じ「描画ルールを幾何モジュールに
-    // 集約しレンダラは写像するだけ」というパターン）。壁全般が対象——手動壁・部屋壁・外壁・
-    // 階段下壁を区別しない。
-    wallJunctions: detail ? resolveWallTJunctions(walls) : null,
+    wallJunctions,
     // 腰壁・垂れ壁の描画オーバーレイ。略図LOD（単線）では特別描画なし。
-    kneeDropOverlays: lodLevel !== LodLevel.SCHEMATIC ? resolveKneeDropOverlays(graph) : null,
-    // 柱の仕上げ包み（柱壁）と取り合う区間。柱を描かないモード（仕上げ・敷地）でも
-    // 壁の見た目は「柱に取られた区間」を反映してよい——柱は実在するため。
-    columnCuts: lodLevel !== LodLevel.SCHEMATIC ? columnWallCuts(graph) : null,
-    openingsByWall,
+    kneeDropOverlays: schematic ? null : resolveKneeDropOverlays(graph),
+    columnCuts,
+    wallLines,
   };
 }
