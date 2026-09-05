@@ -1165,8 +1165,12 @@ function coveredCornerCase(fillerSpan) {
 
 test('resolveWallTJunctions【パス0】: 覆われた角に丸ごと収まる駒は描かない（全区間をspanCuts）', () => {
   const r = coveredCornerCase([2442.5, 2557.5]); // 高い壁の帯にぴったり収まる駒
-  assert.deepEqual(r.get('H-filler')?.spanCuts, [[2442.5, 2557.5]],
-    '角の矩形の中にあり切断面では見えない＝天板・面線とも描かない');
+  // 覆うのは半分ごと（オーナー壁の材＋薄壁の材）。両方が覆うので、和集合が駒の全長を覆う。
+  const cuts = [...(r.get('H-filler')?.spanCuts ?? [])].sort((a, b) => a[0] - b[0]);
+  assert.ok(cuts.length > 0, '角の矩形の中にあり切断面では見えない＝描かない');
+  let reach = 2442.5;
+  for (const [lo, hi] of cuts) { if (lo > reach + 0.5) break; reach = Math.max(reach, hi); }
+  assert.equal(reach >= 2557.5, true, `spanCutsの和集合が全長を覆うはず: ${JSON.stringify(cuts)}`);
 });
 
 test('【実機回帰2026-09】resolveWallTJunctions【パス0】: 半分だけ掛かる駒は隠さず取り合いも保つ', () => {
@@ -1193,14 +1197,18 @@ test('【実機修正2026-09】resolveWallTJunctions【パス0】: 角に全高�
   const overlays = new Map([['H-knee', kneeOverlay()]]);
   const r = resolveWallTJunctions([vOwner, vThin, kneeOwner, tallWest], overlays);
 
-  assert.equal(r.get('V-hi-owner')?.endExtend.lo, undefined, '角は全高どうしの取り合い＝覆わない');
-  assert.equal(r.get('V-hi-owner')?.endWrap.lo, undefined, '端部ではないので取り巻かない');
-  assert.deepEqual(r.get('H-knee')?.spanCuts ?? [], [], '腰壁の天板も切らない（出幅ぶん食い込むまま）');
+  // 判定は**帯の半分ごと**（実機2026-09 2階X2通り）: 全高の壁が接しているのは薄壁側だけなので、
+  // 薄壁は覆わず、反対側のオーナー壁は出隅の角を閉じるために覆う。
+  assert.equal(r.get('V-hi-thin')?.endExtend.lo, undefined, '全高の壁が接する側は覆わない');
+  assert.equal(r.get('V-hi-thin')?.endWrap.lo, undefined, '端部ではないので取り巻かない');
+  assert.equal(r.get('V-hi-owner')?.endExtend.lo, -5045, '反対側の半分は角を閉じるまで伸びる');
+  assert.deepEqual(r.get('H-knee')?.spanCuts ?? [], [[2442.5, 2557.5]],
+    '腰壁の天板は高い壁の帯ぶんだけ落ちる（出幅ぶんの食い込みは残る）');
 
-  // 反対に、同じ帯に全高の壁が居なければ従来どおり覆って取り巻く（実機X3通りの形）。
+  // 同じ帯に全高の壁が居なければ、薄壁側も従来どおり覆って取り巻く（実機X3通りの形）。
   const r2 = resolveWallTJunctions([vOwner, vThin, kneeOwner], overlays);
-  assert.equal(r2.get('V-hi-owner')?.endWrap.lo, true, '角を共有する全高の壁が無ければ端部として扱う');
-  assert.equal(r2.get('V-hi-owner')?.endExtend.lo, -5045, '腰壁の帯の遠位面まで覆うはず');
+  assert.equal(r2.get('V-hi-thin')?.endWrap.lo, true, '角を共有する全高の壁が無ければ端部として扱う');
+  assert.equal(r2.get('V-hi-thin')?.endExtend.lo, -5045, '腰壁の帯の遠位面まで覆うはず');
 });
 
 // ==================================================================
