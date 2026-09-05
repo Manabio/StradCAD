@@ -1,4 +1,5 @@
 import { subtractIntervals } from '../finish/stair/stairGeometry.js';
+import { resolveFinVisibility, finishJoinBoundary } from '../finish/wallFinishJoin.js';
 
 /**
  * 壁同士の取り合い（T字の突き当たり・出隅/入隅のコーナー）を検出し、詳細LOD描画にのみ
@@ -136,30 +137,11 @@ const TOUCH_TOLERANCE = 30; // mm
 // 除外範囲を一致させる（トリムがコーナー処理した壁を、ここでT字として誤検出しないため）。
 const CORNER_EXCLUSION = 150; // mm
 
-// 端点はねだし判定・fin線可視性判定の座標許容誤差(mm)。ShapesLayer.jsxのecap判定と
-// resolveFinVisibilityの両方が使う共有定数（旧: 両ファイルに別々の同名定数を持っており、
-// 値のドリフトが実バグの一因だった。単一の供給源に統合する）。
-export const ENDPOINT_EPS = 0.5;
-
-/**
- * 内側線（fin線）の位置と可視性を解決する——壁単体（他壁との取り合いを一切見ない）だけで
- * 決まる性質のため、パス2の候補判定（makeView）とShapesLayer.jsxの描画ガードの**唯一の
- * 供給源**にする（旧: 両者が別々に同じ式を持っており、`wallFinish>0`だけを見てmaterialRange
- * 上の可視性を見ていなかったため、`|axisOffset|===wallFinish`の薄壁（内側線が軸CL上に
- * 潰れる。finish/stair/stairUnderWalls.jsのルール2＝階段下部屋の外側仕上げ薄壁が実際に
- * 生成する形状）でfin線が描かれないのにパス2がcapSuppressを立ててしまい、端にcapもfinも
- * 無くなる回帰を生んだ）。
- * @param {import('@core').Wall} wall
- * @returns {{finBoundary:number, finVisible:boolean}}
- */
-export function resolveFinVisibility(wall) {
-  const { lo, hi } = wall.materialRange;
-  const finBoundary = wall.axisValue - wall.faceDir * (wall.wallFinish ?? 0);
-  const finVisible = wall.wallFinish > 0
-    && finBoundary >= lo && finBoundary <= hi
-    && Math.abs(finBoundary - wall.axisCL.effectiveValue) > ENDPOINT_EPS;
-  return { finBoundary, finVisible };
-}
+// fin線（内側線）の位置・可視性と、取り合い先（相手の内側線の位置）は
+// finish/wallFinishJoin.js が唯一の供給源——柱の仕上げ包み（finish/columnWrap.js）と
+// **同じ経路**を通す（判定を変えるときはあちらのファイルだけを直す）。ENDPOINT_EPS は
+// ShapesLayer.jsx のecap判定が本モジュール経由で引いているため再輸出する。
+export { ENDPOINT_EPS, resolveFinVisibility } from '../finish/wallFinishJoin.js';
 
 // 壁1本分のビュー（POJO スナップショット）。
 // この解決は壁の総当たり（O(壁²)）で、内側で読む `materialRange` / `backingRange` /
@@ -341,7 +323,11 @@ export function resolveWallTJunctions(walls) {
       const alo = a.lenLo, ahi = a.lenHi;
 
       for (const b of crossDir) {
-        if (!b.finVisible) continue;
+        // 置き先: Bの内側線の位置（取り合いの規則は finish/wallFinishJoin.js が唯一の
+        // 供給源。柱の仕上げ包み＝finish/columnWrap.js と同じ経路を通す）。fin線が描かれない
+        // 壁とはそもそも取り合わない＝null。
+        const target = finishJoinBoundary(b);
+        if (target == null) continue;
         const blo = b.lenLo, bhi = b.lenHi;
 
         // すれ違い除外: Bの長さ方向スパンがAの厚み方向位置（faceValue）を含まない＝
@@ -364,9 +350,6 @@ export function resolveWallTJunctions(walls) {
             // 入隅: この壁の端点がBの仕上げ面(faceValue)に一致しているか（既存の判定式）。
             if (Math.abs(coord - b.axisValue) > TOUCH_TOLERANCE) continue;
           }
-
-          // 置き先: Bの内側線の位置（fin線。resolveFinVisibilityが唯一の供給源）。
-          const target = b.finBoundary;
 
           // 方向ガード（入隅・出隅で別々に必須）: TOUCH_TOLERANCE(30mm)はwallFinish(標準
           // 12.5mm)より大きく、touchチェックだけでは二値化しない——相手の面を最大27.5mm

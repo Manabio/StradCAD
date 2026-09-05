@@ -8,6 +8,8 @@ import {
   bareColumnRect, wallFinishCoverMm, columnMeetsWall, isColumnInsideWall,
   wrapColumnWithFinish, columnWrapSolids, columnWallCuts,
 } from './columnWrap.js';
+import { resolveFinVisibility } from './wallFinishJoin.js';
+import { columnWrapEdgePrimitives, columnWrapFinKey } from '../structural/columnWrapLineJoin.js';
 
 function makeGridRoom() {
   const plane = new Plane('p1', 0, '1階', 1, 1);
@@ -95,10 +97,18 @@ test('isColumnInsideWall: 材厚に完全に収まる柱だけ真（はみ出す
 
 // ---- 包み ----
 // 壁1枚を作るヘルパ（材厚・スパン・層構成・軸CL）。
-const mkWall = (isVertical, mr, axis, { finish = 12.5, backing = null, span = [-9000, 9000] } = {}) => ({
-  isVertical, materialRange: mr, coord1: span[0], coord2: span[1],
-  backingRange: backing, wallFinish: finish, axisCL: { effectiveValue: axis },
-});
+// axisValue（仕上げ面）・faceDir は実Wallと同じ関係で導く——材(materialRange)の遠位端が
+// 常に仕上げ面（core/wall.js。renderer/wallJunctionResolve.js ヘッダの「faceDir方向の遠位端が
+// 常にfaceValue」）。柱壁と壁仕上げ材の取り合い（finish/wallFinishJoin.js）はこの2値から
+// 相手の内側線を求めるため、ダブルにも持たせないと取り合い経路が動かない。
+const mkWall = (isVertical, mr, axis, { finish = 12.5, backing = null, span = [-9000, 9000] } = {}) => {
+  const face = Math.abs(mr.lo - axis) > Math.abs(mr.hi - axis) ? mr.lo : mr.hi;
+  return {
+    isVertical, materialRange: mr, coord1: span[0], coord2: span[1],
+    axisValue: face, faceDir: Math.sign(face - axis) || 1,
+    backingRange: backing, wallFinish: finish, axisCL: { effectiveValue: axis },
+  };
+};
 
 test('wrapColumnWithFinish: 向き合う壁との隙間が150以下ならその隙間ぶん伸ばして壁面と揃える（トリム）', () => {
   // 実機ログの構成: 壁の仕上げ面 -6942.5 に対し柱の外面 -6900（隙間42.5mm）。
@@ -214,11 +224,58 @@ test('wrapColumnWithFinish: 各面の仕上げ材厚を記録する（残りが�
   assert.equal(wrapped.finishes.yLo, 12.5, 'うち仕上げ材は12.5mm（残り90mmが下地材）');
 });
 
+// 相手のfin線が描かれない壁（内側線が軸CL上に潰れる薄壁。resolveFinVisibility参照）とは
+// 取り合えないため、トリムしても「自前の仕上げ厚で内側へ入れる」式へフォールバックする。
 test('wrapColumnWithFinish: 包みが仕上げ厚より薄い（トリム量が小さい）面は全部を仕上げ材とみなす', () => {
   const wall = mkWall(false, { lo: -12.5, hi: 0 }, 0, { finish: 12.5 });
+  assert.equal(resolveFinVisibility(wall).finVisible, false, '前提: この薄壁のfin線は描かれない');
   const wrapped = wrapColumnWithFinish({ xLo: 0, xHi: 300, yLo: 5, yHi: 300, baseZ: 0 }, [wall]);
   assert.equal(wrapped.covers.yLo, 5, 'トリム量は隙間の5mm');
   assert.equal(wrapped.finishes.yLo, 5, '下地を入れる余地が無いので全部が仕上げ材');
+});
+
+// ユーザー実機指摘2026-09「内壁と柱包みの壁仕上げ材の取り合いが誤って離れている」。
+// 取り合う面の内側境界は**相手壁の内側線の位置**（finish/wallFinishJoin.js。壁同士の
+// 取り合い＝wallJunctionResolve.js パス2 と同じ経路）に置く——自前の仕上げ厚ぶん内側へ
+// 入れると、トリム量に関わらず常に「仕上げ厚2枚ぶん」食い違って離れる。
+test('【実機修正2026-09】wrapColumnWithFinish: トリムした面の内側境界は相手壁の内側線に合う', () => {
+  const wall = mkWall(false, { lo: -6955, hi: -6942.5 }, -7000); // 仕上げ面-6942.5・内側線-6955
+  const wrapped = wrapColumnWithFinish(
+    { xLo: -7900, xHi: -7650, yLo: -6900, yHi: -6650, baseZ: 0 }, [wall]); // 隙間42.5mm
+  assert.equal(wrapped.trimmed.yLo, true);
+  assert.equal(wrapped.finishes.yLo, -12.5,
+    '内側境界は面より外（壁の材の中）にある＝見込み量は負');
+  assert.equal(wrapped.yLo + wrapped.finishes.yLo, resolveFinVisibility(wall).finBoundary,
+    '柱壁の内側境界が壁の内側線とちょうど同じ位置に来るはず（離れない）');
+});
+
+// 描かれる線どうしが本当に1点で出会うことまで確かめる（壁側=columnWallCuts の切り欠き端、
+// 柱側=columnWrapEdgePrimitives の内側線の端点）。実機の不良「取り合いが離れている」は
+// この2つが仕上げ厚2枚ぶん食い違う形で現れた。
+test('【実機修正2026-09】柱壁の内側線の端点が、壁のfin線の切り欠き端とちょうど一致する', () => {
+  const { graph, x1 } = makeGridRoom();
+  // 内壁（x=4000通り）の室内側に、隙間92.5mmで立つ柱。
+  const ym = graph.addCenterLine(CenterLineType.HORIZONTAL, 1500, { labeled: false, discipline: Discipline.ARCH });
+  graph.addColumn(StructuralMaterialType.RC, 'RC-300x300', x1, ym, { eccentricity: { x: -300, y: 0 } });
+
+  const solid = columnWrapSolids(graph)[0];
+  assert.equal(solid.wrapped.trimmed.xHi, true, '前提: 柱の東面が内壁の仕上げ面までトリムされる');
+
+  // 柱側の壁（材が柱側にある垂直壁）と、そのfin線の切り欠き。
+  const wall = graph.walls.find(w => w.isVertical && Math.abs(w.materialRange.hi - 4000) < 1);
+  const fb = resolveFinVisibility(wall).finBoundary; // 壁のfin線（縦線）のx位置
+  const [cutLo, cutHi] = columnWallCuts(graph).get(wall.id).fin[0];
+
+  // 柱側の内側線（yLo/yHi の横線）。壁と取り合う xHi の辺自体は描かない（壁側に任せる）。
+  const prims = columnWrapEdgePrimitives(solid.column, solid.wrapped, true);
+  const keyOf = edge => columnWrapFinKey(solid.column.id, edge);
+  assert.equal(prims.some(p => p.key === keyOf('xHi')), false, 'トリム面の内側線は描かない');
+  for (const [edge, cutEnd] of [['yLo', cutLo], ['yHi', cutHi]]) {
+    const line = prims.find(p => p.key === keyOf(edge));
+    assert.equal(line.y1, cutEnd, `${edge}の内側線は壁のfin線が切れる位置にあるはず`);
+    assert.equal(Math.max(line.x1, line.x2), fb,
+      `${edge}の内側線の端点が壁の内側線(${fb})まで届くはず（届かないと離れて見える）`);
+  }
 });
 
 // ---- 壁との取り合い（壁側を落とす区間） ----

@@ -16,6 +16,7 @@
  * 設計意図は `.claude/elevation-model.md`「2.5D立体の加算レイヤ」節を参照。
  */
 import { findSectionEntry, diaphragmProjection } from '../structural/sectionCatalog.js';
+import { resolveFinVisibility, finishJoinInset } from './wallFinishJoin.js';
 
 // 座標比較の許容（elevation/elevationStyle.js の GAP_EPS_MM と同値。finish/ が elevation/ へ
 // 依存しないよう独立に持つ）。
@@ -57,7 +58,12 @@ function rangesOverlap(aLo, aHi, bLo, bHi) {
 // 公開関数の引数（生の wall 配列）・戻り値は変えない——入口でビューを組むだけ。
 // ================================================================
 
-/** 壁1本分のビュー。mr は materialRange（null 可）、backingMm は下地帯の厚み（null=下地なし）。 */
+/**
+ * 壁1本分のビュー。mr は materialRange（null 可）、backingMm は下地帯の厚み（null=下地なし）。
+ * finLine は内側線（仕上げ／下地の境界線）の位置と可視性——柱壁の内側境界をここへ合わせる
+ * （`resolveSideCover` のトリム分岐。規則は finish/wallFinishJoin.js が唯一の供給源）。
+ * materialRange 同様 MobX の computed 由来のため、ここで1回だけ写して内側のループは読まない。
+ */
 function makeWallView(wall) {
   const mr = wall.materialRange ?? null;
   const br = wall.backingRange ?? null;
@@ -68,6 +74,8 @@ function makeWallView(wall) {
     mr,
     spanLo: Math.min(c1, c2), spanHi: Math.max(c1, c2),
     wallFinish: wall.wallFinish ?? 0,
+    // 軸CLを持たない壁（手動作成の退化データ・テストダブル）はfin線を解決できない＝取り合わない。
+    finLine: mr && wall.axisCL ? resolveFinVisibility(wall) : null,
     backingMm: br ? Math.abs(br.hi - br.lo) : null,
     axisId: wall.axisCL?.id ?? null,
   };
@@ -211,7 +219,10 @@ function isColumnInsideWallSet(rect, set) {
  * @param {-1|1} side - -1: lo側の面 / +1: hi側の面
  * @param {number} trimGapMm
  * @returns {{coverMm:number, finishMm:number, wall:object|null, trimmed:boolean, inWall:boolean}}
- *   finishMm はその面の仕上げ材の厚み（包みの残りが下地材）。平面図が包みを2層で描くのに使う。
+ *   finishMm はその面から内側境界（仕上げ材と下地材の境目）までの見込み量。平面図が包みを
+ *   2層で描くのに使う。**トリムした面では負になりうる**——そこは壁の仕上げ材と取り合う面で、
+ *   内側境界は自前の仕上げ厚ぶん内側ではなく**相手の内側線の位置**に置くため
+ *   （finish/wallFinishJoin.js が唯一の供給源）。
  */
 function resolveSideCover(rect, set, axis, side, trimGapMm) {
   const facingVertical = axis === 'x'; // x方向の面と向き合うのは垂直壁（厚み方向がX）
@@ -234,11 +245,20 @@ function resolveSideCover(rect, set, axis, side, trimGapMm) {
   if (nearest) fallbackCover = wallBackingMm(nearest.view, set) + nearest.view.wallFinish;
   // 仕上げ材の厚み。包みの残りが下地材（平面図はこの2層を描き分ける）。包みが仕上げ厚より
   // 薄い（トリム量が小さい）場合は全部を仕上げ材とみなす——下地を入れる余地が無いため。
+  // これは**壁と取り合っていない面**（宙に浮いた包みの見付け）の式。
   const finishOf = (view, coverMm) => Math.min(view?.wallFinish ?? 0, coverMm);
   if (nearest && nearest.gapMm <= trimGapMm + GAP_EPS) {
     // 隙間を塞いで壁の仕上げ面と揃える（規約2）。隙間0＝既に接している場合も接続扱い。
+    const trimmedFace = face + side * nearest.gapMm; // 相手の仕上げ面と揃った位置
+    // 取り合う面の内側境界は**相手の内側線の位置**へ置く（壁同士の取り合い＝
+    // wallJunctionResolve.js パス2 と同じ規則・同じ経路。finish/wallFinishJoin.js）。
+    // 自前の仕上げ厚で内側へ入れると、壁のfin線と柱壁の内側線が仕上げ厚2枚ぶん食い違って
+    // 離れて見える（実機指摘2026-09）。相手のfin線が描かれない壁とは取り合えないので、
+    // その場合だけ取り合わない面と同じ式へフォールバックする。
+    const joined = finishJoinInset(nearest.view.finLine, trimmedFace, side);
     return {
-      coverMm: nearest.gapMm, finishMm: finishOf(nearest.view, nearest.gapMm),
+      coverMm: nearest.gapMm,
+      finishMm: joined ?? finishOf(nearest.view, nearest.gapMm),
       wall: nearest.view.wall, trimmed: true, inWall: false,
     };
   }
