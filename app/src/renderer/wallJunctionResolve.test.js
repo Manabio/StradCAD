@@ -715,36 +715,39 @@ function realVd288b5() {
   });
 }
 
-test('resolveWallTJunctions【パス3】: 出隅（実機指摘の代表例）は両壁のfinCutsに相手の下地帯が入る', () => {
+// 【仕様改訂2026-09後半】かつては出隅でも相手の下地帯で切り欠いていたが、ユーザー確定が
+// 「角では平行な2本線（面線・内側線）が取り合う」へ改訂された——**その角で終わっている壁**の
+// fin線は切り欠かない（外壁どうしの例外を、角で終わる組すべてへ広げた形）。
+test('resolveWallTJunctions【パス3】: 出隅（角で終わる組）はfinCutsを積まない＝2本線が角で取り合う', () => {
   const result = resolveWallTJunctions([realH7763d6(), realVd288b5()]);
 
-  // パス1（T字）はCORNER_EXCLUSIONでこの隅を対象外にする（対角なので双方向とも
-  // aAxisPosが相手壁の端から150mm以内）——finCutsはパス3由来のみのはず。
-  assert.deepEqual(result.get('H-7763d6')?.finCuts, [[-3045, -2955]],
-    '7763d6のfin線からd288b5の下地帯[-3045,-2955]が差し引かれるはず');
-  assert.deepEqual(result.get('V-d288b5')?.finCuts, [[-2045, -1955]],
-    'd288b5のfin線から7763d6の下地帯[-2045,-1955]が差し引かれるはず');
+  assert.deepEqual(result.get('H-7763d6')?.finCuts ?? [], [],
+    '7763d6はd288b5の材の中で終わっている＝角なので切り欠かない');
+  assert.deepEqual(result.get('V-d288b5')?.finCuts ?? [], [], 'd288b5側も同様');
+  // 内側線の端点は相手の内側線の位置（角の交点）に合う＝パス2の結果がそのまま生きる。
+  assert.equal(result.get('H-7763d6')?.finEnd.hi, -2955);
+  assert.equal(result.get('V-d288b5')?.finEnd.hi, -1955);
   // パス3はfaceCutsを一切変更しない（ユーザーが対象外とした型を動かさない）。
   assert.deepEqual(result.get('H-7763d6')?.faceCuts ?? [], []);
   assert.deepEqual(result.get('V-d288b5')?.faceCuts ?? [], []);
 });
 
-test('resolveWallLines相当（resolveWallFinSegments経由）: 出隅の最終finSegmentsが実機指摘どおりに短縮される', () => {
+test('resolveWallLines相当（resolveWallFinSegments経由）: 出隅の最終finSegmentsが角の交点まで届く', () => {
   const result = resolveWallTJunctions([realH7763d6(), realVd288b5()]);
 
   const hSeg = resolveWallFinSegments({
     segments: [[-6142.5, -2942.5]], lo: -6142.5, hi: -2942.5,
     finEnd: result.get('H-7763d6').finEnd, finCuts: result.get('H-7763d6').finCuts, columnFinCuts: [],
   });
-  assert.deepEqual(hSeg, [[-6142.5, -3045]],
-    '7763d6のfin線はx=-3045で終わるはず（従来はfinEndのみでx=-2955までだった）');
+  assert.deepEqual(hSeg, [[-6142.5, -2955]],
+    '7763d6のfin線は角の交点x=-2955まで届くはず（仕様改訂2026-09後半。旧: -3045で切れていた）');
 
   const vSeg = resolveWallFinSegments({
     segments: [[-3500, -1942.5]], lo: -3500, hi: -1942.5,
     finEnd: result.get('V-d288b5').finEnd, finCuts: result.get('V-d288b5').finCuts, columnFinCuts: [],
   });
-  assert.deepEqual(vSeg, [[-3500, -2045]],
-    'd288b5のfin線はy=-2045で終わるはず（従来はfinEndのみでy=-1955までだった）');
+  assert.deepEqual(vSeg, [[-3500, -1955]],
+    'd288b5のfin線も角の交点y=-1955まで届くはず（仕様改訂2026-09後半）');
 });
 
 // ---- 2026-09 実機指摘（回帰）: 外壁出隅（isExteriorWall:true同士）はパス3の除外対象。
@@ -805,16 +808,16 @@ test('resolveWallFinSegments経由: 外壁出隅の最終finSegmentsが角の交
 // ---- 失敗系: 片方だけ外壁（外壁と室内壁が取り合う一般的な出隅）は従来どおり切り欠く ----
 // 除外条件は`&&`（両方とも外壁の組だけを除外）——`||`に広げると本ケースまで誤って
 // 除外してしまう（変異テストで固定）。
-test('【失敗系】resolveWallTJunctions【パス3】: 外壁と室内壁が取り合う出隅は片方だけ外壁でも従来どおり切り欠く', () => {
+// 仕様改訂2026-09後半で、外壁どうしの例外は「角で終わる組は切り欠かない」という一般則に
+// 吸収された——片方だけ外壁でも、角である以上2本線が角で取り合う。
+test('resolveWallTJunctions【パス3】: 外壁と室内壁の出隅でも角なら切り欠かない', () => {
   const exterior = { ...realExteriorH011027(), isExteriorWall: true };
   const interior = { ...realExteriorVe5a22a(), isExteriorWall: false };
 
   const result = resolveWallTJunctions([exterior, interior]);
 
-  assert.deepEqual(result.get('011027')?.finCuts, [[-8045, -7955]],
-    '片方だけ外壁（相手は室内壁扱い）なら除外せず従来どおりVの下地帯を積むはず');
-  assert.deepEqual(result.get('e5a22a')?.finCuts, [[-7045, -6955]],
-    '片方だけ外壁（自分は室内壁扱い）なら除外せず従来どおりWの下地帯を積むはず');
+  assert.deepEqual(result.get('011027')?.finCuts ?? [], []);
+  assert.deepEqual(result.get('e5a22a')?.finCuts ?? [], []);
 });
 
 // ---- 2026-09 QA指摘（ブロッカー修正）: X字除外ガードは「fbからVの端までの距離」ではなく
@@ -839,7 +842,7 @@ function convexAtWallFinish(wallFinish) {
   return { v, h };
 }
 
-test('resolveWallTJunctions【パス3】: 仕上げ厚が30mmを超える出隅でもfin線が相手の下地を横切らない（テーブル駆動）', () => {
+test('resolveWallTJunctions【パス3】: 仕上げ厚が30mmを超える出隅でも角では2本線が交点で取り合う（テーブル駆動）', () => {
   for (const wallFinish of [12.5, 42.5]) {
     const { v, h } = convexAtWallFinish(wallFinish);
     const result = resolveWallTJunctions([v, h]);
@@ -848,15 +851,15 @@ test('resolveWallTJunctions【パス3】: 仕上げ厚が30mmを超える出隅�
       segments: [[-6000, v.coord2]], lo: -6000, hi: v.coord2,
       finEnd: result.get('V-thick')?.finEnd ?? {}, finCuts: result.get('V-thick')?.finCuts ?? [], columnFinCuts: [],
     });
-    assert.deepEqual(vSeg, [[-6000, -45]],
-      `wallFinish=${wallFinish}: fin線は相手(h)の下地帯[-45,45]を横切らず-45で終わるはず`);
+    assert.deepEqual(vSeg, [[-6000, 45]],
+      `wallFinish=${wallFinish}: fin線は角の交点(相手の内側線=45)まで届くはず（仕様改訂2026-09後半）`);
 
     const hSeg = resolveWallFinSegments({
       segments: [[-6000, h.coord2]], lo: -6000, hi: h.coord2,
       finEnd: result.get('H-thick')?.finEnd ?? {}, finCuts: result.get('H-thick')?.finCuts ?? [], columnFinCuts: [],
     });
-    assert.deepEqual(hSeg, [[-6000, -45]],
-      `wallFinish=${wallFinish}: fin線は相手(v)の下地帯[-45,45]を横切らず-45で終わるはず`);
+    assert.deepEqual(hSeg, [[-6000, 45]],
+      `wallFinish=${wallFinish}: 相手側も同じく角の交点まで届くはず`);
   }
 });
 
@@ -876,8 +879,8 @@ test('【失敗系】resolveWallTJunctions【パス3】: fin線が描かれな�
   const result = resolveWallTJunctions([v, hNoFin]);
   assert.deepEqual(result.get('H-thick')?.finCuts ?? [], [],
     'fin線を持たないWにはパス3のfinCutsを積まないはず');
-  assert.deepEqual(result.get('V-thick')?.finCuts ?? [], [[-45, 45]],
-    '相手(V)側のカットは従来どおり発火するはず（ガードはW側にだけ効く）');
+  assert.deepEqual(result.get('V-thick')?.finCuts ?? [], [],
+    '相手(V)側もこの組は角なので切り欠かない（仕様改訂2026-09後半）——fin線ガードとは別の理由');
 });
 
 // ---- 2026-09 QA指摘: パス1のbodySide除外（反対側からの突き当たりはface/finともにカットしない）
@@ -1051,4 +1054,202 @@ test('【失敗系】resolveWallTJunctions【パス3】: 相手のいない壁�
   const result = resolveWallTJunctions([solo]);
 
   assert.deepEqual(result.get('Solo-owner')?.finCuts ?? [], []);
+});
+
+// ==================================================================
+// パス0: 高さが違う壁の取り合い（ユーザー確定2026-09「高い方の壁が優先」「低い壁と高い壁が
+// 端部でL字に取り合う場合、高い方の壁仕上げ材が端部を覆い、2本線が端部を取り巻く」）。
+// 高さの供給源は finish/kneeDropWall.js の planWallHeight（overlaysのmode/topHeight）。
+// ==================================================================
+
+// 腰壁として渡すオーバーレイ（resolveKneeDropOverlays の戻り値と同じ形。capLo/capHiは
+// 平面の天板幅で、ここでは高さ比較にしか使わないため0でよい）。
+const kneeOverlay = (topHeight = 900) => ({ mode: 'knee', capLo: 0, capHi: 0, topHeight });
+
+test('resolveWallTJunctions【パス0】: 突き当たる壁が腰壁なら通し壁をカットしない（高い方が優先）', () => {
+  const makeB = () => stubWall({
+    id: 'B-up', isVertical: false, axis: 2000, face: 1925,
+    coord1: 0, coord2: 7000,
+    backingRange: { lo: 1937.5, hi: 2062.5 }, materialRange: { lo: 1925, hi: 2062.5 },
+  });
+  // 前提: 高さが同じなら従来どおりカットされ、Aは下地を延長する。
+  const plain = resolveWallTJunctions([abuttingWallFromAbove(), makeB()]);
+  assert.deepEqual(plain.get('B-up')?.finCuts, [[2437.5, 2562.5]]);
+  assert.equal(plain.get('A-vert')?.baseExtend.hi, 1937.5);
+
+  const overlays = new Map([['A-vert', kneeOverlay()]]);
+  const result = resolveWallTJunctions([abuttingWallFromAbove(), makeB()], overlays);
+  assert.deepEqual(result.get('B-up')?.finCuts ?? [], [],
+    '腰壁は切断面に無いので、通し壁の内側線は連続のまま描かれるはず');
+  assert.deepEqual(result.get('B-up')?.faceCuts ?? [], [], '仕上げ面線も切らないはず');
+  assert.equal(result.get('A-vert')?.baseExtend.hi, undefined, '腰壁側も相手の下地まで延長しない');
+});
+
+test('resolveWallTJunctions【パス0】: 高い壁の端は腰壁の帯全体の遠位面まで伸び、端部を取り巻く', () => {
+  // 腰壁V-ownerの材は[2455,2557.5]、相棒の薄壁V-thinは[2442.5,2455]——帯全体は[2442.5,2557.5]。
+  // H-thin-rightのlo端は2557.5に止まっており、帯の遠位面2442.5まで伸ばすと角を覆い切る。
+  const overlays = new Map([['V-owner', kneeOverlay()], ['V-thin', kneeOverlay()]]);
+  const result = resolveWallTJunctions([realVOwner(), realVThin(), realHThinRight()], overlays);
+
+  assert.equal(result.get('H-thin-right')?.endExtend.lo, 2442.5,
+    '1枚ぶん(2455)ではなく帯全体の遠位面(2442.5)まで伸ばすはず（オーナーと薄壁で端が段違いにならない）');
+  assert.equal(result.get('H-thin-right')?.endWrap.lo, true, '実際の端部なので仕上げ材で取り巻く');
+  assert.equal(result.get('H-thin-right')?.endExtend.hi, undefined, '相手のいない自由端は伸ばさない');
+  assert.deepEqual(result.get('V-owner')?.spanCuts, [[-5057.5, -5045]],
+    '腰壁側は高い壁の帯に覆われる区間を天板輪郭から落とすはず');
+  assert.equal(result.get('H-thin-right')?.finEnd.lo, undefined, 'パス2の寄せは起きない（高さが違う組）');
+});
+
+test('resolveWallTJunctions【パス0】: 既に帯を越えて終端している壁も「覆っている端」として取り巻く', () => {
+  // 実機2026-09 X3通り: 下地オーナー壁は壁生成の出隅処理で既に腰壁の帯を越えて終端しており、
+  // 伸長は不要。伸長の有無で分けると同じ端の2枚で木口線の有無が食い違う。
+  const already = stubWall({
+    id: 'H-past', isVertical: false, axis: -5000, face: -5057.5, faceDir: -1,
+    coord1: 2442.5, coord2: 4442.5, // lo端は帯[2442.5,2557.5]の遠位面に既に到達
+    backingRange: null, materialRange: { lo: -5057.5, hi: -5045 },
+  });
+  const overlays = new Map([['V-owner', kneeOverlay()], ['V-thin', kneeOverlay()]]);
+  const result = resolveWallTJunctions([realVOwner(), realVThin(), already], overlays);
+  assert.equal(result.get('H-past')?.endExtend.lo, undefined, '伸ばす必要はない');
+  assert.equal(result.get('H-past')?.endWrap.lo, true, 'それでも端部は仕上げ材で取り巻くはず');
+});
+
+test('【失敗系】resolveWallTJunctions【パス0】: 通り過ぎる相手（T字・X字）は端部ではないので伸ばさない', () => {
+  const b = stubWall({
+    id: 'B-through', isVertical: false, axis: 2000, face: 1925,
+    coord1: 0, coord2: 7000,
+    backingRange: { lo: 1937.5, hi: 2062.5 }, materialRange: { lo: 1925, hi: 2062.5 },
+  });
+  const overlays = new Map([['B-through', kneeOverlay()]]);
+  const result = resolveWallTJunctions([abuttingWallFromAbove(), b], overlays);
+  assert.equal(result.get('A-vert')?.endExtend?.hi, undefined,
+    'Bが通り過ぎるT字では覆うべき角が無い（伸ばすとBの中で妻線が浮く）');
+  assert.deepEqual(result.get('B-through')?.spanCuts ?? [], [], '天板輪郭も落とさない');
+});
+
+test('【失敗系】resolveWallTJunctions【パス0】: 高さが同じなら何も起きない（従来の取り合いのまま）', () => {
+  const result = resolveWallTJunctions([realVOwner(), realVThin(), realHThinRight()]);
+  assert.equal(result.get('H-thin-right')?.endExtend.lo, undefined);
+  assert.equal(result.get('H-thin-right')?.endWrap.lo, undefined);
+  assert.deepEqual(result.get('V-owner')?.spanCuts ?? [], []);
+  assert.equal(result.get('H-thin-right')?.finEnd.lo, 2545, '従来のパス2は生きている');
+});
+
+test('【失敗系】resolveWallTJunctions【パス0】: 垂れ壁（mode=drop）・オーバーレイ省略は従来どおり取り合う', () => {
+  const drop = new Map([['V-thin', { mode: 'drop', capLo: 0, capHi: 0 }]]);
+  assert.equal(resolveWallTJunctions([realVThin(), realHThinLeft()], drop).get('H-thin-left')?.finEnd.hi, 2455,
+    '確定した規則は腰壁のみ——垂れ壁は従来の取り合いのまま');
+  assert.equal(resolveWallTJunctions([realVThin(), realHThinLeft()], null).get('H-thin-left')?.finEnd.hi, 2455);
+});
+
+// ---- 覆われた角に隠れる壁（壁生成が交差部に作る短い駒）----
+// 高い壁の端が覆う角の矩形（高い壁の帯 × 低い壁の帯）に**丸ごと収まる**壁だけを隠す。
+// 半分だけ掛かる駒（角の外側では全高の壁が続く）は隠さない——隠すと全高どうしの取り合いが
+// 壊れる（実機2026-09で4本の取り合いが失われた回帰）。
+function coveredCornerCase(fillerSpan) {
+  // 高い壁（垂直・帯[2442.5,2557.5]）が、腰壁（水平・帯[-5057.5,-4942.5]）の端部を覆う。
+  const vOwner = stubWall({ id: 'V-hi-owner', isVertical: true, axis: 2500, face: 2557.5,
+    coord1: -4000, coord2: -5057.5, backingRange: { lo: 2455, hi: 2545 }, materialRange: { lo: 2455, hi: 2557.5 } });
+  const vThin = stubWall({ id: 'V-hi-thin', isVertical: true, axis: 2500, face: 2442.5, faceDir: -1,
+    coord1: -4000, coord2: -5057.5, backingRange: null, materialRange: { lo: 2442.5, hi: 2455 } });
+  const kneeOwner = stubWall({ id: 'H-knee', isVertical: false, axis: -5000, face: -4942.5,
+    coord1: -2000, coord2: 2442.5, backingRange: { lo: -5045, hi: -4955 }, materialRange: { lo: -5045, hi: -4942.5 } });
+  const kneeThin = stubWall({ id: 'H-knee-thin', isVertical: false, axis: -5000, face: -5057.5, faceDir: -1,
+    coord1: -2000, coord2: 2442.5, backingRange: null, materialRange: { lo: -5057.5, hi: -5045 } });
+  const filler = stubWall({ id: 'H-filler', isVertical: false, axis: -5000, face: -5057.5, faceDir: -1,
+    coord1: fillerSpan[0], coord2: fillerSpan[1],
+    backingRange: { lo: -5045, hi: -4955 }, materialRange: { lo: -5057.5, hi: -4955 } });
+  const overlays = new Map([['H-knee', kneeOverlay()], ['H-knee-thin', kneeOverlay()]]);
+  return resolveWallTJunctions([vOwner, vThin, kneeOwner, kneeThin, filler], overlays);
+}
+
+test('resolveWallTJunctions【パス0】: 覆われた角に丸ごと収まる駒は描かない（全区間をspanCuts）', () => {
+  const r = coveredCornerCase([2442.5, 2557.5]); // 高い壁の帯にぴったり収まる駒
+  assert.deepEqual(r.get('H-filler')?.spanCuts, [[2442.5, 2557.5]],
+    '角の矩形の中にあり切断面では見えない＝天板・面線とも描かない');
+});
+
+test('【実機回帰2026-09】resolveWallTJunctions【パス0】: 半分だけ掛かる駒は隠さず取り合いも保つ', () => {
+  const r = coveredCornerCase([2385, 2500]); // 高い壁の帯から外側へはみ出す駒
+  assert.deepEqual(r.get('H-filler')?.spanCuts ?? [], [],
+    '角の外側では全高の壁が続くため、駒は全高のまま描く');
+});
+
+// ---- 角を全高の壁と共有する端は覆わない（ユーザー確定2026-09。実機X2通り）----
+// 「壁---+---腰壁 / 壁」の交点では、西が全高の壁・東が腰壁。角は**全高どうしの入隅・出隅**として
+// 取り合い、そこへ腰壁の天板が出幅ぶん食い込むのが正しい——高い壁はそこで終わっていないので、
+// 端部を覆う・取り巻く・相手の天板を切る、のいずれもしない。
+test('【実機修正2026-09】resolveWallTJunctions【パス0】: 角に全高の壁が続く端は覆わない', () => {
+  // 高い壁（垂直・帯[2442.5,2557.5]）の端が、東の腰壁の帯[-5057.5,-4942.5]に触れる。
+  // ただし同じ帯の**西側**には全高の壁が続いている（高い壁の帯の外へ伸びる）。
+  const vOwner = stubWall({ id: 'V-hi-owner', isVertical: true, axis: 2500, face: 2557.5,
+    coord1: -4000, coord2: -4942.5, backingRange: { lo: 2455, hi: 2545 }, materialRange: { lo: 2455, hi: 2557.5 } });
+  const vThin = stubWall({ id: 'V-hi-thin', isVertical: true, axis: 2500, face: 2442.5, faceDir: -1,
+    coord1: -4000, coord2: -4942.5, backingRange: null, materialRange: { lo: 2442.5, hi: 2455 } });
+  const kneeOwner = stubWall({ id: 'H-knee', isVertical: false, axis: -5000, face: -4942.5,
+    coord1: 2557.5, coord2: 6000, backingRange: { lo: -5045, hi: -4955 }, materialRange: { lo: -5045, hi: -4942.5 } });
+  const tallWest = stubWall({ id: 'H-tall-west', isVertical: false, axis: -5000, face: -4942.5,
+    coord1: -2000, coord2: 2442.5, backingRange: { lo: -5045, hi: -4955 }, materialRange: { lo: -5045, hi: -4942.5 } });
+  const overlays = new Map([['H-knee', kneeOverlay()]]);
+  const r = resolveWallTJunctions([vOwner, vThin, kneeOwner, tallWest], overlays);
+
+  assert.equal(r.get('V-hi-owner')?.endExtend.lo, undefined, '角は全高どうしの取り合い＝覆わない');
+  assert.equal(r.get('V-hi-owner')?.endWrap.lo, undefined, '端部ではないので取り巻かない');
+  assert.deepEqual(r.get('H-knee')?.spanCuts ?? [], [], '腰壁の天板も切らない（出幅ぶん食い込むまま）');
+
+  // 反対に、同じ帯に全高の壁が居なければ従来どおり覆って取り巻く（実機X3通りの形）。
+  const r2 = resolveWallTJunctions([vOwner, vThin, kneeOwner], overlays);
+  assert.equal(r2.get('V-hi-owner')?.endWrap.lo, true, '角を共有する全高の壁が無ければ端部として扱う');
+  assert.equal(r2.get('V-hi-owner')?.endExtend.lo, -5045, '腰壁の帯の遠位面まで覆うはず');
+});
+
+// ==================================================================
+// パス5: 材が続く端には妻線を描かない（ユーザー確定2026-09「壁のL字・T字取り合いに、角で
+// 壁下地材面から対岸の壁仕上げ材の部屋側表面までの線分が残る」）。
+// 壁生成は直交壁との交差部に短い駒を作り通し壁を分割する——その境目は材の終わりではない。
+// ==================================================================
+
+// 交差部で分割された通し壁（薄壁＋オーナー壁）と、交差部を埋める駒。
+function crossingRun() {
+  const westThin = stubWall({ id: 'W-thin', isVertical: false, axis: -5000, face: -5057.5, faceDir: -1,
+    coord1: -8000, coord2: -5657.5, backingRange: null, materialRange: { lo: -5057.5, hi: -5045 } });
+  const westOwner = stubWall({ id: 'W-owner', isVertical: false, axis: -5000, face: -4942.5,
+    coord1: -8000, coord2: -5657.5, backingRange: { lo: -5045, hi: -4955 }, materialRange: { lo: -5045, hi: -4942.5 } });
+  const filler = stubWall({ id: 'H-filler', isVertical: false, axis: -5000, face: -5057.5, faceDir: -1,
+    coord1: -5657.5, coord2: -5542.5, backingRange: { lo: -5045, hi: -4955 }, materialRange: { lo: -5057.5, hi: -4955 } });
+  const eastThin = stubWall({ id: 'E-thin', isVertical: false, axis: -5000, face: -5057.5, faceDir: -1,
+    coord1: -5542.5, coord2: -3000, backingRange: null, materialRange: { lo: -5057.5, hi: -5045 } });
+  const eastOwner = stubWall({ id: 'E-owner', isVertical: false, axis: -5000, face: -4942.5,
+    coord1: -5542.5, coord2: -3000, backingRange: { lo: -5045, hi: -4955 }, materialRange: { lo: -5045, hi: -4942.5 } });
+  return [westThin, westOwner, filler, eastThin, eastOwner];
+}
+
+test('resolveWallTJunctions【パス5】: 交差部の駒の妻線は両端とも抑止する（材が続いている）', () => {
+  const r = resolveWallTJunctions(crossingRun());
+  assert.equal(r.get('H-filler')?.capSuppress.lo, true,
+    '駒の材[-5057.5,-4955]は西の薄壁＋オーナー壁の和[-5057.5,-4942.5]に覆われる＝材の終わりではない');
+  assert.equal(r.get('H-filler')?.capSuppress.hi, true, '東側も同様');
+  // 薄壁の交差部側の端も、駒が材を引き継ぐので妻線を描かない。
+  assert.equal(r.get('W-thin')?.capSuppress.hi, true);
+  assert.equal(r.get('E-thin')?.capSuppress.lo, true);
+});
+
+test('【失敗系】resolveWallTJunctions【パス5】: 材が続かない端・覆い切れない端は妻線を残す', () => {
+  const r = resolveWallTJunctions(crossingRun());
+  assert.equal(r.get('W-thin')?.capSuppress.lo, undefined, '外側の自由端（-8000）は材の終わり＝妻線を描く');
+  assert.equal(r.get('E-owner')?.capSuppress.hi, undefined, '同上（-3000側）');
+  // オーナー壁の材[-5045,-4942.5]は駒の材[-5057.5,-4955]に**覆い切られない**（-4955〜-4942.5が
+  // 残る）ため抑止しない——「和集合が自分の材帯を覆う」ことを要求する判定であることの固定。
+  assert.equal(r.get('W-owner')?.capSuppress.hi, undefined);
+  assert.equal(r.get('E-owner')?.capSuppress.lo, undefined);
+});
+
+test('【失敗系】resolveWallTJunctions【パス5】: 隣に壁があっても材帯が重ならなければ抑止しない', () => {
+  const w = stubWall({ id: 'W1', isVertical: false, axis: -5000, face: -5057.5, faceDir: -1,
+    coord1: -8000, coord2: -5657.5, backingRange: null, materialRange: { lo: -5057.5, hi: -5045 } });
+  // 別の通り（材帯が離れている）の壁が続いていても、この壁の材は終わっている。
+  const other = stubWall({ id: 'W2', isVertical: false, axis: -3000, face: -3057.5, faceDir: -1,
+    coord1: -5657.5, coord2: -3000, backingRange: null, materialRange: { lo: -3057.5, hi: -3045 } });
+  const r = resolveWallTJunctions([w, other]);
+  assert.equal(r.get('W1')?.capSuppress.hi, undefined);
 });

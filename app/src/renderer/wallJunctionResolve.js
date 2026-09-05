@@ -1,5 +1,6 @@
 import { subtractIntervals } from '../finish/stair/stairGeometry.js';
 import { resolveFinVisibility, finishJoinBoundary } from '../finish/wallFinishJoin.js';
+import { planWallHeight } from '../finish/kneeDropWall.js';
 
 /**
  * 壁同士の取り合い（T字の突き当たり・出隅/入隅のコーナー）を検出し、詳細LOD描画にのみ
@@ -11,7 +12,51 @@ import { resolveFinVisibility, finishJoinBoundary } from '../finish/wallFinishJo
  * face（materialRange の境界）へ既にスナップしている前提の上で、その端点から先の
  * 「見た目だけ」を解決する。resolveStairSideLines（stairGeometry.js）と同様、
  * 「描画ルールを幾何モジュールに集約しレンダラは写像するだけ」という既存パターンに倣う。
- * 対象は壁全般（手動壁・部屋壁・外壁・階段下壁を区別しない）。3つの独立したパスからなる。
+ * 対象は壁全般（手動壁・部屋壁・外壁・階段下壁を区別しない）。6つの独立したパスからなる
+ *（パス0だけは他より先に走る。理由は下記）。
+ *
+ * ## パス6: 通し壁の材へ入り込んだ端は描かない
+ * 2026-09ユーザー確定。壁生成は角の欠けを塞ぐために壁の端を相手の材の遠位面まで伸ばす
+ * （`closeConvexCorners`）。相手がそこで**終わる**（角）ならこれは正しいが、相手が**両側へ
+ * 続く通し壁**の場合は角ではなく、伸ばした端の面線が通し壁の材の中を横切って反対側の面まで
+ * 描かれてしまう（実機1階 X4通り2か所: 室内壁の面線が外壁の材を貫いて外面まで届いていた）。
+ * 端が通し壁の材に入り込んでいる場合だけ、その材の区間を `spanCuts` で落とす——突き抜けて
+ * いる（X字）配置は対象外（そこは端ではない）。高さが違う組はパス0の担当（低い壁の帯を覆う
+ * のは意図した振る舞い）なので除く。
+ *
+ * ## パス5: 妻線の抑止 — 材が続く端には妻線を描かない
+ * 2026-09ユーザー確定「壁のL字・T字取り合いに、角で壁下地材面から対岸の壁仕上げ材の部屋側表面
+ * までの線分が残る」。壁生成は直交壁との交差部に**短い駒**（相手の材幅ぶんの壁）を作り、通し壁を
+ * そこで分割する——分割の境目は材の終わりではないのに、両側の壁がそこへ妻線を描いていた。
+ * 駒の材は「片面の仕上げ＋下地」で反対面の仕上げを持たないため、その妻線がちょうど
+ * 「下地材面から対岸の仕上げ材表面まで」の線分になる（実機1階22交点40本・2階3交点13本）。
+ * 判定はT字・コーナーの分類に依存せず幾何のみ——端のすぐ外側（`CONTINUE_PROBE`）にある同じ
+ * 向きの壁の材の**和集合が自分の材帯を覆う**なら、材はそこで終わっていない。角で相手の面線と
+ * 重なるだけの妻線（覆われていない端）は従来どおり描く——見た目は面線と一致するため増えない。
+ *
+ * ## パス0: 高さが違う壁の取り合い — 高い方が優先し、L字の端部を覆って取り巻く
+ * ユーザー確定2026-09。平面切断高さ以下の腰壁は**切断面に存在せず**、天板を見下ろした輪郭で
+ * 描かれる。にもかかわらずパス1〜3が腰壁を普通の壁として扱うと、切断面まで在る高い壁の面線・
+ * 内側線が切られ妻線が消える——そこには無い壁の痕跡が高い壁の側に出る。そこで:
+ *  - **高さが違う壁の組は、パス1〜3のどれも解決しない**（`meetAtPlanCut`。高さの供給源は
+ *    finish/kneeDropWall.js の `planWallHeight` 1箇所）。低い方は天板輪郭なので解決結果を使わない。
+ *  - 代わりにパス0が、その組の**L字の端部**だけを見る（相手の端がこちらの材に触れている
+ *    ——パス3と同じ語彙。通り過ぎるT字・X字は角ではないので対象外）。高い壁の端を低い壁の
+ *    **帯全体**（オーナー＋薄壁＝`fullFaceRange`）の遠位面まで伸ばし（`endExtend`）、その端を
+ *    仕上げ材で取り巻く（`endWrap`＝外側線は端まで・内側線は仕上げ厚ぶん手前で止めて木口線へ
+ *    折れる。「壁仕上げ材の出隅の角はL字処理」）。伸ばさないと低い壁の材幅ぶんの矩形が角に
+ *    欠けて残る。伸ばした先に同じ通り・同じ面向きの壁が続くなら端部ではなく通過点なので、
+ *    妻線も取り巻きも出さない。
+ *  - 低い壁側には`spanCuts`（高い壁の帯に覆われる区間は描かない）を返す。覆う側と譲る側は
+ *    同じ1つの取り合いの裏表なので、判定を分けずここで両方を決める。
+ *  - **覆われた角の矩形の中に丸ごと収まる壁**（壁生成が交差部に作る短い駒）は、切断面では
+ *    高い壁の材の中にあり見えない——`spanCuts`で描かず、パス1〜3の対象からも外す
+ *    （外さないと、その駒が高い壁の内側線を下地幅で切る＝実機2026-09 X3通りの不良）。
+ *    **ここで隠すのは「覆われた角の矩形の中に完全に収まる壁」だけ**——腰壁の区間の端に
+ *    半分だけ掛かる駒（区間の外側では全高の壁が続く）はそのまま全高の壁であり、
+ *    腰壁として扱うと全高どうしのT字・十字の取り合いが壊れる（実機で確認した回帰）。
+ * パス0が先に走るのは、この「隠れる壁」の確定をパス1〜3の入口ガードに使うため。
+ * `kneeDropOverlays` を渡さない呼び出し（略図LOD・旧テスト）は全壁が同じ高さ＝パス0は何もしない。
  *
  * ## パス1: T字（貫通）取り合い — 下地を持つ壁同士のみ対象
  * - 壁A（突き当たり側）: 下地の描画範囲を、直交する壁Bの下地帯（backingRange）のうち
@@ -148,11 +193,12 @@ export { ENDPOINT_EPS, resolveFinVisibility } from '../finish/wallFinishJoin.js'
 // `axisValue` / `coord1,2` / `faceDir` / `wallFinish` はすべて MobX の computed（または
 // フィールド）。実データ規模だとこの読み出し自体が支配的なコストになる（実測）ため、
 // 値を1回だけコピーして二重ループはそれを見る（finish/columnWrap.js の壁ビューと同じ手口）。
-function makeView(w) {
+function makeView(w, kneeDropOverlays) {
   const backing = w.backingRange;
   const { finBoundary, finVisible } = resolveFinVisibility(w);
   return {
     id: w.id,
+    planHeight: planWallHeight(kneeDropOverlays, w.id),
     isVertical: w.isVertical,
     isExteriorWall: w.isExteriorWall ?? false,
     lenLo: Math.min(w.coord1, w.coord2), lenHi: Math.max(w.coord1, w.coord2),
@@ -173,6 +219,32 @@ function makeView(w) {
 // （所有権ペアの反対側＝thin側）があればその materialRange も含めて返す。相棒が無ければ
 // Aの単独 materialRange のまま（それでも従来のbackingRangeより仕上げ帯ぶん広く、
 // 「12.5mmの食い込み」自体は解消する）。
+// 「覆われた角の矩形に丸ごと収まる」判定の座標許容(mm)。既存トリムは理論上ゼロ誤差で面へ
+// スナップするため小さい値で足りる（ENDPOINT_EPS と同値）。
+const CONTAIN_EPS = 0.5; // mm
+
+// パス5専用: 「端のすぐ外側」を見るための微小距離(mm)。壁の材は隣の壁とちょうど境を接する
+// （既存トリムが面へスナップする）ため、端そのものではなく1mm外側を見る。
+const CONTINUE_PROBE = 1; // mm
+
+// 区間の集合 bands が [range.lo, range.hi] を隙間なく覆うか（パス5の「材が続く」判定）。
+function coversRange(bands, range) {
+  if (bands.length === 0) return false;
+  let reach = range.lo;
+  for (const b of [...bands].sort((x, y) => x.lo - y.lo)) {
+    if (b.lo > reach + CONTAIN_EPS) return false; // 隙間がある＝覆っていない
+    reach = Math.max(reach, b.hi);
+  }
+  return reach >= range.hi - CONTAIN_EPS;
+}
+
+// 平面の切断面で本当に取り合う組か（高さが違えば高い方が優先＝取り合わない。モジュール
+// ヘッダのパス0参照）。パス1〜3すべてがこの1つの述語を通る——腰壁の扱いを変えるときは
+// finish/kneeDropWall.js の planWallHeight だけを直せばよいようにする。
+function meetAtPlanCut(a, b) {
+  return a.planHeight === b.planHeight;
+}
+
 const AXIS_EPS = 0.5; // mm
 function fullFaceRange(a, group) {
   let lo = a.materialRange.lo, hi = a.materialRange.hi;
@@ -188,21 +260,27 @@ function fullFaceRange(a, group) {
 }
 
 /**
- * 壁配列から取り合い（T字・コーナー）を検出し、壁ID → 描画調整のMapを返す。
+ * 壁配列から取り合い（T字・コーナー・高さ差）を検出し、壁ID → 描画調整のMapを返す。
  * @param {import('@core').Wall[]} walls
+ * @param {Map<string, object>|null} [kneeDropOverlays] finish/kneeDropWall.js の
+ *   resolveKneeDropOverlays の結果。平面での壁の高さ（腰壁か否か）の判定に使う
+ *   （モジュールヘッダ「パス0」）。省略時は全壁を同じ高さとみなす（従来挙動）。
  * @returns {Map<string, {
  *   baseExtend:{lo?:number,hi?:number},
  *   faceCuts:[number,number][],
  *   finCuts:[number,number][],
  *   finEnd:{lo?:number,hi?:number},
  *   capSuppress:{lo?:boolean,hi?:boolean},
+ *   endExtend:{lo?:number,hi?:number},
+ *   endWrap:{lo?:boolean,hi?:boolean},
+ *   spanCuts:[number,number][],
  * }>}
  */
-export function resolveWallTJunctions(walls) {
+export function resolveWallTJunctions(walls, kneeDropOverlays = null) {
   const result = new Map();
   const ensure = (id) => {
     if (!result.has(id)) {
-      result.set(id, { baseExtend: {}, faceCuts: [], finCuts: [], finEnd: {}, capSuppress: {} });
+      result.set(id, { baseExtend: {}, faceCuts: [], finCuts: [], finEnd: {}, capSuppress: {}, endExtend: {}, endWrap: {}, spanCuts: [] });
     }
     return result.get(id);
   };
@@ -211,8 +289,89 @@ export function resolveWallTJunctions(walls) {
   const allVerticals = [], allHorizontals = [];
   for (const w of walls) {
     if (w.wallFinish == null) continue; // 仕上げ厚不明（手動壁で寸法未確定）は対象外
-    const view = makeView(w);
+    const view = makeView(w, kneeDropOverlays);
     (view.isVertical ? allVerticals : allHorizontals).push(view);
+  }
+
+  // ---- パス0: 高さが違う壁の取り合い（高い方が優先。モジュールヘッダ参照） ----
+  // 他のパスと入口が逆で、**高さが違う組だけ**を見る。ここで確定する「覆われた角に隠れる壁」を
+  // パス1〜3の入口ガードに使うため、先に走らせる。
+  const hiddenInCoveredCorner = new Set();
+  for (const [sameDir, crossDir] of [[allVerticals, allHorizontals], [allHorizontals, allVerticals]]) {
+    for (const a of sameDir) {
+      const alo = a.lenLo, ahi = a.lenHi;
+      // 判定も結果も**帯単位**で行う（オーナー壁＋仕上げ薄壁を合わせた材幅＝パス1のfaceCutsと
+      // 同じ`fullFaceRange`）。1枚ぶんの材幅で見ると、同じ通りのオーナー壁と薄壁で覆う/覆わないや
+      // 覆う深さが食い違い、高い壁の端が段違いになる（実機2026-09で両方を確認: X3通りは深さが
+      // 段違い・X2通りは薄壁側だけが覆う判定から外れていた）。
+      const aBand = fullFaceRange(a, sameDir);
+      for (const b of crossDir) {
+        if (!(a.planHeight > b.planHeight)) continue; // 覆うのは高い方だけ
+        const bBand = fullFaceRange(b, crossDir);
+        // L字の端部か: bの端（=aの厚み方向の位置）がaの帯に触れているか（パス3と同じ語彙）。
+        // 通り過ぎるT字・X字ではbの端がaの帯から遠く、角ではないので対象外になる。
+        const bNearEnd = Math.abs(b.lenLo - a.axisValue) <= Math.abs(b.lenHi - a.axisValue) ? b.lenLo : b.lenHi;
+        if (bNearEnd < aBand.lo - TOUCH_TOLERANCE || bNearEnd > aBand.hi + TOUCH_TOLERANCE) continue;
+
+        // **同じ帯に全高の壁が続いているなら、角はその壁との取り合い**（パス1〜3）に任せる。
+        // 低い壁は反対側から寄り付くだけで、aはそこで終わっていない——覆う・取り巻くのは誤り
+        // （ユーザー確定2026-09。実機X2通り: 西は全高の壁・東が腰壁で、角は全高どうしの
+        // 入隅・出隅として取り合い、そこへ腰壁の天板が出幅ぶん食い込むのが正しい）。
+        // 「aの帯の外側へ続く」ことを要求する——aの帯の中に丸ごと収まる壁は交差部の駒であって
+        // 角の相手ではない（実機X3通り: 駒を相手と見なすと端部の取り巻きが起きなくなる）。
+        const sharedByTallWall = crossDir.some(c => c.id !== b.id
+          && c.planHeight > b.planHeight
+          && c.materialRange.lo < bBand.hi - CONTAIN_EPS && c.materialRange.hi > bBand.lo + CONTAIN_EPS
+          && c.lenLo <= aBand.hi + TOUCH_TOLERANCE && c.lenHi >= aBand.lo - TOUCH_TOLERANCE
+          && (c.lenLo < aBand.lo - CONTAIN_EPS || c.lenHi > aBand.hi + CONTAIN_EPS));
+        if (sharedByTallWall) continue;
+
+        for (const [end, coord, anchorCoord] of [['lo', alo, ahi], ['hi', ahi, alo]]) {
+          // aのこの端がbの帯に触れているか（触れていない端＝反対側の自由端は対象外）。
+          if (coord < bBand.lo - TOUCH_TOLERANCE || coord > bBand.hi + TOUCH_TOLERANCE) continue;
+          const dir = Math.sign(coord - anchorCoord) || 1;
+          // 伸ばし先: bの帯の遠位面（出隅のfarFaceと同じ式）＝角の矩形を覆い切る位置。
+          const target = dir > 0 ? bBand.hi : bBand.lo;
+          const rec = ensure(a.id);
+          // 伸ばすのは足りないときだけ（生成時の出隅処理で既に帯を越えて終端している壁は
+          // 縮めない）。**覆っている端であることは変わらない**ので、妻線・取り巻きの判断は
+          // どちらでも同じように行う——伸長の有無で分けると、同じ端のオーナー壁と薄壁で
+          // 木口線の有無が食い違う（実機2026-09 X3通り）。
+          const cur = rec.endExtend[end];
+          if (dir * (target - coord) > 0 && (cur == null || dir * (target - cur) > 0)) {
+            rec.endExtend[end] = target;
+          }
+          // 低い壁のうち、高い壁の帯に覆われる区間は描かない（天板輪郭が高い壁の帯を横切らない）。
+          ensure(b.id).spanCuts.push([aBand.lo, aBand.hi]);
+          // 覆われた角の矩形（aの帯 × bの帯）に**丸ごと収まる**壁は、切断面では高い壁の材の中に
+          // あって見えない。描かず、パス1〜3の対象からも外す（外さないとこの駒が高い壁の
+          // 内側線を下地幅で切る）。区間の端に半分だけ掛かる駒は「収まって」いないので従来どおり。
+          for (const c of crossDir) {
+            if (c.id === b.id || hiddenInCoveredCorner.has(c.id)) continue;
+            if (!(c.materialRange.lo >= bBand.lo - CONTAIN_EPS && c.materialRange.hi <= bBand.hi + CONTAIN_EPS)) continue;
+            if (!(c.lenLo >= aBand.lo - CONTAIN_EPS && c.lenHi <= aBand.hi + CONTAIN_EPS)) continue;
+            hiddenInCoveredCorner.add(c.id);
+            ensure(c.id).spanCuts.push([c.lenLo, c.lenHi]);
+          }
+          // 伸ばした先に**同じ通り・同じ面向きの壁が続いている**なら、そこは端部ではなく通過点
+          // （部屋ごとに分割された1枚の壁が低い壁を跨ぐ形）——妻線を出さず、仕上げ材の取り巻きも
+          // しない。伸びた2本が重なって面線・内側線が連続するのが正しい姿。
+          const continued = sameDir.some(c => c.id !== a.id
+            && Math.abs(c.axisCLValue - a.axisCLValue) <= AXIS_EPS && c.faceDir === a.faceDir
+            && c.lenLo <= target + TOUCH_TOLERANCE && c.lenHi >= target - TOUCH_TOLERANCE);
+          if (continued) rec.capSuppress[end] = true;
+          rec.endWrap[end] = !continued;
+        }
+      }
+    }
+  }
+  // 隠れる壁はパス1〜3の総当たりから外す（見えない壁は誰とも取り合わない）。
+  if (hiddenInCoveredCorner.size > 0) {
+    for (const group of [allVerticals, allHorizontals]) {
+      for (let i = group.length - 1; i >= 0; i--) {
+        if (hiddenInCoveredCorner.has(group[i].id)) group.splice(i, 1);
+      }
+    }
   }
 
   // ---- パス1: T字（貫通）取り合い。下地を持つ壁同士だけが対象 ----
@@ -229,6 +388,7 @@ export function resolveWallTJunctions(walls) {
       const aFaceRange = fullFaceRange(a, group);
 
       for (const b of crossDir) {
+        if (!meetAtPlanCut(a, b)) continue; // 高さが違う＝高い方が優先（パス0の担当）
         const blo = b.lenLo, bhi = b.lenHi;
         const aAxisPos = a.axisValue; // Aの厚み方向位置 = Bの長さ方向での占有位置
 
@@ -289,6 +449,7 @@ export function resolveWallTJunctions(walls) {
         // 向きで二分している（wGroup/vGroupが常に異なるisVerticalの組）ため到達しないが、
         // 将来wGroupの取り方を広げた場合の保険として残す。
         if (v.id === w.id) continue;
+        if (!meetAtPlanCut(w, v)) continue; // 高さが違う＝高い方が優先（パス0の担当）
         // 外壁どうしの出隅は除外する（2026-09ユーザー確定）: 外壁の仕上げは建物の外周を
         // 一続きに回り込む1枚の皮であり、その2本の境界線（fin線）は出隅で角を回って
         // 取り合う——パス2が両側のfinEndを互いの交点へ合わせているため、パス3で下地帯を
@@ -298,6 +459,13 @@ export function resolveWallTJunctions(walls) {
         // 判定は`&&`（両方とも外壁の組み合わせのみ除外）——片方だけ外壁（外壁と室内壁が
         // 取り合う一般的なT字・出隅）は従来どおり切り欠く。
         if (w.isExteriorWall && v.isExteriorWall) continue;
+        // **Wがその角で終わっているなら切り欠かない**（2026-09ユーザー確定「角では平行な
+        // 2本線が取り合う」）。パス2が内側線の端点を相手の内側線の位置（角の交点）へ置いて
+        // いるので、そこを下地帯で切り欠くと外側線だけが角に届き内側線が消える。外壁どうしの
+        // 例外（上）と同じ理屈を、角で終わる組すべてへ広げたもの——切り欠きが必要なのは
+        // 「Wが横を通り過ぎる途中でVの下地を横切る」配置だけ。
+        if ((w.lenLo >= v.materialRange.lo - TOUCH_TOLERANCE && w.lenLo <= v.materialRange.hi + TOUCH_TOLERANCE)
+          || (w.lenHi >= v.materialRange.lo - TOUCH_TOLERANCE && w.lenHi <= v.materialRange.hi + TOUCH_TOLERANCE)) continue;
         const ext = result.get(v.id)?.baseExtend;
         const vLo = ext?.lo != null ? Math.min(v.lenLo, ext.lo) : v.lenLo;
         const vHi = ext?.hi != null ? Math.max(v.lenHi, ext.hi) : v.lenHi;
@@ -323,6 +491,7 @@ export function resolveWallTJunctions(walls) {
       const alo = a.lenLo, ahi = a.lenHi;
 
       for (const b of crossDir) {
+        if (!meetAtPlanCut(a, b)) continue; // 高さが違う＝高い方が優先（パス0の担当）
         // 置き先: Bの内側線の位置（取り合いの規則は finish/wallFinishJoin.js が唯一の
         // 供給源。柱の仕上げ包み＝finish/columnWrap.js と同じ経路を通す）。fin線が描かれない
         // 壁とはそもそも取り合わない＝null。
@@ -374,6 +543,46 @@ export function resolveWallTJunctions(walls) {
             // 小さい（両ガードの定義より）ため、タイブレークの処理順に関わらず入隅が必ず勝つ。
             rec.capSuppress[end] = !isConvex;
           }
+        }
+      }
+    }
+  }
+
+  // ---- パス5: 妻線の抑止（材が続く端には妻線を描かない。モジュールヘッダ参照） ----
+  // 判定はT字・コーナーの分類に依存せず幾何のみ——端のすぐ外側にある同じ向きの壁の材の和集合が
+  // 自分の材帯を覆うなら、材はそこで終わっていない＝妻線を描いてはいけない。
+  for (const group of [allVerticals, allHorizontals]) {
+    for (const w of group) {
+      for (const [end, coord, anchorCoord] of [['lo', w.lenLo, w.lenHi], ['hi', w.lenHi, w.lenLo]]) {
+        const probe = coord + (Math.sign(coord - anchorCoord) || 1) * CONTINUE_PROBE;
+        const bands = [];
+        for (const v of group) {
+          if (v.id === w.id || v.lenLo > probe || v.lenHi < probe) continue;
+          if (v.materialRange.hi < w.materialRange.lo - CONTAIN_EPS
+            || v.materialRange.lo > w.materialRange.hi + CONTAIN_EPS) continue;
+          bands.push(v.materialRange);
+        }
+        if (coversRange(bands, w.materialRange)) ensure(w.id).capSuppress[end] = true;
+      }
+    }
+  }
+
+  // ---- パス6: 通し壁の材へ入り込んだ端は描かない（モジュールヘッダ参照） ----
+  for (const [sameDir, crossDir] of [[allVerticals, allHorizontals], [allHorizontals, allVerticals]]) {
+    for (const a of sameDir) {
+      for (const [coord, anchorCoord] of [[a.lenLo, a.lenHi], [a.lenHi, a.lenLo]]) {
+        const dir = Math.sign(coord - anchorCoord) || 1;
+        for (const b of crossDir) {
+          // 高さが違う組はパス0の担当（低い壁の帯を覆うのは正しい振る舞い）。
+          if (b.planHeight !== a.planHeight) continue;
+          // 相手が**その位置で両側へ続いている**＝角ではない通し壁のときだけ。角（相手がそこで
+          // 終わる）の食い込みは、壁生成が角の欠けを塞ぐために伸ばしたもので正しい。
+          if (!(b.lenLo < a.axisValue - CONTAIN_EPS && b.lenHi > a.axisValue + CONTAIN_EPS)) continue;
+          const near = dir > 0 ? b.materialRange.lo : b.materialRange.hi;
+          const far  = dir > 0 ? b.materialRange.hi : b.materialRange.lo;
+          if (!(dir * (coord - near) > CONTAIN_EPS)) continue;  // 近い面を越えていない＝食い込みなし
+          if (dir * (coord - far) > CONTAIN_EPS) continue;      // 突き抜けている（X字）は対象外
+          ensure(a.id).spanCuts.push([b.materialRange.lo, b.materialRange.hi]);
         }
       }
     }

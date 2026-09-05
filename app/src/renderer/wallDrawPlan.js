@@ -95,7 +95,8 @@ export function resolveDeferredBackingIds(generalShapes) {
  *
  * @param {import('@core').Wall} wall
  * @param {{openings?:object[], junction?:object, colCuts?:object}} [deps]
- *   junction: wallJunctions.get(wall.id)（resolveWallTJunctionsの結果）
+ *   junction: wallJunctions.get(wall.id)（resolveWallTJunctionsの結果。endExtend/spanCutsは
+ *     描画上の壁スパンを置き換え／切り欠き、endWrapは端部の仕上げ材の回り込みを立てる）
  *   colCuts: columnCuts.get(wall.id)（columnWallCutsの結果。face/fin/backingの3区間を持つ）
  * @returns {{
  *   segments:[number,number][],
@@ -103,26 +104,54 @@ export function resolveDeferredBackingIds(generalShapes) {
  *   finSegments:[number,number][],
  *   finBoundary:number,
  *   finVisible:boolean,
+ *   spanLo:number,
+ *   spanHi:number,
+ *   endWrapLo:number|null,
+ *   endWrapHi:number|null,
  *   capLoSuppressed:boolean,
  *   capHiSuppressed:boolean,
  * }}
+ *   spanLo/spanHi: 描画上の壁スパン（endExtend適用後）。endWrapLo/Hi: その端を仕上げ材で
+ *   取り巻く木口線の位置（null＝取り巻かない）。
  */
 export function resolveWallLines(wall, { openings = [], junction, colCuts } = {}) {
+  // **描画上の壁スパン**: 低い壁（腰壁）とL字の端部で取り合う高い壁は、その端を相手の帯の
+  // 遠位面まで伸ばして描く（wallJunctionResolve.js パス0のendExtend。ユーザー確定2026-09
+  // 「高い方の壁仕上げ材が端部を覆う」）。ここで1回だけ広げれば、面線・内側線・妻線・下地・
+  // 開口分割のすべてが同じ端点に従う——モデルの端点（wall.coord1/coord2）は変えない。
+  const endExtend = junction?.endExtend ?? {};
+  const lo = endExtend.lo ?? Math.min(wall.coord1, wall.coord2);
+  const hi = endExtend.hi ?? Math.max(wall.coord1, wall.coord2);
   // 開口がある区間を除いた複数の区間に分割する（openingsはcoord1昇順が前提）。
-  const lo = Math.min(wall.coord1, wall.coord2), hi = Math.max(wall.coord1, wall.coord2);
-  const segments = [];
+  const rawSegments = [];
   let cursor = lo;
   for (const o of openings) {
-    if (o.coord1 > cursor) segments.push([cursor, o.coord1]);
+    if (o.coord1 > cursor) rawSegments.push([cursor, o.coord1]);
     cursor = Math.max(cursor, o.coord2);
   }
-  if (cursor < hi) segments.push([cursor, hi]);
+  if (cursor < hi) rawSegments.push([cursor, hi]);
+  // 高い壁の帯に覆われる区間は描かない（低い壁側。パス0のspanCuts）。segmentsを直接削るため、
+  // 面線・内側線・妻線・下地・腰壁の天板輪郭がまとめて従う。
+  const spanCuts = junction?.spanCuts ?? [];
+  const segments = spanCuts.length === 0 ? rawSegments
+    : rawSegments.flatMap(([a, b]) => subtractIntervals(a, b, spanCuts));
 
   const baseExtend  = junction?.baseExtend ?? {};
   const faceCuts    = junction?.faceCuts ?? [];
   const finCuts     = junction?.finCuts ?? [];
   const finEnd      = junction?.finEnd ?? {};
   const capSuppress = junction?.capSuppress ?? {};
+  // 端部を仕上げ材で取り巻く端（パス0のendWrap）: 外側線（面線・妻線）は端まで描き、内側線は
+  // 端から仕上げ厚ぶん手前で止めて、そこへ木口線（endWrapLo/Hiの位置）を渡す。内側線の止め先は
+  // パス2と同じ`finEnd`で表す——「内側線の端点を取り合う相手の内側線の位置に置く」規則の、
+  // 相手が**自分の端に回り込んだ仕上げ材**である場合。
+  const endWrap = junction?.endWrap ?? {};
+  const finish = wall.wallFinish > 0 ? wall.wallFinish : 0;
+  const wrapLo = endWrap.lo && finish > 0 ? lo + finish : null;
+  const wrapHi = endWrap.hi && finish > 0 ? hi - finish : null;
+  const finEndWrapped = { ...finEnd };
+  if (wrapLo != null) finEndWrapped.lo = wrapLo;
+  if (wrapHi != null) finEndWrapped.hi = wrapHi;
 
   // 仕上げ面線・仕上げ境界線（fin線）専用のセグメント: 直交する通し壁側からのカットが
   // あれば、その区間だけ切り欠く。柱の仕上げ包み（柱壁）が占める区間も同じ切り欠きとして
@@ -133,7 +162,7 @@ export function resolveWallLines(wall, { openings = [], junction, colCuts } = {}
     : segments.flatMap(([a, b]) => subtractIntervals(a, b, [...baseCuts, ...extra]));
   const faceSegments = cutBy(faceCuts, colCuts?.face ?? []);
   const finSegments = resolveWallFinSegments({
-    segments, lo, hi, finEnd, finCuts, columnFinCuts: colCuts?.fin ?? [],
+    segments, lo, hi, finEnd: finEndWrapped, finCuts, columnFinCuts: colCuts?.fin ?? [],
   });
 
   // cap線（妻線）抑止判定は自壁の物理両端（最初のセグメントの始点＝lo端／最後のセグメントの
@@ -149,6 +178,10 @@ export function resolveWallLines(wall, { openings = [], junction, colCuts } = {}
     finSegments,
     finBoundary,
     finVisible,
+    spanLo: lo,
+    spanHi: hi,
+    endWrapLo: wrapLo,
+    endWrapHi: wrapHi,
     capLoSuppressed: segCount > 0 && isCapSuppressed('lo', 0, segCount, { baseExtend, capSuppress }),
     capHiSuppressed: segCount > 0 && isCapSuppressed('hi', segCount - 1, segCount, { baseExtend, capSuppress }),
   };
@@ -183,11 +216,16 @@ export function buildWallDrawPlan(graph, lodLevel) {
     if (found.length > 0) openingsByWall.set(wall.id, found.sort((a, b) => a.coord1 - b.coord1));
   }
 
+  // 腰壁・垂れ壁の描画オーバーレイ。略図LOD（単線）では特別描画なし。
+  // **壁の取り合い解決より先に**求める——平面での壁の高さ（腰壁か否か）はここが情報源で、
+  // 高さが違う壁の組は取り合わない（高い方が優先。wallJunctionResolve.js のパス0）。
+  const kneeDropOverlays = schematic ? null : resolveKneeDropOverlays(graph);
+
   // 壁のT字取り合い（突き当たり）解決: 詳細LODでのみ、ジオメトリを変えずに描画時だけ反映する
   // （wallJunctionResolve.js。resolveStairSideLines と同じ「描画ルールを幾何モジュールに
   // 集約しレンダラは写像するだけ」というパターン）。壁全般が対象——手動壁・部屋壁・外壁・
   // 階段下壁を区別しない。
-  const wallJunctions = detail ? resolveWallTJunctions(walls) : null;
+  const wallJunctions = detail ? resolveWallTJunctions(walls, kneeDropOverlays) : null;
   // 柱の仕上げ包み（柱壁）と取り合う区間。柱を描かないモード（仕上げ・敷地）でも
   // 壁の見た目は「柱に取られた区間」を反映してよい——柱は実在するため。
   const columnCuts = schematic ? null : columnWallCuts(graph);
@@ -208,8 +246,7 @@ export function buildWallDrawPlan(graph, lodLevel) {
   return {
     deferredBackingIds: detail ? resolveDeferredBackingIds(graph.generalShapes) : EMPTY_SET,
     wallJunctions,
-    // 腰壁・垂れ壁の描画オーバーレイ。略図LOD（単線）では特別描画なし。
-    kneeDropOverlays: schematic ? null : resolveKneeDropOverlays(graph),
+    kneeDropOverlays,
     columnCuts,
     wallLines,
   };

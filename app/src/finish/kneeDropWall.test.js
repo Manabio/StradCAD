@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import { Plane, PlanGraph, CenterLineType, Discipline, edgeKey } from '@core';
 import { generateRoomWallsFromOutline } from './wallGeneration.js';
 import { edgeGeometry, buildCellToRoom } from './edgeClassify.js';
-import { effectiveCeilingHeight, validateKneeDropWall, ERR_CEILING_HEIGHT_UNRESOLVED, kneeDropRecordsOnAxis, resolveKneeDropOverlays, kneeDropRecordForWallSpan, kneeDropRecordsAtPointOnWall } from './kneeDropWall.js';
+import { effectiveCeilingHeight, validateKneeDropWall, ERR_CEILING_HEIGHT_UNRESOLVED, kneeDropRecordsOnAxis, resolveKneeDropOverlays, kneeDropRecordForWallSpan, kneeDropRecordsAtPointOnWall, planWallHeight, wallsMeetAtPlanCut, PLAN_CUT_HEIGHT } from './kneeDropWall.js';
 
 function makeGraph() {
   const plane = new Plane('p1', 0, '1階', 1, 1);
@@ -225,4 +225,52 @@ test('【失敗系】kneeDropRecordsAtPointOnWall: 点が区間外なら構成�
   const yMid = graph.shapeMap.get(axisCLId);
   const own = [...graph.walls].find(w => !w.isVertical && w.axisCL === yMid);
   assert.deepEqual(kneeDropRecordsAtPointOnWall(graph, own, 4500, 0.5), []);
+});
+
+// ==== 平面での壁の高さ（「取り合いは高い方が優先」の唯一の供給源。ユーザー確定2026-09）====
+test('planWallHeight: 天板輪郭で描かれる腰壁はその天端高さ、それ以外の壁はInfinity', () => {
+  const graph = makeGraph();
+  const { key } = makeSharedEdgeRooms(graph);
+  graph.setKneeDropWall(key, { knee: { topHeight: 900 } });
+  const overlays = resolveKneeDropOverlays(graph);
+
+  const knee = [...graph.walls].find(w => overlays.has(w.id));
+  const tall = [...graph.walls].find(w => !overlays.has(w.id));
+  assert.equal(planWallHeight(overlays, knee.id), 900, '腰壁の高さは天端高さ');
+  assert.equal(planWallHeight(overlays, tall.id), Infinity, '切断面に切られる壁は常に高い側');
+  assert.equal(wallsMeetAtPlanCut(overlays, knee.id, tall.id), false, '高さが違えば取り合わない');
+  assert.equal(wallsMeetAtPlanCut(overlays, tall.id, tall.id), true);
+});
+
+test('【失敗系】planWallHeight: 切断高さ超の腰壁・垂れ壁・オーバーレイ無しはすべてInfinity', () => {
+  const graph = makeGraph();
+  const { key } = makeSharedEdgeRooms(graph);
+  graph.setKneeDropWall(key, { knee: { topHeight: PLAN_CUT_HEIGHT + 1 } }); // 切断面に切られる
+  const overlays = resolveKneeDropOverlays(graph);
+  assert.equal(overlays.size, 0, '切断高さを超える腰壁は天板輪郭で描かない＝オーバーレイ無し');
+
+  const anyWall = [...graph.walls][0];
+  assert.equal(planWallHeight(overlays, anyWall.id), Infinity);
+  assert.equal(planWallHeight(null, anyWall.id), Infinity, 'オーバーレイ未解決（略図LOD）は全壁同じ高さ');
+  assert.equal(planWallHeight(new Map([['w', { mode: 'drop', capLo: 0, capHi: 0 }]]), 'w'), Infinity,
+    '垂れ壁は対象外（確定した規則は腰壁のみ）');
+  assert.equal(wallsMeetAtPlanCut(null, 'a', 'b'), true);
+});
+
+// 実機2026-09の回帰: 区間の端の交差部にできる短い駒は**半分だけ**が区間内に入る。これを腰壁と
+// 見なすと、区間の外側で続く全高の壁の取り合い（T字・十字）が壊れる（実機で4本が失われた）。
+// 構成壁の判定は変えない——駒は全高のまま扱い、描画の可否は取り合い側（覆われた角）で決める。
+test('【実機回帰2026-09】resolveKneeDropOverlays: 区間端に半分だけ掛かる駒は腰壁にしない', () => {
+  const graph = makeGraph();
+  const { key } = makeSharedEdgeRooms(graph);
+  graph.setKneeDropWall(key, { knee: { topHeight: 800 } });
+  const [axisCLId, , endCLId] = key.split(':');
+  const yMid = graph.shapeMap.get(axisCLId), x1 = graph.shapeMap.get(endCLId);
+  // 区間の端(x=4000)の交差部にできる駒: [3942.5, 4057.5]（半分だけ区間内）。
+  const filler = graph.addWall(yMid, -57.5, false, x1, -57.5, x1, 57.5, {
+    isRoomWall: true, wallFinish: 12.5, backingOffset: 0, backingDepth: 90, finishSide: -1,
+  });
+  const overlays = resolveKneeDropOverlays(graph);
+  assert.equal(overlays.has(filler.id), false, '駒は全高の壁のまま（腰壁扱いにしない）');
+  assert.equal(planWallHeight(overlays, filler.id), Infinity);
 });

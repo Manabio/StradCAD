@@ -9,7 +9,8 @@
 // resolveWallLines／buildWallDrawPlan の呼び出し結果そのものを固定する。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Plane, PlanGraph, CenterLineType, Discipline } from '@core';
+import { Plane, PlanGraph, CenterLineType, Discipline, edgeKey } from '@core';
+import { generateRoomWallsFromOutline } from '../finish/wallGeneration.js';
 import { LodLevel } from '../viewport.js';
 import { resolveWallTJunctions } from './wallJunctionResolve.js';
 import { buildWallDrawPlan, resolveWallLines } from './wallDrawPlan.js';
@@ -129,19 +130,19 @@ test('resolveWallLines: 4枚一括の解決でVownerのhi端もfinSegments/capHi
 // fin線が残る）——wallJunctionResolve.jsパス3（fin線の直交壁下地貫通防止）により、
 // 相手の下地帯ぶんさらに短縮され-45で終わるのが正しい（ユーザー確定仕様「fin線は
 // 直交する壁の下地を横切る区間を描かない」）。 ----
-test('resolveWallLines: 出隅側の壁（実Wall）はfinSegmentsが相手の下地帯ぶんさらに短縮され、cap抑止は立たない', () => {
+test('resolveWallLines: 出隅側の壁（実Wall）はfinSegmentsが角の交点まで届き、cap抑止は立たない', () => {
   const { g, v, h } = buildConvexGraph();
   const junctions = resolveWallTJunctions([...g.walls]);
 
   const vLines = resolveWallLines(v, { junction: junctions.get(v.id) });
   assert.deepEqual(vLines.segments, [[-6000, 57.5]]);
-  assert.deepEqual(vLines.finSegments, [[-6000, -45]],
-    'fin線は相手(h)の内側線位置(45)まで短縮した上、さらに相手の下地帯[-45,45]を横切らず-45で終わるはず');
+  assert.deepEqual(vLines.finSegments, [[-6000, 45]],
+    'fin線は相手(h)の内側線位置(45)＝角の交点まで届くはず（仕様改訂2026-09後半: 角では2本線が取り合う）');
   assert.equal(vLines.capHiSuppressed, false,
     '出隅ではcap抑止は立たない（キャップの扱いは現状維持というユーザー確定仕様）');
 
   const hLines = resolveWallLines(h, { junction: junctions.get(h.id) });
-  assert.deepEqual(hLines.finSegments, [[-6000, -45]]);
+  assert.deepEqual(hLines.finSegments, [[-6000, 45]], '相手(v)側も同じく角の交点まで届く');
   assert.equal(hLines.capHiSuppressed, false);
 });
 
@@ -186,8 +187,8 @@ test('buildWallDrawPlan: 詳細LODでwallLinesが入隅・出隅の両方を実�
 
   const convex = buildConvexGraph();
   const convexPlan = buildWallDrawPlan(convex.g, LodLevel.DETAIL);
-  assert.deepEqual(convexPlan.wallLines.get(convex.v.id).finSegments, [[-6000, -45]],
-    '相手(h)の下地帯[-45,45]ぶんさらに短縮される（パス3。上のresolveWallLinesテスト参照）');
+  assert.deepEqual(convexPlan.wallLines.get(convex.v.id).finSegments, [[-6000, 45]],
+    '角の交点(45)まで届く（仕様改訂2026-09後半。上のresolveWallLinesテスト参照）');
   assert.equal(convexPlan.wallLines.get(convex.v.id).capHiSuppressed, false);
 });
 
@@ -211,4 +212,62 @@ test('【失敗系】resolveWallLines: 相手がいない壁（junctionなし）
   assert.deepEqual(lines.finSegments, [[57.5, 2442.5]]);
   assert.equal(lines.capLoSuppressed, false);
   assert.equal(lines.capHiSuppressed, false);
+});
+
+// ---- 腰壁は取り合いの相手にならない／L字の端部は高い方が覆って取り巻く（2026-09ユーザー確定）----
+// resolveWallTJunctions 側の単体テストは wallJunctionResolve.test.js にあるが、
+// buildWallDrawPlan が腰壁オーバーレイを**実際に渡しているか**はここでしか守れない
+// （渡し忘れても純関数のテストは緑のまま）。実グラフで固定する。
+// 間仕切り（x=2000・y=2000〜5000）は上下室の境（y=2000。腰壁指定）で**終わる**壁——
+// 実機2026-09のX3通りと同じ形（相手が腰壁で、その先に同じ通りの壁が続かない端部）。
+function buildKneePartitionGraph(kneeTopHeight) {
+  const g = new PlanGraph(new Plane('p', 0, '1階', 1, 1));
+  const x0 = vCL(g, 0), xm = vCL(g, 2000), x1 = vCL(g, 4000);
+  const y0 = hCL(g, 0), yMid = hCL(g, 2000), y2 = hCL(g, 5000);
+  const upper = g.addRoom(new Set([`${x0.id}:${y0.id}:${xm.id}:${yMid.id}`, `${xm.id}:${y0.id}:${x1.id}:${yMid.id}`]), '上室');
+  const lowerL = g.addRoom(new Set([`${x0.id}:${yMid.id}:${xm.id}:${y2.id}`]), '下左');
+  const lowerR = g.addRoom(new Set([`${xm.id}:${yMid.id}:${x1.id}:${y2.id}`]), '下右');
+  for (const r of [upper, lowerL, lowerR]) generateRoomWallsFromOutline(g, r);
+  if (kneeTopHeight != null) {
+    for (const [s2, e2] of [[x0, xm], [xm, x1]]) {
+      g.setKneeDropWall(edgeKey(yMid.id, s2.id, e2.id), { knee: { topHeight: kneeTopHeight } });
+    }
+  }
+  // 下2室を仕切る間仕切りのうち下左室側（材[1942.5,2000]）。lo端で腰壁の帯とL字に取り合う。
+  const part = [...g.walls].find(w => w.isVertical && w.axisCL === xm
+    && Math.min(w.coord1, w.coord2) > 2000 && w.materialRange.hi <= 2000);
+  return { g, part };
+}
+
+test('buildWallDrawPlan: 腰壁とL字に取り合う端部は、高い壁が覆って仕上げ材が端を取り巻く', () => {
+  const knee = buildKneePartitionGraph(900);
+  const lines = buildWallDrawPlan(knee.g, LodLevel.DETAIL).wallLines.get(knee.part.id);
+
+  // 腰壁の帯（オーナー[1942.5,2000]＋薄壁[2000,2057.5]）の遠位面1942.5まで覆う。
+  assert.deepEqual(lines.segments, [[1942.5, 4942.5]], '端部を覆うまでスパンごと伸びるはず');
+  assert.equal(lines.capLoSuppressed, false, '実際の端部なので妻線（外側線）は端に残るはず');
+  assert.equal(lines.endWrapLo, 1955, '木口線は端から仕上げ厚(12.5)内側に立つはず');
+  assert.deepEqual(lines.finSegments, [[1955, 4955]],
+    '内側線は端まで行かず木口線の位置で止まり、そこで角を作る（外側線は端まで・内側線同士がL字）');
+});
+
+test('【失敗系】buildWallDrawPlan: 腰壁の先に同じ通りの壁が続く端は、端部ではないので取り巻かない', () => {
+  // 上下室の外周壁（x=0の通り）は腰壁の帯を跨いで上下に続く1枚——妻線も木口線も出さず、
+  // 伸びた2本が重なって面線・内側線が連続するのが正しい。
+  const knee = buildKneePartitionGraph(900);
+  const west = [...knee.g.walls].find(w => w.isVertical && w.materialRange.lo === 0
+    && Math.min(w.coord1, w.coord2) > 2000);
+  const lines = buildWallDrawPlan(knee.g, LodLevel.DETAIL).wallLines.get(west.id);
+  assert.deepEqual(lines.segments, [[1942.5, 4942.5]], '覆うところまでは同じく伸びる');
+  assert.equal(lines.endWrapLo, null, '通過点なので取り巻かない');
+  assert.equal(lines.capLoSuppressed, true, '妻線も出さない（壁は続いている）');
+});
+
+test('【失敗系】buildWallDrawPlan: 切断高さを超える腰壁指定は通常の壁のまま取り合う', () => {
+  const tall = buildKneePartitionGraph(1800); // PLAN_CUT_HEIGHT(1500)超＝切断面に切られる
+  const lines = buildWallDrawPlan(tall.g, LodLevel.DETAIL).wallLines.get(tall.part.id);
+  assert.deepEqual(lines.segments, [[2057.5, 4942.5]], '端部を覆う延長は起きないはず');
+  assert.equal(lines.endWrapLo, null);
+  assert.equal(lines.capLoSuppressed, true, '切断面まで在る壁どうしなので従来どおり取り合う（キャップ抑止）');
+  assert.deepEqual(lines.finSegments, [[2045, 4955]], '内側線は相手の内側線の位置へ寄る（パス2）');
 });

@@ -113,8 +113,8 @@ export const ShapesLayer = observer(({ graph, viewport, stairUnderClips = null }
         // （そちらのJSDoc参照。開口・T字/コーナー取り合い・柱の仕上げ包みを
         // buildWallDrawPlan内でまとめて解決している）。
         const plan = wallLines.get(shape.id);
-        const { segments, faceSegments, finSegments, finBoundary, finVisible, capLoSuppressed, capHiSuppressed } = plan;
-        const lo = Math.min(shape.coord1, shape.coord2), hi = Math.max(shape.coord1, shape.coord2);
+        const { segments, faceSegments, finSegments, finBoundary, finVisible,
+          spanLo: lo, spanHi: hi, endWrapLo, endWrapHi, capLoSuppressed, capHiSuppressed } = plan;
 
         if (lodLevel === LodLevel.SCHEMATIC) {
           // 略図: 軸オフセット位置の単線（厚み表現なし）
@@ -229,16 +229,19 @@ export const ShapesLayer = observer(({ graph, viewport, stairUnderClips = null }
           )));
         }
 
-        // 端点はねだし部の木口: 仕上げ厚の見切り線を妻線の内側に加えて2重線にする
-        // （他の仕上げ線と同様、詳細のみ）。端点判定は軸CLの線分範囲越え＋交点消失で導出する
+        // 木口（仕上げ厚の見切り線を妻線の内側に加えて2重線にする。他の仕上げ線と同様、詳細のみ）。
+        // 2通りの端で描く:
+        //  - 端点はねだし部（従来）: 軸CLの線分範囲越え＋交点消失で導出する
+        //  - 低い壁（腰壁）の端部を覆った端（wallDrawPlan.js の endWrapLo/Hi。ユーザー確定2026-09
+        //    「高い方の壁仕上げ材が端部を取り巻く」）——位置は解決済みなのでここは写すだけ
         if (shape.wallFinish > 0) {
           const axisCL = shape.axisCL;
           const tips = [
-            { side: 'lo', beyond: axisCL.extentLo != null && lo < axisCL.extentLo - ENDPOINT_EPS, capV: lo + shape.wallFinish },
-            { side: 'hi', beyond: axisCL.extentHi != null && hi > axisCL.extentHi + ENDPOINT_EPS, capV: hi - shape.wallFinish },
+            { side: 'lo', wrap: endWrapLo, beyond: axisCL.extentLo != null && lo < axisCL.extentLo - ENDPOINT_EPS, capV: lo + shape.wallFinish },
+            { side: 'hi', wrap: endWrapHi, beyond: axisCL.extentHi != null && hi > axisCL.extentHi + ENDPOINT_EPS, capV: hi - shape.wallFinish },
           ];
           for (const t of tips) {
-            if (!t.beyond || !isEndpointAt(graph, axisCL, t.side)) continue;
+            if (t.wrap == null && (!t.beyond || !isEndpointAt(graph, axisCL, t.side))) continue;
             if (!segments.some(([a, b]) => t.capV > a && t.capV < b)) continue;
             elems.push(
               <Line

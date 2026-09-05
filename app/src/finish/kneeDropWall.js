@@ -289,7 +289,8 @@ export function validateKneeDropWall(kneeTop, dropBottom, ceilingHeight) {
  * 常に優先される（腰壁天板より低い切断面には他に描くものが無いため）。腰壁指定が無い区間
  * でのみ垂れ壁の判定（切断面が壁本体を貫くか）を行う。
  * @param {object} graph
- * @returns {Map<string, {mode:'knee'|'drop', capLo:number, capHi:number}>}
+ * @returns {Map<string, {mode:'knee'|'drop', capLo:number, capHi:number, topHeight?:number}>}
+ *   topHeight は mode==='knee' のみ（planWallHeight が読む平面での壁の高さ）。
  */
 export function resolveKneeDropOverlays(graph) {
   const result = new Map();
@@ -304,7 +305,11 @@ export function resolveKneeDropOverlays(graph) {
 
     let overlay = null;
     if (rec.knee) {
-      if (rec.knee.topHeight <= PLAN_CUT_HEIGHT) overlay = { mode: 'knee', capLo, capHi };
+      // topHeight は「平面での壁の高さ」（planWallHeight）の情報源も兼ねる——壁同士の
+      // 取り合いで高い方を優先するための比較に使う。
+      if (rec.knee.topHeight <= PLAN_CUT_HEIGHT) {
+        overlay = { mode: 'knee', capLo, capHi, topHeight: rec.knee.topHeight };
+      }
     } else if (rec.drop) {
       const ceilingHeight = effectiveCeilingHeight(graph, key, cellToRoom);
       // 垂れ壁の下端（床からの高さ = ceilingHeight - bottomHeight）が平面切断高さより上にあれば、
@@ -320,4 +325,36 @@ export function resolveKneeDropOverlays(graph) {
     }
   }
   return result;
+}
+
+/**
+ * 平面での壁の高さ(mm)——「壁同士の取り合いは**高い方が優先**」（ユーザー確定2026-09）を
+ * 判定するための唯一の供給源。
+ *
+ * 平面切断高さ以下の腰壁は天板輪郭（`resolveKneeDropOverlays` の mode==='knee'）で描かれ、
+ * **切断面には存在しない**——その天端高さがそのまま高さになる。それ以外の壁は切断面に
+ * 切られる＝腰壁より必ず高いので `Infinity` を返す（天井高さを引かない: 比較にしか使わない
+ * 値であり、実高さを持ち出すと部屋ごとの天井高さの差で取り合いが揺れる）。
+ * 垂れ壁（mode==='drop'）は対象外＝従来どおり `Infinity` 扱い——確定した規則は腰壁のみ。
+ * @param {Map<string, object>|null|undefined} overlays resolveKneeDropOverlays の結果
+ * @param {string} wallId
+ * @returns {number}
+ */
+export function planWallHeight(overlays, wallId) {
+  const o = overlays?.get(wallId);
+  return o?.mode === 'knee' ? o.topHeight : Infinity;
+}
+
+/**
+ * 2本の壁が平面の切断面で**取り合うか**。高さが違えば取り合わない——高い方は相手が
+ * 居ないものとして描かれ（面線・内側線・妻線を相手に譲らない）、低い方（腰壁）は天板輪郭で
+ * 相手の面まで描かれる。renderer/wallJunctionResolve.js の取り合い解決の入口で使う。
+ * @param {Map<string, object>|null|undefined} overlays resolveKneeDropOverlays の結果
+ *   （null/undefined＝腰壁の解決前・略図LOD。全壁を同じ高さとみなす＝従来挙動）
+ * @param {string} aId
+ * @param {string} bId
+ * @returns {boolean}
+ */
+export function wallsMeetAtPlanCut(overlays, aId, bId) {
+  return planWallHeight(overlays, aId) === planWallHeight(overlays, bId);
 }
