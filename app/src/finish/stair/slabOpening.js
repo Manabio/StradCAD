@@ -20,19 +20,21 @@ import { cellsBeyondBreak, subtractIntervals } from './stairGeometry.js';
 // （壁は境界CLに帰属するため通常ほぼ0。丸め・端数対策の余裕）。
 const WALL_AXIS_CL_EPS = 0.5;
 
-// 開口を成すセル集合を列挙する。
-// - 吹抜け（VOID）・階段吹抜け（STAIR_VOID）Room … 占有セル全体が開口
-// - 上階の階段 … 破れ線より先のセルが開口（破れ手前＝階段とりつき部はスラブが残る）
+// 開口を成すセル集合を列挙する。`kind` は縁を誰が描くかの区別
+// （'void'＝renderer/VoidLayer.jsx が「上部吹抜け」として外形を描く / 'stair'＝階段側が描く）。
+// - 吹抜け（VOID）Room … 占有セル全体が開口。kind='void'
+// - 階段吹抜け（STAIR_VOID）Room … 占有セル全体が開口。VoidLayer は描画対象外のため kind='stair'
+// - 上階の階段 … 破れ線より先のセルが開口（破れ手前＝階段とりつき部はスラブが残る）。kind='stair'
 function openingCellSets(upperGraph, riserOf) {
   const sets = [];
   for (const room of upperGraph.rooms) {
     if (room.feature !== RoomFeature.VOID && room.feature !== RoomFeature.STAIR_VOID) continue;
     const cells = refreshCells(room.cells, upperGraph);
-    if (cells.size > 0) sets.push(cells);
+    if (cells.size > 0) sets.push({ cells, kind: room.feature === RoomFeature.VOID ? 'void' : 'stair' });
   }
   for (const stair of upperGraph.stairs) {
     const beyond = cellsBeyondBreak(stair, upperGraph, riserOf(stair));
-    if (beyond.size > 0) sets.push(beyond);
+    if (beyond.size > 0) sets.push({ cells: beyond, kind: 'stair' });
   }
   return sets;
 }
@@ -59,22 +61,30 @@ export function slabOpeningRects(upperGraph, { riserOf = () => null } = {}) {
  * 描く位置は上階の壁の内面（＝開口側の面。腰壁なら外面にあたる）で、壁が無い辺はCLへ落ちる
  * （`faceRect` の規約）。壁の有無判定は境界CLで行うため、両方を持つ必要がある。
  * 非矩形の開口は1つの矩形で境界を表せないためスキップする（voidGeometry.js と同じ方針）。
+ *
+ * 上階の吹抜け（VOID）Roomは除く（ユーザー決定2026-09）——その外形は renderer/VoidLayer.jsx が
+ * 「上部吹抜け」の破線として既に描いており、ここでも描くと同じ矩形に線種・太さの違う破線が
+ * 二重に乗る（VoidLayer は insetRect ぶん内側、dash も別）。開口としての範囲そのものは
+ * `slabOpeningRects`（破れ先破線のクリップ用）が引き続きVOIDを含めて返す。
+ * STAIR_VOID は VoidLayer の描画対象外（voidGeometry.js）なので、ここが縁を描き続ける。
  * @returns {{cl:object, face:object}[]|null} null＝上階が無い／未解決
  */
 export function slabOpeningFrames(upperGraph, { riserOf = () => null } = {}) {
   if (!upperGraph) return null;
-  return openingParts(upperGraph, riserOf).filter(p => p.face).map(p => ({ cl: p.cl, face: p.face }));
+  return openingParts(upperGraph, riserOf)
+    .filter(p => p.face && p.kind !== 'void')
+    .map(p => ({ cl: p.cl, face: p.face }));
 }
 
 // 開口1つぶんの {cells, cl, face}。非矩形（1つの矩形で境界を表せない）は cl/face を null にし、
 // 呼び出し側がセル矩形へフォールバックする（voidGeometry.js と同じ「矩形のみ」方針）。
 function openingParts(upperGraph, riserOf) {
-  return openingCellSets(upperGraph, riserOf).map((cells) => {
+  return openingCellSets(upperGraph, riserOf).map(({ cells, kind }) => {
     const cl = roomBounds(cells, upperGraph);
-    if (!Number.isFinite(cl.x1) || !(cl.x2 > cl.x1 && cl.y2 > cl.y1)) return { cells, cl: null, face: null };
+    if (!Number.isFinite(cl.x1) || !(cl.x2 > cl.x1 && cl.y2 > cl.y1)) return { cells, kind, cl: null, face: null };
     const inBounds = getCellsInRect(cl.x1, cl.y1, cl.x2, cl.y2, upperGraph);
-    if (!inBounds.every(c => cells.has(c.key))) return { cells, cl: null, face: null };
-    return { cells, cl, face: faceRect(cells, upperGraph) ?? cl };
+    if (!inBounds.every(c => cells.has(c.key))) return { cells, kind, cl: null, face: null };
+    return { cells, kind, cl, face: faceRect(cells, upperGraph) ?? cl };
   });
 }
 

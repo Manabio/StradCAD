@@ -7,8 +7,8 @@
  * stairLineRenderProps の返り値（{key,points,strokeWidth,dash}[]）を<Line>へ渡すだけにする。
  *
  * 対象は破線でない外周線（thin/medium/heavy=ささら等）・踏面線（thin/heavy）のみ。
- * 見下げ（isDownView。自階スラブの開口越しに見下ろす下階階段の点線表現）・
- * s.dashed（到達辺等、install表示でも点線の区間）はdash扱いにして対象外にする
+ * 見下げ（isDownView。自階スラブの開口越しに見下ろす下階階段の破線表現）・
+ * s.dashed（到達辺等、install表示でも破線の区間）はdash扱いにして対象外にする
  * （破線除外はfigureLineJoin.js側の規約。矢じり・破れ線・選択ハイライト・開口縁は
  *   このモジュールの対象外＝呼び出し側がそもそも入力チャネルへ混ぜない）。
  *
@@ -30,10 +30,13 @@
  * 端点が偶然一致しても互いに影響しない。
  */
 import { resolvePlanLinePointsMmScaledStroke } from '../../renderer/planLineJoin.js';
+import { UPPER_VOID_DASH_PX } from '../voidGeometry.js';
 
-// 見下げ（isDownView）の点線パターン（スクリーンpx）。旧StairLayer.jsx内蔵定数を移設——
-// dash判定の唯一の供給源をここに一本化する。
-const DOWNVIEW_DASH_PX = [3, 3];
+// 見下げ（isDownView）・破れ先（階段下エリアの外周線）の破線パターン（スクリーンpx）。
+// **書式は「上部吹抜け」と同じものを参照する**（ユーザー決定2026-09）——描画根拠
+// （見下げ／見上げ／上部吹抜け）は別のままでよいが、平面に並ぶ「見えない線」の線種が
+// 系統ごとに違うと混在して見える。ここで独自のパターン値を持たないこと。
+const DOWNVIEW_DASH_PX = UPPER_VOID_DASH_PX;
 
 // lineWeightsPxに該当キーが無い場合の既定値（世界mm相当。×scaleXで実1px相当に戻る）。
 // figureLineJoin.jsのweightPxが持つ既定THIN_PX=1と同じ「不明な太さは1px扱い」規約に合わせる。
@@ -54,10 +57,18 @@ export function outlineStrokeWidth(s, scaleX, lineWeightsPx) {
 export function stairTreadKey(view, id, i) { return `${view}:${id}:t:${i}`; }
 export function stairOutlineKey(view, id, i) { return `${view}:${id}:o:${i}`; }
 
-// 見下げの点線パターンを実px→世界mm相当へ変換する（beyondLines等、L字結合を経由しない
-// 常時点線の<Line>もこれを呼ぶ——dashパターン値の唯一の供給源）。
+// 見下げ・破れ先の破線パターンを実px→世界mm相当へ変換する（beyondLines等、L字結合を経由しない
+// 常時破線の<Line>もこれを呼ぶ——dashパターン値の唯一の供給源）。
 export function stairDownviewDashPx(scaleX) {
   return DOWNVIEW_DASH_PX.map(w => w / scaleX);
+}
+
+// 見上げ破線（上階スラブ開口の縁。renderer/StairLayer.jsx の openingEdges）のパターンを
+// 実px→世界mm相当へ変換する。呼び出し元（描画根拠）は見下げと別だが、書式は同じ
+// UPPER_VOID_DASH_PX を参照する——関数を分けたまま値だけ共有することで、
+// 「根拠は別・書式は共通」を型で表す。
+export function stairUpperOpeningDashPx(scaleX) {
+  return UPPER_VOID_DASH_PX.map(w => w / scaleX);
 }
 
 /**

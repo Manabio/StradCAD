@@ -9,7 +9,9 @@ import assert from 'node:assert/strict';
 import {
   stairTreadKey, stairOutlineKey,
   buildStairJoinPrimitives, resolveStairLinePointsMm, stairLineRenderProps,
+  stairDownviewDashPx, stairUpperOpeningDashPx,
 } from './stairLineJoinPrimitives.js';
+import { UPPER_VOID_DASH_PX } from '../voidGeometry.js';
 
 const WEIGHTS = { thin: 1, medium: 2 };
 const SCALE_X = 0.0378;
@@ -229,13 +231,14 @@ test('stairLineRenderProps: heavy踏面線×heavy外周線の角で treads側の
   assert.ok(Math.abs(oy1 * SCALE_X - (-1.0)) < 1e-9, `外周線側も実1px延長（角の外側＝y負方向。実際:${oy1 * SCALE_X}px）`);
 });
 
-test('stairLineRenderProps: isDownViewの踏面線・外周線はdashに見下げパターンが入る', () => {
+test('stairLineRenderProps: isDownViewの踏面線・外周線のdashは「上部吹抜け」と同じ書式（UPPER_VOID_DASH_PX）', () => {
   const tread = { x1: 0, y1: 0, x2: 100, y2: 0 };
   const outlineSeg = { x1: 0, y1: 0, x2: 100, y2: 0 };
   const entry = { view: 'upper', id: 's1', treadSegs: [tread], outlineSegs: [outlineSeg], isDownView: true };
   const { treads, outline } = stairLineRenderProps(entry, fakeViewport(SCALE_X), WEIGHTS);
-  assert.deepEqual(treads[0].dash, [3 / SCALE_X, 3 / SCALE_X]);
-  assert.deepEqual(outline[0].dash, [3 / SCALE_X, 3 / SCALE_X]);
+  const expected = UPPER_VOID_DASH_PX.map(w => w / SCALE_X);
+  assert.deepEqual(treads[0].dash, expected);
+  assert.deepEqual(outline[0].dash, expected);
 });
 
 test('stairLineRenderProps: s.dashed（到達辺等）はisDownViewでなくても外周線dashに[40,30]相当が入る', () => {
@@ -274,4 +277,11 @@ test('失敗系: 長さ0の線分 → 座標不変', () => {
   const [x1, y1, x2, y2] = resolved.get(stairOutlineKey('install', 's1', 0)).points;
   assert.ok(Math.abs(x1 - 50) < 1e-6); assert.ok(Math.abs(y1 - 50) < 1e-6);
   assert.ok(Math.abs(x2 - 50) < 1e-6); assert.ok(Math.abs(y2 - 50) < 1e-6);
+});
+
+test('階段の破線は見上げ・見下げとも「上部吹抜け」（UPPER_VOID_DASH_PX）と同じ書式を参照する', () => {
+  const scaleX = 0.25;
+  const expected = UPPER_VOID_DASH_PX.map(w => w / scaleX);
+  assert.deepEqual(stairUpperOpeningDashPx(scaleX), expected); // 上階スラブ開口の縁（見上げ破線）
+  assert.deepEqual(stairDownviewDashPx(scaleX), expected);     // 破れ先＝階段下エリアの外周線・見下げ
 });

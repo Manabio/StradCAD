@@ -10,6 +10,15 @@ import { refreshCells, roomBounds, getCellsInRect } from './gridCells.js';
 import { faceRect } from './wallFaces.js';
 
 /**
+ * 「上部吹抜け」（直下階に描く上階吹抜けの×・外形）の破線パターン（スクリーンpx）。
+ * **上階に床が無い範囲の外形を表す破線の唯一の供給源**——階段側の見上げ破線
+ * （上階スラブ開口の縁。finish/stair/stairLineJoinPrimitives.js の `stairUpperOpeningDashPx`）も
+ * これを参照する。同じ性質の線なのに線種が食い違うと、隣り合ったとき混在して見える
+ * （ユーザー決定2026-09）。自階の吹抜け（一点鎖線）・見下げの点線は別の線種で、ここには含めない。
+ */
+export const UPPER_VOID_DASH_PX = [8, 4];
+
+/**
  * グラフ全体から吹抜けの×描画データを列挙する。
  * 矩形（RoomLabelsLayer.jsx の isRectangular 判定と同じ方式。ただし refreshCells 済みで比較）
  * でない部屋・壁内4頂点が解決できない部屋はスキップする。

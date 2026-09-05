@@ -145,3 +145,21 @@ test('trimOpeningEdgesAgainstStair: 破れ先セル／階段側の線が無け�
   assert.deepEqual(trimOpeningEdgesAgainstStair(OPENING_EDGE, [], BEYOND), OPENING_EDGE);
   assert.deepEqual(trimOpeningEdgesAgainstStair([], STAIR_SEGS, BEYOND), []);
 });
+
+test('slabOpeningFrames: 上階の吹抜け(VOID)Roomは縁を返さない（VoidLayerの「上部吹抜け」破線と二重描画しない）', () => {
+  const { graph, left, right } = makeGrid();
+  graph.addRoom(new Set([left, right])).setFeature(RoomFeature.VOID);
+  assert.deepEqual(slabOpeningFrames(graph), []);
+  assert.deepEqual(slabOpeningEdges(slabOpeningFrames(graph), graph), []);
+  // 範囲そのもの（破れ先破線のクリップ用）はVOIDも含めて返り続ける
+  assert.equal(slabOpeningRects(graph).length, 1);
+});
+
+test('slabOpeningFrames: VOIDとSTAIR_VOIDが混在してもSTAIR_VOID側だけが縁を返す', () => {
+  const { graph, left, right } = makeGrid();
+  graph.addRoom(new Set([left])).setFeature(RoomFeature.VOID);
+  graph.addRoom(new Set([right])).setFeature(RoomFeature.STAIR_VOID);
+  const frames = slabOpeningFrames(graph);
+  assert.equal(frames.length, 1);
+  assert.deepEqual([frames[0].cl.x1, frames[0].cl.x2], [1000, 2000]); // right（STAIR_VOID）のみ
+});

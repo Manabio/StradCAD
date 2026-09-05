@@ -1,7 +1,7 @@
 import { observer } from 'mobx-react-lite';
 import { Group, Line, Text } from 'react-konva';
 import { LodLevel } from '../viewport.js';
-import { computeVoidCrosses } from '../finish/voidGeometry.js';
+import { computeVoidCrosses, UPPER_VOID_DASH_PX } from '../finish/voidGeometry.js';
 
 const VOID_CROSS_COLOR  = '#1e293b'; // ×の色（StepSectionLayer の断面線と同系）
 const LABEL_FONT_SIZE_PX = 12;       // 「上部吹抜け」のスクリーン上表示サイズ(px)
@@ -120,7 +120,7 @@ export const VoidLayer = observer(({ graph, viewport, upperCrosses = [] }) => {
               points={[r.x1, r.y1, r.x2, r.y2]}
               stroke={VOID_CROSS_COLOR}
               strokeWidth={thin}
-              dash={[8, 4]}
+              dash={UPPER_VOID_DASH_PX}
               strokeScaleEnabled={false}
               listening={false}
             />
@@ -128,7 +128,7 @@ export const VoidLayer = observer(({ graph, viewport, upperCrosses = [] }) => {
               points={[r.x2, r.y1, r.x1, r.y2]}
               stroke={VOID_CROSS_COLOR}
               strokeWidth={thin}
-              dash={[8, 4]}
+              dash={UPPER_VOID_DASH_PX}
               strokeScaleEnabled={false}
               listening={false}
             />
@@ -137,7 +137,7 @@ export const VoidLayer = observer(({ graph, viewport, upperCrosses = [] }) => {
               closed
               stroke={VOID_CROSS_COLOR}
               strokeWidth={thin}
-              dash={[8, 4]}
+              dash={UPPER_VOID_DASH_PX}
               strokeScaleEnabled={false}
               listening={false}
             />

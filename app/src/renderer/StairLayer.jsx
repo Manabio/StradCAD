@@ -10,7 +10,7 @@ import { trimOpeningEdgesAgainstStair } from '../finish/stair/slabOpening.js';
 import { outlineSegments } from '../finish/gridCells.js';
 import { LodLevel } from '../viewport.js';
 import {
-  stairLineRenderProps, stairDownviewDashPx, outlineStrokeWidth,
+  stairLineRenderProps, stairDownviewDashPx, stairUpperOpeningDashPx, outlineStrokeWidth,
 } from '../finish/stair/stairLineJoinPrimitives.js';
 
 const STAIR_STROKE = '#1e293b';
@@ -49,8 +49,8 @@ function chevronPoints(pts, len) {
  *
  *   ■ 破れ線から先＝見下げの表現
  *   installOverlap 付き upper エントリが描くのは「自階スラブの開口越しに見下ろす下階階段」で、
- *   実体は当該平面より下にある。そのため見えがかり線（踏面線・外周線）は点線
- *   （DOWNVIEW_DASH_PX）で描く。矢印・段数字は見えがかり線ではなく記号のため実線のまま。
+ *   実体は当該平面より下にある。そのため見えがかり線（踏面線・外周線）は破線
+ *   （DOWNVIEW_DASH_PX。書式は「上部吹抜け」と共通）で描く。矢印・段数字は見えがかり線ではなく記号のため実線のまま。
  *   描かれる範囲＝自階スラブの開口は「install 階段の破れ線より先」で、線の終点は当該平面の
  *   実線（footprint 境界＝壁面線・到達辺）になる。開口を狭める2要素は別の層が担当し、
  *   ここでは合成しない: 上階階段のとりつき部（破れ線手前側＝スラブが残る側）は破れ線クリップが、
@@ -78,9 +78,13 @@ export const StairLayer = observer(({
   onSelectStair = null,
 }) => {
   const px = (w) => w / viewport.scaleX; // ズーム非依存の線幅
-  // 見下げ（破れ線から先）の点線パターン。踏面線・外周線のdashはstairLineRenderProps側で
-  // 解決するため、ここではbeyondLines・openingEdges（L字結合を経由しない常時点線）用にのみ使う。
+  // 見下げ（破れ線から先＝階段下エリア）の破線パターン。書式は「上部吹抜け」と共通
+  // （UPPER_VOID_DASH_PX を stairDownviewDashPx が参照する）。踏面線・外周線のdashは
+  // stairLineRenderProps側で解決するため、ここではbeyondLines（L字結合を経由しない
+  // 常時破線）用にのみ使う。
   const downviewDash = stairDownviewDashPx(viewport.scaleX);
+  // 見上げ破線（開口の縁）の線種は「上部吹抜け」と共通（finish/voidGeometry.js の UPPER_VOID_DASH_PX）。
+  const upperOpeningDash = stairUpperOpeningDashPx(viewport.scaleX);
   // 省略LODでは開口の縁（見上げ破線）を描かず、破れ先の破線だけ細線で残す（ユーザー決定）。
   const schematic = viewport.lodLevel === LodLevel.SCHEMATIC;
 
@@ -376,7 +380,8 @@ export const StairLayer = observer(({
   });
 
   // 直上階スラブ開口の縁（見上げ破線）。階段エントリ単位ではなく開口単位で1度だけ描く
-  // （複数の階段が同じ開口を共有しても二重に描かない）。当該階の壁に覆われた区間は
+  // （複数の階段が同じ開口を共有しても二重に描かない）。線種は「上部吹抜け」と共通
+  // （UPPER_VOID_DASH_PX。同じ「上階に床が無い範囲の外形」を表す線のため）。当該階の壁に覆われた区間は
   // 呼び出し側（slabOpeningEdges）で既に差し引かれている。さらに、階段のとりつき部では階段側の
   // 破線が縁を担うので、直交する破れ先破線との交点で切って落とす（残りと合わせてL字になる）。
   // 破れ先破線側は既に開口の縁でクリップ済み——切る向きは双方向で、片方だけでは
@@ -388,7 +393,7 @@ export const StairLayer = observer(({
     <Line
       key={`so${i}`} points={[s.x1, s.y1, s.x2, s.y2]}
       stroke={STAIR_STROKE} strokeWidth={px(2)} // 破れ先破線（階段外周）と同じ太さに揃える
-      dash={downviewDash} listening={false}
+      dash={upperOpeningDash} listening={false}
     />
   ));
 
