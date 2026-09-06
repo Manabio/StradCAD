@@ -6,8 +6,8 @@
 // （抽出純モジュールはnode:testから単体import可能に保つという不変条件）。
 // ================================================================
 
-import { exteriorSideDir } from './openingGeometry.js';
-import { HINGED_MECHANISMS, SASH_OPEN_MECHANISMS } from './openingCatalog.js';
+import { exteriorSideDir, swingSideTowardPerp } from './openingGeometry.js';
+import { HINGED_MECHANISMS, SASH_OPEN_MECHANISMS, hingeSideMatters } from './openingCatalog.js';
 // viewport.js は mobx と @core しか import しない純モジュールのため、node:test 単体import制約
 // （抽出純モジュールはnode:testから単体import可能に保つ）に抵触しない（openingTagPlacement.js と同じ）。
 import { LodLevel } from '../viewport.js';
@@ -20,6 +20,24 @@ export const SASH_DEPTH_MM         = 40; // 一般LODの見込帯（固定）
 export const FRAME_OVERHANG_MM     = 10; // 枠が壁面から室内外へ出る量
 export const FRAME_JAMB_WIDTH_MM   = 30; // 方立の全幅（本体20 + かかり代10）
 export const FRAME_KAKARI_WIDTH_MM = 10; // 方立のうち開口側かかり代
+
+/**
+ * 開き戸が開く直交方向(±1。isVertical壁ならx、水平壁ならy)。蝶番系以外は0を返す。
+ *
+ * 扉は「開く側の壁面」で閉じる（蝶番＝その面にある）ため、平面記号の回転中心・閉じた扉の
+ * 四角・方立の欠き込みはすべてこの向きに従う——host.axisValue（ユーザーが叩いた面）に
+ * 固定すると、「開く方向反転」後に扉が壁を貫いて反対側へ開く（planSymbolPlan参照）。
+ *
+ * 式は openingGeometry.js swingSideTowardPerp と同一（perpDir と swingSide を入れ替えても
+ * 成り立つ自己逆関数のため、順方向計算にそのまま使う＝式を二重定義しない）。
+ * 両開き系（hingeSideMatters が false）は *LeafSpecs が coord1 側 leaf を hingeSide=-1 固定で
+ * 作り opening.hingeSide を参照しないため、実効吊元を -1 として計算する。
+ */
+export function swingOpenPerpDir(isVertical, hingeSide, swingSide, mechanism, entry) {
+  if (!HINGED_MECHANISMS.has(mechanism)) return 0;
+  const effHingeSide = hingeSideMatters(mechanism, entry) ? hingeSide : -1;
+  return swingSideTowardPerp(isVertical, effHingeSide, swingSide);
+}
 
 /**
  * 蝶番(hinge)から見た「閉じ位置」の方向角(度、ワールド空間)。hingeSide<0→長さ座標が増える
@@ -272,22 +290,35 @@ export function frameInnerSpan(coord1, coord2, jambWidth) {
  *          'none'     SCHEMATIC/STANDARD（lodLevelがDETAILでない）。
  * - innerSpan: frameInnerSpanの結果。frame==='none'のときはnull（呼び出し側はspan-shrinkを
  *   行わない＝一般記号は開口全幅のまま）。
- * - pivotPerp: 回転中心のperp座標。axisValueをband内へクランプした値——frameDepthで半外付けに
- *   帯が寄ると、hostの面自身（axisValue）がband外に出ることがあるため（F2。扉の回転中心を
- *   「枠の中心」ではなく「band内の最寄りの面」に保つ）。frameDepth未設定時のbandは常に
- *   axisValueを含むため、その場合はaxisValueと一致し既存挙動は変わらない。
- * @returns {{frame:'notched'|'sash'|'sashOpen'|'none', innerSpan:{lo:number,hi:number,width:number}|null, pivotPerp:number}}
+ * - pivotPerp: 回転中心のperp座標。**蝶番系は「扉が開く側の壁面」**（openPerpDir＞0ならfaceHi、
+ *   ＜0ならfaceLo）——扉は開く側の面で閉じ、蝶番もその面にあるため。host.axisValue
+ *   （ユーザーが叩いた面）に固定すると「開く方向反転」後に閉じた扉・欠き込みが元の面に残り、
+ *   扉が壁厚を貫いて反対側へ開く（実際に起きた不具合）。既定配置では開く側＝叩いた面のため
+ *   従来と同じ位置になる。面線（faceLo/faceHi）が渡らない・非蝶番系はaxisValueへフォールバック。
+ *   詳細LODではさらにband内へクランプする——frameDepthで半外付けに帯が寄ると面自身がband外に
+ *   出るため（F2。回転中心を「枠の中心」ではなく「band内の最寄りの面」に保つ）。一般LODのbandは
+ *   axisValue±20mmの便宜的な帯で壁面を含まないため、クランプすると面ではなく帯の縁に吸着する。
+ * - leafOutward: 閉じた扉の四角（swingClosedLeafSpan）・方立の欠き込みが壁の中心側へ向かう向き
+ *   （＝openPerpDir。pivot面から壁内部へ扉厚ぶん）。Math.sign(host.axisOffset) は使わない——
+ *   hostは叩いた面の壁で室外側・開く側のどちらとも一致せず、CL偏芯でも破綻する。
+ * @returns {{frame:'notched'|'sash'|'sashOpen'|'none', innerSpan:{lo:number,hi:number,width:number}|null, pivotPerp:number, leafOutward:number}}
  */
-export function planSymbolPlan({ mechanism, lodLevel, coord1, coord2, axisValue, band, jambWidth }) {
-  const pivotPerp = Math.min(Math.max(axisValue, band.lo), band.hi);
-  if (lodLevel !== LodLevel.DETAIL) return { frame: 'none', innerSpan: null, pivotPerp };
+export function planSymbolPlan({ mechanism, lodLevel, coord1, coord2, axisValue, band, jambWidth, faceLo, faceHi, openPerpDir = 0 }) {
+  const hasFaces = Number.isFinite(faceLo) && Number.isFinite(faceHi);
+  const pivotFace = openPerpDir && hasFaces
+    ? (openPerpDir > 0 ? Math.max(faceLo, faceHi) : Math.min(faceLo, faceHi))
+    : axisValue;
+  const detail = lodLevel === LodLevel.DETAIL;
+  const pivotPerp = detail ? Math.min(Math.max(pivotFace, band.lo), band.hi) : pivotFace;
+  const leafOutward = openPerpDir || 1;
+  if (!detail) return { frame: 'none', innerSpan: null, pivotPerp, leafOutward };
   const frame = HINGED_MECHANISMS.has(mechanism)
     ? 'notched'
     : SASH_OPEN_MECHANISMS.has(mechanism)
       ? 'sashOpen'
       : 'sash';
   const innerSpan = frameInnerSpan(coord1, coord2, jambWidth);
-  return { frame, innerSpan, pivotPerp };
+  return { frame, innerSpan, pivotPerp, leafOutward };
 }
 
 /**

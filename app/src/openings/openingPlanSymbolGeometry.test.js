@@ -23,7 +23,8 @@ import {
   swingDoubleLeafSpecs, swingChildLeafSpecs, fireDoorLeafSpecs, fireFoldLeafSpecs,
   swingChildLengths, openingExteriorDir, resolveSlideLayoutPanels, trackOf,
   planFrameBand, bandPerp, frameInnerSpan, SASH_DEPTH_MM, FRAME_OVERHANG_MM,
-  planSymbolPlan, innerSpanOpening, swingClosedLeafSpan,
+  planSymbolPlan, innerSpanOpening, swingClosedLeafSpan, swingOpenPerpDir,
+  closedAngleFor, leafOpenAngle, angleVectors, DOOR_OPEN_ANGLE_DEG,
 } from './openingPlanSymbolGeometry.js';
 
 // 独立検算用（production の closedAngleFor/leafOpenAngle を経由しない）。開き角の中間角
@@ -485,4 +486,141 @@ test('【失敗系】swingClosedLeafSpan: leafLength=0（間口が枠に食わ�
   // outward=0 は 1（外向き）として扱い、厚み0の潰れた四角にしない
   assert.equal(span.perpLo, -30);
   assert.equal(span.perpHi, 0);
+});
+
+// ================================================================
+// 「開く方向反転」で扉が閉じる壁面（回転中心・閉じた扉の四角・方立の欠き込み）が反対側へ移る
+// ================================================================
+
+// 独立検算（leafBulgeSignと同じ方針。production の swingSideTowardPerp を経由せず、
+// leafが実際にどちら側へ膨らむかの符号を三角関数から直接求める）。
+function expectedOpenPerpSign(isVertical, hingeSide, swingSide) {
+  return leafBulgeSign(isVertical, hingeSide, swingSide);
+}
+
+test('swingOpenPerpDir: 片開き系はleafが実際に膨らむ側（独立検算）と一致し、非蝶番系は0', () => {
+  const entry = findCatalogEntry('fitting', 'singleSwing');
+  for (const isVertical of [false, true]) {
+    for (const hingeSide of [-1, 1]) {
+      for (const swingSide of [-1, 1]) {
+        assert.equal(
+          swingOpenPerpDir(isVertical, hingeSide, swingSide, OpeningMechanism.SWING, entry),
+          expectedOpenPerpSign(isVertical, hingeSide, swingSide),
+          `isVertical=${isVertical}, hingeSide=${hingeSide}, swingSide=${swingSide}`,
+        );
+      }
+    }
+  }
+  assert.equal(swingOpenPerpDir(false, -1, 1, OpeningMechanism.SLIDE_DOUBLE), 0, '非蝶番系は0（回転中心は従来どおりaxisValue）');
+});
+
+test('swingOpenPerpDir: 両開き系は実効吊元-1で計算する（opening.hingeSideに依らずcoord1側leafと一致）', () => {
+  const dbl = findCatalogEntry('fitting', 'doubleSwing');
+  const specs = swingDoubleLeafSpecs(0, 1800, 1800, 1);
+  const coord1Leaf = specs[0];
+  for (const hingeSide of [-1, 1]) {
+    assert.equal(
+      swingOpenPerpDir(false, hingeSide, 1, OpeningMechanism.SWING_DOUBLE, dbl),
+      leafBulgeSign(false, coord1Leaf.hingeSide, coord1Leaf.sense),
+      `hingeSide=${hingeSide}: 両開きはopening.hingeSideに依らずcoord1側leafの膨らむ側と一致するはず`,
+    );
+  }
+});
+
+// 面線 faceLo=850 / faceHi=1000（壁厚150mm）、詳細LODのband=面±10mm。
+const FACES = { faceLo: 850, faceHi: 1000 };
+const DETAIL_BAND = { lo: 840, hi: 1010, center: 925, depth: 170 };
+
+test('planSymbolPlan: 蝶番系の回転中心は「扉が開く側の壁面」——openPerpDirの符号でfaceHi/faceLoが切り替わる', () => {
+  for (const mechanism of HINGED_MECHANISMS) {
+    const hi = planSymbolPlan({ mechanism, lodLevel: LodLevel.DETAIL, coord1: 0, coord2: 1000, axisValue: 1000, band: DETAIL_BAND, jambWidth: 30, ...FACES, openPerpDir: 1 });
+    const lo = planSymbolPlan({ mechanism, lodLevel: LodLevel.DETAIL, coord1: 0, coord2: 1000, axisValue: 1000, band: DETAIL_BAND, jambWidth: 30, ...FACES, openPerpDir: -1 });
+    assert.equal(hi.pivotPerp, FACES.faceHi, `${mechanism}: +側へ開くならfaceHiで閉じるはず`);
+    assert.equal(lo.pivotPerp, FACES.faceLo, `${mechanism}: -側へ開くならfaceLoで閉じるはず（axisValue=1000のままではない＝不具合の再発防止）`);
+    assert.equal(hi.leafOutward, 1);
+    assert.equal(lo.leafOutward, -1);
+  }
+});
+
+test('回帰: 「開く方向反転」（swingSideの反転）で閉じた扉の四角が反対の壁面へ移り、壁厚の中に納まる', () => {
+  const entry = findCatalogEntry('fitting', 'singleSwing');
+  const common = { mechanism: OpeningMechanism.SWING, lodLevel: LodLevel.DETAIL, coord1: 0, coord2: 900, axisValue: 1000, band: DETAIL_BAND, jambWidth: 30, ...FACES };
+  const spanOf = (swingSide) => {
+    const openPerpDir = swingOpenPerpDir(false, -1, swingSide, OpeningMechanism.SWING, entry);
+    const plan = planSymbolPlan({ ...common, openPerpDir });
+    return swingClosedLeafSpan({
+      hingeAlong: 0, hingeSide: -1, leafLength: 900,
+      pivotPerp: plan.pivotPerp, outward: plan.leafOutward, thickness: 30,
+    });
+  };
+  // 水平壁・hingeSide=-1 では perpDir=(-1)*swingSide*hingeSide=swingSide——
+  // swingSide=-1 が -perp（faceLo=850）側、+1 が +perp（faceHi=1000）側。
+  const a = spanOf(-1), b = spanOf(1);
+  assert.notDeepEqual(
+    [a.perpLo, a.perpHi], [b.perpLo, b.perpHi],
+    '開く方向反転で閉じた扉の四角は別の面へ移るはず（元の面に残るのが不具合）',
+  );
+  for (const [label, span] of [['反転前', a], ['反転後', b]]) {
+    assert.ok(span.perpLo >= FACES.faceLo - 1e-9 && span.perpHi <= FACES.faceHi + 1e-9,
+      `${label}: 閉じた扉(厚30mm)は壁厚(${FACES.faceLo}〜${FACES.faceHi})の中に納まるはず（壁の外へ出ない）`);
+  }
+  assert.ok(Math.abs(a.perpLo - FACES.faceLo) < 1e-9, 'swingSide=-1は-側の面で閉じるはず');
+  assert.ok(Math.abs(b.perpHi - FACES.faceHi) < 1e-9, 'swingSide=+1は+側の面で閉じるはず');
+});
+
+test('planSymbolPlan: 非蝶番系・面線が無い呼び出しは従来どおりaxisValueをband内へクランプする（既存挙動の維持）', () => {
+  const band = { lo: 1040, hi: 1110, center: 1075, depth: 70 };
+  const noFace = planSymbolPlan({ mechanism: OpeningMechanism.SWING, lodLevel: LodLevel.DETAIL, coord1: 0, coord2: 1000, axisValue: 900, band, jambWidth: 30 });
+  assert.equal(noFace.pivotPerp, band.lo, '面線が渡らなければaxisValue(900)をband内へクランプ（F2の挙動）');
+  const slide = planSymbolPlan({ mechanism: OpeningMechanism.SLIDE_DOUBLE, lodLevel: LodLevel.DETAIL, coord1: 0, coord2: 1000, axisValue: 900, band: DETAIL_BAND, jambWidth: 30, ...FACES, openPerpDir: 0 });
+  assert.equal(slide.pivotPerp, 900, '非蝶番系（openPerpDir=0）はaxisValueのまま');
+});
+
+test('planSymbolPlan: 一般LOD（STANDARD）は便宜的なbandでクランプせず、回転中心を実際の壁面に置く', () => {
+  const stdBand = { lo: 980, hi: 1020, center: 1000, depth: 40 }; // axisValue±20mmの便宜帯
+  const plan = planSymbolPlan({ mechanism: OpeningMechanism.SWING, lodLevel: LodLevel.STANDARD, coord1: 0, coord2: 1000, axisValue: 1000, band: stdBand, jambWidth: 30, ...FACES, openPerpDir: -1 });
+  assert.equal(plan.frame, 'none', '一般LODはframe==="none"のまま');
+  assert.equal(plan.pivotPerp, FACES.faceLo, 'band.lo(980)へ吸着せず、反対の壁面(850)に置くはず');
+});
+
+// ================================================================
+// 片開き戸（SWING）の動作線円弧と、閉じた扉・開いた扉の接続（ユーザー確認2026-09で確定した仕様）
+//   ・円弧の中心 = 閉じた扉の吊元側・外面（開く側の壁面）の角
+//   ・半径       = 扉長（＝閉じた扉の戸先側・外面の角まで）
+//   ・1/4円で、終点＝開いた扉の先端に一致する（開いた扉が動作線に届く）
+// renderer/OpeningsLayer.jsx swingLeafSymbol / swingSymbol はこの3点を合成するだけなので、
+// 合成元（closedAngleFor / leafOpenAngle / angleVectors / swingClosedLeafSpan）の整合をここで固定する。
+// ================================================================
+
+test('SWING: 動作線円弧は「閉じた扉の吊元側・外面の角」中心・半径=扉長の1/4円で、始点=閉じた扉の戸先側の角／終点=開いた扉の先端に一致する', () => {
+  // 水平壁（isVertical=false → ワールドx=長さ方向along・y=直交方向perp）。
+  // 幅900・吊元側後退25・戸先側後退20 → 吊元along=25, 扉長=855。壁面perp=1000、開く側=+perp。
+  const isVertical = false, hingeSide = -1, swingSide = 1;
+  const hingeAlong = 25, leafLength = 855, pivotPerp = 1000, thickness = 30;
+  const outward = swingOpenPerpDir(isVertical, hingeSide, swingSide, OpeningMechanism.SWING, findCatalogEntry('fitting', 'singleSwing'));
+  assert.equal(outward, 1, '前提: この向きでは+perp側へ開く');
+
+  const span = swingClosedLeafSpan({ hingeAlong, hingeSide, leafLength, pivotPerp, outward, thickness });
+  // 中心（=吊元・壁面）が閉じた扉の「吊元側・外面」の角であること
+  assert.equal(span.alongLo, hingeAlong, '閉じた扉の吊元側の辺は吊元alongと一致するはず');
+  assert.equal(span.perpHi, pivotPerp, '閉じた扉の外面は開く側の壁面(pivotPerp)と一致するはず');
+  assert.equal(span.perpLo, pivotPerp - thickness, '扉厚は壁の中心側へ入るはず');
+
+  const closedAngle = closedAngleFor(isVertical, hingeSide);
+  const openAngle   = leafOpenAngle(closedAngle, swingSide);
+  assert.equal(Math.abs(openAngle - closedAngle), DOOR_OPEN_ANGLE_DEG, '1/4円（90°）のはず');
+
+  // 円弧の始点・終点（中心 + 半径 × 各角度の単位ベクトル。arcPathD と同じ式）
+  const at = (angle) => {
+    const { dir } = angleVectors(angle);
+    return {
+      along: Math.round(hingeAlong + dir.x * leafLength),
+      perp:  Math.round(pivotPerp  + dir.y * leafLength),
+    };
+  };
+  const start = at(closedAngle), end = at(openAngle);
+  assert.deepEqual(start, { along: span.alongHi, perp: pivotPerp },
+    '始点は閉じた扉の戸先側・外面の角（along=880, perp=壁面）のはず');
+  assert.deepEqual(end, { along: hingeAlong, perp: pivotPerp + leafLength },
+    '終点は開いた扉の先端（吊元から壁に直交して扉長ぶん）のはず＝開いた扉が動作線に届く');
 });
