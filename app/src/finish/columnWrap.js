@@ -385,19 +385,22 @@ export function columnWallCuts(graph, opts = {}) {
   for (const { wrapped, hidden } of columnWrapSolidsSet(graph, set, opts)) {
     if (hidden) continue; // 壁に完全に埋まる柱は壁の描画を変えない
     const f = wrapped.finishes ?? {};
-    // この柱が接する壁の集合。下地を消してよいかの判定（canRemoveBacking）に使う。
-    const touched = set.all.filter(v => wallTouchedByColumn(wrapped, v));
-    const touchedSet = new Set(touched);
+    // 切り欠く相手は**長さ方向に端で接するだけの壁も含める**（実機修正2026-09。平面2階X3-Y2の
+    // 左上）——柱壁が腰壁の帯を貫いて伸びた側では、その帯を`endExtend`で横切って伸ばされた
+    // 直交壁の線（モデルのスパンの外）が柱壁に呑まれる。スパンの重なりだけで選ぶとこの壁が
+    // 対象から漏れ、階段側壁の面線・内側線が柱包みの左面を突き抜けて描かれていた。
+    const touched = set.all.filter(v => wallTouchedByColumn(wrapped, v, true));
+    // 下地を消してよいかの判定（canRemoveBacking）は従来どおり**重なり**だけを見る。
+    const touchedSet = new Set(set.all.filter(v => wallTouchedByColumn(wrapped, v)));
     for (const view of touched) {
       const wall = view.wall;
       if (wall.id == null) continue;
       const [spanLo, spanHi, finLo, finHi] = view.isVertical
         ? [wrapped.yLo, wrapped.yHi, f.yLo ?? 0, f.yHi ?? 0]
         : [wrapped.xLo, wrapped.xHi, f.xLo ?? 0, f.xHi ?? 0];
-      const clip = (lo, hi) => {
-        const a = Math.max(lo, view.spanLo), b = Math.min(hi, view.spanHi);
-        return b - a > GAP_EPS ? [a, b] : null;
-      };
+      // 壁のスパンで丸めない——`endExtend`で伸ばして描かれる部分まで切る必要があるため
+      // （はみ出したぶんは呼び出し側の subtractIntervals が実際のセグメントに当てて捨てる）。
+      const clip = (lo, hi) => (hi - lo > GAP_EPS ? [lo, hi] : null);
       const face = clip(spanLo, spanHi);
       const fin = clip(spanLo + finLo, spanHi - finHi);
       if (!face && !fin) continue;
@@ -411,15 +414,23 @@ export function columnWallCuts(graph, opts = {}) {
   return cuts;
 }
 
-/** 柱の包みが壁の材厚と重なる、または接するか（トリムで面が揃うと重なり0になるため接触も含む）。 */
-function wallTouchedByColumn(wrapped, view) {
+/**
+ * 柱の包みが壁の材厚と重なる、または接するか（トリムで面が揃うと重なり0になるため接触も含む）。
+ * @param {boolean} [spanTouch] - 長さ方向も**端で接するだけ**で真にする。切り欠きの対象を選ぶ
+ *   ときだけ立てる——壁は`endExtend`（wallJunctionResolve.js パス0）でモデルのスパンの外へ
+ *   伸ばして描かれることがあり、その伸ばした先が柱壁に呑まれる（下記 `columnWallCuts`）。
+ *   下地を消してよいかの判定（`canRemoveBacking`）は従来どおり重なりだけを見る。
+ */
+function wallTouchedByColumn(wrapped, view, spanTouch = false) {
   const mr = view.mr;
   if (!mr) return false;
   const [acrossLo, acrossHi, spanLo, spanHi] = view.isVertical
     ? [wrapped.xLo, wrapped.xHi, wrapped.yLo, wrapped.yHi]
     : [wrapped.yLo, wrapped.yHi, wrapped.xLo, wrapped.xHi];
   if (acrossHi < mr.lo - GAP_EPS || acrossLo > mr.hi + GAP_EPS) return false;
-  return rangesOverlap(spanLo, spanHi, view.spanLo, view.spanHi);
+  return spanTouch
+    ? spanLo <= view.spanHi + GAP_EPS && spanHi >= view.spanLo - GAP_EPS
+    : rangesOverlap(spanLo, spanHi, view.spanLo, view.spanHi);
 }
 
 /**

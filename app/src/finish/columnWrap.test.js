@@ -370,3 +370,39 @@ test('wrapColumnWithFinish: 腰壁と取り合う辺は帯の遠位面まで伸�
   assert.equal(columnWrapEdgePrimitives(graph.columns[0], plain, false).some(p => p.key.endsWith(':xLo')), false,
     '全高の壁と取り合う辺は従来どおり出さない');
 });
+
+// 実機指摘2026-09「平面2階X3-Y2の左上、柱包みと階段側壁仕上げ材が正しく取り合っていない」。
+// 柱壁が腰壁の帯を貫いて伸びた側では、その帯を横切って伸ばされた（wallJunctionResolve.js
+// パス0の`endExtend`）直交壁の線が柱壁に呑まれる。伸ばした先は**その壁のモデルのスパンの外**
+// なので、切り欠きを壁のスパンで丸めていると対象から漏れ、階段側壁の面線・内側線が柱包みの
+// 左面を突き抜けて描かれていた。
+test('【実機修正2026-09】腰壁を貫いた柱壁は、端で接するだけの直交壁もスパン外まで切る', () => {
+  const kneeOwner = { ...mkWall(true, { lo: -45, hi: 57.5 }, 0,
+    { backing: { lo: -45, hi: 45 }, span: [-6942.5, -3442.5] }),
+    id: 'w-knee-owner', axisCL: { id: 'cl-x0', effectiveValue: 0 } };
+  const kneeThin = { ...mkWall(true, { lo: -57.5, hi: -45 }, 0,
+    { span: [-6942.5, -3442.5] }),
+    id: 'w-knee-thin', axisCL: { id: 'cl-x0', effectiveValue: 0 } };
+  // 腰壁の帯（x=-57.5..57.5）を挟んで両側にある、Y2通りの仕上げ薄壁。柱側（room）はスパンが
+  // 柱壁と重なるが、階段側（stair）はスパンが x=-57.5 で**端で接するだけ**。
+  const stairSide = { ...mkWall(false, { lo: -6955, hi: -6942.5 }, -7000,
+    { span: [-2942.5, -57.5] }),
+    id: 'w-stair', axisCL: { id: 'cl-y2', effectiveValue: -7000 } };
+  const roomSide = { ...mkWall(false, { lo: -6955, hi: -6942.5 }, -7000,
+    { span: [57.5, 942.5] }),
+    id: 'w-room', axisCL: { id: 'cl-y2', effectiveValue: -7000 } };
+  const column = { id: 'c1', sectionDefId: 'RC-300x300', x: 215, y: -6725, rotation: 0 };
+  const graph = { walls: [kneeOwner, kneeThin, stairSide, roomSide], columns: [column] };
+  const opts = { capOutlineWallIds: new Set(['w-knee-owner', 'w-knee-thin']) };
+
+  const { wrapped } = columnWrapSolids(graph, opts)[0];
+  assert.equal(wrapped.xLo, -57.5, '前提: 柱壁は腰壁の帯を貫いて遠位面まで伸びる');
+  assert.equal(wrapped.finishes.xLo, 12.5, '前提: その辺の内側境界は自前の仕上げ厚ぶん内側');
+
+  const cuts = columnWallCuts(graph, opts);
+  const stair = cuts.get('w-stair');
+  assert.ok(stair, '端で接するだけの階段側壁も切り欠きの対象になるはず');
+  assert.equal(stair.face[0][0], -57.5, '面線は柱壁の左面（-57.5）から切る＝そこで取り合う');
+  assert.equal(stair.fin[0][0], -45, '内側線は柱壁の内側境界（-45）から切る＝そこで取り合う');
+  assert.equal(cuts.get('w-room').face[0][0], -57.5, '柱側の壁も同じ区間で切る（層ごとの幅は従来どおり）');
+});
