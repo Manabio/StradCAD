@@ -120,7 +120,7 @@ export const SceneLayers = observer(({
                 その階のもの）。finishWrap=壁と干渉する柱に仕上げ包みの外形を重ねる（追加仕様2026-08。
                 厚みは展開図の柱型と同じ finish/columnWrap.js から取る）。 */}
             {showPlanFigure && <ShapesLayer graph={graph} viewport={viewport} stairUnderClips={stairUnderClips} />}
-            {showPlanFigure && <OpeningsLayer graph={graph} viewport={viewport} selectedId={appMode === 'opening' ? mode?.selectedOpeningId : null} />}
+            {showPlanFigure && <OpeningsLayer graph={graph} viewport={viewport} />}
             {showPlanFigure && <ColumnsLayer graph={graph} viewport={viewport} finishWrap />}
             {appMode === 'structure' && <StructuralLayer composition={structComposition} viewport={viewport} project={project} />}
             {appMode === 'structure' && (
@@ -155,6 +155,7 @@ export const SceneLayers = observer(({
               project={project}
               viewport={viewport}
               appMode={appMode}
+              selectedId={appMode === 'opening' ? mode?.selectedOpeningId : null}
               onSelectOpening={onOpeningTagClick}
             />
             {appMode !== 'site' && <IntersectionMarkers graph={graph} viewport={viewport} />}
