@@ -13,3 +13,11 @@
 export function shouldShowPlanFigure(appMode) {
   return appMode !== 'structure' && appMode !== 'elevation';
 }
+
+// 平面図の**注記**（階段の段数字）を描くモードか。図形（上記）と違い注記は平面モード限定
+// ——室名（RoomLabelsLayer）・段差断面（StepSectionLayer）と同じ「注記は平面のみ」の扱い。
+// ユーザー決定2026-09: 他モードへ遷移しても階段の図は出したままにするが、段数字は出さない
+// （仕上げモードで従来出ていた段数字もこの規則に揃えて消える）。
+export function shouldShowStairStepNumbers(appMode) {
+  return appMode === 'floorplan';
+}

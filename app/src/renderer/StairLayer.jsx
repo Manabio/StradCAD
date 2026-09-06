@@ -41,6 +41,7 @@ function chevronPoints(pts, len) {
  *     view:'install'|'upper', selectable:boolean, graph?:object,
  *     cellBounds:Array<{x1,y1,x2,y2}>|undefined,  // 実セル占有（選択ヒット・枠用。省略時は bounds）
  *     installOverlap?:boolean, clipAgainstId?:string }
+ * stepNumbers=false のとき段数字（注記）を描かない。図そのものは変えない。
  *   graph は stair.cells・壁の実体を解決するグラフ（その階段が実在する階のグラフ。upper エントリ
  *   では peek した下階グラフ）。省略時は側面線の壁有無判定をせず常時描画する（安全側）。
  *   installOverlap/clipAgainstId/beyondBreakBounds は、footprint が自階 install 階段と重なる
@@ -74,6 +75,7 @@ export const StairLayer = observer(({
   laneGapMm = 0,
   breakOverhangMm = 0,
   slabOpeningEdges = [],
+  stepNumbers: showStepNumbers = true,
   selectedStairId = null,
   onSelectStair = null,
 }) => {
@@ -275,11 +277,14 @@ export const StairLayer = observer(({
     // ではアンカー点が install の破れ線先セル（beyondBreakBounds）に入る番号（＝下階から登って
     // きた階段の破れ先の部分。到達番号を含む）だけ残す。手前側の番号は install 自身が描くため
     // 重複させない。領域が導出不能（空/未提供）なら従来どおり安全側で全抑止する。
-    const visibleNumbers = e.installOverlap
+    // stepNumbers=false（平面モード以外）は段数字を丸ごと描かない——注記は平面のみという
+    // 規則（planFigureVisibility.js の shouldShowStairStepNumbers）。図（踏面線・矢印・破れ線）は
+    // どのモードでも描き続ける。
+    const visibleNumbers = !showStepNumbers ? [] : (e.installOverlap
       ? (e.beyondBreakBounds?.length > 0
           ? geom.stepNumbers.filter((n) => pointInRects(e.beyondBreakBounds, n.x, n.y))
           : [])
-      : geom.stepNumbers;
+      : geom.stepNumbers);
     const stepNumbers = visibleNumbers.map((n, i) => (
       <Text
         key={`n${i}`}

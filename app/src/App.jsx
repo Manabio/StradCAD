@@ -22,6 +22,7 @@ import { FinishSidebar }   from './finish/FinishSidebar.jsx';
 import { FinishHalfModal } from './finish/FinishHalfModal.jsx';
 import { floorHeightAbove } from './finish/stair/stairDimensions.js';
 import { buildStairEntries, buildUpperStairPeekEntries } from './finish/stair/stairEntries.js';
+import { shouldShowPlanFigure } from './renderer/planFigureVisibility.js';
 import { slabOpeningRects, slabOpeningFrames, slabOpeningEdges } from './finish/stair/slabOpening.js';
 import { runFinishEntryBoundary, runFinishExitBoundary } from './finish/finishBoundary.js';
 import { computeVoidCrosses } from './finish/voidGeometry.js';
@@ -279,7 +280,7 @@ const App = observer(() => {
       const active = project.activePlane;
       const idx = planes.findIndex(p => p.id === active?.id);
       const below = idx > 0 ? planes[idx - 1] : null;
-      if (!below || !active || (appMode !== 'finish' && appMode !== 'floorplan')) {
+      if (!below || !active || !shouldShowPlanFigure(appMode)) {
         if (!cancelled) setUpperStairEntries([]);
         return;
       }
@@ -302,7 +303,7 @@ const App = observer(() => {
       const active = project.activePlane;
       const idx = planes.findIndex(p => p.id === active?.id);
       const above = idx >= 0 && idx + 1 < planes.length ? planes[idx + 1] : null;
-      if (!above || !active || (appMode !== 'finish' && appMode !== 'floorplan')) {
+      if (!above || !active || !shouldShowPlanFigure(appMode)) {
         setUpperVoidCrosses([]);
         setUpperSlabOpenings(null); // 上階なし＝スラブ開口は判定不能（クリップしない）
         setUpperSlabFrames(null);

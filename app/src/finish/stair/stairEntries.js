@@ -9,6 +9,7 @@ import { measureStairSpans } from './stairClassify.js';
 import { cellsBeyondBreak, LANE_GAP } from './stairGeometry.js';
 import { stairUnderWallClips } from './stairUnderClip.js';
 import { roomBounds, cellBoundsList, refreshCells } from '../gridCells.js';
+import { shouldShowPlanFigure } from '../../renderer/planFigureVisibility.js';
 
 // 矩形2つが実質的に重なる（浮動小数の際どい接触は無視）か。EPS(mm) 未満の重なりは無視する。
 const RECT_OVERLAP_EPS = 1; // mm
@@ -55,10 +56,13 @@ export function buildUpperStairPeekEntries(belowGraph, floorHeight) {
  * @returns {{ isStairMode, installEntries, upperEntries, stairLaneGapMm, stairBreakOverhangMm, stairUnderClips }}
  */
 export function buildStairEntries(graph, project, { appMode, viewport, upperStairEntriesPeek, upperSlabOpenings = null, stairBreakOverhangMm }) {
-  // isStairMode: site・structure モードでは階段を描画しないため、cellsBeyondBreak・
-  // refreshCells・measureStairSpans 等の無駄な計算と observable 購読（graph.stairs等）を
-  // 空配列で止める（QA指摘）。stairUnderClips のゲートも同じ変数で揃える。
-  const isStairMode = appMode === 'finish' || appMode === 'floorplan';
+  // isStairMode: 階段は平面図一式の一部なので、壁・建具・柱とまったく同じ述語で出し入れする
+  // （renderer/planFigureVisibility.js が単一の供給源。不具合2026-09「建具モードに入ると階段
+  // 関連の図が消える」の根本原因は、ここだけモードの列挙が別だったこと）。描かない伏図
+  // （structure）・展開図（elevation）では cellsBeyondBreak・refreshCells・measureStairSpans 等の
+  // 無駄な計算と observable 購読（graph.stairs等）を空配列で止める（QA指摘）。
+  // stairUnderClips のゲートも同じ変数で揃える。
+  const isStairMode = shouldShowPlanFigure(appMode);
   const stairFh = floorHeightAbove(project, project.activePlane);
   const installEntries = isStairMode ? graph.stairs.map(s => {
     const riser = s.riser ?? (stairFh != null ? stairFh / Math.max(1, s.totalSteps) : null);
@@ -121,8 +125,9 @@ export function buildStairEntries(graph, project, { appMode, viewport, upperStai
   const stairLaneGapMm = viewport.lodLevel === LodLevel.SCHEMATIC ? 0 : LANE_GAP;
 
   // 2a壁（階段下部屋の偏芯壁）の破れ線より階段踏面側を描画しないための、壁ID→クリップ多角形。
-  // StairLayer と同じ条件（isStairMode）でゲートする——それ以外のモード（site等）では
-  // 壁を常にクリップなしで描く（モード間で壁の見え方を変えない）。また upperStairEntriesPeek が
+  // StairLayer と同じ条件（isStairMode）でゲートする——階段を描くモードでは必ずクリップも
+  // 効かせ、描かないモードでは壁をクリップなしで描く（描かれる階段と壁の欠きを食い違わせない）。
+  // また upperStairEntriesPeek が
   // 未解決（null。階/モード切替直後の1フレーム）の間は中間階ガードが判定不能なため、
   // 安全側で一切クリップしない（QA指摘）。stairUnderWallClips はクリップ対象が0件のとき自ら
   // null を返す（毎レンダー新規の空Mapを渡し続けて observer の差分検出が無駄に走るのを防ぐ）。

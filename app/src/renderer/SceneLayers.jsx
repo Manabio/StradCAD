@@ -21,7 +21,7 @@ import { DrawPreview } from './DrawPreview.jsx';
 import { CLAddPreview } from './CLAddPreview.jsx';
 import { WallRefIndicator } from './WallRefIndicator.jsx';
 import { SiteLinesLayer, SiteDrawPreview } from './SiteLinesLayer.jsx';
-import { shouldShowPlanFigure } from './planFigureVisibility.js';
+import { shouldShowPlanFigure, shouldShowStairStepNumbers } from './planFigureVisibility.js';
 import { ElevationLayer } from './ElevationLayer.jsx';
 
 // ================================================================
@@ -100,6 +100,7 @@ export const SceneLayers = observer(({
                 laneGapMm={stairLaneGapMm}
                 breakOverhangMm={stairBreakOverhangMm}
                 slabOpeningEdges={stairSlabOpeningEdges}
+                stepNumbers={shouldShowStairStepNumbers(appMode)}
                 selectedStairId={appMode === 'finish' ? mode?.selectedStairId : null}
                 onSelectStair={appMode === 'finish' ? (id => modeRef.current?.selectStair(id)) : null}
               />
@@ -143,7 +144,8 @@ export const SceneLayers = observer(({
             {/* 段差断面: 段差線は全LOD（略図＝細線 / 標準・詳細＝中線）、ハッチ・寸法は詳細のみ
                 ——レイヤー内部でLOD分岐する */}
             {appMode === 'floorplan' && <StepSectionLayer graph={graph} viewport={viewport} />}
-            {(appMode === 'floorplan' || appMode === 'finish') && (
+            {/* 吹抜けも平面図一式の一部（階段吹抜けと同じ peek 由来）——壁・階段と同じ述語で出す。 */}
+            {showPlanFigure && (
               <VoidLayer graph={graph} viewport={viewport} upperCrosses={upperVoidCrosses} />
             )}
             {/* 表示可否は shouldShowOpeningTags(appMode, lodLevel) が唯一の判定
