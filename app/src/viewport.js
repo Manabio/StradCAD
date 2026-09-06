@@ -8,14 +8,10 @@ export const LOD_SCHEMATIC_DENOM = 90; // scaleDenominator >= 90 → 略図（1/
 export const LOD_DETAIL_DENOM    = 60; // scaleDenominator <= 60 → 詳細（1/60 を含む）
 export const LodLevel = { SCHEMATIC: 'schematic', STANDARD: 'standard', DETAIL: 'detail' };
 
-// lineWeight(mm) をワールド空間の strokeWidth に変換する（ズーム追従、最低1px相当を保証）。
-// 壁・開口・一般図形・構造部材（柱・梁・耐力壁・スラブ）が共通で使う。
-export function resolveStrokeWidth(lineWeight, scale) {
-  return Math.max(1 / scale, lineWeight);
-}
-
 // mm定義 + 校正値(px/mm) から、4段階が常に1px以上の差で見分けられるpxを算出する。
-// 通り芯・寸法線・敷地線など、ズームに関わらず太さを固定する注記レイヤーが使う。
+// **線の太さの指定は「実画面上の絶対太さ」**であり、ズーム倍率の影響を受けない（ユーザー確定
+// 2026-09）。どの描画モード（LOD）で描くかは倍率で変わるが、指定された太さ自体は変わらない。
+// 図面のすべての線（通り芯・寸法・敷地・階段・壁・建具・構造部材）がこの表を唯一の情報源にする。
 export function resolveLineWeightsPx(pxPerMm) {
   const toPx = (mm) => Math.max(1, Math.round(mm * pxPerMm));
   const w = {
@@ -28,6 +24,45 @@ export function resolveLineWeightsPx(pxPerMm) {
   if (w.thick      <= w.medium) w.thick      = w.medium + 1;
   if (w.ultraThick <= w.thick)  w.ultraThick = w.thick + 1;
   return w;
+}
+
+// lineWeight(mm) → 4段階の名前。LINE_WEIGHT_MM の値は一意なので値から名前を引ける。
+const LINE_WEIGHT_NAME_BY_MM = new Map(
+  Object.entries(LINE_WEIGHT_MM).map(([name, mm]) => [mm, name]));
+
+/**
+ * lineWeight(mm指定) を**実スクリーンpx**へ解決する。
+ * 4段階の標準値は `lineWeightsPx`（校正値ベース・段間1px以上を保証した表）をそのまま引く
+ * ——注記レイヤーと壁・建具・構造部材で同じ段が同じ太さになるようにするため。表に無いmm
+ * （旧データが持つ0.15など）は表と同じ式で個別に換算する。
+ * @param {number} lineWeight - mm
+ * @param {{thin:number,medium:number,thick:number,ultraThick:number}} [lineWeightsPx] - viewport.lineWeightsPx
+ * @param {number} [pxPerMm] - 表に無いmmの換算に使う校正値
+ * @returns {number} 実スクリーンpx
+ */
+export function lineWeightPx(lineWeight, lineWeightsPx, pxPerMm) {
+  const name = LINE_WEIGHT_NAME_BY_MM.get(lineWeight);
+  if (name && lineWeightsPx?.[name] != null) return lineWeightsPx[name];
+  return Math.max(1, Math.round(lineWeight * (pxPerMm ?? DEFAULT_PX_PER_MM)));
+}
+
+/**
+ * ワールド座標のGroup（Konvaの親Groupが scaleX/scaleY を持つ）内に描く線の strokeWidth。
+ * **実スクリーンpx固定の太さ**（`lineWeightPx`）を scale で割って世界mm相当へ戻す
+ * ——Konvaが親Groupのscaleを掛け直すので、画面上はズームに関わらず指定pxちょうどになる。
+ * SiteLinesLayer・StairLayer・StepSectionLayer・VoidLayer が個別に書いていた
+ * 「実px ÷ scale」と同じ式で、壁・建具・一般図形・構造部材・柱包みもこれを使う。
+ *
+ * 旧実装は `Math.max(1 / scale, lineWeight)`（＝画面上 `max(1, mm × scale)` px）で、
+ * **指定した太さが倍率で変わる**という解釈違いだった（ユーザー指摘2026-09）。
+ * @param {number} lineWeight - mm
+ * @param {number} scale - 親Groupのscale（非等倍なら Math.min(scaleX, scaleY)）
+ * @param {object} [lineWeightsPx] - viewport.lineWeightsPx
+ * @param {number} [pxPerMm] - 表に無いmmの換算に使う校正値
+ * @returns {number} 世界mm相当の strokeWidth
+ */
+export function resolveStrokeWidth(lineWeight, scale, lineWeightsPx, pxPerMm) {
+  return lineWeightPx(lineWeight, lineWeightsPx, pxPerMm) / scale;
 }
 
 function loadCalibration() {

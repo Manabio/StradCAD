@@ -28,17 +28,18 @@ function fakeViewport(scaleX, scaleY = scaleX, offsetX = 37, offsetY = -52) {
 
 // 期待値はWEIGHTS/リテラルの2から直接計算する（SUTの関数を呼び直して比較すると、
 // 太さ判定を壊す変異（例: 全部thin扱いにする）が素通りするトートロジーになる——team-lessons指摘）。
-// widthは世界mm相当値（実px化はresolvePlanLinePointsMmScaledStroke委譲後、2026-09移行）——
-// heavy(px2)は実2px相当を世界mm相当で表すため2/SCALE_Xになる（scale依存）。
+// widthは世界mm相当値。**線の太さの指定は実画面上の絶対太さ**（ユーザー確定2026-09）なので、
+// どの段も「実px ÷ scaleX」になる——不具合2026-09: thin/mediumだけ実px値をそのまま返しており、
+// 踏面線・外周線が1世界mm固定＝ズームで太さが変わっていた。
 test('写像: 外周線の辺ごとの幅は描画幅（旧outlineWeight）と同じ供給源から出る', () => {
   const thinSeg = { x1: 0, y1: 0, x2: 100, y2: 0, thin: true };
   const mediumSeg = { x1: 0, y1: 0, x2: 100, y2: 0, medium: true };
   const heavySeg = { x1: 0, y1: 0, x2: 100, y2: 0 };
   const entries = [{ view: 'install', id: 's1', outlineSegs: [thinSeg, mediumSeg, heavySeg], isDownView: false }];
   const prims = buildStairJoinPrimitives(entries, SCALE_X, WEIGHTS);
-  assert.ok(Math.abs(prims[0].width - WEIGHTS.thin) < 1e-9, 'thin');
-  assert.ok(Math.abs(prims[1].width - WEIGHTS.medium) < 1e-9, 'medium');
-  assert.ok(Math.abs(prims[2].width - 2 / SCALE_X) < 1e-9, 'heavy(px2)は常に実2px相当（世界mm相当では2/SCALE_X）');
+  assert.ok(Math.abs(prims[0].width - WEIGHTS.thin / SCALE_X) < 1e-9, 'thin(実1px相当)');
+  assert.ok(Math.abs(prims[1].width - WEIGHTS.medium / SCALE_X) < 1e-9, 'medium(実2px相当)');
+  assert.ok(Math.abs(prims[2].width - 2 / SCALE_X) < 1e-9, 'heavy(実2px相当)');
 });
 
 test('写像: 踏面線の幅は描画幅（旧treads三項演算）と同じ供給源から出る', () => {
@@ -46,8 +47,8 @@ test('写像: 踏面線の幅は描画幅（旧treads三項演算）と同じ供
   const heavySeg = { x1: 0, y1: 0, x2: 100, y2: 0, heavy: true };
   const entries = [{ view: 'install', id: 's1', treadSegs: [thinSeg, heavySeg], isDownView: false }];
   const prims = buildStairJoinPrimitives(entries, SCALE_X, WEIGHTS);
-  assert.ok(Math.abs(prims[0].width - WEIGHTS.thin) < 1e-9, 'thin(既定)');
-  assert.ok(Math.abs(prims[1].width - 2 / SCALE_X) < 1e-9, 'heavy(px2)は常に実2px相当（世界mm相当では2/SCALE_X）');
+  assert.ok(Math.abs(prims[0].width - WEIGHTS.thin / SCALE_X) < 1e-9, 'thin(既定・実1px相当)');
+  assert.ok(Math.abs(prims[1].width - 2 / SCALE_X) < 1e-9, 'heavy(実2px相当)');
 });
 
 test('写像: 見下げ(isDownView)の踏面線・外周線はdash扱いになる（対象外の唯一の情報源）', () => {
@@ -85,8 +86,8 @@ test('写像: キーはstairTreadKey/stairOutlineKeyと一致し、view/id/index
 // ---- 統合（resolveStairLinePointsMm。非恒等fakeViewport） ----
 
 test('統合: 外周の直交角（medium×medium）が閉じる', () => {
-  // medium(=lineWeightsPx.medium=2)がTHIN_PX=1を実px換算で上回るよう、ズームしたscaleを使う
-  // （非恒等の要件は満たしたまま。SCALE_Xの既定=0.0378だとmedium*scaleX<1で「両方thin」判定になる）。
+  // 太さは実px固定（medium=2px）になったので、どのズームでもTHIN_PX=1を上回り角が閉じる。
+  // 非恒等（scale≠1）の要件を満たすscaleで検証する。
   const zoomedScale = 2.6;
   const a = { x1: 0, y1: 0, x2: 100, y2: 0, medium: true };
   const b = { x1: 100, y1: 0, x2: 100, y2: 100, medium: true };
@@ -96,12 +97,11 @@ test('統合: 外周の直交角（medium×medium）が閉じる', () => {
   assert.ok(Math.abs(ax2 - 100) > 1e-6, '外側へ延びるはず');
   assert.ok(Math.abs(ay2 - 0) < 1e-6);
   // widthはscaleXで割り戻され、元のstrokeWidth値（lineWeightsPx.medium）と一致する（strokeWidthは不変）。
-  assert.equal(resolved.get(stairOutlineKey('install', 's1', 0)).width, WEIGHTS.medium);
+  assert.equal(resolved.get(stairOutlineKey('install', 's1', 0)).width, WEIGHTS.medium / zoomedScale);
 });
 
 test('統合: 踏面線(thin)×外周線(medium)の角は両方延長する', () => {
-  // strokeWidthはKonvaの親Groupのscaleを継承する世界mm相当値のため、実pxしきい値(THIN_PX=1)を
-  // 跨がせるにはズームした（scaleXが大きい）viewportで検証する必要がある（非恒等の要件は満たす）。
+  // medium=2px（実px固定）がTHIN_PX=1を上回るため、ズームに関わらず両方が延長される。
   const zoomedScale = 2.6;
   const tread = { x1: 0, y1: 0, x2: 100, y2: 0 }; // thin(既定)
   const outline = { x1: 100, y1: 0, x2: 100, y2: 100, medium: true };

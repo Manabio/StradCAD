@@ -38,20 +38,26 @@ import { UPPER_VOID_DASH_PX } from '../voidGeometry.js';
 // 系統ごとに違うと混在して見える。ここで独自のパターン値を持たないこと。
 const DOWNVIEW_DASH_PX = UPPER_VOID_DASH_PX;
 
-// lineWeightsPxに該当キーが無い場合の既定値（世界mm相当。×scaleXで実1px相当に戻る）。
-// figureLineJoin.jsのweightPxが持つ既定THIN_PX=1と同じ「不明な太さは1px扱い」規約に合わせる。
-const DEFAULT_STROKE_WIDTH = (scaleX) => 1 / scaleX;
+// lineWeightsPxに該当キーが無い場合の既定px。figureLineJoin.jsのweightPxが持つ既定THIN_PX=1と
+// 同じ「不明な太さは1px扱い」規約に合わせる。
+const DEFAULT_PX = 1;
 
-// 踏面線の太さ（世界mm相当のstrokeWidth値。StairLayer.jsx旧: `s.heavy ? px(2) : viewport.lineWeightsPx.thin`）。
+// 実スクリーンpx → 世界mm相当（Konva親Groupのscale継承前提）。**線の太さの指定は実画面上の
+// 絶対太さ**なので、必ずscaleXで割ってから渡す（ユーザー確定2026-09）。
+// 不具合2026-09: lineWeightsPx（実px値）をこの変換なしで返しており、踏面線・外周線だけが
+// 1世界mm固定＝ズームで太さが変わっていた（1/100で0.04px＝ほぼ不可視、拡大すると過太）。
+const toWorld = (px, scaleX) => px / scaleX;
+
+// 踏面線の太さ（世界mm相当のstrokeWidth値）。ささら等のheavyは2px、それ以外は細線。
 export function treadStrokeWidth(s, scaleX, lineWeightsPx) {
-  return s.heavy ? (2 / scaleX) : (lineWeightsPx.thin ?? DEFAULT_STROKE_WIDTH(scaleX));
+  return toWorld(s.heavy ? 2 : (lineWeightsPx?.thin ?? DEFAULT_PX), scaleX);
 }
 
-// 外周線の太さ（世界mm相当のstrokeWidth値。StairLayer.jsx旧: outlineWeight関数）。
+// 外周線の太さ（世界mm相当のstrokeWidth値）。
 export function outlineStrokeWidth(s, scaleX, lineWeightsPx) {
-  if (s.thin) return lineWeightsPx.thin ?? DEFAULT_STROKE_WIDTH(scaleX);
-  if (s.medium) return lineWeightsPx.medium ?? DEFAULT_STROKE_WIDTH(scaleX);
-  return 2 / scaleX;
+  if (s.thin) return toWorld(lineWeightsPx?.thin ?? DEFAULT_PX, scaleX);
+  if (s.medium) return toWorld(lineWeightsPx?.medium ?? DEFAULT_PX, scaleX);
+  return toWorld(2, scaleX);
 }
 
 export function stairTreadKey(view, id, i) { return `${view}:${id}:t:${i}`; }

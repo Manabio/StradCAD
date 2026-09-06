@@ -168,12 +168,15 @@ export const ColumnsLayer = observer(({ graph, viewport, diaphragm = false, fini
   // 平面では柱断面を太線の輪郭で描く（塗りではなく断面線で示す）。構造モードは従来どおり。
   const outline = finishWrap || viewport.lodLevel === LodLevel.STANDARD;
   const outlineStrokeWidth = resolveStrokeWidth(
-    finishWrap ? LINE_WEIGHT_MM.thick : LINE_WEIGHT_MM.medium, scale);
-  const diaStrokeWidth = resolveStrokeWidth(LINE_WEIGHT_MM.thin, scale);
+    finishWrap ? LINE_WEIGHT_MM.thick : LINE_WEIGHT_MM.medium, scale,
+    viewport.lineWeightsPx, viewport.pxPerMmX);
+  const diaStrokeWidth = resolveStrokeWidth(
+    LINE_WEIGHT_MM.thin, scale, viewport.lineWeightsPx, viewport.pxPerMmX);
   // 柱壁（仕上げ包み）の線は**壁と同じ太さ**にする（ユーザー指示2026-08）——太さの判断自体は
   // structural/columnWrapLineJoin.js の columnWrapStrokeWidth（壁の太さ決定と同じ関数・同じ
   // 引数系）に集約し、ここは呼ぶだけにする。
-  const wrapStrokeWidth = columnWrapStrokeWidth(viewport.scaleX, viewport.scaleY);
+  const wrapStrokeWidth = columnWrapStrokeWidth(
+    viewport.scaleX, viewport.scaleY, viewport.lodLevel === LodLevel.DETAIL, viewport.lineWeightsPx);
   // 壁に完全に埋まる柱は包みを持たない（columnWrap.js参照）。
   // 包みの解決は柱×壁の総当たり。graph が変わらない限り同じ結果なので graph 単位に
   // キャッシュする（graphDerived.js。パン・ズームの再レンダーで引き直さない）。
@@ -192,8 +195,10 @@ export const ColumnsLayer = observer(({ graph, viewport, diaphragm = false, fini
     const wrap = wrapByColumnId?.get(column.id);
     if (wrap) {
       const detail = viewport.lodLevel === LodLevel.DETAIL;
+      // 包みの線は**壁の線**として描く（色は取り合う壁から継ぐ。finish/columnWrap.js の wallColor）
+      // ——柱の材種色のままだと、同じ1本に見える仕上げ線が柱のところだけ色違いになる。
       els.push(...columnWrapRenderProps(
-        [{ column, wrap, color, strokeWidth: wrapStrokeWidth, detail }], viewport,
+        [{ column, wrap, color: wrap.wallColor ?? color, strokeWidth: wrapStrokeWidth, detail }], viewport,
       ).map(p => (
         <Line key={p.key} points={p.points} stroke={p.color} strokeWidth={p.strokeWidth} listening={false} />
       )));
@@ -238,8 +243,8 @@ export const StructuralLayer = observer(({ composition, viewport, project }) => 
   if (!composition) return null;
   const scale  = Math.min(viewport.scaleX, viewport.scaleY);
   const lod    = viewport.lodLevel;
-  const thin   = resolveStrokeWidth(LINE_WEIGHT_MM.thin, scale);
-  const medium = resolveStrokeWidth(LINE_WEIGHT_MM.medium, scale);
+  const thin   = resolveStrokeWidth(LINE_WEIGHT_MM.thin, scale, viewport.lineWeightsPx, viewport.pxPerMmX);
+  const medium = resolveStrokeWidth(LINE_WEIGHT_MM.medium, scale, viewport.lineWeightsPx, viewport.pxPerMmX);
 
   // 各カテゴリのレイヤを解決し graph と表示スタイルを取り出す。Group の opacity でレイヤ全体を淡くし、
   // 線・帯・輪郭には dashForStyle で破線を与える（SOLID は素通し＝現状の描画と完全一致）。

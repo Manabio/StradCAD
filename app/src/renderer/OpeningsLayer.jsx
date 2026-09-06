@@ -14,6 +14,7 @@ import {
 } from '../openings/openingPlanSymbolGeometry.js';
 import { arcPathD } from './ShapesLayer.jsx';
 import { LodLevel, resolveStrokeWidth } from '../viewport.js';
+import { wallFinishLineWeight } from '../finish/wallFinishJoin.js';
 
 const TICK_HALF_MM  = 30;
 
@@ -172,14 +173,14 @@ function foldSymbol(opening, band, sp) {
 }
 
 // SLIDE_SINGLE（引き戸）: slideDoubleSymbolの1枚版。枠矩形＋内側トラック1本に全長leaf線。
-function slideSingleSymbol(opening, band, sp) {
+function slideSingleSymbol(opening, band, sp, fsp) {
   const { coord1, coord2, isVertical } = opening;
   const leafPerp = bandPerp(band, 0.25);
   const p1 = toWorld(isVertical, coord1, leafPerp);
   const p2 = toWorld(isVertical, coord2, leafPerp);
   return (
     <>
-      <Rect {...rectSpec(isVertical, coord1, coord2, band.lo, band.hi)} fill="transparent" {...sp} />
+      <Rect {...rectSpec(isVertical, coord1, coord2, band.lo, band.hi)} fill="transparent" {...fsp} />
       <Line points={[p1.x, p1.y, p2.x, p2.y]} {...sp} />
     </>
   );
@@ -188,9 +189,9 @@ function slideSingleSymbol(opening, band, sp) {
 // SLIDE_LAYOUT: 枠矩形＋パネルごとのleaf線。パネル幅=width/panels.length、隣接パネルは
 // 引違いと同じoverlapで重ねる。トラック割付・perp位置は openingPlanSymbolGeometry.js の
 // trackOf/trackPerp（純関数）に委ねる。FIXテキストは平面には描かない（矢印同様、対象外）。
-function slideLayoutSymbol(opening, band, sp, entry) {
+function slideLayoutSymbol(opening, band, sp, entry, fsp) {
   const { coord1, coord2, width, isVertical } = opening;
-  const frame = <Rect {...rectSpec(isVertical, coord1, coord2, band.lo, band.hi)} fill="transparent" {...sp} />;
+  const frame = <Rect {...rectSpec(isVertical, coord1, coord2, band.lo, band.hi)} fill="transparent" {...fsp} />;
   const panels = resolveSlideLayoutPanels(entry);
   if (panels.length === 0) return frame;
 
@@ -218,7 +219,7 @@ function slideLayoutSymbol(opening, band, sp, entry) {
 }
 
 // HUNG（上げ下げ窓）: 枠矩形＋両トラックに全長線1本ずつ（上下障子が平面では全長重なる）。
-function hungSymbol(opening, band, sp) {
+function hungSymbol(opening, band, sp, fsp) {
   const { coord1, coord2, isVertical } = opening;
   const leaf1Perp = bandPerp(band, 0.25);
   const leaf2Perp = bandPerp(band, 0.75);
@@ -226,7 +227,7 @@ function hungSymbol(opening, band, sp) {
   const l2a = toWorld(isVertical, coord1, leaf2Perp), l2b = toWorld(isVertical, coord2, leaf2Perp);
   return (
     <>
-      <Rect {...rectSpec(isVertical, coord1, coord2, band.lo, band.hi)} fill="transparent" {...sp} />
+      <Rect {...rectSpec(isVertical, coord1, coord2, band.lo, band.hi)} fill="transparent" {...fsp} />
       <Line points={[l1a.x, l1a.y, l1b.x, l1b.y]} {...sp} />
       <Line points={[l2a.x, l2a.y, l2b.x, l2b.y]} {...sp} />
     </>
@@ -256,13 +257,13 @@ function pivotSymbol(opening, band, sp) {
 
 // 窓一般線: 枠矩形（band）＋壁軸上に全長1本線。FIXED/TILT/TILT_OUT/AWNING/PROJECT_OUT/
 // LOUVER/AWNING_MULTI/GARARI/GLASS_BLOCK/PIVOT_H に適用する。
-function windowLineSymbol(opening, band, sp) {
+function windowLineSymbol(opening, band, sp, fsp) {
   const { coord1, coord2, isVertical } = opening;
   const p1 = toWorld(isVertical, coord1, band.center);
   const p2 = toWorld(isVertical, coord2, band.center);
   return (
     <>
-      <Rect {...rectSpec(isVertical, coord1, coord2, band.lo, band.hi)} fill="transparent" {...sp} />
+      <Rect {...rectSpec(isVertical, coord1, coord2, band.lo, band.hi)} fill="transparent" {...fsp} />
       <Line points={[p1.x, p1.y, p2.x, p2.y]} {...sp} />
     </>
   );
@@ -399,7 +400,7 @@ function fireFoldSymbol(opening, pivotPerp, sp, entry) {
 // pivotPerpは蝶番系（回転中心）専用——host.axisValueをband内へクランプした値（F2。
 // planSymbolPlanが算出）。OVERHEAD/EMERGENCYは回転しないためhost自体（+graph）で
 // openingExteriorDirを引く。未対応の機構はnullを返し、呼び出し側がtickSymbolへフォールバックする。
-function otherMechanismSymbol(mechanism, opening, pivotPerp, host, graph, band, sp, entry) {
+function otherMechanismSymbol(mechanism, opening, pivotPerp, host, graph, band, sp, entry, fsp) {
   switch (mechanism) {
     case OpeningMechanism.SWING_DOUBLE: return swingDoubleSymbol(opening, pivotPerp, sp);
     case OpeningMechanism.SWING_CHILD:  return swingChildSymbol(opening, pivotPerp, sp, entry);
@@ -409,9 +410,9 @@ function otherMechanismSymbol(mechanism, opening, pivotPerp, host, graph, band, 
     case OpeningMechanism.FREE:         return freeSymbol(opening, pivotPerp, sp);
     case OpeningMechanism.FREE_DOUBLE:  return freeDoubleSymbol(opening, pivotPerp, sp);
     case OpeningMechanism.FOLD:         return foldSymbol(opening, band, sp);
-    case OpeningMechanism.SLIDE_SINGLE: return slideSingleSymbol(opening, band, sp);
-    case OpeningMechanism.SLIDE_LAYOUT: return slideLayoutSymbol(opening, band, sp, entry);
-    case OpeningMechanism.HUNG:         return hungSymbol(opening, band, sp);
+    case OpeningMechanism.SLIDE_SINGLE: return slideSingleSymbol(opening, band, sp, fsp);
+    case OpeningMechanism.SLIDE_LAYOUT: return slideLayoutSymbol(opening, band, sp, entry, fsp);
+    case OpeningMechanism.HUNG:         return hungSymbol(opening, band, sp, fsp);
     case OpeningMechanism.PIVOT:        return pivotSymbol(opening, band, sp);
     case OpeningMechanism.FIXED:
     case OpeningMechanism.TILT:
@@ -422,7 +423,7 @@ function otherMechanismSymbol(mechanism, opening, pivotPerp, host, graph, band, 
     case OpeningMechanism.AWNING_MULTI:
     case OpeningMechanism.GARARI:
     case OpeningMechanism.GLASS_BLOCK:
-    case OpeningMechanism.PIVOT_H:      return windowLineSymbol(opening, band, sp);
+    case OpeningMechanism.PIVOT_H:      return windowLineSymbol(opening, band, sp, fsp);
     case OpeningMechanism.SHUTTER:      return shutterSymbol(opening, band, sp);
     case OpeningMechanism.OVERHEAD:     return overheadSymbol(opening, host, graph, band, sp);
     case OpeningMechanism.EMERGENCY:    return emergencySymbol(opening, host, graph, band, sp);
@@ -459,7 +460,7 @@ function jambOutlinePoints(isVertical, outerAlong, dir, jambW, kakariW, totalPer
 // （host側の面がband外に出る）、素のhost.axisValueを起点にした場合に扉leafがband外へ140mm
 // 浮いた上notchFarのクランプで輪郭が矩形へ潰れる実バグがあった（F2）。frameDepth未設定時は
 // bandが必ずhost.axisValueを含むためpivotPerp===host.axisValueとなり既存挙動は変わらない。
-function swingFrameSymbol(opening, host, band, pivotPerp, sp) {
+function swingFrameSymbol(opening, host, band, pivotPerp, fsp) {
   const { coord1, coord2, width, isVertical } = opening;
   const jambW = Math.min(FRAME_JAMB_WIDTH_MM, width / 2);
   const kakariW = Math.min(FRAME_KAKARI_WIDTH_MM, jambW);
@@ -477,8 +478,8 @@ function swingFrameSymbol(opening, host, band, pivotPerp, sp) {
 
   return (
     <>
-      <Line points={jambOutlinePoints(isVertical, coord1, 1, jambW, kakariW, totalPerpLo, totalPerpHi, kakariPerpLo, kakariPerpHi, outward)} closed fill="transparent" {...sp} />
-      <Line points={jambOutlinePoints(isVertical, coord2, -1, jambW, kakariW, totalPerpLo, totalPerpHi, kakariPerpLo, kakariPerpHi, outward)} closed fill="transparent" {...sp} />
+      <Line points={jambOutlinePoints(isVertical, coord1, 1, jambW, kakariW, totalPerpLo, totalPerpHi, kakariPerpLo, kakariPerpHi, outward)} closed fill="transparent" {...fsp} />
+      <Line points={jambOutlinePoints(isVertical, coord2, -1, jambW, kakariW, totalPerpLo, totalPerpHi, kakariPerpLo, kakariPerpHi, outward)} closed fill="transparent" {...fsp} />
     </>
   );
 }
@@ -487,12 +488,12 @@ function swingFrameSymbol(opening, host, band, pivotPerp, sp) {
 // （扉が通過しないためswingFrameSymbolのような欠き込みは無い）。記号本体（otherMechanismSymbol）
 // が自前で枠矩形を描かない機構（FOLD/PIVOT/SHUTTER/OVERHEAD/EMERGENCY）専用——記号側が枠矩形を
 // 描く機構は sashFrameOpenSymbol を使う（F5、二重描画防止）。
-function sashFrameSymbol(opening, band, jambWidth, sp) {
+function sashFrameSymbol(opening, band, jambWidth, fsp) {
   const { coord1, coord2, isVertical } = opening;
   return (
     <>
-      <Rect {...rectSpec(isVertical, coord1, coord1 + jambWidth, band.lo, band.hi)} fill="transparent" {...sp} />
-      <Rect {...rectSpec(isVertical, coord2 - jambWidth, coord2, band.lo, band.hi)} fill="transparent" {...sp} />
+      <Rect {...rectSpec(isVertical, coord1, coord1 + jambWidth, band.lo, band.hi)} fill="transparent" {...fsp} />
+      <Rect {...rectSpec(isVertical, coord2 - jambWidth, coord2, band.lo, band.hi)} fill="transparent" {...fsp} />
     </>
   );
 }
@@ -505,7 +506,7 @@ function sashFrameSymbol(opening, band, jambWidth, sp) {
 // （前コミットf86f305「開口の縁の二重描画をなくす」と同じ瑕疵の再発防止。F5）。
 // 開口を横断する線は描かない（折れ戸・開き戸の開口部を塞がないため、上下の横線は各ジャンブの
 // 幅ぶんだけに留める）。
-function sashFrameOpenSymbol(opening, band, jambWidth, sp) {
+function sashFrameOpenSymbol(opening, band, jambWidth, fsp) {
   const { coord1, coord2, isVertical } = opening;
   const jamb = (outerAlong, innerAlong) => {
     const p1 = toWorld(isVertical, innerAlong, band.lo);
@@ -516,8 +517,8 @@ function sashFrameOpenSymbol(opening, band, jambWidth, sp) {
   };
   return (
     <>
-      <Line points={jamb(coord1, coord1 + jambWidth)} {...sp} />
-      <Line points={jamb(coord2, coord2 - jambWidth)} {...sp} />
+      <Line points={jamb(coord1, coord1 + jambWidth)} {...fsp} />
+      <Line points={jamb(coord2, coord2 - jambWidth)} {...fsp} />
     </>
   );
 }
@@ -539,11 +540,11 @@ function slideDoubleLeafLines(opening, band, sp) {
   );
 }
 
-function slideDoubleSymbol(opening, band, sp) {
+function slideDoubleSymbol(opening, band, sp, fsp) {
   const { coord1, coord2, isVertical } = opening;
   return (
     <>
-      <Rect {...rectSpec(isVertical, coord1, coord2, band.lo, band.hi)} fill="transparent" {...sp} />
+      <Rect {...rectSpec(isVertical, coord1, coord2, band.lo, band.hi)} fill="transparent" {...(fsp ?? sp)} />
       {slideDoubleLeafLines(opening, band, sp)}
     </>
   );
@@ -552,7 +553,7 @@ function slideDoubleSymbol(opening, band, sp) {
 // 引き違い 詳細LOD専用: band（見込帯）から枠位置を導出し、枠＋2枚のサッシ＋召し合わせ部の
 // 気密材（破線）を描く。窓（OpeningCategory.WINDOW）のみ各サッシ中央にガラス線を追加し、
 // 戸は無地のパネルとして描く。
-function slideDoubleDetailSymbol(opening, band, sp) {
+function slideDoubleDetailSymbol(opening, band, sp, fsp) {
   const { coord1, coord2, centerCoord, isVertical, category } = opening;
   const overlap = Math.max(opening.width * 0.12, 60);
 
@@ -570,7 +571,7 @@ function slideDoubleDetailSymbol(opening, band, sp) {
 
   return (
     <>
-      <Rect {...rectSpec(isVertical, coord1, coord2, outerLo, outerHi)} fill="transparent" {...sp} />
+      <Rect {...rectSpec(isVertical, coord1, coord2, outerLo, outerHi)} fill="transparent" {...fsp} />
       {leaves.map(({ span, track }, i) => {
         const glassPerp = (track[0] + track[1]) / 2;
         const g1 = toWorld(isVertical, span[0], glassPerp);
@@ -662,8 +663,18 @@ export const OpeningsLayer = observer(({ graph, viewport, selectedId = null }) =
     const entry = findCatalogEntry(opening.category, opening.subType);
     const sp = {
       stroke:      opening.color,
-      strokeWidth: resolveStrokeWidth(opening.lineWeight, Math.min(scaleX, scaleY)),
+      strokeWidth: resolveStrokeWidth(
+        opening.lineWeight, Math.min(scaleX, scaleY), viewport.lineWeightsPx, viewport.pxPerMmX),
       listening:   false,
+    };
+    // 枠（方立・見込帯の外形）は**壁に据わる枠材の断面**なので、壁の仕上げ材と同じ太さで描く
+    // （ユーザー指示2026-09「建具や窓の枠なども対象にして」。太さの供給源は壁と同じ
+    // finish/wallFinishJoin.js の wallFinishLineWeight＝詳細LODのみ太線）。障子・扉・レール等の
+    // 記号線は従来どおり sp（開口のlineWeight）のまま——切断された枠材と記号を描き分ける。
+    const fsp = {
+      ...sp,
+      strokeWidth: resolveStrokeWidth(
+        wallFinishLineWeight(detail), Math.min(scaleX, scaleY), viewport.lineWeightsPx, viewport.pxPerMmX),
     };
     const highlight = opening.id === selectedId ? selectionHighlight(opening, host, opening.isVertical) : null;
 
@@ -706,7 +717,7 @@ export const OpeningsLayer = observer(({ graph, viewport, selectedId = null }) =
         return (
           <Fragment key={opening.id}>
             {highlight}
-            {detail && swingFrameSymbol(opening, host, band, plan.pivotPerp, sp)}
+            {detail && swingFrameSymbol(opening, host, band, plan.pivotPerp, fsp)}
             {swingSymbol(
               opening, plan.pivotPerp, sp,
               detail ? FRAME_HINGE_INSET_MM : 0,
@@ -720,7 +731,7 @@ export const OpeningsLayer = observer(({ graph, viewport, selectedId = null }) =
         return (
           <Fragment key={opening.id}>
             {highlight}
-            {detail ? slideDoubleDetailSymbol(opening, band, sp) : slideDoubleSymbol(opening, band, sp)}
+            {detail ? slideDoubleDetailSymbol(opening, band, sp, fsp) : slideDoubleSymbol(opening, band, sp, fsp)}
           </Fragment>
         );
       }
@@ -731,8 +742,8 @@ export const OpeningsLayer = observer(({ graph, viewport, selectedId = null }) =
         return (
           <Fragment key={opening.id}>
             {highlight}
-            {swingFrameSymbol(opening, host, band, plan.pivotPerp, sp)}
-            {otherMechanismSymbol(entry.mechanism, spanOpening, plan.pivotPerp, host, graph, band, sp, entry)}
+            {swingFrameSymbol(opening, host, band, plan.pivotPerp, fsp)}
+            {otherMechanismSymbol(entry.mechanism, spanOpening, plan.pivotPerp, host, graph, band, sp, entry, fsp)}
           </Fragment>
         );
       }
@@ -741,18 +752,18 @@ export const OpeningsLayer = observer(({ graph, viewport, selectedId = null }) =
         // 一般/詳細・方立の形状の分岐点はplanSymbolPlanに一本化されている）。
         const spanOpening = innerSpanOpening(opening, plan.innerSpan);
         const frameEl = plan.frame === 'sashOpen'
-          ? sashFrameOpenSymbol(opening, band, jambW, sp)
-          : sashFrameSymbol(opening, band, jambW, sp);
+          ? sashFrameOpenSymbol(opening, band, jambW, fsp)
+          : sashFrameSymbol(opening, band, jambW, fsp);
         return (
           <Fragment key={opening.id}>
             {highlight}
             {frameEl}
-            {otherMechanismSymbol(entry.mechanism, spanOpening, plan.pivotPerp, host, graph, band, sp, entry)}
+            {otherMechanismSymbol(entry.mechanism, spanOpening, plan.pivotPerp, host, graph, band, sp, entry, fsp)}
           </Fragment>
         );
       }
       // frame==='none'（STANDARD）: bandは一般帯（axisValue中心・幅40mm）なので見た目は不変。
-      const other = otherMechanismSymbol(entry.mechanism, opening, plan.pivotPerp, host, graph, band, sp, entry);
+      const other = otherMechanismSymbol(entry.mechanism, opening, plan.pivotPerp, host, graph, band, sp, entry, fsp);
       if (other) return <Fragment key={opening.id}>{highlight}{other}</Fragment>;
     }
     return <Fragment key={opening.id}>{highlight}{tickSymbol(opening, band, sp)}</Fragment>;

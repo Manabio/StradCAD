@@ -206,7 +206,7 @@ export const StairLayer = observer(({
     const beyondLines = beyondOutlineSegs.map((s, i) => (
       <Line
         key={`bo${i}`} points={[s.x1, s.y1, s.x2, s.y2]} {...lineProps}
-        strokeWidth={schematic ? viewport.lineWeightsPx.thin : outlineStrokeWidth(s, viewport.scaleX, viewport.lineWeightsPx)}
+        strokeWidth={schematic ? px(viewport.lineWeightsPx.thin) : outlineStrokeWidth(s, viewport.scaleX, viewport.lineWeightsPx)}
         dash={downviewDash}
       />
     ));

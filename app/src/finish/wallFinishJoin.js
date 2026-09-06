@@ -19,6 +19,24 @@
  *
  * 純モジュール（node:test から単体 import 可能。store.js/*.jsx/react-konva を静的に引かない）。
  */
+import { LINE_WEIGHT_MM } from '../core/constants.js';
+
+
+/**
+ * 壁仕上げ材の線（面線・妻線・内側線・木口線）の線幅(mm)。**詳細LODだけ太線**にする
+ * ——ユーザー指示2026-09「平面詳細描画時、壁仕上げ線を中線から太線に」。対象は仕上げ材の
+ * 4本だけで、下地（間柱）と略図・標準LODの壁線は壁Shapeの既定（medium＝core/shapeBase.js）
+ * のまま。
+ *
+ * **柱の仕上げ包み（柱壁）もこの関数を使う**——壁と太さが揃っていないと1本の線として
+ * 連続して見えない（ユーザー指示2026-08）。太さの判断をここ1箇所に閉じ込め、壁側と柱側で
+ * 別々に決めない（`structural/columnWrapLineJoin.js` の `columnWrapStrokeWidth` が本関数を引く）。
+ * @param {boolean} detail - viewport.lodLevel === LodLevel.DETAIL か
+ * @returns {number} LINE_WEIGHT_MM のいずれかの値(mm)
+ */
+export function wallFinishLineWeight(detail) {
+  return detail ? LINE_WEIGHT_MM.thick : LINE_WEIGHT_MM.medium;
+}
 
 // 端点はねだし判定・fin線可視性判定の座標許容誤差(mm)。ShapesLayer.jsx のecap判定と
 // `resolveFinVisibility` の両方が使う共有定数（旧: 両ファイルに別々の同名定数を持っており、

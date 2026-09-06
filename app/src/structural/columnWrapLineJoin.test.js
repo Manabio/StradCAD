@@ -8,8 +8,9 @@ import {
   columnWrapOuterKey, columnWrapFinKey,
   columnWrapEdgePrimitives, columnWrapRenderProps, columnWrapStrokeWidth,
 } from './columnWrapLineJoin.js';
-import { resolveStrokeWidth, DEFAULT_PX_PER_MM } from '../viewport.js';
+import { resolveStrokeWidth, resolveLineWeightsPx, DEFAULT_PX_PER_MM } from '../viewport.js';
 import { LINE_WEIGHT_MM } from '../core.js';
+import { wallFinishLineWeight } from '../finish/wallFinishJoin.js';
 
 function fakeViewport(scaleX, scaleY = scaleX, offsetX = 37, offsetY = -52) {
   return {
@@ -187,63 +188,63 @@ test('T4: wrapsがnull/undefined → columnWrapRenderPropsは空配列', () => {
 
 // ---- T1・T2: 太さの供給源（壁のLOD仕様＝resolveStrokeWidth(shape.lineWeight, scale)由来） ----
 
-test('T2: columnWrapStrokeWidthは壁の太さ決定と同じ関数・同じ引数系（resolveStrokeWidth(LINE_WEIGHT_MM.medium, Math.min(scaleX,scaleY))）——唯一の供給源', () => {
+test('T2: columnWrapStrokeWidthは壁の仕上げ材の線と同じ供給源（resolveStrokeWidth(wallFinishLineWeight(detail), Math.min(scaleX,scaleY))）——唯一の供給源', () => {
   // scale=10相当を含める——scale<=4付近ではresolveStrokeWidthの1/scale下限が支配的になり
   // medium(0.25)とthick(0.35)等の取り違えを吸収してしまうため、定数そのものの取り違えを
   // 検出するには下限が効かない大きいscaleが必要。
-  for (const [sx, sy] of [[0.0378, 0.0378], [0.063, 0.063], [3.78, 3.78], [10, 12]]) {
-    const expected = resolveStrokeWidth(LINE_WEIGHT_MM.medium, Math.min(sx, sy));
-    assert.equal(columnWrapStrokeWidth(sx, sy), expected, `scaleX=${sx},scaleY=${sy}`);
+  for (const detail of [false, true]) {
+    for (const [sx, sy] of [[0.0378, 0.0378], [0.063, 0.063], [3.78, 3.78], [10, 12]]) {
+      const expected = resolveStrokeWidth(wallFinishLineWeight(detail), Math.min(sx, sy));
+      assert.equal(columnWrapStrokeWidth(sx, sy, detail), expected, `detail=${detail} scaleX=${sx},scaleY=${sy}`);
+    }
   }
 });
 
-test('T1: 本番の線幅解決（壁のLOD仕様由来）で既定ズーム1/100・1/60・1/1では包み線は延長ゼロ＝素のmm座標と厳密一致', () => {
-  // worldToScreen→screenToWorldの往復による浮動小数点誤差ぶんのみ許容する（延長が発火していれば
-  // 誤差の桁ではなく相手辺の半幅ぶん＝数十mm単位でずれるため、この許容差でも延長ゼロ検出は成立する）。
-  const near = (pts, expected, msg) => pts.forEach((v, i) => assert.ok(Math.abs(v - expected[i]) < 1e-6, `${msg}: 期待${expected[i]}, 実際${v}`));
+test('T2b: wallFinishLineWeightは詳細LODだけ太線・それ以外は中線（壁と柱包みが引く唯一の定義）', () => {
+  assert.equal(wallFinishLineWeight(true), LINE_WEIGHT_MM.thick);
+  assert.equal(wallFinishLineWeight(false), LINE_WEIGHT_MM.medium);
+});
+
+// 線の太さは**実スクリーンpx固定**（ユーザー確定2026-09）なので、延長が発火するかどうかも、
+// 発火したときの画面上の延長量も、**ズーム倍率に依らない**。旧実装（mm×scaleで太さが変わる）
+// では「scale>4で発火・以下は不発」というズーム依存の境界があり、T1/T6/T7はそれを固定していた。
+const PROD_PX = resolveLineWeightsPx(DEFAULT_PX_PER_MM); // 本番の4段階px（既定校正: 1/2/3/4）
+
+test('T1: 本番の太さ表（medium=2px）ではどのズームでも延長が発火し、画面px上の延長量は一定', () => {
   const wrap = { xLo: 0, xHi: 200, yLo: 0, yHi: 100 };
-  for (const denom of [100, 60, 1]) { // 1/100・1/60・1/1（scaleDenominator。viewport.js LOD閾値と同じ単位）
+  const halfPx = PROD_PX.medium / 2; // 直交する相手の半幅（px）
+  for (const denom of [100, 60, 1]) { // 1/100・1/60・1/1
     const scale = DEFAULT_PX_PER_MM / denom;
     const vp = fakeViewport(scale);
-    const strokeWidth = columnWrapStrokeWidth(vp.scaleX, vp.scaleY);
-    const wraps = [{ column: { id: 'c1' }, wrap, color: '#000', strokeWidth, detail: false }];
-    const out = columnWrapRenderProps(wraps, vp);
+    const strokeWidth = columnWrapStrokeWidth(vp.scaleX, vp.scaleY, false, PROD_PX);
+    const out = columnWrapRenderProps([{ column: { id: 'c1' }, wrap, color: '#000', strokeWidth, detail: false }], vp);
     const byKey = Object.fromEntries(out.map(p => [p.key, p]));
-    near(byKey['wrap:c1:xLo'].points, [0, 0, 0, 100], `denom=1/${denom} xLo`);
-    near(byKey['wrap:c1:xHi'].points, [200, 0, 200, 100], `denom=1/${denom} xHi`);
-    near(byKey['wrap:c1:yLo'].points, [0, 0, 200, 0], `denom=1/${denom} yLo`);
-    near(byKey['wrap:c1:yHi'].points, [0, 100, 200, 100], `denom=1/${denom} yHi`);
+    // mmの延長量はscaleで割った値になるが、画面px換算では常に相手の半幅ちょうど。
+    const extMm = -byKey['wrap:c1:xLo'].points[1];
+    assert.ok(Math.abs(extMm * scale - halfPx) < 1e-9, `denom=1/${denom}: 画面px延長量 期待${halfPx}, 実際${extMm * scale}`);
   }
 });
 
-// T1の裏側: 1/1より拡大した scale>4（viewport.js zoomAt の上限クランプは20）では、本番の線幅解決でも
-// px幅が1を超え延長が発火する。延長量は相手半幅＝LINE_WEIGHT_MM.medium/2＝0.125mm でscaleに依らない。
-// （T1だけだと恒等側しか固定できず、joinを無効化しても緑のままになる——QA指摘）
-test('T6: 1/1より拡大したズーム（scale>4）では本番線幅でも延長が発火する（延長量0.125mm固定）', () => {
-  const near = (pts, expected, msg) => pts.forEach((v, i) => assert.ok(Math.abs(v - expected[i]) < 1e-9, `${msg}: 期待${expected[i]}, 実際${v}`));
-  const wrap = { xLo: 0, xHi: 200, yLo: 0, yHi: 100 };
-  const half = LINE_WEIGHT_MM.medium / 2;
-  for (const scale of [4.001, 8, 20]) {
-    const vp = fakeViewport(scale);
-    const strokeWidth = columnWrapStrokeWidth(vp.scaleX, vp.scaleY);
-    const out = columnWrapRenderProps([{ column: { id: 'c1' }, wrap, color: '#000', strokeWidth, detail: false }], vp);
-    const byKey = Object.fromEntries(out.map(p => [p.key, p]));
-    near(byKey['wrap:c1:xLo'].points, [0, -half, 0, 100 + half], `scale=${scale} xLo`);
-    near(byKey['wrap:c1:yLo'].points, [-half, 0, 200 + half, 0], `scale=${scale} yLo`);
+test('T6: 線幅指定そのものがズームに依らない——columnWrapStrokeWidth×scaleは常に指定px', () => {
+  for (const detail of [false, true]) {
+    const expectedPx = detail ? PROD_PX.thick : PROD_PX.medium;
+    for (const scale of [0.0378, 0.063, 3.78, 20]) {
+      const w = columnWrapStrokeWidth(scale, scale, detail, PROD_PX);
+      assert.ok(Math.abs(w * scale - expectedPx) < 1e-9,
+        `detail=${detail} scale=${scale}: 期待${expectedPx}px, 実際${w * scale}px`);
+    }
   }
 });
 
-test('T7: 延長の発火境界は scale=4（LINE_WEIGHT_MM.medium と 1/scale の交点）', () => {
+test('T7: 細線（1px）同士はズームに関わらず延長しない（THIN_PXガード）', () => {
   const wrap = { xLo: 0, xHi: 200, yLo: 0, yHi: 100 };
-  const extOf = scale => {
+  for (const scale of [0.0378, 4, 20]) {
     const vp = fakeViewport(scale);
-    const strokeWidth = columnWrapStrokeWidth(vp.scaleX, vp.scaleY);
+    const strokeWidth = resolveStrokeWidth(LINE_WEIGHT_MM.thin, scale, PROD_PX); // thin=1px
     const out = columnWrapRenderProps([{ column: { id: 'c1' }, wrap, color: '#000', strokeWidth, detail: false }], vp);
-    return -out.find(p => p.key === 'wrap:c1:xLo').points[1];
-  };
-  assert.ok(Math.abs(extOf(3.999)) < 1e-6, 'scale<=4 は延長ゼロ');
-  assert.ok(Math.abs(extOf(4.0)) < 1e-6, 'scale=4 ちょうどは延長ゼロ（THIN_PX の <= 判定）');
-  assert.ok(Math.abs(extOf(4.001) - LINE_WEIGHT_MM.medium / 2) < 1e-9, 'scale>4 は 0.125mm 延長');
+    const ext = -out.find(p => p.key === 'wrap:c1:xLo').points[1];
+    assert.ok(Math.abs(ext) < 1e-6, `scale=${scale}: 細線同士は延長ゼロのはず、実際${ext}`);
+  }
 });
 
 test('失敗系: 4辺全trimmedの柱は出力に寄与しない（他の柱には影響しない）', () => {

@@ -1,12 +1,11 @@
 import { observer } from 'mobx-react-lite';
 import { Group, Line, Rect, Circle, Path } from 'react-konva';
 import { ShapeType } from '@core';
-import { isEndpointAt } from '../transform/centerLineExtend.js';
 import { LodLevel, resolveStrokeWidth } from '../viewport.js';
 import { subtractIntervals } from '../finish/stair/stairGeometry.js';
 import { buildWallDrawPlan } from './wallDrawPlan.js';
-import { ENDPOINT_EPS } from './wallJunctionResolve.js';
 import { graphComputed } from './graphDerived.js';
+import { wallFinishLineWeight } from '../finish/wallFinishJoin.js';
 
 const DASH = {
   solid:     undefined,
@@ -21,10 +20,13 @@ const WALL_BACKING_PITCH = 450;
 // 持たないため、間柱の標準的な厚み（□-90×45 の 45 側）を描画上の固定値として使う。
 const WALL_STUD_WIDTH = 45;
 
-function strokeProps(shape, scaleX, scaleY) {
+
+function strokeProps(shape, viewport) {
+  const { scaleX, scaleY } = viewport;
   return {
     stroke:      shape.color,
-    strokeWidth: resolveStrokeWidth(shape.lineWeight, Math.min(scaleX, scaleY)),
+    strokeWidth: resolveStrokeWidth(
+      shape.lineWeight, Math.min(scaleX, scaleY), viewport.lineWeightsPx, viewport.pxPerMmX),
     dash:        DASH[shape.lineType],
     listening:   false,
   };
@@ -68,11 +70,19 @@ export const ShapesLayer = observer(({ graph, viewport, stairUnderClips = null }
   // される——毎回総当たりし直すと実測約30ms/レンダーで、60fps の予算を一回で使い切る
   // （平面モードのカクつきの主因）。
   // LOD ごとに結果が違うため lodLevel をキーに含める（graphDerived.js の約束）。
-  const { deferredBackingIds, wallJunctions, kneeDropOverlays, columnCuts, wallLines } =
+  const { deferredBackingIds, wallJunctions, kneeDropOverlays, columnCuts, wallLines, finishMerges } =
     graphComputed(graph, `wallDrawPlan:${lodLevel}`, () => buildWallDrawPlan(graph, lodLevel));
 
+  // 分かれて描かれていた仕上げ線を1本にまとめる（finishLineSplits.js が解決済み）。
+  // null を返す線分は描かず（まとめた1本に吸収された）、区間を返す線分はその区間で描く。
+  // Mapに無い線分は従来どおりの区間で描く。
+  const merged = (key, lo, hi) => {
+    const m = finishMerges?.get(key);
+    return m === undefined ? [lo, hi] : m; // null（描かない）はそのまま返す
+  };
+
   return graph.generalShapes.map((shape) => {
-    const sp = strokeProps(shape, scaleX, scaleY);
+    const sp = strokeProps(shape, viewport);
 
     switch (shape.type) {
 
@@ -114,7 +124,7 @@ export const ShapesLayer = observer(({ graph, viewport, stairUnderClips = null }
         // buildWallDrawPlan内でまとめて解決している）。
         const plan = wallLines.get(shape.id);
         const { segments, faceSegments, finSegments, finBoundary, finVisible,
-          spanLo: lo, spanHi: hi, endWrapLo, endWrapHi, capLoSuppressed, capHiSuppressed } = plan;
+          spanLo: lo, capValues, ecapValues } = plan;
 
         if (lodLevel === LodLevel.SCHEMATIC) {
           // 略図: 軸オフセット位置の単線（厚み表現なし）
@@ -156,6 +166,15 @@ export const ShapesLayer = observer(({ graph, viewport, stairUnderClips = null }
         // 中心線は CenterLinesLayer が別途描画するため、ここでは重複させない
         // （仕上げ面の長辺 + 両端の妻線のみを描き、軸CL上の長辺は描かない）
         const faceV = shape.axisValue;
+        // 仕上げ材の線（面線・妻線・内側線・木口線）は詳細LODで太線にする（ユーザー指示2026-09）。
+        // 太さの判断は finish/wallFinishJoin.js の wallFinishLineWeight が唯一の供給源
+        // ——柱の仕上げ包み（柱壁）も同じ関数を引く。下地（間柱）は sp のまま（中線）。
+        const finSp = {
+          ...sp,
+          strokeWidth: resolveStrokeWidth(
+            wallFinishLineWeight(lodLevel === LodLevel.DETAIL), Math.min(scaleX, scaleY),
+            viewport.lineWeightsPx, viewport.pxPerMmX),
+        };
 
         // 妻線(cap)・端点はねだし部木口(ecap)の描画範囲: 既定（backingDepth未指定=null）は
         // axisV〜faceV（下地帯が通り芯位置から始まる対称壁の想定。従来どおり変更なし）。
@@ -165,41 +184,34 @@ export const ShapesLayer = observer(({ graph, viewport, stairUnderClips = null }
         // （階段下壁のコーナートリム stairUnderWalls.js でも同じ式を使う）。
         const { lo: capLo, hi: capHi } = shape.materialRange;
 
-        const faceLines = faceSegments.map(([a, b], i) => (
-          <Line
-            key={`${shape.id}:face:${i}`}
-            points={shape.isVertical
-              ? [faceV, a, faceV, b]
-              : [a, faceV, b, faceV]
-            }
-            {...sp}
-          />
-        ));
-        // cap線（妻線）: 抑止するかどうかの判断（capLoSuppressed/capHiSuppressed）は
-        // wallDrawPlan.js の resolveWallLines に集約済み——ここは自壁の物理両端
-        // （最初のセグメントのa＝lo端／最後のセグメントのb＝hi端）でのみ適用して写像するだけ
-        // （開口で分割された中間セグメント境界は対象外）。
-        const capLines = segments.flatMap(([a, b], i) => {
-          const line = [];
-          if (!(i === 0 && capLoSuppressed)) {
-            line.push(
-              <Line
-                key={`${shape.id}:capA:${i}`}
-                points={shape.isVertical ? [capLo, a, capHi, a] : [a, capLo, a, capHi]}
-                {...sp}
-              />,
-            );
-          }
-          if (!(i === segments.length - 1 && capHiSuppressed)) {
-            line.push(
-              <Line
-                key={`${shape.id}:capB:${i}`}
-                points={shape.isVertical ? [capLo, b, capHi, b] : [b, capLo, b, capHi]}
-                {...sp}
-              />,
-            );
-          }
-          return line;
+        const faceLines = faceSegments.flatMap(([a0, b0], i) => {
+          const seg = merged(`${shape.id}:face:${i}`, a0, b0);
+          if (!seg) return [];
+          const [a, b] = seg;
+          return [(
+            <Line
+              key={`${shape.id}:face:${i}`}
+              points={shape.isVertical
+                ? [faceV, a, faceV, b]
+                : [a, faceV, b, faceV]
+              }
+              {...finSp}
+            />
+          )];
+        });
+        // cap線（妻線）: どの位置に引くか（抑止判定を含む）は wallDrawPlan.js の
+        // resolveWallLines が capValues として解決済み——ここは写像するだけ。
+        const capLines = capValues.flatMap((v, i) => {
+          const seg = merged(`${shape.id}:cap:${i}`, capLo, capHi);
+          if (!seg) return [];
+          const [c0, c1] = seg;
+          return [(
+            <Line
+              key={`${shape.id}:cap:${i}`}
+              points={shape.isVertical ? [c0, v, c1, v] : [v, c0, v, c1]}
+              {...finSp}
+            />
+          )];
         });
         const rects = [...faceLines, ...capLines];
 
@@ -217,44 +229,38 @@ export const ShapesLayer = observer(({ graph, viewport, stairUnderClips = null }
         // 同じ式をこの.jsx側にも重複して持っており、ENDPOINT_EPSの定義ドリフトを含め
         // 実バグの一因だった）。
         if (finVisible) {
-          elems.push(...finSegments.map(([a, b], i) => (
-            <Line
-              key={`${shape.id}:fin:${i}`}
-              points={shape.isVertical
-                ? [finBoundary, a, finBoundary, b]
-                : [a, finBoundary, b, finBoundary]
-              }
-              {...sp}
-            />
-          )));
+          elems.push(...finSegments.flatMap(([a0, b0], i) => {
+            const seg = merged(`${shape.id}:fin:${i}`, a0, b0);
+            if (!seg) return [];
+            const [a, b] = seg;
+            return [(
+              <Line
+                key={`${shape.id}:fin:${i}`}
+                points={shape.isVertical
+                  ? [finBoundary, a, finBoundary, b]
+                  : [a, finBoundary, b, finBoundary]
+                }
+                {...finSp}
+              />
+            )];
+          }));
         }
 
         // 木口（仕上げ厚の見切り線を妻線の内側に加えて2重線にする。他の仕上げ線と同様、詳細のみ）。
-        // 2通りの端で描く:
-        //  - 端点はねだし部（従来）: 軸CLの線分範囲越え＋交点消失で導出する
-        //  - 低い壁（腰壁）の端部を覆った端（wallDrawPlan.js の endWrapLo/Hi。ユーザー確定2026-09
-        //    「高い方の壁仕上げ材が端部を取り巻く」）——位置は解決済みなのでここは写すだけ
-        if (shape.wallFinish > 0) {
-          const axisCL = shape.axisCL;
-          const tips = [
-            { side: 'lo', wrap: endWrapLo, beyond: axisCL.extentLo != null && lo < axisCL.extentLo - ENDPOINT_EPS, capV: lo + shape.wallFinish },
-            { side: 'hi', wrap: endWrapHi, beyond: axisCL.extentHi != null && hi > axisCL.extentHi + ENDPOINT_EPS, capV: hi - shape.wallFinish },
-          ];
-          for (const t of tips) {
-            if (t.wrap == null && (!t.beyond || !isEndpointAt(graph, axisCL, t.side))) continue;
-            if (!segments.some(([a, b]) => t.capV > a && t.capV < b)) continue;
-            elems.push(
-              <Line
-                key={`${shape.id}:ecap:${t.side}`}
-                points={shape.isVertical
-                  ? [capLo, t.capV, capHi, t.capV]
-                  : [t.capV, capLo, t.capV, capHi]
-                }
-                {...sp}
-              />,
-            );
-          }
-        }
+        // 引く位置の判断（端点はねだし部／低い壁の端部を覆った端）は resolveWallLines が
+        // ecapValues として解決済み——ここは写像するだけ。
+        elems.push(...ecapValues.flatMap((v, i) => {
+          const seg = merged(`${shape.id}:ecap:${i}`, capLo, capHi);
+          if (!seg) return [];
+          const [c0, c1] = seg;
+          return [(
+            <Line
+              key={`${shape.id}:ecap:${i}`}
+              points={shape.isVertical ? [c0, v, c1, v] : [v, c0, v, c1]}
+              {...finSp}
+            />
+          )];
+        }));
 
         // 下地（間柱）断面: 通り芯(axisCL)上の実材厚。式は core.js の Wall.backingRange と
         // 共有する（backingRange===null は「下地なし＝仕上げのみの薄壁」で描画しない）。

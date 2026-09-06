@@ -4,9 +4,9 @@
  * 閉じる」）と同じ規則を適用する純関数群（第4弾）。設計意図は .claude/elevation-model.md
  * 「L字の角の外角を閉じる」節を参照。
  *
- * 線の太さ（`columnWrapStrokeWidth`）は壁の太さ決定と**同じ関数・同じ引数系**を使う
- * （renderer/ShapesLayer.jsx `strokeProps`: `resolveStrokeWidth(shape.lineWeight,
- * Math.min(scaleX,scaleY))`。壁のShape既定lineWeightはmedium＝core/shapeBase.js）。
+ * 線の太さ（`columnWrapStrokeWidth`）は壁の仕上げ材の線と**同じ供給源**
+ * （`finish/wallFinishJoin.js` の `wallFinishLineWeight(detail)`。詳細LODは太線・それ以外は中線）
+ * を `resolveStrokeWidth(_, Math.min(scaleX,scaleY))` に通した値を使う。
  * `resolveStrokeWidth`はズーム追従の最低1px相当保証（`Math.max(1/scale, lineWeight)`）を持ち、
  * LINE_WEIGHT_MM.medium(0.25)は既定の校正値では scale<=4（scaleDenominator>=1＝1/100〜1/1）の範囲で
  * `1/scale`側が上回るため、実スクリーンpxはちょうど1.0px——figureLineJoin.jsの
@@ -38,19 +38,22 @@
  */
 import { resolvePlanLinePointsMmScaledStroke } from '../renderer/planLineJoin.js';
 import { resolveStrokeWidth } from '../viewport.js';
-import { LINE_WEIGHT_MM } from '../core.js';
+import { wallFinishLineWeight } from '../finish/wallFinishJoin.js';
 
 /**
- * 柱の仕上げ包み（柱壁）の線の太さ。壁の太さ決定と**同じ関数・同じ引数系**
- * （renderer/ShapesLayer.jsx `strokeProps`: `resolveStrokeWidth(shape.lineWeight,
- * Math.min(scaleX,scaleY))`、壁のShape既定lineWeightはmedium＝core/shapeBase.js）を使う——
- * 壁と取り合う相手と太さが揃っていないと1本の線として連続して見えないため（ユーザー指示2026-08）。
+ * 柱の仕上げ包み（柱壁）の線の太さ。壁の仕上げ材の線と**同じ供給源・同じ引数系**
+ * （`finish/wallFinishJoin.js` の `wallFinishLineWeight(detail)` を
+ * `resolveStrokeWidth(_, Math.min(scaleX,scaleY))` に通す。renderer/ShapesLayer.jsx の
+ * 仕上げ材の線と完全に同じ式）を使う——壁と取り合う相手と太さが揃っていないと1本の線として
+ * 連続して見えないため（ユーザー指示2026-08）。詳細LODで太線になるのも壁と同時（2026-09）。
  * @param {number} scaleX
  * @param {number} scaleY
+ * @param {boolean} detail - viewport.lodLevel === LodLevel.DETAIL か
+ * @param {object} [lineWeightsPx] - viewport.lineWeightsPx（実スクリーンpxの4段階表）
  * @returns {number} `resolveStrokeWidth`の戻り値（世界mm相当。Konva親Groupのscale継承前提）
  */
-export function columnWrapStrokeWidth(scaleX, scaleY) {
-  return resolveStrokeWidth(LINE_WEIGHT_MM.medium, Math.min(scaleX, scaleY));
+export function columnWrapStrokeWidth(scaleX, scaleY, detail, lineWeightsPx) {
+  return resolveStrokeWidth(wallFinishLineWeight(detail), Math.min(scaleX, scaleY), lineWeightsPx);
 }
 
 // 柱壁の外形4辺（旧 columnWrapLines のペア配列と同じ頂点定義）。

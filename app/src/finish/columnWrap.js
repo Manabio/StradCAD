@@ -288,7 +288,12 @@ export function wrapColumnWithFinish(rect, walls, opts = {}) {
 function wrapColumnWithFinishSet(rect, set, opts = {}) {
   const trimGapMm = opts.trimGapMm ?? TRIM_GAP_MM;
   const covers = {}, finishes = {}, trimmed = {}, wallAxes = [];
+  // 包みの線の色。**包みは壁（仕上げ材）であって構造材ではない**ので、取り合う壁の線色を継ぐ
+  // ——柱の材種色（COLOR_BY_MATERIAL。伏図で部材の種別を示すための色）で描くと、平面では
+  // 同じ1本の仕上げ線が柱のところだけ色違いになる（ユーザー実機指摘2026-09）。
+  let wallColor = null;
   const pushAxis = wall => {
+    if (wallColor == null && wall?.color) wallColor = wall.color;
     const axisValue = wall?.axisCL?.effectiveValue;
     if (!Number.isFinite(axisValue)) return;
     if (wallAxes.some(a => a.isVertical === wall.isVertical && Math.abs(a.axisValue - axisValue) <= GAP_EPS)) return;
@@ -308,7 +313,7 @@ function wrapColumnWithFinishSet(rect, set, opts = {}) {
     ...rect,
     xLo: rect.xLo - covers.xLo, xHi: rect.xHi + covers.xHi,
     yLo: rect.yLo - covers.yLo, yHi: rect.yHi + covers.yHi,
-    covers, finishes, trimmed, wallAxes,
+    covers, finishes, trimmed, wallAxes, wallColor,
   };
 }
 
