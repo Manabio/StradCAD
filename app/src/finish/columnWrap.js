@@ -64,7 +64,7 @@ function rangesOverlap(aLo, aHi, bLo, bHi) {
  * （`resolveSideCover` のトリム分岐。規則は finish/wallFinishJoin.js が唯一の供給源）。
  * materialRange 同様 MobX の computed 由来のため、ここで1回だけ写して内側のループは読まない。
  */
-function makeWallView(wall) {
+function makeWallView(wall, capOutlineIds) {
   const mr = wall.materialRange ?? null;
   const br = wall.backingRange ?? null;
   const c1 = wall.coord1, c2 = wall.coord2;
@@ -78,14 +78,17 @@ function makeWallView(wall) {
     finLine: mr && wall.axisCL ? resolveFinVisibility(wall) : null,
     backingMm: br ? Math.abs(br.hi - br.lo) : null,
     axisId: wall.axisCL?.id ?? null,
+    // 平面で**天板の輪郭**として描かれる壁（腰壁・垂れ壁）か。切断面にその壁の面線が無いので、
+    // 柱壁はこの壁と取り合う辺を省略できない（`continued`。ユーザー確定2026-09「高い壁が勝つ」）。
+    capOutline: wall.id != null && !!capOutlineIds?.has(wall.id),
   };
 }
 
 /** 壁配列 → ビュー集合（向き別・軸CL別の束ね込みを含む）。 */
-function makeWallSet(walls) {
+function makeWallSet(walls, capOutlineIds) {
   const all = [], vertical = [], horizontal = [], byAxis = new Map();
   for (const wall of walls ?? []) {
-    const view = makeWallView(wall);
+    const view = makeWallView(wall, capOutlineIds);
     all.push(view);
     (view.isVertical ? vertical : horizontal).push(view);
     if (view.axisId == null) continue;
@@ -194,6 +197,8 @@ function isColumnInsideWallSet(rect, set) {
   for (const view of set.all) {
     const mr = view.mr;
     if (!mr) continue;
+    // 腰壁・垂れ壁は平面切断高さに無い＝柱を隠さない（柱はその上まで伸びている）。
+    if (view.capOutline) continue;
     const [acrossLo, acrossHi, spanLo, spanHi] = view.isVertical
       ? [rect.xLo, rect.xHi, rect.yLo, rect.yHi]
       : [rect.yLo, rect.yHi, rect.xLo, rect.xHi];
@@ -202,6 +207,21 @@ function isColumnInsideWallSet(rect, set) {
     if (spanLo >= view.spanLo - tol - GAP_EPS && spanHi <= view.spanHi + tol + GAP_EPS) return true;
   }
   return false;
+}
+
+/**
+ * 腰壁・垂れ壁の**帯全体**（同じ通り・同じ向きで長さ方向が重なる天板の壁すべて。下地オーナー＋
+ * 仕上げ薄壁の対を1つの帯として見る `fullFaceRange` と同じ考え方）の遠位面を返す。
+ * 1枚ぶんの材で止めると、対になるもう1枚（薄壁）の材幅が柱壁の脇に欠けて残る。
+ */
+function capBandFarFace(view, set, side, spanLo, spanHi) {
+  let far = side < 0 ? view.mr.lo : view.mr.hi;
+  for (const other of set.byAxis.get(view.axisId) ?? []) {
+    if (!other.capOutline || other.isVertical !== view.isVertical || !other.mr) continue;
+    if (!rangesOverlap(spanLo, spanHi, other.spanLo, other.spanHi)) continue;
+    far = side < 0 ? Math.min(far, other.mr.lo) : Math.max(far, other.mr.hi);
+  }
+  return far;
 }
 
 /**
@@ -234,13 +254,17 @@ function resolveSideCover(rect, set, axis, side, trimGapMm) {
     const mr = view.mr;
     if (!mr) continue;
     if (!rangesOverlap(spanLo, spanHi, view.spanLo, view.spanHi)) continue;
-    // 面が材厚の中＝壁内。この面は覆わない（規約3）。
-    if (face > mr.lo + GAP_EPS && face < mr.hi - GAP_EPS) {
+    // 面が材厚の中＝壁内。この面は覆わない（規約3）。**腰壁・垂れ壁は除く**——平面切断高さで
+    // その壁は存在せず（天板の輪郭で描かれる）、柱はその上まで伸びているので覆う必要がある。
+    const inside = face > mr.lo + GAP_EPS && face < mr.hi - GAP_EPS;
+    if (inside && !view.capOutline) {
       return { coverMm: 0, finishMm: 0, wall: view.wall, trimmed: false, inWall: true };
     }
     const gapMm = side < 0 ? face - mr.hi : mr.lo - face;
-    if (gapMm < -GAP_EPS) continue; // その壁は面の反対側にある
-    if (!nearest || gapMm < nearest.gapMm) nearest = { gapMm, view };
+    if (gapMm < -GAP_EPS && !inside) continue; // その壁は面の反対側にある
+    // 材の中で終わる面（腰壁のみここに来る）は隙間0＝接している扱い。伸ばし先は下の遠位面。
+    const gap = Math.max(gapMm, 0);
+    if (!nearest || gap < nearest.gapMm) nearest = { gapMm: gap, view };
   }
   if (nearest) fallbackCover = wallBackingMm(nearest.view, set) + nearest.view.wallFinish;
   // 仕上げ材の厚み。包みの残りが下地材（平面図はこの2層を描き分ける）。包みが仕上げ厚より
@@ -249,17 +273,29 @@ function resolveSideCover(rect, set, axis, side, trimGapMm) {
   const finishOf = (view, coverMm) => Math.min(view?.wallFinish ?? 0, coverMm);
   if (nearest && nearest.gapMm <= trimGapMm + GAP_EPS) {
     // 隙間を塞いで壁の仕上げ面と揃える（規約2）。隙間0＝既に接している場合も接続扱い。
-    const trimmedFace = face + side * nearest.gapMm; // 相手の仕上げ面と揃った位置
+    // **相手が腰壁・垂れ壁（天板の輪郭で描かれる壁）なら、手前の面ではなくその帯の遠位面まで
+    // 伸ばす**（ユーザー確定2026-09「柱包みの壁を作って：当たる腰壁分の壁も含めて作る」）
+    // ——切断高さでその壁は無いので、手前で止めると壁の材幅ぶんの矩形が柱壁の脇に欠けて残る
+    // （wallJunctionResolve.js パス0の `endExtend` が高い壁の端を低い壁の帯の遠位面まで
+    // 伸ばすのと同じ理由・同じ帯単位）。
+    const coverMm = nearest.view.capOutline
+      ? Math.abs(capBandFarFace(nearest.view, set, side, spanLo, spanHi) - face)
+      : nearest.gapMm;
+    const trimmedFace = face + side * coverMm; // 相手の仕上げ面と揃った位置
     // 取り合う面の内側境界は**相手の内側線の位置**へ置く（壁同士の取り合い＝
     // wallJunctionResolve.js パス2 と同じ規則・同じ経路。finish/wallFinishJoin.js）。
     // 自前の仕上げ厚で内側へ入れると、壁のfin線と柱壁の内側線が仕上げ厚2枚ぶん食い違って
     // 離れて見える（実機指摘2026-09）。相手のfin線が描かれない壁とは取り合えないので、
     // その場合だけ取り合わない面と同じ式へフォールバックする。
-    const joined = finishJoinInset(nearest.view.finLine, trimmedFace, side);
+    // 腰壁の帯を貫いて伸びた面は相手の内側線と取り合わない（切断面にその線が無い）ので、
+    // 取り合っていない面と同じ式（自前の仕上げ厚）で内側境界を置く。
+    const joined = nearest.view.capOutline ? null
+      : finishJoinInset(nearest.view.finLine, trimmedFace, side);
     return {
-      coverMm: nearest.gapMm,
-      finishMm: joined ?? finishOf(nearest.view, nearest.gapMm),
+      coverMm,
+      finishMm: joined ?? finishOf(nearest.view, coverMm),
       wall: nearest.view.wall, trimmed: true, inWall: false,
+      capOutline: nearest.view.capOutline,
     };
   }
   return {
@@ -275,19 +311,24 @@ function resolveSideCover(rect, set, axis, side, trimGapMm) {
  * 「この柱はどの面に現れるか」を面の軸CLと照合して決めるため（実機フィードバック2026-08。
  * `sectionStructure.js` の `structuralColumnPrimitivesForCut` 参照）。150mmを超えて離れた壁は
  * 接続しない＝その面には柱型を出さない（独立柱の見えがかりは defer のまま）。
+ * `continued` は「その辺を壁の面線が引き継ぐか」＝柱壁がその辺を描かないか（`trimmed`と違い、
+ * **腰壁・垂れ壁と取り合う辺では false**——天板の輪郭で描かれる壁は切断面に面線を持たない。
+ * 全高の柱壁が勝ち、そこへ天板が突き当たる。ユーザー確定2026-09）。対象壁の集合は
+ * `opts.capOutlineWallIds`（finish/kneeDropWall.js の resolveKneeDropOverlays のキー）で渡す
+ * ——省略時は空＝従来どおり `continued === trimmed`。
  * @param {ColumnRect} rect - ダイヤフラム出まで含んだ素の外形
  * @param {object[]} walls
- * @param {{trimGapMm?:number}} [opts]
- * @returns {ColumnRect & {covers:SideAmounts, trimmed:SideAmounts,
+ * @param {{trimGapMm?:number, capOutlineWallIds?:Set<string>}} [opts]
+ * @returns {ColumnRect & {covers:SideAmounts, trimmed:SideAmounts, continued:SideAmounts,
  *   wallAxes:Array<{isVertical:boolean, axisValue:number}>}}
  */
 export function wrapColumnWithFinish(rect, walls, opts = {}) {
-  return wrapColumnWithFinishSet(rect, makeWallSet(walls), opts);
+  return wrapColumnWithFinishSet(rect, makeWallSet(walls, opts.capOutlineWallIds), opts);
 }
 
 function wrapColumnWithFinishSet(rect, set, opts = {}) {
   const trimGapMm = opts.trimGapMm ?? TRIM_GAP_MM;
-  const covers = {}, finishes = {}, trimmed = {}, wallAxes = [];
+  const covers = {}, finishes = {}, trimmed = {}, continued = {}, wallAxes = [];
   // 包みの線の色。**包みは壁（仕上げ材）であって構造材ではない**ので、取り合う壁の線色を継ぐ
   // ——柱の材種色（COLOR_BY_MATERIAL。伏図で部材の種別を示すための色）で描くと、平面では
   // 同じ1本の仕上げ線が柱のところだけ色違いになる（ユーザー実機指摘2026-09）。
@@ -304,6 +345,9 @@ function wrapColumnWithFinishSet(rect, set, opts = {}) {
     covers[key] = r.coverMm;
     finishes[key] = r.finishMm;
     trimmed[key] = r.trimmed;
+    // 壁の面線がこの辺を引き継ぐか。腰壁・垂れ壁（天板の輪郭で描かれる壁）は切断面に面線が
+    // 無い＝引き継げないので、柱壁が自分でこの辺を描く（全高の柱壁が勝つ）。
+    continued[key] = r.trimmed && !r.capOutline;
     // 接続（トリム）した壁・食い込んでいる壁だけを索引に積む。遠い壁は積まない。
     if (r.trimmed || r.inWall) pushAxis(r.wall);
   }
@@ -313,7 +357,7 @@ function wrapColumnWithFinishSet(rect, set, opts = {}) {
     ...rect,
     xLo: rect.xLo - covers.xLo, xHi: rect.xHi + covers.xHi,
     yLo: rect.yLo - covers.yLo, yHi: rect.yHi + covers.yHi,
-    covers, finishes, trimmed, wallAxes, wallColor,
+    covers, finishes, trimmed, continued, wallAxes, wallColor,
   };
 }
 
@@ -336,7 +380,7 @@ function wrapColumnWithFinishSet(rect, set, opts = {}) {
  *   backing:Array<[number,number]>}>} 壁id → 層ごとの、壁の長さ方向で落とす区間（複数可）
  */
 export function columnWallCuts(graph, opts = {}) {
-  const set = makeWallSet(graph?.walls ?? []);
+  const set = makeWallSet(graph?.walls ?? [], opts.capOutlineWallIds);
   const cuts = new Map();
   for (const { wrapped, hidden } of columnWrapSolidsSet(graph, set, opts)) {
     if (hidden) continue; // 壁に完全に埋まる柱は壁の描画を変えない
@@ -412,7 +456,7 @@ function canRemoveBacking(view, set, touchedSet) {
  * @returns {Array<{column:object, bare:ColumnRect, wrapped:object, hidden:boolean}>}
  */
 export function columnWrapSolids(graph, opts = {}) {
-  return columnWrapSolidsSet(graph, makeWallSet(graph?.walls ?? []), opts);
+  return columnWrapSolidsSet(graph, makeWallSet(graph?.walls ?? [], opts.capOutlineWallIds), opts);
 }
 
 function columnWrapSolidsSet(graph, set, opts) {

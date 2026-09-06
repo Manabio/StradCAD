@@ -289,8 +289,10 @@ export function validateKneeDropWall(kneeTop, dropBottom, ceilingHeight) {
  * 常に優先される（腰壁天板より低い切断面には他に描くものが無いため）。腰壁指定が無い区間
  * でのみ垂れ壁の判定（切断面が壁本体を貫くか）を行う。
  * @param {object} graph
- * @returns {Map<string, {mode:'knee'|'drop', capLo:number, capHi:number, topHeight?:number}>}
+ * @returns {Map<string, {mode:'knee'|'drop', capLo:number, capHi:number, topHeight?:number,
+ *   capJoins?:{lo?:CapJoin, hi?:CapJoin}}>}
  *   topHeight は mode==='knee' のみ（planWallHeight が読む平面での壁の高さ）。
+ *   capJoins は天板どうしが角で取り合う端のみ（resolveCapJoins）。
  */
 export function resolveKneeDropOverlays(graph) {
   const result = new Map();
@@ -323,6 +325,102 @@ export function resolveKneeDropOverlays(graph) {
     for (const w of geo.walls) {
       if (!result.has(w.id)) result.set(w.id, overlay);
     }
+  }
+  return withCapJoins(result, graph.walls);
+}
+
+// 天板どうしが角で取り合うとみなす許容差(mm)。壁端は既存トリム（closeConvexCorners 等）が
+// 相手の材の面へスナップし、天板の帯は材より CAP_OVERHANG ぶん外へ広いので、理論上は必ず
+// 相手の帯の内側に入る。厳密スナップを経ていない壁（手動壁）も拾えるよう、
+// wallJunctionResolve.js の TOUCH_TOLERANCE と同値にする。
+const CAP_JOIN_TOL = 30; // mm
+
+/**
+ * @typedef {{capLoAt:number, capHiAt:number}} CapJoin
+ *   天板の長辺2本（capLo側・capHi側）がその端で止まる長さ方向の座標。
+ */
+
+// 壁1本の天板ビュー（角の解決に要る値だけを写したPOJO）。
+function capView(wall, overlay) {
+  return {
+    id: wall.id,
+    isVertical: wall.isVertical,
+    lo: Math.min(wall.coord1, wall.coord2),
+    hi: Math.max(wall.coord1, wall.coord2),
+    capLo: overlay.capLo,
+    capHi: overlay.capHi,
+    // 線種（実線＝腰壁／破線＝垂れ壁）も高さも同じ天板どうしだけが取り合う。高さが違う組は
+    // 「高い方が優先」（wallJunctionResolve.js パス0）の担当で、ここでは触らない。
+    capKey: `${overlay.mode}:${overlay.topHeight ?? ''}`,
+  };
+}
+
+// bの2つの端のうち、aの天板の帯に入るもの（両方入る退化配置では帯の中心に近い方）。
+// どちらも入らない＝bはaの帯を素通りする（T字・十字）か遠くにある＝角ではない。
+function capEndInBand(b, a) {
+  const center = (a.capLo + a.capHi) / 2;
+  let best = null;
+  for (const end of ['lo', 'hi']) {
+    const coord = b[end];
+    if (coord < a.capLo - CAP_JOIN_TOL || coord > a.capHi + CAP_JOIN_TOL) continue;
+    if (best === null || Math.abs(coord - center) < Math.abs(b[best] - center)) best = end;
+  }
+  return best;
+}
+
+/**
+ * 天板（腰壁・垂れ壁の輪郭）どうしが直角に出会う**角**を解決する。
+ *
+ * ユーザー確定2026-09「天板の内側・外側どうしでトリムし、壁厚+24（＝天板幅）の端部の線は
+ * 描かない」。壁本体の取り合い（wallJunctionResolve.js のパス2「内側線どうし・外側線どうしが
+ * 交点で取り合う」）と同じ規則を、天板の長辺2本に適用したもの——これが無いと両者の端部が
+ * 重なって描かれる（実機2026-09「22」2階 X3×Y1+3500）。
+ *
+ * 角と見なすのは**相互**に取り付いている組だけ（aの端がbの帯に入り、かつbの端がaの帯に入る）
+ * ——通り過ぎるT字・十字は角ではないので従来どおり触らない。
+ *
+ * 止め先は「相手の帯の遠位面／近位面」だけで決まるため、向き（4通りの角）にも偏芯
+ * （帯が軸CLに対して非対称）にもそのまま効く: 相手の本体は端の向きの**逆側**へ伸びるので、
+ * その側が角の内側＝相手の帯の近位面まで縮め、反対側が外側＝遠位面まで伸ばす。
+ *
+ * @param {Array<ReturnType<typeof capView>>} views 天板で描かれる壁のビュー
+ * @returns {Map<string, {lo?:CapJoin, hi?:CapJoin}>} 角で取り合う端だけを持つ
+ */
+export function resolveCapJoins(views) {
+  const joins = new Map();
+  for (const a of views) {
+    for (const b of views) {
+      if (a.isVertical === b.isVertical) continue; // 平行な天板は角を作らない
+      if (a.capKey !== b.capKey) continue;
+      const endB = capEndInBand(b, a);
+      if (endB === null) continue;
+      const dirB = endB === 'lo' ? -1 : 1; // bの端が向く向き（本体は -dirB 側へ伸びる）
+      for (const [endA, coordA, anchorA] of [['lo', a.lo, a.hi], ['hi', a.hi, a.lo]]) {
+        if (coordA < b.capLo - CAP_JOIN_TOL || coordA > b.capHi + CAP_JOIN_TOL) continue;
+        const dirA = Math.sign(coordA - anchorA) || 1;
+        const far  = dirA > 0 ? b.capHi : b.capLo; // 角の外側（相手の帯の遠位面）
+        const near = dirA > 0 ? b.capLo : b.capHi; // 角の内側（相手の帯の近位面）
+        const rec = joins.get(a.id) ?? {};
+        rec[endA] = dirB < 0
+          ? { capLoAt: far,  capHiAt: near }  // bの本体はcapHi側＝そちらが内側
+          : { capLoAt: near, capHiAt: far };
+        joins.set(a.id, rec);
+      }
+    }
+  }
+  return joins;
+}
+
+// 角の取り合い（capJoins）を解決して overlay に載せる。overlay は区間ごとに1つの共有オブジェクト
+// だが capJoins は**壁ごと**に違うため、該当する壁のエントリだけ複製して差し替える。
+function withCapJoins(result, walls) {
+  const views = [];
+  for (const w of walls) {
+    const overlay = result.get(w.id);
+    if (overlay) views.push(capView(w, overlay));
+  }
+  for (const [id, capJoins] of resolveCapJoins(views)) {
+    result.set(id, { ...result.get(id), capJoins });
   }
   return result;
 }

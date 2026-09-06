@@ -89,7 +89,7 @@ export function columnWrapFinKey(columnId, edgeKey) { return `wrapfin:${columnId
 
 /**
  * 柱1本ぶんの、実際に描く辺だけを figureLineJoin.js 語彙の primitives（mm座標。widthは未設定）へ
- * 写像する。壁と取り合う辺（`wrap.trimmed[key]`）は対象外（壁側の線に任せる。旧 columnWrapLines
+ * 写像する。壁の面線が引き継ぐ辺（`wrap.continued[key]`）は対象外（壁側の線に任せる。旧 columnWrapLines
  * の `skip`）。仕上げ材が無い内側境界の辺（`finishes[key]`が0以下）も対象外。
  * @param {object} column - graph.columns の1件（idのみ参照）
  * @param {object|null|undefined} wrap - finish/columnWrap.js の wrapColumnWithFinish 戻り値
@@ -99,7 +99,10 @@ export function columnWrapFinKey(columnId, edgeKey) { return `wrapfin:${columnId
  */
 export function columnWrapEdgePrimitives(column, wrap, detail) {
   if (!wrap) return [];
-  const skip = key => wrap.trimmed?.[key];
+  // 壁の面線が引き継ぐ辺だけを省く（`continued`。`trimmed`との違い＝腰壁・垂れ壁と取り合う辺は
+  // 引き継がれない。finish/columnWrap.js 参照）。`continued`を持たない相手（テストダブル・旧
+  // 呼び出し）は従来どおり`trimmed`で判断する。
+  const skip = key => (wrap.continued ?? wrap.trimmed)?.[key];
   const prims = [];
   for (const [key, x1, y1, x2, y2] of outerEdges(wrap)) {
     if (skip(key)) continue;

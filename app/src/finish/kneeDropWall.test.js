@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import { Plane, PlanGraph, CenterLineType, Discipline, edgeKey } from '@core';
 import { generateRoomWallsFromOutline } from './wallGeneration.js';
 import { edgeGeometry, buildCellToRoom } from './edgeClassify.js';
-import { effectiveCeilingHeight, validateKneeDropWall, ERR_CEILING_HEIGHT_UNRESOLVED, kneeDropRecordsOnAxis, resolveKneeDropOverlays, kneeDropRecordForWallSpan, kneeDropRecordsAtPointOnWall, planWallHeight, wallsMeetAtPlanCut, PLAN_CUT_HEIGHT } from './kneeDropWall.js';
+import { effectiveCeilingHeight, validateKneeDropWall, ERR_CEILING_HEIGHT_UNRESOLVED, kneeDropRecordsOnAxis, resolveKneeDropOverlays, kneeDropRecordForWallSpan, kneeDropRecordsAtPointOnWall, planWallHeight, wallsMeetAtPlanCut, PLAN_CUT_HEIGHT, resolveCapJoins } from './kneeDropWall.js';
 
 function makeGraph() {
   const plane = new Plane('p1', 0, '1階', 1, 1);
@@ -273,4 +273,84 @@ test('【実機回帰2026-09】resolveKneeDropOverlays: 区間端に半分だけ
   const overlays = resolveKneeDropOverlays(graph);
   assert.equal(overlays.has(filler.id), false, '駒は全高の壁のまま（腰壁扱いにしない）');
   assert.equal(planWallHeight(overlays, filler.id), Infinity);
+});
+
+// ==== 天板どうしの角の取り合い（実機2026-09「22」2階 X3×Y1+3500: 端部が重なって描かれた）====
+// 規則: 外側どうし・内側どうしでトリム（相手の帯の遠位面／近位面まで長辺を伸縮）し、
+// 端部の線（長さ＝天板幅＝壁厚+24）は描かない。
+
+// 1室の直交する2辺（y=0の辺・x=0の辺）に同じ高さの腰壁を指定する。
+function makeCornerKneeGraph(topHeights = [900, 900]) {
+  const graph = makeGraph();
+  const x0 = addCL(graph, CenterLineType.VERTICAL, 0);
+  const x1 = addCL(graph, CenterLineType.VERTICAL, 4000);
+  const y0 = addCL(graph, CenterLineType.HORIZONTAL, 0);
+  const y1 = addCL(graph, CenterLineType.HORIZONTAL, 5000);
+  const room = graph.addRoom(new Set([`${x0.id}:${y0.id}:${x1.id}:${y1.id}`]), '室');
+  generateRoomWallsFromOutline(graph, room);
+  graph.setKneeDropWall(edgeKey(y0.id, x0.id, x1.id), { knee: { topHeight: topHeights[0] } });
+  graph.setKneeDropWall(edgeKey(x0.id, y0.id, y1.id), { knee: { topHeight: topHeights[1] } });
+  const wallOn = (vertical, axisValue) => [...graph.walls]
+    .find(w => w.isVertical === vertical && w.axisCL.effectiveValue === axisValue);
+  return { graph, hWall: wallOn(false, 0), vWall: wallOn(true, 0) };
+}
+
+test('【実機2026-09】resolveKneeDropOverlays: 角で出会う同高の天板は外側どうし・内側どうしでトリムする', () => {
+  const { graph, hWall, vWall } = makeCornerKneeGraph();
+  const overlays = resolveKneeDropOverlays(graph);
+  // 天板の帯は材（[0,57.5]）の外へ12mm出る＝[-12, 69.5]。角は(x,y)=(57.5,57.5)側が内側。
+  assert.deepEqual(overlays.get(hWall.id).capJoins,
+    { lo: { capLoAt: -12, capHiAt: 69.5 } },
+    '外側の長辺(y=-12)は相手の帯の遠位面(x=-12)まで伸び、内側の長辺(y=69.5)は近位面(x=69.5)で止まる');
+  assert.deepEqual(overlays.get(vWall.id).capJoins,
+    { lo: { capLoAt: -12, capHiAt: 69.5 } }, '縦壁側も同じ2点（外側の角・内側の角）で取り合う');
+  // 角でない側の端（hi端）には取り合いが立たない＝端部の線は従来どおり描かれる。
+  assert.equal(overlays.get(hWall.id).capJoins.hi, undefined);
+});
+
+test('【失敗系】resolveKneeDropOverlays: 高さが違う腰壁どうしの角は取り合わない（高い方が優先の担当）', () => {
+  const { graph, hWall, vWall } = makeCornerKneeGraph([900, 1000]);
+  const overlays = resolveKneeDropOverlays(graph);
+  assert.equal(overlays.get(hWall.id).capJoins, undefined);
+  assert.equal(overlays.get(vWall.id).capJoins, undefined);
+});
+
+// 向き（4通りの角）に依らないこと・偏芯した帯でも相手の帯の面で止まることを、ビュー直渡しで固定する。
+const view = (id, isVertical, lo, hi, capLo, capHi) =>
+  ({ id, isVertical, lo, hi, capLo, capHi, capKey: 'knee:900' });
+
+test('resolveCapJoins: 角の向きが変わっても外側＝相手の帯の遠位面・内側＝近位面で止まる', () => {
+  // 横壁は-x方向へ伸びhi端(x=57.5)が角。縦壁は+y方向へ伸びlo端(y=57.5)が角＝右上が外側。
+  const h = view('h', false, -3000, 57.5, -12, 69.5);
+  const v = view('v', true, 57.5, 3000, -12, 69.5);
+  const joins = resolveCapJoins([h, v]);
+  assert.deepEqual(joins.get('h'), { hi: { capLoAt: 69.5, capHiAt: -12 } },
+    '縦壁の本体は+y側＝横壁のcapHi(y=69.5)が内側。外側(y=-12)は遠位面x=69.5まで伸びる');
+  assert.deepEqual(joins.get('v'), { lo: { capLoAt: 69.5, capHiAt: -12 } },
+    '横壁の本体は-x側＝縦壁のcapLo(x=-12)が内側。外側(x=69.5)は遠位面y=-12まで伸びる');
+});
+
+test('resolveCapJoins: 偏芯して帯が軸CLに対し非対称でも相手の帯の面で止まる', () => {
+  // 縦壁の帯を[-12, 200]（+x側へ偏芯）に置く。横壁の止め先はこの帯の両面になる。
+  const h = view('h', false, 200, 3000, -12, 69.5);
+  const v = view('v', true, 69.5, 3000, -12, 200);
+  const joins = resolveCapJoins([h, v]);
+  assert.deepEqual(joins.get('h'), { lo: { capLoAt: -12, capHiAt: 200 } });
+  assert.deepEqual(joins.get('v'), { lo: { capLoAt: -12, capHiAt: 69.5 } });
+});
+
+test('【失敗系】resolveCapJoins: 素通りするT字・十字は角ではないので取り合わない', () => {
+  // 縦壁が横壁の帯を貫いて両側へ伸びる（どちらの端も横壁の帯に無い）＝T字。
+  const h = view('h', false, 0, 3000, -12, 69.5);
+  const v = view('v', true, -3000, 3000, 1000, 1100);
+  assert.equal(resolveCapJoins([h, v]).size, 0);
+});
+
+test('【失敗系】resolveCapJoins: 平行な天板どうし・線種が違う天板どうしは取り合わない', () => {
+  const h1 = view('h1', false, 0, 3000, -12, 69.5);
+  const h2 = view('h2', false, 3000, 6000, -12, 69.5);
+  assert.equal(resolveCapJoins([h1, h2]).size, 0, '平行（同じ向き）は角を作らない');
+  const v = { ...view('v', true, 57.5, 3000, -12, 69.5), capKey: 'drop:' };
+  assert.equal(resolveCapJoins([view('h', false, 57.5, 3000, -12, 69.5), v]).size, 0,
+    '実線（腰壁）と破線（垂れ壁）はトリムしない');
 });

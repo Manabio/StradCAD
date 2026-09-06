@@ -339,3 +339,34 @@ test('【失敗系】columnWallCuts: 柱から遠い壁・柱の無いgraphで�
   assert.equal(columnWallCuts(makeGridRoom().graph).size, 0, '柱が無ければ空');
   assert.equal(columnWallCuts(null).size, 0);
 });
+
+// ==== 柱壁と腰壁が出会う辺は、柱壁が勝つ（ユーザー確定2026-09）====
+// 腰壁・垂れ壁は平面切断高さに存在しない（天板の輪郭で描かれる）。柱壁はその上まで在る
+// 全高の壁なので、
+//  1. その辺を壁側へ譲らない（`continued`=false。譲ると切断面に線が1本も無くなる）
+//  2. 手前の面で止めず**帯の遠位面まで伸ばす**＝「当たる腰壁分の壁も含めて作る」
+//     （止めると腰壁の材幅ぶんの矩形が柱壁の脇に欠けて残る）
+test('wrapColumnWithFinish: 腰壁と取り合う辺は帯の遠位面まで伸び、continued=false（柱壁が自分で描く）', () => {
+  const { graph } = makeGridRoom();
+  const xc = graph.addCenterLine(CenterLineType.VERTICAL, 250, { labeled: false, discipline: Discipline.ARCH });
+  const yc = graph.addCenterLine(CenterLineType.HORIZONTAL, 1000, { labeled: false, discipline: Discipline.ARCH });
+  graph.addColumn(StructuralMaterialType.RC, 'RC-300x300', xc, yc, {});
+  // x=0の通りの壁（材[0,57.5]）。柱のxLo面(100)との隙間42.5mm ≦150 ＝トリムして接続する辺。
+  const kneeWall = [...graph.walls].find(w => w.isVertical && w.materialRange.lo === 0);
+  const bare = bareColumnRect(graph.columns[0]);
+
+  const plain = wrapColumnWithFinish(bare, graph.walls);
+  assert.equal(plain.trimmed.xLo, true, '前提: この辺は壁の仕上げ面までトリムされる');
+  assert.equal(plain.continued.xLo, true, '全高の壁なら従来どおり壁側の面線に任せる');
+
+  const knee = wrapColumnWithFinish(bare, graph.walls, { capOutlineWallIds: new Set([kneeWall.id]) });
+  assert.equal(plain.xLo, 57.5, '前提: 全高の壁なら手前の面（材のhi）で止まる');
+  assert.equal(knee.xLo, 0, '腰壁なら帯を貫いて遠位面（材のlo）まで伸びる＝腰壁分の壁も作る');
+  assert.equal(knee.finishes.xLo, 12.5, '相手の内側線とは取り合えないので自前の仕上げ厚で内側境界を置く');
+  assert.equal(knee.trimmed.xLo, true, 'トリム（接続）した事実は変えない（展開図の索引はこれを見る）');
+  assert.equal(knee.continued.xLo, false, '腰壁の面線は切断面に無いので柱壁が自分でこの辺を描く');
+  assert.ok(columnWrapEdgePrimitives(graph.columns[0], knee, false).some(p => p.key.endsWith(':xLo')),
+    '描画対象の辺として実際に出てくるはず');
+  assert.equal(columnWrapEdgePrimitives(graph.columns[0], plain, false).some(p => p.key.endsWith(':xLo')), false,
+    '全高の壁と取り合う辺は従来どおり出さない');
+});

@@ -97,12 +97,16 @@ export function resolveDeferredBackingIds(generalShapes) {
  * QA指摘）。wallDrawPlan.test.js が実Wallインスタンスでこの関数の呼び出し結果を検証する。
  *
  * @param {import('@core').Wall} wall
- * @param {{openings?:object[], junction?:object, colCuts?:object}} [deps]
+ * @param {{openings?:object[], junction?:object, colCuts?:object, kneeDrop?:object}} [deps]
  *   junction: wallJunctions.get(wall.id)（resolveWallTJunctionsの結果。endExtend/spanCutsは
  *     描画上の壁スパンを置き換え／切り欠き、endWrapは端部の仕上げ材の回り込みを立てる）
  *   colCuts: columnCuts.get(wall.id)（columnWallCutsの結果。face/fin/backingの3区間を持つ）
+ *   kneeDrop: kneeDropOverlays.get(wall.id)（resolveKneeDropOverlaysの結果。天板輪郭の帯と
+ *     角の取り合い。この壁が天板で描かれるか否かの判断もこれ1つで足りる）
  * @returns {{
  *   segments:[number,number][],
+ *   capSegments:[number,number][],
+ *   capJoins:{lo?:object, hi?:object}|null,
  *   faceSegments:[number,number][],
  *   finSegments:[number,number][],
  *   finBoundary:number,
@@ -121,7 +125,7 @@ export function resolveDeferredBackingIds(generalShapes) {
  *   spanLo/spanHi: 描画上の壁スパン（endExtend適用後）。endWrapLo/Hi: その端を仕上げ材で
  *   取り巻く木口線の位置（null＝取り巻かない）。
  */
-export function resolveWallLines(wall, { openings = [], junction, colCuts, endpointAt } = {}) {
+export function resolveWallLines(wall, { openings = [], junction, colCuts, kneeDrop, endpointAt } = {}) {
   // **描画上の壁スパン**: 低い壁（腰壁）とL字の端部で取り合う高い壁は、その端を相手の帯の
   // 遠位面まで伸ばして描く（wallJunctionResolve.js パス0のendExtend。ユーザー確定2026-09
   // 「高い方の壁仕上げ材が端部を覆う」）。ここで1回だけ広げれば、面線・内側線・妻線・下地・
@@ -142,6 +146,24 @@ export function resolveWallLines(wall, { openings = [], junction, colCuts, endpo
   const spanCuts = junction?.spanCuts ?? [];
   const segments = spanCuts.length === 0 ? rawSegments
     : rawSegments.flatMap(([a, b]) => subtractIntervals(a, b, spanCuts));
+
+  // 腰壁・垂れ壁の天板輪郭（ShapesLayer.jsx が描く）専用のセグメント。**柱の仕上げ包み
+  // （柱壁）は全高の壁**なので、壁同士の「高い方が優先」（wallJunctionResolve.js パス0）と
+  // 同じ規則が要る——柱壁に占有される区間は天板を描かず、天板はそこへ突き当たる
+  // （ユーザー確定2026-09「柱包みの壁を作って、そこへ腰壁が当たる」）。切る区間は柱壁の外形幅
+  // ＝面線と同じ `colCuts.face`（内側境界の幅で切ると天板が柱壁へ食い込む）。
+  const capCuts = colCuts?.face ?? [];
+  const capSegments = capCuts.length === 0 ? segments
+    : segments.flatMap(([a, b]) => subtractIntervals(a, b, capCuts));
+  // 天板どうしの角の取り合い（finish/kneeDropWall.js の capJoins）が効くのは、天板の
+  // **物理端がそのまま残っている**端だけ。柱壁や開口で切られた端は相手の天板ではなく
+  // 端部の線（長さ＝天板幅）を描く。
+  const capEnd = (end, value) => (kneeDrop?.capJoins?.[end] != null
+    && capSegments.length > 0 && Math.abs(value - (end === 'lo' ? lo : hi)) <= ENDPOINT_EPS)
+    ? kneeDrop.capJoins[end] : undefined;
+  const capJoins = kneeDrop?.capJoins && capSegments.length > 0
+    ? { lo: capEnd('lo', capSegments[0][0]), hi: capEnd('hi', capSegments[capSegments.length - 1][1]) }
+    : null;
 
   const baseExtend  = junction?.baseExtend ?? {};
   const faceCuts    = junction?.faceCuts ?? [];
@@ -210,6 +232,8 @@ export function resolveWallLines(wall, { openings = [], junction, colCuts, endpo
   const { finBoundary, finVisible } = resolveFinVisibility(wall);
   return {
     segments,
+    capSegments,
+    capJoins,
     faceSegments,
     finSegments,
     finBoundary,
@@ -267,7 +291,10 @@ export function buildWallDrawPlan(graph, lodLevel) {
   const wallJunctions = detail ? resolveWallTJunctions(walls, kneeDropOverlays) : null;
   // 柱の仕上げ包み（柱壁）と取り合う区間。柱を描かないモード（仕上げ・敷地）でも
   // 壁の見た目は「柱に取られた区間」を反映してよい——柱は実在するため。
-  const columnCuts = schematic ? null : columnWallCuts(graph);
+  // 柱壁は**全高の壁**なので、天板の輪郭で描かれる壁（腰壁・垂れ壁）と取り合う辺は
+  // 壁側へ譲らない（`capOutlineWallIds`。finish/columnWrap.js の `continued`）。
+  const capOutlineWallIds = kneeDropOverlays ? new Set(kneeDropOverlays.keys()) : undefined;
+  const columnCuts = schematic ? null : columnWallCuts(graph, { capOutlineWallIds });
 
   // 壁ごとの描画ライン（開口分割・仕上げ面線・内側線・キャップ抑止）をここでまとめて解決する
   // （resolveWallLines。ShapesLayer.jsx は返り値を写像するだけにする）。SCHEMATIC では
@@ -279,6 +306,7 @@ export function buildWallDrawPlan(graph, lodLevel) {
       openings: openingsByWall.get(wall.id),
       junction: wallJunctions?.get(wall.id),
       colCuts: columnCuts?.get(wall.id),
+      kneeDrop: kneeDropOverlays?.get(wall.id),
       // 木口線の「端点はねだし」判定にCLの端点かどうかが要る（graph依存なのでここで解決して渡す）。
       endpointAt: detail && wall.axisCL
         ? { lo: isEndpointAt(graph, wall.axisCL, 'lo'), hi: isEndpointAt(graph, wall.axisCL, 'hi') }

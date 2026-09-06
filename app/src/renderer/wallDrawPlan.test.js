@@ -9,7 +9,7 @@
 // resolveWallLines／buildWallDrawPlan の呼び出し結果そのものを固定する。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Plane, PlanGraph, CenterLineType, Discipline, edgeKey } from '@core';
+import { Plane, PlanGraph, CenterLineType, Discipline, edgeKey, StructuralMaterialType } from '@core';
 import { generateRoomWallsFromOutline } from '../finish/wallGeneration.js';
 import { LodLevel } from '../viewport.js';
 import { resolveWallTJunctions } from './wallJunctionResolve.js';
@@ -274,4 +274,62 @@ test('【失敗系】buildWallDrawPlan: 切断高さを超える腰壁指定は�
   assert.equal(lines.endWrapLo, null);
   assert.equal(lines.capLoSuppressed, true, '切断面まで在る壁どうしなので従来どおり取り合う（キャップ抑止）');
   assert.deepEqual(lines.finSegments, [[2045, 4955]], '内側線は相手の内側線の位置へ寄る（パス2）');
+});
+
+// ==== 柱壁（全高）と腰壁の天板 ====
+// 天板は壁帯とは別の輪郭で描かれるため、通常の面線カット（faceCuts/colCuts）では守られない
+// ——柱壁に占有される区間を描かず、そこへ突き当たる（ユーザー確定2026-09「高い壁が勝つ。
+// 柱包みの壁を作って、そこへ腰壁が当たる」）。
+const KNEE_OVERLAY = {
+  mode: 'knee', capLo: -12, capHi: 69.5,
+  capJoins: { lo: { capLoAt: -12, capHiAt: 69.5 }, hi: { capLoAt: 2500, capHiAt: 2400 } },
+};
+
+test('resolveWallLines: 天板（capSegments）は柱壁の外形幅で切れる。壁帯のsegmentsは変えない', () => {
+  const { hLeft } = buildConcaveGraph(); // スパン[57.5, 2442.5]
+  const lines = resolveWallLines(hLeft, { kneeDrop: KNEE_OVERLAY, colCuts: { face: [[1000, 1300]] } });
+
+  assert.deepEqual(lines.capSegments, [[57.5, 1000], [1300, 2442.5]],
+    '柱壁の区間だけ天板が抜け、両側に端部（天板幅の線）ができるはず');
+  assert.deepEqual(lines.segments, [[57.5, 2442.5]], '壁帯側のスパンは従来どおり無変更');
+  assert.deepEqual(lines.capJoins, KNEE_OVERLAY.capJoins, '物理両端は残るので角の取り合いも残る');
+});
+
+test('resolveWallLines: 柱壁に切られた端では角の取り合い（capJoins）を落とす', () => {
+  const { hLeft } = buildConcaveGraph();
+  const lines = resolveWallLines(hLeft, { kneeDrop: KNEE_OVERLAY, colCuts: { face: [[0, 300]] } });
+
+  assert.deepEqual(lines.capSegments, [[300, 2442.5]]);
+  assert.equal(lines.capJoins.lo, undefined, '端が柱壁へ移った側は相手の天板ではなく端部の線を描く');
+  assert.deepEqual(lines.capJoins.hi, KNEE_OVERLAY.capJoins.hi, '反対の端は影響を受けない');
+});
+
+test('【失敗系】resolveWallLines: 柱が無ければ天板は壁帯と同じ区間、腰壁でなければcapJoinsはnull', () => {
+  const { hLeft } = buildConcaveGraph();
+  const knee = resolveWallLines(hLeft, { kneeDrop: KNEE_OVERLAY });
+  assert.deepEqual(knee.capSegments, knee.segments);
+
+  const plain = resolveWallLines(hLeft, {});
+  assert.deepEqual(plain.capSegments, plain.segments);
+  assert.equal(plain.capJoins, null);
+});
+
+// buildWallDrawPlan が腰壁オーバーレイと柱の切り欠きを**実際に天板へ配線しているか**は
+// ここでしか守れない（純関数のテストは渡し忘れを検出しない）。実グラフで固定する。
+test('buildWallDrawPlan: 腰壁の通りに立つ柱の包みで天板が分割される（実グラフ経由の配線）', () => {
+  const g = new PlanGraph(new Plane('p', 0, '2階', 1, 1));
+  const x0 = vCL(g, 0), x1 = vCL(g, 4000);
+  const y0 = hCL(g, 0), yMid = hCL(g, 2000), y2 = hCL(g, 5000);
+  const upper = g.addRoom(new Set([`${x0.id}:${y0.id}:${x1.id}:${yMid.id}`]), '上室');
+  const lower = g.addRoom(new Set([`${x0.id}:${yMid.id}:${x1.id}:${y2.id}`]), '下室');
+  for (const r of [upper, lower]) generateRoomWallsFromOutline(g, r);
+  g.addColumn(StructuralMaterialType.RC, 'RC-300x300', vCL(g, 2000), yMid, {});
+  g.setKneeDropWall(edgeKey(yMid.id, x0.id, x1.id), { knee: { topHeight: 900 } });
+
+  const plan = buildWallDrawPlan(g, LodLevel.DETAIL);
+  const kneeWall = [...g.walls].find(w => plan.kneeDropOverlays.has(w.id));
+  const lines = plan.wallLines.get(kneeWall.id);
+  // 素の300角＋層構成102.5×2 ＝ 見付け505mm（x=1747.5〜2252.5）。
+  assert.deepEqual(lines.capSegments, [[57.5, 1747.5], [2252.5, 3942.5]]);
+  assert.deepEqual(lines.segments, [[57.5, 3942.5]], '壁帯のスパンは変わらない');
 });

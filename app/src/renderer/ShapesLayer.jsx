@@ -123,7 +123,7 @@ export const ShapesLayer = observer(({ graph, viewport, stairUnderClips = null }
         // （そちらのJSDoc参照。開口・T字/コーナー取り合い・柱の仕上げ包みを
         // buildWallDrawPlan内でまとめて解決している）。
         const plan = wallLines.get(shape.id);
-        const { segments, faceSegments, finSegments, finBoundary, finVisible,
+        const { segments, capSegments, capJoins, faceSegments, finSegments, finBoundary, finVisible,
           spanLo: lo, capValues, ecapValues } = plan;
 
         if (lodLevel === LodLevel.SCHEMATIC) {
@@ -142,24 +142,43 @@ export const ShapesLayer = observer(({ graph, viewport, stairUnderClips = null }
 
         // 腰壁・垂れ壁: 平面切断高さ以下の腰壁／壁本体を貫かない垂れ壁は、通常の壁帯描画の
         // 代わりに天板幅（faceLo-出幅 〜 faceHi+出幅）の輪郭を実線（腰壁）/破線（垂れ壁）で描く
-        // （resolveKneeDropOverlays が優先順位込みで解決済み。開口による区間分割はそのまま使う）。
+        // （resolveKneeDropOverlays が優先順位込みで解決済み）。輪郭は矩形ではなく長辺2本＋
+        // 端部2本の線で描く——天板どうしが角で取り合う端では、長辺を相手の天板の内側／外側まで
+        // 伸縮させ（capJoins）、端部の線を描かないため。区間（capSegments）は開口ぶんの分割に
+        // 加えて柱壁（全高＝高い方が優先）に占有される区間を除いたもの（resolveWallLines）。
         const kneeDrop = kneeDropOverlays?.get(shape.id) ?? null;
         if (kneeDrop) {
-          const dash = kneeDrop.mode === 'knee' ? DASH.solid : DASH.dashed;
-          return segments.map(([a, b], i) => (
-            <Rect
-              key={`${shape.id}:kdcap:${i}`}
-              x={shape.isVertical ? kneeDrop.capLo : a}
-              y={shape.isVertical ? a : kneeDrop.capLo}
-              width={shape.isVertical ? kneeDrop.capHi - kneeDrop.capLo : b - a}
-              height={shape.isVertical ? b - a : kneeDrop.capHi - kneeDrop.capLo}
-              fill="transparent"
-              stroke={sp.stroke}
-              strokeWidth={sp.strokeWidth}
-              dash={dash}
-              listening={false}
-            />
-          ));
+          const { capLo, capHi } = kneeDrop;
+          const capSp = {
+            stroke: sp.stroke,
+            strokeWidth: sp.strokeWidth,
+            dash: kneeDrop.mode === 'knee' ? DASH.solid : DASH.dashed,
+            listening: false,
+          };
+          // (長さ方向, 厚み方向) → 実座標（縦壁は軸が入れ替わる）。
+          const pt = (along, across) => (shape.isVertical ? [across, along] : [along, across]);
+          const lastSeg = capSegments.length - 1;
+          return capSegments.flatMap(([a, b], i) => {
+            // 角の取り合いは壁の物理両端でのみ効く（開口で分割された中間境界は対象外）
+            // ——妻線抑止（capLoSuppressed/capHiSuppressed）と同じインデックス条件。
+            const joinLo = i === 0 ? capJoins?.lo : null;
+            const joinHi = i === lastSeg ? capJoins?.hi : null;
+            const out = [
+              <Line key={`${shape.id}:kdlo:${i}`} {...capSp}
+                points={[...pt(joinLo?.capLoAt ?? a, capLo), ...pt(joinHi?.capLoAt ?? b, capLo)]} />,
+              <Line key={`${shape.id}:kdhi:${i}`} {...capSp}
+                points={[...pt(joinLo?.capHiAt ?? a, capHi), ...pt(joinHi?.capHiAt ?? b, capHi)]} />,
+            ];
+            if (!joinLo) {
+              out.push(<Line key={`${shape.id}:kdcap:lo:${i}`} {...capSp}
+                points={[...pt(a, capLo), ...pt(a, capHi)]} />);
+            }
+            if (!joinHi) {
+              out.push(<Line key={`${shape.id}:kdcap:hi:${i}`} {...capSp}
+                points={[...pt(b, capLo), ...pt(b, capHi)]} />);
+            }
+            return out;
+          });
         }
 
         // 標準・詳細: 軸CL(柱芯) 〜 face(仕上げ面) の帯で実厚を表現

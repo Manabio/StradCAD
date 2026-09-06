@@ -4,6 +4,7 @@ import { StructuralMaterialType, LINE_WEIGHT_MM } from '../core.js';
 import { cellBoundsFromKey } from '../finish/gridCells.js';
 import { findSectionEntry, diaphragmProjection } from '../structural/sectionCatalog.js';
 import { columnWrapSolids } from '../finish/columnWrap.js';
+import { resolveKneeDropOverlays } from '../finish/kneeDropWall.js';
 import { columnWrapRenderProps, columnWrapStrokeWidth } from '../structural/columnWrapLineJoin.js';
 import { graphComputed } from './graphDerived.js';
 import { LodLevel, resolveStrokeWidth } from '../viewport.js';
@@ -181,7 +182,10 @@ export const ColumnsLayer = observer(({ graph, viewport, diaphragm = false, fini
   // 包みの解決は柱×壁の総当たり。graph が変わらない限り同じ結果なので graph 単位に
   // キャッシュする（graphDerived.js。パン・ズームの再レンダーで引き直さない）。
   const wrapByColumnId = finishWrap
-    ? graphComputed(graph, 'columnWrapByColumnId', () => new Map(columnWrapSolids(graph)
+    ? graphComputed(graph, 'columnWrapByColumnId', () => new Map(columnWrapSolids(graph,
+      // 腰壁・垂れ壁（天板の輪郭で描かれる壁）と取り合う辺は、柱壁が自分で描く
+      // ——全高の柱壁が勝ち、そこへ天板が突き当たる（finish/columnWrap.js の `continued`）。
+      { capOutlineWallIds: new Set(resolveKneeDropOverlays(graph).keys()) })
       .filter(w => !w.hidden && Object.values(w.wrapped.covers).some(v => v > 0))
       .map(w => [w.column.id, w.wrapped])))
     : null;
