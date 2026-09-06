@@ -21,6 +21,7 @@ import { DrawPreview } from './DrawPreview.jsx';
 import { CLAddPreview } from './CLAddPreview.jsx';
 import { WallRefIndicator } from './WallRefIndicator.jsx';
 import { SiteLinesLayer, SiteDrawPreview } from './SiteLinesLayer.jsx';
+import { shouldShowPlanFigure } from './planFigureVisibility.js';
 import { ElevationLayer } from './ElevationLayer.jsx';
 
 // ================================================================
@@ -49,6 +50,7 @@ export const SceneLayers = observer(({
   // 誤解釈だった（当時の項目4の意図は「建具モード専用のUIはパネルのみで完結し、モード切替の
   // ためだけの追加キャンバスUIは持たない」という意味で、平面描画そのものを消す指示ではなかった）。
   // openingモード用の早期returnは持たず、floorplan等と同じ共有レイヤ群（下記）をそのまま通す。
+  const showPlanFigure = shouldShowPlanFigure(appMode);
   return (
     <>
       <Layer name="world">
@@ -111,14 +113,14 @@ export const SceneLayers = observer(({
               />
             )}
             {appMode === 'site' && <SiteDrawPreview mode={mode} />}
-            {/* 構造モードでは平面図（壁・建具）を描画しない。通り芯と構造部材のみ表示する。 */}
-            {appMode !== 'structure' && <ShapesLayer graph={graph} viewport={viewport} stairUnderClips={stairUnderClips} />}
-            {appMode !== 'structure' && <OpeningsLayer graph={graph} viewport={viewport} selectedId={appMode === 'opening' ? mode?.selectedOpeningId : null} />}
-            {/* 平面モードでは自階の柱（構造モードで生成・保存済み）を表示する。構造モードの伏図と違い
-                1つ下の階ではなく自階graphの柱を描く（その階の平面に立つ柱はその階のもの）。 */}
-            {/* 追加仕様2026-08: 平面では壁と干渉する柱に仕上げ包みの外形を重ねる（finishWrap）。
-                展開図の柱型と同じ finish/columnWrap.js から厚みを取る。 */}
-            {appMode === 'floorplan' && <ColumnsLayer graph={graph} viewport={viewport} finishWrap />}
+            {/* 平面図一式（壁・建具・柱）は同じ述語で出し入れする——壁は柱の位置で欠き取られるため、
+                壁だけ描いて柱を描かないモードがあると柱まわりの壁が穴になる（planFigureVisibility.js）。
+                柱は自階graphのもの（構造モードの伏図と違い1つ下の階ではない。その階の平面に立つ柱は
+                その階のもの）。finishWrap=壁と干渉する柱に仕上げ包みの外形を重ねる（追加仕様2026-08。
+                厚みは展開図の柱型と同じ finish/columnWrap.js から取る）。 */}
+            {showPlanFigure && <ShapesLayer graph={graph} viewport={viewport} stairUnderClips={stairUnderClips} />}
+            {showPlanFigure && <OpeningsLayer graph={graph} viewport={viewport} selectedId={appMode === 'opening' ? mode?.selectedOpeningId : null} />}
+            {showPlanFigure && <ColumnsLayer graph={graph} viewport={viewport} finishWrap />}
             {appMode === 'structure' && <StructuralLayer composition={structComposition} viewport={viewport} project={project} />}
             {appMode === 'structure' && (
               <MemberTagLayer
