@@ -10,6 +10,7 @@
  */
 
 import { Builder, ByteBuffer } from 'flatbuffers';
+import { normalizeSubType } from '../openings/openingCatalog.js';
 
 // ================================================================
 // 列挙値エンコード
@@ -1165,7 +1166,8 @@ function readOpening(bb, tablePos) {
     refOffset:   r.f64(OP.REF_OFF),
     width:       r.f64(OP.WIDTH),
     category:    OPENING_CATEGORY_DEC[r.i8(OP.CATEGORY)] ?? 'fitting',
-    subType:     r.str(OP.SUB_TYPE) || null,
+    // 廃止キー（例: swingDoor→singleSwing）は読み込み時に現行キーへ正規化する（openingCatalog.js）
+    subType:     normalizeSubType(OPENING_CATEGORY_DEC[r.i8(OP.CATEGORY)] ?? 'fitting', r.str(OP.SUB_TYPE) || null),
     hingeSide:   r.i8(OP.HINGE_SIDE) < 0 ? -1 : 1,
     swingSide:   r.i8(OP.SWING_SIDE) < 0 ? -1 : 1,
     discipline:  r.str(OP.DISC) || 'arch',

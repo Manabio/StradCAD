@@ -120,7 +120,6 @@ export const FITTING_CATALOG = [
   { key: 'sliding',       label: '引き戸',       mechanism: OpeningMechanism.SLIDE_SINGLE, wallKinds: ['interior', 'exterior'], defaultWidth: 800,  defaultHeight: 2000 },
   { key: 'doubleSliding', label: '引き違い戸',   mechanism: OpeningMechanism.SLIDE_DOUBLE, wallKinds: ['interior', 'exterior'], defaultWidth: 1600, defaultHeight: 2000 },
   { key: 'folding',       label: '折れ戸',       mechanism: OpeningMechanism.FOLD,         wallKinds: ['interior'],            defaultWidth: 800,  defaultHeight: 2000 },
-  { key: 'swingDoor',     label: '開き戸',       mechanism: OpeningMechanism.SWING,        wallKinds: ['interior'],            defaultWidth: 800,  defaultHeight: 2000 },
   { key: 'door',          label: 'ドア',         mechanism: OpeningMechanism.SWING,        wallKinds: ['exterior'],            defaultWidth: 900,  defaultHeight: 2000 },
   { key: 'swing',         label: '開き',         mechanism: OpeningMechanism.SWING,        wallKinds: ['exterior'],            defaultWidth: 900,  defaultHeight: 2000 },
   { key: 'freeDoor',      label: '自由片開き扉', mechanism: OpeningMechanism.FREE,         wallKinds: ['interior', 'exterior'], defaultWidth: 900,  defaultHeight: 2000 },
@@ -192,6 +191,20 @@ export const DEFAULT_MATERIALS = {
 /** wallKind ('interior' | 'exterior') に応じた建具カタログの絞り込み。 */
 export function getFittingOptions(wallKind) {
   return FITTING_CATALOG.filter(o => o.wallKinds.includes(wallKind));
+}
+
+// 廃止した種別キー → 現行キーの読み替え表（唯一の定義箇所）。旧データのデコード時に正規化する
+// ため、カタログ本体・UIのselect・記号採番はすべて現行キーだけを扱えばよい。
+//   swingDoor（開き戸）: singleSwing（片開き戸）と機構・既定寸法まで同一の重複項目だったため廃止。
+export const LEGACY_SUBTYPE_ALIASES = Object.freeze({
+  fitting: { swingDoor: 'singleSwing' },
+  window:  {},
+});
+
+/** 旧データの種別キーを現行キーへ読み替える（未知・現行キーはそのまま返す）。 */
+export function normalizeSubType(category, subType) {
+  if (!subType) return subType;
+  return LEGACY_SUBTYPE_ALIASES[category === 'window' ? 'window' : 'fitting'][subType] ?? subType;
 }
 
 export function findCatalogEntry(category, subType) {

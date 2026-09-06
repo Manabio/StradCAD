@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   defaultOpeningHeight, defaultMaterialGlassFor, FIXTURE_SYMBOLS,
   findCatalogEntry, FITTING_CATALOG, WINDOW_CATALOG, IMPLEMENTED_MECHANISMS, OpeningMechanism,
+  normalizeSubType,
 } from './openingCatalog.js';
 
 test('defaultOpeningHeight: カタログに存在する種別はdefaultHeightを返す', () => {
@@ -99,4 +100,18 @@ test('IMPLEMENTED_MECHANISMS: FITTING_CATALOG/WINDOW_CATALOGの全エントリ�
 test('【失敗系】findCatalogEntry: 未知のsubTypeはnullを返す', () => {
   assert.equal(findCatalogEntry('window', 'unknownWindowType'), null);
   assert.equal(findCatalogEntry('fitting', 'unknownFittingType'), null);
+});
+
+// ---- 廃止キーの読み替え（旧データ移行。graphFbs.js のデコードが呼ぶ） ----
+test('normalizeSubType: 廃止した swingDoor は singleSwing へ読み替える', () => {
+  assert.equal(normalizeSubType('fitting', 'swingDoor'), 'singleSwing');
+  assert.equal(findCatalogEntry('fitting', 'swingDoor'), null, 'カタログ本体から削除済みのはず');
+  assert.ok(FITTING_CATALOG.some(o => o.key === 'singleSwing' && o.label === '片開き戸'));
+});
+
+test('【失敗系】normalizeSubType: 現行キー・未知キー・null はそのまま返す', () => {
+  assert.equal(normalizeSubType('fitting', 'singleSwing'), 'singleSwing');
+  assert.equal(normalizeSubType('fitting', 'unknownFittingType'), 'unknownFittingType');
+  assert.equal(normalizeSubType('window', 'swingDoor'), 'swingDoor'); // 窓カテゴリには読み替え表がない
+  assert.equal(normalizeSubType('fitting', null), null);
 });
