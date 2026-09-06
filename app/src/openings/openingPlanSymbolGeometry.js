@@ -7,8 +7,19 @@
 // ================================================================
 
 import { exteriorSideDir } from './openingGeometry.js';
+import { HINGED_MECHANISMS, SASH_OPEN_MECHANISMS } from './openingCatalog.js';
+// viewport.js は mobx と @core しか import しない純モジュールのため、node:test 単体import制約
+// （抽出純モジュールはnode:testから単体import可能に保つ）に抵触しない（openingTagPlacement.js と同じ）。
+import { LodLevel } from '../viewport.js';
 
 export const DOOR_OPEN_ANGLE_DEG = 90;
+
+// 平面記号の見込帯・枠寸法（すべて mm）。renderer/OpeningsLayer.jsx から移設——
+// planFrameBand が一般/詳細の唯一の分岐点になるため、その入出力に関わる寸法定数もここに置く。
+export const SASH_DEPTH_MM         = 40; // 一般LODの見込帯（固定）
+export const FRAME_OVERHANG_MM     = 10; // 枠が壁面から室内外へ出る量
+export const FRAME_JAMB_WIDTH_MM   = 30; // 方立の全幅（本体20 + かかり代10）
+export const FRAME_KAKARI_WIDTH_MM = 10; // 方立のうち開口側かかり代
 
 /**
  * 蝶番(hinge)から見た「閉じ位置」の方向角(度、ワールド空間)。hingeSide<0→長さ座標が増える
@@ -168,4 +179,108 @@ export function resolveSlideLayoutPanels(entry) {
  */
 export function openingExteriorDir(host, graph, centerCoord) {
   return exteriorSideDir(host, graph, centerCoord) ?? host.faceDir;
+}
+
+/**
+ * 平面記号の見込帯（壁厚方向の範囲）。詳細LODは「一般記号を実寸の帯で描き直したもの」であり
+ * 別実装ではない——この関数が一般／詳細の唯一の分岐点になる（機構を追加しても詳細側の枠処理には
+ * 手を入れなくてよい拡張ポイント。.claude/opening-model.md参照）。frameDepth（ユーザー入力の
+ * 見込み、実装方針6）を最優先し、未設定（0/負値/null=不正値。heightと同じ規約）または壁厚以上の
+ * ときのみ壁厚いっぱい（面±overhang）へ縮退する。exteriorDirは半外付けの寄せ方向——境界が
+ * 屋内で室外側が定まらない（0/null/undefined）ときは面間の中央に置く。
+ * @returns {{lo:number, hi:number, center:number, depth:number}}
+ */
+export function planFrameBand({ axisValue, faceLo, faceHi, frameDepth, exteriorDir, detail }) {
+  if (!detail) {
+    const lo = axisValue - SASH_DEPTH_MM / 2, hi = axisValue + SASH_DEPTH_MM / 2;
+    return { lo, hi, center: axisValue, depth: hi - lo };
+  }
+  const outerLo = Math.min(faceLo, faceHi) - FRAME_OVERHANG_MM;
+  const outerHi = Math.max(faceLo, faceHi) + FRAME_OVERHANG_MM;
+  const d = frameDepth > 0 ? frameDepth : null;
+  let lo, hi;
+  if (d === null || d >= outerHi - outerLo) {
+    lo = outerLo; hi = outerHi;
+  } else if (exteriorDir > 0) {
+    hi = outerHi; lo = hi - d;
+  } else if (exteriorDir < 0) {
+    lo = outerLo; hi = lo + d;
+  } else {
+    const c = (outerLo + outerHi) / 2;
+    lo = c - d / 2; hi = c + d / 2;
+  }
+  return { lo, hi, center: (lo + hi) / 2, depth: hi - lo };
+}
+
+/** 見込帯の相対位置t(0..1)に対応するperp座標。leafのトラック位置計算で使う。 */
+export function bandPerp(band, t) {
+  return band.lo + band.depth * t;
+}
+
+/**
+ * 枠内法（両端の方立の内側）の長さ方向区間。詳細LODでは記号本体をこの区間へ寄せる。
+ * width<=jambWidth*2の細い開口でも区間を反転させない（中央へ縮退させる）。
+ * @returns {{lo:number, hi:number, width:number}}
+ */
+export function frameInnerSpan(coord1, coord2, jambWidth) {
+  const width = coord2 - coord1;
+  if (width <= jambWidth * 2) {
+    const mid = (coord1 + coord2) / 2;
+    return { lo: mid, hi: mid, width: 0 };
+  }
+  const lo = coord1 + jambWidth, hi = coord2 - jambWidth;
+  return { lo, hi, width: hi - lo };
+}
+
+/**
+ * 詳細LODディスパッチの「判断」を1箇所に集約する純関数。renderer/OpeningsLayer.jsx は
+ * `.jsx`のためnode:testから単体importできず、判断ロジックをそこへ残すと結線ミスが単体テストで
+ * 検出できない（QA実測: F1のcenterCoord消失・F2のpivotPerp未クランプが1779/1779緑のまま混入した。
+ * 過去にもleaf仕様決定を*LeafSpecs関数へ一本化した際に同種の指摘を受けている）。
+ *
+ * - frame: 'notched'  蝶番系（HINGED_MECHANISMS。SWING含む）——扉が通過するため方立に欠き込みが
+ *            要る（呼び出し側はswingFrameSymbolを使う。SWING自身は既存のFRAME_HINGE_INSET_MM等
+ *            専用inset方式のままで、innerSpanは使わない＝現状維持）。
+ *          'sashOpen' 記号自身が開口全幅の枠矩形を描く非蝶番系（SASH_OPEN_MECHANISMS）——方立は
+ *            内側の縦線を持たない3辺（コの字）で描く（記号側の枠矩形と同一座標の二重描画防止。F5）。
+ *          'sash'     それ以外の非蝶番系（記号が枠矩形を描かない）——方立は閉じた矩形。
+ *            SLIDE_DOUBLEもここに分類されるが、OpeningsLayer.jsxはSLIDE_DOUBLEを専用ブランチ
+ *            （slideDoubleDetailSymbol）で早期returnして消費するため、この'sash'は実際には
+ *            参照されない（IMPLEMENTED_MECHANISMSの29機構を漏れなく分類する総関数にするための
+ *            既定値。呼び出し側が実際にsashFrameSymbolを描く「sash」機構は5件）。
+ *          'none'     SCHEMATIC/STANDARD（lodLevelがDETAILでない）。
+ * - innerSpan: frameInnerSpanの結果。frame==='none'のときはnull（呼び出し側はspan-shrinkを
+ *   行わない＝一般記号は開口全幅のまま）。
+ * - pivotPerp: 回転中心のperp座標。axisValueをband内へクランプした値——frameDepthで半外付けに
+ *   帯が寄ると、hostの面自身（axisValue）がband外に出ることがあるため（F2。扉の回転中心を
+ *   「枠の中心」ではなく「band内の最寄りの面」に保つ）。frameDepth未設定時のbandは常に
+ *   axisValueを含むため、その場合はaxisValueと一致し既存挙動は変わらない。
+ * @returns {{frame:'notched'|'sash'|'sashOpen'|'none', innerSpan:{lo:number,hi:number,width:number}|null, pivotPerp:number}}
+ */
+export function planSymbolPlan({ mechanism, lodLevel, coord1, coord2, axisValue, band, jambWidth }) {
+  const pivotPerp = Math.min(Math.max(axisValue, band.lo), band.hi);
+  if (lodLevel !== LodLevel.DETAIL) return { frame: 'none', innerSpan: null, pivotPerp };
+  const frame = HINGED_MECHANISMS.has(mechanism)
+    ? 'notched'
+    : SASH_OPEN_MECHANISMS.has(mechanism)
+      ? 'sashOpen'
+      : 'sash';
+  const innerSpan = frameInnerSpan(coord1, coord2, jambWidth);
+  return { frame, innerSpan, pivotPerp };
+}
+
+/**
+ * 詳細LODで枠の内法へ記号本体を寄せるための派生opening。coord1/coord2/widthのみ`span`
+ * （frameInnerSpanの結果）に差し替え、centerCoordは変えない（OVERHEAD/EMERGENCY等が向き判定に
+ * 使うため）。
+ *
+ * `{...opening}`はMobXのcomputed（centerCoord/coord1/coord2。core/wall.js Openingのgetterが
+ * `makeObservable`でinstanceにenumerable:falseとして定義される）を**own enumerable property
+ * として拾えない**ため、上書きしない限りcenterCoordは必ずundefinedになる——実装時に一度この形で
+ * 落とし、実Openingインスタンスで再現・修正した実バグ（PIVOT/EMERGENCYの記号が詳細LODで消える・
+ * overheadSymbol/emergencySymbolのalong=undefined化でexteriorSideDirのsegmented判定が壊れる）。
+ * 将来Openingにcomputedフィールドが増えたときも同じ形で再発しうるため、この関数へ一本化する。
+ */
+export function innerSpanOpening(opening, span) {
+  return { ...opening, coord1: span.lo, coord2: span.hi, width: span.width, centerCoord: opening.centerCoord };
 }

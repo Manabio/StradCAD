@@ -54,6 +54,33 @@ export const HINGED_MECHANISMS = new Set([
   OpeningMechanism.FIRE_FOLD,
 ]);
 
+// 非蝶番系のうち、一般記号自身が開口全幅の枠矩形（サッシ枠rect）を描く機構の集合（唯一の定義箇所）。
+// 詳細LODの方立（縦枠）はこれらの機構では記号側の枠矩形と内側の縦線が同一座標で重なるため、
+// 方立側は内側の縦線を持たない3辺（コの字）で描く必要がある——閉じた矩形のまま重ねると
+// 「開口の縁の二重描画」になる（renderer/OpeningsLayer.jsx sashFrameOpenSymbol・
+// openingPlanSymbolGeometry.js planSymbolPlan の frame:'sashOpen' が参照）。
+//
+// 既知の例外（未解消・軽微）: SHUTTER/OVERHEADは含めていない。どちらも記号自身が「開口全幅の
+// 枠矩形」を持たない（一点鎖線1本・破線Rectの短辺のみ）ため、'sashOpen'（内側縦線なしのコの字）
+// へ寄せると方立の外形が内法端で途切れてしまう。'sash'（閉じた矩形）のままなので、内法端
+// （coord1+jambW/coord2-jambW）でtick・破線と方立内側縦線がalong座標で一部重なる——F5ほど大きな
+// 帯全幅の完全重複ではないため、幾何は変更せずこの既知差異として記録するに留める。
+export const SASH_OPEN_MECHANISMS = new Set([
+  OpeningMechanism.SLIDE_SINGLE,
+  OpeningMechanism.SLIDE_LAYOUT,
+  OpeningMechanism.HUNG,
+  OpeningMechanism.FIXED,
+  OpeningMechanism.TILT,
+  OpeningMechanism.TILT_OUT,
+  OpeningMechanism.AWNING,
+  OpeningMechanism.PROJECT_OUT,
+  OpeningMechanism.LOUVER,
+  OpeningMechanism.AWNING_MULTI,
+  OpeningMechanism.GARARI,
+  OpeningMechanism.GLASS_BLOCK,
+  OpeningMechanism.PIVOT_H,
+]);
+
 // このフェーズで平面記号を実装する機構（姿図は別フェーズ。未実装の姿図はラベル表示へ
 // フォールバックする＝openingElevationFigure.js mechanismPrimitives の既定分岐）。
 export const IMPLEMENTED_MECHANISMS = new Set([

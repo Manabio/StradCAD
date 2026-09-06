@@ -9,11 +9,12 @@ import {
   DOOR_OPEN_ANGLE_DEG, closedAngleFor, leafOpenAngle, angleVectors,
   swingDoubleLeafSpecs, swingChildLeafSpecs, fireDoorLeafSpecs, fireFoldLeafSpecs,
   foldZigzagPoints, trackOf, trackPerp, openingExteriorDir, resolveSlideLayoutPanels,
+  FRAME_JAMB_WIDTH_MM, FRAME_KAKARI_WIDTH_MM,
+  planFrameBand, bandPerp, planSymbolPlan, innerSpanOpening,
 } from '../openings/openingPlanSymbolGeometry.js';
 import { arcPathD } from './ShapesLayer.jsx';
 import { LodLevel, resolveStrokeWidth } from '../viewport.js';
 
-const SASH_DEPTH_MM = 40;
 const TICK_HALF_MM  = 30;
 
 // 引き違い 詳細LOD用（すべて mm）
@@ -21,9 +22,6 @@ const SLIDE_TRACK_INSET_MM = 4;       // 枠から戸先・召し合わせレー
 const WEATHERSTRIP_DASH    = [6, 4];  // 召し合わせ部・気密材(モヘア)の破線パターン
 
 // 開き戸 詳細LOD用 枠寸法（すべて mm）
-const FRAME_JAMB_WIDTH_MM     = 30; // 方立（縦枠）の全体幅（20=本体 + 10=かかり代）
-const FRAME_KAKARI_WIDTH_MM   = 10; // 方立のうち開口側「かかり代」の幅
-const FRAME_OVERHANG_MM       = 10; // 壁の両面から枠が室内側に出る量
 const DOOR_LEAF_THICKNESS_MM  = 30; // 扉厚（かかり代を欠き込む深さ）
 const DOOR_HINGE_GAP_MM       = 5;  // 開いた扉と吊元側の方立との隙間
 // 吊元側後退量: 方立の全幅(30) - 吊元と方立の隙間(5)
@@ -59,8 +57,8 @@ function rectSpec(isVertical, alongLo, alongHi, perpLo, perpHi) {
 // swingSide*hingeSide と整合させる——hingeSideが反転する対向leaf（両開き・親子等）を同じ
 // 物理側へ開かせるには、呼び出し側がswingSideも反転して渡す必要がある（openingPlanSymbolGeometry.js
 // leafOpenAngle 参照。2枚が壁の反対側へ開いてしまう回帰バグの再発防止）。
-function swingLeafSymbol(isVertical, host, hingeAlong, hingeSide, swingSide, leafLength, sp, leafThickness = 0) {
-  const hinge = toWorld(isVertical, hingeAlong, host.axisValue);
+function swingLeafSymbol(isVertical, pivotPerp, hingeAlong, hingeSide, swingSide, leafLength, sp, leafThickness = 0) {
+  const hinge = toWorld(isVertical, hingeAlong, pivotPerp);
   const closedAngle = closedAngleFor(isVertical, hingeSide);
   const openAngle = leafOpenAngle(closedAngle, swingSide, DOOR_OPEN_ANGLE_DEG);
   const { dir, perp } = angleVectors(openAngle);
@@ -91,49 +89,49 @@ function swingLeafSymbol(isVertical, host, hingeAlong, hingeSide, swingSide, lea
 }
 
 // SWING（片開き）: 開口全幅を1本のleafとして描く（既存のinset付き呼び出しをそのまま踏襲）。
-function swingSymbol(opening, host, sp, hingeInset = 0, latchInset = 0, leafThickness = 0) {
+function swingSymbol(opening, pivotPerp, sp, hingeInset = 0, latchInset = 0, leafThickness = 0) {
   const { width, hingeSide, swingSide, isVertical } = opening;
   const effHingeInset = Math.min(hingeInset, width);
   const effLatchInset = Math.min(latchInset, width);
   const leafLength = Math.max(0, width - effHingeInset - effLatchInset);
   const hingeAlong = hingeSide < 0 ? opening.coord1 + effHingeInset : opening.coord2 - effHingeInset;
-  return swingLeafSymbol(isVertical, host, hingeAlong, hingeSide, swingSide, leafLength, sp, leafThickness);
+  return swingLeafSymbol(isVertical, pivotPerp, hingeAlong, hingeSide, swingSide, leafLength, sp, leafThickness);
 }
 
 // leaf仕様の配列（{hingeAlong, hingeSide, sense, leafLength}[]）をswingLeafSymbolへ機械的に
 // 展開する共通ヘルパ。leaf仕様の決定（対向leafのsense符号反転を含む）はopeningPlanSymbolGeometry.js
 // 側の *LeafSpecs 関数に一本化し、ここでは消費するだけにする（QAレビュー: OpeningsLayer.jsx単体で
 // swingSideの符号を握っていると、レンダラ結線のミスがテストで検出できない）。
-function swingLeafSymbols(isVertical, host, specs, sp) {
+function swingLeafSymbols(isVertical, pivotPerp, specs, sp) {
   return specs.map((s, i) => (
-    <Fragment key={i}>{swingLeafSymbol(isVertical, host, s.hingeAlong, s.hingeSide, s.sense, s.leafLength, sp)}</Fragment>
+    <Fragment key={i}>{swingLeafSymbol(isVertical, pivotPerp, s.hingeAlong, s.hingeSide, s.sense, s.leafLength, sp)}</Fragment>
   ));
 }
 
 // SWING_DOUBLE（両開き）: 左右の枠端それぞれを吊元に、各leaf長=width/2で開口中央に円弧が出会う。
-function swingDoubleSymbol(opening, host, sp) {
+function swingDoubleSymbol(opening, pivotPerp, sp) {
   const { coord1, coord2, width, swingSide, isVertical } = opening;
   const specs = swingDoubleLeafSpecs(coord1, coord2, width, swingSide);
-  return <>{swingLeafSymbols(isVertical, host, specs, sp)}</>;
+  return <>{swingLeafSymbols(isVertical, pivotPerp, specs, sp)}</>;
 }
 
 // SWING_CHILD（親子扉）: 親leaf長=width×(1-childRatio)、子leaf長=width×childRatio。
 // 親の吊元はhingeSide側の枠端、子の吊元は反対側の枠端。
-function swingChildSymbol(opening, host, sp, entry) {
+function swingChildSymbol(opening, pivotPerp, sp, entry) {
   const { coord1, coord2, width, hingeSide, swingSide, isVertical } = opening;
   const childRatio = entry?.childRatio ?? 0.3;
   const specs = swingChildLeafSpecs(coord1, coord2, width, hingeSide, swingSide, childRatio);
-  return <>{swingLeafSymbols(isVertical, host, specs, sp)}</>;
+  return <>{swingLeafSymbols(isVertical, pivotPerp, specs, sp)}</>;
 }
 
 // 自由開きleaf1枚: 閉じ位置の扉線1本＋両側（swingSide側とその逆側）に90°円弧。
 // 両方向の弧を描くため、対向leaf（coord2側）にswingSideを反転して渡しても和集合（描画結果）は
 // 変わらない——swingDoubleSymbol等と異なり符号反転は不要（freeDoubleSymbol参照）。
-function freeLeafSymbol(isVertical, host, hingeAlong, hingeSide, swingSide, leafLength, sp) {
-  const hinge = toWorld(isVertical, hingeAlong, host.axisValue);
+function freeLeafSymbol(isVertical, pivotPerp, hingeAlong, hingeSide, swingSide, leafLength, sp) {
+  const hinge = toWorld(isVertical, hingeAlong, pivotPerp);
   const closedAngle = closedAngleFor(isVertical, hingeSide);
   const towardFar = hingeSide < 0 ? 1 : -1;
-  const far = toWorld(isVertical, hingeAlong + towardFar * leafLength, host.axisValue);
+  const far = toWorld(isVertical, hingeAlong + towardFar * leafLength, pivotPerp);
   return (
     <>
       <Line points={[hinge.x, hinge.y, far.x, far.y]} {...sp} />
@@ -144,46 +142,44 @@ function freeLeafSymbol(isVertical, host, hingeAlong, hingeSide, swingSide, leaf
 }
 
 // FREE（自由片開き）: 1leaf、開口全幅。
-function freeSymbol(opening, host, sp) {
+function freeSymbol(opening, pivotPerp, sp) {
   const { coord1, coord2, width, hingeSide, swingSide, isVertical } = opening;
   const hingeAlong = hingeSide < 0 ? coord1 : coord2;
-  return freeLeafSymbol(isVertical, host, hingeAlong, hingeSide, swingSide, width, sp);
+  return freeLeafSymbol(isVertical, pivotPerp, hingeAlong, hingeSide, swingSide, width, sp);
 }
 
 // FREE_DOUBLE（自由両開き）: FREEを両leafに（各leaf長width/2、吊元は両枠端）。
-function freeDoubleSymbol(opening, host, sp) {
+function freeDoubleSymbol(opening, pivotPerp, sp) {
   const { coord1, coord2, width, swingSide, isVertical } = opening;
   const leafLength = width / 2;
   return (
     <>
-      {freeLeafSymbol(isVertical, host, coord1, -1, swingSide, leafLength, sp)}
-      {freeLeafSymbol(isVertical, host, coord2, 1, swingSide, leafLength, sp)}
+      {freeLeafSymbol(isVertical, pivotPerp, coord1, -1, swingSide, leafLength, sp)}
+      {freeLeafSymbol(isVertical, pivotPerp, coord2, 1, swingSide, leafLength, sp)}
     </>
   );
 }
 
 // FOLD（折れ戸・折りたたみ窓）: 開口全長にジグザグ線（W形）。山数=max(2,round(width/450))。
-function foldSymbol(opening, host, sp) {
+function foldSymbol(opening, band, sp) {
   const { coord1, width, isVertical } = opening;
-  const axisValue = host.axisValue;
   const peaks = Math.max(2, Math.round(width / 450));
   const pts = foldZigzagPoints(coord1, width, peaks, FOLD_AMPLITUDE_MM).flatMap(({ along, perpOffset }) => {
-    const p = toWorld(isVertical, along, axisValue + perpOffset);
+    const p = toWorld(isVertical, along, band.center + perpOffset);
     return [p.x, p.y];
   });
   return <Line points={pts} {...sp} />;
 }
 
 // SLIDE_SINGLE（引き戸）: slideDoubleSymbolの1枚版。枠矩形＋内側トラック1本に全長leaf線。
-function slideSingleSymbol(opening, host, sp) {
+function slideSingleSymbol(opening, band, sp) {
   const { coord1, coord2, isVertical } = opening;
-  const axisValue = host.axisValue;
-  const leafPerp = axisValue - SASH_DEPTH_MM / 4;
+  const leafPerp = bandPerp(band, 0.25);
   const p1 = toWorld(isVertical, coord1, leafPerp);
   const p2 = toWorld(isVertical, coord2, leafPerp);
   return (
     <>
-      <Rect {...rectSpec(isVertical, coord1, coord2, axisValue - SASH_DEPTH_MM / 2, axisValue + SASH_DEPTH_MM / 2)} fill="transparent" {...sp} />
+      <Rect {...rectSpec(isVertical, coord1, coord2, band.lo, band.hi)} fill="transparent" {...sp} />
       <Line points={[p1.x, p1.y, p2.x, p2.y]} {...sp} />
     </>
   );
@@ -192,10 +188,9 @@ function slideSingleSymbol(opening, host, sp) {
 // SLIDE_LAYOUT: 枠矩形＋パネルごとのleaf線。パネル幅=width/panels.length、隣接パネルは
 // 引違いと同じoverlapで重ねる。トラック割付・perp位置は openingPlanSymbolGeometry.js の
 // trackOf/trackPerp（純関数）に委ねる。FIXテキストは平面には描かない（矢印同様、対象外）。
-function slideLayoutSymbol(opening, host, sp, entry) {
+function slideLayoutSymbol(opening, band, sp, entry) {
   const { coord1, coord2, width, isVertical } = opening;
-  const axisValue = host.axisValue;
-  const frame = <Rect {...rectSpec(isVertical, coord1, coord2, axisValue - SASH_DEPTH_MM / 2, axisValue + SASH_DEPTH_MM / 2)} fill="transparent" {...sp} />;
+  const frame = <Rect {...rectSpec(isVertical, coord1, coord2, band.lo, band.hi)} fill="transparent" {...sp} />;
   const panels = resolveSlideLayoutPanels(entry);
   if (panels.length === 0) return frame;
 
@@ -213,7 +208,7 @@ function slideLayoutSymbol(opening, host, sp, entry) {
         const start = i === 0 ? startBase : startBase - overlap / 2;
         const end = i === panels.length - 1 ? endBase : endBase + overlap / 2;
         const track = trackOf(p, i, tracks, hasFix);
-        const perp = trackPerp(axisValue, track, tracks, SASH_DEPTH_MM);
+        const perp = trackPerp(band.center, track, tracks, band.depth);
         const a = toWorld(isVertical, start, perp);
         const b = toWorld(isVertical, end, perp);
         return <Line key={i} points={[a.x, a.y, b.x, b.y]} {...sp} />;
@@ -223,16 +218,15 @@ function slideLayoutSymbol(opening, host, sp, entry) {
 }
 
 // HUNG（上げ下げ窓）: 枠矩形＋両トラックに全長線1本ずつ（上下障子が平面では全長重なる）。
-function hungSymbol(opening, host, sp) {
+function hungSymbol(opening, band, sp) {
   const { coord1, coord2, isVertical } = opening;
-  const axisValue = host.axisValue;
-  const leaf1Perp = axisValue - SASH_DEPTH_MM / 4;
-  const leaf2Perp = axisValue + SASH_DEPTH_MM / 4;
+  const leaf1Perp = bandPerp(band, 0.25);
+  const leaf2Perp = bandPerp(band, 0.75);
   const l1a = toWorld(isVertical, coord1, leaf1Perp), l1b = toWorld(isVertical, coord2, leaf1Perp);
   const l2a = toWorld(isVertical, coord1, leaf2Perp), l2b = toWorld(isVertical, coord2, leaf2Perp);
   return (
     <>
-      <Rect {...rectSpec(isVertical, coord1, coord2, axisValue - SASH_DEPTH_MM / 2, axisValue + SASH_DEPTH_MM / 2)} fill="transparent" {...sp} />
+      <Rect {...rectSpec(isVertical, coord1, coord2, band.lo, band.hi)} fill="transparent" {...sp} />
       <Line points={[l1a.x, l1a.y, l1b.x, l1b.y]} {...sp} />
       <Line points={[l2a.x, l2a.y, l2b.x, l2b.y]} {...sp} />
     </>
@@ -241,13 +235,12 @@ function hungSymbol(opening, host, sp) {
 
 // PIVOT（縦軸回転窓）: 開口中央に壁直交方向の障子線（長さ=min(width,600)）＋その両側に
 // 90°円弧2つ（回転の軌跡、半径=width/2、中心=開口中心）。
-function pivotSymbol(opening, host, sp) {
+function pivotSymbol(opening, band, sp) {
   const { centerCoord, width, isVertical } = opening;
-  const axisValue = host.axisValue;
   const leafLen = Math.min(width, 600);
-  const p1 = toWorld(isVertical, centerCoord, axisValue - leafLen / 2);
-  const p2 = toWorld(isVertical, centerCoord, axisValue + leafLen / 2);
-  const center = toWorld(isVertical, centerCoord, axisValue);
+  const p1 = toWorld(isVertical, centerCoord, band.center - leafLen / 2);
+  const p2 = toWorld(isVertical, centerCoord, band.center + leafLen / 2);
+  const center = toWorld(isVertical, centerCoord, band.center);
   const r = width / 2;
   const alongAngle = isVertical ? 90 : 0;
   const perpAngle  = isVertical ? 0 : 90;
@@ -261,31 +254,29 @@ function pivotSymbol(opening, host, sp) {
   );
 }
 
-// 窓一般線: 枠矩形（SASH_DEPTH_MM）＋壁軸上に全長1本線。FIXED/TILT/TILT_OUT/AWNING/PROJECT_OUT/
+// 窓一般線: 枠矩形（band）＋壁軸上に全長1本線。FIXED/TILT/TILT_OUT/AWNING/PROJECT_OUT/
 // LOUVER/AWNING_MULTI/GARARI/GLASS_BLOCK/PIVOT_H に適用する。
-function windowLineSymbol(opening, host, sp) {
+function windowLineSymbol(opening, band, sp) {
   const { coord1, coord2, isVertical } = opening;
-  const axisValue = host.axisValue;
-  const p1 = toWorld(isVertical, coord1, axisValue);
-  const p2 = toWorld(isVertical, coord2, axisValue);
+  const p1 = toWorld(isVertical, coord1, band.center);
+  const p2 = toWorld(isVertical, coord2, band.center);
   return (
     <>
-      <Rect {...rectSpec(isVertical, coord1, coord2, axisValue - SASH_DEPTH_MM / 2, axisValue + SASH_DEPTH_MM / 2)} fill="transparent" {...sp} />
+      <Rect {...rectSpec(isVertical, coord1, coord2, band.lo, band.hi)} fill="transparent" {...sp} />
       <Line points={[p1.x, p1.y, p2.x, p2.y]} {...sp} />
     </>
   );
 }
 
 // SHUTTER: 開口全長の一点鎖線を壁軸上に1本＋両端に既存tick。
-function shutterSymbol(opening, host, sp) {
+function shutterSymbol(opening, band, sp) {
   const { coord1, coord2, isVertical } = opening;
-  const axisValue = host.axisValue;
-  const p1 = toWorld(isVertical, coord1, axisValue);
-  const p2 = toWorld(isVertical, coord2, axisValue);
+  const p1 = toWorld(isVertical, coord1, band.center);
+  const p2 = toWorld(isVertical, coord2, band.center);
   return (
     <>
       <Line points={[p1.x, p1.y, p2.x, p2.y]} dash={SHUTTER_DASH} {...sp} />
-      {tickSymbol(opening, host, sp)}
+      {tickSymbol(opening, band, sp)}
     </>
   );
 }
@@ -294,9 +285,9 @@ function shutterSymbol(opening, host, sp) {
 // 逆側）の壁面に接して描く（跳ね上げた戸板の投影）＋壁軸上に実線1本。openingExteriorDirは
 // 境界（host自身または反対側の壁）の外壁面向きを見るため、hostが室内向き壁でもCL偏芯でも
 // 正しい室外側を返す（Math.sign(host.axisOffset)は使わない。openingPlanSymbolGeometry.js参照）。
-function overheadSymbol(opening, host, graph, sp) {
+function overheadSymbol(opening, host, graph, band, sp) {
   const { coord1, coord2, isVertical, centerCoord } = opening;
-  const axisValue = host.axisValue;
+  const axisValue = band.center;
   const dir = -openingExteriorDir(host, graph, centerCoord);
   const perpLo = dir > 0 ? axisValue : axisValue - OVERHEAD_DEPTH_MM;
   const perpHi = dir > 0 ? axisValue + OVERHEAD_DEPTH_MM : axisValue;
@@ -312,9 +303,9 @@ function overheadSymbol(opening, host, graph, sp) {
 
 // EMERGENCY（非常用進入口）: 壁軸上に全長1本線＋開口中央に逆三角形（一辺400mm、底辺が
 // 外部側・頂点が室内側、輪郭のみ）。外部側の判定は overheadSymbol と同じ openingExteriorDir。
-function emergencySymbol(opening, host, graph, sp) {
+function emergencySymbol(opening, host, graph, band, sp) {
   const { coord1, coord2, centerCoord, isVertical } = opening;
-  const axisValue = host.axisValue;
+  const axisValue = band.center;
   const extDir = openingExteriorDir(host, graph, centerCoord);
   const height = (EMERGENCY_SIDE_MM * Math.sqrt(3)) / 2;
   const halfBase = EMERGENCY_SIDE_MM / 2;
@@ -333,8 +324,8 @@ function emergencySymbol(opening, host, graph, sp) {
 
 // FIRE_DOOR 1leaf分: 開放位置のleaf線＋閉位置までの破線円弧（90°または180°）。swingSideは
 // swingLeafSymbolと同じ回転センス規約（2枚構成の対向leafは呼び出し側で符号反転して渡す）。
-function fireLeafSymbol(isVertical, host, hingeAlong, hingeSide, swingSide, leafLength, angleDeg, sp) {
-  const hinge = toWorld(isVertical, hingeAlong, host.axisValue);
+function fireLeafSymbol(isVertical, pivotPerp, hingeAlong, hingeSide, swingSide, leafLength, angleDeg, sp) {
+  const hinge = toWorld(isVertical, hingeAlong, pivotPerp);
   const closedAngle = closedAngleFor(isVertical, hingeSide);
   const openAngle = leafOpenAngle(closedAngle, swingSide, angleDeg);
   const { dir } = angleVectors(openAngle);
@@ -349,7 +340,7 @@ function fireLeafSymbol(isVertical, host, hingeAlong, hingeSide, swingSide, leaf
 
 // FIRE_DOOR（常時開放式防火戸）: fireLeaves:2は両枠端から対称に（弧は開口中央で出会う）、
 // 1はhingeSide側のみ（leaf長=width）。leaf仕様の決定はfireDoorLeafSpecs（純関数）に一本化する。
-function fireDoorSymbol(opening, host, sp, entry) {
+function fireDoorSymbol(opening, pivotPerp, sp, entry) {
   const { coord1, coord2, width, hingeSide, swingSide, isVertical } = opening;
   const fireLeaves = entry?.fireLeaves ?? 1;
   const fireAngle  = entry?.fireAngle  ?? 90;
@@ -357,7 +348,7 @@ function fireDoorSymbol(opening, host, sp, entry) {
   return (
     <>
       {specs.map((s, i) => (
-        <Fragment key={i}>{fireLeafSymbol(isVertical, host, s.hingeAlong, s.hingeSide, s.sense, s.leafLength, fireAngle, sp)}</Fragment>
+        <Fragment key={i}>{fireLeafSymbol(isVertical, pivotPerp, s.hingeAlong, s.hingeSide, s.sense, s.leafLength, fireAngle, sp)}</Fragment>
       ))}
     </>
   );
@@ -365,8 +356,8 @@ function fireDoorSymbol(opening, host, sp, entry) {
 
 // FIRE_FOLD 1袖分: 吊元側に折りたたんだジグザグ（leaf長の1/4程度の幅、2山）＋閉位置までの破線円弧。
 // swingSideの規約はfireLeafSymbolと同じ。
-function fireFoldPanel(isVertical, host, hingeAlong, hingeSide, swingSide, leafLen, angleDeg, sp) {
-  const hinge = toWorld(isVertical, hingeAlong, host.axisValue);
+function fireFoldPanel(isVertical, pivotPerp, hingeAlong, hingeSide, swingSide, leafLen, angleDeg, sp) {
+  const hinge = toWorld(isVertical, hingeAlong, pivotPerp);
   const closedAngle = closedAngleFor(isVertical, hingeSide);
   const openAngle = leafOpenAngle(closedAngle, swingSide, angleDeg);
   const { dir, perp } = angleVectors(openAngle);
@@ -388,35 +379,40 @@ function fireFoldPanel(isVertical, host, hingeAlong, hingeSide, swingSide, leafL
 
 // FIRE_FOLD（常時開放式防火折戸）: fireAngle:90は片袖（hingeSide側のみ、弧半径=width）、
 // 180は両袖（各半径=width/2、開口中央で出会う）。leaf仕様の決定はfireFoldLeafSpecs（純関数）に一本化する。
-function fireFoldSymbol(opening, host, sp, entry) {
+function fireFoldSymbol(opening, pivotPerp, sp, entry) {
   const { coord1, coord2, width, hingeSide, swingSide, isVertical } = opening;
   const fireAngle = entry?.fireAngle ?? 90;
   const specs = fireFoldLeafSpecs(coord1, coord2, width, hingeSide, swingSide, fireAngle);
   return (
     <>
       {specs.map((s, i) => (
-        <Fragment key={i}>{fireFoldPanel(isVertical, host, s.hingeAlong, s.hingeSide, s.sense, s.leafLength, fireAngle, sp)}</Fragment>
+        <Fragment key={i}>{fireFoldPanel(isVertical, pivotPerp, s.hingeAlong, s.hingeSide, s.sense, s.leafLength, fireAngle, sp)}</Fragment>
       ))}
     </>
   );
 }
 
-// SWING・SLIDE_DOUBLE以外の実装済み機構の記号（STANDARD/DETAILとも同一表現）。
-// 未対応の機構はnullを返し、呼び出し側がtickSymbolへフォールバックする。
-function otherMechanismSymbol(mechanism, opening, host, graph, sp, entry) {
+// SWING・SLIDE_DOUBLE以外の実装済み機構の記号。band（見込帯）を受け取る機構は詳細LODでは
+// 呼び出し側（OpeningsLayer本体）が枠内法へ寄せたopening（openingPlanSymbolGeometry.js
+// frameInnerSpan由来）を渡すため、この関数自身はSTANDARD/DETAILの分岐を持たない——分岐点は
+// planFrameBand/planSymbolPlanに一本化されている（.claude/opening-model.md参照）。
+// pivotPerpは蝶番系（回転中心）専用——host.axisValueをband内へクランプした値（F2。
+// planSymbolPlanが算出）。OVERHEAD/EMERGENCYは回転しないためhost自体（+graph）で
+// openingExteriorDirを引く。未対応の機構はnullを返し、呼び出し側がtickSymbolへフォールバックする。
+function otherMechanismSymbol(mechanism, opening, pivotPerp, host, graph, band, sp, entry) {
   switch (mechanism) {
-    case OpeningMechanism.SWING_DOUBLE: return swingDoubleSymbol(opening, host, sp);
-    case OpeningMechanism.SWING_CHILD:  return swingChildSymbol(opening, host, sp, entry);
+    case OpeningMechanism.SWING_DOUBLE: return swingDoubleSymbol(opening, pivotPerp, sp);
+    case OpeningMechanism.SWING_CHILD:  return swingChildSymbol(opening, pivotPerp, sp, entry);
     case OpeningMechanism.SWING_IN:
     case OpeningMechanism.PROJECT_V:
-    case OpeningMechanism.DREH_KIPP:    return swingSymbol(opening, host, sp);
-    case OpeningMechanism.FREE:         return freeSymbol(opening, host, sp);
-    case OpeningMechanism.FREE_DOUBLE:  return freeDoubleSymbol(opening, host, sp);
-    case OpeningMechanism.FOLD:         return foldSymbol(opening, host, sp);
-    case OpeningMechanism.SLIDE_SINGLE: return slideSingleSymbol(opening, host, sp);
-    case OpeningMechanism.SLIDE_LAYOUT: return slideLayoutSymbol(opening, host, sp, entry);
-    case OpeningMechanism.HUNG:         return hungSymbol(opening, host, sp);
-    case OpeningMechanism.PIVOT:        return pivotSymbol(opening, host, sp);
+    case OpeningMechanism.DREH_KIPP:    return swingSymbol(opening, pivotPerp, sp);
+    case OpeningMechanism.FREE:         return freeSymbol(opening, pivotPerp, sp);
+    case OpeningMechanism.FREE_DOUBLE:  return freeDoubleSymbol(opening, pivotPerp, sp);
+    case OpeningMechanism.FOLD:         return foldSymbol(opening, band, sp);
+    case OpeningMechanism.SLIDE_SINGLE: return slideSingleSymbol(opening, band, sp);
+    case OpeningMechanism.SLIDE_LAYOUT: return slideLayoutSymbol(opening, band, sp, entry);
+    case OpeningMechanism.HUNG:         return hungSymbol(opening, band, sp);
+    case OpeningMechanism.PIVOT:        return pivotSymbol(opening, band, sp);
     case OpeningMechanism.FIXED:
     case OpeningMechanism.TILT:
     case OpeningMechanism.TILT_OUT:
@@ -426,12 +422,12 @@ function otherMechanismSymbol(mechanism, opening, host, graph, sp, entry) {
     case OpeningMechanism.AWNING_MULTI:
     case OpeningMechanism.GARARI:
     case OpeningMechanism.GLASS_BLOCK:
-    case OpeningMechanism.PIVOT_H:      return windowLineSymbol(opening, host, sp);
-    case OpeningMechanism.SHUTTER:      return shutterSymbol(opening, host, sp);
-    case OpeningMechanism.OVERHEAD:     return overheadSymbol(opening, host, graph, sp);
-    case OpeningMechanism.EMERGENCY:    return emergencySymbol(opening, host, graph, sp);
-    case OpeningMechanism.FIRE_DOOR:    return fireDoorSymbol(opening, host, sp, entry);
-    case OpeningMechanism.FIRE_FOLD:    return fireFoldSymbol(opening, host, sp, entry);
+    case OpeningMechanism.PIVOT_H:      return windowLineSymbol(opening, band, sp);
+    case OpeningMechanism.SHUTTER:      return shutterSymbol(opening, band, sp);
+    case OpeningMechanism.OVERHEAD:     return overheadSymbol(opening, host, graph, band, sp);
+    case OpeningMechanism.EMERGENCY:    return emergencySymbol(opening, host, graph, band, sp);
+    case OpeningMechanism.FIRE_DOOR:    return fireDoorSymbol(opening, pivotPerp, sp, entry);
+    case OpeningMechanism.FIRE_FOLD:    return fireFoldSymbol(opening, pivotPerp, sp, entry);
     default: return null;
   }
 }
@@ -454,21 +450,28 @@ function jambOutlinePoints(isVertical, outerAlong, dir, jambW, kakariW, totalPer
 
 // 開き戸 詳細LOD専用: 両端の方立（縦枠）を描く（リーフ・円弧は swingSymbol が別途描画）
 //
-// 方立は全幅30mm（本体20mm＋かかり代10mm）だが、扉が通過する位置（扉が閉じた面=
-// host.axisValue から室内側へ10mm＋壁中心側へ扉厚30mm＝計40mmの範囲）だけかかり代
-// 10mmが欠き込まれた段付き断面になる。四角２つの組合せではなく単一の輪郭で描く。
-function swingFrameSymbol(opening, host, graph, sp) {
+// 方立は全幅30mm（本体20mm＋かかり代10mm）だが、扉が通過する位置（扉が閉じた面=pivotPerp
+// から室内側へ10mm＋壁中心側へ扉厚30mm＝計40mmの範囲）だけかかり代10mmが欠き込まれた
+// 段付き断面になる。四角２つの組合せではなく単一の輪郭で描く。
+//
+// pivotPerp（=host.axisValueをband内へクランプした値。呼び出し側のplanSymbolPlanが算出）を
+// 欠き込みの起点にする——frameDepthの半外付けでbandがhost.axisValue自身を含まなくなると
+// （host側の面がband外に出る）、素のhost.axisValueを起点にした場合に扉leafがband外へ140mm
+// 浮いた上notchFarのクランプで輪郭が矩形へ潰れる実バグがあった（F2）。frameDepth未設定時は
+// bandが必ずhost.axisValueを含むためpivotPerp===host.axisValueとなり既存挙動は変わらない。
+function swingFrameSymbol(opening, host, band, pivotPerp, sp) {
   const { coord1, coord2, width, isVertical } = opening;
   const jambW = Math.min(FRAME_JAMB_WIDTH_MM, width / 2);
   const kakariW = Math.min(FRAME_KAKARI_WIDTH_MM, jambW);
-  const [faceLo, faceHi] = wallFaceRange(host, graph);
-  const totalPerpLo = faceLo - FRAME_OVERHANG_MM;
-  const totalPerpHi = faceHi + FRAME_OVERHANG_MM;
+  const totalPerpLo = band.lo;
+  const totalPerpHi = band.hi;
 
-  // 欠き込み範囲: host.axisValue から室内側10mm 〜 壁中心側30mm。室内側の境界は
+  // 欠き込み範囲: pivotPerp から室内側10mm 〜 壁中心側30mm。室内側の境界は
   // 方立全体の外縁（totalPerpLo/Hi）と一致するため、残るかかり代は反対側の一区間のみ。
+  // 扉厚(30mm)ぶんがband外へはみ出す場合の保険として、なおband内へクランプする。
   const outward   = Math.sign(host.axisOffset) || 1;
-  const notchFar  = host.axisValue - outward * DOOR_LEAF_THICKNESS_MM;
+  const notchFarRaw = pivotPerp - outward * DOOR_LEAF_THICKNESS_MM;
+  const notchFar  = Math.min(Math.max(notchFarRaw, totalPerpLo), totalPerpHi);
   const kakariPerpLo = outward > 0 ? totalPerpLo : notchFar;
   const kakariPerpHi = outward > 0 ? notchFar    : totalPerpHi;
 
@@ -480,13 +483,51 @@ function swingFrameSymbol(opening, host, graph, sp) {
   );
 }
 
+// 非蝶番系 詳細LOD専用（frame:'sash'）: 開口両端に方立（縦枠）を単純な閉じた矩形2つで描く
+// （扉が通過しないためswingFrameSymbolのような欠き込みは無い）。記号本体（otherMechanismSymbol）
+// が自前で枠矩形を描かない機構（FOLD/PIVOT/SHUTTER/OVERHEAD/EMERGENCY）専用——記号側が枠矩形を
+// 描く機構は sashFrameOpenSymbol を使う（F5、二重描画防止）。
+function sashFrameSymbol(opening, band, jambWidth, sp) {
+  const { coord1, coord2, isVertical } = opening;
+  return (
+    <>
+      <Rect {...rectSpec(isVertical, coord1, coord1 + jambWidth, band.lo, band.hi)} fill="transparent" {...sp} />
+      <Rect {...rectSpec(isVertical, coord2 - jambWidth, coord2, band.lo, band.hi)} fill="transparent" {...sp} />
+    </>
+  );
+}
+
+// 非蝶番系 詳細LOD専用（frame:'sashOpen'）: 記号自身が開口全幅の枠矩形を描く機構
+// （SASH_OPEN_MECHANISMS = SLIDE_SINGLE/SLIDE_LAYOUT/HUNG/windowLine群）専用の方立。
+// 内側（開口本体側）の縦線を持たない3辺（コの字）で描く——閉じた矩形のまま描くと、記号側の
+// 枠矩形（otherMechanismSymbolがframeInnerSpanの内法区間に描く矩形）と方立の内側縦線が
+// 座標coord1+jambWidth/coord2-jambWidthで完全に一致し、同じ線を2回描いてしまう
+// （前コミットf86f305「開口の縁の二重描画をなくす」と同じ瑕疵の再発防止。F5）。
+// 開口を横断する線は描かない（折れ戸・開き戸の開口部を塞がないため、上下の横線は各ジャンブの
+// 幅ぶんだけに留める）。
+function sashFrameOpenSymbol(opening, band, jambWidth, sp) {
+  const { coord1, coord2, isVertical } = opening;
+  const jamb = (outerAlong, innerAlong) => {
+    const p1 = toWorld(isVertical, innerAlong, band.lo);
+    const p2 = toWorld(isVertical, outerAlong, band.lo);
+    const p3 = toWorld(isVertical, outerAlong, band.hi);
+    const p4 = toWorld(isVertical, innerAlong, band.hi);
+    return [p1.x, p1.y, p2.x, p2.y, p3.x, p3.y, p4.x, p4.y];
+  };
+  return (
+    <>
+      <Line points={jamb(coord1, coord1 + jambWidth)} {...sp} />
+      <Line points={jamb(coord2, coord2 - jambWidth)} {...sp} />
+    </>
+  );
+}
+
 // 引き違い leaf線2本のみ（枠矩形なし）。SCHEMATIC LODでの略図表現・slideDoubleSymbolの内部で共用する。
-function slideDoubleLeafLines(opening, host, sp) {
+function slideDoubleLeafLines(opening, band, sp) {
   const { coord1, coord2, centerCoord, isVertical } = opening;
   const overlap = Math.max(opening.width * 0.12, 60);
-  const axisValue = host.axisValue;
-  const leaf1Perp = axisValue - SASH_DEPTH_MM / 4;
-  const leaf2Perp = axisValue + SASH_DEPTH_MM / 4;
+  const leaf1Perp = bandPerp(band, 0.25);
+  const leaf2Perp = bandPerp(band, 0.75);
   const leaf1 = [toWorld(isVertical, coord1, leaf1Perp), toWorld(isVertical, centerCoord + overlap / 2, leaf1Perp)];
   const leaf2 = [toWorld(isVertical, centerCoord - overlap / 2, leaf2Perp), toWorld(isVertical, coord2, leaf2Perp)];
 
@@ -498,31 +539,24 @@ function slideDoubleLeafLines(opening, host, sp) {
   );
 }
 
-function slideDoubleSymbol(opening, host, sp) {
+function slideDoubleSymbol(opening, band, sp) {
   const { coord1, coord2, isVertical } = opening;
-  const axisValue = host.axisValue;
-
-  const frameRect = isVertical
-    ? { x: axisValue - SASH_DEPTH_MM / 2, y: coord1, width: SASH_DEPTH_MM, height: coord2 - coord1 }
-    : { x: coord1, y: axisValue - SASH_DEPTH_MM / 2, width: coord2 - coord1, height: SASH_DEPTH_MM };
-
   return (
     <>
-      <Rect {...frameRect} fill="transparent" {...sp} />
-      {slideDoubleLeafLines(opening, host, sp)}
+      <Rect {...rectSpec(isVertical, coord1, coord2, band.lo, band.hi)} fill="transparent" {...sp} />
+      {slideDoubleLeafLines(opening, band, sp)}
     </>
   );
 }
 
-// 引き違い 詳細LOD専用: 壁厚から枠位置を導出し、枠＋2枚のサッシ＋召し合わせ部の気密材（破線）を描く。
-// 窓（OpeningCategory.WINDOW）のみ各サッシ中央にガラス線を追加し、戸は無地のパネルとして描く。
-function slideDoubleDetailSymbol(opening, host, graph, sp) {
+// 引き違い 詳細LOD専用: band（見込帯）から枠位置を導出し、枠＋2枚のサッシ＋召し合わせ部の
+// 気密材（破線）を描く。窓（OpeningCategory.WINDOW）のみ各サッシ中央にガラス線を追加し、
+// 戸は無地のパネルとして描く。
+function slideDoubleDetailSymbol(opening, band, sp) {
   const { coord1, coord2, centerCoord, isVertical, category } = opening;
   const overlap = Math.max(opening.width * 0.12, 60);
 
-  const [faceLo, faceHi] = wallFaceRange(host, graph);
-  const outerLo = faceLo - FRAME_OVERHANG_MM;
-  const outerHi = faceHi + FRAME_OVERHANG_MM;
+  const outerLo = band.lo, outerHi = band.hi;
   const sashDepth = Math.max(0, (outerHi - outerLo - SLIDE_TRACK_INSET_MM * 3) / 2);
   const track1 = [outerLo + SLIDE_TRACK_INSET_MM, outerLo + SLIDE_TRACK_INSET_MM + sashDepth];
   const track2 = [outerHi - SLIDE_TRACK_INSET_MM - sashDepth, outerHi - SLIDE_TRACK_INSET_MM];
@@ -554,9 +588,9 @@ function slideDoubleDetailSymbol(opening, host, graph, sp) {
 }
 
 // 記号未実装の機構: 開口端に短いティックマーク2本のみ描き、ギャップの存在を視認できるようにする
-function tickSymbol(opening, host, sp) {
+function tickSymbol(opening, band, sp) {
   const { coord1, coord2, isVertical } = opening;
-  const axisValue = host.axisValue;
+  const axisValue = band.center;
   const tick = (along) => {
     const a = toWorld(isVertical, along, axisValue - TICK_HALF_MM);
     const b = toWorld(isVertical, along, axisValue + TICK_HALF_MM);
@@ -591,10 +625,35 @@ function selectionHighlight(opening, host, isVertical) {
 export const OpeningsLayer = observer(({ graph, viewport, selectedId = null }) => {
   if (!graph) return null;
   const { scaleX, scaleY, lodLevel } = viewport;
+  const detail = lodLevel === LodLevel.DETAIL;
 
   // 開口ごとのホスト壁は graph が変わらない限り同じ——パン・ズームの再レンダーで
   // 引き直さないよう graph 単位にキャッシュする（graphDerived.js）。
   const hostByOpening = graphComputed(graph, 'hostWallByOpening', () => buildHostWallByOpening(graph));
+
+  // 詳細LODでのみ壁面線(faceLo/faceHi)を引く。wallFaceRange→findCounterpartWallはgraph.wallsの
+  // 線形探索（O(壁数)）のため、開口ごとに毎回呼ぶとO(開口数×壁数)になる（F6）。ホスト壁が
+  // 同じ複数開口（1本の壁に窓が並ぶ等）で重複計算しないよう、ホスト壁の id 単位で1回だけ計算し
+  // graph 単位にキャッシュする（hostByOpeningと同じ graphComputed パターン。実装方針9）。
+  //
+  // 注意（graphDerived.js の規約）: compute は自身の実行中に読んだobservable/computedだけを
+  // 依存として登録する。外側の変数（上のhostByOpening）をクロージャで捕まえるだけだと、
+  // その参照はこのcomputedが最初に作られた時点のものに固定され、graph.openingsが変わって
+  // hostWallByOpeningが再計算されても（graph.wallsが変わらない限り）このcomputedは無効化
+  // されない——`wallFaceRange`がgraph.wallsを読むために"たまたま"連動していただけの壊れやすい
+  // 依存だった。compute内で`graphComputed(graph, 'hostWallByOpening', ...)`を呼び直し、
+  // その場でhostWallByOpening computedを`.get()`することで、MobXのcomputed同士の依存追跡に
+  // 正しく乗せる（computed-observes-computedはMobXの標準パターン）。
+  const faceRangeByHostId = detail
+    ? graphComputed(graph, 'wallFaceRangeByHostId', () => {
+        const hosts = graphComputed(graph, 'hostWallByOpening', () => buildHostWallByOpening(graph));
+        const map = new Map();
+        for (const host of hosts.values()) {
+          if (!map.has(host.id)) map.set(host.id, wallFaceRange(host, graph));
+        }
+        return map;
+      })
+    : null;
 
   return graph.openings.map((opening) => {
     const host = hostByOpening.get(opening.id) ?? null;
@@ -608,22 +667,48 @@ export const OpeningsLayer = observer(({ graph, viewport, selectedId = null }) =
     };
     const highlight = opening.id === selectedId ? selectionHighlight(opening, host, opening.isVertical) : null;
 
+    // 見込帯（planFrameBand）が一般/詳細の唯一の分岐点。詳細LODのときだけ壁面線
+    // （faceRangeByHostId）を引き、frameDepth（ユーザー入力）が設定されているときだけ
+    // 室外側判定（openingExteriorDir）も追加で引く——一般LODのレンダーコストを増やさない。
+    const band = detail
+      ? (() => {
+          // キャッシュミス（本来起きない想定だが、キー衝突等の異常系でも詳細LOD描画を
+          // 丸ごと落とさないための保険）はメモ化なしで直接計算し、その1件だけ縮退させる。
+          const [faceLo, faceHi] = faceRangeByHostId.get(host.id) ?? wallFaceRange(host, graph);
+          const exteriorDir = opening.frameDepth > 0 ? openingExteriorDir(host, graph, opening.centerCoord) : undefined;
+          return planFrameBand({ axisValue: host.axisValue, faceLo, faceHi, frameDepth: opening.frameDepth, exteriorDir, detail: true });
+        })()
+      : planFrameBand({ axisValue: host.axisValue, detail: false });
+
     // 略図: 機構を問わずティックマークのみ（視認ノイズを減らす簡略表示）。ただし引き違い
     // （戸・窓）だけはtickに加えてleaf線2本（枠矩形なし）も描き、開閉方向が視認できるようにする。
     if (lodLevel === LodLevel.SCHEMATIC) {
-      const slideLeaf = entry?.mechanism === OpeningMechanism.SLIDE_DOUBLE ? slideDoubleLeafLines(opening, host, sp) : null;
-      return <Fragment key={opening.id}>{highlight}{tickSymbol(opening, host, sp)}{slideLeaf}</Fragment>;
+      const slideLeaf = entry?.mechanism === OpeningMechanism.SLIDE_DOUBLE ? slideDoubleLeafLines(opening, band, sp) : null;
+      return <Fragment key={opening.id}>{highlight}{tickSymbol(opening, band, sp)}{slideLeaf}</Fragment>;
     }
 
     if (entry && IMPLEMENTED_MECHANISMS.has(entry.mechanism)) {
+      // 詳細LODディスパッチの「判断」（notched/sashOpen/sash/none・内法区間・回転中心）は
+      // すべてplanSymbolPlan（純関数、node:test単体テスト対象）に一本化する——ここに
+      // 機構ごとの分岐を書き足さない（QA指摘: .jsx内の判断は結線ミスがテストで検出できない）。
+      const jambW = Math.min(FRAME_JAMB_WIDTH_MM, opening.width / 2);
+      const plan = planSymbolPlan({
+        mechanism: entry.mechanism,
+        lodLevel,
+        coord1: opening.coord1,
+        coord2: opening.coord2,
+        axisValue: host.axisValue,
+        band,
+        jambWidth: jambW,
+      });
+
       if (entry.mechanism === OpeningMechanism.SWING) {
-        const detail = lodLevel === LodLevel.DETAIL;
         return (
           <Fragment key={opening.id}>
             {highlight}
-            {detail && swingFrameSymbol(opening, host, graph, sp)}
+            {detail && swingFrameSymbol(opening, host, band, plan.pivotPerp, sp)}
             {swingSymbol(
-              opening, host, sp,
+              opening, plan.pivotPerp, sp,
               detail ? FRAME_HINGE_INSET_MM : 0,
               detail ? FRAME_LATCH_INSET_MM : 0,
               detail ? DOOR_LEAF_THICKNESS_MM : 0,
@@ -632,17 +717,44 @@ export const OpeningsLayer = observer(({ graph, viewport, selectedId = null }) =
         );
       }
       if (entry.mechanism === OpeningMechanism.SLIDE_DOUBLE) {
-        const detail = lodLevel === LodLevel.DETAIL;
         return (
           <Fragment key={opening.id}>
             {highlight}
-            {detail ? slideDoubleDetailSymbol(opening, host, graph, sp) : slideDoubleSymbol(opening, host, sp)}
+            {detail ? slideDoubleDetailSymbol(opening, band, sp) : slideDoubleSymbol(opening, band, sp)}
           </Fragment>
         );
       }
-      const other = otherMechanismSymbol(entry.mechanism, opening, host, graph, sp, entry);
+      if (plan.frame === 'notched') {
+        // 蝶番系（SWING以外）: 回転中心はplan.pivotPerpのまま（不変条件。扉は枠の中心ではなく
+        // 面で閉じる）、開口の長さ方向のみ枠の内法へ寄せる。
+        const spanOpening = innerSpanOpening(opening, plan.innerSpan);
+        return (
+          <Fragment key={opening.id}>
+            {highlight}
+            {swingFrameSymbol(opening, host, band, plan.pivotPerp, sp)}
+            {otherMechanismSymbol(entry.mechanism, spanOpening, plan.pivotPerp, host, graph, band, sp, entry)}
+          </Fragment>
+        );
+      }
+      if (plan.frame === 'sashOpen' || plan.frame === 'sash') {
+        // 非蝶番系: 一般記号を枠内法・実見込へ寄せて描く（機構を追加してもここは変更不要——
+        // 一般/詳細・方立の形状の分岐点はplanSymbolPlanに一本化されている）。
+        const spanOpening = innerSpanOpening(opening, plan.innerSpan);
+        const frameEl = plan.frame === 'sashOpen'
+          ? sashFrameOpenSymbol(opening, band, jambW, sp)
+          : sashFrameSymbol(opening, band, jambW, sp);
+        return (
+          <Fragment key={opening.id}>
+            {highlight}
+            {frameEl}
+            {otherMechanismSymbol(entry.mechanism, spanOpening, plan.pivotPerp, host, graph, band, sp, entry)}
+          </Fragment>
+        );
+      }
+      // frame==='none'（STANDARD）: bandは一般帯（axisValue中心・幅40mm）なので見た目は不変。
+      const other = otherMechanismSymbol(entry.mechanism, opening, plan.pivotPerp, host, graph, band, sp, entry);
       if (other) return <Fragment key={opening.id}>{highlight}{other}</Fragment>;
     }
-    return <Fragment key={opening.id}>{highlight}{tickSymbol(opening, host, sp)}</Fragment>;
+    return <Fragment key={opening.id}>{highlight}{tickSymbol(opening, band, sp)}</Fragment>;
   });
 });
