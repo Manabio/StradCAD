@@ -52,6 +52,27 @@ export function angleVectors(angleDeg) {
   };
 }
 
+/**
+ * 詳細LODの片開き戸「閉じた状態の扉」の矩形区間（長さ方向 along・直交方向 perp）。
+ *
+ * 扉は開いた位置を1本線＋円弧で示し、厚みのある四角は閉じた位置に描く（ユーザー指示2026-09）。
+ * 閉じ位置の扉は方立の欠き込み（pivotPerp から壁中心側へ扉厚ぶん。OpeningsLayer.jsx
+ * swingFrameSymbol の notchFar と同じ区間）にそのまま納まる——欠き込みの向き outward は
+ * 呼び出し側が Math.sign(host.axisOffset) で与える。
+ * 長さ方向は吊元 hingeAlong から閉じ方向（closedAngleFor と同じ towardFar の規約）へ leafLength。
+ */
+export function swingClosedLeafSpan({ hingeAlong, hingeSide, leafLength, pivotPerp, outward, thickness }) {
+  const towardFar = hingeSide < 0 ? 1 : -1;
+  const alongFar  = hingeAlong + towardFar * leafLength;
+  const perpFar   = pivotPerp - (outward || 1) * thickness;
+  return {
+    alongLo: Math.min(hingeAlong, alongFar),
+    alongHi: Math.max(hingeAlong, alongFar),
+    perpLo:  Math.min(pivotPerp, perpFar),
+    perpHi:  Math.max(pivotPerp, perpFar),
+  };
+}
+
 /** SWING_CHILD: 親leaf長=width×(1-childRatio)・子leaf長=width×childRatio。 */
 export function swingChildLengths(width, childRatio) {
   return { parentLen: width * (1 - childRatio), childLen: width * childRatio };

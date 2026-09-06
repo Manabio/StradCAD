@@ -23,7 +23,7 @@ import {
   swingDoubleLeafSpecs, swingChildLeafSpecs, fireDoorLeafSpecs, fireFoldLeafSpecs,
   swingChildLengths, openingExteriorDir, resolveSlideLayoutPanels, trackOf,
   planFrameBand, bandPerp, frameInnerSpan, SASH_DEPTH_MM, FRAME_OVERHANG_MM,
-  planSymbolPlan, innerSpanOpening,
+  planSymbolPlan, innerSpanOpening, swingClosedLeafSpan,
 } from './openingPlanSymbolGeometry.js';
 
 // 独立検算用（production の closedAngleFor/leafOpenAngle を経由しない）。開き角の中間角
@@ -450,3 +450,39 @@ test('【失敗系】planSymbolPlan: width∈{0,40,60}のPIVOT/SLIDE_LAYOUT/FOLD
 // 既にfindCounterpartWall/exteriorSideDir単体として厚く検証済み。F1の実体（along=opening.centerCoord
 // がinnerSpanOpeningのcenterCoord消失により undefined 化する）はT3で直接固定済みのため、同じ配線点を
 // 別のsegmented fixtureで再確認しても検証価値が重複するだけで新規に検出できるバグが無い。
+
+// ---- 詳細LODの片開き戸「閉じた状態の扉」の四角（swingClosedLeafSpan） ----
+// 扉の四角は開いた位置ではなく閉じた位置に描く（開いた扉は1本線＋円弧）。
+// 直交方向は方立の欠き込み（pivotPerp 〜 壁中心側へ扉厚）と同じ区間になることを検算する。
+
+test('swingClosedLeafSpan: hingeSide<0 は吊元から座標増加方向へ leafLength ぶん伸びる', () => {
+  const span = swingClosedLeafSpan({
+    hingeAlong: 1025, hingeSide: -1, leafLength: 755, pivotPerp: 0, outward: 1, thickness: 30,
+  });
+  assert.equal(span.alongLo, 1025);
+  assert.equal(span.alongHi, 1780);
+  // 欠き込みと同じ向き（壁中心側＝-outward）へ扉厚ぶん
+  assert.equal(span.perpLo, -30);
+  assert.equal(span.perpHi, 0);
+});
+
+test('swingClosedLeafSpan: hingeSide>0 は吊元から座標減少方向へ伸び、outward<0 は厚みが逆側へ出る', () => {
+  const span = swingClosedLeafSpan({
+    hingeAlong: 1780, hingeSide: 1, leafLength: 755, pivotPerp: 100, outward: -1, thickness: 30,
+  });
+  assert.equal(span.alongLo, 1025);
+  assert.equal(span.alongHi, 1780);
+  assert.equal(span.perpLo, 100);
+  assert.equal(span.perpHi, 130);
+});
+
+test('【失敗系】swingClosedLeafSpan: leafLength=0（間口が枠に食われた縮退）でも lo<=hi の有限区間を返す', () => {
+  const span = swingClosedLeafSpan({
+    hingeAlong: 500, hingeSide: -1, leafLength: 0, pivotPerp: 0, outward: 0, thickness: 30,
+  });
+  assert.equal(span.alongLo, 500);
+  assert.equal(span.alongHi, 500);
+  // outward=0 は 1（外向き）として扱い、厚み0の潰れた四角にしない
+  assert.equal(span.perpLo, -30);
+  assert.equal(span.perpHi, 0);
+});

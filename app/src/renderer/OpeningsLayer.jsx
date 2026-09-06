@@ -10,7 +10,7 @@ import {
   swingDoubleLeafSpecs, swingChildLeafSpecs, fireDoorLeafSpecs, fireFoldLeafSpecs,
   foldZigzagPoints, trackOf, trackPerp, openingExteriorDir, resolveSlideLayoutPanels,
   FRAME_JAMB_WIDTH_MM, FRAME_KAKARI_WIDTH_MM,
-  planFrameBand, bandPerp, planSymbolPlan, innerSpanOpening,
+  planFrameBand, bandPerp, planSymbolPlan, innerSpanOpening, swingClosedLeafSpan,
 } from '../openings/openingPlanSymbolGeometry.js';
 import { arcPathD } from './ShapesLayer.jsx';
 import { LodLevel, resolveStrokeWidth } from '../viewport.js';
@@ -52,34 +52,23 @@ function rectSpec(isVertical, alongLo, alongHi, perpLo, perpHi) {
     : { x: alongLo, y: perpLo, width: alongHi - alongLo, height: perpHi - perpLo };
 }
 
-// 開き戸leaf1枚（扉線＋90°円弧）。吊元位置・leaf長を引数化し、片開き・両開き・親子等の
-// 複数箇所から再利用する。leafThickness>0（詳細LOD）のときのみ扉厚みのある四角形を描く。
+// 開き戸leaf1枚（開いた位置の扉線1本＋90°円弧）。吊元位置・leaf長を引数化し、片開き・両開き・
+// 親子等の複数箇所から再利用する。開いた扉はLOD（一般/詳細）を問わず厚みのない1本線で描く
+// ——詳細LODの扉厚は「閉じた状態の四角」として swingSymbol が別途描く（ユーザー指示2026-09）。
 // swingSide の規約: openingGeometry.js swingSideTowardPerp の perpDir=(isVertical?1:-1)*
 // swingSide*hingeSide と整合させる——hingeSideが反転する対向leaf（両開き・親子等）を同じ
 // 物理側へ開かせるには、呼び出し側がswingSideも反転して渡す必要がある（openingPlanSymbolGeometry.js
 // leafOpenAngle 参照。2枚が壁の反対側へ開いてしまう回帰バグの再発防止）。
-function swingLeafSymbol(isVertical, pivotPerp, hingeAlong, hingeSide, swingSide, leafLength, sp, leafThickness = 0) {
+function swingLeafSymbol(isVertical, pivotPerp, hingeAlong, hingeSide, swingSide, leafLength, sp) {
   const hinge = toWorld(isVertical, hingeAlong, pivotPerp);
   const closedAngle = closedAngleFor(isVertical, hingeSide);
   const openAngle = leafOpenAngle(closedAngle, swingSide, DOOR_OPEN_ANGLE_DEG);
-  const { dir, perp } = angleVectors(openAngle);
-
-  // 扉の厚みは吊元（蝶番位置=枠から隙間ぶん離れた位置）から開く側へ向けて全幅とる
-  // （蝶番を中心に両側へ振ると、吊元側の縁が枠に潜り込んでしまうため）
-  const away  = { x: -swingSide * perp.x, y: -swingSide * perp.y };
-  const near1 = hinge;
-  const near2 = { x: hinge.x + away.x * leafThickness, y: hinge.y + away.y * leafThickness };
-  const far1  = { x: near1.x + dir.x * leafLength, y: near1.y + dir.y * leafLength };
-  const far2  = { x: near2.x + dir.x * leafLength, y: near2.y + dir.y * leafLength };
+  const { dir } = angleVectors(openAngle);
+  const far = { x: hinge.x + dir.x * leafLength, y: hinge.y + dir.y * leafLength };
 
   return (
     <>
-      <Line
-        points={[near1.x, near1.y, far1.x, far1.y, far2.x, far2.y, near2.x, near2.y]}
-        closed
-        fill="transparent"
-        {...sp}
-      />
+      <Line points={[hinge.x, hinge.y, far.x, far.y]} {...sp} />
       <Path
         data={arcPathD(hinge.x, hinge.y, leafLength, closedAngle, openAngle - closedAngle)}
         fill="transparent"
@@ -90,13 +79,28 @@ function swingLeafSymbol(isVertical, pivotPerp, hingeAlong, hingeSide, swingSide
 }
 
 // SWING（片開き）: 開口全幅を1本のleafとして描く（既存のinset付き呼び出しをそのまま踏襲）。
-function swingSymbol(opening, pivotPerp, sp, hingeInset = 0, latchInset = 0, leafThickness = 0) {
+// closedLeaf（詳細LODのみ。{thickness, outward}）を渡すと、開いた位置の扉線・円弧に加えて
+// 「閉じた状態の扉」を厚みのある四角で描く（方立の欠き込みにそのまま納まる区間。
+// 区間計算は openingPlanSymbolGeometry.js swingClosedLeafSpan に一本化）。
+function swingSymbol(opening, pivotPerp, sp, hingeInset = 0, latchInset = 0, closedLeaf = null) {
   const { width, hingeSide, swingSide, isVertical } = opening;
   const effHingeInset = Math.min(hingeInset, width);
   const effLatchInset = Math.min(latchInset, width);
   const leafLength = Math.max(0, width - effHingeInset - effLatchInset);
   const hingeAlong = hingeSide < 0 ? opening.coord1 + effHingeInset : opening.coord2 - effHingeInset;
-  return swingLeafSymbol(isVertical, pivotPerp, hingeAlong, hingeSide, swingSide, leafLength, sp, leafThickness);
+  const openLeaf = swingLeafSymbol(isVertical, pivotPerp, hingeAlong, hingeSide, swingSide, leafLength, sp);
+  if (!closedLeaf) return openLeaf;
+
+  const span = swingClosedLeafSpan({
+    hingeAlong, hingeSide, leafLength, pivotPerp,
+    outward: closedLeaf.outward, thickness: closedLeaf.thickness,
+  });
+  return (
+    <>
+      <Rect {...rectSpec(isVertical, span.alongLo, span.alongHi, span.perpLo, span.perpHi)} fill="transparent" {...sp} />
+      {openLeaf}
+    </>
+  );
 }
 
 // leaf仕様の配列（{hingeAlong, hingeSide, sense, leafLength}[]）をswingLeafSymbolへ機械的に
@@ -722,7 +726,9 @@ export const OpeningsLayer = observer(({ graph, viewport, selectedId = null }) =
               opening, plan.pivotPerp, sp,
               detail ? FRAME_HINGE_INSET_MM : 0,
               detail ? FRAME_LATCH_INSET_MM : 0,
-              detail ? DOOR_LEAF_THICKNESS_MM : 0,
+              detail
+                ? { thickness: DOOR_LEAF_THICKNESS_MM, outward: Math.sign(host.axisOffset) || 1 }
+                : null,
             )}
           </Fragment>
         );
