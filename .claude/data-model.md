@@ -175,6 +175,15 @@ id一致だと面や壁が持つCLと記録側のCLが食い違って**指定が
 ただし`kneeDropRecordsOnAxis`は断面エンジンが**点クエリ**（幅1mm）にも使うため素の重なり判定の
 ままにし、「壁→区間の帰属」を問う経路だけ`kneeDropRecordForWallSpan`／`kneeDropWallGeometry`を通す。
 
+## 腰壁の区間はセル境界ではなく「押した壁の連続範囲」で決める
+`resolveWallSpanKey`は押下位置のセル（部屋側の領域片）から区間CLを取るが、**セルは壁が
+途切れても1枚のまま**（領域は壁ではなくCLで割れる）。セル境界をそのまま区間にすると、
+同じ通りで分断して建つ別の壁まで構成壁になり一緒に腰壁化する（実機2026-09「10」2階X3:
+Y2〜Y1が1セルで、通り上にはY2〜-3500と-2000〜Y1の2本が分断して建つ）。そこで区間を
+押した壁の連続範囲（同じ通り・隙間が隅の取り合いの許容差以内で続く壁の集合）で**内側へ
+詰める**。詰めるのは常に狭める方向だけなので、1本の壁がセルをまたぐときの「セル単位で
+指定できる」粒度は変わらない。
+
 ## CL偏芯（clEccentricities）はレコードと導出結果を分離する
 `PlanGraph.clEccentricities`（clId→`{mode:'value'|'face', value, side, backing}`）は「何を指定したか」だけを保持し、Wall側（axisOffset/wallFinish/backingOffset/backingDepth/finishSide）へは`finish/clEccentricity.js`の`applyCLEccentricity`が導出した結果のみを書き込む——値を直接Wallへ書くと下地材変更時に再計算できず不整合が固定化する。`backing=''`は「per-floor既定（`interiorWallBacking`）に従う」という明示的なフォールバック合図であり、未指定と同義に扱わない。適用点は操作確定時とモード境界（`runFinishExitBoundary`ステップ2b）の両方で、前回の適用結果に依存せず現在のspecと現材から毎回フル再計算する（冪等）——材未ロード・下地コード未解決時は黙って既定値へ潰さず適用自体をスキップする。
 

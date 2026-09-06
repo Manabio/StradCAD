@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import { Plane, PlanGraph, CenterLineType, Discipline, edgeKey } from '@core';
 import { generateRoomWallsFromOutline } from './wallGeneration.js';
 import { edgeGeometry, buildCellToRoom } from './edgeClassify.js';
-import { effectiveCeilingHeight, validateKneeDropWall, ERR_CEILING_HEIGHT_UNRESOLVED, kneeDropRecordsOnAxis, resolveKneeDropOverlays, kneeDropRecordForWallSpan, kneeDropRecordsAtPointOnWall, planWallHeight, wallsMeetAtPlanCut, PLAN_CUT_HEIGHT, resolveCapJoins } from './kneeDropWall.js';
+import { effectiveCeilingHeight, validateKneeDropWall, ERR_CEILING_HEIGHT_UNRESOLVED, kneeDropRecordsOnAxis, resolveKneeDropOverlays, kneeDropRecordForWallSpan, kneeDropRecordsAtPointOnWall, planWallHeight, wallsMeetAtPlanCut, PLAN_CUT_HEIGHT, resolveCapJoins, resolveWallSpanKey } from './kneeDropWall.js';
 
 function makeGraph() {
   const plane = new Plane('p1', 0, '1階', 1, 1);
@@ -353,4 +353,52 @@ test('【失敗系】resolveCapJoins: 平行な天板どうし・線種が違う
   const v = { ...view('v', true, 57.5, 3000, -12, 69.5), capKey: 'drop:' };
   assert.equal(resolveCapJoins([view('h', false, 57.5, 3000, -12, 69.5), v]).size, 0,
     '実線（腰壁）と破線（垂れ壁）はトリムしない');
+});
+
+// ==== 実機2026-09「10」2階 X3: 通り芯上で分断された別の壁まで腰壁になる ====
+// セル（部屋側の領域片）は壁が途切れても1枚のままなので、セル境界をそのまま区間にすると
+// 同じ通りの別の壁まで区間の構成壁になった。区間は押した壁の連続範囲で内側へ詰める。
+function makeSplitWallsOnAxis(graph) {
+  const xAxis  = addCL(graph, CenterLineType.VERTICAL, 0);
+  addCL(graph, CenterLineType.VERTICAL, 4000);       // セルの反対側の境界
+  const y0     = addCL(graph, CenterLineType.HORIZONTAL, 0);
+  const y7000  = addCL(graph, CenterLineType.HORIZONTAL, 7000);
+  // 壁端のCL。破線ARCH CLは領域を分割しない（gridCells.isDividerCL）ので
+  // x>0 側は [0,7000] の1セルのまま＝実機と同じ「セルの方が壁より長い」状況になる。
+  const dashed = (v) => graph.addCenterLine(CenterLineType.HORIZONTAL, v,
+    { labeled: false, discipline: Discipline.ARCH, lineType: 'dashed' });
+  const y3500 = dashed(3500);
+  const y5500 = dashed(5500);
+
+  const props = { isRoomWall: true, wallFinish: 12.5, backingOffset: 0, backingDepth: 90, finishSide: 1 };
+  const near = graph.addWall(xAxis, 57.5, true, y0,    57.5, y3500, -57.5, props); // [57.5, 3442.5]
+  const far  = graph.addWall(xAxis, 57.5, true, y5500, 57.5, y7000, -57.5, props); // [5557.5, 6942.5]
+  return { xAxis, y0, y3500, near, far };
+}
+
+test('【実機2026-09「10」】resolveWallSpanKey: 区間は押した壁の連続範囲までで、分断された同じ通りの壁を含まない', () => {
+  const graph = makeGraph();
+  const { xAxis, y0, y3500, near, far } = makeSplitWallsOnAxis(graph);
+
+  const key = resolveWallSpanKey(near, { x: near.axisValue, y: 1000 }, graph);
+  assert.equal(key, edgeKey(xAxis.id, y0.id, y3500.id), 'セル境界(0〜7000)ではなく壁の連続範囲(0〜3500)');
+
+  graph.setKneeDropWall(key, { knee: { topHeight: 800 } });
+  const overlays = resolveKneeDropOverlays(graph);
+  assert.equal(overlays.has(near.id), true, '押した壁は腰壁になる');
+  assert.equal(overlays.has(far.id), false, '分断された別の壁は腰壁にしない');
+});
+
+test('【失敗系】resolveWallSpanKey: セルの方が壁の連続範囲より狭ければセル境界のまま（区間指定の粒度は変えない）', () => {
+  const graph = makeGraph();
+  const xAxis = addCL(graph, CenterLineType.VERTICAL, 0);
+  addCL(graph, CenterLineType.VERTICAL, 4000);
+  const y0    = addCL(graph, CenterLineType.HORIZONTAL, 0);
+  const yMid  = addCL(graph, CenterLineType.HORIZONTAL, 3500); // 分割CL＝セルを2枚に割る
+  const y7000 = addCL(graph, CenterLineType.HORIZONTAL, 7000);
+  const wall  = graph.addWall(xAxis, 57.5, true, y0, 57.5, y7000, -57.5,
+    { isRoomWall: true, wallFinish: 12.5, backingOffset: 0, backingDepth: 90, finishSide: 1 });
+
+  assert.equal(resolveWallSpanKey(wall, { x: wall.axisValue, y: 1000 }, graph), edgeKey(xAxis.id, y0.id, yMid.id));
+  assert.equal(resolveWallSpanKey(wall, { x: wall.axisValue, y: 5000 }, graph), edgeKey(xAxis.id, yMid.id, y7000.id));
 });

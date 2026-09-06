@@ -151,9 +151,51 @@ export function kneeDropRecordsAtPointOnWall(graph, wall, pointCoord, eps) {
 }
 
 /**
+ * 押した壁と**繋がっている壁の連続範囲**（同じ通り・同じ向きで、隙間なく続く壁の集合）の
+ * 両端を返す。端の座標だけでなく、その端を与えた壁の端点CL（clStart/clEnd）も返す
+ * ——区間キーはCLで書くため。
+ *
+ * 隣り合う壁は隅の取り合いで半壁厚ぶん食い違う（端点は相手壁の仕上げ面まで伸びる）ので、
+ * 連続とみなす隙間の許容は SPAN_OVERLAP_EPS と同値にする（同じ「隅の取り合いの許容差」）。
+ * 壁の生成側（axisOffsetの符号）では分けない——同じ通りの1枚の壁が、部屋ごとに±両側の
+ * 壁として生成されるのが通常だから。
+ * @param {object} graph
+ * @param {import('@core').Wall} wall
+ * @returns {{lo:number, hi:number, loCL, hiCL}}
+ */
+function wallRunOf(graph, wall) {
+  const peers = graph.walls.filter(w =>
+    w.isVertical === wall.isVertical && sameAxisLine(w.axisCL, wall.axisCL));
+
+  const endsOf = (w) => (w.coord1 <= w.coord2)
+    ? { lo: w.coord1, hi: w.coord2, loCL: w.clStart, hiCL: w.clEnd }
+    : { lo: w.coord2, hi: w.coord1, loCL: w.clEnd,   hiCL: w.clStart };
+
+  let run = endsOf(wall);
+  // 端が伸びなくなるまで繰り返す（1回の走査では、後ろに現れた壁が前の壁を繋げる場合を拾えない）
+  for (let grew = true; grew;) {
+    grew = false;
+    for (const w of peers) {
+      const e = endsOf(w);
+      if (e.lo > run.hi + SPAN_OVERLAP_EPS || e.hi < run.lo - SPAN_OVERLAP_EPS) continue; // 繋がっていない
+      if (e.lo < run.lo) { run = { ...run, lo: e.lo, loCL: e.loCL }; grew = true; }
+      if (e.hi > run.hi) { run = { ...run, hi: e.hi, hiCL: e.hiCL }; grew = true; }
+    }
+  }
+  return run;
+}
+
+/**
  * 壁の押下位置（ワールド座標）から、腰壁・垂れ壁の対象区間キー（edgeKey）を解決する。
  * 壁の部屋側（axisOffsetの符号側）へ微小オフセットしてセルを解決し、壁の長さ方向のセル境界
  * CLペアをedgeKeyへ正規化する（computeNamedBoundaryEdges と同じ正規化規則）。
+ *
+ * ただしセル境界は**押した壁より長いことがある**——セルは部屋側の領域片であり、その辺に
+ * 沿って壁が途切れていても1枚のセルのままだから（実機「10」2階 X3: Y2〜Y1 が1セルで、
+ * 通り上には Y2〜-3500 と -2000〜Y1 の2本の壁が分断して建つ）。セル境界をそのまま区間に
+ * すると、指定していない別の壁まで同じ区間の構成壁として腰壁になる。そこで区間を
+ * **押した壁の連続範囲**（wallRunOf）で内側へ詰める。詰めるのは常に狭める方向だけなので、
+ * 1本の壁がセルをまたぐ場合の「セル単位で指定できる」粒度は変わらない。
  * @param {import('@core').Wall} wall
  * @param {{x:number,y:number}} worldPos
  * @param {object} graph
@@ -175,8 +217,15 @@ export function resolveWallSpanKey(wall, worldPos, graph) {
   const [sId, eId] = wall.isVertical ? [topId, bottomId] : [leftId, rightId];
   const sCL = getShape(graph, sId), eCL = getShape(graph, eId);
   if (!sCL || !eCL) return null;
-  const [s2, e2] = sCL.value <= eCL.value ? [sId, eId] : [eId, sId];
-  return edgeKey(axisCL.id, s2, e2);
+  let [loCL, hiCL] = sCL.value <= eCL.value ? [sCL, eCL] : [eCL, sCL];
+
+  // 連続範囲で内側へ詰める。端のCLが区間の内側にあるときだけ差し替える（外側＝セルの方が
+  // 狭いならセルのまま）。詰めた結果が潰れる（lo>=hi）組み合わせは採らない。
+  const run = wallRunOf(graph, wall);
+  if (run.loCL && run.loCL.value > loCL.value && run.loCL.value < hiCL.value) loCL = run.loCL;
+  if (run.hiCL && run.hiCL.value < hiCL.value && run.hiCL.value > loCL.value) hiCL = run.hiCL;
+
+  return edgeKey(axisCL.id, loCL.id, hiCL.id);
 }
 
 /**
