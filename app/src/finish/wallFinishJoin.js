@@ -47,19 +47,25 @@ export const ENDPOINT_EPS = 0.5;
  * 内側線（fin線）の位置と可視性を解決する——壁単体（他壁との取り合いを一切見ない）だけで
  * 決まる性質のため、`wallJunctionResolve.js` パス2の候補判定（makeView）・ShapesLayer.jsx の
  * 描画ガード・柱包みの取り合いの**唯一の供給源**にする（旧: 描画ガードとパス2が別々に同じ式を
- * 持っており、`wallFinish>0`だけを見て materialRange 上の可視性を見ていなかったため、
- * `|axisOffset|===wallFinish`の薄壁（内側線が軸CL上に潰れる。`finish/stair/stairUnderWalls.js`の
- * ルール2＝階段下部屋の外側仕上げ薄壁が実際に生成する形状）でfin線が描かれないのにパス2が
- * capSuppressを立ててしまい、端にcapもfinも無くなる回帰を生んだ）。
+ * 持っており、`wallFinish>0`だけを見て materialRange 上の可視性を見ていなかった）。
+ *
+ * 可視の条件は「仕上げ材が在り、その境界面が自分の材の中にある」ことだけ。**軸CLと重なるかは
+ * 見ない**（2026-09に撤去）——ShapesLayer の「軸CL上の長辺は描かない」という規則は、対称壁の
+ * ペアが軸CLで背中合わせに接する辺（材の境界ではなく、中心線レイヤーが描く線と重なるだけ）を
+ * 指したもので、**仕上げ／下地の境界面**には当てはまらない。`|axisOffset|===wallFinish` の薄壁
+ * （`finish/stair/stairUnderWalls.js` ルール2＝階段下部屋の外側仕上げ薄壁。偏芯壁は下地を室内側へ
+ * 全寄せするので、その外側の仕上げ材の内側面がちょうど軸CL上に来る）でこの条件を課すと、
+ * **12.5mmの帯が1本線で描かれ**、直交して取り合う壁の内側線が受け手を失って宙で終わる
+ * （実機2026-09で確認）。この形は偏芯壁でしか生じないため、撤去しても対称壁の描画結果は
+ * 変わらない（対称・下地オーナー・resolveBackingOwnershipの薄壁はいずれも
+ * `|axisOffset| = wallBase/2 + wallFinish` で、wallBase>0 なら軸CL上には来ない）。
  * @param {import('@core').Wall} wall
  * @returns {{finBoundary:number, finVisible:boolean}}
  */
 export function resolveFinVisibility(wall) {
   const { lo, hi } = wall.materialRange;
   const finBoundary = wall.axisValue - wall.faceDir * (wall.wallFinish ?? 0);
-  const finVisible = wall.wallFinish > 0
-    && finBoundary >= lo && finBoundary <= hi
-    && Math.abs(finBoundary - wall.axisCL.effectiveValue) > ENDPOINT_EPS;
+  const finVisible = wall.wallFinish > 0 && finBoundary >= lo && finBoundary <= hi;
   return { finBoundary, finVisible };
 }
 

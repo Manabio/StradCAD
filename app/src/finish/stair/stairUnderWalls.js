@@ -53,7 +53,29 @@ const SAMPLE_EPS = 10; // mm
 const T_EPS = 1e-3;
 
 // レーン間中心線から階段下部屋側へ逃げる固定量(mm)。主構造非依存（ルール6・固定値）。
-const LANE_CLEARANCE = 50;
+export const LANE_CLEARANCE = 50;
+
+/**
+ * ルール6（U字系のレーン間中心線壁）の「階段側仕上げ薄壁」の壁プロパティ。唯一の供給源。
+ *
+ * 帯は [CL+sign*50, CL+sign*(50+f_st)]（sign は階段下部屋の側）。仕上げ面が向くのは**階段側**
+ * ＝CL寄り＝`-sign` なので、面(axisValue)は帯のCL寄りの端に置き、向きは `finishSide` で明示する
+ * ——`Wall.faceDirOr` は finishSide が無ければ `sign(axisOffset)` を採るため、`sign*(50+f_st)` の
+ * まま置くと面と内側線が入れ替わり、この帯だけ「外形線が内側線として」取り合ってしまう
+ * （実機2026-09・1階Y1+3500の偏芯壁の東端で、相手の内側線に合わせるべき線が帯の外形線に
+ * なっていた）。ルール2の薄壁は axisOffset に -sign を掛けるため同じ問題は起きない。
+ * @param {-1|1} sign - 階段下部屋の側（軸CLから見た符号）
+ * @param {number} stFinish - 階段ペアRoomの仕上げ厚(mm)
+ */
+export function laneStairSideThinProps(sign, stFinish) {
+  return {
+    axisOffset:    sign * LANE_CLEARANCE,
+    wallFinish:    stFinish,
+    finishSide:    -sign,
+    backingOffset: 0,
+    backingDepth:  0,
+  };
+}
 
 // 2a壁の突き当たり判定の許容差(mm)。core/wallChamfer.js trimIntersectingWalls の tolerance と同水準。
 const JUNCTION_TOLERANCE = 150; // mm
@@ -286,10 +308,15 @@ function computeWallSegments(graph, rawParams) {
 
   const result = [];
   for (const [, segs] of groups) {
-    const { axisCLId, axisOffset, isVertical, wallFinish, backingOffset, backingDepth } = segs[0];
+    const { axisCLId, axisOffset, isVertical, wallFinish, backingOffset, backingDepth, finishSide } = segs[0];
     const axisCL = getShape(graph, axisCLId);
     if (!axisCL) continue;
-    const protrusion = Math.abs(axisOffset);
+    // clipToAxisExtent へ渡す張り出し量は**材が軸CLから最も遠く届く量**。仕上げ面(axisOffset)と
+    // 仕上げ／下地の境界面のうち遠い方を採る——面が帯のCL寄りに来る薄壁（ルール6の階段側薄壁は
+    // finishSide で向きを明示する）では axisOffset だけ見ると仕上げ厚ぶん足りない。
+    const faceSign = finishSide ?? (Math.sign(axisOffset) || 1);
+    const finOffset = axisOffset - faceSign * (wallFinish ?? 0);
+    const protrusion = Math.max(Math.abs(axisOffset), Math.abs(finOffset));
 
     for (const seg of mergeSegments(segs, graph)) {
       const startCL = getShape(graph, seg.startCLId);
@@ -312,7 +339,7 @@ function computeWallSegments(graph, rawParams) {
       const segHi = Math.max(startCL.value + clipped.startOffset, endCL.value + clipped.endOffset);
 
       result.push({
-        axisCLId, axisOffset, isVertical, wallFinish, backingOffset, backingDepth,
+        axisCLId, axisOffset, isVertical, wallFinish, backingOffset, backingDepth, finishSide,
         axisCL, startCL, endCL, clipped, segLo, segHi, skip: false,
       });
     }
@@ -332,6 +359,7 @@ function buildWallsFromSegments(graph, segments) {
     if (s.skip) continue;
     const w = graph.addWall(s.axisCL, s.axisOffset, s.isVertical, s.startCL, s.clipped.startOffset, s.endCL, s.clipped.endOffset, {
       isRoomWall: true, wallFinish: s.wallFinish, backingOffset: s.backingOffset, backingDepth: s.backingDepth,
+      finishSide: s.finishSide ?? null,
     });
     walls.push(w);
   }
@@ -471,14 +499,9 @@ export function generateStairUnderWalls(graph, stair, room, dims, opts = {}) {
         backingOffset: sign * (LANE_CLEARANCE + stFinish + base / 2),
         backingDepth:  base,
       });
-      // 階段側仕上げ薄壁: 帯 [CL+sign*50, CL+sign*(50+f_st)]
-      thinParams.push({
-        ...p,
-        axisOffset:    sign * (LANE_CLEARANCE + stFinish),
-        wallFinish:    stFinish,
-        backingOffset: 0,
-        backingDepth:  0,
-      });
+      // 階段側仕上げ薄壁: 帯 [CL+sign*50, CL+sign*(50+f_st)]。向きの規約は
+      // laneStairSideThinProps が唯一の供給源。
+      thinParams.push({ ...p, ...laneStairSideThinProps(sign, stFinish) });
       continue;
     }
 

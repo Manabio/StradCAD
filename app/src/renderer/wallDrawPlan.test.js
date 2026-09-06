@@ -146,12 +146,12 @@ test('resolveWallLines: 出隅側の壁（実Wall）はfinSegmentsが角の交�
   assert.equal(hLines.capHiSuppressed, false);
 });
 
-// ---- 実バグ再現（2026-09 QA指摘）: |axisOffset|===wallFinish の薄壁は内側線が軸CL上に
-// 潰れる（finVisible=false）。finish/stair/stairUnderWalls.jsのルール2（階段下部屋の
-// 外側仕上げ薄壁。axisOffset:-sign*outerFinish, wallFinish:outerFinish, backingDepth:0,
-// finishSideを渡さないためfaceDir=sign(axisOffset)で厳密に成立）が実際に生成する形状を
-// 実Wallで再現する。旧コード（wallFinish>0だけを見る）では、この壁がcapSuppressを
-// 立てるのにfin線自体は描かれず、端にcap・fin線がともに無くなる回帰があった。
+// ---- |axisOffset|===wallFinish の薄壁（内側線がちょうど軸CL上に来る）を実Wallで再現する。
+// finish/stair/stairUnderWalls.jsのルール2（階段下部屋の外側仕上げ薄壁。
+// axisOffset:-sign*outerFinish, wallFinish:outerFinish, backingDepth:0）が実際に生成する形状。
+// 2026-09の偏芯壁対応で、この薄壁も**普通に2本線で描かれ普通に取り合う**ようになった
+// （旧: 軸CLと重なる内側線を抑止していたため、12.5mmの帯が1本線で描かれ、直交する壁の
+// 内側線が受け手を失って宙で終わっていた）。
 function buildCollapsedFinGraph() {
   const g = new PlanGraph(new Plane('p', 0, '1階', 1, 1));
   const xAxis = vCL(g, 1000), yAxis = hCL(g, 0);
@@ -168,15 +168,19 @@ function buildCollapsedFinGraph() {
   return { g, collapsedV, hLeft };
 }
 
-test('【失敗系】buildWallDrawPlan: 内側線が軸CL上に潰れる薄壁（実Wall）はcapHiSuppressedがfalseのまま', () => {
-  const { g, hLeft } = buildCollapsedFinGraph();
+test('buildWallDrawPlan: 内側線が軸CL上に来る薄壁（実Wall）も2本線で描かれ、普通に取り合う', () => {
+  const { g, collapsedV, hLeft } = buildCollapsedFinGraph();
   const plan = buildWallDrawPlan(g, LodLevel.DETAIL);
 
+  const vLines = plan.wallLines.get(collapsedV.id);
+  assert.equal(vLines.finVisible, true, '仕上げ材の帯は面線と内側線の2本で描かれるはず');
+  assert.equal(vLines.finBoundary, 1000, '内側線は軸CL上（材の中）に来る');
+
   const hLeftLines = plan.wallLines.get(hLeft.id);
-  assert.deepEqual(hLeftLines.finSegments, [[0, 987.5]],
-    '内側線が潰れた壁は延長先として採られないため、fin線は物理端のままのはず');
-  assert.equal(hLeftLines.capHiSuppressed, false,
-    '内側線が潰れた壁にキャップだけが抑止される回帰が起きていないはず（修正前はtrueになる）');
+  assert.deepEqual(hLeftLines.finSegments, [[0, 1000]],
+    'fin線は相手(collapsedV)の内側線の位置=1000まで延びるはず');
+  assert.equal(hLeftLines.capHiSuppressed, true,
+    '入隅として解決される以上キャップは抑止されるはず（内側線が受け手を得たため）');
 });
 
 test('buildWallDrawPlan: 詳細LODでwallLinesが入隅・出隅の両方を実グラフ経由で正しく解決する', () => {

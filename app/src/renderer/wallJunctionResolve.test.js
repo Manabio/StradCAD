@@ -292,30 +292,44 @@ test('【失敗系】resolveWallTJunctions: wallFinish===0の壁（相手壁）�
     '相手のwallFinishが0だと延長先(相手の内側線位置)が意味を持たないため対象外のはず');
 });
 
-// ---- 失敗系（実バグ再現・2026-09 QA指摘）: |axisOffset|===wallFinish の薄壁は
-// finBoundary(=axisValue-faceDir*wallFinish)が軸CL上に潰れる（finVisible=false）。
-// この形状はfinish/stair/stairUnderWalls.jsのルール2（階段下部屋の外側仕上げ薄壁。
-// axisOffset:-sign*outerFinish, wallFinish:outerFinish, backingDepth:0, finishSideは
-// 渡さないためfaceDir=sign(axisOffset)で厳密に成立）が実際に生成する。旧コードは
-// wallFinish>0だけを見ていたため、この壁がcapSuppressを立てるのにfin線自体は
-// （ShapesLayer側のfinVisibleガードにより）描かれず、端にcap・fin線がともに無くなる
-// 回帰があった。finVisible化により自壁・相手壁の両方の役割で対象外になるはず ----
-test('【失敗系】resolveWallTJunctions: 内側線が軸CL上に潰れる薄壁（|axisOffset|===wallFinish）はコーナー解決の対象外', () => {
+// ---- |axisOffset|===wallFinish の薄壁は finBoundary(=axisValue-faceDir*wallFinish) が
+// ちょうど軸CL上に来る。finish/stair/stairUnderWalls.jsのルール2（階段下部屋の外側仕上げ薄壁）が
+// 実際に生成する形状で、偏芯壁が下地を室内側へ全寄せする以上その外側の仕上げ材では必ずこうなる。
+// 2026-09の偏芯壁対応で、この薄壁も**普通に2本線で描かれ普通に取り合う**ようになった
+// （旧: 軸CLと重なる内側線を抑止していたため、帯が1本線で描かれ、取り合う相手の内側線が
+// 受け手を失って宙で終わっていた。抑止をやめた根拠は finish/wallFinishJoin.js 参照）----
+test('resolveWallTJunctions: 内側線が軸CL上に来る薄壁も、自壁・相手壁の両方の役割でコーナー解決に加わる', () => {
   // axisCLValue=2500, axisOffset=-57.5, wallFinish=57.5 → finBoundary
-  // = axisValue(2442.5) - faceDir(-1)*wallFinish(57.5) = 2500 = axisCLValue（潰れる）。
+  // = axisValue(2442.5) - faceDir(-1)*wallFinish(57.5) = 2500 = axisCLValue（軸CL上）。
   const collapsedV = stubWall({
     id: 'V-collapsed', isVertical: true, axis: 2500, face: 2442.5, faceDir: -1, wallFinish: 57.5,
     coord1: -6942.5, coord2: -5057.5,
     backingRange: null, materialRange: { lo: 2442.5, hi: 2500 },
   });
-  const hLeft = realHThinLeft(); // 通常の薄壁（finVisible=true）。V-collapsedの面で終端する
+  const hLeft = realHThinLeft(); // 通常の薄壁。V-collapsedの面で終端する
 
   const result = resolveWallTJunctions([collapsedV, hLeft]);
 
-  assert.equal(result.has('V-collapsed'), false,
-    '内側線が潰れた壁は自壁としてもコーナー解決の候補にならない（finEnd/capSuppressを持たない）はず');
-  assert.equal(result.get('H-thin-left')?.finEnd.hi, undefined,
-    '相手側（H-thin-left）も、内側線が潰れた壁を延長先として採らないはず');
+  assert.equal(result.get('H-thin-left')?.finEnd.hi, 2500,
+    '相手の内側線（軸CL上）まで延びるはず');
+  assert.equal(result.get('H-thin-left')?.capSuppress.hi, true);
+  assert.equal(result.get('V-collapsed')?.finEnd.hi, -5045,
+    '自壁としても、相手(H-thin-left)の内側線の位置まで内側線が延びるはず');
+  assert.equal(result.get('V-collapsed')?.capSuppress.hi, true);
+});
+
+// ---- 相手の仕上げ厚が0（仕上げ材そのものが無い＝境界面も存在しない）壁は、
+// `finishJoinPlane` でも null のままで取り合わない ----
+test('【失敗系】resolveWallTJunctions: 仕上げ厚0の相手は境界面が存在しないため取り合わない', () => {
+  const zeroFinishV = stubWall({
+    id: 'V-zero', isVertical: true, axis: 2500, face: 2442.5, faceDir: -1, wallFinish: 0,
+    coord1: -6942.5, coord2: -5057.5,
+    backingRange: null, materialRange: { lo: 2442.5, hi: 2500 },
+  });
+
+  const result = resolveWallTJunctions([zeroFinishV, realHThinLeft()]);
+
+  assert.equal(result.get('H-thin-left')?.finEnd.hi, undefined);
   assert.equal(result.get('H-thin-left')?.capSuppress.hi, undefined);
 });
 
@@ -1260,4 +1274,135 @@ test('【失敗系】resolveWallTJunctions【パス5】: 隣に壁があって�
     coord1: -5657.5, coord2: -3000, backingRange: null, materialRange: { lo: -3057.5, hi: -3045 } });
   const r = resolveWallTJunctions([w, other]);
   assert.equal(r.get('W1')?.capSuppress.hi, undefined);
+});
+
+// ==================================================================
+// 偏芯壁の帯との取り合い（パス6の帯の境目リトラクト・パス2の境界面・パス2b）。
+// 数値は実機データ・1階（階段下部屋の偏芯壁 y軸CL=-3500 が、通り芯X2 x軸CL=-3000 の帯へ
+// 西からT字で取り合う隅。2026-09 実測）をそのまま使う。
+// 帯はどちらも非対称: X2は [-3057.5,-2942.5]（薄壁 -3057.5..-3045 ＋ オーナー -3045..-2942.5）、
+// 階段下部屋側は [-3602.5,-3487.5]（偏芯オーナー -3602.5..-3500 ＋ 仕上げ薄壁 -3500..-3487.5）。
+// 生成側のトリム（trimStairUnderJunctions）が相手を1枚ずつ見るため、双方の端が
+// **帯の境目**（-3045 / -3500）で止まっている。
+// ==================================================================
+const eccJunctionWalls = () => [
+  // X2の帯: 西側の部屋の仕上げ薄壁（通し）
+  stubWall({
+    id: 'X2-thin', isVertical: true, axis: -3000, face: -3057.5, faceDir: -1,
+    coord1: -6942.5, coord2: -2057.5,
+    backingRange: null, materialRange: { lo: -3057.5, hi: -3045 },
+  }),
+  // X2の帯: 下地オーナー壁。階段下部屋の壁で南北に分割されている
+  stubWall({
+    id: 'X2-owner-n', isVertical: true, axis: -3000, face: -2942.5, faceDir: 1,
+    coord1: -6942.5, coord2: -3487.5,
+    backingRange: { lo: -3045, hi: -2955 }, materialRange: { lo: -3045, hi: -2942.5 },
+  }),
+  stubWall({
+    id: 'X2-owner-s', isVertical: true, axis: -3000, face: -2942.5, faceDir: 1,
+    coord1: -3500, coord2: -1942.5,
+    backingRange: { lo: -3045, hi: -2955 }, materialRange: { lo: -3045, hi: -2942.5 },
+  }),
+  // 階段下部屋の偏芯壁（下地を室内側へ全寄せ）とその外側仕上げ薄壁（内側線は軸CL上に来る）
+  stubWall({
+    id: 'ecc-owner', isVertical: false, axis: -3500, face: -3602.5, faceDir: -1,
+    coord1: -3045, coord2: -1665,
+    backingRange: { lo: -3590, hi: -3500 }, materialRange: { lo: -3602.5, hi: -3500 },
+  }),
+  stubWall({
+    id: 'ecc-thin', isVertical: false, axis: -3500, face: -3487.5, faceDir: 1,
+    coord1: -3045, coord2: -1562.5,
+    backingRange: null, materialRange: { lo: -3500, hi: -3487.5 },
+  }),
+];
+
+test('resolveWallTJunctions: 偏芯壁の帯どうしの隅は、帯の境目で止まった端を帯の手前の面まで詰める', () => {
+  const result = resolveWallTJunctions(eccJunctionWalls());
+
+  // 階段下部屋側の2枚: 帯の境目(-3045)からX2の帯の手前の面(-2942.5)まで詰まる
+  assert.equal(result.get('ecc-owner')?.endExtend.lo, -2942.5);
+  assert.equal(result.get('ecc-thin')?.endExtend.lo, -2942.5);
+  // X2側の南の駒: 帯の境目(-3500)から階段下部屋の帯の手前の面(-3487.5)まで詰まる
+  assert.equal(result.get('X2-owner-s')?.endExtend.lo, -3487.5);
+  // X2側の北の駒は帯を貫き切った端（-3487.5）なので、従来どおりパス6の「通り抜け」で
+  // 最初に当たった壁の手前の面(-3602.5)まで詰まる
+  assert.equal(result.get('X2-owner-n')?.endExtend.hi, -3602.5);
+});
+
+test('resolveWallTJunctions: 詰めたあとの端で、面線は帯の幅ぶん・内側線は下地の幅ぶんだけ空く', () => {
+  const result = resolveWallTJunctions(eccJunctionWalls());
+
+  // 面線（外側線）は互いの面で終わる＝X2の面線には帯の全幅(115mm)の空きができる
+  assert.equal(result.get('ecc-owner')?.finEnd.lo, -2955,
+    '偏芯壁の内側線は相手(X2オーナー)の内側線の位置に納まるはず');
+  assert.equal(result.get('ecc-owner')?.capSuppress.lo, true);
+  assert.equal(result.get('X2-owner-n')?.finEnd.hi, -3590);
+  assert.equal(result.get('X2-owner-n')?.capSuppress.hi, true);
+  // 帯の外側半分（内側線が軸CL上に来る薄壁）の内側線で納まる
+  // ——結果として X2 の内側線の空きは下地の幅(-3590..-3500=90mm)ちょうどになる
+  assert.equal(result.get('X2-owner-s')?.finEnd.lo, -3500,
+    '相手が線を描かない薄壁でも、その仕上げ／下地の境界面(-3500)で内側線が納まるはず');
+  assert.equal(result.get('X2-owner-s')?.capSuppress.lo, true);
+});
+
+test('resolveWallTJunctions: 帯の外側半分（内側線が軸CL上に来る薄壁）も角として解決され妻線が消える', () => {
+  const result = resolveWallTJunctions(eccJunctionWalls());
+
+  // 帯の両半分とも、詰めた結果の同じ位置(-2942.5)で角として解決される
+  assert.equal(result.get('ecc-owner')?.capSuppress.lo, true);
+  assert.equal(result.get('ecc-thin')?.capSuppress.lo, true);
+  // 反対の端（-1562.5）はこのフィクスチャに相手の壁が無い＝自由端なので妻線は残る
+  assert.equal(result.get('ecc-thin')?.capSuppress.hi, undefined);
+});
+
+// ---- 失敗系: 帯の中でも「どの壁の面でもない位置」で止まった端は、相手の材を途中まで
+// 貫いただけのT字の突き当たりなので詰めない ----
+test('【失敗系】resolveWallTJunctions: 帯の境目ではない位置で止まった端は詰めない', () => {
+  const walls = eccJunctionWalls();
+  const ecc = walls.find(w => w.id === 'ecc-owner');
+  ecc.coord1 = -3000; // X2オーナー壁の材の中（境目 -3045 でも面 -2942.5 でもない）
+
+  const result = resolveWallTJunctions(walls);
+
+  assert.equal(result.get('ecc-owner')?.endExtend.lo, undefined,
+    '境目に乗らない端はT字の突き当たり＝詰める対象ではないはず');
+});
+
+// ==================================================================
+// 偏芯壁の帯どうしの**出隅**（実機・1階 Y1-3500 × X2+1500）。帯の外側半分どうしが角を作る:
+// 階段下部屋の帯 [-3602.5,-3487.5] の外側半分（-3500..-3487.5）と、レーン間中心線壁の帯
+// [-1665,-1550] の外側半分（-1562.5..-1550）。どちらも仕上げのみの薄壁で、
+// 面（外形線）と内側線が仕上げ厚(12.5)しか離れていないため、入隅・出隅の述語が
+// TOUCH_TOLERANCE(30)の中で両方とも通る。「内側同士・外側同士が取り合う」ことを固定する。
+// ==================================================================
+const eccConvexCornerWalls = () => [
+  // 階段下部屋の帯の外側半分。東へ走り、相手の帯の内側線の位置(-1562.5)で終端する。
+  stubWall({
+    id: 'ecc-outer', isVertical: false, axis: -3500, face: -3487.5, faceDir: 1,
+    coord1: -2942.5, coord2: -1562.5,
+    backingRange: null, materialRange: { lo: -3500, hi: -3487.5 },
+  }),
+  // レーン間中心線壁の帯の外側半分（階段側仕上げ）。南へ走り、相手の帯の外面(-3487.5)まで届く。
+  stubWall({
+    id: 'lane-outer', isVertical: true, axis: -1500, face: -1550, faceDir: 1,
+    coord1: -6012.5, coord2: -3487.5,
+    backingRange: null, materialRange: { lo: -1562.5, hi: -1550 },
+  }),
+];
+
+test('resolveWallTJunctions: 偏芯壁の帯どうしの出隅は、内側線同士・外側線同士で取り合う', () => {
+  const result = resolveWallTJunctions(eccConvexCornerWalls());
+
+  // 内側線: 相手の帯を貫いて届いている側は、相手の内側線の位置まで短縮する
+  assert.equal(result.get('lane-outer')?.finEnd.hi, -3500,
+    '内側線(x=-1562.5)は相手の内側線(y=-3500)で止まるはず');
+  assert.equal(result.get('lane-outer')?.capSuppress.hi, false,
+    '出隅なのでキャップの扱いは変えない（外形線は角まで届く）');
+
+  // もう一方は既に相手の内側線の位置で終端している＝動かす必要が無い。ただし妻線を残すと
+  // 内側線が角を越えて外形線まで伸びて見えるので抑止する。
+  assert.equal(result.get('ecc-outer')?.finEnd.hi, undefined,
+    '内側線(y=-3500)は端(-1562.5)のままでよい＝相手の内側線とちょうど交わる');
+  assert.equal(result.get('ecc-outer')?.capSuppress.hi, true,
+    '妻線は内側線同士の交点を横切るので抑止されるはず');
 });

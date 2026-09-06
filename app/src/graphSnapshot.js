@@ -426,6 +426,36 @@ function resolveCL(graph, id) {
 // ----------------------------------------------------------------
 // デシリアライズ: Uint8Array | ArrayBuffer | plain object → フロアグラフ
 // ----------------------------------------------------------------
+/**
+ * 旧データ互換: 仕上げ面の向きが未指定のまま**逆向きに保存された仕上げ薄壁**を正規化する。
+ *
+ * 対象は `finish/stair/stairUnderWalls.js` ルール6（U字系のレーン間中心線壁）の階段側仕上げ
+ * 薄壁だけ。この帯は [CL+sign*50, CL+sign*(50+f_st)] に置かれ仕上げ面は**階段側（CL寄り）**を
+ * 向くが、旧実装は面を帯の遠い側（`axisOffset = sign*(50+f_st)`）に置き `finishSide` を渡さな
+ * かったため、`Wall.faceDirOr` が `sign(axisOffset)` から逆向きの faceDir を導き、**面線と内側線
+ * の役割が入れ替わって**いた。材の帯（materialRange）は同じなので線の位置は変わらないが、
+ * 取り合い（renderer/wallJunctionResolve.js パス2）が外形線を内側線として扱い、出隅で
+ * 「内側同士・外側同士」が組めなくなる（実機2026-09・1階Y1+3500×X2+1500の出隅）。
+ *
+ * 既存の2a壁は仕上げモードを抜け直しても再生成されない（`finish/finishBoundary.js` ステップ2a）
+ * ため、生成側の修正だけでは既存図面が直らない。復元経路で一度だけ直す（冪等）。
+ *
+ * 判定は `finishSide` 未指定の仕上げのみ薄壁（backingDepth===0）で、面が軸CLから仕上げ厚を
+ * 超えて離れているもの——ルール2の薄壁は `|axisOffset|===wallFinish`、通常の壁生成
+ * （resolveBackingOwnership）とCL偏芯は `finishSide` を必ず持つため、いずれもここに入らない。
+ * @param {object} d - snapshot.walls の1件
+ * @returns {{axisOffset:number, finishSide:number|null}}
+ */
+function normalizeLegacyFinishSide(d) {
+  const axisOffset = d.axisOffset ?? 0;
+  const finishSide = d.finishSide ?? null;
+  const finish = d.wallFinish ?? 0;
+  if (finishSide != null || d.backingDepth !== 0 || !(finish > 0)) return { axisOffset, finishSide };
+  const sign = Math.sign(axisOffset);
+  if (sign === 0 || Math.abs(axisOffset) <= finish) return { axisOffset, finishSide };
+  return { axisOffset: sign * (Math.abs(axisOffset) - finish), finishSide: -sign };
+}
+
 export function restoreGraph(graph, data) {
   let snapshot;
   if (data instanceof Uint8Array || data instanceof ArrayBuffer) {
@@ -523,8 +553,9 @@ function applySnapshot(graph, snapshot) {
       const clStart = resolveCL(graph, d.clStartId);
       const clEnd   = resolveCL(graph, d.clEndId);
       if (axisCL && clStart && clEnd) {
-        graph.addWall(axisCL, d.axisOffset ?? 0, d.isVertical, clStart, d.startOffset, clEnd, d.endOffset,
-          { discipline: d.discipline, lineWeight: d.lineWeight, lineType: d.lineType, color: d.color, isRoomWall: d.isRoomWall ?? false, isExteriorWall: d.isExteriorWall ?? false, wallFinish: d.wallFinish ?? null, backingOffset: d.backingOffset ?? null, backingDepth: d.backingDepth ?? null, finishSide: d.finishSide ?? null }, d.id);
+        const { axisOffset, finishSide } = normalizeLegacyFinishSide(d);
+        graph.addWall(axisCL, axisOffset, d.isVertical, clStart, d.startOffset, clEnd, d.endOffset,
+          { discipline: d.discipline, lineWeight: d.lineWeight, lineType: d.lineType, color: d.color, isRoomWall: d.isRoomWall ?? false, isExteriorWall: d.isExteriorWall ?? false, wallFinish: d.wallFinish ?? null, backingOffset: d.backingOffset ?? null, backingDepth: d.backingDepth ?? null, finishSide }, d.id);
       }
     }
     graph.resolveExtentWallRefs();

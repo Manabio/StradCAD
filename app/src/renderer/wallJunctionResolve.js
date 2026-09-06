@@ -26,6 +26,16 @@ import { planWallHeight } from '../finish/kneeDropWall.js';
  * 突き当たり）や、通り抜けていない端（角の相手の材の中で止まっている＝正しい延長）は対象外。
  * 詰めた結果はビューの長さ方向スパンにも反映するので、以降のパス0〜3は詰めたあとの端で判定する
  * ——入隅の相手が「最初に当たった壁」になり、内側線の合わせ先もその壁の内側線になる。
+ *
+ * **どの壁も通り抜けていない端でも、`帯`（同じ軸CL上で向かい合うオーナー壁＋仕上げ薄壁の組。
+ * `groupIntoBands`）の内部で止まっていれば同じく帯の手前の面まで詰める**。壁の端は帯の面
+ * （手前＝入隅の頂点／遠位＝角を閉じる延長）のどちらかに在るのが前提で、その中間＝帯の中で
+ * 隣り合う2枚の境目は描画上の端になりえない。対称壁ではこの境目が軸CL上にあり実際上生じないが、
+ * **偏芯壁の帯は軸CLに対して非対称**で、生成側のトリム（`trimStairUnderJunctions` の
+ * `snapToMaterialFace` は相手を1枚ずつ見る）が端を「帯の片割れの面」へ合わせると境目で終わる端が
+ * 実際に生じる（実機2026-09・1階Y1+3500×X2: 階段下部屋の偏芯壁と、そこで分割された通り芯の
+ * オーナー壁の双方）。詰めないと、面線・内側線が相手の帯の中へ仕上げ厚ぶん食い込んだまま描かれ、
+ * 妻線が帯を横切る線として残る。
  * ## パス0: 高さが違う壁の取り合い — 高い方が優先し、L字の端部を覆って取り巻く
  * ユーザー確定2026-09。平面切断高さ以下の腰壁は**切断面に存在せず**、天板を見下ろした輪郭で
  * 描かれる。にもかかわらずパス1〜3が腰壁を普通の壁として扱うと、切断面まで在る高い壁の面線・
@@ -238,6 +248,40 @@ function meetAtPlanCut(a, b) {
 }
 
 const AXIS_EPS = 0.5; // mm
+
+// 交差する壁を**帯**（同じ軸CL上で背中合わせに向かい合うオーナー壁＋仕上げ薄壁の組）へ束ね、
+// 材の範囲と`seams`（帯の中で隣り合う2枚が接する位置＝帯の面ではない内部の境目）を返す。
+// 帯の面（=最外の2面）と内部の境目を区別するために要る——対称壁では境目が軸CL上にあり
+// そこで終わる端は実際上生じないが、偏芯壁（階段下部屋の偏芯壁・CL偏芯壁）の帯は軸CLに対して
+// 非対称で、生成側のトリムが「相手の帯の片割れの面」へ端を合わせると境目で終わる端が実際に
+// 生じる（実機2026-09）。境目は**面向きが逆の2枚が接する位置**だけを数える（同じ面向きの壁が
+// 重なるだけの退化配置を帯と誤認しないため）。
+function groupIntoBands(facing) {
+  const bands = new Map();
+  for (const b of facing) {
+    const cur = bands.get(b.axisCLValue);
+    if (cur) {
+      cur.lo = Math.min(cur.lo, b.materialRange.lo);
+      cur.hi = Math.max(cur.hi, b.materialRange.hi);
+      cur.walls.push(b);
+    } else {
+      bands.set(b.axisCLValue, { lo: b.materialRange.lo, hi: b.materialRange.hi, walls: [b] });
+    }
+  }
+  for (const band of bands.values()) {
+    band.seams = [];
+    for (const p of band.walls) {
+      for (const q of band.walls) {
+        if (q.faceDir === p.faceDir) continue;
+        if (Math.abs(p.materialRange.hi - q.materialRange.lo) <= CONTAIN_EPS) {
+          band.seams.push(p.materialRange.hi);
+        }
+      }
+    }
+  }
+  return [...bands.values()];
+}
+
 function fullFaceRange(a, group) {
   let lo = a.materialRange.lo, hi = a.materialRange.hi;
   for (const s of group) {
@@ -313,6 +357,22 @@ export function resolveWallTJunctions(walls, kneeDropOverlays = null) {
           // 自分の全長が相手の帯に収まっている壁は「通り抜けた」のではないので詰めない。
           if (!(dir * (near - anchorCoord) > CONTAIN_EPS)) continue;
           if (trim == null || dir * (near - trim) < 0) trim = near; // 最も手前の壁
+        }
+        // どの壁も通り抜けていない場合でも、端が**帯の内部**（帯の面のどれでもない位置。
+        // 帯の中で隣り合う2枚の境目）で止まっていれば、そこは描画上の端ではない
+        // ——帯の手前の面まで詰める（モジュールヘッダ パス6の後半）。
+        if (trim == null) {
+          // 帯の中で隣り合う2枚の**境目**（seam）にちょうど乗る端だけを見る。どの壁の面でも
+          // ない位置で止まった端は相手の材を途中まで貫いただけのT字の突き当たりで、詰めない。
+          for (const band of groupIntoBands(facing)) {
+            if (!band.seams.some(v => Math.abs(coord - v) <= CONTAIN_EPS)) continue;
+            const near = dir > 0 ? band.lo : band.hi;
+            const far  = dir > 0 ? band.hi : band.lo;
+            if (!(dir * (coord - near) > CONTAIN_EPS)) continue; // 帯の手前の面より外＝詰めない
+            if (!(dir * (coord - far) < -CONTAIN_EPS)) continue; // 帯を貫き切った端＝出隅の延長
+            if (!(dir * (near - anchorCoord) > CONTAIN_EPS)) continue; // 交差部の駒（自分が帯に収まる）
+            if (trim == null || dir * (near - trim) < 0) trim = near;
+          }
         }
         if (trim == null || !(dir * (coord - trim) > CONTAIN_EPS)) continue;
         ensure(a.id).endExtend[end] = trim;
@@ -574,6 +634,16 @@ export function resolveWallTJunctions(walls, kneeDropOverlays = null) {
           // delta===0（内側線が既にtarget位置にあり動かす必要が無い）はどちらの式でも
           // 不採用（安全側）——キャップだけ残る自由端相当として扱う。
           const delta = dir * (target - coord);
+          // delta≒0（内側線が既に相手の内側線の位置にある）: 動かす必要が無いだけで**角である**。
+          // finEndは変えないが、妻線はその角（内側線同士の交点）を横切ってしまうので抑止する。
+          // 偏芯壁の帯どうしの出隅で起きる——薄い相手（帯の外側半分）では近位面と遠位面が
+          // TOUCH_TOLERANCE以内に収まるため出隅の述語も通り、方向ガードだけが残る形になる。
+          // 対称壁では端が相手の内側線の位置に来ること自体が無い（帯の面は±(wallBase/2+
+          // wallFinish)・軸CL、内側線は±wallBase/2）ため、この枝は偏芯壁でしか通らない。
+          if (Math.abs(delta) <= CONTAIN_EPS) {
+            ensure(a.id).capSuppress[end] = true;
+            continue;
+          }
           if (isConvex ? !(delta < 0) : !(delta > 0)) continue;
 
           const rec = ensure(a.id);

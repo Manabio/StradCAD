@@ -621,3 +621,47 @@ test('decodeSite: 不正なバイト列（他データの断片）を渡して�
   assert.doesNotThrow(() => decodeSite(garbage));
   assert.equal(decodeSite(garbage), null, 'GS.SITEフィールドが読めない＝不在扱いでnull');
 });
+
+// ==================================================================
+// 旧データ互換: 仕上げ面の向きが未指定のまま逆向きに保存された仕上げ薄壁の正規化
+// （normalizeLegacyFinishSide。finish/stair/stairUnderWalls.js ルール6の階段側薄壁）。
+// 材の帯は変えず、面線と内側線の**役割**だけを正しい向きへ入れ替える。
+// ==================================================================
+function makeThinWall(axisOffset, props) {
+  const graph = makeGraph();
+  const axisCL  = graph.addCenterLine(CenterLineType.VERTICAL,   -1500, { labeled: false, discipline: Discipline.ARCH });
+  const clStart = graph.addCenterLine(CenterLineType.HORIZONTAL, -6000, { labeled: false, discipline: Discipline.ARCH });
+  const clEnd   = graph.addCenterLine(CenterLineType.HORIZONTAL, -3500, { labeled: false, discipline: Discipline.ARCH });
+  const wall = graph.addWall(axisCL, axisOffset, true, clStart, 0, clEnd, 0,
+    { isRoomWall: true, wallFinish: 12.5, backingOffset: 0, backingDepth: 0, ...props });
+  const restored = makeGraph();
+  restoreGraph(restored, serializeGraph(graph));
+  return restored.shapeMap.get(wall.id);
+}
+
+test('復元: 向き未指定で逆向きに保存された階段側仕上げ薄壁は、帯を変えずに向きだけ正規化される', () => {
+  // 旧実装が生成した形: axisOffset=-(50+12.5)、finishSide なし → faceDir=-1（面が帯の遠い側）
+  const w = makeThinWall(-62.5, {});
+
+  assert.deepEqual(w.materialRange, { lo: -1562.5, hi: -1550 }, '材の帯は変わらないはず');
+  assert.equal(w.faceDir, 1, '仕上げ面は階段側（軸CL寄り）を向くはず');
+  assert.equal(w.axisValue, -1550, '面は帯の軸CL寄りの端');
+  assert.equal(w.axisValue - w.faceDir * w.wallFinish, -1562.5, '内側線は帯の反対の端');
+});
+
+test('【失敗系】復元: finishSide を持つ壁・ルール2の薄壁・下地を持つ壁は正規化の対象外', () => {
+  // finishSide 明示済み（通常の壁生成 resolveBackingOwnership・CL偏芯・修正後の生成）
+  const explicit = makeThinWall(-62.5, { finishSide: -1 });
+  assert.equal(explicit.axisOffset, -62.5);
+  assert.equal(explicit.faceDir, -1);
+
+  // ルール2の薄壁（|axisOffset|===wallFinish）は元から正しい向き
+  const rule2 = makeThinWall(-12.5, {});
+  assert.equal(rule2.axisOffset, -12.5);
+  assert.equal(rule2.faceDir, -1);
+
+  // 下地を持つ壁（backingDepth>0）は対象外
+  const owner = makeThinWall(-102.5, { backingOffset: -45, backingDepth: 90 });
+  assert.equal(owner.axisOffset, -102.5);
+  assert.equal(owner.faceDir, -1);
+});

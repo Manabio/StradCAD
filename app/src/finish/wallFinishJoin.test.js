@@ -18,14 +18,21 @@ test('resolveFinVisibility: 内側線は仕上げ面から仕上げ厚ぶん軸C
   assert.equal(resolveFinVisibility(negative).finBoundary, 3955, 'faceDirが負なら軸CL側＝+方向');
 });
 
-test('【失敗系】resolveFinVisibility: 仕上げ厚0・材の外・軸CL上に潰れる薄壁は不可視', () => {
+test('【失敗系】resolveFinVisibility: 仕上げ厚0・内側線が材の外へ出る壁は不可視', () => {
   assert.equal(resolveFinVisibility(mkWall(0, 57.5, 0, { lo: 0, hi: 57.5 })).finVisible, false);
   assert.equal(resolveFinVisibility(mkWall(0, 57.5, 100, { lo: 0, hi: 57.5 })).finVisible, false,
     '仕上げ厚が材幅を超えると内側線は材の外＝描かれない');
-  // |axisOffset|===wallFinish の薄壁（階段下部屋の外側仕上げ薄壁）は内側線が軸CL上に潰れる。
-  assert.equal(resolveFinVisibility(mkWall(0, 12.5, 12.5, { lo: 0, hi: 12.5 })).finVisible, false);
-  assert.equal(resolveFinVisibility(mkWall(0, 12.5 + ENDPOINT_EPS * 2, 12.5, { lo: 0, hi: 25 })).finVisible, true,
-    'ENDPOINT_EPSを超えて離れていれば可視');
+});
+
+// ---- 2026-09 偏芯壁対応: 内側線が軸CLと重なるかは可視性に関係しない。
+// `|axisOffset|===wallFinish` の薄壁（階段下部屋の外側仕上げ薄壁。偏芯壁は下地を室内側へ
+// 全寄せするので、その外側の仕上げ材の内側面がちょうど軸CL上に来る）で内側線を抑止すると、
+// 12.5mmの帯が1本線で描かれ、直交して取り合う壁の内側線が受け手を失って宙で終わる ----
+test('resolveFinVisibility: 内側線が軸CL上に来る薄壁でも、材の中にある限り描く', () => {
+  assert.equal(resolveFinVisibility(mkWall(0, 12.5, 12.5, { lo: 0, hi: 12.5 })).finVisible, true,
+    '仕上げ材の帯は2本線（仕上げ面と内側線）で描かれるはず');
+  assert.equal(resolveFinVisibility(mkWall(0, 12.5, 12.5, { lo: 0, hi: 12.5 })).finBoundary, 0);
+  assert.equal(resolveFinVisibility(mkWall(0, 12.5 + ENDPOINT_EPS * 2, 12.5, { lo: 0, hi: 25 })).finVisible, true);
 });
 
 test('finishJoinBoundary: 取り合い先は相手の内側線の位置。描かれない壁とは取り合わない', () => {

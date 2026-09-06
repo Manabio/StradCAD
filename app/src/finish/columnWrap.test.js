@@ -224,11 +224,11 @@ test('wrapColumnWithFinish: 各面の仕上げ材厚を記録する（残りが�
   assert.equal(wrapped.finishes.yLo, 12.5, 'うち仕上げ材は12.5mm（残り90mmが下地材）');
 });
 
-// 相手のfin線が描かれない壁（内側線が軸CL上に潰れる薄壁。resolveFinVisibility参照）とは
+// 相手のfin線が描かれない壁（内側線が材の外へ出る退化形。resolveFinVisibility参照）とは
 // 取り合えないため、トリムしても「自前の仕上げ厚で内側へ入れる」式へフォールバックする。
 test('wrapColumnWithFinish: 包みが仕上げ厚より薄い（トリム量が小さい）面は全部を仕上げ材とみなす', () => {
-  const wall = mkWall(false, { lo: -12.5, hi: 0 }, 0, { finish: 12.5 });
-  assert.equal(resolveFinVisibility(wall).finVisible, false, '前提: この薄壁のfin線は描かれない');
+  const wall = mkWall(false, { lo: -12.5, hi: 0 }, 0, { finish: 30 });
+  assert.equal(resolveFinVisibility(wall).finVisible, false, '前提: この壁のfin線は描かれない');
   const wrapped = wrapColumnWithFinish({ xLo: 0, xHi: 300, yLo: 5, yHi: 300, baseZ: 0 }, [wall]);
   assert.equal(wrapped.covers.yLo, 5, 'トリム量は隙間の5mm');
   assert.equal(wrapped.finishes.yLo, 5, '下地を入れる余地が無いので全部が仕上げ材');
