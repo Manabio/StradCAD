@@ -1,7 +1,7 @@
 import { useRef } from 'react';
 import { observer } from 'mobx-react-lite';
 import { runInAction } from 'mobx';
-import { getFittingOptions, WINDOW_CATALOG, getFixtureSymbols, findCatalogEntry, defaultOpeningHeight, HINGED_MECHANISMS } from './openingCatalog.js';
+import { getFittingOptions, WINDOW_CATALOG, getFixtureSymbols, findCatalogEntry, defaultOpeningHeight, HINGED_MECHANISMS, hingeSideMatters } from './openingCatalog.js';
 import { OpeningCategory } from '../core.js';
 import { findHostWall, maxOpeningWidthAt, findOpeningsOnWall } from './openingGeometry.js';
 import { ERR_OPENING_OUT_OF_WALL, ERR_OPENING_OVERLAP } from '../error.js';
@@ -11,6 +11,7 @@ import { AutoScaledFigure } from '../structural/sectionFigure/AutoScaledFigure.j
 import {
   beginOpeningFieldUndo, endOpeningFieldUndo, withOpeningUndo, validateOpeningEdit, removeOpeningWithUndo,
   materialGlassAfterFixtureChange, noteAfterSubTypeChange, swingSideAfterSubTypeChange,
+  flippedHingeSides, flippedSwingSide,
 } from './openingEdit.js';
 import { openingTagOf, fixtureSymbolOf } from './openingNumbering.js';
 
@@ -174,12 +175,21 @@ export const OpeningEditor = observer(function OpeningEditor({ graph, project, o
         <AutoScaledFigure primitives={figure} onEditDim={onEditDim} {...FIGURE_FRAME} />
         {entry?.mechanism && HINGED_MECHANISMS.has(entry.mechanism) && (
           <div style={{ position: 'absolute', top: 4, right: 4, display: 'flex', gap: 4 }}>
+            {/* 吊元反転は「開く面を維持したまま吊元だけを反対の枠端へ移す」操作（hingeSideだけを
+                反転すると開く面まで裏返る。確定値は openingEdit.js flippedHingeSides に一本化）。
+                両開き系は吊元が意味を持たないためボタン自体を出さない（hingeSideMatters）。 */}
+            {hingeSideMatters(entry.mechanism, entry) && (
+              <button type="button" style={{ fontSize: 11, padding: '2px 6px' }}
+                onClick={() => commitEdit(() => runInAction(() => {
+                  const next = flippedHingeSides(opening);
+                  opening.hingeSide = next.hingeSide;
+                  opening.swingSide = next.swingSide;
+                }))}>
+                吊元反転
+              </button>
+            )}
             <button type="button" style={{ fontSize: 11, padding: '2px 6px' }}
-              onClick={() => commitEdit(() => runInAction(() => { opening.hingeSide = -opening.hingeSide; }))}>
-              吊元反転
-            </button>
-            <button type="button" style={{ fontSize: 11, padding: '2px 6px' }}
-              onClick={() => commitEdit(() => runInAction(() => { opening.swingSide = -opening.swingSide; }))}>
+              onClick={() => commitEdit(() => runInAction(() => { opening.swingSide = flippedSwingSide(opening); }))}>
               開く方向反転
             </button>
           </div>

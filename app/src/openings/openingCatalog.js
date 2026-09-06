@@ -54,6 +54,19 @@ export const HINGED_MECHANISMS = new Set([
   OpeningMechanism.FIRE_FOLD,
 ]);
 
+// 吊元(hingeSide)が平面記号・姿図に実際に効くか（唯一の定義箇所）。両開き系は左右の枠端の
+// 両方が吊元になるため、*LeafSpecs（openingPlanSymbolGeometry.js）も mechanismPrimitives
+// （openingElevationFigure.js）も opening.hingeSide を参照しない＝「吊元反転」は意味を持たない
+// （それでも swingSide を道連れに反転すると、開く面だけが裏返るという別の不具合になる）。
+// FIRE_DOOR は fireLeaves:2、FIRE_FOLD は fireAngle:180 のときだけ両袖＝対称になる。
+export function hingeSideMatters(mechanism, entry) {
+  if (!HINGED_MECHANISMS.has(mechanism)) return false;
+  if (mechanism === OpeningMechanism.SWING_DOUBLE || mechanism === OpeningMechanism.FREE_DOUBLE) return false;
+  if (mechanism === OpeningMechanism.FIRE_DOOR) return (entry?.fireLeaves ?? 1) !== 2;
+  if (mechanism === OpeningMechanism.FIRE_FOLD) return (entry?.fireAngle ?? 90) !== 180;
+  return true;
+}
+
 // 非蝶番系のうち、一般記号自身が開口全幅の枠矩形（サッシ枠rect）を描く機構の集合（唯一の定義箇所）。
 // 詳細LODの方立（縦枠）はこれらの機構では記号側の枠矩形と内側の縦線が同一座標で重なるため、
 // 方立側は内側の縦線を持たない3辺（コの字）で描く必要がある——閉じた矩形のまま重ねると

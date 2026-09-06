@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {
   defaultOpeningHeight, defaultMaterialGlassFor, FIXTURE_SYMBOLS,
   findCatalogEntry, FITTING_CATALOG, WINDOW_CATALOG, IMPLEMENTED_MECHANISMS, OpeningMechanism,
-  normalizeSubType,
+  normalizeSubType, hingeSideMatters,
 } from './openingCatalog.js';
 
 test('defaultOpeningHeight: カタログに存在する種別はdefaultHeightを返す', () => {
@@ -114,4 +114,27 @@ test('【失敗系】normalizeSubType: 現行キー・未知キー・null はそ
   assert.equal(normalizeSubType('fitting', 'unknownFittingType'), 'unknownFittingType');
   assert.equal(normalizeSubType('window', 'swingDoor'), 'swingDoor'); // 窓カテゴリには読み替え表がない
   assert.equal(normalizeSubType('fitting', null), null);
+});
+
+// ---- 吊元(hingeSide)が意味を持つ機構の判定（OpeningEditor.jsx「吊元反転」ボタンの表示条件） ----
+test('hingeSideMatters: 片側吊りの機構はtrue、両開き系（吊元が両枠端）はfalse', () => {
+  for (const m of [OpeningMechanism.SWING, OpeningMechanism.SWING_CHILD, OpeningMechanism.SWING_IN,
+    OpeningMechanism.FREE, OpeningMechanism.PROJECT_V, OpeningMechanism.DREH_KIPP]) {
+    assert.equal(hingeSideMatters(m), true, `${m} は吊元が意味を持つはず`);
+  }
+  assert.equal(hingeSideMatters(OpeningMechanism.SWING_DOUBLE), false, '両開きは吊元が両枠端＝反転が無意味');
+  assert.equal(hingeSideMatters(OpeningMechanism.FREE_DOUBLE), false, '自由両開きも同様');
+});
+
+test('hingeSideMatters: FIRE_DOORはfireLeaves、FIRE_FOLDはfireAngleで分かれる', () => {
+  assert.equal(hingeSideMatters(OpeningMechanism.FIRE_DOOR, findCatalogEntry('fitting', 'fireDoorSingle')), true);
+  assert.equal(hingeSideMatters(OpeningMechanism.FIRE_DOOR, findCatalogEntry('fitting', 'fireDoorDouble')), false);
+  assert.equal(hingeSideMatters(OpeningMechanism.FIRE_FOLD, findCatalogEntry('fitting', 'fireFold90')), true);
+  assert.equal(hingeSideMatters(OpeningMechanism.FIRE_FOLD, findCatalogEntry('fitting', 'fireFold180')), false);
+});
+
+test('hingeSideMatters: 非蝶番系（引き戸・FIX等）はfalse', () => {
+  assert.equal(hingeSideMatters(OpeningMechanism.SLIDE_DOUBLE), false);
+  assert.equal(hingeSideMatters(OpeningMechanism.FIXED), false);
+  assert.equal(hingeSideMatters(undefined), false);
 });

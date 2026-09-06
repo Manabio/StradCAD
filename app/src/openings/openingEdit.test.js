@@ -14,8 +14,9 @@ import { openingTagAnchor } from './openingTagPlacement.js';
 import {
   placeOpeningWithDefaults, removeOpeningWithUndo, withOpeningUndo, pushOpeningUndo, snapshotOpening,
   materialGlassAfterFixtureChange, validateOpeningEdit, noteAfterSubTypeChange, openDirForMechanism,
-  defaultSwingSideFor, swingSideAfterSubTypeChange,
+  defaultSwingSideFor, swingSideAfterSubTypeChange, flippedHingeSides, flippedSwingSide,
 } from './openingEdit.js';
+import { closedAngleFor, leafOpenAngle, angleVectors } from './openingPlanSymbolGeometry.js';
 
 function makePlaneGraph(planeId = 'p1') {
   const plane = new Plane(planeId, 0, `${planeId}階`, 1, 1);
@@ -660,4 +661,57 @@ test('【Finding B 回帰】textFieldのtrim変換を経れば前後空白だけ
   renumberOpenings(graph, project);
   assert.equal(openingTagOf(openingA, project), 'AW-1', '枝番なしの単一バリアントになるはず');
   assert.equal(openingTagOf(openingB, project), 'AW-1');
+});
+
+// ================================================================
+// 「吊元反転」ボタン（flippedHingeSides）——吊元だけを移し、開く面は維持する
+// ================================================================
+
+// 平面記号が実際に開く直交方向（perp。isVertical壁ならx、水平壁ならy）の符号。
+// OpeningsLayer.jsx swingLeafSymbol と同じ経路（closedAngleFor → leafOpenAngle → angleVectors）
+// で求める——「hingeSide/swingSideの積」ではなく描画結果の向きで検証する。
+function openPerpSign(isVertical, hingeSide, swingSide) {
+  const closed = closedAngleFor(isVertical, hingeSide);
+  const { dir } = angleVectors(leafOpenAngle(closed, swingSide));
+  const perp = isVertical ? dir.x : dir.y;
+  return Math.sign(Math.round(perp));
+}
+
+test('flippedHingeSides: 吊元は反対の枠端へ移り、扉が開く面（perp方向）は変わらない（全4通り×縦横壁）', () => {
+  for (const isVertical of [false, true]) {
+    for (const hingeSide of [-1, 1]) {
+      for (const swingSide of [-1, 1]) {
+        const before = { hingeSide, swingSide };
+        const after = flippedHingeSides(before);
+        assert.equal(after.hingeSide, -hingeSide, '吊元は反対の枠端へ移るはず');
+        assert.equal(
+          openPerpSign(isVertical, after.hingeSide, after.swingSide),
+          openPerpSign(isVertical, before.hingeSide, before.swingSide),
+          `開く面（壁のどちらの面へ開くか）は維持されるはず (isVertical=${isVertical}, hingeSide=${hingeSide}, swingSide=${swingSide})`,
+        );
+      }
+    }
+  }
+});
+
+test('回帰: hingeSideだけを反転すると開く面が裏返る（修正前の不具合。flippedHingeSidesが防ぐ差分）', () => {
+  const before = { hingeSide: -1, swingSide: 1 };
+  const naive = { hingeSide: 1, swingSide: 1 }; // 修正前のボタン処理
+  assert.notEqual(
+    openPerpSign(false, naive.hingeSide, naive.swingSide),
+    openPerpSign(false, before.hingeSide, before.swingSide),
+    '前提: hingeSideのみの反転は開く面を裏返す（これが不具合）',
+  );
+  assert.notEqual(flippedHingeSides(before).swingSide, naive.swingSide, 'flippedHingeSidesはswingSideも反転して面を保つはず');
+});
+
+test('flippedSwingSide: 開く面だけを裏返し、吊元（hingeSide）には触れない', () => {
+  const opening = { hingeSide: -1, swingSide: 1 };
+  assert.equal(flippedSwingSide(opening), -1);
+  assert.equal(opening.hingeSide, -1, '吊元は呼び出しで変化しないはず');
+  assert.equal(
+    openPerpSign(false, opening.hingeSide, flippedSwingSide(opening)),
+    -openPerpSign(false, opening.hingeSide, opening.swingSide),
+    '開く面は裏返るはず',
+  );
 });

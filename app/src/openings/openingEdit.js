@@ -48,6 +48,28 @@ export function defaultSwingSideFor(wall, graph, centerCoord, hingeSide, mechani
   return swingSideTowardPerp(wall.isVertical, hingeSide, openDir);
 }
 
+/**
+ * 「吊元反転」ボタンの確定値（唯一の定義箇所。{hingeSide, swingSide} を返す）。
+ * 吊元だけを反対の枠端へ移し、扉が開く物理側（壁のどちらの面へ開くか）は維持する。
+ *
+ * 開く物理側は perpDir = (isVertical?1:-1) * swingSide * hingeSide（openingGeometry.js
+ * swingSideTowardPerp の順方向）で決まるため、hingeSide だけを反転すると積の符号が変わり
+ * 「吊元と一緒に開く面まで裏返る」——これが修正前の不具合。swingSide も同時に反転して
+ * 積（＝perpDir）を保つ。
+ *
+ * 両開き系（hingeSideMatters が false）は吊元自体が意味を持たず、swingSide だけが開く面を
+ * 決めるため、この反転を掛けると開く面だけが裏返る。呼び出し側（OpeningEditor.jsx）は
+ * hingeSideMatters が false のときボタン自体を出さない。
+ */
+export function flippedHingeSides(opening) {
+  return { hingeSide: -opening.hingeSide, swingSide: -opening.swingSide };
+}
+
+/** 「開く方向反転」ボタンの確定値。吊元（hingeSide）は動かさず、開く面だけを裏返す。 */
+export function flippedSwingSide(opening) {
+  return -opening.swingSide;
+}
+
 const EDITABLE = [
   'refOffset', 'width', 'height', 'subType', 'hingeSide', 'swingSide', 'fixtureType', 'sillHeight',
   'finish', 'materialGlass', 'frameDepth', 'hardware', 'note', 'handleHeight',
