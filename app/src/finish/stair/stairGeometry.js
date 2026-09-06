@@ -12,7 +12,7 @@ const seg  = (p, q) => ({ x1: p.x, y1: p.y, x2: q.x, y2: q.y, dashed: false });
 const line = (p, q) => ({ x1: p.x, y1: p.y, x2: q.x, y2: q.y });
 const clamp01 = (t) => Math.max(0, Math.min(1, t));
 
-export const LABEL_OUT = 350; // mm — U/D ラベルを始点（踏面1本目線）の外側へ押し出す距離
+export const LABEL_OUT = 150; // mm — U/D ラベルを始点（踏面1本目線）の外側へ押し出す距離（文字サイズ200mmの1文字ぶん踏面線側へ寄せた値）
 export const LANE_GAP = 100; // mm — 折返し・回り階段の往路・復路の間のあき（標準・詳細LOD。簡略は0を渡す）
 const NUM_GAP   = 1 / 4; // 段数数字を基点側の線（踏面線／踊場・周回部の入口境界線）から離す量（区間内比率）
 const NUM_OUT   = 0.15;  // 段数字を幅方向の外周側（隣接壁側）へ寄せる位置（外側端からの距離。レーン/アーム/全幅で共通利用）
@@ -373,8 +373,14 @@ function radialMix(pivot, perim, ratio = TURN_OUT) {
 }
 
 // 設置階上階への到達番号（最終番号 = totalSteps）。upper のみ呼ぶ。
-function emitArrival(out, totalSteps, p, detail) {
-  if (detail) out.stepNumbers.push({ x: p.x, y: p.y, text: String(totalSteps) });
+// 描画位置 p は他の段数字とまったく同じ規則（自分の段の起点線から NUM_GAP ぶん先）で決める。
+// 到達段は上階の床そのものなので、その位置は図の到達辺より外側（床側）になり、番号どうしの
+// 間隔が全段で 1 ピッチにそろう。ただし間引き判定（StairLayer の破れ線先セル判定）まで外へ
+// 出すと図の外＝判定領域外になって番号が消えるため、判定用アンカー pClip は従来どおり
+// 到達辺上（図の内側）に置き、可視範囲は変えない。
+function emitArrival(out, totalSteps, p, pClip, detail) {
+  if (!detail) return;
+  out.stepNumbers.push({ x: p.x, y: p.y, text: String(totalSteps), clipX: pClip.x, clipY: pClip.y });
 }
 
 // 直進（STRAIGHT）: マス番号→走行軸mm（そのマスの基点側境界）。
@@ -433,7 +439,8 @@ function buildStraight(stair, b, { view, detail, riser, breakOverhangMm = 0 }) {
     numberLimitMm: view === 'install' ? shownMm : Infinity,
     nosingMm,
   });
-  if (view !== 'install') emitArrival(out, totalSteps, f.pt(1, numS), detail);
+  // 到達番号は最終マスの続き（到達辺から NUM_GAP ピッチ先＝上階の床側）
+  if (view !== 'install') emitArrival(out, totalSteps, f.pt(1 + NUM_GAP / run.cells, numS), f.pt(1, numS), detail);
   return { ...out, outline, arrows, breakLine };
 }
 
@@ -489,7 +496,7 @@ function buildStraightLanding(stair, b, { view, detail, riser, spans, breakOverh
     treadLine: (mm) => lineAt(landingEnd + mm),
     labelPt:   (mm) => f.pt(tAt(landingEnd + mm), numS),
   }, { detail, limitMm: limitMm - landingEnd, numberLimitMm: numberLimitMm - landingEnd, nosingMm });
-  if (view !== 'install') emitArrival(out, totalSteps, f.pt(1, numS), detail);
+  if (view !== 'install') emitArrival(out, totalSteps, f.pt(1 + tAt(NUM_GAP * pitch2), numS), f.pt(1, numS), detail);
   return { ...out, outline, arrows, breakLine };
 }
 
@@ -600,7 +607,7 @@ function buildSwitchback(stair, b, { view, detail, spans, laneGapMm = 0, breakOv
     ? uTurnArrow([f.pt(0, cA), f.pt(tMid, cA), f.pt(tMid, cB), uArrowEnd], 'U')
     : uTurnArrow([f.pt(0, cB), f.pt(tMid, cB), f.pt(tMid, cA), f.pt(0, cA)], 'D')];
 
-  if (!isInstall) emitArrival(out, totalSteps, f.pt(0, 1 - NUM_OUT), detail);
+  if (!isInstall) emitArrival(out, totalSteps, f.pt(-tAt(NUM_GAP * pitchB), 1 - NUM_OUT), f.pt(0, 1 - NUM_OUT), detail);
   return { ...out, outline, arrows, breakLine };
 }
 
@@ -700,7 +707,7 @@ function buildWinding(stair, b, { view, detail, spans, laneGapMm = 0, breakOverh
     ? uTurnArrow([f.pt(0, cA), f.pt(tMid, cA), f.pt(tMid, cB), uArrowEnd], 'U')
     : uTurnArrow([f.pt(0, cB), f.pt(tMid, cB), f.pt(tMid, cA), f.pt(0, cA)], 'D')];
 
-  if (!isInstall) emitArrival(out, totalSteps, f.pt(0, 1 - NUM_OUT), detail);
+  if (!isInstall) emitArrival(out, totalSteps, f.pt(-tAt(NUM_GAP * pitchB), 1 - NUM_OUT), f.pt(0, 1 - NUM_OUT), detail);
   return { ...out, outline, arrows, breakLine };
 }
 
@@ -867,7 +874,7 @@ function buildLTurn(stair, b, { view, detail, riser, spans, breakOverhangMm = 0 
     const end = breakDiag.atPoint(toWorld(midU, inCorner ? runV : bpV));
     arrows = [uTurnArrow([toWorld(0, midV), toWorld(midU, midV), end], 'U')];
   }
-  if (!isInstall) emitArrival(out, totalSteps, toWorld(1 - NUM_OUT, 0), detail);
+  if (!isInstall) emitArrival(out, totalSteps, toWorld(1 - NUM_OUT, -NUM_GAP * pitch2), toWorld(1 - NUM_OUT, 0), detail);
   return { ...out, outline, arrows, breakLine };
 }
 
@@ -1035,7 +1042,7 @@ function buildOpenWell(stair, b, { view, detail, riser, breakOverhangMm = 0 }) {
       ? runArrow(toWorld(runW, aw / 2), toWorld(0, aw / 2), '')
       : runArrow(toWorld(0, aw / 2), toWorld(runW, aw / 2), 'D'));
   }
-  if (!isInstall) emitArrival(out, totalSteps, toWorld(0, aw / 2), detail);
+  if (!isInstall) emitArrival(out, totalSteps, toWorld(-NUM_GAP * pitch3, aw / 2), toWorld(0, aw / 2), detail);
   return { ...out, outline, arrows, breakLine };
 }
 
@@ -1059,8 +1066,10 @@ function buildOpenWell(stair, b, { view, detail, riser, breakOverhangMm = 0 }) {
  * @returns {{
  *   treads:{x1,y1,x2,y2,heavy?}[], outline:{x1,y1,x2,y2,dashed,thin?,port?,side?}[],
  *   arrows:{x1,y1,x2,y2,labelX,labelY,label}[], breakLine:{x1,y1,x2,y2}[]|null,
- *   stepNumbers:{x,y,text}[],
+ *   stepNumbers:{x,y,text,clipX?,clipY?}[],
  * }}
+ *   stepNumbers の clipX/clipY … 間引き判定用のアンカー（省略時は x/y）。到達番号だけは
+ *   描画位置が図の外（上階の床側）に出るため、判定は到達辺上の点で行う。
  *   treads の heavy … レーンあきの閉じ辺（内側ささらが取りつく踊り場線）。ささらと同じ太さで描く。
  *   outline の port … 'entry'=区画初段（上り口）／'arrival'=設置階上階への到達辺（下り口）。
  *   thin な線分にのみ付く（stairPortEdges が開口辺の特定に使う）。

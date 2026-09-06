@@ -63,7 +63,8 @@ function chevronPoints(pts, len) {
  *   （beyondBreakClip.js）でクリップする——破れ線を跨ぐ線分は交点で切り、跨がない線分は
  *   中点が beyondBreakBounds（install 階段の cellsBeyondBreak をワールド矩形へ解決したもの。
  *   stairGeometry.js で全タイプ単一ソース判定済み）に入るかで採否を決める。段数字は
- *   点のためアンカー点が beyondBreakBounds（破れ先）に入る番号だけ残す（下階階段の
+ *   点のためアンカー点（clipX/clipY。無ければ描画点）が beyondBreakBounds（破れ先）に入る
+ *   番号だけ残す。到達番号は描画位置が図の外（上階の床側）にあるため判定は到達辺上で行う（下階階段の
  *   踏面番号・矢印先端・重複踏面が破れ線手前に残って見える不良の対策）。
  * install/upper の両ビュー（設置階・設置上階）を同じ経路で描く。
  * bounds・spans は呼び出し側でワールド座標に解決済みのため、上階（peek した非アクティブ階）でも描ける。
@@ -274,7 +275,8 @@ export const StairLayer = observer(({
       );
     });
     // 段数字は踏面線のクリップとは独立したルールで間引く: 数字は点なので、重なる upper エントリ
-    // ではアンカー点が install の破れ線先セル（beyondBreakBounds）に入る番号（＝下階から登って
+    // ではアンカー点（clipX/clipY。到達番号だけは描画位置ではなく到達辺上の点）が install の
+    // 破れ線先セル（beyondBreakBounds）に入る番号（＝下階から登って
     // きた階段の破れ先の部分。到達番号を含む）だけ残す。手前側の番号は install 自身が描くため
     // 重複させない。領域が導出不能（空/未提供）なら従来どおり安全側で全抑止する。
     // stepNumbers=false（平面モード以外）は段数字を丸ごと描かない——注記は平面のみという
@@ -282,7 +284,7 @@ export const StairLayer = observer(({
     // どのモードでも描き続ける。
     const visibleNumbers = !showStepNumbers ? [] : (e.installOverlap
       ? (e.beyondBreakBounds?.length > 0
-          ? geom.stepNumbers.filter((n) => pointInRects(e.beyondBreakBounds, n.x, n.y))
+          ? geom.stepNumbers.filter((n) => pointInRects(e.beyondBreakBounds, n.clipX ?? n.x, n.clipY ?? n.y))
           : [])
       : geom.stepNumbers);
     const stepNumbers = visibleNumbers.map((n, i) => (
