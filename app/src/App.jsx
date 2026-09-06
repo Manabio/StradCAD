@@ -54,7 +54,7 @@ import { recomputeStructuralComposition, runStructuralModeSetup, reflectStructur
 import { figureBindingManager } from './figure/FigureBindingManager.js';
 import { floorSwapManager } from './storage/FloorSwapManager.js';
 import { saveFloor, loadFloor } from './storage/db.js';
-import { readLocalAutosaveRaw, parseAutosaveData, writeLocalAutosave, parseOpenedFileBytes, downloadDocumentFile, defaultDocumentFileName } from './storage/localSnapshot.js';
+import { parseOpenedFileBytes, downloadDocumentFile, defaultDocumentFileName } from './storage/localSnapshot.js';
 import { SaveFileDialog } from './ui/SaveFileDialog.jsx';
 import { isDocumentEnvelope } from './storage/documentFile.js';
 import { SiteInfoPanel }       from './ui/SiteInfoPanel.jsx';
@@ -1101,29 +1101,13 @@ const App = observer(() => {
       setSaveDialogDefaultName(defaultDocumentFileName());
       return;
     }
-    if (id === 'load') {
-      const raw = readLocalAutosaveRaw();
-      if (!raw) { setToast({ msg: '自動保存データが見つかりません', key: Date.now() }); return; }
-      try {
-        restoreGraph(graph, parseAutosaveData(raw));
-        setToast({ msg: '読込み完了', key: Date.now() });
-      } catch {
-        setToast({ msg: '読込みに失敗しました', key: Date.now() });
-      }
-      return;
-    }
-    if (id === 'export') {
-      writeLocalAutosave(graph);
-      setToast({ msg: '書出し（自動保存）完了', key: Date.now() });
-      return;
-    }
     if (id === 'settings') {
       setShowCalibration(true);
     }
   }
 
   // 保存ファイル名ダイアログの確定。文書全体（全階・plane一覧・通り芯/構造情報・敷地・調査/計画情報）を
-  // IDB へ明示保存で確定し、同じ内容を .stq 文書ファイルとしてダウンロード書き出しする（「開く」と対）
+  // IDB へ明示保存で確定し、同じ内容を .stq 文書ファイルとしてダウンロード書き出しする（「読込み」と対）
   function handleSaveConfirm(fileName) {
     setSaveDialogDefaultName(null);
     exportDocument()
@@ -1154,9 +1138,9 @@ const App = observer(() => {
       // 置き換えて reload（通常のブート復元経路をそのまま使う。resetAll と同じ理由）
       if (isDocumentEnvelope(parsed)) {
         setFloorConfirm({
-          message: '文書ファイルを開きます。現在の内容（保存していない編集を含む）は置き換えられます。よろしいですか？',
+          message: '文書ファイルを読み込みます。現在の内容（保存していない編集を含む）は置き換えられます。よろしいですか？',
           buttons: [
-            { label: '開く',       value: 'ok', primary: true },
+            { label: '読込み',     value: 'ok', primary: true },
             { label: 'キャンセル', value: 'cancel' },
           ],
           onSelect: (v) => {
@@ -1172,7 +1156,7 @@ const App = observer(() => {
       // 旧形式（単一グラフ FlatBuffers / 旧JSONスナップショット）: アクティブ階へ復元
       try {
         restoreGraph(graph, parsed);
-        setToast({ msg: 'ファイルを開きました', key: Date.now() });
+        setToast({ msg: 'ファイルを読み込みました', key: Date.now() });
       } catch {
         setToast({ msg: 'ファイルの読み込みに失敗しました', key: Date.now() });
       }

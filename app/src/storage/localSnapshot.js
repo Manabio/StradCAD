@@ -1,34 +1,15 @@
-// ハンバーガーメニューの「読込/書出」（localStorage 自動保存）・ファイル読込のパース処理。
-// App.jsx から抽出。ディスパッチ（id分岐）・FileReader配線・toast表示は App.jsx に残す。
-import { serializeGraph } from '../graphSnapshot.js';
+// 文書ファイル（.stq）の書き出し・読み込みパース処理。App.jsx から抽出し、
+// ディスパッチ（id分岐）・FileReader配線・toast表示は App.jsx に残す。
+// 旧「読込み/書出し」メニューが使っていた localStorage 自動保存（単一グラフ）は廃止済み——
+// 残骸キーの掃除だけを clearLocalAutosave が担う。
 
-const AUTOSAVE_KEY = 'strad-autosave';
+// 旧・単一グラフ自動保存のキー（廃止済み。現在は掃除のためだけに参照する）。
+const LEGACY_AUTOSAVE_KEY = 'strad-autosave';
 
-// localStorage の自動保存データ（生文字列）を読む。未保存なら null。
-export function readLocalAutosaveRaw() {
-  return localStorage.getItem(AUTOSAVE_KEY);
-}
-
-// 自動保存データを消去する（「新規（全消去）」メニュー専用）。AUTOSAVE_KEY の唯一の所有者は
-// このモジュール——他モジュール（store.js 等）はキー文字列をハードコードしないこと。
+// 旧・自動保存データの残骸を消去する（「新規（全消去）」メニュー専用）。キー文字列の唯一の
+// 所有者はこのモジュール——他モジュール（store.js 等）はハードコードしないこと。
 export function clearLocalAutosave() {
-  localStorage.removeItem(AUTOSAVE_KEY);
-}
-
-// 自動保存データ（base64=新形式 or JSON文字列=旧形式）を restoreGraph に渡せる形へパースする。
-// 不正な内容は例外を投げる（呼び出し側が catch して toast を出す）。
-export function parseAutosaveData(raw) {
-  return raw.trimStart().startsWith('{')
-    ? JSON.parse(raw)
-    : Uint8Array.from(atob(raw), c => c.charCodeAt(0));
-}
-
-// 現在のグラフを base64 化して localStorage へ書き出す（大容量でも安全な変換方式）。
-export function writeLocalAutosave(graph) {
-  const bytes = serializeGraph(graph);
-  let binary = '';
-  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
-  localStorage.setItem(AUTOSAVE_KEY, btoa(binary));
+  localStorage.removeItem(LEGACY_AUTOSAVE_KEY);
 }
 
 // 既定の文書ファイル名（拡張子なし・保存日時入り）。保存ダイアログの初期値に使う。
@@ -39,7 +20,7 @@ export function defaultDocumentFileName() {
 }
 
 // 文書ファイル（JSONエンベロープ文字列。store.js の exportDocument が構築）を
-// .stq としてダウンロード書き出しする（「開く」が読める形式）。
+// .stq としてダウンロード書き出しする（「読込み」が読める形式）。
 // fileName は拡張子なしでも可（.stq を補う）。省略時は既定名。
 export function downloadDocumentFile(json, fileName = defaultDocumentFileName()) {
   const blob = new Blob([json], { type: 'application/json' });

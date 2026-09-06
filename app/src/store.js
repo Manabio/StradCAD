@@ -389,7 +389,7 @@ export async function importDocument(envelope) {
 
 /**
  * すべてのIndexedDBストア（floors/projects/savedFloors）と、文書系のlocalStorageキー
- * （保存フラグ・ブートplaneId・projectId）、および「書出し」（自動保存）データを消去する。
+ * （保存フラグ・ブートplaneId・projectId）、および旧「書出し」（廃止済みlocalStorage自動保存）の残骸を消去する。
  * 「新規（全消去）」メニュー専用。
  * 画面校正（strad_pxPerMmX/Y 等、viewport.js）は端末設定のため対象外——文書ではなく端末に紐づく。
  * in-memory再初期化は行わない（呼び出し側が location.reload() で再起動すること。module singleton・

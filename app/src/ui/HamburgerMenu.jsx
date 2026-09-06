@@ -5,10 +5,8 @@ const BUILDING_INFO_ITEM   = { id: 'building-info',   label: '建築情報' };
 
 const FILE_ITEMS = [
   { id: 'new',      label: '新規（全消去）' },
-  { id: 'open',     label: '開く' },
+  { id: 'open',     label: '読込み' },  // 文書ファイル(.stq)の読み込み。旧localStorage退避「読込み/書出し」は廃止済み
   { id: 'save',     label: '保存' },
-  { id: 'load',     label: '読込み' },
-  { id: 'export',   label: '書出し' },
   { id: 'settings', label: '画面校正' },
 ];
 
