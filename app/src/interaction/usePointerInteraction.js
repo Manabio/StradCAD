@@ -27,12 +27,14 @@ import { isLastGridOnAxis } from '../transform/centerLineConvert.js';
 import { interiorWallSpans } from '../finish/edgeClassify.js';
 import { isEligibleWallSpan } from '../finish/kneeDropWall.js';
 
-// project, graph, size, appMode, columnAxisMode, modeRef, menu, setMenu, onToast, onUndo, onRedo
-// は毎レンダー App.jsx から渡す（useCallback/useMemo で固定しない——modeRef.current・graph の
-// 鮮度が「毎レンダー再生成」前提に依存する）。
+// project, graph, size, appMode, columnAxisMode, modeRef, menu, setMenu, onToast, onUndo, onRedo,
+// onExitOpeningMode は毎レンダー App.jsx から渡す（useCallback/useMemo で固定しない——
+// modeRef.current・graph の鮮度が「毎レンダー再生成」前提に依存する）。
+// onExitOpeningMode: 建具モードで建具ターゲット以外の描画エリアをタップしたときの脱出
+// （App.jsx の handleModeChange('floorplan')。境界処理を通す唯一の経路をそのまま呼ぶ）。
 export function usePointerInteraction({
   project, graph, size, appMode, columnAxisMode, modeRef,
-  menu, setMenu, onToast, onUndo, onRedo,
+  menu, setMenu, onToast, onUndo, onRedo, onExitOpeningMode,
 }) {
   const [isPanning,   setIsPanning]   = useState(false);
   const [pressPos,    setPressPos]    = useState(null);
@@ -461,6 +463,26 @@ export function usePointerInteraction({
     modeRef.current?.commitMove();
   }
 
+  // 建具モードの脱出タップか（＝建具ターゲット以外の描画エリアのタップか）。
+  // 「建具ターゲット」は2種類あり、判定方法が違う:
+  //   ・壁上の建具本体 → nearOpening（snap.js の近傍判定。タップで選択する対象そのもの）
+  //   ・記号丸        → Konva のヒット結果。記号丸は壁から離れた室内側に置かれるため近傍判定
+  //                     では拾えない。OpeningTagLayer の Circle だけが listening なので、
+  //                     e.target が Stage 以外＝記号丸に当たった、と判定できる。
+  // ガター帯（通り芯エリア）は描画エリアではないので脱出させない。
+  // 呼び出し側で drag・長押しメニュー・描画/移動中は既に除外済み。加えて「タップ」に限定する
+  // ——長押しが成立済み（isPending()===false）なら脱出しない。建具モードの長押しは壁・開口以外で
+  // メニューを出さない（menuItems.js）ため、長押ししてそのまま離しただけでモードが変わると驚く。
+  // ガター側の押下は longPress.begin を通らないので、この判定だけでも二重に弾かれる。
+  function isOpeningModeExitTap(e) {
+    if (!longPress.isPending()) return false;
+    if (nearOpeningRef.current) return false;
+    const stage = e.target?.getStage?.();
+    if (!stage || e.target !== stage) return false;
+    const { clientX, clientY } = e.evt;
+    return !isInGutter(clientX, clientY, size.width, size.height);
+  }
+
   // ---- ポインタ Up ----
   const handlePointerUp = (e) => {
     // ---- 展開モード ----
@@ -552,11 +574,16 @@ export function usePointerInteraction({
     moveDownRef.current = null;
 
     // 平面モード: 通常タップで開口を選択（パレット表示）/ 空白タップで選択解除。
-    // 建具モード: 通常タップで開口を選択（パネルに姿図・フォームを表示）/ 空白タップで選択解除。
+    // 建具モード: 建具ターゲットのタップで選択（パネルに姿図・フォームを表示）/ それ以外の
+    // 描画エリアのタップで平面モードへ脱出（脱出経路2026-09。パネルの×・モードバーに次ぐ3本目）。
     // 描画・移動・パン・長押しメニュー中は対象外。
     if ((appMode === 'floorplan' || appMode === 'opening') && !menu && !drag.current
         && !drawDownRef.current && !modeRef.current?.moveState && !modeRef.current?.drawState) {
-      modeRef.current?.selectOpening?.(nearOpeningRef.current?.id ?? null);
+      if (appMode === 'opening' && isOpeningModeExitTap(e)) {
+        onExitOpeningMode?.();
+      } else {
+        modeRef.current?.selectOpening?.(nearOpeningRef.current?.id ?? null);
+      }
     }
 
     // 描画モード: タップで完成

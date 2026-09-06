@@ -181,6 +181,9 @@ const App = observer(() => {
     onToast: msg => setToast({ msg, key: Date.now() }),
     onUndo: performUndo,
     onRedo: performRedo,
+    // 建具モードの脱出（建具ターゲット以外の描画エリアのタップ）。パネルの×と同じ経路を呼ぶ
+    // ——handleModeChange を通すことで境界処理（modeBoundaries.opening.exit）が必ず走る。
+    onExitOpeningMode: () => handleModeChange('floorplan'),
   });
 
   // 起動時IDB復元の完了をマウント時1回だけ待ち、activeFloorId をproject.activePlaneIdへ同期する。
