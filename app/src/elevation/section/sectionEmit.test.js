@@ -320,34 +320,34 @@ test('【QA修正3・失敗系・WP-E2・最終フィルタ】emitLine: 水平�
   assert.equal(prim.dash, undefined, 'dashは付かないはず');
 });
 
-// ---- アキX連結（開口+上階アキ=1組のX。defer D1の一般規則） ----
+// ---- アキX: 建具の開口は連結に参加しない（ユーザー明示指示2026-09。旧defer D1は廃止） ----
 
-test('【WP-E2・D1】emitOpenGapMarks: 隣接列のopenPassThrough帯とopen帯がz範囲重なりで連結し1組のXになる', () => {
+test('【アキX】emitOpenGapMarks: openingPassThrough帯はアキ扱いにならず、隣のopen帯だけが1組のXになる', () => {
   const cut = makeCut({ baseFloorZ: 0 });
   const columns = [
-    // 開口相当（本来kind:'wall'だがWP-E7でopeningPassThrough:trueが付く想定）とアキが隣接し、
-    // z範囲が重なる（1900-2400 と 1800-2400）。
+    // 建具の開口（kind:'wall'＋openingPassThrough）と上階アキが隣接しz範囲が重なる構成。
+    // 旧仕様では連結して「1組の大きなX」になり、姿図の上をバツが通っていた。
     { x0: 0, x1: 500, worldLo: 0, worldHi: 500,
       bands: [{ kind: 'wall', z0: 1900, z1: 2400, distMm: 50, openingPassThrough: true }] },
     { x0: 500, x1: 1000, worldLo: 500, worldHi: 1000,
       bands: [{ kind: 'open', z0: 1800, z1: 2400 }] },
   ];
-  const prims = emitOpenGapMarks(columns, cut);
-  assert.equal(prims.filter(p => p.type === 'line').length, 2,
-    '連結成分が1つなら対角線2本(=1組のX)のはず（実際:' + prims.length + '本）');
+  const lines = emitOpenGapMarks(columns, cut).filter(p => p.type === 'line');
+  assert.equal(lines.length, 2, 'open帯単独の1組(2本)のはず');
+  // バツの範囲は open 帯の列（x:500-1000）だけ＝建具の列(x:0-500)へ伸びない。
+  assert.equal(Math.min(...lines.flatMap(p => [p.x1, p.x2])), 500,
+    'バツの左端は建具の列へ食い込まないはず');
 });
 
-test('【失敗系・WP-E2・D1】emitOpenGapMarks: z範囲が重ならなければ連結せず2組のX(4本)になる', () => {
+test('【失敗系・アキX】emitOpenGapMarks: openingPassThrough帯だけの列にはバツを描かない', () => {
   const cut = makeCut({ baseFloorZ: 0 });
   const columns = [
     { x0: 0, x1: 500, worldLo: 0, worldHi: 500,
       bands: [{ kind: 'wall', z0: 100, z1: 400, distMm: 50, openingPassThrough: true }] },
-    { x0: 500, x1: 1000, worldLo: 500, worldHi: 1000,
-      bands: [{ kind: 'open', z0: 1800, z1: 2400 }] },
   ];
   const prims = emitOpenGapMarks(columns, cut);
-  assert.equal(prims.filter(p => p.type === 'line').length, 4,
-    'z範囲が重ならなければ連結されず、2組のX(4本)のはず');
+  assert.equal(prims.filter(p => p.type === 'line').length, 0,
+    '建具の姿図の場所にバツは出ないはず');
 });
 
 test('【失敗系・WP-E2・D1】emitOpenGapMarks: openingPassThroughが無いkind:wall帯はアキ扱いにならず連結しない', () => {
@@ -1150,12 +1150,12 @@ test('【移行・アキ】emitOpenGapMarks: 対角2本（一点鎖線）＋「�
   assert.deepEqual([text.x, text.y], [2000, -1300], 'テキストは抜けの中心');
 });
 
-test('【失敗系・移行・アキ】emitOpenGapMarks: 建具の開口を含む成分には矩形・テキストを付けない（バツのみ）', () => {
+test('【失敗系・移行・アキ】emitOpenGapMarks: 建具の開口には矩形・テキスト・バツのいずれも付けない', () => {
   const columns = [{ x0: 1000, x1: 3000, worldLo: 1000, worldHi: 3000,
     bands: [{ kind: 'wall', z0: 600, z1: 2000, distMm: 500, openingPassThrough: true }] }];
   const prims = emitOpenGapMarks(columns, makeCut({ baseFloorZ: 0 }));
   assert.equal(gapText(prims), undefined, '建具の姿図が描く場所を「アキ」と書いてはいけない');
-  assert.equal(gapDiagonals(prims).length, 2, 'バツ自体は従来どおり出る');
+  assert.equal(gapDiagonals(prims).length, 0, '建具の姿の前にバツは描かない');
 });
 
 test('【失敗系・移行・アキ】emitOpenGapMarks: 床断面より下の抜けには矩形・テキストを付けない', () => {

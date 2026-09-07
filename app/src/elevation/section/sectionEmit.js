@@ -1036,10 +1036,9 @@ export function joinToStairProfile(wallContent, stairContent, cut, ref) {
 
 /**
  * SectionColumn[] → アキのX（対角線2本。AMBIGUITY E）のプリミティブ列。
- * kind==='open' の band、および openingPassThrough:true が付いた band（kind問わず。§5.4・
- * WP-E7でopeningがこのフラグを立てる想定——本関数自体はフラグの由来を問わない）を
+ * kind==='open' の band（ただし openingPassThrough:true が付いたものは除く。下記）を
  * 「アキ扱い」とみなし、列をまたいでz範囲が重なるもの同士を連結成分としてまとめてから
- * 1組ずつXを描く（defer D1「開口が2階アキと連続する場合の1つの大きなX」の一般規則。§7）。
+ * 1組ずつXを描く。
  * @param {import('./sectionTypes.js').SectionColumn[]} columns
  * @param {import('./sectionTypes.js').SectionCut} cut
  * @param {{ceilZ?:number}} [emitCtx]
@@ -1068,14 +1067,15 @@ export function emitOpenGapMarks(columns, cut, emitCtx = {}) {
       // **面の平面にある腰壁の天端の上（＝本当のアキ）は下が'wall'帯なので影響しない**
       // ——「6」Cの「バツ左下点は左側壁断面と腰壁上端の交点へ」はそちらの構成で、従来どおり。
       const overCutWall = col.bands.some(x => x.kind === 'cut' && Math.abs(x.z1 - b.z0) < GAP_EPS);
-      if ((b.kind === 'open' || b.openingPassThrough) && !overCutWall) {
-        // viaOpening: 建具の開口として抜けている区間。**アキ標記（矩形＋「ア キ」）は付けない**
-        // ——そこは建具の姿図が描く場所であり「アキ」ではない（バツは従来どおり出す。
-        // 「開口が2階アキと連続する場合は1組の大きなX」の確認済み仕様を壊さないため）。
+      // **建具の開口はアキ扱いにしない**（ユーザー明示指示2026-09「建具の姿の前に『バツ』不要」）
+      // ——そこは建具の姿図が描く場所であり「アキ」ではない。開口をアキのセルに入れると、
+      // 真上の上階アキと連結して1つの塊になり、その塊の対角＝バツが姿図の上を通ってしまう
+      // （旧仕様「開口が2階アキと連続する場合の1つの大きなX」＝defer D1。本指示で廃止）。
+      // 上階アキ自身は開口を外しても単独の連結成分として残るので、そちらのバツは従来どおり出る。
+      if (b.kind === 'open' && !b.openingPassThrough && !overCutWall) {
         const x0 = Math.max(col.x0, faceLoX), x1 = Math.min(col.x1, faceHiX);
         if (x1 - x0 <= GAP_EPS) continue; // 面の外（延長ぶん）だけの列
-        cells.push({ colIndex, x0, x1, z0: b.z0, z1: b.z1,
-          viaOpening: b.kind !== 'open' || b.openingPassThrough === true });
+        cells.push({ colIndex, x0, x1, z0: b.z0, z1: b.z1 });
       }
     }
   });
@@ -1155,9 +1155,8 @@ export function emitOpenGapMarks(columns, cut, emitCtx = {}) {
     // 「1組の大きなX」（WP-E7 D1の確認済み仕様）が細切れになるため採らない。
     const blockers = obstructionRects(columns, x0, x1,
       Math.min(z0, LC.lo, RC.lo), Math.max(z1, LC.hi, RC.hi));
-    // アキ標記の「ア キ」（旧 elevationFigure.js の appendGapMark から移設）。次の3条件を
-    // すべて満たす連結成分にだけ付ける:
-    //   - 建具の開口を含まない（viaOpening）… そこは建具の姿図の場所で「アキ」ではない
+    // アキ標記の「ア キ」（旧 elevationFigure.js の appendGapMark から移設）。次の2条件を
+    // すべて満たす連結成分にだけ付ける（建具の開口はそもそもセルに入らない＝上記）:
     //   - 外接矩形そのもの（全セルが同じz範囲）… L字に食い込んだ成分では外接矩形の中心が
     //     アキでない場所（腰壁の上等）に落ち、文字が実体の上に乗る
     //   - 床断面より上（dash==='center'）… 床断面より下の抜けは「向こう側の断面＝細線の破線」で、
@@ -1169,7 +1168,7 @@ export function emitOpenGapMarks(columns, cut, emitCtx = {}) {
     // 線種の情報を上書きしてしまう**（実機「5」A: X2通りの壁の断面（太線）の上に、アキ矩形の
     // 左辺（中線）が重なっていた）。抜けの範囲はバツと「ア キ」で足りる。
     const isRect = g.every(c => Math.abs(c.z0 - z0) < GAP_EPS && Math.abs(c.z1 - z1) < GAP_EPS);
-    if (!g.some(c => c.viaOpening) && isRect && dash === 'center') {
+    if (isRect && dash === 'center') {
       // 中心はクランプ後のz範囲（バツと同じ範囲）で採る——線と文字が食い違わないため。
       const tLo = Math.min(LC.lo, RC.lo), tHi = Math.max(LC.hi, RC.hi);
       prims.push({ type: 'text', x: (x0 + x1) / 2, y: zToY((tLo + tHi) / 2),

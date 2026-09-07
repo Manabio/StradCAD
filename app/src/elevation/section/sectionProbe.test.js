@@ -426,7 +426,7 @@ test('【失敗系・WP-E7・D1統合】開口なし: 中央の壁が両隣のop
   assert.equal(prims.length, 4, `中央の壁(開口なし)は両隣のopen列を橋渡ししないため2組のX(4本)のはず（実際:${prims.length}本）`);
 });
 
-test('【WP-E7・D1統合】開口が天井際まで届き2Fアキ相当のopen列と連続: ゾーンが橋渡しされ1組の大きなX(2本)になる', () => {
+test('【WP-E7・統合】開口が天井際まで届き両隣のopen列と連続しても、開口は橋渡しせず2組のX(4本)のまま', () => {
   const graph = makeGapWallGraph();
   const wall = farWallOf(graph);
   const x1500 = graph.centerLines.find(cl => cl.centerLineType === CenterLineType.VERTICAL && cl.value === 1500);
@@ -439,8 +439,13 @@ test('【WP-E7・D1統合】開口が天井際まで届き2Fアキ相当のopen�
     { x0: 1500, x1: 2500, worldLo: 1500, worldHi: 2500, bands: probeColumn(cut, 2000, probeCtx) },
     { x0: 2500, x1: 4000, worldLo: 2500, worldHi: 4000, bands: probeColumn(cut, 3250, probeCtx) },
   ];
-  const prims = emitOpenGapMarks(columns, cut);
-  assert.equal(prims.length, 2, `開口が両隣のopen列と橋渡しするため1組の大きなX(2本)のはず（実際:${prims.length}本）`);
+  // ユーザー明示指示2026-09「建具の姿の前に『バツ』不要」——開口はアキ扱いにしないので、
+  // 開口なしの上のケースと同じく左右のopen列がそれぞれ独立した1組のXになる。
+  const lines = emitOpenGapMarks(columns, cut).filter(p => p.type === 'line');
+  assert.equal(lines.length, 4, `開口は橋渡ししないため2組のX(4本)のはず（実際:${lines.length}本）`);
+  // バツが開口の列（x:1500-2500）を横切らない＝建具の姿図の上に線が乗らない。
+  assert.ok(lines.every(p => Math.max(p.x1, p.x2) <= 1500 + 1e-6 || Math.min(p.x1, p.x2) >= 2500 - 1e-6),
+    'バツは開口の列を横切らないはず');
 });
 
 // ---- 実機フィードバック第3弾A2: 見えがかり壁のz上限は「上階に実Roomがあるか」で決める ----
