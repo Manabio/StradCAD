@@ -1,0 +1,482 @@
+[
+ {
+  "room": "2fb68e86-1657-42ce-8f14-091033b3adc3",
+  "name": "25",
+  "faces": [
+   {
+    "letter": "A",
+    "kind": null,
+    "panelId": null,
+    "isVertical": false,
+    "axis": null,
+    "lo": 1057.5,
+    "hi": 6942.5,
+    "len": null,
+    "w0": true,
+    "wR": true
+   },
+   {
+    "letter": "B",
+    "kind": null,
+    "panelId": null,
+    "isVertical": true,
+    "axis": null,
+    "lo": -6942.5,
+    "hi": -3557.5,
+    "len": null,
+    "w0": true,
+    "wR": true
+   },
+   {
+    "letter": "C",
+    "kind": null,
+    "panelId": null,
+    "isVertical": false,
+    "axis": null,
+    "lo": 1057.5,
+    "hi": 6942.5,
+    "len": null,
+    "w0": true,
+    "wR": true
+   },
+   {
+    "letter": "D",
+    "kind": null,
+    "panelId": null,
+    "isVertical": true,
+    "axis": null,
+    "lo": -6942.5,
+    "hi": -3557.5,
+    "len": null,
+    "w0": true,
+    "wR": true
+   }
+  ]
+ },
+ {
+  "room": "6ac58dcf-087d-4c83-861a-dcd37d36e0d7",
+  "name": "",
+  "faces": [
+   {
+    "letter": "A",
+    "kind": null,
+    "panelId": null,
+    "isVertical": false,
+    "axis": null,
+    "lo": -2942.5,
+    "hi": -57.5,
+    "len": null,
+    "w0": true,
+    "wR": true
+   },
+   {
+    "letter": "B",
+    "kind": null,
+    "panelId": null,
+    "isVertical": true,
+    "axis": null,
+    "lo": -6942.5,
+    "hi": -3557.5,
+    "len": null,
+    "w0": true,
+    "wR": true
+   },
+   {
+    "letter": "C",
+    "kind": null,
+    "panelId": null,
+    "isVertical": false,
+    "axis": null,
+    "lo": -2942.5,
+    "hi": -57.5,
+    "len": null,
+    "w0": true,
+    "wR": true
+   },
+   {
+    "letter": "D",
+    "kind": null,
+    "panelId": null,
+    "isVertical": true,
+    "axis": null,
+    "lo": -6942.5,
+    "hi": -3500,
+    "len": null,
+    "w0": false,
+    "wR": true
+   }
+  ]
+ },
+ {
+  "room": "6ffcb61e-9050-4b30-ade2-77e417f57b0d",
+  "name": "21",
+  "faces": [
+   {
+    "letter": "A",
+    "kind": null,
+    "panelId": null,
+    "isVertical": false,
+    "axis": null,
+    "lo": -7942.5,
+    "hi": -3057.5,
+    "len": null,
+    "w0": true,
+    "wR": true
+   },
+   {
+    "letter": "B",
+    "kind": null,
+    "panelId": null,
+    "isVertical": true,
+    "axis": null,
+    "lo": -6942.5,
+    "hi": -3557.5,
+    "len": null,
+    "w0": true,
+    "wR": true
+   },
+   {
+    "letter": "C",
+    "kind": null,
+    "panelId": null,
+    "isVertical": false,
+    "axis": null,
+    "lo": -7942.5,
+    "hi": -3057.5,
+    "len": null,
+    "w0": true,
+    "wR": true
+   },
+   {
+    "letter": "D",
+    "kind": null,
+    "panelId": null,
+    "isVertical": true,
+    "axis": null,
+    "lo": -6942.5,
+    "hi": -3557.5,
+    "len": null,
+    "w0": true,
+    "wR": true
+   }
+  ]
+ },
+ {
+  "room": "83955bf4-a6df-4cfe-b907-3288da68c585",
+  "name": "24",
+  "faces": [
+   {
+    "letter": "A",
+    "kind": null,
+    "panelId": null,
+    "isVertical": false,
+    "axis": null,
+    "lo": -5542.5,
+    "hi": -3057.5,
+    "len": null,
+    "w0": true,
+    "wR": true
+   },
+   {
+    "letter": "B",
+    "kind": null,
+    "panelId": null,
+    "isVertical": true,
+    "axis": null,
+    "lo": -1942.5,
+    "hi": -57.5,
+    "len": null,
+    "w0": true,
+    "wR": true
+   },
+   {
+    "letter": "C",
+    "kind": null,
+    "panelId": null,
+    "isVertical": false,
+    "axis": null,
+    "lo": -5542.5,
+    "hi": -3057.5,
+    "len": null,
+    "w0": true,
+    "wR": true
+   },
+   {
+    "letter": "D",
+    "kind": null,
+    "panelId": null,
+    "isVertical": true,
+    "axis": null,
+    "lo": -1942.5,
+    "hi": -57.5,
+    "len": null,
+    "w0": true,
+    "wR": true
+   }
+  ]
+ },
+ {
+  "room": "abe48f3b-260d-4407-a99c-ce3e61ff5456",
+  "name": "部屋",
+  "faces": [
+   {
+    "letter": "A",
+    "kind": null,
+    "panelId": null,
+    "isVertical": false,
+    "axis": null,
+    "lo": -2942.5,
+    "hi": -57.5,
+    "len": null,
+    "w0": true,
+    "wR": true
+   },
+   {
+    "letter": "B",
+    "kind": null,
+    "panelId": null,
+    "isVertical": true,
+    "axis": null,
+    "lo": -1942.5,
+    "hi": -57.5,
+    "len": null,
+    "w0": true,
+    "wR": true
+   },
+   {
+    "letter": "C",
+    "kind": null,
+    "panelId": null,
+    "isVertical": false,
+    "axis": null,
+    "lo": -2942.5,
+    "hi": -57.5,
+    "len": null,
+    "w0": true,
+    "wR": true
+   },
+   {
+    "letter": "D",
+    "kind": null,
+    "panelId": null,
+    "isVertical": true,
+    "axis": null,
+    "lo": -1942.5,
+    "hi": -57.5,
+    "len": null,
+    "w0": true,
+    "wR": true
+   }
+  ]
+ },
+ {
+  "room": "b16325fe-ec7c-4c88-bdeb-326415d94278",
+  "name": "26",
+  "faces": [
+   {
+    "letter": "A",
+    "kind": null,
+    "panelId": null,
+    "isVertical": false,
+    "axis": null,
+    "lo": 1057.5,
+    "hi": 6942.5,
+    "len": null,
+    "w0": true,
+    "wR": true
+   },
+   {
+    "letter": "B",
+    "kind": null,
+    "panelId": null,
+    "isVertical": true,
+    "axis": null,
+    "lo": -3442.5,
+    "hi": -57.5,
+    "len": null,
+    "w0": true,
+    "wR": true
+   },
+   {
+    "letter": "C",
+    "kind": null,
+    "panelId": null,
+    "isVertical": false,
+    "axis": null,
+    "lo": 1057.5,
+    "hi": 6942.5,
+    "len": null,
+    "w0": true,
+    "wR": true
+   },
+   {
+    "letter": "D",
+    "kind": null,
+    "panelId": null,
+    "isVertical": true,
+    "axis": null,
+    "lo": -3442.5,
+    "hi": -57.5,
+    "len": null,
+    "w0": true,
+    "wR": true
+   }
+  ]
+ },
+ {
+  "room": "d79a5ddc-9faf-4a73-adfb-86fb0baa79ec",
+  "name": "22",
+  "faces": [
+   {
+    "letter": "A",
+    "kind": null,
+    "panelId": null,
+    "isVertical": false,
+    "axis": null,
+    "lo": -7942.5,
+    "hi": 942.5,
+    "len": null,
+    "w0": true,
+    "wR": true
+   },
+   {
+    "letter": "D",
+    "kind": null,
+    "panelId": null,
+    "isVertical": true,
+    "axis": null,
+    "lo": -6942.5,
+    "hi": -3442.5,
+    "len": null,
+    "w0": false,
+    "wR": true
+   },
+   {
+    "letter": "A",
+    "kind": null,
+    "panelId": null,
+    "isVertical": false,
+    "axis": null,
+    "lo": 57.5,
+    "hi": 942.5,
+    "len": null,
+    "w0": true,
+    "wR": true
+   },
+   {
+    "letter": "B",
+    "kind": null,
+    "panelId": null,
+    "isVertical": true,
+    "axis": null,
+    "lo": -6942.5,
+    "hi": -57.5,
+    "len": null,
+    "w0": true,
+    "wR": true
+   },
+   {
+    "letter": "C",
+    "kind": null,
+    "panelId": null,
+    "isVertical": false,
+    "axis": null,
+    "lo": 57.5,
+    "hi": 942.5,
+    "len": null,
+    "w0": true,
+    "wR": true
+   },
+   {
+    "letter": "D",
+    "kind": null,
+    "panelId": null,
+    "isVertical": true,
+    "axis": null,
+    "lo": -3442.5,
+    "hi": -57.5,
+    "len": null,
+    "w0": true,
+    "wR": false
+   },
+   {
+    "letter": "C",
+    "kind": null,
+    "panelId": null,
+    "isVertical": false,
+    "axis": null,
+    "lo": -7942.5,
+    "hi": 942.5,
+    "len": null,
+    "w0": true,
+    "wR": true
+   },
+   {
+    "letter": "D",
+    "kind": null,
+    "panelId": null,
+    "isVertical": true,
+    "axis": null,
+    "lo": -3442.5,
+    "hi": -2057.5,
+    "len": null,
+    "w0": true,
+    "wR": true
+   }
+  ]
+ },
+ {
+  "room": "f93cf97d-8725-40bf-8d9a-0087a49946c5",
+  "name": "23",
+  "faces": [
+   {
+    "letter": "A",
+    "kind": null,
+    "panelId": null,
+    "isVertical": false,
+    "axis": null,
+    "lo": -7942.5,
+    "hi": -5657.5,
+    "len": null,
+    "w0": true,
+    "wR": true
+   },
+   {
+    "letter": "B",
+    "kind": null,
+    "panelId": null,
+    "isVertical": true,
+    "axis": null,
+    "lo": -1942.5,
+    "hi": -57.5,
+    "len": null,
+    "w0": true,
+    "wR": true
+   },
+   {
+    "letter": "C",
+    "kind": null,
+    "panelId": null,
+    "isVertical": false,
+    "axis": null,
+    "lo": -7942.5,
+    "hi": -5657.5,
+    "len": null,
+    "w0": true,
+    "wR": true
+   },
+   {
+    "letter": "D",
+    "kind": null,
+    "panelId": null,
+    "isVertical": true,
+    "axis": null,
+    "lo": -1942.5,
+    "hi": -57.5,
+    "len": null,
+    "w0": true,
+    "wR": true
+   }
+  ]
+ }
+]

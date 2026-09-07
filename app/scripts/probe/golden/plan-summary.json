@@ -1,0 +1,16 @@
+[
+ {
+  "plane": "1階",
+  "segs": 348,
+  "penetrate": 27,
+  "split": 19,
+  "overlap": 2
+ },
+ {
+  "plane": "2階",
+  "segs": 255,
+  "penetrate": 10,
+  "split": 4,
+  "overlap": 14
+ }
+]

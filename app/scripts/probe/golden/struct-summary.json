@@ -1,0 +1,14 @@
+[
+ {
+  "plane": "1階",
+  "columns": 8,
+  "beams": 10,
+  "wraps": 8
+ },
+ {
+  "plane": "2階",
+  "columns": 8,
+  "beams": 10,
+  "wraps": 8
+ }
+]
