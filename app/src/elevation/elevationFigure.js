@@ -14,7 +14,7 @@
  * OpeningTagLayer.jsx と同じ構成でGroup描画する）。
  */
 import { CenterLineType, OpeningCategory } from '@core';
-import { openingsOnFace, faceBoundaryLocalX, drawnSpanRanges, wallCoverageGapsOnFace } from './elevationFaces.js';
+import { openingsOnFace, openingBelongsToFaceRoom, faceBoundaryLocalX, drawnSpanRanges, wallCoverageGapsOnFace } from './elevationFaces.js';
 import { effectiveHeight, openingTagPartsOf } from '../openings/openingNumbering.js';
 import { findCatalogEntry } from '../openings/openingCatalog.js';
 import { buildOpeningElevation } from '../openings/openingElevationFigure.js';
@@ -909,7 +909,9 @@ export function buildFaceFigure(face, ctx) {
     return segs[idx].floorDeltaMm;
   };
   const floorDyAt = x => { const d = drawnDeltaAt(x); return d ? -d : 0; };
-  const openings = openingsOnFace(face, graph);
+  // 手前に別の部屋が挟まる位置の建具は、この面の建具ではないので姿図を描かない
+  // （openingBelongsToFaceRoom。実機「6」C＝階段の展開に階段下の部屋の建具が出ていた）。
+  const openings = openingsOnFace(face, graph).filter(o => openingBelongsToFaceRoom(o, face, room, graph));
   for (const o of openings) {
     const localX = localXOf(face, o.centerCoord);
     const x = localX - o.width / 2;

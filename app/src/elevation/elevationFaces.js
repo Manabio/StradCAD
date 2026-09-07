@@ -11,8 +11,10 @@ import { RoomKind, RoomFeature } from '@core';
 import { computeExternalEdgeParams, mergeSegments } from '../finish/wallGeneration.js';
 import { innerWallFaceAt } from '../finish/wallFaces.js';
 import { sameAxisLine } from '../finish/kneeDropWall.js';
+import { buildCellToRoom } from '../finish/edgeClassify.js';
+import { worldToCell } from '../finish/gridCells.js';
 import { graphList } from '../graphReadScope.js';
-import { SPLIT_MERGE_EPS_MM } from './elevationStyle.js';
+import { SPLIT_MERGE_EPS_MM, PROBE_EPS_MM } from './elevationStyle.js';
 
 // struct CL は graph._structGraph.shapeMap に格納されるため両方を検索する（finish/*.js と同じ規約）。
 function getShape(graph, id) {
@@ -613,6 +615,44 @@ export function faceBoundaryLocalX(face, graph) {
  * @param {object} graph
  * @returns {import('@core').Opening[]}
  */
+/**
+ * 面の**手前側**（＝面の部屋がある側）の、走行方向`coord`の位置にある所有Room。
+ * 軸CLちょうどは境界セルで所有Roomが不安定なため、室内側へ`PROBE_EPS_MM`だけ逃がして引く
+ * （`sectionProbe.js`の`roomAtWallPosition`と同じ手法）。
+ * @param {object} face - buildRoomFaces の1件
+ * @param {number} coord - 面の走行方向の世界座標（例: opening.centerCoord）
+ * @param {object} graph
+ * @returns {object|null}
+ */
+export function roomAtFaceSide(face, coord, graph) {
+  const inner = face.axisCL.effectiveValue + (Math.sign(face.inward) || 1) * PROBE_EPS_MM;
+  const cell = worldToCell(face.isVertical ? inner : coord, face.isVertical ? coord : inner, graph);
+  return cell ? (buildCellToRoom(graph).get(cell.key) ?? null) : null;
+}
+
+/**
+ * その建具の姿図をこの面に描くか（ユーザー明示指示2026-09「「6」C: この階段の展開に階段下の
+ * 部屋の建具は描画不要」）。
+ *
+ * `openingsOnFace`は軸CLと座標範囲だけで拾うため、**面の手前にその部屋以外の部屋が挟まる**位置の
+ * 建具まで含む。実機「6」C（折返し階段の上り口側の面）は、面の西半分の手前が階段下の部屋「13」で、
+ * そこにある「5」↔「13」の建具——階段室のどちら側でもない建具——の姿図が描かれていた。
+ * 手前側の所有Roomがこの部屋（またはこの部屋の部分指定）でなければ、その建具はこの面の建具ではない。
+ * 所有Roomが引けない位置（部屋の外・セル未登録）は**従来どおり描く**（安全側。既存の全構成で
+ * 判定が効かないままになる方が、姿図が消えるより害が小さい）。
+ * @param {import('@core').Opening} o
+ * @param {object} face
+ * @param {import('@core').Room|null|undefined} room - 面の属する部屋（帯の部屋）
+ * @param {object} graph
+ * @returns {boolean}
+ */
+export function openingBelongsToFaceRoom(o, face, room, graph) {
+  if (!room) return true;
+  const near = roomAtFaceSide(face, o.centerCoord, graph);
+  if (!near) return true;
+  return near.id === room.id || !!near.referenceRoomIds?.has(room.id);
+}
+
 export function openingsOnFace(face, graph) {
   return (graphList(graph, 'openings') ?? [])
     .filter(o => o.isVertical === face.isVertical && o.axisCL.id === face.axisCL.id)
