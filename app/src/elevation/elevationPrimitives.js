@@ -36,11 +36,17 @@ const NAME_BOX_MIN_W_MM  = 1200;
  * @param {object[]} primitives
  * @returns {object[]}
  */
+// 太さの強さ（同じ位置に複数の経路から線が出たとき、どれを残すか）。
+const WEIGHT_RANK = { thick: 3, medium: 2, thin: 1 };
+const weightRank = w => WEIGHT_RANK[w] ?? 0;
+
 export function dedupeCoincidentLines(primitives) {
-  const seen = new Set();
-  const out = [];
-  for (const p of primitives) {
-    if (p.type !== 'line') { out.push(p); continue; }
+  // 鍵は**太さを含めない**（幾何と線種の様式だけ）——同じ位置に太さ違いの線が出たら
+  // **太い方だけを残す**（ユーザー明示指示2026-09で面端の縦線をCUT（壁断面）にしたところ、
+  // 断面エンジンが同じ端へ出す凹み側面線（中線）と二重になった。従来は図側も中線だったため
+  // 完全一致で重複除去されて表に出ていなかった）。断面（太線）が中線に上書きされてはいけない、
+  // という線種の規則（sectionEmit.jsのアキ矩形の議論と同じ）をこの1箇所で担保する。
+  const keyOf = p => {
     const dash = p.dash ?? '';
     const ends = dash
       ? [p.x1, p.y1, p.x2, p.y2, p.dashAnchor ?? '']
@@ -49,7 +55,21 @@ export function dedupeCoincidentLines(primitives) {
     // （同じ外接矩形の別の対角線。アキのバツがまさにこれ）が同一視されてしまうため、
     // 傾きの符号も鍵に含める。
     const slopeSign = dash ? '' : Math.sign((p.x2 - p.x1) * (p.y2 - p.y1));
-    const key = `${dash}|${p.weight ?? ''}|${slopeSign}|${ends.join(',')}`;
+    return `${dash}|${slopeSign}|${ends.join(',')}`;
+  };
+  const best = new Map();
+  for (const p of primitives) {
+    if (p.type !== 'line') continue;
+    const key = keyOf(p);
+    const rank = weightRank(p.weight);
+    if (!best.has(key) || rank > best.get(key)) best.set(key, rank);
+  }
+  const seen = new Set();
+  const out = [];
+  for (const p of primitives) {
+    if (p.type !== 'line') { out.push(p); continue; }
+    const key = keyOf(p);
+    if (weightRank(p.weight) < best.get(key)) continue; // 同位置に太い線がある＝そちらを残す
     if (seen.has(key)) continue;
     seen.add(key);
     out.push(p);

@@ -15,7 +15,8 @@
  */
 import { CenterLineType, OpeningCategory } from '@core';
 import { openingsOnFace, openingBelongsToFaceRoom, faceBoundaryLocalX, drawnSpanRanges, wallCoverageGapsOnFace } from './elevationFaces.js';
-import { effectiveHeight, openingTagPartsOf } from '../openings/openingNumbering.js';
+import { openingSectionPrimitives, wallThicknessForOpening } from '../openings/openingSection.js';
+import { openingTagPartsOf } from '../openings/openingNumbering.js';
 import { findCatalogEntry } from '../openings/openingCatalog.js';
 import { buildOpeningElevation } from '../openings/openingElevationFigure.js';
 import { translatePrimitive, mirrorPrimitiveX } from './elevationPrimitives.js';
@@ -66,11 +67,9 @@ export function estimateWallLabelWidthPx(text) {
 // 床線・上下の寸法行に重なる（詳細はelevationStyle.jsの該当コメント参照）。モジュール読み込み時に
 // 決め打ちできないため、以前あった同名のモジュールレベル定数は廃止した。
 
-// 項目3: 直交壁の建具断面（枠2断面＋扉1枚）の帯幅構成。openingElevationFigure.jsのINSET_MMと
-// 桁を揃えた見付幅にする（他に基準となる値が無いため、既存の建具姿図の枠見付と統一する判断）。
-const SECTION_FRAME_W  = 40;  // 枠1本ぶんの見付幅(mm)
-const SECTION_LEAF_TH  = 40;  // 閉めた扉（断面）の厚み(mm)
-const SECTION_STRIP_MM = SECTION_FRAME_W * 2 + SECTION_LEAF_TH; // 断面帯の全幅(mm)
+// 項目3: 直交壁の建具断面（枠と扉）は**建具ごとの描き方**（openings/openingSection.js）へ
+// 移した——ユーザー明示指示2026-09「建具の断面描画方法：各建具が断面の描画方法を所持する」。
+// 帯の全幅も建具ごとに変わるため openingSectionWidthMm で引く。
 
 /**
  * 材名の展開図表示用言い換え（項目3。表示専用の変換——材マスター側のデータ（materialData.js）は
@@ -328,35 +327,6 @@ export function openingsReachingCorner(perpFace, graph, corner) {
 }
 
 /**
- * 直交壁の建具の断面（枠2断面＋閉めた状態の扉1枚）プリミティブ（項目3）。
- * Fの面端（x0=0 or run）から dir 方向（+1=右へ・-1=左へ）へ SECTION_STRIP_MM ぶん帯を作り、
- * [枠][扉][枠] の3つのrectを開口高さ範囲(top..sillTop)いっぱいに並べる。
- * 線種は切断面の慣習どおり枠=CUT(太)・扉=SILHOUETTE（ユーザー仕様「建築慣習に沿って決めてよい」）。
- * @param {import('@core').Opening} o - 対象開口（openingsReachingCornerの結果1件）
- * @param {number} x0 - 帯の起点（F上のローカルx。0またはrun）
- * @param {1|-1} dir - 帯が伸びる向き
- * @param {string} cutWeight
- * @param {string} silhouetteWeight
- * @returns {object[]}
- */
-export function openingSectionPrimitives(o, x0, dir, cutWeight, silhouetteWeight) {
-  const h = effectiveHeight(o);
-  const sill = o.category === OpeningCategory.WINDOW ? (o.sillHeight ?? 0) : 0;
-  const top = -(sill + h), sillTop = -sill;
-  const a = x0;
-  const b = x0 + dir * SECTION_FRAME_W;
-  const c = x0 + dir * (SECTION_FRAME_W + SECTION_LEAF_TH);
-  const d = x0 + dir * SECTION_STRIP_MM;
-  const band = (lo, hi, weight) =>
-    ({ type: 'rect', x: Math.min(lo, hi), y: top, w: Math.abs(hi - lo), h: sillTop - top, weight });
-  return [
-    band(a, b, cutWeight),
-    band(b, c, silhouetteWeight),
-    band(c, d, cutWeight),
-  ];
-}
-
-/**
  * **その面の平面に壁の実体が無いローカルx区間**（＝開放スパン＋多層合成で延長された範囲＋
  * 実壁の被覆の隙間）。「その面のどこに壁があるか」の**単一の述語**で、巾木（壁のないところに
  * 巾木はない）と壁2段書き（壁仕上げは壁の中央に書く）の両方がここから出す——二重管理を
@@ -594,9 +564,9 @@ export function buildFaceFigure(face, ctx) {
   // 視線方向に壁が折れて向こうへ続く角）を区別して描く:
   //   壁のない端部 … 「続きがある」ことを示すため床線・天井線を図の外側へextendMmぶん延長し、
   //                   端の縦線は描かない（壁が無い＝切断していないため）。
-  //   出隅         … 縦線を描くが、切断面(CUT)ではなく見えがかりの折れ角のためSILHOUETTE
-  //                   （中線）で描く（QA修正。前回CUTのまま描いていたのを是正——出隅は壁が
-  //                   折れて向こうの面へ続くだけで、そこで部屋の断面が切れているわけではない）。
+  //   折れ角(edge)  … 壁はあるが仮想断面を横切らない端。縦線は描くが切断面ではないので
+  //                   SILHOUETTE（中線）——壁が折れて向こうの面へ続くだけで、そこで部屋の
+  //                   断面が切れているわけではない。壁断面のある端はCUT（太線。下記）。
   const hasWallAtLocal0   = face.hasWallAtLocal0   ?? true;
   const hasWallAtLocalRun = face.hasWallAtLocalRun ?? true;
   const extendMm = wallLessEndExtendModelMm ?? DEFAULT_WALL_LESS_END_EXTEND_MM;
@@ -768,11 +738,20 @@ export function buildFaceFigure(face, ctx) {
   // 問題修正2026-08: 端の縦線の上端は帯のCH固定ではなく、その端の区間の実際の天井y
   // （ceilYOf。天井断面線と同じ基準）まで描く。WP-2: ceilingProfile有りの面ではceilAbsAtXが
   // 補間値を返す（未指定・範囲外はceilYOf(segs[0]/segs[last])のまま＝現行同値）。
+  // 線種は端の種類で分ける（ユーザー明示指示2026-09「全面、太線（=壁断面）が正解」）:
+  //   hasWallAtLocal0/Run … 直交壁が**仮想断面を横切っている**＝そこに壁の断面が実在する
+  //     → CUT（太線＝壁断面）。断面エンジンが切断壁の縁をCUTで描くのと同じ線種になる。
+  //   edgeAtLocal0/Run のみ … 壁は切断面を横切らず向こうへ折れる折れ角 → SILHOUETTE（中線）。
+  // 旧実装は両方をSILHOUETTEで描いていた——2026-08-16の「出隅の縦線を中線へ」の是正が、
+  // 当時まだ出隅/入隅を区別するフラグ（edgeAtLocal0/Run。2026-08-21に新設）を持たず
+  // hasWallAtLocal0/Runへ一律に適用されたまま、フラグ新設時にも戻されなかったもの。
   if (hasWallAtLocal0 || edgeAtLocal0) {
-    prims.push({ type: 'line', x1: 0,   y1: -ceilAbsAtX(0, ceilAbsOf(segs[0])), x2: 0,   y2: floorYAtStart, weight: silhouetteWeight });
+    prims.push({ type: 'line', x1: 0,   y1: -ceilAbsAtX(0, ceilAbsOf(segs[0])), x2: 0,   y2: floorYAtStart,
+      weight: hasWallAtLocal0 ? cutWeight : silhouetteWeight });
   }
   if (hasWallAtLocalRun || edgeAtLocalRun) {
-    prims.push({ type: 'line', x1: run, y1: -ceilAbsAtX(run, ceilAbsOf(segs[segs.length - 1])), x2: run, y2: floorYAtEnd, weight: silhouetteWeight });
+    prims.push({ type: 'line', x1: run, y1: -ceilAbsAtX(run, ceilAbsOf(segs[segs.length - 1])), x2: run, y2: floorYAtEnd,
+      weight: hasWallAtLocalRun ? cutWeight : silhouetteWeight });
   }
 
   // アキ（腰壁＋垂れ壁の同時指定でできる四角い穴）の標記は**断面エンジンの責務**へ移した
@@ -944,14 +923,20 @@ export function buildFaceFigure(face, ctx) {
   if (prevFace && !face.extendedAtLocal0 && (face.hasWallAtLocal0 ?? true)) {
     const dy = floorDyAt(0);
     for (const o of openingsReachingCorner(prevFace, graph, 'end')) {
-      prims.push(...openingSectionPrimitives(o, 0, 1, cutWeight, silhouetteWeight)
+      prims.push(...openingSectionPrimitives(o, 0, 1, cutWeight, silhouetteWeight,
+        // 帯のmmは面のローカルx（x0=0からdir=+1）。世界座標が増える向きとの対応は
+        // face.dirSign×dir（localXOf の規約）。
+        { wallThicknessMm: wallThicknessForOpening(o, graph), worldPerDirSign: (face.dirSign ?? 1) * 1,
+          detailWeight })
         .map(p => translatePrimitive(p, 0, dy)));
     }
   }
   if (nextFace && !face.extendedAtLocalRun && (face.hasWallAtLocalRun ?? true)) {
     const dy = floorDyAt(run);
     for (const o of openingsReachingCorner(nextFace, graph, 'start')) {
-      prims.push(...openingSectionPrimitives(o, run, -1, cutWeight, silhouetteWeight)
+      prims.push(...openingSectionPrimitives(o, run, -1, cutWeight, silhouetteWeight,
+        { wallThicknessMm: wallThicknessForOpening(o, graph), worldPerDirSign: (face.dirSign ?? 1) * -1,
+          detailWeight })
         .map(p => translatePrimitive(p, 0, dy)));
     }
   }

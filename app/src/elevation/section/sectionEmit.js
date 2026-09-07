@@ -11,6 +11,8 @@ import {
   ElevationLineRole, weightForRole, GAP_EPS_MM as GAP_EPS, kneeCapBottomMm, KNEE_CAP_FACE_MM,
 } from '../elevationStyle.js';
 import { zToY, cutDrawRange, localXOf } from './sectionTypes.js';
+import { openingSectionPrimitives } from '../../openings/openingSection.js';
+import { FRAME_OVERHANG_MM } from '../../openings/openingPlanSymbolGeometry.js';
 
 /**
  * §5.6最終フィルタの唯一の適用箇所（emitLine(x1,z1,x2,z2,role)の1箇所だけで適用する、という
@@ -576,6 +578,31 @@ export function emitColumns(columns, cut, emitCtx = {}) {
         // 低い天井の裏に隠れている——両縁を描くと壁厚が図に出てしまう（ユーザー明示指示:
         // 実機「5」A「X2の右側が断面線なら、左側は壁の中になり、描画しないが正解」）。
         const hidden = band.exposedSide ?? null;
+        // **建具で切れている区間は壁ではない**（sectionProbe.jsが仮想断面と建具の交差で付ける
+        // `openingPassThrough`。ユーザー明示指示2026-09）——壁の断面の両縁は描かず、開口の
+        // 上下（まぐさの下端・下枠の上端）に壁の断面の切り口としてCUTの水平線を引く。
+        if (band.openingPassThrough) {
+          for (const z of [band.z0, band.z1]) {
+            prims.push(Object.assign(
+              emitLine(cut, col.x0, z, col.x1, z, ElevationLineRole.CUT, { ceilZ }),
+              { __o: 'cutOpeningEdge' }));
+          }
+          // その建具の断面（枠・扉。openings/openingSection.js）を1回だけ重ねる。
+          // 見込の基準は**この帯の壁1枚の材の範囲**——ユーザー明示指示2026-09「枠の上の壁は、
+          // 当該部屋側のみで良いので、内外壁をまとめる必要はない」。列は壁厚方向に分割される
+          // ことがあるため、その壁の最初の列（隣に同じ壁のcut帯が続かない側）でだけ描く。
+          const mr = band.wall?.materialRange;
+          if (mr && band.opening && !sameWall(matchingBand(prev, band.z0, band.z1, 'cut'))) {
+            const a = localXOf(cut, mr.lo), b = localXOf(cut, mr.hi);
+            prims.push(...openingSectionPrimitives(
+              band.opening, Math.min(a, b) - FRAME_OVERHANG_MM, 1,
+              weightForRole(ElevationLineRole.CUT), weightForRole(ElevationLineRole.SILHOUETTE),
+              { wallThicknessMm: Math.abs(mr.hi - mr.lo), worldPerDirSign: cut.dirSign ?? 1,
+                detailWeight: weightForRole(ElevationLineRole.DETAIL) },
+            ));
+          }
+          continue;
+        }
         if (hidden !== 'hi' && !sameWall(matchingBand(prev, band.z0, band.z1, 'cut'))) {
           prims.push(Object.assign(emitLine(cut, col.x0, band.z0, col.x0, band.z1, ElevationLineRole.CUT, { ceilZ }),{__o:'cutEdgeLo'}));
         }

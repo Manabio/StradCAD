@@ -17,9 +17,13 @@ export const DOOR_OPEN_ANGLE_DEG = 90;
 // 平面記号の見込帯・枠寸法（すべて mm）。renderer/OpeningsLayer.jsx から移設——
 // planFrameBand が一般/詳細の唯一の分岐点になるため、その入出力に関わる寸法定数もここに置く。
 export const SASH_DEPTH_MM         = 40; // 一般LODの見込帯（固定）
-export const FRAME_OVERHANG_MM     = 10; // 枠が壁面から室内外へ出る量
+export const FRAME_OVERHANG_MM     = 12; // 枠が壁面から室内外へ出る量（ユーザー明示指示2026-09で10→12）
 export const FRAME_JAMB_WIDTH_MM   = 30; // 方立の全幅（本体20 + かかり代10）
-export const FRAME_KAKARI_WIDTH_MM = 10; // 方立のうち開口側かかり代
+export const FRAME_KAKARI_WIDTH_MM = 10; // 方立のうち開口側かかり代（＝戸当たり）
+// 扉厚（平面では「かかり代を欠き込む深さ」）。**平面記号と展開図の建具断面が共有する唯一の定義**
+// ——展開図側（純モジュール）は .jsx を静的に引けないため、レンダラ（OpeningsLayer.jsx）に
+// 置いていた定数をここへ移した（ユーザー明示指示2026-09「平面に指定があるので参照のこと」）。
+export const DOOR_LEAF_THICKNESS_MM = 30;
 
 /**
  * 開き戸が開く直交方向(±1。isVertical壁ならx、水平壁ならy)。蝶番系以外は0を返す。

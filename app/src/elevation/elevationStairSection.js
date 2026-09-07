@@ -247,6 +247,18 @@ export function stringerPrimitives(profilePoints, depthMm, zBounds, opts = {}) {
   const band = stringerBandGeometry(nosings, depthMm, opts);
   if (!band) return [];
   const { top: [[x1, y1], [x2, y2]], bottom: [b1, b2] } = band;
+  // bottomOnly: ささらの帯のうち**下端の輪郭だけ**を返す（ユーザー明示指示2026-09「「13」D:
+  // 階段断面のささら（上）は、部屋の向こう側なので描画不要」——階段下から見上げる面では、
+  // ささらの上端線は踏面の裏側にあって見えない）。上端・端部の縦線も出さないので、返るのは
+  // 開いた1本の線分だけ。
+  if (opts.bottomOnly) {
+    // **flightのz範囲ではクリップしない**（ユーザー明示指示2026-09「「13」D: ささら（下）が
+    // 途中で終わっている。延長または踊り場下なのか判定して描画」）——下端線は段鼻の勾配線から
+    // せいぶん下がるため、区間の下り口側では必ずbaseZより下へ出る。そこを切ると線が宙で終わる。
+    // 下に踊り場が来る範囲は踊り場の桁枠が別途その輪郭を描く（landingFramePrimitives）ので、
+    // ここで切る必要はない。区間の外へは伸びない（点列自体がflightの走行範囲）。
+    return [{ type: 'polyline', points: [b1, b2], weight: weightForRole(ElevationLineRole.DETAIL) }];
+  }
   const points = [[x1, y1], [x2, y2], b2, b1, [x1, y1]];
   // 実機フィードバック第3弾B: オフセット後の多角形は、法線オフセット(ox,oy)ぶん元のnosing線
   // （flightの端の1つ内側のnosingを結ぶ線。flight自身の始端・終端ちょうどではない）よりFL側へ

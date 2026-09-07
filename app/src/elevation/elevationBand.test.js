@@ -322,9 +322,13 @@ test('【項目3・結合】buildRoomBand: D面隅の建具はA面(prevFace=D)�
   graph.addOpening(x0, 1, true, y0, 100, 800, OpeningCategory.FITTING, 'singleSwing', {});
 
   const band = buildRoomBand(room, graph, { project: { openingNumberIndex: new Map() } });
-  const strip = band.primitives.filter(p => p.type === 'rect' && p.x >= 0 && p.x + p.w <= 120 && p.weight != null);
-  assert.equal(strip.length, 3, 'A面のx=0側に枠2断面＋扉1枚＝3本のrectが出るはず');
-  assert.deepEqual(strip.map(r => r.weight).sort(), ['medium', 'thick', 'thick'].sort());
+  const strip = band.primitives.filter(p => p.type === 'rect' && p.x >= 0 && p.weight != null);
+  assert.equal(strip.length, 2, 'A面のx=0側に上枠1＋扉1＝2本のrectが出るはず');
+  assert.deepEqual(strip.map(r => r.weight).sort(), ['medium', 'thick']);
+  const head = strip.find(r => r.weight === 'thick');
+  assert.equal(head.h, 30, '上枠の見付は30');
+  // このフィクスチャの壁は室内側1枚だけ（材の範囲57.5）なので、見込は 57.5+24=81.5。
+  assert.equal(head.w, 57.5 + 24, '上枠の見込は壁の層厚+24（室内外へ12ずつ）');
 });
 
 // ---- 項目4(結合): buildRoomBandがwallAdjacentFloorSegmentsを実際に配線し、部分指定の壁際に

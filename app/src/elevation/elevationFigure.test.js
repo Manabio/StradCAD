@@ -100,13 +100,13 @@ test('【失敗系】avoidObstacleRangesX: 障害物が空なら常に既定xを
 // ---- CUT/SILHOUETTE本数（床1天井1=CUT2本、出隅の両端縦線2本=SILHOUETTE） ----
 // QA修正(5a): 出隅（壁がある通常の面端）の縦線はCUT(太)ではなくSILHOUETTE(中線)で描く
 // （切断面ではなく、壁が折れて隣の面へ続くだけの見えがかりの角のため）。
-test('buildFaceFigure: 床線1・天井線1の計2本のCUT(太)線と、両端縦線2本のSILHOUETTE(中線)線が出る', () => {
+test('buildFaceFigure: 床線・天井線に加え、壁のある両端の縦線もCUT(太)＝壁断面で出る', () => {
   const face = makeFace();
   const prims = buildFaceFigure(face, baseCtx());
   const cutLines = prims.filter(p => p.type === 'line' && p.weight === 'thick');
   const silhouetteLines = prims.filter(p => p.type === 'line' && p.weight === 'medium');
-  assert.equal(cutLines.length, 2, '床線・天井線の2本のはず');
-  assert.equal(silhouetteLines.length, 2, '出隅の両端縦線2本のはず');
+  assert.equal(cutLines.length, 4, '床線・天井線・両端の壁断面の縦線で4本のはず');
+  assert.equal(silhouetteLines.length, 0, '仮想断面を横切る壁がある端は中線では描かないはず');
 });
 
 // ---- 項目1・2・QA修正(5a): 壁のない端部（hasWallAtLocal0/Run=false）は床線・天井線を延長し
@@ -118,10 +118,10 @@ test('【項目1】buildFaceFigure: hasWallAtLocal0=falseの面は左端の縦�
   const cutLines = prims.filter(p => p.type === 'line' && p.weight === 'thick');
   const silhouetteLines = prims.filter(p => p.type === 'line' && p.weight === 'medium');
 
-  assert.equal(cutLines.length, 2, '床線・天井線の2本のはず（縦線はCUTではない）');
-  assert.equal(silhouetteLines.length, 1, '右端(出隅)の縦線1本だけSILHOUETTEで残るはず');
-  assert.ok(!silhouetteLines.some(l => l.x1 === 0 && l.x2 === 0), '左端(x=0)の縦線は描かないはず');
-  assert.ok(silhouetteLines.some(l => l.x1 === face.run && l.x2 === face.run), '右端(x=run)の縦線は残るはず');
+  assert.equal(cutLines.length, 3, '床線・天井線・右端の壁断面の縦線で3本のはず');
+  assert.equal(silhouetteLines.length, 0, '壁のある端は壁断面(太線)で描くはず');
+  assert.ok(!cutLines.some(l => l.x1 === 0 && l.x2 === 0), '左端(x=0)の縦線は描かないはず');
+  assert.ok(cutLines.some(l => l.x1 === face.run && l.x2 === face.run), '右端(x=run)の縦線は残るはず');
   const floorLine = cutLines.find(l => l.y1 === l.y2 && l.y1 === 0);
   const ceilLine  = cutLines.find(l => l.y1 === l.y2 && l.y1 === -2400);
   assert.equal(floorLine.x1, -200, '床線の左端はx=-extendMm(-200)まで延長されるはず');
@@ -137,10 +137,10 @@ test('【項目1】buildFaceFigure: hasWallAtLocalRun=falseの面は右端の縦
   const cutLines = prims.filter(p => p.type === 'line' && p.weight === 'thick');
   const silhouetteLines = prims.filter(p => p.type === 'line' && p.weight === 'medium');
 
-  assert.equal(cutLines.length, 2);
-  assert.equal(silhouetteLines.length, 1);
-  assert.ok(!silhouetteLines.some(l => l.x1 === face.run && l.x2 === face.run), '右端の縦線は描かないはず');
-  assert.ok(silhouetteLines.some(l => l.x1 === 0 && l.x2 === 0), '左端の縦線は残るはず');
+  assert.equal(cutLines.length, 3);
+  assert.equal(silhouetteLines.length, 0);
+  assert.ok(!cutLines.some(l => l.x1 === face.run && l.x2 === face.run), '右端の縦線は描かないはず');
+  assert.ok(cutLines.some(l => l.x1 === 0 && l.x2 === 0), '左端の縦線は残るはず');
   const floorLine = cutLines.find(l => l.y1 === l.y2 && l.y1 === 0);
   assert.equal(floorLine.x2, face.run + 200, '床線の右端はx=run+extendMmまで延長されるはず');
 });
@@ -199,8 +199,8 @@ test('【失敗系・項目1】buildFaceFigure: faceにhasWallAtLocal0/hasWallAt
   const prims = buildFaceFigure(face, baseCtx({ wallLessEndExtendModelMm: 200 }));
   const cutLines = prims.filter(p => p.type === 'line' && p.weight === 'thick');
   const silhouetteLines = prims.filter(p => p.type === 'line' && p.weight === 'medium');
-  assert.equal(cutLines.length, 2, 'face側にフィールドが無ければ壁あり扱いで床線・天井線2本のはず');
-  assert.equal(silhouetteLines.length, 2, '両端の縦線もSILHOUETTEで2本出るはず');
+  assert.equal(cutLines.length, 4, 'face側にフィールドが無ければ壁あり扱い＝床線・天井線＋両端の壁断面で4本のはず');
+  assert.equal(silhouetteLines.length, 0, '壁のある端は壁断面(太線)で描くはず');
 });
 
 // ---- QA修正（実グラフでの発動確認）: buildRoomFaces由来の実faceでも続き表現が出る ----
@@ -231,10 +231,10 @@ test('【QA修正】buildFaceFigure: 実グラフの上り口辺（壁生成ス�
     graph, project: { openingNumberIndex: new Map() }, room, ceilingHeight: 2400,
     materialMap: null, gridCLs: [], wallLessEndExtendModelMm: 150,
   });
-  // QA修正(5a): 壁のある端(出隅)の縦線はSILHOUETTE(中線)で描く。
-  const silhouetteVerticals = prims.filter(p => p.type === 'line' && p.weight === 'medium' && p.x1 === p.x2);
-  assert.equal(silhouetteVerticals.length, 1, '壁なし側(run側)の縦線は描かれず、壁あり側(0側)の1本だけのはず');
-  assert.equal(silhouetteVerticals[0].x1, 0, '残る縦線は壁のある0側のはず');
+  // 壁のある端（仮想断面を横切る＝壁断面がある）の縦線はCUT(太線)で描く。
+  const cutVerticals = prims.filter(p => p.type === 'line' && p.weight === 'thick' && p.x1 === p.x2);
+  assert.equal(cutVerticals.length, 1, '壁なし側(run側)の縦線は描かれず、壁あり側(0側)の1本だけのはず');
+  assert.equal(cutVerticals[0].x1, 0, '残る縦線は壁のある0側のはず');
   const floorLine = prims.find(p => p.type === 'line' && p.weight === 'thick' && p.y1 === p.y2 && p.y1 === 0);
   assert.equal(floorLine.x2, faceD.run + 150, '床線はrunを超えてextendMm(150)ぶん外側へ延長されるはず');
 });
@@ -272,9 +272,9 @@ test('【QA修正・項目1/3】buildFaceFigure: 出隅の縦線は、その隅�
 
   // A面のD側(x=0)・D面のA側(x=0)は同じ物理的な隅を指すため、どちらの縦線もy2=-300（子の床高さ）
   // まで届くはず——中心線を挟んで床高が変わる出隅で、実際の高さを正確に参照できているかの確認。
-  const cornerVertA = primsA.find(p => p.type === 'line' && p.weight === 'medium' && p.x1 === 0 && p.x2 === 0);
-  const cornerVertD = primsD.find(p => p.type === 'line' && p.weight === 'medium' && p.x1 === 0 && p.x2 === 0);
-  assert.ok(cornerVertA && cornerVertD, '両面ともx=0の出隅縦線が見つかるはず');
+  const cornerVertA = primsA.find(p => p.type === 'line' && p.weight === 'thick' && p.x1 === 0 && p.x2 === 0);
+  const cornerVertD = primsD.find(p => p.type === 'line' && p.weight === 'thick' && p.x1 === 0 && p.x2 === 0);
+  assert.ok(cornerVertA && cornerVertD, '両面ともx=0の隅の縦線（壁断面）が見つかるはず');
   assert.equal(cornerVertA.y2, -300, 'A面の出隅縦線は子の床高さ(-300)まで届くはず');
   assert.equal(cornerVertD.y2, -300, 'D面の出隅縦線も同じ隅なので子の床高さ(-300)まで届くはず（両面で一致）');
 });
@@ -299,9 +299,9 @@ test('【項目4】buildFaceFigure: floorSegmentsが2区間（段差あり）な
 
   const cutLines = prims.filter(p => p.type === 'line' && p.weight === 'thick');
   const silhouetteLines = prims.filter(p => p.type === 'line' && p.weight === 'medium');
-  // 天井線1・床の水平線2（区間ごと）・段差縦線1 = 計4本のCUT。両端縦線2本はSILHOUETTE（QA修正5a）。
-  assert.equal(cutLines.length, 4, `CUT線は4本のはず（実際:${cutLines.length}）`);
-  assert.equal(silhouetteLines.length, 2, '両端(出隅)の縦線2本はSILHOUETTEのはず');
+  // 天井線1・床の水平線2（区間ごと）・段差縦線1・両端の壁断面の縦線2 = 計6本のCUT。
+  assert.equal(cutLines.length, 6, `CUT線は6本のはず（実際:${cutLines.length}）`);
+  assert.equal(silhouetteLines.length, 0, '壁のある端は壁断面(太線)で描くはず');
 
   const floorHorizontals = cutLines.filter(l => l.y1 === l.y2);
   assert.equal(floorHorizontals.length, 3, '天井線1本+床の水平線2本=3本の水平CUT線のはず');
@@ -319,10 +319,10 @@ test('【項目4】buildFaceFigure: floorSegmentsが2区間（段差あり）な
   // 段差の寸法線・寸法値は描かない（明示指示）。
   assert.ok(!prims.some(p => p.type === 'dim' && p.at === RISER_X_OFFSET_TESTS), '段差位置の寸法は描かないはず');
 
-  // 両端の縦線（x=0とx=run=4000。出隅=SILHOUETTE）は、その位置の区間の床yまで伸びる
+  // 両端の縦線（x=0とx=run=4000。壁断面=CUT）は、その位置の区間の床yまで伸びる
   // （面の外端はriserXAtの対象外＝オフセットの影響を受けない）。
-  const leftEnd  = silhouetteLines.find(l => l.x1 === 0 && l.x2 === 0);
-  const rightEnd = silhouetteLines.find(l => l.x1 === face.run && l.x2 === face.run);
+  const leftEnd  = cutLines.find(l => l.x1 === 0 && l.x2 === 0);
+  const rightEnd = cutLines.find(l => l.x1 === face.run && l.x2 === face.run);
   assert.ok(leftEnd && rightEnd, '両端の縦線が見つかるはず');
   assert.equal(leftEnd.y2, 0, '左端は左区間の床y(0)まで');
   assert.equal(rightEnd.y2, -300, '右端は右区間の床y(-300)まで');
@@ -360,9 +360,8 @@ test('【QA修正・実機フィードバック】buildFaceFigure: floorSegments
   const riser = cutLines.find(l => l.x1 === RISER_X_OFFSET_TESTS && l.x2 === RISER_X_OFFSET_TESTS && l.y1 === 0 && l.y2 === -300);
   assert.ok(riser, '段差縦線はhideFlatLineの影響を受けず描かれるはず');
 
-  // 両端縦線（出隅。SILHOUETTE）もhideFlatLineの影響を受けない。
-  const silhouetteLines = prims.filter(p => p.type === 'line' && p.weight === 'medium');
-  const leftEnd = silhouetteLines.find(l => l.x1 === 0 && l.x2 === 0);
+  // 両端縦線（壁断面。CUT）もhideFlatLineの影響を受けない。
+  const leftEnd = cutLines.find(l => l.x1 === 0 && l.x2 === 0);
   assert.ok(leftEnd, '左端の縦線はhideFlatLineの影響を受けず描かれるはず');
   assert.equal(leftEnd.y2, 0, '左端縦線はhideFlatLineの区間でも自身の区間の床y(0)まで届くはず');
 });
@@ -522,10 +521,9 @@ test('【問題修正2026-08】buildFaceFigure: chMmが異なる2区間（床は
   // 床は同一FLのため、床の水平線は分割されても段差の縦線は出ない（y=0同士の長さ0の線を残さない）。
   assert.ok(!cutLines.some(l => l.x1 === l.x2 && l.y1 === 0 && l.y2 === 0), '床の段差縦線（長さ0）は出ないはず');
 
-  // 両端の縦線（SILHOUETTE）はその端の区間の実際の天井まで届く。
-  const silhouetteLines = prims.filter(p => p.type === 'line' && p.weight === 'medium');
-  const leftEnd  = silhouetteLines.find(l => l.x1 === 0 && l.x2 === 0);
-  const rightEnd = silhouetteLines.find(l => l.x1 === 4000 && l.x2 === 4000);
+  // 両端の縦線（壁断面。CUT）はその端の区間の実際の天井まで届く。
+  const leftEnd  = cutLines.find(l => l.x1 === 0 && l.x2 === 0);
+  const rightEnd = cutLines.find(l => l.x1 === 4000 && l.x2 === 4000);
   assert.equal(leftEnd.y1, -2400, '左端の縦線は左区間の天井(-2400)から');
   assert.equal(rightEnd.y1, -2600, '右端の縦線は右区間の天井(-2600)から');
 
@@ -833,8 +831,8 @@ test('【失敗系・問題修正2026-08】buildFaceFigure: 天井絶対高さ�
   assert.equal(ceilLines.length, 1, '天井絶対高さが同じなら天井線は1本に結合されるはず');
   assert.equal(ceilLines[0].x1, 0);
   assert.equal(ceilLines[0].x2, 4000);
-  // CUT線は天井1＋床2＋床段差縦線1の計4本（天井段差の縦線は出ない）。
-  assert.equal(cutLines.length, 4, `天井段差の縦線は出ないはず（実際:${JSON.stringify(cutLines)}）`);
+  // CUT線は天井1＋床2＋床段差縦線1＋両端の壁断面2の計6本（天井段差の縦線は出ない）。
+  assert.equal(cutLines.length, 6, `天井段差の縦線は出ないはず（実際:${JSON.stringify(cutLines)}）`);
 });
 
 // ---- 項目3・4: 壁2段書き（材名の言い換え・配置・省略） ----
@@ -1174,8 +1172,10 @@ test('buildFaceFigure: 面端の直交壁建具断面（枠・扉の3rect）も�
     graph: makeGraph({ openings: [perpOpening] }), prevFace, floorSegments: STEP_SEGS,
   });
   const prims = buildFaceFigure(face, ctx);
-  const sections = prims.filter(p => p.type === 'rect' && p.h === 2000 && p.y === -2000 + 100);
-  assert.equal(sections.length, 3, '断面の[枠][扉][枠]3rectが隅の床基準（+100シフト）で描かれるはず');
+  assert.ok(prims.some(p => p.type === 'rect' && p.weight === 'thick' && p.h === 30 && p.y === -2000 + 100),
+    '上枠が隅の床基準（+100シフト）で描かれるはず');
+  assert.ok(prims.some(p => p.type === 'rect' && p.weight === 'medium' && p.y === -1980 + 100),
+    '扉も同じ床基準（+100シフト）で描かれるはず');
 });
 
 // ---- 項目2: 建具記号丸(tag)は建具の中心ではなく、寸法行より図寄りの専用段へ描かれる ----
@@ -1313,10 +1313,17 @@ test('【項目3】buildFaceFigure: prevFace上の開口が隅(perpFace.run)ま�
   const ctx = baseCtx({ graph: makeGraph({ openings: [perpOpening] }), prevFace, nextFace: null });
   const prims = buildFaceFigure(face, ctx);
 
-  const strip = prims.filter(p => p.type === 'rect' && p.x >= 0 && p.x + p.w <= 120 && p.y === -2000 && p.h === 2000);
-  assert.equal(strip.length, 3, '枠2断面＋扉1枚＝3本のrectが面のx=0側の帯に出るはず');
-  const weights = strip.map(r => r.weight).sort();
-  assert.deepEqual(weights, ['medium', 'thick', 'thick'].sort(), '枠2本=CUT(thick)・扉1本=SILHOUETTE(medium)のはず');
+  // 片開き戸の断面（ユーザー明示指示2026-09。openings/openingSection.js）: 縦断面なので
+  // 上枠（見付30・見込は壁厚+24）と扉（厚30・FL+10〜指定高さ-20・中線）の2本。
+  // このフィクスチャのgraphは実壁を持たないため見込はフォールバック値（115+24=139）になる。
+  const strip = prims.filter(p => p.type === 'rect' && p.x >= 0 && p.x + p.w <= 139 && p.weight != null);
+  assert.equal(strip.length, 2, '上枠1＋扉1＝2本のrectが面のx=0側の帯に出るはず');
+  const head = strip.find(r => r.weight === 'thick');
+  assert.deepEqual([head.x, head.w, head.y, head.h], [0, 139, -2000, 30],
+    '上枠は見付30・見込いっぱい・指定高さの直下のはず');
+  const leaf = strip.find(r => r.weight === 'medium');
+  assert.deepEqual([leaf.w, leaf.y, leaf.h], [30, -1980, 1970],
+    '扉は厚30・上端=指定高さ-20(戸当たり)・下端=FL+10のはず');
 });
 
 test('【失敗系・項目3】buildFaceFigure: prevFace上の開口が隅から離れていれば断面を描かない', () => {
@@ -1815,10 +1822,10 @@ test('【WP-2】buildFaceFigure: ceilingProfileが面の範囲を覆っていれ
   assert.equal(flatHorizontalCutLines[0].y1, 0);
 
   // 端の縦線（出隅=SILHOUETTE）の上端もceilAbsAtX経由で補間値に追従する。
-  const endVerticals = prims.filter(p => p.type === 'line' && p.weight === 'medium' && p.x1 === p.x2);
+  const endVerticals = prims.filter(p => p.type === 'line' && p.weight === 'thick' && p.x1 === p.x2);
   const leftEdge = endVerticals.find(p => p.x1 === 0);
   const rightEdge = endVerticals.find(p => p.x1 === face.run);
-  assert.ok(leftEdge && rightEdge, '両端の縦線(SILHOUETTE)が見つかるはず');
+  assert.ok(leftEdge && rightEdge, '両端の縦線(壁断面=CUT)が見つかるはず');
   assert.equal(leftEdge.y1, -2200, '左端縦線の上端は補間天井高(-2200)のはず');
   assert.equal(rightEdge.y1, -3000, '右端縦線の上端は補間天井高(-3000)のはず');
 });

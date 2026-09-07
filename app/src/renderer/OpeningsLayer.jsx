@@ -11,6 +11,7 @@ import {
   foldZigzagPoints, trackOf, trackPerp, openingExteriorDir, resolveSlideLayoutPanels,
   FRAME_JAMB_WIDTH_MM, FRAME_KAKARI_WIDTH_MM,
   planFrameBand, bandPerp, planSymbolPlan, innerSpanOpening, swingClosedLeafSpan, swingOpenPerpDir,
+  DOOR_LEAF_THICKNESS_MM,
 } from '../openings/openingPlanSymbolGeometry.js';
 import { arcPathD } from './ShapesLayer.jsx';
 import { LodLevel, resolveStrokeWidth } from '../viewport.js';
@@ -23,7 +24,6 @@ const SLIDE_TRACK_INSET_MM = 4;       // 枠から戸先・召し合わせレー
 const WEATHERSTRIP_DASH    = [6, 4];  // 召し合わせ部・気密材(モヘア)の破線パターン
 
 // 開き戸 詳細LOD用 枠寸法（すべて mm）
-const DOOR_LEAF_THICKNESS_MM  = 30; // 扉厚（かかり代を欠き込む深さ）
 const DOOR_HINGE_GAP_MM       = 5;  // 開いた扉と吊元側の方立との隙間
 // 吊元側後退量: 方立の全幅(30) - 吊元と方立の隙間(5)
 const FRAME_HINGE_INSET_MM = FRAME_JAMB_WIDTH_MM - DOOR_HINGE_GAP_MM;

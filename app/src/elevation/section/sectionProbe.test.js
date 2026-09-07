@@ -7,7 +7,9 @@ import assert from 'node:assert/strict';
 import { Plane, PlanGraph, CenterLineType, Discipline, edgeKey, OpeningCategory, RoomFeature } from '@core';
 import { generateRoomWallsFromOutline } from '../../finish/wallGeneration.js';
 import { makeProbeContext, collectCutBreaks, probeColumn } from './sectionProbe.js';
-import { emitOpenGapMarks } from './sectionEmit.js';
+import { emitOpenGapMarks, emitColumns } from './sectionEmit.js';
+import { buildColumns } from './sectionEngine.js';
+import { ElevationLineRole, weightForRole } from '../elevationStyle.js';
 
 const CH = 2400; // DEFAULT_ROOM_CEILING_HEIGHT（core/constants.js）明示指定なしの既定値
 
@@ -606,4 +608,101 @@ test('【実機修正2026-09・多層帯】makeProbeContext: above層の床zも�
   assert.equal(ctx.floorZOf(upperRoom, layers[1]), 2900,
     '上階の床は階高3000から帯の部屋のFL(100)を引いた z=2900 のはず'
     + '（layer.floorZMm は階のdatum差のまま＝触らない）');
+});
+
+// ==== 仮想断面が建具を切っているかの判定（ユーザー明示指示2026-09） ====
+// 切断壁（面を横切る壁）は従来まったく開口を見ておらず、仮想断面が建具のど真ん中を通っていても
+// 中身の詰まった壁の断面として描かれていた。見えがかり壁と同じ規約で openingPassThrough を付け、
+// emitColumns が壁の断面ではなく開口（上下のCUT水平線）として描くことを固定する。
+function makeCutWallOpeningGraph(openingCenterY) {
+  const graph = makeGraph();
+  makeRectRoom(graph, 0, 0, 4000, 3000, 'LDK');
+  const wall = [...graph.walls].find(w =>
+    w.isVertical && Math.abs(w.axisCL.effectiveValue) < 1);
+  const y0 = [...graph.centerLines].find(c =>
+    c.centerLineType === CenterLineType.HORIZONTAL && Math.abs(c.effectiveValue) < 1);
+  // 腰高800・高さ1000の窓（z:800〜1800）。x=0の壁の、y=openingCenterY を中心に幅800。
+  graph.addOpening(wall.axisCL, 1, true, y0, openingCenterY, 800,
+    OpeningCategory.WINDOW, 'casement', { sillHeight: 800, height: 1000 });
+  return graph;
+}
+
+// x=0の縦壁を y=1500 で横切る切断線（部屋の中を東西に切って南を見る）。
+function crossingCut(graph) {
+  return {
+    seqNo: '1', line: { isVertical: false, axisValue: 1500, lo: -500, hi: 4500 },
+    viewSign: 1, dirSign: 1, layers: [{ graph, floorZMm: 0, role: 'self' }],
+    zRange: { loZ: 0, hiZ: CH }, baseFloorZ: 0,
+  };
+}
+
+test('【2026-09】probeColumn: 仮想断面が切断壁の建具を通っていれば、その帯にopeningPassThroughが付く', () => {
+  const graph = makeCutWallOpeningGraph(1500); // 建具は y:1100〜1900＝切断線(1500)を跨ぐ
+  const cut = crossingCut(graph);
+  const bands = probeColumn(cut, 0, makeProbeContext(cut.layers)); // x=0の壁の中を見る列
+  const cutBands = bands.filter(b => b.kind === 'cut');
+  assert.ok(cutBands.length > 0, '前提: x=0の壁は切断壁として拾われるはず');
+  const opened = cutBands.filter(b => b.openingPassThrough);
+  assert.ok(opened.length > 0, '建具のz範囲の帯にopeningPassThroughが付くはず');
+  assert.equal(Math.min(...opened.map(b => b.z0)), 800, '窓の下端(腰高800)から');
+  assert.equal(Math.max(...opened.map(b => b.z1)), 1800, '窓の上端(800+1000)まで');
+});
+
+test('【失敗系・2026-09】probeColumn: 建具が切断線から外れていれば切断壁は詰まったまま', () => {
+  const graph = makeCutWallOpeningGraph(2500); // 建具は y:2100〜2900＝切断線(1500)に掛からない
+  const cut = crossingCut(graph);
+  const bands = probeColumn(cut, 0, makeProbeContext(cut.layers));
+  const cutBands = bands.filter(b => b.kind === 'cut');
+  assert.ok(cutBands.length > 0, '前提: 切断壁は拾われるはず');
+  assert.ok(!cutBands.some(b => b.openingPassThrough),
+    '切断線が通らない建具では開口扱いにしないはず');
+});
+
+// 片開き戸（FITTING/singleSwing）版。建具ごとの断面の描き方（openings/openingSection.js）が
+// 断面エンジン側でも効くことを見る。
+function makeCutWallDoorGraph(openingCenterY) {
+  const graph = makeGraph();
+  makeRectRoom(graph, 0, 0, 4000, 3000, 'LDK');
+  const wall = [...graph.walls].find(w => w.isVertical && Math.abs(w.axisCL.effectiveValue) < 1);
+  const y0 = [...graph.centerLines].find(c =>
+    c.centerLineType === CenterLineType.HORIZONTAL && Math.abs(c.effectiveValue) < 1);
+  graph.addOpening(wall.axisCL, 1, true, y0, openingCenterY, 800,
+    OpeningCategory.FITTING, 'singleSwing', { height: 2000, hingeSide: -1, swingSide: 1 });
+  return graph;
+}
+
+test('【2026-09】emitColumns: 建具で切れた切断壁には、その建具の断面（上枠・扉）が出る', () => {
+  const graph = makeCutWallDoorGraph(1500);
+  const cut = crossingCut(graph);
+  const prims = emitColumns(buildColumns(cut, makeProbeContext(cut.layers)), cut, {});
+  // 見込＝この帯の壁1枚の材の範囲＋24（内外壁はまとめない）。
+  const rects = prims.filter(p => p.type === 'rect');
+  assert.equal(rects.length, 2, '上枠1・扉1のrectが出るはず（竪枠は縦断面に掛からない）');
+  const head = rects.find(r => r.weight === weightForRole(ElevationLineRole.CUT));
+  assert.equal(head.h, 30, '上枠の見付は30');
+  assert.equal(-head.y, 2000, '上枠の上端は指定高さ2000');
+  const leaf = rects.find(r => r.weight === weightForRole(ElevationLineRole.SILHOUETTE));
+  assert.equal(leaf.w, 30, '扉厚は30');
+  assert.equal(-leaf.y, 1980, '扉の上端は指定高さ-20');
+  assert.equal(-(leaf.y + leaf.h), 10, '扉の下端はFL+10');
+  // このフィクスチャの壁（室内側1枚）の材の範囲は57.5なので、見込は 57.5+24=81.5。
+  assert.equal(head.w, 57.5 + 24, '上枠は見込いっぱい＝その帯の壁1枚の層厚+24');
+});
+
+test('【2026-09】emitColumns: 建具で切れた切断壁は、両縁ではなく開口の上下にCUT水平線を描く', () => {
+  const graph = makeCutWallOpeningGraph(1500);
+  const cut = crossingCut(graph);
+  const probeCtx = makeProbeContext(cut.layers);
+  const columns = buildColumns(cut, probeCtx);
+  const prims = emitColumns(columns, cut, {});
+  const cutWeight = weightForRole(ElevationLineRole.CUT);
+  const atOpeningTop = prims.filter(p => p.type === 'line' && p.weight === cutWeight
+    && Math.abs(p.y1 - p.y2) < 1e-6 && Math.abs(-p.y1 - 1800) < 1e-6);
+  assert.ok(atOpeningTop.length > 0, '建具の上端(z=1800)に壁の切り口のCUT水平線が出るはず');
+  // 開口の範囲には壁の断面の縦線（両縁）を描かない。
+  const verticalsInOpening = prims.filter(p => p.type === 'line' && p.weight === cutWeight
+    && Math.abs(p.x1 - p.x2) < 1e-6
+    && Math.min(-p.y1, -p.y2) > 850 && Math.max(-p.y1, -p.y2) < 1750);
+  assert.equal(verticalsInOpening.length, 0,
+    `建具の範囲に壁の断面の縦線は出ないはず（実際:${JSON.stringify(verticalsInOpening)}）`);
 });

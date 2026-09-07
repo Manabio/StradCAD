@@ -12,6 +12,7 @@ import { computeExternalEdgeParams, mergeSegments } from '../finish/wallGenerati
 import { innerWallFaceAt } from '../finish/wallFaces.js';
 import { sameAxisLine } from '../finish/kneeDropWall.js';
 import { buildCellToRoom } from '../finish/edgeClassify.js';
+import { cutPlaneOffsetMm } from './section/sectionCutPlane.js';
 import { worldToCell } from '../finish/gridCells.js';
 import { graphList } from '../graphReadScope.js';
 import { SPLIT_MERGE_EPS_MM, PROBE_EPS_MM } from './elevationStyle.js';
@@ -193,22 +194,43 @@ export function drawnSpanRanges(face, graph) {
 }
 
 /**
- * 面端の直交面（perpFace）の壁が、face の切断面（faceValue の平面）を室内側へ横切って
- * いるか。横切っていれば図の端部にその壁の断面（返し）が現れる＝通常の隅。横切っていない
- * （壁が面の向こう側だけにあり、こちら側では図の端部に壁断面が現れない）端は
- * 「壁断面のない中心線」＝壁のない端部として扱う（続きがある表現＝床・天井線の延長）。
+ * 面端の直交面（perpFace）の壁が、face の**仮想断面**を室内側へ横切っているか。横切っていれば
+ * 図の端部にその壁の断面（返し）が現れる＝通常の隅。横切っていない（壁が面の向こう側だけに
+ * あり、こちら側では図の端部に壁断面が現れない）端は「壁断面のない中心線」＝壁のない端部として
+ * 扱う（続きがある表現＝床・天井線の延長）。
  * perpFace.lo/hi は face の奥行き方向に沿った直交面のスパン。
+ *
+ * **基準は仮想断面線そのもの**（`planeValue`。`section/sectionCutPlane.js`の
+ * `cutPlaneOffsetMm`で面の軸から室内側へ下げた位置）——ユーザー明示指示2026-09
+ * 「壁断面の判定については仮想断面が何を切っているのかを正しく判定できるようにして」。
+ * 省略時は面の壁の仕上げ面（`face.faceValue`）へフォールバックする（幾何を持たない合成face・
+ * graph無しの単体テスト向け）。仕上げ面は仮想断面と一致するか手前にあるため、旧実装は
+ * 柱型が仕上げ面より室内へ張り出す面で「切っていない壁を切っている」と誤判定しえた。
  * @param {{lo:number, hi:number}} perpFace
  * @param {{faceValue:number, inward:number}} face
+ * @param {number} [planeValue] - 仮想断面の世界座標
  * @returns {boolean}
  */
-export function perpWallCrossesFacePlane(perpFace, face) {
+export function perpWallCrossesFacePlane(perpFace, face, planeValue) {
   // inward不明（幾何を持たない合成face＝既存単体テストの後方互換）は判定不能のため
   // 従来どおり「横切っている＝壁あり」へフォールバックする（hasRealWall ?? true と同じ規約）。
   if (face.inward !== 1 && face.inward !== -1) return true;
+  const plane = Number.isFinite(planeValue) ? planeValue : face.faceValue;
   return face.inward > 0
-    ? perpFace.hi > face.faceValue + PLANE_CROSS_EPS_MM
-    : perpFace.lo < face.faceValue - PLANE_CROSS_EPS_MM;
+    ? perpFace.hi > plane + PLANE_CROSS_EPS_MM
+    : perpFace.lo < plane - PLANE_CROSS_EPS_MM;
+}
+
+/**
+ * face の仮想断面（切断線）の世界座標。graph 無し・軸CL無しの合成faceはnull。
+ * @param {object} face
+ * @param {object|null} graph
+ * @returns {number|null}
+ */
+export function faceCutPlaneValue(face, graph) {
+  const axisValue = face?.axisCL?.effectiveValue;
+  if (!graph || !Number.isFinite(axisValue) || (face.inward !== 1 && face.inward !== -1)) return null;
+  return axisValue + face.inward * cutPlaneOffsetMm(face, [{ graph, floorZMm: 0, role: 'self' }]);
 }
 
 /**
@@ -241,8 +263,9 @@ export function snapFaceEndsToCorners(faces, graph = null) {
     // かつその壁がこの面の切断面を室内側へ横切っている（perpWallCrossesFacePlane）。
     const realAtLo = !!startFace && realWallAtCorner(f, startFace, graph);
     const realAtHi = !!endFace   && realWallAtCorner(f, endFace, graph);
-    const hasWallAtLo = realAtLo && perpWallCrossesFacePlane(startFace, f);
-    const hasWallAtHi = realAtHi && perpWallCrossesFacePlane(endFace, f);
+    const planeValue = faceCutPlaneValue(f, graph);
+    const hasWallAtLo = realAtLo && perpWallCrossesFacePlane(startFace, f, planeValue);
+    const hasWallAtHi = realAtHi && perpWallCrossesFacePlane(endFace, f, planeValue);
     // 見えがかりエッジ＝実壁はあるが切断面を横切らない端（凹み角）。壁断面は描かないが、
     // 壁が折れて向こうへ続く角のエッジ自体は見えるため、縦線（中線）を描く対象として公開する
     // （ユーザー明示指示2026-08。直交面や実壁自体が無い端＝階段上り口等は従来どおり縦線なし）。

@@ -284,8 +284,11 @@ test('planFrameBand: 詳細LOD・exteriorDirが定まらない(null/undefined)�
 });
 
 test('planFrameBand: 詳細LOD・frameDepthが壁厚(overhang込み)以上のときは面間いっぱいへ縮退する', () => {
-  const band = planFrameBand({ axisValue: 1000, faceLo: 900, faceHi: 1100, frameDepth: 220, exteriorDir: 1, detail: true });
-  assert.deepEqual(band, { lo: 900 - FRAME_OVERHANG_MM, hi: 1100 + FRAME_OVERHANG_MM, center: 1000, depth: 220 });
+  // 壁厚200＋出し（FRAME_OVERHANG_MM）×2 が「壁厚(overhang込み)」。定数から組み立てる
+  // ——出しぶんの値が変わってもこのテストの意図（縮退する側の分岐）が壊れないように。
+  const full = 200 + FRAME_OVERHANG_MM * 2;
+  const band = planFrameBand({ axisValue: 1000, faceLo: 900, faceHi: 1100, frameDepth: full, exteriorDir: 1, detail: true });
+  assert.deepEqual(band, { lo: 900 - FRAME_OVERHANG_MM, hi: 1100 + FRAME_OVERHANG_MM, center: 1000, depth: full });
 });
 
 test('planFrameBand: faceLo>faceHiと順序が逆でも同じ帯になる', () => {

@@ -374,10 +374,18 @@ test('【2026-09】帯では柱型の片縁が接合部の端の縦線と畳ま�
     { graph: g1, floorZMm: 0, role: 'self' },
     { graph: g2, floorZMm: FLOOR_HEIGHT, role: 'above' }])[0];
   const jointX = added[0] + (toLocalX(c1, col.xLo) - toLocalX(c1, col.xHi));
-  assert.equal(before.filter(x => Math.abs(x - jointX) < 1e-6).length, 1,
-    '接合部の端の縦線はsolids無しでも1本ある（柱型の片縁と同一位置・同一線種）');
-  assert.equal(after.filter(x => Math.abs(x - jointX) < 1e-6).length, 1,
-    '柱型を足しても接合部xの縦線は1本のまま（dedupeCoincidentLinesが畳む）');
+  // 接合部の端の縦線は**壁断面（CUT＝太線）**（ユーザー明示指示2026-09。仮想断面を横切る壁が
+  // ある端の縦線はCUT）。柱型の片縁は同じ位置の中線なので、dedupeCoincidentLinesが
+  // 「同位置は太い方を残す」で畳む——結果、接合部xの縦線は太線1本のままになる。
+  const cutVerticalsAt = (band, x) => band.primitives.filter(p => p.type === 'line' && p.weight === 'thick'
+    && Math.abs(p.x1 - p.x2) < 1e-6 && Math.abs(p.x1 - x) < 1e-6
+    && Math.abs(Math.min(p.y1, p.y2) + 2400) < 1e-6 && Math.abs(Math.max(p.y1, p.y2)) < 1e-6).length;
+  assert.equal(cutVerticalsAt(without, jointX), 1,
+    '接合部の端の縦線はsolids無しでも壁断面(太線)で1本ある');
+  assert.equal(cutVerticalsAt(with_, jointX), 1,
+    '柱型を足しても接合部xの縦線は太線1本のまま');
+  assert.equal(after.filter(x => Math.abs(x - jointX) < 1e-6).length, 0,
+    '柱型の片縁（中線）は同位置の壁断面へ畳まれ、中線としては残らないはず');
 });
 
 // ================================================================

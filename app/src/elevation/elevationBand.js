@@ -13,6 +13,8 @@ import { makeProbeContext } from './section/sectionProbe.js';
 import { buildCutContent } from './section/sectionContent.js';
 import { cutPlaneOffsetMm, faceCutLine, faceViewSign } from './section/sectionCutPlane.js';
 import { structuralColumnContribution } from './section/sectionStructure.js';
+import { stairContribution, stairPrimitivesForCut, clipStairUnderCeiling } from './section/sectionStair.js';
+import { graphList } from '../graphReadScope.js';
 import { faceBoundaryLocalX, faceWallLessExtents } from './elevationFaces.js';
 import { composeRoomFaces, neighborWallFace } from './elevationFaceList.js';
 import { buildFaceFigure, segEndProfile } from './elevationFigure.js';
@@ -21,6 +23,7 @@ import { roomCeilingHeight } from '../finish/roomMetrics.js';
 import {
   CH_DIM_OFFSET_MM, DEFAULT_FACE_GAP_MM, DEFAULT_TRIANGLE_OFFSET_MM, BAND_TOP_MARGIN_MM,
   DEFAULT_WALL_LESS_END_EXTEND_MM, DEFAULT_DIM_FOOT_GAP_MM,
+  ElevationLineRole, weightForRole, GAP_EPS_MM as BAND_GAP_EPS,
 } from './elevationStyle.js';
 import {
   translatePrimitive, collectGridCLs, appendRoomNameFrame, dedupeCoincidentLines,
@@ -404,6 +407,248 @@ export function ceilProfileFromSegments(segs, run, CH) {
  * @param {{endExtendMm?:number, includeFace?:(face:object)=>boolean}} [opts]
  *   includeFace … 断面エンジンへ通す面の絞り込み（既定=すべて）。
  */
+// 矩形どうしが面積を持って重なるか（mm。接しているだけは重なりとみなさない）。
+const OVER_ROOM_EPS_MM = 1;
+function rectsOverlap(a, b) {
+  return Math.min(a.x2, b.x2) - Math.max(a.x1, b.x1) > OVER_ROOM_EPS_MM
+    && Math.min(a.y2, b.y2) - Math.max(a.y1, b.y1) > OVER_ROOM_EPS_MM;
+}
+
+// flightの世界矩形（走行×幅）。
+function flightRect(f) {
+  return f.isVertical
+    ? { x1: f.acrossLo, x2: f.acrossHi, y1: f.runLo, y2: f.runHi }
+    : { x1: f.runLo, x2: f.runHi, y1: f.acrossLo, y2: f.acrossHi };
+}
+
+/**
+ * その部屋の**上を通る**レーンだけ（折返し階段は往路・復路の2レーンを持ち、階段下の部屋の上に
+ * あるのは普通どちらか一方——面の高さ・ささらの見え方はそのレーンで決まる）。
+ * @param {{flights:object[]}} contribution
+ * @param {{x1:number,y1:number,x2:number,y2:number}|null} bounds - 帯の部屋の包絡矩形
+ */
+function flightsOverRoom(contribution, bounds) {
+  const flights = contribution?.flights ?? [];
+  if (!bounds) return flights;
+  return flights.filter(f => rectsOverlap(bounds, flightRect(f)));
+}
+
+/**
+ * この部屋の**上を通る**階段の3D寄与（ユーザー明示指示2026-09「「13」D: 天井に階段断面と
+ * ささら（下）みえがかりが正解」）——階段下の部屋の展開図には、その上を通る階段が
+ * 断面・見えがかりとして現れる。階段室自身（`stair.roomId === room.id`）は`buildStairBand`の
+ * 担当なので除く。
+ *
+ * 判定はflightの世界矩形（走行×幅）が部屋の包絡矩形と面積を持って重なるか——`stair.cells`と
+ * 部屋のセルは階段下の部屋では重複して登録されうるため、セルの所有ではなく幾何で見る。
+ * @param {import('@core').Room} room
+ * @param {object} graph
+ * @param {number|null|undefined} floorHeight - 設置階〜上階の階高（stairContributionの必須入力）
+ * @returns {ReturnType<typeof stairContribution>|null}
+ */
+export function stairContributionOverRoom(room, graph, floorHeight) {
+  if (floorHeight == null) return null;
+  const b = roomBounds(room.cells, graph);
+  if (!b) return null;
+  for (const stair of graph.stairs ?? []) {
+    if (stair.roomId === room.id) continue;
+    const contribution = stairContribution(stair, graph, floorHeight);
+    if (!contribution) continue;
+    if (flightsOverRoom(contribution, b).length > 0) return contribution;
+  }
+  return null;
+}
+
+/**
+ * 面の壁（axisCL上・面の区間に掛かる実壁）の材の世界範囲の合併。無ければnull。
+ */
+function faceWallMaterialRange(face, graph) {
+  let lo = Infinity, hi = -Infinity;
+  for (const w of graphList(graph, 'walls') ?? []) {
+    if (w.isVertical !== face.isVertical || w.axisCL.id !== face.axisCL.id) continue;
+    const c1 = Math.min(w.coord1, w.coord2), c2 = Math.max(w.coord1, w.coord2);
+    if (c2 <= face.lo + BAND_GAP_EPS || c1 >= face.hi - BAND_GAP_EPS) continue;
+    if (!w.materialRange) continue;
+    lo = Math.min(lo, w.materialRange.lo);
+    hi = Math.max(hi, w.materialRange.hi);
+  }
+  return Number.isFinite(lo) ? { lo, hi } : null;
+}
+
+/**
+ * この面から、上を通るレーンのささらの見えがかりが見えるか（ユーザー明示指示2026-09
+ * 「「13」B: ささら（下）は、B面壁の向こう側なので見えない（=描画しないが正解）」）。
+ *
+ * レーンの幅方向の端（＝そのささらが立つ通り）が、**その面の壁の材を挟んで向こう側**にあれば
+ * 見えない。実機「13」はB面の壁が偏芯していて材が x=−1665〜−1550（部屋の側へ165張り出す）に
+ * あり、レーンの東端（x=−1500）はその向こう側——一方D面は材が −3057.5〜−2942.5 で、レーンの
+ * 西端（x=−3000）は材の中なので見える（＝ご指示の「D: ささら（下）みえがかりが正解」）。
+ * 面と平行に走るレーンが無ければ側面視ではないので判定対象外（true）。
+ * @param {object} face
+ * @param {object} graph
+ * @param {{flights:object[]}} contribution
+ * @returns {boolean}
+ */
+function stringerSightlineVisible(face, graph, contribution, bounds) {
+  const flight = flightsOverRoom(contribution, bounds).find(f => f.isVertical === face.isVertical);
+  if (!flight) return true;
+  const mr = faceWallMaterialRange(face, graph);
+  if (!mr) return true;
+  return face.inward > 0
+    ? flight.acrossLo >= mr.lo - BAND_GAP_EPS
+    : flight.acrossHi <= mr.hi + BAND_GAP_EPS;
+}
+
+/**
+ * その面が図として描かれるローカルx範囲（buildFaceFigureのdrawnX0/drawnXRunと同じ規約）。
+ * 壁のある端はその端まで、壁のない端だけ`extendMm`ぶん外へ延ばす。
+ */
+function faceDrawnXRange(face, extendMm) {
+  return {
+    lo: (face.hasWallAtLocal0 ?? true) ? 0 : -extendMm,
+    hi: (face.hasWallAtLocalRun ?? true) ? face.run : face.run + extendMm,
+  };
+}
+
+/**
+ * 断面エンジンの出力を、その面が描かれる範囲（faceDrawnXRange）へ切り詰める。
+ *
+ * 探査は端の取り合いを見るために面の外まで延長する（withProbeExtension）が、**壁のある端の
+ * 向こうは描かない**——ユーザー明示指示2026-09「「13」C: 左側壁断面の左側にある縦線（2本）は、
+ * 壁の向こう側なので描画不要」。壁のない端の延長（続きがあることを示すはね出し）は
+ * faceDrawnXRangeがそのまま許すので従来どおり。
+ */
+function clipContentToFace(prims, range) {
+  const inX = x => x >= range.lo - BAND_GAP_EPS && x <= range.hi + BAND_GAP_EPS;
+  const out = [];
+  for (const q of prims) {
+    if (q.type === 'line') {
+      const lo = Math.min(q.x1, q.x2), hi = Math.max(q.x1, q.x2);
+      if (hi < range.lo - BAND_GAP_EPS || lo > range.hi + BAND_GAP_EPS) continue;
+      if (lo >= range.lo - BAND_GAP_EPS && hi <= range.hi + BAND_GAP_EPS) { out.push(q); continue; }
+      if (Math.abs(q.x1 - q.x2) < BAND_GAP_EPS) continue; // 縦線は範囲外なら落とすだけ
+      const at = t => [q.x1 + (q.x2 - q.x1) * t, q.y1 + (q.y2 - q.y1) * t];
+      const tOf = x => (x - q.x1) / (q.x2 - q.x1);
+      const t0 = Math.min(Math.max(tOf(range.lo), 0), 1), t1 = Math.min(Math.max(tOf(range.hi), 0), 1);
+      const [ta, tb] = t0 <= t1 ? [t0, t1] : [t1, t0];
+      if (tb - ta < 1e-9) continue;
+      const [x1, y1] = at(ta), [x2, y2] = at(tb);
+      out.push({ ...q, x1, y1, x2, y2 });
+    } else if (q.type === 'polyline' && Array.isArray(q.points)) {
+      for (const pts of clipPolylineX(q.points, range.lo, range.hi)) out.push({ ...q, points: pts });
+    } else if (q.type === 'text' || q.type === 'rect') {
+      if (inX(q.x)) out.push(q);
+    } else {
+      out.push(q);
+    }
+  }
+  return out;
+}
+
+// 点列をx範囲[lo,hi]でクリップし、連続する残り区間ごとの点列を返す（範囲の境界では補間する
+// ——点の取捨だけだと、範囲を跨ぐ2点の線分がまるごと消える）。
+function clipPolylineX(points, lo, hi) {
+  const out = [];
+  let run = [];
+  const push = pt => {
+    const last = run[run.length - 1];
+    if (!last || Math.abs(last[0] - pt[0]) > 1e-9 || Math.abs(last[1] - pt[1]) > 1e-9) run.push(pt);
+  };
+  const flush = () => { if (run.length > 1) out.push(run); run = []; };
+  for (let i = 0; i + 1 < points.length; i++) {
+    const [x1, y1] = points[i], [x2, y2] = points[i + 1];
+    const at = t => [x1 + (x2 - x1) * t, y1 + (y2 - y1) * t];
+    let ta = 0, tb = 1;
+    if (Math.abs(x2 - x1) < 1e-9) {
+      if (x1 < lo - BAND_GAP_EPS || x1 > hi + BAND_GAP_EPS) { flush(); continue; }
+    } else {
+      const t0 = (lo - x1) / (x2 - x1), t1 = (hi - x1) / (x2 - x1);
+      ta = Math.max(0, Math.min(t0, t1));
+      tb = Math.min(1, Math.max(t0, t1));
+      if (tb - ta < 1e-9) { flush(); continue; }
+    }
+    push(at(ta)); push(at(tb));
+    if (tb < 1 - 1e-9) flush(); // 線分の途中で範囲外へ出た＝ここで途切れる
+  }
+  flush();
+  return out;
+}
+
+/**
+ * その走行位置（世界座標）での階段（flight）の段鼻の高さ。区間の外は端の高さでクランプする。
+ */
+function stairZAtRun(flight, runWorld) {
+  const start = flight.travelSign > 0 ? flight.runLo : flight.runHi;
+  const end   = flight.travelSign > 0 ? flight.runHi : flight.runLo;
+  if (Math.abs(end - start) < BAND_GAP_EPS) return flight.baseZ;
+  const t = Math.min(Math.max((runWorld - start) / (end - start), 0), 1);
+  return flight.baseZ + t * flight.steps * flight.riserMm;
+}
+
+/**
+ * 面の端の縦線（SILHOUETTE。buildFaceFigureが天井から床まで引く）の上端を`topY`まで下げる。
+ * 階段下の部屋では、その端の天井は階段そのもの（ユーザー明示指示2026-09「「13」B: 左の壁断面：
+ * 階段断面との取り合いまで」「「13」D: 右の縦断面は、階段断面と出会ったところが終点」）。
+ */
+function lowerFaceEndVertical(primitives, xCursor, localX, ceilAbs, topY) {
+  // **線種で絞らない**——面端の縦線は壁断面(CUT)で描かれ（仮想断面を横切る壁がある端）、
+  // 同じ位置に断面エンジンの凹み側面線(SILHOUETTE)も出る。中線だけを対象にすると、
+  // 壁断面は天井まで伸びたまま中線だけが階段の高さで止まり、取り合わない（実機「13」B・D）。
+  const weights = new Set([weightForRole(ElevationLineRole.SILHOUETTE), weightForRole(ElevationLineRole.CUT)]);
+  const x = xCursor + localX;
+  for (let i = 0; i < primitives.length; i++) {
+    const q = primitives[i];
+    if (q.type !== 'line' || !weights.has(q.weight)) continue;
+    if (Math.abs(q.x1 - x) > BAND_GAP_EPS || Math.abs(q.x2 - x) > BAND_GAP_EPS) continue;
+    const top = Math.min(q.y1, q.y2), bottom = Math.max(q.y1, q.y2);
+    if (Math.abs(top + ceilAbs) > BAND_GAP_EPS) continue; // その面の天井から立ち上がる縦線だけ
+    if (topY <= top + BAND_GAP_EPS) continue;
+    primitives[i] = { ...q, x1: x, y1: topY, x2: x, y2: bottom };
+  }
+}
+
+/**
+ * 天井断面線（CUTの水平線）を、指定の高さ`newY`へ引き直す（階段下の部屋の、階段を横切る面）。
+ */
+function setCeilingLineY(primitives, xCursor, face, ceilAbs, newY) {
+  const w = weightForRole(ElevationLineRole.CUT);
+  const y = -ceilAbs;
+  const panelLo = xCursor - DEFAULT_WALL_LESS_END_EXTEND_MM - 1;
+  const panelHi = xCursor + face.run + DEFAULT_WALL_LESS_END_EXTEND_MM + 1;
+  for (let i = 0; i < primitives.length; i++) {
+    const q = primitives[i];
+    if (q.type !== 'line' || q.weight !== w) continue;
+    if (Math.abs(q.y1 - y) > BAND_GAP_EPS || Math.abs(q.y2 - y) > BAND_GAP_EPS) continue;
+    const lo = Math.min(q.x1, q.x2), hi = Math.max(q.x1, q.x2);
+    if (hi < panelLo || lo > panelHi) continue;
+    primitives[i] = { ...q, y1: newY, y2: newY };
+  }
+}
+
+/**
+ * 天井断面線（CUTの水平線）を、階段断面とぶつかったxで止める。`primitives`のうちこの面の
+ * パネル範囲に掛かる y=-ceilAbs の水平CUT線だけを対象に、残す側へ縮める（範囲外になった線は
+ * 取り除く）。図（buildFaceFigure）は断面エンジンより前に組まれるため、階段断面との交点は
+ * ここでしか分からない——交点は描かれた階段断面そのもの（clipStairUnderCeilingのcrossXs）から
+ * 採るので、天井線と階段断面はかならず同じ点で出会う。
+ */
+function trimCeilingLineAt(primitives, xCursor, face, ceilAbs, keep) {
+  const cutWeight = weightForRole(ElevationLineRole.CUT);
+  const y = -ceilAbs;
+  const panelLo = xCursor - DEFAULT_WALL_LESS_END_EXTEND_MM - 1;
+  const panelHi = xCursor + face.run + DEFAULT_WALL_LESS_END_EXTEND_MM + 1;
+  for (let i = primitives.length - 1; i >= 0; i--) {
+    const q = primitives[i];
+    if (q.type !== 'line' || q.weight !== cutWeight) continue;
+    if (Math.abs(q.y1 - y) > BAND_GAP_EPS || Math.abs(q.y2 - y) > BAND_GAP_EPS) continue;
+    const lo = Math.min(q.x1, q.x2), hi = Math.max(q.x1, q.x2);
+    if (hi < panelLo || lo > panelHi) continue;
+    const nLo = Math.max(lo, keep.lo), nHi = Math.min(hi, keep.hi);
+    if (nHi - nLo <= BAND_GAP_EPS) { primitives.splice(i, 1); continue; }
+    primitives[i] = { ...q, x1: nLo, x2: nHi };
+  }
+}
+
 export function appendBandCutContent(primitives, room, graph, layout, layers, opts = {}) {
   const endExtendMm = opts.endExtendMm ?? DEFAULT_WALL_LESS_END_EXTEND_MM;
   const includeFace = opts.includeFace ?? (() => true);
@@ -452,8 +697,74 @@ export function appendBandCutContent(primitives, room, graph, layout, layers, op
         farCeilZ: sp.farCeilAbsMm,
       })),
     };
-    const { content } = buildCutContent(cut, probeCtx, { endExtendMm, bandRoomBounds, scale: opts.scale });
-    for (const p of content) primitives.push(translatePrimitive(p, xCursor, 0));
+    const { cut: pcut, columns, content } = buildCutContent(
+      cut, probeCtx, { endExtendMm, bandRoomBounds, scale: opts.scale });
+    const drawnX = faceDrawnXRange(face, endExtendMm);
+    for (const p of clipContentToFace(content, drawnX)) {
+      primitives.push(translatePrimitive(p, xCursor, 0));
+    }
+    // 階段下の部屋: 上を通る階段の断面・見えがかりを重ねる（階段帯とまったく同じ部品）。
+    // 梯子（正面視の踏面）は出さない——下から見上げる面には踏面の正面は見えない。
+    if (opts.stairOver) {
+      // 梯子（踏面の見えがかり。DETAIL＝細線）は描く（ユーザー明示指示2026-09「「13」A:
+      // 階段見えがかりの梯子（細線）を描く」）。
+      const raw = stairPrimitivesForCut(opts.stairOver, pcut, columns, {
+        includeStringerSightline: stringerSightlineVisible(face, graph, opts.stairOver, bandRoomBounds),
+        stringerSightlineLowerOnly: true,
+      });
+      // 天井が張られている範囲では、その上の階段は天井に隠れる（clipStairUnderCeiling）。
+      const ceilAbs = layout.CH;
+      const { prims: shown, crossXs } = clipStairUnderCeiling(raw, ceilAbs);
+      for (const p of clipContentToFace(shown, drawnX)) {
+        primitives.push(translatePrimitive(p, xCursor, 0));
+      }
+      // 面を**横切る**レーン（正面視）の下は、その面の天井が階段そのもの——天井断面線を
+      // 階段の高さへ引き直す（ユーザー明示指示2026-09「「13」A: 天井高さは、B面の階段断面との
+      // 取り合い高さ」）。両端の縦線もその高さで止まる。
+      const crossFlight = flightsOverRoom(opts.stairOver, bandRoomBounds)
+        .find(f => f.isVertical !== face.isVertical);
+      if (crossFlight) {
+        const z = stairZAtRun(crossFlight, face.axisCL.effectiveValue);
+        // **端の縦線（仮想断面）は下げない**——天井に高低差が生じ、低い方を見る面では
+        // 仮想断面は最も高い位置まで引く（ユーザー明示指示2026-09「「13」A: 天井に高低差が
+        // 生じ、低い方を見る場合は、最も高い位置まで仮想断面を引く」）。動かすのは天井断面線だけ。
+        if (z < ceilAbs - BAND_GAP_EPS) setCeilingLineY(primitives, xCursor, face, ceilAbs, -z);
+      }
+      // 面と**平行**なレーン（側面視）では、階段断面が面の端まで届いていれば、その端の縦線は
+      // 階段断面と出会ったところで終わる（同指示「「13」B: 左の壁断面：階段断面との取り合いまで」
+      // 「「13」D: 右の縦断面は、階段断面と出会ったところが終点」）。
+      // **面と平行なレーン（側面視）のときだけ**。面を横切るレーン（正面視。実機「13」A）では
+      // 端の縦線＝仮想断面は最も高い位置まで引く（上記）ので、ささらの断面の高さで下げない。
+      const alongFlight = flightsOverRoom(opts.stairOver, bandRoomBounds)
+        .find(f => f.isVertical === face.isVertical);
+      const cutWeightStair = weightForRole(ElevationLineRole.CUT);
+      const stairPts = alongFlight
+        ? shown.filter(q => q.weight === cutWeightStair)
+          .flatMap(q => (q.type === 'polyline' ? q.points : [[q.x1, q.y1], [q.x2, q.y2]]))
+        : [];
+      for (const localX of [0, face.run]) {
+        const ys = stairPts.filter(([px]) => Math.abs(px - localX) < BAND_GAP_EPS).map(([, py]) => py);
+        if (ys.length > 0) lowerFaceEndVertical(primitives, xCursor, localX, ceilAbs, Math.max(...ys));
+      }
+      // 階段断面が天井とぶつかったなら、そこで天井断面線を止める（残すのは階段が無い側）。
+      // **階段がどちら側に残るかは重心で決める**——交点の直前・直後の点だけで見ると、段鼻の
+      // 出っ張り（数十mm）で向きが反転して判定を誤る。
+      if (crossXs.length > 0) {
+        const cutWeight = weightForRole(ElevationLineRole.CUT);
+        const xs = shown.filter(q => q.weight === cutWeight)
+          .flatMap(q => (q.type === 'polyline' ? q.points : [[q.x1, q.y1], [q.x2, q.y2]]))
+          .filter(([, py]) => py > -ceilAbs + BAND_GAP_EPS) // 天井より下＝現わしの側
+          .map(([px]) => px);
+        if (xs.length > 0) {
+          const centroid = xs.reduce((a, b) => a + b, 0) / xs.length;
+          const stairOnLoSide = centroid < Math.min(...crossXs);
+          const boundary = xCursor + (stairOnLoSide ? Math.max(...crossXs) : Math.min(...crossXs));
+          trimCeilingLineAt(primitives, xCursor, face, ceilAbs, stairOnLoSide
+            ? { lo: boundary, hi: Infinity }
+            : { lo: -Infinity, hi: boundary });
+        }
+      }
+    }
   });
 }
 
@@ -480,7 +791,8 @@ export function buildRoomBand(room, graph, ctx = {}) {
   // へ任せる。通常の部屋帯の層スタックは自階1層だけ——上階・下階が無いだけで、切断線の位置・
   // 探査延長・見えがかりの距離判定・アキは多層帯と同一の処理を通る。
   appendBandCutContent(primitives, room, graph, layout, [{ graph, floorZMm: 0, role: 'self' }],
-    { endExtendMm: ctx.wallLessEndExtendModelMm });
+    { endExtendMm: ctx.wallLessEndExtendModelMm,
+      stairOver: stairContributionOverRoom(room, graph, ctx.solids?.floorHeightMm) });
   return finalizeBand(room, graph, primitives, {
     faceCount: faces.length, chDimX: layout.chDimX, prevBoundaryHi: layout.prevBoundaryHi,
     triOffsetMm: ctx.triangleOffsetModelMm, nameGapModelMm: ctx.nameGapModelMm,

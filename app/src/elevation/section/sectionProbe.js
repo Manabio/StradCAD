@@ -53,7 +53,10 @@ function sameZBand(a, b) {
         && (a.openingPassThrough ?? false) === (b.openingPassThrough ?? false);
     case 'cut':
     case 'cutAlong':
-      return a.wall === b.wall && a.layerRole === b.layerRole;
+      // 建具の開口で切れている区間は「同じ壁」でも別の帯（壁ではなく開口）——統合すると
+      // openingPassThroughが消えて詰まった壁の断面に戻る（'wall'側と同じ理由）。
+      return a.wall === b.wall && a.layerRole === b.layerRole
+        && (a.openingPassThrough ?? false) === (b.openingPassThrough ?? false);
     case 'slab':
       return a.ownerRoom === b.ownerRoom && a.floorZ === b.floorZ && a.ceilZ === b.ceilZ;
     case 'open':
@@ -385,7 +388,8 @@ function openingPassThroughRangesFor(wall, graph, worldMid, floorZ, z0, z1) {
     if (worldMid < c1 - GAP_EPS || worldMid > c2 + GAP_EPS) continue;
     const abs = openingAbsZRange(o, floorZ);
     const lo = clamp(abs.z0, z0, z1), hi = clamp(abs.z1, z0, z1);
-    if (hi - lo > GAP_EPS) ranges.push({ z0: lo, z1: hi });
+    // openingも添える——切断壁ではその建具の断面（枠・扉）を描くため（sectionEmit.js）。
+    if (hi - lo > GAP_EPS) ranges.push({ z0: lo, z1: hi, opening: o });
   }
   return ranges;
 }
@@ -593,7 +597,14 @@ export function probeColumn(cut, worldMid, probeCtx) {
         if (worldMid < mr.lo - GAP_EPS || worldMid > mr.hi + GAP_EPS) continue;
         // アキ（腰壁＋垂れ壁）は2つの帯になる（kneeDropZRangesAt）ため、候補も範囲ごとに積む。
         for (const { z0, z1 } of kneeDropZRangesAt(layer.graph, w, line.axisValue, info.floorZ, info.ceilZ)) {
-          candidates.push({ kind: 'cut', wall: w, layer, distMm: 0, z0, z1,
+          // **仮想断面がその壁の建具を切っているか**（ユーザー明示指示2026-09「仮想断面抽出時、
+          // 建具を切っているものがないか判定する処理を追加して反映させて」）。切断壁における
+          // 「壁の長さ方向の位置」は切断線の軸そのもの（line.axisValue）——見えがかり壁が
+          // worldMid（列の位置）で見るのと対になる。ここで拾ったz範囲の帯は壁ではなく建具の
+          // 開口なので、`emitColumns`が壁の断面ではなく開口として描く。
+          const openRanges = openingPassThroughRangesFor(
+            w, layer.graph, line.axisValue, info.floorZ, z0, z1);
+          candidates.push({ kind: 'cut', wall: w, layer, distMm: 0, z0, z1, openRanges,
             isKneeDrop: isKneeDropRange(z0, z1, info) });
         }
       } else if (isCutAlongWall(w, line)) {
@@ -669,10 +680,18 @@ export function probeColumn(cut, worldMid, probeCtx) {
         compareLayerPriority(a, b))[0];
     if (frontMatch) {
       const mr = frontMatch.wall.materialRange;
-      bands.push({
+      const band = {
         kind: frontMatch.kind, z0, z1, wall: frontMatch.wall, layerRole: frontMatch.layer.role,
         thicknessMm: Math.abs(mr.hi - mr.lo), isKneeDrop: frontMatch.isKneeDrop === true,
-      });
+      };
+      // 切断壁でも、そのz区間が建具の開口なら開口として印を付ける（見えがかり壁と同じ規約）。
+      // どの建具かも持たせる——emitColumnsがその建具の断面（枠・扉）を描くため。
+      const hit = (frontMatch.openRanges ?? []).find(r => zm > r.z0 - GAP_EPS && zm < r.z1 + GAP_EPS);
+      if (hit) {
+        band.openingPassThrough = true;
+        if (hit.opening) band.opening = hit.opening;
+      }
+      bands.push(band);
       continue;
     }
 

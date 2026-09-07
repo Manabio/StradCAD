@@ -880,9 +880,18 @@ export function landingFramePrimitives(landing, cut, columns, unit, mitreX = nul
  * @param {{flights:Flight[], landings:Landing[], structure:string|null, unit?:StairUnit, secondaryFlights?:Flight[]}|null} contribution
  * @param {import('./sectionTypes.js').SectionCut} cut
  * @param {import('./sectionTypes.js').SectionColumn[]} columns
+ * @param {{includeLadder?:boolean, includeStringerSightline?:boolean}} [opts]
+ *   includeLadder=false で正面視の梯子（踏面の水平線）を出さない（ユーザー明示指示2026-09
+ *   「梯子の件: 階段下は描画しない」。階段下の部屋の展開は階段を**下から**見るため、踏面を
+ *   正面から見た梯子は見えない）。
+ *   includeStringerSightline=false でレーン側面視のささらの見えがかりを出さない（同指示
+ *   「「13」B: ささら（下）は、B面壁の向こう側なので見えない」）。
+ *   stringerSightlineLowerOnly=true でささらの帯のうち**下端の輪郭だけ**を描く（同指示
+ *   「「13」D: 階段断面のささら（上）は、部屋の向こう側なので描画不要」。階段下から見上げる面では
+ *   ささらの上端線は踏面の裏＝部屋の外にある）。既定はいずれも従来どおり。
  * @returns {object[]}
  */
-export function stairPrimitivesForCut(contribution, cut, columns) {
+export function stairPrimitivesForCut(contribution, cut, columns, opts = {}) {
   if (!contribution) return [];
   const prims = [];
   // 階段の走行軸の向き。**flightsが空でも踊り場から取れる**ようにする（ユーザー実機指摘2026-08
@@ -924,7 +933,9 @@ export function stairPrimitivesForCut(contribution, cut, columns) {
       }
     }
     const ladderAcross = isSteel ? ladderAcrossRange(flight, trueAcrossLo, trueAcrossHi, LANE_GAP) : flight;
-    prims.push(...flightLadderPrimitives(flight, cut, columns, ladderAcross));
+    if (opts.includeLadder !== false) {
+      prims.push(...flightLadderPrimitives(flight, cut, columns, ladderAcross));
+    }
     // ささら正面視（レーンを横切る切断のみ該当。§6「鉄骨階段のみ」）: 12mm厚×せいSTEEL_STRINGER_
     // DEPTH_MMの断面矩形をCUT（太線）で描く。ユーザー指示「断面は太線」対応。
     if (isSteel) {
@@ -983,13 +994,67 @@ export function stairPrimitivesForCut(contribution, cut, columns) {
   // 輪郭（DETAIL＝切断面の向こう側にあるこのレーン自身のささら）を追加する。ユーザー指示
   // 「見えかがりは細線」対応（stringerPrimitives参照。2026-08-23実機修正でジグザグ自体が
   // CUTとして見えるようになったため、これは踏面のCUTに重ねて描く追加の輪郭になる）。
-  if (isSteel) {
+  if (isSteel && opts.includeStringerSightline !== false) {
     for (const { points, flight } of zigzagEntries) {
       prims.push(...stringerPrimitives(points, STEEL_STRINGER_DEPTH_MM, flightZBounds(flight),
         { noses: computeFlightProfile(flight, cut, columns).noses,
           baseboardMm: contribution.unit?.baseboardHeightMm ?? 0,
+          bottomOnly: opts.stringerSightlineLowerOnly === true,
           ...landingMitreOpts(flight, contribution.landings, contribution.unit) }));
     }
   }
   return prims;
+}
+
+/**
+ * 階段下の部屋の天井との取り合い（ユーザー明示指示2026-09「「13」D/B: 扉近くがCH貼りのばし、
+ * 鉄骨階段と取り合う先は鉄骨階段現わし」「天井を止める基準: CHの線が階段断面とぶつかるところ」）。
+ *
+ * 天井が張られている範囲では、その上の階段は天井に隠れて見えない——絶対z=`ceilAbsZ`（図のy=-z）
+ * より**上**にある階段プリミティブを落とし、またぐ線分は天井の高さちょうどで切る。切った位置
+ * （crossXs）が呼び出し側の「天井断面線をどこで止めるか」の単一情報源になる（作図側で別に
+ * 交点を計算すると、描かれた階段断面と天井線が食い違う）。
+ * @param {object[]} prims - stairPrimitivesForCutの出力（面ローカル座標）
+ * @param {number} ceilAbsZ - その面の天井の絶対z(mm)
+ * **crossXsに数えるのはCUT（階段の断面＝踏面・蹴上の輪郭）だけ**——ユーザー明示指示
+ * 「天井を止める基準: CHの線が階段断面とぶつかるところ」。見えがかりのささら（DETAIL）は
+ * 断面ではないので、天井を止める位置は決めない（クリップ自体は同じように受ける）。
+ * @returns {{prims:object[], crossXs:number[]}} crossXsは階段断面が天井と交わったローカルx。
+ */
+export function clipStairUnderCeiling(prims, ceilAbsZ) {
+  const yc = -ceilAbsZ;
+  const under = y => y >= yc - GAP_EPS; // 図のyは下向き負＝yが大きいほど低い＝天井より下
+  const cutWeight = weightForRole(ElevationLineRole.CUT);
+  const crossXs = [];
+  const addCross = (weight, x) => { if (weight === cutWeight) crossXs.push(x); };
+  const out = [];
+  const xAt = (x1, y1, x2, y2) => x1 + ((yc - y1) / (y2 - y1)) * (x2 - x1);
+  for (const p of prims) {
+    if (p.type === 'line') {
+      const u1 = under(p.y1), u2 = under(p.y2);
+      if (u1 && u2) { out.push(p); continue; }
+      if (!u1 && !u2) continue;
+      const xm = xAt(p.x1, p.y1, p.x2, p.y2);
+      addCross(p.weight, xm);
+      out.push(u1 ? { ...p, x2: xm, y2: yc } : { ...p, x1: xm, y1: yc });
+    } else if (p.type === 'polyline' && Array.isArray(p.points)) {
+      let run = [];
+      const flush = () => { if (run.length > 1) out.push({ ...p, points: run }); run = []; };
+      for (let i = 0; i < p.points.length; i++) {
+        const [x, y] = p.points[i];
+        if (under(y)) run.push([x, y]);
+        const next = p.points[i + 1];
+        if (!next) break;
+        const [nx, ny] = next;
+        if (under(y) === under(ny)) continue;
+        const xm = xAt(x, y, nx, ny);
+        addCross(p.weight, xm);
+        if (under(y)) { run.push([xm, yc]); flush(); } else { run = [[xm, yc]]; }
+      }
+      flush();
+    } else {
+      out.push(p);
+    }
+  }
+  return { prims: out, crossXs };
 }
