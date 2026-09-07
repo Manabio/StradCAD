@@ -57,6 +57,10 @@ import { planWallHeight } from '../finish/kneeDropWall.js';
  *    **ここで隠すのは「覆われた角の矩形の中に完全に収まる壁」だけ**——腰壁の区間の端に
  *    半分だけ掛かる駒（区間の外側では全高の壁が続く）はそのまま全高の壁であり、
  *    腰壁として扱うと全高どうしのT字・十字の取り合いが壊れる（実機で確認した回帰）。
+ *  - 逆に、**交差する両方の通りが腰壁**だと、交差部の駒だけが全高のまま残って「高い方」に
+ *    なり、角を取り巻いて相手の天板まで切ってしまう。角の矩形に丸ごと埋まった駒
+ *    （`isCornerFiller`）は覆う側にせず、自分を`spanCuts`で落とす——角は天板どうしの
+ *    取り合い（finish/kneeDropWall.js の`capJoins`）に任せる（実機2026-09「10」2階 X3×Y1-2000）。
  * パス0が先に走るのは、この「隠れる壁」の確定をパス1〜3の入口ガードに使うため。
  * `kneeDropOverlays` を渡さない呼び出し（略図LOD・旧テスト）は全壁が同じ高さ＝パス0は何もしない。
  *
@@ -296,6 +300,36 @@ function fullFaceRange(a, group) {
 }
 
 /**
+ * aが「交差部の駒」——低い壁（腰壁）どうしの角の矩形に**丸ごと埋まった全高の壁**——か。
+ *
+ * 壁生成は部屋の外周を部屋ごとに切り出すため、角にはどちらの辺にも属さない短い駒が残ることが
+ * ある。その駒に腰壁の指定は乗らない（区間の端に半分だけ掛かるので構成壁ではない）ので全高の
+ * 壁として残り、パス0では**駒が「高い方」になって**角を取り巻き、腰壁の天板を切ってしまう
+ * （実機2026-09「10」2階 X3×Y1-2000: 交差部に壁厚2本線のL字が出て、縦の天板が駒の面で切れた）。
+ * 駒は角の矩形に完全に埋まっている＝切断面に見えるのは両側の腰壁の天板だけなので、描かない。
+ *
+ * 判定は**両方向の封じ込め**で行う（片方だけだと普通の壁を消しかねない）:
+ *   長さ方向 … 交差壁bの帯（bBand）に丸ごと収まる＝bに突き当たって終わる壁ではなくbの中の駒。
+ *   厚み方向 … 同じ通りで隣り合う**低い壁**の材の中に収まる＝腰壁の帯の中の駒。
+ * さらに同じ通りに全高の壁が隣接していれば駒ではなく全高の連なりの一部なので対象外
+ * （その角は全高どうしの取り合い。低い壁に覆われる駒の非表示はパス0の既存規則が扱う）。
+ */
+function isCornerFiller(a, bBand, sameDir) {
+  if (a.lenLo < bBand.lo - CONTAIN_EPS || a.lenHi > bBand.hi + CONTAIN_EPS) return false;
+  let lo = Infinity, hi = -Infinity;
+  for (const k of sameDir) {
+    if (k.id === a.id) continue;
+    if (Math.abs(k.axisCLValue - a.axisCLValue) > AXIS_EPS) continue;
+    // 長さ方向で隣り合う（角で接する）壁だけを宿主候補にする
+    if (k.lenHi < a.lenLo - TOUCH_TOLERANCE || k.lenLo > a.lenHi + TOUCH_TOLERANCE) continue;
+    if (!(k.planHeight < a.planHeight)) return false; // 同じ通りに全高の壁が続く＝駒ではない
+    lo = Math.min(lo, k.materialRange.lo);
+    hi = Math.max(hi, k.materialRange.hi);
+  }
+  return a.materialRange.lo >= lo - CONTAIN_EPS && a.materialRange.hi <= hi + CONTAIN_EPS;
+}
+
+/**
  * 壁配列から取り合い（T字・コーナー・高さ差）を検出し、壁ID → 描画調整のMapを返す。
  * @param {import('@core').Wall[]} walls
  * @param {Map<string, object>|null} [kneeDropOverlays] finish/kneeDropWall.js の
@@ -417,6 +451,13 @@ export function resolveWallTJunctions(walls, kneeDropOverlays = null) {
           && c.lenLo <= a.materialRange.hi + CONTAIN_EPS && c.lenHi >= a.materialRange.lo - CONTAIN_EPS
           && (c.lenLo < aBand.lo - CONTAIN_EPS || c.lenHi > aBand.hi + CONTAIN_EPS));
         if (sharedByTallWall) continue;
+
+        // 角の矩形に丸ごと埋まった駒は覆う側にしない——描かず（spanCutsで全長を落とす）、
+        // 角は両側の腰壁の天板どうしの取り合い（finish/kneeDropWall.js の capJoins）に任せる。
+        if (isCornerFiller(a, bBand, sameDir)) {
+          ensure(a.id).spanCuts.push([alo, ahi]);
+          continue;
+        }
 
         for (const [end, coord, anchorCoord] of [['lo', alo, ahi], ['hi', ahi, alo]]) {
           // aのこの端がbの帯に触れているか（触れていない端＝反対側の自由端は対象外）。

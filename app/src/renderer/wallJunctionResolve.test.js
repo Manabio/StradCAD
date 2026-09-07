@@ -1225,6 +1225,66 @@ test('【実機修正2026-09】resolveWallTJunctions【パス0】: 角に全高�
   assert.equal(r2.get('V-hi-thin')?.endExtend.lo, -5045, '腰壁の帯の遠位面まで覆うはず');
 });
 
+// ---- 腰壁どうしの角に残る駒（実機2026-09「10」2階 X3×Y1-2000）----
+// 交差する両方の通りが腰壁だと、交差部の駒だけが全高のまま残り、パス0では**駒が「高い方」に
+// なって**角を取り巻き、腰壁の天板を自分の材の幅で切っていた（交差部に壁厚2本線のL字が出て、
+// 縦の天板が駒の面で切れる）。駒は角の矩形に丸ごと埋まっている＝切断面に見えるのは両側の
+// 天板だけなので描かず、角は天板どうしの取り合い（finish/kneeDropWall.js の capJoins）に任せる。
+function kneeCornerWithFiller({ crossIsKnee = true, tallOnFillerRun = false } = {}) {
+  // 縦の腰壁（通りx=0・帯[-57.5,57.5]）と横の腰壁（通りy=-2000・帯[-2057.5,-1942.5]）のL字。
+  const vOwner = stubWall({ id: 'V-owner', isVertical: true, axis: 0, face: 57.5,
+    coord1: -2057.5, coord2: -57.5, backingRange: { lo: -45, hi: 45 }, materialRange: { lo: -45, hi: 57.5 } });
+  const vThin = stubWall({ id: 'V-thin', isVertical: true, axis: 0, face: -57.5, faceDir: -1,
+    coord1: -1942.5, coord2: -57.5, backingRange: null, materialRange: { lo: -57.5, hi: -45 } });
+  const hOwner = stubWall({ id: 'H-owner', isVertical: false, axis: -2000, face: -1942.5,
+    coord1: -2942.5, coord2: -57.5, backingRange: { lo: -2045, hi: -1955 }, materialRange: { lo: -2045, hi: -1942.5 } });
+  const hThin = stubWall({ id: 'H-thin', isVertical: false, axis: -2000, face: -2057.5, faceDir: -1,
+    coord1: -2942.5, coord2: -57.5, backingRange: null, materialRange: { lo: -2057.5, hi: -2045 } });
+  // 交差部の駒（腰壁の指定は乗らない＝全高のまま）
+  const filler = stubWall({ id: 'H-filler', isVertical: false, axis: -2000, face: -2057.5, faceDir: -1,
+    coord1: -57.5, coord2: 57.5, backingRange: { lo: -2045, hi: -1955 }, materialRange: { lo: -2057.5, hi: -1955 } });
+  const walls = [vOwner, vThin, hOwner, hThin, filler];
+  // 駒と同じ通りの反対側に全高の壁が続くケース（駒は全高の連なりの一部＝隠さない）
+  if (tallOnFillerRun) {
+    walls.push(stubWall({ id: 'H-tall-east', isVertical: false, axis: -2000, face: -1942.5,
+      coord1: 57.5, coord2: 2000, backingRange: { lo: -2045, hi: -1955 }, materialRange: { lo: -2045, hi: -1942.5 } }));
+  }
+  const overlays = new Map([['H-owner', kneeOverlay(800)], ['H-thin', kneeOverlay(800)]]);
+  if (crossIsKnee) {
+    overlays.set('V-owner', kneeOverlay(800));
+    overlays.set('V-thin', kneeOverlay(800));
+  }
+  return resolveWallTJunctions(walls, overlays);
+}
+
+test('【実機2026-09「10」】resolveWallTJunctions【パス0】: 腰壁どうしの角に残る駒は描かず、天板も切らない', () => {
+  const r = kneeCornerWithFiller();
+  const cuts = [...(r.get('H-filler')?.spanCuts ?? [])].sort((a, b) => a[0] - b[0]);
+  let reach = -57.5;
+  for (const [lo, hi] of cuts) { if (lo > reach + 0.5) break; reach = Math.max(reach, hi); }
+  assert.equal(reach >= 57.5, true, `駒の全長がspanCutsで覆われるはず: ${JSON.stringify(cuts)}`);
+  assert.deepEqual(r.get('H-filler')?.endWrap ?? {}, {}, '駒は端部を取り巻かない（壁厚2本線のL字を出さない）');
+  for (const id of ['V-owner', 'V-thin']) {
+    assert.deepEqual(r.get(id)?.spanCuts ?? [], [],
+      `${id}: 天板は駒の材の幅で切られず、端まで描かれるはず`);
+  }
+});
+
+test('【失敗系】resolveWallTJunctions【パス0】: 交差する通りが全高なら、その壁が従来どおり角を覆って取り巻く', () => {
+  const r = kneeCornerWithFiller({ crossIsKnee: false });
+  // 駒は全高の縦壁が覆う角の矩形に収まるので、既存の「覆われた角に隠れる壁」の規則で消える
+  // ——新しい規則（腰壁どうしの角の駒）に横取りさせない。
+  assert.equal(r.get('V-owner')?.endWrap.lo, true, '全高の壁は端部を仕上げ材で取り巻くはず');
+  assert.equal(r.get('V-thin')?.endExtend.lo, -2057.5, '腰壁の帯の遠位面まで伸びるはず');
+  assert.deepEqual(r.get('H-owner')?.spanCuts ?? [], [[-57.5, 57.5], [-57.5, 57.5]],
+    '腰壁の天板は全高の壁の帯ぶん落ちる');
+});
+
+test('【失敗系】resolveWallTJunctions【パス0】: 駒と同じ通りに全高の壁が続くなら隠さない', () => {
+  const r = kneeCornerWithFiller({ tallOnFillerRun: true });
+  assert.deepEqual(r.get('H-filler')?.spanCuts ?? [], [], '駒ではなく全高の連なりの一部');
+});
+
 // ==================================================================
 // パス5: 材が続く端には妻線を描かない（ユーザー確定2026-09「壁のL字・T字取り合いに、角で
 // 壁下地材面から対岸の壁仕上げ材の部屋側表面までの線分が残る」）。
