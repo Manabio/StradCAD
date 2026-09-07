@@ -9,8 +9,8 @@
  * **内側線の合わせ先**——「相手の内側線の位置（`finBoundary`）へ置く」。
  *
  * この規則を使う経路（**判定を変えるときはこのファイルだけを直す**）:
- *  - 壁 ↔ 壁: `renderer/wallJunctionResolve.js` パス2（出隅・入隅・十字）。相手壁の
- *    `finBoundary` を自壁のfin線の端点（finEnd）に置く。
+ *  - 壁 ↔ 壁: `renderer/planWallRegion.js` の下地矩形の端の正規化（出隅・入隅・T字）。相手壁の
+ *    `finBoundary` へ自壁の下地の端を置く（旧 `wallJunctionResolve.js` パス2の finEnd）。
  *  - 壁 ↔ 柱の仕上げ包み（柱壁）: `finish/columnWrap.js` `resolveSideCover` のトリム分岐。
  *    包みの面が壁の仕上げ面へ揃った側では、包みの内側境界を相手壁の `finBoundary` に置く
  *    （`finishJoinInset`）。**自前の仕上げ厚で内側へ入れると、壁のfin線と柱壁の内側線が

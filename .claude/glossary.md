@@ -152,3 +152,14 @@ WINDING/L_TURN/FLARED/OPEN_WELLは対象外＝従来面順へフォールバッ�
 コピーしたPOJO（`finish/columnWrap.js`・`renderer/wallJunctionResolve.js`）。柱×壁・壁×壁の
 総当たりループからMobXの読み出しを取り除くための手口で、`finish/gridCells.js`の分割格子
 スナップショットと同じ考え方。公開関数の引数・返り値は変えず、入口でビューを組むだけ。
+
+## 合併境界（平面の壁取り合い）
+軸平行な矩形集合の合併領域の輪郭。ある矩形の辺のうち「外向き側を他の矩形が覆っていない部分」だけが残り、
+同一直線で接する辺は1本に畳まれる（`renderer/orthoRegion.js` `unionBoundary`。座標は1/1000mm整数）。
+平面の壁仕上げ材の線は、線をトリムして作るのではなく、この境界として得る。設計意図は`.claude/plan-wall-region.md`。
+
+## 層（material / backing）
+平面切断面の材を表す2つの矩形集合（`renderer/planWallRegion.js`）。**material**＝実際に材が在る範囲
+（下地∪仕上げ。対称壁は下地の遠位面まで広げる）、**backing**＝下地帯。`material`の合併境界が面線・妻線、
+`backing`の合併境界のうち`material`の内部にある部分が内側線・木口線。腰壁・垂れ壁（天板の輪郭で描く壁）は
+切断面に材を持たないので層に入らない。

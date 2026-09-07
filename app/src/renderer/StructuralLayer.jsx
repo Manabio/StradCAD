@@ -3,8 +3,7 @@ import { Line, Rect, Circle, Group } from 'react-konva';
 import { StructuralMaterialType, LINE_WEIGHT_MM } from '../core.js';
 import { cellBoundsFromKey } from '../finish/gridCells.js';
 import { findSectionEntry, diaphragmProjection } from '../structural/sectionCatalog.js';
-import { columnWrapSolids } from '../finish/columnWrap.js';
-import { resolveKneeDropOverlays } from '../finish/kneeDropWall.js';
+import { planColumnWraps } from './wallDrawPlan.js';
 import { columnWrapRenderProps, columnWrapStrokeWidth } from '../structural/columnWrapLineJoin.js';
 import { graphComputed } from './graphDerived.js';
 import { LodLevel, resolveStrokeWidth } from '../viewport.js';
@@ -181,13 +180,11 @@ export const ColumnsLayer = observer(({ graph, viewport, diaphragm = false, fini
   // 壁に完全に埋まる柱は包みを持たない（columnWrap.js参照）。
   // 包みの解決は柱×壁の総当たり。graph が変わらない限り同じ結果なので graph 単位に
   // キャッシュする（graphDerived.js。パン・ズームの再レンダーで引き直さない）。
+  // 包みの解決結果は壁の領域（renderer/wallDrawPlan.js の planColumnWraps）と共有する——同じ柱壁が
+  // 壁側の覆い判定と柱側の描画で食い違わないための単一の入口（二重計算もしない）。
   const wrapByColumnId = finishWrap
-    ? graphComputed(graph, 'columnWrapByColumnId', () => new Map(columnWrapSolids(graph,
-      // 腰壁・垂れ壁（天板の輪郭で描かれる壁）と取り合う辺は、柱壁が自分で描く
-      // ——全高の柱壁が勝ち、そこへ天板が突き当たる（finish/columnWrap.js の `continued`）。
-      { capOutlineWallIds: new Set(resolveKneeDropOverlays(graph).keys()) })
-      .filter(w => !w.hidden && Object.values(w.wrapped.covers).some(v => v > 0))
-      .map(w => [w.column.id, w.wrapped])))
+    ? graphComputed(graph, 'columnWrapByColumnId',
+      () => new Map(planColumnWraps(graph).map(w => [w.column.id, w.wrapped])))
     : null;
   return graph.columns.flatMap(column => {
     const color = COLOR_BY_MATERIAL[column.materialType];

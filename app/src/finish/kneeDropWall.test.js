@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import { Plane, PlanGraph, CenterLineType, Discipline, edgeKey } from '@core';
 import { generateRoomWallsFromOutline } from './wallGeneration.js';
 import { edgeGeometry, buildCellToRoom } from './edgeClassify.js';
-import { effectiveCeilingHeight, validateKneeDropWall, ERR_CEILING_HEIGHT_UNRESOLVED, kneeDropRecordsOnAxis, resolveKneeDropOverlays, kneeDropRecordForWallSpan, kneeDropRecordsAtPointOnWall, planWallHeight, wallsMeetAtPlanCut, PLAN_CUT_HEIGHT, resolveCapJoins, resolveWallSpanKey } from './kneeDropWall.js';
+import { effectiveCeilingHeight, validateKneeDropWall, ERR_CEILING_HEIGHT_UNRESOLVED, kneeDropRecordsOnAxis, resolveKneeDropOverlays, kneeDropRecordForWallSpan, kneeDropRecordsAtPointOnWall, planWallHeight, PLAN_CUT_HEIGHT, resolveWallSpanKey } from './kneeDropWall.js';
 
 function makeGraph() {
   const plane = new Plane('p1', 0, '1階', 1, 1);
@@ -238,8 +238,6 @@ test('planWallHeight: 天板輪郭で描かれる腰壁はその天端高さ、�
   const tall = [...graph.walls].find(w => !overlays.has(w.id));
   assert.equal(planWallHeight(overlays, knee.id), 900, '腰壁の高さは天端高さ');
   assert.equal(planWallHeight(overlays, tall.id), Infinity, '切断面に切られる壁は常に高い側');
-  assert.equal(wallsMeetAtPlanCut(overlays, knee.id, tall.id), false, '高さが違えば取り合わない');
-  assert.equal(wallsMeetAtPlanCut(overlays, tall.id, tall.id), true);
 });
 
 test('【失敗系】planWallHeight: 切断高さ超の腰壁・垂れ壁・オーバーレイ無しはすべてInfinity', () => {
@@ -254,7 +252,6 @@ test('【失敗系】planWallHeight: 切断高さ超の腰壁・垂れ壁・オ�
   assert.equal(planWallHeight(null, anyWall.id), Infinity, 'オーバーレイ未解決（略図LOD）は全壁同じ高さ');
   assert.equal(planWallHeight(new Map([['w', { mode: 'drop', capLo: 0, capHi: 0 }]]), 'w'), Infinity,
     '垂れ壁は対象外（確定した規則は腰壁のみ）');
-  assert.equal(wallsMeetAtPlanCut(null, 'a', 'b'), true);
 });
 
 // 実機2026-09の回帰: 区間の端の交差部にできる短い駒は**半分だけ**が区間内に入る。これを腰壁と
@@ -295,64 +292,22 @@ function makeCornerKneeGraph(topHeights = [900, 900]) {
   return { graph, hWall: wallOn(false, 0), vWall: wallOn(true, 0) };
 }
 
-test('【実機2026-09】resolveKneeDropOverlays: 角で出会う同高の天板は外側どうし・内側どうしでトリムする', () => {
+// 角の取り合いそのもの（外側どうし・内側どうし、端部の線を描かない）は renderer/planWallRegion.js が
+// 天板を高さクラスごとの領域として解く帰結になった。規則は planWallRegion.test.js の「天板の角」4件と
+// renderer/wallDrawPlan.test.js の実グラフ経由の角テストが固定する。ここは供給値（帯・線種・高さ）だけ。
+test('【実機2026-09】resolveKneeDropOverlays: 角で出会う同高の天板は同じ帯・線種・高さを供給する', () => {
   const { graph, hWall, vWall } = makeCornerKneeGraph();
   const overlays = resolveKneeDropOverlays(graph);
-  // 天板の帯は材（[0,57.5]）の外へ12mm出る＝[-12, 69.5]。角は(x,y)=(57.5,57.5)側が内側。
-  assert.deepEqual(overlays.get(hWall.id).capJoins,
-    { lo: { capLoAt: -12, capHiAt: 69.5 } },
-    '外側の長辺(y=-12)は相手の帯の遠位面(x=-12)まで伸び、内側の長辺(y=69.5)は近位面(x=69.5)で止まる');
-  assert.deepEqual(overlays.get(vWall.id).capJoins,
-    { lo: { capLoAt: -12, capHiAt: 69.5 } }, '縦壁側も同じ2点（外側の角・内側の角）で取り合う');
-  // 角でない側の端（hi端）には取り合いが立たない＝端部の線は従来どおり描かれる。
-  assert.equal(overlays.get(hWall.id).capJoins.hi, undefined);
+  // 天板の帯は材（[0,57.5]）の外へ12mm出る＝[-12, 69.5]。
+  assert.deepEqual(overlays.get(hWall.id), { mode: 'knee', capLo: -12, capHi: 69.5, topHeight: 900 });
+  assert.deepEqual(overlays.get(vWall.id), { mode: 'knee', capLo: -12, capHi: 69.5, topHeight: 900 });
 });
 
-test('【失敗系】resolveKneeDropOverlays: 高さが違う腰壁どうしの角は取り合わない（高い方が優先の担当）', () => {
+test('【失敗系】resolveKneeDropOverlays: 高さが違う腰壁どうしは別の高さクラス（planWallHeight が違う）', () => {
   const { graph, hWall, vWall } = makeCornerKneeGraph([900, 1000]);
   const overlays = resolveKneeDropOverlays(graph);
-  assert.equal(overlays.get(hWall.id).capJoins, undefined);
-  assert.equal(overlays.get(vWall.id).capJoins, undefined);
-});
-
-// 向き（4通りの角）に依らないこと・偏芯した帯でも相手の帯の面で止まることを、ビュー直渡しで固定する。
-const view = (id, isVertical, lo, hi, capLo, capHi) =>
-  ({ id, isVertical, lo, hi, capLo, capHi, capKey: 'knee:900' });
-
-test('resolveCapJoins: 角の向きが変わっても外側＝相手の帯の遠位面・内側＝近位面で止まる', () => {
-  // 横壁は-x方向へ伸びhi端(x=57.5)が角。縦壁は+y方向へ伸びlo端(y=57.5)が角＝右上が外側。
-  const h = view('h', false, -3000, 57.5, -12, 69.5);
-  const v = view('v', true, 57.5, 3000, -12, 69.5);
-  const joins = resolveCapJoins([h, v]);
-  assert.deepEqual(joins.get('h'), { hi: { capLoAt: 69.5, capHiAt: -12 } },
-    '縦壁の本体は+y側＝横壁のcapHi(y=69.5)が内側。外側(y=-12)は遠位面x=69.5まで伸びる');
-  assert.deepEqual(joins.get('v'), { lo: { capLoAt: 69.5, capHiAt: -12 } },
-    '横壁の本体は-x側＝縦壁のcapLo(x=-12)が内側。外側(x=69.5)は遠位面y=-12まで伸びる');
-});
-
-test('resolveCapJoins: 偏芯して帯が軸CLに対し非対称でも相手の帯の面で止まる', () => {
-  // 縦壁の帯を[-12, 200]（+x側へ偏芯）に置く。横壁の止め先はこの帯の両面になる。
-  const h = view('h', false, 200, 3000, -12, 69.5);
-  const v = view('v', true, 69.5, 3000, -12, 200);
-  const joins = resolveCapJoins([h, v]);
-  assert.deepEqual(joins.get('h'), { lo: { capLoAt: -12, capHiAt: 200 } });
-  assert.deepEqual(joins.get('v'), { lo: { capLoAt: -12, capHiAt: 69.5 } });
-});
-
-test('【失敗系】resolveCapJoins: 素通りするT字・十字は角ではないので取り合わない', () => {
-  // 縦壁が横壁の帯を貫いて両側へ伸びる（どちらの端も横壁の帯に無い）＝T字。
-  const h = view('h', false, 0, 3000, -12, 69.5);
-  const v = view('v', true, -3000, 3000, 1000, 1100);
-  assert.equal(resolveCapJoins([h, v]).size, 0);
-});
-
-test('【失敗系】resolveCapJoins: 平行な天板どうし・線種が違う天板どうしは取り合わない', () => {
-  const h1 = view('h1', false, 0, 3000, -12, 69.5);
-  const h2 = view('h2', false, 3000, 6000, -12, 69.5);
-  assert.equal(resolveCapJoins([h1, h2]).size, 0, '平行（同じ向き）は角を作らない');
-  const v = { ...view('v', true, 57.5, 3000, -12, 69.5), capKey: 'drop:' };
-  assert.equal(resolveCapJoins([view('h', false, 57.5, 3000, -12, 69.5), v]).size, 0,
-    '実線（腰壁）と破線（垂れ壁）はトリムしない');
+  assert.equal(planWallHeight(overlays, hWall.id), 900);
+  assert.equal(planWallHeight(overlays, vWall.id), 1000);
 });
 
 // ==== 実機2026-09「10」2階 X3: 通り芯上で分断された別の壁まで腰壁になる ====

@@ -1,8 +1,8 @@
 /**
  * 平面の壁描画に必要な「壁をまたぐ派生値」を1レンダー分まとめて解決する純モジュール。
- * ShapesLayer.jsx の描画前準備（下地の重複防止・T字取り合い・腰壁垂れ壁・柱の仕上げ包み・
- * 壁ごとの開口・壁ごとの面線/内側線/キャップ抑止の解決＝resolveWallLines）をレンダラから
- * 切り出したもの。挙動は切り出し前と同じ。
+ * ShapesLayer.jsx の描画前準備（下地の重複防止・高さが違う壁の取り合い・腰壁垂れ壁・
+ * 柱の仕上げ包み・壁ごとの開口・壁ごとの描画線＝resolveWallLines）をレンダラから
+ * 切り出したもの。
  *
  * 切り出した理由は2つ:
  *   1. **メモ化の継ぎ目**——これらは graph が変わらない限り同じ結果を返すのに、
@@ -13,38 +13,31 @@
  *
  * 純モジュール（node:test / node 直実行から単体 import 可能。store.js・*.jsx を静的に引かない）。
  *
- * ## ShapesLayer.jsx に残る未検証ロジック（構造的な残余。2026-09時点）
- * このモジュールへ「判断」を寄せたが、`.jsx` 側にはまだ react-konva を静的 import するために
- * node から検証できないロジックが残る——site/stair/柱包みの各レイヤーと同じ扱いで、これらは
- * **写像であって判断ではない**（対象の型・座標をどのKonvaノードへどう対応付けるかという
- * 描画特有の関心事）と整理した上で意図的に残している:
- *   - `wallLines.get(shape.id)` の取り出しと各フィールドへの分配
- *   - `faceSegments`/`finSegments` と実際の描画座標（`faceV`/`plan.finBoundary`、
- *     `shape.isVertical`による軸の振り分け）との対応付け
- *   - cap 抑止フラグ（`capLoSuppressed`/`capHiSuppressed`）を「最初のセグメントの始点」
- *     「最後のセグメントの終点」にのみ適用するインデックス条件（`i===0`/`i===length-1`）
- *   - 下地（間柱）描画の `extended`（`baseExtend`適用）・`studCuts`（柱カット）による
- *     セグメント調整とピッチ配置
- *   - 端点はねだし部の木口（ecap）の描画可否判定・座標計算
- *   - SCHEMATIC/腰壁・垂れ壁/標準・詳細の分岐そのもの（どのKonvaコンポーネントを使うか）
- *   - 腰壁・垂れ壁の`Rect`座標変換
+ * ## 仕上げ材の線（面線・妻線・内側線・木口線）は「領域の境界」で解く
+ * 2026-09に線トリム方式（旧 `wallJunctionResolve.js` の6パス＋旧 `finishLineSplits.js`）から
+ * **材の領域を合成してその境界を描く**方式（`planWallRegion.js`）へ移行した。
+ * 設計意図・移行の道筋は `.claude/plan-wall-region.md`。ここでは領域が解いた結果を
+ * 壁ごとの `lines` として持ち回るだけで、取り合いの分類は一切持たない。
+ *
+ * ## ShapesLayer.jsx に残るロジック（構造的な残余）
+ * `.jsx` 側に残るのは**写像であって判断ではない**もの（対象の型・座標をどのKonvaノードへ
+ * 対応付けるかという描画特有の関心事）:
+ *   - `lines` の各線分を `<Line points>` へ写す（軸の振り分けを含む）
+ *   - 下地（間柱）のピッチ配置と柱カットによるセグメント調整
+ *   - SCHEMATIC／腰壁・垂れ壁／標準・詳細の分岐（どのKonvaコンポーネントを使うか）
+ *   - 腰壁・垂れ壁の天板輪郭の座標変換
  *   - 2a壁（階段下部屋）の描画クリップ（`stairUnderClips`）適用
- *   - `key`/`listening`/`fill`等のKonva props・配列内の描画順
- * これらをさらに純関数へ追い出す設計（`resolveWallLines`を描画スペック配列
- * `{kind,points}[]`まで進めて`.jsx`を完全な写像にする案）も検討したが、cap/ecap/下地
- * スタッド/腰壁Rectまで移す大改修になり回帰リスクが見合わないため今回は見送る
- * （2026-09 QA協議）。
+ *   - `key`/`listening`/`fill` 等のKonva props・配列内の描画順
  */
 import { ShapeType } from '@core';
 import { LodLevel } from '../viewport.js';
-import { subtractIntervals } from '../finish/stair/stairGeometry.js';
-import { resolveWallTJunctions, resolveWallFinSegments, isCapSuppressed, resolveFinVisibility } from './wallJunctionResolve.js';
-import { ENDPOINT_EPS } from '../finish/wallFinishJoin.js';
+import { resolveWallTJunctions } from './wallJunctionResolve.js';
 import { isEndpointAt } from '../transform/centerLineExtend.js';
 import { resolveKneeDropOverlays } from '../finish/kneeDropWall.js';
-import { columnWallCuts } from '../finish/columnWrap.js';
+import { columnWallCuts, columnWrapSolids } from '../finish/columnWrap.js';
 import { indexByAxis, findOpeningsOnWallIndexed } from '../openings/openingGeometry.js';
-import { resolveFinishLineMerges } from './finishLineSplits.js';
+import { resolveWallRegionLines, wallSpanIntervals } from './planWallRegion.js';
+import { graphComputed } from './graphDerived.js';
 
 // 略図LOD で返す下地重複防止の空集合（読み取り専用として共有する）。
 const EMPTY_SET = new Set();
@@ -88,190 +81,78 @@ export function resolveDeferredBackingIds(generalShapes) {
 }
 
 /**
- * 壁1本分の描画ライン（開口分割・仕上げ面線・内側線・キャップ抑止）を解決する純関数。
- * ShapesLayer.jsx が下していた判断（面線・内側線をどこで切るか、キャップを描くか）を
- * ここへ集約し、.jsx は返り値を `<Line>` へ写すだけにする——以前はこの判断が.jsx内に
- * インラインで書かれており、呼び出し側が正しい引数を渡すかを検証するテストが0本だった
- * （`isCapSuppressed`へ空のcapSuppressを渡す・`resolveWallFinSegments`の戻り値を無視する・
- * 仕上げ面線をfinCuts側の区間で切る、のいずれの変異もフルスイートが緑のままだった＝
- * QA指摘）。wallDrawPlan.test.js が実Wallインスタンスでこの関数の呼び出し結果を検証する。
+ * 壁1本分の描画ラインを解決する純関数。仕上げ材の線（面線・妻線・内側線・木口線）と天板の輪郭
+ * （腰壁・垂れ壁）は `planWallRegion.js` が領域の境界として解いた結果（`regionLines`）をそのまま
+ * 持ち回り、ここでは**領域に載らない要素**（略図の単線・下地スタッドの配置範囲）だけを組み立てる。
  *
  * @param {import('@core').Wall} wall
- * @param {{openings?:object[], junction?:object, colCuts?:object, kneeDrop?:object}} [deps]
- *   junction: wallJunctions.get(wall.id)（resolveWallTJunctionsの結果。endExtend/spanCutsは
- *     描画上の壁スパンを置き換え／切り欠き、endWrapは端部の仕上げ材の回り込みを立てる）
- *   colCuts: columnCuts.get(wall.id)（columnWallCutsの結果。face/fin/backingの3区間を持つ）
- *   kneeDrop: kneeDropOverlays.get(wall.id)（resolveKneeDropOverlaysの結果。天板輪郭の帯と
- *     角の取り合い。この壁が天板で描かれるか否かの判断もこれ1つで足りる）
+ * @param {{openings?:object[], junction?:object, regionLines?:object[],
+ *   backingSpan?:[number,number]|null}} [deps]
+ *   junction: wallJunctions.get(wall.id)（endExtend＝描画上の壁スパン／spanCutsで切り欠く区間）
  * @returns {{
  *   segments:[number,number][],
- *   capSegments:[number,number][],
- *   capJoins:{lo?:object, hi?:object}|null,
- *   faceSegments:[number,number][],
- *   finSegments:[number,number][],
- *   finBoundary:number,
- *   finVisible:boolean,
+ *   lines:Array<{vertical:boolean, at:number, lo:number, hi:number, kind:string, ids:string[], style?:string}>,
+ *   backingSpan:[number,number]|null,
  *   spanLo:number,
  *   spanHi:number,
- *   endWrapLo:number|null,
- *   endWrapHi:number|null,
- *   capLoSuppressed:boolean,
- *   capHiSuppressed:boolean,
- *   capValues:number[],
- *   ecapValues:number[],
  * }}
- *   capValues/ecapValues: 妻線・木口線を引く長さ方向の位置（抑止判定・描画条件を適用済み）。
- *   厚み方向の範囲は wall.materialRange。
- *   spanLo/spanHi: 描画上の壁スパン（endExtend適用後）。endWrapLo/Hi: その端を仕上げ材で
- *   取り巻く木口線の位置（null＝取り巻かない）。
+ *   segments: 開口・spanCuts で分割した描画上のスパン（略図の単線と下地スタッドの配置に使う）。
+ *   lines: 描く線分（世界mm座標）。kind は仕上げ材の 'face'|'cap'|'fin'|'ecap'（描画は同一）と天板の
+ *     'kd'|'kdcap'（`style` が 'knee'=実線／'drop'=破線）。ids は畳まれた1本に寄与したすべての壁のid。
+ *   backingSpan: 下地スタッドを並べる長さ方向の範囲（突き合わせ延長・端部の回り込み反映済み）。
  */
-export function resolveWallLines(wall, { openings = [], junction, colCuts, kneeDrop, endpointAt } = {}) {
+export function resolveWallLines(wall, { openings = [], junction, regionLines = null, backingSpan = null } = {}) {
   // **描画上の壁スパン**: 低い壁（腰壁）とL字の端部で取り合う高い壁は、その端を相手の帯の
-  // 遠位面まで伸ばして描く（wallJunctionResolve.js パス0のendExtend。ユーザー確定2026-09
-  // 「高い方の壁仕上げ材が端部を覆う」）。ここで1回だけ広げれば、面線・内側線・妻線・下地・
-  // 開口分割のすべてが同じ端点に従う——モデルの端点（wall.coord1/coord2）は変えない。
+  // 遠位面まで伸ばして描く（wallJunctionResolve.js パス0のendExtend）。ここで1回だけ広げれば
+  // 単線・下地の入力が同じ端点に従う——モデルの端点（wall.coord1/coord2）は変えない。
   const endExtend = junction?.endExtend ?? {};
   const lo = endExtend.lo ?? Math.min(wall.coord1, wall.coord2);
   const hi = endExtend.hi ?? Math.max(wall.coord1, wall.coord2);
-  // 開口がある区間を除いた複数の区間に分割する（openingsはcoord1昇順が前提）。
-  const rawSegments = [];
-  let cursor = lo;
-  for (const o of openings) {
-    if (o.coord1 > cursor) rawSegments.push([cursor, o.coord1]);
-    cursor = Math.max(cursor, o.coord2);
-  }
-  if (cursor < hi) rawSegments.push([cursor, hi]);
-  // 高い壁の帯に覆われる区間は描かない（低い壁側。パス0のspanCuts）。segmentsを直接削るため、
-  // 面線・内側線・妻線・下地・腰壁の天板輪郭がまとめて従う。
-  const spanCuts = junction?.spanCuts ?? [];
-  const segments = spanCuts.length === 0 ? rawSegments
-    : rawSegments.flatMap(([a, b]) => subtractIntervals(a, b, spanCuts));
+  const segments = wallSpanIntervals(lo, hi, openings, junction?.spanCuts ?? []);
+  return { segments, lines: regionLines ?? [], backingSpan, spanLo: lo, spanHi: hi };
+}
 
-  // 腰壁・垂れ壁の天板輪郭（ShapesLayer.jsx が描く）専用のセグメント。**柱の仕上げ包み
-  // （柱壁）は全高の壁**なので、壁同士の「高い方が優先」（wallJunctionResolve.js パス0）と
-  // 同じ規則が要る——柱壁に占有される区間は天板を描かず、天板はそこへ突き当たる
-  // （ユーザー確定2026-09「柱包みの壁を作って、そこへ腰壁が当たる」）。切る区間は柱壁の外形幅
-  // ＝面線と同じ `colCuts.face`（内側境界の幅で切ると天板が柱壁へ食い込む）。
-  const capCuts = colCuts?.face ?? [];
-  const capSegments = capCuts.length === 0 ? segments
-    : segments.flatMap(([a, b]) => subtractIntervals(a, b, capCuts));
-  // 天板どうしの角の取り合い（finish/kneeDropWall.js の capJoins）が効くのは、天板の
-  // **物理端がそのまま残っている**端だけ。柱壁や開口で切られた端は相手の天板ではなく
-  // 端部の線（長さ＝天板幅）を描く。
-  const capEnd = (end, value) => (kneeDrop?.capJoins?.[end] != null
-    && capSegments.length > 0 && Math.abs(value - (end === 'lo' ? lo : hi)) <= ENDPOINT_EPS)
-    ? kneeDrop.capJoins[end] : undefined;
-  const capJoins = kneeDrop?.capJoins && capSegments.length > 0
-    ? { lo: capEnd('lo', capSegments[0][0]), hi: capEnd('hi', capSegments[capSegments.length - 1][1]) }
-    : null;
-
-  const baseExtend  = junction?.baseExtend ?? {};
-  const faceCuts    = junction?.faceCuts ?? [];
-  const finCuts     = junction?.finCuts ?? [];
-  const finEnd      = junction?.finEnd ?? {};
-  const capSuppress = junction?.capSuppress ?? {};
-  // 端部を仕上げ材で取り巻く端（パス0のendWrap）: 外側線（面線・妻線）は端まで描き、内側線は
-  // 端から仕上げ厚ぶん手前で止めて、そこへ木口線（endWrapLo/Hiの位置）を渡す。内側線の止め先は
-  // パス2と同じ`finEnd`で表す——「内側線の端点を取り合う相手の内側線の位置に置く」規則の、
-  // 相手が**自分の端に回り込んだ仕上げ材**である場合。
-  const endWrap = junction?.endWrap ?? {};
-  const finish = wall.wallFinish > 0 ? wall.wallFinish : 0;
-  const wrapLo = endWrap.lo && finish > 0 ? lo + finish : null;
-  const wrapHi = endWrap.hi && finish > 0 ? hi - finish : null;
-  const finEndWrapped = { ...finEnd };
-  if (wrapLo != null) finEndWrapped.lo = wrapLo;
-  if (wrapHi != null) finEndWrapped.hi = wrapHi;
-
-  // 仕上げ面線・仕上げ境界線（fin線）専用のセグメント: 直交する通し壁側からのカットが
-  // あれば、その区間だけ切り欠く。柱の仕上げ包み（柱壁）が占める区間も同じ切り欠きとして
-  // 扱う（columnWallCuts）。**層ごとに区間が違う**——仕上げ面線は柱壁の外形幅・T字通し壁の
-  // 全材幅（faceCuts）、仕上げ境界線は内側境界の幅・T字通し壁の下地幅（finCuts）で切る
-  // （同じ区間で切ると柱側の境界線と端が食い違い、柱を一周して見える）。
-  const cutBy = (baseCuts, extra) => (baseCuts.length === 0 && extra.length === 0) ? segments
-    : segments.flatMap(([a, b]) => subtractIntervals(a, b, [...baseCuts, ...extra]));
-  const faceSegments = cutBy(faceCuts, colCuts?.face ?? []);
-  const finSegments = resolveWallFinSegments({
-    segments, lo, hi, finEnd: finEndWrapped, finCuts, columnFinCuts: colCuts?.fin ?? [],
-  });
-
-  // cap線（妻線）抑止判定は自壁の物理両端（最初のセグメントの始点＝lo端／最後のセグメントの
-  // 終点＝hi端）でのみ意味を持つ（開口で分割された中間セグメント境界は対象外）。
-  const segCount = segments.length;
-  const capLoSuppressed = segCount > 0 && isCapSuppressed('lo', 0, segCount, { baseExtend, capSuppress });
-  const capHiSuppressed = segCount > 0 && isCapSuppressed('hi', segCount - 1, segCount, { baseExtend, capSuppress });
-  // 妻線（cap）・木口線（ecap）を**引く位置**もここで決める（.jsx は写像するだけにする）。
-  // 判断をここへ寄せた理由は2つ:
-  //  1. 分割検出（finishLineSplits.js）が「描かれる仕上げ線」を漏れなく見るため——実機2026-09の
-  //     出隅では直交壁の妻線・木口線が相手壁の仕上げ線と同一直線に並んで1本を構成しており、
-  //     .jsx 側にしか位置が無いと検出から漏れる（ユーザー指摘「黒線が残っている」）。
-  //  2. 抑止フラグと位置が別ファイルに分かれていると、片方だけ直したときに食い違う。
-  // 妻線: セグメント境界ごと。自壁の物理両端だけ抑止判定を効かせる（中間境界は開口の縁）。
-  const capValues = [];
-  segments.forEach(([a, b], i) => {
-    if (!(i === 0 && capLoSuppressed)) capValues.push(a);
-    if (!(i === segCount - 1 && capHiSuppressed)) capValues.push(b);
-  });
-  // 木口線: 端部はねだし部（軸CLの線分範囲越え＋その端がCLの端点）か、低い壁の端部を覆った端
-  // （endWrap）。位置は端から仕上げ厚ぶん内側で、実在するセグメントの内部に限る。
-  const ecapValues = [];
-  if (finish > 0) {
-    const cl = wall.axisCL;
-    const tips = [
-      { wrap: wrapLo, beyond: cl?.extentLo != null && lo < cl.extentLo - ENDPOINT_EPS && !!endpointAt?.lo, capV: lo + finish },
-      { wrap: wrapHi, beyond: cl?.extentHi != null && hi > cl.extentHi + ENDPOINT_EPS && !!endpointAt?.hi, capV: hi - finish },
-    ];
-    for (const t of tips) {
-      if (t.wrap == null && !t.beyond) continue;
-      if (!segments.some(([a, b]) => t.capV > a && t.capV < b)) continue;
-      ecapValues.push(t.capV);
-    }
-  }
-  // fin線（仕上げ／下地の境界線）の位置・可視性は壁単体の性質（他壁との取り合いを見ない）
-  // ——resolveFinVisibility が唯一の供給源（wallJunctionResolve.js のパス2候補判定
-  // ＝makeView と同じ関数）。ShapesLayer.jsx はこれを読むだけにする。
-  const { finBoundary, finVisible } = resolveFinVisibility(wall);
-  return {
-    segments,
-    capSegments,
-    capJoins,
-    faceSegments,
-    finSegments,
-    finBoundary,
-    finVisible,
-    spanLo: lo,
-    spanHi: hi,
-    endWrapLo: wrapLo,
-    endWrapHi: wrapHi,
-    capLoSuppressed,
-    capHiSuppressed,
-    capValues,
-    ecapValues,
-  };
+/**
+ * 平面で描く柱の仕上げ包み（柱壁）——壁に完全に埋まる柱・包み厚0の柱を除いたもの。
+ * 壁の領域（buildWallDrawPlan）と柱壁の描画（renderer/StructuralLayer.jsx）が**同じ結果を共有**する
+ * 入口。柱×壁の総当たりで graph が変わらない限り同じなので graph 単位にキャッシュする（graphDerived.js。
+ * 略図LODでも同じ値なのでキーに LOD は要らない）。腰壁・垂れ壁（天板の輪郭で描かれる壁）と取り合う
+ * 辺は柱壁が自分で描く——全高の柱壁が勝ち、そこへ天板が突き当たる（finish/columnWrap.js の `continued`）。
+ * @param {object} graph
+ * @returns {Array<{column:object, wrapped:object}>}
+ */
+export function planColumnWraps(graph) {
+  return graphComputed(graph, 'planColumnWraps', () => columnWrapSolids(graph,
+    { capOutlineWallIds: new Set(resolveKneeDropOverlays(graph).keys()) })
+    .filter(w => !w.hidden && Object.values(w.wrapped.covers).some(v => v > 0))
+    .map(({ column, wrapped }) => ({ column, wrapped })));
 }
 
 /**
  * 1レンダー分の壁描画準備をまとめて解決する。
  * @param {object} graph
  * @param {string} lodLevel - viewport.lodLevel（LodLevel）
+ * @param {{clipGroups?: Map<string, string>|null}} [opts]
+ *   clipGroups: 壁id → 描画クリップの単位。2a壁（階段下部屋の偏芯壁）は壁id単位の Group clipFunc
+ *   で描画が切られるため、領域の境界を畳むときに単位が違う壁の線を1本にしない
+ *   （planWallRegion.js の wallInput）。graph だけでは決まらない情報なので呼び出し側
+ *   （ShapesLayer.jsx）が渡し、graphComputed のキーにも符号化する。省略時は畳み方に制約なし。
  * @returns {{
  *   deferredBackingIds: Set<string>,
  *   wallJunctions: Map<string, object>|null,
  *   kneeDropOverlays: Map<string, object>|null,
  *   columnCuts: Map<string, object>|null,
  *   wallLines: Map<string, object>,
- *   finishMerges: Map<string, [number,number]|null>|null,
  * }}
  */
-export function buildWallDrawPlan(graph, lodLevel) {
+export function buildWallDrawPlan(graph, lodLevel, { clipGroups = null } = {}) {
   const detail = lodLevel === LodLevel.DETAIL;
   const schematic = lodLevel === LodLevel.SCHEMATIC;
   const walls = graph.walls;
 
   // 壁ごとの開口（開口位置で壁線にギャップを入れるための区間分割）。従来は壁1本ごとに
-  // graph.openings を総当たりしていた（O(壁 × 開口)）。coord1 昇順は resolveWallLines の
-  // 区間分割が前提にしているためここで確定させる。openingsByWall自体は resolveWallLines
-  // へ渡すためだけの中間値で、外部消費者はいない（ShapesLayer.jsxはwallLines経由でしか
-  // segmentsを読まない）ため返り値には含めない。
+  // graph.openings を総当たりしていた（O(壁 × 開口)）。coord1 昇順は区間分割が前提に
+  // しているためここで確定させる。
   const openingIndex = indexByAxis(graph.openings);
   const openingsByWall = new Map();
   for (const wall of walls) {
@@ -284,33 +165,51 @@ export function buildWallDrawPlan(graph, lodLevel) {
   // 高さが違う壁の組は取り合わない（高い方が優先。wallJunctionResolve.js のパス0）。
   const kneeDropOverlays = schematic ? null : resolveKneeDropOverlays(graph);
 
-  // 壁のT字取り合い（突き当たり）解決: 詳細LODでのみ、ジオメトリを変えずに描画時だけ反映する
-  // （wallJunctionResolve.js。resolveStairSideLines と同じ「描画ルールを幾何モジュールに
-  // 集約しレンダラは写像するだけ」というパターン）。壁全般が対象——手動壁・部屋壁・外壁・
-  // 階段下壁を区別しない。
-  const wallJunctions = detail ? resolveWallTJunctions(walls, kneeDropOverlays) : null;
-  // 柱の仕上げ包み（柱壁）と取り合う区間。柱を描かないモード（仕上げ・敷地）でも
-  // 壁の見た目は「柱に取られた区間」を反映してよい——柱は実在するため。
-  // 柱壁は**全高の壁**なので、天板の輪郭で描かれる壁（腰壁・垂れ壁）と取り合う辺は
-  // 壁側へ譲らない（`capOutlineWallIds`。finish/columnWrap.js の `continued`）。
+  // 壁をまたぐ端の解決（wallJunctionResolve.js）。領域が使うのはパス0（高さが違う壁の取り合い＝
+  // 低い壁の帯を覆う `endExtend`・覆われる区間 `spanCuts`・端部の回り込み `endWrap`）だけで、パス6
+  // （通り抜けた端の詰め）は `segments`（略図の単線・天板の輪郭・下地スタッド）にしか効かない
+  // （planWallRegion.js の `regionSpan`）。**標準LODでも走らせる**——標準LODも領域方式で描く
+  // （ユーザー確定2026-09）ので、パス0の `spanCuts` が無いと詳細では隠れる交差部の駒が閉じた矩形として
+  // 残る（実機 2階 (0,-2000)）。略図LODは単線だけなので要らない。
+  const wallJunctions = schematic ? null : resolveWallTJunctions(walls, kneeDropOverlays);
+  // 柱の仕上げ包み（柱壁）。柱を描かないモード（仕上げ・敷地）でも壁の見た目は「柱に取られた区間」を
+  // 反映してよい——柱は実在するため。柱壁は**全高の壁**なので、天板の輪郭で描かれる壁（腰壁・垂れ壁）と
+  // 取り合う辺は壁側へ譲らない（`capOutlineWallIds`。finish/columnWrap.js の `continued`）。
+  //  - `columnWraps` … 柱壁の外形（材）と内側境界（下地）の矩形。領域の**覆い判定にだけ**参加させ、境界は
+  //    出さない（planWallRegion.js）——柱壁の線は renderer/StructuralLayer.jsx が `continued` で
+  //    「壁の面線が引き継ぐ辺」を省いて描く。どちらが描くかは finish/columnWrap.js の `continued` 1箇所。
+  //  - `columnCuts` … 下地スタッドを消す区間（`backing`。columnWallCuts の canRemoveBacking）にだけ使う。
   const capOutlineWallIds = kneeDropOverlays ? new Set(kneeDropOverlays.keys()) : undefined;
   const columnCuts = schematic ? null : columnWallCuts(graph, { capOutlineWallIds });
+  const columnWraps = schematic ? null : planColumnWraps(graph)
+    .map(({ column, wrapped }) => ({ id: column.id, outer: wrapped, finishes: wrapped.finishes ?? {} }));
 
-  // 壁ごとの描画ライン（開口分割・仕上げ面線・内側線・キャップ抑止）をここでまとめて解決する
-  // （resolveWallLines。ShapesLayer.jsx は返り値を写像するだけにする）。SCHEMATIC では
-  // wallJunctions/columnCuts がともにnullのため、面線・内側線・キャップ抑止は自然に
-  // 無変更（segmentsのみが単線描画に使われる）になる。
+  // 仕上げ材の線は**材の領域の境界**として1回で解く（planWallRegion.js）。標準LODは面線と妻線だけを
+  // 描くが、それも同じ領域の境界なので同じ経路を通す（内側線・木口線は `detail` で抑止）。
+  // 略図LODは単線（segments）だけなので領域は要らない。
+  // 端点はねだし（軸CLの線分範囲を越えた端＝木口線を出す端）は下地の端の正規化にしか効かず、
+  // 標準LODでは下地の辺を描かないので詳細LODでだけ解く（graph の総当たりを標準LODで払わない）。
+  const endpointAtByWall = new Map();
+  if (detail) {
+    for (const wall of walls) {
+      if (!wall.axisCL) continue;
+      endpointAtByWall.set(wall.id, {
+        lo: isEndpointAt(graph, wall.axisCL, 'lo'), hi: isEndpointAt(graph, wall.axisCL, 'hi'),
+      });
+    }
+  }
+  const region = schematic ? null : resolveWallRegionLines(walls, {
+    junctions: wallJunctions, openingsByWall, kneeDropOverlays, endpointAtByWall,
+    columnWraps, clipGroups, detail,
+  });
+
   const wallLines = new Map();
   for (const wall of walls) {
     wallLines.set(wall.id, resolveWallLines(wall, {
       openings: openingsByWall.get(wall.id),
       junction: wallJunctions?.get(wall.id),
-      colCuts: columnCuts?.get(wall.id),
-      kneeDrop: kneeDropOverlays?.get(wall.id),
-      // 木口線の「端点はねだし」判定にCLの端点かどうかが要る（graph依存なのでここで解決して渡す）。
-      endpointAt: detail && wall.axisCL
-        ? { lo: isEndpointAt(graph, wall.axisCL, 'lo'), hi: isEndpointAt(graph, wall.axisCL, 'hi') }
-        : null,
+      regionLines: region?.lines.get(wall.id) ?? null,
+      backingSpan: region?.backingSpans.get(wall.id) ?? null,
     }));
   }
 
@@ -320,62 +219,5 @@ export function buildWallDrawPlan(graph, lodLevel) {
     kneeDropOverlays,
     columnCuts,
     wallLines,
-    // 分かれて描かれている仕上げ線を1本にまとめる指示（finishLineSplits.js）。
-    // 内側線・妻線・木口線は詳細LODでしか描かないので詳細のみ。null＝まとめない。
-    finishMerges: detail
-      ? resolveFinishLineMerges(collectFinishLines(walls, wallLines, kneeDropOverlays))
-      : null,
   };
-}
-
-/**
- * 描かれる仕上げ線（面線・内側線）を、分割検出（finishLineSplits.js）が食べる形へ写す。
- * key は ShapesLayer.jsx が <Line> に付ける key と同じ文字列にする——検出結果をレンダラ側で
- * 線分ごとに引き当てるため（色分けも本実装の延長対象の特定も同じキーで引く）。
- * 腰壁・垂れ壁（kneeDropOverlays に載る壁）は**除く**——これらは仕上げ線ではなく天板幅の
- * 矩形輪郭（Rect）で描かれ、face/fin/cap/ecap のどれも描かれない。除かないと「描かれていない線」を
- * 連なりに数えてしまい、実機2026-09の2階X2×Y1+2000では垂れ壁の面線が本体（body）として拾われた。
- *
- * @param {object[]} walls
- * @param {Map<string, object>} wallLines - resolveWallLines の結果
- * @param {Map<string, object>|null} kneeDropOverlays - resolveKneeDropOverlays の結果
- * @returns {Array<{key:string, vertical:boolean, at:number, lo:number, hi:number, fillerMax:number}>}
- */
-export function collectFinishLines(walls, wallLines, kneeDropOverlays) {
-  const lines = [];
-  for (const wall of walls) {
-    if (wall.wallFinish == null) continue; // 仕上げ厚不明（手動壁）は仕上げ線を持たない
-    if (kneeDropOverlays?.has(wall.id)) continue; // 腰壁・垂れ壁は矩形輪郭で描かれる
-    const plan = wallLines.get(wall.id);
-    if (!plan) continue;
-    // 「埋めるために足された線分」と見なす長さの上限＝その壁の材幅（厚み）。角を埋める線分は
-    // 原理的に材幅を超えない。妻線・木口線は定義上ちょうど材幅になる。
-    const { lo: mLo, hi: mHi } = wall.materialRange;
-    const fillerMax = mHi - mLo;
-    // 線種が同じ線分どうしだけをまとめる（違う色・線幅・破線をまとめると見た目が変わる）。
-    const styleKey = `${wall.color}|${wall.lineWeight}|${wall.lineType}`;
-    const push = (key, vertical, at, lo, hi, mergeLo = lo, mergeHi = hi) =>
-      lines.push({ key, vertical, at, lo, hi, mergeLo, mergeHi, fillerMax, styleKey });
-    // 面線・内側線は壁と同じ向きに走る。
-    plan.faceSegments.forEach(([lo, hi], i) =>
-      push(`${wall.id}:face:${i}`, wall.isVertical, wall.axisValue, lo, hi));
-    if (plan.finVisible) {
-      plan.finSegments.forEach(([lo, hi], i) =>
-        push(`${wall.id}:fin:${i}`, wall.isVertical, plan.finBoundary, lo, hi));
-    }
-    // 妻線・木口線は壁と**直交**する向きに走り、厚み方向の材の範囲いっぱいに引かれる。
-    // 出隅では、これが相手壁の仕上げ線と同一直線に並んで1本の線を構成する。
-    plan.capValues.forEach((v, i) =>
-      push(`${wall.id}:cap:${i}`, !wall.isVertical, v, mLo, mHi));
-    // 木口線だけは「まとめるときに使う区間」を**自壁の内側線まで**に切り詰める（ユーザー確定
-    // 2026-09「案A」）。内側線どうしが取り合うのが仕上げ材の規則で、材幅いっぱいのまま採ると
-    // まとめた内側線が相手の内側線を通り越して仕上げ面まで達する。描画そのもの（lo/hi）は
-    // 材幅のまま——まとめられなかった木口線は従来どおり2重線の内側として全幅で描く。
-    const finB = plan.finBoundary;
-    const eLo = wall.faceDir > 0 ? mLo : finB;
-    const eHi = wall.faceDir > 0 ? finB : mHi;
-    plan.ecapValues.forEach((v, i) =>
-      push(`${wall.id}:ecap:${i}`, !wall.isVertical, v, mLo, mHi, eLo, eHi));
-  }
-  return lines;
 }
