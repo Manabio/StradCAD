@@ -123,13 +123,22 @@ export function compareLayerPriority(a, b) {
  * 見ていたため、3層以上の吹抜けや上階側の壁で誤ったキャップ線が残った）。実Room
  * （VOID/STAIR_VOID以外）＝上階に実床があればそこで止める。
  * cutAlong/cut（切断壁）は対象外（壁自身のkneeDrop/実存在範囲を維持）。
+ *
+ * **ただし「上階にその壁が続いていない」なら上階のFLで止める**（ユーザー実機指摘2026-09
+ * 「「6」C: X3から1500、2FLから2階天井断面まで縦線は不要」「2階のバツの右側頂点は
+ * 上がX2-2階天井断面、下がX2-2FL」）——吹抜けを登る規則は「壁がそこに立っている」ことが前提で、
+ * 上階の平面にその壁が無ければ、壁面を上階まで描くのは平面照合のない描画になる。
+ * 実機は1階の壁（Y1から3500・X2〜X3から1500）の上に2階の壁が無く、階段の吹抜け（stairVoid）
+ * ごしに壁面が2階天井まで伸びていた。
  * @param {LayerInfo[]} stack - orderLayerStackの結果
  * @param {LayerInfo} info - この壁候補を見つけた層
  * @param {(upper:LayerInfo)=>object|null} roomAtLayer - 壁の位置でその層の所有Roomを1点プローブする
  * @param {number} fallbackZ - 上位層のceilZが求まらない防御的ケースの最終フォールバック
+ * @param {(upper:LayerInfo)=>boolean} [wallContinuesAt] - その層にこの壁が続いているか
+ *   （既定=常にtrue＝従来どおり吹抜けを天井まで登る）
  * @returns {number}
  */
-export function resolveSightlineTopZ(stack, info, roomAtLayer, fallbackZ) {
+export function resolveSightlineTopZ(stack, info, roomAtLayer, fallbackZ, wallContinuesAt = () => true) {
   let topZ = info.ceilZ;
   for (const upper of layersAboveOf(stack, info)) {
     // **上階に実床があれば、その手前の天井で見えがかりは終わる**（ユーザー実機指摘2026-08
@@ -140,8 +149,14 @@ export function resolveSightlineTopZ(stack, info, roomAtLayer, fallbackZ) {
     // 天井の見えがかり線が出なかった。区間2400..3000は`probeColumn`が天井懐（slab・非描画）に
     // 分類する。
     if (isRealRoom(roomAtLayer(upper))) break;
-    // 上が吹抜けなら壁はそのまま上階の天井まで続く（天井裏ぶんも含めて見える）。
     const upperFloorZ = Number.isFinite(upper.floorZ) ? upper.floorZ : upper.layer.floorZMm;
+    // **上階にこの壁が無ければ、そこで壁は終わる**（上記）——吹抜けごしに見えるのは
+    // 上階のFL（床スラブの縁）までで、その上に壁面は無い。
+    if (!wallContinuesAt(upper)) {
+      if (Number.isFinite(upperFloorZ)) topZ = Math.max(topZ, upperFloorZ);
+      break;
+    }
+    // 上が吹抜けで、かつ壁が続いているなら上階の天井まで（天井裏ぶんも含めて見える）。
     topZ = Math.max(topZ, Number.isFinite(upperFloorZ) ? upperFloorZ : topZ,
       upper.ceilZ ?? fallbackZ);
   }

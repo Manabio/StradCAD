@@ -322,6 +322,35 @@ function roomAtWallPosition(wall, worldMid, viewSign, probeCtx) {
 }
 
 /**
+ * 「その層にもこの壁が続いているか」（`resolveSightlineTopZ`へ渡す`wallContinuesAt`の実体）。
+ *
+ * 判定は**その層の同じ通り（同じ向き・同じ軸CL実効値。グラフが層ごとに別なのでidは一致しない）
+ * に壁が引かれているか**で二段に分ける:
+ *   - その通りに壁が1本も無い層 … 「その通りについて何も言っていない層」とみなし`true`
+ *     （＝従来どおり吹抜けを天井まで登る。上階が吹抜けだけで壁の記録を持たない構成が該当）。
+ *   - その通りに壁がある層 … その壁割りが唯一の情報源なので、worldMidを覆う壁があるときだけ
+ *     `true`。**この位置の抜けは上階の平面が決めた意図的な抜け**（実機「6」C: 2階のY1から3500の
+ *     壁はX2〜X3から1500の区間だけ無い）。
+ * 壁の厚み・偏芯・仕上げは問わない——「そこに壁が立っているか」だけの判定。
+ * @param {import('@core').Wall} wall
+ * @param {number} worldMid - 列の中央（壁の長さ方向の世界座標）
+ * @returns {(upper:{layer:{graph:object}})=>boolean}
+ */
+function wallContinuesOnLayer(wall, worldMid) {
+  const axisValue = wall.axisCL.effectiveValue;
+  return upper => {
+    const onAxis = (graphList(upper.layer.graph, 'walls') ?? []).filter(w2 =>
+      w2.isVertical === wall.isVertical
+      && Math.abs(w2.axisCL.effectiveValue - axisValue) <= COINCIDENT_TOL_MM);
+    if (onAxis.length === 0) return true;
+    return onAxis.some(w2 => {
+      const c1 = Math.min(w2.coord1, w2.coord2), c2 = Math.max(w2.coord1, w2.coord2);
+      return worldMid >= c1 - GAP_EPS && worldMid <= c2 + GAP_EPS;
+    });
+  };
+}
+
+/**
  * openingの絶対z範囲（§5.4「openingPassThrough」）。sill/heightの規約はopeningElevationFigure.js
  * ・openingNumbering.jsと同じ単一情報源を使う（フィッティング=sill0・窓=sillHeight??0、
  * heightはeffectiveHeightでカタログ既定へフォールバック——展開図の建具姿図と同じ解釈）。
@@ -587,6 +616,7 @@ export function probeColumn(cut, worldMid, probeCtx) {
         // 上階1段しか見ていなかったが、規則自体は層の役割にも段数にも依存しない。
         const capZ = resolveSightlineTopZ(
           layerStack, info, roomAtWallPosition(w, worldMid, cut.viewSign, probeCtx), zHi,
+          wallContinuesOnLayer(w, worldMid),
         );
         for (const { z0, z1 } of kneeDropZRangesAt(layer.graph, w, worldMid, info.floorZ, capZ)) {
           // 腰壁・垂れ壁指定で高さが制限された壁か（アキのバツのクリップ対象。sectionEmit.jsの
