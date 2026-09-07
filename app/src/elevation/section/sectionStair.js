@@ -497,7 +497,11 @@ function flightLadderPrimitives(flight, cut, columns, ladderAcross) {
   const dashed = flight.baseZ < (cut.baseFloorZ ?? 0) - GAP_EPS;
   const steps = Math.max(0, Math.round(flight.steps));
   const prims = [];
-  for (let k = 1; k <= steps; k++) {
+  // **基準床より下から始まる区間は足元（k=0＝その区間の床。実機の1FL）も描く**
+  // （ユーザー明示指示2026-09「「6」C: 1FLも破線描画」）——踏面だけだと最下段の下に線が無く、
+  // 区間の床がどこかが図に出ない。基準床から始まる区間（k=0＝帯自身の床＝踊り場）は
+  // 既に床断面線（太線）が引かれているので足さない。
+  for (let k = dashed ? 0 : 1; k <= steps; k++) {
     const z = flight.baseZ + k * flight.riserMm;
     prims.push(emitLine(cut, loX, z, hiX, z, ElevationLineRole.DETAIL, dashed ? { dash: 'dashed' } : {}));
   }

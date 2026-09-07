@@ -1080,9 +1080,26 @@ export function emitOpenGapMarks(columns, cut, emitCtx = {}) {
     }
   });
 
+  // **同じ列でzが接するセルは先に1つへ繋ぐ**（ユーザー実機指摘2026-09「「6」C: 1階X3〜
+  // X3から1500、バツが踊り場で上下2つに分かれているが1つが正解」）——列のz区間は
+  // `cut.baseFloorZ`のような**描画都合の断点**でも割られており（sectionProbe.jsのzSet。
+  // 線種の最終降格を区間ごとに効かせるための分割）、そこで連結成分が切れると1つの抜けが
+  // 上下2組のバツになる。接しているセルは同じ列＝同じx範囲なので、繋いでも形は変わらない。
+  const merged = [];
+  for (const [, group] of Map.groupBy(cells, c => c.colIndex)) {
+    for (const cell of [...group].sort((a, b) => a.z0 - b.z0)) {
+      const prev = merged[merged.length - 1];
+      if (prev && prev.colIndex === cell.colIndex && cell.z0 <= prev.z1 + GAP_EPS) {
+        prev.z1 = Math.max(prev.z1, cell.z1);
+      } else {
+        merged.push({ ...cell });
+      }
+    }
+  }
+
   // 連結成分（列インデックスが隣接し、z範囲が重なるセル同士を1つにまとめる）。
   const groups = [];
-  for (const cell of cells) {
+  for (const cell of merged) {
     const touching = groups.filter(g => g.some(c =>
       Math.abs(c.colIndex - cell.colIndex) <= 1 && overlapsZ(c, cell)));
     if (touching.length === 0) { groups.push([cell]); continue; }
