@@ -30,25 +30,57 @@ import { stairContribution } from '../sectionStair.js';
 import { graphList } from '../../../graphReadScope.js';
 
 const MID_WALL_TOL_MM = 300; // 壁厚程度の許容差（往路・復路間の壁の実在判定。既存実装と同値）
+// 「階段footprintの境界上のCLか、内側に立つCLか」の判別許容差(mm)。footprintは
+// roomBounds（セル格子＝CL位置）なので境界上の壁は本来ぴったり一致するが、CL偏芯・
+// 手動移動ぶんを飲み込む余裕として壁厚1枚ぶんを見る。
+const FOOTPRINT_EDGE_TOL_MM = 150;
 
 /**
- * 階段下（破れ線先セル）に部屋が指定されているか。判定は仕上げモード側と同じ単一情報源
+ * 階段下（破れ線先セル）の部屋の情報。判定は仕上げモード側と同じ単一情報源
  * （`cellsBeyondBreak` × `stairUnderRoomsOf`）に委譲する——展開図が独自判定を持つと
  * 階段下壁の生成（`stairUnderWalls.js`）と食い違うため。
  *
- * **判定不能なら true（＝現行表現を保つ）へ倒す**——graph未整備・破れ線先セルを導出できない
- * （`cellsBeyondBreak`が空。U字構造として認識できない構成等）場合は「階段下が開いている」と
- * 積極的に言えないため、ユーザー実機確認済みの表現（踊り場が基準床）をそのまま使う。
- * 逆に倒すと、判定できないだけの階段まで描画が変わってしまう。
+ * - `hasRoomUnder` … 階段下に部屋が指定されているか。**判定不能なら true（＝現行表現を保つ）**
+ *   へ倒す——graph未整備・破れ線先セルを導出できない（`cellsBeyondBreak`が空。U字構造として
+ *   認識できない構成等）場合は「階段下が開いている」と積極的に言えないため、ユーザー実機
+ *   確認済みの表現（踊り場が基準床）をそのまま使う。逆に倒すと、判定できないだけの階段まで
+ *   描画が変わってしまう。
+ * - `hiddenWallIds` … その部屋のために生成された壁（`room.generatedWallIds`。2a壁）のid。
+ *   **階段の展開図はこれらを一切見ない**（ユーザー実機指摘2026-09「「6」D1: …「13」の壁関連
+ *   （2本の縦線とアキばつ）は、階段より下なので描画しない」）——2a壁は階段下の空間の壁で、
+ *   その展開は階段下部屋自身の帯（「13」A〜D）が描く。平面図でも同じ規約で、破れ線より
+ *   階段踏面側では2a壁を描かない（`finish/stair/stairUnderClip.js`）。
+ *   階段帯でこれを見てしまうと、レーン境界（中心1）に載る2a壁が「その切断で最も手前の壁面」
+ *   になり、(1)壁端の縦線、(2)その先が`open`になってアキのバツ（本来はもっと奥の壁が
+ *   見えがかりとして続く）、(3)`isBlockedByWall`が成立して復路ささらの見えがかりが消える、
+ *   の3つが同時に起きる。
  * @param {import('@core').Stair} stair
  * @param {object} graph
- * @returns {boolean}
+ * @returns {{hasRoomUnder:boolean, hiddenWallIds:Set<string>|null}}
  */
-function hasRoomUnderStair(stair, graph) {
-  if (!stair || !graph?.rooms) return true;
+function stairUnderInfo(stair, graph) {
+  if (!stair || !graph?.rooms) return { hasRoomUnder: true, hiddenWallIds: null };
   const beyond = cellsBeyondBreak(stair, graph, stair.riser ?? null);
-  if (beyond.size === 0) return true;
-  return stairUnderRoomsOf(stair, graph, beyond).length > 0;
+  if (beyond.size === 0) return { hasRoomUnder: true, hiddenWallIds: null };
+  const rooms = stairUnderRoomsOf(stair, graph, beyond);
+  // 対象は**階段のfootprintの内側に立つ**壁だけ——階段下部屋の外周のうち階段室自身の外周と
+  // 重なる辺（実機「13」の南辺=階段室の南壁）は階段室の実壁そのもので、階段の展開図に
+  // 必要である。footprint境界上のCLを除くことでその辺だけが残る。
+  const fp = stair.cells ? roomBounds(stair.cells, graph) : null;
+  const insideFootprint = (wall) => {
+    if (!fp) return false;
+    const v = wall.axisCL.effectiveValue;
+    const [lo, hi] = wall.isVertical ? [fp.x1, fp.x2] : [fp.y1, fp.y2];
+    return v > Math.min(lo, hi) + FOOTPRINT_EDGE_TOL_MM && v < Math.max(lo, hi) - FOOTPRINT_EDGE_TOL_MM;
+  };
+  const hiddenWallIds = new Set();
+  for (const room of rooms) {
+    for (const id of room.generatedWallIds ?? []) {
+      const w = graph.shapeMap?.get(id);
+      if (w && insideFootprint(w)) hiddenWallIds.add(id);
+    }
+  }
+  return { hasRoomUnder: rooms.length > 0, hiddenWallIds: hiddenWallIds.size > 0 ? hiddenWallIds : null };
 }
 
 // ---- elevationStairSequence.js から移設（挙動不変。§9でstairFaceSequence側からは削除する）----
@@ -243,7 +275,7 @@ export function switchbackCuts(stair, faces, graph, opts = {}) {
   // 部屋が有る場合は従来どおり踊り場が基準床（その下は別室＝向こう側なので細破線へ降格）。
   // 判定は階段下部屋の唯一の情報源（stairUnderRoomsOf × cellsBeyondBreak）をそのまま使う
   // ——展開図が独自の判定を持つと、壁生成（stairUnderWalls.js）との食い違いが生まれるため。
-  const hasRoomUnder = hasRoomUnderStair(stair, graph);
+  const { hasRoomUnder, hiddenWallIds } = stairUnderInfo(stair, graph);
   const underFloorZ = hasRoomUnder ? landingAbs : 0;
 
   const b = roomBounds(stair.cells, graph);
@@ -448,6 +480,10 @@ export function switchbackCuts(stair, faces, graph, opts = {}) {
       layers, zRange: zRangeUpper, baseFloorZ: underFloorZ, stairCut: inboundWithLanding,
     });
   }
+
+  // 階段下部屋の2a壁は全cutで見えない（stairUnderInfo参照）。cutごとに書き分ける理由が無いため
+  // ここで一括して載せる——「どのcutが何を見るか」の唯一の情報源はこの切断定義表である。
+  if (hiddenWallIds) for (const c of cuts) c.hiddenWallIds = hiddenWallIds;
 
   return {
     cuts, wEntry, wLanding, wOut1, wOut2, wall, kneeDrop, params, landingAbs, underFloorZ, hasRoomUnder, isSteel, contribution,

@@ -706,3 +706,42 @@ test('【2026-09】emitColumns: 建具で切れた切断壁は、両縁ではな
   assert.equal(verticalsInOpening.length, 0,
     `建具の範囲に壁の断面の縦線は出ないはず（実際:${JSON.stringify(verticalsInOpening)}）`);
 });
+
+
+// ---- cut.hiddenWallIds: その切断が「実体ごと見ない」壁（現状の供給元は階段下部屋の2a壁。
+// section/cuts/switchbackCuts.jsのstairUnderInfo）----
+test('probeColumn/collectCutBreaks: cut.hiddenWallIdsの壁は候補にも列の分割にも現れない', () => {
+  const graph = makeGraph();
+  makeRectRoom(graph, 0, 0, 4000, 3000);
+  const far = farWallOf(graph);
+  assert.ok(far, '奥の壁があるはず');
+
+  const cut = frontCut(graph);
+  const bandsBefore = probeColumn(cut, 2000, makeProbeContext(cut.layers));
+  assert.ok(bandsBefore.some(b => b.wall === far), '通常は奥の壁が候補に現れるはず');
+
+  const hidden = frontCut(graph, { hiddenWallIds: new Set([far.id]) });
+  const bandsAfter = probeColumn(hidden, 2000, makeProbeContext(hidden.layers));
+  assert.ok(!bandsAfter.some(b => b.wall === far), '非可視指定の壁は候補に現れないはず');
+
+  // 列の分割からも消える（片方だけだと壁端に縦線・アキの境界が残る）。
+  const breaksBefore = collectCutBreaks(cut, makeProbeContext(cut.layers));
+  const breaksAfter = collectCutBreaks(hidden, makeProbeContext(hidden.layers));
+  assert.ok(breaksAfter.length <= breaksBefore.length, '非可視指定で列境界は増えないはず');
+  const c1 = Math.min(far.coord1, far.coord2), c2 = Math.max(far.coord1, far.coord2);
+  const inside = v => v > cut.line.lo + 1 && v < cut.line.hi - 1;
+  for (const v of [c1, c2].filter(inside)) {
+    assert.ok(!breaksAfter.some(b => Math.abs(b - v) < 1e-6),
+      `非可視指定の壁の端(${v})では列を割らないはず`);
+  }
+});
+
+test('【失敗系】probeColumn: hiddenWallIdsに無いidを指定しても既存の結果は変わらない', () => {
+  const graph = makeGraph();
+  makeRectRoom(graph, 0, 0, 4000, 3000);
+  const cut = frontCut(graph);
+  const base = probeColumn(cut, 2000, makeProbeContext(cut.layers));
+  const other = frontCut(graph, { hiddenWallIds: new Set(['no-such-wall']) });
+  const after = probeColumn(other, 2000, makeProbeContext(other.layers));
+  assert.deepEqual(after.map(b => [b.kind, b.z0, b.z1]), base.map(b => [b.kind, b.z0, b.z1]));
+});

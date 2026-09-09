@@ -154,7 +154,7 @@ function stepCeilingProfile(segs) {
 /**
  * レーン側の面（seq2=wOut1／seq4=wOut2）のfloorSegments・ceilingProfileを組み立てる
  * （項目A対応）。floorDeltaSegsはfloorDeltaMm（既存の階段自身の床段差＝レーン=0・
- * 踊り場=landingAbs）の並び（[{loX,hiX,floorDeltaMm,hideFlatLine?}]。昇順・隙間なし。
+ * 踊り場=landingAbs）の並び（[{loX,hiX,floorDeltaMm,flatLineSpanX?}]。昇順・隙間なし。
  * seq2は[レーン,踊り場]の順・seq4は鏡像で[踊り場,レーン]の順になる——どちらの順でも
  * 正しく組み立てられるようfloorDeltaMm===0かどうかだけで判定する）、aboveLayerがあれば
  * 実Room有無で1F天井高さ(ceilLowAbs)／上階天井(ceilTopAbs)を区間ごとに割り当てる。
@@ -164,7 +164,8 @@ function stepCeilingProfile(segs) {
  * ceilingProfileは「レーンから踊り場へ向けて勾配で立ち上がる」非対称な式で、floorDeltaSegsの
  * 区分境界だけからは一般化して再現できないため、呼び出し側の既存リテラルをそのまま温存する）。
  * @param {object} face
- * @param {Array<{loX:number, hiX:number, floorDeltaMm:number, hideFlatLine?:boolean}>} floorDeltaSegs
+ * @param {Array<{loX:number, hiX:number, floorDeltaMm:number,
+ *   flatLineSpanX?:{lo?:number,hi?:number}}>} floorDeltaSegs
  * @param {{graph:object, floorZMm:number, role:string}|null} aboveLayer
  * @param {ReturnType<typeof makeProbeContext>} probeCtx
  * @param {number} ceilLowAbs
@@ -222,9 +223,9 @@ function buildLaneFloorAndCeiling(
     const floorDeltaMm = ownerSeg?.floorDeltaMm ?? 0;
     const hasRoom = hasAboveRoomAtX(aboveSegs, mid);
     const ceilAbs = hasRoom ? ceilLowAbs : ceilTopAbs;
-    const hideFlatLine = floorDeltaMm === 0 && ownerSeg?.hideFlatLine === true;
+    const flatLineSpanX = floorDeltaMm === 0 ? ownerSeg?.flatLineSpanX : undefined;
     floorSegments.push({
-      loX, hiX, floorDeltaMm, chMm: ceilAbs - floorDeltaMm, ...(hideFlatLine ? { hideFlatLine: true } : {}),
+      loX, hiX, floorDeltaMm, chMm: ceilAbs - floorDeltaMm, ...(flatLineSpanX ? { flatLineSpanX } : {}),
     });
     profileSegs.push({ loX, hiX, ceilAbs });
   }
@@ -452,6 +453,9 @@ export function stairFaceSequence(stair, faces, graph, opts = {}) {
   // この壁は切断線から見て**面の裏側**へ伸びるため、elevationFigure.jsの直交壁検出
   // （室内側へ突出する袖壁が対象）に掛からず、一点鎖線の源が1つも無かった。
   // 面に直交し、かつ芯が面の範囲内にある面にだけ載せる（面と平行なB/D側には出ない）。
+  // 段鼻の出(mm)。レーン区間の1FL線をどこで止めるか（＝ジグザグの始点が1FLに接するx）の
+  // 単一情報源はflight自身の`nosingMm`（sectionStair.jsのstairContributionが載せる値）。
+  const nosingMm = contribution?.flights?.[0]?.nosingMm ?? 0;
   const midWall = cutTable.wall ?? null;
   const midWallCLXs = face => {
     if (!midWall || !face || midWall.isVertical === face.isVertical) return undefined;
@@ -492,14 +496,19 @@ export function stairFaceSequence(stair, faces, graph, opts = {}) {
   const outFace2 = cutOf('2').face;
   {
     const laneLenOnFace = Math.max(0, outFace2.run - landingLen);
-    // QA実機フィードバック修正: レーン区間(floorDeltaMm:0)の床線(z=0)は、段鼻の断面
-    // ジグザグ(stairCutのcontent)が既にその区間の輪郭を表しているため、床の水平線が
-    // ジグザグの下を素通りして踊り場側の隅まで貫通してしまう（「階段設置階FLは階段断面
-    // に出会ったらそこが終点」）——hideFlatLine:trueでこの区間だけ床線を描かない
-    // （elevationFigure.jsのbuildFaceFigure参照。段差縦線・注記等の他の処理は不変）。
+    // レーン区間(floorDeltaMm:0)の床線(z=0)は「階段設置階FLは階段断面に出会ったらそこが終点」
+    // （ユーザー明示指示）——段鼻の断面ジグザグ(stairCutのcontent)がその先の輪郭を表すため、
+    // 床の水平線をそのまま引くとジグザグの下を素通りして踊り場側の隅まで貫通する。
+    // **階段下に部屋がある場合だけ**この規則を効かせる（部屋が無ければ階段の下も同じ空間で
+    // 1FLが続いて見えるため従来どおり全長を引く）。旧実装は`hideFlatLine`で区間を丸ごと
+    // 非描画にしており、階段の**手前**（下りた先＝壁のない端部のはり出し）まで消していた
+    // ——ユーザー実機指摘2026-09「「6」D1: 1階Y2から3500、下りた階段の先（左側）に1FL断面
+    // はり出しが正解」。終点は段鼻の先端が1FLに接するx（＝上り口端＋段鼻の出）で、
+    // ジグザグの始点とちょうど繋がる。
     const floorDeltaSegs2 = laneLenOnFace > 0
       ? [
-          { loX: 0, hiX: laneLenOnFace, floorDeltaMm: 0, hideFlatLine: hasRoomUnder },
+          { loX: 0, hiX: laneLenOnFace, floorDeltaMm: 0,
+            ...(hasRoomUnder ? { flatLineSpanX: { hi: nosingMm } } : {}) },
           { loX: laneLenOnFace, hiX: outFace2.run, floorDeltaMm: underFloorZ },
         ]
       : [{ loX: 0, hiX: outFace2.run, floorDeltaMm: underFloorZ }];
@@ -545,12 +554,13 @@ export function stairFaceSequence(stair, faces, graph, opts = {}) {
   {
     const laneLenOnFace4 = Math.max(0, outFace4.run - landingLen);
     const landingHi4 = outFace4.run - laneLenOnFace4;
-    // QA実機フィードバック修正: seq2と同じ理由でレーン区間の床線を描かない（seq4は
-    // 踊り場が左・レーンが右の鏡像構成のため、こちらは第2区間がレーンにあたる）。
+    // seq2と同じ規則（seq4は踊り場が左・レーンが右の鏡像構成のため、レーンは第2区間で
+    // 1FLのはり出しは**右端側**に出る）。
     const floorDeltaSegs4 = landingHi4 < outFace4.run
       ? [
           { loX: 0, hiX: landingHi4, floorDeltaMm: underFloorZ },
-          { loX: landingHi4, hiX: outFace4.run, floorDeltaMm: 0, hideFlatLine: hasRoomUnder },
+          { loX: landingHi4, hiX: outFace4.run, floorDeltaMm: 0,
+            ...(hasRoomUnder ? { flatLineSpanX: { lo: outFace4.run - nosingMm } } : {}) },
         ]
       : [{ loX: 0, hiX: outFace4.run, floorDeltaMm: underFloorZ }];
     // 項目A: seq2と同じくbuildLaneFloorAndCeilingで決める（fallbackCeilingProfile4は

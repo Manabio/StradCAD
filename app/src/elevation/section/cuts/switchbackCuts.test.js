@@ -286,3 +286,42 @@ test('【ユーザー実機フィードバック2026-08-23・不具合1修正】
       `${seqNo}のstairCut.unitはcontribution.unitと同一オブジェクトのはず`);
   }
 });
+
+
+// ---- 階段下部屋の2a壁は階段の展開図から見えない（ユーザー実機指摘2026-09「「6」D1:
+// 「13」の壁関連（2本の縦線とアキばつ）は、階段より下なので描画しない」）----
+test('switchbackCuts: 階段下部屋の2a壁のうちfootprintの内側に立つものだけがcut.hiddenWallIdsに載る', () => {
+  const graph = makeGraph();
+  const { room, stair } = makeSwitchbackFixture(graph);
+  const under = [...graph.rooms].find(r => r.name === '階段下');
+  assert.ok(under, '階段下部屋があるはず');
+  const xm = graph.centerLines.find(cl => cl.centerLineType === CenterLineType.VERTICAL && cl.effectiveValue === 1000);
+  const x0 = graph.centerLines.find(cl => cl.centerLineType === CenterLineType.VERTICAL && cl.effectiveValue === 0);
+  const ym = graph.centerLines.find(cl => cl.centerLineType === CenterLineType.HORIZONTAL && cl.effectiveValue === 1500);
+  const y1 = graph.centerLines.find(cl => cl.centerLineType === CenterLineType.HORIZONTAL && cl.effectiveValue === 4500);
+  // レーン境界（footprintの内側）の2a壁と、階段室外周と重なる辺（footprintの境界上）の2a壁。
+  const laneWall = graph.addWall(xm, -50, true, ym, 0, y1, 0, {});
+  const edgeWall = graph.addWall(x0, -50, true, ym, 0, y1, 0, {});
+  under.generatedWallIds.add(laneWall.id);
+  under.generatedWallIds.add(edgeWall.id);
+
+  const faces = composeRoomFaces(room, graph);
+  const table = switchbackCuts(stair, faces, graph, OPTS);
+  for (const cut of table.cuts) {
+    assert.ok(cut.hiddenWallIds?.has(laneWall.id),
+      `seq${cut.seqNo}: レーン境界の2a壁は非可視のはず（階段下の空間の壁で、その展開は階段下部屋の帯が描く）`);
+    assert.ok(!cut.hiddenWallIds.has(edgeWall.id),
+      `seq${cut.seqNo}: 階段室外周と重なる2a壁は階段室の実壁そのものなので非可視にしないはず`);
+  }
+});
+
+test('【失敗系】switchbackCuts: 階段下に部屋が無ければhiddenWallIdsは付かない（従来どおり全ての壁が見える）', () => {
+  const graph = makeGraph();
+  const { room, stair } = makeSwitchbackFixture(graph, { withRoomUnder: false });
+  const faces = composeRoomFaces(room, graph);
+  const table = switchbackCuts(stair, faces, graph, OPTS);
+  assert.equal(table.hasRoomUnder, false);
+  for (const cut of table.cuts) {
+    assert.equal(cut.hiddenWallIds, undefined, `seq${cut.seqNo}: 非可視の壁は無いはず`);
+  }
+});

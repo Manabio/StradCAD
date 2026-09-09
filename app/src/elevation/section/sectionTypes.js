@@ -28,6 +28,7 @@
  *   zRange: {loZ:number, hiZ:number},
  *   baseFloorZ: number,
  *   stairCut?: object,
+ *   hiddenWallIds?: Set<string>,
  *   chDimSplitAbsYs?: number[],
  *   anchorRoom?: object,
  * }} SectionCut

@@ -1011,20 +1011,36 @@ test('【QA修正・実機フィードバック】stairFaceSequence: seq4は左=
     `（左=${JSON.stringify(minXPt)}, 右=${JSON.stringify(maxXPt)}）`);
 });
 
-test('【QA修正・実機フィードバック】stairFaceSequence: seq2/seq4のレーン区間床線(FL)は「階段断面に出会ったら終点」＝hideFlatLine:trueで貫通しない', () => {
+test('stairFaceSequence: seq2/seq4のレーン区間床線(FL)は「階段断面に出会ったら終点」＝上り口側だけに残る（flatLineSpanX）', () => {
   const graph = makeGraph();
   const { room, stair } = makeUserDimsFixture(graph);
   const faces = composeRoomFaces(room, graph);
   const entries = stairFaceSequence(stair, faces, graph, OPTS);
 
+  // seq2は上り口が左（localX小）・seq4はその鏡像で上り口が右。1FL線は上り口の外側
+  // （壁のない端部のはり出し）にだけ残り、レーンの中＝階段断面の下へは入らない。
   for (const seqNo of ['2', '4']) {
     const entry = entries.find(e => e.seqNo === seqNo);
-    const laneSeg = entry.floorSegments.find(s => s.floorDeltaMm === 0);
-    assert.ok(laneSeg, `seq${seqNo}にfloorDeltaMm:0(レーン)区間があるはず`);
-    assert.equal(laneSeg.hideFlatLine, true,
-      `seq${seqNo}のレーン区間はhideFlatLine:trueのはず（階段断面(ジグザグ)が既に境界を表すため）`);
+    const laneSegs = entry.floorSegments.filter(s => s.floorDeltaMm === 0);
+    assert.ok(laneSegs.length > 0, `seq${seqNo}にfloorDeltaMm:0(レーン)区間があるはず`);
+    const nosing = stair.nosing ?? 0;
+    for (const seg of laneSegs) {
+      assert.ok(seg.flatLineSpanX,
+        `seq${seqNo}のレーン区間はflatLineSpanXで切り詰められるはず（階段断面が境界を表すため）`);
+    }
+    if (seqNo === '2') {
+      const first = laneSegs[0];
+      assert.equal(first.flatLineSpanX.hi, first.loX + nosing,
+        'seq2のレーン床線は上り口端＋段鼻の出（ジグザグが1FLに接するx）で終わるはず');
+      assert.equal(first.flatLineSpanX.lo, undefined, 'seq2は左側（はり出し側）を切らないはず');
+    } else {
+      const last = laneSegs[laneSegs.length - 1];
+      assert.equal(last.flatLineSpanX.lo, entry.face.run - nosing,
+        'seq4のレーン床線は上り口端−段鼻の出（ジグザグが1FLに接するx）から始まるはず');
+      assert.equal(last.flatLineSpanX.hi, undefined, 'seq4は右側（はり出し側）を切らないはず');
+    }
     const landingSeg = entry.floorSegments.find(s => s.floorDeltaMm > 0);
-    assert.ok(!landingSeg.hideFlatLine, `seq${seqNo}の踊り場区間は通常どおり床線を描くはず`);
+    assert.ok(!landingSeg.flatLineSpanX, `seq${seqNo}の踊り場区間は通常どおり床線を描くはず`);
   }
 });
 

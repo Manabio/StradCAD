@@ -468,6 +468,22 @@ export function makeProbeContext(layers, opts = {}) {
  *   直接走査で完結するため必須ではない）。
  * @returns {number[]} 昇順・重複除去済み
  */
+/**
+ * その切断が「実体ごと見ない」壁か（`cut.hiddenWallIds`）。
+ *
+ * 現状の唯一の供給元は階段下部屋の2a壁（`section/cuts/switchbackCuts.js`の`stairUnderInfo`）。
+ * 階段下の空間の壁はその部屋自身の帯が展開を描くもので、階段の帯からは見えない扱いにする
+ * ——平面図が破れ線より階段踏面側で2a壁を描かないのと同じ規約（`stairUnderClip.js`）。
+ * 列の分割（`collectCutBreaks`）と候補の収集（`probeColumn`）の**両方**で効かせる
+ * ——片方だけだと、壁は消えても壁端で列が割れたまま残り、そこに縦線・アキの境界が出る。
+ * @param {import('./sectionTypes.js').SectionCut} cut
+ * @param {import('@core').Wall} wall
+ * @returns {boolean}
+ */
+function isHiddenWall(cut, wall) {
+  return cut.hiddenWallIds?.has(wall.id) === true;
+}
+
 export function collectCutBreaks(cut, probeCtx) {
   const line = cut.line;
   const layers = cut.layers ?? [];
@@ -486,6 +502,7 @@ export function collectCutBreaks(cut, probeCtx) {
     probeCtx?.cellToRoomFor?.(layer); // ウォームアップ（後続のprobeColumn呼び出しのキャッシュ寄与）
     for (const v of collectRunBreaks(layer.graph, line.isVertical, probeLo, probeHi)) values.add(v);
     for (const w of graphList(layer.graph, 'walls') ?? []) {
+      if (isHiddenWall(cut, w)) continue; // 非可視の壁（下記isHiddenWall）は列も割らない
       if (isCutWall(w, line)) {
         const mr = w.materialRange;
         addIfInside(mr.lo); addIfInside(mr.hi);
@@ -592,6 +609,7 @@ export function probeColumn(cut, worldMid, probeCtx) {
     const { layer } = info;
     if (info.ceilZ == null) continue; // 防御的ガード（fallbackCeilZにより通常到達しない）
     for (const w of graphList(layer.graph, 'walls') ?? []) {
+      if (isHiddenWall(cut, w)) continue;
       if (isCutWall(w, line)) {
         const mr = w.materialRange;
         if (worldMid < mr.lo - GAP_EPS || worldMid > mr.hi + GAP_EPS) continue;

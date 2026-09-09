@@ -401,7 +401,8 @@ function subtractRuns(base, holes) {
  *   materialMap:Map|null, gridCLs:object[], faceLabelAvoidThresholdModelMm?:number,
  *   prevFace?:object|null, nextFace?:object|null, openingTagRowModelMm?:number,
  *   dimRowGapModelMm?:number, gridRowGapModelMm?:number,
- *   floorSegments?:Array<{loX:number,hiX:number,floorDeltaMm:number,chMm?:number}>,
+ *   floorSegments?:Array<{loX:number,hiX:number,floorDeltaMm:number,chMm?:number,
+ *     flatLineSpanX?:{lo?:number,hi?:number}}>,
  *   beyondCeilings?:Array<{loX:number,hiX:number,ceilAbsMm:number}>,
  *   ceilingProfile?:Array<[number,number]>, skipBaseboard?:boolean, skipWallLabel?:boolean,
  *   floorSpanX?:{lo:number,hi:number}}} ctx
@@ -583,17 +584,22 @@ export function buildFaceFigure(face, ctx) {
   const halfWallMm = halfWallThicknessMm(face);
   const riserXAt = i => drawnRiserX(segs, i, halfWallMm);
 
+  // 区間の床線が実際に引かれるx範囲。`s.flatLineSpanX`（既定=未指定=区間いっぱい）で狭める
+  // ——階段帯のレーン区間のように「床の実体が区間の一部にしか無い」場合に使う
+  // （ユーザー実機指摘2026-09「「6」D1: 下りた階段の先（左側）に1FL断面はり出しが正解」。
+  // 旧`hideFlatLine`は区間まるごと非描画で、はり出しごと消えていた）。空になればnull。
+  const flatLineRangeAt = (i) => {
+    const s = segs[i];
+    const lo = Math.max(i === 0 ? drawnX0 : riserXAt(i - 1), s.flatLineSpanX?.lo ?? -Infinity);
+    const hi = Math.min(i === segs.length - 1 ? drawnXRun : riserXAt(i), s.flatLineSpanX?.hi ?? Infinity);
+    return hi - lo > 1e-6 ? { lo, hi } : null;
+  };
+
   for (const [i, s] of segs.entries()) {
-    // QA実機フィードバック修正: 区間の床線は既定で描くが、`s.hideFlatLine===true`の区間だけは
-    // 描かない（段差縦線・注記等の他の処理には影響しない。既定値undefined=falsyのため
-    // floorSegments未指定・既存呼び出しは完全無変化）。階段帯のレーン区間（段鼻の断面
-    // ジグザグが同じ高さを既に表現している区間）で、床の水平線がジグザグの下を素通りして
-    // 面の遠端まで貫通してしまう実機不具合の修正に使う（elevationStairSequence.js参照）。
-    if (s.hideFlatLine) continue;
+    const span = flatLineRangeAt(i);
+    if (!span) continue;
     const y = floorYOf(s);
-    const x1 = i === 0 ? drawnX0 : riserXAt(i - 1);
-    const x2 = i === segs.length - 1 ? drawnXRun : riserXAt(i);
-    prims.push({ type: 'line', x1, y1: y, x2, y2: y, weight: cutWeight });
+    prims.push({ type: 'line', x1: span.lo, y1: y, x2: span.hi, y2: y, weight: cutWeight });
   }
   for (let i = 0; i + 1 < segs.length; i++) {
     // 段差の縦線（明示指示により寸法線・寸法値は描かない）。床の段差そのものはCUT
@@ -602,6 +608,12 @@ export function buildFaceFigure(face, ctx) {
     // 境界には床の段差縦線を描かない（描くと長さ0の線が残る）。
     if (floorYOf(segs[i]) === floorYOf(segs[i + 1])) continue;
     const x = riserXAt(i);
+    // 段差の縦線は「両側の床線が実際にその境界まで来ている」ときだけ引く——片側の床線が
+    // flatLineSpanXで手前で終わっていれば、そこに段差は無い（ユーザー実機指摘2026-09
+    // 「「6」D1: Y2から1000の…2本の縦線…は階段より下なので描画しない」。レーン区間の床は
+    // 階段そのもので、踊り場との間に1FLからの立ち上がりは存在しない）。
+    const a = flatLineRangeAt(i), b = flatLineRangeAt(i + 1);
+    if (!a || !b || a.hi < x - 1e-6 || b.lo > x + 1e-6) continue;
     prims.push({
       type: 'line', x1: x, y1: floorYOf(segs[i]), x2: x, y2: floorYOf(segs[i + 1]),
       weight: cutWeight,
