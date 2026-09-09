@@ -608,24 +608,6 @@ function lowerFaceEndVertical(primitives, xCursor, localX, ceilAbs, topY) {
 }
 
 /**
- * 天井断面線（CUTの水平線）を、指定の高さ`newY`へ引き直す（階段下の部屋の、階段を横切る面）。
- */
-function setCeilingLineY(primitives, xCursor, face, ceilAbs, newY) {
-  const w = weightForRole(ElevationLineRole.CUT);
-  const y = -ceilAbs;
-  const panelLo = xCursor - DEFAULT_WALL_LESS_END_EXTEND_MM - 1;
-  const panelHi = xCursor + face.run + DEFAULT_WALL_LESS_END_EXTEND_MM + 1;
-  for (let i = 0; i < primitives.length; i++) {
-    const q = primitives[i];
-    if (q.type !== 'line' || q.weight !== w) continue;
-    if (Math.abs(q.y1 - y) > BAND_GAP_EPS || Math.abs(q.y2 - y) > BAND_GAP_EPS) continue;
-    const lo = Math.min(q.x1, q.x2), hi = Math.max(q.x1, q.x2);
-    if (hi < panelLo || lo > panelHi) continue;
-    primitives[i] = { ...q, y1: newY, y2: newY };
-  }
-}
-
-/**
  * 天井断面線（CUTの水平線）を、階段断面とぶつかったxで止める。`primitives`のうちこの面の
  * パネル範囲に掛かる y=-ceilAbs の水平CUT線だけを対象に、残す側へ縮める（範囲外になった線は
  * 取り除く）。図（buildFaceFigure）は断面エンジンより前に組まれるため、階段断面との交点は
@@ -706,29 +688,43 @@ export function appendBandCutContent(primitives, room, graph, layout, layers, op
     // 階段下の部屋: 上を通る階段の断面・見えがかりを重ねる（階段帯とまったく同じ部品）。
     // 梯子（正面視の踏面）は出さない——下から見上げる面には踏面の正面は見えない。
     if (opts.stairOver) {
+      const ceilAbs = layout.CH;
+      const crossFlight = flightsOverRoom(opts.stairOver, bandRoomBounds)
+        .find(f => f.isVertical !== face.isVertical);
+      // **面を横切るレーンでは、仮想断面の位置で階段が天井より上なら階段を一切描かない**
+      // （ユーザー明示指示2026-09「「13」C: CH2400の天井平場で切断なので、階段梯子は見えない
+      // はず」）——梯子（flightLadderPrimitives）はレーンの**全段を絶対高さで**描く規約で、
+      // 切断線の位置に依らない。天井より上を落とすクリップ（clipStairUnderCeiling）は
+      // プリミティブ単位のz比較なので、踏面が天井より低ければ残ってしまい、実機「13」Cでは
+      // 仮想断面の位置の階段（段鼻2938・ささら下端2698）が天井2400の上にあるのに、
+      // 踏面（1636〜2318）が見えていた。判定は**仮想断面の位置の段鼻**で行う——天井を止める
+      // 基準（「CHの線が階段断面とぶつかるところ」）と同じ「階段断面＝段鼻」基準に揃える。
+      const stairHiddenByCeil = crossFlight
+        && stairZAtRun(crossFlight, cut.line.axisValue) >= ceilAbs - BAND_GAP_EPS;
       // 梯子（踏面の見えがかり。DETAIL＝細線）は描く（ユーザー明示指示2026-09「「13」A:
       // 階段見えがかりの梯子（細線）を描く」）。
-      const raw = stairPrimitivesForCut(opts.stairOver, pcut, columns, {
+      const raw = stairHiddenByCeil ? [] : stairPrimitivesForCut(opts.stairOver, pcut, columns, {
         includeStringerSightline: stringerSightlineVisible(face, graph, opts.stairOver, bandRoomBounds),
         stringerSightlineLowerOnly: true,
       });
       // 天井が張られている範囲では、その上の階段は天井に隠れる（clipStairUnderCeiling）。
-      const ceilAbs = layout.CH;
       const { prims: shown, crossXs } = clipStairUnderCeiling(raw, ceilAbs);
       for (const p of clipContentToFace(shown, drawnX)) {
         primitives.push(translatePrimitive(p, xCursor, 0));
       }
-      // 面を**横切る**レーン（正面視）の下は、その面の天井が階段そのもの——天井断面線を
-      // 階段の高さへ引き直す（ユーザー明示指示2026-09「「13」A: 天井高さは、B面の階段断面との
-      // 取り合い高さ」）。両端の縦線もその高さで止まる。
-      const crossFlight = flightsOverRoom(opts.stairOver, bandRoomBounds)
-        .find(f => f.isVertical !== face.isVertical);
-      if (crossFlight) {
+      if (crossFlight && !stairHiddenByCeil) {
+        // **天井高さは動かさない**（ユーザー明示指示2026-09「「13」A: 仮想断面の位置を確認して
+        // 天井高さをプローブ／2400が正解」）——仮想断面の位置でプローブした天井は部屋のCHで、
+        // 上を通る階段はその下に現わしで見えるだけ。**端の縦線（仮想断面）も最も高い位置まで**
+        // （同指示「天井に高低差が生じ、低い方を見る場合は、最も高い位置まで仮想断面を引く」）。
+        // 階段の高さ（踊り場の高さ）は**見えがかりなので細線**（同指示）。
         const z = stairZAtRun(crossFlight, face.axisCL.effectiveValue);
-        // **端の縦線（仮想断面）は下げない**——天井に高低差が生じ、低い方を見る面では
-        // 仮想断面は最も高い位置まで引く（ユーザー明示指示2026-09「「13」A: 天井に高低差が
-        // 生じ、低い方を見る場合は、最も高い位置まで仮想断面を引く」）。動かすのは天井断面線だけ。
-        if (z < ceilAbs - BAND_GAP_EPS) setCeilingLineY(primitives, xCursor, face, ceilAbs, -z);
+        if (z < ceilAbs - BAND_GAP_EPS) {
+          primitives.push(translatePrimitive({
+            type: 'line', x1: drawnX.lo, y1: -z, x2: drawnX.hi, y2: -z,
+            weight: weightForRole(ElevationLineRole.DETAIL),
+          }, xCursor, 0));
+        }
       }
       // 面と**平行**なレーン（側面視）では、階段断面が面の端まで届いていれば、その端の縦線は
       // 階段断面と出会ったところで終わる（同指示「「13」B: 左の壁断面：階段断面との取り合いまで」
