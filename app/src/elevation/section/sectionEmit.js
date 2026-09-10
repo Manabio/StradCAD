@@ -10,7 +10,8 @@ import {
   GAP_LABEL_WIDTH_PX,
   ElevationLineRole, weightForRole, GAP_EPS_MM as GAP_EPS, kneeCapBottomMm, KNEE_CAP_FACE_MM,
 } from '../elevationStyle.js';
-import { zToY, cutDrawRange, localXOf } from './sectionTypes.js';
+import { drawnFloorProfileZMax } from '../elevationFloorProfile.js';
+import { zToY, cutDrawRange, localXOf, hasCutWallStandingOn } from './sectionTypes.js';
 import { openingSectionPrimitives } from '../../openings/openingSection.js';
 import { FRAME_OVERHANG_MM } from '../../openings/openingPlanSymbolGeometry.js';
 
@@ -382,7 +383,7 @@ function ceilStepSlabSection(columns, cut, ceilZ) {
     // 床の断面線へ折れるのが1本の輪郭）。壁の列を越えた位置＝壁の向こう側の面から描き始める。
     let startX = x;
     for (let k = step > 0 ? i + 1 : i; columns[k]; k += step) {
-      if (!columns[k].bands.some(bd => bd.kind === 'cut' && Math.abs(bd.z0 - floorZ) < GAP_EPS)) break;
+      if (!hasCutWallStandingOn(columns[k], floorZ)) break;
       startX = step > 0 ? columns[k].x1 : columns[k].x0;
     }
     const outX = a.ceilZ < b.ceilZ ? range.lo : range.hi;
@@ -397,6 +398,83 @@ function ceilStepSlabSection(columns, cut, ceilZ) {
   return prims;
 }
 
+// 2つのslab帯が**同じ層の床**か（`sectionProbe.js`の`slabBandOf`が層のfloorZをそのまま持たせる。
+// `sectionLevelZs`が既に`band.floorZ`を「その層のFL」として読んでいるのと同じ見方）。
+// 手書き列（単体テスト）のようにfloorZを持たない帯どうしは「同じ」とみなす。
+function sameSlabOwner(a, b) {
+  if (!Number.isFinite(a.floorZ) || !Number.isFinite(b.floorZ)) {
+    return !Number.isFinite(a.floorZ) && !Number.isFinite(b.floorZ);
+  }
+  return Math.abs(a.floorZ - b.floorZ) < GAP_EPS;
+}
+
+/**
+ * スラブの走り（`bandRuns`の'slab'）。ただし**所有層が同じでzが連続するslab帯は1本のスラブ**
+ * として数える。
+ *
+ * z区間の切れ目（`sectionProbe.js`のzBreaks）は腰壁の切断高のような**物理境界でない値**でも
+ * 入るため、1枚の床構造が2つの走りに割れる（実機「6」Cのはり出し列: `slab(z0-1500)` と
+ * `slab(z1500-3000)`。どちらも所有層は上階で、z=1500に実体の境界は無い）。走りのまま
+ * `slabEdgeCutWallJunction`のペアリングに渡すと、同じ1枚のスラブが同じ切断壁と2回取り合い、
+ * 実体のない高さ（z=1500）の水平線と、上位の走りの縦線を内包する重複した縦線が出る。
+ * 所有層が違う隣接slab（1階の天井懐 z2400-3000 と 2階の床構造 z3000-5400）は**結合しない**
+ * ——その境界(2FL)は実体の境界そのもので、実機「5」D1・「5」Bの2FL断面線がそこから出る。
+ * 同じ理由で「各xで最上位のslab1本だけを相手にする」も採らない（実測: 実機「6」D1で2FL張り出しが
+ * 消え、1F天井との取り合いが腰壁の手前側の面へずれる／「6」Bの2FL線が消える）——所有層が違う
+ * slabが積み重なるのは**正常な構成**であって、割れた走りの症状ではない。
+ * @param {object[]} columns
+ * @returns {{key:string, band:object, x0:number, x1:number}[]}
+ */
+function slabRuns(columns) {
+  const merged = columns.map(col => {
+    const bands = [];
+    for (const b of col.bands) {
+      const last = bands[bands.length - 1];
+      if (b.kind === 'slab' && last?.kind === 'slab'
+        && Math.abs(last.z1 - b.z0) < GAP_EPS && sameSlabOwner(last, b)) {
+        bands[bands.length - 1] = { ...last, z1: b.z1 };
+        continue;
+      }
+      bands.push(b);
+    }
+    return { ...col, bands };
+  });
+  return bandRuns(merged, 'slab', b => `${b.z0}|${b.z1}`);
+}
+
+/**
+ * スラブ天端の水平線を`nearX`から`targetX`へ伸ばすとき、**その天端に腰壁が同面で載っている
+ * 列の手前**で止めたx。
+ *
+ * 根拠は`emitColumns`の`flushOnSlab`と同じユーザー裁定（実機「6」C「2FLの線は、左の壁断面から
+ * 腰壁が終わるエッジまで不要。この腰壁の仕上げ面は、直下の2FLから1F天井線までの面と同面のため」）
+ * ——腰壁は床の端に立つので、その仕上げ面と直下のスラブ小口は同一平面で、見た目に線は現れない。
+ * `flushOnSlab`は見えがかり帯の側（腰壁の下端縁）でこの線を抑止しているが、スラブの側から
+ * 張り出す本経路が抑止を持たないと、同じ線を反対側から引き直してしまう（はり出し列に腰壁の
+ * **断面**が立つと、面の中の走りとzが一致してペアになり、面の中へ侵入していた）。
+ *
+ * 「面の外に立つ切断壁は相手にしない」（`cutDrawRange`で弾く）案は採らない——同じ切断壁から
+ * 出る1F天井断面線と2FLへの立上り（実機「6」D2の裁定どおりの線）まで一緒に消えるため。
+ * 消すべきは「同面ゆえに見えない」1本だけであり、その理由は`flushOnSlab`が既に述べている。
+ * @param {object[]} columns
+ * @param {number} nearX - 張り出しの起点（切断壁の手前の面）
+ * @param {number} targetX - 抑止が無ければ届く先（スラブの端）
+ * @param {number} slabTopZ - スラブの天端z
+ * @returns {number}
+ */
+function flushKneeStopX(columns, nearX, targetX, slabTopZ) {
+  const dir = targetX > nearX ? 1 : -1;
+  const lo = Math.min(nearX, targetX), hi = Math.max(nearX, targetX);
+  const ordered = dir > 0 ? columns : [...columns].reverse();
+  let x = nearX;
+  for (const col of ordered) {
+    if (col.x0 < lo - GAP_EPS || col.x1 > hi + GAP_EPS) continue;
+    if (col.bands.some(b => b.isKneeDrop && Math.abs(b.z0 - slabTopZ) < GAP_EPS)) break;
+    x = dir > 0 ? col.x1 : col.x0;
+  }
+  return x;
+}
+
 /**
  * 上階床スラブの端に**切断壁が載っている**（袖壁・腰壁）ときの取り合い
  * （ユーザー実機指摘2026-08「6」D1・B「CL内側まで進んで、上を向いて2階袖壁の階段側断面線と
@@ -409,7 +487,7 @@ function ceilStepSlabSection(columns, cut, ceilZ) {
  */
 function slabEdgeCutWallJunction(columns, cut, ceilZ) {
   const prims = [];
-  const slabs = bandRuns(columns, 'slab', b => `${b.z0}|${b.z1}`);
+  const slabs = slabRuns(columns);
   for (const c of cutWallRuns(columns)) {
     for (const s of slabs) {
       if (Math.abs(s.band.z1 - c.band.z0) > GAP_EPS) continue; // 壁がこのスラブの上に載っている
@@ -423,7 +501,9 @@ function slabEdgeCutWallJunction(columns, cut, ceilZ) {
       // 「2F腰壁断面が2FLまで下りたあと、左を向いて2FL床断面線はりだし」）。旧はこの線を
       // 「スラブの上に立つ遠い壁の下端縁」に頼っていたが、その壁が帯の部屋の外（d7250）で
       // 探索対象から外れた結果、線ごと消えていた——スラブ自身から描くのが本来の姿。
-      const outX = slabOnLoSide ? s.x0 : s.x1;
+      // 張り出しは**腰壁が同面で載っている区間の手前で止める**（`flushOnSlab`と同じ規約を、
+      // スラブの側から見たもの）。
+      const outX = flushKneeStopX(columns, nearX, slabOnLoSide ? s.x0 : s.x1, s.band.z1);
       if (Math.abs(outX - nearX) > GAP_EPS) {
         prims.push(emitLine(cut, nearX, s.band.z1, outX, s.band.z1, ElevationLineRole.SILHOUETTE, { ceilZ }));
       }
@@ -521,6 +601,17 @@ function sectionLevelZs(cut, col, ceilZ) {
   const chZ = ceilZ ?? cut.zRange?.hiZ;
   if (Number.isFinite(chZ)) zs.push(chZ);
   return zs;
+}
+
+/**
+ * 面自身の範囲（断面ローカルx）。`cut.line.lo/hi`（探査延長`probeExtendLo/HiMm`を**含まない**値）
+ * をdirSignに関わらず昇順に直したもの。「面の端かどうか」を見る箇所の唯一の式にする。
+ * @param {import('./sectionTypes.js').SectionCut} cut
+ * @returns {{loX:number, hiX:number}}
+ */
+function faceRangeX(cut) {
+  const a = localXOf(cut, cut.line.lo), b = localXOf(cut, cut.line.hi);
+  return { loX: Math.min(a, b), hiX: Math.max(a, b) };
 }
 
 /**
@@ -690,15 +781,25 @@ export function emitColumns(columns, cut, emitCtx = {}) {
         // 2026-08「「5」B: 2階Y1から2000と3500のCLにエッジが描画されない」）。
         // 隣接列がスラブ等の別の見え方になるだけの場合は従来どおり抑止する（その17「6」D1）。
         const endsAtGap = nb => !!nb && nb.bands.some(x => x.kind === 'open' && overlapsZ(x, band));
+        // **面の端でもその17は効かせない**（ユーザー実機指摘2026-09「「6」D2: 2階Y2から3500には
+        // 「21」の壁エッジが左側に見える」）——その17の前提「隣接列で同じ壁が1本の帯として続く」は
+        // 隣接列が無い＝探査範囲の外である面の端では成立しない。端に壁が有るかどうかの答えは
+        // `emitCtx.openEndLo/Hi`（face.hasWallAtLocal0/Run）が既に持っており、それが唯一の情報源。
+        // 判定に`!prev`だけを使うと不足する——探査は面の外まで延ばされることがあり（cutDrawRange
+        // のprobeExtendLo/HiMm）、最終列が面の端より内側にある合成入力では従来どおり抑止したい
+        // （その17の実機「6」D1）。**列の端が面の端に一致する**ことまで見る。
+        const { loX: faceLoX, hiX: faceHiX } = faceRangeX(cut);
+        const atFaceEndLo = !prev && Math.abs(col.x0 - faceLoX) < GAP_EPS;
+        const atFaceEndHi = !next && Math.abs(col.x1 - faceHiX) < GAP_EPS;
         {
           const wholeBand = [{ z0: band.z0, z1: band.z1 }];
-          const loRanges = (splitByCutWall && !endsAtGap(prev)) ? []
+          const loRanges = (splitByCutWall && !endsAtGap(prev) && !atFaceEndLo) ? []
             : prev ? uncoveredZRanges(prev, band) : (emitCtx.openEndLo ? [] : wholeBand);
           for (const r of loRanges) {
             const x = wallEndXAt(columns, i, -1, r.z0, col.x0);
             prims.push(Object.assign(emitLine(cut, x, r.z0, x, r.z1, role, { ceilZ }),{__o:'recessLo'}));
           }
-          const hiRanges = (splitByCutWall && !endsAtGap(next)) ? []
+          const hiRanges = (splitByCutWall && !endsAtGap(next) && !atFaceEndHi) ? []
             : next ? uncoveredZRanges(next, band) : (emitCtx.openEndHi ? [] : wholeBand);
           for (const r of hiRanges) {
             const x = wallEndXAt(columns, i, +1, r.z0, col.x1);
@@ -1081,8 +1182,7 @@ export function emitOpenGapMarks(columns, cut, emitCtx = {}) {
   // 2026-08「「5」C2: 1階400の『アキ・バツ』が省略されない」）——壁2段書きの省略判定と同じ考え方。
   // scale（px/mm）未指定（単体テスト・ゴールデン）では判定せず従来どおり全て描く。
   const minGapWidthMm = emitCtx.scale ? GAP_LABEL_WIDTH_PX / emitCtx.scale : 0;
-  const endA = localXOf(cut, cut.line.lo), endB = localXOf(cut, cut.line.hi);
-  const faceLoX = Math.min(endA, endB), faceHiX = Math.max(endA, endB);
+  const { loX: faceLoX, hiX: faceHiX } = faceRangeX(cut);
   const cells = [];
   columns.forEach((col, colIndex) => {
     for (const b of col.bands) {
@@ -1102,7 +1202,16 @@ export function emitOpenGapMarks(columns, cut, emitCtx = {}) {
       if (b.kind === 'open' && !b.openingPassThrough && !overCutWall) {
         const x0 = Math.max(col.x0, faceLoX), x1 = Math.min(col.x1, faceHiX);
         if (x1 - x0 <= GAP_EPS) continue; // 面の外（延長ぶん）だけの列
-        cells.push({ colIndex, x0, x1, z0: b.z0, z1: b.z1 });
+        // **断面線より下のアキは、その面の抜けではない**（ユーザー明示指示2026-09
+        // 「階段下に部屋がある場合、断面下は描画しない」）——バツを後から切ると「X」の形が
+        // 崩れるので、**セルの段階で**断面線まで持ち上げる（連結成分・外接矩形・「ア キ」の
+        // 位置がそのまま可視範囲のものになる）。輪郭が斜め（階段断面）に掛かる列では
+        // **区間の最大**で持ち上げる——中点や低い側で持ち上げると、セルの一部が断面線の
+        // 下に残る。`cut.drawFloorProfile`未指定は従来どおり無制限。
+        const floorZ = drawnFloorProfileZMax(cut.drawFloorProfile, x0, x1);
+        const z0 = Math.max(b.z0, floorZ === -Infinity ? b.z0 : floorZ);
+        if (b.z1 - z0 <= GAP_EPS) continue;
+        cells.push({ colIndex, x0, x1, z0, z1: b.z1 });
       }
     }
   });

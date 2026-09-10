@@ -10,19 +10,21 @@
  */
 import { roomBounds } from '../finish/gridCells.js';
 import { roomCeilingHeight } from '../finish/roomMetrics.js';
-import { graphList } from '../graphReadScope.js';
-import { composeRoomFaces, dropFacesSeenAsSightline, mergeSteppedFacesIntoPanel } from './elevationFaceList.js';
+import { composeRoomFaces, dropFacesSeenAsSightline, mergeSteppedFacesIntoPanel,
+  touchesEnd } from './elevationFaceList.js';
 import { labelFaces } from './elevationFaces.js';
-import { selectElevationRooms, faceWallLessExtents } from './elevationFaces.js';
+import { selectElevationRooms, faceWallLessExtents, upperFloorEndsOf } from './elevationFaces.js';
 import { parseBaseboardHeightMm, formatMaterialLabel, estimateWallLabelWidthPx } from './elevationFigure.js';
 import { ElevationLineRole, weightForRole, WALL_LABEL_LINE_GAP_MM, CH_DIM_OFFSET_MM,
   DEFAULT_WALL_LESS_END_EXTEND_MM } from './elevationStyle.js';
 import { findRunCLAt } from './elevationFloorProfile.js';
-import { layoutBandFaces, finalizeBand, appendBandCutContent } from './elevationBand.js';
+import { layoutBandFaces, finalizeBand, appendBandCutContent,
+  floorZProfileFromSegments } from './elevationBand.js';
 import { translatePrimitive } from './elevationPrimitives.js';
 import { makeProbeContext } from './section/sectionProbe.js';
-import { buildCutContent } from './section/sectionContent.js';
-import { cutPlaneOffsetMm, faceCutLine, faceViewSign } from './section/sectionCutPlane.js';
+import { buildCutContent, planeOverhangForFace, endZOf, upperFloorCutWallEndsOf } from './section/sectionContent.js';
+import { cutPlaneOffsetMm, faceCutLine, faceViewSign,
+  wallWorldRangesOnFacePlane } from './section/sectionCutPlane.js';
 import { reachableLocalRanges } from './section/sectionVisibility.js';
 import { buildColumns } from './section/sectionEngine.js';
 import { structuralColumnContribution } from './section/sectionStructure.js';
@@ -84,21 +86,15 @@ function mergeRanges(ranges) {
  * 吹抜けの2層帯は「自階の面を下へ延長する」方式のため、下階に壁が無い区間まで延長すると
  * 実在しない壁の輪郭が1FLまで描かれてしまう（ユーザー実機指摘2026-08その17と同じ構造の不具合。
  * 階段帯はsection層で層ごとに壁を拾うが、吹抜け帯は面をそのまま引き伸ばすだけだった）。
+ *
+ * 判定の実体は`section/sectionCutPlane.js`の`wallWorldRangesOnFacePlane`——同じ問い
+ * （その面の平面がその層に在るか）を階段帯の層ごとの探査窓も使うため、述語は1つにする。
  * @param {object} face
  * @param {object} lowerGraph
  * @returns {{lo:number,hi:number}[]} 世界座標の範囲（結合済み）
  */
 function lowerWallWorldRanges(face, lowerGraph) {
-  const axis = face.axisCL?.effectiveValue;
-  if (axis == null) return [];
-  const ranges = [];
-  for (const w of graphList(lowerGraph, 'walls') ?? []) {
-    if (!w.isVertical !== !face.isVertical) continue;
-    const wAxis = w.axisCL?.effectiveValue;
-    if (wAxis == null || Math.abs(wAxis - axis) > LOWER_AXIS_EPS_MM) continue;
-    ranges.push({ lo: Math.min(w.coord1, w.coord2), hi: Math.max(w.coord1, w.coord2) });
-  }
-  return mergeRanges(ranges);
+  return wallWorldRangesOnFacePlane(face, lowerGraph);
 }
 
 /**
@@ -388,6 +384,27 @@ function splitSegByCover(seg, cover) {
 }
 
 /**
+ * その面の **下階の平面が面の端より外へ続いている量**（面ローカル。`planeOverhangForFace`）。
+ *
+ * 上部吹抜けの帯（`buildRoomBandWithVoidAbove`）の鏡像。gateの材料は「その端の区間の**床**
+ * 断面の高さ」で、**`faceOverride`適用後の`floorSegments`そのもの**から取る——探査側
+ * （`section/sectionContent.js`の`layerRunWindowsOf`）が読む`cut.floorZProfile`を
+ * `elevationBand.js`が同じ`floorSegments`から作るので、図側と探査側のgateが同じ1つの値になる
+ * （`lowerCoverLocal`から二値で作り直すと、段差床の区間で`floorDeltaMm`ぶん静かに食い違う）。
+ * @param {object} face
+ * @param {object} lowerGraph
+ * @param {Array<{loX:number,hiX:number,floorDeltaMm?:number}>} floorSegments - override適用後の確定値
+ * @param {number} lowerCeilZ - 下階層の天井z（帯FL基準）
+ * @returns {{lo:number,hi:number}}
+ */
+function lowerOverhangForFace(face, lowerGraph, floorSegments, lowerCeilZ) {
+  return planeOverhangForFace(face, lowerGraph, {
+    towardLayer: -1, layerBoundaryZ: lowerCeilZ,
+    endBandZ: endZOf(floorZProfileFromSegments(floorSegments, face.run), s => s.floorZ),
+  });
+}
+
+/**
  * 吹抜け部屋の帯（設置階下階のFLから設置階の天井高さまでの2層帯。CLを合わせて描画）。
  * lowerGraph・ctx.floorHeightBelowMm のどちらかが無ければ drop なしの1層帯（buildRoomBand相当・
  * heightUnits:1）を返す（例外は投げない）。
@@ -410,6 +427,8 @@ export function buildVoidBand(voidRoom, graph, lowerGraph, ctx = {}) {
 
   let faceOverride;
   let dropMm = 0;
+  let lowerCeilZ = null;      // 下階層の天井z（帯FL基準）。gateの材料
+  let overhangByFace = null;  // 面 → 下階の平面が面の端より外へ続く量（面ローカル）
   if (hasLower) {
     const lowerRoom = findLowerRoom(voidRoom, graph, lowerGraph);
     const flDiffMm = lowerRoom
@@ -419,6 +438,13 @@ export function buildVoidBand(voidRoom, graph, lowerGraph, ctx = {}) {
     // 物理的に「設置階下階のFLが設置階のFL以上」という値は2層表現として意味を持たないため、
     // 0でクランプする（クランプせず負値のまま使うと、床が天井より上に来る空白の2層帯になる）。
     dropMm = Math.max(0, floorHeightBelowMm + flDiffMm);
+    // 下階層の天井z（gateの材料）。下階Roomが引けなければ材料が無い＝**はり出しを一切認めない**
+    // （階段帯のような「材料が無ければ素通り」ではなく全か無か——下階の天井が分からないまま
+    // 面の外を描くと、閉じる線の根拠が無い）。
+    // 制約: 複数室にまたがる下階はアンカー室（`findLowerRoom`が返す1室）のCHで代表する。
+    lowerCeilZ = lowerRoom != null && dropMm > 0
+      ? -dropMm + roomCeilingHeight(lowerGraph, lowerRoom).mm : null;
+    if (lowerCeilZ != null) overhangByFace = new Map();
     // ceilAbs = floorDelta + chMm が不変（天井は動かず床だけ下がる）。
     // 下へ延長するのは**下階に同じ壁が実在する区間だけ**（lowerCoverLocal）。壁の無い区間は
     // 設置階の床（2FL）のまま残し、その境界は既存の段差床線の仕組みで縦の折れとして出る
@@ -438,7 +464,16 @@ export function buildVoidBand(voidRoom, graph, lowerGraph, ctx = {}) {
             : { ...seg, loX: part.loX, hiX: part.hiX, hiCLId });
         }
       }
-      return { floorSegments: out };
+      // はり出し量は**この確定した`out`から**求める（gateの材料＝端の区間の床断面高さ）。
+      // 求めた値は面をキーに控え、後段の`appendBandCutContent`（探査窓・描画範囲）へも同じ
+      // オブジェクトを渡す——図側とcontent側で二重に計算しない。
+      const overhang = lowerCeilZ != null
+        ? lowerOverhangForFace(face, lowerGraph, out, lowerCeilZ) : null;
+      overhangByFace?.set(face, overhang);
+      // lowerOverhang: 図側（elevationFigure.js）が**区間の床断面線だけ**をこの量だけ外へ
+      // 延ばす＝はり出し区間の下辺。content側の壁エッジ・上辺と同じ値から出す。
+      return { floorSegments: out,
+        ...(overhang && (overhang.lo > 0 || overhang.hi > 0) ? { lowerOverhang: overhang } : {}) };
     };
   }
 
@@ -450,9 +485,15 @@ export function buildVoidBand(voidRoom, graph, lowerGraph, ctx = {}) {
   // 一切出ない（面の引き伸ばしは床線・天井線の話で、壁の実体の話ではない）。
   appendBandCutContent(primitives, voidRoom, graph, layout,
     hasLower && dropMm > 0
-      ? [{ graph, floorZMm: 0, role: 'self' }, { graph: lowerGraph, floorZMm: -dropMm, role: 'below' }]
+      ? [{ graph, floorZMm: 0, role: 'self' },
+        // ceilZMm: 下階層の天井z。**面の端も層ごとに違う**のgate（下階の空間がその端で
+        // 見えているか）の材料——層の部屋のCHは帯しか知らないのでここで載せる。
+        { graph: lowerGraph, floorZMm: -dropMm, role: 'below', ceilZMm: lowerCeilZ ?? undefined }]
       : [{ graph, floorZMm: 0, role: 'self' }],
-    { endExtendMm: ctx.wallLessEndExtendModelMm, scale: ctx.scale });
+    { endExtendMm: ctx.wallLessEndExtendModelMm, scale: ctx.scale,
+      // 下階の平面が面の端より外へ続くぶん（gate付き）。探査（層ごとの窓）と描画範囲へ同じ値。
+      ...(overhangByFace
+        ? { upperPlaneOverhang: true, faceOverhangOf: face => overhangByFace.get(face) } : {}) });
   return finalizeBand(voidRoom, graph, primitives, {
     faceCount: faces.length, chDimX: layout.chDimX, prevBoundaryHi: layout.prevBoundaryHi,
     triOffsetMm: ctx.triangleOffsetModelMm, nameGapModelMm: ctx.nameGapModelMm,
@@ -529,6 +570,45 @@ export function buildRoomBandWithVoidAbove(room, graph, voidRoom, upperGraph, ct
   // 届かない）。落とした結果でletter内の採番をやり直す。
   faces = labelFaces(mergeSteppedFacesIntoPanel(dropFacesSeenAsSightline(faces, graph)));
 
+  // **面の端も層ごとに違う**（.claude/elevation-model.md）——上階の平面がこの面の端より外へ
+  // 続いていれば、そのぶんだけ上階の壁エッジまで描く。認めるのは**吹抜けが面の端に達している
+  // 端だけ**（gate）——吹抜けでない端で上階だけ外へ伸ばすと、閉じる線の無い突起になる。
+  // gateの材料（端区間の天井断面高さ）は`ceilProfile`と同じ規則で作る: 吹抜けの区間は
+  // 上階の天井（floorHeightMm+voidCH）、それ以外はこの部屋のCH。
+  // （段差床のある端では`ceilProfile`側が`floorDeltaMm+CH`になるためわずかに食い違いうるが、
+  // どちらの向きに外れても「探査したが描画範囲でクリップ」か「広げたが実データ無し」で、
+  // 実在しない線は出ない。）
+  const bandCH = roomCeilingHeight(graph, room).mm;
+  const overhangByFace = new Map();
+  for (const face of faces) {
+    const plan = face.kind === 'step' ? null : face.voidAbove;
+    if (!plan) { overhangByFace.set(face, { lo: 0, hi: 0 }); continue; }
+    const voidLocal = plan.voidLocal ?? [];
+    // 「吹抜けが面の端に達しているか」はパネル統合の条件5とまったく同じ問い——述語もεも
+    // `elevationFaceList.js`の`touchesEnd`に一本化する（別々に書くとεがずれる）。
+    const voidAt0 = touchesEnd(voidLocal, face.run, '0');
+    const voidAtRun = touchesEnd(voidLocal, face.run, 'Run');
+    // 上階FLの断面線を許す端（`elevationFaces.js`の`upperFloorEndsOf`。階段帯＝
+    // `elevationStairSequence.js`の`upperOverhangOf`と**共通の1つの関数**）も**ここで面ごとに
+    // 1回**求めて同じ値に載せる——はり出し量と同じ情報源に置くことで二重計算を避ける。
+    // はり出し自体（天井断面線・壁エッジ）はこの判定で落とさない：上階の壁は実在するので、
+    // その断面と天井は描く。
+    overhangByFace.set(face, {
+      ...planeOverhangForFace(face, upperGraph, {
+        towardLayer: 1, layerBoundaryZ: floorHeightMm,
+        endBandZ: {
+          atLocal0: voidAt0 ? floorHeightMm + voidCH : bandCH,
+          atLocalRun: voidAtRun ? floorHeightMm + voidCH : bandCH,
+        },
+      }),
+      upperFloorEnds: upperFloorEndsOf(face, graph, upperGraph),
+    });
+  }
+
+  // 面 → はり出し外端に立つ切断壁の向こう側の面（`upperFloorCutWallEndsOf`）。1回目のlayoutでは
+  // 空（＝従来の描き方）で、下のcontentが埋め、2回目のlayoutが読む。
+  const cutEndsByFace = new Map();
+
   const faceOverride = (face, i, defaults) => {
     const plan = face.voidAbove;
     if (!plan) return null;
@@ -545,11 +625,29 @@ export function buildRoomBandWithVoidAbove(room, graph, voidRoom, upperGraph, ct
           chMm: floorHeightMm + voidCH - delta, ceilFloorZMm: floorHeightMm });
       }
     }
-    return { floorSegments: out };
+    // upperOverhang: 図側（elevationFigure.js）が天井断面線をこの量だけ外へ延ばす。
+    // upperFloorZ（＝上階のFL。帯の床基準）も渡す——はり出し区間の**下辺**が上階FLの断面線に
+    // なる（ユーザー裁定2026-09。階段帯D2の`upperFloorEdgeSpans`と同じ意味の線）。
+    // upperFloorCutEnds: はり出しの外端に立つ切断壁（上階の腰壁）の向こう側の面
+    // （ユーザー裁定2026-09「「5」A1: 2FL断面まで下りて外側に向かって張り出して終了、が正解」）。
+    // その端では壁の向こう側の面から**外へ**張り出して終わる——壁の下には引かない。
+    // 値はcontentの列からしか出せないので、下の収穫パス（cutEndsByFace）が入れる。
+    // upperFloorEnds: そのうち**上階の床が実在する端だけ**へ絞る（`elevationFaces.js`の
+    // `upperFloorEndsOf`。上のoverhangByFaceで面ごとに求めて載せてある）。
+    const overhang = overhangByFace.get(face);
+    return { floorSegments: out,
+      ...(overhang ? { upperOverhang: overhang, upperFloorZ: floorHeightMm,
+        upperFloorEnds: overhang.upperFloorEnds,
+        upperFloorCutEnds: cutEndsByFace.get(face) } : {}) };
   };
 
+  // 上階FL断面線の起点（はり出し外端に立つ切断壁の向こう側の面）は**contentの列にしか無い**
+  // 情報なのに、図（layoutBandFaces）はcontentより先に走る。そこで、レイアウトを先に1度組んで
+  // contentを走らせ、収穫した起点を載せて**図だけ**組み直す——レイキャストを伴うcontentは
+  // 1度きり。2回目のlayoutBandFacesは1回目とfaceOverrideの`upperFloorCutEnds`しか違わず、
+  // 面の配置・floorSegments・faceRunsは同一なので、後段（upper/appendUpperStoreyOutline）は
+  // 1回目のlayoutをそのまま使ってよい（プリミティブの並びも変わらない）。
   const layout = layoutBandFaces(room, graph, faces, { ...ctx, faceOverride });
-  const primitives = [...layout.primitives];
 
   // 壁の輪郭は**全4種の帯で共通の唯一の経路**（elevationBand.jsのappendBandCutContent→
   // section/sectionContent.jsのbuildCutContent）へ任せる——探査延長・端の凹み側面線の抑制・
@@ -559,13 +657,31 @@ export function buildRoomBandWithVoidAbove(room, graph, voidRoom, upperGraph, ct
   // 上階を描いてよい範囲（＝「断面の中」でない範囲）は**主cutより先に**求める——上階の床の
   // 断面線は主cutのceilStepSlabSectionが描くため、そちらにも同じ範囲を渡す必要がある。
   const upper = makeUpperStoreyContext(layout, upperGraph, floorHeightMm, voidCH);
-  appendBandCutContent(primitives, room, graph, layout, [
+  // 積み先が**空配列**なのは、この帯が`stairOver`を渡さないから——`appendBandCutContent`の
+  // 後処理2つ（`lowerFaceEndVertical`・`trimCeilingLineAt`）は`stairOver`指定時にだけ走り、
+  // そのときだけ積み先の図のプリミティブを走査する（同関数の`primitives`のJSDoc参照）。
+  // ここでcontentを別配列に取るのは、下の「収穫した起点で図を組み直す」ためにcontentと図を
+  // 分けて持つ必要があるから。
+  const cutContent = [];
+  appendBandCutContent(cutContent, room, graph, layout, [
     { graph, floorZMm: 0, role: 'self' },
     { graph: upperGraph, floorZMm: floorHeightMm, role: 'above' },
   ], {
     endExtendMm: ctx.wallLessEndExtendModelMm, scale: ctx.scale,
     aboveCeilVisibleRangesOf: face => upper.segsByFace.get(face),
+    // 面の端より外へ続く上階の平面（gate付き。上記overhangByFace）——探査（層ごとの窓）と
+    // 描画範囲の両方へ同じ値を渡す。図側の天井断面線もfaceOverrideのupperOverhangで同じ値。
+    upperPlaneOverhang: true,
+    faceOverhangOf: face => overhangByFace.get(face),
+    // 上階FL断面線の起点の収穫（上記）。意味づけは`upperFloorCutWallEndsOf`ただ1つ。
+    onFaceColumns: (face, columns) =>
+      cutEndsByFace.set(face, upperFloorCutWallEndsOf(columns, floorHeightMm)),
   });
+  // 収穫した起点を載せて図を組み直す（差分は上階FL断面線のx範囲だけ）。
+  const primitives = [...layoutBandFaces(room, graph, faces, { ...ctx, faceOverride }).primitives,
+    ...cutContent];
+  // `appendUpperStoreyOutline`の`buildCutContent`は**はり出さない**（upperPlaneOverhang未指定）
+  // ——あちらは上階を自階1層として立てる断面で、比べる相手の層が無い。
   // 上階ぶんの輪郭・体裁（方針C）: 吹抜けを通して下階の空間とつながっている範囲へ、上階を
   // 自階とする1層の断面をもう1本重ねる。範囲は輪郭・体裁で共有する（食い違うと片方だけ出る）。
   appendUpperStoreyOutline(primitives, layout, upper, {

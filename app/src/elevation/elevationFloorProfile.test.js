@@ -7,7 +7,8 @@ import { generateRoomWallsFromOutline } from '../finish/wallGeneration.js';
 import { buildRoomFaces } from './elevationFaces.js';
 import {
   wallAdjacentFloorSegments, drawnRiserX, drawnCeilingRiserX, halfWallThicknessMm,
-  familyCeilingSegments,
+  familyCeilingSegments, floorProfileFromSegments, mergeFloorProfiles,
+  drawnFloorProfileZAt, drawnFloorProfileZMax, clipContentAboveDrawnProfile,
 } from './elevationFloorProfile.js';
 
 function makeGraph() {
@@ -447,4 +448,154 @@ test('halfWallThicknessMm: 面自身のfaceValueとaxisCL.effectiveValueの差�
 test('【失敗系】halfWallThicknessMm: 差が0（合成face等で不明）ならDEFAULT_HALF_WALL_MM(57.5)へフォールバックする', () => {
   const face = { faceValue: 0, axisCL: { effectiveValue: 0 } };
   assert.equal(halfWallThicknessMm(face), 57.5);
+});
+
+// ==== 断面線の外は描画しない（折れ線輪郭方式。ユーザー明示指示2026-09） ====
+// QA修正2026-09: 実装をsection/sectionEmit.jsから本ファイルへ移したのに合わせ、
+// テストもsectionEmit.test.jsからそのまま移設した（内容は無変更）。
+const SEGS = [{ loX: 0, hiX: 1000, floorDeltaMm: 0 }, { loX: 1000, hiX: 2000, floorDeltaMm: 500 }];
+const PROFILE = floorProfileFromSegments(SEGS);
+
+test('floorProfileFromSegments: 段差は同じxを2点にして垂直に落とす', () => {
+  assert.deepEqual(PROFILE, [[0, 0], [1000, 0], [1000, 500], [2000, 500]]);
+});
+
+test('clipContentAboveDrawnProfile: 断面線より下の縦線は輪郭で切り、全部下なら落とす', () => {
+  const prims = [
+    { type: 'line', x1: 1500, y1: 0, x2: 1500, y2: -2000 },   // 床500をまたぐ → 500から
+    { type: 'line', x1: 1500, y1: 0, x2: 1500, y2: -400 },    // 全部床より下 → 落ちる
+    { type: 'line', x1: 500, y1: 0, x2: 500, y2: -2000 },     // 床0の区間 → そのまま
+  ];
+  const out = clipContentAboveDrawnProfile(prims, PROFILE);
+  assert.equal(out.length, 2);
+  assert.deepEqual([out[0].y1, out[0].y2], [-500, -2000], '輪郭をまたぐ縦線は輪郭で切れるはず');
+  assert.deepEqual([out[1].y1, out[1].y2], [0, -2000], '床0の区間の縦線は切られないはず');
+});
+
+test('clipContentAboveDrawnProfile: 床の高さちょうどの水平線（床断面線そのもの）は残す', () => {
+  const out = clipContentAboveDrawnProfile([
+    { type: 'line', x1: 1200, y1: -500, x2: 2000, y2: -500 }, // 床断面線そのもの
+    { type: 'line', x1: 1200, y1: -200, x2: 2000, y2: -200 }, // 床より下
+  ], PROFILE);
+  assert.equal(out.length, 1, '床より下の水平線だけが落ちるはず');
+  assert.equal(out[0].y1, -500);
+});
+
+test('clipContentAboveDrawnProfile: 矩形（建具の姿）は下端を輪郭まで詰める', () => {
+  const out = clipContentAboveDrawnProfile([{ type: 'rect', x: 1200, y: -2000, w: 30, h: 1990 }], PROFILE);
+  assert.equal(out.length, 1);
+  assert.equal(out[0].y, -2000, '上端は動かさないはず');
+  assert.equal(out[0].h, 1500, '下端は輪郭(500)まで＝高さ2000-500のはず');
+});
+
+// 斜めの輪郭（階段断面）: x:0→1000でz:0→1000へ上る。
+const SLOPE = [[0, 0], [1000, 1000]];
+
+test('clipContentAboveDrawnProfile: 斜めの輪郭を跨ぐ縦線は交点で切れる', () => {
+  const out = clipContentAboveDrawnProfile(
+    [{ type: 'line', x1: 400, y1: 0, x2: 400, y2: -900 }], SLOPE);
+  assert.equal(out.length, 1);
+  assert.deepEqual([out[0].y1, out[0].y2], [-400, -900], 'x=400の輪郭(400)から上だけ残るはず');
+});
+
+test('clipContentAboveDrawnProfile: 水平線は輪郭より下のx範囲だけが落ちる', () => {
+  const out = clipContentAboveDrawnProfile(
+    [{ type: 'line', x1: 0, y1: -600, x2: 1000, y2: -600 }], SLOPE);
+  assert.equal(out.length, 1, '交点(x=600)で分かれ、輪郭より上の側だけ残るはず');
+  assert.ok(Math.abs(out[0].x1 - 0) < 1e-6 && Math.abs(out[0].x2 - 600) < 1e-6,
+    `輪郭が上回る手前（x:0..600）だけ残るはず（実際:${out[0].x1}..${out[0].x2}）`);
+});
+
+test('clipContentAboveDrawnProfile: polylineは輪郭で分断され、残った区間ごとに1本になる', () => {
+  // 谷型の輪郭（両端が高く中央が0）。水平なpolylineは中央だけが残る。
+  const valley = [[0, 1000], [400, 0], [600, 0], [1000, 1000]];
+  const out = clipContentAboveDrawnProfile(
+    [{ type: 'polyline', points: [[0, -500], [1000, -500]], weight: 'thin' }], valley);
+  assert.equal(out.length, 1, '中央の1本だけが残るはず');
+  assert.equal(out[0].weight, 'thin', '属性は引き継ぐはず');
+  const xs = out[0].points.map(([x]) => x);
+  assert.ok(Math.abs(Math.min(...xs) - 200) < 1e-6 && Math.abs(Math.max(...xs) - 800) < 1e-6,
+    `残るのはx:200..800のはず（実際:${JSON.stringify(out[0].points)}）`);
+});
+
+test('drawnFloorProfileZMax: 区間の最大（中点ではなく）を返す', () => {
+  assert.equal(drawnFloorProfileZMax(SLOPE, 200, 800), 800);
+  assert.equal(drawnFloorProfileZMax(PROFILE, 900, 1100), 500, '段差をまたぐ区間は高い側');
+});
+
+test('mergeFloorProfiles: 交わる2本は交点xを挿入してmaxになる', () => {
+  const merged = mergeFloorProfiles([[0, 0], [1000, 1000]], [[0, 1000], [1000, 0]]);
+  assert.ok(merged.some(([x, z]) => Math.abs(x - 500) < 1e-6 && Math.abs(z - 500) < 1e-6),
+    `交点(500,500)が挿入されるはず（実際:${JSON.stringify(merged)}）`);
+  assert.equal(drawnFloorProfileZAt(merged, 250), 750, '交点より左は下り側(高い方)のはず');
+  assert.equal(drawnFloorProfileZAt(merged, 750), 750, '交点より右は上り側(高い方)のはず');
+});
+
+test('mergeFloorProfiles: 短い寄与は自分のx範囲の外まで相手を押し上げない', () => {
+  // 踊り場（[2000,3000]でz=1500）と階段（[0,2000]でz:0→1500）の関係。踊り場の端点値が
+  // 面の全長を覆うと、レーンの床線が丸ごと消える（回帰: seq2）。
+  const merged = mergeFloorProfiles([[0, 0], [2000, 1500]], [[2000, 1500], [3000, 1500]]);
+  assert.equal(drawnFloorProfileZAt(merged, 0), 0, '階段の足元は0のままのはず');
+  assert.equal(drawnFloorProfileZAt(merged, 1000), 750);
+  assert.equal(drawnFloorProfileZAt(merged, 2500), 1500);
+});
+
+test('【失敗系】clipContentAboveDrawnProfile: profile未指定なら入力配列をそのまま返す（通常の部屋帯・吹抜け帯は無変化）', () => {
+  const prims = [{ type: 'line', x1: 1500, y1: 0, x2: 1500, y2: -400 }];
+  assert.equal(clipContentAboveDrawnProfile(prims, null), prims);
+  assert.equal(clipContentAboveDrawnProfile(prims, []), prims);
+  assert.equal(drawnFloorProfileZAt(null, 100), -Infinity);
+  assert.equal(drawnFloorProfileZMax(null, 0, 100), -Infinity);
+});
+
+test('【失敗系】clipContentAboveDrawnProfile: 輪郭と交わらない線は無傷（同じオブジェクトの値のまま）', () => {
+  const prims = [
+    { type: 'line', x1: 0, y1: -1800, x2: 2000, y2: -1800, weight: 'thin', dash: 'dashed' },
+    { type: 'text', x: 500, y: -1000, text: 'ア キ' },
+  ];
+  const out = clipContentAboveDrawnProfile(prims, PROFILE);
+  assert.equal(out.length, 2);
+  assert.deepEqual({ ...out[0] }, prims[0], '輪郭より上の線は属性ごとそのままのはず');
+  assert.equal(out[1], prims[1]);
+});
+
+test('drawnFloorProfileZAt: 範囲外（壁のない端部のはり出しぶん）は端点値を保持する', () => {
+  assert.equal(drawnFloorProfileZAt(PROFILE, -150), 0);
+  assert.equal(drawnFloorProfileZAt(PROFILE, 2150), 500);
+});
+
+// ---- QA指摘: -0 を出力しない（sectionStair.jsのstairCutFloorProfile・elevationFigure.jsの
+// endFloorYOfと同じ規約。z=0の輪郭で切ると -(0) = -0 になり、Object.is比較（assert.strict・
+// ゴールデン）が 0 と食い違う） ----
+test('clipContentAboveDrawnProfile: 輪郭の値が0の区間でも -0 を出力しない', () => {
+  const profile = [[0, 0], [1000, 0]];
+  const [line] = clipContentAboveDrawnProfile(
+    [{ type: 'line', x1: 500, y1: 500, x2: 500, y2: -2000 }], profile);
+  assert.equal(Object.is(line.y1, -0), false, `縦線の切り口が-0になっている（実際:${line.y1}）`);
+  assert.equal(line.y1, 0);
+  // polylineは切り口が区間の**先頭**になる向き（下→上）と**末尾**になる向き（上→下）の両方。
+  const polys = clipContentAboveDrawnProfile([
+    { type: 'polyline', points: [[0, 500], [1000, -500]] },
+    { type: 'polyline', points: [[0, -500], [1000, 500]] },
+  ], profile);
+  assert.equal(polys.length, 2);
+  for (const poly of polys) {
+    assert.ok(poly.points.every(([, y]) => Object.is(y, -0) === false),
+      `polylineの切り口が-0になっている（実際:${JSON.stringify(poly.points)}）`);
+  }
+});
+
+// ---- QA指摘: profileLimitsOn（外挿）の極小区間ガード ----
+// 「同じ位置のはずの2点」が丸め誤差でμm単位ずれた準垂直な段差が、区間の**内側**に挟まると、
+// 外挿の分母(2q)が潰れて段差の高さぶん上下へ飛び出した値が返る（＝合成結果に入力のどこにも
+// 無いzが現れる）。PROFILE_LIMIT_MIN_SPAN_MM(1e-3mm)未満の区間は外挿せず端点値を使う。
+test('【失敗系】mergeFloorProfiles: μm幅の準垂直な段差があってもNaN・入力範囲外のzを出さない', () => {
+  const a = [[0, 0], [1000, 0], [1000.0000005, 1000], [2000, 1000]]; // 1000で0→1000へ立つ
+  const b = [[0, -5000], [999.999999, -5000], [1000.000002, -5000], [2000, -5000]];
+  const merged = mergeFloorProfiles(a, b);
+  for (const [x, z] of merged) {
+    assert.ok(Number.isFinite(x) && Number.isFinite(z), `NaN/Infinityが出ている: ${JSON.stringify([x, z])}`);
+    assert.ok(z >= -5000 - 1e-6 && z <= 1000 + 1e-6,
+      `入力のz範囲(-5000..1000)の外の値が出ている: ${JSON.stringify([x, z])}`);
+  }
 });

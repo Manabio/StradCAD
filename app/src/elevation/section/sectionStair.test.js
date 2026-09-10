@@ -5,7 +5,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Plane, PlanGraph, CenterLineType, Discipline, StairType, StructuralMaterialType } from '@core';
 import { generateRoomWallsFromOutline } from '../../finish/wallGeneration.js';
-import { stairContribution, stairPrimitivesForCut, clipStringerToAnchors, landingFramePrimitives, stairWallGapZones } from './sectionStair.js';
+import { stairContribution, stairPrimitivesForCut, clipStringerToAnchors, landingFramePrimitives, stairWallGapZones, stairCutFloorProfile } from './sectionStair.js';
 
 function makeGraph(name = 'p1') {
   const plane = new Plane(name, 0, `${name}階`, 1, 1);
@@ -257,6 +257,27 @@ test('【実機指摘】stairPrimitivesForCut: 面の描画範囲の外にある
   const outLines = stairPrimitivesForCut(c, outside, columns)
     .filter(p => p.type === 'line' && p.weight === 'thick');
   assert.equal(outLines.length, 0, '描画範囲の外の断面矩形は1本も出ないはず');
+});
+
+// QA指摘2026-09: clampToDrawRangeは交わりが空のとき「クランプせず元のrangeを返す」＝面の外へ
+// 描く、という未文書のフォールバックだった。空なら非描画（null）へ倒す。
+test('【失敗系・QA指摘2026-09】stairPrimitivesForCut: 列が面の描画範囲と交わらなければジグザグを描かない', () => {
+  const graph = makeGraph();
+  const { stair } = makeSwitchbackFixture(graph);
+  const c = stairContribution(stair, graph, FLOOR_HEIGHT);
+  const cut = {
+    seqNo: '2', line: { isVertical: true, axisValue: 500, lo: 1500, hi: 4500 },
+    viewSign: 1, dirSign: 1, layers: [], zRange: { loZ: 0, hiZ: 3000 }, baseFloorZ: 0,
+  };
+  // 前提: 面の中の列ならジグザグが1本出る（描画範囲はローカル0..3000）。
+  const inside = [{ x0: 0, x1: 3000, worldLo: 1500, worldHi: 4500, bands: [] }];
+  assert.equal(stairPrimitivesForCut(c, cut, inside).filter(p => p.type === 'polyline').length, 1);
+
+  // 列が丸ごと描画範囲の外（ローカル5000..6000）＝この面には何も描かない。
+  const outside = [{ x0: 5000, x1: 6000, worldLo: 6500, worldHi: 7500, bands: [] }];
+  const prims = stairPrimitivesForCut(c, cut, outside);
+  assert.deepEqual(prims.filter(p => p.type === 'polyline'), [],
+    '交わりが空のとき元のrangeへ戻すと、面の外にジグザグが描かれてしまう');
 });
 
 // ---- ささらはSTEELのみ（失敗系WOODで0本） ----
@@ -773,4 +794,54 @@ test('【失敗系・実機フィードバック第3弾D】stairWallGapZones: WO
 test('【失敗系・実機フィードバック第3弾D】stairWallGapZones: contribution=nullは例外を投げず空配列', () => {
   const cut = { line: { isVertical: false, axisValue: 1500, lo: 0, hi: 2000 }, dirSign: 1 };
   assert.deepEqual(stairWallGapZones(null, cut), []);
+});
+
+
+// ---- 断面線（下側の輪郭）: stairCutFloorProfile（ユーザー明示指示2026-09「展開図では、
+// 断面線の外は描画しない」）。切っている（縦断している）寄与だけが断面線に現れる ----
+test('stairCutFloorProfile: 縦断するflightだけを拾う（隣レーン＝切っていない側は含まない）', () => {
+  const graph = makeGraph();
+  const { stair } = makeSwitchbackFixture(graph);
+  const c = stairContribution(stair, graph, FLOOR_HEIGHT);
+  // 往路レーン(across 0..1000)の中を縦断する切断。踊り場(run 0..1500)とはrunが重ならない。
+  const cut = {
+    seqNo: '2', line: { isVertical: true, axisValue: 500, lo: 1500, hi: 4500 },
+    viewSign: 1, dirSign: 1, layers: [], zRange: { loZ: 0, hiZ: 3000 }, baseFloorZ: 0,
+  };
+  const profile = stairCutFloorProfile(c, cut, null);
+  assert.ok(profile && profile.length > 2, '往路の輪郭が返るはず');
+  const xs = profile.map(([x]) => x);
+  assert.deepEqual(xs, [...xs].sort((a, b) => a - b), 'x昇順のはず');
+  const zs = profile.map(([, z]) => z);
+  const landingZ = c.landings[0].z;
+  assert.equal(Math.min(...zs), 0, '下端は往路の登り口FL(baseZ=0)のはず');
+  assert.equal(Math.max(...zs), landingZ,
+    `上端は踊り場(${landingZ})のはず——復路(baseZ=踊り場)まで拾うと階高まで伸びてしまう`);
+  // 両端は必ずアンカー（登り口FL・踊り場）で閉じる（段鼻の出のぶん1リザー高い点で終わらない）。
+  assert.ok(profile[0][1] === 0 || profile[profile.length - 1][1] === 0);
+  assert.ok(profile[0][1] === landingZ || profile[profile.length - 1][1] === landingZ);
+});
+
+test('stairCutFloorProfile: secondaryFlights（見えがかりの隣レーン）は断面線に含めない', () => {
+  const graph = makeGraph();
+  const { stair } = makeSwitchbackFixture(graph);
+  const c = stairContribution(stair, graph, FLOOR_HEIGHT);
+  const cut = {
+    seqNo: '2', line: { isVertical: true, axisValue: 500, lo: 1500, hi: 4500 },
+    viewSign: 1, dirSign: 1, layers: [], zRange: { loZ: 0, hiZ: 3000 }, baseFloorZ: 0,
+  };
+  const base = stairCutFloorProfile(c, cut, null);
+  const withSecondary = stairCutFloorProfile(
+    { ...c, secondaryFlights: [c.flights[1]] }, cut, null);
+  assert.deepEqual(withSecondary, base, 'secondaryFlightsを足しても輪郭は変わらないはず');
+});
+
+test('【失敗系】stairCutFloorProfile: contribution=null・寄与なしはnull（例外を投げない）', () => {
+  const cut = {
+    seqNo: '2', line: { isVertical: true, axisValue: 500, lo: 1500, hi: 4500 },
+    viewSign: 1, dirSign: 1, layers: [], zRange: { loZ: 0, hiZ: 3000 }, baseFloorZ: 0,
+  };
+  assert.equal(stairCutFloorProfile(null, cut, null), null);
+  assert.equal(stairCutFloorProfile({ flights: [], landings: [] }, cut, null), null);
+  assert.equal(stairCutFloorProfile({}, cut, null), null);
 });

@@ -163,3 +163,16 @@ WINDING/L_TURN/FLARED/OPEN_WELLは対象外＝従来面順へフォールバッ�
 （下地∪仕上げ。対称壁は下地の遠位面まで広げる）、**backing**＝下地帯。`material`の合併境界が面線・妻線、
 `backing`の合併境界のうち`material`の内部にある部分が内側線・木口線。腰壁・垂れ壁（天板の輪郭で描く壁）は
 切断面に材を持たないので層に入らない。
+
+## 断面線（FloorProfile）
+展開図で「その面の**下側の輪郭**」を表す折れ線（`[[localX, absZ]]`。`elevation/elevationFloorProfile.js`）。
+帯の床と、その切断が縦断する階段寄与のmaxで、階段室では2FL断面→階段断面→踊り場断面→壁断面と続く
+閉じた輪郭になる。**この線の外（下）は描かない**。天井側の`ceilingProfile`と規約を揃えた双子で、
+垂直な段差は同じxを2点・範囲外は端点値を保持する。設計意図は`.claude/elevation-model.md`。
+
+## 探査窓（layerRunWindows）
+多層帯で「その層を探査してよい走り方向の世界範囲」（`elevation/section/sectionContent.js`が作り、
+`sectionProbe.js`が読む）。**面の端は層ごとに違う**（自階の面は自階の壁で終わるが、同じ通りの
+上階の壁はその先へ続きうる）ことを表す。自階の窓は従来の探査範囲そのままで、上階の窓だけが
+「平面が続いている量」だけ広い。体裁のはり出し（壁のない端部の`probeExtendLo/HiMm`）とは別物で、
+そちらは`cutDrawRange`＝面の外に断面を描かないための枠の情報源のまま。

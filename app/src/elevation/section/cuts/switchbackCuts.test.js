@@ -13,7 +13,7 @@ function makeGraph(name = 'p1') {
 }
 
 // elevationStairSequence.test.jsのmakeSwitchbackFixtureと同一構成。
-function makeSwitchbackFixture(graph, { withMidWall = false, midWallGraph = null, withRoomUnder = true } = {}) {
+function makeSwitchbackFixture(graph, { withMidWall = false, midWallGraph = null, withRoomUnder = true, asymmetricEnds = false } = {}) {
   const x0 = graph.addCenterLine(CenterLineType.VERTICAL, 0,    { labeled: false, discipline: Discipline.ARCH });
   const xm = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
   const x1 = graph.addCenterLine(CenterLineType.VERTICAL, 2000, { labeled: false, discipline: Discipline.ARCH });
@@ -28,6 +28,20 @@ function makeSwitchbackFixture(graph, { withMidWall = false, midWallGraph = null
 
   const room = graph.addRoom(cells, '階段');
   generateRoomWallsFromOutline(graph, room);
+
+  // 実機「6」と同じ**非対称な隅**を作る（既定の矩形室はwOut1/wOut2・wEntry/wLandingが対称で、
+  // 枠のずれが顕在化しない）。実機は室境界の1辺が厚みの違う2本の壁に分かれており、隅のスナップ
+  // （snapFaceEndsToCorners）が向かい合う2面で別の値に着地する——y=4500辺を「復路側の半分だけ
+  // 覆う厚い壁」に、x=2000辺を「踊り場側の半分だけ覆う厚い壁」に置き換えて同じ形にする。
+  // 結果: wOut1(x=0側).hi=4500 ≠ wOut2(x=2000側).hi=4300、wEntry.hi=2000 ≠ wLanding.hi=1800。
+  if (asymmetricEnds) {
+    const at = (isVertical, value) => [...graph.walls].find(
+      w => !!w.isVertical === isVertical && w.axisCL.effectiveValue === value);
+    graph.removeShape(at(false, 4500).id);
+    graph.addWall(y1, -200, false, xm, 0, x1, 0, {});   // y=4500辺は x1000..2000 だけ・厚さ200
+    graph.removeShape(at(true, 2000).id);
+    graph.addWall(x1, -200, true, y0, 0, ym, 0, {});    // x=2000辺は y0..1500 だけ・厚さ200
+  }
 
   let midWall = null;
   if (withMidWall) {
@@ -287,6 +301,52 @@ test('【ユーザー実機フィードバック2026-08-23・不具合1修正】
   }
 });
 
+
+// ==== 不変条件（ユーザー実機指摘2026-09「「6」D2: 鉄骨階段のささらは壁面と面一のはずが、
+// D2面だけ壁の内側に入っている」）: cut.line.lo/hi は **その cut の face の lo/hi と一致する**。
+// ローカルxの原点はcut側(cutOriginWorld)とface側(originWorld)が別々に決まるため、枠がずれると
+// content全体が面に対して平行移動し、面の端より内側にささら断面が入る。====
+test('switchbackCuts: 各cutのline.lo/hiはそのcutのfaceのlo/hiに一致する（非対称な隅でも）', () => {
+  const graph = makeGraph();
+  const { room, stair } = makeSwitchbackFixture(graph, { asymmetricEnds: true });
+  const faces = composeRoomFaces(room, graph);
+  const table = switchbackCuts(stair, faces, graph, OPTS);
+  assert.ok(table);
+  // 前提: このfixtureは向かい合う面の走り範囲が実際に食い違っていること（対称なら不具合を
+  // 再現できず、テストが素通りする）。
+  assert.notEqual(table.wOut1.hi, table.wOut2.hi,
+    `前提: wOut1(${table.wOut1.hi})とwOut2(${table.wOut2.hi})の枠が食い違うfixtureのはず`);
+  assert.notEqual(table.wEntry.hi, table.wLanding.hi,
+    `前提: wEntry(${table.wEntry.hi})とwLanding(${table.wLanding.hi})の枠が食い違うfixtureのはず`);
+  for (const seqNo of ['1', '2', '3', '4', '5']) {
+    const cut = table.cuts.find(c => c.seqNo === seqNo);
+    assert.equal(cut.line.lo, cut.face.lo,
+      `seq${seqNo}: line.lo(${cut.line.lo})はface.lo(${cut.face.lo})と一致するはず（ローカルxの原点を共有する）`);
+    assert.equal(cut.line.hi, cut.face.hi,
+      `seq${seqNo}: line.hi(${cut.line.hi})はface.hi(${cut.face.hi})と一致するはず（ローカルxの原点を共有する）`);
+  }
+});
+
+test('【失敗系】switchbackCuts: 非対称な隅でもseq3/seq5の面の走り(run)は自分のfaceのぶんで、向かいの面のぶんに広がらない', () => {
+  const graph = makeGraph();
+  const { room, stair } = makeSwitchbackFixture(graph, { asymmetricEnds: true });
+  const faces = composeRoomFaces(room, graph);
+  const table = switchbackCuts(stair, faces, graph, OPTS);
+  const bySeq = Object.fromEntries(table.cuts.map(c => [c.seqNo, c]));
+  // seq5の枠が（旧実装のように）wOut1由来だと、面より200mm広い枠になり
+  // content全体が面に対して200mmずれる。
+  assert.equal(bySeq['5'].line.hi - bySeq['5'].line.lo, table.wOut2.run,
+    'seq5の切断線の枠はwOut2(自分のface)のrunのはず');
+  assert.notEqual(bySeq['5'].line.hi - bySeq['5'].line.lo, table.wOut1.run,
+    'seq5の切断線の枠がwOut1のrunだと、ささら断面が面の端より内側＝壁の中に描かれる');
+  assert.equal(bySeq['3'].line.hi - bySeq['3'].line.lo, table.wLanding.run,
+    'seq3の切断線の枠はwLanding(自分のface)のrunのはず');
+  assert.notEqual(bySeq['3'].line.hi - bySeq['3'].line.lo, table.wEntry.run,
+    'seq3の切断線の枠がwEntry(seq1と共有)のrunだと、seq3のcontentが面に対してずれる');
+  // 切断の**位置**(axisValue)はseq1と共有したまま（枠だけを分けた変更であることの明示）。
+  assert.equal(bySeq['3'].line.axisValue, bySeq['1'].line.axisValue,
+    'seq1とseq3は同じ位置（踊り場前縁）で切る——分けたのは枠(lo/hi)だけ');
+});
 
 // ---- 階段下部屋の2a壁は階段の展開図から見えない（ユーザー実機指摘2026-09「「6」D1:
 // 「13」の壁関連（2本の縦線とアキばつ）は、階段より下なので描画しない」）----

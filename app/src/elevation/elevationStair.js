@@ -163,6 +163,9 @@ export function buildStairBand(stairRoom, graph, upperGraph, ctx = {}) {
       faceOverride: (face, i) => ({
         floorSegments: sequence[i].floorSegments,
         ceilingProfile: sequence[i].ceilingProfile,
+        // その面の断面線（下側の輪郭。ユーザー明示指示2026-09「断面線の外は描画しない」）。
+        // 図形側では面端の縦線の下端に使う（床線・段差縦線はflatLineSpanX経由で自動追従）。
+        floorProfile: sequence[i].floorProfile,
         // ユーザー明示指示（「2FL 寸法線はここで分ける」）: seq1（常にi===0=帯先頭面）が
         // chDimSplitAbsYsを持てば、elevationBand.jsのlayoutBandFacesがそれを見て左CH寸法を
         // 分割する（elevationBand.jsのchDimSplitAbsYsフック参照）。他entryは未設定=現行1本のまま。
@@ -173,6 +176,17 @@ export function buildStairBand(stairRoom, graph, upperGraph, ctx = {}) {
         chDimChains: sequence[i].chDimChains,
         // 往復間の壁の芯の一点鎖線（ユーザー実機指摘2026-08「6」C。elevationFigure.js参照）。
         extraCenterLineXs: sequence[i].extraCenterLineXs,
+        // 上階の平面が自階の面の端より外へ続く量と、その上階のFL（ユーザー裁定2026-09「「6」D2」）。
+        // content側の壁エッジと同じ探査窓から出た値（elevationStairSequence.jsのupperOverhangOf）。
+        upperOverhang: sequence[i].upperOverhang,
+        upperFloorZ: sequence[i].upperFloorZ,
+        // はり出しの外端に立つ切断壁（上階の腰壁）の向こう側の面（ユーザー裁定2026-09「「6」C」）。
+        // これも同じ探査の結果（columns）から出た値で、図側は壁を引き直さない。
+        upperFloorCutEnds: sequence[i].upperFloorCutEnds,
+        // 上階FL断面線を許す端（上階の床が実在する端だけ）。上部吹抜けを持つ部屋帯と共通の
+        // gate（elevationFaces.jsのupperFloorEndsOf）——はり出し量は上階の壁しか見ないため、
+        // 上階が吹抜けのまま境界に腰壁だけ立つ端では床の無い位置に2FL線が出てしまう。
+        upperFloorEnds: sequence[i].upperFloorEnds,
         skipBaseboard: true, skipWallLabel: true,
       }),
     });

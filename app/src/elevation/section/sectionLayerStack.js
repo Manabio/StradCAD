@@ -56,6 +56,12 @@ export function orderLayerStack(layerInfos) {
  * `sectionTypes.js`の契約「高さは絶対z（上が正・設置階FL=0基準）」より、**z原点に最も近い層**が
  * 帯自身の階であることが一意に決まる（role名'self'を見る必要はない。実データでも全ての
  * 生成箇所がself層をfloorZMm:0で作っている）。同距離なら上側（＝地上側）を優先する。
+ *
+ * **ただし層スタックが「その列に届いている層」だけの部分集合である場合は、帯自身の階が
+ * そこに居るとは限らない**——層ごとの探査窓（`SectionCut.layerRunWindows`）で自階が落ちた
+ * はり出し列では、残った上階が本関数の答えになる。呼び出し側は「baseの下は自階の床構造」の
+ * ような、baseが帯自身の階であることに依存する推論をそのまま当ててはいけない
+ * （`sectionProbe.js`の`unexploredBelowZOf`が、その高さを未探査として帯ごと落としている）。
  * @param {LayerInfo[]} stack - orderLayerStackの結果
  * @returns {LayerInfo|null}
  */

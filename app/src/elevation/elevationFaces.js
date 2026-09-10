@@ -13,6 +13,7 @@ import { innerWallFaceAt } from '../finish/wallFaces.js';
 import { sameAxisLine } from '../finish/kneeDropWall.js';
 import { buildCellToRoom } from '../finish/edgeClassify.js';
 import { cutPlaneOffsetMm } from './section/sectionCutPlane.js';
+import { isRealRoom } from './section/sectionLayerStack.js';
 import { worldToCell } from '../finish/gridCells.js';
 import { graphList } from '../graphReadScope.js';
 import { SPLIT_MERGE_EPS_MM, PROBE_EPS_MM } from './elevationStyle.js';
@@ -651,6 +652,39 @@ export function roomAtFaceSide(face, coord, graph) {
   const inner = face.axisCL.effectiveValue + (Math.sign(face.inward) || 1) * PROBE_EPS_MM;
   const cell = worldToCell(face.isVertical ? inner : coord, face.isVertical ? coord : inner, graph);
   return cell ? (buildCellToRoom(graph).get(cell.key) ?? null) : null;
+}
+
+/**
+ * はり出しの向こうに**上階の床が実在する**端か（端ごと）。
+ *
+ * はり出し量そのもの（`section/sectionContent.js`の`planeOverhangForFace`・階段帯の
+ * `elevationStairSequence.js`の`upperOverhangOf`）が見るのは上階の**壁**の伸びだけなので、
+ * 2階で吹抜けが2室ぶん続き境界に腰壁だけが立つ構成では、床が無いのに上階FLの断面線がCLの外へ出る。
+ * 既存規約（.claude/elevation-model.md「上に部屋が無い（吹抜けが続く）位置に床の断面線を
+ * 描いてはいけない」）に合わせ、上階graphの所有Roomを引いて実Room（VOID/STAIR_VOIDでない。
+ * `section/sectionLayerStack.js`の`isRealRoom`＝全モジュール共通の判定）の端だけ許す。
+ * 問う位置は**面端のCLから半壁厚ぶん外側**——CLちょうどはセル境界で所有Roomが不安定なうえ、
+ * 上階の床が始まるのはそのCL（図側`upperFloorEdgeSpans`が線を引き始める位置）だから。
+ * 半壁厚はCL（`faceBoundaryLocalX`）と面の端（0/run）の差＝既存値から取る（別計算しない）。
+ *
+ * **上部吹抜けを持つ部屋帯（`elevationVoid.js`）と階段帯（`elevationStairSequence.js`）が
+ * 共有する唯一の実装**——どちらの帯の上階FL断面線も同じ1つのgateを通す（別々に書くと、
+ * 帯によって「床の無い位置の2FL線」が出たり出なかったりする）。置き場がここなのは、
+ * 材料（`faceBoundaryLocalX`・`roomAtFaceSide`）が両方このモジュールにあるため。
+ * @param {object} face
+ * @param {object} graph - 帯自身の階のgraph（面端のCL idはこちらで引ける。図側と同じ情報源）
+ * @param {object} upperGraph
+ * @returns {{lo:boolean, hi:boolean}}
+ */
+export function upperFloorEndsOf(face, graph, upperGraph) {
+  const boundary = faceBoundaryLocalX(face, graph);
+  const at = (clLocal, outward) => {
+    const faceEnd = outward > 0 ? face.run : 0;   // その端の面の縁（CLとの差＝半壁厚）
+    const halfWall = Math.abs(clLocal - faceEnd);
+    const world = face.originWorld + face.dirSign * (clLocal + outward * halfWall);
+    return isRealRoom(roomAtFaceSide(face, world, upperGraph));
+  };
+  return { lo: at(boundary.lo, -1), hi: at(boundary.hi, +1) };
 }
 
 /**

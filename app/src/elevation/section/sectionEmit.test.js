@@ -8,6 +8,7 @@ import {
 } from './sectionEmit.js';
 import { KNEE_CAP_FACE_MM } from '../elevationStyle.js';
 import { buildColumns } from './sectionEngine.js';
+import { upperFloorCutWallEndsOf } from './sectionContent.js';
 
 function makeCut(overrides = {}) {
   return { seqNo: '1', line: { isVertical: false, axisValue: 0, lo: 0, hi: 3000 },
@@ -735,6 +736,117 @@ test('【実機指摘・6D(c)】emitColumns: 見えている壁が別の層へ�
   assert.deepEqual(kneeVerts, [-57.5, 57.5], '腰壁の縦線は外縁2本だけのはず');
 });
 
+// ---- QA指摘2026-09（1）: はり出し列に立つ腰壁の断面から、スラブ天端の線が面の中へ侵入していた ----
+// 実機「6」C（xCursor 0）の形。はり出し列(x-115..0)に上階の腰壁の**断面**が立ち、面の中の
+// 走り slab(z2400-3000) と z が一致してペアになり、2FL中線が x0..1505 へ引き直されていた
+// ——これは`emitColumns`の`flushOnSlab`が「腰壁の仕上げ面は直下のスラブ小口と同面」として
+// 既に消している線そのもの（ユーザー裁定「「6」C: 2FLの線は…腰壁が終わるエッジまで不要」）。
+function kneeOnOverhangColumns() {
+  const knee = { id: 'w-knee-2f' };
+  return [
+    // はり出し列（自階の平面が無い＝slab帯を作らない。sectionProbe.jsのunexploredBelowZOf）。
+    { x0: -115, x1: 0, worldLo: 0, worldHi: 1, bands: [
+      { kind: 'cut', z0: 3000, z1: 3800, wall: knee, layerRole: 'above', isKneeDrop: true },
+      { kind: 'wall', z0: 3800, z1: 5400, distMm: 2500, layerRole: 'above' }] },
+    // 面の中: 1階天井懐スラブの上に、同じ腰壁が**見えがかり**で載る。
+    { x0: 0, x1: 1442.5, worldLo: 1, worldHi: 2, bands: [
+      { kind: 'open', z0: 0, z1: 2400 },
+      { kind: 'slab', z0: 2400, z1: 3000, floorZ: 0 },
+      { kind: 'wall', z0: 3000, z1: 3800, distMm: 2500, layerRole: 'above', isKneeDrop: true },
+      { kind: 'open', z0: 3800, z1: 5400 }] },
+    { x0: 1442.5, x1: 1505, worldLo: 2, worldHi: 3, bands: [
+      { kind: 'open', z0: 0, z1: 2400 },
+      { kind: 'slab', z0: 2400, z1: 3000, floorZ: 0 },
+      { kind: 'open', z0: 3000, z1: 5400 }] },
+    { x0: 1505, x1: 2885, worldLo: 3, worldHi: 4, bands: [
+      { kind: 'wall', z0: 0, z1: 3000, distMm: 2500, layerRole: 'self' },
+      { kind: 'open', z0: 3000, z1: 5400 }] },
+  ];
+}
+const overhangKneeCut = { line: { isVertical: true, axisValue: 0, lo: 0, hi: 2885 }, dirSign: 1,
+  zRange: { loZ: 0, hiZ: 5400 }, baseFloorZ: 1500, layers: [{ floorZMm: 0 }, { floorZMm: 3000 }] };
+
+test('【QA指摘2026-09・6C】emitColumns: はり出し列の腰壁断面から、スラブ天端の線が面の中へ伸びない', () => {
+  const prims = emitColumns(kneeOnOverhangColumns(), overhangKneeCut, { ceilZ: 5400 });
+  // 腰壁が同面で載っている区間 x(0,1442.5) に2FL(z3000)の水平線が入らないこと
+  // （腰壁が終わったx=1442.5より外の線は従来どおり出る＝この裁定の対象外）。
+  const intoFlush = horizAt(prims, 3000)
+    .filter(p => Math.min(p.x1, p.x2) < 1442.5 - 1e-6 && Math.max(p.x1, p.x2) > 1e-6);
+  assert.deepEqual(intoFlush, [],
+    `2FL(z3000)の水平線が腰壁と同面の区間へ伸びている（実際:${JSON.stringify(intoFlush)}）`);
+});
+
+test('【QA指摘2026-09・6C】emitColumns: 同じ腰壁断面から出る1F天井断面線と2FLへの立上りは残る', () => {
+  // 裁定で消すのは「同面ゆえに見えない」2FL線1本だけ——「6」D2の裁定どおりの取り合い
+  // （下階天井→腰壁の向こう側の面→上へ立ち上げて上階床）は消してはいけない。
+  const prims = emitColumns(kneeOnOverhangColumns(), overhangKneeCut, { ceilZ: 5400 });
+  const ceilLine = horizAt(prims, 2400).find(p => Math.min(p.x1, p.x2) < -1e-6);
+  assert.ok(ceilLine, '1F天井断面線ははり出し側（x<0）へ出るはず');
+  assert.deepEqual([ceilLine.x1, ceilLine.x2].sort((a, b) => a - b), [-115, 0]);
+  const riser = vertAtX(prims, -115).filter(p =>
+    Math.abs(Math.min(-p.y1, -p.y2) - 2400) < 1e-6 && Math.abs(Math.max(-p.y1, -p.y2) - 3000) < 1e-6);
+  assert.equal(riser.length, 1, '腰壁の向こう側の面に z2400→3000 の立上りが1本');
+});
+
+// ---- QA指摘2026-09（2）: 同じスラブがz断点で2走りに割れ、同じ切断壁と2回発火していた ----
+test('【QA指摘2026-09】emitColumns: 所有層が同じでzが連続するslabは1走り（実体のない高さに線を出さない）', () => {
+  const knee = { id: 'w-knee-2f' };
+  // 腰壁の切断高(1500)がzBreaksに入り、上階の床構造が slab(0-1500)/slab(1500-3000) に割れた列。
+  const columns = [
+    { x0: -100, x1: 0, worldLo: 0, worldHi: 1, bands: [
+      { kind: 'slab', z0: 0, z1: 1500, floorZ: 3000 },
+      { kind: 'slab', z0: 1500, z1: 3000, floorZ: 3000 },
+      { kind: 'cut', z0: 3000, z1: 3800, wall: knee, layerRole: 'above', isKneeDrop: true }] },
+    { x0: 0, x1: 1000, worldLo: 1, worldHi: 2, bands: [
+      { kind: 'open', z0: 0, z1: 3000 }, { kind: 'open', z0: 3000, z1: 5400 }] },
+  ];
+  const cut = { line: { isVertical: true, axisValue: 0, lo: 0, hi: 1000 }, dirSign: 1,
+    zRange: { loZ: 0, hiZ: 5400 }, baseFloorZ: 0, layers: [{ floorZMm: 0 }, { floorZMm: 3000 }] };
+  const prims = emitColumns(columns, cut, { ceilZ: 5400 });
+
+  assert.deepEqual(horizAt(prims, 1500), [],
+    'z=1500は腰壁の切断高で入っただけの断点＝実体の境界ではないので水平線は出ない');
+  // 縦線はスラブ小口の1本だけ（走りが2つに割れると z1500..3000 が別に立ち、上位を内包する重複になる）。
+  const verts = vertAtX(prims, -100).filter(p => Math.max(-p.y1, -p.y2) <= 3000 + 1e-6);
+  assert.equal(verts.length, 1, `スラブ小口の縦線は1本のはず（実際:${JSON.stringify(verts)}）`);
+  assert.deepEqual([-verts[0].y1, -verts[0].y2].sort((a, b) => a - b), [0, 3000],
+    'スラブ全体（0..3000）を1本で通るはず');
+});
+
+test('【失敗系・QA指摘2026-09】emitColumns: 所有層が違う隣接slab（1階天井懐と2階床構造）は結合しない', () => {
+  // 実機「6」D1・「6」Bの形。ここを結合すると2FL(z3000)の取り合い3本が丸ごと消える。
+  const knee = { id: 'w-knee-2f' };
+  const columns = [
+    { x0: -150, x1: -57.5, worldLo: 0, worldHi: 1, bands: [
+      { kind: 'wall', z0: 0, z1: 2400, distMm: 2250, layerRole: 'self' },
+      { kind: 'slab', z0: 2400, z1: 3000, floorZ: 0 },
+      { kind: 'slab', z0: 3000, z1: 5400, floorZ: 3000 }] },
+    { x0: -57.5, x1: 0, worldLo: 1, worldHi: 2, bands: [
+      { kind: 'wall', z0: 0, z1: 2400, distMm: 2250, layerRole: 'self' },
+      { kind: 'slab', z0: 2400, z1: 3000, floorZ: 0 },
+      { kind: 'cut', z0: 3000, z1: 3800, wall: knee, layerRole: 'above', isKneeDrop: true },
+      { kind: 'wall', z0: 3800, z1: 5400, distMm: 2250, layerRole: 'above' }] },
+    { x0: 0, x1: 57.5, worldLo: 2, worldHi: 3, bands: [
+      { kind: 'wall', z0: 0, z1: 3000, distMm: 2250, layerRole: 'self' },
+      { kind: 'cut', z0: 3000, z1: 3800, wall: knee, layerRole: 'above', isKneeDrop: true },
+      { kind: 'wall', z0: 3800, z1: 5400, distMm: 2250, layerRole: 'self' }] },
+    { x0: 57.5, x1: 1000, worldLo: 3, worldHi: 4, bands: [
+      { kind: 'wall', z0: 0, z1: 5400, distMm: 2250, layerRole: 'self' }] },
+  ];
+  const cut = { line: { isVertical: true, axisValue: 0, lo: 0, hi: 1000 }, dirSign: 1,
+    zRange: { loZ: 0, hiZ: 5400 }, baseFloorZ: 0, layers: [{ floorZMm: 0 }, { floorZMm: 3000 }] };
+  const prims = emitColumns(columns, cut, { ceilZ: 5400, openEndLo: true });
+
+  const ceil = horizAt(prims, 2400).map(p => [p.x1, p.x2].sort((a, b) => a - b));
+  assert.ok(ceil.some(([a, b]) => a === -57.5 && b === 57.5), '1F天井断面線は腰壁を渡るはず');
+  const riser = vertAtX(prims, 57.5).filter(p =>
+    Math.abs(Math.min(-p.y1, -p.y2) - 2400) < 1e-6 && Math.abs(Math.max(-p.y1, -p.y2) - 3000) < 1e-6);
+  assert.equal(riser.length, 1, '腰壁の向こう側の面に2FLへの立上りが1本');
+  const fl = horizAt(prims, 3000).map(p => [p.x1, p.x2].sort((a, b) => a - b));
+  assert.ok(fl.some(([a, b]) => a === -150 && b === -57.5),
+    `2FL床断面線が腰壁の外側面から外へ張り出すはず（実際:${JSON.stringify(fl)}）`);
+});
+
 // ---- ユーザー裁定2026-08 A案: 端部の延長は「線の引き伸ばし」ではなく探査範囲の拡張で行う ----
 // emitColumns自身は延長を一切しない（sectionProbe.jsのprobeExtendLo/HiMmが外側の列を作り、
 // 延長ぶんの線は通常の帯の縁として出る）。両方やると二重に伸びるため、その回帰ガード。
@@ -839,6 +951,54 @@ test('【失敗系】emitColumns: 手前に腰壁が無ければ、壁が終わ�
   const edges = prims.filter(p => p.x1 === p.x2 &&
     Math.abs(Math.max(p.y1, p.y2) - (-3800)) < 1e-6 && Math.abs(Math.min(p.y1, p.y2) - (-5400)) < 1e-6);
   assert.ok(edges.length > 0, '腰壁(cut)が無い列では、壁が終わる境界の縦線は従来どおり出るはず');
+});
+
+// ---- その17は面の端では効かせない（ユーザー実機指摘2026-09「「6」D2: 2階Y2から3500には
+// 「21」の壁エッジが左側に見える」）----
+// その17の前提「隣接列で同じ壁が1本の帯として続く」は、隣接列が無い＝探査範囲の外である
+// 面の端では成立しない。端に壁が有るかどうかは`openEndLo/Hi`（face.hasWallAtLocal0/Run）が
+// 唯一の情報源。
+test('【実機指摘2026-09】emitColumns: 面の端の列では、切断壁の天端で持ち上がった帯にも側縁の縦線を描く', () => {
+  const cut = makeCut({ line: { isVertical: false, axisValue: 0, lo: 0, hi: 2000 }, zRange: { loZ: 0, hiZ: 5400 } });
+  // 切断壁(z0..2400)の天端で見えがかり壁の下端が持ち上がっている列が、面の両端(x=0/x=2000)に立つ。
+  const bands = [{ kind: 'cut', z0: 0, z1: 2400 },
+                 { kind: 'wall', z0: 2400, z1: 5400, distMm: 750, layerRole: 'self' }];
+  const columns = [
+    { x0: 0, x1: 1000, worldLo: 0, worldHi: 1000, bands },
+    { x0: 1000, x1: 2000, worldLo: 1000, worldHi: 2000, bands },
+  ];
+  const wallEdges = x => emitColumns(columns, cut, { ceilZ: 5400 }).filter(p =>
+    p.x1 === p.x2 && p.x1 === x && Math.min(-p.y1, -p.y2) === 2400 && Math.max(-p.y1, -p.y2) === 5400);
+  assert.equal(wallEdges(0).length, 1,
+    `面のlo端(x=0)には壁エッジの縦線z2400..5400が出るはず（実際:${JSON.stringify(wallEdges(0))}）`);
+  assert.equal(wallEdges(2000).length, 1,
+    `面のhi端(x=2000)にも同じく出るはず（実際:${JSON.stringify(wallEdges(2000))}）`);
+  assert.equal(wallEdges(1000).length, 0,
+    '面の内側の列境界(x=1000)は同じ壁が続くだけなので、その17どおり縦線は出ないはず');
+
+  // 端の壁の有無の唯一の情報源はopenEndLo/Hi——面の端に壁が無いと分かっていれば従来どおり描かない。
+  const openEnds = emitColumns(columns, cut, { ceilZ: 5400, openEndLo: true, openEndHi: true }).filter(p =>
+    p.x1 === p.x2 && (p.x1 === 0 || p.x1 === 2000)
+    && Math.min(-p.y1, -p.y2) === 2400 && Math.max(-p.y1, -p.y2) === 5400);
+  assert.equal(openEnds.length, 0,
+    `openEndLo/Hi=true（面の端に壁が無い）なら縦線は出ないはず（実際:${JSON.stringify(openEnds)}）`);
+});
+
+test('【失敗系・実機指摘2026-09】emitColumns: 列の端が面の端に一致しなければ、その17どおり側縁を消す', () => {
+  // 同じ形だが面はx=0..3000で、最終列はx=2000で終わる（＝面の端まで探査が届いていない）。
+  // 隣接列が「無い」のは範囲外だからであって、そこで壁が終わるからではない。
+  const cut = makeCut({ line: { isVertical: false, axisValue: 0, lo: 0, hi: 3000 }, zRange: { loZ: 0, hiZ: 5400 } });
+  const columns = [
+    { x0: 0, x1: 1000, worldLo: 0, worldHi: 1000,
+      bands: [{ kind: 'wall', z0: 0, z1: 5400, distMm: 750, layerRole: 'self' }] },
+    { x0: 1000, x1: 2000, worldLo: 1000, worldHi: 2000,
+      bands: [{ kind: 'cut', z0: 0, z1: 2400 },
+              { kind: 'wall', z0: 2400, z1: 5400, distMm: 750, layerRole: 'self' }] },
+  ];
+  const edges = emitColumns(columns, cut, { ceilZ: 5400 }).filter(p =>
+    p.x1 === p.x2 && p.x1 === 2000 && Math.min(-p.y1, -p.y2) === 2400 && Math.max(-p.y1, -p.y2) === 5400);
+  assert.equal(edges.length, 0,
+    `面の端(x=3000)ではない列の端(x=2000)には側縁を描かないはず（実際:${JSON.stringify(edges)}）`);
 });
 
 
@@ -1414,4 +1574,38 @@ test('【失敗系】emitOpenGapMarks: 遠側天井が近側より高くても�
   const cut = makeCut({ openSpans: [{ loX: 0, hiX: 1000, farFloorZ: 0, farCeilZ: 3000 }] });
   assert.deepEqual(gapYs(cut, columns), [-2400, 0],
     '近側の天井断面(2400)で止まるはず——遠側天井(3000)へ引き上げてはいけない');
+});
+
+// ---- upperFloorCutWallEndsOf（sectionContent.js）: はり出し外端に立つ**切断壁**の
+// 向こう側の面。図側（elevationFigure.jsのupperFloorEdgeSpans）はこの値からしか
+// 「切断壁か見えがかり壁か」を知れない（ユーザー裁定2026-09「「6」C・「5」A1」）。
+// 述語（`hasCutWallStandingOn`）はceilStepSlabSectionの「切断壁の断面の中を通さない」と共有。 ----
+const UF = 3000; // 上階のFL
+
+test('upperFloorCutWallEndsOf: 端の列に上階FLから立ち上がる切断壁があれば、その列の外縁を返す', () => {
+  // 実データ「6」C: 外端の列(-115..-57.5)が腰壁の断面(z3000..3800)。
+  const columns = [
+    { x0: -115, x1: -57.5, bands: [{ kind: 'cut', z0: UF, z1: 3800 }] },
+    { x0: -57.5, x1: 0, bands: [{ kind: 'cut', z0: UF, z1: 3800 }] },
+    { x0: 0, x1: 2885, bands: [{ kind: 'open', z0: 0, z1: 2400 }] },
+  ];
+  assert.deepEqual(upperFloorCutWallEndsOf(columns, UF), { lo: -115, hi: null },
+    'lo側だけ切断壁＝先頭列の外縁(-115)。hi側は切断壁でないのでnull');
+});
+
+test('【失敗系】upperFloorCutWallEndsOf: 見えがかり壁・上階FLから立ち上がらない断面はnull', () => {
+  // 実データ「6」D2: 外端は全高の見えがかり壁（kind==='wall'）で切断壁ではない。
+  const sightline = [{ x0: -160, x1: 0, bands: [{ kind: 'wall', z0: UF, z1: 5400 }] }];
+  assert.deepEqual(upperFloorCutWallEndsOf(sightline, UF), { lo: null, hi: null });
+  // 自階の壁の断面（床から立つ）は上階の床の小口とは関係ない＝拾わない。
+  const ownCut = [{ x0: -160, x1: 0, bands: [{ kind: 'cut', z0: 0, z1: 2400 }] }];
+  assert.deepEqual(upperFloorCutWallEndsOf(ownCut, UF), { lo: null, hi: null });
+});
+
+test('【失敗系】upperFloorCutWallEndsOf: 列が無い・上階FLが非有限なら両端null', () => {
+  const columns = [{ x0: 0, x1: 100, bands: [{ kind: 'cut', z0: UF, z1: 3800 }] }];
+  assert.deepEqual(upperFloorCutWallEndsOf([], UF), { lo: null, hi: null });
+  assert.deepEqual(upperFloorCutWallEndsOf(undefined, UF), { lo: null, hi: null });
+  assert.deepEqual(upperFloorCutWallEndsOf(columns, undefined), { lo: null, hi: null });
+  assert.deepEqual(upperFloorCutWallEndsOf(columns, NaN), { lo: null, hi: null });
 });

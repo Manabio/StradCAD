@@ -11,11 +11,16 @@
  * 高さはこのモジュール以下すべて「絶対z（上が正・設置階FL=0基準）」で扱い、プリミティブ化の
  * 最後（sectionEmit.js）でのみ y=-z へ変換する（§2項目6）。
  */
+import { GAP_EPS_MM as GAP_EPS } from '../elevationStyle.js';
 
 /**
  * @typedef {{ isVertical:boolean, axisValue:number, lo:number, hi:number }} CutLine
  *   既存faceの (isVertical, axisCL.value, lo, hi) と同型。isVertical=trueは切断線自身が
  *   固定X（axisValue）・Y方向(lo..hi)に伸びることを表す（faceの規約と同じ）。
+ *   probeExtendLo/HiMm（任意）… 壁のない端部で図の外へ伸ばす量。`cutDrawRange`の情報源。
+ *   unionExtendLo/HiMm（任意。既定=probeExtendLo/HiMm）… **探査だけ**を広げる量＝全層の
+ *   探査窓（`SectionCut.layerRunWindows`）の和。層ごとに面の端が違うため（下記）、実際に
+ *   レイキャストする範囲は`cutDrawRange`より広くなりうる。
  */
 
 /**
@@ -29,9 +34,20 @@
  *   baseFloorZ: number,
  *   stairCut?: object,
  *   hiddenWallIds?: Set<string>,
+ *   layerRunWindows?: Map<object,{lo:number,hi:number}>,
+ *   floorZProfile?: Array<{loX:number, hiX:number, floorZ:number}>,
+ *   drawFloorProfile?: Array<[number,number]>,
  *   chDimSplitAbsYs?: number[],
  *   anchorRoom?: object,
  * }} SectionCut
+ *   layerRunWindows（任意）… 層 → その層を探査してよい走り方向の世界範囲。**面の端は層ごとに
+ *   違う**（自階の面は自階の壁で終わるが、同じ通りの上階の壁はその先へ続きうる）ことを表す
+ *   付加データで、`cut.layers`配列自体は写さない（参照同一性とprobeCtxのキャッシュを壊さない）。
+ *   生成は`sectionContent.js`の`withProbeExtension`、消費は`sectionProbe.js`。
+ *   floorZProfile（任意）… `ceilProfile`の床側の双子（区間ごとの床断面高さ・断面ローカルx）。
+ *   下階の層への探査窓のgate（`sectionContent.js`の`planeOverhangForFace`）だけが読む。
+ *   layers[].ceilZMm（任意）… その層の天井z。**下階の層**のgateで「帯の床がその層の天井より
+ *   下か」を見るために呼び出し側（帯）が載せる（層の部屋のCHは帯しか知らない）。
  */
 
 /**
@@ -50,6 +66,28 @@
  * @typedef {{ x0:number, x1:number, worldLo:number, worldHi:number,
  *   bands:ZBand[], loCLId?:string, hiCLId?:string }} SectionColumn
  */
+
+/**
+ * その列に「z（＝上階のFL）からそのまま立ち上がる切断壁」の帯があるか。
+ *
+ * 「上階の床の断面線は、境界に立つ切断壁の**断面の中**を通さない／壁の向こう側の面から
+ * 描き始める」という既存規約（`sectionEmit.js`の`ceilStepSlabSection`）と、はり出し外端の
+ * 判定（`sectionContent.js`の`upperFloorCutWallEndsOf`）は**同じ1つの問い**なので、述語も
+ * εもここへ一本化する（別々に書くと片方だけ腰壁の中を線が通る）。
+ *
+ * 見るのは`kind==='cut'`だけ——面と**平行**な壁（`kind==='cutAlong'`＝縦断された壁）は端の外縁を
+ * 決めないため**意図的に除外**する。`sectionEngine.js`の`isCutBand`等が`cutAlong`を含むのとは
+ * **別の問い**（あちらは「その帯を断面として扱うか」、こちらは「上階の床の断面線をどこから
+ * 描き始めるか＝その列の外縁が床の小口の起点になるか」）。`ceilStepSlabSection`との同値性を
+ * 保つため、片方だけ`cutAlong`を足してはいけない。
+ * @param {SectionColumn|undefined} column
+ * @param {number} z - 絶対z（上階のFL）
+ * @returns {boolean}
+ */
+export function hasCutWallStandingOn(column, z) {
+  if (!column || !Number.isFinite(z)) return false;
+  return (column.bands ?? []).some(b => b.kind === 'cut' && Math.abs(b.z0 - z) < GAP_EPS);
+}
 
 /**
  * cut.line の run方向（isVerticalならY、falseならX）で、図のx=0に対応する世界座標

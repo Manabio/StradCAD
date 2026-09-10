@@ -21,7 +21,9 @@ import { findCatalogEntry } from '../openings/openingCatalog.js';
 import { buildOpeningElevation } from '../openings/openingElevationFigure.js';
 import { translatePrimitive, mirrorPrimitiveX } from './elevationPrimitives.js';
 import { collectRow1SplitPoints } from './elevationDimSplit.js';
-import { drawnRiserX, drawnCeilingRiserX, halfWallThicknessMm } from './elevationFloorProfile.js';
+import {
+  drawnRiserX, drawnCeilingRiserX, halfWallThicknessMm, drawnFloorProfileZAt,
+} from './elevationFloorProfile.js';
 import { solidPrimitivesForFace } from './elevationSolids.js';
 import { kneeDropRecordsOnAxis } from '../finish/kneeDropWall.js';
 import {
@@ -395,6 +397,114 @@ function subtractRuns(base, holes) {
 }
 
 /**
+ * 上階のはり出し区間（`ctx.upperOverhang`）に上階FLの床断面線を引くx範囲（両端ぶん・0〜2件）。
+ *
+ * **はり出しの外端に切断壁（上階の腰壁）が立つ端が最優先**（ユーザー裁定2026-09「「6」C・
+ * 「5」A1: 2FL断面まで下りて外側に向かって張り出して終了、が正解」）——その壁の**向こう側の
+ * 面**（`ctx.upperFloorCutEnds`。content側の列が唯一の情報源。`section/sectionContent.js`の
+ * `upperFloorCutWallEndsOf`）から、さらに**外側へ**`extendMm`ぶん張り出して終わる。壁の下
+ * （CL〜向こう側の面）には引かない——既存規約「上階の床の断面線は境界に立つ切断壁の断面の中を
+ * 通さない」（`section/sectionEmit.js`の`ceilStepSlabSection`）と同じ1つの見方。
+ *
+ * 外端に切断壁が立たない端（実データ「6」D2＝全高の見えがかり壁）は従来どおり:
+ * 外端から内側へ向かって断面線（floorProfile）が上階FL以上である間だけ引く——その先は断面線
+ * 自身（実データでは2FLへ到達した復路階段）が輪郭になるため、二重に線を引かない。外端で既に
+ * 断面線が上階FLに届いていなければ、そこに上階の床の小口は現れない（=引かない）。
+ * **断面線を持たない帯（上部吹抜けを持つ部屋帯）でははり出し区間のうち面端のCLより向こう側**に
+ * 引く（下記の分岐）。
+ *
+ * **はり出し側へ断面線の定義域が伸びていない面では引かない**（QA指摘2026-09）。
+ * `drawnFloorProfileZAt`は「範囲外は端点値」の規約なので、断面線が面の端ちょうどで終わっていても
+ * 外端の高さを聞けば端点の値が返る——その値ははり出し区間について何も言っておらず、それを
+ * 根拠に線を引くのは面の外の外挿になる。実データ「6」D2の断面線は`sectionStair.js`が面の外
+ * （-132.5）まで階段の輪郭を出しているので、この判定を通る。定義域がはり出しの途中までの場合は
+ * 従来どおり端点値で外端まで延ばす——そこは「輪郭が続いていると分かっている」側だから。
+ * @param {Array<[number,number]>|null|undefined} floorProfile - その面の断面線
+ * @param {number|undefined} upperFloorZ - 上階のFL（絶対z）
+ * @param {{lo:number,hi:number}|undefined} overhang - 面ローカルのはり出し量
+ * @param {{drawnX0:number, drawnXRun:number, ceilX0:number, ceilXRun:number,
+ *   boundaryLo:number, boundaryHi:number, extendMm:number}} xs - boundaryLo/Hi＝面端のCL
+ *   （faceBoundaryLocalX。常に有限数を返すためフォールバックは持たない）。extendMm＝壁のない
+ *   端部の「はり出し」記法と**同じ量**（`wallLessEndExtendModelMm`。2パス換算後の確定値）。
+ * @param {{lo:boolean,hi:boolean}|undefined} floorEnds - 上階の床が実在する端（省略時は両端
+ *   ＝現行と完全同一）。壁だけが続いて床が無い端を落とすためのgate（`elevationFaces.js`の
+ *   `upperFloorEndsOf`。上部吹抜けを持つ部屋帯・階段帯の両方が同じ関数から供給する）。
+ * @param {{lo:number|null,hi:number|null}|undefined} cutEnds - はり出しの外端に立つ切断壁の
+ *   向こう側の面（面ローカルx。省略・null＝立っていない＝現行と**完全同一**）。
+ * @returns {Array<{lo:number,hi:number}>}
+ */
+function upperFloorEdgeSpans(floorProfile, upperFloorZ, overhang, xs, floorEnds, cutEnds) {
+  if (!overhang || !Number.isFinite(upperFloorZ)) return [];
+  // 上階の**床**が無い端では引かない（.claude/elevation-model.md「上に部屋が無い位置に床の
+  // 断面線を描いてはいけない」のはり出し版。はり出し量は上階の壁しか見ていないため、吹抜けが
+  // 続く先に腰壁だけが立つ構成ではここで落とす必要がある）。天井断面線・壁エッジは落とさない。
+  const openLo = floorEnds?.lo !== false, openHi = floorEnds?.hi !== false;
+  // はり出しの外端に切断壁が立つ端は、その壁の向こう側の面から**外側へ**extendMmぶん。
+  // はり出しが0の端は対象外——そこは「はり出し区間」ではなく、切断壁があっても面の端そのもの。
+  const outward = (cutX, hasOverhang, sign) => {
+    if (!hasOverhang || !Number.isFinite(cutX) || !(xs.extendMm > 0)) return null;
+    const far = cutX + sign * xs.extendMm;
+    return { lo: Math.min(cutX, far), hi: Math.max(cutX, far) };
+  };
+  const cutLo = openLo ? outward(cutEnds?.lo, (overhang.lo ?? 0) > 1e-6, -1) : null;
+  const cutHi = openHi ? outward(cutEnds?.hi, (overhang.hi ?? 0) > 1e-6, +1) : null;
+  if (cutLo || cutHi) {
+    // 片端だけ切断壁のこともある——残る端は**従来の規則そのまま**（cutEndsを渡さず再入し、
+    // 切断壁の側だけgateで閉じる）。返す順はlo→hiのまま（プリミティブの並びを変えない）。
+    const rest = upperFloorEdgeSpans(floorProfile, upperFloorZ, overhang, xs,
+      { lo: openLo && !cutLo, hi: openHi && !cutHi });
+    return [cutLo, ...rest, cutHi].filter(Boolean);
+  }
+  // 断面線を持たない帯（上部吹抜けを持つ部屋帯。`elevationVoid.js`のbuildRoomBandWithVoidAbove）
+  // は、はり出し区間のうち**面端のCLより向こう側**に引く（ユーザー実機指摘2026-09「「5」A1:
+  // 追加された2階X3の2FLは、X3の右側が正解」）——輪郭を引き継ぐ断面線が無いので外端までは
+  // 引くが、はり出しには面端の壁（実データ「5」A1ではX3の2階腰壁。CL±半壁厚）が立っており、
+  // **上階の床が始まるのはそのCL**（平面はセル＝CL区切りなので、吹抜けの部屋はCLで終わり、
+  // その向こうが上階の床のある部屋）。CLより手前は吹抜けの上に壁が張り出している側で、
+  // そこに上階の床は無い。
+  // 範囲は天井断面線のはり出し（ceilX0/ceilXRun）と面端のCL（boundaryLo/Hi。どちらも別計算
+  // しない既存値）から取る。CLがはり出しの外にある面（面端に壁が無くCLが面の端と一致する等）は
+  // クランプで従来どおり全幅——はり出しの外へは絶対に出ない。
+  if (!floorProfile?.length) {
+    const clampToOverhang = (cl, outer, inner) =>
+      Math.min(Math.max(cl, Math.min(outer, inner)), Math.max(outer, inner));
+    const spanToCL = (outer, inner, cl, open) => {
+      if (!open) return null;
+      const b = clampToOverhang(cl, outer, inner);
+      return Math.abs(b - outer) > 1e-6 ? { lo: Math.min(outer, b), hi: Math.max(outer, b) } : null;
+    };
+    return [spanToCL(xs.ceilX0, xs.drawnX0, xs.boundaryLo, openLo),
+      spanToCL(xs.ceilXRun, xs.drawnXRun, xs.boundaryHi, openHi)].filter(Boolean);
+  }
+  const domLo = floorProfile[0][0], domHi = floorProfile[floorProfile.length - 1][0];
+  const zAt = x => drawnFloorProfileZAt(floorProfile, x);
+  const spanFrom = (xOuter, xInner) => {
+    if (Math.abs(xInner - xOuter) < 1e-6) return null;
+    const dir = Math.sign(xInner - xOuter);
+    // 断面線の定義域がはり出し側（xInnerの外）へ一歩も出ていなければ、外端の高さは端点値の
+    // 外挿でしかない＝この面のはり出しに上階の床の小口は描けない。
+    if (dir > 0 ? domLo >= xInner - 1e-6 : domHi <= xInner + 1e-6) return null;
+    if (zAt(xOuter) < upperFloorZ - 1e-6) return null;
+    // 断面線の折れ点で刻んで、上階FLを下回る最初の区間の中で交点を線形補間する。
+    const inner = floorProfile.map(p => p[0])
+      .filter(x => (x - xOuter) * dir > 1e-6 && (xInner - x) * dir > 1e-6)
+      .sort((a, b) => (a - b) * dir);
+    let prev = xOuter;
+    for (const x of [...inner, xInner]) {
+      const zPrev = zAt(prev), z = zAt(x);
+      if (z >= upperFloorZ - 1e-6) { prev = x; continue; }
+      const t = (zPrev - upperFloorZ) / (zPrev - z);
+      const cross = prev + (x - prev) * t;
+      return Math.abs(cross - xOuter) < 1e-6 // 外端で既に断面線が上階FLを離れる＝長さ0
+        ? null : { lo: Math.min(xOuter, cross), hi: Math.max(xOuter, cross) };
+    }
+    return { lo: Math.min(xOuter, xInner), hi: Math.max(xOuter, xInner) };
+  };
+  return [openLo ? spanFrom(xs.ceilX0, xs.drawnX0) : null,
+    openHi ? spanFrom(xs.ceilXRun, xs.drawnXRun) : null].filter(Boolean);
+}
+
+/**
  * 壁面1枚 → プリミティブ配列。
  * @param {object} face - buildRoomFaces の1件
  * @param {{graph:object, project:object, room:import('@core').Room, ceilingHeight:number,
@@ -404,7 +514,8 @@ function subtractRuns(base, holes) {
  *   floorSegments?:Array<{loX:number,hiX:number,floorDeltaMm:number,chMm?:number,
  *     flatLineSpanX?:{lo?:number,hi?:number}}>,
  *   beyondCeilings?:Array<{loX:number,hiX:number,ceilAbsMm:number}>,
- *   ceilingProfile?:Array<[number,number]>, skipBaseboard?:boolean, skipWallLabel?:boolean,
+ *   ceilingProfile?:Array<[number,number]>, floorProfile?:Array<[number,number]>|null,
+ *   skipBaseboard?:boolean, skipWallLabel?:boolean,
  *   floorSpanX?:{lo:number,hi:number}}} ctx
  *   beyondCeilings省略時（単体テスト等）は別エリアの天井の破線を描かない
  *   （elevationFloorProfile.jsのfamilyCeilingSegmentsをlayoutBandFacesが計算して渡す）。
@@ -439,6 +550,31 @@ function subtractRuns(base, holes) {
  *   そのまま使う（通常部屋帯・吹抜け帯は無指定のため出力が完全一致＝WP-G0ゲートで担保）。
  *   指定時はdrawnX0/drawnXRunをMath.max/minでこの範囲へクランプする——階段の腰壁越しに
  *   見える向こう側の床線・天井線を、cutAlong壁（往復間の壁）の実位置で打ち切るためのフック。
+ *   floorProfile（ユーザー明示指示2026-09「展開図では、断面線の外は描画しない」。
+ *   [[localX,absZ],...]＝その面の**断面線＝下側の輪郭**。ceilingProfileの双子で、規約も
+ *   補間もelevationFloorProfile.jsのdrawnFloorProfileZAtに揃える）省略時は現行と**完全同一**。
+ *   指定時は**面端の縦線（壁のある端のCUT縦線）の下端**だけをその位置の輪郭値にする——
+ *   階段帯のように床が階段そのもので出来ている面で、端の壁が帯の床（区間の床高さ）から
+ *   立ち上がって階段断面の下へ食い込むのを防ぐ。床線・段差縦線・天井は触らない
+ *   （床線側はfloorSegments[].flatLineSpanXが同じ輪郭から導出されて自動追従する）。
+ *   upperOverhang/upperFloorZ（ユーザー裁定2026-09「「6」D2」。省略時は現行と**完全同一**）＝
+ *   **上階の平面が自階の面の端より外へ続いている量**（面ローカルmm。両端ぶん）と、その上階のFL。
+ *   指定時、はり出し区間には上＝上階の天井断面線（両端を延ばす）・下＝上階のFL断面線を描く
+ *   （外端の壁エッジは断面エンジンのcontentが描く）。床線・巾木・段差縦線・面端の縦線は
+ *   延ばさない——それらは自階の面の要素で、面はその端で終わっているため。
+ *   upperFloorEnds（QA指摘2026-09。省略時は両端＝現行と**完全同一**）＝そのうち**上階の床が
+ *   実在する端**だけtrueのgate。falseの端でも天井断面線・壁エッジははり出したまま、上階FLの
+ *   断面線だけを描かない（はり出し量は上階の壁しか見ないため、吹抜けが続く先に腰壁だけが
+ *   立つ構成では床の無い位置に床の断面線が出てしまう）。
+ *   upperFloorCutEnds（ユーザー裁定2026-09「「6」C・「5」A1」。省略・null＝現行と**完全同一**）
+ *   ＝はり出しの外端に立つ**切断壁（上階の腰壁）の向こう側の面**（面ローカルx。端ごと）。
+ *   指定された端では上階FLの断面線を「その面から**外側へ**wallLessEndExtendModelMmぶん」だけ
+ *   描く——壁の下（CL〜向こう側の面）には引かない。値の唯一の情報源はcontent側の列
+ *   （`section/sectionContent.js`の`upperFloorCutWallEndsOf`）。
+ *   lowerOverhang（ユーザー裁定2026-09。省略時は現行と**完全同一**）＝その鏡像で、**下階の
+ *   平面**が面の端より外へ続いている量。指定時は**区間の床断面線だけ**を両端へ延ばす
+ *   （はり出し区間の上端＝下階の天井・外端＝下階の壁エッジはcontentが描くので、図側が足すのは
+ *   下辺だけでよい）。天井線・巾木・段差縦線・面端の縦線は延ばさない。
  * @returns {object[]}
  */
 export function buildFaceFigure(face, ctx) {
@@ -446,7 +582,8 @@ export function buildFaceFigure(face, ctx) {
     graph, project, room, ceilingHeight: CH, materialMap, gridCLs, faceLabelAvoidThresholdModelMm,
     prevFace, nextFace, openingTagRowModelMm, dimRowGapModelMm, gridRowGapModelMm, floorSegments,
     wallLessEndExtendModelMm, scale, ceilingProfile, skipBaseboard, skipWallLabel, floorSpanX,
-    solids, extraCenterLineXs, skipFaceLabel, faceLabelBoundary,
+    solids, extraCenterLineXs, skipFaceLabel, faceLabelBoundary, floorProfile,
+    upperOverhang, upperFloorZ, upperFloorEnds, upperFloorCutEnds, lowerOverhang,
   } = ctx;
   const run = face.run;
   const prims = [];
@@ -463,19 +600,12 @@ export function buildFaceFigure(face, ctx) {
   // 解決する——旧実装は「範囲を覆っていなければ丸ごとフォールバック」だったため、本番設定
   // （wallLessEndExtendModelMm≈150が常に渡る）では描画範囲がprofile範囲よりわずかに広がり、
   // 勾配天井が一度も描かれない不具合があった。
-  const ceilAbsAtX = (x, fallbackAbsMm) => {
-    if (!Array.isArray(ceilingProfile) || ceilingProfile.length === 0) return fallbackAbsMm;
-    const first = ceilingProfile[0], last = ceilingProfile[ceilingProfile.length - 1];
-    const cx = Math.min(Math.max(x, first[0]), last[0]); // 範囲外は端点値へクランプ
-    for (let i = 0; i + 1 < ceilingProfile.length; i++) {
-      const [x1, y1] = ceilingProfile[i];
-      const [x2, y2] = ceilingProfile[i + 1];
-      if (cx >= x1 - 1e-6 && cx <= x2 + 1e-6) {
-        return x2 === x1 ? y2 : y1 + ((cx - x1) / (x2 - x1)) * (y2 - y1);
-      }
-    }
-    return last[1];
-  };
+  // QA修正2026-09: 補間・端点クランプの中身は床側のdrawnFloorProfileZAt（elevationFloorProfile.js）
+  // と1文字も違わない同一アルゴリズムだったため、そちらへ委譲して実装を1つにした（天井
+  // プロファイルは床プロファイルの上下逆版という、もともとの設計意図どおり）。
+  const ceilAbsAtX = (x, fallbackAbsMm) =>
+    (!Array.isArray(ceilingProfile) || !ceilingProfile.length)
+      ? fallbackAbsMm : drawnFloorProfileZAt(ceilingProfile, x);
 
   // QA C1→D1/D2: 建具記号丸(タグ)行・ROW1（壁芯間寸法行）の床線からの距離、ROW1→ROW2・
   // ROW2→通り芯丸行の行間。ctx未指定時（単体テスト等）はモジュール読み込み時に決め打ちできる
@@ -577,6 +707,16 @@ export function buildFaceFigure(face, ctx) {
                                 : (hasWallAtLocal0   ? 0   : -extendMm);
   const drawnXRun = floorSpanX ? Math.min(hasWallAtLocalRun ? run : run + extendMm, floorSpanX.hi)
                                 : (hasWallAtLocalRun ? run : run + extendMm);
+  // 上階のはり出し（ctx.upperOverhang。未指定＝0＝現行と完全同一）。**天井断面線だけ**が
+  // この範囲まで伸びる——自階の床線・巾木・段差はその面の端で終わる。
+  const ceilX0   = drawnX0   - (upperOverhang?.lo ?? 0);
+  const ceilXRun = drawnXRun + (upperOverhang?.hi ?? 0);
+  // 下階のはり出し（ctx.lowerOverhang。未指定＝0＝現行と完全同一）。上階のはり出しの鏡像で、
+  // **区間の床断面線だけ**がこの範囲まで伸びる——天井線・巾木・段差縦線・面端の縦線は
+  // その面の端で終わる。はり出し区間の上端（下階の天井）と外端（下階の壁エッジ）は断面
+  // エンジンのcontentが描くので、図側が足すのは下辺＝下階の床断面線の延長だけでよい。
+  const floorX0   = drawnX0   - (lowerOverhang?.lo ?? 0);
+  const floorXRun = drawnXRun + (lowerOverhang?.hi ?? 0);
 
   // 新仕様「段差位置のCLオフセット」: 内部境界（区間水平床線の端x・段差縦線x）は寸法・CL位置
   // （segs[i].hiX＝オフセット前）そのものではなく、床が低い側へ半壁厚ぶんずらした位置
@@ -590,8 +730,8 @@ export function buildFaceFigure(face, ctx) {
   // 旧`hideFlatLine`は区間まるごと非描画で、はり出しごと消えていた）。空になればnull。
   const flatLineRangeAt = (i) => {
     const s = segs[i];
-    const lo = Math.max(i === 0 ? drawnX0 : riserXAt(i - 1), s.flatLineSpanX?.lo ?? -Infinity);
-    const hi = Math.min(i === segs.length - 1 ? drawnXRun : riserXAt(i), s.flatLineSpanX?.hi ?? Infinity);
+    const lo = Math.max(i === 0 ? floorX0 : riserXAt(i - 1), s.flatLineSpanX?.lo ?? -Infinity);
+    const hi = Math.min(i === segs.length - 1 ? floorXRun : riserXAt(i), s.flatLineSpanX?.hi ?? Infinity);
     return hi - lo > 1e-6 ? { lo, hi } : null;
   };
 
@@ -646,11 +786,11 @@ export function buildFaceFigure(face, ctx) {
   // 側のクランプで解決する）。
   const hasCeilingProfile = Array.isArray(ceilingProfile) && ceilingProfile.length >= 2;
   if (hasCeilingProfile) {
-    const points = [[drawnX0, -ceilAbsAtX(drawnX0, CH)]];
+    const points = [[ceilX0, -ceilAbsAtX(ceilX0, CH)]];
     for (const [x, y] of ceilingProfile) {
       if (x > drawnX0 + 1e-6 && x < drawnXRun - 1e-6) points.push([x, -y]);
     }
-    points.push([drawnXRun, -ceilAbsAtX(drawnXRun, CH)]);
+    points.push([ceilXRun, -ceilAbsAtX(ceilXRun, CH)]);
     prims.push({ type: 'polyline', points, weight: cutWeight });
   } else {
     const ceilRiserXAt = i => drawnCeilingRiserX(segs, i, halfWallMm, CH);
@@ -703,8 +843,8 @@ export function buildFaceFigure(face, ctx) {
     };
     const ceilBoundaryX = ri => (crossesStorey(ri) ? segs[ceilRuns[ri].endIdx].hiX : ceilRiserXAt(ceilRuns[ri].endIdx));
     for (const [ri, r] of ceilRuns.entries()) {
-      const x1 = ri === 0 ? drawnX0 : ceilBoundaryX(ri - 1);
-      const x2 = ri === ceilRuns.length - 1 ? drawnXRun : ceilBoundaryX(ri);
+      const x1 = ri === 0 ? ceilX0 : ceilBoundaryX(ri - 1);
+      const x2 = ri === ceilRuns.length - 1 ? ceilXRun : ceilBoundaryX(ri);
       prims.push({ type: 'line', x1, y1: r.y, x2, y2: r.y, weight: cutWeight });
     }
     // 別エリア天井の破線は「論理区間（segs）」基準で天井断面と比較する——描画済みrun範囲
@@ -741,6 +881,24 @@ export function buildFaceFigure(face, ctx) {
       prims.push({ type: 'line', x1: x, y1: ceilRuns[ri].y, x2: x, y2: ceilRuns[ri + 1].y, weight: cutWeight });
     }
   }
+  // 上階のはり出しの**下辺＝上階のFL断面線**（ユーザー裁定2026-09「「6」D2」。上辺は上の天井断面線、
+  // 外端の壁エッジは断面エンジンのcontentが描き、この3本ではり出し区間が閉じる）。
+  // 引く範囲は「はり出しの外端から、断面線（ctx.floorProfile）が上階FLを**下回る最初のx**まで」
+  // ——その位置で断面線（実データでは2FLへ到達した復路階段）自身が輪郭を引き継ぐ。外端で既に
+  // 断面線が上階FLに届いていない面では引かない（そこに上階の床の小口は現れない）。
+  // 断面線を持たない帯（上部吹抜けを持つ部屋帯）は「はり出しの外端から面端のCLまで」
+  // ——上階の床が始まるのは面端に立つ壁のCL（ユーザー実機指摘2026-09「「5」A1」）。
+  // どちらの帯でも、上階の床が実在しない端（ctx.upperFloorEnds）には引かない——供給元は
+  // 上部吹抜けを持つ部屋帯（elevationVoid.js）と階段帯（elevationStairSequence.jsの
+  // upperOverhangOf）の両方で、判定は共通の1つの関数（elevationFaces.jsのupperFloorEndsOf）。
+  // 未指定の呼び出し（単体テスト等）は両端とも許す＝この節の導入前と完全同一。
+  for (const side of upperFloorEdgeSpans(floorProfile, upperFloorZ, upperOverhang,
+    { drawnX0, drawnXRun, ceilX0, ceilXRun, boundaryLo: boundary.lo, boundaryHi: boundary.hi,
+      extendMm },
+    upperFloorEnds, upperFloorCutEnds)) {
+    prims.push({ type: 'line', x1: side.lo, y1: -upperFloorZ, x2: side.hi, y2: -upperFloorZ,
+      weight: cutWeight });
+  }
   // 端の縦線（中線）: 壁がある端（出隅・入隅）に加え、見えがかりエッジ（edgeAtLocal0/Run＝
   // 実壁が切断面を横切らず向こう側へ折れて続く凹み角。ユーザー明示指示2026-08）にも描く——
   // 壁断面は無いが角のエッジ自体は見えるため。エッジ端は壁のない端部でもあるので、
@@ -757,12 +915,19 @@ export function buildFaceFigure(face, ctx) {
   // 旧実装は両方をSILHOUETTEで描いていた——2026-08-16の「出隅の縦線を中線へ」の是正が、
   // 当時まだ出隅/入隅を区別するフラグ（edgeAtLocal0/Run。2026-08-21に新設）を持たず
   // hasWallAtLocal0/Runへ一律に適用されたまま、フラグ新設時にも戻されなかったもの。
+  // 下端は**断面線（ctx.floorProfile。下側の輪郭）**まで（ユーザー明示指示2026-09「展開図では、
+  // 断面線の外は描画しない」）——階段帯のように床が階段そのもので出来ている面では、面端の壁は
+  // 帯の床（区間の床高さ）ではなく、その位置の輪郭（階段断面）から立ち上がる。未指定（通常の
+  // 部屋帯・吹抜け帯・単体テスト）は従来どおり区間の床y。
+  // `|| 0`は-0を避ける（floorYOfと同じ規約。z=0の面で出力が-0になると既存の比較がズレる）。
+  const endFloorYOf = (x, fallbackY) =>
+    (floorProfile?.length ? (-drawnFloorProfileZAt(floorProfile, x) || 0) : fallbackY);
   if (hasWallAtLocal0 || edgeAtLocal0) {
-    prims.push({ type: 'line', x1: 0,   y1: -ceilAbsAtX(0, ceilAbsOf(segs[0])), x2: 0,   y2: floorYAtStart,
+    prims.push({ type: 'line', x1: 0,   y1: -ceilAbsAtX(0, ceilAbsOf(segs[0])), x2: 0,   y2: endFloorYOf(0, floorYAtStart),
       weight: hasWallAtLocal0 ? cutWeight : silhouetteWeight });
   }
   if (hasWallAtLocalRun || edgeAtLocalRun) {
-    prims.push({ type: 'line', x1: run, y1: -ceilAbsAtX(run, ceilAbsOf(segs[segs.length - 1])), x2: run, y2: floorYAtEnd,
+    prims.push({ type: 'line', x1: run, y1: -ceilAbsAtX(run, ceilAbsOf(segs[segs.length - 1])), x2: run, y2: endFloorYOf(run, floorYAtEnd),
       weight: hasWallAtLocalRun ? cutWeight : silhouetteWeight });
   }
 

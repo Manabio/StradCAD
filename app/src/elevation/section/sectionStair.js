@@ -85,6 +85,7 @@ import { ElevationLineRole, weightForRole, GAP_EPS_MM as GAP_EPS } from '../elev
 import { parseBaseboardHeightMm } from '../elevationFigure.js';
 import { localXOf, cutDrawRange } from './sectionTypes.js';
 import { emitLine } from './sectionEmit.js';
+import { mergeFloorProfiles } from '../elevationFloorProfile.js';
 
 /**
  * @typedef {{isVertical:boolean, runLo:number, runHi:number, travelSign:1|-1,
@@ -264,15 +265,29 @@ function columnsXRangeOverlapping(columns, cut, runLo, runHi) {
     const wLo = Math.max(c.worldLo, runLo), wHi = Math.min(c.worldHi, runHi);
     return [localXOf(cut, wLo), localXOf(cut, wHi)];
   });
-  return { loX: Math.min(...xs), hiX: Math.max(...xs) };
+  return clampToDrawRange(cut, { loX: Math.min(...xs), hiX: Math.max(...xs) });
 }
 
-// columns全体（この切断の描画される全ローカルx範囲=[0,face.run]相当）のMath.min/max。空なら
-// クランプ無し（[-Infinity,Infinity]）。
-function fullColumnsXRange(columns) {
+// columns全体（この切断の描画される全ローカルx範囲=[0,face.run]相当）のMath.min/max。columnsが
+// 空ならクランプ無し（[-Infinity,Infinity]）、面の描画範囲と交わらなければnull（=非描画）。
+function fullColumnsXRange(columns, cut) {
   if (!columns || columns.length === 0) return { loX: -Infinity, hiX: Infinity };
   const xs = columns.flatMap(c => [c.x0, c.x1]);
-  return { loX: Math.min(...xs), hiX: Math.max(...xs) };
+  return clampToDrawRange(cut, { loX: Math.min(...xs), hiX: Math.max(...xs) });
+}
+
+// 列の範囲は**面の描画範囲を超えうる**——層ごとに面の端が違う多層帯では、上階の平面が続く側に
+// 面の外の列が立つ（sectionContent.jsのlayerRunWindows）。階段の作図（段鼻ジグザグ・梯子・
+// ささら断面）が面の外へ伸びてよいかは列ではなく`cutDrawRange`が決める（面の外に断面を描かない、
+// の単一情報源）ため、列由来のx範囲は必ずここを通す。窓が無い切断では列の範囲が描画範囲に一致
+// するため、クランプは素通り＝従来と完全同値。
+// **交わりが空なら非描画（null）**——その部品は面の描画範囲の外にしか無い。元のrangeを返すと
+// 「面の外に断面を描かない」の単一情報源を無視して面の外へ描いてしまう。呼び出し側は既に
+// nullを「描かない」（空配列・continue）として扱う契約になっている。
+function clampToDrawRange(cut, range) {
+  const draw = cutDrawRange(cut);
+  const loX = Math.max(range.loX, draw.lo), hiX = Math.min(range.hiX, draw.hi);
+  return hiX < loX ? null : { loX, hiX };
 }
 
 // flightの段鼻ジグザグ点列を、cutのローカルx軸へ投影して求める（isLengthwiseCutのゲート無し。
@@ -408,7 +423,9 @@ function computeFlightProfile(flight, cut, columns) {
   const runLengthMm = flight.lengthMm ?? (flight.runHi - flight.runLo);
   const { points, noses } = stairRunProfile(
     flight.steps, flight.riserMm, runLengthMm, startX, -flight.baseZ, localDir, flight.nosingMm ?? 0);
-  const { loX, hiX } = fullColumnsXRange(columns);
+  const range = fullColumnsXRange(columns, cut);
+  if (!range) return { points: [], noses: [] }; // 列が面の描画範囲と交わらない＝この面には描かない
+  const { loX, hiX } = range;
   const clamp = ([x, y]) => [Math.min(hiX, Math.max(loX, x)), y];
   return { points: points.map(clamp), noses: noses.map(clamp) };
 }
@@ -417,6 +434,7 @@ function computeFlightProfile(flight, cut, columns) {
 function flightZigzagPrimitives(flight, cut, columns) {
   if (!isLengthwiseCut(flight.isVertical, flight.acrossLo, flight.acrossHi, flight.runLo, flight.runHi, cut)) return [];
   const clamped = computeFlightZigzagPoints(flight, cut, columns);
+  if (clamped.length < 2) return []; // 面の描画範囲と交わらない（clampToDrawRangeが空）＝描かない
   return [{ type: 'polyline', points: clamped, weight: weightForRole(ElevationLineRole.SILHOUETTE) }];
 }
 
@@ -872,6 +890,57 @@ export function landingFramePrimitives(landing, cut, columns, unit, mitreX = nul
     }
   }
   return prims;
+}
+
+/**
+ * この切断（cut）の**断面線（下側の輪郭）**のうち、**階段が受け持つ部分**をFloorProfile
+ * （elevationFloorProfile.jsのtypedef。`[[localX, absZ]]`・x昇順・範囲外は端点値を保持）で返す。
+ * contributionがnull、または縦断する寄与が1つも無ければnull（＝この面の断面線に階段は現れない）。
+ *
+ * 対象は**cut.lineが縦断している**flight・landingだけ（`isLengthwiseCut`）——横切る（正面視）
+ * レーンはそもそも切っていない＝断面線ではない。`secondaryFlights`（往復間に壁が無いときだけ
+ * 見える隣レーンのささら）も**見えがかり**であって断面線ではないので含めない。正面視の踊り場も
+ * 含めない——その面の帯の床が既にlanding.zそのもので、二重に足しても輪郭は変わらないため。
+ * @param {{flights?:Flight[], landings?:Landing[], unit?:StairUnit}|null} contribution
+ * @param {import('./sectionTypes.js').SectionCut} cut
+ * @param {import('./sectionTypes.js').SectionColumn[]|null} [columns] - 省略時はx範囲の
+ *   クランプ無し（fullColumnsXRange(null)が±Infinityを返すためcomputeFlightProfileはそのまま呼べる）
+ * @returns {Array<[number,number]>|null}
+ */
+export function stairCutFloorProfile(contribution, cut, columns = null) {
+  if (!contribution) return null;
+  const parts = [];
+  for (const flight of contribution.flights ?? []) {
+    if (!isLengthwiseCut(flight.isVertical, flight.acrossLo, flight.acrossHi, flight.runLo, flight.runHi, cut)) continue;
+    const points = clipStringerToAnchors(
+      computeFlightProfile(flight, cut, columns).points, contribution.unit, flight);
+    if (!points || points.length < 2) continue;
+    // 図座標y=-z。`|| 0`は-0を避ける（baseZ=0の典型ケース。flightZBoundsと同じ理由）。
+    const pts = points.map(([x, y]) => [x, -y || 0]).sort((a, b) => a[0] - b[0]);
+    // **両端はアンカー（登り口FL・下り口FL）の高さで閉じる**——段鼻の出のぶん点列はx方向に
+    // 単調ではなく（段鼻が一段下の蹴込みより出る）、素直にx昇順へ並べると最も外側のxに来るのは
+    // 段鼻＝1リザーぶん高い点になる。FloorProfileは範囲外で端点値を保持する規約なので、
+    // そのままでは階段の外（踊り場の床断面線・その先の壁断面）まで1リザーぶん高く切ってしまう。
+    const baseZ = flight.baseZ, topZ = flight.baseZ + flight.steps * flight.riserMm;
+    const baseAtLoX = points[0][0] < points[points.length - 1][0]; // clipStringerToAnchors: 先頭=登り口FL
+    pts[0] = [pts[0][0], baseAtLoX ? baseZ : topZ];
+    pts[pts.length - 1] = [pts[pts.length - 1][0], baseAtLoX ? topZ : baseZ];
+    parts.push(pts);
+  }
+  // 踊り場の向き（走行軸）はstairPrimitivesForCutと同じ導出（flightsが空でも踊り場のside辺から取る）。
+  const stairIsVertical = contribution.flights?.[0]?.isVertical
+    ?? contribution.landings?.[0]?.frame?.edges?.find(e => e.kind === 'side')?.isVertical
+    ?? cut.line.isVertical;
+  for (const landing of contribution.landings ?? []) {
+    if (!isLengthwiseCut(stairIsVertical, landing.acrossLo, landing.acrossHi, landing.runLo, landing.runHi, cut)) continue;
+    const range = columns ? columnsXRangeOverlapping(columns, cut, landing.runLo, landing.runHi) : null;
+    const xs = range ? [range.loX, range.hiX] : [localXOf(cut, landing.runLo), localXOf(cut, landing.runHi)];
+    const loX = Math.min(...xs), hiX = Math.max(...xs);
+    if (hiX - loX <= GAP_EPS) continue;
+    parts.push([[loX, landing.z], [hiX, landing.z]]);
+  }
+  if (parts.length === 0) return null;
+  return parts.reduce((acc, p) => (acc ? mergeFloorProfiles(acc, p) : p), null);
 }
 
 /**

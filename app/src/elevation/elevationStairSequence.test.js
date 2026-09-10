@@ -10,8 +10,10 @@ import { letterOf } from './elevationFaces.js';
 import { stairFaceSequence, kneeWallCapContent, stairChDimChains } from './elevationStairSequence.js';
 import { switchbackCuts } from './section/cuts/switchbackCuts.js';
 import { buildFaceFigure } from './elevationFigure.js';
+import { buildStairBand } from './elevationStair.js';
 import { resolveSwitchbackParams } from './elevationStairSection.js';
 import { ElevationLineRole, weightForRole } from './elevationStyle.js';
+import { drawnFloorProfileZAt } from './elevationFloorProfile.js';
 
 function makeGraph(name = 'p1') {
   const plane = new Plane(name, 0, `${name}階`, 1, 1);
@@ -27,20 +29,35 @@ function makeGraph(name = 'p1') {
 // 表現（踊り場が基準床・その下は別室＝向こう側なので細破線）は「下に部屋がある場合」のものなので
 // （実機指摘2026-08「現時点の描画は下に部屋がある場合」）、既存テストの前提をフィクスチャ側で
 // 明示する。falseにすると「下に部屋がない」＝1FLが基準床の表現になる（専用テストで検証）。
-function makeSwitchbackFixture(graph, { withMidWall = false, midWallGraph = null, upperLandingOnly = false, withRoomUnder = true } = {}) {
+// entryGapMm（既定0＝従来構成）: 上り口側の壁を階段の足元からこの距離だけ離す。部屋だけを
+// y:4500..4500+entryGapMm ぶん伸ばし（**階段のセルは3つのまま**）、「階段の足元が面の内側に
+// ある」構成を作る。既定の3セル構成では階段の走行部が上り口側の壁までいっぱいに広がるため、
+// 階段の足元は常に面の端（またはその外）に来てしまい、「レーンの1FL線ははり出し側にだけ残る」
+// （flatLineSpanX.loを付けない）という規約を空スパンと区別できない。
+function makeSwitchbackFixture(graph, { withMidWall = false, midWallGraph = null, upperLandingOnly = false, withRoomUnder = true, entryGapMm = 0 } = {}) {
   const x0 = graph.addCenterLine(CenterLineType.VERTICAL, 0,    { labeled: false, discipline: Discipline.ARCH });
   const xm = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
   const x1 = graph.addCenterLine(CenterLineType.VERTICAL, 2000, { labeled: false, discipline: Discipline.ARCH });
   const y0 = graph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: false, discipline: Discipline.ARCH });
   const ym = graph.addCenterLine(CenterLineType.HORIZONTAL, 1500, { labeled: false, discipline: Discipline.ARCH });
   const y1 = graph.addCenterLine(CenterLineType.HORIZONTAL, 4500, { labeled: false, discipline: Discipline.ARCH });
+  // entryGapMm=0（既定）ではCLを1本も増やさない＝従来のフィクスチャとまったく同じグラフになる。
+  const y2 = entryGapMm > 0
+    ? graph.addCenterLine(CenterLineType.HORIZONTAL, 4500 + entryGapMm, { labeled: false, discipline: Discipline.ARCH })
+    : null;
 
   const landingKey = `${x0.id}:${y0.id}:${x1.id}:${ym.id}`;
   const outboundKey = `${x0.id}:${ym.id}:${xm.id}:${y1.id}`;
   const returnKey = `${xm.id}:${ym.id}:${x1.id}:${y1.id}`;
   const cells = new Set([landingKey, outboundKey, returnKey]);
 
-  const room = graph.addRoom(cells, '階段');
+  // 部屋は（entryGapMm>0なら）上り口側へ1行ぶん広い矩形。階段のcellsは3つのまま。
+  const roomCells = new Set(cells);
+  if (y2) {
+    roomCells.add(`${x0.id}:${y1.id}:${xm.id}:${y2.id}`);
+    roomCells.add(`${xm.id}:${y1.id}:${x1.id}:${y2.id}`);
+  }
+  const room = graph.addRoom(roomCells, '階段');
   generateRoomWallsFromOutline(graph, room);
 
   let midWall = null;
@@ -164,13 +181,10 @@ test('stairFaceSequence: seq1(W_entry)は往路(dashed)・復路(実線)の梯�
   assert.ok(ladderLines.some(l => l.dash === undefined), '復路(踊り場以上)は実線のはず');
 });
 
-// ---- WP-E5b書き換え: エンジン化により、seq1の壁断面は「往復間の壁があるかどうか」に関わらず
-// 一般規則（見えがかり壁のSILHOUETTE輪郭＋踊り場断面線=baseFloorZより下の降格）で描かれる。
-// 壁が無い（往路・復路の間に実壁が無い）このfixtureでは、見えがかりで見える先の壁
-// （見返り先の実壁）の輪郭が面全幅の縦線として現れ、踊り場（baseFloorZ=landingAbs）より下は
-// DETAIL破線へ降格する——旧実装が個別にpush していた「両端x=0/runのdashed縦線」に相当する
-// 保存意味論（「踊り場より下の壁断面=細破線」）を、一般規則の降格結果として確認する ----
-test('stairFaceSequence: seq1(W_entry・壁無し)は両端(x=0/run)の壁輪郭縦線が踊り場(landingAbs)より下でDETAIL破線に降格する', () => {
+// ---- 断面線の外は描画しない（ユーザー明示指示2026-09）: 階段下に部屋があるとき、この帯の床は
+// 踊り場（landingAbs）で、そこより下の**壁の断面・見えがかり**は描かない（旧・細破線への降格は
+// 廃止）。踊り場より上は従来どおりSILHOUETTE実線のまま ----
+test('stairFaceSequence: seq1(W_entry・壁無し)は両端(x=0/run)の壁輪郭縦線が踊り場(landingAbs)より下に無い', () => {
   const graph = makeGraph();
   const { room, stair } = makeSwitchbackFixture(graph);
   const faces = composeRoomFaces(room, graph);
@@ -179,27 +193,24 @@ test('stairFaceSequence: seq1(W_entry・壁無し)は両端(x=0/run)の壁輪郭
   const seq1 = entries.find(e => e.seqNo === '1');
   const n1 = 6, riser = OPTS.floorHeight / 12;
   const landingAbs = n1 * riser;
-  const detailWeight = weightForRole(ElevationLineRole.DETAIL);
   const silhouetteWeight = weightForRole(ElevationLineRole.SILHOUETTE);
 
-  // 踊り場より下(y:0..-landingAbs)の両端(x=0/run)は破線・DETAIL（-0との対消滅を避けるため
-  // Math.abs(x1-0)の近さで比較する）。
-  const belowDashedXs = seq1.content
-    .filter(p => p.type === 'line' && p.x1 === p.x2 && p.dash === 'dashed' && p.weight === detailWeight &&
-      Math.abs(p.y1 - 0) < 1e-9 && Math.abs(p.y2 - (-landingAbs)) < 1e-9)
-    .map(l => l.x1).sort((a, b) => a - b);
-  assert.equal(belowDashedXs.length, 2, '両端(x=0とx=wEntry.run)の踊り場より下は破線のはず');
-  assert.ok(Math.abs(belowDashedXs[0] - 0) < 1e-6 && Math.abs(belowDashedXs[1] - seq1.face.run) < 1e-6,
-    `踊り場より下の破線は両端(0, ${seq1.face.run})にあるはず（実際:${belowDashedXs}）`);
-
-  // 踊り場より上(y:-landingAbs..-chLowerMm)の両端は通常のSILHOUETTE(実線)のまま降格しない。
+  // 踊り場より上(y:-landingAbs..-chLowerMm)の両端は通常のSILHOUETTE(実線)。
   const aboveSilXs = seq1.content
     .filter(p => p.type === 'line' && p.x1 === p.x2 && p.dash === undefined && p.weight === silhouetteWeight &&
       Math.abs(p.y1 - (-landingAbs)) < 1e-9 && Math.abs(p.y2 - (-OPTS.chLowerMm)) < 1e-9)
     .map(l => l.x1).sort((a, b) => a - b);
-  assert.equal(aboveSilXs.length, 2, '両端の踊り場より上はSILHOUETTE実線のままのはず');
+  assert.equal(aboveSilXs.length, 2, '両端の踊り場より上はSILHOUETTE実線のはず');
   assert.ok(Math.abs(aboveSilXs[0] - 0) < 1e-6 && Math.abs(aboveSilXs[1] - seq1.face.run) < 1e-6,
     `踊り場より上のSILHOUETTEは両端(0, ${seq1.face.run})にあるはず（実際:${aboveSilXs}）`);
+
+  // 同じxに、踊り場より下へ伸びる壁の縁は無い（階段自身の見えがかり＝ささらの端面・破線梯子は
+  // 別担当で、そちらは踊り場より下も描く）。
+  for (const x of aboveSilXs) {
+    const below = seq1.content.find(p => p.type === 'line' && p.x1 === p.x2 &&
+      Math.abs(p.x1 - x) < 1e-6 && p.weight === silhouetteWeight && -p.y1 < landingAbs - 1e-6);
+    assert.ok(!below, `x=${x}の踊り場より下に壁の縁が描かれているはず無い（${JSON.stringify(below)}）`);
+  }
 });
 
 // ---- WP-E5b書き換え: 一般規則（emitColumnsの'wall'/'cut' band。§5.6）による厚みの2縁を、
@@ -217,7 +228,6 @@ test('stairFaceSequence: seq1(wall実在時)は厚みぶん離れた2本の壁�
   const seq1 = entries.find(e => e.seqNo === '1');
   const n1 = 6, riser = OPTS.floorHeight / 12;
   const landingAbs = n1 * riser;
-  const detailWeight = weightForRole(ElevationLineRole.DETAIL);
   const cutWeight = weightForRole(ElevationLineRole.CUT);
   const silhouetteWeight = weightForRole(ElevationLineRole.SILHOUETTE);
 
@@ -235,14 +245,18 @@ test('stairFaceSequence: seq1(wall実在時)は厚みぶん離れた2本の壁�
   }
   assert.ok(aboveXs, `踊り場〜1F天井にmaterialRange幅(50)ちょうど離れた壁の2縁があるはず（候補:${candidateXs}）`);
 
-  // 踊り場より下(0..landingAbs)は同じ2本のxがDETAIL破線に降格する。
-  const belowDashedXs = seq1.content
-    .filter(p => p.type === 'line' && p.x1 === p.x2 && p.dash === 'dashed' && p.weight === detailWeight &&
-      Math.abs(p.y1 - 0) < 1e-9 && Math.abs(p.y2 - (-landingAbs)) < 1e-9)
+  // 踊り場より下(0..landingAbs)には同じ2本のxの壁の縁を描かない（断面線の外）。
+  // QA修正2026-09: 除外条件は「太さがDETAILでない」（＝階段自身の見えがかりを太さで避ける）
+  // ではなく`__o`の有無で行う——`__o`（cutEdgeLo/Hi・recessLo/Hi）は断面エンジンが壁の縁に
+  // だけ付けるマーカー（sectionEmit.js）で、階段自身の見えがかり（ささらの端面・破線梯子）に
+  // は付かない。太さで避けていると、壁の縁がDETAILへ降格した場合まで見逃していた。
+  const belowXs = seq1.content
+    .filter(p => p.type === 'line' && p.x1 === p.x2 && p.__o !== undefined &&
+      Math.min(-p.y1, -p.y2) < landingAbs - 1e-6)
     .map(p => p.x1);
   for (const x of aboveXs) {
-    assert.ok(belowDashedXs.some(bx => Math.abs(bx - x) < 1e-6),
-      `x=${x}の踊り場より下はDETAIL破線のはず`);
+    assert.ok(!belowXs.some(bx => Math.abs(bx - x) < 1e-6),
+      `x=${x}の踊り場より下に壁の縁が描かれているはず無い`);
   }
 });
 
@@ -530,14 +544,44 @@ test('stairFaceSequence: seq2は踊り場床断面線(太線)を含み、面端�
     Math.abs(p.y1 - (-landingAbs)) < 1e-9);
   assert.ok(landingFloorLine, '踊り場床断面線(太線・水平・-landingAbs)が見つからない');
 
-  // 面端(x=0/run)には見えがかり壁の輪郭(縦線)がある（1F天井=chLowerMmまで）。
+  // 面端(x=0/run)には見えがかり壁の輪郭(縦線)がある（1F天井=chLowerMmまで）。**下端はその位置の
+  // 断面線**（ユーザー明示指示2026-09「断面線の外は描画しない」）——踊り場側(x=run)は踊り場
+  // (landingAbs)から、上り口側(x=0)はそこに掛かる階段断面（このfixtureでは最下段の蹴込みが
+  // 面の端より外＝壁芯側から始まるため、面端では既に1FLより少し上）から立ち上がる。
+  // 期待値は輪郭そのもの（entry.floorProfile。contentのクリップと同じ単一情報源）から取る。
   for (const x of [0, seq2.face.run]) {
+    const zBottom = drawnFloorProfileZAt(seq2.floorProfile, x);
     const edge = seq2.content.find(p =>
-      p.type === 'line' && p.x1 === x && p.x2 === x &&
+      p.type === 'line' && Math.abs(p.x1 - x) < 1e-6 && Math.abs(p.x2 - x) < 1e-6 &&
       (p.weight === cutWeight || p.weight === silhouetteWeight) &&
-      Math.abs(p.y1 - 0) < 1e-6 && Math.abs(p.y2 - (-OPTS.chLowerMm)) < 1e-6);
-    assert.ok(edge, `面端(x=${x})に壁の縁(0..-chLowerMm)が見つからない`);
+      Math.abs(p.y1 - (-zBottom)) < 1e-6 && Math.abs(p.y2 - (-OPTS.chLowerMm)) < 1e-6);
+    assert.ok(edge, `面端(x=${x})に壁の縁(${zBottom}..-chLowerMm)が見つからない`);
   }
+  // 踊り場側の端は踊り場の高さそのもの（輪郭が壊れて別の高さになっていないことの独立確認）。
+  assert.equal(drawnFloorProfileZAt(seq2.floorProfile, seq2.face.run), landingAbs);
+
+  // x=0側も独立に係留する（上のzBottomは製品コードと同じseq2.floorProfileから引いているため、
+  // それだけでは輪郭がまるごとズレても気付けない）。輪郭とは別の情報源＝contentの階段断面
+  // ジグザグから同じ値を組み立てる。ジグザグの点列はx昇順に並べ替えると輪郭と同じ折れ線に
+  // なるが、**足元側の頭は面の範囲へクランプされている**（sectionStair.jsの
+  // computeFlightZigzagPoints）ためx=0を直接引くと同じxに2点＝値が定まらない。ジグザグは
+  // (踏面ピッチ, 蹴上)ぶん平行移動すると自分自身に重なるので、1ピッチ右の値から蹴上1つを
+  // 引いてx=0の値にする。
+  const zigzag = seq2.content.find(p => p.type === 'polyline' && p.weight === silhouetteWeight);
+  assert.ok(zigzag, 'seq2に階段断面のジグザグ(polyline)があるはず');
+  const sorted = zigzag.points.map(([x, y]) => [x, -y]).sort((a, b) => a[0] - b[0]);
+  const pitch = sorted[4][0] - sorted[2][0]; // 段2つ先の対応点までのx＝踏面ピッチ
+  const zAtSorted = (pts, x) => {
+    for (let i = 0; i + 1 < pts.length; i++) {
+      const [x1, z1] = pts[i], [x2, z2] = pts[i + 1];
+      if (x >= x1 && x <= x2) return x2 === x1 ? z2 : z1 + ((x - x1) / (x2 - x1)) * (z2 - z1);
+    }
+    return NaN;
+  };
+  const zZigzagAtX0 = zAtSorted(sorted, pitch) - riser;
+  assert.ok(Math.abs(drawnFloorProfileZAt(seq2.floorProfile, 0) - zZigzagAtX0) < 1e-6,
+    `x=0の輪郭(${drawnFloorProfileZAt(seq2.floorProfile, 0)})は階段断面のジグザグから求めた値` +
+    `(${zZigzagAtX0})と一致するはず（ピッチ:${pitch}・蹴上:${riser}）`);
 });
 
 // ---- seq2/2.5は断面プロファイル(polyline)を含み、鋼構造は踏面がCUTでその向こうにささらが重なる ----
@@ -1019,28 +1063,78 @@ test('stairFaceSequence: seq2/seq4のレーン区間床線(FL)は「階段断面
 
   // seq2は上り口が左（localX小）・seq4はその鏡像で上り口が右。1FL線は上り口の外側
   // （壁のない端部のはり出し）にだけ残り、レーンの中＝階段断面の下へは入らない。
+  // 終点は**ジグザグの足元x（断面ジグザグが1FLに接する点）**——旧テストは「上り口端＋段鼻の出」
+  // という算術で期待値を書いていたが、これは「階段の足元がちょうど面の端にある」ことを暗に
+  // 仮定した式で、このfixtureのように最下段の蹴込みが面の端より外（壁芯側）から始まる構成では
+  // 成り立たない（輪郭方式への移行で判明。実機「6」D1では従来どおり上り口端＋段鼻の出になる）。
   for (const seqNo of ['2', '4']) {
     const entry = entries.find(e => e.seqNo === seqNo);
     const laneSegs = entry.floorSegments.filter(s => s.floorDeltaMm === 0);
     assert.ok(laneSegs.length > 0, `seq${seqNo}にfloorDeltaMm:0(レーン)区間があるはず`);
-    const nosing = stair.nosing ?? 0;
     for (const seg of laneSegs) {
       assert.ok(seg.flatLineSpanX,
         `seq${seqNo}のレーン区間はflatLineSpanXで切り詰められるはず（階段断面が境界を表すため）`);
     }
+    // ジグザグ（断面プロファイルのpolyline）がレーンの床(z=0)に接するx。
+    const zigzag = entry.content.find(p =>
+      p.type === 'polyline' && p.weight === weightForRole(ElevationLineRole.SILHOUETTE));
+    const footX = zigzag.points.reduce((a, b) => (b[1] > a[1] ? b : a))[0]; // yが最大＝zが最小＝足元
     if (seqNo === '2') {
       const first = laneSegs[0];
-      assert.equal(first.flatLineSpanX.hi, first.loX + nosing,
-        'seq2のレーン床線は上り口端＋段鼻の出（ジグザグが1FLに接するx）で終わるはず');
-      assert.equal(first.flatLineSpanX.lo, undefined, 'seq2は左側（はり出し側）を切らないはず');
+      assert.ok(first.flatLineSpanX.hi <= footX + 1e-6,
+        `seq2のレーン床線はジグザグの足元x(${footX})より先へ伸びてはいけない（実際:${first.flatLineSpanX.hi}）`);
     } else {
       const last = laneSegs[laneSegs.length - 1];
-      assert.equal(last.flatLineSpanX.lo, entry.face.run - nosing,
-        'seq4のレーン床線は上り口端−段鼻の出（ジグザグが1FLに接するx）から始まるはず');
-      assert.equal(last.flatLineSpanX.hi, undefined, 'seq4は右側（はり出し側）を切らないはず');
+      assert.ok(last.flatLineSpanX.lo >= footX - 1e-6,
+        `seq4のレーン床線はジグザグの足元x(${footX})より手前から始まってはいけない（実際:${last.flatLineSpanX.lo}）`);
     }
     const landingSeg = entry.floorSegments.find(s => s.floorDeltaMm > 0);
     assert.ok(!landingSeg.flatLineSpanX, `seq${seqNo}の踊り場区間は通常どおり床線を描くはず`);
+  }
+});
+
+// ---- D1の番人（QA修正2026-09）: 上のテストは片側の不等式しか見ておらず、可視範囲が**空**
+// （flatLineSpanX={lo:hiX, hi:loX}）でも緑になってしまう——上の2つのフィクスチャは階段の足元が
+// 面の端（またはその外）にあり、1FL線が残る「はり出し」がそもそも存在しないため。
+// entryGapMmで上り口側の壁を階段の足元から離し、**はり出しが実在する**構成で
+// 「はり出し側は切らない（lo/hiの片方がundefined）」「可視範囲は空でない」「終点は
+// ジグザグの足元x」の3点を固定する（ユーザー実機「6」D1「1FLのはり出しは残す」）。 ----
+test('stairFaceSequence: 階段の足元が面の内側にあるとき、seq2のレーン1FL線ははり出し側に残る（D1）', () => {
+  const graph = makeGraph();
+  const { room, stair } = makeSwitchbackFixture(graph, { withRoomUnder: true, entryGapMm: 1000 });
+  const faces = composeRoomFaces(room, graph);
+  const entries = stairFaceSequence(stair, faces, graph, OPTS);
+
+  for (const seqNo of ['2', '4']) {
+    const entry = entries.find(e => e.seqNo === seqNo);
+    const laneSegs = entry.floorSegments.filter(s => s.floorDeltaMm === 0);
+    assert.ok(laneSegs.length > 0, `seq${seqNo}にfloorDeltaMm:0(レーン)区間があるはず`);
+    // ジグザグ（階段断面のpolyline）の最下点x＝階段の足元。ここが面の内側にあることが前提。
+    const zigzag = entry.content.find(p =>
+      p.type === 'polyline' && p.weight === weightForRole(ElevationLineRole.SILHOUETTE));
+    const footX = zigzag.points.reduce((a, b) => (b[1] > a[1] ? b : a))[0];
+
+    // seq2は上り口が左（＝はり出しはloX側）、seq4はその鏡像。
+    const seg = seqNo === '2' ? laneSegs[0] : laneSegs[laneSegs.length - 1];
+    const span = seg.flatLineSpanX;
+    assert.ok(span, `seq${seqNo}のレーン区間はflatLineSpanXで切り詰められるはず`);
+    if (seqNo === '2') {
+      assert.ok(footX > seg.loX + 1e-6 && footX < seg.hiX - 1e-6,
+        `前提: seq2の階段の足元(${footX})は区間(${seg.loX}..${seg.hiX})の内側にあるはず`);
+      assert.equal(span.lo, undefined, 'はり出し側(loX側)は切らない＝loは付かないはず');
+      assert.ok(span.hi > seg.loX + 1e-6,
+        `可視範囲が空（{lo:hiX,hi:loX}）になっている（実際:${JSON.stringify(span)}）`);
+      assert.ok(Math.abs(span.hi - footX) < 1e-6,
+        `1FL線の終点(${span.hi})は階段断面の足元x(${footX})と一致するはず`);
+    } else {
+      assert.ok(footX > seg.loX + 1e-6 && footX < seg.hiX - 1e-6,
+        `前提: seq4の階段の足元(${footX})は区間(${seg.loX}..${seg.hiX})の内側にあるはず`);
+      assert.equal(span.hi, undefined, 'はり出し側(hiX側)は切らない＝hiは付かないはず');
+      assert.ok(span.lo < seg.hiX - 1e-6,
+        `可視範囲が空（{lo:hiX,hi:loX}）になっている（実際:${JSON.stringify(span)}）`);
+      assert.ok(Math.abs(span.lo - footX) < 1e-6,
+        `1FL線の始点(${span.lo})は階段断面の足元x(${footX})と一致するはず`);
+    }
   }
 });
 
@@ -1710,4 +1804,278 @@ test('【明示指示】stairFaceSequence: seq2の復路ささら見えがかり
   const frameBot = landingY + 300 - 60; // 踊り場床+巾木-せい = 桁枠の下端
   assert.ok(Math.max(...secondary.points.map(q => q[1])) < frameBot - 1,
     '復路のささらが踊り場桁枠の下端まで達してはいけない');
+});
+
+
+// ---- 断面線の外は描画しない（ユーザー明示指示2026-09「展開図では、断面線の外は描画しない」
+// 「階段下に部屋がある場合、断面下は描画しない」「階段下に部屋がない場合、…階段下の設置階の
+// 床断面…まで描画」）。分岐は階段下部屋の有無ひとつ ----
+test('stairFaceSequence: 階段下に部屋があると、壁の縦線はどの面でもその位置の床断面線より下に無い', () => {
+  const graph = makeGraph();
+  const { room, stair } = makeSwitchbackFixture(graph); // 既定 withRoomUnder:true
+  const entries = stairFaceSequence(stair, composeRoomFaces(room, graph), graph, OPTS);
+  const detailWeight = weightForRole(ElevationLineRole.DETAIL);
+
+  for (const e of entries) {
+    const floorAt = (x) => {
+      const segs = e.floorSegments;
+      const hit = segs.find(s => x >= s.loX - 1 && x <= s.hiX + 1);
+      return (hit ?? (x < segs[0].loX ? segs[0] : segs[segs.length - 1])).floorDeltaMm ?? 0;
+    };
+    for (const p of e.content) {
+      if (p.type !== 'line' || Math.abs(p.x1 - p.x2) > 1e-6) continue;
+      if (p.weight === detailWeight) continue; // 階段自身の見えがかり（ささらの端面・破線梯子）は別担当
+      const floor = floorAt(p.x1);
+      assert.ok(Math.min(-p.y1, -p.y2) >= floor - 1e-6,
+        `seq${e.seqNo}: x=${p.x1}の縦線が床断面(${floor})より下へ伸びている（${-p.y1}..${-p.y2}）`);
+    }
+  }
+});
+
+test('【失敗系】stairFaceSequence: 階段下に部屋が無ければ壁の縦線は設置階FL(0)まで描く（クリップしない）', () => {
+  const graph = makeGraph();
+  const { room, stair } = makeSwitchbackFixture(graph, { withRoomUnder: false });
+  const entries = stairFaceSequence(stair, composeRoomFaces(room, graph), graph, OPTS);
+
+  for (const e of entries) {
+    assert.ok(e.floorSegments.every(s => (s.floorDeltaMm ?? 0) === 0),
+      `seq${e.seqNo}: 階段下に部屋が無ければ帯の床は設置階FL(0)のはず`);
+    const toFloor = e.content.some(p => p.type === 'line' && Math.abs(p.x1 - p.x2) < 1e-6 &&
+      Math.abs(Math.min(-p.y1, -p.y2)) < 1e-6);
+    assert.ok(toFloor, `seq${e.seqNo}: 設置階FL(0)まで届く縦線があるはず`);
+  }
+});
+
+
+// ---- 断面線は折れ線（ユーザー実機指摘2026-09「6」D2）: 2FL断面→復路の階段断面→踊り場断面→
+// 壁断面で閉じた輪郭ができ、その下は描かない。踊り場の床線も階段断面と取り合う点で終わる ----
+test('stairFaceSequence: seq5の踊り場の床線は階段断面（ジグザグ）の最下点で終わる（flatLineSpanX）', () => {
+  const graph = makeGraph();
+  const { room, stair } = makeSwitchbackFixture(graph);
+  const entries = stairFaceSequence(stair, composeRoomFaces(room, graph), graph, OPTS);
+  const seq5 = entries.find(e => e.seqNo === '5');
+
+  // 復路の断面ジグザグ（CUT/SILHOUETTEのpolyline）の最下点＝踊り場側の段鼻。座標は決め打ちせず
+  // 出力から取る（面の幾何が変わっても「断面線と床線が同じ点で出会う」という関係だけを見る）。
+  const zigzag = seq5.content.find(p => p.type === 'polyline' && p.points?.length > 1 &&
+    (p.weight === weightForRole(ElevationLineRole.CUT) || p.weight === weightForRole(ElevationLineRole.SILHOUETTE)));
+  assert.ok(zigzag, 'seq5に復路の断面ジグザグがあるはず');
+  const footX = zigzag.points.reduce((a, b) => (b[1] > a[1] ? b : a))[0]; // yが最大＝zが最小＝最下点
+
+  const landingSeg = seq5.floorSegments.find(s => footX >= s.loX - 1e-6 && footX <= s.hiX + 1e-6)
+    ?? seq5.floorSegments[0];
+  assert.ok(landingSeg.flatLineSpanX, 'seq5の踊り場区間はflatLineSpanXで切り詰められるはず');
+  assert.ok(Math.abs(landingSeg.flatLineSpanX.lo - footX) < 1e-6,
+    `踊り場の床線の始点はジグザグの最下点x(${footX})のはず（実際:${landingSeg.flatLineSpanX.lo}）`);
+});
+
+test('stairFaceSequence: seq5は断面線（ジグザグ）より下に壁contentを描かず、階段自身の断面は残る', () => {
+  const graph = makeGraph();
+  const { room, stair } = makeSwitchbackFixture(graph);
+  const entries = stairFaceSequence(stair, composeRoomFaces(room, graph), graph, OPTS);
+  const seq5 = entries.find(e => e.seqNo === '5');
+  const landingAbs = 6 * (OPTS.floorHeight / 12); // n1=6段・riser=階高/12
+
+  // 壁の断面・見えがかり（DETAIL＝階段自身の見えがかり以外）の縦線は、その位置の**断面線**より
+  // 下に無い——踊り場の高さではなく輪郭で判定する（seq5の輪郭は踊り場から2FLへ上る階段断面で、
+  // 上り口側では踊り場よりずっと高い。クリップを外すと面端の縦線が踊り場まで降りてくる）。
+  const below = seq5.content.filter(p =>
+    p.type === 'line' && Math.abs(p.x1 - p.x2) < 1e-6 &&
+    p.weight !== weightForRole(ElevationLineRole.DETAIL) &&
+    Math.min(-p.y1, -p.y2) < drawnFloorProfileZAt(seq5.floorProfile, p.x1) - 1e-6);
+  assert.equal(below.length, 0,
+    `断面線より下の壁の縦線は描かないはず（実際:${JSON.stringify(below)}）`);
+  // 上り口側の面端の縦線は、踊り場ではなく階段断面（＝踊り場より高い位置）から立ち上がる。
+  const atX0 = seq5.content.find(p => p.type === 'line' &&
+    Math.abs(p.x1) < 1e-6 && Math.abs(p.x2) < 1e-6 && p.weight !== weightForRole(ElevationLineRole.DETAIL));
+  assert.ok(atX0, 'seq5の上り口側(x=0)に壁の縦線があるはず');
+  assert.ok(Math.min(-atX0.y1, -atX0.y2) > landingAbs + 1e-6,
+    `x=0の壁の縦線の下端は踊り場(${landingAbs})より上のはず（実際:${Math.min(-atX0.y1, -atX0.y2)}）`);
+
+  // 階段自身の断面（ジグザグ）は踊り場から2FLまで残る（クリップの巻き添えにしない）。
+  const zigzag = seq5.content.find(p => p.type === 'polyline' && p.points?.length > 1);
+  assert.ok(zigzag, 'seq5の階段断面（ジグザグ）は残るはず');
+  const zs = zigzag.points.map(([, y]) => -y);
+  assert.ok(Math.abs(Math.min(...zs) - landingAbs) < 1e-6, `ジグザグの下端は踊り場(${landingAbs})のはず`);
+  assert.ok(Math.abs(Math.max(...zs) - OPTS.floorHeight) < 1e-6, 'ジグザグの上端は2FLのはず');
+});
+
+// ---- ユーザー裁定2026-09「「6」C 左端X3外側の2階腰壁断面は、2FL断面まで下りて外側に向かって
+// 張り出して終了、が正解」: はり出しの外端に**切断壁**（上階の壁の断面）が立つ端では、上階FLの
+// 断面線をその壁の**向こう側の面**から外へwallLessEndExtendModelMmぶん張り出して終える
+// （壁の下＝面の端〜向こう側の面には引かない）。判定材料はcontentの列で、
+// `section/sectionContent.js`の`upperFloorCutWallEndsOf`が唯一の情報源。 ----
+
+// 上階（2F）に「面の端に立つ切断壁」と「その通りに続く壁」を作る:
+//   ・2Fの部屋は階段室と同じ矩形（x:[0,2000] y:[0,4500]）。
+//   ・cornerFarHalf … 面の端のCL(x=2000)の**外側**半分の壁（隣室ぶん）。これで隅の壁の
+//     材が1942.5..2057.5になり、向こう側の面が2057.5になる。
+//   ・planeSpan … 面の通り(y=4500)の2F壁を、その隅の壁の向こう側の面(2057.5)まで通す。
+//     これではり出し量（planeOverhangForFace）が隅の壁厚ぶん＝115になる。
+//   ・beyondFeature … CL(x=2000)の**向こう側**（x:[2000,4000]）の2F部屋のfeature。
+//     実データ「6」C（X3の東に2階の実部屋がある）に合わせた既定は null＝実Room。
+//     RoomFeature.VOID にすると「吹抜けが続く先に腰壁だけが立つ」構成になり、
+//     上階FL断面線のgate（elevationFaces.jsのupperFloorEndsOf）がその端を落とす。
+//     壁は生成しない——gateが見るのはセルの所有Roomだけで、壁を足すとはり出し量が変わる。
+function makeUpperForOverhang(graph,
+  { cornerFarHalf = true, planeSpan = true, beyondFeature = null } = {}) {
+  const cl = (t, v) => graph.addCenterLine(t, v, { labeled: false, discipline: Discipline.ARCH });
+  const ux0 = cl(CenterLineType.VERTICAL, 0), ux1 = cl(CenterLineType.VERTICAL, 2000);
+  const uy0 = cl(CenterLineType.HORIZONTAL, 0), uy1 = cl(CenterLineType.HORIZONTAL, 4500);
+  const roomUp = graph.addRoom(new Set([`${ux0.id}:${uy0.id}:${ux1.id}:${uy1.id}`]), '2F');
+  generateRoomWallsFromOutline(graph, roomUp);
+  const ux2 = cl(CenterLineType.VERTICAL, 4000);
+  const beyond = graph.addRoom(new Set([`${ux1.id}:${uy0.id}:${ux2.id}:${uy1.id}`]), '2F隣室');
+  if (beyondFeature) beyond.setFeature(beyondFeature);
+  if (cornerFarHalf) graph.addWall(ux1, 57.5, true, uy0, 0, uy1, 0, {});
+  if (planeSpan) {
+    for (const w of [...graph.walls]) {
+      if (w.isVertical || Math.abs(w.axisCL.effectiveValue - 4500) > 1) continue;
+      if (w.coord2 > w.coord1) w.endOffset = 57.5; else w.startOffset = 57.5;
+    }
+  }
+  return roomUp;
+}
+
+// seq1（踊り場前縁の見返り＝面C）の図を組んで、上階FL(=floorHeight)の水平線だけを返す。
+// ctxは**elevationStair.jsのfaceOverrideと同じ集合**を渡す（upperFloorEndsを落とすと
+// 本番では出ない線がテストでだけ出る）。
+function seq1UpperFloorLines(graph, upperGraph, { room, stair }) {
+  const e = stairFaceSequence(stair, composeRoomFaces(room, graph), graph,
+    { ...OPTS, upperGraph, wallLessEndExtendModelMm: 150 }).find(x => x.seqNo === '1');
+  const prims = buildFaceFigure(e.face, {
+    graph, project: { openingNumberIndex: new Map() }, room, ceilingHeight: OPTS.chLowerMm,
+    materialMap: null, gridCLs: [], wallLessEndExtendModelMm: 150,
+    floorSegments: e.floorSegments, floorProfile: e.floorProfile, ceilingProfile: e.ceilingProfile,
+    upperOverhang: e.upperOverhang, upperFloorZ: e.upperFloorZ,
+    upperFloorCutEnds: e.upperFloorCutEnds, upperFloorEnds: e.upperFloorEnds,
+    skipBaseboard: true, skipWallLabel: true,
+  });
+  return { entry: e, run: e.face.run,
+    lines: prims.filter(p => p.type === 'line'
+      && p.y1 === -OPTS.floorHeight && p.y2 === -OPTS.floorHeight) };
+}
+
+test('stairFaceSequence: はり出し外端に上階の切断壁が立つseq1は、壁の向こう側の面から外へ2FL線を張り出す', () => {
+  const graph = makeGraph();
+  const fixture = makeSwitchbackFixture(graph);
+  const upperGraph = makeGraph('p2');
+  makeUpperForOverhang(upperGraph);
+
+  const { entry, run, lines } = seq1UpperFloorLines(graph, upperGraph, fixture);
+  assert.deepEqual(entry.upperOverhang, { lo: 0, hi: 115 },
+    '隅の壁厚ぶん（115）だけ上階の平面が面の端より外へ続く');
+  assert.deepEqual(entry.upperFloorCutEnds, { lo: null, hi: run + 115 },
+    'はり出し外端(run+115)に切断壁が立つ＝その向こう側の面が2FL線の起点');
+  assert.equal(lines.length, 1, '2FL線は切断壁の立つ側だけ1本');
+  assert.deepEqual([lines[0].x1, lines[0].x2], [run + 115, run + 115 + 150],
+    '壁の向こう側の面から外へwallLessEndExtendModelMm(150)ぶん');
+  assert.equal(lines[0].weight, weightForRole(ElevationLineRole.CUT), '床の断面線はCUT（太線）');
+  assert.ok(!lines.some(p => Math.min(p.x1, p.x2) < run + 115 - 1e-6),
+    '壁の下（面の端〜向こう側の面）には引かない＝切断壁の断面の中を通さない');
+});
+
+test('【失敗系】stairFaceSequence: はり出し外端の壁が切断されない構成では2FL線は従来どおりはり出しの中で終わる', () => {
+  const graph = makeGraph();
+  const fixture = makeSwitchbackFixture(graph);
+  const upperGraph = makeGraph('p2');
+  // 隅のCLの外側半分の壁を置かない＝面の端に立つ壁の材が仮想断面の外に届かず、外端の列は
+  // 切断壁にならない（実データ「6」D2の「外端は全高の見えがかり壁」に相当する側）。
+  makeUpperForOverhang(upperGraph, { cornerFarHalf: false });
+
+  const { entry, lines } = seq1UpperFloorLines(graph, upperGraph, fixture);
+  assert.deepEqual(entry.upperOverhang, { lo: 0, hi: 115 }, 'はり出し自体は同じ');
+  assert.deepEqual(entry.upperFloorCutEnds, { lo: null, hi: null }, '外端に切断壁は立たない');
+  // 切断壁が無ければ判断は従来どおり断面線（floorProfile）任せ——seq1の断面線は踊り場の高さで
+  // 平らなので上階FLに届かず、1本も引かない（＝実データ「6」Cの修正前の姿）。
+  assert.equal(lines.length, 0,
+    '外端に切断壁が立たない端では、断面線が上階FLに届かないかぎり引かない');
+});
+
+test('【失敗系】stairFaceSequence: 上階の平面が面の端より外へ続かなければ2FL線も切断壁の判定も出ない', () => {
+  const graph = makeGraph();
+  const fixture = makeSwitchbackFixture(graph);
+  const upperGraph = makeGraph('p2');
+  makeUpperForOverhang(upperGraph, { planeSpan: false });
+
+  const { entry, lines } = seq1UpperFloorLines(graph, upperGraph, fixture);
+  assert.equal(entry.upperOverhang, undefined, 'はり出しが無い＝2FL線を引く区間そのものが無い');
+  assert.equal(entry.upperFloorCutEnds, undefined);
+  assert.equal(entry.upperFloorEnds, undefined, 'はり出しが無い端はgateも問わない');
+  assert.equal(lines.length, 0);
+});
+
+// ---- 上階FL断面線のgate（`elevationFaces.js`の`upperFloorEndsOf`）を階段帯にも通す:
+// はり出し量は上階の**壁**の伸びしか見ないため、上階が吹抜けのまま境界に腰壁だけが立つ端では
+// 床の無い位置に2FL線が出る。上部吹抜けを持つ部屋帯と**同じ1つの関数**で落とす。 ----
+
+test('stairFaceSequence: はり出しの先が上階の吹抜け（床が無い）なら、外端に切断壁が立っても2FL線を引かない', () => {
+  const graph = makeGraph();
+  const fixture = makeSwitchbackFixture(graph);
+  const upperGraph = makeGraph('p2');
+  // CL(x=2000)の向こうはVOID＝床が無く、境界には腰壁（cornerFarHalf）だけが立つ構成。
+  makeUpperForOverhang(upperGraph, { beyondFeature: RoomFeature.VOID });
+
+  const { entry, run, lines } = seq1UpperFloorLines(graph, upperGraph, fixture);
+  assert.deepEqual(entry.upperOverhang, { lo: 0, hi: 115 },
+    'はり出し自体（天井断面線・壁エッジ）は実部屋のときと同じ＝上階の壁は実在する');
+  assert.deepEqual(entry.upperFloorCutEnds, { lo: null, hi: run + 115 },
+    '切断壁の判定も同じ＝落とすのはgateであって列の解釈ではない');
+  assert.equal(entry.upperFloorEnds?.hi, false, 'はり出しの向こうに上階の床が無い端');
+  assert.equal(lines.length, 0, '床の無い位置に2FL線を引かない');
+});
+
+test('【失敗系】stairFaceSequence: はり出しの先が上階の実部屋（feature未設定）なら2FL線は従来どおり出る', () => {
+  const graph = makeGraph();
+  const fixture = makeSwitchbackFixture(graph);
+  const upperGraph = makeGraph('p2');
+  makeUpperForOverhang(upperGraph); // beyondFeature=null＝実Room（実データ「6」Cと同じ）
+
+  const { entry, run, lines } = seq1UpperFloorLines(graph, upperGraph, fixture);
+  assert.equal(entry.upperFloorEnds?.hi, true, 'はり出しの向こうに上階の実部屋がある端');
+  assert.equal(lines.length, 1, 'gateは通り、2FL線は1本出る');
+  assert.deepEqual([lines[0].x1, lines[0].x2], [run + 115, run + 115 + 150],
+    '壁の向こう側の面から外へwallLessEndExtendModelMm(150)ぶん');
+});
+
+// 帯まるごと（buildStairBand→faceOverride→buildFaceFigure）でも同じ結果になるか——上の3件は
+// buildFaceFigureを直接呼ぶため、elevationStair.jsのfaceOverrideの配線そのものは通らない。
+// 2FL(y=-floorHeight)の太線だけを取り出して2構成を差分で比べる（帯のxCursorに依存しない）。
+function bandUpperFloorLines(graph, upperGraph, room) {
+  const band = buildStairBand(room, graph, upperGraph,
+    { floorHeight: OPTS.floorHeight, wallLessEndExtendModelMm: 150 });
+  return band.primitives.filter(p => p.type === 'line'
+    && p.weight === weightForRole(ElevationLineRole.CUT)
+    && p.y1 === -OPTS.floorHeight && p.y2 === -OPTS.floorHeight)
+    .map(p => [Math.min(p.x1, p.x2), Math.max(p.x1, p.x2)].join('..')).sort();
+}
+
+test('buildStairBand: 上階FL断面線のgateは帯の組み立て（faceOverride）まで届く——吹抜けの先の1本だけが消える', () => {
+  const real = makeGraph(), voided = makeGraph();
+  const realUp = makeGraph('p2'), voidedUp = makeGraph('p2');
+  const realFix = makeSwitchbackFixture(real), voidFix = makeSwitchbackFixture(voided);
+  makeUpperForOverhang(realUp);
+  makeUpperForOverhang(voidedUp, { beyondFeature: RoomFeature.VOID });
+
+  const withFloor = bandUpperFloorLines(real, realUp, realFix.room);
+  const withVoid  = bandUpperFloorLines(voided, voidedUp, voidFix.room);
+  const dropped = withFloor.filter(s => !withVoid.includes(s));
+  assert.deepEqual(withVoid, withFloor.filter(s => !dropped.includes(s)),
+    'gateで消えるのははり出しの2FL線だけ（他の2FL線は両構成で同じ）');
+  assert.equal(dropped.length, 1, `消えるのは1本だけ（実際:${JSON.stringify(dropped)}）`);
+  const [lo, hi] = dropped[0].split('..').map(Number);
+  assert.ok(Math.abs((hi - lo) - 150) < 1e-6,
+    `消えた線ははり出し外の張り出し（wallLessEndExtendModelMm=150）のはず（実際:${hi - lo}）`);
+});
+
+test('【失敗系】stairFaceSequence: はり出しの先が上階のSTAIR_VOID（最上階の自動配置Room）でも2FL線を引かない', () => {
+  const graph = makeGraph();
+  const fixture = makeSwitchbackFixture(graph);
+  const upperGraph = makeGraph('p2');
+  makeUpperForOverhang(upperGraph, { beyondFeature: RoomFeature.STAIR_VOID });
+
+  const { entry, lines } = seq1UpperFloorLines(graph, upperGraph, fixture);
+  assert.equal(entry.upperFloorEnds?.hi, false,
+    'STAIR_VOIDも実床が無い（isRealRoomの判定は全モジュール共通）');
+  assert.equal(lines.length, 0);
 });

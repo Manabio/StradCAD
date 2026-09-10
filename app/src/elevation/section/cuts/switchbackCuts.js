@@ -334,11 +334,21 @@ export function switchbackCuts(stair, faces, graph, opts = {}) {
 
   const tRunTravel = travelCoordAt(tRun);
 
-  // ---- seq1/seq3: 踊り場前縁 W(tRun,0→1)（幅方向の全幅線。リード裁定で両方ともこの1本の
+  // ==== 不変条件: cut.line.lo/hi は **その cut の face の lo/hi と一致させる** ====
+  // ローカルxの原点はcut側が`cutOriginWorld(cut)=dirSign>0?line.lo:line.hi`（sectionTypes.js）、
+  // face側が`originWorld=dirSign>0?lo:hi`（elevationFigure.jsのlocalXOf）で別々に決まる。
+  // 枠がずれるとcontent全体が面に対して平行移動し、壁の仕上げ面より内側にささら断面が入る
+  // （実機「6」D2: seq5のlineがwOut1枠(run 3442.5)・faceがwOut2(run 3340)で102.5ずれ、
+  // 踊り場桁枠のささら断面が面の右端＝Y2壁の仕上げ面を突き抜けて壁の中に描かれていた）。
+  // 切断線の**位置**(axisValue)はW(t,s)から導く値のままでよい——揃えるのは枠(lo/hi)だけ。
+
+  // ---- seq1/seq3: 踊り場前縁 W(tRun,0→1)（幅方向の全幅線。リード裁定で両方ともこの位置の
   // 切断線を共有する——設計書§6.1表のseq3の元位置W(1)からの意図保存の逸脱。理由:
   // wLandingを「距離のある見えがかり候補」として自然に検出させ、seq3の床基準(landingAbs)を
   // 保ったまま「踊り場の奥行き分だけ離れた壁」を一般規則で出すため）。
+  // axisValue（切断位置）は共有し、枠だけ各々のfaceに合わせる（上の不変条件）。
   const seq13Line = { isVertical: wEntry.isVertical, axisValue: tRunTravel, lo: wEntry.lo, hi: wEntry.hi };
+  const seq3Line = { isVertical: wLanding.isVertical, axisValue: tRunTravel, lo: wLanding.lo, hi: wLanding.hi };
   const seq1ViewSign = Math.sign(travelCoordAt(0) - tRunTravel) || 1; // 上り口向き(-t方向)
   const seq3ViewSign = Math.sign(travelCoordAt(1) - tRunTravel) || 1; // 踊り場奥向き(+t方向)
 
@@ -352,8 +362,11 @@ export function switchbackCuts(stair, faces, graph, opts = {}) {
   // 値としては従来のmidAcross基準の向きと同じtowardS1になる。詳細はtowardS1/towardS0参照）。
   const outboundLaneAcross = acrossCoordAt(0.25);
   const inboundLaneAcross = acrossCoordAt(0.75);
+  // 枠(lo/hi)は各々のfaceに合わせる（上の不変条件）——outboundLaneLineはseq2/4がwOut1枠の面
+  // （midOutFaceは`...wOut1`で枠を引き継ぐ）を見るのでwOut1、inboundLaneLineはseq5がwOut2の
+  // 面を見るのでwOut2。
   const outboundLaneLine = { isVertical: wOut1.isVertical, axisValue: outboundLaneAcross, lo: wOut1.lo, hi: wOut1.hi };
-  const inboundLaneLine = { isVertical: wOut1.isVertical, axisValue: inboundLaneAcross, lo: wOut1.lo, hi: wOut1.hi };
+  const inboundLaneLine = { isVertical: wOut2.isVertical, axisValue: inboundLaneAcross, lo: wOut2.lo, hi: wOut2.hi };
   // sectionProbe.jsのisSightlineShape契約: (shape.axisCL.effectiveValue - line.axisValue) * viewSign > 0
   // が見えがかり候補——「s=1側が見える」viewSignは、line位置に関わらずwidthDirSignと同符号になる
   // （0.25→1・0.5→1・0.75→1のいずれも同じ向き。s<1の基準点なら常に成り立つ幾何）。
@@ -443,7 +456,7 @@ export function switchbackCuts(stair, faces, graph, opts = {}) {
     });
   }
   cuts.push({
-    seqNo: '3', face: wLanding, line: seq13Line, viewSign: seq3ViewSign, dirSign: wLanding.dirSign,
+    seqNo: '3', face: wLanding, line: seq3Line, viewSign: seq3ViewSign, dirSign: wLanding.dirSign,
     // §6.1表「階段寄与: なし」＝段の重ね描きなし。踊り場の断面・桁枠は描く（landingOnly参照）。
     layers, zRange: zRangeUpper, baseFloorZ: underFloorZ, stairCut: landingOnly,
   });

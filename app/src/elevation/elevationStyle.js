@@ -93,6 +93,13 @@ export const DEFAULT_WALL_LESS_END_EXTEND_MM = 150; // 倍率決定用の1パス
 // （section/sectionEmit.js の nearestSightlineDistMm。線種の階調と同じ基準）。
 export const SIGHTLINE_DEPTH_LIMIT_MM = 800;
 
+// 上階の平面が自階の面の端より外へ続いているとき、その先まで探査・作図してよい量の上限(mm)
+// （ユーザー裁定2026-09「「6」D2: 2階Y2から3500には「21」の壁エッジが左側に見える」）。
+// 隅の取り合い＝端の直交壁の厚み＋偏芯を飲む上限で、これを超える食い違いはパネル幅を決め直す
+// 領域なのではり出しを描かない（**全か無か**——途中で切ると、壁がそこで終わっていないのに
+// 存在しない位置へ壁端の縦線が出る）。
+export const UPPER_PLANE_OVERHANG_LIMIT_MM = 500;
+
 // アキ標記「ア キ」の概算テキスト幅(px)。全角2文字＋半角空白1つ＝(1.0+0.5+1.0)×12px
 // （elevationFigure.jsのestimateWallLabelWidthPxと同じ文字クラス別の係数。section/から
 // そちらをimportすると層をまたぐため、この1件だけ定数として持つ）。

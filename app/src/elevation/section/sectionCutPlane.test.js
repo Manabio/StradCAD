@@ -5,7 +5,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Plane, PlanGraph, CenterLineType, Discipline } from '@core';
 import { generateRoomWallsFromOutline } from '../../finish/wallGeneration.js';
-import { cutPlaneOffsetMm, faceCutLine, faceViewSign } from './sectionCutPlane.js';
+import { cutPlaneOffsetMm, faceCutLine, faceViewSign,
+  wallWorldRangesOnFacePlane, planeOverhangBeyondEnds } from './sectionCutPlane.js';
 import { composeRoomFaces } from '../elevationFaceList.js';
 
 function makeGraph(name, level) {
@@ -159,4 +160,50 @@ test('【失敗系】cutPlaneOffsetMm: 軸CLやinwardが無い合成faceは0（�
 test('【失敗系】cutPlaneOffsetMm: 層0件・柱0件でも例外を投げない', () => {
   assert.equal(cutPlaneOffsetMm(bareFace(), []), 0);
   assert.equal(cutPlaneOffsetMm(bareFace(), null, { columnSolids: null }), 0);
+});
+
+// ---- その面の平面がその層に在る範囲（吹抜け帯の下階照合と、多層帯の層ごとの探査窓の共通述語） ----
+test('wallWorldRangesOnFacePlane: 同じ通り（向き＋軸の世界座標）の壁の走り範囲を結合して返す', () => {
+  const g1 = makeGraph('1階', 0);
+  const room = makeRectRoom(g1, 0, 0, 4000, 6000, 'LDK');
+  for (const f of facesOf(room, g1)) {
+    const ranges = wallWorldRangesOnFacePlane(f, g1);
+    assert.equal(ranges.length, 1, `${f.label}: 1枚の壁なので1区間のはず`);
+    // 面の走り範囲（壁の仕上げ面へスナップ済み）を覆っていること。
+    assert.ok(ranges[0].lo <= f.lo + 1 && ranges[0].hi >= f.hi - 1,
+      `${f.label}: 面(${f.lo}..${f.hi})を覆うはず（実際:${JSON.stringify(ranges[0])}）`);
+  }
+});
+
+test('wallWorldRangesOnFacePlane: 向きが違う壁・別の通りの壁は拾わない', () => {
+  const g1 = makeGraph('1階', 0);
+  const room = makeRectRoom(g1, 0, 0, 4000, 6000, 'LDK');
+  // 軸の世界座標が他の通りと重ならない面（x=4000。横向きの通りは y=0/6000 のみ）で見る。
+  const face = facesOf(room, g1).find(f => f.isVertical && f.axisCL.effectiveValue === 4000);
+  assert.ok(face, 'x=4000の縦の面があるはず');
+  const other = { ...face, axisCL: { effectiveValue: 4500 } };
+  assert.deepEqual(wallWorldRangesOnFacePlane(other, g1), [], '500mmずれた通りには壁が無い');
+  assert.deepEqual(wallWorldRangesOnFacePlane({ ...face, isVertical: false }, g1), [],
+    '直交する向きの壁は同じ平面ではない');
+});
+
+test('【失敗系】wallWorldRangesOnFacePlane: 壁ゼロ・軸CLなしは空配列（nullではない）', () => {
+  const empty = makeGraph('1階', 0);
+  assert.deepEqual(wallWorldRangesOnFacePlane(bareFace(), empty), []);
+  assert.deepEqual(wallWorldRangesOnFacePlane(bareFace({ axisCL: {} }), empty), []);
+  assert.deepEqual(wallWorldRangesOnFacePlane(null, empty), []);
+});
+
+test('planeOverhangBeyondEnds: 端に接している連続区間だけを見る（離れた別スパンの壁は数えない）', () => {
+  // 実データ「6」D2の形: 面の端(hi=3000)の続き160 と、はるか外(5000〜)の別スパンの壁。
+  const ranges = [{ lo: -1000, hi: 3160 }, { lo: 5000, hi: 9000 }];
+  assert.deepEqual(planeOverhangBeyondEnds(ranges, { lo: 0, hi: 3000 }), { lo: 1000, hi: 160 },
+    '端に接する区間のはみ出しだけ（別スパンの9000までは数えない）');
+});
+
+test('【失敗系】planeOverhangBeyondEnds: 端に壁が届いていない側・壁ゼロは0', () => {
+  assert.deepEqual(planeOverhangBeyondEnds([{ lo: 1000, hi: 2000 }], { lo: 0, hi: 3000 }),
+    { lo: 0, hi: 0 }, 'どちらの端にも届いていない区間ははみ出しを主張しない');
+  assert.deepEqual(planeOverhangBeyondEnds([], { lo: 0, hi: 3000 }), { lo: 0, hi: 0 });
+  assert.deepEqual(planeOverhangBeyondEnds(null, { lo: 0, hi: 3000 }), { lo: 0, hi: 0 });
 });

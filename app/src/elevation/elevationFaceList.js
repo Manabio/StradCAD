@@ -223,10 +223,25 @@ function localEndKeyAt(face, world) {
 // 帰結: 部分指定でFLが変わる段差でも統合される。各メンバーは自分の`floorSegments`で床を描くので、
 // 段差は継ぎ目に段として現れる（描き落ちにはならない）。
 function panelJointVoidAtEnd(face, key) {
-  const ranges = face.voidAbove?.voidLocal ?? [];
+  return touchesEnd(face.voidAbove?.voidLocal ?? [], face.run, key);
+}
+
+/**
+ * ローカルx範囲の並びが**面の端に達しているか**（端＝`key`。'0'＝ローカルx=0側・'Run'＝run側）。
+ *
+ * 「その端はこの範囲に含まれるか」を問う箇所の単一の述語——パネル統合の条件5（上記
+ * `panelJointVoidAtEnd`）と、吹抜け帯のはり出しgate（`elevationVoid.js`）が同じ問いを
+ * 別々のεで答えていた（1mm と 1e-6）。εは`MIN_FACE_RUN_MM`（＝面として意味を持つ最小幅）
+ * に一本化する——それ未満の幅しか端にかかっていない範囲は、面の端に達していないとみなす。
+ * @param {Array<{lo:number,hi:number}>} ranges - 面ローカルx（昇順マージ済みでなくてよい）
+ * @param {number} run - 面の走り長さ
+ * @param {'0'|'Run'} key
+ * @returns {boolean}
+ */
+export function touchesEnd(ranges, run, key) {
   return key === '0'
     ? ranges.some(r => r.lo <= MIN_FACE_RUN_MM && r.hi > MIN_FACE_RUN_MM)
-    : ranges.some(r => r.hi >= face.run - MIN_FACE_RUN_MM && r.lo < face.run - MIN_FACE_RUN_MM);
+    : ranges.some(r => r.hi >= run - MIN_FACE_RUN_MM && r.lo < run - MIN_FACE_RUN_MM);
 }
 
 /**

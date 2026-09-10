@@ -31,6 +31,63 @@ function rangesOverlap(aLo, aHi, bLo, bHi) {
   return aLo < bHi - GAP_EPS && aHi > bLo + GAP_EPS;
 }
 
+// 面の軸CLと層の壁を同一視する世界座標の許容差(mm)。CLは階ごとに別オブジェクトのため、
+// idではなく世界座標で突き合わせる（isSightlineShapeと同じ規約）。
+const PLANE_AXIS_EPS_MM = 1;
+
+/**
+ * face と同じ通り（軸CLの世界座標・向きが一致）の壁が graph に実在する世界範囲
+ * （走り方向。昇順・接するものは結合済み）。
+ *
+ * 「その面の平面がその層に存在するか」を問う箇所の**単一の述語**——吹抜け帯の
+ * `lowerWallWorldRanges`／`upperPlaneLocal`（elevationVoid.js）と、多層帯の層ごとの探査窓
+ * （sectionContent.jsの`layerRunWindows`）が同じ判定でなければ、同じ「上階の平面」について
+ * 帯ごとに違う答えを出すことになる。
+ * @param {{isVertical:boolean, axisCL:object}} face
+ * @param {object} graph
+ * @returns {Array<{lo:number,hi:number}>} 壁が1枚も無ければ空配列
+ */
+export function wallWorldRangesOnFacePlane(face, graph) {
+  const axis = face?.axisCL?.effectiveValue;
+  if (axis == null) return [];
+  const ranges = [];
+  for (const w of graphList(graph, 'walls') ?? []) {
+    if (!w.isVertical !== !face.isVertical) continue;
+    const wAxis = w.axisCL?.effectiveValue;
+    if (wAxis == null || Math.abs(wAxis - axis) > PLANE_AXIS_EPS_MM) continue;
+    ranges.push({ lo: Math.min(w.coord1, w.coord2), hi: Math.max(w.coord1, w.coord2) });
+  }
+  ranges.sort((a, b) => a.lo - b.lo);
+  const out = [];
+  for (const r of ranges) {
+    const last = out[out.length - 1];
+    if (last && r.lo <= last.hi) last.hi = Math.max(last.hi, r.hi);
+    else out.push({ ...r });
+  }
+  return out;
+}
+
+/**
+ * その層の平面が、切断線の端（`lo`/`hi`。世界座標）より**外へ続いている量**(mm)。
+ *
+ * 端に接している連続区間だけを見る——「同じ通りにある壁の最初から最後まで」で測ると、
+ * 面から遠く離れた別スパンの壁（実データ「6」D2の2階: 面の外3545の位置にある別の壁）まで
+ * 拾ってしまい、隅の取り合いを見るための量ではなくなる。端に壁が無い（区間が端に届いて
+ * いない）側は0。
+ * @param {Array<{lo:number,hi:number}>} ranges - wallWorldRangesOnFacePlaneの結果
+ * @param {{lo:number, hi:number}} line - 切断線の走り範囲（世界座標）
+ * @returns {{lo:number, hi:number}} 0以上（loは line.lo より小さい側、hiは line.hi より大きい側）
+ */
+export function planeOverhangBeyondEnds(ranges, line) {
+  const at = end => (ranges ?? []).find(r =>
+    r.lo <= end + PLANE_AXIS_EPS_MM && r.hi >= end - PLANE_AXIS_EPS_MM) ?? null;
+  const atLo = at(line.lo), atHi = at(line.hi);
+  return {
+    lo: atLo ? Math.max(0, line.lo - atLo.lo) : 0,
+    hi: atHi ? Math.max(0, atHi.hi - line.hi) : 0,
+  };
+}
+
 /**
  * 面の軸から見て「室内側（+inward方向）へどれだけ出ているか」。負（室外側）は0へ丸める。
  * @param {number} axisValue - 面の軸CLの世界座標

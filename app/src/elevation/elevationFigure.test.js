@@ -2297,3 +2297,389 @@ test('【失敗系・実機修正2026-09】buildFaceFigure: 開放スパンと�
   assert.deepEqual(baseboardSpans(prims), [[0, 1000], [2000, 4000]],
     '開放スパンと壁の被覆の隙間が同じ区間を指しても、巾木の途切れは1個所のまま重複しないはず');
 });
+
+
+// ---- ctx.floorProfile: 面端の縦線の下端を「その位置の断面線」にする（ユーザー明示指示2026-09
+// 「展開図では、断面線の外は描画しない」。階段帯のように床が階段そのもので出来ている面では、
+// 端の壁は帯の床ではなく階段断面から立ち上がる） ----
+test('buildFaceFigure: ctx.floorProfile指定時、面端の縦線の下端はその位置の輪郭値になる', () => {
+  const CH = 2400;
+  const floorSegments = [{ loX: 0, hiX: 4000, floorDeltaMm: 0 }];
+  // 左端(x=0)で1200まで上がっている斜めの断面線（階段断面）。右端(x=4000)は床(0)のまま。
+  const floorProfile = [[0, 1200], [2000, 0], [4000, 0]];
+  const prims = buildFaceFigure(makeFace(), baseCtx({ ceilingHeight: CH, floorSegments, floorProfile }));
+  const cutLines = prims.filter(p => p.type === 'line' && p.weight === 'thick');
+
+  const leftEnd = cutLines.find(l => l.x1 === 0 && l.x2 === 0);
+  assert.ok(leftEnd, '左端の縦線は描かれるはず');
+  assert.equal(leftEnd.y2, -1200, '左端縦線の下端は輪郭(1200)のはず');
+  const rightEnd = cutLines.find(l => l.x1 === 4000 && l.x2 === 4000);
+  assert.equal(rightEnd.y2, 0, '右端は輪郭が床と同じ(0)なので従来どおり');
+
+  // 床線・天井線には触らない（切り詰めはflatLineSpanX側の担当）。
+  const floorHorizontal = cutLines.find(l => l.y1 === l.y2 && l.y1 === 0 && l.x1 !== l.x2);
+  assert.ok(floorHorizontal, '床の水平線は輪郭の有無に関わらず描かれるはず');
+  assert.equal(floorHorizontal.x1, 0);
+  assert.equal(floorHorizontal.x2, 4000);
+});
+
+// ---- ctx.upperOverhang / ctx.upperFloorZ: 上階の平面が自階の面の端より外へ続くぶんのはり出し
+// （ユーザー裁定2026-09「「6」D2」。上＝上階の天井断面線・下＝上階のFL断面線で閉じる） ----
+test('buildFaceFigure: upperOverhang指定時、天井断面線だけがはり出し、床線・面端の縦線は面の端で終わる', () => {
+  const CH = 2400;
+  const floorSegments = [{ loX: 0, hiX: 4000, floorDeltaMm: 0 }];
+  const ctx = baseCtx({ ceilingHeight: CH, floorSegments, upperOverhang: { lo: 160, hi: 0 } });
+  const prims = buildFaceFigure(makeFace(), ctx);
+  const cutLines = prims.filter(p => p.type === 'line' && p.weight === 'thick');
+
+  const ceil = cutLines.find(l => l.y1 === l.y2 && l.y1 === -CH && l.x1 !== l.x2);
+  assert.deepEqual([ceil.x1, ceil.x2], [-160, 4000], '天井断面線の左端だけがはり出す');
+  const floor = cutLines.find(l => l.y1 === l.y2 && l.y1 === 0 && l.x1 !== l.x2);
+  assert.deepEqual([floor.x1, floor.x2], [0, 4000], '床線は自階の面の要素なので延ばさない');
+  const leftEnd = cutLines.find(l => l.x1 === 0 && l.x2 === 0);
+  assert.ok(leftEnd, '面端の縦線は従来どおりローカルx=0に残る（はり出しの内側の辺）');
+});
+
+test('buildFaceFigure: upperOverhang+upperFloorZ指定時、上階FLの断面線ははり出し区間にだけ引かれる', () => {
+  const CH = 5400 - 1500;
+  const floorSegments = [{ loX: 0, hiX: 4000, floorDeltaMm: 1500, chMm: CH }];
+  // 実データ「6」D2と同じ形: 断面線（階段）は面の外(-132.5..-102.5)で2FL(3000)にいて、
+  // そこから面の中へ下っていく。
+  const floorProfile = [[-132.5, 3000], [-102.5, 3000], [0, 2870], [4000, 1500]];
+  const prims = buildFaceFigure(makeFace(), baseCtx({
+    ceilingHeight: 5400, floorSegments, floorProfile,
+    upperOverhang: { lo: 160, hi: 0 }, upperFloorZ: 3000,
+  }));
+  const flLines = prims.filter(p => p.type === 'line' && p.y1 === -3000 && p.y2 === -3000);
+  assert.equal(flLines.length, 1, '上階FLの断面線は1本');
+  assert.deepEqual([flLines[0].x1, flLines[0].x2], [-160, -102.5],
+    'はり出しの外端から、断面線が上階FLを下回る位置（階段が2FLに達するx）まで');
+  assert.equal(flLines[0].weight, 'thick', '床の断面線はCUT（太線）');
+});
+
+// ---- floorProfileを持たない帯（上部吹抜けを持つ部屋帯。elevationVoid.jsの
+// buildRoomBandWithVoidAbove）で、**はり出しの外端に切断壁が立たない**（ctx.upperFloorCutEnds
+// 未指定）とき: はり出し区間のうち面端のCLより向こう側に上階FLの断面線を引く。
+// 【裁定の履歴】旧「「5」A1: 追加された2階X3の2FLは、X3の右側が正解」はこのCL規則の根拠
+// だったが、ユーザー裁定2026-09で**外端に切断壁が立つ端**については「2FL断面まで下りて外側に
+// 向かって張り出して終了」へ置き換わった（下の`upperFloorCutEnds`の節）。実データ「5」A1は
+// そちらへ移り、ここは切断壁の立たない端に残る既定の規則。 ----
+test('buildFaceFigure: 切断壁の立たないはり出しでは、面端のCLより向こう側だけに上階FLの断面線を引く', () => {
+  const CH = 2400;
+  const RUN = 4000;
+  const HALF_WALL = 57.5; // 面端に立つ壁（実データ「5」A1のX3の2階腰壁）の半壁厚
+  const floorSegments = [{ loX: 0, hiX: RUN, floorDeltaMm: 0 }];
+  // 面はCLの手前（壁の室内側の面）で終わり、CLはその外側にある＝はり出しの中にCLが立つ。
+  const endCL = { id: 'x1', centerLineType: CenterLineType.VERTICAL,
+    effectiveValue: RUN + HALF_WALL, value: RUN + HALF_WALL };
+  const prims = buildFaceFigure(makeFace(), baseCtx({
+    graph: makeGraph({ shapes: new Map([[endCL.id, endCL]]) }),
+    ceilingHeight: CH, floorSegments,
+    upperOverhang: { lo: 0, hi: 115 }, upperFloorZ: 3000,
+  }));
+  const flLines = prims.filter(p => p.type === 'line' && p.y1 === -3000 && p.y2 === -3000);
+  assert.equal(flLines.length, 1, '上階FLの断面線は1本（はり出しのある側だけ）');
+  assert.deepEqual([flLines[0].x1, flLines[0].x2], [RUN + HALF_WALL, RUN + 115],
+    'CL（上階の床が始まる位置）から、はり出しの外端まで');
+  assert.equal(flLines[0].weight, 'thick', '床の断面線はCUT（太線）');
+  assert.ok(!prims.some(p => p.type === 'line' && p.y1 === -3000 && p.y2 === -3000
+    && Math.min(p.x1, p.x2) < RUN + HALF_WALL - 1e-6),
+    'CLより手前（吹抜けの上に壁が張り出している側）には引かない');
+  // 起点はCLそのもの（RUN+HALF_WALL）。**外端に切断壁が立つ端はこの規則を使わない**
+  // （ctx.upperFloorCutEndsの節。壁の向こう側の面から外へ張り出す）。
+  assert.equal(Math.min(flLines[0].x1, flLines[0].x2), RUN + HALF_WALL,
+    `切断壁の情報が無い端の起点はCL(${RUN + HALF_WALL})`);
+});
+
+// 【失敗系】はり出しに壁のCLが立たない面（面端のCLが引けない・面の端と一致する）では、
+// 止める根拠が無いのではり出し区間の全幅のまま（makeFaceのstartCLId/endCLIdはbaseCtxの
+// graphで引けないため faceBoundaryLocalX が {0, run} へフォールバックする）。
+test('【失敗系】buildFaceFigure: はり出しに立つ壁のCLが無ければ上階FLの断面線ははり出し区間の全幅', () => {
+  const CH = 2400;
+  const RUN = 4000;
+  const floorSegments = [{ loX: 0, hiX: RUN, floorDeltaMm: 0 }];
+  const prims = buildFaceFigure(makeFace(), baseCtx({
+    ceilingHeight: CH, floorSegments,
+    upperOverhang: { lo: 0, hi: 115 }, upperFloorZ: 3000,
+  }));
+  const flLines = prims.filter(p => p.type === 'line' && p.y1 === -3000 && p.y2 === -3000);
+  assert.equal(flLines.length, 1, '上階FLの断面線は1本（はり出しのある側だけ）');
+  assert.deepEqual([flLines[0].x1, flLines[0].x2], [RUN, RUN + 115],
+    'はり出し区間（面の端〜外端）の全幅');
+  assert.equal(flLines[0].weight, 'thick', '床の断面線はCUT（太線）');
+  assert.ok(!prims.some(p => p.type === 'line' && p.y1 === -3000 && p.x1 < RUN - 1e-6),
+    '面の内側には引かない（上階の床は腰壁の断面の中）');
+});
+
+// ---- ctx.upperFloorCutEnds: はり出しの外端に**切断壁（上階の腰壁）**が立つ端
+// （ユーザー裁定2026-09「「6」C 左端X3外側の2階腰壁断面は、2FL断面まで下りて外側に向かって
+// 張り出して終了、が正解」「「5」A1 X3外側の腰壁断面は…同」）。
+// 値は壁の向こう側の面（面ローカルx）で、そこから**外側へ**wallLessEndExtendModelMm（既定150）
+// ぶん張り出して終わる。壁の下（CL〜向こう側の面）には引かない。 ----
+test('buildFaceFigure: はり出し外端に切断壁が立つ端は、壁の向こう側の面から外へ張り出して終わる', () => {
+  const CH = 2400;
+  const RUN = 4000;
+  const OVERHANG = 115; // 実データ「5」A1: 面端6085→外端6200
+  const floorSegments = [{ loX: 0, hiX: RUN, floorDeltaMm: 0 }];
+  const prims = buildFaceFigure(makeFace(), baseCtx({
+    ceilingHeight: CH, floorSegments,
+    upperOverhang: { lo: 0, hi: OVERHANG }, upperFloorZ: 3000,
+    upperFloorCutEnds: { lo: null, hi: RUN + OVERHANG },
+  }));
+  const flLines = prims.filter(p => p.type === 'line' && p.y1 === -3000 && p.y2 === -3000);
+  assert.equal(flLines.length, 1, '上階FLの断面線は1本（切断壁の立つ側だけ）');
+  assert.deepEqual([flLines[0].x1, flLines[0].x2], [RUN + OVERHANG, RUN + OVERHANG + 150],
+    '壁の向こう側の面から、外側へwallLessEndExtendModelMm(150)ぶん');
+  assert.equal(flLines[0].weight, 'thick', '床の断面線はCUT（太線）');
+  assert.ok(!prims.some(p => p.type === 'line' && p.y1 === -3000 && p.y2 === -3000
+    && Math.min(p.x1, p.x2) < RUN + OVERHANG - 1e-6),
+    '壁の下（CL〜向こう側の面）には引かない＝切断壁の断面の中を通さない');
+  const ceil = prims.filter(p => p.type === 'line' && p.weight === 'thick'
+    && p.y1 === p.y2 && p.y1 === -CH);
+  assert.deepEqual([ceil[0].x1, ceil[0].x2], [0, RUN + OVERHANG],
+    '天井断面線は従来どおり壁の外側の面まで（張り出すのは2FL線だけ）');
+});
+
+test('buildFaceFigure: 切断壁の立つ端はfloorProfileより優先し、立たない端は従来どおり', () => {
+  const RUN = 2885;
+  const floorSegments = [{ loX: 0, hiX: RUN, floorDeltaMm: 1500, chMm: 5400 - 1500 }];
+  // 実データ「6」C（seq1）: 断面線は踊り場1500で平ら＝floorProfile分岐なら線が出ない側。
+  const floorProfile = [[0, 1500], [RUN, 1500]];
+  const prims = buildFaceFigure(makeFace(), baseCtx({
+    ceilingHeight: 5400, floorSegments, floorProfile,
+    upperOverhang: { lo: 115, hi: 0 }, upperFloorZ: 3000,
+    upperFloorCutEnds: { lo: -115, hi: null },
+  }));
+  const flLines = prims.filter(p => p.type === 'line' && p.y1 === -3000 && p.y2 === -3000);
+  assert.equal(flLines.length, 1, '切断壁の立つlo側だけ1本');
+  assert.deepEqual([flLines[0].x1, flLines[0].x2], [-115 - 150, -115],
+    '壁の向こう側の面(-115)から外側(-265)へ。断面線が平らでも引く');
+});
+
+test('【失敗系】buildFaceFigure: upperFloorCutEnds未指定・nullの端は現行の描き方と完全一致', () => {
+  const RUN = 4000;
+  const floorSegments = [{ loX: 0, hiX: RUN, floorDeltaMm: 0 }];
+  const mk = upperFloorCutEnds => buildFaceFigure(makeFace(), baseCtx({
+    ceilingHeight: 2400, floorSegments,
+    upperOverhang: { lo: 0, hi: 115 }, upperFloorZ: 3000, upperFloorCutEnds,
+  }));
+  const base = mk(undefined);
+  // 実データ「6」D2の外端は全高の**見えがかり**壁で切断壁ではない＝nullが来る側。
+  assert.deepEqual(mk({ lo: null, hi: null }), base, '両端nullは未指定と同じ出力');
+  assert.deepEqual(mk({ lo: 3000, hi: null }), base, 'はり出し0の端(lo)の値は無視する');
+  const fl = base.filter(p => p.type === 'line' && p.y1 === -3000 && p.y2 === -3000);
+  assert.deepEqual([fl[0].x1, fl[0].x2], [RUN, RUN + 115], '従来どおりはり出し区間の中で終わる');
+});
+
+test('【失敗系】buildFaceFigure: 上階の床が実在しない端(upperFloorEnds=false)は切断壁でも引かない', () => {
+  const RUN = 4000;
+  const floorSegments = [{ loX: 0, hiX: RUN, floorDeltaMm: 0 }];
+  const ctxOf = upperFloorEnds => baseCtx({
+    ceilingHeight: 2400, floorSegments,
+    upperOverhang: { lo: 0, hi: 115 }, upperFloorZ: 3000,
+    upperFloorCutEnds: { lo: null, hi: RUN + 115 }, upperFloorEnds,
+  });
+  const blocked = buildFaceFigure(makeFace(), ctxOf({ lo: true, hi: false }));
+  assert.equal(blocked.filter(p => p.type === 'line' && p.y1 === -3000).length, 0,
+    '上階に実部屋が無い端のgateは切断壁の張り出しにも効く（既存gateを維持）');
+  const open = buildFaceFigure(makeFace(), ctxOf({ lo: true, hi: true }));
+  assert.equal(open.filter(p => p.type === 'line' && p.y1 === -3000 && p.y2 === -3000).length, 1,
+    'gateが開いていれば張り出しは出る');
+  // 天井断面線・壁エッジはgateで落とさない（既存規約）。
+  assert.ok(blocked.some(p => p.type === 'line' && p.weight === 'thick'
+    && p.y1 === p.y2 && p.y1 === -2400 && Math.max(p.x1, p.x2) === RUN + 115),
+    '天井断面線ははり出したまま');
+});
+
+test('【失敗系】buildFaceFigure: floorProfileが無くupperFloorZ未指定なら上階FLの断面線は引かない', () => {
+  const CH = 2400;
+  const floorSegments = [{ loX: 0, hiX: 4000, floorDeltaMm: 0 }];
+  const mk = extra => buildFaceFigure(makeFace(), baseCtx({
+    ceilingHeight: CH, floorSegments, upperOverhang: { lo: 0, hi: 115 }, ...extra,
+  }));
+  const base = mk({});
+  assert.equal(base.filter(p => p.type === 'line' && p.y1 === -3000).length, 0,
+    'upperFloorZが無ければ上階FLの高さが分からない＝引かない');
+  assert.deepEqual(mk({ upperFloorZ: undefined }), base);
+  assert.deepEqual(mk({ upperFloorZ: null }), base);
+});
+
+test('【失敗系】buildFaceFigure: floorProfileが無くはり出し0の側には上階FLの断面線を引かない', () => {
+  const CH = 2400;
+  const floorSegments = [{ loX: 0, hiX: 4000, floorDeltaMm: 0 }];
+  const mk = upperOverhang => buildFaceFigure(makeFace(), baseCtx({
+    ceilingHeight: CH, floorSegments, upperOverhang, upperFloorZ: 3000,
+  }));
+  // 両側0＝はり出しが無い面には1本も出ない（＝通常の部屋帯は完全不変）。
+  assert.deepEqual(mk({ lo: 0, hi: 0 }), mk(undefined),
+    'はり出し0はupperOverhang未指定と同じ出力');
+  assert.equal(mk({ lo: 0, hi: 0 }).filter(p => p.type === 'line' && p.y1 === -3000).length, 0);
+  // 片側だけはり出す面では、0の側（ここではhi側）に線が現れない。
+  const fl = mk({ lo: 160, hi: 0 }).filter(p => p.type === 'line' && p.y1 === -3000 && p.y2 === -3000);
+  assert.equal(fl.length, 1);
+  assert.deepEqual([fl[0].x1, fl[0].x2], [-160, 0], 'lo側だけ＝面の端から外端まで');
+});
+
+// 面端のCLは（はり出しの有無に関わらず）どの面にもあるため、CLを起点にする分岐は
+// **はり出し区間の外へは絶対に出ない**ことが安全条件。破ると、はり出しが0の面
+// （＝通常の部屋帯のほぼ全面）にCLまでの偽の水平線が生える。
+test('【失敗系】buildFaceFigure: 面端のCLがはり出しの外にあっても上階FLの断面線ははり出しを越えない', () => {
+  const CH = 2400;
+  const RUN = 4000;
+  const floorSegments = [{ loX: 0, hiX: RUN, floorDeltaMm: 0 }];
+  const endCL = { id: 'x1', centerLineType: CenterLineType.VERTICAL,
+    effectiveValue: RUN + 57.5, value: RUN + 57.5 };
+  const mk = upperOverhang => buildFaceFigure(makeFace(), baseCtx({
+    graph: makeGraph({ shapes: new Map([[endCL.id, endCL]]) }),
+    ceilingHeight: CH, floorSegments, upperOverhang, upperFloorZ: 3000,
+  })).filter(p => p.type === 'line' && p.y1 === -3000 && p.y2 === -3000);
+  assert.equal(mk({ lo: 0, hi: 0 }).length, 0,
+    'はり出し0の面にCLまでの線を生やさない（通常の部屋帯は完全不変）');
+  assert.equal(mk({ lo: 0, hi: 30 }).length, 0,
+    'はり出しがCLに届かない＝はり出しは丸ごと吹抜けの側＝上階の床は無い');
+});
+
+// T3（QA指摘2026-09）: 天井をceilingProfile（勾配天井・階段帯）で描く分岐にも、はり出しが効くこと。
+// 水平天井の分岐だけを見ていると、この分岐のceilX0/ceilXRunがdrawnX0/drawnXRunへ戻っても
+// 全テストが通ってしまう（＝天井のはり出しが静かに消える）。
+test('buildFaceFigure: ceilingProfile+upperOverhang指定時、天井polylineの両端がはり出す', () => {
+  const CH = 2400;
+  const floorSegments = [{ loX: 0, hiX: 4000, floorDeltaMm: 0 }];
+  const ceilingProfile = [[0, 2400], [2000, 2700], [4000, 2400]];
+  const prims = buildFaceFigure(makeFace(), baseCtx({
+    ceilingHeight: CH, floorSegments, ceilingProfile, upperOverhang: { lo: 160, hi: 80 },
+  }));
+  const poly = prims.filter(p => p.type === 'polyline' && p.weight === 'thick');
+  assert.equal(poly.length, 1, '天井はpolyline1本');
+  const xs = poly[0].points.map(([x]) => x);
+  assert.equal(xs[0], -160, '左端はdrawnX0-lo');
+  assert.equal(xs[xs.length - 1], 4080, '右端はdrawnXRun+hi');
+  // はり出しぶんの高さは端点クランプ（勾配天井の端の値）で、床線はそのまま面の端で終わる。
+  assert.equal(poly[0].points[0][1], -2400, 'はり出し部の天井高さは断面の端点値');
+  const floor = prims.find(p => p.type === 'line' && p.y1 === 0 && p.y2 === 0 && p.x1 !== p.x2);
+  assert.deepEqual([floor.x1, floor.x2], [0, 4000], '床線ははり出さない');
+});
+
+test('【失敗系】buildFaceFigure: ceilingProfile指定でもupperOverhang未指定なら天井polylineは面の端で終わる', () => {
+  const CH = 2400;
+  const floorSegments = [{ loX: 0, hiX: 4000, floorDeltaMm: 0 }];
+  const ceilingProfile = [[0, 2400], [2000, 2700], [4000, 2400]];
+  const base = buildFaceFigure(makeFace(), baseCtx({ ceilingHeight: CH, floorSegments, ceilingProfile }));
+  const poly = base.find(p => p.type === 'polyline' && p.weight === 'thick');
+  assert.deepEqual([poly.points[0][0], poly.points[poly.points.length - 1][0]], [0, 4000]);
+  for (const overhang of [null, undefined, { lo: 0, hi: 0 }]) {
+    assert.deepEqual(buildFaceFigure(makeFace(), baseCtx({
+      ceilingHeight: CH, floorSegments, ceilingProfile, upperOverhang: overhang,
+    })), base, `upperOverhang=${JSON.stringify(overhang)}は現行出力と一致するはず`);
+  }
+});
+
+// ---- ctx.lowerOverhang: 下階の平面が自階の面の端より外へ続くぶんのはり出し（upperOverhangの
+// 鏡像。吹抜け帯`elevationVoid.js`が渡す）。**区間の床断面線だけ**が伸び、上端（下階の天井）と
+// 外端（下階の壁エッジ）は断面エンジンのcontentが描く ----
+// QA指摘2026-09（テスト③）: これまで`lowerOverhang`の直接テストが無く、帯経由でしか触れて
+// いなかった（＝この分岐をdrawnX0/drawnXRunへ戻しても図側の期待値が誰も落ちない）。
+test('buildFaceFigure: lowerOverhang指定時、床断面線だけがはり出し、天井線・巾木・段差縦線・面端の縦線は面の端で終わる', () => {
+  const CH = 2400;
+  const floorSegments = [
+    { loX: 0,    hiX: 2000, floorDeltaMm: 0 },
+    { loX: 2000, hiX: 4000, floorDeltaMm: 300 },
+  ];
+  const ctx = baseCtx({
+    ceilingHeight: CH, floorSegments, lowerOverhang: { lo: 160, hi: 0 },
+    room: makeRoom({}, { baseboardHeight: 'h=60' }),
+  });
+  const prims = buildFaceFigure(makeFace(), ctx);
+  const cutLines = prims.filter(p => p.type === 'line' && p.weight === 'thick');
+
+  // 先頭区間（FL=0）の床線だけが -160 まで。次の区間（FL=-300）は面の中なので変わらない。
+  const floor0 = cutLines.find(l => l.y1 === l.y2 && l.y1 === 0 && l.x1 !== l.x2);
+  assert.deepEqual([floor0.x1, floor0.x2], [-160, RISER_X_OFFSET_TESTS],
+    '先頭区間の床断面線の左端だけがはり出す');
+  const floor1 = cutLines.find(l => l.y1 === l.y2 && l.y1 === -300 && l.x1 !== l.x2);
+  assert.deepEqual([floor1.x1, floor1.x2], [RISER_X_OFFSET_TESTS, 4000], '2区間目は面の中のまま');
+
+  // 天井線・巾木・段差縦線・面端の縦線は面の端（x=0）のまま。
+  const ceil = cutLines.find(l => l.y1 === l.y2 && l.y1 === -CH && l.x1 !== l.x2);
+  assert.deepEqual([ceil.x1, ceil.x2], [0, 4000], '天井断面線は下階のはり出しでは伸びない');
+  const base0 = prims.find(p => p.type === 'line' && p.weight === 'thin' && p.y1 === -60 && p.y2 === -60);
+  assert.equal(base0.x1, 0, '巾木は面の端で終わる');
+  assert.ok(cutLines.some(l => l.x1 === l.x2 && l.x1 === RISER_X_OFFSET_TESTS),
+    '段差の縦線は従来どおり段差位置のまま');
+  assert.ok(cutLines.some(l => l.x1 === l.x2 && l.x1 === 0),
+    '面端の縦線は面の端（x=0）のまま＝はり出し区間の内側の辺');
+});
+
+test('【失敗系】buildFaceFigure: lowerOverhang未指定／{lo:0,hi:0}は現行出力と完全一致（既定offの保証）', () => {
+  const CH = 2400;
+  const floorSegments = [
+    { loX: 0,    hiX: 2000, floorDeltaMm: 0 },
+    { loX: 2000, hiX: 4000, floorDeltaMm: 300 },
+  ];
+  const mk = lowerOverhang => buildFaceFigure(makeFace(), baseCtx({
+    ceilingHeight: CH, floorSegments, lowerOverhang,
+    room: makeRoom({}, { baseboardHeight: 'h=60' }),
+  }));
+  const base = mk(undefined);
+  for (const overhang of [null, { lo: 0, hi: 0 }]) {
+    assert.deepEqual(mk(overhang), base,
+      `lowerOverhang=${JSON.stringify(overhang)}は現行出力と一致するはず`);
+  }
+});
+
+// T4（QA指摘2026-09）: 外端の輪郭値は`drawnFloorProfileZAt`の「範囲外は端点値」クランプで
+// 得られるため、断面線が面の端ちょうどで終わっていても値が返る——それを根拠に線を引くのは
+// 面の外への外挿になる。断面線がはり出し側へ伸びている面（実データ「6」D2）だけが対象。
+test('【失敗系】buildFaceFigure: 断面線の定義域が面の中だけなら、上階FLの断面線を引かない', () => {
+  const floorSegments = [{ loX: 0, hiX: 4000, floorDeltaMm: 1500, chMm: 3900 }];
+  // 断面線は面の中[0,4000]だけ。左端で上階FL(3000)にいるが、はり出し(-160..0)は未知。
+  const floorProfile = [[0, 3000], [2000, 3000], [4000, 1500]];
+  const prims = buildFaceFigure(makeFace(), baseCtx({
+    ceilingHeight: 5400, floorSegments, floorProfile,
+    upperOverhang: { lo: 160, hi: 0 }, upperFloorZ: 3000,
+  }));
+  assert.equal(prims.filter(p => p.type === 'line' && p.y1 === -3000 && p.y2 === -3000).length, 0,
+    '定義域の外の端点値を根拠にはり出し区間へ床の小口を描いてはいけない');
+});
+
+test('【失敗系】buildFaceFigure: 断面線が上階FLに届かない面では上階FLの断面線を引かない', () => {
+  const CH = 2400;
+  const floorSegments = [{ loX: 0, hiX: 4000, floorDeltaMm: 0 }];
+  const floorProfile = [[0, 0], [4000, 0]]; // 断面線は床(0)のまま＝上階FL(3000)に届かない
+  const prims = buildFaceFigure(makeFace(), baseCtx({
+    ceilingHeight: CH, floorSegments, floorProfile,
+    upperOverhang: { lo: 160, hi: 0 }, upperFloorZ: 3000,
+  }));
+  assert.equal(prims.filter(p => p.type === 'line' && p.y1 === -3000).length, 0,
+    'そこに上階の床の小口は現れない');
+});
+
+test('【失敗系】buildFaceFigure: upperOverhang未指定・0は既存出力と完全一致（通常の部屋帯は無変化）', () => {
+  const CH = 2400;
+  const floorSegments = [
+    { loX: 0, hiX: 2000, floorDeltaMm: 0 },
+    { loX: 2000, hiX: 4000, floorDeltaMm: 300 },
+  ];
+  const floorProfile = [[0, 3000], [4000, 3000]];
+  const base = buildFaceFigure(makeFace(), baseCtx({ ceilingHeight: CH, floorSegments, floorProfile }));
+  for (const overhang of [null, undefined, { lo: 0, hi: 0 }]) {
+    const actual = buildFaceFigure(makeFace(), baseCtx({
+      ceilingHeight: CH, floorSegments, floorProfile, upperOverhang: overhang, upperFloorZ: 3000,
+    }));
+    assert.deepEqual(actual, base, `upperOverhang=${JSON.stringify(overhang)}は現行出力と一致するはず`);
+  }
+});
+
+test('【失敗系】buildFaceFigure: floorProfile未指定・空配列は既存出力と完全一致（通常の部屋帯は無変化）', () => {
+  const CH = 2400;
+  const floorSegments = [
+    { loX: 0, hiX: 2000, floorDeltaMm: 0 },
+    { loX: 2000, hiX: 4000, floorDeltaMm: 300 },
+  ];
+  const base = buildFaceFigure(makeFace(), baseCtx({ ceilingHeight: CH, floorSegments }));
+  for (const profile of [null, undefined, []]) {
+    const withProfile = buildFaceFigure(
+      makeFace(), baseCtx({ ceilingHeight: CH, floorSegments, floorProfile: profile }));
+    assert.deepEqual(withProfile, base, `floorProfile=${JSON.stringify(profile)}は現行出力と一致するはず`);
+  }
+});

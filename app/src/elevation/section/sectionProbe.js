@@ -116,17 +116,37 @@ function isCutWall(wall, line) {
 }
 
 /**
- * 切断線の走り方向の探査範囲（`line.lo..hi` ＋ 壁のない端部の探査延長 `probeExtendLo/HiMm`）。
+ * 切断線の走り方向の探査範囲（`line.lo..hi` ＋ 探査延長）。
  * `collectCutBreaks`（列の切り方）と `isCutWall`（候補の拾い方）が**同じ範囲**を見るための
  * 単一実装——片方だけ延長を見ると「列はあるのに中身が無い」帯ができる。
+ *
+ * 読むのは`unionExtendLo/HiMm`（＝全層の探査窓の和。既定は`probeExtendLo/HiMm`と同値）——
+ * 層ごとに面の端が違う（`SectionCut.layerRunWindows`）ため、ここは**どれかの層が探査してよい
+ * 最大の範囲**を返し、層ごとの絞り込みは`withinLayerWindow`が行う。
  * @param {import('./sectionTypes.js').CutLine} line
  * @returns {{lo:number, hi:number}}
  */
 function cutProbeRange(line) {
   return {
-    lo: line.lo - (line.probeExtendLoMm ?? 0),
-    hi: line.hi + (line.probeExtendHiMm ?? 0),
+    lo: line.lo - (line.unionExtendLoMm ?? line.probeExtendLoMm ?? 0),
+    hi: line.hi + (line.unionExtendHiMm ?? line.probeExtendHiMm ?? 0),
   };
+}
+
+/**
+ * その層をその位置で探査してよいか（`SectionCut.layerRunWindows`。窓が無ければ従来どおり全域）。
+ * 列の分割（`collectCutBreaks`は窓へクランプして刻む）と列の中身（`probeColumn`の層スタック）の
+ * **両方**で効かせる——`isHiddenWall`と同じ理由で、片方だけだと「列はあるのに中身が無い」／
+ * 「中身が無いのに列が割れている」帯になる。
+ * @param {import('./sectionTypes.js').SectionCut} cut
+ * @param {object} layer
+ * @param {number} worldCoord
+ * @returns {boolean}
+ */
+function withinLayerWindow(cut, layer, worldCoord) {
+  const w = cut.layerRunWindows?.get(layer);
+  if (!w) return true;
+  return worldCoord >= w.lo - GAP_EPS && worldCoord <= w.hi + GAP_EPS;
 }
 
 /**
@@ -500,23 +520,29 @@ export function collectCutBreaks(cut, probeCtx) {
 
   for (const layer of layers) {
     probeCtx?.cellToRoomFor?.(layer); // ウォームアップ（後続のprobeColumn呼び出しのキャッシュ寄与）
-    for (const v of collectRunBreaks(layer.graph, line.isVertical, probeLo, probeHi)) values.add(v);
+    // **層ごとの探査窓へクランプする**（withinLayerWindow）——その層の平面が届いていない範囲で
+    // 列を割ると、中身の無い列（＝存在しない壁端の縦線）が出る。窓が無い層は従来どおり全域。
+    const win = cut.layerRunWindows?.get(layer);
+    const loOf = Math.max(probeLo, win?.lo ?? -Infinity);
+    const hiOf = Math.min(probeHi, win?.hi ?? Infinity);
+    const addIfInsideLayer = v => { if (v > loOf + GAP_EPS && v < hiOf - GAP_EPS) addIfInside(v); };
+    for (const v of collectRunBreaks(layer.graph, line.isVertical, loOf, hiOf)) values.add(v);
     for (const w of graphList(layer.graph, 'walls') ?? []) {
       if (isHiddenWall(cut, w)) continue; // 非可視の壁（下記isHiddenWall）は列も割らない
       if (isCutWall(w, line)) {
         const mr = w.materialRange;
-        addIfInside(mr.lo); addIfInside(mr.hi);
+        addIfInsideLayer(mr.lo); addIfInsideLayer(mr.hi);
       } else if (isCutAlongWall(w, line)) {
         const c1 = Math.min(w.coord1, w.coord2), c2 = Math.max(w.coord1, w.coord2);
-        addIfInside(c1); addIfInside(c2);
+        addIfInsideLayer(c1); addIfInsideLayer(c2);
       } else if (isSightlineShape(w, line, cut.viewSign)) {
         const c1 = Math.min(w.coord1, w.coord2), c2 = Math.max(w.coord1, w.coord2);
-        addIfInside(c1); addIfInside(c2);
+        addIfInsideLayer(c1); addIfInsideLayer(c2);
       }
     }
     for (const o of graphList(layer.graph, 'openings') ?? []) {
       if (!isSightlineShape(o, line, cut.viewSign)) continue;
-      addIfInside(o.coord1); addIfInside(o.coord2);
+      addIfInsideLayer(o.coord1); addIfInsideLayer(o.coord2);
     }
   }
   return [...values].sort((a, b) => a - b);
@@ -536,7 +562,11 @@ export function collectCutBreaks(cut, probeCtx) {
  * @returns {Array<{layer:object, room:object|null, floorZ:number, ceilZ:number}>}
  */
 function buildLayerStack(cut, worldMid, probeCtx) {
-  return orderLayerStack((cut.layers ?? []).map(layer => {
+  // **その層の平面が届いていない位置では、その層は層スタックに現れない**（withinLayerWindow）。
+  // 壁の候補だけを落とすのでは足りない——床天井の分類（slab/open）も所有層の判断
+  // （`layerOwningZ`・`upperFloorZAt`）もこのスタックが情報源で、面の外に自階の床天井が
+  // 残っていると、面の端に実在しない天井段差（＝上階の床の断面線）が生まれる。
+  return orderLayerStack((cut.layers ?? []).filter(layer => withinLayerWindow(cut, layer, worldMid)).map(layer => {
     const room = probeOwnerRoom(cut, worldMid, layer, probeCtx, cut.viewSign);
     const floorZ = probeCtx.floorZOf(room, layer);
     // QA修正: room=nullでも壁候補は諦めない（fallbackCeilZ参照）。ceilZが実質nullになるのは
@@ -544,6 +574,36 @@ function buildLayerStack(cut, worldMid, probeCtx) {
     const ceilZ = room ? floorZ + probeCtx.chOf(room, layer.graph) : fallbackCeilZ(layer, floorZ, cut);
     return { layer, room, floorZ, ceilZ };
   }));
+}
+
+/**
+ * **はり出し列（探査窓で自階が落ちた列）で「未探査」になる高さの上限**。窓が無い切断・自階が
+ * 残っている列ではnull（従来どおり制限なし）。
+ *
+ * `sectionLayerStack.js`の`baseLayerOf`は「z原点に最も近い層＝帯自身の階」を返すが、
+ * **窓で自階が落ちた列ではその契約が自階を指さない**——残っているのは上階だけなので、上階が
+ * baseになる。その結果`probeColumn`の床天井の分類が「baseのFLより下＝自階の床構造」を
+ * 上階のFL（実データ「6」では3000）に対して適用し、はり出し列の地面から2FLまでが丸ごと
+ * slab（2階の床構造が地面まで続く）になっていた。そこは**面の外＝その高さを持つ平面が
+ * どれも届いていない未探査域**であって、床構造ではない。
+ *
+ * したがって、はり出し列ではその列に実在する最下層のFL（`floorZMm`）より下に帯を作らない
+ * （＝何も描かない）。列の外＝未探査を「実体が無い（アキ）」とも「躯体（slab）」とも言わない、
+ * という`emitColumns`の端の扱い（「隣接列が無いことは『そこで壁が終わる』ことを意味しない」）と
+ * 同じ境界の引き方。
+ * @param {import('./sectionTypes.js').SectionCut} cut
+ * @param {Array<{layer:object}>} layerStack - buildLayerStackの結果
+ * @param {number} worldMid
+ * @returns {number|null}
+ */
+function unexploredBelowZOf(cut, layerStack, worldMid) {
+  if (!cut.layerRunWindows) return null;
+  const present = layerStack.map(i => i.layer?.floorZMm).filter(Number.isFinite);
+  if (present.length === 0) return null;
+  const lowest = Math.min(...present);
+  const droppedBelow = (cut.layers ?? []).some(layer => Number.isFinite(layer?.floorZMm)
+    && layer.floorZMm < lowest - GAP_EPS && !withinLayerWindow(cut, layer, worldMid));
+  return droppedBelow ? lowest : null;
 }
 
 // LayerInfo（層ごとの床天井）→ 非描画のslab ZBand。床構造・天井懐・上階床のどれであっても
@@ -602,6 +662,8 @@ export function probeColumn(cut, worldMid, probeCtx) {
   // orderLayerStackでfloorZMm昇順へ整列してから使う——以降の層の判断（所有層・上位層・優先順位）は
   // 全て並びの上で答えるため、呼び出し側がcut.layersをどの順で渡しても結果は変わらない。
   const layerStack = buildLayerStack(cut, worldMid, probeCtx);
+  // はり出し列（探査窓で自階が落ちた列）で「面の外＝未探査」になる高さの上限（無ければnull）。
+  const unexploredBelowZ = unexploredBelowZOf(cut, layerStack, worldMid);
 
   // 候補壁の収集（層ごと。§5.2 step1）。
   const candidates = [];
@@ -730,6 +792,9 @@ export function probeColumn(cut, worldMid, probeCtx) {
     // 壁が1枚も無いz区間の分類（§5.2 step4(5)）。**帯自身の階に所有Roomがある列でのみ**
     // 床スラブ・天井懐を主張する（室外の列は従来どおり全てopen＝アキX判定の対象。ユーザーの
     // 「壁の無い辺は面にしない」規則と同根の保守的な境界であり、意図して残している）。
+    // **はり出し列で未探査になる高さには帯を作らない**（unexploredBelowZOf）——そこはアキでも
+    // 躯体でもなく「面の外」で、slabを主張すると上階の床構造が地面まで続いてしまう。
+    if (unexploredBelowZ != null && z1 <= unexploredBelowZ + GAP_EPS) continue;
     const baseInfo = baseLayerOf(layerStack);
     if (baseInfo?.room && z1 <= baseInfo.floorZ + GAP_EPS) {
       bands.push(slabBandOf(baseInfo, z0, z1)); // 帯のFLより下＝自階の床構造
@@ -755,6 +820,8 @@ export function probeColumn(cut, worldMid, probeCtx) {
     bands.push({ kind: 'open', z0, z1 });
   }
 
-  if (bands.length === 0) bands.push({ kind: 'open', z0: zLo, z1: zHi });
+  // 帯が1本も無い列は通常「候補ゼロ＝全域アキ」だが、**はり出し列では未探査で空になっただけ**
+  // なので、アキを主張せず空のまま返す（面の外にアキのバツを出さない）。
+  if (bands.length === 0 && unexploredBelowZ == null) bands.push({ kind: 'open', z0: zLo, z1: zHi });
   return mergeAdjacentZBands(bands, cut.baseFloorZ);
 }
