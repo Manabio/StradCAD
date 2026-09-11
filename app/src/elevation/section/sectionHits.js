@@ -80,6 +80,12 @@ import {
 // PROBE_EPS_MMより小さい値にして、区間境界ちょうどのレコードも安定して拾えるようにする。
 const POINT_QUERY_EPS_MM = 0.5;
 
+// POINT_QUERY_EPS_MMの点クエリが0件だったときの再クエリ幅(mm)——隅の取り合いで壁端がレコード
+// 区間の外へ食い込む量の許容差。kneeDropWall.jsのSPAN_OVERLAP_EPSと同じ規約値（同ファイルの
+// isConstituentWallが壁の全スパン基準で使う許容差そのもの。chamferWalls・wallJunctionResolveの
+// CORNER_EXCLUSION・closeConvexCornersのCONTINUE_TOLとも揃えた150mm）——kneeDropZRangesAt参照。
+const CORNER_OVERHANG_EPS_MM = 150;
+
 // 「切断線が壁の中心線と同一直線上（coincident）」とみなす許容差(mm)。壁厚/2に対する
 // 上乗せ分（WP-E5リード裁定・coincident壁＝cutAlongカテゴリ）。CL再スナップ等による
 // サブミリ〜数mm程度の誤差を吸収する目的の小さな値（PROBE_EPS_MMと同水準）。
@@ -343,13 +349,35 @@ function withinViewRoom(cut, worldMid, info, probeCtx, wall) {
  * 点クエリに掛かるレコードでも、**wall自身がその区間の構成壁でなければ無視する**
  * （kneeDropRecordsAtPointOnWall）。隅の取り合いで隣区間へ食い込んだ壁端が隣区間の腰壁指定を
  * 拾うと、全高の壁の端だけが腰壁の高さになる（実機2026-09「22」2階 A1×X2の「腰壁の残骸」）。
+ *
+ * 逆に、狭い点クエリ（±POINT_QUERY_EPS_MM）が**0件**、かつ**pointCoordがwall自身の端
+ * （wLo/wHi＝wall.coord1/coord2）からCORNER_OVERHANG_EPS_MM以内**のときだけ、検索窓を
+ * ±CORNER_OVERHANG_EPS_MMへ広げて再クエリする（wall自身が区間の構成壁かの判定＝
+ * isConstituentWallは`kneeDropRecordsAtPointOnWall`内で従来どおりwallの全スパン基準のまま
+ * 変えない）。壁自身がその区間の腰壁として指定された本人でも、隅の取り合いで壁端がレコード
+ * 区間の外（例: 区間端CLから57.5mm先）へ食い込むと、その食い込み部の点だけを見る狭い点クエリは
+ * レコードのhi/loの外に出てしまい0件になる（実機2026-09「6」面C x=0: knee壁-1500..57.5のうち
+ * 57.5mm食い込み部手前が全高に落ちていた）。CORNER_OVERHANG_EPS_MMは隅の取り合いの許容差
+ * （kneeDropWall.jsのSPAN_OVERLAP_EPSと同じ規約値。chamferWalls・wallJunctionResolveの
+ * CORNER_EXCLUSION・closeConvexCornersのCONTINUE_TOLとも揃えた150mm）。
+ * **「壁自身の端から150mm以内」の絞り込みが必須**（QA是正2026-09）——これが無いと、
+ * mergeSegmentsで結合された長い壁（例: X1..X3の1本）の、区間境界(X2)の手前150mm
+ * （壁自身の端からは遠いがレコード境界には近い点）まで隣区間の腰壁指定を拾ってしまい、
+ * 全高であるべき区間が腰壁の高さへ縮む誤爆になる（区間境界の手前で切り替わる従来挙動が壊れる）。
  * @param {number} pointCoord - 点クエリ位置（wall自身の長さ方向座標）
  * @param {number} floorZ
  * @param {number} ceilZ
  * @returns {Array<{z0:number, z1:number}>} 1件 or 2件（z0昇順）
  */
 function kneeDropZRangesAt(graph, wall, pointCoord, floorZ, ceilZ) {
-  const records = kneeDropRecordsAtPointOnWall(graph, wall, pointCoord, POINT_QUERY_EPS_MM);
+  let records = kneeDropRecordsAtPointOnWall(graph, wall, pointCoord, POINT_QUERY_EPS_MM);
+  if (records.length === 0) {
+    const wLo = Math.min(wall.coord1, wall.coord2), wHi = Math.max(wall.coord1, wall.coord2);
+    const nearWallEnd = pointCoord < wLo + CORNER_OVERHANG_EPS_MM || pointCoord > wHi - CORNER_OVERHANG_EPS_MM;
+    if (nearWallEnd) {
+      records = kneeDropRecordsAtPointOnWall(graph, wall, pointCoord, CORNER_OVERHANG_EPS_MM);
+    }
+  }
   for (const { rec } of records) {
     if (!rec.knee && !rec.drop) continue;
     const kneeTop  = rec.knee ? floorZ + rec.knee.topHeight : null;

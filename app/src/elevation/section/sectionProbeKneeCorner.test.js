@@ -78,12 +78,62 @@ test('【失敗系】区間本来の腰壁（-1500..X3）は従来どおり高�
   assert.equal(own[0].isKneeDrop, true);
 });
 
+// 実機13.stq「6」面C相当（2026-09診断）。knee壁自身は「X2..X3区間の腰壁」の構成壁そのものだが、
+// 隅の取り合いでX3(0)を57.5mm越えて自分の壁端(57.5)まで伸びる。この食い込み部(0..57.5)を
+// 点クエリ（±0.5mm）でレコード検索すると、レコードのhi(=0)がスパン外に出て0件になり、
+// 全高フォールバックへ落ちる（実機の症状: 面Cのx=0にrecessHi(3800..5400)が乗って太く見える）。
+test('【実機13.stq「6」面C相当】腰壁自身の壁端の食い込み部(X3超えの0..57.5mm)でも腰壁指定が効く（構成壁は壁単位で決まる）', () => {
+  const { graph, knee } = buildFixture();
+  const cut = a1Cut(graph);
+  const bands = probeColumn(cut, 28.75, makeProbeContext(cut.layers)); // 0..57.5 の食い込み部
+  const own = wallBandsOf(bands, knee);
+  assert.equal(own.length, 1, `knee壁の帯が1本のはず（実際:${JSON.stringify(bands)}）`);
+  assert.equal(own[0].z1, KNEE, '壁端の食い込み部でも腰壁の天端(800)で止まるはず（全高になってはいけない）');
+  assert.equal(own[0].isKneeDrop, true);
+});
+
+// kneeDropZRangesAtはcut/cutAlong/wallFaceの3経路が共有するため、切断壁（kind:'cut'）経路でも
+// 同じ食い込み部で同じ是正が効くことを別途確認する（点クエリの位置依存をこの関数1つで解消したことの裏付け）。
+test('【実機13.stq「6」面C相当・cut経路】切断壁として横切る位置がX3超えの食い込み部でも腰壁指定が効く', () => {
+  const { graph, knee } = buildFixture();
+  // knee壁(水平・軸Ym=-3500)を縦の切断線(isVertical:true)がX=28.75（食い込み部）で直交して横切る。
+  const cut = {
+    seqNo: 'cutCorner',
+    line: { isVertical: true, axisValue: 28.75, lo: -4000, hi: -3000 },
+    viewSign: 1, dirSign: 1,
+    layers: [{ graph, floorZMm: 0, role: 'self' }],
+    zRange: { loZ: 0, hiZ: CH }, baseFloorZ: 0,
+  };
+  // worldMid=knee壁のmaterialRange内（軸-3500〜仕上げ面-3442.5）。
+  const bands = probeColumn(cut, -3470, makeProbeContext(cut.layers));
+  const own = bands.filter(b => b.kind === 'cut' && b.wall === knee);
+  assert.equal(own.length, 1, `knee壁のcut帯が1本のはず（実際:${JSON.stringify(bands)}）`);
+  assert.equal(own[0].z1, KNEE, '切断壁経路でも壁端の食い込み部で腰壁の天端(800)で止まるはず');
+  assert.equal(own[0].isKneeDrop, true);
+});
+
 test('【対照】X1..X3の1本に結合された壁はX2..X3区間の構成壁でもあるため、X2の先は腰壁指定が効く', () => {
   const { graph, a1 } = buildFixture({ mergedWall: true });
   const cut = a1Cut(graph);
   const ctx = makeProbeContext(cut.layers);
   assert.equal(wallBandsOf(probeColumn(cut, -2971.25, ctx), a1)[0].z1, KNEE, 'X2の先は腰壁');
   assert.equal(wallBandsOf(probeColumn(cut, -5000, ctx), a1)[0].z1, CH, 'X1..X2は全高のまま');
+});
+
+// QA是正2026-09: 「壁自身の端から150mm以内」の絞り込みが無いと、区間境界(X2)の手前150mm
+// （壁自身の端からは遠いがレコード境界には近い点）まで隣区間の腰壁指定を拾ってしまい、
+// 全高であるべき区間が腰壁の高さへ縮む誤爆になる。壁自身の端(X1=-7942.5)からは遠く、
+// X2境界(-3000)の手前150mm以内にあるx=-3100/-3050/-3010で全高のままであることを固定する。
+test('【QA是正・失敗系】X1..X3の1本に結合された壁は、X2境界の手前150mm(壁自身の端からは遠い)では全高のまま（腰壁の誤爆防止）', () => {
+  const { graph, a1 } = buildFixture({ mergedWall: true });
+  const cut = a1Cut(graph);
+  const ctx = makeProbeContext(cut.layers);
+  for (const x of [-3100, -3050, -3010]) {
+    const own = wallBandsOf(probeColumn(cut, x, ctx), a1);
+    assert.equal(own.length, 1, `x=${x}: A1壁の帯が1本のはず`);
+    assert.equal(own[0].z1, CH, `x=${x}: 区間境界(X2)の手前でも全高のままのはず（腰壁800に縮んではいけない）`);
+    assert.equal(own[0].isKneeDrop, false, `x=${x}: isKneeDropもfalseのはず`);
+  }
 });
 
 // 帯の出力で症状そのものを固定する: 天端(z=800)の線がX2の食い込み部に出ない／壁端の縦線が
