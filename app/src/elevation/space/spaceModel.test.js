@@ -280,6 +280,72 @@ test('【QA指摘A・Phase2】componentOf: STAIR_VOIDは直下の階段室(featu
     'STAIR_VOIDは隣の通常室とは連結しないはず（階段室以外は対象外）');
 });
 
+// ---- ユーザー裁定: VOIDは「重なる吹抜けの最下階の親部屋1室」とだけ連結する（複数階の吹抜けは連鎖） ----
+function makeThreeLevelVoidChainGraphs() {
+  const l1Graph = makeGraph();
+  const room1F = makeRectRoom(l1Graph, 0, 0, 4000, 3000, '1F部屋');
+  const l2Graph = new PlanGraph(new Plane('p2', 2900, '2階', 1, 1));
+  const void2F = makeRectRoom(l2Graph, 0, 0, 4000, 3000, '2F吹抜け');
+  void2F.setFeature(RoomFeature.VOID);
+  const l3Graph = new PlanGraph(new Plane('p3', 5800, '3階', 1, 1));
+  const void3F = makeRectRoom(l3Graph, 0, 0, 4000, 3000, '3F吹抜け');
+  void3F.setFeature(RoomFeature.VOID);
+  return {
+    layer1: { graph: l1Graph, floorZMm: 0, role: 'self' }, room1F,
+    layer2: { graph: l2Graph, floorZMm: 2900, role: 'above' }, void2F,
+    layer3: { graph: l3Graph, floorZMm: 5800, role: 'above' }, void3F,
+  };
+}
+
+test('【ユーザー裁定・VOID連鎖】componentOf: 3階VOID→2階VOID→1階部屋が連鎖して同一成分になる', () => {
+  const { layer1, room1F, layer2, void2F, layer3, void3F } = makeThreeLevelVoidChainGraphs();
+  const index = buildSpaceIndex([layer1, layer2, layer3]);
+
+  const id1 = index.componentOf(layer1, room1F);
+  const id2 = index.componentOf(layer2, void2F);
+  const id3 = index.componentOf(layer3, void3F);
+  assert.ok(id1 != null && id2 != null && id3 != null, '3室とも成分idを持つはず');
+  assert.equal(id1, id2, '1階部屋と2階VOIDは連結するはず');
+  assert.equal(id2, id3, '2階VOIDと3階VOIDは連結するはず（連鎖）');
+  assert.equal(id1, id3, '1階部屋と3階VOIDは連鎖の結果として同一成分のはず');
+});
+
+test('【ユーザー裁定・VOID連鎖】componentOf: 直下に親部屋しかない場合は従来どおり1段だけ連結する', () => {
+  const lowerGraph = makeGraph();
+  const lowerRoom = makeRectRoom(lowerGraph, 0, 0, 4000, 3000, '1F部屋');
+  const upperGraph = new PlanGraph(new Plane('p2', 2900, '2階', 1, 1));
+  const upperVoid = makeRectRoom(upperGraph, 0, 0, 4000, 3000, '2F吹抜け');
+  upperVoid.setFeature(RoomFeature.VOID);
+
+  const lowerLayer = { graph: lowerGraph, floorZMm: 0, role: 'self' };
+  const upperLayer = { graph: upperGraph, floorZMm: 2900, role: 'above' };
+  const index = buildSpaceIndex([lowerLayer, upperLayer]);
+
+  assert.equal(index.componentOf(lowerLayer, lowerRoom), index.componentOf(upperLayer, upperVoid),
+    '直下が親部屋のみ（VOIDなし）なら従来どおり親部屋と連結するはず');
+});
+
+test('【ユーザー裁定・VOID連鎖】componentOf: 直下にVOIDと通常室の両方が重なる配置ではVOID側を優先して連鎖する', () => {
+  const lowerGraph = makeGraph();
+  // 親部屋(x:0-4000)とVOID(x:4000-8000)が並んで直下に存在し、どちらも上階VOIDのbboxに重なる。
+  // QA指摘①と同じ理由で、先勝ちだけでVOID優先と誤認しないよう親部屋を**先に**生成する。
+  const parentRoom = makeRectRoom(lowerGraph, 0, 0, 4000, 3000, '親部屋');
+  const lowerVoid = makeRectRoom(lowerGraph, 4000, 0, 8000, 3000, '1F吹抜け');
+  lowerVoid.setFeature(RoomFeature.VOID);
+  const upperGraph = new PlanGraph(new Plane('p2', 2900, '2階', 1, 1));
+  const upperVoid = makeRectRoom(upperGraph, 0, 0, 8000, 3000, '2F吹抜け'); // bboxは両方にまたがる
+  upperVoid.setFeature(RoomFeature.VOID);
+
+  const lowerLayer = { graph: lowerGraph, floorZMm: 0, role: 'self' };
+  const upperLayer = { graph: upperGraph, floorZMm: 2900, role: 'above' };
+  const index = buildSpaceIndex([lowerLayer, upperLayer]);
+
+  assert.equal(index.componentOf(upperLayer, upperVoid), index.componentOf(lowerLayer, lowerVoid),
+    '直下のVOIDと連結する（連鎖）はず');
+  assert.notEqual(index.componentOf(upperLayer, upperVoid), index.componentOf(lowerLayer, parentRoom),
+    '親部屋とは直接連結しないはず（直下にVOIDがある間は親部屋を見ない。連結は1F吹抜け経由の別件）');
+});
+
 // ---- QA指摘B: 遮断条件はmasterTypeに依存しない（STEP判定でも全高の壁があれば遮断） ----
 test('【QA指摘B・Phase2】componentOf: 床レベル差でSTEP判定される境界でも、全高の壁が実在すれば別成分', () => {
   const graph = makeGraph();

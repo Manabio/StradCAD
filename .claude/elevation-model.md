@@ -1303,11 +1303,13 @@ INV2は「役割名にも配列順にも依存していない」ことの実行�
 この索引を内包する薄いラッパで、対外契約（`floorZOf`/`chOf`等）は変えていない。
 
 **Phase 2**: `componentOf(layer, room)`/`componentAt`（空気ボリュームの連結成分）を追加。同一層は
-全高の壁で仕切られない限り連結（腰壁・垂れ壁は連結を切らない）。階またぎは、VOIDは直下の
-**親部屋1室**（feature==null）、STAIR_VOIDは直下の**階段室1室**（feature===STAIR）とだけ連結する
-単一マッチで、bboxが重なるだけの他の部屋（階段下の閉じた部屋等）は連結しない
-（13.stq「13」で実証済み。QA是正2026-09）。**本番からは誰も読まない**（検証プローブ・単体テスト
-のみが消費者）。`section/sectionHits.js`の`probeColumnHits`/`visibleBandsOf`も追加——1列の候補を
+全高の壁で仕切られない限り連結（腰壁・垂れ壁は連結を切らない）。階またぎは、VOIDは**重なる
+吹抜けの最下階の親部屋1室**（複数階にわたる吹抜けは、直下に重なるVOIDがある限りそれと連結して
+連鎖し、その最下階でようやく親部屋(feature==null)と連結する）、STAIR_VOIDは直下の
+**階段室1室**（feature===STAIR）とだけ連結する単一マッチで、bboxが重なるだけの他の部屋
+（階段下の閉じた部屋等）は連結しない（13.stq「13」で実証済み。QA是正・ユーザー裁定2026-09）。
+**本番からは誰も読まない**（検証プローブ・単体テストのみが消費者）。
+`section/sectionHits.js`の`probeColumnHits`/`visibleBandsOf`も追加——1列の候補を
 深度昇順の全ヒットとして保持し、深度最小だけ残して従来`probeColumn`と完全同値へ畳み込む合成
 関数として`probeColumn`を薄く保つ。水平面ヒット（floorFace/ceilFace）はPhase 3。
 詳細は`.claude/elevation-redesign.md`参照。

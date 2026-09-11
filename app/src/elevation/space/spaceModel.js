@@ -220,26 +220,37 @@ function findSingleOverlappingRoom(bounds, targetGraph, predicate) {
   return null;
 }
 
-// 階またぎ連結（設計ASSUMED 4。QA指摘でリード改訂: 「bboxが重なる下階Room全部」ではなく
-// 次の2規則だけに絞る）:
-//   (i)  上の層のセルがVOID       → 直下の**親部屋1室**（feature==null）とだけ連結
-//        （`elevationVoid.js`の`findLowerRoom`と同じ規約: 吹抜けの直下室は1室という製品規約）。
-//   (ii) 上の層のセルがSTAIR_VOID → 直下の**階段室1室**（feature===STAIR）とだけ連結
-//        （`elevationStair.js`の`findOverlappingVoidRoom`が使う対応と対称の向き）。
+// 階またぎ連結（設計ASSUMED 4。QA指摘でリード改訂の上、ユーザー裁定2026-09でVOID側を再改訂）:
+//   (i)  上の層のセルがVOID       → **重なる吹抜けの最下階の親部屋1室**とだけ連結する。
+//        直下層に**重なるVOID**（feature===VOID）が1室あれば、まずそれとだけ連結して終える——
+//        下のVOIDが自分自身の処理（このループの1つ下のペア）でさらに下へつなぐため、
+//        層ペアを1段ずつ辿るだけで**連鎖**が成立する（3階VOID⇔2階VOID⇔1階の親部屋、のように
+//        Union-Findの推移性で1つの成分にまとまる）。直下層に重なるVOIDが無ければ従来どおり
+//        **親部屋1室**（feature==null。`elevationVoid.js`の`findLowerRoom`と同じ規約）と連結する。
+//        両方が重なる配置ではVOID側を優先する（親部屋は連鎖の終端でしか見ない）。
+//        層スタックに吹抜けの最下階そのものが含まれない（`layers`に渡されていない）場合は、
+//        渡された範囲の中で連鎖できるところまでで止まる（それより下は評価しようがない）。
+//   (ii) 上の層のセルがSTAIR_VOID → 直下の**階段室1室**（feature===STAIR）とだけ連結（変更なし。
+//        `elevationStair.js`の`findOverlappingVoidRoom`が使う対応と対称の向き）。
 // 階段下の閉じた部屋（天井を持ち全高壁で囲まれる。例: 13.stq「13」）はどちらの規則にも
 // 該当しないため連結しない——旧実装（bbox重なり全部）が誤って混入させていた反例。
+// `findSingleOverlappingRoom`の「先に見つかった1室だけを対応先とする」規約はそのまま使う。
 // 隣接する層ペア（floorZMm昇順で連続する2層）だけを見る。
 function unionCrossLayerAdjacency(uf, layers) {
   const ordered = [...layers].filter(l => l?.graph).sort((a, b) => a.floorZMm - b.floorZMm);
   for (let i = 0; i + 1 < ordered.length; i++) {
     const lower = ordered[i], upper = ordered[i + 1];
     for (const upperRoom of graphList(upper.graph, 'rooms') ?? []) {
-      let predicate;
-      if (upperRoom.feature === RoomFeature.VOID) predicate = r => r.feature == null;
-      else if (upperRoom.feature === RoomFeature.STAIR_VOID) predicate = r => r.feature === RoomFeature.STAIR;
-      else continue;
       const bounds = roomBounds(refreshCells(upperRoom.cells, upper.graph), upper.graph);
-      const target = findSingleOverlappingRoom(bounds, lower.graph, predicate);
+      let target;
+      if (upperRoom.feature === RoomFeature.VOID) {
+        target = findSingleOverlappingRoom(bounds, lower.graph, r => r.feature === RoomFeature.VOID)
+          ?? findSingleOverlappingRoom(bounds, lower.graph, r => r.feature == null);
+      } else if (upperRoom.feature === RoomFeature.STAIR_VOID) {
+        target = findSingleOverlappingRoom(bounds, lower.graph, r => r.feature === RoomFeature.STAIR);
+      } else {
+        continue;
+      }
       if (!target) continue;
       uf.ensure(upperRoom); uf.ensure(target); uf.union(upperRoom, target);
     }
