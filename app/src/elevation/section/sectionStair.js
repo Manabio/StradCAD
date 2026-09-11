@@ -688,6 +688,30 @@ export function stairFaceHits(contribution, cut) {
   return hits;
 }
 
+/**
+ * `stairFaceHits`（占有面のヒット列。Phase 6b-1）から遮蔽矩形
+ * （`splitGapMarksByStair`/`dashHorizontalsBehindStair`が破線化判定に使う`{xLo,xHi,zLo,zHi}`）を
+ * 組み立てる（展開図一般化Phase 6b-2 段A。設計`.claude/elevation-redesign.md`§5.11 C-3）。
+ *
+ * 対象は`part:'tread'|'landingFrame'`だけ——`stringer`（内側ささらの見えがかり線）は
+ * `xLo===xHi`（幅0の縦線）で、遮蔽矩形として面積を持たない（`segmentInsideRect`は退化した
+ * 矩形を常に非交差として扱うため含めても実害は無いが、「遮蔽物＝手前に実体として描かれる階段」
+ * という定義上、幅0の線は意味を持たないため明示的に除外する）。
+ *
+ * `stairFaceHits`のtread/landingFrameは`stairOccluderRects`と同じ判定（`crossesFlight`）・
+ * 同じ形状から生成される（突き合わせテスト`sectionStair.test.js`「stairOccluderRectsと一致」で
+ * 保証済み）ため、本関数の出力は常に`stairOccluderRects(contribution, cut)`と同じ集合になる
+ * （出力不変。Phase 6b-2段Aのゲート）。
+ * @param {object|null} contribution - `cut.stairCut`
+ * @param {import('./sectionTypes.js').SectionCut} cut
+ * @returns {Array<{xLo:number, xHi:number, zLo:number, zHi:number}>}
+ */
+export function stairFaceOccluderRects(contribution, cut) {
+  return stairFaceHits(contribution, cut)
+    .filter(h => h.part !== 'stringer')
+    .map(h => ({ xLo: h.xLo, xHi: h.xHi, zLo: h.z0, zHi: h.z1 }));
+}
+
 // cut.lineがflightを横切っているか（flightLadderPrimitivesと同じ判定。ささら正面視・梯子で共有。
 // export: 展開図一般化Phase 6b-1のstairFaceHitsが同じ判定を再利用する）。
 export function crossesFlight(flight, cut) {

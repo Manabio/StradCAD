@@ -227,6 +227,107 @@ test('【失敗系・WP-E2・§5.5】emitColumns: 隣接列でdistMmが同じな
   assert.equal(seam.length, 0, 'distMmが同じ境界には凹みの縦線が出ないはず');
 });
 
+// ---- Phase 6b-2 C-1（設計`.claude/elevation-redesign.md`§5.11）: kind:'hidden'（「描かない実体」）----
+
+test('【Phase6b-2 C-1】emitColumns: kind:"hidden"の帯は何も描かない', () => {
+  const cut = makeCut();
+  const columns = [
+    { x0: 0, x1: 1000, worldLo: 0, worldHi: 1000, bands: [{ kind: 'hidden', z0: 0, z1: 2400 }] },
+  ];
+  const prims = emitColumns(columns, cut);
+  assert.deepEqual(prims, [], 'hidden帯だけの列からは1本も線が出ないはず');
+});
+
+// QA是正2026-09（Phase 6b-2 C-1後の実機回帰）: 当初は「隣がhiddenでも通常どおり凹み側縁が出る」と
+// 実装したが、実機13.stq「6」面D1で無関係な壁の凹み縦線が誤って復活する回帰が発覚した
+// （裁定9130007「13の壁関連の2本の縦線は描画しない」に反する）。hiddenの裏にも実体（今は
+// 描かないだけの壁）が在り視界は途切れていないため、cutと同じく「覆う側」として扱い、
+// 凹み側縁を出さないのが正しい——期待値を反転する。
+test('【QA是正2026-09・Phase6b-2 C-1】emitColumns: 隣がhiddenの境界には凹み側縁を描かない（cutと同じ「覆う」扱い）', () => {
+  const cut = makeCut();
+  const columns = [
+    { x0: 0, x1: 500, worldLo: 0, worldHi: 500,
+      bands: [{ kind: 'wall', z0: 0, z1: 2400, distMm: 1000, layerRole: 'self' }] },
+    { x0: 500, x1: 1000, worldLo: 500, worldHi: 1000, bands: [{ kind: 'hidden', z0: 0, z1: 2400 }] },
+  ];
+  const prims = emitColumns(columns, cut);
+  const recess = prims.find(p => p.x1 === 500 && p.x2 === 500 && p.y1 === 0 && p.y2 === -2400);
+  assert.equal(recess, undefined,
+    '隣がhiddenなら凹み側縁は出ないはず（hiddenの裏で壁が終わったわけではないため）');
+});
+
+test('【失敗系・QA是正2026-09】emitColumns: hiddenの被覆がband全体をz方向で覆わなければ、覆われない残りには従来どおり縁が出る', () => {
+  const cut = makeCut();
+  const columns = [
+    { x0: 0, x1: 500, worldLo: 0, worldHi: 500,
+      bands: [{ kind: 'wall', z0: 0, z1: 2400, distMm: 1000, layerRole: 'self' }] },
+    // hiddenがband上半分(1200..2400)しか覆わない列——下半分(0..1200)は覆われないまま残る。
+    { x0: 500, x1: 1000, worldLo: 500, worldHi: 1000, bands: [{ kind: 'hidden', z0: 1200, z1: 2400 }] },
+  ];
+  const prims = emitColumns(columns, cut);
+  const recess = prims.find(p => p.x1 === 500 && p.x2 === 500 && p.y1 === 0 && p.y2 === -1200);
+  assert.ok(recess, 'hiddenに覆われない残りのz区間(0..1200)には凹み側縁が出るはず');
+  const fullRecess = prims.find(p => p.x1 === 500 && p.x2 === 500 && p.y1 === 0 && p.y2 === -2400);
+  assert.equal(fullRecess, undefined, '全区間ぶんの縁（覆われた上半分まで含む）は出ないはず');
+});
+
+// QA是正2026-09（Phase 6b-2 C-1後の実機回帰・A続き）: `uncoveredZRanges`（x方向の隣接列比較）だけ
+// でなく`ownsBoundary`（z方向の同一列内の上下比較）もhiddenを「何も見えていない（open等と同格）」
+// 扱いにしていたため、hidden帯の上または下に隣接する**別の**壁帯の天端/下端の縁線が誤って出て
+// いた（実機13.stq「6」面A・D2: `(9542.5,-2400)-(9555,-2400)`・`(16586.5,-2400)-(18055,-2400)`等）。
+test('【QA是正2026-09・Phase6b-2 C-1】emitColumns: z方向でhiddenに隣接するwall帯は、hidden側の縁を描かない（ownsBoundaryがhiddenを「覆う」扱いにする）', () => {
+  const cut = makeCut({ zRange: { loZ: -500, hiZ: 5000 }, baseFloorZ: -500 });
+  const columns = [
+    { x0: 0, x1: 1000, worldLo: 0, worldHi: 1000, bands: [
+      { kind: 'wall', z0: 0, z1: 1000, distMm: 1000, layerRole: 'self' }, // 下側=通常のwall帯
+      { kind: 'hidden', z0: 1000, z1: 2400 }, // 上に隣接するhidden帯
+    ] },
+  ];
+  const prims = emitColumns(columns, cut, { ceilZ: 5000 });
+  const topEdge = prims.find(p => p.y1 === -1000 && p.y2 === -1000);
+  assert.equal(topEdge, undefined,
+    'wall帯の上端(z=1000)はhiddenに隣接するので縁を描かないはず（hiddenの裏で壁が終わったわけではない）');
+});
+
+// QA是正2026-09・B: 縮退した列（`col.x0===col.x1`）でも、天端/下端の水平縁（x1===x2かつy1===y2の
+// 「点」）は出さない（`dedupeLines`の出口ガード）。実機13.stq「6」面A/D2の12.5mm・56mmの断片や
+// 完全に縮退した点`(16530.5,-2400)→(16530.5,-2400)`は、hidden隣接の修正で自然に消えたが、
+// 縮退した列そのものはデータ構成として起こりうるため、ガードは残す（変異で確認する対象）。
+test('【QA是正2026-09・B】emitColumns: 縮退した列（x0===x1）でも長さゼロの線分は出さない', () => {
+  const cut = makeCut({ zRange: { loZ: -500, hiZ: 5000 }, baseFloorZ: -500 });
+  const columns = [
+    { x0: 500, x1: 500, worldLo: 500, worldHi: 500,
+      bands: [{ kind: 'wall', z0: 0, z1: 2400, distMm: 1000, layerRole: 'self' }] },
+  ];
+  const prims = emitColumns(columns, cut, { ceilZ: 5000 });
+  const zeroLength = prims.filter(p => p.type === 'line' && p.x1 === p.x2 && p.y1 === p.y2);
+  assert.deepEqual(zeroLength, [], '長さゼロ（x1===x2かつy1===y2）の線分プリミティブは1本も無いはず');
+});
+
+test('【Phase6b-2 C-1】emitOpenGapMarks: kind:"hidden"の帯はアキの成分に入らない（open帯とは連結しない）', () => {
+  const cut = makeCut();
+  const columns = [
+    { x0: 0, x1: 500, worldLo: 0, worldHi: 500, bands: [{ kind: 'open', z0: 0, z1: 2400 }] },
+    // 中央列がhidden（壁の実体）を挟むと、両側のopen帯は別成分——1組ではなく2組のXになる。
+    { x0: 500, x1: 1000, worldLo: 500, worldHi: 1000, bands: [{ kind: 'hidden', z0: 0, z1: 2400 }] },
+    { x0: 1000, x1: 1500, worldLo: 1000, worldHi: 1500, bands: [{ kind: 'open', z0: 0, z1: 2400 }] },
+  ];
+  const prims = emitOpenGapMarks(columns, cut);
+  const lines = prims.filter(p => p.type === 'line');
+  assert.equal(lines.length, 4, 'hiddenで隔てられた2つのopen成分ごとに対角線2本＝計4本のはず');
+  assert.ok(!lines.some(p => Math.min(p.x1, p.x2) < 500 && Math.max(p.x1, p.x2) > 500),
+    'hidden帯のx範囲(500..1000)を横切るバツは無いはず（成分がhiddenで分断されている）');
+});
+
+test('【失敗系・Phase6b-2 C-1】emitOpenGapMarks: hiddenだけの列にはバツもテキストも出ない', () => {
+  const cut = makeCut();
+  const columns = [
+    { x0: 0, x1: 1000, worldLo: 0, worldHi: 1000, bands: [{ kind: 'hidden', z0: 0, z1: 2400 }] },
+  ];
+  const prims = emitOpenGapMarks(columns, cut);
+  assert.deepEqual(prims, [], 'hiddenだけの列からはアキの標記が一切出ないはず');
+});
+
 test('【WP-E2・線種テーブル】emitOpenGapMarks: baseFloorZより上のアキXはdash:center', () => {
   const cut = makeCut({ baseFloorZ: 0 });
   const columns = [
@@ -247,6 +348,80 @@ test('【WP-E2・線種テーブル】emitOpenGapMarks: 床断面より下のア
   const prims = emitOpenGapMarks(columns, cut).filter(p => p.type === 'line');
   assert.equal(prims.length, 2);
   for (const p of prims) assert.equal(p.dash, 'dashed');
+});
+
+// ================================================================
+// Phase 6b-2 C-2＋C-5（設計`.claude/elevation-redesign.md`§5.11。13.stq「6」面C相当）:
+// アキの下端の輪郭クランプを撤去し（C-2）、対角線の線種を線分ごとに判定する（C-5）。
+// ================================================================
+
+test('【Phase6b-2 C-2+C-5・13.stq「6」面C相当】emitOpenGapMarks: 列0〜1492.5=open(z0..2400)・列≥1492.5=hiddenから、対角が裁定の2本（各2分割）になる', () => {
+  // ユーザー裁定2026-09-11: アキはx 0〜1492.5×z 0〜2400の長方形、対角(0,0)→(1492.5,2400)・
+  // (0,2400)→(1492.5,0)。baseFloorZ=1500（踊り場高さ相当）でそれぞれ分割され、
+  // 下片(z<1500)がdashed・上片(z>1500)がcenterになるはず。
+  const columns = [
+    { x0: 0, x1: 1492.5, worldLo: 0, worldHi: 1492.5, bands: [{ kind: 'open', z0: 0, z1: 2400 }] },
+    { x0: 1492.5, x1: 2885, worldLo: 1492.5, worldHi: 2885, bands: [{ kind: 'hidden', z0: 0, z1: 2400 }] },
+  ];
+  const cut = makeCut({ baseFloorZ: 1500, zRange: { loZ: 0, hiZ: 2400 } });
+  const prims = emitOpenGapMarks(columns, cut, { ceilZ: 2400 });
+  const lines = prims.filter(p => p.type === 'line').map(p => ({
+    x1: p.x1, y1: p.y1, x2: p.x2, y2: p.y2, dash: p.dash,
+  }));
+  assert.equal(lines.length, 4, '対角2本×分割2片＝4本のはず（hidden側(x≥1492.5)へは伸びない）');
+  const splitX1 = 1492.5 * 1500 / 2400; // 932.8125（対角(0,0)-(1492.5,2400)がz=1500と交わるx）
+  const splitX2 = 1492.5 * 900 / 2400;  // 559.6875（対角(0,2400)-(1492.5,0)がz=1500と交わるx）
+  const has = (x1, y1, x2, y2, dash) => lines.some(l =>
+    Math.abs(l.x1 - x1) < 1e-6 && Math.abs(l.y1 - y1) < 1e-6
+    && Math.abs(l.x2 - x2) < 1e-6 && Math.abs(l.y2 - y2) < 1e-6 && l.dash === dash);
+  assert.ok(has(0, 0, splitX1, -1500, 'dashed'), '対角1の下片(0,0)→(932.8125,1500)はdashedのはず');
+  assert.ok(has(splitX1, -1500, 1492.5, -2400, 'center'), '対角1の上片(932.8125,1500)→(1492.5,2400)はcenterのはず');
+  assert.ok(has(0, -2400, splitX2, -1500, 'center'), '対角2の上片(0,2400)→(559.6875,1500)はcenterのはず');
+  assert.ok(has(splitX2, -1500, 1492.5, 0, 'dashed'), '対角2の下片(559.6875,1500)→(1492.5,0)はdashedのはず');
+  // QA是正2026-09（C）: 「ア キ」のゲートを「isRectかつ上片(center)が実在するか」
+  // （`exempt || z1 > baseFloorZ + GAP_EPS`）へ修正——本成分は矩形かつz1(2400) > baseFloorZ(1500)
+  // なので上片が実在し、文字は矩形の中心(x=746.25, z=(0+2400)/2=1200 → y=-1200)に出るはず。
+  const text = prims.find(p => p.type === 'text');
+  assert.ok(text, '矩形の成分には「ア キ」が出るはず（上片がcenterで実在するため）');
+  assert.deepEqual([text.x, text.y], [746.25, -1200], '「ア キ」は矩形の中心にあるはず');
+});
+
+test('【Phase6b-2 C-5・統合】splitGapMarksByStair: C-5分割後のcenter片も、遮蔽矩形と重なる区間だけ従来どおりdashedへ落ちる', () => {
+  // baseFloorZ=0（境界に触れない）なので分割なし=対角1本がまるごとcenterのまま
+  // emitOpenGapMarksから出る——その後段（splitGapMarksByStair）が遮蔽区間だけをdashedへ
+  // 落とす、というstage Aまでの経路がC-5の分割後もそのまま機能することを確認する。
+  const columns = [
+    { x0: 0, x1: 1000, worldLo: 0, worldHi: 1000, bands: [{ kind: 'open', z0: 0, z1: 2000 }] },
+  ];
+  const cut = makeCut({ baseFloorZ: 0, zRange: { loZ: 0, hiZ: 2000 } });
+  const raw = emitOpenGapMarks(columns, cut, { ceilZ: 2000 });
+  const diag1Before = raw.filter(p => p.type === 'line' && p.dash === 'center'
+    && p.x1 === 0 && p.y1 === 0);
+  assert.equal(diag1Before.length, 1, '前提: baseFloorZに触れないのでC-5の分割は起きず対角1本のまま');
+  // 「往路梯子相当」の遮蔽矩形: x 0〜500・z 0〜1000（対角(0,0)-(1000,2000)の前半だけに掛かる）。
+  const rects = [{ xLo: 0, xHi: 500, zLo: 0, zHi: 1000 }];
+  const out = splitGapMarksByStair(raw, rects);
+  const outLines = out.filter(p => p.type === 'line' && p.x1 === 0 && p.y1 === 0
+    || p.type === 'line' && p.x2 === 1000 && p.y2 === -2000);
+  // 遮蔽と重なる前半(x0..500, z0..1000)がdashed・残り(x500..1000)がcenterの2本に割れるはず。
+  assert.ok(outLines.some(p => p.dash === 'dashed' && Math.abs(p.x2 - 500) < 1e-6),
+    '遮蔽区間(x0..500)はdashedへ落ちるはず');
+  assert.ok(outLines.some(p => p.dash === 'center' && Math.abs(p.x1 - 500) < 1e-6),
+    '遮蔽の外(x500..1000)はcenterのまま残るはず');
+});
+
+test('【失敗系・Phase6b-2 C-5】emitOpenGapMarks: extendedFromZを持つ帯（structZ0がbaseFloorZ以上）は分割・降格しない（回帰「11ダッシュ」A2）', () => {
+  // splitOpenByFarFace由来のextendedFromZ（伸ばす前のz0=0）がbaseFloorZ(0)以上なので、
+  // 実際のz0(-100)がbaseFloorZより下でも「この帯自身がbaseFloorZの下へ潜った」とは扱わない
+  // ——対角は分割されず1本のまま、dashは終始'center'（neverDowngradeでemitLineの自動降格も
+  // 効かない）。
+  const columns = [{ x0: 0, x1: 1000, worldLo: 0, worldHi: 1000,
+    bands: [{ kind: 'open', z0: -100, z1: 2400, farFloorZ: -100, farCeilZ: 2400, farDepthMm: 58,
+      extendedFromZ: 0 }] }];
+  const cut = makeCut({ baseFloorZ: 0 });
+  const lines = emitOpenGapMarks(columns, cut, { ceilZ: 2400 }).filter(p => p.type === 'line');
+  assert.equal(lines.length, 2, '分割されず対角2本のままのはず（exempt）');
+  for (const p of lines) assert.equal(p.dash, 'center', 'extendedFromZの例外はdash:centerを維持するはず');
 });
 
 // ---- 最終フィルタ（§5.6最終行）----
@@ -1473,9 +1648,11 @@ const gapYs = (cut, columns) => [...new Set(emitOpenGapMarks(columns, cut)
 test('【裁定2026-09・3点固定1/3】emitOpenGapMarks: 実機「11ダッシュ」A2左型は遠側床（1FLの破線）まで下がる', () => {
   // 遠側床が帯の床と異なる（-100）＝その高さに遠側床線（1FLの破線）が実際に描かれている。
   // splitOpenByFarFace: farFloorZ(-100)は区間の外（z0=0より下）なのでfarVoidを作らず、
-  // open帯自体の下端がfarFloorZまで伸びる（sectionEngine.test.js【Phase5】参照）。
+  // open帯自体の下端がfarFloorZまで伸びる（sectionEngine.test.js【Phase5】参照。
+  // `extendedFromZ: 0`＝伸ばす前のz0は、まさにそのテストの実出力どおり）。
   const columns = [{ x0: 0, x1: 1000, worldLo: 0, worldHi: 1000,
-    bands: [{ kind: 'open', z0: -100, z1: 2400, farFloorZ: -100, farCeilZ: 2400, farDepthMm: 58 }] }];
+    bands: [{ kind: 'open', z0: -100, z1: 2400, farFloorZ: -100, farCeilZ: 2400, farDepthMm: 58,
+      extendedFromZ: 0 }] }];
   const cut = makeCut();
   assert.deepEqual(gapYs(cut, columns), [-2400, 100],
     '下端は遠側床z=-100（FL=100の帯では最終y=0＝1FLの破線）のはず');
@@ -1538,13 +1715,17 @@ test('【失敗系】emitOpenGapMarks: far付帯情報の無いアキは従来�
 test('【失敗系・実機修正2026-09】emitOpenGapMarks: far値が引けない（band.farDepthMm欠落）ときはクランプしない（帯の床と断定しない）', () => {
   // splitOpenByFarFace の対象外（`!Number.isFinite(band.farDepthMm)`）のときは素通しなので、
   // band自体が探査どおりのz0/z1のまま渡ってくる（farFloorZ/farCeilZ自体を持たない）。
+  // `extendedFromZ`も付かない（splitOpenByFarFace由来の延伸ではなく、この帯自身のz0がbaseFloorZ
+  // より低いだけ）——Phase 6b-2 C-5により、baseFloorZ(0)をまたぐ対角線はz=0で分割され、
+  // その点(y=0)が新たに頂点集合へ加わる（下片は§5.6最終フィルタでdashedへ降格。線の本数・
+  // 下端z自体は変わらない）。
   const columns = [
     { x0: 0, x1: 1000, worldLo: 0, worldHi: 1000, bands: [{ kind: 'open', z0: -50, z1: 2400 }] },
   ];
   const cut = makeCut();
   const ys = [...new Set(emitOpenGapMarks(columns, cut)
     .filter(p => p.type === 'line').flatMap(p => [p.y1, p.y2]))].sort((a, b) => a - b);
-  assert.deepEqual(ys, [-2400, 50], '下端は探査どおり(z=-50 → y=50)のままのはず');
+  assert.deepEqual(ys, [-2400, 0, 50], '下端は探査どおり(z=-50 → y=50)のまま・baseFloorZ(z=0)の分割点(y=0)が加わる');
 });
 
 test('【実機修正2026-09】emitOpenGapMarks: 「ア キ」はクランプ後のz範囲の中心に置く（線と文字を食い違わせない）', () => {

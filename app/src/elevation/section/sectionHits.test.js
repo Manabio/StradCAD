@@ -632,7 +632,11 @@ test('【回帰・QA是正2026-09】visibleBandsOf: 同じ壁・同じ距離の�
 // ため、境界には isRoomWall:true の実壁が立つ——実機13.stqの2a壁と同じ性質）。
 // ================================================================
 
-test('【isHiddenWall】帯自身の部屋と階段下部屋を隔てる実壁は非可視になる', () => {
+// Phase 6b-2 C-1（設計`.claude/elevation-redesign.md`§5.11）: isHiddenWall該当の壁は
+// 「候補から消す」のではなく「描かない実体」として候補・選択結果に残る。旧テスト
+// 「候補収集(probeColumnHits)・列の分割(collectCutBreaks)の両方から消える」は前提が変わった
+// ため、逆向き（残る・hiddenが付く・選択結果がkind:'hidden'になる）へ更新する。
+test('【Phase6b-2 C-1】帯自身の部屋と階段下部屋を隔てる実壁は候補から消えず、hidden:trueが付き、選択結果はkind:"hidden"になる（"open"にはならない）', () => {
   const graph = makeGraph();
   const airRoom = makeRectRoom(graph, 0, 0, 4000, 3000, 'LDK');
   const underRoom = makeRectRoom(graph, 0, 3000, 4000, 6000, 'Under');
@@ -646,13 +650,28 @@ test('【isHiddenWall】帯自身の部屋と階段下部屋を隔てる実壁�
   assert.equal(isHiddenWall(cut, wall, layer, probeCtx), true,
     '帯自身の空気ボリューム(airRoom)と階段下部屋(underRooms)を隔てる壁は非可視のはず');
 
-  // 候補収集(probeColumnHits)・列の分割(collectCutBreaks)の両方から消える
-  // （旧cut.hiddenWallIdsテストと同じ確認粒度）。
-  const { hits } = probeColumnHits(cut, 2000, probeCtx);
-  assert.ok(!hits.some(h => h.wall === wall), '非可視の壁は候補(hits)に現れないはず');
+  // 候補収集(probeColumnHits)からは消えない——hidden:trueを付けて積む（深度順は不変）。
+  const { hits, layerStack, unexploredBelowZ } = probeColumnHits(cut, 2000, probeCtx);
+  const wallHit = hits.find(h => h.wall === wall);
+  assert.ok(wallHit, '非可視の壁も候補(hits)には残るはず（Phase 6b-2でcontinueをやめた）');
+  assert.equal(wallHit.hidden, true, '非可視の壁のヒットにはhidden:trueが付くはず');
+
+  // 選択結果(visibleBandsOf)は'open'（アキ・バツの対象）ではなく'hidden'（描かない実体）になる。
+  const bands = visibleBandsOf(hits, cut, { layerStack, unexploredBelowZ });
+  assert.ok(!bands.some(b => b.kind === 'open'),
+    'この列にopen帯は無いはず（壁の実体がhiddenとして選ばれ、アキにならない）');
+  const hiddenBands = bands.filter(b => b.kind === 'hidden');
+  assert.ok(hiddenBands.length > 0, 'kind:"hidden"の帯が選ばれるはず');
+  // hidden帯はwall/distMm/openingPassThrough/far付帯を一切持たない（実体の詳細を渡さない宣言）。
+  for (const b of hiddenBands) {
+    assert.equal(b.wall, undefined, 'hidden帯にwall参照は付かないはず');
+    assert.equal(b.distMm, undefined, 'hidden帯にdistMmは付かないはず');
+    assert.equal(b.farFloorZ, undefined, 'hidden帯にfarFloorZは付かないはず');
+    assert.equal(b.farCeilZ, undefined, 'hidden帯にfarCeilZは付かないはず');
+  }
 });
 
-test('【失敗系・isHiddenWall】cut.underRoomsが無ければ非隠蔽のまま（従来どおり壁が見える）', () => {
+test('【失敗系・isHiddenWall】cut.underRoomsが無ければ非隠蔽のまま（従来どおりkind:"wall"の帯になる）', () => {
   const graph = makeGraph();
   const airRoom = makeRectRoom(graph, 0, 0, 4000, 3000, 'LDK');
   makeRectRoom(graph, 0, 3000, 4000, 6000, 'Under');
@@ -662,6 +681,12 @@ test('【失敗系・isHiddenWall】cut.underRoomsが無ければ非隠蔽のま
   const probeCtx = makeProbeContext(cut.layers);
   assert.equal(isHiddenWall(cut, wall, cut.layers[0], probeCtx), false,
     'underRooms未指定なら判定対象外（非隠蔽）のはず');
+  // 選択結果も従来どおりkind:'wall'（hiddenにならない）。
+  const { hits, layerStack, unexploredBelowZ } = probeColumnHits(cut, 2000, probeCtx);
+  const bands = visibleBandsOf(hits, cut, { layerStack, unexploredBelowZ });
+  assert.ok(bands.some(b => b.kind === 'wall' && b.wall === wall),
+    'underRoomsが無ければ従来どおりkind:"wall"の帯として選ばれるはず');
+  assert.ok(!bands.some(b => b.kind === 'hidden'), 'hidden帯は出ないはず');
 });
 
 test('【失敗系・isHiddenWall】isRoomWall=falseの壁（自立した間仕切り等）は、位置が階段下部屋の境界と重なっても非隠蔽のまま', () => {

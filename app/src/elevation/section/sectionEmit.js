@@ -10,7 +10,6 @@ import {
   GAP_LABEL_WIDTH_PX,
   ElevationLineRole, weightForRole, GAP_EPS_MM as GAP_EPS, kneeCapBottomMm, KNEE_CAP_FACE_MM,
 } from '../elevationStyle.js';
-import { drawnFloorProfileZMax } from '../elevationFloorProfile.js';
 import { zToY, cutDrawRange, localXOf, hasCutWallStandingOn } from './sectionTypes.js';
 import { openingSectionPrimitives } from '../../openings/openingSection.js';
 import { FRAME_OVERHANG_MM } from '../../openings/openingPlanSymbolGeometry.js';
@@ -132,6 +131,20 @@ function uncoveredZRanges(col, band) {
     // 線種を「切断壁の縁=太線／見えがかり=中線・細線」へ分けた時点（ユーザー明示指示2026-08）に
     // 重複が表面化した——偶然の重複除去に頼らず、描かない理由の側で決める。
     if (nb.kind === 'cut') {
+      if (!overlapsZ(nb, band)) continue;
+      ranges = subtractZ(ranges, nb);
+      continue;
+    }
+    // QA是正2026-09（Phase 6b-2 C-1後の実機回帰）: hidden帯（展開図一般化Phase 6b-2 C-1。
+    // 「描かない実体」）も覆う側に数える——理由はcutと同じで、hiddenの裏にも実体（今は描かない
+    // だけの壁）が在り、その位置で視界が途切れているわけではない。hidden自身は自分の縁を
+    // 一切描かない（sectionEmit.jsの`emitColumns`のif/elseチェーンに該当分岐が無い）ため、
+    // ここで覆わないと「hiddenの手前でこの帯（無関係な別の壁）が終わった」という誤った凹みの
+    // 縦線が生える（実機13.stq「6」面D1: 同じ`cut.airRoom`/`cut.underRooms`を帯の全cutで共有する
+    // ため、この帯とは無関係な部屋13の2a壁がD1でも非可視候補になり、その span の両端
+    // （`(3780,0)-(3780,-2400)`・`(6305,-1500)-(6305,-5400)`）に凹みの縦線が誤って出ていた。
+    // 裁定9130007「13の壁関連の2本の縦線は描画しない」に反する回帰）。
+    if (nb.kind === 'hidden') {
       if (!overlapsZ(nb, band)) continue;
       ranges = subtractZ(ranges, nb);
       continue;
@@ -567,6 +580,13 @@ function neighborBandAt(col, z, dir) {
  * @returns {boolean}
  */
 function ownsBoundary(band, neighbor) {
+  // QA是正2026-09（Phase 6b-2 C-1後の実機回帰）: 隣（z方向）がhidden帯なら境界線を描かない
+  // ——hiddenは「開いている（visibleDepthMm null）」のではなく「実体はあるが描かない」ため、
+  // `null`と同じ「相手が何も見えていない」扱いにすると、band側が誤って「自分がこの境界の
+  // 輪郭を持つ」と判定し、hiddenの手前・上下に無関係な縁線が生える（実機13.stq「6」面A/D2:
+  // 同じ`cut.airRoom`/`cut.underRooms`を共有する部屋13の2a壁が非可視候補になった別の面で、
+  // その壁の帯（z方向の上または下）に隣接する無関係な壁の天端/下端の縁線が誤って出ていた）。
+  if (neighbor?.kind === 'hidden') return false;
   const a = visibleDepthMm(band);
   if (a === null) return false;
   const b = visibleDepthMm(neighbor);
@@ -870,6 +890,9 @@ export function emitColumns(columns, cut, emitCtx = {}) {
       // （slabとopenの境界）→SILHOUETTE水平線」）。同一列内でz方向に隣接するslab/open帯の境界を
       // 対象にする——列をまたぐslab⇄open（x方向の境界）は凹み側面線に相当する概念が無く
       // （床の厚み方向の境界であってwallの見付面ではない）、本WPでは対象外（ASSUMED）。
+      // hidden帯（展開図一般化Phase 6b-2 C-1。「描かない実体」）も、上のif/elseチェーンに
+      // 該当する分岐が無いためここでは自動的に何も描かない——kind==='cut'/'wall'/'cutAlong'/
+      // 'open'のどれでもないので単に読み飛ばされる（他のkindを新設したときと同じ扱い）。
     }
     for (let i = 0; i + 1 < col.bands.length; i++) {
       const a = col.bands[i], b = col.bands[i + 1];
@@ -897,16 +920,30 @@ export function emitColumns(columns, cut, emitCtx = {}) {
   return dedupeLines(prims);
 }
 
+// QA是正2026-09（Phase 6b-2 C-1後の実機回帰の副次修正・B）: 長さゼロの線分（x1===x2かつ
+// y1===y2）か。列の境界が縮退する構成（例: hidden帯の材の面がちょうど別の列境界と一致し、
+// col.x0===col.x1になる等）では`emitLine`/`subtractRectsFromLine`が実質「点」のプリミティブを
+// 生んでしまうことがある——実害（見えない点が描画されるだけ）は小さいが、diffツールや将来の
+// レンダラで意図しない挙動を招くため、出口（`dedupeLines`＝`emitColumns`の集約点・
+// `subtractRectsFromLine`＝クリップの出口）でまとめて捨てる。GAP_EPSではなく極小固定値
+// （浮動小数の丸め誤差ぶんだけを許容）を使う——GAP_EPSは面のmm単位の許容差で、ここでは
+// 「本当に同一点か」だけを見たいため。
+function isZeroLengthLine(p) {
+  return p.type === 'line' && Math.abs(p.x1 - p.x2) < 1e-9 && Math.abs(p.y1 - p.y2) < 1e-9;
+}
+
 // 完全に同一（type/x1/y1/x2/y2/weight/dash）の線プリミティブを1本にまとめる（WP-E5b追加）。
 // sectionProbe.jsがcut.baseFloorZ/ceilZをzBreaksに割り込ませる（§5.6最終フィルタをband内部の
 // 一部にも適用できるようにするため）副作用として、同一kindの隣接z区間が「上端／下端」を
 // それぞれ独立に描く際、その内部分割の境界ちょうどで同じ水平線が2回出ることがある
 // （例: wallの下側区間の上端縁と上側区間の下端縁が同じz=baseFloorZに重なる）——見た目には
 // 影響しない冗長プリミティブだが、テスト側の本数アサーションを不安定にするため統合する。
+// 長さゼロの線分（isZeroLengthLine）もここで捨てる（QA是正2026-09・B）。
 function dedupeLines(prims) {
   const seen = new Set();
   const out = [];
   for (const p of prims) {
+    if (isZeroLengthLine(p)) continue;
     const key = p.type === 'line' ? `${p.type}|${p.x1}|${p.y1}|${p.x2}|${p.y2}|${p.weight}|${p.dash ?? ''}` : null;
     if (key && seen.has(key)) continue;
     if (key) seen.add(key);
@@ -930,6 +967,26 @@ function segmentInsideRect(x1, y1, x2, y2, r) {
     else { if (t < t0) return null; if (t < t1) t1 = t; }
   }
   return t1 - t0 > 1e-9 ? [t0, t1] : null;
+}
+
+/**
+ * z-x平面の線分[a,b]（各`[x,z]`）を、`splitZ`（baseFloorZ）で**厳密に内部**を横切る場合だけ
+ * 2本へ分割する（展開図一般化Phase 6b-2 C-5）。触れるだけ（両端の一方がちょうどsplitZ）や
+ * またがない場合は元の1本のまま返す——ゼロ長の断片を作らないため。
+ * 分割点では`a→b`の向きを保ったまま`[a, mid]`・`[mid, b]`の順で返す（呼び出し側の描画順・
+ * 既存の座標対応を変えないため）。
+ * @param {[number,number]} a - [x,z]
+ * @param {[number,number]} b - [x,z]
+ * @param {number} splitZ
+ * @returns {Array<[[number,number],[number,number]]>} 1件（分割なし）または2件
+ */
+function splitSegmentAtZ(a, b, splitZ) {
+  const [ax, az] = a, [bx, bz] = b;
+  const lo = Math.min(az, bz), hi = Math.max(az, bz);
+  if (!(splitZ > lo + GAP_EPS && splitZ < hi - GAP_EPS)) return [[a, b]];
+  const t = (splitZ - az) / (bz - az);
+  const mid = [ax + (bx - ax) * t, splitZ];
+  return [[a, mid], [mid, b]];
 }
 
 // 媒介変数区間の集合を昇順・非重複へ統合する。
@@ -966,7 +1023,10 @@ function obstructionRects(columns, x0, x1, z0, z1) {
 }
 
 // 線分から矩形の和に入る区間を取り除き、残った区間だけの線分列にする。
+// QA是正2026-09・B: 入力自体が長さゼロ（縮退した列の境界等から生成された「点」）なら
+// 素通りさせず捨てる——素通りさせると矩形と重ならない限り点のまま最終出力へ残ってしまう。
 function subtractRectsFromLine(p, rects) {
+  if (isZeroLengthLine(p)) return [];
   if (!rects.length) return [p];
   const cut = mergeIntervals(rects
     .map(r => segmentInsideRect(p.x1, p.y1, p.x2, p.y2, r))
@@ -1225,14 +1285,14 @@ export function emitOpenGapMarks(columns, cut, emitCtx = {}) {
       if (b.kind === 'open' && !b.openingPassThrough && !overCutWall) {
         const x0 = Math.max(col.x0, faceLoX), x1 = Math.min(col.x1, faceHiX);
         if (x1 - x0 <= GAP_EPS) continue; // 面の外（延長ぶん）だけの列
-        // **断面線より下のアキは、その面の抜けではない**（ユーザー明示指示2026-09
-        // 「階段下に部屋がある場合、断面下は描画しない」）——バツを後から切ると「X」の形が
-        // 崩れるので、**セルの段階で**断面線まで持ち上げる（連結成分・外接矩形・「ア キ」の
-        // 位置がそのまま可視範囲のものになる）。輪郭が斜め（階段断面）に掛かる列では
-        // **区間の最大**で持ち上げる——中点や低い側で持ち上げると、セルの一部が断面線の
-        // 下に残る。`cut.drawFloorProfile`未指定は従来どおり無制限。
-        const floorZ = drawnFloorProfileZMax(cut.drawFloorProfile, x0, x1);
-        const z0 = Math.max(b.z0, floorZ === -Infinity ? b.z0 : floorZ);
+        // **アキの下端はband自身が決める**（展開図一般化Phase 6b-2 C-2。設計
+        // `.claude/elevation-redesign.md`§5.11）——旧実装はここで`cut.drawFloorProfile`
+        // （断面線＝面全幅フラットの輪郭）まで強制的に持ち上げていたが、輪郭は「階段の占有形状の
+        // 概算」に過ぎず、実際にどこまでが空気で（open帯）どこからが階段下部屋の壁（今はkind:
+        // 'hidden'として実体を持つ）かは既にband自身（sectionHits.jsのvisibleBandsOf）が答えを
+        // 持っている。二重にクランプすると、hidden実体の手前側にあるはずの本来のアキ下端
+        // （階段の桁の間の隙間等）が輪郭の高さまで誤って持ち上げられる（実機「6」C）。
+        const z0 = b.z0;
         if (b.z1 - z0 <= GAP_EPS) continue;
         // structZ0: 一点鎖線/破線の切替（下記dash）専用のz0。`sectionEngine.js`の
         // `splitOpenByFarFace`が遠側床へ下端を伸ばした帯（`b.extendedFromZ`＝伸ばす前のz0）は、
@@ -1311,8 +1371,19 @@ export function emitOpenGapMarks(columns, cut, emitCtx = {}) {
     // （Phase 5・`extendedFromZ`）はこの帯自身がbaseFloorZの下へ潜ったわけではないため対象外
     // （実機「11'」A2: 遠側床線自体は図側が別に「破線」で描くが、アキの対角線・「ア キ」は
     // この帯自身の床断面（baseFloorZ）より上のままなら一点鎖線・文字ありのまま）。
+    // **`exempt`**（展開図一般化Phase 6b-2 C-5。設計`.claude/elevation-redesign.md`§5.11）は
+    // 「線分ごとの分割をしない（＝対角線全体をneverDowngradeのcenterで通す）」かどうかのゲート
+    // ——旧実装はこの1つの真偽値で**成分全体**の様式（'center'か'dashed'か。`dash`変数）を
+    // 一括決定していたが、新実装は「structZ0がbaseFloorZ以上（＝実extendedFromZの例外か、
+    // そもそも全区間baseFloorZより上）」のときだけ旧どおり一括center（exempt）とし、それ以外は
+    // 各対角線をbaseFloorZで分割して§5.6最終フィルタ（emitLineのbeyond判定）に降格を委ねる
+    // （下記）。QA是正2026-09（C）: 「ア キ」のゲートは`dash`（成分単位の一括値）ではなく
+    // `hasUpperCenterPiece`（下記）を使う——線分ごとの分割後は成分全体が'dashed'扱いでも
+    // 上片はcenterのまま描かれるため、旧`dash==='center'`ゲートのままだと矩形の成分でも
+    // 文字が出なくなっていた。
     const structZ0 = Math.min(...g.map(c => c.structZ0 ?? c.z0));
-    const dash = structZ0 >= (cut.baseFloorZ ?? 0) - GAP_EPS ? 'center' : 'dashed';
+    const baseFloorZ = cut.baseFloorZ ?? 0;
+    const exempt = structZ0 >= baseFloorZ - GAP_EPS;
     // **バツは実体（腰壁等）と交差する区間をクリップする**（ユーザー実機指摘2026-08「6」C
     // 「バツが、腰壁と交差する場合、腰壁内はクリップして描画しない」）。連結成分の外接矩形
     // いっぱいに対角線を引くため、成分に食い込む壁の上を線が通ってしまう。
@@ -1325,8 +1396,8 @@ export function emitOpenGapMarks(columns, cut, emitCtx = {}) {
     // すべて満たす連結成分にだけ付ける（建具の開口はそもそもセルに入らない＝上記）:
     //   - 外接矩形そのもの（全セルが同じz範囲）… L字に食い込んだ成分では外接矩形の中心が
     //     アキでない場所（腰壁の上等）に落ち、文字が実体の上に乗る
-    //   - 床断面より上（dash==='center'）… 床断面より下の抜けは「向こう側の断面＝細線の破線」で、
-    //     そこへ実線の標記を足すのは線種の規則に反する
+    //   - 上片（center）が実在する（`hasUpperCenterPiece`。QA是正2026-09・C）… 床断面より下だけの
+    //     抜けは「向こう側の断面＝細線の破線」で、そこへ実線の標記を足すのは線種の規則に反する
     //
     // **輪郭の矩形は描かない**（ユーザー明示指示「矩形をやめて」）——アキの輪郭は定義上つねに
     // 周囲の実体（壁の断面・床/天井の断面線・腰壁の天端・面端の縦線）と一致するため、矩形として
@@ -1334,15 +1405,39 @@ export function emitOpenGapMarks(columns, cut, emitCtx = {}) {
     // 線種の情報を上書きしてしまう**（実機「5」A: X2通りの壁の断面（太線）の上に、アキ矩形の
     // 左辺（中線）が重なっていた）。抜けの範囲はバツと「ア キ」で足りる。
     const isRect = g.every(c => Math.abs(c.z0 - z0) < GAP_EPS && Math.abs(c.z1 - z1) < GAP_EPS);
-    if (isRect && dash === 'center') {
-      // 中心はクランプ後のz範囲（バツと同じ範囲）で採る——線と文字が食い違わないため。
+    // QA是正2026-09（Phase 6b-2 C-5の回帰）: 旧ゲート（`dash==='center'`＝成分単位のexempt判定）は
+    // 線分ごとの分割（C-5）導入後、矩形の成分でも**上片がcenterのまま**なのに「成分全体としては
+    // 非exempt（dash変数は'dashed'）」というだけの理由で「ア キ」が一切出なくなっていた。
+    // 正しいゲートは「上片（center）が実在するか」——exemptならそのまま（従来どおり全体がcenter）、
+    // 非exemptでも**成分の上端z1がbaseFloorZより上**なら、その部分はC-5の分割でcenterのまま
+    // 描かれる（実際に文字を置ける中心がある）ので出してよい。
+    const hasUpperCenterPiece = exempt || z1 > baseFloorZ + GAP_EPS;
+    if (isRect && hasUpperCenterPiece) {
+      // 中心は矩形の中心（クランプ後のz範囲＝バツと同じ範囲）で採る——線と文字が食い違わないため。
       const tLo = Math.min(L.lo, R.lo), tHi = Math.max(L.hi, R.hi);
       prims.push({ type: 'text', x: (x0 + x1) / 2, y: zToY((tLo + tHi) / 2),
         text: 'ア キ', anchor: 'middle', baseline: 'middle' });
     }
+    // **線分ごとの線種判定**（Phase 6b-2 C-5）: `exempt`（旧`structZ0>=baseFloorZ`の一括判定）
+    // なら旧どおり対角線1本のまま`neverDowngrade`でcenterを強制する（`extendedFromZ`の例外は
+    // ここで保たれる——`emitLine`の実z（beyond判定）に関わらず様式を固定するため）。
+    // 非exemptなら対角をbaseFloorZで分割し、**両片ともdash:'center'のまま**`emitLine`へ渡す
+    // ——下片（両端がbaseFloorZ以下）は`emitLine`の§5.6最終フィルタ（`beyond`判定）が
+    // 自動的にDETAIL+dashedへ降格させる（`emitLine`のforceDash/neverDowngrade注記参照）。
+    // 上片は降格条件に当たらないためcenterのまま残る——「下片が破線・上片が一点鎖線」という
+    // ユーザー裁定（2026-09-11「6」C）はこの分割だけで成立し、成分全体を1つの値で塗る旧実装より
+    // 実際の高さに忠実になる。
     for (const [a, b] of [[[x0, L.lo], [x1, R.hi]], [[x0, L.hi], [x1, R.lo]]]) {
-      const line = emitLine(cut, a[0], a[1], b[0], b[1], ElevationLineRole.DETAIL, { dash, ceilZ });
-      prims.push(...subtractRectsFromLine(line, blockers));
+      if (exempt) {
+        const line = emitLine(cut, a[0], a[1], b[0], b[1], ElevationLineRole.DETAIL,
+          { dash: 'center', ceilZ, neverDowngrade: true });
+        prims.push(...subtractRectsFromLine(line, blockers));
+        continue;
+      }
+      for (const [p, q] of splitSegmentAtZ(a, b, baseFloorZ)) {
+        const line = emitLine(cut, p[0], p[1], q[0], q[1], ElevationLineRole.DETAIL, { dash: 'center', ceilZ });
+        prims.push(...subtractRectsFromLine(line, blockers));
+      }
     }
   }
   return prims;

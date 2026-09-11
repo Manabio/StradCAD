@@ -46,7 +46,7 @@ import {
   joinToStairProfile, clipStairDetailInSlabBand,
 } from './section/sectionEmit.js';
 import {
-  stairPrimitivesForCut, stairWallGapZones, stairOccluderRects, stairCutFloorProfile,
+  stairPrimitivesForCut, stairWallGapZones, stairFaceOccluderRects, stairCutFloorProfile,
 } from './section/sectionStair.js';
 import { structuralContribution, structuralPrimitivesForCut } from './section/sectionStructure.js';
 import { worldToCell, roomBounds } from '../finish/gridCells.js';
@@ -411,10 +411,14 @@ function contentForCut(rawCut, probeCtx, endExtendMm = 0, bandRoomBounds = null,
       upperFloorCutEnds: undefined, upperFloorEnds: undefined };
   }
   // **断面線の外は描画しない**（ユーザー明示指示2026-09）。その面の断面線（下側の輪郭。
-  // 帯の床＋縦断する階段寄与の折れ線）をcutへ載せ、アキのセルの下限（sectionEmit.jsの
-  // emitOpenGapMarks）と、最後の壁content一括クリップの両方が同じ1つの輪郭を読む。
+  // 帯の床＋縦断する階段寄与の折れ線）は**壁の断面・見えがかり・建具の姿**のクリップにだけ使う
+  // （下記`clipContentAboveDrawnProfile`）。展開図一般化Phase 6b-2 C-2（設計
+  // `.claude/elevation-redesign.md`§5.11）: アキのセルの下限はband自身（sectionHits.jsの
+  // visibleBandsOf）が答えを持つようになったため、`cut`へ`drawFloorProfile`を載せて
+  // emitOpenGapMarks（sectionEmit.js）へ渡す経路は廃止した——`cut`は常に`rawCut`のまま
+  // （旧実装の`{...rawCut, drawFloorProfile}`のクローンは不要になった）。
   // 階段下に部屋が無い面では呼び出し側がnullを渡す（＝下限なし＝従来どおり設置階FLまで描く）。
-  const cut = drawFloorProfile ? { ...rawCut, drawFloorProfile } : rawCut;
+  const cut = rawCut;
   // 拡張済みcut（探査延長＋帯の部屋の包絡矩形つき）はレイキャストだけでなく構造材の判定でも使う
   // ——「室内を空中で横断する梁の見えがかり」がbandRoomBoundsを見るため（sectionStructure.js）。
   // 共通経路（section/sectionContent.js）: 探査延長・端の凹み側面線の抑制・壁断面／見えがかり・
@@ -426,14 +430,18 @@ function contentForCut(rawCut, probeCtx, endExtendMm = 0, bandRoomBounds = null,
   // 見付け矩形（stairOccluderRects）から求める。
   // 階段の見付けシルエット（手前に実体がある範囲）。アキのバツ・見えがかり水平線の
   // どちらの破線判定にも同じ集合を使う。
-  const occluders = stairOccluderRects(cut.stairCut ?? null, cut);
+  // 展開図一般化Phase 6b-2 段A: 遮蔽チャネルの正式化。`stairOccluderRects`（面固有の実装）から
+  // `stairFaceHits`（ヒット列。Phase 6b-1）由来の`stairFaceOccluderRects`へ置き換える——
+  // 出力は突き合わせテスト済みで完全不変（sectionStair.jsのstairFaceOccluderRectsヘッダ参照）。
+  const occluders = stairFaceOccluderRects(cut.stairCut ?? null, cut);
   const gapMarks = splitGapMarksByStair(rawGapMarks, occluders);
   // 見えがかりの水平線のうち階段の背後に入る区間は破線（同指摘「その先は袋階段に隠れて
   // 見えなくなるが、アキ・バツのために破線で右側壁断面線まで」）。
-  const wallContent = [
-    ...dashHorizontalsBehindStair(wallPrims, occluders),
-    ...gapMarks,
-  ];
+  // 展開図一般化Phase 6b-2 C-2: gapMarksは**ここに含めない**——壁プリミティブ（wallContent）
+  // だけが下の`clipContentAboveDrawnProfile`（輪郭より下を落とす処理）の対象になる。
+  // アキ（gapMarks）は輪郭ではなくband自身の下端をそのまま使うため、二重クリップしない
+  // （最終contentへは下で別途合流させる）。
+  const wallContent = dashHorizontalsBehindStair(wallPrims, occluders);
   // 下ささらの見えがかりは下階天井〜上階床の帯（床構造の中）でカットする
   // （ユーザー実機指摘2026-08「6」D2。sectionEmit.js参照）。
   const stairContent = zRef
@@ -448,14 +456,15 @@ function contentForCut(rawCut, probeCtx, endExtendMm = 0, bandRoomBounds = null,
     ? joinToStairProfile(wallContent, stairContent, pcut,
       { ...zRef, drawLo: cutDrawRange(pcut).lo, drawHi: cutDrawRange(pcut).hi })
     : wallContent;
-  // クリップの対象は**壁の断面・見えがかり・アキ・建具の姿**だけ——階段自身の断面（踊り場桁枠・
+  // クリップの対象は**壁の断面・見えがかり・建具の姿**だけ——階段自身の断面（踊り場桁枠・
   // ささら断面は踊り場から桁成ぶん下がる）と階段の見えがかり（正面視の破線梯子・1FL足元線・
   // ささらの端面）、構造梁（踊り場受け梁も梁成ぶん下がる）は断面線そのもの／階段の一部で、
   // ユーザー裁定2026-09で「描く」側（clipContentAboveDrawnProfileのヘッダ参照）。
+  // アキ（gapMarks）はPhase 6b-2 C-2でこのクリップの対象から外れた——下端はband自身が決める。
   const wallOut = clipContentAboveDrawnProfile(
     clipWallFloorEdgeUnderZigzag(joined, stairContent), drawFloorProfile);
   return {
-    content: [...wallOut, ...stairContent, ...structuralContent],
+    content: [...wallOut, ...gapMarks, ...stairContent, ...structuralContent],
     ...upperOverhangOf(pcut, columns),
   };
 }

@@ -5,7 +5,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Plane, PlanGraph, CenterLineType, Discipline, StairType, StructuralMaterialType } from '@core';
 import { generateRoomWallsFromOutline } from '../../finish/wallGeneration.js';
-import { stairContribution, stairPrimitivesForCut, clipStringerToAnchors, landingFramePrimitives, stairWallGapZones, stairCutFloorProfile, stairFaceHits, stairOccluderRects } from './sectionStair.js';
+import { stairContribution, stairPrimitivesForCut, clipStringerToAnchors, landingFramePrimitives, stairWallGapZones, stairCutFloorProfile, stairFaceHits, stairOccluderRects, stairFaceOccluderRects } from './sectionStair.js';
 
 function makeGraph(name = 'p1') {
   const plane = new Plane(name, 0, `${name}階`, 1, 1);
@@ -1016,6 +1016,46 @@ test('【突き合わせ・Phase6b-1要件B】stairFaceHits(tread+landingFrame)�
   const occluder = sortRects(stairOccluderRects(c, cut));
   assert.equal(occluder.length, 1, '前提: 側面視では踊り場桁枠1件だけのはず（段板はcrossesFlightで対象外）');
   assert.deepEqual(toOccluderRectShape(stairFaceHits(c, cut)), occluder);
+});
+
+// 展開図一般化Phase 6b-2 段A（遮蔽チャネルの正式化）: stairFaceOccluderRects自体
+// （stairFaceHitsからstringerを除いて組み立てる本番の遮蔽矩形）がstairOccluderRectsと
+// 一致することを直接固定する（上の2件はstairFaceHitsの生の形状の突き合わせ、これは
+// elevationStairSequence.jsが実際に呼ぶ関数の突き合わせ）。
+test('【Phase6b-2段A】stairFaceOccluderRectsはstairOccluderRectsと同じ矩形集合を返す（正面視・STEEL）', () => {
+  const graph = makeGraph();
+  const { stair } = makeSwitchbackFixture(graph, StructuralMaterialType.STEEL);
+  const c = stairContribution(stair, graph, FLOOR_HEIGHT);
+  const cut = {
+    seqNo: '1', line: { isVertical: false, axisValue: 3000, lo: 0, hi: 2000 },
+    dirSign: 1, viewSign: 1, layers: [], zRange: { loZ: 0, hiZ: 3000 }, baseFloorZ: 1200,
+  };
+  assert.deepEqual(sortRects(stairFaceOccluderRects(c, cut)), sortRects(stairOccluderRects(c, cut)));
+});
+
+// 6b-1からの持ち越し（QA是正2026-09・D）: 側面視・WOOD（踊り場桁枠1件のみ）でも本番の消費者
+// （elevationStairSequence.jsが呼ぶstairFaceOccluderRects）とstairOccluderRectsが一致することを
+// 固定する——正面視・STEELの1構成だけでは、桁枠オンリーのcut（側面視）や非STEEL（段板そのものが
+// stairFaceHitsに出ない構成）での突き合わせが未検証のままだった。
+test('【Phase6b-2段A】stairFaceOccluderRectsはstairOccluderRectsと同じ矩形集合を返す（側面視・WOOD。踊り場桁枠1件のみ）', () => {
+  const graph = makeGraph();
+  const { stair } = makeSwitchbackFixture(graph); // WOOD
+  const c = stairContribution(stair, graph, FLOOR_HEIGHT);
+  const cut = {
+    seqNo: '2', line: { isVertical: true, axisValue: 500, lo: 1500, hi: 4500 },
+    dirSign: 1, viewSign: 1, layers: [], zRange: { loZ: 0, hiZ: 3000 }, baseFloorZ: 0,
+  };
+  const expected = sortRects(stairOccluderRects(c, cut));
+  assert.equal(expected.length, 1, '前提: 側面視では踊り場桁枠1件だけのはず');
+  assert.deepEqual(sortRects(stairFaceOccluderRects(c, cut)), expected);
+});
+
+test('【Phase6b-2段A】stairFaceOccluderRectsはcontributionが無い（cut.stairCut===null。階段帯以外）とき空配列を返す', () => {
+  const cut = {
+    seqNo: '1', line: { isVertical: false, axisValue: 3000, lo: 0, hi: 2000 },
+    dirSign: 1, viewSign: 1, layers: [], zRange: { loZ: 0, hiZ: 3000 }, baseFloorZ: 1200,
+  };
+  assert.deepEqual(stairFaceOccluderRects(null, cut), []);
 });
 
 // stairPrimitivesForCutが実際に描く「内側ささらの見えがかり」線のx座標（ローカル）を取り出す

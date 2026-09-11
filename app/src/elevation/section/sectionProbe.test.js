@@ -710,9 +710,16 @@ test('【2026-09】emitColumns: 建具で切れた切断壁は、両縁ではな
 
 // ---- cut.airRoom/cut.underRooms: その切断が「実体ごと見ない」壁（展開図一般化Phase 6。
 // 現状の供給元は階段下部屋の2a壁。section/cuts/switchbackCuts.js。判定ロジック自体の網羅テストは
-// section/sectionHits.test.jsの【isHiddenWall】群——ここではcollectCutBreaks（列の分割）も
-// probeColumnと同じく非可視の壁を無視することを確認する）----
-test('probeColumn/collectCutBreaks: airRoom/underRoomsで指定した壁は候補にも列の分割にも現れない', () => {
+// section/sectionHits.test.jsの【isHiddenWall】群——ここでは`collectCutBreaks`（列の分割）の
+// 挙動を確認する）----
+// Phase 6b-2 C-1（設計`.claude/elevation-redesign.md`§5.11）: `isHiddenWall`該当の壁は
+// 「候補から消す」のではなく「描かない実体（kind:'hidden'）」として扱うよう変わった。
+// `collectCutBreaks`はもう`isHiddenWall`を呼ばない（sectionProbe.jsのコメント参照）ため、
+// 非可視指定の壁の端でも**他の壁と同じく列を割る**——旧テスト（「列を割らないはず」）とは
+// 逆向きの期待値になる。QA是正2026-09で実測確認済み: 割らないと面C自身の右端が隣接CLへ
+// ずれて壊れるため、列分割側は「割る」のまま——別の面での副作用は`emitColumns`側で抑える
+// （`sectionEmit.test.js`の【QA是正2026-09】群参照）。
+test('collectCutBreaks: airRoom/underRoomsで非可視指定の壁でも、他の壁と同じく端で列を割る', () => {
   const graph = makeGraph();
   const airRoom = makeRectRoom(graph, 0, 0, 4000, 3000);
   const far = farWallOf(graph);
@@ -720,27 +727,30 @@ test('probeColumn/collectCutBreaks: airRoom/underRoomsで指定した壁は候�
   // underRoomは壁を生成しない（makeRectRoomNoWalls）——airRoom側の奥の壁(far)自体は
   // 既にisRoomWall:trueで生成済みなので、underRoomはcellToRoomの所有権（y>3000のセルを
   // 「Under」が持つ）だけ要る。壁を追加生成すると、そのCL端が新たな列境界を作り
-  // （collectRunBreaksは非可視判定と無関係に全壁を見るため）、下の「非可視指定の壁の端では
-  // 列を割らない」検証が無関係な境界と混同してしまう。
+  // （collectRunBreaksは非可視判定と無関係に全壁を見るため）、下の「非可視指定の壁の端でも
+  // 列を割る」検証が無関係な境界と混同してしまう。
   const underRoom = makeRectRoomNoWalls(graph, 0, 3000, 4000, 6000, 'Under');
 
   const cut = frontCut(graph);
-  const bandsBefore = probeColumn(cut, 2000, makeProbeContext(cut.layers));
-  assert.ok(bandsBefore.some(b => b.wall === far), '通常は奥の壁が候補に現れるはず');
-
   const hidden = frontCut(graph, { airRoom, underRooms: new Set([underRoom]) });
+  // 選択結果（probeColumn）は非可視指定でkind:'hidden'になる（wall参照を持たない）——
+  // 「候補が消える」わけではないことは section/sectionHits.test.js の
+  // 【Phase6b-2 C-1】で確認済み。ここでは列の分割だけを見る。
   const bandsAfter = probeColumn(hidden, 2000, makeProbeContext(hidden.layers));
-  assert.ok(!bandsAfter.some(b => b.wall === far), '非可視指定の壁は候補に現れないはず');
+  assert.ok(bandsAfter.some(b => b.kind === 'hidden'),
+    '非可視指定の壁はkind:"hidden"の帯として選ばれるはず（wall参照は持たない）');
+  assert.ok(!bandsAfter.some(b => b.wall === far), 'hidden帯はwall参照を持たないはず');
 
-  // 列の分割からも消える（片方だけだと壁端に縦線・アキの境界が残る）。
+  // 列の分割: 非可視指定でも壁の材の面（materialRange）の位置では他の壁と同じく列を割る。
   const breaksBefore = collectCutBreaks(cut, makeProbeContext(cut.layers));
   const breaksAfter = collectCutBreaks(hidden, makeProbeContext(hidden.layers));
-  assert.ok(breaksAfter.length <= breaksBefore.length, '非可視指定で列境界は増えないはず');
+  assert.deepEqual(breaksAfter, breaksBefore,
+    '非可視指定の有無で列境界そのものは変わらないはず（isHiddenWallはもう列分割を判定しない）');
   const c1 = Math.min(far.coord1, far.coord2), c2 = Math.max(far.coord1, far.coord2);
   const inside = v => v > cut.line.lo + 1 && v < cut.line.hi - 1;
   for (const v of [c1, c2].filter(inside)) {
-    assert.ok(!breaksAfter.some(b => Math.abs(b - v) < 1e-6),
-      `非可視指定の壁の端(${v})では列を割らないはず`);
+    assert.ok(breaksAfter.some(b => Math.abs(b - v) < 1e-6),
+      `非可視指定の壁の端(${v})でも他の壁と同じく列を割るはず`);
   }
 });
 

@@ -37,7 +37,6 @@ import { GAP_EPS_MM as GAP_EPS } from '../elevationStyle.js';
  *   underRooms?: Set<object>,
  *   layerRunWindows?: Map<object,{lo:number,hi:number}>,
  *   floorZProfile?: Array<{loX:number, hiX:number, floorZ:number}>,
- *   drawFloorProfile?: Array<[number,number]>,
  *   chDimSplitAbsYs?: number[],
  *   anchorRoom?: object,
  * }} SectionCut
@@ -60,7 +59,7 @@ import { GAP_EPS_MM as GAP_EPS } from '../elevationStyle.js';
 
 /**
  * @typedef {{
- *   kind: 'cut'|'wall'|'open'|'slab'|'farVoid',
+ *   kind: 'cut'|'cutAlong'|'wall'|'open'|'slab'|'farVoid'|'hidden',
  *   z0:number, z1:number,
  *   wall?:object, layerRole?:string, distMm?:number, ownerRoom?:object,
  *   floorZ?:number, ceilZ?:number, thicknessMm?:number,
@@ -68,6 +67,11 @@ import { GAP_EPS_MM as GAP_EPS } from '../elevationStyle.js';
  *   openingPassThrough?:boolean,
  *   farFloorZ?:number|null, farCeilZ?:number|null, farDepthMm?:number,
  * }} ZBand
+ *   hidden（展開図一般化Phase 6b-2。`sectionHits.js`の`isHiddenWall`該当の実体）＝
+ *   「そこに壁は実在するが描かない」区間。`wall`/`distMm`/`openingPassThrough`/`far*`等の
+ *   付帯情報は一切持たない（他kindと違い実体の詳細を渡さない、という宣言そのもの）。
+ *   `open`（アキ）とは別kind——アキのバツ・見えがかり線の対象にならず、かつ`overCutWall`
+ *   （切断壁の天端の上はアキではない、の判定）にも当たらない独立したkindとして扱う。
  *   slab=床スラブ・天井懐（今回は非描画）。z0<z1（絶対z）。
  *   farVoid（Phase4。`elevationStyle.js`の`HORIZONTAL_FACES_ENABLED`。裁定済み2026-09-11・
  *   既定on）＝floorFace/ceilFaceより向こう側（向こうの部屋の天井懐・床構造）の非描画区間。

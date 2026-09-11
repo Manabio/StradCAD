@@ -121,11 +121,19 @@ function clamp(z, lo, hi) { return Math.max(lo, Math.min(hi, z)); }
  * 適用すること**（この切断と無関係な壁まで判定しない）——旧実装は壁idのSetを引くだけだったため
  * 全走査の先頭で早期continueしても無害だったが、本判定は`cellAt`を2回呼ぶため、切断と無関係な
  * 壁（他の階段・他の部屋の壁）にまで適用すると無駄な計算が積み重なる。
- * 列の分割（`collectCutBreaks`）と候補の収集（`probeColumnHits`）の**両方**で効かせる
- * ——片方だけだと、壁は消えても壁端で列が割れたまま残り、そこに縦線・アキの境界が出る。
+ *
+ * **展開図一般化Phase 6b-2（設計`.claude/elevation-redesign.md`§5.11 C-1）で「候補から消す」から
+ * 「描かない実体として積む」へ変わった**——該当した壁は`probeColumnHits`が`hidden:true`を
+ * 付けて候補へ積み、選択されれば`ZBand.kind:'hidden'`（実体は在るが描画しない）になる。
+ * `collectCutBreaks`（列の分割）はもう本関数を呼ばない——「実体として在る」以上、他の壁と同じく
+ * 材の面・端点で列を割ってよい（旧実装は「候補から消える」前提で列も割らないことにより
+ * 「壁は消えても壁端で列が割れたまま残る」ことを避けていたが、その前提自体が無くなった。
+ * QA是正2026-09で実測: 面C自身の右端はこの列分割に依存するため列分割側を「割らない」へは
+ * 戻せない——列分割による副作用は`emitColumns`側で個別に抑える）。
+ * 消費者は`probeColumnHits`（`section/sectionHits.js`）1箇所のみ。
  * @param {import('./sectionTypes.js').SectionCut} cut
  * @param {import('@core').Wall} wall
- * @param {object} layer - その壁が属する層（`probeColumnHits`のinfo.layer／`collectCutBreaks`のlayer）
+ * @param {object} layer - その壁が属する層（`probeColumnHits`のinfo.layer）
  * @param {ReturnType<typeof import('./sectionProbe.js').makeProbeContext>} [probeCtx]
  * @returns {boolean}
  */
@@ -212,8 +220,9 @@ export function isCutWall(wall, line) {
 /**
  * その層をその位置で探査してよいか（`SectionCut.layerRunWindows`。窓が無ければ従来どおり全域）。
  * 列の分割（`collectCutBreaks`は窓へクランプして刻む）と列の中身（`probeColumnHits`の層スタック）の
- * **両方**で効かせる——`isHiddenWall`と同じ理由で、片方だけだと「列はあるのに中身が無い」／
- * 「中身が無いのに列が割れている」帯になる。
+ * **両方**で効かせる——片方だけだと、「列はあるのに中身が無い」／「中身が無いのに列が割れている」
+ * 帯になる（`isHiddenWall`は逆にPhase 6b-2で`collectCutBreaks`側を呼ばなくなったため、この理由付けの
+ * 対比先はもう`isHiddenWall`ではない）。
  * @param {import('./sectionTypes.js').SectionCut} cut
  * @param {object} layer
  * @param {number} worldCoord
@@ -668,7 +677,10 @@ export function probeColumnHits(cut, worldMid, probeCtx) {
     if (info.ceilZ == null) continue; // 防御的ガード（fallbackCeilZにより通常到達しない）
     for (const w of graphList(layer.graph, 'walls') ?? []) {
       if (isCutWall(w, line)) {
-        if (isHiddenWall(cut, w, layer, probeCtx)) continue;
+        // Phase 6b-2 C-1: isHiddenWall該当でも候補から消さない（「描かない実体」として積む）。
+        // `hidden:true`はvisibleBandsOfが選択したときだけ効く——列の分割（collectCutBreaks側の
+        // isHiddenWall呼び出し）は従来どおり別判定のまま、候補収集側だけがこの変更の対象。
+        const hidden = isHiddenWall(cut, w, layer, probeCtx);
         const mr = w.materialRange;
         if (worldMid < mr.lo - GAP_EPS || worldMid > mr.hi + GAP_EPS) continue;
         // アキ（腰壁＋垂れ壁）は2つの帯になる（kneeDropZRangesAt）ため、候補も範囲ごとに積む。
@@ -681,10 +693,10 @@ export function probeColumnHits(cut, worldMid, probeCtx) {
           const openRanges = openingPassThroughRangesFor(
             w, layer.graph, line.axisValue, info.floorZ, z0, z1);
           hits.push({ kind: 'cut', wall: w, layer, distMm: 0, z0, z1, openRanges,
-            isKneeDrop: isKneeDropRange(z0, z1, info) });
+            isKneeDrop: isKneeDropRange(z0, z1, info), hidden });
         }
       } else if (isCutAlongWall(w, line)) {
-        if (isHiddenWall(cut, w, layer, probeCtx)) continue;
+        const hidden = isHiddenWall(cut, w, layer, probeCtx);
         // cutAlong（縦断された壁。§6.1「切断線がその中を通る→全幅の断面」）: x範囲=壁スパン
         // [coord1,coord2]∩切断線範囲、z範囲=kneeDropRecordsOnAxisによる実存在範囲
         // （pointCoord=worldMid。壁自身の長さ方向＝cutのrun方向と一致するためwallと同じ規約）。
@@ -692,10 +704,10 @@ export function probeColumnHits(cut, worldMid, probeCtx) {
         if (worldMid < c1 - GAP_EPS || worldMid > c2 + GAP_EPS) continue;
         for (const { z0, z1 } of kneeDropZRangesAt(layer.graph, w, worldMid, info.floorZ, info.ceilZ)) {
           hits.push({ kind: 'cutAlong', wall: w, layer, distMm: 0, z0, z1,
-            isKneeDrop: isKneeDropRange(z0, z1, info) });
+            isKneeDrop: isKneeDropRange(z0, z1, info), hidden });
         }
       } else if (isSightlineShape(w, line, cut.viewSign)) {
-        if (isHiddenWall(cut, w, layer, probeCtx)) continue;
+        const hidden = isHiddenWall(cut, w, layer, probeCtx);
         const c1 = Math.min(w.coord1, w.coord2), c2 = Math.max(w.coord1, w.coord2);
         if (worldMid < c1 - GAP_EPS || worldMid > c2 + GAP_EPS) continue;
         const distMm = Math.abs(w.axisCL.effectiveValue - line.axisValue);
@@ -715,7 +727,7 @@ export function probeColumnHits(cut, worldMid, probeCtx) {
           // （openingPassThroughRangesForはz0/z1へクランプ済み）。band選択後、選ばれたz区間が
           // そのいずれかに含まれれば ZBand.openingPassThrough:true を付与する（visibleBandsOf参照）。
           const openRanges = openingPassThroughRangesFor(w, layer.graph, worldMid, info.floorZ, z0, z1);
-          hits.push({ kind: 'wallFace', wall: w, layer, distMm, z0, z1, openRanges, isKneeDrop });
+          hits.push({ kind: 'wallFace', wall: w, layer, distMm, z0, z1, openRanges, isKneeDrop, hidden });
         }
       }
     }
@@ -919,6 +931,13 @@ export function visibleBandsOf(hits, cut, opts = {}) {
         (a.kind === b.kind ? 0 : a.kind === 'cut' ? -1 : 1) ||
         compareLayerPriority(a, b))[0];
     if (frontMatch) {
+      // Phase 6b-2 C-1: hiddenヒットが選ばれたら「描かない実体」帯——wall/distMm/opening/far
+      // 付帯情報は一切持たせない（壁の実体の詳細を一切渡さない、という宣言そのもの。
+      // sectionTypes.jsのZBand doc参照）。
+      if (frontMatch.hidden) {
+        bands.push({ kind: 'hidden', z0, z1 });
+        continue;
+      }
       const mr = frontMatch.wall.materialRange;
       const band = {
         kind: frontMatch.kind, z0, z1, wall: frontMatch.wall, layerRole: frontMatch.layer.role,
@@ -939,6 +958,11 @@ export function visibleBandsOf(hits, cut, opts = {}) {
       .filter(c => c.kind === 'wallFace')
       .sort((a, b) => a.distMm - b.distMm || compareLayerPriority(a, b))[0];
     if (wallMatch) {
+      // Phase 6b-2 C-1: frontMatchと同じ「描かない実体」宣言（上記コメント参照）。
+      if (wallMatch.hidden) {
+        bands.push({ kind: 'hidden', z0, z1 });
+        continue;
+      }
       // QA是正（Phase4・A）: `wall`帯にも「区間内部にある最も近いfloorFace/ceilFace」の
       // 付帯情報を載せる——**選択には使わない**（wallMatchが選ばれる規則自体は不変）が、
       // `sectionEngine.js`の深度上限適用で`b.distMm`が上限超えのためこの帯自身が`open`へ
@@ -1032,6 +1056,10 @@ function sameZBand(a, b) {
         && (a.openingPassThrough ?? false) === (b.openingPassThrough ?? false);
     case 'slab':
       return a.ownerRoom === b.ownerRoom && a.floorZ === b.floorZ && a.ceilZ === b.ceilZ;
+    case 'hidden':
+      // Phase 6b-2 C-1: hidden帯は付帯情報を一切持たない（wall参照すら無い）ため、
+      // 隣接するhidden同士は常に同一実体の続きとみなして良い。
+      return true;
     case 'open':
       // Phase4: farFloorZ/farCeilZ/farDepthMmが違えば別の帯（フラグoffでは両方常にundefined
       // ＝この比較は常にtrueで従来どおり。WP-E7 D1のopeningPassThroughと同じ理由——比較しないと
