@@ -5,10 +5,13 @@
 // buildRoomBandWithVoidAbove を通る。全部屋を buildRoomBand で作ると**実機が通らない経路**を
 // 比較してしまい、階段室（例: 11.stq 1階の「6」）の差分を取り逃がす。
 //
-// 使い方: node dumpElevFigure.mjs [outDir] [src.stq] [--horizontal-faces]
-//   --horizontal-faces … 展開図一般化Phase4のフラグ（elevationStyle.jsのHORIZONTAL_FACES_
-//   ENABLED。既定off）をダンプ中だけonにする。水平面ヒット（floorFace/ceilFace）の見えがかり線・
-//   アキの縮小を試すための上書き（`.claude/elevation-redesign.md`§5.5 R2）。
+// 使い方: node dumpElevFigure.mjs [outDir] [src.stq] [--no-horizontal-faces]
+//   --no-horizontal-faces … 展開図一般化Phase4のフラグ（elevationStyle.jsのHORIZONTAL_FACES_
+//   ENABLED。裁定済み2026-09-11・既定on）をダンプ中だけoffにする。戻るのは**水平面ヒットの
+//   見えがかり線・アキの縮小だけ**（`.claude/elevation-redesign.md`§5.5）——アキ下端のクランプ
+//   規則（`sectionEmit.js`の`spanLoZ`。2026-09-11裁定）はこのフラグの外で常に新規則のまま動くため、
+//   offにしても13.stq「10」面D1は新規則(z=0)のまま。**offはPhase 4前の基準ではない。**
+//   --horizontal-faces … 既定onなので実質no-op。過去のコマンド互換のため残す。
 import fs from 'node:fs';
 import path from 'node:path';
 import { RoomFeature } from '../../src/core.js';
@@ -24,8 +27,8 @@ import { withGraphReadScope } from '../../src/graphReadScope.js';
 import { setHorizontalFacesEnabled } from '../../src/elevation/elevationStyle.js';
 
 const rawArgs = process.argv.slice(2);
-const horizontalFaces = rawArgs.includes('--horizontal-faces');
-const positional = rawArgs.filter(a => a !== '--horizontal-faces');
+const horizontalFaces = !rawArgs.includes('--no-horizontal-faces');
+const positional = rawArgs.filter(a => a !== '--horizontal-faces' && a !== '--no-horizontal-faces');
 const outDir = positional[0] ?? path.join(import.meta.dirname, 'golden');
 const src = positional[1] ?? 'D:/tatsuya/Download/11.stq';
 setHorizontalFacesEnabled(horizontalFaces);

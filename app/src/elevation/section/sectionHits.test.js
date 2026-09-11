@@ -507,13 +507,19 @@ test('【Phase4・c・フラグoff】visibleBandsOf: HORIZONTAL_FACES_ENABLEDが
   const probeCtx = makeProbeContext(cut.layers);
   const { hits, layerStack, unexploredBelowZ } = probeColumnHits(cut, 2000, probeCtx);
 
-  const bands = visibleBandsOf(hits, cut, { layerStack, unexploredBelowZ });
-  const openBand = bands.find(b => b.kind === 'open');
-  assert.ok(openBand);
-  assert.equal(openBand.farFloorZ, undefined);
-  assert.equal(openBand.farCeilZ, undefined);
-  assert.equal(openBand.farDepthMm, undefined);
-  assert.deepEqual(bands, probeColumn(cut, 2000, probeCtx), 'probeColumnとも完全一致するはず');
+  // 裁定済み2026-09-11でHORIZONTAL_FACES_ENABLEDの既定はon——このテストは旧挙動（フラグoff）を
+  // 明示的に検証するため、ここでoffへ切り替える。
+  const prev = HORIZONTAL_FACES_ENABLED;
+  setHorizontalFacesEnabled(false);
+  try {
+    const bands = visibleBandsOf(hits, cut, { layerStack, unexploredBelowZ });
+    const openBand = bands.find(b => b.kind === 'open');
+    assert.ok(openBand);
+    assert.equal(openBand.farFloorZ, undefined);
+    assert.equal(openBand.farCeilZ, undefined);
+    assert.equal(openBand.farDepthMm, undefined);
+    assert.deepEqual(bands, probeColumn(cut, 2000, probeCtx), 'probeColumnとも完全一致するはず');
+  } finally { setHorizontalFacesEnabled(prev); }
 });
 
 test('【Phase4・d】visibleBandsOf: 垂れ壁面のopen帯(z0..1800)は部屋Cの床(0)も天井(3000)も区間の境界そのものなので付帯情報が付かない（縮まない＝ユーザー受入基準どおり）', () => {

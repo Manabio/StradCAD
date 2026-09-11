@@ -842,8 +842,9 @@ export function emitColumns(columns, cut, emitCtx = {}) {
           prims.push(Object.assign(emitLine(cut, col.x1, band.z0, col.x1, band.z1, ElevationLineRole.CUT, { ceilZ }),{__o:'cutEdgeHi'}));
         }
       } else if (band.kind === 'open' && (band.farFloorZ != null || band.farCeilZ != null)) {
-        // Phase4（水平面ヒットの見えがかり。既定offのHORIZONTAL_FACES_ENABLEDでのみfarFloorZ/
-        // farCeilZが付く——`sectionEngine.js`の`splitOpenByFarFace`が深度上限内のときだけ付与する。
+        // Phase4（水平面ヒットの見えがかり。裁定済み2026-09-11・既定onのHORIZONTAL_FACES_ENABLEDで
+        // farFloorZ/farCeilZが付く（フラグoff＝旧挙動比較時は付かない）——`sectionEngine.js`の
+        // `splitOpenByFarFace`が深度上限内のときだけ付与する。
         // 設計§5.5「その z に見えがかりの水平線を描く」「線種は既存規則に従い、同じ深度の壁面と
         // 同じ重み」: 重みは'wall'帯と同じ`sightRole`（深度→SILHOUETTE/DETAIL）の経路をそのまま使う。
         // **FL・CHの見えがかりは描画しない**規則（'wall'帯と同じ`sectionLevelZs`/`atSectionLevel`
@@ -1300,16 +1301,19 @@ export function emitOpenGapMarks(columns, cut, emitCtx = {}) {
       .sort((a, b) => b.ov - a.ov)[0]?.sp;
     const farFloorZ = span && Number.isFinite(span.farFloorZ) ? span.farFloorZ : null;
     const farCeilZ = span && Number.isFinite(span.farCeilZ) ? span.farCeilZ : null;
-    // 下端 = **その位置で実際に描かれている遠側床の断面線**（ユーザー裁定2026-09「バツは破線=1FL
-    // まで」。実機の3点で確定）。遠側床が帯の床と**異なる**ときだけ遠側床へ着ける——同値なら
-    // 遠側床線はそもそも描かれないので、探査が見つけた床（部分指定の段差等）のままにする。
+    // 下端 = **区間の内部に遠側床があれば常にそこで止める**（ユーザー裁定2026-09-11でPhase4
+    // （`sectionEngine.js`の`splitOpenByFarFace`）の規則へ統一）。旧規則は「遠側床が帯の床(0)と
+    // 異なるときだけ着ける」で、13.stq/11.stq「10」D1面（far=0・探査z=-50）だけ探査どおり
+    // （z=-50）に残る差分があった——Phase4は同じ区間へ「同値でも常に縮める」を適用しており、
+    // 2経路（openSpans注入とPhase4）が同じ問いに別の答えを出す不整合だったため、Phase4側
+    // （常に縮める）へ揃えた。far値が引けない（該当スパン無し）ときは従来どおりクランプしない。
     //   「11'」A2左（far=-100。1FLの破線が引かれている）→ far（＝その破線の高さ）
-    //   「10」D1（far=0。遠側床線は無い・近側の床が下がっている）→ 探査どおり
+    //   「10」D1（far=0。遠側床線は無い・近側の床が下がっている）→ far（=0。旧z=-50から変更）
     //   遠側床が帯の床より高い構成（far=+300）→ far（その下は遠側スラブで塞がれている）
     // **二重補正は無い**: face.spans の far 値は元から帯の部屋基準
     // （effectiveFloorLevel(farOwner) - effectiveFloorLevel(room)）で、プローブ側も
     // sectionProbe.js の基準是正で帯の部屋基準に揃った（elevationBand.jsのbandFloorOffsetMm）。
-    const spanLoZ = z => (farFloorZ != null && Math.abs(farFloorZ) > GAP_EPS ? farFloorZ : z);
+    const spanLoZ = z => (farFloorZ != null ? farFloorZ : z);
     const spanHiZ = z => (farCeilZ == null ? z : Math.min(z, farCeilZ));
     const LC = { lo: spanLoZ(L.lo), hi: spanHiZ(L.hi) };
     const RC = { lo: spanLoZ(R.lo), hi: spanHiZ(R.hi) };

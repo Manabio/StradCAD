@@ -61,8 +61,8 @@ import { GAP_EPS_MM as GAP_EPS } from '../elevationStyle.js';
  *   farFloorZ?:number|null, farCeilZ?:number|null, farDepthMm?:number,
  * }} ZBand
  *   slab=床スラブ・天井懐（今回は非描画）。z0<z1（絶対z）。
- *   farVoid（Phase4。`elevationStyle.js`の`HORIZONTAL_FACES_ENABLED`が既定offのため通常は
- *   出現しない）＝floorFace/ceilFaceより向こう側（向こうの部屋の天井懐・床構造）の非描画区間。
+ *   farVoid（Phase4。`elevationStyle.js`の`HORIZONTAL_FACES_ENABLED`。裁定済み2026-09-11・
+ *   既定on）＝floorFace/ceilFaceより向こう側（向こうの部屋の天井懐・床構造）の非描画区間。
  *   slabと同じ「非描画」だが実体の所有者情報（ownerRoom/floorZ/ceilZ）を持たないため別kindにした
  *   （`sectionEngine.js`の`splitOpenByFarFace`が生成。`emitColumns`/`emitOpenGapMarks`はどちらも
  *   `'open'`しか見ないため、このkindは自動的に「線を描かずアキにもしない」）。

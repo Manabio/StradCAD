@@ -96,14 +96,20 @@ export const SIGHTLINE_DEPTH_LIMIT_MM = 800;
 // 展開図一般化Phase 4（`.claude/elevation-redesign.md` §5.5・ユーザー裁定2026-09-11「2」）:
 // 水平面ヒット（floorFace/ceilFace。section/sectionHits.jsがPhase3で候補として積むだけの、
 // 向こう側の部屋の床・天井）を、深度上限内なら見えがかり線として描き、アキの範囲をその面まで
-// 縮める機能のオン/オフ単一スイッチ。**既定はoff**——Phase4は「初めて出力が変わる」段階で、
-// diffを先にユーザーへ見せて裁定を仰ぐ設計上の要求（R2）があり、本番挙動を変えないため。
+// 縮める機能のオン/オフ単一スイッチ。**裁定済み2026-09-11・既定on**——knee-drop-test.stqの
+// 「A」面Cで受入基準（アキは腰壁天端800〜天井2400のみ・その上にBのFL+2400天井見えがかり線）を
+// 満たすことをユーザーが実機確認し採用。offが戻すのは**水平面ヒットの見えがかり線とアキの分割
+// だけ**（`splitOpenByFarFace`の深度上限適用・`emitColumns`の水平見えがかり線描画）——
+// アキ下端のクランプ規則（`sectionEmit.js`の`spanLoZ`。2026-09-11裁定）はこのフラグの外で
+// 常に新規則のまま動くため、offにしても13.stq「10」面D1のアキ下端は新規則(z=0)のまま戻らない。
+// **offはPhase 4以前の基準ではない**——比較用には`setHorizontalFacesEnabled(false)`で戻せるが、
+// 戻るのは上記2点のみと理解すること。
 // section/配下の複数箇所（sectionHits.js・sectionEngine.js）がここを直接参照する
 // （opts引数をappendBandCutContentまで通す案は、帯ビルダー4種・switchbackCuts等の呼び出し
 // 階層が深く変更範囲が大きいため見送り、既存の「elevationStyle.jsの定数＋ダンプ側で上書き」
 // 規約に合わせた——他の展開図定数と同じ単一情報源）。ダンプ側は`setHorizontalFacesEnabled`で
-// 上書きする（scripts/probe/dumpElevFigure.mjs `--horizontal-faces`）。
-export let HORIZONTAL_FACES_ENABLED = false;
+// 上書きする（scripts/probe/dumpElevFigure.mjs `--no-horizontal-faces`で旧挙動比較用にoffへ）。
+export let HORIZONTAL_FACES_ENABLED = true;
 export function setHorizontalFacesEnabled(v) { HORIZONTAL_FACES_ENABLED = v; }
 
 // 上階の平面が自階の面の端より外へ続いているとき、その先まで探査・作図してよい量の上限(mm)

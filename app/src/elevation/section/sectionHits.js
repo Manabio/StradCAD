@@ -44,11 +44,11 @@
  * `section/`配下（`sectionProbe.js`経由の再エクスポートを含む）専用**——`elevation/`の他ディレクトリ
  * からは直接importしない（面の体裁側は`sectionContent.js`の`buildCutContent`が入口）。
  *
- * Phase 4（`elevationStyle.js`の`HORIZONTAL_FACES_ENABLED`。既定off）: `visibleBandsOf`が
- * `open`帯へ`farFloorZ`/`farCeilZ`/`farDepthMm`（上限内の最も近いfloorFace/ceilFace）を付帯情報
- * として載せる。深度上限の適用・アキの範囲を縮める処理・見えがかり線の描画は行わない
- * （それぞれ`sectionEngine.js`・`sectionEmit.js`が担当）。フラグoffではこの付帯情報自体を
- * 付けない（出力完全不変）。
+ * Phase 4（`elevationStyle.js`の`HORIZONTAL_FACES_ENABLED`。裁定済み2026-09-11・既定on）:
+ * `visibleBandsOf`が`open`帯へ`farFloorZ`/`farCeilZ`/`farDepthMm`（上限内の最も近いfloorFace/
+ * ceilFace）を付帯情報として載せる。深度上限の適用・アキの範囲を縮める処理・見えがかり線の描画は
+ * 行わない（それぞれ`sectionEngine.js`・`sectionEmit.js`が担当）。フラグoff（旧挙動比較用）では
+ * この付帯情報自体を付けない（出力完全不変）。
  */
 import { OpeningCategory } from '@core';
 import { worldToCell } from '../../finish/gridCells.js';

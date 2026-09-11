@@ -721,8 +721,9 @@ export function appendBandCutContent(primitives, room, graph, layout, layers, op
         loX: sp.loX, hiX: sp.hiX,
         // **?? 0 で埋めない**——引けない値を「帯の床」と断定するとアキの下端が引き上げられる
         // （エンジン側は非有限なら「クランプしない」へ倒す）。**閾値と埋め方は対で意味を持つ**:
-        // 現ルールは`farFloorZ > GAP_EPS`のときだけクランプするため0で埋めても観測上は同じだが、
-        // クランプ条件を広げるならfar値の欠損時の扱いをここで再検討すること。
+        // 現ルール（2026-09-11裁定でPhase4へ統一）は`farFloorZ != null`なら常にクランプする
+        // （0でもクランプする）ため、ここで`?? 0`にすると「区間にfaceが無く本来クランプしない
+        // 欠損ケース」まで0クランプ対象になってしまう——欠損は`undefined`のまま`section/`側へ渡すこと。
         farFloorZ: sp.farFloorDeltaMm,
         farCeilZ: sp.farCeilAbsMm,
       })),

@@ -6,7 +6,7 @@
 // ある端（報告: 2'のC2右端・3'のB1右端・3'のD1左端）で延長が描かれなかった。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Plane, PlanGraph, CenterLineType, Discipline, OpeningCategory } from '@core';
+import { Plane, PlanGraph, CenterLineType, Discipline, OpeningCategory, edgeKey } from '@core';
 import { generateRoomWallsFromOutline, resolveBackingOwnership } from '../finish/wallGeneration.js';
 import { worldToCell } from '../finish/gridCells.js';
 import { composeRoomFaces } from './elevationFaceList.js';
@@ -430,11 +430,12 @@ test('【裁定2026-09・11ダッシュ型】帯: FL≠0の部屋でも、アキ
 });
 
 // ================================================================
-// 実機欠陥2026-09（目視で検出）:「「10」D1・「11'」A2 のバツの下端が帯の床に張り付く」。
+// 実機欠陥2026-09（目視で検出）→ 2026-09-11裁定で規則そのものが反転。
 // 実データ相当（親＋部分指定のFL差）で組むと、開放スパンの far 側が**親＝帯の部屋と同じFL**
-// （farFloorDeltaMm=0）でありながら、その位置の**近側の床が部分指定で下がっている**構成が現れる。
-// 探査は下がった床（z=-50）まで空気を見つけているのに、far値0でクランプすると下端がz=0へ
-// 引き上げられていた。値が0でも「帯の床と断定して引き上げる」ことはしない、が回帰ゲート。
+// （farFloorDeltaMm=0）でありながら、その位置の**近側の床が部分指定で下がっている**構成が現れる
+// （「10」D1・「11'」A2）。旧裁定は「値が0でも帯の床と断定して引き上げない」（探査どおりz=-50）
+// だったが、Phase4（区間内部に遠側床があれば常に縮める）と矛盾していたため、ユーザー裁定で
+// Phase4側（0でも常に持ち上げる）へ統一した——この帯ビルダー経由のテストもその新規則に揃える。
 // ================================================================
 function makePartialFloorRoom({ partialCells }) {
   const graph = new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
@@ -453,7 +454,7 @@ function makePartialFloorRoom({ partialCells }) {
 }
 const gapDiagOf = band => band.primitives.filter(p => p.type === 'line' && p.x1 !== p.x2 && p.y1 !== p.y2);
 
-test('【実機修正2026-09・回帰】帯: 遠側床が帯の床と同値でも、近側の床が下がっていればバツの下端はその床まで下りる', () => {
+test('【裁定2026-09-11・アキ下端統一】帯: 遠側床が帯の床と同値でも、区間内部にあれば常にその値(y=0)まで持ち上げる', () => {
   // 部分指定＝左下セル: 開放スパンの far 側は親（FL差0）だが、その位置の床は-50。
   const { graph, room } = makePartialFloorRoom({ partialCells: [[0, 0, 2000, 2000]] });
   const opens = composeRoomFaces(room, graph)
@@ -462,9 +463,10 @@ test('【実機修正2026-09・回帰】帯: 遠側床が帯の床と同値で�
     `前提: この構成の開放スパンは farFloorDeltaMm=0（実データで実際に現れる値）`);
   const band = buildRoomBand(room, graph, { project: { openingNumberIndex: new Map() } });
   const ys = [...new Set(gapDiagOf(band).flatMap(p => [p.y1, p.y2]))].sort((a, b) => a - b);
-  assert.equal(Math.max(...ys), 50,
-    `バツの下端は下がった床(y=+50)まで下りるはず——far値0で帯の床へ引き上げてはいけない（実際:${JSON.stringify(ys)}）`);
-  // 線と文字が食い違わないこと（実機では下端0に対しtextの中心が-1175だった）。
+  assert.equal(Math.max(...ys), 0,
+    `バツの下端はfar値0(y=0)まで持ち上がるはず——2026-09-11裁定でPhase4の規則へ統一（実際:${JSON.stringify(ys)}）`);
+  // 線と文字が食い違わないこと（2026-09の一本化前の実機では、下端(誤)とtextの中心-1175が
+  // 食い違う不具合があった。今回の裁定でバツの下端はy=0になったため、中心もy=-1200へ動く）。
   const text = band.primitives.find(p => p.type === 'text' && p.text === 'ア キ');
   assert.ok(text, '「ア キ」があるはず');
   assert.equal(text.y, (Math.max(...ys) + Math.min(...ys)) / 2,
@@ -482,4 +484,46 @@ test('【裁定2026-09】帯: 遠側床が下がっていれば、下端は遠�
   const bottoms = [...new Set(gapDiagOf(band).map(p => Math.max(p.y1, p.y2)))];
   assert.ok(bottoms.includes(-far.farFloorDeltaMm),
     `遠側床(y=${-far.farFloorDeltaMm})に着くバツがあるはず（実際:${JSON.stringify(bottoms)}）`);
+});
+
+// ================================================================
+// QA指摘②（2026-09-11）: HORIZONTAL_FACES_ENABLED既定onそのものを固定する帯レベルの回帰テスト。
+// フラグは一切操作しない——`elevationStyle.js`の既定値だけで通ることが本テストの主張。
+// knee-drop-test.stq相当（部屋A 4000×4000・南に部屋B（天井高2400）・共有壁に腰壁800）を
+// buildRoomBand経由で組む。既定onなら面C（腰壁の上・Bを見る面）に
+//   - Bの天井(FL+2400)の見えがかり線（medium・z=2400）が出る
+//   - アキのバツは腰壁天端(z=800)〜Bの天井(z=2400)（Aの天井3000までは伸びない）
+// が成り立つ。既定をfalseへ戻す変異で本テストが赤化することを確認済み（報告に実行結果を貼る）。
+// ================================================================
+test('【QA指摘②・既定on固定】帯: knee-drop-test.stq相当は面Cに天井見えがかり線(medium,z=2400)とアキ[800,2400]が出る', () => {
+  const graph = new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
+  const V = v => graph.centerLines.find(c => c.centerLineType === CenterLineType.VERTICAL && c.value === v)
+    ?? graph.addCenterLine(CenterLineType.VERTICAL, v, ARCH);
+  const H = v => graph.centerLines.find(c => c.centerLineType === CenterLineType.HORIZONTAL && c.value === v)
+    ?? graph.addCenterLine(CenterLineType.HORIZONTAL, v, ARCH);
+  const key = (x0, y0, x1, y1) => `${V(x0).id}:${H(y0).id}:${V(x1).id}:${H(y1).id}`;
+  const roomA = graph.addRoom(new Set([key(0, 0, 4000, 4000)]), 'A');
+  generateRoomWallsFromOutline(graph, roomA);
+  roomA.setOverride('ceilingHeight', '3000');
+  const roomB = graph.addRoom(new Set([key(0, 4000, 4000, 8000)]), 'B');
+  generateRoomWallsFromOutline(graph, roomB);
+  roomB.setOverride('ceilingHeight', '2400');
+  // 部屋A自身の南壁（materialRangeがAの室内側=hi===4000）に腰壁(topHeight800)を指定する
+  // （section/sectionHits.test.jsのmakeKneeWallFixtureと同型のフィクスチャ）。
+  const nearWall = graph.walls.find(w =>
+    !w.isVertical && w.axisCL.effectiveValue === 4000 && w.materialRange.hi === 4000);
+  assert.ok(nearWall, '前提: 部屋A/Bの共有壁があるはず');
+  graph.setKneeDropWall(
+    edgeKey(nearWall.axisCL.id, nearWall.clStart.id, nearWall.clEnd.id), { knee: { topHeight: 800 } });
+
+  const band = buildRoomBand(roomA, graph, { project: { openingNumberIndex: new Map() } });
+
+  const sightline = band.primitives.filter(p => p.type === 'line' && p.weight === 'medium'
+    && p.y1 === p.y2 && Math.abs(-p.y1 - 2400) < 1);
+  assert.ok(sightline.length > 0,
+    'Bの天井(FL+2400)の見えがかり線(medium)がz=2400に出るはず（HORIZONTAL_FACES_ENABLED既定on）');
+
+  const ys = [...new Set(gapDiagOf(band).flatMap(p => [p.y1, p.y2]))].sort((a, b) => a - b);
+  assert.deepEqual(ys, [-2400, -800],
+    `アキは腰壁天端(z=800)〜Bの天井(z=2400)のはず——Aの天井3000までは伸びないはず（実際:${JSON.stringify(ys)}）`);
 });

@@ -1455,14 +1455,12 @@ test('【失敗系】emitOpenGapMarks: scale未指定（単体テスト・ゴー
 // ---- アキの高低差追従（ユーザー裁定2026-09「高低差」。cut.openSpans はappendBandCutContentが
 // face.spans から渡す。図側の appendGapMark を止めた二重描画の解消と対で入った規約） ----
 
-// ---- ユーザー裁定2026-09（3点で確定）: アキの下端は「遠側床が帯の床より高いときだけそこまで
-// 持ち上げ、それ以外は探査が見つけた床のまま」。**3点は同時に満たす必要がある**（1点だけ合わせると
-// 他が回帰する）。帯の最終座標は y = -z - 部屋のFL（zToY＋finalizeBandのfloorOffset）。
-// （2026-09の基準是正後の値。sectionProbe.jsの床解決を帯の部屋の実効FL基準へ揃えたため、
-//   FL≠0の部屋の探査z0がfloorOffsetぶん動いた。下端は「その位置で実際に描かれている遠側床の
-//   断面線」＝遠側床が帯の床と異なるときだけそこへ着ける、で3点が同時に通る）
+// ---- ユーザー裁定2026-09-11: アキの下端は「区間の内部に遠側床があれば常にそこで止める」
+// （Phase4の規則へ統一。旧裁定「遠側床が帯の床より高いときだけ持ち上げ、それ以外は探査が見つけた
+// 床のまま」は「10」D1（far=0）だけ探査どおりz=-50に残す例外だったが、Phase4は同値でも常に
+// 縮めるため統一した）。帯の最終座標は y = -z - 部屋のFL（zToY＋finalizeBandのfloorOffset）。
 //   実機「11'」A2左: far=-100・探査z0=0・FL=100 → z=-100 → y=0（1FLの破線に一致）
-//   実機「10」D1:    far=0・探査z0=-50・FL=0   → z=-50  → y=+50（遠側床線は無い＝探査どおり）
+//   実機「10」D1:    far=0・探査z0=-50・FL=0   → z=0    → y=0（2026-09-11裁定でy=+50から変更）
 //   ゴールデン:      far=+300・探査z0=0・FL=0  → z=+300 → y=-300
 const gapYs = (cut, columns) => [...new Set(emitOpenGapMarks(columns, cut)
   .filter(p => p.type === 'line').flatMap(p => [p.y1, p.y2]))].sort((a, b) => a - b);
@@ -1475,13 +1473,14 @@ test('【裁定2026-09・3点固定1/3】emitOpenGapMarks: 実機「11ダッシ�
     '下端は遠側床z=-100（FL=100の帯では最終y=0＝1FLの破線）のはず');
 });
 
-test('【裁定2026-09・3点固定2/3】emitOpenGapMarks: 実機「10」D1型（遠側=帯と同FL・近側の床が下がる）は下がった床まで', () => {
+test('【裁定2026-09-11・アキ下端統一】emitOpenGapMarks: 実機「10」D1型（遠側=帯と同FL・近側の床が下がる）は同値でもfarまで持ち上げる', () => {
   const columns = [{ x0: 0, x1: 1000, worldLo: 0, worldHi: 1000, bands: [{ kind: 'open', z0: -50, z1: 2400 }] }];
   const cut = makeCut({ baseFloorZ: -50, openSpans: [{ loX: 0, hiX: 1000, farFloorZ: 0, farCeilZ: 2400 }] });
   const prims = emitOpenGapMarks(columns, cut);
-  assert.deepEqual(gapYs(cut, columns), [-2400, 50], 'far=0で帯の床へ引き上げてはいけない（z=-50のまま）');
+  assert.deepEqual(gapYs(cut, columns), [-2400, 0],
+    'far=0（区間内部にある）は2026-09-11裁定でPhase4の規則へ統一し、同値でも常にfarへ持ち上げる（旧z=-50→新z=0）');
   const text = prims.find(p => p.type === 'text');
-  assert.equal(text.y, (50 + -2400) / 2, '「ア キ」はバツと同じ範囲の中心にあるはず');
+  assert.equal(text.y, (0 + -2400) / 2, '「ア キ」はバツと同じ範囲の中心にあるはず');
 });
 
 test('【裁定2026-09・3点固定3/3】emitOpenGapMarks: 遠側床が帯の床より高ければ、そこまで持ち上げる', () => {
@@ -1524,7 +1523,7 @@ test('【失敗系・実機修正2026-09】emitOpenGapMarks: far値が引けな�
   assert.deepEqual(ys, [-2400, 50], '下端は探査どおり(z=-50 → y=50)のままのはず');
 });
 
-test('【実機修正2026-09】emitOpenGapMarks: 遠側床が帯の床と同値でも、探査が見つけた下の床までは下げたまま', () => {
+test('【裁定2026-09-11・アキ下端統一】emitOpenGapMarks: 遠側床が帯の床と同値でも、区間内部にあれば常にそこまで持ち上げる', () => {
   // 実機「10」D1型: far側は帯の部屋と同じFL（0）だが、その位置の近側の床が部分指定で-50。
   const columns = [
     { x0: 0, x1: 1000, worldLo: 0, worldHi: 1000, bands: [{ kind: 'open', z0: -50, z1: 2400 }] },
@@ -1534,9 +1533,9 @@ test('【実機修正2026-09】emitOpenGapMarks: 遠側床が帯の床と同値�
   const cut = makeCut({ baseFloorZ: -50, openSpans: [{ loX: 0, hiX: 1000, farFloorZ: 0, farCeilZ: 2400 }] });
   const prims = emitOpenGapMarks(columns, cut);
   const ys = [...new Set(prims.filter(p => p.type === 'line').flatMap(p => [p.y1, p.y2]))].sort((a, b) => a - b);
-  assert.deepEqual(ys, [-2400, 50], 'far=0で下端を帯の床(y=0)へ引き上げてはいけない');
+  assert.deepEqual(ys, [-2400, 0], 'far=0でも常に帯の床(y=0)まで持ち上げる（2026-09-11裁定でPhase4の規則へ統一）');
   const text = prims.find(p => p.type === 'text');
-  assert.equal(text.y, (50 + -2400) / 2, '「ア キ」はバツと同じ範囲の中心にあるはず');
+  assert.equal(text.y, (0 + -2400) / 2, '「ア キ」はバツと同じ範囲の中心にあるはず');
 });
 
 test('【実機修正2026-09】emitOpenGapMarks: 「ア キ」はクランプ後のz範囲の中心に置く（線と文字を食い違わせない）', () => {

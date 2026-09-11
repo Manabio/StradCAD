@@ -44,7 +44,8 @@ function bandsEqual(a, b) {
       && (band.distMm ?? null) === (other.distMm ?? null)
       && (band.layerRole ?? null) === (other.layerRole ?? null)
       && (band.openingPassThrough ?? false) === (other.openingPassThrough ?? false)
-      // Phase4（水平面ヒット。既定offなら両側常にundefined＝比較は常にtrueで従来どおり）:
+      // Phase4（水平面ヒット。裁定済み2026-09-11・既定on。フラグoff＝旧挙動比較時は両側常に
+      // undefined＝比較は常にtrueで従来どおり）:
       // 比較しないと「片方の列だけ深度上限内の奥の床・天井が見える」隣接列が誤って1列へ統合され、
       // その列の実際のx範囲の一部でfarFloorZ/farCeilZが取りこぼされる（openingPassThroughと同じ
       // 理由。WP-E7 D1参照）。
@@ -352,8 +353,8 @@ export function buildColumns(cut, probeCtx) {
   }
   // Phase4（水平面ヒットの深度上限適用。`.claude/elevation-redesign.md`§5.5・ユーザー裁定
   // 2026-09-11「2」）: 壁と**同じ場所・同じ基準**（nearestMm・SIGHTLINE_DEPTH_LIMIT_MM）で
-  // floorFace/ceilFaceの深度上限を掛ける。既定offのHORIZONTAL_FACES_ENABLEDでのみ実行——
-  // 出力不変（Phase3までの契約）を保つ。
+  // floorFace/ceilFaceの深度上限を掛ける。裁定済み2026-09-11・既定onのHORIZONTAL_FACES_ENABLEDで
+  // 実行——フラグoff（旧挙動比較時）は出力不変（Phase3までの契約）を保つ。
   // QA是正（Phase4・C）: nearestMmが非有限（この切断にwall帯が1枚も無い＝上限の基準点が
   // そもそも無い）ときは、壁の深度上限適用自体が丸ごとスキップされる（上のif）のに、
   // ここだけ素通しすると`emitColumns`がfarFloorZ/farCeilZだけを見て無条件に水平線を描いて
