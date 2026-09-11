@@ -43,7 +43,9 @@ export { probeColumn };
  *   chOf:(room:object|null, graph:object)=>number|null,
  *   floorZOf:(room:object|null, layer:object)=>number,
  *   cellAt:(layer:object, worldX:number, worldY:number)=>{room:object|null, floorZ:number, ceilZ:number|null}|null,
- *   cellsAlong:(layer:object, cut:object, worldMid:number, fromDepthMm:number, toDepthMm:number)=>Array<object>}}
+ *   cellsAlong:(layer:object, cut:object, worldMid:number, fromDepthMm:number, toDepthMm:number)=>Array<object>,
+ *   componentOf:(layer:object, room:object|null)=>number|null,
+ *   componentAt:(layer:object, worldX:number, worldY:number)=>number|null}}
  */
 export function makeProbeContext(layers, opts = {}) {
   const spaceIndex = buildSpaceIndex(layers, opts);
@@ -56,6 +58,11 @@ export function makeProbeContext(layers, opts = {}) {
     // Phase 3（展開図一般化）: 水平面ヒット（floorFace/ceilFace。`section/sectionHits.js`の
     // `probeColumnHits`）の材料。`cellAt`（1点プローブ）の一般形。
     cellsAlong: spaceIndex.cellsAlong,
+    // Phase 6（展開図一般化。設計§5.4「規則へ吸収」）: 空気ボリュームの連結成分。
+    // `section/sectionHits.js`の`isHiddenWall`（階段下の閉じた部屋の壁を階段帯の視線から
+    // 除外する判定）が消費する。呼ばれるまで計算しない（spaceIndex側の遅延初期化のまま）。
+    componentOf: spaceIndex.componentOf,
+    componentAt: spaceIndex.componentAt,
   };
 }
 
@@ -71,9 +78,14 @@ export function makeProbeContext(layers, opts = {}) {
  *     このWPでも列境界自体は用意しておく（実際のopeningPassThrough付与はWP-E7で行う）。
  * GAP_EPS未満の重複・line.lo/hiちょうどの値は素通し（Setで自然に併合される）。
  * @param {import('./sectionTypes.js').SectionCut} cut
- * @param {ReturnType<typeof makeProbeContext>} [probeCtx] - 未指定でも計算可能
- *   （層別cellToRoomのウォームアップにのみ使う。§5.1自体はgraph.centerLines/walls/openingsの
- *   直接走査で完結するため必須ではない）。
+ * @param {ReturnType<typeof makeProbeContext>} [probeCtx] - 展開図一般化Phase 6以降は
+ *   **非可視判定（`isHiddenWall`。`cut.airRoom`/`cut.underRooms`）に必須**——省略すると
+ *   `isHiddenWall`がcomponentOf/cellAtを引けず常にfalse（非隠蔽）を返すため、列の分割
+ *   （本関数）だけ非可視の壁の端でも割れてしまい、候補収集側（`probeColumnHits`。probeCtxは
+ *   別経路で必ず渡る）と非対称になる——「列はあるのに中身が無い」帯の原因になるため、
+ *   `cut.airRoom`/`cut.underRooms`を使う呼び出し側は必ずprobeCtxを渡すこと。層別cellToRoomの
+ *   ウォームアップにも使う（§5.1自体はgraph.centerLines/walls/openingsの直接走査で完結する
+ *   ため、非可視判定を使わないテスト等ではprobeCtx省略でも動く）。
  * @returns {number[]} 昇順・重複除去済み
  */
 export function collectCutBreaks(cut, probeCtx) {
@@ -100,14 +112,19 @@ export function collectCutBreaks(cut, probeCtx) {
     const addIfInsideLayer = v => { if (v > loOf + GAP_EPS && v < hiOf - GAP_EPS) addIfInside(v); };
     for (const v of collectRunBreaks(layer.graph, line.isVertical, loOf, hiOf)) values.add(v);
     for (const w of graphList(layer.graph, 'walls') ?? []) {
-      if (isHiddenWall(cut, w)) continue; // 非可視の壁（section/sectionHits.js）は列も割らない
+      // 非可視の壁（section/sectionHits.js）は列も割らない——判定は幾何で候補になった壁だけに
+      // 効かせる（isCutWall/isCutAlongWall/isSightlineShapeのいずれにも該当しない、この切断と
+      // 無関係な壁まで空気ボリューム判定にかけると、無関係な部屋の壁まで巻き込んで非可視になる）。
       if (isCutWall(w, line)) {
+        if (isHiddenWall(cut, w, layer, probeCtx)) continue;
         const mr = w.materialRange;
         addIfInsideLayer(mr.lo); addIfInsideLayer(mr.hi);
       } else if (isCutAlongWall(w, line)) {
+        if (isHiddenWall(cut, w, layer, probeCtx)) continue;
         const c1 = Math.min(w.coord1, w.coord2), c2 = Math.max(w.coord1, w.coord2);
         addIfInsideLayer(c1); addIfInsideLayer(c2);
       } else if (isSightlineShape(w, line, cut.viewSign)) {
+        if (isHiddenWall(cut, w, layer, probeCtx)) continue;
         const c1 = Math.min(w.coord1, w.coord2), c2 = Math.max(w.coord1, w.coord2);
         addIfInsideLayer(c1); addIfInsideLayer(c2);
       }

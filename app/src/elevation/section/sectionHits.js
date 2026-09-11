@@ -73,19 +73,78 @@ const COINCIDENT_TOL_MM = PROBE_EPS_MM;
 function clamp(z, lo, hi) { return Math.max(lo, Math.min(hi, z)); }
 
 /**
- * その切断が「実体ごと見ない」壁か（`cut.hiddenWallIds`）。
+ * その切断が「実体ごと見ない」壁か（`cut.airRoom`／`cut.underRooms`。展開図一般化Phase 6・
+ * 設計§5.4「規則へ吸収」）。
  *
- * 現状の唯一の供給元は階段下部屋の2a壁（`section/cuts/switchbackCuts.js`の`stairUnderInfo`）。
- * 階段下の空間の壁はその部屋自身の帯が展開を描くもので、階段の帯からは見えない扱いにする
- * ——平面図が破れ線より階段踏面側で2a壁を描かないのと同じ規約（`stairUnderClip.js`）。
+ * 旧実装（`cut.hiddenWallIds`。壁idのSet）は階段下部屋の2a壁を`stairUnderInfo`が
+ * footprintの内外（`FOOTPRINT_EDGE_TOL_MM`）で判定し、id単位で列挙していた——階段の帯からは
+ * 「階段自身の空気ボリューム（`cut.airRoom`＝階段室）と、階段下に指定された部屋（`cut.underRooms`）
+ * を隔てる壁は見えない」という規則を**id列挙という実装**でしか表せていなかった。
+ *
+ * 新実装: 壁の両側のセルが指すRoom（`probeCtx.cellAt`）を見る。**両側に実在の部屋があり
+ * （どちらかがcellAt().room===null＝建物の外・未区画なら対象外。階段下部屋の外周のうち階段室
+ * 自身の外周と重なる辺——実機「13」の南辺。その外側は建物の外——はこれで非隠蔽のまま残る）、
+ * かつ片側だけが`cut.underRooms`に含まれ（両方 or どちらでもないなら対象外）、かつその
+ * 「片側」の反対側が`cut.airRoom`の連結成分（`space/spaceModel.js`の`buildComponents`）と
+ * 一致する**壁を「帯自身の空気ボリュームと階段下部屋を隔てる境界」とみなし非可視にする。
+ *
+ * **`cut.underRooms`で対象を具体的な部屋へスコープすることが必須**（QA実測: 単に
+ * 「壁の両側が別の連結成分で片側が階段室の成分」まで一般化すると、階段室と無関係な別室
+ * （例: 「9」）が偶然隣り合うだけの階段自身の外壁まで誤って非可視になる——13.stq「6」D面
+ * （wOut1）の実壁が広範囲に消えた反例。QA是正）。
+ *
+ * `cut.airRoom`／`cut.underRooms`が無い（階段以外の帯・階段にroomIdが無い・階段下に部屋指定が
+ * 無い等）／`probeCtx.cellAt`が無い（テスト用の簡略probeCtx等）ときは常にfalse（非隠蔽＝
+ * 従来どおり全ての壁が見える）。
+ *
+ * **判定は`layer.role==='self'`（階段自身の階）に限る**——「階段下の閉じた部屋」は階段自身の
+ * 階にしか存在し得ない概念で、上階（`role:'above'`。往復間の壁が2Fにある構成等）の壁は
+ * `cut.underRooms`に該当しようがない（underRoomsは自階のgraphからしか集めない）ため実害は
+ * 無いが、role制限自体は無駄な計算を避ける安全弁として残す。
+ *
+ * **呼び出し側は`isCutWall`/`isCutAlongWall`/`isSightlineShape`のいずれかに該当した壁だけに
+ * 適用すること**（この切断と無関係な壁まで判定しない）——旧実装は壁idのSetを引くだけだったため
+ * 全走査の先頭で早期continueしても無害だったが、本判定は`cellAt`を2回呼ぶため、切断と無関係な
+ * 壁（他の階段・他の部屋の壁）にまで適用すると無駄な計算が積み重なる。
  * 列の分割（`collectCutBreaks`）と候補の収集（`probeColumnHits`）の**両方**で効かせる
  * ——片方だけだと、壁は消えても壁端で列が割れたまま残り、そこに縦線・アキの境界が出る。
  * @param {import('./sectionTypes.js').SectionCut} cut
  * @param {import('@core').Wall} wall
+ * @param {object} layer - その壁が属する層（`probeColumnHits`のinfo.layer／`collectCutBreaks`のlayer）
+ * @param {ReturnType<typeof import('./sectionProbe.js').makeProbeContext>} [probeCtx]
  * @returns {boolean}
  */
-export function isHiddenWall(cut, wall) {
-  return cut.hiddenWallIds?.has(wall.id) === true;
+export function isHiddenWall(cut, wall, layer, probeCtx) {
+  const airRoom = cut.airRoom;
+  const underRooms = cut.underRooms;
+  if (!airRoom || !underRooms?.size || layer?.role !== 'self' || typeof probeCtx?.cellAt !== 'function') {
+    return false;
+  }
+  // **部屋の生成壁（isRoomWall）だけを対象にする**——2a壁は`generateRoomWallsFromOutline`と
+  // 同型の経路で生成される（実測: 13.stqの旧hiddenWallIds4枚は全てisRoomWall:true）。
+  // 往復間の壁（findMidWallが見つける自立した間仕切り。isRoomWall:false）は、たまたま
+  // 階段下部屋の境界と位置が重なっても対象外——実運用ではstairUnderWalls.jsの委譲規則
+  // （既存壁と重なるエッジには2a壁を生成しない）でこの重なりは起きないが、フィクスチャ等
+  // 独自に壁を置く構成では起こりうるため、ここで明示的に除外する。
+  if (!wall.isRoomWall) return false;
+  const airComponent = probeCtx.componentOf(layer, airRoom);
+  if (airComponent == null) return false;
+  const mid = (wall.coord1 + wall.coord2) / 2;
+  const av = wall.axisCL.effectiveValue;
+  const roomOnSide = offset => (wall.isVertical
+    ? probeCtx.cellAt(layer, av + offset, mid)
+    : probeCtx.cellAt(layer, mid, av + offset))?.room ?? null;
+  const near = roomOnSide(-PROBE_EPS_MM);
+  const far = roomOnSide(PROBE_EPS_MM);
+  // 片側でも部屋が無い（建物の外・未区画）なら、その壁は帯自身の外周壁そのもの——非隠蔽のまま。
+  if (!near || !far) return false;
+  const nearIsUnder = underRooms.has(near);
+  const farIsUnder = underRooms.has(far);
+  if (nearIsUnder === farIsUnder) return false; // 両方 or どちらも階段下部屋でないなら対象外
+  const otherRoom = nearIsUnder ? far : near;
+  // 「片側=階段下部屋」の反対側が、帯自身の空気ボリュームと連結しているか（`otherRoom`が
+  // 階段室そのもの、または全高の壁で仕切られずに階段室と繋がる空間）。
+  return probeCtx.componentOf(layer, otherRoom) === airComponent;
 }
 
 /**
@@ -559,8 +618,8 @@ export function probeColumnHits(cut, worldMid, probeCtx) {
     const { layer } = info;
     if (info.ceilZ == null) continue; // 防御的ガード（fallbackCeilZにより通常到達しない）
     for (const w of graphList(layer.graph, 'walls') ?? []) {
-      if (isHiddenWall(cut, w)) continue;
       if (isCutWall(w, line)) {
+        if (isHiddenWall(cut, w, layer, probeCtx)) continue;
         const mr = w.materialRange;
         if (worldMid < mr.lo - GAP_EPS || worldMid > mr.hi + GAP_EPS) continue;
         // アキ（腰壁＋垂れ壁）は2つの帯になる（kneeDropZRangesAt）ため、候補も範囲ごとに積む。
@@ -576,6 +635,7 @@ export function probeColumnHits(cut, worldMid, probeCtx) {
             isKneeDrop: isKneeDropRange(z0, z1, info) });
         }
       } else if (isCutAlongWall(w, line)) {
+        if (isHiddenWall(cut, w, layer, probeCtx)) continue;
         // cutAlong（縦断された壁。§6.1「切断線がその中を通る→全幅の断面」）: x範囲=壁スパン
         // [coord1,coord2]∩切断線範囲、z範囲=kneeDropRecordsOnAxisによる実存在範囲
         // （pointCoord=worldMid。壁自身の長さ方向＝cutのrun方向と一致するためwallと同じ規約）。
@@ -586,6 +646,7 @@ export function probeColumnHits(cut, worldMid, probeCtx) {
             isKneeDrop: isKneeDropRange(z0, z1, info) });
         }
       } else if (isSightlineShape(w, line, cut.viewSign)) {
+        if (isHiddenWall(cut, w, layer, probeCtx)) continue;
         const c1 = Math.min(w.coord1, w.coord2), c2 = Math.max(w.coord1, w.coord2);
         if (worldMid < c1 - GAP_EPS || worldMid > c2 + GAP_EPS) continue;
         const distMm = Math.abs(w.axisCL.effectiveValue - line.axisValue);

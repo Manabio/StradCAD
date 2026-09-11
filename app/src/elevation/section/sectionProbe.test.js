@@ -708,19 +708,27 @@ test('【2026-09】emitColumns: 建具で切れた切断壁は、両縁ではな
 });
 
 
-// ---- cut.hiddenWallIds: その切断が「実体ごと見ない」壁（現状の供給元は階段下部屋の2a壁。
-// section/cuts/switchbackCuts.jsのstairUnderInfo）----
-test('probeColumn/collectCutBreaks: cut.hiddenWallIdsの壁は候補にも列の分割にも現れない', () => {
+// ---- cut.airRoom/cut.underRooms: その切断が「実体ごと見ない」壁（展開図一般化Phase 6。
+// 現状の供給元は階段下部屋の2a壁。section/cuts/switchbackCuts.js。判定ロジック自体の網羅テストは
+// section/sectionHits.test.jsの【isHiddenWall】群——ここではcollectCutBreaks（列の分割）も
+// probeColumnと同じく非可視の壁を無視することを確認する）----
+test('probeColumn/collectCutBreaks: airRoom/underRoomsで指定した壁は候補にも列の分割にも現れない', () => {
   const graph = makeGraph();
-  makeRectRoom(graph, 0, 0, 4000, 3000);
+  const airRoom = makeRectRoom(graph, 0, 0, 4000, 3000);
   const far = farWallOf(graph);
   assert.ok(far, '奥の壁があるはず');
+  // underRoomは壁を生成しない（makeRectRoomNoWalls）——airRoom側の奥の壁(far)自体は
+  // 既にisRoomWall:trueで生成済みなので、underRoomはcellToRoomの所有権（y>3000のセルを
+  // 「Under」が持つ）だけ要る。壁を追加生成すると、そのCL端が新たな列境界を作り
+  // （collectRunBreaksは非可視判定と無関係に全壁を見るため）、下の「非可視指定の壁の端では
+  // 列を割らない」検証が無関係な境界と混同してしまう。
+  const underRoom = makeRectRoomNoWalls(graph, 0, 3000, 4000, 6000, 'Under');
 
   const cut = frontCut(graph);
   const bandsBefore = probeColumn(cut, 2000, makeProbeContext(cut.layers));
   assert.ok(bandsBefore.some(b => b.wall === far), '通常は奥の壁が候補に現れるはず');
 
-  const hidden = frontCut(graph, { hiddenWallIds: new Set([far.id]) });
+  const hidden = frontCut(graph, { airRoom, underRooms: new Set([underRoom]) });
   const bandsAfter = probeColumn(hidden, 2000, makeProbeContext(hidden.layers));
   assert.ok(!bandsAfter.some(b => b.wall === far), '非可視指定の壁は候補に現れないはず');
 
@@ -736,12 +744,12 @@ test('probeColumn/collectCutBreaks: cut.hiddenWallIdsの壁は候補にも列の
   }
 });
 
-test('【失敗系】probeColumn: hiddenWallIdsに無いidを指定しても既存の結果は変わらない', () => {
+test('【失敗系】probeColumn: underRoomsが空集合なら既存の結果は変わらない', () => {
   const graph = makeGraph();
-  makeRectRoom(graph, 0, 0, 4000, 3000);
+  const airRoom = makeRectRoom(graph, 0, 0, 4000, 3000);
   const cut = frontCut(graph);
   const base = probeColumn(cut, 2000, makeProbeContext(cut.layers));
-  const other = frontCut(graph, { hiddenWallIds: new Set(['no-such-wall']) });
+  const other = frontCut(graph, { airRoom, underRooms: new Set() });
   const after = probeColumn(other, 2000, makeProbeContext(other.layers));
   assert.deepEqual(after.map(b => [b.kind, b.z0, b.z1]), base.map(b => [b.kind, b.z0, b.z1]));
 });

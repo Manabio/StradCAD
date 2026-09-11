@@ -16,7 +16,7 @@ import assert from 'node:assert/strict';
 import { Plane, PlanGraph, CenterLineType, Discipline, edgeKey, OpeningCategory } from '@core';
 import { generateRoomWallsFromOutline } from '../../finish/wallGeneration.js';
 import { makeProbeContext, probeColumn } from './sectionProbe.js';
-import { probeColumnHits, visibleBandsOf } from './sectionHits.js';
+import { probeColumnHits, visibleBandsOf, isHiddenWall } from './sectionHits.js';
 import { HORIZONTAL_FACES_ENABLED, setHorizontalFacesEnabled } from '../elevationStyle.js';
 
 const CH = 2400; // DEFAULT_ROOM_CEILING_HEIGHT（core/constants.js）明示指定なしの既定値
@@ -622,4 +622,114 @@ test('【回帰・QA是正2026-09】visibleBandsOf: 同じ壁・同じ距離の�
     assert.equal(wallBands[0].farFloorZ, 600,
       '畳んだ結果、残るfar付帯は下側(z0が小さい方)の帯のもの——mergeAdjacentZBandsの注記どおり');
   } finally { setHorizontalFacesEnabled(prev); }
+});
+
+// ================================================================
+// isHiddenWall（展開図一般化Phase 6。設計§5.4「規則へ吸収」）:
+// cut.airRoom/cut.underRoomsによる空気ボリューム判定（旧cut.hiddenWallIdsの置換）。
+// フィクスチャは「帯自身の部屋(LDK=airRoom)」「階段下相当の部屋(Under=underRooms)」が
+// y=3000で隣接する2室（makeRectRoomが両者ともgenerateRoomWallsFromOutlineで実壁を生成する
+// ため、境界には isRoomWall:true の実壁が立つ——実機13.stqの2a壁と同じ性質）。
+// ================================================================
+
+test('【isHiddenWall】帯自身の部屋と階段下部屋を隔てる実壁は非可視になる', () => {
+  const graph = makeGraph();
+  const airRoom = makeRectRoom(graph, 0, 0, 4000, 3000, 'LDK');
+  const underRoom = makeRectRoom(graph, 0, 3000, 4000, 6000, 'Under');
+  const wall = farWallOf(graph);
+  assert.ok(wall, '境界の壁があるはず');
+  assert.equal(wall.isRoomWall, true, '前提: 部屋の生成壁(isRoomWall)のはず');
+
+  const cut = frontCut(graph, { airRoom, underRooms: new Set([underRoom]) });
+  const probeCtx = makeProbeContext(cut.layers);
+  const layer = cut.layers[0];
+  assert.equal(isHiddenWall(cut, wall, layer, probeCtx), true,
+    '帯自身の空気ボリューム(airRoom)と階段下部屋(underRooms)を隔てる壁は非可視のはず');
+
+  // 候補収集(probeColumnHits)・列の分割(collectCutBreaks)の両方から消える
+  // （旧cut.hiddenWallIdsテストと同じ確認粒度）。
+  const { hits } = probeColumnHits(cut, 2000, probeCtx);
+  assert.ok(!hits.some(h => h.wall === wall), '非可視の壁は候補(hits)に現れないはず');
+});
+
+test('【失敗系・isHiddenWall】cut.underRoomsが無ければ非隠蔽のまま（従来どおり壁が見える）', () => {
+  const graph = makeGraph();
+  const airRoom = makeRectRoom(graph, 0, 0, 4000, 3000, 'LDK');
+  makeRectRoom(graph, 0, 3000, 4000, 6000, 'Under');
+  const wall = farWallOf(graph);
+
+  const cut = frontCut(graph, { airRoom }); // underRooms未指定
+  const probeCtx = makeProbeContext(cut.layers);
+  assert.equal(isHiddenWall(cut, wall, cut.layers[0], probeCtx), false,
+    'underRooms未指定なら判定対象外（非隠蔽）のはず');
+});
+
+test('【失敗系・isHiddenWall】isRoomWall=falseの壁（自立した間仕切り等）は、位置が階段下部屋の境界と重なっても非隠蔽のまま', () => {
+  const graph = makeGraph();
+  const airRoom = makeRectRoom(graph, 0, 0, 4000, 3000, 'LDK');
+  const underRoom = makeRectRoom(graph, 0, 3000, 4000, 6000, 'Under');
+  // 境界(y=3000)と同じ位置に、isRoomWall:falseの自立した壁を別途置く（例:
+  // switchbackCuts.jsのfindMidWallが見つける往復間の壁）——wall.coord1/coord2/materialRangeは
+  // クラスのgetter（非enumerable）なのでオブジェクトスプライドでは複製できず、実際に
+  // graph.addWallで生成した壁でなければ意味のある検証にならない。
+  const y3000 = graph.centerLines.find(cl => cl.centerLineType === CenterLineType.HORIZONTAL && cl.effectiveValue === 3000);
+  const x0 = graph.centerLines.find(cl => cl.centerLineType === CenterLineType.VERTICAL && cl.effectiveValue === 0);
+  const x1 = graph.centerLines.find(cl => cl.centerLineType === CenterLineType.VERTICAL && cl.effectiveValue === 4000);
+  const freestandingWall = graph.addWall(y3000, 0, false, x0, 0, x1, 0, { isRoomWall: false });
+  assert.equal(freestandingWall.isRoomWall, false, '前提: isRoomWall=falseの壁のはず');
+
+  const cut = frontCut(graph, { airRoom, underRooms: new Set([underRoom]) });
+  const probeCtx = makeProbeContext(cut.layers);
+  assert.equal(isHiddenWall(cut, freestandingWall, cut.layers[0], probeCtx), false,
+    'isRoomWall=falseの壁は2a壁ではないため非隠蔽のはず（実測: 13.stqの旧hiddenWallIds4枚は全てisRoomWall:true）');
+});
+
+test('【失敗系・isHiddenWall】underRoomsと無関係な第三の部屋を隔てるだけの壁は非隠蔽のまま（無関係な部屋の外壁まで隠さない）', () => {
+  const graph = makeGraph();
+  const airRoom = makeRectRoom(graph, 0, 0, 4000, 3000, 'LDK');
+  makeRectRoom(graph, 0, 3000, 4000, 6000, 'Under'); // underRoomsに入れない＝この部屋とは無関係
+  makeRectRoom(graph, 4000, 0, 8000, 3000, 'Other'); // airRoomの東隣（無関係な別室9相当。隙間なく隣接）
+  const eastWall = graph.walls.find(w => w.isVertical && w.axisCL.effectiveValue === 4000);
+  assert.ok(eastWall, 'airRoomとOtherの間の壁があるはず');
+
+  // underRoomsは実際には無関係な"Other"を指す——QA実測の反例（13.stq「6」D面の実壁が
+  // 無関係な部屋との境界というだけで誤って非可視化されていたケース）を再現する。
+  const otherRoom = [...graph.rooms].find(r => r.name === 'Other');
+  const cut = frontCut(graph, { airRoom, underRooms: new Set([otherRoom]) });
+  const probeCtx = makeProbeContext(cut.layers);
+  assert.equal(isHiddenWall(cut, eastWall, cut.layers[0], probeCtx), true,
+    '対照実験: underRoomsに実際に指定されていれば隠れる（判定ロジック自体は機能する）');
+
+  // 今度はunderRoomsを空にする（Otherを含めない）——このときeastWallは隠れないはず。
+  const cutNoUnder = frontCut(graph, { airRoom, underRooms: new Set() });
+  assert.equal(isHiddenWall(cutNoUnder, eastWall, cutNoUnder.layers[0], probeCtx), false,
+    'underRoomsに含まれない部屋との境界というだけでは非可視にしないはず');
+});
+
+// QA指摘（コミット前レビュー）: isHiddenWallの中心規則「反対側が帯自身の空気ボリュームと
+// 連結しているか」（`probeCtx.componentOf(layer, otherRoom) === airComponent`）がノーガード
+// だった——このregionを常にtrueへ変異させても既存テストは全緑のままだった（このテストが無いと
+// 判定ロジックの半分が検証されずに通る）。13.stq「13」⇔「1」（階段下部屋と、階段室とは
+// 連結していない別室が隣接する境界）の実際の構成を再現する: airRoom(階段室)—underRoom(階段下
+// 部屋)—isolatedRoom(階段室と全高壁で仕切られた無関係な別室)の3室を一列に並べ、
+// underRoomとisolatedRoomの境界壁を検証する。
+test('【isHiddenWall】階段下部屋の反対側が階段室の空気ボリュームと非連結の部屋なら非隠蔽のまま（13.stq「13」⇔「1」相当）', () => {
+  const graph = makeGraph();
+  const airRoom = makeRectRoom(graph, 0, 0, 4000, 3000, 'LDK');       // 階段室
+  const underRoom = makeRectRoom(graph, 0, 3000, 4000, 6000, 'Under'); // 階段下部屋
+  const isolatedRoom = makeRectRoom(graph, 0, 6000, 4000, 9000, 'Isolated'); // 階段室と無関係な別室
+  const wall = graph.walls.find(w => !w.isVertical && w.axisCL.effectiveValue === 6000);
+  assert.ok(wall, 'Under⇔Isolatedの境界壁があるはず');
+  assert.equal(wall.isRoomWall, true, '前提: 部屋の生成壁のはず');
+
+  const cut = frontCut(graph, { airRoom, underRooms: new Set([underRoom]) });
+  const probeCtx = makeProbeContext(cut.layers);
+  // 前提確認: airRoomとisolatedRoomは全高の壁（airRoom⇔underRoom・underRoom⇔isolatedRoom
+  // それぞれの境界壁）で仕切られており、別の連結成分のはず。
+  assert.notEqual(
+    probeCtx.componentOf(cut.layers[0], airRoom), probeCtx.componentOf(cut.layers[0], isolatedRoom),
+    '前提: airRoomとisolatedRoomは非連結のはず');
+
+  assert.equal(isHiddenWall(cut, wall, cut.layers[0], probeCtx), false,
+    'Under側は階段下部屋だが、反対側(Isolated)が階段室の空気ボリュームと非連結なので非隠蔽のはず');
 });

@@ -33,13 +33,21 @@ import { GAP_EPS_MM as GAP_EPS } from '../elevationStyle.js';
  *   zRange: {loZ:number, hiZ:number},
  *   baseFloorZ: number,
  *   stairCut?: object,
- *   hiddenWallIds?: Set<string>,
+ *   airRoom?: object,
+ *   underRooms?: Set<object>,
  *   layerRunWindows?: Map<object,{lo:number,hi:number}>,
  *   floorZProfile?: Array<{loX:number, hiX:number, floorZ:number}>,
  *   drawFloorProfile?: Array<[number,number]>,
  *   chDimSplitAbsYs?: number[],
  *   anchorRoom?: object,
  * }} SectionCut
+ *   airRoom（任意。展開図一般化Phase 6）… その帯自身の空気ボリュームを代表するRoom
+ *   （階段帯なら階段室。`section/cuts/switchbackCuts.js`が設定）。
+ *   underRooms（任意。展開図一般化Phase 6）… 階段下に指定された部屋の集合（同上が設定）。
+ *   `section/sectionHits.js`の`isHiddenWall`が、壁の両側のセルのRoomを見て、片側だけが
+ *   `underRooms`に含まれ、かつその反対側が`airRoom`の連結成分と一致する壁を「実体ごと見ない」
+ *   （階段下の閉じた部屋の壁は階段帯から見えない）判定に使う。どちらも未指定なら常に非隠蔽
+ *   （従来どおり全ての壁が見える）。
  *   layerRunWindows（任意）… 層 → その層を探査してよい走り方向の世界範囲。**面の端は層ごとに
  *   違う**（自階の面は自階の壁で終わるが、同じ通りの上階の壁はその先へ続きうる）ことを表す
  *   付加データで、`cut.layers`配列自体は写さない（参照同一性とprobeCtxのキャッシュを壊さない）。

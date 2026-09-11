@@ -30,57 +30,34 @@ import { stairContribution } from '../sectionStair.js';
 import { graphList } from '../../../graphReadScope.js';
 
 const MID_WALL_TOL_MM = 300; // 壁厚程度の許容差（往路・復路間の壁の実在判定。既存実装と同値）
-// 「階段footprintの境界上のCLか、内側に立つCLか」の判別許容差(mm)。footprintは
-// roomBounds（セル格子＝CL位置）なので境界上の壁は本来ぴったり一致するが、CL偏芯・
-// 手動移動ぶんを飲み込む余裕として壁厚1枚ぶんを見る。
-const FOOTPRINT_EDGE_TOL_MM = 150;
 
 /**
- * 階段下（破れ線先セル）の部屋の情報。判定は仕上げモード側と同じ単一情報源
+ * 階段下（破れ線先セル）の部屋情報。判定は仕上げモード側と同じ単一情報源
  * （`cellsBeyondBreak` × `stairUnderRoomsOf`）に委譲する——展開図が独自判定を持つと
  * 階段下壁の生成（`stairUnderWalls.js`）と食い違うため。
  *
- * - `hasRoomUnder` … 階段下に部屋が指定されているか。**判定不能なら true（＝現行表現を保つ）**
- *   へ倒す——graph未整備・破れ線先セルを導出できない（`cellsBeyondBreak`が空。U字構造として
- *   認識できない構成等）場合は「階段下が開いている」と積極的に言えないため、ユーザー実機
- *   確認済みの表現（踊り場が基準床）をそのまま使う。逆に倒すと、判定できないだけの階段まで
- *   描画が変わってしまう。
- * - `hiddenWallIds` … その部屋のために生成された壁（`room.generatedWallIds`。2a壁）のid。
- *   **階段の展開図はこれらを一切見ない**（ユーザー実機指摘2026-09「「6」D1: …「13」の壁関連
- *   （2本の縦線とアキばつ）は、階段より下なので描画しない」）——2a壁は階段下の空間の壁で、
- *   その展開は階段下部屋自身の帯（「13」A〜D）が描く。平面図でも同じ規約で、破れ線より
- *   階段踏面側では2a壁を描かない（`finish/stair/stairUnderClip.js`）。
- *   階段帯でこれを見てしまうと、レーン境界（中心1）に載る2a壁が「その切断で最も手前の壁面」
- *   になり、(1)壁端の縦線、(2)その先が`open`になってアキのバツ（本来はもっと奥の壁が
- *   見えがかりとして続く）、(3)`isBlockedByWall`が成立して復路ささらの見えがかりが消える、
- *   の3つが同時に起きる。
+ * - `hasRoomUnder` … **判定不能なら true（＝現行表現を保つ）**へ倒す——graph未整備・破れ線先
+ *   セルを導出できない（`cellsBeyondBreak`が空。U字構造として認識できない構成等）場合は
+ *   「階段下が開いている」と積極的に言えないため、ユーザー実機確認済みの表現（踊り場が基準床）を
+ *   そのまま使う。逆に倒すと、判定できないだけの階段まで描画が変わってしまう。
+ * - `underRooms` … 階段下に指定された部屋そのもの（Room[]。0件もありうる）。
+ *   展開図一般化Phase 6: 階段下部屋の壁（2a壁）を階段の展開図から隠す判定（旧: 壁id列挙の
+ *   `hiddenWallIds`）は、空気ボリュームの連結成分（`section/sectionHits.js`の`isHiddenWall`。
+ *   `cut.underRooms`＝この配列）で表す規則へ一般化した——**この配列で「特定のどの部屋が
+ *   階段下か」をスコープする**ことが必須（QA実測: 単に「階段室の成分と異なる壁は全部隠す」
+ *   まで一般化すると、階段室と無関係な別室（例: 「9」）が偶然隣り合うだけの階段自身の外壁まで
+ *   誤って隠れる——13.stq「6」D面の実壁が広範囲に消えた反例）。2a壁のid・footprintの内外
+ *   （旧`FOOTPRINT_EDGE_TOL_MM`）はこの関数が知る必要が無くなった。
  * @param {import('@core').Stair} stair
  * @param {object} graph
- * @returns {{hasRoomUnder:boolean, hiddenWallIds:Set<string>|null}}
+ * @returns {{hasRoomUnder:boolean, underRooms:import('@core').Room[]}}
  */
-function stairUnderInfo(stair, graph) {
-  if (!stair || !graph?.rooms) return { hasRoomUnder: true, hiddenWallIds: null };
+function stairUnderRoomInfo(stair, graph) {
+  if (!stair || !graph?.rooms) return { hasRoomUnder: true, underRooms: [] };
   const beyond = cellsBeyondBreak(stair, graph, stair.riser ?? null);
-  if (beyond.size === 0) return { hasRoomUnder: true, hiddenWallIds: null };
-  const rooms = stairUnderRoomsOf(stair, graph, beyond);
-  // 対象は**階段のfootprintの内側に立つ**壁だけ——階段下部屋の外周のうち階段室自身の外周と
-  // 重なる辺（実機「13」の南辺=階段室の南壁）は階段室の実壁そのもので、階段の展開図に
-  // 必要である。footprint境界上のCLを除くことでその辺だけが残る。
-  const fp = stair.cells ? roomBounds(stair.cells, graph) : null;
-  const insideFootprint = (wall) => {
-    if (!fp) return false;
-    const v = wall.axisCL.effectiveValue;
-    const [lo, hi] = wall.isVertical ? [fp.x1, fp.x2] : [fp.y1, fp.y2];
-    return v > Math.min(lo, hi) + FOOTPRINT_EDGE_TOL_MM && v < Math.max(lo, hi) - FOOTPRINT_EDGE_TOL_MM;
-  };
-  const hiddenWallIds = new Set();
-  for (const room of rooms) {
-    for (const id of room.generatedWallIds ?? []) {
-      const w = graph.shapeMap?.get(id);
-      if (w && insideFootprint(w)) hiddenWallIds.add(id);
-    }
-  }
-  return { hasRoomUnder: rooms.length > 0, hiddenWallIds: hiddenWallIds.size > 0 ? hiddenWallIds : null };
+  if (beyond.size === 0) return { hasRoomUnder: true, underRooms: [] };
+  const underRooms = stairUnderRoomsOf(stair, graph, beyond);
+  return { hasRoomUnder: underRooms.length > 0, underRooms };
 }
 
 // ---- elevationStairSequence.js から移設（挙動不変。§9でstairFaceSequence側からは削除する）----
@@ -275,8 +252,14 @@ export function switchbackCuts(stair, faces, graph, opts = {}) {
   // 部屋が有る場合は従来どおり踊り場が基準床（その下は別室＝向こう側なので細破線へ降格）。
   // 判定は階段下部屋の唯一の情報源（stairUnderRoomsOf × cellsBeyondBreak）をそのまま使う
   // ——展開図が独自の判定を持つと、壁生成（stairUnderWalls.js）との食い違いが生まれるため。
-  const { hasRoomUnder, hiddenWallIds } = stairUnderInfo(stair, graph);
+  const { hasRoomUnder, underRooms } = stairUnderRoomInfo(stair, graph);
   const underFloorZ = hasRoomUnder ? landingAbs : 0;
+  // 展開図一般化Phase 6: 階段帯自身の空気ボリューム＝階段室（`stair.roomId`）。
+  // `section/sectionHits.js`の`isHiddenWall`が、壁の両側の連結成分をこのRoomの成分と比べる
+  // ——ただし対象は`underRooms`（階段下に指定された部屋）に面する壁だけにスコープする
+  // （`stairUnderRoomInfo`のコメント参照）。
+  const stairRoom = stair.roomId ? graph.roomMap?.get(stair.roomId) ?? null : null;
+  const underRoomSet = underRooms.length > 0 ? new Set(underRooms) : null;
 
   const b = roomBounds(stair.cells, graph);
   const f = makeFrame(stair, b);
@@ -494,9 +477,10 @@ export function switchbackCuts(stair, faces, graph, opts = {}) {
     });
   }
 
-  // 階段下部屋の2a壁は全cutで見えない（stairUnderInfo参照）。cutごとに書き分ける理由が無いため
-  // ここで一括して載せる——「どのcutが何を見るか」の唯一の情報源はこの切断定義表である。
-  if (hiddenWallIds) for (const c of cuts) c.hiddenWallIds = hiddenWallIds;
+  // 全cutが同じ階段室の空気ボリューム・同じ階段下部屋の集合を主語にする（isHiddenWall参照）。
+  // cutごとに書き分ける理由が無いためここで一括して載せる——「どのcutが何を見るか」の唯一の
+  // 情報源はこの切断定義表。
+  if (stairRoom && underRoomSet) for (const c of cuts) { c.airRoom = stairRoom; c.underRooms = underRoomSet; }
 
   return {
     cuts, wEntry, wLanding, wOut1, wOut2, wall, kneeDrop, params, landingAbs, underFloorZ, hasRoomUnder, isSteel, contribution,
