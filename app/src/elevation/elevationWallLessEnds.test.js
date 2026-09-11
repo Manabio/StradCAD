@@ -423,10 +423,14 @@ test('【裁定2026-09・11ダッシュ型】帯: FL≠0の部屋でも、アキ
   const ys = [...new Set(diag.flatMap(p => [p.y1, p.y2]))].sort((a, b) => a - b);
   assert.equal(Math.max(...ys), farFloor.y1,
     `バツの下端は遠側床線(y=${farFloor.y1}＝1FLの破線)と一致するはず（実際:${JSON.stringify(ys)}）`);
-  // 上端は近側/遠側の天井の低い方＝この構成では天井断面線と同じ高さ。
+  // 上端は近側/遠側の天井の低い方——Phase 5（探査の答えが唯一の情報源。`.claude/elevation-model.md`
+  // 「アキのz範囲」）では、遠側天井が近側の天井断面より低ければ、断面エンジン自身が探査した
+  // 遠側天井の**見えがかり線**（Phase4。weightはsightRoleが決める＝天井断面線と同じthickとは
+  // 限らない）と一致する。この構成の遠側天井はA2自身の天井断面より低い部屋のものなので、
+  // 「天井断面線(thick)」ではなく「遠側天井の見えがかり線」に一致するのが正しい。
   const ceilLine = openSpanGapMarks().band.primitives.find(p => p.type === 'line'
-    && p.weight === 'thick' && Math.abs(p.y1 - p.y2) < 1e-6 && Math.abs(p.y1 - ys[0]) < 1e-6);
-  assert.ok(ceilLine, `バツの上端(y=${ys[0]})は天井断面線と同じ高さのはず`);
+    && Math.abs(p.y1 - p.y2) < 1e-6 && Math.abs(p.y1 - ys[0]) < 1e-6);
+  assert.ok(ceilLine, `バツの上端(y=${ys[0]})に一致する水平線（天井断面線または遠側天井の見えがかり線）があるはず`);
 });
 
 // ================================================================

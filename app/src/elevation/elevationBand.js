@@ -712,21 +712,11 @@ export function appendBandCutContent(primitives, room, graph, layout, layers, op
       // 認められる端＝吹抜けが端まで達している端＝その端に上階の床が無い端だから。
       // 同じ理由で`elevationVoid.js`の`appendUpperStoreyTrim`（上階の天井線・巾木）も広げない。
       aboveCeilVisibleRanges: opts.aboveCeilVisibleRangesOf?.(face),
-      // 開放スパン（face.spans の kind==='open'）の遠側の床・天井（帯FL基準のz）。アキ（バツ）の
-      // 下端を遠側床へ着け、上端を近側/遠側の天井の低い方で止めるためにエンジンが使う
-      // （ユーザー裁定2026-09「高低差」）。判定材料が主cutに無いものは呼び出し側から渡す、という
-      // aboveCeilVisibleRangesと同じ形。**値の単一情報源はface.spans**——図側に残る遠側床線と
-      // 同じ値から出るので、線とアキの下端が食い違わない。
-      openSpans: (face.spans ?? []).filter(sp => sp.kind === 'open').map(sp => ({
-        loX: sp.loX, hiX: sp.hiX,
-        // **?? 0 で埋めない**——引けない値を「帯の床」と断定するとアキの下端が引き上げられる
-        // （エンジン側は非有限なら「クランプしない」へ倒す）。**閾値と埋め方は対で意味を持つ**:
-        // 現ルール（2026-09-11裁定でPhase4へ統一）は`farFloorZ != null`なら常にクランプする
-        // （0でもクランプする）ため、ここで`?? 0`にすると「区間にfaceが無く本来クランプしない
-        // 欠損ケース」まで0クランプ対象になってしまう——欠損は`undefined`のまま`section/`側へ渡すこと。
-        farFloorZ: sp.farFloorDeltaMm,
-        farCeilZ: sp.farCeilAbsMm,
-      })),
+      // Phase 5（展開図一般化。設計`.claude/elevation-redesign.md`§5.5）: 開放スパンの遠側床・
+      // 遠側天井は、もうここから断面エンジンへ外部注入しない——エンジン自身の探査
+      // （`section/sectionHits.js`の`farFaceAnnotation`。視線方向のヒット列から拾う
+      // floorFace/ceilFace）が唯一の情報源になった。`face.spans`のfarFloorDeltaMm/farCeilAbsMmは
+      // 図側（`elevationFigure.js`）が遠側床線・遠側天井線を描くために引き続き使う。
     };
     const { cut: pcut, columns, content } = buildCutContent(
       cut, probeCtx,

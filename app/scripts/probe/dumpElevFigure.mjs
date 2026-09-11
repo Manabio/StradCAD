@@ -7,10 +7,13 @@
 //
 // 使い方: node dumpElevFigure.mjs [outDir] [src.stq] [--no-horizontal-faces]
 //   --no-horizontal-faces … 展開図一般化Phase4のフラグ（elevationStyle.jsのHORIZONTAL_FACES_
-//   ENABLED。裁定済み2026-09-11・既定on）をダンプ中だけoffにする。戻るのは**水平面ヒットの
-//   見えがかり線・アキの縮小だけ**（`.claude/elevation-redesign.md`§5.5）——アキ下端のクランプ
-//   規則（`sectionEmit.js`の`spanLoZ`。2026-09-11裁定）はこのフラグの外で常に新規則のまま動くため、
-//   offにしても13.stq「10」面D1は新規則(z=0)のまま。**offはPhase 4前の基準ではない。**
+//   ENABLED。裁定済み2026-09-11・既定on）をダンプ中だけoffにする。Phase 5で`spanLoZ`
+//   （`cut.openSpans`外部注入による、このフラグの外で独立して動くアキ下端クランプ）を撤去し
+//   `splitOpenByFarFace`（このフラグにゲートされる）へ一本化したため、offはアキ下端のクランプ/
+//   延伸を含む水平面ヒット由来の表現をすべて止めた素の探査結果になる——**Phase 4以前の基準とは
+//   一致しない**（面によって結果が違う。例: 13.stq「10」D1は偶然z=−50《旧規則相当》に戻るが、
+//   「11'」A2はz=0《どの過去の規則とも異なる》になる）。**比較用途はもう無い**——残すのは
+//   `HORIZONTAL_FACES_ENABLED`のon/off個別テストのため。
 //   --horizontal-faces … 既定onなので実質no-op。過去のコマンド互換のため残す。
 import fs from 'node:fs';
 import path from 'node:path';

@@ -994,7 +994,8 @@ export function buildFaceFigure(face, ctx) {
     // emitOpenGapMarks）も描いており、2つの描画者が同じ標記を出していた（帯の床へ着く側と
     // 遠側床へ着く側で、床に高低差があるとずれて見える）。**アキの標記はすべてsection/が
     // 唯一の情報源**（.claude/elevation-model.mdの担当境界）に一本化し、高低差への追従
-    // （下端=遠側床・上端=低い方の天井）はエンジン側でcut.openSpansから行う。
+    // （下端=遠側床・上端=低い方の天井）はエンジン自身の探査（Phase 5。section/sectionHits.jsの
+    // farFaceAnnotation）で行う。
     // ここで残すのは図側の表現（遠側床線・遠側天井線・境界エッジ）だけ。
     const prevIsWall = i > 0 ? spans[i - 1].kind === 'wall' : hasWallAtLocal0;
     const nextIsWall = i < spans.length - 1 ? spans[i + 1].kind === 'wall' : hasWallAtLocalRun;

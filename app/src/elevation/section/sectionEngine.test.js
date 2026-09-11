@@ -133,6 +133,54 @@ test('【Phase4・e相当】splitOpenByFarFace: farCeilZがnull（天井高が�
   assert.deepEqual(parts[1], { kind: 'open', z0: 1500, z1: 3000, farFloorZ: 1500, farCeilZ: null, farDepthMm: 100 });
 });
 
+test('【Phase5・実機「11ダッシュ」A2型】splitOpenByFarFace: farFloorZが区間の外（z0より下）なら、farVoidを作らず下端をfarFloorZまで伸ばす', () => {
+  // z0(0)の下に隠す実体は無い（区間の外＝farFloorZ側は「そこまで抜けている」）ため、farVoidを
+  // 作らずopen自体の下端を書き換える——「区間の内部を縮める」Phase4とは逆方向の変更。
+  const band = { kind: 'open', z0: 0, z1: 2400, farFloorZ: -100, farCeilZ: 2400, farDepthMm: 58 };
+  const parts = splitOpenByFarFace(band, 0);
+  assert.deepEqual(parts, [{ kind: 'open', z0: -100, z1: 2400, farFloorZ: -100, farCeilZ: 2400, farDepthMm: 58,
+    extendedFromZ: 0 }],
+    'farVoidを挟まず、open帯自体の下端がfarFloorZ(-100)まで伸びるはず。extendedFromZ(=伸ばす前のz0)は' +
+    'emitOpenGapMarksの一点鎖線/破線切替がこの帯自身の下降と誤認しないための印');
+});
+
+test('【失敗系・Phase5】splitOpenByFarFace: farFloorZがz1以上（不正・境界）なら区間の外でも下端は伸ばさない', () => {
+  const band = { kind: 'open', z0: 0, z1: 2400, farFloorZ: 2400, farCeilZ: null, farDepthMm: 58 };
+  const parts = splitOpenByFarFace(band, 0);
+  assert.deepEqual(parts, [{ kind: 'open', z0: 0, z1: 2400, farFloorZ: 2400, farCeilZ: null, farDepthMm: 58 }],
+    'farFloorZ(2400)がz1と同値（不正値扱い）ならz0は変えないはず');
+});
+
+// QA是正2026-09（検算・実機「11'」A2）: 全高壁の向こうにある別室の天井（深度1057.5・上限超え）が、
+// 手前で開いている別室の床（深度57.5・上限内）と`farDepthMm`（両者の最小値）を共有していたため、
+// 本来上限外で採用されないはずの天井が上限判定をすり抜けて採用されていた。
+// farFloorDepthMm/farCeilDepthMmで個別に判定することを固定する。
+test('【QA是正・検算】splitOpenByFarFace: 近い床（上限内）と遠い天井（上限外）が同じopen区間にあれば、床だけ縮み天井は縮まず天井線も出ない', () => {
+  // 床は57.5mm先（上限内）・天井は1057.5mm先（nearestMm=57.5からは1000mm差で上限800超え）。
+  const band = {
+    kind: 'open', z0: 0, z1: 2400, farFloorZ: -100, farCeilZ: 2300,
+    farDepthMm: 57.5, farFloorDepthMm: 57.5, farCeilDepthMm: 1057.5,
+  };
+  const parts = splitOpenByFarFace(band, 57.5); // nearestMm=57.5（最も手前の壁面までの距離）
+  assert.deepEqual(parts, [{
+    kind: 'open', z0: -100, z1: 2400, farFloorZ: -100, farCeilZ: null,
+    farDepthMm: 57.5, farFloorDepthMm: 57.5, farCeilDepthMm: 1057.5, extendedFromZ: 0,
+  }], '床(farFloorZ=-100)だけ下端に反映され、天井(farCeilZ)は上限超えでnullへ落ち、z1(2400)のまま縮まないはず');
+});
+
+test('【失敗系・QA是正・検算】splitOpenByFarFace: 逆に遠い床（上限外）と近い天井（上限内）なら、天井だけ縮み床は伸びない', () => {
+  const band = {
+    kind: 'open', z0: 0, z1: 2400, farFloorZ: -100, farCeilZ: 2300,
+    farDepthMm: 57.5, farFloorDepthMm: 1057.5, farCeilDepthMm: 57.5,
+  };
+  const parts = splitOpenByFarFace(band, 57.5);
+  assert.deepEqual(parts, [
+    { kind: 'open', z0: 0, z1: 2300, farFloorZ: null, farCeilZ: 2300,
+      farDepthMm: 57.5, farFloorDepthMm: 1057.5, farCeilDepthMm: 57.5 },
+    { kind: 'farVoid', z0: 2300, z1: 2400 },
+  ], '天井(farCeilZ=2300)だけ区間内部として縮み、床(farFloorZ)は上限超えでnullへ落ち、z0(0)のまま伸びないはず');
+});
+
 // ---- 失敗系 ----
 test('【失敗系・Phase4】splitOpenByFarFace: kind!=="open"やfarDepthMm欠落の帯はそのまま1件で返る（対象外は無変化）', () => {
   assert.deepEqual(splitOpenByFarFace({ kind: 'wall', z0: 0, z1: 800, distMm: 57.5 }, 0),

@@ -853,12 +853,16 @@ export function emitColumns(columns, cut, emitCtx = {}) {
         // 断面線と重なるため描かない（ユーザー受入基準の「Aの床線／天井線と重なる」＝dedupe）。
         const sectionZs = sectionLevelZs(cut, col, col.ceilZ ?? ceilZ);
         const atSectionLevel = z => sectionZs.some(f => Math.abs(z - f) < GAP_EPS);
-        const role = sightRole(band.farDepthMm);
+        // QA是正2026-09（検算）: 床線・天井線は別々の実体（別々の深度）から出ることがあるため、
+        // 重み（sightRole）も床・天井それぞれの深度で決める——`band.farDepthMm`（両者の最小値）を
+        // 両方の線に使うと、深い側の線が浅い側の重みを借りてしまう。
+        const floorRole = sightRole(band.farFloorDepthMm ?? band.farDepthMm);
+        const ceilRole = sightRole(band.farCeilDepthMm ?? band.farDepthMm);
         if (band.farFloorZ != null && !atSectionLevel(band.farFloorZ) && !hiddenByCutWall(col, band.farFloorZ)) {
-          prims.push(emitLine(cut, col.x0, band.farFloorZ, col.x1, band.farFloorZ, role, { ceilZ }));
+          prims.push(emitLine(cut, col.x0, band.farFloorZ, col.x1, band.farFloorZ, floorRole, { ceilZ }));
         }
         if (band.farCeilZ != null && !atSectionLevel(band.farCeilZ) && !hiddenByCutWall(col, band.farCeilZ)) {
-          prims.push(emitLine(cut, col.x0, band.farCeilZ, col.x1, band.farCeilZ, role, { ceilZ }));
+          prims.push(emitLine(cut, col.x0, band.farCeilZ, col.x1, band.farCeilZ, ceilRole, { ceilZ }));
         }
       }
       // open/slabの帯自体はここでは描かない（AMBIGUITY F）。ただしslab→openの境界（＝above層の
@@ -1230,7 +1234,11 @@ export function emitOpenGapMarks(columns, cut, emitCtx = {}) {
         const floorZ = drawnFloorProfileZMax(cut.drawFloorProfile, x0, x1);
         const z0 = Math.max(b.z0, floorZ === -Infinity ? b.z0 : floorZ);
         if (b.z1 - z0 <= GAP_EPS) continue;
-        cells.push({ colIndex, x0, x1, z0, z1: b.z1 });
+        // structZ0: 一点鎖線/破線の切替（下記dash）専用のz0。`sectionEngine.js`の
+        // `splitOpenByFarFace`が遠側床へ下端を伸ばした帯（`b.extendedFromZ`＝伸ばす前のz0）は、
+        // 様式判定では**伸ばす前**のまま扱う——遠側（別の部屋）の低い床へ伸びただけで、
+        // この帯自身が階層の下へ潜ったわけではない（実機「11'」A2）。
+        cells.push({ colIndex, x0, x1, z0, z1: b.z1, structZ0: b.extendedFromZ ?? z0 });
       }
     }
   });
@@ -1288,40 +1296,23 @@ export function emitOpenGapMarks(columns, cut, emitCtx = {}) {
     const R = edgeZ(x1 - GAP_EPS, z0, z1);
     // **開放スパンのアキは高低差に追従する**（ユーザー裁定2026-09「高低差」＝バツの床は遠側床に
     // 着く）——下端は遠側の床、上端は近側/遠側の天井の低い方（既存の「開放先の天井が低ければ
-    // そこまで」と同じ規約）。判定材料（遠側のFL/CH）は探査では得られないため、呼び出し側が
-    // `cut.openSpans`（値の出どころは face.spans）で渡す。該当しないアキ（探査で見つかる通常の
-    // 壁なし区間）は従来どおり探査どおりのz範囲のまま。
-    // **far値が引けないときはクランプしない**（＝探査どおりのz。「値が無いのに帯の床と断定する」
-    // のは安全側ではない——実機で下端が帯の床へ引き上げられる不具合になった）。
-    // 連結成分に複数の開放スパンが掛かりうるため、**重なりが最大のもの**を採る
-    // （最初の1件だと、端が僅かに掛かっただけの別スパンのfar値を使ってしまう）。
-    const span = (cut.openSpans ?? [])
-      .map(sp => ({ sp, ov: Math.min(sp.hiX, x1) - Math.max(sp.loX, x0) }))
-      .filter(c => c.ov > GAP_EPS)
-      .sort((a, b) => b.ov - a.ov)[0]?.sp;
-    const farFloorZ = span && Number.isFinite(span.farFloorZ) ? span.farFloorZ : null;
-    const farCeilZ = span && Number.isFinite(span.farCeilZ) ? span.farCeilZ : null;
-    // 下端 = **区間の内部に遠側床があれば常にそこで止める**（ユーザー裁定2026-09-11でPhase4
-    // （`sectionEngine.js`の`splitOpenByFarFace`）の規則へ統一）。旧規則は「遠側床が帯の床(0)と
-    // 異なるときだけ着ける」で、13.stq/11.stq「10」D1面（far=0・探査z=-50）だけ探査どおり
-    // （z=-50）に残る差分があった——Phase4は同じ区間へ「同値でも常に縮める」を適用しており、
-    // 2経路（openSpans注入とPhase4）が同じ問いに別の答えを出す不整合だったため、Phase4側
-    // （常に縮める）へ揃えた。far値が引けない（該当スパン無し）ときは従来どおりクランプしない。
-    //   「11'」A2左（far=-100。1FLの破線が引かれている）→ far（＝その破線の高さ）
-    //   「10」D1（far=0。遠側床線は無い・近側の床が下がっている）→ far（=0。旧z=-50から変更）
-    //   遠側床が帯の床より高い構成（far=+300）→ far（その下は遠側スラブで塞がれている）
-    // **二重補正は無い**: face.spans の far 値は元から帯の部屋基準
-    // （effectiveFloorLevel(farOwner) - effectiveFloorLevel(room)）で、プローブ側も
-    // sectionProbe.js の基準是正で帯の部屋基準に揃った（elevationBand.jsのbandFloorOffsetMm）。
-    const spanLoZ = z => (farFloorZ != null ? farFloorZ : z);
-    const spanHiZ = z => (farCeilZ == null ? z : Math.min(z, farCeilZ));
-    const LC = { lo: spanLoZ(L.lo), hi: spanHiZ(L.hi) };
-    const RC = { lo: spanLoZ(R.lo), hi: spanHiZ(R.hi) };
+    // そこまで」と同じ規約）。Phase 5（設計`.claude/elevation-redesign.md`§5.5）:
+    // 判定材料（遠側のFL/CH）は**もう呼び出し側からは渡さない**——`col.bands`の`'open'`帯自体が
+    // 断面エンジンの探査（`sectionEngine.js`の`splitOpenByFarFace`。値の出どころは
+    // `sectionHits.js`の`farFaceAnnotation`＝視線方向のヒット列）で既にfloorFace/ceilFaceの
+    // z0/z1へクランプ・延長済みなので、ここで拾う`L`/`R`（`b.z0`/`b.z1`由来）がそのまま
+    // アキの範囲になる。**二重クランプはしない**——以前は`cut.openSpans`（`face.spans`由来の
+    // 外部注入）で同じ範囲をもう一度クランプしていたが、値の単一情報源を探査（bands）へ一本化した。
     // §5.6: baseFloorZより上=一点鎖線(center)、床断面より下=破線(dashed)。連結成分がbaseFloorZを
     // またぐ（D1の「開口+上階アキ」等）場合は、床断面より下へ到達している時点でdashedを選ぶ
     // （ASSUMED: 設計書はこの併合時の様式を明記していないため、より弱い表現＝dashedを安全側の
     // 既定にした。報告に明記する）。
-    const dash = z0 >= (cut.baseFloorZ ?? 0) - GAP_EPS ? 'center' : 'dashed';
+    // **structZ0**（`z0`ではなく`c.structZ0`の最小）で判定する——遠側床への下端延伸
+    // （Phase 5・`extendedFromZ`）はこの帯自身がbaseFloorZの下へ潜ったわけではないため対象外
+    // （実機「11'」A2: 遠側床線自体は図側が別に「破線」で描くが、アキの対角線・「ア キ」は
+    // この帯自身の床断面（baseFloorZ）より上のままなら一点鎖線・文字ありのまま）。
+    const structZ0 = Math.min(...g.map(c => c.structZ0 ?? c.z0));
+    const dash = structZ0 >= (cut.baseFloorZ ?? 0) - GAP_EPS ? 'center' : 'dashed';
     // **バツは実体（腰壁等）と交差する区間をクリップする**（ユーザー実機指摘2026-08「6」C
     // 「バツが、腰壁と交差する場合、腰壁内はクリップして描画しない」）。連結成分の外接矩形
     // いっぱいに対角線を引くため、成分に食い込む壁の上を線が通ってしまう。
@@ -1329,7 +1320,7 @@ export function emitOpenGapMarks(columns, cut, emitCtx = {}) {
     // ——「アキのセルの和」でクリップすると、開口と上階アキがL字に連結する構成で
     // 「1組の大きなX」（WP-E7 D1の確認済み仕様）が細切れになるため採らない。
     const blockers = obstructionRects(columns, x0, x1,
-      Math.min(z0, LC.lo, RC.lo), Math.max(z1, LC.hi, RC.hi));
+      Math.min(z0, L.lo, R.lo), Math.max(z1, L.hi, R.hi));
     // アキ標記の「ア キ」（旧 elevationFigure.js の appendGapMark から移設）。次の2条件を
     // すべて満たす連結成分にだけ付ける（建具の開口はそもそもセルに入らない＝上記）:
     //   - 外接矩形そのもの（全セルが同じz範囲）… L字に食い込んだ成分では外接矩形の中心が
@@ -1345,11 +1336,11 @@ export function emitOpenGapMarks(columns, cut, emitCtx = {}) {
     const isRect = g.every(c => Math.abs(c.z0 - z0) < GAP_EPS && Math.abs(c.z1 - z1) < GAP_EPS);
     if (isRect && dash === 'center') {
       // 中心はクランプ後のz範囲（バツと同じ範囲）で採る——線と文字が食い違わないため。
-      const tLo = Math.min(LC.lo, RC.lo), tHi = Math.max(LC.hi, RC.hi);
+      const tLo = Math.min(L.lo, R.lo), tHi = Math.max(L.hi, R.hi);
       prims.push({ type: 'text', x: (x0 + x1) / 2, y: zToY((tLo + tHi) / 2),
         text: 'ア キ', anchor: 'middle', baseline: 'middle' });
     }
-    for (const [a, b] of [[[x0, LC.lo], [x1, RC.hi]], [[x0, LC.hi], [x1, RC.lo]]]) {
+    for (const [a, b] of [[[x0, L.lo], [x1, R.hi]], [[x0, L.hi], [x1, R.lo]]]) {
       const line = emitLine(cut, a[0], a[1], b[0], b[1], ElevationLineRole.DETAIL, { dash, ceilZ });
       prims.push(...subtractRectsFromLine(line, blockers));
     }

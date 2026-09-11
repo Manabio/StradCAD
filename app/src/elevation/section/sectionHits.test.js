@@ -431,7 +431,7 @@ test('【Phase3・垂れ壁版】probeColumnHits: 垂れ壁(下端1200・天井3
   assert.equal(roomCCeil.z0, 3000); assert.equal(roomCCeil.z1, 3000, '部屋Cの天井はz=3000のはず');
 });
 
-test('【Phase3・出力不変】visibleBandsOf: floorFace/ceilFace/slabFaceヒットを含めても含めなくてもbandsは同一', () => {
+test('【Phase3・出力不変】visibleBandsOf: floorFace/ceilFace/slabFaceヒットの有無でband自体の選択（kind/z0/z1/wall等）は変わらない', () => {
   const { graph, nearWall } = makeKneeWallFixture();
   const cut = kneeFaceCut(graph, nearWall);
   const probeCtx = makeProbeContext(cut.layers);
@@ -443,8 +443,17 @@ test('【Phase3・出力不変】visibleBandsOf: floorFace/ceilFace/slabFaceヒ�
 
   const bandsWithFaces = visibleBandsOf(hits, cut, { layerStack, unexploredBelowZ });
   const bandsWithoutFaces = visibleBandsOf(withoutFaces, cut, { layerStack, unexploredBelowZ });
-  assert.deepEqual(bandsWithFaces, bandsWithoutFaces,
-    '水平面ヒットの有無でbandsは変わらないはず（出力完全不変）');
+  // Phase 5でfarFaceAnnotationの探索範囲がz0未満（floorFaceの延長ケース）へ広がったため、
+  // floorFace/ceilFaceヒットの有無は band.farFloorZ/farCeilZ/farDepthMm には実際に効くように
+  // なった（この帯がsectionEngine.jsで`open`へ作り替えられたとき引き継がれる付帯情報。
+  // 「11'」A2型）——Phase3が担保するのは**band自体の選択**（kind/z0/z1/wall/room。
+  // `frontMatch`/`wallMatch`は元からfloorFace/ceilFaceを見ない）が変わらないことなので、
+  // far*系のプロパティを除いて比較する。
+  const FAR_KEYS = new Set(['farFloorZ', 'farCeilZ', 'farDepthMm']);
+  const stripFar = bands => bands.map(b =>
+    Object.fromEntries(Object.entries(b).filter(([k]) => !FAR_KEYS.has(k))));
+  assert.deepEqual(stripFar(bandsWithFaces), stripFar(bandsWithoutFaces),
+    '水平面ヒットの有無でband自体の選択（far*を除く）は変わらないはず');
 });
 
 // 変異手順（報告に貼る。実行して確認済み）: visibleBandsOfの`coverableHits`フィルタを
@@ -480,7 +489,7 @@ test('【Phase3・出力不変】visibleBandsOf: floorFace/ceilFace/slabFaceヒ�
 // 「区間はもともと2400までしか無かった」を見分けられない）。
 const roomABounds = { x1: 0, x2: 4000, y1: 0, y2: 4000 };
 
-test('【Phase4・a】visibleBandsOf: フラグonなら腰壁面のopen帯へ部屋BのfarCeilZ(2400)が付く（floorは範囲外でnull）', () => {
+test('【Phase4・a】visibleBandsOf: フラグonなら腰壁面のopen帯へ部屋BのfarCeilZ(2400)が付く（floorはz0(800)より下だが、その下は腰壁本体＝実体があるので対象外でnull）', () => {
   const { graph, roomA, nearWall } = makeKneeWallFixture();
   roomA.setOverride('ceilingHeight', '3000');
   const cut = { ...kneeFaceCut(graph, nearWall), bandRoomBounds: roomABounds };
@@ -495,7 +504,13 @@ test('【Phase4・a】visibleBandsOf: フラグonなら腰壁面のopen帯へ部
     assert.ok(openBand, 'open帯があるはず（腰壁の上、z800..3000＝部屋A自身の天井まで）');
     assert.equal(openBand.z0, 800); assert.equal(openBand.z1, 3000);
     assert.equal(openBand.farCeilZ, 2400, '部屋Bの天井2400は区間[800,3000]の内部にあるので付くはず');
-    assert.equal(openBand.farFloorZ, null, '部屋Bの床0は区間[800,3000]の外（下端未満）なのでnullのはず');
+    // Phase 5（設計`.claude/elevation-redesign.md`§5.5「残る非対称」の解消）: floorFaceは
+    // z0(800)より下（z=0）も候補になりうるが、**それを許すのはz0がこの列自身の探査下限
+    // （cut.zRange.loZ）と一致するときだけ**——ここはz0=800で列自身の下限0とは一致しない
+    // （0..800は腰壁本体＝実体のある`wall`帯として既に表現済み）ので対象外のまま。
+    // 実機「11'」A2型（z0がその列の探査下限そのもの＝下に何も無い）はsectionEngine.test.js
+    // 【QA是正A】で別途検証する。
+    assert.equal(openBand.farFloorZ, null, '部屋Bの床0はz0(800)より下だが、その下は腰壁本体なので対象外でnullのはず');
     assert.equal(openBand.farDepthMm, 57.5, '腰壁自身と同じ距離（境界CL上のため）のはず');
   } finally { setHorizontalFacesEnabled(prev); }
 });

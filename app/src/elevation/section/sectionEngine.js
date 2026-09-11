@@ -51,7 +51,10 @@ function bandsEqual(a, b) {
       // 理由。WP-E7 D1参照）。
       && (band.farFloorZ ?? null) === (other.farFloorZ ?? null)
       && (band.farCeilZ ?? null) === (other.farCeilZ ?? null)
-      && (band.farDepthMm ?? null) === (other.farDepthMm ?? null);
+      && (band.farDepthMm ?? null) === (other.farDepthMm ?? null)
+      // Phase5: extendedFromZ（下端をfarFloorZまで伸ばした帯の、伸ばす前のz0。emitOpenGapMarksの
+      // 一点鎖線/破線切替の判定材料）も同じ理由で比較する。
+      && (band.extendedFromZ ?? null) === (other.extendedFromZ ?? null);
   });
 }
 
@@ -276,27 +279,60 @@ function ceilingProfileFromColumns(columns, cut, face) {
  * `open`帯の付帯情報（`sectionHits.js`の`farFaceAnnotation`）へ深度上限を適用し、アキの範囲を
  * floorFace/ceilFaceのzまで縮める（Phase4。設計§5.5・§5.6意図的差分1・2）。
  *
+ * **床と天井の深度上限判定は独立に行う**（QA是正2026-09: 実機「11'」A2の検算で発見。全高壁の
+ * 向こうにある別室の天井《深度1057.5・上限超え》が、手前で開いている別室の床《深度57.5・
+ * 上限内》と`farDepthMm`（両者の最小値）を共有していたため、本来上限外で採用されないはずの
+ * 天井が上限判定をすり抜けて採用されていた）。`farFloorDepthMm`/`farCeilDepthMm`
+ * （`sectionHits.js`の`farFaceAnnotation`が別々に返す）で個別に判定し、上限超えの側は
+ * `farFloorZ`/`farCeilZ`をnullへ落として使わない——**帯の元々の`farDepthMm`（最小値）はもう
+ * ここでの分割判定には使わない**（`sightRole`の重み判定など他の消費者向けにそのまま引き継ぐだけ）。
+ *
  * 上限**以上**なら水平面は無かったことにする（付帯情報を落として従来どおり全域アキ。意図的差分2
  * 「既定は壁と同じ800を掛ける」）。上限内なら区間を最大3分割する:
  * `[非描画(farVoid)?, open(floorZ..ceilZ), 非描画(farVoid)?]`——floorZ/ceilZが区間の内部に
  * 無ければ（境界に一致・またはそもそも無い）その側は分割しない。`farVoid`は**非描画**
  * （`emitColumns`・`emitOpenGapMarks`のどちらも`'open'`しか見ないため、このkindは自動的に
  * 「線も描かずアキにもしない」——floorFace/ceilFaceより向こう側《天井懐・床構造》の意味）。
+ *
+ * **floorZが区間の外（`z0`より下）でも、下端をそこまで伸ばす**（Phase 5。設計
+ * `.claude/elevation-redesign.md`§5.5「残る非対称」の解消——実機「11'」A2型。`farVoid`は
+ * 作らない: `z0`と`farFloorZ`の間は「実体が無い」からこそ伸ばす対象で、隠すものが無い）。
+ * `lo`は「区間の内部で縮める（floorZ>z0）」「区間の外まで伸ばす（floorZ<z0）」を同じ式で
+ * 扱う——`lo>z0`ならfarVoidで隠し、`lo<=z0`ならfarVoidを作らず素通し、という下のif文自体は
+ * 変更していない（`lo`の計算だけを緩めた）。ceilZ側（`hi`）は対称ケースが無いため区間内部の
+ * ときだけ（従来どおり）。
  * @param {import('./sectionTypes.js').ZBand} band
  * @param {number} nearestMm - この切断で最も手前の壁面までの距離（壁の深度上限と同じ基準点）
  * @returns {import('./sectionTypes.js').ZBand[]}
  */
 export function splitOpenByFarFace(band, nearestMm) {
   if (band.kind !== 'open' || !Number.isFinite(band.farDepthMm)) return [band];
-  if (band.farDepthMm - nearestMm >= SIGHTLINE_DEPTH_LIMIT_MM) {
-    return [{ kind: 'open', z0: band.z0, z1: band.z1 }]; // 上限以上: 水平面は描かず従来どおり全域アキ
+  const { z0, z1, farFloorZ, farCeilZ, farDepthMm, farFloorDepthMm, farCeilDepthMm } = band;
+  const floorDepthMm = farFloorDepthMm ?? farDepthMm;
+  const ceilDepthMm = farCeilDepthMm ?? farDepthMm;
+  const okF = Number.isFinite(floorDepthMm) && floorDepthMm - nearestMm < SIGHTLINE_DEPTH_LIMIT_MM;
+  const okC = Number.isFinite(ceilDepthMm) && ceilDepthMm - nearestMm < SIGHTLINE_DEPTH_LIMIT_MM;
+  if (!okF && !okC) {
+    return [{ kind: 'open', z0: band.z0, z1: band.z1 }]; // 両方上限以上: 水平面は描かず従来どおり全域アキ
   }
-  const { z0, z1, farFloorZ, farCeilZ, farDepthMm } = band;
-  const lo = (farFloorZ != null && farFloorZ > z0 + GAP_EPS && farFloorZ < z1 - GAP_EPS) ? farFloorZ : z0;
-  const hi = (farCeilZ != null && farCeilZ > z0 + GAP_EPS && farCeilZ < z1 - GAP_EPS) ? farCeilZ : z1;
+  const effFarFloorZ = okF ? farFloorZ : null;
+  const effFarCeilZ = okC ? farCeilZ : null;
+  const lo = (effFarFloorZ != null && effFarFloorZ < z1 - GAP_EPS) ? effFarFloorZ : z0;
+  const hi = (effFarCeilZ != null && effFarCeilZ > z0 + GAP_EPS && effFarCeilZ < z1 - GAP_EPS) ? effFarCeilZ : z1;
   const parts = [];
   if (lo > z0 + GAP_EPS) parts.push({ kind: 'farVoid', z0, z1: lo });
-  parts.push({ kind: 'open', z0: lo, z1: hi, farFloorZ, farCeilZ, farDepthMm });
+  // **伸ばした側（lo<z0）は`extendedFromZ`に伸ばす前のz0を残す**——`emitOpenGapMarks`の
+  // 一点鎖線/破線の切替（baseFloorZより下か）はこの帯**自身**が下の階層へ潜っているかの判定で、
+  // 遠側（別の部屋）の低い床へ伸びただけの区間は対象外（実機「11'」A2: 遠側床線自体は図側が
+  // 別途「破線」で描くが、アキの対角線・「ア キ」は近側z0が床断面より上のままなら一点鎖線・
+  // 文字ありのまま——伸びた区間があるという理由だけで様式を変えない）。
+  const extendedFromZ = lo < z0 - GAP_EPS ? z0 : undefined;
+  // farFloorDepthMm/farCeilDepthMmは**入力に有ったときだけ**引き継ぐ（`undefined`のプロパティを
+  // 常に足すと、値を持たないテスト用の帯リテラルとの`deepEqual`比較が値の有無だけで壊れる）。
+  parts.push({ kind: 'open', z0: lo, z1: hi, farFloorZ: effFarFloorZ, farCeilZ: effFarCeilZ, farDepthMm,
+    ...(farFloorDepthMm !== undefined ? { farFloorDepthMm } : {}),
+    ...(farCeilDepthMm !== undefined ? { farCeilDepthMm } : {}),
+    ...(extendedFromZ !== undefined ? { extendedFromZ } : {}) });
   if (hi < z1 - GAP_EPS) parts.push({ kind: 'farVoid', z0: hi, z1 });
   return parts;
 }
@@ -345,9 +381,13 @@ export function buildColumns(cut, probeCtx) {
       // 引き継ぐ——ここで`{kind:'open',z0,z1}`だけを新規生成すると、奥室のCHが自室と異なる図面で
       // 「手前の壁は深度上限超え・でもその向こうの床天井は上限内」という構成の線・アキ縮小が
       // 丸ごと消える（この帯はそのままだと`splitOpenByFarFace`の対象外になってしまうため）。
+      // QA是正2026-09（検算）: farFloorDepthMm/farCeilDepthMmも同じ理由で引き継ぐ——引き継がないと
+      // `splitOpenByFarFace`が`farDepthMm`（床天井の深度の最小値）へフォールバックし、床・天井を
+      // 独立に上限判定する意味が無くなる（実機「10」D1で旧・共有深度の値へ戻る回帰になる）。
       col.bands = col.bands.map(b => (b.kind === 'wall' && Number.isFinite(b.distMm)
         && b.distMm - nearestMm >= SIGHTLINE_DEPTH_LIMIT_MM)
-        ? { kind: 'open', z0: b.z0, z1: b.z1, farFloorZ: b.farFloorZ, farCeilZ: b.farCeilZ, farDepthMm: b.farDepthMm }
+        ? { kind: 'open', z0: b.z0, z1: b.z1, farFloorZ: b.farFloorZ, farCeilZ: b.farCeilZ,
+            farDepthMm: b.farDepthMm, farFloorDepthMm: b.farFloorDepthMm, farCeilDepthMm: b.farCeilDepthMm }
         : b);
     }
   }
