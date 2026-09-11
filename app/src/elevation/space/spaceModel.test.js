@@ -3,7 +3,7 @@
 // finish/wallGeneration.js（壁生成）を踏襲する。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Plane, PlanGraph, CenterLineType, Discipline } from '@core';
+import { Plane, PlanGraph, CenterLineType, Discipline, edgeKey, RoomFeature } from '@core';
 import { generateRoomWallsFromOutline } from '../../finish/wallGeneration.js';
 import { buildSpaceIndex } from './spaceModel.js';
 import { makeProbeContext } from '../section/sectionProbe.js';
@@ -151,6 +151,173 @@ test('【明示CH指定】buildSpaceIndex.cellAt: 明示CH指定の部屋のceil
   const customCell = index.cellAt(layer, 2000, 4500);
   assert.equal(customCell.room, customRoom);
   assert.equal(customCell.ceilZ, customCell.floorZ + 2700, '明示CH指定(2700)は床+2700のはず');
+});
+
+// ================================================================
+// componentOf/componentAt（Phase 2。設計 §5.3(a)）
+// ================================================================
+
+// 隣接する2部屋（Y=3000で共有境界）を持つグラフ。名前付き（computeNamedBoundaryEdgesの対象）。
+function makeAdjacentRoomsGraph(nameA = 'A', nameB = 'B') {
+  const graph = makeGraph();
+  const roomA = makeRectRoom(graph, 0, 0, 4000, 3000, nameA);
+  const roomB = makeRectRoom(graph, 0, 3000, 4000, 6000, nameB);
+  return { graph, roomA, roomB };
+}
+
+function sharedWallOf(graph, axisValue) {
+  return graph.walls.find(w => !w.isVertical && Math.abs(w.axisCL.effectiveValue - axisValue) < 1);
+}
+
+test('【Phase2】componentOf: 全高の壁で仕切られた2室は別成分', () => {
+  const { graph, roomA, roomB } = makeAdjacentRoomsGraph();
+  const layer = { graph, floorZMm: 0, role: 'self' };
+  const index = buildSpaceIndex([layer]);
+
+  const idA = index.componentOf(layer, roomA);
+  const idB = index.componentOf(layer, roomB);
+  assert.ok(idA != null && idB != null, '両方とも成分idを持つはず');
+  assert.notEqual(idA, idB, '全高の壁で仕切られた2室は別成分のはず');
+});
+
+test('【Phase2】componentOf: 腰壁で仕切られた2室は同成分（全高でないため連結を切らない）', () => {
+  const { graph, roomA, roomB } = makeAdjacentRoomsGraph();
+  const wall = sharedWallOf(graph, 3000);
+  assert.ok(wall, '共有壁があるはず');
+  graph.setKneeDropWall(edgeKey(wall.axisCL.id, wall.clStart.id, wall.clEnd.id), { knee: { topHeight: 900 } });
+  const layer = { graph, floorZMm: 0, role: 'self' };
+  const index = buildSpaceIndex([layer]);
+
+  assert.equal(index.componentOf(layer, roomA), index.componentOf(layer, roomB),
+    '腰壁指定は全高でないため同じ成分のはず');
+});
+
+test('【Phase2】componentOf: 垂れ壁で仕切られた2室も同成分', () => {
+  const { graph, roomA, roomB } = makeAdjacentRoomsGraph();
+  const wall = sharedWallOf(graph, 3000);
+  graph.setKneeDropWall(edgeKey(wall.axisCL.id, wall.clStart.id, wall.clEnd.id), { drop: { bottomHeight: 700 } });
+  const layer = { graph, floorZMm: 0, role: 'self' };
+  const index = buildSpaceIndex([layer]);
+
+  assert.equal(index.componentOf(layer, roomA), index.componentOf(layer, roomB));
+});
+
+test('【Phase2】componentOf: 上の層のセルがVOIDなら階またぎで下のセルと同成分', () => {
+  const lowerGraph = makeGraph();
+  const lowerRoom = makeRectRoom(lowerGraph, 0, 0, 4000, 3000, '階段室');
+  const upperGraph = new PlanGraph(new Plane('p2', 2900, '2階', 1, 1));
+  const upperVoid = makeRectRoom(upperGraph, 0, 0, 4000, 3000, '吹抜け');
+  upperVoid.setFeature(RoomFeature.VOID);
+
+  const lowerLayer = { graph: lowerGraph, floorZMm: 0, role: 'self' };
+  const upperLayer = { graph: upperGraph, floorZMm: 2900, role: 'above' };
+  const index = buildSpaceIndex([lowerLayer, upperLayer]);
+
+  assert.equal(index.componentOf(lowerLayer, lowerRoom), index.componentOf(upperLayer, upperVoid),
+    '上階が吹抜け(VOID)でfootprintが重なれば階またぎで同じ成分のはず');
+});
+
+test('【Phase2】componentOf: 上の層が実Room（VOIDでない）なら階またぎで連結しない', () => {
+  const lowerGraph = makeGraph();
+  const lowerRoom = makeRectRoom(lowerGraph, 0, 0, 4000, 3000, '階段室');
+  const upperGraph = new PlanGraph(new Plane('p2', 2900, '2階', 1, 1));
+  const upperRoom = makeRectRoom(upperGraph, 0, 0, 4000, 3000, '洋室'); // feature未設定=実Room
+
+  const lowerLayer = { graph: lowerGraph, floorZMm: 0, role: 'self' };
+  const upperLayer = { graph: upperGraph, floorZMm: 2900, role: 'above' };
+  const index = buildSpaceIndex([lowerLayer, upperLayer]);
+
+  assert.notEqual(index.componentOf(lowerLayer, lowerRoom), index.componentOf(upperLayer, upperRoom),
+    '上階が実Roomなら階またぎで連結しないはず');
+});
+
+// ---- QA指摘A: 階またぎ連結は「bboxが重なる下階Room全部」ではなく、VOIDなら親部屋1室・
+// STAIR_VOIDなら階段室1室、という単一マッチにだけ絞る ----
+test('【QA指摘A・Phase2】componentOf: 上階VOIDのbboxが下階2室（直下の親部屋＋隣の閉じた部屋）にまたがっても、親部屋だけが連結し閉じた部屋は別成分のまま', () => {
+  const lowerGraph = makeGraph();
+  // 親部屋(x:0-4000)と、全高の壁1枚で仕切られた隣の閉室(x:4000-8000)。どちらもfeature=null。
+  const parentRoom = makeRectRoom(lowerGraph, 0, 0, 4000, 3000, '親部屋');
+  const closedRoom = makeRectRoom(lowerGraph, 4000, 0, 8000, 3000, '閉室');
+  const upperGraph = new PlanGraph(new Plane('p2', 2900, '2階', 1, 1));
+  // 上階のVOIDは意図的に下階2室のbbox全体(x:0-8000)を覆う——13.stq「13」混入の再現条件
+  // （bboxは非矩形の実形状より広いことがある）。
+  const upperVoid = makeRectRoom(upperGraph, 0, 0, 8000, 3000, '吹抜け');
+  upperVoid.setFeature(RoomFeature.VOID);
+
+  const lowerLayer = { graph: lowerGraph, floorZMm: 0, role: 'self' };
+  const upperLayer = { graph: upperGraph, floorZMm: 2900, role: 'above' };
+  const index = buildSpaceIndex([lowerLayer, upperLayer]);
+
+  assert.notEqual(index.componentOf(lowerLayer, parentRoom), index.componentOf(lowerLayer, closedRoom),
+    '前提: 親部屋と閉室は全高の壁で仕切られ同一層内では別成分のはず');
+  assert.equal(index.componentOf(lowerLayer, parentRoom), index.componentOf(upperLayer, upperVoid),
+    '親部屋(1室)だけがVOIDと連結するはず');
+  assert.notEqual(index.componentOf(lowerLayer, closedRoom), index.componentOf(upperLayer, upperVoid),
+    '隣の閉じた部屋はbboxが重なるだけでは連結しないはず（単一マッチ規約）');
+});
+
+test('【QA指摘A・Phase2】componentOf: STAIR_VOIDは直下の階段室(feature STAIR)とだけ連結し、隣の通常室とは連結しない', () => {
+  const lowerGraph = makeGraph();
+  // QA指摘①: normalRoomを**先に**生成する（graph.rooms/graphListの走査は挿入順）——
+  // stairRoomを先に生成すると、述語を`r=>true`へ緩めても「先勝ち」のfindSingleOverlappingRoomが
+  // 偶然stairRoomを返してしまい、述語（feature===STAIR）がテストで固定されない
+  // （QA実測: 述語をr=>trueに緩めても緑のまま）。normalRoomを先にすれば、述語が正しく
+  // feature===STAIRだけを通すことを確認できる（緩めるとnormalRoomが先勝ちしてしまい赤化する）。
+  const normalRoom = makeRectRoom(lowerGraph, 4000, 0, 8000, 3000, '洋室'); // feature=null・全高壁で仕切り
+  const stairRoom = makeRectRoom(lowerGraph, 0, 0, 4000, 3000, '階段');
+  stairRoom.setFeature(RoomFeature.STAIR);
+  const upperGraph = new PlanGraph(new Plane('p2', 2900, '2階', 1, 1));
+  const upperStairVoid = makeRectRoom(upperGraph, 0, 0, 8000, 3000, '階段吹抜け'); // bboxは両室にまたがる
+  upperStairVoid.setFeature(RoomFeature.STAIR_VOID);
+
+  const lowerLayer = { graph: lowerGraph, floorZMm: 0, role: 'self' };
+  const upperLayer = { graph: upperGraph, floorZMm: 2900, role: 'above' };
+  const index = buildSpaceIndex([lowerLayer, upperLayer]);
+
+  assert.equal(index.componentOf(lowerLayer, stairRoom), index.componentOf(upperLayer, upperStairVoid),
+    'STAIR_VOIDは階段室と連結するはず');
+  assert.notEqual(index.componentOf(lowerLayer, normalRoom), index.componentOf(upperLayer, upperStairVoid),
+    'STAIR_VOIDは隣の通常室とは連結しないはず（階段室以外は対象外）');
+});
+
+// ---- QA指摘B: 遮断条件はmasterTypeに依存しない（STEP判定でも全高の壁があれば遮断） ----
+test('【QA指摘B・Phase2】componentOf: 床レベル差でSTEP判定される境界でも、全高の壁が実在すれば別成分', () => {
+  const graph = makeGraph();
+  const roomA = makeRectRoom(graph, 0, 0, 4000, 3000, 'A');
+  const roomB = makeRectRoom(graph, 0, 3000, 4000, 6000, 'B');
+  roomB.setFloorLevel(100); // 床レベル差 → selectBoundaryMasterはSTEPを返す（壁の有無を問わず）
+  const layer = { graph, floorZMm: 0, role: 'self' };
+  const index = buildSpaceIndex([layer]);
+
+  assert.notEqual(index.componentOf(layer, roomA), index.componentOf(layer, roomB),
+    'STEP判定でも境界に全高の室内壁が実在するため別成分のはず（masterTypeに依らない遮断）');
+});
+
+// ---- 失敗系: roomが層に無い ----
+test('【失敗系・Phase2】componentOf: roomがnullならnullを返す', () => {
+  const { graph, roomA } = makeAdjacentRoomsGraph();
+  const layer = { graph, floorZMm: 0, role: 'self' };
+  const index = buildSpaceIndex([layer]);
+  assert.equal(index.componentOf(layer, null), null);
+  assert.ok(index.componentOf(layer, roomA) != null, '対照: 実在のroomはidを持つ');
+});
+
+test('【失敗系・Phase2】componentOf: buildSpaceIndexへ渡さなかった層のroomはnullを返す', () => {
+  const { graph: g1 } = makeAdjacentRoomsGraph('A1', 'B1');
+  const { graph: g2, roomA: foreignRoom } = makeAdjacentRoomsGraph('A2', 'B2'); // 別グラフ・別索引
+  const layer1 = { graph: g1, floorZMm: 0, role: 'self' };
+  const index = buildSpaceIndex([layer1]); // g2は渡していない
+  void g2;
+
+  assert.equal(index.componentOf(layer1, foreignRoom), null,
+    '索引の構築に含まれないRoomはnullのはず');
+});
+
+test('【失敗系・Phase2】componentAt: 格子の外（セルなし）はnullを返す', () => {
+  const { graph } = makeAdjacentRoomsGraph();
+  const layer = { graph, floorZMm: 0, role: 'self' };
+  const index = buildSpaceIndex([layer]);
+  assert.equal(index.componentAt(layer, -50000, -50000), null);
 });
 
 // ---- 変異ガード用の土台: floorOffsetMm未指定なら従来どおり階のdatum基準のまま ----
