@@ -13,10 +13,14 @@
  * worldToCell・roomBounds・refreshCells、`finish/roomMetrics.js` roomCeilingHeight、
  * `finish/kneeDropWall.js` kneeDropRecordsOnAxis、`graph.effectiveFloorLevel`）。
  *
- * `componentOf`/`componentAt`（Phase 2。同一空気ボリュームの連結成分）を本Phaseで追加した。
+ * `componentOf`/`componentAt`（Phase 2。同一空気ボリュームの連結成分）はPhase 2で追加済み。
  * **本Phaseでは本番から誰も読まない**（設計R4）——検証プローブ（`scripts/probe/
- * dumpSpaceComponents.mjs`）と単体テストのみが消費者。`cellsAlong`（列に沿ったヒット列）は
- * `section/sectionHits.js`（Phase 2後半）で別途扱う。
+ * dumpSpaceComponents.mjs`）と単体テストのみが消費者。
+ *
+ * `cellsAlong`（Phase 3。設計§5.3(a)）: `cellAt`の一般形——1点プローブではなく、視線方向へ
+ * 格子セル単位で進み、通過するセル（room変化点で区切った区間）を近い順に返す。腰壁・垂れ壁の
+ * 向こう側の床・天井（`section/sectionHits.js`のfloorFace/ceilFaceヒット）の材料になる。
+ * 消費者は`section/sectionHits.js`の`probeColumnHits`（`makeProbeContext`経由）。
  */
 import { RoomFeature } from '@core';
 import { buildCellToRoom, computeNamedBoundaryEdges, edgeGeometry } from '../../finish/edgeClassify.js';
@@ -24,6 +28,11 @@ import { worldToCell, roomBounds, refreshCells } from '../../finish/gridCells.js
 import { roomCeilingHeight } from '../../finish/roomMetrics.js';
 import { kneeDropRecordsOnAxis, kneeDropWallGeometry } from '../../finish/kneeDropWall.js';
 import { graphList } from '../../graphReadScope.js';
+import { GAP_EPS_MM as GAP_EPS, PROBE_EPS_MM } from '../elevationStyle.js';
+
+// cellsAlongの無限ループ防御（格子異常時の安全弁）。実データの通常の列は
+// せいぜい数十セルなので、この上限に達すること自体が異常の兆候。
+const CELLS_ALONG_MAX_STEPS = 5000;
 
 /**
  * @typedef {object} SpaceCell
@@ -127,8 +136,99 @@ export function buildSpaceIndex(layers, opts = {}) {
     return cell?.room ? componentOf(layer, cell.room) : null;
   }
 
+  // ================================================================
+  // cellsAlong（Phase 3。設計§5.3(a)）: cellAtの一般形——視線方向へ格子セル単位で進み、
+  // 通過するセルを近い順に返す。
+  // ================================================================
+
+  /**
+   * cut.line の位置（worldMid＝走り方向の世界座標）から `cut.viewSign` の方向へ、
+   * `fromDepthMm`（切断面からの深さ。0＝切断面そのもの）〜`toDepthMm` の範囲を格子セル単位で
+   * 進み、通過するセルを近い順に `{room, floorZ, ceilZ, depthMm, componentId}` で返す。
+   *
+   * room が変わるセルの境界だけを区切りとする（同一Roomが続く限り1件に畳む）——格子の刻み自体は
+   * 「別の空気ボリューム」の境界ではないため。**この畳み込み契約はテストで固定済み**
+   * （`spaceModel.test.js`「視線方向に2セルまたぐ同一室」。畳み込みを外す変異で赤化することを
+   * 確認済み——QA指摘①）。`viewSign` は`cut.viewSign`をそのまま使う
+   * （`faceViewSign`（`section/sectionCutPlane.js`）で解決済みの値。ここで符号を書き下ろさない）。
+   * `depthMm`はそのセルへ入る距離（=セルの手前端の深さ。`fromDepthMm`未満にはならない）。
+   *
+   * `worldToCell`はCENTER LINEの格子分割のみを見る（壁の材厚は見ない）ため、壁の実体そのものは
+   * セルとして現れない——腰壁・垂れ壁の「向こう側」の部屋がすぐ次のセルとして出てくる
+   * （壁厚ぶんの深さがそのまま`depthMm`に反映される）。
+   *
+   * 失敗経路: `layer.graph`が無い／`cut.line`が無い／`worldMid`・`fromDepthMm`・`toDepthMm`が
+   * 有限数でない／`toDepthMm<=fromDepthMm`は例外を投げず空配列を返す（`cellAt`の
+   * 「セルが1つも無い→null」と同じ、例外を投げない規約）。
+   * `componentId`は返さない（QA指摘④）——本Phaseでは誰も読まず、算出には`ensureComponents()`
+   * （層全体の境界走査＋壁探索。実機規模で約78ms/回）が要るため、列ごとに呼ばれる本関数へ
+   * 素朴に含めると全列でこのコストを払うことになる。Phase 6（階段下部屋の空気ボリューム判定）で
+   * 消費者が現れたら、そのときに`componentOf(layer, seg.room)`を呼び出し側から個別に引けばよい
+   * （`buildSpaceIndex`が返す`componentOf`は変わらず公開されている）。
+   * @param {object} layer
+   * @param {{line:{isVertical:boolean, axisValue:number}, viewSign:1|-1}} cut
+   * @param {number} worldMid
+   * @param {number} fromDepthMm
+   * @param {number} toDepthMm
+   * @returns {Array<{room:object|null, floorZ:number, ceilZ:number|null, depthMm:number}>}
+   */
+  function cellsAlong(layer, cut, worldMid, fromDepthMm, toDepthMm) {
+    if (!layer?.graph || !cut?.line) return [];
+    // toDepthMmはInfinity（未上限の探査。addHorizontalFaceHitsが渡す）を許す——非数(NaN)だけ拒む。
+    // worldMid/fromDepthMmは有限数であることを要求する（探査の起点が不定では組み立てられない）。
+    if (!Number.isFinite(worldMid) || !Number.isFinite(fromDepthMm) || Number.isNaN(toDepthMm)) return [];
+    if (!(toDepthMm > fromDepthMm)) return [];
+    const { line } = cut;
+    const viewSign = cut.viewSign === -1 ? -1 : 1;
+    const axisValue = line.axisValue;
+    const graph = layer.graph;
+
+    const out = [];
+    let depth = fromDepthMm;
+    let steps = 0;
+    while (depth < toDepthMm - GAP_EPS && steps++ < CELLS_ALONG_MAX_STEPS) {
+      // 境界ちょうどを避け、次のセルの内側へ逃がす（probeOwnerRoomと同じ手法）。
+      const offset = viewSign * (depth + PROBE_EPS_MM);
+      const px = line.isVertical ? axisValue + offset : worldMid;
+      const py = line.isVertical ? worldMid : axisValue + offset;
+      const cell = worldToCell(px, py, graph);
+      if (!cell) break; // 格子の外＝これ以上進めない
+
+      // セルの奥行き方向の実世界範囲をdepth軸へ変換する（isVertical=trueならx1/x2、falseならy1/y2）。
+      const [wLo, wHi] = line.isVertical ? [cell.x1, cell.x2] : [cell.y1, cell.y2];
+      const d0 = (wLo - axisValue) * viewSign, d1 = (wHi - axisValue) * viewSign;
+      const cellLo = Math.min(d0, d1), cellHi = Math.max(d0, d1);
+      if (!(cellHi > depth + GAP_EPS)) break; // 前進しない異常値は打ち切り（防御）
+
+      const room = cellToRoomFor(layer).get(cell.key) ?? null;
+      const last = out[out.length - 1];
+      if (!last || last.room !== room) {
+        // floorZFor（graph.effectiveFloorLevel等の純算術）は例外を投げない。ceilZ側
+        // （chFor→roomCeilingHeight→room.getFinishInfo()）だけが、部屋の異常データで例外に
+        // なりうる（getFinishInfo()の実装は展開帯構築時に例外を投げる想定済み——
+        // buildBandsSafelyがその部屋の帯だけを落とす）。cellsAlongは視線の先の**無関係な**
+        // 部屋まで辿るため、素朴に例外を伝播させると「隣・その先の部屋が壊れているだけで、
+        // 手前の正常な部屋の帯まで巻き添えで失敗する」（実機QA F4相当の退行。実測して踏んだ）。
+        // QA指摘③是正: 区間そのものは諦めず積む（床＝floorZは解決できているため）。
+        // ceilZだけnullに落とす——`addHorizontalFaceHits`の`if (seg.ceilZ != null)`が効いて
+        // 「その部屋の床線（floorFace）は出るが天井線（ceilFace）は出ない」という、
+        // どこで何を諦めたかが辿れる縮退になる（区間ごと消すより情報の欠落が小さい）。
+        const floorZ = floorZFor(room, layer);
+        let ceilZ = null;
+        if (room) {
+          try { ceilZ = floorZ + chFor(room, graph); }
+          catch { /* この部屋の天井だけ諦める（上記コメント） */ }
+        }
+        // QA指摘④: componentIdは積まない（本函数のJSDoc参照）。
+        out.push({ room, floorZ, ceilZ, depthMm: Math.max(fromDepthMm, cellLo) });
+      }
+      depth = Math.min(cellHi, toDepthMm);
+    }
+    return out;
+  }
+
   return {
-    cellAt, cellToRoomFor, cellToRoomByLayer, floorZFor, chFor, componentOf, componentAt,
+    cellAt, cellToRoomFor, cellToRoomByLayer, floorZFor, chFor, componentOf, componentAt, cellsAlong,
   };
 }
 

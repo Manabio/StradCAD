@@ -295,8 +295,170 @@ test('【変異テスト用の土台】visibleBandsOf: 複数の見えがかり�
   const cut = frontCut(graph);
   const probeCtx = makeProbeContext(cut.layers);
   const { hits, layerStack, unexploredBelowZ } = probeColumnHits(cut, 2000, probeCtx);
-  assert.equal(hits.length, 2, '前提: 手前・奥の2件のヒットがあるはず');
+  // Phase3: hitsには選択対象のwallFace候補2件に加え、選択対象外のslabFace候補（この層自身の
+  // floorZ/ceilZ。visibleBandsOfが除外する）も積まれるため、ここでは選択に効く候補だけを数える。
+  const wallLikeHits = hits.filter(h => h.kind === 'wallFace' || h.kind === 'cut' || h.kind === 'cutAlong');
+  assert.equal(wallLikeHits.length, 2, '前提: 手前・奥の2件のヒットがあるはず');
   const bands = visibleBandsOf(hits, cut, { layerStack, unexploredBelowZ });
   assert.equal(bands.length, 1);
   assert.equal(bands[0].distMm, 1500, '手前の壁(距離1500)が奥の壁(距離3000)より優先されるはず');
 });
+
+// ================================================================
+// (5) Phase 3: 水平面ヒット（floorFace/ceilFace/slabFace。knee-drop-test.stq相当の構成）
+// ================================================================
+//
+// フィクスチャは knee-drop-test.stq（部屋A 4000×4000・南に部屋B（天井高2400）・共有壁に腰壁800）を
+// 単体テスト用に縮約したもの。切断線(cut.line)は**壁自身のmaterialRange.lo**（=室内側の仕上げ面。
+// production同様、sectionCutPlane.jsが壁のすぐ室内側へ置く規約に倣う）に置く——
+// generateRoomWallsFromOutlineの既定壁厚（DEFAULT_WALL_BASE+DEFAULT_WALL_FINISH*2）では
+// 中心線から57.5mmになり、実機13.stq相当の値（QA指摘②で確認済みの実測値）と一致する。
+// 腰壁自身のwallFaceヒットと、その先(部屋B)のfloorFace/ceilFaceヒットが**同じ距離(57.5mm)**
+// になる——腰壁の軸位置と部屋A/Bの境界CLが同一直線上にあるため。この「同深度」がkindRank
+// （QA指摘②）の並び替えを実際に問うケースになる。
+
+function makeKneeWallFixture() {
+  const graph = makeGraph();
+  const roomA = makeRectRoom(graph, 0, 0, 4000, 4000, 'A');
+  const roomB = makeRectRoom(graph, 0, 4000, 4000, 8000, 'B');
+  roomB.setOverride('ceilingHeight', '2400');
+  // 部屋A自身の南壁（materialRangeがAの室内側=hi===4000）に腰壁(topHeight800)を指定する。
+  const nearWall = graph.walls.find(w =>
+    !w.isVertical && w.axisCL.effectiveValue === 4000 && w.materialRange.hi === 4000);
+  graph.setKneeDropWall(
+    edgeKey(nearWall.axisCL.id, nearWall.clStart.id, nearWall.clEnd.id), { knee: { topHeight: 800 } });
+  return { graph, roomA, roomB, nearWall };
+}
+
+// axisValue=nearWall.materialRange.lo（壁の室内側仕上げ面）——production（sectionCutPlane.js）の
+// 「壁の中心線から室内側へ、壁仕上げ面まで下がる」規則と同じ置き方にする。
+function kneeFaceCut(graph, nearWall) {
+  return {
+    seqNo: 'kneeFace',
+    line: { isVertical: false, axisValue: nearWall.materialRange.lo, lo: 0, hi: 4000 },
+    viewSign: 1, dirSign: 1,
+    layers: [{ graph, floorZMm: 0, role: 'self' }],
+    zRange: { loZ: 0, hiZ: 3000 }, baseFloorZ: 0,
+  };
+}
+
+test('【Phase3・knee-drop-test相当】probeColumnHits: 部屋Aの腰壁面の列では、腰壁のwallFaceヒット(z 0..800)→部屋BのfloorFace/ceilFace→Bの奥の壁wallFaceが深度昇順で並ぶ', () => {
+  const { graph, roomB, nearWall } = makeKneeWallFixture();
+  const cut = kneeFaceCut(graph, nearWall);
+  const probeCtx = makeProbeContext(cut.layers);
+  const { hits } = probeColumnHits(cut, 2000, probeCtx);
+
+  const near = hits.find(h => h.wall === nearWall);
+  assert.ok(near, '腰壁自身のヒットがあるはず');
+  assert.equal(near.kind, 'wallFace');
+  assert.equal(near.z0, 0); assert.equal(near.z1, 800, '腰壁の実在範囲はz 0..800のはず');
+  assert.equal(near.distMm, 57.5, '既定壁厚（DEFAULT_WALL_BASE+FINISH*2）の半厚。実機13.stqと同じ値');
+
+  const roomBFloor = hits.find(h => h.kind === 'floorFace' && h.room === roomB);
+  const roomBCeil = hits.find(h => h.kind === 'ceilFace' && h.room === roomB);
+  assert.ok(roomBFloor, '部屋BのfloorFaceヒットがあるはず');
+  assert.ok(roomBCeil, '部屋BのceilFaceヒットがあるはず');
+  assert.equal(roomBFloor.z0, 0); assert.equal(roomBFloor.z1, 0, '部屋Bの床はz=0相当のはず');
+  assert.equal(roomBCeil.z0, 2400); assert.equal(roomBCeil.z1, 2400, '部屋Bの天井はz=2400のはず');
+  assert.equal(roomBFloor.distMm, roomBCeil.distMm, '同じセグメントから生成されるため同じ深さのはず');
+
+  const farWall = hits.find(h => h.kind === 'wallFace' && h.wall !== nearWall
+    && h.wall.axisCL.effectiveValue === 8000);
+  assert.ok(farWall, 'Bの奥の壁のヒットがあるはず');
+
+  // QA指摘②: 腰壁の軸位置と部屋A/Bの境界CLは同一直線上（腰壁は境界に立つ壁）のため、
+  // 腰壁のwallFaceヒットと部屋BのfloorFace/ceilFaceヒットは**同じ距離(57.5mm)**になる
+  // ——kindRankの「同深度なら垂直面(wallFace)が水平面(floorFace/ceilFace)より先」という
+  // 明示規則が無いと、並びが生成順（配列への積み順）に依存してしまう実ケース。
+  assert.equal(near.distMm, roomBFloor.distMm, '腰壁と部屋Bの床天井は同じ距離(境界)のはず');
+  assert.ok(roomBFloor.distMm < farWall.distMm, '部屋Bの床天井の方がBの奥の壁より近いはず');
+  // probeColumnHitsはhits全体をdistMm昇順→kindRank昇順でソート済みであること（配列上の並びでも確認）。
+  assert.ok(hits.indexOf(near) < hits.indexOf(roomBFloor),
+    '同深度でも垂直面(wallFace)が水平面(floorFace)より先に並ぶはず（kindRank）');
+  assert.ok(hits.indexOf(roomBFloor) < hits.indexOf(farWall));
+});
+
+// QA指摘⑤: cutPlaneOffsetMm===0（切断線が壁の中心線ちょうど）だとfloorFace/ceilFaceは
+// 一切出ない——info.room自体が向こう側の部屋(B)になり、cellsAlongの最初のセグメント(B)が
+// info.roomと一致してスキップされるため（addHorizontalFaceHitsのコメント参照）。
+test('【QA指摘⑤・Phase3】probeColumnHits: 切断線が壁の中心線ちょうど(offset=0)だとfloorFace/ceilFaceは出ず、向こう側の部屋はslabFace経路だけになる', () => {
+  const { graph, roomB, nearWall } = makeKneeWallFixture();
+  const cut = {
+    seqNo: 'offset0',
+    line: { isVertical: false, axisValue: nearWall.axisCL.effectiveValue, lo: 0, hi: 4000 }, // offset=0
+    viewSign: 1, dirSign: 1,
+    layers: [{ graph, floorZMm: 0, role: 'self' }],
+    zRange: { loZ: 0, hiZ: 3000 }, baseFloorZ: 0,
+  };
+  const probeCtx = makeProbeContext(cut.layers);
+  const { hits, layerStack } = probeColumnHits(cut, 2000, probeCtx);
+
+  assert.equal(layerStack[0].room, roomB, '前提: offset=0では自室の解決が向こう側の部屋(B)になる');
+  assert.ok(!hits.some(h => h.kind === 'floorFace'), 'floorFaceヒットは出ないはず');
+  assert.ok(!hits.some(h => h.kind === 'ceilFace'), 'ceilFaceヒットは出ないはず');
+  assert.ok(hits.some(h => h.kind === 'slabFace' && h.room === roomB),
+    '向こう側だったはずの部屋(B)は、自室扱いとしてslabFace経路で表現されるはず');
+});
+
+function makeDropWallFixture() {
+  const graph = makeGraph();
+  const roomD = makeRectRoom(graph, 0, 0, 4000, 4000, 'D');
+  roomD.setOverride('ceilingHeight', '3000'); // 天井3000
+  const roomC = makeRectRoom(graph, 0, 4000, 4000, 8000, 'C');
+  roomC.setOverride('ceilingHeight', '3000');
+  const nearWall = graph.walls.find(w =>
+    !w.isVertical && w.axisCL.effectiveValue === 4000 && w.materialRange.hi === 4000);
+  graph.setKneeDropWall(
+    edgeKey(nearWall.axisCL.id, nearWall.clStart.id, nearWall.clEnd.id), { drop: { bottomHeight: 1200 } });
+  return { graph, roomD, roomC, nearWall };
+}
+
+test('【Phase3・垂れ壁版】probeColumnHits: 垂れ壁(下端1200・天井3000)の列でも部屋CのceilFaceがz=3000で出る', () => {
+  const { graph, roomC, nearWall } = makeDropWallFixture();
+  const cut = kneeFaceCut(graph, nearWall);
+  cut.seqNo = 'dropFace';
+  const probeCtx = makeProbeContext(cut.layers);
+  const { hits } = probeColumnHits(cut, 2000, probeCtx);
+
+  const near = hits.find(h => h.wall === nearWall);
+  assert.ok(near, '垂れ壁自身のヒットがあるはず');
+  assert.equal(near.z0, 1800, '垂れ壁の実在範囲の下端は天井3000-下端1200=1800のはず');
+  assert.equal(near.z1, 3000);
+
+  const roomCCeil = hits.find(h => h.kind === 'ceilFace' && h.room === roomC);
+  assert.ok(roomCCeil, '部屋CのceilFaceヒットがあるはず');
+  assert.equal(roomCCeil.z0, 3000); assert.equal(roomCCeil.z1, 3000, '部屋Cの天井はz=3000のはず');
+});
+
+test('【Phase3・出力不変】visibleBandsOf: floorFace/ceilFace/slabFaceヒットを含めても含めなくてもbandsは同一', () => {
+  const { graph, nearWall } = makeKneeWallFixture();
+  const cut = kneeFaceCut(graph, nearWall);
+  const probeCtx = makeProbeContext(cut.layers);
+  const { hits, layerStack, unexploredBelowZ } = probeColumnHits(cut, 2000, probeCtx);
+
+  const faceKinds = new Set(['floorFace', 'ceilFace', 'slabFace']);
+  const withoutFaces = hits.filter(h => !faceKinds.has(h.kind));
+  assert.ok(withoutFaces.length < hits.length, '前提: 除外対象の水平面ヒットが実在するはず');
+
+  const bandsWithFaces = visibleBandsOf(hits, cut, { layerStack, unexploredBelowZ });
+  const bandsWithoutFaces = visibleBandsOf(withoutFaces, cut, { layerStack, unexploredBelowZ });
+  assert.deepEqual(bandsWithFaces, bandsWithoutFaces,
+    '水平面ヒットの有無でbandsは変わらないはず（出力完全不変）');
+});
+
+// 変異手順（報告に貼る。実行して確認済み）: visibleBandsOfの`coverableHits`フィルタを
+// `hits`そのものへ戻すだけでは「出力不変」テストは赤くならない——floorFace/ceilFaceは
+// z0===z1（厚みゼロ）で登録しており、`covering`のz区間一致判定
+// （`zm > c.z0-EPS && zm < c.z1+EPS`）を実質満たせないため、選択（frontMatch/wallMatch。
+// 元々kind='wallFace'等しか見ない）に混ざっても無害という二重の安全策になっている。
+// coverableHitsの除外が実際に効くことを確認するには、次の3点を**同時に**変更する:
+// (1) `coverableHits = hits`（除外フィルタ無効化）、(2) wallMatchの`.filter(c => c.kind
+// === 'wallFace')`を`|| c.kind === 'floorFace' || c.kind === 'ceilFace'`へ拡張、
+// (3) addHorizontalFaceHitsのfloorFace/ceilFaceのz1を`z0+50`/`z0-50`へ広げて厚みを持たせる
+// （Phase 4で実際に厚み・深度上限を持つ形に近づく想定）。この3点を同時に戻すと、
+// 「出力不変」テストと上の2本の【Phase3】テストが赤くなることを確認した。
+//
+// 変異手順その2（報告に貼る）: spaceModel.jsのcellsAlongの`viewSign`の符号を反転する
+// （`cut.viewSign === -1 ? -1 : 1` → `cut.viewSign === -1 ? 1 : -1`）と、腰壁の先の
+// floorFace/ceilFaceが逆向き（部屋Aの内側）を探査してしまい、上の
+// 「腰壁の...深度昇順で並ぶ」テストが赤くなることを確認する。

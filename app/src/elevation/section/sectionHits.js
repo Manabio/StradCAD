@@ -11,12 +11,23 @@
  * このファイルへ集約し、`sectionProbe.js`側はここから import して使う（一方向依存。循環import
  * を避けるため）。
  *
- * kind の語彙は `cut | cutAlong | wallFace | slab`（水平面ヒット floorFace/ceilFace は
- * Phase 3。今は作らない。openingFaceも同様——開口のpass-through情報は従来どおり各ヒットの
- * `openRanges`に添えるだけで、独立したヒット種別にはしない）。`slab`は「その区間を塞ぐ
- * wall/cut/cutAlongが1つも無いとき、層スタックの床天井から静的に導ける躯体・天井懐」で、
- * 候補収集（壁の走査）では作れないため`visibleBandsOf`のフォールバックとして残す
- * （候補収集＝`probeColumnHits`が作るのはcut/cutAlong/wallFaceのみ）。
+ * kind の語彙は `cut | cutAlong | wallFace | slab | floorFace | ceilFace | slabFace`。
+ * floorFace/ceilFace/slabFace（Phase 3。設計§5.3(b)）は視線方向の奥にある床・天井・躯体を
+ * 表す水平面ヒットで、`probeColumnHits`が候補として積むが、**`visibleBandsOf`は選択対象から
+ * 除外する**（出力完全不変。Phase 4で深度上限を適用して初めて描画に使う——`.claude/
+ * elevation-model.md`「空間セル索引」節）。openingFaceは無い——開口のpass-through情報は従来どおり
+ * 各ヒットの`openRanges`に添えるだけで、独立したヒット種別にはしない。
+ *
+ * **`SurfaceHit.distMm`の意味はkindによって違う**（QA指摘②）: cut/cutAlongは常に`0`（切断面上の
+ * 実体という定義そのもの）。wallFace/floorFace/ceilFaceは**測定値**（切断面からの実距離。
+ * `compareHitDepth`のソートキー）。`slabFace`の`distMm:0`だけは**測定値ではなく番兵**
+ * （`addHorizontalFaceHits`。自室＝距離0の位置から見た自室自身の床天井という定義上、常に0を
+ * 置いているだけで、実際の奥行きを表さない）——`slabFace`は`visibleBandsOf`の選択に参加しない
+ * ため実害は無いが、Phase 4以降でdistMmをそのまま奥行きとして読む処理を書くときは要注意。
+ * 小文字の`slab`（既存）は「その区間を塞ぐwall/cut/cutAlongが1つも無いとき、層スタックの
+ * 床天井から静的に導ける躯体・天井懐」の**選択結果側**（`ZBand.kind`）の語で、候補収集
+ * （壁の走査）では作れないため`visibleBandsOf`のフォールバックとして残る——`slabFace`（新規の
+ * **候補**）とは別物（前者はZBandのkind、後者はSurfaceHitのkind）。
  *
  * `visibleBandsOf(hits, cut, opts)` は「深度最小のヒットだけ残し、覆われないz区間は層スタックの
  * 床天井からslab/openを導く」——現行`probeColumn`のz区間分割・選択ロジックと**完全同値**に作る
@@ -462,6 +473,59 @@ function slabBandOf(info, z0, z1) {
 }
 
 /**
+ * 水平面ヒット（floorFace/ceilFace/slabFace。Phase 3。設計§5.3(b)）を候補へ積む。
+ *
+ * - `slabFace`: この層自身の床構造・天井懐の高さ（既存`slabBandOf`と同じ情報源＝
+ *   layerStackの自室floorZ/ceilZ）を、選択に使わない「候補」としても持たせる（Phase 4以降の
+ *   準備。`visibleBandsOf`は`slab`《ZBandのkind》のフォールバックロジックを従来どおり自分で
+ *   再計算するため、ここで積む`slabFace`候補は今は誰も読まない）。
+ * - `floorFace`/`ceilFace`: `probeCtx.cellsAlong`で視線方向の奥にある各室の床・天井を辿る。
+ *   `info.room`と同じセグメント（この層自身の室）はスキップする——その高さはz-band自体の
+ *   床天井として既に表現されているため、ヒットとして重複させない。
+ *
+ * `z0===z1`（厚みゼロの面）で登録する——`visibleBandsOf`の選択（frontMatch/wallMatch）からは
+ * 除外されるため、z範囲としての意味は持たせず「その高さに面がある」事実だけを保持する。
+ *
+ * 視線方向の探査に上限は掛けない（`toDepthMm=Infinity`。安全弁は`cellsAlong`自身の
+ * ステップ数上限）——深度上限（`SIGHTLINE_DEPTH_LIMIT_MM`）の適用はPhase 4（設計ユーザー裁定2）。
+ * `probeCtx.cellsAlong`が無い（テスト用の簡略probeCtx等）場合は静かに何もしない。
+ *
+ * **`cut.line`が切断対象の壁の中心線ちょうど（cutPlaneOffsetMm===0。`sectionCutPlane.js`の
+ * オフセットが0）だと floorFace/ceilFace は一切出ない**（QA指摘⑤。実測で確認済み）——
+ * `buildLayerStack`の`probeOwnerRoom`（`info.room`の解決）も本関数の`cellsAlong`も、同じ
+ * `cut.line.axisValue`から同じ`+viewSign*PROBE_EPS_MM`だけ進んだ点を見る。オフセットが無いと
+ * その最初の一点が**向こう側の部屋**（境界を挟んで先の部屋）に着地し、`info.room`自体が
+ * その部屋になってしまう——`cellsAlong`が返す最初のセグメントは`info.room`と一致して
+ * スキップされ（このセグメントは既に自室として表現されているため）、floorFace/ceilFaceは
+ * 生成されず、その部屋は`slabFace`（自室の床構造・天井懐）経路だけで表現される。
+ * production（`sectionCutPlane.js`）の切断線は常に「壁仕上げ面まで室内側へ下がる」正のオフセットを
+ * 持つため実害は無いが、`cut`を手書きするテスト・将来の呼び出し側はこの前提を崩さないこと。
+ * @param {import('./sectionTypes.js').SectionCut} cut
+ * @param {number} worldMid
+ * @param {{layer:object, room:object|null, floorZ:number, ceilZ:number}} info
+ * @param {ReturnType<typeof import('./sectionProbe.js').makeProbeContext>} probeCtx
+ * @param {Array} hits - 追記先
+ */
+function addHorizontalFaceHits(cut, worldMid, info, probeCtx, hits) {
+  const { layer } = info;
+  if (info.room) {
+    // distMm:0は番兵（自室＝切断面の位置そのものという定義上の値。測定値ではない。
+    // ファイル冒頭のSurfaceHit.distMmの注記参照。QA指摘②）。
+    hits.push({ kind: 'slabFace', layer, room: info.room, distMm: 0, z0: info.floorZ, z1: info.floorZ });
+    hits.push({ kind: 'slabFace', layer, room: info.room, distMm: 0, z0: info.ceilZ, z1: info.ceilZ });
+  }
+  if (typeof probeCtx?.cellsAlong !== 'function') return;
+  const segs = probeCtx.cellsAlong(layer, cut, worldMid, 0, Infinity);
+  for (const seg of segs) {
+    if (!seg.room || seg.room === info.room) continue; // 自室は既にz-band構造で表現済み
+    hits.push({ kind: 'floorFace', layer, room: seg.room, distMm: seg.depthMm, z0: seg.floorZ, z1: seg.floorZ });
+    if (seg.ceilZ != null) {
+      hits.push({ kind: 'ceilFace', layer, room: seg.room, distMm: seg.depthMm, z0: seg.ceilZ, z1: seg.ceilZ });
+    }
+  }
+}
+
+/**
  * 1本の列（worldMid。`collectCutBreaks`が返す隣接ペアの中点を渡す想定）に見える面の候補を
  * **深度昇順**で全て返す（§5.2 step1-2の候補収集。「z区間ごとに1つ選ぶ」（旧step3-4）は行わない）。
  * 層0件・切断線が部屋外・壁ゼロのいずれでも例外を投げず、候補が無ければ空のhits配列を返す。
@@ -474,8 +538,9 @@ function slabBandOf(info, z0, z1) {
  * @param {import('./sectionTypes.js').SectionCut} cut
  * @param {number} worldMid
  * @param {ReturnType<typeof import('./sectionProbe.js').makeProbeContext>} probeCtx
- * @returns {{hits:Array<{kind:'cut'|'cutAlong'|'wallFace', wall:import('@core').Wall, layer:object,
- *   distMm:number, z0:number, z1:number, openRanges:Array, isKneeDrop:boolean}>,
+ * @returns {{hits:Array<{kind:'cut'|'cutAlong'|'wallFace'|'floorFace'|'ceilFace'|'slabFace',
+ *   wall?:import('@core').Wall, room?:object, layer:object,
+ *   distMm:number, z0:number, z1:number, openRanges?:Array, isKneeDrop?:boolean}>,
  *   layerStack:Array, unexploredBelowZ:number|null}}
  */
 export function probeColumnHits(cut, worldMid, probeCtx) {
@@ -538,6 +603,9 @@ export function probeColumnHits(cut, worldMid, probeCtx) {
         }
       }
     }
+    // Phase 3: 水平面ヒット（floorFace/ceilFace/slabFace）を追加する。visibleBandsOfは
+    // これらを選択対象から除外するため、出力（ZBand[]）は不変のまま。
+    addHorizontalFaceHits(cut, worldMid, info, probeCtx, hits);
   }
 
   hits.sort(compareHitDepth);
@@ -547,7 +615,26 @@ export function probeColumnHits(cut, worldMid, probeCtx) {
 // 深度の並び（浅い=手前が先）。cut/cutAlongは常にdistMm=0（同一平面上の実体）、wallFaceは
 // 実距離。同深度の同点(cut/cutAlong)はcutを先に、wallFace同士はcompareLayerPriorityで解決する
 // ——旧probeColumnのfrontMatch/wallMatch選択の並べ替え条件と完全に同じ規則を1つの比較関数へ畳む。
-function kindRank(kind) { return kind === 'cut' ? 0 : kind === 'cutAlong' ? 1 : 2; }
+// QA指摘②: floorFace/ceilFace（水平面。視線の先の別室の床天井）とslabFace（自室の床構造・
+// 天井懐）にも明示的なrankを割る——同じdistMmで垂直面（cut/cutAlong/wallFace＝視線を遮る実体）と
+// 水平面（floorFace/ceilFace）が並ぶとき、**遮蔽物である垂直面を先にする**規則を固定する
+// （実ケース: 腰壁のwallFaceと、その向こうの部屋のfloorFaceが同じ距離＝腰壁の軸位置が
+// 部屋境界そのものであるため、生成順に依存させず規則で決める）。slabFaceは自室由来で
+// 常にdistMm:0の番兵のため最後（rank最大）に置く——cut/cutAlong（実体の遮蔽物。同じdistMm:0）を
+// 優先させるため。floorFace/ceilFaceは現状visibleBandsOfの選択には参加しない
+// （`coverableHits`で除外。Phase 3は出力不変が目的）が、hits配列自体の並びは
+// Phase 4以降の消費者（奥の床天井の見えがかり線を「一番近い遮蔽物」と付き合わせる処理）が
+// 依存しうるため、このrankをここで固定しておく。
+function kindRank(kind) {
+  switch (kind) {
+    case 'cut': return 0;
+    case 'cutAlong': return 1;
+    case 'wallFace': return 2;
+    case 'floorFace': case 'ceilFace': return 3;
+    case 'slabFace': return 4;
+    default: return 5;
+  }
+}
 function compareHitDepth(a, b) {
   return (a.distMm - b.distMm) || (kindRank(a.kind) - kindRank(b.kind)) || compareLayerPriority(a, b);
 }
@@ -578,6 +665,13 @@ export function visibleBandsOf(hits, cut, opts = {}) {
   const layerStack = opts.layerStack;
   const unexploredBelowZ = 'unexploredBelowZ' in opts ? opts.unexploredBelowZ : null;
 
+  // Phase 3（設計§5.3(b)）: 水平面ヒット（floorFace/ceilFace/slabFace）は選択対象から除外する
+  // ——出力完全不変の仕掛けそのもの。これらのkindが追加される前は`hits`と`coverableHits`は
+  // 常に同一だったため、この1行の追加自体が挙動を変えることはない。Phase 4で深度上限を適用して
+  // 初めて、これらのkindを見る側（新しい選択ロジック）が追加される。
+  const coverableHits = hits.filter(h =>
+    h.kind !== 'floorFace' && h.kind !== 'ceilFace' && h.kind !== 'slabFace');
+
   // zBreaks = 全ヒットのz端点 ∪ 層の床天井 ∪ zRange端 ∪ cut.baseFloorZ（§5.2 step3。WP-E5b追加:
   // baseFloorZはemitLineの§5.6最終フィルタ（両端がbaseFloorZ未満なら向こう側=DETAIL破線へ
   // 降格）の境界そのものであり、ここをz区間の境界にしておかないと1本の線分がbaseFloorZを
@@ -586,7 +680,7 @@ export function visibleBandsOf(hits, cut, opts = {}) {
   // が成立しない。baseFloorZをz区間の境界に割ることで、下側の区間だけが正しく降格される）。
   const zSet = new Set([zLo, zHi]);
   if (cut.baseFloorZ != null) zSet.add(clamp(cut.baseFloorZ, zLo, zHi));
-  for (const c of hits) {
+  for (const c of coverableHits) {
     zSet.add(clamp(c.z0, zLo, zHi)); zSet.add(clamp(c.z1, zLo, zHi));
     // WP-E7 D1: 開口のz端点もz区間の境界にする（開口の有無で'wall'帯を分割し、開口の
     // 部分だけにopeningPassThroughを付与できるようにするため）。
@@ -604,7 +698,7 @@ export function visibleBandsOf(hits, cut, opts = {}) {
     const z0 = zBreaks[i], z1 = zBreaks[i + 1];
     if (z1 - z0 < GAP_EPS) continue;
     const zm = (z0 + z1) / 2;
-    const covering = hits.filter(c => zm > c.z0 - GAP_EPS && zm < c.z1 + GAP_EPS);
+    const covering = coverableHits.filter(c => zm > c.z0 - GAP_EPS && zm < c.z1 + GAP_EPS);
 
     // cut・cutAlongは同格の最前面（§6.1裁定）。同一z区間に両方あれば直交して横切るcutを
     // 優先する（cutAlongより明確に「その場を塞ぐ」実体のため）。

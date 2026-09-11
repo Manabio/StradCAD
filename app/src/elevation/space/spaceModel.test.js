@@ -8,6 +8,7 @@ import { generateRoomWallsFromOutline } from '../../finish/wallGeneration.js';
 import { buildSpaceIndex } from './spaceModel.js';
 import { makeProbeContext } from '../section/sectionProbe.js';
 import { PROBE_EPS_MM } from '../elevationStyle.js';
+import { worldToCell } from '../../finish/gridCells.js';
 
 const CH = 2400; // DEFAULT_ROOM_CEILING_HEIGHT（core/constants.js）明示指定なしの既定値
 
@@ -396,4 +397,135 @@ test('【不変ゲート】buildSpaceIndex.cellAt: floorOffsetMm未指定なら�
   assert.equal(index.floorZFor(room, layer), 100);
   assert.equal(index.floorZFor(other, layer), 0);
   assert.equal(index.floorZFor(null, layer), 0);
+});
+
+// ================================================================
+// cellsAlong（Phase 3。設計§5.3(a)）
+// ================================================================
+
+// cellsAlong用の最小cut（line.isVertical=false＝depth軸はY、worldMidはX）。
+function faceCut(axisValue, viewSign = 1) {
+  return { line: { isVertical: false, axisValue }, viewSign };
+}
+
+test('【Phase3】cellsAlong: 1室のみの列では、その室1件だけを深さ0で返す', () => {
+  const graph = makeGraph();
+  const room = makeRectRoom(graph, 0, 0, 4000, 3000, 'LDK');
+  const layer = { graph, floorZMm: 0, role: 'self' };
+  const index = buildSpaceIndex([layer]);
+
+  const segs = index.cellsAlong(layer, faceCut(0), 2000, 0, 10000);
+  assert.equal(segs.length, 1);
+  assert.equal(segs[0].room, room);
+  assert.equal(segs[0].depthMm, 0, '切断面直後のセルは深さ0のはず');
+  assert.equal(segs[0].floorZ, 0);
+  assert.equal(segs[0].ceilZ, CH);
+});
+
+test('【Phase3】cellsAlong: 2室が並ぶ列では、部屋が変わる境界で区切られた2件を近い順に返す', () => {
+  const { graph, roomA, roomB } = makeAdjacentRoomsGraph(); // A: y[0,3000] / B: y[3000,6000]
+  const layer = { graph, floorZMm: 0, role: 'self' };
+  const index = buildSpaceIndex([layer]);
+
+  const segs = index.cellsAlong(layer, faceCut(0), 2000, 0, 10000);
+  assert.equal(segs.length, 2);
+  assert.equal(segs[0].room, roomA);
+  assert.equal(segs[0].depthMm, 0);
+  assert.equal(segs[1].room, roomB);
+  assert.equal(segs[1].depthMm, 3000, '2番目の部屋に入る深さ=A-B境界(y=3000)のはず');
+  assert.ok(segs[0].depthMm < segs[1].depthMm, '近い順（深度昇順）のはず');
+});
+
+// ---- QA指摘①: 「room変化点で区切る」契約は、同一室が視線方向に複数の格子セルへ
+// またがる構成でこそ効く（1セル=1室の単純な矩形室だけでは畳み込みの有無が区別できない）。
+// 部屋A(y0..4000)の内部に区切りCL(y=2000)を追加し、Aが物理的に2セルへ分かれることを
+// worldToCellのキーで確認したうえで、cellsAlongが「A@0, B@4000」の2件（3件ではない）に
+// 畳み込むことを固定する。
+test('【QA指摘①・Phase3】cellsAlong: 同一室が視線方向に2セルへまたがっても、室が変わる境界だけで区切られた2件になる（畳み込み契約の固定）', () => {
+  const graph = makeGraph();
+  const roomA = makeRectRoom(graph, 0, 0, 4000, 4000, 'A');
+  const roomB = makeRectRoom(graph, 0, 4000, 4000, 8000, 'B');
+  // Aの内部だけを分割する区切りCL（部屋境界ではない・単なる格子の刻み）。
+  graph.addCenterLine(CenterLineType.HORIZONTAL, 2000, { labeled: false, discipline: Discipline.ARCH });
+  const layer = { graph, floorZMm: 0, role: 'self' };
+  const index = buildSpaceIndex([layer]);
+
+  // 前提: Aの中がy=2000で物理的に2セルへ分かれていること（同室・別セルキー）。
+  const cellNear = worldToCell(2000, 1000, graph);
+  const cellFar = worldToCell(2000, 3000, graph);
+  assert.notEqual(cellNear?.key, cellFar?.key, '前提: Aの内部はy=2000で物理的に2セルへ分かれるはず');
+
+  const segs = index.cellsAlong(layer, faceCut(0), 2000, 0, 10000);
+  assert.equal(segs.length, 2, '同一室(A)の2セルは1件へ畳み込まれ、室が変わるB境界だけで区切られるはず');
+  assert.equal(segs[0].room, roomA); assert.equal(segs[0].depthMm, 0);
+  assert.equal(segs[1].room, roomB); assert.equal(segs[1].depthMm, 4000);
+});
+
+// ---- 回帰ガード（実機QA F4相当）: 視線の先の無関係な部屋のfinish情報が壊れていても、
+// 手前の正常な部屋の探査自体は落ちない（ElevationModeState.test.jsの「1部屋の帯構築が失敗
+// しても他の部屋の帯は残る」を壊す実装バグを実際に踏んだ。cellsAlongは自室と無関係な、
+// 視線の先の部屋のroom.getFinishInfo()まで呼ぶため、素朴な実装だと例外がそのまま伝播していた）。
+// QA指摘③是正: 例外が起きた部屋の区間そのものは（床＝floorZは解決できているため）積む。
+// ceilZだけnullに落とす——区間ごと消すより「どこで何を諦めたか」の情報の欠落が小さい。----
+test('【回帰ガード・Phase3】cellsAlong: 視線の先の部屋のgetFinishInfoが例外を投げても、例外を投げず手前の部屋の区間は返す（先の部屋はceilZ:nullで縮退）', () => {
+  const { graph, roomA, roomB } = makeAdjacentRoomsGraph();
+  roomB.getFinishInfo = () => { throw new Error('boom'); };
+  const layer = { graph, floorZMm: 0, role: 'self' };
+  const index = buildSpaceIndex([layer]);
+
+  const segs = index.cellsAlong(layer, faceCut(0), 2000, 0, 10000);
+  assert.equal(segs.length, 2, '例外を投げず、壊れている部屋(B)の区間も（縮退した形で）残るはず');
+  assert.equal(segs[0].room, roomA, '手前の正常な部屋(A)の区間は返るはず');
+  assert.equal(segs[0].floorZ, 0);
+  assert.equal(segs[0].ceilZ, CH);
+  assert.equal(segs[1].room, roomB);
+  assert.equal(segs[1].floorZ, 0, '床(floorZFor)は例外を投げないため解決できているはず（floor levelは未指定=0）');
+  assert.equal(segs[1].ceilZ, null, '天井(chFor)だけgetFinishInfo異常でnullに縮退するはず');
+});
+
+test('【回帰ガード・Phase3】cellsAlong: toDepthMm=Infinity（未上限の探査。probeColumnHitsの実呼び出し）でも正しくセルを辿る', () => {
+  // Number.isFinite(Infinity)===falseのため、素朴な「全て有限数か」ガードだとInfinityを
+  // 非数と誤判定して即座に空配列を返してしまう（実際に踏んだ実装バグ）。toDepthMm=Infinityは
+  // section/sectionHits.jsのaddHorizontalFaceHitsが実際に渡す値なので、退行すると本番のhitsに
+  // floorFace/ceilFaceが一切載らなくなる。
+  const { graph, roomA, roomB } = makeAdjacentRoomsGraph();
+  const layer = { graph, floorZMm: 0, role: 'self' };
+  const index = buildSpaceIndex([layer]);
+
+  const segs = index.cellsAlong(layer, faceCut(0), 2000, 0, Infinity);
+  assert.equal(segs.length, 2);
+  assert.equal(segs[0].room, roomA);
+  assert.equal(segs[1].room, roomB);
+});
+
+test('【失敗系・Phase3】cellsAlong: 範囲外（格子の外）から始めると空配列を返す', () => {
+  const graph = makeGraph();
+  makeRectRoom(graph, 0, 0, 4000, 3000, 'LDK');
+  const layer = { graph, floorZMm: 0, role: 'self' };
+  const index = buildSpaceIndex([layer]);
+
+  const segs = index.cellsAlong(layer, faceCut(0), 2000, 100000, 200000);
+  assert.deepEqual(segs, []);
+});
+
+test('【失敗系・Phase3】cellsAlong: layerにgraphが無ければ例外を投げず空配列を返す', () => {
+  const graph = makeGraph();
+  makeRectRoom(graph, 0, 0, 4000, 3000, 'LDK');
+  const layer = { graph, floorZMm: 0, role: 'self' };
+  const index = buildSpaceIndex([layer]);
+
+  assert.deepEqual(index.cellsAlong({ graph: null, floorZMm: 0 }, faceCut(0), 2000, 0, 1000), []);
+  assert.deepEqual(index.cellsAlong(undefined, faceCut(0), 2000, 0, 1000), []);
+});
+
+test('【失敗系・Phase3】cellsAlong: worldMid・fromDepthMm・toDepthMmがNaNでも例外を投げず空配列を返す', () => {
+  const graph = makeGraph();
+  makeRectRoom(graph, 0, 0, 4000, 3000, 'LDK');
+  const layer = { graph, floorZMm: 0, role: 'self' };
+  const index = buildSpaceIndex([layer]);
+
+  assert.deepEqual(index.cellsAlong(layer, faceCut(0), NaN, 0, 1000), []);
+  assert.deepEqual(index.cellsAlong(layer, faceCut(0), 2000, NaN, 1000), []);
+  assert.deepEqual(index.cellsAlong(layer, faceCut(0), 2000, 0, NaN), []);
+  assert.deepEqual(index.cellsAlong(layer, faceCut(0), 2000, 1000, 500), [], 'toDepthMm<=fromDepthMmも空配列');
 });

@@ -42,7 +42,8 @@ export { probeColumn };
  * @returns {{cellToRoomByLayer:Map, cellToRoomFor:(layer:object)=>Map,
  *   chOf:(room:object|null, graph:object)=>number|null,
  *   floorZOf:(room:object|null, layer:object)=>number,
- *   cellAt:(layer:object, worldX:number, worldY:number)=>{room:object|null, floorZ:number, ceilZ:number|null}|null}}
+ *   cellAt:(layer:object, worldX:number, worldY:number)=>{room:object|null, floorZ:number, ceilZ:number|null}|null,
+ *   cellsAlong:(layer:object, cut:object, worldMid:number, fromDepthMm:number, toDepthMm:number)=>Array<object>}}
  */
 export function makeProbeContext(layers, opts = {}) {
   const spaceIndex = buildSpaceIndex(layers, opts);
@@ -52,6 +53,9 @@ export function makeProbeContext(layers, opts = {}) {
     chOf: spaceIndex.chFor,
     floorZOf: spaceIndex.floorZFor,
     cellAt: spaceIndex.cellAt,
+    // Phase 3（展開図一般化）: 水平面ヒット（floorFace/ceilFace。`section/sectionHits.js`の
+    // `probeColumnHits`）の材料。`cellAt`（1点プローブ）の一般形。
+    cellsAlong: spaceIndex.cellsAlong,
   };
 }
 

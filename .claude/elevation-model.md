@@ -1311,7 +1311,16 @@ INV2は「役割名にも配列順にも依存していない」ことの実行�
 **本番からは誰も読まない**（検証プローブ・単体テストのみが消費者）。
 `section/sectionHits.js`の`probeColumnHits`/`visibleBandsOf`も追加——1列の候補を
 深度昇順の全ヒットとして保持し、深度最小だけ残して従来`probeColumn`と完全同値へ畳み込む合成
-関数として`probeColumn`を薄く保つ。水平面ヒット（floorFace/ceilFace）はPhase 3。
+関数として`probeColumn`を薄く保つ。
+
+**Phase 3**: `buildSpaceIndex`に`cellsAlong`（`cellAt`の一般形。視線方向へ格子セル単位で進み、
+room変化点で区切った区間を近い順に返す）を追加。`probeColumnHits`がこれを使い、水平面ヒット
+`floorFace`/`ceilFace`（視線の先の別室の床天井。腰壁・垂れ壁の向こうは1点プローブでは解決
+できず、これが唯一の情報源）と`slabFace`（自室の床構造・天井懐）を候補へ積むが、
+出力の完全不変は、除外フィルタ（`visibleBandsOf`の`coverableHits`）・選択ロジックのkind
+ホワイトリスト（`frontMatch`/`wallMatch`が元々`wallFace`等しか見ない）・縮退z（`z0===z1`で
+`covering`のz区間一致判定を実質満たさない）の三重の安全策で担保している——Phase 4で深度上限
+（`SIGHTLINE_DEPTH_LIMIT_MM`）を適用し実際の厚み・深度を持たせて初めて畳み込まれ描画に使われる。
 詳細は`.claude/elevation-redesign.md`参照。
 
 ## 2.5D立体の加算レイヤ（全展開図共通。`elevationSolids.js`。追加仕様2026-08）
