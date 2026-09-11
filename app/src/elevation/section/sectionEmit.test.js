@@ -1609,3 +1609,107 @@ test('【失敗系】upperFloorCutWallEndsOf: 列が無い・上階FLが非有�
   assert.deepEqual(upperFloorCutWallEndsOf(columns, undefined), { lo: null, hi: null });
   assert.deepEqual(upperFloorCutWallEndsOf(columns, NaN), { lo: null, hi: null });
 });
+
+// ================================================================
+// Phase 4: 水平面ヒットの見えがかり線・アキの縮小（`sectionEngine.js`の`splitOpenByFarFace`が
+// 分割済みのopen/farVoid帯を渡す前提。設計§5.5・§5.6意図的差分1）
+// ================================================================
+
+test('【Phase4・a】emitColumns: open帯のfarCeilZに見えがかり線を出し、重みは同じ深度の壁面と同じ規則(sightRole)で決まる', () => {
+  const cut = makeCut({ zRange: { loZ: 0, hiZ: 3000 } });
+  const columns = [
+    { x0: 0, x1: 1000, worldLo: 0, worldHi: 1000, bands: [
+      { kind: 'wall', z0: 0, z1: 800, distMm: 100, layerRole: 'self' }, // 直近の見えがかり=100mm
+      { kind: 'open', z0: 800, z1: 2400, farFloorZ: null, farCeilZ: 2400, farDepthMm: 100 },
+      { kind: 'farVoid', z0: 2400, z1: 3000 },
+    ] },
+  ];
+  const prims = emitColumns(columns, cut, { ceilZ: 3000 });
+  const line2400 = prims.find(p => p.type === 'line' && p.y1 === -2400 && p.y2 === -2400 && p.x1 === 0 && p.x2 === 1000);
+  assert.ok(line2400, 'z=2400に水平線が出るはず');
+  assert.equal(line2400.weight, 'medium', 'farDepthMm(100)は直近(100)と同じ距離なのでSILHOUETTE(medium)');
+});
+
+test('【Phase4】emitColumns: farDepthMmが直近より奥ならDETAIL(thin)になる（壁面と同じ深度→重みの経路）', () => {
+  const cut = makeCut({ zRange: { loZ: 0, hiZ: 3000 } });
+  const columns = [
+    { x0: 0, x1: 1000, worldLo: 0, worldHi: 1000, bands: [
+      { kind: 'wall', z0: 0, z1: 800, distMm: 100, layerRole: 'self' },
+      { kind: 'open', z0: 800, z1: 2400, farFloorZ: null, farCeilZ: 2400, farDepthMm: 700 },
+      { kind: 'farVoid', z0: 2400, z1: 3000 },
+    ] },
+  ];
+  const prims = emitColumns(columns, cut, { ceilZ: 3000 });
+  const line2400 = prims.find(p => p.type === 'line' && p.y1 === -2400 && p.y2 === -2400);
+  assert.ok(line2400);
+  assert.equal(line2400.weight, 'thin', 'farDepthMm(700)は直近(100)より奥なのでDETAIL(thin)');
+});
+
+test('【Phase4】emitColumns: farFloorZ/farCeilZが自身のFL・CH（sectionLevelZs）と同値ならdedupeして線を描かない', () => {
+  const cut = makeCut({ baseFloorZ: 0, zRange: { loZ: 0, hiZ: 1200 } });
+  const columns = [
+    { x0: 0, x1: 1000, worldLo: 0, worldHi: 1000, bands: [
+      // farFloorZ=0はbaseFloorZ(0)と同値、farCeilZ=1200はceilZ(1200)と同値＝どちらもFL/CHの
+      // 見えがかりは描画しない既存規則（sectionLevelZs/atSectionLevel）でdedupeされるはず。
+      { kind: 'open', z0: 0, z1: 1200, farFloorZ: 0, farCeilZ: 1200, farDepthMm: 100 },
+    ] },
+  ];
+  const prims = emitColumns(columns, cut, { ceilZ: 1200 });
+  assert.equal(prims.filter(p => p.type === 'line').length, 0,
+    'FL(0)・CH(1200)と同値の水平面は既存の断面線と重なるため描かないはず');
+});
+
+test('【Phase4】emitOpenGapMarks: open帯が[800,2400]へ縮んでいれば、アキは縮んだ範囲だけ・farVoid帯[2400,3000]はアキにも線にもならない', () => {
+  const cut = makeCut({ baseFloorZ: 0, zRange: { loZ: 0, hiZ: 3000 } });
+  const columns = [
+    { x0: 0, x1: 1000, worldLo: 0, worldHi: 1000, bands: [
+      { kind: 'open', z0: 800, z1: 2400, farFloorZ: null, farCeilZ: 2400, farDepthMm: 100 },
+      { kind: 'farVoid', z0: 2400, z1: 3000 },
+    ] },
+  ];
+  const prims = emitOpenGapMarks(columns, cut);
+  const text = prims.find(p => p.type === 'text' && p.text === 'ア キ');
+  assert.ok(text, '「ア キ」標記があるはず');
+  assert.equal(text.y, -((800 + 2400) / 2), 'アキの中心は縮んだ範囲[800,2400]の中点のはず（[800,3000]の中点ではない）');
+  const lines = prims.filter(p => p.type === 'line');
+  for (const l of lines) {
+    assert.ok(Math.max(l.y1, l.y2) <= 0 - 800 && Math.min(l.y1, l.y2) >= -2400,
+      'バツの線はz800..2400の範囲内に収まるはず（farVoid側[2400,3000]へはみ出さない）');
+  }
+});
+
+// ---- 失敗系 ----
+test('【失敗系・Phase4】emitColumns/emitOpenGapMarks: open帯にfarFloorZ/farCeilZが無ければ（フラグoff相当）従来どおり何も変わらない', () => {
+  const cut = makeCut({ baseFloorZ: 0, zRange: { loZ: 0, hiZ: 3000 } });
+  const columns = [
+    { x0: 0, x1: 1000, worldLo: 0, worldHi: 1000, bands: [{ kind: 'open', z0: 800, z1: 3000 }] },
+  ];
+  assert.equal(emitColumns(columns, cut, { ceilZ: 3000 }).filter(p => p.type === 'line').length, 0,
+    '付帯情報が無いopen帯はPhase4の新しい分岐に入らず、従来どおり何も描かないはず');
+  const gap = emitOpenGapMarks(columns, cut).find(p => p.type === 'text' && p.text === 'ア キ');
+  assert.equal(gap.y, -((800 + 3000) / 2), 'アキは縮まず従来どおり全域[800,3000]のままのはず');
+});
+
+// ---- (f) 奥の壁の建具姿図は描かない（ユーザー裁定2の禁止事項） ----
+// floorFace/ceilFaceには建具情報（opening/openingPassThrough）自体が無い（sectionHits.jsの
+// addHorizontalFaceHitsはkind:'floorFace'/'ceilFace'のヒットにopening関連フィールドを一切載せない
+// ——建具の断面はwallFace/cut候補の`openRanges`だけが持つ独立した仕組み）。本テストは、
+// open帯に（万一）openingPassThrough/opening相当のプロパティが紛れ込んでいても、Phase4の新しい
+// 分岐（'open'ケース）が単純な水平線(type:'line')以外のプリミティブ（建具姿図のrect/polyline等）
+// を一切生成しないことを確認する——生成経路そのものが無いことの回帰確認。
+test('【Phase4・f】emitColumns: open帯からは水平線(type:line)以外のプリミティブ（建具姿図等）は一切出ない', () => {
+  const cut = makeCut({ zRange: { loZ: 0, hiZ: 3000 } });
+  const columns = [
+    { x0: 0, x1: 1000, worldLo: 0, worldHi: 1000, bands: [
+      { kind: 'wall', z0: 0, z1: 800, distMm: 100, layerRole: 'self' },
+      // openingPassThrough/openingが紛れ込んでも（本来floorFace/ceilFace由来のopen帯には
+      // 付かないが）Phase4の分岐はこれらを一切読まないことを確認する。
+      { kind: 'open', z0: 800, z1: 2400, farFloorZ: null, farCeilZ: 2400, farDepthMm: 100,
+        openingPassThrough: true, opening: { id: 'dummy' } },
+      { kind: 'farVoid', z0: 2400, z1: 3000 },
+    ] },
+  ];
+  const prims = emitColumns(columns, cut, { ceilZ: 3000 });
+  const nonLine = prims.filter(p => p.type !== 'line');
+  assert.deepEqual(nonLine, [], 'line以外のプリミティブ（建具姿図のrect/polyline等）は出ないはず');
+});

@@ -43,12 +43,18 @@
  * `cutProbeRange`/`isCutWall`/`isCutAlongWall`/`isSightlineShape`/`buildLayerStack`）は
  * `section/`配下（`sectionProbe.js`経由の再エクスポートを含む）専用**——`elevation/`の他ディレクトリ
  * からは直接importしない（面の体裁側は`sectionContent.js`の`buildCutContent`が入口）。
+ *
+ * Phase 4（`elevationStyle.js`の`HORIZONTAL_FACES_ENABLED`。既定off）: `visibleBandsOf`が
+ * `open`帯へ`farFloorZ`/`farCeilZ`/`farDepthMm`（上限内の最も近いfloorFace/ceilFace）を付帯情報
+ * として載せる。深度上限の適用・アキの範囲を縮める処理・見えがかり線の描画は行わない
+ * （それぞれ`sectionEngine.js`・`sectionEmit.js`が担当）。フラグoffではこの付帯情報自体を
+ * 付けない（出力完全不変）。
  */
 import { OpeningCategory } from '@core';
 import { worldToCell } from '../../finish/gridCells.js';
 import { kneeDropRecordsAtPointOnWall } from '../../finish/kneeDropWall.js';
 import { effectiveHeight } from '../../openings/openingNumbering.js';
-import { GAP_EPS_MM as GAP_EPS, PROBE_EPS_MM } from '../elevationStyle.js';
+import { GAP_EPS_MM as GAP_EPS, PROBE_EPS_MM, HORIZONTAL_FACES_ENABLED } from '../elevationStyle.js';
 import { graphList } from '../../graphReadScope.js';
 import {
   isRealRoom, orderLayerStack, baseLayerOf, layerOwningZ,
@@ -655,6 +661,52 @@ function compareHitDepth(a, b) {
  *   （`probeColumnHits(...).layerStack`をそのまま渡す）。
  * @returns {import('./sectionTypes.js').ZBand[]}
  */
+/**
+ * z区間 (z0,z1) の**内部**（両端に触れない）にある指定kindのヒットのうち、深度が最小のもの
+ * （Phase4「上限内の最も近いfloorFace/ceilFace」。設計§5.5「情報の流れ」）。
+ * 深度上限そのものはここでは適用しない——上限判定には「その切断全体で最も手前の壁面」が要り、
+ * 列単体を扱う`visibleBandsOf`にはその値が渡っていない。上限は`sectionEngine.js`の
+ * 深度上限適用（壁と同じ場所）で掛ける。
+ * 境界（z0・z1ちょうど）は対象外——そこは既に他の帯の縁として表現済みで、縮める意味が無い。
+ * @param {Array} hits - `probeColumnHits(...).hits`（深度昇順・floorFace/ceilFaceを含む生のまま）
+ * @param {'floorFace'|'ceilFace'} kind
+ * @param {number} z0
+ * @param {number} z1
+ * @returns {{z0:number, distMm:number}|null}
+ */
+function nearestFaceInRange(hits, kind, z0, z1) {
+  let best = null;
+  for (const h of hits) {
+    if (h.kind !== kind) continue;
+    if (h.z0 <= z0 + GAP_EPS || h.z0 >= z1 - GAP_EPS) continue;
+    if (!best || h.distMm < best.distMm) best = h;
+  }
+  return best;
+}
+
+/**
+ * `open`帯へ「上限内の最も近いfloorFace/ceilFace」の付帯情報を載せる（Phase4。設計§5.5
+ * 「情報の流れ」＝`farFloorZ`/`farCeilZ`/`farDepthMm`）。`HORIZONTAL_FACES_ENABLED`がfalseなら
+ * 常に空オブジェクト——これが出力完全不変（Phase3までの契約）を保つ唯一の分岐点。
+ * floorFace/ceilFaceは独立に探す（同じ奥の部屋から一緒に出ることが多いが、必ずしも対にならない
+ * ——例: 片方がceilZ:null《Phase3の縮退》で積まれなかった場合）。
+ * @param {Array} hits
+ * @param {number} z0
+ * @param {number} z1
+ * @returns {{farFloorZ?:number|null, farCeilZ?:number|null, farDepthMm?:number}}
+ */
+function farFaceAnnotation(hits, z0, z1) {
+  if (!HORIZONTAL_FACES_ENABLED) return {};
+  const floor = nearestFaceInRange(hits, 'floorFace', z0, z1);
+  const ceil = nearestFaceInRange(hits, 'ceilFace', z0, z1);
+  if (!floor && !ceil) return {};
+  return {
+    farFloorZ: floor ? floor.z0 : null,
+    farCeilZ: ceil ? ceil.z0 : null,
+    farDepthMm: Math.min(floor?.distMm ?? Infinity, ceil?.distMm ?? Infinity),
+  };
+}
+
 export function visibleBandsOf(hits, cut, opts = {}) {
   const zLo = cut.zRange?.loZ ?? 0;
   const zHi = cut.zRange?.hiZ ?? 0;
@@ -728,7 +780,17 @@ export function visibleBandsOf(hits, cut, opts = {}) {
       .filter(c => c.kind === 'wallFace')
       .sort((a, b) => a.distMm - b.distMm || compareLayerPriority(a, b))[0];
     if (wallMatch) {
-      const band = { kind: 'wall', z0, z1, wall: wallMatch.wall, layerRole: wallMatch.layer.role, distMm: wallMatch.distMm, isKneeDrop: wallMatch.isKneeDrop === true };
+      // QA是正（Phase4・A）: `wall`帯にも「区間内部にある最も近いfloorFace/ceilFace」の
+      // 付帯情報を載せる——**選択には使わない**（wallMatchが選ばれる規則自体は不変）が、
+      // `sectionEngine.js`の深度上限適用で`b.distMm`が上限超えのためこの帯自身が`open`へ
+      // 作り替えられたとき（`:342-344`）、その場で新規に`{kind:'open',z0,z1}`を作ると付帯情報が
+      // 引き継がれない——奥室のCHが自室と異なる図面で、手前の壁が上限超えの構成だと、線もアキ
+      // 縮小も出なくなる実害があった。ここで先に載せておけば、上限超え変換時に引き継ぐだけでよい。
+      const band = {
+        kind: 'wall', z0, z1, wall: wallMatch.wall, layerRole: wallMatch.layer.role,
+        distMm: wallMatch.distMm, isKneeDrop: wallMatch.isKneeDrop === true,
+        ...farFaceAnnotation(hits, z0, z1),
+      };
       // WP-E7 D1: このz区間(zm)が選ばれたwallMatchの開口z範囲のいずれかに含まれれば
       // openingPassThroughを付与する（描画は貫通させない=kindは'wall'のまま。§5.4）。
       if ((wallMatch.openRanges ?? []).some(r => zm > r.z0 - GAP_EPS && zm < r.z1 + GAP_EPS)) {
@@ -761,17 +823,20 @@ export function visibleBandsOf(hits, cut, opts = {}) {
       if (!owner || owner === baseInfo) {
         bands.push(slabBandOf(baseInfo, z0, z1));
       } else {
-        bands.push(isRealRoom(owner.room) ? slabBandOf(owner, z0, z1) : { kind: 'open', z0, z1 });
+        bands.push(isRealRoom(owner.room) ? slabBandOf(owner, z0, z1)
+          : { kind: 'open', z0, z1, ...farFaceAnnotation(hits, z0, z1) });
       }
       continue;
     }
 
-    bands.push({ kind: 'open', z0, z1 });
+    bands.push({ kind: 'open', z0, z1, ...farFaceAnnotation(hits, z0, z1) });
   }
 
   // 帯が1本も無い列は通常「候補ゼロ＝全域アキ」だが、**はり出し列では未探査で空になっただけ**
   // なので、アキを主張せず空のまま返す（面の外にアキのバツを出さない）。
-  if (bands.length === 0 && unexploredBelowZ == null) bands.push({ kind: 'open', z0: zLo, z1: zHi });
+  if (bands.length === 0 && unexploredBelowZ == null) {
+    bands.push({ kind: 'open', z0: zLo, z1: zHi, ...farFaceAnnotation(hits, zLo, zHi) });
+  }
   return mergeAdjacentZBands(bands, cut.baseFloorZ);
 }
 
@@ -789,6 +854,15 @@ function sameZBand(a, b) {
   if (a.kind !== b.kind) return false;
   switch (a.kind) {
     case 'wall':
+      // Phase4・QA是正2026-09: ここではfarFloorZ/farCeilZ/farDepthMmを**意図的に比較しない**
+      // ——'open'側（下記）と同じ理由で比較を足すと、同じ壁・同じ距離(distMm)の隣接z区間が
+      // floorFace/ceilFaceの付帯情報の僅かな違いだけで畳まれなくなり、本来1枚の壁の断面に
+      // 実在しない継ぎ目線が出る（本関数冒頭の「上端/下端の縁線を無条件に描く」ため、畳まれず
+      // 内部分割されたz区間の境界にもその縁線が重ねて出てしまう）。実機「5」（voidAbove・
+      // 多層帯）で、1枚の壁の断面線に本来1本のところ縦線3本（既存のCUT線と同位置にSILHOUETTE線
+      // が余分に2本）が出る回帰として発覚した。畳んだ結果どちらの付帯情報が残るかは
+      // `mergeAdjacentZBands`の注記を参照——比較しない代償として、畳まれた帯の**上側だけに
+      // あった**付帯情報は失われうる。
       return a.wall === b.wall && a.distMm === b.distMm && a.layerRole === b.layerRole
         && (a.openingPassThrough ?? false) === (b.openingPassThrough ?? false);
     case 'cut':
@@ -800,7 +874,13 @@ function sameZBand(a, b) {
     case 'slab':
       return a.ownerRoom === b.ownerRoom && a.floorZ === b.floorZ && a.ceilZ === b.ceilZ;
     case 'open':
-      return true;
+      // Phase4: farFloorZ/farCeilZ/farDepthMmが違えば別の帯（フラグoffでは両方常にundefined
+      // ＝この比較は常にtrueで従来どおり。WP-E7 D1のopeningPassThroughと同じ理由——比較しないと
+      // 「片方だけ水平面が見える」列が誤って統合され、その区間の一部でfarFloorZ/farCeilZが
+      // 取りこぼされる）。
+      return (a.farFloorZ ?? null) === (b.farFloorZ ?? null)
+        && (a.farCeilZ ?? null) === (b.farCeilZ ?? null)
+        && (a.farDepthMm ?? null) === (b.farDepthMm ?? null);
     default:
       return false;
   }
@@ -815,6 +895,10 @@ function mergeAdjacentZBands(bands, baseFloorZ) {
   for (const band of bands) {
     const last = merged[merged.length - 1];
     const atBaseFloorZ = baseFloorZ != null && Math.abs(band.z0 - baseFloorZ) < GAP_EPS;
+    // QA是正2026-09: 'wall'帯を畳むとき（sameZBandがfarFloorZ/farCeilZ/farDepthMmを比較しない
+    // ため）、残る付帯情報は常に`last`（zが下側＝先に積まれた帯）のもの——`band`（上側）にだけ
+    // 近い水平面があった場合はそちらが失われる（過少報告側。線が余分に出ることはない）。
+    // Phase 5でopenSpans注入をこの付帯情報へ一本化するときは、この片側切り捨てへの対応が要る。
     if (last && !atBaseFloorZ && Math.abs(last.z1 - band.z0) < GAP_EPS && sameZBand(last, band)) {
       last.z1 = band.z1;
     } else {

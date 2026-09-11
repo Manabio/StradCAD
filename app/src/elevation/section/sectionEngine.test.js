@@ -2,10 +2,11 @@
 // 完了条件: floorSegmentsが隙間なく面全幅・hiX>loX／ceilingProfile昇順。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Plane, PlanGraph, CenterLineType, Discipline } from '@core';
+import { Plane, PlanGraph, CenterLineType, Discipline, edgeKey } from '@core';
 import { generateRoomWallsFromOutline } from '../../finish/wallGeneration.js';
 import { makeProbeContext } from './sectionProbe.js';
-import { buildSectionFigure, mergeColumns } from './sectionEngine.js';
+import { buildSectionFigure, buildColumns, mergeColumns, splitOpenByFarFace } from './sectionEngine.js';
+import { SIGHTLINE_DEPTH_LIMIT_MM, HORIZONTAL_FACES_ENABLED, setHorizontalFacesEnabled } from '../elevationStyle.js';
 
 const CH = 2400;
 
@@ -88,6 +89,131 @@ test('【WP-E4】mergeColumns: bandsが完全一致する隣接列は1列に統�
   assert.equal(merged[0].x1, 1000);
   assert.equal(merged[1].x0, 1000);
   assert.equal(merged[1].x1, 1500);
+});
+
+// ================================================================
+// Phase 4: splitOpenByFarFace（水平面ヒットの深度上限適用・アキの範囲を縮める。設計§5.5）
+// ================================================================
+
+test('【Phase4・a】splitOpenByFarFace: 上限内のfarCeilZは区間を[z0,farCeilZ]の open と [farCeilZ,z1]の非描画(farVoid)へ2分割する', () => {
+  const band = { kind: 'open', z0: 800, z1: 3000, farFloorZ: null, farCeilZ: 2400, farDepthMm: 100 };
+  const parts = splitOpenByFarFace(band, 0); // nearestMm=0 → 100-0=100 < 800（上限内）
+  assert.equal(parts.length, 2);
+  assert.deepEqual(parts[0], { kind: 'open', z0: 800, z1: 2400, farFloorZ: null, farCeilZ: 2400, farDepthMm: 100 });
+  assert.deepEqual(parts[1], { kind: 'farVoid', z0: 2400, z1: 3000 });
+});
+
+test('【Phase4・b】splitOpenByFarFace: 深度上限"以上"なら付帯情報を落として従来どおり全域アキ（分割しない）', () => {
+  const farDepthMm = SIGHTLINE_DEPTH_LIMIT_MM; // ちょうど上限（>=なので上限超え扱い）
+  const band = { kind: 'open', z0: 800, z1: 3000, farFloorZ: null, farCeilZ: 2400, farDepthMm };
+  const parts = splitOpenByFarFace(band, 0);
+  assert.deepEqual(parts, [{ kind: 'open', z0: 800, z1: 3000 }],
+    '上限ちょうど(境界含む)は水平面を無かったことにし、付帯情報の無い単一open帯に戻すはず');
+});
+
+test('【Phase4】splitOpenByFarFace: farFloorZ/farCeilZが両方とも区間の内部にあれば[非描画,open,非描画]の3分割', () => {
+  const band = { kind: 'open', z0: 0, z1: 3000, farFloorZ: 500, farCeilZ: 2400, farDepthMm: 100 };
+  const parts = splitOpenByFarFace(band, 0);
+  assert.equal(parts.length, 3);
+  assert.deepEqual(parts.map(p => [p.kind, p.z0, p.z1]),
+    [['farVoid', 0, 500], ['open', 500, 2400], ['farVoid', 2400, 3000]]);
+});
+
+test('【Phase4・d相当】splitOpenByFarFace: farFloorZ/farCeilZが区間の境界そのもの（内部でない）なら分割せず1本のopenのまま', () => {
+  const band = { kind: 'open', z0: 0, z1: 1800, farFloorZ: undefined, farCeilZ: undefined, farDepthMm: undefined };
+  const parts = splitOpenByFarFace(band, 0);
+  assert.deepEqual(parts, [band], '付帯情報が無い（=境界扱いで付かなかった）帯はそのまま素通りするはず');
+});
+
+test('【Phase4・e相当】splitOpenByFarFace: farCeilZがnull（天井高が解決できない縮退）ならfarVoidは下側だけ・open上端は元のz1のまま', () => {
+  const band = { kind: 'open', z0: 800, z1: 3000, farFloorZ: 1500, farCeilZ: null, farDepthMm: 100 };
+  const parts = splitOpenByFarFace(band, 0);
+  assert.equal(parts.length, 2);
+  assert.deepEqual(parts[0], { kind: 'farVoid', z0: 800, z1: 1500 });
+  assert.deepEqual(parts[1], { kind: 'open', z0: 1500, z1: 3000, farFloorZ: 1500, farCeilZ: null, farDepthMm: 100 });
+});
+
+// ---- 失敗系 ----
+test('【失敗系・Phase4】splitOpenByFarFace: kind!=="open"やfarDepthMm欠落の帯はそのまま1件で返る（対象外は無変化）', () => {
+  assert.deepEqual(splitOpenByFarFace({ kind: 'wall', z0: 0, z1: 800, distMm: 57.5 }, 0),
+    [{ kind: 'wall', z0: 0, z1: 800, distMm: 57.5 }]);
+  const plainOpen = { kind: 'open', z0: 0, z1: 800 };
+  assert.deepEqual(splitOpenByFarFace(plainOpen, 0), [plainOpen]);
+});
+
+// QA是正C: nearestMmが非有限（この切断にwall帯が1枚も無い＝上限の基準点そのものが無い）ときは
+// 「上限を超えている」と同じ扱いにする（buildColumnsは`Number.isFinite(nearestMm) ?
+// nearestMm : -Infinity`をsplitOpenByFarFaceへ渡す——本テストはその-Infinity契約そのものを
+// 直接検証する。buildColumnsレベルでnearestMmを非有限にする実データ相当の幾何
+// 〈この切断のどの列にも'wall'帯が1枚も無い〉は、現行のフィクスチャ手段（矩形室＋
+// generateRoomWallsFromOutline）では壁の無い辺を作れないため構成できない——呼び出し側の
+// 配線（buildColumns内の三項演算子）はコードレビューで確認済み・本関数の契約はここで固定する）。
+test('【失敗系・QA是正C】splitOpenByFarFace: nearestMmが非有限(-Infinity)なら、farDepthMmが小さくても上限超え扱いになり付帯情報を落とす', () => {
+  const band = { kind: 'open', z0: 800, z1: 3000, farFloorZ: null, farCeilZ: 2400, farDepthMm: 57.5 };
+  // 有限なnearestMm(0)なら上限内（57.5-0=57.5<800）で分割されるはず、という前提を先に確認する。
+  assert.equal(splitOpenByFarFace(band, 0).length, 2, '前提: 有限なnearestMmなら上限内で分割されるはず');
+  const parts = splitOpenByFarFace(band, -Infinity);
+  assert.deepEqual(parts, [{ kind: 'open', z0: 800, z1: 3000 }],
+    '基準点が無い(-Infinity)なら上限超えと同じ扱いで、付帯情報の無い単一open帯に戻すはず');
+});
+
+// ================================================================
+// QA是正A: `wall`帯が深度上限超えで`open`へ作り替えられる経路（buildColumns内の
+// nearestSightlineDistMm比較）でも、farFloorZ/farCeilZ/farDepthMmが失われず引き継がれ、
+// buildColumnsの結果にfarVoid分割が出ることを**実データ相当の幾何**で確認する。
+// ================================================================
+//
+// フィクスチャ: 部屋A(0..4000,0..4000・天井3000)の南に腰壁(topHeight800)を挟んで部屋B
+// (天井2400)。腰壁面のcutをbandRoomBoundsで絞らずに探査すると、腰壁の上(z800..)の
+// 見えがかり壁の勝者は**部屋Bのさらに南（外周壁。距離4057.5mm）**になる——この壁自身の
+// z上限は「視線方向の所有Room＝部屋A」の天井(3000)まで解決される（sectionLayerStack.jsの
+// resolveSightlineTopZ）ため、**部屋B自身の天井(2400)より高い**。この壁は深度上限
+// （4057.5-57.5=4000>=800）を超えるため`open`へ作り替えられるが、部屋Bの天井(2400)は
+// その壁の帯の**内部**（800<2400<3000）にあり、かつ部屋Bの天井の見えがかり自体の深度は
+// **cellsAlongの段差歩き＝腰壁のすぐ向こう＝57.5mm**（壁自身の距離4057.5mmとは別物）で
+// 上限内——「壁は上限超え・その向こうの天井は上限内」という、QA是正Aが直す実例そのもの。
+function makeFarWallKneeFixture() {
+  const graph = makeGraph();
+  const roomA = makeRectRoom(graph, 0, 0, 4000, 4000, 'A');
+  roomA.setOverride('ceilingHeight', '3000');
+  const roomB = makeRectRoom(graph, 0, 4000, 4000, 8000, 'B');
+  roomB.setOverride('ceilingHeight', '2400');
+  const nearWall = graph.walls.find(w =>
+    !w.isVertical && w.axisCL.effectiveValue === 4000 && w.materialRange.hi === 4000);
+  graph.setKneeDropWall(
+    edgeKey(nearWall.axisCL.id, nearWall.clStart.id, nearWall.clEnd.id), { knee: { topHeight: 800 } });
+  return { graph, roomA, roomB, nearWall };
+}
+function kneeFaceCutForFarWallFixture(graph, nearWall) {
+  return {
+    seqNo: 'kneeFace',
+    line: { isVertical: false, axisValue: nearWall.materialRange.lo, lo: 0, hi: 4000 },
+    viewSign: 1, dirSign: 1,
+    layers: [{ graph, floorZMm: 0, role: 'self' }],
+    zRange: { loZ: 0, hiZ: 3000 }, baseFloorZ: 0,
+    // bandRoomBoundsは意図的に付けない——部屋Bのさらに南の外周壁が候補として通る必要がある。
+  };
+}
+
+test('【QA是正A】buildColumns: 深度上限超えの壁(distMm4057.5)がopenへ作り替えられても、その内部にある近いceilFace(部屋Bの天井2400・深度57.5)は失われず、open/farVoidへ分割される', () => {
+  const { graph, nearWall } = makeFarWallKneeFixture();
+  const cut = kneeFaceCutForFarWallFixture(graph, nearWall);
+  const probeCtx = makeProbeContext(cut.layers);
+
+  const prev = HORIZONTAL_FACES_ENABLED;
+  setHorizontalFacesEnabled(true);
+  try {
+    const columns = buildColumns(cut, probeCtx);
+    const midCol = columns.find(c => Math.abs(c.x0 - 57.5) < 1 && Math.abs(c.x1 - 3942.5) < 1);
+    assert.ok(midCol, '腰壁の面幅ぶんの列があるはず');
+    const openBand = midCol.bands.find(b => b.kind === 'open');
+    const farVoidBand = midCol.bands.find(b => b.kind === 'farVoid');
+    assert.ok(openBand, 'open帯（腰壁の上・部屋Bの天井まで）があるはず');
+    assert.equal(openBand.z0, 800); assert.equal(openBand.z1, 2400,
+      '上限内のfarCeilZ(2400)まで縮むはず（作り替え元のwall帯の元々のz1は3000だった）');
+    assert.ok(farVoidBand, 'farVoid帯（部屋Bの天井懐。z2400..3000）があるはず');
+    assert.equal(farVoidBand.z0, 2400); assert.equal(farVoidBand.z1, 3000);
+  } finally { setHorizontalFacesEnabled(prev); }
 });
 
 // ---- 失敗系 ----

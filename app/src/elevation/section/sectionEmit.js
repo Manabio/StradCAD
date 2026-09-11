@@ -841,6 +841,24 @@ export function emitColumns(columns, cut, emitCtx = {}) {
         if (!nextAlong) {
           prims.push(Object.assign(emitLine(cut, col.x1, band.z0, col.x1, band.z1, ElevationLineRole.CUT, { ceilZ }),{__o:'cutEdgeHi'}));
         }
+      } else if (band.kind === 'open' && (band.farFloorZ != null || band.farCeilZ != null)) {
+        // Phase4（水平面ヒットの見えがかり。既定offのHORIZONTAL_FACES_ENABLEDでのみfarFloorZ/
+        // farCeilZが付く——`sectionEngine.js`の`splitOpenByFarFace`が深度上限内のときだけ付与する。
+        // 設計§5.5「その z に見えがかりの水平線を描く」「線種は既存規則に従い、同じ深度の壁面と
+        // 同じ重み」: 重みは'wall'帯と同じ`sightRole`（深度→SILHOUETTE/DETAIL）の経路をそのまま使う。
+        // **FL・CHの見えがかりは描画しない**規則（'wall'帯と同じ`sectionLevelZs`/`atSectionLevel`
+        // ガード）をそのまま流用する——奥の部屋の床・天井がこの帯自身のFL・CHと同値なら（実機
+        // knee-drop-test「B」面: 奥室の床0・天井3000がA自身のbaseFloorZ/ceilZと同値）既存の
+        // 断面線と重なるため描かない（ユーザー受入基準の「Aの床線／天井線と重なる」＝dedupe）。
+        const sectionZs = sectionLevelZs(cut, col, col.ceilZ ?? ceilZ);
+        const atSectionLevel = z => sectionZs.some(f => Math.abs(z - f) < GAP_EPS);
+        const role = sightRole(band.farDepthMm);
+        if (band.farFloorZ != null && !atSectionLevel(band.farFloorZ) && !hiddenByCutWall(col, band.farFloorZ)) {
+          prims.push(emitLine(cut, col.x0, band.farFloorZ, col.x1, band.farFloorZ, role, { ceilZ }));
+        }
+        if (band.farCeilZ != null && !atSectionLevel(band.farCeilZ) && !hiddenByCutWall(col, band.farCeilZ)) {
+          prims.push(emitLine(cut, col.x0, band.farCeilZ, col.x1, band.farCeilZ, role, { ceilZ }));
+        }
       }
       // open/slabの帯自体はここでは描かない（AMBIGUITY F）。ただしslab→openの境界（＝above層の
       // 床の端）はSILHOUETTE水平線として描く（WP-E5b追加。§5.6「2FLの中線= above層の床スラブ端

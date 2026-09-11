@@ -93,6 +93,19 @@ export const DEFAULT_WALL_LESS_END_EXTEND_MM = 150; // 倍率決定用の1パス
 // （section/sectionEmit.js の nearestSightlineDistMm。線種の階調と同じ基準）。
 export const SIGHTLINE_DEPTH_LIMIT_MM = 800;
 
+// 展開図一般化Phase 4（`.claude/elevation-redesign.md` §5.5・ユーザー裁定2026-09-11「2」）:
+// 水平面ヒット（floorFace/ceilFace。section/sectionHits.jsがPhase3で候補として積むだけの、
+// 向こう側の部屋の床・天井）を、深度上限内なら見えがかり線として描き、アキの範囲をその面まで
+// 縮める機能のオン/オフ単一スイッチ。**既定はoff**——Phase4は「初めて出力が変わる」段階で、
+// diffを先にユーザーへ見せて裁定を仰ぐ設計上の要求（R2）があり、本番挙動を変えないため。
+// section/配下の複数箇所（sectionHits.js・sectionEngine.js）がここを直接参照する
+// （opts引数をappendBandCutContentまで通す案は、帯ビルダー4種・switchbackCuts等の呼び出し
+// 階層が深く変更範囲が大きいため見送り、既存の「elevationStyle.jsの定数＋ダンプ側で上書き」
+// 規約に合わせた——他の展開図定数と同じ単一情報源）。ダンプ側は`setHorizontalFacesEnabled`で
+// 上書きする（scripts/probe/dumpElevFigure.mjs `--horizontal-faces`）。
+export let HORIZONTAL_FACES_ENABLED = false;
+export function setHorizontalFacesEnabled(v) { HORIZONTAL_FACES_ENABLED = v; }
+
 // 上階の平面が自階の面の端より外へ続いているとき、その先まで探査・作図してよい量の上限(mm)
 // （ユーザー裁定2026-09「「6」D2: 2階Y2から3500には「21」の壁エッジが左側に見える」）。
 // 隅の取り合い＝端の直交壁の厚み＋偏芯を飲む上限で、これを超える食い違いはパネル幅を決め直す

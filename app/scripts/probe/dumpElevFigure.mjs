@@ -4,6 +4,11 @@
 // ——階段室は buildStairBand・吹抜けは buildVoidBand・上部吹抜けを持つ部屋は
 // buildRoomBandWithVoidAbove を通る。全部屋を buildRoomBand で作ると**実機が通らない経路**を
 // 比較してしまい、階段室（例: 11.stq 1階の「6」）の差分を取り逃がす。
+//
+// 使い方: node dumpElevFigure.mjs [outDir] [src.stq] [--horizontal-faces]
+//   --horizontal-faces … 展開図一般化Phase4のフラグ（elevationStyle.jsのHORIZONTAL_FACES_
+//   ENABLED。既定off）をダンプ中だけonにする。水平面ヒット（floorFace/ceilFace）の見えがかり線・
+//   アキの縮小を試すための上書き（`.claude/elevation-redesign.md`§5.5 R2）。
 import fs from 'node:fs';
 import path from 'node:path';
 import { RoomFeature } from '../../src/core.js';
@@ -16,9 +21,14 @@ import { roomBounds } from '../../src/finish/gridCells.js';
 import { floorHeightAbove, floorHeightBelow } from '../../src/finish/stair/stairDimensions.js';
 import { collectGridCLs } from '../../src/elevation/elevationPrimitives.js';
 import { withGraphReadScope } from '../../src/graphReadScope.js';
+import { setHorizontalFacesEnabled } from '../../src/elevation/elevationStyle.js';
 
-const outDir = process.argv[2] ?? path.join(import.meta.dirname, 'golden');
-const src = process.argv[3] ?? 'D:/tatsuya/Download/11.stq';
+const rawArgs = process.argv.slice(2);
+const horizontalFaces = rawArgs.includes('--horizontal-faces');
+const positional = rawArgs.filter(a => a !== '--horizontal-faces');
+const outDir = positional[0] ?? path.join(import.meta.dirname, 'golden');
+const src = positional[1] ?? 'D:/tatsuya/Download/11.stq';
+setHorizontalFacesEnabled(horizontalFaces);
 fs.mkdirSync(outDir, { recursive: true });
 const r = (v) => (typeof v === 'number' ? Math.round(v * 1000) / 1000 : v);
 

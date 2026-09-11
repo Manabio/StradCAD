@@ -21,7 +21,7 @@
  *   - cut.stairCutは「事前計算済みのstairContribution結果」を直接指す想定（sectionEngine.js
  *     自身はfinish/stair側の詳細を知らない——第3層との結合点はこの1箇所に閉じる）。
  */
-import { GAP_EPS_MM as GAP_EPS, SIGHTLINE_DEPTH_LIMIT_MM } from '../elevationStyle.js';
+import { GAP_EPS_MM as GAP_EPS, SIGHTLINE_DEPTH_LIMIT_MM, HORIZONTAL_FACES_ENABLED } from '../elevationStyle.js';
 import { localXOf, worldOf } from './sectionTypes.js';
 import { collectCutBreaks, probeColumn, upperFloorZAt } from './sectionProbe.js';
 import { faceFromCut } from './sectionFace.js';
@@ -43,7 +43,14 @@ function bandsEqual(a, b) {
       && (band.wall ?? null) === (other.wall ?? null)
       && (band.distMm ?? null) === (other.distMm ?? null)
       && (band.layerRole ?? null) === (other.layerRole ?? null)
-      && (band.openingPassThrough ?? false) === (other.openingPassThrough ?? false);
+      && (band.openingPassThrough ?? false) === (other.openingPassThrough ?? false)
+      // Phase4（水平面ヒット。既定offなら両側常にundefined＝比較は常にtrueで従来どおり）:
+      // 比較しないと「片方の列だけ深度上限内の奥の床・天井が見える」隣接列が誤って1列へ統合され、
+      // その列の実際のx範囲の一部でfarFloorZ/farCeilZが取りこぼされる（openingPassThroughと同じ
+      // 理由。WP-E7 D1参照）。
+      && (band.farFloorZ ?? null) === (other.farFloorZ ?? null)
+      && (band.farCeilZ ?? null) === (other.farCeilZ ?? null)
+      && (band.farDepthMm ?? null) === (other.farDepthMm ?? null);
   });
 }
 
@@ -265,6 +272,35 @@ function ceilingProfileFromColumns(columns, cut, face) {
  *   floorSpanX:object|undefined}}
  */
 /**
+ * `open`帯の付帯情報（`sectionHits.js`の`farFaceAnnotation`）へ深度上限を適用し、アキの範囲を
+ * floorFace/ceilFaceのzまで縮める（Phase4。設計§5.5・§5.6意図的差分1・2）。
+ *
+ * 上限**以上**なら水平面は無かったことにする（付帯情報を落として従来どおり全域アキ。意図的差分2
+ * 「既定は壁と同じ800を掛ける」）。上限内なら区間を最大3分割する:
+ * `[非描画(farVoid)?, open(floorZ..ceilZ), 非描画(farVoid)?]`——floorZ/ceilZが区間の内部に
+ * 無ければ（境界に一致・またはそもそも無い）その側は分割しない。`farVoid`は**非描画**
+ * （`emitColumns`・`emitOpenGapMarks`のどちらも`'open'`しか見ないため、このkindは自動的に
+ * 「線も描かずアキにもしない」——floorFace/ceilFaceより向こう側《天井懐・床構造》の意味）。
+ * @param {import('./sectionTypes.js').ZBand} band
+ * @param {number} nearestMm - この切断で最も手前の壁面までの距離（壁の深度上限と同じ基準点）
+ * @returns {import('./sectionTypes.js').ZBand[]}
+ */
+export function splitOpenByFarFace(band, nearestMm) {
+  if (band.kind !== 'open' || !Number.isFinite(band.farDepthMm)) return [band];
+  if (band.farDepthMm - nearestMm >= SIGHTLINE_DEPTH_LIMIT_MM) {
+    return [{ kind: 'open', z0: band.z0, z1: band.z1 }]; // 上限以上: 水平面は描かず従来どおり全域アキ
+  }
+  const { z0, z1, farFloorZ, farCeilZ, farDepthMm } = band;
+  const lo = (farFloorZ != null && farFloorZ > z0 + GAP_EPS && farFloorZ < z1 - GAP_EPS) ? farFloorZ : z0;
+  const hi = (farCeilZ != null && farCeilZ > z0 + GAP_EPS && farCeilZ < z1 - GAP_EPS) ? farCeilZ : z1;
+  const parts = [];
+  if (lo > z0 + GAP_EPS) parts.push({ kind: 'farVoid', z0, z1: lo });
+  parts.push({ kind: 'open', z0: lo, z1: hi, farFloorZ, farCeilZ, farDepthMm });
+  if (hi < z1 - GAP_EPS) parts.push({ kind: 'farVoid', z0: hi, z1 });
+  return parts;
+}
+
+/**
  * cut → SectionColumn[]（collectCutBreaks→probeColumn×N→mergeColumns。§4「内部フロー」の
  * 前半部分）。buildSectionFigureの内部処理を切り出したもの——face/floorSegments/ceilingProfile
  * を必要とせずcontentだけを組み立てたい呼び出し側（elevationStairSequence.js等）が
@@ -303,9 +339,32 @@ export function buildColumns(cut, probeCtx) {
   const nearestMm = nearestSightlineDistMm(rawColumns);
   if (Number.isFinite(nearestMm)) {
     for (const col of rawColumns) {
+      // QA是正（Phase4・A）: `wall`→`open`への作り替えでも、`sectionHits.js`が`wall`帯へ
+      // 既に載せていたfarFloorZ/farCeilZ/farDepthMm（区間内部にある最も近いfloorFace/ceilFace）を
+      // 引き継ぐ——ここで`{kind:'open',z0,z1}`だけを新規生成すると、奥室のCHが自室と異なる図面で
+      // 「手前の壁は深度上限超え・でもその向こうの床天井は上限内」という構成の線・アキ縮小が
+      // 丸ごと消える（この帯はそのままだと`splitOpenByFarFace`の対象外になってしまうため）。
       col.bands = col.bands.map(b => (b.kind === 'wall' && Number.isFinite(b.distMm)
         && b.distMm - nearestMm >= SIGHTLINE_DEPTH_LIMIT_MM)
-        ? { kind: 'open', z0: b.z0, z1: b.z1 } : b);
+        ? { kind: 'open', z0: b.z0, z1: b.z1, farFloorZ: b.farFloorZ, farCeilZ: b.farCeilZ, farDepthMm: b.farDepthMm }
+        : b);
+    }
+  }
+  // Phase4（水平面ヒットの深度上限適用。`.claude/elevation-redesign.md`§5.5・ユーザー裁定
+  // 2026-09-11「2」）: 壁と**同じ場所・同じ基準**（nearestMm・SIGHTLINE_DEPTH_LIMIT_MM）で
+  // floorFace/ceilFaceの深度上限を掛ける。既定offのHORIZONTAL_FACES_ENABLEDでのみ実行——
+  // 出力不変（Phase3までの契約）を保つ。
+  // QA是正（Phase4・C）: nearestMmが非有限（この切断にwall帯が1枚も無い＝上限の基準点が
+  // そもそも無い）ときは、壁の深度上限適用自体が丸ごとスキップされる（上のif）のに、
+  // ここだけ素通しすると`emitColumns`がfarFloorZ/farCeilZだけを見て無条件に水平線を描いて
+  // しまう——「基準が無いので上限を掛けられない」は「上限を超えている」と同じ扱いにする
+  // のが安全側（壁と対称）。`splitOpenByFarFace`へ`-Infinity`を渡すと、有限なfarDepthMmは
+  // 必ず`farDepthMm-(-Infinity)=+Infinity>=上限`になり「上限以上」分岐（付帯情報を落として
+  // 従来どおり全域アキ）へ入る——新しい特別扱いを増やさずに済む。
+  if (HORIZONTAL_FACES_ENABLED) {
+    const limitBasisMm = Number.isFinite(nearestMm) ? nearestMm : -Infinity;
+    for (const col of rawColumns) {
+      col.bands = col.bands.flatMap(b => splitOpenByFarFace(b, limitBasisMm));
     }
   }
   // 可視領域の判定・打ち切りは**全列を揃えてから**行い、判定は必ず**打ち切り前の実体**で行う

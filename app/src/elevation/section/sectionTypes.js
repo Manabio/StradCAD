@@ -52,14 +52,23 @@ import { GAP_EPS_MM as GAP_EPS } from '../elevationStyle.js';
 
 /**
  * @typedef {{
- *   kind: 'cut'|'wall'|'open'|'slab',
+ *   kind: 'cut'|'wall'|'open'|'slab'|'farVoid',
  *   z0:number, z1:number,
  *   wall?:object, layerRole?:string, distMm?:number, ownerRoom?:object,
  *   floorZ?:number, ceilZ?:number, thicknessMm?:number,
  *   nearEdgeOpen?:boolean, farEdgeOpen?:boolean,
  *   openingPassThrough?:boolean,
+ *   farFloorZ?:number|null, farCeilZ?:number|null, farDepthMm?:number,
  * }} ZBand
  *   slab=床スラブ・天井懐（今回は非描画）。z0<z1（絶対z）。
+ *   farVoid（Phase4。`elevationStyle.js`の`HORIZONTAL_FACES_ENABLED`が既定offのため通常は
+ *   出現しない）＝floorFace/ceilFaceより向こう側（向こうの部屋の天井懐・床構造）の非描画区間。
+ *   slabと同じ「非描画」だが実体の所有者情報（ownerRoom/floorZ/ceilZ）を持たないため別kindにした
+ *   （`sectionEngine.js`の`splitOpenByFarFace`が生成。`emitColumns`/`emitOpenGapMarks`はどちらも
+ *   `'open'`しか見ないため、このkindは自動的に「線を描かずアキにもしない」）。
+ *   `open`のfarFloorZ/farCeilZ/farDepthMm（Phase4）＝`sectionHits.js`の`visibleBandsOf`が
+ *   付帯情報として載せる「上限内の最も近いfloorFace/ceilFaceのzと深度」（`splitOpenByFarFace`の
+ *   入力）。フラグoffでは常にundefined。
  */
 
 /**

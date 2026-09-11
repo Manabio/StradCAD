@@ -1323,6 +1323,32 @@ room変化点で区切った区間を近い順に返す）を追加。`probeColu
 （`SIGHTLINE_DEPTH_LIMIT_MM`）を適用し実際の厚み・深度を持たせて初めて畳み込まれ描画に使われる。
 詳細は`.claude/elevation-redesign.md`参照。
 
+**Phase 4**（`elevationStyle.js`の`HORIZONTAL_FACES_ENABLED`。**既定off**——本番挙動は不変のまま。
+理由はR2「Phase4の差分は予想より大きい可能性があり、diffを先に見せてユーザー裁定する」ため）:
+`visibleBandsOf`が`open`帯（`wall`帯が深度上限超えで`open`へ作り替えられたものも含む——QA是正で
+`wall`帯自身にも同じ付帯情報を持たせ、作り替え時に引き継ぐ）へ**区間の内部にある**最も近い
+floorFace/ceilFaceを`farFloorZ`/`farCeilZ`/`farDepthMm`として付帯情報化し（深度上限そのものは
+ここでは適用しない）、`sectionEngine.js`の`splitOpenByFarFace`が壁と同じ基準（その切断で最も
+手前の壁面からの距離・`SIGHTLINE_DEPTH_LIMIT_MM`=800。基準点が無い＝wall帯が1枚も無い切断では
+上限超えと同じ扱い）で上限を適用する。上限内なら区間を`[非描画(farVoid)?, open(floorZ..ceilZ),
+非描画(farVoid)?]`へ分割し、アキの範囲をfloorZ/ceilZまで縮める。`farVoid`（floorFace/ceilFaceより
+向こう側＝天井懐・床構造）は非描画——`emitColumns`/`emitOpenGapMarks`はどちらも`'open'`しか見ないため
+自動的に線もアキも出ない。見えがかり線は`sightRole`（壁と同じ深度→重みの経路）で線種を決め、自身の
+FL・CHと同値なら（`sectionLevelZs`/`atSectionLevel`）既存の断面線と重なるため描かない。奥の壁の
+建具姿図は描かない（floorFace/ceilFaceに建具情報を一切持たせていない）。ダンプは
+`dumpElevFigure.mjs --horizontal-faces`で上書きできる。
+
+**裁定待ち（QA是正2026-09）**: アキの下端の既存確定裁定（`:295-296`「下端は**遠側床が帯の床より
+高いときだけ**そこまで持ち上げ、それ以外は探査が見つけた床のまま」。実装は`sectionEmit.js:1312`
+`farFloorZ != null && Math.abs(farFloorZ) > GAP_EPS ? farFloorZ : z`＝`cut.openSpans`のfar値が
+帯の床と**同値(0)**なら探査値のまま・**異なる**ときだけ持ち上げる）に対し、Phase 4は
+「`open`区間の**内部**にfloorFaceがあれば常に（同値でも）縮める」——判定基準が違う。この差で
+13.stq/11.stq「10」D1面（小上がり10'（FL−50）から部屋10（FL0）を見る面）のアキ下端が
+**旧z=−50（バツが遠側床線を突き抜ける。`:307`の確定値）→新z=0（床線で止まる）**へ変わる（フラグon時のみ）。
+どちらを採るかは未裁定。**Phase4のほうを採る場合は`:295-296`の文言と`sectionEmit.js:1312`の条件を
+同時に揃えること**——片方だけ変えるとPhase 5（`openSpans`注入を探査の答えへ差し替え）のゲート
+「diff空（一致しなければPhase4が誤り＝検算）」が食い違って落ちる。
+
 ## 2.5D立体の加算レイヤ（全展開図共通。`elevationSolids.js`。追加仕様2026-08）
 「2.5D展開を階段・吹抜けだけでなく全ての展開図へ」への回答は、**`buildFaceFigure`を断面エンジン
 （`section/sectionEngine.js`）へ置き換えることではなく、階段帯で確立済みの「純粋な加算レイヤ」

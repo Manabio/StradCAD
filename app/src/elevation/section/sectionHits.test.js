@@ -17,6 +17,7 @@ import { Plane, PlanGraph, CenterLineType, Discipline, edgeKey, OpeningCategory 
 import { generateRoomWallsFromOutline } from '../../finish/wallGeneration.js';
 import { makeProbeContext, probeColumn } from './sectionProbe.js';
 import { probeColumnHits, visibleBandsOf } from './sectionHits.js';
+import { HORIZONTAL_FACES_ENABLED, setHorizontalFacesEnabled } from '../elevationStyle.js';
 
 const CH = 2400; // DEFAULT_ROOM_CEILING_HEIGHT（core/constants.js）明示指定なしの既定値
 
@@ -462,3 +463,142 @@ test('【Phase3・出力不変】visibleBandsOf: floorFace/ceilFace/slabFaceヒ�
 // （`cut.viewSign === -1 ? -1 : 1` → `cut.viewSign === -1 ? 1 : -1`）と、腰壁の先の
 // floorFace/ceilFaceが逆向き（部屋Aの内側）を探査してしまい、上の
 // 「腰壁の...深度昇順で並ぶ」テストが赤くなることを確認する。
+
+// ================================================================
+// (6) Phase 4: `open`帯へのfarFloorZ/farCeilZ/farDepthMm付帯情報（HORIZONTAL_FACES_ENABLED）
+// ================================================================
+// `visibleBandsOf`はここまで（深度上限の適用・アキの縮小）は行わない——付帯情報を載せるだけ
+// （sectionEngine.jsの`splitOpenByFarFace`が上限適用・縮小を担当。テストはsectionEngine.test.js側）。
+//
+// `bandRoomBounds`（部屋Aの包絡矩形。本番は`appendBandCutContent`が設定する`withinViewRoom`の
+// 入力）を明示する——省略すると、部屋Bのさらに奥（外周壁。距離約4057.5mm）が見えがかり壁の候補
+// として通ってしまい、部屋BのfloorFace/ceilFaceより優先して選ばれる（本番でも同じ壁は`hits`には
+// 残るが、`bandRoomBounds`で「部屋Aの外」として除外されている。既存の【Phase3】テストは
+// `bandRoomBounds`を付けずに候補収集そのものを確認しているため、この差はそちら側の設計）。
+// 部屋Aの天井高も3000へ上書きする（本番knee-drop-test.stqと同じ。既定の2400のままだと部屋A自身の
+// 天井が部屋Bの天井2400とたまたま同じ高さになり、「区間が縮むのはPhase4のコードのおかげ」と
+// 「区間はもともと2400までしか無かった」を見分けられない）。
+const roomABounds = { x1: 0, x2: 4000, y1: 0, y2: 4000 };
+
+test('【Phase4・a】visibleBandsOf: フラグonなら腰壁面のopen帯へ部屋BのfarCeilZ(2400)が付く（floorは範囲外でnull）', () => {
+  const { graph, roomA, nearWall } = makeKneeWallFixture();
+  roomA.setOverride('ceilingHeight', '3000');
+  const cut = { ...kneeFaceCut(graph, nearWall), bandRoomBounds: roomABounds };
+  const probeCtx = makeProbeContext(cut.layers);
+  const { hits, layerStack, unexploredBelowZ } = probeColumnHits(cut, 2000, probeCtx);
+
+  const prev = HORIZONTAL_FACES_ENABLED;
+  setHorizontalFacesEnabled(true);
+  try {
+    const bands = visibleBandsOf(hits, cut, { layerStack, unexploredBelowZ });
+    const openBand = bands.find(b => b.kind === 'open');
+    assert.ok(openBand, 'open帯があるはず（腰壁の上、z800..3000＝部屋A自身の天井まで）');
+    assert.equal(openBand.z0, 800); assert.equal(openBand.z1, 3000);
+    assert.equal(openBand.farCeilZ, 2400, '部屋Bの天井2400は区間[800,3000]の内部にあるので付くはず');
+    assert.equal(openBand.farFloorZ, null, '部屋Bの床0は区間[800,3000]の外（下端未満）なのでnullのはず');
+    assert.equal(openBand.farDepthMm, 57.5, '腰壁自身と同じ距離（境界CL上のため）のはず');
+  } finally { setHorizontalFacesEnabled(prev); }
+});
+
+test('【Phase4・c・フラグoff】visibleBandsOf: HORIZONTAL_FACES_ENABLEDがfalseならopen帯にfarFloorZ/farCeilZ/farDepthMmが一切付かない（出力完全不変）', () => {
+  const { graph, roomA, nearWall } = makeKneeWallFixture();
+  roomA.setOverride('ceilingHeight', '3000');
+  const cut = { ...kneeFaceCut(graph, nearWall), bandRoomBounds: roomABounds };
+  const probeCtx = makeProbeContext(cut.layers);
+  const { hits, layerStack, unexploredBelowZ } = probeColumnHits(cut, 2000, probeCtx);
+
+  const bands = visibleBandsOf(hits, cut, { layerStack, unexploredBelowZ });
+  const openBand = bands.find(b => b.kind === 'open');
+  assert.ok(openBand);
+  assert.equal(openBand.farFloorZ, undefined);
+  assert.equal(openBand.farCeilZ, undefined);
+  assert.equal(openBand.farDepthMm, undefined);
+  assert.deepEqual(bands, probeColumn(cut, 2000, probeCtx), 'probeColumnとも完全一致するはず');
+});
+
+test('【Phase4・d】visibleBandsOf: 垂れ壁面のopen帯(z0..1800)は部屋Cの床(0)も天井(3000)も区間の境界そのものなので付帯情報が付かない（縮まない＝ユーザー受入基準どおり）', () => {
+  const { graph, nearWall } = makeDropWallFixture();
+  const cut = { ...kneeFaceCut(graph, nearWall), seqNo: 'dropFace', bandRoomBounds: roomABounds };
+  const probeCtx = makeProbeContext(cut.layers);
+  const { hits, layerStack, unexploredBelowZ } = probeColumnHits(cut, 2000, probeCtx);
+
+  const prev = HORIZONTAL_FACES_ENABLED;
+  setHorizontalFacesEnabled(true);
+  try {
+    const bands = visibleBandsOf(hits, cut, { layerStack, unexploredBelowZ });
+    const openBand = bands.find(b => b.kind === 'open' && b.z0 === 0);
+    // 垂れ壁の実在範囲はz1800..3000（下端 = 天井3000-bottomHeight1200。kneeDropWall.jsの規約）
+    // のため、垂れ壁の下のアキはz0..1800——ユーザー受入基準「Cの床線(0)と垂れ壁下端のあいだが
+    // アキ」の区間そのもの。
+    assert.ok(openBand, '垂れ壁下端(1800)未満のopen帯(z0..1800)があるはず');
+    assert.equal(openBand.z1, 1800);
+    assert.equal(openBand.farFloorZ, undefined, '部屋Cの床0は区間の下端(z0=0)ちょうどなので付帯情報は付かない');
+    assert.equal(openBand.farCeilZ, undefined, '部屋Cの天井3000は区間の上端(z1=1800)より上（垂れ壁の中）なので付かない');
+  } finally { setHorizontalFacesEnabled(prev); }
+});
+
+// ---- 失敗系 ----
+test('【失敗系・Phase4・e】visibleBandsOf: floorFaceヒットはあってもceilFaceヒットが無い（天井高が解決できない縮退。設計§5.7）なら、open帯にfarFloorZだけ付きfarCeilZは付かない', () => {
+  // 実際にceilZ:nullな部屋を作る（getFinishInfo例外の再現）代わりに、addHorizontalFaceHitsが
+  // 生成する形（floorFace/ceilFaceは同じ深さの独立したヒット）をそのまま使い、ceilFaceヒットだけを
+  // 取り除く——「セグメントのceilZがnullでceilFaceが積まれなかった」のと同じ入力形になる
+  // （sectionHits.jsのaddHorizontalFaceHits「if (seg.ceilZ != null)」ガード参照）。
+  // 部屋BのfloorFace(z=0)は腰壁面のアキ区間[800,3000]の外（範囲外）で使えないため、区間の内部に
+  // 床が来る構成が要る——ここでは合成のfloorFaceヒット（z=1500、部屋Bのfloorヒットの複製で深さも
+  // 同じ）を1件加える。
+  const { graph, roomA, nearWall } = makeKneeWallFixture();
+  roomA.setOverride('ceilingHeight', '3000');
+  const cut = { ...kneeFaceCut(graph, nearWall), bandRoomBounds: roomABounds };
+  const probeCtx = makeProbeContext(cut.layers);
+  const { hits, layerStack, unexploredBelowZ } = probeColumnHits(cut, 2000, probeCtx);
+  const roomBFloor = hits.find(h => h.kind === 'floorFace');
+  assert.ok(roomBFloor, '前提: 部屋BのfloorFaceヒットがあるはず');
+
+  const syntheticHits = hits
+    .filter(h => h.kind !== 'ceilFace' && h.kind !== 'floorFace')
+    .concat([{ ...roomBFloor, z0: 1500, z1: 1500 }]); // 区間[800,3000]の内部へ床だけ合成
+
+  const prev = HORIZONTAL_FACES_ENABLED;
+  setHorizontalFacesEnabled(true);
+  try {
+    const bands = visibleBandsOf(syntheticHits, cut, { layerStack, unexploredBelowZ });
+    const openBand = bands.find(b => b.kind === 'open');
+    assert.ok(openBand);
+    assert.equal(openBand.farFloorZ, 1500, 'floorFaceヒットは区間内部にあるので付くはず（床線だけの縮退）');
+    assert.equal(openBand.farCeilZ, null, 'ceilFaceヒットが無ければfarCeilZはnull（天井線は出ない）のはず');
+  } finally { setHorizontalFacesEnabled(prev); }
+});
+
+// QA是正2026-09: sameZBandの'wall'ケースはfarFloorZ/farCeilZ/farDepthMmを比較しない
+// （実機「5」voidAbove縦線3本の回帰対応）。回帰テスト——同じ壁・同じ距離(distMm)の隣接z区間は、
+// far付帯情報（floorFace/ceilFaceの有無・値）が違っても**1本に畳まれる**ことを固定する。
+// hitsは手書き（同じ壁を指す2件のwallFaceヒットをz0..1200/1200..2400へ人為的に分け、
+// 下側の区間[0,1200]の内部にだけfloorFaceヒット(z=600)を1件合成する）——sameZBandへ
+// far比較を戻す変異（'wall'ケースへfarFloorZ等の比較を足す）で本テストが赤化することを確認済み。
+test('【回帰・QA是正2026-09】visibleBandsOf: 同じ壁・同じ距離の隣接wall帯は、far付帯（floorFace/ceilFaceの有無）が違っても1本のwall帯に畳まれる', () => {
+  const { graph, nearWall } = makeKneeWallFixture();
+  const cut = { ...kneeFaceCut(graph, nearWall), bandRoomBounds: roomABounds };
+  const probeCtx = makeProbeContext(cut.layers);
+  const { layerStack, unexploredBelowZ } = probeColumnHits(cut, 2000, probeCtx);
+  const layer = cut.layers[0];
+
+  const syntheticHits = [
+    { kind: 'wallFace', wall: nearWall, layer, distMm: 57.5, z0: 0, z1: 1200, isKneeDrop: false },
+    { kind: 'wallFace', wall: nearWall, layer, distMm: 57.5, z0: 1200, z1: 2400, isKneeDrop: false },
+    // 下側の区間[0,1200]の内部（z=600）にだけfloorFaceを置く——上側[1200,2400]には無い
+    // （item③「上側だけにあった付帯情報は失われる」の前提そのもの）。
+    { kind: 'floorFace', layer, room: null, distMm: 57.5, z0: 600, z1: 600 },
+  ];
+
+  const prev = HORIZONTAL_FACES_ENABLED;
+  setHorizontalFacesEnabled(true);
+  try {
+    const bands = visibleBandsOf(syntheticHits, cut, { layerStack, unexploredBelowZ });
+    const wallBands = bands.filter(b => b.kind === 'wall');
+    assert.equal(wallBands.length, 1, '2本のwallFaceヒット（同じ壁・同じ距離）由来のwall帯は畳まれて1本のはず');
+    assert.equal(wallBands[0].z0, 0); assert.equal(wallBands[0].z1, 2400,
+      '畳まれた帯はz0..2400（元の2区間の和）のはず');
+    assert.equal(wallBands[0].farFloorZ, 600,
+      '畳んだ結果、残るfar付帯は下側(z0が小さい方)の帯のもの——mergeAdjacentZBandsの注記どおり');
+  } finally { setHorizontalFacesEnabled(prev); }
+});
