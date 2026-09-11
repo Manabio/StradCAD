@@ -11,12 +11,16 @@
  * このファイルへ集約し、`sectionProbe.js`側はここから import して使う（一方向依存。循環import
  * を避けるため）。
  *
- * kind の語彙は `cut | cutAlong | wallFace | slab | floorFace | ceilFace | slabFace`。
+ * kind の語彙は `cut | cutAlong | wallFace | slab | floorFace | ceilFace | slabFace | stairFace`。
  * floorFace/ceilFace/slabFace（Phase 3。設計§5.3(b)）は視線方向の奥にある床・天井・躯体を
  * 表す水平面ヒットで、`probeColumnHits`が候補として積むが、**`visibleBandsOf`は選択対象から
  * 除外する**（出力完全不変。Phase 4で深度上限を適用して初めて描画に使う——`.claude/
  * elevation-model.md`「空間セル索引」節）。openingFaceは無い——開口のpass-through情報は従来どおり
  * 各ヒットの`openRanges`に添えるだけで、独立したヒット種別にはしない。
+ * stairFace（Phase 6b-1。設計§5.3(b)）は階段の占有形状（`sectionStair.js`の`stairFaceHits`。
+ * 段板・踊り場桁枠・内側ささらの見えがかり）を表すヒットで、`cut.stairCut`（階段帯以外は常に
+ * null）があるときだけ積む。floorFace/ceilFace/slabFaceと同様に`visibleBandsOf`は選択対象から
+ * 除外する（載せるだけ。選択への参加は6b-2）。
  *
  * **`SurfaceHit.distMm`の意味はkindによって違う**（QA指摘②）: cut/cutAlongは常に`0`（切断面上の
  * 実体という定義そのもの）。wallFace/floorFace/ceilFaceは**測定値**（切断面からの実距離。
@@ -24,6 +28,15 @@
  * （`addHorizontalFaceHits`。自室＝距離0の位置から見た自室自身の床天井という定義上、常に0を
  * 置いているだけで、実際の奥行きを表さない）——`slabFace`は`visibleBandsOf`の選択に参加しない
  * ため実害は無いが、Phase 4以降でdistMmをそのまま奥行きとして読む処理を書くときは要注意。
+ * `stairFace`の`distMm`（=`depthNearMm`）は**cut/cutAlongの0とも`slabFace`の番兵0とも違う3つ目の
+ * 意味を持つ**（QA是正2026-09・要件C）——実際に切断平面へ**接触している**実体としての0で、
+ * `atCutPlane:true`がその事実を明示する。区別の要点: cut/cutAlongの0＝「切断線そのものに
+ * 存在する壁」という定義値／`slabFace`の0＝「自室の位置は距離ゼロ」という定義上の置き値（番兵。
+ * 実際の奥行きは無関係）／`stairFace`の0（`atCutPlane`時）＝「その実体（段板・内側ささら）の
+ * 手前端が実測で切断平面と一致する」という**測定結果**（switchbackCutsのseq1/3の幾何的必然。
+ * `sectionStair.js`の`stairFaceHits`コメント参照）。`stairFace`は**奥行きの範囲**
+ * （`depthNearMm`〜`depthFarMm`）も持つ——floorFace/ceilFace/wallFaceのような単一のスカラー
+ * 距離では表せない「手前から奥まで実体が続く」物体（flight自体の走り長さぶん）を表すため。
  * 小文字の`slab`（既存）は「その区間を塞ぐwall/cut/cutAlongが1つも無いとき、層スタックの
  * 床天井から静的に導ける躯体・天井懐」の**選択結果側**（`ZBand.kind`）の語で、候補収集
  * （壁の走査）では作れないため`visibleBandsOf`のフォールバックとして残る——`slabFace`（新規の
@@ -56,6 +69,8 @@ import { kneeDropRecordsAtPointOnWall } from '../../finish/kneeDropWall.js';
 import { effectiveHeight } from '../../openings/openingNumbering.js';
 import { GAP_EPS_MM as GAP_EPS, PROBE_EPS_MM, HORIZONTAL_FACES_ENABLED } from '../elevationStyle.js';
 import { graphList } from '../../graphReadScope.js';
+import { localXOf } from './sectionTypes.js';
+import { stairFaceHits } from './sectionStair.js';
 import {
   isRealRoom, orderLayerStack, baseLayerOf, layerOwningZ,
   compareLayerPriority, resolveSightlineTopZ,
@@ -591,6 +606,40 @@ function addHorizontalFaceHits(cut, worldMid, info, probeCtx, hits) {
 }
 
 /**
+ * 階段の占有形状（`sectionStair.js`の`stairFaceHits`。展開図一般化Phase 6b-1。設計§5.3(b)）を
+ * 候補へ積む。`cut.stairCut`が無い（階段帯以外の帯すべて）ときは何もしない——階段以外の帯の
+ * 出力には一切影響しない。
+ *
+ * `stairFaceHits(cut.stairCut, cut)`はローカルx範囲（`sectionTypes.js`の`localXOf`と同じ座標系）
+ * で占有矩形・占有線を返すため、`worldMid`を同じ変換へ通してから領域判定する
+ * （`GAP_EPS`は境界ちょうどの列を拾うための許容差。他のヒット種別のx/spanクランプと同水準）。
+ * layerは自階（`role:'self'`）を単一情報源にする——階段の`baseZ`・`floorHeight`は自階基準の
+ * 絶対z（stairContribution参照）で、上階レイヤーには対応する概念が無い。
+ * @param {import('./sectionTypes.js').SectionCut} cut
+ * @param {number} worldMid
+ * @param {Array} hits - 追記先
+ */
+function addStairFaceHits(cut, worldMid, hits) {
+  // このガードは`stairFaceHits`自身の`if (!contribution || !cut?.line) return [];`と二重——
+  // 通常帯（cut.stairCutが無い）に積まない保証は`stairFaceHits`のnullチェック側が持つ。
+  // ここでの早期returnは無駄な関数呼び出しを避けるための最適化に過ぎない（QA指摘D）。
+  if (!cut.stairCut) return;
+  const layer = (cut.layers ?? []).find(l => l.role === 'self') ?? cut.layers?.[0] ?? null;
+  const localX = localXOf(cut, worldMid);
+  for (const face of stairFaceHits(cut.stairCut, cut)) {
+    if (localX < face.xLo - GAP_EPS || localX > face.xHi + GAP_EPS) continue;
+    hits.push({
+      kind: 'stairFace', layer, side: face.side, part: face.part,
+      // distMmはdepthNearMmと同値にする——compareHitDepth（下記）が全kind共通でdistMmを
+      // ソートキーに使うため、SurfaceHit.distMmは常に「最も手前」の深度を指す規約を保つ
+      // （QA是正2026-09・要件C）。
+      distMm: face.depthNearMm, depthNearMm: face.depthNearMm, depthFarMm: face.depthFarMm,
+      atCutPlane: face.atCutPlane === true, z0: face.z0, z1: face.z1,
+    });
+  }
+}
+
+/**
  * 1本の列（worldMid。`collectCutBreaks`が返す隣接ペアの中点を渡す想定）に見える面の候補を
  * **深度昇順**で全て返す（§5.2 step1-2の候補収集。「z区間ごとに1つ選ぶ」（旧step3-4）は行わない）。
  * 層0件・切断線が部屋外・壁ゼロのいずれでも例外を投げず、候補が無ければ空のhits配列を返す。
@@ -674,6 +723,11 @@ export function probeColumnHits(cut, worldMid, probeCtx) {
     // これらを選択対象から除外するため、出力（ZBand[]）は不変のまま。
     addHorizontalFaceHits(cut, worldMid, info, probeCtx, hits);
   }
+  // Phase 6b-1: 階段の占有面（stairFace）を追加する。cut.stairCutが無ければ何もしない
+  // （階段帯以外は素通し）。層ごとではなく列に対して1回——stairContributionの絶対zは
+  // 自階基準で層に依らないため、layerStackのループの外で良い。visibleBandsOfは選択対象から
+  // 除外するため、出力（ZBand[]）は不変のまま。
+  addStairFaceHits(cut, worldMid, hits);
 
   hits.sort(compareHitDepth);
   return { hits, layerStack, unexploredBelowZ };
@@ -692,11 +746,16 @@ export function probeColumnHits(cut, worldMid, probeCtx) {
 // （`coverableHits`で除外。Phase 3は出力不変が目的）が、hits配列自体の並びは
 // Phase 4以降の消費者（奥の床天井の見えがかり線を「一番近い遮蔽物」と付き合わせる処理）が
 // 依存しうるため、このrankをここで固定しておく。
+// QA指摘②の追記（Phase 6b-1）: stairFace（階段の占有形状。垂直な実体）はwallFaceと
+// floorFace/ceilFace（水平面）の間に置く——腰壁と同様「遮蔽物である垂直面を先にする」規則を
+// 階段にも適用する（stairFace自身は本Phaseでは選択に参加しないため実害は無いが、6b-2で
+// 同じ規則を前提にできるようここで固定しておく）。
 function kindRank(kind) {
   switch (kind) {
     case 'cut': return 0;
     case 'cutAlong': return 1;
     case 'wallFace': return 2;
+    case 'stairFace': return 2.5;
     case 'floorFace': case 'ceilFace': return 3;
     case 'slabFace': return 4;
     default: return 5;
@@ -816,8 +875,13 @@ export function visibleBandsOf(hits, cut, opts = {}) {
   // ——出力完全不変の仕掛けそのもの。これらのkindが追加される前は`hits`と`coverableHits`は
   // 常に同一だったため、この1行の追加自体が挙動を変えることはない。Phase 4で深度上限を適用して
   // 初めて、これらのkindを見る側（新しい選択ロジック）が追加される。
+  // Phase 6b-1: stairFace（階段の占有形状）も同じ理由で除外する——除外しないとz0/z1が
+  // 下のzBreaksへ紛れ込み、階段帯の帯がstairFaceの端で余分に分割される（`frontMatch`/
+  // `wallMatch`のkindホワイトリストには最初から入っていないため選択結果自体は変わらないが、
+  // `mergeAdjacentZBands`に「必ず戻る」保証を持たせるより、floorFace/ceilFace/slabFaceと
+  // 同じ場所で先に弾く方が出力完全不変の仕掛けとして一貫する）。
   const coverableHits = hits.filter(h =>
-    h.kind !== 'floorFace' && h.kind !== 'ceilFace' && h.kind !== 'slabFace');
+    h.kind !== 'floorFace' && h.kind !== 'ceilFace' && h.kind !== 'slabFace' && h.kind !== 'stairFace');
 
   // zBreaks = 全ヒットのz端点 ∪ 層の床天井 ∪ zRange端 ∪ cut.baseFloorZ（§5.2 step3。WP-E5b追加:
   // baseFloorZはemitLineの§5.6最終フィルタ（両端がbaseFloorZ未満なら向こう側=DETAIL破線へ

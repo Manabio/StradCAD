@@ -23,7 +23,8 @@ dist-ssr
 *.sln
 *.sw?
 
-# 調査用プローブ（scripts/probe）の出力。コミットするのはスクリプトと golden/・golden13/ だけ。
+# 調査用プローブ（scripts/probe）の出力。コミットするのはスクリプトと golden/・golden13/・golden11/ だけ。
 scripts/probe/*/
 !scripts/probe/golden/
 !scripts/probe/golden13/
+!scripts/probe/golden11/

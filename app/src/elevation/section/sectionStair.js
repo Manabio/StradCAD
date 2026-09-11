@@ -244,7 +244,8 @@ function isBlockedByWall(columns, cut, secondaryFlight) {
 }
 
 // cut.lineが対象（レーン・踊り場）を「縦断」しているか（向きが一致・幅の内側・run範囲が重なる）。
-function isLengthwiseCut(entityIsVertical, entityAcrossLo, entityAcrossHi, entityRunLo, entityRunHi, cut) {
+// export: 展開図一般化Phase 6b-1のstairFaceHitsが同じ判定を再利用する。
+export function isLengthwiseCut(entityIsVertical, entityAcrossLo, entityAcrossHi, entityRunLo, entityRunHi, cut) {
   return cut.line.isVertical === entityIsVertical &&
     cut.line.axisValue >= entityAcrossLo - GAP_EPS && cut.line.axisValue <= entityAcrossHi + GAP_EPS &&
     rangesOverlap(cut.line.lo, cut.line.hi, entityRunLo, entityRunHi);
@@ -444,7 +445,8 @@ function flightZigzagPrimitives(flight, cut, columns) {
 // ちょうどレーン境界midAcrossにある一般規則の「縦断」判定自体が壊れる）ため、梯子の幅だけの
 // 別軸として計算する。trueAcrossLo/Hi（部屋の実際の外縁。全flights/landingsの最小・最大）と
 // 一致しない側＝レーン同士が接する内側の境界だけをgap/2ぶん狭める。
-function ladderAcrossRange(flight, trueAcrossLo, trueAcrossHi, gapMm) {
+// export: 展開図一般化Phase 6b-1のstairFaceHitsが同じ幅を再利用する。
+export function ladderAcrossRange(flight, trueAcrossLo, trueAcrossHi, gapMm) {
   const half = gapMm / 2;
   const acrossLo = flight.acrossLo > trueAcrossLo + GAP_EPS ? flight.acrossLo + half : flight.acrossLo;
   const acrossHi = flight.acrossHi < trueAcrossHi - GAP_EPS ? flight.acrossHi - half : flight.acrossHi;
@@ -598,8 +600,97 @@ export function stairOccluderRects(contribution, cut) {
   return rects;
 }
 
-// cut.lineがflightを横切っているか（flightLadderPrimitivesと同じ判定。ささら正面視・梯子で共有）。
-function crossesFlight(flight, cut) {
+/**
+ * ヒット列（展開図一般化Phase 6b-1。設計`.claude/elevation-redesign.md`§5.3(b)）向けの階段の
+ * 占有面。`stairOccluderRects`と**完全に同じ判定・同じ形状**（正面視＝`crossesFlight`の段板占有・
+ * 踊り場桁枠）、内側ささらの見えがかりは`innerStringerGeometry`（`innerStringerSilhouette`が
+ * 描画へ変換する直前の幾何と**共通の単一情報源**。QA是正2026-09: 以前は独自に`isLengthwiseCut`
+ * （側面視）を条件にしており、本番の`crossesFlight`（正面視）と定義上排他だったため、本番が線を
+ * 描く切断ではヒットが出ず、描かない切断で出るという逆転が起きていた——13.stq/11.stqのような
+ * 非STEEL構成でなくとも、STEEL構成であっても本番の描画とヒットが噛み合わない状態だった）を使い、
+ * 往路/復路の識別（`side`）と深度（`depthNearMm`/`depthFarMm`/`atCutPlane`）を添えて返す——
+ * `section/sectionHits.js`の`probeColumnHits`がこれを`kind:'stairFace'`のSurfaceHitへ変換する
+ * （本Phaseでは`visibleBandsOf`の選択には参加しない。載せるだけ）。
+ * **`stairOccluderRects`/`innerStringerSilhouette`自体は変更しない**——アキのバツ・見えがかり線の
+ * 破線化という既存の出力契約を壊さないため、同じ判定を共有関数（`innerStringerGeometry`）・
+ * 同じ述語（`crossesFlight`）から導きつつ、描画とヒット化は別関数のままにした
+ * （突き合わせテスト: `sectionStair.test.js`「stairOccluderRectsと一致」「innerStringerSilhouetteと
+ * 一致」参照。S6単一情報源）。
+ *
+ * 深度（QA是正2026-09・要件C）: `SurfaceHit`は`depthNearMm`（視線方向の最も手前）・
+ * `depthFarMm`（最も奥）・`atCutPlane`（`depthNearMm:0`が実測値ではなく切断平面への接触を
+ * 意味することの明示。ファイル冒頭`SurfaceHit`の型ドキュメント参照）を持つ。
+ * - 正面視（`crossesFlight`）の段板・内側ささら: `depthNearMm:0, atCutPlane:true`。
+ *   switchbackCutsのseq1/3は`cut.line.axisValue`（=tRunTravel＝踊り場前縁）が常にflightの
+ *   runLo/runHiの境界そのものと一致する構成のため、切断平面は文字通りその境界に立っている。
+ *   `depthFarMm`はそのflightの走り長さ（`lengthMm`。無ければ`runHi-runLo`）——flight自体が
+ *   その奥行きぶん切断平面から奥（踊り場と反対側）へ伸びる実体のため。
+ * - 踊り場桁枠: `depthNearMm:0, depthFarMm:0, atCutPlane:true`——`stairOccluderRects`と同じく
+ *   cut向きに関わらず無条件で積む既存挙動のままで、桁枠自体は「走り長さ」に相当する奥行きの
+ *   モデルを持たない（せい=`landingFrameDepthMm`はz方向の厚みであり視線方向の奥行きではない）。
+ *
+ * 斜めの踏面ジグザグ（側面視で実際に切られる自レーン自身の段鼻プロファイル。
+ * `computeFlightZigzagPoints`）は**本関数の対象外**（Phase 6b-1のスコープ外・6b-2で選択に
+ * 参加させる段と合わせて設計する——ASSUMED）。
+ * @param {object|null} contribution - `cut.stairCut`
+ * @param {import('./sectionTypes.js').SectionCut} cut
+ * @returns {Array<{side:'outbound'|'inbound'|null, part:'tread'|'landingFrame'|'stringer',
+ *   xLo:number, xHi:number, z0:number, z1:number,
+ *   depthNearMm:number, depthFarMm:number, atCutPlane:boolean}>}
+ */
+export function stairFaceHits(contribution, cut) {
+  if (!contribution || !cut?.line) return [];
+  const isSteel = contribution.structure === StructuralMaterialType.STEEL;
+  const acrossExtents = [...(contribution.flights ?? []), ...(contribution.landings ?? [])];
+  if (acrossExtents.length === 0) return [];
+  const trueAcrossLo = Math.min(...acrossExtents.map(e => e.acrossLo));
+  const trueAcrossHi = Math.max(...acrossExtents.map(e => e.acrossHi));
+  const hits = [];
+
+  (contribution.flights ?? []).forEach((flight, idx) => {
+    const side = idx === 0 ? 'outbound' : 'inbound';
+    const depthFarMm = flight.lengthMm ?? Math.abs(flight.runHi - flight.runLo);
+    if (crossesFlight(flight, cut)) {
+      const across = isSteel ? ladderAcrossRange(flight, trueAcrossLo, trueAcrossHi, LANE_GAP) : flight;
+      const a = localXOf(cut, across.acrossLo), b = localXOf(cut, across.acrossHi);
+      hits.push({
+        side, part: 'tread', xLo: Math.min(a, b), xHi: Math.max(a, b),
+        z0: flight.baseZ, z1: flight.baseZ + flight.steps * flight.riserMm,
+        depthNearMm: 0, depthFarMm, atCutPlane: true,
+      });
+    }
+    // 内側ささらの見えがかり: 判定・形状は本番`innerStringerSilhouette`と共通の
+    // `innerStringerGeometry`（=`crossesFlight`＋baseZゲート＋innerAcrossWorld）から導く
+    // （QA是正2026-09・要件A。以前の`isLengthwiseCut`は本番と排他で誤りだった）。
+    if (isSteel) {
+      const ladderAcross = ladderAcrossRange(flight, trueAcrossLo, trueAcrossHi, LANE_GAP);
+      const geo = innerStringerGeometry(flight, cut, ladderAcross, trueAcrossLo, trueAcrossHi);
+      if (geo) {
+        hits.push({
+          side, part: 'stringer', xLo: geo.x, xHi: geo.x, z0: geo.z0, z1: geo.z1,
+          depthNearMm: 0, depthFarMm, atCutPlane: true,
+        });
+      }
+    }
+  });
+
+  const frameDepthMm = contribution.unit?.landingFrameDepthMm ?? 0;
+  if (frameDepthMm > 0) {
+    for (const landing of contribution.landings ?? []) {
+      const a = localXOf(cut, landing.acrossLo), b = localXOf(cut, landing.acrossHi);
+      hits.push({
+        side: null, part: 'landingFrame', xLo: Math.min(a, b), xHi: Math.max(a, b),
+        z0: landing.z - frameDepthMm, z1: landing.z,
+        depthNearMm: 0, depthFarMm: 0, atCutPlane: true,
+      });
+    }
+  }
+  return hits;
+}
+
+// cut.lineがflightを横切っているか（flightLadderPrimitivesと同じ判定。ささら正面視・梯子で共有。
+// export: 展開図一般化Phase 6b-1のstairFaceHitsが同じ判定を再利用する）。
+export function crossesFlight(flight, cut) {
   return cut.line.isVertical !== flight.isVertical &&
     cut.line.axisValue >= flight.runLo - GAP_EPS && cut.line.axisValue <= flight.runHi + GAP_EPS;
 }
@@ -687,8 +778,9 @@ function stringerEndCapPrimitives(flight, cut, ladderAcross) {
  * ユーザー実機指摘2026-08「6」C「梯子状の壁断面のない方の端」）のacross世界座標。
  * 部屋の実外縁(trueAcrossLo/Hi)と一致しない側が内側——`ladderAcrossRange`がLANE_GAPを
  * 片側だけ詰めるのと同じ判定基準（単一情報源）。両端とも外縁なら内側は無い（null）。
+ * export: 展開図一般化Phase 6b-1のstairFaceHitsが同じ判定を再利用する。
  */
-function innerAcrossWorld(flight, trueAcrossLo, trueAcrossHi) {
+export function innerAcrossWorld(flight, trueAcrossLo, trueAcrossHi) {
   if (flight.acrossLo > trueAcrossLo + GAP_EPS) return 'lo';
   if (flight.acrossHi < trueAcrossHi - GAP_EPS) return 'hi';
   return null;
@@ -696,20 +788,34 @@ function innerAcrossWorld(flight, trueAcrossLo, trueAcrossHi) {
 
 /**
  * 内側のささらの見えがかり（正面視の縦線1本。ユーザー実機指摘2026-08「6」C
- * 「往路が1FLから踊り場まで、復路は踊り場断面から2FLまで」）。
+ * 「往路が1FLから踊り場まで、復路は踊り場断面から2FLまで」）の**幾何**（対象か否かの判定と
+ * x/z0/z1）だけを返す純関数。`innerStringerSilhouette`（本番の描画）と`stairFaceHits`
+ * （展開図一般化Phase 6b-1のヒット化。QA是正2026-09）が**両方ここを呼ぶ単一情報源**——
+ * 以前は`stairFaceHits`側が独自に`isLengthwiseCut`（側面視）で条件を組んでおり、本番の
+ * `crossesFlight`（正面視）と**定義上排他**になっていた（QA指摘A: 本番が線を描く切断では
+ * ヒットが出ず、描かない切断で出る、という逆転が起きていた）。
+ *
  * 既存の`stringerEndCapPrimitives`（第3弾E）は「踊り場より下まで達するレーン」限定で両端に
  * 端面の細破線を描くもので、踊り場**より上**の復路には一切出なかった——そちらの契約は変えず、
  * ここでは端面規則の対象外（baseZ>=baseFloorZ）のレーンについて内側の縦線だけを補う。
+ * @param {import('./sectionTypes.js').SectionCut} cut
+ * @returns {{x:number, worldX:number, z0:number, z1:number}|null} worldXはlocalXOf変換前の
+ *   世界座標（`stairFaceHits`の深度計算がcut.line.axisValueとの差を取るのに使う）。
  */
-function innerStringerSilhouette(flight, cut, ladderAcross, trueAcrossLo, trueAcrossHi) {
-  if (!crossesFlight(flight, cut)) return [];
-  if (flight.baseZ < (cut.baseFloorZ ?? 0) - GAP_EPS) return []; // 端面規則(第3弾E)の担当
+function innerStringerGeometry(flight, cut, ladderAcross, trueAcrossLo, trueAcrossHi) {
+  if (!crossesFlight(flight, cut)) return null;
+  if (flight.baseZ < (cut.baseFloorZ ?? 0) - GAP_EPS) return null; // 端面規則(第3弾E)の担当
   const side = innerAcrossWorld(flight, trueAcrossLo, trueAcrossHi);
-  if (!side) return [];
+  if (!side) return null;
   const across = ladderAcross ?? flight;
-  const x = localXOf(cut, side === 'lo' ? across.acrossLo : across.acrossHi);
-  const topZ = flight.baseZ + flight.steps * flight.riserMm;
-  return [emitLine(cut, x, flight.baseZ, x, topZ, ElevationLineRole.DETAIL, { neverDowngrade: true })];
+  const worldX = side === 'lo' ? across.acrossLo : across.acrossHi;
+  return { x: localXOf(cut, worldX), worldX, z0: flight.baseZ, z1: flight.baseZ + flight.steps * flight.riserMm };
+}
+
+function innerStringerSilhouette(flight, cut, ladderAcross, trueAcrossLo, trueAcrossHi) {
+  const geo = innerStringerGeometry(flight, cut, ladderAcross, trueAcrossLo, trueAcrossHi);
+  if (!geo) return [];
+  return [emitLine(cut, geo.x, geo.z0, geo.x, geo.z1, ElevationLineRole.DETAIL, { neverDowngrade: true })];
 }
 
 // 踊り場のレーン縦断: 床のCUT水平線1本（columns中、踊り場のrun範囲と重なる列のx範囲のみ）。

@@ -13,7 +13,7 @@
 // 配列コピーで失われる実害があったため）。visibleBandsOfはopts.layerStackを必須にした。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Plane, PlanGraph, CenterLineType, Discipline, edgeKey, OpeningCategory } from '@core';
+import { Plane, PlanGraph, CenterLineType, Discipline, edgeKey, OpeningCategory, StructuralMaterialType } from '@core';
 import { generateRoomWallsFromOutline } from '../../finish/wallGeneration.js';
 import { makeProbeContext, probeColumn } from './sectionProbe.js';
 import { probeColumnHits, visibleBandsOf, isHiddenWall } from './sectionHits.js';
@@ -733,3 +733,138 @@ test('【isHiddenWall】階段下部屋の反対側が階段室の空気ボリ�
   assert.equal(isHiddenWall(cut, wall, cut.layers[0], probeCtx), false,
     'Under側は階段下部屋だが、反対側(Isolated)が階段室の空気ボリュームと非連結なので非隠蔽のはず');
 });
+
+// ================================================================
+// (7) Phase 6b-1: 階段の占有面（stairFace。設計`.claude/elevation-redesign.md`§5.3(b)）
+// ================================================================
+// 13.stq「6」面C相当（switchbackCuts seqNo '1'・正面視・踊り場から上り口Y2へ見下ろす向き）の
+// フィクスチャ。ユーザー裁定の実測値と同じ縮尺（往路0〜1392.5・復路の内側ささら1492.5・
+// baseFloorZ=1500=n1*riser）を使う——`sectionStair.test.js`の`stairSixCFixtureContribution`と
+// 同じ幾何（QA是正2026-09・要件B「x=1492.5に出ることを固定」）。ここでは`probeColumnHits`/
+// `visibleBandsOf`への配線だけを確認する（stairFaceHits自体の判定はsectionStair.test.js側）。
+function stairContributionFixture() {
+  return {
+    structure: StructuralMaterialType.STEEL,
+    flights: [
+      { isVertical: true, runLo: 1500, runHi: 4500, acrossLo: 0, acrossHi: 1442.5,
+        baseZ: 0, riserMm: 250, steps: 6, lengthMm: 3000 },
+      { isVertical: true, runLo: 1500, runHi: 4500, acrossLo: 1442.5, acrossHi: 2985,
+        baseZ: 1500, riserMm: 250, steps: 6, lengthMm: 3000 },
+    ],
+    landings: [{ runLo: 0, runHi: 1500, acrossLo: 0, acrossHi: 2985, z: 1500 }],
+    unit: { landingFrameDepthMm: 300 },
+  };
+}
+
+// 正面視の切断（seq1相当）。room自体は階段室の平面ではなく、南に壁を1枚持つだけの単純な矩形室
+// ——stairFaceの深度(0)と見えがかり壁の深度(3000)を比べるための「奥の壁」を1枚用意するのが目的。
+function stairFrontCut(graph, overrides = {}) {
+  return {
+    seqNo: '1',
+    line: { isVertical: false, axisValue: 3000, lo: 0, hi: 2985 },
+    viewSign: 1, dirSign: 1,
+    layers: [{ graph, floorZMm: 0, role: 'self' }],
+    zRange: { loZ: 0, hiZ: 3000 }, baseFloorZ: 1500,
+    stairCut: stairContributionFixture(),
+    ...overrides,
+  };
+}
+
+test('【Phase6b-1・(a)・QA是正】probeColumnHits: 「6」面C相当の列（x=700/1492.5/2000）で、段板・内側ささらのstairFaceヒットが深度0で、奥の壁(distMm=3000)より手前に並ぶ', () => {
+  const graph = makeGraph();
+  makeRectRoom(graph, 0, 0, 4000, 6000, 'STAIRWELL'); // 南壁(y=6000)までの距離=3000（axisValue=3000から）
+  const cut = stairFrontCut(graph);
+  const probeCtx = makeProbeContext(cut.layers);
+
+  // x=700: 往路(outbound)の段板のみ（0〜1392.5の内側。復路の内側ささらはx=1492.5でここには無い）。
+  const at700 = probeColumnHits(cut, 700, probeCtx).hits;
+  const stairHit700 = at700.find(h => h.kind === 'stairFace');
+  assert.ok(stairHit700, 'x=700の列にstairFaceヒットがあるはず（往路の段板の占有範囲0..1392.5の内側）');
+  assert.equal(stairHit700.side, 'outbound'); assert.equal(stairHit700.part, 'tread');
+  assert.equal(stairHit700.z0, 0); assert.equal(stairHit700.z1, 1500);
+  assert.equal(stairHit700.distMm, 0, '正面視の段板は切断平面上にある実体として深度0のはず');
+  assert.equal(stairHit700.depthNearMm, 0); assert.equal(stairHit700.depthFarMm, 3000);
+  assert.equal(stairHit700.atCutPlane, true);
+
+  // x=1492.5: 復路(inbound)の内側ささら（ユーザー裁定の実測値そのもの）と、復路の段板の両方が
+  // 同じ列に乗る（段板のx範囲1492.5..2985がstringerのx=1492.5をちょうど含むため）。
+  const at1492 = probeColumnHits(cut, 1492.5, probeCtx).hits;
+  const stringerHit = at1492.find(h => h.kind === 'stairFace' && h.part === 'stringer');
+  assert.ok(stringerHit, 'x=1492.5の列に復路の内側ささらヒットがあるはず（ユーザー裁定の実測値）');
+  assert.equal(stringerHit.side, 'inbound');
+  assert.equal(stringerHit.z0, 1500); assert.equal(stringerHit.z1, 3000);
+  assert.equal(stringerHit.distMm, 0); assert.equal(stringerHit.atCutPlane, true);
+  const treadHit1492 = at1492.find(h => h.kind === 'stairFace' && h.part === 'tread' && h.side === 'inbound');
+  assert.ok(treadHit1492, 'x=1492.5は復路の段板の占有範囲(1492.5..2985)の左端でもあるはず');
+
+  // x=2000: 復路(inbound)の段板のみ（内側ささらはx=1492.5だけの縦線なのでここには無い）。
+  const at2000 = probeColumnHits(cut, 2000, probeCtx).hits;
+  const stairHit2000 = at2000.filter(h => h.kind === 'stairFace');
+  assert.ok(stairHit2000.some(h => h.part === 'tread' && h.side === 'inbound'), 'x=2000は復路の段板の範囲内のはず');
+  assert.ok(!stairHit2000.some(h => h.part === 'stringer'), 'x=2000には内側ささら(x=1492.5限定)のヒットは無いはず');
+
+  const wallHit = at700.find(h => h.kind === 'wallFace');
+  assert.ok(wallHit, '南壁の見えがかりヒットがあるはず');
+  assert.equal(wallHit.distMm, 3000);
+  assert.ok(stairHit700.distMm < wallHit.distMm, '段板は奥の壁より手前(深度が小さい)のはず');
+  assert.ok(at700.indexOf(stairHit700) < at700.indexOf(wallHit),
+    'hits配列は深度昇順のはずなので、段板ヒットが壁ヒットより先に並ぶ');
+});
+
+test('【Phase6b-1・(b)・出力不変】visibleBandsOf: stairFaceヒットの有無でband自体の選択（kind/z0/z1/wall等）は変わらない', () => {
+  const graph = makeGraph();
+  makeRectRoom(graph, 0, 0, 4000, 6000, 'STAIRWELL');
+  const cut = stairFrontCut(graph);
+  const probeCtx = makeProbeContext(cut.layers);
+  const { hits, layerStack, unexploredBelowZ } = probeColumnHits(cut, 700, probeCtx);
+
+  assert.ok(hits.some(h => h.kind === 'stairFace'), '前提: stairFaceヒットが実在するはず');
+  const withoutStairFace = hits.filter(h => h.kind !== 'stairFace');
+
+  const bandsWithStairFace = visibleBandsOf(hits, cut, { layerStack, unexploredBelowZ });
+  const bandsWithoutStairFace = visibleBandsOf(withoutStairFace, cut, { layerStack, unexploredBelowZ });
+  assert.deepEqual(bandsWithStairFace, bandsWithoutStairFace,
+    'stairFaceヒットの有無でbandの選択は変わらないはず（Phase 6b-1は載せるだけ・選択には参加しない）');
+});
+
+test('【Phase6b-1・(c)・失敗系】probeColumnHits: cut.stairCutが無ければstairFaceヒットは0件（階段帯以外への影響が無いこと）', () => {
+  const graph = makeGraph();
+  makeRectRoom(graph, 0, 0, 4000, 6000, 'STAIRWELL');
+  const cut = stairFrontCut(graph, { stairCut: null });
+  const probeCtx = makeProbeContext(cut.layers);
+  const { hits } = probeColumnHits(cut, 700, probeCtx);
+  assert.ok(!hits.some(h => h.kind === 'stairFace'));
+});
+
+test('【Phase6b-1・(c)・失敗系】probeColumnHits: worldMidがNaNでも例外を投げず、bandsはzRangeを隙間なく覆う', () => {
+  // 上の「worldMidがNaNでも例外を投げずbands・hitsを返す」と同じ既知の挙動（NaNはガード比較を
+  // 常にfalseにすり抜けるため、stairFaceヒットも「境界チェックなしで候補に採用される」）を
+  // stairFace経路でも変えないことだけを確認する——visibleBandsOfはstairFaceを選択対象から
+  // 除外するため、混入してもbands自体には影響しない。
+  const graph = makeGraph();
+  makeRectRoom(graph, 0, 0, 4000, 6000, 'STAIRWELL');
+  const cut = stairFrontCut(graph);
+  const probeCtx = makeProbeContext(cut.layers);
+  const { hits, layerStack, unexploredBelowZ } = probeColumnHits(cut, NaN, probeCtx);
+  assert.ok(Array.isArray(hits), '例外を投げず配列を返すはず');
+
+  const bands = visibleBandsOf(hits, cut, { layerStack, unexploredBelowZ });
+  assert.ok(bands.length >= 1, '例外を投げずbandsを返すはず');
+  assert.equal(bands[0].z0, 0, 'zRange下端から始まるはず');
+  assert.equal(bands[bands.length - 1].z1, 3000, 'zRange上端まで覆うはず');
+});
+
+// 変異手順（報告に貼る。実行して確認済み）:
+// (1) coverableHitsの除外リストから'stairFace'を外すだけでは、この単体フィクスチャでは
+//     【(b)・出力不変】は赤くならない（実測）——floorFace/ceilFace/slabFaceのときと同じ
+//     二重の安全策（上のコメント「変異手順その1」参照）がここにも働く: stairFaceの
+//     z0/z1はzBreaksへ混入しband分割は起きるが、frontMatch/wallMatchのkindホワイトリストに
+//     元から'stairFace'が無いため選択結果（kind/wall/distMm）自体は変わらず、分割された
+//     隣接bandはmergeAdjacentZBandsが1本に畳み戻す。除外を外したうえで**さらに**
+//     `wallMatch`の`.filter(c => c.kind === 'wallFace')`を`|| c.kind === 'stairFace'`へ
+//     広げる（stairFaceのdistMm=0が実際の壁(distMm=3000)より優先して選ばれるようになる）と
+//     初めて【(b)・出力不変】が赤くなることを確認した——コード側の安全策はkindホワイトリスト
+//     （選択に混ざらない）が主、coverableHitsの除外（zBreaksを汚さない）は副次的な一貫性。
+// (2) sectionStair.jsのstairFaceHitsで正面視(tread)のdepthMmを`0`から`-1`（符号を反転した値）へ
+//     変えると→上の【(a)】の`stairHit.distMm < wallHit.distMm`は通ってしまう(-1<3000)ため、
+//     `assert.equal(stairHit.distMm, 0, ...)`の等値チェックが赤くなる。

@@ -341,7 +341,16 @@ Phase 5（下記「移した」節）以降、断面エンジン自身の探査�
 採取元は`D:/tatsuya/Download/13.stq`・採取時点はPhase 4裁定後（本コミット。HORIZONTAL_FACES_
 ENABLED既定on）——以後このスナップショットは再生成しない（動かないゴールデンでなければ
 「新設計との差分」を測る基準にならない）。Phase 4裁定前（`HORIZONTAL_FACES_ENABLED`既定off時代）の
-版はコミット5943d89時点のもの。
+版はコミット5943d89時点のもの。**「6」（階段室）はPhase 6前半（2a壁の非表示を空気ボリューム連結へ
+置換）で意図的差分が出たまま再採取していない**——「6」の差分は基準に含めず、他の部屋の一致だけで
+判定する（コミット8e8e1e6時点で確認済み）。
+
+`app/scripts/probe/golden11/`（`D:/tatsuya/Download/11.stq`を同じ形式でダンプした固定スナップショット。
+展開図一般化Phase 6b-1で追加）も同じ手順で追跡する——`.gitignore`に`!scripts/probe/golden11/`を追加し、
+golden13と並ぶ回帰ゲートに昇格した。採取時点はコミット8e8e1e6（Phase 6前半の直後・Phase 6b-1着手前）。
+`app/scripts/probe/golden-knee/`（`makeKneeDropTest.mjs`が生成する`knee-drop-test.stq`のダンプ）は
+現時点では未追跡（ローカルにのみ存在）——3ファイルすべてを毎回`git stash`基点で突き合わせる運用は
+`.claude/elevation-redesign.md`§5.9(e)の手順に従う。
 
 ## A/B/C/D の向きと不変条件
 **展開記号は「その断面が見ている面」の幾何で決まる（ユーザー明示指示2026-08その11）**: 展開図の作成は
@@ -1344,6 +1353,26 @@ room変化点で区切った区間を近い順に返す）を追加。`probeColu
 `covering`のz区間一致判定を実質満たさない）の三重の安全策で担保している——Phase 4で深度上限
 （`SIGHTLINE_DEPTH_LIMIT_MM`）を適用し実際の厚み・深度を持たせて初めて畳み込まれ描画に使われる。
 詳細は`.claude/elevation-redesign.md`参照。
+
+**Phase 6b-1**: 階段の占有形状（段板・踊り場桁枠・内側ささらの見えがかり）を`sectionStair.js`の
+`stairFaceHits`で求め、`kind:'stairFace'`のヒットとして`probeColumnHits`へ積む（`cut.stairCut`が
+無い帯には一切影響しない）。floorFace/ceilFace/slabFaceと同じく`visibleBandsOf`の`coverableHits`で
+除外し選択には参加させない——**載せるだけ**。`stairOccluderRects`（段板・踊り場桁枠の占有矩形）とは
+**完全に同じ判定・同じ形状**（突き合わせテストで固定。`sectionStair.test.js`「stairOccluderRectsと
+一致」）。内側ささらの見えがかりは、本番の描画（`innerStringerSilhouette`）と**単一情報源
+`innerStringerGeometry`（正面視＝`crossesFlight`が条件。QA是正2026-09——初版は誤って
+`isLengthwiseCut`＝側面視を条件にしており、本番の描画条件と定義上排他だったため、本番が線を描く
+切断ではヒットが出ず描かない切断で出る、という逆転が起きていた）**から導く（既存2関数自体は
+変更しない）。深度は`depthNearMm`/`depthFarMm`/`atCutPlane`の3値（`SurfaceHit`型ドキュメント
+参照。cut/cutAlongの0＝定義値・slabFaceの0＝番兵・stairFaceの0＝`atCutPlane`時に限り切断平面への
+実測上の接触、という3種の0を区別する）: 正面視の段板・内側ささらは`depthNearMm:0`（switchbackCuts
+のseq1/3はcut.line.axisValueが常にflightのrunLo/runHi境界そのものと一致する構成のため）・
+`depthFarMm`はそのflightの走り長さ、踊り場桁枠は`depthNearMm:depthFarMm:0`（奥行きのモデルを
+持たない既存挙動のまま）。`kindRank`にも`stairFace`（wallFaceとfloorFace/ceilFaceの間）を追加したが、
+本Phaseでは選択に不参加のため出力へは効かない。選択に参加させ、階段下部屋「13」の2a壁の向こうに
+実際に見える範囲を決めるのはPhase 6b-2——13.stq/11.stqは非STEEL（ささら自体を持たない）ため、
+側面視・ささら系の経路は実データではまだ通っていない（STEEL折返し階段のテスト用.stqが必要なら
+`makeKneeDropTest.mjs`の作法で6b-2着手時に作る）。
 
 **Phase 4**（`elevationStyle.js`の`HORIZONTAL_FACES_ENABLED`。**裁定済み2026-09-11・既定on**——
 knee-drop-test.stqの「A」面Cで受入基準（腰壁天端800〜天井2400がアキ、その上にBのFL+2400天井

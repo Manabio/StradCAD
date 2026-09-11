@@ -5,7 +5,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Plane, PlanGraph, CenterLineType, Discipline, StairType, StructuralMaterialType } from '@core';
 import { generateRoomWallsFromOutline } from '../../finish/wallGeneration.js';
-import { stairContribution, stairPrimitivesForCut, clipStringerToAnchors, landingFramePrimitives, stairWallGapZones, stairCutFloorProfile } from './sectionStair.js';
+import { stairContribution, stairPrimitivesForCut, clipStringerToAnchors, landingFramePrimitives, stairWallGapZones, stairCutFloorProfile, stairFaceHits, stairOccluderRects } from './sectionStair.js';
 
 function makeGraph(name = 'p1') {
   const plane = new Plane(name, 0, `${name}階`, 1, 1);
@@ -845,3 +845,268 @@ test('【失敗系】stairCutFloorProfile: contribution=null・寄与なしはnu
   assert.equal(stairCutFloorProfile({ flights: [], landings: [] }, cut, null), null);
   assert.equal(stairCutFloorProfile({}, cut, null), null);
 });
+
+// ================================================================
+// stairFaceHits（展開図一般化Phase 6b-1。設計`.claude/elevation-redesign.md`§5.3(b)）
+// ================================================================
+// stairOccluderRectsと同じ判定・同じ形状（正面視=crossesFlightの段板占有・踊り場桁枠）、
+// 内側ささらの見えがかりはinnerStringerGeometry（innerStringerSilhouetteが描画へ変換する
+// 直前の幾何と共通の単一情報源）を使う。往路/復路の識別(side)と深度
+// (depthNearMm/depthFarMm/atCutPlane)を添える。section/sectionHits.jsのprobeColumnHitsが
+// これをkind:'stairFace'のSurfaceHitへ変換する（本Phaseではvisibleの選択には参加しない。
+// sectionHits.test.js側で確認）。
+//
+// QA是正2026-09（要件A）: 内側ささらの条件は本番`innerStringerSilhouette`と同じ`crossesFlight`
+// （正面視）でなければならない——旧実装は`isLengthwiseCut`（側面視）を使っており、
+// `crossesFlight`とは定義上排他（`cut.line.isVertical !== flight.isVertical`か
+// `===`かの違い）のため、本番が線を描く切断（正面視）ではヒットが出ず、本番が描かない切断
+// （側面視）でヒットが出るという逆転が起きていた。
+
+test('【Phase6b-1・要件A是正】stairFaceHits: 正面視(crossesFlight)の切断では、往路・復路の段板ヒット＋復路(baseZ=踊り場)の内側ささらヒット＋踊り場桁枠ヒットが出る（STEEL・LANE_GAPで往復間に空き）', () => {
+  const graph = makeGraph();
+  const { stair } = makeSwitchbackFixture(graph, StructuralMaterialType.STEEL);
+  const c = stairContribution(stair, graph, FLOOR_HEIGHT);
+  const cut = {
+    seqNo: '1', line: { isVertical: false, axisValue: 3000, lo: 0, hi: 2000 },
+    dirSign: 1, viewSign: 1, layers: [], zRange: { loZ: 0, hiZ: 3000 }, baseFloorZ: 1200,
+  };
+  const faces = stairFaceHits(c, cut);
+
+  const outboundTread = faces.find(f => f.side === 'outbound' && f.part === 'tread');
+  const inboundTread = faces.find(f => f.side === 'inbound' && f.part === 'tread');
+  assert.ok(outboundTread, '往路の段板ヒットがあるはず');
+  assert.ok(inboundTread, '復路の段板ヒットがあるはず');
+  assert.equal(outboundTread.z0, 0); assert.equal(outboundTread.z1, 1200, '往路はbaseZ(0)〜steps*riser(1200)のはず');
+  assert.equal(inboundTread.z0, 1200); assert.equal(inboundTread.z1, 2400, '復路はbaseZ(踊り場1200)〜1200+1200のはず');
+  for (const f of [outboundTread, inboundTread]) {
+    assert.equal(f.depthNearMm, 0, '正面視は切断平面へ接触する実体として深度near=0のはず（§5.7の測定距離の意味を持たない縮退）');
+    assert.equal(f.depthFarMm, 3000, 'depthFar=flightの走り長さ(lengthMm)のはず');
+    assert.equal(f.atCutPlane, true);
+  }
+  assert.ok(outboundTread.xHi <= inboundTread.xLo, 'STEELはLANE_GAPぶん往路(xHi)と復路(xLo)の間に空きがあるはず');
+  assert.equal(outboundTread.xHi, 950); assert.equal(inboundTread.xLo, 1050, 'LANE_GAP=100の半分(50)ずつ詰めた境界のはず');
+
+  // 要件A是正の核心: この切断はcrossesFlight=trueの正面視なので、baseZ>=baseFloorZ（端面規則の
+  // 対象外）である復路(inbound)にだけ内側ささらのヒットが出る（本番stairPrimitivesForCutが
+  // innerStringerSilhouetteを描くのと同じ切断・同じレーン）。往路(outbound)はbaseZ(0)<
+  // baseFloorZ(1200)のためstringerEndCapPrimitives側の担当でここには出ない。
+  const stringer = faces.find(f => f.part === 'stringer');
+  assert.ok(stringer, '正面視のこの切断で復路の内側ささらヒットが出るはず');
+  assert.equal(stringer.side, 'inbound');
+  assert.equal(stringer.xLo, stringer.xHi, '縦線1本なので幅ゼロのはず');
+  assert.equal(stringer.xLo, 1050, '内側(acrossLo側)をLANE_GAP/2ぶん詰めた位置のはず');
+  assert.equal(stringer.z0, 1200); assert.equal(stringer.z1, 2400, '復路の全高(baseZ〜baseZ+steps*riser)のはず');
+  assert.equal(stringer.depthNearMm, 0, '正面視のstringerも段板と同じくdepthNear=0のはず');
+  assert.equal(stringer.depthFarMm, 3000);
+  assert.ok(!faces.some(f => f.part === 'stringer' && f.side === 'outbound'), '往路には内側ささらヒットは出ないはず');
+
+  const frame = faces.find(f => f.part === 'landingFrame');
+  assert.ok(frame, '踊り場桁枠のヒットがあるはず');
+  assert.equal(frame.z0, 900); assert.equal(frame.z1, 1200, '桁枠はlanding.z(1200)からlandingFrameDepthMm(300)下がったz900..1200のはず');
+  assert.equal(frame.depthNearMm, 0); assert.equal(frame.depthFarMm, 0); assert.equal(frame.atCutPlane, true);
+});
+
+test('【Phase6b-1】stairFaceHits: WOOD(木造)でも正面視の段板ヒットは出る（LANE_GAPは無く境界で接する。ささらは無いのでstringerは出ない）', () => {
+  const graph = makeGraph();
+  const { stair } = makeSwitchbackFixture(graph); // 既定WOOD
+  const c = stairContribution(stair, graph, FLOOR_HEIGHT);
+  const cut = {
+    seqNo: '1', line: { isVertical: false, axisValue: 3000, lo: 0, hi: 2000 },
+    dirSign: 1, viewSign: 1, layers: [], zRange: { loZ: 0, hiZ: 3000 }, baseFloorZ: 1200,
+  };
+  const faces = stairFaceHits(c, cut);
+  const outbound = faces.find(f => f.side === 'outbound' && f.part === 'tread');
+  const inbound = faces.find(f => f.side === 'inbound' && f.part === 'tread');
+  assert.equal(outbound.xHi, 1000); assert.equal(inbound.xLo, 1000, 'WOODはLANE_GAPが無いのでレーン境界でぴったり接するはず');
+  assert.ok(!faces.some(f => f.part === 'stringer'), 'WOODはささら自体が無いためstringerヒットは出ないはず');
+});
+
+test('【失敗系・Phase6b-1・要件A是正】stairFaceHits: 側面視（レーンを縦断する切断）ではstairFaceは一切出ない（段板もstringerも本番はcrossesFlight=正面視でしか描かないため）', () => {
+  const graph = makeGraph();
+  const { stair } = makeSwitchbackFixture(graph, StructuralMaterialType.STEEL);
+  const c = stairContribution(stair, graph, FLOOR_HEIGHT);
+  const cut = {
+    seqNo: '2', line: { isVertical: true, axisValue: 500, lo: 1500, hi: 4500 },
+    dirSign: 1, viewSign: 1, layers: [], zRange: { loZ: 0, hiZ: 3000 }, baseFloorZ: 0,
+  };
+  const faces = stairFaceHits(c, cut);
+  assert.ok(!faces.some(f => f.part === 'tread'), '側面視ではcrossesFlightがfalseなので段板ヒットは出ないはず');
+  assert.ok(!faces.some(f => f.part === 'stringer'), '側面視ではinnerStringerGeometryもcrossesFlightで弾かれるためstringerヒットは出ないはず');
+  // 踊り場桁枠だけはcut向きに関わらず無条件で出る（stairOccluderRectsと同じ既存挙動）。
+  assert.ok(faces.some(f => f.part === 'landingFrame'), '桁枠ヒットは切断の向きに関わらず出るはず');
+});
+
+test('【失敗系・Phase6b-1】stairFaceHits: WOOD(木造)の側面視でも桁枠ヒットだけは出る（structure非依存の既存挙動）', () => {
+  const graph = makeGraph();
+  const { stair } = makeSwitchbackFixture(graph); // 既定WOOD
+  const c = stairContribution(stair, graph, FLOOR_HEIGHT);
+  const cut = {
+    seqNo: '2', line: { isVertical: true, axisValue: 500, lo: 1500, hi: 4500 },
+    dirSign: 1, viewSign: 1, layers: [], zRange: { loZ: 0, hiZ: 3000 }, baseFloorZ: 0,
+  };
+  const faces = stairFaceHits(c, cut);
+  assert.ok(!faces.some(f => f.part === 'stringer'));
+  assert.ok(!faces.some(f => f.part === 'tread'));
+  assert.ok(faces.some(f => f.part === 'landingFrame'), '桁枠ヒットはstructureに関わらず出るはず（stairOccluderRectsと同じ既存挙動）');
+});
+
+test('【失敗系・Phase6b-1】stairFaceHits: contribution=null・cut.lineが無ければ例外を投げず空配列', () => {
+  const cut = {
+    seqNo: '1', line: { isVertical: false, axisValue: 3000, lo: 0, hi: 2000 },
+    dirSign: 1, viewSign: 1, layers: [], zRange: { loZ: 0, hiZ: 3000 }, baseFloorZ: 1200,
+  };
+  assert.deepEqual(stairFaceHits(null, cut), []);
+  assert.deepEqual(stairFaceHits({ flights: [], landings: [] }, cut), []);
+  assert.deepEqual(stairFaceHits({ flights: [{ acrossLo: 0, acrossHi: 1 }], landings: [] }, {}), []);
+});
+
+test('【失敗系・Phase6b-1】stairFaceHits: 段板も内側ささらも対象外の切断（正面視でも側面視でもない）は段板・ささらとも出ない', () => {
+  const graph = makeGraph();
+  const { stair } = makeSwitchbackFixture(graph, StructuralMaterialType.STEEL);
+  const c = stairContribution(stair, graph, FLOOR_HEIGHT);
+  // isVertical=falseだが幅方向の範囲(lo/hi)が階段のacross(0..2000)と重ならない位置＝正面視でも
+  // レーン縦断でもない（実務上は起こりにくい人工的な構成だが、対象外分岐の確認として使う）。
+  const cut = {
+    seqNo: 'x', line: { isVertical: false, axisValue: 9000, lo: 0, hi: 2000 },
+    dirSign: 1, viewSign: 1, layers: [], zRange: { loZ: 0, hiZ: 3000 }, baseFloorZ: 0,
+  };
+  const faces = stairFaceHits(c, cut);
+  assert.ok(!faces.some(f => f.part === 'tread'), 'axisValueが走行範囲(1500..4500)の外なので段板ヒットは出ないはず');
+  assert.ok(!faces.some(f => f.part === 'stringer'));
+});
+
+// ================================================================
+// 突き合わせテスト（QA是正2026-09・要件B。S6単一情報源）:
+// stairFaceHitsが生成する形状は、本番の描画関数（stairOccluderRects・innerStringerSilhouette）が
+// 生成する形状と食い違ってはいけない——両者が別々の判定を持つ（＝S6違反）とドリフトが起きうる
+// ため、突き合わせを固定する。
+// ================================================================
+
+// stairFaceHitsのtread/landingFrameパーツをstairOccluderRectsと同じ{xLo,xHi,zLo,zHi}形へ正規化
+// （比較しやすいようside/part/depth*は落とし、z0/z1→zLo/zHiへ改名）。
+function toOccluderRectShape(faces) {
+  return faces
+    .filter(f => f.part === 'tread' || f.part === 'landingFrame')
+    .map(f => ({ xLo: f.xLo, xHi: f.xHi, zLo: f.z0, zHi: f.z1 }))
+    .sort((a, b) => a.xLo - b.xLo || a.zLo - b.zLo);
+}
+function sortRects(rects) {
+  return [...rects].sort((a, b) => a.xLo - b.xLo || a.zLo - b.zLo);
+}
+
+test('【突き合わせ・Phase6b-1要件B】stairFaceHits(tread+landingFrame)の矩形集合はstairOccluderRectsの矩形集合と一致する（正面視・STEEL）', () => {
+  const graph = makeGraph();
+  const { stair } = makeSwitchbackFixture(graph, StructuralMaterialType.STEEL);
+  const c = stairContribution(stair, graph, FLOOR_HEIGHT);
+  const cut = {
+    seqNo: '1', line: { isVertical: false, axisValue: 3000, lo: 0, hi: 2000 },
+    dirSign: 1, viewSign: 1, layers: [], zRange: { loZ: 0, hiZ: 3000 }, baseFloorZ: 1200,
+  };
+  assert.deepEqual(toOccluderRectShape(stairFaceHits(c, cut)), sortRects(stairOccluderRects(c, cut)));
+});
+
+test('【突き合わせ・Phase6b-1要件B】stairFaceHits(tread+landingFrame)の矩形集合はstairOccluderRectsの矩形集合と一致する（側面視・WOOD。両方とも桁枠1件のみ）', () => {
+  const graph = makeGraph();
+  const { stair } = makeSwitchbackFixture(graph); // WOOD
+  const c = stairContribution(stair, graph, FLOOR_HEIGHT);
+  const cut = {
+    seqNo: '2', line: { isVertical: true, axisValue: 500, lo: 1500, hi: 4500 },
+    dirSign: 1, viewSign: 1, layers: [], zRange: { loZ: 0, hiZ: 3000 }, baseFloorZ: 0,
+  };
+  const occluder = sortRects(stairOccluderRects(c, cut));
+  assert.equal(occluder.length, 1, '前提: 側面視では踊り場桁枠1件だけのはず（段板はcrossesFlightで対象外）');
+  assert.deepEqual(toOccluderRectShape(stairFaceHits(c, cut)), occluder);
+});
+
+// stairPrimitivesForCutが実際に描く「内側ささらの見えがかり」線のx座標（ローカル）を取り出す
+// 薄いヘルパー。DETAIL(thin)・垂直（x1===x2）・neverDowngradeで太さは変わらないので線種では
+// 区別できないため、baseFloorZ=0（stringerEndCapPrimitivesの担当条件`baseZ<baseFloorZ`が
+// どちらのflightにも成立しない構成）にして、対象になりうる垂直DETAIL細線をinnerStringerSilhouette
+// 由来だけに絞る（テスト側の前提はassert.equalで固定し、崩れたら気づける形にする）。
+function innerStringerXs(contribution, cut, columns) {
+  const prims = stairPrimitivesForCut(contribution, cut, columns);
+  return prims
+    .filter(p => p.type === 'line' && p.weight === 'thin' && Math.abs(p.x1 - p.x2) < 1e-6 && Math.abs(p.y1 - p.y2) > 1e-6)
+    .map(p => p.x1)
+    .sort((a, b) => a - b);
+}
+
+test('【突き合わせ・Phase6b-1要件B】part:stringerのヒットが出る切断＝stairPrimitivesForCutが内側ささらの縦線を描く切断（x位置も一致。正面視・STEEL・baseFloorZ=0でstringerEndCapと非曖昧）', () => {
+  const graph = makeGraph();
+  const { stair } = makeSwitchbackFixture(graph, StructuralMaterialType.STEEL);
+  const c = stairContribution(stair, graph, FLOOR_HEIGHT);
+  const cut = {
+    seqNo: '1', line: { isVertical: false, axisValue: 3000, lo: 0, hi: 2000 },
+    dirSign: 1, viewSign: 1, layers: [], zRange: { loZ: 0, hiZ: 3000 }, baseFloorZ: 0,
+  };
+  const columns = [{ x0: 0, x1: 2000, worldLo: 0, worldHi: 2000, bands: [] }];
+  // 前提: baseFloorZ=0ではどちらのflightもbaseZ(0・1200)<baseFloorZ(0)を満たさないため
+  // stringerEndCapPrimitivesは1本も出ない（垂直DETAIL細線の出処をinnerStringerSilhouetteに限定できる）。
+  assert.ok(!stairPrimitivesForCut(c, cut, columns).some(p =>
+    p.type === 'line' && p.weight === 'thin' && p.dash === 'dashed' && Math.abs(p.x1 - p.x2) < 1e-6),
+  '前提: この構成ではstringerEndCapPrimitives(端面の破線)は出ないはず');
+
+  const renderedXs = innerStringerXs(c, cut, columns);
+  const hitXs = stairFaceHits(c, cut).filter(f => f.part === 'stringer').map(f => f.xLo).sort((a, b) => a - b);
+  assert.deepEqual(hitXs, renderedXs, 'stairFaceHitsのstringerヒットのx集合は、本番が描く内側ささら線のx集合と一致するはず');
+  assert.deepEqual(hitXs, [950, 1050], '往路(outbound)は内側=acrossHi側(1000-50)・復路(inbound)は内側=acrossLo側(1000+50)のはず');
+});
+
+// 13.stq「6」面C相当（switchbackCuts seqNo '1'・往路0〜1392.5・復路の内側ささら1492.5・
+// baseFloorZ=1500=n1*riser）のfixture。makeSwitchbackFixtureを介さず、実測値と同じ縮尺の
+// contributionリテラルを直接構成する（S6: 判定はinnerStringerGeometry・crossesFlight・
+// ladderAcrossRangeという単一情報源から導くため、fixtureの作り方に依らず同じ結果になることの
+// 確認でもある）。
+function stairSixCFixtureContribution() {
+  return {
+    structure: StructuralMaterialType.STEEL,
+    flights: [
+      { isVertical: true, runLo: 1500, runHi: 4500, acrossLo: 0, acrossHi: 1442.5,
+        baseZ: 0, riserMm: 250, steps: 6, lengthMm: 3000 }, // outbound: rise=1500
+      { isVertical: true, runLo: 1500, runHi: 4500, acrossLo: 1442.5, acrossHi: 2985,
+        baseZ: 1500, riserMm: 250, steps: 6, lengthMm: 3000 }, // inbound: rise=1500
+    ],
+    landings: [{ runLo: 0, runHi: 1500, acrossLo: 0, acrossHi: 2985, z: 1500 }],
+    unit: { landingFrameDepthMm: 300 },
+  };
+}
+
+test('【固定値・Phase6b-1要件B・13.stq「6」面C相当】stairFaceHits: 復路の内側ささらヒットがx=1492.5（面ローカル）に出る（往路の段板はx0〜1392.5）', () => {
+  const c = stairSixCFixtureContribution();
+  const cut = {
+    seqNo: '1', line: { isVertical: false, axisValue: 3000, lo: 0, hi: 2985 },
+    dirSign: 1, viewSign: 1, layers: [], zRange: { loZ: 0, hiZ: 3000 }, baseFloorZ: 1500,
+  };
+  const faces = stairFaceHits(c, cut);
+
+  const outboundTread = faces.find(f => f.side === 'outbound' && f.part === 'tread');
+  assert.ok(outboundTread);
+  assert.equal(outboundTread.xLo, 0); assert.equal(outboundTread.xHi, 1392.5,
+    '往路の段板はLANE_GAP/2(50)ぶん内側へ詰めた1392.5までのはず（ユーザー裁定の実測値と同じ縮尺）');
+
+  const stringer = faces.find(f => f.part === 'stringer');
+  assert.ok(stringer, '復路(baseZ=baseFloorZ=1500)の内側ささらヒットが出るはず');
+  assert.equal(stringer.side, 'inbound');
+  assert.equal(stringer.xLo, 1492.5, 'ユーザー裁定「復路ささら x=1492.5」と同じ値のはず');
+  assert.equal(stringer.z0, 1500); assert.equal(stringer.z1, 3000);
+  assert.ok(!faces.some(f => f.part === 'stringer' && f.side === 'outbound'),
+    '往路(baseZ=0<baseFloorZ=1500)はstringerEndCapPrimitivesの担当域なのでここには出ない');
+
+  // 本番の描画（stairPrimitivesForCut）と突き合わせる。
+  const columns = [{ x0: 0, x1: 2985, worldLo: 0, worldHi: 2985, bands: [] }];
+  const renderedXs = innerStringerXsExcludingEndCap(c, cut, columns);
+  assert.deepEqual(renderedXs, [1492.5]);
+});
+
+// baseFloorZ=1500（stringerEndCapPrimitivesが往路側だけ発火しうる構成）でも内側ささらの
+// x集合だけを取り出すヘルパー——端面の破線は`dash:'dashed'`が付く（emitLineがbaseFloorZ以下を
+// 自動降格させるため）のに対し、innerStringerSilhouetteはneverDowngrade:trueで`dash`なしの
+// まま太さthinを保つ、という線属性の違いで区別する（S6: 本番のemitLine降格規則をそのまま使う）。
+function innerStringerXsExcludingEndCap(contribution, cut, columns) {
+  const prims = stairPrimitivesForCut(contribution, cut, columns);
+  return prims
+    .filter(p => p.type === 'line' && p.weight === 'thin' && !p.dash
+      && Math.abs(p.x1 - p.x2) < 1e-6 && Math.abs(p.y1 - p.y2) > 1e-6)
+    .map(p => p.x1)
+    .sort((a, b) => a - b);
+}
