@@ -5,13 +5,14 @@
  * 呼ばれるようになった。
  *
  * §5.7「既存部品の転用」どおり、レイキャスト自体は新規実装だが、断点抽出・セル所有者探索は
- * 既存の純関数（collectRunBreaks・buildCellToRoom・worldToCell・kneeDropRecordsOnAxis・
- * roomCeilingHeight）をそのまま再利用する。
+ * 既存の純関数（collectRunBreaks・worldToCell・kneeDropRecordsOnAxis）をそのまま再利用する。
+ * セル所有者・床天井の解決（buildCellToRoom・roomCeilingHeight）は展開図一般化Phase 1で
+ * `space/spaceModel.js`の`buildSpaceIndex`へ集約し、本ファイルはそれを`makeProbeContext`
+ * 経由で呼ぶ側になった。
  */
 import { OpeningCategory } from '@core';
-import { buildCellToRoom } from '../../finish/edgeClassify.js';
 import { worldToCell } from '../../finish/gridCells.js';
-import { roomCeilingHeight } from '../../finish/roomMetrics.js';
+import { buildSpaceIndex } from '../space/spaceModel.js';
 import { kneeDropRecordsAtPointOnWall } from '../../finish/kneeDropWall.js';
 import { effectiveHeight } from '../../openings/openingNumbering.js';
 import { collectRunBreaks } from '../elevationFloorProfile.js';
@@ -200,14 +201,12 @@ function probeOwnerRoom(cut, worldMid, layer, probeCtx, sign) {
 }
 
 // 切断線から視線方向へoffsetMm進んだ位置の所有Room（probeOwnerRoomの一般形）。
+// 1点クエリはcellAt（buildSpaceIndex。makeProbeContext内で公開）の一般形なので、cellAt経由にする。
 function ownerRoomAtOffset(cut, worldMid, layer, probeCtx, offsetMm) {
   const { line } = cut;
   const px = line.isVertical ? line.axisValue + offsetMm : worldMid;
   const py = line.isVertical ? worldMid : line.axisValue + offsetMm;
-  const cell = worldToCell(px, py, layer.graph);
-  if (!cell) return null;
-  const map = probeCtx.cellToRoomFor(layer);
-  return map.get(cell.key) ?? null;
+  return probeCtx.cellAt(layer, px, py)?.room ?? null;
 }
 
 /**
@@ -417,58 +416,27 @@ function openingPassThroughRangesFor(wall, graph, worldMid, floorZ, z0, z1) {
 /**
  * layers（各{graph,floorZMm,role}）から、レイキャストに必要な索引（層別cellToRoom・
  * 天井高さ・floorZ算出）をまとめたプローブコンテキストを作る（§4 sectionProbe.js冒頭）。
- * 層ごとにbuildCellToRoomを1回だけ作りメモ化する（worldToCellの毎回filter+sortコスト対策。
- * §11リスク2で織り込み済み）——cellToRoomFor はlayerオブジェクト単位でキャッシュしつつ、
- * 実体（buildCellToRoomの結果）はgraph単位で共有する（同じgraphを指す複数layer——self/above/
- * below等——が同じ実体を再利用できるように）。
+ *
+ * 展開図一般化Phase 1（`.claude/elevation-redesign.md` §5.2/§5.3）: 床天井の式（cellToRoomの
+ * メモ化・chOf・floorZOf）の実体は`space/spaceModel.js`の`buildSpaceIndex`へ移設した。
+ * ここは索引を呼ぶ**薄いラッパ**——既存4キー（cellToRoomByLayer/cellToRoomFor/chOf/floorZOf）の
+ * 対外契約（返り値の形・各関数の入出力）は移設前と完全に同一。`cellAt`はQA指摘で追加した5つ目の
+ * キーで、`ownerRoomAtOffset`（probeOwnerRoomの一般形）の本番呼び出しがこれ経由になった。
  * @param {Array<{graph:object, floorZMm:number, role:string}>} layers
  * @returns {{cellToRoomByLayer:Map, cellToRoomFor:(layer:object)=>Map,
  *   chOf:(room:object|null, graph:object)=>number|null,
- *   floorZOf:(room:object|null, layer:object)=>number}}
+ *   floorZOf:(room:object|null, layer:object)=>number,
+ *   cellAt:(layer:object, worldX:number, worldY:number)=>{room:object|null, floorZ:number, ceilZ:number|null}|null}}
  */
 export function makeProbeContext(layers, opts = {}) {
-  // 帯のz原点（その帯の部屋の実効FL）と階のdatumのズレ。呼び出し側（elevationBand.jsの
-  // bandFloorOffsetMm）が単一情報源。未指定＝0＝従来どおり階のdatum基準。
-  const floorOffsetMm = opts.floorOffsetMm ?? 0;
-  const cellToRoomByLayer = new Map(); // layer -> Map<cellKey, Room>（呼び出し側から参照可能に公開）
-  const cellToRoomByGraph = new Map(); // graph -> Map<cellKey, Room>（実体はgraph単位で共有）
-  const chCacheByGraph = new Map();    // graph -> Map<room.id, mm>
-
-  function cellToRoomFor(layer) {
-    const cached = cellToRoomByLayer.get(layer);
-    if (cached) return cached;
-    let byGraph = cellToRoomByGraph.get(layer.graph);
-    if (!byGraph) {
-      byGraph = buildCellToRoom(layer.graph);
-      cellToRoomByGraph.set(layer.graph, byGraph);
-    }
-    cellToRoomByLayer.set(layer, byGraph);
-    return byGraph;
-  }
-  for (const layer of layers ?? []) cellToRoomFor(layer);
-
-
-
-  function chOf(room, graph) {
-    if (!room) return null;
-    let cache = chCacheByGraph.get(graph);
-    if (!cache) { cache = new Map(); chCacheByGraph.set(graph, cache); }
-    if (!cache.has(room.id)) cache.set(room.id, roomCeilingHeight(graph, room).mm);
-    return cache.get(room.id);
-  }
-
-  // **帯のローカル z=0 ≡ その帯の部屋の実効FL**（elevationBand.jsのbandFloorOffsetMm。
-  // finalizeBandの平行移動と対の不変条件）。ここを階のdatum基準のままにすると、実効FL≠0の
-  // 部屋の帯だけエンジンの床zがfloorOffsetぶんズレ、床断面線と重ならない中線やアキの誤った
-  // 下端として現れる（ユーザー実機指摘2026-09「「11'」B1/A2の不要な中線」）。
-  // layer.floorZMm 自体は触らない——壁・断面のzまで動くため。
-  function floorZOf(room, layer) {
-    if (!room) return layer.floorZMm - floorOffsetMm; // 部屋外（所有Room不明）はlayer自身の基準面へ
-    const graph = layer.graph;
-    return layer.floorZMm + graph.effectiveFloorLevel(room) - graph.floorDatum - floorOffsetMm;
-  }
-
-  return { cellToRoomByLayer, cellToRoomFor, chOf, floorZOf };
+  const spaceIndex = buildSpaceIndex(layers, opts);
+  return {
+    cellToRoomByLayer: spaceIndex.cellToRoomByLayer,
+    cellToRoomFor: spaceIndex.cellToRoomFor,
+    chOf: spaceIndex.chFor,
+    floorZOf: spaceIndex.floorZFor,
+    cellAt: spaceIndex.cellAt,
+  };
 }
 
 /**

@@ -1297,6 +1297,13 @@ SILHOUETTE」（AMBIGUITY B）は撤回した——断面は隣に何が見え�
 INV2は「役割名にも配列順にも依存していない」ことの実行可能な証明であり、層まわりの新しい分岐を
 入れた瞬間に落ちる——層の判断をここへ足すときは、まずこの3本を通すこと。
 
+## 空間セル索引（`space/spaceModel.js`。展開図一般化Phase 1・2026-09）
+床天井の式（「帯のローカルz=0 ≡ その帯の部屋の実効FL」を含む）は`space/spaceModel.js`の
+`buildSpaceIndex`へ集約し、ここを唯一の置き場所とした。`sectionProbe.js`の`makeProbeContext`は
+この索引を内包する薄いラッパで、対外契約（`floorZOf`/`chOf`等）は変えていない。Phase 2以降は
+ここへ「列に沿ったヒット列（奥行き方向の複数ヒット）」を足し、腰壁・垂れ壁の向こう側の床天井を
+1点プローブの外から注入せず索引から引けるようにする（`.claude/elevation-redesign.md`参照）。
+
 ## 2.5D立体の加算レイヤ（全展開図共通。`elevationSolids.js`。追加仕様2026-08）
 「2.5D展開を階段・吹抜けだけでなく全ての展開図へ」への回答は、**`buildFaceFigure`を断面エンジン
 （`section/sectionEngine.js`）へ置き換えることではなく、階段帯で確立済みの「純粋な加算レイヤ」
