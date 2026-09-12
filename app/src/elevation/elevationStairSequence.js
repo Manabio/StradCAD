@@ -40,10 +40,10 @@ import { UNSUPPORTED_FAN_LANE_TYPES, fanLaneCuts } from './section/cuts/fanCuts.
 import { makeProbeContext } from './section/sectionProbe.js';
 import { buildSectionFigure } from './section/sectionEngine.js';
 import { buildCutContent, upperFloorCutWallEndsOf } from './section/sectionContent.js';
-import { cutDrawRange } from './section/sectionTypes.js';
+import { cutDrawRange, localXOf } from './section/sectionTypes.js';
 import {
   emitLine, splitGapMarksByStair, dashHorizontalsBehindStair,
-  joinToStairProfile, clipStairDetailInSlabBand,
+  joinToStairProfile,
 } from './section/sectionEmit.js';
 import {
   stairPrimitivesForCut, stairWallGapZones, stairFaceOccluderRects, stairCutFloorProfile,
@@ -458,6 +458,17 @@ function contentForCut(rawCut, probeCtx, endExtendMm = 0, bandRoomBounds = null,
   // アキのバツまでは吹抜けの多層帯とまったく同じ処理を通る。ここから下が階段固有の後段加工。
   const { cut: pcut, columns, wallPrims, gapMarks: rawGapMarks } =
     buildCutContent(cut, probeCtx, { endExtendMm, bandRoomBounds, upperPlaneOverhang: true });
+  // 展開図一般化Phase 6b-2「一体設計」(.claude/elevation-redesign.md§5.12):
+  // 階段自身の幾何（踏面CUT・ささら・桁枠）の描画範囲は`cutDrawRange`を、上階の平面が面端より
+  // 外へ続く量（`upperOverhang`）だけ広げたもの——2FLへ到達する終端を、上階の床のはり出しと
+  // 同じ終点まで許す。末尾の返り値（upperOverhang等）と同じ計算を先に1回だけ行い、
+  // `stairPrimitivesForCut`の`opts.outerBound`へそのまま渡す（二重計算しない）。
+  // QA是正（2026-09-12その6）: `opts.outerBound`は増分ではなく**面ローカルxの絶対値**（はり出しの
+  // 外端そのもの）で渡す——`upperOverhang`（`wallLessEndAt`補正済みの基準からの増分）をそのまま
+  // `cutDrawRange`へ加算すると、壁のない端部かつ上階のはり出しがある構成で基準がズレ二重計上/
+  // 過小計上になりうるため、`stairOverhangOuter`（`localXOf`から直接出す絶対値。cutDrawRange
+  // 自身と同じ基準）を別途用意する。
+  const overhang = upperOverhangOf(pcut, columns);
   // アキのバツは、手前に階段が描かれる区間だけ破線へ落とす（ユーザー実機指摘2026-08「6」C
   // 「但し、階段に隠れる部分は破線」）。隠れる範囲はプリミティブからの逆算ではなくflight自身の
   // 見付け矩形（stairOccluderRects）から求める。
@@ -476,11 +487,15 @@ function contentForCut(rawCut, probeCtx, endExtendMm = 0, bandRoomBounds = null,
   // （最終contentへは下で別途合流させる）。
   const wallContent = dashHorizontalsBehindStair(wallPrims, occluders);
   // 下ささらの見えがかりは下階天井〜上階床の帯（床構造の中）でカットする
-  // （ユーザー実機指摘2026-08「6」D2。sectionEmit.js参照）。
-  const stairContent = zRef
-    ? clipStairDetailInSlabBand(
-        stairPrimitivesForCut(cut.stairCut ?? null, cut, columns), zRef.ceilLowAbs, zRef.floorHeight)
-    : stairPrimitivesForCut(cut.stairCut ?? null, cut, columns);
+  // （ユーザー実機指摘2026-08「6」D2。sectionEmit.js参照）。QA是正（2026-09-12その4）:
+  // このスラブ帯クリップは`stairPrimitivesForCut`の出口（x終端クリップの前）へ移設した——
+  // x終端クリップが先に1本のDETAIL polylineを2本へ分割した後にスラブ帯クリップのisLower
+  // （x範囲重複＋meanZ比較でペアを見るだけの判定）が走ると、同じ部材の分割済み断片どうしを
+  // 別々のささらと誤認してスラブ帯を余分に削る（`stairPrimitivesForCut`のslabBandオプションの
+  // ヘッダコメント参照）。ここでは呼ばず`opts.slabBand`で渡すだけにする。
+  const stairOpts = { outerBound: overhang.stairOverhangOuter,
+    slabBand: zRef ? { zLo: zRef.ceilLowAbs, zHi: zRef.floorHeight } : undefined };
+  const stairContent = stairPrimitivesForCut(cut.stairCut ?? null, cut, columns, stairOpts);
   // WP-C: 構造梁（踊り場受け梁等）の加算寄与。stairContentと独立の別レイヤのため、
   // clipWallFloorEdgeUnderZigzag（階段ジグザグの向こうの壁縁除去）の対象には含めない。
   const structuralContent = structuralPrimitivesForCut(structuralContribution(cut.layers), pcut, columns);
@@ -498,7 +513,7 @@ function contentForCut(rawCut, probeCtx, endExtendMm = 0, bandRoomBounds = null,
     clipWallFloorEdgeUnderZigzag(joined, stairContent), drawFloorProfile), cut.face);
   return {
     content: [...wallOut, ...gapMarks, ...stairContent, ...structuralContent],
-    ...upperOverhangOf(pcut, columns),
+    ...overhang,
   };
 }
 
@@ -518,17 +533,24 @@ function contentForCut(rawCut, probeCtx, endExtendMm = 0, bandRoomBounds = null,
  * `upperFloorEndsOf`）で、下階graphは自階の層・上階graphははり出しを決めた層から取る
  * （どちらもこの`pcut.layers`が唯一の情報源。図側で引き直さない）。落とすのは床の断面線だけで、
  * はり出し自体（天井断面線・壁エッジ）は残す——上階の壁は実在するため。
+ * stairOverhangOuter（QA是正2026-09-12その6）… `upperOverhang`と同じ勝ち窓（best）から、
+ * `stairDrawRange`（section/sectionStair.js）へそのまま渡せる**面ローカルx絶対値**を計算した
+ * もの。`upperOverhang`自体は`wallLessEndAt`補正済みの`baseLo/baseHi`からの**増分**であり、
+ * その基準は`cutDrawRange`自身の基準（常に`probeExtendLoMm/HiMm`込み）と食い違うことがある
+ * （壁のない端部かつ上階のはり出しがある構成）ため、`stairDrawRange`には増分ではなく
+ * `localXOf`で直接出した絶対値を渡し、`Math.min/max`で比較する（基準の取り方に依存しない）。
  * @param {import('./section/sectionTypes.js').SectionCut} pcut
  * @param {import('./section/sectionTypes.js').SectionColumn[]} [columns]
  * @returns {{upperOverhang:{lo:number,hi:number}|undefined, upperFloorZ:number|undefined,
  *   upperFloorCutEnds:{lo:number|null,hi:number|null}|undefined,
- *   upperFloorEnds:{lo:boolean,hi:boolean}|undefined}}
+ *   upperFloorEnds:{lo:boolean,hi:boolean}|undefined,
+ *   stairOverhangOuter:{lo:number,hi:number}|undefined}}
  */
-function upperOverhangOf(pcut, columns) {
+export function upperOverhangOf(pcut, columns) {
   const windows = pcut.layerRunWindows;
   if (!windows) {
     return { upperOverhang: undefined, upperFloorZ: undefined, upperFloorCutEnds: undefined,
-      upperFloorEnds: undefined };
+      upperFloorEnds: undefined, stairOverhangOuter: undefined };
   }
   const line = pcut.line;
   let best = null;
@@ -555,11 +577,11 @@ function upperOverhangOf(pcut, columns) {
     const worldLo = Math.max(0, baseLo - w.lo), worldHi = Math.max(0, w.hi - baseHi);
     const local = pcut.dirSign > 0 ? { lo: worldLo, hi: worldHi } : { lo: worldHi, hi: worldLo };
     if (local.lo + local.hi <= 0) continue;
-    if (!best || local.lo + local.hi > best.local.lo + best.local.hi) best = { local, layer };
+    if (!best || local.lo + local.hi > best.local.lo + best.local.hi) best = { local, layer, w };
   }
   if (!best) {
     return { upperOverhang: undefined, upperFloorZ: undefined, upperFloorCutEnds: undefined,
-      upperFloorEnds: undefined };
+      upperFloorEnds: undefined, stairOverhangOuter: undefined };
   }
   // 面端のCLを引く下階graphは自階の層（面はそのgraphのcomposeRoomFacesで作られている）。
   // 面・自階graphのどちらかが欠ける切断（単体テストの手組みcut等）は**gateを渡さない**＝
@@ -567,9 +589,14 @@ function upperOverhangOf(pcut, columns) {
   const selfLayer = (pcut.layers ?? []).find(l => l?.role === 'self');
   const floorEnds = pcut.face && selfLayer?.graph && best.layer?.graph
     ? upperFloorEndsOf(pcut.face, selfLayer.graph, best.layer.graph) : undefined;
+  // stairOverhangOuter: best.w（勝ち窓。worldLo/worldHi）を`localXOf`で直接面ローカルxへ変換する
+  // （`cutDrawRange`自身と同じ変換＝基準が1つ）。dirSignでlo/hi側が入れ替わるのは`local`と同じ規約。
+  const outerA = localXOf(pcut, best.w.lo), outerB = localXOf(pcut, best.w.hi);
+  const stairOverhangOuter = pcut.dirSign > 0
+    ? { lo: outerA, hi: outerB } : { lo: outerB, hi: outerA };
   return { upperOverhang: best.local, upperFloorZ: best.layer.floorZMm,
     upperFloorCutEnds: upperFloorCutWallEndsOf(columns, best.layer.floorZMm),
-    upperFloorEnds: floorEnds };
+    upperFloorEnds: floorEnds, stairOverhangOuter };
 }
 
 /**

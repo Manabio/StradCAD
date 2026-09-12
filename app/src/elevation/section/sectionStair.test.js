@@ -5,7 +5,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Plane, PlanGraph, CenterLineType, Discipline, StairType, StructuralMaterialType } from '@core';
 import { generateRoomWallsFromOutline } from '../../finish/wallGeneration.js';
-import { stairContribution, stairPrimitivesForCut, clipStringerToAnchors, landingFramePrimitives, stairWallGapZones, stairCutFloorProfile, stairFaceHits, stairOccluderRects, stairFaceOccluderRects } from './sectionStair.js';
+import { stairContribution, stairPrimitivesForCut, clipStringerToAnchors, landingFramePrimitives, stairWallGapZones, stairCutFloorProfile, stairFaceHits, stairOccluderRects, stairFaceOccluderRects, stairDrawRange } from './sectionStair.js';
+import { localXOf, cutDrawRange } from './sectionTypes.js';
 
 function makeGraph(name = 'p1') {
   const plane = new Plane(name, 0, `${name}階`, 1, 1);
@@ -278,6 +279,191 @@ test('【失敗系・QA指摘2026-09】stairPrimitivesForCut: 列が面の描画
   const prims = stairPrimitivesForCut(c, cut, outside);
   assert.deepEqual(prims.filter(p => p.type === 'polyline'), [],
     '交わりが空のとき元のrangeへ戻すと、面の外にジグザグが描かれてしまう');
+});
+
+// ==== 展開図一般化Phase 6b-2「一体設計」（.claude/elevation-redesign.md§5.12）====
+// 規則: stairDrawRange(cut, outerBound) = cutDrawRange(cut) を、outerBound（はり出しの外端の
+// **面ローカルx絶対値**。増分ではない。QA是正2026-09-12その6）がそれより外のときだけ
+// Math.min/maxで広げたもの。階段自身の幾何（踏面CUT・段鼻・ささら）はこの範囲まで生成時に
+// クランプし、出口で同じ範囲へクリップする。
+
+// ---- QA是正2026-09-12その6: 壁のない端部(probeExtendLoMm)＋はり出しでも基準が1つ ----
+// cutDrawRange自身がすでにprobeExtendLoMm(壁のない端部の体裁延長)ぶん広がっている構成で、
+// さらに外側まで続くはり出し(outerBound)を渡したとき、境界は**はり出しの外端の絶対world位置を
+// localXOfで直接変換した値**に一致するはず——増分契約（cutDrawRange.lo - ext.lo）へ戻すと、
+// この「cutDrawRange.loが既に0でない」構成だけ二重計上（またはbaseLoとのズレ）でズレる。
+test('【QA是正2026-09-12その6】stairDrawRange: 壁のない端部(probeExtendLoMm=150)＋はり出しでも境界ははり出しの外端(localXOf)に一致する', () => {
+  const cut = {
+    dirSign: 1,
+    line: { isVertical: true, axisValue: 500, lo: 1500, hi: 4500, probeExtendLoMm: 150 },
+  };
+  // 前提: cutDrawRange.lo は壁のない端部の延長(150)ぶん既に0より外（-150）。
+  const draw = cutDrawRange(cut);
+  assert.equal(draw.lo, -150, '前提: probeExtendLoMm=150ぶんcutDrawRange.loは-150のはず');
+
+  // はり出しの外端（world=1300。壁のない端部の延長(world1350)よりさらに50mm外）を
+  // 面ローカルx絶対値へ変換したものをouterBoundとして渡す。
+  const outerWorldEdge = 1300;
+  const outerLo = localXOf(cut, outerWorldEdge);
+  assert.equal(outerLo, -200, '前提: localXOf(cut,1300)は-200のはず(world1300-origin1500)');
+
+  const range = stairDrawRange(cut, { lo: outerLo });
+  assert.equal(range.lo, localXOf(cut, outerWorldEdge),
+    `stairDrawRange.loははり出しの外端(world${outerWorldEdge}→local${outerLo})に一致するはず` +
+    `（実際${range.lo}）`);
+  // 増分契約（cutDrawRange.lo - outerLo）へ戻すと、この構成では -150-(-200)=50 になり、
+  // 符号まで反転した全く異なる値になる——cutDrawRange.loが0でない（壁のない端部）ことが
+  // ズレを生む根本原因。
+  const wrongIncrementContract = draw.lo - outerLo;
+  assert.notEqual(wrongIncrementContract, range.lo,
+    '失敗系: 増分契約で計算した値は絶対値契約の結果と一致しない（この構成でズレが生じる証拠）');
+});
+
+// ---- D2-2: 最終段の蹴込（鼻の出） ----
+test('【D2-2】stairPrimitivesForCut: outerBoundを渡すと最終段の蹴込(鼻の出)がstairDrawRangeの外に残る', () => {
+  const graph = makeGraph();
+  const { stair } = makeSwitchbackFixture(graph, StructuralMaterialType.STEEL);
+  const c = stairContribution(stair, graph, FLOOR_HEIGHT);
+  const cut = {
+    seqNo: '2', line: { isVertical: true, axisValue: 500, lo: 1500, hi: 4500 },
+    viewSign: 1, dirSign: 1, layers: [], zRange: { loZ: 0, hiZ: 3000 }, baseFloorZ: 0,
+  };
+  // 列自体も面の外へ広がっている想定（実データのlayerRunWindows同様、描画範囲より広い）——
+  // 列がcutDrawRangeちょうどだと、outerBoundを広げても列側のMath.min/maxで頭打ちになり
+  // 効果が出ない（fullColumnsXRangeはcolumnsとstairDrawRangeの交わりを取るため）。
+  const columns = [{ x0: -100, x1: 3000, worldLo: 1400, worldHi: 4500, bands: [] }];
+  const zigzagOf = prims => prims.find(p => p.type === 'polyline' && p.weight === 'thick');
+
+  // 末尾3点: [nose_4(踊り場の1段手前), foot_5(最終段の蹴込の足元), nose_5(最終段=2FL到達点)]。
+  const clamped = zigzagOf(stairPrimitivesForCut(c, cut, columns));
+  const tail = clamped.points.slice(-3);
+  assert.deepEqual(tail.map(p => p[0]), [600, 0, 0],
+    '前提: outerBound省略では最終段の鼻の足元(foot_5)がcutDrawRangeの境界(local0)で止まり、' +
+    '蹴上が垂直(x不変)・踏面は蹴込ぶん(20)短い600のまま');
+
+  const nosing = stair.nosing; // 既定20mm
+  // cutDrawRange.lo(=0)より外（はり出しの外端）は面ローカルx絶対値=-nosingそのもの。
+  const extended = zigzagOf(stairPrimitivesForCut(c, cut, columns, { outerBound: { lo: -nosing } }));
+  const extTail = extended.points.slice(-3);
+  assert.deepEqual(extTail.map(p => p[0]), [600, -nosing, 0],
+    `outerBound={lo:${-nosing}}で最終段の蹴込の足元(foot_5)がstairDrawRangeの外(local=${-nosing})まで残るはず`);
+  assert.equal(tail[0][0] - extTail[1][0], 600 + nosing, '踏面長は蹴込ぶん伸びてtreadMm+nosingMm(620)になるはず');
+  assert.equal(tail[1][0], tail[2][0], '前提: outerBound省略では最終段の蹴上は垂直(foot_5・nose_5が同x)のまま');
+  assert.notEqual(extTail[1][0], extTail[2][0],
+    'outerBoundありでは最終段の蹴上が斜め(foot_5・nose_5のxが異なる)になるはず');
+});
+
+// ---- 失敗系: outerBound省略は従来（cutDrawRangeぴったり）と同じ ----
+test('【失敗系】stairPrimitivesForCut: outerBound未指定は従来どおりcutDrawRangeで止まる', () => {
+  const graph = makeGraph();
+  const { stair } = makeSwitchbackFixture(graph, StructuralMaterialType.STEEL);
+  const c = stairContribution(stair, graph, FLOOR_HEIGHT);
+  const cut = {
+    seqNo: '2', line: { isVertical: true, axisValue: 500, lo: 1500, hi: 4500 },
+    viewSign: 1, dirSign: 1, layers: [], zRange: { loZ: 0, hiZ: 3000 }, baseFloorZ: 0,
+  };
+  const columns = [{ x0: -100, x1: 3000, worldLo: 1400, worldHi: 4500, bands: [] }];
+  const zigzagOf = prims => prims.find(p => p.type === 'polyline' && p.weight === 'thick');
+  const withoutOpts = zigzagOf(stairPrimitivesForCut(c, cut, columns));
+  const withEmptyOpts = zigzagOf(stairPrimitivesForCut(c, cut, columns, {}));
+  // cutDrawRangeちょうど(lo=0,hi=3000)を絶対値で明示しても、Math.min/maxなので広がらない
+  // （QA是正2026-09-12その6の絶対値契約での「無効化」の書き方。旧{lo:0,hi:0}は増分契約の書き方
+  // だったため同じ意味にならない）。
+  const withNoOpOuterBound = zigzagOf(stairPrimitivesForCut(c, cut, columns, { outerBound: { lo: 0, hi: 3000 } }));
+  assert.deepEqual(withoutOpts.points, withEmptyOpts.points,
+    'opts省略とopts={}は同じ結果(既定outerBound=undefined)のはず');
+  assert.deepEqual(withoutOpts.points, withNoOpOuterBound.points,
+    'outerBound:{lo:0,hi:3000}(=cutDrawRangeそのもの)を明示しても省略時と同じはず');
+  const xs = withoutOpts.points.map(p => p[0]);
+  assert.ok(Math.min(...xs) >= 0 - 1e-9 && Math.max(...xs) <= 3000 + 1e-9,
+    'outerBound未指定の全点はcutDrawRange[0,3000]の内側のはず');
+});
+
+// ---- P3: 終端クリップ（stairPrimitivesForCutの出口で1箇所）／QAその1: 旧コメント
+// 「cutDrawRangeを超える幾何を生成している箇所が無いため素通り」は事実誤りだった ----
+// 壁centerline(グリッドCL)を基準に組まれるstringerEndCapPrimitives/innerStringerSilhouetteは
+// 壁の内側面（cutDrawRangeの基準）より半壁厚ぶん外側に出ることがある（実機と同じ構成。
+// elevationStairSequence.test.jsの「往路ささらの端面」テスト参照）。
+test('【終端】stairPrimitivesForCut: outerBound省略でもcutDrawRangeを超える幾何があれば境界へ寄るか落ちる', () => {
+  const graph = makeGraph();
+  const { stair } = makeSwitchbackFixture(graph, StructuralMaterialType.STEEL);
+  const c = stairContribution(stair, graph, FLOOR_HEIGHT);
+  const landingAbs = 1200;
+  // cut.lineを往路flightの幅(acrossLo:0,acrossHi:1000)より内側(50..1950)に取り、壁centerlineと
+  // 壁内側面の半壁厚ズレを模す——acrossLo(world0)はcutDrawRangeの外(local-50)になる。
+  const cut = {
+    seqNo: '1', line: { isVertical: false, axisValue: 3000, lo: 50, hi: 1950 },
+    viewSign: 1, dirSign: 1, layers: [], zRange: { loZ: 0, hiZ: 3000 }, baseFloorZ: landingAbs,
+  };
+  const columns = [{ x0: 0, x1: 1900, worldLo: 50, worldHi: 1950, bands: [] }];
+  const prims = stairPrimitivesForCut(c, cut, columns);
+  const range = { lo: 0, hi: 1900 }; // cutDrawRange(cut)（probeExtend無し）
+  for (const p of prims) {
+    if (p.type === 'line') {
+      assert.ok(Math.min(p.x1, p.x2) >= range.lo - 1e-6 && Math.max(p.x1, p.x2) <= range.hi + 1e-6,
+        `line x=${p.x1}..${p.x2}がstairDrawRange[${range.lo},${range.hi}]の外`);
+    } else if (p.type === 'polyline') {
+      for (const [x] of p.points) {
+        assert.ok(x >= range.lo - 1e-6 && x <= range.hi + 1e-6,
+          `polyline点 x=${x}がstairDrawRange[${range.lo},${range.hi}]の外`);
+      }
+    }
+  }
+  // QA是正（2026-09-12その2）: 往路flightのacrossLo(world0→local-50)はcutDrawRangeの外だが、
+  // ささらの端面（stringerEndCapPrimitives）は**削除ではなく境界(local0)へクランプ**されて
+  // 残る——壁centerline位置の情報を消さず、描画範囲の端に寄るだけ。
+  const dashedAtOuter = prims.filter(p =>
+    p.type === 'line' && p.x1 === p.x2 && p.dash === 'dashed' && Math.abs(p.x1 - range.lo) < 1e-6);
+  assert.equal(dashedAtOuter.length, 1,
+    'stairDrawRangeの外(acrossLo)にあったささらの端面は境界(local0)へクランプされて1本残るはず');
+  // 内側(acrossHi。LANE_GAP/2ぶん詰めたworld950→local(950-50)=900)は範囲内なので元のまま残る。
+  const dashedAtInner = prims.some(p =>
+    p.type === 'line' && p.x1 === p.x2 && p.dash === 'dashed' && Math.abs(p.x1 - 900) < 1e-6);
+  assert.ok(dashedAtInner, 'stairDrawRangeの内側(acrossHi)のささらの端面は元の位置のまま残るはず');
+});
+
+// ---- QA是正その4（2026-09-12）: スラブ帯クリップはx終端クリップより前に走る ----
+// secondaryFlights（switchbackCuts.jsがseq2にのみ設定する「往復間に壁が無いときに見える他レーン
+// のささら」。elevationStairSequence.test.jsの同名フィクスチャと同じ組み方）経由のDETAIL
+// polylineは、clipPolylineAboveOccluderによる占有形状の切り出しで「面の外へ出た閉じた輪郭」
+// になる——x終端クリップが1つの部材を2本の断片に分ける実例（実機「6」で見つかった退行と
+// 同じ機構。sectionEmit.test.jsの手組みpolylineでの確認に続く、stairPrimitivesForCut自身を
+// 通した固定）。
+test('【QA是正2026-09-12その4】stairPrimitivesForCut: スラブ帯クリップ(opts.slabBand)はx終端クリップより前に走る', () => {
+  const graph = makeGraph();
+  const { stair } = makeSwitchbackFixture(graph, StructuralMaterialType.STEEL);
+  const c = stairContribution(stair, graph, FLOOR_HEIGHT);
+  const c2 = { ...c, secondaryFlights: [c.flights[1]] };
+  const cut = {
+    seqNo: '2', line: { isVertical: true, axisValue: 500, lo: 1500, hi: 4500 },
+    viewSign: 1, dirSign: 1, layers: [], zRange: { loZ: 0, hiZ: 3000 }, baseFloorZ: 0,
+  };
+  const columns = [{ x0: -200, x1: 3000, worldLo: 1300, worldHi: 4500, bands: [] }];
+  const thinOf = prims => prims.filter(p => p.type === 'polyline' && p.weight === 'thin');
+
+  // slabBand無し（x終端クリップだけ）での出力から、面の外へ出ていた部材がx=3000(面端)から
+  // 面の内側へ伸びる2点のDETAIL polyline（閉じた輪郭の一部）として残ることを確認し、その
+  // 両端のzを「まだ分割されていない1本」の証拠として使う。
+  const baseline = stairPrimitivesForCut(c2, cut, columns);
+  const unsplit = thinOf(baseline).find(p => p.points.length === 2 && Math.abs(p.points[0][0] - 3000) < 1e-6);
+  assert.ok(unsplit, '前提: secondaryFlights経由の2点DETAIL polyline(x=3000起点)が見つかるはず');
+  const [zA, zB] = unsplit.points.map(([, y]) => -y);
+  assert.ok(Math.abs(zA - zB) > 500, '前提: 両端のzは十分離れている(スラブ帯を挟める)はず');
+
+  // スラブ帯をこの部材のz範囲の中間（30%〜60%）に置く——両端(zA/zB)を挟む位置。
+  const zMin = Math.min(zA, zB), zSpan = Math.abs(zA - zB);
+  const slabBand = { zLo: zMin + zSpan * 0.3, zHi: zMin + zSpan * 0.6 };
+
+  const sharePolyline = prims => thinOf(prims).some(p =>
+    p.points.some(([, y]) => Math.abs(-y - zA) < 1e-6) &&
+    p.points.some(([, y]) => Math.abs(-y - zB) < 1e-6));
+
+  // 正しい順序（現行実装）: opts.slabBandを渡すと、スラブ帯クリップはx終端クリップより前に
+  // 走る——この部材はまだ分割されておらず`isLower`の相手が無いため、帯の中を通っていても
+  // クリップされない。両端(zA・zB)は同じ1本のpolylineに残る。
+  const withSlabBand = stairPrimitivesForCut(c2, cut, columns, { slabBand });
+  assert.ok(sharePolyline(withSlabBand),
+    'opts.slabBandを渡しても、この部材はx終端クリップ前にスラブ帯クリップを受けるため両端が同じ1本に残るはず');
 });
 
 // ---- ささらはSTEELのみ（失敗系WOODで0本） ----

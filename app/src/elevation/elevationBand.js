@@ -27,6 +27,7 @@ import {
 } from './elevationStyle.js';
 import {
   translatePrimitive, collectGridCLs, appendRoomNameFrame, dedupeCoincidentLines,
+  clipPrimitivesToXRange,
 } from './elevationPrimitives.js';
 
 /**
@@ -562,61 +563,10 @@ export function faceDrawnXRange(face, extendMm, overhang) {
  * 壁の向こう側なので描画不要」。壁のない端の延長（続きがあることを示すはね出し）は
  * faceDrawnXRangeがそのまま許すので従来どおり。
  */
-function clipContentToFace(prims, range) {
-  const inX = x => x >= range.lo - BAND_GAP_EPS && x <= range.hi + BAND_GAP_EPS;
-  const out = [];
-  for (const q of prims) {
-    if (q.type === 'line') {
-      const lo = Math.min(q.x1, q.x2), hi = Math.max(q.x1, q.x2);
-      if (hi < range.lo - BAND_GAP_EPS || lo > range.hi + BAND_GAP_EPS) continue;
-      if (lo >= range.lo - BAND_GAP_EPS && hi <= range.hi + BAND_GAP_EPS) { out.push(q); continue; }
-      if (Math.abs(q.x1 - q.x2) < BAND_GAP_EPS) continue; // 縦線は範囲外なら落とすだけ
-      const at = t => [q.x1 + (q.x2 - q.x1) * t, q.y1 + (q.y2 - q.y1) * t];
-      const tOf = x => (x - q.x1) / (q.x2 - q.x1);
-      const t0 = Math.min(Math.max(tOf(range.lo), 0), 1), t1 = Math.min(Math.max(tOf(range.hi), 0), 1);
-      const [ta, tb] = t0 <= t1 ? [t0, t1] : [t1, t0];
-      if (tb - ta < 1e-9) continue;
-      const [x1, y1] = at(ta), [x2, y2] = at(tb);
-      out.push({ ...q, x1, y1, x2, y2 });
-    } else if (q.type === 'polyline' && Array.isArray(q.points)) {
-      for (const pts of clipPolylineX(q.points, range.lo, range.hi)) out.push({ ...q, points: pts });
-    } else if (q.type === 'text' || q.type === 'rect') {
-      if (inX(q.x)) out.push(q);
-    } else {
-      out.push(q);
-    }
-  }
-  return out;
-}
-
-// 点列をx範囲[lo,hi]でクリップし、連続する残り区間ごとの点列を返す（範囲の境界では補間する
-// ——点の取捨だけだと、範囲を跨ぐ2点の線分がまるごと消える）。
-function clipPolylineX(points, lo, hi) {
-  const out = [];
-  let run = [];
-  const push = pt => {
-    const last = run[run.length - 1];
-    if (!last || Math.abs(last[0] - pt[0]) > 1e-9 || Math.abs(last[1] - pt[1]) > 1e-9) run.push(pt);
-  };
-  const flush = () => { if (run.length > 1) out.push(run); run = []; };
-  for (let i = 0; i + 1 < points.length; i++) {
-    const [x1, y1] = points[i], [x2, y2] = points[i + 1];
-    const at = t => [x1 + (x2 - x1) * t, y1 + (y2 - y1) * t];
-    let ta = 0, tb = 1;
-    if (Math.abs(x2 - x1) < 1e-9) {
-      if (x1 < lo - BAND_GAP_EPS || x1 > hi + BAND_GAP_EPS) { flush(); continue; }
-    } else {
-      const t0 = (lo - x1) / (x2 - x1), t1 = (hi - x1) / (x2 - x1);
-      ta = Math.max(0, Math.min(t0, t1));
-      tb = Math.min(1, Math.max(t0, t1));
-      if (tb - ta < 1e-9) { flush(); continue; }
-    }
-    push(at(ta)); push(at(tb));
-    if (tb < 1 - 1e-9) flush(); // 線分の途中で範囲外へ出た＝ここで途切れる
-  }
-  flush();
-  return out;
-}
+// 実装は elevationPrimitives.js の clipPrimitivesToXRange へ移設済み（展開図一般化Phase 6b-2
+// 「一体設計」: section/sectionStair.js の階段自身の描画範囲クリップが同じ処理を要るため、
+// 帯ビルダー専用ではなくなった。呼び出し側（下のclipContentToFace(...)）は変えない）。
+const clipContentToFace = clipPrimitivesToXRange;
 
 /**
  * その走行位置（世界座標）での階段（flight）の段鼻の高さ。区間の外は端の高さでクランプする。

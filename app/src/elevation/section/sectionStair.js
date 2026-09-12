@@ -84,8 +84,9 @@ import {
 import { ElevationLineRole, weightForRole, GAP_EPS_MM as GAP_EPS } from '../elevationStyle.js';
 import { parseBaseboardHeightMm } from '../elevationFigure.js';
 import { localXOf, cutDrawRange } from './sectionTypes.js';
-import { emitLine } from './sectionEmit.js';
+import { emitLine, clipStairDetailInSlabBand } from './sectionEmit.js';
 import { mergeFloorProfiles } from '../elevationFloorProfile.js';
+import { clipPrimitivesToXRange } from '../elevationPrimitives.js';
 
 /**
  * @typedef {{isVertical:boolean, runLo:number, runHi:number, travelSign:1|-1,
@@ -266,29 +267,62 @@ function columnsXRangeOverlapping(columns, cut, runLo, runHi) {
     const wLo = Math.max(c.worldLo, runLo), wHi = Math.min(c.worldHi, runHi);
     return [localXOf(cut, wLo), localXOf(cut, wHi)];
   });
+  // **outerBoundは渡さない**——踊り場CUT線・梯子・ささら正面視矩形は面の真の描画範囲
+  // （cutDrawRange）までで閉じる。上階のはり出しぶん広げるのは階段自身が2FLへ到達する終端
+  // （fullColumnsXRange）だけ（展開図一般化Phase 6b-2「一体設計」。.claude/elevation-redesign.md§5.12）。
   return clampToDrawRange(cut, { loX: Math.min(...xs), hiX: Math.max(...xs) });
 }
 
 // columns全体（この切断の描画される全ローカルx範囲=[0,face.run]相当）のMath.min/max。columnsが
 // 空ならクランプ無し（[-Infinity,Infinity]）、面の描画範囲と交わらなければnull（=非描画）。
-function fullColumnsXRange(columns, cut) {
+// outerBound（既定undefined＝現行完全同値）: stairDrawRangeのouterBoundへそのまま渡す。
+// **階段自身の幾何（踏面CUT・段鼻・ささら）が面端の外まで伸びてよい唯一の理由**＝上階の平面が
+// 面端より外へ続く（upperOverhangOf）終端（展開図一般化Phase 6b-2「一体設計」）。
+function fullColumnsXRange(columns, cut, outerBound) {
   if (!columns || columns.length === 0) return { loX: -Infinity, hiX: Infinity };
   const xs = columns.flatMap(c => [c.x0, c.x1]);
-  return clampToDrawRange(cut, { loX: Math.min(...xs), hiX: Math.max(...xs) });
+  return clampToDrawRange(cut, { loX: Math.min(...xs), hiX: Math.max(...xs) }, outerBound);
 }
 
 // 列の範囲は**面の描画範囲を超えうる**——層ごとに面の端が違う多層帯では、上階の平面が続く側に
 // 面の外の列が立つ（sectionContent.jsのlayerRunWindows）。階段の作図（段鼻ジグザグ・梯子・
-// ささら断面）が面の外へ伸びてよいかは列ではなく`cutDrawRange`が決める（面の外に断面を描かない、
-// の単一情報源）ため、列由来のx範囲は必ずここを通す。窓が無い切断では列の範囲が描画範囲に一致
-// するため、クランプは素通り＝従来と完全同値。
-// **交わりが空なら非描画（null）**——その部品は面の描画範囲の外にしか無い。元のrangeを返すと
-// 「面の外に断面を描かない」の単一情報源を無視して面の外へ描いてしまう。呼び出し側は既に
+// ささら断面）が面の外へ伸びてよいかは列ではなく`stairDrawRange`が決める（面の外に断面を描かない、
+// の単一情報源）ため、列由来のx範囲は必ずここを通す。窓が無い切断・outerBound省略では列の範囲が
+// 描画範囲に一致するため、クランプは素通り＝従来と完全同値。
+// **交わりが空なら非描画（null）**——その部品は描画範囲の外にしか無い。元のrangeを返すと
+// 「面の外に断面を描かない」の単一情報源を無視して描いてしまう。呼び出し側は既に
 // nullを「描かない」（空配列・continue）として扱う契約になっている。
-function clampToDrawRange(cut, range) {
-  const draw = cutDrawRange(cut);
+function clampToDrawRange(cut, range, outerBound) {
+  const draw = stairDrawRange(cut, outerBound);
   const loX = Math.max(range.loX, draw.lo), hiX = Math.min(range.hiX, draw.hi);
   return hiX < loX ? null : { loX, hiX };
+}
+
+/**
+ * 階段自身の幾何（踏面CUT・段鼻・ささら見えがかり・桁枠）の描画範囲。`cutDrawRange`（面の真の
+ * 境界＋壁のない端部の体裁延長）を、`outerBound`（はり出しの外端の**面ローカルx・絶対値**）が
+ * それより外まで伸びているときだけ、そこまで広げる——階段が2FLへ到達する終端は、上階の床の
+ * はり出しと同じ終点で閉じる必要があるため（展開図一般化Phase 6b-2「一体設計」。
+ * .claude/elevation-redesign.md§5.12「一体設計（architect 2026-09-12）」）。
+ *
+ * QA是正（2026-09-12 その6）: `outerBound`を**増分**（cutDrawRangeからの加算量）として受け取る
+ * 実装は、`upperOverhangOf`側の基準（`wallLessEndAt`補正済みの`baseLo/baseHi`。壁のない端部かつ
+ * 上階のはり出しがある構成では`cutDrawRange`自身の基準＝常に`probeExtendLoMm/HiMm`込みと一致
+ * しない）とズレ、二重計上/過小計上になりうる。**絶対値で受け取りMath.min/maxで比較する**ことで、
+ * `cutDrawRange`と同じ`localXOf`変換から出す限り基準の取り方に依存しない単一の比較になる。
+ * `outerBound`省略時・該当フィールドがnullのときはそちら側を広げない（＝`cutDrawRange`そのもの。
+ * 現行完全同値）。
+ * @param {import('./sectionTypes.js').SectionCut} cut
+ * @param {{lo?:number|null, hi?:number|null}} [outerBound] - はり出しの外端の面ローカルx絶対値
+ *   （loは小さいほど外、hiは大きいほど外。cutDrawRangeより内側の値を渡しても広げない方向には
+ *   効かない——Math.min/maxが現在の範囲より外側の値だけを採用する）。
+ * @returns {{lo:number, hi:number}}
+ */
+export function stairDrawRange(cut, outerBound) {
+  const draw = cutDrawRange(cut);
+  const lo = outerBound?.lo != null ? Math.min(draw.lo, outerBound.lo) : draw.lo;
+  const hi = outerBound?.hi != null ? Math.max(draw.hi, outerBound.hi) : draw.hi;
+  return { lo, hi };
 }
 
 // flightの段鼻ジグザグ点列を、cutのローカルx軸へ投影して求める（isLengthwiseCutのゲート無し。
@@ -303,8 +337,8 @@ function clampToDrawRange(cut, range) {
 // 同じローカルx軸上に投影する必要がある——flight.travelSign/cut.dirSignだけがローカルx方向を
 // 決めるため、flight自身がcut.lineの内側にあるかどうかとは無関係に計算できる（ゲート無しに
 // した理由）。
-function computeFlightZigzagPoints(flight, cut, columns) {
-  return computeFlightProfile(flight, cut, columns).points;
+function computeFlightZigzagPoints(flight, cut, columns, outerBound) {
+  return computeFlightProfile(flight, cut, columns, outerBound).points;
 }
 
 
@@ -417,14 +451,18 @@ function clipPolylineAboveOccluder(points, seg) {
 // ジグザグ点列と段鼻列をまとめて返す（同じクランプを両方へ適用する単一実装）。段鼻は
 // ささらの上端線の起点——点列のindexの偶奇からは拾えない（蹴込>0で刻みが変わる）ため、
 // stairRunProfileが返す明示的な段鼻列をそのまま持ち回る。
-function computeFlightProfile(flight, cut, columns) {
+// outerBound（既定undefined→fullColumnsXRangeがcutDrawRangeのまま扱う）: stairPrimitivesForCut
+// のopts.outerBound（面ローカルx絶対値。QA是正2026-09-12その6で増分から絶対値へ変更）。
+// 最終段の鼻が面端の外（上階のはり出しぶん）へ残るかはこのクランプ幅で決まる
+// （展開図一般化Phase 6b-2「一体設計」）。
+function computeFlightProfile(flight, cut, columns, outerBound) {
   const worldStart = flight.travelSign > 0 ? flight.runLo : flight.runHi;
   const localDir = flight.travelSign * cut.dirSign; // ローカルx方向の歩行方向
   const startX = localXOf(cut, worldStart);
   const runLengthMm = flight.lengthMm ?? (flight.runHi - flight.runLo);
   const { points, noses } = stairRunProfile(
     flight.steps, flight.riserMm, runLengthMm, startX, -flight.baseZ, localDir, flight.nosingMm ?? 0);
-  const range = fullColumnsXRange(columns, cut);
+  const range = fullColumnsXRange(columns, cut, outerBound);
   if (!range) return { points: [], noses: [] }; // 列が面の描画範囲と交わらない＝この面には描かない
   const { loX, hiX } = range;
   const clamp = ([x, y]) => [Math.min(hiX, Math.max(loX, x)), y];
@@ -432,9 +470,9 @@ function computeFlightProfile(flight, cut, columns) {
 }
 
 // レーン縦断: 段鼻のジグザグ本体（SILHOUETTE。WOOD向け。isLengthwiseCutで縦断対象かを判定）。
-function flightZigzagPrimitives(flight, cut, columns) {
+function flightZigzagPrimitives(flight, cut, columns, outerBound) {
   if (!isLengthwiseCut(flight.isVertical, flight.acrossLo, flight.acrossHi, flight.runLo, flight.runHi, cut)) return [];
-  const clamped = computeFlightZigzagPoints(flight, cut, columns);
+  const clamped = computeFlightZigzagPoints(flight, cut, columns, outerBound);
   if (clamped.length < 2) return []; // 面の描画範囲と交わらない（clampToDrawRangeが空）＝描かない
   return [{ type: 'polyline', points: clamped, weight: weightForRole(ElevationLineRole.SILHOUETTE) }];
 }
@@ -784,13 +822,22 @@ function flightStringerFrontPrimitives(flight, cut, columns, ladderAcross, depth
 // flight.baseZ>=baseFloorZ（例: seq1のinbound。踊り場より下に一切かからない）なら空配列
 // （「往路梯子」限定という実機指示は、この条件だけで自然に満たされる——outboundはbaseZ=0<
 // landingAbs=baseFloorZなので該当し、inboundはbaseZ=landingAbsで非該当になる）。
-function stringerEndCapPrimitives(flight, cut, ladderAcross) {
+// QA是正（2026-09-12 その2）: acrossLo/acrossHiは壁centerline（グリッドCL）基準で、壁の内側面
+// （cutDrawRangeの基準）より半壁厚ぶん外側に出ることがある（実機と同じ構成。
+// elevationStairSequence.test.jsの「往路ささらの端面」テスト参照）——`localXOf`の直組みで
+// cutDrawRangeの外に出た点を出口の終端クリップに渡すと、**代替の線が無いまま消える**
+// （`cutDrawRange`のヘッダが名指しする「面の外に断面を描かない」対象そのもので、消すのではなく
+// 描画範囲の端へ**クランプ**して残すのが単一情報源化として正しい——端面の縦線は「境界のどこかに
+// ささらの端がある」という情報を持つため、位置が多少寄っても消してはいけない）。
+function stringerEndCapPrimitives(flight, cut, ladderAcross, outerBound) {
   if (!crossesFlight(flight, cut)) return [];
   const baseFloorZ = cut.baseFloorZ ?? 0;
   if (!(flight.baseZ < baseFloorZ - GAP_EPS)) return [];
   const topZ = Math.min(baseFloorZ, flight.baseZ + flight.steps * flight.riserMm);
   const { acrossLo, acrossHi } = ladderAcross ?? flight;
-  const xLo = localXOf(cut, acrossLo), xHi = localXOf(cut, acrossHi);
+  const draw = stairDrawRange(cut, outerBound);
+  const clampX = x => Math.min(draw.hi, Math.max(draw.lo, x));
+  const xLo = clampX(localXOf(cut, acrossLo)), xHi = clampX(localXOf(cut, acrossHi));
   return [
     emitLine(cut, xLo, flight.baseZ, xLo, topZ, ElevationLineRole.DETAIL),
     emitLine(cut, xHi, flight.baseZ, xHi, topZ, ElevationLineRole.DETAIL),
@@ -1079,7 +1126,8 @@ export function stairCutFloorProfile(contribution, cut, columns = null) {
  * @param {{flights:Flight[], landings:Landing[], structure:string|null, unit?:StairUnit, secondaryFlights?:Flight[]}|null} contribution
  * @param {import('./sectionTypes.js').SectionCut} cut
  * @param {import('./sectionTypes.js').SectionColumn[]} columns
- * @param {{includeLadder?:boolean, includeStringerSightline?:boolean}} [opts]
+ * @param {{includeLadder?:boolean, includeStringerSightline?:boolean, outerBound?:{lo?:number,hi?:number},
+ *   slabBand?:{zLo:number,zHi:number}}} [opts]
  *   includeLadder=false で正面視の梯子（踏面の水平線）を出さない（ユーザー明示指示2026-09
  *   「梯子の件: 階段下は描画しない」。階段下の部屋の展開は階段を**下から**見るため、踏面を
  *   正面から見た梯子は見えない）。
@@ -1088,10 +1136,32 @@ export function stairCutFloorProfile(contribution, cut, columns = null) {
  *   stringerSightlineLowerOnly=true でささらの帯のうち**下端の輪郭だけ**を描く（同指示
  *   「「13」D: 階段断面のささら（上）は、部屋の向こう側なので描画不要」。階段下から見上げる面では
  *   ささらの上端線は踏面の裏＝部屋の外にある）。既定はいずれも従来どおり。
+ *   outerBound（任意。既定undefined＝現行完全同値）… 階段自身の幾何の描画範囲（`stairDrawRange`）
+ *   を`cutDrawRange`より外まで広げる、はり出しの外端の**面ローカルx絶対値**（増分ではない。
+ *   QA是正2026-09-12その6）。呼び出し側（`elevationStairSequence.js`の`contentForCut`）が
+ *   `upperOverhangOf`の結果（`stairOverhangOuter`）をそのまま渡す——階段が2FLへ到達する終端を、
+ *   上階の床のはり出しと同じ終点まで許す（展開図一般化Phase 6b-2「一体設計」。
+ *   .claude/elevation-redesign.md§5.12）。
+ *   slabBand（任意）… 下ささらの見えがかりを下階天井〜上階床の帯（床構造の中）でカットする
+ *   `sectionEmit.js`の`clipStairDetailInSlabBand`をここで（x終端クリップより前に）適用する
+ *   （QA是正2026-09-12その4）。以前は`elevationStairSequence.js`側で本関数の返り値に外側から
+ *   適用していたが、その順序では**x終端クリップが先に走り1本のDETAIL polylineを2本へ分割した
+ *   後に`clipStairDetailInSlabBand`のisLower（x範囲が重なりmeanZが高い相手がいる方を下ささらと
+ *   みなすペア判定）が走るため、同じ部材の分割済み断片どうしを別々のささらと誤認してスラブ帯を
+ *   余分に削る**副作用があった。未分割（x終端クリップ前）の状態でペア判定する本関数内へ
+ *   移設し、`slabBand`を渡した場合の順序（z帯クリップ→x終端クリップ）はここ1箇所だけで決める。
+ *   `elevationBand.js`のstairOverと`sectionEngine.js`のSTRAIGHT階段経路は`opts.slabBand`を
+ *   渡さないため、このクリップ自体が従来どおり非適用（挙動不変）——両者はそもそも
+ *   `clipStairDetailInSlabBand`を必要としない経路であり、本関数が単一の順序規則を持つことの
+ *   利点は「elevationStairSequence.js側で順序を誤る余地が無くなる」点にある
+ *   （`__member`等の分割由来タグで`isLower`を補正する代替案は、呼び出し元へタグが漏れて
+ *   出力に余分なフィールドが残る・将来タグを外す場所をもう1つ覚える必要がある、という単一情報源
+ *   性を損なう副作用があるため不採用）。
  * @returns {object[]}
  */
 export function stairPrimitivesForCut(contribution, cut, columns, opts = {}) {
   if (!contribution) return [];
+  const outerBound = opts.outerBound;
   const prims = [];
   // 階段の走行軸の向き。**flightsが空でも踊り場から取れる**ようにする（ユーザー実機指摘2026-08
   // 「6」A）——seq3は「段の重ね描きなし」でflights:[]の寄与を受け取るため、旧実装の
@@ -1114,7 +1184,7 @@ export function stairPrimitivesForCut(contribution, cut, columns, opts = {}) {
   const zigzagEntries = []; // {points, flight}（実機フィードバック第3弾B: stringerPrimitives
   // のz方向クリップにflightのbaseZ/steps/riserMmが要るため、点列だけでなくflightも持ち回る）
   for (const flight of contribution.flights ?? []) {
-    const zig = flightZigzagPrimitives(flight, cut, columns);
+    const zig = flightZigzagPrimitives(flight, cut, columns, outerBound);
     if (zig.length > 0) {
       if (isSteel) {
         // ユーザー実機フィードバック2026-08-23（switchbackCuts.jsの切断線再定義で、切断線が
@@ -1143,7 +1213,7 @@ export function stairPrimitivesForCut(contribution, cut, columns, opts = {}) {
         contribution.unit?.baseboardHeightMm ?? 0));
       // 実機フィードバック第3弾E: 踊り場より下（flight.baseZ<cut.baseFloorZ）まで達するレーンは
       // ささらの端面（縦の細破線）も追加する。
-      prims.push(...stringerEndCapPrimitives(flight, cut, ladderAcross));
+      prims.push(...stringerEndCapPrimitives(flight, cut, ladderAcross, outerBound));
       // 内側のささらの見えがかり（同上の縦線1本。端面規則の対象外レーン＝復路を補う）。
       prims.push(...innerStringerSilhouette(flight, cut, ladderAcross, trueAcrossLo, trueAcrossHi));
     }
@@ -1159,17 +1229,18 @@ export function stairPrimitivesForCut(contribution, cut, columns, opts = {}) {
     const nearTopSeg = (() => {
       for (const flight of contribution.flights ?? []) {
         if (!isLengthwiseCut(flight.isVertical, flight.acrossLo, flight.acrossHi, flight.runLo, flight.runHi, cut)) continue;
-        const band = stringerBandGeometry(computeFlightProfile(flight, cut, columns).noses, STEEL_STRINGER_DEPTH_MM, {
-          baseboardMm: contribution.unit?.baseboardHeightMm ?? 0,
-          ...landingMitreOpts(flight, contribution.landings, contribution.unit),
-        });
+        const band = stringerBandGeometry(
+          computeFlightProfile(flight, cut, columns, outerBound).noses, STEEL_STRINGER_DEPTH_MM, {
+            baseboardMm: contribution.unit?.baseboardHeightMm ?? 0,
+            ...landingMitreOpts(flight, contribution.landings, contribution.unit),
+          });
         if (band) return band.top;
       }
       return null;
     })();
     for (const secondary of contribution.secondaryFlights ?? []) {
       if (isBlockedByWall(columns, cut, secondary)) continue;
-      const prof = computeFlightProfile(secondary, cut, columns);
+      const prof = computeFlightProfile(secondary, cut, columns, outerBound);
       const points = clipStringerToAnchors(prof.points, contribution.unit, secondary);
       for (const prim of stringerPrimitives(points, STEEL_STRINGER_DEPTH_MM, flightZBounds(secondary),
         { noses: prof.noses, baseboardMm: contribution.unit?.baseboardHeightMm ?? 0,
@@ -1196,13 +1267,32 @@ export function stairPrimitivesForCut(contribution, cut, columns, opts = {}) {
   if (isSteel && opts.includeStringerSightline !== false) {
     for (const { points, flight } of zigzagEntries) {
       prims.push(...stringerPrimitives(points, STEEL_STRINGER_DEPTH_MM, flightZBounds(flight),
-        { noses: computeFlightProfile(flight, cut, columns).noses,
+        { noses: computeFlightProfile(flight, cut, columns, outerBound).noses,
           baseboardMm: contribution.unit?.baseboardHeightMm ?? 0,
           bottomOnly: opts.stringerSightlineLowerOnly === true,
           ...landingMitreOpts(flight, contribution.landings, contribution.unit) }));
     }
   }
-  return prims;
+  // 階段自身の幾何の終端クリップ（展開図一般化Phase 6b-2「一体設計」。
+  // .claude/elevation-redesign.md§5.12）。順序＝ミトレ（landingMitreOpts等）→辺落とし
+  // （clipPolylineAboveOccluder等）→zクリップ（flightZBounds/clipStringerToAnchors）→
+  // **スラブ帯クリップ（slabBand。QA是正2026-09-12その4）**→x終端クリップ（ここ、裁定(c)
+  // 「トリム先、全端クリップ」）。スラブ帯クリップをx終端クリップより前に置くのは、
+  // `clipStairDetailInSlabBand`のisLower（x範囲が重なりmeanZが高い相手がいる方を下ささらとみなす
+  // ペア判定）が、x終端クリップで分割済みの断片どうしを誤ってペアにしないようにするため——
+  // 未分割の状態で判定すれば、どの断片が「同じ部材」かという問題自体が発生しない。
+  const slabClipped = opts.slabBand
+    ? clipStairDetailInSlabBand(prims, opts.slabBand.zLo, opts.slabBand.zHi) : prims;
+  // QA是正（2026-09-12その1）: 「cutDrawRangeを超える幾何を生成している箇所が無いため素通り」
+  // という旧コメントは事実誤り——`stringerEndCapPrimitives`はそのままでは壁centerline基準の
+  // x（cutDrawRangeの外）を直組みしていたため、落ちる（その後QA是正その2で出口ではなく生成時に
+  // `stairDrawRange`へクランプする側へ直した）。`innerStringerSilhouette`等（列を経由せず直接
+  // local xを組む見えがかり線）は**意図的に**クランプせず、ここで初めてクリップ/分割される
+  // （実機「6」D2で裁定済み）。outerBound未指定（「13」のstairOver等）でも、面の外へ出る幾何
+  // （壁のない端の体裁延長や、flight自身の寸法が面の実境界を僅かに超える構成等）があれば
+  // ここで切られる——「出力不変」は「出力が変わる幾何が現に無かった」という実測結果であって、
+  // このクリップが無条件に素通りすることを保証するものではない。
+  return clipPrimitivesToXRange(slabClipped, stairDrawRange(cut, outerBound));
 }
 
 /**

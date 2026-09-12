@@ -7,13 +7,15 @@ import { measureStairSpans } from '../finish/stair/stairClassify.js';
 import { cellsBeyondBreak } from '../finish/stair/stairGeometry.js';
 import { composeRoomFaces } from './elevationFaceList.js';
 import { letterOf } from './elevationFaces.js';
-import { stairFaceSequence, kneeWallCapContent, stairChDimChains } from './elevationStairSequence.js';
+import { stairFaceSequence, kneeWallCapContent, stairChDimChains, upperOverhangOf } from './elevationStairSequence.js';
+import { localXOf } from './section/sectionTypes.js';
 import { switchbackCuts } from './section/cuts/switchbackCuts.js';
 import { buildFaceFigure } from './elevationFigure.js';
 import { buildStairBand } from './elevationStair.js';
 import { resolveSwitchbackParams } from './elevationStairSection.js';
 import { ElevationLineRole, weightForRole } from './elevationStyle.js';
 import { drawnFloorProfileZAt } from './elevationFloorProfile.js';
+import { withGraphReadScope } from '../graphReadScope.js';
 
 function makeGraph(name = 'p1') {
   const plane = new Plane(name, 0, `${name}階`, 1, 1);
@@ -264,6 +266,13 @@ test('stairFaceSequence: seq1(wall実在時)は厚みぶん離れた2本の壁�
 // 往路flightのacrossLo/acrossHiのうち外側（部屋の実際の外縁）は面端(x=0/run)の壁輪郭縦線
 // （既存の別テストで検証済み・降格して同じ高さ範囲にDETAIL破線で現れる）とx位置が一致しうる
 // ため、位置では絞らずSTEEL/WOODの本数差（増分2本）で検証する。
+// QA是正（2026-09-12 その2）: 展開図一般化Phase 6b-2「一体設計」の出口クリップ導入直後は、
+// 外側の端面線（acrossLo/acrossHiの外側＝部屋の実外縁）がグリッドCL位置（壁centerline）で
+// 組まれ壁の内側面（cutDrawRange）より半壁厚ぶん外側に出ていることを理由に「代替なしに消す」
+// 実装をしていたが、QA実測で誤りと判明——`stringerEndCapPrimitives`は`cutDrawRange`を名指しで
+// 避けるべき「x=−57.5にartifactを描く最後の生産者」であり、消す（情報を失う）のではなく
+// `stairDrawRange`へ**クランプ**して残すべき（単一情報源化）。クランプ後は元の壁centerline位置
+// ではなく描画範囲の端に寄るだけで2本とも残るため、本数差は元どおり2本。
 test('【実機フィードバック第3弾E】stairFaceSequence: 鉄骨階段のseq1は木造より踊り場より下のDETAIL破線縦線が2本多い（往路ささらの端面ぶん）', () => {
   const n1 = 6, riser = OPTS.floorHeight / 12;
   const landingAbs = n1 * riser;
@@ -594,6 +603,10 @@ test('stairFaceSequence: seq2は踊り場床断面線(太線)を含み、面端�
 // のDETAILも重なる——「踏面CUT(1本)＋自レーンささらDETAIL(1本)＋他レーンささらDETAIL(1本)
 // =3本」になる（他レーンの可視判定はstairFaceSequence: 鉄骨階段は往復間に壁が無ければ...の
 // 専用テストで別途固定する）。
+// 展開図一般化Phase 6b-2「一体設計」（.claude/elevation-redesign.md§5.12）でstairPrimitivesForCut
+// の出口に`stairDrawRange`への終端クリップを導入した結果、他レーンささらのDETAIL polyline
+// （このfixtureでは面の外（x<0）まで伸びていた）が面端で2本に分かれる——
+// 「踏面CUT(1本)＋自レーンDETAIL(1本)＋他レーンDETAIL(面端クリップで2本に分かれる)=4本」になる。
 test('stairFaceSequence: 鉄骨階段(structure=STEEL)はseq2の踏面ジグザグがCUTで描かれ、その向こうのささら(DETAIL polyline)が重なる', () => {
   const graph = makeGraph();
   const { room, stair } = makeSwitchbackFixture(graph);
@@ -603,11 +616,12 @@ test('stairFaceSequence: 鉄骨階段(structure=STEEL)はseq2の踏面ジグザ�
   const entries = stairFaceSequence(stair, faces, graph, OPTS);
   const seq2 = entries.find(e => e.seqNo === '2');
   const polylines = seq2.content.filter(p => p.type === 'polyline');
-  assert.equal(polylines.length, 3, '踏面のCUT(1本)＋自レーンささらDETAIL(1本)＋他レーンささらDETAIL(1本)=3本のはず');
+  assert.equal(polylines.length, 4,
+    '踏面のCUT(1本)＋自レーンささらDETAIL(1本)＋他レーンささらDETAIL(面端クリップで2本に分かれる)=4本のはず');
   const zigzag = polylines.find(p => p.weight === weightForRole(ElevationLineRole.CUT));
   const stringers = polylines.filter(p => p.weight === weightForRole(ElevationLineRole.DETAIL));
   assert.ok(zigzag, '踏面のジグザグはCUTのはず');
-  assert.equal(stringers.length, 2, 'ささらの見えがかりはDETAILが2本(自レーン＋他レーン)のはず');
+  assert.equal(stringers.length, 3, 'ささらの見えがかりはDETAILが3本(自レーン1本＋他レーン2本)のはず');
 });
 
 // ---- ユーザー実機フィードバック2026-08-23: 「1」Bでは、往路と復路の間に壁はないので、
@@ -630,7 +644,12 @@ test('stairFaceSequence: 鉄骨階段は往復間に壁が無ければseq2に他
   const detailPolylineCount = (entry) =>
     entry.content.filter(p => p.type === 'polyline' && p.weight === weightForRole(ElevationLineRole.DETAIL)).length;
 
-  assert.equal(detailPolylineCount(withoutWall), 2, '壁が無ければ自レーン＋他レーンのささらDETAILが2本見えるはず');
+  // 展開図一般化Phase 6b-2「一体設計」（.claude/elevation-redesign.md§5.12）でstairPrimitivesForCut
+  // の出口に`stairDrawRange`への終端クリップを導入した結果、他レーン(復路)のささらDETAIL
+  // polyline（面の外（x<0）まで伸びていた）が面端で2本に分かれる（自レーン1本は面端に掛からず
+  // 不変）。壁ありは他レーン自体が遮られるため不変（自レーン1本のみ）。
+  assert.equal(detailPolylineCount(withoutWall), 3,
+    '壁が無ければ自レーン(1本)＋他レーンのささらDETAIL(面端クリップで2本)=3本見えるはず');
   assert.equal(detailPolylineCount(withWall), 1, '壁があれば他レーンのささらは遮られ自レーンの1本だけのはず');
 });
 
@@ -2036,6 +2055,75 @@ test('【失敗系】stairFaceSequence: はり出しの先が上階の実部屋�
   assert.equal(lines.length, 1, 'gateは通り、2FL線は1本出る');
   assert.deepEqual([lines[0].x1, lines[0].x2], [run + 115, run + 115 + 150],
     '壁の向こう側の面から外へwallLessEndExtendModelMm(150)ぶん');
+});
+
+// ---- D1-1（.claude/elevation-redesign.md§5.12「一体設計」）: stairPrimitivesForCutの出口
+// クリップを本番経路（stairFaceSequence）まで通しで確認する——階段自身の幾何（CUT/DETAIL
+// polyline）が「面の真の境界＋upperOverhang」（stairDrawRange）の外へ出ないこと。
+// seq5（復路flight縦断の面）はmakeUpperForOverhangの隅の壁厚(57.5)ぶん上下ともはり出しを持つ
+// （lo/hi対称。直接のgolden対象「6」D2とはlo/hiが逆だが同じ機構の確認として十分）。 ----
+test('【D1-1】stairFaceSequence: 階段自身のpolyline(CUT/DETAIL)は面の真の境界＋upperOverhangを越えない', () => {
+  const graph = makeGraph();
+  const fixture = makeSwitchbackFixture(graph);
+  fixture.stair.setField('structure', StructuralMaterialType.STEEL);
+  const upperGraph = makeGraph('p2');
+  // makeUpperForOverhangはMobX strict-mode外でwall.endOffsetを書き換える（既存ヘルパーの仕様。
+  // 警告は出るが他のseq1系テストでも同じヘルパーを使い実害は無い）——seq5のupperOverhang計算は
+  // この変更を拾うのにwithGraphReadScope（dumpElevFigure.mjs等の本番呼び出しと同じラップ）が
+  // 要るため、ここだけ明示的に使う（他のテストがseq1止まりで気づいていなかった既存の特性）。
+  const { entries } = withGraphReadScope(graph, () => withGraphReadScope(upperGraph, () => {
+    makeUpperForOverhang(upperGraph);
+    const faces = composeRoomFaces(fixture.room, graph);
+    return { entries: stairFaceSequence(fixture.stair, faces, graph,
+      { ...OPTS, upperGraph, wallLessEndExtendModelMm: 150 }) };
+  }));
+  const seq5 = entries.find(e => e.seqNo === '5');
+  assert.deepEqual(seq5.upperOverhang, { lo: 57.5, hi: 57.5 },
+    '前提: seq5は隅の壁厚ぶん上下とも57.5のはり出しを持つ');
+  const range = { lo: -seq5.upperOverhang.lo, hi: seq5.face.run + seq5.upperOverhang.hi };
+  const polylines = seq5.content.filter(p => p.type === 'polyline');
+  assert.ok(polylines.length > 0, '前提: seq5に階段のpolylineがあること');
+  for (const p of polylines) {
+    for (const [x] of p.points) {
+      assert.ok(x >= range.lo - 1e-6 && x <= range.hi + 1e-6,
+        `階段のpolyline点 x=${x} が面の真の境界＋overhang[${range.lo},${range.hi}]の外`);
+    }
+  }
+  assert.ok(polylines.some(p => p.points.some(([x]) => Math.abs(x - range.lo) < 1e-6)),
+    'はり出しの境界(local -57.5)ちょうどまで達するpolylineがあるはず（出口クリップが効いている証拠）');
+});
+
+// ---- QA是正2026-09-12その6: stairOverhangOuterはupperOverhangと同じ勝ち窓から返す ----
+// upperOverhangOf内部の`best`（layerRunWindowsの中でもっとも大きいはみ出しを持つ層）を
+// 選ぶループは1つしか無いが、stairOverhangOuterとupperOverhangを**別々の選定基準**で
+// 再計算するよう誤って分岐させてしまう将来の回帰を防ぐため、複数の候補層（above）を与えて
+// upperOverhangが選ぶ層（最大のはみ出し）とstairOverhangOuterが実際に参照する窓のworld値が
+// 一致することを固定する——一致しなければstairOverhangOuterは「勝たなかった方の層」の
+// 窓から計算されていることになる。
+test('【QA是正2026-09-12その6】upperOverhangOf: stairOverhangOuterはupperOverhangと同じ勝ち窓(best)から返る', () => {
+  const layerSmall = { role: 'above', graph: {}, floorZMm: 2400 }; // はみ出し合計150(小)
+  const layerBig = { role: 'above', graph: {}, floorZMm: 2700 };   // はみ出し合計250(大)
+  const pcut = {
+    dirSign: 1,
+    line: { lo: 1000, hi: 2000 }, // probeExtendLoMm/HiMm未指定(=0)・pcut.face未指定(両端とも許容)
+    layers: [{ role: 'self', graph: {} }],
+    layerRunWindows: new Map([
+      [layerSmall, { lo: 950, hi: 2100 }],
+      [layerBig, { lo: 800, hi: 2050 }],
+    ]),
+  };
+  const result = upperOverhangOf(pcut, []);
+  assert.deepEqual(result.upperOverhang, { lo: 200, hi: 50 },
+    'はみ出し合計が大きいlayerBig(200+50=250>150)が勝ち窓として選ばれるはず');
+  assert.equal(result.upperFloorZ, 2700, '前提: upperFloorZもlayerBigのものになっているはず');
+  // stairOverhangOuterはupperOverhangと**同じ**layerBigの窓(world lo=800,hi=2050)をlocalXOfで
+  // 直接変換した値のはず——layerSmallの窓(lo=950,hi=2100)から計算されていれば一致しない。
+  const expected = { lo: localXOf(pcut, 800), hi: localXOf(pcut, 2050) };
+  assert.deepEqual(result.stairOverhangOuter, expected,
+    `stairOverhangOuterはlayerBigの窓(world 800..2050)から直接出した絶対値のはず` +
+    `（期待${JSON.stringify(expected)}・実際${JSON.stringify(result.stairOverhangOuter)}）`);
+  assert.notDeepEqual(result.stairOverhangOuter, { lo: localXOf(pcut, 950), hi: localXOf(pcut, 2100) },
+    '失敗系: layerSmall(負けた窓)の値とは一致しないはず');
 });
 
 // 帯まるごと（buildStairBand→faceOverride→buildFaceFigure）でも同じ結果になるか——上の3件は
