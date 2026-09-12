@@ -56,6 +56,10 @@
  * `cutProbeRange`/`isCutWall`/`isCutAlongWall`/`isSightlineShape`/`buildLayerStack`）は
  * `section/`配下（`sectionProbe.js`経由の再エクスポートを含む）専用**——`elevation/`の他ディレクトリ
  * からは直接importしない（面の体裁側は`sectionContent.js`の`buildCutContent`が入口）。
+ * `isWallHiddenForBand`（§5.12 D2-1是正で追加）だけは例外——`section/cuts/switchbackCuts.js`の
+ * `stairBandWallFilter`（`section/`配下）が唯一の外部向け窓口として`isHiddenWall`と同じ判断を
+ * 面リスト構築（`elevationFaces.js`）へ提供する。`elevationFaces.js`/`elevationStair.js`自身は
+ * 本ファイルを直接importしない——`stairBandWallFilter`が返す`wallFilter`関数を受け取るだけ。
  *
  * Phase 4（`elevationStyle.js`の`HORIZONTAL_FACES_ENABLED`。裁定済み2026-09-11・既定on）:
  * `visibleBandsOf`が`open`帯へ`farFloorZ`/`farCeilZ`/`farDepthMm`（上限内の最も近いfloorFace/
@@ -136,7 +140,10 @@ function clamp(z, lo, hi) { return Math.max(lo, Math.min(hi, z)); }
  * 「壁は消えても壁端で列が割れたまま残る」ことを避けていたが、その前提自体が無くなった。
  * QA是正2026-09で実測: 面C自身の右端はこの列分割に依存するため列分割側を「割らない」へは
  * 戻せない——列分割による副作用は`emitColumns`側で個別に抑える）。
- * 消費者は`probeColumnHits`（`section/sectionHits.js`）1箇所のみ。
+ * 消費者は`probeColumnHits`（`section/sectionHits.js`）と、面リスト構築時の
+ * `section/cuts/switchbackCuts.js`の`stairBandWallFilter`（展開図一般化§5.12 D2-1是正）の2箇所
+ * ——判定の実体は下記`isWallHiddenForBand`に集約し、本関数はcutからairRoom/underRoomsを
+ * 取り出す薄いラッパになった。
  * @param {import('./sectionTypes.js').SectionCut} cut
  * @param {import('@core').Wall} wall
  * @param {object} layer - その壁が属する層（`probeColumnHits`のinfo.layer）
@@ -144,8 +151,24 @@ function clamp(z, lo, hi) { return Math.max(lo, Math.min(hi, z)); }
  * @returns {boolean}
  */
 export function isHiddenWall(cut, wall, layer, probeCtx) {
-  const airRoom = cut.airRoom;
-  const underRooms = cut.underRooms;
+  return isWallHiddenForBand(wall, layer, { airRoom: cut.airRoom, underRooms: cut.underRooms }, probeCtx);
+}
+
+/**
+ * `isHiddenWall`の判定本体（cutを介さない形）。§5.12 D2-1是正で追加——面リスト構築
+ * （`elevationFaces.js`の`realWallAtCorner`。`composeRoomFaces`→`snapFaceEndsToCorners`経由）が
+ * 隅の実壁候補を探す時点でも、断面エンジンの候補収集（`probeColumnHits`。上記`isHiddenWall`
+ * 経由）と**同じ判断**を使う必要がある——「この帯で実体として数えない壁」の単一情報源。
+ * @param {import('@core').Wall} wall
+ * @param {object} layer - `role`だけを見る（`role==='self'`以外は常にfalse）
+ * @param {{airRoom?:object, underRooms?:Set<object>}} bandInfo - 帯自身の空気ボリューム代表Roomと
+ *   階段下に指定された部屋の集合（`isHiddenWall`のcut.airRoom/cut.underRoomsと同じ形）
+ * @param {ReturnType<typeof import('./sectionProbe.js').makeProbeContext>} [probeCtx]
+ * @returns {boolean}
+ */
+export function isWallHiddenForBand(wall, layer, bandInfo, probeCtx) {
+  const airRoom = bandInfo?.airRoom;
+  const underRooms = bandInfo?.underRooms;
   if (!airRoom || !underRooms?.size || layer?.role !== 'self' || typeof probeCtx?.cellAt !== 'function') {
     return false;
   }

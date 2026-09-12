@@ -303,9 +303,13 @@ test('【はり出し】buildRoomBandWithVoidAbove: 吹抜けが達している�
   const baseHi = Math.max(...linesOf(band)
     .filter(p => p.y1 === -60 && p.y2 === -60 && inFaceA(p)).map(p => p.x2));
   assert.equal(baseHi, FACE_A_RUN, '巾木は面の端で終わる（はり出さない）');
+  // 【案2】展開図一般化§5.12 D2-1是正・裁定(a)「面端の外はcontent側に渡す」: 面端縦線自体の
+  // 上端は、この帯自身の実壁の高さ＝上階FL（-VOID_ABOVE_FH）までに縮む——天井（UPPER_CEIL_Y）
+  // まで伸ばすと、上階FLから上（はり出し・壁の縁）と二重に描くことになる。上階FLから上は
+  // 上のupperFL断面線・外端の壁エッジ（content）が描く担当（elevationFigure.jsのcapsAtUpperFloor）。
   assert.ok(vertsOf(band).some(p => p.x1 === FACE_A_RUN && p.weight === 'thick'
-    && Math.min(p.y1, p.y2) === UPPER_CEIL_Y && Math.max(p.y1, p.y2) === 0),
-  '面端の縦線は面の端のまま（床〜上階の天井）');
+    && Math.min(p.y1, p.y2) === -VOID_ABOVE_FH && Math.max(p.y1, p.y2) === 0),
+  '面端の縦線は面の端のまま（床〜上階FL。天井までは伸ばさない）');
 });
 
 test('【失敗系・はり出し】buildRoomBandWithVoidAbove: はり出しの向こうにも吹抜けが続く（上階に床が無い）端では上階FLの断面線を引かない', () => {

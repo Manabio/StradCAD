@@ -50,7 +50,7 @@ import {
 } from './section/sectionStair.js';
 import { structuralContribution, structuralPrimitivesForCut } from './section/sectionStructure.js';
 import { worldToCell, roomBounds } from '../finish/gridCells.js';
-import { labelFaces, letterOf, upperFloorEndsOf } from './elevationFaces.js';
+import { labelFaces, letterOf, upperFloorEndsOf, wallLessEndAt } from './elevationFaces.js';
 import {
   collectRunBreaks, clipContentAboveDrawnProfile,
   floorProfileFromSegments, mergeFloorProfiles, drawnFloorProfileZMax,
@@ -372,6 +372,39 @@ function withFlatLineSpans(segs, profile) {
   });
 }
 
+/**
+ * QA是正2026-09（§5.12 D2-1是正・項目2）: wallFilterで除外された実壁がある端
+ * （`face.hiddenWallAtLocal0/Run`）では、content側の水平線を面の真の境界（ローカル0/run。
+ * `localXOf`はcutとface共通の座標系のため、この境界は常に`0`と`face.run`）で切る。
+ *
+ * 探査窓（`section/sectionContent.js`の`withProbeExtension`）は**ここでは触らない**——
+ * 探査自体は壁のない端部と同じだけ広げたままにする（締めると、その壁を手掛かりにする
+ * `recessLo`等の既存描画が列ごと消える）。ここは**描画だけ**を絞る——hidden端は実壁が
+ * そこにあり実際には続いていないため、探査の延長区間に「面の外へ続く」内容
+ * （`farFloorZ/farCeilZ`の見えがかり水平線＝実機「6」D2のmedium 2FL中線）を描くと、
+ * 面の真の境界に既に出ている太線の断面（2F床の小口）と重なって冗長になる。
+ * 縦線（x1===x2）は対象外（hidden端自体の縦線は別の規則で決まる。面図側が描く）。
+ * @param {object[]} prims
+ * @param {object|null} face - cut.face
+ * @returns {object[]}
+ */
+export function clipContentAtHiddenEnds(prims, face) {
+  if (!face?.hiddenWallAtLocal0 && !face?.hiddenWallAtLocalRun) return prims;
+  const lo = face.hiddenWallAtLocal0   ? 0        : -Infinity;
+  const hi = face.hiddenWallAtLocalRun ? face.run : Infinity;
+  const out = [];
+  for (const p of prims) {
+    if (p.type !== 'line' || p.x1 === p.x2) { out.push(p); continue; }
+    const xLo = Math.min(p.x1, p.x2), xHi = Math.max(p.x1, p.x2);
+    const clippedLo = Math.max(xLo, lo), clippedHi = Math.min(xHi, hi);
+    if (clippedHi - clippedLo <= GAP_EPS) continue; // 区間が丸ごと外 or 退化＝落とす
+    if (clippedLo <= xLo + GAP_EPS && clippedHi >= xHi - GAP_EPS) { out.push(p); continue; } // クリップ不要
+    const growing = p.x1 <= p.x2;
+    out.push({ ...p, x1: growing ? clippedLo : clippedHi, x2: growing ? clippedHi : clippedLo });
+  }
+  return out;
+}
+
 function clipWallFloorEdgeUnderZigzag(wallContent, stairContent) {
   const zigzagXRanges = stairContent
     .filter(p => p.type === 'polyline')
@@ -461,8 +494,8 @@ function contentForCut(rawCut, probeCtx, endExtendMm = 0, bandRoomBounds = null,
   // ささらの端面）、構造梁（踊り場受け梁も梁成ぶん下がる）は断面線そのもの／階段の一部で、
   // ユーザー裁定2026-09で「描く」側（clipContentAboveDrawnProfileのヘッダ参照）。
   // アキ（gapMarks）はPhase 6b-2 C-2でこのクリップの対象から外れた——下端はband自身が決める。
-  const wallOut = clipContentAboveDrawnProfile(
-    clipWallFloorEdgeUnderZigzag(joined, stairContent), drawFloorProfile);
+  const wallOut = clipContentAtHiddenEnds(clipContentAboveDrawnProfile(
+    clipWallFloorEdgeUnderZigzag(joined, stairContent), drawFloorProfile), cut.face);
   return {
     content: [...wallOut, ...gapMarks, ...stairContent, ...structuralContent],
     ...upperOverhangOf(pcut, columns),
@@ -501,8 +534,21 @@ function upperOverhangOf(pcut, columns) {
   let best = null;
   // 比較の基準は**自階の窓**（＝壁のない端部の体裁のはり出しを含む従来の探査範囲）——
   // その延長ぶんは図側が既にdrawnX0/drawnXRunで描いており、ここで二重に足さない。
-  const baseLo = line.lo - (line.probeExtendLoMm ?? 0);
-  const baseHi = line.hi + (line.probeExtendHiMm ?? 0);
+  // QA是正2026-09（§5.12 D2-1是正・項目1/4）: 単一情報源`wallLessEndAt`（elevationFaces.js）
+  // で選ぶ——**真に壁のない端部**だけ従来どおり`probeExtendLoMm/HiMm`込みの基準、wallFilterで
+  // 除外された実壁がある端（hasWallAtLocal0/Run=falseだがwallLessEndAt=false）は面自身の
+  // 真の境界（line.lo/hi）に戻す——`section/sectionContent.js`の`layerRunWindowsOf`と
+  // **同じ基準**でなければ、そちらが正しく測った窓（`windows`の値）をここで再び「壁のない
+  // 端部込みの基準」と比べてしまい、実壁のoverhangが常に0（該当なし）に潰れる（実測: 実データ
+  // 「6」D2でupperFloorZ自体が出ずelevationFigure.jsのcapもupperFloorEdgeSpansも一切発火
+  // しなかった根本原因）。`pcut.face`が無い（単体テストの手組みcut等）呼び出しは従来どおり
+  // 両端とも拡張込みの基準＝出力完全不変。
+  const worldLoIsWallLess = pcut.face
+    ? (pcut.dirSign > 0 ? wallLessEndAt(pcut.face, '0') : wallLessEndAt(pcut.face, 'Run')) : true;
+  const worldHiIsWallLess = pcut.face
+    ? (pcut.dirSign > 0 ? wallLessEndAt(pcut.face, 'Run') : wallLessEndAt(pcut.face, '0')) : true;
+  const baseLo = worldLoIsWallLess ? line.lo - (line.probeExtendLoMm ?? 0) : line.lo;
+  const baseHi = worldHiIsWallLess ? line.hi + (line.probeExtendHiMm ?? 0) : line.hi;
   for (const [layer, w] of windows) {
     if (layer?.role === 'self') continue;
     // world側のはみ出し → 面ローカルの端（dirSign>0ならworldのlo側がローカルx=0側）。

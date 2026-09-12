@@ -45,6 +45,26 @@ test('composeRoomFaces: 段差・袖壁が無い矩形部屋ではbuildRoomFaces
   }
 });
 
+// ---- 展開図一般化§5.12 D2-1是正: composeRoomFacesのopts.wallFilterはbuildRoomFacesへ配線される ----
+// 判定ロジック自体(isWallHiddenForBand)や階段帯からの供給(stairBandWallFilter)は別ファイルで
+// 検証済み。ここではcomposeRoomFacesがopts.wallFilterを実際にbuildRoomFacesへ渡す配線だけを見る。
+test('composeRoomFaces: opts.wallFilterはbuildRoomFacesへ配線され、除外された壁のhasRealWallがfalseになる', () => {
+  const graph = makeGraph();
+  const room = makeRect(graph);
+  const wallA = [...graph.walls].find(w => !w.isVertical && w.axisCL.effectiveValue === 0);
+  assert.ok(wallA, '前提: A面(y=0)に実壁があるはず');
+
+  // keepWallLessFaces:true（階段帯と同じオプション）でhasRealWall:falseの面も残し、直接検証する
+  // （既定はhasRealWall:falseの面を落とすため、除外の効果はfind結果の有無ではなくフィールドで見る）。
+  const withoutFilter = composeRoomFaces(room, graph, { keepWallLessFaces: true });
+  assert.equal(withoutFilter.find(f => f.label === 'A').hasRealWall, true,
+    '前提: wallFilter未指定なら従来どおりA面に実壁があるはず');
+
+  const withFilter = composeRoomFaces(room, graph, { keepWallLessFaces: true, wallFilter: w => w.id !== wallA.id });
+  assert.equal(withFilter.find(f => f.label === 'A').hasRealWall, false,
+    'opts.wallFilterで除外した壁はcomposeRoomFacesの結果にも反映されるはず');
+});
+
 // ---- 段差あり: composeRoomFacesはstep面を挿入し、既存Cは繰り下がる ----
 test('composeRoomFaces: 内部（壁のない）段差があると段差見付け面(kind===\'step\')が挿入され、既存の同letter面は繰り下がる', () => {
   const graph = makeGraph();

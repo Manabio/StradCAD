@@ -15,6 +15,7 @@ import { floorHeightAbove } from '../finish/stair/stairDimensions.js';
 import { roomCeilingHeight } from '../finish/roomMetrics.js';
 import { composeRoomFaces } from './elevationFaceList.js';
 import { buildSwitchbackSectionPrimitives } from './elevationStairSection.js';
+import { stairBandWallFilter } from './section/cuts/switchbackCuts.js';
 import { stairFaceSequence } from './elevationStairSequence.js';
 import { ElevationLineRole, weightForRole } from './elevationStyle.js';
 import { translatePrimitive } from './elevationPrimitives.js';
@@ -138,7 +139,12 @@ export function buildStairBand(stairRoom, graph, upperGraph, ctx = {}) {
   // レーン範囲の算出に使う）。描画に回す面リストからは落とす——壁が無いところに壁面の展開を
   // 描かない、という原則は階段帯のフォールバック経路でも同じ（ユーザー実機指摘2026-08
   // 「展開描画において平面照合なしで描画する経路がないか」）。
-  const composedFaces = composeRoomFaces(stairRoom, graph, { keepWallLessFaces: true });
+  // wallFilter（展開図一般化§5.12 D2-1是正）: 階段室自身の空気ボリュームと階段下部屋を隔てる
+  // 2a壁は、断面エンジンの候補収集（isHiddenWall）と同じ判断で「この帯では実体として数えない」
+  // ——面リスト構築（buildRoomFaces内の壁検出・realWallAtCornerの隅探査）にも同じ述語を通す
+  // （さもないと、階段室自身が壁を持たない辺で隣接部屋の2a壁を「隅に実壁がある」と誤検出する）。
+  const wallFilter = stairBandWallFilter(stair, graph);
+  const composedFaces = composeRoomFaces(stairRoom, graph, { keepWallLessFaces: true, wallFilter });
   const drawableFaces = composedFaces.filter(f => f.kind === 'step' || f.hasRealWall !== false);
   const sequence = (stair && composedFaces.length > 0 && chUpperAbsMm != null)
     ? stairFaceSequence(stair, composedFaces, graph, {

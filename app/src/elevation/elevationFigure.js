@@ -14,7 +14,7 @@
  * OpeningTagLayer.jsx と同じ構成でGroup描画する）。
  */
 import { CenterLineType, OpeningCategory } from '@core';
-import { openingsOnFace, openingBelongsToFaceRoom, faceBoundaryLocalX, drawnSpanRanges, wallCoverageGapsOnFace } from './elevationFaces.js';
+import { openingsOnFace, openingBelongsToFaceRoom, faceBoundaryLocalX, drawnSpanRanges, wallCoverageGapsOnFace, wallLessEndAt } from './elevationFaces.js';
 import { openingSectionPrimitives, wallThicknessForOpening } from '../openings/openingSection.js';
 import { openingTagPartsOf } from '../openings/openingNumbering.js';
 import { findCatalogEntry } from '../openings/openingCatalog.js';
@@ -426,6 +426,8 @@ function subtractRuns(base, holes) {
  *   boundaryLo:number, boundaryHi:number, extendMm:number}} xs - boundaryLo/Hi＝面端のCL
  *   （faceBoundaryLocalX。常に有限数を返すためフォールバックは持たない）。extendMm＝壁のない
  *   端部の「はり出し」記法と**同じ量**（`wallLessEndExtendModelMm`。2パス換算後の確定値）。
+ *   drawnX0/Runは`wallLessEndAt`（単一情報源）に基づき、真に壁のない端部だけが拡張済み
+ *   （QA是正2026-09・§5.12 D2-1是正）。
  * @param {{lo:boolean,hi:boolean}|undefined} floorEnds - 上階の床が実在する端（省略時は両端
  *   ＝現行と完全同一）。壁だけが続いて床が無い端を落とすためのgate（`elevationFaces.js`の
  *   `upperFloorEndsOf`。上部吹抜けを持つ部屋帯・階段帯の両方が同じ関数から供給する）。
@@ -434,11 +436,29 @@ function subtractRuns(base, holes) {
  * @returns {Array<{lo:number,hi:number}>}
  */
 function upperFloorEdgeSpans(floorProfile, upperFloorZ, overhang, xs, floorEnds, cutEnds) {
-  if (!overhang || !Number.isFinite(upperFloorZ)) return [];
+  return [
+    upperFloorEdgeSpanAt('lo', floorProfile, upperFloorZ, overhang, xs, floorEnds, cutEnds),
+    upperFloorEdgeSpanAt('hi', floorProfile, upperFloorZ, overhang, xs, floorEnds, cutEnds),
+  ].filter(Boolean);
+}
+
+/**
+ * `upperFloorEdgeSpans`の片端ぶん（QA是正2026-09: この端に実際に線を引くかどうかの判定を
+ * `capsAtUpperFloor`とここだけの1箇所へ集約するため、`upperFloorEdgeSpans`はこの関数の
+ * lo/hi呼び出しをまとめるだけの薄いラッパへ変更した。挙動は旧実装と完全同一——旧実装の
+ * 「cutLo/cutHiのどちらかがあれば、無い側だけcutEnds無しで再入する」という制御を、
+ * 各端を独立に評価する形へ書き換えただけ（cutEnds未指定の再入時に相手側のcutも常にnullに
+ * なる旧実装の性質は、この関数を端ごとに呼ぶことでそのまま保たれる）。
+ * @param {'lo'|'hi'} end
+ * @returns {{lo:number,hi:number}|null}
+ */
+function upperFloorEdgeSpanAt(end, floorProfile, upperFloorZ, overhang, xs, floorEnds, cutEnds) {
+  if (!overhang || !Number.isFinite(upperFloorZ)) return null;
   // 上階の**床**が無い端では引かない（.claude/elevation-model.md「上に部屋が無い位置に床の
   // 断面線を描いてはいけない」のはり出し版。はり出し量は上階の壁しか見ていないため、吹抜けが
   // 続く先に腰壁だけが立つ構成ではここで落とす必要がある）。天井断面線・壁エッジは落とさない。
-  const openLo = floorEnds?.lo !== false, openHi = floorEnds?.hi !== false;
+  const open = end === 'lo' ? floorEnds?.lo !== false : floorEnds?.hi !== false;
+  if (!open) return null;
   // はり出しの外端に切断壁が立つ端は、その壁の向こう側の面から**外側へ**extendMmぶん。
   // はり出しが0の端は対象外——そこは「はり出し区間」ではなく、切断壁があっても面の端そのもの。
   const outward = (cutX, hasOverhang, sign) => {
@@ -446,15 +466,10 @@ function upperFloorEdgeSpans(floorProfile, upperFloorZ, overhang, xs, floorEnds,
     const far = cutX + sign * xs.extendMm;
     return { lo: Math.min(cutX, far), hi: Math.max(cutX, far) };
   };
-  const cutLo = openLo ? outward(cutEnds?.lo, (overhang.lo ?? 0) > 1e-6, -1) : null;
-  const cutHi = openHi ? outward(cutEnds?.hi, (overhang.hi ?? 0) > 1e-6, +1) : null;
-  if (cutLo || cutHi) {
-    // 片端だけ切断壁のこともある——残る端は**従来の規則そのまま**（cutEndsを渡さず再入し、
-    // 切断壁の側だけgateで閉じる）。返す順はlo→hiのまま（プリミティブの並びを変えない）。
-    const rest = upperFloorEdgeSpans(floorProfile, upperFloorZ, overhang, xs,
-      { lo: openLo && !cutLo, hi: openHi && !cutHi });
-    return [cutLo, ...rest, cutHi].filter(Boolean);
-  }
+  const cutSpan = end === 'lo'
+    ? outward(cutEnds?.lo, (overhang.lo ?? 0) > 1e-6, -1)
+    : outward(cutEnds?.hi, (overhang.hi ?? 0) > 1e-6, +1);
+  if (cutSpan) return cutSpan;
   // 断面線を持たない帯（上部吹抜けを持つ部屋帯。`elevationVoid.js`のbuildRoomBandWithVoidAbove）
   // は、はり出し区間のうち**面端のCLより向こう側**に引く（ユーザー実機指摘2026-09「「5」A1:
   // 追加された2階X3の2FLは、X3の右側が正解」）——輪郭を引き継ぐ断面線が無いので外端までは
@@ -466,42 +481,45 @@ function upperFloorEdgeSpans(floorProfile, upperFloorZ, overhang, xs, floorEnds,
   // しない既存値）から取る。CLがはり出しの外にある面（面端に壁が無くCLが面の端と一致する等）は
   // クランプで従来どおり全幅——はり出しの外へは絶対に出ない。
   if (!floorProfile?.length) {
-    const clampToOverhang = (cl, outer, inner) =>
-      Math.min(Math.max(cl, Math.min(outer, inner)), Math.max(outer, inner));
-    const spanToCL = (outer, inner, cl, open) => {
-      if (!open) return null;
-      const b = clampToOverhang(cl, outer, inner);
-      return Math.abs(b - outer) > 1e-6 ? { lo: Math.min(outer, b), hi: Math.max(outer, b) } : null;
-    };
-    return [spanToCL(xs.ceilX0, xs.drawnX0, xs.boundaryLo, openLo),
-      spanToCL(xs.ceilXRun, xs.drawnXRun, xs.boundaryHi, openHi)].filter(Boolean);
+    const outer = end === 'lo' ? xs.ceilX0 : xs.ceilXRun;
+    const inner = end === 'lo' ? xs.drawnX0 : xs.drawnXRun;
+    const cl = end === 'lo' ? xs.boundaryLo : xs.boundaryHi;
+    const clampToOverhang = (v, o, i) => Math.min(Math.max(v, Math.min(o, i)), Math.max(o, i));
+    const b = clampToOverhang(cl, outer, inner);
+    return Math.abs(b - outer) > 1e-6 ? { lo: Math.min(outer, b), hi: Math.max(outer, b) } : null;
   }
   const domLo = floorProfile[0][0], domHi = floorProfile[floorProfile.length - 1][0];
   const zAt = x => drawnFloorProfileZAt(floorProfile, x);
-  const spanFrom = (xOuter, xInner) => {
-    if (Math.abs(xInner - xOuter) < 1e-6) return null;
-    const dir = Math.sign(xInner - xOuter);
-    // 断面線の定義域がはり出し側（xInnerの外）へ一歩も出ていなければ、外端の高さは端点値の
-    // 外挿でしかない＝この面のはり出しに上階の床の小口は描けない。
-    if (dir > 0 ? domLo >= xInner - 1e-6 : domHi <= xInner + 1e-6) return null;
-    if (zAt(xOuter) < upperFloorZ - 1e-6) return null;
-    // 断面線の折れ点で刻んで、上階FLを下回る最初の区間の中で交点を線形補間する。
-    const inner = floorProfile.map(p => p[0])
-      .filter(x => (x - xOuter) * dir > 1e-6 && (xInner - x) * dir > 1e-6)
-      .sort((a, b) => (a - b) * dir);
-    let prev = xOuter;
-    for (const x of [...inner, xInner]) {
-      const zPrev = zAt(prev), z = zAt(x);
-      if (z >= upperFloorZ - 1e-6) { prev = x; continue; }
-      const t = (zPrev - upperFloorZ) / (zPrev - z);
-      const cross = prev + (x - prev) * t;
-      return Math.abs(cross - xOuter) < 1e-6 // 外端で既に断面線が上階FLを離れる＝長さ0
-        ? null : { lo: Math.min(xOuter, cross), hi: Math.max(xOuter, cross) };
-    }
-    return { lo: Math.min(xOuter, xInner), hi: Math.max(xOuter, xInner) };
-  };
-  return [openLo ? spanFrom(xs.ceilX0, xs.drawnX0) : null,
-    openHi ? spanFrom(xs.ceilXRun, xs.drawnXRun) : null].filter(Boolean);
+  const xOuter = end === 'lo' ? xs.ceilX0 : xs.ceilXRun;
+  // QA是正2026-09（§5.12 D2-1是正・項目4）: 内側の基準は`drawnX0/Run`——これは`buildFaceFigure`
+  // 側で既に`wallLessEndAt`（単一情報源。elevationFaces.js）に基づき、真に壁のない端部
+  // （体裁の延長=extendMmぶん外側）だけを延ばし、wallFilterで除外された実壁がある端
+  // （hiddenWallAtLocal0/Run）は延ばさない（=0。面自身の真の境界と一致）よう修正済み
+  // （elevationFigure.js:728-731）。ここで別の基準（boundaryLo/Hi等）を持ち出すと判定の
+  // 二重管理になるため、drawnX0/Runをそのまま使う（実データ「6」D2: 旧実装はここで
+  // boundaryLo/Hiへ迂回しており、断面線の定義域チェックがdrawnX0の誤り〈-150〉と
+  // boundaryLo〈0〉のどちらを向くかで二重の基準を持っていた）。
+  const xInner = end === 'lo' ? xs.drawnX0 : xs.drawnXRun;
+  if (Math.abs(xInner - xOuter) < 1e-6) return null;
+  const dir = Math.sign(xInner - xOuter);
+  // 断面線の定義域がはり出し側（xInnerの外）へ一歩も出ていなければ、外端の高さは端点値の
+  // 外挿でしかない＝この面のはり出しに上階の床の小口は描けない。
+  if (dir > 0 ? domLo >= xInner - 1e-6 : domHi <= xInner + 1e-6) return null;
+  if (zAt(xOuter) < upperFloorZ - 1e-6) return null;
+  // 断面線の折れ点で刻んで、上階FLを下回る最初の区間の中で交点を線形補間する。
+  const between = floorProfile.map(p => p[0])
+    .filter(x => (x - xOuter) * dir > 1e-6 && (xInner - x) * dir > 1e-6)
+    .sort((a, b) => (a - b) * dir);
+  let prev = xOuter;
+  for (const x of [...between, xInner]) {
+    const zPrev = zAt(prev), z = zAt(x);
+    if (z >= upperFloorZ - 1e-6) { prev = x; continue; }
+    const t = (zPrev - upperFloorZ) / (zPrev - z);
+    const cross = prev + (x - prev) * t;
+    return Math.abs(cross - xOuter) < 1e-6 // 外端で既に断面線が上階FLを離れる＝長さ0
+      ? null : { lo: Math.min(xOuter, cross), hi: Math.max(xOuter, cross) };
+  }
+  return { lo: Math.min(xOuter, xInner), hi: Math.max(xOuter, xInner) };
 }
 
 /**
@@ -701,12 +719,17 @@ export function buildFaceFigure(face, ctx) {
   const hasWallAtLocal0   = face.hasWallAtLocal0   ?? true;
   const hasWallAtLocalRun = face.hasWallAtLocalRun ?? true;
   const extendMm = wallLessEndExtendModelMm ?? DEFAULT_WALL_LESS_END_EXTEND_MM;
+  // QA是正2026-09（§5.12 D2-1是正・項目1/4）: 体裁の延長（extendMm）は`wallLessEndAt`
+  // （単一情報源。elevationFaces.js）が「真に壁のない端部」と判定した端だけに効かせる——
+  // `hasWallAtLocal0/Run`=falseだけでは判定しない（wallFilterで除外された実壁がある端
+  // 〈hiddenWallAtLocal0/Run〉は体裁の延長を受けない。実機「6」D2の2F床の小口が
+  // 57.5→207.5へ広がっていた根本原因）。
   // WP-E7 defer D2: ctx.floorSpanX（既定=未指定=現行の値そのまま）で床線・天井線の描画範囲を
   // クランプする。未指定時はMath.max/min自体が素通りするため現行と完全一致する。
-  const drawnX0   = floorSpanX ? Math.max(hasWallAtLocal0   ? 0   : -extendMm, floorSpanX.lo)
-                                : (hasWallAtLocal0   ? 0   : -extendMm);
-  const drawnXRun = floorSpanX ? Math.min(hasWallAtLocalRun ? run : run + extendMm, floorSpanX.hi)
-                                : (hasWallAtLocalRun ? run : run + extendMm);
+  const drawnX0   = floorSpanX ? Math.max(wallLessEndAt(face, '0')   ? -extendMm : 0, floorSpanX.lo)
+                                : (wallLessEndAt(face, '0')   ? -extendMm : 0);
+  const drawnXRun = floorSpanX ? Math.min(wallLessEndAt(face, 'Run') ? run + extendMm : run, floorSpanX.hi)
+                                : (wallLessEndAt(face, 'Run') ? run + extendMm : run);
   // 上階のはり出し（ctx.upperOverhang。未指定＝0＝現行と完全同一）。**天井断面線だけ**が
   // この範囲まで伸びる——自階の床線・巾木・段差はその面の端で終わる。
   const ceilX0   = drawnX0   - (upperOverhang?.lo ?? 0);
@@ -892,10 +915,11 @@ export function buildFaceFigure(face, ctx) {
   // 上部吹抜けを持つ部屋帯（elevationVoid.js）と階段帯（elevationStairSequence.jsの
   // upperOverhangOf）の両方で、判定は共通の1つの関数（elevationFaces.jsのupperFloorEndsOf）。
   // 未指定の呼び出し（単体テスト等）は両端とも許す＝この節の導入前と完全同一。
+  const edgeSpanXs = {
+    drawnX0, drawnXRun, ceilX0, ceilXRun, boundaryLo: boundary.lo, boundaryHi: boundary.hi, extendMm,
+  };
   for (const side of upperFloorEdgeSpans(floorProfile, upperFloorZ, upperOverhang,
-    { drawnX0, drawnXRun, ceilX0, ceilXRun, boundaryLo: boundary.lo, boundaryHi: boundary.hi,
-      extendMm },
-    upperFloorEnds, upperFloorCutEnds)) {
+    edgeSpanXs, upperFloorEnds, upperFloorCutEnds)) {
     prims.push({ type: 'line', x1: side.lo, y1: -upperFloorZ, x2: side.hi, y2: -upperFloorZ,
       weight: cutWeight });
   }
@@ -922,12 +946,35 @@ export function buildFaceFigure(face, ctx) {
   // `|| 0`は-0を避ける（floorYOfと同じ規約。z=0の面で出力が-0になると既存の比較がズレる）。
   const endFloorYOf = (x, fallbackY) =>
     (floorProfile?.length ? (-drawnFloorProfileZAt(floorProfile, x) || 0) : fallbackY);
+  // 案2（展開図一般化§5.12 D2-1是正・ユーザー裁定(a)「面端の外はcontent側に渡す」）:
+  // 2層帯（上階FL=upperFloorZを持つ帯）で、かつ**その端に実際にupperFloorEdgeSpans（上の
+  // 895行目付近の呼び出し）が2FL断面線を1本引く**場合に限り、面端縦線の上端を天井ではなく
+  // 上階FLまでに縮める——その先（上階FLから上）は上階の床のはり出し（upperFloorEdgeSpans）と
+  // 壁の縁（content。断面エンジン）が描く担当分けにする。
+  // QA是正2026-09（gateの一本化）: 旧実装は`ctx.upperFloorEnds`（上階の床が実在する端か）
+  // だけを見ていたため、`upperFloorEdgeSpans`自身がclipContentAbove～等の理由で線を1本も
+  // 引かない端（はり出し量が0・断面線の定義域が届かない等）でもcapが掛かり、上端が宙で
+  // 途切れる縦線になっていた（実機「6」面C右端・「5」でも発現）。**判定の単一情報源は
+  // `upperFloorEdgeSpanAt`**（`upperFloorEdgeSpans`自身が呼ぶのと同じ関数）——この面の
+  // ctxで実際に呼んで非nullが返る端だけがcap対象。upperFloorZが非有限（1層帯・単体テスト等）
+  // は`upperFloorEdgeSpanAt`が即nullを返すため出力完全不変。
+  const capsAtUpperFloor = end => Number.isFinite(upperFloorZ) && !!upperFloorEdgeSpanAt(
+    end, floorProfile, upperFloorZ, upperOverhang, edgeSpanXs, upperFloorEnds, upperFloorCutEnds);
+  // QA是正2026-09（項目1）: capped時も**この面の実際の天井（ceilAbsAtX）より低い側**で止める
+  // ——upperFloorZをそのまま使うと、天井がupperFloorZより低い面（例: 腰壁で天井が下がる区間）
+  // で縦線が実際の天井を突き抜けて伸びる（実機「5」x=0・x=21935: 天井2400なのにupperFloorZ
+  // =3000まで=600mm突き抜け）。Math.minは「この帯自身の実壁の高さまで」という担当範囲の
+  // 定義そのもの——upperFloorZは上限であって下限ではない。
+  const endCeilYOf = (x, fallbackAbsMm, capped) => {
+    const ceil = ceilAbsAtX(x, fallbackAbsMm);
+    return -(capped ? Math.min(ceil, upperFloorZ) : ceil);
+  };
   if (hasWallAtLocal0 || edgeAtLocal0) {
-    prims.push({ type: 'line', x1: 0,   y1: -ceilAbsAtX(0, ceilAbsOf(segs[0])), x2: 0,   y2: endFloorYOf(0, floorYAtStart),
+    prims.push({ type: 'line', x1: 0,   y1: endCeilYOf(0, ceilAbsOf(segs[0]), capsAtUpperFloor('lo')), x2: 0,   y2: endFloorYOf(0, floorYAtStart),
       weight: hasWallAtLocal0 ? cutWeight : silhouetteWeight });
   }
   if (hasWallAtLocalRun || edgeAtLocalRun) {
-    prims.push({ type: 'line', x1: run, y1: -ceilAbsAtX(run, ceilAbsOf(segs[segs.length - 1])), x2: run, y2: endFloorYOf(run, floorYAtEnd),
+    prims.push({ type: 'line', x1: run, y1: endCeilYOf(run, ceilAbsOf(segs[segs.length - 1]), capsAtUpperFloor('hi')), x2: run, y2: endFloorYOf(run, floorYAtEnd),
       weight: hasWallAtLocalRun ? cutWeight : silhouetteWeight });
   }
 

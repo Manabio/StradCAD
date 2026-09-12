@@ -602,3 +602,80 @@ test('【明示指示】buildStairBand: 階段下に部屋が無ければ高さ�
       `足は自分側のCLの手前で止まるはず（実際の長さ:${Math.abs(d.foot - d.at)}）`);
   }
 });
+
+// ---- QA是正2026-09（項目3・§5.12 D2-1是正）: buildStairBand経由でのwallFilter配線を固定 ----
+// composeRoomFaces(stairRoom, graph, {wallFilter})の配線（elevationStair.js）自体を守る
+// 回帯テストが無かった（wallFilterをnullにしても既存2082件は全緑）ため、実際にbuildStairBandを
+// 呼んで「階段下部屋の2a壁は面端の実壁として数えない」ことを固定する。
+//
+// フィクスチャ: 階段室をL字（landing+outbound。returnKeyは部屋自身には含めない）にし、
+// stair.cellsだけにreturnKeyを含めることで、階段の踊り場側の壁（x=1000辺）を部屋の
+// **実際の外形（perimeter）**にする。階段下部屋(under=returnKey)がその同じx=1000辺に
+// 自分の外形壁を生成する（2a壁相当）——階段室自身はその辺に壁を持たないため
+// （wallFilterが正しく配線されていれば）その辺はhasRealWall:falseになり、
+// composeRoomFaces（既定=hasRealWall:falseの面を落とす）から消える＝
+// buildStairBandの描画対象面数(faceCount)が減る。
+function makeHiddenWallStairFixture() {
+  const graph = new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
+  const x0 = graph.addCenterLine(CenterLineType.VERTICAL, 0,    { labeled: false, discipline: Discipline.ARCH });
+  const xm = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
+  const x1 = graph.addCenterLine(CenterLineType.VERTICAL, 2000, { labeled: false, discipline: Discipline.ARCH });
+  const y0 = graph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: false, discipline: Discipline.ARCH });
+  const ym = graph.addCenterLine(CenterLineType.HORIZONTAL, 1500, { labeled: false, discipline: Discipline.ARCH });
+  const y1 = graph.addCenterLine(CenterLineType.HORIZONTAL, 4500, { labeled: false, discipline: Discipline.ARCH });
+  const landingKey  = `${x0.id}:${y0.id}:${x1.id}:${ym.id}`;
+  const outboundKey = `${x0.id}:${ym.id}:${xm.id}:${y1.id}`;
+  const returnKey   = `${xm.id}:${ym.id}:${x1.id}:${y1.id}`;
+  const stairCells = new Set([landingKey, outboundKey, returnKey]);
+  const roomCells = new Set([landingKey, outboundKey]); // L字。returnKeyは部屋自身に含めない。
+  const room = graph.addRoom(roomCells, '階段');
+  generateRoomWallsFromOutline(graph, room);
+  const stair = graph.addStair({
+    type: StairType.SWITCHBACK, cells: stairCells, roomId: room.id,
+    sections: [6, 1, 6], riser: null, upDirection: 'up', flip: false,
+  });
+  const beyond = cellsBeyondBreak(stair, graph, stair.riser ?? null);
+  const under = graph.addRoom(new Set(beyond), '階段下');
+  generateRoomWallsFromOutline(graph, under); // 2a壁相当（x=1000辺に自分の外形壁を生成）
+  return { room, stair, under, graph };
+}
+
+test('【QA是正・§5.12 D2-1是正】buildStairBand: 階段下部屋の2a壁は面端の実壁として数えない（hasWallAtLocal0===false・面はhasRealWall:falseで描画から落ち、faceCountが減る）', () => {
+  const { room, graph, stair } = makeHiddenWallStairFixture();
+  const band = buildStairBand(room, graph, null, { stair, floorHeight: 2400 });
+  // x=1000辺（隣接するB2/C1面）はhasRealWall:falseになり描画対象から落ちるため、
+  // 全周壁のあるL字（6面）よりfaceCountが少ないはず。
+  assert.ok(band.faceCount < 6,
+    `階段下部屋の2a壁を実壁として数えなければfaceCountは6未満のはず（実際:${band.faceCount}）`);
+  assert.equal(band.faceCount, 4, '2a壁を数えないと面はA/B1/C2/Dの4枚になるはず');
+});
+
+// ---- QA是正2026-09（第2ラウンド・項目3(1)）: 除外壁のある端でも2F床の小口はthickで1本、 ----
+// 長さは上階壁の半壁厚（体裁の延長=150mmを含まない）。wallLessEndAt統一（項目1・4）の回帯。
+function makeHiddenWallStairFixtureWithUpper() {
+  const { room, stair, under, graph } = makeHiddenWallStairFixture();
+  // upperGraph: x=1000の通りに、自階の階段下部屋の範囲(y:1500-4500)よりさらに北へ500mm
+  // 延びる2F部屋を置く——x=1000の隅に上階の壁の「はり出し」（overhang）を作る。
+  const upperGraph = new PlanGraph(new Plane('p2', 2400, '2階', 1, 1));
+  const ux0 = upperGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
+  const ux1 = upperGraph.addCenterLine(CenterLineType.VERTICAL, 2000, { labeled: false, discipline: Discipline.ARCH });
+  const uy0 = upperGraph.addCenterLine(CenterLineType.HORIZONTAL, 1000, { labeled: false, discipline: Discipline.ARCH });
+  const uy1 = upperGraph.addCenterLine(CenterLineType.HORIZONTAL, 4500, { labeled: false, discipline: Discipline.ARCH });
+  const upperKey = `${ux0.id}:${uy0.id}:${ux1.id}:${uy1.id}`;
+  const upperRoom = upperGraph.addRoom(new Set([upperKey]), '2F');
+  generateRoomWallsFromOutline(upperGraph, upperRoom);
+  return { room, stair, under, graph, upperGraph };
+}
+
+test('【QA是正・第2ラウンド項目3(1)】buildStairBand: 除外壁のある端でも2F床の小口（上階FL断面線）がthickで1本引かれ、長さは上階壁の半壁厚（体裁の延長150mmを含まない）', () => {
+  const { room, graph, stair, upperGraph } = makeHiddenWallStairFixtureWithUpper();
+  const band = buildStairBand(room, graph, upperGraph, { stair, floorHeight: 2400 });
+  const upperFloorZ = 2400; // floorHeight（upperGraph.plane.elevation）
+  const edgeLines = band.primitives.filter(p =>
+    p.type === 'line' && p.weight === 'thick' && p.y1 === p.y2 && p.y1 === -upperFloorZ);
+  assert.equal(edgeLines.length, 1,
+    `上階FL(z=${upperFloorZ})のthick線は1本だけのはず（実際:${edgeLines.length}本）`);
+  const len = Math.abs(edgeLines[0].x2 - edgeLines[0].x1);
+  assert.equal(len, 57.5,
+    `長さは上階壁の半壁厚(57.5mm)のはず（体裁の延長150mmを含めた207.5等であってはならない。実際:${len}）`);
+});

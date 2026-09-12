@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { Plane, PlanGraph, CenterLineType, Discipline, StairType, StructuralMaterialType, edgeKey } from '@core';
 import { generateRoomWallsFromOutline } from '../../../finish/wallGeneration.js';
 import { composeRoomFaces } from '../../elevationFaceList.js';
-import { switchbackCuts } from './switchbackCuts.js';
+import { switchbackCuts, stairBandWallFilter } from './switchbackCuts.js';
 import { cellsBeyondBreak } from '../../../finish/stair/stairGeometry.js';
 
 function makeGraph(name = 'p1') {
@@ -379,4 +379,44 @@ test('【失敗系】switchbackCuts: 階段下に部屋が無ければairRoom/un
     assert.equal(cut.airRoom, undefined, `seq${cut.seqNo}: airRoomは付かないはず`);
     assert.equal(cut.underRooms, undefined, `seq${cut.seqNo}: underRoomsは付かないはず`);
   }
+});
+
+// ----------------------------------------------------------------
+// stairBandWallFilter（展開図一般化§5.12 D2-1是正）: 面リスト構築（composeRoomFaces。
+// elevationStair.js経由）へ渡す壁フィルタの供給。判定ロジック自体（airRoomの連結成分と
+// underRoomsを隔てる2a壁を隠す）はsection/sectionHits.test.jsのisHiddenWallで網羅済みのため、
+// ここでは「stairBandWallFilterがstairUnderRoomInfo/probeCtx/isWallHiddenForBandを正しく
+// 組み立てて配線しているか」だけを見る。
+// ----------------------------------------------------------------
+test('stairBandWallFilter: 階段下に部屋が無ければnull（＝フィルタなし。従来どおり全ての壁が見える）', () => {
+  const graph = makeGraph();
+  const { stair } = makeSwitchbackFixture(graph, { withRoomUnder: false });
+  assert.equal(stairBandWallFilter(stair, graph), null);
+});
+
+test('stairBandWallFilter: 階段下に部屋があれば、階段室自身の空気ボリュームと階段下部屋を隔てる壁を除外する関数を返す', () => {
+  const graph = makeGraph();
+  const { stair } = makeSwitchbackFixture(graph);
+  const under = [...graph.rooms].find(r => r.name === '階段下');
+  assert.ok(under, '前提: 階段下部屋があるはず');
+
+  // 階段室自身の外形（往路レーンと踊り場の境界。x=1000, y:1500-4500）に、階段下部屋（x:1000-2000
+  // 側）を隔てるisRoomWall壁を追加する——13.stq「6」の2a壁と同じ構図（近傍が階段室自身の空気
+  // ボリューム・反対側が階段下部屋）。
+  const x1000 = [...graph.centerLines].find(cl => cl.centerLineType === CenterLineType.VERTICAL && cl.effectiveValue === 1000);
+  const y1500 = [...graph.centerLines].find(cl => cl.centerLineType === CenterLineType.HORIZONTAL && cl.effectiveValue === 1500);
+  const y4500 = [...graph.centerLines].find(cl => cl.centerLineType === CenterLineType.HORIZONTAL && cl.effectiveValue === 4500);
+  const hiddenWall = graph.addWall(x1000, 50, true, y1500, 0, y4500, 0, { isRoomWall: true });
+  assert.equal(hiddenWall.isRoomWall, true, '前提: isRoomWall:trueの壁のはず（2a壁と同じ性質）');
+
+  // 対照実験: 階段室自身の外壁(x=0)は非隠蔽のままのはず(外側=建物の外=部屋が無いため対象外)。
+  const exteriorWall = [...graph.walls].find(w => w.isVertical && w.axisCL.effectiveValue === 0);
+  assert.ok(exteriorWall, '前提: 階段室自身の外壁(x=0)があるはず');
+
+  const wallFilter = stairBandWallFilter(stair, graph);
+  assert.equal(typeof wallFilter, 'function', '階段下に部屋があれば関数を返すはず');
+  assert.equal(wallFilter(hiddenWall), false,
+    '階段室自身の空気ボリュームと階段下部屋を隔てる壁は「数えない」(false)はず');
+  assert.equal(wallFilter(exteriorWall), true,
+    '建物の外に面する自室の外壁は従来どおり「数える」(true)はず');
 });

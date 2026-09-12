@@ -20,6 +20,7 @@ import {
   DEFAULT_WALL_LESS_END_EXTEND_MM,
 } from './elevationStyle.js';
 import { screenMmToModelMm, horizontalDimLabelBox } from './elevationLayout.js';
+import { clipContentAtHiddenEnds } from './elevationStairSequence.js';
 import { DEFAULT_PX_PER_MM } from '../viewport.js';
 
 function makeFace(overrides = {}) {
@@ -2479,8 +2480,13 @@ test('【失敗系】buildFaceFigure: 上階の床が実在しない端(upperFlo
     upperOverhang: { lo: 0, hi: 115 }, upperFloorZ: 3000,
     upperFloorCutEnds: { lo: null, hi: RUN + 115 }, upperFloorEnds,
   });
+  // 【案2】upperFloorEnds.lo=trueの面端縦線は、この帯自身も2層帯（upperFloorZ指定あり）
+  // のため上端がupperFloorZ(-3000)まで縮む（elevationFigure.js:923-926。§5.12 D2-1是正・
+  // 裁定(a)）——y1===-3000の「線」自体はこのテストの対象（upperFloorEdgeSpansの水平な
+  // はり出し線）と別物なので、下記のとおりy1===y2===-3000（水平線）で絞って区別する
+  // （openケースの絞り込みと同じ精度に揃える）。
   const blocked = buildFaceFigure(makeFace(), ctxOf({ lo: true, hi: false }));
-  assert.equal(blocked.filter(p => p.type === 'line' && p.y1 === -3000).length, 0,
+  assert.equal(blocked.filter(p => p.type === 'line' && p.y1 === -3000 && p.y2 === -3000).length, 0,
     '上階に実部屋が無い端のgateは切断壁の張り出しにも効く（既存gateを維持）');
   const open = buildFaceFigure(makeFace(), ctxOf({ lo: true, hi: true }));
   assert.equal(open.filter(p => p.type === 'line' && p.y1 === -3000 && p.y2 === -3000).length, 1,
@@ -2489,6 +2495,145 @@ test('【失敗系】buildFaceFigure: 上階の床が実在しない端(upperFlo
   assert.ok(blocked.some(p => p.type === 'line' && p.weight === 'thick'
     && p.y1 === p.y2 && p.y1 === -2400 && Math.max(p.x1, p.x2) === RUN + 115),
     '天井断面線ははり出したまま');
+});
+
+// ---- 展開図一般化§5.12 D2-1是正・裁定(a)（案2）: 面端縦線の上端は2層帯ではupperFloorZまで ----
+// 「面端の外はcontent側に渡す」——上階FLから上（はり出し・壁の縁）はupperFloorEdgeSpansと
+// 断面エンジンのcontentが描くため、面端縦線自身は上階FLで止める。1層帯（upperFloorZ未指定）・
+// upperFloorEnds未指定（上階の床の有無を判定していない呼び出し）は従来どおり天井まで
+// ＝出力完全不変（elevationFigure.js:923-926付近のcapsAtUpperFloor）。
+test('【案2】buildFaceFigure: 2層帯・はり出しあり(upperFloorZ+upperOverhang+upperFloorEnds指定)では面端縦線の上端がupperFloorZまでに縮む(天井までは伸びない)', () => {
+  const CH = 5400; // 実データ「6」D2と同じ桁（旧: 天井5400まで誤って伸びていた）
+  const floorSegments = [{ loX: 0, hiX: 4000, floorDeltaMm: 0 }];
+  const prims = buildFaceFigure(makeFace(), baseCtx({
+    ceilingHeight: CH, floorSegments, upperFloorZ: 3000,
+    upperOverhang: { lo: 160, hi: 160 }, upperFloorEnds: { lo: true, hi: true },
+  }));
+  const endLines = prims.filter(p => p.type === 'line' && !p.dash && p.x1 === p.x2 && (p.x1 === 0 || p.x1 === 4000));
+  assert.equal(endLines.length, 2, '面端の縦線(local0・localRun)が2本あるはず');
+  for (const l of endLines) {
+    assert.equal(Math.max(l.y1, l.y2), 0, '下端は床(y=0)のはず');
+    assert.equal(Math.min(l.y1, l.y2), -3000, '上端は天井(-5400)ではなくupperFloorZ(-3000)までに縮むはず');
+  }
+});
+
+// ---- QA是正2026-09（項目2）: capsAtUpperFloorのgateはupperFloorEdgeSpansと同じ関数を共有する ----
+test('【QA是正・案2】buildFaceFigure: はり出しが無い端（upperOverhang未指定/0）では、upperFloorZ+upperFloorEndsが指定されていてもcapしない（従来どおり天井まで）', () => {
+  const CH = 5400;
+  const floorSegments = [{ loX: 0, hiX: 4000, floorDeltaMm: 0 }];
+  const mk = upperOverhang => buildFaceFigure(makeFace(), baseCtx({
+    ceilingHeight: CH, floorSegments, upperFloorZ: 3000, upperOverhang, upperFloorEnds: { lo: true, hi: true },
+  }));
+  const endLinesOf = prims => prims.filter(p => p.type === 'line' && !p.dash && p.x1 === p.x2 && (p.x1 === 0 || p.x1 === 4000));
+  for (const overhang of [undefined, { lo: 0, hi: 0 }]) {
+    for (const l of endLinesOf(mk(overhang))) {
+      assert.equal(Math.min(l.y1, l.y2), -CH,
+        `overhang=${JSON.stringify(overhang)}: はり出しが無ければupperFloorEdgeSpansは1本も引かないためcapしない（天井までのはず）`);
+    }
+  }
+});
+
+// ---- QA是正2026-09（項目1）: capped時も実際の天井より低い側では止まらない（Math.min） ----
+test('【QA是正・案2】buildFaceFigure: 天井がupperFloorZより低い面端では、capしても実際の天井（低い方）で止まり、upperFloorZまで伸びない', () => {
+  const CH = 2400; // 天井2400 < upperFloorZ3000（実機「5」x=0・x=21935相当）
+  const floorSegments = [{ loX: 0, hiX: 4000, floorDeltaMm: 0 }];
+  const prims = buildFaceFigure(makeFace(), baseCtx({
+    ceilingHeight: CH, floorSegments, upperFloorZ: 3000,
+    upperOverhang: { lo: 160, hi: 160 }, upperFloorEnds: { lo: true, hi: true },
+  }));
+  const endLines = prims.filter(p => p.type === 'line' && !p.dash && p.x1 === p.x2 && (p.x1 === 0 || p.x1 === 4000));
+  assert.equal(endLines.length, 2, '面端の縦線が2本あるはず');
+  for (const l of endLines) {
+    assert.equal(Math.min(l.y1, l.y2), -CH,
+      '天井(2400)がupperFloorZ(3000)より低いので、その低い方(天井)で止まるはず（600mm突き抜けない）');
+  }
+});
+
+// ---- QA是正2026-09: capが隣接面（パネル接合部）と重なり2本を作らない ----
+// パネル統合（mergeSteppedFacesIntoPanel）で1枚の壁として扱われる隣接面は、接合端で
+// 同じ物理壁の断面線を共有する——同じ帯・同じupperFloorZ/upperOverhang/天井高であれば、
+// 双方のbuildFaceFigureが出す端の縦線は高さも完全一致するはず（一致しなければ、dedupe
+// （sectionEmit.js等）で1本に畳めず「2本」に分離して残ってしまう。実機「5」x=21935で
+// 発現した症状の一般化ガード）。
+test('【QA是正】buildFaceFigure: 同一のupperFloorZ/upperOverhang/天井高を持つ隣接面どうしは、接合端の縦線の高さが完全一致する（2本に分離しない）', () => {
+  const CH = 2400;
+  const ctxOf = () => baseCtx({
+    ceilingHeight: CH, floorSegments: [{ loX: 0, hiX: 4000, floorDeltaMm: 0 }],
+    upperFloorZ: 3000, upperOverhang: { lo: 160, hi: 160 }, upperFloorEnds: { lo: true, hi: true },
+  });
+  // faceA(localRun側で接合)・faceB(local0側で接合)——実際のパネル接合と同じ「片方はhasWallAtLocalRun、
+  // もう片方はhasWallAtLocal0」の組み合わせを模す。
+  const primsA = buildFaceFigure(makeFace({ hasWallAtLocalRun: true }), ctxOf());
+  const primsB = buildFaceFigure(makeFace({ hasWallAtLocal0: true }), ctxOf());
+  const endLineOf = (prims, x) => prims.find(p => p.type === 'line' && !p.dash && p.x1 === p.x2 && p.x1 === x);
+  const runEnd = endLineOf(primsA, 4000), localEnd = endLineOf(primsB, 0);
+  assert.ok(runEnd && localEnd, '両方の接合端に縦線があるはず');
+  assert.deepEqual([Math.min(runEnd.y1, runEnd.y2), Math.max(runEnd.y1, runEnd.y2)],
+    [Math.min(localEnd.y1, localEnd.y2), Math.max(localEnd.y1, localEnd.y2)],
+    '同一条件の隣接面どうしは接合端の縦線の高さ(上端=cap後・下端)が完全一致し、2本に分離しないはず');
+});
+
+// ---- QA是正2026-09（第2ラウンド・項目1/4・実機「6」D2の最小再現）----
+// 実データ「6」D2相当: hasWallAtLocal0=false・hiddenWallAtLocal0=true（wallFilterで除外された
+// 実壁がある端）・floorProfileがlocal -30..0でz=upperFloorZちょうどフラット（2FLに到達済み）。
+test('【QA是正・第2ラウンド項目1/4】buildFaceFigure: hidden端の2F床の小口はthick1本・幅は上階壁の半壁厚（体裁の延長150mmを含まない207.5等にならない）', () => {
+  const floorSegments = [{ loX: 0, hiX: 3442.5, floorDeltaMm: 0 }];
+  const floorProfile = [[-30, 3000], [0, 3000], [220, 2700]];
+  const face = { axisCL: { id: 'axisY0', effectiveValue: 0 }, isVertical: false, inward: 1, faceValue: 0,
+    lo: 0, hi: 3442.5, run: 3442.5, dirSign: 1, originWorld: 0, startCLId: 'x0', endCLId: 'x1',
+    hasWallAtLocal0: false, hiddenWallAtLocal0: true, hasWallAtLocalRun: true };
+  const prims = buildFaceFigure(face, baseCtx({
+    ceilingHeight: 5400, floorSegments, floorProfile,
+    upperFloorZ: 3000, upperOverhang: { lo: 57.5, hi: 0 },
+    upperFloorEnds: { lo: true, hi: false }, upperFloorCutEnds: { lo: null, hi: null },
+  }));
+  const edgeLines = prims.filter(p => p.type === 'line' && !p.dash && p.y1 === -3000 && p.y2 === -3000);
+  assert.equal(edgeLines.length, 1, '2F床の小口は1本だけのはず');
+  assert.equal(Math.abs(edgeLines[0].x2 - edgeLines[0].x1), 57.5,
+    `長さは上階壁の半壁厚(57.5mm)のはず（実際:${Math.abs(edgeLines[0].x2 - edgeLines[0].x1)}）`);
+});
+
+// ---- QA是正2026-09（第2ラウンド・項目3(2)）: hidden端では床線・天井線を図の外へ延長しない ----
+test('【QA是正・第2ラウンド項目3(2)】buildFaceFigure: hidden端(hasWall=false・hiddenWall=true)では床線・天井線を図の外へ延長しない（最小xが0）', () => {
+  const CH = 2400;
+  const floorSegments = [{ loX: 0, hiX: 4000, floorDeltaMm: 0 }];
+  const face = makeFace({ hasWallAtLocal0: false, hiddenWallAtLocal0: true });
+  const prims = buildFaceFigure(face, baseCtx({ ceilingHeight: CH, floorSegments }));
+  const xs = prims.flatMap(p => p.type === 'line' ? [p.x1, p.x2] : p.type === 'polyline' ? p.points.map(pt => pt[0]) : []);
+  assert.equal(Math.min(...xs), 0,
+    `hidden端は真に壁のない端部ではないため体裁の延長(-150)を受けず、最小xは0のはず（実際:${Math.min(...xs)}）`);
+});
+
+// ---- QA是正2026-09（第2ラウンド・項目3(3)）: 上階FLの断面線は同位置の中線を内包しない ----
+test('【QA是正・第2ラウンド項目3(3)】clipContentAtHiddenEnds: hidden端のcontentは探査延長区間（面の外）に残る水平線（上階FL断面線と同位置の冗長な中線）を落とす', () => {
+  const face = { run: 3442.5, hiddenWallAtLocal0: true, hiddenWallAtLocalRun: false };
+  const prims = [
+    // withProbeExtension（探査窓。§2で未変更）が広げた探査範囲の中で見つかった、面の外(x<0)へ
+    // 残る冗長な中線（実機「6」D2の`medium x=0..-150 y=-3000`相当。elevationFigure.jsの
+    // upperFloorEdgeSpans側が別途、面の真の境界までの太線を描くため二重になる）。
+    { type: 'line', x1: 0, y1: -3000, x2: -150, y2: -3000, weight: 'medium' },
+    { type: 'line', x1: 500, y1: -2400, x2: 600, y2: -2400, weight: 'medium' }, // 面の中の線は対象外
+    { type: 'line', x1: 3442.5, y1: -2400, x2: 3500, y2: -2400, weight: 'medium' }, // hiddenでない端は対象外
+    { type: 'line', x1: -57.5, y1: -3000, x2: -57.5, y2: -5400, weight: 'medium', __o: 'recessLo' }, // 縦線は対象外
+  ];
+  const out = clipContentAtHiddenEnds(prims, face);
+  assert.ok(!out.some(p => p.type === 'line' && p.x1 !== p.x2 && Math.min(p.x1, p.x2) < 0),
+    'hidden端(local0)を越えて面の外(x<0)へ残る水平線が無いはず（上階FL断面線と同位置の中線が重ならない）');
+  assert.equal(out.length, 3, '面の外へ丸ごと出ていた冗長な中線(1本)だけが落ち、残り3本（面の中・非hidden端・縦線）は保たれるはず');
+  assert.ok(out.some(p => p.x1 === 3442.5), 'hiddenでない端(localRun)の線はクリップされず残るはず');
+  assert.ok(out.some(p => p.__o === 'recessLo'), '縦線(recessLo)はクリップされず残るはず');
+});
+
+test('【失敗系・案2】buildFaceFigure: upperFloorEnds未指定・1層帯(upperFloorZ未指定)では面端縦線は従来どおり天井まで(出力不変)', () => {
+  const CH = 5400;
+  const floorSegments = [{ loX: 0, hiX: 4000, floorDeltaMm: 0 }];
+  const mk = extra => buildFaceFigure(makeFace(), baseCtx({ ceilingHeight: CH, floorSegments, ...extra }));
+  const base = mk({});
+  const endLinesOf = prims => prims.filter(p => p.type === 'line' && !p.dash && p.x1 === p.x2 && (p.x1 === 0 || p.x1 === 4000));
+  for (const l of endLinesOf(base)) assert.equal(Math.min(l.y1, l.y2), -CH, '1層帯(upperFloorZ未指定)は従来どおり天井までのはず');
+  // upperFloorEnds未指定（2層帯だがどちらの端も上階の床の有無を判定していない呼び出し）も
+  // 天井までのまま＝出力完全不変（upperFloorZだけの指定では縮めない）。
+  assert.deepEqual(mk({ upperFloorZ: 3000 }), base, 'upperFloorEnds未指定はupperFloorZがあっても出力不変のはず');
 });
 
 test('【失敗系】buildFaceFigure: floorProfileが無くupperFloorZ未指定なら上階FLの断面線は引かない', () => {

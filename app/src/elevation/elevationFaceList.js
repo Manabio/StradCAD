@@ -139,10 +139,15 @@ export function splitFacesAtPartitionWalls(faces, room, graph) {
  * 部屋 → 面リスト（袖壁分割・段差見付け面挿入・再採番まで済んだ最終形）。
  * @param {import('@core').Room} room
  * @param {object} graph
+ * @param {{keepWallLessFaces?:boolean, wallFilter?:(wall:import('@core').Wall)=>boolean}} [opts]
+ *   wallFilter（展開図一般化§5.12 D2-1是正）: 「この帯で実体として数える壁」の絞り込み
+ *   （既定=未指定=全壁。通常の部屋帯・吹抜け帯は渡さない＝従来どおり）。階段帯だけが
+ *   `section/cuts/switchbackCuts.js`の`stairBandWallFilter`を渡す——断面エンジンの
+ *   `isHiddenWall`と同じ判断を面リスト構築（`buildRoomFaces`の壁検出全体）にも通す。
  * @returns {object[]}
  */
 export function composeRoomFaces(room, graph, opts = {}) {
-  let faces = buildRoomFaces(room, graph);
+  let faces = buildRoomFaces(room, graph, opts.wallFilter);
   faces = extendFacesWithOpenSpans(faces, room, graph);
   faces = splitFacesAtPartitionWalls(faces, room, graph);
   faces = insertStepFaces(faces, room, graph);

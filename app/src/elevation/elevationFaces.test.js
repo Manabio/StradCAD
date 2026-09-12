@@ -7,7 +7,7 @@ import { Plane, PlanGraph, CenterLineType, Discipline, OpeningCategory } from '@
 import { generateRoomWallsFromOutline } from '../finish/wallGeneration.js';
 import {
   buildRoomFaces, openingsOnFace, faceBoundaryLocalX, snapFaceEndsToCorners, faceWallLessExtents,
-  wallCoverageGapsOnFace,
+  wallCoverageGapsOnFace, wallLessEndAt,
 } from './elevationFaces.js';
 
 function makeGraph() {
@@ -212,6 +212,29 @@ test('【失敗系・QA G2】faceWallLessExtents: 両端に壁がある（また
     'フィールド省略時はtrue(壁あり)扱い＝延長0（buildFaceFigureの`?? true`と同じ規約）');
 });
 
+// ---- QA是正2026-09（第2ラウンド・項目1/4）: wallLessEndAt（「壁のない端部」の単一情報源） ----
+test('wallLessEndAt: 実壁がある端(hasWall=true)はfalse', () => {
+  assert.equal(wallLessEndAt({ hasWallAtLocal0: true }, '0'), false);
+});
+test('wallLessEndAt: 真に壁が無い端(hasWall=false・hiddenWall=false)はtrue', () => {
+  assert.equal(wallLessEndAt({ hasWallAtLocal0: false, hiddenWallAtLocal0: false }, '0'), true);
+  assert.equal(wallLessEndAt({ hasWallAtLocal0: false }, '0'), true, 'hiddenWall未指定はfalse扱い');
+});
+test('【QA是正・第2ラウンド】wallLessEndAt: wallFilterで除外された実壁がある端(hasWall=false・hiddenWall=true)はfalse（体裁の延長を受けない）', () => {
+  assert.equal(wallLessEndAt({ hasWallAtLocal0: false, hiddenWallAtLocal0: true }, '0'), false);
+  assert.equal(wallLessEndAt({ hasWallAtLocalRun: false, hiddenWallAtLocalRun: true }, 'Run'), false);
+});
+test('【失敗系】wallLessEndAt: フィールド省略時はtrue(壁あり)扱い＝false（buildFaceFigureの`?? true`と同じ規約）', () => {
+  assert.equal(wallLessEndAt({}, '0'), false);
+});
+
+test('【QA是正・第2ラウンド】faceWallLessExtents: wallFilterで除外された実壁がある端(hiddenWallAtLocal0/Run)は体裁の延長を受けない（延長0）', () => {
+  const { leftExtendMm, rightExtendMm } = faceWallLessExtents(
+    { hasWallAtLocal0: false, hiddenWallAtLocal0: true, hasWallAtLocalRun: false, hiddenWallAtLocalRun: true }, 19);
+  assert.equal(leftExtendMm, 0, 'hidden端は体裁の延長を受けないはず');
+  assert.equal(rightExtendMm, 0, 'hidden端は体裁の延長を受けないはず');
+});
+
 // ---- QA G2 (buildRoomBandの実際の配置式を模擬): 壁なし端を挟む2面でも実間隔はgapModelMm
 // (実画面30mm相当)を維持する ----
 // buildRoomBandへ合成faceを注入する手段は無い（buildFaceFigureのように直接ctxへfaceを渡す
@@ -310,6 +333,57 @@ test('【失敗系】buildRoomFaces: 全周壁のある矩形部屋は全面でh
   const { room } = makeRectRoom(graph, 0, 0, 4000, 3000);
   const faces = buildRoomFaces(room, graph);
   for (const f of faces) {
+    assert.equal(f.hasWallAtLocal0, true, `${f.label}のhasWallAtLocal0はtrueのはず`);
+    assert.equal(f.hasWallAtLocalRun, true, `${f.label}のhasWallAtLocalRunはtrueのはず`);
+  }
+});
+
+// ---- 展開図一般化§5.12 D2-1是正: buildRoomFaces/snapFaceEndsToCornersのwallFilter ----
+// 「この帯で実体として数えない壁」（isWallHiddenForBand。section/sectionHits.js）は面リスト
+// 構築側からは`wallFilter`という単純なコールバックとして渡されるだけなので、ここでは
+// isHiddenWallの判定ロジック自体（sectionHits.test.jsで別途網羅）ではなく、「除外された壁は
+// 面自身の壁検出(buildRoomFacesのinnerWallFaceAt呼び出し)からも隅の実壁検出(realWallAtCorner)
+// からも一貫して無視され、面の端が部屋の外形(CL芯)へフォールバックする」という配線を検証する。
+test('【§5.12 D2-1是正】buildRoomFaces: wallFilterで除外された壁は面自身・隅探査の両方から無視され、面の端は部屋の外形(CL芯)に留まる', () => {
+  const graph = makeGraph();
+  const { room } = makeRectRoom(graph, 0, 0, 4000, 3000);
+  // 全周壁のある矩形室でA面(上辺)の壁だけをwallFilterで除外する
+  // （13.stq「6」面D2の2a壁と同じ「壁は実在するがこの帯では数えない」状況を単純化して再現）。
+  const wallA = [...graph.walls].find(w => !w.isVertical && w.axisCL.effectiveValue === 0);
+  assert.ok(wallA, '前提: A面(y=0)に実壁があるはず');
+  const wallFilter = w => w.id !== wallA.id;
+
+  const faces = buildRoomFaces(room, graph, wallFilter);
+  const byLabel = Object.fromEntries(faces.map(f => [f.label, f]));
+
+  // A自身: 面端の縦線を立てる根拠（hasRealWall）が消え、faceValueはCL芯(y=0)へ戻る。
+  assert.equal(byLabel.A.hasRealWall, false, 'wallFilterで除外されたA面はhasRealWallがfalseのはず');
+  assert.equal(byLabel.A.faceValue, 0, 'A面のfaceValueはCL芯(0)へフォールバックするはず');
+  // A⇔B・A⇔Dの隅: 「隣の面(A)に実壁がある」という誤判定が消え、B/D側の対応端がfalseになる
+  // （面の端は部屋の外形＝隅CLの位置に留まり、Aの壁面へは詰められない）。
+  assert.equal(byLabel.B.hasWallAtLocal0, false, 'B面の始端(A隅)はwallFilterでAの壁が消えるためfalseのはず');
+  assert.equal(byLabel.D.hasWallAtLocalRun, false, 'D面の終端(A隅)はwallFilterでAの壁が消えるためfalseのはず');
+  // 他の面・他の端（C・B/Dの反対側）は無関係な壁のためtrueのまま（波及していないことの確認）。
+  assert.equal(byLabel.B.hasWallAtLocalRun, true);
+  assert.equal(byLabel.D.hasWallAtLocal0, true);
+  assert.equal(byLabel.C.hasWallAtLocal0, true);
+  assert.equal(byLabel.C.hasWallAtLocalRun, true);
+});
+
+// ---- 失敗系（対照実験）: wallFilterが実在する自室の壁を除外しなければ従来どおり ----
+test('【失敗系・§5.12 D2-1是正】buildRoomFaces: wallFilterが対象外の壁だけを除外する場合は従来どおり（自室の実壁があれば全面hasWallAtLocal0/Runがtrueのまま）', () => {
+  const graph = makeGraph();
+  const { room } = makeRectRoom(graph, 0, 0, 4000, 3000);
+  // 実在するどの面の壁とも一致しないダミーidで除外するwallFilter＝実質何も除外しない。
+  const wallFilter = w => w.id !== 'no-such-wall-id';
+
+  const filtered = buildRoomFaces(room, graph, wallFilter);
+  const unfiltered = buildRoomFaces(room, graph);
+  assert.deepEqual(
+    filtered.map(f => ({ label: f.label, hasWallAtLocal0: f.hasWallAtLocal0, hasWallAtLocalRun: f.hasWallAtLocalRun, faceValue: f.faceValue })),
+    unfiltered.map(f => ({ label: f.label, hasWallAtLocal0: f.hasWallAtLocal0, hasWallAtLocalRun: f.hasWallAtLocalRun, faceValue: f.faceValue })),
+    '無関係な壁だけを除外するwallFilterは出力に影響しないはず（自室の実壁があれば従来どおり）');
+  for (const f of filtered) {
     assert.equal(f.hasWallAtLocal0, true, `${f.label}のhasWallAtLocal0はtrueのはず`);
     assert.equal(f.hasWallAtLocalRun, true, `${f.label}のhasWallAtLocalRunはtrueのはず`);
   }

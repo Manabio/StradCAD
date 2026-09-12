@@ -15,7 +15,7 @@ import { cutPlaneOffsetMm, faceCutLine, faceViewSign } from './section/sectionCu
 import { structuralColumnContribution } from './section/sectionStructure.js';
 import { stairContribution, stairPrimitivesForCut, clipStairUnderCeiling } from './section/sectionStair.js';
 import { graphList } from '../graphReadScope.js';
-import { faceBoundaryLocalX, faceWallLessExtents } from './elevationFaces.js';
+import { faceBoundaryLocalX, faceWallLessExtents, wallLessEndAt } from './elevationFaces.js';
 import { composeRoomFaces, neighborWallFace } from './elevationFaceList.js';
 import { buildFaceFigure, segEndProfile } from './elevationFigure.js';
 import { wallAdjacentFloorSegments, familyCeilingSegments } from './elevationFloorProfile.js';
@@ -537,14 +537,20 @@ function stringerSightlineVisible(face, graph, contribution, bounds) {
  * 量**（`section/sectionContent.js`の`planeOverhangForFace`）——その端の壁エッジを描くために、
  * 描画範囲をそのぶん外へ広げる。壁のない端では`planeOverhangForFace`が0を返すので、
  * 体裁のはり出し（`extendMm`）と二重に足されることはない。
+ * QA是正2026-09（§5.12 D2-1是正・第2ラウンド項目4）: 体裁の延長（extendMm）は単一情報源
+ * `wallLessEndAt`（elevationFaces.js。`!hasWallAt && !hiddenWallAt`）が「真に壁のない端部」と
+ * 判定した端だけに効かせる——`hasWallAtLocal0/Run`=falseだけでは判定しない（wallFilterで
+ * 除外された実壁がある端`hiddenWallAtLocal0/Run`は体裁の延長を受けない。13.stq「6」差分ゼロで
+ * 確認済み＝現時点では出力へ影響しない休眠定義だったが、定義を`elevationFigure.js`側と
+ * 揃えないと将来的な食い違いの温床になる）。
  * @param {object} face
  * @param {number} extendMm
  * @param {{lo:number,hi:number}} [overhang]
  */
-function faceDrawnXRange(face, extendMm, overhang) {
+export function faceDrawnXRange(face, extendMm, overhang) {
   return {
-    lo: ((face.hasWallAtLocal0 ?? true) ? 0 : -extendMm) - (overhang?.lo ?? 0),
-    hi: ((face.hasWallAtLocalRun ?? true) ? face.run : face.run + extendMm) + (overhang?.hi ?? 0),
+    lo: (wallLessEndAt(face, '0')   ? -extendMm : 0)        - (overhang?.lo ?? 0),
+    hi: (wallLessEndAt(face, 'Run') ? face.run + extendMm : face.run) + (overhang?.hi ?? 0),
   };
 }
 

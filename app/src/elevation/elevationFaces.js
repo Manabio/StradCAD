@@ -124,12 +124,20 @@ const CORNER_PROBE_DEPTH_MM = 100;
  * この関数ではなく`perpWallCrossesFacePlane`が担う——役割を混ぜない。
  *
  * graph未指定（合成faceを使う既存の単体テスト）は従来どおり面全体のフラグへフォールバックする。
+ *
+ * `wallFilter`（展開図一般化§5.12 D2-1是正）: 「この帯で実体として数える壁」の絞り込み
+ * （既定=未指定=全壁を数える＝従来どおり）。階段帯（`elevationStair.js`）は`stairBandWallFilter`
+ * （`section/cuts/switchbackCuts.js`）が返す関数を渡し、断面エンジンの`isHiddenWall`と同じ判断
+ * （階段室の空気成分と階段下部屋を隔てる2a壁は隅の実壁として数えない）を隅探査にも通す
+ * ——さもないと、階段室自身は持たない隣室（階段下部屋）の2a壁がCL上に素通しで見つかり、
+ * 「隅に実壁がある」と誤判定して面端が誤った位置へスナップされる（13.stq「6」面D2の実測）。
  * @param {object} f - 対象の面
  * @param {object} perpFace - 隅を共有する直交面
  * @param {object|null} graph
+ * @param {(wall:import('@core').Wall)=>boolean} [wallFilter]
  * @returns {boolean}
  */
-function realWallAtCorner(f, perpFace, graph) {
+function realWallAtCorner(f, perpFace, graph, wallFilter) {
   const fallback = perpFace.hasRealWall ?? true;
   if (!graph?.walls || !perpFace.axisCL) return fallback;
   if (perpFace.inward !== 1 && perpFace.inward !== -1) return fallback;
@@ -138,6 +146,7 @@ function realWallAtCorner(f, perpFace, graph) {
   return innerWallFaceAt(graph, perpFace.axisCL, {
     isVertical: perpFace.isVertical, inward: perpFace.inward,
     spanLo: f.faceValue - CORNER_PROBE_DEPTH_MM, spanHi: f.faceValue + CORNER_PROBE_DEPTH_MM,
+    wallFilter,
   }) != null;
 }
 
@@ -250,11 +259,19 @@ export function faceCutPlaneValue(face, graph) {
  * 壁断面が現れないため壁のない端部として扱い、端座標も直交面へ詰めずCL芯のまま残す
  * （「図の端部が壁断面のない中心線の場合は、図の外側まで床と天井断面をのばす」）。
  * 判定結果は hasWallAtLocal0/hasWallAtLocalRun として面のローカル座標系（0/run）向けに公開する。
+ * `wallFilter`指定時はさらに`hiddenWallAtLocal0/Run`（QA是正2026-09・§5.12 D2-1是正）——
+ * wallFilterで除外されなければ実壁があったはずの端かどうか（フィルタ無しでrealWallAtCornerを
+ * 再判定するだけ）。断面エンジンの層ごとの探査窓（section/sectionContent.jsの
+ * planeOverhangForFace）が「実壁は無いが除外された壁がある」端と「本当に何も無い」端を
+ * 区別するための材料——面自体の描画（hasWallAtLocal0/Run）は変えない。
  * @param {object[]} faces - letter/dirSign/faceValue/hasRealWall/lo/hi/startCLId/endCLId/axisCL を持つ面リスト
- * @returns {object[]} lo/hi/run/originWorld を詰め直し、hasWallAtLocal0/hasWallAtLocalRunを
- *   追加した新しい配列（他フィールドは同一参照）
+ * @param {object|null} graph
+ * @param {(wall:import('@core').Wall)=>boolean} [wallFilter] - buildRoomFacesのwallFilterと同じ
+ *   （realWallAtCornerの隅探査にも適用する）。
+ * @returns {object[]} lo/hi/run/originWorld を詰め直し、hasWallAtLocal0/hasWallAtLocalRun・
+ *   hiddenWallAtLocal0/hiddenWallAtLocalRunを追加した新しい配列（他フィールドは同一参照）
  */
-export function snapFaceEndsToCorners(faces, graph = null) {
+export function snapFaceEndsToCorners(faces, graph = null, wallFilter) {
   const byAxisCLId = groupByAxisCLId(faces);
 
   return faces.map(f => {
@@ -262,8 +279,19 @@ export function snapFaceEndsToCorners(faces, graph = null) {
     const endFace   = findCornerNeighbor(byAxisCLId, f.axisCL.id, f.endCLId);
     // 「壁あり」＝対応する直交面が存在し、**その隅に実壁があり**（realWallAtCorner）、
     // かつその壁がこの面の切断面を室内側へ横切っている（perpWallCrossesFacePlane）。
-    const realAtLo = !!startFace && realWallAtCorner(f, startFace, graph);
-    const realAtHi = !!endFace   && realWallAtCorner(f, endFace, graph);
+    const realAtLo = !!startFace && realWallAtCorner(f, startFace, graph, wallFilter);
+    const realAtHi = !!endFace   && realWallAtCorner(f, endFace, graph, wallFilter);
+    // QA是正2026-09（§5.12 D2-1是正・項目4/5の根本）: wallFilterで「この帯では数えない」と
+    // 除外された壁が実在するか（フィルタ無しでrealWallAtCornerを再判定するだけ。壁の同定・
+    // inward判定自体は変えない）。実壁は物理的に存在するため、断面エンジン側の層ごとの探査窓
+    // （section/sectionContent.jsのlayerRunWindowsOf・planeOverhangForFace）は
+    // 「壁が無い＝genuine wall-less end」と区別してこの情報を使う——2a壁が正しく除外された
+    // 面端でも、上階の平面（実データ「6」D2の2F床）はそこに実在する壁を手掛かりに探査してよい
+    // （「壁が完全に無い」上り口等の一般の壁のない端部では、この探査を広げる意味が無いため
+    // 従来どおり抑止する。elevation-model.md「面端の不変条件」節参照）。wallFilter未指定
+    // （通常の部屋帯・吹抜け帯）は常にfalse＝出力完全不変。
+    const hiddenAtLo = !!wallFilter && !realAtLo && !!startFace && realWallAtCorner(f, startFace, graph);
+    const hiddenAtHi = !!wallFilter && !realAtHi && !!endFace   && realWallAtCorner(f, endFace, graph);
     const planeValue = faceCutPlaneValue(f, graph);
     const hasWallAtLo = realAtLo && perpWallCrossesFacePlane(startFace, f, planeValue);
     const hasWallAtHi = realAtHi && perpWallCrossesFacePlane(endFace, f, planeValue);
@@ -287,6 +315,8 @@ export function snapFaceEndsToCorners(faces, graph = null) {
       hasWallAtLocalRun: f.dirSign > 0 ? hasWallAtHi : hasWallAtLo,
       edgeAtLocal0:      f.dirSign > 0 ? edgeAtLo : edgeAtHi,
       edgeAtLocalRun:    f.dirSign > 0 ? edgeAtHi : edgeAtLo,
+      hiddenWallAtLocal0:   f.dirSign > 0 ? hiddenAtLo : hiddenAtHi,
+      hiddenWallAtLocalRun: f.dirSign > 0 ? hiddenAtHi : hiddenAtLo,
     };
   });
 }
@@ -296,6 +326,35 @@ export function snapFaceEndsToCorners(faces, graph = null) {
 function exitCLId(f) { return f.dirSign > 0 ? f.endCLId : f.startCLId; }
 
 /**
+ * 「壁のない端部」（体裁の延長・縦線なしの対象）の単一判定（QA是正2026-09・§5.12 D2-1是正）。
+ *
+ * **「壁が無い」（`hasWallAtLocal0/Run`=false）だけでは壁のない端部と判定しない**——
+ * wallFilterで除外された実壁（`hiddenWallAtLocal0/Run`=true。§5.12是正）も`hasWallAt*`は
+ * falseになるが、これは「この帯では数えないだけで実壁はある」端であり、上り口・下り口のような
+ * 本当に何も無い端と同じ体裁の延長（`wallLessExtendMm`ぶん図の外側へ床・天井線を延ばす）を
+ * 適用してはいけない（実機「6」D2: 2a壁を数えない端に150延長が混入し、2F床の小口が
+ * 57.5→207.5へ広がり、面全体が+150平行移動していた根本原因）。
+ *
+ * `elevationFigure.js`（`drawnX0/Run`・`upperFloorEdgeSpanAt`のxInner）・`elevationFaces.js`の
+ * `faceWallLessExtents`・`section/sectionContent.js`の`layerRunWindowsOf`/`planeOverhangForFace`・
+ * `elevationStairSequence.js`の`upperOverhangOf`——体裁の延長に関わる**全箇所**がこの1関数を
+ * 呼ぶ（判定の二重管理を禁じる）。**例外は探査窓**（`section/sectionContent.js`の
+ * `withProbeExtension`）——探査は「壁が無い（hasWallAt*=false）」だけで広げ続ける。探査を
+ * 締めるとhidden端の实壁自体が列から消え、その壁を手掛かりにする`recessLo`等の既存描画が
+ * 全滅する（QA変異MUT-Dで確認済み）。「探査は広げる・描画は締める」——広く探って、
+ * 描画時にこの関数で真に壁のない端だけへ絞る、という役割分担。
+ * @param {{hasWallAtLocal0?:boolean, hasWallAtLocalRun?:boolean,
+ *   hiddenWallAtLocal0?:boolean, hiddenWallAtLocalRun?:boolean}} face
+ * @param {'0'|'Run'} end
+ * @returns {boolean}
+ */
+export function wallLessEndAt(face, end) {
+  const hasWall = face[`hasWallAtLocal${end}`] ?? true;
+  const hiddenWall = !!face[`hiddenWallAtLocal${end}`];
+  return !hasWall && !hiddenWall;
+}
+
+/**
  * 隣接面ギャップ算出用: この面の「壁のない端部の延長」ぶんの左右オフセット(mm)（QA G2）。
  * buildFaceFigureは面端に対応する直交壁が無ければ（hasWallAtLocal0/hasWallAtLocalRunがfalse）
  * 床線・天井線をwallLessExtendMmぶん図の外側へ延長する（項目1）。buildRoomBand/buildStairBandは
@@ -303,14 +362,17 @@ function exitCLId(f) { return f.dirSign > 0 ? f.endCLId : f.startCLId; }
  * 加味する必要がある——本関数はその加味すべきオフセットだけを返す純関数（面自体もctxも
  * 変更しない）。フィールドが無ければtrue（壁あり）扱いにフォールバックする
  * （buildFaceFigureの`face.hasWallAtLocal0 ?? true`と同じ規約）。
- * @param {{hasWallAtLocal0?:boolean, hasWallAtLocalRun?:boolean}} face
+ * `wallLessEndAt`が「壁のない端部」の単一情報源——除外された実壁がある端（hiddenWallAtLocal0/
+ * Run）は体裁の延長を受けない（§5.12是正）。
+ * @param {{hasWallAtLocal0?:boolean, hasWallAtLocalRun?:boolean,
+ *   hiddenWallAtLocal0?:boolean, hiddenWallAtLocalRun?:boolean}} face
  * @param {number} wallLessExtendMm
  * @returns {{leftExtendMm:number, rightExtendMm:number}}
  */
 export function faceWallLessExtents(face, wallLessExtendMm) {
   return {
-    leftExtendMm:  (face.hasWallAtLocal0   ?? true) ? 0 : wallLessExtendMm,
-    rightExtendMm: (face.hasWallAtLocalRun ?? true) ? 0 : wallLessExtendMm,
+    leftExtendMm:  wallLessEndAt(face, '0')   ? wallLessExtendMm : 0,
+    rightExtendMm: wallLessEndAt(face, 'Run') ? wallLessExtendMm : 0,
   };
 }
 
@@ -320,6 +382,12 @@ export function faceWallLessExtents(face, wallLessExtendMm) {
  * 隣接要素が世界座標で隅を共有する＝buildRoomFaces の不変条件）。
  * @param {import('@core').Room} room
  * @param {object} graph
+ * @param {(wall:import('@core').Wall)=>boolean} [wallFilter] - 「この帯で実体として数える壁」の
+ *   絞り込み（既定=未指定=全壁。展開図一般化§5.12 D2-1是正）。この面自身の壁検出
+ *   （`innerWallFaceAt`）と、隅の実壁検出（`realWallAtCorner`。`snapFaceEndsToCorners`経由）の
+ *   両方へ同じ述語を通す——どちらも同じ関数`innerWallFaceAt`でCL上の壁を素通しで走査するため、
+ *   面自身の軸区間だけを絞っても隅側から同じ壁を拾い直せば意味がない（片方だけの絞り込みは
+ *   「この帯では見えない壁のはずが面の一部にだけ残る」矛盾を生む）。
  * @returns {Array<{id:string, label:string, letter:string, isVertical:boolean, axisCL:object,
  *   inward:number, faceValue:number, hasRealWall:boolean, lo:number, hi:number, run:number,
  *   dirSign:number, originWorld:number, startCLId:string, endCLId:string,
@@ -327,7 +395,7 @@ export function faceWallLessExtents(face, wallLessExtendMm) {
  *   実壁（graph.walls）があるか（無ければfaceValueはCL芯へフォールバック——階段の上り口辺等、
  *   generateRoomWallsFromOutlineがstairOpenings指定で壁生成をスキップした辺はfalseになる）。
  */
-export function buildRoomFaces(room, graph) {
+export function buildRoomFaces(room, graph, wallFilter) {
   // axisCLId ごとにグループ化してから mergeSegments する（wallGeneration.js の各生成関数と同じ
   // 手順）。グループ化せず全外周エッジを一括で渡すと、mergeSegments が「endCLId===次のstartCLId」
   // だけで結合するため、L字の隅で別軸（別letter）の面同士が誤って1本にマージされてしまう
@@ -353,7 +421,7 @@ export function buildRoomFaces(room, graph) {
     const dirSign = DIR_SIGN[letter];
     const lo = Math.min(startCL.value, endCL.value);
     const hi = Math.max(startCL.value, endCL.value);
-    const innerFace = innerWallFaceAt(graph, axisCL, { isVertical: seg.isVertical, inward, spanLo: lo, spanHi: hi });
+    const innerFace = innerWallFaceAt(graph, axisCL, { isVertical: seg.isVertical, inward, spanLo: lo, spanHi: hi, wallFilter });
     // QA修正: innerWallFaceAtがnull（この軸区間に実壁=graph.wallsが無い）でCL芯へ
     // フォールバックしたかをhasRealWallとして記録する（wallFaces.jsのfaceRectのhasWallと
     // 同じ考え方。stairOpenings指定でgenerateRoomWallsFromOutlineが壁生成をスキップした辺は
@@ -393,7 +461,7 @@ export function buildRoomFaces(room, graph) {
   }
 
   // ラベル付与: letterごとの出現順（=時計回りに辿った順）にB1,B2,…を振る（labelFaces。単独ならletterのまま）。
-  return snapFaceEndsToCorners(labelFaces(chain), graph);
+  return snapFaceEndsToCorners(labelFaces(chain), graph, wallFilter);
 }
 
 /**

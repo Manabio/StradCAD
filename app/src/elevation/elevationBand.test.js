@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Plane, PlanGraph, CenterLineType, Discipline, OpeningCategory } from '@core';
 import { generateRoomWallsFromOutline } from '../finish/wallGeneration.js';
-import { buildRoomBand, layoutBandFaces, finalizeBand } from './elevationBand.js';
+import { buildRoomBand, layoutBandFaces, finalizeBand, faceDrawnXRange } from './elevationBand.js';
 import { buildRoomFaces, faceBoundaryLocalX } from './elevationFaces.js';
 import { layoutBands, bandContentOriginMm } from './elevationLayout.js';
 import { figureBounds } from '../structural/sectionFigure/sectionGeometry.js';
@@ -807,4 +807,19 @@ test('【失敗系】layoutBandFaces: dimFootGapModelMm未指定でも足はCL�
     assert.ok(Math.abs(d.foot - d.at) > 0 && Math.abs(d.foot - d.at) < CH_DIM_OFFSET_MM,
       '既定でも0<足<CH寸法オフセットのはず');
   }
+});
+
+// ---- QA是正2026-09（第2ラウンド・項目4）: faceDrawnXRangeもwallLessEndAtに統一する ----
+test('【QA是正・第2ラウンド】faceDrawnXRange: wallFilterで除外された実壁がある端(hiddenWallAtLocal0/Run)は体裁の延長(extendMm)を与えない', () => {
+  const face = { run: 3442.5, hasWallAtLocal0: false, hiddenWallAtLocal0: true, hasWallAtLocalRun: true };
+  const range = faceDrawnXRange(face, 150);
+  assert.equal(range.lo, 0, 'hidden端はextendMm(150)ぶん外へ広げないはず（真の境界=0のまま）');
+  assert.equal(range.hi, 3442.5, '実壁のある端はそのまま面の端のはず');
+});
+
+test('【失敗系・QA是正・第2ラウンド】faceDrawnXRange: 真に壁が無い端(hasWall=false・hiddenWall未設定)は従来どおり体裁の延長を受ける', () => {
+  const face = { run: 3442.5, hasWallAtLocal0: false, hasWallAtLocalRun: false };
+  const range = faceDrawnXRange(face, 150);
+  assert.equal(range.lo, -150, '真に壁が無い端はextendMmぶん外へ広がるはず（従来どおり）');
+  assert.equal(range.hi, 3442.5 + 150);
 });

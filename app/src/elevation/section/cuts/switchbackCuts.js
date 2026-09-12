@@ -28,6 +28,8 @@ import { localXOf as localXOfFace } from '../../elevationFigure.js';
 import { resolveSwitchbackParams } from '../../elevationStairSection.js';
 import { stairContribution } from '../sectionStair.js';
 import { graphList } from '../../../graphReadScope.js';
+import { makeProbeContext } from '../sectionProbe.js';
+import { isWallHiddenForBand } from '../sectionHits.js';
 
 const MID_WALL_TOL_MM = 300; // 壁厚程度の許容差（往路・復路間の壁の実在判定。既存実装と同値）
 
@@ -58,6 +60,37 @@ function stairUnderRoomInfo(stair, graph) {
   if (beyond.size === 0) return { hasRoomUnder: true, underRooms: [] };
   const underRooms = stairUnderRoomsOf(stair, graph, beyond);
   return { hasRoomUnder: underRooms.length > 0, underRooms };
+}
+
+/**
+ * 階段帯の面リスト構築（`composeRoomFaces`）向けの壁フィルタ（展開図一般化§5.12 D2-1是正）。
+ *
+ * 断面エンジンの候補収集（`probeColumnHits`。`isHiddenWall`経由）は「階段室自身の空気ボリュームと
+ * 階段下部屋を隔てる2a壁」を実体はあるが描かない壁として扱うが、**面リスト構築
+ * （`elevationFaces.js`の`buildRoomFaces`／`realWallAtCorner`）は同じ壁を`innerWallFaceAt`で
+ * 素通しに拾ってしまう**——所有者（どの部屋の壁か）も可視性も見ないため、階段室自身が
+ * 壁を持たない辺でも、隣接する階段下部屋の2a壁が同じCL軸上にあるだけで「隅に実壁がある」
+ * 「この面自身に壁がある」と誤判定する（13.stq「6」面D2の実測。§5.12参照）。
+ *
+ * 判断の単一情報源は`isHiddenWall`と同じ`isWallHiddenForBand`——`stairUnderRoomInfo`
+ * （このファイルの唯一の情報源。壁生成側`stairUnderWalls.js`と揃える）で`underRooms`を求め、
+ * 階段自身の階（`role:'self'`）1層だけのprobeCtxを組んでその場で判定する。
+ *
+ * `underRooms`が0件（階段下に部屋指定が無い・判定不能）／`stair.roomId`が無い／該当Roomが
+ * graphに無い場合はnull（＝フィルタなし。呼び出し側は`opts.wallFilter`に渡さないのと同義）。
+ * @param {import('@core').Stair} stair
+ * @param {object} graph - 設置階のgraph
+ * @returns {((wall:import('@core').Wall)=>boolean)|null}
+ */
+export function stairBandWallFilter(stair, graph) {
+  const { underRooms } = stairUnderRoomInfo(stair, graph);
+  if (underRooms.length === 0) return null;
+  const stairRoom = stair?.roomId ? graph.roomMap?.get(stair.roomId) ?? null : null;
+  if (!stairRoom) return null;
+  const layer = { graph, floorZMm: 0, role: 'self' };
+  const probeCtx = makeProbeContext([layer]);
+  const bandInfo = { airRoom: stairRoom, underRooms: new Set(underRooms) };
+  return wall => !isWallHiddenForBand(wall, layer, bandInfo, probeCtx);
 }
 
 // ---- elevationStairSequence.js から移設（挙動不変。§9でstairFaceSequence側からは削除する）----

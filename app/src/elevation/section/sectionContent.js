@@ -19,6 +19,7 @@ import { emitColumns, emitOpenGapMarks } from './sectionEmit.js';
 import { wallWorldRangesOnFacePlane, planeOverhangBeyondEnds } from './sectionCutPlane.js';
 import { hasCutWallStandingOn } from './sectionTypes.js';
 import { UPPER_PLANE_OVERHANG_LIMIT_MM, GAP_EPS_MM as GAP_EPS } from '../elevationStyle.js';
+import { wallLessEndAt } from '../elevationFaces.js';
 
 /**
  * 端区間の高さ（cutローカルx＝面ローカルxの0側／run側）を区分プロファイルから取り出す。
@@ -77,11 +78,17 @@ export function planeOverhangForFace(face, layerGraph, { towardLayer = 1, layerB
     : { lo: world.hi, hi: world.lo };
   const openTo = z => !endBandZ || !Number.isFinite(layerBoundaryZ)
     || (z - layerBoundaryZ) * towardLayer > GAP_EPS;
-  const allow = (v, hasWall, gateOk) =>
-    (hasWall !== false && gateOk && v <= UPPER_PLANE_OVERHANG_LIMIT_MM ? v : 0);
+  // QA是正2026-09（§5.12 D2-1是正・項目4）: gateは単一情報源`wallLessEndAt`（elevationFaces.js）
+  // の否定——「真に壁のない端部」だけで閉じる。wallFilterで「この帯では数えない」と除外された
+  // 壁（hasWall=false だがhiddenWall=true＝wallLessEndAt=false）は、物理的には実在するため、
+  // 上階の平面がそこにあるかを探査してよい（実データ「6」D2: 2a壁の除外でhasWallAtLocal0が
+  // falseになった端でも、2階床のはり出しは描かれるべき）。真に壁が無い一般の壁のない端部
+  // （wallLessEndAt=true）だけ従来どおりgateを閉じる。
+  const allow = (v, wallLess, gateOk) =>
+    (!wallLess && gateOk && v <= UPPER_PLANE_OVERHANG_LIMIT_MM ? v : 0);
   return {
-    lo: allow(local.lo, face.hasWallAtLocal0, openTo(endBandZ?.atLocal0)),
-    hi: allow(local.hi, face.hasWallAtLocalRun, openTo(endBandZ?.atLocalRun)),
+    lo: allow(local.lo, wallLessEndAt(face, '0'), openTo(endBandZ?.atLocal0)),
+    hi: allow(local.hi, wallLessEndAt(face, 'Run'), openTo(endBandZ?.atLocalRun)),
   };
 }
 
@@ -117,6 +124,18 @@ function layerRunWindowsOf(cut) {
   const endCeilZ = endZOf(cut.ceilProfile, s => s.ceilZ);
   const endFloorZ = endZOf(cut.floorZProfile, s => s.floorZ);
   const selfFloorZ = layers.find(l => l?.role === 'self')?.floorZMm ?? 0;
+  // QA是正2026-09（§5.12 D2-1是正・項目1/4）: 他層の窓の基準点は単一情報源`wallLessEndAt`
+  // （elevationFaces.js）で選ぶ——**真に壁のない端部**（wallLessEndAt=true）だけ
+  // `selfLo/Hi`（probeExtendLoMm/HiMm込み。壁のない端部の体裁のはり出し＝extendMm=150ぶん
+  // 既に外側へ動いている）を基準にし、wallFilterで除外された実壁がある端
+  // （hasWallAtLocal0/Run=falseだがwallLessEndAt=false）は**面自身の真の境界（line.lo/hi）**
+  // に戻す——selfLo/Hiを基準にplaneOverhangForFaceの測定量（face.lo/hiからの距離）を足すと、
+  // 実壁の位置を150mm近く通り過ぎて二重に外側へずれる（実測: 実データ「6」D2で2F床の小口が
+  // 57.5→207.5へ広がっていた根本原因）。
+  const worldLoIsWallLess = cut.dirSign > 0 ? wallLessEndAt(cut.face, '0') : wallLessEndAt(cut.face, 'Run');
+  const worldHiIsWallLess = cut.dirSign > 0 ? wallLessEndAt(cut.face, 'Run') : wallLessEndAt(cut.face, '0');
+  const baseLo = worldLoIsWallLess ? selfLo : line.lo;
+  const baseHi = worldHiIsWallLess ? selfHi : line.hi;
   const windows = new Map();
   for (const layer of layers) {
     if (layer?.role === 'self' || !layer?.graph) { windows.set(layer, { lo: selfLo, hi: selfHi }); continue; }
@@ -128,7 +147,7 @@ function layerRunWindowsOf(cut) {
       ? { towardLayer: -1, layerBoundaryZ: layer.ceilZMm, endBandZ: endFloorZ }
       : { towardLayer: 1, layerBoundaryZ: layer.floorZMm, endBandZ: endCeilZ });
     const world = cut.dirSign > 0 ? { lo: local.lo, hi: local.hi } : { lo: local.hi, hi: local.lo };
-    windows.set(layer, { lo: selfLo - world.lo, hi: selfHi + world.hi });
+    windows.set(layer, { lo: baseLo - world.lo, hi: baseHi + world.hi });
   }
   return windows;
 }
@@ -154,6 +173,13 @@ function layerRunWindowsOf(cut) {
  * @returns {import('./sectionTypes.js').SectionCut}
  */
 export function withProbeExtension(cut, endExtendMm, bandRoomBounds = null, opts = {}) {
+  // QA是正2026-09（§5.12 D2-1是正・第2ラウンド項目5）: 探査は広げる・描画は締める。
+  // ここは`hasWallAtLocal0/Run===false`のまま（`wallLessEndAt`へ置換しないこと）——wallFilterで
+  // 除外された実壁がある端（hiddenWallAtLocal0/Run=true）も含めて従来どおり探査窓を広げる。
+  // 探査まで`wallLessEndAt`で締めると、その壁を手掛かりにする既存描画（`recessLo`等）が
+  // 列ごと消える（実測で確認済み）。「描画だけ締める」側は`elevationStairSequence.js`の
+  // `clipContentAtHiddenEnds`・`elevationFigure.js`の`drawnX0/Run`・`elevationBand.js`の
+  // `faceDrawnXRange`が担当する。
   const openLo = cut.face?.hasWallAtLocal0 === false;
   const openHi = cut.face?.hasWallAtLocalRun === false;
   const localLoIsWorldLo = cut.dirSign > 0;
@@ -211,9 +237,17 @@ export function upperFloorCutWallEndsOf(columns, upperFloorZ) {
 
 /**
  * `emitColumns`/`emitOpenGapMarks`へ渡す描画コンテキスト。
- * openEndLo/Hi: この面の端に壁が無い（壁面がその先へ続く）なら、描画範囲の端に凹み側面線を
- * 出さない（ユーザー実機指摘2026-08「3500左CLにエッジはない」）——隣接列が無いことは
- * 「そこで壁が終わる」ことを意味せず、範囲外は単に未探査。
+ * openEndLo/Hi: この面の端に壁が無い（壁面がその先へ続く）なら、描画範囲の端に凹み側面線
+ * （`recessLo/Hi`）を出さない（ユーザー実機指摘2026-08「3500左CLにエッジはない」）——隣接列が
+ * 無いことは「そこで壁が終わる」ことを意味せず、範囲外は単に未探査。
+ *
+ * QA是正2026-09（§5.12 D2-1是正・第2ラウンド項目4）: 単一情報源`wallLessEndAt`（真に壁の
+ * ない端部か。elevationFaces.js）に統一した——旧`hasWallAtLocal0/Run===false`のままだと、
+ * wallFilterで除外された実壁がある端（hiddenWallAtLocal0/Run=true）も「壁のない端部」として
+ * `recessLo/Hi`を抑止してしまう（実壁はあるので抑止は誤り）。**置換の影響はHEAD基点diff
+ * （13.stq/11.stq/knee-drop-test.stq、floorHeight分岐を含む全帯）で確認済み＝出力完全不変**
+ * ——現時点の実データでは`recessLo/Hi`の抑止対象（`!prev`かつ面の端に一致する列）とhidden端の
+ * 列が重なるケースが無いため。挙動が変わる可能性が今後あるため旧判定には戻さない。
  * `cut.face`のhasWallAtLocal0/Runがそのままローカルx=0/run側の端に対応する（cut.dirSignと
  * faceのdirSignは呼び出し側で揃えてある前提）。
  * @param {import('./sectionTypes.js').SectionCut} cut
@@ -222,8 +256,8 @@ export function upperFloorCutWallEndsOf(columns, upperFloorZ) {
 export function emitCtxForCut(cut) {
   return {
     ceilZ: cut.zRange?.hiZ,
-    openEndLo: cut.face?.hasWallAtLocal0 === false,
-    openEndHi: cut.face?.hasWallAtLocalRun === false,
+    openEndLo: cut.face ? wallLessEndAt(cut.face, '0') : false,
+    openEndHi: cut.face ? wallLessEndAt(cut.face, 'Run') : false,
   };
 }
 

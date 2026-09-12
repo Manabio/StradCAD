@@ -1638,7 +1638,45 @@ SILHOUETTE（中線）で描く——切断面ではなく壁が折れて隣の�
 その継ぎ目に無いはずの縦線が出る）。`innerWallFaceAt`へ渡すスパンを**面の仕上げ面を挟む±100mmの窓**へ絞るだけでよい
 （壁の同定・inward判定は既存関数のまま＝判定の二重管理を増やさない）。**窓は面の両側に取る**——「実壁が向こう側へ折れて続く角」
 （見えがかりエッジ）を落とさないため。室内へ横切るか否かの区別は`perpWallCrossesFacePlane`の担当で、役割を混ぜない
-（室内側だけの片側窓にすると確認済みのRound Fの3箇所がエッジごと消える。実装して回帰テストで検出した）。**横切り判定はユーザー明示指示2026-08**——実壁があっても、その壁が面の向こう側
+（室内側だけの片側窓にすると確認済みのRound Fの3箇所がエッジごと消える。実装して回帰テストで検出した）。
+
+**面端の壁は「この帯で実体として数える壁」に限る**（展開図一般化§5.12 D2-1是正）——`innerWallFaceAt`
+（面自身の壁検出・`realWallAtCorner`の隅探査）は所有者・可視性を見ず素通しに走査するため、階段室が
+自身は壁を持たない辺で階段下部屋の2a壁を「隅に実壁がある」と誤検出しうる（実機13.stq「6」面D2）。
+階段帯は`composeRoomFaces`へ`wallFilter`を渡し、`isHiddenWall`と同じ判断（`isWallHiddenForBand`）を
+面リスト構築にも通す（供給元`stairBandWallFilter`。他の帯は渡さず無変化）。除外された壁が実在する
+端は`face.hiddenWallAtLocal0/Run`として別途公開する。
+
+**「壁のない端部」（体裁の延長150mm・縦線なし）の判定は`hasWallAt*=false`だけでは決まらない**——
+`hiddenWallAtLocal0/Run`=true（実壁はあるがこの帯では除外）の端は、本当に何も無い端と違って
+体裁の延長を受けてはいけない（受けると2F床の小口が57.5mm→207.5mmへ広がる等、実機「6」D2で
+実測した不具合の根本）。単一情報源`wallLessEndAt(face, end)`（`elevationFaces.js`。
+`!hasWallAt && !hiddenWallAt`）が「真に壁のない端部」を判定し、体裁の延長に関わる**全箇所**
+（`elevationFigure.js`の`drawnX0/Run`・`upperFloorEdgeSpanAt`の内側基準、`elevationFaces.js`の
+`faceWallLessExtents`、`elevationBand.js`の`faceDrawnXRange`、`section/sectionContent.js`の
+`layerRunWindowsOf`・`planeOverhangForFace`・`emitCtxForCut`、`elevationStairSequence.js`の
+`upperOverhangOf`）がこれを呼ぶ。**例外は探査窓**
+（`section/sectionContent.js`の`withProbeExtension`）——探査は`hasWallAt*=false`だけで従来どおり
+広げ続ける（hidden端も含む）。締めると、その壁を手掛かりにする既存描画（`recessLo`等）が列ごと
+消える。**「探査は広げる・描画は締める」**——広く探って、描画時に`wallLessEndAt`で真に壁のない
+端だけへ絞る、という役割分担。content側がこの延長区間に描く水平線（上階の平面の見えがかり等）は
+`elevationStairSequence.js`の`clipContentAtHiddenEnds`がhidden端では面の真の境界へクリップする
+（探査窓自体は変えない。描画だけを絞る）。
+
+**未解決（次ステップ。最終段上端の閉じ方の一体設計で扱う）**: 最終段の鼻が面端の30mm外に出る
+（`clamp`で蹴上が垂直に潰れる。§5.12診断の根本C）／内側ささらの上端が上階壁の向こう側の面で
+止まる終端定義が未整備（上階壁の面を56mm越える）／§5.12是正で面が正しい幅になった結果、
+1F天井の見えがかり断片（`medium`・案1由来）が階段輪郭で切られて残る。いずれも今回の是正
+（§5.12 D2-1・wallLessEndAt統一）の対象外。
+
+**面端縦線の担当範囲はこの帯自身の実壁の高さまで**——2層帯で、かつ**その端に実際に上階FLの
+断面線（`upperFloorEdgeSpans`）が1本引かれる**場合に限り、天井まで伸ばさず上階FLとこの面の実際の
+天井の**低い方**（`Math.min`）で止め、その先は上階の床のはり出し・壁の縁（content）に任せる
+（`capsAtUpperFloor`）。gateは`upperFloorEdgeSpans`自身が呼ぶ`upperFloorEdgeSpanAt`と同じ関数を
+共有する単一情報源——`ctx.upperFloorEnds`の有無だけを見ると、はり出し量が0等でこの関数が実際には
+1本も線を引かない端でもcapが掛かり、縦線の上端が宙で途切れる。
+
+**横切り判定はユーザー明示指示2026-08**——実壁があっても、その壁が面の向こう側
 だけにある端（L字の凹み角・上端短縮されたCLの壁が視点側の帯に無い等）は図の端部に壁断面が現れないため壁のない端部
 （床・天井線を図の外側（実画面5mm）まで延長＝続きがある表現）として扱う。ただしこの端は**見えがかりエッジ**（`edgeAtLocal0/Run`）
 ——実壁が向こう側へ折れて続く角のエッジ自体は見えるため、延長に加えて端の縦線（中線=SILHOUETTE）も描く（直交面や実壁自体が無い端＝

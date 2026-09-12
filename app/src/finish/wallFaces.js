@@ -63,11 +63,17 @@ export function footprintBoundaryCLs(cells, graph) {
  * 該当する壁がなければ null（呼び出し側は cl.effectiveValue へフォールバックする）。
  * 壁の同定は clId の一致のみで行う（value 近似一致は使わない——同一CL上の壁は1本の前提）。
  * @param {1|-1} inward - cl.effectiveValue から footprint 内部へ向かう符号
+ * @param {(wall:import('@core').Wall)=>boolean} [wallFilter] - 「この帯で実体として数える壁」の
+ *   絞り込み（既定=全壁を数える＝従来どおり）。展開図一般化§5.12 D2-1是正——階段帯の面リスト
+ *   構築（`elevation/elevationFaces.js`の`realWallAtCorner`）が、断面エンジンの`isHiddenWall`と
+ *   同じ判断（階段室の空気成分と階段下部屋を隔てる2a壁は数えない）を隅の実壁探査にも通すために
+ *   追加した。平面側の消費者（faceRect等）は本引数を渡さないため挙動不変。
  */
-export function innerWallFaceAt(graph, cl, { isVertical, inward, spanLo, spanHi }) {
+export function innerWallFaceAt(graph, cl, { isVertical, inward, spanLo, spanHi, wallFilter }) {
   let best = null;
   for (const w of wallsOnAxisCL(graph, cl.id)) {
     if (w.isVertical !== isVertical) continue;
+    if (wallFilter && !wallFilter(w)) continue;
     const wLo = Math.min(w.coord1, w.coord2), wHi = Math.max(w.coord1, w.coord2);
     if (Math.min(wHi, spanHi) - Math.max(wLo, spanLo) <= SPAN_OVERLAP_EPS) continue;
     if (inward * (w.axisValue - cl.effectiveValue) <= -FACE_EPS) continue;

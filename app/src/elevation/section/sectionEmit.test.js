@@ -8,7 +8,7 @@ import {
 } from './sectionEmit.js';
 import { KNEE_CAP_FACE_MM } from '../elevationStyle.js';
 import { buildColumns } from './sectionEngine.js';
-import { upperFloorCutWallEndsOf } from './sectionContent.js';
+import { upperFloorCutWallEndsOf, emitCtxForCut } from './sectionContent.js';
 
 function makeCut(overrides = {}) {
   return { seqNo: '1', line: { isVertical: false, axisValue: 0, lo: 0, hi: 3000 },
@@ -1914,4 +1914,25 @@ test('【Phase4・f】emitColumns: open帯からは水平線(type:line)以外の
   const prims = emitColumns(columns, cut, { ceilZ: 3000 });
   const nonLine = prims.filter(p => p.type !== 'line');
   assert.deepEqual(nonLine, [], 'line以外のプリミティブ（建具姿図のrect/polyline等）は出ないはず');
+});
+
+// ---- QA是正2026-09（§5.12 D2-1是正・第2ラウンド項目4）: emitCtxForCutもwallLessEndAtに統一 ----
+test('【QA是正・第2ラウンド】emitCtxForCut: wallFilterで除外された実壁がある端(hiddenWallAtLocal0/Run)はopenEndLo/Hiがfalse（recessLo/Hiの抑止対象にならない）', () => {
+  const cut = { zRange: { hiZ: 3000 }, face: { hasWallAtLocal0: false, hiddenWallAtLocal0: true, hasWallAtLocalRun: true } };
+  const ctx = emitCtxForCut(cut);
+  assert.equal(ctx.openEndLo, false, '実壁がある端(除外されただけ)はopenEndLoがfalseのはず');
+  assert.equal(ctx.openEndHi, false);
+});
+
+test('【失敗系・QA是正・第2ラウンド】emitCtxForCut: 真に壁が無い端(hasWall=false・hiddenWall未設定)は従来どおりopenEndLo/Hiがtrue', () => {
+  const cut = { zRange: { hiZ: 3000 }, face: { hasWallAtLocal0: false, hasWallAtLocalRun: false } };
+  const ctx = emitCtxForCut(cut);
+  assert.equal(ctx.openEndLo, true);
+  assert.equal(ctx.openEndHi, true);
+});
+
+test('【失敗系】emitCtxForCut: cut.faceが無ければopenEndLo/Hiはfalse（従来どおり）', () => {
+  const ctx = emitCtxForCut({ zRange: { hiZ: 3000 } });
+  assert.equal(ctx.openEndLo, false);
+  assert.equal(ctx.openEndHi, false);
 });
