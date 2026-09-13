@@ -97,6 +97,8 @@ VERIFIED/REASONED/ASSUMEDのラベルで区別。当初ASSUMEDだった項目（
 | 「5」(1階・上部吹抜け) | 面端縦線z5400→3800、中線消滅 | 5d2ef84 |
 | 「22」(2階・通常部屋) | 腰壁端の57.5mm片が全高→腰壁天端になりアキが4→1に減る | 同上5d2ef84 |
 
+| 「6」(1階・階段室)【2026-09-13 B/C裁定・golden未採取】 | 面C左端(X3)のスラブ取り合い2本（壁断面の内部）削除／面B右端のCL上縦線（内部）削除・取り合い3本CUT化・1F天井線が走り全体で1本／面D1左端（Bの鏡像・指摘外）の取り合い3本CUT化 | `slabJunctionOf`のgate・`clipInsideSlabSolids`・`slabEdgeCutWallJunction`のCUT化（elevation-model.md「壁のない端部の2層取り合い」「断面の中は描画しない」） |
+
 11.stq: 「6」「5」「22」に同型の差分。knee-drop-test.stq: golden-kneeと一致。線単位の全リストは`diffElevGolden.mjs`の出力（scratchpad）。**2026-09-12の6点指摘のうちキャンセルしたもの（D2-3下ささら・84mm片ほか）は現状のまま＝意図的に残した不備**（§5.12裁定2026-09-13）。
 
 ## 付録: 一文まとめ
