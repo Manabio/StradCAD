@@ -143,6 +143,8 @@ export class Wall extends Shape {
 //   height: 建具高さ(mm、null=未設定＝旧データ)。窓は sillHeight〜sillHeight+height が開口範囲
 //   finish/materialGlass/hardware/note: 建具表の自由入力項目（string|null、null=未入力）
 //   frameDepth: 見込み(mm、null=未設定)。0は不正値としてnull扱い（heightと同じ規約。openings/層で正規化）
+//   frameFaceWidth: 三方枠の見付(mm、null=未設定)。0以下/nullはframeDepthと同じ規約
+//   frameProjection: 三方枠の壁面からの出幅(mm、null=未設定)。0以下/nullはframeDepthと同じ規約
 // ----------------------------------------------------------------
 export class Opening extends Shape {
   constructor(id, axisCL, wallSide, isVertical, refCL, refOffset, width, category, subType, props) {
@@ -167,6 +169,8 @@ export class Opening extends Shape {
     this.frameDepth     = props?.frameDepth     ?? null; // 見込み(mm、null=未設定)
     this.hardware       = props?.hardware       ?? null; // 金物（建具表の自由入力）
     this.note           = props?.note           ?? null; // 備考（建具表の自由入力）
+    this.frameFaceWidth  = props?.frameFaceWidth  ?? null; // 三方枠の見付(mm、null=未設定)
+    this.frameProjection = props?.frameProjection ?? null; // 三方枠の壁面からの出幅(mm、null=未設定)
     makeObservable(this, {
       axisCL:      observable.ref,
       wallSide:    observable,
@@ -185,6 +189,8 @@ export class Opening extends Shape {
       frameDepth:    observable,
       hardware:      observable,
       note:          observable,
+      frameFaceWidth:  observable,
+      frameProjection: observable,
       centerCoord: computed,
       coord1:      computed,
       coord2:      computed,

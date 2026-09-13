@@ -907,6 +907,38 @@ test('【項目4】buildFaceFigure: 開口が面中心にかかると壁2段書�
   assert.equal(text.x, 500);
 });
 
+// ---- 扉のない建具（三方枠）: 内法をアキ（バツ＋「ア キ」）として標記する。扉のある建具には出ない ----
+test('buildFaceFigure: 三方枠(FRAME_ONLY)は見付ぶん内側の内法にバツ2本＋「ア キ」を描く', () => {
+  const opening = {
+    id: 'opFrame', isVertical: false, axisCL: { id: 'axisY0' }, wallSide: 1,
+    centerCoord: 2000, width: 2000, height: 2000, sillHeight: null, frameFaceWidth: null, frameProjection: null,
+    category: OpeningCategory.FITTING, subType: 'threeSidedFrame', fixtureType: 'WF',
+  };
+  const prims = buildFaceFigure(makeFace(), baseCtx({ graph: makeGraph({ openings: [opening] }) }));
+  const label = prims.filter(p => p.type === 'text' && p.text === 'ア キ');
+  assert.equal(label.length, 1, '「ア キ」は1つ');
+  // 内法: x=1000+20〜3000-20、y=-(2000-20)〜0（見付の既定20） → 中心(2000, -990)
+  assert.equal(label[0].x, 2000);
+  assert.equal(label[0].y, -990);
+  const diagonals = prims.filter(p => p.type === 'line' && p.dash === 'center'
+    && Math.abs(p.x1 - p.x2) > 1 && Math.abs(p.y1 - p.y2) > 1);
+  assert.equal(diagonals.length, 2, 'バツは対角線2本');
+  for (const d of diagonals) {
+    assert.deepEqual([Math.min(d.x1, d.x2), Math.max(d.x1, d.x2)], [1020, 2980], '対角線のx範囲は内法');
+    assert.deepEqual([Math.min(d.y1, d.y2), Math.max(d.y1, d.y2)], [-1980, 0], '対角線のy範囲は内法（下端FL）');
+  }
+});
+
+test('buildFaceFigure: 扉のある建具(singleSwing)の姿の前には「ア キ」を描かない（従来どおり）', () => {
+  const opening = {
+    id: 'opDoor', isVertical: false, axisCL: { id: 'axisY0' }, wallSide: 1,
+    centerCoord: 2000, width: 800, height: 2000, sillHeight: null,
+    category: OpeningCategory.FITTING, subType: 'singleSwing', fixtureType: null,
+  };
+  const prims = buildFaceFigure(makeFace(), baseCtx({ graph: makeGraph({ openings: [opening] }) }));
+  assert.equal(prims.filter(p => p.type === 'text' && p.text === 'ア キ').length, 0);
+});
+
 // ---- QA G1: 壁2段書きの幅概算は文字クラス別（半角ASCII=0.5・全角等=1.0）に積算する ----
 test('【QA G1】estimateWallLabelWidthPx: 半角ASCIIは0.5倍・全角(CJK等)は1.0倍で積算する', () => {
   // 全角4文字のみ: 4×1.0×12=48px

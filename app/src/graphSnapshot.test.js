@@ -240,6 +240,51 @@ test('Opening.frameDepth=0 は不正値として encode→decode 後は null に
   assert.equal(o2.frameDepth, null, '0mmの見込みは物理的に無効な値のためnullへ丸められる（heightと同じ規約）');
 });
 
+// ---- 三方枠の新規2フィールド（frameFaceWidth/frameProjection・記号SSF）のFBS往復 ----
+test('三方枠（記号SSF・見付/出幅）は FlatBuffers encode→decode で値ありのまま往復する', () => {
+  const { graph, opening } = makeGraphWithWindow({
+    fixtureType: 'SSF', frameFaceWidth: 25, frameProjection: 15,
+  });
+
+  const bytes = serializeGraph(graph);
+  const restored = makeGraph();
+  restoreGraph(restored, bytes);
+
+  const o2 = restored.shapeMap.get(opening.id);
+  assert.ok(o2);
+  assert.equal(o2.fixtureType, 'SSF');
+  assert.equal(o2.frameFaceWidth, 25);
+  assert.equal(o2.frameProjection, 15);
+});
+
+test('frameFaceWidth/frameProjection は未設定（null）なら encode→decode 後も null のまま', () => {
+  const { graph, opening } = makeGraphWithWindow({ fixtureType: 'AW' });
+  assert.equal(opening.frameFaceWidth, null);
+  assert.equal(opening.frameProjection, null);
+
+  const bytes = serializeGraph(graph);
+  const restored = makeGraph();
+  restoreGraph(restored, bytes);
+
+  const o2 = restored.shapeMap.get(opening.id);
+  assert.ok(o2);
+  assert.equal(o2.frameFaceWidth, null);
+  assert.equal(o2.frameProjection, null);
+});
+
+test('frameFaceWidth=0 は不正値として encode→decode 後は null に正規化される（frameDepthと同じ規約）', () => {
+  const { graph, opening } = makeGraphWithWindow({ fixtureType: 'SSF', frameFaceWidth: 0, frameProjection: 0 });
+
+  const bytes = serializeGraph(graph);
+  const restored = makeGraph();
+  restoreGraph(restored, bytes);
+
+  const o2 = restored.shapeMap.get(opening.id);
+  assert.ok(o2);
+  assert.equal(o2.frameFaceWidth, null);
+  assert.equal(o2.frameProjection, null);
+});
+
 // ---- QA G2: 巾木を""へクリアした部屋はFlatBuffers往復後も""のまま（既定値へ化けない） ----
 // graphSnapshot.js:620-622 は「新しいRoomを作ってから空でないフィールドだけ上書きする」実装
 // （if (val) room.finish.setField(...)）のため、RoomFinishコンストラクタの既定値が非空だと

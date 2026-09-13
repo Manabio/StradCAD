@@ -1,8 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { OpeningCategory } from '../core.js';
-import { findCatalogEntry, FITTING_CATALOG, WINDOW_CATALOG } from './openingCatalog.js';
-import { buildOpeningElevation } from './openingElevationFigure.js';
+import { findCatalogEntry, FITTING_CATALOG, WINDOW_CATALOG, OpeningMechanism } from './openingCatalog.js';
+import { buildOpeningElevation, frameOnlyInnerRect } from './openingElevationFigure.js';
 
 // buildOpeningElevation は effectiveHeight(opening) 経由でしか height を読まないため、
 // core.js の Opening インスタンスは不要——プリミティブ生成が読む最小限のプロパティを
@@ -274,6 +274,86 @@ test('【失敗系】buildOpeningElevation: 未知のsubType（entry=null）で�
   assert.doesNotThrow(() => { primitives = buildOpeningElevation(opening, { tag: null, entry: null }); });
   assert.ok(primitives.some(p => p.type === 'rect'), '枠のrectは機構に関わらず描かれるはず');
   assert.equal(primitives.filter(p => p.type === 'text').length, 0, 'entry=nullではラベルテキストも出ない（entry.labelが読めないため）・tagもnull');
+});
+
+// ---- 三方枠(FRAME_ONLY): 灰色insetの代わりに見付ぶん内側の三方(左竪・上・右竪)を実線で描く ----
+test('buildOpeningElevation: 三方枠(FRAME_ONLY)はtextラベルを出さず、灰色inset rectも無く、見付ぶん内側の水平線を1本持つ', () => {
+  const entry = findCatalogEntry(OpeningCategory.FITTING, 'threeSidedFrame');
+  const opening = makeOpening({
+    category: OpeningCategory.FITTING, subType: 'threeSidedFrame', width: 800, height: 2000, sillHeight: null,
+    frameFaceWidth: 25,
+  });
+  assert.equal(entry.mechanism, OpeningMechanism.FRAME_ONLY);
+  const primitives = buildOpeningElevation(opening, { tag: null, entry });
+
+  assert.equal(primitives.filter(p => p.type === 'text').length, 0, 'ラベルフォールバックしない');
+  assert.ok(!primitives.some(p => p.type === 'rect' && p.stroke === '#94a3b8'), '灰色insetのrectは描かない');
+
+  const top = -2000; // -(sill(0)+height)
+  const fw = 25;
+  const innerTop = top + fw;
+  const horizontals = primitives.filter(p => p.type === 'line' && p.y1 === innerTop && p.y2 === innerTop);
+  assert.equal(horizontals.length, 1, `見付ぶん内側(y=${innerTop})の水平線が1本あるはず`);
+  assert.equal(horizontals[0].x1, fw);
+  assert.equal(horizontals[0].x2, 800 - fw);
+
+  // 左右の竪枠: FL(0)から上枠下端(innerTop)まで、見付ぶん内側のxに立つ
+  const verts = primitives.filter(p => p.type === 'line'
+    && Math.min(p.y1, p.y2) === innerTop && Math.max(p.y1, p.y2) === 0);
+  assert.deepEqual(verts.map(p => p.x1).sort((a, b) => a - b), [fw, 800 - fw], '左右の竪枠は見付ぶん内側');
+  assert.ok(verts.every(p => p.x1 === p.x2), '竪枠は垂直線');
+  // 「三方」＝下枠を描かない（FL上の水平線が無い）
+  assert.equal(primitives.filter(p => p.type === 'line' && p.y1 === 0 && p.y2 === 0).length, 0, '下枠は描かない');
+});
+
+// ---- 三方枠の線種: 外周（指定寸法）の三方＝細線、内法（見付ぶん内側）の三方＝中線。外周rectは描かない ----
+test('buildOpeningElevation: 三方枠は外周三方がthin・内法三方がmediumで、rectを一切描かない', () => {
+  const entry = findCatalogEntry(OpeningCategory.FITTING, 'threeSidedFrame');
+  const opening = makeOpening({
+    category: OpeningCategory.FITTING, subType: 'threeSidedFrame', width: 800, height: 2000, sillHeight: null,
+    frameFaceWidth: 20,
+  });
+  const primitives = buildOpeningElevation(opening, { tag: null, entry });
+  assert.equal(primitives.filter(p => p.type === 'rect').length, 0, '外周rect・灰色insetともに描かない');
+
+  const top = -2000;
+  const outer = primitives.filter(p => p.type === 'line' && p.weight === 'thin');
+  const inner = primitives.filter(p => p.type === 'line' && p.weight === 'medium');
+  assert.equal(outer.length, 3, '外周は三方3本');
+  assert.equal(inner.length, 3, '内法は三方3本');
+  // 外周: x=0/800の竪2本（FL〜top）＋y=topの横1本（指定寸法＝細線の寸法）
+  assert.deepEqual(outer.filter(p => p.x1 === p.x2).map(p => p.x1).sort((a, b) => a - b), [0, 800]);
+  assert.ok(outer.every(p => Math.min(p.y1, p.y2) === top), '外周の各線はy=topに達する');
+  // 内法: 見付20ぶん内側（x=20/780、y=top+20）
+  assert.deepEqual(inner.filter(p => p.x1 === p.x2).map(p => p.x1).sort((a, b) => a - b), [20, 780]);
+  const innerTop = inner.find(p => p.y1 === p.y2);
+  assert.equal(innerTop.y1, top + 20);
+  assert.equal(innerTop.x1, 20); assert.equal(innerTop.x2, 780);
+});
+
+test('frameOnlyInnerRect: 内法矩形は見付ぶん内側・下端FL(0)・見付は開口半幅でクランプ', () => {
+  const o = makeOpening({ category: OpeningCategory.FITTING, subType: 'threeSidedFrame', width: 800, height: 2000, sillHeight: null, frameFaceWidth: 25 });
+  assert.deepEqual(frameOnlyInnerRect(o), { x: 25, y: -1975, w: 750, h: 1975, fw: 25 });
+  const narrow = makeOpening({ category: OpeningCategory.FITTING, subType: 'threeSidedFrame', width: 30, height: 2000, sillHeight: null, frameFaceWidth: 25 });
+  assert.equal(frameOnlyInnerRect(narrow).fw, 15);
+  assert.equal(frameOnlyInnerRect(narrow).w, 0);
+});
+
+// ---- 失敗系: 見付が開口半幅を超えても竪枠が交差・上枠が反転しない（平面の方立と同じクランプ） ----
+test('【失敗系】buildOpeningElevation: 見付(25)が開口幅(30)の半分を超える三方枠でも上枠が反転しない', () => {
+  const entry = findCatalogEntry(OpeningCategory.FITTING, 'threeSidedFrame');
+  const opening = makeOpening({
+    category: OpeningCategory.FITTING, subType: 'threeSidedFrame', width: 30, height: 2000, sillHeight: null,
+    frameFaceWidth: 25,
+  });
+  const primitives = buildOpeningElevation(opening, { tag: null, entry });
+  const fw = 15; // width/2 にクランプ
+  const innerTop = -2000 + fw;
+  const horizontals = primitives.filter(p => p.type === 'line' && p.y1 === innerTop && p.y2 === innerTop);
+  assert.equal(horizontals.length, 1);
+  assert.ok(horizontals[0].x1 <= horizontals[0].x2, '上枠のx1<=x2（反転しない）');
+  assert.equal(horizontals[0].x1, fw);
+  assert.equal(horizontals[0].x2, 30 - fw);
 });
 
 // ================================================================

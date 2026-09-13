@@ -7,9 +7,11 @@
 // ================================================================
 
 import { OpeningMechanism } from './openingCatalog.js';
-import { effectiveHeight, effectiveHandleHeight } from './openingNumbering.js';
+import { effectiveHeight, effectiveHandleHeight, effectiveFrameFaceWidth } from './openingNumbering.js';
 import { resolveSlideLayoutPanels } from './openingPlanSymbolGeometry.js';
 import { OpeningCategory } from '../core.js';
+// 線種語彙（'thin'|'medium'|'thick'）の単一情報源。elevationStyle.js は import ゼロの純モジュール。
+import { ElevationLineRole, weightForRole } from '../elevation/elevationStyle.js';
 
 const INSET_MM = 40; // 内側見付の枠inset
 
@@ -300,8 +302,27 @@ function mechanismPrimitives(opening, entry, width, top, sillTop) {
   if (mechanism === OpeningMechanism.FIRE_FOLD) {
     return foldPanelPrimitives(4, width, top, sillTop, midY);
   }
+  if (mechanism === OpeningMechanism.FRAME_ONLY) {
+    // 三方枠: 灰色insetの代わりに三方（左竪・上・右竪）の実線を呼び出し元(buildOpeningElevation)
+    // が描く（見付ぶん内側）ため、ここでは意匠プリミティブを持たない（ラベルへもフォールバック
+    // しない——三方枠は枠自身の姿で表現済み）。
+    return [];
+  }
   // それ以外（未実装機構）: 枠のみ＋種別ラベル（IMPLEMENTED_MECHANISMSの既存方針に合わせる）。
   return entry ? [{ type: 'text', x: width / 2, y: midY, text: entry.label, size: 11, anchor: 'middle', baseline: 'middle' }] : [];
+}
+
+/**
+ * 三方枠（FRAME_ONLY）の内法（実際の開口）の矩形（姿図ローカル座標。yは上向き負、下端はFL=0）。
+ * 見付は平面の方立（openingPlanSymbolGeometry.js frameOnlyJambProfiles）と同じ式で開口半幅に
+ * クランプする——狭い開口で左右の竪枠が交差・上枠が反転しないための不変条件を2箇所で別扱いにしない。
+ * 建具モードの姿図（内法の中線）と展開図（アキ標記の範囲）が共有する唯一の定義。
+ * @returns {{x:number, y:number, w:number, h:number, fw:number}}
+ */
+export function frameOnlyInnerRect(opening, width = opening.width, top = -effectiveHeight(opening)) {
+  const fw = Math.min(effectiveFrameFaceWidth(opening), width / 2);
+  const y = top + fw;
+  return { x: fw, y, w: width - 2 * fw, h: -y, fw };
 }
 
 const HANDLE_W = 120;    // レバーハンドルのカプセル形 よこ寸法(mm)
@@ -383,9 +404,36 @@ export function buildOpeningElevation(
     : { type: 'dim', dir: 'v', at: width + 250, from: top, to: sillTop, foot: width,
         editable: true, target: 'height', label: String(round(height)) };
 
+  // 三方枠(FRAME_ONLY)は「見付のある枠を枠見付分の三方細線」で描く（ユーザー指示2026-09）:
+  //   外周＝指定寸法（幅×高さ）の三方（左竪・上・右竪。下枠なし）を細線（DETAIL）、
+  //   内法＝その見付ぶん内側の三方を中線（SILHOUETTE）＝実際の開口（空気と切れる線）。
+  // 通常の建具の外周rect（既定の線種）・灰色INSET矩形は描かない。線種語彙は展開図の
+  // elevationStyle.js（'thin'|'medium'|'thick'）——建具モードの姿図（SVG）はweightを解釈せず
+  // 均一幅で描くため、線種の差は展開図でのみ現れる。内法の矩形は展開図側（elevation/
+  // elevationFigure.js）がアキ標記（バツ＋「ア キ」）の範囲にも使うため frameOnlyInnerRect に一本化。
+  const isFrameOnly = entry?.mechanism === OpeningMechanism.FRAME_ONLY;
+  const frameOutline = isFrameOnly
+    ? (() => {
+        const inner = frameOnlyInnerRect(opening, width, top);
+        const thin = weightForRole(ElevationLineRole.DETAIL);
+        const medium = weightForRole(ElevationLineRole.SILHOUETTE);
+        const innerTop = inner.y, innerBottom = inner.y + inner.h;
+        return [
+          { type: 'line', x1: 0,     y1: sillTop, x2: 0,     y2: top,     weight: thin },
+          { type: 'line', x1: 0,     y1: top,     x2: width, y2: top,     weight: thin },
+          { type: 'line', x1: width, y1: top,     x2: width, y2: sillTop, weight: thin },
+          { type: 'line', x1: inner.x,           y1: innerBottom, x2: inner.x,           y2: innerTop,    weight: medium },
+          { type: 'line', x1: inner.x,           y1: innerTop,    x2: inner.x + inner.w, y2: innerTop,    weight: medium },
+          { type: 'line', x1: inner.x + inner.w, y1: innerTop,    x2: inner.x + inner.w, y2: innerBottom, weight: medium },
+        ];
+      })()
+    : [
+        { type: 'rect', x: 0, y: top, w: width, h: height },
+        { type: 'rect', x: INSET_MM, y: top + INSET_MM, w: Math.max(width - 2 * INSET_MM, 0), h: Math.max(height - 2 * INSET_MM, 0), stroke: '#94a3b8' },
+      ];
+
   const primitives = [
-    { type: 'rect', x: 0, y: top, w: width, h: height },
-    { type: 'rect', x: INSET_MM, y: top + INSET_MM, w: Math.max(width - 2 * INSET_MM, 0), h: Math.max(height - 2 * INSET_MM, 0), stroke: '#94a3b8' },
+    ...frameOutline,
     { type: 'levelLine', y: 0, label: 'FL' },
     ...mechanismPrimitives(opening, entry, width, top, sillTop),
     {

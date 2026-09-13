@@ -15,6 +15,7 @@ import {
   placeOpeningWithDefaults, removeOpeningWithUndo, withOpeningUndo, pushOpeningUndo, snapshotOpening,
   materialGlassAfterFixtureChange, validateOpeningEdit, noteAfterSubTypeChange, openDirForMechanism,
   defaultSwingSideFor, swingSideAfterSubTypeChange, flippedHingeSides, flippedSwingSide,
+  fixtureTypeAfterSubTypeChange,
 } from './openingEdit.js';
 import { closedAngleFor, leafOpenAngle, angleVectors } from './openingPlanSymbolGeometry.js';
 
@@ -366,6 +367,30 @@ test('placeOpeningWithDefaults: 新規配置時にfixtureType既定の材料・�
   assert.equal(opening.materialGlass, defaultMaterialGlassFor('AW'));
 });
 
+// ---- placeOpeningWithDefaults: subType指定で三方枠を配置できる ----
+test('placeOpeningWithDefaults: subType="threeSidedFrame"を指定すると三方枠(WF・木製・備考なし)が配置される', () => {
+  const { graph, wall } = makeWallGraph(3000, { isExteriorWall: false }); // 内壁
+  const project = makeProject();
+  const { opening, error } = placeOpeningWithDefaults(graph, project, wall, { x: 1500, y: 75 }, OpeningCategory.FITTING, 'threeSidedFrame');
+  assert.equal(error, null);
+  assert.equal(opening.subType, 'threeSidedFrame');
+  assert.equal(opening.fixtureType, 'WF');
+  assert.equal(opening.materialGlass, defaultMaterialGlassFor('WF'));
+  assert.equal(opening.note, null, 'FRAME_ONLYはSWINGではないためレバーハンドルは入らない');
+  assert.equal(opening.frameFaceWidth, 20, '見付の初期値20を配置時に明示保存する');
+  assert.equal(opening.frameProjection, 12, '出幅の初期値12を配置時に明示保存する');
+});
+
+test('placeOpeningWithDefaults: 三方枠以外（既定の片開き戸）では見付・出幅はnullのまま', () => {
+  const { graph, wall } = makeWallGraph(3000, { isExteriorWall: false });
+  const project = makeProject();
+  const { opening, error } = placeOpeningWithDefaults(graph, project, wall, { x: 1500, y: 75 }, OpeningCategory.FITTING);
+  assert.equal(error, null);
+  assert.equal(opening.subType, 'singleSwing');
+  assert.equal(opening.frameFaceWidth, null);
+  assert.equal(opening.frameProjection, null);
+});
+
 // ---- 材料・ガラスの記号変更時の差し替え規則 ----
 test('materialGlassAfterFixtureChange: 現在値が旧記号の初期値のままなら新記号の初期値へ差し替える', () => {
   const oldSymbol = 'AW', newSymbol = 'JW';
@@ -383,6 +408,23 @@ test('materialGlassAfterFixtureChange: ユーザーが編集済みの値は記�
 test('materialGlassAfterFixtureChange: 現在値がnull（未入力）なら新記号の初期値が入る', () => {
   const oldSymbol = 'AW', newSymbol = 'JW';
   assert.equal(materialGlassAfterFixtureChange(null, oldSymbol, newSymbol), defaultMaterialGlassFor(newSymbol));
+});
+
+// ---- 種別（機構）変更時の建具記号の差し替え規則 ----
+test('fixtureTypeAfterSubTypeChange: WD→三方枠 は WF へ差し替わる', () => {
+  assert.equal(fixtureTypeAfterSubTypeChange('WD', 'fitting', 'interior', OpeningMechanism.FRAME_ONLY), 'WF');
+});
+
+test('fixtureTypeAfterSubTypeChange: WF→片開き戸(SWING) は WD へ差し替わる', () => {
+  assert.equal(fixtureTypeAfterSubTypeChange('WF', 'fitting', 'interior', OpeningMechanism.SWING), 'WD');
+});
+
+test('fixtureTypeAfterSubTypeChange: AD→三方枠 は wallKind不問で WF へ差し替わる', () => {
+  assert.equal(fixtureTypeAfterSubTypeChange('AD', 'fitting', 'exterior', OpeningMechanism.FRAME_ONLY), 'WF');
+});
+
+test('fixtureTypeAfterSubTypeChange: 片開き戸(SWING)→引き戸(SLIDE_SINGLE) は記号を維持する（どちらもスコープ無し）', () => {
+  assert.equal(fixtureTypeAfterSubTypeChange('WD', 'fitting', 'interior', OpeningMechanism.SLIDE_SINGLE), 'WD');
 });
 
 // ---- placeOpeningWithDefaults: 建具(fitting)×SWING機構で備考欄に「レバーハンドル」が自動設定される ----

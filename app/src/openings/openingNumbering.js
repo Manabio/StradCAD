@@ -4,7 +4,7 @@
 // structural/memberNumbering.js の2パス構造をなぞるが共通化はしない
 // （構造固有の台帳・sizeKey・階プレフィックス等が流れ込むため並行実装が正当）。
 //
-// signature は「base（記号|種別|幅|高さ|窓台高さ）」＋「sub（仕上|材料・ガラス|見込み|金物|備考）」の
+// signature は「base（記号|種別|幅|高さ|窓台高さ）」＋「sub（仕上|材料・ガラス|見込み|金物|備考|見付|出幅）」の
 // 結合キー（openingSignature = openingBaseSignature + openingSubSignature）。グループの粒度は
 // フラット（project.openingNumberIndex は signature 単一階層の Map のまま。base→variantsの
 // ネストMapにはしない）——deep observable の再発防止パターン（差し替え・ゴースト掃除。下記コメント）を
@@ -30,7 +30,10 @@
 //   4. 階プレフィックスは付けない（採番は全階統一＝記号-番号(-枝番)は仕様を指す）。
 // ================================================================
 
-import { defaultFixtureSymbol, defaultOpeningHeight } from './openingCatalog.js';
+import {
+  defaultFixtureSymbol, defaultOpeningHeight, findCatalogEntry, OpeningMechanism,
+  DEFAULT_FRAME_FACE_MM, DEFAULT_FRAME_PROJECTION_MM,
+} from './openingCatalog.js';
 
 /** opening.fixtureType（未設定ならカテゴリ既定へフォールバック）。 */
 export function fixtureSymbolOf(opening) {
@@ -61,6 +64,24 @@ export function effectiveHandleHeight(opening) {
   return (h != null && h > 0) ? h : DEFAULT_HANDLE_HEIGHT;
 }
 
+/**
+ * opening.frameFaceWidth（未設定・不正値なら DEFAULT_FRAME_FACE_MM へフォールバック）。三方枠の見付。
+ * height<=0 が未設定扱いになる規約（effectiveHeight参照）をそのまま踏襲する。
+ */
+export function effectiveFrameFaceWidth(opening) {
+  const w = opening.frameFaceWidth;
+  return (w != null && w > 0) ? w : DEFAULT_FRAME_FACE_MM;
+}
+
+/**
+ * opening.frameProjection（未設定・不正値なら DEFAULT_FRAME_PROJECTION_MM へフォールバック）。
+ * 三方枠の壁面からの出幅。height<=0 が未設定扱いになる規約（effectiveHeight参照）をそのまま踏襲する。
+ */
+export function effectiveFrameProjection(opening) {
+  const p = opening.frameProjection;
+  return (p != null && p > 0) ? p : DEFAULT_FRAME_PROJECTION_MM;
+}
+
 function round(v) { return Math.round(v); }
 
 // signature の各項目に使う正規化（null/未入力は'-'、値ありはそのまま。文字列化して結合する）。
@@ -74,9 +95,17 @@ export function openingBaseSignature(opening) {
   return `${symbol}|${opening.subType}|${round(opening.width)}|${round(height)}|${sill == null ? '-' : round(sill)}`;
 }
 
-/** 枝番のグルーピングキー（仕上|材料・ガラス|見込み|金物|備考）。 */
+/**
+ * 枝番のグルーピングキー（仕上|材料・ガラス|見込み|金物|備考|見付|出幅）。
+ * 見付・出幅は三方枠（FRAME_ONLY）にだけ意味を持つため、三方枠は実効値（未設定＝既定20/12と
+ * 明示20/12を同一視する）、それ以外の機構は常に'-'にする——扉のある建具に紛れ込んだ値で
+ * グループが割れないようにする。
+ */
 export function openingSubSignature(opening) {
-  return `${norm(opening.finish)}|${norm(opening.materialGlass)}|${norm(opening.frameDepth)}|${norm(opening.hardware)}|${norm(opening.note)}`;
+  const frameOnly = findCatalogEntry(opening.category, opening.subType)?.mechanism === OpeningMechanism.FRAME_ONLY;
+  const face = frameOnly ? effectiveFrameFaceWidth(opening) : null;
+  const proj = frameOnly ? effectiveFrameProjection(opening) : null;
+  return `${norm(opening.finish)}|${norm(opening.materialGlass)}|${norm(opening.frameDepth)}|${norm(opening.hardware)}|${norm(opening.note)}|${norm(face)}|${norm(proj)}`;
 }
 
 /** 採番グループの同一性キー（openingBaseSignature + openingSubSignature の結合）。 */

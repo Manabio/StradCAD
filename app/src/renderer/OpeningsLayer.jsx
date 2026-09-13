@@ -4,14 +4,15 @@ import { Line, Rect, Path } from 'react-konva';
 import { OpeningCategory, LINE_WEIGHT_MM } from '../core.js';
 import { buildHostWallByOpening, wallFaceRange } from '../openings/openingGeometry.js';
 import { graphComputed } from './graphDerived.js';
-import { findCatalogEntry, IMPLEMENTED_MECHANISMS, OpeningMechanism, HINGED_MECHANISMS } from '../openings/openingCatalog.js';
+import { findCatalogEntry, IMPLEMENTED_MECHANISMS, OpeningMechanism, HINGED_MECHANISMS, frameProfileFor } from '../openings/openingCatalog.js';
+import { fixtureSymbolOf, effectiveFrameFaceWidth, effectiveFrameProjection } from '../openings/openingNumbering.js';
 import {
   DOOR_OPEN_ANGLE_DEG, closedAngleFor, leafOpenAngle, angleVectors,
   swingDoubleLeafSpecs, swingChildLeafSpecs, fireDoorLeafSpecs, fireFoldLeafSpecs,
   foldZigzagPoints, trackOf, trackPerp, openingExteriorDir, resolveSlideLayoutPanels,
   FRAME_JAMB_WIDTH_MM, FRAME_KAKARI_WIDTH_MM,
   planFrameBand, bandPerp, planSymbolPlan, innerSpanOpening, swingClosedLeafSpan, swingOpenPerpDir,
-  DOOR_LEAF_THICKNESS_MM,
+  DOOR_LEAF_THICKNESS_MM, frameOnlyJambProfiles,
 } from '../openings/openingPlanSymbolGeometry.js';
 import { arcPathD } from './ShapesLayer.jsx';
 import { LodLevel, resolveStrokeWidth } from '../viewport.js';
@@ -617,6 +618,28 @@ function tickSymbol(opening, band, sp) {
   );
 }
 
+// 三方枠（FRAME_ONLY）: 枠自身が記号（見付×出幅の方立2本）。判断（座標・閉曲線か否か・断面の
+// 描き分け）はすべてframeOnlyJambProfiles（純関数）に一本化し、ここではtoWorldへ機械的に
+// 展開するだけ。
+function frameOnlySymbol(opening, faceLo, faceHi, axisValue, fsp) {
+  const profile = frameProfileFor(fixtureSymbolOf(opening));
+  const jambs = frameOnlyJambProfiles({
+    coord1: opening.coord1, coord2: opening.coord2, faceLo, faceHi, axisValue,
+    faceWidth: effectiveFrameFaceWidth(opening), projection: effectiveFrameProjection(opening), profile,
+  });
+  const toPoints = (jamb) => jamb.points.flatMap(({ along, perp }) => {
+    const w = toWorld(opening.isVertical, along, perp);
+    return [w.x, w.y];
+  });
+  return (
+    <>
+      {jambs.map((jamb, i) => (
+        <Line key={i} points={toPoints(jamb)} closed={jamb.closed} fill="transparent" {...fsp} />
+      ))}
+    </>
+  );
+}
+
 // 選択中の建具の表示は「建具ターゲット（記号丸）自身を選択状態にする」方式に一本化する
 // （ユーザー指示2026-09。旧: 開口を囲む水色の矩形を重ねていた——図面に無い線が増える上、
 // タップ対象である記号丸と選択表示が別物になっていた）。renderer/OpeningTagLayer.jsx 参照。
@@ -730,6 +753,9 @@ export const OpeningsLayer = observer(({ graph, viewport }) => {
         openPerpDir: swingOpenPerpDir(opening.isVertical, opening.hingeSide, opening.swingSide, entry.mechanism, entry),
       });
 
+      if (plan.frame === 'frameOnly') {
+        return <Fragment key={opening.id}>{frameOnlySymbol(opening, faceLo, faceHi, host.axisValue, fsp)}</Fragment>;
+      }
       if (entry.mechanism === OpeningMechanism.SWING) {
         return (
           <Fragment key={opening.id}>

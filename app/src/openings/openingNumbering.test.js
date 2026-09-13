@@ -10,7 +10,9 @@ import {
   collectFloorOpeningGroups, assignOpeningNumbers, applyOpeningTags, renumberOpenings,
   openingGroupsOnFloor, fixtureSymbolOf, openingTagOf, effectiveHeight, openingTagPartsOf,
   effectiveHandleHeight, DEFAULT_HANDLE_HEIGHT, openingSignature,
+  effectiveFrameFaceWidth, effectiveFrameProjection,
 } from './openingNumbering.js';
+import { DEFAULT_FRAME_FACE_MM, DEFAULT_FRAME_PROJECTION_MM } from './openingCatalog.js';
 
 function tagOfOpeningId(groups, id) {
   return groups.find(gr => gr.openings.some(o => o.id === id))?.tag;
@@ -19,8 +21,12 @@ function tagOfOpeningId(groups, id) {
 function makeOpening(id, {
   fixtureType = 'AW', subType = 'doubleSliding', width = 1690, height = 1170, sillHeight = 800, category = 'window',
   finish = null, materialGlass = null, frameDepth = null, hardware = null, note = null,
+  frameFaceWidth = null, frameProjection = null,
 } = {}) {
-  return { id, fixtureType, subType, width, height, sillHeight, category, finish, materialGlass, frameDepth, hardware, note };
+  return {
+    id, fixtureType, subType, width, height, sillHeight, category, finish, materialGlass, frameDepth, hardware, note,
+    frameFaceWidth, frameProjection,
+  };
 }
 
 function makeGraph(planeId, openings) {
@@ -166,6 +172,26 @@ test('effectiveHandleHeight: handleHeight=-300（負値）も不正値としてD
   assert.equal(effectiveHandleHeight(opening), DEFAULT_HANDLE_HEIGHT);
 });
 
+// ---- 三方枠の見付・出幅: 未設定(null)/0/負値は既定(20/12)へフォールバック、正値はそのまま ----
+test('【失敗系】effectiveFrameFaceWidth: frameFaceWidth未設定(null)/0/負値はDEFAULT_FRAME_FACE_MM(20)へフォールバックする', () => {
+  assert.equal(DEFAULT_FRAME_FACE_MM, 20);
+  for (const v of [null, 0, -5]) {
+    assert.equal(effectiveFrameFaceWidth(makeOpening('a', { frameFaceWidth: v })), DEFAULT_FRAME_FACE_MM, `frameFaceWidth=${v}`);
+  }
+});
+
+test('effectiveFrameFaceWidth: 正値(25)はそのまま返す', () => {
+  assert.equal(effectiveFrameFaceWidth(makeOpening('a', { frameFaceWidth: 25 })), 25);
+});
+
+test('【失敗系】effectiveFrameProjection: frameProjection未設定(null)/0/負値はDEFAULT_FRAME_PROJECTION_MM(12)へフォールバックし、正値(15)はそのまま返す', () => {
+  assert.equal(DEFAULT_FRAME_PROJECTION_MM, 12);
+  for (const v of [null, 0, -3]) {
+    assert.equal(effectiveFrameProjection(makeOpening('a', { frameProjection: v })), DEFAULT_FRAME_PROJECTION_MM, `frameProjection=${v}`);
+  }
+  assert.equal(effectiveFrameProjection(makeOpening('a', { frameProjection: 15 })), 15);
+});
+
 // ---- 回帰: 吊元違いは同一グループ（採番同一）——openingSignatureはhingeSide/swingSideを含まない ----
 test('openingSignature: hingeSide/swingSideだけが異なる2つの開口はsignatureが一致する（吊元違いは同一グループ・採番同一）', () => {
   const a = makeOpening('a', { category: 'fitting', subType: 'singleSwing', width: 800, height: 2000, sillHeight: null });
@@ -214,6 +240,43 @@ test('assignOpeningNumbers: 同一base・材料違い2件は枝番a/bが付く�
   // materialGlass 'アルミ' < '樹脂'（辞書順）なので 'アルミ' 側が a
   assert.equal(tagA, 'AW-1a');
   assert.equal(tagB, 'AW-1b');
+});
+
+// ---- 三方枠の見付/出幅違いも枝番の対象（openingSubSignatureの末尾に追加した項目） ----
+test('assignOpeningNumbers: 見付(frameFaceWidth)違いの2件は同一base扱いだが枝番a/bが付く', () => {
+  const project = makeProject();
+  const g = makeGraph('p1', [
+    makeOpening('a', { fixtureType: 'WF', subType: 'threeSidedFrame', category: 'fitting', sillHeight: null, frameFaceWidth: 20, frameProjection: 12 }),
+    makeOpening('b', { fixtureType: 'WF', subType: 'threeSidedFrame', category: 'fitting', sillHeight: null, frameFaceWidth: 25, frameProjection: 12 }),
+  ]);
+  renumberOpenings(g, project);
+
+  const groups = openingGroupsOnFloor(g, project);
+  assert.equal(groups.length, 2, '見付が異なるため別バリアント・別グループになる');
+  const tagA = tagOfOpeningId(groups, 'a');
+  const tagB = tagOfOpeningId(groups, 'b');
+  assert.equal(tagA, 'WF-1a');
+  assert.equal(tagB, 'WF-1b');
+});
+
+test('openingSignature: frameFaceWidth/frameProjectionのみ異なる2件は異なるsignatureになる', () => {
+  const base = makeOpening('a', { fixtureType: 'WF', subType: 'threeSidedFrame', category: 'fitting', sillHeight: null, frameFaceWidth: 20, frameProjection: 12 });
+  const diffFace = makeOpening('b', { fixtureType: 'WF', subType: 'threeSidedFrame', category: 'fitting', sillHeight: null, frameFaceWidth: 25, frameProjection: 12 });
+  const diffProj = makeOpening('c', { fixtureType: 'WF', subType: 'threeSidedFrame', category: 'fitting', sillHeight: null, frameFaceWidth: 20, frameProjection: 15 });
+  assert.notEqual(openingSignature(base), openingSignature(diffFace));
+  assert.notEqual(openingSignature(base), openingSignature(diffProj));
+});
+
+test('openingSignature: 三方枠は見付・出幅の未設定(null)と既定値(20/12)の明示を同一視する（枝番が割れない）', () => {
+  const explicit = makeOpening('a', { fixtureType: 'WF', subType: 'threeSidedFrame', category: 'fitting', sillHeight: null, frameFaceWidth: 20, frameProjection: 12 });
+  const unset    = makeOpening('b', { fixtureType: 'WF', subType: 'threeSidedFrame', category: 'fitting', sillHeight: null, frameFaceWidth: null, frameProjection: null });
+  assert.equal(openingSignature(explicit), openingSignature(unset));
+});
+
+test('openingSignature: 扉のある建具(singleSwing)では見付・出幅の値はsignatureに影響しない（三方枠にだけ意味を持つ）', () => {
+  const a = makeOpening('a', { fixtureType: 'WD', subType: 'singleSwing', category: 'fitting', sillHeight: null, frameFaceWidth: null, frameProjection: null });
+  const b = makeOpening('b', { fixtureType: 'WD', subType: 'singleSwing', category: 'fitting', sillHeight: null, frameFaceWidth: 25, frameProjection: 15 });
+  assert.equal(openingSignature(a), openingSignature(b));
 });
 
 // ---- バリアント1種類 → AW-1（枝番なし） ----

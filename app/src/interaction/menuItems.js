@@ -90,6 +90,7 @@ export function getMenuItems(context, endpointState, clState, wallState) {
       const items = [
         { id: 'add-fitting', label: '建具', icon: '🚪' },
         { id: 'add-window',  label: '窓',   icon: '🪟' },
+        { id: 'add-frame',   label: '三方枠', icon: '⊓' },
       ];
       // 腰壁・垂れ壁: 2a壁（階段下部屋の偏芯壁）は対象外（wallState.eligible が false）
       if (wallState?.eligible) items.push({ id: 'knee-drop-wall', label: '腰/垂壁', icon: '▤' });

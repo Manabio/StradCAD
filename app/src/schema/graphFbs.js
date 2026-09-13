@@ -170,19 +170,21 @@ const SHS = {
 const SITE_KIND_ENC = { boundary: 0, road: 1, survey: 2, roadWidth: 3, other: 4 };
 const SITE_KIND_DEC = ['boundary', 'road', 'survey', 'roadWidth', 'other'];
 
-// Opening: 25 フィールド（開口 — 建具・窓）
+// Opening: 27 フィールド（開口 — 建具・窓）
 const OP = {
   ID: 0, AXIS_CL: 1, WALL_SIDE: 2, IS_V: 3,
   REF_CL: 4, REF_OFF: 5, WIDTH: 6, CATEGORY: 7, SUB_TYPE: 8,
   HINGE_SIDE: 9, SWING_SIDE: 10,
   DISC: 11, LW: 12, LT: 13, COL: 14,
-  FIXTURE_TYPE: 15, // 建具記号（外壁窓のみ）。0=なし/1=AW/2=JW/3=SW/4=AD/5=SD/6=WD/7=WW
+  FIXTURE_TYPE: 15, // 建具記号（外壁窓のみ）。0=なし/1=AW/2=JW/3=SW/4=AD/5=SD/6=WD/7=WW/8=WF/9=SF/10=SSF
   HAS_SILL_H: 16, SILL_H: 17, // 窓台高さ(mm)。null=未設定
   HEIGHT: 18, // 建具高さ(mm)。0=未設定
   FINISH: 19, MATERIAL_GLASS: 20, // 建具表: 仕上／材料・ガラス（自由入力文字列。空文字=未入力=null）
   FRAME_DEPTH: 21, // 見込み(mm)。0=未設定（heightと同じ規約。0mmの見込みは不正値のためhasフラグ不要）
   HARDWARE: 22, NOTE: 23, // 建具表: 金物／備考（自由入力文字列）
   HANDLE_H: 24, // レバーハンドル取付高さ(mm)。0=未設定（heightと同じ規約）
+  FRAME_FACE_W: 25, // 三方枠の見付(mm)。0=未設定（heightと同じ規約）
+  FRAME_PROJ: 26, // 三方枠の壁面からの出幅(mm)。0=未設定（heightと同じ規約）
 };
 
 // Opening.category 列挙値エンコード
@@ -190,8 +192,8 @@ const OPENING_CATEGORY_ENC = { fitting: 0, window: 1 };
 const OPENING_CATEGORY_DEC = ['fitting', 'window'];
 
 // Opening.fixtureType 列挙値エンコード
-const FIXTURE_TYPE_ENC = { AW: 1, JW: 2, SW: 3, AD: 4, SD: 5, WD: 6, WW: 7 };
-const FIXTURE_TYPE_DEC = [null, 'AW', 'JW', 'SW', 'AD', 'SD', 'WD', 'WW'];
+const FIXTURE_TYPE_ENC = { AW: 1, JW: 2, SW: 3, AD: 4, SD: 5, WD: 6, WW: 7, WF: 8, SF: 9, SSF: 10 };
+const FIXTURE_TYPE_DEC = [null, 'AW', 'JW', 'SW', 'AD', 'SD', 'WD', 'WW', 'WF', 'SF', 'SSF'];
 
 // DiagonalLine: 7 フィールド
 const DG = { ID: 0, A: 1, B: 2, DISC: 3, LW: 4, LT: 5, COL: 6 };
@@ -431,7 +433,7 @@ function writeOpening(b, o) {
 
   const hasSillH = o.sillHeight != null;
 
-  b.startObject(25);
+  b.startObject(27);
   b.addFieldOffset(OP.ID,         sId,   0);
   b.addFieldOffset(OP.AXIS_CL,    sAxis, 0);
   b.addFieldInt8(OP.WALL_SIDE,    o.wallSide < 0 ? -1 : 1, 0);
@@ -457,6 +459,8 @@ function writeOpening(b, o) {
   b.addFieldOffset(OP.HARDWARE,       sHardware, 0);
   b.addFieldOffset(OP.NOTE,           sNote,     0);
   b.addFieldFloat64(OP.HANDLE_H,      o.handleHeight ?? 0, 0.0);
+  b.addFieldFloat64(OP.FRAME_FACE_W,  o.frameFaceWidth ?? 0, 0.0);
+  b.addFieldFloat64(OP.FRAME_PROJ,    o.frameProjection ?? 0, 0.0);
   return b.endObject();
 }
 
@@ -1183,6 +1187,8 @@ function readOpening(bb, tablePos) {
     hardware:      r.str(OP.HARDWARE)       || null,
     note:          r.str(OP.NOTE)           || null,
     handleHeight:  r.f64(OP.HANDLE_H)       || null,
+    frameFaceWidth:  r.f64(OP.FRAME_FACE_W) || null,
+    frameProjection: r.f64(OP.FRAME_PROJ)   || null,
   };
 }
 

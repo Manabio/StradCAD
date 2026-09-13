@@ -1296,6 +1296,12 @@ const App = observer(() => {
       else       enterOpeningMode(opening.id);
       return;
     }
+    if (item.id === 'add-frame') {
+      const { opening, error } = placeOpeningWithDefaults(graph, project, menu.wall, menu.worldPos, OpeningCategory.FITTING, 'threeSidedFrame');
+      if (error) setToast({ msg: error, key: Date.now() });
+      else       enterOpeningMode(opening.id);
+      return;
+    }
     if (item.id === 'opening-edit') {
       enterOpeningMode(menu.opening.id);
       return;

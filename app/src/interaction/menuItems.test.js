@@ -39,13 +39,13 @@ test('buildMenuState: 構造モードでも壁以外（梁芯の中心線上）�
   assert.ok(state.items.some(i => i.id === 'cl-move'));
 });
 
-test('buildMenuState: 平面モードの壁上メニューは従来どおり建具・窓・腰/垂壁を持つ', () => {
+test('buildMenuState: 平面モードの壁上メニューは建具・窓・三方枠・腰/垂壁を持つ', () => {
   const wall = { id: 'w1' };
   const state = buildMenuState('floorplan', {
     snap: null, cl: null, clEndpoint: null, opening: null, wall, wallEligible: true,
   });
   assert.equal(state.context, CONTEXT.WALL);
-  assert.deepEqual(state.items.map(i => i.id), ['add-fitting', 'add-window', 'knee-drop-wall']);
+  assert.deepEqual(state.items.map(i => i.id), ['add-fitting', 'add-window', 'add-frame', 'knee-drop-wall']);
 });
 
 test('buildMenuState: 非建具モードの中心線上は null にならず、canMove/hasInteriorWall を反映する', () => {

@@ -71,6 +71,7 @@ function buildSnapshot(graph) {
       finish: o.finish ?? null, materialGlass: o.materialGlass ?? null,
       frameDepth: o.frameDepth ?? null, hardware: o.hardware ?? null, note: o.note ?? null,
       handleHeight: o.handleHeight ?? null,
+      frameFaceWidth: o.frameFaceWidth ?? null, frameProjection: o.frameProjection ?? null,
       ...baseProps(o),
     })),
     diagonals: gs.filter(s => s.type === ShapeType.DIAGONAL).map(d => ({
@@ -636,7 +637,8 @@ function applySnapshot(graph, snapshot) {
             height: d.height ?? null,
             finish: d.finish ?? null, materialGlass: d.materialGlass ?? null,
             frameDepth: d.frameDepth ?? null, hardware: d.hardware ?? null, note: d.note ?? null,
-            handleHeight: d.handleHeight ?? null }, d.id);
+            handleHeight: d.handleHeight ?? null,
+            frameFaceWidth: d.frameFaceWidth ?? null, frameProjection: d.frameProjection ?? null }, d.id);
       }
     }
 

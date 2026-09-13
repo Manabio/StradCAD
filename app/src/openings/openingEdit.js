@@ -17,7 +17,10 @@
 import { runInAction } from 'mobx';
 import { undoManager } from '../undoManager.js';
 import { OpeningCategory } from '../core.js';
-import { getFittingOptions, WINDOW_CATALOG, defaultFixtureSymbolFor, defaultOpeningHeight, defaultMaterialGlassFor, defaultNoteFor, OpeningMechanism } from './openingCatalog.js';
+import {
+  getFittingOptions, WINDOW_CATALOG, defaultFixtureSymbolFor, defaultOpeningHeight, defaultMaterialGlassFor, defaultNoteFor,
+  getFixtureSymbols, OpeningMechanism, DEFAULT_FRAME_FACE_MM, DEFAULT_FRAME_PROJECTION_MM,
+} from './openingCatalog.js';
 import { findHostWall, validateOpeningPlacement, maxOpeningWidthAt, findOpeningsOnWall, swingSideTowardPerp, exteriorSideDir } from './openingGeometry.js';
 import { renumberOpenings } from './openingNumbering.js';
 import { ERR_OPENING_OUT_OF_WALL, ERR_OPENING_OVERLAP } from '../error.js';
@@ -73,6 +76,7 @@ export function flippedSwingSide(opening) {
 const EDITABLE = [
   'refOffset', 'width', 'height', 'subType', 'hingeSide', 'swingSide', 'fixtureType', 'sillHeight',
   'finish', 'materialGlass', 'frameDepth', 'hardware', 'note', 'handleHeight',
+  'frameFaceWidth', 'frameProjection',
 ];
 
 /** Opening の編集可能フィールドのみを持つ plain object スナップショット（refCL は id で保持）。 */
@@ -93,6 +97,7 @@ function addOpeningFromSnapshot(graph, o) {
       hingeSide: o.hingeSide, swingSide: o.swingSide, fixtureType: o.fixtureType, sillHeight: o.sillHeight, height: o.height,
       finish: o.finish, materialGlass: o.materialGlass, frameDepth: o.frameDepth, hardware: o.hardware, note: o.note,
       handleHeight: o.handleHeight,
+      frameFaceWidth: o.frameFaceWidth, frameProjection: o.frameProjection,
     }, o.id);
 }
 
@@ -141,19 +146,22 @@ export function endOpeningFieldUndo(graph, project, opening) {
  * 場合は壁中央フォールバック時に maxOpeningWidthAt の上限へクランプしてから配置する——壁長不足
  * だけを理由に配置失敗させない。それでも幅が0以下（スパン0の縮退壁等）・重なり等でNGなら
  * 配置せずエラーを返す。
+ * @param {string|null} [subType] 明示的な種別キー（openingCatalog.js のキー）。指定時は該当カタログ
+ *   エントリを使う（見つからなければ catalog[0] へフォールバック）。省略時は従来どおり catalog[0]
+ *   （＝建具ラジアルの既定＝singleSwing、窓ラジアルの既定＝引き違い窓）。
  * @returns {{ opening: object|null, error: string|null }}
  */
-export function placeOpeningWithDefaults(graph, project, wall, worldPos, category) {
+export function placeOpeningWithDefaults(graph, project, wall, worldPos, category, subType = null) {
   const wallKind = wall.isExteriorWall ? 'exterior' : 'interior';
   const catalog = category === OpeningCategory.WINDOW ? WINDOW_CATALOG : getFittingOptions(wallKind);
-  const entry = catalog[0];
+  const entry = (subType && catalog.find(e => e.key === subType)) ?? catalog[0];
   if (!entry) return { opening: null, error: 'この壁に配置できる建具がありません' };
 
-  const subType = entry.key;
+  const resolvedSubType = entry.key;
   let width = entry.defaultWidth;
-  const height = defaultOpeningHeight(category, subType);
+  const height = defaultOpeningHeight(category, resolvedSubType);
   const sillHeight = category === OpeningCategory.WINDOW ? 800 : null;
-  const fixtureType = defaultFixtureSymbolFor(category, wallKind);
+  const fixtureType = defaultFixtureSymbolFor(category, wallKind, entry.mechanism);
   const materialGlass = defaultMaterialGlassFor(fixtureType);
   const refCL = wall.clStart;
 
@@ -202,8 +210,13 @@ export function placeOpeningWithDefaults(graph, project, wall, worldPos, categor
   const swingSide = defaultSwingSideFor(wall, graph, centerCoord, hingeSide, entry.mechanism);
   // 備考欄の初期値は defaultNoteFor が唯一の定義箇所（materialGlassと同じ規約）。
   const note = defaultNoteFor(category, entry.mechanism);
-  const opening = graph.addOpening(wall.axisCL, wallSide, wall.isVertical, refCL, refOffset, width, category, subType,
-    { hingeSide, swingSide, fixtureType, sillHeight, height, materialGlass, note });
+  // 三方枠は見付・出幅の初期値（20/12）を配置時に明示保存する（materialGlassと同じ「配置時に設定」
+  // 規約。建具モードの欄に初期値が見える）。それ以外の機構では意味を持たないため null のまま。
+  const frameOnly = entry.mechanism === OpeningMechanism.FRAME_ONLY;
+  const frameFaceWidth  = frameOnly ? DEFAULT_FRAME_FACE_MM : null;
+  const frameProjection = frameOnly ? DEFAULT_FRAME_PROJECTION_MM : null;
+  const opening = graph.addOpening(wall.axisCL, wallSide, wall.isVertical, refCL, refOffset, width, category, resolvedSubType,
+    { hingeSide, swingSide, fixtureType, sillHeight, height, materialGlass, note, frameFaceWidth, frameProjection });
   undoManager.push(
     () => runInAction(() => { graph.removeShape(opening.id); renumberOpenings(graph, project); }),
     () => runInAction(() => { addOpeningFromSnapshot(graph, opening); renumberOpenings(graph, project); }),
@@ -242,6 +255,18 @@ export function validateOpeningEdit(o, graph, { width, refOffset }) {
 export function materialGlassAfterFixtureChange(currentValue, oldSymbol, newSymbol) {
   const isUnedited = currentValue == null || currentValue === defaultMaterialGlassFor(oldSymbol);
   return isUnedited ? defaultMaterialGlassFor(newSymbol) : currentValue;
+}
+
+/**
+ * 種別（機構）を変更したときの建具記号の差し替え規則: 現在の記号が新機構の記号スコープ
+ * （getFixtureSymbols(category, newMechanism)）に含まれていればそのまま維持し、含まれて
+ * いなければ新機構の既定記号（defaultFixtureSymbolFor）へ差し替える。三方枠(FRAME_ONLY)⇔
+ * それ以外の種別変更で記号が自動的に WF/SF/SSF ⇔ WD/AD 等へ切り替わる唯一の判定ロジック。
+ */
+export function fixtureTypeAfterSubTypeChange(currentSymbol, category, wallKind, newMechanism) {
+  const scoped = getFixtureSymbols(category, newMechanism);
+  if (scoped.some(f => f.key === currentSymbol)) return currentSymbol;
+  return defaultFixtureSymbolFor(category, wallKind, newMechanism);
 }
 
 /**

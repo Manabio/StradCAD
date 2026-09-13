@@ -25,6 +25,7 @@ import {
   planFrameBand, bandPerp, frameInnerSpan, SASH_DEPTH_MM, FRAME_OVERHANG_MM,
   planSymbolPlan, innerSpanOpening, swingClosedLeafSpan, swingOpenPerpDir,
   closedAngleFor, leafOpenAngle, angleVectors, DOOR_OPEN_ANGLE_DEG,
+  frameOnlyJambProfiles, frameOnlyPerpRange,
 } from './openingPlanSymbolGeometry.js';
 
 // 独立検算用（production の closedAngleFor/leafOpenAngle を経由しない）。開き角の中間角
@@ -351,10 +352,13 @@ test('【失敗系】SASH_OPEN_MECHANISMS/HINGED_MECHANISMSはIMPLEMENTED_MECHAN
 // で早期returnされるため、実際にsashFrameSymbolへ到達する「sash」機構は5件（FOLD/PIVOT/SHUTTER/
 // OVERHEAD/EMERGENCY）——planSymbolPlan自体はIMPLEMENTED_MECHANISMS全29件を漏れなく分類する
 // 総関数であることをここでは検証している（openingPlanSymbolGeometry.js側のJSDoc参照）。
-test('planSymbolPlan: IMPLEMENTED_MECHANISMSの29機構すべてがDETAILでframe!==\'none\'になり、HINGED=notched/SASH_OPEN=sashOpen/残り=sashに分類される', () => {
+// FRAME_ONLY（三方枠）は notched/sashOpen/sash のどれにも属さない別枠の'frameOnly'に分類される
+// （STANDARDでも詳細を描く意図的な例外。専用テスト「planSymbolPlan: FRAME_ONLYは...」で検証済み）
+// ため、このテストの分類対象からは除く。
+test('planSymbolPlan: IMPLEMENTED_MECHANISMSのFRAME_ONLY以外29機構すべてがDETAILでframe!==\'none\'になり、HINGED=notched/SASH_OPEN=sashOpen/残り=sashに分類される', () => {
   const band = { lo: 480, hi: 520, center: 500, depth: 40 };
-  const mechanisms = [...IMPLEMENTED_MECHANISMS];
-  assert.equal(mechanisms.length, 29, 'IMPLEMENTED_MECHANISMSは29機構のはず（done-means前提の変化を検知する）');
+  const mechanisms = [...IMPLEMENTED_MECHANISMS].filter(m => m !== OpeningMechanism.FRAME_ONLY);
+  assert.equal(mechanisms.length, 29, 'FRAME_ONLYを除くとIMPLEMENTED_MECHANISMSは29機構のはず（done-means前提の変化を検知する）');
   assert.equal(HINGED_MECHANISMS.size, 10);
   assert.equal(SASH_OPEN_MECHANISMS.size, 13);
 
@@ -379,6 +383,96 @@ test('planSymbolPlan: SCHEMATIC/STANDARD（lodLevel!==DETAIL）はframe===\'none
     assert.equal(plan.frame, 'none');
     assert.equal(plan.innerSpan, null);
   }
+});
+
+// ---- 三方枠(FRAME_ONLY): STANDARD/DETAILどちらも'frameOnly'を返す（一般記号に相当するものが無い意図的例外） ----
+test('planSymbolPlan: FRAME_ONLYはSTANDARD/DETAILとも frame===\'frameOnly\'・innerSpan===null を返す', () => {
+  const band = { lo: 480, hi: 520, center: 500, depth: 40 };
+  for (const lodLevel of [LodLevel.STANDARD, LodLevel.DETAIL]) {
+    const plan = planSymbolPlan({ mechanism: OpeningMechanism.FRAME_ONLY, lodLevel, coord1: 0, coord2: 1000, axisValue: 500, band, jambWidth: 30 });
+    assert.equal(plan.frame, 'frameOnly', `lodLevel=${lodLevel}`);
+    assert.equal(plan.innerSpan, null, `lodLevel=${lodLevel}`);
+  }
+});
+
+test('planSymbolPlan: FRAME_ONLY以外の機構はSTANDARDで従来どおりframe===\'none\'のまま（frameOnly分岐に巻き込まれない）', () => {
+  const band = { lo: 480, hi: 520, center: 500, depth: 40 };
+  const plan = planSymbolPlan({ mechanism: OpeningMechanism.SWING, lodLevel: LodLevel.STANDARD, coord1: 0, coord2: 1000, axisValue: 500, band, jambWidth: 30 });
+  assert.equal(plan.frame, 'none');
+});
+
+// ---- frameOnlyPerpRange: 三方枠の見込み＝壁厚（面間）＋2×出幅（建具モードの見込み欄と方立が共有） ----
+test('frameOnlyPerpRange: depthは面間+2×projection、lo/hiは面±projection（faceLo>faceHiでも同じ）', () => {
+  const r = frameOnlyPerpRange({ faceLo: 100, faceHi: 215, axisValue: 157.5, projection: 12 });
+  assert.equal(r.lo, 88);
+  assert.equal(r.hi, 227);
+  assert.equal(r.depth, 115 + 24);
+  const swapped = frameOnlyPerpRange({ faceLo: 215, faceHi: 100, axisValue: 157.5, projection: 12 });
+  assert.deepEqual(swapped, r);
+});
+
+test('【失敗系】frameOnlyPerpRange: 面が引けない(faceLo/faceHi=undefined)ときはaxisValue±SASH_DEPTH_MM/2を面の代わりにする', () => {
+  const r = frameOnlyPerpRange({ faceLo: undefined, faceHi: undefined, axisValue: 1000, projection: 10 });
+  assert.equal(r.faceMin, 1000 - SASH_DEPTH_MM / 2);
+  assert.equal(r.faceMax, 1000 + SASH_DEPTH_MM / 2);
+  assert.equal(r.depth, SASH_DEPTH_MM + 20);
+});
+
+// ---- frameOnlyJambProfiles: 三方枠の方立2本（見付×出幅） ----
+test('frameOnlyJambProfiles: solid(木製)は閉じた矩形4点、perp範囲は面±projection、along幅はfaceWidth', () => {
+  const [j1, j2] = frameOnlyJambProfiles({
+    coord1: 0, coord2: 1000, faceLo: 900, faceHi: 1100, axisValue: 1000,
+    faceWidth: 20, projection: 12, profile: 'solid',
+  });
+  assert.equal(j1.closed, true);
+  assert.equal(j1.points.length, 4);
+  assert.equal(j2.closed, true);
+  assert.equal(j2.points.length, 4);
+  const perps = [...j1.points, ...j2.points].map(p => p.perp);
+  assert.equal(Math.min(...perps), 900 - 12);
+  assert.equal(Math.max(...perps), 1100 + 12);
+  // coord1側(dir=+1)は0→20、coord2側(dir=-1)は1000→980
+  const alongs1 = j1.points.map(p => p.along);
+  assert.equal(Math.min(...alongs1), 0);
+  assert.equal(Math.max(...alongs1), 20);
+  const alongs2 = j2.points.map(p => p.along);
+  assert.equal(Math.min(...alongs2), 980);
+  assert.equal(Math.max(...alongs2), 1000);
+});
+
+test('frameOnlyJambProfiles: bent(鋼板)は開いた6点で、返しの短辺(perpLo→faceMin, faceMax→perpHi)がprojectionぶん', () => {
+  const [j1] = frameOnlyJambProfiles({
+    coord1: 0, coord2: 1000, faceLo: 900, faceHi: 1100, axisValue: 1000,
+    faceWidth: 20, projection: 12, profile: 'bent',
+  });
+  assert.equal(j1.closed, false);
+  assert.equal(j1.points.length, 6);
+  // 両端が壁面(faceMin/faceMax)に接し、内側がperpLo/perpHiまで12mmの返し
+  assert.equal(j1.points[0].perp, 900);
+  assert.equal(j1.points[1].perp, 900 - 12);
+  assert.equal(j1.points[4].perp, 1100 + 12);
+  assert.equal(j1.points[5].perp, 1100);
+});
+
+test('frameOnlyJambProfiles: 幅の狭い開口（faceWidthが開口幅の半分を超える）はfwがwidth/2にクランプされ方立が交差しない', () => {
+  const [j1, j2] = frameOnlyJambProfiles({
+    coord1: 0, coord2: 60, faceLo: 900, faceHi: 1100, axisValue: 1000,
+    faceWidth: 40, projection: 12, profile: 'solid', // faceWidth(40) > width/2(30)
+  });
+  const alongs1 = j1.points.map(p => p.along);
+  const alongs2 = j2.points.map(p => p.along);
+  assert.equal(Math.max(...alongs1), 30, 'fwはwidth/2=30へクランプされるはず');
+  assert.equal(Math.min(...alongs2), 30, 'fwはwidth/2=30へクランプされるはず');
+});
+
+test('frameOnlyJambProfiles: faceLo/faceHi未指定(非finite)はaxisValue±SASH_DEPTH_MM/2で代用する', () => {
+  const [j1] = frameOnlyJambProfiles({
+    coord1: 0, coord2: 1000, faceLo: undefined, faceHi: undefined, axisValue: 1000,
+    faceWidth: 20, projection: 12, profile: 'solid',
+  });
+  const perps = j1.points.map(p => p.perp);
+  assert.equal(Math.min(...perps), 1000 - SASH_DEPTH_MM / 2 - 12);
+  assert.equal(Math.max(...perps), 1000 + SASH_DEPTH_MM / 2 + 12);
 });
 
 // 【T2】MUT3（蝶番系の回転中心をband.centerに差し替える変異）を殺す: F2のpivotPerpは

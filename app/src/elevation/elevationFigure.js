@@ -17,8 +17,8 @@ import { CenterLineType, OpeningCategory } from '@core';
 import { openingsOnFace, openingBelongsToFaceRoom, faceBoundaryLocalX, drawnSpanRanges, wallCoverageGapsOnFace, wallLessEndAt } from './elevationFaces.js';
 import { openingSectionPrimitives, wallThicknessForOpening } from '../openings/openingSection.js';
 import { openingTagPartsOf } from '../openings/openingNumbering.js';
-import { findCatalogEntry } from '../openings/openingCatalog.js';
-import { buildOpeningElevation } from '../openings/openingElevationFigure.js';
+import { findCatalogEntry, isDoorlessMechanism } from '../openings/openingCatalog.js';
+import { buildOpeningElevation, frameOnlyInnerRect } from '../openings/openingElevationFigure.js';
 import { translatePrimitive, mirrorPrimitiveX } from './elevationPrimitives.js';
 import { collectRow1SplitPoints } from './elevationDimSplit.js';
 import {
@@ -1125,6 +1125,15 @@ export function buildFaceFigure(face, ctx) {
     });
     const oriented = face.dirSign < 0 ? figurePrims.map(p => mirrorPrimitiveX(p, o.width)) : figurePrims;
     for (const p of oriented) prims.push(translatePrimitive(p, x, floorDyAt(localX)));
+    // 「扉のない建具」（三方枠等。openingCatalog.js DOORLESS_MECHANISMS）の内法は実際に抜けている
+    // ＝アキなので、開放スパンと同じ標記（バツ＋「ア キ」。appendGapMark）を内法の矩形に描く
+    // （ユーザー指示2026-09）。断面エンジン（emitOpenGapMarks）は「建具の姿の前にバツ不要」で
+    // 開口をアキから外しているため、扉のない建具だけここで補う。内法は左右対称なので
+    // 面の向き（dirSign）による鏡映は不要。
+    if (isDoorlessMechanism(entry?.mechanism)) {
+      const inner = frameOnlyInnerRect(o);
+      appendGapMark(prims, { x: x + inner.x, y: inner.y + floorDyAt(localX), w: inner.w, h: inner.h }, detailWeight);
+    }
 
     // 建具記号丸（項目2）: 建具の中心ではなく、姿が見える図の下（注記帯側。寸法行より図寄りの
     // 専用段=openingTagRowY）へ置く。背景透明の仕様は不変（fill指定なし）。

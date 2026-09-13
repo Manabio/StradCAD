@@ -1,9 +1,10 @@
 import { useRef } from 'react';
 import { observer } from 'mobx-react-lite';
 import { runInAction } from 'mobx';
-import { getFittingOptions, WINDOW_CATALOG, getFixtureSymbols, findCatalogEntry, defaultOpeningHeight, HINGED_MECHANISMS, hingeSideMatters } from './openingCatalog.js';
+import { getFittingOptions, WINDOW_CATALOG, getFixtureSymbols, findCatalogEntry, defaultOpeningHeight, HINGED_MECHANISMS, hingeSideMatters, OpeningMechanism } from './openingCatalog.js';
 import { OpeningCategory } from '../core.js';
-import { findHostWall, maxOpeningWidthAt, findOpeningsOnWall } from './openingGeometry.js';
+import { findHostWall, maxOpeningWidthAt, findOpeningsOnWall, wallFaceRange } from './openingGeometry.js';
+import { frameOnlyPerpRange } from './openingPlanSymbolGeometry.js';
 import { ERR_OPENING_OUT_OF_WALL, ERR_OPENING_OVERLAP } from '../error.js';
 import { buildOpeningElevation } from './openingElevationFigure.js';
 import { openingMountLocation } from './openingRoomLabel.js';
@@ -11,9 +12,9 @@ import { AutoScaledFigure } from '../structural/sectionFigure/AutoScaledFigure.j
 import {
   beginOpeningFieldUndo, endOpeningFieldUndo, withOpeningUndo, validateOpeningEdit, removeOpeningWithUndo,
   materialGlassAfterFixtureChange, noteAfterSubTypeChange, swingSideAfterSubTypeChange,
-  flippedHingeSides, flippedSwingSide,
+  flippedHingeSides, flippedSwingSide, fixtureTypeAfterSubTypeChange,
 } from './openingEdit.js';
-import { openingTagOf, fixtureSymbolOf } from './openingNumbering.js';
+import { openingTagOf, fixtureSymbolOf, effectiveFrameProjection } from './openingNumbering.js';
 
 // 数値入力は絶対値化して確定する（幅・高さ・位置・窓台高さ共通の規約。図上のdim編集（onEditDim）・
 // numField の両方で使う）。height/handleHeight はさらに絶対値化後の0を不正値として未設定(null)に
@@ -53,6 +54,12 @@ export const OpeningEditor = observer(function OpeningEditor({ graph, project, o
   const mountLocation = openingMountLocation(opening, graph);
 
   const figure = buildOpeningElevation(opening, { tag, entry });
+  const isFrameOnly = entry?.mechanism === OpeningMechanism.FRAME_ONLY;
+  const frameOnlyDepth = (() => {
+    if (!isFrameOnly || !wall) return null;
+    const [faceLo, faceHi] = wallFaceRange(wall, graph);
+    return frameOnlyPerpRange({ faceLo, faceHi, axisValue: wall.axisValue, projection: effectiveFrameProjection(opening) }).depth;
+  })();
 
   // 仕様変更でタグが変わった旨を通知する（renumberOpenings は openingEdit.js の pushOpeningUndo が
   // 前進方向・undo・redo いずれの確定でも呼ぶため、ここでは前後のタグを比較するだけでよい）。
@@ -104,6 +111,15 @@ export const OpeningEditor = observer(function OpeningEditor({ graph, project, o
       // SWING機構（開き窓等）でも常にnull——窓のFIX→開き窓のような変更でも誤って
       // 'レバーハンドル' が入ることはない（category を渡さない実装だと機構だけで判定し混入する）。
       opening.note = noteAfterSubTypeChange(opening.note, opening.category, oldEntry?.mechanism, en?.mechanism);
+      // 記号（fixtureType）は「現在の記号が新機構のスコープに含まれていれば維持、含まれていなければ
+      // 新機構の既定記号へ差し替え」規則（fixtureTypeAfterSubTypeChangeが唯一の判定ロジック）。
+      // 三方枠(FRAME_ONLY)⇔それ以外の種別変更でWF/SF/SSF⇔WD/AD等が自動で切り替わる。
+      const oldSymbol = fixtureSymbolOf(opening);
+      const newSymbol = fixtureTypeAfterSubTypeChange(oldSymbol, opening.category, wallKind, en?.mechanism);
+      if (newSymbol !== oldSymbol) {
+        opening.fixtureType = newSymbol;
+        opening.materialGlass = materialGlassAfterFixtureChange(opening.materialGlass, oldSymbol, newSymbol);
+      }
       if (en) {
         opening.width  = en.defaultWidth;
         opening.height = defaultOpeningHeight(opening.category, key);
@@ -199,7 +215,7 @@ export const OpeningEditor = observer(function OpeningEditor({ graph, project, o
       <div style={rowStyle}>
         <span style={labelStyle}>記号</span>
         <select style={inputStyle} value={fixtureSymbolOf(opening)} onChange={onFixtureTypeChange}>
-          {getFixtureSymbols(opening.category).map(f => <option key={f.key} value={f.key}>{f.label}</option>)}
+          {getFixtureSymbols(opening.category, entry?.mechanism).map(f => <option key={f.key} value={f.key}>{f.label}</option>)}
         </select>
       </div>
 
@@ -227,11 +243,37 @@ export const OpeningEditor = observer(function OpeningEditor({ graph, project, o
           onChange={textField('materialGlass')} {...fieldUndoProps} />
       </div>
 
-      <div style={rowStyle}>
-        <span style={labelStyle}>見込み(mm)</span>
-        <input type="number" style={inputStyle} value={opening.frameDepth || ''}
-          onChange={numField('frameDepth', { allowNull: true, zeroAsNull: true })} {...fieldUndoProps} />
-      </div>
+      {isFrameOnly ? (
+        // 三方枠の見込みは壁厚（面間）＋2×出幅の自動計算（読取専用・非永続。式は
+        // openingPlanSymbolGeometry.js frameOnlyPerpRange が平面の方立と共有する唯一の定義）。
+        // ホスト壁が引けないときは '—'。
+        <div style={rowStyle}>
+          <span style={labelStyle}>見込み(mm)</span>
+          <input type="text" readOnly style={readonlyStyle} value={frameOnlyDepth == null ? '—' : String(Math.round(frameOnlyDepth))} />
+        </div>
+      ) : (
+        <div style={rowStyle}>
+          <span style={labelStyle}>見込み(mm)</span>
+          <input type="number" style={inputStyle} value={opening.frameDepth || ''}
+            onChange={numField('frameDepth', { allowNull: true, zeroAsNull: true })} {...fieldUndoProps} />
+        </div>
+      )}
+
+      {isFrameOnly && (
+        <>
+          <div style={rowStyle}>
+            <span style={labelStyle}>見付(mm)</span>
+            <input type="number" style={inputStyle} value={opening.frameFaceWidth || ''}
+              onChange={numField('frameFaceWidth', { allowNull: true, zeroAsNull: true })} {...fieldUndoProps} />
+          </div>
+
+          <div style={rowStyle}>
+            <span style={labelStyle}>出幅(mm)</span>
+            <input type="number" style={inputStyle} value={opening.frameProjection || ''}
+              onChange={numField('frameProjection', { allowNull: true, zeroAsNull: true })} {...fieldUndoProps} />
+          </div>
+        </>
+      )}
 
       <div style={rowStyle}>
         <span style={labelStyle}>金物</span>

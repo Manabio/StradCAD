@@ -7,7 +7,7 @@
 // ================================================================
 
 import { exteriorSideDir, swingSideTowardPerp } from './openingGeometry.js';
-import { HINGED_MECHANISMS, SASH_OPEN_MECHANISMS, hingeSideMatters } from './openingCatalog.js';
+import { HINGED_MECHANISMS, SASH_OPEN_MECHANISMS, hingeSideMatters, OpeningMechanism } from './openingCatalog.js';
 // viewport.js は mobx と @core しか import しない純モジュールのため、node:test 単体import制約
 // （抽出純モジュールはnode:testから単体import可能に保つ）に抵触しない（openingTagPlacement.js と同じ）。
 import { LodLevel } from '../viewport.js';
@@ -292,6 +292,10 @@ export function frameInnerSpan(coord1, coord2, jambWidth) {
  *            参照されない（IMPLEMENTED_MECHANISMSの29機構を漏れなく分類する総関数にするための
  *            既定値。呼び出し側が実際にsashFrameSymbolを描く「sash」機構は5件）。
  *          'none'     SCHEMATIC/STANDARD（lodLevelがDETAILでない）。
+ *          'frameOnly' 三方枠（FRAME_ONLY）——lodLevelに関わらず常にこの値を返す意図的な例外。
+ *            三方枠は「枠自身が記号」であり、他機構のような「一般記号（simplified）と詳細記号
+ *            （実寸の方立等）」の2段構えに相当するものが無い（STANDARD/DETAILどちらでも実寸の
+ *            枠断面を描く）。呼び出し側はframeOnlyJambProfilesを使う。innerSpanは使わないためnull。
  * - innerSpan: frameInnerSpanの結果。frame==='none'のときはnull（呼び出し側はspan-shrinkを
  *   行わない＝一般記号は開口全幅のまま）。
  * - pivotPerp: 回転中心のperp座標。**蝶番系は「扉が開く側の壁面」**（openPerpDir＞0ならfaceHi、
@@ -315,6 +319,8 @@ export function planSymbolPlan({ mechanism, lodLevel, coord1, coord2, axisValue,
   const detail = lodLevel === LodLevel.DETAIL;
   const pivotPerp = detail ? Math.min(Math.max(pivotFace, band.lo), band.hi) : pivotFace;
   const leafOutward = openPerpDir || 1;
+  // 三方枠は「STANDARDでも詳細を描く」意図的な例外（frame一覧のJSDoc参照）。lodLevel判定より前に返す。
+  if (mechanism === OpeningMechanism.FRAME_ONLY) return { frame: 'frameOnly', innerSpan: null, pivotPerp, leafOutward };
   if (!detail) return { frame: 'none', innerSpan: null, pivotPerp, leafOutward };
   const frame = HINGED_MECHANISMS.has(mechanism)
     ? 'notched'
@@ -323,6 +329,67 @@ export function planSymbolPlan({ mechanism, lodLevel, coord1, coord2, axisValue,
       : 'sash';
   const innerSpan = frameInnerSpan(coord1, coord2, jambWidth);
   return { frame, innerSpan, pivotPerp, leafOutward };
+}
+
+/**
+ * 三方枠（FRAME_ONLY）の壁厚方向の範囲（唯一の定義箇所）。枠は壁の両仕上げ面を出幅（projection）
+ * ずつ越えて包むため、見込み depth ＝ 壁厚（面間）＋2×出幅 になる——建具モードの「見込み」欄
+ * （自動計算・読取専用）と平面の方立（frameOnlyJambProfiles）が同じ式を共有する。
+ * faceLo/faceHi が無い（ホスト壁が引けない）ときは axisValue±SASH_DEPTH_MM/2 を面の代わりに使う。
+ * @returns {{faceMin:number, faceMax:number, lo:number, hi:number, depth:number}}
+ */
+export function frameOnlyPerpRange({ faceLo, faceHi, axisValue, projection }) {
+  const hasFaces = Number.isFinite(faceLo) && Number.isFinite(faceHi);
+  const f1 = hasFaces ? faceLo : axisValue - SASH_DEPTH_MM / 2;
+  const f2 = hasFaces ? faceHi : axisValue + SASH_DEPTH_MM / 2;
+  const faceMin = Math.min(f1, f2), faceMax = Math.max(f1, f2);
+  const lo = faceMin - projection, hi = faceMax + projection;
+  return { faceMin, faceMax, lo, hi, depth: hi - lo };
+}
+
+/**
+ * 三方枠（FRAME_ONLY）の平面記号——方立2本（開口の両端）を along（壁長さ方向）/perp（壁厚方向）
+ * 座標のポリラインとして返す。見付＝壁長さ方向の寸法（faceWidth）、出幅＝仕上げ面から室内外へ
+ * 出る量／チリ（projection）。木製（profile:'solid'）は無垢材の断面＝閉じた矩形、鋼板
+ * （profile:'bent'）は曲げ加工＝壁面へ戻る短い返し（projectionぶん）を持つ開いたコの字。
+ *
+ * @param {object} p
+ * @param {number} p.coord1 開口のalong座標（小さい側）
+ * @param {number} p.coord2 開口のalong座標（大きい側）
+ * @param {number} p.faceLo 壁面のperp座標（片側。無ければaxisValue±SASH_DEPTH_MM/2で代用）
+ * @param {number} p.faceHi 壁面のperp座標（もう片側）
+ * @param {number} p.axisValue faceLo/faceHiが無いときのフォールバック中心
+ * @param {number} p.faceWidth 見付(mm)
+ * @param {number} p.projection 出幅(mm)
+ * @param {'solid'|'bent'} p.profile frameProfileFor参照
+ * @returns {[{points:{along:number,perp:number}[], closed:boolean}, {points:{along:number,perp:number}[], closed:boolean}]}
+ */
+export function frameOnlyJambProfiles({ coord1, coord2, faceLo, faceHi, axisValue, faceWidth, projection, profile }) {
+  const { faceMin, faceMax, lo: perpLo, hi: perpHi } = frameOnlyPerpRange({ faceLo, faceHi, axisValue, projection });
+  // 幅の狭い開口で方立同士が交差しないよう、見付をopening半幅でクランプする。
+  const fw = Math.min(faceWidth, (coord2 - coord1) / 2);
+
+  function jamb(outer, dir) {
+    const inner = outer + dir * fw;
+    const points = profile === 'solid'
+      ? [
+          { along: outer, perp: perpLo },
+          { along: inner, perp: perpLo },
+          { along: inner, perp: perpHi },
+          { along: outer, perp: perpHi },
+        ]
+      : [
+          { along: outer, perp: faceMin },
+          { along: outer, perp: perpLo },
+          { along: inner, perp: perpLo },
+          { along: inner, perp: perpHi },
+          { along: outer, perp: perpHi },
+          { along: outer, perp: faceMax },
+        ];
+    return { points, closed: profile === 'solid' };
+  }
+
+  return [jamb(coord1, 1), jamb(coord2, -1)];
 }
 
 /**

@@ -36,6 +36,7 @@ export const OpeningMechanism = Object.freeze({
   AWNING_MULTI: 'awningMulti',      // オーニング窓
   GARARI:       'garari',           // ガラリ（固定）
   GLASS_BLOCK:  'glassBlock',       // ガラスブロック
+  FRAME_ONLY:   'frameOnly',        // 三方枠（枠のみ・扉なし）
 });
 
 // 吊元(hingeSide)・開き勝手(swingSide)を持つ機構の集合（唯一の定義箇所）。OpeningEditor.jsx の
@@ -126,7 +127,19 @@ export const IMPLEMENTED_MECHANISMS = new Set([
   OpeningMechanism.AWNING_MULTI,
   OpeningMechanism.GARARI,
   OpeningMechanism.GLASS_BLOCK,
+  OpeningMechanism.FRAME_ONLY,
 ]);
+
+// 「扉のない建具」（枠だけで扉・障子を持たない機構）の集合（唯一の定義箇所）。展開図はこの建具の
+// 内法をアキ（バツ＋「ア キ」）として標記する——建具の姿の前にバツを描かない既存規則
+// （section/sectionEmit.js emitOpenGapMarks）は「扉がある建具」を前提にしたもので、扉が無ければ
+// そこは実際に抜けている＝アキ。
+export const DOORLESS_MECHANISMS = new Set([OpeningMechanism.FRAME_ONLY]);
+
+/** mechanism が「扉のない建具」（DOORLESS_MECHANISMS）か。undefined/null は false。 */
+export function isDoorlessMechanism(mechanism) {
+  return DOORLESS_MECHANISMS.has(mechanism);
+}
 
 export const FITTING_CATALOG = [
   { key: 'singleSwing',   label: '片開き戸',     mechanism: OpeningMechanism.SWING,        wallKinds: ['interior'],            defaultWidth: 800,  defaultHeight: 2000 },
@@ -148,6 +161,9 @@ export const FITTING_CATALOG = [
   { key: 'fireDoorSingle180',   label: '常時開放式防火戸(片開き180度)',  mechanism: OpeningMechanism.FIRE_DOOR, wallKinds: ['interior'], defaultWidth: 900,  defaultHeight: 2000, fireLeaves: 1, fireAngle: 180 },
   { key: 'fireFold90',          label: '常時開放式防火折戸(90度)',       mechanism: OpeningMechanism.FIRE_FOLD, wallKinds: ['interior'], defaultWidth: 1600, defaultHeight: 2000, fireAngle: 90  },
   { key: 'fireFold180',         label: '常時開放式防火折戸(180度)',      mechanism: OpeningMechanism.FIRE_FOLD, wallKinds: ['interior'], defaultWidth: 1600, defaultHeight: 2000, fireAngle: 180 },
+  // 三方枠（枠のみ・扉なし）。placeOpeningWithDefaults の catalog[0] フォールバックに使われないよう
+  // 必ず末尾に置く（「建具」ラジアルの既定は先頭の singleSwing のまま）。
+  { key: 'threeSidedFrame', label: '三方枠', mechanism: OpeningMechanism.FRAME_ONLY, wallKinds: ['interior', 'exterior'], defaultWidth: 800, defaultHeight: 2000 },
 ];
 
 export const WINDOW_CATALOG = [
@@ -179,6 +195,11 @@ export const WINDOW_CATALOG = [
 ];
 
 // 建具記号（材質×種別）。マスタは1箇所のみ（fixtureType の意味拡張。.claude/opening-model.md）。
+// mechanism を持つ記号（WF/SF/SSF）はその機構専用のスコープ記号（getFixtureSymbols/
+// defaultFixtureSymbolFor 参照）。mechanism を持たない記号はスコープ無し＝FRAME_ONLY以外の
+// 全機構で共通に使う。
+// profile は平面記号の断面の描き分け（frameOnlyJambProfiles 参照）: 'solid'=木材の無垢断面
+// （閉じた矩形）、'bent'=鋼板の曲げ加工（開いたコの字＋返し）。
 export const FIXTURE_SYMBOLS = [
   { key: 'AW', label: 'AW（アルミ製窓）',     category: 'window'  },
   { key: 'JW', label: 'JW（樹脂製窓）',       category: 'window'  },
@@ -187,6 +208,9 @@ export const FIXTURE_SYMBOLS = [
   { key: 'AD', label: 'AD（アルミ製ドア）',   category: 'fitting' },
   { key: 'SD', label: 'SD（スチール製ドア）', category: 'fitting' },
   { key: 'WD', label: 'WD（木製建具）',       category: 'fitting' },
+  { key: 'WF',  label: 'WF（木製三方枠）',          category: 'fitting', mechanism: OpeningMechanism.FRAME_ONLY, profile: 'solid' },
+  { key: 'SF',  label: 'SF（鉄製三方枠）',          category: 'fitting', mechanism: OpeningMechanism.FRAME_ONLY, profile: 'bent'  },
+  { key: 'SSF', label: 'SSF（ステンレス製三方枠）', category: 'fitting', mechanism: OpeningMechanism.FRAME_ONLY, profile: 'bent'  },
 ];
 
 // 建具表「材料・ガラス」欄の記号別初期値。AW/AD=アルミ、WD/WW=木質、JW=樹脂、SW/SD=スチール
@@ -199,7 +223,19 @@ export const DEFAULT_MATERIALS = {
   JW: '樹脂',
   SW: 'スチール',
   SD: 'スチール',
+  WF: '木製',
+  SF: 'スチール',
+  SSF: 'ステンレス',
 };
+
+// 三方枠の見付・出幅の既定値(mm)。ユーザーが編集可能（Opening.frameFaceWidth/frameProjection）。
+export const DEFAULT_FRAME_FACE_MM = 20;      // 見付
+export const DEFAULT_FRAME_PROJECTION_MM = 12; // 壁面からの出幅（チリ）
+
+/** 建具記号の平面断面プロファイル（frameOnlyJambProfiles参照）。未定義の記号は'solid'。唯一の定義箇所。 */
+export function frameProfileFor(symbol) {
+  return FIXTURE_SYMBOLS.find(f => f.key === symbol)?.profile ?? 'solid';
+}
 
 /** wallKind ('interior' | 'exterior') に応じた建具カタログの絞り込み。 */
 export function getFittingOptions(wallKind) {
@@ -225,9 +261,16 @@ export function findCatalogEntry(category, subType) {
   return list.find(o => o.key === subType) ?? null;
 }
 
-/** category ('window' | 'fitting') に一致する建具記号一覧。 */
-export function getFixtureSymbols(category) {
-  return FIXTURE_SYMBOLS.filter(f => f.category === category);
+/**
+ * category ('window' | 'fitting') に一致する建具記号一覧。mechanism が FRAME_ONLY のときは
+ * 三方枠専用記号（WF/SF/SSF）のみ、それ以外（未指定含む）はスコープ無しの記号のみを返す
+ * （mechanism省略時は従来どおり全スコープ無し記号＝既存呼び出しの互換を維持）。
+ */
+export function getFixtureSymbols(category, mechanism) {
+  if (mechanism === OpeningMechanism.FRAME_ONLY) {
+    return FIXTURE_SYMBOLS.filter(f => f.category === category && f.mechanism === OpeningMechanism.FRAME_ONLY);
+  }
+  return FIXTURE_SYMBOLS.filter(f => f.category === category && f.mechanism == null);
 }
 
 /** 建具記号未設定（旧データ）時のカテゴリ既定記号。唯一の定義箇所。 */
@@ -235,8 +278,9 @@ export function defaultFixtureSymbol(category) {
   return category === 'window' ? 'AW' : 'WD';
 }
 
-/** 新規配置時の既定建具記号（wallKind も加味）。 */
-export function defaultFixtureSymbolFor(category, wallKind) {
+/** 新規配置時の既定建具記号（wallKind も加味）。mechanism が FRAME_ONLY のときは wallKind 不問で 'WF'。 */
+export function defaultFixtureSymbolFor(category, wallKind, mechanism) {
+  if (mechanism === OpeningMechanism.FRAME_ONLY) return 'WF';
   if (category === 'window') return 'AW';
   return wallKind === 'exterior' ? 'AD' : 'WD';
 }

@@ -3,8 +3,20 @@ import assert from 'node:assert/strict';
 import {
   defaultOpeningHeight, defaultMaterialGlassFor, FIXTURE_SYMBOLS,
   findCatalogEntry, FITTING_CATALOG, WINDOW_CATALOG, IMPLEMENTED_MECHANISMS, OpeningMechanism,
-  normalizeSubType, hingeSideMatters,
+  normalizeSubType, hingeSideMatters, getFixtureSymbols, defaultFixtureSymbolFor, frameProfileFor,
+  DEFAULT_FRAME_FACE_MM, DEFAULT_FRAME_PROJECTION_MM, isDoorlessMechanism, DOORLESS_MECHANISMS,
 } from './openingCatalog.js';
+
+// ---- 「扉のない建具」判定（展開図のアキ標記の根拠）----
+test('isDoorlessMechanism: FRAME_ONLY(三方枠)だけがtrue、扉のある機構・未指定はfalse', () => {
+  assert.equal(isDoorlessMechanism(OpeningMechanism.FRAME_ONLY), true);
+  assert.equal(isDoorlessMechanism(OpeningMechanism.SWING), false);
+  assert.equal(isDoorlessMechanism(OpeningMechanism.SLIDE_DOUBLE), false);
+  assert.equal(isDoorlessMechanism(OpeningMechanism.FIXED), false, 'FIX窓はガラスがあるため「抜け」ではない');
+  assert.equal(isDoorlessMechanism(undefined), false);
+  assert.equal(isDoorlessMechanism(null), false);
+  assert.deepEqual([...DOORLESS_MECHANISMS], [OpeningMechanism.FRAME_ONLY]);
+});
 
 test('defaultOpeningHeight: カタログに存在する種別はdefaultHeightを返す', () => {
   assert.equal(defaultOpeningHeight('window', 'doubleSliding'), 1170);
@@ -35,6 +47,59 @@ test('FIXTURE_SYMBOLS: WW（木製窓）が窓カテゴリに存在する', () =
   const ww = FIXTURE_SYMBOLS.find(f => f.key === 'WW');
   assert.ok(ww);
   assert.equal(ww.category, 'window');
+});
+
+// ---- 三方枠（WF/SF/SSF）: 記号のスコープ・平面断面プロファイル・既定寸法 ----
+test('FITTING_CATALOG: 末尾に三方枠(threeSidedFrame・mechanism:FRAME_ONLY)が存在する（catalog[0]フォールバック回避のため末尾必須）', () => {
+  assert.equal(FITTING_CATALOG[FITTING_CATALOG.length - 1].key, 'threeSidedFrame');
+  assert.equal(FITTING_CATALOG[FITTING_CATALOG.length - 1].mechanism, OpeningMechanism.FRAME_ONLY);
+  assert.notEqual(FITTING_CATALOG[0].key, 'threeSidedFrame');
+});
+
+test('getFixtureSymbols: mechanism省略時は従来どおりスコープ無しの記号のみ返す（WF/SF/SSFを含まない）', () => {
+  const symbols = getFixtureSymbols('fitting').map(f => f.key);
+  assert.deepEqual(symbols, ['AD', 'SD', 'WD']);
+});
+
+test('getFixtureSymbols: mechanism===FRAME_ONLYは三方枠専用記号(WF/SF/SSF)のみ返す', () => {
+  const symbols = getFixtureSymbols('fitting', OpeningMechanism.FRAME_ONLY).map(f => f.key);
+  assert.deepEqual(symbols, ['WF', 'SF', 'SSF']);
+});
+
+test('getFixtureSymbols: FRAME_ONLY以外の機構を渡してもmechanism省略時と同じ（スコープ無しの記号のみ）', () => {
+  const symbols = getFixtureSymbols('fitting', OpeningMechanism.SWING).map(f => f.key);
+  assert.deepEqual(symbols, ['AD', 'SD', 'WD']);
+});
+
+test('defaultFixtureSymbolFor: mechanism===FRAME_ONLYはwallKind不問で常にWF', () => {
+  assert.equal(defaultFixtureSymbolFor('fitting', 'interior', OpeningMechanism.FRAME_ONLY), 'WF');
+  assert.equal(defaultFixtureSymbolFor('fitting', 'exterior', OpeningMechanism.FRAME_ONLY), 'WF');
+});
+
+test('defaultFixtureSymbolFor: mechanism省略時は従来どおりwallKindで分岐する', () => {
+  assert.equal(defaultFixtureSymbolFor('fitting', 'interior'), 'WD');
+  assert.equal(defaultFixtureSymbolFor('fitting', 'exterior'), 'AD');
+});
+
+test('frameProfileFor: WFはsolid（木材の無垢断面）、SF/SSFはbent（鋼板の曲げ加工）', () => {
+  assert.equal(frameProfileFor('WF'), 'solid');
+  assert.equal(frameProfileFor('SF'), 'bent');
+  assert.equal(frameProfileFor('SSF'), 'bent');
+});
+
+test('frameProfileFor: 未知の記号はsolidへフォールバック', () => {
+  assert.equal(frameProfileFor('XX'), 'solid');
+});
+
+test('DEFAULT_MATERIALS: WF=木製・SF=スチール・SSF=ステンレス', () => {
+  assert.equal(defaultMaterialGlassFor('WF'), '木製');
+  assert.equal(defaultMaterialGlassFor('SF'), 'スチール');
+  assert.equal(defaultMaterialGlassFor('SSF'), 'ステンレス');
+});
+
+test('三方枠の見付・出幅の既定値は20mm/12mm', () => {
+  assert.equal(DEFAULT_FRAME_FACE_MM, 20);
+  assert.equal(DEFAULT_FRAME_PROJECTION_MM, 12);
 });
 
 // ================================================================
