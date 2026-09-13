@@ -29,6 +29,7 @@ import {
   translatePrimitive, collectGridCLs, appendRoomNameFrame, dedupeCoincidentLines,
   clipPrimitivesToXRange,
 } from './elevationPrimitives.js';
+import { buildBandLayers } from './section/sectionBandLayers.js';
 
 /**
  * 帯のローカルy/z原点と階のdatumのズレ（mm）。**帯のローカル z=0 ≡ その帯の部屋の実効FL**という
@@ -804,11 +805,15 @@ export function buildRoomBand(room, graph, ctx = {}) {
   // 壁の輪郭は**他の3種の帯とまったく同じ共通経路**（appendBandCutContent→buildCutContent）
   // へ任せる。通常の部屋帯の層スタックは自階1層だけ——上階・下階が無いだけで、切断線の位置・
   // 探査延長・見えがかりの距離判定・アキは多層帯と同一の処理を通る。
-  appendBandCutContent(primitives, room, graph, layout, [{ graph, floorZMm: 0, role: 'self' }],
+  const layers = buildBandLayers(graph);
+  appendBandCutContent(primitives, room, graph, layout, layers,
     { endExtendMm: ctx.wallLessEndExtendModelMm,
       stairOver: stairContributionOverRoom(room, graph, ctx.solids?.floorHeightMm) });
   return finalizeBand(room, graph, primitives, {
     faceCount: faces.length, chDimX: layout.chDimX, prevBoundaryHi: layout.prevBoundaryHi,
     triOffsetMm: ctx.triangleOffsetModelMm, nameGapModelMm: ctx.nameGapModelMm,
+    // heightUnits（Phase 7b-1）: layers.lengthへ統一——通常帯は自階1層だけなので常に1
+    // （旧実装はheightUnits省略＝finalizeBandの既定値1と同値。他3種の帯と同じ式で揃える）。
+    heightUnits: layers.length,
   });
 }

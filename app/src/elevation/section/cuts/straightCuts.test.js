@@ -9,6 +9,7 @@ import { makeProbeContext } from '../sectionProbe.js';
 import { buildColumns } from '../sectionEngine.js';
 import { stairPrimitivesForCut } from '../sectionStair.js';
 import { straightCuts } from './straightCuts.js';
+import { buildBandLayers } from '../sectionBandLayers.js';
 
 function makeGraph(name = 'p1') {
   const plane = new Plane(name, 0, `${name}階`, 1, 1);
@@ -40,7 +41,7 @@ test('【WP-E6】straightCuts: STRAIGHTはseqNo [1,2,3,4] の4件を返す', () 
   const { room, stair } = makeStraightFixture(graph);
   const faces = composeRoomFaces(room, graph);
 
-  const result = straightCuts(stair, faces, graph, OPTS);
+  const result = straightCuts(stair, faces, graph, { ...OPTS, layers: buildBandLayers(graph) });
   assert.ok(result, 'STRAIGHT+実測+floorHeightありでnullにならないはず');
   assert.deepEqual(result.cuts.map(c => c.seqNo), ['1', '2', '3', '4']);
 });
@@ -51,7 +52,7 @@ test('【WP-E6】straightCuts: seq2(側面プロファイル)は断面ジグザ�
   const { room, stair } = makeStraightFixture(graph);
   const faces = composeRoomFaces(room, graph);
 
-  const result = straightCuts(stair, faces, graph, OPTS);
+  const result = straightCuts(stair, faces, graph, { ...OPTS, layers: buildBandLayers(graph) });
   const seq2 = result.cuts.find(c => c.seqNo === '2');
   const probeCtx = makeProbeContext(seq2.layers);
   const columns = buildColumns(seq2, probeCtx);
@@ -67,7 +68,7 @@ test('【WP-E6】straightCuts: 全cutのzRangeが0〜chUpperAbsMm(2層分)にな
   const { room, stair } = makeStraightFixture(graph);
   const faces = composeRoomFaces(room, graph);
 
-  const result = straightCuts(stair, faces, graph, OPTS);
+  const result = straightCuts(stair, faces, graph, { ...OPTS, layers: buildBandLayers(graph) });
   for (const cut of result.cuts) {
     assert.equal(cut.zRange.loZ, 0);
     assert.equal(cut.zRange.hiZ, OPTS.chUpperAbsMm);
@@ -80,7 +81,7 @@ test('【WP-E6】straightCuts: STRAIGHT_LANDINGは踊り場壁が無ければseq
   const { room, stair } = makeStraightFixture(graph, { type: StairType.STRAIGHT_LANDING, sections: [12, 1, 2] });
   const faces = composeRoomFaces(room, graph);
 
-  const result = straightCuts(stair, faces, graph, OPTS);
+  const result = straightCuts(stair, faces, graph, { ...OPTS, layers: buildBandLayers(graph) });
   assert.ok(result);
   assert.deepEqual(result.cuts.map(c => c.seqNo), ['1', '2', '4', '5']);
   assert.equal(result.contribution.landings.length, 1, '踊り場自体(Landing)はcontributionに含まれるはず');
@@ -96,7 +97,7 @@ test('【WP-E6】straightCuts: 踊り場壁が実在すればseq3(踊り場面)�
   // landingWorld=W(tRun1,0.5)の世界y座標=upDirection='up'なのでtが進むほどyは減るため
   // landing.runHi側)を確定する（straightCuts自身が導出した値をそのまま使う——ハードコードした
   // 座標だと許容差(300mm)を外れてfindLandingWallが壁を見つけられない）。
-  const pass1 = straightCuts(stair, faces, graph, OPTS);
+  const pass1 = straightCuts(stair, faces, graph, { ...OPTS, layers: buildBandLayers(graph) });
   const landingZ = pass1.contribution.landings[0].z;
   const landingWorldY = pass1.contribution.landings[0].runHi;
 
@@ -106,7 +107,7 @@ test('【WP-E6】straightCuts: 踊り場壁が実在すればseq3(踊り場面)�
   const x1 = graph.centerLines.find(cl => cl.centerLineType === CenterLineType.VERTICAL && cl.value === 1000);
   graph.addWall(ym, 50, false, x0, 0, x1, 0, { isRoomWall: false, isExteriorWall: false });
 
-  const result = straightCuts(stair, faces, graph, OPTS);
+  const result = straightCuts(stair, faces, graph, { ...OPTS, layers: buildBandLayers(graph) });
   assert.ok(result);
   assert.deepEqual(result.cuts.map(c => c.seqNo), ['1', '2', '3', '4', '5'],
     `踊り場位置に実壁があればseq3が挿入されるはず（実際:${JSON.stringify(result.cuts.map(c => c.seqNo))}）`);
@@ -132,7 +133,7 @@ test('【失敗系・WP-E6】straightCuts: WINDING(扇形レーンを持つ回�
   stair.setField('type', StairType.WINDING);
   const faces = composeRoomFaces(room, graph);
 
-  assert.equal(straightCuts(stair, faces, graph, OPTS), null);
+  assert.equal(straightCuts(stair, faces, graph, { ...OPTS, layers: buildBandLayers(graph) }), null);
 });
 
 test('【失敗系・WP-E6】straightCuts: SWITCHBACKはnullを返す（switchbackCuts.jsの担当）', () => {
@@ -141,7 +142,7 @@ test('【失敗系・WP-E6】straightCuts: SWITCHBACKはnullを返す（switchba
   stair.setField('type', StairType.SWITCHBACK);
   const faces = composeRoomFaces(room, graph);
 
-  assert.equal(straightCuts(stair, faces, graph, OPTS), null);
+  assert.equal(straightCuts(stair, faces, graph, { ...OPTS, layers: buildBandLayers(graph) }), null);
 });
 
 // ---- 失敗系: stair.cellsが空・floorHeight未確定はnull ----
@@ -151,7 +152,7 @@ test('【失敗系・WP-E6】straightCuts: stair.cellsが空はnullを返す', (
   stair.setCells(new Set());
   const faces = composeRoomFaces(room, graph);
 
-  assert.equal(straightCuts(stair, faces, graph, OPTS), null);
+  assert.equal(straightCuts(stair, faces, graph, { ...OPTS, layers: buildBandLayers(graph) }), null);
 });
 
 test('【失敗系・WP-E6】straightCuts: opts.floorHeightがnullはnullを返す', () => {
@@ -160,6 +161,23 @@ test('【失敗系・WP-E6】straightCuts: opts.floorHeightがnullはnullを返�
   const faces = composeRoomFaces(room, graph);
 
   assert.equal(straightCuts(stair, faces, graph, { chUpperAbsMm: 4800 }), null);
+});
+
+// QA指摘F5: opts.layersは必須（本番はbuildStairBandが必ず渡す。opts.upperGraphから作り直す
+// フォールバックは本番に到達しない死コードだったため削除した）。未指定・非配列は既存の
+// 失敗系規約（対象外条件はnull）にならいnullを返す。
+test('【失敗系・QA指摘F5】straightCuts: opts.layers未指定はnull', () => {
+  const graph = makeGraph();
+  const { room, stair } = makeStraightFixture(graph);
+  const faces = composeRoomFaces(room, graph);
+  assert.equal(straightCuts(stair, faces, graph, OPTS), null, 'opts.layers省略時はOPTS単体でnull');
+});
+
+test('【失敗系・QA指摘F5】straightCuts: opts.layersが配列でなければnull', () => {
+  const graph = makeGraph();
+  const { room, stair } = makeStraightFixture(graph);
+  const faces = composeRoomFaces(room, graph);
+  assert.equal(straightCuts(stair, faces, graph, { ...OPTS, layers: null }), null);
 });
 
 // ==== QA実機フィードバック修正: dirSignは部屋のコンパス向き（letterOf基準）ではなく階段自身の
@@ -172,7 +190,7 @@ test('【QA修正・実機フィードバック】straightCuts: seq2の面は上
   stair.setField('upDirection', 'down'); // 部屋の向きは変えず歩行方向だけ反転する
   const faces = composeRoomFaces(room, graph);
 
-  const result = straightCuts(stair, faces, graph, OPTS);
+  const result = straightCuts(stair, faces, graph, { ...OPTS, layers: buildBandLayers(graph) });
   assert.ok(result);
   const seq2 = result.cuts.find(c => c.seqNo === '2');
   const entryWorld = 0;    // upDirection='down'はcoordAt(t)=b.y1+t*(b.y2-b.y1)なのでt=0はb.y1=0

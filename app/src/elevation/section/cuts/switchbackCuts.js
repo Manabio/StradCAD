@@ -261,7 +261,12 @@ export function buildMidWallFace(wall, inward, loWorld, hiWorld, faces, hasRealW
  * @param {import('@core').Stair} stair
  * @param {object[]} faces - composeRoomFaces(stairRoom, graph) の結果
  * @param {object} graph - 設置階のgraph
- * @param {{floorHeight:number, chUpperAbsMm:number, chLowerMm:number, upperGraph?:object}} opts
+ * @param {{floorHeight:number, chUpperAbsMm:number, chLowerMm:number, upperGraph?:object,
+ *   layers:object[]}} opts
+ *   layers … 呼び出し側（elevationStair.jsのbuildStairBand）が`buildBandLayers`で1度組んだ層。
+ *   **必須**（QA指摘F5: 本番はbuildStairBandが必ず渡すため、opts.upperGraphから作り直す
+ *   「第2の入口」は本番に到達しない死コードだった）。配列でなければ既存の失敗系規約
+ *   （対象外条件はnullを返す）にならい、他の未確定条件と同じくnullを返す。
  * @returns {{cuts:object[], wEntry:object, wLanding:object, wOut1:object, wOut2:object,
  *   wall:import('@core').Wall|null, kneeDrop:object|null, params:object, landingAbs:number,
  *   isSteel:boolean, contribution:object|null}|null}
@@ -343,8 +348,8 @@ export function switchbackCuts(stair, faces, graph, opts = {}) {
 
   const contribution = stairContribution(stair, graph, floorHeight);
 
-  const layers = [{ graph, floorZMm: 0, role: 'self' }];
-  if (opts.upperGraph) layers.push({ graph: opts.upperGraph, floorZMm: floorHeight, role: 'above' });
+  if (!Array.isArray(opts.layers)) return null; // QA指摘F5: opts.layersは必須（本番は必ず渡す）
+  const layers = opts.layers;
 
   const zRangeUpper = { loZ: 0, hiZ: ceilTopAbs };
 

@@ -41,6 +41,7 @@ import { makeProbeContext } from './section/sectionProbe.js';
 import { buildSectionFigure } from './section/sectionEngine.js';
 import { buildCutContent, upperFloorCutWallEndsOf } from './section/sectionContent.js';
 import { cutDrawRange, localXOf } from './section/sectionTypes.js';
+import { layerDirectlyAboveSelf } from './section/sectionLayerStack.js';
 import {
   emitLine, splitGapMarksByStair, dashHorizontalsBehindStair,
   joinToStairProfile,
@@ -685,9 +686,13 @@ export function stairFaceSequence(stair, faces, graph, opts = {}) {
   // WP-E5b: content生成はエンジン経由（makeProbeContext→cutごとにcontentForCut）。
   // 全cutが同一のlayers参照を共有する（switchbackCuts.js参照）ため、probeCtxは1回だけ作る。
   const probeCtx = makeProbeContext(cuts[0].layers);
-  // 項目A: above層（role!=='self'）があれば実Room有無で1F天井高さ/上階天井を判定する
+  // 項目A: 自階の直上の層があれば実Room有無で1F天井高さ/上階天井を判定する
   // （buildLaneFloorAndCeiling）。無ければフォールバック（挙動不変）。
-  const aboveLayer = cuts[0].layers.find(l => l.role !== 'self') ?? null;
+  // Phase 7b-2: 旧`layers.find(l => l.role !== 'self')`は配列先頭の非自階層を無条件に拾うため
+  // below層しか無い帯やN層（3層以上）で「自階の直上」ではない層を誤って選びうる——
+  // 一般規則（floorZMmがself超で最小）で選ぶ`layerDirectlyAboveSelf`へ置換（layers.length===2の
+  // 現行データでは常に同じ結果。3層以上でのみ違いが出る＝実データ未経由。§5.12「Phase 7設計」）。
+  const aboveLayer = layerDirectlyAboveSelf(cuts[0].layers);
   // 1つの切断 → その面のentryのcontent系フィールド（content＋上階のはり出し）。
   // はり出し（upperOverhang/upperFloorZ）はcontentと同じ探査窓から出るため、同じ呼び出しで受ける。
   const contentFields = (cut, zRef = null, drawFloorProfile = null) =>

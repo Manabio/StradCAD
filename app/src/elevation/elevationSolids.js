@@ -19,6 +19,7 @@ import {
   structuralContribution, structuralPrimitivesForCut,
   structuralColumnContribution, structuralColumnPrimitivesForCut,
 } from './section/sectionStructure.js';
+import { buildBandLayers } from './section/sectionBandLayers.js';
 
 /**
  * face（buildRoomFacesの1件）→ 断面エンジンの SectionCut 相当のアダプタ。
@@ -45,10 +46,8 @@ export function faceSectionCut(face, opts) {
   const CH = opts.ceilingHeight;
   if (!Number.isFinite(CH) || CH <= 0) return null;
 
-  const layers = [{ graph: opts.graph, floorZMm: 0, role: 'self' }];
-  if (opts.upperGraph && Number.isFinite(opts.floorHeightMm)) {
-    layers.push({ graph: opts.upperGraph, floorZMm: opts.floorHeightMm, role: 'above' });
-  }
+  const layers = buildBandLayers(opts.graph, opts.upperGraph
+    ? { above: [{ graph: opts.upperGraph, floorHeightMm: opts.floorHeightMm }] } : {});
   return {
     seqNo: 'face',
     line: { isVertical: face.isVertical, axisValue, lo: face.lo, hi: face.hi },

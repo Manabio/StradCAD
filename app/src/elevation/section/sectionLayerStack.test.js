@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import { RoomFeature } from '@core';
 import {
   isRealRoom, orderLayerStack, baseLayerOf, layerOwningZ,
-  layersAboveOf, compareLayerPriority, resolveSightlineTopZ,
+  layersAboveOf, compareLayerPriority, resolveSightlineTopZ, layerDirectlyAboveSelf,
 } from './sectionLayerStack.js';
 
 // LayerInfo（probeColumnが層ごとに作る「その列でのその層の床天井」）の最小リテラル。
@@ -138,4 +138,72 @@ test('【失敗系】resolveSightlineTopZ: 上位層のceilZが無ければfallb
 test('【失敗系】resolveSightlineTopZ: 上位層が無い（最上階）なら自層の天井のまま', () => {
   const self = info(0);
   assert.equal(resolveSightlineTopZ(orderLayerStack([self]), self, () => null, 9999), 2400);
+});
+
+// ---- layerDirectlyAboveSelf（Phase 7b-2是正・QA指摘F1: baseLayerOf/layersAboveOfを合成する
+// 薄いアダプタ。role名は見ない・εはlayersAboveOf経由） ----
+// 生の層（{graph, floorZMm, role?}）のリテラル。roleは記録用の識別子でしかなく、
+// layerDirectlyAboveSelf自身はrole名を一切読まない（自階の特定はbaseLayerOf＝z原点最近傍）。
+function rawLayer(floorZMm, role) {
+  return { graph: {}, floorZMm, role };
+}
+
+test('layerDirectlyAboveSelf: above2層のうちfloorZMmが小さい方（自階の直上）を選ぶ', () => {
+  const self = rawLayer(0, 'self');
+  const above1 = rawLayer(2900, 'above');
+  const above2 = rawLayer(5800, 'above2');
+  assert.equal(layerDirectlyAboveSelf([self, above1, above2]), above1);
+});
+
+test('layerDirectlyAboveSelf: 配列の並び順を入れ替えても同じ層を選ぶ（role名・配列順に依存しない）', () => {
+  const self = rawLayer(0, 'self');
+  const above1 = rawLayer(2900, 'above');
+  const above2 = rawLayer(5800, 'above2');
+  const perms = [
+    [self, above1, above2], [self, above2, above1], [above1, self, above2],
+    [above2, above1, self], [above1, above2, self], [above2, self, above1],
+  ];
+  for (const perm of perms) {
+    assert.equal(layerDirectlyAboveSelf(perm), above1, `並び[${perm.map(l => l.floorZMm)}]で結果が変わった`);
+  }
+});
+
+test('layerDirectlyAboveSelf: below層しか無ければnull（自階より上の層が無い）', () => {
+  const self = rawLayer(0, 'self');
+  const below = rawLayer(-2900, 'below');
+  assert.equal(layerDirectlyAboveSelf([self, below]), null);
+});
+
+test('layerDirectlyAboveSelf: above/below混在でも自階より上だけから選ぶ', () => {
+  const self = rawLayer(0, 'self');
+  const below = rawLayer(-2900, 'below');
+  const above = rawLayer(2900, 'above');
+  assert.equal(layerDirectlyAboveSelf([below, self, above]), above);
+});
+
+// role名を見ないため「self層が無い」という概念自体が無い——1層しかない配列は、その1層が
+// baseLayerOf（z原点最近傍）として自階役を担い、自階より上の層が無い＝nullになる
+// （どの層をroleで'self'と呼んでいても答えは変わらない）。
+test('【失敗系】layerDirectlyAboveSelf: 層が1件しかなければ（自階より上の層が無い）null', () => {
+  const above = rawLayer(2900, 'above');
+  assert.equal(layerDirectlyAboveSelf([above]), null);
+});
+
+test('【失敗系】layerDirectlyAboveSelf: 層が0件・未指定でも例外を投げずnull', () => {
+  assert.equal(layerDirectlyAboveSelf([]), null);
+  assert.equal(layerDirectlyAboveSelf(undefined), null);
+});
+
+// QA指摘5-2: 自階より上に同一floorZMmの層が2つあるとき、決めた規則（入力配列内で先に現れた
+// ものを返す＝orderLayerStackの安定ソートが同値を入力順のまま残す）を固定する。
+test('【決めた規則】layerDirectlyAboveSelf: 自階より上に同一floorZMmの層が2つあれば、入力配列内で先に現れた方を返す', () => {
+  const self = rawLayer(0, 'self');
+  const aboveFirst = rawLayer(2900, 'above-first');
+  const aboveSecond = rawLayer(2900, 'above-second'); // 同一floorZMm・別オブジェクト
+  assert.equal(layerDirectlyAboveSelf([self, aboveFirst, aboveSecond]), aboveFirst,
+    '入力配列で先に現れたaboveFirstを返すはず');
+  // 入力順を入れ替えると「先に現れた方」も入れ替わる（この規則自体は入力順に依存することの明示。
+  // 一般のINV2「配列順不変」はfloorZMmが相異なる場合の話で、この退化例（同一floorZMm）は対象外）。
+  assert.equal(layerDirectlyAboveSelf([self, aboveSecond, aboveFirst]), aboveSecond,
+    '入れ替えれば先に現れるaboveSecondを返すはず（同一floorZMmの退化例は入力順で決まる）');
 });

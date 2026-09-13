@@ -26,6 +26,7 @@ import { layoutBandFaces, finalizeBand } from './elevationBand.js';
 // R: 矩形重なり探索部（findOverlappingVoidRoom内の実装）はelevationVoid.jsのfindOverlappingRoomへ
 // 切り出し共有した（elevationVoid.js→elevationStair.jsの逆importは無いため循環しない）。
 import { findOverlappingRoom } from './elevationVoid.js';
+import { buildBandLayers } from './section/sectionBandLayers.js';
 
 const CORNER_EPS = 1; // mm — stairPortEdges(世界座標)とfaceのaxisCL一致判定の許容差
 
@@ -146,10 +147,21 @@ export function buildStairBand(stairRoom, graph, upperGraph, ctx = {}) {
   const wallFilter = stairBandWallFilter(stair, graph);
   const composedFaces = composeRoomFaces(stairRoom, graph, { keepWallLessFaces: true, wallFilter });
   const drawableFaces = composedFaces.filter(f => f.kind === 'step' || f.hasRealWall !== false);
+  // 層スタックはbuildBandLayers（Phase 7）で1度だけ組み、cut表（switchbackCuts/straightCuts）へ
+  // opts.layers経由で渡す——upperGraph・floorHeightの両方が非nullのときだけabove層を積む
+  // （chUpperAbsMmはこの条件のときだけ解決されるため、下のheightUnits=layers.lengthと
+  // 同じ条件になる）。
+  // QA指摘F3: floorHeightが非有限（NaN。null/undefinedではないため上のガードは通過する）だと、
+  // buildBandLayers内部のNumber.isFinite判定でabove層の追加自体が打ち切られ1層へ退避する
+  // （旧実装はfloorZMm:NaNの層をそのまま2層目に混入させていた）。実データではfloorHeightは
+  // floorHeightAbove/Below（plane.elevationの差）から来るため非有限にはならず、この分岐差は
+  // 到達しない（ASSUMED: 実データでの発生は未確認）。
+  const layers = buildBandLayers(graph,
+    upperGraph && floorHeight != null ? { above: [{ graph: upperGraph, floorHeightMm: floorHeight }] } : {});
   const sequence = (stair && composedFaces.length > 0 && chUpperAbsMm != null)
     ? stairFaceSequence(stair, composedFaces, graph, {
         floorHeight, chUpperAbsMm, chLowerMm: roomCeilingHeight(graph, stairRoom).mm,
-        upperGraph,
+        upperGraph, layers,
         // content側の「壁のない端部」延長量。図形側（layoutBandFaces→buildFaceFigure）へ渡すのと
         // 同じctxの値をそのまま使い、同じ端で図形とcontentの線の長さを揃える。
         wallLessEndExtendModelMm: ctx.wallLessEndExtendModelMm,
@@ -245,7 +257,9 @@ export function buildStairBand(stairRoom, graph, upperGraph, ctx = {}) {
     for (const p of buildSwitchbackSectionPrimitives(stair, graph, floorHeight)) primitives.push(p);
   }
 
-  const heightUnits = (upperGraph && floorHeight != null && chUpperAbsMm != null) ? 2 : 1;
+  // heightUnits（Phase 7b-1）: layers.lengthへ統一——上のlayersと同じ条件（upperGraph・
+  // floorHeightの両方が非null）でabove層が積まれ、それがそのまま「2層帯か1層帯か」になる。
+  const heightUnits = layers.length;
 
   // R1: 部屋名枠＋左右引出線＋留め三角・bounds・floorOffset平行移動はelevationBand.jsの
   // finalizeBandへ共通化（buildRoomBandと共有。以前は階段帯だけappendRoomNameFrameが欠落していた）。

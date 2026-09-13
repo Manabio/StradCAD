@@ -28,6 +28,7 @@ import { cutPlaneOffsetMm, faceCutLine, faceViewSign,
 import { reachableLocalRanges } from './section/sectionVisibility.js';
 import { buildColumns } from './section/sectionEngine.js';
 import { structuralColumnContribution } from './section/sectionStructure.js';
+import { buildBandLayers } from './section/sectionBandLayers.js';
 
 // 2つのワールド矩形が重なるか（面積0の接触は重なりに含めない）。
 // elevationStair.jsのfindOverlappingVoidRoomと同じ実装（R: 矩形重なり探索部を共有ヘルパへ切り出し）。
@@ -188,7 +189,7 @@ function upperStoreySegments(face, upperGraph, ctx) {
  * 1つのMapで持つ。
  */
 function makeUpperStoreyContext(layout, upperGraph, floorHeightMm, upperCH) {
-  const layers = [{ graph: upperGraph, floorZMm: floorHeightMm, role: 'self' }];
+  const layers = buildBandLayers(upperGraph, { selfFloorZMm: floorHeightMm });
   const probeCtx = makeProbeContext(layers);
   const columnSolids = structuralColumnContribution(layers);
   const hiZ = floorHeightMm + upperCH;
@@ -429,21 +430,19 @@ export function buildVoidBand(voidRoom, graph, lowerGraph, ctx = {}) {
   let dropMm = 0;
   let lowerCeilZ = null;      // 下階層の天井z（帯FL基準）。gateの材料
   let overhangByFace = null;  // 面 → 下階の平面が面の端より外へ続く量（面ローカル）
+  // 層スタックは`buildBandLayers`が1箇所で組む（Phase 7）。dropMm・lowerCeilZは**層から読む**——
+  // 「設置階下階のFLが設置階のFL以上」のクランプ（旧QA修正）・「下階Roomが引けなければ
+  // はり出しを一切認めない」（下階の天井が分からないまま面の外を描くと閉じる線の根拠が無い）は
+  // buildBandLayers側の規則（below.dropMm<=0で打ち切り・anchorRoom無しはceilZMm無し）と同値。
+  let layers = buildBandLayers(graph);
   if (hasLower) {
     const lowerRoom = findLowerRoom(voidRoom, graph, lowerGraph);
-    const flDiffMm = lowerRoom
-      ? lowerGraph.effectiveFloorLevel(lowerRoom) - lowerGraph.floorDatum
-      : 0;
-    // QA修正: 下階Roomの沈み床（flDiffMmが大きく負）でfloorHeightBelowMm+flDiffMmが0以下になりうる。
-    // 物理的に「設置階下階のFLが設置階のFL以上」という値は2層表現として意味を持たないため、
-    // 0でクランプする（クランプせず負値のまま使うと、床が天井より上に来る空白の2層帯になる）。
-    dropMm = Math.max(0, floorHeightBelowMm + flDiffMm);
-    // 下階層の天井z（gateの材料）。下階Roomが引けなければ材料が無い＝**はり出しを一切認めない**
-    // （階段帯のような「材料が無ければ素通り」ではなく全か無か——下階の天井が分からないまま
-    // 面の外を描くと、閉じる線の根拠が無い）。
     // 制約: 複数室にまたがる下階はアンカー室（`findLowerRoom`が返す1室）のCHで代表する。
-    lowerCeilZ = lowerRoom != null && dropMm > 0
-      ? -dropMm + roomCeilingHeight(lowerGraph, lowerRoom).mm : null;
+    layers = buildBandLayers(graph,
+      { below: [{ graph: lowerGraph, floorHeightMm: floorHeightBelowMm, anchorRoom: lowerRoom }] });
+    const belowLayer = layers.find(l => l.role === 'below') ?? null;
+    dropMm = belowLayer ? -belowLayer.floorZMm : 0;
+    lowerCeilZ = belowLayer?.ceilZMm ?? null;
     if (lowerCeilZ != null) overhangByFace = new Map();
     // ceilAbs = floorDelta + chMm が不変（天井は動かず床だけ下がる）。
     // 下へ延長するのは**下階に同じ壁が実在する区間だけ**（lowerCoverLocal）。壁の無い区間は
@@ -483,13 +482,7 @@ export function buildVoidBand(voidRoom, graph, lowerGraph, ctx = {}) {
   // 層スタックは設置階＋直下階——面を下へ延長する方式（このファイル冒頭）でも、下階の壁は
   // 下階のgraphからしか読めないため、下階を層として積まないと1FL付近の断面・見えがかりが
   // 一切出ない（面の引き伸ばしは床線・天井線の話で、壁の実体の話ではない）。
-  appendBandCutContent(primitives, voidRoom, graph, layout,
-    hasLower && dropMm > 0
-      ? [{ graph, floorZMm: 0, role: 'self' },
-        // ceilZMm: 下階層の天井z。**面の端も層ごとに違う**のgate（下階の空間がその端で
-        // 見えているか）の材料——層の部屋のCHは帯しか知らないのでここで載せる。
-        { graph: lowerGraph, floorZMm: -dropMm, role: 'below', ceilZMm: lowerCeilZ ?? undefined }]
-      : [{ graph, floorZMm: 0, role: 'self' }],
+  appendBandCutContent(primitives, voidRoom, graph, layout, layers,
     { endExtendMm: ctx.wallLessEndExtendModelMm, scale: ctx.scale,
       // 下階の平面が面の端より外へ続くぶん（gate付き）。探査（層ごとの窓）と描画範囲へ同じ値。
       ...(overhangByFace
@@ -497,9 +490,10 @@ export function buildVoidBand(voidRoom, graph, lowerGraph, ctx = {}) {
   return finalizeBand(voidRoom, graph, primitives, {
     faceCount: faces.length, chDimX: layout.chDimX, prevBoundaryHi: layout.prevBoundaryHi,
     triOffsetMm: ctx.triangleOffsetModelMm, nameGapModelMm: ctx.nameGapModelMm,
-    // QA修正: dropMmが0にクランプされた（下階FL差で相殺された）場合は実質1層と同じ表現のため
-    // heightUnits=1にする（hasLowerだけを見ると2層予約されたままになってしまう）。
-    heightUnits: hasLower && dropMm > 0 ? 2 : 1,
+    // heightUnits（Phase 7b-1）: layers.lengthへ統一——dropMmが0にクランプされた（下階FL差で
+    // 相殺された）場合はbuildBandLayers内部でbelow層自体が積まれず、layers.length=1になる
+    // （旧`hasLower && dropMm > 0 ? 2 : 1`と同値。QA修正の意図はlayers側の打ち切り規則が担う）。
+    heightUnits: layers.length,
   });
 }
 
@@ -533,7 +527,7 @@ export function buildRoomBandWithVoidAbove(room, graph, voidRoom, upperGraph, ct
     // 階高が解決できない図面だけ壁断面・見えがかり・アキが丸ごと欠ける（例外もログも出ない）。
     const layout = layoutBandFaces(room, graph, baseFaces, ctx);
     const prims = [...layout.primitives];
-    appendBandCutContent(prims, room, graph, layout, [{ graph, floorZMm: 0, role: 'self' }],
+    appendBandCutContent(prims, room, graph, layout, buildBandLayers(graph),
       { endExtendMm: ctx.wallLessEndExtendModelMm, scale: ctx.scale });
     return finalizeBand(room, graph, prims, {
       faceCount: baseFaces.length, chDimX: layout.chDimX, prevBoundaryHi: layout.prevBoundaryHi,
@@ -663,10 +657,10 @@ export function buildRoomBandWithVoidAbove(room, graph, voidRoom, upperGraph, ct
   // ここでcontentを別配列に取るのは、下の「収穫した起点で図を組み直す」ためにcontentと図を
   // 分けて持つ必要があるから。
   const cutContent = [];
-  appendBandCutContent(cutContent, room, graph, layout, [
-    { graph, floorZMm: 0, role: 'self' },
-    { graph: upperGraph, floorZMm: floorHeightMm, role: 'above' },
-  ], {
+  // heightUnits（Phase 7b-1）はこのlayersのlengthをそのまま使う（下のfinalizeBand）——
+  // このメイン経路は上のガード（floorHeightMm!=null && upperGraph）を通過済みなので常に2。
+  const mainLayers = buildBandLayers(graph, { above: [{ graph: upperGraph, floorHeightMm }] });
+  appendBandCutContent(cutContent, room, graph, layout, mainLayers, {
     endExtendMm: ctx.wallLessEndExtendModelMm, scale: ctx.scale,
     aboveCeilVisibleRangesOf: face => upper.segsByFace.get(face),
     // 面の端より外へ続く上階の平面（gate付き。上記overhangByFace）——探査（層ごとの窓）と
@@ -698,7 +692,7 @@ export function buildRoomBandWithVoidAbove(room, graph, voidRoom, upperGraph, ct
   return finalizeBand(room, graph, primitives, {
     faceCount: faces.length, chDimX: layout.chDimX, prevBoundaryHi: layout.prevBoundaryHi,
     triOffsetMm: ctx.triangleOffsetModelMm, nameGapModelMm: ctx.nameGapModelMm,
-    heightUnits: 2,
+    heightUnits: mainLayers.length,
   });
 }
 

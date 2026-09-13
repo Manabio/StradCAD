@@ -103,6 +103,34 @@ export function layersAboveOf(stack, info) {
 }
 
 /**
+ * 生の層配列（`sectionBandLayers.js`の`buildBandLayers`が返す`{graph, floorZMm, role}[]`。
+ * role名は問わない）から「自階の直上の層」を返す（無ければnull）。
+ *
+ * Phase 7b-2是正（QA指摘F1）: 旧`elevationStairSequence.js`の実装は
+ * `layers.find(l => l.role !== 'self')`（配列先頭の非自階層を無条件に拾う。3層以上や
+ * below層しか無い帯で誤った層を選びうる）と、その置換として一度書かれた本ファイル外の
+ * 個別実装（`l?.role === 'self'`でrole名に依存し、εも素の`>`）の**どちらも**本モジュールが
+ * 廃した規約に反していた。本関数は`baseLayerOf`（z原点に最も近い層＝自階。role名を見ない）と
+ * `layersAboveOf`（εを含む一般規則で自階より上の層を昇順に返す）だけを合成する薄いアダプタで、
+ * 独自の比較式を持たない——`baseLayerOf`/`layersAboveOf`は`.layer.floorZMm`しか読まないため、
+ * 生の層をそのまま`{layer}`（`LayerInfo`のroom/floorZ/ceilZを持たない最小形）へ包んで渡せる。
+ *
+ * 同一floorZMmの層が複数あるとき（物理的には同じ絶対高さの階が複数あるという退化例。実データでは
+ * 生じない前提）は**入力配列内で先に現れたもの**を返す——`orderLayerStack`の安定ソートが同値を
+ * 入力順のまま残すため、`layersAboveOf`が返す配列も同値の先頭は入力順で決まる。
+ * `compareLayerPriority`は`|floorZMm|`と符号しか見ないため同値では常に0を返し優劣を付けられず、
+ * 使えない——したがって「入力配列の順序に依存する、決定的だが恣意的な規則」であることを明示する。
+ * @param {Array<{graph:object, floorZMm:number, role?:string}>} layers
+ * @returns {{graph:object, floorZMm:number, role?:string}|null}
+ */
+export function layerDirectlyAboveSelf(layers) {
+  const stack = orderLayerStack((layers ?? []).map(layer => ({ layer })));
+  const self = baseLayerOf(stack);
+  if (!self) return null;
+  return layersAboveOf(stack, self)[0]?.layer ?? null;
+}
+
+/**
  * 同距離の候補が競合したときの層の優先順位（負ならaが優先）。
  * 「帯自身の階（z原点）に近い層を優先し、同距離なら上側（地上側）を優先」——旧ROLE_ORDER表
  * `{self:0, above:1, below:2}`と2層構成では完全に同値で、層数に依らず定義できる一般形。

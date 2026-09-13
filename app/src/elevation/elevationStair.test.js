@@ -201,6 +201,50 @@ test('【WP-S3・失敗系・項目11】buildStairBand: 3階目の情報(project
   assert.equal(band.heightUnits, 2, '直上階の情報が解決できているためheightUnits=2のはず');
 });
 
+// ---- Phase 7: straightCuts.jsのopts.layers受け取り経路（buildBandLayers。§5.12「Phase 7設計」）
+// は実データ(13.stq/11.stq)にSTRAIGHT階段が無いため、上のSWITCHBACK用テストのように実データ経由
+// では検証できない——合成fixtureで「buildStairBandが組んだlayersがstraightCutsまで実際に届き、
+// 探査結果に反映されている」ことを固定する（team-lessons: 実データ未経由の経路は同じコミットに
+// 合成fixtureのテストを入れて実行されることを示す）。
+//
+// 検証方法（heightUnits・帯上端の縦線では検知できないことを確認済み。REASONED: heightUnitsは
+// chUpperAbsMmの解決可否だけで決まり、帯外周の縦線もzRange.hiZ止まりでlayers非依存のため、
+// layersを`buildBandLayers(graph)`＝自階のみへ壊しても両方とも変化しない）——自階の天井
+// （chLowerMm=2400）に「自階の天井の水平線（見えがかりの打ち切り線。weight:medium）」が
+// 出るかどうかで判定する: 直上に届く層（above=吹抜け）が無ければ、自階の天井2400で見えがかりが
+// 打ち切られその境界線が出る。above層が正しく届いていれば、吹抜けを通して上階天井(5400)まで
+// 見通せるため2400の境界線は出ない。
+test('【Phase 7】buildStairBand: STRAIGHT階段でもbuildBandLayersが組んだ層がstraightCutsまで届き、自階天井(2400)の見えがかり打ち切り線が出ない', () => {
+  const graph = makeGraph('p1');
+  const x0 = graph.addCenterLine(CenterLineType.VERTICAL, 0,    { labeled: false, discipline: Discipline.ARCH });
+  const x1 = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
+  const y0 = graph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: false, discipline: Discipline.ARCH });
+  const y1 = graph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: false, discipline: Discipline.ARCH });
+  const cells = new Set([`${x0.id}:${y0.id}:${x1.id}:${y1.id}`]);
+  const room = graph.addRoom(cells, '階段');
+  generateRoomWallsFromOutline(graph, room);
+  const stair = graph.addStair({
+    type: StairType.STRAIGHT, cells, roomId: room.id, upDirection: 'up', flip: false,
+    totalSteps: 12, tread: 250,
+  });
+
+  const upperGraph = makeGraph('p2');
+  upperGraph.plane.elevation = 3000; // floorHeight = 3000
+  const voidRoom = makeRectRoom(upperGraph, 0, 0, 1000, 3000, '吹抜け');
+  voidRoom.setFeature(RoomFeature.VOID); // CH明示指定なし → upperGraph.defaultCeilingHeight(2400)
+
+  const project = { planes: [graph.plane, upperGraph.plane] };
+  const band = buildStairBand(room, graph, upperGraph, { project, stair });
+  const chLowerMm = 2400; // 階段室自身のCH（graph.defaultCeilingHeight）
+
+  const selfCeilingCutoffLines = band.primitives.filter(p =>
+    p.type === 'line' && p.weight === 'medium' && p.y1 === p.y2 && Math.abs(p.y1 - (-chLowerMm)) < 1e-6);
+  assert.equal(selfCeilingCutoffLines.length, 0,
+    `above層(吹抜け)が正しく届いていれば自階天井(${chLowerMm})の見えがかり打ち切り線は出ないはず` +
+    `（実際:${selfCeilingCutoffLines.length}本。出ていればbuildBandLayersが組んだ層がstraightCutsまで渡っていない）`);
+  assert.equal(band.heightUnits, 2, '直上階の情報が解決できていればSTRAIGHT階段でもheightUnits=2のはず');
+});
+
 // ---- 項目12: 折返し階段(SWITCHBACK)は断面プロファイル(polyline×2)を帯に含む ----
 test('【項目12】buildStairBand: SWITCHBACK階段は断面プロファイル(polyline)を含む', () => {
   const graph = makeGraph('p1');
@@ -548,6 +592,17 @@ test('【失敗系】buildStairBand: upperGraph=nullはheightUnits=1（1層）�
   const room = makeRectRoom(graph, 0, 0, 2000, 4000, '階段');
   const band = buildStairBand(room, graph, null);
   assert.equal(band.heightUnits, 1);
+});
+
+// ---- QA指摘・項目5-1: upperGraphはあるが階高が解決できない（project未指定・ctx.floorHeight未指定）
+// なら、floorHeightAbove(null, plane)がnullを返しchUpperAbsMmも解決されないため1層のまま ----
+test('【失敗系】buildStairBand: upperGraphはあるが階高が解決できない（projectもctx.floorHeightも無い）ならheightUnits=1', () => {
+  const graph = makeGraph('p1');
+  const room = makeRectRoom(graph, 0, 0, 2000, 4000, '階段');
+  const upperGraph = makeGraph('p2');
+  const band = buildStairBand(room, graph, upperGraph); // ctx省略＝project/floorHeightどちらも無い
+  assert.equal(band.heightUnits, 1,
+    '階高が解決できなければupperGraphがあってもlayersはself1層のみ＝heightUnits=1のはず');
 });
 
 

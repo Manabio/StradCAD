@@ -6,6 +6,7 @@ import { generateRoomWallsFromOutline } from '../../../finish/wallGeneration.js'
 import { composeRoomFaces } from '../../elevationFaceList.js';
 import { switchbackCuts, stairBandWallFilter } from './switchbackCuts.js';
 import { cellsBeyondBreak } from '../../../finish/stair/stairGeometry.js';
+import { buildBandLayers } from '../sectionBandLayers.js';
 
 function makeGraph(name = 'p1') {
   const plane = new Plane(name, 0, `${name}階`, 1, 1);
@@ -82,7 +83,7 @@ test('【WP-E5】switchbackCuts: 往復間の壁が無ければcuts=[1,2,3,4,5]'
   const graph = makeGraph();
   const { room, stair } = makeSwitchbackFixture(graph);
   const faces = composeRoomFaces(room, graph);
-  const result = switchbackCuts(stair, faces, graph, OPTS);
+  const result = switchbackCuts(stair, faces, graph, { ...OPTS, layers: buildBandLayers(graph) });
   assert.ok(result);
   assert.deepEqual(result.cuts.map(c => c.seqNo), ['1', '2', '3', '4', '5']);
 });
@@ -91,7 +92,7 @@ test('【WP-E5】switchbackCuts: 往復間の壁があればcuts=[1,2,2.5,3,4,4.
   const graph = makeGraph();
   const { room, stair } = makeSwitchbackFixture(graph, { withMidWall: true });
   const faces = composeRoomFaces(room, graph);
-  const result = switchbackCuts(stair, faces, graph, OPTS);
+  const result = switchbackCuts(stair, faces, graph, { ...OPTS, layers: buildBandLayers(graph) });
   assert.ok(result);
   assert.deepEqual(result.cuts.map(c => c.seqNo), ['1', '2', '2.5', '3', '4', '4.5', '5']);
 });
@@ -100,7 +101,7 @@ test('【WP-E5】switchbackCuts: 各cutのbaseFloorZ/zRangeが§6.1表どおり'
   const graph = makeGraph();
   const { room, stair } = makeSwitchbackFixture(graph);
   const faces = composeRoomFaces(room, graph);
-  const result = switchbackCuts(stair, faces, graph, OPTS);
+  const result = switchbackCuts(stair, faces, graph, { ...OPTS, layers: buildBandLayers(graph) });
   const byNo = Object.fromEntries(result.cuts.map(c => [c.seqNo, c]));
   assert.equal(byNo['1'].baseFloorZ, result.landingAbs);
   assert.equal(byNo['2'].baseFloorZ, 0);
@@ -115,7 +116,8 @@ test('【WP-E5】switchbackCuts: upperGraph経由でmidWallが検出されれば
   const upperGraph = makeGraph('p2');
   const { room, stair } = makeSwitchbackFixture(graph, { withMidWall: true, midWallGraph: upperGraph });
   const faces = composeRoomFaces(room, graph);
-  const result = switchbackCuts(stair, faces, graph, { ...OPTS, upperGraph });
+  const layers = buildBandLayers(graph, { above: [{ graph: upperGraph, floorHeightMm: OPTS.floorHeight }] });
+  const result = switchbackCuts(stair, faces, graph, { ...OPTS, upperGraph, layers });
   assert.ok(result.wall, 'upperGraph.walls経由でmidWallが見つかるはず');
   assert.deepEqual(result.cuts.map(c => c.seqNo), ['1', '2', '2.5', '3', '4', '4.5', '5']);
 });
@@ -129,7 +131,8 @@ test('【WP-E5】switchbackCuts: 腰壁指定はkneeDropが解決される', () 
     edgeKey(midWall.axisCL.id, midWall.clStart.id, midWall.clEnd.id),
     { knee: { topHeight: 900 } },
   );
-  const result = switchbackCuts(stair, faces, graph, { ...OPTS, upperGraph });
+  const layers = buildBandLayers(graph, { above: [{ graph: upperGraph, floorHeightMm: OPTS.floorHeight }] });
+  const result = switchbackCuts(stair, faces, graph, { ...OPTS, upperGraph, layers });
   assert.ok(result.kneeDrop?.knee);
   assert.equal(result.kneeDrop.knee.topHeight, 900);
 });
@@ -140,7 +143,7 @@ test('【失敗系・WP-E5】switchbackCuts: SWITCHBACK以外はnull', () => {
   const { room, stair } = makeSwitchbackFixture(graph);
   stair.setField('type', StairType.STRAIGHT);
   const faces = composeRoomFaces(room, graph);
-  assert.equal(switchbackCuts(stair, faces, graph, OPTS), null);
+  assert.equal(switchbackCuts(stair, faces, graph, { ...OPTS, layers: buildBandLayers(graph) }), null);
 });
 
 test('【失敗系・WP-E5】switchbackCuts: floorHeight未確定(null)はnull', () => {
@@ -155,14 +158,31 @@ test('【失敗系・WP-E5】switchbackCuts: stair.cellsが空はnull', () => {
   const { room, stair } = makeSwitchbackFixture(graph);
   stair.setCells(new Set());
   const faces = composeRoomFaces(room, graph);
-  assert.equal(switchbackCuts(stair, faces, graph, OPTS), null);
+  assert.equal(switchbackCuts(stair, faces, graph, { ...OPTS, layers: buildBandLayers(graph) }), null);
 });
 
 test('【失敗系・WP-E5】switchbackCuts: stairがnullはnull', () => {
   const graph = makeGraph();
   const { room } = makeSwitchbackFixture(graph);
   const faces = composeRoomFaces(room, graph);
-  assert.equal(switchbackCuts(null, faces, graph, OPTS), null);
+  assert.equal(switchbackCuts(null, faces, graph, { ...OPTS, layers: buildBandLayers(graph) }), null);
+});
+
+// QA指摘F5: opts.layersは必須（本番はbuildStairBandが必ず渡す。opts.upperGraphから作り直す
+// フォールバックは本番に到達しない死コードだったため削除した）。未指定・非配列は既存の
+// 失敗系規約（対象外条件はnull）にならいnullを返す。
+test('【失敗系・QA指摘F5】switchbackCuts: opts.layers未指定はnull', () => {
+  const graph = makeGraph();
+  const { room, stair } = makeSwitchbackFixture(graph);
+  const faces = composeRoomFaces(room, graph);
+  assert.equal(switchbackCuts(stair, faces, graph, OPTS), null, 'opts.layers省略時はOPTS単体でnull');
+});
+
+test('【失敗系・QA指摘F5】switchbackCuts: opts.layersが配列でなければnull', () => {
+  const graph = makeGraph();
+  const { room, stair } = makeSwitchbackFixture(graph);
+  const faces = composeRoomFaces(room, graph);
+  assert.equal(switchbackCuts(stair, faces, graph, { ...OPTS, layers: null }), null);
 });
 
 // ==== QA実機フィードバック修正: dirSignは部屋のコンパス向き（letterOf基準）ではなく階段自身の
@@ -194,7 +214,7 @@ test('【QA修正・実機フィードバック】switchbackCuts: seq2の面は�
   const graph = makeGraph();
   const { room, stair } = makeUserDimsFixture(graph);
   const faces = composeRoomFaces(room, graph);
-  const table = switchbackCuts(stair, faces, graph, OPTS);
+  const table = switchbackCuts(stair, faces, graph, { ...OPTS, layers: buildBandLayers(graph) });
   assert.ok(table);
   // entryWorldがwOut1のローカルx=0側（originWorldに一致する側）にあるはず。
   const { wOut1, entryWorld, landingStartWorld } = table;
@@ -213,7 +233,7 @@ test('【QA修正・実機フィードバック】switchbackCuts: seq2のdirSign
   const graph = makeGraph();
   const { room, stair } = makeUserDimsFixture(graph, 'down');
   const faces = composeRoomFaces(room, graph);
-  const table = switchbackCuts(stair, faces, graph, OPTS);
+  const table = switchbackCuts(stair, faces, graph, { ...OPTS, layers: buildBandLayers(graph) });
   assert.ok(table);
   const { wOut1, entryWorld, landingStartWorld } = table;
   const localXOfEntry = (entryWorld - wOut1.originWorld) * wOut1.dirSign;
@@ -227,7 +247,7 @@ test('【QA修正・実機フィードバック】switchbackCuts: seq4の面は�
   const graph = makeGraph();
   const { room, stair } = makeUserDimsFixture(graph);
   const faces = composeRoomFaces(room, graph);
-  const table = switchbackCuts(stair, faces, graph, OPTS);
+  const table = switchbackCuts(stair, faces, graph, { ...OPTS, layers: buildBandLayers(graph) });
   const { wOut2, entryWorld, landingStartWorld } = table;
   const localXOfEntry = (entryWorld - wOut2.originWorld) * wOut2.dirSign;
   const localXOfLanding = (landingStartWorld - wOut2.originWorld) * wOut2.dirSign;
@@ -240,7 +260,7 @@ test('【QA修正・実機フィードバック】switchbackCuts: seq4のstairCu
   const graph = makeGraph();
   const { room, stair } = makeUserDimsFixture(graph);
   const faces = composeRoomFaces(room, graph);
-  const table = switchbackCuts(stair, faces, graph, OPTS);
+  const table = switchbackCuts(stair, faces, graph, { ...OPTS, layers: buildBandLayers(graph) });
   const seq4 = table.cuts.find(c => c.seqNo === '4');
   assert.ok(seq4.stairCut, 'seq4はstairCutを持つはず');
   assert.equal(seq4.stairCut.flights.length, 1);
@@ -254,7 +274,7 @@ test('【失敗系・QA修正・実機フィードバック】switchbackCuts: se
   const graph = makeGraph();
   const { room, stair } = makeUserDimsFixture(graph);
   const faces = composeRoomFaces(room, graph);
-  const table = switchbackCuts(stair, faces, graph, OPTS);
+  const table = switchbackCuts(stair, faces, graph, { ...OPTS, layers: buildBandLayers(graph) });
   const seq5 = table.cuts.find(c => c.seqNo === '5');
   assert.equal(seq5.dirSign, seq5.face.dirSign,
     'cut.dirSignとface.dirSignが一致しないと、content(cut基準)とfloorSegments(face基準)が左右で食い違う');
@@ -266,7 +286,7 @@ test('【ユーザー実機フィードバック2026-08-23】switchbackCuts: seq
   const graph = makeGraph();
   const { room, stair } = makeSwitchbackFixture(graph, { withMidWall: true });
   const faces = composeRoomFaces(room, graph);
-  const table = switchbackCuts(stair, faces, graph, OPTS);
+  const table = switchbackCuts(stair, faces, graph, { ...OPTS, layers: buildBandLayers(graph) });
   const bySeq = Object.fromEntries(table.cuts.map(c => [c.seqNo, c]));
 
   // フィクスチャ: x0=0,xm=1000,x1=2000（vertical CL）・upDirection='up'・flip=false
@@ -291,7 +311,7 @@ test('【ユーザー実機フィードバック2026-08-23・不具合1修正】
   const { room, stair } = makeSwitchbackFixture(graph, { withMidWall: true });
   stair.setField('structure', StructuralMaterialType.STEEL);
   const faces = composeRoomFaces(room, graph);
-  const table = switchbackCuts(stair, faces, graph, OPTS);
+  const table = switchbackCuts(stair, faces, graph, { ...OPTS, layers: buildBandLayers(graph) });
   const bySeq = Object.fromEntries(table.cuts.map(c => [c.seqNo, c]));
 
   assert.ok(table.contribution.unit, '前提: contribution.unitが存在するはず');
@@ -310,7 +330,7 @@ test('switchbackCuts: 各cutのline.lo/hiはそのcutのfaceのlo/hiに一致す
   const graph = makeGraph();
   const { room, stair } = makeSwitchbackFixture(graph, { asymmetricEnds: true });
   const faces = composeRoomFaces(room, graph);
-  const table = switchbackCuts(stair, faces, graph, OPTS);
+  const table = switchbackCuts(stair, faces, graph, { ...OPTS, layers: buildBandLayers(graph) });
   assert.ok(table);
   // 前提: このfixtureは向かい合う面の走り範囲が実際に食い違っていること（対称なら不具合を
   // 再現できず、テストが素通りする）。
@@ -331,7 +351,7 @@ test('【失敗系】switchbackCuts: 非対称な隅でもseq3/seq5の面の走�
   const graph = makeGraph();
   const { room, stair } = makeSwitchbackFixture(graph, { asymmetricEnds: true });
   const faces = composeRoomFaces(room, graph);
-  const table = switchbackCuts(stair, faces, graph, OPTS);
+  const table = switchbackCuts(stair, faces, graph, { ...OPTS, layers: buildBandLayers(graph) });
   const bySeq = Object.fromEntries(table.cuts.map(c => [c.seqNo, c]));
   // seq5の枠が（旧実装のように）wOut1由来だと、面より200mm広い枠になり
   // content全体が面に対して200mmずれる。
@@ -361,7 +381,7 @@ test('switchbackCuts: 階段下に部屋があれば全cutのairRoom=階段室�
   assert.ok(under, '階段下部屋があるはず');
 
   const faces = composeRoomFaces(room, graph);
-  const table = switchbackCuts(stair, faces, graph, OPTS);
+  const table = switchbackCuts(stair, faces, graph, { ...OPTS, layers: buildBandLayers(graph) });
   assert.equal(table.hasRoomUnder, true);
   for (const cut of table.cuts) {
     assert.equal(cut.airRoom, room, `seq${cut.seqNo}: airRoomは階段室自身のはず`);
@@ -373,7 +393,7 @@ test('【失敗系】switchbackCuts: 階段下に部屋が無ければairRoom/un
   const graph = makeGraph();
   const { room, stair } = makeSwitchbackFixture(graph, { withRoomUnder: false });
   const faces = composeRoomFaces(room, graph);
-  const table = switchbackCuts(stair, faces, graph, OPTS);
+  const table = switchbackCuts(stair, faces, graph, { ...OPTS, layers: buildBandLayers(graph) });
   assert.equal(table.hasRoomUnder, false);
   for (const cut of table.cuts) {
     assert.equal(cut.airRoom, undefined, `seq${cut.seqNo}: airRoomは付かないはず`);

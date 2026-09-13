@@ -16,6 +16,7 @@ import { resolveSwitchbackParams } from './elevationStairSection.js';
 import { ElevationLineRole, weightForRole } from './elevationStyle.js';
 import { drawnFloorProfileZAt } from './elevationFloorProfile.js';
 import { withGraphReadScope } from '../graphReadScope.js';
+import { buildBandLayers } from './section/sectionBandLayers.js';
 
 function makeGraph(name = 'p1') {
   const plane = new Plane(name, 0, `${name}階`, 1, 1);
@@ -112,7 +113,7 @@ test('stairFaceSequence: 往路・復路の間に壁が無ければ seqNo は [1
   const { room, stair } = makeSwitchbackFixture(graph);
   const faces = composeRoomFaces(room, graph);
 
-  const entries = stairFaceSequence(stair, faces, graph, OPTS);
+  const entries = stairFaceSequence(stair, faces, graph, { ...OPTS, layers: buildBandLayers(graph) });
   assert.ok(entries, 'SWITCHBACK+実測spans+floorHeightありでnullにならないはず');
   assert.deepEqual(entries.map(e => e.seqNo), ['1', '2', '3', '4', '5']);
 });
@@ -123,7 +124,7 @@ test('stairFaceSequence: 往路・復路の間に実壁があれば seqNo は [1
   const { room, stair } = makeSwitchbackFixture(graph, { withMidWall: true });
   const faces = composeRoomFaces(room, graph);
 
-  const entries = stairFaceSequence(stair, faces, graph, OPTS);
+  const entries = stairFaceSequence(stair, faces, graph, { ...OPTS, layers: buildBandLayers(graph) });
   assert.ok(entries);
   assert.deepEqual(entries.map(e => e.seqNo), ['1', '2', '2.5', '3', '4', '4.5', '5']);
 });
@@ -137,7 +138,7 @@ test('【mutation証跡用】stairFaceSequence: travelSign<0のfixtureでもseq2
   const { room, stair } = makeSwitchbackFixture(graph, { withMidWall: true });
   const faces = composeRoomFaces(room, graph);
 
-  const entries = stairFaceSequence(stair, faces, graph, OPTS);
+  const entries = stairFaceSequence(stair, faces, graph, { ...OPTS, layers: buildBandLayers(graph) });
   const seq2 = entries.find(e => e.seqNo === '2');
   const seq25 = entries.find(e => e.seqNo === '2.5');
   const seq45 = entries.find(e => e.seqNo === '4.5');
@@ -160,7 +161,7 @@ test('stairFaceSequence: seq2のceilingProfileは上り口端でchLowerMm・踊�
   const { room, stair } = makeSwitchbackFixture(graph);
   const faces = composeRoomFaces(room, graph);
 
-  const entries = stairFaceSequence(stair, faces, graph, OPTS);
+  const entries = stairFaceSequence(stair, faces, graph, { ...OPTS, layers: buildBandLayers(graph) });
   const seq2 = entries.find(e => e.seqNo === '2');
   assert.ok(Array.isArray(seq2.ceilingProfile), 'seq2はceilingProfileを持つはず');
   const first = seq2.ceilingProfile[0];
@@ -176,7 +177,7 @@ test('stairFaceSequence: seq1(W_entry)は往路(dashed)・復路(実線)の梯�
   const { room, stair } = makeSwitchbackFixture(graph);
   const faces = composeRoomFaces(room, graph);
 
-  const entries = stairFaceSequence(stair, faces, graph, OPTS);
+  const entries = stairFaceSequence(stair, faces, graph, { ...OPTS, layers: buildBandLayers(graph) });
   const seq1 = entries.find(e => e.seqNo === '1');
   const ladderLines = seq1.content.filter(p => p.type === 'line' && p.y1 === p.y2 && p.x1 !== p.x2);
   assert.ok(ladderLines.some(l => l.dash === 'dashed'), '往路(踊り場より下)は破線のはず');
@@ -191,7 +192,7 @@ test('stairFaceSequence: seq1(W_entry・壁無し)は両端(x=0/run)の壁輪郭
   const { room, stair } = makeSwitchbackFixture(graph);
   const faces = composeRoomFaces(room, graph);
 
-  const entries = stairFaceSequence(stair, faces, graph, OPTS);
+  const entries = stairFaceSequence(stair, faces, graph, { ...OPTS, layers: buildBandLayers(graph) });
   const seq1 = entries.find(e => e.seqNo === '1');
   const n1 = 6, riser = OPTS.floorHeight / 12;
   const landingAbs = n1 * riser;
@@ -226,7 +227,7 @@ test('stairFaceSequence: seq1(wall実在時)は厚みぶん離れた2本の壁�
   const { room, stair } = makeSwitchbackFixture(graph, { withMidWall: true });
   const faces = composeRoomFaces(room, graph);
 
-  const entries = stairFaceSequence(stair, faces, graph, OPTS);
+  const entries = stairFaceSequence(stair, faces, graph, { ...OPTS, layers: buildBandLayers(graph) });
   const seq1 = entries.find(e => e.seqNo === '1');
   const n1 = 6, riser = OPTS.floorHeight / 12;
   const landingAbs = n1 * riser;
@@ -282,7 +283,7 @@ test('【実機フィードバック第3弾E】stairFaceSequence: 鉄骨階段�
     const { room, stair } = makeSwitchbackFixture(graph);
     if (structure) stair.setField('structure', structure);
     const faces = composeRoomFaces(room, graph);
-    const entries = stairFaceSequence(stair, faces, graph, OPTS);
+    const entries = stairFaceSequence(stair, faces, graph, { ...OPTS, layers: buildBandLayers(graph) });
     const seq1 = entries.find(e => e.seqNo === '1');
     return seq1.content.filter(p =>
       p.type === 'line' && p.x1 === p.x2 && p.dash === 'dashed' && p.weight === detailWeight &&
@@ -299,7 +300,7 @@ test('【失敗系・実機フィードバック第3弾E】stairFaceSequence: �
   const { room, stair } = makeSwitchbackFixture(graph);
   stair.setField('structure', StructuralMaterialType.STEEL);
   const faces = composeRoomFaces(room, graph);
-  const entries = stairFaceSequence(stair, faces, graph, OPTS);
+  const entries = stairFaceSequence(stair, faces, graph, { ...OPTS, layers: buildBandLayers(graph) });
   const seq2 = entries.find(e => e.seqNo === '2'); // baseFloorZ:0（踊り場より下という概念自体が無い面）
   const detailWeight = weightForRole(ElevationLineRole.DETAIL);
   const anyDashedVertical = seq2.content.some(p =>
@@ -313,7 +314,7 @@ test('stairFaceSequence: seq1(wall実在時)は壁の見え側に1階天井線(�
   const { room, stair } = makeSwitchbackFixture(graph, { withMidWall: true });
   const faces = composeRoomFaces(room, graph);
 
-  const entries = stairFaceSequence(stair, faces, graph, OPTS);
+  const entries = stairFaceSequence(stair, faces, graph, { ...OPTS, layers: buildBandLayers(graph) });
   const seq1 = entries.find(e => e.seqNo === '1');
   const silhouetteWeight = weightForRole(ElevationLineRole.SILHOUETTE);
 
@@ -346,7 +347,8 @@ test('【実機フィードバック第3弾A2】stairFaceSequence: seq1の壁は
   // ようにする（旧テストのQA指摘を踏襲）。
   const localOpts = { floorHeight: 2600, chUpperAbsMm: 5000, chLowerMm: 2400 };
 
-  const entries = stairFaceSequence(stair, faces, graph, { ...localOpts, upperGraph });
+  const entries = stairFaceSequence(stair, faces, graph, { ...localOpts, upperGraph,
+    layers: buildBandLayers(graph, { above: [{ graph: upperGraph, floorHeightMm: localOpts.floorHeight }] }) });
   const seq1 = entries.find(e => e.seqNo === '1');
   const silhouetteWeight = weightForRole(ElevationLineRole.SILHOUETTE);
 
@@ -381,7 +383,7 @@ test('【実機フィードバック第3弾A2】stairFaceSequence: seq1は往復
   const { room, stair } = makeSwitchbackFixture(graph, { withMidWall: true, midWallGraph: upperGraph, upperLandingOnly: true });
   const faces = composeRoomFaces(room, graph);
 
-  const entries = stairFaceSequence(stair, faces, graph, { ...OPTS, upperGraph });
+  const entries = stairFaceSequence(stair, faces, graph, { ...OPTS, upperGraph, layers: buildBandLayers(graph, { above: [{ graph: upperGraph, floorHeightMm: OPTS.floorHeight }] }) });
   const seq1 = entries.find(e => e.seqNo === '1');
   const detailWeight = weightForRole(ElevationLineRole.DETAIL);
 
@@ -407,7 +409,7 @@ test('【QA修正1・A2/線種規則2026-08で書き換え】stairFaceSequence: 
     graph, { withMidWall: true, midWallGraph: upperGraph, upperLandingOnly: true });
   const faces = composeRoomFaces(room, graph);
 
-  const entries = stairFaceSequence(stair, faces, graph, { ...OPTS, upperGraph });
+  const entries = stairFaceSequence(stair, faces, graph, { ...OPTS, upperGraph, layers: buildBandLayers(graph, { above: [{ graph: upperGraph, floorHeightMm: OPTS.floorHeight }] }) });
   const seq1 = entries.find(e => e.seqNo === '1');
   const detailWeight = weightForRole(ElevationLineRole.DETAIL);
   const mr = midWall.materialRange;
@@ -462,7 +464,7 @@ test('【QA修正1・実機フィードバック第3弾Fで書き換え】stairF
     { knee: { topHeight } },
   );
 
-  const entries = stairFaceSequence(stair, faces, graph, { ...OPTS, upperGraph });
+  const entries = stairFaceSequence(stair, faces, graph, { ...OPTS, upperGraph, layers: buildBandLayers(graph, { above: [{ graph: upperGraph, floorHeightMm: OPTS.floorHeight }] }) });
   const seq1 = entries.find(e => e.seqNo === '1');
   const expectedTopAbs = OPTS.floorHeight + topHeight; // = 2400+900 = 3300
   const mr = midWall.materialRange;
@@ -492,7 +494,7 @@ test('stairFaceSequence: seq2は上り口端〜踊り場前縁までの実際の
   const { room, stair } = makeSwitchbackFixture(graph);
   const faces = composeRoomFaces(room, graph);
 
-  const entries = stairFaceSequence(stair, faces, graph, OPTS);
+  const entries = stairFaceSequence(stair, faces, graph, { ...OPTS, layers: buildBandLayers(graph) });
   const seq2 = entries.find(e => e.seqNo === '2');
 
   assert.equal(seq2.floorSegments.length, 2, 'floorSegmentsは直進部+踊り場の2区間のはず');
@@ -514,7 +516,7 @@ test('【mutation証跡用】stairFaceSequence: seq2の直進部区間幅(laneLe
   const { room, stair } = makeSwitchbackFixture(graph);
   const faces = composeRoomFaces(room, graph);
 
-  const entries = stairFaceSequence(stair, faces, graph, OPTS);
+  const entries = stairFaceSequence(stair, faces, graph, { ...OPTS, layers: buildBandLayers(graph) });
   const seq2 = entries.find(e => e.seqNo === '2');
   const params = resolveSwitchbackParams(stair, graph, OPTS.floorHeight);
 
@@ -541,7 +543,7 @@ test('stairFaceSequence: seq2は踊り場床断面線(太線)を含み、面端�
   const { room, stair } = makeSwitchbackFixture(graph);
   const faces = composeRoomFaces(room, graph);
 
-  const entries = stairFaceSequence(stair, faces, graph, OPTS);
+  const entries = stairFaceSequence(stair, faces, graph, { ...OPTS, layers: buildBandLayers(graph) });
   const seq2 = entries.find(e => e.seqNo === '2');
   const cutWeight = weightForRole(ElevationLineRole.CUT);
   const silhouetteWeight = weightForRole(ElevationLineRole.SILHOUETTE);
@@ -613,7 +615,7 @@ test('stairFaceSequence: 鉄骨階段(structure=STEEL)はseq2の踏面ジグザ�
   stair.setField('structure', StructuralMaterialType.STEEL);
   const faces = composeRoomFaces(room, graph);
 
-  const entries = stairFaceSequence(stair, faces, graph, OPTS);
+  const entries = stairFaceSequence(stair, faces, graph, { ...OPTS, layers: buildBandLayers(graph) });
   const seq2 = entries.find(e => e.seqNo === '2');
   const polylines = seq2.content.filter(p => p.type === 'polyline');
   assert.equal(polylines.length, 4,
@@ -636,7 +638,7 @@ test('stairFaceSequence: 鉄骨階段は往復間に壁が無ければseq2に他
     const { room, stair } = makeSwitchbackFixture(graph, withMidWall ? { withMidWall: true } : {});
     stair.setField('structure', StructuralMaterialType.STEEL);
     const faces = composeRoomFaces(room, graph);
-    return stairFaceSequence(stair, faces, graph, OPTS);
+    return stairFaceSequence(stair, faces, graph, { ...OPTS, layers: buildBandLayers(graph) });
   };
 
   const withoutWall = makeEntries(false).find(e => e.seqNo === '2');
@@ -658,7 +660,7 @@ test('【失敗系】stairFaceSequence: 木造(既定)はseq2にささらを含�
   const { room, stair } = makeSwitchbackFixture(graph);
   const faces = composeRoomFaces(room, graph);
 
-  const entries = stairFaceSequence(stair, faces, graph, OPTS);
+  const entries = stairFaceSequence(stair, faces, graph, { ...OPTS, layers: buildBandLayers(graph) });
   const seq2 = entries.find(e => e.seqNo === '2');
   assert.equal(seq2.content.filter(p => p.type === 'polyline').length, 1);
 });
@@ -676,7 +678,7 @@ test('stairFaceSequence: STRAIGHT階段はnullを返さずseq[1,2,3,4]の配列�
   stair.setField('type', StairType.STRAIGHT);
   const faces = composeRoomFaces(room, graph);
 
-  const entries = stairFaceSequence(stair, faces, graph, OPTS);
+  const entries = stairFaceSequence(stair, faces, graph, { ...OPTS, layers: buildBandLayers(graph) });
   assert.ok(entries, 'STRAIGHTはstraightCuts経由でnullにならないはず');
   assert.deepEqual(entries.map(e => e.seqNo), ['1', '2', '3', '4']);
 });
@@ -688,7 +690,7 @@ test('【失敗系】stairFaceSequence: stair.cellsが空はnullを返す', () =
   stair.setCells(new Set());
   const faces = composeRoomFaces(room, graph);
 
-  assert.equal(stairFaceSequence(stair, faces, graph, OPTS), null);
+  assert.equal(stairFaceSequence(stair, faces, graph, { ...OPTS, layers: buildBandLayers(graph) }), null);
 });
 
 // ---- 失敗系: floorHeight未確定(null)はnull ----
@@ -706,7 +708,7 @@ test('【失敗系】stairFaceSequence: stairがnullはnullを返す', () => {
   const { room } = makeSwitchbackFixture(graph);
   const faces = composeRoomFaces(room, graph);
 
-  assert.equal(stairFaceSequence(null, faces, graph, OPTS), null);
+  assert.equal(stairFaceSequence(null, faces, graph, { ...OPTS, layers: buildBandLayers(graph) }), null);
 });
 
 // ---- 【mutation証跡用】踊り場レベルの床offset(landingAbs=n1*riser)が違うと床yがずれる ----
@@ -715,7 +717,7 @@ test('【mutation証跡用】stairFaceSequence: seq3(W_landing)の床yはlanding
   const { room, stair } = makeSwitchbackFixture(graph);
   const faces = composeRoomFaces(room, graph);
 
-  const entries = stairFaceSequence(stair, faces, graph, OPTS);
+  const entries = stairFaceSequence(stair, faces, graph, { ...OPTS, layers: buildBandLayers(graph) });
   const seq3 = entries.find(e => e.seqNo === '3');
   const n1 = 6, riser = OPTS.floorHeight / 12; // sections=[6,1,6] → totalSteps=12
   const landingAbs = n1 * riser;
@@ -734,7 +736,7 @@ test('stairFaceSequence: 往復間の壁がupperGraphのみにある場合、opt
   const graphHasMid = graph.walls.some(w => w.isVertical && Math.abs(w.axisCL.effectiveValue - 1000) < 1);
   assert.equal(graphHasMid, false, 'graph.wallsには往復間の壁が無いはず（upperGraph限定の配置）');
 
-  const entries = stairFaceSequence(stair, faces, graph, { ...OPTS, upperGraph });
+  const entries = stairFaceSequence(stair, faces, graph, { ...OPTS, upperGraph, layers: buildBandLayers(graph, { above: [{ graph: upperGraph, floorHeightMm: OPTS.floorHeight }] }) });
   assert.deepEqual(entries.map(e => e.seqNo), ['1', '2', '2.5', '3', '4', '4.5', '5'],
     'upperGraph.walls経由でmidWallが検出され、seq2.5/4.5が出るはず');
 });
@@ -745,7 +747,7 @@ test('【失敗系】stairFaceSequence: opts.upperGraph未指定なら従来ど�
   const { room, stair } = makeSwitchbackFixture(graph, { withMidWall: true }); // graph自身に壁
   const faces = composeRoomFaces(room, graph);
 
-  const entries = stairFaceSequence(stair, faces, graph, OPTS); // upperGraph未指定
+  const entries = stairFaceSequence(stair, faces, graph, { ...OPTS, layers: buildBandLayers(graph) }); // upperGraph未指定
   assert.deepEqual(entries.map(e => e.seqNo), ['1', '2', '2.5', '3', '4', '4.5', '5']);
 });
 
@@ -776,7 +778,7 @@ test('stairFaceSequence: 腰壁(knee.topHeight)を指定すると、seq1は上�
     { knee: { topHeight } },
   );
 
-  const entries = stairFaceSequence(stair, faces, graph, { ...OPTS, upperGraph });
+  const entries = stairFaceSequence(stair, faces, graph, { ...OPTS, upperGraph, layers: buildBandLayers(graph, { above: [{ graph: upperGraph, floorHeightMm: OPTS.floorHeight }] }) });
   const seq1 = entries.find(e => e.seqNo === '1');
   const cutWeight = weightForRole(ElevationLineRole.CUT);
   const silhouetteWeight = weightForRole(ElevationLineRole.SILHOUETTE);
@@ -835,7 +837,7 @@ test('【mutation証跡用】stairFaceSequence: 壁厚(materialRange幅)=200の�
   const midWall = upperGraph.addWall(uxm, 200, true, uym, 0, uy1, 0, {});
   const faces = composeRoomFaces(room, graph);
 
-  const entries = stairFaceSequence(stair, faces, graph, { ...OPTS, upperGraph });
+  const entries = stairFaceSequence(stair, faces, graph, { ...OPTS, upperGraph, layers: buildBandLayers(graph, { above: [{ graph: upperGraph, floorHeightMm: OPTS.floorHeight }] }) });
   const seq1 = entries.find(e => e.seqNo === '1');
   const cutWeight = weightForRole(ElevationLineRole.CUT);
   const silhouetteWeight = weightForRole(ElevationLineRole.SILHOUETTE);
@@ -858,7 +860,7 @@ test('【mutation証跡用】stairFaceSequence: 壁厚(materialRange幅)=200の�
     edgeKey(midWall.axisCL.id, midWall.clStart.id, midWall.clEnd.id),
     { knee: { topHeight: 900 } },
   );
-  const entriesWithKnee = stairFaceSequence(stair, faces, graph, { ...OPTS, upperGraph });
+  const entriesWithKnee = stairFaceSequence(stair, faces, graph, { ...OPTS, upperGraph, layers: buildBandLayers(graph, { above: [{ graph: upperGraph, floorHeightMm: OPTS.floorHeight }] }) });
   const seq2 = entriesWithKnee.find(e => e.seqNo === '2');
   const expectedTopAbs = OPTS.floorHeight + 900;
   const topLine = seq2.content.find(p =>
@@ -877,7 +879,7 @@ test('【失敗系】stairFaceSequence: 腰壁・垂れ壁指定が無ければs
   const { room, stair } = makeSwitchbackFixture(graph, { withMidWall: true, midWallGraph: upperGraph });
   const faces = composeRoomFaces(room, graph);
 
-  const entries = stairFaceSequence(stair, faces, graph, { ...OPTS, upperGraph });
+  const entries = stairFaceSequence(stair, faces, graph, { ...OPTS, upperGraph, layers: buildBandLayers(graph, { above: [{ graph: upperGraph, floorHeightMm: OPTS.floorHeight }] }) });
   const seq2 = entries.find(e => e.seqNo === '2');
   assert.equal(seq2.content.filter(p => p.type === 'rect').length, 0, '腰壁・垂れ壁指定が無ければrectは出ないはず');
   const silhouetteLines = seq2.content.filter(p => p.type === 'line' && p.weight === weightForRole(ElevationLineRole.SILHOUETTE) && p.x1 === p.x2);
@@ -891,7 +893,7 @@ test('【mutation証跡用】stairFaceSequence: seq4はseq2の鏡像構成で、
   const { room, stair } = makeSwitchbackFixture(graph);
   const faces = composeRoomFaces(room, graph);
 
-  const entries = stairFaceSequence(stair, faces, graph, OPTS);
+  const entries = stairFaceSequence(stair, faces, graph, { ...OPTS, layers: buildBandLayers(graph) });
   const seq4 = entries.find(e => e.seqNo === '4');
 
   assert.equal(seq4.floorSegments.length, 2, 'seq4のfloorSegmentsも2区間のはず');
@@ -961,7 +963,7 @@ test('【回帰】stairFaceSequence: 浅い階段室(spans=null)でもseq2/4のf
   assert.equal(measureStairSpans(stair, graph), null, '前提: このfixtureはmeasureStairSpansがnullを返すはず');
 
   const faces = composeRoomFaces(room, graph);
-  const entries = stairFaceSequence(stair, faces, graph, OPTS);
+  const entries = stairFaceSequence(stair, faces, graph, { ...OPTS, layers: buildBandLayers(graph) });
   assert.ok(entries, 'SWITCHBACK+cellsありでnullにならないはず');
 
   for (const seqNo of ['2', '4']) {
@@ -1018,7 +1020,7 @@ test('【QA修正・実機フィードバック】stairFaceSequence: seq1の梯�
   const graph = makeGraph();
   const { room, stair } = makeUserDimsFixture(graph);
   const faces = composeRoomFaces(room, graph);
-  const entries = stairFaceSequence(stair, faces, graph, OPTS);
+  const entries = stairFaceSequence(stair, faces, graph, { ...OPTS, layers: buildBandLayers(graph) });
   const seq1 = entries.find(e => e.seqNo === '1');
 
   // 踏面梯子(横線・両端x異なる・面全幅は除外——全幅の水平線は壁バンド縁が降格した別物で
@@ -1039,7 +1041,7 @@ test('【QA修正・実機フィードバック】stairFaceSequence: seq2は左=
   const graph = makeGraph();
   const { room, stair } = makeUserDimsFixture(graph);
   const faces = composeRoomFaces(room, graph);
-  const entries = stairFaceSequence(stair, faces, graph, OPTS);
+  const entries = stairFaceSequence(stair, faces, graph, { ...OPTS, layers: buildBandLayers(graph) });
   const seq2 = entries.find(e => e.seqNo === '2');
 
   assert.equal(seq2.floorSegments.length, 2, '踊り場ぶんの床段差で2区間のはず');
@@ -1053,7 +1055,7 @@ test('【QA修正・実機フィードバック】stairFaceSequence: seq4は左=
   const graph = makeGraph();
   const { room, stair } = makeUserDimsFixture(graph);
   const faces = composeRoomFaces(room, graph);
-  const entries = stairFaceSequence(stair, faces, graph, OPTS);
+  const entries = stairFaceSequence(stair, faces, graph, { ...OPTS, layers: buildBandLayers(graph) });
   const seq4 = entries.find(e => e.seqNo === '4');
 
   assert.equal(seq4.floorSegments.length, 2);
@@ -1078,7 +1080,7 @@ test('stairFaceSequence: seq2/seq4のレーン区間床線(FL)は「階段断面
   const graph = makeGraph();
   const { room, stair } = makeUserDimsFixture(graph);
   const faces = composeRoomFaces(room, graph);
-  const entries = stairFaceSequence(stair, faces, graph, OPTS);
+  const entries = stairFaceSequence(stair, faces, graph, { ...OPTS, layers: buildBandLayers(graph) });
 
   // seq2は上り口が左（localX小）・seq4はその鏡像で上り口が右。1FL線は上り口の外側
   // （壁のない端部のはり出し）にだけ残り、レーンの中＝階段断面の下へは入らない。
@@ -1122,7 +1124,7 @@ test('stairFaceSequence: 階段の足元が面の内側にあるとき、seq2の
   const graph = makeGraph();
   const { room, stair } = makeSwitchbackFixture(graph, { withRoomUnder: true, entryGapMm: 1000 });
   const faces = composeRoomFaces(room, graph);
-  const entries = stairFaceSequence(stair, faces, graph, OPTS);
+  const entries = stairFaceSequence(stair, faces, graph, { ...OPTS, layers: buildBandLayers(graph) });
 
   for (const seqNo of ['2', '4']) {
     const entry = entries.find(e => e.seqNo === seqNo);
@@ -1170,7 +1172,7 @@ test('【QA修正・実機フィードバックR2】stairFaceSequence: upDirecti
       const graph = makeGraph();
       const { room, stair } = makeUserDimsFixture(graph, upDirection, flip);
       const faces = composeRoomFaces(room, graph);
-      const entries = stairFaceSequence(stair, faces, graph, OPTS);
+      const entries = stairFaceSequence(stair, faces, graph, { ...OPTS, layers: buildBandLayers(graph) });
       const seq1 = entries.find(e => e.seqNo === '1');
       const rungs = seq1.content.filter(p =>
         p.type === 'line' && p.y1 === p.y2 && p.x1 !== p.x2 && p.weight === 'thin' &&
@@ -1197,7 +1199,7 @@ test('【QA修正・実機フィードバックR2】stairFaceSequence: seq2/seq4
   const graph = makeGraph();
   const { room, stair } = makeUserDimsFixture(graph);
   const faces = composeRoomFaces(room, graph);
-  const entries = stairFaceSequence(stair, faces, graph, OPTS);
+  const entries = stairFaceSequence(stair, faces, graph, { ...OPTS, layers: buildBandLayers(graph) });
   for (const seqNo of ['2', '4']) {
     const entry = entries.find(e => e.seqNo === seqNo);
     const zeroLines = entry.content.filter(p => p.type === 'line' && p.y1 === 0 && p.y2 === 0);
@@ -1214,7 +1216,7 @@ test('【WP-C】stairFaceSequence: 踊り場back辺に置いたrole:landing梁�
   const graph = makeGraph();
   const { room, stair } = makeSwitchbackFixture(graph);
   const faces = composeRoomFaces(room, graph);
-  const before = stairFaceSequence(stair, faces, graph, OPTS);
+  const before = stairFaceSequence(stair, faces, graph, { ...OPTS, layers: buildBandLayers(graph) });
   const beforeLens = Object.fromEntries(before.map(e => [e.seqNo, e.content.length]));
 
   // 踊り場back辺（y0）に沿う水平梁（isVertical=false）。x0(=0)〜x1(=2000)。levelOffset=890は
@@ -1224,7 +1226,7 @@ test('【WP-C】stairFaceSequence: 踊り場back辺に置いたrole:landing梁�
   const y0 = graph.centerLines.find(cl => cl.centerLineType === CenterLineType.HORIZONTAL && cl.value === 0);
   graph.addBeam(StructuralMaterialType.STEEL, 'STEEL-H200x100', y0, false, x0, x1, { role: 'landing', levelOffset: 890 });
 
-  const after = stairFaceSequence(stair, faces, graph, OPTS);
+  const after = stairFaceSequence(stair, faces, graph, { ...OPTS, layers: buildBandLayers(graph) });
   const afterBySeq = Object.fromEntries(after.map(e => [e.seqNo, e]));
 
   // seq2はbaseFloorZ=0（topZ890はそれより上）のためCUT(太線)のまま、seq4/5はbaseFloorZ=1200
@@ -1263,7 +1265,7 @@ test('【失敗系・WP-C】stairFaceSequence: 構造梁が無い階段は従来
   const graph = makeGraph();
   const { room, stair } = makeSwitchbackFixture(graph);
   const faces = composeRoomFaces(room, graph);
-  const entries = stairFaceSequence(stair, faces, graph, OPTS);
+  const entries = stairFaceSequence(stair, faces, graph, { ...OPTS, layers: buildBandLayers(graph) });
   assert.deepEqual(entries.map(e => e.seqNo), ['1', '2', '3', '4', '5']);
   for (const e of entries) assert.ok(Array.isArray(e.content));
 });
@@ -1281,7 +1283,7 @@ test('stairFaceSequence: 上階(2F)の実Roomが踊り場のみ(upperLandingOnly
   const upperGraph = makeGraph('p2');
   const { room, stair } = makeSwitchbackFixture(graph, { withMidWall: true, midWallGraph: upperGraph, upperLandingOnly: true });
   const faces = composeRoomFaces(room, graph);
-  const entries = stairFaceSequence(stair, faces, graph, { ...OPTS, upperGraph });
+  const entries = stairFaceSequence(stair, faces, graph, { ...OPTS, upperGraph, layers: buildBandLayers(graph, { above: [{ graph: upperGraph, floorHeightMm: OPTS.floorHeight }] }) });
   const seq2 = entries.find(e => e.seqNo === '2');
   const seq4 = entries.find(e => e.seqNo === '4');
 
@@ -1305,12 +1307,85 @@ test('stairFaceSequence: 上階(2F)の実Roomが踊り場のみ(upperLandingOnly
     'seq4末尾(レーン側)は上階天井のはず');
 });
 
+// ==== Phase 7b-2: aboveLayer（旧layers.find(l => l.role !== 'self')）をlayerDirectlyAboveSelf
+// （floorZMmが自階超で最小の1層）へ置換した是正の合成fixtureテスト ====
+//
+// 現行の生産経路（buildStairBand→switchbackCuts）はcut.layersを常に[self, above]の2層でしか
+// 組まないため、3層構成は実データを一切経由しない（13.stq/11.stqの階段はswitchbackのみで
+// 2層帯止まり）。opts.layersはswitchbackCutsが**素通しする値**（必須引数。QA是正F5でフォールバックを
+// 削除済み）なので、ここでは3層のlayersを直接組み立てて渡し、経路が実行されることを示す
+// （team-lessons: 実データ未経由の経路は同じコミットに合成fixtureのテストを入れて実行を示す）。
+//
+// 上の「上階(2F)の実Roomが踊り場のみ」テストと同じ構成に、**3階目(above2)を往路・復路レーンにも
+// 実Roomがある**（2Fとは逆の構成）グラフとして追加する——旧実装（配列先頭の非self層を無条件に
+// 拾う）がaboveLayerを誤って3階目に固定すると、レーン区間の判定が「吹抜け(chUpperAbsMm)」から
+// 「実Room有り(chLowerMm)」へひっくり返るため、mutationで検知できる。
+function makeFarAboveGraph() {
+  const g = makeGraph('p3');
+  const x0 = g.addCenterLine(CenterLineType.VERTICAL, 0,    { labeled: false, discipline: Discipline.ARCH });
+  const xm = g.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
+  const x1 = g.addCenterLine(CenterLineType.VERTICAL, 2000, { labeled: false, discipline: Discipline.ARCH });
+  const y0 = g.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: false, discipline: Discipline.ARCH });
+  const ym = g.addCenterLine(CenterLineType.HORIZONTAL, 1500, { labeled: false, discipline: Discipline.ARCH });
+  const y1 = g.addCenterLine(CenterLineType.HORIZONTAL, 4500, { labeled: false, discipline: Discipline.ARCH });
+  // 2F(upperLandingOnly)とは逆に、踊り場・往路・復路の全セルへRoomを置く（全面実床）。
+  const landingKey  = `${x0.id}:${y0.id}:${x1.id}:${ym.id}`;
+  const outboundKey = `${x0.id}:${ym.id}:${xm.id}:${y1.id}`;
+  const returnKey   = `${xm.id}:${ym.id}:${x1.id}:${y1.id}`;
+  g.addRoom(new Set([landingKey, outboundKey, returnKey]), '3F');
+  return g;
+}
+
+test('【Phase 7b-2】stairFaceSequence: above2層(2F=踊り場のみ実床／3F=全面実床)のうち直上(2F)を選び、' +
+  'レーン区間は3F(全面実床)ではなく2F(吹抜け)基準でceilingProfileが決まる', () => {
+  const graph = makeGraph();
+  const upperGraph = makeGraph('p2'); // 2F: 踊り場のみ実床（直上・正しい選択先）
+  const { room, stair } = makeSwitchbackFixture(graph, { withMidWall: true, midWallGraph: upperGraph, upperLandingOnly: true });
+  const faces = composeRoomFaces(room, graph);
+  const farAboveGraph = makeFarAboveGraph(); // 3F: 全面実床（旧実装が誤って選びうる層）
+
+  const selfLayer = { graph, floorZMm: 0, role: 'self' };
+  const aboveLayer = { graph: upperGraph, floorZMm: OPTS.floorHeight, role: 'above' };
+  const above2Layer = { graph: farAboveGraph, floorZMm: OPTS.floorHeight * 2, role: 'above2' };
+
+  // 配列順を入れ替えた2通りで結果が完全一致すること（role名・配列順に依存しない一般規則）。
+  const orders = [
+    [selfLayer, aboveLayer, above2Layer],
+    [above2Layer, aboveLayer, selfLayer],
+  ];
+  const results = orders.map(layers =>
+    stairFaceSequence(stair, faces, graph, { ...OPTS, upperGraph, layers }));
+
+  for (const entries of results) {
+    const seq2 = entries.find(e => e.seqNo === '2');
+    const seq4 = entries.find(e => e.seqNo === '4');
+    // 2F(直上)基準なら「上階(2F)の実Roomが踊り場のみ」テストと同じ結果になる——
+    // レーン区間は吹抜け(chUpperAbsMm)、踊り場側は1F天井(chLowerMm)。3F(全面実床)を誤って
+    // 選んでいれば、レーン区間も実Room有り扱いでchLowerMmになってしまう。
+    const laneSeg2 = seq2.floorSegments.find(s => s.floorDeltaMm === 0);
+    assert.ok(laneSeg2, 'seq2にレーン区間(floorDeltaMm:0)があるはず');
+    assert.equal(laneSeg2.floorDeltaMm + laneSeg2.chMm, OPTS.chUpperAbsMm,
+      '直上(2F)基準ならレーン区間は吹抜け（上階天井まで抜ける）のはず');
+    assert.equal(seq2.ceilingProfile[0][1], OPTS.chUpperAbsMm, 'ceilingProfile冒頭(レーン側)は上階天井のはず');
+    assert.equal(seq2.ceilingProfile[seq2.ceilingProfile.length - 1][1], OPTS.chLowerMm,
+      'ceilingProfile末尾(踊り場側)は1F天井のはず');
+    assert.equal(seq4.ceilingProfile[0][1], OPTS.chLowerMm, 'seq4冒頭(踊り場側)は1F天井のはず');
+    assert.equal(seq4.ceilingProfile[seq4.ceilingProfile.length - 1][1], OPTS.chUpperAbsMm,
+      'seq4末尾(レーン側)は上階天井のはず');
+  }
+  assert.deepEqual(
+    results[0].map(e => ({ seqNo: e.seqNo, floorSegments: e.floorSegments, ceilingProfile: e.ceilingProfile })),
+    results[1].map(e => ({ seqNo: e.seqNo, floorSegments: e.floorSegments, ceilingProfile: e.ceilingProfile })),
+    'layers配列の並び順を入れ替えても結果が完全一致するはず（role名・配列順に依存しない）',
+  );
+});
+
 test('【失敗系・ユーザー実機フィードバック2026-08-23第3弾・項目A】stairFaceSequence: 上階(2F)にRoomが無い(upperGraph自体無指定)' +
   '場合は例外を投げず、既存のlaneLenOnFace基準フォールバックのまま動く', () => {
   const graph = makeGraph();
   const { room, stair } = makeSwitchbackFixture(graph);
   const faces = composeRoomFaces(room, graph);
-  const entries = stairFaceSequence(stair, faces, graph, OPTS); // upperGraph未指定
+  const entries = stairFaceSequence(stair, faces, graph, { ...OPTS, layers: buildBandLayers(graph) }); // upperGraph未指定
   const seq2 = entries.find(e => e.seqNo === '2');
   assert.ok(Array.isArray(seq2.ceilingProfile) && seq2.ceilingProfile.length >= 2, '例外を投げず既存の形のceilingProfileを返すはず');
 });
@@ -1352,7 +1427,7 @@ test('【実機フィードバック第3弾D】stairFaceSequence: 室が階段�
   }
 
   const faces = composeRoomFaces(room, graph);
-  const entries = stairFaceSequence(stair, faces, graph, OPTS);
+  const entries = stairFaceSequence(stair, faces, graph, { ...OPTS, layers: buildBandLayers(graph) });
   const seq1 = entries.find(e => e.seqNo === '1');
   const n1 = 6, riser = OPTS.floorHeight / 12;
   const landingAbs = n1 * riser;
@@ -1378,7 +1453,7 @@ test('【失敗系・実機フィードバック第3弾D】stairFaceSequence: �
   const { room, stair } = makeSwitchbackFixture(graph);
   stair.setField('structure', StructuralMaterialType.STEEL);
   const faces = composeRoomFaces(room, graph);
-  const entries = stairFaceSequence(stair, faces, graph, OPTS);
+  const entries = stairFaceSequence(stair, faces, graph, { ...OPTS, layers: buildBandLayers(graph) });
   const seq1 = entries.find(e => e.seqNo === '1');
   const wallGapDiagonals = seq1.content.filter(p =>
     p.type === 'line' && p.x1 !== p.x2 && p.y1 !== p.y2 &&
@@ -1500,7 +1575,8 @@ for (const upDirection of ['up', 'down']) {
   for (const flip of [false, true]) {
     test(`【実機フィードバック第3弾B・再現確認】stairFaceSequence: 実機相当fixture(upDirection=${upDirection}・flip=${flip})でseq2/seq4のthin(DETAIL)ポリラインはself/secondaryともflightのFL範囲を超えて突き出さない`, () => {
       const { stair, faces, graph, upperGraph } = makeRealisticSwitchbackFixture(upDirection, flip);
-      const REAL_OPTS = { floorHeight: 3000, chUpperAbsMm: 5400, chLowerMm: 2400, upperGraph };
+      const REAL_OPTS = { floorHeight: 3000, chUpperAbsMm: 5400, chLowerMm: 2400, upperGraph,
+        layers: buildBandLayers(graph, { above: [{ graph: upperGraph, floorHeightMm: 3000 }] }) };
       const entries = stairFaceSequence(stair, faces, graph, REAL_OPTS);
       assert.ok(entries, 'entriesがnullにならないはず');
       const contribution = { outbound: { baseZ: 0, steps: 11, riserMm: REAL_OPTS.floorHeight / 22 },
@@ -1559,7 +1635,7 @@ test('【実機フィードバック第3弾・続報】stairFaceSequence: 上階
   stairVoidRoom.setFeature(RoomFeature.STAIR_VOID);
 
   const faces = composeRoomFaces(room, graph);
-  const entries = stairFaceSequence(stair, faces, graph, { ...OPTS, upperGraph });
+  const entries = stairFaceSequence(stair, faces, graph, { ...OPTS, upperGraph, layers: buildBandLayers(graph, { above: [{ graph: upperGraph, floorHeightMm: OPTS.floorHeight }] }) });
   const seq1 = entries.find(e => e.seqNo === '1');
   const seq2 = entries.find(e => e.seqNo === '2');
   const silhouetteWeight = weightForRole(ElevationLineRole.SILHOUETTE);
@@ -1585,7 +1661,7 @@ test('【失敗系・実機フィードバック第3弾・続報】stairFaceSequ
   upperGraph.addRoom(new Set([uKey]), '洋室'); // feature未設定=実Room
 
   const faces = composeRoomFaces(room, graph);
-  const entries = stairFaceSequence(stair, faces, graph, { ...OPTS, upperGraph });
+  const entries = stairFaceSequence(stair, faces, graph, { ...OPTS, upperGraph, layers: buildBandLayers(graph, { above: [{ graph: upperGraph, floorHeightMm: OPTS.floorHeight }] }) });
   const seq1 = entries.find(e => e.seqNo === '1');
 
   // 線種は奥行きで決まる（ユーザー明示指示2026-08「直近を中線、それ以外を細線」）ため、この
@@ -1607,7 +1683,7 @@ test('【実機指摘】stairFaceSequence: seq5の面はwOut2の全長で、seq4
   const graph = makeGraph();
   const { room, stair } = makeSwitchbackFixture(graph, { withMidWall: true });
   const faces = composeRoomFaces(room, graph);
-  const table = switchbackCuts(stair, faces, graph, OPTS);
+  const table = switchbackCuts(stair, faces, graph, { ...OPTS, layers: buildBandLayers(graph) });
   assert.ok(table);
   const seq5 = table.cuts.find(c => c.seqNo === '5');
   const seq4 = table.cuts.find(c => c.seqNo === '4');
@@ -1633,8 +1709,8 @@ test('【実機指摘】stairFaceSequence: 展開記号は切断の視線の向�
   const graph = makeGraph();
   const { room, stair } = makeSwitchbackFixture(graph, { withMidWall: true });
   const faces = composeRoomFaces(room, graph);
-  const entries = stairFaceSequence(stair, faces, graph, OPTS);
-  const table = switchbackCuts(stair, faces, graph, OPTS);
+  const entries = stairFaceSequence(stair, faces, graph, { ...OPTS, layers: buildBandLayers(graph) });
+  const table = switchbackCuts(stair, faces, graph, { ...OPTS, layers: buildBandLayers(graph) });
   assert.ok(entries && table);
   // 実装の式をそのまま写経しても契約の検証にならないので、ユーザーの言葉どおりの性質で見る:
   // 「同じ世界方向を見ている切断どうしは同じ記号」「向きが違えば違う記号」。
@@ -1663,7 +1739,7 @@ test('【実機指摘】stairFaceSequence: 展開記号のラベルは歩行順�
   const graph = makeGraph();
   const { room, stair } = makeSwitchbackFixture(graph, { withMidWall: true });
   const faces = composeRoomFaces(room, graph);
-  const entries = stairFaceSequence(stair, faces, graph, OPTS);
+  const entries = stairFaceSequence(stair, faces, graph, { ...OPTS, layers: buildBandLayers(graph) });
   const labels = entries.map(e => e.face.label);
   assert.equal(labels.length, new Set(labels).size, `ラベルは重複しないはず（実際:${labels}）`);
   // letterごとに、出現順で 1,2,3... の連番（単独ならletterのみ）になっている。
@@ -1682,7 +1758,7 @@ test('【実機指摘】stairFaceSequence: 展開記号のラベルは歩行順�
 test('【実機指摘】stairFaceSequence: 階段下に部屋が無ければ帯の床・基準床が1FL(0)になる', () => {
   const graph = makeGraph();
   const { room, stair } = makeSwitchbackFixture(graph, { withRoomUnder: false });
-  const entries = stairFaceSequence(stair, composeRoomFaces(room, graph), graph, OPTS);
+  const entries = stairFaceSequence(stair, composeRoomFaces(room, graph), graph, { ...OPTS, layers: buildBandLayers(graph) });
   const seq1 = entries.find(e => e.seqNo === '1');
   const seq3 = entries.find(e => e.seqNo === '3');
   for (const [no, e] of [['1', seq1], ['3', seq3]]) {
@@ -1694,7 +1770,7 @@ test('【実機指摘】stairFaceSequence: 階段下に部屋が無ければ帯�
 test('【実機指摘】stairFaceSequence: 階段下に部屋があれば従来どおり踊り場が帯の床（回帰）', () => {
   const graph = makeGraph();
   const { room, stair } = makeSwitchbackFixture(graph); // withRoomUnder既定true
-  const entries = stairFaceSequence(stair, composeRoomFaces(room, graph), graph, OPTS);
+  const entries = stairFaceSequence(stair, composeRoomFaces(room, graph), graph, { ...OPTS, layers: buildBandLayers(graph) });
   const seq1 = entries.find(e => e.seqNo === '1');
   assert.ok(seq1.floorSegments[0].floorDeltaMm > 0, '踊り場の高さが帯の床になるはず');
 });
@@ -1705,8 +1781,8 @@ test('【実機指摘】stairFaceSequence: 階段下に部屋が無ければseq1
   const withUnder = makeGraph('pU');
   const a = makeSwitchbackFixture(graph, { withRoomUnder: false });
   const b = makeSwitchbackFixture(withUnder); // 下に部屋あり
-  const seqOf = (g, f) => stairFaceSequence(f.stair, composeRoomFaces(f.room, g), g, OPTS)
-    .find(e => e.seqNo === '1');
+  const seqOf = (g, f) => stairFaceSequence(f.stair, composeRoomFaces(f.room, g), g,
+    { ...OPTS, layers: buildBandLayers(g) }).find(e => e.seqNo === '1');
   const bottomOf = (g, f) => {
     const e = seqOf(g, f);
     const prims = buildFaceFigure(e.face, {
@@ -1734,8 +1810,8 @@ test('【明示指示】stairFaceSequence: 各面の幾何(inward)は、その�
     const graph = makeGraph();
     const { room, stair } = makeSwitchbackFixture(graph, { withMidWall });
     const faces = composeRoomFaces(room, graph);
-    const entries = stairFaceSequence(stair, faces, graph, OPTS);
-    const table = switchbackCuts(stair, faces, graph, OPTS);
+    const entries = stairFaceSequence(stair, faces, graph, { ...OPTS, layers: buildBandLayers(graph) });
+    const table = switchbackCuts(stair, faces, graph, { ...OPTS, layers: buildBandLayers(graph) });
     assert.ok(entries && table);
     let checked = 0;
     for (const e of entries) {
@@ -1753,8 +1829,8 @@ test('【明示指示】stairFaceSequence: seq2は往復レーンの境界を見
   const graph = makeGraph();
   const { room, stair } = makeSwitchbackFixture(graph, { withMidWall: false });
   const faces = composeRoomFaces(room, graph);
-  const entries = stairFaceSequence(stair, faces, graph, OPTS);
-  const table = switchbackCuts(stair, faces, graph, OPTS);
+  const entries = stairFaceSequence(stair, faces, graph, { ...OPTS, layers: buildBandLayers(graph) });
+  const table = switchbackCuts(stair, faces, graph, { ...OPTS, layers: buildBandLayers(graph) });
   const axisOf = e => entries.find(x => x.seqNo === e).face.axisCL.effectiveValue;
   const laneBoundary = (table.wOut1.axisCL.effectiveValue + table.wOut2.axisCL.effectiveValue) / 2;
 
@@ -1816,7 +1892,8 @@ test('【失敗系】stairChDimChains: 退化した区間（高さ0）は寸法�
 // 突き抜けて踊り場まで描かれていた。
 test('【明示指示】stairFaceSequence: seq2の復路ささら見えがかりは、手前（往路）のささら上端より下へ出ない', () => {
   const { stair, faces, graph, upperGraph } = makeRealisticSwitchbackFixture('up', false);
-  const REAL_OPTS = { floorHeight: 3000, chUpperAbsMm: 5400, chLowerMm: 2400, upperGraph };
+  const REAL_OPTS = { floorHeight: 3000, chUpperAbsMm: 5400, chLowerMm: 2400, upperGraph,
+        layers: buildBandLayers(graph, { above: [{ graph: upperGraph, floorHeightMm: 3000 }] }) };
   const entries = stairFaceSequence(stair, faces, graph, REAL_OPTS);
   const entry = entries.find(e => e.seqNo === '2');
   assert.ok(entry, '前提: seq2がある');
@@ -1856,7 +1933,7 @@ test('【明示指示】stairFaceSequence: seq2の復路ささら見えがかり
 test('stairFaceSequence: 階段下に部屋があると、壁の縦線はどの面でもその位置の床断面線より下に無い', () => {
   const graph = makeGraph();
   const { room, stair } = makeSwitchbackFixture(graph); // 既定 withRoomUnder:true
-  const entries = stairFaceSequence(stair, composeRoomFaces(room, graph), graph, OPTS);
+  const entries = stairFaceSequence(stair, composeRoomFaces(room, graph), graph, { ...OPTS, layers: buildBandLayers(graph) });
   const detailWeight = weightForRole(ElevationLineRole.DETAIL);
 
   for (const e of entries) {
@@ -1878,7 +1955,7 @@ test('stairFaceSequence: 階段下に部屋があると、壁の縦線はどの�
 test('【失敗系】stairFaceSequence: 階段下に部屋が無ければ壁の縦線は設置階FL(0)まで描く（クリップしない）', () => {
   const graph = makeGraph();
   const { room, stair } = makeSwitchbackFixture(graph, { withRoomUnder: false });
-  const entries = stairFaceSequence(stair, composeRoomFaces(room, graph), graph, OPTS);
+  const entries = stairFaceSequence(stair, composeRoomFaces(room, graph), graph, { ...OPTS, layers: buildBandLayers(graph) });
 
   for (const e of entries) {
     assert.ok(e.floorSegments.every(s => (s.floorDeltaMm ?? 0) === 0),
@@ -1895,7 +1972,7 @@ test('【失敗系】stairFaceSequence: 階段下に部屋が無ければ壁の�
 test('stairFaceSequence: seq5の踊り場の床線は階段断面（ジグザグ）の最下点で終わる（flatLineSpanX）', () => {
   const graph = makeGraph();
   const { room, stair } = makeSwitchbackFixture(graph);
-  const entries = stairFaceSequence(stair, composeRoomFaces(room, graph), graph, OPTS);
+  const entries = stairFaceSequence(stair, composeRoomFaces(room, graph), graph, { ...OPTS, layers: buildBandLayers(graph) });
   const seq5 = entries.find(e => e.seqNo === '5');
 
   // 復路の断面ジグザグ（CUT/SILHOUETTEのpolyline）の最下点＝踊り場側の段鼻。座標は決め打ちせず
@@ -1915,7 +1992,7 @@ test('stairFaceSequence: seq5の踊り場の床線は階段断面（ジグザグ
 test('stairFaceSequence: seq5は断面線（ジグザグ）より下に壁contentを描かず、階段自身の断面は残る', () => {
   const graph = makeGraph();
   const { room, stair } = makeSwitchbackFixture(graph);
-  const entries = stairFaceSequence(stair, composeRoomFaces(room, graph), graph, OPTS);
+  const entries = stairFaceSequence(stair, composeRoomFaces(room, graph), graph, { ...OPTS, layers: buildBandLayers(graph) });
   const seq5 = entries.find(e => e.seqNo === '5');
   const landingAbs = 6 * (OPTS.floorHeight / 12); // n1=6段・riser=階高/12
 
@@ -1985,7 +2062,9 @@ function makeUpperForOverhang(graph,
 // 本番では出ない線がテストでだけ出る）。
 function seq1UpperFloorLines(graph, upperGraph, { room, stair }) {
   const e = stairFaceSequence(stair, composeRoomFaces(room, graph), graph,
-    { ...OPTS, upperGraph, wallLessEndExtendModelMm: 150 }).find(x => x.seqNo === '1');
+    { ...OPTS, upperGraph, wallLessEndExtendModelMm: 150,
+      layers: buildBandLayers(graph, { above: [{ graph: upperGraph, floorHeightMm: OPTS.floorHeight }] }) })
+    .find(x => x.seqNo === '1');
   const prims = buildFaceFigure(e.face, {
     graph, project: { openingNumberIndex: new Map() }, room, ceilingHeight: OPTS.chLowerMm,
     materialMap: null, gridCLs: [], wallLessEndExtendModelMm: 150,
@@ -2099,7 +2178,8 @@ test('【D1-1】stairFaceSequence: 階段自身のpolyline(CUT/DETAIL)は面の�
     makeUpperForOverhang(upperGraph);
     const faces = composeRoomFaces(fixture.room, graph);
     return { entries: stairFaceSequence(fixture.stair, faces, graph,
-      { ...OPTS, upperGraph, wallLessEndExtendModelMm: 150 }) };
+      { ...OPTS, upperGraph, wallLessEndExtendModelMm: 150,
+        layers: buildBandLayers(graph, { above: [{ graph: upperGraph, floorHeightMm: OPTS.floorHeight }] }) }) };
   }));
   const seq5 = entries.find(e => e.seqNo === '5');
   assert.deepEqual(seq5.upperOverhang, { lo: 57.5, hi: 57.5 },
