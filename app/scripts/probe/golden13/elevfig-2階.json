@@ -2007,7 +2007,7 @@
   "room": "d79a5ddc-9faf-4a73-adfb-86fb0baa79ec",
   "name": "22",
   "kind": "room",
-  "count": 184,
+  "count": 182,
   "prims": [
    {
     "type": "line",
@@ -3174,7 +3174,7 @@
     "type": "line",
     "weight": "medium",
     "x1": 7885,
-    "x2": 7942.5,
+    "x2": 8000,
     "y1": -800,
     "y2": -800
    },
@@ -3182,7 +3182,67 @@
     "type": "line",
     "weight": "thin",
     "x1": 7885,
-    "x2": 7942.5,
+    "x2": 8000,
+    "y1": -750,
+    "y2": -750
+   },
+   {
+    "__o": "recessHi",
+    "type": "line",
+    "weight": "medium",
+    "x1": 8000,
+    "x2": 8000,
+    "y1": 0,
+    "y2": -800
+   },
+   {
+    "type": "line",
+    "weight": "thin",
+    "x1": 7950,
+    "x2": 7950,
+    "y1": 0,
+    "y2": -800
+   },
+   {
+    "dash": "center",
+    "type": "line",
+    "weight": "thin",
+    "x1": 5000,
+    "x2": 8885,
+    "y1": 0,
+    "y2": -2400
+   },
+   {
+    "dash": "center",
+    "type": "line",
+    "weight": "thin",
+    "x1": 5000,
+    "x2": 7590,
+    "y1": -2400,
+    "y2": -800
+   },
+   {
+    "dash": "center",
+    "type": "line",
+    "weight": "thin",
+    "x1": 8000,
+    "x2": 8885,
+    "y1": -546.718,
+    "y2": 0
+   },
+   {
+    "type": "line",
+    "weight": "medium",
+    "x1": 9235,
+    "x2": 9350,
+    "y1": -800,
+    "y2": -800
+   },
+   {
+    "type": "line",
+    "weight": "thin",
+    "x1": 9235,
+    "x2": 9350,
     "y1": -750,
     "y2": -750
    },
@@ -3190,79 +3250,18 @@
     "__o": "recessLo",
     "type": "line",
     "weight": "medium",
-    "x1": 7942.5,
-    "x2": 7942.5,
-    "y1": -800,
-    "y2": -2400
-   },
-   {
-    "dash": "center",
-    "type": "line",
-    "weight": "thin",
-    "x1": 5000,
-    "x2": 7942.5,
+    "x1": 9235,
+    "x2": 9235,
     "y1": 0,
-    "y2": -2400
-   },
-   {
-    "dash": "center",
-    "type": "line",
-    "weight": "thin",
-    "x1": 5000,
-    "x2": 7942.5,
-    "y1": -2400,
-    "y2": -800
-   },
-   {
-    "anchor": "middle",
-    "baseline": "middle",
-    "text": "ア キ",
-    "type": "text",
-    "x": 8442.5,
-    "y": -1200
-   },
-   {
-    "dash": "center",
-    "type": "line",
-    "weight": "thin",
-    "x1": 8000,
-    "x2": 8885,
-    "y1": 0,
-    "y2": -2400
-   },
-   {
-    "dash": "center",
-    "type": "line",
-    "weight": "thin",
-    "x1": 8000,
-    "x2": 8885,
-    "y1": -2400,
-    "y2": 0
-   },
-   {
-    "__o": "recessHi",
-    "type": "line",
-    "weight": "medium",
-    "x1": 9292.5,
-    "x2": 9292.5,
-    "y1": -800,
-    "y2": -2400
-   },
-   {
-    "type": "line",
-    "weight": "medium",
-    "x1": 9292.5,
-    "x2": 9350,
-    "y1": -800,
     "y2": -800
    },
    {
     "type": "line",
     "weight": "thin",
-    "x1": 9292.5,
-    "x2": 9350,
-    "y1": -750,
-    "y2": -750
+    "x1": 9285,
+    "x2": 9285,
+    "y1": 0,
+    "y2": -800
    },
    {
     "type": "line",
@@ -3294,14 +3293,14 @@
     "baseline": "middle",
     "text": "ア キ",
     "type": "text",
-    "x": 11013.75,
+    "x": 10985,
     "y": -1600
    },
    {
     "dash": "center",
     "type": "line",
     "weight": "thin",
-    "x1": 9292.5,
+    "x1": 9235,
     "x2": 12735,
     "y1": -800,
     "y2": -2400
@@ -3310,7 +3309,7 @@
     "dash": "center",
     "type": "line",
     "weight": "thin",
-    "x1": 9292.5,
+    "x1": 9235,
     "x2": 12735,
     "y1": -2400,
     "y2": -800
@@ -3319,7 +3318,7 @@
     "type": "line",
     "weight": "medium",
     "x1": 22650,
-    "x2": 24592.5,
+    "x2": 24650,
     "y1": -800,
     "y2": -800
    },
@@ -3327,7 +3326,7 @@
     "type": "line",
     "weight": "thin",
     "x1": 22650,
-    "x2": 24592.5,
+    "x2": 24650,
     "y1": -750,
     "y2": -750
    },
@@ -3341,103 +3340,85 @@
     "y2": -800
    },
    {
-    "__o": "recessLo",
-    "type": "line",
-    "weight": "medium",
-    "x1": 24592.5,
-    "x2": 24592.5,
-    "y1": -800,
-    "y2": -2400
-   },
-   {
     "__o": "recessHi",
     "type": "line",
     "weight": "medium",
-    "x1": 26092.5,
-    "x2": 26092.5,
-    "y1": -800,
-    "y2": -2400
-   },
-   {
-    "type": "line",
-    "weight": "medium",
-    "x1": 26092.5,
-    "x2": 26150,
-    "y1": -800,
-    "y2": -800
-   },
-   {
-    "type": "line",
-    "weight": "thin",
-    "x1": 26092.5,
-    "x2": 26150,
-    "y1": -750,
-    "y2": -750
-   },
-   {
-    "type": "line",
-    "weight": "medium",
-    "x1": 26150,
-    "x2": 26185,
-    "y1": -800,
-    "y2": -800
-   },
-   {
-    "type": "line",
-    "weight": "thin",
-    "x1": 26150,
-    "x2": 26185,
-    "y1": -750,
-    "y2": -750
-   },
-   {
-    "anchor": "middle",
-    "baseline": "middle",
-    "text": "ア キ",
-    "type": "text",
-    "x": 23621.25,
-    "y": -1600
-   },
-   {
-    "dash": "center",
-    "type": "line",
-    "weight": "thin",
-    "x1": 22650,
-    "x2": 24592.5,
-    "y1": -800,
-    "y2": -2400
-   },
-   {
-    "dash": "center",
-    "type": "line",
-    "weight": "thin",
-    "x1": 22650,
-    "x2": 24592.5,
-    "y1": -2400,
-    "y2": -800
-   },
-   {
-    "anchor": "middle",
-    "baseline": "middle",
-    "text": "ア キ",
-    "type": "text",
-    "x": 25342.5,
-    "y": -1200
-   },
-   {
-    "dash": "center",
-    "type": "line",
-    "weight": "thin",
     "x1": 24650,
+    "x2": 24650,
+    "y1": 0,
+    "y2": -800
+   },
+   {
+    "type": "line",
+    "weight": "thin",
+    "x1": 24600,
+    "x2": 24600,
+    "y1": 0,
+    "y2": -800
+   },
+   {
+    "type": "line",
+    "weight": "medium",
+    "x1": 26035,
+    "x2": 26150,
+    "y1": -800,
+    "y2": -800
+   },
+   {
+    "type": "line",
+    "weight": "thin",
+    "x1": 26035,
+    "x2": 26150,
+    "y1": -750,
+    "y2": -750
+   },
+   {
+    "__o": "recessLo",
+    "type": "line",
+    "weight": "medium",
+    "x1": 26035,
     "x2": 26035,
     "y1": 0,
+    "y2": -800
+   },
+   {
+    "type": "line",
+    "weight": "thin",
+    "x1": 26085,
+    "x2": 26085,
+    "y1": 0,
+    "y2": -800
+   },
+   {
+    "type": "line",
+    "weight": "medium",
+    "x1": 26150,
+    "x2": 26185,
+    "y1": -800,
+    "y2": -800
+   },
+   {
+    "type": "line",
+    "weight": "thin",
+    "x1": 26150,
+    "x2": 26185,
+    "y1": -750,
+    "y2": -750
+   },
+   {
+    "dash": "center",
+    "type": "line",
+    "weight": "thin",
+    "x1": 22650,
+    "x2": 26035,
+    "y1": -800,
     "y2": -2400
    },
    {
     "dash": "center",
     "type": "line",
     "weight": "thin",
-    "x1": 24650,
+    "x1": 22650,
     "x2": 26035,
     "y1": -2400,
     "y2": 0
