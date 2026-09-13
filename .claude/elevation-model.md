@@ -16,9 +16,10 @@
 
 ## 2つの描画エンジンの担当境界（新しい表現をどちらへ足すか）
 1枚の帯へ**2つのエンジンが同時にプリミティブを流し込む**。断面エンジンへの入口は
-`elevationBand.js`の`appendBandCutContent`（→`section/sectionContent.js`の`buildCutContent`）**1つだけ**で、
-通常の部屋帯・上部吹抜けを持つ部屋帯・吹抜け帯がこれを共有する（階段帯は`switchbackCuts`が組んだcutを
-同じ`buildCutContent`へ渡す）。帯ごとに違うのは**層スタックだけ**——通常の部屋帯は自階1層、
+`section/sectionContent.js`の**`buildSectionFromLine(line, layers, opts)`（面非依存の入口。展開図一般化Phase 8・
+2026-09-13）→`buildCutContent`**で、通常の部屋帯・上部吹抜けを持つ部屋帯・吹抜け帯（`appendBandCutContent`／
+`appendUpperStoreyOutline`）がこれを共有する。階段帯だけは`switchbackCuts`/`straightCuts`が組んだcutを
+`buildCutContent`へ直接渡す（`ends`を持たない手組みcut＝face由来のフォールバック経路。統合はクリーンアップPhase）。帯ごとに違うのは**層スタックだけ**——通常の部屋帯は自階1層、
 上部吹抜けは自階＋上階、吹抜け帯は自階＋直下階。**層スタックを組む入口は`section/sectionBandLayers.js`の
 `buildBandLayers(selfGraph, {above, below, selfFloorZMm})`の1関数だけ**（展開図一般化Phase 7・2026-09-13。
 帯ビルダー・階段のcut表・加算レイヤはこれを呼ぶか受け取るだけで、層のリテラルを書かない。above/belowは
@@ -260,7 +261,7 @@ letter内の採番をやり直すため）。**上部吹抜けの2層帯だけ�
 標記を置いても図が汚れるだけ。判定は`GAP_LABEL_WIDTH_PX`(=30。「ア キ」の概算幅)を
 `scale`(px/mm)で実寸へ戻した値。**`scale`未指定（単体テスト・ゴールデン）では判定しない**
 ——実画面幅が決まらないため。`scale`は帯の2パス目でのみ確定するので、
-`appendBandCutContent`→`buildCutContent`→`emitCtx`と渡す。
+`appendBandCutContent`→`buildSectionFromLine`→`buildCutContent`→`emitCtx`と渡す。
 
 **この判定に畳めないもの（別の問い）**:
 `withinViewRoom`（`sectionProbe.js`）は**視線方向（奥行き）**の可視性で、切断面内(x,z)の連結性
@@ -1343,10 +1344,24 @@ SILHOUETTE」（AMBIGUITY B）は撤回した——断面は隣に何が見え�
 ## 切断1本→contentの共通経路（`section/sectionContent.js`）
 階段帯と吹抜けの多層帯は「切断を1本立てて断面エンジンへ渡す」同じ処理なのに別々に手で組み立てて
 いたため、**階段帯にはあるものが吹抜け帯には無い**という差が静かに溜まっていた（探査延長・端の
-凹み側面線の抑制・アキのバツが吹抜け帯には丸ごと無かった）。`buildCutContent`を唯一の入口にし、
+凹み側面線の抑制・アキのバツが吹抜け帯には丸ごと無かった）。`buildCutContent`を唯一の共通経路にし、
 **ここへ足した修正は階段にも吹抜けにも同時に効く**状態を不変条件とする。タイプ固有の処理
 （階段のささら・遮蔽、構造材の加算レイヤ）は返り値の部品に対して呼び出し側が後段で行う——
 共通経路にタイプ固有の分岐を持ち込まない、が境界。
+
+**面非依存の入口 `buildSectionFromLine(line, layers, opts)`**（Phase 8・2026-09-13）: 切断線と層スタックを主語に
+cutを組んで`buildCutContent`へ渡す薄い層。`face`は必須引数ではなく**opts の「面由来の値の供給元」**に降格し、
+面固有の値（`viewSign`/`dirSign`/`zRange`（必須。エンジンで導出しない＝導出すると帯種別の分岐が生える）/
+`baseFloorZ`/`ceilProfile`/`floorZProfile`/`aboveCeilVisibleRanges`/`stairCut`/`bandRoomBounds`/`probeCtx`…）は呼び出し側が
+渡す。**面述語の導出は`SectionCut.ends`（`{openLo,openHi,wallLessLo,wallLessHi}`）1箇所**——`withProbeExtension`
+（探査を広げる）と`emitCtxForCut`（端の凹み側面線を締める）は`cut.ends`を読み、`ends`の無い手組みcut（階段cut表）
+だけ従来のface導出へフォールバックする。**face-lessの縮退規則**: 層ごとの探査窓（`layerRunWindowsOf`。壁の中心線の
+平面が要る）は作らない／`bandRoomBounds`の既定は渡さない＝深度上限`SIGHTLINE_DEPTH_LIMIT_MM`だけで絞る
+（ユーザー裁定2026-09-13。`withinViewRoom`は帯＝1部屋前提の特例で、多室横断では成立しないため）。`cut.face`を
+なお直読みするのは`layerRunWindowsOf`・`sectionStructure.js`（半壁厚許容・`faceAxis`）・`elevationStairSequence.js`
+（はり出し基準）で、face-lessではそれぞれ窓なし／許容0／`line.axisValue`へ縮退する。範囲外: 斜めの切断線
+（`CutLine`は軸平行のみ）、多室横断での`baseFloorZ`・`ceilProfile`の意味づけ、材の層構成、体裁、
+`buildSectionFigure`（直進階段専用の2本目の経路）の統合。
 
 ## 層スタックの一般規則（`section/sectionLayerStack.js`。多層化2026-08）
 断面エンジンの`SectionCut.layers`は「どの階のgraphを絶対zのどこへ置くか」の並びでしかないのに、
