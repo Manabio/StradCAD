@@ -22,7 +22,7 @@
  *     自身はfinish/stair側の詳細を知らない——第3層との結合点はこの1箇所に閉じる）。
  */
 import { GAP_EPS_MM as GAP_EPS, SIGHTLINE_DEPTH_LIMIT_MM, HORIZONTAL_FACES_ENABLED } from '../elevationStyle.js';
-import { localXOf, worldOf } from './sectionTypes.js';
+import { localXOf, worldOf, ceilProfileZAt } from './sectionTypes.js';
 import { collectCutBreaks, probeColumn, upperFloorZAt } from './sectionProbe.js';
 import { faceFromCut } from './sectionFace.js';
 import { emitColumns, emitOpenGapMarks, nearestSightlineDistMm } from './sectionEmit.js';
@@ -79,29 +79,6 @@ function withCeilProfileBreaks(cut, breaks) {
     }
   }
   return [...values].sort((a, b) => a - b);
-}
-
-/**
- * `cut.ceilProfile`（区間ごとの天井断面の高さ。断面ローカルx）から、xを含む区間の天井を引く。
- * profileが無ければnull＝打ち切らない（階段帯など、区間の天井を持たない呼び出し側は従来どおり）。
- *
- * **profileの範囲外（壁のない端部の探査延長で作られる面の外の列）は端の区間の値へクランプする**
- * ——面図側が天井線を`drawnX0..drawnXRun`（延長込み）まで端の区間の高さで引き延ばしている
- * （`elevationFigure.js`の`ceilAbsAtX`と同じ規約）以上、打ち切り高さもそこまで同じ値でなければ
- * ならない。nullを返すと**その列だけ打ち切りが効かず**、描かれている天井線より上の帯の側縁が
- * 面の端に出る（実測: 実機「5」で面の左端に z2400..3000 の中線が出た）。
- * @param {import('./sectionTypes.js').SectionCut} cut
- * @param {number} x0
- * @param {number} x1
- * @returns {number|null}
- */
-function ceilZAt(cut, x0, x1) {
-  const prof = cut.ceilProfile;
-  if (!Array.isArray(prof) || prof.length === 0) return null;
-  const mid = (x0 + x1) / 2;
-  const hit = prof.find(s => mid >= s.loX - GAP_EPS && mid <= s.hiX + GAP_EPS)
-    ?? (mid < prof[0].loX ? prof[0] : prof[prof.length - 1]);
-  return hit && Number.isFinite(hit.ceilZ) ? hit.ceilZ : null;
 }
 
 // 切断された壁の帯（'cut'＝面を横切る壁／'cutAlong'＝縦断された壁）か。
@@ -361,7 +338,7 @@ export function buildColumns(cut, probeCtx) {
     // ——エンジン側で天井の有無を推測すると階段帯の見え方まで変わるため、区間の天井を知っている
     // 呼び出し側（elevationVoid.js）から渡す。probeColumn自体はzRange全域を返す契約のまま
     // （不変条件テストが依存）で、描画対象の切り出しはここで行う。
-    const ceilZ = ceilZAt(cut, Math.min(localA, localB), Math.max(localA, localB));
+    const ceilZ = ceilProfileZAt(cut.ceilProfile, Math.min(localA, localB), Math.max(localA, localB));
     rawColumns.push({
       x0: Math.min(localA, localB), x1: Math.max(localA, localB), worldLo, worldHi, ceilZ,
       bands: probeColumn(cut, worldMid, probeCtx),

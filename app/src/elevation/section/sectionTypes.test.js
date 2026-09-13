@@ -5,7 +5,7 @@
 // （呼び出し側=sectionStair.jsのstairPrimitivesForCutと同じ組み立て方。「D1」の縮小再現）。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { isSolidBand, solidRectsOf, zToY } from './sectionTypes.js';
+import { isSolidBand, solidRectsOf, zToY, ceilProfileZAt } from './sectionTypes.js';
 import { isStringer } from './sectionEmit.js';
 import { subtractRectsFromPrimitives } from '../elevationPrimitives.js';
 import { ElevationLineRole, weightForRole } from '../elevationStyle.js';
@@ -185,4 +185,40 @@ test('【失敗系・T-a】solidRectsOf: floorZが異なるslab帯2本は結合�
 test('【T-b・失敗系】solidRectsOf: 退化した帯(z0===z1)は矩形を作らない', () => {
   const columns = [{ x0: -150, x1: 0, worldLo: 0, worldHi: 150, bands: [{ kind: 'slab', z0: 3000, z1: 3000 }] }];
   assert.deepEqual(solidRectsOf(columns), []);
+});
+
+// ---- ceilProfileZAt: sectionEngine.jsの列分割(ceilZ)・elevationBand.jsのstairOverが共有する
+// 天井プロファイル解決の単一情報源（展開図一般化Phase 6b-3・エンジン内単一情報源化）。
+// [x0,x1]の中点を含む区間のceilZを返す。範囲外は端の区間の値へクランプする。
+test('【ceilProfileZAt】区間一様なら[x0,x1]の位置に関わらず同じceilZを返す', () => {
+  const profile = [{ loX: 0, hiX: 2000, ceilZ: 2400 }];
+  assert.equal(ceilProfileZAt(profile, 0, 0), 2400);
+  assert.equal(ceilProfileZAt(profile, 1000, 1000), 2400);
+  assert.equal(ceilProfileZAt(profile, 1900, 1900), 2400);
+});
+
+test('【ceilProfileZAt】区間ごとに天井高が違えば、[x0,x1]の中点を含む区間のceilZを返す', () => {
+  const profile = [
+    { loX: 0, hiX: 1000, ceilZ: 2400 },
+    { loX: 1000, hiX: 2000, ceilZ: 3000 },
+  ];
+  assert.equal(ceilProfileZAt(profile, 300, 300), 2400, '区間0(低い方)の中点はceilZ=2400のはず');
+  assert.equal(ceilProfileZAt(profile, 1500, 1500), 3000, '区間1(高い方)の中点はceilZ=3000のはず');
+  // [x0,x1]の中点で判定する（呼び出し側=sectionEngine.jsのbuildColumnsは列自身の実幅を渡す）。
+  assert.equal(ceilProfileZAt(profile, 900, 1100), 2400,
+    '中点1000は区間0の上端(hiX=1000)ちょうどなので区間0側にマッチするはず');
+});
+
+test('【失敗系・ceilProfileZAt】profileの範囲外は端の区間の値へクランプする', () => {
+  const profile = [
+    { loX: 0, hiX: 1000, ceilZ: 2400 },
+    { loX: 1000, hiX: 2000, ceilZ: 3000 },
+  ];
+  assert.equal(ceilProfileZAt(profile, -500, -500), 2400, '範囲より手前は先頭区間の値へクランプ');
+  assert.equal(ceilProfileZAt(profile, 2500, 2500), 3000, '範囲より奥は末尾区間の値へクランプ');
+});
+
+test('【失敗系・ceilProfileZAt】profileが無い・空なら打ち切らない(null)', () => {
+  assert.equal(ceilProfileZAt(undefined, 0, 0), null);
+  assert.equal(ceilProfileZAt([], 0, 0), null);
 });

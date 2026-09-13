@@ -655,6 +655,16 @@ export function appendBandCutContent(primitives, room, graph, layout, layers, op
       zRange: { loZ: floorZ, hiZ: Math.max(...ceilProfile.map(s => s.ceilZ)) },
       // 断面の中（天井の向こう）は描かない。区間ごとの天井断面高さで打ち切る（sectionEngine.js）。
       ceilProfile,
+      // 階段下の部屋の帯に重ねる階段の3D寄与（`stairContributionOverRoom`）。他の帯の`stairCut`
+      // （階段室自身の帯）と同じ役割の情報源だが、この帯（`buildCutContent`経由）は
+      // `buildSectionFigure`（`sectionEngine.js:421`の`stairPrimitivesForCut(cut.stairCut…)`）を
+      // 呼ばないため、この`stairCut`から階段プリミティブが自動生成されることは無い（`stairOver`
+      // ブロックが別経路で明示的に描く）。`addStairFaceHits`自体（`sectionHits.js`）は`cut.stairCut`
+      // を見て`stairFace`ヒットを候補へ積むが、同ファイル:946の`coverableHits`フィルタが選択対象
+      // から`stairFace`を除くため出力には影響しない——**`stairFace`が選択に参加するよう変える段では
+      // ここを再点検すること**（展開図一般化Phase 6b-3・3a。設計`.claude/elevation-redesign.md`
+      // §5.12末尾）。
+      stairCut: opts.stairOver ?? null,
       // `ceilProfile`の**床側の双子**（区間ごとの床断面高さ）。**下階の層への探査窓のgate**
       // （`section/sectionContent.js`の`planeOverhangForFace`）が「その端で帯の床が下階の
       // 空間まで下りているか」を判定する唯一の材料——`baseFloorZ`は全区間の最小値なので
@@ -749,6 +759,10 @@ export function appendBandCutContent(primitives, room, graph, layout, layers, op
       // 階段断面が天井とぶつかったなら、そこで天井断面線を止める（残すのは階段が無い側）。
       // **階段がどちら側に残るかは重心で決める**——交点の直前・直後の点だけで見ると、段鼻の
       // 出っ張り（数十mm）で向きが反転して判定を誤る。
+      // #8の重心判定を交点区間ごとの占有判定へ替える試みは、クリップ後のCUT点群が交点の両側に
+      // またがるため誤判定（13.stq 面B cross=1409.5/xs 0〜1427.5、面D cross=885.5/xs 867.5〜2295）。
+      // 区間ごとに`stairZAtRun`で判定し直す再設計が要る（`.claude/elevation-redesign.md`§5.12
+      // 6b-3）。
       if (crossXs.length > 0) {
         const cutWeight = weightForRole(ElevationLineRole.CUT);
         const xs = shown.filter(q => q.weight === cutWeight)

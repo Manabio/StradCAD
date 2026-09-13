@@ -297,6 +297,33 @@ export function worldOf(cut, localX) {
 }
 
 /**
+ * `ceilProfile`（`SectionCut.ceilProfile`と同型。区間ごとの天井断面の高さ。断面ローカルx）から、
+ * [x0,x1]の中点を含む区間の天井を引く。profileが無ければnull＝打ち切らない（階段帯など、区間の
+ * 天井を持たない呼び出し側は従来どおり）。
+ *
+ * **profileの範囲外（壁のない端部の探査延長で作られる面の外の列）は端の区間の値へクランプする**
+ * ——面図側が天井線を`drawnX0..drawnXRun`（延長込み）まで端の区間の高さで引き延ばしている
+ * （`elevationFigure.js`の`ceilAbsAtX`と同じ規約）以上、打ち切り高さもそこまで同じ値でなければ
+ * ならない。nullを返すと**その列だけ打ち切りが効かず**、描かれている天井線より上の帯の側縁が
+ * 面の端に出る（実測: 実機「5」で面の左端に z2400..3000 の中線が出た）。
+ *
+ * `sectionEngine.js`の列分割（`ceilZ`）が使う天井プロファイル解決の単一情報源（旧実装は
+ * `sectionEngine.js`内の私設関数`ceilZAt`だった。展開図一般化Phase 6b-3でここへ集約）。
+ * @param {Array<{loX:number, hiX:number, ceilZ:number}>|undefined} ceilProfile
+ * @param {number} x0
+ * @param {number} x1
+ * @returns {number|null}
+ */
+export function ceilProfileZAt(ceilProfile, x0, x1) {
+  const prof = ceilProfile;
+  if (!Array.isArray(prof) || prof.length === 0) return null;
+  const mid = (x0 + x1) / 2;
+  const hit = prof.find(s => mid >= s.loX - GAP_EPS && mid <= s.hiX + GAP_EPS)
+    ?? (mid < prof[0].loX ? prof[0] : prof[prof.length - 1]);
+  return hit && Number.isFinite(hit.ceilZ) ? hit.ceilZ : null;
+}
+
+/**
  * その切断の描画範囲（断面ローカルx。`cut.line.lo..hi` ＋ 壁のない端部の探査延長
  * `probeExtendLo/HiMm`）。**面の外に断面（梁・ささら・踊り場桁枠の矩形）を描かない**ための
  * 共通判定の単一情報源（ユーザー実機指摘2026-08「6」。面が0..2885なのに x=-57.5 や x=2942.5、
