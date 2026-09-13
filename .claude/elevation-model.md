@@ -19,7 +19,11 @@
 `elevationBand.js`の`appendBandCutContent`（→`section/sectionContent.js`の`buildCutContent`）**1つだけ**で、
 通常の部屋帯・上部吹抜けを持つ部屋帯・吹抜け帯がこれを共有する（階段帯は`switchbackCuts`が組んだcutを
 同じ`buildCutContent`へ渡す）。帯ごとに違うのは**層スタックだけ**——通常の部屋帯は自階1層、
-上部吹抜けは自階＋上階、吹抜け帯は自階＋直下階。切断線の位置・探査延長・見えがかりの距離判定・
+上部吹抜けは自階＋上階、吹抜け帯は自階＋直下階。**層スタックを組む入口は`section/sectionBandLayers.js`の
+`buildBandLayers(selfGraph, {above, below, selfFloorZMm})`の1関数だけ**（展開図一般化Phase 7・2026-09-13。
+帯ビルダー・階段のcut表・加算レイヤはこれを呼ぶか受け取るだけで、層のリテラルを書かない。above/belowは
+呼び出し側が持つ階リストを宣言的に渡し、階高が解決できない層で打ち切る。空気連結`componentOf`で層を
+列挙する案は不成立＝連結は可視判定側の役目）。切断線の位置・探査延長・見えがかりの距離判定・
 アキはすべて共通経路が決める。
 
 | | `buildFaceFigure`（`elevationFigure.js`） | 断面エンジン（`section/`） |
@@ -1353,6 +1357,10 @@ SILHOUETTE」（AMBIGUITY B）は撤回した——断面は隣に何が見え�
 4つの一般規則（所有層`layerOwningZ`／帯自身の階`baseLayerOf`／上位層`layersAboveOf`／優先順位
 `compareLayerPriority`）だけで答え、role文字列は`ZBand.layerRole`（`sectionEmit.js`が隣接列の
 同一性判定に使う識別子）としてのみ残す**——意味を持つのは並び（floorZMm）であって名前ではない。
+境界（Phase 7・2026-09-13）: 層を**組む**のは`sectionBandLayers.js`（`buildBandLayers`）、層に**問う**のは
+本モジュール。生の`cut.layers`から「自階の直上の層」を引く`layerDirectlyAboveSelf`も本モジュールの
+`baseLayerOf`＋`layersAboveOf`の薄いアダプタとして置く（`elevationStairSequence.js`が旧`find(role!=='self')`
+＝配列順先頭の決め打ちをしていた箇所の是正。同一floorZMmが2つあれば入力配列で先に現れた方）。
 
 帯自身の階を「role==='self'」ではなく**z原点に最も近い層**として定義できるのは、`sectionTypes.js`の
 契約「高さは絶対z・設置階FL=0基準」があるため（この契約を崩すとbaseLayerOfの定義も崩れる）。
@@ -1479,7 +1487,7 @@ baseFloorZの下へ潜ったかで判定する（遠側だけが低い区間は�
 `faceSectionCut`が face を SectionCut へ写す（`(isVertical, axisCL.value, lo, hi)`がCutLineと同型・
 `cutOriginWorld`が`face.originWorld`と一致するため、断面ローカルxと面ローカルxが同値になる＝面の
 座標系のまま合成できる）。高さ基準は帯そのもの（baseFloorZ=0・zRange=0..CH）で、layersは自階
-（floorZMm=0）＋上階（floorZMm=階高）。**帯のz範囲へクリップすることが「梁型だけが出る」という
+（floorZMm=0）＋上階（floorZMm=階高。`buildBandLayers`で組む）。**帯のz範囲へクリップすることが「梁型だけが出る」という
 建築的に正しい挙動をそのまま与える**——自階graphの床梁（天端=自FL）は床より下で全消し、上階graphの
 梁は天端=階高のため梁成が「階高−CH」を超えて天井から降りる分だけ残る。副次的に、床より下の細破線が
 注記帯（tag行・ROW1/ROW2・通り芯丸）へ被る問題も原理的に起きない。x方向は`[0, run]`へクランプする
