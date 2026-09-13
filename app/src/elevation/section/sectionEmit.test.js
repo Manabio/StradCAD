@@ -4,12 +4,11 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   emitLine, emitColumns, emitOpenGapMarks, splitGapMarksByStair, dashHorizontalsBehindStair,
-  joinToStairProfile, clipStairDetailInSlabBand,
+  joinToStairProfile,
 } from './sectionEmit.js';
 import { KNEE_CAP_FACE_MM } from '../elevationStyle.js';
 import { buildColumns } from './sectionEngine.js';
 import { upperFloorCutWallEndsOf, emitCtxForCut } from './sectionContent.js';
-import { clipPrimitivesToXRange } from '../elevationPrimitives.js';
 
 function makeCut(overrides = {}) {
   return { seqNo: '1', line: { isVertical: false, axisValue: 0, lo: 0, hi: 3000 },
@@ -638,66 +637,6 @@ test('【実機指摘】joinToStairProfile: 1F天井断面線を階段断面と�
   assert.ok(slab, '2FLの床断面線が張り出すはず');
   const xs = [slab.x1, slab.x2].sort((a, b) => a - b);
   assert.deepEqual(xs, [-285, 500], '階段の上り切り(x=500)から近い側の端(-285)へ張り出すはず');
-});
-
-test('【実機指摘】clipStairDetailInSlabBand: 下ささらだけを帯で切り、上ささらは残す', () => {
-  // ささらの見えがかりは上端・下端の2本1組。z1000→z4000へ上がり、天井2400〜床3000の帯を通過する。
-  const lower = { type: 'polyline', weight: 'thin', points: [[0, -1000], [3000, -4000]] };
-  const upper = { type: 'polyline', weight: 'thin', points: [[0, -1300], [3000, -4300]] }; // 300上
-  const profile = { type: 'polyline', weight: 'thick', points: [[0, -1000], [3000, -4000]] };
-  const out = clipStairDetailInSlabBand([lower, upper, profile], 2400, 3000);
-
-  assert.ok(out.includes(profile), 'CUT(太線)の断面プロファイルは対象外で素通しのはず');
-  assert.ok(out.includes(upper), '上ささらは見えるのでそのまま残るはず');
-  assert.ok(!out.includes(lower), '下ささらは帯で切られるはず');
-  const parts = out.filter(p => p.weight === 'thin' && p !== upper);
-  assert.equal(parts.length, 2, '下ささらは帯の下側・上側の2本に分かれるはず');
-  const zsOf = p => p.points.map(([, y]) => -y);
-  assert.ok(parts.some(p => Math.max(...zsOf(p)) <= 2400 + 1e-6), '帯より下の区間が残るはず');
-  assert.ok(parts.some(p => Math.min(...zsOf(p)) >= 3000 - 1e-6), '帯より上の区間が残るはず');
-});
-
-test('【失敗系・実機指摘】clipStairDetailInSlabBand: 帯に掛からない・帯が退化していれば素通し', () => {
-  const below = { type: 'polyline', weight: 'thin', points: [[0, -100], [1000, -2000]] };
-  assert.deepEqual(clipStairDetailInSlabBand([below], 2400, 3000), [below]);
-  assert.deepEqual(clipStairDetailInSlabBand([below], 3000, 3000), [below]);
-});
-
-// QA是正（2026-09-12その4。展開図一般化Phase 6b-2「一体設計」）: clipStairDetailInSlabBandの
-// isLower（x範囲が重なりmeanZが高い相手がいる方を下ささらとみなすペア判定）は、**1つの部材の
-// DETAIL polylineが先に（x終端クリップ等で）複数のpolylineへ分割された後**に呼ぶと、その
-// 分割済みの断片どうしをmeanZの違いだけで「別々のささらの上下ペア」と誤認し、どちらか一方を
-// スラブ帯で余分に削ってしまう——分割前は1本の部材であり「相手」が存在しないため本来クリップ
-// されないはず。section/sectionStair.jsのstairPrimitivesForCutは、この誤判定を避けるため
-// **スラブ帯クリップをx終端クリップより前**に置く（分割が起きる前に部材のペア判定を終える）。
-// ここでは`clipStairDetailInSlabBand`と`clipPrimitivesToXRange`（elevationPrimitives.js。
-// x終端クリップの実体）の2つを直接組み合わせ、順序が結果を変えることを固定する。
-test('【QA是正2026-09-12その4】clipStairDetailInSlabBand: 分割済みの断片どうしは上下ささら対とみなさない（スラブ帯クリップをx終端クリップより前に置く）', () => {
-  // 1本のDETAIL polyline（1部材）。x=0..1000の描画範囲に対し、x<0の区間を持ち、範囲境界を
-  // 2回跨ぐ（外→内→外→内）ようジグザグする——x終端クリップで2本の断片に分かれたとき、
-  // 断片ごとのmeanZが異なる（z100→500→300→700と山谷があるため）構成。
-  const member = { type: 'polyline', weight: 'thin',
-    points: [[-30, -100], [50, -500], [-20, -300], [60, -700]] };
-  const range = { lo: 0, hi: 1000 };
-  const zLo = 400, zHi = 600; // スラブ帯（下階天井〜上階床）
-
-  // z=500（元の部材が単独で山をなす頂点。帯z400..600の内側）の有無で判定する——山の反対側
-  // （z=700側。常にmeanZが高い方に固定され、どちらの順序でも消えない）とは別の値にしている。
-  const hasApex = prims => prims.some(p => p.points.some(([, y]) => Math.abs(-y - 500) < 1e-6));
-
-  // 正しい順序: スラブ帯クリップ→x終端クリップ。分割前は1部材しかないため`isLower`の相手が
-  // おらずクリップは発火しない——頂点(z=500)もそのまま残る。
-  const correctOrder = clipPrimitivesToXRange(
-    clipStairDetailInSlabBand([member], zLo, zHi), range);
-  assert.ok(hasApex(correctOrder), '正しい順序では分割前の部材の頂点(z=500)がそのまま残るはず');
-
-  // 誤った順序（QA是正前の実装）: x終端クリップ→スラブ帯クリップ。x終端クリップが1部材を
-  // 2本の断片へ分割し、その断片どうしがmeanZの違いから「上下ペア」に誤認されて
-  // meanZの低い方（頂点z=500を含む断片）がスラブ帯で余分に削られる——頂点(z=500)が消える。
-  const wrongOrder = clipStairDetailInSlabBand(
-    clipPrimitivesToXRange([member], range), zLo, zHi);
-  assert.ok(!hasApex(wrongOrder),
-    '誤った順序（退行の再現）では分割由来の断片どうしが誤ってペア視され、頂点(z=500)が消えるはず');
 });
 
 test('【失敗系・実機指摘】joinToStairProfile: 階段断面が無ければ何も変えない', () => {

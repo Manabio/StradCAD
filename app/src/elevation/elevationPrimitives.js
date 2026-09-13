@@ -254,6 +254,154 @@ export function clipPrimitivesToXRange(prims, range) {
   return out;
 }
 
+// 線分(x1,y1)-(x2,y2)が軸並行矩形の内側にある媒介変数区間[t0,t1]（Liang-Barsky。交わらなければ
+// null）。矩形は呼び出し側の座標系のまま（y方向は呼び出し側で変換済みのものを渡す）。
+// **辺上（p≈0の分岐）は内側と判定する**——矩形をGAP_EPS等だけ内側へ縮めるかどうかは呼び出し側の
+// 責務（展開図一般化Phase 6b-2 設計(d)。sectionTypes.jsのisSolidBand/solidRectsOf参照）。
+export function segmentInsideRect(x1, y1, x2, y2, r) {
+  const dx = x2 - x1, dy = y2 - y1;
+  const ps = [-dx, dx, -dy, dy];
+  const qs = [x1 - r.xLo, r.xHi - x1, y1 - r.yLo, r.yHi - y1];
+  let t0 = 0, t1 = 1;
+  for (let i = 0; i < 4; i++) {
+    const p = ps[i], q = qs[i];
+    if (Math.abs(p) < 1e-9) { if (q < 0) return null; continue; }
+    const t = q / p;
+    if (p < 0) { if (t > t1) return null; if (t > t0) t0 = t; }
+    else { if (t < t0) return null; if (t < t1) t1 = t; }
+  }
+  return t1 - t0 > 1e-9 ? [t0, t1] : null;
+}
+
+// 媒介変数区間の集合を昇順・非重複へ統合する。
+export function mergeIntervals(list) {
+  const sorted = [...list].sort((a, b) => a[0] - b[0]);
+  const out = [];
+  for (const iv of sorted) {
+    const last = out[out.length - 1];
+    if (last && iv[0] <= last[1] + 1e-9) last[1] = Math.max(last[1], iv[1]);
+    else out.push([...iv]);
+  }
+  return out;
+}
+
+// 「残す価値のある長さか」の判定用の許容差（展開図一般化Phase 6b-2 P2是正・QA是正2026-09-13
+// F5で係数を見直し）。GAP_EPSだけ内側へ縮めた矩形（sectionTypes.jsのsolidRectsOf）を勾配のある
+// 線分に適用すると、縮めた分（GAP_EPS）が勾配の浅い軸へ増幅されたサブミクロン〜ミクロン級の
+// 「点に近いが完全な点ではない」区間が生じうる——媒介変数tの差(`>1e-9`)ではこれを弾けない。
+// 増幅率は線分の勾配（軸ごとの伸び幅の比）に依存し、実測した最悪ケース（面D2の裁定済み線分。
+// GAP_EPS《1e-6mm》の約1.14倍＝約1.1e-6mm）よりさらに浅い勾配の線分では、GAP_EPSの数百倍
+// まで増幅されうる——QAレビューで1e-4〜1e-3mm程度のアーティファクトが理論上あり得ると
+// 指摘された（F5）。GAP_EPSの2000倍（2e-3mm=2ミクロン）を取れば、この観測範囲に2倍以上の
+// 余裕で収まり、なお実務上の作図スケール(mm)からは隔絶した数ミクロンであり、意図した出力
+// （数mm〜数十mm単位の差分）には影響しない（展開モジュール群で次に大きい既存の許容差は
+// SPLIT_MERGE_EPS_MM=1mm。elevationStyle.js。使用は elevationDimSplit.js 等）。
+// 8.33e-4mmの根拠は合成fixture（elevationPrimitives.test.jsのF5テスト）由来——実データ
+// 13.stq/11.stq/knee-drop-test.stqの全2643線分に2e-3mm未満の実線分は無く最短は8mm
+// （QA実測2026-09-13）。golden一致（diffElevGolden.mjs）でも確認済み。
+const SLIVER_EPS_MM = PRIM_GAP_EPS * 2000;
+function farEnough(a, b) {
+  return Math.hypot(a.x - b.x, a.y - b.y) > SLIVER_EPS_MM;
+}
+
+// QA是正2026-09（Phase 6b-2 C-1後の実機回帰の副次修正・B。2026-09-13第2ラウンドで
+// section/sectionEmit.jsから移設し単一情報源化）: 長さゼロの線分（x1===x2かつy1===y2）か。
+// 列の境界が縮退する構成（例: hidden帯の材の面がちょうど別の列境界と一致し、col.x0===col.x1に
+// なる等）では`emitLine`/`subtractRectsFromLine`が実質「点」のプリミティブを生んでしまうことが
+// ある——実害（見えない点が描画されるだけ）は小さいが、diffツールや将来のレンダラで意図しない
+// 挙動を招くため、出口（`dedupeLines`＝`emitColumns`の集約点・`subtractRectsFromLine`＝
+// クリップの出口）でまとめて捨てる。GAP_EPSではなく極小固定値（浮動小数の丸め誤差ぶんだけを
+// 許容）を使う——GAP_EPSは面のmm単位の許容差で、ここでは「本当に同一点か」だけを見たいため。
+export function isZeroLengthLine(p) {
+  return p.type === 'line' && Math.abs(p.x1 - p.x2) < 1e-9 && Math.abs(p.y1 - p.y2) < 1e-9;
+}
+
+// 線分から矩形の和に入る区間を取り除き、残った区間だけの線分列にする。
+// QA是正2026-09・B: 入力自体が長さゼロ（縮退した列の境界等から生成された「点」）なら
+// 素通りさせず捨てる——素通りさせると矩形と重ならない限り点のまま最終出力へ残ってしまう。
+export function subtractRectsFromLine(p, rects) {
+  if (isZeroLengthLine(p)) return [];
+  if (!rects.length) return [p];
+  const cut = mergeIntervals(rects
+    .map(r => segmentInsideRect(p.x1, p.y1, p.x2, p.y2, r))
+    .filter(Boolean));
+  if (!cut.length) return [p];
+  const at = t => ({ x: p.x1 + (p.x2 - p.x1) * t, y: p.y1 + (p.y2 - p.y1) * t });
+  const out = [];
+  let cursor = 0;
+  for (const [c0, c1] of cut) {
+    const a = at(cursor), b = at(c0);
+    if (farEnough(a, b)) out.push({ ...p, x1: a.x, y1: a.y, x2: b.x, y2: b.y });
+    cursor = Math.max(cursor, c1);
+  }
+  const a = at(cursor), b = at(1);
+  if (farEnough(a, b)) out.push({ ...p, x1: a.x, y1: a.y, x2: b.x, y2: b.y });
+  return out;
+}
+
+// polyline版のsubtractRectsFromLine: 矩形の内部に入る区間を落とし、残った区間だけの
+// 連続run（複数本になりうる）を新しいpolylineとして返す（元のline版と同じアルゴリズムを
+// 頂点間の各線分に適用し、矩形内部へ入るたびにrunを打ち切る）。
+function subtractRectsFromPolyline(p, rects) {
+  const out = [];
+  let run = [];
+  const pushPt = ([x, y]) => {
+    const last = run[run.length - 1];
+    if (!last || farEnough({ x: last[0], y: last[1] }, { x, y })) run.push([x, y]);
+  };
+  // QA是正2026-09-13第2ラウンド: flush側での総延長チェック（F5当初案）は削除した——`pushPt`が
+  // 連続する2点間に`farEnough`（>SLIVER_EPS_MM）を要求するため、`run.length>1`ならその時点で
+  // 少なくとも1辺がSLIVER_EPS_MMを超えており、run全体の総延長も必ずSLIVER_EPS_MMを超える
+  // （恒真、到達不能なガードだった。ガードを外しても全テスト緑）。「残す価値のある長さか」の
+  // 唯一の関所は`farEnough`（区間ごと）であり、ここに重ねて別の関所を持たない。
+  const flush = () => { if (run.length > 1) out.push({ ...p, points: run }); run = []; };
+  for (let i = 0; i + 1 < p.points.length; i++) {
+    const [x1, y1] = p.points[i], [x2, y2] = p.points[i + 1];
+    const at = t => [x1 + (x2 - x1) * t, y1 + (y2 - y1) * t];
+    const cut = mergeIntervals(rects
+      .map(r => segmentInsideRect(x1, y1, x2, y2, r))
+      .filter(Boolean));
+    let cursor = 0;
+    for (const [c0, c1] of cut) {
+      const a = at(cursor), b = at(c0);
+      if (farEnough({ x: a[0], y: a[1] }, { x: b[0], y: b[1] })) { pushPt(a); pushPt(b); }
+      flush(); // 矩形の内部に入る＝runを打ち切る（区間の手前が無くても打ち切りは要る）
+      cursor = Math.max(cursor, c1);
+    }
+    const a = at(cursor), b = at(1);
+    if (farEnough({ x: a[0], y: a[1] }, { x: b[0], y: b[1] })) { pushPt(a); pushPt(b); }
+  }
+  flush();
+  return out;
+}
+
+/**
+ * プリミティブ配列から、渡された矩形群（呼び出し側の座標系。line/polylineと同じxy）の内部に
+ * 入る区間を取り除く（展開図一般化Phase 6b-2 P1で`section/sectionEmit.js`から移設。
+ * `mergeIntervals`/`segmentInsideRect`/`subtractRectsFromLine`は元々`splitGapMarksByStair`
+ * （アキのバツの階段による隠れ判定）専用だったが、階段自身の幾何（DETAILのpolyline＝
+ * ささらの見えがかり）を同じ規則で切るP2のために、polyline対応を追加してここへ一本化する）。
+ * line/polyline以外の型はそのまま通す（矩形減算の対象ではないため）。
+ * **矩形を内側へ縮めるかどうかは呼び出し側の責務**（辺上は内側と判定される。P1では既存の
+ * `splitGapMarksByStair`用途に合わせ縮めない＝出力不変）。
+ * @param {object[]} prims
+ * @param {Array<{xLo:number, xHi:number, yLo:number, yHi:number}>} rects
+ * @returns {object[]}
+ */
+export function subtractRectsFromPrimitives(prims, rects) {
+  if (!rects?.length) return prims;
+  const out = [];
+  for (const p of prims) {
+    if (p.type === 'line') { out.push(...subtractRectsFromLine(p, rects)); continue; }
+    if (p.type === 'polyline' && Array.isArray(p.points) && p.points.length > 1) {
+      out.push(...subtractRectsFromPolyline(p, rects));
+      continue;
+    }
+    out.push(p);
+  }
+  return out;
+}
+
 // 点列をx範囲[lo,hi]でクリップし、連続する残り区間ごとの点列を返す（範囲の境界では補間する
 // ——点の取捨だけだと、範囲を跨ぐ2点の線分がまるごと消える）。
 function clipPolylineToXRange(points, lo, hi) {

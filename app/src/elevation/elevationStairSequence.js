@@ -486,15 +486,12 @@ function contentForCut(rawCut, probeCtx, endExtendMm = 0, bandRoomBounds = null,
   // アキ（gapMarks）は輪郭ではなくband自身の下端をそのまま使うため、二重クリップしない
   // （最終contentへは下で別途合流させる）。
   const wallContent = dashHorizontalsBehindStair(wallPrims, occluders);
-  // 下ささらの見えがかりは下階天井〜上階床の帯（床構造の中）でカットする
-  // （ユーザー実機指摘2026-08「6」D2。sectionEmit.js参照）。QA是正（2026-09-12その4）:
-  // このスラブ帯クリップは`stairPrimitivesForCut`の出口（x終端クリップの前）へ移設した——
-  // x終端クリップが先に1本のDETAIL polylineを2本へ分割した後にスラブ帯クリップのisLower
-  // （x範囲重複＋meanZ比較でペアを見るだけの判定）が走ると、同じ部材の分割済み断片どうしを
-  // 別々のささらと誤認してスラブ帯を余分に削る（`stairPrimitivesForCut`のslabBandオプションの
-  // ヘッダコメント参照）。ここでは呼ばず`opts.slabBand`で渡すだけにする。
-  const stairOpts = { outerBound: overhang.stairOverhangOuter,
-    slabBand: zRef ? { zLo: zRef.ceilLowAbs, zHi: zRef.floorHeight } : undefined };
+  // 下ささらの見えがかりのうち「断面内部（実体で囲まれた矩形の厳密内部）」に入る区間は
+  // `stairPrimitivesForCut`が自身の出口（x終端クリップの前）で`columns`だけから一般判定する
+  // （展開図一般化Phase 6b-2 設計(d)。ユーザー裁定2026-09-13）。旧`opts.slabBand`
+  // （下階天井〜上階床の固定z帯を`zRef`から外部指定してカットする特例）はP3で削除済み
+  // ——一般ルールが同じ問い（下ささらが床構造の中を通る区間）を`columns`の実体だけで答える。
+  const stairOpts = { outerBound: overhang.stairOverhangOuter };
   const stairContent = stairPrimitivesForCut(cut.stairCut ?? null, cut, columns, stairOpts);
   // WP-C: 構造梁（踊り場受け梁等）の加算寄与。stairContentと独立の別レイヤのため、
   // clipWallFloorEdgeUnderZigzag（階段ジグザグの向こうの壁縁除去）の対象には含めない。

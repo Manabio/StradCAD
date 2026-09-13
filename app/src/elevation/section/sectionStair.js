@@ -83,10 +83,10 @@ import {
 } from '../elevationStairSection.js';
 import { ElevationLineRole, weightForRole, GAP_EPS_MM as GAP_EPS } from '../elevationStyle.js';
 import { parseBaseboardHeightMm } from '../elevationFigure.js';
-import { localXOf, cutDrawRange } from './sectionTypes.js';
-import { emitLine, clipStairDetailInSlabBand } from './sectionEmit.js';
+import { localXOf, cutDrawRange, zToY, solidRectsOf } from './sectionTypes.js';
+import { emitLine, isStringer } from './sectionEmit.js';
 import { mergeFloorProfiles } from '../elevationFloorProfile.js';
-import { clipPrimitivesToXRange } from '../elevationPrimitives.js';
+import { clipPrimitivesToXRange, subtractRectsFromPrimitives } from '../elevationPrimitives.js';
 
 /**
  * @typedef {{isVertical:boolean, runLo:number, runHi:number, travelSign:1|-1,
@@ -1126,8 +1126,7 @@ export function stairCutFloorProfile(contribution, cut, columns = null) {
  * @param {{flights:Flight[], landings:Landing[], structure:string|null, unit?:StairUnit, secondaryFlights?:Flight[]}|null} contribution
  * @param {import('./sectionTypes.js').SectionCut} cut
  * @param {import('./sectionTypes.js').SectionColumn[]} columns
- * @param {{includeLadder?:boolean, includeStringerSightline?:boolean, outerBound?:{lo?:number,hi?:number},
- *   slabBand?:{zLo:number,zHi:number}}} [opts]
+ * @param {{includeLadder?:boolean, includeStringerSightline?:boolean, outerBound?:{lo?:number,hi?:number}}} [opts]
  *   includeLadder=false で正面視の梯子（踏面の水平線）を出さない（ユーザー明示指示2026-09
  *   「梯子の件: 階段下は描画しない」。階段下の部屋の展開は階段を**下から**見るため、踏面を
  *   正面から見た梯子は見えない）。
@@ -1142,21 +1141,26 @@ export function stairCutFloorProfile(contribution, cut, columns = null) {
  *   `upperOverhangOf`の結果（`stairOverhangOuter`）をそのまま渡す——階段が2FLへ到達する終端を、
  *   上階の床のはり出しと同じ終点まで許す（展開図一般化Phase 6b-2「一体設計」。
  *   .claude/elevation-redesign.md§5.12）。
- *   slabBand（任意）… 下ささらの見えがかりを下階天井〜上階床の帯（床構造の中）でカットする
- *   `sectionEmit.js`の`clipStairDetailInSlabBand`をここで（x終端クリップより前に）適用する
- *   （QA是正2026-09-12その4）。以前は`elevationStairSequence.js`側で本関数の返り値に外側から
- *   適用していたが、その順序では**x終端クリップが先に走り1本のDETAIL polylineを2本へ分割した
- *   後に`clipStairDetailInSlabBand`のisLower（x範囲が重なりmeanZが高い相手がいる方を下ささらと
- *   みなすペア判定）が走るため、同じ部材の分割済み断片どうしを別々のささらと誤認してスラブ帯を
- *   余分に削る**副作用があった。未分割（x終端クリップ前）の状態でペア判定する本関数内へ
- *   移設し、`slabBand`を渡した場合の順序（z帯クリップ→x終端クリップ）はここ1箇所だけで決める。
- *   `elevationBand.js`のstairOverと`sectionEngine.js`のSTRAIGHT階段経路は`opts.slabBand`を
- *   渡さないため、このクリップ自体が従来どおり非適用（挙動不変）——両者はそもそも
- *   `clipStairDetailInSlabBand`を必要としない経路であり、本関数が単一の順序規則を持つことの
- *   利点は「elevationStairSequence.js側で順序を誤る余地が無くなる」点にある
- *   （`__member`等の分割由来タグで`isLower`を補正する代替案は、呼び出し元へタグが漏れて
- *   出力に余分なフィールドが残る・将来タグを外す場所をもう1つ覚える必要がある、という単一情報源
- *   性を損なう副作用があるため不採用）。
+ *   階段自身の幾何（DETAIL polylineのささらの見えがかり。`isStringer`）は、「断面内部は
+ *   描かない」の一般判定（展開図一般化Phase 6b-2 設計(d)。ユーザー裁定2026-09-13）で
+ *   x終端クリップの直前にクリップする——旧`opts.slabBand`+`clipStairDetailInSlabBand`
+ *   （下階天井〜上階床の固定z帯だけを外部から指定してカットする特例）は、階段下に部屋が
+ *   無い場合に指定した一般ルールの特例に過ぎなかったため、この一般判定に置き換えて削除した
+ *   （P3。診断・裁定の経緯は`.claude/elevation-redesign.md`§5.12参照）。
+ *   一般ルール: 囲む実体＝`slab ∪ cut ∪ cutAlong`（`sectionTypes.js`の`isSolidBand`）の矩形。
+ *   ただし`slab`の矩形は、その上に立つ`cut`壁の**向こう側の面**まで延ばす（`solidRectsOf`。
+ *   `sectionEmit.js`の`slabEdgeCutWallJunction`が小口の縦線を立てるxと同一の規則）。対象は
+ *   `isStringer`のpolylineのみ——踏面（CUT）・桁枠・端面・梯子は対象外（踏面を対象にすると
+ *   最終段の蹴込がslab内で消えD2-2が回帰する。実測済み）。判定は矩形の**厳密内部**
+ *   （`solidRectsOf`がGAP_EPSだけ内側へ縮めて返す）。`hidden`（そこに壁は実在するが描かない
+ *   区間。§5.10で階段の占有形状が遮蔽物として参加する側に回った）・`wall`（見えがかり壁）は
+ *   囲まない——`isSolidBand`の対象外。矩形は`columns`からだけ作る（新チャネルを増やさない。
+ *   §5.9(b)）。QA是正（2026-09-13第2ラウンド）: この一般判定は`solidRectsOf(columns)`＋
+ *   `isStringer(p)`だけのプリミティブ単位・無状態な処理で、旧`isLower`のような「他の部材との
+ *   ペア判定」を一切持たない——x終端クリップとの前後を入れ替えても出力は変わらない（実測:
+ *   QAが順序を入れ替えて`npm test`2114/2114緑・13.stq一致を確認済み）。x終端クリップより
+ *   前に置いているのは、旧`opts.slabBand`+`clipStairDetailInSlabBand`（トリム→クリップの
+ *   順で組んでいた旧規約）との連続性のためであり、正しさの条件ではない。
  * @returns {object[]}
  */
 export function stairPrimitivesForCut(contribution, cut, columns, opts = {}) {
@@ -1276,13 +1280,31 @@ export function stairPrimitivesForCut(contribution, cut, columns, opts = {}) {
   // 階段自身の幾何の終端クリップ（展開図一般化Phase 6b-2「一体設計」。
   // .claude/elevation-redesign.md§5.12）。順序＝ミトレ（landingMitreOpts等）→辺落とし
   // （clipPolylineAboveOccluder等）→zクリップ（flightZBounds/clipStringerToAnchors）→
-  // **スラブ帯クリップ（slabBand。QA是正2026-09-12その4）**→x終端クリップ（ここ、裁定(c)
-  // 「トリム先、全端クリップ」）。スラブ帯クリップをx終端クリップより前に置くのは、
-  // `clipStairDetailInSlabBand`のisLower（x範囲が重なりmeanZが高い相手がいる方を下ささらとみなす
-  // ペア判定）が、x終端クリップで分割済みの断片どうしを誤ってペアにしないようにするため——
-  // 未分割の状態で判定すれば、どの断片が「同じ部材」かという問題自体が発生しない。
-  const slabClipped = opts.slabBand
-    ? clipStairDetailInSlabBand(prims, opts.slabBand.zLo, opts.slabBand.zHi) : prims;
+  // **「断面内部は描かない」の一般判定（設計(d)）**→x終端クリップ（ここ、裁定(c)
+  // 「トリム先、全端クリップ」）。
+  //
+  // 一般ルール（ユーザー裁定2026-09-13。P3で特例を削除し確定）: 「実体（`slab`∪`cut`∪
+  // `cutAlong`。`sectionTypes.js`の`isSolidBand`/`solidRectsOf`）で囲まれた矩形の
+  // **厳密内部**にあるささらの見えがかり（`isStringer`）は描かない」——踏面（CUT）・桁枠・
+  // 端面・梯子は対象外（踏面を対象にすると最終段の蹴込がslab内で消えD2-2が回帰する。実測済み）。
+  // `slab`の矩形は、その上に立つ`cut`壁の向こう側の面まで延ばす（`slabEdgeCutWallJunction`と
+  // 同じ規則）。`hidden`（そこに壁は実在するが描かない区間）・`wall`（見えがかり壁）は
+  // 囲まない。矩形は`columns`からだけ作る（新チャネルを増やさない。§5.9(b)）。
+  // 旧`clipStairDetailInSlabBand`+`opts.slabBand`（下階天井〜上階床の固定z帯を外部から
+  // 指定してカットする特例。階段下に部屋が無い場合に指定した一般ルールの特例に過ぎなかった）
+  // はこの一般ルールへ置き換え、P3で削除済み。
+  //
+  // QA是正（2026-09-13第2ラウンド）: この一般判定は`solidRectsOf(columns)`＋`isStringer(p)`
+  // だけを見るプリミティブ単位・無状態の処理で、他のpolylineとのペア判定（旧`isLower`）を
+  // 持たない——x終端クリップとの前後を入れ替えても出力は変わらない（実測確認済み。順序は
+  // 出力に影響しない）。ここに置くのは旧規約（トリム→クリップ）との連続性のためであり、
+  // 正しさの条件ではない。
+  const solidRects = solidRectsOf(columns).map(r => ({
+    xLo: r.xLo, xHi: r.xHi, yLo: zToY(r.zHi), yHi: zToY(r.zLo),
+  }));
+  const slabClipped = solidRects.length
+    ? prims.flatMap(p => (isStringer(p) ? subtractRectsFromPrimitives([p], solidRects) : [p]))
+    : prims;
   // QA是正（2026-09-12その1）: 「cutDrawRangeを超える幾何を生成している箇所が無いため素通り」
   // という旧コメントは事実誤り——`stringerEndCapPrimitives`はそのままでは壁centerline基準の
   // x（cutDrawRangeの外）を直組みしていたため、落ちる（その後QA是正その2で出口ではなく生成時に

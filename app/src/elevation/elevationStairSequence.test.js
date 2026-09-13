@@ -1469,14 +1469,38 @@ function makeRealisticSwitchbackFixture(upDirection, flip) {
     if (beyond.size > 0) graph.addRoom(new Set(beyond), '階段下');
   }
   const faces = composeRoomFaces(room, graph);
-  return { graph, stair, faces };
+
+  // 上階(2F)の最小graph（コーディネーター指示2026-09-13）: 本番buildStairBand
+  // （elevationStair.js:149）は必ずupperGraphをstairFaceSequenceへ渡しており、chUpperAbsMmは
+  // resolveUpperCeilingHeight経由でupperGraphの実データから決まる——upperGraph無し・
+  // chUpperAbsMmだけ手渡しは本番に無い入力（展開図一般化Phase 6b-2の一般判定
+  // `solidRectsOf`は列の実体bandをそのまま信じるため、上階データが無いとその列は
+  // 「1F天井から手渡しのchUpperAbsMmまで丸ごとslab」に落ちて実データより過大な範囲を
+  // 埋めてしまう）。到達側（踊り場の直上。1F同様landingKeyの位置）に実Room1室、
+  // 井戸（往路・復路レーンの直上）はSTAIR_VOIDにする——findOverlappingVoidRoom
+  // （elevationStair.js）が判定する構図と同じ。
+  const upperGraph = makeGraph('p2');
+  const ux0 = upperGraph.addCenterLine(CenterLineType.VERTICAL, 0,    { labeled: false, discipline: Discipline.ARCH });
+  const uxm = upperGraph.addCenterLine(CenterLineType.VERTICAL, 1500, { labeled: false, discipline: Discipline.ARCH });
+  const ux1 = upperGraph.addCenterLine(CenterLineType.VERTICAL, 3000, { labeled: false, discipline: Discipline.ARCH });
+  const uy0 = upperGraph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: false, discipline: Discipline.ARCH });
+  const uym = upperGraph.addCenterLine(CenterLineType.HORIZONTAL, 1000, { labeled: false, discipline: Discipline.ARCH });
+  const uy1 = upperGraph.addCenterLine(CenterLineType.HORIZONTAL, 3500, { labeled: false, discipline: Discipline.ARCH });
+  const uLandingKey  = `${ux0.id}:${uy0.id}:${ux1.id}:${uym.id}`;
+  const uOutboundKey = `${ux0.id}:${uym.id}:${uxm.id}:${uy1.id}`;
+  const uReturnKey   = `${uxm.id}:${uym.id}:${ux1.id}:${uy1.id}`;
+  upperGraph.addRoom(new Set([uLandingKey]), '2F'); // 到達側=実Room
+  const stairVoidRoom = upperGraph.addRoom(new Set([uOutboundKey, uReturnKey]), '階段吹抜け');
+  stairVoidRoom.setFeature(RoomFeature.STAIR_VOID); // 井戸=STAIR_VOID
+
+  return { graph, stair, faces, upperGraph };
 }
 
 for (const upDirection of ['up', 'down']) {
   for (const flip of [false, true]) {
     test(`【実機フィードバック第3弾B・再現確認】stairFaceSequence: 実機相当fixture(upDirection=${upDirection}・flip=${flip})でseq2/seq4のthin(DETAIL)ポリラインはself/secondaryともflightのFL範囲を超えて突き出さない`, () => {
-      const REAL_OPTS = { floorHeight: 3000, chUpperAbsMm: 5400, chLowerMm: 2400 };
-      const { stair, faces, graph } = makeRealisticSwitchbackFixture(upDirection, flip);
+      const { stair, faces, graph, upperGraph } = makeRealisticSwitchbackFixture(upDirection, flip);
+      const REAL_OPTS = { floorHeight: 3000, chUpperAbsMm: 5400, chLowerMm: 2400, upperGraph };
       const entries = stairFaceSequence(stair, faces, graph, REAL_OPTS);
       assert.ok(entries, 'entriesがnullにならないはず');
       const contribution = { outbound: { baseZ: 0, steps: 11, riserMm: REAL_OPTS.floorHeight / 22 },
@@ -1791,8 +1815,8 @@ test('【失敗系】stairChDimChains: 退化した区間（高さ0）は寸法�
 // 旧実装は往復間の壁の有無（isBlockedByWall）しか見ておらず、復路のささら下端が往路ささらを
 // 突き抜けて踊り場まで描かれていた。
 test('【明示指示】stairFaceSequence: seq2の復路ささら見えがかりは、手前（往路）のささら上端より下へ出ない', () => {
-  const REAL_OPTS = { floorHeight: 3000, chUpperAbsMm: 5400, chLowerMm: 2400 };
-  const { stair, faces, graph } = makeRealisticSwitchbackFixture('up', false);
+  const { stair, faces, graph, upperGraph } = makeRealisticSwitchbackFixture('up', false);
+  const REAL_OPTS = { floorHeight: 3000, chUpperAbsMm: 5400, chLowerMm: 2400, upperGraph };
   const entries = stairFaceSequence(stair, faces, graph, REAL_OPTS);
   const entry = entries.find(e => e.seqNo === '2');
   assert.ok(entry, '前提: seq2がある');

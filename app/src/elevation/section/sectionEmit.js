@@ -10,9 +10,14 @@ import {
   GAP_LABEL_WIDTH_PX,
   ElevationLineRole, weightForRole, GAP_EPS_MM as GAP_EPS, kneeCapBottomMm, KNEE_CAP_FACE_MM,
 } from '../elevationStyle.js';
-import { zToY, cutDrawRange, localXOf, hasCutWallStandingOn } from './sectionTypes.js';
+import {
+  zToY, cutDrawRange, localXOf, hasCutWallStandingOn, slabRuns, cutWallRuns, farXOfCutOnSlab,
+} from './sectionTypes.js';
 import { openingSectionPrimitives } from '../../openings/openingSection.js';
 import { FRAME_OVERHANG_MM } from '../../openings/openingPlanSymbolGeometry.js';
+import {
+  mergeIntervals, segmentInsideRect, subtractRectsFromLine, isZeroLengthLine,
+} from '../elevationPrimitives.js';
 
 /**
  * §5.6最終フィルタの唯一の適用箇所（emitLine(x1,z1,x2,z2,role)の1箇所だけで適用する、という
@@ -221,27 +226,6 @@ function wallEndXAt(columns, i, dir, z0, fallbackX) {
 }
 
 /**
- * 連続する列にまたがる同一の帯を1つのrun（x範囲）へまとめる（キーが一致し、かつ列が隣接する
- * 場合のみ連結する）。
- * @param {object[]} columns
- * @param {string} kind
- * @param {(band:object)=>*} keyOf - 同一性のキー（cut帯は壁参照、slab帯はz範囲）
- */
-function bandRuns(columns, kind, keyOf) {
-  const runs = [];
-  columns.forEach((col, i) => {
-    for (const b of col.bands) {
-      if (b.kind !== kind) continue;
-      const key = keyOf(b);
-      const open = runs.find(r => r.key === key && r.lastIndex === i - 1);
-      if (open) { open.x1 = col.x1; open.lastIndex = i; }
-      else runs.push({ key, band: b, x0: col.x0, x1: col.x1, lastIndex: i });
-    }
-  });
-  return runs;
-}
-
-/**
  * 切断壁（`cut`帯）の天端のCUT水平線。腰壁のように**見えている天井より下で終わる**切断壁は、
  * その上端が切断面の一部（そこで断面が閉じる）なので水平線を描く
  * （ユーザー実機指摘2026-08「6」D「腰壁断面線は、天端で曲がり、壁厚だけ左に進み」。
@@ -307,14 +291,6 @@ function kneeCapUnderline(cut, x0, x1, topZ, floorZ, ceilZ) {
   if (bottom == null) return [];
   const z = floorZ + bottom;
   return [emitLine(cut, x0, z, x1, z, ElevationLineRole.DETAIL, { ceilZ })];
-}
-
-// 切断壁の断面をz範囲で（壁参照ではなく）まとめる。**壁は片面ずつのWallオブジェクトとして
-// 持つデータモデル**のため、実機の袖壁1枚が2つのWallに分かれており（列ダンプでx=45に境界）、
-// 壁参照でまとめると同じ断面が2つのrunに割れてしまう——同じz範囲で連続する列は1枚の壁の
-// 断面とみなす。
-function cutWallRuns(columns) {
-  return bandRuns(columns, 'cut', b => `${b.z0}|${b.z1}`);
 }
 
 /**
@@ -411,49 +387,6 @@ function ceilStepSlabSection(columns, cut, ceilZ) {
   return prims;
 }
 
-// 2つのslab帯が**同じ層の床**か（`sectionProbe.js`の`slabBandOf`が層のfloorZをそのまま持たせる。
-// `sectionLevelZs`が既に`band.floorZ`を「その層のFL」として読んでいるのと同じ見方）。
-// 手書き列（単体テスト）のようにfloorZを持たない帯どうしは「同じ」とみなす。
-function sameSlabOwner(a, b) {
-  if (!Number.isFinite(a.floorZ) || !Number.isFinite(b.floorZ)) {
-    return !Number.isFinite(a.floorZ) && !Number.isFinite(b.floorZ);
-  }
-  return Math.abs(a.floorZ - b.floorZ) < GAP_EPS;
-}
-
-/**
- * スラブの走り（`bandRuns`の'slab'）。ただし**所有層が同じでzが連続するslab帯は1本のスラブ**
- * として数える。
- *
- * z区間の切れ目（`sectionProbe.js`のzBreaks）は腰壁の切断高のような**物理境界でない値**でも
- * 入るため、1枚の床構造が2つの走りに割れる（実機「6」Cのはり出し列: `slab(z0-1500)` と
- * `slab(z1500-3000)`。どちらも所有層は上階で、z=1500に実体の境界は無い）。走りのまま
- * `slabEdgeCutWallJunction`のペアリングに渡すと、同じ1枚のスラブが同じ切断壁と2回取り合い、
- * 実体のない高さ（z=1500）の水平線と、上位の走りの縦線を内包する重複した縦線が出る。
- * 所有層が違う隣接slab（1階の天井懐 z2400-3000 と 2階の床構造 z3000-5400）は**結合しない**
- * ——その境界(2FL)は実体の境界そのもので、実機「5」D1・「5」Bの2FL断面線がそこから出る。
- * 同じ理由で「各xで最上位のslab1本だけを相手にする」も採らない（実測: 実機「6」D1で2FL張り出しが
- * 消え、1F天井との取り合いが腰壁の手前側の面へずれる／「6」Bの2FL線が消える）——所有層が違う
- * slabが積み重なるのは**正常な構成**であって、割れた走りの症状ではない。
- * @param {object[]} columns
- * @returns {{key:string, band:object, x0:number, x1:number}[]}
- */
-function slabRuns(columns) {
-  const merged = columns.map(col => {
-    const bands = [];
-    for (const b of col.bands) {
-      const last = bands[bands.length - 1];
-      if (b.kind === 'slab' && last?.kind === 'slab'
-        && Math.abs(last.z1 - b.z0) < GAP_EPS && sameSlabOwner(last, b)) {
-        bands[bands.length - 1] = { ...last, z1: b.z1 };
-        continue;
-      }
-      bands.push(b);
-    }
-    return { ...col, bands };
-  });
-  return bandRuns(merged, 'slab', b => `${b.z0}|${b.z1}`);
-}
 
 /**
  * スラブ天端の水平線を`nearX`から`targetX`へ伸ばすとき、**その天端に腰壁が同面で載っている
@@ -503,11 +436,12 @@ function slabEdgeCutWallJunction(columns, cut, ceilZ) {
   const slabs = slabRuns(columns);
   for (const c of cutWallRuns(columns)) {
     for (const s of slabs) {
-      if (Math.abs(s.band.z1 - c.band.z0) > GAP_EPS) continue; // 壁がこのスラブの上に載っている
-      // スラブが伸びている側の反対＝袖壁の「向こう側」の面。実機ではそれが階段側になる。
-      const slabOnLoSide = s.x0 < c.x0 - GAP_EPS;
-      const nearX = slabOnLoSide ? c.x0 : c.x1;
-      const farX  = slabOnLoSide ? c.x1 : c.x0;
+      // 壁がこのスラブの上に載っているか（farX＝袖壁の「向こう側」の面。実機では階段側になる）。
+      // QA是正（2026-09-13第2ラウンド・F3）: `sectionTypes.js`の`farXOfCutOnSlab`へ一本化
+      // （`solidRectsOf`と同じ式の複製をやめた）。
+      const hit = farXOfCutOnSlab(s, c);
+      if (!hit) continue;
+      const { nearX, farX, slabOnLoSide } = hit;
       prims.push(emitLine(cut, nearX, s.band.z0, farX, s.band.z0, ElevationLineRole.SILHOUETTE, { ceilZ }));
       prims.push(emitLine(cut, farX, s.band.z0, farX, s.band.z1, ElevationLineRole.SILHOUETTE, { ceilZ }));
       // **上階床の断面線を袖壁の手前の面からスラブ側へ張り出す**（ユーザー実機指摘2026-08「6」D1
@@ -920,18 +854,6 @@ export function emitColumns(columns, cut, emitCtx = {}) {
   return dedupeLines(prims);
 }
 
-// QA是正2026-09（Phase 6b-2 C-1後の実機回帰の副次修正・B）: 長さゼロの線分（x1===x2かつ
-// y1===y2）か。列の境界が縮退する構成（例: hidden帯の材の面がちょうど別の列境界と一致し、
-// col.x0===col.x1になる等）では`emitLine`/`subtractRectsFromLine`が実質「点」のプリミティブを
-// 生んでしまうことがある——実害（見えない点が描画されるだけ）は小さいが、diffツールや将来の
-// レンダラで意図しない挙動を招くため、出口（`dedupeLines`＝`emitColumns`の集約点・
-// `subtractRectsFromLine`＝クリップの出口）でまとめて捨てる。GAP_EPSではなく極小固定値
-// （浮動小数の丸め誤差ぶんだけを許容）を使う——GAP_EPSは面のmm単位の許容差で、ここでは
-// 「本当に同一点か」だけを見たいため。
-function isZeroLengthLine(p) {
-  return p.type === 'line' && Math.abs(p.x1 - p.x2) < 1e-9 && Math.abs(p.y1 - p.y2) < 1e-9;
-}
-
 // 完全に同一（type/x1/y1/x2/y2/weight/dash）の線プリミティブを1本にまとめる（WP-E5b追加）。
 // sectionProbe.jsがcut.baseFloorZ/ceilZをzBreaksに割り込ませる（§5.6最終フィルタをband内部の
 // 一部にも適用できるようにするため）副作用として、同一kindの隣接z区間が「上端／下端」を
@@ -950,23 +872,6 @@ function dedupeLines(prims) {
     out.push(p);
   }
   return out;
-}
-
-// 線分(x1,y1)-(x2,y2)が軸並行矩形の内側にある媒介変数区間[t0,t1]（Liang-Barsky。交わらなければ
-// null）。矩形はz→y変換済み（yLo<=yHi）で渡す。
-function segmentInsideRect(x1, y1, x2, y2, r) {
-  const dx = x2 - x1, dy = y2 - y1;
-  const ps = [-dx, dx, -dy, dy];
-  const qs = [x1 - r.xLo, r.xHi - x1, y1 - r.yLo, r.yHi - y1];
-  let t0 = 0, t1 = 1;
-  for (let i = 0; i < 4; i++) {
-    const p = ps[i], q = qs[i];
-    if (Math.abs(p) < 1e-9) { if (q < 0) return null; continue; }
-    const t = q / p;
-    if (p < 0) { if (t > t1) return null; if (t > t0) t0 = t; }
-    else { if (t < t0) return null; if (t < t1) t1 = t; }
-  }
-  return t1 - t0 > 1e-9 ? [t0, t1] : null;
 }
 
 /**
@@ -989,18 +894,6 @@ function splitSegmentAtZ(a, b, splitZ) {
   return [[a, mid], [mid, b]];
 }
 
-// 媒介変数区間の集合を昇順・非重複へ統合する。
-function mergeIntervals(list) {
-  const sorted = [...list].sort((a, b) => a[0] - b[0]);
-  const out = [];
-  for (const iv of sorted) {
-    const last = out[out.length - 1];
-    if (last && iv[0] <= last[1] + 1e-9) last[1] = Math.max(last[1], iv[1]);
-    else out.push([...iv]);
-  }
-  return out;
-}
-
 /**
  * 指定のx/z範囲に食い込む**腰壁・垂れ壁**の帯を矩形（y変換済み）で返す。アキのバツのクリップに使う
  * （ユーザー実機指摘2026-08「6」C「バツが、腰壁と交差する場合、腰壁内はクリップして描画しない」）。
@@ -1020,33 +913,6 @@ function obstructionRects(columns, x0, x1, z0, z1) {
     }
   }
   return rects;
-}
-
-// 線分から矩形の和に入る区間を取り除き、残った区間だけの線分列にする。
-// QA是正2026-09・B: 入力自体が長さゼロ（縮退した列の境界等から生成された「点」）なら
-// 素通りさせず捨てる——素通りさせると矩形と重ならない限り点のまま最終出力へ残ってしまう。
-function subtractRectsFromLine(p, rects) {
-  if (isZeroLengthLine(p)) return [];
-  if (!rects.length) return [p];
-  const cut = mergeIntervals(rects
-    .map(r => segmentInsideRect(p.x1, p.y1, p.x2, p.y2, r))
-    .filter(Boolean));
-  if (!cut.length) return [p];
-  const at = t => ({ x: p.x1 + (p.x2 - p.x1) * t, y: p.y1 + (p.y2 - p.y1) * t });
-  const out = [];
-  let cursor = 0;
-  for (const [c0, c1] of cut) {
-    if (c0 - cursor > 1e-9) {
-      const a = at(cursor), b = at(c0);
-      out.push({ ...p, x1: a.x, y1: a.y, x2: b.x, y2: b.y });
-    }
-    cursor = Math.max(cursor, c1);
-  }
-  if (1 - cursor > 1e-9) {
-    const a = at(cursor), b = at(1);
-    out.push({ ...p, x1: a.x, y1: a.y, x2: b.x, y2: b.y });
-  }
-  return out;
 }
 
 /**
@@ -1142,63 +1008,14 @@ function profileXAtZ(points, z) {
 }
 
 /**
- * 階段の**下ささらの見えがかり**（DETAILのpolyline）のうち、下階天井〜上階床の間に入る区間を
- * 取り除く（ユーザー実機指摘2026-08「6」D2「1F天井断面から2F床断面の間は、天井内なので、
- * 下ささらをカット」）。その帯は床構造の中で、室内側からは見えない。
- * z帯を横切る線分は交点で分割し、帯の外に残る部分だけを新しいpolylineとして返す。
- * @param {object[]} stairContent
- * @param {number} zLo - 下階天井
- * @param {number} zHi - 上階床
+ * 階段のささらの見えがかり（DETAILのpolyline）か（展開図一般化Phase 6b-2 設計(d)で単一情報源化。
+ * 元は`clipStairDetailInSlabBand`内のローカル関数だったが、P2（`sectionStair.js`の
+ * `stairPrimitivesForCut`が「断面内部は描かない」一般判定で同じ述語を使う）のためexportする）。
+ * @param {object} p
+ * @returns {boolean}
  */
-export function clipStairDetailInSlabBand(stairContent, zLo, zHi) {
-  if (!(zHi > zLo + GAP_EPS)) return stairContent;
-  const detail = weightForRole(ElevationLineRole.DETAIL);
-  const inBand = z => z > zLo + GAP_EPS && z < zHi - GAP_EPS;
-  const isStringer = p => p.type === 'polyline' && p.weight === detail && p.points?.length > 1;
-  // **上ささらは見えるので残す**（ユーザー実機指摘2026-08「6」D2）。ささらの見えがかりは
-  // 上端・下端の2本1組で出るので、x範囲が重なる相手より低い方＝下端だけを対象にする
-  // （同じ高さのもの＝重複出力は両方とも残す）。
-  const stringers = stairContent.filter(isStringer).map(p => ({
-    p,
-    meanZ: p.points.reduce((sum, [, y]) => sum - y, 0) / p.points.length,
-    xLo: Math.min(...p.points.map(([x]) => x)),
-    xHi: Math.max(...p.points.map(([x]) => x)),
-  }));
-  const isLower = p => {
-    const me = stringers.find(e => e.p === p);
-    return stringers.some(o => o.p !== p && o.meanZ > me.meanZ + GAP_EPS
-      && o.xLo < me.xHi - GAP_EPS && o.xHi > me.xLo + GAP_EPS);
-  };
-  const out = [];
-  for (const p of stairContent) {
-    if (!isStringer(p) || !isLower(p)) { out.push(p); continue; }
-    let run = [];
-    const flush = () => { if (run.length > 1) out.push({ ...p, points: run }); run = []; };
-    const push = pt => {
-      const last = run[run.length - 1];
-      if (!last || Math.abs(last[0] - pt[0]) > GAP_EPS || Math.abs(last[1] - pt[1]) > GAP_EPS) run.push(pt);
-    };
-    for (let i = 0; i + 1 < p.points.length; i++) {
-      const a = p.points[i], b = p.points[i + 1];
-      const at = t => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
-      // 帯の境界を横切るtで線分を分割し、区間ごとに中点で内外を判定する。
-      const ts = [0, 1];
-      if (Math.abs(b[1] - a[1]) > GAP_EPS) {
-        for (const edge of [zLo, zHi]) {
-          const t = (zToY(edge) - a[1]) / (b[1] - a[1]);
-          if (t > GAP_EPS && t < 1 - GAP_EPS) ts.push(t);
-        }
-      }
-      ts.sort((x, y) => x - y);
-      for (let k = 0; k + 1 < ts.length; k++) {
-        const [t0, t1] = [ts[k], ts[k + 1]];
-        if (inBand(-at((t0 + t1) / 2)[1])) { flush(); continue; } // 帯の中は捨てる
-        push(at(t0)); push(at(t1));
-      }
-    }
-    flush();
-  }
-  return out;
+export function isStringer(p) {
+  return p.type === 'polyline' && p.weight === weightForRole(ElevationLineRole.DETAIL) && p.points?.length > 1;
 }
 
 /**

@@ -422,14 +422,21 @@ test('【終端】stairPrimitivesForCut: outerBound省略でもcutDrawRangeを�
   assert.ok(dashedAtInner, 'stairDrawRangeの内側(acrossHi)のささらの端面は元の位置のまま残るはず');
 });
 
-// ---- QA是正その4（2026-09-12）: スラブ帯クリップはx終端クリップより前に走る ----
-// secondaryFlights（switchbackCuts.jsがseq2にのみ設定する「往復間に壁が無いときに見える他レーン
-// のささら」。elevationStairSequence.test.jsの同名フィクスチャと同じ組み方）経由のDETAIL
-// polylineは、clipPolylineAboveOccluderによる占有形状の切り出しで「面の外へ出た閉じた輪郭」
-// になる——x終端クリップが1つの部材を2本の断片に分ける実例（実機「6」で見つかった退行と
-// 同じ機構。sectionEmit.test.jsの手組みpolylineでの確認に続く、stairPrimitivesForCut自身を
-// 通した固定）。
-test('【QA是正2026-09-12その4】stairPrimitivesForCut: スラブ帯クリップ(opts.slabBand)はx終端クリップより前に走る', () => {
+// ---- P3是正（2026-09-13）: solidRectsOfの矩形を持つcolumnsを渡すと実体矩形の厳密内部で切られ、
+// 両断片が別部材と誤認されず残る ----
+// 旧`opts.slabBand`+`isLower`（x範囲重複＋meanZ比較で「上下ペア」を推測する特例）は
+// 展開図一般化Phase 6b-2 設計(d)の一般ルールへ置き換わった（P3で削除）。新ルールは
+// `columns`自身が持つ実体（`slab`∪`cut`∪`cutAlong`。`solidRectsOf`）だけを見て矩形の
+// **厳密内部**を切るため、旧実装のような「相手がいなければクリップしない」という
+// パートナー依存は無い——secondaryFlights経由のDETAIL polyline（clipPolylineAboveOccluderに
+// よる占有形状の切り出しで「面の外へ出た閉じた輪郭」になる。elevationStairSequence.test.jsの
+// 同名フィクスチャと同じ組み方）が、実在するslab帯を通れば必ず切られ、切られた両側の断片が
+// 別々の部材（例えば元からあった他のpolyline）と混同されずに残ることを固定する。
+// QA是正（2026-09-13第2ラウンド）: この判定はプリミティブ単位・無状態（他のpolylineとの
+// ペア判定を持たない）なので、x終端クリップとの前後関係は出力に影響しない（実測確認済み）。
+// 本テストの主張はあくまで「実体矩形の厳密内部で切られ、両断片が残る」ことであり、
+// x終端クリップとの順序ではない。
+test('【P3是正】stairPrimitivesForCut: solidRectsOfの矩形を持つcolumnsを渡すと実体矩形の厳密内部で切られ、両断片が別部材と誤認されず残る', () => {
   const graph = makeGraph();
   const { stair } = makeSwitchbackFixture(graph, StructuralMaterialType.STEEL);
   const c = stairContribution(stair, graph, FLOOR_HEIGHT);
@@ -438,32 +445,35 @@ test('【QA是正2026-09-12その4】stairPrimitivesForCut: スラブ帯クリ�
     seqNo: '2', line: { isVertical: true, axisValue: 500, lo: 1500, hi: 4500 },
     viewSign: 1, dirSign: 1, layers: [], zRange: { loZ: 0, hiZ: 3000 }, baseFloorZ: 0,
   };
-  const columns = [{ x0: -200, x1: 3000, worldLo: 1300, worldHi: 4500, bands: [] }];
+  const emptyColumns = [{ x0: -200, x1: 3000, worldLo: 1300, worldHi: 4500, bands: [] }];
   const thinOf = prims => prims.filter(p => p.type === 'polyline' && p.weight === 'thin');
 
-  // slabBand無し（x終端クリップだけ）での出力から、面の外へ出ていた部材がx=3000(面端)から
+  // band無し（実体が無い＝素通し）での出力から、面の外へ出ていた部材がx=3000(面端)から
   // 面の内側へ伸びる2点のDETAIL polyline（閉じた輪郭の一部）として残ることを確認し、その
   // 両端のzを「まだ分割されていない1本」の証拠として使う。
-  const baseline = stairPrimitivesForCut(c2, cut, columns);
+  const baseline = stairPrimitivesForCut(c2, cut, emptyColumns);
   const unsplit = thinOf(baseline).find(p => p.points.length === 2 && Math.abs(p.points[0][0] - 3000) < 1e-6);
   assert.ok(unsplit, '前提: secondaryFlights経由の2点DETAIL polyline(x=3000起点)が見つかるはず');
   const [zA, zB] = unsplit.points.map(([, y]) => -y);
-  assert.ok(Math.abs(zA - zB) > 500, '前提: 両端のzは十分離れている(スラブ帯を挟める)はず');
+  assert.ok(Math.abs(zA - zB) > 500, '前提: 両端のzは十分離れている(slab帯を挟める)はず');
 
-  // スラブ帯をこの部材のz範囲の中間（30%〜60%）に置く——両端(zA/zB)を挟む位置。
+  // この部材のz範囲の中間（30%〜60%）に実在するslab帯を置く——columns自体が実体を持つ
+  // （旧slabBandのような外部指定ではない）。x範囲は部材の全x域(-200..3000)を覆う。
   const zMin = Math.min(zA, zB), zSpan = Math.abs(zA - zB);
-  const slabBand = { zLo: zMin + zSpan * 0.3, zHi: zMin + zSpan * 0.6 };
+  const zLo = zMin + zSpan * 0.3, zHi = zMin + zSpan * 0.6;
+  const slabColumns = [{ x0: -200, x1: 3000, worldLo: 1300, worldHi: 4500,
+    bands: [{ kind: 'slab', z0: zLo, z1: zHi }] }];
 
   const sharePolyline = prims => thinOf(prims).some(p =>
     p.points.some(([, y]) => Math.abs(-y - zA) < 1e-6) &&
     p.points.some(([, y]) => Math.abs(-y - zB) < 1e-6));
+  const hasNear = (prims, z) => thinOf(prims).some(p => p.points.some(([, y]) => Math.abs(-y - z) < 1e-6));
 
-  // 正しい順序（現行実装）: opts.slabBandを渡すと、スラブ帯クリップはx終端クリップより前に
-  // 走る——この部材はまだ分割されておらず`isLower`の相手が無いため、帯の中を通っていても
-  // クリップされない。両端(zA・zB)は同じ1本のpolylineに残る。
-  const withSlabBand = stairPrimitivesForCut(c2, cut, columns, { slabBand });
-  assert.ok(sharePolyline(withSlabBand),
-    'opts.slabBandを渡しても、この部材はx終端クリップ前にスラブ帯クリップを受けるため両端が同じ1本に残るはず');
+  const withSlabColumns = stairPrimitivesForCut(c2, cut, slabColumns);
+  assert.ok(!sharePolyline(withSlabColumns),
+    'columns自体に実在するslab帯を渡すと、パートナー(isLower相手)の有無に関わらずこの部材は帯の厳密内部で切られ、両端(zA・zB)は同じ1本に残らないはず');
+  assert.ok(hasNear(withSlabColumns, zA) && hasNear(withSlabColumns, zB),
+    '切られた両側の断片（zA側・zB側）はそれぞれ別のpolylineとして残り、消えたり別部材と混同されたりしないはず');
 });
 
 // ---- ささらはSTEELのみ（失敗系WOODで0本） ----
