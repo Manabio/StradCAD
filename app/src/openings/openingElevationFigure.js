@@ -319,8 +319,10 @@ function mechanismPrimitives(opening, entry, width, top, sillTop) {
  * 建具モードの姿図（内法の中線）と展開図（アキ標記の範囲）が共有する唯一の定義。
  * @returns {{x:number, y:number, w:number, h:number, fw:number}}
  */
-export function frameOnlyInnerRect(opening, width = opening.width, top = -effectiveHeight(opening)) {
-  const fw = Math.min(effectiveFrameFaceWidth(opening), width / 2);
+export function frameOnlyInnerRect(opening, { width = opening.width, top = -effectiveHeight(opening), minFaceMm = 0 } = {}) {
+  // minFaceMm＝実画面の描画限界（見付1px保証。展開図側 elevation/elevationStyle.js drawLimitMm）。
+  // 細線（外周）は指定寸法を守り、中線（内法）を見付ぶん、ただし限界未満なら限界ぶん内側へ置く。
+  const fw = Math.min(Math.max(effectiveFrameFaceWidth(opening), minFaceMm), width / 2);
   const y = top + fw;
   return { x: fw, y, w: width - 2 * fw, h: -y, fw };
 }
@@ -385,8 +387,10 @@ function leverHandlePrimitives(opening, width) {
  * @returns {object[]} AutoScaledFigure が描くプリミティブ配列
  */
 export function buildOpeningElevation(
-  opening, { tag, entry, includeDims = true, includeMotionArrows = true, includeLevelLine = true } = {},
+  opening, { tag, entry, includeDims = true, includeMotionArrows = true, includeLevelLine = true, minFaceMm = 0 } = {},
 ) {
+  // minFaceMm: 実画面の描画限界(mm)＝見付1px保証（展開図側が表示倍率から算出して渡す。
+  // 建具モードの姿図・単体テストは0＝モデル寸法のまま）。三方枠の内法（中線）だけが従う。
   const width  = opening.width;
   const height = effectiveHeight(opening);
   // 建具（fitting）は窓台の概念を持たないため sill=0 扱い（core.js のコメント方針どおり）。
@@ -414,7 +418,7 @@ export function buildOpeningElevation(
   const isFrameOnly = entry?.mechanism === OpeningMechanism.FRAME_ONLY;
   const frameOutline = isFrameOnly
     ? (() => {
-        const inner = frameOnlyInnerRect(opening, width, top);
+        const inner = frameOnlyInnerRect(opening, { width, top, minFaceMm });
         const thin = weightForRole(ElevationLineRole.DETAIL);
         const medium = weightForRole(ElevationLineRole.SILHOUETTE);
         const innerTop = inner.y, innerBottom = inner.y + inner.h;

@@ -929,6 +929,28 @@ test('buildFaceFigure: 三方枠(FRAME_ONLY)は見付ぶん内側の内法にバ
   }
 });
 
+test('buildFaceFigure: 見付1px保証——scale=1/100では三方枠の内法（中線・アキ標記）が100mm内側になり、外周（細線）は指定寸法のまま', () => {
+  const opening = {
+    id: 'opFrame', isVertical: false, axisCL: { id: 'axisY0' }, wallSide: 1,
+    centerCoord: 2000, width: 2000, height: 2000, sillHeight: null, frameFaceWidth: 20, frameProjection: 12,
+    category: OpeningCategory.FITTING, subType: 'threeSidedFrame', fixtureType: 'WF',
+  };
+  const prims = buildFaceFigure(makeFace(), baseCtx({ graph: makeGraph({ openings: [opening] }), scale: 1 / 100 }));
+  const outerVerts = prims.filter(p => p.type === 'line' && p.weight === 'thin' && p.x1 === p.x2 && Math.min(p.y1, p.y2) === -2000);
+  assert.deepEqual([...new Set(outerVerts.map(p => p.x1))].sort((a, b) => a - b), [1000, 3000], '外周は指定寸法(1000〜3000)');
+  const innerVerts = prims.filter(p => p.type === 'line' && p.weight === 'medium' && p.x1 === p.x2 && Math.min(p.y1, p.y2) === -1900);
+  assert.deepEqual([...new Set(innerVerts.map(p => p.x1))].sort((a, b) => a - b), [1100, 2900], '内法は1px(=100mm)内側');
+  const label = prims.find(p => p.type === 'text' && p.text === 'ア キ');
+  assert.equal(label.y, -950, 'アキ標記も広げた内法の中心');
+
+  // 線幅を加味: lineWeightsPx{thin:1,medium:2} → 中心間 1+(1+2)/2=2.5px=250mm(1/100)
+  const prims2 = buildFaceFigure(makeFace(), baseCtx({
+    graph: makeGraph({ openings: [opening] }), scale: 1 / 100, lineWeightsPx: { thin: 1, medium: 2, thick: 3 },
+  }));
+  const innerVerts2 = prims2.filter(p => p.type === 'line' && p.weight === 'medium' && p.x1 === p.x2 && Math.min(p.y1, p.y2) === -1750);
+  assert.deepEqual([...new Set(innerVerts2.map(p => p.x1))].sort((a, b) => a - b), [1250, 2750], '内法は余白1px＝250mm内側');
+});
+
 test('buildFaceFigure: 扉のある建具(singleSwing)の姿の前には「ア キ」を描かない（従来どおり）', () => {
   const opening = {
     id: 'opDoor', isVertical: false, axisCL: { id: 'axisY0' }, wallSide: 1,

@@ -88,6 +88,7 @@ export function layoutBandFaces(room, graph, faces, ctx = {}) {
   const gridRowGapModelMm    = ctx.gridRowGapModelMm;     // 未指定はbuildFaceFigure既定(QA D1)
   const wallLessEndExtendModelMm = ctx.wallLessEndExtendModelMm; // 未指定はbuildFaceFigure既定(項目1)
   const scale = ctx.scale; // 未指定はbuildFaceFigure既定=壁2段書き省略判定を行わない（項目4）
+  const lineWeightsPx = ctx.lineWeightsPx ?? null; // 見付1px保証の線幅表（未指定＝線幅0扱い）
   // ユーザー明示指示2026-08その13: 寸法線の足はCLから実画面3mm離す（展開図で統一）。
   // 未指定（単体テスト等）は1パス目の仮値。
   const dimFootGapMm = ctx.dimFootGapModelMm ?? DEFAULT_DIM_FOOT_GAP_MM;
@@ -204,7 +205,7 @@ export function layoutBandFaces(room, graph, faces, ctx = {}) {
     const faceCtx = {
       graph, project, room, ceilingHeight: CH, materialMap, gridCLs, faceLabelAvoidThresholdModelMm,
       prevFace, nextFace, openingTagRowModelMm, dimRowGapModelMm, gridRowGapModelMm, floorSegments,
-      beyondCeilings, wallLessEndExtendModelMm, scale, solids: ctx.solids ?? null,
+      beyondCeilings, wallLessEndExtendModelMm, scale, lineWeightsPx, solids: ctx.solids ?? null,
       dimFootGapModelMm: dimFootGapMm,
       // 規則B: 面ラベルはパネルで1つ（2枚目以降は描かず、先頭はパネル全幅の中心へ）。
       skipFaceLabel: inPanelWithPrev[i], faceLabelBoundary: panelLabelBoundary.get(i),
@@ -687,7 +688,7 @@ export function appendBandCutContent(primitives, room, graph, layout, layers, op
         // floorFace/ceilFace）が唯一の情報源になった。`face.spans`のfarFloorDeltaMm/farCeilAbsMmは
         // 図側（`elevationFigure.js`）が遠側床線・遠側天井線を描くために引き続き使う。
         seqNo: String(i),
-        probeCtx, endExtendMm, bandRoomBounds, scale: opts.scale,
+        probeCtx, endExtendMm, bandRoomBounds, scale: opts.scale, lineWeightsPx: opts.lineWeightsPx ?? null,
         upperPlaneOverhang: opts.upperPlaneOverhang,
       },
     );

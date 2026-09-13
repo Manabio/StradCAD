@@ -339,6 +339,27 @@ test('frameOnlyInnerRect: 内法矩形は見付ぶん内側・下端FL(0)・見�
   assert.equal(frameOnlyInnerRect(narrow).w, 0);
 });
 
+// ---- 見付1px保証: minFaceMm（描画限界）未満の見付は限界まで広げる。外周（細線）は指定寸法のまま ----
+test('buildOpeningElevation: minFaceMm=30 のとき三方枠の内法（中線）は30mm内側、外周（細線）は指定寸法のまま', () => {
+  const entry = findCatalogEntry(OpeningCategory.FITTING, 'threeSidedFrame');
+  const opening = makeOpening({
+    category: OpeningCategory.FITTING, subType: 'threeSidedFrame', width: 800, height: 2000, sillHeight: null,
+    frameFaceWidth: 20,
+  });
+  const primitives = buildOpeningElevation(opening, { tag: null, entry, minFaceMm: 30 });
+  const outer = primitives.filter(p => p.type === 'line' && p.weight === 'thin');
+  const inner = primitives.filter(p => p.type === 'line' && p.weight === 'medium');
+  assert.deepEqual(outer.filter(p => p.x1 === p.x2).map(p => p.x1).sort((a, b) => a - b), [0, 800], '外周は指定寸法を守る');
+  assert.deepEqual(inner.filter(p => p.x1 === p.x2).map(p => p.x1).sort((a, b) => a - b), [30, 770], '内法は限界30mm内側');
+  assert.equal(inner.find(p => p.y1 === p.y2).y1, -2000 + 30);
+  // 限界以上の見付（60）はそのまま
+  const wide = buildOpeningElevation(makeOpening({
+    category: OpeningCategory.FITTING, subType: 'threeSidedFrame', width: 800, height: 2000, sillHeight: null, frameFaceWidth: 60,
+  }), { tag: null, entry, minFaceMm: 30 });
+  assert.deepEqual(wide.filter(p => p.type === 'line' && p.weight === 'medium' && p.x1 === p.x2).map(p => p.x1).sort((a, b) => a - b), [60, 740]);
+  assert.equal(frameOnlyInnerRect(opening, { minFaceMm: 30 }).fw, 30);
+});
+
 // ---- 失敗系: 見付が開口半幅を超えても竪枠が交差・上枠が反転しない（平面の方立と同じクランプ） ----
 test('【失敗系】buildOpeningElevation: 見付(25)が開口幅(30)の半分を超える三方枠でも上枠が反転しない', () => {
   const entry = findCatalogEntry(OpeningCategory.FITTING, 'threeSidedFrame');

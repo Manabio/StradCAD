@@ -27,7 +27,7 @@ import {
 import { solidPrimitivesForFace } from './elevationSolids.js';
 import { kneeDropRecordsOnAxis } from '../finish/kneeDropWall.js';
 import {
-  ElevationLineRole, weightForRole,
+  ElevationLineRole, weightForRole, faceGapLimitMm,
   WALL_LABEL_LINE_GAP_MM,
   OPENING_TAG_RADIUS_PX, GRID_TAG_RADIUS_PX, GRID_TAG_FONT_PX,
   FACE_LABEL_FONT_PX, GRID_LINE_ABOVE_CH_MM, CANVAS_BG_COLOR, DEFAULT_FACE_LABEL_AVOID_THRESHOLD_MM,
@@ -599,7 +599,7 @@ export function buildFaceFigure(face, ctx) {
   const {
     graph, project, room, ceilingHeight: CH, materialMap, gridCLs, faceLabelAvoidThresholdModelMm,
     prevFace, nextFace, openingTagRowModelMm, dimRowGapModelMm, gridRowGapModelMm, floorSegments,
-    wallLessEndExtendModelMm, scale, ceilingProfile, skipBaseboard, skipWallLabel, floorSpanX,
+    wallLessEndExtendModelMm, scale, lineWeightsPx, ceilingProfile, skipBaseboard, skipWallLabel, floorSpanX,
     solids, extraCenterLineXs, skipFaceLabel, faceLabelBoundary, floorProfile,
     upperOverhang, upperFloorZ, upperFloorEnds, upperFloorCutEnds, lowerOverhang,
   } = ctx;
@@ -1120,8 +1120,12 @@ export function buildFaceFigure(face, ctx) {
     const localX = localXOf(face, o.centerCoord);
     const x = localX - o.width / 2;
     const entry = findCatalogEntry(o.category, o.subType);
+    // 見付1px保証: 表示倍率と線幅から描画限界(mm)を1つ定め、三方枠の内法（中線）は外周（細線＝
+    // 指定寸法）から少なくともその分だけ内側に描く——細線と中線の間の余白が1pxになる中心間距離
+    // （elevationStyle.js faceGapLimitMm。scale未確定の1パス目は0＝モデル寸法）。
+    const minFaceMm = faceGapLimitMm(scale, lineWeightsPx, 'thin', 'medium');
     const figurePrims = buildOpeningElevation(o, {
-      entry, includeDims: false, includeMotionArrows: false, includeLevelLine: false,
+      entry, includeDims: false, includeMotionArrows: false, includeLevelLine: false, minFaceMm,
     });
     const oriented = face.dirSign < 0 ? figurePrims.map(p => mirrorPrimitiveX(p, o.width)) : figurePrims;
     for (const p of oriented) prims.push(translatePrimitive(p, x, floorDyAt(localX)));
@@ -1131,7 +1135,7 @@ export function buildFaceFigure(face, ctx) {
     // 開口をアキから外しているため、扉のない建具だけここで補う。内法は左右対称なので
     // 面の向き（dirSign）による鏡映は不要。
     if (isDoorlessMechanism(entry?.mechanism)) {
-      const inner = frameOnlyInnerRect(o);
+      const inner = frameOnlyInnerRect(o, { minFaceMm });
       appendGapMark(prims, { x: x + inner.x, y: inner.y + floorDyAt(localX), w: inner.w, h: inner.h }, detailWeight);
     }
 

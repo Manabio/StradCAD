@@ -26,7 +26,7 @@ import {
 // DEFAULT_PX_PER_MMはviewport.js（appViewport.jsとは別。window依存を持たない純モジュール
 // ——appViewport.jsのヘッダコメント参照）からのみ取得する。ElevationModeState.js自体は
 // node:testから単体importできる状態を保つ（ElevationModeState.test.js参照）。
-import { DEFAULT_PX_PER_MM as DEFAULT_SCREEN_PX_PER_MM } from '../viewport.js';
+import { DEFAULT_PX_PER_MM as DEFAULT_SCREEN_PX_PER_MM, resolveLineWeightsPx } from '../viewport.js';
 
 // 項目2: 階ごとのビュー位置記憶（Map<floorId, {focusedRoomId, precedingRoomId, scrollY,
 // faceScroll}>）。セッション内のメモリ保持のみ（IDB永続化なし。undo・graph変更とは無関係の
@@ -272,7 +272,7 @@ export class ElevationModeState {
       openingTagRowModelMm: DEFAULT_OPENING_TAG_ROW_MM, dimRowGapModelMm: DEFAULT_DIM_ROW_GAP_MM,
       gridRowGapModelMm: DEFAULT_GRID_ROW_GAP_MM,
       wallLessEndExtendModelMm: DEFAULT_WALL_LESS_END_EXTEND_MM,
-      dimFootGapModelMm: DEFAULT_DIM_FOOT_GAP_MM, scale: null,
+      dimFootGapModelMm: DEFAULT_DIM_FOOT_GAP_MM, scale: null, lineWeightsPx: null,
     }));
     // WP-0: 縮尺決定・帯の積み上げ高さの両方とも、帯高さの整数倍切り上げ（2層帯の帯スロット
     // 高さを標準帯高さの整数倍に揃える）を経てから使う——チェックする値はどのパスでも同じ
@@ -304,7 +304,10 @@ export class ElevationModeState {
       room => buildOne(room, {
         gapModelMm, nameGapModelMm, triangleOffsetModelMm, faceLabelAvoidThresholdModelMm,
         openingTagRowModelMm, dimRowGapModelMm, gridRowGapModelMm, wallLessEndExtendModelMm,
-        dimFootGapModelMm, scale,
+        // 見付1px保証（elevationStyle.js faceGapLimitMm）は線幅も加味するため、描画側
+        // （renderer/ElevationLayer.jsx→figurePrimitivesKonva.jsx の viewport.lineWeightsPx）と
+        // 同じ表を同じ校正値から引いて渡す。
+        dimFootGapModelMm, scale, lineWeightsPx: resolveLineWeightsPx(screenPxPerMm),
       }),
       (err, room) => console.error(`[elevation] 部屋「${room.name}」の帯構築に失敗:`, err),
     );

@@ -1391,6 +1391,33 @@ test('emitColumns: cutAlongの腰壁（天端が天井より下）は天端の�
   assert.deepEqual([cap.x1, cap.x2], [0, 500], '天端と同じx範囲のはず');
 });
 
+test('emitColumns: 見付1px保証——emitCtx.scale=1/100では腰壁天端の細線は天端の100mm(=1px)下、天端(中線)は動かない', () => {
+  const cut = makeCut();
+  const columns = [{ x0: 0, x1: 500, worldLo: 0, worldHi: 500,
+    bands: [{ kind: 'cutAlong', z0: 0, z1: 800, isKneeDrop: true }] }];
+  const prims = emitColumns(columns, cut, { ceilZ: 2400, scale: 1 / 100 });
+  assert.ok(prims.find(p => p.y1 === -800 && p.y1 === p.y2 && p.weight === 'thick'), '天端(CUT)は-800のまま');
+  assert.ok(prims.find(p => p.y1 === -700 && p.y1 === p.y2 && p.weight === 'thin'), '細線は天端の100mm下');
+  assert.equal(prims.filter(p => p.y1 === capY(800) && p.y1 === p.y2 && p.weight === 'thin').length, 0,
+    '作図値50mm下の細線は出ない（1px未満）');
+  // 見えがかり（wall）の腰壁も同じ保証
+  const wallCols = [{ x0: 0, x1: 500, worldLo: 0, worldHi: 500,
+    bands: [{ kind: 'wall', z0: 0, z1: 800, distMm: 1000, layerRole: 'self', isKneeDrop: true }] }];
+  const wallPrims = emitColumns(wallCols, cut, { ceilZ: 2400, scale: 1 / 100 });
+  assert.ok(wallPrims.find(p => p.y1 === -700 && p.y1 === p.y2 && p.weight === 'thin'), '見えがかりの腰壁も細線は100mm下');
+});
+
+test('emitColumns: 見付1px保証は線幅を加味する——lineWeightsPx{thin:1,thick:3}・scale=1/100では細線は天端の300mm(=余白1px)下', () => {
+  const cut = makeCut();
+  const columns = [{ x0: 0, x1: 500, worldLo: 0, worldHi: 500,
+    bands: [{ kind: 'cutAlong', z0: 0, z1: 800, isKneeDrop: true }] }];
+  const lineWeightsPx = { thin: 1, medium: 2, thick: 3 };
+  const prims = emitColumns(columns, cut, { ceilZ: 2400, scale: 1 / 100, lineWeightsPx });
+  assert.ok(prims.find(p => p.y1 === -800 && p.y1 === p.y2 && p.weight === 'thick'), '天端(CUT)は-800のまま');
+  assert.ok(prims.find(p => p.y1 === -500 && p.y1 === p.y2 && p.weight === 'thin'), '細線は 1+(3+1)/2=3px=300mm 下');
+  assert.equal(prims.filter(p => p.y1 === -700 && p.y1 === p.y2 && p.weight === 'thin').length, 0, '線幅無視の100mm下には出ない');
+});
+
 test('【失敗系】emitColumns: 天井まで立つcutAlong（腰壁でない）には天端の細線を足さない', () => {
   const cut = makeCut();
   const columns = [{ x0: 0, x1: 500, worldLo: 0, worldHi: 500,
@@ -1443,6 +1470,11 @@ test('【移行・腰壁の端部】emitColumns: 壁がそこで終わる端に�
     `両端の中線＋内側の細線で計4本のはず（実際:${JSON.stringify(verticals)}）`);
   const inner = verticals.filter(p => p.x1 === 1000 + KNEE_CAP_FACE_MM || p.x1 === 3000 - KNEE_CAP_FACE_MM);
   assert.ok(inner.every(p => p.weight === 'thin'), '内側の端面は細線のはず');
+
+  // 見付1px保証: scale=1/100 では端面の細線も内側100mm（=1px）へ寄る（中線＝壁端は動かない）
+  const primsScaled = emitColumns(kneeCapColumns(), makeCut(), { ceilZ: 2400, scale: 1 / 100 });
+  const xsScaled = [...new Set(primsScaled.filter(p => p.x1 === p.x2 && p.y1 === 0 && p.y2 === -900).map(p => p.x1))].sort((a, b) => a - b);
+  assert.deepEqual(xsScaled, [1000, 1100, 2900, 3000]);
 });
 
 test('【失敗系・移行】emitColumns: 同じ壁面が隣の列へ続く端には端面の細線を描かない', () => {

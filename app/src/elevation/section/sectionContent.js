@@ -316,7 +316,7 @@ export function buildCutContent(cut, probeCtx, opts = {}) {
   );
   const columns = buildColumns(pcut, probeCtx);
   // scale（px/mm）はアキ標記の省略判定に使う（sectionEmit.jsのemitOpenGapMarks）。
-  const emitCtx = { ...emitCtxForCut(pcut), scale: opts.scale };
+  const emitCtx = { ...emitCtxForCut(pcut), scale: opts.scale, lineWeightsPx: opts.lineWeightsPx ?? null };
   // 壁content（断面・見えがかり・凹み側面線）は「断面内部は描画しない」の一般判定
   // （`clipInsideSlabSolids`）を通してから返す。
   const wallPrims = clipInsideSlabSolids(emitColumns(columns, pcut, emitCtx), columns);
@@ -384,6 +384,7 @@ export function buildSectionFromLine(line, layers, opts = {}) {
     endExtendMm: opts.endExtendMm ?? 0,
     bandRoomBounds: opts.bandRoomBounds ?? null,
     scale: opts.scale,
+    lineWeightsPx: opts.lineWeightsPx ?? null,
     upperPlaneOverhang: opts.upperPlaneOverhang ?? false,
   });
 }

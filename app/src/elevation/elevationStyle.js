@@ -114,9 +114,54 @@ export const GAP_LABEL_WIDTH_PX = 30;
 // 腰壁高さ）はCAP_THICKNESS側のまま変えない——ここは見えがかりの表現専用の値。
 export const KNEE_CAP_FACE_MM = 50;
 
+// ---- 見付の1px保証（ユーザー指示2026-09「展開図：見付1px保証」）----
+// 見付（2本線の間隔）は実画面で潰れると1本に見える。表示倍率 scale(px/mm) から**描画限界**を
+// 1つ定め、それ未満の見付は限界まで広げて描く（例: 30mm=1pxの倍率なら 20mm の見付は限界まで
+// 広げ、60mm はそのまま2px＝自然縮尺）。
+// 限界は**2本の線の間の余白が MIN_FACE_PX になる中心間距離**——線には太さがあるため、中心間が
+// 1pxでも線幅ぶん重なって1本に見える（ユーザー実機指摘2026-09「画面上、一本線に見える。線幅も
+// 加味して、余白が1pxになるように」）。よって限界px＝MIN_FACE_PX＋(線A幅＋線B幅)/2。線幅は
+// 描画側と同じ表（viewport.lineWeightsPx＝resolveLineWeightsPx(校正px/mm)）を渡して引く。
+// 広げる側は「どちらの線が寸法を守るか」を各見付が決める——三方枠は細線（外周＝指定寸法）を
+// 守り中線（内法）を内側へ、腰壁天端は中線（天端＝腰壁高さ）を守り細線を下へ。
+// scale 不明（倍率決定用の1パス目・単体テスト・ゴールデン）は限界0＝モデル寸法のまま。
+export const MIN_FACE_PX = 1;
+
+/** weight（'thin'|'medium'|'thick'）の実画面px。表が無い・未知のweightは 0（余白のみ）。 */
+export function strokePxOf(weight, lineWeightsPx) {
+  return lineWeightsPx?.[weight] ?? 0;
+}
+
+/**
+ * 表示倍率 scale(px/mm) での描画限界(mm)＝隣り合う2本の線の中心間距離の下限。
+ * strokePxSum は両線の太さ(px)の和（余白 MIN_FACE_PX に半分ずつ足す）。scale が無い/0以下なら 0。
+ */
+export function drawLimitMm(scale, strokePxSum = 0) {
+  return scale > 0 ? (MIN_FACE_PX + strokePxSum / 2) / scale : 0;
+}
+
+/** weightA/weightB の2本の線の間の余白を MIN_FACE_PX 以上にする中心間距離の下限(mm)。 */
+export function faceGapLimitMm(scale, lineWeightsPx, weightA, weightB) {
+  return drawLimitMm(scale, strokePxOf(weightA, lineWeightsPx) + strokePxOf(weightB, lineWeightsPx));
+}
+
+/** 見付 faceMm（weightA/weightB の2本線の間隔）を余白 MIN_FACE_PX 以上に保証した作図値(mm)。 */
+export function visibleFaceMm(faceMm, scale, lineWeightsPx, weightA, weightB) {
+  return Math.max(faceMm, faceGapLimitMm(scale, lineWeightsPx, weightA, weightB));
+}
+
+/**
+ * 腰壁天端の見付の作図値(mm)。KNEE_CAP_FACE_MM に1px保証を掛けたもの（唯一の定義箇所）。
+ * 天端側の線（topWeight。切断壁なら'thick'、見えがかりなら中線/細線）と下端の細線('thin')の間の余白を保証する。
+ */
+export function kneeCapFaceMm(scale, lineWeightsPx, topWeight = 'thick') {
+  return visibleFaceMm(KNEE_CAP_FACE_MM, scale, lineWeightsPx, topWeight, 'thin');
+}
+
 /**
  * 腰壁の天端の帯の**下端**（床からの高さmm）。天端の上端は呼び出し側が既に描いている位置
- * （面図なら topHeight、断面エンジンなら band.z1）なので、ここは下端だけを答える。
+ * （面図なら topHeight、断面エンジンなら band.z1）なので、ここは下端だけを答える——中線（天端）
+ * が腰壁高さを守り、細線（下端）が見付ぶん（1px保証後）下がる。
  *
  * 帯が壁の高さに収まらない（天端が見付以下）の退化指定では **null** を返す——このガードを
  * 各所で書くと片方だけ抜けて床線の下へ線が出る。展開図側の唯一の情報源として集約する。
@@ -124,10 +169,13 @@ export const KNEE_CAP_FACE_MM = 50;
  * appendKneeCapEndFaces）——腰壁の天端・端部は壁の実体に属する表現なので、面図側
  * （elevationFigure.js）は持たない。
  * @param {number} topMm 天端の高さ（その壁の足元からの相対値）
+ * @param {number} [scale] 表示倍率(px/mm)。省略時は1px保証なし
+ * @param {object} [lineWeightsPx] 線幅表(px)。省略時は線幅0として余白のみ保証
+ * @param {string} [topWeight] 天端側の線のweight（既定'thick'）
  * @returns {number|null}
  */
-export function kneeCapBottomMm(topMm) {
-  const bottom = topMm - KNEE_CAP_FACE_MM;
+export function kneeCapBottomMm(topMm, scale, lineWeightsPx, topWeight) {
+  const bottom = topMm - kneeCapFaceMm(scale, lineWeightsPx, topWeight);
   return bottom > GAP_EPS_MM ? bottom : null;
 }
 

@@ -8,7 +8,7 @@
  */
 import {
   GAP_LABEL_WIDTH_PX,
-  ElevationLineRole, weightForRole, GAP_EPS_MM as GAP_EPS, kneeCapBottomMm, KNEE_CAP_FACE_MM,
+  ElevationLineRole, weightForRole, GAP_EPS_MM as GAP_EPS, kneeCapBottomMm, kneeCapFaceMm,
 } from '../elevationStyle.js';
 import {
   zToY, cutDrawRange, localXOf, hasCutWallStandingOn, slabRuns, cutWallRuns, slabJunctionOf,
@@ -235,14 +235,14 @@ function wallEndXAt(columns, i, dir, z0, fallbackX) {
  * （スラブ端・床断面線）が既に描いており、同指摘のプロファイルも天端→外側面→2FL床と回って
  * 壁の下を通らない。
  */
-function cutWallTopEdges(columns, cut, ceilZ) {
+function cutWallTopEdges(columns, cut, ceilZ, emitCtx) {
   const topZ = ceilZ ?? cut.zRange?.hiZ ?? null;
   if (topZ == null) return [];
   return cutWallRuns(columns)
     .filter(r => r.band.z1 < topZ - GAP_EPS)
     .flatMap(r => [
       emitLine(cut, r.x0, r.band.z1, r.x1, r.band.z1, ElevationLineRole.CUT, { ceilZ }),
-      ...kneeCapUnderline(cut, r.x0, r.x1, r.band.z1, r.band.z0, ceilZ),
+      ...kneeCapUnderline(cut, r.x0, r.x1, r.band.z1, r.band.z0, ceilZ, emitCtx, weightForRole(ElevationLineRole.CUT)),
     ]);
 }
 
@@ -257,22 +257,26 @@ function cutWallTopEdges(columns, cut, ceilZ) {
  * @param {import('./sectionTypes.js').SectionCut} cut
  * @param {object} col
  * @param {object} band 見えがかり壁の帯（isKneeDrop以外は無視する）
- * @param {{prev:object|null, next:object|null, loRanges:object[], hiRanges:object[], ceilZ:number|undefined}} ctx
+ * @param {{prev:object|null, next:object|null, loRanges:object[], hiRanges:object[], ceilZ:number|undefined, scale?:number}} ctx
+ *   scale は表示倍率(px/mm)。見付の1px保証（elevationStyle.js kneeCapFaceMm）に使う。
  */
 function appendKneeCapEndFaces(prims, cut, col, band, ctx) {
   if (!band.isKneeDrop) return;
   const top = (col.ceilZ ?? ctx.ceilZ ?? Infinity);
   if (!(band.z1 < top - GAP_EPS)) return; // 天井まで届く壁＝天端が露出していない
-  if (kneeCapBottomMm(band.z1 - band.z0) == null) return; // 見付に満たない退化指定
+  // 端面: 外側の線は凹み側面線（中線）、内側は細線。余白1px保証は中線×細線の線幅で取る。
+  const outerWeight = weightForRole(ElevationLineRole.SILHOUETTE);
+  if (kneeCapBottomMm(band.z1 - band.z0, ctx.scale, ctx.lineWeightsPx, outerWeight) == null) return; // 見付に満たない退化指定
+  const faceMm = kneeCapFaceMm(ctx.scale, ctx.lineWeightsPx, outerWeight);
   const coversWholeBand = ranges => ranges.length === 1
     && Math.abs(ranges[0].z0 - band.z0) < GAP_EPS && Math.abs(ranges[0].z1 - band.z1) < GAP_EPS;
   // 内側へ寄せる向きは列の内側（lo端なら+、hi端なら−）。
   if (ctx.prev && coversWholeBand(ctx.loRanges)) {
-    const x = col.x0 + KNEE_CAP_FACE_MM;
+    const x = col.x0 + faceMm;
     prims.push(emitLine(cut, x, band.z0, x, band.z1, ElevationLineRole.DETAIL, { ceilZ: ctx.ceilZ }));
   }
   if (ctx.next && coversWholeBand(ctx.hiRanges)) {
-    const x = col.x1 - KNEE_CAP_FACE_MM;
+    const x = col.x1 - faceMm;
     prims.push(emitLine(cut, x, band.z0, x, band.z1, ElevationLineRole.DETAIL, { ceilZ: ctx.ceilZ }));
   }
 }
@@ -284,10 +288,13 @@ function appendKneeCapEndFaces(prims, cut, col, band, ctx) {
  * ——面図側（elevationFigure.js の kneeCapMarksOnFace）と同じ規則にするため。
  * @param {number} topZ 天端のz（絶対）
  * @param {number} floorZ その壁の足元のz（帯のz0。層の床）
+ * @param {{scale?:number, lineWeightsPx?:object}} [emitCtx] 表示倍率(px/mm)と線幅表。見付の1px保証
+ *   （天端の線が高さを守り、細線が線幅込みで余白1px以上下がる）
+ * @param {string} [topWeight] 天端の線のweight（切断壁は'thick'、見えがかりは描いた線のrole）
  * @returns {object[]} 0本 or 1本
  */
-function kneeCapUnderline(cut, x0, x1, topZ, floorZ, ceilZ) {
-  const bottom = kneeCapBottomMm(topZ - floorZ);
+function kneeCapUnderline(cut, x0, x1, topZ, floorZ, ceilZ, emitCtx = {}, topWeight = 'thick') {
+  const bottom = kneeCapBottomMm(topZ - floorZ, emitCtx.scale, emitCtx.lineWeightsPx, topWeight);
   if (bottom == null) return [];
   const z = floorZ + bottom;
   return [emitLine(cut, x0, z, x1, z, ElevationLineRole.DETAIL, { ceilZ })];
@@ -742,7 +749,7 @@ export function emitColumns(columns, cut, emitCtx = {}) {
           // 腰壁の天端（仕様2026-08）: 見えがかりでも天端の帯は見えるので下端を細線で足す。
           // 天端の水平線を実際に描いた場合だけ——遮蔽で消した縁の下に帯だけ残ると嘘になる。
           if (band.isKneeDrop && band.z1 < (col.ceilZ ?? ceilZ ?? Infinity) - GAP_EPS) {
-            prims.push(...kneeCapUnderline(cut, col.x0, col.x1, band.z1, band.z0, ceilZ));
+            prims.push(...kneeCapUnderline(cut, col.x0, col.x1, band.z1, band.z0, ceilZ, emitCtx, weightForRole(topRole)));
           }
         }
         // 凹み: 隣接列で同一z区間のwallのdistMmが変化した境界にSILHOUETTE縦線（§5.5）。
@@ -811,7 +818,9 @@ export function emitColumns(columns, cut, emitCtx = {}) {
           //     行って終わる。その位置の縦線は端部処理が描くため二重にしない。
           //   - 同じ軸上に壁が続く端 … 連続する壁は同じ偏芯・同じ厚みで同面のため
           //     （uncoveredZRangesが空を返す）。
-          appendKneeCapEndFaces(prims, cut, col, band, { prev, next, loRanges, hiRanges, ceilZ });
+          appendKneeCapEndFaces(prims, cut, col, band, {
+            prev, next, loRanges, hiRanges, ceilZ, scale: emitCtx.scale, lineWeightsPx: emitCtx.lineWeightsPx,
+          });
         }
       } else if (band.kind === 'cutAlong') {
         // cutAlong（縦断された壁。WP-E5リード裁定・§6.1）: 見付面自体は塗らず輪郭のみ描く。
@@ -823,7 +832,7 @@ export function emitColumns(columns, cut, emitCtx = {}) {
         // 腰壁の天端（仕様2026-08）: 上端が天井より下で終わる＝天端が露出している帯だけ、
         // 帯の下端を細線で足す（垂れ壁は下端が露出するので z1 は天井に一致し、ここは通らない）。
         if (band.isKneeDrop && band.z1 < (col.ceilZ ?? ceilZ ?? Infinity) - GAP_EPS) {
-          prims.push(...kneeCapUnderline(cut, col.x0, col.x1, band.z1, band.z0, ceilZ));
+          prims.push(...kneeCapUnderline(cut, col.x0, col.x1, band.z1, band.z0, ceilZ, emitCtx, weightForRole(ElevationLineRole.CUT)));
         }
         // 端部縦線: 壁のx方向の実際の端（隣接列に同じcutAlong壁が続かない側）にCUT縦線
         // （壁の実端の断面。§5.5の凹み側面線と同じ「隣接列と比較」パターンだが、cutAlongは
@@ -880,7 +889,7 @@ export function emitColumns(columns, cut, emitCtx = {}) {
       }
     }
   });
-  prims.push(...cutWallTopEdges(columns, cut, ceilZ));
+  prims.push(...cutWallTopEdges(columns, cut, ceilZ, emitCtx));
   // 上階の床との取り合いは、**区間ごとの天井を持つ帯（cut.ceilProfileあり＝通常の部屋帯・
   // 吹抜け帯）は ceilStepSlabSection、持たない帯（階段帯）は slabEdgeCutWallJunction** が担当する。
   // 両方走らせると同じ取り合いを別々の作図で二重に描く——前者は「天井の高さが変わる境界」を

@@ -219,7 +219,7 @@ function makeUpperStoreyContext(layout, upperGraph, floorHeightMm, upperCH) {
  * @param {{floorHeightMm:number, roomBoundsRect:object|null, endExtendMm:number|undefined}} opts
  */
 function appendUpperStoreyOutline(primitives, layout, upper, opts) {
-  const { floorHeightMm, roomBoundsRect, endExtendMm, scale } = opts;
+  const { floorHeightMm, roomBoundsRect, endExtendMm, scale, lineWeightsPx = null } = opts;
   const { layers, probeCtx, columnSolids, hiZ, segsByFace } = upper;
   for (const { face, xCursor } of layout.faceRuns) {
     for (const seg of segsByFace.get(face) ?? []) {
@@ -239,7 +239,7 @@ function appendUpperStoreyOutline(primitives, layout, upper, opts) {
           zRange: { loZ: floorHeightMm, hiZ },
           ceilProfile: [{ loX: 0, hiX: hi - lo, ceilZ: hiZ }],
           seqNo: `${face.label}^`,
-          probeCtx, endExtendMm, bandRoomBounds: roomBoundsRect, scale,
+          probeCtx, endExtendMm, bandRoomBounds: roomBoundsRect, scale, lineWeightsPx,
         },
       );
       // cutのローカルx=0は line.lo/hi 側。面ローカルxへ戻す。
@@ -486,7 +486,7 @@ export function buildVoidBand(voidRoom, graph, lowerGraph, ctx = {}) {
   // 下階のgraphからしか読めないため、下階を層として積まないと1FL付近の断面・見えがかりが
   // 一切出ない（面の引き伸ばしは床線・天井線の話で、壁の実体の話ではない）。
   appendBandCutContent(primitives, voidRoom, graph, layout, layers,
-    { endExtendMm: ctx.wallLessEndExtendModelMm, scale: ctx.scale,
+    { endExtendMm: ctx.wallLessEndExtendModelMm, scale: ctx.scale, lineWeightsPx: ctx.lineWeightsPx ?? null,
       // 下階の平面が面の端より外へ続くぶん（gate付き）。探査（層ごとの窓）と描画範囲へ同じ値。
       ...(overhangByFace
         ? { upperPlaneOverhang: true, faceOverhangOf: face => overhangByFace.get(face) } : {}) });
@@ -531,7 +531,7 @@ export function buildRoomBandWithVoidAbove(room, graph, voidRoom, upperGraph, ct
     const layout = layoutBandFaces(room, graph, baseFaces, ctx);
     const prims = [...layout.primitives];
     appendBandCutContent(prims, room, graph, layout, buildBandLayers(graph),
-      { endExtendMm: ctx.wallLessEndExtendModelMm, scale: ctx.scale });
+      { endExtendMm: ctx.wallLessEndExtendModelMm, scale: ctx.scale, lineWeightsPx: ctx.lineWeightsPx ?? null });
     return finalizeBand(room, graph, prims, {
       faceCount: baseFaces.length, chDimX: layout.chDimX, prevBoundaryHi: layout.prevBoundaryHi,
       triOffsetMm: ctx.triangleOffsetModelMm, nameGapModelMm: ctx.nameGapModelMm,
@@ -664,7 +664,7 @@ export function buildRoomBandWithVoidAbove(room, graph, voidRoom, upperGraph, ct
   // このメイン経路は上のガード（floorHeightMm!=null && upperGraph）を通過済みなので常に2。
   const mainLayers = buildBandLayers(graph, { above: [{ graph: upperGraph, floorHeightMm }] });
   appendBandCutContent(cutContent, room, graph, layout, mainLayers, {
-    endExtendMm: ctx.wallLessEndExtendModelMm, scale: ctx.scale,
+    endExtendMm: ctx.wallLessEndExtendModelMm, scale: ctx.scale, lineWeightsPx: ctx.lineWeightsPx ?? null,
     aboveCeilVisibleRangesOf: face => upper.segsByFace.get(face),
     // 面の端より外へ続く上階の平面（gate付き。上記overhangByFace）——探査（層ごとの窓）と
     // 描画範囲の両方へ同じ値を渡す。図側の天井断面線もfaceOverrideのupperOverhangで同じ値。
@@ -684,7 +684,7 @@ export function buildRoomBandWithVoidAbove(room, graph, voidRoom, upperGraph, ct
   appendUpperStoreyOutline(primitives, layout, upper, {
     floorHeightMm,
     roomBoundsRect: roomBounds(room.cells, graph),
-    endExtendMm: ctx.wallLessEndExtendModelMm, scale: ctx.scale,
+    endExtendMm: ctx.wallLessEndExtendModelMm, scale: ctx.scale, lineWeightsPx: ctx.lineWeightsPx ?? null,
   });
   // 値の出どころはすべて2階の部屋。
   appendUpperStoreyTrim(primitives, layout, upperGraph, upper, {
