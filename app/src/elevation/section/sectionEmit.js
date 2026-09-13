@@ -11,7 +11,7 @@ import {
   ElevationLineRole, weightForRole, GAP_EPS_MM as GAP_EPS, kneeCapBottomMm, KNEE_CAP_FACE_MM,
 } from '../elevationStyle.js';
 import {
-  zToY, cutDrawRange, localXOf, hasCutWallStandingOn, slabRuns, cutWallRuns, farXOfCutOnSlab,
+  zToY, cutDrawRange, localXOf, hasCutWallStandingOn, slabRuns, cutWallRuns, slabJunctionOf,
 } from './sectionTypes.js';
 import { openingSectionPrimitives } from '../../openings/openingSection.js';
 import { FRAME_OVERHANG_MM } from '../../openings/openingPlanSymbolGeometry.js';
@@ -430,20 +430,28 @@ function flushKneeStopX(columns, nearX, targetX, slabTopZ) {
  * とつなぎ、袖壁の断面線と交点で取り合わせる。この立上りが無いと天井線が宙で終わる。
  * 上階床側（slab.z1）の水平線は袖壁の手前の面で止まる（`hiddenByCutWall`）——同指摘の
  * 「2FL床断面まで下りる、再度CLの外へ延長して終わる」どおり、壁の下は通らない。
+ *
+ * **小口が立つのは、壁の向こう側に探査済みの空気があるスラブだけ**（`sectionTypes.js`の
+ * `slabJunctionOf`のgate。ユーザー裁定2026-09-13「6」C: 壁のある端では自階の壁＋床構造が
+ * 未探査のまま上階の腰壁だけがはり出し列に立つ——そこへ小口と1F天井線を描くと壁断面の
+ * **内部**に線が入る）。
+ * **この取り合いの3本（下階天井・立上り・上階床）はすべて断面＝CUT**（ユーザー裁定2026-09-13
+ * 「6」B「Y2から3500にある1階天井、1階天井から2FLまでの縦線は断面を表す太線が正解」）——
+ * スラブは仮想断面が実際に切っている躯体で、その輪郭は壁の断面縁と同格。下階天井の線は
+ * **スラブの走り全体**（外端〜壁の向こう側の面）を1本で描き、走りの中で見えがかり側が出す
+ * 同じ高さの中線（見えがかり壁の上端縁・slab/open境界）は`emitColumns`が抑止する
+ * （`sectionSlabRunsOf`。同じ線を2種類の線種で重ねない）。
  */
-function slabEdgeCutWallJunction(columns, cut, ceilZ) {
+function slabEdgeCutWallJunction(columns, cut, ceilZ, sectionSlabs) {
   const prims = [];
-  const slabs = slabRuns(columns);
-  for (const c of cutWallRuns(columns)) {
-    for (const s of slabs) {
-      // 壁がこのスラブの上に載っているか（farX＝袖壁の「向こう側」の面。実機では階段側になる）。
-      // QA是正（2026-09-13第2ラウンド・F3）: `sectionTypes.js`の`farXOfCutOnSlab`へ一本化
-      // （`solidRectsOf`と同じ式の複製をやめた）。
-      const hit = farXOfCutOnSlab(s, c);
-      if (!hit) continue;
-      const { nearX, farX, slabOnLoSide } = hit;
-      prims.push(emitLine(cut, nearX, s.band.z0, farX, s.band.z0, ElevationLineRole.SILHOUETTE, { ceilZ }));
-      prims.push(emitLine(cut, farX, s.band.z0, farX, s.band.z1, ElevationLineRole.SILHOUETTE, { ceilZ }));
+  for (const { run: s, hits } of sectionSlabs) {
+    // 下階天井の断面線: スラブの走り全体を、立つ壁の向こう側の面まで含めて1本で描く。
+    const xs = [s.x0, s.x1, ...hits.map(h => h.farX)];
+    prims.push(emitLine(cut, Math.min(...xs), s.band.z0, Math.max(...xs), s.band.z0,
+      ElevationLineRole.CUT, { ceilZ }));
+    for (const { nearX, farX, slabOnLoSide } of hits) {
+      // 小口（立上り）: 壁の向こう側の面で下階天井→上階床。
+      prims.push(emitLine(cut, farX, s.band.z0, farX, s.band.z1, ElevationLineRole.CUT, { ceilZ }));
       // **上階床の断面線を袖壁の手前の面からスラブ側へ張り出す**（ユーザー実機指摘2026-08「6」D1
       // 「2F腰壁断面が2FLまで下りたあと、左を向いて2FL床断面線はりだし」）。旧はこの線を
       // 「スラブの上に立つ遠い壁の下端縁」に頼っていたが、その壁が帯の部屋の外（d7250）で
@@ -452,11 +460,36 @@ function slabEdgeCutWallJunction(columns, cut, ceilZ) {
       // スラブの側から見たもの）。
       const outX = flushKneeStopX(columns, nearX, slabOnLoSide ? s.x0 : s.x1, s.band.z1);
       if (Math.abs(outX - nearX) > GAP_EPS) {
-        prims.push(emitLine(cut, nearX, s.band.z1, outX, s.band.z1, ElevationLineRole.SILHOUETTE, { ceilZ }));
+        prims.push(emitLine(cut, nearX, s.band.z1, outX, s.band.z1, ElevationLineRole.CUT, { ceilZ }));
       }
     }
   }
   return prims;
+}
+
+/**
+ * 「切断壁が縁に載り、その向こう側に小口が見える」スラブの走り（＝断面として輪郭を描く
+ * スラブ）とその取り合い（`slabJunctionOf`の結果）の一覧。`slabEdgeCutWallJunction`が輪郭を
+ * 描き、`emitColumns`が同じ高さの見えがかり側の中線を抑止するための共通の問い。
+ * @param {import('./sectionTypes.js').SectionColumn[]} columns
+ * @returns {Array<{run:{x0:number,x1:number,band:object}, hits:Array<{nearX:number,farX:number,slabOnLoSide:boolean}>}>}
+ */
+function sectionSlabRunsOf(columns) {
+  const cutRuns = cutWallRuns(columns);
+  const out = [];
+  for (const run of slabRuns(columns)) {
+    const hits = cutRuns.map(c => slabJunctionOf(columns, run, c)).filter(Boolean);
+    if (hits.length > 0) out.push({ run, hits });
+  }
+  return out;
+}
+
+// その列・その高さの水平線は「断面として輪郭を描くスラブ」の下端（下階天井の断面線）か
+// ——`slabEdgeCutWallJunction`がCUTで1本描くので、見えがかり側（壁の上端縁・slab/open境界）は
+// 同じ位置に中線を重ねない。
+function ownedBySectionSlab(sectionSlabs, col, z) {
+  return sectionSlabs.some(({ run }) => Math.abs(run.band.z0 - z) < GAP_EPS
+    && col.x0 >= run.x0 - GAP_EPS && col.x1 <= run.x1 + GAP_EPS);
 }
 
 /**
@@ -584,6 +617,14 @@ export function emitColumns(columns, cut, emitCtx = {}) {
   const nearestDistMm = nearestSightlineDistMm(columns);
   const sightRole = distMm => (Number.isFinite(distMm) && distMm <= nearestDistMm + GAP_EPS
     ? ElevationLineRole.SILHOUETTE : ElevationLineRole.DETAIL);
+  // 断面として輪郭を描くスラブ（`slabEdgeCutWallJunction`の対象。ceilProfileを持たない帯
+  // ＝階段帯だけ。持つ帯は`ceilStepSlabSection`が担当し、ここは従来どおり空）。
+  // ceilProfileを持つ帯（通常の部屋帯・吹抜け帯）は`ceilStepSlabSection`の担当で、ここは空
+  // （＝CUT化も中線の抑止もしない）。持たない帯（階段帯）だけ`slabEdgeCutWallJunction`が使う。
+  // **1回だけ計算して両方へ渡す**（条件式を2箇所に持つと「CUT線は出るのに中線を抑止しない」
+  // 二重線が起きる）。
+  const hasCeilProfile = Array.isArray(cut.ceilProfile) && cut.ceilProfile.length > 0;
+  const sectionSlabs = hasCeilProfile ? [] : sectionSlabRunsOf(columns);
   // 注: 「壁のない端部で線を図の外側へ延長する」処理はここには無い。プリミティブを後から
   // 引き伸ばすのではなく、**探査範囲そのものを外へ広げる**（sectionProbe.jsの
   // probeExtendLo/HiMm。ユーザー裁定2026-08 A案）——面の外の列も実データとして生成されるため、
@@ -695,6 +736,7 @@ export function emitColumns(columns, cut, emitCtx = {}) {
           && Math.abs(upperBand.ceilZ - band.z1) < GAP_EPS;
         const topRole = atSpaceCeil ? ElevationLineRole.SILHOUETTE : role;
         if (!hiddenByCutWall(col, band.z1) && !atSectionLevel(band.z1)
+            && !ownedBySectionSlab(sectionSlabs, col, band.z1)
             && ownsBoundary(band, neighborBandAt(col, band.z1, +1))) {
           prims.push(emitLine(cut, col.x0, band.z1, col.x1, band.z1, topRole, { ceilZ, forceDash: beyondBand }));
           // 腰壁の天端（仕様2026-08）: 見えがかりでも天端の帯は見えるので下端を細線で足す。
@@ -832,7 +874,7 @@ export function emitColumns(columns, cut, emitCtx = {}) {
       const aIsFloorEdge = (a.kind === 'slab' || a.kind === 'open');
       const bIsFloorEdge = (b.kind === 'slab' || b.kind === 'open');
       if (aIsFloorEdge && bIsFloorEdge && a.kind !== b.kind) {
-        if (!hiddenByCutWall(col, a.z1)) {
+        if (!hiddenByCutWall(col, a.z1) && !ownedBySectionSlab(sectionSlabs, col, a.z1)) {
           prims.push(emitLine(cut, col.x0, a.z1, col.x1, a.z1, ElevationLineRole.SILHOUETTE, { ceilZ }));
         }
       }
@@ -845,10 +887,10 @@ export function emitColumns(columns, cut, emitCtx = {}) {
   // 起点に低い天井の側へ床の断面線を伸ばし、後者は「スラブ帯の外端」を起点に反対側へ伸ばす。
   // 通常の部屋帯では 1F天井〜2FL が吹抜けの側でも天井懐(slab)に分類されるため、後者は床の
   // 断面線を吹抜けの側（床が無い側）へ引いてしまう。
-  if (Array.isArray(cut.ceilProfile) && cut.ceilProfile.length > 0) {
+  if (hasCeilProfile) {
     prims.push(...ceilStepSlabSection(columns, cut, ceilZ));
   } else {
-    prims.push(...slabEdgeCutWallJunction(columns, cut, ceilZ));
+    prims.push(...slabEdgeCutWallJunction(columns, cut, ceilZ, sectionSlabs));
   }
   return dedupeLines(prims);
 }

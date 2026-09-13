@@ -45,6 +45,7 @@ function bandsEqual(a, b) {
       && (band.distMm ?? null) === (other.distMm ?? null)
       && (band.layerRole ?? null) === (other.layerRole ?? null)
       && (band.openingPassThrough ?? false) === (other.openingPassThrough ?? false)
+      && (band.hiddenOf ?? null) === (other.hiddenOf ?? null)
       // Phase4（水平面ヒット。裁定済み2026-09-11・既定on。far値が付かない列は両側undefined
       // ＝比較は常にtrueで従来どおり）:
       // 比較しないと「片方の列だけ深度上限内の奥の床・天井が見える」隣接列が誤って1列へ統合され、

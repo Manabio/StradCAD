@@ -226,21 +226,126 @@ export function farXOfCutOnSlab(slabRun, cutRun) {
   return { nearX, farX, slabOnLoSide };
 }
 
+// 手前が空気（切断線の位置に実体が無い）とみなす帯か——`slabJunctionOf`の小口判定用。
+// `open`/`farVoid`（アキ・遠側の面の向こう）・`wall`（見えがかり壁＝手前は空気）・
+// `hidden`のうち**見えがかり由来**（`hiddenOf:'wall'`。2a壁＝この帯では実体として数えない）。
+// 切断壁由来のhidden（`hiddenOf:'cut'`）は切断線上に実体がある＝断面の中なので空気ではない。
+// 出自を持たないhidden（手書き列・旧データ）は見えがかり由来とみなす（実データの4件はすべて
+// wall由来。2026-09-13実測）。
+function isAirBand(band) {
+  if (band.kind === 'open' || band.kind === 'farVoid' || band.kind === 'wall') return true;
+  return band.kind === 'hidden' && (band.hiddenOf ?? 'wall') === 'wall';
+}
+
+/**
+ * `cutRun`が`slabRun`の縁に立ち、その**向こう側に小口が見える**取り合い（`farXOfCutOnSlab`＋
+ * 空気のgate）。立っていない・向こう側が空気でなければ`null`。
+ *
+ * gate（ユーザー裁定2026-09-13「6」C: 「X3の踊り場ささら断面…腰壁天端で折り返して2FL床断面、
+ * はりだしで囲まれる範囲は壁・天井内部。したがって内部はクリップされて描画しない」）:
+ * 壁の向こう側の面（farX）の**その先の列**で、スラブのz範囲**全体**が探査済みの空気の帯
+ * （`isAirBand`）で覆われていなければ、スラブはそこで終わっていない——列が無い（探査窓の外＝
+ * 未知）なら実体とも空気とも言わない（`sectionHits.js`の`unexploredBelowZOf`と同じ境界の引き方:
+ * 「未知」を「アキ」にしない）。z範囲の一部だけが空気（残りが`slab`/`cut`）でも小口とは言わない
+ * ——小口は断面の輪郭で、輪郭の途中に実体があるならそこは断面の中。
+ * 実機「6」Cの左端は上階の腰壁だけがはり出し列に立ち、その下（自階の壁＋床構造）は自階の窓の外で
+ * 未探査だった——そこへ「スラブが腰壁の向こう側まで延びる」と仮定して小口と1F天井線を描くと、
+ * 壁断面の**内部**に線が入る。実機「6」B/D1（壁のない端部）は、腰壁の向こう側＝階段室側の列に
+ * 見えがかり壁（B）／見えがかり由来のhidden（D1。2a壁）が探査済みで在るため従来どおり小口が立つ。
+ * `slab`が続く／別の`cut`が立つ向こう側にも小口は無い（スラブが続いている・壁の中）。
+ * `slabEdgeCutWallJunction`（`sectionEmit.js`）と`slabSolidRectsOf`（本ファイル）が**同じこの
+ * 1関数**で「壁が載っているか・どこまで延ばすか」を決める（別々に書くと片方だけ壁の中へ
+ * スラブが延びる）。
+ * @param {SectionColumn[]} columns - x0昇順
+ * @param {{x0:number, x1:number, band:{z0:number,z1:number}}} slabRun
+ * @param {{x0:number, x1:number, band:{z0:number,z1:number}}} cutRun
+ * @returns {{nearX:number, farX:number, slabOnLoSide:boolean}|null}
+ */
+export function slabJunctionOf(columns, slabRun, cutRun) {
+  const hit = farXOfCutOnSlab(slabRun, cutRun);
+  if (!hit) return null;
+  const beyond = (columns ?? []).find(c => (hit.slabOnLoSide
+    ? Math.abs(c.x0 - hit.farX) < GAP_EPS
+    : Math.abs(c.x1 - hit.farX) < GAP_EPS));
+  if (!beyond) return null;
+  // スラブのz範囲から空気の帯を引いていき、残りが無ければ全体が空気。
+  let rest = [{ z0: slabRun.band.z0, z1: slabRun.band.z1 }];
+  for (const b of beyond.bands ?? []) {
+    if (!isAirBand(b)) continue;
+    rest = rest.flatMap(r => {
+      if (b.z1 <= r.z0 + GAP_EPS || b.z0 >= r.z1 - GAP_EPS) return [r];
+      const out = [];
+      if (b.z0 > r.z0 + GAP_EPS) out.push({ z0: r.z0, z1: b.z0 });
+      if (b.z1 < r.z1 - GAP_EPS) out.push({ z0: b.z1, z1: r.z1 });
+      return out;
+    });
+  }
+  return rest.every(r => r.z1 - r.z0 <= GAP_EPS) ? hit : null;
+}
+
+/**
+ * スラブ（床構造・天井懐）の実体矩形（z空間・縮めない）。`slab`の矩形は、その縁に立ち
+ * 向こう側に小口が見える`cut`壁の**向こう側の面**（farX）まで延ばす（`slabJunctionOf`。
+ * `sectionEmit.js`の`slabEdgeCutWallJunction`が小口の縦線を立てるxと同一の規則・同一関数）。
+ * `wall`（見えがかり壁。断面ではない）が上に載っている場合は延ばさない——「小口の縦線は
+ * 切断壁の断面にだけ現れる」という既存規則と同じ境界線をここでも守る。
+ * `solidRectsOf`（ささらの一般判定）と`sectionContent.js`の`buildCutContent`（壁content
+ * の「断面内部は描画しない」一般判定）が共有する。
+ * @param {SectionColumn[]} columns
+ * @returns {Array<{xLo:number, xHi:number, zLo:number, zHi:number}>}
+ */
+export function slabSolidRectsOf(columns) {
+  const rects = [];
+  const cutRuns = cutWallRuns(columns ?? []);
+  for (const run of slabRuns(columns ?? [])) {
+    let xLo = run.x0, xHi = run.x1;
+    for (const c of cutRuns) {
+      const hit = slabJunctionOf(columns, run, c);
+      if (!hit) continue;
+      if (hit.slabOnLoSide) xHi = Math.max(xHi, hit.farX); // slabのhi側に立つ壁→farXへ延ばす
+      else xLo = Math.min(xLo, hit.farX); // slabのlo側に立つ壁→farXへ延ばす
+    }
+    rects.push({ xLo, xHi, zLo: run.band.z0, zHi: run.band.z1 });
+  }
+  return rects;
+}
+
+/**
+ * 矩形を**GAP_EPSだけ内側へ縮めた厳密内部**にする（`elevationPrimitives.js`の
+ * `subtractRectsFromPrimitives`が使う`segmentInsideRect`はLiang-Barskyのp≈0分岐で辺上を内側と
+ * 判定するため、縮めないと矩形の縁にちょうど乗る裁定済みの線（例: 面C x=1492.5の復路ささら・
+ * スラブ小口の縦線そのもの）まで消えてしまう）。退化した矩形は捨てる。
+ * @param {Array<{xLo:number, xHi:number, zLo:number, zHi:number}>} rects
+ * @returns {Array<{xLo:number, xHi:number, zLo:number, zHi:number}>}
+ */
+export function strictInteriorOf(rects) {
+  return rects
+    .map(r => ({
+      xLo: Math.min(r.xLo, r.xHi) + GAP_EPS, xHi: Math.max(r.xLo, r.xHi) - GAP_EPS,
+      zLo: Math.min(r.zLo, r.zHi) + GAP_EPS, zHi: Math.max(r.zLo, r.zHi) - GAP_EPS,
+    }))
+    .filter(r => r.xHi > r.xLo && r.zHi > r.zLo);
+}
+
+/**
+ * z空間の矩形（`solidRectsOf`/`slabSolidRectsOf`の返り）を面ローカル（y=-z。
+ * `elevationPrimitives.js`の`subtractRectsFromPrimitives`が受ける形）へ写す。
+ * `sectionStair.js`（ささら）と`sectionContent.js`（壁content）が共有する（式を複製しない）。
+ * @param {Array<{xLo:number, xHi:number, zLo:number, zHi:number}>} rects
+ * @returns {Array<{xLo:number, xHi:number, yLo:number, yHi:number}>}
+ */
+export function rectsToFaceLocal(rects) {
+  return rects.map(r => ({ xLo: r.xLo, xHi: r.xHi, yLo: zToY(r.zHi), yHi: zToY(r.zLo) }));
+}
+
 /**
  * 列群から「実体で囲まれた矩形」の集合を作る（展開図一般化Phase 6b-2 設計(d)。「6」面Cのアキ矩形
  * （6b-2）と同じ考え方を階段自身の幾何へ広げ、階段のささらの見えがかりのうちこの矩形の
  * **厳密内部**にある区間を描かない、という一般判定の入力にする——`.claude/elevation-redesign.md`
  * §5.12参照）。
  *
- * `slab`の矩形は、その上に立つ`cut`壁の**向こう側の面**（farX）まで延ばす（`farXOfCutOnSlab`。
- * `sectionEmit.js`の`slabEdgeCutWallJunction`が小口の縦線を立てるxと同一の規則・同一関数）。
- * `wall`（見えがかり壁。断面ではない）が上に載っている場合は延ばさない——「小口の縦線は
- * 切断壁の断面にだけ現れる」という既存規則と同じ境界線をここでも守る。
- *
- * 返す矩形は**GAP_EPSだけ内側へ縮めた厳密内部**（`elevationPrimitives.js`の
- * `subtractRectsFromPrimitives`が使う`segmentInsideRect`はLiang-Barskyのp≈0分岐で辺上を内側と
- * 判定するため、縮めないと矩形の縁にちょうど乗る裁定済みの見えがかり線（例: 面C x=1492.5の
- * 復路ささら）まで消えてしまう）。
+ * 囲む実体＝`cut`∪`cutAlong`（列ごとの直接矩形）∪`slab`（`slabSolidRectsOf`。farX延長込み）。
+ * 返す矩形は**GAP_EPSだけ内側へ縮めた厳密内部**（`strictInteriorOf`）。
  * @param {import('./sectionTypes.js').SectionColumn[]} columns
  * @returns {Array<{xLo:number, xHi:number, zLo:number, zHi:number}>}
  */
@@ -248,32 +353,12 @@ export function solidRectsOf(columns) {
   const rects = [];
   for (const col of columns ?? []) {
     for (const b of col.bands ?? []) {
-      // slabは列にまたがるrun（sameSlabOwnerの縦マージ込み）＋farX延長が要るため下のループで
-      // まとめて扱う（ここでは素通り）。
+      // slabは列にまたがるrun（sameSlabOwnerの縦マージ込み）＋farX延長が要るため
+      // slabSolidRectsOfでまとめて扱う（ここでは素通り）。
       if (isSolidBand(b) && b.kind !== 'slab') rects.push({ xLo: col.x0, xHi: col.x1, zLo: b.z0, zHi: b.z1 });
     }
   }
-  // `slabEdgeCutWallJunction`（sectionEmit.js）と同じrun生成（cutWallRuns/slabRuns）を引く
-  // ——単一情報源化（QA是正2026-09-13・F4）。以前はここだけの簡易版（縦マージ無し）を
-  // 複製していたが、実データで縦マージが必要な構成（同一層のslabがzBreaksで2走りに割れる）
-  // に対して不一致を起こしうるため解消した。
-  const cutRuns = cutWallRuns(columns ?? []);
-  for (const run of slabRuns(columns ?? [])) {
-    let xLo = run.x0, xHi = run.x1;
-    for (const c of cutRuns) {
-      const hit = farXOfCutOnSlab(run, c);
-      if (!hit) continue;
-      if (hit.slabOnLoSide) xHi = Math.max(xHi, hit.farX); // slabのhi側に立つ壁→farXへ延ばす
-      else xLo = Math.min(xLo, hit.farX); // slabのlo側に立つ壁→farXへ延ばす
-    }
-    rects.push({ xLo, xHi, zLo: run.band.z0, zHi: run.band.z1 });
-  }
-  return rects
-    .map(r => ({
-      xLo: Math.min(r.xLo, r.xHi) + GAP_EPS, xHi: Math.max(r.xLo, r.xHi) - GAP_EPS,
-      zLo: Math.min(r.zLo, r.zHi) + GAP_EPS, zHi: Math.max(r.zLo, r.zHi) - GAP_EPS,
-    }))
-    .filter(r => r.xHi > r.xLo && r.zHi > r.zLo);
+  return strictInteriorOf([...rects, ...slabSolidRectsOf(columns)]);
 }
 
 /**

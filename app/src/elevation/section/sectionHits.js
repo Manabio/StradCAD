@@ -983,7 +983,10 @@ export function visibleBandsOf(hits, cut, opts = {}) {
       // 付帯情報は一切持たせない（壁の実体の詳細を一切渡さない、という宣言そのもの。
       // sectionTypes.jsのZBand doc参照）。
       if (frontMatch.hidden) {
-        bands.push({ kind: 'hidden', z0, z1 });
+        // hiddenOf（2026-09-13）: 出自だけは持つ——'cut'は切断線上に実体がある（断面の中）、
+        // 'wall'は見えがかり（手前は空気）。`sectionTypes.js`の`slabJunctionOf`（スラブの小口が
+        // 壁の向こう側に見えるか）が空気かどうかを問うために要る。他の付帯情報は従来どおり持たない。
+        bands.push({ kind: 'hidden', z0, z1, hiddenOf: 'cut' });
         continue;
       }
       const mr = frontMatch.wall.materialRange;
@@ -1008,7 +1011,7 @@ export function visibleBandsOf(hits, cut, opts = {}) {
     if (wallMatch) {
       // Phase 6b-2 C-1: frontMatchと同じ「描かない実体」宣言（上記コメント参照）。
       if (wallMatch.hidden) {
-        bands.push({ kind: 'hidden', z0, z1 });
+        bands.push({ kind: 'hidden', z0, z1, hiddenOf: 'wall' }); // 出自はfrontMatch側のコメント参照
         continue;
       }
       // QA是正（Phase4・A）: `wall`帯にも「区間内部にある最も近いfloorFace/ceilFace」の
@@ -1105,8 +1108,9 @@ function sameZBand(a, b) {
     case 'slab':
       return a.ownerRoom === b.ownerRoom && a.floorZ === b.floorZ && a.ceilZ === b.ceilZ;
     case 'hidden':
-      // Phase 6b-2 C-1: hidden帯は付帯情報を一切持たない（wall参照すら無い）ため、
-      // 隣接するhidden同士は常に同一実体の続きとみなして良い。
+      // Phase 6b-2 C-1: hidden帯は付帯情報を（出自hiddenOf以外）持たない（wall参照すら無い）ため、
+      // 出自が同じ隣接hidden同士は常に同一実体の続きとみなして良い。
+      if ((a.hiddenOf ?? null) !== (b.hiddenOf ?? null)) return false;
       return true;
     case 'open':
       // Phase4: farFloorZ/farCeilZ/farDepthMmが違えば別の帯（far値が付かない列は両側undefined

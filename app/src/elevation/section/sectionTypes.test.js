@@ -5,17 +5,20 @@
 // （呼び出し側=sectionStair.jsのstairPrimitivesForCutと同じ組み立て方。「D1」の縮小再現）。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { isSolidBand, solidRectsOf, zToY, ceilProfileZAt } from './sectionTypes.js';
+import { isSolidBand, solidRectsOf, slabJunctionOf, slabSolidRectsOf, zToY, ceilProfileZAt } from './sectionTypes.js';
 import { isStringer } from './sectionEmit.js';
 import { subtractRectsFromPrimitives } from '../elevationPrimitives.js';
 import { ElevationLineRole, weightForRole } from '../elevationStyle.js';
 
-// D1の縮小再現: 列0(x:-150..0)にslab[2400..3000]、列1(x:0..60)にその上に立つcut[3000..3800]。
-// 「6」実データと同じ構成（cutの下端z0=3000がslabの上端z1=3000に一致＝スラブの上に壁が載る）。
+// D1の縮小再現: 列0(x:-150..0)にslab[2400..3000]、列1(x:0..60)にその上に立つcut[3000..3800]、
+// 列2(x:60..200)は壁の向こう側＝階段室側（実データはhidden[0..5400]＝2a壁。この帯では実体として
+// 数えない＝探査済みの非実体）。「6」実データと同じ構成（cutの下端z0=3000がslabの上端z1=3000に
+// 一致＝スラブの上に壁が載り、向こう側に小口が見える）。
 function makeD1LikeColumns() {
   return [
     { x0: -150, x1: 0, worldLo: 0, worldHi: 150, bands: [{ kind: 'slab', z0: 2400, z1: 3000 }] },
     { x0: 0, x1: 60, worldLo: 150, worldHi: 210, bands: [{ kind: 'cut', z0: 3000, z1: 3800 }] },
+    { x0: 60, x1: 200, worldLo: 210, worldHi: 350, bands: [{ kind: 'hidden', z0: 0, z1: 5400 }] },
   ];
 }
 
@@ -44,6 +47,65 @@ test('solidRectsOf: slabの矩形は、その上に立つcut壁の向こう側�
   // cut壁(x:0..60)の向こう側の面=60まで延びる（GAP_EPSだけ内側へ縮めた値なので厳密一致ではない）。
   assert.ok(Math.abs(slabRect.xHi - 60) < 1e-3, `slabの矩形はfarX=60まで延びるはず（実際:${slabRect.xHi}）`);
   assert.ok(Math.abs(slabRect.xLo - (-150)) < 1e-3, '手前側(lo)は列の実幅のまま');
+});
+
+// ---- slabJunctionOf のgate（ユーザー裁定2026-09-13「6」C: 壁の向こう側が未探査なら小口は無い）----
+const slabRunOf = () => ({ x0: -150, x1: 0, band: { z0: 2400, z1: 3000 } });
+const cutRunOf = () => ({ x0: 0, x1: 60, band: { z0: 3000, z1: 3800 } });
+const withBeyond = beyondBands => [
+  { x0: -150, x1: 0, bands: [{ kind: 'slab', z0: 2400, z1: 3000 }] },
+  { x0: 0, x1: 60, bands: [{ kind: 'cut', z0: 3000, z1: 3800 }] },
+  ...(beyondBands ? [{ x0: 60, x1: 200, bands: beyondBands }] : []),
+];
+
+test('【失敗系・6C】slabJunctionOf: 壁の向こう側に列が無い（未探査）なら小口は無い（nullで、スラブも延びない）', () => {
+  // 実機「6」C左端: はり出し列に上階の腰壁だけが立ち、その下（自階の壁＋床構造）は自階の窓の外。
+  const columns = withBeyond(null);
+  assert.equal(slabJunctionOf(columns, slabRunOf(), cutRunOf()), null);
+  const rect = slabSolidRectsOf(columns).find(r => Math.abs(r.zLo - 2400) < 1);
+  assert.ok(Math.abs(rect.xHi - 0) < 1e-6, `未探査側へは延びずxHi=0（列の実幅）のはず（実際:${rect.xHi}）`);
+});
+
+test('【失敗系・6C】slabJunctionOf: 向こう側の列がスラブのz範囲を実体(slab/cut)で占めていれば小口は無い', () => {
+  assert.equal(slabJunctionOf(withBeyond([{ kind: 'slab', z0: 2400, z1: 3000 }]), slabRunOf(), cutRunOf()), null,
+    'スラブが続いている');
+  assert.equal(slabJunctionOf(withBeyond([{ kind: 'cut', z0: 0, z1: 5400 }]), slabRunOf(), cutRunOf()), null,
+    '別の切断壁の中');
+  // z範囲の中点(2700)を内部に含む非実体の帯が無い（2400..2700はslab、2700..5400はopen）。
+  assert.equal(slabJunctionOf(withBeyond([{ kind: 'slab', z0: 2400, z1: 2700 }, { kind: 'open', z0: 2700, z1: 5400 }]),
+    slabRunOf(), cutRunOf()), null);
+});
+
+test('slabJunctionOf: 向こう側の列に探査済みの空気（wall/open/見えがかり由来hidden/farVoid）があれば小口が立つ（nearX/farXは従来どおり）', () => {
+  for (const band of [
+    { kind: 'wall', z0: 1500, z1: 5400, distMm: 750 },   // 実機「6」B
+    { kind: 'open', z0: 0, z1: 5400 },
+    { kind: 'hidden', z0: 0, z1: 5400, hiddenOf: 'wall' }, // 実機「6」D1（2a壁＝この帯では実体として数えない）
+    { kind: 'hidden', z0: 0, z1: 5400 },                  // 出自なし（手書き列）は見えがかり由来とみなす
+    { kind: 'farVoid', z0: 2400, z1: 3000 },
+  ]) {
+    const hit = slabJunctionOf(withBeyond([band]), slabRunOf(), cutRunOf());
+    assert.deepEqual(hit, { nearX: 0, farX: 60, slabOnLoSide: true }, `kind=${band.kind}`);
+  }
+});
+
+test('【失敗系】slabJunctionOf: 向こう側のhiddenが切断壁由来（hiddenOf:cut）なら断面の中＝小口は立たない', () => {
+  assert.equal(slabJunctionOf(withBeyond([{ kind: 'hidden', z0: 0, z1: 5400, hiddenOf: 'cut' }]),
+    slabRunOf(), cutRunOf()), null);
+});
+
+test('【失敗系】slabJunctionOf: スラブのz範囲の一部だけが空気（残りが実体）なら小口は立たない（範囲全体の被覆で判定）', () => {
+  // 2400..2650はcut、2650..3000はopen——中点2700は空気だが範囲全体は覆われていない。
+  assert.equal(slabJunctionOf(withBeyond([{ kind: 'cut', z0: 0, z1: 2650 }, { kind: 'open', z0: 2650, z1: 5400 }]),
+    slabRunOf(), cutRunOf()), null);
+  // 空気の帯2本の和で覆われていれば立つ。
+  assert.deepEqual(slabJunctionOf(withBeyond([{ kind: 'open', z0: 0, z1: 2650 }, { kind: 'wall', z0: 2650, z1: 5400, distMm: 750 }]),
+    slabRunOf(), cutRunOf()), { nearX: 0, farX: 60, slabOnLoSide: true });
+});
+
+test('【失敗系】slabJunctionOf: 壁がスラブの上に載っていなければ（z不一致）向こう側が空気でもnull', () => {
+  const columns = withBeyond([{ kind: 'open', z0: 0, z1: 5400 }]);
+  assert.equal(slabJunctionOf(columns, slabRunOf(), { x0: 0, x1: 60, band: { z0: 3200, z1: 3800 } }), null);
 });
 
 // ---- 正常系: isStringerのpolylineが farX で切られる ----
@@ -152,6 +214,7 @@ test('【T-a】solidRectsOf: 同一オーナーでzが割れたslab帯2本は1�
     { x0: -150, x1: 0, worldLo: 0, worldHi: 150,
       bands: [{ kind: 'slab', z0: 0, z1: 1500, floorZ: 3000 }, { kind: 'slab', z0: 1500, z1: 3000, floorZ: 3000 }] },
     { x0: 0, x1: 60, worldLo: 150, worldHi: 210, bands: [{ kind: 'cut', z0: 3000, z1: 3800 }] },
+    { x0: 60, x1: 200, worldLo: 210, worldHi: 350, bands: [{ kind: 'open', z0: 0, z1: 5400 }] },
   ];
   const rects = solidRectsOf(columns);
   // rectsには`cut`帯自身の直接矩形（x:0..60, z:3000..3800）も1件含まれる——slab由来の矩形
@@ -170,6 +233,7 @@ test('【失敗系・T-a】solidRectsOf: floorZが異なるslab帯2本は結合�
     { x0: -150, x1: 0, worldLo: 0, worldHi: 150,
       bands: [{ kind: 'slab', z0: 0, z1: 1500, floorZ: 1500 }, { kind: 'slab', z0: 1500, z1: 3000, floorZ: 3000 }] },
     { x0: 0, x1: 60, worldLo: 150, worldHi: 210, bands: [{ kind: 'cut', z0: 3000, z1: 3800 }] },
+    { x0: 60, x1: 200, worldLo: 210, worldHi: 350, bands: [{ kind: 'open', z0: 0, z1: 5400 }] },
   ];
   const rects = solidRectsOf(columns);
   const slabRects = rects.filter(r => r.zLo < 3000);

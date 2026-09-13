@@ -928,16 +928,21 @@ test('【QA指摘2026-09・6C】emitColumns: はり出し列の腰壁断面か�
     `2FL(z3000)の水平線が腰壁と同面の区間へ伸びている（実際:${JSON.stringify(intoFlush)}）`);
 });
 
-test('【QA指摘2026-09・6C】emitColumns: 同じ腰壁断面から出る1F天井断面線と2FLへの立上りは残る', () => {
-  // 裁定で消すのは「同面ゆえに見えない」2FL線1本だけ——「6」D2の裁定どおりの取り合い
-  // （下階天井→腰壁の向こう側の面→上へ立ち上げて上階床）は消してはいけない。
+test('【ユーザー裁定2026-09-13・6C】emitColumns: 壁のある端のはり出し列に立つ腰壁断面からは、1F天井断面線も2FLへの立上りも出ない（壁・天井の内部）', () => {
+  // 旧QA指摘2026-09は「「6」D2の裁定どおりの取り合い（下階天井→腰壁の向こう側の面→上へ立ち
+  // 上げて上階床）は消してはいけない」としてこの2本を残していたが、ユーザー裁定2026-09-13「6」C
+  // で反転: 「X3の踊り場ささら断面、階段側壁断面、1F天井と2FL床までの壁断面、腰壁断面、腰壁天端で
+  // 折り返して2FL床断面、はりだしで囲まれる範囲は壁・天井内部。したがって内部はクリップされて
+  // 描画しないが正解」。はり出し列(x-115..0)の腰壁の下は自階の窓の外＝未探査で、そこへ
+  // 「スラブが向こう側まで延びる」と仮定する根拠が無い（sectionTypes.jsのslabJunctionOfのgate）。
   const prims = emitColumns(kneeOnOverhangColumns(), overhangKneeCut, { ceilZ: 5400 });
-  const ceilLine = horizAt(prims, 2400).find(p => Math.min(p.x1, p.x2) < -1e-6);
-  assert.ok(ceilLine, '1F天井断面線ははり出し側（x<0）へ出るはず');
-  assert.deepEqual([ceilLine.x1, ceilLine.x2].sort((a, b) => a - b), [-115, 0]);
-  const riser = vertAtX(prims, -115).filter(p =>
-    Math.abs(Math.min(-p.y1, -p.y2) - 2400) < 1e-6 && Math.abs(Math.max(-p.y1, -p.y2) - 3000) < 1e-6);
-  assert.equal(riser.length, 1, '腰壁の向こう側の面に z2400→3000 の立上りが1本');
+  const ceilOut = horizAt(prims, 2400).filter(p => Math.min(p.x1, p.x2) < -1e-6);
+  assert.deepEqual(ceilOut, [], `1F天井断面線がはり出し側（x<0）へ出ている（実際:${JSON.stringify(ceilOut)}）`);
+  const riser = vertAtX(prims, -115).filter(p => Math.max(-p.y1, -p.y2) <= 3000 + 1e-6);
+  assert.deepEqual(riser, [], `腰壁の向こう側の面(x=-115)に2FL以下の縦線が出ている（実際:${JSON.stringify(riser)}）`);
+  // 面の中の1F天井の中線（slab/open境界。「6」Cで裁定済みの見えがかり）は従来どおり残る。
+  const ceilIn = horizAt(prims, 2400).map(p => [p.x1, p.x2].sort((a, b) => a - b));
+  assert.ok(ceilIn.some(([a, b]) => Math.abs(a - 0) < 1e-6 && b > 1000), '面の中の1F天井線(x=0..)は残るはず');
 });
 
 // ---- QA指摘2026-09（2）: 同じスラブがz断点で2走りに割れ、同じ切断壁と2回発火していた ----
@@ -945,6 +950,8 @@ test('【QA指摘2026-09】emitColumns: 所有層が同じでzが連続するsla
   const knee = { id: 'w-knee-2f' };
   // 腰壁の切断高(1500)がzBreaksに入り、上階の床構造が slab(0-1500)/slab(1500-3000) に割れた列。
   const columns = [
+    // 壁の向こう側（小口が見える側）。gate（slabJunctionOf）が「探査済みの非実体」を要求する。
+    { x0: -200, x1: -100, worldLo: -1, worldHi: 0, bands: [{ kind: 'open', z0: 0, z1: 5400 }] },
     { x0: -100, x1: 0, worldLo: 0, worldHi: 1, bands: [
       { kind: 'slab', z0: 0, z1: 1500, floorZ: 3000 },
       { kind: 'slab', z0: 1500, z1: 3000, floorZ: 3000 },
@@ -989,14 +996,115 @@ test('【失敗系・QA指摘2026-09】emitColumns: 所有層が違う隣接slab
     zRange: { loZ: 0, hiZ: 5400 }, baseFloorZ: 0, layers: [{ floorZMm: 0 }, { floorZMm: 3000 }] };
   const prims = emitColumns(columns, cut, { ceilZ: 5400, openEndLo: true });
 
-  const ceil = horizAt(prims, 2400).map(p => [p.x1, p.x2].sort((a, b) => a - b));
-  assert.ok(ceil.some(([a, b]) => a === -57.5 && b === 57.5), '1F天井断面線は腰壁を渡るはず');
+  // ユーザー裁定2026-09-13「6」B: 1F天井断面線は走り全体（外端-150〜壁の向こう側の面57.5）を
+  // CUTで1本（旧アサーションは腰壁の下の区間[-57.5,57.5]が別線だった時代のもの）。
+  const ceil = horizAt(prims, 2400);
+  assert.equal(ceil.length, 1, '見えがかり側の中線を重ねず1本');
+  assert.deepEqual([ceil[0].x1, ceil[0].x2].sort((a, b) => a - b), [-150, 57.5], '1F天井断面線は腰壁を渡り走り全体');
+  assert.equal(ceil[0].weight, 'thick');
   const riser = vertAtX(prims, 57.5).filter(p =>
     Math.abs(Math.min(-p.y1, -p.y2) - 2400) < 1e-6 && Math.abs(Math.max(-p.y1, -p.y2) - 3000) < 1e-6);
   assert.equal(riser.length, 1, '腰壁の向こう側の面に2FLへの立上りが1本');
-  const fl = horizAt(prims, 3000).map(p => [p.x1, p.x2].sort((a, b) => a - b));
-  assert.ok(fl.some(([a, b]) => a === -150 && b === -57.5),
-    `2FL床断面線が腰壁の外側面から外へ張り出すはず（実際:${JSON.stringify(fl)}）`);
+  assert.equal(riser[0].weight, 'thick');
+  const fl = horizAt(prims, 3000);
+  const flOut = fl.find(p => Math.min(p.x1, p.x2) === -150 && Math.max(p.x1, p.x2) === -57.5);
+  assert.ok(flOut, `2FL床断面線が腰壁の外側面から外へ張り出すはず（実際:${JSON.stringify(fl)}）`);
+  assert.equal(flOut.weight, 'thick');
+});
+
+test('【失敗系・6B】emitColumns: ceilProfileを持つ帯（通常の部屋帯・吹抜け帯）ではスラブの輪郭のCUT化も中線の抑止も行わない（ceilStepSlabSectionの担当）', () => {
+  const cut = { ...faceEndCut, ceilProfile: [{ loX: -1000, hiX: 150, ceilZ: 5400 }] };
+  const prims = emitColumns(kneeAtFaceEndColumns(), cut, { ceilZ: 5400, openEndHi: true });
+  const ceil = horizAt(prims, 2400);
+  assert.ok(ceil.length > 0 && ceil.every(p => p.weight === 'medium'), `従来どおり中線のまま（実際:${JSON.stringify(ceil)}）`);
+  assert.deepEqual(vertAtX(prims, -57.5).filter(p => Math.max(-p.y1, -p.y2) <= 3000 + 1e-6), [],
+    'slabEdgeCutWallJunctionの立上りは出ない');
+});
+
+test('【失敗系・6B】emitColumns: 中線の抑止は走りのx範囲の外・上階床側(z1)には及ばない', () => {
+  // 走り(0..150)の外側 x=-1300..-1000 に、同じ高さ2400のslab/open境界を持つ列を足す。
+  const columns = [
+    { x0: -1300, x1: -1000, worldLo: -1, worldHi: 0, bands: [
+      { kind: 'open', z0: 0, z1: 2400 }, { kind: 'slab', z0: 2400, z1: 3000, floorZ: 0, ceilZ: 2400 },
+      { kind: 'open', z0: 3000, z1: 5400 }] },
+    ...kneeAtFaceEndColumns(),
+  ];
+  const cut = { ...faceEndCut, line: { ...faceEndCut.line, lo: -1300 } };
+  const prims = emitColumns(columns, cut, { ceilZ: 5400, openEndHi: true });
+  const outside2400 = horizAt(prims, 2400).filter(p => Math.max(p.x1, p.x2) <= -1000 + 1e-6);
+  assert.equal(outside2400.length, 1, '走りの外の1F天井の中線は残る');
+  assert.equal(outside2400[0].weight, 'medium');
+  const outside3000 = horizAt(prims, 3000).filter(p => Math.max(p.x1, p.x2) <= -1000 + 1e-6);
+  assert.equal(outside3000.length, 1, '走りの外の上階床側(z1)の境界線も従来どおり');
+});
+
+// ---- ユーザー裁定2026-09-13「6」B: スラブ＋腰壁の取り合い3本は断面（太線）・内部に線を残さない ----
+// 実機「6」B右端（Y2から3500）の列構成の縮小再現。x=0がCL、腰壁は-57.5..57.5に芯合わせ、
+// 面の内側(x<0)は階段室（自階の壁X0が1500..3000まで見えがかり）、面の外側(x>0)は隣室
+// （壁0..2400・1F天井懐2400..3000・その上は未探査=slab）。
+function kneeAtFaceEndColumns() {
+  const knee = { id: 'w-knee-2f' };
+  const other = { axisCL: 'other', axisValue: 1 };
+  return [
+    { x0: -1000, x1: -57.5, worldLo: 0, worldHi: 1, bands: [
+      { kind: 'wall', z0: 0, z1: 1500, distMm: 750, layerRole: 'self' },
+      { kind: 'wall', z0: 1500, z1: 5400, distMm: 750, layerRole: 'self' }] },
+    { x0: -57.5, x1: 0, worldLo: 1, worldHi: 2, bands: [
+      { kind: 'wall', z0: 0, z1: 1500, distMm: 750, layerRole: 'self' },
+      { kind: 'wall', z0: 1500, z1: 3000, distMm: 750, layerRole: 'self' },
+      { kind: 'cut', z0: 3000, z1: 3800, wall: knee, layerRole: 'above', isKneeDrop: true },
+      { kind: 'wall', z0: 3800, z1: 5400, distMm: 750, layerRole: 'self' }] },
+    { x0: 0, x1: 57.5, worldLo: 2, worldHi: 3, bands: [
+      { kind: 'wall', z0: 0, z1: 1500, distMm: 750, layerRole: 'self' },
+      { kind: 'wall', z0: 1500, z1: 2400, distMm: 750, layerRole: 'self', wall: other },
+      { kind: 'slab', z0: 2400, z1: 3000, floorZ: 0, ceilZ: 2400 },
+      { kind: 'cut', z0: 3000, z1: 3800, wall: knee, layerRole: 'above', isKneeDrop: true },
+      { kind: 'slab', z0: 3800, z1: 5400, floorZ: 3000, ceilZ: 5400 }] },
+    { x0: 57.5, x1: 150, worldLo: 3, worldHi: 4, bands: [
+      { kind: 'wall', z0: 0, z1: 1500, distMm: 750, layerRole: 'self' },
+      { kind: 'wall', z0: 1500, z1: 2400, distMm: 750, layerRole: 'self', wall: other },
+      { kind: 'slab', z0: 2400, z1: 3000, floorZ: 0, ceilZ: 2400 },
+      // 上階の床構造（所有層が違う＝1F天井懐とは結合しない。実機はupperFloorZ=3000の列）。
+      { kind: 'slab', z0: 3000, z1: 5400, floorZ: 3000, ceilZ: 5400 }] },
+  ];
+}
+const faceEndCut = { line: { isVertical: true, axisValue: 0, lo: -1000, hi: 0 }, dirSign: 1,
+  zRange: { loZ: 0, hiZ: 5400 }, baseFloorZ: 1500, layers: [{ floorZMm: 0 }, { floorZMm: 3000 }] };
+
+test('【ユーザー裁定2026-09-13・6B】emitColumns: 1F天井断面線・2FLへの立上り・2FL床断面線は断面＝太線(CUT)で、1F天井線はスラブの走り全体を1本で描く', () => {
+  const prims = emitColumns(kneeAtFaceEndColumns(), faceEndCut, { ceilZ: 5400, openEndHi: true });
+  const ceil = horizAt(prims, 2400);
+  assert.equal(ceil.length, 1, `1F天井断面線は1本のはず（見えがかり側の中線を重ねない。実際:${JSON.stringify(ceil)}）`);
+  assert.deepEqual([ceil[0].x1, ceil[0].x2].sort((a, b) => a - b), [-57.5, 150],
+    '腰壁の向こう側の面(-57.5)からスラブの外端(150)まで');
+  assert.equal(ceil[0].weight, 'thick', '1F天井断面線は断面＝太線');
+  const riser = vertAtX(prims, -57.5).filter(p =>
+    Math.abs(Math.min(-p.y1, -p.y2) - 2400) < 1e-6 && Math.abs(Math.max(-p.y1, -p.y2) - 3000) < 1e-6);
+  assert.equal(riser.length, 1, '立上りは1本');
+  assert.equal(riser[0].weight, 'thick', '立上りは断面＝太線');
+  const fl = horizAt(prims, 3000).filter(p => Math.min(p.x1, p.x2) >= 57.5 - 1e-6);
+  assert.equal(fl.length, 1, '2FL床断面線は腰壁の外側面から外へ1本');
+  assert.equal(fl[0].weight, 'thick', '2FL床断面線は断面＝太線');
+});
+
+test('【失敗系・6B】emitColumns: 向こう側の列がスラブなら小口は立たず、1F天井の縁は従来どおり見えがかり（中線）のまま', () => {
+  // 壁の向こう側(x<-57.5)もスラブ＝スラブが続いている（壁がスラブの途中に立つ）。
+  const columns = kneeAtFaceEndColumns();
+  const knee = columns[1].bands[2].wall;
+  columns[0].bands = [
+    { kind: 'wall', z0: 0, z1: 2400, distMm: 750, layerRole: 'self' },
+    { kind: 'slab', z0: 2400, z1: 3000, floorZ: 0, ceilZ: 2400 },
+    { kind: 'wall', z0: 3000, z1: 5400, distMm: 750, layerRole: 'self' }];
+  columns[1].bands = [
+    { kind: 'wall', z0: 0, z1: 2400, distMm: 750, layerRole: 'self' },
+    { kind: 'slab', z0: 2400, z1: 3000, floorZ: 0, ceilZ: 2400 },
+    { kind: 'cut', z0: 3000, z1: 3800, wall: knee, layerRole: 'above', isKneeDrop: true },
+    { kind: 'wall', z0: 3800, z1: 5400, distMm: 750, layerRole: 'self' }];
+  const prims = emitColumns(columns, faceEndCut, { ceilZ: 5400, openEndHi: true });
+  assert.deepEqual(vertAtX(prims, -57.5).filter(p => Math.max(-p.y1, -p.y2) <= 3000 + 1e-6), [],
+    '立上り（小口）は出ない');
+  assert.ok(horizAt(prims, 2400).length > 0 && horizAt(prims, 2400).every(p => p.weight === 'medium'),
+    '1F天井の縁は中線のまま');
 });
 
 // ---- ユーザー裁定2026-08 A案: 端部の延長は「線の引き伸ばし」ではなく探査範囲の拡張で行う ----

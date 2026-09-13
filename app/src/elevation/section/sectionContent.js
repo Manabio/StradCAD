@@ -17,7 +17,8 @@
 import { buildColumns } from './sectionEngine.js';
 import { emitColumns, emitOpenGapMarks } from './sectionEmit.js';
 import { wallWorldRangesOnFacePlane, planeOverhangBeyondEnds } from './sectionCutPlane.js';
-import { hasCutWallStandingOn } from './sectionTypes.js';
+import { hasCutWallStandingOn, slabSolidRectsOf, strictInteriorOf, rectsToFaceLocal } from './sectionTypes.js';
+import { subtractRectsFromPrimitives } from '../elevationPrimitives.js';
 import { UPPER_PLANE_OVERHANG_LIMIT_MM, GAP_EPS_MM as GAP_EPS } from '../elevationStyle.js';
 import { wallLessEndAt } from '../elevationFaces.js';
 import { makeProbeContext } from './sectionProbe.js';
@@ -269,6 +270,31 @@ export function emitCtxForCut(cut) {
 }
 
 /**
+ * **断面内部は描画しない**（ユーザー明示指示2026-08）の一般判定を壁contentへ掛ける: スラブ
+ * （床構造・天井懐。その縁に立つ切断壁の向こう側の面まで＝`sectionTypes.js`の
+ * `slabSolidRectsOf`）の**厳密内部**にある線は描かない。ささらの見えがかり（`sectionStair.js`の
+ * 設計(d)）と同じ矩形・同じ減算（`subtractRectsFromPrimitives`）で、壁の断面・見えがかりにも
+ * 同じ判定を掛ける（ユーザー裁定2026-09-13「6」B「Y2から3500のCL上、1階天井から2FLまでにある
+ * 線分は断面内部なので描画しない」——見えがかり壁の側縁（`sectionEmit.js`の`recessHi`）が列の
+ * 境界＝CLに立っていた。列は壁の向こう側までスラブが延びることを知らないため
+ * `uncoveredZRanges`は縁を出すが、そこはスラブ＋腰壁で1つの断面の中）。
+ * `cut`/`cutAlong`の矩形は対象にしない——腰壁の天端の帯の下端（`kneeCapUnderline`）や建具の
+ * 断面（枠・扉）は壁の断面の厚みの中に**意図して**描く線のため。矩形の辺上に乗る線
+ * （スラブ小口の縦線・下階天井の断面線そのもの）は厳密内部ではないので残る。
+ * **帯種で分けない**（`sectionEmit.js`の`ownedBySectionSlab`が階段帯＝ceilProfile無しに限るのとは
+ * 違い、通常の部屋帯・吹抜け帯（`ceilStepSlabSection`の出力を含む）にも同じ判定を掛ける）
+ * ——「断面内部は描画しない」は帯種に依らない一般則で、あちらは「同じ線を2種類の線種で
+ * 重ねない」というCUT化に付随する抑止（CUT化する帯にだけ要る）。golden13/11/knee-dropで
+ * 階段帯以外の出力は1本も変わらない（2026-09-13実測）。
+ * @param {object[]} prims - `emitColumns`の出力（面ローカル座標・y=-z）
+ * @param {import('./sectionTypes.js').SectionColumn[]} columns
+ * @returns {object[]}
+ */
+export function clipInsideSlabSolids(prims, columns) {
+  return subtractRectsFromPrimitives(prims, rectsToFaceLocal(strictInteriorOf(slabSolidRectsOf(columns))));
+}
+
+/**
  * 1つの切断 → 壁断面・見えがかり・アキ（タイプ非依存）。
  *
  * 呼び出し側が後段でタイプ固有の加工をできるよう、まとめた`content`だけでなく途中の部品も返す
@@ -291,7 +317,9 @@ export function buildCutContent(cut, probeCtx, opts = {}) {
   const columns = buildColumns(pcut, probeCtx);
   // scale（px/mm）はアキ標記の省略判定に使う（sectionEmit.jsのemitOpenGapMarks）。
   const emitCtx = { ...emitCtxForCut(pcut), scale: opts.scale };
-  const wallPrims = emitColumns(columns, pcut, emitCtx);
+  // 壁content（断面・見えがかり・凹み側面線）は「断面内部は描画しない」の一般判定
+  // （`clipInsideSlabSolids`）を通してから返す。
+  const wallPrims = clipInsideSlabSolids(emitColumns(columns, pcut, emitCtx), columns);
   const gapMarks = emitOpenGapMarks(columns, pcut, emitCtx);
   return { cut: pcut, columns, emitCtx, wallPrims, gapMarks, content: [...wallPrims, ...gapMarks] };
 }

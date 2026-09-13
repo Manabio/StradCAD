@@ -83,7 +83,7 @@ import {
 } from '../elevationStairSection.js';
 import { ElevationLineRole, weightForRole, GAP_EPS_MM as GAP_EPS } from '../elevationStyle.js';
 import { parseBaseboardHeightMm } from '../elevationFigure.js';
-import { localXOf, cutDrawRange, zToY, solidRectsOf } from './sectionTypes.js';
+import { localXOf, cutDrawRange, solidRectsOf, rectsToFaceLocal } from './sectionTypes.js';
 import { emitLine, isStringer } from './sectionEmit.js';
 import { mergeFloorProfiles } from '../elevationFloorProfile.js';
 import { clipPrimitivesToXRange, subtractRectsFromPrimitives } from '../elevationPrimitives.js';
@@ -1153,7 +1153,8 @@ export function stairCutFloorProfile(contribution, cut, columns = null) {
  *   （P3。診断・裁定の経緯は`.claude/elevation-redesign.md`§5.12参照）。
  *   一般ルール: 囲む実体＝`slab ∪ cut ∪ cutAlong`（`sectionTypes.js`の`isSolidBand`）の矩形。
  *   ただし`slab`の矩形は、その上に立つ`cut`壁の**向こう側の面**まで延ばす（`solidRectsOf`。
- *   `sectionEmit.js`の`slabEdgeCutWallJunction`が小口の縦線を立てるxと同一の規則）。対象は
+ *   `sectionEmit.js`の`slabEdgeCutWallJunction`が小口の縦線を立てるxと同一の規則＝
+ *   `slabJunctionOf`。向こう側に探査済みの空気がある場合だけ。ユーザー裁定2026-09-13「6」C）。対象は
  *   `isStringer`のpolylineのみ——踏面（CUT）・桁枠・端面・梯子は対象外（踏面を対象にすると
  *   最終段の蹴込がslab内で消えD2-2が回帰する。実測済み）。判定は矩形の**厳密内部**
  *   （`solidRectsOf`がGAP_EPSだけ内側へ縮めて返す）。`hidden`（そこに壁は実在するが描かない
@@ -1292,7 +1293,8 @@ export function stairPrimitivesForCut(contribution, cut, columns, opts = {}) {
   // **厳密内部**にあるささらの見えがかり（`isStringer`）は描かない」——踏面（CUT）・桁枠・
   // 端面・梯子は対象外（踏面を対象にすると最終段の蹴込がslab内で消えD2-2が回帰する。実測済み）。
   // `slab`の矩形は、その上に立つ`cut`壁の向こう側の面まで延ばす（`slabEdgeCutWallJunction`と
-  // 同じ規則）。`hidden`（そこに壁は実在するが描かない区間）・`wall`（見えがかり壁）は
+  // 同じ規則＝`slabJunctionOf`。向こう側に探査済みの空気がある場合だけ。ユーザー裁定
+  // 2026-09-13「6」C）。`hidden`（そこに壁は実在するが描かない区間）・`wall`（見えがかり壁）は
   // 囲まない。矩形は`columns`からだけ作る（新チャネルを増やさない。§5.9(b)）。
   // 旧`clipStairDetailInSlabBand`+`opts.slabBand`（下階天井〜上階床の固定z帯を外部から
   // 指定してカットする特例。階段下に部屋が無い場合に指定した一般ルールの特例に過ぎなかった）
@@ -1303,9 +1305,7 @@ export function stairPrimitivesForCut(contribution, cut, columns, opts = {}) {
   // 持たない——x終端クリップとの前後を入れ替えても出力は変わらない（実測確認済み。順序は
   // 出力に影響しない）。ここに置くのは旧規約（トリム→クリップ）との連続性のためであり、
   // 正しさの条件ではない。
-  const solidRects = solidRectsOf(columns).map(r => ({
-    xLo: r.xLo, xHi: r.xHi, yLo: zToY(r.zHi), yHi: zToY(r.zLo),
-  }));
+  const solidRects = rectsToFaceLocal(solidRectsOf(columns));
   const slabClipped = solidRects.length
     ? prims.flatMap(p => (isStringer(p) ? subtractRectsFromPrimitives([p], solidRects) : [p]))
     : prims;
