@@ -796,9 +796,8 @@ export function emitColumns(columns, cut, emitCtx = {}) {
           prims.push(Object.assign(emitLine(cut, col.x1, band.z0, col.x1, band.z1, ElevationLineRole.CUT, { ceilZ }),{__o:'cutEdgeHi'}));
         }
       } else if (band.kind === 'open' && (band.farFloorZ != null || band.farCeilZ != null)) {
-        // Phase4（水平面ヒットの見えがかり。裁定済み2026-09-11・既定onのHORIZONTAL_FACES_ENABLEDで
-        // farFloorZ/farCeilZが付く（フラグoff＝旧挙動比較時は付かない）——`sectionEngine.js`の
-        // `splitOpenByFarFace`が深度上限内のときだけ付与する。
+        // Phase4（水平面ヒットの見えがかり。裁定済み2026-09-11・既定on）: `sectionEngine.js`の
+        // `splitOpenByFarFace`が深度上限内のときだけfarFloorZ/farCeilZを付与する。
         // 設計§5.5「その z に見えがかりの水平線を描く」「線種は既存規則に従い、同じ深度の壁面と
         // 同じ重み」: 重みは'wall'帯と同じ`sightRole`（深度→SILHOUETTE/DETAIL）の経路をそのまま使う。
         // **FL・CHの見えがかりは描画しない**規則（'wall'帯と同じ`sectionLevelZs`/`atSectionLevel`
@@ -920,7 +919,7 @@ function obstructionRects(columns, x0, x1, z0, z1) {
  * 破線へ落とす**（ユーザー実機指摘2026-08「6」C「但し、階段に隠れる部分は破線」）。
  * 破線の範囲は**何かの基準線の左右では決まらない**（同指摘の撤回・再指示「想定したバツに対して
  * 描画面+所定距離までレイキャストして、隠れた部分を破線にする」）——渡す矩形は手前に実体が
- * 存在する範囲そのもの（`stairOccluderRects`）で、対角線とその重なりを取るだけ。
+ * 存在する範囲そのもの（`stairFaceOccluderRects`）で、対角線とその重なりを取るだけ。
  * 対象は`dash:'center'`の斜め線だけ——既に`dashed`のもの（床断面より下のアキ）や水平・垂直線は
  * そのまま通す。区間ごとに線分を分割して積み直すため、1本のバツが複数の線分になる。
  * @param {object[]} prims - emitOpenGapMarksの出力（他のプリミティブが混ざっていてもよい）

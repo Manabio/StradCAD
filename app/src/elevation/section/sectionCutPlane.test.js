@@ -129,13 +129,12 @@ test('cutPlaneOffsetMm: 1mm単位で切り上げる（ユーザー明示指示�
 });
 
 // ---- faceCutLine / faceViewSign ----
-test('faceCutLine: lo/hiと向きは動かさず、面の軸はfaceAxisValueとして残す', () => {
+test('faceCutLine: lo/hiと向きは動かさない', () => {
   const face = bareFace({ faceValue: 57.5 });
   const line = faceCutLine(face, 58);
   assert.equal(line.lo, 0); assert.equal(line.hi, 4000);
   assert.equal(line.isVertical, false);
   assert.equal(line.axisValue, 58, '切断線は室内側へ58mm下がる');
-  assert.equal(line.faceAxisValue, 0, '面の軸CL（柱と面の照合に使う）は別値として残る');
 });
 
 test('faceCutLine: buttToleranceMmは「壁仕上げ面までの距離−下がった量」（負にはしない）', () => {

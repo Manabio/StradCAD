@@ -176,15 +176,11 @@ export function cutPlaneOffsetMm(face, layers, opts = {}) {
 
 /**
  * 面 → SectionCut の CutLine（仮想断面線）。`axisValue`は面の軸から室内側へ`offsetMm`下げた位置。
- *
- * `faceAxisValue`（面自身の軸CLの世界座標）を併せて載せる——切断線が面の軸から離れると、
- * 「その面の壁と接続した柱か」のような**面の軸との照合**（`sectionStructure.js`）が
- * `cut.line.axisValue`では成り立たなくなるため、面の軸は別の値として保持する。
  * `lo/hi`と`dirSign`は動かさないので、断面ローカルxと面ローカルxが同値である不変条件
  * （`sectionTypes.js`の`cutOriginWorld`）はそのまま保たれる。
  * @param {{isVertical:boolean, inward:number, lo:number, hi:number, axisCL:object, faceValue?:number}} face
  * @param {number} offsetMm - cutPlaneOffsetMmの結果
- * @returns {import('./sectionTypes.js').CutLine & {faceAxisValue:number}}
+ * @returns {import('./sectionTypes.js').CutLine}
  */
 export function faceCutLine(face, offsetMm) {
   const axisValue = face.axisCL.effectiveValue;
@@ -192,7 +188,6 @@ export function faceCutLine(face, offsetMm) {
     isVertical: !!face.isVertical,
     axisValue: axisValue + face.inward * offsetMm,
     lo: face.lo, hi: face.hi,
-    faceAxisValue: axisValue,
     // 直交壁は面の壁に突き当たって室内側の面で終わる（面の軸CL上までは届かない）。切断線を
     // 室内側へ下げたぶんだけ突き当たり位置は近づくので、許容差は「壁仕上げ面までの距離 −
     // 下げた量」で足りる（負なら0）。sectionProbe.jsのisCutWall参照。

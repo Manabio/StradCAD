@@ -1,7 +1,8 @@
 /**
  * 2.5D断面エンジン: buildSectionFigure（columns→出力組み立て。WP-E4）。
- * 設計意図はarchitect承認済みの実装指示書§4参照。buildSectionFigure自体は現時点で
- * 通常部屋帯・吹抜け帯からは未使用（§11リスク4のとおり将来の統合余地）——buildColumns
+ * 設計意図はarchitect承認済みの実装指示書§4参照。直進階段専用の2本目の経路——実データ13/11に
+ * 直進階段が無くgoldenでゲートできないため、buildSectionFromLineへの統合はPhase 7c
+ * （直進階段を含むテスト.stq）以降（ユーザー裁定2026-09-13）。buildColumns
  * （本ファイルからexport）はWP-E5bでelevationStairSequence.jsから直接呼ばれる。
  *
  * 内部フロー（§4のコメントどおり）: collectCutBreaks → probeColumn×N → mergeColumns
@@ -21,7 +22,7 @@
  *   - cut.stairCutは「事前計算済みのstairContribution結果」を直接指す想定（sectionEngine.js
  *     自身はfinish/stair側の詳細を知らない——第3層との結合点はこの1箇所に閉じる）。
  */
-import { GAP_EPS_MM as GAP_EPS, SIGHTLINE_DEPTH_LIMIT_MM, HORIZONTAL_FACES_ENABLED } from '../elevationStyle.js';
+import { GAP_EPS_MM as GAP_EPS, SIGHTLINE_DEPTH_LIMIT_MM } from '../elevationStyle.js';
 import { localXOf, worldOf, ceilProfileZAt } from './sectionTypes.js';
 import { collectCutBreaks, probeColumn, upperFloorZAt } from './sectionProbe.js';
 import { faceFromCut } from './sectionFace.js';
@@ -44,8 +45,8 @@ function bandsEqual(a, b) {
       && (band.distMm ?? null) === (other.distMm ?? null)
       && (band.layerRole ?? null) === (other.layerRole ?? null)
       && (band.openingPassThrough ?? false) === (other.openingPassThrough ?? false)
-      // Phase4（水平面ヒット。裁定済み2026-09-11・既定on。フラグoff＝旧挙動比較時は両側常に
-      // undefined＝比較は常にtrueで従来どおり）:
+      // Phase4（水平面ヒット。裁定済み2026-09-11・既定on。far値が付かない列は両側undefined
+      // ＝比較は常にtrueで従来どおり）:
       // 比較しないと「片方の列だけ深度上限内の奥の床・天井が見える」隣接列が誤って1列へ統合され、
       // その列の実際のx範囲の一部でfarFloorZ/farCeilZが取りこぼされる（openingPassThroughと同じ
       // 理由。WP-E7 D1参照）。
@@ -370,8 +371,7 @@ export function buildColumns(cut, probeCtx) {
   }
   // Phase4（水平面ヒットの深度上限適用。`.claude/elevation-redesign.md`§5.5・ユーザー裁定
   // 2026-09-11「2」）: 壁と**同じ場所・同じ基準**（nearestMm・SIGHTLINE_DEPTH_LIMIT_MM）で
-  // floorFace/ceilFaceの深度上限を掛ける。裁定済み2026-09-11・既定onのHORIZONTAL_FACES_ENABLEDで
-  // 実行——フラグoff（旧挙動比較時）は出力不変（Phase3までの契約）を保つ。
+  // floorFace/ceilFaceの深度上限を掛ける。
   // QA是正（Phase4・C）: nearestMmが非有限（この切断にwall帯が1枚も無い＝上限の基準点が
   // そもそも無い）ときは、壁の深度上限適用自体が丸ごとスキップされる（上のif）のに、
   // ここだけ素通しすると`emitColumns`がfarFloorZ/farCeilZだけを見て無条件に水平線を描いて
@@ -379,11 +379,9 @@ export function buildColumns(cut, probeCtx) {
   // のが安全側（壁と対称）。`splitOpenByFarFace`へ`-Infinity`を渡すと、有限なfarDepthMmは
   // 必ず`farDepthMm-(-Infinity)=+Infinity>=上限`になり「上限以上」分岐（付帯情報を落として
   // 従来どおり全域アキ）へ入る——新しい特別扱いを増やさずに済む。
-  if (HORIZONTAL_FACES_ENABLED) {
-    const limitBasisMm = Number.isFinite(nearestMm) ? nearestMm : -Infinity;
-    for (const col of rawColumns) {
-      col.bands = col.bands.flatMap(b => splitOpenByFarFace(b, limitBasisMm));
-    }
+  const limitBasisMm = Number.isFinite(nearestMm) ? nearestMm : -Infinity;
+  for (const col of rawColumns) {
+    col.bands = col.bands.flatMap(b => splitOpenByFarFace(b, limitBasisMm));
   }
   // 可視領域の判定・打ち切りは**全列を揃えてから**行い、判定は必ず**打ち切り前の実体**で行う
   // ——打ち切りながら進めると、既に打ち切った隣の列のz範囲が変わっていて同じ壁と認識できず、

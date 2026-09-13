@@ -491,8 +491,8 @@ test('【裁定2026-09】帯: 遠側床が下がっていれば、下端は遠�
 });
 
 // ================================================================
-// QA指摘②（2026-09-11）: HORIZONTAL_FACES_ENABLED既定onそのものを固定する帯レベルの回帰テスト。
-// フラグは一切操作しない——`elevationStyle.js`の既定値だけで通ることが本テストの主張。
+// QA指摘②（2026-09-11）: 水平面ヒットの既定動作そのものを固定する帯レベルの回帰テスト。
+// フラグは無い——常時この動作だけで通ることが本テストの主張。
 // knee-drop-test.stq相当（部屋A 4000×4000・南に部屋B（天井高2400）・共有壁に腰壁800）を
 // buildRoomBand経由で組む。既定onなら面C（腰壁の上・Bを見る面）に
 //   - Bの天井(FL+2400)の見えがかり線（medium・z=2400）が出る
@@ -525,7 +525,7 @@ test('【QA指摘②・既定on固定】帯: knee-drop-test.stq相当は面Cに�
   const sightline = band.primitives.filter(p => p.type === 'line' && p.weight === 'medium'
     && p.y1 === p.y2 && Math.abs(-p.y1 - 2400) < 1);
   assert.ok(sightline.length > 0,
-    'Bの天井(FL+2400)の見えがかり線(medium)がz=2400に出るはず（HORIZONTAL_FACES_ENABLED既定on）');
+    'Bの天井(FL+2400)の見えがかり線(medium)がz=2400に出るはず（水平面ヒットの既定動作）');
 
   const ys = [...new Set(gapDiagOf(band).flatMap(p => [p.y1, p.y2]))].sort((a, b) => a - b);
   assert.deepEqual(ys, [-2400, -800],

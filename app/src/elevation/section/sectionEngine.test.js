@@ -6,7 +6,7 @@ import { Plane, PlanGraph, CenterLineType, Discipline, edgeKey } from '@core';
 import { generateRoomWallsFromOutline } from '../../finish/wallGeneration.js';
 import { makeProbeContext } from './sectionProbe.js';
 import { buildSectionFigure, buildColumns, mergeColumns, splitOpenByFarFace } from './sectionEngine.js';
-import { SIGHTLINE_DEPTH_LIMIT_MM, HORIZONTAL_FACES_ENABLED, setHorizontalFacesEnabled } from '../elevationStyle.js';
+import { SIGHTLINE_DEPTH_LIMIT_MM } from '../elevationStyle.js';
 
 const CH = 2400;
 
@@ -248,20 +248,16 @@ test('【QA是正A】buildColumns: 深度上限超えの壁(distMm4057.5)がopen
   const cut = kneeFaceCutForFarWallFixture(graph, nearWall);
   const probeCtx = makeProbeContext(cut.layers);
 
-  const prev = HORIZONTAL_FACES_ENABLED;
-  setHorizontalFacesEnabled(true);
-  try {
-    const columns = buildColumns(cut, probeCtx);
-    const midCol = columns.find(c => Math.abs(c.x0 - 57.5) < 1 && Math.abs(c.x1 - 3942.5) < 1);
-    assert.ok(midCol, '腰壁の面幅ぶんの列があるはず');
-    const openBand = midCol.bands.find(b => b.kind === 'open');
-    const farVoidBand = midCol.bands.find(b => b.kind === 'farVoid');
-    assert.ok(openBand, 'open帯（腰壁の上・部屋Bの天井まで）があるはず');
-    assert.equal(openBand.z0, 800); assert.equal(openBand.z1, 2400,
-      '上限内のfarCeilZ(2400)まで縮むはず（作り替え元のwall帯の元々のz1は3000だった）');
-    assert.ok(farVoidBand, 'farVoid帯（部屋Bの天井懐。z2400..3000）があるはず');
-    assert.equal(farVoidBand.z0, 2400); assert.equal(farVoidBand.z1, 3000);
-  } finally { setHorizontalFacesEnabled(prev); }
+  const columns = buildColumns(cut, probeCtx);
+  const midCol = columns.find(c => Math.abs(c.x0 - 57.5) < 1 && Math.abs(c.x1 - 3942.5) < 1);
+  assert.ok(midCol, '腰壁の面幅ぶんの列があるはず');
+  const openBand = midCol.bands.find(b => b.kind === 'open');
+  const farVoidBand = midCol.bands.find(b => b.kind === 'farVoid');
+  assert.ok(openBand, 'open帯（腰壁の上・部屋Bの天井まで）があるはず');
+  assert.equal(openBand.z0, 800); assert.equal(openBand.z1, 2400,
+    '上限内のfarCeilZ(2400)まで縮むはず（作り替え元のwall帯の元々のz1は3000だった）');
+  assert.ok(farVoidBand, 'farVoid帯（部屋Bの天井懐。z2400..3000）があるはず');
+  assert.equal(farVoidBand.z0, 2400); assert.equal(farVoidBand.z1, 3000);
 });
 
 // ---- 失敗系 ----

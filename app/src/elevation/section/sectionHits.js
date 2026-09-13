@@ -61,17 +61,16 @@
  * 面リスト構築（`elevationFaces.js`）へ提供する。`elevationFaces.js`/`elevationStair.js`自身は
  * 本ファイルを直接importしない——`stairBandWallFilter`が返す`wallFilter`関数を受け取るだけ。
  *
- * Phase 4（`elevationStyle.js`の`HORIZONTAL_FACES_ENABLED`。裁定済み2026-09-11・既定on）:
+ * Phase 4（裁定済み2026-09-11・既定on）:
  * `visibleBandsOf`が`open`帯へ`farFloorZ`/`farCeilZ`/`farDepthMm`（上限内の最も近いfloorFace/
  * ceilFace）を付帯情報として載せる。深度上限の適用・アキの範囲を縮める処理・見えがかり線の描画は
- * 行わない（それぞれ`sectionEngine.js`・`sectionEmit.js`が担当）。フラグoff（旧挙動比較用）では
- * この付帯情報自体を付けない（出力完全不変）。
+ * 行わない（それぞれ`sectionEngine.js`・`sectionEmit.js`が担当）。
  */
 import { OpeningCategory } from '@core';
 import { worldToCell } from '../../finish/gridCells.js';
 import { kneeDropRecordsAtPointOnWall } from '../../finish/kneeDropWall.js';
 import { effectiveHeight } from '../../openings/openingNumbering.js';
-import { GAP_EPS_MM as GAP_EPS, PROBE_EPS_MM, HORIZONTAL_FACES_ENABLED } from '../elevationStyle.js';
+import { GAP_EPS_MM as GAP_EPS, PROBE_EPS_MM } from '../elevationStyle.js';
 import { graphList } from '../../graphReadScope.js';
 import { localXOf } from './sectionTypes.js';
 import { stairFaceHits } from './sectionStair.js';
@@ -887,8 +886,7 @@ function nearestFaceInRange(hits, kind, z0, z1, allowBelowZ0) {
 
 /**
  * `open`帯へ「上限内の最も近いfloorFace/ceilFace」の付帯情報を載せる（Phase4。設計§5.5
- * 「情報の流れ」＝`farFloorZ`/`farCeilZ`/`farDepthMm`）。`HORIZONTAL_FACES_ENABLED`がfalseなら
- * 常に空オブジェクト——これが出力完全不変（Phase3までの契約）を保つ唯一の分岐点。
+ * 「情報の流れ」＝`farFloorZ`/`farCeilZ`/`farDepthMm`）。
  * floorFace/ceilFaceは独立に探す（同じ奥の部屋から一緒に出ることが多いが、必ずしも対にならない
  * ——例: 片方がceilZ:null《Phase3の縮退》で積まれなかった場合）。
  *
@@ -910,7 +908,6 @@ function nearestFaceInRange(hits, kind, z0, z1, allowBelowZ0) {
  *   farFloorDepthMm?:number|null, farCeilDepthMm?:number|null}}
  */
 function farFaceAnnotation(hits, z0, z1, zLo) {
-  if (!HORIZONTAL_FACES_ENABLED) return {};
   const allowBelowZ0 = Math.abs(z0 - zLo) < GAP_EPS;
   const floor = nearestFaceInRange(hits, 'floorFace', z0, z1, allowBelowZ0);
   const ceil = nearestFaceInRange(hits, 'ceilFace', z0, z1, allowBelowZ0);
@@ -1112,7 +1109,7 @@ function sameZBand(a, b) {
       // 隣接するhidden同士は常に同一実体の続きとみなして良い。
       return true;
     case 'open':
-      // Phase4: farFloorZ/farCeilZ/farDepthMmが違えば別の帯（フラグoffでは両方常にundefined
+      // Phase4: farFloorZ/farCeilZ/farDepthMmが違えば別の帯（far値が付かない列は両側undefined
       // ＝この比較は常にtrueで従来どおり。WP-E7 D1のopeningPassThroughと同じ理由——比較しないと
       // 「片方だけ水平面が見える」列が誤って統合され、その区間の一部でfarFloorZ/farCeilZが
       // 取りこぼされる）。

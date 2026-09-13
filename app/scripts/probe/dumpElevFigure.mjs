@@ -5,16 +5,7 @@
 // buildRoomBandWithVoidAbove を通る。全部屋を buildRoomBand で作ると**実機が通らない経路**を
 // 比較してしまい、階段室（例: 11.stq 1階の「6」）の差分を取り逃がす。
 //
-// 使い方: node dumpElevFigure.mjs [outDir] [src.stq] [--no-horizontal-faces]
-//   --no-horizontal-faces … 展開図一般化Phase4のフラグ（elevationStyle.jsのHORIZONTAL_FACES_
-//   ENABLED。裁定済み2026-09-11・既定on）をダンプ中だけoffにする。Phase 5で`spanLoZ`
-//   （`cut.openSpans`外部注入による、このフラグの外で独立して動くアキ下端クランプ）を撤去し
-//   `splitOpenByFarFace`（このフラグにゲートされる）へ一本化したため、offはアキ下端のクランプ/
-//   延伸を含む水平面ヒット由来の表現をすべて止めた素の探査結果になる——**Phase 4以前の基準とは
-//   一致しない**（面によって結果が違う。例: 13.stq「10」D1は偶然z=−50《旧規則相当》に戻るが、
-//   「11'」A2はz=0《どの過去の規則とも異なる》になる）。**比較用途はもう無い**——残すのは
-//   `HORIZONTAL_FACES_ENABLED`のon/off個別テストのため。
-//   --horizontal-faces … 既定onなので実質no-op。過去のコマンド互換のため残す。
+// 使い方: node dumpElevFigure.mjs [outDir] [src.stq]
 import fs from 'node:fs';
 import path from 'node:path';
 import { RoomFeature } from '../../src/core.js';
@@ -27,14 +18,15 @@ import { roomBounds } from '../../src/finish/gridCells.js';
 import { floorHeightAbove, floorHeightBelow } from '../../src/finish/stair/stairDimensions.js';
 import { collectGridCLs } from '../../src/elevation/elevationPrimitives.js';
 import { withGraphReadScope } from '../../src/graphReadScope.js';
-import { setHorizontalFacesEnabled } from '../../src/elevation/elevationStyle.js';
 
 const rawArgs = process.argv.slice(2);
-const horizontalFaces = !rawArgs.includes('--no-horizontal-faces');
-const positional = rawArgs.filter(a => a !== '--horizontal-faces' && a !== '--no-horizontal-faces');
-const outDir = positional[0] ?? path.join(import.meta.dirname, 'golden');
-const src = positional[1] ?? 'D:/tatsuya/Download/11.stq';
-setHorizontalFacesEnabled(horizontalFaces);
+const unknownOption = rawArgs.find(a => a.startsWith('-'));
+if (unknownOption) {
+  console.error(`unknown option: ${unknownOption}`);
+  process.exit(1);
+}
+const outDir = rawArgs[0] ?? path.join(import.meta.dirname, 'golden');
+const src = rawArgs[1] ?? 'D:/tatsuya/Download/11.stq';
 fs.mkdirSync(outDir, { recursive: true });
 const r = (v) => (typeof v === 'number' ? Math.round(v * 1000) / 1000 : v);
 

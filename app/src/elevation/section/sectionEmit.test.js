@@ -769,7 +769,7 @@ test('【実機指摘】emitOpenGapMarks: L字のアキではバツの頂点が�
 // ---- ユーザー実機指摘2026-08「6」C（撤回・再指示）: 破線範囲は基準線の左右では決まらない ----
 // 旧実装は「内側のささらより右（z全域）」を対角線ごとに割り当てていた（裁定「(あ)」）が、
 // ユーザーが撤回し「想定したバツに対して描画面+所定距離までレイキャストして、隠れた部分を
-// 破線にする」と再指示——渡す矩形は手前に実体がある範囲そのもの（stairOccluderRects）になり、
+// 破線にする」と再指示——渡す矩形は手前に実体がある範囲そのもの（stairFaceOccluderRects）になり、
 // 対角線ごとの割り当ては無くなった。
 test('【実機指摘・撤回後】splitGapMarksByStair: 矩形は対角線を選ばず、両方に同じように効く', () => {
   const low  = { type: 'line', x1: 0, y1: 0, x2: 1000, y2: -1000, weight: 'thin', dash: 'center' };
@@ -1858,7 +1858,7 @@ test('【Phase4】emitOpenGapMarks: open帯が[800,2400]へ縮んでいれば、
 });
 
 // ---- 失敗系 ----
-test('【失敗系・Phase4】emitColumns/emitOpenGapMarks: open帯にfarFloorZ/farCeilZが無ければ（フラグoff相当）従来どおり何も変わらない', () => {
+test('【失敗系・Phase4】emitColumns/emitOpenGapMarks: open帯にfarFloorZ/farCeilZが無ければ（far付帯情報なし）従来どおり何も変わらない', () => {
   const cut = makeCut({ baseFloorZ: 0, zRange: { loZ: 0, hiZ: 3000 } });
   const columns = [
     { x0: 0, x1: 1000, worldLo: 0, worldHi: 1000, bands: [{ kind: 'open', z0: 800, z1: 3000 }] },

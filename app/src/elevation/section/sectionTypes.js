@@ -85,14 +85,14 @@ import { GAP_EPS_MM as GAP_EPS } from '../elevationStyle.js';
  *   `open`（アキ）とは別kind——アキのバツ・見えがかり線の対象にならず、かつ`overCutWall`
  *   （切断壁の天端の上はアキではない、の判定）にも当たらない独立したkindとして扱う。
  *   slab=床スラブ・天井懐（今回は非描画）。z0<z1（絶対z）。
- *   farVoid（Phase4。`elevationStyle.js`の`HORIZONTAL_FACES_ENABLED`。裁定済み2026-09-11・
- *   既定on）＝floorFace/ceilFaceより向こう側（向こうの部屋の天井懐・床構造）の非描画区間。
+ *   farVoid（Phase4。裁定済み2026-09-11・既定on）＝floorFace/ceilFaceより向こう側
+ *   （向こうの部屋の天井懐・床構造）の非描画区間。
  *   slabと同じ「非描画」だが実体の所有者情報（ownerRoom/floorZ/ceilZ）を持たないため別kindにした
  *   （`sectionEngine.js`の`splitOpenByFarFace`が生成。`emitColumns`/`emitOpenGapMarks`はどちらも
  *   `'open'`しか見ないため、このkindは自動的に「線を描かずアキにもしない」）。
  *   `open`のfarFloorZ/farCeilZ/farDepthMm（Phase4）＝`sectionHits.js`の`visibleBandsOf`が
  *   付帯情報として載せる「上限内の最も近いfloorFace/ceilFaceのzと深度」（`splitOpenByFarFace`の
- *   入力）。フラグoffでは常にundefined。
+ *   入力）。該当が無ければ常にundefined。
  */
 
 /**

@@ -472,7 +472,7 @@ function contentForCut(rawCut, probeCtx, endExtendMm = 0, bandRoomBounds = null,
   const overhang = upperOverhangOf(pcut, columns);
   // アキのバツは、手前に階段が描かれる区間だけ破線へ落とす（ユーザー実機指摘2026-08「6」C
   // 「但し、階段に隠れる部分は破線」）。隠れる範囲はプリミティブからの逆算ではなくflight自身の
-  // 見付け矩形（stairOccluderRects）から求める。
+  // 見付け矩形（stairFaceOccluderRects）から求める。
   // 階段の見付けシルエット（手前に実体がある範囲）。アキのバツ・見えがかり水平線の
   // どちらの破線判定にも同じ集合を使う。
   // 展開図一般化Phase 6b-2 段A: 遮蔽チャネルの正式化。`stairOccluderRects`（面固有の実装）から

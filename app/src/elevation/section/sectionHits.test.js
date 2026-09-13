@@ -17,7 +17,6 @@ import { Plane, PlanGraph, CenterLineType, Discipline, edgeKey, OpeningCategory,
 import { generateRoomWallsFromOutline } from '../../finish/wallGeneration.js';
 import { makeProbeContext, probeColumn } from './sectionProbe.js';
 import { probeColumnHits, visibleBandsOf, isHiddenWall } from './sectionHits.js';
-import { HORIZONTAL_FACES_ENABLED, setHorizontalFacesEnabled } from '../elevationStyle.js';
 
 const CH = 2400; // DEFAULT_ROOM_CEILING_HEIGHT（core/constants.js）明示指定なしの既定値
 
@@ -474,7 +473,7 @@ test('【Phase3・出力不変】visibleBandsOf: floorFace/ceilFace/slabFaceヒ�
 // 「腰壁の...深度昇順で並ぶ」テストが赤くなることを確認する。
 
 // ================================================================
-// (6) Phase 4: `open`帯へのfarFloorZ/farCeilZ/farDepthMm付帯情報（HORIZONTAL_FACES_ENABLED）
+// (6) Phase 4: `open`帯へのfarFloorZ/farCeilZ/farDepthMm付帯情報
 // ================================================================
 // `visibleBandsOf`はここまで（深度上限の適用・アキの縮小）は行わない——付帯情報を載せるだけ
 // （sectionEngine.jsの`splitOpenByFarFace`が上限適用・縮小を担当。テストはsectionEngine.test.js側）。
@@ -489,52 +488,26 @@ test('【Phase3・出力不変】visibleBandsOf: floorFace/ceilFace/slabFaceヒ�
 // 「区間はもともと2400までしか無かった」を見分けられない）。
 const roomABounds = { x1: 0, x2: 4000, y1: 0, y2: 4000 };
 
-test('【Phase4・a】visibleBandsOf: フラグonなら腰壁面のopen帯へ部屋BのfarCeilZ(2400)が付く（floorはz0(800)より下だが、その下は腰壁本体＝実体があるので対象外でnull）', () => {
+test('【Phase4・a】visibleBandsOf: 腰壁面のopen帯へ部屋BのfarCeilZ(2400)が付く（floorはz0(800)より下だが、その下は腰壁本体＝実体があるので対象外でnull）', () => {
   const { graph, roomA, nearWall } = makeKneeWallFixture();
   roomA.setOverride('ceilingHeight', '3000');
   const cut = { ...kneeFaceCut(graph, nearWall), bandRoomBounds: roomABounds };
   const probeCtx = makeProbeContext(cut.layers);
   const { hits, layerStack, unexploredBelowZ } = probeColumnHits(cut, 2000, probeCtx);
 
-  const prev = HORIZONTAL_FACES_ENABLED;
-  setHorizontalFacesEnabled(true);
-  try {
-    const bands = visibleBandsOf(hits, cut, { layerStack, unexploredBelowZ });
-    const openBand = bands.find(b => b.kind === 'open');
-    assert.ok(openBand, 'open帯があるはず（腰壁の上、z800..3000＝部屋A自身の天井まで）');
-    assert.equal(openBand.z0, 800); assert.equal(openBand.z1, 3000);
-    assert.equal(openBand.farCeilZ, 2400, '部屋Bの天井2400は区間[800,3000]の内部にあるので付くはず');
-    // Phase 5（設計`.claude/elevation-redesign.md`§5.5「残る非対称」の解消）: floorFaceは
-    // z0(800)より下（z=0）も候補になりうるが、**それを許すのはz0がこの列自身の探査下限
-    // （cut.zRange.loZ）と一致するときだけ**——ここはz0=800で列自身の下限0とは一致しない
-    // （0..800は腰壁本体＝実体のある`wall`帯として既に表現済み）ので対象外のまま。
-    // 実機「11'」A2型（z0がその列の探査下限そのもの＝下に何も無い）はsectionEngine.test.js
-    // 【QA是正A】で別途検証する。
-    assert.equal(openBand.farFloorZ, null, '部屋Bの床0はz0(800)より下だが、その下は腰壁本体なので対象外でnullのはず');
-    assert.equal(openBand.farDepthMm, 57.5, '腰壁自身と同じ距離（境界CL上のため）のはず');
-  } finally { setHorizontalFacesEnabled(prev); }
-});
-
-test('【Phase4・c・フラグoff】visibleBandsOf: HORIZONTAL_FACES_ENABLEDがfalseならopen帯にfarFloorZ/farCeilZ/farDepthMmが一切付かない（出力完全不変）', () => {
-  const { graph, roomA, nearWall } = makeKneeWallFixture();
-  roomA.setOverride('ceilingHeight', '3000');
-  const cut = { ...kneeFaceCut(graph, nearWall), bandRoomBounds: roomABounds };
-  const probeCtx = makeProbeContext(cut.layers);
-  const { hits, layerStack, unexploredBelowZ } = probeColumnHits(cut, 2000, probeCtx);
-
-  // 裁定済み2026-09-11でHORIZONTAL_FACES_ENABLEDの既定はon——このテストは旧挙動（フラグoff）を
-  // 明示的に検証するため、ここでoffへ切り替える。
-  const prev = HORIZONTAL_FACES_ENABLED;
-  setHorizontalFacesEnabled(false);
-  try {
-    const bands = visibleBandsOf(hits, cut, { layerStack, unexploredBelowZ });
-    const openBand = bands.find(b => b.kind === 'open');
-    assert.ok(openBand);
-    assert.equal(openBand.farFloorZ, undefined);
-    assert.equal(openBand.farCeilZ, undefined);
-    assert.equal(openBand.farDepthMm, undefined);
-    assert.deepEqual(bands, probeColumn(cut, 2000, probeCtx), 'probeColumnとも完全一致するはず');
-  } finally { setHorizontalFacesEnabled(prev); }
+  const bands = visibleBandsOf(hits, cut, { layerStack, unexploredBelowZ });
+  const openBand = bands.find(b => b.kind === 'open');
+  assert.ok(openBand, 'open帯があるはず（腰壁の上、z800..3000＝部屋A自身の天井まで）');
+  assert.equal(openBand.z0, 800); assert.equal(openBand.z1, 3000);
+  assert.equal(openBand.farCeilZ, 2400, '部屋Bの天井2400は区間[800,3000]の内部にあるので付くはず');
+  // Phase 5（設計`.claude/elevation-redesign.md`§5.5「残る非対称」の解消）: floorFaceは
+  // z0(800)より下（z=0）も候補になりうるが、**それを許すのはz0がこの列自身の探査下限
+  // （cut.zRange.loZ）と一致するときだけ**——ここはz0=800で列自身の下限0とは一致しない
+  // （0..800は腰壁本体＝実体のある`wall`帯として既に表現済み）ので対象外のまま。
+  // 実機「11'」A2型（z0がその列の探査下限そのもの＝下に何も無い）はsectionEngine.test.js
+  // 【QA是正A】で別途検証する。
+  assert.equal(openBand.farFloorZ, null, '部屋Bの床0はz0(800)より下だが、その下は腰壁本体なので対象外でnullのはず');
+  assert.equal(openBand.farDepthMm, 57.5, '腰壁自身と同じ距離（境界CL上のため）のはず');
 });
 
 test('【Phase4・d】visibleBandsOf: 垂れ壁面のopen帯(z0..1800)は部屋Cの床(0)も天井(3000)も区間の境界そのものなので付帯情報が付かない（縮まない＝ユーザー受入基準どおり）', () => {
@@ -543,19 +516,15 @@ test('【Phase4・d】visibleBandsOf: 垂れ壁面のopen帯(z0..1800)は部屋C
   const probeCtx = makeProbeContext(cut.layers);
   const { hits, layerStack, unexploredBelowZ } = probeColumnHits(cut, 2000, probeCtx);
 
-  const prev = HORIZONTAL_FACES_ENABLED;
-  setHorizontalFacesEnabled(true);
-  try {
-    const bands = visibleBandsOf(hits, cut, { layerStack, unexploredBelowZ });
-    const openBand = bands.find(b => b.kind === 'open' && b.z0 === 0);
-    // 垂れ壁の実在範囲はz1800..3000（下端 = 天井3000-bottomHeight1200。kneeDropWall.jsの規約）
-    // のため、垂れ壁の下のアキはz0..1800——ユーザー受入基準「Cの床線(0)と垂れ壁下端のあいだが
-    // アキ」の区間そのもの。
-    assert.ok(openBand, '垂れ壁下端(1800)未満のopen帯(z0..1800)があるはず');
-    assert.equal(openBand.z1, 1800);
-    assert.equal(openBand.farFloorZ, undefined, '部屋Cの床0は区間の下端(z0=0)ちょうどなので付帯情報は付かない');
-    assert.equal(openBand.farCeilZ, undefined, '部屋Cの天井3000は区間の上端(z1=1800)より上（垂れ壁の中）なので付かない');
-  } finally { setHorizontalFacesEnabled(prev); }
+  const bands = visibleBandsOf(hits, cut, { layerStack, unexploredBelowZ });
+  const openBand = bands.find(b => b.kind === 'open' && b.z0 === 0);
+  // 垂れ壁の実在範囲はz1800..3000（下端 = 天井3000-bottomHeight1200。kneeDropWall.jsの規約）
+  // のため、垂れ壁の下のアキはz0..1800——ユーザー受入基準「Cの床線(0)と垂れ壁下端のあいだが
+  // アキ」の区間そのもの。
+  assert.ok(openBand, '垂れ壁下端(1800)未満のopen帯(z0..1800)があるはず');
+  assert.equal(openBand.z1, 1800);
+  assert.equal(openBand.farFloorZ, undefined, '部屋Cの床0は区間の下端(z0=0)ちょうどなので付帯情報は付かない');
+  assert.equal(openBand.farCeilZ, undefined, '部屋Cの天井3000は区間の上端(z1=1800)より上（垂れ壁の中）なので付かない');
 });
 
 // ---- 失敗系 ----
@@ -579,15 +548,11 @@ test('【失敗系・Phase4・e】visibleBandsOf: floorFaceヒットはあって
     .filter(h => h.kind !== 'ceilFace' && h.kind !== 'floorFace')
     .concat([{ ...roomBFloor, z0: 1500, z1: 1500 }]); // 区間[800,3000]の内部へ床だけ合成
 
-  const prev = HORIZONTAL_FACES_ENABLED;
-  setHorizontalFacesEnabled(true);
-  try {
-    const bands = visibleBandsOf(syntheticHits, cut, { layerStack, unexploredBelowZ });
-    const openBand = bands.find(b => b.kind === 'open');
-    assert.ok(openBand);
-    assert.equal(openBand.farFloorZ, 1500, 'floorFaceヒットは区間内部にあるので付くはず（床線だけの縮退）');
-    assert.equal(openBand.farCeilZ, null, 'ceilFaceヒットが無ければfarCeilZはnull（天井線は出ない）のはず');
-  } finally { setHorizontalFacesEnabled(prev); }
+  const bands = visibleBandsOf(syntheticHits, cut, { layerStack, unexploredBelowZ });
+  const openBand = bands.find(b => b.kind === 'open');
+  assert.ok(openBand);
+  assert.equal(openBand.farFloorZ, 1500, 'floorFaceヒットは区間内部にあるので付くはず（床線だけの縮退）');
+  assert.equal(openBand.farCeilZ, null, 'ceilFaceヒットが無ければfarCeilZはnull（天井線は出ない）のはず');
 });
 
 // QA是正2026-09: sameZBandの'wall'ケースはfarFloorZ/farCeilZ/farDepthMmを比較しない
@@ -611,17 +576,13 @@ test('【回帰・QA是正2026-09】visibleBandsOf: 同じ壁・同じ距離の�
     { kind: 'floorFace', layer, room: null, distMm: 57.5, z0: 600, z1: 600 },
   ];
 
-  const prev = HORIZONTAL_FACES_ENABLED;
-  setHorizontalFacesEnabled(true);
-  try {
-    const bands = visibleBandsOf(syntheticHits, cut, { layerStack, unexploredBelowZ });
-    const wallBands = bands.filter(b => b.kind === 'wall');
-    assert.equal(wallBands.length, 1, '2本のwallFaceヒット（同じ壁・同じ距離）由来のwall帯は畳まれて1本のはず');
-    assert.equal(wallBands[0].z0, 0); assert.equal(wallBands[0].z1, 2400,
-      '畳まれた帯はz0..2400（元の2区間の和）のはず');
-    assert.equal(wallBands[0].farFloorZ, 600,
-      '畳んだ結果、残るfar付帯は下側(z0が小さい方)の帯のもの——mergeAdjacentZBandsの注記どおり');
-  } finally { setHorizontalFacesEnabled(prev); }
+  const bands = visibleBandsOf(syntheticHits, cut, { layerStack, unexploredBelowZ });
+  const wallBands = bands.filter(b => b.kind === 'wall');
+  assert.equal(wallBands.length, 1, '2本のwallFaceヒット（同じ壁・同じ距離）由来のwall帯は畳まれて1本のはず');
+  assert.equal(wallBands[0].z0, 0); assert.equal(wallBands[0].z1, 2400,
+    '畳まれた帯はz0..2400（元の2区間の和）のはず');
+  assert.equal(wallBands[0].farFloorZ, 600,
+    '畳んだ結果、残るfar付帯は下側(z0が小さい方)の帯のもの——mergeAdjacentZBandsの注記どおり');
 });
 
 // ================================================================

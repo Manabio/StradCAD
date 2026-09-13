@@ -610,6 +610,9 @@ function laneGapLocalX(contribution, cut, trueAcrossLo, trueAcrossHi, isSteel) {
  * 「バツも破線範囲は、何かの基準線の左右では決まらない」として撤回した。深さ方向の限定
  * （「描画面+所定距離まで」）は、階段のflightが帯自身の部屋（`bandRoom`）の中にしか存在せず
  * 描画面より手前であることが構成上保証されるため、追加の判定を持たない（ASSUMED）。
+ *
+ * 本番参照ゼロ。`stairFaceOccluderRects`（`elevationStairSequence.js`）との突き合わせテスト
+ * （`sectionStair.test.js`）専用の参照実装として残す（Phase 6b-2 段A）。
  */
 export function stairOccluderRects(contribution, cut) {
   if (!contribution || !cut?.line) return [];
@@ -649,8 +652,9 @@ export function stairOccluderRects(contribution, cut) {
  * 往路/復路の識別（`side`）と深度（`depthNearMm`/`depthFarMm`/`atCutPlane`）を添えて返す——
  * `section/sectionHits.js`の`probeColumnHits`がこれを`kind:'stairFace'`のSurfaceHitへ変換する
  * （本Phaseでは`visibleBandsOf`の選択には参加しない。載せるだけ）。
- * **`stairOccluderRects`/`innerStringerSilhouette`自体は変更しない**——アキのバツ・見えがかり線の
- * 破線化という既存の出力契約を壊さないため、同じ判定を共有関数（`innerStringerGeometry`）・
+ * **`innerStringerSilhouette`（本番）は変更せず、`stairOccluderRects`は参照実装として据え置く**——
+ * アキのバツ・見えがかり線の破線化という既存の出力契約を壊さないため、同じ判定を共有関数
+ * （`innerStringerGeometry`）・
  * 同じ述語（`crossesFlight`）から導きつつ、描画とヒット化は別関数のままにした
  * （突き合わせテスト: `sectionStair.test.js`「stairOccluderRectsと一致」「innerStringerSilhouetteと
  * 一致」参照。S6単一情報源）。

@@ -47,7 +47,7 @@ function buildFixture({ mergedWall = false } = {}) {
 function a1Cut(graph) {
   return {
     seqNo: '0',
-    line: { isVertical: false, axisValue: -3200, lo: -7942.5, hi: 57.5, faceAxisValue: -3500, buttToleranceMm: 0 },
+    line: { isVertical: false, axisValue: -3200, lo: -7942.5, hi: 57.5, buttToleranceMm: 0 },
     viewSign: -1, dirSign: 1,
     layers: [{ graph, floorZMm: 0, role: 'self' }],
     zRange: { loZ: 0, hiZ: CH }, baseFloorZ: 0,

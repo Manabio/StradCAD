@@ -1173,9 +1173,9 @@ test('【失敗系・Phase6b-1】stairFaceHits: 段板も内側ささらも対�
 
 // ================================================================
 // 突き合わせテスト（QA是正2026-09・要件B。S6単一情報源）:
-// stairFaceHitsが生成する形状は、本番の描画関数（stairOccluderRects・innerStringerSilhouette）が
-// 生成する形状と食い違ってはいけない——両者が別々の判定を持つ（＝S6違反）とドリフトが起きうる
-// ため、突き合わせを固定する。
+// stairFaceHitsが生成する形状は、本番の描画関数`innerStringerSilhouette`と参照実装
+// `stairOccluderRects`が生成する形状と食い違ってはいけない——両者が別々の判定を持つ
+// （＝S6違反）とドリフトが起きうるため、突き合わせを固定する。
 // ================================================================
 
 // stairFaceHitsのtread/landingFrameパーツをstairOccluderRectsと同じ{xLo,xHi,zLo,zHi}形へ正規化
