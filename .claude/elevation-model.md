@@ -19,13 +19,18 @@
 `section/sectionContent.js`の**`buildSectionFromLine(line, layers, opts)`（面非依存の入口。展開図一般化Phase 8・
 2026-09-13）→`buildCutContent`**で、通常の部屋帯・上部吹抜けを持つ部屋帯・吹抜け帯（`appendBandCutContent`／
 `appendUpperStoreyOutline`）がこれを共有する。階段帯だけは`switchbackCuts`/`straightCuts`が組んだcutを
-`buildCutContent`へ直接渡す（`ends`を持たない手組みcut＝face由来のフォールバック経路。統合はクリーンアップPhase）。帯ごとに違うのは**層スタックだけ**——通常の部屋帯は自階1層、
+`buildCutContent`へ直接渡す（`ends`を持たない手組みcut＝face由来のフォールバック経路。統合は見送り——13/11に
+直進階段が無くgoldenでゲート不能のため、Phase 7cでテスト.stqに直進階段を含めてから。裁定2026-09-13）。帯ごとに違うのは**層スタックだけ**——通常の部屋帯は自階1層、
 上部吹抜けは自階＋上階、吹抜け帯は自階＋直下階。**層スタックを組む入口は`section/sectionBandLayers.js`の
 `buildBandLayers(selfGraph, {above, below, selfFloorZMm})`の1関数だけ**（展開図一般化Phase 7・2026-09-13。
 帯ビルダー・階段のcut表・加算レイヤはこれを呼ぶか受け取るだけで、層のリテラルを書かない。above/belowは
 呼び出し側が持つ階リストを宣言的に渡し、階高が解決できない層で打ち切る。空気連結`componentOf`で層を
 列挙する案は不成立＝連結は可視判定側の役目）。切断線の位置・探査延長・見えがかりの距離判定・
 アキはすべて共通経路が決める。
+
+帯⇄エンジン間の専用チャネルは、Phase 5で`openSpans`（遠側床・天井の外部注入）、Phase 6b-2で
+`drawFloorProfile`（断面線によるアキ下限のクランプ）が撤去され、現在6本（`ceilProfile`／
+`floorZProfile`／`aboveCeilVisibleRanges`／`upperFloorCutEnds`／`upperOverhang`系＋Phase 6b-3の`stairCut`）。
 
 | | `buildFaceFigure`（`elevationFigure.js`） | 断面エンジン（`section/`） |
 |---|---|---|
@@ -283,7 +288,8 @@ z0/z1をそのまま読むだけになった。**図側に残る遠側床線・�
 ——アキとは別の表現で、値の出どころ（`face.spans`の`farFloorDeltaMm`/`farCeilAbsMm`）も担当（図側
 だけの責務）も変わっていない。両者が異なる情報源を参照する構成は残るが、アキ側はもう外部注入を
 経由しない。**図側（`face.spans`）と探査側（ヒット列）の2系統が残る以上、両者の値が食い違う余地は
-まだある——食い違ったらどちらが正か決める規則はまだ無く、Phase 6以降の課題。**
+まだある——食い違ったらどちらが正か決める規則はまだ無く、未一本化（クリーンアップPhase棚卸しC3。
+削ると遠側床線・天井線が消えるため要裁定の別フェーズ）。**
 
 ### 不変条件: 帯のローカル z=0 ≡ その帯の部屋の実効FL
 `finalizeBand`は部屋の実効FLぶん帯全体を平行移動する（`bandFloorOffsetMm`）。断面エンジンの床解決
@@ -331,6 +337,38 @@ Phase 5（下記「移した」節）以降、断面エンジン自身の探査�
 アキの唯一の情報源はエンジンなので出ない）。段差見付け面（`kind==='step'`）と腰壁＋垂れ壁のアキは
 `appendGapMark`経路のまま（断面エンジンは`kind==='step'`の面を対象にしないため二重にならない）。
 
+## 修正手順（一般化を担保する）
+展開図関連の修正はすべてこの手順に従う（設計 `.claude/elevation-redesign.md`§5.9(2)）。
+- **(a) 再現をデータで固定する**: 実データ（`D:/tatsuya/Download/*.stq`）に構成があればそれを、無ければ
+  `makeKneeDropTest.mjs`の作法でテスト用.stqを作り、`dumpElevFigure.mjs`で帯のプリミティブをダンプして
+  「何が違うか」を図の座標で言う。
+- **(b) 判断の置き場所を決める**: 壁の実体・可視・奥行き・アキは断面エンジン（`section/`）だけ、図面の
+  体裁は`buildFaceFigure`。「面ローカルで自階だけ見て決める」判断を新設しない。列にしか無い情報が図に
+  要るなら、チャネル（図⇄エンジンの専用受け渡し）を増やさず、エンジンの答え（ZBandの付帯・ヒット列）を読む。
+- **(c) 帯種別の分岐を足さない**: 通常／上部吹抜け／吹抜け／階段のどれかにしか効かない`if`を
+  `buildCutContent`以降に入れない。層スタック（`sectionLayerStack.js`）とヒット列で表現できないなら
+  設計を見直す。
+- **(d) 「未知」を「アキ」にしない**: 探査が答えられない区間をopenに落として後段の除外条件で引く、を
+  繰り返さない。答えられない理由（層の窓・深度上限・成分違い）をbandに残す。
+- **(e) ゲートで守る**: 修正前に`golden13`/`golden11`/`golden-knee`とのdiffを取り、修正後の差分を1本ずつ
+  説明できるものだけ採用（`diffElevGolden.mjs --merge`）。意図的な差分はユーザー裁定→ゴールデン再採取→
+  採取コミットをdocに記録。合成fixtureの単体テストは変異テストで赤化を確認してから提出。INV1-3
+  （`sectionProbeMultiLayer.test.js`）は必ず緑。
+- **(f) 深度・座標系を疑う**: 出力不変が期待される置換で差分が出たら「モデル差」と言う前に、帯ローカル／
+  絶対・floorOffset・深度の基準点（切断線か最も手前の壁面か）・全高壁の向こうでないかを実データで
+  裏取りする。
+- **(g) 定数は1箇所**: 深度上限・許容誤差は`elevationStyle.js`から取り、経路ごとに別の値を持たない。
+
+### クリーンアップで残したもの（2026-09-13）
+- `unexploredBelowZOf`（`sectionProbe.js`）: 置換する一般規則が未導入。削るとはり出し列のslabが地面まで
+  伸びる回帰。
+- `sectionEmit.js`の帯種別排他分岐（`ceilProfile`の有無で`ceilStepSlabSection`／`slabEdgeCutWallJunction`を
+  排他選択）: 解消は根本A（階段帯へ列ごとの実効天井を与える）が前提。
+- `stairOver`の残り判断（`lowerFaceEndVertical`＝図の線を後から書き換える唯一の残存機構）: 踏面ジグザグの
+  ヒット列化（6b-1′）が前提（裁定X）。
+- `buildSectionFigure`（直進階段専用の2本目の経路）: 統合はPhase 7c以降（裁定Q1）。
+- `hiddenWallIds`/`openSpans`: 本番参照ゼロ。「なぜ置換したか」を示す説明コメントのみ残す。
+
 ### 視覚回帰ゲート
 `elevationSectionGolden.test.js`が`buildRoomBand`/`buildVoidBand`の出力プリミティブ全体を
 正規化JSONで固定する。矩形・段差に加えて**腰壁・腰壁袖壁・アキ・開放スパン**の4ケースを持つ
@@ -345,8 +383,9 @@ Phase 5（下記「移した」節）以降、断面エンジン自身の探査�
 比較ロジックは`elevGoldenDiff.mjs`（純モジュール）に分離してあり、単体テストで担保する。
 採取元は`D:/tatsuya/Download/13.stq`。スナップショットは**ユーザー裁定済みの意図的差分を取り込むときだけ**
 再採取し、採取時点のコミットと取り込んだ差分をここに記録する（それ以外では動かさない——動かないゴールデン
-でなければ「新設計との差分」を測る基準にならない）。採取履歴: Phase 4裁定前（`HORIZONTAL_FACES_ENABLED`
-既定off時代）＝コミット5943d89／Phase 4裁定後（既定on）＝Phase 4コミット／**2026-09-13 再採取**（Phase 6b-2
+でなければ「新設計との差分」を測る基準にならない）。採取履歴: Phase 4裁定前（水平面ヒット由来の
+見えがかり線・アキ分割が既定offだった時代。当時のon/offフラグ`HORIZONTAL_FACES_ENABLED`はクリーン
+アップPhaseで削除済み）＝コミット5943d89／Phase 4裁定後（既定on）＝Phase 4コミット／**2026-09-13 再採取**（Phase 6b-2
 設計(d)コミット9b36c33直後。ユーザー裁定「6点指摘の残りはキャンセルし当初計画を優先」）: 取り込んだ差分は
 「6」（Phase 6前半の2a壁非表示の是正・6b-2のアキ矩形・面端の壁判定・最終段の蹴込・ささらの一般判定化）、
 「5」と2F「22」（コミット5d2ef84「腰壁・垂れ壁の高さ制限を隅の食い込み区間にも効かせる」。x=6085の縦線が
@@ -1183,6 +1222,9 @@ hだけ上へそのまま平行移動した連続ポリラインとして描く�
   ——above.roomがVOID/STAIR_VOIDなら'open'（アキX判定の対象）として扱う。
 
 ## 展開図では断面の中は描画しない（ユーザー明示指示2026-08）
+**特例（スラブ帯クリップ等）は、この一般判定で置換できるなら削除する**（ユーザー裁定2026-09-13）——
+ルールの多重化は一般化を阻害する。確認事項には必ず根拠（その条件がいつ何のために決まったか）を併記する。
+
 描けるのは**床断面線と天井断面線に挟まれた範囲**だけで、天井の向こう（天井裏・上階の躯体）には
 何も描かない。実機「5」A面の左3200エリア（1階天井断面・2階X2壁断面・2階天井断面で区切られる外）に
 2階の壁断面や天井裏の見えがかりが出ていた根本原因は、**断面エンジンが`ceilZ`を帯に1つ（帯の天井）
@@ -1336,9 +1378,9 @@ SILHOUETTE」（AMBIGUITY B）は撤回した——断面は隣に何が見え�
 なる。`sectionCutPlaneExtraction.test.js`が offset=0 と正規のオフセットを並べてこの症状を凍結する。
 
 `faceCutLine`は`lo/hi/dirSign`を動かさない（断面ローカルxと面ローカルxが同値である
-`sectionTypes.js`の不変条件を保つ）。面の軸CLは`line.faceAxisValue`として別に残す——切断線が面の軸から
-離れると「その面の壁と接続した柱か」のような**面の軸との照合**（`sectionStructure.js`）が
-`line.axisValue`では成り立たなくなるため。視線の符号は`faceViewSign`（=-inward）が唯一の定義
+`sectionTypes.js`の不変条件を保つ）。`line.faceAxisValue`は読み手ゼロで削除済み（クリーンアップ
+Phase）——面の軸との照合（`sectionStructure.js`）は`cut.face?.axisCL?.effectiveValue ?? cut.line.axisValue`
+で行う。視線の符号は`faceViewSign`（=-inward）が唯一の定義
 （過去に経路ごとに符号が食い違った）。
 
 ## 切断1本→contentの共通経路（`section/sectionContent.js`）
@@ -1393,6 +1435,12 @@ INV2は「役割名にも配列順にも依存していない」ことの実行�
 `buildSpaceIndex`へ集約し、ここを唯一の置き場所とした。`sectionProbe.js`の`makeProbeContext`は
 この索引を内包する薄いラッパで、対外契約（`floorZOf`/`chOf`等）は変えていない。
 
+**ヒット列の確定規約**（`section/sectionHits.js`。設計`.claude/elevation-redesign.md`§5.7）:
+- 深度は切断線から視線方向へ測った正値で、壁の`distMm`と同一基準。
+- 同深度のタイは垂直面（cut/cutAlong/wallFace）が水平面（floorFace/ceilFace）より先（`kindRank`）。
+- floorFace/ceilFaceは単一zの縮退面で、厚みを持つのは`slabFace`だけ。
+- 視線の先の天井高が解決できないときは`ceilZ:null`（床線は出るが天井線は出ない）。
+
 **Phase 2**: `componentOf(layer, room)`/`componentAt`（空気ボリュームの連結成分）を追加。同一層は
 全高の壁で仕切られない限り連結（腰壁・垂れ壁は連結を切らない）。階またぎは、VOIDは**重なる
 吹抜けの最下階の親部屋1室**（複数階にわたる吹抜けは、直下に重なるVOIDがある限りそれと連結して
@@ -1436,12 +1484,11 @@ room変化点で区切った区間を近い順に返す）を追加。`probeColu
 側面視・ささら系の経路は実データではまだ通っていない（STEEL折返し階段のテスト用.stqが必要なら
 `makeKneeDropTest.mjs`の作法で6b-2着手時に作る）。
 
-**Phase 4**（`elevationStyle.js`の`HORIZONTAL_FACES_ENABLED`。**裁定済み2026-09-11・既定on**——
+**Phase 4**（水平面ヒット由来の見えがかり線・アキ分割。**裁定済み2026-09-11**——
 knee-drop-test.stqの「A」面Cで受入基準（腰壁天端800〜天井2400がアキ、その上にBのFL+2400天井
-見えがかり線）をユーザーが実機確認し採用。offが戻すのは**水平面ヒットの見えがかり線とアキの
-分割・延伸**（下記`splitOpenByFarFace`の深度上限適用・見えがかり線描画。Phase 5でアキ下端の
-クランプ規則もこのフラグの内側へ一本化したため、Phase 4時点の「offでも新規則のまま」という
-挙動はもう無い——下記「移した」節・`--no-horizontal-faces`の説明を参照）:
+見えがかり線）をユーザーが実機確認し採用。当時は`elevationStyle.js`の`HORIZONTAL_FACES_ENABLED`
+というon/offフラグでdiffを先に見せてから既定onへ確定したが、フラグ自体はクリーンアップPhaseで
+削除済み（本番参照ゼロ・golden不変）——**この表現は常に有効**で、比較用のoff経路はもう無い）:
 `visibleBandsOf`が`open`帯（`wall`帯が深度上限超えで`open`へ作り替えられたものも含む——QA是正で
 `wall`帯自身にも同じ付帯情報を持たせ、作り替え時に引き継ぐ）へ**区間の内部にある**最も近い
 floorFace/ceilFaceを`farFloorZ`/`farCeilZ`/`farDepthMm`として付帯情報化し（深度上限そのものは
@@ -1452,16 +1499,7 @@ floorFace/ceilFaceを`farFloorZ`/`farCeilZ`/`farDepthMm`として付帯情報化
 向こう側＝天井懐・床構造）は非描画——`emitColumns`/`emitOpenGapMarks`はどちらも`'open'`しか見ないため
 自動的に線もアキも出ない。見えがかり線は`sightRole`（壁と同じ深度→重みの経路）で線種を決め、自身の
 FL・CHと同値なら（`sectionLevelZs`/`atSectionLevel`）既存の断面線と重なるため描かない。奥の壁の
-建具姿図は描かない（floorFace/ceilFaceに建具情報を一切持たせていない）。既定onのため通常は
-何もしなくてよい。`dumpElevFigure.mjs --no-horizontal-faces`は今も残すが、**Phase 5で`spanLoZ`
-（`cut.openSpans`外部注入による、このフラグの外で独立して動くアキ下端クランプ）を撤去し
-`splitOpenByFarFace`（このフラグにゲートされる）へ一本化したため、offはアキ下端のクランプ/延伸を
-含む水平面ヒット由来の表現をすべて止めた素の探査結果になり、Phase 4以前の基準とも一致しない**
-（Phase 4以前は`spanLoZ`がフラグの外で常に動いており、遠側床への追従＝アキ下端の延伸が別経路で
-入っていた。今のoffにはその経路が無いため、実機「11'」A2のバツ下端はz=0のまま《y=−100》になり、
-Phase 4前・Phase 4後・現在のどの基準とも異なる第4の状態になる）。**比較用途はもう無い**——
-残すのは`HORIZONTAL_FACES_ENABLED`の`sectionHits.test.js`/`sectionEngine.test.js`での
-on/off個別テストのため。
+建具姿図は描かない（floorFace/ceilFaceに建具情報を一切持たせていない）。
 
 **裁定済み（採用。2026-09-11）**: アキの下端の既存確定裁定（旧文言「下端は**遠側床が
 帯の床より高いときだけ**そこまで持ち上げ、それ以外は探査が見つけた床のまま」）とPhase 4の規則
@@ -1767,6 +1805,8 @@ scale未確定のため省略判定を行わない）。**テキスト幅概算�
 
 `stairOccluderRects`＝**階段の見付けシルエット**（flightの正面視bbox＋各landingの桁枠の帯）。
 アキのバツ（`splitGapMarksByStair`）と見えがかり水平線（`dashHorizontalsBehindStair`）で同じ集合を使う。
+**本番の情報源は`stairFaceOccluderRects`（`elevationStairSequence.js`。ヒット列由来）**——`stairOccluderRects`
+自体はテスト専用の参照実装（突き合わせテストで一致を保証するだけの実装）。
 
 **階段の断面プロファイルとの取り合い**（`joinToStairProfile`。ユーザー実機指摘2026-08「6」D2）:
 下階天井の断面線は**階段断面と交わるxで終える**（旧はスラブ帯が切れる列境界で止まり、階段の手前で
