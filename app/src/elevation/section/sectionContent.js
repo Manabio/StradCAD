@@ -20,6 +20,7 @@ import { wallWorldRangesOnFacePlane, planeOverhangBeyondEnds } from './sectionCu
 import { hasCutWallStandingOn } from './sectionTypes.js';
 import { UPPER_PLANE_OVERHANG_LIMIT_MM, GAP_EPS_MM as GAP_EPS } from '../elevationStyle.js';
 import { wallLessEndAt } from '../elevationFaces.js';
+import { makeProbeContext } from './sectionProbe.js';
 
 /**
  * 端区間の高さ（cutローカルx＝面ローカルxの0側／run側）を区分プロファイルから取り出す。
@@ -180,8 +181,11 @@ export function withProbeExtension(cut, endExtendMm, bandRoomBounds = null, opts
   // 列ごと消える（実測で確認済み）。「描画だけ締める」側は`elevationStairSequence.js`の
   // `clipContentAtHiddenEnds`・`elevationFigure.js`の`drawnX0/Run`・`elevationBand.js`の
   // `faceDrawnXRange`が担当する。
-  const openLo = cut.face?.hasWallAtLocal0 === false;
-  const openHi = cut.face?.hasWallAtLocalRun === false;
+  // 展開図一般化Phase 8: `cut.ends`（面非依存の入口`buildSectionFromLine`が唯一の生成元）が
+  // あればそちらを読む——値は`cut.face`から導出した場合と同一（`hasWallAtLocal0/Run===false`）。
+  // `ends`の無い手組みcut（既存の階段cut表・単体テスト）はこれまでどおり`cut.face`から導出する。
+  const openLo = cut.ends ? cut.ends.openLo : cut.face?.hasWallAtLocal0 === false;
+  const openHi = cut.ends ? cut.ends.openHi : cut.face?.hasWallAtLocalRun === false;
   const localLoIsWorldLo = cut.dirSign > 0;
   const extend = !!endExtendMm && (openLo || openHi);
   const extended = { ...cut, bandRoomBounds, line: !extend ? cut.line : { ...cut.line,
@@ -250,14 +254,17 @@ export function upperFloorCutWallEndsOf(columns, upperFloorZ) {
  * 列が重なるケースが無いため。挙動が変わる可能性が今後あるため旧判定には戻さない。
  * `cut.face`のhasWallAtLocal0/Runがそのままローカルx=0/run側の端に対応する（cut.dirSignと
  * faceのdirSignは呼び出し側で揃えてある前提）。
+ * 展開図一般化Phase 8: `cut.ends`（`buildSectionFromLine`が唯一の生成元）があればそちらを読む
+ * （値は`cut.face`から`wallLessEndAt`で導出した場合と同一）。`ends`の無い手組みcutは従来どおり
+ * `cut.face`から導出する。
  * @param {import('./sectionTypes.js').SectionCut} cut
  * @returns {{ceilZ:number|undefined, openEndLo:boolean, openEndHi:boolean}}
  */
 export function emitCtxForCut(cut) {
   return {
     ceilZ: cut.zRange?.hiZ,
-    openEndLo: cut.face ? wallLessEndAt(cut.face, '0') : false,
-    openEndHi: cut.face ? wallLessEndAt(cut.face, 'Run') : false,
+    openEndLo: cut.ends ? cut.ends.wallLessLo : (cut.face ? wallLessEndAt(cut.face, '0') : false),
+    openEndHi: cut.ends ? cut.ends.wallLessHi : (cut.face ? wallLessEndAt(cut.face, 'Run') : false),
   };
 }
 
@@ -287,4 +294,68 @@ export function buildCutContent(cut, probeCtx, opts = {}) {
   const wallPrims = emitColumns(columns, pcut, emitCtx);
   const gapMarks = emitOpenGapMarks(columns, pcut, emitCtx);
   return { cut: pcut, columns, emitCtx, wallPrims, gapMarks, content: [...wallPrims, ...gapMarks] };
+}
+
+/**
+ * **面非依存の入口**（展開図一般化Phase 8）。「1本の切断線 → 壁断面・見えがかり・アキの
+ * content」を、帯（部屋帯・吹抜け帯）と階段cut表の両方が共有する薄いラッパとして提供する。
+ * 返り値は`buildCutContent`と同型（`SectionFigure`は返さない——面配置・体裁はこの関数の外）。
+ *
+ * `face`は「面固有の値の供給元」に降格した——`viewSign`/`dirSign`/`zRange`等の面固有の値は
+ * すべて呼び出し側が`opts`で渡す（このエンジンに`zRange`等を導出させると帯種別の`if`が生える
+ * ため導出しない）。面述語（`ends`）の導出だけはここ1箇所に集約する。
+ * face-lessで呼ぶ（`opts.ends`を渡し`opts.face`を省略する）と: `layerRunWindowsOf`（本ファイル。
+ * `cut.face`必須のgate）は層ごとの窓を作らない——これは正しい縮退。ただし`sectionStructure.js:166`
+ * の半壁厚許容は0に落ち、`:299`の`faceAxis`は`line.axisValue`にフォールバックする——「真の
+ * 面非依存」ではなく、これらの副作用込みの縮退であることに注意（`ends`が面述語の単一導出源で
+ * あることまでが本関数の保証で、`face`を読む他の消費側の縮退までは保証しない）。
+ * @param {import('./sectionTypes.js').CutLine} line
+ * @param {Array<{graph:object, floorZMm:number, role:string}>} layers - `sectionBandLayers.js`の`buildBandLayers`の返り
+ * @param {{viewSign:1|-1, dirSign:1|-1, zRange:{loZ:number,hiZ:number}, probeCtx?:object,
+ *   baseFloorZ?:number, ceilProfile?:object[], floorZProfile?:object[],
+ *   aboveCeilVisibleRanges?:object[], stairCut?:object|null, airRoom?:object,
+ *   underRooms?:Set<object>, bandRoomBounds?:object|null, chDimSplitAbsYs?:number[],
+ *   seqNo?:string, endExtendMm?:number, upperPlaneOverhang?:boolean, scale?:number,
+ *   face?:object, ends?:{openLo:boolean,openHi:boolean,wallLessLo:boolean,wallLessHi:boolean}}} [opts]
+ *   - `opts.zRange`は必須（`opts`自体を省略した場合・`zRange`を省略した場合のいずれも、
+ *   `baseFloorZ`の既定`zRange.loZ`の参照でTypeErrorになる。導出しない・フォールバックしない）。
+ *   probeCtx（省略時のみ`makeProbeContext(layers)`を組む）… 帯経路は面ループの外で作った
+ *   probeCtxを**必ず渡す**（毎面ごとに作り直すと空間索引の再構築で性能退行する）。
+ *   ends（省略時）… `opts.face`から導出する（`openLo/Hi`＝`hasWallAtLocal0/Run===false`、
+ *   `wallLessLo/Hi`＝`wallLessEndAt(face,'0'/'Run')`）。`face`も無ければ全て`false`
+ *   （＝「持たない帯」と同じ挙動）。
+ * @returns {{cut:object, columns:object[], emitCtx:object,
+ *   wallPrims:object[], gapMarks:object[], content:object[]}}
+ */
+export function buildSectionFromLine(line, layers, opts = {}) {
+  const face = opts.face;
+  const ends = opts.ends ?? (face
+    ? {
+      openLo: face.hasWallAtLocal0 === false,
+      openHi: face.hasWallAtLocalRun === false,
+      wallLessLo: wallLessEndAt(face, '0'),
+      wallLessHi: wallLessEndAt(face, 'Run'),
+    }
+    : { openLo: false, openHi: false, wallLessLo: false, wallLessHi: false });
+  const { viewSign, dirSign, zRange } = opts;
+  const cut = {
+    seqNo: opts.seqNo, line, layers, viewSign, dirSign, zRange,
+    baseFloorZ: opts.baseFloorZ ?? zRange.loZ,
+    ceilProfile: opts.ceilProfile,
+    floorZProfile: opts.floorZProfile,
+    aboveCeilVisibleRanges: opts.aboveCeilVisibleRanges,
+    stairCut: opts.stairCut ?? null,
+    airRoom: opts.airRoom,
+    underRooms: opts.underRooms,
+    chDimSplitAbsYs: opts.chDimSplitAbsYs,
+    face,
+    ends,
+  };
+  const probeCtx = opts.probeCtx ?? makeProbeContext(layers);
+  return buildCutContent(cut, probeCtx, {
+    endExtendMm: opts.endExtendMm ?? 0,
+    bandRoomBounds: opts.bandRoomBounds ?? null,
+    scale: opts.scale,
+    upperPlaneOverhang: opts.upperPlaneOverhang ?? false,
+  });
 }

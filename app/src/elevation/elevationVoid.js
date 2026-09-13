@@ -22,7 +22,7 @@ import { layoutBandFaces, finalizeBand, appendBandCutContent,
   floorZProfileFromSegments } from './elevationBand.js';
 import { translatePrimitive } from './elevationPrimitives.js';
 import { makeProbeContext } from './section/sectionProbe.js';
-import { buildCutContent, planeOverhangForFace, endZOf, upperFloorCutWallEndsOf } from './section/sectionContent.js';
+import { buildSectionFromLine, planeOverhangForFace, endZOf, upperFloorCutWallEndsOf } from './section/sectionContent.js';
 import { cutPlaneOffsetMm, faceCutLine, faceViewSign,
   wallWorldRangesOnFacePlane } from './section/sectionCutPlane.js';
 import { reachableLocalRanges } from './section/sectionVisibility.js';
@@ -229,16 +229,19 @@ function appendUpperStoreyOutline(primitives, layout, upper, opts) {
       const wb = face.originWorld + face.dirSign * seg.hi;
       const lo = Math.min(wa, wb), hi = Math.max(wa, wb);
       const offsetMm = cutPlaneOffsetMm(face, layers, { columnSolids });
-      const cut = {
-        seqNo: `${face.label}^`, dirSign: face.dirSign, face,
-        viewSign: faceViewSign(face),
-        line: faceCutLine({ ...face, lo, hi }, offsetMm),
-        layers, baseFloorZ: floorHeightMm,
-        zRange: { loZ: floorHeightMm, hiZ },
-        ceilProfile: [{ loX: 0, hiX: hi - lo, ceilZ: hiZ }],
-      };
-      const { content } = buildCutContent(cut, probeCtx,
-        { endExtendMm, bandRoomBounds: roomBoundsRect, scale });
+      // 展開図一般化Phase 8: 面非依存の入口`buildSectionFromLine`（section/sectionContent.js）を
+      // 経由する（出力不変。cutリテラルの組み立てはあちらへ移った）。
+      const { content } = buildSectionFromLine(
+        faceCutLine({ ...face, lo, hi }, offsetMm), layers,
+        {
+          face, viewSign: faceViewSign(face), dirSign: face.dirSign,
+          baseFloorZ: floorHeightMm,
+          zRange: { loZ: floorHeightMm, hiZ },
+          ceilProfile: [{ loX: 0, hiX: hi - lo, ceilZ: hiZ }],
+          seqNo: `${face.label}^`,
+          probeCtx, endExtendMm, bandRoomBounds: roomBoundsRect, scale,
+        },
+      );
       // cutのローカルx=0は line.lo/hi 側。面ローカルxへ戻す。
       const cutOriginWorld = face.dirSign > 0 ? lo : hi;
       const dx = xCursor + (cutOriginWorld - face.originWorld) * face.dirSign;

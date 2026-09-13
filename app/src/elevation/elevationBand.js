@@ -10,7 +10,7 @@
 import { figureBounds } from '../structural/sectionFigure/sectionGeometry.js';
 import { roomBounds } from '../finish/gridCells.js';
 import { makeProbeContext } from './section/sectionProbe.js';
-import { buildCutContent } from './section/sectionContent.js';
+import { buildSectionFromLine } from './section/sectionContent.js';
 import { cutPlaneOffsetMm, faceCutLine, faceViewSign } from './section/sectionCutPlane.js';
 import { structuralColumnContribution } from './section/sectionStructure.js';
 import { stairContribution, stairPrimitivesForCut, clipStairUnderCeiling } from './section/sectionStair.js';
@@ -408,7 +408,7 @@ export function floorZProfileFromSegments(segs, run) {
 }
 
 /**
- * 帯の全面を断面エンジン（`section/sectionContent.js`の`buildCutContent`）へ通し、
+ * 帯の全面を断面エンジン（`section/sectionContent.js`の`buildSectionFromLine`→`buildCutContent`）へ通し、
  * **壁の輪郭**（断面・見えがかり・アキ）を`primitives`へ積む——**全4種の帯**（通常の部屋・
  * 上部吹抜けを持つ部屋・吹抜け・階段）に共通する唯一の入口。
  *
@@ -432,7 +432,7 @@ export function floorZProfileFromSegments(segs, run) {
  *   upperPlaneOverhang?:boolean, faceOverhangOf?:(face:object)=>{lo:number,hi:number}|undefined,
  *   onFaceColumns?:(face:object, columns:object[])=>void}} [opts]
  *   includeFace … 断面エンジンへ通す面の絞り込み（既定=すべて）。
- *   onFaceColumns … 面ごとの列（`buildCutContent`の`columns`）の通知（既定=無し）。図側が
+ *   onFaceColumns … 面ごとの列（`buildSectionFromLine`→`buildCutContent`の`columns`）の通知（既定=無し）。図側が
  *     列からしか分からない値を必要とする帯（上部吹抜けを持つ部屋帯の上階FL断面線の起点）用。
  *   upperPlaneOverhang … 層ごとの探査窓（`section/sectionContent.js`）を使うか（既定false＝現行と
  *     完全同一）。faceOverhangOf … その面の描画範囲を外へ広げる量（面ローカル。既定=広げない）。
@@ -646,48 +646,51 @@ export function appendBandCutContent(primitives, room, graph, layout, layers, op
     // ——0のままだと下階ぶんの壁が一切探査されない（zRange外）。上へ伸びる帯（上部吹抜け）は
     // 天井側のceilProfileが伸びるだけで床は動かないため、この値は0のまま。
     const floorZ = Math.min(0, ...(floorSegments ?? []).map(s => s.floorDeltaMm ?? 0));
-    const cut = {
-      seqNo: String(i), dirSign: face.dirSign, face,
-      viewSign: faceViewSign(face),
+    // 展開図一般化Phase 8: 面非依存の入口`buildSectionFromLine`（section/sectionContent.js）を
+    // 経由する（出力不変。cutリテラルの組み立てはあちらへ移った）。面固有の値は下記optsで渡す。
+    const { cut: pcut, columns, content } = buildSectionFromLine(
       // 仮想断面線は面の壁芯ではなく**室内側へ下がった位置**（section/sectionCutPlane.js）。
       // 壁芯ちょうどに置くと切断面が壁の中を通り、見えがかり候補も所有Roomも取れない。
-      line: faceCutLine(face, cutPlaneOffsetMm(face, layers, { columnSolids })),
-      layers, baseFloorZ: floorZ,
-      zRange: { loZ: floorZ, hiZ: Math.max(...ceilProfile.map(s => s.ceilZ)) },
-      // 断面の中（天井の向こう）は描かない。区間ごとの天井断面高さで打ち切る（sectionEngine.js）。
-      ceilProfile,
-      // 階段下の部屋の帯に重ねる階段の3D寄与（`stairContributionOverRoom`）。他の帯の`stairCut`
-      // （階段室自身の帯）と同じ役割の情報源だが、この帯（`buildCutContent`経由）は
-      // `buildSectionFigure`（`sectionEngine.js:421`の`stairPrimitivesForCut(cut.stairCut…)`）を
-      // 呼ばないため、この`stairCut`から階段プリミティブが自動生成されることは無い（`stairOver`
-      // ブロックが別経路で明示的に描く）。`addStairFaceHits`自体（`sectionHits.js`）は`cut.stairCut`
-      // を見て`stairFace`ヒットを候補へ積むが、同ファイル:946の`coverableHits`フィルタが選択対象
-      // から`stairFace`を除くため出力には影響しない——**`stairFace`が選択に参加するよう変える段では
-      // ここを再点検すること**（展開図一般化Phase 6b-3・3a。設計`.claude/elevation-redesign.md`
-      // §5.12末尾）。
-      stairCut: opts.stairOver ?? null,
-      // `ceilProfile`の**床側の双子**（区間ごとの床断面高さ）。**下階の層への探査窓のgate**
-      // （`section/sectionContent.js`の`planeOverhangForFace`）が「その端で帯の床が下階の
-      // 空間まで下りているか」を判定する唯一の材料——`baseFloorZ`は全区間の最小値なので
-      // 端ごとの違い（吹抜け帯の「下階に壁が無い区間は設置階の床のまま」）を表せない。
-      floorZProfile: floorZProfileFromSegments(floorSegments, face.run),
-      // 天井断面より上で描画してよい範囲（面ローカルx＝断面ローカルx）。省略＝制限しない。
-      // 多層帯（上部吹抜け）だけが渡す（elevationVoid.jsのupperStoreySegments）。
-      // **はり出し（faceOverhangOf）ではこの範囲を広げない**——広げる必要が無いため:
-      // 唯一の消費点は`sectionEmit.js`の`ceilStepSlabSection`（上階の床の断面線）で、
-      // そちらは`cutDrawRange`（＝面の端＋体裁のはり出し）で閉じており、gate下でははり出しが
-      // 認められる端＝吹抜けが端まで達している端＝その端に上階の床が無い端だから。
-      // 同じ理由で`elevationVoid.js`の`appendUpperStoreyTrim`（上階の天井線・巾木）も広げない。
-      aboveCeilVisibleRanges: opts.aboveCeilVisibleRangesOf?.(face),
-      // Phase 5（展開図一般化。設計`.claude/elevation-redesign.md`§5.5）: 開放スパンの遠側床・
-      // 遠側天井は、もうここから断面エンジンへ外部注入しない——エンジン自身の探査
-      // （`section/sectionHits.js`の`farFaceAnnotation`。視線方向のヒット列から拾う
-      // floorFace/ceilFace）が唯一の情報源になった。`face.spans`のfarFloorDeltaMm/farCeilAbsMmは
-      // 図側（`elevationFigure.js`）が遠側床線・遠側天井線を描くために引き続き使う。
-    };
-    const { cut: pcut, columns, content } = buildCutContent(
-      cut, probeCtx,
-      { endExtendMm, bandRoomBounds, scale: opts.scale, upperPlaneOverhang: opts.upperPlaneOverhang });
+      faceCutLine(face, cutPlaneOffsetMm(face, layers, { columnSolids })), layers,
+      {
+        face, viewSign: faceViewSign(face), dirSign: face.dirSign,
+        baseFloorZ: floorZ,
+        zRange: { loZ: floorZ, hiZ: Math.max(...ceilProfile.map(s => s.ceilZ)) },
+        // 断面の中（天井の向こう）は描かない。区間ごとの天井断面高さで打ち切る（sectionEngine.js）。
+        ceilProfile,
+        // 階段下の部屋の帯に重ねる階段の3D寄与（`stairContributionOverRoom`）。他の帯の`stairCut`
+        // （階段室自身の帯）と同じ役割の情報源だが、この帯（`buildSectionFromLine`→`buildCutContent`経由）は
+        // `buildSectionFigure`（`sectionEngine.js:421`の`stairPrimitivesForCut(cut.stairCut…)`）を
+        // 呼ばないため、この`stairCut`から階段プリミティブが自動生成されることは無い（`stairOver`
+        // ブロックが別経路で明示的に描く）。`addStairFaceHits`自体（`sectionHits.js`）は`cut.stairCut`
+        // を見て`stairFace`ヒットを候補へ積むが、同ファイル:946の`coverableHits`フィルタが選択対象
+        // から`stairFace`を除くため出力には影響しない——**`stairFace`が選択に参加するよう変える段では
+        // ここを再点検すること**（展開図一般化Phase 6b-3・3a。設計`.claude/elevation-redesign.md`
+        // §5.12末尾）。
+        stairCut: opts.stairOver ?? null,
+        // `ceilProfile`の**床側の双子**（区間ごとの床断面高さ）。**下階の層への探査窓のgate**
+        // （`section/sectionContent.js`の`planeOverhangForFace`）が「その端で帯の床が下階の
+        // 空間まで下りているか」を判定する唯一の材料——`baseFloorZ`は全区間の最小値なので
+        // 端ごとの違い（吹抜け帯の「下階に壁が無い区間は設置階の床のまま」）を表せない。
+        floorZProfile: floorZProfileFromSegments(floorSegments, face.run),
+        // 天井断面より上で描画してよい範囲（面ローカルx＝断面ローカルx）。省略＝制限しない。
+        // 多層帯（上部吹抜け）だけが渡す（elevationVoid.jsのupperStoreySegments）。
+        // **はり出し（faceOverhangOf）ではこの範囲を広げない**——広げる必要が無いため:
+        // 唯一の消費点は`sectionEmit.js`の`ceilStepSlabSection`（上階の床の断面線）で、
+        // そちらは`cutDrawRange`（＝面の端＋体裁のはり出し）で閉じており、gate下でははり出しが
+        // 認められる端＝吹抜けが端まで達している端＝その端に上階の床が無い端だから。
+        // 同じ理由で`elevationVoid.js`の`appendUpperStoreyTrim`（上階の天井線・巾木）も広げない。
+        aboveCeilVisibleRanges: opts.aboveCeilVisibleRangesOf?.(face),
+        // Phase 5（展開図一般化。設計`.claude/elevation-redesign.md`§5.5）: 開放スパンの遠側床・
+        // 遠側天井は、もうここから断面エンジンへ外部注入しない——エンジン自身の探査
+        // （`section/sectionHits.js`の`farFaceAnnotation`。視線方向のヒット列から拾う
+        // floorFace/ceilFace）が唯一の情報源になった。`face.spans`のfarFloorDeltaMm/farCeilAbsMmは
+        // 図側（`elevationFigure.js`）が遠側床線・遠側天井線を描くために引き続き使う。
+        seqNo: String(i),
+        probeCtx, endExtendMm, bandRoomBounds, scale: opts.scale,
+        upperPlaneOverhang: opts.upperPlaneOverhang,
+      },
+    );
     // 図側がcontentの列からしか分からない値（上階FL断面線の起点＝はり出し外端に立つ切断壁の
     // 向こう側の面）を取り出すためのフック。列そのものを渡し、意味づけは呼び出し側の1つの関数
     // （`section/sectionContent.js`の`upperFloorCutWallEndsOf`）に任せる。
@@ -715,7 +718,7 @@ export function appendBandCutContent(primitives, room, graph, layout, layers, op
       // 踏面（1636〜2318）が見えていた。判定は**仮想断面の位置の段鼻**で行う——天井を止める
       // 基準（「CHの線が階段断面とぶつかるところ」）と同じ「階段断面＝段鼻」基準に揃える。
       const stairHiddenByCeil = crossFlight
-        && stairZAtRun(crossFlight, cut.line.axisValue) >= ceilAbs - BAND_GAP_EPS;
+        && stairZAtRun(crossFlight, pcut.line.axisValue) >= ceilAbs - BAND_GAP_EPS;
       // 梯子（踏面の見えがかり。DETAIL＝細線）は描く（ユーザー明示指示2026-09「「13」A:
       // 階段見えがかりの梯子（細線）を描く」）。
       const raw = stairHiddenByCeil ? [] : stairPrimitivesForCut(opts.stairOver, pcut, columns, {
@@ -802,7 +805,7 @@ export function buildRoomBand(room, graph, ctx = {}) {
   const faces = composeRoomFaces(room, graph);
   const layout = layoutBandFaces(room, graph, faces, ctx);
   const primitives = [...layout.primitives];
-  // 壁の輪郭は**他の3種の帯とまったく同じ共通経路**（appendBandCutContent→buildCutContent）
+  // 壁の輪郭は**他の3種の帯とまったく同じ共通経路**（appendBandCutContent→buildSectionFromLine→buildCutContent）
   // へ任せる。通常の部屋帯の層スタックは自階1層だけ——上階・下階が無いだけで、切断線の位置・
   // 探査延長・見えがかりの距離判定・アキは多層帯と同一の処理を通る。
   const layers = buildBandLayers(graph);

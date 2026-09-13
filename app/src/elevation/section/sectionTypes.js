@@ -39,7 +39,19 @@ import { GAP_EPS_MM as GAP_EPS } from '../elevationStyle.js';
  *   floorZProfile?: Array<{loX:number, hiX:number, floorZ:number}>,
  *   chDimSplitAbsYs?: number[],
  *   anchorRoom?: object,
+ *   face?: object,
+ *   ends?: {openLo:boolean, openHi:boolean, wallLessLo:boolean, wallLessHi:boolean},
  * }} SectionCut
+ *   face（任意）… 面固有の値の供給元（展開図一般化Phase 8で「面を要求しない」よう`opts`へ
+ *   降格した。`sectionContent.js`内で直読みするのは`layerRunWindowsOf`のみ。ほかに
+ *   `sectionStructure.js:166`（半壁厚の許容。`cut.face`が無ければ0）・`:299`（`faceAxis`。
+ *   `cut.face`が無ければ`line.axisValue`にフォールバック）・`elevationStairSequence.js:567`
+ *   （はり出し基準。`pcut.face`が無ければ両端とも拡張込みの基準）が読む——いずれもQA是正
+ *   コメントの示すとおり`face`欠如時のフォールバックを持つ）。
+ *   ends（任意。展開図一般化Phase 8）… ローカルx=0側/run側の端の性質（openLo/Hi＝
+ *   `face.hasWallAtLocal0/Run===false`、wallLessLo/Hi＝`wallLessEndAt(face,'0'/'Run')`と同値）。
+ *   `buildSectionFromLine`（`sectionContent.js`）が唯一の生成元——`withProbeExtension`・
+ *   `emitCtxForCut`はこちらを優先して読み、無い手組みcutだけ`face`から導出する。
  *   airRoom（任意。展開図一般化Phase 6）… その帯自身の空気ボリュームを代表するRoom
  *   （階段帯なら階段室。`section/cuts/switchbackCuts.js`が設定）。
  *   underRooms（任意。展開図一般化Phase 6）… 階段下に指定された部屋の集合（同上が設定）。
