@@ -692,9 +692,18 @@ export const OpeningsLayer = observer(({ graph, viewport }) => {
   // Circle に直接 openingId 属性）。クリックハンドラは付けない——選択は従来どおり pointerUp 側の
   // nearOpening 判定と記号丸クリックが担う。
   const hitStrokeWidth = OPENING_HIT_PX / Math.min(scaleX, scaleY);
+  // ホバー時のカーソルは記号丸（OpeningTagLayer.jsx）・部材タグ等と同じ「container.style.cursor を直接書く」
+  // 流儀（ユーザー指示 2026-09-14）。App.jsx の cursor 算出（nearOpening 等）は壁線近傍しか見ないため、
+  // 壁から離れた動作弧などは Konva のホバーで補う。
+  const setCursor = (e, cursor) => { e.target.getStage().container().style.cursor = cursor; };
   return graph.openings.map((opening) => {
     const el = renderOpeningSymbol(opening);
-    return el ? <Group key={opening.id} name="opening-symbol" openingId={opening.id}>{el}</Group> : null;
+    return el ? (
+      <Group key={opening.id} name="opening-symbol" openingId={opening.id}
+        onMouseEnter={e => setCursor(e, 'pointer')} onMouseLeave={e => setCursor(e, 'default')}>
+        {el}
+      </Group>
+    ) : null;
   });
 
   function renderOpeningSymbol(opening) {
