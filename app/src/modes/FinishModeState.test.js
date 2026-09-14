@@ -2,7 +2,7 @@
 // node:testから直接importできる（ElevationModeState.test.jsと同じ方針）。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Plane, PlanGraph, CenterLineType, Discipline, applyDefaultBaseboard } from '@core';
+import { Plane, PlanGraph, CenterLineType, Discipline, applyDefaultBaseboard, RoomKind, RoomFeature } from '@core';
 import { FinishModeState } from './FinishModeState.js';
 
 function makeGraph() {
@@ -69,4 +69,98 @@ test('【失敗系・QA G2】FinishModeState.commitDrag: 既存部屋と完全�
   assert.equal(state.namingIsNew, false);
   assert.equal(graph.roomMap.get(firstRoomId).finish.baseboardMaterial, '',
     '既存部屋の完全一致ドラッグでユーザーのクリアが巾木初期値へ巻き戻ってはいけない');
+});
+
+// ---- 屋外部屋（非階段）の外部タブ連動（_syncExteriorRows）----
+test('applyNaming: 非階段の部屋をkind=EXTERIORで確定するとexteriorRowsに部位=名前・roomId=部屋IDの行が1件追加される', () => {
+  const graph = makeSingleCellGraph();
+  const state = new FinishModeState(graph, null);
+  const room = graph.addRoom(new Set(['dummy']), '');
+
+  state.applyNaming(room.id, { name: 'テラス', kind: RoomKind.EXTERIOR, feature: null });
+
+  const rows = graph.exteriorRows.filter(r => r.roomId === room.id);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].part, 'テラス');
+});
+
+test('applyNaming: 同じ屋外部屋を別名で再確定すると行は1件のままpartが更新される', () => {
+  const graph = makeSingleCellGraph();
+  const state = new FinishModeState(graph, null);
+  const room = graph.addRoom(new Set(['dummy']), '');
+
+  state.applyNaming(room.id, { name: 'テラス', kind: RoomKind.EXTERIOR, feature: null });
+  state.applyNaming(room.id, { name: 'バルコニー', kind: RoomKind.EXTERIOR, feature: null });
+
+  const rows = graph.exteriorRows.filter(r => r.roomId === room.id);
+  assert.equal(rows.length, 1, '行は増えず1件のまま');
+  assert.equal(rows[0].part, 'バルコニー');
+});
+
+test('applyNaming: 屋外部屋を屋内(kind=INTERIOR)へ再確定するとexteriorRowsの連動行が消える', () => {
+  const graph = makeSingleCellGraph();
+  const state = new FinishModeState(graph, null);
+  const room = graph.addRoom(new Set(['dummy']), '');
+
+  state.applyNaming(room.id, { name: 'テラス', kind: RoomKind.EXTERIOR, feature: null });
+  assert.equal(graph.exteriorRows.filter(r => r.roomId === room.id).length, 1);
+
+  state.applyNaming(room.id, { name: '部屋', kind: RoomKind.INTERIOR, feature: null });
+
+  assert.equal(graph.exteriorRows.filter(r => r.roomId === room.id).length, 0);
+});
+
+test('deleteRoom: 非階段の屋外部屋を削除するとexteriorRowsの連動行が消える', () => {
+  const graph = makeSingleCellGraph();
+  const state = new FinishModeState(graph, null);
+  const room = graph.addRoom(new Set(['dummy']), '');
+  state.applyNaming(room.id, { name: 'テラス', kind: RoomKind.EXTERIOR, feature: null });
+  assert.equal(graph.exteriorRows.filter(r => r.roomId === room.id).length, 1);
+
+  state.deleteRoom(room.id);
+
+  assert.equal(graph.exteriorRows.filter(r => r.roomId === room.id).length, 0);
+  assert.equal(graph.roomMap.has(room.id), false);
+});
+
+// ---- 失敗系: 存在しないroomIdはexteriorRowsを増やさない ----
+test('【失敗系】applyNaming: 存在しないroomIdを渡すとnullを返しexteriorRowsは増えない', () => {
+  const graph = makeSingleCellGraph();
+  const state = new FinishModeState(graph, null);
+  const before = graph.exteriorRows.length;
+
+  const result = state.applyNaming('no-such-room-id', { name: 'テラス', kind: RoomKind.EXTERIOR, feature: null });
+
+  assert.equal(result, null);
+  assert.equal(graph.exteriorRows.length, before);
+});
+
+// ---- _syncExteriorRows: 屋外階段は既存行のpartを上書きしない（旧挙動維持） ----
+test('_syncExteriorRows: 屋外階段（feature=STAIR）は既存行のpartをユーザー編集のまま保つ（上書きしない）', () => {
+  const graph = makeSingleCellGraph();
+  const state = new FinishModeState(graph, null);
+  const room = graph.addRoom(new Set(['dummy']), '階段');
+  room.setKind(RoomKind.EXTERIOR);
+  room.setFeature(RoomFeature.STAIR);
+
+  const row = graph.addExteriorRow('exteriorRows', '手編集した部位名', room.id);
+
+  state._syncExteriorRows(room);
+
+  assert.equal(row.part, '手編集した部位名', '既存行のpartは上書きされないはず');
+  assert.equal(graph.exteriorRows.filter(r => r.roomId === room.id).length, 1, '新規行も追加されないはず');
+});
+
+test('_syncExteriorRows: 屋外階段で連動行が無ければ部位「階段」で新規追加する', () => {
+  const graph = makeSingleCellGraph();
+  const state = new FinishModeState(graph, null);
+  const room = graph.addRoom(new Set(['dummy']), '階段');
+  room.setKind(RoomKind.EXTERIOR);
+  room.setFeature(RoomFeature.STAIR);
+
+  state._syncExteriorRows(room);
+
+  const rows = graph.exteriorRows.filter(r => r.roomId === room.id);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].part, '階段');
 });

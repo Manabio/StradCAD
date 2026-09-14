@@ -3,8 +3,8 @@
 // なると両者のラベルが同一セルに落ちて重なって表示される（問題: 「3」と「3'」の重なり）。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Plane, PlanGraph, CenterLineType, Discipline } from '@core';
-import { normalizePartialDominance } from './roomReinterpret.js';
+import { Plane, PlanGraph, CenterLineType, Discipline, RoomKind, ExteriorLevelRef } from '@core';
+import { normalizePartialDominance, reinterpretRoomsOnEntry, snapshotRoomsState, restoreRoomsState } from './roomReinterpret.js';
 import { roomNameAnchor } from './roomLabel.js';
 import { worldToCell } from './gridCells.js';
 
@@ -208,4 +208,84 @@ test('【失敗系】normalizePartialDominance: 親の解決不能キーは入�
   assert.equal(partial.referenceRoomIds.size, 0, '子（12M>残余9M）が親になるはず');
   assert.ok(parent.cells.has(gone),
     '解決不能キーは reinterpretRoomsOnEntry の現状維持方針どおり捨てずに残すはず');
+});
+
+// ---- reinterpretRoomsOnEntry: 屋外部屋が2辺喪失で完全吸収されると連動行も孤児化しない ----
+// 3列(左/中/右)の行で、中央セル1つを屋外部屋、左右2セルを屋内部屋が持つ。中央の左右の
+// 仕切りCL（x1/x2）が「（floorplanモードでの短縮により）この行の範囲では非アクティブ」に
+// なった状態を再現する（addCenterLineのextentLo/extentHiを行のyレンジ外に設定）。
+// これにより中央セルはlostSides=['left','right']（2辺喪失）となり、左右セルとまとめて
+// 1つの領域に統合される。セル数の少ない屋外部屋（1セル）が完全吸収され消える経路を通す。
+function makeRowWithShortenedMiddleDividers() {
+  const graph = new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
+  const ARCH = { labeled: false, discipline: Discipline.ARCH };
+  const x0 = graph.addCenterLine(CenterLineType.VERTICAL, 0,    ARCH);
+  // x1/x2: 本来は行の仕切りだが、extentLo/Hiが行のyレンジ[0,3000]の外にあるため
+  // 「この行の範囲では非分割（＝短縮済み）」を表す。
+  const x1 = graph.addCenterLine(CenterLineType.VERTICAL, 3000, { ...ARCH, extentLo: 4000, extentHi: 5000 });
+  const x2 = graph.addCenterLine(CenterLineType.VERTICAL, 6000, { ...ARCH, extentLo: 4000, extentHi: 5000 });
+  const x3 = graph.addCenterLine(CenterLineType.VERTICAL, 9000, ARCH);
+  const y0 = graph.addCenterLine(CenterLineType.HORIZONTAL, 0,    ARCH);
+  const y1 = graph.addCenterLine(CenterLineType.HORIZONTAL, 3000, ARCH);
+
+  const left  = `${x0.id}:${y0.id}:${x1.id}:${y1.id}`;
+  const mid   = `${x1.id}:${y0.id}:${x2.id}:${y1.id}`;
+  const right = `${x2.id}:${y0.id}:${x3.id}:${y1.id}`;
+  return { graph, left, mid, right };
+}
+
+test('reinterpretRoomsOnEntry: 屋外部屋の2辺喪失（完全吸収）でexteriorRowsの連動行も孤児化せず削除される', () => {
+  const { graph, left, mid, right } = makeRowWithShortenedMiddleDividers();
+
+  const big = graph.addRoom(new Set([left, right]), 'LDK');
+  const small = graph.addRoom(new Set([mid]), 'テラス');
+  small.setKind(RoomKind.EXTERIOR);
+  graph.addExteriorRow('exteriorRows', 'テラス', small.id);
+
+  assert.equal(graph.exteriorRows.filter(r => r.roomId === small.id).length, 1, '前提: 連動行が1件ある');
+
+  reinterpretRoomsOnEntry(graph);
+
+  assert.equal(graph.roomMap.has(small.id), false, '屋外部屋（少ないセル数）は完全吸収されて消えるはず');
+  assert.equal(graph.roomMap.has(big.id), true, '屋内部屋（多いセル数）は残るはず');
+  assert.equal(graph.exteriorRows.filter(r => r.roomId === small.id).length, 0,
+    '吸収削除された屋外部屋の連動行が孤児化せず削除されるはず');
+});
+
+// ---- snapshotRoomsState/restoreRoomsState: 屋外部屋の仕上げレベル3フィールドのundo往復 ----
+test('snapshotRoomsState→restoreRoomsState: exteriorSlope/exteriorLevelRef/exteriorLevelが採取時の値へ戻る', () => {
+  const graph = new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
+  const room = graph.addRoom(new Set(['dummy']), 'テラス');
+  room.setKind(RoomKind.EXTERIOR);
+  room.setExteriorSlope(50);
+  room.setExteriorLevelRef(ExteriorLevelRef.GL);
+  room.setExteriorLevel(150);
+
+  const snap = snapshotRoomsState(graph);
+
+  // 採取後に別値へ変更する
+  room.setExteriorSlope(100);
+  room.setExteriorLevelRef(ExteriorLevelRef.ROOM);
+  room.setExteriorLevel(-300);
+
+  restoreRoomsState(graph, snap);
+
+  const restored = graph.roomMap.get(room.id);
+  assert.equal(restored.exteriorSlope, 50, '採取時の勾配へ戻るはず');
+  assert.equal(restored.exteriorLevelRef, ExteriorLevelRef.GL, '採取時の基準へ戻るはず');
+  assert.equal(restored.exteriorLevel, 150, '採取時のおさえへ戻るはず');
+});
+
+test('snapshotRoomsState→restoreRoomsState: 未設定の部屋はnull/"room"/nullのまま往復する', () => {
+  const graph = new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
+  const room = graph.addRoom(new Set(['dummy']), 'LDK');
+  // exteriorSlope/exteriorLevelRef/exteriorLevel は未設定のまま
+
+  const snap = snapshotRoomsState(graph);
+  restoreRoomsState(graph, snap);
+
+  const restored = graph.roomMap.get(room.id);
+  assert.equal(restored.exteriorSlope, null);
+  assert.equal(restored.exteriorLevelRef, ExteriorLevelRef.ROOM);
+  assert.equal(restored.exteriorLevel, null);
 });

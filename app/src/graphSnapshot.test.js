@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Plane, PlanGraph, CenterLineType, Discipline, OpeningCategory, Project, Site, SiteLineKind } from './core.js';
+import { Plane, PlanGraph, CenterLineType, Discipline, OpeningCategory, Project, Site, SiteLineKind, RoomKind, ExteriorLevelRef } from './core.js';
 import {
   serializeGraph, restoreGraph, serializeStructCLs, restoreStructCLs, serializePlanes, decodePlanes,
   serializeSite, decodeSite, restoreSite,
@@ -709,4 +709,50 @@ test('【失敗系】復元: finishSide を持つ壁・ルール2の薄壁・下
   const owner = makeThinWall(-102.5, { backingOffset: -45, backingDepth: 90 });
   assert.equal(owner.axisOffset, -102.5);
   assert.equal(owner.faceDir, -1);
+});
+
+// ---- 屋外部屋の仕上げレベル（exteriorSlope/exteriorLevelRef/exteriorLevel）----
+test('Room.exteriorSlope/exteriorLevelRef/exteriorLevel は FlatBuffers encode→decode で値ありのまま往復する', () => {
+  const graph = makeGraph();
+  const x0 = graph.addCenterLine(CenterLineType.VERTICAL,   0,    { labeled: false, discipline: Discipline.ARCH });
+  const x1 = graph.addCenterLine(CenterLineType.VERTICAL,   4000, { labeled: false, discipline: Discipline.ARCH });
+  const y0 = graph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: false, discipline: Discipline.ARCH });
+  const y1 = graph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: false, discipline: Discipline.ARCH });
+  const key = `${x0.id}:${y0.id}:${x1.id}:${y1.id}`;
+  const room = graph.addRoom(new Set([key]), '屋外');
+  room.setKind(RoomKind.EXTERIOR);
+  room.setExteriorSlope(50);
+  room.setExteriorLevelRef(ExteriorLevelRef.GL);
+  room.setExteriorLevel(150);
+
+  const bytes = serializeGraph(graph);
+  const restored = makeGraph();
+  restoreGraph(restored, bytes);
+
+  const r2 = restored.roomMap.get(room.id);
+  assert.ok(r2, '復元後に同一IDの部屋が存在する');
+  assert.equal(r2.exteriorSlope, 50);
+  assert.equal(r2.exteriorLevelRef, ExteriorLevelRef.GL);
+  assert.equal(r2.exteriorLevel, 150);
+});
+
+test('Room.exteriorSlope/exteriorLevelRef/exteriorLevel 未設定（旧データ相当）は encode→decode 後も null/"room" のまま（既定値に化けない）', () => {
+  const graph = makeGraph();
+  const x0 = graph.addCenterLine(CenterLineType.VERTICAL,   0,    { labeled: false, discipline: Discipline.ARCH });
+  const x1 = graph.addCenterLine(CenterLineType.VERTICAL,   4000, { labeled: false, discipline: Discipline.ARCH });
+  const y0 = graph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: false, discipline: Discipline.ARCH });
+  const y1 = graph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: false, discipline: Discipline.ARCH });
+  const key = `${x0.id}:${y0.id}:${x1.id}:${y1.id}`;
+  const room = graph.addRoom(new Set([key]), '屋外');
+  room.setKind(RoomKind.EXTERIOR);
+  // exteriorSlope/exteriorLevelRef/exteriorLevel は未設定のまま（旧データのフィールド欠落と同値の状態）
+
+  const bytes = serializeGraph(graph);
+  const restored = makeGraph();
+  restoreGraph(restored, bytes);
+
+  const r2 = restored.roomMap.get(room.id);
+  assert.equal(r2.exteriorSlope, null);
+  assert.equal(r2.exteriorLevelRef, ExteriorLevelRef.ROOM);
+  assert.equal(r2.exteriorLevel, null);
 });

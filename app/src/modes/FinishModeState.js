@@ -658,23 +658,18 @@ export class FinishModeState {
         const stair = [...this.graph.stairMap.values()].find(s => s.roomId === roomId);
         this.selectedStairId = stair ? stair.id : null;
       }
-      // 屋外階段 → 外部タブに部位「階段」の行を自動追加（新規変換・既存階段の再確定＝kind切替の両方が通る）。
-      // 屋内階段（屋外→屋内へ切替された場合含む）→ 連動行を削除。
-      if (room.kind === RoomKind.EXTERIOR) {
-        if (!this.graph.exteriorRows.some(r => r.roomId === room.id)) {
-          this.graph.addExteriorRow('exteriorRows', '階段', room.id);
-        }
-      } else {
-        this.graph.removeExteriorRowsByRoomId(room.id);
-      }
+      // 屋外部屋（階段・非階段共通）→ 外部タブに部位の行を自動追加／更新。屋内へ切替 → 連動行を削除。
+      this._syncExteriorRows(room);
       this.selectedRoomId = room.id;
     } else {
       if (wasStair) this._removeLinkedStair(roomId); // STAIR → null/void: 連動Stairを削除
       room.setFeature(feature ?? null);
-      room.setName(name || '部屋');
+      room.setName(name || (room.kind === RoomKind.EXTERIOR ? '屋外' : '部屋'));
       this.sessionModifiedRoomIds.add(roomId);
       this.selectedRoomId  = roomId;
       this.selectedStairId = null;
+      // 屋外部屋（階段・非階段共通）→ 外部タブに部位の行を自動追加／更新。屋内へ切替 → 連動行を削除。
+      this._syncExteriorRows(room);
     }
 
     this.namingRoomId    = null;
@@ -688,6 +683,27 @@ export class FinishModeState {
     // 境界エッジの生成はモード境界の差分追跡で行う（フェーズ4）。命名時の即時生成は廃止。
     this.lastNamingUndoEntry = pushFinishUndo(this.graph, undoBefore);
     return convertedStair;
+  }
+
+  /**
+   * 屋外部屋（階段・非階段共通）と外部タブ（exteriorRows）の部位行を同期する。
+   * kind===EXTERIOR: 部位名（階段は固定「階段」、それ以外は room.name）で1行を確保・更新。
+   * それ以外（屋内へ切替）: 連動行を削除。
+   */
+  _syncExteriorRows(room) {
+    if (room.kind === RoomKind.EXTERIOR) {
+      const isStair = room.feature === RoomFeature.STAIR;
+      const rows = this.graph.exteriorRows.filter(r => r.roomId === room.id);
+      if (rows.length > 0) {
+        // 階段は既存行のpartを上書きしない（旧挙動維持。ユーザーの手編集を尊重）。
+        // 非階段は部屋名で追従する。
+        if (!isStair) for (const r of rows) r.setField('part', room.name);
+      } else {
+        this.graph.addExteriorRow('exteriorRows', isStair ? '階段' : room.name, room.id);
+      }
+    } else {
+      this.graph.removeExteriorRowsByRoomId(room.id);
+    }
   }
 
   /** roomId を roomId に持つ Stair があれば道連れで削除する（Room削除経路の共通ガード）。 */
@@ -770,6 +786,7 @@ export class FinishModeState {
 
     this._removeLinkedStair(roomId);
     if (room.referenceRoomIds.size > 0 || room.kind === RoomKind.EXTERIOR) {
+      if (room.kind === RoomKind.EXTERIOR) this.graph.removeExteriorRowsByRoomId(roomId); // 非階段屋外部屋の連動行も削除
       this.graph.removeRoom(roomId);
     } else {
       this._makeUndefined(room);

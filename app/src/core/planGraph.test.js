@@ -173,6 +173,19 @@ test('removeExteriorRowGroup: categoryを変えればexteriorFittingRows/structu
   assert.equal(graph.structureRows[0].id, keptStructure.id);
 });
 
+test('removeExteriorRowGroup: 同じpartの手入力行を削除しても、同名partのroomId連動行は残る', () => {
+  const graph = makeGraph();
+  const manual = addRow(graph, 'exteriorRows', 'テラス'); // roomId=null（手入力）
+  const linked = addRow(graph, 'exteriorRows', 'テラス', 'room-1'); // roomId連動（屋外部屋）
+  assert.equal(graph.exteriorRows.length, 2);
+
+  graph.removeExteriorRowGroup('exteriorRows', 'テラス');
+
+  assert.equal(graph.exteriorRows.length, 1);
+  assert.equal(graph.exteriorRows[0].id, linked.id, '連動行は巻き込まれず残るはず');
+  assert.notEqual(graph.exteriorRows.some(r => r.id === manual.id), true, '手入力行は削除されるはず');
+});
+
 // ---- structGraphマージ順（_mergeWithStructGraph）----
 
 test('centerLines/gridXs: _structGraphがあれば[...struct, ...own]順でマージ、無ければ自グラフのみ', () => {

@@ -3,7 +3,7 @@
  * RoomFinish / ExteriorFinishRow / Room）。core.js から分離。
  */
 import { makeObservable, observable, action } from 'mobx';
-import { RoomKind, DEFAULT_WALL_MATERIAL } from './constants.js';
+import { RoomKind, ExteriorLevelRef, DEFAULT_WALL_MATERIAL } from './constants.js';
 import { INTERIOR_MASTERS } from '../finish/materials/interiorMasters.js';
 
 // ================================================================
@@ -121,7 +121,7 @@ export class ExteriorFinishRow {
     this.finish = '';
     this.base   = '';
     this.note   = '';
-    this.roomId = null; // 階段ペアRoomのID（階段連動行のみ設定。手入力行は null）
+    this.roomId = null; // 連動元RoomのID（屋外部屋（階段含む）の連動行のみ設定。手入力行は null）
     makeObservable(this, {
       part:     observable,
       finish:   observable,
@@ -149,27 +149,37 @@ export class Room {
     this.finish           = new RoomFinish();
     this.namePosition     = null;   // { x, y } | null — null = roomBounds 重心を使用
     this.floorLevel       = null;   // 階基準からの符号付き床レベル差(mm)。null = 基準どおり
+    // 屋外部屋の仕上げレベル（外部タブの仕上げレベル入力用。kind===EXTERIOR以外では未使用）
+    this.exteriorSlope    = null;   // 勾配 1/N の N。null = 未設定
+    this.exteriorLevelRef = ExteriorLevelRef.ROOM; // おさえの基準: 'room' | 'gl'
+    this.exteriorLevel    = null;   // おさえの符号付きmm。null = 未設定
     this.generatedWallIds = new Set(); // 自動生成された Wall の ID を管理（非 observable）
     makeObservable(this, {
-      name:             observable,
-      cells:            observable,
-      referenceRoomIds: observable,
-      kind:             observable,
-      feature:          observable,
-      templateKey:      observable,
-      namePosition:     observable.ref,
-      floorLevel:       observable,
-      setName:          action,
-      addCell:          action,
-      removeCell:       action,
-      setCells:         action,
-      setKind:          action,
-      setFeature:       action,
-      setTemplateKey:   action,
-      setOverride:      action,
-      clearOverride:    action,
-      setNamePosition:  action,
-      setFloorLevel:    action,
+      name:                observable,
+      cells:               observable,
+      referenceRoomIds:    observable,
+      kind:                observable,
+      feature:             observable,
+      templateKey:         observable,
+      namePosition:        observable.ref,
+      floorLevel:          observable,
+      exteriorSlope:       observable,
+      exteriorLevelRef:    observable,
+      exteriorLevel:       observable,
+      setName:             action,
+      addCell:             action,
+      removeCell:          action,
+      setCells:            action,
+      setKind:             action,
+      setFeature:          action,
+      setTemplateKey:      action,
+      setOverride:         action,
+      clearOverride:       action,
+      setNamePosition:     action,
+      setFloorLevel:       action,
+      setExteriorSlope:    action,
+      setExteriorLevelRef: action,
+      setExteriorLevel:    action,
     });
   }
   setName(name)              { this.name = name; }
@@ -180,6 +190,9 @@ export class Room {
   setFeature(feature)        { this.feature = feature; } // 'stair' | 'void' | 'stairVoid' | null
   setNamePosition(x, y)     { this.namePosition = { x, y }; }
   setFloorLevel(mm)         { this.floorLevel = mm; } // mm | null（null = 階基準どおり）
+  setExteriorSlope(n)       { this.exteriorSlope = n; } // 勾配1/N の N | null
+  setExteriorLevelRef(ref)  { this.exteriorLevelRef = ref; } // 'room' | 'gl'
+  setExteriorLevel(mm)      { this.exteriorLevel = mm; } // おさえの符号付きmm | null
 
   setTemplateKey(key)        { this.templateKey = key; }
 

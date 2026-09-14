@@ -94,7 +94,7 @@ const ED = { KEY: 0, MASTER_TYPE: 1, OVR_KEYS: 2, OVR_VALS: 3 };
 // ExteriorFinishRow（外部仕上げ行 — exteriorRows/exteriorFittingRows/structureRowsで共通）: 6 フィールド
 const XR = { ID: 0, PART: 1, FINISH: 2, BASE: 3, NOTE: 4, ROOM_ID: 5 };
 
-// Room: 25 フィールド
+// Room: 30 フィールド
 const RM = {
   ID: 0, NAME: 1, CELLS: 2, REF_IDS: 3, GEN_WALL_IDS: 4,
   HAS_POS: 5, POS_X: 6, POS_Y: 7,
@@ -105,11 +105,18 @@ const RM = {
   TEMPLATE_KEY: 19, OVR_KEYS: 20, OVR_VALS: 21, // 内装マスター参照 + 個別上書きポケット
   HAS_FLOOR_LEVEL: 22, FLOOR_LEVEL: 23, // 床レベル差(mm)。null は HAS=0 で表現
   FEATURE: 24, // 属性軸（none=0 / stair=1 / void=2）。kind とは独立
+  // 屋外部屋の仕上げレベル（末尾追加。旧データはフィールド欠落＝既定値で復元）
+  HAS_EXT_LEVEL: 25, EXT_LEVEL: 26, EXT_LEVEL_REF: 27, // おさえ(mm) / 基準（room=0 / gl=1）
+  HAS_EXT_SLOPE: 28, EXT_SLOPE: 29, // 勾配 1/N の N
 };
 
 // Room.kind 列挙値エンコード（VOID は旧データデコード専用。書き込みは INTERIOR/EXTERIOR のみ）
 const ROOM_KIND_ENC = { interior: 0, void: 1, exterior: 2 };
 const ROOM_KIND_DEC = ['interior', 'void', 'exterior'];
+
+// Room.exteriorLevelRef 列挙値エンコード（room=0 / gl=1。旧データはフィールド欠落＝0=room）
+const EXT_LEVEL_REF_ENC = { room: 0, gl: 1 };
+const EXT_LEVEL_REF_DEC = ['room', 'gl'];
 
 // Room.feature 列挙値エンコード（属性軸。null は none=0）
 const ROOM_FEATURE_ENC = { stair: 1, void: 2, stairVoid: 3, undefined: 4 };
@@ -613,7 +620,7 @@ function writeRoom(b, rm) {
   const kindEnc    = isLegacyVoidKind ? ROOM_KIND_ENC.interior : (ROOM_KIND_ENC[rm.kind] ?? 0);
   const featureVal = isLegacyVoidKind ? 'void' : (rm.feature ?? null);
 
-  b.startObject(25);
+  b.startObject(30);
   b.addFieldOffset(RM.ID,           sId,          0);
   b.addFieldOffset(RM.NAME,         sName,        0);
   b.addFieldOffset(RM.CELLS,        cellsVec,     0);
@@ -639,6 +646,11 @@ function writeRoom(b, rm) {
   b.addFieldInt8(RM.HAS_FLOOR_LEVEL, rm.floorLevel != null ? 1 : 0, 0);
   b.addFieldFloat64(RM.FLOOR_LEVEL,  rm.floorLevel ?? 0.0, 0.0);
   b.addFieldInt8(RM.FEATURE,        ROOM_FEATURE_ENC[featureVal] ?? 0, 0);
+  b.addFieldInt8(RM.HAS_EXT_LEVEL,   rm.exteriorLevel != null ? 1 : 0, 0);
+  b.addFieldFloat64(RM.EXT_LEVEL,    rm.exteriorLevel ?? 0.0, 0.0);
+  b.addFieldInt8(RM.EXT_LEVEL_REF,   EXT_LEVEL_REF_ENC[rm.exteriorLevelRef] ?? 0, 0);
+  b.addFieldInt8(RM.HAS_EXT_SLOPE,   rm.exteriorSlope != null ? 1 : 0, 0);
+  b.addFieldFloat64(RM.EXT_SLOPE,    rm.exteriorSlope ?? 0.0, 0.0);
   return b.endObject();
 }
 
@@ -1326,6 +1338,9 @@ function readRoom(bb, tablePos) {
     templateKey: r.str(RM.TEMPLATE_KEY) || null,
     overrides,
     floorLevel: r.i8(RM.HAS_FLOOR_LEVEL) ? r.f64(RM.FLOOR_LEVEL) : null,
+    exteriorLevel:    r.i8(RM.HAS_EXT_LEVEL) ? r.f64(RM.EXT_LEVEL) : null,
+    exteriorLevelRef: EXT_LEVEL_REF_DEC[r.i8(RM.EXT_LEVEL_REF)] ?? 'room',
+    exteriorSlope:    r.i8(RM.HAS_EXT_SLOPE) ? r.f64(RM.EXT_SLOPE) : null,
   };
 }
 

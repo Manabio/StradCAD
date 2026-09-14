@@ -4,8 +4,10 @@
 // あった（QA指摘）。この穴を塞ぐ。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { PlanGraph, Plane, CenterLineType, Discipline } from '@core';
-import { applyBackingOwnership, computeExternalEdgeParams } from './wallGeneration.js';
+import { PlanGraph, Plane, CenterLineType, Discipline, RoomKind, RoomFeature } from '@core';
+import {
+  applyBackingOwnership, computeExternalEdgeParams, generateExteriorWalls, isInteriorWallTarget,
+} from './wallGeneration.js';
 
 function makeGraph() {
   const plane = new Plane('p1', 0, '1階', 1, 1);
@@ -73,4 +75,106 @@ test('computeExternalEdgeParams: 同値で延長の違うCLが2本あっても�
   assert.ok(params.some(p => p.isVertical && p.axisCLId === x1.id &&
     (p.startCLId === yNear.id || p.endCLId === yNear.id)),
     '右列の左辺の分割点はセルを画している側のCL(yNear)を指すはず');
+});
+
+// ---- 屋外部屋は壁を持たない（境界は屋内側から'courtyard'として生成し、壁本体は屋外室側に置かれる）----
+test('generateExteriorWalls: 屋内室[0,4000]・屋外室[4000,8000]が隣接する場合、courtyard壁のaxisOffsetは屋外室側（正）で、屋外室の外周(x=8000)には壁が出ない', () => {
+  const graph = makeGraph();
+  const ARCH = { labeled: false, discipline: Discipline.ARCH };
+  const x0 = graph.addCenterLine(CenterLineType.VERTICAL,   0,    ARCH);
+  const x1 = graph.addCenterLine(CenterLineType.VERTICAL,   4000, ARCH);
+  const x2 = graph.addCenterLine(CenterLineType.VERTICAL,   8000, ARCH);
+  const y0 = graph.addCenterLine(CenterLineType.HORIZONTAL, 0,    ARCH);
+  const y1 = graph.addCenterLine(CenterLineType.HORIZONTAL, 3000, ARCH);
+
+  graph.addRoom(new Set([`${x0.id}:${y0.id}:${x1.id}:${y1.id}`]), '室内');
+  const exterior = graph.addRoom(new Set([`${x1.id}:${y0.id}:${x2.id}:${y1.id}`]), 'テラス');
+  exterior.setKind(RoomKind.EXTERIOR);
+
+  const walls = generateExteriorWalls(graph);
+
+  // 共有境界(x=4000)上の壁はcourtyard壁。isExteriorWall=trueかつaxisOffsetは正（屋外室=x大側）。
+  const courtyardWalls = walls.filter(w => w.axisCL.id === x1.id);
+  assert.ok(courtyardWalls.length >= 1, '共有境界(x=4000)にcourtyard壁が生成されるはず');
+  for (const w of courtyardWalls) {
+    assert.equal(w.isExteriorWall, true);
+    assert.ok(w.axisOffset > 0, `axisOffsetは屋外室側（正）のはず（実際:${w.axisOffset}）`);
+  }
+
+  // 屋外室自身の外周（x=8000等）には壁が出ない
+  assert.equal(walls.some(w => w.axisCL.id === x2.id), false,
+    '屋外室の外側辺(x=8000)には壁が出ないはず');
+});
+
+test('generateExteriorWalls: 屋外部屋のみ（屋内部屋が無い）場合は壁を生成しない', () => {
+  const graph = makeGraph();
+  const ARCH = { labeled: false, discipline: Discipline.ARCH };
+  const x0 = graph.addCenterLine(CenterLineType.VERTICAL,   0,    ARCH);
+  const x1 = graph.addCenterLine(CenterLineType.VERTICAL,   4000, ARCH);
+  const y0 = graph.addCenterLine(CenterLineType.HORIZONTAL, 0,    ARCH);
+  const y1 = graph.addCenterLine(CenterLineType.HORIZONTAL, 3000, ARCH);
+
+  const exterior = graph.addRoom(new Set([`${x0.id}:${y0.id}:${x1.id}:${y1.id}`]), 'テラス');
+  exterior.setKind(RoomKind.EXTERIOR);
+
+  const walls = generateExteriorWalls(graph);
+
+  assert.deepEqual(walls, []);
+});
+
+// ---- isInteriorWallTarget: finishBoundary.js ステップ2（内周壁の全再生成）の対象判定 ----
+test('isInteriorWallTarget: 屋外部屋（kind=EXTERIOR）は対象外', () => {
+  const graph = makeGraph();
+  const room = graph.addRoom(new Set(['dummy']), 'テラス');
+  room.setKind(RoomKind.EXTERIOR);
+
+  assert.equal(isInteriorWallTarget(room, new Set()), false);
+});
+
+test('isInteriorWallTarget: 屋外階段（kind=EXTERIOR かつ feature=STAIR）も対象外', () => {
+  const graph = makeGraph();
+  const room = graph.addRoom(new Set(['dummy']), '階段');
+  room.setKind(RoomKind.EXTERIOR);
+  room.setFeature(RoomFeature.STAIR);
+
+  assert.equal(isInteriorWallTarget(room, new Set()), false);
+});
+
+test('isInteriorWallTarget: 屋内の通常部屋は対象', () => {
+  const graph = makeGraph();
+  const room = graph.addRoom(new Set(['dummy']), 'LDK');
+
+  assert.equal(isInteriorWallTarget(room, new Set()), true);
+});
+
+test('isInteriorWallTarget: UNDEFINED（未定義）は対象外', () => {
+  const graph = makeGraph();
+  const room = graph.addRoom(new Set(['dummy']), '');
+  room.setFeature(RoomFeature.UNDEFINED);
+
+  assert.equal(isInteriorWallTarget(room, new Set()), false);
+});
+
+test('isInteriorWallTarget: 部分指定（referenceRoomIdsあり・非STAIR）は対象外（親が外周壁を担う）', () => {
+  const graph = makeGraph();
+  const parent = graph.addRoom(new Set(['dummy1']), '親');
+  const partial = graph.addRoom(new Set(['dummy2']), '子', undefined, new Set([parent.id]));
+
+  assert.equal(isInteriorWallTarget(partial, new Set()), false);
+});
+
+test('isInteriorWallTarget: 部分指定×feature=STAIR（部分指定から階段変換）は例外で対象', () => {
+  const graph = makeGraph();
+  const parent = graph.addRoom(new Set(['dummy1']), '親');
+  const stairPartial = graph.addRoom(new Set(['dummy2']), '階段', undefined, new Set([parent.id]));
+  stairPartial.setFeature(RoomFeature.STAIR);
+
+  assert.equal(isInteriorWallTarget(stairPartial, new Set()), true);
+});
+
+test('isInteriorWallTarget: under2aRoomIdsに含まれる部屋（階段下2a）は対象外', () => {
+  const graph = makeGraph();
+  const room = graph.addRoom(new Set(['dummy']), '階段下');
+
+  assert.equal(isInteriorWallTarget(room, new Set([room.id])), false);
 });

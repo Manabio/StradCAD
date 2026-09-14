@@ -86,7 +86,8 @@ export function reinterpretRoomsOnEntry(graph) {
         for (const c of cells) e.room.addCell(c.key);
         e.room.referenceRoomIds.add(dominant.id);
       } else if (e.room.cells.size === 0) {
-        // 2辺以上喪失 → 旧部屋名を削除し、親へ完全吸収
+        // 2辺以上喪失 → 旧部屋名を削除し、親へ完全吸収（屋外部屋の連動行も孤児化させず削除）
+        graph.removeExteriorRowsByRoomId(e.room.id);
         graph.removeRoom(e.room.id);
       }
     }
@@ -260,6 +261,7 @@ export function snapshotRoomsState(graph) {
       return {
         id: r.id, name: r.name, cells: [...r.cells], referenceRoomIds: [...r.referenceRoomIds],
         kind: r.kind, feature: r.feature, templateKey: r.templateKey, floorLevel: r.floorLevel,
+        exteriorSlope: r.exteriorSlope, exteriorLevelRef: r.exteriorLevelRef, exteriorLevel: r.exteriorLevel,
         namePosition: r.namePosition ? { x: r.namePosition.x, y: r.namePosition.y } : null,
         generatedWallIds: [...r.generatedWallIds],
         customOverrides: [...r.customOverrides],
@@ -277,6 +279,9 @@ export function restoreRoomsState(graph, snap) {
     const room = new Room(d.id, d.name, new Set(d.cells), new Set(d.referenceRoomIds), d.kind, d.templateKey, d.feature ?? null);
     room.generatedWallIds = new Set(d.generatedWallIds);
     if (d.floorLevel != null) room.setFloorLevel(d.floorLevel);
+    if (d.exteriorSlope != null) room.setExteriorSlope(d.exteriorSlope);
+    if (d.exteriorLevelRef) room.setExteriorLevelRef(d.exteriorLevelRef);
+    if (d.exteriorLevel != null) room.setExteriorLevel(d.exteriorLevel);
     if (d.namePosition) room.setNamePosition(d.namePosition.x, d.namePosition.y);
     for (const [k, v] of d.customOverrides) room.customOverrides.set(k, v);
     for (const [k, v] of Object.entries(d.finish)) if (v) room.finish.setField(k, v);

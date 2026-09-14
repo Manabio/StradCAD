@@ -5,7 +5,8 @@ import { useScrollIntoViewWhenActive } from '../ui/useScrollIntoViewWhenActive.j
 import { StairTab } from './stair/StairTab.jsx';
 import { withFinishUndo, beginFieldUndo, endFieldUndo } from './finishUndo.js';
 import { roomCeilingHeight } from './roomMetrics.js';
-import { RoomFeature, RoomKind, DEFAULT_ROOM_FLOOR_LEVEL, DEFAULT_ROOM_CEILING_HEIGHT } from '@core';
+import { parseSlopeInput } from './exteriorLevelInput.js';
+import { RoomFeature, RoomKind, ExteriorLevelRef, DEFAULT_ROOM_FLOOR_LEVEL, DEFAULT_ROOM_CEILING_HEIGHT } from '@core';
 import { rulesFor, effectiveStructure } from '../structural/structureRules.js';
 
 // ---- 内部仕上げ表 ----
@@ -306,9 +307,17 @@ export const FinishTable = observer(({ graph, mode, project, selectedRoomId, onS
   useEffect(() => { if (mode.selectedStairId) setActiveTab('stair'); }, [mode.selectedStairId]);
   // 部屋が選択されたら「内部」タブへ自動切替（階段選択時は階段タブが勝つ。宣言順で下の effect が
   // 後に評価されるため、両方セットされた場合はここで内部タブに切り替わらないよう明示的にガードする）
+  // 屋外部屋（階段以外）は外部タブが担当するため、選択時はそちらへ切り替える。
+  // 選択IDだけでなく kind/feature も依存に含める——新規部屋はドラッグ確定時点で選択済み
+  // （selectedRoomId 不変）のため、命名ダイアログで「屋外」を確定した時点で切り替えるには
+  // kind の変化で effect を再実行する必要がある（observer なので render 内の参照で追跡される）。
+  const selectedRoom = mode.selectedRoomId ? mode.graph.roomMap.get(mode.selectedRoomId) : null;
+  const selectedIsExterior = !!selectedRoom
+    && selectedRoom.kind === RoomKind.EXTERIOR && selectedRoom.feature !== RoomFeature.STAIR;
   useEffect(() => {
-    if (mode.selectedRoomId && !mode.selectedStairId) setActiveTab('interior');
-  }, [mode.selectedRoomId, mode.selectedStairId]);
+    if (!mode.selectedRoomId || mode.selectedStairId) return;
+    setActiveTab(selectedIsExterior ? 'exterior' : 'interior');
+  }, [mode.selectedRoomId, mode.selectedStairId, selectedIsExterior]);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', flex: 1, overflow: 'hidden' }}>
@@ -367,13 +376,14 @@ export const FinishTable = observer(({ graph, mode, project, selectedRoomId, onS
 // ================================================================
 
 const InteriorTable = observer(({ graph, mode, selectedRoomId, onSelectRoom, floorName }) => {
-  // 屋外階段（feature===STAIR かつ kind===EXTERIOR）は階段タブ＋外部タブが担当するため
-  // 内部仕上げ表からは除外する。屋内階段（kind===INTERIOR）は通常部屋と同じカードで表示する
+  // 屋外部屋（kind===EXTERIOR）は階段の有無によらず除外する（外部タブが担当。非階段は
+  // 部位の仕上げレベル入力、屋外階段は階段タブ＋外部タブの部位「階段」行）。
+  // 屋内階段（kind===INTERIOR）は通常部屋と同じカードで表示する
   // （上階自動設置の無名ペアRoomも同様に表示される＝意図どおり）。
   // 階段吹抜け（STAIR_VOID）は自動管理 Room のため引き続き表に出さない。
   // 未定義の部屋（UNDEFINED）も表に出さない（B: 名前未確定のため命名対象外）。
   const rooms = graph.rooms.filter(r =>
-    (r.feature !== RoomFeature.STAIR || r.kind === RoomKind.INTERIOR)
+    r.kind !== RoomKind.EXTERIOR
     && r.feature !== RoomFeature.STAIR_VOID && r.feature !== RoomFeature.UNDEFINED);
 
   const [dragId, setDragId]             = useState(null);
@@ -851,12 +861,122 @@ const FlatExteriorTable = observer(({ graph, category }) => {
 // GroupedExteriorTable — 外部（部位ごとにテーブルを分割し、部位追加で増減）
 // ----------------------------------------------------------------
 
+// 屋外部屋（階段以外）の部位見出し直下に出す仕上げレベル入力（勾配・おさえ基準・おさえmm）。
+// FloorLevelInput（部屋カードのFL欄）と同じ draft 方式（文字入力はfocus/blurでundo境界）。
+const ExteriorLevelRow = observer(({ room, graph }) => {
+  const [slopeDraft, setSlopeDraft] = useState(null);
+  const [levelDraft, setLevelDraft] = useState(null);
+  // 符号はローカルstateで保持する（levelがnullでも選択が保持されるように。derivedにすると
+  // level===nullの間は毎レンダー既定符号へ引き戻され、"－"を選んでも見た目が戻ってしまう）。
+  // 初期値は既存の格納値の符号（あれば）／基準の既定符号（room→−／gl→＋）から導出する。
+  const [signDraft, setSignDraft] = useState(() => {
+    if (room.exteriorLevel != null) return room.exteriorLevel < 0 ? '-' : '+';
+    return (room.exteriorLevelRef ?? ExteriorLevelRef.ROOM) === ExteriorLevelRef.GL ? '+' : '-';
+  });
+
+  // undo/redo（restoreRoomsState は Room を作り直すが本コンポーネントは再マウントされない）で
+  // 格納値の符号が変わったら追従する。null のときは選択を保持する（上記の意図を壊さない）。
+  useEffect(() => {
+    if (room.exteriorLevel != null) setSignDraft(room.exteriorLevel < 0 ? '-' : '+');
+  }, [room.exteriorLevel]);
+
+  const levelRef = room.exteriorLevelRef ?? ExteriorLevelRef.ROOM;
+  const level    = room.exteriorLevel;
+  const absLevel = level == null ? null : Math.abs(level);
+
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 6, fontSize: 12, color: '#374151', marginBottom: 6, whiteSpace: 'nowrap' }}>
+      <span style={{ fontWeight: 700 }}>仕上げレベル</span>
+      <span>勾配 1/</span>
+      <input
+        type="text"
+        inputMode="numeric"
+        value={slopeDraft ?? (room.exteriorSlope == null ? '' : String(room.exteriorSlope))}
+        onChange={e => {
+          const t = e.target.value;
+          if (!/^\d*$/.test(t)) return;
+          setSlopeDraft(t);
+          const n = parseSlopeInput(t);
+          if (n !== null) room.setExteriorSlope(n);
+        }}
+        onFocus={() => beginFieldUndo(graph)}
+        onBlur={() => {
+          // 空文字/"0" は勾配指定なしとしてクリアする（未編集=null のときは何もしない）
+          if (slopeDraft !== null && parseSlopeInput(slopeDraft) === null) room.setExteriorSlope(null);
+          setSlopeDraft(null);
+          endFieldUndo(graph);
+        }}
+        onClick={e => e.stopPropagation()}
+        style={{ ...cellInputStyle, width: 48, border: '1px solid #cbd5e1', padding: '2px 4px' }}
+      />
+      <span>おさえ</span>
+      <select
+        value={levelRef}
+        onChange={e => {
+          const ref = e.target.value;
+          // 基準を変えたら符号を自動選択: room→負、gl→正（signDraftも合わせて更新する）
+          const newSign = ref === ExteriorLevelRef.GL ? '+' : '-';
+          setSignDraft(newSign);
+          withFinishUndo(graph, () => {
+            room.setExteriorLevelRef(ref);
+            if (room.exteriorLevel != null) {
+              room.setExteriorLevel(newSign === '+' ? Math.abs(room.exteriorLevel) : -Math.abs(room.exteriorLevel));
+            }
+          });
+        }}
+        style={{ ...cellInputStyle, width: 'auto', border: '1px solid #cbd5e1', padding: '2px 4px' }}
+      >
+        <option value={ExteriorLevelRef.ROOM}>部屋内レベル</option>
+        <option value={ExteriorLevelRef.GL}>GL</option>
+      </select>
+      <select
+        value={signDraft}
+        onChange={e => {
+          const s = e.target.value;
+          setSignDraft(s);
+          withFinishUndo(graph, () => {
+            if (room.exteriorLevel != null) {
+              room.setExteriorLevel(s === '-' ? -Math.abs(room.exteriorLevel) : Math.abs(room.exteriorLevel));
+            }
+          });
+        }}
+        style={{ ...cellInputStyle, width: 'auto', border: '1px solid #cbd5e1', padding: '2px 4px' }}
+      >
+        <option value="+">＋</option>
+        <option value="-">－</option>
+      </select>
+      <input
+        type="text"
+        inputMode="numeric"
+        value={levelDraft ?? (absLevel == null ? '' : String(absLevel))}
+        onChange={e => {
+          const t = e.target.value;
+          if (!/^\d*$/.test(t)) return;
+          setLevelDraft(t);
+          if (t !== '') room.setExteriorLevel(signDraft === '-' ? -Number(t) : Number(t));
+        }}
+        onFocus={() => beginFieldUndo(graph)}
+        onBlur={() => {
+          if (levelDraft === '') room.setExteriorLevel(null);
+          setLevelDraft(null);
+          endFieldUndo(graph);
+        }}
+        onClick={e => e.stopPropagation()}
+        style={{ ...cellInputStyle, width: 60, border: '1px solid #cbd5e1', padding: '2px 4px' }}
+      />
+      <span>mm</span>
+    </div>
+  );
+});
+
 const GroupedExteriorTable = observer(({ graph, category }) => {
   const rows = graph[category];
 
+  // 群キー: roomId連動行（階段・屋外部屋）は roomId 単位、手入力行は part 単位で分ける
+  // （同名partの手入力行と連動行を混同しない）。
   const groups = new Map();
   for (const row of rows) {
-    const key = row.part || '';
+    const key = row.roomId ? `room:${row.roomId}` : `part:${row.part}`;
     if (!groups.has(key)) groups.set(key, []);
     groups.get(key).push(row);
   }
@@ -869,12 +989,21 @@ const GroupedExteriorTable = observer(({ graph, category }) => {
           部位が登録されていません
         </div>
       )}
-      {[...groups.entries()].map(([part, groupRows]) => (
-        <div key={part} style={{ marginBottom: 16 }}>
+      {[...groups.entries()].map(([groupKey, groupRows]) => {
+        const part   = groupRows[0].part;
+        const roomId = groupRows[0].roomId;
+        const room   = roomId ? graph.roomMap.get(roomId) : null;
+        const showLevelRow = room && room.kind === RoomKind.EXTERIOR && room.feature !== RoomFeature.STAIR;
+        return (
+        <div key={groupKey} style={{ marginBottom: 16 }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
             <div style={{ fontSize: 13, fontWeight: 700, color: '#374151' }}>{part || '（部位未設定）'}</div>
             <button
-              onClick={() => withFinishUndo(graph, () => graph.removeExteriorRowGroup(category, part))}
+              onClick={() => withFinishUndo(graph, () => {
+                // roomId連動行（階段・屋外部屋）はremoveExteriorRowsByRoomIdで、手入力行はpart一致で削除する
+                if (roomId) graph.removeExteriorRowsByRoomId(roomId);
+                else graph.removeExteriorRowGroup(category, part);
+              })}
               style={{
                 fontSize: 11, color: '#94a3b8', background: 'none',
                 border: 'none', cursor: 'pointer', padding: '0 4px',
@@ -884,6 +1013,7 @@ const GroupedExteriorTable = observer(({ graph, category }) => {
               × 部位を削除
             </button>
           </div>
+          {showLevelRow && <ExteriorLevelRow room={room} graph={graph} />}
           <table style={{ borderCollapse: 'collapse', width: '100%', fontSize: 12 }}>
             <thead>
               <tr>
@@ -918,7 +1048,7 @@ const GroupedExteriorTable = observer(({ graph, category }) => {
             </tbody>
           </table>
           <button
-            onClick={() => withFinishUndo(graph, () => graph.addExteriorRow(category, part))}
+            onClick={() => withFinishUndo(graph, () => graph.addExteriorRow(category, part, roomId ?? null))}
             style={{
               marginTop: 4, fontSize: 12, color: '#2563eb', background: 'none',
               border: '1px dashed #93c5fd', borderRadius: 4, padding: '3px 10px', cursor: 'pointer',
@@ -927,7 +1057,8 @@ const GroupedExteriorTable = observer(({ graph, category }) => {
             ＋ 行を追加
           </button>
         </div>
-      ))}
+        );
+      })}
       <div style={{ marginTop: 8 }}>
         <select
           value=""

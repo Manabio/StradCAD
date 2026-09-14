@@ -11,6 +11,7 @@
 
 export {
   Discipline, ShapeType, OpeningCategory, ShapeKind, CenterLineType, RoomKind, RoomFeature,
+  ExteriorLevelRef,
   StairType, StructuralMaterialType, LINE_WEIGHT_MM, DimensionKind, DimensionSide,
   DEFAULT_WALL_MATERIAL, DEFAULT_EXTERIOR_WALL_BACKING,
   DEFAULT_INTERIOR_WALL_BACKING, DEFAULT_CEILING_BACKING, DEFAULT_FLOOR_BACKING,

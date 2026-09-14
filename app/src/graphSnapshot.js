@@ -116,6 +116,9 @@ function buildSnapshot(graph) {
           posY:             r.namePosition?.y ?? 0,
           templateKey:      r.templateKey ?? null,
           floorLevel:       r.floorLevel ?? null,
+          exteriorSlope:    r.exteriorSlope ?? null,
+          exteriorLevelRef: r.exteriorLevelRef,
+          exteriorLevel:    r.exteriorLevel ?? null,
           // 個別上書きポケット（選択された材のみが結果的に永続化される）
           overrides:        [...r.customOverrides].map(([key, value]) => ({ key, value: String(value) })),
           finish: {
@@ -734,6 +737,9 @@ function applySnapshot(graph, snapshot) {
       room.generatedWallIds = new Set(d.generatedWallIds);
       if (d.hasNamePosition) room.setNamePosition(d.posX, d.posY);
       if (d.floorLevel != null) room.setFloorLevel(d.floorLevel);
+      if (d.exteriorSlope != null) room.setExteriorSlope(d.exteriorSlope);
+      if (d.exteriorLevelRef) room.setExteriorLevelRef(d.exteriorLevelRef);
+      if (d.exteriorLevel != null) room.setExteriorLevel(d.exteriorLevel);
       for (const [key, val] of Object.entries(d.finish ?? {})) {
         if (val) room.finish.setField(key, val);
       }

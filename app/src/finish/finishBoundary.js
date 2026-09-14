@@ -11,7 +11,7 @@ import {
 } from './stair/stairUnderWalls.js';
 import {
   generateRoomWallsFromOutline, generateExteriorWalls, snapshotWall, restoreWallsFromSnapshots,
-  resolveBackingOwnership, applyBackingOwnership, closeConvexCorners,
+  resolveBackingOwnership, applyBackingOwnership, closeConvexCorners, isInteriorWallTarget,
 } from './wallGeneration.js';
 import { snapshotEdges, restoreEdges, syncEdgesFromTopology, interiorWallSpans, buildCellToRoom } from './edgeClassify.js';
 import {
@@ -224,7 +224,9 @@ export async function runFinishExitBoundary(graph, project, fmode, { goingToStru
   // ——ステップ1で対象範囲の壁を全削除済みのため、毎回全再生成してよい（順序非依存・冪等）。
   // UNDEFINED は内周壁を持たない（新モデル＝全再生成方式では、未定義化した時点で内周壁は
   // 消える。外壁線はステップ3が維持するため部屋の輪郭自体は失われない。意図どおりの新挙動）。
-  // 階段ペアRoom（feature=STAIR）・階段吹抜け（STAIR_VOID）も同仕様で参加する:
+  // 階段ペアRoom（feature=STAIR）・階段吹抜け（STAIR_VOID）も同仕様で参加する（ただし
+  // 屋外（kind=EXTERIOR）の部屋・階段は対象外——屋外部屋は壁を持たないため、屋外階段も含め
+  // 常にスキップする。屋内側の統一ルールのみ以下の説明が適用される）:
   // 下地オーナー壁＋仕上げ薄壁方式——同一CL上の下地（間柱帯）は1つだけ、各面（部屋側・
   // 階段側）の仕上げ材は面ごとに描画される。所有権解決（resolveBackingOwnership。
   // wallGeneration.js）をこの直後に行い、＋側の壁を下地オーナーに、−側の壁を仕上げ薄壁
@@ -233,13 +235,12 @@ export async function runFinishExitBoundary(graph, project, fmode, { goingToStru
   // feature=STAIR（部屋の部分指定から階段変換した階段）は例外で対象に含める。旧版にあった
   // 親隣接面だけの抑止（parentAdjacentEdges）は不要——新モデルでは所有権解決
   // （resolveBackingOwnership）が親側の壁との重なりを検出して自動的に薄壁化するため。
+  // 対象判定は isInteriorWallTarget（wallGeneration.js）に抽出済み（単体テスト対象）。
   const wallIdToRoom = new Map(); // wallId -> 生成元Room（所有権解決の分割で generatedWallIds を張り替えるため）
   const roomWallLists = new Map(); // room -> Wall[]（今回生成分。所有権解決前）
   const processedRooms = [];
   for (const room of graph.rooms) {
-    if (room.feature === RoomFeature.UNDEFINED) continue;
-    if (room.referenceRoomIds?.size > 0 && room.feature !== RoomFeature.STAIR) continue;
-    if (under2aRoomIds.has(room.id)) continue;
+    if (!isInteriorWallTarget(room, under2aRoomIds)) continue;
 
     const walls = generateRoomWallsFromOutline(graph, room, fmode?.roomWallDims?.(graph, room) || {}, [...stairOpenings, ...underEdges]);
     if (walls.length === 0) continue;

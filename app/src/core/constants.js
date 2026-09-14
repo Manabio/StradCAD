@@ -52,6 +52,12 @@ export const RoomKind = Object.freeze({
   EXTERIOR: 'exterior',  // 屋外
 });
 
+// 屋外部屋の仕上げレベル（おさえ）の基準
+export const ExteriorLevelRef = Object.freeze({
+  ROOM: 'room', // 部屋内レベル
+  GL:   'gl',   // GL
+});
+
 // 部屋の属性軸（feature） — kind とは独立。相互排他・個別ON/OFF可。null = なし。
 export const RoomFeature = Object.freeze({
   STAIR:      'stair',     // 階段

@@ -383,8 +383,10 @@ export class PlanGraph {
     _removeArrayItemsWhere(this[category], r => r.id === id);
   }
 
+  // roomId連動行（階段・屋外部屋）は対象外——連動行の削除はremoveExteriorRowsByRoomIdが担う
+  // （同名partの手入力行と連動行が混在した場合、連動行を巻き込んで削除しないため）。
   removeExteriorRowGroup(category, part) {
-    _removeArrayItemsWhere(this[category], r => r.part === part);
+    _removeArrayItemsWhere(this[category], r => r.part === part && r.roomId == null);
   }
 
   /** roomId にリンクした外部仕上げ行（階段連動。exteriorRowsのみ対象）があれば削除する。 */

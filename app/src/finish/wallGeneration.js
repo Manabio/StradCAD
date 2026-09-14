@@ -5,7 +5,7 @@
  * デフォルト: wallBase=90, wallFinish=12.5 → 57.5mm
  */
 
-import { RoomKind } from '@core';
+import { RoomKind, RoomFeature } from '@core';
 import { worldToCell, dividerCLsBetween, isActiveAcrossRange } from './gridCells.js';
 import { buildCellToRoom } from './edgeClassify.js';
 
@@ -220,21 +220,25 @@ export function findOutsideRoom(p, graph, cellToRoom) {
 /**
  * 部屋の外周エッジ1本が外壁ループに含まれるかどうかを判定する。
  *
- * - 内外区分が「屋内」（kind !== EXTERIOR）の部屋: 外側に部屋が割り当てられていない（建物外周）場合のみ外壁
- * - 内外区分が「屋外」の部屋: 外側が「屋内」（kind !== EXTERIOR）の部屋（中庭の境界）の場合のみ外壁
+ * 屋外部屋（kind===EXTERIOR）は壁を持たない——常に null（辺は生成しない）。
+ * 屋内部屋の辺のみを対象に判定する:
+ * - 外側に部屋が割り当てられていない（建物外周）場合のみ 'outer'
+ * - 外側が「屋外」の部屋（中庭・屋外部屋との境界）の場合のみ 'courtyard'
+ *   （屋内側の辺から生成する。壁本体は室外側＝屋外部屋側に置かれる）
  *
  * feature（階段・吹抜け属性）は外壁分類に無関係。
  *
  * @returns {'outer' | 'courtyard' | null}
  */
 function classifyExteriorEdge(room, p, graph, cellToRoom) {
+  if (room.kind === RoomKind.EXTERIOR) return null;
+
   const outsideRoom = findOutsideRoom(p, graph, cellToRoom);
   const outsideKind = outsideRoom?.kind ?? null;
 
-  if (room.kind !== RoomKind.EXTERIOR) {
-    return outsideKind === null ? 'outer' : null;
-  }
-  return (outsideKind !== null && outsideKind !== RoomKind.EXTERIOR) ? 'courtyard' : null;
+  if (outsideKind === null) return 'outer';
+  if (outsideKind === RoomKind.EXTERIOR) return 'courtyard';
+  return null;
 }
 
 /**
@@ -352,6 +356,23 @@ export function clipToAxisExtent(axisCL, startCL, startOffset, endCL, endOffset,
 // ----------------------------------------------------------------
 
 /**
+ * finishBoundary.js ステップ2（内周壁の全再生成）の対象Roomかどうかを判定する。
+ * 対象外: UNDEFINED（未定義）・屋外部屋（kind===EXTERIOR。壁を持たない）・
+ * 部分指定（referenceRoomIds あり。ただしfeature=STAIRは例外で対象に含める）・
+ * 2a部屋（under2aRoomIds。階段下は別管理）。
+ * @param {import('@core').Room} room
+ * @param {Set<string>} under2aRoomIds
+ * @returns {boolean}
+ */
+export function isInteriorWallTarget(room, under2aRoomIds) {
+  if (room.feature === RoomFeature.UNDEFINED) return false;
+  if (room.kind === RoomKind.EXTERIOR) return false;
+  if (room.referenceRoomIds?.size > 0 && room.feature !== RoomFeature.STAIR) return false;
+  if (under2aRoomIds.has(room.id)) return false;
+  return true;
+}
+
+/**
  * 部屋の境界多角形を「閉じた形」として捉え、各辺の端点オフセットを
  * コーナーマップから直接決定して壁を生成する。
  *
@@ -444,7 +465,8 @@ export function generateRoomWallsFromOutline(graph, room, { wallBase = DEFAULT_W
  *
  * computeExternalEdgeParams が返す axisOffset は常に室内方向を指すため、
  * 外壁本体は `loopType` を問わず常にその逆方向（室外側）に生成する
- * （`outer` = 建物の真の外側 / `courtyard` = 隣接する屋内/吹抜け側）。
+ * （`outer` = 建物の真の外側 / `courtyard` = 屋内部屋の辺から見た室外側＝隣接する屋外部屋側。
+ * 屋外部屋自身は壁を持たないため、courtyard の辺は常に屋内部屋側から生成される）。
  *
  * generateRoomWallsFromOutline と同様にコーナーマップでオフセットを決定し、
  * loopType ごとに閉じたループとして扱う。生成された壁には

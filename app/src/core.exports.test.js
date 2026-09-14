@@ -27,6 +27,7 @@ const EXPECTED_EXPORTS = [
   'Discipline',
   'Edge',
   'ExteriorFinishRow',
+  'ExteriorLevelRef',
   'HDimensionLine',
   'HOST_BEAM_MATCH_TOL_MM',
   'HorizontalLine',
