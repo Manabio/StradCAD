@@ -67,7 +67,7 @@ function renderTag(p, key, t, onTagClick) {
   return (
     <Group key={key} x={x} y={y} onClick={handleClick} onTap={handleClick}>
       <Circle radius={r} stroke={stroke} strokeWidth={1} strokeScaleEnabled={false}
-        listening={clickable} />
+        listening={clickable} openingId={p.openingId} dirSign={p.dirSign} />
       <Line points={[-r, 0, r, 0]} stroke={stroke} strokeWidth={1} strokeScaleEnabled={false} listening={false} />
       <Text x={-r} y={-r} width={r * 2} height={r} align="center" verticalAlign="middle"
         text={p.top ?? ''} fontSize={fontSize} fill={stroke} listening={false} />
@@ -165,6 +165,14 @@ function renderOne(p, i, t, lineWeightsPx, screenPxPerMm, onTagClick, joined) {
       return renderDim(p, key, t);
     case 'miterTriangle':
       return renderMiterTriangle(p, key, t, screenPxPerMm);
+    case 'hit':
+      // 展開図の建具ドラッグ起点（elevationFigure.js）。見た目なし・ヒットのみ。Konva の Rect は fill 未指定でも
+      // 矩形全体がヒット領域になる（HitContext は fillEnabled なら colorKey で塗る）。openingId/dirSign は
+      // usePointerInteraction.js が pointerDown の e.target から読む Konva 属性。
+      return (
+        <Rect key={key} x={t.tx(p.x)} y={t.ty(p.y)} width={t.sx(p.w)} height={t.sx(p.h)}
+          listening openingId={p.openingId} dirSign={p.dirSign} />
+      );
     default:
       return null;
   }

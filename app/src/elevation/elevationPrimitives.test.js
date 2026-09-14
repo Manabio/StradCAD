@@ -1,7 +1,16 @@
 // elevationPrimitives.js の appendRoomNameFrame のテスト（QA G5・項目9/10）。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { appendRoomNameFrame, subtractRectsFromPrimitives } from './elevationPrimitives.js';
+import { appendRoomNameFrame, subtractRectsFromPrimitives, translatePrimitive, mirrorPrimitiveX } from './elevationPrimitives.js';
+
+// translatePrimitive / mirrorPrimitiveX は同じプリミティブ型集合を扱う（片方にだけ型を追加すると、その型だけ
+// 移動/反転されない無言バグ）。展開図の建具ドラッグ起点 'hit'（elevationFigure.js）が両方で扱われることを固定する
+// ——QA指摘 2026-09-14: translate に無く、2面目以降のヒット矩形が帯内で平行移動されなかった。
+test('translatePrimitive/mirrorPrimitiveX: type:hit は rect と同じく移動・反転される', () => {
+  const p = { type: 'hit', openingId: 'op1', dirSign: 1, x: 100, y: -2000, w: 900, h: 2000 };
+  assert.deepEqual(translatePrimitive(p, 5000, 30), { ...p, x: 5100, y: -1970 });
+  assert.deepEqual(mirrorPrimitiveX(p, 900), { ...p, x: -100 });
+});
 import { DEFAULT_NAME_GAP_MM, GAP_EPS_MM } from './elevationStyle.js';
 
 // ---- QA是正2026-09-13・F5: 矩形の縁をかすめて1e-4〜1e-3mmにしかならないrunは出力しない ----

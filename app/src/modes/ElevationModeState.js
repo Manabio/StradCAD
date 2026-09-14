@@ -51,6 +51,7 @@ export class ElevationModeState {
   // OpeningPanel.jsxをそのまま再利用する）。null=パネル非表示。QA修正: パネル表示中も展開図の
   // ドラッグ・スクロールは自由に行える（以前あった規制は撤廃した。usePointerInteraction.js参照）。
   selectedOpeningId = null;
+  openingDragPreview = null; // observable.ref — { openingId, dxLocalMm } | null（setOpeningDragPreview 参照）
 
   // screenPxPerMm: 校正値（viewport.pxPerMmX/Yの平均。実画面mm→px）。ElevationModeState.js自体は
   // DOM依存のappViewport.jsを静的importしない（node:test単体実行のため。ElevationModeState.test.js
@@ -73,11 +74,13 @@ export class ElevationModeState {
       loading:    observable,
       materialError: observable,
       selectedOpeningId: observable,
+      openingDragPreview: observable.ref,
       scale:      computed,
       layout:     computed,
       setViewSize: action,
       scrollBy:    action,
       selectOpening: action,
+      setOpeningDragPreview: action,
     });
   }
 
@@ -86,6 +89,14 @@ export class ElevationModeState {
    * 同じAPI名——OpeningPanel.jsxをそのまま再利用するため）。id=nullでパネルを閉じる。
    */
   selectOpening(id) { this.selectedOpeningId = id ?? null; }
+
+  /**
+   * 建具ドラッグ中のプレビュー { openingId, dxLocalMm } | null。ドラッグ中は refOffset を書かず
+   * （書くと _openingsSignature の reaction が帯を丸ごと再構築し、応答が追いつかない——実機指摘
+   * 2026-09-14）、ElevationLayer.jsx がその建具のプリミティブだけを dxLocalMm（帯ローカルx）だけ
+   * ずらして描く。確定時に refOffset を1回書いて再構築し、プレビューを消す。
+   */
+  setOpeningDragPreview(preview) { this.openingDragPreview = preview ?? null; }
 
   /**
    * 材データの動的ロード・直上階のpeek・帯の一括構築。

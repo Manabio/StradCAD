@@ -1270,6 +1270,34 @@ test('【項目2】buildFaceFigure: 建具記号丸(tag)は開口の中心では
   assert.notEqual(tag.cy, -(500 + 2000) / 2, '以前の仕様（開口の縦中心）には戻っていないはず');
 });
 
+// ---- 建具ドラッグの起点: 姿図の外形を覆う透明ヒット矩形（type:'hit'）と記号丸に openingId/dirSign を持たせる ----
+test('buildFaceFigure: 建具ごとに姿図外形のヒット矩形(hit)を1つ出し、tag と共に openingId・dirSign を持つ', () => {
+  const opening = {
+    id: 'op5', isVertical: false, axisCL: { id: 'axisY0' }, wallSide: 1,
+    centerCoord: 2000, width: 900, height: 2000, sillHeight: 500,
+    category: OpeningCategory.WINDOW, subType: 'singleSliding', fixtureType: null,
+  };
+  const face = makeFace();
+  const prims = buildFaceFigure(face, baseCtx({ graph: makeGraph({ openings: [opening] }) }));
+  const hits = prims.filter(p => p.type === 'hit');
+  assert.equal(hits.length, 1, '建具1件につきヒット矩形1つ');
+  assert.deepEqual(hits[0], { type: 'hit', openingId: 'op5', dirSign: face.dirSign, x: 1550, y: -2500, w: 900, h: 2000 },
+    '幅×高さ・窓台の上（y=-(sill+height)）を覆う');
+  const tag = prims.find(p => p.type === 'tag');
+  assert.equal(tag.openingId, 'op5');
+  assert.equal(tag.dirSign, face.dirSign, '記号丸からのドラッグにも面の向きが要る');
+  // 姿図のプリミティブ（枠 rect 等）にも openingId が付く——ドラッグ中のプレビュー（ElevationLayer.jsx が
+  // この建具のプリミティブだけをずらす）が姿図全体を動かせるように。
+  const frame = prims.find(p => p.type === 'rect' && p.w === 900);
+  assert.equal(frame?.openingId, 'op5', '姿図の枠 rect にも openingId');
+  assert.ok(!prims.some(p => p.type === 'line' && p.weight === 'thick' && p.openingId), '壁の断面線(thick)には付かない');
+});
+
+test('【失敗系】buildFaceFigure: 建具が無い面にはヒット矩形(hit)を出さない', () => {
+  const prims = buildFaceFigure(makeFace(), baseCtx({ graph: makeGraph({ openings: [] }) }));
+  assert.ok(!prims.some(p => p.type === 'hit'));
+});
+
 // ---- QA C1: 建具記号丸(tag)はスクリーン固定サイズ(OPENING_TAG_RADIUS_PX)を持つため、行位置は
 // 2パス機構でscreenMmToModelMm換算した値を使わないと、低倍率(縮小)側で床線・ROW1に重なる。
 // ここでは1/20・1/50・1/100の3スケールで実際に換算した値をctx経由で渡し、タグ円が床線・ROW1

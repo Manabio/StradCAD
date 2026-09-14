@@ -823,3 +823,31 @@ test('【失敗系・QA是正・第2ラウンド】faceDrawnXRange: 真に壁が
   assert.equal(range.lo, -150, '真に壁が無い端はextendMmぶん外へ広がるはず（従来どおり）');
   assert.equal(range.hi, 3442.5 + 150);
 });
+
+// ---- 展開図の建具ドラッグ起点（type:'hit'）は帯内座標（面の xCursor 込み）に置かれる ----
+// QA指摘 2026-09-14: translatePrimitive に 'hit' が無く、2面目以降のヒット矩形が面ローカルxのまま帯に置かれて
+// 「1面目の空白を押すと別面の建具が動く」事故になっていた。面ローカルの buildFaceFigure だけでなく、
+// 帯レベル（buildRoomBand）で姿図の枠 rect と同じ位置にあることを固定する。
+test('buildRoomBand: 4面すべての建具で hit 矩形が姿図の枠 rect と同じ帯内座標に置かれる', () => {
+  const graph = makeGraph();
+  const room = makeRectRoom(graph, 0, 0, 4000, 3000);
+  const cl = t => graph.centerLines.find(c => c.centerLineType === t[0] && c.value === t[1]);
+  const x0 = cl(['X', 0]), x1 = cl(['X', 4000]), y0 = cl(['Y', 0]), y1 = cl(['Y', 3000]);
+  graph.addOpening(y0, 1,  false, x0, 2000, 900, OpeningCategory.FITTING, 'singleSwing', {}); // A面（y=0）
+  graph.addOpening(x1, -1, true,  y0, 1500, 900, OpeningCategory.FITTING, 'singleSwing', {}); // B面（x=4000）
+  graph.addOpening(y1, -1, false, x0, 2000, 900, OpeningCategory.FITTING, 'singleSwing', {}); // C面（y=3000）
+  graph.addOpening(x0, 1,  true,  y0, 1500, 900, OpeningCategory.FITTING, 'singleSwing', {}); // D面（x=0）
+
+  const band = buildRoomBand(room, graph, { project: { openingNumberIndex: new Map() } });
+  const hits = band.primitives.filter(p => p.type === 'hit');
+  assert.equal(hits.length, 4, '建具4件＝hit 4件');
+  const xs = new Set();
+  for (const hit of hits) {
+    const frame = band.primitives.find(p => p.type === 'rect' && p.w === 900 && p.openingId === hit.openingId);
+    assert.ok(frame, `${hit.openingId} の姿図枠 rect があるはず`);
+    assert.equal(hit.x, frame.x, `${hit.openingId}: hit.x は枠 rect と同じ帯内座標（xCursor 込み）のはず`);
+    assert.ok(hit.y <= frame.y && hit.y + hit.h >= frame.y + frame.h, `${hit.openingId}: hit は枠を縦に覆う`);
+    xs.add(hit.x);
+  }
+  assert.equal(xs.size, 4, '4面の hit は帯内で別々の位置にある（面ローカルxのまま重なっていない）');
+});

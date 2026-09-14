@@ -34,11 +34,21 @@ export const ElevationLayer = observer(({ mode, size, onOpeningClick }) => {
         // 帯の実描画範囲(band.bounds.minY..maxY)の上端をtopMmへ合わせる。
         const originMmY = bandContentOriginMm(pl, band);
         const t = makeElevationTransform(scale, -faceOffsetMm * scale, originMmY * scale);
+        const renderOpts = { lineWeightsPx: viewport.lineWeightsPx, screenPxPerMm, onTagClick: onOpeningClick };
+        // 建具ドラッグ中のプレビュー（ElevationModeState.setOpeningDragPreview）: 帯は再構築せず、
+        // その建具のプリミティブ（openingId 付き）だけを別 Group に分け、帯ローカルxの移動量ぶん
+        // px でずらして描く。確定時に refOffset が書かれて帯が再構築され、プレビューは消える。
+        const preview = mode.openingDragPreview;
+        const moving = preview ? band.primitives.filter(p => p.openingId === preview.openingId) : [];
+        const still  = moving.length ? band.primitives.filter(p => p.openingId !== preview.openingId) : band.primitives;
         return (
           <Group key={`${pl.roomId}-${i}`}>
-            {renderFigurePrimitives(band.primitives, t, {
-              lineWeightsPx: viewport.lineWeightsPx, screenPxPerMm, onTagClick: onOpeningClick,
-            })}
+            {renderFigurePrimitives(still, t, renderOpts)}
+            {moving.length > 0 && (
+              <Group x={preview.dxLocalMm * scale}>
+                {renderFigurePrimitives(moving, t, renderOpts)}
+              </Group>
+            )}
           </Group>
         );
       })}

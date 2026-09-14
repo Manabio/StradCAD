@@ -90,6 +90,7 @@ export function translatePrimitive(p, dx, dy) {
     case 'arrow':
       return { ...p, x1: p.x1 + dx, y1: p.y1 + dy, x2: p.x2 + dx, y2: p.y2 + dy };
     case 'rect':
+    case 'hit': // 展開図の建具ドラッグ起点の透明矩形（elevationFigure.js）。rect と同形
       return { ...p, x: p.x + dx, y: p.y + dy };
     case 'text':
       return { ...p, x: p.x + dx, y: p.y + dy };
@@ -127,6 +128,7 @@ export function mirrorPrimitiveX(p, width) {
     case 'arrow':
       return { ...p, x1: m(p.x1), x2: m(p.x2) };
     case 'rect':
+    case 'hit':
       return { ...p, x: m(p.x + p.w) };
     case 'text': {
       const anchor = p.anchor === 'start' ? 'end' : p.anchor === 'end' ? 'start' : p.anchor;

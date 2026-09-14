@@ -16,7 +16,7 @@
 import { CenterLineType, OpeningCategory } from '@core';
 import { openingsOnFace, openingBelongsToFaceRoom, faceBoundaryLocalX, drawnSpanRanges, wallCoverageGapsOnFace, wallLessEndAt } from './elevationFaces.js';
 import { openingSectionPrimitives, wallThicknessForOpening } from '../openings/openingSection.js';
-import { openingTagPartsOf } from '../openings/openingNumbering.js';
+import { openingTagPartsOf, effectiveHeight } from '../openings/openingNumbering.js';
 import { findCatalogEntry, isDoorlessMechanism } from '../openings/openingCatalog.js';
 import { buildOpeningElevation, frameOnlyInnerRect } from '../openings/openingElevationFigure.js';
 import { translatePrimitive, mirrorPrimitiveX } from './elevationPrimitives.js';
@@ -1117,6 +1117,7 @@ export function buildFaceFigure(face, ctx) {
   // （openingBelongsToFaceRoom。実機「6」C＝階段の展開に階段下の部屋の建具が出ていた）。
   const openings = openingsOnFace(face, graph).filter(o => openingBelongsToFaceRoom(o, face, room, graph));
   for (const o of openings) {
+    const primStart = prims.length; // この建具のプリミティブ範囲（末尾で openingId を付ける）
     const localX = localXOf(face, o.centerCoord);
     const x = localX - o.width / 2;
     const entry = findCatalogEntry(o.category, o.subType);
@@ -1129,6 +1130,15 @@ export function buildFaceFigure(face, ctx) {
     });
     const oriented = face.dirSign < 0 ? figurePrims.map(p => mirrorPrimitiveX(p, o.width)) : figurePrims;
     for (const p of oriented) prims.push(translatePrimitive(p, x, floorDyAt(localX)));
+    // 建具ドラッグ（interaction/usePointerInteraction.js）の起点: 姿図の外形（幅×高さ。窓は窓台上）を
+    // 覆う透明なヒット矩形。線分1本ずつのヒットは細線で実用にならないため矩形で受ける（ユーザー裁定
+    // 2026-09-14）。dirSign は画面x方向の移動を世界座標の壁長さ方向へ戻す符号（localXOf の逆）。
+    // 描画は figurePrimitivesKonva.jsx（listening のみ・見た目なし）。SVG 出力等は type を知らず無視する。
+    {
+      const h = effectiveHeight(o);
+      const sill = o.category === OpeningCategory.WINDOW ? (o.sillHeight ?? 0) : 0;
+      prims.push({ type: 'hit', openingId: o.id, dirSign: face.dirSign, x, y: floorDyAt(localX) - sill - h, w: o.width, h });
+    }
     // 「扉のない建具」（三方枠等。openingCatalog.js DOORLESS_MECHANISMS）の内法は実際に抜けている
     // ＝アキなので、開放スパンと同じ標記（バツ＋「ア キ」。appendGapMark）を内法の矩形に描く
     // （ユーザー指示2026-09）。断面エンジン（emitOpenGapMarks）は「建具の姿の前にバツ不要」で
@@ -1146,8 +1156,12 @@ export function buildFaceFigure(face, ctx) {
     const { symbol, number } = openingTagPartsOf(o, project);
     prims.push({
       type: 'tag', cx: localX, cy: openingTagRowY, rPx: OPENING_TAG_RADIUS_PX,
-      top: symbol, bottom: number ?? '', openingId: o.id,
+      top: symbol, bottom: number ?? '', openingId: o.id, dirSign: face.dirSign, // dirSign: 記号丸からの建具ドラッグ用（hit と同じ）
     });
+    // この建具に属する全プリミティブ（姿図・アキ標記・hit・tag）へ openingId を付ける——展開図の建具
+    // ドラッグ中、ElevationLayer.jsx が帯を再構築せずにこの建具のプリミティブだけをずらして描く
+    // （ElevationModeState.setOpeningDragPreview）ため。
+    for (let i = primStart; i < prims.length; i++) prims[i].openingId = o.id;
   }
 
   // 直交壁の建具が切断位置にかかる場合、その断面（枠2断面＋扉1枚）を面の両端に描く（項目3）。
