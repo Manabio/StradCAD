@@ -25,6 +25,10 @@ export function isRcWallBacking(code) {
 // materialData.js の BACKING（category:'backing'）中、spec が杉・桧・松・栂等の木質材である
 // 13件（□-90×90 〜 □-30×30）と同じコード（配列はこちらが真実のソース）。
 export const WOOD_WALL_BACKING_CODES = Object.freeze([
+  '111111111239', // □-120×45 杉・松等（間柱/大壁用）（在来木造 柱120角。2026-09-14追加）
+  '111111111240', // □-120×30 杉・松等（間柱/薄口）（同上。柱寸×30）
+  '111111111241', // □-105×45 杉・松等（間柱/大壁用）（柱105角）
+  '111111111242', // □-105×30 杉・松等（間柱/薄口）（柱105角。柱寸×30）
   '111111111152', // □-90×90  杉・桧等（集成材/製材）
   '111111111153', // □-75×75  杉・桧等（集成材/製材）
   '111111111154', // □-60×60  杉・松等（製材）
@@ -45,4 +49,31 @@ const WOOD_WALL_BACKING_CODE_SET = new Set(WOOD_WALL_BACKING_CODES);
 /** code（下地材コード）が木質下地かどうか。 */
 export function isWoodWallBacking(code) {
   return WOOD_WALL_BACKING_CODE_SET.has(code);
+}
+
+// 在来木造の壁下地＝「柱同寸×30」（仕様2026-09-14）を自動選択するための、寸法 → 材コード表。
+// キーは `${幅}x${見込み}`。幅＝柱寸法（正角。90/105/120）、見込み＝30（壁下地材）／45（間柱）。
+// materialData.js の BACKING は新規4件のコードをこの表から取る（二重管理防止。90×45/90×30 は既存コード）。
+export const WOOD_STUD_CODE_BY_SIZE = Object.freeze({
+  '120x45': '111111111239',
+  '120x30': '111111111240',
+  '105x45': '111111111241',
+  '105x30': '111111111242',
+  '90x45':  '111111111155',
+  '90x30':  '111111111156',
+});
+
+/** 柱寸法（幅）と見込みから木質下地材（間柱）のコードを返す。表に無い組み合わせは null。 */
+export function woodStudCodeFor(widthMm, depthMm) {
+  return WOOD_STUD_CODE_BY_SIZE[`${widthMm}x${depthMm}`] ?? null;
+}
+
+/** 下地材分類（structural/structureRules.js の BACKING_RULES＝壁下地材ごとのルールのキー）。 */
+export const BackingClass = Object.freeze({ WOOD: 'wood', RC: 'rc', OTHER: 'other' });
+
+/** code（下地材コード）の下地材分類。分類の真実はこのファイルの材コード集合。 */
+export function backingClassOf(code) {
+  if (WOOD_WALL_BACKING_CODE_SET.has(code)) return BackingClass.WOOD;
+  if (RC_WALL_BACKING_CODE_SET.has(code)) return BackingClass.RC;
+  return BackingClass.OTHER;
 }

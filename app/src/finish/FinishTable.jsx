@@ -6,6 +6,7 @@ import { StairTab } from './stair/StairTab.jsx';
 import { withFinishUndo, beginFieldUndo, endFieldUndo } from './finishUndo.js';
 import { roomCeilingHeight } from './roomMetrics.js';
 import { RoomFeature, RoomKind, DEFAULT_ROOM_FLOOR_LEVEL, DEFAULT_ROOM_CEILING_HEIGHT } from '@core';
+import { rulesFor, effectiveStructure } from '../structural/structureRules.js';
 
 // ---- 内部仕上げ表 ----
 
@@ -192,14 +193,16 @@ const TAB_TO_CATEGORY = {
 // ================================================================
 
 // 材選択ドロップダウン（カテゴリで材マスタをフィルタ。値は材コード）
-const MaterialSelect = observer(({ mode, category, value, onChange, style }) => {
+const MaterialSelect = observer(({ mode, category, value, onChange, style, disabled = false, title }) => {
   const materials = mode?.getMaterialsByCategory(category) ?? [];
   return (
     <select
       value={value ?? ''}
       onChange={e => onChange(e.target.value)}
       onClick={e => e.stopPropagation()}
-      style={{ ...cellInputStyle, cursor: 'pointer', ...style }}
+      disabled={disabled}
+      title={title}
+      style={{ ...cellInputStyle, cursor: disabled ? 'default' : 'pointer', ...style }}
     >
       <option value="">（未選択）</option>
       {materials.map(m => (
@@ -210,7 +213,7 @@ const MaterialSelect = observer(({ mode, category, value, onChange, style }) => 
 });
 
 // 表の上に1行表示する per-floor 設定行（共通仕様タブの下地材設定）
-const PerFloorRow = observer(({ label, mode, category, value, onChange }) => (
+const PerFloorRow = observer(({ label, mode, category, value, onChange, disabled = false, title }) => (
   <div style={{
     display: 'flex', alignItems: 'center', gap: 8,
     padding: '6px 12px', borderBottom: '1px solid #e2e8f0',
@@ -218,7 +221,7 @@ const PerFloorRow = observer(({ label, mode, category, value, onChange }) => (
   }}>
     <span style={{ fontSize: 12, fontWeight: 700, color: '#374151', whiteSpace: 'nowrap' }}>{label}：</span>
     <MaterialSelect mode={mode} category={category} value={value} onChange={onChange}
-      style={{ flex: 1, minWidth: 120 }} />
+      disabled={disabled} title={title} style={{ flex: 1, minWidth: 120 }} />
   </div>
 ));
 
@@ -250,6 +253,10 @@ const PerFloorNumberRow = observer(({ label, graph, value, onChange, onBlurValid
 // 「内外壁」は内部的に graph.exteriorWallBacking と同じ設定を指す（独立フィールドは持たない）。
 // 外壁下地の値を変更すると本行の表示も連動して追従する。
 const CommonSpecTable = observer(({ graph, mode }) => {
+  // 在来木造は壁下地材を「柱同寸×30」へ自動選択する（structural/woodAutoFill.js conformWoodBacking）ため
+  // 内壁・外壁の下地材は手で変えられない（主構造ルール backing）。
+  const autoBacking = rulesFor(effectiveStructure(graph)).backing != null;
+  const autoTitle = autoBacking ? '在来木造では柱同寸×30の間柱を自動選択します' : undefined;
   // CH初期値の 0 指定エラー（部屋カードの CH と同じルール: CHは0より大きい）
   const [chError, setChError] = useState(null);
   useEffect(() => {
@@ -261,11 +268,11 @@ const CommonSpecTable = observer(({ graph, mode }) => {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', flex: 1, overflow: 'hidden' }}>
       <div style={{ overflowY: 'auto', flex: 1 }}>
-        <PerFloorRow label="内壁下地" mode={mode} category="backing"
+        <PerFloorRow label="内壁下地" mode={mode} category="backing" disabled={autoBacking} title={autoTitle}
           value={graph.interiorWallBacking} onChange={code => withFinishUndo(graph, () => graph.setInteriorWallBacking(code))} />
-        <PerFloorRow label="内外壁" mode={mode} category="backing"
+        <PerFloorRow label="内外壁" mode={mode} category="backing" disabled={autoBacking} title={autoTitle}
           value={graph.exteriorWallBacking} onChange={code => withFinishUndo(graph, () => graph.setExteriorWallBacking(code))} />
-        <PerFloorRow label="外壁下地" mode={mode} category="backing"
+        <PerFloorRow label="外壁下地" mode={mode} category="backing" disabled={autoBacking} title={autoTitle}
           value={graph.exteriorWallBacking} onChange={code => withFinishUndo(graph, () => graph.setExteriorWallBacking(code))} />
         <PerFloorRow label="天井" mode={mode} category="backing"
           value={graph.ceilingBacking} onChange={code => withFinishUndo(graph, () => graph.setCeilingBacking(code))} />

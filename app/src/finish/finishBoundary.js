@@ -20,6 +20,7 @@ import {
 } from './roomReinterpret.js';
 import { kneeDropWallGeometry } from './kneeDropWall.js';
 import { reflectStructuralAfterFinishExit } from '../structural/structuralOrchestration.js';
+import { conformWoodBacking } from '../structural/woodAutoFill.js';
 // finish/clEccentricity.js は edgeComposition.js 経由で materials/materialData.js（材マスタ全件）を
 // 静的に引くため、コード分割維持のため動的 import する（materialData.js のヘッダコメント参照）。
 
@@ -33,6 +34,18 @@ export async function runFinishEntryBoundary(graph, project) {
 
   const entryUndoFns = [];
   const entryRedoFns = [];
+
+  // 在来木造: 共通仕様の壁下地材を柱同寸×30へ自動選択する（structural/woodAutoFill.js。壁の生成が
+  // この per-floor 設定から壁厚を決めるため、退出時の壁生成より前＝突入時に揃える）。ここが唯一の
+  // 呼び出し元——壁は脱出時にしか再生成されないため、他の経路（構造再計算）で下地材だけ変えると
+  // 壁厚とズレる。既存文書の旧厚の壁も、この階が仕上げモードを一度通れば脱出時に新厚で作り直される。
+  // 自動導出のため undo では元のコードへ戻す（下の entryUndoFns）。
+  const backingChanges = runInAction(() => conformWoodBacking(graph, project));
+  if (backingChanges.length > 0) {
+    const setter = f => (f === 'exteriorWallBacking' ? 'setExteriorWallBacking' : 'setInteriorWallBacking');
+    entryUndoFns.push(() => { for (const c of backingChanges) graph[setter(c.field)](c.from); });
+    entryRedoFns.push(() => { for (const c of backingChanges) graph[setter(c.field)](c.to); });
+  }
 
   const roomsBefore = snapshotRoomsState(graph);
   const stairRoomChanges = [];

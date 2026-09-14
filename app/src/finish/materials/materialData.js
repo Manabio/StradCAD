@@ -16,7 +16,7 @@
 // ※ このファイルは仕上げモード突入時にのみ動的 import される（コード分割）。
 //    ロード・照合・破棄のライフサイクルは FinishModeState 側で扱う（本ファイルは純データ）。
 // ================================================================
-import { RC_WALL_BACKING_CODES } from './backingClass.js';
+import { RC_WALL_BACKING_CODES, WOOD_STUD_CODE_BY_SIZE } from './backingClass.js';
 
 /** 材の役割（カテゴリ）。壁材＝面材選択肢、外壁下地＝下地材選択肢のフィルタに使用。 */
 export const MATERIAL_CATEGORY = Object.freeze({
@@ -70,6 +70,13 @@ const BACKING = [
   { code: '111111111149', name: 'ランナー-45×102', spec: '溶融亜鉛めっき鋼板（JIS A 6517）', x: 45, y: 102, thickness: null, note: '100型スタッド用ランナー 超高壁の下端 上端の固定用大型ランナー' },
   { code: '111111111150', name: '振れ止め-25×10', spec: '溶融亜鉛めっき鋼板', x: 25, y: 10, thickness: null, note: 'LGS壁のねじれ防止補強材 高さ1200mmピッチ以内でスタッドのスリットに通す' },
   { code: '111111111151', name: '振れ止め-38×12', spec: '溶融亜鉛めっき鋼板', x: 38, y: 12, thickness: null, note: '大型LGS壁90型 100型用の強力振れ止めチャンネル材' },
+  // 在来木造の壁下地＝柱同寸×30（仕様2026-09-14「壁下地材は柱寸法×30」）。柱寸法の候補（120/105/90）ごとに
+  // 間柱（×45）・薄口（×30）を大きさ順に置く（90×45/90×30 は既存）。コードは末尾採番（既存コードは据え置き＝
+  // 保存済み文書の下地材参照を壊さない。backingClass.js の WOOD_STUD_CODE_BY_SIZE と同じ値）。
+  { code: WOOD_STUD_CODE_BY_SIZE['120x45'], name: '□-120×45', spec: '杉・松等（間柱/大壁用）', x: 120, y: 45, thickness: null, note: '在来木造 柱120角の外壁 内壁を構成する間柱 ピッチ455mmまたは303mm' },
+  { code: WOOD_STUD_CODE_BY_SIZE['120x30'], name: '□-120×30', spec: '杉・松等（間柱/薄口）',   x: 120, y: 30, thickness: null, note: '在来木造 柱120角の壁下地（柱寸×30）' },
+  { code: WOOD_STUD_CODE_BY_SIZE['105x45'], name: '□-105×45', spec: '杉・松等（間柱/大壁用）', x: 105, y: 45, thickness: null, note: '在来木造 柱105角の外壁 内壁を構成する間柱 ピッチ455mmまたは303mm' },
+  { code: WOOD_STUD_CODE_BY_SIZE['105x30'], name: '□-105×30', spec: '杉・松等（間柱/薄口）',   x: 105, y: 30, thickness: null, note: '在来木造 柱105角の壁下地（柱寸×30）' },
   { code: '111111111152', name: '□-90×90', spec: '杉・桧等（集成材/製材）', x: 90, y: 90, thickness: null, note: '木造住宅の平屋用の柱 または小規模な下地 床束フレーム三寸角' },
   { code: '111111111153', name: '□-75×75', spec: '杉・桧等（集成材/製材）', x: 75, y: 75, thickness: null, note: '小柱 床を支える木製床束 または庇ひさしを支持する小規模フレーム二寸五分角' },
   { code: '111111111154', name: '□-60×60', spec: '杉・松等（製材）',       x: 60, y: 60, thickness: null, note: '補強用の小柱や強度の必要な下地組 または和室の床構成部材二寸角' },
