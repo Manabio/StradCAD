@@ -5,7 +5,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Plane, PlanGraph, CenterLineType, Discipline, StairType, StructuralMaterialType } from '@core';
 import { generateRoomWallsFromOutline } from '../../finish/wallGeneration.js';
-import { stairContribution, stairPrimitivesForCut, clipStringerToAnchors, landingFramePrimitives, stairWallGapZones, stairCutFloorProfile, stairFaceHits, stairOccluderRects, stairFaceOccluderRects, stairDrawRange } from './sectionStair.js';
+import { stairContribution, stairPrimitivesForCut, clipStringerToAnchors, landingFramePrimitives, stairWallGapZones, stairCutFloorProfile, stairFaceHits, stairOccluderRects, stairFaceOccluderRects, stairDrawRange, flightNoseZAt } from './sectionStair.js';
+import { stairRunProfile, stringerBandGeometry } from '../elevationStairSection.js';
 import { localXOf, cutDrawRange } from './sectionTypes.js';
 
 function makeGraph(name = 'p1') {
@@ -182,9 +183,12 @@ test('【実機指摘】stairPrimitivesForCut: ささら正面視の断面矩形
   };
   const columns = [{ x0: 0, x1: f.acrossHi - f.acrossLo, worldLo: f.acrossLo, worldHi: f.acrossHi, bands: [] }];
   const prims = stairPrimitivesForCut(c, cut, columns);
-  const worldStart = f.travelSign > 0 ? f.runLo : f.runHi;
-  const worldEnd   = f.travelSign > 0 ? f.runHi : f.runLo;
-  const noseZ = f.baseZ + ((axisValue - worldStart) / (worldEnd - worldStart)) * f.steps * f.riserMm;
+  // 段鼻の高さは**断面の段鼻列と同じ規約**（stairRunProfile: 踏面ピッチ＝区間長÷(段数−1)、最初の
+  // 段鼻は始端でbaseZ+riser）で求める。区間の中央(axisValue)は始端から区間長の半分＝踏面ピッチ
+  // 2.5個ぶん → baseZ + riser×(1+2.5)。旧実装の線形補間（始端でbaseZ）だと baseZ + riser×3 になり
+  // 断面より1/2リザー低かった（ユーザー実機指摘2026-09-14「13」A）。
+  const pitch = f.lengthMm / (f.steps - 1);
+  const noseZ = f.baseZ + f.riserMm * (1 + (f.lengthMm / 2) / pitch);
   const baseboard = c.unit.baseboardHeightMm;
   assert.ok(baseboard > 0, '前提: 巾木高さが0でない');
 
@@ -1346,3 +1350,133 @@ function innerStringerXsExcludingEndCap(contribution, cut, columns) {
     .map(p => p.x1)
     .sort((a, b) => a - b);
 }
+
+// ---- ユーザー実機指摘2026-09-14「13」A: 階段の見え掛かりの横線が隣のBの断面と不一致 ----
+// 根本原因: 正面視のささら断面（flightStringerFrontPrimitives）と階段下の部屋の帯の「上を通る
+// 階段の高さ」細線（elevationBand.js）は、断面のジグザグ（stairRunProfile）とは**別の線形補間**
+// （始端でbaseZ・終端でbaseZ+steps×riser）で高さを決めていた。断面は始端に最初の段鼻
+// （baseZ+riser）を置き踏面ピッチ＝区間長÷(段数−1)で刻むため、始端側ほど最大1リザーずれる。
+// flightNoseZAt がその単一情報源——stairRunProfileの段鼻列と全点で一致することを固定する。
+test('【実機指摘2026-09-14「13」A】flightNoseZAt: stairRunProfileの段鼻列と全ての段鼻で一致し、始端はbaseZ+riser・終端はbaseZ+steps×riser', () => {
+  const graph = makeGraph();
+  const { stair } = makeSwitchbackFixture(graph, StructuralMaterialType.STEEL);
+  const c = stairContribution(stair, graph, FLOOR_HEIGHT);
+  for (const f of c.flights) {
+    const worldStart = f.travelSign > 0 ? f.runLo : f.runHi;
+    const worldEnd   = f.travelSign > 0 ? f.runHi : f.runLo;
+    // 断面のジグザグ（世界座標の走行方向をそのままxにして生成。dir=travelSign）。
+    const { noses } = stairRunProfile(f.steps, f.riserMm, f.lengthMm, worldStart, -f.baseZ, f.travelSign, f.nosingMm);
+    assert.equal(noses.length, f.steps, '前提: 段鼻は段数ぶん');
+    for (const [x, y] of noses) {
+      assert.ok(Math.abs(flightNoseZAt(f, x) - (-y)) < 1e-6,
+        `段鼻(${x})の高さ${-y}と一致するはず（実際:${flightNoseZAt(f, x)}）`);
+    }
+    assert.ok(Math.abs(flightNoseZAt(f, worldStart) - (f.baseZ + f.riserMm)) < 1e-6,
+      '始端＝最初の段鼻（baseZ+riser）。旧線形補間のbaseZではない');
+    assert.ok(Math.abs(flightNoseZAt(f, worldEnd) - (f.baseZ + f.steps * f.riserMm)) < 1e-6,
+      '終端＝baseZ+steps×riser');
+    // 区間の外は端の高さでクランプ（踊り場側へ越えても下がらない・上階側へ越えても上がらない）。
+    assert.ok(Math.abs(flightNoseZAt(f, worldStart - f.travelSign * 500) - (f.baseZ + f.riserMm)) < 1e-6);
+    assert.ok(Math.abs(flightNoseZAt(f, worldEnd + f.travelSign * 500) - (f.baseZ + f.steps * f.riserMm)) < 1e-6);
+  }
+});
+
+test('【失敗系・実機指摘2026-09-14】flightNoseZAt: 1段だけの区間は段鼻が1つ＝どの位置でもbaseZ+riser（0除算しない）', () => {
+  const f = { isVertical: true, runLo: 0, runHi: 300, travelSign: 1, acrossLo: 0, acrossHi: 1000,
+    baseZ: 100, riserMm: 150, steps: 1, lengthMm: 300, nosingMm: 0 };
+  for (const x of [-100, 0, 150, 300, 400]) {
+    assert.equal(flightNoseZAt(f, x), 250, `x=${x}`);
+  }
+});
+
+// 階段下の部屋の帯（「13」D相当）: flightの両端が面の描画範囲の外へ続く構成で、側面視のささらの帯
+// （見えがかり）の勾配が断面の段鼻列（riser/踏面ピッチ）と一致すること。旧実装は段鼻列を面の
+// 描画範囲へクランプしてから帯の直線を引いていたため、端点だけxが寄って勾配が変わっていた。
+test('【実機指摘2026-09-14「13」D】stairPrimitivesForCut: 面の外へ続くflightの側面視ささら（下端のみ）の勾配は断面の段鼻列の勾配(riser÷踏面ピッチ)に一致する', () => {
+  const graph = makeGraph();
+  const { stair } = makeSwitchbackFixture(graph, StructuralMaterialType.STEEL);
+  const c = stairContribution(stair, graph, FLOOR_HEIGHT);
+  const f = c.flights[0]; // 往路（run 1500..4500）
+  // 面はflightの走行範囲の**内側**だけ（両端が面の外へ続く）——階段下の部屋の帯と同じ構成。
+  const faceLo = f.runLo + 600, faceHi = f.runHi - 600;
+  const cut = {
+    seqNo: '2', line: { isVertical: true, axisValue: (f.acrossLo + f.acrossHi) / 2, lo: faceLo, hi: faceHi },
+    viewSign: 1, dirSign: 1, layers: [], zRange: { loZ: 0, hiZ: 3000 }, baseFloorZ: 0,
+  };
+  const columns = [{ x0: 0, x1: faceHi - faceLo, worldLo: faceLo, worldHi: faceHi, bands: [] }];
+  const prims = stairPrimitivesForCut({ ...c, flights: [f], landings: [] }, cut, columns,
+    { includeLadder: false, stringerSightlineLowerOnly: true });
+  const lower = prims.filter(p => p.type === 'polyline' && p.weight === 'thin');
+  assert.ok(lower.length >= 1, `下端のささら見えがかり(thin polyline)が出るはず（実際:${JSON.stringify(prims)}）`);
+  const [[x1, y1], [x2, y2]] = [lower[0].points[0], lower[0].points[lower[0].points.length - 1]];
+  const slope = Math.abs((y2 - y1) / (x2 - x1));
+  const expected = f.riserMm / (f.lengthMm / (f.steps - 1));
+  assert.ok(Math.abs(slope - expected) < 1e-6,
+    `帯の勾配${slope}は段鼻列の勾配${expected}のはず（クランプ済み段鼻から帯を引くと崩れる）`);
+});
+
+// 「踊り場＋flightの手前側だけ」を見る面（flightの遠端が面の外へ続く）のfixture。踊り場桁枠のミトレ交点
+// （landingSideMitreX）と、手前レーンのささら上端による復路ささらの遮蔽（nearTopSeg）が、どちらも
+// **未クランプの段鼻列**から求まることを固定する（QA指摘2026-09-14: この2箇所は勾配テストでは守れない）。
+function makeLandingSideFixture() {
+  const graph = makeGraph();
+  const { stair } = makeSwitchbackFixture(graph, StructuralMaterialType.STEEL);
+  const c = stairContribution(stair, graph, FLOOR_HEIGHT);
+  const f = c.flights[0]; // 往路（run 1500..4500、踊り場側が runLo）
+  const faceLo = 0, faceHi = f.runHi - 600; // 踊り場(0..1500)を含み、flightの遠端600mmは面の外
+  const cut = {
+    seqNo: '2', line: { isVertical: true, axisValue: (f.acrossLo + f.acrossHi) / 2, lo: faceLo, hi: faceHi },
+    viewSign: 1, dirSign: 1, layers: [], zRange: { loZ: 0, hiZ: 3000 }, baseFloorZ: 0,
+  };
+  const columns = [{ x0: 0, x1: faceHi - faceLo, worldLo: faceLo, worldHi: faceHi, bands: [] }];
+  // 期待値は本番と独立に、未クランプの段鼻列（stairRunProfile）→ stringerBandGeometry で求める。
+  const worldStart = f.travelSign > 0 ? f.runLo : f.runHi;
+  const { noses } = stairRunProfile(f.steps, f.riserMm, f.lengthMm, localXOf(cut, worldStart), -f.baseZ,
+    f.travelSign * cut.dirSign, f.nosingMm);
+  const band = stringerBandGeometry(noses, 300, {
+    baseboardMm: c.unit.baseboardHeightMm, mitreDepthMm: c.unit.landingFrameDepthMm, mitreStart: false, mitreEnd: true,
+  });
+  return { c, f, cut, columns, band };
+}
+
+test('【QA指摘2026-09-14】landingSideMitreX: 面の外へ続くflightでも踊り場桁枠side辺の下端線は未クランプ段鼻列のミトレ交点で終わり、斜めささらの下端と同じ点で継がる', () => {
+  const { c, f, cut, columns, band } = makeLandingSideFixture();
+  const prims = stairPrimitivesForCut({ ...c, flights: [f] }, cut, columns, { includeLadder: false });
+  const expectedMitreX = band.bottom[1][0];
+  const frameBotY = -(c.landings[0].z + c.unit.baseboardHeightMm - c.unit.landingFrameDepthMm); // 桁枠下端
+  // 桁枠side辺の下端線（細線・水平・桁枠下端の高さ）はミトレ交点で終わる。
+  const frameBot = prims.filter(p => p.type === 'line' && p.weight === 'thin'
+    && Math.abs(p.y1 - frameBotY) < 1e-6 && Math.abs(p.y2 - frameBotY) < 1e-6);
+  assert.ok(frameBot.length > 0, `桁枠下端の水平細線が出るはず（実際:${JSON.stringify(prims)}）`);
+  assert.ok(frameBot.some(p => Math.abs(Math.max(p.x1, p.x2) - expectedMitreX) < 1e-6),
+    `桁枠下端線の端x=${expectedMitreX}（未クランプ段鼻のミトレ交点）のはず（実際:${JSON.stringify(frameBot.map(p => [p.x1, p.x2]))}）`);
+  // 斜めささらの下端（見えがかり）も同じ点から始まる＝取り合いが1点で継がる。
+  const lower = prims.filter(p => p.type === 'polyline' && p.weight === 'thin'
+    && p.points.some(([x, y]) => Math.abs(x - expectedMitreX) < 1e-6 && Math.abs(y - frameBotY) < 1e-6));
+  assert.ok(lower.length > 0, `斜めささらの下端がミトレ交点(${expectedMitreX}, ${frameBotY})を通るはず`);
+});
+
+test('【QA指摘2026-09-14】nearTopSeg: 復路（secondaryFlights）のささらは、未クランプ段鼻列から作った手前レーンのささら上端線で切られる', () => {
+  const { c, f, cut, columns, band } = makeLandingSideFixture();
+  const prims = stairPrimitivesForCut({ ...c, flights: [f], secondaryFlights: [c.flights[1]] }, cut, columns, { includeLadder: false });
+  // 手前レーンの上端線（未クランプ段鼻＋巾木）。遮蔽外形はこの直線（線分の外は端点の高さで水平延長）。
+  const [[ax, ay], [bx, by]] = band.top;
+  const occluderY = x => (x <= Math.min(ax, bx) ? (ax <= bx ? ay : by) : x >= Math.max(ax, bx) ? (ax <= bx ? by : ay)
+    : ay + (x - ax) * (by - ay) / (bx - ax));
+  // 復路のささら＝往路の上端線より奥のレーン（z範囲 1200〜2400）。切られた端点が上端線の上に乗る。
+  const secondary = prims.filter(p => p.type === 'polyline' && p.weight === 'thin'
+    && p.points.every(([, y]) => y <= -c.landings[0].z + 1e-6));
+  assert.ok(secondary.length > 0, `復路のささら（踊り場より上の細線polyline）が出るはず（実際:${JSON.stringify(prims)}）`);
+  const onOccluder = secondary.flatMap(p => p.points).filter(([x, y]) => Math.abs(y - occluderY(x)) < 1e-6
+    && x > Math.min(ax, bx) + 1e-6 && x < Math.max(ax, bx) - 1e-6);
+  assert.ok(onOccluder.length > 0,
+    `復路ささらの切れ端は手前レーンの上端線上（未クランプ段鼻の勾配）にあるはず（実際:${JSON.stringify(secondary.map(p => p.points))}）`);
+});
+
+test('【失敗系・実機指摘2026-09-14】flightNoseZAt: lengthMm未定義のflightは|runHi−runLo|を区間長にする', () => {
+  const f = { isVertical: true, runLo: 0, runHi: 2400, travelSign: -1, acrossLo: 0, acrossHi: 1000,
+    baseZ: 0, riserMm: 200, steps: 5, lengthMm: undefined, nosingMm: 0 };
+  assert.equal(flightNoseZAt(f, 2400), 200, '始端（travelSign<0なのでrunHi側）＝最初の段鼻');
+  assert.equal(flightNoseZAt(f, 0), 1000, '終端＝baseZ+steps×riser');
+  assert.equal(flightNoseZAt(f, 1200), 600, '中央＝踏面ピッチ(600)×2ぶん進んだ段鼻');
+});

@@ -618,12 +618,17 @@ test('stairFaceSequence: 鉄骨階段(structure=STEEL)はseq2の踏面ジグザ�
   const entries = stairFaceSequence(stair, faces, graph, { ...OPTS, layers: buildBandLayers(graph) });
   const seq2 = entries.find(e => e.seqNo === '2');
   const polylines = seq2.content.filter(p => p.type === 'polyline');
-  assert.equal(polylines.length, 4,
-    '踏面のCUT(1本)＋自レーンささらDETAIL(1本)＋他レーンささらDETAIL(面端クリップで2本に分かれる)=4本のはず');
+  // ユーザー実機指摘2026-09-14「13」D対応（sectionStair.jsのcomputeFlightProfileが段鼻列をクランプしなくなった）:
+  // ささらの帯は面の描画範囲へクランプする前の段鼻列から作り、面の外は出口の終端クリップに
+  // 任せる。このfixtureでは自レーンの段鼻列も半壁厚ぶん面の外へ出るため、自レーンの帯（閉じた
+  // 輪郭）も面端で2本に分かれる（旧実装はクランプで面端に縦線を立てて1本に閉じていた）——
+  // 「踏面CUT(1本)＋自レーンDETAIL(2本)＋他レーンDETAIL(2本)=5本」。
+  assert.equal(polylines.length, 5,
+    '踏面のCUT(1本)＋自レーンささらDETAIL(面端クリップで2本)＋他レーンささらDETAIL(面端クリップで2本)=5本のはず');
   const zigzag = polylines.find(p => p.weight === weightForRole(ElevationLineRole.CUT));
   const stringers = polylines.filter(p => p.weight === weightForRole(ElevationLineRole.DETAIL));
   assert.ok(zigzag, '踏面のジグザグはCUTのはず');
-  assert.equal(stringers.length, 3, 'ささらの見えがかりはDETAILが3本(自レーン1本＋他レーン2本)のはず');
+  assert.equal(stringers.length, 4, 'ささらの見えがかりはDETAILが4本(自レーン2本＋他レーン2本)のはず');
 });
 
 // ---- ユーザー実機フィードバック2026-08-23: 「1」Bでは、往路と復路の間に壁はないので、
@@ -650,9 +655,11 @@ test('stairFaceSequence: 鉄骨階段は往復間に壁が無ければseq2に他
   // の出口に`stairDrawRange`への終端クリップを導入した結果、他レーン(復路)のささらDETAIL
   // polyline（面の外（x<0）まで伸びていた）が面端で2本に分かれる（自レーン1本は面端に掛からず
   // 不変）。壁ありは他レーン自体が遮られるため不変（自レーン1本のみ）。
-  assert.equal(detailPolylineCount(withoutWall), 3,
-    '壁が無ければ自レーン(1本)＋他レーンのささらDETAIL(面端クリップで2本)=3本見えるはず');
-  assert.equal(detailPolylineCount(withWall), 1, '壁があれば他レーンのささらは遮られ自レーンの1本だけのはず');
+  // ユーザー実機指摘2026-09-14「13」D対応（段鼻列の未クランプ化。上のテストのコメント参照）で自レーンの帯も
+  // 面端クリップで2本に分かれる——壁なし: 自レーン2本＋他レーン2本=4本／壁あり: 自レーン2本のみ。
+  assert.equal(detailPolylineCount(withoutWall), 4,
+    '壁が無ければ自レーン(面端クリップで2本)＋他レーンのささらDETAIL(面端クリップで2本)=4本見えるはず');
+  assert.equal(detailPolylineCount(withWall), 2, '壁があれば他レーンのささらは遮られ自レーンの2本だけのはず');
 });
 
 test('【失敗系】stairFaceSequence: 木造(既定)はseq2にささらを含まない(polylineは1本)', () => {

@@ -13,7 +13,7 @@ import { makeProbeContext } from './section/sectionProbe.js';
 import { buildSectionFromLine } from './section/sectionContent.js';
 import { cutPlaneOffsetMm, faceCutLine, faceViewSign } from './section/sectionCutPlane.js';
 import { structuralColumnContribution } from './section/sectionStructure.js';
-import { stairContribution, stairPrimitivesForCut, clipStairUnderCeiling } from './section/sectionStair.js';
+import { stairContribution, stairPrimitivesForCut, clipStairUnderCeiling, flightNoseZAt } from './section/sectionStair.js';
 import { graphList } from '../graphReadScope.js';
 import { faceBoundaryLocalX, faceWallLessExtents, wallLessEndAt } from './elevationFaces.js';
 import { composeRoomFaces, neighborWallFace } from './elevationFaceList.js';
@@ -572,13 +572,12 @@ const clipContentToFace = clipPrimitivesToXRange;
 
 /**
  * その走行位置（世界座標）での階段（flight）の段鼻の高さ。区間の外は端の高さでクランプする。
+ * 実体は`section/sectionStair.js`の`flightNoseZAt`（断面の段鼻列と同じ規約の単一情報源）。
+ * 旧実装はここに独自の線形補間（始端でbaseZ）を持っており、断面（始端で最初の段鼻＝baseZ+riser）
+ * と食い違っていた（実機「13」A。ユーザー実機指摘2026-09-14）。
  */
 function stairZAtRun(flight, runWorld) {
-  const start = flight.travelSign > 0 ? flight.runLo : flight.runHi;
-  const end   = flight.travelSign > 0 ? flight.runHi : flight.runLo;
-  if (Math.abs(end - start) < BAND_GAP_EPS) return flight.baseZ;
-  const t = Math.min(Math.max((runWorld - start) / (end - start), 0), 1);
-  return flight.baseZ + t * flight.steps * flight.riserMm;
+  return flightNoseZAt(flight, runWorld);
 }
 
 /**

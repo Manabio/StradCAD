@@ -466,7 +466,15 @@ function computeFlightProfile(flight, cut, columns, outerBound) {
   if (!range) return { points: [], noses: [] }; // 列が面の描画範囲と交わらない＝この面には描かない
   const { loX, hiX } = range;
   const clamp = ([x, y]) => [Math.min(hiX, Math.max(loX, x)), y];
-  return { points: points.map(clamp), noses: noses.map(clamp) };
+  // 段鼻列（noses）は**クランプしない**。ささらの帯（stringerBandGeometry）は「最初と最後の段鼻を
+  // 結ぶ直線」から作るため、面の描画範囲へクランプした段鼻を渡すと、flightが面の外へ続く構成
+  // （階段下の部屋の帯＝実機「13」D。flightの両端が面の端の外にある）で端点だけxが寄って
+  // **勾配が断面の段鼻列と違う帯**になる（ユーザー実機指摘2026-09-14「見え掛かりが断面と不一致」
+  // の一因）。帯・ミトレ交点・遮蔽外形はクランプ前の段鼻から作り、面の外はstairPrimitivesForCut
+  // 出口のx終端クリップ（clipPrimitivesToXRange）に任せる。ジグザグ本体（points）だけは従来どおり
+  // クランプする（面端で蹴上を立てる既存の見え方を保つ）。クランプ済みの段鼻列は持たない
+  // ——同じ原始データの2つ目の供給源を作らないため（QA指摘2026-09-14）。
+  return { points: points.map(clamp), noses };
 }
 
 // レーン縦断: 段鼻のジグザグ本体（SILHOUETTE。WOOD向け。isLengthwiseCutで縦断対象かを判定）。
@@ -761,17 +769,32 @@ export function crossesFlight(flight, cut) {
     cut.line.axisValue >= flight.runLo - GAP_EPS && cut.line.axisValue <= flight.runHi + GAP_EPS;
 }
 
-// flightの段鼻を結ぶ連続勾配線（stairRunProfileの折れ線ではなく、その近似元になる直線）上で、
-// 走行方向の世界座標runCoordにおける高さ(絶対z)を返す（ささらの正面視断面の基準高さに使う）。
-// worldStart（flight.travelSign>0ならrunLo、逆なら runHi）でz=flight.baseZ、
-// worldEnd（その逆側）でz=flight.baseZ+steps*riserMmになるよう線形補間する。
-function flightElevationAt(flight, runCoord) {
+/**
+ * flightの**段鼻を結ぶ勾配線**上で、走行方向の世界座標runCoordにおける高さ(絶対z)を返す。
+ * 正面視（レーンを横切る切断）のささら断面の基準高さと、階段下の部屋の帯が重ねる
+ * 「上を通る階段の高さ」の細線（elevationBand.js）が**両方ここを呼ぶ単一情報源**。
+ *
+ * 段鼻の並びは断面（stairRunProfile。踏面ピッチ＝区間長÷(段数−1)、最初の段鼻は区間の
+ * 始端でbaseZ+riser）と同じ規約で置く——始端(d=0)でz=baseZ+riser、終端(d=区間長)で
+ * z=baseZ+steps×riser。区間の外は端の高さでクランプする。
+ *
+ * 旧実装（`flightElevationAt`／elevationBand.jsの`stairZAtRun`）は「始端でbaseZ・終端で
+ * baseZ+steps×riser」の線形補間で、断面の段鼻列より始端側ほど低く（最大1リザー）ずれていた
+ * ——実機「13」A（階段下の部屋の、階段を横切る面）で階段の高さの細線が踊り場高さ(1500)に出て、
+ * 隣のBの断面が壁と取り合う高さ（最初の段鼻=1636）と食い違った（ユーザー実機指摘2026-09-14）。
+ * 段数・踏面数（stairRunProfile側）には触れず、高さの問い合わせだけを断面と同じ規約へ揃える。
+ * @param {Flight} flight
+ * @param {number} runCoord - 走行方向の世界座標
+ * @returns {number} 絶対z(mm)
+ */
+export function flightNoseZAt(flight, runCoord) {
   const worldStart = flight.travelSign > 0 ? flight.runLo : flight.runHi;
-  const worldEnd = flight.travelSign > 0 ? flight.runHi : flight.runLo;
-  const span = worldEnd - worldStart;
-  const totalRise = flight.steps * flight.riserMm;
-  const t = span !== 0 ? (runCoord - worldStart) / span : 0;
-  return flight.baseZ + t * totalRise;
+  const runLengthMm = flight.lengthMm ?? Math.abs(flight.runHi - flight.runLo);
+  const d = Math.min(Math.max((runCoord - worldStart) * flight.travelSign, 0), runLengthMm);
+  const steps = Math.max(1, Math.round(flight.steps));
+  // stairRunProfileと同じ踏面ピッチ（区間長÷(段数−1)）。1段の区間は段鼻が1つ＝一定高さ。
+  const t = steps > 1 && runLengthMm > 0 ? d / (runLengthMm / (steps - 1)) : 0;
+  return flight.baseZ + flight.riserMm * (1 + t);
 }
 
 // ささらの正面視断面（CUT矩形。厚さthicknessMm×せいdepthMm）を1本のx位置に対して作る。
@@ -809,7 +832,7 @@ function flightStringerFrontPrimitives(flight, cut, columns, ladderAcross, depth
   // 上端は段鼻の高さそのものではなく**巾木高さぶん上**（ユーザー実機指摘2026-08「6」C
   // 「両側のささら断面上端高さは、踊り場面+巾木」。既定の裁定「ささらの上端は踏面先端で
   // 巾木同寸」＝側面視のstringerBandGeometryと同じ基準を正面視の断面矩形にも揃える）。
-  const zTop = flightElevationAt(flight, cut.line.axisValue) + baseboardMm;
+  const zTop = flightNoseZAt(flight, cut.line.axisValue) + baseboardMm;
   return [
     ...stringerRectLines(cut, loX, loX + thicknessMm, zTop, depthMm),
     ...stringerRectLines(cut, hiX - thicknessMm, hiX, zTop, depthMm),

@@ -2,8 +2,9 @@
 // 壁を生成した部屋に対して帯を組み立てる（elevationFaces.test.js と同じ方針）。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Plane, PlanGraph, CenterLineType, Discipline, OpeningCategory } from '@core';
+import { Plane, PlanGraph, CenterLineType, Discipline, OpeningCategory, StairType, StructuralMaterialType } from '@core';
 import { generateRoomWallsFromOutline } from '../finish/wallGeneration.js';
+import { cellsBeyondBreak } from '../finish/stair/stairGeometry.js';
 import { buildRoomBand, layoutBandFaces, finalizeBand, faceDrawnXRange } from './elevationBand.js';
 import { buildRoomFaces, faceBoundaryLocalX } from './elevationFaces.js';
 import { layoutBands, bandContentOriginMm } from './elevationLayout.js';
@@ -850,4 +851,84 @@ test('buildRoomBand: 4面すべての建具で hit 矩形が姿図の枠 rect �
     xs.add(hit.x);
   }
   assert.equal(xs.size, 4, '4面の hit は帯内で別々の位置にある（面ローカルxのまま重なっていない）');
+});
+
+// ---- ユーザー実機指摘2026-09-14「13」A: 階段の見え掛かりの横線が隣のBの断面と不一致 ----
+// 階段下の部屋（折返し階段の復路レーンの下）の帯で、レーンを**横切る**面（踊り場側の壁＝復路の
+// 始端）に重ねる「上を通る階段の高さ」の細線は、隣の面（レーンと平行。断面のジグザグが壁と
+// 取り合う高さ）と同じ高さ＝**最初の段鼻（baseZ+riser）**でなければならない。旧実装は独自の
+// 線形補間（始端でbaseZ＝踊り場高さ）で、断面より1リザー低い位置に出ていた。
+function makeStairUnderRoomFixture(structure = StructuralMaterialType.WOOD) {
+  const graph = makeGraph();
+  const x0 = graph.addCenterLine(CenterLineType.VERTICAL, 0,    { labeled: false, discipline: Discipline.ARCH });
+  const xm = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
+  const x1 = graph.addCenterLine(CenterLineType.VERTICAL, 2000, { labeled: false, discipline: Discipline.ARCH });
+  const y0 = graph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: false, discipline: Discipline.ARCH });
+  const ym = graph.addCenterLine(CenterLineType.HORIZONTAL, 1500, { labeled: false, discipline: Discipline.ARCH });
+  const y1 = graph.addCenterLine(CenterLineType.HORIZONTAL, 4500, { labeled: false, discipline: Discipline.ARCH });
+  const landingKey  = `${x0.id}:${y0.id}:${x1.id}:${ym.id}`;
+  const outboundKey = `${x0.id}:${ym.id}:${xm.id}:${y1.id}`;
+  const returnKey   = `${xm.id}:${ym.id}:${x1.id}:${y1.id}`;
+  const cells = new Set([landingKey, outboundKey, returnKey]);
+  const room = graph.addRoom(cells, '階段');
+  generateRoomWallsFromOutline(graph, room);
+  const stair = graph.addStair({
+    type: StairType.SWITCHBACK, cells, roomId: room.id,
+    sections: [6, 1, 6], riser: null, upDirection: 'up', flip: false, structure,
+  });
+  const beyond = cellsBeyondBreak(stair, graph, stair.riser ?? null);
+  const under = graph.addRoom(new Set(beyond), '階段下');
+  generateRoomWallsFromOutline(graph, under);
+  return { graph, stair, under };
+}
+
+// 帯のプリミティブから「面の全幅に渡る細線の水平線」の高さ(絶対z)集合を数える。
+function thinHorizontalZCounts(band) {
+  const counts = new Map();
+  for (const p of band.primitives) {
+    if (p.type !== 'line' || p.weight !== 'thin' || p.dash) continue;
+    if (Math.abs(p.y1 - p.y2) > 1e-6) continue;
+    const z = Math.round(-p.y1 * 1000) / 1000;
+    counts.set(z, (counts.get(z) ?? 0) + 1);
+  }
+  return counts;
+}
+
+test('【実機指摘2026-09-14「13」A】buildRoomBand(階段下の部屋): レーンを横切る面の「階段の高さ」細線は踊り場高さ(baseZ)ではなく最初の段鼻(baseZ+riser)＝隣の面の断面が壁と取り合う高さに出る', () => {
+  const { graph, under } = makeStairUnderRoomFixture();
+  const floorHeightMm = 2400;
+  const band = buildRoomBand(under, graph, { solids: { upperGraph: null, floorHeightMm } });
+  const riser = floorHeightMm / 12;      // 200
+  const landingAbs = 6 * riser;          // 1200 ＝ 復路のbaseZ
+  const firstNose = landingAbs + riser;  // 1400
+  const counts = thinHorizontalZCounts(band);
+  assert.equal(counts.get(landingAbs) ?? 0, 0,
+    `踊り場高さ(${landingAbs})に細線は出ないはず（旧実装の線形補間の位置。実際:${JSON.stringify([...counts])}）`);
+  // 最初の段鼻には梯子の1本目と「階段の高さ」の細線が重なる＝2本以上。
+  assert.ok((counts.get(firstNose) ?? 0) >= 2,
+    `最初の段鼻(${firstNose})に階段の高さの細線が梯子と重なって出るはず（実際:${JSON.stringify([...counts])}）`);
+  // 隣の面（レーンと平行）の断面のジグザグは、横切る面と接する端で同じ高さ(firstNose)を持つ
+  // （木造のジグザグはSILHOUETTE＝medium、鉄骨はCUT＝thick。線種は問わず点列だけ見る）。
+  const zigzags = band.primitives.filter(p => p.type === 'polyline' && p.weight !== 'thin');
+  assert.ok(zigzags.some(p => p.points.some(([, y]) => Math.abs(-y - firstNose) < 1e-6)),
+    `断面のジグザグに最初の段鼻(${firstNose})の点があるはず（実際:${JSON.stringify(zigzags.map(p => p.points))}）`);
+});
+
+test('【実機指摘2026-09-14「13」A・鉄骨】buildRoomBand(階段下の部屋): 横切る面のささら断面矩形の上端は「仮想断面の位置の段鼻＋巾木」で、踊り場高さ基準の旧値より上にある', () => {
+  const { graph, under } = makeStairUnderRoomFixture(StructuralMaterialType.STEEL);
+  const floorHeightMm = 2400;
+  const band = buildRoomBand(under, graph, { solids: { upperGraph: null, floorHeightMm } });
+  const riser = floorHeightMm / 12, landingAbs = 6 * riser, firstNose = landingAbs + riser;
+  const baseboard = 60; // 階段Roomの巾木既定 'h=60'
+  const tops = band.primitives
+    .filter(p => p.type === 'line' && p.weight === 'thick' && Math.abs(p.y1 - p.y2) < 1e-6 && Math.abs(p.x1 - p.x2) <= 12 + 1e-6)
+    .map(p => Math.round(-p.y1 * 1000) / 1000);
+  assert.ok(tops.length > 0, 'ささら断面矩形（幅12の横辺）が出るはず');
+  // 仮想断面は壁から室内側へ下がった位置＝始端より少し先なので、上端は firstNose+巾木 以上
+  // （旧実装は踊り場高さ基準の線形補間で、landingAbs+巾木 と firstNose+巾木 の間に出ていた）。
+  const oldLo = landingAbs + baseboard, newLo = firstNose + baseboard;
+  assert.ok(!tops.some(z => z > oldLo + 1e-6 && z < newLo - 1e-6),
+    `踊り場高さ基準の旧値(${oldLo}〜${newLo}の間)は残らないはず（実際:${JSON.stringify([...new Set(tops)])}）`);
+  assert.ok(tops.some(z => z >= newLo - 1e-6 && z < newLo + riser),
+    `始端付近の矩形の上端は${newLo}以上${newLo + riser}未満のはず（実際:${JSON.stringify([...new Set(tops)])}）`);
 });
