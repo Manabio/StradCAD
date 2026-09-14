@@ -7,7 +7,10 @@ import { runInAction } from 'mobx';
 import { undoManager } from '../undoManager.js';
 import { serializeGraph, restoreGraph } from '../graphSnapshot.js';
 import { ERR_STRUCT_MAIN_UNSPECIFIED } from '../error.js';
-import { autoFillColumns, autoFillColumnAxisOffsets, autoFillColumnSizes, resolveLowestGraph, convertMembersToEffectiveMaterial, deleteClassificationOverflow } from './structuralAutoFill.js';
+import { autoFillColumnsForStructure, autoFillColumnAxisOffsets, autoFillColumnSizes, resolveLowestGraph, convertMembersToEffectiveMaterial, deleteClassificationOverflow, UNSPECIFIED_STRUCTURE } from './structuralAutoFill.js';
+import { conformWoodSections } from './woodAutoFill.js';
+import { rulesFor } from './structureRules.js';
+import { collectWallBeamSources, autoFillWallBeamAxes } from './wallBeamAxes.js';
 import { structureHasMemberKind, MEMBER_KIND } from './structuralClassification.js';
 import { buildStructuralWallGate } from './wallGate.js';
 import { collectFloorGroups, assignNumbers, applyNumbers } from './memberNumbering.js';
@@ -61,17 +64,23 @@ export async function recomputeStructuralComposition(composition, subjectGraph, 
   if (belowGraph) {
     const belowGate = await buildStructuralWallGate(belowGraph.plane, project, subjectGraph);
     const belowLowestGraph = await resolveLowestGraph(project, belowGraph);
+    // 壁由来の梁芯CL（マージ済み・下階込み）。在来木造の壁交点柱はこのCLをアンカーにするため、柱より先に生成する
+    //（structuralRecompute.js の主経路と同じ順序。自階だけの未マージ source で作ると extent の短いCLが永続化される）。
+    const belowWallSources = await collectWallBeamSources(belowGraph, project);
     // belowMainStructure 引数は軒桁(eaves)専用。通常階の下階に eaves は無いため自階の実効値で十分。
     const belowBelowMainStructure = belowGraph.structureOverride ?? project.structuralInfo.mainStructure;
     if (mutate) belowBefore = serializeGraph(belowGraph);
     const belowStructure = belowGraph.structureOverride ?? project.structuralInfo.mainStructure;
     runInAction(() => {
       convertMembersToEffectiveMaterial(belowGraph, project, belowBelowMainStructure);
-      // 主構造変更で柱が「×」化した場合は、下階の柱を生成せず既存の自動柱を削除する（問題.md「×は削除/○は生成」）。
-      if (structureHasMemberKind(MEMBER_KIND.COLUMN, belowStructure)) autoFillColumns(belowGraph, project, belowGate);
+      conformWoodSections(belowGraph, project); // 在来木造: 既存断面を主構造ルールへそろえる（structuralRecompute.js と同じ）
+      autoFillWallBeamAxes(belowGraph, belowWallSources);
+      // 主構造変更で柱が「×」化した場合は、下階の柱を生成せず既存の自動柱を削除する（「×は削除/○は生成」）。
+      // 柱の配置源（通り芯交点／壁交点）は主構造ルールで振り分ける（autoFillColumnsForStructure）。
+      if (structureHasMemberKind(MEMBER_KIND.COLUMN, belowStructure)) autoFillColumnsForStructure(belowGraph, project, belowGate);
       deleteClassificationOverflow(belowGraph, project);
       autoFillColumnAxisOffsets(belowGraph, project, belowLowestGraph);
-      autoFillColumnSizes(belowGraph, project, belowGraph.plane);
+      if (rulesFor(belowStructure).columnSizing !== 'fixed') autoFillColumnSizes(belowGraph, project, belowGraph.plane);
       conformToLedger(belowGraph, project);
       collectFloorGroups(belowGraph, project);
     });
@@ -110,7 +119,7 @@ export async function recomputeStructuralComposition(composition, subjectGraph, 
 // @returns {Promise<object>} composition（呼び出し側が setStructComposition する）
 export async function runStructuralModeSetup(targetGraph, project, { onToast } = {}) {
   const effectiveMainStructure = targetGraph.structureOverride ?? project.structuralInfo.mainStructure;
-  if (effectiveMainStructure === '未定') {
+  if (effectiveMainStructure === UNSPECIFIED_STRUCTURE) {
     onToast?.(ERR_STRUCT_MAIN_UNSPECIFIED);
   }
 

@@ -15,6 +15,7 @@
 // ================================================================
 import { isWoodWallBacking } from '../finish/materials/backingClass.js';
 import { effectiveStructure } from '../structural/structuralAutoFill.js';
+import { rulesFor, backingRulesFor, BackingClass } from '../structural/structureRules.js';
 
 /** 主要構造 */
 export const SashStructure = Object.freeze({
@@ -157,7 +158,9 @@ export const SASH_DETAIL_CATALOG = [
  * @returns {object} SASH_DETAIL_CATALOG のエントリ（必ず1件返す）
  */
 export function resolveSashDetail({ isWoodStructure = false, backingDepth = 0, finishKey = null } = {}) {
-  const useFin = isWoodStructure || backingDepth >= 90;
+  // 下地寸法によるフィン直付けの閾値（90mm）は壁下地材ルール（structureRules.js BACKING_RULES 木質下地）。
+  const finMinDepth = backingRulesFor(BackingClass.WOOD).sashFinMinDepth;
+  const useFin = isWoodStructure || backingDepth >= finMinDepth;
   const positioning = useFin ? SashPositioning.FIN : SashPositioning.FINISH;
   const bucket = SASH_DETAIL_CATALOG.filter(e => e.positioning === positioning);
 
@@ -199,7 +202,7 @@ export function woodBackingDepth(backingMaterial) {
  */
 export function resolveSashDetailForGraph(graph, project, materialMap, finishKey = null) {
   const structure = effectiveStructure(graph, project);
-  const isWoodStructure = (structure ?? '').startsWith('木造');
+  const isWoodStructure = rulesFor(structure).sashFinDirect; // 主構造ルール（structureRules.js）
   const backing = materialMap?.get(graph.exteriorWallBacking) ?? null;
   const backingDepth = woodBackingDepth(backing);
   return resolveSashDetail({ isWoodStructure, backingDepth, finishKey });

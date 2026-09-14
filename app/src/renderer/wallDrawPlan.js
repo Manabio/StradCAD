@@ -38,6 +38,7 @@ import { columnWallCuts, columnWrapSolids } from '../finish/columnWrap.js';
 import { indexByAxis, findOpeningsOnWallIndexed } from '../openings/openingGeometry.js';
 import { resolveWallRegionLines, wallSpanIntervals } from './planWallRegion.js';
 import { graphComputed } from './graphDerived.js';
+import { rulesFor, effectiveStructure } from '../structural/structureRules.js';
 
 // 略図LOD で返す下地重複防止の空集合（読み取り専用として共有する）。
 const EMPTY_SET = new Set();
@@ -122,6 +123,8 @@ export function resolveWallLines(wall, { openings = [], junction, regionLines = 
  * @returns {Array<{column:object, wrapped:object}>}
  */
 export function planColumnWraps(graph) {
+  // 主構造ルールで柱包みを持たない構造（在来木造）は包みなし＝空（structureRules.js drawing.columnFinishWrap）。
+  if (!rulesFor(effectiveStructure(graph)).drawing.columnFinishWrap) return [];
   return graphComputed(graph, 'planColumnWraps', () => columnWrapSolids(graph,
     { capOutlineWallIds: new Set(resolveKneeDropOverlays(graph).keys()) })
     .filter(w => !w.hidden && Object.values(w.wrapped.covers).some(v => v > 0))
@@ -180,7 +183,9 @@ export function buildWallDrawPlan(graph, lodLevel, { clipGroups = null } = {}) {
   //    「壁の面線が引き継ぐ辺」を省いて描く。どちらが描くかは finish/columnWrap.js の `continued` 1箇所。
   //  - `columnCuts` … 下地スタッドを消す区間（`backing`。columnWallCuts の canRemoveBacking）にだけ使う。
   const capOutlineWallIds = kneeDropOverlays ? new Set(kneeDropOverlays.keys()) : undefined;
-  const columnCuts = schematic ? null : columnWallCuts(graph, { capOutlineWallIds });
+  // 柱包みを持たない構造（在来木造）は素の柱断面で壁を欠き取る（noCover。finish/columnWrap.js）。
+  const noCover = !rulesFor(effectiveStructure(graph)).drawing.columnFinishWrap;
+  const columnCuts = schematic ? null : columnWallCuts(graph, { capOutlineWallIds, noCover });
   const columnWraps = schematic ? null : planColumnWraps(graph)
     .map(({ column, wrapped }) => ({ id: column.id, outer: wrapped, finishes: wrapped.finishes ?? {} }));
 

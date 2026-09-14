@@ -2,8 +2,8 @@
 // 設計意図は .claude/structural-model.md「梁芯CL（discipline:'fuse'）と小梁は既存の仕組みへ薄く乗せる」参照。
 import { CenterLineType, centerLineKind, spanKey } from '../core.js';
 import { CL_OVERLAP_TOL_MM } from '../core/constants.js';
-import { secondaryBeamSpansFor, resolveDefaultMaterialType, isStructureSpecified, effectiveStructure } from './structuralAutoFill.js';
-import { DEFAULT_BEAM_SECTION_BY_MATERIAL } from './memberCatalog.js';
+import { secondaryBeamSpansFor, isStructureSpecified, effectiveStructure } from './structuralAutoFill.js';
+import { rulesFor } from './structureRules.js';
 import { structureHasMemberKind, MEMBER_KIND } from './structuralClassification.js';
 
 /**
@@ -44,7 +44,7 @@ export function beamAxisMoveRange(graph, cl) {
  *                      ユーザーの手動削除として記録され、以後その位置に小梁が生成されなくなる。
  *                      deleteClassificationOverflow と同じ理由・同じ規律）
  *   - 不足分         → graph.addBeam。materialType/sectionDefId は同一CL上の既存小梁から継承し、
- *                      無ければ project の既定材料・既定断面（DEFAULT_BEAM_SECTION_BY_MATERIAL）
+ *                      無ければ自階の主構造ルールの既定材料・既定断面（structureRules.js defaultSections.beam）
  * host判定・区間規則は secondaryBeamSpansFor（structuralAutoFill.js。autoFillSecondaryBeamsと共有）に
  * 集約し、二系統にしない。
  * autoFillSecondaryBeams と同じ構造ゲート（主構造未確定・記号Bが構造分類で×の間は何もしない）を持つ。
@@ -95,8 +95,9 @@ export function resolveSecondaryBeamsForAxis(graph, cl, project) {
   // 不足分: 新規追加。材料・断面は同一CL上の既存小梁（張り替え後に残る先頭）から継承、無ければ既定。
   if (n < newPairs.length) {
     const template = olds[0] ?? null;
-    const materialType = template?.materialType ?? resolveDefaultMaterialType(graph, project);
-    const section = template?.sectionDefId ?? DEFAULT_BEAM_SECTION_BY_MATERIAL[materialType];
+    const rules = rulesFor(effectiveStructure(graph, project));
+    const materialType = template?.materialType ?? rules.baseMaterial;
+    const section = template?.sectionDefId ?? rules.defaultSections.beam;
     for (let i = n; i < newPairs.length; i++) {
       const { a, b } = newPairs[i];
       graph.addBeam(materialType, section, cl, isVertical, a, b, { role: 'secondary', beamType: '小梁' });

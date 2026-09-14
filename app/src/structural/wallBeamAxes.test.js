@@ -260,3 +260,14 @@ test('collectWallBeamSources: RC壁下地のmaterialThicknessをbackingDepthに�
   assert.equal(sources.length, 1);
   assert.equal(sources[0].coord, 2000);
 });
+
+// QA指摘2026-09-14: 主構造がどこにも設定されていない（undefined）graph でも例外を投げない。
+// 旧実装は structure.startsWith('RC造') で TypeError になっていた（structureRules.js 経由で
+// UNSPECIFIED_RULES＝生成源なしへ落ちる。ステップ1移設で唯一挙動が変わった点）。
+test('【失敗系】collectWallBeamSources: 主構造が未設定（undefined）でも例外を投げず空配列を返す', async () => {
+  const { graph, x1, x3 } = makeGridGraph('p1', 0);
+  addBackingWall(graph, { axisValue: 2000, clStart: x1, clEnd: x3, isVertical: false });
+  const project = { planes: [graph.plane], structuralInfo: { mainStructure: undefined } };
+  const sources = await collectWallBeamSources(graph, project);
+  assert.deepEqual(sources, []);
+});

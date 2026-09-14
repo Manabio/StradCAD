@@ -1,7 +1,7 @@
 import { observer } from 'mobx-react-lite';
 import { runInAction } from 'mobx';
 import { useState, useEffect, useRef } from 'react';
-import { StructuralMaterialType } from '../core.js';
+import { StructuralMaterialType, CenterLineType } from '../core.js';
 import { ConfirmDialog } from '../ui/ConfirmDialog.jsx';
 import { useScrollIntoViewWhenActive } from '../ui/useScrollIntoViewWhenActive.js';
 import {
@@ -12,10 +12,10 @@ import {
 import {
   MEMBER_GROUPS, REMOVE_FN_BY_MAP, FIELD_DEFS_BY_CATEGORY,
   materialLabel, sectionAspectRatio, sectionIconShape, memberSymbol, memberSignature, memberSizeKey,
-  DEFAULT_SECTION_BY_MATERIAL, DEFAULT_COLUMN_SECTION_BY_MATERIAL, DEFAULT_BEAM_SECTION_BY_MATERIAL,
+  DEFAULT_SECTION_BY_MATERIAL,
   FIGURE_FRAME_BY_MAP, DEFAULT_FIGURE_FRAME,
 } from './memberCatalog.js';
-import { resolveDefaultMaterialType, alignToOuterFace, autoFillColumnSizes, autoFillColumnBaseSizes, isRigidFrameStructure,
+import { alignToOuterFace, autoFillColumnSizes, autoFillColumnBaseSizes, isRigidFrameStructure, beamAxisCenterLines,
   autoFillBeamEccentricity, autoBeamEccentricity, faceGapForEccentricity, autoFillColumnAxisOffsets, axisExteriorSign, resolveLowestGraph } from './structuralAutoFill.js';
 import { buildExteriorSide } from './wallGate.js';
 import { SECTION_CATALOG, findSectionEntry, SectionShape } from './sectionCatalog.js';
@@ -32,7 +32,7 @@ import { MemberLayoutStudy } from './sectionFigure/MemberLayoutStudy.jsx';
 import { isStudyEnabled, layoutScopeFor, getLayoutOverrides, applyLayoutOverrides } from './sectionFigure/layoutStudy.js';
 import { isFoundationPlane } from './drawingDesignation.js';
 import { structureHasMemberKind, memberKindOf, MEMBER_KIND, FIGURE_TYPE } from './structuralClassification.js';
-import { foundationOptionsFor, isWoodStructure } from '../ui/StructuralInfoDialog.jsx';
+import { foundationOptionsFor, rulesFor } from './structureRules.js';
 
 // この map グループが、その階・主構造で構造リストに出し得る部材種別（空グループの表示可否判定用）。
 // 梁グループだけは自階が基礎面か否かで「基礎梁」⇄「梁」に分かれる（自階＝床下材の供給グラフで判定）。
@@ -87,7 +87,7 @@ function buildFigureCtx(entity, mapName, graph, project, isRoof = false) {
       // 木造基礎梁の断面図は基礎種別ごとのベース／べた基礎の合成を反映する（問題.md）。
       // foundationType は 'ベタ基礎' が木造・RC共通表記のため、woodFoundation（木造の基礎梁か）と併用して分岐する。
       foundationType: project?.structuralInfo?.foundationType,
-      woodFoundation: entity.role === 'foundation' && typeof structure === 'string' && structure.startsWith('木造'),
+      woodFoundation: entity.role === 'foundation' && rulesFor(structure).foundation.sectionFigure === 'wood',
     };
   }
   if (mapName === 'wallMap') {
@@ -479,9 +479,10 @@ const MemberGroupSection = observer(({
 
   // 木造系の基礎伏図の梁＝土台基礎。見出しを「土台基礎」に改め、基礎種別（なし/ベタ基礎/土間コン）を右横に置く。
   // 基礎種別は基礎梁の断面に効く建物全体設定（project.structuralInfo.foundationType）を直接編集する。
+  const foundationBeamGroupLabel = rulesFor(structure).foundation.beamGroupLabel; // 木造='土台基礎'／他=null
   const isWoodFoundationBeamGroup = group.mapName === 'beamMap' && group.key === 'beam'
-    && isWoodStructure(structure) && isFoundationPlane(graph.plane, project);
-  const groupLabel = isWoodFoundationBeamGroup ? '土台基礎' : group.label;
+    && foundationBeamGroupLabel != null && isFoundationPlane(graph.plane, project);
+  const groupLabel = isWoodFoundationBeamGroup ? foundationBeamGroupLabel : group.label;
 
   return (
     <div style={{ marginBottom: 16 }}>
@@ -555,10 +556,11 @@ const MemberCard = observer(({
   // when を持つフィールド（接合方法＝鉄骨の梁のみ）は条件を満たすときだけ出す。
   const allFields = (FIELD_DEFS_BY_CATEGORY[group.category] ?? [])
     .filter(f => f.key in representative && !FIGURE_DIM_KEYS.has(f.key) && (!f.when || f.when(representative)));
-  // 木造の基礎梁は断面が構造算定（b×D・常にRC）で決まり、断面マスター選択は意味を持たないため「断面」を隠す（問題.md）。
+  // 木造の基礎梁は断面が構造算定（b×D・常にRC）で決まり、断面マスター選択は意味を持たないため「断面」を隠す
+  // （問題.md。有無は主構造ルール structureRules.js foundation.beamSectionField）。
   const structure = graph?.structureOverride ?? project?.structuralInfo?.mainStructure;
   const isWoodFoundationBeam = group.mapName === 'beamMap' && representative.role === 'foundation'
-    && typeof structure === 'string' && structure.startsWith('木造');
+    && !rulesFor(structure).foundation.beamSectionField;
   // 「断面」は部材番号の直下（図の上）に置く。残りは図の下に並べる。
   const sectionField = isWoodFoundationBeam ? null : allFields.find(f => f.kind === 'section');
   const fields = allFields.filter(f => f.kind !== 'section');
@@ -1096,13 +1098,16 @@ const MemberFieldInput = observer(({ members, fieldDef, graph, group, project, r
     });
   }
   if (fieldDef.kind === 'section') {
-    const options = SECTION_CATALOG.filter(s => s.materialType === members[0].materialType);
+    // 柱は正角材を想定（仕様）——木造の梁断面（幅<成）は柱の選択肢に出さない。
+    const options = SECTION_CATALOG.filter(s => s.materialType === members[0].materialType
+      && (group.mapName !== 'columnMap' || s.materialType !== 'WOOD' || s.width === s.height));
     // 断面変更時、柱芯オフセットが入っている軸については「外側面で揃える」よう個別偏心量を補正する
     // （alignToOuterFace。基準幅=その材料の既定断面幅、補正方向=既存オフセットの符号）。
     // 梁は断面幅が変わるため、faceGap（柱外面と梁縁のギャップ）を保ったまま偏芯量を再算出する。
     function handleSectionChange(newId) {
-      const defaultMap = group.mapName === 'columnMap' ? DEFAULT_COLUMN_SECTION_BY_MATERIAL : DEFAULT_BEAM_SECTION_BY_MATERIAL;
-      const refWidth = findSectionEntry(defaultMap[members[0].materialType])?.width ?? 0;
+      // 基準幅＝その階の主構造ルールの既定断面幅（柱芯オフセットの基準 defaultColumnWidth と同じ情報源）。
+      const sections = rulesFor(graph?.structureOverride ?? project?.structuralInfo?.mainStructure).defaultSections;
+      const refWidth = findSectionEntry(group.mapName === 'columnMap' ? sections.column : sections.beam)?.width ?? 0;
       const newWidth = findSectionEntry(newId)?.width ?? refWidth;
       onCommit(targets => {
         for (const m of targets) {
@@ -1191,18 +1196,29 @@ const NewIntersectionMemberSelector = observer(({ group, graph, project, structu
   // 柱脚が「×」の構造では追加候補から外す（問題.md「×はカテゴリ自体表示しない」）。
   const allowColumnBase = structureHasMemberKind(MEMBER_KIND.COLUMN_BASE, structure);
 
+  // 柱は自階の実効主構造を材質・既定断面に使う（柱は各階が自階graphに持つ）。基礎・柱脚は常にRC固定。
+  const rules = rulesFor(graph?.structureOverride ?? project?.structuralInfo?.mainStructure);
+  // 在来木造（壁交点方式）の柱は壁由来の梁芯CL上にも立つため、選択肢に梁芯CLを含める。基礎・柱脚は通り芯のみ。
+  const wallColumns = group.mapName === 'columnMap' && rules.columnPlacement === 'wallIntersections';
+  const beamAxes = wallColumns ? beamAxisCenterLines(graph) : [];
+  const axisLabel = cl => cl.label ?? `梁芯 ${Math.round(cl.effectiveValue)}`;
+  const verticalOptions = [...graph.gridXs, ...beamAxes.filter(cl => cl.centerLineType === CenterLineType.VERTICAL)];
+  const horizontalOptions = [...graph.gridYs, ...beamAxes.filter(cl => cl.centerLineType === CenterLineType.HORIZONTAL)];
+
   async function handleAdd() {
-    const vCL = graph.gridXs.find(cl => cl.id === vId);
-    const hCL = graph.gridYs.find(cl => cl.id === hId);
+    const vCL = verticalOptions.find(cl => cl.id === vId);
+    const hCL = horizontalOptions.find(cl => cl.id === hId);
     if (!vCL || !hCL) return;
-    // 柱は自階の実効主構造を材質に使う（柱は各階が自階graphに持つ）。基礎・柱脚は常にRC固定（下のelse節）。
-    const materialType = resolveDefaultMaterialType(graph, project);
+    const materialType = rules.baseMaterial;
     const before = serializeGraph(graph);
     runInAction(() => {
       if (group.mapName === 'columnMap') {
-        graph.addColumn(materialType, DEFAULT_COLUMN_SECTION_BY_MATERIAL[materialType], vCL, hCL, {});
-        // 柱が支える階数(N)も自階（graph.plane）基準で算定する。
-        autoFillColumnSizes(graph, project, graph.plane);
+        const column = graph.addColumn(materialType, rules.defaultSections.column, vCL, hCL, {});
+        // 壁交点方式では候補に無い自動柱（auto）は再計算で撤去される（woodAutoFill.js）。手動追加は
+        // ユーザーの明示なので固定（locked）にして撤去対象から外す。
+        if (wallColumns) column.setDimensionStatus('locked');
+        // 柱が支える階数(N)も自階（graph.plane）基準で算定する（columnSizing:'fixed' の在来は算定しない＝再計算と同じ）。
+        if (rules.columnSizing !== 'fixed') autoFillColumnSizes(graph, project, graph.plane);
       } else {
         // 基礎・柱脚は主構造に関わらず常にRC造（structuralAutoFill.js の autoFillFootings と同じ理由）。
         graph.addFooting(footingKind, DEFAULT_SECTION_BY_MATERIAL[StructuralMaterialType.RC], vCL, hCL, { materialType: StructuralMaterialType.RC });
@@ -1224,11 +1240,11 @@ const NewIntersectionMemberSelector = observer(({ group, graph, project, structu
       )}
       <select value={vId} onChange={e => setVId(e.target.value)} style={selectStyle}>
         <option value="">垂直CL...</option>
-        {graph.gridXs.map(cl => <option key={cl.id} value={cl.id}>{cl.label}</option>)}
+        {verticalOptions.map(cl => <option key={cl.id} value={cl.id}>{axisLabel(cl)}</option>)}
       </select>
       <select value={hId} onChange={e => setHId(e.target.value)} style={selectStyle}>
         <option value="">水平CL...</option>
-        {graph.gridYs.map(cl => <option key={cl.id} value={cl.id}>{cl.label}</option>)}
+        {horizontalOptions.map(cl => <option key={cl.id} value={cl.id}>{axisLabel(cl)}</option>)}
       </select>
       <button disabled={!vId || !hId} onClick={() => handleAdd().catch(console.error)} style={addButtonStyle}>＋ 追加</button>
     </div>
@@ -1255,13 +1271,14 @@ const NewSpanMemberSelector = observer(({ group, graph, project }) => {
     const clEnd   = crossOptions.find(cl => cl.id === endId);
     if (!axisCL || !clStart || !clEnd || clStart.id === clEnd.id) return;
     const before = serializeGraph(graph);
-    const materialType = resolveDefaultMaterialType(graph, project);
+    const rules = rulesFor(graph?.structureOverride ?? project?.structuralInfo?.mainStructure);
+    const materialType = rules.baseMaterial;
     runInAction(() => {
       if (group.mapName === 'beamMap') {
-        graph.addBeam(materialType, DEFAULT_BEAM_SECTION_BY_MATERIAL[materialType], axisCL, isVertical, clStart, clEnd, {});
+        graph.addBeam(materialType, rules.defaultSections.beam, axisCL, isVertical, clStart, clEnd, {});
         autoFillBeamEccentricity(graph, project); // 外周梁なら柱外面合わせの偏芯量を初期算出（faceGap=0＝面一）
       } else {
-        graph.addBearingWall(materialType, DEFAULT_SECTION_BY_MATERIAL[materialType], axisCL, isVertical, clStart, clEnd, {});
+        graph.addBearingWall(materialType, rules.defaultSections.other, axisCL, isVertical, clStart, clEnd, {});
       }
       renumberMembers(graph, project, group.mapName);
     });

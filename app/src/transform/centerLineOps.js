@@ -18,7 +18,7 @@ import {
 } from './centerLineConvert.js';
 import { resolveSecondaryBeamsForAxis } from '../structural/beamAxisMove.js';
 import { renumberMembers } from '../structural/memberNumbering.js';
-import { autoFillSecondaryBeams, autoFillBeamEccentricity } from '../structural/structuralAutoFill.js';
+import { autoFillSecondaryBeams, autoFillBeamEccentricity, UNSPECIFIED_STRUCTURE } from '../structural/structuralAutoFill.js';
 
 // CL の pendingDelta を実座標に bake する（ref CL / 通常 CL 両対応）
 export function bakeCLValue(cl, newVal) {
@@ -266,7 +266,7 @@ export async function demoteGridToCenterWithUndo(graph, project, cl) {
 // この関数は「提案すべきか」の判定部のみを行う純関数。ダイアログ表示（setFloorConfirm）は呼び出し側（App.jsx）。
 export function shouldSuggestWoodStructure(graph, project, appMode, clType, newValues) {
   if (appMode !== 'floorplan') return false;
-  if (project.structuralInfo.mainStructure !== '未定') return false; // 既に主構造が確定済みなら提案しない
+  if (project.structuralInfo.mainStructure !== UNSPECIFIED_STRUCTURE) return false; // 既に主構造が確定済みなら提案しない
   const grid = (clType === CenterLineType.VERTICAL ? graph.gridXs : graph.gridYs).map(cl => cl.effectiveValue);
   return newValues.some(v => {
     let nearest = Infinity;

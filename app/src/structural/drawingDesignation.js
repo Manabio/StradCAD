@@ -1,4 +1,5 @@
 import { makeFloorName } from '../floorNumber.js';
+import { rulesFor } from './structureRules.js';
 
 // 構造モードの図面呼称（伏図名称）の判定。伏図呼称の判定木を「1平面=1呼称」に正規化したもの。
 // 最下階判定が最優先（最下階は視点に関わらず常に基礎伏図）。
@@ -32,9 +33,9 @@ export function structuralPlaneBelow(plane, project) {
 
 /** plane の構造モード上の図面呼称（例: "1階伏図", "基礎伏図", "2階床伏図", "小屋伏図"）を返す。 */
 export function computeStructuralDesignation(plane, graph, project) {
+  // 呼称の木造／非木造の出し分けは主構造ルール（structureRules.js designation）から読む。
   if (plane.isRoofPlane) {
-    const isWood = (project.structuralInfo.mainStructure ?? '').startsWith('木造');
-    return isWood ? '小屋伏図' : 'R階伏図';
+    return rulesFor(project.structuralInfo.mainStructure).designation.roof;
   }
 
   const real = project.planes; // 採用かつ屋根専用平面を除く・elevation昇順
@@ -48,6 +49,5 @@ export function computeStructuralDesignation(plane, graph, project) {
   if (plane.startFloor < 0) return `${floorLabel}伏図`; // ②地下階（最下階を除く）
 
   const effective = graph?.structureOverride ?? project.structuralInfo.mainStructure;
-  const isWood = (effective ?? '').startsWith('木造');
-  return isWood ? `${floorLabel}梁伏図` : `${floorLabel}伏図`; // ③1階／④中間階
+  return `${floorLabel}${rulesFor(effective).designation.floorSuffix}`; // ③1階／④中間階（木造=梁伏図・他=伏図）
 }

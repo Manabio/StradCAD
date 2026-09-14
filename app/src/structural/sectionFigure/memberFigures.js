@@ -12,6 +12,7 @@
 // ================================================================
 
 import { findSectionEntry, SectionShape, diaphragmProjection } from '../sectionCatalog.js';
+import { WOOD_FOUNDATION_SECTION_DEFAULTS, MAT_FOUNDATION } from '../structureRules.js';
 import { withLayoutId } from './layoutStudy.js';
 import { annotatedFigure } from './sectionGeometry.js';
 
@@ -300,11 +301,9 @@ function rcRectBeamFigure(beam, ctx, levelLabel) {
   return { primitives: prims };
 }
 
-// 木造基礎の断面詳細の既定寸法（問題.md）。ベース600×150・張り出し0、べた基礎 厚150・天端GL+50、基礎梁の地中部250。
+// 木造基礎の断面詳細の既定寸法（問題.md。実体は structureRules.js WOOD_FOUNDATION_SECTION_DEFAULTS）。
 // beam.foundationSection に保存された編集値があれば上書きする（未編集分はこの既定で補完）。
-const WOOD_FOUNDATION_DEFAULTS = Object.freeze({
-  embedDepth: 250, baseWidth: 600, baseThickness: 150, baseOverhang: 0, matThickness: 150, matTopAboveGL: 50,
-});
+const WOOD_FOUNDATION_DEFAULTS = WOOD_FOUNDATION_SECTION_DEFAULTS;
 
 // 編集可能な材寸法線（materialDim に editable/target/fieldKey を付ける）。value がラベル＝現在値。
 function editMatDim(dir, from, to, edge, side, value, g, target, fieldKey, opts = {}) {
@@ -341,7 +340,7 @@ function foundationBeamFigure(beam, ctx) {
 
   // ---- 木造：問題.md の基礎断面（全寸法を編集可能フィールドとして配置）----
   const fs = { ...WOOD_FOUNDATION_DEFAULTS, ...(beam.foundationSection ?? {}) };
-  const isMat = ctx.foundationType === 'ベタ基礎';
+  const isMat = ctx.foundationType === MAT_FOUNDATION;
   const embed = Math.min(fs.embedDepth, D); // 地中部（GL下）
   const rise  = D - embed;                  // 立ち上がり（GL上）
   const g = resolveGap(ctx, Math.max(b, D, fs.baseWidth));

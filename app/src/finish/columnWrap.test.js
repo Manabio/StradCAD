@@ -406,3 +406,19 @@ test('【実機修正2026-09】腰壁を貫いた柱壁は、端で接するだ�
   assert.equal(stair.fin[0][0], -45, '内側線は柱壁の内側境界（-45）から切る＝そこで取り合う');
   assert.equal(cuts.get('w-room').face[0][0], -57.5, '柱側の壁も同じ区間で切る（層ごとの幅は従来どおり）');
 });
+
+// ---- noCover（在来木造: 柱包みを持たない構造。structural/structureRules.js drawing.columnFinishWrap）----
+test('wrapColumnWithFinish: noCover=true は外形を素の断面のまま（covers/finishes=0・trimmed/continued=false）にし、接続した壁の索引（wallAxes）だけ解く', () => {
+  const { graph, x0, y0 } = makeGridRoom();
+  const column = graph.addColumn(StructuralMaterialType.WOOD, 'WOOD-120x120', x0, y0, {});
+  const bare = bareColumnRect(column);
+  const wrapped = wrapColumnWithFinish(bare, graph.walls);
+  const plain = wrapColumnWithFinish(bare, graph.walls, { noCover: true });
+  assert.ok(Object.values(wrapped.covers).some(v => v > 0), '前提: 包みありでは覆う面がある');
+  assert.deepEqual([plain.xLo, plain.xHi, plain.yLo, plain.yHi], [bare.xLo, bare.xHi, bare.yLo, bare.yHi], '外形は素の断面');
+  assert.ok(Object.values(plain.covers).every(v => v === 0));
+  assert.ok(Object.values(plain.finishes).every(v => v === 0));
+  assert.ok(Object.values(plain.trimmed).every(v => v === false));
+  assert.ok(Object.values(plain.continued).every(v => v === false));
+  assert.deepEqual(plain.wallAxes, wrapped.wallAxes, '接続した壁の索引は包みの有無で変わらない');
+});

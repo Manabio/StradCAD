@@ -1,4 +1,5 @@
 import { findSectionEntry } from './sectionCatalog.js';
+import { rulesFor } from './structureRules.js';
 
 // ================================================================
 // 柱・柱脚の概算サイズ算定（負担床面積ベース）
@@ -104,14 +105,6 @@ export function computeColumnBaseSize(columnWidthD) {
 
 const FOUNDATION_BEAM_WIDTH_MARGIN = 100; // b = 最も太い柱の大きさ + この値(mm)
 
-// 木造（在来）の基礎梁標準寸法・下限（問題.md）。標準は150×600（=350+250）。
-// 幅の最小135／成の最小450（梁間≤3640mmのとき）。auto算定は標準値、下限はユーザー編集時のバリデーション用。
-export const WOOD_FOUNDATION_BEAM = Object.freeze({ width: 150, depth: 600, minWidth: 135, minDepth: 450, minDepthSpanLimit: 3640 });
-
-/** 主構造が木造系か（基礎梁の標準寸法ルール分岐用）。 */
-function isWoodStructure(mainStructure) {
-  return mainStructure === '木造（在来）' || mainStructure === '木造（2"×4"）';
-}
 
 /** graph.gridXs/gridYs（X・Y方向）の隣接CL間距離の最大値(mm)を返す＝「建物の中で最も長い柱間」L。 */
 export function longestGridSpan(graph) {
@@ -144,14 +137,14 @@ export function maxColumnSectionSize(project) {
 }
 
 /** 基礎梁の断面（梁幅b・梁成D、mm、50mmピッチ切り上げ）を算定する。
- *  mainStructure: 実効主構造の文字列表記。'RC造'始まり（ラーメン/壁式）のみD=L/7、それ以外（S造/SRC造/木造/未定）はD=L/8
- *  （ユーザー指定はS造/RC造のみのため、それ以外はS造に準じた値で代用する簡易ルール）。 */
+ *  mainStructure: 実効主構造の文字列表記。算定方式は主構造ルール（structureRules.js foundation.beamSizing）:
+ *    kind:'fixed'       … 木造系。土台幅基準の標準寸法150×600固定（柱幅・スパン由来の算定式とは別系統）。
+ *    kind:'spanDivisor' … RC系はD=L/7、S造/SRC造（および未定）はD=L/8
+ *                         （ユーザー指定はS造/RC造のみのため、それ以外はS造に準じた値で代用する簡易ルール）。 */
 export function computeFoundationBeamSize(graph, project, mainStructure) {
-  // 木造系は土台幅基準の標準寸法150×600固定（問題.md）。柱幅・スパン由来のRC/S算定式とは別系統。
-  if (isWoodStructure(mainStructure)) {
-    return { width: WOOD_FOUNDATION_BEAM.width, depth: WOOD_FOUNDATION_BEAM.depth };
-  }
-  const depthDivisor = mainStructure?.startsWith('RC造') ? 7 : 8;
+  const sizing = rulesFor(mainStructure).foundation.beamSizing;
+  if (sizing.kind === 'fixed') return { width: sizing.width, depth: sizing.depth };
+  const depthDivisor = sizing.depthDivisor;
   const span = longestGridSpan(graph);
   const columnSize = maxColumnSectionSize(project);
   return {

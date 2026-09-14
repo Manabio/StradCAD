@@ -16,6 +16,8 @@ import {
   deleteClassificationOverflow,
 } from './structuralAutoFill.js';
 import { collectFloorGroups } from './memberNumbering.js';
+import { conformWoodSections } from './woodAutoFill.js';
+import { rulesFor } from './structureRules.js';
 import { conformToLedger } from './memberGroups.js';
 
 /**
@@ -45,7 +47,7 @@ export async function recomputeStructuralForGraph(targetGraph, project, mainStru
 
   // 構造体トポロジーから未定義の柱・梁・基礎（基礎伏図のみ）を検出し、自動補完する。
   // ユーザーが明示削除した箇所は除外集合（excludedColumnSlots 等）により復活しない。
-  const { newColumns, newFootings, newBeams } = runInAction(() => autoFillStructuralGrid(targetGraph, project, mainStructure, wallGate, wallSources));
+  const { newColumns, removedColumns, newFootings, newBeams } = runInAction(() => autoFillStructuralGrid(targetGraph, project, mainStructure, wallGate, wallSources));
   // べた基礎（木造）のマットスラブを基礎伏図に生成・撤去する（基礎種別で取捨。問題.md）。基礎伏図以外では no-op。
   const matFoundation = runInAction(() => autoFillMatFoundation(targetGraph, project));
   // 外周モデル（side ビュー）を1回構築し、柱芯オフセットと梁偏芯の両方に渡す——柱・梁で外側方向（内外定義）を一致させる。
@@ -59,11 +61,19 @@ export async function recomputeStructuralForGraph(targetGraph, project, mainStru
   const updatedBeamEcc = runInAction(() => autoFillBeamEccentricity(targetGraph, project));
   // 別フロアにいる間に主要構造が変更された等で取りこぼした柱・梁を、実効主構造に合わせて変換する。
   const { convertedColumns, convertedBeams, convertedFootings } = runInAction(() => convertMembersToEffectiveMaterial(targetGraph, project, mainStructure));
+  // 在来木造: 既存の柱・梁の断面を主構造ルール（柱120角・梁は柱同寸幅）へそろえる（手動固定も含む。ユーザー裁定2026-09-14）。
+  const conformedSections = runInAction(() => conformWoodSections(targetGraph, project));
+  // 壁下地材（共通仕様の per-floor 設定。壁厚の情報源）はここでは触らない——壁は仕上げ脱出時の導出物で、
+  // 構造再計算は壁を再生成できないため、ここで下地材だけ変えると「共通仕様は120×30なのに壁は90のまま」
+  // のズレを作る（実機 2026-09-14）。在来の柱同寸×30への自動選択は壁生成の直前＝仕上げ突入
+  // （finish/finishBoundary.js runFinishEntryBoundary → conformWoodBacking）だけで行う。
   // 構造変更で「×」化した部材の自動生成分を削除する（問題.md「×は削除」。生成側は autoFillStructuralGrid の構造ゲート）。
   const removedByClass = runInAction(() => deleteClassificationOverflow(targetGraph, project));
   // 柱の負担床面積から柱幅・柱脚サイズを再算定する（dimensionStatus==='auto'の部材のみ。ロック済みは保持）。
   // 柱は自階graphに属するため、支える階数(N)も自階（targetGraph.plane）基準で算定する。
-  const updatedColumnSizes = runInAction(() => autoFillColumnSizes(targetGraph, project, targetGraph.plane));
+  // 在来木造（columnSizing:'fixed'）は柱寸法を欄で決めるため負担面積からの概算を行わない。
+  const ownRules = rulesFor(targetGraph.structureOverride ?? project.structuralInfo.mainStructure);
+  const updatedColumnSizes = ownRules.columnSizing === 'fixed' ? [] : runInAction(() => autoFillColumnSizes(targetGraph, project, targetGraph.plane));
   const updatedFootingSizes = runInAction(() => autoFillColumnBaseSizes(targetGraph, project));
   // 基礎梁(role:'foundation')の梁幅b・梁成Dを、建物全体の最長スパン・最大柱幅から再算定する。
   const updatedBeamSizes = runInAction(() => autoFillFoundationBeamSizes(targetGraph, project));
@@ -77,9 +87,9 @@ export async function recomputeStructuralForGraph(targetGraph, project, mainStru
     collectFloorGroups(targetGraph, project);
   });
 
-  const changed = newColumns.length > 0 || newFootings.length > 0 || newBeams.length > 0
+  const changed = newColumns.length > 0 || removedColumns.length > 0 || newFootings.length > 0 || newBeams.length > 0
     || matFoundation.created.length > 0 || matFoundation.removed.length > 0
-    || convertedColumns.length > 0 || convertedBeams.length > 0 || convertedFootings.length > 0
+    || convertedColumns.length > 0 || convertedBeams.length > 0 || convertedFootings.length > 0 || conformedSections.length > 0
     || removedByClass.length > 0
     || updatedColumnSizes.length > 0 || updatedFootingSizes.length > 0 || updatedBeamSizes.length > 0
     || updatedRoofBeamSizes.length > 0 || updatedBeamEcc.length > 0;

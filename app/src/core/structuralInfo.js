@@ -6,12 +6,13 @@
  * 階ごとの例外は PlanGraph.structureOverride（mainStructure のみ。null=この建物全体値を継承）。
  */
 import { makeObservable, observable, action } from 'mobx';
+import { UNSPECIFIED_STRUCTURE, MAT_FOUNDATION } from '../structural/structureRules.js';
 
 export class StructuralInfo {
   constructor() {
-    this.mainStructure    = '未定';
+    this.mainStructure    = UNSPECIFIED_STRUCTURE;
     this.otherStructures  = observable.array([]);
-    this.foundationType   = 'ベタ基礎';
+    this.foundationType   = MAT_FOUNDATION;
     // 出幅（mm）: 通り芯から柱外面までの距離。1構造×1通り芯あたり1値で持つ（columnFaceProjections。
     // キー=`${structure}|${cl.label}`。混構造では構造ごと、X/Y通り芯ごとに別値を指定できる）。
     // ラーメン系の柱芯はこの出幅と自階の柱幅から決定的に導出する（autoFillColumnAxisOffsets）。

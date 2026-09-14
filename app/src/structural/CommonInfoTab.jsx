@@ -1,11 +1,11 @@
 import { useEffect, useRef } from 'react';
 import { observer } from 'mobx-react-lite';
 import {
-  MAIN_STRUCTURE_OPTIONS, OTHER_STRUCTURE_OPTIONS, foundationOptionsFor,
   DESIGN_STRENGTH_OPTIONS, CONCRETE_TYPE_OPTIONS, MAIN_BAR_OPTIONS, HOOP_BAR_OPTIONS,
   SNOW_AREA_OPTIONS, BASIC_WIND_SPEED_OPTIONS, SURFACE_ROUGHNESS_OPTIONS, SEISMIC_ZONE_FACTOR_OPTIONS,
   SelectRow, CheckboxGroup, TranscribedField,
 } from '../ui/StructuralInfoDialog.jsx';
+import { MAIN_STRUCTURE_OPTIONS, OTHER_STRUCTURE_OPTIONS, foundationOptionsFor, MAT_FOUNDATION } from './structureRules.js';
 
 /**
  * 共通タブ（旧・構造パレット）。
@@ -30,7 +30,7 @@ export const CommonInfoTab = observer(function CommonInfoTab({ project, graph, o
       // 建物全体の foundationType に影響しないため、建物全体の mainStructure 変更時のみ正規化する。
       if (!hasOverride) {
         const opts = foundationOptionsFor(v);
-        if (!opts.includes(info.foundationType)) info.setField('foundationType', 'ベタ基礎');
+        if (!opts.includes(info.foundationType)) info.setField('foundationType', MAT_FOUNDATION);
       }
     });
   }

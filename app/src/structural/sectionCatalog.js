@@ -62,12 +62,34 @@ function buildSquarePipes() {
   });
 }
 
+// 木造製材（幅×成）。正角材の幅（柱寸法の候補: 90/105/120。柱・棟木・火打ち・母屋・旧既定105角）ごとに、
+// 正角と「その幅 × 梁成表の成」（在来木造の梁は材幅＝柱同寸。structureRules.js WOOD_BEAM_DEPTH_TABLE）を
+// 直積で生成する——柱寸法を変えても同寸幅の梁断面が必ず引けるようにするため。
+const WOOD_SQUARE_WIDTHS = [90, 105, 120];
+const WOOD_BEAM_DEPTHS = [120, 150, 180, 210, 240, 270, 300, 330, 360];
+
+// 幅ごとに正角＋（成>幅の）梁断面。キーは `WOOD-{幅}x{成}`。
+function buildWoodRects() {
+  const out = [];
+  for (const width of WOOD_SQUARE_WIDTHS) {
+    for (const height of [width, ...WOOD_BEAM_DEPTHS.filter(d => d > width)]) {
+      out.push({ key: `WOOD-${width}x${height}`, materialType: 'WOOD', shape: SectionShape.RECT, width, height, label: `${width}×${height}` });
+    }
+  }
+  return out;
+}
+
+/** 木造の矩形断面キー（幅×成）。カタログに無い組み合わせは null。 */
+export function woodRectSectionKey(width, height) {
+  const key = `WOOD-${width}x${height}`;
+  return SECTION_CATALOG.some(s => s.key === key) ? key : null;
+}
+
 // --- カタログ本体 --------------------------------------------------------------
 
 export const SECTION_CATALOG = [
-  // 木造（角材）
-  { key: 'WOOD-105x105', materialType: 'WOOD', shape: SectionShape.RECT, width: 105, height: 105, label: '105×105' },
-  { key: 'WOOD-120x120', materialType: 'WOOD', shape: SectionShape.RECT, width: 120, height: 120, label: '120×120' },
+  // 木造（角材・梁）
+  ...buildWoodRects(),
   // S造（規格鋼材）
   ...buildHSections(),
   ...buildSquarePipes(),

@@ -3,6 +3,7 @@ import { Line, Rect, Circle, Group } from 'react-konva';
 import { StructuralMaterialType, LINE_WEIGHT_MM } from '../core.js';
 import { cellBoundsFromKey } from '../finish/gridCells.js';
 import { findSectionEntry, diaphragmProjection } from '../structural/sectionCatalog.js';
+import { rulesFor, effectiveStructure } from '../structural/structureRules.js';
 import { planColumnWraps } from './wallDrawPlan.js';
 import { columnWrapRenderProps, columnWrapStrokeWidth } from '../structural/columnWrapLineJoin.js';
 import { graphComputed } from './graphDerived.js';
@@ -15,6 +16,10 @@ export const COLOR_BY_MATERIAL = {
   [StructuralMaterialType.STEEL]: '#475569',
   [StructuralMaterialType.RC]:    '#1e293b',
 };
+
+// 平面図で柱断面を「壁と同じ線」として描くときの線色（主構造ルール drawing.planColumnColor==='wall'。
+// 壁の既定色 core/shapeBase.js の color '#000000' と同値）。
+const PLAN_WALL_LINE_COLOR = '#000000';
 
 // 柱は構造図では全LODで実寸表示する（梁・耐力壁の仮サイズLODとは非対称）。COLUMN_SIZE_MM は
 // sectionDefId がカタログに無い場合のフォールバック辺長。BEAM_WIDTH_MM は梁の仮表示幅。
@@ -106,10 +111,9 @@ function bandLines(keyPrefix, isVertical, axisValue, half, segments, stroke, str
 }
 
 // 木造基礎伏図の「土台」「ベース」帯の振り分け寸法（問題.md）。通り芯・1階壁芯（＝基礎梁の軸）から
-// 土台は±75（幅150）、ベースは±300（幅600）を振り分けて描く。土台は袋とじ（交点で重ねて閉じる）、
-// ベースは角でトリム（直交する基礎梁に突き当たる端を半幅だけ控えて突合せにする）。
-const SILL_HALF = 75;   // 土台 幅150 の半分
-const BASE_HALF  = 300;  // ベース 幅600 の半分
+// 土台は幅150（structureRules.js foundation.sillWidthMm）、ベースは幅600（foundation.sectionDefaults.baseWidth）を
+// 振り分けて描く。土台は袋とじ（交点で重ねて閉じる）、ベースは角でトリム（直交する基礎梁に突き当たる端を
+// 半幅だけ控えて突合せにする）。
 const BAND_COORD_TOL = 1; // 端点一致判定の許容(mm)
 
 // 基礎梁(role:'foundation')の軸に沿った帯1本のRect props（isVertical=軸がX方向）。lo/hi は span方向の座標。
@@ -120,7 +124,10 @@ function bandRect(beam, lo, hi, half) {
 }
 
 // 木造基礎伏図の土台・ベース帯を基礎梁から生成する。drawBase=false（べた基礎）ならベースは描かない。
-function woodFoundationBands(foundationBeams, drawBase, sillColor, baseColor, strokeWidth) {
+// 帯の幅は主構造ルール（foundationRules）から引く。
+function woodFoundationBands(foundationBeams, drawBase, sillColor, baseColor, strokeWidth, foundationRules) {
+  const SILL_HALF = foundationRules.sillWidthMm / 2;
+  const BASE_HALF = foundationRules.sectionDefaults.baseWidth / 2;
   const spanLo = b => Math.min(b.clStart.value, b.clEnd.value);
   const spanHi = b => Math.max(b.clStart.value, b.clEnd.value);
   // 端 coord で直交する基礎梁に突き当たるか（その直交梁のスパンが自軸を含む）。ベースのトリム判定に使う。
@@ -182,12 +189,17 @@ export const ColumnsLayer = observer(({ graph, viewport, diaphragm = false, fini
   // キャッシュする（graphDerived.js。パン・ズームの再レンダーで引き直さない）。
   // 包みの解決結果は壁の領域（renderer/wallDrawPlan.js の planColumnWraps）と共有する——同じ柱壁が
   // 壁側の覆い判定と柱側の描画で食い違わないための単一の入口（二重計算もしない）。
-  const wrapByColumnId = finishWrap
+  // 主構造ルール（structureRules.js drawing）: 在来木造は包みを持たず、平面の柱断面は壁と同じ黒で描く
+  // （ユーザー指示2026-09-14。材種色の断面に黒の包み線が重なって二重に見えていた）。
+  const drawing = rulesFor(effectiveStructure(graph)).drawing;
+  const wrapByColumnId = finishWrap && drawing.columnFinishWrap
     ? graphComputed(graph, 'columnWrapByColumnId',
       () => new Map(planColumnWraps(graph).map(w => [w.column.id, w.wrapped])))
     : null;
   return graph.columns.flatMap(column => {
-    const color = COLOR_BY_MATERIAL[column.materialType];
+    const color = finishWrap && drawing.planColumnColor === 'wall'
+      ? PLAN_WALL_LINE_COLOR
+      : COLOR_BY_MATERIAL[column.materialType];
     const els = [];
     // 仕上げ包み（柱壁）。軸並行なので rotation は持たない——包みは向き合う壁の向きで決まる。
     // 実線同士のL字の角の外角を閉じる（structural/columnWrapLineJoin.js。第4弾）。柱単位で解決
@@ -261,10 +273,12 @@ export const StructuralLayer = observer(({ composition, viewport, project }) => 
 
   // 木造基礎伏図の土台・ベース帯（問題.md）。基礎梁(role:'foundation')がある＝基礎伏図、かつ実効主構造が木造のときのみ。
   // ベースの有無は基礎種別（べた基礎はベースなし＝土台のみ）。実効主構造は基礎伏図グラフ（=自階）の上書きを優先。
+  // 帯の有無・ベース（独立フーチング）の有無は主構造ルール（structureRules.js foundation.drawsBands / hasBase）。
   const foundationBeams = (beam?.graph?.beams ?? []).filter(b => b.role === 'foundation');
   const effStructure = beam?.graph?.structureOverride ?? project?.structuralInfo?.mainStructure;
-  const woodFoundation = foundationBeams.length > 0 && typeof effStructure === 'string' && effStructure.startsWith('木造');
-  const drawBase = woodFoundation && project?.structuralInfo?.foundationType !== 'ベタ基礎';
+  const foundationRules = rulesFor(effStructure).foundation;
+  const woodFoundation = foundationBeams.length > 0 && foundationRules.drawsBands;
+  const drawBase = woodFoundation && foundationRules.hasBase(project?.structuralInfo?.foundationType);
 
   return (
     <>
@@ -274,7 +288,7 @@ export const StructuralLayer = observer(({ composition, viewport, project }) => 
       {woodFoundation && (
         <Group {...groupPropsForStyle(footing?.spec.style)}>
           {woodFoundationBands(foundationBeams, drawBase,
-            COLOR_BY_MATERIAL[StructuralMaterialType.WOOD], COLOR_BY_MATERIAL[StructuralMaterialType.RC], thin)}
+            COLOR_BY_MATERIAL[StructuralMaterialType.WOOD], COLOR_BY_MATERIAL[StructuralMaterialType.RC], thin, foundationRules)}
         </Group>
       )}
       <Group {...groupPropsForStyle(footing?.spec.style)}>

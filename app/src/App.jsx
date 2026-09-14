@@ -49,6 +49,7 @@ import { BuildingInfoDialog }  from './ui/BuildingInfoDialog.jsx';
 import { StructuralPanel } from './structural/StructuralPanel.jsx';
 import { autoFillColumnAxisOffsets, autoFillBeamEccentricity, resolveLowestGraph, axisExteriorSign } from './structural/structuralAutoFill.js';
 import { buildExteriorSide } from './structural/wallGate.js';
+import { TRADITIONAL_WOOD_STRUCTURE } from './structural/structureRules.js';
 import { buildStructuralFigureSlots, designationForSlot, firstSlotKeyForPlane } from './structural/structuralFigureSlots.js';
 import { recomputeStructuralComposition, runStructuralModeSetup, reflectStructuralToOtherFloors, reflectStructuralAfterFloorAdd } from './structural/structuralOrchestration.js';
 import { figureBindingManager } from './figure/FigureBindingManager.js';
@@ -1404,7 +1405,7 @@ const App = observer(() => {
   // 木造（在来）の自動判定（問題.md）: 平面モードで主構造が未指定のとき、追加した通り芯が
   // 既存グリッドと910の倍数間隔をなすなら「木造（在来）」を提案する確認ダイアログを出す。
   // 「寸法指定を910で割った余りが0」を、隣接グリッドCLとの最小間隔で判定する（参照なし絶対座標入力にも効く）。
-  // 主構造の正式表記は StructuralInfoDialog.MAIN_STRUCTURE_OPTIONS に準拠（'未定' / '木造（在来）'＝全角括弧）。
+  // 主構造の正式表記は structural/structureRules.js（TRADITIONAL_WOOD_STRUCTURE＝'木造（在来）'。全角括弧）。
   function maybeSuggestWoodStructure(clType, newValues) {
     if (!shouldSuggestWoodStructure(graph, project, appMode, clType, newValues)) return;
     setFloorConfirm({
@@ -1417,7 +1418,7 @@ const App = observer(() => {
         setFloorConfirm(null);
         if (v !== 'yes') return;
         const prev = project.structuralInfo.mainStructure;
-        const apply = () => runInAction(() => project.structuralInfo.setField('mainStructure', '木造（在来）'));
+        const apply = () => runInAction(() => project.structuralInfo.setField('mainStructure', TRADITIONAL_WOOD_STRUCTURE));
         apply();
         undoManager.push(
           () => runInAction(() => project.structuralInfo.setField('mainStructure', prev)),

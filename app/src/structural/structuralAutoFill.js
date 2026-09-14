@@ -1,10 +1,12 @@
 import { StructuralMaterialType, CenterLineType, columnSlotKey, spanKey, centerLineKind, findHostPrimaryBeam } from '../core.js';
-import { DEFAULT_SECTION_BY_MATERIAL, DEFAULT_COLUMN_SECTION_BY_MATERIAL, DEFAULT_BEAM_SECTION_BY_MATERIAL } from './memberCatalog.js';
+import { DEFAULT_SECTION_BY_MATERIAL, DEFAULT_BEAM_SECTION_BY_MATERIAL } from './memberCatalog.js';
 import { findSectionEntry } from './sectionCatalog.js';
 import { isFoundationPlane } from './drawingDesignation.js';
 import { computeTributaryColumnWidth, computeColumnBaseSize, computeFoundationBeamSize, computeRoofBeamSize } from './memberSizing.js';
 import { floorSwapManager } from '../storage/FloorSwapManager.js';
 import { isRigidFrameStructure, structureHasMemberKind, memberKindOf, MEMBER_KIND } from './structuralClassification.js';
+import { rulesFor, defaultMaterialFor, UNSPECIFIED_STRUCTURE, effectiveStructure } from './structureRules.js';
+import { autoFillWoodColumns } from './woodAutoFill.js';
 import { buildExteriorSide, footprintCellKeys } from './wallGate.js';
 import { autoFillWallBeamAxes } from './wallBeamAxes.js';
 import { landingEdgeCLs, landingZ } from '../finish/stair/stairLanding.js';
@@ -24,22 +26,19 @@ import { floorHeightAbove } from '../finish/stair/stairDimensions.js';
 //   （通常階/屋根の辺は大梁 role:'primary', symbol G）。柱自体はどの実体平面でも自階分を生成する。
 // 屋根専用平面（isRoofPlane）は「柱の立つ階」ではないため柱は生成しない（横架材=軒桁のみ）。
 
-// 主構造未指定を表す値（StructuralInfoDialog.MAIN_STRUCTURE_OPTIONS[0] と一致させる）。
+// 主構造未指定を表す値（structureRules.MAIN_STRUCTURE_OPTIONS[0]）。
 // 未指定の間は部材を自動生成・材変換しない（木造フォールバックで実データが湧くのを防ぐ）。
-export const UNSPECIFIED_STRUCTURE = '未定';
+// 実体は structureRules.js（主構造ごとのルールセット）。既存の import 経路を保つため再exportする。
+export { UNSPECIFIED_STRUCTURE };
 
-/** 主構造の文字列表記から既定の StructuralMaterialType を導出する。 */
+/** 主構造の文字列表記から既定の StructuralMaterialType を導出する（structureRules.js の baseMaterial。
+ *  '未定' 等の未知はフォールバック既定=WOOD。生成・変換は呼び出し側でガード済み）。 */
 export function defaultMaterialType(mainStructure) {
-  if (mainStructure?.startsWith('木造')) return StructuralMaterialType.WOOD;
-  if (mainStructure?.startsWith('S造') || mainStructure?.startsWith('SRC造')) return StructuralMaterialType.STEEL;
-  if (mainStructure?.startsWith('RC造')) return StructuralMaterialType.RC;
-  return StructuralMaterialType.WOOD; // '未定' 等のフォールバック既定（生成・変換は呼び出し側でガード済み）
+  return defaultMaterialFor(mainStructure);
 }
 
-/** その階の実効主構造（階の上書き優先・なければ建物全体値）。 */
-export function effectiveStructure(graph, project) {
-  return graph.structureOverride ?? project.structuralInfo.mainStructure;
-}
+/** その階の実効主構造（階の上書き優先・なければ建物全体値）。実体は structureRules.js（既存の import 経路の互換で再export）。 */
+export { effectiveStructure };
 
 /** その階の主構造が確定しているか（'未定'でない）。未確定の間は柱・梁・基礎を自動生成しない。 */
 export function isStructureSpecified(graph, project) {
@@ -51,22 +50,17 @@ export function resolveDefaultMaterialType(graph, project) {
   return defaultMaterialType(effectiveStructure(graph, project));
 }
 
-/** 木造系（在来・2"×4"）か。基礎種別（ベタ基礎時のベース有無・マットスラブ有無）の分岐に使う。 */
-function isWoodStructure(structure) {
-  return structure === '木造（在来）' || structure === '木造（2"×4"）';
-}
-
 /** 基礎伏図で「ベース（独立フーチング）」を自動生成するか（問題.md：木造べた基礎時はベースなし）。
- *  木造のなし／土間コンは基礎梁＋ベースの合成のためベースを生成する。非木造は従来どおり常に生成する。 */
+ *  木造のなし／土間コンは基礎梁＋ベースの合成のためベースを生成する。非木造は常に生成する。
+ *  判定は主構造ルール（structureRules.js の foundation.hasBase）。 */
 export function foundationGeneratesBase(structure, foundationType) {
-  if (isWoodStructure(structure)) return foundationType !== 'ベタ基礎';
-  return true;
+  return rulesFor(structure).foundation.hasBase(foundationType);
 }
 
 /** 基礎伏図で「べた基礎（マットスラブ role:'mat_foundation'）」を自動生成するか（問題.md：木造べた基礎時のみ）。
- *  非木造の基礎スラブは従来どおり手動配置（自動生成しない）。 */
+ *  非木造の基礎スラブは手動配置（自動生成しない）。判定は主構造ルール（foundation.hasMatSlab）。 */
 export function foundationGeneratesMatSlab(structure, foundationType) {
-  return isWoodStructure(structure) && foundationType === 'ベタ基礎';
+  return rulesFor(structure).foundation.hasMatSlab(foundationType);
 }
 
 // 柱芯（ColumnAxis）の対象＝柱・梁でラーメン躯体を構成する構造形式のみ（S造/SRC造/RC造(ラーメン)）。
@@ -109,16 +103,28 @@ export function computeGridSpans(graph) {
  *  基礎伏図でも呼ぶ（最下階の柱も自階分として生成する）。屋根専用平面では呼ばない。 */
 export function autoFillColumns(graph, project, wallGate = null) {
   if (!isStructureSpecified(graph, project)) return []; // 主構造未確定の間は生成しない
-  const materialType = resolveDefaultMaterialType(graph, project);
+  const rules = rulesFor(effectiveStructure(graph, project));
+  const materialType = rules.baseMaterial;
   const existing = new Set(graph.columns.map(c => columnSlotKey(c.verticalCL, c.horizontalCL)));
   const created = [];
   for (const { verticalCL, horizontalCL, key } of computeGridIntersections(graph)) {
     if (existing.has(key) || graph.excludedColumnSlots.has(key)) continue;
     // 建物フットプリント外の交点には柱を作らない（外壁線で有無を取捨。wallGate.js 参照）。
     if (wallGate && !wallGate.intersectionInBuilding(verticalCL, horizontalCL)) continue;
-    created.push(graph.addColumn(materialType, DEFAULT_COLUMN_SECTION_BY_MATERIAL[materialType], verticalCL, horizontalCL, {}));
+    created.push(graph.addColumn(materialType, rules.defaultSections.column, verticalCL, horizontalCL, {}));
   }
   return created;
+}
+
+/** 柱の自動生成を主構造ルールの選択子（columnPlacement）で振り分ける単一の入口。
+ *  通り芯交点（既定）＝autoFillColumns、壁交点（在来木造）＝autoFillWoodColumns（撤去も伴う）。
+ *  構造モード突入時の再計算（autoFillStructuralGrid）と、下階グラフへの反映（structuralOrchestration.js）が共有する。
+ *  @returns {{created: object[], removed: string[]}} */
+export function autoFillColumnsForStructure(graph, project, wallGate = null) {
+  if (!isStructureSpecified(graph, project)) return { created: [], removed: [] };
+  const rules = rulesFor(effectiveStructure(graph, project));
+  if (rules.columnPlacement === 'wallIntersections') return autoFillWoodColumns(graph, project, wallGate);
+  return { created: autoFillColumns(graph, project, wallGate), removed: [] };
 }
 
 /** 柱が存在しない交点を検出し、独立フーチングをデフォルト材料・断面で自動生成する（除外集合のスロットはスキップ）。
@@ -137,8 +143,8 @@ export function autoFillFootings(graph, wallGate = null) {
   return created;
 }
 
-// べた基礎マットスラブの既定厚(mm)（問題.md：べた基礎 厚150）。レベル（GL+50・天端制約）は次フェーズ。
-const MAT_FOUNDATION_THICKNESS = 150;
+// べた基礎マットスラブの既定厚(mm)は主構造ルール（structureRules.js foundation.sectionDefaults.matThickness＝
+// 断面図の既定と同じ値）から引く。レベル（GL+50・天端制約）は次フェーズ。
 
 /** 基礎伏図（基準階）に「べた基礎」のマットスラブ（StructuralSlab role:'mat_foundation'）を自動生成・撤去する。
  *  - 木造べた基礎（foundationGeneratesMatSlab）かつ建物フットプリントがある → 自動マットスラブが無ければ1枚生成する。
@@ -161,7 +167,7 @@ export function autoFillMatFoundation(graph, project) {
       StructuralMaterialType.RC,
       DEFAULT_SECTION_BY_MATERIAL[StructuralMaterialType.RC],
       cells,
-      { role: 'mat_foundation', levelRef: 'top', thickness: MAT_FOUNDATION_THICKNESS },
+      { role: 'mat_foundation', levelRef: 'top', thickness: rulesFor(structure).foundation.sectionDefaults.matThickness },
     );
     return { created: [slab.id], removed: [] };
   }
@@ -179,14 +185,17 @@ export function autoFillMatFoundation(graph, project) {
  *  role: 基礎伏図では 'foundation'（symbol FG）、それ以外（通常階・R階伏図）では 'primary'（symbol G）。
  *  基礎梁（role:'foundation'）は主構造に関わらず常にRC造（独立フーチングと同じ理由）。 */
 export function autoFillBeams(graph, project, role = 'primary', wallGate = null) {
-  const materialType = role === 'foundation' ? StructuralMaterialType.RC : resolveDefaultMaterialType(graph, project);
+  // 基礎梁は主構造に関わらずRC（材種既定断面）。床梁は自階の主構造ルールの既定断面。
+  const rules = rulesFor(effectiveStructure(graph, project));
+  const materialType = role === 'foundation' ? StructuralMaterialType.RC : rules.baseMaterial;
+  const section = role === 'foundation' ? DEFAULT_BEAM_SECTION_BY_MATERIAL[materialType] : rules.defaultSections.beam;
   const existing = new Set(graph.beams.map(b => spanKey(b.axisCL, b.clStart, b.clEnd)));
   const created = [];
   for (const { axisCL, isVertical, clStart, clEnd, key } of computeGridSpans(graph)) {
     if (existing.has(key) || graph.excludedBeamSlots.has(key)) continue;
     // 建物フットプリント外の辺（どの対象階の屋内にも接しない辺）には梁を作らない（外壁線で有無を取捨。wallGate.js 参照）。
     if (wallGate && !wallGate.spanInBuilding(axisCL, isVertical, clStart, clEnd)) continue;
-    created.push(graph.addBeam(materialType, DEFAULT_BEAM_SECTION_BY_MATERIAL[materialType], axisCL, isVertical, clStart, clEnd, { role }));
+    created.push(graph.addBeam(materialType, section, axisCL, isVertical, clStart, clEnd, { role }));
   }
   return created;
 }
@@ -224,8 +233,9 @@ export function autoFillSecondaryBeams(graph, project) {
   if (!isStructureSpecified(graph, project)) return [];
   const structure = effectiveStructure(graph, project);
   if (!structureHasMemberKind(MEMBER_KIND.BEAM, structure)) return [];
-  const materialType = resolveDefaultMaterialType(graph, project);
-  const section = DEFAULT_BEAM_SECTION_BY_MATERIAL[materialType];
+  const rules = rulesFor(structure);
+  const materialType = rules.baseMaterial;
+  const section = rules.defaultSections.beam;
   const existing = new Set(graph.beams.map(b => spanKey(b.axisCL, b.clStart, b.clEnd)));
   const created = [];
   for (const cl of beamAxisCenterLines(graph)) {
@@ -249,14 +259,15 @@ export function autoFillSecondaryBeams(graph, project) {
  *  autoFillStructuralGrid 側で isRoofPlane の場合は autoFillBeams(..., 'primary') を呼ばず、
  *  この関数だけを呼ぶこと。belowMainStructure: autoFillColumns と同じ「1つ下の階」（＝最上の実体平面）。 */
 export function autoFillRoofBeams(graph, project, belowMainStructure, wallGate = null) {
-  const materialType = defaultMaterialType(belowMainStructure);
+  const rules = rulesFor(belowMainStructure);
+  const materialType = rules.baseMaterial;
   const existing = new Set(graph.beams.map(b => spanKey(b.axisCL, b.clStart, b.clEnd)));
   const created = [];
   for (const { axisCL, isVertical, clStart, clEnd, key } of computeGridSpans(graph)) {
     if (existing.has(key) || graph.excludedBeamSlots.has(key)) continue;
     // 軒桁も直下階のフットプリント（外壁線）でゲートする（wallGate は直下の最上階基準。wallGate.js 参照）。
     if (wallGate && !wallGate.spanInBuilding(axisCL, isVertical, clStart, clEnd)) continue;
-    created.push(graph.addBeam(materialType, DEFAULT_BEAM_SECTION_BY_MATERIAL[materialType], axisCL, isVertical, clStart, clEnd, { role: 'eaves' }));
+    created.push(graph.addBeam(materialType, rules.defaultSections.beam, axisCL, isVertical, clStart, clEnd, { role: 'eaves' }));
   }
   return created;
 }
@@ -358,15 +369,20 @@ export function autoFillStructuralGrid(graph, project, belowMainStructure, wallG
   // 基礎梁・ベース（基礎）は常に○のため実質ゲートされない。地階＝RC固定の地中梁図も常に○。
   const structure = effectiveStructure(graph, project);
   const foundationType = project.structuralInfo.foundationType;
-  const newColumns  = (!isRoof && ownSpecified && structureHasMemberKind(MEMBER_KIND.COLUMN, structure)) ? autoFillColumns(graph, project, wallGate) : [];
+  // 壁由来の梁芯CL自動生成は柱より前に行う（在来木造の壁交点柱が梁芯CLをアンカーに使うため。
+  // 通り芯グリッドの部材とは独立の生成源なので、他の主構造でも順序は結果に影響しない）。
+  const newWallBeamAxes = autoFillWallBeamAxes(graph, wallSources);
+  // 柱は主構造ルールの配置源（通り芯交点／壁交点）で振り分ける。壁交点方式は候補に無い自動柱の撤去も返す。
+  const columnsResult = (!isRoof && ownSpecified && structureHasMemberKind(MEMBER_KIND.COLUMN, structure))
+    ? autoFillColumnsForStructure(graph, project, wallGate) : { created: [], removed: [] };
+  const newColumns = columnsResult.created;
+  const removedColumns = columnsResult.removed;
   // ベース（独立フーチング）は分類（表A）に加え、基礎種別でもゲートする（木造べた基礎時はベースなし。問題.md）。
   const newFootings = (foundation && ownSpecified && structureHasMemberKind(MEMBER_KIND.INDEPENDENT_FOOTING, structure)
     && foundationGeneratesBase(structure, foundationType)) ? autoFillFootings(graph, wallGate) : [];
   const beamKind = foundation ? MEMBER_KIND.FOUNDATION_BEAM : MEMBER_KIND.BEAM;
   const newBeams     = (!isRoof && ownSpecified && structureHasMemberKind(beamKind, structure)) ? autoFillBeams(graph, project, foundation ? 'foundation' : 'primary', wallGate) : [];
   const newRoofBeams = (isRoof && belowMainStructure !== UNSPECIFIED_STRUCTURE) ? autoFillRoofBeams(graph, project, belowMainStructure, wallGate) : [];
-  // 壁由来の梁芯CL自動生成。大梁生成後・小梁生成直前に呼ぶ（生成順序: 大梁 → 梁芯 → 小梁）。
-  const newWallBeamAxes = autoFillWallBeamAxes(graph, wallSources);
   // 踊り場受け梁（role:'landing'）。鉄骨・RC階段の踊り場辺（壁側1辺）へ自動生成する（WP-B2）。
   // 通り芯グリッドとは無関係の生成源のため、小梁生成の直前という以外の順序上の制約はない。
   const newLandingBeams = autoFillStairLandingBeams(graph, project, wallGate);
@@ -374,7 +390,7 @@ export function autoFillStructuralGrid(graph, project, belowMainStructure, wallG
   // （直交大梁に挟まれている＝大梁のフットプリント判定を継承するため。上のnewBeams生成後に呼ぶ）。
   // 出自を問わず全梁芯が対象のため、壁由来の梁芯（newWallBeamAxes）もそのまま拾う。
   const newSecondaryBeams = autoFillSecondaryBeams(graph, project);
-  return { newColumns, newFootings, newBeams: [...newBeams, ...newRoofBeams, ...newWallBeamAxes, ...newLandingBeams, ...newSecondaryBeams] };
+  return { newColumns, removedColumns, newFootings, newBeams: [...newBeams, ...newRoofBeams, ...newWallBeamAxes, ...newLandingBeams, ...newSecondaryBeams] };
 }
 
 /** 主要構造（実効値）と異なる材種の既存柱・梁を、新しい材種のサブクラスへ変換する。
@@ -385,17 +401,20 @@ export function autoFillStructuralGrid(graph, project, belowMainStructure, wallG
  *  軒桁を含む横架材(role:'eaves')は屋根の1つ下の階（belowMainStructure）の実効主構造を対象材質にする
  *  （autoFillRoofBeamsが同じbelowMainStructureで生成するため）。それ以外の梁（通常階の床梁）も自階基準でよい。 */
 export function convertMembersToEffectiveMaterial(graph, project, belowMainStructure) {
-  const belowMaterialType = defaultMaterialType(belowMainStructure);
+  // 対象材質・変換後の既定断面は主構造ルール（自階＝ownRules・屋根の1つ下＝belowRules）から引く。
+  const belowRules = rulesFor(belowMainStructure);
+  const ownRules = rulesFor(effectiveStructure(graph, project));
+  const belowMaterialType = belowRules.baseMaterial;
   const belowSpecified = belowMainStructure !== UNSPECIFIED_STRUCTURE;
   const ownSpecified = isStructureSpecified(graph, project);
-  const ownMaterialType = resolveDefaultMaterialType(graph, project);
+  const ownMaterialType = ownRules.baseMaterial;
   const convertedColumns = [];
   const convertedBeams = [];
   const convertedFootings = [];
   for (const column of [...graph.columnMap.values()]) {
     // 自階主構造が未確定なら変換しない（既存の柱を木造フォールバックへ書き換えてしまうのを防ぐ）。
     if (ownSpecified && column.materialType !== ownMaterialType) {
-      graph.convertColumnMaterial(column, ownMaterialType, DEFAULT_COLUMN_SECTION_BY_MATERIAL[ownMaterialType]);
+      graph.convertColumnMaterial(column, ownMaterialType, ownRules.defaultSections.column);
       convertedColumns.push(column.id);
     }
   }
@@ -405,8 +424,11 @@ export function convertMembersToEffectiveMaterial(graph, project, belowMainStruc
     const targetMaterial = beam.role === 'foundation' ? StructuralMaterialType.RC
       : beam.role === 'eaves' ? belowMaterialType
       : ownMaterialType;
+    const targetSection = beam.role === 'foundation' ? DEFAULT_BEAM_SECTION_BY_MATERIAL[StructuralMaterialType.RC]
+      : beam.role === 'eaves' ? belowRules.defaultSections.beam
+      : ownRules.defaultSections.beam;
     if (beam.materialType !== targetMaterial) {
-      graph.convertBeamMaterial(beam, targetMaterial, DEFAULT_BEAM_SECTION_BY_MATERIAL[targetMaterial]);
+      graph.convertBeamMaterial(beam, targetMaterial, targetSection);
       convertedBeams.push(beam.id);
     }
   }
@@ -451,8 +473,7 @@ export function deleteClassificationOverflow(graph, project) {
 
 /** その階の実効主構造から既定柱幅(mm)を導出する。ラーメン系の柱芯インセット量(width/2)の基準。 */
 function defaultColumnWidth(mainStructure) {
-  const materialType = defaultMaterialType(mainStructure);
-  return findSectionEntry(DEFAULT_COLUMN_SECTION_BY_MATERIAL[materialType])?.width ?? 200;
+  return findSectionEntry(rulesFor(mainStructure).defaultSections.column)?.width ?? 200;
 }
 
 /** あるCL（通り芯）が外周かどうかの符号を、軸線に沿って**全交差位置を走査**して求める単一ヘルパ。

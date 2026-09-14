@@ -11,6 +11,7 @@
 
 import { Builder, ByteBuffer } from 'flatbuffers';
 import { normalizeSubType } from '../openings/openingCatalog.js';
+import { UNSPECIFIED_STRUCTURE, MAT_FOUNDATION } from '../structural/structureRules.js';
 
 // ================================================================
 // 列挙値エンコード
@@ -1090,9 +1091,9 @@ function readStructuralInfo(bb, tablePos) {
   if (!tablePos) return null;
   const r = makeReader(bb, tablePos);
   return {
-    mainStructure:      r.str(SI.MAIN_STRUCTURE)      || '未定',
+    mainStructure:      r.str(SI.MAIN_STRUCTURE)      || UNSPECIFIED_STRUCTURE,
     otherStructures:    r.strVec(SI.OTHER_STRUCTURES),
-    foundationType:     r.str(SI.FOUNDATION_TYPE)      || 'ベタ基礎',
+    foundationType:     r.str(SI.FOUNDATION_TYPE)      || MAT_FOUNDATION,
     designStrength:     r.str(SI.DESIGN_STRENGTH)      || 'Fc24',
     concreteType:       r.str(SI.CONCRETE_TYPE)        || '普通コンクリート',
     mainBar:            r.str(SI.MAIN_BAR)             || 'SD345',

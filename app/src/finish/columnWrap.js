@@ -318,7 +318,9 @@ function resolveSideCover(rect, set, axis, side, trimGapMm) {
  * ——省略時は空＝従来どおり `continued === trimmed`。
  * @param {ColumnRect} rect - ダイヤフラム出まで含んだ素の外形
  * @param {object[]} walls
- * @param {{trimGapMm?:number, capOutlineWallIds?:Set<string>}} [opts]
+ * @param {{trimGapMm?:number, capOutlineWallIds?:Set<string>, noCover?:boolean}} [opts]
+ *   noCover=true は包みを付けない構造（在来木造。structural/structureRules.js drawing.columnFinishWrap）
+ *   ——外形は素の断面のまま、接続した壁の索引（wallAxes。展開図がどの面に柱型を出すか）だけ解く。
  * @returns {ColumnRect & {covers:SideAmounts, trimmed:SideAmounts, continued:SideAmounts,
  *   wallAxes:Array<{isVertical:boolean, axisValue:number}>}}
  */
@@ -328,6 +330,7 @@ export function wrapColumnWithFinish(rect, walls, opts = {}) {
 
 function wrapColumnWithFinishSet(rect, set, opts = {}) {
   const trimGapMm = opts.trimGapMm ?? TRIM_GAP_MM;
+  const noCover = opts.noCover === true;
   const covers = {}, finishes = {}, trimmed = {}, continued = {}, wallAxes = [];
   // 包みの線の色。**包みは壁（仕上げ材）であって構造材ではない**ので、取り合う壁の線色を継ぐ
   // ——柱の材種色（COLOR_BY_MATERIAL。伏図で部材の種別を示すための色）で描くと、平面では
@@ -342,12 +345,12 @@ function wrapColumnWithFinishSet(rect, set, opts = {}) {
   };
   for (const [axis, side, key] of [['x', -1, 'xLo'], ['x', 1, 'xHi'], ['y', -1, 'yLo'], ['y', 1, 'yHi']]) {
     const r = resolveSideCover(rect, set, axis, side, trimGapMm);
-    covers[key] = r.coverMm;
-    finishes[key] = r.finishMm;
-    trimmed[key] = r.trimmed;
+    covers[key] = noCover ? 0 : r.coverMm;
+    finishes[key] = noCover ? 0 : r.finishMm;
+    trimmed[key] = !noCover && r.trimmed;
     // 壁の面線がこの辺を引き継ぐか。腰壁・垂れ壁（天板の輪郭で描かれる壁）は切断面に面線が
     // 無い＝引き継げないので、柱壁が自分でこの辺を描く（全高の柱壁が勝つ）。
-    continued[key] = r.trimmed && !r.capOutline;
+    continued[key] = !noCover && r.trimmed && !r.capOutline;
     // 接続（トリム）した壁・食い込んでいる壁だけを索引に積む。遠い壁は積まない。
     if (r.trimmed || r.inWall) pushAxis(r.wall);
   }

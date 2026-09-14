@@ -11,8 +11,9 @@
 // ここはあくまで宣言データに留める。
 //
 // 静的な参照データ（core.js 非依存。memberCatalog.js と同じく循環import回避）。
-// 主構造キーは StructuralInfoDialog.MAIN_STRUCTURE_OPTIONS の正式表記（'未定' を除く6種）と一致させる。
-// ※ RC造は半角括弧 '(...)' 、木造は全角括弧 '（...）' の混在表記が正規（MAIN_STRUCTURE_OPTIONS 準拠）。
+// 主構造キーの正式表記（'未定' を除く6種）はここ（STRUCTURES）が真実——共通タブの選択肢
+// structureRules.MAIN_STRUCTURE_OPTIONS はこの配列から組み立てる。
+// ※ RC造は半角括弧 '(...)' 、木造は全角括弧 '（...）' の混在表記が正規。
 // ================================================================
 
 // 主構造の正規キー（表示順）。SLOT_PRESENCE / FIGURE_MEMBERS の boolean 配列はこの並びに対応する。

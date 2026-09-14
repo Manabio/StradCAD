@@ -22,6 +22,7 @@ import { findSectionEntry } from '../../structural/sectionCatalog.js';
 // 柱の仕上げ包みの幾何は平面図（renderer/StructuralLayer.jsx）と共有する単一の情報源から取る
 // ——同じ柱が図面ごとに違う太さで描かれないため（finish/columnWrap.js のヘッダ参照）。
 import { bareColumnRect, isColumnInsideWall, wrapColumnWithFinish } from '../../finish/columnWrap.js';
+import { rulesFor, effectiveStructure } from '../../structural/structureRules.js';
 import { ElevationLineRole, GAP_EPS_MM as GAP_EPS, SIGHTLINE_DEPTH_LIMIT_MM } from '../elevationStyle.js';
 import { localXOf, cutDrawRange } from './sectionTypes.js';
 import { halfWallThicknessMm } from '../elevationFloorProfile.js';
@@ -223,11 +224,13 @@ export function structuralColumnContribution(layers) {
   const walls = (layers ?? []).flatMap(l => l.graph?.walls ?? []);
   const result = [];
   for (const layer of layers ?? []) {
+    // 柱包みを持たない構造（在来木造。structureRules.js drawing.columnFinishWrap）は素の断面で柱型を出す。
+    const noCover = !rulesFor(effectiveStructure(layer.graph)).drawing.columnFinishWrap;
     for (const column of layer.graph?.columns ?? []) {
       if (column.role === FOUNDATION_ROLE) continue; // 杭は展開図に描かない
       const bare = bareColumnRect(column, layer.floorZMm);
       if (isColumnInsideWall(bare, walls)) continue;
-      result.push(wrapColumnWithFinish(bare, walls));
+      result.push(wrapColumnWithFinish(bare, walls, { noCover }));
     }
   }
   return result;

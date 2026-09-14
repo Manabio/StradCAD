@@ -23,6 +23,7 @@ export class Project {
 
     this.site = new Site();
     this.structuralInfo = new StructuralInfo();
+    this.structGraph._structuralInfo = this.structuralInfo; // 各階graph・peek一時graphが _structGraph 経由で辿る
 
     // 調査・計画情報（敷地情報／建築情報ダイアログの入力値）。プレーンJSONオブジェクトを
     // 丸ごと保持し、ダイアログを閉じるときに setSiteInfo/setBuildingInfo で全置換する
@@ -107,6 +108,7 @@ export class Project {
                              isRoofPlane, roofForPlaneId);
     const graph = new PlanGraph(plane);
     graph._structGraph = this.structGraph; // 全階共通の通り芯を参照
+    graph._structuralInfo = this.structuralInfo; // 建物全体の構造情報（主構造ルールの解決用）
     this.planeMap.set(plane.id, plane);
     this.graphMap.set(plane.id, graph);
     if (!this.activePlaneId) this.activePlaneId = plane.id;

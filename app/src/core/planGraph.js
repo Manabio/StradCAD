@@ -129,6 +129,10 @@ export class PlanGraph {
 
     // 主要構造の階ごとの例外（null = project.structuralInfo.mainStructure を継承）
     this.structureOverride   = null;
+    // 建物全体の構造情報（Project.structuralInfo）への参照。Project が生成時にセットする
+    // （peek の一時グラフは _structGraph 経由で辿る）。project が手元に無い描画・展開図の経路でも
+    // 主構造ルール（structural/structureRules.js の effectiveStructure）を引くための後方参照。永続化しない。
+    this._structuralInfo     = null;
 
     // 全階共通の通り芯グラフ（Project.structGraph）への参照。
     // null = このグラフ自身が structGraph（通り芯専用グラフ）。
