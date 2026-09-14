@@ -8,9 +8,10 @@ import { frameOnlyPerpRange } from './openingPlanSymbolGeometry.js';
 import { ERR_OPENING_OUT_OF_WALL, ERR_OPENING_OVERLAP } from '../error.js';
 import { buildOpeningElevation } from './openingElevationFigure.js';
 import { openingMountLocation } from './openingRoomLabel.js';
+import { openingRefOffsetRange } from './openingMove.js';
 import { AutoScaledFigure } from '../structural/sectionFigure/AutoScaledFigure.jsx';
 import {
-  beginOpeningFieldUndo, endOpeningFieldUndo, withOpeningUndo, validateOpeningEdit, removeOpeningWithUndo,
+  beginOpeningFieldUndo, endOpeningFieldUndo, withOpeningUndo, resolveRefOffsetEdit, removeOpeningWithUndo,
   materialGlassAfterFixtureChange, noteAfterSubTypeChange, swingSideAfterSubTypeChange,
   flippedHingeSides, flippedSwingSide, fixtureTypeAfterSubTypeChange,
 } from './openingEdit.js';
@@ -52,6 +53,8 @@ export const OpeningEditor = observer(function OpeningEditor({ graph, project, o
   const entry    = findCatalogEntry(opening.category, opening.subType);
   const tag      = openingTagOf(opening, project);
   const mountLocation = openingMountLocation(opening, graph);
+  // 「位置」欄の min/max（可動範囲。ドラッグと同じ openingMove.js の範囲。引けなければ属性なし）
+  const offsetRange = openingRefOffsetRange(opening, graph);
 
   const figure = buildOpeningElevation(opening, { tag, entry });
   const isFrameOnly = entry?.mechanism === OpeningMechanism.FRAME_ONLY;
@@ -163,15 +166,19 @@ export const OpeningEditor = observer(function OpeningEditor({ graph, project, o
   };
 
   const onOffsetFocus = () => { beforeOffsetRef.current = opening.refOffset; beginOpeningFieldUndo(graph, project, opening); };
+  // 位置は可動範囲（ドラッグと同じ openingRefOffsetRange）の端へクランプする（弾かない）。
+  // 範囲が引けないときだけ従来の検証で弾いて前値へ戻す（resolveRefOffsetEdit 参照）。
   const onOffsetBlur = () => {
     const beforeTag = openingTagOf(opening, project);
-    const err = validateOpeningEdit(opening, graph, { width: opening.width, refOffset: opening.refOffset });
-    if (err) {
+    const { value, message } = resolveRefOffsetEdit(opening, graph, opening.refOffset);
+    if (value == null) {
       runInAction(() => { opening.refOffset = beforeOffsetRef.current; });
-      onToast?.(err);
+    } else if (value !== opening.refOffset) {
+      runInAction(() => { opening.refOffset = value; });
     }
+    if (message) onToast?.(message);
     endOpeningFieldUndo(graph, project, opening);
-    if (!err) notifyIfTagChanged(beforeTag);
+    if (value != null) notifyIfTagChanged(beforeTag);
   };
 
   const endFieldWithToast = () => {
@@ -290,6 +297,7 @@ export const OpeningEditor = observer(function OpeningEditor({ graph, project, o
       <div style={rowStyle}>
         <span style={labelStyle}>位置（{opening.refCL?.label ?? '基準'}から）</span>
         <input type="number" style={inputStyle} value={opening.refOffset}
+          min={offsetRange?.min} max={offsetRange?.max}
           onChange={numField('refOffset')} onFocus={onOffsetFocus} onBlur={onOffsetBlur} />
       </div>
 

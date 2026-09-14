@@ -174,7 +174,7 @@ const App = observer(() => {
     cursorWorld, cursorScreen, pressPos, isPanning,
     commitCLMove,
     setSnapPoint, setNearCL, setNearWall, setNearOpening, setCursorWorld,
-    resetGestureRefs,
+    resetGestureRefs, didOpeningDragEnd,
   } = usePointerInteraction({
     project, graph, size, appMode, columnAxisMode, modeRef,
     menu, setMenu,
@@ -1743,7 +1743,7 @@ const App = observer(() => {
             cursorWorld={cursorWorld}
             clPreview={clPreview}
             clDialog={clDialog}
-            onOpeningTagClick={enterOpeningMode}
+            onOpeningTagClick={id => { if (!didOpeningDragEnd()) enterOpeningMode(id); }}
             onElevationOpeningClick={id => modeRef.current?.selectOpening(id)}
             wallDialog={wallDialog}
             menu={menu}

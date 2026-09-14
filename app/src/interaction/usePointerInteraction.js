@@ -6,6 +6,7 @@
 // ドメインモジュール（transform/centerLineOps.js 等）呼び出しのまま（描画完成時の
 // addDiagonalLine undo 等、数行の例外はそのまま持つ）。
 import { useRef, useState } from 'react';
+import { runInAction } from 'mobx';
 import { viewport } from '../appViewport.js';
 import { undoManager } from '../undoManager.js';
 import {
@@ -18,7 +19,13 @@ import { useLongPress } from './useLongPress.js';
 import { findColumnAxisLabel, findGutterCL } from './gutterHitTest.js';
 import { CONTEXT, detectContext, buildMenuState } from './menuItems.js';
 import { centerLineKind, CenterLineType } from '@core';
-import { roundAbsToStep } from '../renderer/clMoveMath.js';
+import { roundAbsToStep, calcStep } from '../renderer/clMoveMath.js';
+import { findHostWall } from '../openings/openingGeometry.js';
+import {
+  openingMoveRange, openingSnapCandidates, resolveOpeningRefOffset, snapIndicatorAlong,
+  elevationDragAlong, previewDxLocalMm,
+} from '../openings/openingMove.js';
+import { snapshotOpening, pushOpeningUndo } from '../openings/openingEdit.js';
 import { inGutter as isInGutter } from '../layout.js';
 import { commitCLMoveOp, commitStretchWithUndo } from '../transform/centerLineOps.js';
 import { commitSiteTapLine } from '../transform/siteEdit.js';
@@ -73,6 +80,9 @@ export function usePointerInteraction({
   const finishDragDownRef = useRef(null); // 仕上げモード: pointerDown 座標
   const siteDrawDownRef   = useRef(null); // 敷地モード: ドラッグ開始スクリーン座標
   const elevationDragRef  = useRef(null); // 展開モード: { x, y, axis:'h'|'v'|null, roomId }
+  const openingDownRef    = useRef(null); // 建具ドラッグ開始判定用: { clientX, clientY, opening }
+  const openingDragRef    = useRef(null); // 建具ドラッグ中: { opening, wall, range, candidates, grabDelta, before }
+  const openingDragEndedRef = useRef(false); // 直前の pointerUp が建具ドラッグの確定だったか（記号丸の click を無視するため）
 
   // ---- ガター通り芯 長押しフック ----
   // 長押し確定（500ms後）までの待ち時間を使い、押下直後（onStart）から移動範囲の
@@ -190,6 +200,14 @@ export function usePointerInteraction({
 
     // ---- 展開モード ----
     if (appMode === 'elevation') {
+      // 建具ターゲット（姿図のヒット矩形・記号丸）の押下は建具ドラッグの候補（8px超で開始）。
+      // スクロールにはしない（8px未満の動きでスクロールしないのは許容）。
+      openingDragEndedRef.current = false;
+      const hit = elevationHitAtTarget(e.target);
+      if (hit) {
+        openingDownRef.current = { clientX, clientY, opening: hit.opening, dirSign: hit.dirSign };
+        return;
+      }
       elevationDragRef.current = {
         x: clientX, y: clientY, axis: null,
         roomId: modeRef.current?.bandAtScreenY(clientY) ?? null,
@@ -257,10 +275,141 @@ export function usePointerInteraction({
       }
       return;
     }
+    // 建具ドラッグの起点候補（平面/建具モード）: 記号丸・平面記号の線分（Konva ヒット。openingId 属性）
+    // または壁線近傍の建具本体（nearOpening）。ここでは押下を記録するだけで、8px超の移動で開始する
+    // （交点ストレッチと同じ規約。長押しが先に成立すれば従来どおりメニュー）。
+    openingDragEndedRef.current = false;
+    if (appMode === 'floorplan' || appMode === 'opening') {
+      const opening = openingAtKonvaTarget(e.target) ?? nearOpeningRef.current;
+      if (opening) openingDownRef.current = { clientX, clientY, opening };
+    }
     // 交点スナップ中なら押下位置を記録（移動閾値超えでストレッチへ）
     if (snapRef.current) stretchDownRef.current = { clientX, clientY, snap: snapRef.current };
     longPress.begin(clientX, clientY);
   };
+
+  // ---- 建具ドラッグ（壁長さ方向の1次元移動）----
+  // 範囲・スナップ候補・確定値は openings/openingMove.js（純関数）。ここは refOffset の書き換えと
+  // インジケータ表示のみ。壁の切り欠き・記号・記号丸は refOffset から導出されるため自動で追従する。
+  // 確定は pushOpeningUndo（差分が無ければ積まない）。キャンセル（canvas外・ESC）は before へ戻す。
+  function openingAtKonvaTarget(target) {
+    if (!target || typeof target.getAttr !== 'function') return null;
+    const id = target.getAttr('openingId') ?? target.findAncestor?.('.opening-symbol')?.getAttr('openingId');
+    return id != null ? (graph?.shapeMap.get(id) ?? null) : null;
+  }
+  // 平面: 世界座標の壁長さ方向成分（along）。展開図: 押下時の開口中心＋画面x移動×dirSign（下記）。
+  function planAlongAt(wall, clientX, clientY) {
+    const world = viewport.screenToWorld(clientX, clientY);
+    return wall.isVertical ? world.y : world.x;
+  }
+  // alongAtDownFn(wall) → 押下点の壁長さ方向座標（ホスト壁が決まってから評価する）
+  function startOpeningDrag(opening, alongAtDownFn, extra = {}) {
+    const wall = findHostWall(opening, graph);
+    if (!wall) return false;
+    const range = openingMoveRange(wall, opening, graph);
+    if (!range) return false;
+    openingDragRef.current = {
+      opening, wall, range,
+      candidates: openingSnapCandidates(wall, opening, graph, range),
+      grabDelta: opening.centerCoord - alongAtDownFn(wall), // つまんだ点と開口中心のずれ（中心がカーソルへ飛ばないように）
+      before: snapshotOpening(opening),
+      ...extra,
+    };
+    return true;
+  }
+  // 確定値を求めて refOffset へ書く（平面・展開図共通）。戻り値は resolveOpeningRefOffset の結果（null=無効入力）。
+  function applyOpeningDrag(alongNow, thresholdMm, stepMm, { write = true } = {}) {
+    const st = openingDragRef.current;
+    const r = resolveOpeningRefOffset(alongNow + st.grabDelta, {
+      refValue: st.opening.refCL.effectiveValue, range: st.range, candidates: st.candidates, thresholdMm, stepMm,
+    });
+    if (write && r && r.refOffset !== st.opening.refOffset) runInAction(() => { st.opening.refOffset = r.refOffset; });
+    return r;
+  }
+  function updatePlanOpeningDrag(clientX, clientY) {
+    const st = openingDragRef.current;
+    const scale = st.wall.isVertical ? viewport.scaleY : viewport.scaleX;
+    const r = applyOpeningDrag(planAlongAt(st.wall, clientX, clientY), SNAP_THRESHOLD_PX / scale, calcStep(viewport.scaleDenominator));
+    setCursorWorld(viewport.screenToWorld(clientX, clientY));
+    setCursorScreen({ x: clientX, y: clientY });
+    if (r?.snapped) {
+      const a = snapIndicatorAlong(r.candidate, st.opening.width / 2);
+      setSnapPoint(st.wall.isVertical ? { x: st.wall.axisValue, y: a } : { x: a, y: st.wall.axisValue });
+    } else {
+      setSnapPoint(null);
+    }
+  }
+  // 展開図: 押下点からの画面x移動(px)÷mode.scale(px/mm)×dirSign が壁長さ方向の移動量（elevationFigure.js の
+  // localXOf の逆）。ドラッグ中は refOffset を書かない——書くたびに ElevationModeState の reaction が帯を
+  // 丸ごと再構築して応答が追いつかない（実機指摘 2026-09-14）。代わりに確定値を求めてプレビュー
+  // （setOpeningDragPreview: その建具のプリミティブだけを帯ローカルxでずらす。ElevationLayer.jsx）を
+  // requestAnimationFrame で1フレーム1回更新し、確定時（flush）に refOffset を1回だけ書く。
+  // 刻みと吸着閾値は平面より細かくする（ユーザー指示 2026-09-14）: 展開図は倍率が固定で小さく、平面と
+  // 同じ「表示倍率に応じた刻み（1/100なら100mm）」「20px（1/100で約500mm）」では微調整ができない。
+  // 刻みは 10mm 固定（画面1px未満＝実質連続。最終値は建具タブの位置欄で手打ちする前提）、吸着は 8px。
+  // インジケータは平面専用なので出さない。
+  const ELEVATION_DRAG_STEP_MM = 10;
+  const ELEVATION_SNAP_THRESHOLD_PX = 8;
+  function updateElevationOpeningDrag(clientX) {
+    const st = openingDragRef.current;
+    const scale = modeRef.current?.scale;
+    if (!(scale > 0)) return;
+    st.pendingAlong = elevationDragAlong({ downCenter: st.downCenter, downClientX: st.downClientX, clientX, scale, dirSign: st.dirSign });
+    if (st.raf != null) return;
+    st.raf = requestAnimationFrame(() => {
+      st.raf = null;
+      if (openingDragRef.current !== st) return;
+      const r = applyOpeningDrag(st.pendingAlong, ELEVATION_SNAP_THRESHOLD_PX / scale, ELEVATION_DRAG_STEP_MM, { write: false });
+      if (!r) return;
+      const newCenter = st.opening.refCL.effectiveValue + r.refOffset;
+      modeRef.current?.setOpeningDragPreview?.({ openingId: st.opening.id, dxLocalMm: previewDxLocalMm(newCenter, st.downCenter, st.dirSign) });
+    });
+  }
+  // 確定: 最後の位置で refOffset を1回書き（帯の再構築はこの1回だけ）、プレビューを同じ action 内で消す
+  // （別々に行うと「再構築後の帯」に「プレビューのずらし」が重なる1フレームが出る）。
+  function flushElevationOpeningDrag() {
+    const st = openingDragRef.current;
+    if (!st || st.downCenter == null) return; // 平面ドラッグ
+    if (st.raf != null) { cancelAnimationFrame(st.raf); st.raf = null; }
+    const scale = modeRef.current?.scale;
+    const r = scale > 0 && st.pendingAlong != null
+      ? applyOpeningDrag(st.pendingAlong, ELEVATION_SNAP_THRESHOLD_PX / scale, ELEVATION_DRAG_STEP_MM, { write: false })
+      : null;
+    runInAction(() => {
+      modeRef.current?.setOpeningDragPreview?.(null);
+      if (r && r.refOffset !== st.opening.refOffset) st.opening.refOffset = r.refOffset;
+    });
+  }
+  // 確定（平面・展開図共通）: undo 1件（動いていなければ積まない）＋その建具を選択。
+  function finishOpeningDrag() {
+    const st = openingDragRef.current;
+    flushElevationOpeningDrag();
+    openingDragRef.current = null;
+    openingDownRef.current = null;
+    pushOpeningUndo(graph, project, st.opening, st.before);
+    openingDragEndedRef.current = true; // 記号丸から始めた場合、直後に飛ぶ click（モード遷移）を無視させる
+    modeRef.current?.selectOpening?.(st.opening.id);
+    setSnapPoint(null);
+  }
+  function cancelOpeningDrag() {
+    const st = openingDragRef.current;
+    openingDragRef.current = null;
+    openingDownRef.current = null;
+    if (st?.raf != null) cancelAnimationFrame(st.raf);
+    runInAction(() => {
+      if (st?.downCenter != null) modeRef.current?.setOpeningDragPreview?.(null); // 展開図プレビューを消す
+      if (st && st.opening.refOffset !== st.before.refOffset) st.opening.refOffset = st.before.refOffset;
+    });
+    setSnapPoint(null);
+  }
+  // 展開図の建具ターゲット（姿図のヒット矩形・記号丸。openingId と dirSign の Konva 属性を持つ）
+  function elevationHitAtTarget(target) {
+    if (!target || typeof target.getAttr !== 'function') return null;
+    const id = target.getAttr('openingId'), dirSign = target.getAttr('dirSign');
+    if (id == null || (dirSign !== 1 && dirSign !== -1)) return null;
+    const opening = graph?.shapeMap.get(id);
+    return opening ? { opening, dirSign } : null;
+  }
 
   // ---- ポインタ Move ----
   const handlePointerMove = (e) => {
@@ -269,6 +418,19 @@ export function usePointerInteraction({
 
     // ---- 展開モード ----
     if (appMode === 'elevation') {
+      // 建具ドラッグ中／起動判定（8px超で開始。押下点＝開口中心をつまんだ扱いなので grabDelta=0）
+      if (openingDragRef.current) { updateElevationOpeningDrag(clientX); return; }
+      if (openingDownRef.current) {
+        const d = openingDownRef.current;
+        if (Math.hypot(clientX - d.clientX, clientY - d.clientY) > 8) {
+          openingDownRef.current = null;
+          const c = d.opening.centerCoord;
+          if (startOpeningDrag(d.opening, () => c, { downCenter: c, downClientX: d.clientX, dirSign: d.dirSign, raf: null, pendingAlong: null })) {
+            updateElevationOpeningDrag(clientX);
+          }
+        }
+        return;
+      }
       const drag = elevationDragRef.current;
       if (!drag) return;
       const dx = clientX - drag.x;
@@ -320,6 +482,12 @@ export function usePointerInteraction({
         const world = viewport.screenToWorld(clientX, clientY);
         modeRef.current.updateSiteDraw(world.x, world.y);
       }
+      return;
+    }
+
+    // ---- 建具ドラッグ中（平面）----
+    if (openingDragRef.current) {
+      updatePlanOpeningDrag(clientX, clientY);
       return;
     }
 
@@ -417,6 +585,20 @@ export function usePointerInteraction({
     }
 
     // ---- 通常モード ----
+    // 建具ドラッグ起動判定: 建具ターゲットからの 8px 超のドラッグ（長押し成立前）。ストレッチ・
+    // パンより優先する。開始できない（ホスト壁なし・収まる余地なし）ときは従来の判定へ落とす。
+    if (openingDownRef.current) {
+      const { clientX: dX, clientY: dY, opening } = openingDownRef.current;
+      if (Math.hypot(clientX - dX, clientY - dY) > 8) {
+        openingDownRef.current = null;
+        if (startOpeningDrag(opening, wall => planAlongAt(wall, dX, dY))) {
+          stretchDownRef.current = null;
+          longPress.abort();
+          updatePlanOpeningDrag(clientX, clientY);
+          return;
+        }
+      }
+    }
     // ストレッチ起動判定: 交点近傍からのドラッグを検出して longPress パンより優先
     if (stretchDownRef.current) {
       const { clientX: dX, clientY: dY, snap } = stretchDownRef.current;
@@ -466,9 +648,10 @@ export function usePointerInteraction({
   // 建具モードの脱出タップか（＝建具ターゲット以外の描画エリアのタップか）。
   // 「建具ターゲット」は2種類あり、判定方法が違う:
   //   ・壁上の建具本体 → nearOpening（snap.js の近傍判定。タップで選択する対象そのもの）
-  //   ・記号丸        → Konva のヒット結果。記号丸は壁から離れた室内側に置かれるため近傍判定
-  //                     では拾えない。OpeningTagLayer の Circle だけが listening なので、
-  //                     e.target が Stage 以外＝記号丸に当たった、と判定できる。
+  //   ・記号丸・記号線分 → Konva のヒット結果。記号丸は壁から離れた室内側に置かれ、扉の動作弧も
+  //                     壁から離れるため近傍判定では拾えない。OpeningTagLayer の Circle と
+  //                     OpeningsLayer の記号線分（建具ドラッグの起点。線分の8pxのみ）だけが listening
+  //                     なので、e.target が Stage 以外＝建具ターゲットに当たった、と判定できる。
   // ガター帯（通り芯エリア）は描画エリアではないので脱出させない。
   // 呼び出し側で drag・長押しメニュー・描画/移動中は既に除外済み。加えて「タップ」に限定する
   // ——長押しが成立済み（isPending()===false）なら脱出しない。建具モードの長押しは壁・開口以外で
@@ -487,6 +670,8 @@ export function usePointerInteraction({
   const handlePointerUp = (e) => {
     // ---- 展開モード ----
     if (appMode === 'elevation') {
+      if (openingDragRef.current) finishOpeningDrag();
+      openingDownRef.current = null;
       elevationDragRef.current = null;
       setIsPanning(false);
       return;
@@ -545,6 +730,16 @@ export function usePointerInteraction({
       return;
     }
 
+    // ---- 建具ドラッグ確定（平面）----
+    if (openingDragRef.current) {
+      finishOpeningDrag();
+      longPress.abort();
+      drag.current = null;
+      setIsPanning(false);
+      return;
+    }
+    openingDownRef.current = null;
+
     // ---- ストレッチ確定 ----
     const ss = modeRef.current?.stretchState;
     if (ss) {
@@ -582,7 +777,11 @@ export function usePointerInteraction({
       if (appMode === 'opening' && isOpeningModeExitTap(e)) {
         onExitOpeningMode?.();
       } else {
-        modeRef.current?.selectOpening?.(nearOpeningRef.current?.id ?? null);
+        // 記号線分（OpeningsLayer の Group。壁から離れた動作弧など nearOpening に掛からない部分）の
+        // タップも選択にする——線分が listening になった（建具ドラッグの起点）ことで e.target が
+        // Stage でなくなり脱出タップにならないため、選択解除で終わらせず当該建具を選ぶ。
+        const tapped = openingAtKonvaTarget(e.target) ?? nearOpeningRef.current;
+        modeRef.current?.selectOpening?.(tapped?.id ?? null);
       }
     }
 
@@ -612,6 +811,8 @@ export function usePointerInteraction({
   // ---- ポインタ Leave (外アップ扱い) ----
   const handlePointerLeave = () => {
     if (appMode === 'elevation') {
+      if (openingDragRef.current) cancelOpeningDrag();
+      openingDownRef.current = null;
       elevationDragRef.current = null;
       setIsPanning(false);
       return;
@@ -630,6 +831,9 @@ export function usePointerInteraction({
       setIsPanning(false);
       return;
     }
+    // 建具ドラッグ中にキャンバス外に出たらキャンセル（開始前へ戻す）
+    if (openingDragRef.current) cancelOpeningDrag();
+    openingDownRef.current = null;
     // CL移動中にキャンバス外に出たらキャンセル
     if (modeRef.current?.moveState) {
       moveDownRef.current = null;
@@ -704,7 +908,15 @@ export function usePointerInteraction({
   function resetGestureRefs() {
     siteDrawDownRef.current = null;
     stretchDownRef.current = null;
+    // 建具ドラッグ中の ESC は開始前へ戻す（CL移動の cancelMove と同じ扱い）
+    if (openingDragRef.current) cancelOpeningDrag();
+    openingDownRef.current = null;
   }
+
+  // 直前の pointerUp が建具ドラッグの確定だったか。記号丸の Konva click は pointerUp の後に飛ぶため、
+  // App.jsx の記号丸クリック（建具モードへの遷移）はこれを見て無視する（ドラッグのたびにモードが
+  // 切り替わらないように）。次の pointerDown でリセットされる。
+  function didOpeningDragEnd() { return openingDragEndedRef.current; }
 
   // ---- スナップ & 近傍CL/壁/開口 計算 ----
   // 候補解決は snap.js の resolvePointerTargets に一本化（App側は setState への反映のみ）。
@@ -735,6 +947,6 @@ export function usePointerInteraction({
     cursorWorld, cursorScreen, pressPos, isPanning,
     commitCLMove,
     setSnapPoint, setNearCL, setNearWall, setNearOpening, setCursorWorld,
-    resetGestureRefs,
+    resetGestureRefs, didOpeningDragEnd,
   };
 }

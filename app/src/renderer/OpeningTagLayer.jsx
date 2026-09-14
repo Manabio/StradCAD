@@ -21,7 +21,9 @@ const TAG_FILL            = '#fff';
 
 // 記号丸1件分: 円＋直径横線＋上段(記号)/下段(採番)テキスト。回転は一切かけない（常に正対）。
 // クリックで建具モードへ遷移・該当建具を選択する（onSelect経由）。
-const OpeningTag = observer(({ x, y, radius, fontSize, stroke, strokeWidth, fill, ringStroke, ringStrokeWidth, symbol, number, onSelect }) => {
+// openingId は Circle の Konva 属性として持たせる——建具ドラッグ（usePointerInteraction.js）が
+// pointerDown の e.target から「どの建具の記号丸か」を引くため。
+const OpeningTag = observer(({ x, y, radius, fontSize, stroke, strokeWidth, fill, ringStroke, ringStrokeWidth, symbol, number, onSelect, openingId }) => {
   // 文字と直径横線の離れ（＝文字ボックスの端から横線までの隙間）。上下半円の中央に文字を置く
   // （＝離れ (radius-fontSize)/2）より詰め、その半分にする（ユーザー指示2026-09。上下とも同じ）。
   // 文字ボックスは高さfontSizeで横線から gap だけ離す——半円の高さいっぱいの箱に
@@ -37,6 +39,7 @@ const OpeningTag = observer(({ x, y, radius, fontSize, stroke, strokeWidth, fill
       strokeScaleEnabled={false}
       onClick={onSelect}
       onTap={onSelect}
+      openingId={openingId}
       onMouseEnter={e => { e.target.getStage().container().style.cursor = 'pointer'; }}
       onMouseLeave={e => { e.target.getStage().container().style.cursor = 'default'; }}
       listening
@@ -103,6 +106,7 @@ export const OpeningTagLayer = observer(({ graph, project, viewport, appMode, se
         ringStrokeWidth={isSelected ? viewport.lineWeightsPx.thick : strokeWidth}
         symbol={symbol}
         number={number}
+        openingId={p.openingId}
         onSelect={() => onSelectOpening(p.openingId)}
       />
     );

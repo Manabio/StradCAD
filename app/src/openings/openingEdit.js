@@ -23,6 +23,7 @@ import {
 } from './openingCatalog.js';
 import { findHostWall, validateOpeningPlacement, maxOpeningWidthAt, findOpeningsOnWall, swingSideTowardPerp, exteriorSideDir } from './openingGeometry.js';
 import { renumberOpenings } from './openingNumbering.js';
+import { openingRefOffsetRange, clampRefOffset } from './openingMove.js';
 import { ERR_OPENING_OUT_OF_WALL, ERR_OPENING_OVERLAP } from '../error.js';
 
 // 内開き系機構（室内側へ開く特性を持つ）。placeOpeningWithDefaults の swingSide 既定計算で、
@@ -245,6 +246,28 @@ export function validateOpeningEdit(o, graph, { width, refOffset }) {
   if (!wall) return null;
   const centerCoord = o.refCL.effectiveValue + refOffset;
   return validateOpeningPlacement(wall, centerCoord - width / 2, centerCoord + width / 2, graph, o.id);
+}
+
+/**
+ * 「位置」欄（refOffset）の確定規則（ユーザー裁定 2026-09-14「範囲端へクランプ＋トースト」）:
+ * 可動範囲（openingMove.js openingRefOffsetRange＝ドラッグと同じ範囲）が引けるならその端へクランプし、
+ * 値が変わったときだけメッセージを返す。範囲が引けない（ホスト壁なし＝制約なし／収まる余地なし）
+ * ときは従来どおり validateOpeningEdit で判定し、NGなら value:null（呼び出し側が前値へ戻す）。
+ * 幅編集（onEditDim）の「丸められるときは丸める／置けないときは弾く」二段構えと同じ思想。
+ * @returns {{ value:number|null, message:string|null }}
+ */
+export function resolveRefOffsetEdit(o, graph, refOffset) {
+  // 有限でない値（NaN/Infinity）は前値へ戻す——clampRefOffset は NaN を素通しする規約のため、ここで
+  // 止めないと opening.refOffset に NaN が書かれる（QA指摘 2026-09-14。numField は絶対値化するので通常は来ない）。
+  if (!Number.isFinite(refOffset)) return { value: null, message: null };
+  const range = openingRefOffsetRange(o, graph);
+  if (range) {
+    const value = clampRefOffset(refOffset, range);
+    const message = value !== refOffset ? `位置を可動範囲 ${range.min}〜${range.max}mm に丸めました` : null;
+    return { value, message };
+  }
+  const err = validateOpeningEdit(o, graph, { width: o.width, refOffset });
+  return err ? { value: null, message: err } : { value: refOffset, message: null };
 }
 
 /**

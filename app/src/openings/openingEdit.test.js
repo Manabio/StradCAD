@@ -15,7 +15,7 @@ import {
   placeOpeningWithDefaults, removeOpeningWithUndo, withOpeningUndo, pushOpeningUndo, snapshotOpening,
   materialGlassAfterFixtureChange, validateOpeningEdit, noteAfterSubTypeChange, openDirForMechanism,
   defaultSwingSideFor, swingSideAfterSubTypeChange, flippedHingeSides, flippedSwingSide,
-  fixtureTypeAfterSubTypeChange,
+  fixtureTypeAfterSubTypeChange, resolveRefOffsetEdit,
 } from './openingEdit.js';
 import { closedAngleFor, leafOpenAngle, angleVectors } from './openingPlanSymbolGeometry.js';
 
@@ -485,11 +485,11 @@ test('noteAfterSubTypeChange: 窓(window)で編集済みの備考は種別変更
   );
 });
 
-// ---- Finding 1 回帰: validateOpeningEdit の検証（OpeningEditor.jsx onOffsetBlur の位置編集ガードが依拠） ----
+// ---- Finding 1 回帰: validateOpeningEdit の検証（resolveRefOffsetEdit の範囲が引けないときのフォールバックが依拠） ----
 // onEditDim の幅編集はもはや validateOpeningEdit を使わない（NGで弾く代わりに maxOpeningWidthAt で
-// クランプする仕様に変更済み——openingGeometry.test.js 参照）。validateOpeningEdit 自体は
-// onOffsetBlur（位置=refOffset の編集）のガードとして今も使われているため、検証関数そのものの
-// 正しさはここで確認する。
+// クランプする仕様に変更済み——openingGeometry.test.js 参照）。位置（refOffset）の編集も 2026-09-14 から
+// 可動範囲へのクランプ（resolveRefOffsetEdit）が主経路になったが、範囲が引けないケースの弾きに
+// validateOpeningEdit を今も使うため、検証関数そのものの正しさはここで確認する。
 test('【Finding 1 回帰】validateOpeningEdit: 壁長2000mmに幅5000mmはNGを返す', () => {
   const { graph, wall } = makeWallGraph(2000);
   const opening = graph.addOpening(wall.axisCL, 1, false, wall.clStart, 1000, 800, OpeningCategory.FITTING, 'singleSwing', {});
@@ -497,6 +497,46 @@ test('【Finding 1 回帰】validateOpeningEdit: 壁長2000mmに幅5000mmはNG�
   const err = validateOpeningEdit(opening, graph, { width: 5000, refOffset: opening.refOffset });
   assert.ok(err, '壁長2000mmを超える幅5000mmはNGのはず');
   assert.equal(opening.width, 800, 'validateOpeningEditは検証のみで代入しない（呼び出し側が結果に応じて代入する前提）');
+});
+
+// ---- resolveRefOffsetEdit: 位置欄は可動範囲の端へクランプ＋メッセージ（ユーザー裁定 2026-09-14） ----
+test('resolveRefOffsetEdit: 範囲内はそのまま・メッセージなし', () => {
+  const { graph, wall } = makeWallGraph(3000);
+  const opening = graph.addOpening(wall.axisCL, 1, false, wall.clStart, 1000, 800, OpeningCategory.FITTING, 'singleSwing', {});
+  assert.deepEqual(resolveRefOffsetEdit(opening, graph, 1500), { value: 1500, message: null });
+});
+
+test('resolveRefOffsetEdit: 範囲外は端へクランプし、範囲を含むメッセージを返す（弾かない）', () => {
+  const { graph, wall } = makeWallGraph(3000);
+  graph.addOpening(wall.axisCL, 1, false, wall.clStart, 2700, 400, OpeningCategory.FITTING, 'singleSwing', {}); // 2500..2900
+  const opening = graph.addOpening(wall.axisCL, 1, false, wall.clStart, 1000, 800, OpeningCategory.FITTING, 'singleSwing', {});
+  // 範囲 400..2100（hi側は隣接開口の coord1=2500 − 半幅400）
+  const r = resolveRefOffsetEdit(opening, graph, 9999);
+  assert.equal(r.value, 2100);
+  assert.match(r.message, /400〜2100/);
+  assert.equal(resolveRefOffsetEdit(opening, graph, 0).value, 400);
+  assert.equal(opening.refOffset, 1000, 'resolveRefOffsetEdit は判定のみで代入しない');
+});
+
+test('【失敗系】resolveRefOffsetEdit: 隣接開口に覆われて範囲が引けない（不正データ）は value:null＋重なりエラーで弾く', () => {
+  const { graph, wall } = makeWallGraph(3000);
+  graph.addOpening(wall.axisCL, 1, false, wall.clStart, 1500, 3000, OpeningCategory.FITTING, 'singleSwing', {}); // 壁全面
+  const opening = graph.addOpening(wall.axisCL, 1, false, wall.clStart, 1000, 800, OpeningCategory.FITTING, 'singleSwing', {});
+  assert.deepEqual(resolveRefOffsetEdit(opening, graph, 1000), { value: null, message: ERR_OPENING_OVERLAP });
+});
+
+test('【失敗系】resolveRefOffsetEdit: NaN/Infinity は value:null（前値へ戻す）で refOffset に流さない', () => {
+  const { graph, wall } = makeWallGraph(3000);
+  const opening = graph.addOpening(wall.axisCL, 1, false, wall.clStart, 1000, 800, OpeningCategory.FITTING, 'singleSwing', {});
+  assert.deepEqual(resolveRefOffsetEdit(opening, graph, NaN), { value: null, message: null });
+  assert.deepEqual(resolveRefOffsetEdit(opening, graph, Infinity), { value: null, message: null });
+});
+
+test('【失敗系】resolveRefOffsetEdit: ホスト壁が引けない開口は制約なし（そのまま通す）', () => {
+  const { graph, wall } = makeWallGraph(3000);
+  const otherAxis = graph.addCenterLine(CenterLineType.HORIZONTAL, 5000, { labeled: false, discipline: Discipline.ARCH });
+  const opening = graph.addOpening(otherAxis, 1, false, wall.clStart, 1000, 800, OpeningCategory.FITTING, 'singleSwing', {});
+  assert.deepEqual(resolveRefOffsetEdit(opening, graph, 12345), { value: 12345, message: null });
 });
 
 // ---- removeOpeningWithUndo: undoでfixtureType/sillHeight/heightが保持される ----

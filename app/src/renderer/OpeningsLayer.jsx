@@ -1,6 +1,9 @@
 import { Fragment } from 'react';
 import { observer } from 'mobx-react-lite';
-import { Line, Rect, Path } from 'react-konva';
+import { Group, Line, Rect, Path } from 'react-konva';
+
+// 建具記号の線分のヒット幅（画面px。壁ラジアルの WALL_THRESHOLD_PX と同じ8px）
+const OPENING_HIT_PX = 8;
 import { OpeningCategory, LINE_WEIGHT_MM } from '../core.js';
 import { buildHostWallByOpening, wallFaceRange } from '../openings/openingGeometry.js';
 import { graphComputed } from './graphDerived.js';
@@ -680,7 +683,21 @@ export const OpeningsLayer = observer(({ graph, viewport }) => {
       })
     : null;
 
+  // 建具ドラッグ（interaction/usePointerInteraction.js）の起点にするため、建具1件の記号線分を
+  // name='opening-symbol'・openingId 属性の Group で包み、線分自体にヒット幅（画面8px相当）を持たせる。
+  // fillEnabled:false は必須——Konva のヒットキャンバスは fill の値（このレイヤは全て transparent）に
+  // 関係なく fillEnabled（既定 true）なら図形内部を塗るため、これが無いと動作弧の扇形・見込帯の内部が
+  // 丸ごとヒット域になり、扇形の内側からのパンが建具移動になる（QA指摘 2026-09-14）。
+  // 押下側は e.target.findAncestor('.opening-symbol') で openingId を引く（記号丸は OpeningTagLayer の
+  // Circle に直接 openingId 属性）。クリックハンドラは付けない——選択は従来どおり pointerUp 側の
+  // nearOpening 判定と記号丸クリックが担う。
+  const hitStrokeWidth = OPENING_HIT_PX / Math.min(scaleX, scaleY);
   return graph.openings.map((opening) => {
+    const el = renderOpeningSymbol(opening);
+    return el ? <Group key={opening.id} name="opening-symbol" openingId={opening.id}>{el}</Group> : null;
+  });
+
+  function renderOpeningSymbol(opening) {
     const host = hostByOpening.get(opening.id) ?? null;
     if (!host) return null; // ホスト壁が見つからない開口は描画しない（壁の削除・トリム後の縮退仕様）
 
@@ -689,7 +706,9 @@ export const OpeningsLayer = observer(({ graph, viewport }) => {
       stroke:      opening.color,
       strokeWidth: resolveStrokeWidth(
         opening.lineWeight, Math.min(scaleX, scaleY), viewport.lineWeightsPx, viewport.pxPerMmX),
-      listening:   false,
+      listening:   true,
+      hitStrokeWidth,
+      fillEnabled: false,
     };
     // 枠（方立・見込帯の外形）は**壁に据わる枠材の断面**なので、壁の仕上げ材と同じ太さで描く
     // （ユーザー指示2026-09「建具や窓の枠なども対象にして」。太さの供給源は壁と同じ
@@ -808,5 +827,5 @@ export const OpeningsLayer = observer(({ graph, viewport }) => {
       if (other) return <Fragment key={opening.id}>{other}</Fragment>;
     }
     return <Fragment key={opening.id}>{tickSymbol(opening, band, sp)}</Fragment>;
-  });
+  }
 });
