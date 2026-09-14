@@ -90,3 +90,21 @@ project, contribute it upstream to the team's playbook in the ccteams repo.
 - **正しい動き**: 実データに構成が無いときは、`loadDoc.mjs` の逆（`serializeGraph`/`serializeStructCLs`/
   `serializePlanes`→`buildDocumentJson`）で**テスト用 .stq を作って実機で見てもらう**。
   往復テスト（既存 .stq を読み→書き→読みで部屋・壁のダイジェスト一致）を先に通すこと。
+
+### 面ローカルで生成した新しいプリミティブ型が帯レベルの変換で無言に置き去りになる（2026-09-14 展開図の建具ドラッグで発生）
+
+- **症状**: `elevation/elevationFigure.js` に新型 `type:'hit'`（建具ドラッグの透明ヒット矩形）を追加したが、
+  `elevation/elevationPrimitives.js` の `translatePrimitive`（面ごとの `xCursor` 平行移動）に case が無く
+  `default: return p` に落ちて、2面目以降のヒット矩形が面ローカルxのまま帯に置かれた。1面目の空白を
+  押すと別面の建具が（別面の dirSign で逆向きに）動く事故。関数コメントが「両関数は同じ型集合を
+  扱うこと」と自ら警告していたのに、追加時に読んでいなかった。
+- **誤った直感**: 面ローカルの `buildFaceFigure` に対するテスト（座標・属性の一致）で十分と考えた。
+  「hit は rect と同形だから既存経路で動く」と型名の追加を忘れた。
+- **正しい動き**:
+  1. プリミティブ型を追加したら `translatePrimitive` と `mirrorPrimitiveX` の**両方**へ同時に case を
+     足し、`elevationPrimitives.test.js` で移動・反転を固定する（同じ型集合の不変条件）。
+  2. 面ローカルのテストに加えて、**帯レベル（`buildRoomBand`。`xCursor` が乗る側）**で「同じ建具の
+     既存プリミティブ（姿図の枠 rect 等）と同じ位置にある」ことを検証する（`elevationBand.test.js`
+     「4面すべての建具で hit 矩形が…」）。複数面を持つ部屋でないと1面目の偶然一致で緑になる。
+  3. 新しい型を消費する側（Konva 描画・SVG 出力・境界計算）が `default` で握りつぶす設計のときは、
+     「握りつぶされて困る型か」を追加時に一度自問する。
