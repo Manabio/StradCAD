@@ -2,7 +2,6 @@ import { observer } from 'mobx-react-lite';
 import { Group, Line, Rect, Circle, Path } from 'react-konva';
 import { ShapeType } from '@core';
 import { LodLevel, resolveStrokeWidth } from '../viewport.js';
-import { subtractIntervals } from '../finish/stair/stairGeometry.js';
 import { buildWallDrawPlan } from './wallDrawPlan.js';
 import { graphComputed } from './graphDerived.js';
 import { wallFinishLineWeight } from '../finish/wallFinishJoin.js';
@@ -13,12 +12,6 @@ const DASH = {
   center:    [12, 4, 2, 4],
   dimension: [4, 4],
 };
-
-// 壁下地（間柱）のピッチ表現(mm)。LOD詳細描画でのみ使用。
-const WALL_BACKING_PITCH = 450;
-// 壁下地の角材を通り芯方向に描く際の見かけ幅(mm)。実材の長手方向寸法は壁データに
-// 持たないため、間柱の標準的な厚み（□-90×45 の 45 側）を描画上の固定値として使う。
-const WALL_STUD_WIDTH = 45;
 
 
 function strokeProps(shape, viewport) {
@@ -93,7 +86,7 @@ export const ShapesLayer = observer(({ graph, viewport, stairUnderClips = null }
   // 識別する代わりにここから渡す。
   const clipGroups = stairUnderClipGroups(stairUnderClips);
   const clipKey = clipGroups ? [...clipGroups].map(([id, g]) => `${id}=${g}`).join(',') : '';
-  const { deferredBackingIds, kneeDropOverlays, columnCuts, wallLines } =
+  const { kneeDropOverlays, wallLines, wallStuds } =
     graphComputed(graph, `wallDrawPlan:${lodLevel}:${clipKey}`,
       () => buildWallDrawPlan(graph, lodLevel, { clipGroups }));
 
@@ -138,7 +131,7 @@ export const ShapesLayer = observer(({ graph, viewport, stairUnderClips = null }
         // resolveWallLines に判断を集約済み——ここは写像するだけ（そちらのJSDoc参照。
         // 仕上げ材の線は planWallRegion.js が材の領域の境界として解いた `lines`）。
         const plan = wallLines.get(shape.id);
-        const { segments, lines, backingSpan, spanLo: lo } = plan;
+        const { segments, lines } = plan;
 
         if (lodLevel === LodLevel.SCHEMATIC) {
           // 略図: 軸オフセット位置の単線（厚み表現なし）
@@ -193,54 +186,32 @@ export const ShapesLayer = observer(({ graph, viewport, stairUnderClips = null }
           />
         ));
 
-        // 詳細のみ: 下地（間柱断面）450mmピッチ配置
-        // wallFinish は generateRoomWallsFromOutline/generateExteriorWalls 生成時のみ確定（手動壁は null）
-        if (lodLevel !== LodLevel.DETAIL || shape.wallFinish == null) {
-          return finishLines;
-        }
+        // 詳細のみ: 下地（間柱断面）。位置と材厚の判断（下地帯の端の正規化・柱壁に取られた区間の除外・
+        // 固定ピッチ／在来木造の柱間面割付＋柱面から10mmの端部材）は wallDrawPlan.js → wallStudLayout.js が
+        // 主構造ルールの選択子 studLayout で解決済み（`wallStuds`）——ここは矩形へ写すだけ。
+        // 厚み方向は通り芯(axisCL)上の実材厚（core.js の Wall.backingRange）。
+        const studs = wallStuds.get(shape.id);
+        if (!studs) return finishLines;
 
         const elems = [...finishLines];
-
-        // 下地（間柱）断面: 通り芯(axisCL)上の実材厚。式は core.js の Wall.backingRange と
-        // 共有する（backingRange===null は「下地なし＝仕上げのみの薄壁」で描画しない）。
-        // 並べる長さ方向の範囲は領域が正規化した下地の端（`backingSpan`。取り合う相手の内側線
-        // まで延長／短縮・端部の回り込み反映済み）に従う——物理端に接する区間だけ端を置き換え、
-        // 開口で分かれた内側の端は開口の縁のまま（planWallRegion.js の下地矩形と同じ規則）。
-        const colCuts = columnCuts?.get(shape.id) ?? null;
         const backingBand = shape.backingRange;
-        if (backingBand && backingSpan && !deferredBackingIds.has(shape.id)) {
-          const backingDepth = backingBand.hi - backingBand.lo;
-          const halfDepth = backingDepth / 2, halfWidth = WALL_STUD_WIDTH / 2;
-          const backingCenterV = (backingBand.lo + backingBand.hi) / 2;
-          const { spanHi: hi } = plan;
-          const extended = segments
-            .map(([a, b]) => [a <= lo ? backingSpan[0] : a, b >= hi ? backingSpan[1] : b])
-            .filter(([a, b]) => b > a);
-          // 柱壁に取られた区間の下地は削除する（ユーザー指示2026-08「不要になった壁下地材は削除」）。
-          // ただし**その下地に乗る仕上げ材が他に残っていれば削除しない**（反対側の部屋の壁など。
-          // 判定は columnWallCuts の canRemoveBacking が持ち、`backing` として区間を返す）。
-          const studCuts = colCuts?.backing ?? [];
-          const backingSegments = studCuts.length === 0 ? extended
-            : extended.flatMap(([a, b]) => subtractIntervals(a, b, studCuts));
-          for (const [a, b] of backingSegments) {
-            let p = lo + Math.ceil((a - lo) / WALL_BACKING_PITCH) * WALL_BACKING_PITCH;
-            if (p - halfWidth < a) p += WALL_BACKING_PITCH;
-            for (; p + halfWidth <= b; p += WALL_BACKING_PITCH) {
-              elems.push(
-                <Rect
-                  key={`${shape.id}:stud:${p}`}
-                  x={shape.isVertical ? backingCenterV - halfDepth : p - halfWidth}
-                  y={shape.isVertical ? p - halfWidth : backingCenterV - halfDepth}
-                  width={shape.isVertical ? backingDepth : WALL_STUD_WIDTH}
-                  height={shape.isVertical ? WALL_STUD_WIDTH : backingDepth}
-                  fill="transparent"
-                  stroke={sp.stroke}
-                  strokeWidth={sp.strokeWidth}
-                  listening={false}
-                />,
-              );
-            }
-          }
+        const backingDepth = backingBand.hi - backingBand.lo;
+        const halfDepth = backingDepth / 2, halfWidth = studs.depth / 2;
+        const backingCenterV = (backingBand.lo + backingBand.hi) / 2;
+        for (const p of studs.centers) {
+          elems.push(
+            <Rect
+              key={`${shape.id}:stud:${p}`}
+              x={shape.isVertical ? backingCenterV - halfDepth : p - halfWidth}
+              y={shape.isVertical ? p - halfWidth : backingCenterV - halfDepth}
+              width={shape.isVertical ? backingDepth : studs.depth}
+              height={shape.isVertical ? studs.depth : backingDepth}
+              fill="transparent"
+              stroke={sp.stroke}
+              strokeWidth={sp.strokeWidth}
+              listening={false}
+            />,
+          );
         }
 
         return elems;

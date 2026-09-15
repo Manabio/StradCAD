@@ -69,6 +69,64 @@ export function studPositions(lengthMm, pitchMm = TRADITIONAL_WOOD_BACKING.studP
 }
 
 /**
+ * 壁の下地区間 [lo,hi] を、その壁上に立つ柱の区間（長さ方向の [lo,hi]。順不同・重複可）で「面」に分ける。
+ * 面＝柱と柱の間（2点間）。区間の端が柱で終わらない（開口の縁・自由端）面は columnAtLo/Hi が false。
+ * 柱の端が区間の端に接している（柱面まで下地帯が正規化されている）場合も「柱で終わる」と扱う。
+ * 区間の外にある柱・幅0以下の面は出さない。純関数。
+ * @param {number} lo
+ * @param {number} hi
+ * @param {Array<[number,number]>} columnIntervals
+ * @returns {Array<{lo:number, hi:number, columnAtLo:boolean, columnAtHi:boolean}>}
+ */
+export function wallRunFaces(lo, hi, columnIntervals) {
+  if (!Number.isFinite(lo) || !Number.isFinite(hi) || hi <= lo) return [];
+  const columns = (columnIntervals ?? [])
+    .filter(([a, b]) => Number.isFinite(a) && Number.isFinite(b) && b > a && b >= lo && a <= hi)
+    .sort((a, b) => a[0] - b[0]);
+  const faces = [];
+  let cur = lo, columnAtLo = false;
+  for (const [a, b] of columns) {
+    if (a > cur) faces.push({ lo: cur, hi: a, columnAtLo, columnAtHi: true });
+    cur = Math.max(cur, b);
+    columnAtLo = true;
+  }
+  if (hi > cur) faces.push({ lo: cur, hi, columnAtLo, columnAtHi: false });
+  return faces;
+}
+
+/**
+ * 1面（柱と柱の間）の壁下地材の中心位置＝面の始端からの距離 mm（昇順）。
+ *  - 柱で終わる端には、柱面から clearanceMm を空けて端部材を立てる（中心＝clearance＋材厚/2）。
+ *  - 面の全長（2点間距離）を studPositions で割り付け、端部材や面の外にかかる材は落とす
+ *    （材の区間 [中心±材厚/2] が空き区間に収まるものだけ。距離が短い面は端部材だけ・0本になる）。
+ * 非数・0以下の長さ・材厚0以下は空配列。
+ * @param {number} lengthMm - 面の長さ（柱面〜柱面。柱で終わらない端は区間の端まで）
+ * @param {{columnAtLo?:boolean, columnAtHi?:boolean}} ends - 両端が柱で終わるか
+ * @param {{pitchMm?:number, depthMm?:number, clearanceMm?:number}} [spec]
+ *   pitchMm: 割付ピッチ（既定 studPitchMm=455）／depthMm: 材の長さ方向の厚み（既定 studDepthMm=30）／
+ *   clearanceMm: 柱面からのクリアランス（既定 studColumnClearanceMm=10）
+ * @returns {number[]}
+ */
+export function faceStudPositions(lengthMm, { columnAtLo = false, columnAtHi = false } = {}, {
+  pitchMm = TRADITIONAL_WOOD_BACKING.studPitchMm,
+  depthMm = TRADITIONAL_WOOD_BACKING.studDepthMm,
+  clearanceMm = TRADITIONAL_WOOD_BACKING.studColumnClearanceMm,
+} = {}) {
+  if (!Number.isFinite(lengthMm) || lengthMm <= 0 || !Number.isFinite(depthMm) || depthMm <= 0) return [];
+  if (!Number.isFinite(clearanceMm) || clearanceMm < 0) return [];
+  const half = depthMm / 2;
+  const out = [];
+  // 端部材。空き区間 [freeLo, freeHi] は端部材（無ければ面の端）の内側。
+  let freeLo = 0, freeHi = lengthMm;
+  if (columnAtLo && clearanceMm + depthMm <= lengthMm) { out.push(clearanceMm + half); freeLo = clearanceMm + depthMm; }
+  if (columnAtHi && lengthMm - clearanceMm - depthMm >= freeLo) { out.push(lengthMm - clearanceMm - half); freeHi = lengthMm - clearanceMm - depthMm; }
+  for (const p of studPositions(lengthMm, pitchMm)) {
+    if (p - half >= freeLo && p + half <= freeHi) out.push(p);
+  }
+  return out.sort((a, b) => a - b);
+}
+
+/**
  * 壁下地材（縦下地）の断面＝柱寸×30（幅＝柱寸、見込み＝30）。
  * @param {number} columnWidthMm
  * @param {typeof TRADITIONAL_WOOD_BACKING} [backing]

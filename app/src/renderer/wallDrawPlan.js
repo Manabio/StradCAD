@@ -34,7 +34,8 @@ import { LodLevel } from '../viewport.js';
 import { resolveWallTJunctions } from './wallJunctionResolve.js';
 import { isEndpointAt } from '../transform/centerLineExtend.js';
 import { resolveKneeDropOverlays } from '../finish/kneeDropWall.js';
-import { columnWallCuts, columnWrapSolids } from '../finish/columnWrap.js';
+import { columnWallCuts, columnWrapSolids, bareColumnRect } from '../finish/columnWrap.js';
+import { resolveWallStuds, columnIntervalsOnWall } from './wallStudLayout.js';
 import { indexByAxis, findOpeningsOnWallIndexed } from '../openings/openingGeometry.js';
 import { resolveWallRegionLines, wallSpanIntervals } from './planWallRegion.js';
 import { graphComputed } from './graphDerived.js';
@@ -146,7 +147,9 @@ export function planColumnWraps(graph) {
  *   kneeDropOverlays: Map<string, object>|null,
  *   columnCuts: Map<string, object>|null,
  *   wallLines: Map<string, object>,
+ *   wallStuds: Map<string, {centers:number[], depth:number}>,
  * }}
+ *   wallStuds: 詳細LODの壁下地材（間柱断面）の長さ方向の中心位置と材厚（wallStudLayout.js）。詳細以外は空。
  */
 export function buildWallDrawPlan(graph, lodLevel, { clipGroups = null } = {}) {
   const detail = lodLevel === LodLevel.DETAIL;
@@ -218,11 +221,34 @@ export function buildWallDrawPlan(graph, lodLevel, { clipGroups = null } = {}) {
     }));
   }
 
+  const deferredBackingIds = detail ? resolveDeferredBackingIds(graph.generalShapes) : EMPTY_SET;
+
+  // 詳細のみ: 壁下地材（間柱断面）の位置（renderer/wallStudLayout.js）。主構造ルールの選択子 studLayout で
+  // 固定ピッチ（従来）／柱間の面割付（在来木造。壁上の柱＝素の柱断面の区間で面に分ける）を選ぶ。
+  // wallFinish は generateRoomWallsFromOutline/generateExteriorWalls 生成時のみ確定（手動壁は null）。
+  // backingRange===null は「下地なし＝仕上げのみの薄壁」、deferred は同軸の相手に下地を委ねる対称壁。
+  const wallStuds = new Map();
+  if (detail) {
+    const rules = rulesFor(effectiveStructure(graph));
+    const columnRects = rules.studLayout === 'betweenColumns'
+      ? graph.columns.filter(c => c.role !== 'foundation').map(c => bareColumnRect(c)) : [];
+    for (const wall of walls) {
+      if (wall.wallFinish == null || !wall.backingRange || deferredBackingIds.has(wall.id)) continue;
+      const studs = resolveWallStuds(wallLines.get(wall.id), {
+        layout: rules.studLayout, backing: rules.backing,
+        columnIntervals: columnIntervalsOnWall(wall, columnRects),
+        studCuts: columnCuts?.get(wall.id)?.backing ?? [],
+      });
+      if (studs) wallStuds.set(wall.id, studs);
+    }
+  }
+
   return {
-    deferredBackingIds: detail ? resolveDeferredBackingIds(graph.generalShapes) : EMPTY_SET,
+    deferredBackingIds,
     wallJunctions,
     kneeDropOverlays,
     columnCuts,
     wallLines,
+    wallStuds,
   };
 }

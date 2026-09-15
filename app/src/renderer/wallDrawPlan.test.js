@@ -12,6 +12,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Plane, PlanGraph, CenterLineType, Discipline, edgeKey, StructuralMaterialType } from '@core';
+import { TRADITIONAL_WOOD_STRUCTURE } from '../structural/structureRules.js';
 import { generateRoomWallsFromOutline } from '../finish/wallGeneration.js';
 import { LodLevel } from '../viewport.js';
 import { buildWallDrawPlan, resolveWallLines } from './wallDrawPlan.js';
@@ -413,4 +414,53 @@ test('buildWallDrawPlan: 腰壁の通りに立つ柱の包みで天板が分割�
   assert.deepEqual(at(kd, true, 1747.5), [], '柱壁の面上の端部の線は天板側からは出ない');
   assert.deepEqual(at(kd, true, 2252.5), []);
   assert.deepEqual(plan.wallLines.get(kneeWall.id).segments, [[57.5, 3942.5]], '壁帯のスパンは変わらない');
+});
+
+// ---- 壁下地材（間柱断面）の割付: 主構造ルールの選択子 studLayout の配線を実グラフで固定する
+// （renderer/wallStudLayout.js の純関数テストだけでは buildWallDrawPlan が柱の区間・ルール値を渡すかは検証されない）。
+function buildStudGraph(structure) {
+  const g = new PlanGraph(new Plane('p', 0, '1階', 1, 1));
+  g.structureOverride = structure;
+  const yAxis = hCL(g, 0);
+  const x0 = vCL(g, 0), x1 = vCL(g, 1820), x2 = vCL(g, 3640);
+  // 下地オーナー壁（下地120＝在来の柱同寸×30の間柱・仕上げ12.5）。x=0〜3640。
+  const w = wall(g, yAxis, 72.5, false, x0, 0, x2, 0, { backingOffset: 0, backingDepth: 120, finishSide: 1 });
+  return { g, w, cls: [x0, x1, x2], yAxis };
+}
+
+test('buildWallDrawPlan: 在来木造は壁上の柱（120角）で面に分け、各面は柱面から10mmの端部材＋455割付（材厚30）', () => {
+  const { g, w, cls, yAxis } = buildStudGraph(TRADITIONAL_WOOD_STRUCTURE);
+  for (const cl of cls) g.addColumn(StructuralMaterialType.WOOD, 'WOOD-120x120', cl, yAxis, {});
+  const plan = buildWallDrawPlan(g, LodLevel.DETAIL);
+  assert.deepEqual(plan.wallLines.get(w.id).backingSpan, [0, 3640], '取り合う相手が無い＝下地の端は物理端');
+  // 面 [60,1760]・[1880,3580]（柱面〜柱面 1700）: 端部材 25/1675 ＋ 395/850/1305（面の始端から）
+  assert.deepEqual(plan.wallStuds.get(w.id), {
+    centers: [85, 455, 910, 1365, 1735, 1905, 2275, 2730, 3185, 3555], depth: 30,
+  });
+  // 標準LODでは解かない
+  assert.equal(buildWallDrawPlan(g, LodLevel.STANDARD).wallStuds.size, 0);
+});
+
+test('buildWallDrawPlan: 在来木造でも柱の無い壁は面が1つ＝壁全長の455割付だけ（端部材なし）', () => {
+  const { g, w } = buildStudGraph(TRADITIONAL_WOOD_STRUCTURE);
+  const plan = buildWallDrawPlan(g, LodLevel.DETAIL);
+  // L=3640: 商8 → 内側7ピッチ=3185、両端227.5
+  assert.deepEqual(plan.wallStuds.get(w.id).centers, [227.5, 682.5, 1137.5, 1592.5, 2047.5, 2502.5, 2957.5, 3412.5]);
+});
+
+test('buildWallDrawPlan: 在来以外（S造）は従来どおり壁の始端から450固定ピッチ・見かけ幅45', () => {
+  const { g, w } = buildStudGraph('S造');
+  const plan = buildWallDrawPlan(g, LodLevel.DETAIL);
+  assert.deepEqual(plan.wallStuds.get(w.id), { centers: [450, 900, 1350, 1800, 2250, 2700, 3150, 3600], depth: 45 });
+});
+
+test('【失敗系】buildWallDrawPlan: 仕上げのみの薄壁（下地なし）・手動壁（wallFinish=null）には下地材を出さない', () => {
+  const { g, w, cls, yAxis } = buildStudGraph(TRADITIONAL_WOOD_STRUCTURE);
+  const thin = wall(g, hCL(g, 5000), 72.5, false, cls[0], 0, cls[2], 0, { backingDepth: 0, finishSide: 1 });
+  const manual = g.addWall(hCL(g, 8000), 72.5, false, cls[0], 0, cls[2], 0, { backingOffset: 0, backingDepth: 120 });
+  g.addColumn(StructuralMaterialType.WOOD, 'WOOD-120x120', cls[1], yAxis, {});
+  const plan = buildWallDrawPlan(g, LodLevel.DETAIL);
+  assert.ok(plan.wallStuds.has(w.id));
+  assert.equal(plan.wallStuds.has(thin.id), false, '下地なしの薄壁');
+  assert.equal(plan.wallStuds.has(manual.id), false, '手動壁');
 });

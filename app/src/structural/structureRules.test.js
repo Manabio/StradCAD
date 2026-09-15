@@ -214,10 +214,11 @@ test('【不変条件】主構造由来の柱の既定断面は rulesFor(...).de
   assert.deepEqual(offenders, [], `材種表からの柱既定断面の直接参照が残っている:\n${offenders.join('\n')}`);
 });
 
-test('structureRules: 描画ルール（柱包み・平面の柱線色）は在来木造だけ包みなし・壁と同じ色', () => {
-  assert.deepEqual({ ...rulesFor(TRADITIONAL_WOOD_STRUCTURE).drawing }, { columnFinishWrap: false, planColumnColor: 'wall' });
+test('structureRules: 描画ルール（柱包み・平面の柱線色・線幅）は在来木造だけ包みなし・壁と同じ色・極太線', () => {
+  // 在来は壁厚＝柱寸法で柱の輪郭が壁の下地帯の線と重なるため極太線（実機 moku1 2026-09-15「柱が消えた」）
+  assert.deepEqual({ ...rulesFor(TRADITIONAL_WOOD_STRUCTURE).drawing }, { columnFinishWrap: false, planColumnColor: 'wall', planColumnLineWeight: 'ultraThick' });
   for (const key of ['木造（2"×4"）', 'S造', 'SRC造', 'RC造(ラーメン)', 'RC造(壁式)', UNSPECIFIED_STRUCTURE]) {
-    assert.deepEqual({ ...rulesFor(key).drawing }, { columnFinishWrap: true, planColumnColor: 'material' }, key);
+    assert.deepEqual({ ...rulesFor(key).drawing }, { columnFinishWrap: true, planColumnColor: 'material', planColumnLineWeight: 'thick' }, key);
   }
 });
 

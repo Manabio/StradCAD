@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import { RoomFeature } from '../core/constants.js';
 import {
   woodBeamDepthMm, woodBeamSectionKey, studPositions, studSpec, openingJambSpec, entranceOpeningWidthMm, hipBraceAllowed,
+  wallRunFaces, faceStudPositions,
 } from './woodFraming.js';
 import { WOOD_BEAM_DEPTH_TABLE, TRADITIONAL_WOOD_FRAMING, TRADITIONAL_WOOD_BACKING, rulesFor, TRADITIONAL_WOOD_STRUCTURE } from './structureRules.js';
 import { findSectionEntry, woodRectSectionKey, SECTION_CATALOG } from './sectionCatalog.js';
@@ -154,4 +155,58 @@ test('structureRules: 在来木造だけが framing/backing を持ち、柱120�
     assert.equal(rulesFor(key).backing, null, `${key} は backing を持たない`);
   }
   assert.equal(rulesFor('木造（2"×4"）').defaultSections.column, 'WOOD-105x105', '2×4の既定断面は変えない');
+});
+
+test('wallRunFaces: 下地区間を壁上の柱区間で面（2点間）に分け、柱で終わる端に印を付ける', () => {
+  // 柱 [-60,60]（区間の始端に柱面が接する＝T字の相手壁上の柱）・[1760,1880]・[3580,3700]
+  assert.deepEqual(wallRunFaces(60, 3700, [[1760, 1880], [-60, 60], [3580, 3700]]), [
+    { lo: 60, hi: 1760, columnAtLo: true, columnAtHi: true },
+    { lo: 1880, hi: 3580, columnAtLo: true, columnAtHi: true },
+  ]);
+  // 開口の縁で終わる区間（柱なし）は両端とも false
+  assert.deepEqual(wallRunFaces(2803, 3553, [[-60, 60], [3580, 3700]]),
+    [{ lo: 2803, hi: 3553, columnAtLo: false, columnAtHi: false }]);
+  // 区間の途中で始まる／終わる柱は面の端を柱面へ寄せる
+  assert.deepEqual(wallRunFaces(0, 1000, [[900, 1020]]), [{ lo: 0, hi: 900, columnAtLo: false, columnAtHi: true }]);
+  assert.deepEqual(wallRunFaces(0, 1000, [[-20, 100]]), [{ lo: 100, hi: 1000, columnAtLo: true, columnAtHi: false }]);
+});
+
+test('【失敗系】wallRunFaces: 幅0以下の区間は空、区間外・不正な柱区間は無視、柱に覆い尽くされた区間は面なし', () => {
+  assert.deepEqual(wallRunFaces(100, 100, [[0, 50]]), []);
+  assert.deepEqual(wallRunFaces(NaN, 100, []), []);
+  assert.deepEqual(wallRunFaces(0, 1000, [[2000, 2120], [NaN, 10], [500, 400]]),
+    [{ lo: 0, hi: 1000, columnAtLo: false, columnAtHi: false }]);
+  assert.deepEqual(wallRunFaces(0, 100, [[-10, 110]]), []);
+  assert.deepEqual(wallRunFaces(0, 100, null), [{ lo: 0, hi: 100, columnAtLo: false, columnAtHi: false }]);
+});
+
+test('faceStudPositions: 柱で終わる端は柱面から10mmクリアランスの端部材（中心25）、内側は面の全長を455で割付', () => {
+  // L=1700（柱面〜柱面）: 商3 → 内側2ピッチ=910、両端395 → 395/850/1305 ＋ 端部材 25/1675
+  assert.deepEqual(faceStudPositions(1700, { columnAtLo: true, columnAtHi: true }), [25, 395, 850, 1305, 1675]);
+  // 片側だけ柱（もう一方は開口の縁）: 端部材は柱側だけ
+  assert.deepEqual(faceStudPositions(1700, { columnAtLo: true }), [25, 395, 850, 1305]);
+  assert.deepEqual(faceStudPositions(1700, { columnAtHi: true }), [395, 850, 1305, 1675]);
+  // 柱なし（両端とも開口の縁など）は studPositions のまま
+  assert.deepEqual(faceStudPositions(1700, {}), studPositions(1700));
+  // 値はルール（クリアランス10・材厚30・ピッチ455）から
+  assert.equal(TRADITIONAL_WOOD_BACKING.studColumnClearanceMm, 10);
+  assert.deepEqual(faceStudPositions(1700, { columnAtLo: true, columnAtHi: true }, { clearanceMm: 20, depthMm: 40 }),
+    [40, 395, 850, 1305, 1660]);
+  // ピッチ違い（外壁の「縦下地間隔」）: L=1700, p=303 → 商5 → 内側4×303=1212、両端244
+  assert.deepEqual(faceStudPositions(1700, { columnAtLo: true, columnAtHi: true }, { pitchMm: 303 }),
+    [25, 244, 547, 850, 1153, 1456, 1675]);
+});
+
+test('【失敗系】faceStudPositions: 端部材と重なる割付材は落とす、端部材が入らない短い面は空、非数・0以下は空', () => {
+  // L=100: 端部材 25/75、中央の割付材50は端部材と重なる（材厚30）ので落とす
+  assert.deepEqual(faceStudPositions(100, { columnAtLo: true, columnAtHi: true }), [25, 75]);
+  // L=70: 端部材は片側（25）だけ入る（もう一方 70-40=30 < 40 で重なる）
+  assert.deepEqual(faceStudPositions(70, { columnAtLo: true, columnAtHi: true }), [25]);
+  // L=30: 端部材（クリアランス10＋材厚30=40）が入らない → 割付材の中央15は面に収まる
+  assert.deepEqual(faceStudPositions(30, { columnAtLo: true, columnAtHi: true }), [15]);
+  assert.deepEqual(faceStudPositions(13, { columnAtLo: true, columnAtHi: false }), []);
+  assert.deepEqual(faceStudPositions(0, { columnAtLo: true }), []);
+  assert.deepEqual(faceStudPositions(NaN, {}), []);
+  assert.deepEqual(faceStudPositions(1700, {}, { depthMm: 0 }), []);
+  assert.deepEqual(faceStudPositions(1700, {}, { clearanceMm: -1 }), []);
 });

@@ -173,9 +173,13 @@ export const ColumnsLayer = observer(({ graph, viewport, diaphragm = false, fini
   if (!graph) return null;
   const scale   = Math.min(viewport.scaleX, viewport.scaleY);
   // 平面では柱断面を太線の輪郭で描く（塗りではなく断面線で示す）。構造モードは従来どおり。
+  // 主構造ルール（structureRules.js drawing）: 在来木造は包みを持たず、平面の柱断面は壁と同じ黒で描き
+  // （ユーザー指示2026-09-14。材種色の断面に黒の包み線が重なって二重に見えていた）、輪郭は極太線にする
+  // （壁厚＝柱寸法のとき柱の輪郭が壁の下地帯の線と重なり、壁と同じ太線では見分けられないため）。
+  const drawing = rulesFor(effectiveStructure(graph)).drawing;
   const outline = finishWrap || viewport.lodLevel === LodLevel.STANDARD;
   const outlineStrokeWidth = resolveStrokeWidth(
-    finishWrap ? LINE_WEIGHT_MM.thick : LINE_WEIGHT_MM.medium, scale,
+    finishWrap ? LINE_WEIGHT_MM[drawing.planColumnLineWeight] : LINE_WEIGHT_MM.medium, scale,
     viewport.lineWeightsPx, viewport.pxPerMmX);
   const diaStrokeWidth = resolveStrokeWidth(
     LINE_WEIGHT_MM.thin, scale, viewport.lineWeightsPx, viewport.pxPerMmX);
@@ -189,9 +193,6 @@ export const ColumnsLayer = observer(({ graph, viewport, diaphragm = false, fini
   // キャッシュする（graphDerived.js。パン・ズームの再レンダーで引き直さない）。
   // 包みの解決結果は壁の領域（renderer/wallDrawPlan.js の planColumnWraps）と共有する——同じ柱壁が
   // 壁側の覆い判定と柱側の描画で食い違わないための単一の入口（二重計算もしない）。
-  // 主構造ルール（structureRules.js drawing）: 在来木造は包みを持たず、平面の柱断面は壁と同じ黒で描く
-  // （ユーザー指示2026-09-14。材種色の断面に黒の包み線が重なって二重に見えていた）。
-  const drawing = rulesFor(effectiveStructure(graph)).drawing;
   const wrapByColumnId = finishWrap && drawing.columnFinishWrap
     ? graphComputed(graph, 'columnWrapByColumnId',
       () => new Map(planColumnWraps(graph).map(w => [w.column.id, w.wrapped])))

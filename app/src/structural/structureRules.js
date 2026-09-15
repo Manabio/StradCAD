@@ -70,6 +70,7 @@ export const TRADITIONAL_WOOD_BACKING = Object.freeze({
   windowJambDepthMm: 45,   // 外壁アルミ窓の両袖＝柱寸×45
   doorJambDepthMm: null,   // 外壁アルミ扉の両袖＝柱と同寸（null＝柱寸）
   jambClearanceMm: 5,      // 袖材の左右クリアランス
+  studColumnClearanceMm: 10, // 各面の端部材（壁下地材）は柱面からこのクリアランスを空けて立てる
 });
 
 // 木造（在来）の基礎梁標準寸法・下限（仕様確認済み）。標準は150×600（=350+250）。
@@ -126,9 +127,14 @@ const WOOD_RULES = Object.freeze({
   columnPlacement: 'gridIntersections',
   // (3) 柱幅の算定: 負担床面積から概算（既定）／固定（在来＝柱寸法は欄で決める。tributaryWidth を算定しない）。
   columnSizing: 'tributary',
+  // (3) 平面詳細の壁下地材（間柱断面）の割付: 'fixedPitch'＝壁の始端から450固定ピッチ・見かけ幅45（既定。
+  // renderer/wallStudLayout.js）／'betweenColumns'＝壁上の柱で区切った各面を studPositions で割り付け、
+  // 面の両端は柱面から studColumnClearanceMm を空けて端部材を立てる（在来。woodFraming.js faceStudPositions）。
+  studLayout: 'fixedPitch',
   // (2)(3) 柱の描き方: columnFinishWrap＝仕上げ包み（柱壁。finish/columnWrap.js）を平面・展開図に付けるか。
   // planColumnColor＝平面図の柱断面の線色（'material'＝材種色／'wall'＝壁と同じ線色）。
-  drawing: Object.freeze({ columnFinishWrap: true, planColumnColor: 'material' }),
+  // planColumnLineWeight＝平面図の柱断面の輪郭線幅（LINE_WEIGHT_MM のキー。'thick'＝壁の仕上げ線と同じ）。
+  drawing: Object.freeze({ columnFinishWrap: true, planColumnColor: 'material', planColumnLineWeight: 'thick' }),
   // 壁由来の梁芯生成源（(3)）: 自階＋1つ下の実体階の下地オーナー壁（下地材の種別は問わない）。在来のみ。
   wallBeamAxes: null,
   // 外壁アルミサッシはフィン下地直付け（openings/sashDetailCatalog.js）。
@@ -157,7 +163,8 @@ const RC_RULES = Object.freeze({
   backing: null,
   columnPlacement: 'gridIntersections',
   columnSizing: 'tributary',
-  drawing: Object.freeze({ columnFinishWrap: true, planColumnColor: 'material' }),
+  studLayout: 'fixedPitch',
+  drawing: Object.freeze({ columnFinishWrap: true, planColumnColor: 'material', planColumnLineWeight: 'thick' }),
   // 自階の下地オーナー壁のうち下地材がRC下地の壁のみ（上下階で壁が連続し自立するため下階は見ない）。
   wallBeamAxes: 'rcBacking',
   sashFinDirect: false,
@@ -193,10 +200,12 @@ export const STRUCTURE_RULES = Object.freeze({
   [TRADITIONAL_WOOD_STRUCTURE]: withProfile(TRADITIONAL_WOOD_STRUCTURE,
     { ...WOOD_RULES, isTraditionalWood: true, wallBeamAxes: 'selfAndBelow',
       framing: TRADITIONAL_WOOD_FRAMING, backing: TRADITIONAL_WOOD_BACKING,
-      columnPlacement: 'wallIntersections', columnSizing: 'fixed',
-      // 在来木造の柱は壁の中に立つ管柱＝仕上げ包み（柱壁）は付けない。平面の柱断面は壁と同じ黒の太線
-      // （ユーザー指示2026-09-14「在来木造の柱に柱包みは不要」「茶色の断面…黒指定」）。
-      drawing: Object.freeze({ columnFinishWrap: false, planColumnColor: 'wall' }) },
+      columnPlacement: 'wallIntersections', columnSizing: 'fixed', studLayout: 'betweenColumns',
+      // 在来木造の柱は壁の中に立つ管柱＝仕上げ包み（柱壁）は付けない。平面の柱断面は壁と同じ黒
+      // （ユーザー指示2026-09-14「在来木造の柱に柱包みは不要」「茶色の断面…黒指定」）。輪郭は**極太線**——
+      // 壁厚＝柱寸法（conformWoodBacking で下地120＝柱120）になると柱の輪郭が壁の下地帯の線と完全に重なり、
+      // 壁と同じ太線では柱が見分けられない（実機 moku1 2026-09-15「中心線と取り合う壁の柱が消えた」）。
+      drawing: Object.freeze({ columnFinishWrap: false, planColumnColor: 'wall', planColumnLineWeight: 'ultraThick' }) },
     { column: TRADITIONAL_WOOD_FRAMING.columnSection, beam: TRADITIONAL_WOOD_FRAMING.columnSection }), // 梁の既定＝柱同寸の正角
   '木造（2"×4"）': withProfile('木造（2"×4"）', WOOD_RULES), // 壁自体が構造体＝壁下に梁を入れない（wallBeamAxes:null）
 });
