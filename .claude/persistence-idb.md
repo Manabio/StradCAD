@@ -23,6 +23,9 @@
 ## 文書ファイル（.stq）＝保存ドキュメントの読み戻しを包んだもの
 「保存」の`exportDocument`は、まず`saveToIDB`で保存ドキュメントを確定してから、その確定内容（savedFloors全件＋projectsの通り芯/plane一覧/敷地/調査・計画情報）をIDBから読み戻してJSONエンベロープ（`format:'stq-document'`、バイト列はbase64。調査・計画情報`info`のみ元がJSONのためオブジェクトのまま）に包む——**ファイルの中身＝次回起動で復元される内容**を常に一致させるための順序で、in-memoryから直接シリアライズしてはならない（非アクティブ階はスワップアウト済みでメモリに実体がない）。読み込み（`importDocument`）は検証を通してから全ストアを消去して書き込み、in-memoryへは反映せず`location.reload()`で通常のブート復元経路を再利用する（`resetAll`と同じ理由）。projectIdはファイルに保存せず現行タブのものを使い続ける。エンベロープをJSONにしたのは「読込み」の先頭バイト判別（`{`=JSON）を変えずに旧形式（単一グラフFlatBuffers・旧JSONスナップショット→アクティブ階のみ復元）と共存させるため。構築・パースは純モジュール`storage/documentFile.js`（node:testから単体import可能に保つ）。
 
+## bootReadyは全階activate後に壁の鮮度sweepを1回通す（undo対象外・dirtyにする）
+`store.js`の`bootReady`は`floorSwapManager.activate`の直後に`refreshWallsAllFloors`（`wallRefresh.js`。壁の再生成をFinishModeStateから独立させる計画のステップ5）を`pushUndo:false`で呼び、鍵不一致の階だけ壁を作り直す。変更があれば`markDirty()`するが、鍵が全階一致していれば何もせず`dirty`にもしない（`markDirty`は`beforeunload`の警告用フラグだけで、undoスタック長には連動しない）。sweepが失敗しても`bootReady`自体は握って続行する。
+
 ## セッションロック（storage/sessionLock.js）— 単一ライター、自動昇格なし
 `openDB()`は冒頭で`isSessionOwner()===false`ならthrowし、以降の全読み書き（全公開関数がopenDB経由）をこの1箇所で塞ぐ。read-only編集・別タブ間の同期・マージは提供しない——マージ機構を持たないこのアプリでは、2つ目以降のタブに「別文書として振る舞う余地」を与えるより「1タブだけで編集」を強制する方が競合破損を避けられるという判断。ロック保持タブが閉じてロックが空いても、既存の非オーナータブが自動でロックを奪いに行くことはない（自動昇格なし）——再取得はユーザーの明示的なリロードのみ。Web Locks API非対応環境はフォールバックし、排他されない（現行動作を維持）。
 

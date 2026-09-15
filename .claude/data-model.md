@@ -15,8 +15,10 @@ Intersection・Shape・Wall・Opening・構造部材はすべて自前の座標�
 ## Wallは自前のオフセットを持ち、ngraphに参加しない
 軸CLからのオフセットで位置を持つ（shapeMapのみで管理）。`isRoomWall`の壁はchamferWallsの対象外（生成時のコーナーマップによるオフセットを固定値として保持）。
 
-## 内周壁は仕上げ脱出境界で全削除・導出再生成する（下地オーナー壁＋仕上げ薄壁方式）
-内周壁（`isRoomWall`かつ非外壁）は「部屋指定・内装・偏芯からの導出物」であり、壁自体に前回の解決結果を持ち越さない。`runFinishExitBoundary`は脱出のたびに全削除→部屋ごとに再生成する（順序非依存・冪等。2a=階段下部屋の壁のみ例外、下記）。同一CL上の下地（間柱帯）はスパン単位でオーナー1本だけを持つ——生成直後は軸オフセットの符号（＋側優先）、外周CLでは外壁がオーナーになる（`finish/wallGeneration.js`の`resolveBackingOwnership`/`applyBackingOwnership`）。オーナー以外は`backingDepth=0`の仕上げ薄壁として面ごとに独立描画される。階段ペアRoom（`feature=STAIR`）・階段吹抜け（`STAIR_VOID`）も通常のRoomと同じ経路で壁を持つ。階段下部屋（破れ線先セルに部屋指定された領域。通称「2a」）だけは例外——`generateStairUnderWalls`固有の偏芯式で一度生成したら不変・専用トリムを持つ別管理の壁のため、全削除・所有権解決・CL偏芯（`clEccentricity.js`）のいずれの対象にもならない。ただし2aの外周エッジのうち向こう側がユーザー指定の通常部屋（吹抜けVOID含む）で階段footprint境界上にあるものは、同一CL上に下地が2重にならないよう2a側では生成・claimせず通常の所有権解決（`resolveBackingOwnership`）へ委譲する（`isDelegatedEdge`。footprint外の区間は対をなす階段ペアRoom壁が無く2a側面が下地むき出しになるため委譲しない）。
+## 内周壁は鮮度キーが変わった境界で全削除・導出再生成する（下地オーナー壁＋仕上げ薄壁方式）
+内周壁（`isRoomWall`かつ非外壁）は「部屋指定・内装・偏芯からの導出物」であり、壁自体に前回の解決結果を持ち越さない。同一CL上の下地（間柱帯）はスパン単位でオーナー1本だけを持つ——生成直後は軸オフセットの符号（＋側優先）、外周CLでは外壁がオーナーになる（`finish/wallGeneration.js`の`resolveBackingOwnership`/`applyBackingOwnership`）。オーナー以外は`backingDepth=0`の仕上げ薄壁として面ごとに独立描画される。階段ペアRoom（`feature=STAIR`）・階段吹抜け（`STAIR_VOID`）・階段下部屋（破れ線先セルに部屋指定された領域。通称「2a」）も通常のRoomと同じ経路で壁を持つ——2aもライフサイクルは同じで、専用なのは`generateStairUnderWalls`固有の偏芯式という生成手順だけ（全削除・所有権解決・CL偏芯（`clEccentricity.js`）の対象になる）。ただし2aの外周エッジのうち向こう側がユーザー指定の通常部屋（吹抜けVOID含む）で階段footprint境界上にあるものは、同一CL上に下地が2重にならないよう2a側では生成・claimせず通常の所有権解決（`resolveBackingOwnership`）へ委譲する（`isDelegatedEdge`。footprint外の区間は対をなす階段ペアRoom壁が無く2a側面が下地むき出しになるため委譲しない）。
+
+**再生成の起動条件（鮮度キー方式。壁の再生成をFinishModeStateから独立させる計画）**: 壁の入力（外壁下地・内壁下地の材コード×2・実効主構造・在来木造の柱断面・部屋ごとのid・kind/feature/壁材/壁仕上げ）を要約した文字列（`finish/wallFreshnessKey.js`の`wallFreshnessKey`）を`graph.wallFreshnessKey`へ保存する。**仕上げ脱出の自階**（`runFinishExitBoundary`）は従来どおり鍵を見ずに毎回全削除→再生成する——鍵はその結果として書き込むだけで、再生成の可否には使わない。鍵が「作り直すかどうか」の条件になるのは**それ以外の階・境界**（仕上げ脱出の他階・構造脱出・文書読込み＝`store.js` bootReady）で、「保存キー≠現在キー」の階だけ全削除→導出再生成する（`wallRefresh.js`の`refreshWallsAllFloors`が担う）。数値(mm)は鍵に含めない——材コードだけで組み立てるため丸め規約が不要になる。材マスタ（壁材/壁仕上げ/下地材の実体）や壁生成規則を変えたら、鍵の入力が同じでも出力壁が変わりうるため`WALL_KEY_VERSION`を上げて既存キーを一律不一致にする。未脱出階（`wallFreshnessKey===null`かつ壁0本の階）は`refreshWallsAllFloors`のsweep対象外——壁の無い階は柱を保全する裁定（2026-09-14）と整合させるため、壁を新規生成しない（仕上げモードへ一度入って脱出したときに初めて壁を持つ、という現状の挙動を変えない）。
 
 ## 出隅の取り合いは壁生成後の全体パスで閉じる（closeConvexCorners）
 壁生成のコーナーマップは**1つの部屋の輪郭の中**でしか角を解決できない。角を挟む2枚が別々の

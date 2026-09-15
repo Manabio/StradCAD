@@ -12,12 +12,13 @@ import {
 } from './storage/db.js';
 import { buildDocumentJson, parseDocumentEnvelope } from './storage/documentFile.js';
 import { encodeProjectInfo, decodeProjectInfo } from './storage/projectInfo.js';
-import { clearDirty } from './dirtyState.js';
+import { clearDirty, markDirty } from './dirtyState.js';
 import { acquireSessionLock } from './storage/sessionLock.js';
 import { SpatialIndex } from './transform/SpatialIndex.js';
 import { serializePlanes, decodePlanes, serializeSite, decodeSite, restoreSite } from './graphSnapshot.js';
 import { reconcilePlanes } from './floorOps.js';
 import { clearLocalAutosave } from './storage/localSnapshot.js';
+import { refreshWallsAllFloors } from './wallRefresh.js';
 
 // ----------------------------------------------------------------
 // ID の永続化
@@ -210,6 +211,21 @@ export const bootReady = (async () => {
   await restoreProjectInfoFromIDB();
   await floorSwapManager.activate(project.activePlane, project.activeGraph);
   floorSwapManager.startSiteDirtyTracking(project.site);
+  // 読込み時の全階壁sweep（壁の再生成をFinishModeStateから独立させる計画のステップ5。
+  // 裁定2026-09-15）: 文書を開いた時点で主構造・階別構造・下地材コードの入力と壁の鍵が
+  // 食い違っている階（他アプリ間での文書共有・旧バージョンの文書等）があれば、仕上げ脱出・
+  // 構造脱出と同じ規律で鍵不一致の階だけ壁を作り直す。ensureTopStairVoid・ensureStairRooms
+  // と同じ「突入時の自動修復」——undo 対象外（pushUndo:false・pushActiveStructuralUndo:false。
+  // undoスタックは空のまま）だが、変更があれば markDirty() して保存を促す（保存すれば鍵も
+  // 保存され次回は走らない。鍵一致で何も変わらなければ dirty にしない）。sweep が reject
+  // しても bootReady 自体は失敗させない（壁は古いまま＝次の境界で再試行される自己修復性の
+  // ため、try/catch で握って続行する）。
+  try {
+    const { changedPlaneIds } = await refreshWallsAllFloors(project, { pushUndo: false, pushActiveStructuralUndo: false });
+    if (changedPlaneIds.length > 0) markDirty();
+  } catch (e) {
+    console.error(e);
+  }
 })();
 bootReady.catch(console.error);
 

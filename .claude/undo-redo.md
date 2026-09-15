@@ -26,6 +26,7 @@ plane作成・新階同期・切替・全階の構造再計算が複数階へ波
 - `ensureTopStairVoid`・`syncUpperFloorsAuto`単体（階追加経由は階追加エントリが包含）: 冪等なデータ修復・自動同期
 - `syncRoofPlane`・構造モード突入時の自動補完: 建物形状が変われば作り直す冪等インフラ
 - 編集可能peek（構造モードの下階柱編集）のgraphを対象にした変更: 復元先が使い捨てで履歴ナビでも復活しない
+- 読込み時の壁再生成（`wallRefresh.js`の`refreshWallsAllFloors`。壁の再生成をFinishModeStateから独立させる計画のステップ5）: `store.js`の`bootReady`が文書読込み直後に鍵不一致の階だけ壁を作り直す自動修復。undo対象外だが、変更があれば`markDirty()`してdirtyにする（保存すれば鍵も保存され次回は走らない。鍵一致で何も変わらなければdirtyにしない）
 
 ## 落とし穴
 - undo/redo内のフロア切替・IDB書き込みは非同期の投げ放し。連打は`historyNavRef`で弾き、切替中に履歴が動いた場合はpeek再照合で実行を中止する。

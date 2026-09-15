@@ -190,3 +190,14 @@ WINDING/L_TURN/FLARED/OPEN_WELLは対象外＝従来面順へフォールバッ�
 枠材を正面から見た幅（壁長さ方向の寸法）、**出幅（チリ）**は壁の仕上げ面から室内外へ枠が
 出る量。ともに`Opening.frameFaceWidth`/`frameProjection`（既定20mm/12mm）でユーザーが修正できる。
 設計意図は`.claude/opening-model.md`「三方枠は建具サブタイプ＋FRAME_ONLY機構」節。
+
+## 鮮度キー（wallFreshnessKey）
+壁の入力（外壁下地・内壁下地の材コード×2・実効主構造・在来木造の柱断面・部屋ごとの**id**・kind/feature/
+壁材/壁仕上げ。部屋を作り直すとidが変わり鍵も変わる）を要約した決定的な文字列
+（`finish/wallFreshnessKey.js`）。`graph.wallFreshnessKey`へ保存し、「保存キー≠現在キー」を
+内周壁・外壁の全削除→導出再生成の起動条件にする（仕上げ脱出・構造脱出・文書読込みの3境界。
+`wallRefresh.js`の`refreshWallsAllFloors`）——ただし3境界のうち**仕上げ脱出の自階は無条件**
+（鍵を見ずに毎回再生成し、鍵は結果として書く）。数値(mm)は含めない（材コードだけで組み立て、
+丸め規約を持たない）。材マスタや生成規則を変えたら`WALL_KEY_VERSION`を上げて既存キーを一律
+不一致にする。設計意図は`.claude/data-model.md`「内周壁は鮮度キーが変わった境界で全削除・
+導出再生成する」節。
