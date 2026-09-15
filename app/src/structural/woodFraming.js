@@ -185,6 +185,37 @@ export function mergeWallIntervals(intervals, tol = CL_OVERLAP_TOL_MM) {
 }
 
 /**
+ * 点群（例: 上階柱の(x,y)）を、下地帯（halfDepth）を持つ壁区間へスナップする（在来木造・上階柱直下の
+ * 柱＝ステップ3bが使う）。点の法線方向座標が壁の下地帯の内側（|perp − s.coord| ≤ s.halfDepth）かつ
+ * 走行方向が壁の範囲内（自由端の外は junctionTol まで許容）な**すべての**組合せを返す（1点が複数の
+ * 壁区間に一致する場合は複数件。1件も一致しなければ0件）。**segments の並び順には依存しない**——
+ * どの壁が「勝つ」かの決定（run に入るか等）は、run情報を持たない本関数の責務ではなく呼び出し側
+ * （`woodAutoFill.js`の`autoFillWoodColumns`）が同じ(x,y)の複数件から決定的タイブレークで1件選ぶ
+ * （QA F6・2026-09-16：旧実装は`segments`配列の最初の一致で`break`しており`graph.walls`の並び順に
+ * 結果が依存する不具合だった）。dist＝|perp − s.coord|（タイブレークの判定材料として持ち帰る）。
+ * 純関数（graph非依存）。
+ * @param {Array<{x:number, y:number}>} points
+ * @param {Array<{isVertical:boolean, coord:number, lo:number, hi:number, halfDepth:number}>} segments
+ * @param {number} junctionTol - 壁の端部の取り合い許容(mm)
+ * @returns {Array<{x:number, y:number, isVertical:boolean, coord:number, along:number, dist:number}>}
+ */
+export function pointsOnWallLines(points, segments, junctionTol) {
+  const out = [];
+  for (const p of (points ?? [])) {
+    if (!Number.isFinite(p?.x) || !Number.isFinite(p?.y)) continue;
+    for (const s of (segments ?? [])) {
+      const perp = s.isVertical ? p.x : p.y;
+      const dist = Math.abs(perp - s.coord);
+      if (dist > s.halfDepth) continue;
+      const along = s.isVertical ? p.y : p.x;
+      if (along < s.lo - junctionTol || along > s.hi + junctionTol) continue;
+      out.push({ x: p.x, y: p.y, isVertical: s.isVertical, coord: s.coord, along, dist });
+    }
+  }
+  return out;
+}
+
+/**
  * 壁線上の通し梁の支持区間（3dの前提: 梁は途中の柱位置で切らず、両端＋下階柱を支持点として
  * 通しで架ける。端は壁の交点＝自由端へは伸ばさない）。points（線上の端点候補座標。重複・未ソート可）
  * を昇順・tol未満は同一点としてdedupし、隣り合う2点のペアが mergedIntervals（mergeWallIntervals

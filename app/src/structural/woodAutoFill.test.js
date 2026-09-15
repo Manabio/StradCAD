@@ -15,6 +15,7 @@ import { generateRoomWallsFromOutline } from '../finish/wallGeneration.js';
 import { floorSwapManager } from '../storage/FloorSwapManager.js';
 import { recomputeStructuralForGraph } from './structuralRecompute.js';
 import { SECONDARY_BEAM_CLEARANCE_MM } from '../core/structuralEntities.js';
+import { findSectionEntry } from './sectionCatalog.js';
 
 function makeGridGraph(structure = TRADITIONAL_WOOD_STRUCTURE) {
   const graph = new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
@@ -127,6 +128,277 @@ test('【失敗系】autoFillWoodColumns: 壁が無い階（壁未生成）は�
   assert.deepEqual(created, []);
   assert.deepEqual(removed, []);
   assert.ok(graph.columnMap.has(gridAuto.id), '壁が無い階の既存柱は残る');
+});
+
+// ================================================================
+// 在来木造・上階柱直下の柱（ステップ3b）。フィクスチャ: 横壁 y=2000（x:0..4000）＋縦壁 x=1000（交点）・
+// x=3000（T字）で、y=2000の壁線上に through-run [1000,3000] ができる（3aの交点は(1000,2000)・(3000,2000)）。
+// 走行方向のアンカー用に通り芯 x=2000（壁は無い）も置く——3b候補(2000,2000)は3aの交点と別スロットになる。
+// ================================================================
+function makeWoodLineWithRunGraph() {
+  const { graph, x1, x2, y1, y2 } = makeGridGraph();
+  addBackingWall(graph, { axisValue: 2000, clStart: x1, clEnd: x2, isVertical: false }); // 横壁 y=2000（halfDepth=60）
+  addBackingWall(graph, { axisValue: 1000, clStart: y1, clEnd: y2, isVertical: true });  // 縦壁 x=1000（交点）
+  const ym = graph.addCenterLine(CenterLineType.HORIZONTAL, 2000, { labeled: false, discipline: Discipline.ARCH });
+  addBackingWall(graph, { axisValue: 3000, clStart: ym, clEnd: y2, isVertical: true });  // 縦壁 x=3000（T字）→run[1000,3000]
+  autoFillWallBeamAxes(graph, selfWallSegments(graph));
+  // 下階が無い前提のwallRunSegments代用（wallRunSegments(graph,null,structure)と同値＝selfのみ）。
+  const wallSegments = selfWallSegments(graph);
+  return { graph, x1, x2, y1, y2, wallSegments };
+}
+
+test('autoFillWoodColumns（3b・1）: 上階柱直下—壁線上（交点でない）・run内・アンカー有りなら1本、座標は(壁線coord, 上階柱along)', () => {
+  const { graph, wallSegments } = makeWoodLineWithRunGraph();
+  graph.addCenterLine(CenterLineType.VERTICAL, 2000, { labeled: true, discipline: Discipline.STRUCT }); // 走行方向アンカー（壁は無い）
+  const base = autoFillWoodColumns(graph, PROJECT, null, [], wallSegments); // 3aのみ確定（交点2本）
+  assert.equal(base.created.length, 2);
+  const above = [{ x: 2000, y: 2000, role: 'standard' }];
+  const { created, removed } = autoFillWoodColumns(graph, PROJECT, null, above, wallSegments);
+  assert.equal(created.length, 1, '3b候補1本だけ新規に立つ');
+  assert.deepEqual([created[0].x, created[0].y], [2000, 2000], '座標＝(壁線coord=2000, 上階柱along=2000)');
+  assert.deepEqual(removed, []);
+});
+
+test('【失敗系】autoFillWoodColumns（3b・2）: 壁の無い位置には立たない', () => {
+  const { graph, wallSegments } = makeWoodLineWithRunGraph();
+  const above = [{ x: 2000, y: 500, role: 'standard' }]; // y=500は壁(y=2000)から遠い
+  const { created } = autoFillWoodColumns(graph, PROJECT, null, above, wallSegments);
+  assert.equal(created.length, 2, '3aの交点2本のみ（3b候補は増えない）');
+});
+
+test('【失敗系】autoFillWoodColumns（3b・3）: 下地帯の外（halfDepth超）には立たない', () => {
+  const { graph, wallSegments } = makeWoodLineWithRunGraph();
+  graph.addCenterLine(CenterLineType.VERTICAL, 2000, { labeled: true, discipline: Discipline.STRUCT });
+  const above = [{ x: 2000, y: 2100, role: 'standard' }]; // halfDepth=60に対しperp差100
+  const { created } = autoFillWoodColumns(graph, PROJECT, null, above, wallSegments);
+  assert.equal(created.length, 2);
+});
+
+test('【失敗系】autoFillWoodColumns（3b・4）: runの外（自由端側）には立たない', () => {
+  const { graph, wallSegments } = makeWoodLineWithRunGraph();
+  graph.addCenterLine(CenterLineType.VERTICAL, 3500, { labeled: true, discipline: Discipline.STRUCT });
+  // x=3500は壁の物理範囲(0..4000)の内側だが、through-run[1000,3000]の外（自由端側）。
+  const above = [{ x: 3500, y: 2000, role: 'standard' }];
+  const { created } = autoFillWoodColumns(graph, PROJECT, null, above, wallSegments);
+  assert.equal(created.length, 2);
+});
+
+test('autoFillWoodColumns（3b・T1）: 下地帯の内側（中心から外れる）の上階柱は壁線へ寄せて立つ（QA F1）', () => {
+  const { graph, wallSegments } = makeWoodLineWithRunGraph();
+  graph.addCenterLine(CenterLineType.VERTICAL, 2000, { labeled: true, discipline: Discipline.STRUCT }); // 走行方向アンカー（壁は無い）
+  // halfDepth=60に対しperp差40（帯の内側だが中心からは外れる）。
+  const above = [{ x: 2000, y: 2040, role: 'standard' }];
+  const { created } = autoFillWoodColumns(graph, PROJECT, null, above, wallSegments);
+  assert.equal(created.length, 3, '3a交点2本＋3b候補1本');
+  const col3b = created.find(c => c.x === 2000 && c.y === 2000);
+  assert.ok(col3b, '3b柱は壁線の座標(y=2000)へスナップして立つ（上階柱の生のy=2040ではない）');
+});
+
+test('【失敗系】autoFillWoodColumns（3b・T3）: 上階の基礎柱（role=\'foundation\'）は候補にしない（QA F3）', () => {
+  const { graph, wallSegments } = makeWoodLineWithRunGraph();
+  graph.addCenterLine(CenterLineType.VERTICAL, 2000, { labeled: true, discipline: Discipline.STRUCT });
+  const above = [{ x: 2000, y: 2000, role: 'foundation' }];
+  const { created } = autoFillWoodColumns(graph, PROJECT, null, above, wallSegments);
+  assert.equal(created.length, 2, '基礎柱（杭）の直下には3b柱を立てない（3aの2本のみ）');
+});
+
+test('autoFillWoodColumns（3b・T6）: 1点が複数の壁線に一致しても選ぶ線は決定的（graph.wallsの追加順に依存しない・QA F6）', () => {
+  // 横壁2本を近接させ、y=2000（run[1000,3000]あり）とy=2100（runなし。交差する縦壁が無いため
+  // 単独の壁＝runが作れない）のどちらの帯にも入る点(x=2000,y=2055)を作る（halfDepth=60ずつ）。
+  // dist（|perp-coord|）だけを見るとy=2100側（dist=45）がy=2000側（dist=55）より近いため、
+  // run優先を効かせないと誤ってrunの無いy=2100側を選んでしまう——run優先が効いているかを固定する。
+  // selfWallSegments/wallIntersectionPointsはgraph.wallsの追加順をそのまま辿るため、addY2000/addY2100
+  // の呼び出し順（＝graph.wallsへの追加順）を入れ替えて、結果が変わらないことを確認する。
+  function buildGraph(y2100First) {
+    const { graph, x1, x2, y1, y2 } = makeGridGraph();
+    const addY2000 = () => {
+      addBackingWall(graph, { axisValue: 2000, clStart: x1, clEnd: x2, isVertical: false });
+      addBackingWall(graph, { axisValue: 1000, clStart: y1, clEnd: y2, isVertical: true });
+      const ym = graph.addCenterLine(CenterLineType.HORIZONTAL, 2000, { labeled: false, discipline: Discipline.ARCH });
+      addBackingWall(graph, { axisValue: 3000, clStart: ym, clEnd: y2, isVertical: true });
+    };
+    const addY2100 = () => {
+      // x:1500..2500のみ（交差する縦壁が無いため孤立した壁＝runが作れない）。
+      const y2100Start = graph.addCenterLine(CenterLineType.VERTICAL, 1500, { labeled: false, discipline: Discipline.ARCH });
+      const y2100End = graph.addCenterLine(CenterLineType.VERTICAL, 2500, { labeled: false, discipline: Discipline.ARCH });
+      addBackingWall(graph, { axisValue: 2100, clStart: y2100Start, clEnd: y2100End, isVertical: false });
+    };
+    if (y2100First) { addY2100(); addY2000(); } else { addY2000(); addY2100(); }
+    graph.addCenterLine(CenterLineType.VERTICAL, 2000, { labeled: true, discipline: Discipline.STRUCT }); // 走行方向アンカー
+    autoFillWallBeamAxes(graph, selfWallSegments(graph));
+    return { graph, wallSegments: selfWallSegments(graph) };
+  }
+
+  const above = [{ x: 2000, y: 2055, role: 'standard' }];
+  const results = new Set();
+  for (const y2100First of [false, true]) {
+    const { graph, wallSegments } = buildGraph(y2100First);
+    const { created } = autoFillWoodColumns(graph, PROJECT, null, above, wallSegments);
+    const col3b = created.find(c => c.x === 2000);
+    results.add(col3b ? `${col3b.x},${col3b.y}` : 'none');
+  }
+  assert.equal(results.size, 1, `graph.wallsの追加順を入れ替えても選ばれる線は同じはず（実際: ${[...results]}）`);
+  assert.deepEqual([...results], ['2000,2000'], 'distはy=2100側が近い(45<55)がrunに入る線(y=2000)が優先して選ばれる');
+});
+
+test('【失敗系】autoFillWoodColumns（3b・5）: 走行方向にCLが無い（0.5mm一致なし）と立たず、CLも新設しない', () => {
+  const { graph, wallSegments } = makeWoodLineWithRunGraph();
+  const clCountBefore = graph.centerLines.length;
+  const above = [{ x: 2500, y: 2000, role: 'standard' }]; // x=2500は近傍の通り芯・梁芯から500mm以上離れている
+  const { created } = autoFillWoodColumns(graph, PROJECT, null, above, wallSegments);
+  assert.equal(created.length, 2, 'アンカー解決不能な3b候補は見送られる（QA裁定F2で寄せは廃止済み。0.5mm一致が無ければ即見送り）');
+  assert.equal(graph.centerLines.length, clCountBefore, 'CLは新設しない');
+});
+
+test('autoFillWoodColumns（3b・6）: 3aの交点と同スロットなら重複生成しない（created 0）', () => {
+  const { graph, wallSegments } = makeWoodLineWithRunGraph();
+  const above = [{ x: 1000, y: 2000, role: 'standard' }]; // 既に3aの交点そのもの
+  const { created } = autoFillWoodColumns(graph, PROJECT, null, above, wallSegments);
+  assert.equal(created.length, 2, '3aの2本のみ（3b分の追加は無い）');
+});
+
+test('autoFillWoodColumns（3b・7）: excludedColumnSlotsに記録された位置は復活しない', () => {
+  const { graph, wallSegments } = makeWoodLineWithRunGraph();
+  graph.addCenterLine(CenterLineType.VERTICAL, 2000, { labeled: true, discipline: Discipline.STRUCT });
+  const above = [{ x: 2000, y: 2000, role: 'standard' }];
+  const first = autoFillWoodColumns(graph, PROJECT, null, above, wallSegments);
+  const col3b = first.created.find(c => c.x === 2000 && c.y === 2000);
+  assert.ok(col3b, '前提: 3b柱が立っている');
+  graph.removeColumn(col3b.id); // 除外集合へ記録される（既存の3aテストと同じ規律）
+  const second = autoFillWoodColumns(graph, PROJECT, null, above, wallSegments);
+  assert.deepEqual(second.created, [], '除外スロットには生成しない');
+});
+
+test('autoFillWoodColumns（3b・8）: lockedにした3b柱は aboveColumns=[] でも撤去されない', () => {
+  const { graph, wallSegments } = makeWoodLineWithRunGraph();
+  graph.addCenterLine(CenterLineType.VERTICAL, 2000, { labeled: true, discipline: Discipline.STRUCT });
+  const above = [{ x: 2000, y: 2000, role: 'standard' }];
+  const first = autoFillWoodColumns(graph, PROJECT, null, above, wallSegments);
+  const col3b = first.created.find(c => c.x === 2000 && c.y === 2000);
+  col3b.setDimensionStatus('locked');
+  const { removed } = autoFillWoodColumns(graph, PROJECT, null, [], wallSegments); // 上階柱が消えても
+  assert.deepEqual(removed, []);
+  assert.ok(graph.columnMap.has(col3b.id), 'locked済みの3b柱は残る');
+});
+
+test('autoFillWoodColumns（3b・9）: 冪等（同じ入力で2回目はcreated 0・removed 0）', () => {
+  const { graph, wallSegments } = makeWoodLineWithRunGraph();
+  graph.addCenterLine(CenterLineType.VERTICAL, 2000, { labeled: true, discipline: Discipline.STRUCT });
+  const above = [{ x: 2000, y: 2000, role: 'standard' }];
+  const first = autoFillWoodColumns(graph, PROJECT, null, above, wallSegments);
+  assert.equal(first.created.length, 3, '3a(2)+3b(1)');
+  const second = autoFillWoodColumns(graph, PROJECT, null, above, wallSegments);
+  assert.deepEqual([second.created.length, second.removed.length], [0, 0]);
+});
+
+test('autoFillWoodColumns（3b・10）: aboveColumns未指定・null・[]はいずれも従来（3aのみ）と同結果', () => {
+  const omitted = autoFillWoodColumns(makeWoodLineWithRunGraph().graph, PROJECT, null);
+  assert.equal(omitted.created.length, 2, '未指定（既定[]）は3aのみ');
+  const { graph: g2, wallSegments: ws2 } = makeWoodLineWithRunGraph();
+  const nulled = autoFillWoodColumns(g2, PROJECT, null, null, ws2);
+  assert.equal(nulled.created.length, 2, 'null明示も3aのみ');
+  const { graph: g3, wallSegments: ws3 } = makeWoodLineWithRunGraph();
+  const empty = autoFillWoodColumns(g3, PROJECT, null, [], ws3);
+  assert.equal(empty.created.length, 2, '空配列明示も3aのみ');
+});
+
+test('【失敗系】autoFillWoodColumns（3b・11）: wallGateで外れる3b候補は立たない（3aは影響を受けない）', () => {
+  const { graph, wallSegments } = makeWoodLineWithRunGraph();
+  graph.addCenterLine(CenterLineType.VERTICAL, 2000, { labeled: true, discipline: Discipline.STRUCT });
+  const above = [{ x: 2000, y: 2000, role: 'standard' }];
+  const gate = {
+    intersectionInBuilding: (v, h) => !(v.effectiveValue === 2000 && h.effectiveValue === 2000),
+    spanInBuilding: () => true,
+  };
+  const { created } = autoFillWoodColumns(graph, PROJECT, gate, above, wallSegments);
+  assert.equal(created.length, 2, '3aの2本は通り、3b候補だけがゲートで弾かれる');
+});
+
+test('【対照】autoFillColumnsForStructure（3b・12）: 非在来（S造）ではaboveColumnsが無視される', () => {
+  const steel = makeGridGraph('S造');
+  addBackingWall(steel.graph, { axisValue: 2000, clStart: steel.x1, clEnd: steel.x2, isVertical: false });
+  addBackingWall(steel.graph, { axisValue: 1000, clStart: steel.y1, clEnd: steel.y2, isVertical: true });
+  const above = [{ x: 999999, y: 999999, role: 'standard' }]; // 通り芯交点方式では影響し得ない値
+  const withAbove = autoFillColumnsForStructure(steel.graph, PROJECT, null, above, []);
+  const steel2 = makeGridGraph('S造');
+  addBackingWall(steel2.graph, { axisValue: 2000, clStart: steel2.x1, clEnd: steel2.x2, isVertical: false });
+  addBackingWall(steel2.graph, { axisValue: 1000, clStart: steel2.y1, clEnd: steel2.y2, isVertical: true });
+  const withoutAbove = autoFillColumnsForStructure(steel2.graph, PROJECT);
+  assert.equal(withAbove.created.length, withoutAbove.created.length);
+  assert.deepEqual(withAbove.created.map(c => `${c.x},${c.y}`).sort(), withoutAbove.created.map(c => `${c.x},${c.y}`).sort());
+});
+
+// ---- 【統合】3bで下階に柱ができると、上階の梁の受梁扱いが外れて成が下がる（3d伝播との結合）----
+test('【統合・3b×3d】recomputeStructuralForGraph: 1階に3b柱ができると2階の梁は受梁扱いが外れ、成が下がる', async () => {
+  const project = new Project('proj-3b-3d', 'test');
+  const { graph: g1 } = project.addPlane(0, '1階', 'p1');    // 3bの対象階（下階）
+  const { graph: g2 } = project.addPlane(3000, '2階', 'p2'); // 梁成の対象階（上階）
+  project.activePlaneId = 'p2';
+  g1.structureOverride = TRADITIONAL_WOOD_STRUCTURE;
+  g2.structureOverride = TRADITIONAL_WOOD_STRUCTURE;
+
+  // 1階: 3640×1820の実壁の部屋（4隅が3a交点）＋走行方向アンカー用の通り芯 x=1820（壁は無い）。
+  const gx0 = g1.addCenterLine(CenterLineType.VERTICAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+  const gx1 = g1.addCenterLine(CenterLineType.VERTICAL, 3640, { labeled: true, discipline: Discipline.STRUCT });
+  const gy0 = g1.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+  const gy1 = g1.addCenterLine(CenterLineType.HORIZONTAL, 1820, { labeled: true, discipline: Discipline.STRUCT });
+  const room = g1.addRoom(new Set([`${gx0.id}:${gy0.id}:${gx1.id}:${gy1.id}`]), 'A');
+  generateRoomWallsFromOutline(g1, room);
+  g1.addCenterLine(CenterLineType.VERTICAL, 1820, { labeled: true, discipline: Discipline.STRUCT });
+
+  // 2階: y=0の横大梁1本（x:0..3640）＋その軸上の自階柱(x=1820)。1階に支持が無い間は単一区間・荷重1（受梁）。
+  const x0 = g2.addCenterLine(CenterLineType.VERTICAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+  const x1 = g2.addCenterLine(CenterLineType.VERTICAL, 3640, { labeled: true, discipline: Discipline.STRUCT });
+  const xm = g2.addCenterLine(CenterLineType.VERTICAL, 1820, { labeled: true, discipline: Discipline.STRUCT });
+  const y0 = g2.addCenterLine(CenterLineType.HORIZONTAL, 0,  { labeled: true, discipline: Discipline.STRUCT });
+  const beam = g2.addBeam(StructuralMaterialType.WOOD, 'WOOD-120x360', y0, false, x0, x1, { role: 'primary' });
+  g2.addColumn(StructuralMaterialType.WOOD, 'WOOD-120x120', xm, y0, {});
+
+  const peekMap = { p1: g1, p2: g2 };
+  const originalPeek = floorSwapManager.peek;
+  floorSwapManager.peek = async (plane) => peekMap[plane.id] ?? null;
+  try {
+    await recomputeStructuralForGraph(g2, project, TRADITIONAL_WOOD_STRUCTURE);
+    const before = beam.sectionDefId;
+
+    await recomputeStructuralForGraph(g1, project, TRADITIONAL_WOOD_STRUCTURE);
+    const col3b = g1.columns.find(c => c.role !== 'foundation' && Math.abs(c.x - 1820) < 1 && Math.abs(c.y) < 1);
+    assert.ok(col3b, '1階に3b柱(1820,0)が立つ');
+
+    await recomputeStructuralForGraph(g2, project, TRADITIONAL_WOOD_STRUCTURE);
+    const after = beam.sectionDefId;
+    assert.notEqual(after, before, '1階に支持ができ受梁扱いが外れて成が変わる');
+    const beforeHeight = findSectionEntry(before)?.height;
+    const afterHeight = findSectionEntry(after)?.height;
+    assert.ok(afterHeight < beforeHeight, `成が下がる: before=${beforeHeight} after=${afterHeight}`);
+  } finally {
+    floorSwapManager.peek = originalPeek;
+  }
+});
+
+test('structuralRecompute.js（3b・14）: 在来木造のときだけ1つ上の実体階をpeekし、非在来ではpeekしない', async () => {
+  async function run(structure) {
+    const project = new Project('proj-3b-peek', 'test');
+    const { graph: g1 } = project.addPlane(0, '1階', 'p1');
+    const { graph: g2 } = project.addPlane(3000, '2階', 'p2');
+    project.activePlaneId = 'p1';
+    g1.structureOverride = structure;
+    g2.structureOverride = structure;
+    const graphMap = { p1: g1, p2: g2 };
+    const calls = [];
+    const originalPeek = floorSwapManager.peek;
+    floorSwapManager.peek = async (plane) => { calls.push(plane.id); return graphMap[plane.id] ?? null; };
+    try {
+      await recomputeStructuralForGraph(g1, project, structure);
+    } finally {
+      floorSwapManager.peek = originalPeek;
+    }
+    return calls;
+  }
+  const woodCalls = await run(TRADITIONAL_WOOD_STRUCTURE);
+  assert.ok(woodCalls.includes('p2'), '在来木造は1つ上の実体階(p2)をpeekする（上階柱直下の柱＝ステップ3b）');
+  const steelCalls = await run('S造');
+  assert.deepEqual(steelCalls, [], '非在来は1つ上の実体階をpeekしない');
 });
 
 test('autoFillColumnsForStructure: 在来木造は壁交点方式、それ以外は従来の通り芯交点方式', () => {
@@ -878,8 +1150,8 @@ test('【不変条件】structuralRecompute.js: wallRunSegments を autoFillStru
   const src = fs.readFileSync(path.join(here, 'structuralRecompute.js'), 'utf8');
   assert.ok(/wallRunSegments\(targetGraph,\s*belowGraph,\s*structure\)/.test(src),
     'wallRunSegments(targetGraph, belowGraph, structure) の呼び出しが無い');
-  assert.ok(/autoFillStructuralGrid\(targetGraph, project, mainStructure, wallGate, wallSources, wallSegments\)/.test(src),
-    'autoFillStructuralGrid へ wallSegments を渡していない');
+  assert.ok(/autoFillStructuralGrid\(targetGraph, project, mainStructure, wallGate, wallSources, wallSegments, aboveColumns\)/.test(src),
+    'autoFillStructuralGrid へ wallSegments・aboveColumns を渡していない');
   assert.ok(/removedBeams\.length > 0/.test(src), 'removedBeams が changed の判定に含まれていない');
 });
 

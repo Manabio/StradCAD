@@ -10,7 +10,7 @@ import { ERR_STRUCT_MAIN_UNSPECIFIED } from '../error.js';
 import { autoFillColumnsForStructure, autoFillColumnAxisOffsets, autoFillColumnSizes, resolveLowestGraph, convertMembersToEffectiveMaterial, deleteClassificationOverflow, UNSPECIFIED_STRUCTURE } from './structuralAutoFill.js';
 import { conformWoodSections } from './woodAutoFill.js';
 import { rulesFor } from './structureRules.js';
-import { collectWallBeamSources, autoFillWallBeamAxes } from './wallBeamAxes.js';
+import { collectWallBeamSources, autoFillWallBeamAxes, peekBelowGraph, wallRunSegments } from './wallBeamAxes.js';
 import { structureHasMemberKind, MEMBER_KIND } from './structuralClassification.js';
 import { buildStructuralWallGate } from './wallGate.js';
 import { collectFloorGroups, assignNumbers, applyNumbers } from './memberNumbering.js';
@@ -64,20 +64,33 @@ export async function recomputeStructuralComposition(composition, subjectGraph, 
   if (belowGraph) {
     const belowGate = await buildStructuralWallGate(belowGraph.plane, project, subjectGraph);
     const belowLowestGraph = await resolveLowestGraph(project, belowGraph);
+    const belowStructure = belowGraph.structureOverride ?? project.structuralInfo.mainStructure;
+    // belowGraphから見た「1つ下の実体階」。壁由来の梁芯生成（selfAndBelow＝在来木造のみ）と、在来木造の
+    // 壁線上の通し梁（3c）が候補列挙に使う壁区間の両方で使い回す（追加peek 0回——非在来はrulesFor条件が
+    // 効かずpeekしない。従来collectWallBeamSourcesが内部で自前peekしていたのと同じ条件をここへ括り出した）。
+    const belowBelowGraph = rulesFor(belowStructure).wallBeamAxes === 'selfAndBelow'
+      ? await peekBelowGraph(belowGraph, project) : null;
     // 壁由来の梁芯CL（マージ済み・下階込み）。在来木造の壁交点柱はこのCLをアンカーにするため、柱より先に生成する
     //（structuralRecompute.js の主経路と同じ順序。自階だけの未マージ source で作ると extent の短いCLが永続化される）。
-    const belowWallSources = await collectWallBeamSources(belowGraph, project);
+    const belowWallSources = await collectWallBeamSources(belowGraph, project, belowBelowGraph);
+    // 在来木造の壁線上の通し梁（3c）・上階柱直下の柱（3b）が候補列挙に使う壁区間（マージ不要）。
+    // structuralRecompute.js の主経路（wallRunSegments）と同じ組み立て。
+    const belowWallSegments = wallRunSegments(belowGraph, belowBelowGraph, belowStructure);
+    // belowGraphから見た「1つ上の実体階」＝subjectGraph自身（メモリ上・peek不要）。ここを忘れると
+    // 直前のreflectが作った下階の3b柱が、この再計算で候補から漏れて撤去されてしまう。
+    const aboveColumnsForBelow = subjectGraph.columns;
     // belowMainStructure 引数は軒桁(eaves)専用。通常階の下階に eaves は無いため自階の実効値で十分。
     const belowBelowMainStructure = belowGraph.structureOverride ?? project.structuralInfo.mainStructure;
     if (mutate) belowBefore = serializeGraph(belowGraph);
-    const belowStructure = belowGraph.structureOverride ?? project.structuralInfo.mainStructure;
     runInAction(() => {
       convertMembersToEffectiveMaterial(belowGraph, project, belowBelowMainStructure);
       conformWoodSections(belowGraph, project); // 在来木造: 既存断面を主構造ルールへそろえる（structuralRecompute.js と同じ）
       autoFillWallBeamAxes(belowGraph, belowWallSources);
       // 主構造変更で柱が「×」化した場合は、下階の柱を生成せず既存の自動柱を削除する（「×は削除/○は生成」）。
       // 柱の配置源（通り芯交点／壁交点）は主構造ルールで振り分ける（autoFillColumnsForStructure）。
-      if (structureHasMemberKind(MEMBER_KIND.COLUMN, belowStructure)) autoFillColumnsForStructure(belowGraph, project, belowGate);
+      if (structureHasMemberKind(MEMBER_KIND.COLUMN, belowStructure)) {
+        autoFillColumnsForStructure(belowGraph, project, belowGate, aboveColumnsForBelow, belowWallSegments);
+      }
       deleteClassificationOverflow(belowGraph, project);
       autoFillColumnAxisOffsets(belowGraph, project, belowLowestGraph);
       if (rulesFor(belowStructure).columnSizing !== 'fixed') autoFillColumnSizes(belowGraph, project, belowGraph.plane);

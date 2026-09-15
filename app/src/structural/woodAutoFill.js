@@ -19,7 +19,7 @@ import { woodStudCodeFor } from '../finish/materials/backingClass.js';
 import { beamGridCells } from './framingCells.js';
 import {
   woodBeamDepthForSpans, woodBeamSectionForDepth, crossingBeamLoadCoords,
-  mergeWallIntervals, throughBeamRuns, propagateCarrierDepths,
+  mergeWallIntervals, throughBeamRuns, propagateCarrierDepths, pointsOnWallLines,
 } from './woodFraming.js';
 
 // 壁の端部の取り合い許容(mm)。壁の端は**取り合う壁の半厚（仕上げ込み）ぶん控えて生成される**
@@ -66,19 +66,44 @@ function findCenterAnchorCL(graph, centerLineType, coord) {
     Math.abs(cl.effectiveValue - coord) < CL_OVERLAP_TOL_MM) ?? null;
 }
 
+// 上階柱直下の柱（ステップ3b）のアンカー解決: 通り芯／梁芯（findBeamAnchorCL）→ 壁のある意匠中心線
+// （findCenterAnchorCL）。3aの柱アンカー解決（wallIntersectionPointsのループ内の2段）と同じ2段で、
+// CLは新設しない（どちらも無ければnull）。裁定（QA F2・2026-09-16）：3b限定の「±柱幅/2の寄せ」
+// （3段目）は実データ3文書（moku1/moku2/2026模試）で使用0回・テスト0件・アンカー述語の3つ目の
+// コピーだったため削除した——アンカーが無い候補はCLを新設せず素直に見送る。
+function resolveWoodColumnAnchorCL(graph, centerLineType, coord) {
+  return findBeamAnchorCL(graph, centerLineType, coord) ?? findCenterAnchorCL(graph, centerLineType, coord);
+}
+
 /**
- * 在来木造の柱を「自階の壁が交差する位置」に自動生成し、壁交点に無い自動生成の柱を撤去する。
- *  - 候補＝自階の下地オーナー壁（selfWallSegments）の交点・T字・コーナー。各座標を通り芯／梁芯CL（無ければ
+ * 在来木造の柱を「自階の壁が交差する位置」（ステップ3a）と「1つ上の実体階の柱の直下」（ステップ3b）に
+ * 自動生成し、候補に無い自動生成の柱を撤去する。
+ *  - 3a候補＝自階の下地オーナー壁（selfWallSegments）の交点・T字・コーナー。各座標を通り芯／梁芯CL（無ければ
  *    壁のある意匠中心線）へ解決できた点だけが対象（解決できない方向がある点は生成しない。壁の梁芯CLは
  *    呼び出し側が先に生成する）。
- *  - 除外集合（excludedColumnSlots）・建物フットプリントのゲート（wallGate）は通り芯交点の柱と同じ規律。
- *  - 壁が無い階は生成も撤去もしない（既存の柱を保全。裁定2026-09-14）。
+ *  - 3b候補＝aboveColumns（1つ上の実体階の柱、role!=='foundation'）のうち、自階の壁の下地帯の内側
+ *    （pointsOnWallLines）かつ、その壁線の3c（wallSegments。自階＋1つ下の階）と同一のthrough-run
+ *    （wallLineThroughRuns）の内側にあるもの。壁が無ければ立てない（帯に一致する壁が無い＝候補から外れる。
+ *    その位置の梁は受梁のまま）。アンカーは壁線自身の座標（法線方向）と上階柱の走行方向座標を
+ *    resolveWoodColumnAnchorCL（通り芯／梁芯→意匠中心線。3aと同じ2段。CLは新設しない）で解決し、
+ *    いずれか解決できなければその候補は見送る。3a・3bは同じslotsへ合流する（columnSlotKeyで自然に重複排除。撤去ループに
+ *    別枠を持たせない＝3b由来の柱だけ別ロジックで消えることがない）。
+ *  - 除外集合（excludedColumnSlots）・建物フットプリントのゲート（wallGate）は3a・3b共通（通り芯交点の
+ *    柱と同じ規律）。
+ *  - 壁が無い階は生成も撤去もしない（既存の柱を保全。裁定2026-09-14）。3bもこのガードの対象
+ *    （segments.length===0で早期returnするため、壁が無ければ3b候補も一切評価しない）。
  *  - 撤去＝候補に無い位置の柱のうち dimensionStatus==='auto' かつ通常柱（杭を除く）。手動固定は保持し、
  *    除外集合には記録しない（deleteClassificationOverflow と同じ「可逆」の規律。通り芯交点で生成された
  *    旧来の柱を壁交点方式へ置き換えるための移行でもある）。
+ * @param {object} graph
+ * @param {object} project
+ * @param {object|null} [wallGate]
+ * @param {object[]} [aboveColumns] - 1つ上の実体階の柱集合（省略・null・[]はいずれも3b候補なし＝従来と同結果）
+ * @param {Array<{isVertical:boolean, coord:number, lo:number, hi:number}>} [wallSegments] - 3cと同じ
+ *   壁区間（自階＋1つ下の階、マージ不要のプレーン配列）。3bのthrough-run判定に使う。
  * @returns {{created: object[], removed: string[]}}
  */
-export function autoFillWoodColumns(graph, project, wallGate = null) {
+export function autoFillWoodColumns(graph, project, wallGate = null, aboveColumns = [], wallSegments = []) {
   const rules = rulesFor(effectiveStructure(graph, project));
   const segments = selfWallSegments(graph);
   // 壁が1本も無い階（仕上げモード未着手で壁が未生成）は何もしない＝既存の柱を保全する
@@ -94,6 +119,44 @@ export function autoFillWoodColumns(graph, project, wallGate = null) {
     if (!verticalCL || !horizontalCL) continue;
     slots.set(columnSlotKey(verticalCL, horizontalCL), { verticalCL, horizontalCL });
   }
+
+  // 3b: 上階柱直下の柱。role:'foundation'（杭）は候補にしない——上階の杭の直下に柱を立てる意味は無い。
+  const lineRuns = wallLineThroughRuns(wallSegments);
+  const isInRun = (isVertical, coord, along) => {
+    const line = lineRuns.find(l => l.isVertical === isVertical && Math.abs(l.coord - coord) < CL_OVERLAP_TOL_MM);
+    return !!line?.runs.some(r => along >= r.lo - CL_OVERLAP_TOL_MM && along <= r.hi + CL_OVERLAP_TOL_MM);
+  };
+  const points = (aboveColumns ?? [])
+    .filter(c => c.role !== 'foundation')
+    .map(c => ({ x: c.x, y: c.y }));
+  // pointsOnWallLinesは1点が複数の壁線に一致する場合、すべての一致を並び順非依存で返す。ここで
+  // 決定的タイブレークで1点につき1件へ絞る：runに入る線を優先→|perp-coord|(dist)最小→coord昇順
+  // （QA F6・2026-09-16。旧実装はsegments/graph.wallsの走査順で最初に一致した線を採っており、
+  // runに入らない線が先に見つかると本来立つはずの候補が消える不具合だった）。
+  const bestByPoint = new Map();
+  for (const m of pointsOnWallLines(points, segments, WALL_JUNCTION_TOL_MM)) {
+    const key = `${m.x}:${m.y}`;
+    const candidate = { ...m, inRun: isInRun(m.isVertical, m.coord, m.along) };
+    const cur = bestByPoint.get(key);
+    if (!cur
+      || (candidate.inRun && !cur.inRun)
+      || (candidate.inRun === cur.inRun && candidate.dist < cur.dist)
+      || (candidate.inRun === cur.inRun && candidate.dist === cur.dist && candidate.coord < cur.coord)) {
+      bestByPoint.set(key, candidate);
+    }
+  }
+  for (const { isVertical, coord, along, inRun } of bestByPoint.values()) {
+    if (!inRun) continue; // runの外（自由端側）、または壁の無い位置は立てない
+    const axisType = isVertical ? CenterLineType.VERTICAL : CenterLineType.HORIZONTAL;
+    const crossType = isVertical ? CenterLineType.HORIZONTAL : CenterLineType.VERTICAL;
+    const axisCL = resolveWoodColumnAnchorCL(graph, axisType, coord);
+    const crossCL = resolveWoodColumnAnchorCL(graph, crossType, along);
+    if (!axisCL || !crossCL) continue; // アンカー解決不能な候補は見送る（CLは新設しない）
+    const verticalCL = isVertical ? axisCL : crossCL;
+    const horizontalCL = isVertical ? crossCL : axisCL;
+    slots.set(columnSlotKey(verticalCL, horizontalCL), { verticalCL, horizontalCL });
+  }
+
   const existing = new Set(graph.columns.map(c => columnSlotKey(c.verticalCL, c.horizontalCL)));
   const created = [];
   for (const [key, { verticalCL, horizontalCL }] of slots) {
@@ -121,6 +184,26 @@ function groupWallLines(wallSegments) {
     line.intervals.push({ lo: seg.lo, hi: seg.hi });
   }
   return lines;
+}
+
+/**
+ * wallSegments（自階＋1つ下の階の壁区間、マージ不要のプレーン配列）を線（isVertical, coord）ごとに
+ * まとめ、各線の「通しで架けられる区間」（run。壁が途中で切れていない連続区間。柱の位置では切らない）
+ * を求める（groupWallLines＋mergeWallIntervals＋wallIntersectionPoints＋throughBeamRunsの合成。
+ * 壁線上の通し梁＝ステップ3c-2（autoFillWoodWallBeams）と上階柱直下の柱＝ステップ3b
+ * （autoFillWoodColumns）が同じ「壁線の通し区間」を共有する——二重実装しない）。純関数、graph 非依存。
+ * @param {Array<{isVertical:boolean, coord:number, lo:number, hi:number}>} wallSegments
+ * @returns {Array<{isVertical:boolean, coord:number, runs: Array<{lo:number, hi:number}>}>}
+ */
+export function wallLineThroughRuns(wallSegments) {
+  const points = wallIntersectionPoints(wallSegments);
+  return groupWallLines(wallSegments).map(line => {
+    const merged = mergeWallIntervals(line.intervals, WALL_JUNCTION_TOL_MM);
+    const linePoints = points
+      .filter(p => Math.abs((line.isVertical ? p.x : p.y) - line.coord) < CL_OVERLAP_TOL_MM)
+      .map(p => (line.isVertical ? p.y : p.x));
+    return { isVertical: line.isVertical, coord: line.coord, runs: throughBeamRuns(linePoints, merged, WALL_JUNCTION_TOL_MM) };
+  });
 }
 
 /**
@@ -160,7 +243,6 @@ export function autoFillWoodWallBeams(graph, project, wallSegments, wallGate = n
   const rules = rulesFor(effectiveStructure(graph, project));
   if (!rules.framing || !(wallSegments?.length)) return { created: [], removed: [] };
 
-  const points = wallIntersectionPoints(wallSegments);
   // spanKey -> その位置に既にある梁（同材種）。候補スロットの占有物判定（role:'primary'昇格）に使う。
   const byKey = new Map();
   for (const b of graph.beams) {
@@ -175,19 +257,14 @@ export function autoFillWoodWallBeams(graph, project, wallSegments, wallGate = n
   const created = [];
   const removed = [];
 
-  for (const line of groupWallLines(wallSegments)) {
+  for (const line of wallLineThroughRuns(wallSegments)) {
     const axisType = line.isVertical ? CenterLineType.VERTICAL : CenterLineType.HORIZONTAL;
     const axisCL = findBeamAnchorCL(graph, axisType, line.coord) ?? findCenterAnchorCL(graph, axisType, line.coord);
     if (!axisCL) continue; // アンカー解決不能な線は生成しない（例外を投げない）
 
     const crossType = line.isVertical ? CenterLineType.HORIZONTAL : CenterLineType.VERTICAL;
-    const merged = mergeWallIntervals(line.intervals, WALL_JUNCTION_TOL_MM);
-    const linePoints = points
-      .filter(p => Math.abs((line.isVertical ? p.x : p.y) - line.coord) < CL_OVERLAP_TOL_MM)
-      .map(p => (line.isVertical ? p.y : p.x));
-    const runs = throughBeamRuns(linePoints, merged, WALL_JUNCTION_TOL_MM);
 
-    for (const run of runs) {
+    for (const run of line.runs) {
       const startCL = findBeamAnchorCL(graph, crossType, run.lo) ?? findCenterAnchorCL(graph, crossType, run.lo);
       const endCL   = findBeamAnchorCL(graph, crossType, run.hi) ?? findCenterAnchorCL(graph, crossType, run.hi);
       if (!startCL || !endCL) continue; // アンカー解決不能な端は生成しない（例外を投げない）

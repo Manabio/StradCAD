@@ -4,8 +4,11 @@
 // 経由の indexedDB アクセス）を要しないシナリオだけをここでは検証する（fixture方針は下記コメント参照）。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Project, CenterLineType, Discipline } from '../core.js';
+import { Project, CenterLineType, Discipline, StructuralMaterialType } from '../core.js';
 import { undoManager } from '../undoManager.js';
+import { floorSwapManager } from '../storage/FloorSwapManager.js';
+import { generateRoomWallsFromOutline } from '../finish/wallGeneration.js';
+import { TRADITIONAL_WOOD_STRUCTURE } from './structureRules.js';
 import {
   recomputeStructuralComposition, reflectStructuralAfterFinishExit,
 } from './structuralOrchestration.js';
@@ -66,6 +69,44 @@ test('recomputeStructuralComposition: onToast未指定でも例外を投げな�
   );
 });
 
+// ---- QA F4: 下階編集経路（主構造変更時等）は直前に立った下階の3b柱を撤去しない ----
+test('recomputeStructuralComposition: 下階編集経路は直前に立った下階の3b柱を撤去しない（QA F4）', async () => {
+  const project = new Project('proj-f4', 'test');
+  const { graph: g1 } = project.addPlane(0, '1階', 'p1');    // 下階（belowGraph。3b柱の対象階）
+  const { graph: g2 } = project.addPlane(3000, '2階', 'p2'); // 主題階（subjectGraph）
+  g1.structureOverride = TRADITIONAL_WOOD_STRUCTURE;
+  g2.structureOverride = TRADITIONAL_WOOD_STRUCTURE;
+
+  // 1階: 3640×1820の実壁の部屋（4隅が3a交点）＋走行方向アンカー用の通り芯 x=1820（壁は無い）。
+  const gx0 = g1.addCenterLine(CenterLineType.VERTICAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+  const gx1 = g1.addCenterLine(CenterLineType.VERTICAL, 3640, { labeled: true, discipline: Discipline.STRUCT });
+  const gy0 = g1.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+  const gy1 = g1.addCenterLine(CenterLineType.HORIZONTAL, 1820, { labeled: true, discipline: Discipline.STRUCT });
+  const room = g1.addRoom(new Set([`${gx0.id}:${gy0.id}:${gx1.id}:${gy1.id}`]), 'A');
+  generateRoomWallsFromOutline(g1, room);
+  const anchorX = g1.addCenterLine(CenterLineType.VERTICAL, 1820, { labeled: true, discipline: Discipline.STRUCT });
+
+  // 1階に「直前のreflectStructuralToOtherFloorsで立った」3b柱を模した既存の自動柱を置く（1820,0）。
+  const col3b = g1.addColumn(StructuralMaterialType.WOOD, 'WOOD-120x120', anchorX, gy0, {});
+  assert.equal(col3b.dimensionStatus, 'auto', '前提: 自動生成分（撤去対象になりうる）');
+
+  // 2階: 自階柱(1820,0)——1階の3b柱にとっての「1つ上の実体階の柱」役（aboveColumnsForBelow）。
+  const xm = g2.addCenterLine(CenterLineType.VERTICAL, 1820, { labeled: true, discipline: Discipline.STRUCT });
+  const y0 = g2.addCenterLine(CenterLineType.HORIZONTAL, 0,  { labeled: true, discipline: Discipline.STRUCT });
+  g2.addColumn(StructuralMaterialType.WOOD, 'WOOD-120x120', xm, y0, {});
+
+  const peekMap = { p1: g1, p2: g2 };
+  const originalPeek = floorSwapManager.peek;
+  floorSwapManager.peek = async (plane) => peekMap[plane.id] ?? null;
+  try {
+    const composition = { graphForCategory: () => g1 }; // belowGraph=g1（下階編集経路を通す）
+    await recomputeStructuralComposition(composition, g2, project, { mutate: () => {} });
+    assert.ok(g1.columnMap.has(col3b.id), '1階の3b柱は下階編集経路の再計算で撤去されない');
+  } finally {
+    floorSwapManager.peek = originalPeek;
+  }
+});
+
 // ---- reflectStructuralAfterFinishExit ----
 // runStructuralModeSetup（syncRoofPlane→collectRoofPlaneGroupsが屋根専用平面をfloorSwapManager.peekし、
 // indexedDBに到達する。fake-indexeddb等のIDBモックは本リポジトリの devDependencies に無く新規依存の追加は
@@ -86,4 +127,23 @@ test('reflectStructuralAfterFinishExit: 最上階（唯一の実体階）から�
   const { project, graph } = makeSinglePlaneProject();
 
   await assert.doesNotReject(reflectStructuralAfterFinishExit(graph.plane.id, false, project));
+});
+
+// ---- 不変条件・ソース走査: 下階編集経路（主構造変更時等）が、上階柱直下の柱（ステップ3b）に
+// 必要な aboveColumns（subjectGraph.columns。メモリ上・peek不要）と wallSegments（wallRunSegments）を
+// autoFillColumnsForStructure(belowGraph, ...) へ渡していること。これを渡し忘れると、直前の
+// reflectStructuralToOtherFloors が作った下階の3b柱が、この経路の再計算で候補から漏れて撤去される
+// （woodAutoFill.test.jsの同種テストと同じ手法。fs.readFileSync+正規表現）。----
+test('【不変条件・ソース走査】structuralOrchestration.js: 下階編集経路が autoFillColumnsForStructure に subjectGraph.columns と wallRunSegments(...) を渡している', async () => {
+  const fs = await import('node:fs');
+  const path = await import('node:path');
+  const url = await import('node:url');
+  const here = path.dirname(url.fileURLToPath(import.meta.url));
+  const src = fs.readFileSync(path.join(here, 'structuralOrchestration.js'), 'utf8');
+  assert.ok(/autoFillColumnsForStructure\(belowGraph, project, belowGate, aboveColumnsForBelow, belowWallSegments\)/.test(src),
+    'autoFillColumnsForStructure(belowGraph, ...) へ aboveColumnsForBelow・belowWallSegments を渡していない');
+  assert.ok(/aboveColumnsForBelow\s*=\s*subjectGraph\.columns/.test(src),
+    'aboveColumnsForBelow が subjectGraph.columns（メモリ上）から来ていない（誤ってpeekしている可能性）');
+  assert.ok(/belowWallSegments\s*=\s*wallRunSegments\(belowGraph, belowBelowGraph, belowStructure\)/.test(src),
+    'belowWallSegments が wallRunSegments(belowGraph, belowBelowGraph, belowStructure) から来ていない');
 });

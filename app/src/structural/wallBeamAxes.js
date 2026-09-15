@@ -23,6 +23,16 @@ function belowPlaneOf(plane, project) {
   return planes[idx - 1];
 }
 
+/** plane の「1つ上の実体階」を返す（project.planes、elevation昇順・採用フロアのみ）。
+ *  最上階・屋根専用平面（project.planesに含まれない）・該当なしは null。
+ *  在来木造の上階柱直下の柱（ステップ3b）が使う——belowPlaneOfと対称の私的ヘルパ。 */
+function abovePlaneOf(plane, project) {
+  const planes = project.planes;
+  const idx = planes.findIndex(p => p.id === plane.id);
+  if (idx < 0 || idx + 1 >= planes.length) return null;
+  return planes[idx + 1];
+}
+
 /**
  * plane の「1つ下の実体階」のgraphをpeekする（belowPlaneOf＋floorSwapManager.peek）。無ければnull。
  * collectWallBeamSources（selfAndBelow時の自前peek）と structuralRecompute.js（木造梁成の下階柱取得。
@@ -35,6 +45,22 @@ export async function peekBelowGraph(graph, project) {
   const belowPlane = belowPlaneOf(graph.plane, project);
   if (!belowPlane) return null;
   return await floorSwapManager.peek(belowPlane, project.structGraph);
+}
+
+/**
+ * plane の「1つ上の実体階」のgraphをpeekする（abovePlaneOf＋floorSwapManager.peek）。無ければnull。
+ * 在来木造の上階柱直下の柱（ステップ3b。woodAutoFill.js autoFillWoodColumns）が候補列挙に使う——
+ * 上階graphからは columns の x/y/role しか読まない（.claude/figure.md 規律。他階実体の座標だけを
+ * 自階へ還元して使う）。structuralRecompute.js が主構造ルール（columnPlacement:'wallIntersections'。
+ * 在来木造のみ）のときだけ呼ぶ（非在来はpeekしない）。
+ * @param {object} graph
+ * @param {object} project
+ * @returns {Promise<object|null>}
+ */
+export async function peekAboveGraph(graph, project) {
+  const abovePlane = abovePlaneOf(graph.plane, project);
+  if (!abovePlane) return null;
+  return await floorSwapManager.peek(abovePlane, project.structGraph);
 }
 
 /** wall が下地オーナー壁か（backingRange!=null。backingDepth===0の仕上げのみの薄壁は対象外）。 */
@@ -51,8 +77,10 @@ function wallBackingCode(sourceGraph, wall) {
  *  requireBeamAxisBacking=true なら、per-floor 下地材コードの下地材分類が「梁芯の生成源」
  *  （structureRules.js BACKING_RULES.beamAxisSource＝RC壁下地）の壁だけに絞る（条件(a)）。
  *  false なら下地材の種別は問わない（条件(b)(c)）。
- *  返り値は CL 参照を持たないプレーン配列 [{isVertical, coord, lo, hi}]（世界座標mm）——
- *  他階実体を主題階へ持ち込まない（.claude/figure.md 規律）ため、下階peek分もここで座標へ還元する。 */
+ *  返り値は CL 参照を持たないプレーン配列 [{isVertical, coord, lo, hi, halfDepth}]（世界座標mm）——
+ *  他階実体を主題階へ持ち込まない（.claude/figure.md 規律）ため、下階peek分もここで座標へ還元する。
+ *  halfDepth＝下地帯の半幅（coord±halfDepthが下地帯）。在来木造の上階柱直下の柱（ステップ3b）が
+ *  「壁の下地帯の内側」判定に使う（他の消費先はこのフィールドを見ない＝加算のみで挙動不変）。 */
 function wallBeamSourcesFromGraph(sourceGraph, requireBeamAxisBacking) {
   const out = [];
   for (const wall of sourceGraph.walls) {
@@ -65,13 +93,14 @@ function wallBeamSourcesFromGraph(sourceGraph, requireBeamAxisBacking) {
       coord,
       lo: Math.min(wall.coord1, wall.coord2),
       hi: Math.max(wall.coord1, wall.coord2),
+      halfDepth: (wall.backingRange.hi - wall.backingRange.lo) / 2,
     });
   }
   return out;
 }
 
-/** 自階の下地オーナー壁の区間（プレーン配列 [{isVertical, coord, lo, hi}]。下地材の種別は問わず、下階は含まない）。
- *  在来木造の壁交点柱（woodAutoFill.js）が候補列挙に使う。 */
+/** 自階の下地オーナー壁の区間（プレーン配列 [{isVertical, coord, lo, hi, halfDepth}]。下地材の種別は
+ *  問わず、下階は含まない）。在来木造の壁交点柱・上階柱直下の柱（woodAutoFill.js）が候補列挙に使う。 */
 export function selfWallSegments(graph) {
   return wallBeamSourcesFromGraph(graph, false);
 }
