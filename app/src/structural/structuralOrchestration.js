@@ -154,7 +154,7 @@ export async function runStructuralModeSetup(targetGraph, project, { onToast } =
 
 // アクティブな graph を再計算し、変化があれば undo に積む（通常の auto-save に乗る）。
 // pushUndo=false は階追加フロー用（withFloorAddUndo が全階分を1エントリで巻き戻すため個別には積まない）。
-async function recomputeActiveStructural(project, pushUndo = true) {
+export async function recomputeActiveStructural(project, pushUndo = true) {
   const g = project.activeGraph;
   const mainStructure = g.structureOverride ?? project.structuralInfo.mainStructure;
   const { changed, before, after } = await recomputeStructuralForGraph(g, project, mainStructure);

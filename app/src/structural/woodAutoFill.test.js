@@ -264,7 +264,13 @@ test('【失敗系】conformWoodBacking: 在来木造以外（S造・2×4）は�
   }
 });
 
-test('不変条件: conformWoodBacking の呼び出し元は仕上げ突入境界だけ（構造再計算・反映経路は壁を再生成できないため下地材を触らない）', async () => {
+test('不変条件: conformWoodBacking の呼び出し元は壁を直後に再生成する経路だけ（仕上げ突入境界／壁の再生成をFinishModeStateから独立させる計画のステップ4 wallRefresh.js）', async () => {
+  // ステップ4以前は「構造再計算・反映経路は壁を再生成できないため下地材だけ変えると壁厚と
+  // ズレる」という理由で仕上げ突入境界（finish/finishBoundary.js）だけに絞っていたが、
+  // wallRefresh.js は conformWoodBacking の直後に鍵比較→不一致ならその場で regenerateWalls
+  // まで行う（壁を古いまま残さない）ため、この経路が増えても「下地材だけ変えて壁が古いまま
+  // 残る」事故にはならない。呼び出し元を「壁を直後に再生成する経路」に限定する不変条件として
+  // 引き続き固定する。
   const fs = await import('node:fs');
   const path = await import('node:path');
   const url = await import('node:url');
@@ -281,5 +287,5 @@ test('不変条件: conformWoodBacking の呼び出し元は仕上げ突入境�
     }
   };
   walk(src);
-  assert.deepEqual(callers.sort(), ['finish/finishBoundary.js']);
+  assert.deepEqual(callers.sort(), ['finish/finishBoundary.js', 'wallRefresh.js']);
 });

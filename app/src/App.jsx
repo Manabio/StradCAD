@@ -52,6 +52,7 @@ import { buildExteriorSide } from './structural/wallGate.js';
 import { TRADITIONAL_WOOD_STRUCTURE } from './structural/structureRules.js';
 import { buildStructuralFigureSlots, designationForSlot, firstSlotKeyForPlane } from './structural/structuralFigureSlots.js';
 import { recomputeStructuralComposition, runStructuralModeSetup, reflectStructuralToOtherFloors, reflectStructuralAfterFloorAdd } from './structural/structuralOrchestration.js';
+import { refreshWallsAllFloors } from './wallRefresh.js';
 import { figureBindingManager } from './figure/FigureBindingManager.js';
 import { floorSwapManager } from './storage/FloorSwapManager.js';
 import { saveFloor, loadFloor } from './storage/db.js';
@@ -485,7 +486,14 @@ const App = observer(() => {
     await figureBindingManager.deactivate();
     setStructComposition(null);
     if (closeInfoDialog) setShowStructuralInfoDialog(false);
-    if (reflectOtherFloors) await reflectStructuralToOtherFloors(project);
+    if (reflectOtherFloors) {
+      await reflectStructuralToOtherFloors(project);
+      // 主構造・階別構造・下地材コードを（仕上げモードを開かずに）変えた場合に備え、鍵不一致の
+      // 全階の壁を作り直す（壁の再生成をFinishModeStateから独立させる計画のステップ4）。
+      // 鍵一致の階は peek 以外何もしないため、通常の脱出（何も変えていない）では無害。
+      // 階切替（reflectOtherFloors:false）には足さない（裁定）。
+      await refreshWallsAllFloors(project, { pushUndo: true });
+    }
   }
 
   // ---- モード境界レジストリ ----
