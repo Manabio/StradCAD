@@ -186,12 +186,10 @@ function isDelegatedEdge(outsideRoom, p, graph, under2aRoomIds, stairOpenings, o
 }
 
 // room の外周エッジのうち、委譲されなかった（＝この部屋が壁を持つ）エッジを列挙する唯一の経路。
-// generateStairUnderWalls（壁生成）と stairUnderClaimedEdges（claim専用の軽量経路）の双方が
-// これを呼ぶことで、レーン分類（classifyUTurnEdge）・委譲判定（isDelegatedEdge）の述語を
-// 一本化する（QA指摘: 両者が別々に判定すると、stair を受け取らない経路でレーン分類が
-// 行われず述語がずれる——U字系のレーン間エッジが誤って委譲扱いになりかねない）。
-// opts.cellToRoom を渡すと buildCellToRoom(graph) の再計算を省略する（QA指摘: claim経路・
-// 生成経路の双方から呼ばれる2a部屋1件につき2回走っていた。未指定時は従来どおり内部で作る）。
+// generateStairUnderWalls（壁生成。claimedEdges もこの戻り値経由で一本化——QA U1で専用の
+// 軽量経路 stairUnderClaimedEdges を廃止した）だけがこれを呼ぶ。
+// opts.cellToRoom を渡すと buildCellToRoom(graph) の再計算を省略する（呼び出し側
+// finish/wallRegeneration.js が2a部屋群で1度だけ作ったものを共有する。未指定時は内部で作る）。
 // @returns {{ p:object, kind:'lane'|'landing'|'normal', outsideRoom:import('@core').Room|null }[]}
 function stairUnderOwnParams(graph, stair, room, opts = {}) {
   const { stairOpenings = [], under2aRoomIds = new Set(), cellToRoom: cellToRoomOpt } = opts;
@@ -421,32 +419,6 @@ function computeClaimedEdges(graph, unitParams) {
 // ----------------------------------------------------------------
 
 /**
- * room の外周エッジ（破れ線・踊り場境界等の除外分も含む）を {isVertical,value,lo,hi} で列挙する
- * （壁の生成有無に関わらない claim 専用の軽量経路）。generateStairUnderWalls 内の claim 計算と
- * 同じロジック（computeClaimedEdges）を共有する。部屋が既に generatedWallIds を持つ再脱出時
- * （壁は再生成しない）でも claim だけは毎回行う必要があるため、壁生成から独立して呼べるように
- * 分離している（finish/finishBoundary.js ステップ2a）。
- *
- * 委譲エッジ（isDelegatedEdge。相手がユーザー指定の通常部屋・吹抜けVOID）は claim しない
- * ——ステップ2の隣室壁生成に委譲するため、ここで claim すると隣室壁が抑止され壁ゼロになる。
- * generateStairUnderWalls と同じ stairUnderOwnParams を共有するため、レーン分類・
- * footprint境界判定も含め判定は完全に一致する。stair は位置引数で必須にしている——
- * opts の任意プロパティにすると渡し忘れが静かに失敗し（レーン分類・footprint判定が
- * 行われず生成側と判定がずれる）、QAで指摘された経緯があるため。
- *
- * @param {object} graph
- * @param {import('@core').Stair} stair
- * @param {import('@core').Room} room
- * @param {{stairOpenings?: {isVertical:boolean,value:number,lo:number,hi:number}[],
- *   under2aRoomIds?: Set<string>, cellToRoom?: Map<string, import('@core').Room>}} [opts]
- * @returns {{isVertical:boolean,value:number,lo:number,hi:number}[]}
- */
-export function stairUnderClaimedEdges(graph, stair, room, opts = {}) {
-  const own = stairUnderOwnParams(graph, stair, room, opts);
-  return computeClaimedEdges(graph, own.map(o => o.p));
-}
-
-/**
  * 階段下部屋 room の外周壁（偏芯壁＋外側仕上げ薄壁）を生成する。
  *
  * @param {object} graph
@@ -459,16 +431,18 @@ export function stairUnderClaimedEdges(graph, stair, room, opts = {}) {
  *   splitCLIds は現在未使用（旧ルール4aの名残。呼び出し側の互換性のため受理はするが無視する。
  *   破れ線・踊り場境界は下記のとおり 'normal' と同じルール1・2の経路に乗るため不要になった）。
  *   stairOpenings・under2aRoomIds は isDelegatedEdge（同一CL上に壁1つだけ）の判定に使う。
- *   cellToRoom は省略可（buildCellToRoom(graph) を毎回作らず呼び出し側で1度だけ作って
- *   stairUnderClaimedEdges と共有する場合に渡す。QA指摘）。
+ *   cellToRoom は省略可（buildCellToRoom(graph) を毎回作らず呼び出し側（finish/wallRegeneration.js）
+ *   が2a部屋群で1度だけ作ったものを共有する場合に渡す）。
  * @returns {{ walls: import('@core').Wall[], claimedEdges: {isVertical:boolean,value:number,lo:number,hi:number}[] }}
+ *   claimedEdges は walls が空（ルール3で全区間スキップ等）でも own（委譲されなかったエッジ）
+ *   から独立に計算される——呼び出し側は walls.length===0 でも claimedEdges は必ず反映すること
+ *   （QA U1。省略すると隣室壁・外壁がこの部屋の外周に誤って壁を生成してしまう）。
  */
 export function generateStairUnderWalls(graph, stair, room, dims, opts = {}) {
   const { dimsOf = () => ({}), stairOpenings = [], under2aRoomIds = new Set(), cellToRoom } = opts;
   const base   = dims?.wallBase   ?? DEFAULT_WALL_BASE;
   const finish = dims?.wallFinish ?? DEFAULT_WALL_FINISH;
 
-  // stairUnderClaimedEdges と共有する唯一の判定経路（QA指摘: 述語の一本化）。
   const own = stairUnderOwnParams(graph, stair, room, { stairOpenings, under2aRoomIds, cellToRoom });
   if (own.length === 0) return { walls: [], claimedEdges: [] };
 
