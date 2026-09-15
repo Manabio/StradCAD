@@ -1,7 +1,7 @@
 // memberCatalog.js（WP-B1: 踊り場受け梁 role:'landing' の受け入れ）の単体テスト。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { memberSymbol, MEMBER_GROUPS, FIELD_DEFS_BY_CATEGORY, SIGNATURE_FIELDS_BY_MAP, MEMBER_CATEGORY } from './memberCatalog.js';
+import { memberSymbol, MEMBER_GROUPS, NUMBERED_MAPS, FIELD_DEFS_BY_CATEGORY, SIGNATURE_FIELDS_BY_MAP, MEMBER_CATEGORY } from './memberCatalog.js';
 import { makeBeam } from './memberTestFixtures.js';
 
 test('【WP-B1】memberSymbol: beamMapのrole:landingは記号LGを返す', () => {
@@ -48,4 +48,9 @@ test('【WP-B1】FIELD_DEFS_BY_CATEGORY[ROD]: levelOffsetのラベルは「天�
 
 test('【WP-B1】SIGNATURE_FIELDS_BY_MAP.beamMapはlevelOffsetを含まない（材寸署名は不変）', () => {
   assert.ok(!SIGNATURE_FIELDS_BY_MAP.beamMap.includes('levelOffset'));
+});
+
+test('【伏図の柱記号】columnMapSelf（自階柱・描画専用の参照レイヤ）はNUMBERED_MAPS/MEMBER_GROUPSに現れない', () => {
+  assert.ok(!NUMBERED_MAPS.includes('columnMapSelf'), 'NUMBERED_MAPSは採番対象のmapNameだけを持つ');
+  assert.ok(!MEMBER_GROUPS.some(g => g.mapName === 'columnMapSelf'), 'MEMBER_GROUPSは構造リスト（編集系）のグループだけを持つ');
 });

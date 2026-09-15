@@ -1,8 +1,7 @@
 import { observer } from 'mobx-react-lite';
-import { Rect, Circle, Path } from 'react-konva';
+import { Rect, Circle, Path, Group, Line } from 'react-konva';
 import { findSectionEntry, SectionShape } from '../structural/sectionCatalog.js';
-
-const COLUMN_SIZE_MM = 120; // sectionDefId が断面マスターに無い場合の固定サイズ矩形の辺長
+import { COLUMN_FALLBACK_SIZE_MM, columnSectionSize, columnCrossPointsLocal } from '../structural/framingDrawing.js';
 
 // H形鋼の断面プロファイル（フランジ2本+ウェブ1本）を独立した矩形3つのSVGパスとして表す。
 function hSectionPathD(width, height, flangeT, webT) {
@@ -31,8 +30,8 @@ export const ColumnSymbol = observer(function ColumnSymbol({ column, color, outl
     return (
       <Rect
         x={column.x} y={column.y}
-        width={COLUMN_SIZE_MM} height={COLUMN_SIZE_MM}
-        offsetX={COLUMN_SIZE_MM / 2} offsetY={COLUMN_SIZE_MM / 2}
+        width={COLUMN_FALLBACK_SIZE_MM} height={COLUMN_FALLBACK_SIZE_MM}
+        offsetX={COLUMN_FALLBACK_SIZE_MM / 2} offsetY={COLUMN_FALLBACK_SIZE_MM / 2}
         rotation={column.rotation}
         fill={solidFill} stroke={solidStroke} strokeWidth={outlineStrokeWidth}
         listening={false}
@@ -87,5 +86,21 @@ export const ColumnSymbol = observer(function ColumnSymbol({ column, color, outl
       fill={solidFill} stroke={solidStroke} strokeWidth={outlineStrokeWidth}
       listening={false}
     />
+  );
+});
+
+// 下階柱の伏図記号「×」（断面□に乗せる対角線2本。在来木造の framingColumnSymbol:'crossBox' 専用）。
+// 断面外形は columnSectionSize（カタログ未登録は120角フォールバック）、対角線座標は columnCrossPointsLocal
+// （structural/framingDrawing.js。純関数側に幾何を集約し、ここは Konva 要素へ写すだけ）。
+// observer にする理由は ColumnSymbol と同じ（通り芯スナップ移動中の column.x/y は computed。
+// 座標の読み取りは子で起こす）。
+export const ColumnCrossMark = observer(function ColumnCrossMark({ column, color, strokeWidth }) {
+  const { width, height } = columnSectionSize(column);
+  return (
+    <Group x={column.x} y={column.y} rotation={column.rotation}>
+      {columnCrossPointsLocal(width, height).map((points, i) => (
+        <Line key={i} points={points} stroke={color} strokeWidth={strokeWidth} listening={false} />
+      ))}
+    </Group>
   );
 });

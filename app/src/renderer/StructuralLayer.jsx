@@ -4,11 +4,14 @@ import { StructuralMaterialType, LINE_WEIGHT_MM } from '../core.js';
 import { cellBoundsFromKey } from '../finish/gridCells.js';
 import { findSectionEntry, diaphragmProjection } from '../structural/sectionCatalog.js';
 import { rulesFor, effectiveStructure } from '../structural/structureRules.js';
+import {
+  framingColumnGroups, framingColor, framingColorOverride, columnSectionSize,
+} from '../structural/framingDrawing.js';
 import { planColumnWraps } from './wallDrawPlan.js';
 import { columnWrapRenderProps, columnWrapStrokeWidth } from '../structural/columnWrapLineJoin.js';
 import { graphComputed } from './graphDerived.js';
 import { LodLevel, resolveStrokeWidth } from '../viewport.js';
-import { ColumnSymbol } from './ColumnSymbol.jsx';
+import { ColumnSymbol, ColumnCrossMark } from './ColumnSymbol.jsx';
 import { groupPropsForStyle, dashForStyle } from '../figure/figureStyle.js';
 
 export const COLOR_BY_MATERIAL = {
@@ -21,9 +24,9 @@ export const COLOR_BY_MATERIAL = {
 // 壁の既定色 core/shapeBase.js の color '#000000' と同値）。
 const PLAN_WALL_LINE_COLOR = '#000000';
 
-// 柱は構造図では全LODで実寸表示する（梁・耐力壁の仮サイズLODとは非対称）。COLUMN_SIZE_MM は
-// sectionDefId がカタログに無い場合のフォールバック辺長。BEAM_WIDTH_MM は梁の仮表示幅。
-const COLUMN_SIZE_MM = 120; // 柱のフォールバック（カタログ未登録時）の辺長
+// 柱は構造図では全LODで実寸表示する（梁・耐力壁の仮サイズLODとは非対称）。柱のフォールバック辺長
+// （sectionDefId がカタログに無い場合）は structural/framingDrawing.js の COLUMN_FALLBACK_SIZE_MM を
+// 単一の実装として使う（二重管理しない）。BEAM_WIDTH_MM は梁の仮表示幅。
 const BEAM_WIDTH_MM  = 30;  // 梁の簡易表示の幅
 
 // 剛接合（鉄骨）の継手記号。位置は構造芯から RIGID_JOINT_OFFSET_MM（core側の定数）内側で、
@@ -52,11 +55,12 @@ function jointMarkLines(keyBase, beam, along, half, color, strokeWidth, gap) {
 }
 
 // 柱の実描画サイズ(mm)。LODに依らず常にsectionDefIdのカタログ実寸（矩形等で幅・高さが異なる場合は
-// 大きい方、カタログ未登録はCOLUMN_SIZE_MM）。StructuralLayer.jsx・MemberTagLayer.jsxの両方が
-// これだけを参照する単一の実装。
+// 大きい方、カタログ未登録はCOLUMN_FALLBACK_SIZE_MM）。StructuralLayer.jsx・MemberTagLayer.jsxの両方が
+// これだけを参照する単一の実装。断面寸法の解決自体は framingDrawing.js の columnSectionSize と共用する
+// （柱記号の対角線が使う辺長とタグのマージンが同じ辺長を見るようにするため。二重実装しない）。
 export function columnRenderSize(column) {
-  const sec = findSectionEntry(column.sectionDefId);
-  return Math.max(sec?.width ?? COLUMN_SIZE_MM, sec?.height ?? COLUMN_SIZE_MM);
+  const { width, height } = columnSectionSize(column);
+  return Math.max(width, height);
 }
 
 // 梁の実描画幅(mm)。beamWidth（基礎梁の算定値）が設定済みならLOD・SCHEMATICに関わらず常にそれを使う
@@ -169,7 +173,15 @@ function columnDiaphragmSize(column) {
 // finishWrap=true（平面モード）のとき、柱断面を太線で描き（ユーザー指示2026-08「平面では、柱断面を
 // 太線」）、仕上げ包み（柱壁）の下地材・仕上げ材を細線で重ねる——包み厚の算出は展開図の柱型と同じ
 // finish/columnWrap.js（単一の情報源）。構造モードには渡さない：伏図は躯体の図なので仕上げは載せない。
-export const ColumnsLayer = observer(({ graph, viewport, diaphragm = false, finishWrap = false }) => {
+// framingSymbol（伏図専用。null|'section'|'box'|'boxCross'）は柱記号の選択のみに使う——'boxCross' の
+// ときだけ対角線2本（ColumnCrossMark）を断面の後に重ねる。輪郭線を強制するかどうかは呼び出し側
+// （StructuralLayer.jsx が structural/framingDrawing.js の framingColumnGroups から得た値）が
+// outline props で明示する（既定false＝非在来・平面図経路は完全不変。ここで framingSymbol の有無から
+// 輪郭を判断すると、非在来の下階柱にも 'section' という非null値が渡るだけで輪郭が強制される回帰になる
+// ——実機QA指摘2026-09-15）。colorOverride は伏図の全黒指定（framingColor 'mono'）用。
+export const ColumnsLayer = observer(({
+  graph, viewport, diaphragm = false, finishWrap = false, framingSymbol = null, colorOverride = null, outline: outlineProp = false,
+}) => {
   if (!graph) return null;
   const scale   = Math.min(viewport.scaleX, viewport.scaleY);
   // 平面では柱断面を太線の輪郭で描く（塗りではなく断面線で示す）。構造モードは従来どおり。
@@ -177,7 +189,7 @@ export const ColumnsLayer = observer(({ graph, viewport, diaphragm = false, fini
   // （ユーザー指示2026-09-14。材種色の断面に黒の包み線が重なって二重に見えていた）、輪郭は極太線にする
   // （壁厚＝柱寸法のとき柱の輪郭が壁の下地帯の線と重なり、壁と同じ太線では見分けられないため）。
   const drawing = rulesFor(effectiveStructure(graph)).drawing;
-  const outline = finishWrap || viewport.lodLevel === LodLevel.STANDARD;
+  const outline = finishWrap || viewport.lodLevel === LodLevel.STANDARD || outlineProp;
   const outlineStrokeWidth = resolveStrokeWidth(
     finishWrap ? LINE_WEIGHT_MM[drawing.planColumnLineWeight] : LINE_WEIGHT_MM.medium, scale,
     viewport.lineWeightsPx, viewport.pxPerMmX);
@@ -198,9 +210,9 @@ export const ColumnsLayer = observer(({ graph, viewport, diaphragm = false, fini
       () => new Map(planColumnWraps(graph).map(w => [w.column.id, w.wrapped])))
     : null;
   return graph.columns.flatMap(column => {
-    const color = finishWrap && drawing.planColumnColor === 'wall'
+    const color = colorOverride ?? (finishWrap && drawing.planColumnColor === 'wall'
       ? PLAN_WALL_LINE_COLOR
-      : COLOR_BY_MATERIAL[column.materialType];
+      : COLOR_BY_MATERIAL[column.materialType]);
     const els = [];
     // 仕上げ包み（柱壁）。軸並行なので rotation は持たない——包みは向き合う壁の向きで決まる。
     // 実線同士のL字の角の外角を閉じる（structural/columnWrapLineJoin.js。第4弾）。柱単位で解決
@@ -241,6 +253,17 @@ export const ColumnsLayer = observer(({ graph, viewport, diaphragm = false, fini
         outlineStrokeWidth={outlineStrokeWidth}
       />
     );
+    // 伏図の下階柱記号（×）。断面□の上に対角線2本を重ねる（在来木造 framingColumnSymbol:'boxCross' のみ）。
+    if (framingSymbol === 'boxCross') {
+      els.push(
+        <ColumnCrossMark
+          key={`cross:${column.id}`}
+          column={column}
+          color={color}
+          strokeWidth={outlineStrokeWidth}
+        />
+      );
+    }
     return els;
   });
 });
@@ -272,24 +295,52 @@ export const StructuralLayer = observer(({ composition, viewport, project }) => 
   // 梁は「その伏図に表示される柱」（構造モードでは1つ下の階の柱）の断面手前で止める。
   const displayedColumns = column?.graph?.columns ?? [];
 
+  // 伏図の部材線色・柱記号は主題階（自階＝床下材レイヤの供給階）の主構造ルールで決める
+  // （structural/structureRules.js drawing.framingPlanColor / framingColumnSymbol）。在来木造だけ
+  // 全黒（colorOf が恒等写像でなくなる）・下階柱に×／自階柱に□が乗る。他の主構造は colorOf が
+  // COLOR_BY_MATERIAL の恒等写像のまま＝完全不変。
+  const figureGraph = composition.graphForCategory('beamMap'); // 主題階（自階）
+  const figureRules = rulesFor(effectiveStructure(figureGraph, project));
+  const colorOf = m => framingColor(figureRules.drawing, COLOR_BY_MATERIAL[m]);
+
   // 木造基礎伏図の土台・ベース帯（問題.md）。基礎梁(role:'foundation')がある＝基礎伏図、かつ実効主構造が木造のときのみ。
   // ベースの有無は基礎種別（べた基礎はベースなし＝土台のみ）。実効主構造は基礎伏図グラフ（=自階）の上書きを優先。
   // 帯の有無・ベース（独立フーチング）の有無は主構造ルール（structureRules.js foundation.drawsBands / hasBase）。
   const foundationBeams = (beam?.graph?.beams ?? []).filter(b => b.role === 'foundation');
-  const effStructure = beam?.graph?.structureOverride ?? project?.structuralInfo?.mainStructure;
-  const foundationRules = rulesFor(effStructure).foundation;
+  const foundationRules = figureRules.foundation;
   const woodFoundation = foundationBeams.length > 0 && foundationRules.drawsBands;
   const drawBase = woodFoundation && foundationRules.hasBase(project?.structuralInfo?.foundationType);
 
+  // 柱グループ（z-order: 配列順＝下階柱→自階柱）は structural/framingDrawing.js の
+  // framingColumnGroups が「どのカテゴリを・どの記号で・輪郭を強制するか」を丸ごと決める
+  // ——レンダラはこの配列を resolveCategory して map するだけ（非在来は要素1個＝columnMap のみ、
+  // 輪郭強制なし＝平面図と同じ判断のまま。ここに判断を持たせない）。diaphragm は「配列の先頭」
+  // という位置ではなく category === 'columnMap'（下階柱）で判定する——自階柱グループの並び順が
+  // 変わっても意味を保つため（QA指摘F7）。自階柱にダイヤフラムは無い（従来どおり）。
+  const columnColorOverride = framingColorOverride(figureRules.drawing);
+  const columnGroups = framingColumnGroups(figureRules.drawing);
+
   return (
     <>
-      <Group {...groupPropsForStyle(column?.spec.style)}>
-        <ColumnsLayer graph={column?.graph} viewport={viewport} diaphragm={lod === LodLevel.DETAIL} />
-      </Group>
+      {columnGroups.map(g => {
+        const resolved = composition.resolveCategory(g.category);
+        return (
+          <Group key={g.category} {...groupPropsForStyle(resolved?.spec.style)}>
+            <ColumnsLayer
+              graph={resolved?.graph}
+              viewport={viewport}
+              diaphragm={g.category === 'columnMap' && lod === LodLevel.DETAIL}
+              framingSymbol={g.symbol}
+              colorOverride={columnColorOverride}
+              outline={g.outline}
+            />
+          </Group>
+        );
+      })}
       {woodFoundation && (
         <Group {...groupPropsForStyle(footing?.spec.style)}>
           {woodFoundationBands(foundationBeams, drawBase,
-            COLOR_BY_MATERIAL[StructuralMaterialType.WOOD], COLOR_BY_MATERIAL[StructuralMaterialType.RC], thin, foundationRules)}
+            colorOf(StructuralMaterialType.WOOD), colorOf(StructuralMaterialType.RC), thin, foundationRules)}
         </Group>
       )}
       <Group {...groupPropsForStyle(footing?.spec.style)}>
@@ -298,7 +349,7 @@ export const StructuralLayer = observer(({ composition, viewport, project }) => 
           // 柱脚(ColumnBase)は丸柱の直下でも常に矩形（型枠の都合上、柱脚自体を丸で作ることは無いため）。
           // 独立基礎(IndependentFooting)と区別するため点線（'baseType' in footing で判定）。固有点線が無い場合のみ style 破線。
           const isColumnBase = 'baseType' in f;
-          const color = COLOR_BY_MATERIAL[f.materialType];
+          const color = colorOf(f.materialType);
           const common = {
             fill: color,
             stroke: color,
@@ -323,7 +374,7 @@ export const StructuralLayer = observer(({ composition, viewport, project }) => 
       </Group>
       <Group {...groupPropsForStyle(beam?.spec.style)}>
         {(beam?.graph?.beams ?? []).flatMap(b => {
-          const color = COLOR_BY_MATERIAL[b.materialType];
+          const color = colorOf(b.materialType);
           // 詳細描画では梁を柱断面ではなくダイヤフラム端まで（鋼管柱のみ e 分だけ手前で止まる）。
           const { coord1, coord2 } = b.spanForColumns(displayedColumns, { diaphragm: lod === LodLevel.DETAIL });
           const p1 = b.isVertical ? { x: b.axisValue, y: coord1 } : { x: coord1, y: b.axisValue };
@@ -369,8 +420,8 @@ export const StructuralLayer = observer(({ composition, viewport, project }) => 
               key={`${s.id}:${key}`}
               x={bd.x1} y={bd.y1}
               width={bd.x2 - bd.x1} height={bd.y2 - bd.y1}
-              fill={COLOR_BY_MATERIAL[s.materialType]}
-              stroke={COLOR_BY_MATERIAL[s.materialType]}
+              fill={colorOf(s.materialType)}
+              stroke={colorOf(s.materialType)}
               strokeWidth={thin}
               opacity={0.15}
               listening={false}
@@ -380,7 +431,7 @@ export const StructuralLayer = observer(({ composition, viewport, project }) => 
       </Group>
       <Group {...groupPropsForStyle(wall?.spec.style)}>
         {(wall?.graph?.structuralWalls ?? []).flatMap(w => {
-          const color    = COLOR_BY_MATERIAL[w.materialType];
+          const color    = colorOf(w.materialType);
           const segments = wallSegments(w, wall.graph.wallOpenings);
           if (lod === LodLevel.SCHEMATIC) {
             return segments.map(([segLo, segHi], i) => {

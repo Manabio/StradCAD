@@ -72,6 +72,9 @@
 ## role（構造部材のrole）
 柱=`standard`/`foundation`、梁=`primary`/`secondary`/`foundation`/`eaves`/`roof`/`landing`（踊り場受け梁。記号`LG`）。伏図の慣習（基礎伏図に柱なし等）に対応する。
 
+## 伏図記号
+伏図（framing plan）の柱記号。×＝下階柱（断面□に対角線2本）、□＝当該階（自階）柱（輪郭のみ）。在来木造のみ（他の主構造は断面そのまま）。設計意図は`.claude/structural-model.md`。
+
 ## memberNo（部材番号・タグ）
 構造部材の採番結果のキャッシュ（`記号+順位`。導出結果を実体へ書き戻したもので、真実は毎回の採番）。設計意図は`.claude/structural-model.md`。
 

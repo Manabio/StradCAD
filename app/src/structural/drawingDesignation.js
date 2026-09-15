@@ -22,7 +22,9 @@ export function isFoundationPlane(plane, project) {
  *     1階の柱を書く）。柱データ自体は各階が自階graphに持つため、App.jsx がこの階を peek して読み取り専用に描く。
  *  ② 屋根専用平面の軒桁を含む横架材(role:'eaves')の材質の実効値（屋根の1つ下＝最上の実体平面の設定を使う）。
  *  屋根専用平面 → 最上の実体平面（project.planes末尾）。通常階(rank>=1) → project.planes[rank-1]。
- *  最下階（rank0、基礎伏図） → null（1つ下が無い＝伏図に柱を描かない。呼び出し元は実効値のフォールバックを自前で持つ）。 */
+ *  最下階（rank0、基礎伏図） → null（1つ下が無い＝下階柱レイヤ（×側）のバインディングを持たない。呼び出し元は
+ *  実効値のフォールバックを自前で持つ）。**自階柱レイヤ（□側。在来木造のみ）はこの関数と無関係**——
+ *  基礎伏図でも自階（最下階）の柱は参照表示される（structuralFigure.js 参照）。 */
 export function structuralPlaneBelow(plane, project) {
   const real = project.planes;
   if (plane.isRoofPlane) return real[real.length - 1] ?? null;

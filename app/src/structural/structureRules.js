@@ -134,7 +134,13 @@ const WOOD_RULES = Object.freeze({
   // (2)(3) 柱の描き方: columnFinishWrap＝仕上げ包み（柱壁。finish/columnWrap.js）を平面・展開図に付けるか。
   // planColumnColor＝平面図の柱断面の線色（'material'＝材種色／'wall'＝壁と同じ線色）。
   // planColumnLineWeight＝平面図の柱断面の輪郭線幅（LINE_WEIGHT_MM のキー。'thick'＝壁の仕上げ線と同じ）。
-  drawing: Object.freeze({ columnFinishWrap: true, planColumnColor: 'material', planColumnLineWeight: 'thick' }),
+  // framingPlanColor＝伏図（framing plan）の部材線色（'material'＝材種色／'mono'＝全黒）。
+  // framingColumnSymbol＝伏図の柱記号（'section'＝断面そのまま／'crossBox'＝下階柱に×・自階柱は輪郭のみ□）。
+  // 伏図（framing plan）は在来木造だけ全黒・下階柱□に×／自階柱□（ユーザー指摘2026-09-15）。
+  drawing: Object.freeze({
+    columnFinishWrap: true, planColumnColor: 'material', planColumnLineWeight: 'thick',
+    framingPlanColor: 'material', framingColumnSymbol: 'section',
+  }),
   // 壁由来の梁芯生成源（(3)）: 自階＋1つ下の実体階の下地オーナー壁（下地材の種別は問わない）。在来のみ。
   wallBeamAxes: null,
   // 外壁アルミサッシはフィン下地直付け（openings/sashDetailCatalog.js）。
@@ -164,7 +170,10 @@ const RC_RULES = Object.freeze({
   columnPlacement: 'gridIntersections',
   columnSizing: 'tributary',
   studLayout: 'fixedPitch',
-  drawing: Object.freeze({ columnFinishWrap: true, planColumnColor: 'material', planColumnLineWeight: 'thick' }),
+  drawing: Object.freeze({
+    columnFinishWrap: true, planColumnColor: 'material', planColumnLineWeight: 'thick',
+    framingPlanColor: 'material', framingColumnSymbol: 'section',
+  }),
   // 自階の下地オーナー壁のうち下地材がRC下地の壁のみ（上下階で壁が連続し自立するため下階は見ない）。
   wallBeamAxes: 'rcBacking',
   sashFinDirect: false,
@@ -205,7 +214,10 @@ export const STRUCTURE_RULES = Object.freeze({
       // （ユーザー指示2026-09-14「在来木造の柱に柱包みは不要」「茶色の断面…黒指定」）。輪郭は**極太線**——
       // 壁厚＝柱寸法（conformWoodBacking で下地120＝柱120）になると柱の輪郭が壁の下地帯の線と完全に重なり、
       // 壁と同じ太線では柱が見分けられない（実機 moku1 2026-09-15「中心線と取り合う壁の柱が消えた」）。
-      drawing: Object.freeze({ columnFinishWrap: false, planColumnColor: 'wall', planColumnLineWeight: 'ultraThick' }) },
+      drawing: Object.freeze({
+        columnFinishWrap: false, planColumnColor: 'wall', planColumnLineWeight: 'ultraThick',
+        framingPlanColor: 'mono', framingColumnSymbol: 'crossBox',
+      }) },
     { column: TRADITIONAL_WOOD_FRAMING.columnSection, beam: TRADITIONAL_WOOD_FRAMING.columnSection }), // 梁の既定＝柱同寸の正角
   '木造（2"×4"）': withProfile('木造（2"×4"）', WOOD_RULES), // 壁自体が構造体＝壁下に梁を入れない（wallBeamAxes:null）
 });
