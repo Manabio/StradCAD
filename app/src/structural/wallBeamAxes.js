@@ -23,6 +23,20 @@ function belowPlaneOf(plane, project) {
   return planes[idx - 1];
 }
 
+/**
+ * plane の「1つ下の実体階」のgraphをpeekする（belowPlaneOf＋floorSwapManager.peek）。無ければnull。
+ * collectWallBeamSources（selfAndBelow時の自前peek）と structuralRecompute.js（木造梁成の下階柱取得。
+ * ステップ3d）が同じpeekを共有する——別々にpeekすると1回の再計算で下階を2回読みに行くため。
+ * @param {object} graph
+ * @param {object} project
+ * @returns {Promise<object|null>}
+ */
+export async function peekBelowGraph(graph, project) {
+  const belowPlane = belowPlaneOf(graph.plane, project);
+  if (!belowPlane) return null;
+  return await floorSwapManager.peek(belowPlane, project.structGraph);
+}
+
 /** wall が下地オーナー壁か（backingRange!=null。backingDepth===0の仕上げのみの薄壁は対象外）。 */
 function isBackingOwnerWall(wall) {
   return wall.backingRange != null;
@@ -202,8 +216,13 @@ function mergeWallBeamSources(sources) {
  * RC造は自階のみ（上下階で壁が連続し自立するため下階壁の頭に梁は不要という設計判断）。
  * 呼び出し側（structuralRecompute.js）が wallGate と同じパターンで await し、結果を
  * autoFillStructuralGrid（同期）へプレーン配列として渡す。
+ * @param {object} graph
+ * @param {object} project
+ * @param {object|null} [belowGraph] - 1つ下の実体階のgraph（省略時=undefinedのときだけ自前でpeekする。
+ *   nullを明示すれば「下階なし」として扱い、peekしない——呼び出し側（structuralRecompute.js）が
+ *   木造梁成（ステップ3d）と同じpeek結果を使い回し、1回の再計算で下階を二重にpeekしないための引数）。
  */
-export async function collectWallBeamSources(graph, project) {
+export async function collectWallBeamSources(graph, project, belowGraph = undefined) {
   const structure = effectiveStructure(graph, project);
   // 生成源の選択は主構造ルール（structureRules.js wallBeamAxes: 'rcBacking' | 'selfAndBelow' | null）。
   const mode = rulesFor(structure).wallBeamAxes;
@@ -212,11 +231,8 @@ export async function collectWallBeamSources(graph, project) {
     sources = wallBeamSourcesFromGraph(graph, true);
   } else if (mode === 'selfAndBelow') {
     sources = wallBeamSourcesFromGraph(graph, false);
-    const belowPlane = belowPlaneOf(graph.plane, project);
-    if (belowPlane) {
-      const belowGraph = await floorSwapManager.peek(belowPlane, project.structGraph);
-      sources = sources.concat(wallBeamSourcesFromGraph(belowGraph, false));
-    }
+    const below = belowGraph === undefined ? await peekBelowGraph(graph, project) : belowGraph;
+    if (below) sources = sources.concat(wallBeamSourcesFromGraph(below, false));
   }
   return mergeWallBeamSources(sources);
 }

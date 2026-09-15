@@ -3,7 +3,9 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { RoomFeature } from '../core/constants.js';
 import {
-  woodBeamDepthMm, woodBeamSectionKey, studPositions, studSpec, openingJambSpec, entranceOpeningWidthMm, hipBraceAllowed,
+  woodBeamDepthMm, woodBeamSectionKey, woodBeamSectionForDepth, woodBeamDepthForSpans, crossingBeamLoadCoords,
+  propagateCarrierDepths,
+  studPositions, studSpec, openingJambSpec, entranceOpeningWidthMm, hipBraceAllowed,
   wallRunFaces, faceStudPositions,
 } from './woodFraming.js';
 import { WOOD_BEAM_DEPTH_TABLE, TRADITIONAL_WOOD_FRAMING, TRADITIONAL_WOOD_BACKING, rulesFor, TRADITIONAL_WOOD_STRUCTURE } from './structureRules.js';
@@ -77,6 +79,109 @@ test('sectionCatalog: 木造エントリは正角（90/105/120）と「正角幅
     assert.ok(s.height >= s.width, `${s.key}: 成は幅以上`);
     assert.equal(s.key, `WOOD-${s.width}x${s.height}`);
   }
+});
+
+test('woodBeamSectionForDepth: 成→断面キー（材幅＝柱同寸）。woodBeamSectionKeyはこれへ委譲する', () => {
+  assert.equal(woodBeamSectionForDepth(360, 120), 'WOOD-120x360');
+  assert.equal(woodBeamSectionForDepth(120, 120), 'WOOD-120x120', '成120×幅120＝正角');
+  assert.equal(woodBeamSectionForDepth(120, 105), 'WOOD-105x120');
+  // woodBeamSectionKey は woodBeamDepthMm→woodBeamSectionForDepth の合成と一致する（委譲の確認）。
+  assert.equal(woodBeamSectionKey(1820, 0, 120), woodBeamSectionForDepth(woodBeamDepthMm(1820, 0), 120));
+});
+
+test('【失敗系】woodBeamSectionForDepth: 成がnull・幅が非数/0以下・カタログに無い幅は null', () => {
+  assert.equal(woodBeamSectionForDepth(null, 120), null);
+  assert.equal(woodBeamSectionForDepth(120, 0), null);
+  assert.equal(woodBeamSectionForDepth(120, NaN), null);
+  assert.equal(woodBeamSectionForDepth(120, 150), null, '150幅の木角材はカタログに無い');
+});
+
+test('woodBeamDepthForSpans: 支持点間を区間に分け、各区間の内部荷重数から梁成表を引いた最大値を返す', () => {
+  assert.equal(woodBeamDepthForSpans([0, 3640], []), 300, '単一区間・荷重なし');
+  assert.equal(woodBeamDepthForSpans([0, 1820], [910]), 150, '単一区間・内部荷重1');
+  assert.equal(woodBeamDepthForSpans([0, 1820, 5460], []), 300, '区間最大: [0,1820]=120, [1820,5460]=300 → 300');
+  assert.equal(woodBeamDepthForSpans([0, 1820, 3640], [1820]), 120, '荷重が支持点(端)に一致する位置は内部荷重に数えない');
+  assert.equal(woodBeamDepthForSpans([0, 1820], [910, 910.3]), 150, '同位置(tol未満)の複数荷重源は1か所にまとめる');
+  assert.equal(woodBeamDepthForSpans([0, 0.2, 1820], []), 120, '支持点もtol未満は1点にまとめる');
+  assert.equal(woodBeamDepthForSpans([0, 10000], []), 300, '表外の距離は表の最大側の列');
+});
+
+test('【失敗系】woodBeamDepthForSpans: 支持点0/1個・非数混入・荷重の非数混入は null', () => {
+  assert.equal(woodBeamDepthForSpans([], []), null, '支持点0個');
+  assert.equal(woodBeamDepthForSpans([1820], []), null, '支持点1個');
+  assert.equal(woodBeamDepthForSpans([0, 0.2], []), null, '支持点がtolでまとまって実質1点');
+  assert.equal(woodBeamDepthForSpans([0, NaN], []), null, '支持点に非数混入');
+  assert.equal(woodBeamDepthForSpans([0, 1820], [NaN]), null, '荷重に非数混入');
+  assert.equal(woodBeamDepthForSpans(null, []), null);
+});
+
+test('crossingBeamLoadCoords: 同位置で両方向(+1/-1)そろう十字貫通は除外し、片側だけ(T字)は1か所として残す', () => {
+  assert.deepEqual(crossingBeamLoadCoords([{ coord: 910, dir: 1 }, { coord: 910, dir: -1 }]), [], '十字貫通は荷重に数えない');
+  assert.deepEqual(crossingBeamLoadCoords([{ coord: 910, dir: 1 }]), [910], 'T字は1か所');
+  assert.deepEqual(
+    crossingBeamLoadCoords([{ coord: 910, dir: 1 }, { coord: 910, dir: -1 }, { coord: 1820, dir: 1 }]),
+    [1820], '貫通する910は除外し、T字の1820だけ残す',
+  );
+  assert.deepEqual(crossingBeamLoadCoords([]), []);
+});
+
+test('propagateCarrierDepths: 1段伝播（carrierの成をhostへmaxで反映）', () => {
+  const result = propagateCarrierDepths([
+    { id: 'carrier', depth: 300, isCarrier: true, hostIds: ['host'] },
+    { id: 'host', depth: 240, isCarrier: false, hostIds: [] },
+  ]);
+  assert.equal(result.get('carrier'), 300, 'carrier自身の成は不変');
+  assert.equal(result.get('host'), 300, 'hostの成はcarrierと同寸へ上がる');
+});
+
+test('propagateCarrierDepths: 多段伝播（hostのhostまで、伝播元がcarrierかどうかは問わない）', () => {
+  const result = propagateCarrierDepths([
+    { id: 'carrier', depth: 360, isCarrier: true, hostIds: ['host1'] },
+    { id: 'host1', depth: 240, isCarrier: false, hostIds: ['host2'] },
+    { id: 'host2', depth: 120, isCarrier: false, hostIds: [] },
+  ]);
+  assert.equal(result.get('host1'), 360, 'carrierから直接伝播');
+  assert.equal(result.get('host2'), 360, 'host1が上がった分がさらにhost2へ伝播（荷重経路を辿る）');
+});
+
+test('propagateCarrierDepths: hostのほうが元々大きければ据え置き', () => {
+  const result = propagateCarrierDepths([
+    { id: 'carrier', depth: 240, isCarrier: true, hostIds: ['host'] },
+    { id: 'host', depth: 300, isCarrier: false, hostIds: [] },
+  ]);
+  assert.equal(result.get('host'), 300, 'carrierより大きいhostの成は下げない');
+});
+
+test('propagateCarrierDepths: isCarrier=falseのノードは起点にならない（同じ成・hostIdsでも伝播しない）', () => {
+  const result = propagateCarrierDepths([
+    { id: 'notCarrier', depth: 300, isCarrier: false, hostIds: ['host'] },
+    { id: 'host', depth: 120, isCarrier: false, hostIds: [] },
+  ]);
+  assert.equal(result.get('host'), 120, 'carrierでない梁からは伝播しない');
+});
+
+test('propagateCarrierDepths: 循環（A→B→A）があっても停止し、両者ともmaxの成に収束する', () => {
+  const result = propagateCarrierDepths([
+    { id: 'a', depth: 300, isCarrier: true, hostIds: ['b'] },
+    { id: 'b', depth: 120, isCarrier: false, hostIds: ['a'] },
+  ]);
+  assert.equal(result.get('a'), 300);
+  assert.equal(result.get('b'), 300);
+});
+
+test('【失敗系】propagateCarrierDepths: 未知hostId・非数depthは無視し例外を投げない', () => {
+  assert.doesNotThrow(() => {
+    const result = propagateCarrierDepths([
+      { id: 'carrier', depth: 300, isCarrier: true, hostIds: ['missing', 'host'] },
+      { id: 'host', depth: 120, isCarrier: false, hostIds: [] },
+      { id: 'nanDepth', depth: NaN, isCarrier: true, hostIds: ['host'] },
+    ]);
+    assert.equal(result.get('host'), 300, '未知hostIdは無視しつつ、存在するhostへは伝播する');
+    assert.equal(result.has('nanDepth'), false, '非数depthのノードは結果に含めない');
+    assert.equal(result.has('missing'), false);
+  });
+  assert.deepEqual([...propagateCarrierDepths([]).entries()], []);
+  assert.deepEqual([...propagateCarrierDepths(null).entries()], []);
 });
 
 test('studPositions: AB間の両端に (L − (商−1)×455)/2 をとり、残りを455で割り付ける（位置は材の中心）', () => {

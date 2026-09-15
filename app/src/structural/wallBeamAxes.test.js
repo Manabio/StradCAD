@@ -5,7 +5,7 @@ import path from 'node:path';
 import { Plane, PlanGraph, CenterLineType, Discipline } from '../core.js';
 import {
   collectWallBeamSources, autoFillWallBeamAxes, isTraditionalWoodStructure,
-  wallBackingCenters, mapBackingCenterMoves, findWallBeamAxisCL, wallBeamAxisExcludeKey,
+  wallBackingCenters, mapBackingCenterMoves, findWallBeamAxisCL, wallBeamAxisExcludeKey, peekBelowGraph,
 } from './wallBeamAxes.js';
 import { RC_WALL_BACKING_CODES } from '../finish/materials/backingClass.js';
 import { MATERIALS } from '../finish/materials/materialData.js';
@@ -217,6 +217,41 @@ test('collectWallBeamSources: 条件(c) 木造（在来）は1つ下の実体階
     const sources = await collectWallBeamSources(selfGraph, project);
     assert.equal(sources.length, 1);
     assert.equal(sources[0].coord, 1800);
+  } finally {
+    floorSwapManager.peek = originalPeek;
+  }
+});
+
+test('collectWallBeamSources: 第3引数に既peek済みのgraph（またはnull）を渡すと自前peekしない（structuralRecompute.jsのpeek共有）', async () => {
+  const { graph: selfGraph } = makeGridGraph('p2', 3000);
+  const { graph: belowGraph, x1: belowX1, x3: belowX3 } = makeGridGraph('p1', 0);
+  addBackingWall(belowGraph, { axisValue: 1800, clStart: belowX1, clEnd: belowX3, isVertical: false });
+  selfGraph.structureOverride = '木造（在来）';
+  const project = { planes: [belowGraph.plane, selfGraph.plane], structuralInfo: { mainStructure: '未定' } };
+  const originalPeek = floorSwapManager.peek;
+  floorSwapManager.peek = async () => { throw new Error('belowGraphを明示した場合は自前peekしてはいけない'); };
+  try {
+    // 既にpeek済みのgraphを渡す＝呼び出し側の結果をそのまま使う。
+    const sources = await collectWallBeamSources(selfGraph, project, belowGraph);
+    assert.equal(sources.length, 1);
+    assert.equal(sources[0].coord, 1800);
+    // nullを明示＝「下階なし」。selfAndBelowでも下階分は足されない。
+    const noBelow = await collectWallBeamSources(selfGraph, project, null);
+    assert.equal(noBelow.length, 0);
+  } finally {
+    floorSwapManager.peek = originalPeek;
+  }
+});
+
+test('peekBelowGraph: belowPlaneOf＋floorSwapManager.peekの合成。1つ下の実体階が無ければnull（自前peekしない）', async () => {
+  const { graph: selfGraph } = makeGridGraph('p2', 3000);
+  const { graph: belowGraph } = makeGridGraph('p1', 0);
+  const project = { planes: [belowGraph.plane, selfGraph.plane] };
+  const originalPeek = floorSwapManager.peek;
+  floorSwapManager.peek = async (plane) => (plane.id === belowGraph.plane.id ? belowGraph : null);
+  try {
+    assert.equal(await peekBelowGraph(selfGraph, project), belowGraph);
+    assert.equal(await peekBelowGraph(belowGraph, project), null, '最下階は下に実体階が無い');
   } finally {
     floorSwapManager.peek = originalPeek;
   }

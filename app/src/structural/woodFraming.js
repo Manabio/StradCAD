@@ -7,7 +7,7 @@
 // 生成（壁交点柱・壁下梁・頭つなぎ・床梁・火打ち梁）や描画（伏図の×／□・下地割付線）は次ステップ以降の
 // 消費側が、これらを呼ぶ形で載せる。
 // ================================================================
-import { RoomFeature } from '../core/constants.js';
+import { RoomFeature, CL_OVERLAP_TOL_MM } from '../core/constants.js';
 import { WOOD_BEAM_DEPTH_TABLE, TRADITIONAL_WOOD_FRAMING, TRADITIONAL_WOOD_BACKING, rulesFor, TRADITIONAL_WOOD_STRUCTURE } from './structureRules.js';
 import { woodRectSectionKey } from './sectionCatalog.js';
 
@@ -33,6 +33,19 @@ export function woodBeamDepthMm(spanMm, intermediateLoads, table = WOOD_BEAM_DEP
 }
 
 /**
+ * 梁の断面キー（材幅＝柱同寸 × 成）。既に決まった成から断面キーを引く「成→断面」の判断をここ1か所に
+ * 置く（woodBeamSectionKey・autoFillWoodBeamDepths＝ステップ3d が別式で組み直さないため）。
+ * @param {number} depthMm - 梁成（成が引けない呼び出し元は先にnullで打ち切ること）
+ * @param {number} columnWidthMm - その階の柱寸法（正角）
+ * @returns {string|null} 例 'WOOD-120x240'。成・幅が非数/0以下・カタログに無い幅は null
+ */
+export function woodBeamSectionForDepth(depthMm, columnWidthMm) {
+  if (depthMm == null || !Number.isFinite(columnWidthMm) || columnWidthMm <= 0) return null;
+  // 成が材幅より小さくなる組み合わせ（例: 柱120で成120未満）は無い（表の最小が120）ため、幅×max(成,幅)で引く。
+  return woodRectSectionKey(columnWidthMm, Math.max(depthMm, columnWidthMm));
+}
+
+/**
  * 梁の断面キー（材幅＝柱同寸 × 梁成表の成）。「支持間距離と中間荷重から梁断面を決める」という
  * 呼び出し側の判断をここ1か所に置く（生成側が別式で組み直さないため）。
  * @param {number} spanMm
@@ -41,10 +54,110 @@ export function woodBeamDepthMm(spanMm, intermediateLoads, table = WOOD_BEAM_DEP
  * @returns {string|null} 例 'WOOD-120x240'。梁成が引けない・カタログに無い幅は null
  */
 export function woodBeamSectionKey(spanMm, intermediateLoads, columnWidthMm) {
-  const depth = woodBeamDepthMm(spanMm, intermediateLoads);
-  if (depth == null || !Number.isFinite(columnWidthMm) || columnWidthMm <= 0) return null;
-  // 成が材幅より小さくなる組み合わせ（例: 柱120で成120未満）は無い（表の最小が120）ため、幅×max(成,幅)で引く。
-  return woodRectSectionKey(columnWidthMm, Math.max(depth, columnWidthMm));
+  return woodBeamSectionForDepth(woodBeamDepthMm(spanMm, intermediateLoads), columnWidthMm);
+}
+
+// 支持点・荷重点の座標を許容誤差(tol)でまとめる（昇順ソート後、直前に残した点からtol未満なら同一点扱い）。
+// woodBeamDepthForSpans が支持点・荷重点の両方に使う私的ヘルパ（呼び出し側で個別に丸めさせない）。
+function dedupCoords(coords, tol) {
+  const sorted = [...coords].sort((a, b) => a - b);
+  const out = [];
+  for (const c of sorted) {
+    if (out.length === 0 || c - out[out.length - 1] >= tol) out.push(c);
+  }
+  return out;
+}
+
+/**
+ * 梁1本の断面を「支持区間ごとの梁成表引きの最大値」で決める（ステップ3d）。支持点（両端＋中間の
+ * 支持柱等）を昇順・tol以内でまとめ、隣り合う支持点2点ずつを区間とみなして各区間の距離と区間内部
+ * （両端からtolを超えて内側）の荷重点数から `woodBeamDepthMm` で成を引き、区間の最大値を返す
+ * （表は距離・荷重数とも単調のため、最大区間が最大の成を要求するとは限らず全区間を評価する）。
+ * 荷重点も同じtolでまとめる（同位置の複数荷重源は表の「1か所」に集約）。
+ * 支持点が2点未満（まとめた結果1点以下になる場合を含む）・非数混入・いずれかの区間で
+ * `woodBeamDepthMm` がnullを返す（距離0以下・荷重数が不正）場合はnull。
+ * @param {number[]} supportCoords - 支持点の座標(mm)
+ * @param {number[]} loadCoords - 荷重点の座標(mm)
+ * @param {number} [tol] - 座標の同一視許容誤差(mm)
+ * @returns {number|null}
+ */
+export function woodBeamDepthForSpans(supportCoords, loadCoords, tol = CL_OVERLAP_TOL_MM) {
+  if (!Array.isArray(supportCoords) || supportCoords.some(c => !Number.isFinite(c))) return null;
+  if (!Array.isArray(loadCoords) || loadCoords.some(c => !Number.isFinite(c))) return null;
+  const supports = dedupCoords(supportCoords, tol);
+  if (supports.length < 2) return null;
+  const loads = dedupCoords(loadCoords, tol);
+  let maxDepth = null;
+  for (let i = 0; i < supports.length - 1; i++) {
+    const lo = supports[i], hi = supports[i + 1];
+    const count = loads.filter(l => l > lo + tol && l < hi - tol).length;
+    const depth = woodBeamDepthMm(hi - lo, count);
+    if (depth == null) return null;
+    if (maxDepth == null || depth > maxDepth) maxDepth = depth;
+  }
+  return maxDepth;
+}
+
+/**
+ * 梁の端に取りつく他の梁（ends）から、十字貫通（同じ位置で両方向に相手梁が続く＝通過しているだけで
+ * 荷重ではない）を除いた荷重点の座標を返す。ends は `{coord, dir}`（dir=符号。反対側の端に向かう
+ * 符号で+1/−1を想定）の配列——同じcoord（tol以内）に+1と−1の両方があれば貫通とみなし除外、
+ * 片側だけ（T字）なら1か所として残す。同じcoordにdirが重複しても1か所（Setで畳む）。
+ * @param {Array<{coord:number, dir:number}>} ends
+ * @param {number} [tol]
+ * @returns {number[]} 貫通を除いた代表座標（グループの先頭値）
+ */
+export function crossingBeamLoadCoords(ends, tol = CL_OVERLAP_TOL_MM) {
+  const groups = [];
+  for (const e of ends) {
+    let g = groups.find(g => Math.abs(g.coord - e.coord) < tol);
+    if (!g) { g = { coord: e.coord, dirs: new Set() }; groups.push(g); }
+    g.dirs.add(Math.sign(e.dir));
+  }
+  return groups.filter(g => !(g.dirs.has(1) && g.dirs.has(-1))).map(g => g.coord);
+}
+
+/**
+ * 受梁（区間内部に自階柱があり、その真下に下階柱が無い梁。判定は呼び出し側＝woodAutoFill.jsが行い
+ * isCarrierで渡す）の成を、その受梁の端が取りつく host 梁へ不動点まで伝播する（ステップ3c-3。裁定
+ * 2026-09-14「受梁を受ける梁は受梁同寸」）。host の成 = max(host の成, 受梁の成)——伝播で成が
+ * 上がった梁は、それ自身が受梁かどうかに関わらずさらにその host へ伝播する（荷重経路を辿る）。
+ * 循環（A→B→A等）があっても、各ノードの成は入力に現れる値の中で単調に増えるだけなので有限回で
+ * 不動点に達する（無限ループにはならないが、想定外の入力に備え反復回数の安全弁を持つ）。
+ * 非数のdepth・idの無い要素は無視する。未知のhostId（同じidの要素がnodesに無い）も無視する
+ * （例外を投げない）。
+ * @param {Array<{id:string, depth:number, isCarrier:boolean, hostIds?:string[]}>} nodes
+ * @returns {Map<string, number>} id -> 伝播後の成（入力のdepthのまま、または伝播で上がった値）
+ */
+export function propagateCarrierDepths(nodes) {
+  const list = Array.isArray(nodes) ? nodes : [];
+  const depthById = new Map();
+  const hostsById = new Map();
+  for (const n of list) {
+    if (!n || n.id == null || !Number.isFinite(n.depth)) continue;
+    depthById.set(n.id, n.depth);
+    hostsById.set(n.id, Array.isArray(n.hostIds) ? n.hostIds : []);
+  }
+  const queue = list.filter(n => n && n.isCarrier && depthById.has(n.id)).map(n => n.id);
+  const inQueue = new Set(queue);
+  // 安全弁: 通常は単調増加＋入力値の有限集合により自然に停止するが、想定外の入力で反復が
+  // 膨らまないよう上限を設ける（循環自体は正しく1回で収束するため、この上限に届くのは異常系のみ）。
+  const maxSteps = depthById.size * depthById.size + depthById.size + 16;
+  let steps = 0;
+  while (queue.length > 0) {
+    if (++steps > maxSteps) break;
+    const id = queue.shift();
+    inQueue.delete(id);
+    const depth = depthById.get(id);
+    for (const hostId of hostsById.get(id) ?? []) {
+      if (!depthById.has(hostId)) continue; // 未知hostIdは無視
+      if (depth > depthById.get(hostId)) {
+        depthById.set(hostId, depth);
+        if (!inQueue.has(hostId)) { queue.push(hostId); inQueue.add(hostId); }
+      }
+    }
+  }
+  return depthById;
 }
 
 /**

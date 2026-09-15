@@ -1,7 +1,7 @@
 import { runInAction } from 'mobx';
 import { serializeGraph } from '../graphSnapshot.js';
 import { buildStructuralWallGate, buildExteriorSide } from './wallGate.js';
-import { collectWallBeamSources } from './wallBeamAxes.js';
+import { collectWallBeamSources, peekBelowGraph } from './wallBeamAxes.js';
 import {
   autoFillStructuralGrid,
   autoFillColumnAxisOffsets,
@@ -16,8 +16,8 @@ import {
   deleteClassificationOverflow,
 } from './structuralAutoFill.js';
 import { collectFloorGroups } from './memberNumbering.js';
-import { conformWoodSections } from './woodAutoFill.js';
-import { rulesFor } from './structureRules.js';
+import { conformWoodSections, autoFillWoodBeamDepths } from './woodAutoFill.js';
+import { rulesFor, effectiveStructure } from './structureRules.js';
 import { conformToLedger } from './memberGroups.js';
 
 /**
@@ -41,9 +41,17 @@ export async function recomputeStructuralForGraph(targetGraph, project, mainStru
   // ＝自階かつ直下の全階で建物が連続する位置だけ部材を残す（直下に支えの無い梁・柱は省く）。
   // 非アクティブ下階は peek で覗く。自階に部屋が無い／屋根平面では null＝従来の全グリッド生成。wallGate.js 参照。
   const before = serializeGraph(targetGraph);
+  // 主構造ルール（自階の実効値）。壁由来梁芯の下階peek要否・在来木造の柱寸算定スキップ・
+  // 木造梁成の自動更新（autoFillWoodBeamDepths、ステップ3d）が共有する（旧: 下方で重複していた
+  // rulesFor 呼び出しをここへ集約）。
+  const structure = effectiveStructure(targetGraph, project);
+  const ownRules = rulesFor(structure);
   const wallGate = await buildStructuralWallGate(targetGraph.plane, project, targetGraph);
+  // 壁由来の梁芯生成対象・木造梁成の下階柱（支持点）が使う1つ下の実体階のpeek。
+  // どちらの用途も不要なら（RC造は自階のみ／非木造は梁成の算定自体が対象外）peekしない。
+  const belowGraph = (ownRules.wallBeamAxes === 'selfAndBelow' || ownRules.framing) ? await peekBelowGraph(targetGraph, project) : null;
   // 壁由来の梁芯生成対象（下階peekを含む非同期収集。wallGateと同じパターンで先に await する）。
-  const wallSources = await collectWallBeamSources(targetGraph, project);
+  const wallSources = await collectWallBeamSources(targetGraph, project, belowGraph);
 
   // 構造体トポロジーから未定義の柱・梁・基礎（基礎伏図のみ）を検出し、自動補完する。
   // ユーザーが明示削除した箇所は除外集合（excludedColumnSlots 等）により復活しない。
@@ -63,6 +71,8 @@ export async function recomputeStructuralForGraph(targetGraph, project, mainStru
   const { convertedColumns, convertedBeams, convertedFootings } = runInAction(() => convertMembersToEffectiveMaterial(targetGraph, project, mainStructure));
   // 在来木造: 既存の柱・梁の断面を主構造ルール（柱120角・梁は柱同寸幅）へそろえる（手動固定も含む。ユーザー裁定2026-09-14）。
   const conformedSections = runInAction(() => conformWoodSections(targetGraph, project));
+  // 在来木造: 大梁・小梁の成を支持区間ごとの梁成表引きで自動更新する（ステップ3d。dimensionStatus==='auto'のみ）。
+  const updatedBeamDepths = runInAction(() => autoFillWoodBeamDepths(targetGraph, project, belowGraph?.columns ?? []));
   // 壁下地材（共通仕様の per-floor 設定。壁厚の情報源）はここでは触らない——壁は仕上げ脱出時の導出物で、
   // 構造再計算は壁を再生成できないため、ここで下地材だけ変えると「共通仕様は120×30なのに壁は90のまま」
   // のズレを作る（実機 2026-09-14）。在来の柱同寸×30への自動選択は壁生成の直前＝仕上げ突入
@@ -71,8 +81,7 @@ export async function recomputeStructuralForGraph(targetGraph, project, mainStru
   const removedByClass = runInAction(() => deleteClassificationOverflow(targetGraph, project));
   // 柱の負担床面積から柱幅・柱脚サイズを再算定する（dimensionStatus==='auto'の部材のみ。ロック済みは保持）。
   // 柱は自階graphに属するため、支える階数(N)も自階（targetGraph.plane）基準で算定する。
-  // 在来木造（columnSizing:'fixed'）は柱寸法を欄で決めるため負担面積からの概算を行わない。
-  const ownRules = rulesFor(targetGraph.structureOverride ?? project.structuralInfo.mainStructure);
+  // 在来木造（columnSizing:'fixed'）は柱寸法を欄で決めるため負担面積からの概算を行わない（ownRulesは冒頭で集約済み）。
   const updatedColumnSizes = ownRules.columnSizing === 'fixed' ? [] : runInAction(() => autoFillColumnSizes(targetGraph, project, targetGraph.plane));
   const updatedFootingSizes = runInAction(() => autoFillColumnBaseSizes(targetGraph, project));
   // 基礎梁(role:'foundation')の梁幅b・梁成Dを、建物全体の最長スパン・最大柱幅から再算定する。
@@ -92,7 +101,7 @@ export async function recomputeStructuralForGraph(targetGraph, project, mainStru
     || convertedColumns.length > 0 || convertedBeams.length > 0 || convertedFootings.length > 0 || conformedSections.length > 0
     || removedByClass.length > 0
     || updatedColumnSizes.length > 0 || updatedFootingSizes.length > 0 || updatedBeamSizes.length > 0
-    || updatedRoofBeamSizes.length > 0 || updatedBeamEcc.length > 0;
+    || updatedRoofBeamSizes.length > 0 || updatedBeamEcc.length > 0 || updatedBeamDepths.length > 0;
   const after = changed ? serializeGraph(targetGraph) : before;
   return { changed, before, after };
 }
