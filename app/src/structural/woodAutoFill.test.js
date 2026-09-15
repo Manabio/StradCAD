@@ -2,14 +2,14 @@
 // wallBeamAxes.test.js と同じく実 core.js（Plane/PlanGraph/Wall）を使う。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Plane, PlanGraph, Project, CenterLineType, Discipline, StructuralMaterialType, columnSlotKey, centerLineKind as centerLineKindOf } from '../core.js';
+import { Plane, PlanGraph, Project, CenterLineType, Discipline, StructuralMaterialType, columnSlotKey, spanKey, centerLineKind as centerLineKindOf } from '../core.js';
 import {
   wallIntersectionPoints, autoFillWoodColumns, conformWoodSections, conformWoodBacking, WALL_JUNCTION_TOL_MM,
-  autoFillWoodBeamDepths,
+  autoFillWoodBeamDepths, autoFillWoodWallBeams,
 } from './woodAutoFill.js';
 import { WOOD_STUD_CODE_BY_SIZE } from '../finish/materials/backingClass.js';
 import { autoFillColumnsForStructure, autoFillStructuralGrid } from './structuralAutoFill.js';
-import { TRADITIONAL_WOOD_STRUCTURE } from './structureRules.js';
+import { TRADITIONAL_WOOD_STRUCTURE, rulesFor } from './structureRules.js';
 import { selfWallSegments, autoFillWallBeamAxes } from './wallBeamAxes.js';
 import { generateRoomWallsFromOutline } from '../finish/wallGeneration.js';
 import { floorSwapManager } from '../storage/FloorSwapManager.js';
@@ -144,17 +144,299 @@ test('autoFillColumnsForStructure: 在来木造は壁交点方式、それ以外
   assert.ok(s.created.every(c => c.materialType === StructuralMaterialType.STEEL));
 });
 
-test('autoFillStructuralGrid: 在来木造では通り芯全辺の大梁は従来どおり、柱だけが壁交点へ移る（removedColumns を返す）', () => {
-  const { graph, x1, x2, y1, y2 } = makeGridGraph();
-  addBackingWall(graph, { axisValue: 2000, clStart: x1, clEnd: x2, isVertical: false });
-  addBackingWall(graph, { axisValue: 1000, clStart: y1, clEnd: y2, isVertical: true });
-  const gridAuto = graph.addColumn(StructuralMaterialType.WOOD, 'WOOD-105x105', x1, y1, {});
-  const project = { planes: [graph.plane], structuralInfo: { mainStructure: '未定', foundationType: 'ベタ基礎' } };
-  // wallSources は本番では collectWallBeamSources（マージ済み・下階込み）。ここでは自階の壁だけを渡す。
-  const r = autoFillStructuralGrid(graph, project, TRADITIONAL_WOOD_STRUCTURE, null, selfWallSegments(graph));
-  assert.deepEqual(r.newColumns.map(c => `${c.x},${c.y}`), ['1000,2000']);
-  assert.deepEqual(r.removedColumns, [gridAuto.id]);
-  assert.ok(r.newBeams.length > 0, '大梁・壁由来の梁芯は従来どおり生成される（ステップ3cで置き換える）');
+test('autoFillStructuralGrid: 在来木造では壁線上に通し梁(role:primary)が生成され、通り芯グリッドの小梁は生成されない（柱の壁交点への移動は別テストで固定済み）', () => {
+  // 単純な十字（自由端2本）は交点が線ごとに1点しか無く通し梁の対象外（要2点以上）のため、
+  // 2部屋（コーナー・T字が複数できる）の実壁フィクスチャ（makeTwoRoomGraph、下の
+  // autoFillWoodWallBeams テスト群で定義）を使う。
+  const { graph } = makeTwoRoomGraph();
+  // 自階を最下階(rank0)にしない（最下階だと基礎伏図扱いになり梁のroleが'foundation'固定になるため。
+  // isFoundationPlane は project.planes 内の並び順で判定する）。
+  const project = { planes: [new Plane('p0', -3000, '0階', 0, 1), graph.plane], structuralInfo: { mainStructure: '未定', foundationType: 'ベタ基礎' } };
+  // wallSources/wallSegments は本番では collectWallBeamSources/wallRunSegments（マージ済み・下階込み）。
+  // ここでは自階の壁だけを渡す（既存の他テストと同じ簡略化）。
+  const segs = selfWallSegments(graph);
+  const r = autoFillStructuralGrid(graph, project, TRADITIONAL_WOOD_STRUCTURE, null, segs, segs);
+  const primaries = graph.beams.filter(b => b.role === 'primary');
+  assert.ok(primaries.length > 0, '壁線上の通し梁(role:primary)が生成される');
+  // 上端(y=0)の壁線は途中(x=3640)で分割されず0..7280の通し1本になっているはず（スパンそのものを検証）。
+  const top = primaries.filter(b => !b.isVertical && Math.abs(b.axisValue) < 1);
+  assert.equal(top.length, 1, '上端(y=0)は1本のはず');
+  assert.deepEqual([top[0].clStart.effectiveValue, top[0].clEnd.effectiveValue].sort((a, b) => a - b), [0, 7280]);
+  // MobX観測オブジェクト（循環参照あり）を assert.deepEqual に直接渡すと、不一致時の差分生成で
+  // 大量アロケーション（util.inspectの循環参照検出がMobXプロキシで効かず暴走）が起きるため、
+  // 常に本数(.length)で比較する（他アサーションも同様の理由でプレーン値へ落とす）。
+  assert.equal(graph.beams.filter(b => b.role === 'secondary').length, 0, '在来木造は梁芯CL上の小梁を生成しない（壁線通し梁に置き換え）');
+  assert.ok(r.newColumns.length > 0, '柱も壁交点へ生成される（既存テストと同じ経路）');
+});
+
+// 梁芯CL上の小梁(role:secondary)がhostを持つフィクスチャ（beamAxisMove.test.jsのsetupHostGainFixtureと
+// 同型: 通り芯x0/x10000・y1/y2を全幅の大梁(role:primary)がカバーし、その内側(x=5000)に梁芯CLを置く）。
+function makeSecondaryBeamFixture(structure) {
+  const graph = new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
+  graph.structureOverride = structure;
+  const x0 = graph.addCenterLine(CenterLineType.VERTICAL, 0,     { labeled: true, discipline: Discipline.STRUCT });
+  const x10000 = graph.addCenterLine(CenterLineType.VERTICAL, 10000, { labeled: true, discipline: Discipline.STRUCT });
+  const y1 = graph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+  const y2 = graph.addCenterLine(CenterLineType.HORIZONTAL, 4000, { labeled: true, discipline: Discipline.STRUCT });
+  const rules = rulesFor(structure);
+  graph.addBeam(rules.baseMaterial, rules.defaultSections.beam, y1, false, x0, x10000, { role: 'primary' });
+  graph.addBeam(rules.baseMaterial, rules.defaultSections.beam, y2, false, x0, x10000, { role: 'primary' });
+  graph.addCenterLine(CenterLineType.VERTICAL, 5000, { labeled: false, discipline: Discipline.FUSE, extentLo: 0, extentHi: 4000 });
+  return { graph, x0, x10000, y1, y2 };
+}
+
+test('【対照】autoFillStructuralGrid: 在来木造は梁芯CL上の小梁(role:secondary)を生成しないが、同一フィクスチャをS造にすると1本以上生成される', () => {
+  const wood = makeSecondaryBeamFixture(TRADITIONAL_WOOD_STRUCTURE);
+  const projWood = { planes: [new Plane('p0', -3000, '0階', 0, 1), wood.graph.plane], structuralInfo: { mainStructure: '未定', foundationType: 'ベタ基礎' } };
+  autoFillStructuralGrid(wood.graph, projWood, TRADITIONAL_WOOD_STRUCTURE, null, [], []);
+  // 本数(.length)で比較する（MobX観測オブジェクトの配列をdeepEqualに渡すと不一致時の差分生成で暴走するため）。
+  assert.equal(wood.graph.beams.filter(b => b.role === 'secondary').length, 0, '在来木造はbeamPlacement:wallRunsのためautoFillSecondaryBeamsを呼ばない');
+
+  const steel = makeSecondaryBeamFixture('S造');
+  const projSteel = { planes: [new Plane('p0', -3000, '0階', 0, 1), steel.graph.plane], structuralInfo: { mainStructure: '未定', foundationType: 'ベタ基礎' } };
+  autoFillStructuralGrid(steel.graph, projSteel, 'S造', null, [], []);
+  assert.ok(steel.graph.beams.filter(b => b.role === 'secondary').length >= 1, 'S造(beamPlacement:gridEdges)は同じ梁芯CLから小梁が生成される');
+});
+
+// ---- autoFillWoodWallBeams（ステップ3c-2: 壁線上の通し梁 role:'primary'）----
+// wallIntersectionPoints・selfWallSegments と同じ実壁フィクスチャ（部屋2つ、共有辺が交点になる）。
+function makeTwoRoomGraph() {
+  const graph = new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
+  graph.structureOverride = TRADITIONAL_WOOD_STRUCTURE;
+  const x0 = graph.addCenterLine(CenterLineType.VERTICAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+  const x1 = graph.addCenterLine(CenterLineType.VERTICAL, 3640, { labeled: true, discipline: Discipline.STRUCT });
+  const x2 = graph.addCenterLine(CenterLineType.VERTICAL, 7280, { labeled: true, discipline: Discipline.STRUCT });
+  const y0 = graph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+  const y1 = graph.addCenterLine(CenterLineType.HORIZONTAL, 3640, { labeled: true, discipline: Discipline.STRUCT });
+  const roomA = graph.addRoom(new Set([`${x0.id}:${y0.id}:${x1.id}:${y1.id}`]), 'A');
+  const roomB = graph.addRoom(new Set([`${x1.id}:${y0.id}:${x2.id}:${y1.id}`]), 'B');
+  generateRoomWallsFromOutline(graph, roomA);
+  generateRoomWallsFromOutline(graph, roomB);
+  return { graph, x0, x1, x2, y0, y1 };
+}
+
+test('autoFillWoodWallBeams: 壁線上の通し梁(role:primary)は途中の壁交点で分割されず1本になる（3交点→1本）', () => {
+  const { graph, x0, x2, y0 } = makeTwoRoomGraph();
+  const segs = selfWallSegments(graph);
+  const { created } = autoFillWoodWallBeams(graph, PROJECT, segs);
+  const top = created.filter(b => !b.isVertical && Math.abs(b.axisValue - y0.value) < 1);
+  assert.equal(top.length, 1, '上端(y=0)は途中(x=3640)で分割されず1本のはず');
+  assert.deepEqual([top[0].clStart.id, top[0].clEnd.id].sort(), [x0.id, x2.id].sort(), '0..7280の通し1本');
+  assert.equal(top[0].role, 'primary');
+  assert.equal(top[0].beamType, '大梁');
+  assert.equal(top[0].materialType, StructuralMaterialType.WOOD);
+  // 冪等: もう一度呼んでも増減しない。
+  const again = autoFillWoodWallBeams(graph, PROJECT, segs);
+  assert.deepEqual([again.created.length, again.removed.length], [0, 0]);
+});
+
+test('autoFillWoodWallBeams: 候補スロットに旧方式の小梁(role:secondary)が居座っていても道を空けてrole:primaryへ置き換える（実データmoku1で再発した頭つなぎ・壁下梁の欠落の回帰）', () => {
+  const { graph, x0, x2, y0 } = makeTwoRoomGraph();
+  const segs = selfWallSegments(graph);
+  // 旧・梁芯CL方式で生成されていた小梁が、候補スロット（y=0, x0..x2）にちょうど居座っている状況を再現。
+  const stale = graph.addBeam(StructuralMaterialType.WOOD, 'WOOD-120x120', y0, false, x0, x2, { role: 'secondary', beamType: '小梁' });
+  const { created, removed } = autoFillWoodWallBeams(graph, PROJECT, segs);
+  const top = created.filter(b => !b.isVertical && Math.abs(b.axisValue - y0.value) < 1);
+  assert.equal(top.length, 1, '旧小梁に阻まれず通し梁(role:primary)が生成される');
+  assert.deepEqual(removed, [stale.id], '道を空けた旧小梁が撤去される');
+  assert.equal(graph.beamMap.has(stale.id), false);
+  assert.deepEqual(graph.beams.filter(b => !b.isVertical && Math.abs(b.axisValue - y0.value) < 1).map(b => b.role), ['primary'], '同じ位置に重複して残らない');
+});
+
+test('【失敗系】autoFillWoodWallBeams: 候補スロットの占有物が手動固定(locked)なら重複させず生成を見送り、占有物も撤去しない', () => {
+  const { graph, x0, x2, y0 } = makeTwoRoomGraph();
+  const segs = selfWallSegments(graph);
+  const locked = graph.addBeam(StructuralMaterialType.WOOD, 'WOOD-120x120', y0, false, x0, x2, { role: 'secondary', beamType: '小梁' });
+  locked.setDimensionStatus('locked');
+  const { created, removed } = autoFillWoodWallBeams(graph, PROJECT, segs);
+  assert.equal(created.filter(b => !b.isVertical && Math.abs(b.axisValue - y0.value) < 1).length, 0, '手動固定を巻き込んで重複生成しない');
+  assert.deepEqual(removed, []);
+  assert.ok(graph.beamMap.has(locked.id), '手動固定の梁は保持される');
+});
+
+test('【失敗系】autoFillWoodWallBeams: wallGate.spanInBuilding が false を返す位置には通し梁を生成せず、呼び出し引数は(axisCL,isVertical,startCL,endCL)', () => {
+  const { graph } = makeTwoRoomGraph();
+  const segs = selfWallSegments(graph);
+  const calls = [];
+  const gateAllOut = {
+    intersectionInBuilding: () => false,
+    spanInBuilding: (...args) => { calls.push(args); return false; },
+  };
+  const { created } = autoFillWoodWallBeams(graph, PROJECT, segs, gateAllOut);
+  assert.equal(created.length, 0, 'wallGateが全位置を建物外と判定すれば1本も生成しない');
+  assert.ok(calls.length > 0, 'spanInBuildingが呼ばれるはず');
+  const [axisCL, isVertical, startCL, endCL] = calls[0];
+  assert.equal(typeof isVertical, 'boolean');
+  assert.ok(axisCL && typeof axisCL.effectiveValue === 'number', '第1引数はCLオブジェクト(axisCL)');
+  assert.ok(startCL && typeof startCL.effectiveValue === 'number', '第3引数はCLオブジェクト(startCL)');
+  assert.ok(endCL && typeof endCL.effectiveValue === 'number', '第4引数はCLオブジェクト(endCL)');
+});
+
+test('【対照】autoFillWoodWallBeams: wallGate.spanInBuilding が isVertical で判定を分ければ、横梁(isVertical=false)だけが生成される', () => {
+  const { graph } = makeTwoRoomGraph();
+  const segs = selfWallSegments(graph);
+  const gateHorizOnly = { intersectionInBuilding: () => false, spanInBuilding: (axis, isV) => !isV };
+  const { created } = autoFillWoodWallBeams(graph, PROJECT, segs, gateHorizOnly);
+  assert.ok(created.length > 0, '横梁は生成されるはず');
+  assert.ok(created.every(b => !b.isVertical), '縦梁(isVertical=true)は生成されないはず');
+});
+
+test('autoFillWoodWallBeams: 除外スロット（excludedBeamSlots）に居座る旧方式の自動小梁は候補扱いにならず撤去される（生成も撤去もされず残り続ける事故の回帰）', () => {
+  const { graph, x0, x2, y0 } = makeTwoRoomGraph();
+  const segs = selfWallSegments(graph);
+  const stale = graph.addBeam(StructuralMaterialType.WOOD, 'WOOD-120x120', y0, false, x0, x2, { role: 'secondary', beamType: '小梁' });
+  graph.excludedBeamSlots.add(spanKey(y0, x0, x2)); // ユーザーがこのスロットを明示削除済みという想定
+  const { created, removed } = autoFillWoodWallBeams(graph, PROJECT, segs);
+  assert.equal(created.filter(b => !b.isVertical && Math.abs(b.axisValue - y0.value) < 1).length, 0, '除外スロットには生成しない');
+  assert.deepEqual(removed, [stale.id], '除外スロットに居座る旧・自動小梁は撤去される（候補扱いにしないことで撤去対象に含める）');
+  assert.equal(graph.beamMap.has(stale.id), false);
+});
+
+test('【裁定】autoFillWoodWallBeams: 構造リストから手動追加した梁（role:primary・dimensionStatus:auto）は壁線上に無ければ次の再計算で撤去される。lockedにすれば残る（3aの柱と同じ規律）', () => {
+  const { graph, x1, x2, y1 } = makeGridGraph(); // 4000角の通り芯グリッド（壁なし）
+  addBackingWall(graph, { axisValue: 2000, clStart: x1, clEnd: x2, isVertical: false }); // wallSegmentsを非空にするためのダミー壁
+  const yFar = graph.addCenterLine(CenterLineType.HORIZONTAL, 9000, { labeled: true, discipline: Discipline.STRUCT });
+  const xFar = graph.addCenterLine(CenterLineType.VERTICAL, 9000, { labeled: true, discipline: Discipline.STRUCT });
+  // 壁線上に無い位置（通り芯y=9000・x=9000）へ構造リストの「＋追加」相当（role:primary・既定dimensionStatus=auto）で手動追加。
+  const manualAuto = graph.addBeam(StructuralMaterialType.WOOD, 'WOOD-120x120', yFar, false, x1, xFar, { role: 'primary' });
+  const manualLocked = graph.addBeam(StructuralMaterialType.WOOD, 'WOOD-120x120', y1, false, x1, xFar, { role: 'primary' });
+  manualLocked.setDimensionStatus('locked');
+  const { removed } = autoFillWoodWallBeams(graph, PROJECT, selfWallSegments(graph));
+  assert.ok(removed.includes(manualAuto.id), '壁線上に無いauto梁は次の再計算で撤去される');
+  assert.equal(graph.beamMap.has(manualAuto.id), false);
+  assert.ok(graph.beamMap.has(manualLocked.id), 'lockedにすれば壁線上に無くても残る');
+});
+
+test('【失敗系】autoFillWoodWallBeams: 壁の無い通り芯辺には梁を生成せず、既存の自動生成分（dimensionStatus=auto）は撤去する', () => {
+  const { graph, x1, x2, y1 } = makeGridGraph(); // 4000角の通り芯グリッド
+  addBackingWall(graph, { axisValue: 2000, clStart: x1, clEnd: x2, isVertical: false }); // wallSegmentsを非空にするためのダミー壁（y=0とは別の辺）
+  // 壁の無い y=0(y1) の辺に、旧方式（通り芯グリッド）の自動大梁を先置き。
+  const gridAuto = graph.addBeam(StructuralMaterialType.WOOD, 'WOOD-120x120', y1, false, x1, x2, { role: 'primary' });
+  const { removed } = autoFillWoodWallBeams(graph, PROJECT, selfWallSegments(graph));
+  assert.deepEqual(removed, [gridAuto.id], '壁の無い辺の自動大梁は候補に無いため撤去される');
+  assert.equal(graph.beamMap.has(gridAuto.id), false);
+});
+
+test('autoFillWoodWallBeams: excludedBeamSlots にあるスパンは再生成しない（手動削除の尊重）', () => {
+  const { graph, x0, x2, y0 } = makeTwoRoomGraph();
+  const segs = selfWallSegments(graph);
+  const first = autoFillWoodWallBeams(graph, PROJECT, segs);
+  const top = first.created.find(b => !b.isVertical && Math.abs(b.axisValue - y0.value) < 1);
+  graph.beamMap.delete(top.id);
+  graph.excludedBeamSlots.add(spanKey(y0, x0, x2));
+  const second = autoFillWoodWallBeams(graph, PROJECT, segs);
+  assert.ok(!second.created.some(b => !b.isVertical && Math.abs(b.axisValue - y0.value) < 1), '除外スロットには再生成しない');
+});
+
+test('【失敗系】autoFillWoodWallBeams: dimensionStatus=lockedの梁は候補に無くても撤去しない', () => {
+  const { graph, x1, x2, y1 } = makeGridGraph();
+  addBackingWall(graph, { axisValue: 2000, clStart: x1, clEnd: x2, isVertical: false }); // wallSegmentsを非空にするためのダミー壁
+  const locked = graph.addBeam(StructuralMaterialType.WOOD, 'WOOD-120x120', y1, false, x1, x2, { role: 'primary' });
+  locked.setDimensionStatus('locked');
+  const { removed } = autoFillWoodWallBeams(graph, PROJECT, selfWallSegments(graph));
+  assert.deepEqual(removed, []);
+  assert.ok(graph.beamMap.has(locked.id), '手動固定の梁は保持される');
+});
+
+test('【失敗系】autoFillWoodWallBeams: 壁ゼロの階（wallSegments=[]）は生成も撤去もしない（既存部材を保全）', () => {
+  const { graph, x1, x2, y1 } = makeGridGraph();
+  const gridAuto = graph.addBeam(StructuralMaterialType.WOOD, 'WOOD-120x120', y1, false, x1, x2, { role: 'primary' });
+  const { created, removed } = autoFillWoodWallBeams(graph, PROJECT, []);
+  assert.deepEqual(created, []);
+  assert.deepEqual(removed, []);
+  assert.ok(graph.beamMap.has(gridAuto.id), '壁が無い階の既存梁は残る');
+});
+
+test('【失敗系】autoFillWoodWallBeams: どの通り芯・梁芯・中心線にも解決できない壁区間は例外を投げず無視する', () => {
+  const { graph } = makeGridGraph();
+  // 通り芯・梁芯・意匠中心線のいずれとも一致しない孤立した壁区間（アンカー解決不能）。
+  const wallSegments = [{ isVertical: false, coord: 99999, lo: 0, hi: 1000 }];
+  assert.doesNotThrow(() => {
+    const { created, removed } = autoFillWoodWallBeams(graph, PROJECT, wallSegments);
+    assert.deepEqual(created, []);
+    assert.deepEqual(removed, []);
+  });
+});
+
+test('【失敗系】autoFillWoodWallBeams: 非在来（framingを持たない主構造）は何もしない', () => {
+  const { graph } = makeGridGraph('S造');
+  const wallSegments = [{ isVertical: false, coord: 0, lo: 0, hi: 4000 }];
+  assert.deepEqual(autoFillWoodWallBeams(graph, PROJECT, wallSegments), { created: [], removed: [] });
+});
+
+test('autoFillWoodWallBeams: 同一線上の壁区間の隙間がWALL_JUNCTION_TOL_MM(150)以下ならmergeWallIntervalsが連結し1本、超えれば分割される', () => {
+  function buildGraph() {
+    const graph = new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
+    graph.structureOverride = TRADITIONAL_WOOD_STRUCTURE;
+    for (const x of [0, 1000, 1200, 2000]) {
+      graph.addCenterLine(CenterLineType.VERTICAL, x, { labeled: true, discipline: Discipline.STRUCT });
+    }
+    graph.addCenterLine(CenterLineType.HORIZONTAL, 0, { labeled: true, discipline: Discipline.STRUCT });
+    return graph;
+  }
+  // 横壁(y=0)と交わる縦壁スタブ(x=0,1000,1200,2000)。横壁の隙間の有無に関わらず共通で使う交点源。
+  const crossSegs = [0, 1000, 1200, 2000].map(x => ({ isVertical: true, coord: x, lo: -500, hi: 500 }));
+
+  // 隙間100（≤150）: mergeWallIntervalsが連結し 0..2000 の通し1本になる。
+  const gGap100 = buildGraph();
+  const { created: created100 } = autoFillWoodWallBeams(gGap100, PROJECT, [
+    ...crossSegs,
+    { isVertical: false, coord: 0, lo: 0, hi: 1000 },
+    { isVertical: false, coord: 0, lo: 1100, hi: 2000 },
+  ]);
+  const horiz100 = created100.filter(b => !b.isVertical);
+  assert.equal(horiz100.length, 1, '隙間100は連結されて1本のはず');
+  assert.deepEqual([horiz100[0].clStart.effectiveValue, horiz100[0].clEnd.effectiveValue].sort((a, b) => a - b), [0, 2000]);
+
+  // 隙間200（>150）: 連結されず 0..1000 と 1200..2000 の2本に分かれる。
+  const gGap200 = buildGraph();
+  const { created: created200 } = autoFillWoodWallBeams(gGap200, PROJECT, [
+    ...crossSegs,
+    { isVertical: false, coord: 0, lo: 0, hi: 1000 },
+    { isVertical: false, coord: 0, lo: 1200, hi: 2000 },
+  ]);
+  const horiz200 = created200.filter(b => !b.isVertical);
+  assert.equal(horiz200.length, 2, '隙間200は連結されず2本に分かれるはず');
+  const spans200 = horiz200
+    .map(b => [b.clStart.effectiveValue, b.clEnd.effectiveValue].sort((a, b) => a - b))
+    .sort((a, b) => a[0] - b[0]);
+  assert.deepEqual(spans200, [[0, 1000], [1200, 2000]]);
+});
+
+test('【失敗系】autoFillWoodWallBeams: mergeWallIntervalsが3片を推移的に連結しないと通し梁が1本も生成されない（throughBeamRunsの端点tol単独では代替できない境界。mergeWallIntervalsの第2引数を既定(CL_OVERLAP_TOL_MM=0.5)にすると赤になる）', () => {
+  // 壁が3片・隙間各100（≤150）で連続する線に対し、線上の交点は両端(0,2300)だけを置く
+  // （中間の交点を持たせると throughBeamRuns 自身のtol境界チェックだけで1本になってしまい、
+  // mergeWallIntervals による推移的な連結〔[0,700]+[800,1500]+[1600,2300]→[0,2300]〕を
+  // 独立して検証できないため）。
+  const graph = new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
+  graph.structureOverride = TRADITIONAL_WOOD_STRUCTURE;
+  graph.addCenterLine(CenterLineType.VERTICAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+  graph.addCenterLine(CenterLineType.VERTICAL, 2300, { labeled: true, discipline: Discipline.STRUCT });
+  graph.addCenterLine(CenterLineType.HORIZONTAL, 0,   { labeled: true, discipline: Discipline.STRUCT });
+  const wallSegments = [
+    { isVertical: true, coord: 0,    lo: -500, hi: 500 },
+    { isVertical: true, coord: 2300, lo: -500, hi: 500 },
+    { isVertical: false, coord: 0, lo: 0,    hi: 700 },
+    { isVertical: false, coord: 0, lo: 800,  hi: 1500 },
+    { isVertical: false, coord: 0, lo: 1600, hi: 2300 },
+  ];
+  const { created } = autoFillWoodWallBeams(graph, PROJECT, wallSegments);
+  const horiz = created.filter(b => !b.isVertical);
+  assert.equal(horiz.length, 1, '隙間100×2が推移的に連結され0..2300の通し1本になるはず');
+  assert.deepEqual([horiz[0].clStart.effectiveValue, horiz[0].clEnd.effectiveValue].sort((a, b) => a - b), [0, 2300]);
+});
+
+test('autoFillWoodWallBeams: 撤去される梁に紐づくPenetrationSleeveはsleeveMapから連鎖削除され、excludedBeamSlotsにはキーが追加されない（graph.removeBeamは使わない規律）', () => {
+  const { graph, x1, x2, y1 } = makeGridGraph();
+  addBackingWall(graph, { axisValue: 2000, clStart: x1, clEnd: x2, isVertical: false }); // wallSegmentsを非空にするためのダミー壁
+  const gridAuto = graph.addBeam(StructuralMaterialType.WOOD, 'WOOD-120x120', y1, false, x1, x2, { role: 'primary' });
+  const sleeve = graph.addSleeve('beam', { hostBeamId: gridAuto.id, hostAxisCL: y1, hostClStart: x1, hostClEnd: x2, localPos: 500 });
+  const key = spanKey(y1, x1, x2);
+  const { removed } = autoFillWoodWallBeams(graph, PROJECT, selfWallSegments(graph));
+  assert.deepEqual(removed, [gridAuto.id]);
+  assert.equal(graph.beamMap.has(gridAuto.id), false);
+  assert.equal(graph.sleeveMap.has(sleeve.id), false, '梁の撤去に連鎖してスリーブも削除される');
+  assert.equal(graph.excludedBeamSlots.has(key), false, 'graph.removeBeamは使わないのでexcludedBeamSlotsは汚されない');
 });
 
 test('conformWoodSections: 在来木造の既存の柱・梁を柱120角・柱同寸幅へそろえる（手動固定も含む）。基礎梁・他構造は触らない', () => {
@@ -547,4 +829,55 @@ test('【統合】recomputeStructuralForGraph: 在来木造の梁成が更新さ
   } finally {
     floorSwapManager.peek = originalPeek;
   }
+});
+
+// ---- 【統合】recomputeStructuralForGraphへの配線（壁線上の通し梁・候補に無い自動梁の撤去）を固定する（ステップ3c-2） ----
+test('【統合】recomputeStructuralForGraph: 在来木造は壁線上に通し梁を生成し、壁の無い旧方式(通り芯グリッド)の自動梁を撤去してchanged=trueになる', async () => {
+  const project = new Project('proj3', 'test');
+  // 2階建てにする（1階のみだと基礎伏図扱いになり梁のroleが'foundation'固定になってしまうため、
+  // role:'primary'が生成される対象階＝最下階でない階を作る）。
+  const { graph: g1 } = project.addPlane(0, '1階', 'p1');
+  const { graph } = project.addPlane(3000, '2階', 'p2');
+  project.activePlaneId = 'p2';
+  graph.structureOverride = TRADITIONAL_WOOD_STRUCTURE;
+
+  const x0 = graph.addCenterLine(CenterLineType.VERTICAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+  const x1 = graph.addCenterLine(CenterLineType.VERTICAL, 3640, { labeled: true, discipline: Discipline.STRUCT });
+  const x2 = graph.addCenterLine(CenterLineType.VERTICAL, 7280, { labeled: true, discipline: Discipline.STRUCT }); // 部屋の外（壁が無い）
+  const y0 = graph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+  const y1 = graph.addCenterLine(CenterLineType.HORIZONTAL, 3640, { labeled: true, discipline: Discipline.STRUCT });
+  const room = graph.addRoom(new Set([`${x0.id}:${y0.id}:${x1.id}:${y1.id}`]), 'A');
+  generateRoomWallsFromOutline(graph, room);
+  // 壁の無い x1..x2（部屋の外）に、旧方式（通り芯グリッド）の自動大梁を残置（撤去されるはず）。
+  const staleBeam = graph.addBeam(StructuralMaterialType.WOOD, 'WOOD-120x120', y0, false, x1, x2, { role: 'primary' });
+
+  // 1階（非アクティブ）のpeekはfloorSwapManagerのシングルトンpeekを一時差し替える
+  // （wallRefresh.test.js:285付近・本ファイル既存の【統合】テストと同じ手法）。
+  const peekMap = { p1: g1, p2: graph };
+  const originalPeek = floorSwapManager.peek;
+  floorSwapManager.peek = async (plane) => peekMap[plane.id] ?? null;
+  try {
+    const { changed } = await recomputeStructuralForGraph(graph, project, TRADITIONAL_WOOD_STRUCTURE);
+    assert.equal(changed, true);
+    assert.equal(graph.beamMap.has(staleBeam.id), false, '壁の無い辺の自動大梁は撤去される');
+    const wallBeams = graph.beams.filter(b => b.role === 'primary' && b.materialType === StructuralMaterialType.WOOD);
+    assert.ok(wallBeams.length > 0, '部屋の壁線上に通し梁が生成される');
+    assert.ok(wallBeams.every(b => b.id !== staleBeam.id));
+  } finally {
+    floorSwapManager.peek = originalPeek;
+  }
+});
+
+// ---- 不変条件: structuralRecompute.js が wallRunSegments を autoFillStructuralGrid に渡し、removedBeams を changed に含める ----
+test('【不変条件】structuralRecompute.js: wallRunSegments を autoFillStructuralGrid に渡し、removedBeams を changed に含める（ステップ3c-2）', async () => {
+  const fs = await import('node:fs');
+  const path = await import('node:path');
+  const url = await import('node:url');
+  const here = path.dirname(url.fileURLToPath(import.meta.url));
+  const src = fs.readFileSync(path.join(here, 'structuralRecompute.js'), 'utf8');
+  assert.ok(/wallRunSegments\(targetGraph,\s*belowGraph,\s*structure\)/.test(src),
+    'wallRunSegments(targetGraph, belowGraph, structure) の呼び出しが無い');
+  assert.ok(/autoFillStructuralGrid\(targetGraph, project, mainStructure, wallGate, wallSources, wallSegments\)/.test(src),
+    'autoFillStructuralGrid へ wallSegments を渡していない');
+  assert.ok(/removedBeams\.length > 0/.test(src), 'removedBeams が changed の判定に含まれていない');
 });

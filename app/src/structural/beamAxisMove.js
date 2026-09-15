@@ -57,6 +57,10 @@ export function resolveSecondaryBeamsForAxis(graph, cl, project) {
   if (!isStructureSpecified(graph, project)) return { before: currentCount, after: currentCount };
   const structure = effectiveStructure(graph, project);
   if (!structureHasMemberKind(MEMBER_KIND.BEAM, structure)) return { before: currentCount, after: currentCount };
+  // 在来木造（beamPlacement:'wallRuns'）は梁芯CL上の小梁を持たない（壁線上の通し梁に置き換え済み。
+  // structuralAutoFill.js autoFillStructuralGrid と同じ判定軸）。非破壊の早期return——梁芯CLの移動は
+  // 従来どおりmoveState経由で動くが、小梁側は何も再解決しない。
+  if (rulesFor(structure).beamPlacement === 'wallRuns') return { before: currentCount, after: currentCount };
 
   const isVertical = cl.centerLineType === CenterLineType.VERTICAL;
   const hosts = secondaryBeamSpansFor(graph, cl);

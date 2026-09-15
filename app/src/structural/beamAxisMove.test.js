@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { Plane, PlanGraph, CenterLineType, Discipline, StructuralMaterialType, spanKey } from '../core.js';
 import { beamAxisMoveRange, resolveSecondaryBeamsForAxis } from './beamAxisMove.js';
 import { DEFAULT_BEAM_SECTION_BY_MATERIAL } from './memberCatalog.js';
+import { TRADITIONAL_WOOD_STRUCTURE } from './structureRules.js';
 
 // memberTestFixtures.js のダックタイピングでは effectiveValue・gridXs/gridYs・findHostPrimaryBeam 連携の
 // 実挙動を再現できないため、本ファイルは実 core.js（Plane/PlanGraph）を使う
@@ -63,6 +64,16 @@ function setupHostGainFixture() {
   const project = { structuralInfo: { mainStructure: 'S造' } };
   return { graph, beamAxisCL, project, y1, y2, y3 };
 }
+
+test('【失敗系】resolveSecondaryBeamsForAxis: 在来木造（beamPlacement:wallRuns）は小梁を再解決せず非破壊で早期returnする（ステップ3c-2）', () => {
+  const { graph, beamAxisCL } = setupHostGainFixture();
+  const project = { structuralInfo: { mainStructure: TRADITIONAL_WOOD_STRUCTURE } };
+  const before = graph.beams.filter(b => b.role === 'secondary' && b.axisCL.id === beamAxisCL.id).length;
+  const result = resolveSecondaryBeamsForAxis(graph, beamAxisCL, project);
+  assert.deepEqual(result, { before, after: before });
+  assert.equal(graph.beams.filter(b => b.role === 'secondary').length, 0, '在来木造は小梁を生成しない');
+  assert.equal(graph.beams.filter(b => b.role === 'primary').length, 3, '既存の大梁3本には触れない（非破壊）');
+});
 
 test('resolveSecondaryBeamsForAxis: host不足時は既定材料・断面で新規小梁を生成する（本数0→1）', () => {
   const { graph, beamAxisCL, project } = setupHostGainFixture();

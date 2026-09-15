@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { RoomFeature } from '../core/constants.js';
 import {
   woodBeamDepthMm, woodBeamSectionKey, woodBeamSectionForDepth, woodBeamDepthForSpans, crossingBeamLoadCoords,
-  propagateCarrierDepths,
+  mergeWallIntervals, throughBeamRuns, propagateCarrierDepths,
   studPositions, studSpec, openingJambSpec, entranceOpeningWidthMm, hipBraceAllowed,
   wallRunFaces, faceStudPositions,
 } from './woodFraming.js';
@@ -123,6 +123,72 @@ test('crossingBeamLoadCoords: 同位置で両方向(+1/-1)そろう十字貫通�
     [1820], '貫通する910は除外し、T字の1820だけ残す',
   );
   assert.deepEqual(crossingBeamLoadCoords([]), []);
+});
+
+test('mergeWallIntervals: 重なるか隙間がtol以下の区間を連結し、昇順の最大区間にする', () => {
+  assert.deepEqual(mergeWallIntervals([{ lo: 0, hi: 100 }, { lo: 50, hi: 150 }]), [{ lo: 0, hi: 150 }], '重なりは連結');
+  assert.deepEqual(mergeWallIntervals([{ lo: 0, hi: 100 }, { lo: 100.5, hi: 200 }]), [{ lo: 0, hi: 200 }], '隙間=tol(0.5)は連結');
+  assert.deepEqual(
+    mergeWallIntervals([{ lo: 0, hi: 100 }, { lo: 100.6, hi: 200 }]),
+    [{ lo: 0, hi: 100 }, { lo: 100.6, hi: 200 }],
+    '隙間>tolは分離',
+  );
+  // 未ソート入力でも昇順に並ぶ
+  assert.deepEqual(
+    mergeWallIntervals([{ lo: 500, hi: 600 }, { lo: 0, hi: 100 }]),
+    [{ lo: 0, hi: 100 }, { lo: 500, hi: 600 }],
+  );
+  // tol指定
+  assert.deepEqual(mergeWallIntervals([{ lo: 0, hi: 100 }, { lo: 110, hi: 200 }], 10), [{ lo: 0, hi: 200 }]);
+});
+
+test('【失敗系】mergeWallIntervals: 非数・hi<=loの不正区間は除去、空配列は空配列', () => {
+  assert.deepEqual(
+    mergeWallIntervals([{ lo: 0, hi: 100 }, { lo: 50, hi: 50 }, { lo: NaN, hi: 10 }, { lo: 10, hi: 5 }, null, undefined]),
+    [{ lo: 0, hi: 100 }],
+  );
+  assert.deepEqual(mergeWallIntervals([]), []);
+  assert.deepEqual(mergeWallIntervals(null), []);
+});
+
+test('throughBeamRuns: 連続する被覆ペアは1本の通し梁にまとめる（区間が分かれていても連続被覆なら1本）', () => {
+  // 3点全被覆(1つの区間) → 通しで1本
+  assert.deepEqual(throughBeamRuns([0, 1820, 3640], [{ lo: 0, hi: 3640 }]), [{ lo: 0, hi: 3640 }]);
+  // 3点全被覆(区間が分かれていても連続して被覆されていれば1本にまとめる)
+  assert.deepEqual(
+    throughBeamRuns([0, 1820, 3640], [{ lo: 0, hi: 1820 }, { lo: 1820, hi: 3640 }]),
+    [{ lo: 0, hi: 3640 }],
+  );
+});
+
+test('throughBeamRuns: 中間ペアが未被覆(壁が途切れている)なら2本に割れ、片側だけ被覆なら未被覆側は捨てて1本', () => {
+  // 中間ペアが未被覆(壁が途切れている)なら2本に割れる
+  assert.deepEqual(
+    throughBeamRuns([0, 1820, 3640, 5460], [{ lo: 0, hi: 1820 }, { lo: 3640, hi: 5460 }]),
+    [{ lo: 0, hi: 1820 }, { lo: 3640, hi: 5460 }],
+  );
+  // 片側だけ被覆なら1本(未被覆側は捨てる)
+  assert.deepEqual(throughBeamRuns([0, 1820, 3640], [{ lo: 0, hi: 1820 }]), [{ lo: 0, hi: 1820 }]);
+  // 壁が途中で切れる点(被覆区間の外の点)は端にならない
+  assert.deepEqual(throughBeamRuns([0, 1820, 2000], [{ lo: 0, hi: 1820 }]), [{ lo: 0, hi: 1820 }]);
+});
+
+test('throughBeamRuns: tol境界（iv.hi === p - tol の等号）は被覆とみなす', () => {
+  assert.deepEqual(throughBeamRuns([0, 1820], [{ lo: 0, hi: 1819.5 }]), [{ lo: 0, hi: 1820 }], 'iv.hi=p-tolは境界(等号)で被覆');
+  assert.deepEqual(throughBeamRuns([0, 1820], [{ lo: 0, hi: 1819.4 }]), [], 'iv.hi<p-tolは非被覆');
+});
+
+test('throughBeamRuns: 重複・未ソートの点もdedup・昇順化してから判定する', () => {
+  assert.deepEqual(throughBeamRuns([1820, 0, 0.2], [{ lo: 0, hi: 1820 }]), [{ lo: 0, hi: 1820 }]);
+});
+
+test('【失敗系】throughBeamRuns: 点2点未満・被覆なし・非数混入は空配列', () => {
+  assert.deepEqual(throughBeamRuns([1000], [{ lo: 0, hi: 2000 }]), [], '点1個');
+  assert.deepEqual(throughBeamRuns([], []), []);
+  assert.deepEqual(throughBeamRuns([0, 1820], []), [], '被覆する区間が無い');
+  assert.deepEqual(throughBeamRuns([0, 1820], [{ lo: 5000, hi: 6000 }]), [], '被覆する区間が無い(別位置)');
+  assert.deepEqual(throughBeamRuns([0, NaN, 1820], [{ lo: 0, hi: 1820 }]), [], '点に非数混入');
+  assert.deepEqual(throughBeamRuns(null, [{ lo: 0, hi: 1820 }]), []);
 });
 
 test('propagateCarrierDepths: 1段伝播（carrierの成をhostへmaxで反映）', () => {

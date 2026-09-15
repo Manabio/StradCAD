@@ -3,9 +3,10 @@
 // makeSwitchbackFixtureと同一構成（コメントも参照。sections:[6,1,6]→n1=6・totalSteps=12）。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Project, CenterLineType, Discipline, StairType, StructuralMaterialType } from '../core.js';
+import { Plane, PlanGraph, Project, CenterLineType, Discipline, StairType, StructuralMaterialType } from '../core.js';
 import { generateRoomWallsFromOutline } from '../finish/wallGeneration.js';
-import { autoFillStairLandingBeams } from './structuralAutoFill.js';
+import { autoFillStairLandingBeams, autoFillBeamsForStructure, autoFillStructuralGrid } from './structuralAutoFill.js';
+import { TRADITIONAL_WOOD_STRUCTURE } from './structureRules.js';
 
 // 1階(elevation:0)・2階(elevation:2400)の2フロアProject。floorHeightAbove(project, 1階plane)=2400。
 function makeProjectWithFloors() {
@@ -14,6 +15,66 @@ function makeProjectWithFloors() {
   project.addPlane(2400, '2階');
   return { project, graph };
 }
+
+// autoFillBeamsForStructure/autoFillStructuralGrid（beamPlacementの選択子）テスト用の4000角グリッド。
+function makeGridGraph(structure) {
+  const graph = new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
+  graph.structureOverride = structure;
+  const x1 = graph.addCenterLine(CenterLineType.VERTICAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+  const x2 = graph.addCenterLine(CenterLineType.VERTICAL, 4000, { labeled: true, discipline: Discipline.STRUCT });
+  const y1 = graph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+  const y2 = graph.addCenterLine(CenterLineType.HORIZONTAL, 4000, { labeled: true, discipline: Discipline.STRUCT });
+  return { graph, x1, x2, y1, y2 };
+}
+const GRID_PROJECT = { planes: [], structuralInfo: { mainStructure: '未定', foundationType: 'ベタ基礎' } };
+
+// role・向き・軸位置・端点座標（CL idはgraphごとに乱数のため使わない）で正規化した梁の識別キー。
+function beamKey(b) {
+  const ends = [b.clStart.effectiveValue, b.clEnd.effectiveValue].sort((x, y) => x - y);
+  return `${b.role}:${b.isVertical}:${Math.round(b.axisValue)}:${Math.round(ends[0])}:${Math.round(ends[1])}`;
+}
+
+test('autoFillBeamsForStructure: role!=="primary"（基礎梁等）は在来木造でも通り芯グリッド方式のまま（wallSegmentsは使われない）', () => {
+  const { graph } = makeGridGraph(TRADITIONAL_WOOD_STRUCTURE);
+  const wallSegments = [{ isVertical: false, coord: 0, lo: 0, hi: 4000 }]; // 渡されても使われないはず
+  const { created, removed } = autoFillBeamsForStructure(graph, GRID_PROJECT, 'foundation', null, wallSegments);
+  assert.equal(created.length, 4, '通り芯4辺の基礎梁が生成される（壁線方式は使わない）');
+  assert.deepEqual(removed, []);
+  assert.ok(created.every(b => b.role === 'foundation' && b.materialType === StructuralMaterialType.RC));
+});
+
+test('autoFillBeamsForStructure: role==="primary"の非在来（S造）は wallSegments を渡しても通り芯グリッド方式のまま', () => {
+  const { graph } = makeGridGraph('S造');
+  const wallSegments = [{ isVertical: false, coord: 0, lo: 0, hi: 4000 }];
+  const { created, removed } = autoFillBeamsForStructure(graph, GRID_PROJECT, 'primary', null, wallSegments);
+  assert.equal(created.length, 4, '通り芯4辺の大梁が生成される');
+  assert.deepEqual(removed, []);
+  assert.ok(created.every(b => b.materialType === StructuralMaterialType.STEEL));
+});
+
+test('【失敗系】autoFillBeamsForStructure: role==="primary"の在来木造は壁線方式へ委譲し、壁ゼロなら通り芯グリッドへフォールバックしない', () => {
+  const { graph } = makeGridGraph(TRADITIONAL_WOOD_STRUCTURE);
+  const { created, removed } = autoFillBeamsForStructure(graph, GRID_PROJECT, 'primary', null, []);
+  assert.deepEqual(created, []);
+  assert.deepEqual(removed, []);
+});
+
+test('【不変条件】autoFillStructuralGrid: 非在来（S造）は wallSegments を渡しても結果が従来（通り芯グリッド方式）と同一', () => {
+  const build = () => {
+    const { graph } = makeGridGraph('S造');
+    const project = { planes: [graph.plane], structuralInfo: { mainStructure: '未定', foundationType: 'ベタ基礎' } };
+    return { graph, project };
+  };
+  const { graph: gA, project: pA } = build();
+  const rA = autoFillStructuralGrid(gA, pA, 'S造', null, [], []);
+  const { graph: gB, project: pB } = build();
+  // S造では使われないはずの壁線を渡す（無視されるはず）。
+  const wallSegments = [{ isVertical: false, coord: 2000, lo: 0, hi: 4000 }];
+  const rB = autoFillStructuralGrid(gB, pB, 'S造', null, [], wallSegments);
+  assert.deepEqual(rA.removedBeams, [], 'S造は常にremovedBeams=[]');
+  assert.deepEqual(rB.removedBeams, []);
+  assert.deepEqual(rA.newBeams.map(beamKey).sort(), rB.newBeams.map(beamKey).sort(), 'wallSegmentsの有無で生成される梁が変わらない');
+});
 
 function makeSwitchbackFixture(graph, structure = StructuralMaterialType.STEEL) {
   const x0 = graph.addCenterLine(CenterLineType.VERTICAL, 0,    { labeled: false, discipline: Discipline.ARCH });

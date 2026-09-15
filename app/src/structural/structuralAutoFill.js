@@ -6,7 +6,7 @@ import { computeTributaryColumnWidth, computeColumnBaseSize, computeFoundationBe
 import { floorSwapManager } from '../storage/FloorSwapManager.js';
 import { isRigidFrameStructure, structureHasMemberKind, memberKindOf, MEMBER_KIND } from './structuralClassification.js';
 import { rulesFor, defaultMaterialFor, UNSPECIFIED_STRUCTURE, effectiveStructure } from './structureRules.js';
-import { autoFillWoodColumns } from './woodAutoFill.js';
+import { autoFillWoodColumns, autoFillWoodWallBeams } from './woodAutoFill.js';
 import { buildExteriorSide, footprintCellKeys } from './wallGate.js';
 import { autoFillWallBeamAxes } from './wallBeamAxes.js';
 import { landingEdgeCLs, landingZ } from '../finish/stair/stairLanding.js';
@@ -200,6 +200,20 @@ export function autoFillBeams(graph, project, role = 'primary', wallGate = null)
   return created;
 }
 
+/** 梁(role:'primary')の自動生成を主構造ルールの選択子（beamPlacement）で振り分ける単一の入口。
+ *  通り芯グリッド辺（既定）＝autoFillBeams、壁線上の通し梁（在来木造）＝autoFillWoodWallBeams
+ *  （撤去も伴う）。role==='primary'（かつ在来木造）のときだけ壁線方式へ切り替える——基礎梁
+ *  （role:'foundation'）・屋根の軒桁（role:'eaves'、autoFillRoofBeams）・踊り場受け梁は別経路の
+ *  ままここを通らない。wallSegments は wallGate と同じ既存パターン（呼び出し側が await して渡す）。
+ *  構造モード突入時の再計算（autoFillStructuralGrid）が共有する。
+ *  @returns {{created: object[], removed: string[]}} */
+export function autoFillBeamsForStructure(graph, project, role, wallGate = null, wallSegments = []) {
+  if (role === 'primary' && rulesFor(effectiveStructure(graph, project)).beamPlacement === 'wallRuns') {
+    return autoFillWoodWallBeams(graph, project, wallSegments, wallGate);
+  }
+  return { created: autoFillBeams(graph, project, role, wallGate), removed: [] };
+}
+
 // 梁芯CL（direct discipline:'fuse'、labeled:false）の追加座標許容誤差(mm)。
 const SPAN_EPS = 0.5;
 
@@ -358,8 +372,10 @@ export function autoFillStairLandingBeams(graph, project, wallGate = null) {
  *  wallGate: 建物フットプリント（部屋領域＝外壁線位置）の鉛直連続性で柱・梁・基礎・軒桁の有無を取捨するゲート
  *  （wallGate.js / buildStructuralWallGate。屋根は直下の最上階基準。null＝ゲートなしで全グリッド生成）。
  *  wallSources: 壁由来の梁芯生成対象（structural/wallBeamAxes.js collectWallBeamSources の結果。
- *  下階peekを含む非同期収集のため呼び出し側が await して渡す＝wallGateと同じ既存パターン）。 */
-export function autoFillStructuralGrid(graph, project, belowMainStructure, wallGate = null, wallSources = []) {
+ *  下階peekを含む非同期収集のため呼び出し側が await して渡す＝wallGateと同じ既存パターン）。
+ *  wallSegments: 壁線上の通し梁（在来木造・beamPlacement:'wallRuns'）が候補列挙に使う壁区間
+ *  （wallBeamAxes.js wallRunSegments の結果。マージ不要のプレーン配列。他構造は未使用）。 */
+export function autoFillStructuralGrid(graph, project, belowMainStructure, wallGate = null, wallSources = [], wallSegments = []) {
   const foundation = isFoundationPlane(graph.plane, project);
   const isRoof = graph.plane.isRoofPlane;
   // 自階帰属の柱・梁・基礎は自階の主構造が確定するまで生成しない（autoFillColumns は自前でも同ガード）。
@@ -381,16 +397,26 @@ export function autoFillStructuralGrid(graph, project, belowMainStructure, wallG
   const newFootings = (foundation && ownSpecified && structureHasMemberKind(MEMBER_KIND.INDEPENDENT_FOOTING, structure)
     && foundationGeneratesBase(structure, foundationType)) ? autoFillFootings(graph, wallGate) : [];
   const beamKind = foundation ? MEMBER_KIND.FOUNDATION_BEAM : MEMBER_KIND.BEAM;
-  const newBeams     = (!isRoof && ownSpecified && structureHasMemberKind(beamKind, structure)) ? autoFillBeams(graph, project, foundation ? 'foundation' : 'primary', wallGate) : [];
+  const beamsResult = (!isRoof && ownSpecified && structureHasMemberKind(beamKind, structure))
+    ? autoFillBeamsForStructure(graph, project, foundation ? 'foundation' : 'primary', wallGate, wallSegments)
+    : { created: [], removed: [] };
+  const newBeams = beamsResult.created;
+  const removedBeams = beamsResult.removed;
   const newRoofBeams = (isRoof && belowMainStructure !== UNSPECIFIED_STRUCTURE) ? autoFillRoofBeams(graph, project, belowMainStructure, wallGate) : [];
   // 踊り場受け梁（role:'landing'）。鉄骨・RC階段の踊り場辺（壁側1辺）へ自動生成する（WP-B2）。
   // 通り芯グリッドとは無関係の生成源のため、小梁生成の直前という以外の順序上の制約はない。
   const newLandingBeams = autoFillStairLandingBeams(graph, project, wallGate);
   // 梁芯CL（discipline:'fuse'）ごとの小梁自動生成。wallGate は直接引かない
   // （直交大梁に挟まれている＝大梁のフットプリント判定を継承するため。上のnewBeams生成後に呼ぶ）。
-  // 出自を問わず全梁芯が対象のため、壁由来の梁芯（newWallBeamAxes）もそのまま拾う。
-  const newSecondaryBeams = autoFillSecondaryBeams(graph, project);
-  return { newColumns, removedColumns, newFootings, newBeams: [...newBeams, ...newRoofBeams, ...newWallBeamAxes, ...newLandingBeams, ...newSecondaryBeams] };
+  // 出自を問わず全梁芯が対象のため、壁由来の梁芯（newWallBeamAxes）もそのまま拾う。beamPlacement:'wallRuns'
+  // （在来木造）は通り芯グリッドの大梁を持たないため小梁のhostが無く、呼んでも0本になる以外に害はないが、
+  // 二重の判定軸を持たないよう明示的にスキップする（ステップ3c-2）。
+  const newSecondaryBeams = rulesFor(structure).beamPlacement === 'wallRuns' ? [] : autoFillSecondaryBeams(graph, project);
+  return {
+    newColumns, removedColumns, newFootings,
+    newBeams: [...newBeams, ...newRoofBeams, ...newWallBeamAxes, ...newLandingBeams, ...newSecondaryBeams],
+    removedBeams,
+  };
 }
 
 /** 主要構造（実効値）と異なる材種の既存柱・梁を、新しい材種のサブクラスへ変換する。

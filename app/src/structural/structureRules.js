@@ -127,6 +127,11 @@ const WOOD_RULES = Object.freeze({
   columnPlacement: 'gridIntersections',
   // (3) 柱幅の算定: 負担床面積から概算（既定）／固定（在来＝柱寸法は欄で決める。tributaryWidth を算定しない）。
   columnSizing: 'tributary',
+  // (3) 梁(role:'primary')の生成源: 通り芯グリッドの辺（既定。structuralAutoFill.js autoFillBeams）／
+  // 壁線上の通し梁（在来。woodAutoFill.js autoFillWoodWallBeams）。在来は通り芯グリッドの大梁・梁芯CL上の
+  // 小梁（role:'secondary'）の代わりに、壁線（自階＋1つ下の階の壁）上の壁の交点の並びを通しで1本の
+  // role:'primary'（記号G）の梁として生成する（ステップ3c-2）。
+  beamPlacement: 'gridEdges',
   // (3) 平面詳細の壁下地材（間柱断面）の割付: 'fixedPitch'＝壁の始端から450固定ピッチ・見かけ幅45（既定。
   // renderer/wallStudLayout.js）／'betweenColumns'＝壁上の柱で区切った各面を studPositions で割り付け、
   // 面の両端は柱面から studColumnClearanceMm を空けて端部材を立てる（在来。woodFraming.js faceStudPositions）。
@@ -169,6 +174,8 @@ const RC_RULES = Object.freeze({
   backing: null,
   columnPlacement: 'gridIntersections',
   columnSizing: 'tributary',
+  // (3) 梁(role:'primary')の生成源: 通り芯グリッドの辺（在来木造だけ壁線方式へ上書き。WOOD_RULES参照）。
+  beamPlacement: 'gridEdges',
   studLayout: 'fixedPitch',
   drawing: Object.freeze({
     columnFinishWrap: true, planColumnColor: 'material', planColumnLineWeight: 'thick',
@@ -210,6 +217,7 @@ export const STRUCTURE_RULES = Object.freeze({
     { ...WOOD_RULES, isTraditionalWood: true, wallBeamAxes: 'selfAndBelow',
       framing: TRADITIONAL_WOOD_FRAMING, backing: TRADITIONAL_WOOD_BACKING,
       columnPlacement: 'wallIntersections', columnSizing: 'fixed', studLayout: 'betweenColumns',
+      beamPlacement: 'wallRuns',
       // 在来木造の柱は壁の中に立つ管柱＝仕上げ包み（柱壁）は付けない。平面の柱断面は壁と同じ黒
       // （ユーザー指示2026-09-14「在来木造の柱に柱包みは不要」「茶色の断面…黒指定」）。輪郭は**極太線**——
       // 壁厚＝柱寸法（conformWoodBacking で下地120＝柱120）になると柱の輪郭が壁の下地帯の線と完全に重なり、

@@ -1,7 +1,7 @@
 import { runInAction } from 'mobx';
 import { serializeGraph } from '../graphSnapshot.js';
 import { buildStructuralWallGate, buildExteriorSide } from './wallGate.js';
-import { collectWallBeamSources, peekBelowGraph } from './wallBeamAxes.js';
+import { collectWallBeamSources, peekBelowGraph, wallRunSegments } from './wallBeamAxes.js';
 import {
   autoFillStructuralGrid,
   autoFillColumnAxisOffsets,
@@ -52,10 +52,13 @@ export async function recomputeStructuralForGraph(targetGraph, project, mainStru
   const belowGraph = (ownRules.wallBeamAxes === 'selfAndBelow' || ownRules.framing) ? await peekBelowGraph(targetGraph, project) : null;
   // 壁由来の梁芯生成対象（下階peekを含む非同期収集。wallGateと同じパターンで先に await する）。
   const wallSources = await collectWallBeamSources(targetGraph, project, belowGraph);
+  // 在来木造（beamPlacement:'wallRuns'）の壁線上の通し梁が候補列挙に使う壁区間（マージ不要のプレーン配列。
+  // belowGraphはwallSourcesと同じpeek結果を使い回す＝1回の再計算で下階を二重にpeekしない）。
+  const wallSegments = wallRunSegments(targetGraph, belowGraph, structure);
 
   // 構造体トポロジーから未定義の柱・梁・基礎（基礎伏図のみ）を検出し、自動補完する。
   // ユーザーが明示削除した箇所は除外集合（excludedColumnSlots 等）により復活しない。
-  const { newColumns, removedColumns, newFootings, newBeams } = runInAction(() => autoFillStructuralGrid(targetGraph, project, mainStructure, wallGate, wallSources));
+  const { newColumns, removedColumns, newFootings, newBeams, removedBeams } = runInAction(() => autoFillStructuralGrid(targetGraph, project, mainStructure, wallGate, wallSources, wallSegments));
   // べた基礎（木造）のマットスラブを基礎伏図に生成・撤去する（基礎種別で取捨。問題.md）。基礎伏図以外では no-op。
   const matFoundation = runInAction(() => autoFillMatFoundation(targetGraph, project));
   // 外周モデル（side ビュー）を1回構築し、柱芯オフセットと梁偏芯の両方に渡す——柱・梁で外側方向（内外定義）を一致させる。
@@ -97,6 +100,7 @@ export async function recomputeStructuralForGraph(targetGraph, project, mainStru
   });
 
   const changed = newColumns.length > 0 || removedColumns.length > 0 || newFootings.length > 0 || newBeams.length > 0
+    || removedBeams.length > 0
     || matFoundation.created.length > 0 || matFoundation.removed.length > 0
     || convertedColumns.length > 0 || convertedBeams.length > 0 || convertedFootings.length > 0 || conformedSections.length > 0
     || removedByClass.length > 0

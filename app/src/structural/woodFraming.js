@@ -161,6 +161,61 @@ export function propagateCarrierDepths(nodes) {
 }
 
 /**
+ * 壁の区間（下地帯や壁厚から求めた [lo,hi] 等）を、重なるか隙間が tol 以下のもの同士でまとめ、
+ * 昇順の最大区間の配列にする（throughBeamRuns が「梁を架けられる連続区間」を判定する前段）。
+ * 非数・hi<=lo の区間は捨てる。
+ * @param {Array<{lo:number, hi:number}>} intervals
+ * @param {number} [tol] - 連結を許す隙間の上限(mm)
+ * @returns {Array<{lo:number, hi:number}>}
+ */
+export function mergeWallIntervals(intervals, tol = CL_OVERLAP_TOL_MM) {
+  const valid = (intervals ?? [])
+    .filter(iv => iv && Number.isFinite(iv.lo) && Number.isFinite(iv.hi) && iv.hi > iv.lo)
+    .sort((a, b) => a.lo - b.lo);
+  const out = [];
+  for (const iv of valid) {
+    const last = out[out.length - 1];
+    if (last && iv.lo <= last.hi + tol) {
+      last.hi = Math.max(last.hi, iv.hi);
+    } else {
+      out.push({ lo: iv.lo, hi: iv.hi });
+    }
+  }
+  return out;
+}
+
+/**
+ * 壁線上の通し梁の支持区間（3dの前提: 梁は途中の柱位置で切らず、両端＋下階柱を支持点として
+ * 通しで架ける。端は壁の交点＝自由端へは伸ばさない）。points（線上の端点候補座標。重複・未ソート可）
+ * を昇順・tol未満は同一点としてdedupし、隣り合う2点のペアが mergedIntervals（mergeWallIntervals
+ * の結果を想定）のいずれか1つに収まる＝壁が途切れず続いているかを判定、覆われたペアが連続する
+ * 最大の並びを1本の [lo,hi] にまとめる。壁が途中で切れている点（被覆区間の外）は端にできない。
+ * 点が2点未満・非数混入・被覆ペアが無ければ空配列。
+ * @param {number[]} points
+ * @param {Array<{lo:number, hi:number}>} mergedIntervals
+ * @param {number} [tol]
+ * @returns {Array<{lo:number, hi:number}>}
+ */
+export function throughBeamRuns(points, mergedIntervals, tol = CL_OVERLAP_TOL_MM) {
+  if (!Array.isArray(points) || points.some(p => !Number.isFinite(p))) return [];
+  const pts = dedupCoords(points, tol);
+  if (pts.length < 2) return [];
+  const covered = (a, b) => (mergedIntervals ?? []).some(iv => iv.lo <= a + tol && iv.hi >= b - tol);
+  const out = [];
+  let runStart = null;
+  for (let i = 0; i < pts.length - 1; i++) {
+    if (covered(pts[i], pts[i + 1])) {
+      if (runStart == null) runStart = pts[i];
+    } else {
+      if (runStart != null) out.push({ lo: runStart, hi: pts[i] });
+      runStart = null;
+    }
+  }
+  if (runStart != null) out.push({ lo: runStart, hi: pts[pts.length - 1] });
+  return out;
+}
+
+/**
  * 壁下地材（縦下地）の割付位置＝**材の中心**のA端からの距離 mm（昇順）。
  * 仕様「A,B間を割り付ける場合、AB間の両端に (AB間距離 − (AB間距離/455の商 − 1)×455) / 2 をとり、
  * 残りを455で割付」——両端の余りを等分し、内側を等ピッチにする。

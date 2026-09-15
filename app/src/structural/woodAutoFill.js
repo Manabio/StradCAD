@@ -10,13 +10,16 @@
 // **前提**: 呼び出し側が壁由来の梁芯CL（autoFillWallBeamAxes。マージ済み・下階込みの wallSources）を
 // 先に生成しておくこと——ここでは CL を作らない（自階だけの未マージ source で作ると、下階経路で
 // extent の短い梁芯CLが永続化され、後の重複ガードで固定される）。
-import { CenterLineType, centerLineKind, columnSlotKey, findHostPrimaryBeam } from '../core.js';
+import { CenterLineType, centerLineKind, columnSlotKey, spanKey, findHostPrimaryBeam } from '../core.js';
 import { CL_OVERLAP_TOL_MM } from '../core/constants.js';
 import { findSectionEntry, woodRectSectionKey } from './sectionCatalog.js';
 import { rulesFor, effectiveStructure } from './structureRules.js';
 import { selfWallSegments, findBeamAnchorCL } from './wallBeamAxes.js';
 import { woodStudCodeFor } from '../finish/materials/backingClass.js';
-import { woodBeamDepthForSpans, woodBeamSectionForDepth, crossingBeamLoadCoords, propagateCarrierDepths } from './woodFraming.js';
+import {
+  woodBeamDepthForSpans, woodBeamSectionForDepth, crossingBeamLoadCoords,
+  mergeWallIntervals, throughBeamRuns, propagateCarrierDepths,
+} from './woodFraming.js';
 
 // 壁の端部の取り合い許容(mm)。壁の端は**取り合う壁の半厚（仕上げ込み）ぶん控えて生成される**
 // （仕上げモードの壁生成。実機: x=0 の縦壁に突き当たる横壁は x=57.5 から始まる）ため、交点・T字・
@@ -104,6 +107,126 @@ export function autoFillWoodColumns(graph, project, wallGate = null) {
     graph.columnMap.delete(column.id);
     removed.push(column.id);
   }
+  return { created, removed };
+}
+
+// wallSegments（自階＋1つ下の階の壁区間）を「線」（isVertical, coord）ごとにまとめる。同一線判定は
+// CL_OVERLAP_TOL_MM（mergeWallBeamSources・梁芯の重複ガードと同じ許容）。純関数、graph 非依存。
+function groupWallLines(wallSegments) {
+  const lines = [];
+  for (const seg of wallSegments) {
+    let line = lines.find(l => l.isVertical === seg.isVertical && Math.abs(l.coord - seg.coord) < CL_OVERLAP_TOL_MM);
+    if (!line) { line = { isVertical: seg.isVertical, coord: seg.coord, intervals: [] }; lines.push(line); }
+    line.intervals.push({ lo: seg.lo, hi: seg.hi });
+  }
+  return lines;
+}
+
+/**
+ * 在来木造の壁線上の通し梁（role:'primary'、記号G。ステップ3c-2）を自動生成し、候補に無い自動生成の
+ * 梁（role:'primary'|'secondary', dimensionStatus==='auto'）を撤去する。通り芯グリッドの大梁・梁芯CL上の
+ * 小梁（autoFillBeams/autoFillSecondaryBeams）の代わりにこちらが生成する——呼び出し側
+ * （structural/structuralAutoFill.js autoFillBeamsForStructure）が主構造ルールの選択子
+ * （beamPlacement:'wallRuns'）で振り分ける。
+ *  - 候補＝壁線（wallSegments。自階＋1つ下の階、呼び出し側がマージせず渡す）を線（isVertical,coord）
+ *    ごとにまとめ、各線の壁区間を mergeWallIntervals で連結、その線上の壁の交点（wallIntersectionPoints）
+ *    をthroughBeamRuns へ通した「通しで架けられる区間」。柱の位置では切らない（3dの前提＝両端＋下階柱が
+ *    支持点。支持点は端点候補であって分割規則ではない）。自由端には伸ばさない。
+ *  - 各区間の端は通り芯または壁由来の梁芯CL（無ければ壁のある意匠中心線。柱と同じ findBeamAnchorCL /
+ *    findCenterAnchorCL）へ解決する。軸線自身・端のいずれかが解決できない区間は生成しない（continue）。
+ *  - wallGate.spanInBuilding で鉛直連続性をゲートする（host大梁がゲート済みなのと同じ規律）。
+ *  - 除外集合（excludedBeamSlots）・既存梁との重複は spanKey で確認する（柱・小梁と同じ規律）。
+ *  - 壁が1本も無い階（wallSegments.length===0）・framing を持たない主構造は何もしない（生成も撤去もしない。
+ *    autoFillWoodColumns と同じ「壁ゼロの階は既存部材を保全」裁定）。
+ *  - 撤去は graph.beamMap.delete を直接使う（graph.removeBeam は使わない＝excludedBeamSlots を汚さない。
+ *    deleteClassificationOverflow・resolveSecondaryBeamsForAxis と同じ規律）。子スリーブは連鎖削除する。
+ *    対象は主構造材種の role:'primary'|'secondary' のうち dimensionStatus==='auto' のみ
+ *    （locked/calculated は保持）。
+ *  - **候補スロットに旧方式の小梁（role:'secondary'）が既に居座っている場合は、それを道を空けてから
+ *    通し梁(role:'primary')へ置き換える**（`existing` 判定は role:'primary' の占有だけを「満たされた」と
+ *    みなす——role を見ずに spanKey だけで判定すると、梁芯CL方式で生成された旧・小梁が同じ位置に残った
+ *    まま「既存扱い」で新規生成をスキップし、かつ下段の撤去ループも候補キー一致で保持してしまうため、
+ *    その位置がいつまでも role:'secondary' のまま role:'primary' に昇格しない事故になる（実データ
+ *    moku1.stq の頭つなぎ・壁下梁で複数箇所再発）。占有物が手動固定（dimensionStatus!=='auto'）なら
+ *    重複させず生成を見送る（他の`dimensionStatus`ガードと同じ規律）。
+ * @param {object} graph
+ * @param {object} project
+ * @param {Array<{isVertical:boolean, coord:number, lo:number, hi:number}>} wallSegments
+ * @param {object|null} [wallGate]
+ * @returns {{created: object[], removed: string[]}}
+ */
+export function autoFillWoodWallBeams(graph, project, wallSegments, wallGate = null) {
+  const rules = rulesFor(effectiveStructure(graph, project));
+  if (!rules.framing || !(wallSegments?.length)) return { created: [], removed: [] };
+
+  const points = wallIntersectionPoints(wallSegments);
+  // spanKey -> その位置に既にある梁（同材種）。候補スロットの占有物判定（role:'primary'昇格）に使う。
+  const byKey = new Map();
+  for (const b of graph.beams) {
+    if (b.materialType !== rules.baseMaterial) continue;
+    const k = spanKey(b.axisCL, b.clStart, b.clEnd);
+    const arr = byKey.get(k);
+    if (arr) arr.push(b); else byKey.set(k, [b]);
+  }
+  const existingPrimaryKeys = new Set(
+    [...byKey].filter(([, bs]) => bs.some(b => b.role === 'primary')).map(([k]) => k));
+  const candidateKeys = new Set();
+  const created = [];
+  const removed = [];
+
+  for (const line of groupWallLines(wallSegments)) {
+    const axisType = line.isVertical ? CenterLineType.VERTICAL : CenterLineType.HORIZONTAL;
+    const axisCL = findBeamAnchorCL(graph, axisType, line.coord) ?? findCenterAnchorCL(graph, axisType, line.coord);
+    if (!axisCL) continue; // アンカー解決不能な線は生成しない（例外を投げない）
+
+    const crossType = line.isVertical ? CenterLineType.HORIZONTAL : CenterLineType.VERTICAL;
+    const merged = mergeWallIntervals(line.intervals, WALL_JUNCTION_TOL_MM);
+    const linePoints = points
+      .filter(p => Math.abs((line.isVertical ? p.x : p.y) - line.coord) < CL_OVERLAP_TOL_MM)
+      .map(p => (line.isVertical ? p.y : p.x));
+    const runs = throughBeamRuns(linePoints, merged, WALL_JUNCTION_TOL_MM);
+
+    for (const run of runs) {
+      const startCL = findBeamAnchorCL(graph, crossType, run.lo) ?? findCenterAnchorCL(graph, crossType, run.lo);
+      const endCL   = findBeamAnchorCL(graph, crossType, run.hi) ?? findCenterAnchorCL(graph, crossType, run.hi);
+      if (!startCL || !endCL) continue; // アンカー解決不能な端は生成しない（例外を投げない）
+      if (wallGate && !wallGate.spanInBuilding(axisCL, line.isVertical, startCL, endCL)) continue;
+
+      const key = spanKey(axisCL, startCL, endCL);
+      // 除外スロット（手動削除の尊重）は candidateKeys に加えない——生成しないだけでなく、下段の撤去
+      // ループの対象（＝撤去してよい）にも含める。ここで加えてしまうと、除外スロットに居座る旧方式の
+      // auto小梁が「候補あり」として撤去も生成もされず永久に残る事故になる（QA指摘・再発防止）。
+      if (graph.excludedBeamSlots.has(key)) continue;
+      candidateKeys.add(key);
+      if (existingPrimaryKeys.has(key)) continue;
+
+      // 候補スロットの占有物（旧方式の小梁等）を道を空ける。手動固定が占有していれば重複させず見送る。
+      const occupants = byKey.get(key) ?? [];
+      if (occupants.some(b => b.dimensionStatus !== 'auto')) continue;
+      for (const b of occupants) {
+        for (const s of [...graph.sleeveMap.values()]) if (s.hostBeamId === b.id) graph.sleeveMap.delete(s.id);
+        graph.beamMap.delete(b.id);
+        removed.push(b.id);
+      }
+
+      created.push(graph.addBeam(
+        rules.baseMaterial, rules.defaultSections.beam, axisCL, line.isVertical, startCL, endCL,
+        { role: 'primary', beamType: '大梁' },
+      ));
+      existingPrimaryKeys.add(key);
+    }
+  }
+
+  for (const beam of [...graph.beamMap.values()]) {
+    if (beam.materialType !== rules.baseMaterial) continue;
+    if (beam.role !== 'primary' && beam.role !== 'secondary') continue;
+    if (beam.dimensionStatus !== 'auto') continue;
+    if (candidateKeys.has(spanKey(beam.axisCL, beam.clStart, beam.clEnd))) continue;
+    for (const s of [...graph.sleeveMap.values()]) if (s.hostBeamId === beam.id) graph.sleeveMap.delete(s.id);
+    graph.beamMap.delete(beam.id);
+    removed.push(beam.id);
+  }
+
   return { created, removed };
 }
 

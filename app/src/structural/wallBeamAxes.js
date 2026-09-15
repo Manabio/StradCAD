@@ -230,11 +230,29 @@ export async function collectWallBeamSources(graph, project, belowGraph = undefi
   if (mode === 'rcBacking') {
     sources = wallBeamSourcesFromGraph(graph, true);
   } else if (mode === 'selfAndBelow') {
-    sources = wallBeamSourcesFromGraph(graph, false);
     const below = belowGraph === undefined ? await peekBelowGraph(graph, project) : belowGraph;
-    if (below) sources = sources.concat(wallBeamSourcesFromGraph(below, false));
+    sources = wallRunSegments(graph, below, structure);
   }
   return mergeWallBeamSources(sources);
+}
+
+/**
+ * graph（自階）＋belowGraph（1つ下の実体階。無ければnull）から、壁由来の梁芯生成・在来木造の
+ * 壁線上の通し梁（ステップ3c-2、woodAutoFill.js autoFillWoodWallBeams）が候補列挙に使う壁区間を、
+ * **マージせず**返す（同期・純粋）。rulesFor(structure).wallBeamAxes==='selfAndBelow'（在来木造のみ）
+ * でなければ空配列——RC造の壁由来梁芯生成（rcBacking）・鉄骨系（対象外）はここには現れない。
+ * collectWallBeamSources のselfAndBelow分岐はこの結果を mergeWallBeamSources に通すだけにして、
+ * 「自階＋下階をマージする」処理を二重実装しない。
+ * @param {object} graph
+ * @param {object|null} belowGraph
+ * @param {string} structure
+ * @returns {Array<{isVertical:boolean, coord:number, lo:number, hi:number}>}
+ */
+export function wallRunSegments(graph, belowGraph, structure) {
+  if (rulesFor(structure).wallBeamAxes !== 'selfAndBelow') return [];
+  const self = wallBeamSourcesFromGraph(graph, false);
+  const below = belowGraph ? wallBeamSourcesFromGraph(belowGraph, false) : [];
+  return self.concat(below);
 }
 
 /** gridCLs（value昇順）から、[lo,hi] を含む最小の直交通り芯ペアを返す（見つからない側はnull）。
