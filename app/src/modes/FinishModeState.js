@@ -2,8 +2,8 @@ import { makeObservable, observable, action, computed, runInAction } from 'mobx'
 import { regionCellsAt, refreshCells, cellBoundsFromKey, cellBoundsList, worldToCell } from '../finish/gridCells.js';
 import { classifyStairArea } from '../finish/stair/stairClassify.js';
 import { cellsBeyondBreak } from '../finish/stair/stairGeometry.js';
-import { ensureUnderStairSplit, removeUnderStairSplit, findUnderStairSplitCLs } from '../finish/stair/stairUnderSplit.js';
-import { stairUnderRoomsOf } from '../finish/stair/stairUnderRooms.js';
+import { ensureUnderStairSplit, removeUnderStairSplit } from '../finish/stair/stairUnderSplit.js';
+import { resolveStairUnderEntries } from '../finish/stair/stairUnderRooms.js';
 import { floorHeightAbove } from '../finish/stair/stairDimensions.js';
 import { floorSwapManager } from '../storage/FloorSwapManager.js';
 import { snapshotFinishState, pushFinishUndo, withFinishUndo } from '../finish/finishUndo.js';
@@ -66,6 +66,12 @@ export class FinishModeState {
     // 直近の applyNaming が積んだ undo エントリ（非observable）。階段変換時、
     // App.jsx が上階自動設置（syncUpperFloors）の巻き戻しを同じエントリへ合成するために参照する。
     this.lastNamingUndoEntry = null;
+    // _loadLowerStairs が peek した直下階グラフそのもの（非observable。lowerStairs は
+    // 表示・見下げ判定用に stair+cellBounds へ加工した派生値のため、直下階の壁・部屋トポロジー
+    // 全体が要る finish/finishBoundary.js の resolveStairContext 用にキャッシュを別枠で持つ。
+    // 仕上げモード中は直下階のトポロジーが変わらない前提＝lowerStairs と同じ信頼——
+    // finishBoundary.js の脱出境界はこのキャッシュを peek 代わりに注入し、実IDB再peekをしない）。
+    this._lowerGraph = null;
     makeObservable(this, {
       dragState:      observable.ref,
       selectedRoomId: observable,
@@ -154,11 +160,13 @@ export class FinishModeState {
     const idx = planes.findIndex(p => p.id === active?.id);
     const below = idx > 0 ? planes[idx - 1] : null;
     if (!below || !active) {
+      this._lowerGraph = null;
       if (!this._disposed) runInAction(() => { this.lowerStairs = []; });
       return;
     }
     const temp = await floorSwapManager.peek(below, project.structGraph);
     if (this._disposed) return;
+    this._lowerGraph = temp;
     runInAction(() => {
       this.lowerStairs = temp.stairs.map(s => ({
         stair: s,
@@ -346,30 +354,10 @@ export class FinishModeState {
    * @returns {Array<{ stair, room, riser, beyondCells:Set<string>, splitCLIds:Set<string> }>}
    */
   stairUnderRooms(graph) {
-    const result = [];
-    for (const stair of graph.stairs) {
-      const riser  = this._selfStairRiser(stair);
-      const beyond = cellsBeyondBreak(stair, graph, riser);
-      if (beyond.size === 0) continue;
-
-      // beyondセルのいずれかが下階階段の見下げに当たる中間階の階段は対象外
-      // （階段下エリアではなく下階階段の吹抜けのため）。
-      let hasLowerStair = false;
-      for (const key of beyond) {
-        const cb = cellBoundsFromKey(key, graph);
-        if (!cb) continue;
-        const cx = (cb.x1 + cb.x2) / 2, cy = (cb.y1 + cb.y2) / 2;
-        if (this._lowerStairForPoint(cx, cy)) { hasLowerStair = true; break; }
-      }
-      if (hasLowerStair) continue;
-
-      const splitCLIds = new Set(findUnderStairSplitCLs(stair, graph).map(cl => cl.id));
-
-      for (const room of stairUnderRoomsOf(stair, graph, beyond)) {
-        result.push({ stair, room, riser, beyondCells: beyond, splitCLIds });
-      }
-    }
-    return result;
+    return resolveStairUnderEntries(graph, {
+      lowerStairCellBounds: this.lowerStairs,
+      floorHeight: floorHeightAbove(this.project, this.project?.activePlane),
+    });
   }
 
   // 選択は連結領域単位。短縮CLでL字化した領域は、内部のどこを指しても
@@ -911,6 +899,7 @@ export class FinishModeState {
     this.materialsLoaded = false;
     this.materialError   = null;
     this.lowerStairs     = [];
+    this._lowerGraph     = null;
     this.upperVoids      = [];
     this.upperFloorHeight = null;
     this._disposed       = true;

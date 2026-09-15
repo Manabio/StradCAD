@@ -157,6 +157,7 @@ function buildSnapshot(graph) {
     defaultCeilingHeight: graph.defaultCeilingHeight,
     floorDatum:          graph.floorDatum,
     structureOverride:   graph.structureOverride ?? null,
+    wallFreshnessKey:    graph.wallFreshnessKey ?? null,
     edges: graph.edges.map(e => ({
       key:        e.key,
       masterType: e.masterType ?? null,
@@ -441,8 +442,12 @@ function resolveCL(graph, id) {
  * 取り合い（renderer/wallJunctionResolve.js パス2）が外形線を内側線として扱い、出隅で
  * 「内側同士・外側同士」が組めなくなる（実機2026-09・1階Y1+3500×X2+1500の出隅）。
  *
- * 既存の2a壁は仕上げモードを抜け直しても再生成されない（`finish/finishBoundary.js` ステップ2a）
- * ため、生成側の修正だけでは既存図面が直らない。復元経路で一度だけ直す（冪等）。
+ * ステップ3（2026-09-15裁定）以降、2a壁は仕上げモード脱出のたびに再生成される
+ * （`finish/wallRegeneration.js`）ため、この関数はまだ抜け直していない旧図面のための
+ * 一度きりの正規化として残す。再生成された壁には発火しない——ルール2の薄壁は
+ * `|axisOffset|===wallFinish` でガードの外（下記の「仕上げ厚を超えて離れている」判定に
+ * 掛からない）、resolveBackingOwnership・CL偏芯の壁は `finishSide` を必ず持つため
+ * （いずれも既に `if (finishSide != null || ...) return` で早期リターンする）。
  *
  * 判定は `finishSide` 未指定の仕上げのみ薄壁（backingDepth===0）で、面が軸CLから仕上げ厚を
  * 超えて離れているもの——ルール2の薄壁は `|axisOffset|===wallFinish`、通常の壁生成
@@ -807,6 +812,7 @@ function applySnapshot(graph, snapshot) {
     if (snapshot.defaultCeilingHeight)      graph.setDefaultCeilingHeight(snapshot.defaultCeilingHeight);
     if (snapshot.floorDatum != null)  graph.setFloorDatum(snapshot.floorDatum);
     if (snapshot.structureOverride)   graph.setStructureOverride(snapshot.structureOverride);
+    if (snapshot.wallFreshnessKey)    graph.setWallFreshnessKey(snapshot.wallFreshnessKey);
     for (const k of snapshot.excludedColumnSlots  ?? []) graph.excludedColumnSlots.add(k);
     for (const k of snapshot.excludedBeamSlots    ?? []) graph.excludedBeamSlots.add(k);
     for (const k of snapshot.excludedFootingSlots ?? []) graph.excludedFootingSlots.add(k);

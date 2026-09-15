@@ -756,3 +756,48 @@ test('Room.exteriorSlope/exteriorLevelRef/exteriorLevel 未設定（旧データ
   assert.equal(r2.exteriorLevelRef, ExteriorLevelRef.ROOM);
   assert.equal(r2.exteriorLevel, null);
 });
+
+// ---- 壁の鮮度キー（graph.wallFreshnessKey。finish/wallFreshnessKey.js）の FlatBuffers 往復 ----
+test('graph.wallFreshnessKey は FlatBuffers encode→decode で値ありのまま往復する', () => {
+  const graph = makeGraph();
+  graph.setWallFreshnessKey('v1|ext=CODE-A|int=CODE-B|str=木造（在来）|col=WOOD-120x120|rooms=');
+
+  const bytes = serializeGraph(graph);
+  const restored = makeGraph();
+  restoreGraph(restored, bytes);
+
+  assert.equal(restored.wallFreshnessKey, 'v1|ext=CODE-A|int=CODE-B|str=木造（在来）|col=WOOD-120x120|rooms=');
+});
+
+test('graph.wallFreshnessKey 未設定（null。旧データ相当）は encode→decode 後も null のまま（既定値に化けない）', () => {
+  const graph = makeGraph();
+  // wallFreshnessKey は未設定のまま（旧データのフィールド欠落と同値の状態）
+
+  const bytes = serializeGraph(graph);
+  const restored = makeGraph();
+  restoreGraph(restored, bytes);
+
+  assert.equal(restored.wallFreshnessKey, null);
+});
+
+// ---- QA F(Missing tests): PlanGraph.clear() が wallFreshnessKey をリセットすることの固定 ----
+// restoreGraph は applySnapshot 内で graph.clear() を先に呼んでから復元する（graphSnapshot.js:538）。
+// clear() が wallFreshnessKey をリセットしなければ、鍵なしスナップショット（旧データ・鍵未計算の階）を
+// 「既に鍵を持つ graph」へ restore したときに古い鍵が残留し、次の境界処理が「鮮度あり」と誤判定する。
+test('PlanGraph.clear(): wallFreshnessKey が非nullの状態から呼ぶと null に戻る', () => {
+  const graph = makeGraph();
+  graph.setWallFreshnessKey('v1|ext=X|int=Y|str=|col=|rooms=');
+  graph.clear();
+  assert.equal(graph.wallFreshnessKey, null);
+});
+
+test('restoreGraph: wallFreshnessKey が非nullのgraphへ、鍵を持たないスナップショットをrestoreすると（clear()経由で）nullへ戻る（古い鍵の残留防止）', () => {
+  const stale = makeGraph();
+  stale.setWallFreshnessKey('v1|ext=STALE|int=STALE|str=|col=|rooms=');
+
+  const source = makeGraph(); // wallFreshnessKey未設定のまま
+  const bytes = serializeGraph(source);
+  restoreGraph(stale, bytes);
+
+  assert.equal(stale.wallFreshnessKey, null);
+});

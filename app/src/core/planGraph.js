@@ -129,6 +129,10 @@ export class PlanGraph {
 
     // 主要構造の階ごとの例外（null = project.structuralInfo.mainStructure を継承）
     this.structureOverride   = null;
+    // 壁の鮮度キー（finish/wallFreshnessKey.js）。最後に壁を再生成した時点の入力から
+    // 計算した文字列。null = 未計算（旧データ・壁未生成）。ステップ1では書くだけで
+    // 誰も比較しない（挙動ゼロ変化）。
+    this.wallFreshnessKey    = null;
     // 建物全体の構造情報（Project.structuralInfo）への参照。Project が生成時にセットする
     // （peek の一時グラフは _structGraph 経由で辿る）。project が手元に無い描画・展開図の経路でも
     // 主構造ルール（structural/structureRules.js の effectiveStructure）を引くための後方参照。永続化しない。
@@ -219,6 +223,7 @@ export class PlanGraph {
       defaultCeilingHeight:     observable,
       floorDatum:               observable,
       structureOverride:        observable,
+      wallFreshnessKey:         observable,
       setExteriorWallBacking:   action,
       setInteriorWallBacking:   action,
       setCeilingBacking:        action,
@@ -227,6 +232,7 @@ export class PlanGraph {
       setDefaultCeilingHeight:  action,
       setFloorDatum:            action,
       setStructureOverride:     action,
+      setWallFreshnessKey:      action,
       setColumnAxisOffset:  action,
       setCLEccentricity:    action,
       removeCLEccentricity: action,
@@ -404,6 +410,8 @@ export class PlanGraph {
   setDefaultCeilingHeight(mm)  { this.defaultCeilingHeight = mm; }
   setFloorDatum(mm) { this.floorDatum = mm; }
   setStructureOverride(v) { this.structureOverride = v; }
+  /** 壁の鮮度キー（finish/wallFreshnessKey.js）を設定する。壁再生成の直後に呼ぶ。 */
+  setWallFreshnessKey(v) { this.wallFreshnessKey = v; }
 
   /** 柱芯オフセット（CL id → 通り芯からの偏心量mm）を1件設定する。 */
   setColumnAxisOffset(clId, value) { this.columnAxisOffsets.set(clId, value); }
@@ -943,6 +951,7 @@ export class PlanGraph {
     this.defaultCeilingHeight = DEFAULT_ROOM_CEILING_HEIGHT;
     this.floorDatum          = 0;
     this.structureOverride   = null;
+    this.wallFreshnessKey    = null;
   }
 
   /** 交点を取得または生成する（restoreGraph の内部参照解決用）。*/

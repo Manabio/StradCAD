@@ -64,6 +64,8 @@ const GS = {
   PLANES: 45, ACTIVE_PLANE_ID: 46,
   // 敷地（project.site）。project 単位の blob のみで使用（per-floor blob では常に不在）
   SITE: 47,
+  // 壁の鮮度キー（finish/wallFreshnessKey.js。per-floor。空文字=null=未計算）
+  WALL_FRESHNESS_KEY: 48,
 };
 
 // Stair: 15 フィールド
@@ -1678,10 +1680,11 @@ export function encode(snapshot) {
   const sCeilBacking = b.createString(snapshot.ceilingBacking      ?? '');
   const sFloorBacking = b.createString(snapshot.floorBacking       ?? '');
   const sStructureOverride = b.createString(snapshot.structureOverride ?? '');
+  const sWallFreshnessKey = b.createString(snapshot.wallFreshnessKey ?? '');
   const structuralInfoOff  = writeStructuralInfo(b, snapshot.structuralInfo);
   const siteOff = writeSite(b, snapshot.site);
 
-  b.startObject(48);
+  b.startObject(49);
   b.addFieldOffset(GS.CLS,        clVec,        0);
   b.addFieldOffset(GS.PTS,        ptVec,        0);
   b.addFieldOffset(GS.WALLS,      wallVec,      0);
@@ -1729,6 +1732,7 @@ export function encode(snapshot) {
   b.addFieldOffset(GS.PLANES,                planesVec,              0);
   b.addFieldOffset(GS.ACTIVE_PLANE_ID,       sActivePlaneId,         0);
   b.addFieldOffset(GS.SITE,                  siteOff,                0);
+  b.addFieldOffset(GS.WALL_FRESHNESS_KEY,    sWallFreshnessKey,      0);
   const root = b.endObject();
 
   b.finish(root);
@@ -1792,5 +1796,6 @@ export function decode(bytes) {
     planes:              r.vec(GS.PLANES, readPlane),
     activePlaneId:       r.str(GS.ACTIVE_PLANE_ID) || null,
     site:                readSite(bb, r.nested(GS.SITE)),
+    wallFreshnessKey:    r.str(GS.WALL_FRESHNESS_KEY) || null,
   };
 }
