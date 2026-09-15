@@ -7,6 +7,7 @@ import { Plane, PlanGraph, Project, CenterLineType, Discipline, StairType, Struc
 import { generateRoomWallsFromOutline } from '../finish/wallGeneration.js';
 import { autoFillStairLandingBeams, autoFillBeamsForStructure, autoFillStructuralGrid } from './structuralAutoFill.js';
 import { TRADITIONAL_WOOD_STRUCTURE } from './structureRules.js';
+import { selfWallSegments } from './wallBeamAxes.js';
 
 // 1階(elevation:0)・2階(elevation:2400)の2フロアProject。floorHeightAbove(project, 1階plane)=2400。
 function makeProjectWithFloors() {
@@ -74,6 +75,37 @@ test('【不変条件】autoFillStructuralGrid: 非在来（S造）は wallSegme
   assert.deepEqual(rA.removedBeams, [], 'S造は常にremovedBeams=[]');
   assert.deepEqual(rB.removedBeams, []);
   assert.deepEqual(rA.newBeams.map(beamKey).sort(), rB.newBeams.map(beamKey).sort(), 'wallSegmentsの有無で生成される梁が変わらない');
+});
+
+// ---- ステップ3e-2（床梁 role:'floor'）: autoFillStructuralGrid への配線 ----
+
+test('【統合・3e-2】autoFillStructuralGrid: 在来木造は壁線上の通し梁の直後に床梁(role:floor)も生成し、newBeamsへ含める', () => {
+  const graph = new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
+  graph.structureOverride = TRADITIONAL_WOOD_STRUCTURE;
+  const x0 = graph.addCenterLine(CenterLineType.VERTICAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+  const x1 = graph.addCenterLine(CenterLineType.VERTICAL, 3640, { labeled: true, discipline: Discipline.STRUCT });
+  const y0 = graph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+  const y1 = graph.addCenterLine(CenterLineType.HORIZONTAL, 5460, { labeled: true, discipline: Discipline.STRUCT });
+  const room = graph.addRoom(new Set([`${x0.id}:${y0.id}:${x1.id}:${y1.id}`]), 'A');
+  generateRoomWallsFromOutline(graph, room);
+  // 最下階にしない（基礎伏図扱いだとrole:'primary'の壁線通し梁自体が生成されず床梁の前提が崩れるため）。
+  const project = { planes: [new Plane('p0', -3000, '0階', 0, 1), graph.plane], structuralInfo: { mainStructure: '未定', foundationType: 'ベタ基礎' } };
+  const segs = selfWallSegments(graph);
+  const r = autoFillStructuralGrid(graph, project, TRADITIONAL_WOOD_STRUCTURE, null, segs, segs);
+  const floors = graph.beams.filter(b => b.role === 'floor');
+  assert.ok(floors.length > 0, '3640×5460の部屋（短辺3640>1820）には床梁が生成されるはず');
+  assert.ok(floors.every(fb => r.newBeams.some(b => b.id === fb.id)), '生成された床梁はnewBeamsへ含まれる');
+});
+
+test('【不変条件】structuralAutoFill.js: autoFillStructuralGrid はbeamPlacement==="wallRuns"のときautoFillWoodFloorBeamsを呼び、created/removedを戻り値へ含める（ステップ3e-2）', async () => {
+  const fs = await import('node:fs');
+  const path = await import('node:path');
+  const url = await import('node:url');
+  const here = path.dirname(url.fileURLToPath(import.meta.url));
+  const src = fs.readFileSync(path.join(here, 'structuralAutoFill.js'), 'utf8');
+  assert.ok(/autoFillWoodFloorBeams\(graph, project\)/.test(src), 'autoFillWoodFloorBeams(graph, project) の呼び出しが無い');
+  assert.ok(/floorBeamsResult\.created/.test(src), 'floorBeamsResult.created をnewBeamsへ含めていない');
+  assert.ok(/floorBeamsResult\.removed/.test(src), 'floorBeamsResult.removed をremovedBeamsへ含めていない');
 });
 
 function makeSwitchbackFixture(graph, structure = StructuralMaterialType.STEEL) {

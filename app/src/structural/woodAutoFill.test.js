@@ -5,15 +5,16 @@ import assert from 'node:assert/strict';
 import { Plane, PlanGraph, Project, CenterLineType, Discipline, StructuralMaterialType, columnSlotKey, spanKey, centerLineKind as centerLineKindOf } from '../core.js';
 import {
   wallIntersectionPoints, autoFillWoodColumns, conformWoodSections, conformWoodBacking, WALL_JUNCTION_TOL_MM,
-  autoFillWoodBeamDepths, autoFillWoodWallBeams,
+  autoFillWoodBeamDepths, autoFillWoodWallBeams, autoFillWoodFloorBeams,
 } from './woodAutoFill.js';
 import { WOOD_STUD_CODE_BY_SIZE } from '../finish/materials/backingClass.js';
 import { autoFillColumnsForStructure, autoFillStructuralGrid } from './structuralAutoFill.js';
 import { TRADITIONAL_WOOD_STRUCTURE, rulesFor } from './structureRules.js';
-import { selfWallSegments, autoFillWallBeamAxes } from './wallBeamAxes.js';
+import { selfWallSegments, autoFillWallBeamAxes, wallBeamAxisExcludeKey } from './wallBeamAxes.js';
 import { generateRoomWallsFromOutline } from '../finish/wallGeneration.js';
 import { floorSwapManager } from '../storage/FloorSwapManager.js';
 import { recomputeStructuralForGraph } from './structuralRecompute.js';
+import { SECONDARY_BEAM_CLEARANCE_MM } from '../core/structuralEntities.js';
 
 function makeGridGraph(structure = TRADITIONAL_WOOD_STRUCTURE) {
   const graph = new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
@@ -880,4 +881,274 @@ test('【不変条件】structuralRecompute.js: wallRunSegments を autoFillStru
   assert.ok(/autoFillStructuralGrid\(targetGraph, project, mainStructure, wallGate, wallSources, wallSegments\)/.test(src),
     'autoFillStructuralGrid へ wallSegments を渡していない');
   assert.ok(/removedBeams\.length > 0/.test(src), 'removedBeams が changed の判定に含まれていない');
+});
+
+// ---- autoFillWoodFloorBeams（ステップ3e-2: 床梁 role:'floor'、記号FB）----
+// 短辺width×長辺heightの矩形を4辺すべてprimary梁で囲んだセル。structureを渡せる（非在来との対照に使う）。
+function buildClosedCellGraph(structure, { width = 2730, height = 5460 } = {}) {
+  const graph = new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
+  graph.structureOverride = structure;
+  const rules = rulesFor(structure);
+  const x0 = graph.addCenterLine(CenterLineType.VERTICAL, 0,     { labeled: true, discipline: Discipline.STRUCT });
+  const x1 = graph.addCenterLine(CenterLineType.VERTICAL, width, { labeled: true, discipline: Discipline.STRUCT });
+  const y0 = graph.addCenterLine(CenterLineType.HORIZONTAL, 0,      { labeled: true, discipline: Discipline.STRUCT });
+  const y1 = graph.addCenterLine(CenterLineType.HORIZONTAL, height, { labeled: true, discipline: Discipline.STRUCT });
+  const top    = graph.addBeam(rules.baseMaterial, rules.defaultSections.beam, y0, false, x0, x1, { role: 'primary' });
+  const bottom = graph.addBeam(rules.baseMaterial, rules.defaultSections.beam, y1, false, x0, x1, { role: 'primary' });
+  const left   = graph.addBeam(rules.baseMaterial, rules.defaultSections.beam, x0, true, y0, y1, { role: 'primary' });
+  const right  = graph.addBeam(rules.baseMaterial, rules.defaultSections.beam, x1, true, y0, y1, { role: 'primary' });
+  return { graph, x0, x1, y0, y1, top, bottom, left, right };
+}
+
+test('autoFillWoodFloorBeams: 2730×5460のセル（短辺2730）に床梁2本を短辺方向（横梁）へ1820/3640の位置で生成する。冪等', () => {
+  const { graph, x0, x1 } = buildClosedCellGraph(TRADITIONAL_WOOD_STRUCTURE);
+  const { created, removed } = autoFillWoodFloorBeams(graph, PROJECT);
+  assert.equal(created.length, 2);
+  assert.deepEqual(removed, []);
+  const sorted = created.slice().sort((a, b) => a.axisValue - b.axisValue);
+  assert.deepEqual(sorted.map(b => b.axisValue), [1820, 3640]);
+  for (const b of sorted) {
+    assert.equal(b.isVertical, false, '短辺(x方向2730)と平行=横梁が材軸方向');
+    assert.equal(b.role, 'floor');
+    assert.equal(b.beamType, '床梁');
+    assert.equal(b.materialType, StructuralMaterialType.WOOD);
+    assert.equal(b.dimensionStatus, 'auto');
+    assert.equal(centerLineKindOf(b.axisCL), 'beam', '自動生成した梁芯CL（fuse）');
+    assert.equal(b.axisCL.labeled, false);
+    assert.deepEqual([b.clStart.id, b.clEnd.id].sort(), [x0.id, x1.id].sort(), '直交端はセルの両辺を作る大梁自身のaxisCL');
+  }
+  // 冪等: もう一度呼んでも増減しない。
+  const again = autoFillWoodFloorBeams(graph, PROJECT);
+  assert.deepEqual([again.created.length, again.removed.length], [0, 0]);
+});
+
+test('【失敗系】autoFillWoodFloorBeams: 短辺がちょうど1820（floorBeamMaxPitchMm）以下のセルは床梁なし', () => {
+  const { graph } = buildClosedCellGraph(TRADITIONAL_WOOD_STRUCTURE, { width: 1820 });
+  const { created, removed } = autoFillWoodFloorBeams(graph, PROJECT);
+  assert.deepEqual(created, []);
+  assert.deepEqual(removed, []);
+});
+
+test('【失敗系】autoFillWoodFloorBeams: セルが閉じない（1辺欠け）配置は床梁を生成しない', () => {
+  const { graph, right } = buildClosedCellGraph(TRADITIONAL_WOOD_STRUCTURE);
+  graph.beamMap.delete(right.id); // 4辺被覆を崩す
+  const { created, removed } = autoFillWoodFloorBeams(graph, PROJECT);
+  assert.deepEqual(created, []);
+  assert.deepEqual(removed, []);
+});
+
+test('autoFillWoodFloorBeams: 位置に既存の通り芯があれば重複生成せずそれを再利用する（findBeamAnchorCLの重複ガード）', () => {
+  const { graph } = buildClosedCellGraph(TRADITIONAL_WOOD_STRUCTURE);
+  const before = graph.centerLines.length;
+  const preExisting = graph.addCenterLine(CenterLineType.HORIZONTAL, 1820, { labeled: true, discipline: Discipline.STRUCT });
+  const { created } = autoFillWoodFloorBeams(graph, PROJECT);
+  const at1820 = created.find(b => Math.abs(b.axisValue - 1820) < 1);
+  const at3640 = created.find(b => Math.abs(b.axisValue - 3640) < 1);
+  assert.equal(at1820.axisCL.id, preExisting.id, '既存の通り芯をそのままアンカーに使う（新規CLを作らない）');
+  assert.notEqual(at3640.axisCL.id, preExisting.id);
+  assert.equal(graph.centerLines.length, before + 2, '事前追加の通り芯1本＋3640用の新規梁芯CL1本のみ（1820分は重複生成しない）');
+});
+
+test('autoFillWoodFloorBeams（F1・D1再ブラケット）: 位置に既存の非ラベル梁芯CL（床梁スパンより狭い静的extent）を再利用した場合、床梁スパンとの和集合を直交通り芯へ再ブラケットする（縮めない・冪等。CenterLinesLayerの描画・snap.jsの沿線スナップに必要）', () => {
+  const { graph, x0, x1 } = buildClosedCellGraph(TRADITIONAL_WOOD_STRUCTURE);
+  // 中間の通り芯（x=400,2400）を追加しておく——和集合を取り違えて縮める変異（例:
+  // Math.min/maxを取り違えて交差[500,800]にする）があった場合、bracketExtentが誤って
+  // これら中間の通り芯へブラケットするため検出できる（無ければ両端(x0,x1)の2択しか無く、
+  // 縮めても結果的に同じ結論に落ちて変異を見逃す）。
+  graph.addCenterLine(CenterLineType.VERTICAL, 400,  { labeled: true, discipline: Discipline.STRUCT });
+  graph.addCenterLine(CenterLineType.VERTICAL, 2400, { labeled: true, discipline: Discipline.STRUCT });
+  // 生成予定座標(y=1820)に、床梁スパン(0..2730)より狭い静的extent(500..800)を持つ既存の梁芯CL
+  // （fuse・labeled:false）を先置きする。
+  const pre = graph.addCenterLine(CenterLineType.HORIZONTAL, 1820, {
+    labeled: false, discipline: Discipline.FUSE, extentLo: 500, extentHi: 800,
+  });
+  const { created } = autoFillWoodFloorBeams(graph, PROJECT);
+  const beam = created.find(b => Math.abs(b.axisValue - 1820) < 1);
+  assert.equal(beam.axisCL.id, pre.id, '既存の梁芯CLを再利用する（前提）');
+  // 和集合[min(500,0),max(800,2730)]=[0,2730]がセルの両辺(x0=0,x1=2730)と一致するため両側ref化される。
+  assert.deepEqual(pre.extentLoRef, { clId: x0.id, offset: 0 }, 'lo側はx0(通り芯0)へ再ブラケットされる');
+  assert.deepEqual(pre.extentHiRef, { clId: x1.id, offset: 0 }, 'hi側はx1(通り芯2730)へ再ブラケットされる');
+  assert.equal(pre.extentLo, 0);
+  assert.equal(pre.extentHi, 2730, '床梁スパン(0..2730)を覆う');
+  // 冪等: もう一度呼んでもextentは変化しない（2回目はexistingFloorKeysで先にcontinueするため）。
+  autoFillWoodFloorBeams(graph, PROJECT);
+  assert.deepEqual(pre.extentLoRef, { clId: x0.id, offset: 0 });
+  assert.deepEqual(pre.extentHiRef, { clId: x1.id, offset: 0 });
+});
+
+test('autoFillWoodFloorBeams（F1b・D1再ブラケット）: 位置に既存の非ラベル梁芯CL（ref付きextent＝別の通り芯ブラケット）を再利用した場合も、和集合を再ブラケットする（実データmoku1/moku2 2階 x=5460の再現: wallBeamAxes.jsのbracketExtentが別の壁のために設定した通り芯ブラケットが床梁スパンと無関係に遠い）', () => {
+  // 縦梁（isVertical:true）のセル（w=5460,h=3640。短辺=Y方向）。内部位置x=1820は実データx=5460と同型。
+  const { graph, y1 } = buildClosedCellGraph(TRADITIONAL_WOOD_STRUCTURE, { width: 5460, height: 3640 });
+  const yFar1 = graph.addCenterLine(CenterLineType.HORIZONTAL, -2000, { labeled: true, discipline: Discipline.STRUCT });
+  const yFar2 = graph.addCenterLine(CenterLineType.HORIZONTAL, -500,  { labeled: true, discipline: Discipline.STRUCT });
+  const pre = graph.addCenterLine(CenterLineType.VERTICAL, 1820, { labeled: false, discipline: Discipline.FUSE });
+  graph.setCenterLineExtentRef(pre, 'lo', { clId: yFar1.id, offset: 0 });
+  graph.setCenterLineExtentRef(pre, 'hi', { clId: yFar2.id, offset: 0 });
+  assert.equal(pre.extentLo, -2000, '前提: ref経由で解決した下端');
+  assert.equal(pre.extentHi, -500, '前提: ref経由で解決した上端。床梁スパン(0..3640)と無関係');
+  const { created } = autoFillWoodFloorBeams(graph, PROJECT);
+  const beam = created.find(b => Math.abs(b.axisValue - 1820) < 1);
+  assert.equal(beam.axisCL.id, pre.id, '既存の梁芯CLを再利用する（前提）');
+  // 和集合[min(-2000,0),max(-500,3640)]=[-2000,3640]。lo側はyFar1(-2000)自身がそのまま下限、
+  // hi側はセルの上辺y1(3640)が上限としてブラケットされる（両側ref化）。
+  assert.deepEqual(pre.extentLoRef, { clId: yFar1.id, offset: 0 }, 'lo側はyFar1(-2000)のまま（和集合の下限と一致）');
+  assert.deepEqual(pre.extentHiRef, { clId: y1.id, offset: 0 }, 'hi側は床梁スパンの上限(3640)を覆うy1へ再ブラケットされる');
+  assert.equal(pre.extentLo, -2000);
+  assert.equal(pre.extentHi, 3640, '床梁スパン(0..3640)を覆う');
+});
+
+test('autoFillWoodFloorBeams（N2）: extent未確定（extentLo/Hiがnull＝全幅扱い）の既存梁芯CLは触らない（触ると全幅から有限範囲へ縮めることになるため）', () => {
+  const { graph } = buildClosedCellGraph(TRADITIONAL_WOOD_STRUCTURE);
+  const pre = graph.addCenterLine(CenterLineType.HORIZONTAL, 1820, { labeled: false, discipline: Discipline.FUSE }); // extentLo/Hi省略＝null
+  assert.equal(pre.extentLo, null, '前提: 全幅扱い');
+  assert.equal(pre.extentHi, null);
+  const { created } = autoFillWoodFloorBeams(graph, PROJECT);
+  const beam = created.find(b => Math.abs(b.axisValue - 1820) < 1);
+  assert.equal(beam.axisCL.id, pre.id, '既存の梁芯CLを再利用する（前提）');
+  assert.equal(pre.extentLoRef, null, '触らない');
+  assert.equal(pre.extentHiRef, null);
+  assert.equal(pre.extentLo, null, '全幅のまま（縮められていない）');
+  assert.equal(pre.extentHi, null);
+});
+
+test('autoFillWoodFloorBeams（N1）: locked指定した床梁は再呼び出しでcreated0・removed0のまま本数不変（existingFloorKeysが冪等性の番人であることを直接固定する）', () => {
+  const { graph } = buildClosedCellGraph(TRADITIONAL_WOOD_STRUCTURE);
+  const first = autoFillWoodFloorBeams(graph, PROJECT);
+  assert.equal(first.created.length, 2);
+  for (const b of first.created) b.setDimensionStatus('locked');
+  const beforeCount = graph.beams.filter(b => b.role === 'floor').length;
+  const second = autoFillWoodFloorBeams(graph, PROJECT);
+  assert.deepEqual(second.created, []);
+  assert.deepEqual(second.removed, []);
+  assert.equal(graph.beams.filter(b => b.role === 'floor').length, beforeCount);
+});
+
+test('autoFillWoodFloorBeams（F2）: 長辺÷maxPitchは切り上げ(ceil)で内部本数・ピッチを決める（floorだと2000超ピッチが生じ赤: 2730×4000セルでn=ceil(4000/1820)=3→内部2本、各区間は1820以下）', () => {
+  const { graph } = buildClosedCellGraph(TRADITIONAL_WOOD_STRUCTURE, { height: 4000 });
+  const { created } = autoFillWoodFloorBeams(graph, PROJECT);
+  const ys = created.map(b => b.axisValue).sort((a, b) => a - b);
+  assert.equal(ys.length, 2, 'n=ceil(4000/1820)=3の内部2本のはず（floorなら1本になり赤）');
+  const bounds = [0, ...ys, 4000];
+  for (let i = 0; i < bounds.length - 1; i++) {
+    assert.ok(bounds[i + 1] - bounds[i] <= 1820 + 1, `区間[${bounds[i]},${bounds[i + 1]}]が1820を超えている`);
+  }
+});
+
+test('autoFillWoodFloorBeams（F3）: 正方形セル(3640×3640)は材軸X（横梁・isVertical:false）が唯一の実装（h<=wにすると同寸の境界値3640===3640で赤になる）', () => {
+  const { graph } = buildClosedCellGraph(TRADITIONAL_WOOD_STRUCTURE, { width: 3640, height: 3640 });
+  const { created } = autoFillWoodFloorBeams(graph, PROJECT);
+  assert.equal(created.length, 1);
+  assert.equal(created[0].isVertical, false, '正方形は材軸X（横梁）');
+  assert.equal(created[0].axisValue, 1820, 'セル中央');
+});
+
+test('autoFillWoodFloorBeams（F4）: 撤去される床梁に紐づくPenetrationSleeveはsleeveMapから連鎖削除され、excludedBeamSlotsにはキーが追加されない（graph.removeBeamは使わない規律。壁線通し梁の同名テストを床梁へ移植）', () => {
+  const { graph, right } = buildClosedCellGraph(TRADITIONAL_WOOD_STRUCTURE);
+  const first = autoFillWoodFloorBeams(graph, PROJECT);
+  const beam = first.created.find(b => Math.abs(b.axisValue - 1820) < 1);
+  const sleeve = graph.addSleeve('beam', {
+    hostBeamId: beam.id, hostAxisCL: beam.axisCL, hostClStart: beam.clStart, hostClEnd: beam.clEnd, localPos: 500,
+  });
+  const key = spanKey(beam.axisCL, beam.clStart, beam.clEnd);
+  graph.beamMap.delete(right.id); // セルを開放し候補を空にする（撤去を誘発）
+  const { removed } = autoFillWoodFloorBeams(graph, PROJECT);
+  assert.ok(removed.includes(beam.id));
+  assert.equal(graph.beamMap.has(beam.id), false);
+  assert.equal(graph.sleeveMap.has(sleeve.id), false, '床梁の撤去に連鎖してスリーブも削除される');
+  assert.equal(graph.excludedBeamSlots.has(key), false, 'graph.removeBeamは使わないのでexcludedBeamSlotsは汚されない');
+});
+
+test('【失敗系】autoFillWoodFloorBeams: excludedWallBeamAxesに記録された座標には生成しない（手動削除の尊重）', () => {
+  const { graph } = buildClosedCellGraph(TRADITIONAL_WOOD_STRUCTURE);
+  graph.excludedWallBeamAxes.add(wallBeamAxisExcludeKey(false, 1820)); // 床梁は横梁(isVertical:false)なのでY:1820
+  const { created } = autoFillWoodFloorBeams(graph, PROJECT);
+  assert.deepEqual(created.map(b => b.axisValue), [3640], '除外座標(1820)には生成せず、3640だけ生成される');
+});
+
+test('【失敗系】autoFillWoodFloorBeams: excludedBeamSlotsにあるスパンは再生成しない（手動削除の尊重）', () => {
+  const { graph } = buildClosedCellGraph(TRADITIONAL_WOOD_STRUCTURE);
+  const first = autoFillWoodFloorBeams(graph, PROJECT);
+  const at1820 = first.created.find(b => Math.abs(b.axisValue - 1820) < 1);
+  const key = spanKey(at1820.axisCL, at1820.clStart, at1820.clEnd);
+  graph.beamMap.delete(at1820.id);
+  graph.excludedBeamSlots.add(key);
+  const second = autoFillWoodFloorBeams(graph, PROJECT);
+  assert.deepEqual(second.created, [], '除外スロットには再生成しない（3640は既存のため再生成不要で0件）');
+  assert.deepEqual(second.removed, []);
+});
+
+test('【裁定】autoFillWoodFloorBeams: 候補に無い自動生成の床梁は撤去され、locked指定した床梁は残る', () => {
+  const { graph, right } = buildClosedCellGraph(TRADITIONAL_WOOD_STRUCTURE);
+  const first = autoFillWoodFloorBeams(graph, PROJECT);
+  assert.equal(first.created.length, 2);
+  const locked = first.created.find(b => Math.abs(b.axisValue - 1820) < 1);
+  const autoOnly = first.created.find(b => Math.abs(b.axisValue - 3640) < 1);
+  locked.setDimensionStatus('locked');
+  graph.beamMap.delete(right.id); // セルを開放し候補を空にする
+  const second = autoFillWoodFloorBeams(graph, PROJECT);
+  assert.deepEqual(second.created, []);
+  assert.deepEqual(second.removed, [autoOnly.id], '候補に無いauto床梁は撤去される');
+  assert.ok(graph.beamMap.has(locked.id), 'locked指定した床梁は候補が無くなっても残る');
+  assert.equal(graph.beamMap.has(autoOnly.id), false);
+});
+
+test('autoFillWoodFloorBeams: 床梁の端はhost（セルの両辺を作る大梁）の縁＋クリアランス(50mm)で止まる（coord1/coord2）', () => {
+  const { graph } = buildClosedCellGraph(TRADITIONAL_WOOD_STRUCTURE);
+  const { created } = autoFillWoodFloorBeams(graph, PROJECT);
+  const beam = created.find(b => Math.abs(b.axisValue - 1820) < 1);
+  const half = 120 / 2 + SECONDARY_BEAM_CLEARANCE_MM; // WOOD-120x120の縁+クリアランス
+  assert.deepEqual(beam.spanForColumns(graph.columns), { coord1: half, coord2: 2730 - half });
+});
+
+test('【失敗系】autoFillWoodFloorBeams: 同一軸上に既存の木造梁（primary/floor）が生成スパンと重なっていれば二重防御で生成しない（findBeamAnchorCL再利用時にspanKeyが別物になりすり抜ける事故の対策。実データmoku1.stqの壁下梁・頭つなぎとの二重梁の回帰）', () => {
+  const { graph, x0 } = buildClosedCellGraph(TRADITIONAL_WOOD_STRUCTURE);
+  // y=1820に、生成対象の軸と同一だが範囲が異なる（spanKeyは別物になる）既存の木造梁を先置きする
+  // （clStart=x0は共通・clEndだけ別CL＝生成予定のclEnd(セル右辺)とは異なるスパン）。
+  const yPre = graph.addCenterLine(CenterLineType.HORIZONTAL, 1820, { labeled: false, discipline: Discipline.FUSE });
+  const xMid = graph.addCenterLine(CenterLineType.VERTICAL, 1500, { labeled: true, discipline: Discipline.STRUCT });
+  graph.addBeam(StructuralMaterialType.WOOD, 'WOOD-120x120', yPre, false, x0, xMid, { role: 'floor', beamType: '床梁' });
+  const { created } = autoFillWoodFloorBeams(graph, PROJECT);
+  assert.ok(!created.some(b => Math.abs(b.axisValue - 1820) < 1), 'y=1820は既存梁とスパンが重なるため生成されない（spanKeyは別物のためexistingFloorKeysでは検出できないケース）');
+  assert.equal(created.filter(b => Math.abs(b.axisValue - 3640) < 1).length, 1, 'y=3640は重ならないため影響を受けず生成される');
+});
+
+test('【失敗系】autoFillWoodFloorBeams: 非在来（framingを持たない主構造）は何もしない', () => {
+  const { graph } = buildClosedCellGraph('S造');
+  assert.deepEqual(autoFillWoodFloorBeams(graph, PROJECT), { created: [], removed: [] });
+});
+
+test('【対照】autoFillStructuralGrid: 非在来（S造）は同じ閉じたセルがあっても床梁(role:floor)を生成しない（beamPlacementゲート）', () => {
+  const { graph } = buildClosedCellGraph('S造');
+  const project = { planes: [new Plane('p0', -3000, '0階', 0, 1), graph.plane], structuralInfo: { mainStructure: '未定', foundationType: 'ベタ基礎' } };
+  autoFillStructuralGrid(graph, project, 'S造', null, [], []);
+  assert.equal(graph.beams.filter(b => b.role === 'floor').length, 0);
+});
+
+// 【統合・3d】大梁の両側から取りつく床梁2本が十字貫通と誤判定されて荷重から消えないことの確認（ステップ3e-2）。
+// 中央の縦大梁(host)を挟んで左右2つのセル（それぞれ2730×3640・内部床梁1本ずつ・同じy=1820）を作る。
+// 左セルの床梁の終端・右セルの床梁の始端はどちらもhostへ取りつく（互いに逆方向からの取り合い）——
+// 旧実装（crossingBeamLoadCoordsをそのまま通す）だと+1/−1が同位置で相殺し荷重0（成300）になっていたはず。
+test('【統合・3d】autoFillWoodBeamDepths: 大梁の両側から取りつく床梁2本はhostの荷重1か所として数えられる（十字貫通と誤判定されない）', () => {
+  const graph = new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
+  graph.structureOverride = TRADITIONAL_WOOD_STRUCTURE;
+  const x0 = graph.addCenterLine(CenterLineType.VERTICAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+  const xHost = graph.addCenterLine(CenterLineType.VERTICAL, 2730, { labeled: true, discipline: Discipline.STRUCT });
+  const x2 = graph.addCenterLine(CenterLineType.VERTICAL, 5460, { labeled: true, discipline: Discipline.STRUCT });
+  const y0 = graph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+  const y1 = graph.addCenterLine(CenterLineType.HORIZONTAL, 3640, { labeled: true, discipline: Discipline.STRUCT });
+  graph.addBeam(StructuralMaterialType.WOOD, 'WOOD-120x120', y0, false, x0, x2, { role: 'primary' }); // 上端（左右セル共通）
+  graph.addBeam(StructuralMaterialType.WOOD, 'WOOD-120x120', y1, false, x0, x2, { role: 'primary' }); // 下端（左右セル共通）
+  graph.addBeam(StructuralMaterialType.WOOD, 'WOOD-120x120', x0, true, y0, y1, { role: 'primary' });  // 左端
+  const host = graph.addBeam(StructuralMaterialType.WOOD, 'WOOD-120x120', xHost, true, y0, y1, { role: 'primary' }); // 中央（両側から床梁が取りつく）
+  graph.addBeam(StructuralMaterialType.WOOD, 'WOOD-120x120', x2, true, y0, y1, { role: 'primary' }); // 右端
+
+  const { created } = autoFillWoodFloorBeams(graph, PROJECT);
+  assert.equal(created.length, 2, '左右セルにそれぞれ1本ずつ床梁が生成される（各セル2730×3640、内部位置1820は1か所）');
+  assert.ok(created.every(b => Math.abs(b.axisValue - 1820) < 1), '両方ともy=1820の同一座標で中央のhostへ両側から取りつく');
+  assert.ok(created.every(b => b.clStart.id === xHost.id || b.clEnd.id === xHost.id),
+    '両方の床梁がhostのaxisCLを端に持つ（片方はclEnd、もう片方はclStart。逆方向からの取り合い）');
+
+  const updated = autoFillWoodBeamDepths(graph, PROJECT);
+  assert.ok(updated.includes(host.id), 'hostの成も更新される');
+  assert.equal(host.sectionDefId, 'WOOD-120x330', 'hostは荷重1か所（同位置2本をdedupしたもの）として成330。誤って十字貫通扱い（荷重0・成300）になっていない');
 });

@@ -5,6 +5,7 @@ import { roomBounds } from '../finish/gridCells.js';
 import { LodLevel } from '../viewport.js';
 import { COLOR_BY_MATERIAL, columnRenderSize, beamRenderWidth } from './StructuralLayer.jsx';
 import { groupPropsForStyle } from '../figure/figureStyle.js';
+import { PIN_ROLES } from '../core/structuralEntities.js';
 
 const FONT_SIZE_PX = 22; // スクリーン上の表示サイズ(px)。RoomLabelsLayer と同じ逆補正方式。
 const SECONDARY_TAG_FONT_SIZE_PX = 18; // 小梁タグは大梁(G)より一回り小さく表示する
@@ -210,11 +211,12 @@ export const MemberTagLayer = observer(({ composition, viewport, onTagClick, onS
       </Group>
       <Group {...groupPropsForStyle(composition.styleForCategory('beamMap'))}>
         {axisTags(
-          // 小梁タグは略図（LOD SCHEMATIC）では非表示（大梁のみ残す）
-          (beamGraph?.beams ?? []).filter(b => !(lod === LodLevel.SCHEMATIC && b.role === 'secondary')),
+          // 小梁・床梁タグは略図（LOD SCHEMATIC）では非表示（大梁のみ残す。PIN_ROLES=母材から離して
+          // 終える梁のrole集合。core/structuralEntities.js参照。床梁を小梁と同型に扱う）
+          (beamGraph?.beams ?? []).filter(b => !(lod === LodLevel.SCHEMATIC && PIN_ROLES.has(b.role))),
           'beamMap',
           b => beamMargin(b, lod),
-          b => (b.role === 'secondary' ? SECONDARY_TAG_FONT_SIZE_PX : FONT_SIZE_PX) / viewport.scaleX,
+          b => (PIN_ROLES.has(b.role) ? SECONDARY_TAG_FONT_SIZE_PX : FONT_SIZE_PX) / viewport.scaleX,
         )}
       </Group>
       <Group {...groupPropsForStyle(composition.styleForCategory('wallMap'))}>

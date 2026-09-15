@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import { PlanGraph } from './planGraph.js';
 import { Plane } from './plane.js';
 import { CenterLineType, Discipline, StructuralMaterialType } from './constants.js';
-import { RIGID_JOINT_OFFSET_MM, SECONDARY_BEAM_CLEARANCE_MM } from './structuralEntities.js';
+import { RIGID_JOINT_OFFSET_MM, SECONDARY_BEAM_CLEARANCE_MM, PIN_ROLES } from './structuralEntities.js';
 
 // X1=0 / X2=10000、Y1=0 / Y2=6000 の通り芯。梁はY方向（X1軸沿い）に張る。
 function setupGraph() {
@@ -58,6 +58,26 @@ test('isPinJoint: 鉄骨以外は jointType ではなく role（小梁のみピ�
   assert.equal(woodPrimary.hasRigidJoint, false, '継手記号は鉄骨のみ');
 });
 
+// 【ステップ3e-2・床梁】PIN_ROLES=new Set(['secondary','floor']) が「母材から離して終える」role集合の
+// 単一の定義（isPinJoint・jointType既定・spanForColumnsの早期returnの3か所が読む）。
+test('PIN_ROLES: secondary/floorの2値を持つ', () => {
+  assert.deepEqual([...PIN_ROLES].sort(), ['floor', 'secondary']);
+});
+
+test('isPinJoint/jointType: 木造の床梁(role:floor)も小梁と同じくピン扱い（PIN_ROLES）', () => {
+  const { graph, x1, y1, y2 } = setupGraph();
+  const woodFloor = graph.addBeam(StructuralMaterialType.WOOD, 'WOOD-120x120', x1, true, y1, y2, { role: 'floor' });
+  assert.equal(woodFloor.jointType, 'PIN', '床梁もjointTypeの既定はPIN（コンストラクタがPIN_ROLESを読む）');
+  assert.equal(woodFloor.isPinJoint, true);
+  assert.equal(woodFloor.hasRigidJoint, false, '継手記号は鉄骨のみ（対象外role以前に材種で除外）');
+});
+
+test('【失敗系】isPinJoint: 鉄骨の床梁(role:floor)はjointTypeが権威（PIN_ROLESではなく材種で分岐）', () => {
+  const { graph, x1, y1, y2 } = setupGraph();
+  const steelFloor = addBeam(graph, x1, y1, y2, { role: 'floor', jointType: 'RIGID' });
+  assert.equal(steelFloor.isPinJoint, false, '鉄骨はjointType=RIGIDならPIN_ROLESに関わらず剛接合扱い');
+});
+
 // ---- 継手位置（構造芯から900内側・両端） ----
 
 test('rigidJointCoords: 両端の構造芯から900内側の2箇所を返す', () => {
@@ -94,6 +114,18 @@ test('spanForColumns: ピン接合に指定した大梁は両端をクリアラ�
     coord1: SECONDARY_BEAM_CLEARANCE_MM,
     coord2: 6000 - SECONDARY_BEAM_CLEARANCE_MM,
   });
+});
+
+test('spanForColumns: 床梁(role:floor)も小梁と同じくhost（大梁）の縁+クリアランスで止まる（PIN_ROLES拡張。host解決＝端CLがhostのaxisCL）', () => {
+  const { graph, x1, x2, y1, y2 } = setupGraph();
+  // host: y1軸沿いの横大梁（x1..x2をカバーし、床梁の始端(y1)に取りつく）。
+  graph.addBeam(StructuralMaterialType.WOOD, 'WOOD-120x120', y1, false, x1, x2, { role: 'primary' });
+  // 床梁: x=5000の縦CLからy1..y2へ架ける（始端y1はhostに取りつき、終端y2はhostが無い）。
+  const xMid = graph.addCenterLine(CenterLineType.VERTICAL, 5000, { labeled: true, discipline: Discipline.STRUCT });
+  const floorBeam = graph.addBeam(StructuralMaterialType.WOOD, 'WOOD-120x120', xMid, true, y1, y2, { role: 'floor' });
+  const halfHost = 120 / 2 + SECONDARY_BEAM_CLEARANCE_MM; // host（幅120）の縁+クリアランス
+  assert.deepEqual(floorBeam.spanForColumns(graph.columns), { coord1: halfHost, coord2: 6000 },
+    '始端(y1)はhostの縁+クリアランス、終端(y2)はhostが無いのでCL位置まで');
 });
 
 // ---- 柱に接合する梁か（構造リストの接合2択のグレー化判定） ----

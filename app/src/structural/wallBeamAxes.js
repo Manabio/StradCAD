@@ -257,8 +257,10 @@ export function wallRunSegments(graph, belowGraph, structure) {
 
 /** gridCLs（value昇順）から、[lo,hi] を含む最小の直交通り芯ペアを返す（見つからない側はnull）。
  *  extentを通り芯より内側で切ると autoFillSecondaryBeams の host 抽出（cl.extentLo/Hi で通り芯を
- *  絞り込む）に届かず小梁が0本になるため、壁の区間を含むように外側へスナップする（設計書§2.3(4)）。 */
-function bracketExtent(gridCLs, lo, hi) {
+ *  絞り込む）に届かず小梁が0本になるため、壁の区間を含むように外側へスナップする（設計書§2.3(4)）。
+ *  woodAutoFill.js autoFillWoodFloorBeams（ステップ3e-2 D1）が、床梁の軸に再利用した既存の非ラベル
+ *  梁芯CLのextentを「再ブラケット」する際にも同じ関数を共有する（二重実装しない）。 */
+export function bracketExtent(gridCLs, lo, hi) {
   let loCL = null, hiCL = null;
   for (const cl of gridCLs) {
     if (cl.value <= lo + BRACKET_EPS_MM) loCL = cl;

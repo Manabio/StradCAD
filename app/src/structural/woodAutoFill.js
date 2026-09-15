@@ -10,12 +10,13 @@
 // **前提**: 呼び出し側が壁由来の梁芯CL（autoFillWallBeamAxes。マージ済み・下階込みの wallSources）を
 // 先に生成しておくこと——ここでは CL を作らない（自階だけの未マージ source で作ると、下階経路で
 // extent の短い梁芯CLが永続化され、後の重複ガードで固定される）。
-import { CenterLineType, centerLineKind, columnSlotKey, spanKey, findHostPrimaryBeam } from '../core.js';
+import { CenterLineType, Discipline, centerLineKind, columnSlotKey, spanKey, findHostPrimaryBeam } from '../core.js';
 import { CL_OVERLAP_TOL_MM } from '../core/constants.js';
 import { findSectionEntry, woodRectSectionKey } from './sectionCatalog.js';
-import { rulesFor, effectiveStructure } from './structureRules.js';
-import { selfWallSegments, findBeamAnchorCL } from './wallBeamAxes.js';
+import { rulesFor, effectiveStructure, TRADITIONAL_WOOD_FRAMING } from './structureRules.js';
+import { selfWallSegments, findBeamAnchorCL, wallBeamAxisExcludeKey, bracketExtent } from './wallBeamAxes.js';
 import { woodStudCodeFor } from '../finish/materials/backingClass.js';
+import { beamGridCells } from './framingCells.js';
 import {
   woodBeamDepthForSpans, woodBeamSectionForDepth, crossingBeamLoadCoords,
   mergeWallIntervals, throughBeamRuns, propagateCarrierDepths,
@@ -220,6 +221,177 @@ export function autoFillWoodWallBeams(graph, project, wallSegments, wallGate = n
   for (const beam of [...graph.beamMap.values()]) {
     if (beam.materialType !== rules.baseMaterial) continue;
     if (beam.role !== 'primary' && beam.role !== 'secondary') continue;
+    if (beam.dimensionStatus !== 'auto') continue;
+    if (candidateKeys.has(spanKey(beam.axisCL, beam.clStart, beam.clEnd))) continue;
+    for (const s of [...graph.sleeveMap.values()]) if (s.hostBeamId === beam.id) graph.sleeveMap.delete(s.id);
+    graph.beamMap.delete(beam.id);
+    removed.push(beam.id);
+  }
+
+  return { created, removed };
+}
+
+// 床梁（role:'floor'、記号FB）の材軸方向。短辺・長辺が同寸（正方形）のときは材軸＝X（横梁、isVertical:false）
+// にする（ユーザー裁定2026-09-15。方向自体は既定でユーザー未確認——反転したいときはこの1関数だけ直せばよい）。
+function floorBeamIsVertical(w, h) {
+  return h < w; // 短辺が垂直方向(h)のときだけ縦梁。同寸・hが長いときは横梁。
+}
+
+// 二重防御: 生成しようとしている床梁の軸（isVertical・coord）上に、既存の木造 primary/floor 梁が
+// 生成スパン[lo,hi]と重なっていないか。beamGridCellsのセル判定は内部に梁が入り込む矩形を候補から
+// 除外するが、findBeamAnchorCLで位置に既存の通り芯・梁芯CLを再利用した場合、その既存CLを軸に持つ
+// 別の梁（例: 壁下梁・頭つなぎ）がspanKey（axisCL+clStart+clEnd）だけ見ると別物として重複生成の
+// チェックをすり抜けうる——実データmoku1.stqで、壁下梁と同一軸で一部区間だけ重なる床梁、頭つなぎと
+// ほぼ同位置・並行な床梁が実際に生成された（spanKeyは異なるが幾何的にほぼ二重梁）。ここで軸+範囲の
+// 幾何的な重なりだけを見て最終防波堤とする（beamGridCellsのセル判定とは独立の二重チェック）。
+// 【呼び出し側の規律】冪等性はこの関数ではなく呼び出し側（existingFloorKeysのcontinueがこの呼び出しより
+// 先に評価される）が担保する——2回目呼び出しでは前回生成した床梁自身のspanKeyがexistingFloorKeysに
+// 既にあるため、この関数へ到達する前にcontinueする。そのためこの関数は「自分自身」を除外する必要が無い
+// （以前は除外用のexcludeKey引数を持っていたが、冪等性には寄与せずroleも見ないため同一spanKeyの
+// primaryまで素通ししうる欠陥だった。QA指摘により削除——existingFloorKeysの先行continue一本化）。
+function axisSpanOccupied(graph, materialType, isVertical, coord, lo, hi, tol) {
+  return graph.beams.some(b =>
+    b.materialType === materialType && (b.role === 'primary' || b.role === 'floor') &&
+    b.isVertical === isVertical && Math.abs(b.axisValue - coord) < tol &&
+    Math.min(b.clStart.effectiveValue, b.clEnd.effectiveValue) < hi - tol &&
+    Math.max(b.clStart.effectiveValue, b.clEnd.effectiveValue) > lo + tol);
+}
+
+/**
+ * 在来木造の床梁（role:'floor'、記号FB、ステップ3e-2）を、梁で4辺囲まれたセル（framingCells.js
+ * beamGridCells）のうち短辺が floorBeamMaxPitchMm(1820) を超えるものへ自動生成し、候補に無い
+ * 自動生成の床梁を撤去する。
+ *  - セル抽出は木造の大梁（role:'primary'）から作った線分（coord=axisValue、lo/hi=clStart/clEnd.effectiveValue
+ *    の min/max）に beamGridCells を適用する（finish/gridCells.js は梁芯を含まないため端が host に届かず使わない）。
+ *  - 必要判定: min(短辺,長辺) <= floorBeamMaxPitchMm なら床梁なし（両辺が1820超のときだけ生成）。
+ *  - 方向: 短辺方向に架ける（材軸＝短辺と平行）。長辺方向に n=ceil(長辺/1820) 等分し、内部の n-1 本を
+ *    等間隔で置く（floorBeamIsVertical。正方形は材軸＝X＝横梁）。
+ *  - アンカー: 材軸の直交CL（clStart/clEnd）はセルの両辺を作っている大梁自身の axisCL（座標一致で
+ *    大梁を逆引きする——beamGridCellsは線分の集合しか返さないため）。材軸CL（axisCL）は位置に既存の
+ *    通り芯・梁芯があればそれを使う（findBeamAnchorCL）。無ければ梁芯CL（discipline:'fuse'、labeled:false）
+ *    を自動生成する（excludedWallBeamAxesに記録された座標は生成しない）。extentは絶対座標
+ *    （セルの短辺区間。extentLoRefは使わない——壁由来梁芯のような通り芯ブラケットへスナップする理由が
+ *    無いため）。**位置に既存の非ラベルCLを再利用したとき、その既存extent（ref付きも解決済みの現在値を
+ *    基準に含む）と床梁スパンの和集合を、wallBeamAxes.js bracketExtent（3cのautoFillWallBeamAxesと
+ *    同一実装）へ通して直交通り芯へ再ブラケットする**（D1。ref→staticへ落とさず3cと同じ意味論に揃え、
+ *    ブラケット先の通り芯が動けば追従する。ブラケットできない側だけ静的な和集合値にフォールバック。
+ *    結果は常に和集合以上＝縮めない）。extentLo/extentHiのどちらかがnull（全幅扱い）のCLは触らない
+ *    （縮めることになるため）——放置すると床梁の真下に梁芯が描かれずsnap.jsの沿線スナップも効かなく
+ *    なる不具合になる（実データmoku1/moku2の2階 x=5460の床梁で確認。conflictしたCLはref付きだった
+ *    ため、当初のref除外案では直らなかった）。
+ *  - 撤去は graph.beamMap.delete を直接使う（graph.removeBeam は使わない＝excludedBeamSlots を汚さない。
+ *    壁線通し梁・小梁と同じ規律）。対象は木造の role:'floor' のうち dimensionStatus==='auto' のみ
+ *    （locked/calculated は保持）。CL は孤児になっても撤去しない（壁由来梁芯と同じ裁定）。
+ *  - 除外集合（excludedBeamSlots）にあるスロットは候補扱いにしない（生成しない・撤去対象に含める）。
+ *  - 二重防御（axisSpanOccupied）: 生成しようとしている軸上に既存の木造primary/floor梁が生成スパンと
+ *    幾何的に重なっていれば生成しない（findBeamAnchorCLで既存CLを再利用した際のspanKeyすり抜けの
+ *    最終防止。実データで発覚した壁下梁・頭つなぎとの二重梁を防ぐ）。
+ *  - 非在来（framing を持たない主構造）は何もしない。
+ * @param {object} graph
+ * @param {object} project
+ * @returns {{created: object[], removed: string[]}}
+ */
+export function autoFillWoodFloorBeams(graph, project) {
+  const rules = rulesFor(effectiveStructure(graph, project));
+  if (!rules.framing) return { created: [], removed: [] };
+  const maxPitch = TRADITIONAL_WOOD_FRAMING.floorBeamMaxPitchMm;
+
+  const primaries = graph.beams.filter(b => b.materialType === rules.baseMaterial && b.role === 'primary');
+  const lines = primaries.map(b => ({
+    isVertical: b.isVertical,
+    coord: b.axisValue,
+    lo: Math.min(b.clStart.effectiveValue, b.clEnd.effectiveValue),
+    hi: Math.max(b.clStart.effectiveValue, b.clEnd.effectiveValue),
+  }));
+  const cells = beamGridCells(lines);
+
+  // セルの辺（isVertical, coord）を作っている大梁自身を座標で逆引きする（clStart/clEndのアンカーに使う。
+  // beamGridCellsは線分の集合しか返さないため、生成元の梁オブジェクトへ戻す必要がある）。
+  function findEdgeBeam(isVertical, coord) {
+    return primaries.find(b => b.isVertical === isVertical && Math.abs(b.axisValue - coord) < CL_OVERLAP_TOL_MM) ?? null;
+  }
+
+  const candidateKeys = new Set();
+  const created = [];
+  const existingFloorKeys = new Set(
+    graph.beams
+      .filter(b => b.materialType === rules.baseMaterial && b.role === 'floor')
+      .map(b => spanKey(b.axisCL, b.clStart, b.clEnd)));
+
+  for (const cell of cells) {
+    const w = cell.x2 - cell.x1, h = cell.y2 - cell.y1;
+    if (Math.min(w, h) <= maxPitch) continue; // 短辺が1820以下なら床梁不要
+
+    const isVertical = floorBeamIsVertical(w, h);
+    const longLen = isVertical ? w : h;
+    const longLo  = isVertical ? cell.x1 : cell.y1;
+    const shortLo = isVertical ? cell.y1 : cell.x1;
+    const shortHi = isVertical ? cell.y2 : cell.x2;
+    const n = Math.ceil(longLen / maxPitch);
+    if (n < 2) continue; // 内部位置が無い（理論上min(w,h)>maxPitch判定と矛盾しないための安全弁）
+
+    // 材軸の直交CL＝セルの短辺を作っている大梁自身のaxisCL（材軸と直交する向きの大梁）。
+    const startEdge = findEdgeBeam(!isVertical, shortLo);
+    const endEdge = findEdgeBeam(!isVertical, shortHi);
+    if (!startEdge || !endEdge) continue; // 理論上beamGridCellsの被覆保証により必ず見つかるはずの安全弁
+    const clStart = startEdge.axisCL, clEnd = endEdge.axisCL;
+
+    const axisType = isVertical ? CenterLineType.VERTICAL : CenterLineType.HORIZONTAL;
+    const pitch = longLen / n;
+    for (let i = 1; i < n; i++) {
+      const coord = longLo + i * pitch;
+      let axisCL = findBeamAnchorCL(graph, axisType, coord);
+      if (!axisCL) {
+        const excludeKey = wallBeamAxisExcludeKey(isVertical, coord);
+        if (graph.excludedWallBeamAxes.has(excludeKey)) continue; // 手動削除の尊重
+        axisCL = graph.addCenterLine(axisType, coord, {
+          labeled: false, discipline: Discipline.FUSE, extentLo: shortLo, extentHi: shortHi,
+        });
+      }
+
+      const key = spanKey(axisCL, clStart, clEnd);
+      if (graph.excludedBeamSlots.has(key)) continue; // 除外スロットは候補扱いにしない（生成しない・撤去対象に含める）
+      candidateKeys.add(key);
+      if (existingFloorKeys.has(key)) continue; // 既存（手動固定含む。自分自身の再生成も含む）と重複させない
+      // 二重防御: 同一軸上に「このスロットとは別の」既存木造primary/floor梁が生成スパンと重なっていれば
+      // 生成しない（findBeamAnchorCLで既存CLを再利用したときのspanKeyすり抜けを幾何的な重なりで最終防止）。
+      if (axisSpanOccupied(graph, rules.baseMaterial, isVertical, coord, shortLo, shortHi, CL_OVERLAP_TOL_MM)) continue;
+
+      // F1（D1: 再ブラケット方式）: 位置に既存の非ラベルCL（壁由来梁芯等。findBeamAnchorCLで再利用）を
+      // 使う場合、その既存extentが床梁スパン[shortLo,shortHi]を覆っているとは限らない——放置すると、
+      // CenterLinesLayerはextent±overhangしか描かないため床梁の真下に梁芯が描かれず、snap.jsの
+      // 沿線スナップも効かなくなる（実データmoku1/moku2の2階で確認: 床梁 axis=5460 span=-3640..0 に
+      // 対し既存extentは-9100..-7280＝完全に外）。
+      // 現在の解決済みextent（ref・static問わず）と床梁スパンの和集合[min(現lo,shortLo),
+      // max(現hi,shortHi)]を、wallBeamAxes.js bracketExtent（3cのautoFillWallBeamAxesと同一実装。
+      // 直交通り芯へスナップ）へ通し、その結果でrefを張り替える——ref→staticへ落とすのではなく
+      // 通り芯ブラケット方式（3c）と同じ意味論に揃えることで、ブラケット先の通り芯が動けばこの梁芯も
+      // 追従する（static固定だと追従が失われる）。ブラケットできない側（外側に通り芯が無い）だけ
+      // 静的な和集合値にフォールバックする（bracketExtentの戻り値がnullの側）。bracketExtentは
+      // 「lo以下の最大値・hi以上の最小値」を返すため、結果は常に和集合以上＝現在値以上を覆う（縮めない）。
+      // 【N2】extent未確定（extentLo==null または extentHi==null＝全幅扱いのCL）は触らない——
+      // 触ると「全幅」から有限範囲へ縮めることになってしまう。
+      // 冪等性: 2回目呼び出しはexistingFloorKeysで先にcontinueするためこのブロックへは到達しない。
+      if (axisCL.labeled === false && axisCL.extentLo != null && axisCL.extentHi != null) {
+        const unionLo = Math.min(axisCL.extentLo, shortLo);
+        const unionHi = Math.max(axisCL.extentHi, shortHi);
+        const gridCLs = isVertical ? graph.gridYs : graph.gridXs; // 直交通り芯（value昇順。wallBeamAxes.jsと同じ規約）
+        const { loCL, hiCL } = bracketExtent(gridCLs, unionLo, unionHi);
+        graph.setCenterLineExtentRef(axisCL, 'lo', loCL ? { clId: loCL.id, offset: 0 } : null, loCL ? null : unionLo);
+        graph.setCenterLineExtentRef(axisCL, 'hi', hiCL ? { clId: hiCL.id, offset: 0 } : null, hiCL ? null : unionHi);
+      }
+
+      created.push(graph.addBeam(
+        rules.baseMaterial, rules.defaultSections.beam, axisCL, isVertical, clStart, clEnd,
+        { role: 'floor', beamType: '床梁' },
+      ));
+      existingFloorKeys.add(key);
+    }
+  }
+
+  const removed = [];
+  for (const beam of [...graph.beamMap.values()]) {
+    if (beam.materialType !== rules.baseMaterial || beam.role !== 'floor') continue;
     if (beam.dimensionStatus !== 'auto') continue;
     if (candidateKeys.has(spanKey(beam.axisCL, beam.clStart, beam.clEnd))) continue;
     for (const s of [...graph.sleeveMap.values()]) if (s.hostBeamId === beam.id) graph.sleeveMap.delete(s.id);

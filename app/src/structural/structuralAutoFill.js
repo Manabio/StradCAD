@@ -6,7 +6,7 @@ import { computeTributaryColumnWidth, computeColumnBaseSize, computeFoundationBe
 import { floorSwapManager } from '../storage/FloorSwapManager.js';
 import { isRigidFrameStructure, structureHasMemberKind, memberKindOf, MEMBER_KIND } from './structuralClassification.js';
 import { rulesFor, defaultMaterialFor, UNSPECIFIED_STRUCTURE, effectiveStructure } from './structureRules.js';
-import { autoFillWoodColumns, autoFillWoodWallBeams } from './woodAutoFill.js';
+import { autoFillWoodColumns, autoFillWoodWallBeams, autoFillWoodFloorBeams } from './woodAutoFill.js';
 import { buildExteriorSide, footprintCellKeys } from './wallGate.js';
 import { autoFillWallBeamAxes } from './wallBeamAxes.js';
 import { landingEdgeCLs, landingZ } from '../finish/stair/stairLanding.js';
@@ -374,7 +374,9 @@ export function autoFillStairLandingBeams(graph, project, wallGate = null) {
  *  wallSources: 壁由来の梁芯生成対象（structural/wallBeamAxes.js collectWallBeamSources の結果。
  *  下階peekを含む非同期収集のため呼び出し側が await して渡す＝wallGateと同じ既存パターン）。
  *  wallSegments: 壁線上の通し梁（在来木造・beamPlacement:'wallRuns'）が候補列挙に使う壁区間
- *  （wallBeamAxes.js wallRunSegments の結果。マージ不要のプレーン配列。他構造は未使用）。 */
+ *  （wallBeamAxes.js wallRunSegments の結果。マージ不要のプレーン配列。他構造は未使用）。
+ *  在来木造（beamPlacement:'wallRuns'）は壁線上の通し梁の生成・撤去が確定した直後に、床梁
+ *  （role:'floor'、woodAutoFill.js autoFillWoodFloorBeams。ステップ3e-2）も生成・撤去する。 */
 export function autoFillStructuralGrid(graph, project, belowMainStructure, wallGate = null, wallSources = [], wallSegments = []) {
   const foundation = isFoundationPlane(graph.plane, project);
   const isRoof = graph.plane.isRoofPlane;
@@ -402,6 +404,10 @@ export function autoFillStructuralGrid(graph, project, belowMainStructure, wallG
     : { created: [], removed: [] };
   const newBeams = beamsResult.created;
   const removedBeams = beamsResult.removed;
+  // 在来木造の床梁（role:'floor'、ステップ3e-2）。壁線上の通し梁（大梁）の生成・撤去が確定した
+  // 直後に呼ぶ——床梁のセル抽出・端部アンカーは確定済みの大梁（role:'primary'）を前提にするため。
+  const floorBeamsResult = rulesFor(structure).beamPlacement === 'wallRuns'
+    ? autoFillWoodFloorBeams(graph, project) : { created: [], removed: [] };
   const newRoofBeams = (isRoof && belowMainStructure !== UNSPECIFIED_STRUCTURE) ? autoFillRoofBeams(graph, project, belowMainStructure, wallGate) : [];
   // 踊り場受け梁（role:'landing'）。鉄骨・RC階段の踊り場辺（壁側1辺）へ自動生成する（WP-B2）。
   // 通り芯グリッドとは無関係の生成源のため、小梁生成の直前という以外の順序上の制約はない。
@@ -414,8 +420,8 @@ export function autoFillStructuralGrid(graph, project, belowMainStructure, wallG
   const newSecondaryBeams = rulesFor(structure).beamPlacement === 'wallRuns' ? [] : autoFillSecondaryBeams(graph, project);
   return {
     newColumns, removedColumns, newFootings,
-    newBeams: [...newBeams, ...newRoofBeams, ...newWallBeamAxes, ...newLandingBeams, ...newSecondaryBeams],
-    removedBeams,
+    newBeams: [...newBeams, ...newRoofBeams, ...newWallBeamAxes, ...newLandingBeams, ...newSecondaryBeams, ...floorBeamsResult.created],
+    removedBeams: [...removedBeams, ...floorBeamsResult.removed],
   };
 }
 

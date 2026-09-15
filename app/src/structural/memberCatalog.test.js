@@ -54,3 +54,39 @@ test('【伏図の柱記号】columnMapSelf（自階柱・描画専用の参照�
   assert.ok(!NUMBERED_MAPS.includes('columnMapSelf'), 'NUMBERED_MAPSは採番対象のmapNameだけを持つ');
   assert.ok(!MEMBER_GROUPS.some(g => g.mapName === 'columnMapSelf'), 'MEMBER_GROUPSは構造リスト（編集系）のグループだけを持つ');
 });
+
+// ---- ステップ3e-2（床梁 role:'floor'、記号FB）----
+
+test('【3e-2】memberSymbol: beamMapのrole:floorは記号FBを返す', () => {
+  const floor = makeBeam('b1', 'WOOD-120x120', { role: 'floor' });
+  assert.equal(memberSymbol(floor, 'beamMap'), 'FB');
+});
+
+test('【3e-2】MEMBER_GROUPS: 「梁」グループのfilterはrole:floorも除外する', () => {
+  const beamGroup = MEMBER_GROUPS.find(g => g.key === 'beam');
+  const primary = makeBeam('b1', 'WOOD-120x120', { role: 'primary' });
+  const floor = makeBeam('b2', 'WOOD-120x120', { role: 'floor' });
+  assert.equal(beamGroup.filter(primary), true);
+  assert.equal(beamGroup.filter(floor), false);
+});
+
+test('【3e-2】MEMBER_GROUPS: 「床梁」グループはrole:floorのみを対象にし、手動追加不可・0件時は非表示（踊り場梁と同型）', () => {
+  const floorGroup = MEMBER_GROUPS.find(g => g.key === 'beamFloor');
+  assert.ok(floorGroup);
+  assert.equal(floorGroup.mapName, 'beamMap');
+  assert.equal(floorGroup.category, MEMBER_CATEGORY.ROD);
+  assert.equal(floorGroup.allowManualAdd, false);
+  assert.equal(floorGroup.hideWhenEmpty, true);
+  const floor = makeBeam('b1', 'WOOD-120x120', { role: 'floor' });
+  const primary = makeBeam('b2', 'WOOD-120x120', { role: 'primary' });
+  const secondary = makeBeam('b3', 'WOOD-120x120', { role: 'secondary' });
+  assert.equal(floorGroup.filter(floor), true);
+  assert.equal(floorGroup.filter(primary), false);
+  assert.equal(floorGroup.filter(secondary), false);
+});
+
+test('【失敗系・3e-2】MEMBER_GROUPS: 「小梁」グループのfilterはrole:floorの梁を対象に含めない', () => {
+  const beamSubGroup = MEMBER_GROUPS.find(g => g.key === 'beamSub');
+  const floor = makeBeam('b1', 'WOOD-120x120', { role: 'floor' });
+  assert.equal(beamSubGroup.filter(floor), false);
+});

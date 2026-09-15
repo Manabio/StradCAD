@@ -161,6 +161,12 @@ export const RIGID_JOINT_OFFSET_MM = 900;
 // 端部クリアランス（StructuralBeam.spanForHostBeams）が同じ値を共有する。
 export const HOST_BEAM_MATCH_TOL_MM = 0.5;
 
+// 「母材から離して終える」（host基準のspanForHostBeamsへ委譲する）梁のrole集合。小梁(secondary)に
+// 床梁(floor。ステップ3e-2)を加えた——どちらも取りつく先の大梁の縁+クリアランスで止まる点が同じ
+// （host判定はfindHostPrimaryBeamに集約済み）。鉄骨のピン接合（jointType）はこの集合と独立
+// （材種で権威を分ける。isPinJoint参照）。
+export const PIN_ROLES = new Set(['secondary', 'floor']);
+
 // 直交CL位置(perpCLId)に、coordを跨ぐ大梁(role:'primary')があれば返す（無ければnull）。
 // 小梁の生成条件（structuralAutoFill.autoFillSecondaryBeams）と描画時の端部クリアランス
 // （StructuralBeam._hostEndCenterAndHalfWidth）が二重実装せず同じ関数を使うための単一実装。
@@ -195,13 +201,13 @@ export class StructuralBeam extends StructuralEntity {
     // eccentricity は派生値: s*((梁幅-既定柱幅)/2 + faceGap)。s=外周側符号。structuralAutoFill.autoBeamEccentricity 参照。
     this.faceGap         = props.faceGap ?? 0;
     this.jointCondition  = props.jointCondition ?? { start: 'RIGID', end: 'RIGID' }; // 剛接合=ラーメン既定
-    // 小梁・基礎梁・軒桁・母屋・垂木・踊り場受け梁はサブクラスを増やさず role + 既定値の組み合わせで表現する。
-    this.role             = props.role             ?? 'primary'; // primary/secondary/foundation/eaves/roof/landing
+    // 小梁・床梁・基礎梁・軒桁・母屋・垂木・踊り場受け梁はサブクラスを増やさず role + 既定値の組み合わせで表現する。
+    this.role             = props.role             ?? 'primary'; // primary/secondary/floor/foundation/eaves/roof/landing
     // 接合方法（'RIGID'=剛接合 / 'PIN'=ピン接合）。鉄骨の梁でのみ意味を持つ（isPinJoint/hasRigidJoint 参照）。
-    // 既定は剛接合。ただし梁芯CL追加で自動生成される小梁（role:'secondary'）だけはピン接合を初期値にする
-    // ——生成側（structuralAutoFill/beamAxisMove）ではなくここで既定を決めることで、生成経路が増えても
-    // 初期値が食い違わない。旧データ（jointType未保存）もこの既定に落ちるため移行処理を持たない。
-    this.jointType        = props.jointType ?? (this.role === 'secondary' ? 'PIN' : 'RIGID');
+    // 既定は剛接合。ただし小梁・床梁（PIN_ROLES。梁芯CL追加・床梁自動生成で生成される）だけはピン接合を
+    // 初期値にする——生成側（structuralAutoFill/beamAxisMove/woodAutoFill）ではなくここで既定を決めることで、
+    // 生成経路が増えても初期値が食い違わない。旧データ（jointType未保存）もこの既定に落ちるため移行処理を持たない。
+    this.jointType        = props.jointType ?? (PIN_ROLES.has(this.role) ? 'PIN' : 'RIGID');
     // 梁天端レベル（floorDatum=FL基準・上が正。WP-B3で意味を確定。structural-model.md参照）。
     this.levelOffset      = props.levelOffset      ?? 0;
     this.startLevelOffset = props.startLevelOffset ?? 0; // levelOffsetからの始端追加オフセット（屋根部材の勾配用）
@@ -239,13 +245,13 @@ export class StructuralBeam extends StructuralEntity {
       hasRigidJoint: computed,
     });
   }
-  // ピン接合として描くか。鉄骨は jointType が権威、木造・RCは従来どおり role（小梁のみピン）で決まる
-  // ——木造梁は jointCondition/jointType の既定がピン寄りで、鉄骨以外まで jointType を見ると
-  // 既存の木造大梁の端部処理まで変わってしまうため、材種で権威を分ける。
+  // ピン接合として描くか。鉄骨は jointType が権威、木造・RCは従来どおり role（PIN_ROLES＝小梁・床梁の
+  // みピン）で決まる——木造梁は jointCondition/jointType の既定がピン寄りで、鉄骨以外まで jointType を
+  // 見ると既存の木造大梁の端部処理まで変わってしまうため、材種で権威を分ける。
   get isPinJoint() {
     return this.materialType === StructuralMaterialType.STEEL
       ? this.jointType === 'PIN'
-      : this.role === 'secondary';
+      : PIN_ROLES.has(this.role);
   }
   // 剛接合の継手記号を描く対象か（鉄骨の梁のみ。用語「接合＝鉄骨の構造部材同士が取り合う場所」に従う）。
   get hasRigidJoint() {
@@ -309,13 +315,13 @@ export class StructuralBeam extends StructuralEntity {
   // 表示する柱集合 columns に対し、両端を柱断面手前で止めた始終端座標を返す。
   // 伏図で別階の柱を表示する場合はレンダラが表示中の柱集合を渡す（StructuralLayer.jsx）。
   // opts.diaphragm=true（詳細描画）なら鋼管柱はダイヤフラム端で止める（梁はダイヤフラムまで）。
-  // 小梁（role:'secondary'）は柱ではなく取りつく大梁の縁で止まるため、渡された columns を使わず
+  // 小梁・床梁（PIN_ROLES）は柱ではなく取りつく大梁の縁で止まるため、渡された columns を使わず
   // spanForHostBeams に委譲する（coord1/coord2 getter・StructuralLayer.jsx の両方が自動でトリム後座標になる）。
   // ピン接合（isPinJoint）に指定された鉄骨の大梁も「母材から離して終える」——ただし母材は柱なので
   // spanForHostBeams ではなく柱基準のまま、両端に同じクリアランスを足して手前で止める
   // （小梁の host 基準経路をそのまま流用すると、host大梁の無い端がCL位置まで伸びて柱を突き抜ける）。
   spanForColumns(columns, { diaphragm = false } = {}) {
-    if (this.role === 'secondary' && this.isPinJoint) return this.spanForHostBeams(this._planGraph?.beams ?? []);
+    if (PIN_ROLES.has(this.role) && this.isPinJoint) return this.spanForHostBeams(this._planGraph?.beams ?? []);
     const clearance = this.isPinJoint ? SECONDARY_BEAM_CLEARANCE_MM : 0;
     const a = this._endCenterAndHalfWidth(this.clStart, columns, diaphragm);
     const b = this._endCenterAndHalfWidth(this.clEnd, columns, diaphragm);

@@ -23,13 +23,17 @@ export const MEMBER_GROUPS = [
   { key: 'column',  mapName: 'columnMap',  category: MEMBER_CATEGORY.COLUMN_LIKE, label: '柱・杭',     iconShape: 'square' },
   { key: 'footing', mapName: 'footingMap', category: MEMBER_CATEGORY.BOX_LIKE,    label: '基礎・柱脚', iconShape: 'box' },
   { key: 'beam',    mapName: 'beamMap',    category: MEMBER_CATEGORY.ROD,         label: '梁',         iconShape: 'band',
-    filter: b => b.role !== 'secondary' && b.role !== 'landing' },
+    filter: b => b.role !== 'secondary' && b.role !== 'landing' && b.role !== 'floor' },
   { key: 'beamSub', mapName: 'beamMap',    category: MEMBER_CATEGORY.ROD,         label: '小梁',       iconShape: 'band',
     filter: b => b.role === 'secondary', allowManualAdd: false, hideWhenEmpty: true },
   // 踊り場受け梁（WP-B。小梁と同型＝通り芯グリッドではなく階段の踊り場辺から自動生成するため
   // 手動追加UIなし。1本も無い階（階段の無い階・木造階段の階）ではセクション自体を隠す）。
   { key: 'beamLanding', mapName: 'beamMap', category: MEMBER_CATEGORY.ROD,        label: '踊り場梁',   iconShape: 'band',
     filter: b => b.role === 'landing', allowManualAdd: false, hideWhenEmpty: true },
+  // 床梁（在来木造ステップ3e-2。小梁・踊り場受け梁と同型＝梁で囲まれたセルから自動生成するため
+  // 手動追加UIなし。非在来・床梁の無い階ではセクション自体を隠す）。
+  { key: 'beamFloor', mapName: 'beamMap', category: MEMBER_CATEGORY.ROD,          label: '床梁',       iconShape: 'band',
+    filter: b => b.role === 'floor', allowManualAdd: false, hideWhenEmpty: true },
   { key: 'slab',    mapName: 'slabMap',    category: MEMBER_CATEGORY.PLANE_H,     label: 'スラブ',     iconShape: 'plane' },
   { key: 'wall',    mapName: 'wallMap',    category: MEMBER_CATEGORY.PLANE_V,     label: '耐力壁',     iconShape: 'wall' },
 ];
@@ -79,6 +83,7 @@ export function memberSymbol(entity, mapName) {
     case 'beamMap':
       switch (entity.role) {
         case 'secondary':  return 'B';  // 小梁
+        case 'floor':      return 'FB'; // 床梁
         case 'foundation': return 'FG'; // 基礎梁
         case 'eaves':      return 'EG'; // 軒桁
         case 'roof':       return entity.beamType === '垂木' ? 'RF' : 'PR'; // 垂木 / 母屋
