@@ -1,7 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
 import { Plane, PlanGraph, CenterLineType, Discipline } from '../core.js';
-import { collectWallBeamSources, autoFillWallBeamAxes, isTraditionalWoodStructure } from './wallBeamAxes.js';
+import {
+  collectWallBeamSources, autoFillWallBeamAxes, isTraditionalWoodStructure,
+  wallBackingCenters, mapBackingCenterMoves, findWallBeamAxisCL, wallBeamAxisExcludeKey,
+} from './wallBeamAxes.js';
 import { RC_WALL_BACKING_CODES } from '../finish/materials/backingClass.js';
 import { MATERIALS } from '../finish/materials/materialData.js';
 import { materialThickness } from '../finish/edgeComposition.js';
@@ -37,6 +42,16 @@ function addBackingWall(graph, { axisValue, clStart, clEnd, isVertical, backingD
   );
   return graph.addWall(axisCL, 0, isVertical, clStart, 0, clEnd, 0, {
     isExteriorWall, backingOffset, backingDepth, wallFinish: 12.5,
+  });
+}
+
+// addBackingWall と異なり axisCL を呼び出し側から受け取る（「同じCL上で壁が再生成された」
+// 前後2状態を作るのに使う。壁idは再生成のたびに変わるが axisCL は不変という前提を再現する）。
+function addBackingWallOnCL(graph, axisCL, {
+  clStart, clEnd, isVertical, axisOffset = 0, backingOffset = 0, backingDepth = 120, isExteriorWall = false, finishSide = null,
+}) {
+  return graph.addWall(axisCL, axisOffset, isVertical, clStart, 0, clEnd, 0, {
+    isExteriorWall, backingOffset, backingDepth, finishSide, wallFinish: 12.5,
   });
 }
 
@@ -270,4 +285,206 @@ test('【失敗系】collectWallBeamSources: 主構造が未設定（undefined�
   const project = { planes: [graph.plane], structuralInfo: { mainStructure: undefined } };
   const sources = await collectWallBeamSources(graph, project);
   assert.deepEqual(sources, []);
+});
+
+// ================================================================
+// 壁由来梁芯の追従（ステップ2）: wallBackingCenters / mapBackingCenterMoves / findWallBeamAxisCL
+// ================================================================
+
+test('wallBackingCenters: 下地オーナー壁（backingRange!=null）だけを拾い、仕上げのみの薄壁（backingDepth:0）は拾わない', () => {
+  const { graph, x1, x3 } = makeGridGraph('p1', 0);
+  const axisCL = graph.addCenterLine(CenterLineType.HORIZONTAL, 2000, { labeled: false, discipline: Discipline.ARCH });
+  addBackingWallOnCL(graph, axisCL, {
+    clStart: x1, clEnd: x3, isVertical: false, axisOffset: 50, backingOffset: 50, backingDepth: 120,
+  });
+  // 仕上げのみの薄壁（backingDepth:0）は対象外——resolveBackingOwnership が生成する「−側」の薄壁相当。
+  addBackingWallOnCL(graph, axisCL, {
+    clStart: x1, clEnd: x3, isVertical: false, axisOffset: -12.5, backingOffset: 0, backingDepth: 0,
+  });
+
+  const centers = wallBackingCenters(graph);
+  assert.equal(centers.length, 1, '薄壁は拾わない');
+  assert.equal(centers[0].axisCLId, axisCL.id);
+  assert.equal(centers[0].isVertical, false);
+  assert.equal(centers[0].side, 1, 'side = Math.sign(axisOffset)');
+  assert.equal(centers[0].coord, 2000 + 50, '中心座標 = axisCL値 + backingOffset');
+  assert.equal(centers[0].lo, 0);
+  assert.equal(centers[0].hi, 8000);
+});
+
+test('wallBackingCenters: axisOffsetが負（反対側の下地オーナー壁）はside:-1になる', () => {
+  const { graph, x1, x3 } = makeGridGraph('p1', 0);
+  const axisCL = graph.addCenterLine(CenterLineType.HORIZONTAL, 2000, { labeled: false, discipline: Discipline.ARCH });
+  addBackingWallOnCL(graph, axisCL, {
+    clStart: x1, clEnd: x3, isVertical: false, axisOffset: -50, backingOffset: -50, backingDepth: 120,
+  });
+  const centers = wallBackingCenters(graph);
+  assert.equal(centers.length, 1);
+  assert.equal(centers[0].side, -1);
+  assert.equal(centers[0].coord, 2000 - 50);
+});
+
+test('【QA S3】wallBackingCenters: axisOffset:0でもfinishSide:-1が明示された仕上げ面合わせ壁はside:-1になる（Math.sign(axisOffset)は0に潰れる）', () => {
+  const { graph, x1, x3 } = makeGridGraph('p1', 0);
+  const axisCL = graph.addCenterLine(CenterLineType.HORIZONTAL, 2000, { labeled: false, discipline: Discipline.ARCH });
+  addBackingWallOnCL(graph, axisCL, {
+    clStart: x1, clEnd: x3, isVertical: false, axisOffset: 0, backingOffset: -57.5, backingDepth: 90, finishSide: -1,
+  });
+  const centers = wallBackingCenters(graph);
+  assert.equal(centers.length, 1);
+  assert.equal(centers[0].side, -1, 'faceDirOr(0)はfinishSideを優先するためaxisOffset:0でも0に潰れない');
+  assert.equal(centers[0].coord, 2000 - 57.5);
+});
+
+test('mapBackingCenterMoves: 同じ(axisCLId,isVertical,side)でスパンが重なる旧↔新を対応づけ、動いた分だけ返す', () => {
+  const { graph, x1, x3 } = makeGridGraph('p1', 0);
+  const axisCL = graph.addCenterLine(CenterLineType.HORIZONTAL, 2000, { labeled: false, discipline: Discipline.ARCH });
+  const wall = addBackingWallOnCL(graph, axisCL, {
+    clStart: x1, clEnd: x3, isVertical: false, axisOffset: 45, backingOffset: 45, backingDepth: 90,
+  });
+  const before = wallBackingCenters(graph);
+  assert.equal(before.length, 1);
+  assert.equal(before[0].coord, 2045);
+
+  // 「壁が再生成されて厚みが変わった」を模す（同じaxisCL・壁idは変わらないが実運用では
+  // 別オブジェクトになる。ここではフィールド直接書換えで下地帯中心の移動だけを再現する）。
+  wall.backingOffset = 60;
+  wall.backingDepth = 120;
+  const after = wallBackingCenters(graph);
+  assert.equal(after.length, 1);
+  assert.equal(after[0].coord, 2060);
+
+  const moves = mapBackingCenterMoves(before, after);
+  assert.deepEqual(moves, [{ axisCLId: axisCL.id, isVertical: false, from: 2045, to: 2060 }]);
+});
+
+test('mapBackingCenterMoves: 中心座標が変わらなければ移動として返さない', () => {
+  const { graph, x1, x3 } = makeGridGraph('p1', 0);
+  const axisCL = graph.addCenterLine(CenterLineType.HORIZONTAL, 2000, { labeled: false, discipline: Discipline.ARCH });
+  addBackingWallOnCL(graph, axisCL, {
+    clStart: x1, clEnd: x3, isVertical: false, axisOffset: 45, backingOffset: 45, backingDepth: 90,
+  });
+  const before = wallBackingCenters(graph);
+  const after = wallBackingCenters(graph); // 同一状態から2回取得
+  assert.deepEqual(mapBackingCenterMoves(before, after), []);
+});
+
+test('【失敗系】mapBackingCenterMoves: スパンが重ならない旧↔新は対応づけない（無関係な同軸壁と誤対応しない）', () => {
+  const { graph, x2, x3 } = makeGridGraph('p1', 0);
+  const axisCL = graph.addCenterLine(CenterLineType.HORIZONTAL, 2000, { labeled: false, discipline: Discipline.ARCH });
+  // 旧側スパンは [0,1500]（間に隙間を空ける）。新側は同じCL・side だが [4000,8000] で重ならない。
+  const before = [{ axisCLId: axisCL.id, isVertical: false, side: 1, coord: 2045, lo: 0, hi: 1500 }];
+  addBackingWallOnCL(graph, axisCL, { clStart: x2, clEnd: x3, isVertical: false, axisOffset: 60, backingOffset: 60, backingDepth: 120 });
+  const after = wallBackingCenters(graph);
+  assert.deepEqual(mapBackingCenterMoves(before, after), []);
+});
+
+test('【失敗系】mapBackingCenterMoves: sideが違う旧↔新は対応づけない', () => {
+  const { graph, x1, x3 } = makeGridGraph('p1', 0);
+  const axisCL = graph.addCenterLine(CenterLineType.HORIZONTAL, 2000, { labeled: false, discipline: Discipline.ARCH });
+  const before = [{ axisCLId: axisCL.id, isVertical: false, side: 1, coord: 2045, lo: 0, hi: 8000 }];
+  addBackingWallOnCL(graph, axisCL, { clStart: x1, clEnd: x3, isVertical: false, axisOffset: -60, backingOffset: -60, backingDepth: 120 });
+  const after = wallBackingCenters(graph);
+  assert.deepEqual(mapBackingCenterMoves(before, after), []);
+});
+
+test('【失敗系・孤児は撤去しない裁定】mapBackingCenterMoves: 旧にあって新に対応が無い壁は無視する（moveを返さない）', () => {
+  const { graph } = makeGridGraph('p1', 0);
+  const axisCL = graph.addCenterLine(CenterLineType.HORIZONTAL, 2000, { labeled: false, discipline: Discipline.ARCH });
+  const before = [{ axisCLId: axisCL.id, isVertical: false, side: 1, coord: 2045, lo: 0, hi: 8000 }];
+  const after = []; // 新側に壁が無い（部屋ごと消えた等）
+  assert.deepEqual(mapBackingCenterMoves(before, after), []);
+});
+
+// ---- QA S2: 貪欲findIndex（配列順依存・端点共有を重なり扱い）の是正 ----
+test('【QA S2】mapBackingCenterMoves: after配列の並び順に依存せず、重なり長最大のものへ正しく対応づける（部屋境界で2本に割れた同軸同sideの壁）', () => {
+  const before = [
+    { axisCLId: 'ax', isVertical: false, side: 1, coord: 100, lo: 0, hi: 3000 },
+    { axisCLId: 'ax', isVertical: false, side: 1, coord: 200, lo: 3000, hi: 6000 },
+  ];
+  // after の順序を意図的に before と逆にする（配列順に依存する早期一致だと取り違える）。
+  const after = [
+    { axisCLId: 'ax', isVertical: false, side: 1, coord: 250, lo: 3000, hi: 6000 },
+    { axisCLId: 'ax', isVertical: false, side: 1, coord: 150, lo: 0, hi: 3000 },
+  ];
+  assert.deepEqual(mapBackingCenterMoves(before, after), [
+    { axisCLId: 'ax', isVertical: false, from: 100, to: 150 },
+    { axisCLId: 'ax', isVertical: false, from: 200, to: 250 },
+  ]);
+});
+
+test('【QA S2失敗系】mapBackingCenterMoves: 端点共有のみ（重なり長0）は対応づけない', () => {
+  const before = [{ axisCLId: 'ax', isVertical: false, side: 1, coord: 100, lo: 0, hi: 3000 }];
+  const after = [{ axisCLId: 'ax', isVertical: false, side: 1, coord: 900, lo: 3000, hi: 6000 }];
+  assert.deepEqual(mapBackingCenterMoves(before, after), []);
+});
+
+test('【QA S2】mapBackingCenterMoves: 1旧→2新（分割）でもmoveは最大1件（重なりが大きい方だけ対応づく）', () => {
+  const before = [{ axisCLId: 'ax', isVertical: false, side: 1, coord: 100, lo: 0, hi: 6000 }];
+  const after = [
+    { axisCLId: 'ax', isVertical: false, side: 1, coord: 150, lo: 0, hi: 1000 },   // 重なり1000
+    { axisCLId: 'ax', isVertical: false, side: 1, coord: 250, lo: 500, hi: 6000 }, // 重なり5500（最大）
+  ];
+  const moves = mapBackingCenterMoves(before, after);
+  assert.equal(moves.length, 1, '1旧エントリにつきmoveは最大1件');
+  assert.equal(moves[0].to, 250, '重なりが最大の新側と対応づく');
+});
+
+test('【QA T2】mapBackingCenterMoves: 重なり長が同点の候補はloがb.loに近い方へ対応づく（afterの順を入れ替えても同じ結果）', () => {
+  const before = [{ axisCLId: 'ax', isVertical: false, side: 1, coord: 100, lo: 0, hi: 3000 }];
+  // A: lo=0（b.loと一致）hi=2000 → 重なり = min(3000,2000)-max(0,0) = 2000
+  // B: lo=1000            hi=3000 → 重なり = min(3000,3000)-max(0,1000) = 2000（同点）
+  const a = { axisCLId: 'ax', isVertical: false, side: 1, coord: 150, lo: 0, hi: 2000 };
+  const b = { axisCLId: 'ax', isVertical: false, side: 1, coord: 350, lo: 1000, hi: 3000 };
+
+  const movesAB = mapBackingCenterMoves(before, [a, b]);
+  assert.equal(movesAB.length, 1);
+  assert.equal(movesAB[0].to, 150, 'loがb.loに一致するAへ対応づく');
+
+  const movesBA = mapBackingCenterMoves(before, [b, a]); // after の順を入れ替える
+  assert.equal(movesBA.length, 1);
+  assert.equal(movesBA[0].to, 150, '走査順を変えても結果は変わらない');
+});
+
+test('findWallBeamAxisCL: 許容差内(CL_OVERLAP_TOL_MM)の壁由来梁芯（fuse）を返す', () => {
+  const graph = makeGraph('p1', 0);
+  const beamCL = graph.addCenterLine(CenterLineType.HORIZONTAL, 2045, { labeled: false, discipline: Discipline.FUSE });
+  const found = findWallBeamAxisCL(graph, false, 2045);
+  assert.equal(found, beamCL);
+});
+
+test('findWallBeamAxisCL: 許容差外なら見つからない（null）', () => {
+  const graph = makeGraph('p1', 0);
+  graph.addCenterLine(CenterLineType.HORIZONTAL, 2045, { labeled: false, discipline: Discipline.FUSE });
+  assert.equal(findWallBeamAxisCL(graph, false, 2100), null);
+});
+
+test('【findBeamAnchorCLとの違い】findWallBeamAxisCL: 通り芯（labeled）は対象外——通り芯を動かす事故を防ぐ', () => {
+  const graph = makeGraph('p1', 0);
+  graph.addCenterLine(CenterLineType.HORIZONTAL, 2045, { labeled: true, discipline: Discipline.STRUCT });
+  assert.equal(findWallBeamAxisCL(graph, false, 2045), null,
+    'findBeamAnchorCLは通り芯にも一致するが、findWallBeamAxisCLは意図的に一致させない');
+});
+
+test('wallBeamAxisExcludeKey: autoFillWallBeamAxesの除外キーと同じ書式（X|Y:座標丸め）を返す', () => {
+  assert.equal(wallBeamAxisExcludeKey(true, 2045.6), 'X:2046');
+  assert.equal(wallBeamAxisExcludeKey(false, 2045.4), 'Y:2045');
+});
+
+// ---- 【QA S4不変条件】transform/centerLineOps.js の除外キー操作は wallBeamAxisExcludeKey を経由する ----
+// 除外キーの書式を直書き（inline literal）で複製していると、wallBeamAxisExcludeKey 側だけ
+// 書式を変えたときに片方が取り残されてキーがすれ違う事故になる（QA S4）。
+test('【QA S4不変条件】centerLineOps.js の excludedWallBeamAxes.add(/.delete( 行は wallBeamAxisExcludeKey( を経由する', () => {
+  const src = fs.readFileSync(path.resolve(import.meta.dirname, '../transform/centerLineOps.js'), 'utf8');
+  const lines = src.split(/\r?\n/);
+  const offenders = [];
+  lines.forEach((line, i) => {
+    if (/excludedWallBeamAxes\.(add|delete)\(/.test(line) && !line.includes('wallBeamAxisExcludeKey(')) {
+      offenders.push(`${i + 1}: ${line.trim()}`);
+    }
+  });
+  assert.deepEqual(offenders, [], `除外キーの直書きが残っている:\n${offenders.join('\n')}`);
+  // 前提: 走査対象の行が実在すること（0件だとテストが何も検出できず無意味に緑になるのを防ぐ）。
+  const targetLines = lines.filter(l => /excludedWallBeamAxes\.(add|delete)\(/.test(l));
+  assert.ok(targetLines.length >= 3, `前提: excludedWallBeamAxes.add/delete が3箇所以上あるはず（実際:${targetLines.length}）`);
 });

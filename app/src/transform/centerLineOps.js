@@ -19,6 +19,7 @@ import {
 import { resolveSecondaryBeamsForAxis } from '../structural/beamAxisMove.js';
 import { renumberMembers } from '../structural/memberNumbering.js';
 import { autoFillSecondaryBeams, autoFillBeamEccentricity, UNSPECIFIED_STRUCTURE } from '../structural/structuralAutoFill.js';
+import { wallBeamAxisExcludeKey } from '../structural/wallBeamAxes.js';
 
 // CL の pendingDelta を実座標に bake する（ref CL / 通常 CL 両対応）
 export function bakeCLValue(cl, newVal) {
@@ -71,8 +72,7 @@ export function commitCLMoveOp(graph, project, cl, originalValue) {
     // 移動＝元位置の放棄と解釈する。次回のモード境界再計算で「壁由来の梁芯自動生成」が元の座標に
     // 復活しないよう、移動前の座標を除外集合へ記録する（cl-del分岐の記録と同じ意味・同じキー形式。
     // 手動追加の梁芯を動かした場合も無害——その座標に壁が無ければ単に使われないキーが残るだけ）。
-    const axisKey = cl.centerLineType === CenterLineType.VERTICAL ? 'X' : 'Y';
-    graph.excludedWallBeamAxes.add(`${axisKey}:${Math.round(originalValue)}`);
+    graph.excludedWallBeamAxes.add(wallBeamAxisExcludeKey(cl.centerLineType === CenterLineType.VERTICAL, originalValue));
     bakeCLValue(cl, newValue);
     counts = resolveSecondaryBeamsForAxis(graph, cl, project);
     renumberMembers(graph, project, 'beamMap');
@@ -163,8 +163,7 @@ export function deleteCenterLineWithUndo(graph, project, cl) {
     // ため、記録しないと自動生成が復活させてしまう）。キーは structural/wallBeamAxes.js と同じ形式。
     runInAction(() => {
       if (centerLineKind(cl) === 'beam') {
-        const axisKey = cl.centerLineType === CenterLineType.VERTICAL ? 'X' : 'Y';
-        graph.excludedWallBeamAxes.add(`${axisKey}:${Math.round(cl.effectiveValue)}`);
+        graph.excludedWallBeamAxes.add(wallBeamAxisExcludeKey(cl.centerLineType === CenterLineType.VERTICAL, cl.effectiveValue));
       }
       graph.removeCenterLine(cl.id);
     });
@@ -548,8 +547,7 @@ export function addCenterLineFromDialog(graph, project, payload, viewport) {
       const newCl = graph.addCenterLine(clType, value, props);
       // 壁由来の梁芯自動生成の除外集合を解除する（addColumn/addBeamがexcluded*Slotsを解除する
       // 既存パターンと同型）——手動でこの位置に梁芯を追加した以上、以後の自動生成で復活してよい。
-      const axisKey = clType === CenterLineType.VERTICAL ? 'X' : 'Y';
-      graph.excludedWallBeamAxes.delete(`${axisKey}:${Math.round(newCl.effectiveValue)}`);
+      graph.excludedWallBeamAxes.delete(wallBeamAxisExcludeKey(clType === CenterLineType.VERTICAL, newCl.effectiveValue));
       autoFillSecondaryBeams(graph, project);
       autoFillBeamEccentricity(graph, project);
       renumberMembers(graph, project, 'beamMap');

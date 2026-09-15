@@ -62,6 +62,110 @@ export function selfWallSegments(graph) {
   return wallBeamSourcesFromGraph(graph, false);
 }
 
+// ================================================================
+// 壁由来梁芯の追従（壁再生成をFinishModeStateから独立させる計画のステップ2）。
+//
+// 下地帯の中心が壁再生成で動いたとき（下地材コード変更で壁厚が変わる等）、旧座標に残る
+// 壁由来の梁芯CL（discipline:fuse）を撤去せず追従させる——CL id が変わらないため、
+// それにアンカーされた壁交点柱・除外集合が生きたまま新しい位置に移る。
+// 対応先の壁が無くなった孤児梁芯は撤去しない（2026-09-15裁定。現状に撤去規律が無く、
+// 自動/手動の出自フラグも無いため）。
+// ================================================================
+
+/**
+ * graph の下地オーナー壁から、下地帯中心の位置を CL 単位で控える（wallBeamSourcesFromGraph と
+ * 同じ走査に axisCLId・side を足したもの）。壁再生成の直前・直後にそれぞれ呼び、
+ * mapBackingCenterMoves で旧↔新を突き合わせる。
+ * @param {object} graph
+ * @returns {Array<{axisCLId:string, isVertical:boolean, side:number, coord:number, lo:number, hi:number}>}
+ */
+export function wallBackingCenters(graph) {
+  const out = [];
+  for (const wall of graph.walls) {
+    if (!isBackingOwnerWall(wall)) continue;
+    out.push({
+      axisCLId: wall.axisCL.id,
+      isVertical: wall.isVertical,
+      // side は wall.faceDirOr(0)（core/wall.js）を使う——Math.sign(axisOffset) だけだと
+      // CL偏芯の仕上げ面合わせ（axisOffset===0だがfinishSideが明示されている）で0に潰れ、
+      // 本来+/-で区別すべき2枚の壁が同じsideに丸められてしまう（QA S3）。偏芯なし（対称壁。
+      // finishSide・axisOffsetともnull/0）は引き続き0。
+      side: wall.faceDirOr(0),
+      coord: (wall.backingRange.lo + wall.backingRange.hi) / 2,
+      lo: Math.min(wall.coord1, wall.coord2),
+      hi: Math.max(wall.coord1, wall.coord2),
+    });
+  }
+  return out;
+}
+
+/**
+ * wallBackingCenters の旧・新スナップショットから、下地帯中心が動いた箇所を対応づける。
+ * 壁は再生成のたびに id が総入れ替えになるため、壁idでは対応づけられない——
+ * (axisCLId, isVertical, side) が一致し、かつスパン [lo,hi] の重なり長
+ * `min(a.hi,b.hi) - max(a.lo,b.lo)` が最大（かつ正）のものを旧↔新1:1で対応づける
+ * （座標許容差で寄せる方式は採らない：偶然近い別の壁と誤対応する事故を避ける。QA S2:
+ * 配列の走査順に依存する早期一致だと部屋境界で2本に割れた同軸同sideの壁を取り違える。
+ * 重なり長0（端点が接するだけ）は「重なり」とみなさない——隣接する無関係の壁を拾わないため）。
+ * 旧にあって新に対応が無い壁（下地オーナーでなくなった・部屋ごと消えた等）は無視する
+ * （孤児梁芯を撤去しない裁定と対称——ここで無視されたエントリは追従の対象にならないだけで、
+ * 既存の梁芯には一切触れない）。1件の旧エントリが複数の新エントリと重なりうる場合（分割）でも、
+ * 最も重なりが大きい1件だけを対応づける（moveは旧エントリ1件につき最大1件）。
+ * 重なり長が同点の候補が複数あるときは、`lo` が b.lo に最も近いものを採る決定的タイブレーク
+ * （QA T2。同点のままだと after の走査順に対応づけが依存してしまう）。
+ * @param {ReturnType<typeof wallBackingCenters>} before
+ * @param {ReturnType<typeof wallBackingCenters>} after
+ * @returns {Array<{axisCLId:string, isVertical:boolean, from:number, to:number}>}
+ */
+export function mapBackingCenterMoves(before, after) {
+  const usedAfter = new Set();
+  const moves = [];
+  for (const b of before) {
+    let bestIdx = -1, bestOverlap = 0, bestLoDist = Infinity;
+    for (let i = 0; i < after.length; i++) {
+      if (usedAfter.has(i)) continue;
+      const a = after[i];
+      if (a.axisCLId !== b.axisCLId || a.isVertical !== b.isVertical || a.side !== b.side) continue;
+      const overlap = Math.min(a.hi, b.hi) - Math.max(a.lo, b.lo);
+      if (overlap <= 0) continue;
+      const loDist = Math.abs(a.lo - b.lo);
+      if (overlap > bestOverlap || (overlap === bestOverlap && loDist < bestLoDist)) {
+        bestOverlap = overlap; bestIdx = i; bestLoDist = loDist;
+      }
+    }
+    if (bestIdx === -1) continue; // 対応する新側が無い（孤児）— 追従の対象にしない
+    usedAfter.add(bestIdx);
+    const a = after[bestIdx];
+    if (a.coord !== b.coord) moves.push({ axisCLId: b.axisCLId, isVertical: b.isVertical, from: b.coord, to: a.coord });
+  }
+  return moves;
+}
+
+/**
+ * coord に一致（CL_OVERLAP_TOL_MM以内）する壁由来の梁芯（discipline:fuse。centerLineKind(cl)==='beam'）
+ * を返す。通り芯（labeled）は対象にしない——findBeamAnchorCL（壁交点柱のアンカー解決・重複ガード）は
+ * 通り芯にも一致するが、ここで通り芯まで対象にすると追従処理が通り芯を動かす事故になるため、
+ * 意図的に findBeamAnchorCL を使わず別の述語にする。
+ * @param {object} graph
+ * @param {boolean} isVertical
+ * @param {number} coord
+ * @returns {import('../core.js').CenterLine | null}
+ */
+/** graph.excludedWallBeamAxes のキー形式（座標ベース `${'X'|'Y'}:${Math.round(coord)}`）。
+ *  autoFillWallBeamAxes（除外判定）と wallBeamAxisFollow.js（追従時の張り替え）が共有する
+ *  単一の書式——片方だけ変えるとキーがすれ違い、消したはずの梁芯が復活する事故になる。 */
+export function wallBeamAxisExcludeKey(isVertical, coord) {
+  return `${isVertical ? 'X' : 'Y'}:${Math.round(coord)}`;
+}
+
+export function findWallBeamAxisCL(graph, isVertical, coord) {
+  const centerLineType = isVertical ? CenterLineType.VERTICAL : CenterLineType.HORIZONTAL;
+  return graph.centerLines.find(cl =>
+    cl.centerLineType === centerLineType &&
+    centerLineKind(cl) === 'beam' &&
+    Math.abs(cl.effectiveValue - coord) < CL_OVERLAP_TOL_MM) ?? null;
+}
+
 /** coord に一致（CL_OVERLAP_TOL_MM以内）する通り芯（labeled）または梁芯（fuse。centerLineKind==='beam'）を返す。
  *  意匠中心線・補助線は対象にしない。梁芯の重複ガード（autoFillWallBeamAxes）と壁交点柱のアンカー解決
  *  （woodAutoFill.js）が共有する単一の述語——片方だけ条件を変えると柱が湧く／消えるため。無ければ null。 */
@@ -146,8 +250,7 @@ function bracketExtent(gridCLs, lo, hi) {
 export function autoFillWallBeamAxes(graph, wallSources) {
   const created = [];
   for (const src of wallSources) {
-    const axisKey = src.isVertical ? 'X' : 'Y';
-    const excludeKey = `${axisKey}:${Math.round(src.coord)}`;
+    const excludeKey = wallBeamAxisExcludeKey(src.isVertical, src.coord);
     if (graph.excludedWallBeamAxes.has(excludeKey)) continue;
 
     const centerLineType = src.isVertical ? CenterLineType.VERTICAL : CenterLineType.HORIZONTAL;
