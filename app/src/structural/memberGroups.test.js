@@ -9,8 +9,9 @@ import {
   getGroupSpec, getGroupJoin, getGroupManualTag, setGroupManualTag, clearGroupManualTag,
   getMergedInto, snapshotLedger, restoreLedger,
 } from './memberGroups.js';
-import { memberSymbol, memberSignature, memberSizeKey } from './memberCatalog.js';
+import { memberSymbol, memberSignature, memberSizeKey, memberOrderKey, noJoinSignatureFor } from './memberCatalog.js';
 import { makeColumn, makeBeam, makeGraph, makeProject } from './memberTestFixtures.js';
+import { rulesFor, TRADITIONAL_WOOD_STRUCTURE } from './structureRules.js';
 
 // ---- splitGroup → 再採番の番号遷移（Phase B スモークの移植）----
 test('splitGroup: 分割→再採番で対象が新gid・新番号になり、グループに戻すと自動署名に戻る', () => {
@@ -60,6 +61,44 @@ test('previewSplitTag: dry-runの予定タグが実際の分割結果と一致�
   splitGroup(project, 'columnMap', [target]);
   renumberMembers(g, project, 'columnMap');
   assert.equal(target.memberNo, preview);
+});
+
+// ---- QA指摘F10: previewSplitTag のプレビュー用エントリ（PREVIEW_KEY）にもorderKeyを持たせる ----
+test('【QA指摘F10】previewSplitTag: 個別採番対象のプレビューはorderKeyを渡さないと位置を誤り、渡すと実際の分割結果と一致する', () => {
+  const project = makeProject([{ id: 'p1', startFloor: 1 }]);
+  const rules = rulesFor(TRADITIONAL_WOOD_STRUCTURE);
+  const woodBeam = (id, extra = {}) => makeBeam(id, 'WOOD-120x330', {
+    materialType: 'WOOD', role: 'primary', isVertical: false, coord1: 0, coord2: 1000, ...extra,
+  });
+  const b1 = woodBeam('b1', { axisValue: 100 });
+  const b2 = woodBeam('b2', { axisValue: 300 });
+  const g = makeGraph('p1', { beamMap: [b1, b2] });
+  g.structureOverride = TRADITIONAL_WOOD_STRUCTURE;
+  renumberMembers(g, project, 'beamMap');
+  assert.equal(b1.memberNo, 'G1', '前提: axisValue=100が先にG1');
+  assert.equal(b2.memberNo, 'G2', '前提: axisValue=300が後にG2');
+
+  // b1・b2の間（axisValue=200）に新しい個別採番対象（未収集）を仮に置いたときの予定タグ。
+  const candidate = woodBeam('b3', { axisValue: 200 });
+  const floorInfo = floorRankOf(g.plane, project);
+  const previewWithoutOrderKey = previewSplitTag(
+    project, 'beamMap', memberSymbol(candidate, 'beamMap'),
+    memberSizeKey(candidate, 'beamMap'), memberSignature(candidate, 'beamMap'), floorInfo,
+  );
+  const previewWithOrderKey = previewSplitTag(
+    project, 'beamMap', memberSymbol(candidate, 'beamMap'),
+    memberSizeKey(candidate, 'beamMap'), memberSignature(candidate, 'beamMap'), floorInfo,
+    { orderKey: memberOrderKey(candidate, 'beamMap', rules) },
+  );
+  assert.notEqual(previewWithoutOrderKey, 'G2', 'orderKey省略時はb1より前に誤って並ぶ（回帰の再現）');
+  assert.equal(previewWithOrderKey, 'G2', 'orderKeyを渡せばb1とb2の間＝G2と正しく予測できる');
+
+  // 実際にb3をグラフへ足して収集・採番すると、プレビュー（orderKey渡し）どおりG2になり、
+  // 元のb2はG3へ押し出される。
+  g.beamMap.set(candidate.id, candidate);
+  renumberMembers(g, project, 'beamMap');
+  assert.equal(candidate.memberNo, previewWithOrderKey);
+  assert.equal(b2.memberNo, 'G3');
 });
 
 // ---- mergeGroups → 再採番の番号遷移（Phase C スモークの移植）----
@@ -147,6 +186,40 @@ test('mergeGroups: 吸収された側の手動タグ(grp.no)は破棄される',
   mergeGroups(project, 'beamMap', [{ members: chosen }, { members: absorbed }], 0);
 
   assert.equal(getGroupManualTag(project.memberGroupLedger, absorbedGid), null, '吸収側のgrp.noは削除される');
+});
+
+// ---- QA指摘F12（重大・機能バグ）: mergeGroupsもF1と同じ穴（joinを渡さないと同署名の他の個別採番
+// 対象まで吸収してしまう）を持っていた。修正後はsplitFromSignatureを渡すとchosenGid・oldGidの
+// 両方のmaterializeGroup呼び出しでjoinが抑止される。 ----
+test('【失敗系・QA指摘F12】mergeGroups: 個別採番の4本のうち2本だけ統合しても残り2本は吸収されない', () => {
+  const project = makeProject([{ id: 'p1', startFloor: 1 }]);
+  const rules = rulesFor(TRADITIONAL_WOOD_STRUCTURE);
+  const woodBeam = (id, extra = {}) => makeBeam(id, 'WOOD-120x330', {
+    materialType: 'WOOD', role: 'primary', isVertical: false, coord1: 0, coord2: 1000, ...extra,
+  });
+  const b1 = woodBeam('b1', { axisValue: 100 });
+  const b2 = woodBeam('b2', { axisValue: 200 });
+  const b3 = woodBeam('b3', { axisValue: 300 });
+  const b4 = woodBeam('b4', { axisValue: 400 });
+  const g = makeGraph('p1', { beamMap: [b1, b2, b3, b4] });
+  g.structureOverride = TRADITIONAL_WOOD_STRUCTURE;
+  renumberMembers(g, project, 'beamMap');
+  assert.equal(project.memberNumberIndex.size, 4, '前提: 個別採番で4グループに分かれている');
+
+  // MemberListTab.jsx handleConfirmMerge と同じ手順: b1・b2だけを選択して統合（b1採用）。
+  const splitFromSignature = noJoinSignatureFor(b1, 'beamMap', rules);
+  const gid = mergeGroups(project, 'beamMap', [{ members: [b1] }, { members: [b2] }], 0, { splitFromSignature });
+  renumberMembers(g, project, 'beamMap');
+
+  assert.ok(gid);
+  assert.equal(b1.numberGroupId, gid, 'b1は統合先gidを持つ');
+  assert.equal(b2.numberGroupId, gid, 'b2も統合先gidを持つ（選択どおり吸収される）');
+  assert.equal(b1.memberNo, b2.memberNo, 'b1・b2は同じタグになる');
+  assert.equal(b3.numberGroupId, null, 'b3は選択していないので numberGroupId が付いてはいけない');
+  assert.equal(b4.numberGroupId, null, 'b4も同様');
+  assert.notEqual(b3.memberNo, b1.memberNo, 'b3は統合先タグに吸収されてはいけない');
+  assert.notEqual(b4.memberNo, b1.memberNo, 'b4も同様');
+  assert.equal(project.memberNumberIndex.size, 3, '統合グループ1つ＋b3＋b4の3グループのはず（4本とも1つに吸収されてはいけない）');
 });
 
 // ---- QA8: 分割/統合Undoの軽量台帳スナップショット（snapshotLedger/restoreLedger）の等価性 ----

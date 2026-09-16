@@ -13,7 +13,6 @@ import { VoidLayer } from './VoidLayer.jsx';
 import { StructuralLayer, ColumnsLayer } from './StructuralLayer.jsx';
 import { MemberTagLayer } from './MemberTagLayer.jsx';
 import { OpeningTagLayer } from './OpeningTagLayer.jsx';
-import { PRIMARY_DIMENSION_FIELD_BY_MAP } from '../structural/memberCatalog.js';
 import { IntersectionMarkers } from './CenterLinesLayer.jsx';
 import { GutterLayer } from './GutterLayer.jsx';
 import { SnapIndicator } from './SnapIndicator.jsx';
@@ -34,7 +33,7 @@ export const SceneLayers = observer(({
   isStairMode, installEntries, upperEntries, stairLaneGapMm, stairBreakOverhangMm, stairUnderClips,
   structComposition, upperVoidCrosses, stairSlabOpeningEdges = [],
   snapPoint, cursorWorld, clPreview, clDialog, wallDialog, menu,
-  setShowStructuralInfoDialog, setMemberFocusRequest, setStatusMenu,
+  onMemberClick, setStatusMenu,
   onOpeningTagClick, onElevationOpeningClick,
 }) => {
   // 展開モードは平面・通り芯・寸法を一切出さない専用画面（描画エリア＋ガター全域）。
@@ -122,16 +121,20 @@ export const SceneLayers = observer(({
             {showPlanFigure && <ShapesLayer graph={graph} viewport={viewport} stairUnderClips={stairUnderClips} />}
             {showPlanFigure && <OpeningsLayer graph={graph} viewport={viewport} />}
             {showPlanFigure && <ColumnsLayer graph={graph} viewport={viewport} finishWrap />}
-            {appMode === 'structure' && <StructuralLayer composition={structComposition} viewport={viewport} project={project} />}
+            {appMode === 'structure' && (
+              <StructuralLayer
+                composition={structComposition}
+                viewport={viewport}
+                project={project}
+                onMemberClick={onMemberClick}
+              />
+            )}
             {appMode === 'structure' && (
               <MemberTagLayer
                 composition={structComposition}
                 viewport={viewport}
                 project={project}
-                onTagClick={(entity, mapName) => {
-                  setShowStructuralInfoDialog(true);
-                  setMemberFocusRequest({ mapName, tag: entity.memberNo, fieldKey: PRIMARY_DIMENSION_FIELD_BY_MAP[mapName] ?? null, entityId: entity.id });
-                }}
+                onTagClick={onMemberClick}
                 onStatusMenuRequest={(entity, pos) => setStatusMenu({ entity, pos })}
               />
             )}

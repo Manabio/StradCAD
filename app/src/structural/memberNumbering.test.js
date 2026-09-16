@@ -2,7 +2,9 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { collectFloorGroups, assignNumbers, applyNumbers, floorSpanLabel, renumberMembers } from './memberNumbering.js';
 import { splitGroup, setGroupManualTag } from './memberGroups.js';
-import { makeWall, makeGraph, makeProject } from './memberTestFixtures.js';
+import { makeWall, makeBeam, makeGraph, makeProject } from './memberTestFixtures.js';
+import { isIndividuallyNumbered, memberOrderKey, noJoinSignatureFor } from './memberCatalog.js';
+import { rulesFor, TRADITIONAL_WOOD_STRUCTURE } from './structureRules.js';
 
 // ---- QA1: collectFloorGroups は既存エントリを更新・除去する（材寸編集で旧グループが消える）----
 test('collectFloorGroups: 材寸編集後は旧グループが幽霊として残らない', () => {
@@ -220,4 +222,163 @@ test('assignNumbers: 手動タグ W3 がある状態で自動グループを増�
   assert.equal(new Set(values).size, values.length, '完成タグに重複があってはならない（衝突なし）');
   assert.notEqual(tags.get('tiny'), 'W3', '自動側は手動タグW3を採番しない');
   assert.equal(tags.get('big'), 'W3');
+});
+
+// ---- ステップ4第3単位②: 在来木造の非標準梁（成≠幅の120×330など）は材ごとに個別採番される ----
+
+function woodBeam(id, sectionDefId, extra = {}) {
+  return makeBeam(id, sectionDefId, { materialType: 'WOOD', role: 'primary', isVertical: false, coord1: 0, coord2: 1000, ...extra });
+}
+
+test('【ステップ4第3単位②】collectFloorGroups/applyNumbers: 在来木造の非標準梁(120×330)は材ごとに個別採番され、標準材(120×120)は従来どおり1グループにまとまる', () => {
+  const project = makeProject([{ id: 'p1', startFloor: 1 }]);
+  // 挿入順（Map反復順）はあえてaxisValue昇順と揃えない——orderKeyでの並び替えを検証するため
+  // （挿入順のまま安定ソートされただけでも一致してしまう検証漏れを避ける）。
+  const b1 = woodBeam('b1', 'WOOD-120x330', { axisValue: 100 });
+  const b2 = woodBeam('b2', 'WOOD-120x330', { axisValue: 200 });
+  const b3 = woodBeam('b3', 'WOOD-120x330', { axisValue: 300 });
+  const nonStdInsertOrder = [b3, b1, b2];
+  const std = [
+    woodBeam('b4', 'WOOD-120x120', { axisValue: 400 }),
+    woodBeam('b5', 'WOOD-120x120', { axisValue: 500 }),
+  ];
+  const g = makeGraph('p1', { beamMap: [...nonStdInsertOrder, ...std] });
+  g.structureOverride = TRADITIONAL_WOOD_STRUCTURE;
+
+  collectFloorGroups(g, project);
+  applyNumbers(g, project, assignNumbers(project));
+
+  assert.equal(b1.memberNo, 'G1', '非標準梁のaxisValue最小(100)はG1のはず（挿入順ではない）');
+  assert.equal(b2.memberNo, 'G2');
+  assert.equal(b3.memberNo, 'G3');
+  assert.equal(std[0].memberNo, 'G4', '標準材2本は1グループにまとまりG4になるはず');
+  assert.equal(std[1].memberNo, 'G4');
+});
+
+test('【ステップ4第3単位②】assignNumbers: 個別採番グループの順序はorderKey（axisValue昇順）で決まり、idの大小・並び順・挿入順には依存しない', () => {
+  const project = makeProject([{ id: 'p1', startFloor: 1 }]);
+  // idはaxisValueの大小と逆の辞書順（'aaa'<'mmm'<'zzz'だがaxisValueは'zzz'が最小）、挿入順（Map反復順）も
+  // axisValue昇順と揃えない（zzz→aaa→mmmの順で挿入。安定ソートの副作用による見かけ一致を避ける）。
+  const zzz = woodBeam('zzz', 'WOOD-120x330', { axisValue: 100 });
+  const mmm = woodBeam('mmm', 'WOOD-120x330', { axisValue: 200 });
+  const aaa = woodBeam('aaa', 'WOOD-120x330', { axisValue: 300 });
+  const g = makeGraph('p1', { beamMap: [zzz, aaa, mmm] });
+  g.structureOverride = TRADITIONAL_WOOD_STRUCTURE;
+  collectFloorGroups(g, project);
+  applyNumbers(g, project, assignNumbers(project));
+
+  assert.equal(zzz.memberNo, 'G1', 'axisValue=100（最小）がG1のはず（idの辞書順でも挿入順でもない）');
+  assert.equal(mmm.memberNo, 'G2');
+  assert.equal(aaa.memberNo, 'G3');
+});
+
+test('【ステップ4第3単位②】collectFloorGroups/applyNumbers: 個別採番のグループも2回実行でmemberNoが安定する（冪等）', () => {
+  const project = makeProject([{ id: 'p1', startFloor: 1 }]);
+  const beams = [woodBeam('b1', 'WOOD-120x330', { axisValue: 100 }), woodBeam('b2', 'WOOD-120x330', { axisValue: 200 })];
+  const g = makeGraph('p1', { beamMap: beams });
+  g.structureOverride = TRADITIONAL_WOOD_STRUCTURE;
+
+  collectFloorGroups(g, project);
+  applyNumbers(g, project, assignNumbers(project));
+  const firstPass = beams.map(b => b.memberNo);
+
+  collectFloorGroups(g, project);
+  applyNumbers(g, project, assignNumbers(project));
+  const secondPass = beams.map(b => b.memberNo);
+
+  assert.deepEqual(secondPass, firstPass, '2回目の採番で番号が変わってはいけない');
+});
+
+test('【ステップ4第3単位②】memberGroupKey: numberGroupId を持つ非標準梁は個別化されず、共通gidで1グループにまとまる', () => {
+  const project = makeProject([{ id: 'p1', startFloor: 1 }]);
+  const beams = [
+    woodBeam('b1', 'WOOD-120x330', { axisValue: 100, numberGroupId: 'G#shared' }),
+    woodBeam('b2', 'WOOD-120x330', { axisValue: 200, numberGroupId: 'G#shared' }),
+  ];
+  const g = makeGraph('p1', { beamMap: beams });
+  g.structureOverride = TRADITIONAL_WOOD_STRUCTURE;
+
+  collectFloorGroups(g, project);
+  assert.equal(project.memberNumberIndex.size, 1, 'numberGroupIdが同じ2本は1グループのはず（個別化より優先）');
+  applyNumbers(g, project, assignNumbers(project));
+  assert.equal(beams[0].memberNo, beams[1].memberNo, '共通gidの2本は同じタグになるはず');
+});
+
+test('【失敗系・ステップ4第3単位②】isIndividuallyNumbered/memberOrderKey: 対象外role・材違い・標準断面は個別化されず、coord/axis未定義でも例外を投げない', () => {
+  const rules = rulesFor(TRADITIONAL_WOOD_STRUCTURE);
+  const base = { id: 'x', materialType: 'WOOD', sectionDefId: 'WOOD-120x330', role: 'primary' };
+  assert.equal(isIndividuallyNumbered({ ...base, role: 'foundation' }, 'beamMap', rules), false, '基礎梁は対象外');
+  assert.equal(isIndividuallyNumbered({ ...base, role: 'roof' }, 'beamMap', rules), false, '小屋梁(母屋等)は対象外');
+  assert.equal(isIndividuallyNumbered({ ...base, role: 'eaves' }, 'beamMap', rules), false, '軒桁は対象外');
+  assert.equal(isIndividuallyNumbered({ ...base, materialType: 'STEEL' }, 'beamMap', rules), false, '主構造の材種と違えば対象外');
+  assert.equal(isIndividuallyNumbered({ ...base, sectionDefId: 'WOOD-120x120' }, 'beamMap', rules), false, '標準材（defaultSections.beam）は対象外');
+  assert.equal(isIndividuallyNumbered(base, 'columnMap', rules), false, 'beamMap以外は対象外');
+  const undef = { ...base, coord1: undefined, coord2: undefined, axisValue: undefined, isVertical: undefined };
+  assert.doesNotThrow(() => memberOrderKey(undef, 'beamMap', rules));
+  assert.deepEqual(memberOrderKey(undef, 'beamMap', rules), [0, 0, 0], 'coord/axis未定義は全て0にフォールバックするはず');
+});
+
+test('【失敗系・ステップ4第3単位②】collectFloorGroups: 非在来（主構造未設定）は非正角断面(120×330)の梁が複数あっても個別化されず1グループにまとまる', () => {
+  const project = makeProject([{ id: 'p1', startFloor: 1 }]);
+  const beams = [woodBeam('b1', 'WOOD-120x330'), woodBeam('b2', 'WOOD-120x330')];
+  const g = makeGraph('p1', { beamMap: beams }); // structureOverrideを設定しない＝主構造未定
+  collectFloorGroups(g, project);
+  assert.equal(project.memberNumberIndex.size, 1, '主構造未定は非正角断面でも同一材寸なら1グループのはず');
+});
+
+// ---- QA指摘F1（重大・機能バグ）: 手動タグの materialize（MemberListTab.jsx commitManualNumber）が
+// splitFromSignatureを渡さずjoin=trueで台帳へ書くと、conformToLedgerが同署名の他の個別採番対象まで
+// 新gidへ吸収し、個別採番が無効化される（実測: 120×330 ×3本で1本に手動タグを打つと3本ともそのタグに
+// 統合された）。修正後はnoJoinSignatureForが個別採番対象に「今の署名」を返しjoinを抑止する。 ----
+test('【失敗系・QA指摘F1】手動タグは個別採番を壊さない（120×330 ×3本の1本に手動タグを打っても他の2本は自動採番のまま・グループは3つのまま）', () => {
+  const project = makeProject([{ id: 'p1', startFloor: 1 }]);
+  const b1 = woodBeam('b1', 'WOOD-120x330', { axisValue: 100 });
+  const b2 = woodBeam('b2', 'WOOD-120x330', { axisValue: 200 });
+  const b3 = woodBeam('b3', 'WOOD-120x330', { axisValue: 300 });
+  const g = makeGraph('p1', { beamMap: [b1, b2, b3] });
+  g.structureOverride = TRADITIONAL_WOOD_STRUCTURE;
+  const rules = rulesFor(TRADITIONAL_WOOD_STRUCTURE);
+
+  collectFloorGroups(g, project);
+  applyNumbers(g, project, assignNumbers(project));
+  assert.equal(project.memberNumberIndex.size, 3, '個別採番で3グループに分かれているはず（前提）');
+
+  // MemberListTab.jsx commitManualNumber と同じ手順（b2のカード＝members=[b2]。修正後の形）。
+  const gid = splitGroup(project, 'beamMap', [b2], {
+    splitFromSignature: noJoinSignatureFor(b2, 'beamMap', rules),
+  });
+  setGroupManualTag(project.memberGroupLedger, gid, 'G99');
+  renumberMembers(g, project, 'beamMap');
+
+  // b1・b3は手動タグを挟んで自動側の番号が詰め直される（欠番を作らない既存仕様。
+  // assignNumbers: 手動タグのグループを挟んでも自動グループの番号は連番のまま）——ここで検証したいのは
+  // 番号の絶対値ではなく「b1・b3がG99に吸収されず、3グループのまま独立していること」（QA指摘F1）。
+  assert.equal(b2.memberNo, 'G99', 'b2は手動タグG99になるはず');
+  assert.notEqual(b1.memberNo, 'G99', 'b1がG99に吸収されてはいけない');
+  assert.notEqual(b3.memberNo, 'G99', 'b3がG99に吸収されてはいけない');
+  assert.notEqual(b1.memberNo, b3.memberNo, 'b1とb3は別グループのまま（同一タグに統合されない）');
+  assert.equal(project.memberNumberIndex.size, 3, 'グループは3つのまま（統合されていない）');
+});
+
+// ---- QA指摘F5: 既存グループの再同期（collectFloorGroupsのelse分岐）がorderKeyも更新すること ----
+test('【QA指摘F5】collectFloorGroups: 梁芯移動（axisValue変更）で個別採番の順序が更新される（既存グループのorderKey再同期）', () => {
+  const project = makeProject([{ id: 'p1', startFloor: 1 }]);
+  const b1 = woodBeam('b1', 'WOOD-120x330', { axisValue: 100 });
+  const b2 = woodBeam('b2', 'WOOD-120x330', { axisValue: 200 });
+  const g = makeGraph('p1', { beamMap: [b1, b2] });
+  g.structureOverride = TRADITIONAL_WOOD_STRUCTURE;
+
+  collectFloorGroups(g, project);
+  applyNumbers(g, project, assignNumbers(project));
+  assert.equal(b1.memberNo, 'G1', 'axisValue=100（最小）が先にG1のはず（前提）');
+  assert.equal(b2.memberNo, 'G2');
+
+  // 梁芯移動: b1のaxisValueが300へ（groupKeyはsignature#b1のままで不変＝collectFloorGroupsの
+  // else分岐＝既存グループの再同期を通る）。
+  b1.axisValue = 300;
+  collectFloorGroups(g, project);
+  applyNumbers(g, project, assignNumbers(project));
+
+  assert.equal(b2.memberNo, 'G1', 'axisValue=200（今は最小）のb2がG1になるはず（orderKeyが更新された証拠）');
+  assert.equal(b1.memberNo, 'G2', '移動後300になったb1はG2になるはず');
 });

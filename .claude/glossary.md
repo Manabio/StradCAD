@@ -81,6 +81,12 @@
 ## 材寸署名（signature） / numberGroupId / 部材グループ台帳（memberGroupLedger）
 **材寸署名**＝部材の材料・断面・配筋等から導出する採番グループの既定キー（`memberCatalog.memberSignature`）。**numberGroupId**＝分割・統合・手動採番でのみ設定される明示グループID（null＝署名から自動導出）。**部材グループ台帳**（`project.memberGroupLedger`）＝上記の明示操作だけを持つ建物全体・永続の台帳（`grp.spec`/`grp.join`/`grp.no`/`grp.mergedInto`）。設計意図は`.claude/structural-model.md`。
 
+## 標準材（在来）
+在来木造の主構造ルールが持つ既定の梁断面（`rulesFor(在来).defaultSections.beam`。現状`'WOOD-120x120'`＝柱同寸の正角）。個別採番（下記）の対象外を決める基準になる。
+
+## 個別採番
+在来木造で標準材以外の梁（成が同じでも）を材ごとに個別のグループとして採番する規律（`memberCatalog.isIndividuallyNumbered`/`memberGroupKey`/`memberOrderKey`）。伏図で梁をタップして選択する対象でもある。設計意図は`.claude/structural-model.md`。
+
 ## 図面合成 / FigureDef / レイヤ / バインディング
 1枚の図面を「複数階×複数カテゴリの合成」として持つ仕組み（`.claude/figure.md`）。`FigureDef`＝レイヤ仕様の宣言的リスト。レイヤ＝`(供給階, カテゴリ, スタイル, 役割)`。バインディング＝レイヤが解決された自己完結グラフ（階固有CL＋通り芯参照を内包）。`composition.graphForCategory(mapName)` が描画・編集の対象グラフを一元的に返す。構造伏図は出演階＝`{自階, 自階−1}` の特殊例。
 

@@ -52,6 +52,14 @@ export const WOOD_BEAM_DEPTH_TABLE = Object.freeze({
     Object.freeze([240, 300, 360]), // 中間荷重3か所
   ]),
 });
+// 在来木造の梁成自動更新（woodAutoFill.js autoFillWoodBeamDepths）の対象role。柱と同じく主構造の
+// 主要構造（framing）を持つ階の木造部材だけが対象——対象梁（成を更新する側）と荷重源（他の梁の荷重点
+// として数える側）の両方がこの定数を読む（foundation/eaves/roof/landingは対象外。梁成表は主要構造の
+// 大梁・小梁・床梁の話であり、基礎梁・軒桁・小屋梁・踊り場受け梁は別の算定・別の扱いを持つため）。
+// numbering.individualBeamRoles（在来木造の非標準梁の個別採番。memberCatalog.js isIndividuallyNumbered）
+// も同じ役割集合を読む——梁成表の対象と個別採番の対象は同じ「主要構造の梁」という理由による一致で、
+// 二重管理を避けるためここを共有する。
+export const WOOD_DEPTH_BEAM_ROLES = Object.freeze(['primary', 'secondary', 'floor']);
 // 主要構造（部材の初期値・配置条件）。
 export const TRADITIONAL_WOOD_FRAMING = Object.freeze({
   columnSection:   'WOOD-120x120', // 柱は120角が初期値（梁の材幅は柱同寸）
@@ -159,6 +167,10 @@ const WOOD_RULES = Object.freeze({
   wallBeamAxes: null,
   // 外壁アルミサッシはフィン下地直付け（openings/sashDetailCatalog.js）。
   sashFinDirect: true,
+  // 採番の選択子（(3)）: individualBeamRoles＝標準材（defaultSections.beam）以外の梁を材ごとに個別採番
+  // するrole集合（memberCatalog.js isIndividuallyNumbered/memberGroupKey/memberOrderKey が唯一の消費先）。
+  // 既定null＝個別採番なし（同一材寸は常に1グループ）。在来木造だけ WOOD_DEPTH_BEAM_ROLES で上書きする。
+  numbering: Object.freeze({ individualBeamRoles: null }),
 });
 
 // RC系（ラーメン・壁式）に共通のルール。
@@ -194,6 +206,7 @@ const RC_RULES = Object.freeze({
   // 自階の下地オーナー壁のうち下地材がRC下地の壁のみ（上下階で壁が連続し自立するため下階は見ない）。
   wallBeamAxes: 'rcBacking',
   sashFinDirect: false,
+  numbering: Object.freeze({ individualBeamRoles: null }),
 });
 
 // 鉄骨系（S造・SRC造）に共通のルール。
@@ -228,6 +241,9 @@ export const STRUCTURE_RULES = Object.freeze({
       framing: TRADITIONAL_WOOD_FRAMING, backing: TRADITIONAL_WOOD_BACKING,
       columnPlacement: 'wallIntersections', columnSizing: 'fixed', studLayout: 'betweenColumns',
       beamPlacement: 'wallRuns',
+      // 標準材（defaultSections.beam＝柱同寸の正角）以外の梁は主要構造のrole（WOOD_DEPTH_BEAM_ROLES）
+      // だけ材ごとに個別採番する（ユーザー裁定2026-09-16。memberCatalog.js isIndividuallyNumbered）。
+      numbering: Object.freeze({ individualBeamRoles: WOOD_DEPTH_BEAM_ROLES }),
       // 在来木造の柱は壁の中に立つ管柱＝仕上げ包み（柱壁）は付けない。平面の柱断面は壁と同じ黒
       // （ユーザー指示2026-09-14「在来木造の柱に柱包みは不要」「茶色の断面…黒指定」）。輪郭は**極太線**——
       // 壁厚＝柱寸法（conformWoodBacking で下地120＝柱120）になると柱の輪郭が壁の下地帯の線と完全に重なり、

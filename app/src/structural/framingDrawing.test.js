@@ -5,7 +5,7 @@ import {
   FRAMING_MONO_COLOR, COLUMN_FALLBACK_SIZE_MM,
   framingColumnGroups, framingColor, framingColorOverride,
   columnSectionSize, columnCrossPointsLocal, framingColumnLineWeight, showMemberTags, beamDepthMarks,
-  sillBandSpec,
+  sillBandSpec, pickMembersOnFigure,
 } from './framingDrawing.js';
 import { rulesFor, TRADITIONAL_WOOD_STRUCTURE, UNSPECIFIED_STRUCTURE } from './structureRules.js';
 import { STRUCTURES } from './structuralClassification.js';
@@ -84,6 +84,19 @@ test('showMemberTags: 在来木造はfalse、それ以外の主構造はtrue', (
 test('【失敗系】showMemberTags: drawing自体が未知値・{}・undefinedはtrue（既定show扱い）', () => {
   for (const drawing of [{}, undefined, { memberTags: 'unknown' }, { memberTags: 'show' }]) {
     assert.equal(showMemberTags(drawing), true);
+  }
+});
+
+test('pickMembersOnFigure: showMemberTagsの否定（在来木造はtrue＝タグの代わりに梁タップ、それ以外はfalse）', () => {
+  assert.equal(pickMembersOnFigure(rulesFor(TRADITIONAL_WOOD_STRUCTURE).drawing), true);
+  for (const key of NON_TRADITIONAL_KEYS) {
+    assert.equal(pickMembersOnFigure(rulesFor(key).drawing), false, key);
+  }
+});
+
+test('【失敗系】pickMembersOnFigure: drawing自体が未知値・{}・undefinedはfalse（showMemberTagsの既定showの否定）', () => {
+  for (const drawing of [{}, undefined, { memberTags: 'unknown' }, { memberTags: 'show' }]) {
+    assert.equal(pickMembersOnFigure(drawing), false);
   }
 });
 

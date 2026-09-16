@@ -5,6 +5,7 @@
 import { DimensionKind, DimensionSide, CenterLineType, Discipline } from '@core';
 import { INSET, OUTWARD, labelCircleRadius } from '../layout.js';
 import { nonLabeledClExtent } from '../snapGeometry.js';
+import { NUM_FONT_PX, TEXT_GAP_PX } from './dimensionStyle.js';
 
 // 通り芯寸法(GRID)の基準線スクリーン位置を4辺分まとめてワールド座標で返す
 // （GridDimensions の lineY/lineX と同じ式。位置がずれるとクランプ後の見た目も狂うため必ず揃える）。
@@ -132,8 +133,8 @@ export function columnAxisLabelHits(graph, viewport, width, height) {
 // ================================================================
 
 export const MIN_GAP_CM  = 1;  // 建物外端と寸法線の最小紙面距離。これを割ったら部屋内書きへ退避
-export const NUM_FONT_PX = 11;
-export const TEXT_GAP_PX = 2;
+// NUM_FONT_PX・TEXT_GAP_PX は renderer/dimensionStyle.js（寸法線メトリクスの単一の真実）へ移設済み
+// （GutterLayer.jsx はそちらから直接importする。ここは内部計算(reach)でのみ使う）。
 
 // 「実画面でMIN_GAP_CM cm」相当のワールド距離（mm）。offsetMmと同じく scaleDenominator に比例し、
 // 画面px一定（ズーム非依存）。建物外端と寸法線の最小離隔の判定に使う。

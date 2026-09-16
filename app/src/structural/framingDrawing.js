@@ -65,6 +65,13 @@ export function showMemberTags(drawing) {
   return drawing?.memberTags !== 'hide';
 }
 
+/** タグクリックの代替（伏図の梁タップで部材カードを開く）を有効にするか。showMemberTags の否定＝
+ *  タグを描かない主構造（在来木造）だけタップ選択を有効にする（.claude/structural-model.md
+ *  ステップ4第3単位）。判定先はここに一本化する（新しい drawing フィールドは持たない）。 */
+export function pickMembersOnFigure(drawing) {
+  return !showMemberTags(drawing);
+}
+
 /** 柱の断面外形寸法(mm)。カタログ未登録は COLUMN_FALLBACK_SIZE_MM 角にフォールバックする。 */
 export function columnSectionSize(column) {
   const sec = findSectionEntry(column.sectionDefId);

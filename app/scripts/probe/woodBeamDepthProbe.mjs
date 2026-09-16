@@ -8,8 +8,7 @@
 import { loadDocument } from './loadDoc.mjs';
 import { floorSwapManager } from '../../src/storage/FloorSwapManager.js';
 import { recomputeStructuralForGraph } from '../../src/structural/structuralRecompute.js';
-import { WOOD_DEPTH_BEAM_ROLES } from '../../src/structural/woodAutoFill.js';
-import { isTraditionalWoodStructure } from '../../src/structural/structureRules.js';
+import { WOOD_DEPTH_BEAM_ROLES, isTraditionalWoodStructure } from '../../src/structural/structureRules.js';
 
 const src = process.argv[2] ?? 'D:/tatsuya/Download/moku1.stq';
 const { project } = loadDocument(src);

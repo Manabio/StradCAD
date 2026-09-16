@@ -6,7 +6,7 @@ import { findSectionEntry, diaphragmProjection } from '../structural/sectionCata
 import { rulesFor, effectiveStructure } from '../structural/structureRules.js';
 import {
   framingColumnGroups, framingColor, framingColorOverride, columnSectionSize, framingColumnLineWeight,
-  beamDepthMarks, sillBandSpec,
+  beamDepthMarks, sillBandSpec, pickMembersOnFigure,
 } from '../structural/framingDrawing.js';
 import { planColumnWraps } from './wallDrawPlan.js';
 import { columnWrapRenderProps, columnWrapStrokeWidth } from '../structural/columnWrapLineJoin.js';
@@ -14,6 +14,7 @@ import { graphComputed } from './graphDerived.js';
 import { LodLevel, resolveStrokeWidth } from '../viewport.js';
 import { ColumnSymbol, ColumnCrossMark } from './ColumnSymbol.jsx';
 import { groupPropsForStyle, dashForStyle } from '../figure/figureStyle.js';
+import { DIMENSION_LINE_WEIGHT, NUM_FONT_PX, TEXT_GAP_PX } from './dimensionStyle.js';
 
 export const COLOR_BY_MATERIAL = {
   [StructuralMaterialType.WOOD]:  '#92400e',
@@ -30,11 +31,14 @@ const PLAN_WALL_LINE_COLOR = '#000000';
 // 単一の実装として使う（二重管理しない）。BEAM_WIDTH_MM は梁の仮表示幅。
 const BEAM_WIDTH_MM  = 30;  // 梁の簡易表示の幅
 
-// 非正角材（成≠幅）の標記（renderer/StructuralLayer.jsx beamDepthMarks）の「幅×成」文字の
-// フォントサイズ・平行線からの離れ（画面px）。MemberTagLayer.jsx の FONT_SIZE_PX と同じ
-// 「スクリーン上の表示サイズ(px)。逆補正方式」——viewport.scaleX で割ってワールド座標へ換算する。
-const BEAM_DEPTH_LABEL_FONT_SIZE_PX = 11;
-const BEAM_DEPTH_LABEL_GAP_PX = 2;
+// 伏図の梁タップ（タグの代替。structural/framingDrawing.js pickMembersOnFigure が唯一の判定先）の
+// ヒット幅(px)。openings/OpeningsLayer.jsx の OPENING_HIT_PX と同じ考え方（画面上で一定の太さを保つ）。
+const MEMBER_HIT_PX = 8;
+
+// 非正角材（成≠幅）の標記は寸法線に見立てる（ユーザー裁定2026-09-16。設計意図は
+// .claude/structural-model.md ステップ4第3単位③）——「幅×成」文字のフォントサイズ・平行線からの
+// 離れは寸法線と同じ renderer/dimensionStyle.js（NUM_FONT_PX・TEXT_GAP_PX）を単一の真実として使う
+// （このレイヤー専用のフォントサイズ定数は持たない）。
 
 // タグ文字列のおおよその表示幅(px)。gutterPrimitives.jsx/StepSectionLayer.jsx と同じ
 // CHAR_WIDTH_RATIO(0.62)をレイヤーごとにローカル定義する既存パターン（Text実測を避ける）。
@@ -110,7 +114,9 @@ function wallSegments(wall, openings) {
 
 // isVertical方向、segments区間ごとに axisValue±half の境界線2本を描く（壁・耐力壁・梁の帯表現で共用）。
 // 「部材の実寸幅」（2本の間隔=half*2）と「輪郭線の太さ」（strokeWidth）を分離して表現する。
-function bandLines(keyPrefix, isVertical, axisValue, half, segments, stroke, strokeWidth, dash) {
+// extraProps（既定{}）は各Lineへ素通しで追加するprops——伏図の梁タップ（pickMembersOnFigure）が
+// listening/fillEnabled/hitStrokeWidthを2本線に重ねるためだけに使う（他の呼び出し元は影響なし）。
+function bandLines(keyPrefix, isVertical, axisValue, half, segments, stroke, strokeWidth, dash, extraProps = {}) {
   const sides = [axisValue - half, axisValue + half];
   return segments.flatMap(([segLo, segHi], i) => sides.map(side => {
     const p1 = isVertical ? { x: side, y: segLo } : { x: segLo, y: side };
@@ -123,6 +129,7 @@ function bandLines(keyPrefix, isVertical, axisValue, half, segments, stroke, str
         strokeWidth={strokeWidth}
         dash={dash}
         listening={false}
+        {...extraProps}
       />
     );
   }));
@@ -298,7 +305,7 @@ export const ColumnsLayer = observer(({
 // 帰属（伏図慣習）はこのレイヤーではなく FigureDef（structuralFigure.js）が決める——レンダラは
 // 「カテゴリをどう描くか」だけを知り、「どの階のどのグラフか」は composition.graphForCategory に委ねる。
 // z-order は描画順（柱→基礎→梁→スラブ→耐力壁）で再現し、レイヤ宣言順には依存させない。
-export const StructuralLayer = observer(({ composition, viewport, project }) => {
+export const StructuralLayer = observer(({ composition, viewport, project, onMemberClick = null }) => {
   if (!composition) return null;
   const scale  = Math.min(viewport.scaleX, viewport.scaleY);
   const lod    = viewport.lodLevel;
@@ -325,6 +332,10 @@ export const StructuralLayer = observer(({ composition, viewport, project }) => 
   const figureRules = rulesFor(effectiveStructure(figureGraph, project));
   const colorOf = m => framingColor(figureRules.drawing, COLOR_BY_MATERIAL[m]);
 
+  // 梁タップ（タグの代替。structural/framingDrawing.js pickMembersOnFigure が唯一の判定先）を
+  // 有効にするか。onMemberClick が渡されない呼び出し元（省略時null）では常に無効＝Reactツリー不変。
+  const pickBeams = onMemberClick && pickMembersOnFigure(figureRules.drawing);
+
   // 木造基礎伏図の土台・ベース帯（問題.md）。基礎梁(role:'foundation')がある＝基礎伏図、かつ実効主構造が木造のときのみ。
   // ベースの有無は基礎種別（べた基礎はベースなし＝土台のみ）。実効主構造は基礎伏図グラフ（=自階）の上書きを優先。
   // 帯の有無・ベース（独立フーチング）の有無は主構造ルール（structureRules.js foundation.drawsBands / hasBase）。
@@ -344,15 +355,16 @@ export const StructuralLayer = observer(({ composition, viewport, project }) => 
   });
 
   // 非正角材（成≠幅）の梁の標記（在来木造のみ。structural/framingDrawing.js beamDepthMarks が
-  // 対象選定・幾何を丸ごと決める）。文字サイズ・平行線からの離れは BEAM_DEPTH_LABEL_FONT_SIZE_PX
-  // （逆補正方式はMemberTagLayer.jsxと同じ）、線幅は柱・壁と同じ thin。
+  // 対象選定・幾何を丸ごと決める）。標記は寸法線に見立てる（ユーザー裁定2026-09-16）——文字サイズ・
+  // 平行線からの離れは寸法線と同じ dimensionStyle.js の値を使う（逆補正方式はMemberTagLayer.jsxと同じ）。
   const beamDepthMarkList = beamDepthMarks(figureRules.drawing, lod, beamDrawSpans.map(({ beam: b, coord1, coord2 }) => ({
     id: b.id, isVertical: b.isVertical, axisValue: b.axisValue, coord1, coord2,
     sectionDefId: b.sectionDefId, role: b.role, materialType: b.materialType,
   })));
-  const beamDepthLabelFontSize = BEAM_DEPTH_LABEL_FONT_SIZE_PX / viewport.scaleX;
-  const beamDepthLabelGap = BEAM_DEPTH_LABEL_GAP_PX / viewport.scaleX;
-  const beamDepthMarkStrokeWidth = thin;
+  const beamDepthLabelFontSize = NUM_FONT_PX / viewport.scaleX;
+  const beamDepthLabelGap = TEXT_GAP_PX / viewport.scaleX;
+  const beamDepthMarkStrokeWidth = resolveStrokeWidth(
+    LINE_WEIGHT_MM[DIMENSION_LINE_WEIGHT], scale, viewport.lineWeightsPx, viewport.pxPerMmX);
 
   // 柱グループ（z-order: 配列順＝下階柱→自階柱）は structural/framingDrawing.js の
   // framingColumnGroups が「どのカテゴリを・どの記号で・輪郭を強制するか」を丸ごと決める
@@ -438,11 +450,37 @@ export const StructuralLayer = observer(({ composition, viewport, project }) => 
           const jointMarks = b.rigidJointCoords(displayedColumns, { diaphragm: lod === LodLevel.DETAIL })
             .flatMap((along, i) => jointMarkLines(`joint:${b.id}:${i}`, b, along, b.sectionWidth / 2,
               color, medium, jointGap));
+          // 梁タップのヒット域（pickBeams時のみ）。既存の描画図形（帯2本線／ピン閉矩形／単線）に重ねる
+          // ——透明な当たり判定専用図形は新設しない（openings/OpeningsLayer.jsx と同じ流儀）。
+          // fillEnabled:false は必須（Rect・閉矩形の内部までヒット域が広がるのを防ぐ）。
+          const pickShapeProps = pickBeams
+            ? { listening: true, fillEnabled: false, hitStrokeWidth: Math.max(MEMBER_HIT_PX / scale, width ?? 0) }
+            : { listening: false };
+          // pickBeams時だけ要素群を<Group name="beam-symbol" beamId={b.id}>で包む。クリックの実行は
+          // ここでは行わない——Konvaのonclick/onTapは移動閾値・長押し状態を見ないため、梁上でパンを
+          // 終える／長押しメニュー成立後のpointerupでもカードが開いてしまう（QA指摘F4）。openings/
+          // OpeningsLayer.jsxのopening-symbol（openingId属性）と同じ流儀に揃え、実際のクリック判定は
+          // interaction/usePointerInteraction.jsのpointerUpが「パン未開始かつ長押し未成立」のときだけ
+          // beamId属性からエンティティを解決してonMemberClickを呼ぶ（App.jsxのopenMemberCard）。
+          // 偽なら現状の配列をそのまま返す（非在来はReactツリーも不変）。
+          const wrapPick = els => (pickBeams
+            ? [
+                <Group
+                  key={b.id}
+                  name="beam-symbol"
+                  beamId={b.id}
+                  onMouseEnter={e => { e.target.getStage().container().style.cursor = 'pointer'; }}
+                  onMouseLeave={e => { e.target.getStage().container().style.cursor = 'default'; }}
+                >
+                  {els}
+                </Group>,
+              ]
+            : els);
           if (width == null) {
-            return [
-              <Line key={b.id} points={[p1.x, p1.y, p2.x, p2.y]} stroke={color} strokeWidth={thin} dash={beamDash} listening={false} />,
+            return wrapPick([
+              <Line key={b.id} points={[p1.x, p1.y, p2.x, p2.y]} stroke={color} strokeWidth={thin} dash={beamDash} {...pickShapeProps} />,
               ...jointMarks,
-            ];
+            ]);
           }
           const lo = Math.min(coord1, coord2), hi = Math.max(coord1, coord2);
           // ピン接合の梁（小梁、およびピン指定した鉄骨の大梁）は端部が母材の縁+クリアランスで止まる
@@ -450,15 +488,15 @@ export const StructuralLayer = observer(({ composition, viewport, project }) => 
           // ままだと切りっぱなしに見える。端を横断する線分で閉じ、閉矩形（口の字）で描く
           // （bandRect は foundation の帯と共通の実装）。
           if (b.isPinJoint) {
-            return [
+            return wrapPick([
               <Rect key={b.id} {...bandRect(b, lo, hi, width / 2)}
-                stroke={color} strokeWidth={medium} dash={beamDash} listening={false} />,
-            ];
+                stroke={color} strokeWidth={medium} dash={beamDash} {...pickShapeProps} />,
+            ]);
           }
-          return [
-            ...bandLines(`beam:${b.id}`, b.isVertical, b.axisValue, width / 2, [[lo, hi]], color, medium, beamDash),
+          return wrapPick([
+            ...bandLines(`beam:${b.id}`, b.isVertical, b.axisValue, width / 2, [[lo, hi]], color, medium, beamDash, pickShapeProps),
             ...jointMarks,
-          ];
+          ]);
         })}
       </Group>
       <Group {...groupPropsForStyle(beam?.spec.style)}>

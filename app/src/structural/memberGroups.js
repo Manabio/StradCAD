@@ -231,13 +231,24 @@ export function releaseFromGroup(targetMembers) {
  * UI（MemberCard.isMergeSelectable）が選択自体を防ぐが、呼び出し側の不備でも壊れたデータを作らない
  * ための二重の防御）——無視されたグループの部材は numberGroupId・材寸のどちらも一切変更されない。
  *
+ * splitFromSignature（QA指摘F12）: splitGroup と同一の判定式 `join = splitFromSignature == null ||
+ * signature !== splitFromSignature` を、chosenGid・oldGid 両方の materializeGroup 呼び出しへ適用する
+ * （二重管理しない・単一の入口）。個別採番対象（在来木造の非標準梁）は署名が一致する部材を誤って
+ * 巻き込んで join してしまうと、選択しなかった同署名の他の個別採番グループまで
+ * 次の conformToLedger で統合先へ吸収される（実測: 個別採番4本のうち2本だけ統合しても4本とも
+ * 同じタグになった）。呼び出し側（MemberListTab.jsx）は採用グループの代表部材から
+ * memberCatalog.noJoinSignatureFor で解決した値を渡す——個別採番対象でなければ null（既定どおり
+ * 常にjoinする）。
+ *
  * @param {object} project
  * @param {string} mapName
  * @param {Array<{ members: object[] }>} selectedGroups 選択された各グループ（自階の部材配列。0件可）
  * @param {number} chosenIndex 採用する材寸のグループの selectedGroups 内 index
+ * @param {object} [options]
+ * @param {string|null} [options.splitFromSignature] 個別採番対象のjoin抑止用署名（省略時null＝常時join）
  * @returns {string|null} 統合先gid（採用グループに自階部材が1本も無ければ材寸を読めず null）
  */
-export function mergeGroups(project, mapName, selectedGroups, chosenIndex) {
+export function mergeGroups(project, mapName, selectedGroups, chosenIndex, { splitFromSignature = null } = {}) {
   const ledger = project.memberGroupLedger;
   const chosen = selectedGroups[chosenIndex];
   const chosenRep = chosen?.members?.[0];
@@ -250,7 +261,9 @@ export function mergeGroups(project, mapName, selectedGroups, chosenIndex) {
   if (chosenGid) {
     setGroupSpec(ledger, chosenGid, chosenSpec); // 採用spec（編集後の値）で上書き
   } else {
-    chosenGid = materializeGroup(ledger, chosenSymbol, memberSignature(chosenRep, mapName), chosenSpec);
+    const chosenSignature = memberSignature(chosenRep, mapName);
+    const chosenJoin = splitFromSignature == null || chosenSignature !== splitFromSignature;
+    chosenGid = materializeGroup(ledger, chosenSymbol, chosenSignature, chosenSpec, { join: chosenJoin });
   }
 
   selectedGroups.forEach((g, i) => {
@@ -265,8 +278,10 @@ export function mergeGroups(project, mapName, selectedGroups, chosenIndex) {
     if (rep) {
       // 防御: 記号・材料が採用グループと異なる場合は統合対象から除外する（このグループには一切触れない）。
       if (memberSymbol(rep, mapName) !== chosenSymbol || rep.materialType !== chosenMaterialType) return;
+      const repSignature = memberSignature(rep, mapName);
+      const repJoin = splitFromSignature == null || repSignature !== splitFromSignature;
       const oldGid = rep.numberGroupId
-        ?? materializeGroup(ledger, memberSymbol(rep, mapName), memberSignature(rep, mapName), memberSpecString(rep, mapName));
+        ?? materializeGroup(ledger, memberSymbol(rep, mapName), repSignature, memberSpecString(rep, mapName), { join: repJoin });
       if (oldGid !== chosenGid) {
         setMergedInto(ledger, oldGid, chosenGid);
         // 吸収された側の手動タグ（grp.no）は孤児化させず破棄する（統合後に見えない旧タグが

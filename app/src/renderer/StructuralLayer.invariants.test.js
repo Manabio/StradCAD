@@ -119,6 +119,56 @@ test('【不変条件・ステップ4第3単位③】StructuralLayer.jsx: 非正
   assert.ok(offsetYMatch, `offsetY={${fontSizeVar} + <gap>} が見つからない（寸法線見立てのgapが抜けている回帰）`);
 });
 
+test('【不変条件・ステップ4第3単位③】StructuralLayer.jsx: 非正角材の標記の文字サイズ・ギャップ・線幅は dimensionStyle.js の NUM_FONT_PX/TEXT_GAP_PX/DIMENSION_LINE_WEIGHT 由来で、専用定数(BEAM_DEPTH_LABEL_FONT_SIZE_PX)は残っていない', () => {
+  const src = readSource();
+  assert.ok(!/BEAM_DEPTH_LABEL_FONT_SIZE_PX/.test(src),
+    'BEAM_DEPTH_LABEL_FONT_SIZE_PX が残っている（寸法線メトリクス共有への一本化が未完了）');
+  assert.ok(/from '\.\/dimensionStyle\.js'/.test(src) && /NUM_FONT_PX/.test(src) && /TEXT_GAP_PX/.test(src),
+    'dimensionStyle.js から NUM_FONT_PX・TEXT_GAP_PX を import していない');
+  assert.ok(/NUM_FONT_PX \/ viewport\.scaleX/.test(src), 'フォントサイズが NUM_FONT_PX 由来になっていない');
+  assert.ok(/TEXT_GAP_PX \/ viewport\.scaleX/.test(src), 'ギャップが TEXT_GAP_PX 由来になっていない');
+  const strokeMatch = /const\s+(\w+)\s*=\s*resolveStrokeWidth\(\s*\n\s*LINE_WEIGHT_MM\[DIMENSION_LINE_WEIGHT\]/.exec(src);
+  assert.ok(strokeMatch, '非正角材の標記の線幅が LINE_WEIGHT_MM[DIMENSION_LINE_WEIGHT] から解決されていない');
+  const strokeVar = strokeMatch[1];
+  const usageRe = new RegExp(`points=\\{mark\\.parallel\\}[^/]*strokeWidth=\\{${strokeVar}\\}`);
+  assert.ok(usageRe.test(src), `平行線のstrokeWidthが${strokeVar}（DIMENSION_LINE_WEIGHT由来）を使っていない`);
+});
+
+test('【不変条件・ステップ4第3単位①】StructuralLayer.jsx: 梁の当たり判定は pickMembersOnFigure( でゲートし、fillEnabled:falseかつhitStrokeWidthがMath.max(と梁幅を含む式になっている', () => {
+  const src = readSource();
+  assert.ok(/const pickBeams = onMemberClick && pickMembersOnFigure\(/.test(src),
+    'pickBeams が pickMembersOnFigure(...) の否定（onMemberClick 有無との論理積）でゲートされていない');
+  const propsMatch = /const pickShapeProps = pickBeams\s*\n\s*\?\s*\{([^}]*)\}/.exec(src);
+  assert.ok(propsMatch, 'pickShapeProps（pickBeams=trueのprops）の定義が見つからない');
+  const props = propsMatch[1];
+  assert.ok(/fillEnabled:\s*false/.test(props), 'fillEnabled: false が無い（Rect内部までヒット域が広がる回帰）');
+  assert.ok(/hitStrokeWidth:\s*Math\.max\(/.test(props), 'hitStrokeWidth が Math.max( を使っていない');
+  assert.ok(/width\s*\?\?\s*0/.test(props), 'hitStrokeWidth の算出式が梁幅(width)を含んでいない');
+});
+
+test('【不変条件・QA指摘F4】StructuralLayer.jsx: pickBeams時の<Group name="beam-symbol">はbeamId={b.id}を持ち、onClick/onTapは持たない（クリック判定はusePointerInteraction.js側に委ねる）', () => {
+  const src = readSource();
+  assert.ok(/name="beam-symbol"/.test(src), '<Group name="beam-symbol"> が見つからない');
+  const groupMatch = /<Group\s+key=\{b\.id\}\s+name="beam-symbol"([\s\S]*?)>/.exec(src);
+  assert.ok(groupMatch, '<Group key={b.id} name="beam-symbol" ...> が見つからない');
+  const groupProps = groupMatch[1];
+  assert.ok(/beamId=\{b\.id\}/.test(groupProps), 'beamId={b.id} が渡されていない（usePointerInteraction.jsのbeamAtKonvaTargetが解決できない回帰）');
+  assert.ok(!/onClick=/.test(groupProps), 'onClick が残っている（QA指摘F4: Konvaのonclick/onTapは移動閾値・長押し状態を見ないため使わない）');
+  assert.ok(!/onTap=/.test(groupProps), 'onTap が残っている（QA指摘F4: 同上）');
+  const wrapMatch = /const wrapPick = els => \(pickBeams\s*\n([\s\S]*?)\n\s*: els\)/.exec(src);
+  assert.ok(wrapMatch, 'wrapPick(els) が pickBeams ? [...Group...] : els の三項でない（偽なら配列をそのまま返していない）');
+});
+
+test('【不変条件・QA指摘F2】StructuralLayer.jsx: 梁本体の3分岐（単線Line・ピン閉矩形Rect・bandLines）がすべてpickShapePropsを受け取る（1分岐でも落とすと検出できる）', () => {
+  const src = readSource();
+  assert.ok(/<Line key=\{b\.id\} points=\{\[p1\.x, p1\.y, p2\.x, p2\.y\]\}[^/]*\{\.\.\.pickShapeProps\}/.test(src),
+    '単線（width==null）分岐のLineが{...pickShapeProps}を受け取っていない');
+  assert.ok(/<Rect key=\{b\.id\} \{\.\.\.bandRect\(b, lo, hi, width \/ 2\)\}[\s\S]*?\{\.\.\.pickShapeProps\}/.test(src),
+    'ピン接合（isPinJoint）分岐のRectが{...pickShapeProps}を受け取っていない');
+  assert.ok(/bandLines\(`beam:\$\{b\.id\}`,[^)]*,\s*pickShapeProps\)/.test(src),
+    '既定（bandLines）分岐がpickShapePropsを渡していない');
+});
+
 test('【不変条件】StructuralLayer.jsx: 土台帯のhalf・線幅は sillBandSpec(foundationRules) から解決し、bandLines へそのまま渡す', () => {
   const src = readSource();
   const specMatch = /const\s+(\w+)\s*=\s*sillBandSpec\(\s*foundationRules\s*\)/.exec(src);

@@ -13,7 +13,8 @@ import {
   MEMBER_GROUPS, REMOVE_FN_BY_MAP, FIELD_DEFS_BY_CATEGORY,
   materialLabel, sectionAspectRatio, sectionIconShape, memberSymbol, memberSignature, memberSizeKey,
   DEFAULT_SECTION_BY_MATERIAL,
-  FIGURE_FRAME_BY_MAP, DEFAULT_FIGURE_FRAME,
+  FIGURE_FRAME_BY_MAP, DEFAULT_FIGURE_FRAME, UNNUMBERED_TAG, memberGroupKey, noJoinSignatureFor,
+  memberOrderKey,
 } from './memberCatalog.js';
 import { alignToOuterFace, autoFillColumnSizes, autoFillColumnBaseSizes, isRigidFrameStructure, beamAxisCenterLines,
   autoFillBeamEccentricity, autoBeamEccentricity, faceGapForEccentricity, autoFillColumnAxisOffsets, axisExteriorSign, resolveLowestGraph } from './structuralAutoFill.js';
@@ -136,12 +137,12 @@ const SYMBOL_ORDER = ['C', 'PIL', 'CB', 'F', 'G', 'B', 'FG', 'EG', 'RF', 'PR', '
 // タグ文字列から並び替えキー [記号順位, 番号数値, 階rank] を作る（localeCompare だと "C10" が "C2" より
 // 前に来てしまう不具合の修正。番号は tags の末尾の連続数字、記号は entity から直接引く——文字列パースの
 // 曖昧さ（"RG1"＝屋根プレフィックスR+記号Gか、記号"RG"か）を避けるため memberSymbol() を権威にする）。
-function tagSortTuple(tag, members, group, project) {
+function tagSortTuple(tag, members, group, project, structure) {
   const rep = members[0];
   const symbol = memberSymbol(rep, group.mapName);
   const symbolRank = SYMBOL_ORDER.indexOf(symbol);
-  const num = tag === '(未採番)' ? Infinity : Number(tag.match(/(\d+)$/)?.[1] ?? Infinity);
-  const groupKey = rep.numberGroupId ?? memberSignature(rep, group.mapName);
+  const num = tag === UNNUMBERED_TAG ? Infinity : Number(tag.match(/(\d+)$/)?.[1] ?? Infinity);
+  const groupKey = memberGroupKey(rep, group.mapName, rulesFor(structure));
   const idxEntry = project.memberNumberIndex.get(groupKey);
   const floorRank = idxEntry?.floorRanks.size ? Math.min(...idxEntry.floorRanks) : Infinity;
   return [symbolRank < 0 ? 999 : symbolRank, num, floorRank];
@@ -155,13 +156,13 @@ function computeTagGroups(group, graph, project, structure, figureType) {
   const entities = structure == null ? allEntities : allEntities.filter(e => structureHasMemberKind(memberKindOf(group.mapName, e), structure, figureType));
   const byTag = new Map();
   for (const e of entities) {
-    const tag = e.memberNo ?? '(未採番)';
+    const tag = e.memberNo ?? UNNUMBERED_TAG;
     if (!byTag.has(tag)) byTag.set(tag, []);
     byTag.get(tag).push(e);
   }
   return [...byTag.entries()].sort((a, b) => {
-    const ta = tagSortTuple(a[0], a[1], group, project);
-    const tb = tagSortTuple(b[0], b[1], group, project);
+    const ta = tagSortTuple(a[0], a[1], group, project, structure);
+    const tb = tagSortTuple(b[0], b[1], group, project, structure);
     for (let i = 0; i < ta.length; i++) if (ta[i] !== tb[i]) return ta[i] - tb[i];
     return a[0].localeCompare(b[0]); // 完全同着時の最終防衛（安定化のみ）
   });
@@ -297,7 +298,25 @@ export const MemberListTab = observer(({ composition, project, focusRequest, onT
   // フロア切替・図面合成の組み直し（composition参照が変わる）で統合選択モードを強制終了する。
   // mergeState は特定の graph インスタンス（[統合…]押下時点のもの）を握ったままなので、
   // 切替後に古い graph のまま統合を確定すると別階の部材を操作してしまう。展開カードも道連れで閉じる。
+  // 「前回見たcomposition」をrefに持ち、同一参照なら何もしない（QA指摘F4'）——StructuralPanel.jsxが
+  // focusRequestを受けてタブを'members'へ切り替えると、このコンポーネントは新規マウントになる
+  // （focusRequestは既に構造リストタブへの切替と同時に届いている）。同一コミット内でeffectは宣言順に
+  // 実行されるため、直前のfocusRequest展開effect（292-296行目）がexpandedKeyを設定した直後に、
+  // このeffectが無条件でnullへ戻していた——初回タップでタブは切り替わるがカードが展開されない実機
+  // バグの原因（2回目のタップはcompositionが不変なのでこのeffect自体が発火せず展開される）。
+  // **単純な「初回フラグ」（useRefの真偽値）では直せない**——開発時は<StrictMode>（src/main.jsx）が
+  // 同じマウントのeffectをmount→cleanup→mountと2回実行し、useRefの値はその間も保持されるため、
+  // フラグ方式だと2回目の実行が「もう初回ではない」と誤判定してリセットが走ってしまう
+  // （本番ビルドでは1回しか実行されないため再現しない＝開発時に確認できない修正になる）。
+  // 「前回見たcomposition」を比較する方式なら、StrictModeの2回目の実行もcomposition参照が
+  // 前回（1回目）と同じなので早期returnし、実際にcomposition参照が変わったとき（階切替・図面合成の
+  // 組み直し）だけリセットが走る。初回（lastCompositionRef.current===null）は代入だけしてreturnする
+  // （expandedKeyはまだnullのはずなので、リセットをスキップしても意味論は変わらない）。
+  const lastCompositionRef = useRef(null);
   useEffect(() => {
+    if (lastCompositionRef.current === null) { lastCompositionRef.current = composition; return; }
+    if (composition === lastCompositionRef.current) return;
+    lastCompositionRef.current = composition;
     setMergeState(null);
     setMergeDialogState(null);
     setExpandedKey(null);
@@ -334,7 +353,13 @@ export const MemberListTab = observer(({ composition, project, focusRequest, onT
     const { graph, group, groups } = mergeDialogState;
     const before = serializeGraph(graph);
     const ledgerBefore = snapshotLedger(project);
-    const gid = runInAction(() => mergeGroups(project, group.mapName, groups, chosenIndex));
+    // 採用グループの代表部材から解決したnoJoinSignatureForをmergeGroupsへ渡す（QA指摘F12）——
+    // 個別採番対象（在来木造の非標準梁）を統合すると、選択しなかった同署名の他の個別採番グループまで
+    // 次のconformToLedgerでjoin経由で吸収されてしまう回帰の防止（splitGroupと同じ判定式）。
+    const structure = graph?.structureOverride ?? project?.structuralInfo?.mainStructure;
+    const chosenRep = groups[chosenIndex]?.members?.[0];
+    const splitFromSignature = chosenRep ? noJoinSignatureFor(chosenRep, group.mapName, rulesFor(structure)) : null;
+    const gid = runInAction(() => mergeGroups(project, group.mapName, groups, chosenIndex, { splitFromSignature }));
     if (gid) {
       runInAction(() => renumberMembers(graph, project, group.mapName));
       const after = serializeGraph(graph);
@@ -583,7 +608,7 @@ const MemberCard = observer(({
   const floorLabel = makeFloorName(graph.plane.startFloor, graph.plane.stories ?? 1);
   // このグループが複数階にまたがるか（project.memberNumberIndex の派生キャッシュを読む。
   // モード境界の収集フェーズで再構築されるため、未収集時は「単一階」として扱う＝安全側のフォールバック）。
-  const groupKeyForIndex = representative.numberGroupId ?? memberSignature(representative, group.mapName);
+  const groupKeyForIndex = memberGroupKey(representative, group.mapName, rulesFor(structure));
   const idxEntry = project.memberNumberIndex.get(groupKeyForIndex);
   const isMultiFloor = idxEntry ? (idxEntry.floorRanks.size + (idxEntry.hasRoof ? 1 : 0)) > 1 : false;
   // カードヘッダの広がりバッジ（例 "2~3F・計12本"）。design-member-numbering-ui.md 5節。
@@ -605,14 +630,17 @@ const MemberCard = observer(({
   // 予定タグの dry-run（assignNumbers を汚さない使い捨てビュー。memberNumbering.previewSplitTag）。
   function computeSplitPreview(targetMembers) {
     if (!targetMembers.length) return null;
-    const remainderGroupKey = representative.numberGroupId ?? memberSignature(representative, group.mapName);
+    const remainderGroupKey = memberGroupKey(representative, group.mapName, rulesFor(structure));
     // 「この階」は自階の対象が全部移動＝自階分は0本残る。「この部材」はこの階に他に残りが無い場合のみ0本。
     const removeFromRemainder = scope === 'floor' || (scope === 'entity' && members.length === 1);
     const floorInfo = floorRankOf(graph.plane, project);
     const tag = previewSplitTag(
       project, group.mapName, memberSymbol(targetMembers[0], group.mapName),
       memberSizeKey(targetMembers[0], group.mapName), memberSignature(targetMembers[0], group.mapName),
-      floorInfo, { remainderGroupKey, removeFromRemainder },
+      floorInfo, {
+        remainderGroupKey, removeFromRemainder,
+        orderKey: memberOrderKey(targetMembers[0], group.mapName, rulesFor(structure)),
+      },
     );
     return { count: targetMembers.length, tag };
   }
@@ -637,7 +665,7 @@ const MemberCard = observer(({
     mutateFn(targetMembers);
     const preview = computeSplitPreview(targetMembers);
     const scopeLabel = scope === 'entity' ? 'この部材' : floorLabel;
-    const oldTag = representative.memberNo ?? '(未採番)';
+    const oldTag = representative.memberNo ?? UNNUMBERED_TAG;
     setSplitConfirm({
       message: (
         <>
@@ -665,7 +693,7 @@ const MemberCard = observer(({
         // 分割で追加された新番号のカードへ開き直す（一覧の再計算は memberNo/numberGroupId が
         // observable なのでMobXが行う）。旧番号のカードを開いたままにすると、編集した値がそこには
         // 無い＝「編集が戻った」ように見えるため、必ず分割後の部材側を開く。
-        onExpandKey?.(`${group.mapName}:${targetMembers[0].memberNo ?? '(未採番)'}`);
+        onExpandKey?.(`${group.mapName}:${targetMembers[0].memberNo ?? UNNUMBERED_TAG}`);
         onToast?.(`「${targetMembers[0].memberNo}」として分割しました（${targetMembers.length}本）`);
         setSplitConfirm(null);
       },
@@ -711,7 +739,7 @@ const MemberCard = observer(({
   //   (2) 台帳の grp.no 全値（他階にしか実体が無い＝まだ収集されていないグループの手動タグも拾う）
   function isManualTagUsedElsewhere(tag) {
     const ownGid = representative.numberGroupId;
-    const ownGroupKey = ownGid ?? memberSignature(representative, group.mapName);
+    const ownGroupKey = memberGroupKey(representative, group.mapName, rulesFor(structure));
     for (const [groupKey, t] of assignNumbers(project)) {
       if (groupKey !== ownGroupKey && t === tag) return true;
     }
@@ -743,7 +771,13 @@ const MemberCard = observer(({
     }
     runInAction(() => {
       let gid = representative.numberGroupId;
-      if (!gid) gid = splitGroup(project, group.mapName, members);
+      // 個別採番対象（isIndividuallyNumbered）はsplitFromSignatureに「今の署名」を渡し、
+      // splitGroupのjoinを強制的に抑止する——渡さない（=null）と、常にjoin=trueで台帳へ書かれ、
+      // 次のconformToLedgerが同署名の他の個別採番対象（別の非標準梁）まで吸収してしまう
+      // （QA指摘F1。noJoinSignatureForが唯一の判定先）。
+      if (!gid) gid = splitGroup(project, group.mapName, members, {
+        splitFromSignature: noJoinSignatureFor(representative, group.mapName, rulesFor(structure)),
+      });
       setGroupManualTag(project.memberGroupLedger, gid, value);
       renumberMembers(graph, project, group.mapName);
     });
@@ -895,7 +929,7 @@ const MemberCard = observer(({
           </span>
         )}
         <SectionIcon entity={representative} mapName={group.mapName} iconShape={group.iconShape} />
-        <span style={{ fontWeight: 700, fontSize: 13, color: '#1e293b' }}>{representative.memberNo ?? '(未採番)'}</span>
+        <span style={{ fontWeight: 700, fontSize: 13, color: '#1e293b' }}>{representative.memberNo ?? UNNUMBERED_TAG}</span>
         <span style={{ fontSize: 12, color: '#64748b' }}>{materialLabel(representative.materialType)}</span>
         <span style={{ flex: 1, fontSize: 12, color: '#64748b' }}>{summaryDims(representative, group.mapName)}</span>
         {isFocusTarget && focusedMember && (

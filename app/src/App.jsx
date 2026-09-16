@@ -27,6 +27,7 @@ import { slabOpeningRects, slabOpeningFrames, slabOpeningEdges } from './finish/
 import { runFinishEntryBoundary, runFinishExitBoundary } from './finish/finishBoundary.js';
 import { computeVoidCrosses } from './finish/voidGeometry.js';
 import { MemberStatusMenu } from './ui/MemberStatusMenu.jsx';
+import { PRIMARY_DIMENSION_FIELD_BY_MAP, UNNUMBERED_TAG } from './structural/memberCatalog.js';
 import { CenterLineType, OpeningCategory, centerLineKind } from '@core';
 import { addSkipZero, subtractSkipZero, makeFloorName, renameFloor } from './floorNumber.js';
 import {
@@ -169,6 +170,21 @@ const App = observer(() => {
   // が結果として書き込む columnAxisOffsets の有無で代用する（非ラーメン系は常にclear()される）。
   const columnAxisMode = appMode === 'structure' && graph.columnAxisOffsets.size > 0;
 
+  // 構造リストタブを開いて該当部材へフォーカスする（MemberTagLayer のタグクリック・StructuralLayer の
+  // 梁タップ〔在来木造。ステップ4第3単位①〕の両方から呼ぶ共通処理。usePointerInteraction.js の
+  // pointerUp（F4: パン・長押し未成立のタップだけ）とSceneLayers.jsx（タグクリック・伏図の当たり判定
+  // ゲート）の両方が同じ関数を参照する——App.jsx に置くのは setShowStructuralInfoDialog/
+  // setMemberFocusRequest を両方の呼び出し元へ配線するため）。tag は未採番でも UNNUMBERED_TAG に
+  // 揃える——MemberListTab.computeTagGroups が同じ定数でグルーピングするため、揃えないとフォーカスが
+  // 一致しない。
+  function openMemberCard(entity, mapName) {
+    setShowStructuralInfoDialog(true);
+    setMemberFocusRequest({
+      mapName, tag: entity.memberNo ?? UNNUMBERED_TAG,
+      fieldKey: PRIMARY_DIMENSION_FIELD_BY_MAP[mapName] ?? null, entityId: entity.id,
+    });
+  }
+
   // ---- ポインタ/タッチ/長押しのジェスチャー配線（interaction/usePointerInteraction.js）----
   const {
     handlers: pointerHandlers,
@@ -186,6 +202,9 @@ const App = observer(() => {
     // 建具モードの脱出（建具ターゲット以外の描画エリアのタップ）。パネルの×と同じ経路を呼ぶ
     // ——handleModeChange を通すことで境界処理（modeBoundaries.opening.exit）が必ず走る。
     onExitOpeningMode: () => handleModeChange('floorplan'),
+    // 構造モード: 伏図の梁タップ（F4。Konvaのonclick/onTapは移動閾値を持たないため使わない——
+    // usePointerInteraction.js のpointerUpが「パン未開始かつ長押し未成立」のときだけ呼ぶ）。
+    onMemberClick: openMemberCard,
   });
 
   // 起動時IDB復元の完了をマウント時1回だけ待ち、activeFloorId をproject.activePlaneIdへ同期する。
@@ -1756,8 +1775,7 @@ const App = observer(() => {
             onElevationOpeningClick={id => modeRef.current?.selectOpening(id)}
             wallDialog={wallDialog}
             menu={menu}
-            setShowStructuralInfoDialog={setShowStructuralInfoDialog}
-            setMemberFocusRequest={setMemberFocusRequest}
+            onMemberClick={openMemberCard}
             setStatusMenu={setStatusMenu}
           />
         </Stage>

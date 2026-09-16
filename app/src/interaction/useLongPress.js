@@ -11,11 +11,13 @@ const MOVE_THRESHOLD = 8;   // px — これ以上動いたらパンに切り替
  * @param {(sx, sy) => void}  callbacks.onFire    — 長押し成立 (メニュー表示)
  * @param {() => void}        callbacks.onCancel  — キャンセル (移動 or 早期離し)
  *
- * @returns {{ begin, move, abort, isPending }}
+ * @returns {{ begin, move, abort, isPending, hasFired }}
  *   begin(sx, sy)  — pointerDown で呼ぶ
  *   move(sx, sy)   — pointerMove で呼ぶ。true を返したらパン開始してよい
  *   abort()        — pointerUp / TouchEnd で呼ぶ
  *   isPending()    — タイマー動作中か
+ *   hasFired()     — 直近の begin() 以降に長押しが成立したか（メニューの有無に関わらずtrue。
+ *                    QA指摘F4: 長押し成立後のpointerupでタップ相当の処理を誤って呼ばないためのガード）
  */
 export function useLongPress({ onStart, onFire, onCancel } = {}) {
   const timerRef    = useRef(null);
@@ -56,6 +58,10 @@ export function useLongPress({ onStart, onFire, onCancel } = {}) {
     return timerRef.current !== null;
   }
 
+  function hasFired() {
+    return firedRef.current;
+  }
+
   function _clear() {
     if (timerRef.current) {
       clearTimeout(timerRef.current);
@@ -64,5 +70,5 @@ export function useLongPress({ onStart, onFire, onCancel } = {}) {
     startPosRef.current = null;
   }
 
-  return { begin, move, abort, isPending };
+  return { begin, move, abort, isPending, hasFired };
 }

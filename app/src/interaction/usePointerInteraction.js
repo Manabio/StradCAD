@@ -21,6 +21,7 @@ import { CONTEXT, detectContext, buildMenuState } from './menuItems.js';
 import { centerLineKind, CenterLineType } from '@core';
 import { roundAbsToStep, calcStep } from '../renderer/clMoveMath.js';
 import { findHostWall } from '../openings/openingGeometry.js';
+import { beamAtKonvaTarget, shouldFireMemberTap } from './beamTap.js';
 import {
   openingMoveRange, openingSnapCandidates, resolveOpeningRefOffset, snapIndicatorAlong,
   elevationDragAlong, previewDxLocalMm,
@@ -41,7 +42,7 @@ import { isEligibleWallSpan } from '../finish/kneeDropWall.js';
 // （App.jsx の handleModeChange('floorplan')。境界処理を通す唯一の経路をそのまま呼ぶ）。
 export function usePointerInteraction({
   project, graph, size, appMode, columnAxisMode, modeRef,
-  menu, setMenu, onToast, onUndo, onRedo, onExitOpeningMode,
+  menu, setMenu, onToast, onUndo, onRedo, onExitOpeningMode, onMemberClick,
 }) {
   const [isPanning,   setIsPanning]   = useState(false);
   const [pressPos,    setPressPos]    = useState(null);
@@ -767,6 +768,18 @@ export function usePointerInteraction({
       return;
     }
     moveDownRef.current = null;
+
+    // 構造モード: 伏図の梁タップ（F4。在来木造のみ有効——onMemberClickの真偽＋pickMembersOnFigureの
+    // 判定はStructuralLayer.jsx側）。成立条件の判定（interaction/beamTap.js shouldFireMemberTap）は
+    // 純関数へ抽出済み——node:testでパン・長押しの各信号を単体検証できる（team-lessons「抽出モジュールは
+    // 呼び出し側もテストで守る」）。
+    if (shouldFireMemberTap({
+      appMode, onMemberClick, menu, panned: !!drag.current, longPressFired: longPress.hasFired(),
+      busy: !!drawDownRef.current || !!modeRef.current?.moveState || !!modeRef.current?.drawState,
+    })) {
+      const beam = beamAtKonvaTarget(e.target, graph);
+      if (beam) onMemberClick(beam, 'beamMap');
+    }
 
     // 平面モード: 通常タップで開口を選択（パレット表示）/ 空白タップで選択解除。
     // 建具モード: 建具ターゲットのタップで選択（パネルに姿図・フォームを表示）/ それ以外の

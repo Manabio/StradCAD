@@ -50,6 +50,11 @@ export const REMOVE_FN_BY_MAP = {
 // 採番対象の map 名（structural/memberNumbering.js・memberGroups.js 共通）。
 export const NUMBERED_MAPS = ['columnMap', 'beamMap', 'wallMap', 'slabMap', 'footingMap'];
 
+// 未採番（entity.memberNo が null）の表示・グルーピング用タグ。構造リストタブ（MemberListTab.jsx
+// computeTagGroups）と描画エリアのタップ選択（renderer/SceneLayers.jsx openMemberCard）が同じ値で
+// フォーカスキーを一致させるための単一の定義（一方だけ直書きすると未採番部材でフォーカスが外れる）。
+export const UNNUMBERED_TAG = '(未採番)';
+
 // 描画エリアの部材タグをクリックした時、構造リストタブで自動フォーカスする「寸法」フィールド。
 // 自動算定（memberSizing.js）の対象＝Tri-stateでロック制御するフィールドのみ対象（耐力壁・スラブは未対応）。
 export const PRIMARY_DIMENSION_FIELD_BY_MAP = {
@@ -225,6 +230,56 @@ export function memberSignature(entity, mapName) {
  *  signature と異なり mapName・記号・材料は含まない（部材側に既に materialType があるため冗長）。 */
 export function memberSpecString(entity, mapName) {
   return buildFieldPairs(entity, mapName).map(([k, v]) => `${k}=${v}`).join('|');
+}
+
+// ================================================================
+// 非正角材（成≠幅）の梁の個別採番（在来木造。ユーザー裁定2026-09-16。設計意図は
+// .claude/structural-model.md ステップ4第3単位）。
+//
+// 標準材（rules.defaultSections.beam。在来では現状 'WOOD-120x120'）以外の在来木造の梁は、成が
+// 同じでも材ごとに個別のグループとして管理する（伏図で材をタップして選択する対象でもある）。
+// rules は呼び出し側（structural/structureRules.js の rulesFor）が解決して渡す——ここは
+// structureRules.js を import しない（structureRules.js が memberCatalog.js を import する循環を
+// 避けるため。ファイル冒頭の注意と同じ理由）。
+// ================================================================
+
+/** entity が個別採番の対象か（在来木造の非標準梁のみ）。rules.numbering.individualBeamRoles を
+ *  持たない主構造（非在来6種・未定）は常にfalse。 */
+export function isIndividuallyNumbered(entity, mapName, rules) {
+  return mapName === 'beamMap'
+    && (rules.numbering?.individualBeamRoles?.includes(entity.role) ?? false)
+    && entity.materialType === rules.baseMaterial
+    && entity.sectionDefId !== rules.defaultSections.beam;
+}
+
+/** グループキー（memberNumbering.js collectFloorGroups/applyNumbers・MemberListTab.jsx の groupKey導出の
+ *  唯一の入口）。numberGroupId（分割・統合済み）を最優先し、無ければ個別採番対象は部材ごとに一意
+ *  （signature+id）、それ以外は従来どおり signature（同一材寸＝同一グループ）。 */
+export function memberGroupKey(entity, mapName, rules) {
+  if (entity.numberGroupId) return entity.numberGroupId;
+  const signature = memberSignature(entity, mapName);
+  return isIndividuallyNumbered(entity, mapName, rules) ? `${signature}#${entity.id}` : signature;
+}
+
+/** 採番の並び順キー（memberNumbering.compareGroupsDesc がsizeKey・出現階に次ぐタイブレークに使う）。
+ *  個別採番対象は位置（軸方向→軸座標→区間下端）で決める——idに依存しないため、部材の再生成で
+ *  idが変わっても番号が安定する。非個別・非梁は空配列（従来どおりsignatureでタイブレーク）。 */
+export function memberOrderKey(entity, mapName, rules) {
+  if (!isIndividuallyNumbered(entity, mapName, rules)) return [];
+  return [entity.isVertical ? 1 : 0, entity.axisValue ?? 0, Math.min(entity.coord1 ?? 0, entity.coord2 ?? 0)];
+}
+
+/** 手動採番の materialize（MemberListTab.jsx commitManualNumber）・統合（mergeGroups。QA指摘F12で
+ *  対象を拡張）で memberGroups.splitGroup/mergeGroups へ渡す splitFromSignature。個別採番対象は
+ *  常に「今の署名」を返し、join=false を強制する——署名が一致するので join は必ず抑止される。台帳
+ *  （grp.join）を書くと、直後の conformToLedger が「gid未設定かつ同署名」の他の個別採番対象
+ *  （同じ標準外断面の別の梁）まで新gidへ吸収してしまい、個別採番が無効化される
+ *  （QA指摘F1: 120×330 ×3本で1本に手動タグを打つと3本ともそのタグに統合された。QA指摘F12: 統合
+ *  経路も同じ穴＝個別採番4本のうち2本だけ統合しても4本とも同じタグになった）。個別採番対象で
+ *  なければ null（従来どおり常にjoinする＝同署名の将来の部材も自動で同じタグに合流する。この既定
+ *  挙動は個別採番と無関係の構造では維持する）。 */
+export function noJoinSignatureFor(entity, mapName, rules) {
+  return isIndividuallyNumbered(entity, mapName, rules) ? memberSignature(entity, mapName) : null;
 }
 
 // 配筋サイズ文字列（例 'D25'）から数値部分を取り出す（呼び径の大小比較用）。

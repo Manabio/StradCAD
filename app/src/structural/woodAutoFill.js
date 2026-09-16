@@ -13,7 +13,7 @@
 import { CenterLineType, Discipline, centerLineKind, columnSlotKey, spanKey, findHostPrimaryBeam } from '../core.js';
 import { CL_OVERLAP_TOL_MM } from '../core/constants.js';
 import { findSectionEntry, woodRectSectionKey } from './sectionCatalog.js';
-import { rulesFor, effectiveStructure, TRADITIONAL_WOOD_FRAMING } from './structureRules.js';
+import { rulesFor, effectiveStructure, TRADITIONAL_WOOD_FRAMING, WOOD_DEPTH_BEAM_ROLES } from './structureRules.js';
 import { selfWallSegments, findBeamAnchorCL, wallBeamAxisExcludeKey, bracketExtent } from './wallBeamAxes.js';
 import { woodStudCodeFor } from '../finish/materials/backingClass.js';
 import { beamGridCells } from './framingCells.js';
@@ -513,12 +513,8 @@ export function conformWoodSections(graph, project) {
   return updated;
 }
 
-// 在来木造の梁成自動更新（ステップ3d）の対象role。柱と同じく主構造の主要構造（framing）を持つ階の
-// 木造部材だけが対象——対象梁（成を更新する側）と荷重源（他の梁の荷重点として数える側）の両方が
-// この定数を読む（foundation/eaves/roof/landing は対象外。梁成表は主要構造の大梁・小梁・床梁の話であり、
-// 基礎梁・軒桁・小屋梁・踊り場受け梁は別の算定・別の扱いを持つため）。'floor'（床梁、ステップ3e-2）を
-// 加えたのは床梁自身も梁成表の対象であり、床梁の端も host（大梁）の荷重として数える必要があるため。
-export const WOOD_DEPTH_BEAM_ROLES = Object.freeze(['primary', 'secondary', 'floor']);
+// WOOD_DEPTH_BEAM_ROLES（在来木造の梁成自動更新の対象role）は structural/structureRules.js
+// （WOOD_BEAM_DEPTH_TABLE の隣。個別採番 numbering.individualBeamRoles と同じ集合を共有する）へ移設済み。
 
 // 座標(x,y)が梁の軸線上にあるか（横梁: |y-axisValue|<tol、縦梁: |x-axisValue|<tol）。
 // あれば梁の軸方向の座標（横梁はx、縦梁はy＝支持点・荷重点として扱う値）を返し、無ければnull。

@@ -2,12 +2,11 @@ import { observer } from 'mobx-react-lite';
 import { Line, Circle } from 'react-konva';
 import { DimensionKind, DimensionSide, CenterLineType, Discipline } from '@core';
 import { CenterLinesLayer, clExtent } from './CenterLinesLayer.jsx';
-import { DIMENSION_LINE_WEIGHT } from './dimensionStyle.js';
+import { DIMENSION_LINE_WEIGHT, NUM_FONT_PX, TEXT_GAP_PX } from './dimensionStyle.js';
 import { gutterEdgeCoord, labelCircle, dimensionRow } from './gutterPrimitives.jsx';
 import { INSET } from '../layout.js';
 import {
   gridLineBounds, columnAxisPush, buildColumnAxisAnchors, columnAxisLabelCoords,
-  NUM_FONT_PX, TEXT_GAP_PX,
   drawingAreaBounds, isCenterDimensionTarget, rowDotIds, buildCenterRowAnchors,
 } from './gutterLabelHits.js';
 

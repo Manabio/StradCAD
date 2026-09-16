@@ -1,19 +1,24 @@
-import { NUMBERED_MAPS, memberSymbol, memberSignature, memberSizeKey } from './memberCatalog.js';
+import { NUMBERED_MAPS, memberSymbol, memberSignature, memberSizeKey, memberGroupKey, memberOrderKey } from './memberCatalog.js';
 import { conformToLedger, getGroupManualTag } from './memberGroups.js';
 import { makeFloorLevelPrefix } from '../floorNumber.js';
+import { rulesFor, effectiveStructure } from './structureRules.js';
 
 // 部材タグ番号の採番ルール（材寸ベースグループ採番。設計意図は .claude/structural-model.md）:
 //
-// グループキー = entity.numberGroupId ?? signature(entity, mapName)（memberCatalog.memberSignature）。
-// 「同一材寸＝同一グループ」が既定（signatureから毎回導出）。分割・統合・手動採番というユーザーの明示操作
-// だけが project.memberGroupLedger へ永続化され、numberGroupId として部材へ反映される
+// グループキー = memberCatalog.memberGroupKey(entity, mapName, rules) が唯一の入口
+// （entity.numberGroupId を最優先し、無ければ在来木造の非標準梁（個別採番対象）は部材ごとに一意
+// （signature+id）、それ以外は signature（同一材寸＝同一グループ）——直書き `entity.numberGroupId ??
+// memberSignature(...)` はここに戻さない。ステップ4第3単位②）。分割・統合・手動採番というユーザーの
+// 明示操作だけが project.memberGroupLedger へ永続化され、numberGroupId として部材へ反映される
 // （memberGroups.js の conformToLedger）。
 //
 // 採番は2パスに分かれる（建物全体の情報が必要なため、単一graphでは完結しない）:
 //   パス1（各階）: conformToLedger → collectFloorGroups で project.memberNumberIndex（非永続キャッシュ）に
-//                  groupKey → {mapName, symbol, sizeKey, floorRanks, hasRoof, signature, counts} を積む。
+//                  groupKey → {mapName, symbol, sizeKey, orderKey, floorRanks, hasRoof, signature, counts}
+//                  を積む（orderKey=memberCatalog.memberOrderKey。個別採番対象のタイブレーク用）。
 //   パス2（建物全体で1回）: assignNumbers(project) が純関数として groupKey → タグ の対応表を作り、
-//                  applyNumbers(graph, project, tags) が各階の entity.memberNo へ書き戻す。
+//                  applyNumbers(graph, project, tags) が各階の entity.memberNo へ書き戻す
+//                  （groupKeyの導出はここでもmemberGroupKeyに一本化する）。
 //
 // 採番規則（assignNumbers）:
 //   1. 記号（memberSymbol）ごとに分ける。
@@ -54,6 +59,7 @@ export function floorRankOf(plane, project) {
 export function collectFloorGroups(graph, project) {
   const { rank, isRoof } = floorRankOf(graph.plane, project);
   const planeId = graph.plane.id;
+  const rules = rulesFor(effectiveStructure(graph, project));
 
   // 1. このplaneの既存寄与を全エントリから取り消す。
   // hasRoof は building単位のフラグ（floorRanksのような複数階の集合ではない）。isRoof時に
@@ -75,10 +81,11 @@ export function collectFloorGroups(graph, project) {
       const symbol = memberSymbol(entity, mapName);
       const signature = memberSignature(entity, mapName);
       const sizeKey = memberSizeKey(entity, mapName);
-      const groupKey = entity.numberGroupId ?? signature;
+      const orderKey = memberOrderKey(entity, mapName, rules);
+      const groupKey = memberGroupKey(entity, mapName, rules);
       let group = project.memberNumberIndex.get(groupKey);
       if (!group) {
-        group = { mapName, symbol, sizeKey, signature, floorRanks: new Set(), hasRoof: false, counts: new Map() };
+        group = { mapName, symbol, sizeKey, signature, orderKey, floorRanks: new Set(), hasRoof: false, counts: new Map() };
         project.memberNumberIndex.set(groupKey, group);
         // project.memberNumberIndex は deep な observable.map（core.js）のため、set() に渡した plain
         // object/Map/Set はそのまま格納されず、MobXが別のobservableオブジェクトへ深変換した複製が
@@ -96,6 +103,7 @@ export function collectFloorGroups(graph, project) {
         group.symbol = symbol;
         group.sizeKey = sizeKey;
         group.signature = signature;
+        group.orderKey = orderKey;
       }
       touchedGroups.set(groupKey, group);
       localCounts.set(groupKey, (localCounts.get(groupKey) ?? 0) + 1);
@@ -155,7 +163,10 @@ function floorIdentityKey(group) {
   return group.hasRoof ? `${ranks}+R` : ranks;
 }
 
-// sizeKey 降順・出現最下階昇順・signature昇順のタイブレークで比較する（負=aが先）。
+// sizeKey 降順・出現最下階昇順・orderKey昇順・signature昇順のタイブレークで比較する（負=aが先）。
+// orderKey（memberCatalog.memberOrderKey）は在来木造の個別採番対象（非標準梁）だけ非空——位置
+// （軸方向→軸座標→区間下端）で決まるため、部材の再生成でidが変わっても番号が安定する（idそのものは
+// 順序に効かせない）。非個別・非梁は空配列同士の比較になり従来どおりsignatureへ直接落ちる。
 function compareGroupsDesc(a, b) {
   const len = Math.max(a.sizeKey.length, b.sizeKey.length);
   for (let i = 0; i < len; i++) {
@@ -165,6 +176,11 @@ function compareGroupsDesc(a, b) {
   const minA = a.floorRanks.size ? Math.min(...a.floorRanks) : Infinity;
   const minB = b.floorRanks.size ? Math.min(...b.floorRanks) : Infinity;
   if (minA !== minB) return minA - minB; // 出現最下階が下（rankが小さい）方を先
+  const orderLen = Math.max(a.orderKey?.length ?? 0, b.orderKey?.length ?? 0);
+  for (let i = 0; i < orderLen; i++) {
+    const diff = (a.orderKey?.[i] ?? 0) - (b.orderKey?.[i] ?? 0);
+    if (diff !== 0 && !Number.isNaN(diff)) return diff; // 昇順（小さい方が先）
+  }
   if (a.signature !== b.signature) return a.signature < b.signature ? -1 : 1; // 最終同着: 辞書順
   return 0;
 }
@@ -244,11 +260,15 @@ export function assignNumbers(project) {
  * @param {string} [options.remainderGroupKey] 分割元の現在の groupKey（分割元からの減算に使う）
  * @param {boolean} [options.removeFromRemainder] true なら分割元グループの出現階集合からこの階を除く
  *   （「この階」スコープ、または「この部材」で分割元がこの階に他に残らない場合）
+ * @param {number[]} [options.orderKey] 個別採番対象（memberCatalog.memberOrderKey）のプレビュー用
+ *   採番順序キー。省略時は[]（非個別・従来どおりsignatureでタイブレーク）——QA指摘F10:
+ *   実グループはcollectFloorGroupsがorderKeyを積むが、プレビューは実グループ化される前の
+ *   使い捨てエントリのため呼び出し側が明示的に渡す必要がある。
  * @returns {string|null} 予定タグ
  */
 export function previewSplitTag(project, mapName, symbol, sizeKey, signature, floorInfo, options = {}) {
   const PREVIEW_KEY = '__split_preview__';
-  const { remainderGroupKey, removeFromRemainder } = options;
+  const { remainderGroupKey, removeFromRemainder, orderKey = [] } = options;
   const cloned = new Map(project.memberNumberIndex);
   if (remainderGroupKey && removeFromRemainder && cloned.has(remainderGroupKey)) {
     const src = cloned.get(remainderGroupKey);
@@ -258,7 +278,7 @@ export function previewSplitTag(project, mapName, symbol, sizeKey, signature, fl
     cloned.set(remainderGroupKey, { ...src, floorRanks, hasRoof });
   }
   cloned.set(PREVIEW_KEY, {
-    mapName, symbol, sizeKey, signature,
+    mapName, symbol, sizeKey, signature, orderKey,
     floorRanks: !floorInfo.isRoof && floorInfo.rank >= 0 ? new Set([floorInfo.rank]) : new Set(),
     hasRoof: floorInfo.isRoof,
     counts: new Map(),
@@ -280,9 +300,10 @@ export function applyNumbers(graph, project, tags, onlyMapName = null) {
   let changed = false;
   const renumbered = [];
   const maps = onlyMapName ? [onlyMapName] : NUMBERED_MAPS;
+  const rules = rulesFor(effectiveStructure(graph, project));
   for (const mapName of maps) {
     for (const entity of graph[mapName].values()) {
-      const groupKey = entity.numberGroupId ?? memberSignature(entity, mapName);
+      const groupKey = memberGroupKey(entity, mapName, rules);
       const tag = tags.get(groupKey);
       if (tag != null && tag !== entity.memberNo) {
         if (entity.memberNo != null) renumbered.push({ from: entity.memberNo, to: tag });

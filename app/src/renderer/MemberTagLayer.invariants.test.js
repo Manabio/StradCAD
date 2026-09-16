@@ -43,3 +43,17 @@ test('【不変条件・QA2026-09-16】SceneLayers.jsx: <MemberTagLayer ...> に
   assert.ok(/project=\{project\}/.test(blockMatch[1]),
     'MemberTagLayer に project={project} が渡されていない（主題階の実効主構造が引けず showMemberTags が常に既定 show 扱いになる回帰）');
 });
+
+test('【不変条件・ステップ4第3単位①】SceneLayers.jsx: <StructuralLayer> の onMemberClick と <MemberTagLayer> の onTagClick は同一の関数（openMemberCard）を渡す', () => {
+  const src = fs.readFileSync(path.resolve(import.meta.dirname, 'SceneLayers.jsx'), 'utf8');
+  const structuralBlock = /<StructuralLayer\b([\s\S]*?)\/>/.exec(src);
+  assert.ok(structuralBlock, 'SceneLayers.jsx に <StructuralLayer ... /> の呼び出しが見つからない');
+  const memberTagBlock = /<MemberTagLayer\b([\s\S]*?)\/>/.exec(src);
+  assert.ok(memberTagBlock, 'SceneLayers.jsx に <MemberTagLayer ... /> の呼び出しが見つからない');
+  const onMemberClickMatch = /onMemberClick=\{(\w+)\}/.exec(structuralBlock[1]);
+  const onTagClickMatch = /onTagClick=\{(\w+)\}/.exec(memberTagBlock[1]);
+  assert.ok(onMemberClickMatch, '<StructuralLayer> に onMemberClick={<関数名>} が渡されていない（タグクリックの代替＝梁タップが配線されていない回帰）');
+  assert.ok(onTagClickMatch, '<MemberTagLayer> に onTagClick={<関数名>} が渡されていない');
+  assert.equal(onMemberClickMatch[1], onTagClickMatch[1],
+    'StructuralLayer.onMemberClick と MemberTagLayer.onTagClick が別の関数を渡している（部材カードを開く経路が分岐する回帰）');
+});
