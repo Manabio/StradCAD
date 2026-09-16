@@ -7,6 +7,7 @@ import { PlanGraph } from './planGraph.js';
 import { Plane } from './plane.js';
 import { CenterLineType, Discipline, StructuralMaterialType } from './constants.js';
 import { RIGID_JOINT_OFFSET_MM, SECONDARY_BEAM_CLEARANCE_MM, PIN_ROLES } from './structuralEntities.js';
+import { TRADITIONAL_WOOD_STRUCTURE } from '../structural/structureRules.js';
 
 // X1=0 / X2=10000、Y1=0 / Y2=6000 の通り芯。梁はY方向（X1軸沿い）に張る。
 function setupGraph() {
@@ -126,6 +127,34 @@ test('spanForColumns: 床梁(role:floor)も小梁と同じくhost（大梁）の
   const halfHost = 120 / 2 + SECONDARY_BEAM_CLEARANCE_MM; // host（幅120）の縁+クリアランス
   assert.deepEqual(floorBeam.spanForColumns(graph.columns), { coord1: halfHost, coord2: 6000 },
     '始端(y1)はhostの縁+クリアランス、終端(y2)はhostが無いのでCL位置まで');
+});
+
+test('spanForColumns: 在来木造の階（structureOverride）では小梁・床梁がhost（大梁）の面まで伸びる（クリアランス0。ユーザー裁定2026-09-16）。ピン指定した鉄骨大梁の柱基準経路も同じ0', () => {
+  const { graph, x1, x2, y1, y2 } = setupGraph();
+  graph.setStructureOverride(TRADITIONAL_WOOD_STRUCTURE);
+  graph.addBeam(StructuralMaterialType.WOOD, 'WOOD-120x120', y1, false, x1, x2, { role: 'primary' });
+  const xMid = graph.addCenterLine(CenterLineType.VERTICAL, 5000, { labeled: true, discipline: Discipline.STRUCT });
+  const floorBeam = graph.addBeam(StructuralMaterialType.WOOD, 'WOOD-120x120', xMid, true, y1, y2, { role: 'floor' });
+  assert.equal(floorBeam.pinEndClearanceMm, 0);
+  assert.deepEqual(floorBeam.spanForColumns(graph.columns), { coord1: 120 / 2, coord2: 6000 },
+    '始端(y1)はhostの面（縁）まで、終端(y2)はhostが無いのでCL位置まで');
+  const secondary = graph.addBeam(StructuralMaterialType.WOOD, 'WOOD-120x120', xMid, true, y1, y2, { role: 'secondary' });
+  assert.deepEqual(secondary.spanForColumns(graph.columns), { coord1: 120 / 2, coord2: 6000 }, '小梁も同じ');
+  // 在来の階に置いたピン指定の鉄骨大梁（柱基準経路）もクリアランス0（ルール値は材種によらず階の主構造で決まる）。
+  const pinSteel = addBeam(graph, x1, y1, y2, { jointType: 'PIN' });
+  assert.deepEqual(pinSteel.spanForColumns([]), { coord1: 0, coord2: 6000 });
+  // 上書きを外す（未指定主構造）と既定50に戻る＝クリアランスがルール駆動であることの検査。
+  graph.setStructureOverride(null);
+  assert.equal(floorBeam.pinEndClearanceMm, SECONDARY_BEAM_CLEARANCE_MM);
+  assert.deepEqual(floorBeam.spanForColumns(graph.columns), { coord1: 120 / 2 + SECONDARY_BEAM_CLEARANCE_MM, coord2: 6000 });
+});
+
+test('【失敗系】pinEndClearanceMm: graph 未設定（_planGraph=null。生成直後の梁）でも例外を投げず既定50（未指定ルール）を返す', () => {
+  const { graph, x1, y1, y2 } = setupGraph();
+  const beam = addBeam(graph, x1, y1, y2, { jointType: 'PIN' });
+  beam._planGraph = null;
+  assert.equal(beam.pinEndClearanceMm, SECONDARY_BEAM_CLEARANCE_MM);
+  assert.deepEqual(beam.spanForColumns([]), { coord1: SECONDARY_BEAM_CLEARANCE_MM, coord2: 6000 - SECONDARY_BEAM_CLEARANCE_MM });
 });
 
 // ---- 柱に接合する梁か（構造リストの接合2択のグレー化判定） ----

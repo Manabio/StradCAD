@@ -158,22 +158,28 @@ test('【不変条件・QA指摘F7】`numberGroupId ?? memberSignature(` の直�
 // のいずれも既存テストが全緑のまま通っていた（無防備）。F1/F12と同じ流儀でMemberListTab.jsxのソースを
 // 直接検査し、変異させれば必ず落ちるようにする。
 
-test('【不変条件・ステップ4 C-2b】MemberListTab.jsx: 柱グループ見出しの「各階柱寸法」欄は isWoodColumnGroup（columnMapかつcolumnSizing:"fixed"）でだけ表示され、onStructureChangedが配線されている', () => {
+test('【不変条件・ステップ4 C-2b／裁定2026-09-16】MemberListTab.jsx: 「各階柱寸法」欄は一覧の先頭（柱グループの外）に、自階柱□の graph（columnMapSelf）を対象に、在来（columnSizing:"fixed"）かつ非R階のときだけ出て、onStructureChangedが配線されている', () => {
   const src = fs.readFileSync(path.resolve(import.meta.dirname, 'MemberListTab.jsx'), 'utf8');
-  assert.ok(/isWoodColumnGroup\s*=\s*group\.mapName\s*===\s*'columnMap'\s*&&\s*rulesFor\(structure\)\.columnSizing\s*===\s*'fixed'/.test(src),
-    'isWoodColumnGroup の表示条件（group.mapName===\'columnMap\' && rulesFor(structure).columnSizing===\'fixed\'）が見つからない');
-  assert.ok(/\{isWoodColumnGroup\s*&&\s*\(/.test(src),
-    '{isWoodColumnGroup && (...)} の分岐が見つからない');
-  assert.ok(/<WoodColumnWidthSelect\s+graph=\{graph\}\s+project=\{project\}\s+onStructureChanged=\{onStructureChanged\}\s*\/>/.test(src),
-    '<WoodColumnWidthSelect graph={graph} project={project} onStructureChanged={onStructureChanged} /> の配線が見つからない（実機裁定ステップ4 C-2 QA2: 主構造変更と同じ経路に統一）');
-  // onStructureChanged が MemberListTab（トップレベル props）→ MemberGroupSection → WoodColumnWidthSelect
-  // まで実際に引き回されていること（途中で途切れて undefined になる回帰の防止）。
+  // 欄の対象は当該階（自階柱□）の graph＝composition.graphForCategory('columnMapSelf')（ユーザー裁定
+  // 2026-09-16「柱寸の変更は当該階の柱（□）のみ」）——一覧側の graph（下階柱×）を渡す旧配線への回帰を検出する。
+  assert.ok(/const selfColumnGraph = composition\?\.graphForCategory\('columnMapSelf'\) \?\? null;/.test(src),
+    'selfColumnGraph が columnMapSelf（自階柱□の供給階）から解決されていない');
+  assert.ok(/const woodColumnWidthGraph = \(!isRoofFigure && selfColumnGraph && rulesFor\(selfStructure\)\.columnSizing === 'fixed'\) \? selfColumnGraph : null;/.test(src),
+    'woodColumnWidthGraph の表示条件（非R階 && 自階柱graphあり && columnSizing===\'fixed\'）が見つからない');
+  assert.ok(/\{woodColumnWidthGraph\s*&&\s*\(/.test(src), '{woodColumnWidthGraph && (...)} の分岐が見つからない');
+  assert.ok(/<WoodColumnWidthSelect\s+graph=\{woodColumnWidthGraph\}\s+project=\{project\}\s+onStructureChanged=\{onStructureChanged\}\s*\/>/.test(src),
+    '<WoodColumnWidthSelect graph={woodColumnWidthGraph} project={project} onStructureChanged={onStructureChanged} /> の配線が見つからない（実機裁定ステップ4 C-2 QA2: 主構造変更と同じ経路に統一／裁定2026-09-16: 対象は自階）');
+  assert.ok(!/<WoodColumnWidthSelect\s+graph=\{graph\}/.test(src), '欄が一覧側の graph（下階柱）を書き換える旧配線が残っている');
+  // 欄は柱グループ（MEMBER_GROUPS.map の中＝下階の無い基礎伏図では丸ごと非表示）の外＝一覧の先頭に置く
+  // （QA指摘2026-09-16: 柱グループ見出しに置くと最下階の柱寸を変える手段が無くなる）。
+  const fieldPos = src.indexOf('<WoodColumnWidthSelect');
+  const groupsPos = src.indexOf('{MEMBER_GROUPS.map(group => {');
+  assert.ok(fieldPos > 0 && groupsPos > 0 && fieldPos < groupsPos, '「各階柱寸法」欄が MEMBER_GROUPS.map（柱グループ）より前（一覧の先頭）に無い');
+  assert.ok(!/const MemberGroupSection = observer\(\(\{[\s\S]{0,600}?\bonStructureChanged\b/.test(src),
+    'MemberGroupSection が onStructureChanged を受け取っている（欄を柱グループ見出しへ戻す回帰の兆候）');
+  // onStructureChanged が MemberListTab（トップレベル props）→ WoodColumnWidthSelect へ引き回されていること。
   assert.ok(/export const MemberListTab = observer\(\(\{[^}]*\bonStructureChanged\b[^}]*\}\)/.test(src),
     'MemberListTab が onStructureChanged を props として受け取っていない');
-  assert.ok(/const MemberGroupSection = observer\(\(\{[\s\S]{0,400}?\bonStructureChanged\b/.test(src),
-    'MemberGroupSection が onStructureChanged を props として受け取っていない');
-  assert.ok(/<MemberGroupSection[\s\S]*?onStructureChanged=\{onStructureChanged\}/.test(src),
-    'MemberListTab の <MemberGroupSection> 呼び出しに onStructureChanged が渡されていない');
 });
 
 test('【不変条件・ステップ4 C-2b QA修正】MemberListTab.jsx: WoodColumnWidthSelectの変更ハンドラはonStructureChanged（主構造変更と同じ経路）だけを呼び、自前のconformWoodSections/renumberMembers/pushGraphUndoを持たない', () => {

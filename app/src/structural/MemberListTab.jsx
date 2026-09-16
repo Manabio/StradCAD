@@ -270,8 +270,20 @@ const MergeBar = observer(({ group, graph, project, structure, figureType, selec
   );
 });
 
-export const MemberListTab = observer(({ composition, project, focusRequest, onToast, onStructureChanged }) => {
+export const MemberListTab = observer(({ composition, project, focusRequest, onToast, onStructureChanged, onSelectMembers }) => {
   const [expandedKey, setExpandedKey] = useState(null); // `${mapName}:${タグ}` | null
+
+  // 描画エリアの選択状態（StructuralModeState.selectedMemberIds）は「展開中のカードの部材」を鏡写しにする
+  // （ユーザー裁定2026-09-16）。展開中のカード自身が MemberCard の effect で自分の members を報告し、
+  // ここでは「どのカードも展開していない」ときと、このタブが閉じる（アンマウント）ときに空へ戻す。
+  useEffect(() => {
+    if (expandedKey == null) onSelectMembers?.([]);
+  }, [expandedKey, onSelectMembers]);
+  // アンマウント時の解除は最新のコールバックを ref 経由で呼ぶ（依存配列を空にし、親が渡す関数の参照が
+  // 変わっても cleanup が途中で走らない——走ると展開中なのに一瞬選択が消える）。
+  const onSelectMembersRef = useRef(onSelectMembers);
+  onSelectMembersRef.current = onSelectMembers;
+  useEffect(() => () => onSelectMembersRef.current?.([]), []);
   const [deleteConfirm, setDeleteConfirm] = useState(null); // { mapName, ids, label } | null
   // 統合選択モード（design-member-numbering-ui.md セクション3）。対象は同一セクション（mapName+group.key）内のみ
   // ＝有効な group/graph/structure/figureType を [統合…] 押下時点のコンテキストのまま保持する
@@ -287,6 +299,16 @@ export const MemberListTab = observer(({ composition, project, focusRequest, onT
   // 平面が単一図面種別に属するため、所属図面ルール（GOVERNING_FIGURE）を figureType=ROOF で上書きする。
   const isRoofFigure = composition?.subjectPlane?.isRoofPlane ?? false;
   const figureType = isRoofFigure ? FIGURE_TYPE.ROOF : null;
+
+  // 「各階柱寸法」欄（在来木造＝columnSizing:'fixed'のみ。主構造名の直書き禁止）の対象 graph。
+  // 対象は当該階＝自階柱「□」の供給階（composition.graphForCategory('columnMapSelf')）であって、柱グループの
+  // 一覧が並べる「1つ下の実体階」の下階柱「×」ではない（ユーザー裁定2026-09-16「柱寸の変更は当該階の柱（□）
+  // のみ」）。欄は柱グループの見出しではなく一覧の先頭に置く——柱グループは下階の無い基礎伏図（最下階）で
+  // 丸ごと非表示になり、そこに欄を置くと最下階の柱寸を変える手段が無くなるため（QA指摘2026-09-16）。
+  // R階伏図（屋根専用平面）は柱を持たず上の階も無い（欄が何にも効かない）ため出さない。
+  const selfColumnGraph = composition?.graphForCategory('columnMapSelf') ?? null;
+  const selfStructure = selfColumnGraph ? (selfColumnGraph.structureOverride ?? project.structuralInfo?.mainStructure) : null;
+  const woodColumnWidthGraph = (!isRoofFigure && selfColumnGraph && rulesFor(selfStructure).columnSizing === 'fixed') ? selfColumnGraph : null;
 
   // 描画エリアの部材タグクリック（focusRequest）が来たら、該当部材のカードを開く。
   useEffect(() => {
@@ -387,6 +409,18 @@ export const MemberListTab = observer(({ composition, project, focusRequest, onT
     // 下端固定バー（MergeBar）をスクロール領域の外（flex兄弟）に置くため、ルートをflex縦積みにする。
     <div style={{ display: 'flex', flexDirection: 'column', flex: 1, overflow: 'hidden' }}>
       <div style={{ overflowY: 'auto', flex: 1 }}>
+        {/* 「各階柱寸法」欄（在来木造のみ。上記 woodColumnWidthGraph のコメント参照）。柱グループ見出しと
+            同じ体裁の帯を一覧の先頭に置く。対象階名と記号□を添え、下階柱×の一覧とは階が違うことを明示する。 */}
+        {woodColumnWidthGraph && (
+          <div style={{
+            display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8,
+            fontSize: 13, fontWeight: 700, color: '#374151',
+            padding: '6px 10px', background: '#f1f5f9', marginBottom: 16,
+          }}>
+            <span>各階柱寸法（{woodColumnWidthGraph.plane.name}柱 □）</span>
+            <WoodColumnWidthSelect graph={woodColumnWidthGraph} project={project} onStructureChanged={onStructureChanged} />
+          </div>
+        )}
         {MEMBER_GROUPS.map(group => {
           const g = graphForMap(group.mapName);
           if (!g) return null; // 下階が無い（基礎伏図）場合は柱グループを非表示
@@ -418,10 +452,10 @@ export const MemberListTab = observer(({ composition, project, focusRequest, onT
               mergeActive={isMergingHere}
               mergeAnchorTag={isMergingHere ? mergeState.anchorTag : null}
               mergeAnchorMaterialType={isMergingHere ? mergeState.anchorMaterialType : null}
+              onSelectMembers={onSelectMembers}
               mergeSelectedTags={isMergingHere ? mergeState.selectedTags : null}
               onStartMerge={(tag, materialType) => setMergeState({ group, graph: g, structure: effectiveStructure, figureType, anchorTag: tag, anchorMaterialType: materialType, selectedTags: new Set([tag]) })}
               onToggleMergeTag={toggleMergeTag}
-              onStructureChanged={onStructureChanged}
             />
           );
         })}
@@ -493,15 +527,19 @@ const FoundationTypeSelect = observer(({ project, structure }) => {
 // 柱グループ見出しに置く「各階柱寸法」セレクト（在来木造＝columnSizing:'fixed'のみ）。値は階の値
 // （graph.woodColumnWidthMm）——建物全体設定ではない。選択肢は木造正角幅（sectionCatalog.js
 // WOOD_SQUARE_WIDTHSが唯一の情報源）。
+// **対象は当該階（伏図の主題階＝自階柱「□」）の graph**（ユーザー裁定2026-09-16「柱寸の変更は当該階の柱
+// （□）のみ」）——柱グループの一覧が図面合成上「1つ下の実体階」（伏図慣習。下階柱「×」）を並べるのとは
+// 別に、欄は composition.graphForCategory('columnMapSelf')（自階柱□の供給階＝自階 graph）を書き換える。
+// 伏図Nの梁幅は「下階柱同寸」（resolvedBeamColumnWidthMm＝N−1階の柱寸）のまま——同じ伏図の欄と梁幅は
+// 一致しない（欄=N階の柱寸・梁幅=N−1階の柱寸）のが仕様。
 // 変更は主構造変更と同じ経路（onStructureChanged→structuralOrchestration.js
-// recomputeStructuralComposition）に乗せる（実機裁定ステップ4 C-2 QA2）——柱グループの graph は
-// 図面合成上「1つ下の実体階」（伏図慣習）なので、ここで graph.setWoodColumnWidthMm する mutate は
-// 下階を書き換える。recomputeStructuralComposition が下階編集・自階梁の追従
-// （conformWoodSections/beamColumnWidthMm）・建物全体の採番・1 undoエントリをまとめて行う——
-// 自前の conformWoodSections→renumberMembers→pushGraphUndo は持たない（QA指摘: 採番・undoの
-// 仕組みを主構造変更と二重に持たない）。壁はその場で作り直さない——鍵（finish/wallFreshnessKey.js
-// の col=）に柱寸が乗るため、次の境界（仕上げ脱出／構造脱出／読込み）で refreshWallsAllFloors が
-// conformWoodBacking とともに再生成する（既存の鮮度キー設計）。
+// recomputeStructuralComposition）に乗せる（実機裁定ステップ4 C-2 QA2）——自階の before スナップショットは
+// mutate 前に取られるため undo で戻り、自階の柱断面は conformWoodSections（structuralRecompute.js）が
+// 欄の値へそろえる。1つ上の階の梁幅（自階の柱寸を参照）は、その階の再計算（伏図の訪問・モード境界の
+// reflectStructuralToOtherFloors）で追従する。自前の conformWoodSections→renumberMembers→pushGraphUndo は
+// 持たない（QA指摘: 採番・undoの仕組みを主構造変更と二重に持たない）。壁はその場で作り直さない——鍵
+// （finish/wallFreshnessKey.js の col=）に柱寸が乗るため、次の境界（仕上げ脱出／構造脱出／読込み）で
+// refreshWallsAllFloors が conformWoodBacking とともに再生成する（既存の鮮度キー設計）。
 const WoodColumnWidthSelect = observer(({ graph, project, onStructureChanged }) => {
   const value = woodColumnWidthMm(graph, project);
   function handleChange(width) {
@@ -523,7 +561,8 @@ const WoodColumnWidthSelect = observer(({ graph, project, onStructureChanged }) 
 // （同じラベルの部材は複数あっても重複表示しない。件数はカード見出しに表示）。
 const MemberGroupSection = observer(({
   group, graph, composition, project, structure, figureType, readOnly, expandedKey, onToggle, onExpandKey, onRequestDelete, focusRequest, onToast,
-  mergeModeActiveAnywhere, mergeActive, mergeAnchorTag, mergeAnchorMaterialType, mergeSelectedTags, onStartMerge, onToggleMergeTag, onStructureChanged,
+  mergeModeActiveAnywhere, mergeActive, mergeAnchorTag, mergeAnchorMaterialType, mergeSelectedTags, onStartMerge, onToggleMergeTag,
+  onSelectMembers,
 }) => {
   // 構造種別が持たない部材種別（×）の個体は一覧から除外する（footing→ベース/柱脚、beam→梁/基礎梁を role で割る）。
   // structure=null（主構造未設定）は素通し。memberKindOf が null を返す表外部材（軒桁・杭）は structureHasMemberKind=true で残る。
@@ -538,8 +577,7 @@ const MemberGroupSection = observer(({
   const isWoodFoundationBeamGroup = group.mapName === 'beamMap' && group.key === 'beam'
     && foundationBeamGroupLabel != null && isFoundationPlane(graph.plane, project);
   const groupLabel = isWoodFoundationBeamGroup ? foundationBeamGroupLabel : group.label;
-  // 柱グループ見出しの「各階柱寸法」欄（在来木造＝columnSizing:'fixed'のみ。主構造名の直書き禁止）。
-  const isWoodColumnGroup = group.mapName === 'columnMap' && rulesFor(structure).columnSizing === 'fixed';
+  // 「各階柱寸法」欄はこの見出しには置かない——一覧の先頭（MemberListTab の woodColumnWidthGraph）参照。
 
   return (
     <div style={{ marginBottom: 16 }}>
@@ -554,14 +592,6 @@ const MemberGroupSection = observer(({
           <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontWeight: 400 }}>
             <span style={{ fontSize: 12, color: '#64748b' }}>基礎種別</span>
             <FoundationTypeSelect project={project} structure={structure} />
-          </label>
-        )}
-        {isWoodColumnGroup && (
-          <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontWeight: 400 }}>
-            {/* この柱グループの graph は図面合成上「1つ下の実体階」（伏図慣習）——欄が実際に
-                書き換える階を明示するため、対象階名（plane.name）を添える（実機裁定）。 */}
-            <span style={{ fontSize: 12, color: '#64748b' }}>各階柱寸法（{graph.plane.name}柱）</span>
-            <WoodColumnWidthSelect graph={graph} project={project} onStructureChanged={onStructureChanged} />
           </label>
         )}
       </div>
@@ -594,6 +624,7 @@ const MemberGroupSection = observer(({
             mergeAnchorMaterialType={mergeAnchorMaterialType}
             onToggleMerge={() => onToggleMergeTag(tag)}
             onStartMerge={() => onStartMerge(tag, members[0].materialType)}
+            onSelectMembers={onSelectMembers}
           />
         );
       })}
@@ -607,7 +638,16 @@ const MemberGroupSection = observer(({
 const MemberCard = observer(({
   members, group, graph, composition, project, readOnly, isExpanded, onToggle, onExpandKey, onDelete, focusRequest, onToast,
   mergeModeActiveAnywhere, mergeActive, isMergeAnchor, isMergeSelected, mergeAnchorMaterialType, onToggleMerge, onStartMerge,
+  onSelectMembers,
 }) => {
+  // 展開中は自分の members（同一タグの全部材）を描画エリアの選択状態として報告する（ユーザー裁定2026-09-16
+  // 「構造リストで材を選択すると描画エリアの当該材が選択状態に」）。members 配列は親の再計算で毎回新しい
+  // 参照になるため id 列を依存キーにする。閉じたときの解除は MemberListTab 側（expandedKey==null）で行う
+  // ——別カードへ切り替わるときはそのカードの effect が上書きするため、ここで空へ戻すと一瞬空になる。
+  const memberIdsKey = members.map(m => m.id).join(',');
+  useEffect(() => {
+    if (isExpanded) onSelectMembers?.(memberIdsKey ? memberIdsKey.split(',') : []);
+  }, [isExpanded, memberIdsKey, onSelectMembers]);
   // 梁は同一ラベルに内部梁・両外周梁が混在する。図には偏芯量を編集できる外周梁（柱芯オフセット≠0）を
   // 代表に選ぶ（無ければ先頭）。同一形状＝同一断面のため、断面・材質・番号の表示はどの代表でも一致する。
   const representative = (group.mapName === 'beamMap'
@@ -1074,14 +1114,15 @@ const MemberCard = observer(({
               </div>
             </div>
           )}
-          {/* 在来木造（columnSizing:'fixed'）の非基礎梁は材幅も「各階柱寸法」欄から決まる（conformWoodSections
-              が柱同寸へそろえる）ため、断面欄の読み取り専用化に加えて理由を示す読み取り専用行を出す
-              （isWoodFoundationBeamと同型の分岐。FIELD_DEFSには足さない）。 */}
+          {/* 在来木造（columnSizing:'fixed'）の非基礎梁は材幅も「下階柱同寸」＝梁を支える1つ下の実体階の
+              「各階柱寸法」欄から決まる（conformWoodSections が resolvedBeamColumnWidthMm へそろえる。
+              ユーザー裁定2026-09-16「梁幅を決める柱同寸は下階柱同寸」）ため、断面欄の読み取り専用化に加えて
+              理由を示す読み取り専用行を出す（isWoodFoundationBeamと同型の分岐。FIELD_DEFSには足さない）。 */}
           {group.mapName === 'beamMap' && fieldCtx.woodFixedSection && representative.role !== 'foundation' && (
             <div style={cardRowStyle}>
               <div style={cardFieldStyle}>
                 <span style={cardLabelStyle}>梁幅：</span>
-                <span style={{ fontSize: 12, color: '#64748b' }}>{findSectionEntry(representative.sectionDefId)?.width}mm（各階柱寸法より）</span>
+                <span style={{ fontSize: 12, color: '#64748b' }}>{findSectionEntry(representative.sectionDefId)?.width}mm（下階柱同寸）</span>
               </div>
             </div>
           )}

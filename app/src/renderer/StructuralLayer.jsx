@@ -15,6 +15,7 @@ import { LodLevel, resolveStrokeWidth } from '../viewport.js';
 import { ColumnSymbol, ColumnCrossMark } from './ColumnSymbol.jsx';
 import { groupPropsForStyle, dashForStyle } from '../figure/figureStyle.js';
 import { DIMENSION_LINE_WEIGHT, NUM_FONT_PX, TEXT_GAP_PX } from './dimensionStyle.js';
+import { memberSelectionRects, MEMBER_SELECTION_COLOR, MEMBER_SELECTION_FILL, MEMBER_SELECTION_STROKE_PX } from '../structural/memberSelection.js';
 
 export const COLOR_BY_MATERIAL = {
   [StructuralMaterialType.WOOD]:  '#92400e',
@@ -305,7 +306,9 @@ export const ColumnsLayer = observer(({
 // 帰属（伏図慣習）はこのレイヤーではなく FigureDef（structuralFigure.js）が決める——レンダラは
 // 「カテゴリをどう描くか」だけを知り、「どの階のどのグラフか」は composition.graphForCategory に委ねる。
 // z-order は描画順（柱→基礎→梁→スラブ→耐力壁）で再現し、レイヤ宣言順には依存させない。
-export const StructuralLayer = observer(({ composition, viewport, project, onMemberClick = null }) => {
+// selectedMemberIds（Set<string>|null。構造リストで展開中のカードの部材id集合＝StructuralModeState.selectedMemberIds）
+// を渡すと、該当部材の実形状に半透明の青矩形（structural/memberSelection.js）を最前面に重ねて選択状態を示す。
+export const StructuralLayer = observer(({ composition, viewport, project, onMemberClick = null, selectedMemberIds = null }) => {
   if (!composition) return null;
   const scale  = Math.min(viewport.scaleX, viewport.scaleY);
   const lod    = viewport.lodLevel;
@@ -554,6 +557,36 @@ export const StructuralLayer = observer(({ composition, viewport, project, onMem
           return bandLines(`wall:${w.id}`, w.isVertical, w.axisValue, w.thickness / 2, segments, color, medium, wallDash);
         })}
       </Group>
+      {/* 構造リストで展開中のカードの部材（selectedMemberIds）を選択状態として最前面に示す。
+          どの部材をどんな矩形で示すかは structural/memberSelection.js が決め、ここは描画に使ったのと同じ
+          解決済み幾何（表示中の柱集合・トリム済みの梁スパン・帯幅）を渡して Konva へ写すだけ。
+          全黒の伏図（在来）でも見分けられるよう線色ではなく半透明の青塗り＋青枠で重ねる。listening:false。 */}
+      {selectedMemberIds?.size > 0 && (() => {
+        const selfColumns = composition.resolveCategory('columnMapSelf')?.graph?.columns ?? [];
+        const toColumn = c => ({ id: c.id, x: c.x, y: c.y, rotation: c.rotation, ...columnSectionSize(c) });
+        const rects = memberSelectionRects({
+          columns:  [...displayedColumns, ...selfColumns].map(toColumn),
+          beams:    beamDrawSpans.map(({ beam: b, coord1, coord2 }) => {
+            const w = beamRenderWidth(b, lod);
+            return { id: b.id, isVertical: b.isVertical, axisValue: b.axisValue, coord1, coord2, halfWidth: w == null ? null : w / 2 };
+          }),
+          footings: (footing?.graph?.footings ?? []).map(f => ({ id: f.id, x: f.x, y: f.y, widthX: f.widthX, widthY: f.widthY ?? f.widthX })),
+          walls:    (wall?.graph?.structuralWalls ?? []).map(w => ({
+            id: w.id, isVertical: w.isVertical, axisValue: w.axisValue, coord1: w.coord1, coord2: w.coord2, half: w.thickness / 2,
+          })),
+          slabs:    (slab?.graph?.slabs ?? []).map(s => ({
+            id: s.id, cells: [...s.cells].map(key => cellBoundsFromKey(key, slab.graph)).filter(Boolean),
+          })),
+        }, selectedMemberIds, 1 / scale);
+        return (
+          <Group name="member-selection">
+            {rects.map(({ key, ...r }) => (
+              <Rect key={key} {...r} fill={MEMBER_SELECTION_FILL} stroke={MEMBER_SELECTION_COLOR}
+                strokeWidth={MEMBER_SELECTION_STROKE_PX / scale} listening={false} />
+            ))}
+          </Group>
+        );
+      })()}
     </>
   );
 });

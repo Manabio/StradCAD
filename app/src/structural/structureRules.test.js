@@ -11,6 +11,7 @@ import {
   RC_FOUNDATION_OPTIONS, WOOD_FOUNDATION_OPTIONS, WOOD_FOUNDATION_BEAM,
   BACKING_RULES, BackingClass, backingRulesFor,
   woodColumnWidthMm, woodColumnSectionId, beamColumnWidthMm, resolvedBeamColumnWidthMm,
+  PIN_BEAM_END_CLEARANCE_MM,
 } from './structureRules.js';
 import { STRUCTURES, STRUCTURE_PROFILES } from './structuralClassification.js';
 import { DEFAULT_COLUMN_SECTION_BY_MATERIAL, DEFAULT_BEAM_SECTION_BY_MATERIAL, DEFAULT_SECTION_BY_MATERIAL } from './memberCatalog.js';
@@ -356,6 +357,14 @@ test('structureRules: 描画ルール（柱包み・平面の柱線色・線幅�
       framingPlanColor: 'material', framingColumnSymbol: 'section', framingColumnLineWeight: 'fixed',
       memberTags: 'show', beamDepthMark: 'none',
     }, key);
+  }
+});
+
+test('structureRules: ピン接合の梁の端部クリアランス（pinBeamEndClearanceMm）は在来木造だけ0（大梁面まで伸ばす）、他の主構造・未定は既定50（PIN_BEAM_END_CLEARANCE_MM）', () => {
+  assert.equal(PIN_BEAM_END_CLEARANCE_MM, 50, '既定値（鉄骨造の従来どおり）');
+  assert.equal(rulesFor(TRADITIONAL_WOOD_STRUCTURE).pinBeamEndClearanceMm, 0);
+  for (const key of ['木造（2"×4"）', 'S造', 'SRC造', 'RC造(ラーメン)', 'RC造(壁式)', UNSPECIFIED_STRUCTURE, 'no-such-structure']) {
+    assert.equal(rulesFor(key).pinBeamEndClearanceMm, PIN_BEAM_END_CLEARANCE_MM, key);
   }
 });
 

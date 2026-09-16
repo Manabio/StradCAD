@@ -296,6 +296,11 @@ async function collectRoofPlaneGroups(project) {
 
 export async function reflectStructuralToOtherFloors(project) {
   const activeId = project.activePlaneId;
+  // 注意: 他階の再計算は隣接階を floorSwapManager.peek（毎回IDBから読む）で参照する。アクティブ階の
+  // auto-save は dirty 印だけ（保存は deactivate/saveNow）なので、モード内の自階編集（各階柱寸法等）を
+  // 他階へ読ませたい呼び出し元（構造モードの脱出境界。App.jsx runStructuralExitBoundary）は、この関数を
+  // 呼ぶ前にアクティブ階を saveFloor しておくこと（QA指摘2026-09-16）。ここで保存しないのは、
+  // IDB の無い単体テスト（wallRefresh.test.js 等）がこの関数を直接呼ぶため。
   runInAction(() => project.clearMemberNumberIndex());
   if (project.activeGraph) {
     // アクティブ階はここでは recomputeStructuralForGraph（structuralRecompute.js）を経由しない

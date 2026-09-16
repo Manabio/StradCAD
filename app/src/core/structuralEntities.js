@@ -10,6 +10,7 @@ import { makeObservable, observable, computed, action } from 'mobx';
 import { StructuralMaterialType } from './constants.js';
 import { coordLo as _coordLo, coordHi as _coordHi } from './_internal.js';
 import { findSectionEntry, diaphragmProjection } from '../structural/sectionCatalog.js';
+import { rulesFor, effectiveStructure, PIN_BEAM_END_CLEARANCE_MM } from '../structural/structureRules.js';
 
 // ---- module-private helpers（構造部材の平面位置導出。core/_internal とは別に構造専用） ----
 
@@ -147,9 +148,11 @@ export class RcColumn extends StructuralColumn {
   }
 }
 
-// 小梁（role:'secondary'）の端部クリアランス(mm)。host（取りつく大梁）の縁からこの分だけ離して止める。
+// 小梁（role:'secondary'）の端部クリアランス(mm)の既定値。host（取りつく大梁）の縁からこの分だけ離して止める。
 // ピン接合（jointType:'PIN'）に指定した鉄骨の大梁も同じ値で母材（柱・大梁）の面から離す。
-export const SECONDARY_BEAM_CLEARANCE_MM = 50;
+// 値の真実は主構造ルール（structural/structureRules.js PIN_BEAM_END_CLEARANCE_MM／rulesFor(...).pinBeamEndClearanceMm。
+// 在来木造は0＝大梁面まで伸ばす）。実際の解決は StructuralBeam.pinEndClearanceMm 経由——ここは再exportのみ。
+export const SECONDARY_BEAM_CLEARANCE_MM = PIN_BEAM_END_CLEARANCE_MM;
 
 // 剛接合（鉄骨・水平方向）の継手位置(mm)。構造芯から梁の内側へこの距離の位置で母材を切断し、
 // プレートで補強する（実務の一般的な仕口位置）。切断幅そのもの（10mm）は描画には使わない
@@ -304,9 +307,17 @@ export class StructuralBeam extends StructuralEntity {
     if (!host) return { center: perpCL.effectiveValue + _axisOffset(this._planGraph, perpCL.id), half: 0 };
     return { center: host.axisValue, half: host.sectionWidth / 2 + clearance };
   }
+  // ピン接合の端部クリアランス(mm)。この梁の階の実効主構造のルール（structureRules.js pinBeamEndClearanceMm）
+  // から引く——在来木造は0（小梁・床梁を大梁面まで伸ばす。ユーザー裁定2026-09-16「鉄骨造にあった隙間は
+  // 不要」）、それ以外は PIN_BEAM_END_CLEARANCE_MM(50)。project を持たない経路（描画・getter）のため
+  // effectiveStructure(graph) の後方参照（graph._structuralInfo）で建物全体値を引く（ColumnsLayer と同じ）。
+  // _planGraph 未設定（生成直後）は未指定ルール＝50。
+  get pinEndClearanceMm() {
+    return rulesFor(effectiveStructure(this._planGraph)).pinBeamEndClearanceMm;
+  }
   // 小梁（role:'secondary'）専用: 両端を「取りつく大梁の縁+クリアランス」で止めた始終端座標を返す
   // （host無しの端はCL位置まで＝柱と同じ規約）。beams は自階graphの梁集合（_planGraph.beams）。
-  spanForHostBeams(beams, clearance = SECONDARY_BEAM_CLEARANCE_MM) {
+  spanForHostBeams(beams, clearance = this.pinEndClearanceMm) {
     const a = this._hostEndCenterAndHalfWidth(this.clStart, beams, clearance);
     const b = this._hostEndCenterAndHalfWidth(this.clEnd, beams, clearance);
     const dir = Math.sign(b.center - a.center) || 1;
@@ -322,7 +333,7 @@ export class StructuralBeam extends StructuralEntity {
   // （小梁の host 基準経路をそのまま流用すると、host大梁の無い端がCL位置まで伸びて柱を突き抜ける）。
   spanForColumns(columns, { diaphragm = false } = {}) {
     if (PIN_ROLES.has(this.role) && this.isPinJoint) return this.spanForHostBeams(this._planGraph?.beams ?? []);
-    const clearance = this.isPinJoint ? SECONDARY_BEAM_CLEARANCE_MM : 0;
+    const clearance = this.isPinJoint ? this.pinEndClearanceMm : 0;
     const a = this._endCenterAndHalfWidth(this.clStart, columns, diaphragm);
     const b = this._endCenterAndHalfWidth(this.clEnd, columns, diaphragm);
     const dir = Math.sign(b.center - a.center) || 1;

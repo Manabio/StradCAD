@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { observer } from 'mobx-react-lite';
 import { runInAction, reaction } from 'mobx';
 import { undoManager } from './undoManager.js';
@@ -184,6 +184,11 @@ const App = observer(() => {
       fieldKey: PRIMARY_DIMENSION_FIELD_BY_MAP[mapName] ?? null, entityId: entity.id,
     });
   }
+  // 構造リストで展開中のカードの部材id集合を構造モード状態へ写す（伏図のハイライト。
+  // renderer/StructuralLayer.jsx が mode.selectedMemberIds を読む）。構造モード以外・状態未生成時は無視。
+  // 参照を安定させる（useCallback・依存なし。modeRef は ref なので常に最新を読む）——MemberListTab/MemberCard
+  // の effect がこの関数を依存に持つため、App の再レンダーごとに新しい関数を渡すと effect が空回りする。
+  const selectStructuralMembers = useCallback(ids => modeRef.current?.selectMembers?.(ids), []);
 
   // ---- ポインタ/タッチ/長押しのジェスチャー配線（interaction/usePointerInteraction.js）----
   const {
@@ -506,6 +511,14 @@ const App = observer(() => {
     setStructComposition(null);
     if (closeInfoDialog) setShowStructuralInfoDialog(false);
     if (reflectOtherFloors) {
+      // アクティブ階の現状（メモリ）を先に floors ストアへ書く——reflect は隣接階を floorSwapManager.peek
+      // （毎回IDBから読む）で参照する一方、アクティブ階の auto-save は dirty 印だけ（保存は deactivate/
+      // saveNow）のため、構造モード内の自階編集（各階柱寸法など。上の階の梁幅・個別採番がこれを読む）を
+      // 反映せずに古い値で他階を確定・保存してしまう（QA指摘2026-09-16）。deactivate と同じ
+      // serializeGraph→saveFloor で、未保存文書（dirty）の意味は変えない。
+      if (project.activeGraph && project.activePlane) {
+        await saveFloor(project.activePlane.id, serializeGraph(project.activeGraph));
+      }
       await reflectStructuralToOtherFloors(project);
       // 主構造・階別構造・下地材コードを（仕上げモードを開かずに）変えた場合に備え、鍵不一致の
       // 全階の壁を作り直す（壁の再生成をFinishModeStateから独立させる計画のステップ4）。
@@ -1949,11 +1962,12 @@ const App = observer(() => {
           isLandscape={isLandscape}
           focusRequest={memberFocusRequest}
           onToast={msg => setToast({ msg, key: Date.now() })}
+          onSelectMembers={selectStructuralMembers}
           onStructureChanged={mutate => {
             // 主構造変更（mutate）→ 構造伏図に映る全グラフ（自階＋下階）を再計算し、下階の柱も実効主構造へ追従させる。
-            // 構造リストタブ（MemberListTab.jsx）の「各階柱寸法」変更（mutateが下階graphを書き換える）も
-            // 同じ経路に乗せる（実機裁定ステップ4 C-2 QA2。柱寸変更・下階編集・建物全体の採番・undoを
-            // この1つの仕組みに統一する）。
+            // 構造リストタブ（MemberListTab.jsx）の「各階柱寸法」変更（mutateが自階graphの柱寸を書き換える。
+            // 裁定2026-09-16「柱寸の変更は当該階の柱□のみ」）も同じ経路に乗せる（実機裁定ステップ4 C-2 QA2。
+            // 柱寸変更・自階再計算・建物全体の採番・undoをこの1つの仕組みに統一する）。
             if (structComposition) {
               recomputeStructuralComposition(structComposition, project.activeGraph, project, {
                 mutate, onToast: msg => setToast({ msg, key: Date.now() }),

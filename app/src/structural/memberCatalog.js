@@ -167,8 +167,9 @@ export const FIELD_DEFS_BY_CATEGORY = {
     { key: 'bottomLevel', label: '下端レベル', kind: 'number' },
   ],
   [MEMBER_CATEGORY.ROD]: [
-    // 在来木造（columnSizing:'fixed'）は梁の材幅も「各階柱寸法」欄から決まる（conformWoodSectionsが柱同寸へ
-    // そろえる）ため、部材ごとの断面選択は意味を持たない——基礎梁（役割上RC・寸法は別欄で算定）は対象外。
+    // 在来木造（columnSizing:'fixed'）は梁の材幅も「下階柱同寸」（梁を支える1つ下の実体階の「各階柱寸法」欄。
+    // conformWoodSectionsが resolvedBeamColumnWidthMm へそろえる）で決まるため、部材ごとの断面選択は意味を
+    // 持たない——基礎梁（役割上RC・寸法は別欄で算定）は対象外。
     { key: 'sectionDefId',     label: '断面',   kind: 'section',
       disabledWhen: (e, ctx) => ctx?.woodFixedSection === true && e.role !== 'foundation' },
     // 接合方法（鉄骨の梁のみ）。when=表示条件、disabledWhen=グレー化条件（値は見せるが変更させない）。

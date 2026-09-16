@@ -1,8 +1,15 @@
 import { makeObservable, observable, action, runInAction } from 'mobx';
 import { beamAxisMoveRange } from '../structural/beamAxisMove.js';
+import { sameIdSet } from '../structural/memberSelection.js';
+
+const EMPTY_IDS = Object.freeze(new Set());
 
 export class StructuralModeState {
-  selectedEntityId = null; // 選択中の柱/梁 id | null
+  // 構造リスト（structural/MemberListTab.jsx）で展開中のカードの部材id集合（同一タグの全部材）。
+  // renderer/StructuralLayer.jsx が structural/memberSelection.js でハイライト矩形へ写す
+  // （ユーザー裁定2026-09-16「構造リストで材を選択すると描画エリアの当該材が選択状態に」）。
+  // 書き手は App.jsx→StructuralPanel→MemberListTab の onSelectMembers だけ。空は共有の空Set。
+  selectedMemberIds = EMPTY_IDS;
   placementState   = null; // 配置中ドラフト | null（配置UI本実装は次フェーズ）
   // 柱芯ラベル ロングタップ → 出幅編集の静止入力窓状態。ドラッグ追従はしない（窓は動かない）。
   // { cl, structure, screenX, screenY, projection } | null
@@ -15,11 +22,11 @@ export class StructuralModeState {
   constructor(graph) {
     this.graph = graph;
     makeObservable(this, {
-      selectedEntityId: observable,
+      selectedMemberIds: observable.ref,
       placementState:   observable.ref,
       axisEditState:    observable.ref,
       moveState:        observable.ref,
-      selectEntity:      action,
+      selectMembers:     action,
       clearSelection:    action,
       startAxisEdit:     action,
       updateAxisEdit:    action,
@@ -31,7 +38,13 @@ export class StructuralModeState {
     });
   }
 
-  selectEntity(id) { this.selectedEntityId = id; }
+  // 選択中の部材id集合を差し替える（同内容なら書き換えない＝observer の無駄な再描画を避ける）。
+  // 空・null は共有の空Setへ戻す。
+  selectMembers(ids) {
+    const next = ids ? new Set(ids) : EMPTY_IDS;
+    if (sameIdSet(this.selectedMemberIds, next)) return;
+    this.selectedMemberIds = next.size === 0 ? EMPTY_IDS : next;
+  }
 
   startAxisEdit(state) { this.axisEditState = state; }
   // 入力中の出幅値だけ差し替える（窓位置・対象CLは不変）。
@@ -41,7 +54,7 @@ export class StructuralModeState {
   cancelAxisEdit() { this.axisEditState = null; }
 
   clearSelection() {
-    this.selectedEntityId = null;
+    this.selectedMemberIds = EMPTY_IDS;
     this.placementState   = null;
     this.axisEditState    = null;
   }

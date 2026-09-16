@@ -78,10 +78,16 @@ export function columnSectionSize(column) {
   return { width: sec?.width ?? COLUMN_FALLBACK_SIZE_MM, height: sec?.height ?? COLUMN_FALLBACK_SIZE_MM };
 }
 
+/** 下階柱の×が断面□からはみ出す比率（半幅・半成に掛ける倍率。1 なら×の端点は□の4隅ちょうど）。
+ *  ユーザー裁定2026-09-16「×をもう少し大きくして当該階柱□からでっぱるように」——同じ位置に自階柱□が
+ *  重なると×が□の輪郭に埋もれて下階柱の有無が読めないため、□の外まで対角線を延ばす。 */
+export const COLUMN_CROSS_OVERHANG_RATIO = 1.5;
+
 /** 柱の断面に乗せる対角線2本（×）のローカル座標（中心原点）。柱の rotation を持つ親 Group の中で使う想定。
- *  返り値は Konva Line 2本ぶんの points 配列 [[x1,y1,x2,y2], [x1,y1,x2,y2]]。 */
-export function columnCrossPointsLocal(width, height) {
-  const hw = width / 2, hh = height / 2;
+ *  返り値は Konva Line 2本ぶんの points 配列 [[x1,y1,x2,y2], [x1,y1,x2,y2]]。
+ *  端点は□の4隅を overhangRatio 倍（既定 COLUMN_CROSS_OVERHANG_RATIO）に延ばした位置＝□の外へ出る。 */
+export function columnCrossPointsLocal(width, height, overhangRatio = COLUMN_CROSS_OVERHANG_RATIO) {
+  const hw = width / 2 * overhangRatio, hh = height / 2 * overhangRatio;
   return [
     [-hw, -hh, hw, hh],
     [-hw, hh, hw, -hh],

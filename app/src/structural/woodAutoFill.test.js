@@ -1422,12 +1422,16 @@ test('【裁定】autoFillWoodFloorBeams: 候補に無い自動生成の床梁�
   assert.equal(graph.beamMap.has(autoOnly.id), false);
 });
 
-test('autoFillWoodFloorBeams: 床梁の端はhost（セルの両辺を作る大梁）の縁＋クリアランス(50mm)で止まる（coord1/coord2）', () => {
+test('autoFillWoodFloorBeams: 在来木造の床梁の端はhost（セルの両辺を作る大梁）の面まで伸びる（クリアランス0。ユーザー裁定2026-09-16「鉄骨造にあった隙間は不要」）（coord1/coord2）', () => {
   const { graph } = buildClosedCellGraph(TRADITIONAL_WOOD_STRUCTURE);
   const { created } = autoFillWoodFloorBeams(graph, PROJECT);
   const beam = created.find(b => Math.abs(b.axisValue - 1820) < 1);
-  const half = 120 / 2 + SECONDARY_BEAM_CLEARANCE_MM; // WOOD-120x120の縁+クリアランス
+  assert.equal(rulesFor(TRADITIONAL_WOOD_STRUCTURE).pinBeamEndClearanceMm, 0, '在来のクリアランスは0');
+  assert.equal(beam.pinEndClearanceMm, 0, '床梁自身が在来ルールのクリアランス0を解決する');
+  const half = 120 / 2; // WOOD-120x120の面（縁）まで＝クリアランス無し
   assert.deepEqual(beam.spanForColumns(graph.columns), { coord1: half, coord2: 2730 - half });
+  // 鉄骨造の既定（50mm）と異なることを明示——ルール値を変えれば端が動く（SECONDARY_BEAM_CLEARANCE_MM は既定値）。
+  assert.equal(SECONDARY_BEAM_CLEARANCE_MM, 50);
 });
 
 test('【失敗系】autoFillWoodFloorBeams: 同一軸上に既存の木造梁（primary/floor）が生成スパンと重なっていれば二重防御で生成しない（findBeamAnchorCL再利用時にspanKeyが別物になりすり抜ける事故の対策。実データmoku1.stqの壁下梁・頭つなぎとの二重梁の回帰）', () => {

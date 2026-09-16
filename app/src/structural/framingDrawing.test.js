@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import {
   FRAMING_MONO_COLOR, COLUMN_FALLBACK_SIZE_MM,
   framingColumnGroups, framingColor, framingColorOverride,
-  columnSectionSize, columnCrossPointsLocal, framingColumnLineWeight, showMemberTags, beamDepthMarks,
+  columnSectionSize, columnCrossPointsLocal, COLUMN_CROSS_OVERHANG_RATIO, framingColumnLineWeight, showMemberTags, beamDepthMarks,
   sillBandSpec, pickMembersOnFigure,
 } from './framingDrawing.js';
 import { rulesFor, TRADITIONAL_WOOD_STRUCTURE, UNSPECIFIED_STRUCTURE } from './structureRules.js';
@@ -211,11 +211,11 @@ test('sillBandSpec: halfはsillWidthMmの半分、weightは常にmedium（在来
   }
 });
 
-test('【失敗系】断面がカタログに無い柱は120角にフォールバックし、対角線2本の端点集合＝矩形4隅の集合', () => {
+test('【失敗系】断面がカタログに無い柱は120角にフォールバックし、対角線2本の端点集合＝矩形4隅を延長した集合（比率1なら4隅そのもの）', () => {
   for (const column of [{ sectionDefId: undefined }, { sectionDefId: 'NO-SUCH-SECTION' }, {}]) {
     const size = columnSectionSize(column);
     assert.deepEqual(size, { width: COLUMN_FALLBACK_SIZE_MM, height: COLUMN_FALLBACK_SIZE_MM });
-    const lines = columnCrossPointsLocal(size.width, size.height);
+    const lines = columnCrossPointsLocal(size.width, size.height, 1);
     assert.equal(lines.length, 2, '対角線は2本');
     const points = new Set();
     for (const [x1, y1, x2, y2] of lines) {
@@ -224,6 +224,24 @@ test('【失敗系】断面がカタログに無い柱は120角にフォール�
     }
     const h = COLUMN_FALLBACK_SIZE_MM / 2;
     const corners = new Set([`${-h},${-h}`, `${h},${h}`, `${-h},${h}`, `${h},${-h}`]);
-    assert.deepEqual(points, corners, '対角線2本の端点は矩形の4隅と一致するはず（式の写経ではなく意図の検査）');
+    assert.deepEqual(points, corners, '比率1の対角線2本の端点は矩形の4隅と一致するはず（式の写経ではなく意図の検査）');
   }
+});
+
+test('columnCrossPointsLocal: 既定（COLUMN_CROSS_OVERHANG_RATIO）では×の端点が□の4隅より外（はみ出す）にあり、対角線上に乗る', () => {
+  assert.ok(COLUMN_CROSS_OVERHANG_RATIO > 1, '既定比率は1超（□からでっぱる）');
+  const w = 120, h = 105;
+  const lines = columnCrossPointsLocal(w, h);
+  assert.equal(lines.length, 2);
+  for (const [x1, y1, x2, y2] of lines) {
+    for (const [x, y] of [[x1, y1], [x2, y2]]) {
+      assert.ok(Math.abs(x) > w / 2 && Math.abs(y) > h / 2, `端点(${x},${y})は□(±${w / 2},±${h / 2})の外`);
+      // 端点は□の対角線の延長上（|x|/|y| = w/h）にある＝×の向きが□と同じ。
+      assert.ok(Math.abs(Math.abs(x) / Math.abs(y) - w / h) < 1e-9, `端点(${x},${y})は□の対角線の延長上`);
+    }
+    // 2端点は原点対称（中心を通る1本の対角線）。
+    assert.equal(x1, -x2); assert.equal(y1, -y2);
+  }
+  // 2本は互いに別の対角線（同じ線を2回返していない）。
+  assert.notDeepEqual(lines[0], lines[1]);
 });
