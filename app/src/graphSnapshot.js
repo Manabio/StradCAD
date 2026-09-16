@@ -158,6 +158,7 @@ function buildSnapshot(graph) {
     floorDatum:          graph.floorDatum,
     structureOverride:   graph.structureOverride ?? null,
     wallFreshnessKey:    graph.wallFreshnessKey ?? null,
+    woodColumnWidthMm:   graph.woodColumnWidthMm ?? null,
     edges: graph.edges.map(e => ({
       key:        e.key,
       masterType: e.masterType ?? null,
@@ -813,6 +814,7 @@ function applySnapshot(graph, snapshot) {
     if (snapshot.floorDatum != null)  graph.setFloorDatum(snapshot.floorDatum);
     if (snapshot.structureOverride)   graph.setStructureOverride(snapshot.structureOverride);
     if (snapshot.wallFreshnessKey)    graph.setWallFreshnessKey(snapshot.wallFreshnessKey);
+    if (snapshot.woodColumnWidthMm != null) graph.setWoodColumnWidthMm(snapshot.woodColumnWidthMm);
     for (const k of snapshot.excludedColumnSlots  ?? []) graph.excludedColumnSlots.add(k);
     for (const k of snapshot.excludedBeamSlots    ?? []) graph.excludedBeamSlots.add(k);
     for (const k of snapshot.excludedFootingSlots ?? []) graph.excludedFootingSlots.add(k);

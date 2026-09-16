@@ -52,7 +52,7 @@ export const StructuralPanel = observer(function StructuralPanel({ project, grap
 
       {activeTab === 'common'
         ? <CommonInfoTab project={project} graph={graph} onStructureChanged={onStructureChanged} />
-        : <MemberListTab composition={composition} project={project} focusRequest={focusRequest} onToast={onToast} />}
+        : <MemberListTab composition={composition} project={project} focusRequest={focusRequest} onToast={onToast} onStructureChanged={onStructureChanged} />}
     </>
   );
 

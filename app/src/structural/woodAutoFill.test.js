@@ -824,6 +824,64 @@ test('【失敗系】conformWoodBacking: 在来木造以外（S造・2×4）は�
   }
 });
 
+// ---- 各階柱寸法（graph.woodColumnWidthMm。ステップ4 C-2）が柱・梁の材幅・壁下地材に追従する ----
+test('conformWoodSections/conformWoodBacking: graph.woodColumnWidthMm を105にすると柱・梁の材幅・下地材コードが105へ追従する', () => {
+  const { graph, x1, x2, y1 } = makeGridGraph();
+  graph.setWoodColumnWidthMm(105);
+  const c = graph.addColumn(StructuralMaterialType.WOOD, 'WOOD-120x120', x1, y1, {});
+  const b = graph.addBeam(StructuralMaterialType.WOOD, 'WOOD-120x240', y1, false, x1, x2, { role: 'primary' });
+  const updatedSections = conformWoodSections(graph, PROJECT);
+  assert.deepEqual(updatedSections.sort(), [c.id, b.id].sort());
+  assert.equal(c.sectionDefId, 'WOOD-105x105', '柱は105角へ');
+  assert.equal(b.sectionDefId, 'WOOD-105x240', '梁は材幅だけ105へ・成は保つ');
+  assert.deepEqual(conformWoodSections(graph, PROJECT), [], '2回目は変更なし');
+
+  const changed = conformWoodBacking(graph, PROJECT);
+  assert.deepEqual(changed.map(c2 => c2.field).sort(), ['exteriorWallBacking', 'interiorWallBacking']);
+  assert.equal(graph.exteriorWallBacking, WOOD_STUD_CODE_BY_SIZE['105x30'], '下地材コードも105寸へ追従');
+  assert.equal(graph.interiorWallBacking, WOOD_STUD_CODE_BY_SIZE['105x30']);
+});
+
+test('【失敗系】conformWoodSections/conformWoodBacking: graph.woodColumnWidthMm がカタログ外の幅（例100）なら無効として扱い、ルール既定（120角）で柱・梁・下地材ともそろえる（QA裁定: 無変化ではなく既定へフォールバック統一）', () => {
+  const { graph, x1, x2, y1 } = makeGridGraph();
+  graph.setWoodColumnWidthMm(100); // 90/105/120以外＝正角カタログに無い→無効
+  const c = graph.addColumn(StructuralMaterialType.WOOD, 'WOOD-105x105', x1, y1, {});
+  const b = graph.addBeam(StructuralMaterialType.WOOD, 'WOOD-105x240', y1, false, x1, x2, { role: 'primary' });
+  const updated = conformWoodSections(graph, PROJECT);
+  assert.deepEqual(updated.sort(), [c.id, b.id].sort(), 'カタログ外の階の値は無効＝ルール既定(120)へそろえ直す対象になる');
+  assert.equal(c.sectionDefId, 'WOOD-120x120');
+  assert.equal(b.sectionDefId, 'WOOD-120x240');
+  assert.deepEqual(conformWoodSections(graph, PROJECT), [], '2回目は変更なし（120で安定）');
+
+  const changed = conformWoodBacking(graph, PROJECT);
+  assert.deepEqual(changed.map(c2 => c2.field).sort(), ['exteriorWallBacking', 'interiorWallBacking']);
+  assert.equal(graph.exteriorWallBacking, WOOD_STUD_CODE_BY_SIZE['120x30'], '下地材コードもルール既定(120)へ');
+  assert.equal(graph.interiorWallBacking, WOOD_STUD_CODE_BY_SIZE['120x30']);
+});
+
+test('【失敗系】autoFillWoodColumns: graph.woodColumnWidthMm がカタログ外の幅（例100）でも新規柱はルール既定（120角）で生成される（conformとの不整合を作らない）', () => {
+  const { graph } = makeGridGraph();
+  graph.setWoodColumnWidthMm(100);
+  addBackingWall(graph, { axisValue: 2000, clStart: graph.gridXs[0], clEnd: graph.gridXs[1], isVertical: false });
+  addBackingWall(graph, { axisValue: 1000, clStart: graph.gridYs[0], clEnd: graph.gridYs[1], isVertical: true });
+  const { created } = fillWoodColumns(graph);
+  assert.ok(created.length > 0, '前提: 柱が生成される');
+  for (const c of created) assert.equal(c.sectionDefId, 'WOOD-120x120', 'カタログ外の階の値は無効＝新規柱もルール既定(120)になる');
+});
+
+test('【失敗系】conformWoodSections/conformWoodBacking: 在来木造以外は graph.woodColumnWidthMm を設定していても無変化', () => {
+  for (const structure of ['S造', '木造（2"×4"）']) {
+    const { graph, x1, x2, y1 } = makeGridGraph(structure);
+    graph.setWoodColumnWidthMm(105);
+    const c = graph.addColumn(StructuralMaterialType.WOOD, 'WOOD-120x120', x1, y1, {});
+    const b = graph.addBeam(StructuralMaterialType.WOOD, 'WOOD-120x120', y1, false, x1, x2, { role: 'primary' });
+    assert.deepEqual(conformWoodSections(graph, PROJECT), []);
+    assert.equal(c.sectionDefId, 'WOOD-120x120');
+    assert.equal(b.sectionDefId, 'WOOD-120x120');
+    assert.deepEqual(conformWoodBacking(graph, PROJECT), []);
+  }
+});
+
 test('不変条件: conformWoodBacking の呼び出し元は壁を直後に再生成する経路だけ（仕上げ突入境界／壁の再生成をFinishModeStateから独立させる計画のステップ4 wallRefresh.js）', async () => {
   // ステップ4以前は「構造再計算・反映経路は壁を再生成できないため下地材だけ変えると壁厚と
   // ズレる」という理由で仕上げ突入境界（finish/finishBoundary.js）だけに絞っていたが、

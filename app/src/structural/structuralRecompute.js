@@ -17,7 +17,7 @@ import {
 } from './structuralAutoFill.js';
 import { collectFloorGroups } from './memberNumbering.js';
 import { conformWoodSections, autoFillWoodBeamDepths } from './woodAutoFill.js';
-import { rulesFor, effectiveStructure } from './structureRules.js';
+import { rulesFor, effectiveStructure, beamColumnWidthMm } from './structureRules.js';
 import { conformToLedger } from './memberGroups.js';
 
 /**
@@ -50,6 +50,13 @@ export async function recomputeStructuralForGraph(targetGraph, project, mainStru
   // 壁由来の梁芯生成対象・木造梁成の下階柱（支持点）が使う1つ下の実体階のpeek。
   // どちらの用途も不要なら（RC造は自階のみ／非木造は梁成の算定自体が対象外）peekしない。
   const belowGraph = (ownRules.wallBeamAxes === 'selfAndBelow' || ownRules.framing) ? await peekBelowGraph(targetGraph, project) : null;
+  // 「梁を支える1つ下の実体階の柱寸」の派生値をgraph自身へ書く——この再計算が**唯一の書き込み元**
+  // （structural/structureRules.js beamColumnWidthMmのJSDoc参照）。採番パイプライン
+  // （collectFloorGroups/applyNumbers/renumberMembers）・UI（MemberListTab.jsx）・梁芯CL操作
+  // （transform/centerLineOps.js）はbelowGraphを持ち回らずこの派生値（resolvedBeamColumnWidthMm）
+  // だけを読む（QA指摘: 標準材の解決が採番パイプラインとUI同期経路で二系統に分かれ、タグが往復する
+  // バグの修正。ステップ4 C-2 QA4）。非永続フィールドのため保存はしない。
+  runInAction(() => targetGraph.setBeamColumnWidthMm(beamColumnWidthMm(targetGraph, belowGraph, project)));
   // 壁由来の梁芯生成対象（下階peekを含む非同期収集。wallGateと同じパターンで先に await する）。
   const wallSources = await collectWallBeamSources(targetGraph, project, belowGraph);
   // 在来木造（beamPlacement:'wallRuns'）の壁線上の通し梁が候補列挙に使う壁区間（マージ不要のプレーン配列。
@@ -77,9 +84,11 @@ export async function recomputeStructuralForGraph(targetGraph, project, mainStru
   const updatedBeamEcc = runInAction(() => autoFillBeamEccentricity(targetGraph, project));
   // 別フロアにいる間に主要構造が変更された等で取りこぼした柱・梁を、実効主構造に合わせて変換する。
   const { convertedColumns, convertedBeams, convertedFootings } = runInAction(() => convertMembersToEffectiveMaterial(targetGraph, project, mainStructure));
-  // 在来木造: 既存の柱・梁の断面を主構造ルール（柱120角・梁は柱同寸幅）へそろえる（手動固定も含む。ユーザー裁定2026-09-14）。
+  // 在来木造: 既存の柱・梁の断面を主構造ルール（柱120角・梁は「梁を支える1つ下の実体階の柱寸」幅）へ
+  // そろえる（手動固定も含む。ユーザー裁定2026-09-14／梁幅の下階参照は実機裁定ステップ4 C-2 QA2）。
   const conformedSections = runInAction(() => conformWoodSections(targetGraph, project));
-  // 在来木造: 大梁・小梁の成を支持区間ごとの梁成表引きで自動更新する（ステップ3d。dimensionStatus==='auto'のみ）。
+  // 在来木造: 大梁・小梁の成を支持区間ごとの梁成表引きで自動更新する（ステップ3d。dimensionStatus==='auto'のみ。
+  // 断面キー選定の材幅も同じ下階参照——上で書いたgraph.beamColumnWidthMmを内部で読む）。
   const updatedBeamDepths = runInAction(() => autoFillWoodBeamDepths(targetGraph, project, belowGraph?.columns ?? []));
   // 壁下地材（共通仕様の per-floor 設定。壁厚の情報源）はここでは触らない——壁は仕上げ脱出時の導出物で、
   // 構造再計算は壁を再生成できないため、ここで下地材だけ変えると「共通仕様は120×30なのに壁は90のまま」

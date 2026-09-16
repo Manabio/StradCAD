@@ -19,6 +19,7 @@
 import { STRUCTURES, STRUCTURE_PROFILES } from './structuralClassification.js';
 import { DEFAULT_SECTION_BY_MATERIAL, DEFAULT_COLUMN_SECTION_BY_MATERIAL, DEFAULT_BEAM_SECTION_BY_MATERIAL } from './memberCatalog.js';
 import { BackingClass } from '../finish/materials/backingClass.js';
+import { findSectionEntry, woodRectSectionKey, WOOD_SQUARE_WIDTHS } from './sectionCatalog.js';
 
 /** 主構造未指定を表す値（MAIN_STRUCTURE_OPTIONS[0]。core/structuralInfo.js の既定・FlatBuffers復元の既定もこれ）。 */
 export const UNSPECIFIED_STRUCTURE = '未定';
@@ -62,7 +63,11 @@ export const WOOD_BEAM_DEPTH_TABLE = Object.freeze({
 export const WOOD_DEPTH_BEAM_ROLES = Object.freeze(['primary', 'secondary', 'floor']);
 // 主要構造（部材の初期値・配置条件）。
 export const TRADITIONAL_WOOD_FRAMING = Object.freeze({
-  columnSection:   'WOOD-120x120', // 柱は120角が初期値（梁の材幅は柱同寸）
+  // 柱は120角が既定値（梁の材幅は柱同寸）。階ごとに graph.woodColumnWidthMm で上書きできる
+  // （「各階柱寸法」欄。ステップ4 C-2）——ここは未設定時のフォールバックにすぎない。
+  // 実際の解決は下記 woodColumnWidthMm/woodColumnSectionId を必ず経由すること
+  // （このフィールドを他所から直接読まない）。
+  columnSection:   'WOOD-120x120',
   ridgeSection:    'WOOD-120x120', // 棟木は120角
   purlinSection:   'WOOD-90x90',   // 母屋は90角
   hipBraceSection: 'WOOD-90x90',   // 火打ち梁は90角
@@ -283,6 +288,77 @@ export function effectiveStructure(graph, project = null) {
     // _structuralInfo。peek の一時グラフは全階共通の structGraph 経由）から建物全体値を引く。
     ?? graph?._structuralInfo?.mainStructure
     ?? graph?._structGraph?._structuralInfo?.mainStructure;
+}
+
+/**
+ * その階の在来木造の柱寸(mm)。graph.woodColumnWidthMm（「各階柱寸法」欄・ステップ4 C-2）が
+ * 木造正角のカタログ幅（sectionCatalog.js WOOD_SQUARE_WIDTHS＝90/105/120）に含まれるときだけ
+ * 採用し、それ以外（未設定 null・旧データや外部.stq由来のカタログ外の値）はルール既定
+ * （framing.columnSection の幅）にフォールバックする——QA裁定: カタログ外の階の値は
+ * 「無効＝既定として扱う」で一本化し、conformWoodSections（無変更）と新規生成（120角）の
+ * 不整合を作らない。在来木造以外（framing を持たない主構造）は柱寸という概念を持たないため常にnull。
+ * 柱・梁の材幅、壁下地材、梁成算定の材幅、壁の鮮度キー、非標準梁の個別採番はすべてこれ
+ * （または woodColumnSectionId）を経由して解決すること——framing.columnSection を直接読まない。
+ */
+export function woodColumnWidthMm(graph, project = null) {
+  const rules = rulesFor(effectiveStructure(graph, project));
+  if (!rules.framing) return null;
+  if (graph?.woodColumnWidthMm != null && WOOD_SQUARE_WIDTHS.includes(graph.woodColumnWidthMm)) return graph.woodColumnWidthMm;
+  return findSectionEntry(rules.framing.columnSection)?.width ?? null;
+}
+
+/**
+ * その階の在来木造の柱の正角断面キー（例 'WOOD-120x120'）。woodColumnWidthMm の幅をカタログの
+ * 正角断面へ変換する（カタログに無い幅は null）。在来木造以外は null。
+ */
+export function woodColumnSectionId(graph, project = null) {
+  const width = woodColumnWidthMm(graph, project);
+  return width != null ? woodRectSectionKey(width, width) : null;
+}
+
+/**
+ * その階の梁が参照すべき柱寸(mm)——「梁を支える柱」は伏図の帰属どおり1つ下の実体階の柱
+ * （structural-model.md「柱は自階の柱を自階graphに持つ。伏図慣習は図面合成で実現する」）なので、
+ * 梁の材幅・梁成算定の材幅・非標準梁の個別採番の標準材は graph 自身ではなく belowGraph の
+ * woodColumnWidthMm を参照する（実機裁定・ステップ4 C-2 QA2）。belowGraph が無い（最下階の
+ * 基礎伏図・屋根専用平面）か、belowGraph側が在来木造でない（解決不能）場合は graph 自身の値へ
+ * フォールバックする。柱自身の断面・壁下地材（conformWoodBacking）・壁の鍵は対象外
+ * （従来どおり graph 自身の woodColumnWidthMm を直接使う）。
+ * 呼び出し側は belowGraph として「自階の下の実体階」を渡すこと——編集可能peek経由の書き換え
+ * 直後に読む場合は floorSwapManager.flushEditablePeek() で保留中のデバウンス保存を確定してから
+ * fresh peek すること（stopEditablePeekと同じ「読む前に書く」規律。undo-redo.md参照）。
+ *
+ * **この関数（belowGraph引数を取る生の計算）を呼べるのは structural/structuralRecompute.js と
+ * structural/structuralOrchestration.js の下階編集経路だけ**（構造再計算が唯一の書き込み元。
+ * 下記 resolvedBeamColumnWidthMm 参照）。それ以外（採番パイプライン・UI・梁芯CL操作等の同期経路）は
+ * belowGraph を持ち回らずに済む resolvedBeamColumnWidthMm(graph, project) を使うこと——belowGraph
+ * 無しの同期経路でこの関数を直接呼ぶと常に自階の値へ落ち、下階の柱寸変更が反映されない
+ * （実機QA指摘: 標準材の解決が採番パイプラインとUIで二系統に分かれ、タグが往復するバグ。
+ * ステップ4 C-2 QA4で二系統を解消した）。
+ */
+export function beamColumnWidthMm(graph, belowGraph, project = null) {
+  const rules = rulesFor(effectiveStructure(graph, project));
+  if (!rules.framing) return null;
+  if (belowGraph) {
+    const belowWidth = woodColumnWidthMm(belowGraph, project);
+    if (belowWidth != null) return belowWidth;
+  }
+  return woodColumnWidthMm(graph, project);
+}
+
+/**
+ * standardBeamSectionFor（非標準梁の個別採番の標準材）・conformWoodSections（梁の材幅）・
+ * autoFillWoodBeamDepths（梁成算定の材幅）が読む**唯一の入口**。structural/structuralRecompute.js
+ * （と下階編集経路。structuralOrchestration.js）が再計算のたびに beamColumnWidthMm(graph, belowGraph,
+ * project) の結果を graph.beamColumnWidthMm（非永続の派生フィールド）へ書き込んだものをそのまま返す
+ * ——採番パイプライン（collectFloorGroups/applyNumbers/renumberMembers）・UI（MemberListTab.jsx）・
+ * 梁芯CL操作（transform/centerLineOps.js）は belowGraph を一切持ち回らない。
+ * 未再計算（graph.beamColumnWidthMm===null。文書未読込み直後・突入直後の一瞬など）の間は自階の
+ * woodColumnWidthMm で暫定する——次の再計算で正しい値に補正される（意図的な結果整合性。
+ * .claude/structural-model.md 参照）。
+ */
+export function resolvedBeamColumnWidthMm(graph, project = null) {
+  return graph?.beamColumnWidthMm ?? woodColumnWidthMm(graph, project);
 }
 
 /** 木造系（在来・2"×4"）か。 */

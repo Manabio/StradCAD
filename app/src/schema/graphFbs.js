@@ -27,7 +27,7 @@ const SIDE_DEC     = ['top', 'bottom', 'left', 'right'];
 // フィールドインデックス定数
 // ================================================================
 
-// GraphSnapshot (root): 48 フィールド
+// GraphSnapshot (root): 49 フィールド
 const GS = {
   CLS: 0, PTS: 1, WALLS: 2, DIAGS: 3, VLINES: 4, HLINES: 5, ARCS: 6, CIRCS: 7, DIMS: 8, ROOMS: 9, ROOM_ORDER: 10,
   // 11 は旧 INTERIOR_WALL_PANEL（内壁面材の per-floor 設定。部屋の壁材へ移行し廃止。slot 予約）
@@ -66,6 +66,8 @@ const GS = {
   SITE: 47,
   // 壁の鮮度キー（finish/wallFreshnessKey.js。per-floor。空文字=null=未計算）
   WALL_FRESHNESS_KEY: 48,
+  // 在来木造の各階柱寸法(mm)（per-floor。0=未設定=ルール既定。OP.HEIGHTと同じ規約）
+  WOOD_COLUMN_WIDTH_MM: 49,
 };
 
 // Stair: 15 フィールド
@@ -1684,7 +1686,7 @@ export function encode(snapshot) {
   const structuralInfoOff  = writeStructuralInfo(b, snapshot.structuralInfo);
   const siteOff = writeSite(b, snapshot.site);
 
-  b.startObject(49);
+  b.startObject(50);
   b.addFieldOffset(GS.CLS,        clVec,        0);
   b.addFieldOffset(GS.PTS,        ptVec,        0);
   b.addFieldOffset(GS.WALLS,      wallVec,      0);
@@ -1733,6 +1735,7 @@ export function encode(snapshot) {
   b.addFieldOffset(GS.ACTIVE_PLANE_ID,       sActivePlaneId,         0);
   b.addFieldOffset(GS.SITE,                  siteOff,                0);
   b.addFieldOffset(GS.WALL_FRESHNESS_KEY,    sWallFreshnessKey,      0);
+  b.addFieldFloat64(GS.WOOD_COLUMN_WIDTH_MM, snapshot.woodColumnWidthMm ?? 0, 0.0);
   const root = b.endObject();
 
   b.finish(root);
@@ -1797,5 +1800,6 @@ export function decode(bytes) {
     activePlaneId:       r.str(GS.ACTIVE_PLANE_ID) || null,
     site:                readSite(bb, r.nested(GS.SITE)),
     wallFreshnessKey:    r.str(GS.WALL_FRESHNESS_KEY) || null,
+    woodColumnWidthMm:   r.f64(GS.WOOD_COLUMN_WIDTH_MM) || null,
   };
 }

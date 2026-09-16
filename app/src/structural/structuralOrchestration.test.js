@@ -4,11 +4,14 @@
 // 経由の indexedDB アクセス）を要しないシナリオだけをここでは検証する（fixture方針は下記コメント参照）。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { runInAction } from 'mobx';
 import { Project, CenterLineType, Discipline, StructuralMaterialType } from '../core.js';
 import { undoManager } from '../undoManager.js';
 import { floorSwapManager } from '../storage/FloorSwapManager.js';
 import { generateRoomWallsFromOutline } from '../finish/wallGeneration.js';
-import { TRADITIONAL_WOOD_STRUCTURE } from './structureRules.js';
+import { TRADITIONAL_WOOD_STRUCTURE, rulesFor } from './structureRules.js';
+import { collectFloorGroups, totalCountOf, renumberMembers } from './memberNumbering.js';
+import { memberGroupKey } from './memberCatalog.js';
 import {
   recomputeStructuralComposition, reflectStructuralAfterFinishExit,
 } from './structuralOrchestration.js';
@@ -107,6 +110,157 @@ test('recomputeStructuralComposition: 下階編集経路は直前に立った下
   }
 });
 
+// ---- 実機裁定ステップ4 C-2 QA2: 「各階柱寸法」欄（下階graphのwoodColumnWidthMm）は
+// WoodColumnWidthSelectのonStructureChanged経由でrecomputeStructuralCompositionへ乗る。
+// mutateが下階（belowGraph）自身を書き換えるケース——柱グループのgraphは伏図慣習で「1つ下の実体階」
+// のため、この欄の変更は必ずbelowGraphを書き換える（.claude/structural-model.md参照）。 ----
+test('recomputeStructuralComposition【実機裁定ステップ4 C-2 QA2】: 下階の「各階柱寸法」を変えると下階柱・自階梁（下階柱寸参照）の断面が追従し、undoで断面・柱寸・部材番号のすべてが元に戻る', async () => {
+  const project = new Project('proj-c2-qa2', 'test');
+  const { graph: g1 } = project.addPlane(0, '1階', 'p1');    // 下階（belowGraph。柱グループの編集対象）
+  const { graph: g2 } = project.addPlane(3000, '2階', 'p2'); // 主題階（subjectGraph。梁は下階柱寸を参照）
+  g1.structureOverride = TRADITIONAL_WOOD_STRUCTURE;
+  g2.structureOverride = TRADITIONAL_WOOD_STRUCTURE;
+
+  // 通り芯（全階共通）は project.structGraph に置く——階固有graphへ直接addCenterLineすると、
+  // 通り芯はserializeGraphの階スナップショットから除外される（buildSnapshot: isStructCLは
+  // serializeStructCLs側でだけ復元する前提）ため、undo（restoreGraph）で消えてしまう
+  // （graphSnapshot.test.jsの「通り芯復元前にrestoreGraphすると壁が無音で失われる」と同種の落とし穴）。
+  const x0 = project.structGraph.addCenterLine(CenterLineType.VERTICAL,   0,    { labeled: true, discipline: Discipline.STRUCT });
+  const y0 = project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+  const x1 = project.structGraph.addCenterLine(CenterLineType.VERTICAL,   3640, { labeled: true, discipline: Discipline.STRUCT });
+  // 1階: 柱1本（既定120角のまま）。
+  const col1F = g1.addColumn(StructuralMaterialType.WOOD, 'WOOD-120x120', x0, y0, {});
+
+  // 2階: 梁1本（成240。材幅は「梁を支える1つ下の実体階＝1階」の柱寸を参照する対象）。
+  const beam2F = g2.addBeam(StructuralMaterialType.WOOD, 'WOOD-120x240', y0, false, x0, x1, { role: 'primary' });
+  // 成の自動更新（autoFillWoodBeamDepths、ステップ3d）を対象外にし、材幅だけの追従
+  // （conformWoodSections。dimensionStatusに関わらず書き換える）を単独で確認する。
+  beam2F.setDimensionStatus('locked');
+
+  const peekMap = { p1: g1, p2: g2 };
+  const originalPeek = floorSwapManager.peek;
+  floorSwapManager.peek = async (plane) => peekMap[plane.id] ?? null;
+  try {
+    const composition = { graphForCategory: () => g1 }; // 柱グループの欄が編集する graph（下階=1階）
+    const col1FNoBefore = col1F.memberNo;
+    const beam2FNoBefore = beam2F.memberNo;
+    const undoBefore = undoManager.peekUndo();
+
+    // WoodColumnWidthSelect.handleChange と同じ形の mutate（belowGraph自身を書き換える）。
+    await recomputeStructuralComposition(composition, g2, project, {
+      mutate: () => { g1.setWoodColumnWidthMm(105); },
+    });
+
+    assert.equal(g1.woodColumnWidthMm, 105);
+    assert.equal(col1F.sectionDefId, 'WOOD-105x105', '1階柱は105角へそろう（自階の値）');
+    assert.equal(beam2F.sectionDefId, 'WOOD-105x240', '2階梁は成240を保ったまま材幅だけ105へ（下階=1階の柱寸を参照。beamColumnWidthMm）');
+    assert.notEqual(undoManager.peekUndo(), undoBefore, 'undoエントリが1件積まれる');
+
+    undoManager.undo();
+    // restoreGraph は clear()→再構築のため、undo後は id で引き直す（保持していた古いJS参照は
+    // 置き換え前の実体を指したままになる。structuralOrchestration.test.js の既存パターン
+    // ＝QA F4テストの g1.columnMap.has(col3b.id) と同じ規律）。
+    const col1FAfterUndo = g1.columnMap.get(col1F.id);
+    const beam2FAfterUndo = g2.beamMap.get(beam2F.id);
+    assert.equal(g1.woodColumnWidthMm, null, 'undoで各階柱寸法（下階graphのwoodColumnWidthMm）が戻る');
+    assert.equal(col1FAfterUndo.sectionDefId, 'WOOD-120x120', 'undoで1階柱の断面が戻る');
+    assert.equal(beam2FAfterUndo.sectionDefId, 'WOOD-120x240', 'undoで2階梁の断面が戻る');
+    // 実機観測: 柱寸変更後にundoしても1階の柱番号（グループ表記）が変更前に戻っていなかった
+    // （belowGraphのbeforeスナップショットをmutate実行後に取っていたバグ。再発防止）。
+    assert.equal(col1FAfterUndo.memberNo, col1FNoBefore, 'undoで1階柱の部材番号も変更前に戻る');
+    assert.equal(beam2FAfterUndo.memberNo, beam2FNoBefore, 'undoで2階梁の部材番号も変更前に戻る');
+  } finally {
+    floorSwapManager.peek = originalPeek;
+  }
+});
+
+test('【失敗系・実機裁定ステップ4 C-2 QA2】recomputeStructuralComposition: 下階が無い（基礎伏図相当）場合は自階の値へフォールバックし梁幅が追従する', async () => {
+  const project = new Project('proj-c2-qa2-nobelow', 'test');
+  const { graph: g1 } = project.addPlane(0, '1階', 'p1');
+  g1.structureOverride = TRADITIONAL_WOOD_STRUCTURE;
+  const x0 = g1.addCenterLine(CenterLineType.VERTICAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+  const x1 = g1.addCenterLine(CenterLineType.VERTICAL, 3640, { labeled: true, discipline: Discipline.STRUCT });
+  const y0 = g1.addCenterLine(CenterLineType.HORIZONTAL, 0,  { labeled: true, discipline: Discipline.STRUCT });
+  const beam1F = g1.addBeam(StructuralMaterialType.WOOD, 'WOOD-120x240', y0, false, x0, x1, { role: 'primary' });
+  beam1F.setDimensionStatus('locked'); // 材幅だけの追従を単独で確認する（成の自動更新3dは対象外にする）
+
+  await recomputeStructuralComposition(noBelowComposition, g1, project, {
+    mutate: () => { g1.setWoodColumnWidthMm(105); },
+  });
+
+  assert.equal(beam1F.sectionDefId, 'WOOD-105x240', '下階が無ければ自階の値へフォールバックする（beamColumnWidthMmの規約）');
+});
+
+// ---- 実機再確認（moku1・2階伏図）QA3: undo/redoでentity.memberNoはrestoreGraphで戻るが、
+// 建物全体の採番索引（project.memberNumberIndex。非永続キャッシュ）は作り直されないため、
+// 構造リストのバッジ表示（floorSpanLabel/totalCountOf。例「1~3F・計106本」）が復元後の実体と
+// 食い違って残る（実機観測: undo後に柱グループのバッジが変更前に戻らない・梁グループのバッジが消える）----
+test('recomputeStructuralComposition【実機裁定ステップ4 C-2 QA3】: undoで採番索引（floorRanks・counts）が変更前と一致し、redoで変更後と一致する', async () => {
+  const project = new Project('proj-c2-qa3', 'test');
+  const { graph: g1 } = project.addPlane(0, '1階', 'p1');    // 下階（belowGraph）
+  const { graph: g2 } = project.addPlane(3000, '2階', 'p2'); // 主題階（subjectGraph）
+  const { graph: g3 } = project.addPlane(6000, '3階', 'p3'); // composition対象外（undoで一切触れない階）
+  g1.structureOverride = TRADITIONAL_WOOD_STRUCTURE;
+  g2.structureOverride = TRADITIONAL_WOOD_STRUCTURE;
+  g3.structureOverride = TRADITIONAL_WOOD_STRUCTURE;
+  project.activePlaneId = 'p2';
+
+  const x0 = project.structGraph.addCenterLine(CenterLineType.VERTICAL,   0,    { labeled: true, discipline: Discipline.STRUCT });
+  const y0 = project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+  const y1 = project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: true, discipline: Discipline.STRUCT });
+
+  // 1〜3階すべてに同じ「WOOD-120x120」柱グループへ寄与する柱を置く（建物全体スパン表記
+  // "1~3F"の再現に3階分が要る。3階はcompositionのbelowGraphではない＝undoで一切restoreGraphされない）。
+  const col1F = g1.addColumn(StructuralMaterialType.WOOD, 'WOOD-120x120', x0, y0, {});
+  g2.addColumn(StructuralMaterialType.WOOD, 'WOOD-120x120', x0, y1, {});
+  g3.addColumn(StructuralMaterialType.WOOD, 'WOOD-120x120', x0, y0, {});
+
+  // モード境界の反映パス（reflectStructuralToOtherFloors）が構造モード突入時に必ず先に建物全体を
+  // 収集済み、という前提を再現する（ここでは直接collectFloorGroupsで模す。3階は今回のundo/redoで
+  // 一切触れない階として、その寄与が索引に残ったまま試験する）。
+  runInAction(() => {
+    collectFloorGroups(g1, project);
+    collectFloorGroups(g2, project);
+    collectFloorGroups(g3, project);
+  });
+  const groupKey = memberGroupKey(col1F, 'columnMap', rulesFor(TRADITIONAL_WOOD_STRUCTURE));
+  const groupBefore = project.memberNumberIndex.get(groupKey);
+  assert.ok(groupBefore, '前提: 1階柱が属する柱グループが索引に存在する');
+  const floorRanksBefore = [...groupBefore.floorRanks].sort();
+  const countBefore = totalCountOf(groupBefore);
+  assert.deepEqual(floorRanksBefore, [0, 1, 2], '前提: 1〜3階すべてが同じ柱グループに寄与している（"1~3F"相当）');
+  assert.equal(countBefore, 3);
+
+  const peekMap = { p1: g1, p2: g2, p3: g3 };
+  const originalPeek = floorSwapManager.peek;
+  floorSwapManager.peek = async (plane) => peekMap[plane.id] ?? null;
+  try {
+    const composition = { graphForCategory: () => g1 };
+    await recomputeStructuralComposition(composition, g2, project, {
+      mutate: () => { g1.setWoodColumnWidthMm(105); },
+    });
+
+    // 変更直後: 1階の柱が別グループ（105×105）へ移るため、「120×120」グループは2〜3階だけに縮む
+    // （実機観測どおり "1~3F・計106本" → "2~3F・計72本" 相当の変化）。
+    const groupDuring = project.memberNumberIndex.get(groupKey);
+    assert.deepEqual([...groupDuring.floorRanks].sort(), [1, 2], '前提: 変更直後は1階が抜けて2~3階だけになる');
+    assert.equal(totalCountOf(groupDuring), 2);
+
+    undoManager.undo();
+    const groupAfterUndo = project.memberNumberIndex.get(groupKey);
+    assert.ok(groupAfterUndo, 'undo後に「120×120」柱グループの索引エントリが存在する（実機観測: 梁グループのバッジが消えた不具合の回帰防止）');
+    assert.deepEqual([...groupAfterUndo.floorRanks].sort(), floorRanksBefore, 'undoで索引のfloorRanksが変更前と一致する（バッジ表示の食い違いの回帰防止）');
+    assert.equal(totalCountOf(groupAfterUndo), countBefore, 'undoで索引のcountsが変更前と一致する');
+
+    undoManager.redo();
+    const groupAfterRedo = project.memberNumberIndex.get(groupKey);
+    assert.deepEqual([...groupAfterRedo.floorRanks].sort(), [1, 2], 'redoで索引のfloorRanksが変更後と一致する');
+    assert.equal(totalCountOf(groupAfterRedo), 2, 'redoで索引のcountsが変更後と一致する');
+  } finally {
+    floorSwapManager.peek = originalPeek;
+  }
+});
+
 // ---- reflectStructuralAfterFinishExit ----
 // runStructuralModeSetup（syncRoofPlane→collectRoofPlaneGroupsが屋根専用平面をfloorSwapManager.peekし、
 // indexedDBに到達する。fake-indexeddb等のIDBモックは本リポジトリの devDependencies に無く新規依存の追加は
@@ -146,4 +300,257 @@ test('【不変条件・ソース走査】structuralOrchestration.js: 下階編�
     'aboveColumnsForBelow が subjectGraph.columns（メモリ上）から来ていない（誤ってpeekしている可能性）');
   assert.ok(/belowWallSegments\s*=\s*wallRunSegments\(belowGraph, belowBelowGraph, belowStructure\)/.test(src),
     'belowWallSegments が wallRunSegments(belowGraph, belowBelowGraph, belowStructure) から来ていない');
+});
+
+// ---- 実機再QA指摘1: 標準材の解決が採番パイプライン（collect/apply）とUI同期経路（renumberMembers・
+// MemberListTab.jsx・transform/centerLineOps.js）で二系統に分かれ、下階の柱寸変更後に
+// renumberMembers を呼ぶとタグが分裂する実測バグ（105×120の梁が2G18のまま留まらず2G18〜2G26に分裂）。
+// 派生値方式（graph.beamColumnWidthMm）採用後は renumberMembers もこの派生値を読むだけになり、
+// 分裂しないことを確認する。----
+test('renumberMembers【実機裁定ステップ4 C-2 QA4】: 構造リストの編集（renumberMembers）は下階基準の標準材（graph.beamColumnWidthMm）を保つ——105×120の2本が同一タグのまま分裂しない', async () => {
+  const project = new Project('proj-c2-qa4', 'test');
+  const { graph: g1 } = project.addPlane(0, '1階', 'p1');    // 下階（各階柱寸法の編集対象）
+  const { graph: g2 } = project.addPlane(3000, '2階', 'p2'); // 主題階（構造リストを編集する階）
+  g1.structureOverride = TRADITIONAL_WOOD_STRUCTURE;
+  g2.structureOverride = TRADITIONAL_WOOD_STRUCTURE;
+  project.activePlaneId = 'p2';
+
+  const x0 = project.structGraph.addCenterLine(CenterLineType.VERTICAL,   0,    { labeled: true, discipline: Discipline.STRUCT });
+  const x1 = project.structGraph.addCenterLine(CenterLineType.VERTICAL,   3640, { labeled: true, discipline: Discipline.STRUCT });
+  const y0 = project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+  const y1 = project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: true, discipline: Discipline.STRUCT });
+  const y2 = project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 6000, { labeled: true, discipline: Discipline.STRUCT });
+
+  // 2階: 105×120（標準材＝柱寸105×梁成表の最小成120）×2 本＋105×330（非標準＝個別採番対象）×1本。
+  // 成の自動更新（ステップ3d）を対象外にして材幅の分類だけを確認する。
+  const beamStdA = g2.addBeam(StructuralMaterialType.WOOD, 'WOOD-105x120', y0, false, x0, x1, { role: 'primary' });
+  const beamStdB = g2.addBeam(StructuralMaterialType.WOOD, 'WOOD-105x120', y1, false, x0, x1, { role: 'primary' });
+  const beamNonStd = g2.addBeam(StructuralMaterialType.WOOD, 'WOOD-105x330', y2, false, x0, x1, { role: 'primary' });
+  for (const b of [beamStdA, beamStdB, beamNonStd]) b.setDimensionStatus('locked');
+
+  const peekMap = { p1: g1, p2: g2 };
+  const originalPeek = floorSwapManager.peek;
+  floorSwapManager.peek = async (plane) => peekMap[plane.id] ?? null;
+  try {
+    const composition = { graphForCategory: () => g1 }; // 「各階柱寸法」欄が編集するgraph（下階=1階）
+    // 突入時相当の再計算: 1階の柱寸を105にした状態で2階を再計算し、graph.beamColumnWidthMm
+    // （下階=1階基準の派生値）を2階へキャッシュさせる。
+    await recomputeStructuralComposition(composition, g2, project, {
+      mutate: () => { g1.setWoodColumnWidthMm(105); },
+    });
+    assert.equal(g2.beamColumnWidthMm, 105, '前提: 2階の派生値（下階=1階の柱寸）が105になっている');
+    assert.equal(beamStdA.memberNo, beamStdB.memberNo, '前提: 105×120の2本は同一タグ（標準材として1グループ）');
+    assert.notEqual(beamStdA.memberNo, beamNonStd.memberNo, '前提: 105×330は個別採番対象で別タグ');
+
+    // 「構造リストの編集」相当（分割・統合・手動タグ解除・部材追加/削除はいずれもrenumberMembersを呼ぶ）。
+    runInAction(() => renumberMembers(g2, project, 'beamMap'));
+
+    assert.equal(beamStdA.memberNo, beamStdB.memberNo,
+      'renumberMembers後も105×120の2本は同一タグのまま分裂しない（実機観測: 2G18が2G18〜2G26に分裂したバグの回帰防止）');
+    assert.notEqual(beamStdA.memberNo, beamNonStd.memberNo, '105×330（個別採番対象）は引き続き標準材の2本とは別タグ');
+  } finally {
+    floorSwapManager.peek = originalPeek;
+  }
+});
+
+// ---- 実機再QA指摘2→再QA指摘4: 建物全体の非アクティブ階を同時にメモリ上へ展開し続ける実装
+// （collectで得たtempをそのままapplyまで保持）は同時展開の階数が増えるため撤回した——保持するのは
+// collectフェーズで求めた beamColumnWidthMm（数値のみ）だけにし、applyMemberNumbersToFloor は
+// 従来どおり都度fresh peekし直してから、保存しておいた数値を書き戻してapplyNumbersを呼ぶ
+// （collect時点の標準材判定をapply側でも再現する）。----
+test('【不変条件・実機再QA指摘4】structuralOrchestration.js: applyMemberNumbersToFloor は都度peekし、保存された beamColumnWidthMm 数値を書き戻してから applyNumbers を呼ぶ（tempインスタンスを跨いで保持しない）', async () => {
+  const fs = await import('node:fs');
+  const path = await import('node:path');
+  const url = await import('node:url');
+  const here = path.dirname(url.fileURLToPath(import.meta.url));
+  const src = stripComments(fs.readFileSync(path.join(here, 'structuralOrchestration.js'), 'utf8'));
+  const fnMatch = /async function applyMemberNumbersToFloor\(plane, tags, project, beamColumnWidthMmValue\) \{([\s\S]*?)\r?\n\}/.exec(src);
+  assert.ok(fnMatch, 'applyMemberNumbersToFloor(plane, tags, project, beamColumnWidthMmValue)（数値を引数で受け取る宣言）が見つからない');
+  const body = fnMatch[1];
+  assert.ok(/floorSwapManager\.peek\(/.test(body), 'applyMemberNumbersToFloor が fresh peek していない（tempインスタンスを跨いで保持する実装に戻っている）');
+  assert.ok(/setBeamColumnWidthMm\(beamColumnWidthMmValue\)/.test(body), 'applyMemberNumbersToFloor が保存済みの beamColumnWidthMm 数値を書き戻していない（standardBeamSectionFor の判定がcollect時点と食い違う。コメントアウトされている可能性）');
+  // 呼び出し側（reflectStructuralToOtherFloors/reflectStructuralAfterFinishExit）が temp インスタンス自体
+  // ではなく temp.beamColumnWidthMm（数値）だけを保持していること（同時展開を1階分に戻す配線側の固定）。
+  assert.ok(/beamColumnWidthByPlaneId\.set\(plane\.id, temp\.beamColumnWidthMm\)/.test(src),
+    'reflectStructuralToOtherFloorsがtempインスタンス自体を保持している（beamColumnWidthMm数値だけを保持する規律に反する）');
+  assert.ok(/touched\.push\(\{ plane: planes\[i\], beamColumnWidthMm: temp\.beamColumnWidthMm \}\)/.test(src),
+    'reflectStructuralAfterFinishExitがtempインスタンス自体を保持している（beamColumnWidthMm数値だけを保持する規律に反する）');
+});
+
+// ---- 実機再QA指摘3: mutate指定時、自階（subjectGraph）自身の再計算が内部で行う下階へのfresh peek
+// （floorSwapManagerは毎回IDBから読む）が、mutateで書き換えた下階の編集可能peekのデバウンス保存
+// （最大400ms）未反映のまま古い値を読んでしまう競合を、flushEditablePeek()で解消している。
+// 自階再計算（recomputeStructuralForGraphの呼び出し＝下階へのfresh peekを含む）より前に
+// ちょうど1回awaitされることをスパイで固定する。----
+test('recomputeStructuralComposition【実機裁定ステップ4 C-2 QA3】: mutate指定時はflushEditablePeekを自階再計算（下階へのfresh peekを含む）より前に1回awaitする', async () => {
+  const project = new Project('proj-c2-qa3-flush', 'test');
+  const { graph: g1 } = project.addPlane(0, '1階', 'p1');
+  const { graph: g2 } = project.addPlane(3000, '2階', 'p2');
+  g1.structureOverride = TRADITIONAL_WOOD_STRUCTURE;
+  g2.structureOverride = TRADITIONAL_WOOD_STRUCTURE;
+
+  const calls = [];
+  const originalFlush = floorSwapManager.flushEditablePeek;
+  const originalPeek = floorSwapManager.peek;
+  const peekMap = { p1: g1, p2: g2 };
+  floorSwapManager.flushEditablePeek = () => { calls.push('flush'); return Promise.resolve(); };
+  floorSwapManager.peek = async (plane) => { calls.push(`peek:${plane.id}`); return peekMap[plane.id] ?? null; };
+  try {
+    const composition = { graphForCategory: () => g1 };
+    await recomputeStructuralComposition(composition, g2, project, {
+      mutate: () => { g1.setWoodColumnWidthMm(105); },
+    });
+    assert.equal(calls.filter(c => c === 'flush').length, 1, 'flushEditablePeekがちょうど1回呼ばれる');
+    assert.equal(calls[0], 'flush', 'flushEditablePeekが最初（下階へのfresh peekより前）に呼ばれる');
+    assert.ok(calls.slice(1).some(c => c.startsWith('peek:')), '前提: flush後に少なくとも1回はpeekが呼ばれる（自階再計算の下階peek）');
+  } finally {
+    floorSwapManager.flushEditablePeek = originalFlush;
+    floorSwapManager.peek = originalPeek;
+  }
+});
+
+// ---- 実機再々QA指摘1: reflectStructuralToOtherFloors はアクティブ階を recomputeStructuralForGraph
+// （structuralRecompute.js）経由しない「収集だけ」の軽量経路のため、beamColumnWidthMm（下階基準の
+// 派生値）を誰も書かない窓ができる——文書読込み直後・構造モードのままの階切替直後
+// （runStructuralModeSetupがこのreflectをrecomputeStructuralCompositionより前に呼ぶ）は
+// アクティブ階が未再計算=nullのまま自階フォールバックでcollect/applyが走り、標準材の判定が
+// 一瞬だけ自階基準へずれる（実機観測: moku1・1階=105・アクティブ2階で、突入直後の反映パスで
+// 105×120×9本が2G18〜2G26へ分裂→直後の自階再計算で2G18へ戻る）。----
+// コメントを除去してから走査する（memberCatalog.test.js/structureRules.test.js の scanOffenders と
+// 同じ方針）——コメントアウトで実装を無効化した変異（mutation test）でも赤くなるようにするため、
+// 行コメント（`// …`）・ブロックコメント行（先頭`*`／`/*`）の内容は判定対象から除く。
+function stripComments(src) {
+  return src.split(/\r?\n/)
+    .map(line => (line.trim().startsWith('*') || line.trim().startsWith('/*')) ? '' : line.replace(/\/\/.*$/, ''))
+    .join('\n');
+}
+
+test('【不変条件・実機再々QA指摘1】structuralOrchestration.js: reflectStructuralToOtherFloors はアクティブ階の collectFloorGroups の直前に beamColumnWidthMm の派生値を書く', async () => {
+  const fs = await import('node:fs');
+  const path = await import('node:path');
+  const url = await import('node:url');
+  const here = path.dirname(url.fileURLToPath(import.meta.url));
+  const src = stripComments(fs.readFileSync(path.join(here, 'structuralOrchestration.js'), 'utf8'));
+  // reflectStructuralToOtherFloors本体を抜き出し、その中で
+  // 「setBeamColumnWidthMm(...) の呼び出し」→「collectFloorGroups(project.activeGraph, project)」の順に
+  // 現れることを確認する（間に他の分岐が挟まっても良いが、setBeamColumnWidthMmが必ず先に実行される
+  // ソース上の位置関係を固定する）。
+  const fnMatch = /export async function reflectStructuralToOtherFloors\(project\) \{([\s\S]*?)\r?\n\}/.exec(src);
+  assert.ok(fnMatch, 'reflectStructuralToOtherFloors関数本体が見つからない');
+  const body = fnMatch[1];
+  const setIdx = body.search(/project\.activeGraph\.setBeamColumnWidthMm\(beamColumnWidthMm\(project\.activeGraph, belowForActive, project\)\)/);
+  const collectIdx = body.search(/collectFloorGroups\(project\.activeGraph, project\)/);
+  assert.notEqual(setIdx, -1, 'project.activeGraph.setBeamColumnWidthMm(beamColumnWidthMm(...)) が見つからない（コメントアウトされている可能性）');
+  assert.notEqual(collectIdx, -1, 'collectFloorGroups(project.activeGraph, project) が見つからない');
+  assert.ok(setIdx < collectIdx, 'setBeamColumnWidthMm が collectFloorGroups(project.activeGraph, ...) より後にある（順序が逆）');
+});
+
+// reflectStructuralToOtherFloors を直接呼ぶ挙動テスト（アクティブ階以外を実際に peek+recompute する）は
+// 本ファイル冒頭のコメント・reflectStructuralAfterFinishExit節のコメントと同じ理由（fake-indexeddb等の
+// IDBモックが本リポジトリのdevDependenciesに無く、非アクティブ階でchanged=trueになると
+// saveFloor→実indexedDBに到達しReferenceErrorになる）で断念し、上のソース走査（順序の固定）に留める。
+// 実データでの挙動確認は golden probe（moku1.stq。既存floorsを事前収束させてchanged=falseにしてから
+// reflectStructuralToOtherFloorsを呼び、saveFloorに到達しない状態で検証する）で行う——報告参照。
+
+// ---- 実機再々QA指摘2: resyncTouchedMemberGroups（undo/redo時の派生値再導出。:172,175付近）を
+// 梁でも固定する——柱だけでは派生値の書き込みが自明（本ステップ既存テスト参照）に埋もれて検出できない
+// ため、105×120の標準材グループがundo後もmemberNumberIndexで1グループのままであることを直接見る。----
+test('recomputeStructuralComposition【実機再々QA指摘2】: 1階=105（既存状態）で柱寸を変更→undoすると、memberNumberIndexで105×120の梁が再び1グループに戻る（resyncTouchedMemberGroupsの派生値再導出）', async () => {
+  const project = new Project('proj-c2-qa5-undo-beam', 'test');
+  const { graph: g1 } = project.addPlane(0, '1階', 'p1');    // 下階（各階柱寸法の編集対象。既に105＝ドキュメント読込み直後を模す）
+  const { graph: g2 } = project.addPlane(3000, '2階', 'p2'); // 主題階
+  g1.structureOverride = TRADITIONAL_WOOD_STRUCTURE;
+  g2.structureOverride = TRADITIONAL_WOOD_STRUCTURE;
+  g1.setWoodColumnWidthMm(105);
+  project.activePlaneId = 'p2';
+
+  const x0 = project.structGraph.addCenterLine(CenterLineType.VERTICAL,   0,    { labeled: true, discipline: Discipline.STRUCT });
+  const x1 = project.structGraph.addCenterLine(CenterLineType.VERTICAL,   3640, { labeled: true, discipline: Discipline.STRUCT });
+  const y0 = project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+  const y1 = project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: true, discipline: Discipline.STRUCT });
+  const y2 = project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 6000, { labeled: true, discipline: Discipline.STRUCT });
+
+  const beamStdA = g2.addBeam(StructuralMaterialType.WOOD, 'WOOD-105x120', y0, false, x0, x1, { role: 'primary' });
+  const beamStdB = g2.addBeam(StructuralMaterialType.WOOD, 'WOOD-105x120', y1, false, x0, x1, { role: 'primary' });
+  const beamNonStd = g2.addBeam(StructuralMaterialType.WOOD, 'WOOD-105x330', y2, false, x0, x1, { role: 'primary' });
+  for (const b of [beamStdA, beamStdB, beamNonStd]) b.setDimensionStatus('locked');
+
+  const peekMap = { p1: g1, p2: g2 };
+  const originalPeek = floorSwapManager.peek;
+  floorSwapManager.peek = async (plane) => peekMap[plane.id] ?? null;
+  try {
+    // 反映パス相当（1階=105が既に効いた状態を収集で確立する。既存QA3テストと同じ手法）。
+    runInAction(() => {
+      collectFloorGroups(g1, project);
+      g2.setBeamColumnWidthMm(105);
+      collectFloorGroups(g2, project);
+    });
+    const groupKeyStd = memberGroupKey(beamStdA, 'beamMap', rulesFor(TRADITIONAL_WOOD_STRUCTURE), 'WOOD-105x120');
+    const groupBefore = project.memberNumberIndex.get(groupKeyStd);
+    assert.ok(groupBefore, '前提: 1階=105の時点で105×120グループが索引に存在する');
+    assert.equal(totalCountOf(groupBefore), 2, '前提: 105×120グループは2本（標準材として1グループ）');
+
+    const composition = { graphForCategory: () => g1 };
+    // 柱寸法変更（105→120。標準材が変わり105×120は非標準＝個別採番へ移る）。
+    await recomputeStructuralComposition(composition, g2, project, {
+      mutate: () => { g1.setWoodColumnWidthMm(120); },
+    });
+    const groupDuring = project.memberNumberIndex.get(groupKeyStd);
+    assert.ok(!groupDuring || totalCountOf(groupDuring) < 2, '前提: 変更直後は標準材が120基準になり105×120グループが縮小/消滅する');
+
+    undoManager.undo();
+
+    const groupAfterUndo = project.memberNumberIndex.get(groupKeyStd);
+    assert.ok(groupAfterUndo, 'undo後に105×120グループの索引エントリが存在しない（resyncTouchedMemberGroupsが派生値を再導出できていない可能性）');
+    assert.equal(totalCountOf(groupAfterUndo), 2, 'undo後は105×120グループが2本へ戻る（分裂したまま復元されない不具合の回帰防止）');
+    assert.equal(beamStdA.memberNo, beamStdB.memberNo, 'undo後も105×120の2本は実体レベルでも同一タグ');
+  } finally {
+    floorSwapManager.peek = originalPeek;
+  }
+});
+
+// ---- 実機再々QA指摘3: 下階編集経路（belowGraph自身のbeamColumnWidthMm書き込み。:107付近）を
+// 3階建てで固定する——2階建てのテストではbelowGraph=1階（最下階）でbelowBelowGraph=nullのため
+// この書き込みが自明値（自階フォールバック）にしかならず、消しても検出できない。3階建てで
+// subject=3階・below=2階・belowBelow=1階にし、1階=105のとき2階自身の梁（105×120）が
+// 1グループのままであることを見る。----
+test('recomputeStructuralComposition【実機再々QA指摘3】: 3階建て（below=2階自身の梁がbelowBelow=1階の柱寸を参照）で105×120が1グループのまま', async () => {
+  const project = new Project('proj-c2-qa5-3f', 'test');
+  const { graph: g1 } = project.addPlane(0, '1階', 'p1');
+  const { graph: g2 } = project.addPlane(3000, '2階', 'p2'); // belowGraph（この階自身の梁が対象）
+  const { graph: g3 } = project.addPlane(6000, '3階', 'p3'); // subjectGraph
+  g1.structureOverride = TRADITIONAL_WOOD_STRUCTURE;
+  g2.structureOverride = TRADITIONAL_WOOD_STRUCTURE;
+  g3.structureOverride = TRADITIONAL_WOOD_STRUCTURE;
+  g1.setWoodColumnWidthMm(105); // 1階＝belowBelowGraph（既に105。ドキュメント読込み直後を模す）
+  project.activePlaneId = 'p3';
+
+  const x0 = project.structGraph.addCenterLine(CenterLineType.VERTICAL,   0,    { labeled: true, discipline: Discipline.STRUCT });
+  const x1 = project.structGraph.addCenterLine(CenterLineType.VERTICAL,   3640, { labeled: true, discipline: Discipline.STRUCT });
+  const y0 = project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+  const y1 = project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: true, discipline: Discipline.STRUCT });
+  const y2 = project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 6000, { labeled: true, discipline: Discipline.STRUCT });
+
+  // 2階自身の梁（belowGraphの梁。1階＝belowBelowGraphの柱寸105を参照して初めて「標準材」になる）。
+  const beamStdA = g2.addBeam(StructuralMaterialType.WOOD, 'WOOD-105x120', y0, false, x0, x1, { role: 'primary' });
+  const beamStdB = g2.addBeam(StructuralMaterialType.WOOD, 'WOOD-105x120', y1, false, x0, x1, { role: 'primary' });
+  const beamNonStd = g2.addBeam(StructuralMaterialType.WOOD, 'WOOD-105x330', y2, false, x0, x1, { role: 'primary' });
+  for (const b of [beamStdA, beamStdB, beamNonStd]) b.setDimensionStatus('locked');
+
+  const peekMap = { p1: g1, p2: g2, p3: g3 };
+  const originalPeek = floorSwapManager.peek;
+  floorSwapManager.peek = async (plane) => peekMap[plane.id] ?? null;
+  try {
+    // composition対象＝subject=3階、below=2階（各階柱寸法欄が編集する対象は3階の「1つ下」＝2階だが、
+    // ここでは2階の柱寸自体は変更しない——2階「自身の梁」が1階の柱寸を参照する経路だけを見る）。
+    const composition = { graphForCategory: () => g2 };
+    await recomputeStructuralComposition(composition, g3, project, {});
+
+    assert.equal(g2.beamColumnWidthMm, 105, '前提: 2階自身の派生値（belowBelow=1階の柱寸）が105になっている');
+    assert.equal(beamStdA.memberNo, beamStdB.memberNo,
+      '2階自身の105×120梁2本が同一タグのまま（下階編集経路のbelowGraph自身への書き込みが効いている）');
+    assert.notEqual(beamStdA.memberNo, beamNonStd.memberNo, '105×330（個別採番対象）は引き続き別タグ');
+  } finally {
+    floorSwapManager.peek = originalPeek;
+  }
 });

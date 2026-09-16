@@ -133,6 +133,22 @@ export class PlanGraph {
     // 計算した文字列。null = 未計算（旧データ・壁未生成）。ステップ1では書くだけで
     // 誰も比較しない（挙動ゼロ変化）。
     this.wallFreshnessKey    = null;
+    // 在来木造の各階柱寸法(mm)。null = 未設定（ルール既定＝structureRules.js
+    // TRADITIONAL_WOOD_FRAMING.columnSection の幅を使う）。非在来では読まれない。
+    // 解決は structural/structureRules.js の woodColumnWidthMm/woodColumnSectionId 経由
+    // （直接このフィールドを読まない。ステップ4 C-2）。
+    this.woodColumnWidthMm   = null;
+    // 梁が参照する「梁を支える1つ下の実体階の柱寸」の派生値(mm)。structural/structureRules.js の
+    // beamColumnWidthMm(graph, belowGraph, project) の結果を structuralRecompute.js（と下階編集経路。
+    // structuralOrchestration.js）が再計算のたびに書き込む——**唯一の書き込み元**。永続化しない
+    // （FlatBuffers/graphSnapshot.js には含めない。belowGraphは実体階の関係から毎回導出できる派生値の
+    // ため、保存対象にすると保存時点のbelowGraphと再生成時のbelowGraphが食い違いうる）。clear()で
+    // nullへ戻す。読み手は structural/structureRules.js の resolvedBeamColumnWidthMm(graph, project)
+    // 経由（未再計算=nullの間は自階のwoodColumnWidthMmで暫定する）——採番パイプライン
+    // （collectFloorGroups/applyNumbers/renumberMembers）・UI（MemberListTab.jsx）はこれだけを読み、
+    // belowGraphを持ち回らない（実機QA指摘: 標準材の解決が採番パイプラインとUI同期経路で二系統に
+    // 分かれ、タグが往復するバグの修正。ステップ4 C-2 QA4）。
+    this.beamColumnWidthMm   = null;
     // 建物全体の構造情報（Project.structuralInfo）への参照。Project が生成時にセットする
     // （peek の一時グラフは _structGraph 経由で辿る）。project が手元に無い描画・展開図の経路でも
     // 主構造ルール（structural/structureRules.js の effectiveStructure）を引くための後方参照。永続化しない。
@@ -224,6 +240,8 @@ export class PlanGraph {
       floorDatum:               observable,
       structureOverride:        observable,
       wallFreshnessKey:         observable,
+      woodColumnWidthMm:        observable,
+      beamColumnWidthMm:        observable,
       setExteriorWallBacking:   action,
       setInteriorWallBacking:   action,
       setCeilingBacking:        action,
@@ -233,6 +251,8 @@ export class PlanGraph {
       setFloorDatum:            action,
       setStructureOverride:     action,
       setWallFreshnessKey:      action,
+      setWoodColumnWidthMm:     action,
+      setBeamColumnWidthMm:     action,
       setColumnAxisOffset:  action,
       setCLEccentricity:    action,
       removeCLEccentricity: action,
@@ -412,6 +432,13 @@ export class PlanGraph {
   setStructureOverride(v) { this.structureOverride = v; }
   /** 壁の鮮度キー（finish/wallFreshnessKey.js）を設定する。壁再生成の直後に呼ぶ。 */
   setWallFreshnessKey(v) { this.wallFreshnessKey = v; }
+
+  /** 在来木造の各階柱寸法(mm)を設定する。null = ルール既定へ戻す。 */
+  setWoodColumnWidthMm(v) { this.woodColumnWidthMm = v; }
+
+  /** 「梁を支える1つ下の実体階の柱寸」の派生値(mm)を設定する。structuralRecompute.js（と下階編集経路）
+   *  が再計算のたびに書く非永続フィールド——他所から書かない。 */
+  setBeamColumnWidthMm(v) { this.beamColumnWidthMm = v; }
 
   /** 柱芯オフセット（CL id → 通り芯からの偏心量mm）を1件設定する。 */
   setColumnAxisOffset(clId, value) { this.columnAxisOffsets.set(clId, value); }
@@ -952,6 +979,8 @@ export class PlanGraph {
     this.floorDatum          = 0;
     this.structureOverride   = null;
     this.wallFreshnessKey    = null;
+    this.woodColumnWidthMm   = null;
+    this.beamColumnWidthMm   = null;
   }
 
   /** 交点を取得または生成する（restoreGraph の内部参照解決用）。*/

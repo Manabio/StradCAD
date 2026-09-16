@@ -65,7 +65,7 @@ function buildSquarePipes() {
 // 木造製材（幅×成）。正角材の幅（柱寸法の候補: 90/105/120。柱・棟木・火打ち・母屋・旧既定105角）ごとに、
 // 正角と「その幅 × 梁成表の成」（在来木造の梁は材幅＝柱同寸。structureRules.js WOOD_BEAM_DEPTH_TABLE）を
 // 直積で生成する——柱寸法を変えても同寸幅の梁断面が必ず引けるようにするため。
-const WOOD_SQUARE_WIDTHS = [90, 105, 120];
+export const WOOD_SQUARE_WIDTHS = [90, 105, 120];
 const WOOD_BEAM_DEPTHS = [120, 150, 180, 210, 240, 270, 300, 330, 360];
 
 // 幅ごとに正角＋（成>幅の）梁断面。キーは `WOOD-{幅}x{成}`。

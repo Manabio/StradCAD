@@ -72,6 +72,17 @@ test('wallFreshnessKey: structureOverride（実効主構造）を変えると鍵
   assert.ok(after.includes('col=WOOD-120x120'));
 });
 
+test('wallFreshnessKey【ステップ4 C-2a】: graph.woodColumnWidthMm（各階柱寸法）を変えると鍵のcol=が変わる', () => {
+  const graph = makeGraph();
+  graph.setStructureOverride(TRADITIONAL_WOOD_STRUCTURE);
+  const before = wallFreshnessKey(graph);
+  assert.ok(before.includes('col=WOOD-120x120'));
+  graph.setWoodColumnWidthMm(105);
+  const after = wallFreshnessKey(graph);
+  assert.notEqual(after, before);
+  assert.ok(after.includes('col=WOOD-105x105'));
+});
+
 test('wallFreshnessKey: 部屋の壁材（wallMaterial）を上書きすると鍵が変わる', () => {
   const graph = makeGraph();
   const room = makeRoom(graph);
@@ -181,7 +192,7 @@ test('【不変条件】wallFreshnessKey.js のソースは exteriorWallBacking�
 test('【不変条件】wallFreshnessKey.js は structural/structureRules.js 以外を import しない（材マスタ・wallGeneration非依存）', () => {
   const src = fs.readFileSync(path.resolve(import.meta.dirname, 'wallFreshnessKey.js'), 'utf8');
   const importLines = src.split(/\r?\n/).filter(l => /^import /.test(l));
-  assert.deepEqual(importLines, ["import { effectiveStructure, rulesFor } from '../structural/structureRules.js';"]);
+  assert.deepEqual(importLines, ["import { effectiveStructure, woodColumnSectionId } from '../structural/structureRules.js';"]);
 });
 
 test('【不変条件】finish/wallRegeneration.js は FinishModeState / modes/ / undoManager / floorSwapManager / .jsx / store.js を import しない', () => {

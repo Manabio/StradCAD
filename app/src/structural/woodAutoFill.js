@@ -13,7 +13,10 @@
 import { CenterLineType, Discipline, centerLineKind, columnSlotKey, spanKey, findHostPrimaryBeam } from '../core.js';
 import { CL_OVERLAP_TOL_MM } from '../core/constants.js';
 import { findSectionEntry, woodRectSectionKey } from './sectionCatalog.js';
-import { rulesFor, effectiveStructure, TRADITIONAL_WOOD_FRAMING, WOOD_DEPTH_BEAM_ROLES } from './structureRules.js';
+import {
+  rulesFor, effectiveStructure, TRADITIONAL_WOOD_FRAMING, WOOD_DEPTH_BEAM_ROLES,
+  woodColumnWidthMm, woodColumnSectionId, resolvedBeamColumnWidthMm,
+} from './structureRules.js';
 import { selfWallSegments, findBeamAnchorCL, wallBeamAxisExcludeKey, bracketExtent } from './wallBeamAxes.js';
 import { woodStudCodeFor } from '../finish/materials/backingClass.js';
 import { beamGridCells } from './framingCells.js';
@@ -159,10 +162,12 @@ export function autoFillWoodColumns(graph, project, wallGate = null, aboveColumn
 
   const existing = new Set(graph.columns.map(c => columnSlotKey(c.verticalCL, c.horizontalCL)));
   const created = [];
+  // ループ不変（各候補で同じ値）なのでループ外で1回だけ解決する。
+  const columnSection = woodColumnSectionId(graph, project) ?? rules.defaultSections.column;
   for (const [key, { verticalCL, horizontalCL }] of slots) {
     if (existing.has(key) || graph.excludedColumnSlots.has(key)) continue;
     if (wallGate && !wallGate.intersectionInBuilding(verticalCL, horizontalCL)) continue;
-    created.push(graph.addColumn(rules.baseMaterial, rules.defaultSections.column, verticalCL, horizontalCL, {}));
+    created.push(graph.addColumn(rules.baseMaterial, columnSection, verticalCL, horizontalCL, {}));
   }
   const removed = [];
   for (const column of [...graph.columnMap.values()]) {
@@ -481,19 +486,29 @@ export function autoFillWoodFloorBeams(graph, project) {
 
 /**
  * 在来木造の既存部材の断面を主構造ルールへそろえる（ユーザー裁定2026-09-14「全部置き換え（手動固定も含む）」）。
- *  - 柱（杭を除く木造）＝ framing.columnSection（120角）。
- *  - 梁（基礎梁を除く木造）＝ 材幅を柱同寸にし、成は現在の断面の成を保つ（正角105→正角120、105×240→120×240）。
+ *  - 柱（杭を除く木造）＝ woodColumnSectionId（階の柱寸の正角。「各階柱寸法」欄＝ステップ4 C-2。
+ *    未設定はルール既定の120角）。
+ *  - 梁（基礎梁を除く木造）＝ 材幅を「梁を支える1つ下の実体階の柱寸」（resolvedBeamColumnWidthMm。
+ *    実機裁定ステップ4 C-2 QA2「柱寸欄は柱カード、梁幅は柱寸転記——同一伏図内で整合させる」）にし、
+ *    成は現在の断面の成を保つ（正角105→正角120、105×240→120×240）。graph.beamColumnWidthMm が
+ *    未再計算（null）の間は自階の値へ暫定フォールバックする（resolvedBeamColumnWidthMm 自体の規約）。
  *    カタログに無い組み合わせ（断面が引けない・成が未収録）はそろえない（成を無言で縮めない）。
  *  dimensionStatus に関わらず書き換える（105角のまま残す選択肢は裁定で退けられた）——在来木造の柱寸は
  *  部材ごとの値ではなく階の値（「各階柱寸法」欄＝ステップ4）なので、再計算のたびに欄の値へそろう恒久ルール。
  *  在来以外（framing を持たない主構造）は何もしない。更新した部材idを返す。
+ * 呼び出し元（structuralRecompute.js・structuralOrchestration.js下階編集経路）が事前に
+ * graph.setBeamColumnWidthMm(beamColumnWidthMm(graph, belowGraph, project)) を書いてから呼ぶこと
+ * （QA指摘: belowGraphをここで直接引数に取ると同期経路ごとに belowGraph 解決が分かれる二系統に戻る）。
+ * @param {object} graph
+ * @param {object} project
  */
 export function conformWoodSections(graph, project) {
   const rules = rulesFor(effectiveStructure(graph, project));
   if (!rules.framing) return [];
-  const columnSection = rules.framing.columnSection;
+  const columnSection = woodColumnSectionId(graph, project);
   const columnWidth = findSectionEntry(columnSection)?.width;
   if (!columnWidth) return [];
+  const beamWidth = resolvedBeamColumnWidthMm(graph, project) ?? columnWidth;
   const updated = [];
   for (const column of graph.columns) {
     if (column.materialType !== rules.baseMaterial || column.role === 'foundation') continue;
@@ -505,7 +520,7 @@ export function conformWoodSections(graph, project) {
     if (beam.materialType !== rules.baseMaterial || beam.role === 'foundation') continue;
     const height = findSectionEntry(beam.sectionDefId)?.height;
     if (height == null) continue; // カタログ外の断面はそろえない
-    const key = woodRectSectionKey(columnWidth, Math.max(height, columnWidth));
+    const key = woodRectSectionKey(beamWidth, Math.max(height, beamWidth));
     if (key == null || beam.sectionDefId === key) continue;
     beam.setField('sectionDefId', key);
     updated.push(beam.id);
@@ -547,6 +562,9 @@ function alongCoordOnAxis(beam, x, y, tol) {
  *    dimensionStatus を問わず幅だけそろえるのとは意図的に非対称——柱寸法（幅）は階の値として恒久的に
  *    そろえる一方、成は支持・荷重の実況から決まる算定値のため、手動固定を上書きしない）。
  * 在来以外（framing を持たない主構造）・柱既定断面がカタログに無い場合は何もしない。更新した部材idを返す。
+ * 成の算定に使う材幅（カタログの断面キー選定）は「梁を支える1つ下の実体階の柱寸」
+ * （resolvedBeamColumnWidthMm。実機裁定ステップ4 C-2 QA2）——呼び出し元が事前に
+ * graph.setBeamColumnWidthMm(...) を書いてから呼ぶこと（conformWoodSectionsと同じ規律）。
  * @param {object} graph
  * @param {object} project
  * @param {Array|null} [belowColumns] - 1つ下の実体階の柱集合（呼び出し側が peekBelowGraph(graph,project).columns
@@ -556,7 +574,7 @@ function alongCoordOnAxis(beam, x, y, tol) {
 export function autoFillWoodBeamDepths(graph, project, belowColumns = []) {
   const rules = rulesFor(effectiveStructure(graph, project));
   if (!rules.framing) return [];
-  const columnWidth = findSectionEntry(rules.framing.columnSection)?.width;
+  const columnWidth = resolvedBeamColumnWidthMm(graph, project);
   if (!columnWidth) return [];
   const beams = graph.beams;
   const targets = beams.filter(b => b.materialType === rules.baseMaterial && WOOD_DEPTH_BEAM_ROLES.includes(b.role));
@@ -635,7 +653,7 @@ export function autoFillWoodBeamDepths(graph, project, belowColumns = []) {
  * 在来木造の共通仕様（per-floor）の壁下地材を「柱同寸×30」の間柱へ自動選択する
  * （仕様2026-09-14「壁厚が柱寸法と合っていない」→「在来木造は、共通仕様の壁下地材を柱同寸を自動選択」）。
  * 外壁下地（exteriorWallBacking。内外壁も同じ設定）・内壁下地（interiorWallBacking）の両方。
- * 柱寸法は主構造ルールの柱既定断面の幅（framing.columnSection）、見込みは backing.studDepthMm(30)。
+ * 柱寸法は woodColumnWidthMm（階の柱寸。未設定はルール既定の幅）、見込みは backing.studDepthMm(30)。
  * 表（backingClass.js WOOD_STUD_CODE_BY_SIZE）に無い柱寸は何もしない。在来以外は何もしない。
  * 呼び出し元は仕上げモード突入（finish/finishBoundary.js runFinishEntryBoundary）**だけ**——壁は仕上げ脱出時に
  * per-floor の下地材コードから壁厚を決めて全再生成される導出物なので、その直前に揃える。構造再計算
@@ -646,7 +664,7 @@ export function autoFillWoodBeamDepths(graph, project, belowColumns = []) {
 export function conformWoodBacking(graph, project) {
   const rules = rulesFor(effectiveStructure(graph, project));
   if (!rules.framing || !rules.backing) return [];
-  const columnWidth = findSectionEntry(rules.framing.columnSection)?.width;
+  const columnWidth = woodColumnWidthMm(graph, project);
   const code = columnWidth ? woodStudCodeFor(columnWidth, rules.backing.studDepthMm) : null;
   if (!code) return [];
   const changed = [];

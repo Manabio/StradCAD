@@ -9,7 +9,7 @@ import { serializeGraph, restoreGraph } from '../graphSnapshot.js';
 import { ERR_STRUCT_MAIN_UNSPECIFIED } from '../error.js';
 import { autoFillColumnsForStructure, autoFillColumnAxisOffsets, autoFillColumnSizes, resolveLowestGraph, convertMembersToEffectiveMaterial, deleteClassificationOverflow, UNSPECIFIED_STRUCTURE } from './structuralAutoFill.js';
 import { conformWoodSections } from './woodAutoFill.js';
-import { rulesFor } from './structureRules.js';
+import { rulesFor, effectiveStructure, beamColumnWidthMm } from './structureRules.js';
 import { collectWallBeamSources, autoFillWallBeamAxes, peekBelowGraph, wallRunSegments } from './wallBeamAxes.js';
 import { structureHasMemberKind, MEMBER_KIND } from './structuralClassification.js';
 import { buildStructuralWallGate } from './wallGate.js';
@@ -42,16 +42,29 @@ function reportRenumberToast(renumbered, onToast) {
 // 突入時（mutate なし）は自階 recompute の差分があるときだけ undo を積む（下階は表示用 peek＝undo 非対象。従来挙動を保持）。
 export async function recomputeStructuralComposition(composition, subjectGraph, project, { mutate, onToast } = {}) {
   const before = serializeGraph(subjectGraph);
-  if (mutate) runInAction(mutate);
-
   // 自階床下材＝subjectGraph、1つ下の階の柱＝belowGraph。基礎伏図（1つ下が無い）は belowGraph=null。
+  // mutate 実行前に解決する——mutate が下階（belowGraph）自身を書き換える操作（各階柱寸法の変更等。
+  // 実機裁定ステップ4 C-2 QA2）に対応するため、belowGraph の before スナップショットも mutate 前に
+  // 取っておく必要がある（後方の belowBefore 参照）。
   const belowGraph = composition.graphForCategory('columnMap');
+  const belowBeforeRaw = (mutate && belowGraph) ? serializeGraph(belowGraph) : null;
+  if (mutate) runInAction(mutate);
+  // mutate が下階の編集可能peek（belowGraph）を書き換えた場合、この直後の subjectGraph 自身の再計算
+  // （recomputeStructuralForGraph）が内部で行う下階への「別インスタンスの」fresh peek
+  // （floorSwapManager.peek は毎回IDBから読む・undo-redo.md）が、下階のデバウンス保存（最大400ms）
+  // 未反映のまま古い値を読んでしまう（実機観測: 各階柱寸法を変えた直後、同一伏図内の梁幅が
+  // 旧値のまま食い違って見える）。保留中のデバウンス保存を確定してから読ませる
+  // （flushEditablePeek。stopEditablePeekと同じ「読む前に書く」規律）。
+  if (mutate && belowGraph) await floorSwapManager.flushEditablePeek();
+
   const belowMainStructure = belowGraph
     ? belowGraph.structureOverride ?? project.structuralInfo.mainStructure
     : subjectGraph.structureOverride ?? project.structuralInfo.mainStructure;
 
   // 自階：自動補完・柱芯・材変換・材寸算定・採番の収集（structuralRecompute.js。undo 非依存の純計算）。
   // 番号の確定（assignNumbers/applyNumbers）はまだ行わない——下階分の収集も済んでから1回だけ行う。
+  // 自階の梁幅・梁成算定の材幅（beamColumnWidthMm）は内部で自前peekする下階graphを参照する
+  // （↑のflushEditablePeekにより最新値が読める）。
   const { changed } = await recomputeStructuralForGraph(subjectGraph, project, belowMainStructure);
 
   // 1つ下の階（構造伏図に映る柱の供給元）も実効主構造へ揃える。突入時は reflectStructuralToOtherFloors が
@@ -60,15 +73,20 @@ export async function recomputeStructuralComposition(composition, subjectGraph, 
   // 「主構造を変えても下階の柱が旧材のまま取り残される」不具合を解消する。convertMembersToEffectiveMaterial は
   // 既存の旧材を変換、autoFillColumns は未生成分を新材で生成する（差分のみ）。
   // 主構造変更時のみ下階の before/after を取り、自階と同じ undo エントリで一括復元する。
-  let belowBefore = null, belowAfter = null;
+  let belowBefore = belowBeforeRaw, belowAfter = null;
+  // belowGraphから見た「1つ下の実体階」（belowGraph自身の梁が参照するbeamColumnWidthMmにも使う。
+  // if(belowGraph)ブロックの外＝applyNumbers呼び出し側からも参照するため外側スコープに置く）。
+  let belowBelowGraph = null;
   if (belowGraph) {
     const belowGate = await buildStructuralWallGate(belowGraph.plane, project, subjectGraph);
     const belowLowestGraph = await resolveLowestGraph(project, belowGraph);
     const belowStructure = belowGraph.structureOverride ?? project.structuralInfo.mainStructure;
-    // belowGraphから見た「1つ下の実体階」。壁由来の梁芯生成（selfAndBelow＝在来木造のみ）と、在来木造の
-    // 壁線上の通し梁（3c）が候補列挙に使う壁区間の両方で使い回す（追加peek 0回——非在来はrulesFor条件が
-    // 効かずpeekしない。従来collectWallBeamSourcesが内部で自前peekしていたのと同じ条件をここへ括り出した）。
-    const belowBelowGraph = rulesFor(belowStructure).wallBeamAxes === 'selfAndBelow'
+    // 壁由来の梁芯生成（selfAndBelow＝在来木造のみ）と、在来木造の壁線上の通し梁（3c）が候補列挙に
+    // 使う壁区間の両方で使い回す（追加peek 0回——非在来はrulesFor条件が効かずpeekしない。従来
+    // collectWallBeamSourcesが内部で自前peekしていたのと同じ条件をここへ括り出した。wallBeamAxes
+    // ==='selfAndBelow' は rules.framing truthy と同じ集合＝在来木造のみのため、beamColumnWidthMm
+    // が要求する下々階もこの1回のpeekを共有してよい）。
+    belowBelowGraph = rulesFor(belowStructure).wallBeamAxes === 'selfAndBelow'
       ? await peekBelowGraph(belowGraph, project) : null;
     // 壁由来の梁芯CL（マージ済み・下階込み）。在来木造の壁交点柱はこのCLをアンカーにするため、柱より先に生成する
     //（structuralRecompute.js の主経路と同じ順序。自階だけの未マージ source で作ると extent の短いCLが永続化される）。
@@ -81,10 +99,14 @@ export async function recomputeStructuralComposition(composition, subjectGraph, 
     const aboveColumnsForBelow = subjectGraph.columns;
     // belowMainStructure 引数は軒桁(eaves)専用。通常階の下階に eaves は無いため自階の実効値で十分。
     const belowBelowMainStructure = belowGraph.structureOverride ?? project.structuralInfo.mainStructure;
-    if (mutate) belowBefore = serializeGraph(belowGraph);
     runInAction(() => {
       convertMembersToEffectiveMaterial(belowGraph, project, belowBelowMainStructure);
-      conformWoodSections(belowGraph, project); // 在来木造: 既存断面を主構造ルールへそろえる（structuralRecompute.js と同じ）
+      // belowGraph自身の梁が参照する「belowGraphを支える下々階」の柱寸の派生値を書く——
+      // structuralRecompute.js と同じ唯一の書き込み規律（structureRules.js beamColumnWidthMmの
+      // JSDoc参照。実機裁定ステップ4 C-2 QA2・QA4）。
+      belowGraph.setBeamColumnWidthMm(beamColumnWidthMm(belowGraph, belowBelowGraph, project));
+      // 在来木造: 既存断面を主構造ルールへそろえる（structuralRecompute.js と同じ）。
+      conformWoodSections(belowGraph, project);
       autoFillWallBeamAxes(belowGraph, belowWallSources);
       // 主構造変更で柱が「×」化した場合は、下階の柱を生成せず既存の自動柱を削除する（「×は削除/○は生成」）。
       // 柱の配置源（通り芯交点／壁交点）は主構造ルールで振り分ける（autoFillColumnsForStructure）。
@@ -118,13 +140,42 @@ export async function recomputeStructuralComposition(composition, subjectGraph, 
       () => {
         restoreGraph(subjectGraph, before);
         if (belowBefore) restoreGraph(belowGraph, belowBefore);
+        resyncTouchedMemberGroups(subjectGraph, belowGraph, belowBelowGraph, project);
       },
       () => {
         restoreGraph(subjectGraph, after);
         if (belowAfter) restoreGraph(belowGraph, belowAfter);
+        resyncTouchedMemberGroups(subjectGraph, belowGraph, belowBelowGraph, project);
       },
     );
   }
+}
+
+// undo/redo は restoreGraph でグラフの実体（entity.memberNo 含む）だけを戻すが、建物全体の採番索引
+// （project.memberNumberIndex。非永続キャッシュ）は作り直さない——直前に collectFloorGroups が
+// 積んだ「変更後」の floorRanks/counts が残ったままになり、構造リストのバッジ表示
+// （例「1~3F・計106本」）が復元後の実体と食い違う（実機観測: 各階柱寸法の変更後にundoしても
+// 柱グループのバッジが変更前に戻らない・材寸変更で消えた梁グループのバッジが復活しない）。
+// collectFloorGroups は対象planeの寄与だけを「洗い替え」する純粋な操作（他階のエントリには触れない
+// ——memberNumbering.js collectFloorGroups の設計）ため、今回のundo/redoで実体が変わった2階
+// （subjectGraph・belowGraph）だけを再収集すれば索引全体が正しく揃う。建物全体の反映パス
+// （reflectStructuralToOtherFloors）はここでは使わない——他階へのIDB peek/recompute/saveを伴い、
+// 触れていない階まで巻き込む重い操作のため（このundo/redoが変更したのはsubjectGraph・belowGraphの
+// 2階だけ）。
+// restoreGraph は graph.clear() を内部で呼ぶため、beamColumnWidthMm（非永続の派生フィールド）も
+// nullへ戻る——collectFloorGroups（standardBeamSectionFor経由でこの派生値を読む）を呼ぶ前に、
+// structuralRecompute.js と同じ規律で beamColumnWidthMm を書き直す（QA指摘4: 派生値方式を
+// undo/redoでも一貫させる。この関数もbeamColumnWidthMm(graph, belowGraph, project)を呼べる
+// 「下階編集経路」に含まれる）。
+function resyncTouchedMemberGroups(subjectGraph, belowGraph, belowBelowGraph, project) {
+  runInAction(() => {
+    subjectGraph.setBeamColumnWidthMm(beamColumnWidthMm(subjectGraph, belowGraph, project));
+    collectFloorGroups(subjectGraph, project);
+    if (belowGraph) {
+      belowGraph.setBeamColumnWidthMm(beamColumnWidthMm(belowGraph, belowBelowGraph, project));
+      collectFloorGroups(belowGraph, project);
+    }
+  });
 }
 
 // ---- 構造モード突入時のセットアップ（屋根平面同期・バインディング生成・再計算）----
@@ -184,19 +235,31 @@ export async function recomputeActiveStructural(project, pushUndo = true) {
 // （跨ぎフロア undo は単一アクティブ graph モデルでは扱えないため。削除の取消はベースライン保持で担保する）。
 // 採番は収集（conformToLedger + collectFloorGroups。structuralRecompute.js）のみ行い、番号の確定は
 // 呼び出し側（reflectStructuralToOtherFloors 等）が全階の収集後に1回だけ行う。
+// 戻り値の peek 済み graph（temp）はこの関数の呼び出し元だけが直後に使い、beamColumnWidthMm
+// （非永続の派生値。collect時点の値）を読み終えたら手放す——建物全体の非アクティブ階を同時に
+// メモリ上へ展開し続けるのは避け、常に「今処理している1階分」だけを生かす（QA指摘: apply側は
+// 別途fresh peekし直すため、collect側のtempを跨いで保持する必要が無い）。
 async function recomputeInactiveStructural(plane, project) {
   const temp = await floorSwapManager.peek(plane, project.structGraph);
   const mainStructure = temp.structureOverride ?? project.structuralInfo.mainStructure;
   const { changed } = await recomputeStructuralForGraph(temp, project, mainStructure);
   if (changed) await saveFloor(plane.id, serializeGraph(temp));
+  return temp;
 }
 
-// 採番パス2: 直前に収集済みの project.memberNumberIndex を使って plane 1つへ番号を適用し、
-// 変化があれば保存する（非アクティブ階を peek→適用→保存。全階を同時にメモリ展開しない）。
-async function applyMemberNumbersToFloor(plane, tags, project) {
+// 採番パス2: 直前に収集済みの project.memberNumberIndex を使って番号を適用し、変化があれば保存する。
+// graph は都度 fresh peek し直す（collect時に使ったtempインスタンスをここまで生かし続けない——
+// 同時に生きる非アクティブ階のgraphを常に1階分に戻すため。beamColumnWidthMmValueには collect
+// フェーズで求めた同じ階の派生値（下階の柱寸。数値または未解決null）を渡し、apply対象へ書き戻して
+// からapplyNumbersを呼ぶ——standardBeamSectionFor（groupKey算定）がこれを読むため、fresh peekした
+// graphへ書き戻さないとcollect時点の標準材と食い違ってタグが引けなくなる（QA指摘4）。
+async function applyMemberNumbersToFloor(plane, tags, project, beamColumnWidthMmValue) {
   const temp = await floorSwapManager.peek(plane, project.structGraph);
   let changed = false;
-  runInAction(() => { ({ changed } = applyNumbers(temp, project, tags)); });
+  runInAction(() => {
+    temp.setBeamColumnWidthMm(beamColumnWidthMmValue);
+    ({ changed } = applyNumbers(temp, project, tags));
+  });
   if (changed) await saveFloor(plane.id, serializeGraph(temp));
 }
 
@@ -217,6 +280,10 @@ async function applyMemberNumbersToFloor(plane, tags, project) {
 // 屋根専用平面には自階再計算（recomputeStructuralForGraph。mainStructureの解決に図面合成が要る）を
 // 素直には適用できないため、最低ラインとして「収集だけ」を常に行う（peekしたグラフは保存しない・
 // 番号も書き戻さない。実際の番号確定はユーザーが屋根伏図を直接訪れたときの通常経路に委ねる）。
+// 屋根専用平面の梁（role:'eaves'/'roof'）は WOOD_DEPTH_BEAM_ROLES に含まれず個別採番の対象外
+// （standardBeamSectionFor由来のgroupKeyがそもそも効かない）ため、beamColumnWidthMm（派生値）が
+// ここでは未再計算（null）のまま自階フォールバックになっても実害が無い——temp の使い捨て・
+// apply非対応（下記コメント）と合わせ、派生値方式でも変更不要のまま自然に揃う。
 async function collectRoofPlaneGroups(project) {
   const roofPlane = project.roofPlane;
   if (!roofPlane || roofPlane.id === project.activePlaneId) return; // アクティブなら既に収集済み
@@ -230,17 +297,40 @@ async function collectRoofPlaneGroups(project) {
 export async function reflectStructuralToOtherFloors(project) {
   const activeId = project.activePlaneId;
   runInAction(() => project.clearMemberNumberIndex());
-  if (project.activeGraph) runInAction(() => collectFloorGroups(project.activeGraph, project));
+  if (project.activeGraph) {
+    // アクティブ階はここでは recomputeStructuralForGraph（structuralRecompute.js）を経由しない
+    // 「収集だけ」の軽量経路のため、beamColumnWidthMm（下階基準の派生値）が誰にも書かれない窓が
+    // できる——文書読込み直後・構造モードのままの階切替直後（runStructuralModeSetupがこのreflectを
+    // recomputeStructuralCompositionより前に呼ぶ）は未再計算=nullのまま自階フォールバックで
+    // collect/applyが走り、直後の自階再計算で正しい値へ戻るまでの一瞬だけ標準材の判定が自階基準へ
+    // ずれる（実機観測: moku1・1階=105・アクティブ2階で、突入直後の反映パスで105×120×9本が
+    // 2G18〜2G26へ分裂→直後の自階再計算で2G18へ戻る。振り直しトースト8件が毎回発生し、
+    // オートセーブのタイミング次第で分裂した一時タグが保存されうる）。在来木造のときだけ下階を
+    // 1回peekして書いてから収集する（非在来はpeek 0回のまま）。
+    const activeRules = rulesFor(effectiveStructure(project.activeGraph, project));
+    if (activeRules.framing) {
+      const belowForActive = await peekBelowGraph(project.activeGraph, project);
+      runInAction(() => project.activeGraph.setBeamColumnWidthMm(beamColumnWidthMm(project.activeGraph, belowForActive, project)));
+    }
+    runInAction(() => collectFloorGroups(project.activeGraph, project));
+  }
+  // 収集フェーズで求めた beamColumnWidthMm（下階基準の派生値。数値のみ）だけを保持し、peek済み
+  // graphインスタンス自体は次のplaneへ進む前に手放す——建物全体の非アクティブ階を同時にメモリ上へ
+  // 展開し続けない（同時に生きる非アクティブ階のgraphは常に1階分に戻す）。適用フェーズは
+  // applyMemberNumbersToFloor が都度fresh peekし直し、保存しておいた数値を書き戻してから
+  // applyNumbersを呼ぶ。
+  const beamColumnWidthByPlaneId = new Map();
   for (const plane of project.planes) {
     if (plane.id === activeId) continue;
-    await recomputeInactiveStructural(plane, project);
+    const temp = await recomputeInactiveStructural(plane, project);
+    beamColumnWidthByPlaneId.set(plane.id, temp.beamColumnWidthMm);
   }
   await collectRoofPlaneGroups(project);
   const tags = assignNumbers(project);
   if (project.activeGraph) runInAction(() => applyNumbers(project.activeGraph, project, tags));
   for (const plane of project.planes) {
     if (plane.id === activeId) continue;
-    await applyMemberNumbersToFloor(plane, tags, project);
+    await applyMemberNumbersToFloor(plane, tags, project, beamColumnWidthByPlaneId.get(plane.id));
   }
 }
 
@@ -263,16 +353,16 @@ export async function reflectStructuralAfterFinishExit(currentPlaneId, goingToSt
   if (!goingToStructure) await recomputeActiveStructural(project);
   const planes = project.planes; // elevation 昇順
   const idx = planes.findIndex(p => p.id === currentPlaneId);
-  const touchedPlanes = [];
+  const touched = []; // { plane, beamColumnWidthMm }（数値のみ保持。graphインスタンスは手放す——上記コメント参照）
   if (idx !== -1) {
     for (let i = idx + 1; i < planes.length; i++) {
-      await recomputeInactiveStructural(planes[i], project);
-      touchedPlanes.push(planes[i]);
+      const temp = await recomputeInactiveStructural(planes[i], project);
+      touched.push({ plane: planes[i], beamColumnWidthMm: temp.beamColumnWidthMm });
     }
   }
   if (!goingToStructure) {
     const tags = assignNumbers(project);
     if (project.activeGraph) runInAction(() => applyNumbers(project.activeGraph, project, tags));
-    for (const plane of touchedPlanes) await applyMemberNumbersToFloor(plane, tags, project);
+    for (const { plane, beamColumnWidthMm: v } of touched) await applyMemberNumbersToFloor(plane, tags, project, v);
   }
 }

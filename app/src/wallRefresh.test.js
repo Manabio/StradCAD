@@ -95,6 +95,36 @@ test('refreshWallsAllFloors: 主構造（structureOverride）を変えると自�
   assert.equal(graph.walls.length, wallsBefore, 'undoで壁が変更前の本数に戻る');
 });
 
+// ---- 2b. 各階柱寸法（graph.woodColumnWidthMm。ステップ4 C-2）を変える→鍵不一致→壁が再生成され
+// 鍵が更新される。undoで壁・鍵が変更前へ戻る（主構造変更と同じ鮮度キー設計）----
+test('refreshWallsAllFloors: 各階柱寸法（graph.woodColumnWidthMm）を変えると自階の壁が再生成され鍵が更新される。undoで壁・鍵が変更前へ戻る', async () => {
+  const { project, graph } = makeSinglePlaneProject();
+  graph.structureOverride = TRADITIONAL_WOOD_STRUCTURE; // 在来木造をあらかじめ確定させておく（col=に柱寸が乗る前提）
+  addRectRoom(graph);
+  await seedInitialWalls(graph, project); // 前提: 一度は仕上げモードを通って壁を持った階にする（S4-1）
+  const wallsBefore = graph.walls.length;
+  assert.ok(wallsBefore > 0, '前提: 初期壁が生成されている');
+  const keyBefore = graph.wallFreshnessKey;
+  assert.ok(keyBefore.includes('col=WOOD-120x120'), '前提: 鍵に既定の柱寸（120角）が乗っている');
+  const undoBefore = undoManager.peekUndo();
+
+  graph.setWoodColumnWidthMm(105);
+  const result = await refreshWallsAllFloors(project, { pushUndo: true });
+
+  assert.deepEqual(result.changedPlaneIds, ['p1']);
+  assert.ok(graph.walls.length > 0, '壁が再生成されている');
+  assert.ok(graph.wallFreshnessKey?.includes('col=WOOD-105x105'), '鍵のcol=が105寸へ更新されている');
+  assert.notEqual(graph.wallFreshnessKey, keyBefore);
+
+  // 柱寸変更は壁交点柱・柱同寸下地材の再計算も伴うため、主構造変更と同じく最大2エントリになりうる
+  // （「1エントリで戻る」ではなく「正しく戻る」ことを確認する。上のstructureOverrideテストと同じ規律）。
+  let guard = 0;
+  while (undoManager.peekUndo() !== undoBefore && guard < 10) { undoManager.undo(); guard++; }
+  assert.ok(guard > 0 && guard <= 2, `想定内の件数（1〜2件）でundoスタックが変更前まで戻る（実際:${guard}件）`);
+  assert.equal(graph.wallFreshnessKey, keyBefore, 'undoで鍵が変更前に戻る');
+  assert.equal(graph.walls.length, wallsBefore, 'undoで壁が変更前の本数に戻る');
+});
+
 // ---- 3. 他階: 鍵不一致の非アクティブ階だけsaveFloorされる。一致階は保存されない ----
 test('refreshWallsAllFloors【他階】: 鍵不一致の非アクティブ階だけsaveFloorされ、鍵一致の階は保存されない', async () => {
   const project = new Project('proj', 'test');

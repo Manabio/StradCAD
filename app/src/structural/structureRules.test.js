@@ -10,6 +10,7 @@ import {
   rulesFor, isWoodStructure, isTraditionalWoodStructure, foundationOptionsFor, defaultMaterialFor, effectiveStructure,
   RC_FOUNDATION_OPTIONS, WOOD_FOUNDATION_OPTIONS, WOOD_FOUNDATION_BEAM,
   BACKING_RULES, BackingClass, backingRulesFor,
+  woodColumnWidthMm, woodColumnSectionId, beamColumnWidthMm, resolvedBeamColumnWidthMm,
 } from './structureRules.js';
 import { STRUCTURES, STRUCTURE_PROFILES } from './structuralClassification.js';
 import { DEFAULT_COLUMN_SECTION_BY_MATERIAL, DEFAULT_BEAM_SECTION_BY_MATERIAL, DEFAULT_SECTION_BY_MATERIAL } from './memberCatalog.js';
@@ -67,6 +68,96 @@ test('structureRules: 木造系（在来・2×4）の判定・基礎種別・基
   assert.equal(isTraditionalWoodStructure('木造（2"×4"）'), false, '2×4は在来ではない');
   assert.equal(rulesFor(TRADITIONAL_WOOD_STRUCTURE).wallBeamAxes, 'selfAndBelow', '在来だけ壁由来の梁芯を自階＋下階から生成');
   assert.equal(rulesFor('木造（2"×4"）').wallBeamAxes, null, '2×4は壁自体が構造体＝壁下に梁を入れない');
+});
+
+// ---- 各階柱寸法（ステップ4 C-2a）: woodColumnWidthMm/woodColumnSectionId ----
+test('woodColumnWidthMm/woodColumnSectionId: graph.woodColumnWidthMm 未設定は在来木造のルール既定（120角）', () => {
+  const graph = new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
+  graph.structureOverride = TRADITIONAL_WOOD_STRUCTURE;
+  assert.equal(woodColumnWidthMm(graph), 120);
+  assert.equal(woodColumnSectionId(graph), 'WOOD-120x120');
+});
+
+test('woodColumnWidthMm/woodColumnSectionId: graph.woodColumnWidthMm を設定すると階の値が優先される', () => {
+  const graph = new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
+  graph.structureOverride = TRADITIONAL_WOOD_STRUCTURE;
+  graph.setWoodColumnWidthMm(105);
+  assert.equal(woodColumnWidthMm(graph), 105);
+  assert.equal(woodColumnSectionId(graph), 'WOOD-105x105');
+});
+
+test('【失敗系】woodColumnWidthMm/woodColumnSectionId: 在来木造以外は graph.woodColumnWidthMm を設定していても常に null', () => {
+  for (const structure of ['木造（2"×4"）', 'S造', 'RC造(ラーメン)', UNSPECIFIED_STRUCTURE]) {
+    const graph = new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
+    graph.structureOverride = structure;
+    graph.setWoodColumnWidthMm(105);
+    assert.equal(woodColumnWidthMm(graph), null, structure);
+    assert.equal(woodColumnSectionId(graph), null, structure);
+  }
+});
+
+test('【失敗系】woodColumnWidthMm/woodColumnSectionId: カタログに無い幅（正角材90/105/120以外。例100）は無効として扱い、ルール既定（120角）へフォールバックする（QA裁定: conformWoodSectionsと新規生成の不整合を防ぐ）', () => {
+  const graph = new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
+  graph.structureOverride = TRADITIONAL_WOOD_STRUCTURE;
+  graph.setWoodColumnWidthMm(100);
+  assert.equal(woodColumnWidthMm(graph), 120, 'カタログ外の階の値は無効＝既定(120)を返す（生値100は返さない）');
+  assert.equal(woodColumnSectionId(graph), 'WOOD-120x120');
+});
+
+// ---- beamColumnWidthMm（実機裁定ステップ4 C-2 QA2「梁幅は支持する下階柱の柱寸」）----
+test('beamColumnWidthMm: belowGraphのwoodColumnWidthMmを優先する（梁を支える1つ下の実体階の柱寸）', () => {
+  const graph = new PlanGraph(new Plane('p1', 0, '2階', 2, 1));
+  const belowGraph = new PlanGraph(new Plane('p0', 0, '1階', 1, 1));
+  graph.structureOverride = TRADITIONAL_WOOD_STRUCTURE;
+  belowGraph.structureOverride = TRADITIONAL_WOOD_STRUCTURE;
+  belowGraph.setWoodColumnWidthMm(105);
+  graph.setWoodColumnWidthMm(90); // 自階の値は無視される（belowGraphが優先）
+  assert.equal(beamColumnWidthMm(graph, belowGraph), 105);
+});
+
+test('【失敗系】beamColumnWidthMm: belowGraphが無い（最下階の基礎伏図・屋根専用平面）場合は自階の値へフォールバックする', () => {
+  const graph = new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
+  graph.structureOverride = TRADITIONAL_WOOD_STRUCTURE;
+  graph.setWoodColumnWidthMm(105);
+  assert.equal(beamColumnWidthMm(graph, null), 105);
+  assert.equal(beamColumnWidthMm(graph, undefined), 105, 'belowGraph省略時も自階の値へフォールバック');
+});
+
+test('【失敗系】beamColumnWidthMm: belowGraphが在来木造でない（解決不能）場合も自階の値へフォールバックする', () => {
+  const graph = new PlanGraph(new Plane('p1', 0, '2階', 2, 1));
+  const belowGraph = new PlanGraph(new Plane('p0', 0, '1階', 1, 1));
+  graph.structureOverride = TRADITIONAL_WOOD_STRUCTURE;
+  belowGraph.structureOverride = 'S造'; // 下階が在来木造でない＝belowGraph側は柱寸という概念を持たない
+  graph.setWoodColumnWidthMm(105);
+  assert.equal(beamColumnWidthMm(graph, belowGraph), 105, '下階が解決不能なら自階の値へフォールバック');
+});
+
+test('【失敗系】beamColumnWidthMm: 自階（graph）が在来木造でなければbelowGraphの値に関わらず常にnull', () => {
+  const graph = new PlanGraph(new Plane('p1', 0, '2階', 2, 1));
+  const belowGraph = new PlanGraph(new Plane('p0', 0, '1階', 1, 1));
+  graph.structureOverride = 'S造';
+  belowGraph.structureOverride = TRADITIONAL_WOOD_STRUCTURE;
+  belowGraph.setWoodColumnWidthMm(105);
+  assert.equal(beamColumnWidthMm(graph, belowGraph), null, '自階が在来木造でなければ梁幅という概念を持たない');
+});
+
+// ---- resolvedBeamColumnWidthMm（実機QA指摘4: 標準材の解決を採番パイプライン・UI・梁芯CL操作で
+// 一本化する唯一の読み口。structuralRecompute.js が書いた graph.beamColumnWidthMm を読むだけで
+// belowGraph を引数に取らない）----
+test('resolvedBeamColumnWidthMm: graph.beamColumnWidthMm（構造再計算が書いた派生値）をそのまま返す', () => {
+  const graph = new PlanGraph(new Plane('p1', 0, '2階', 2, 1));
+  graph.structureOverride = TRADITIONAL_WOOD_STRUCTURE;
+  graph.setWoodColumnWidthMm(90); // 自階の値（無視されるはず）
+  graph.setBeamColumnWidthMm(105); // 構造再計算が書いた下階基準の派生値
+  assert.equal(resolvedBeamColumnWidthMm(graph), 105, '派生値が優先される（自階の値90ではない）');
+});
+
+test('【失敗系】resolvedBeamColumnWidthMm: graph.beamColumnWidthMmが未再計算（null）の間は自階のwoodColumnWidthMmで暫定する', () => {
+  const graph = new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
+  graph.structureOverride = TRADITIONAL_WOOD_STRUCTURE;
+  graph.setWoodColumnWidthMm(105);
+  assert.equal(graph.beamColumnWidthMm, null, '前提: 派生値は未再計算のままnull');
+  assert.equal(resolvedBeamColumnWidthMm(graph), 105, '未再計算の間は自階の値へ暫定フォールバック');
 });
 
 test('structureRules: RC系はRC下地の壁だけを梁芯の生成源にし、基礎梁成はL/7。鉄骨系は生成源なし・L/8', () => {
@@ -212,6 +303,44 @@ test('【不変条件】主構造の文字列（木造/RC造/S造/SRC造/未定�
 test('【不変条件】主構造由来の柱の既定断面は rulesFor(...).defaultSections 以外から引かない', () => {
   const offenders = scanOffenders(FORBIDDEN_SECTION_PATTERNS, ALLOWED_SECTION_FILES);
   assert.deepEqual(offenders, [], `材種表からの柱既定断面の直接参照が残っている:\n${offenders.join('\n')}`);
+});
+
+// ---- 不変条件（ステップ4 C-2）: 在来木造の柱寸（framing.columnSection）は structureRules.js の
+// 外で直接読まない。graph.woodColumnWidthMm（「各階柱寸法」欄。階の値・未設定はこのルール既定へ
+// フォールバック）を経由する woodColumnWidthMm/woodColumnSectionId が唯一の入口。
+const FORBIDDEN_COLUMN_SECTION_PATTERNS = [/framing\??\.columnSection/];
+const ALLOWED_COLUMN_SECTION_FILES = new Set(['structural/structureRules.js']);
+
+test('【不変条件】在来木造の柱寸（framing.columnSection）は structureRules.js の外で直接参照しない（woodColumnWidthMm/woodColumnSectionId が唯一の入口）', () => {
+  const offenders = scanOffenders(FORBIDDEN_COLUMN_SECTION_PATTERNS, ALLOWED_COLUMN_SECTION_FILES);
+  assert.deepEqual(offenders, [], `framing.columnSection の直接参照が残っている:\n${offenders.join('\n')}`);
+});
+
+// ---- 不変条件（実機QA指摘4・ステップ4 C-2）: 標準材の解決を採番パイプライン（collect/apply/
+// renumberMembers）・UI（MemberListTab.jsx）・梁芯CL操作（transform/centerLineOps.js）で二系統に
+// 分けない。beamColumnWidthMm(graph, belowGraph, project)（belowGraphを取る生の計算）を直接呼べるのは
+// 構造再計算（structuralRecompute.js）と下階編集経路（structuralOrchestration.js）だけ——
+// それ以外は resolvedBeamColumnWidthMm(graph, project)（belowGraph不要）を経由する。
+// standardBeamSectionFor(graph, project, rules) も belowGraph を第4引数に取らない（3引数固定）。
+const FORBIDDEN_BEAM_COLUMN_WIDTH_PATTERNS = [/(?<![a-zA-Z])beamColumnWidthMm\(/];
+const ALLOWED_BEAM_COLUMN_WIDTH_FILES = new Set([
+  'structural/structureRules.js',           // 自身の定義
+  'structural/structuralRecompute.js',      // 構造再計算（唯一の書き込み元）
+  'structural/structuralOrchestration.js',  // 下階編集経路（recomputeStructuralComposition・resyncTouchedMemberGroups）
+]);
+
+test('【不変条件・実機QA指摘4】beamColumnWidthMm(（belowGraphを取る生の計算）の直接呼び出しは structuralRecompute.js と下階編集経路（structuralOrchestration.js）以外に無い', () => {
+  const offenders = scanOffenders(FORBIDDEN_BEAM_COLUMN_WIDTH_PATTERNS, ALLOWED_BEAM_COLUMN_WIDTH_FILES);
+  assert.deepEqual(offenders, [], `beamColumnWidthMm(の直接呼び出しが残っている（resolvedBeamColumnWidthMmを使うこと）:\n${offenders.join('\n')}`);
+});
+
+test('【不変条件・実機QA指摘4】standardBeamSectionFor の呼び出しは belowGraph を第4引数に渡さない（宣言も3引数固定）', () => {
+  const memberNumberingSrc = fs.readFileSync(path.resolve(import.meta.dirname, 'memberNumbering.js'), 'utf8');
+  assert.ok(/export function standardBeamSectionFor\(graph, project, rules\) \{/.test(memberNumberingSrc),
+    'standardBeamSectionFor の宣言が3引数（graph, project, rules）固定になっていない');
+  // 呼び出しは実装上すべて単一行のため、行単位マッチで「belowGraphを渡す呼び出し」の再導入を検出する。
+  const offenders = scanOffenders([/standardBeamSectionFor\(.*belowGraph/], new Set());
+  assert.deepEqual(offenders, [], `standardBeamSectionFor(...) が belowGraph を渡している呼び出しが残っている:\n${offenders.join('\n')}`);
 });
 
 test('structureRules: 描画ルール（柱包み・平面の柱線色・線幅・伏図の色/柱記号）は在来木造だけ包みなし・壁と同じ色・極太線・全黒・×/□記号', () => {

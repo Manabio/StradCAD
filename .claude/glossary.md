@@ -81,8 +81,15 @@
 ## 材寸署名（signature） / numberGroupId / 部材グループ台帳（memberGroupLedger）
 **材寸署名**＝部材の材料・断面・配筋等から導出する採番グループの既定キー（`memberCatalog.memberSignature`）。**numberGroupId**＝分割・統合・手動採番でのみ設定される明示グループID（null＝署名から自動導出）。**部材グループ台帳**（`project.memberGroupLedger`）＝上記の明示操作だけを持つ建物全体・永続の台帳（`grp.spec`/`grp.join`/`grp.no`/`grp.mergedInto`）。設計意図は`.claude/structural-model.md`。
 
+## 各階柱寸法
+在来木造の柱寸（幅mm）を階ごとに持つ値（`graph.woodColumnWidthMm`。null＝ルール既定120角）。構造リスト柱グループ見出しの欄で編集する（既定90/105/120角）。解決は`structural/structureRules.js`の`woodColumnWidthMm`/`woodColumnSectionId`が唯一の入口——柱の材幅（`conformWoodSections`）、壁下地材（`conformWoodBacking`）、壁の鮮度キー（`col=`）はすべてこれを経由する。**梁の材幅（標準材）は自階のこの値ではなく「梁を支える1つ下の実体階」の値を参照する**——下記「標準材（在来）」参照。設計意図は`.claude/structural-model.md`。
+
 ## 標準材（在来）
-在来木造の主構造ルールが持つ既定の梁断面（`rulesFor(在来).defaultSections.beam`。現状`'WOOD-120x120'`＝柱同寸の正角）。個別採番（下記）の対象外を決める基準になる。
+在来木造の非標準梁判定の基準となる断面。**幅＝「梁を支える1つ下の実体階」の各階柱寸法、成＝梁成表の最小成**（`WOOD_BEAM_DEPTH_TABLE.depthsByLoads[0][0]`＝120。`woodRectSectionKey(幅, 120)`）。カタログ外の幅は`rulesFor(在来).defaultSections.beam`＝建物共通の固定値'WOOD-120x120'へフォールバック。個別採番（下記）の対象外を決める基準になる。
+
+下階参照の生の計算は`structural/structureRules.js`の`beamColumnWidthMm(graph, belowGraph, project)`だが、これを直接呼べるのは`structural/structuralRecompute.js`と`structuralOrchestration.js`の下階編集経路（構造再計算そのもの）だけ——再計算のたびに結果を`graph.beamColumnWidthMm`（**非永続**の派生observableフィールド。FlatBuffers/graphSnapshot.jsには含めず、`clear()`でnullへ戻る）へ書き込む「唯一の書き込み元」。それ以外の全消費者（`standardBeamSectionFor`＝`memberNumbering.js`の採番パイプライン`collectFloorGroups`/`applyNumbers`/`renumberMembers`、UI＝`MemberListTab.jsx`、梁芯CL操作＝`transform/centerLineOps.js`）は`resolvedBeamColumnWidthMm(graph, project)`（＝`graph.beamColumnWidthMm ?? woodColumnWidthMm(graph, project)`。未再計算＝nullの間だけ自階の値で暫定）を経由するだけで、belowGraphを一切持ち回らない。
+
+（実機裁定ステップ4 C-2 QA4: 標準材の解決がこの採番パイプラインとUI同期経路で二系統に分かれ、下階の柱寸変更後に構造リストの編集（`renumberMembers`）でタグが往復するバグが実機で見つかった。派生値方式で入口を1つに統一して解消した。）
 
 ## 個別採番
 在来木造で標準材以外の梁（成が同じでも）を材ごとに個別のグループとして採番する規律（`memberCatalog.isIndividuallyNumbered`/`memberGroupKey`/`memberOrderKey`）。伏図で梁をタップして選択する対象でもある。設計意図は`.claude/structural-model.md`。

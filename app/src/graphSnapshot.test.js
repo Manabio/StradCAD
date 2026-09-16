@@ -801,3 +801,56 @@ test('restoreGraph: wallFreshnessKey が非nullのgraphへ、鍵を持たない�
 
   assert.equal(stale.wallFreshnessKey, null);
 });
+
+// ---- 在来木造の各階柱寸法（graph.woodColumnWidthMm。ステップ4 C-2a）の FlatBuffers 往復 ----
+test('graph.woodColumnWidthMm 未設定（null）は encode→decode 後も null のまま（既定値に化けない）', () => {
+  const graph = makeGraph();
+
+  const bytes = serializeGraph(graph);
+  const restored = makeGraph();
+  restoreGraph(restored, bytes);
+
+  assert.equal(restored.woodColumnWidthMm, null);
+});
+
+test('graph.woodColumnWidthMm は FlatBuffers encode→decode で値ありのまま往復する', () => {
+  const graph = makeGraph();
+  graph.setWoodColumnWidthMm(105);
+
+  const bytes = serializeGraph(graph);
+  const restored = makeGraph();
+  restoreGraph(restored, bytes);
+
+  assert.equal(restored.woodColumnWidthMm, 105);
+});
+
+test('【失敗系】graph.woodColumnWidthMm に 0 を設定すると encode→decode 後は null になる（OP.HEIGHTと同じ0=未指定の規約）', () => {
+  const graph = makeGraph();
+  graph.setWoodColumnWidthMm(0);
+
+  const bytes = serializeGraph(graph);
+  const restored = makeGraph();
+  restoreGraph(restored, bytes);
+
+  assert.equal(restored.woodColumnWidthMm, null);
+});
+
+// ---- 梁が参照する下階柱寸の派生値（graph.beamColumnWidthMm。実機裁定ステップ4 C-2 QA4）は
+// 非永続——structuralRecompute.js/structuralOrchestration.js が再計算のたびに書く一時キャッシュで、
+// FlatBuffers（schema/graphFbs.js）にもgraphSnapshot.jsのper-floorフィールドにも含めない。
+// restoreGraphは内部でgraph.clear()を呼ぶため、encode元の値が何であってもdecode先は常にnullへ戻る
+// （standardBeamSectionForが読むresolvedBeamColumnWidthMmは、未再計算=nullの間は自階のwoodColumnWidthMmで
+// 暫定し、次の再計算で補正される設計——.claude/structural-model.md C-2節参照）。----
+test('graph.beamColumnWidthMm は非永続——encode→decode（restoreGraph）で復元されず常にnullへ戻る', () => {
+  const graph = makeGraph();
+  graph.setBeamColumnWidthMm(105); // 直前の再計算で書かれた値（encode元）
+
+  const bytes = serializeGraph(graph);
+  const restored = makeGraph();
+  restored.setBeamColumnWidthMm(999); // decode先に既に別の値が入っていても（restoreGraphのclear()で消える想定）
+
+  restoreGraph(restored, bytes);
+
+  assert.equal(restored.beamColumnWidthMm, null,
+    'beamColumnWidthMmがFlatBuffers往復で復元されている（非永続フィールドのはずが永続化されてしまっている）');
+});

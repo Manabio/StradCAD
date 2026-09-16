@@ -8,7 +8,7 @@
  * 鍵の比較は壁境界を跨がず毎回走らせたいが、再生成そのものは不一致時だけに限定したい
  * ——両者を別モジュールに分けておくための制約。
  */
-import { effectiveStructure, rulesFor } from '../structural/structureRules.js';
+import { effectiveStructure, woodColumnSectionId } from '../structural/structureRules.js';
 
 /**
  * 鍵の書式バージョン。材マスタ（壁材/壁仕上げ/下地材の実体）や壁生成規則
@@ -23,8 +23,8 @@ export const WALL_KEY_VERSION = 'v1';
  * 鍵に含めるもの:
  *   - 外壁下地・内壁下地の材コード（graph.exteriorWallBacking / interiorWallBacking）
  *   - 実効主構造（effectiveStructure。階の上書き優先）
- *   - 在来木造の柱断面（rulesFor(structure).framing?.columnSection）
- *     ※ 現状は在来固有仕様の固定値。「各階柱寸法」欄が実装されたら、そこの値に差し替える。
+ *   - 在来木造の柱断面（structureRules.js の woodColumnSectionId。graph.woodColumnWidthMm
+ *     ＝「各階柱寸法」欄の値。未設定はルール既定 framing.columnSection の幅にフォールバック）。
  *   - 各部屋の kind・feature・壁材・壁仕上げ（roomOrder順、room.kind / room.feature /
  *     room.getFinishInfo() から。QA F9: 屋外化（kind=EXTERIOR）・UNDEFINED化は
  *     wallMaterial/wallFinish を変えずに壁生成結果（壁を持つか自体）を変えるため、鍵に含める）
@@ -46,7 +46,7 @@ export function wallFreshnessKey(graph, project = null) {
   const ext = graph?.exteriorWallBacking ?? '';
   const int = graph?.interiorWallBacking ?? '';
   const structure = effectiveStructure(graph, project) ?? '';
-  const columnSection = rulesFor(structure).framing?.columnSection ?? '';
+  const columnSection = woodColumnSectionId(graph, project) ?? '';
 
   const roomParts = (graph?.rooms ?? []).map(room => {
     const info = room.getFinishInfo?.() ?? {};

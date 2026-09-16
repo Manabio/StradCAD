@@ -255,6 +255,29 @@ test('【ステップ4第3単位②】collectFloorGroups/applyNumbers: 在来木
   assert.equal(std[1].memberNo, 'G4');
 });
 
+test('【ステップ4 C-2b QA2】collectFloorGroups/applyNumbers: graph.woodColumnWidthMmを105にすると標準材が120×120から105×120（柱寸×梁成表の最小成）へ切り替わる（120×120が非標準＝個別採番、105×120が標準）', () => {
+  const project = makeProject([{ id: 'p1', startFloor: 1 }]);
+  const nonStd = [
+    woodBeam('b1', 'WOOD-120x120', { axisValue: 100 }),
+    woodBeam('b2', 'WOOD-120x120', { axisValue: 200 }),
+  ];
+  const std = [
+    woodBeam('b3', 'WOOD-105x120', { axisValue: 300 }),
+    woodBeam('b4', 'WOOD-105x120', { axisValue: 400 }),
+  ];
+  const g = makeGraph('p1', { beamMap: [...nonStd, ...std] });
+  g.structureOverride = TRADITIONAL_WOOD_STRUCTURE;
+  g.woodColumnWidthMm = 105;
+
+  collectFloorGroups(g, project);
+  applyNumbers(g, project, assignNumbers(project));
+
+  assert.equal(nonStd[0].memberNo, 'G1', '105寸の階では120×120が非標準＝個別採番（axisValue昇順）');
+  assert.equal(nonStd[1].memberNo, 'G2');
+  assert.equal(std[0].memberNo, 'G3', '105×120（柱寸105×梁成表の最小成120）は標準材として1グループにまとまる');
+  assert.equal(std[1].memberNo, 'G3');
+});
+
 test('【ステップ4第3単位②】assignNumbers: 個別採番グループの順序はorderKey（axisValue昇順）で決まり、idの大小・並び順・挿入順には依存しない', () => {
   const project = makeProject([{ id: 'p1', startFloor: 1 }]);
   // idはaxisValueの大小と逆の辞書順（'aaa'<'mmm'<'zzz'だがaxisValueは'zzz'が最小）、挿入順（Map反復順）も

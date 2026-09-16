@@ -7,7 +7,7 @@ import {
   memberSymbol, MEMBER_GROUPS, NUMBERED_MAPS, FIELD_DEFS_BY_CATEGORY, SIGNATURE_FIELDS_BY_MAP, MEMBER_CATEGORY,
   noJoinSignatureFor, memberSignature,
 } from './memberCatalog.js';
-import { makeBeam } from './memberTestFixtures.js';
+import { makeBeam, makeColumn } from './memberTestFixtures.js';
 import { rulesFor, TRADITIONAL_WOOD_STRUCTURE, UNSPECIFIED_STRUCTURE } from './structureRules.js';
 
 test('【WP-B1】memberSymbol: beamMapのrole:landingは記号LGを返す', () => {
@@ -54,6 +54,28 @@ test('【WP-B1】FIELD_DEFS_BY_CATEGORY[ROD]: levelOffsetのラベルは「天�
 
 test('【WP-B1】SIGNATURE_FIELDS_BY_MAP.beamMapはlevelOffsetを含まない（材寸署名は不変）', () => {
   assert.ok(!SIGNATURE_FIELDS_BY_MAP.beamMap.includes('levelOffset'));
+});
+
+// ---- ステップ4 C-2b: 柱・梁の断面欄（sectionDefId）は在来木造（columnSizing:'fixed'）で読み取り専用 ----
+test('【ステップ4 C-2b】FIELD_DEFS_BY_CATEGORY[COLUMN_LIKE].sectionDefId: disabledWhenはctx.woodFixedSection===trueかつrole!=="foundation"のときだけtrue', () => {
+  const field = FIELD_DEFS_BY_CATEGORY[MEMBER_CATEGORY.COLUMN_LIKE].find(f => f.key === 'sectionDefId');
+  assert.ok(field);
+  const column = makeColumn('c1', 'WOOD-120x120', { role: 'standard' });
+  assert.equal(field.disabledWhen(column, { woodFixedSection: true }), true);
+  assert.equal(field.disabledWhen(column, { woodFixedSection: false }), false, '非在来（columnSizing!=="fixed"）は編集可');
+  assert.equal(field.disabledWhen(column, {}), false, 'ctx省略時は編集可（既定はfalse相当）');
+  const pile = makeColumn('c2', 'WOOD-120x120', { role: 'foundation' });
+  assert.equal(field.disabledWhen(pile, { woodFixedSection: true }), false, '杭（role:foundation）は柱寸法欄の対象外なので編集可のまま');
+});
+
+test('【ステップ4 C-2b】FIELD_DEFS_BY_CATEGORY[ROD].sectionDefId: disabledWhenはctx.woodFixedSection===trueかつrole!=="foundation"のときだけtrue', () => {
+  const field = FIELD_DEFS_BY_CATEGORY[MEMBER_CATEGORY.ROD].find(f => f.key === 'sectionDefId');
+  assert.ok(field);
+  const beam = makeBeam('b1', 'WOOD-120x330', { materialType: 'WOOD', role: 'primary' });
+  assert.equal(field.disabledWhen(beam, { woodFixedSection: true }), true);
+  assert.equal(field.disabledWhen(beam, { woodFixedSection: false }), false);
+  const foundationBeam = makeBeam('b2', 'RC-300x300', { materialType: 'RC', role: 'foundation' });
+  assert.equal(field.disabledWhen(foundationBeam, { woodFixedSection: true }), false, '基礎梁は柱寸法欄と無関係（RC・別算定）なので編集可のまま');
 });
 
 test('【伏図の柱記号】columnMapSelf（自階柱・描画専用の参照レイヤ）はNUMBERED_MAPS/MEMBER_GROUPSに現れない', () => {
@@ -131,6 +153,66 @@ test('【不変条件・QA指摘F7】`numberGroupId ?? memberSignature(` の直�
   assert.deepEqual(offenders, [], `groupKey導出の直書きが残っている（memberGroupKeyに一本化されていない）:\n${offenders.join('\n')}`);
 });
 
+// ---- ステップ4 C-2b QA修正: 新UI配線（WoodColumnWidthSelect・断面欄readOnly）のソース走査不変条件 ----
+// QA判定FAIL: 表示条件を消す／ハンドラからconformWoodSectionsを外す／readOnlyからdisabledWhenを外す、
+// のいずれも既存テストが全緑のまま通っていた（無防備）。F1/F12と同じ流儀でMemberListTab.jsxのソースを
+// 直接検査し、変異させれば必ず落ちるようにする。
+
+test('【不変条件・ステップ4 C-2b】MemberListTab.jsx: 柱グループ見出しの「各階柱寸法」欄は isWoodColumnGroup（columnMapかつcolumnSizing:"fixed"）でだけ表示され、onStructureChangedが配線されている', () => {
+  const src = fs.readFileSync(path.resolve(import.meta.dirname, 'MemberListTab.jsx'), 'utf8');
+  assert.ok(/isWoodColumnGroup\s*=\s*group\.mapName\s*===\s*'columnMap'\s*&&\s*rulesFor\(structure\)\.columnSizing\s*===\s*'fixed'/.test(src),
+    'isWoodColumnGroup の表示条件（group.mapName===\'columnMap\' && rulesFor(structure).columnSizing===\'fixed\'）が見つからない');
+  assert.ok(/\{isWoodColumnGroup\s*&&\s*\(/.test(src),
+    '{isWoodColumnGroup && (...)} の分岐が見つからない');
+  assert.ok(/<WoodColumnWidthSelect\s+graph=\{graph\}\s+project=\{project\}\s+onStructureChanged=\{onStructureChanged\}\s*\/>/.test(src),
+    '<WoodColumnWidthSelect graph={graph} project={project} onStructureChanged={onStructureChanged} /> の配線が見つからない（実機裁定ステップ4 C-2 QA2: 主構造変更と同じ経路に統一）');
+  // onStructureChanged が MemberListTab（トップレベル props）→ MemberGroupSection → WoodColumnWidthSelect
+  // まで実際に引き回されていること（途中で途切れて undefined になる回帰の防止）。
+  assert.ok(/export const MemberListTab = observer\(\(\{[^}]*\bonStructureChanged\b[^}]*\}\)/.test(src),
+    'MemberListTab が onStructureChanged を props として受け取っていない');
+  assert.ok(/const MemberGroupSection = observer\(\(\{[\s\S]{0,400}?\bonStructureChanged\b/.test(src),
+    'MemberGroupSection が onStructureChanged を props として受け取っていない');
+  assert.ok(/<MemberGroupSection[\s\S]*?onStructureChanged=\{onStructureChanged\}/.test(src),
+    'MemberListTab の <MemberGroupSection> 呼び出しに onStructureChanged が渡されていない');
+});
+
+test('【不変条件・ステップ4 C-2b QA修正】MemberListTab.jsx: WoodColumnWidthSelectの変更ハンドラはonStructureChanged（主構造変更と同じ経路）だけを呼び、自前のconformWoodSections/renumberMembers/pushGraphUndoを持たない', () => {
+  const src = fs.readFileSync(path.resolve(import.meta.dirname, 'MemberListTab.jsx'), 'utf8');
+  const compMatch = /const WoodColumnWidthSelect = observer\(\(\{ graph, project, onStructureChanged \}\) => \{([\s\S]*?)\n\}\);/.exec(src);
+  assert.ok(compMatch, 'WoodColumnWidthSelect コンポーネント本体（onStructureChangedを受け取る形）が見つからない');
+  const fnMatch = /function handleChange\(width\) \{([\s\S]*?)\n {2}\}/.exec(compMatch[1]);
+  assert.ok(fnMatch, 'handleChange関数本体が見つからない');
+  const body = fnMatch[1];
+  assert.ok(/onStructureChanged\(\(\) => \{\s*graph\.setWoodColumnWidthMm\(width\);\s*\}\);/.test(body),
+    'handleChangeがonStructureChanged(() => { graph.setWoodColumnWidthMm(width); })を呼んでいない（QA指摘: 主構造変更と同じ経路に統一）');
+  for (const forbidden of ['serializeGraph(', 'conformWoodSections(', 'renumberMembers(', 'pushGraphUndo(']) {
+    assert.ok(!body.includes(forbidden),
+      `handleChangeに${forbidden}...が残っている（QA指摘: 採番・undoの仕組みをonStructureChanged経由に一本化し、二重に持たない）`);
+  }
+});
+
+test('【不変条件・ステップ4 C-2b】MemberListTab.jsx: 断面欄（sectionField）のreadOnlyはdisabledWhenを見ており、fieldCtxはwoodFixedSectionを解決して渡す', () => {
+  const src = fs.readFileSync(path.resolve(import.meta.dirname, 'MemberListTab.jsx'), 'utf8');
+  assert.ok(/readOnly=\{readOnly \|\| !!sectionField\.disabledWhen\?\.\(representative, fieldCtx\)\}/.test(src),
+    'sectionField の readOnly が disabledWhen を見ていない（QA指摘: 断面欄が在来木造でも編集可能なまま）');
+  assert.ok(/woodFixedSection:\s*rulesFor\(structure\)\.columnSizing\s*===\s*'fixed'/.test(src),
+    'fieldCtx.woodFixedSection の解決（rulesFor(structure).columnSizing===\'fixed\'）が見つからない');
+});
+
+// ---- ステップ4 C-2b QA修正: standardBeamSectionFor の重複排除（memberNumbering.jsが唯一の実装）----
+test('【不変条件・ステップ4 C-2b】woodColumnSectionId(...) ?? ...defaultSections.beam の式は memberNumbering.js 以外に現れない（standardBeamSectionForの複製禁止）', () => {
+  const offenders = scanOffenders(/woodColumnSectionId\([^)]*\)\s*\?\?\s*.*defaultSections\.beam/, new Set(['structural/memberNumbering.js']));
+  assert.deepEqual(offenders, [], `standardBeamSectionForと同一ロジックの複製が残っている:\n${offenders.join('\n')}`);
+});
+
+test('【不変条件・ステップ4 C-2b】MemberListTab.jsxはstandardBeamSectionForをmemberNumbering.jsからimportし、ローカル定義を持たない', () => {
+  const src = fs.readFileSync(path.resolve(import.meta.dirname, 'MemberListTab.jsx'), 'utf8');
+  assert.ok(/import\s*\{[^}]*\bstandardBeamSectionFor\b[^}]*\}\s*from\s*'\.\/memberNumbering\.js'/.test(src),
+    'MemberListTab.jsx が standardBeamSectionFor を memberNumbering.js から import していない');
+  assert.ok(!/function\s+standardBeamSection\w*\s*\(/.test(src),
+    'MemberListTab.jsx にローカルな standardBeamSection(...) 関数定義が残っている（複製）');
+});
+
 test('【不変条件・QA指摘F7】memberGroupKey( の呼び出しが memberNumbering.js と MemberListTab.jsx の両方に存在する（groupKey導出の一本化が実際に配線されている）', () => {
   const numberingSrc = fs.readFileSync(path.resolve(import.meta.dirname, 'memberNumbering.js'), 'utf8');
   const tabSrc = fs.readFileSync(path.resolve(import.meta.dirname, 'MemberListTab.jsx'), 'utf8');
@@ -154,8 +236,8 @@ test('【不変条件・QA指摘F1】MemberListTab.jsx: 手動タグのmateriali
   const body = fnMatch[1];
   assert.ok(/splitGroup\(project, group\.mapName, members, \{/.test(body),
     'splitGroup(project, group.mapName, members, { ... }) の呼び出しが見つからない');
-  assert.ok(/splitFromSignature:\s*noJoinSignatureFor\(representative, group\.mapName, rulesFor\(structure\)\)/.test(body),
-    'splitFromSignature: noJoinSignatureFor(representative, group.mapName, rulesFor(structure)) が渡されていない（QA指摘F1の回帰）');
+  assert.ok(/splitFromSignature:\s*noJoinSignatureFor\(representative, group\.mapName, rulesFor\(structure\), standardBeamSectionFor\(graph, project, rulesFor\(structure\)\)\)/.test(body),
+    'splitFromSignature: noJoinSignatureFor(representative, group.mapName, rulesFor(structure), standardBeamSectionFor(...)) が渡されていない（QA指摘F1の回帰。ステップ4 C-2で標準材が階の柱寸解決子経由になった）');
 });
 
 test('【不変条件・QA指摘F12】MemberListTab.jsx: 統合の確定（handleConfirmMerge）はmergeGroupsへnoJoinSignatureForの戻り値をsplitFromSignatureとして渡す', () => {
@@ -163,8 +245,8 @@ test('【不変条件・QA指摘F12】MemberListTab.jsx: 統合の確定（handl
   const fnMatch = /function handleConfirmMerge\(chosenIndex\) \{([\s\S]*?)\n {2}\}/.exec(src);
   assert.ok(fnMatch, 'handleConfirmMerge関数本体が見つからない');
   const body = fnMatch[1];
-  assert.ok(/noJoinSignatureFor\(chosenRep, group\.mapName, rulesFor\(structure\)\)/.test(body),
-    'noJoinSignatureFor(chosenRep, group.mapName, rulesFor(structure)) の呼び出しが見つからない（QA指摘F12の回帰）');
+  assert.ok(/noJoinSignatureFor\(chosenRep, group\.mapName, rulesFor\(structure\), standardBeamSectionFor\(graph, project, rulesFor\(structure\)\)\)/.test(body),
+    'noJoinSignatureFor(chosenRep, group.mapName, rulesFor(structure), standardBeamSectionFor(...)) の呼び出しが見つからない（QA指摘F12の回帰。ステップ4 C-2で標準材が階の柱寸解決子経由になった）');
   assert.ok(/mergeGroups\(project, group\.mapName, groups, chosenIndex, \{\s*splitFromSignature\s*\}\)/.test(body),
     'mergeGroups(project, group.mapName, groups, chosenIndex, { splitFromSignature }) の呼び出しが見つからない');
 });

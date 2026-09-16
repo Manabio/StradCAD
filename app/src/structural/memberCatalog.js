@@ -147,7 +147,12 @@ export function sectionIconShape(entity) {
 // kind: 'text' | 'number' | 'select' | 'levelPair'（topLevel/bottomLevel等の2値セット）
 export const FIELD_DEFS_BY_CATEGORY = {
   [MEMBER_CATEGORY.COLUMN_LIKE]: [
-    { key: 'sectionDefId',  label: '断面',     kind: 'section' },
+    // 在来木造（columnSizing:'fixed'）は柱寸が「各階柱寸法」欄（structural リスト柱グループ見出し）の
+    // 値で決まるため、部材ごとの断面選択は意味を持たない——基礎（杭・柱脚扱いの role:'foundation'）は対象外
+    // （柱寸法欄は上部構造の柱の話で杭断面には連動しない）。ctx.woodFixedSection は呼び出し側
+    // （MemberListTab.jsx MemberCard の fieldCtx）が rules.columnSizing==='fixed' から解決して渡す。
+    { key: 'sectionDefId',  label: '断面',     kind: 'section',
+      disabledWhen: (e, ctx) => ctx?.woodFixedSection === true && e.role !== 'foundation' },
     { key: 'topLevel',      label: '上端レベル', kind: 'number' },
     { key: 'bottomLevel',   label: '下端レベル', kind: 'number' },
   ],
@@ -162,7 +167,10 @@ export const FIELD_DEFS_BY_CATEGORY = {
     { key: 'bottomLevel', label: '下端レベル', kind: 'number' },
   ],
   [MEMBER_CATEGORY.ROD]: [
-    { key: 'sectionDefId',     label: '断面',   kind: 'section' },
+    // 在来木造（columnSizing:'fixed'）は梁の材幅も「各階柱寸法」欄から決まる（conformWoodSectionsが柱同寸へ
+    // そろえる）ため、部材ごとの断面選択は意味を持たない——基礎梁（役割上RC・寸法は別欄で算定）は対象外。
+    { key: 'sectionDefId',     label: '断面',   kind: 'section',
+      disabledWhen: (e, ctx) => ctx?.woodFixedSection === true && e.role !== 'foundation' },
     // 接合方法（鉄骨の梁のみ）。when=表示条件、disabledWhen=グレー化条件（値は見せるが変更させない）。
     // 柱に取りつかない梁＝梁に接合する梁（小梁）はピン接合で固定のため選択させない（ユーザー指示）。
     // materialType は 'STEEL'（core.js を import しない方針のため文字列リテラル。ファイル冒頭の注意参照）。
@@ -236,36 +244,40 @@ export function memberSpecString(entity, mapName) {
 // 非正角材（成≠幅）の梁の個別採番（在来木造。ユーザー裁定2026-09-16。設計意図は
 // .claude/structural-model.md ステップ4第3単位）。
 //
-// 標準材（rules.defaultSections.beam。在来では現状 'WOOD-120x120'）以外の在来木造の梁は、成が
-// 同じでも材ごとに個別のグループとして管理する（伏図で材をタップして選択する対象でもある）。
-// rules は呼び出し側（structural/structureRules.js の rulesFor）が解決して渡す——ここは
-// structureRules.js を import しない（structureRules.js が memberCatalog.js を import する循環を
-// 避けるため。ファイル冒頭の注意と同じ理由）。
+// 標準材（standardSection引数。省略時 rules.defaultSections.beam＝建物共通の固定値）以外の在来木造の
+// 梁は、成が同じでも材ごとに個別のグループとして管理する（伏図で材をタップして選択する対象でもある）。
+// 在来木造は「標準材＝階の柱寸の正角」（structureRules.js woodColumnSectionId。ステップ4 C-2）なので、
+// 呼び出し側（structural/memberNumbering.js・MemberListTab.jsx）がそれを解決して渡す。rules 自体も
+// 呼び出し側（structureRules.js の rulesFor）が解決して渡す——ここは structureRules.js を import しない
+// （structureRules.js が memberCatalog.js を import する循環を避けるため。ファイル冒頭の注意と同じ理由）。
 // ================================================================
 
 /** entity が個別採番の対象か（在来木造の非標準梁のみ）。rules.numbering.individualBeamRoles を
- *  持たない主構造（非在来6種・未定）は常にfalse。 */
-export function isIndividuallyNumbered(entity, mapName, rules) {
+ *  持たない主構造（非在来6種・未定）は常にfalse。standardSection＝標準材のsectionDefId（省略時
+ *  rules.defaultSections.beam＝建物共通の固定値）。在来木造は呼び出し側（structural/memberNumbering.js・
+ *  MemberListTab.jsx）が structureRules.js の woodColumnSectionId（階の柱寸から導く正角）を解決して
+ *  渡す——このファイルは循環import回避のため structureRules.js を import しない（ファイル冒頭の注意）。 */
+export function isIndividuallyNumbered(entity, mapName, rules, standardSection = rules.defaultSections.beam) {
   return mapName === 'beamMap'
     && (rules.numbering?.individualBeamRoles?.includes(entity.role) ?? false)
     && entity.materialType === rules.baseMaterial
-    && entity.sectionDefId !== rules.defaultSections.beam;
+    && entity.sectionDefId !== standardSection;
 }
 
 /** グループキー（memberNumbering.js collectFloorGroups/applyNumbers・MemberListTab.jsx の groupKey導出の
  *  唯一の入口）。numberGroupId（分割・統合済み）を最優先し、無ければ個別採番対象は部材ごとに一意
  *  （signature+id）、それ以外は従来どおり signature（同一材寸＝同一グループ）。 */
-export function memberGroupKey(entity, mapName, rules) {
+export function memberGroupKey(entity, mapName, rules, standardSection = rules.defaultSections.beam) {
   if (entity.numberGroupId) return entity.numberGroupId;
   const signature = memberSignature(entity, mapName);
-  return isIndividuallyNumbered(entity, mapName, rules) ? `${signature}#${entity.id}` : signature;
+  return isIndividuallyNumbered(entity, mapName, rules, standardSection) ? `${signature}#${entity.id}` : signature;
 }
 
 /** 採番の並び順キー（memberNumbering.compareGroupsDesc がsizeKey・出現階に次ぐタイブレークに使う）。
  *  個別採番対象は位置（軸方向→軸座標→区間下端）で決める——idに依存しないため、部材の再生成で
  *  idが変わっても番号が安定する。非個別・非梁は空配列（従来どおりsignatureでタイブレーク）。 */
-export function memberOrderKey(entity, mapName, rules) {
-  if (!isIndividuallyNumbered(entity, mapName, rules)) return [];
+export function memberOrderKey(entity, mapName, rules, standardSection = rules.defaultSections.beam) {
+  if (!isIndividuallyNumbered(entity, mapName, rules, standardSection)) return [];
   return [entity.isVertical ? 1 : 0, entity.axisValue ?? 0, Math.min(entity.coord1 ?? 0, entity.coord2 ?? 0)];
 }
 
@@ -278,8 +290,8 @@ export function memberOrderKey(entity, mapName, rules) {
  *  経路も同じ穴＝個別採番4本のうち2本だけ統合しても4本とも同じタグになった）。個別採番対象で
  *  なければ null（従来どおり常にjoinする＝同署名の将来の部材も自動で同じタグに合流する。この既定
  *  挙動は個別採番と無関係の構造では維持する）。 */
-export function noJoinSignatureFor(entity, mapName, rules) {
-  return isIndividuallyNumbered(entity, mapName, rules) ? memberSignature(entity, mapName) : null;
+export function noJoinSignatureFor(entity, mapName, rules, standardSection = rules.defaultSections.beam) {
+  return isIndividuallyNumbered(entity, mapName, rules, standardSection) ? memberSignature(entity, mapName) : null;
 }
 
 // 配筋サイズ文字列（例 'D25'）から数値部分を取り出す（呼び径の大小比較用）。

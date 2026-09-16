@@ -1951,6 +1951,9 @@ const App = observer(() => {
           onToast={msg => setToast({ msg, key: Date.now() })}
           onStructureChanged={mutate => {
             // 主構造変更（mutate）→ 構造伏図に映る全グラフ（自階＋下階）を再計算し、下階の柱も実効主構造へ追従させる。
+            // 構造リストタブ（MemberListTab.jsx）の「各階柱寸法」変更（mutateが下階graphを書き換える）も
+            // 同じ経路に乗せる（実機裁定ステップ4 C-2 QA2。柱寸変更・下階編集・建物全体の採番・undoを
+            // この1つの仕組みに統一する）。
             if (structComposition) {
               recomputeStructuralComposition(structComposition, project.activeGraph, project, {
                 mutate, onToast: msg => setToast({ msg, key: Date.now() }),

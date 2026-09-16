@@ -1,7 +1,27 @@
 import { NUMBERED_MAPS, memberSymbol, memberSignature, memberSizeKey, memberGroupKey, memberOrderKey } from './memberCatalog.js';
 import { conformToLedger, getGroupManualTag } from './memberGroups.js';
 import { makeFloorLevelPrefix } from '../floorNumber.js';
-import { rulesFor, effectiveStructure } from './structureRules.js';
+import { rulesFor, effectiveStructure, resolvedBeamColumnWidthMm, WOOD_BEAM_DEPTH_TABLE } from './structureRules.js';
+import { woodRectSectionKey } from './sectionCatalog.js';
+
+// 個別採番判定の標準材＝「柱寸 × 梁成表の最小成」（実機裁定ステップ4 C-2 QA2。ユーザー文言
+// 「標準材（初期値は 柱寸×120）」の直読み。マジックナンバー禁止のため成は
+// WOOD_BEAM_DEPTH_TABLE.depthsByLoads[0][0]（中間荷重なし・最短スパンの成＝表の最小値）から導く）。
+// 柱寸は「その梁を支える1つ下の実体階の柱寸」の派生値（graph.beamColumnWidthMm。
+// structural/structuralRecompute.jsが再計算のたびに書き込む。未再計算なら自階の値で暫定）——
+// resolvedBeamColumnWidthMmが唯一の読み口で、ここではbelowGraphを一切持ち回らない（QA指摘4:
+// belowGraph引数を各同期経路（collect/apply/renumberMembers・UI）が個別に持つと解決が二系統に
+// 分かれ、下階の柱寸変更後にタグが往復するバグになる。派生値方式でこの経路を一本化した）。
+// 非在来・解決不能（カタログ外の幅）は rules.defaultSections.beam＝建物共通の固定値へフォールバックする。
+// memberCatalog.js は循環import回避のため rules だけを受け取る設計のため、standardSection は
+// 呼び出し側が解決して渡す——この関数が唯一の実装（MemberListTab.jsx もここから import する。
+// QA指摘: 同一ロジックの複製を作らない）。
+export function standardBeamSectionFor(graph, project, rules) {
+  const width = resolvedBeamColumnWidthMm(graph, project);
+  if (width == null) return rules.defaultSections.beam;
+  const minDepth = WOOD_BEAM_DEPTH_TABLE.depthsByLoads[0][0];
+  return woodRectSectionKey(width, minDepth) ?? rules.defaultSections.beam;
+}
 
 // 部材タグ番号の採番ルール（材寸ベースグループ採番。設計意図は .claude/structural-model.md）:
 //
@@ -55,11 +75,17 @@ export function floorRankOf(plane, project) {
  *   3. 収集後、counts.size===0（どの階からも参照されなくなった）グループは index から削除する。
  * これが無いと、材寸編集で組成が変わったグループの残骸（幽霊グループ）が残り、以前と同じ材寸に
  * 見えるだけの新グループが誤って生まれたり、全削除した階の痕跡が残り続けたりする。
+ * 標準材（standardBeamSectionFor）は graph.beamColumnWidthMm（structuralRecompute.jsが再計算のたびに
+ * 書く派生値）を読む——ここではbelowGraphを持ち回らない（QA指摘4。structureRules.js
+ * resolvedBeamColumnWidthMmのJSDoc参照）。
+ * @param {object} graph
+ * @param {object} project
  */
 export function collectFloorGroups(graph, project) {
   const { rank, isRoof } = floorRankOf(graph.plane, project);
   const planeId = graph.plane.id;
   const rules = rulesFor(effectiveStructure(graph, project));
+  const standardSection = standardBeamSectionFor(graph, project, rules);
 
   // 1. このplaneの既存寄与を全エントリから取り消す。
   // hasRoof は building単位のフラグ（floorRanksのような複数階の集合ではない）。isRoof時に
@@ -81,8 +107,8 @@ export function collectFloorGroups(graph, project) {
       const symbol = memberSymbol(entity, mapName);
       const signature = memberSignature(entity, mapName);
       const sizeKey = memberSizeKey(entity, mapName);
-      const orderKey = memberOrderKey(entity, mapName, rules);
-      const groupKey = memberGroupKey(entity, mapName, rules);
+      const orderKey = memberOrderKey(entity, mapName, rules, standardSection);
+      const groupKey = memberGroupKey(entity, mapName, rules, standardSection);
       let group = project.memberNumberIndex.get(groupKey);
       if (!group) {
         group = { mapName, symbol, sizeKey, signature, orderKey, floorRanks: new Set(), hasRoof: false, counts: new Map() };
@@ -295,15 +321,19 @@ export function previewSplitTag(project, mapName, symbol, sizeKey, signature, fl
  *   changed=1件でも memberNo が変化したか（呼び出し側の保存要否判定に使う）。
  *   renumbered=「既に番号を持っていた部材」が別の番号に変わった遷移一覧（初回採番=null→タグ は含まない。
  *   モード境界の再採番トーストが「材寸変更にともなう振り直し」だけを報告するために使う）。
+ * 標準材（standardBeamSectionFor）は graph.beamColumnWidthMm を読む——collectFloorGroupsと同じ
+ * 入口のため、呼び出し順序（同じgraphインスタンスに対してcollectの後でapplyを呼ぶ）さえ守れば
+ * belowGraphを別途持ち回る必要はない（QA指摘4）。
  */
 export function applyNumbers(graph, project, tags, onlyMapName = null) {
   let changed = false;
   const renumbered = [];
   const maps = onlyMapName ? [onlyMapName] : NUMBERED_MAPS;
   const rules = rulesFor(effectiveStructure(graph, project));
+  const standardSection = standardBeamSectionFor(graph, project, rules);
   for (const mapName of maps) {
     for (const entity of graph[mapName].values()) {
-      const groupKey = memberGroupKey(entity, mapName, rules);
+      const groupKey = memberGroupKey(entity, mapName, rules, standardSection);
       const tag = tags.get(groupKey);
       if (tag != null && tag !== entity.memberNo) {
         if (entity.memberNo != null) renumbered.push({ from: entity.memberNo, to: tag });

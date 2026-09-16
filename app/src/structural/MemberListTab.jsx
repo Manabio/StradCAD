@@ -19,8 +19,8 @@ import {
 import { alignToOuterFace, autoFillColumnSizes, autoFillColumnBaseSizes, isRigidFrameStructure, beamAxisCenterLines,
   autoFillBeamEccentricity, autoBeamEccentricity, faceGapForEccentricity, autoFillColumnAxisOffsets, axisExteriorSign, resolveLowestGraph } from './structuralAutoFill.js';
 import { buildExteriorSide } from './wallGate.js';
-import { SECTION_CATALOG, findSectionEntry, SectionShape } from './sectionCatalog.js';
-import { renumberMembers, floorRankOf, previewSplitTag, floorSpanLabel, assignNumbers } from './memberNumbering.js';
+import { SECTION_CATALOG, findSectionEntry, SectionShape, WOOD_SQUARE_WIDTHS } from './sectionCatalog.js';
+import { renumberMembers, floorRankOf, previewSplitTag, floorSpanLabel, assignNumbers, standardBeamSectionFor } from './memberNumbering.js';
 import { splitGroup, releaseFromGroup, mergeGroups, getGroupManualTag, setGroupManualTag, clearGroupManualTag, snapshotLedger, restoreLedger, allManualTags } from './memberGroups.js';
 import { serializeGraph, restoreGraph } from '../graphSnapshot.js';
 import { undoManager } from '../undoManager.js';
@@ -33,7 +33,7 @@ import { MemberLayoutStudy } from './sectionFigure/MemberLayoutStudy.jsx';
 import { isStudyEnabled, layoutScopeFor, getLayoutOverrides, applyLayoutOverrides } from './sectionFigure/layoutStudy.js';
 import { isFoundationPlane } from './drawingDesignation.js';
 import { structureHasMemberKind, memberKindOf, MEMBER_KIND, FIGURE_TYPE } from './structuralClassification.js';
-import { foundationOptionsFor, rulesFor } from './structureRules.js';
+import { foundationOptionsFor, rulesFor, woodColumnSectionId, woodColumnWidthMm } from './structureRules.js';
 
 // この map グループが、その階・主構造で構造リストに出し得る部材種別（空グループの表示可否判定用）。
 // 梁グループだけは自階が基礎面か否かで「基礎梁」⇄「梁」に分かれる（自階＝床下材の供給グラフで判定）。
@@ -137,12 +137,12 @@ const SYMBOL_ORDER = ['C', 'PIL', 'CB', 'F', 'G', 'B', 'FG', 'EG', 'RF', 'PR', '
 // タグ文字列から並び替えキー [記号順位, 番号数値, 階rank] を作る（localeCompare だと "C10" が "C2" より
 // 前に来てしまう不具合の修正。番号は tags の末尾の連続数字、記号は entity から直接引く——文字列パースの
 // 曖昧さ（"RG1"＝屋根プレフィックスR+記号Gか、記号"RG"か）を避けるため memberSymbol() を権威にする）。
-function tagSortTuple(tag, members, group, project, structure) {
+function tagSortTuple(tag, members, group, graph, project, structure) {
   const rep = members[0];
   const symbol = memberSymbol(rep, group.mapName);
   const symbolRank = SYMBOL_ORDER.indexOf(symbol);
   const num = tag === UNNUMBERED_TAG ? Infinity : Number(tag.match(/(\d+)$/)?.[1] ?? Infinity);
-  const groupKey = memberGroupKey(rep, group.mapName, rulesFor(structure));
+  const groupKey = memberGroupKey(rep, group.mapName, rulesFor(structure), standardBeamSectionFor(graph, project, rulesFor(structure)));
   const idxEntry = project.memberNumberIndex.get(groupKey);
   const floorRank = idxEntry?.floorRanks.size ? Math.min(...idxEntry.floorRanks) : Infinity;
   return [symbolRank < 0 ? 999 : symbolRank, num, floorRank];
@@ -161,8 +161,8 @@ function computeTagGroups(group, graph, project, structure, figureType) {
     byTag.get(tag).push(e);
   }
   return [...byTag.entries()].sort((a, b) => {
-    const ta = tagSortTuple(a[0], a[1], group, project, structure);
-    const tb = tagSortTuple(b[0], b[1], group, project, structure);
+    const ta = tagSortTuple(a[0], a[1], group, graph, project, structure);
+    const tb = tagSortTuple(b[0], b[1], group, graph, project, structure);
     for (let i = 0; i < ta.length; i++) if (ta[i] !== tb[i]) return ta[i] - tb[i];
     return a[0].localeCompare(b[0]); // 完全同着時の最終防衛（安定化のみ）
   });
@@ -270,7 +270,7 @@ const MergeBar = observer(({ group, graph, project, structure, figureType, selec
   );
 });
 
-export const MemberListTab = observer(({ composition, project, focusRequest, onToast }) => {
+export const MemberListTab = observer(({ composition, project, focusRequest, onToast, onStructureChanged }) => {
   const [expandedKey, setExpandedKey] = useState(null); // `${mapName}:${タグ}` | null
   const [deleteConfirm, setDeleteConfirm] = useState(null); // { mapName, ids, label } | null
   // 統合選択モード（design-member-numbering-ui.md セクション3）。対象は同一セクション（mapName+group.key）内のみ
@@ -358,7 +358,8 @@ export const MemberListTab = observer(({ composition, project, focusRequest, onT
     // 次のconformToLedgerでjoin経由で吸収されてしまう回帰の防止（splitGroupと同じ判定式）。
     const structure = graph?.structureOverride ?? project?.structuralInfo?.mainStructure;
     const chosenRep = groups[chosenIndex]?.members?.[0];
-    const splitFromSignature = chosenRep ? noJoinSignatureFor(chosenRep, group.mapName, rulesFor(structure)) : null;
+    const splitFromSignature = chosenRep
+      ? noJoinSignatureFor(chosenRep, group.mapName, rulesFor(structure), standardBeamSectionFor(graph, project, rulesFor(structure))) : null;
     const gid = runInAction(() => mergeGroups(project, group.mapName, groups, chosenIndex, { splitFromSignature }));
     if (gid) {
       runInAction(() => renumberMembers(graph, project, group.mapName));
@@ -420,6 +421,7 @@ export const MemberListTab = observer(({ composition, project, focusRequest, onT
               mergeSelectedTags={isMergingHere ? mergeState.selectedTags : null}
               onStartMerge={(tag, materialType) => setMergeState({ group, graph: g, structure: effectiveStructure, figureType, anchorTag: tag, anchorMaterialType: materialType, selectedTags: new Set([tag]) })}
               onToggleMergeTag={toggleMergeTag}
+              onStructureChanged={onStructureChanged}
             />
           );
         })}
@@ -488,12 +490,40 @@ const FoundationTypeSelect = observer(({ project, structure }) => {
   );
 });
 
+// 柱グループ見出しに置く「各階柱寸法」セレクト（在来木造＝columnSizing:'fixed'のみ）。値は階の値
+// （graph.woodColumnWidthMm）——建物全体設定ではない。選択肢は木造正角幅（sectionCatalog.js
+// WOOD_SQUARE_WIDTHSが唯一の情報源）。
+// 変更は主構造変更と同じ経路（onStructureChanged→structuralOrchestration.js
+// recomputeStructuralComposition）に乗せる（実機裁定ステップ4 C-2 QA2）——柱グループの graph は
+// 図面合成上「1つ下の実体階」（伏図慣習）なので、ここで graph.setWoodColumnWidthMm する mutate は
+// 下階を書き換える。recomputeStructuralComposition が下階編集・自階梁の追従
+// （conformWoodSections/beamColumnWidthMm）・建物全体の採番・1 undoエントリをまとめて行う——
+// 自前の conformWoodSections→renumberMembers→pushGraphUndo は持たない（QA指摘: 採番・undoの
+// 仕組みを主構造変更と二重に持たない）。壁はその場で作り直さない——鍵（finish/wallFreshnessKey.js
+// の col=）に柱寸が乗るため、次の境界（仕上げ脱出／構造脱出／読込み）で refreshWallsAllFloors が
+// conformWoodBacking とともに再生成する（既存の鮮度キー設計）。
+const WoodColumnWidthSelect = observer(({ graph, project, onStructureChanged }) => {
+  const value = woodColumnWidthMm(graph, project);
+  function handleChange(width) {
+    onStructureChanged(() => { graph.setWoodColumnWidthMm(width); });
+  }
+  return (
+    <select
+      value={value ?? ''}
+      onChange={e => handleChange(Number(e.target.value))}
+      style={{ ...selectStyle, cursor: 'pointer' }}
+    >
+      {WOOD_SQUARE_WIDTHS.map(w => <option key={w} value={w}>{w}角</option>)}
+    </select>
+  );
+});
+
 // 1分類分のグループ（外部タブの GroupedExteriorTable と同じ「部位ごとの小テーブル」の発想）。
 // 同一形状＝同一タグ（部材番号）であるため、リストはタグ（ラベル）単位で1行のみ表示する
 // （同じラベルの部材は複数あっても重複表示しない。件数はカード見出しに表示）。
 const MemberGroupSection = observer(({
   group, graph, composition, project, structure, figureType, readOnly, expandedKey, onToggle, onExpandKey, onRequestDelete, focusRequest, onToast,
-  mergeModeActiveAnywhere, mergeActive, mergeAnchorTag, mergeAnchorMaterialType, mergeSelectedTags, onStartMerge, onToggleMergeTag,
+  mergeModeActiveAnywhere, mergeActive, mergeAnchorTag, mergeAnchorMaterialType, mergeSelectedTags, onStartMerge, onToggleMergeTag, onStructureChanged,
 }) => {
   // 構造種別が持たない部材種別（×）の個体は一覧から除外する（footing→ベース/柱脚、beam→梁/基礎梁を role で割る）。
   // structure=null（主構造未設定）は素通し。memberKindOf が null を返す表外部材（軒桁・杭）は structureHasMemberKind=true で残る。
@@ -508,6 +538,8 @@ const MemberGroupSection = observer(({
   const isWoodFoundationBeamGroup = group.mapName === 'beamMap' && group.key === 'beam'
     && foundationBeamGroupLabel != null && isFoundationPlane(graph.plane, project);
   const groupLabel = isWoodFoundationBeamGroup ? foundationBeamGroupLabel : group.label;
+  // 柱グループ見出しの「各階柱寸法」欄（在来木造＝columnSizing:'fixed'のみ。主構造名の直書き禁止）。
+  const isWoodColumnGroup = group.mapName === 'columnMap' && rulesFor(structure).columnSizing === 'fixed';
 
   return (
     <div style={{ marginBottom: 16 }}>
@@ -522,6 +554,14 @@ const MemberGroupSection = observer(({
           <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontWeight: 400 }}>
             <span style={{ fontSize: 12, color: '#64748b' }}>基礎種別</span>
             <FoundationTypeSelect project={project} structure={structure} />
+          </label>
+        )}
+        {isWoodColumnGroup && (
+          <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontWeight: 400 }}>
+            {/* この柱グループの graph は図面合成上「1つ下の実体階」（伏図慣習）——欄が実際に
+                書き換える階を明示するため、対象階名（plane.name）を添える（実機裁定）。 */}
+            <span style={{ fontSize: 12, color: '#64748b' }}>各階柱寸法（{graph.plane.name}柱）</span>
+            <WoodColumnWidthSelect graph={graph} project={project} onStructureChanged={onStructureChanged} />
           </label>
         )}
       </div>
@@ -573,17 +613,19 @@ const MemberCard = observer(({
   const representative = (group.mapName === 'beamMap'
     ? members.find(m => (graph.columnAxisOffsets.get(m.axisCL?.id) ?? 0) !== 0)
     : null) ?? members[0];
+  const structure = graph?.structureOverride ?? project?.structuralInfo?.mainStructure;
   // 伏図に表示される柱集合（構造モードは1つ下の階）。梁の接合2択のグレー化判定（柱に取りつくか）に使う——
   // 描画（StructuralLayer.jsx）と同じ composition 解決を通し、自階graphの柱で判定してズレるのを防ぐ。
   const displayedColumns = composition?.graphForCategory('columnMap')?.columns ?? graph.columns;
-  const fieldCtx = { columns: displayedColumns };
+  // woodFixedSection: 在来木造（columnSizing:'fixed'）は柱寸が「各階柱寸法」欄から決まるため、柱・梁の
+  // 断面（sectionDefId）を部材ごとに編集させない（memberCatalog.js disabledWhen が判定に使う）。
+  const fieldCtx = { columns: displayedColumns, woodFixedSection: rulesFor(structure).columnSizing === 'fixed' };
   // 図上で編集する寸法フィールドはフォームから除外（断面図の editable dim と二重入力になるため）。
   // when を持つフィールド（接合方法＝鉄骨の梁のみ）は条件を満たすときだけ出す。
   const allFields = (FIELD_DEFS_BY_CATEGORY[group.category] ?? [])
     .filter(f => f.key in representative && !FIGURE_DIM_KEYS.has(f.key) && (!f.when || f.when(representative)));
   // 木造の基礎梁は断面が構造算定（b×D・常にRC）で決まり、断面マスター選択は意味を持たないため「断面」を隠す
   // （問題.md。有無は主構造ルール structureRules.js foundation.beamSectionField）。
-  const structure = graph?.structureOverride ?? project?.structuralInfo?.mainStructure;
   const isWoodFoundationBeam = group.mapName === 'beamMap' && representative.role === 'foundation'
     && !rulesFor(structure).foundation.beamSectionField;
   // 「断面」は部材番号の直下（図の上）に置く。残りは図の下に並べる。
@@ -608,7 +650,7 @@ const MemberCard = observer(({
   const floorLabel = makeFloorName(graph.plane.startFloor, graph.plane.stories ?? 1);
   // このグループが複数階にまたがるか（project.memberNumberIndex の派生キャッシュを読む。
   // モード境界の収集フェーズで再構築されるため、未収集時は「単一階」として扱う＝安全側のフォールバック）。
-  const groupKeyForIndex = memberGroupKey(representative, group.mapName, rulesFor(structure));
+  const groupKeyForIndex = memberGroupKey(representative, group.mapName, rulesFor(structure), standardBeamSectionFor(graph, project, rulesFor(structure)));
   const idxEntry = project.memberNumberIndex.get(groupKeyForIndex);
   const isMultiFloor = idxEntry ? (idxEntry.floorRanks.size + (idxEntry.hasRoof ? 1 : 0)) > 1 : false;
   // カードヘッダの広がりバッジ（例 "2~3F・計12本"）。design-member-numbering-ui.md 5節。
@@ -630,7 +672,9 @@ const MemberCard = observer(({
   // 予定タグの dry-run（assignNumbers を汚さない使い捨てビュー。memberNumbering.previewSplitTag）。
   function computeSplitPreview(targetMembers) {
     if (!targetMembers.length) return null;
-    const remainderGroupKey = memberGroupKey(representative, group.mapName, rulesFor(structure));
+    const rules = rulesFor(structure);
+    const standardSection = standardBeamSectionFor(graph, project, rules);
+    const remainderGroupKey = memberGroupKey(representative, group.mapName, rules, standardSection);
     // 「この階」は自階の対象が全部移動＝自階分は0本残る。「この部材」はこの階に他に残りが無い場合のみ0本。
     const removeFromRemainder = scope === 'floor' || (scope === 'entity' && members.length === 1);
     const floorInfo = floorRankOf(graph.plane, project);
@@ -639,7 +683,7 @@ const MemberCard = observer(({
       memberSizeKey(targetMembers[0], group.mapName), memberSignature(targetMembers[0], group.mapName),
       floorInfo, {
         remainderGroupKey, removeFromRemainder,
-        orderKey: memberOrderKey(targetMembers[0], group.mapName, rulesFor(structure)),
+        orderKey: memberOrderKey(targetMembers[0], group.mapName, rules, standardSection),
       },
     );
     return { count: targetMembers.length, tag };
@@ -739,7 +783,7 @@ const MemberCard = observer(({
   //   (2) 台帳の grp.no 全値（他階にしか実体が無い＝まだ収集されていないグループの手動タグも拾う）
   function isManualTagUsedElsewhere(tag) {
     const ownGid = representative.numberGroupId;
-    const ownGroupKey = memberGroupKey(representative, group.mapName, rulesFor(structure));
+    const ownGroupKey = memberGroupKey(representative, group.mapName, rulesFor(structure), standardBeamSectionFor(graph, project, rulesFor(structure)));
     for (const [groupKey, t] of assignNumbers(project)) {
       if (groupKey !== ownGroupKey && t === tag) return true;
     }
@@ -776,7 +820,7 @@ const MemberCard = observer(({
       // 次のconformToLedgerが同署名の他の個別採番対象（別の非標準梁）まで吸収してしまう
       // （QA指摘F1。noJoinSignatureForが唯一の判定先）。
       if (!gid) gid = splitGroup(project, group.mapName, members, {
-        splitFromSignature: noJoinSignatureFor(representative, group.mapName, rulesFor(structure)),
+        splitFromSignature: noJoinSignatureFor(representative, group.mapName, rulesFor(structure), standardBeamSectionFor(graph, project, rulesFor(structure))),
       });
       setGroupManualTag(project.memberGroupLedger, gid, value);
       renumberMembers(graph, project, group.mapName);
@@ -1024,9 +1068,20 @@ const MemberCard = observer(({
                 <div style={cardInputWrapStyle}>
                   <MemberFieldInput
                     members={members} fieldDef={sectionField} graph={graph} group={group} project={project}
-                    readOnly={readOnly} onCommit={commitScopedEdit}
+                    readOnly={readOnly || !!sectionField.disabledWhen?.(representative, fieldCtx)} onCommit={commitScopedEdit}
                   />
                 </div>
+              </div>
+            </div>
+          )}
+          {/* 在来木造（columnSizing:'fixed'）の非基礎梁は材幅も「各階柱寸法」欄から決まる（conformWoodSections
+              が柱同寸へそろえる）ため、断面欄の読み取り専用化に加えて理由を示す読み取り専用行を出す
+              （isWoodFoundationBeamと同型の分岐。FIELD_DEFSには足さない）。 */}
+          {group.mapName === 'beamMap' && fieldCtx.woodFixedSection && representative.role !== 'foundation' && (
+            <div style={cardRowStyle}>
+              <div style={cardFieldStyle}>
+                <span style={cardLabelStyle}>梁幅：</span>
+                <span style={{ fontSize: 12, color: '#64748b' }}>{findSectionEntry(representative.sectionDefId)?.width}mm（各階柱寸法より）</span>
               </div>
             </div>
           )}
@@ -1247,7 +1302,10 @@ const NewIntersectionMemberSelector = observer(({ group, graph, project, structu
     const before = serializeGraph(graph);
     runInAction(() => {
       if (group.mapName === 'columnMap') {
-        const column = graph.addColumn(materialType, rules.defaultSections.column, vCL, hCL, {});
+        // 在来木造は「各階柱寸法」欄の値（階の柱寸の正角）を新規柱にも使う。非在来・カタログ外は
+        // 従来どおり rules.defaultSections.column（建物共通の固定値）。
+        const columnSection = woodColumnSectionId(graph, project) ?? rules.defaultSections.column;
+        const column = graph.addColumn(materialType, columnSection, vCL, hCL, {});
         // 壁交点方式では候補に無い自動柱（auto）は再計算で撤去される（woodAutoFill.js）。手動追加は
         // ユーザーの明示なので固定（locked）にして撤去対象から外す。
         if (wallColumns) column.setDimensionStatus('locked');
