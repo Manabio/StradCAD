@@ -158,6 +158,18 @@ test('【不変条件・QA指摘F7】`numberGroupId ?? memberSignature(` の直�
 // のいずれも既存テストが全緑のまま通っていた（無防備）。F1/F12と同じ流儀でMemberListTab.jsxのソースを
 // 直接検査し、変異させれば必ず落ちるようにする。
 
+test('【不変条件・裁定2026-09-17】MemberListTab.jsx: 在来木造（woodFixedSection）の梁カード（beamMap 全カード）は「適用範囲」と「統合…」を出さず、「削除」は残す', () => {
+  const src = fs.readFileSync(path.resolve(import.meta.dirname, 'MemberListTab.jsx'), 'utf8');
+  assert.ok(/const hideScopeAndMerge = group\.mapName === 'beamMap' && fieldCtx\.woodFixedSection;/.test(src),
+    'hideScopeAndMerge（beamMap かつ在来）の判定が無い');
+  assert.ok(/\{!readOnly && !hideScopeAndMerge && \(/.test(src), '「適用範囲」ブロックが hideScopeAndMerge でゲートされていない');
+  assert.ok(/\{!mergeModeActiveAnywhere && !hideScopeAndMerge && \(/.test(src), '「統合…」ボタンが hideScopeAndMerge でゲートされていない');
+  // 「削除」ボタンは在来でもそのまま（hideScopeAndMerge でゲートしない）。
+  assert.ok(/<button onClick=\{onDelete\} style=\{deleteButtonStyle\}>削除/.test(src), '「削除」ボタンが見つからない');
+  const delLine = src.split('\n').find(l => /onClick=\{onDelete\}/.test(l)) ?? '';
+  assert.ok(!/hideScopeAndMerge/.test(delLine), '「削除」が hideScopeAndMerge でゲートされている（裁定は削除を残す）');
+});
+
 test('【不変条件・ステップ4 C-2b／裁定2026-09-16】MemberListTab.jsx: 「各階柱寸法」欄は一覧の先頭（柱グループの外）に、自階柱□の graph（columnMapSelf）を対象に、在来（columnSizing:"fixed"）かつ非R階のときだけ出て、onStructureChangedが配線されている', () => {
   const src = fs.readFileSync(path.resolve(import.meta.dirname, 'MemberListTab.jsx'), 'utf8');
   // 欄の対象は当該階（自階柱□）の graph＝composition.graphForCategory('columnMapSelf')（ユーザー裁定

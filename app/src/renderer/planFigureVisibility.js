@@ -21,3 +21,11 @@ export function shouldShowPlanFigure(appMode) {
 export function shouldShowStairStepNumbers(appMode) {
   return appMode === 'floorplan';
 }
+
+// 通り芯交点の青丸（CenterLinesLayer.jsx IntersectionMarkers）を描くモードか。
+// 敷地モードは通り芯自体を扱わないため従来から描かない。構造モード（伏図）は主構造によらず描かない
+// ——伏図では交点に柱記号（×／□）が乗り、青丸がその上に重なって柱が選べない・見分けられない
+// （ユーザー裁定2026-09-17「主要構造によらず構造モードでは青丸を廃止」）。
+export function shouldShowIntersectionMarkers(appMode) {
+  return appMode !== 'site' && appMode !== 'structure';
+}

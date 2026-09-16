@@ -666,6 +666,10 @@ const MemberCard = observer(({
   // woodFixedSection: 在来木造（columnSizing:'fixed'）は柱寸が「各階柱寸法」欄から決まるため、柱・梁の
   // 断面（sectionDefId）を部材ごとに編集させない（memberCatalog.js disabledWhen が判定に使う）。
   const fieldCtx = { columns: displayedColumns, woodFixedSection: rulesFor(structure).columnSizing === 'fixed' };
+  // 在来木造の梁カード（大梁・小梁・床梁・踊り場梁・土台基礎＝beamMap の全カード）は「適用範囲」
+  // （全体／この階／この部材）と「統合…」を出さない（ユーザー裁定2026-09-17「梁カード全部で実装」）
+  // ——断面が柱寸・梁成表から自動で決まり、部材ごとの分割・統合に意味が無いため。「削除」は残す。
+  const hideScopeAndMerge = group.mapName === 'beamMap' && fieldCtx.woodFixedSection;
   // 図上で編集する寸法フィールドはフォームから除外（断面図の editable dim と二重入力になるため）。
   // when を持つフィールド（接合方法＝鉄骨の梁のみ）は条件を満たすときだけ出す。
   const allFields = (FIELD_DEFS_BY_CATEGORY[group.category] ?? [])
@@ -1038,8 +1042,8 @@ const MemberCard = observer(({
       </div>
       {showBody && (
         <div style={cardBodyStyle}>
-          {/* 適用範囲（分割UI）。ボディ最上段に置く（design-member-numbering-ui.md 2.1）。 */}
-          {!readOnly && (
+          {/* 適用範囲（分割UI）。ボディ最上段に置く（design-member-numbering-ui.md 2.1）。在来の梁カードは出さない（hideScopeAndMerge）。 */}
+          {!readOnly && !hideScopeAndMerge && (
             <div style={{ margin: '6px 0' }}>
               <div style={{ fontSize: 11, color: '#64748b', marginBottom: 4 }}>適用範囲</div>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
@@ -1182,7 +1186,7 @@ const MemberCard = observer(({
           ))}
           {!readOnly && (
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 10 }}>
-              {!mergeModeActiveAnywhere && (
+              {!mergeModeActiveAnywhere && !hideScopeAndMerge && (
                 <button
                   type="button"
                   onClick={onStartMerge}

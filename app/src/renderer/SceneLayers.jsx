@@ -20,7 +20,7 @@ import { DrawPreview } from './DrawPreview.jsx';
 import { CLAddPreview } from './CLAddPreview.jsx';
 import { WallRefIndicator } from './WallRefIndicator.jsx';
 import { SiteLinesLayer, SiteDrawPreview } from './SiteLinesLayer.jsx';
-import { shouldShowPlanFigure, shouldShowStairStepNumbers } from './planFigureVisibility.js';
+import { shouldShowPlanFigure, shouldShowStairStepNumbers, shouldShowIntersectionMarkers } from './planFigureVisibility.js';
 import { ElevationLayer } from './ElevationLayer.jsx';
 
 // ================================================================
@@ -163,7 +163,7 @@ export const SceneLayers = observer(({
               selectedId={appMode === 'opening' ? mode?.selectedOpeningId : null}
               onSelectOpening={onOpeningTagClick}
             />
-            {appMode !== 'site' && <IntersectionMarkers graph={graph} viewport={viewport} />}
+            {shouldShowIntersectionMarkers(appMode) && <IntersectionMarkers graph={graph} viewport={viewport} />}
             <DrawPreview
               drawState={mode?.drawState ?? null}
               snapPoint={snapPoint}
