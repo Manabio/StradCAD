@@ -82,7 +82,10 @@
 **材寸署名**＝部材の材料・断面・配筋等から導出する採番グループの既定キー（`memberCatalog.memberSignature`）。**numberGroupId**＝分割・統合・手動採番でのみ設定される明示グループID（null＝署名から自動導出）。**部材グループ台帳**（`project.memberGroupLedger`）＝上記の明示操作だけを持つ建物全体・永続の台帳（`grp.spec`/`grp.join`/`grp.no`/`grp.mergedInto`）。設計意図は`.claude/structural-model.md`。
 
 ## 各階柱寸法
-在来木造の柱寸（幅mm）を階ごとに持つ値（`graph.woodColumnWidthMm`。null＝ルール既定120角）。構造リスト柱グループ見出しの欄で編集する（既定90/105/120角）。解決は`structural/structureRules.js`の`woodColumnWidthMm`/`woodColumnSectionId`が唯一の入口——柱の材幅（`conformWoodSections`）、壁下地材（`conformWoodBacking`）、壁の鮮度キー（`col=`）はすべてこれを経由する。**梁の材幅（標準材）は自階のこの値ではなく「梁を支える1つ下の実体階」の値を参照する**——下記「標準材（在来）」参照。設計意図は`.claude/structural-model.md`。
+在来木造の柱寸（幅mm）を階ごとに持つ値（`graph.woodColumnWidthMm`。null＝ルール既定120角）。構造リスト柱グループ見出しの欄で編集する（既定90/105/120角）。解決は`structural/structureRules.js`の`woodColumnWidthMm`/`woodColumnSectionId`が唯一の入口——柱の材幅（`conformWoodSections`）、壁下地材（`conformWoodBacking`）、壁の鮮度キー（`col=`）はすべてこれを経由する。**梁の材幅（標準材）は自階のこの値ではなく「梁を支える1つ下の実体階」の値を参照する**——下記「標準材（在来）」参照。**柱1本単位では個別指定（下記「共通／個別指定」）が優先する**（`columnWidthMm(column, graph, project)`が唯一の解決子。柱自身の断面はこの値を経由し、各階柱寸法を直接読まない）。設計意図は`.claude/structural-model.md`。
+
+## 共通／個別指定（在来木造の柱寸）
+在来木造の柱寸（幅mm）の2層（ステップ3）。**共通**＝`column.woodColumnWidthMm===null`。上記「各階柱寸法」（階の値）に従う。**個別指定**＝`column.woodColumnWidthMm`が木造正角のカタログ幅（`sectionCatalog.js`の`WOOD_SQUARE_WIDTHS`）を持つ状態。「個別指定＝階の値と同値」は存在しない（`MemberListTab.jsx`の`MemberColumnWidthSelect`が選択時に階の値と同じ幅ならnullへ正規化する。台帳の手動タグ（`grp.join`）を持つ共通グループへ、階の値と同幅の個別柱が署名一致で吸収され1本1タグが消える事故の再発防止）。梁幅・梁成算定・壁下地材・壁の鮮度キーには影響しない（柱1本の断面だけを変える機能）。設計意図は`.claude/structural-model.md`「在来木造の柱は『共通』と『個別指定』の2層」節。
 
 ## 標準材（在来）
 在来木造の非標準梁判定の基準となる断面。**幅＝「梁を支える1つ下の実体階」の各階柱寸法、成＝梁成表の最小成**（`WOOD_BEAM_DEPTH_TABLE.depthsByLoads[0][0]`＝120。`woodRectSectionKey(幅, 120)`）。カタログ外の幅は`rulesFor(在来).defaultSections.beam`＝建物共通の固定値'WOOD-120x120'へフォールバック。個別採番（下記）の対象外を決める基準になる。
@@ -92,7 +95,7 @@
 （実機裁定ステップ4 C-2 QA4: 標準材の解決がこの採番パイプラインとUI同期経路で二系統に分かれ、下階の柱寸変更後に構造リストの編集（`renumberMembers`）でタグが往復するバグが実機で見つかった。派生値方式で入口を1つに統一して解消した。）
 
 ## 個別採番
-在来木造で標準材以外の梁（成が同じでも）を材ごとに個別のグループとして採番する規律（`memberCatalog.isIndividuallyNumbered`/`memberGroupKey`/`memberOrderKey`）。伏図で梁をタップして選択する対象でもある。設計意図は`.claude/structural-model.md`。
+在来木造で標準材以外の梁（成が同じでも）を材ごとに個別のグループとして採番する規律（`memberCatalog.isIndividuallyNumbered`/`memberGroupKey`/`memberOrderKey`）。伏図で梁をタップして選択する対象でもある。柱にも同じ規律を適用する（`woodColumnWidthMm`を個別指定した柱は1本1タグ。上記「共通／個別指定」参照）。設計意図は`.claude/structural-model.md`。
 
 ## 図面合成 / FigureDef / レイヤ / バインディング
 1枚の図面を「複数階×複数カテゴリの合成」として持つ仕組み（`.claude/figure.md`）。`FigureDef`＝レイヤ仕様の宣言的リスト。レイヤ＝`(供給階, カテゴリ, スタイル, 役割)`。バインディング＝レイヤが解決された自己完結グラフ（階固有CL＋通り芯参照を内包）。`composition.graphForCategory(mapName)` が描画・編集の対象グラフを一元的に返す。構造伏図は出演階＝`{自階, 自階−1}` の特殊例。

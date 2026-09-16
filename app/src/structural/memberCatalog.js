@@ -1,7 +1,7 @@
 // 注意: このファイルは core.js から（memberNumbering.js 経由で）import されるため、
 // 循環import回避のため core.js への依存を持たない（StructuralMaterialType の値は文字列リテラルで直接扱う）。
 
-import { findSectionEntry } from './sectionCatalog.js';
+import { findSectionEntry, WOOD_SQUARE_WIDTHS } from './sectionCatalog.js';
 
 // 構造部材の分類定義（A=点定義/B=軸定義/C=面定義/D=垂直面材。F=基礎・G=開口貫通は別分類でこの定数の対象外。
 // CLAUDE.md「構造材定義」セクション参照）
@@ -253,12 +253,29 @@ export function memberSpecString(entity, mapName) {
 // （structureRules.js が memberCatalog.js を import する循環を避けるため。ファイル冒頭の注意と同じ理由）。
 // ================================================================
 
-/** entity が個別採番の対象か（在来木造の非標準梁のみ）。rules.numbering.individualBeamRoles を
- *  持たない主構造（非在来6種・未定）は常にfalse。standardSection＝標準材のsectionDefId（省略時
- *  rules.defaultSections.beam＝建物共通の固定値）。在来木造は呼び出し側（structural/memberNumbering.js・
- *  MemberListTab.jsx）が structureRules.js の woodColumnSectionId（階の柱寸から導く正角）を解決して
- *  渡す——このファイルは循環import回避のため structureRules.js を import しない（ファイル冒頭の注意）。 */
+/** entity が個別採番の対象か（在来木造の非標準梁、または柱寸を個別指定した在来木造の柱）。
+ *  柱（mapName==='columnMap'）は rules.numbering.individualColumns==='widthOverride'（在来木造だけ。
+ *  ステップ3）かつ entity.woodColumnWidthMm が木造正角のカタログ幅（WOOD_SQUARE_WIDTHS）に含まれる
+ *  ときだけ対象——杭（role:'foundation'）は柱寸法欄の対象外なので除く。カタログ外の値（旧データ等）は
+ *  個別扱いにしない（QA裁定10: 採番だけ個別・寸法解決は階の値というねじれを作らない——
+ *  structureRules.js の columnWidthMm/columnSectionId も同じ「カタログ幅か否か」だけで判定するため、
+ *  ここを合わせることで「個別採番されるが表示は共通の値」という食い違いを防ぐ）。
+ *  「個別指定＝階の値と同値」は MemberListTab.jsx の MemberColumnWidthSelect が書き込み時点で
+ *  null（共通）へ正規化するため存在しない（このファイルは graph を持たず階の値と直接比較できない
+ *  ——排他の保証は書き込み側の責務）。standardSection は柱側では使わない（柱の「標準」は個体の
+ *  woodColumnWidthMm の有無そのもので、断面キーの一致比較ではないため）。
+ *  梁は従来どおり: rules.numbering.individualBeamRoles を持たない主構造（非在来6種・未定）は常にfalse。
+ *  standardSection＝標準材のsectionDefId（省略時 rules.defaultSections.beam＝建物共通の固定値）。
+ *  在来木造は呼び出し側（structural/memberNumbering.js・MemberListTab.jsx）が structureRules.js の
+ *  woodColumnSectionId（階の柱寸から導く正角）を解決して渡す——このファイルは循環import回避のため
+ *  structureRules.js を import しない（ファイル冒頭の注意）。 */
 export function isIndividuallyNumbered(entity, mapName, rules, standardSection = rules.defaultSections.beam) {
+  if (mapName === 'columnMap') {
+    return rules.numbering?.individualColumns === 'widthOverride'
+      && entity.materialType === rules.baseMaterial
+      && entity.role !== 'foundation'
+      && WOOD_SQUARE_WIDTHS.includes(entity.woodColumnWidthMm);
+  }
   return mapName === 'beamMap'
     && (rules.numbering?.individualBeamRoles?.includes(entity.role) ?? false)
     && entity.materialType === rules.baseMaterial
@@ -275,10 +292,11 @@ export function memberGroupKey(entity, mapName, rules, standardSection = rules.d
 }
 
 /** 採番の並び順キー（memberNumbering.compareGroupsDesc がsizeKey・出現階に次ぐタイブレークに使う）。
- *  個別採番対象は位置（軸方向→軸座標→区間下端）で決める——idに依存しないため、部材の再生成で
- *  idが変わっても番号が安定する。非個別・非梁は空配列（従来どおりsignatureでタイブレーク）。 */
+ *  個別採番対象は位置（柱＝座標(x,y)・梁＝軸方向→軸座標→区間下端）で決める——idに依存しないため、
+ *  部材の再生成でidが変わっても番号が安定する。非個別・非梁・非柱は空配列（従来どおりsignatureでタイブレーク）。 */
 export function memberOrderKey(entity, mapName, rules, standardSection = rules.defaultSections.beam) {
   if (!isIndividuallyNumbered(entity, mapName, rules, standardSection)) return [];
+  if (mapName === 'columnMap') return [entity.x ?? 0, entity.y ?? 0];
   return [entity.isVertical ? 1 : 0, entity.axisValue ?? 0, Math.min(entity.coord1 ?? 0, entity.coord2 ?? 0)];
 }
 

@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { collectFloorGroups, assignNumbers, applyNumbers, floorSpanLabel, renumberMembers } from './memberNumbering.js';
 import { splitGroup, setGroupManualTag } from './memberGroups.js';
-import { makeWall, makeBeam, makeGraph, makeProject } from './memberTestFixtures.js';
+import { makeWall, makeBeam, makeColumn, makeGraph, makeProject } from './memberTestFixtures.js';
 import { isIndividuallyNumbered, memberOrderKey, noJoinSignatureFor } from './memberCatalog.js';
 import { rulesFor, TRADITIONAL_WOOD_STRUCTURE } from './structureRules.js';
 
@@ -339,6 +339,68 @@ test('【失敗系・ステップ4第3単位②】isIndividuallyNumbered/memberO
   const undef = { ...base, coord1: undefined, coord2: undefined, axisValue: undefined, isVertical: undefined };
   assert.doesNotThrow(() => memberOrderKey(undef, 'beamMap', rules));
   assert.deepEqual(memberOrderKey(undef, 'beamMap', rules), [0, 0, 0], 'coord/axis未定義は全て0にフォールバックするはず');
+});
+
+// ---- ステップ3（2026-09-17裁定）: 在来木造の柱寸の個別指定は1本1タグ、共通は1タグにまとまる ----
+function woodColumn(id, sectionDefId, extra = {}) {
+  return makeColumn(id, sectionDefId, { materialType: 'WOOD', role: 'standard', ...extra });
+}
+
+test('【ステップ3】collectFloorGroups/applyNumbers: 個別柱寸(105)を持つ柱2本はそれぞれ別タグになり、共通(120)の柱2本は1タグにまとまる（採番順はsizeKey降順優先＝断面が大きい共通120がC1、個別105は座標昇順でC2・C3）', () => {
+  const project = makeProject([{ id: 'p1', startFloor: 1 }]);
+  // 挿入順はあえて座標昇順と揃えない（orderKey=[x,y]での並び替えを検証するため）。
+  const individualB = woodColumn('c1', 'WOOD-105x105', { woodColumnWidthMm: 105, x: 2000, y: 0 });
+  const individualA = woodColumn('c2', 'WOOD-105x105', { woodColumnWidthMm: 105, x: 1000, y: 0 });
+  const commonA = woodColumn('c3', 'WOOD-120x120', { woodColumnWidthMm: null, x: 0, y: 0 });
+  const commonB = woodColumn('c4', 'WOOD-120x120', { woodColumnWidthMm: null, x: 3000, y: 0 });
+  const g = makeGraph('p1', { columnMap: [individualB, individualA, commonA, commonB] });
+  g.structureOverride = TRADITIONAL_WOOD_STRUCTURE;
+
+  collectFloorGroups(g, project);
+  applyNumbers(g, project, assignNumbers(project));
+
+  // 断面積は共通(120×120=14400)が個別(105×105=11025)より大きい＝sizeKey降順でC1は共通のグループ。
+  assert.equal(commonA.memberNo, 'C1', '断面の大きい共通(120角)の柱グループがC1のはず');
+  assert.equal(commonB.memberNo, 'C1', '共通の柱2本は同じタグ（C1）にまとまる');
+  assert.equal(individualA.memberNo, 'C2', '個別指定の柱はx=1000（座標昇順で先）がC2のはず');
+  assert.equal(individualB.memberNo, 'C3', 'もう一方の個別指定の柱（x=2000）はC3');
+});
+
+test('【QA裁定・ステップ3】renumberMembers: 共通柱グループに手動タグ（grp.join）があっても、own(105)が階の値(120)と異なる個別柱はconformToLedgerの署名一致で吸収されず別タグになる（QA実測: own=階の値の個別柱が吸収され1本1タグが消える事故の再発防止）', () => {
+  const project = makeProject([{ id: 'p1', startFloor: 1 }]);
+  const c1 = woodColumn('c1', 'WOOD-120x120', { woodColumnWidthMm: null, x: 0, y: 0 }); // 共通（階の値120）
+  const g = makeGraph('p1', { columnMap: [c1] });
+  g.structureOverride = TRADITIONAL_WOOD_STRUCTURE;
+
+  // c1へ手動タグを打つ（実UIのcommitManualNumberと同じ流れ。共通柱はnoJoinSignatureFor=nullのため
+  // join=trueで台帳に書かれる＝以後同署名の部材はconformToLedgerで自動吸収される）。
+  const gid = splitGroup(project, 'columnMap', [c1]);
+  setGroupManualTag(project.memberGroupLedger, gid, 'CX');
+  renumberMembers(g, project, 'columnMap');
+  assert.equal(c1.memberNo, 'CX', '前提: 共通柱の手動タグがCXとして確定している');
+
+  // own=105（階の値120とは異なる）の個別柱を追加。sectionDefIdは conformWoodSections が実際に
+  // 生成する値（'WOOD-105x105'）を直接与える——本ファイルは duck-typed fixture のため conform自体は
+  // シミュレートしない（既存の個別採番テストと同じ規約）。
+  const c2 = woodColumn('c2', 'WOOD-105x105', { woodColumnWidthMm: 105, x: 1000, y: 0 });
+  g.columnMap.set(c2.id, c2);
+  renumberMembers(g, project, 'columnMap');
+
+  assert.notEqual(c2.memberNo, 'CX', 'own=105は共通(120)と署名が異なるため、CXグループへ吸収されない');
+  assert.equal(c1.memberNo, 'CX', '既存の共通柱の手動タグは変更後も維持される');
+});
+
+test('【失敗系・ステップ3】collectFloorGroups/applyNumbers: 非在来（主構造未設定）は柱にwoodColumnWidthMmがあっても個別化されず1グループにまとまる', () => {
+  const project = makeProject([{ id: 'p1', startFloor: 1 }]);
+  const c1 = woodColumn('c1', 'WOOD-105x105', { woodColumnWidthMm: 105, x: 0, y: 0 });
+  const c2 = woodColumn('c2', 'WOOD-105x105', { woodColumnWidthMm: 105, x: 1000, y: 0 });
+  const g = makeGraph('p1', { columnMap: [c1, c2] }); // structureOverride未設定＝主構造未定
+
+  collectFloorGroups(g, project);
+  applyNumbers(g, project, assignNumbers(project));
+
+  assert.equal(c1.memberNo, 'C1');
+  assert.equal(c2.memberNo, 'C1', '非在来はwoodColumnWidthMmを個別採番の材料に使わない（1グループ）');
 });
 
 test('【失敗系・ステップ4第3単位②】collectFloorGroups: 非在来（主構造未設定）は非正角断面(120×330)の梁が複数あっても個別化されず1グループにまとまる', () => {

@@ -15,7 +15,7 @@ import { CL_OVERLAP_TOL_MM } from '../core/constants.js';
 import { findSectionEntry, woodRectSectionKey } from './sectionCatalog.js';
 import {
   rulesFor, effectiveStructure, TRADITIONAL_WOOD_FRAMING, WOOD_DEPTH_BEAM_ROLES,
-  woodColumnWidthMm, woodColumnSectionId, resolvedBeamColumnWidthMm,
+  woodColumnWidthMm, woodColumnSectionId, resolvedBeamColumnWidthMm, columnSectionId,
 } from './structureRules.js';
 import { selfWallSegments, findBeamAnchorCL, wallBeamAxisExcludeKey, bracketExtent } from './wallBeamAxes.js';
 import { woodStudCodeFor } from '../finish/materials/backingClass.js';
@@ -558,8 +558,9 @@ export function autoFillWoodFloorBeams(graph, project) {
  *    成は現在の断面の成を保つ（正角105→正角120、105×240→120×240）。graph.beamColumnWidthMm が
  *    未再計算（null）の間は自階の値へ暫定フォールバックする（resolvedBeamColumnWidthMm 自体の規約）。
  *    カタログに無い組み合わせ（断面が引けない・成が未収録）はそろえない（成を無言で縮めない）。
- *  dimensionStatus に関わらず書き換える（105角のまま残す選択肢は裁定で退けられた）——在来木造の柱寸は
- *  部材ごとの値ではなく階の値（「各階柱寸法」欄＝ステップ4）なので、再計算のたびに欄の値へそろう恒久ルール。
+ *  dimensionStatus に関わらず書き換える（105角のまま残す選択肢は裁定で退けられた）——柱は解決した値
+ *  （個別指定 ?? 階の値。structureRules.js columnWidthMm/columnSectionId）へそろう恒久ルール
+ *  （柱寸を個別指定した柱はその値、それ以外は「各階柱寸法」欄＝ステップ4の値。ステップ3・2026-09-17裁定）。
  *  在来以外（framing を持たない主構造）は何もしない。更新した部材idを返す。
  * 呼び出し元（structuralRecompute.js・structuralOrchestration.js下階編集経路）が事前に
  * graph.setBeamColumnWidthMm(beamColumnWidthMm(graph, belowGraph, project)) を書いてから呼ぶこと
@@ -577,8 +578,9 @@ export function conformWoodSections(graph, project) {
   const updated = [];
   for (const column of graph.columns) {
     if (column.materialType !== rules.baseMaterial || column.role === 'foundation') continue;
-    if (column.sectionDefId === columnSection) continue;
-    column.setField('sectionDefId', columnSection);
+    const key = columnSectionId(column, graph, project);
+    if (!key || column.sectionDefId === key) continue;
+    column.setField('sectionDefId', key);
     updated.push(column.id);
   }
   for (const beam of graph.beams) {

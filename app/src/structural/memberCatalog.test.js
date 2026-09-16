@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {
   memberSymbol, MEMBER_GROUPS, NUMBERED_MAPS, FIELD_DEFS_BY_CATEGORY, SIGNATURE_FIELDS_BY_MAP, MEMBER_CATEGORY,
-  noJoinSignatureFor, memberSignature,
+  noJoinSignatureFor, memberSignature, isIndividuallyNumbered, memberGroupKey, memberOrderKey,
 } from './memberCatalog.js';
 import { makeBeam, makeColumn } from './memberTestFixtures.js';
 import { rulesFor, TRADITIONAL_WOOD_STRUCTURE, UNSPECIFIED_STRUCTURE } from './structureRules.js';
@@ -119,6 +119,93 @@ test('【失敗系・3e-2】MEMBER_GROUPS: 「小梁」グループのfilterはr
   assert.equal(beamSubGroup.filter(floor), false);
 });
 
+// ---- ステップ3（2026-09-17裁定）: 在来木造の柱の個別採番（isIndividuallyNumbered/memberGroupKey/memberOrderKey） ----
+test('【ステップ3】isIndividuallyNumbered: columnMapは在来木造(numbering.individualColumns==="widthOverride")かつ杭でない木造柱にwoodColumnWidthMmがあるときだけtrue', () => {
+  const rules = rulesFor(TRADITIONAL_WOOD_STRUCTURE);
+  const common = makeColumn('c1', 'WOOD-120x120', { materialType: 'WOOD', role: 'standard', woodColumnWidthMm: null });
+  const individual = makeColumn('c2', 'WOOD-105x105', { materialType: 'WOOD', role: 'standard', woodColumnWidthMm: 105 });
+  const pile = makeColumn('c3', 'WOOD-105x105', { materialType: 'WOOD', role: 'foundation', woodColumnWidthMm: 105 });
+  const steel = makeColumn('c4', 'STEEL-SQ200x200x9.0', { materialType: 'STEEL', role: 'standard', woodColumnWidthMm: 105 });
+  assert.equal(isIndividuallyNumbered(common, 'columnMap', rules), false, '個別指定の無い柱（共通）はfalse');
+  assert.equal(isIndividuallyNumbered(individual, 'columnMap', rules), true, '個別指定した木造柱はtrue');
+  assert.equal(isIndividuallyNumbered(pile, 'columnMap', rules), false, '杭（role:foundation）は柱寸法欄の対象外なのでfalse');
+  assert.equal(isIndividuallyNumbered(steel, 'columnMap', rules), false, '主構造の材種と違えばfalse');
+});
+
+test('【失敗系・QA裁定10・ステップ3】isIndividuallyNumbered: woodColumnWidthMmがカタログ外（正角90/105/120以外。例100）の柱は個別採番の対象にしない（採番は個別・寸法解決は共通というねじれの防止）', () => {
+  const rules = rulesFor(TRADITIONAL_WOOD_STRUCTURE);
+  const outOfCatalog = makeColumn('c1', 'WOOD-100x100', { materialType: 'WOOD', role: 'standard', woodColumnWidthMm: 100 });
+  assert.equal(isIndividuallyNumbered(outOfCatalog, 'columnMap', rules), false, 'カタログ外の個別値(100)は個別採番の対象にならない');
+});
+
+test('【失敗系・ステップ3】isIndividuallyNumbered: 非在来（individualColumns:null）の主構造は柱にwoodColumnWidthMmがあっても常にfalse', () => {
+  for (const structure of ['木造（2"×4"）', 'S造', 'RC造(ラーメン)', UNSPECIFIED_STRUCTURE]) {
+    const rules = rulesFor(structure);
+    const column = makeColumn('c1', rules.defaultSections.column, { materialType: rules.baseMaterial, role: 'standard', woodColumnWidthMm: 105 });
+    assert.equal(isIndividuallyNumbered(column, 'columnMap', rules), false, structure);
+  }
+});
+
+test('【ステップ3】memberGroupKey: 個別柱は signature#id（部材ごとに一意）、共通柱は signature を共有する', () => {
+  const rules = rulesFor(TRADITIONAL_WOOD_STRUCTURE);
+  const commonA = makeColumn('c1', 'WOOD-120x120', { materialType: 'WOOD', role: 'standard', woodColumnWidthMm: null });
+  const commonB = makeColumn('c2', 'WOOD-120x120', { materialType: 'WOOD', role: 'standard', woodColumnWidthMm: null });
+  const individualA = makeColumn('c3', 'WOOD-105x105', { materialType: 'WOOD', role: 'standard', woodColumnWidthMm: 105 });
+  const individualB = makeColumn('c4', 'WOOD-105x105', { materialType: 'WOOD', role: 'standard', woodColumnWidthMm: 105 });
+  assert.equal(memberGroupKey(commonA, 'columnMap', rules), memberGroupKey(commonB, 'columnMap', rules), '共通柱は同一署名を共有する');
+  assert.notEqual(memberGroupKey(individualA, 'columnMap', rules), memberGroupKey(individualB, 'columnMap', rules), '個別柱は断面が同じでも部材ごとに別グループ');
+  assert.equal(memberGroupKey(individualA, 'columnMap', rules), `${memberSignature(individualA, 'columnMap')}#${individualA.id}`);
+});
+
+test('【ステップ3】memberOrderKey: columnMapの個別柱は座標(x,y)を返し、共通柱は空配列', () => {
+  const rules = rulesFor(TRADITIONAL_WOOD_STRUCTURE);
+  const common = makeColumn('c1', 'WOOD-120x120', { materialType: 'WOOD', role: 'standard', woodColumnWidthMm: null, x: 100, y: 200 });
+  const individual = makeColumn('c2', 'WOOD-105x105', { materialType: 'WOOD', role: 'standard', woodColumnWidthMm: 105, x: 100, y: 200 });
+  assert.deepEqual(memberOrderKey(common, 'columnMap', rules), []);
+  assert.deepEqual(memberOrderKey(individual, 'columnMap', rules), [100, 200]);
+});
+
+test('【失敗系・ステップ3】memberOrderKey: columnMapの個別柱でx/y未定義でも例外を投げず[0,0]にフォールバックする', () => {
+  const rules = rulesFor(TRADITIONAL_WOOD_STRUCTURE);
+  const individual = makeColumn('c1', 'WOOD-105x105', { materialType: 'WOOD', role: 'standard', woodColumnWidthMm: 105 });
+  assert.doesNotThrow(() => memberOrderKey(individual, 'columnMap', rules));
+  assert.deepEqual(memberOrderKey(individual, 'columnMap', rules), [0, 0]);
+});
+
+test('【不変条件・ステップ3】MemberListTab.jsx: 柱グループの一覧ソースは columnListCategory(rulesFor(selfStructure).drawing) から解決する（在来木造だけ自階柱□へ切替え）', () => {
+  const src = fs.readFileSync(path.resolve(import.meta.dirname, 'MemberListTab.jsx'), 'utf8');
+  assert.ok(/const categoryFor = group => \(group\.mapName === 'columnMap' \? columnListCategory\(rulesFor\(selfStructure\)\.drawing\) : group\.mapName\);/.test(src),
+    'categoryFor が columnListCategory(rulesFor(selfStructure).drawing) から解決していない（一覧ソースを columnMap に戻す回帰）');
+  assert.ok(/const resolved = composition\?\.resolveCategory\(categoryFor\(group\)\);/.test(src),
+    '柱グループの graph 解決が composition.resolveCategory(categoryFor(group)) を経由していない');
+});
+
+test('【不変条件・ステップ3】MemberListTab.jsx: MemberColumnWidthSelect（個別柱寸セレクト）のhandleChangeはonStructureChangedだけを呼び、setDimensionStatusを呼ばない', () => {
+  const src = fs.readFileSync(path.resolve(import.meta.dirname, 'MemberListTab.jsx'), 'utf8');
+  const compMatch = /const MemberColumnWidthSelect = observer\(\(\{ members, graph, project, readOnly, onStructureChanged \}\) => \{([\s\S]*?)\n\}\);/.exec(src);
+  assert.ok(compMatch, 'MemberColumnWidthSelect コンポーネント本体が見つからない');
+  const fnMatch = /function handleChange\(width\) \{([\s\S]*?)\n {2}\}/.exec(compMatch[1]);
+  assert.ok(fnMatch, 'MemberColumnWidthSelectのhandleChange関数本体が見つからない');
+  assert.ok(/onStructureChanged\(\(\) => \{ for \(const m of members\) m\.setField\('woodColumnWidthMm', next\); \}\);/.test(fnMatch[1]),
+    'handleChangeがonStructureChanged経由でwoodColumnWidthMmを書いていない');
+  assert.ok(!fnMatch[1].includes('setDimensionStatus'),
+    '個別化時にdimensionStatusを書き換えている（裁定: dimensionStatusは使わない。自動撤去ループ・手動固定の意味と衝突する）');
+});
+
+test('【QA裁定・ステップ3】MemberListTab.jsx: MemberColumnWidthSelectは選んだ幅が階の値（woodColumnWidthMm(graph, project)）と同じならnull（共通へ戻す）を書く（個別指定は階の値と排他）', () => {
+  const src = fs.readFileSync(path.resolve(import.meta.dirname, 'MemberListTab.jsx'), 'utf8');
+  const compMatch = /const MemberColumnWidthSelect = observer\(\(\{ members, graph, project, readOnly, onStructureChanged \}\) => \{([\s\S]*?)\n\}\);/.exec(src);
+  assert.ok(compMatch, 'MemberColumnWidthSelect コンポーネント本体が見つからない');
+  const fnMatch = /function handleChange\(width\) \{([\s\S]*?)\n {2}\}/.exec(compMatch[1]);
+  assert.ok(fnMatch, 'MemberColumnWidthSelectのhandleChange関数本体が見つからない');
+  assert.ok(/const commonWidth = woodColumnWidthMm\(graph, project\);/.test(fnMatch[1]),
+    'handleChangeが階の値(woodColumnWidthMm(graph, project))を解決していない');
+  assert.ok(/const next = width === commonWidth \? null : width;/.test(fnMatch[1]),
+    'handleChangeが「階の値と同じならnull」を書いていない（個別指定と階の値の排他が保証されない）');
+  assert.ok(/<select value=\{value\} onChange=\{e => handleChange\(Number\(e\.target\.value\)\)\} disabled=\{readOnly\}/.test(compMatch[1]),
+    'MemberColumnWidthSelectのselectがreadOnlyでdisabledされていない');
+});
+
 // ---- ステップ4第3単位②（非標準梁の個別採番）: groupKey導出の唯一の入口の不変条件 ----
 
 // structureRules.test.js の scanOffenders と同じ簡易パターン（行コメント落とし・ブロックコメント行頭除外）
@@ -160,14 +247,52 @@ test('【不変条件・QA指摘F7】`numberGroupId ?? memberSignature(` の直�
 
 test('【不変条件・裁定2026-09-17】MemberListTab.jsx: 在来木造（woodFixedSection）の梁カード（beamMap 全カード）は「適用範囲」と「統合…」を出さず、「削除」は残す', () => {
   const src = fs.readFileSync(path.resolve(import.meta.dirname, 'MemberListTab.jsx'), 'utf8');
-  assert.ok(/const hideScopeAndMerge = group\.mapName === 'beamMap' && fieldCtx\.woodFixedSection;/.test(src),
-    'hideScopeAndMerge（beamMap かつ在来）の判定が無い');
+  // ステップ3（2026-09-17）: 柱寸を個別指定できる在来木造の柱カード（woodColumnCard）も梁カードと
+  // 同じ理由（適用範囲・統合に意味が無い）でゲートに加わる。
+  assert.ok(/const hideScopeAndMerge = \(group\.mapName === 'beamMap' \|\| woodColumnCard\) && fieldCtx\.woodFixedSection;/.test(src),
+    'hideScopeAndMerge（beamMap または woodColumnCard かつ在来）の判定が無い');
   assert.ok(/\{!readOnly && !hideScopeAndMerge && \(/.test(src), '「適用範囲」ブロックが hideScopeAndMerge でゲートされていない');
   assert.ok(/\{!mergeModeActiveAnywhere && !hideScopeAndMerge && \(/.test(src), '「統合…」ボタンが hideScopeAndMerge でゲートされていない');
-  // 「削除」ボタンは在来でもそのまま（hideScopeAndMerge でゲートしない）。
-  assert.ok(/<button onClick=\{onDelete\} style=\{deleteButtonStyle\}>削除/.test(src), '「削除」ボタンが見つからない');
-  const delLine = src.split('\n').find(l => /onClick=\{onDelete\}/.test(l)) ?? '';
-  assert.ok(!/hideScopeAndMerge/.test(delLine), '「削除」が hideScopeAndMerge でゲートされている（裁定は削除を残す）');
+  // 「削除」ボタンは梁カードでは在来でもそのまま出る（hideScopeAndMerge でゲートしない）。
+  // 柱カードは共通/個別で表示が分かれるため（下の専用テストで検証）、ここは梁側の不変条件だけを見る。
+  assert.ok(/削除\{isIndividualColumn \? '' : `（\$\{members\.length\}件）`\}/.test(src), '「削除」ボタンのラベルが見つからない');
+  const delBlock = /\{!\(woodColumnCard && !isIndividualColumn\) && \([\s\S]{0,200}?<button[\s\S]{0,80}?onClick=\{isIndividualColumn \? \(\) => setColumnRevertConfirm\(true\) : onDelete\}/.test(src);
+  assert.ok(delBlock, '「削除」ボタンが柱の共通/個別カードでハンドラを分岐していない');
+  assert.ok(!/hideScopeAndMerge[\s\S]{0,80}<button[\s\S]{0,80}onDelete/.test(src), '「削除」が hideScopeAndMerge で直接ゲートされている（裁定は梁カードの削除を残す）');
+});
+
+test('【不変条件・ステップ3】MemberListTab.jsx: 在来木造の柱カードは共通（woodColumnCard&&!isIndividualColumn）で削除ボタン自体を出さず、個別（isIndividualColumn）は「削除」で共通へ戻す（onRequestDeleteは呼ばない）', () => {
+  const src = fs.readFileSync(path.resolve(import.meta.dirname, 'MemberListTab.jsx'), 'utf8');
+  assert.ok(/const woodColumnCard = group\.mapName === 'columnMap' && fieldCtx\.woodFixedSection && representative\.role !== 'foundation';/.test(src),
+    'woodColumnCard の判定が見つからない');
+  assert.ok(/const isIndividualColumn = woodColumnCard && isIndividuallyNumbered\(representative, 'columnMap', rulesFor\(structure\)\);/.test(src),
+    'isIndividualColumn の判定が見つからない');
+  assert.ok(/setColumnRevertConfirm\(true\)/.test(src), '個別柱カードの削除が確認ダイアログ（共通へ戻す）を開いていない');
+  const revertMatch = /\{columnRevertConfirm && \([\s\S]{0,600}?onSelect=\{value => \{([\s\S]{0,300}?)\}\}/.exec(src);
+  assert.ok(revertMatch, 'columnRevertConfirm の ConfirmDialog が見つからない');
+  assert.ok(/onStructureChanged\(\(\) => \{ for \(const m of members\) m\.setField\('woodColumnWidthMm', null\); \}\);/.test(revertMatch[1]),
+    '共通へ戻す処理が onStructureChanged 経由で woodColumnWidthMm=null を書いていない');
+  assert.ok(!revertMatch[1].includes('onRequestDelete'), '個別柱の「共通に戻す」が onRequestDelete（部材削除）を呼んでいる（裁定: 柱は消えない）');
+});
+
+test('【不変条件・ステップ3 QA】MemberListTab.jsx: 削除確認は setDeleteConfirm 時点の graph を保持し、確定時に mapName から再解決しない（柱一覧が自階へ切り替わった後に別階を掴む回帰の防止）', () => {
+  const src = fs.readFileSync(path.resolve(import.meta.dirname, 'MemberListTab.jsx'), 'utf8');
+  assert.ok(/onRequestDelete=\{\(ids, label\) => setDeleteConfirm\(\{ graph: g, mapName: group\.mapName, ids, label \}\)\}/.test(src),
+    'onRequestDelete が setDeleteConfirm へ graph: g を渡していない（旧の mapName だけの保持へ戻す回帰）');
+  const confirmBlock = /\{deleteConfirm && \(([\s\S]*?)\n {6}\)\}/.exec(src);
+  assert.ok(confirmBlock, 'deleteConfirm の ConfirmDialog ブロックが見つからない');
+  assert.ok(/const g = deleteConfirm\.graph;/.test(confirmBlock[1]),
+    '削除確定処理が deleteConfirm.graph を使っていない（mapName からの再解決への回帰）');
+  assert.ok(!confirmBlock[1].includes('graphForCategory(') && !confirmBlock[1].includes('resolveCategory('),
+    '削除確定ブロックが graph を mapName から再解決している（一覧が自階へ切り替わった後は別階を掴む回帰）');
+});
+
+test('【不変条件・ステップ3 QA】MemberListTab.jsx: 柱一覧が自階柱□（columnMapSelf）へ切替わった在来木造は、供給階＝主題階なら readOnly にしない（旧のroleForCategoryだけの判定へ戻すと在来の柱一覧全体が閲覧専用になる）', () => {
+  const src = fs.readFileSync(path.resolve(import.meta.dirname, 'MemberListTab.jsx'), 'utf8');
+  assert.ok(/const readOnly = resolved\.spec\.role === LayerRole\.REFERENCE && resolved\.graph\.plane\.id !== composition\.subjectPlane\.id;/.test(src),
+    'readOnly が resolved.spec.role/resolved.graph.plane.id から判定されていない（旧のcomposition.roleForCategory(group.mapName)だけの判定への回帰）');
+  assert.ok(!/const readOnly = composition\.roleForCategory\(/.test(src),
+    '旧の composition.roleForCategory(group.mapName) だけの readOnly 判定が残っている（在来の柱一覧が無言で編集不可になる回帰）');
 });
 
 test('【不変条件・ステップ4 C-2b／裁定2026-09-16】MemberListTab.jsx: 「各階柱寸法」欄は一覧の先頭（柱グループの外）に、自階柱□の graph（columnMapSelf）を対象に、在来（columnSizing:"fixed"）かつ非R階のときだけ出て、onStructureChangedが配線されている', () => {
@@ -187,8 +312,15 @@ test('【不変条件・ステップ4 C-2b／裁定2026-09-16】MemberListTab.js
   const fieldPos = src.indexOf('<WoodColumnWidthSelect');
   const groupsPos = src.indexOf('{MEMBER_GROUPS.map(group => {');
   assert.ok(fieldPos > 0 && groupsPos > 0 && fieldPos < groupsPos, '「各階柱寸法」欄が MEMBER_GROUPS.map（柱グループ）より前（一覧の先頭）に無い');
-  assert.ok(!/const MemberGroupSection = observer\(\(\{[\s\S]{0,600}?\bonStructureChanged\b/.test(src),
-    'MemberGroupSection が onStructureChanged を受け取っている（欄を柱グループ見出しへ戻す回帰の兆候）');
+  // MemberGroupSection は onStructureChanged を素直に受け取り MemberCard へ引き回す（ステップ3で
+  // 個別柱寸セレクトの配線に使うため）が、「各階柱寸法」欄（WoodColumnWidthSelect・graph.setWoodColumnWidthMm）
+  // 自体は柱グループ見出しへ戻っていないことを直接検査する（欄はMemberListTab側の一覧の先頭のみに残る）。
+  const groupSectionMatch = /const MemberGroupSection = observer\(\(\{([\s\S]*?)\n\}\);/.exec(src);
+  assert.ok(groupSectionMatch, 'MemberGroupSection コンポーネント本体が見つからない');
+  assert.ok(!groupSectionMatch[1].includes('WoodColumnWidthSelect'),
+    'MemberGroupSection が WoodColumnWidthSelect を描画している（欄を柱グループ見出しへ戻す回帰）');
+  assert.ok(!groupSectionMatch[1].includes('setWoodColumnWidthMm'),
+    'MemberGroupSection が graph.setWoodColumnWidthMm を書いている（欄を柱グループ見出しへ戻す回帰）');
   // onStructureChanged が MemberListTab（トップレベル props）→ WoodColumnWidthSelect へ引き回されていること。
   assert.ok(/export const MemberListTab = observer\(\(\{[^}]*\bonStructureChanged\b[^}]*\}\)/.test(src),
     'MemberListTab が onStructureChanged を props として受け取っていない');

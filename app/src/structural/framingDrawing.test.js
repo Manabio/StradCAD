@@ -5,7 +5,7 @@ import {
   FRAMING_MONO_COLOR, COLUMN_FALLBACK_SIZE_MM,
   framingColumnGroups, framingColor, framingColorOverride,
   columnSectionSize, columnCrossPointsLocal, COLUMN_CROSS_OVERHANG_RATIO, framingColumnLineWeight, showMemberTags, beamDepthMarks,
-  sillBandSpec, pickMembersOnFigure,
+  sillBandSpec, pickMembersOnFigure, columnListCategory,
 } from './framingDrawing.js';
 import { rulesFor, TRADITIONAL_WOOD_STRUCTURE, UNSPECIFIED_STRUCTURE } from './structureRules.js';
 import { STRUCTURES } from './structuralClassification.js';
@@ -29,6 +29,19 @@ test('【失敗系】framingColumnGroups: 未知の framingColumnSymbol 値は�
   for (const bogus of [undefined, null, '', 'unknown', 'section']) {
     const groups = framingColumnGroups({ framingColumnSymbol: bogus });
     assert.deepEqual(groups, [{ category: 'columnMap', symbol: 'section', outline: false }], `framingColumnSymbol=${String(bogus)}`);
+  }
+});
+
+test('columnListCategory: 在来木造は自階柱□（columnMapSelf）、他の主構造・未知値は下階柱×（columnMap）', () => {
+  assert.equal(columnListCategory(rulesFor(TRADITIONAL_WOOD_STRUCTURE).drawing), 'columnMapSelf');
+  for (const key of NON_TRADITIONAL_KEYS) {
+    assert.equal(columnListCategory(rulesFor(key).drawing), 'columnMap', key);
+  }
+});
+
+test('【失敗系】columnListCategory: drawing自体が未知値・{}・undefinedはcolumnMap（既定・恒等写像）', () => {
+  for (const drawing of [{}, undefined, { framingColumnSymbol: 'unknown' }, { framingColumnSymbol: 'section' }]) {
+    assert.equal(columnListCategory(drawing), 'columnMap', String(drawing));
   }
 });
 

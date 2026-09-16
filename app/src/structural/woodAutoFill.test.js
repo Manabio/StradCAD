@@ -16,6 +16,7 @@ import { floorSwapManager } from '../storage/FloorSwapManager.js';
 import { recomputeStructuralForGraph } from './structuralRecompute.js';
 import { SECONDARY_BEAM_CLEARANCE_MM } from '../core/structuralEntities.js';
 import { findSectionEntry } from './sectionCatalog.js';
+import { serializeGraph, restoreGraph } from '../graphSnapshot.js';
 
 function makeGridGraph(structure = TRADITIONAL_WOOD_STRUCTURE) {
   const graph = new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
@@ -896,6 +897,80 @@ test('【失敗系】conformWoodSections: カタログに無い断面の木造�
   const b = graph.addBeam(StructuralMaterialType.WOOD, 'WOOD-120x400', y1, false, x1, x2, { role: 'primary' });
   assert.deepEqual(conformWoodSections(graph, PROJECT), []);
   assert.equal(b.sectionDefId, 'WOOD-120x400');
+});
+
+// ---- 柱の個別柱寸（column.woodColumnWidthMm。ステップ3・2026-09-17裁定「共通と個別指定の2層」）----
+test('conformWoodSections: 個別柱寸（column.woodColumnWidthMm）を持つ柱はその値へ、それ以外の柱は階の値（共通）へそろう。梁幅は個別柱寸に影響されない', () => {
+  const { graph, x1, x2, y1, y2 } = makeGridGraph();
+  const individual = graph.addColumn(StructuralMaterialType.WOOD, 'WOOD-120x120', x1, y1, { woodColumnWidthMm: 105 });
+  const common = graph.addColumn(StructuralMaterialType.WOOD, 'WOOD-105x105', x2, y1, {});
+  // 梁は既定(105)からずらしておく——個別柱寸(105)と偶然一致すると「個別柱寸に影響されていない」ことを
+  // 検証できないため、階の値(既定120)だけに追従することを見分けられる値(105)から始める。
+  const b = graph.addBeam(StructuralMaterialType.WOOD, 'WOOD-105x240', y2, false, x1, x2, { role: 'primary' });
+  const updated = conformWoodSections(graph, PROJECT);
+  assert.deepEqual(updated.sort(), [individual.id, common.id, b.id].sort());
+  assert.equal(individual.sectionDefId, 'WOOD-105x105', '個別指定の柱はその値(105)へ');
+  assert.equal(common.sectionDefId, 'WOOD-120x120', '個別指定の無い柱は階の値(既定120)へ');
+  assert.equal(b.sectionDefId, 'WOOD-120x240', '梁幅は階の値(既定120)へ——個別柱(105)の存在に影響されない');
+  assert.deepEqual(conformWoodSections(graph, PROJECT), [], '2回目は変更なし');
+});
+
+test('【失敗系】conformWoodSections: 個別柱寸がカタログ外（例100）の柱は無効として扱い階の値へそろう（woodColumnWidthMmと同じ規約）', () => {
+  const { graph, x1, y1 } = makeGridGraph();
+  const column = graph.addColumn(StructuralMaterialType.WOOD, 'WOOD-105x105', x1, y1, { woodColumnWidthMm: 100 });
+  const updated = conformWoodSections(graph, PROJECT);
+  assert.deepEqual(updated, [column.id]);
+  assert.equal(column.sectionDefId, 'WOOD-120x120', 'カタログ外の個別値は無効＝階の値(既定120)へ');
+});
+
+// 柱の verticalCL/horizontalCL は通り芯（Discipline.STRUCT・labeled:true）で作ると、serializeGraph の
+// 階スナップショットからは除外される（通り芯は project.structGraph が別チャンネルで持つ。
+// structuralOrchestration.test.js の同種コメント参照）。ここでは往復対象を柱に絞るため、
+// 中心線（Discipline.ARCH。graphSnapshot.test.js の makeGraphWithWindow と同じ規約）で組む。
+function makeArchCLGraph() {
+  const graph = new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
+  graph.structureOverride = TRADITIONAL_WOOD_STRUCTURE;
+  const x1 = graph.addCenterLine(CenterLineType.VERTICAL,   0, { labeled: false, discipline: Discipline.ARCH });
+  const y1 = graph.addCenterLine(CenterLineType.HORIZONTAL, 0, { labeled: false, discipline: Discipline.ARCH });
+  return { graph, x1, y1 };
+}
+
+test('serializeGraph/restoreGraph: 柱の個別柱寸（woodColumnWidthMm）が往復で保持される（extras漏れ検出。packExtraFieldsからwoodColumnWidthMmを削ると失敗する）', () => {
+  const { graph, x1, y1 } = makeArchCLGraph();
+  const column = graph.addColumn(StructuralMaterialType.WOOD, 'WOOD-105x105', x1, y1, { woodColumnWidthMm: 105 });
+  const bytes = serializeGraph(graph);
+  const restored = new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
+  restoreGraph(restored, bytes);
+  const c2 = restored.columnMap.get(column.id);
+  assert.ok(c2, '復元後に同一IDの柱が存在する');
+  assert.equal(c2.woodColumnWidthMm, 105, '個別柱寸が復元後も保持される');
+});
+
+test('【失敗系】serializeGraph/restoreGraph: 個別柱寸を設定していない柱（共通）はnullのまま往復する', () => {
+  const { graph, x1, y1 } = makeArchCLGraph();
+  const column = graph.addColumn(StructuralMaterialType.WOOD, 'WOOD-120x120', x1, y1, {});
+  const bytes = serializeGraph(graph);
+  const restored = new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
+  restoreGraph(restored, bytes);
+  const c2 = restored.columnMap.get(column.id);
+  assert.equal(c2.woodColumnWidthMm, null);
+});
+
+// ---- autoFillWoodColumns: 個別柱寸を持つ柱は撤去ループの対象判定に影響されない（dimensionStatusと独立） ----
+test('autoFillWoodColumns: 個別柱寸（woodColumnWidthMm）を持つ柱もdimensionStatus="auto"のままで、候補から外れれば他のauto柱と同様に撤去される', () => {
+  const { graph, x1, y1, y2 } = makeGridGraph();
+  const horiz = addBackingWall(graph, { axisValue: 0, clStart: x1, clEnd: graph.gridXs[1], isVertical: false });
+  addBackingWall(graph, { axisValue: 0, clStart: y1, clEnd: y2, isVertical: true });
+  const { created } = fillWoodColumns(graph);
+  assert.equal(created.length, 1, '前提: 壁交点に柱が1本生成される');
+  const column = created[0];
+  column.setField('woodColumnWidthMm', 105); // 個別指定（dimensionStatusはautoのまま＝架空の「固定」にしない）
+  assert.equal(column.dimensionStatus, 'auto', '前提: 個別指定してもdimensionStatusはautoのまま');
+  // 横壁を取り除いて交点そのものを消す（縦壁は残るためsegments.length>0＝壁ゼロの保全ガードには触れない）。
+  // graph.removeWall は耐力壁（StructuralWall・wallMap）用——架構の壁（addWallの戻り値）は removeShape で消す。
+  graph.removeShape(horiz.id);
+  const second = fillWoodColumns(graph);
+  assert.ok(second.removed.includes(column.id), '個別柱寸を持っていても候補から外れれば撤去される（dimensionStatusと独立）');
 });
 
 // 本番の壁生成（finish/wallGeneration.js。壁の端が取り合う壁の半厚ぶん控えられる）から、

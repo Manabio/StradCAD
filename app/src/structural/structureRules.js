@@ -187,7 +187,9 @@ const WOOD_RULES = Object.freeze({
   // 採番の選択子（(3)）: individualBeamRoles＝標準材（defaultSections.beam）以外の梁を材ごとに個別採番
   // するrole集合（memberCatalog.js isIndividuallyNumbered/memberGroupKey/memberOrderKey が唯一の消費先）。
   // 既定null＝個別採番なし（同一材寸は常に1グループ）。在来木造だけ WOOD_DEPTH_BEAM_ROLES で上書きする。
-  numbering: Object.freeze({ individualBeamRoles: null }),
+  // individualColumns＝柱の個別採番（'widthOverride'＝柱寸の個別指定がある柱を1本1タグにする。ステップ3）。
+  // 既定null＝個別採番なし。在来木造だけ 'widthOverride' で上書きする。
+  numbering: Object.freeze({ individualBeamRoles: null, individualColumns: null }),
 });
 
 // RC系（ラーメン・壁式）に共通のルール。
@@ -224,7 +226,7 @@ const RC_RULES = Object.freeze({
   // 自階の下地オーナー壁のうち下地材がRC下地の壁のみ（上下階で壁が連続し自立するため下階は見ない）。
   wallBeamAxes: 'rcBacking',
   sashFinDirect: false,
-  numbering: Object.freeze({ individualBeamRoles: null }),
+  numbering: Object.freeze({ individualBeamRoles: null, individualColumns: null }),
 });
 
 // 鉄骨系（S造・SRC造）に共通のルール。
@@ -263,7 +265,7 @@ export const STRUCTURE_RULES = Object.freeze({
       pinBeamEndClearanceMm: 0,
       // 標準材（defaultSections.beam＝柱同寸の正角）以外の梁は主要構造のrole（WOOD_DEPTH_BEAM_ROLES）
       // だけ材ごとに個別採番する（ユーザー裁定2026-09-16。memberCatalog.js isIndividuallyNumbered）。
-      numbering: Object.freeze({ individualBeamRoles: WOOD_DEPTH_BEAM_ROLES }),
+      numbering: Object.freeze({ individualBeamRoles: WOOD_DEPTH_BEAM_ROLES, individualColumns: 'widthOverride' }),
       // 在来木造の柱は壁の中に立つ管柱＝仕上げ包み（柱壁）は付けない。平面の柱断面は壁と同じ黒
       // （ユーザー指示2026-09-14「在来木造の柱に柱包みは不要」「茶色の断面…黒指定」）。輪郭は**極太線**——
       // 壁厚＝柱寸法（conformWoodBacking で下地120＝柱120）になると柱の輪郭が壁の下地帯の線と完全に重なり、
@@ -329,6 +331,25 @@ export function woodColumnWidthMm(graph, project = null) {
 export function woodColumnSectionId(graph, project = null) {
   const width = woodColumnWidthMm(graph, project);
   return width != null ? woodRectSectionKey(width, width) : null;
+}
+
+/**
+ * 柱1本の実効柱寸(mm)——在来木造の柱は「共通」（階の値。woodColumnWidthMm）と「個別指定」
+ * （column.woodColumnWidthMm）の2層（ステップ3・2026-09-17裁定）。個別指定がカタログの正角幅
+ * （WOOD_SQUARE_WIDTHS）に含まれるときだけ採用し、それ以外（null＝共通・カタログ外の無効値）は
+ * 階の値へフォールバックする（woodColumnWidthMm と同じ「カタログ外は無効」規約）。
+ * woodAutoFill.js conformWoodSections（柱の断面そろえ）・memberCatalog.js isIndividuallyNumbered
+ * （個別採番の判定）が唯一の消費先——column.woodColumnWidthMm を他所から直接読まないこと。
+ */
+export function columnWidthMm(column, graph, project = null) {
+  const own = column?.woodColumnWidthMm;
+  return (own != null && WOOD_SQUARE_WIDTHS.includes(own)) ? own : woodColumnWidthMm(graph, project);
+}
+
+/** columnWidthMm の正角断面キー版（例 'WOOD-105x105'）。カタログに無ければ null。 */
+export function columnSectionId(column, graph, project = null) {
+  const w = columnWidthMm(column, graph, project);
+  return w != null ? woodRectSectionKey(w, w) : null;
 }
 
 /**

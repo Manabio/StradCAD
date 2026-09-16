@@ -176,6 +176,42 @@ test('recomputeStructuralComposition【実機裁定ステップ4 C-2 QA2】: 下
   }
 });
 
+// ---- ステップ3（2026-09-17裁定）: 柱の個別柱寸（column.woodColumnWidthMm）----
+test('recomputeStructuralComposition【ステップ3】: 柱の個別柱寸を設定するとその柱だけ断面・タグが分かれ、undoで断面・タグとも変更前（共通）に戻る', async () => {
+  const project = new Project('proj-step3-individual-column', 'test');
+  const { graph: g1 } = project.addPlane(0, '1階', 'p1');
+  g1.structureOverride = TRADITIONAL_WOOD_STRUCTURE;
+  const x0 = project.structGraph.addCenterLine(CenterLineType.VERTICAL,   0,    { labeled: true, discipline: Discipline.STRUCT });
+  const x1 = project.structGraph.addCenterLine(CenterLineType.VERTICAL,   3640, { labeled: true, discipline: Discipline.STRUCT });
+  const y0 = project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+  const col1 = g1.addColumn(StructuralMaterialType.WOOD, 'WOOD-120x120', x0, y0, {});
+  const col2 = g1.addColumn(StructuralMaterialType.WOOD, 'WOOD-120x120', x1, y0, {});
+
+  // ベース採番（column.setField直後ではなくrecomputeStructuralCompositionを通した状態を前提にする）。
+  await recomputeStructuralComposition(noBelowComposition, g1, project, { mutate: () => {} });
+  const col1TagBefore = col1.memberNo;
+  const col2TagBefore = col2.memberNo;
+  assert.equal(col1TagBefore, col2TagBefore, '前提: 個別指定前は共通の1グループ（同じタグ）');
+
+  const undoBefore = undoManager.peekUndo();
+  await recomputeStructuralComposition(noBelowComposition, g1, project, {
+    mutate: () => { col1.setField('woodColumnWidthMm', 105); },
+  });
+
+  assert.equal(col1.sectionDefId, 'WOOD-105x105', '個別指定した柱はその値へ');
+  assert.equal(col2.sectionDefId, 'WOOD-120x120', '個別指定していない柱は共通（階の値・既定120）のまま');
+  assert.notEqual(col1.memberNo, col2.memberNo, '個別指定した柱は共通のタグから分かれる');
+  assert.notEqual(undoManager.peekUndo(), undoBefore, 'undoエントリが1件積まれる');
+
+  undoManager.undo();
+  const col1AfterUndo = g1.columnMap.get(col1.id);
+  const col2AfterUndo = g1.columnMap.get(col2.id);
+  assert.equal(col1AfterUndo.woodColumnWidthMm, null, 'undoで個別柱寸(woodColumnWidthMm)が戻る');
+  assert.equal(col1AfterUndo.sectionDefId, 'WOOD-120x120', 'undoで断面が戻る');
+  assert.equal(col1AfterUndo.memberNo, col2AfterUndo.memberNo, 'undoでタグが共通へ戻る（採番索引の戻りも同型）');
+  assert.equal(col1AfterUndo.memberNo, col1TagBefore, 'undoでタグが変更前と一致する');
+});
+
 test('【失敗系・実機裁定ステップ4 C-2 QA2】recomputeStructuralComposition: 下階が無い（基礎伏図相当）場合は自階の値へフォールバックし梁幅が追従する', async () => {
   const project = new Project('proj-c2-qa2-nobelow', 'test');
   const { graph: g1 } = project.addPlane(0, '1階', 'p1');

@@ -11,6 +11,7 @@ import {
   RC_FOUNDATION_OPTIONS, WOOD_FOUNDATION_OPTIONS, WOOD_FOUNDATION_BEAM,
   BACKING_RULES, BackingClass, backingRulesFor,
   woodColumnWidthMm, woodColumnSectionId, beamColumnWidthMm, resolvedBeamColumnWidthMm,
+  columnWidthMm, columnSectionId,
   PIN_BEAM_END_CLEARANCE_MM,
 } from './structureRules.js';
 import { STRUCTURES, STRUCTURE_PROFILES } from './structuralClassification.js';
@@ -103,6 +104,50 @@ test('【失敗系】woodColumnWidthMm/woodColumnSectionId: カタログに無�
   graph.setWoodColumnWidthMm(100);
   assert.equal(woodColumnWidthMm(graph), 120, 'カタログ外の階の値は無効＝既定(120)を返す（生値100は返さない）');
   assert.equal(woodColumnSectionId(graph), 'WOOD-120x120');
+});
+
+// ---- columnWidthMm/columnSectionId（ステップ3・2026-09-17裁定「柱は共通と個別指定の2層」）----
+test('columnWidthMm/columnSectionId: 柱の個別指定（column.woodColumnWidthMm）がカタログ幅なら個別値を返す', () => {
+  const graph = new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
+  graph.structureOverride = TRADITIONAL_WOOD_STRUCTURE;
+  graph.setWoodColumnWidthMm(120); // 階の値（共通）
+  const column = { woodColumnWidthMm: 105 };
+  assert.equal(columnWidthMm(column, graph), 105, '個別指定が階の値(120)より優先される');
+  assert.equal(columnSectionId(column, graph), 'WOOD-105x105');
+});
+
+test('columnWidthMm/columnSectionId: 個別指定が無い（null）柱は階の値（woodColumnWidthMm）へフォールバックする', () => {
+  const graph = new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
+  graph.structureOverride = TRADITIONAL_WOOD_STRUCTURE;
+  graph.setWoodColumnWidthMm(105);
+  const column = { woodColumnWidthMm: null };
+  assert.equal(columnWidthMm(column, graph), 105);
+  assert.equal(columnSectionId(column, graph), 'WOOD-105x105');
+});
+
+test('【失敗系】columnWidthMm/columnSectionId: 個別指定がカタログ外（正角90/105/120以外。例100）は無効として扱い階の値へフォールバックする（woodColumnWidthMmと同じ規約）', () => {
+  const graph = new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
+  graph.structureOverride = TRADITIONAL_WOOD_STRUCTURE;
+  graph.setWoodColumnWidthMm(120);
+  const column = { woodColumnWidthMm: 100 };
+  assert.equal(columnWidthMm(column, graph), 120, 'カタログ外の個別値は無効＝階の値を返す（生値100は返さない）');
+  assert.equal(columnSectionId(column, graph), 'WOOD-120x120');
+});
+
+test('【失敗系】columnWidthMm/columnSectionId: 在来木造以外は個別指定が無い（null）柱は階の値と同じくnull（woodColumnWidthMmへフォールバック）', () => {
+  const graph = new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
+  graph.structureOverride = 'S造';
+  const column = { woodColumnWidthMm: null };
+  assert.equal(columnWidthMm(column, graph), null);
+  assert.equal(columnSectionId(column, graph), null);
+});
+
+test('【失敗系】columnWidthMm/columnSectionId: column自体がnull/undefinedでも例外を投げず階の値へフォールバックする', () => {
+  const graph = new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
+  graph.structureOverride = TRADITIONAL_WOOD_STRUCTURE;
+  graph.setWoodColumnWidthMm(105);
+  assert.equal(columnWidthMm(null, graph), 105);
+  assert.equal(columnWidthMm(undefined, graph), 105);
 });
 
 // ---- beamColumnWidthMm（実機裁定ステップ4 C-2 QA2「梁幅は支持する下階柱の柱寸」）----
@@ -315,6 +360,22 @@ const ALLOWED_COLUMN_SECTION_FILES = new Set(['structural/structureRules.js']);
 test('【不変条件】在来木造の柱寸（framing.columnSection）は structureRules.js の外で直接参照しない（woodColumnWidthMm/woodColumnSectionId が唯一の入口）', () => {
   const offenders = scanOffenders(FORBIDDEN_COLUMN_SECTION_PATTERNS, ALLOWED_COLUMN_SECTION_FILES);
   assert.deepEqual(offenders, [], `framing.columnSection の直接参照が残っている:\n${offenders.join('\n')}`);
+});
+
+// ---- 不変条件（ステップ3・2026-09-17裁定）: 柱1本の個別柱寸（column.woodColumnWidthMm）の直接比較
+// （!=/==）は columnWidthMm/columnSectionId の実装（structureRules.js）・isIndividuallyNumbered の実装
+// （memberCatalog.js）・フィールド定義（core/structuralEntities.js）以外に無い。graph自身の「各階柱寸法」
+// （graph.woodColumnWidthMm。ステップ4 C-2、別の値）は対象外（否定先読みで除外）。
+const FORBIDDEN_INDIVIDUAL_COLUMN_WIDTH_PATTERNS = [/(?<!graph)(?<!snapshot)\.woodColumnWidthMm\s*(?:!==|===|!=|==)/];
+const ALLOWED_INDIVIDUAL_COLUMN_WIDTH_FILES = new Set([
+  'structural/structureRules.js',
+  'structural/memberCatalog.js',
+  'core/structuralEntities.js',
+]);
+
+test('【不変条件・ステップ3】柱の個別柱寸（column.woodColumnWidthMm）の直接比較は columnWidthMm/columnSectionId（structureRules.js）・isIndividuallyNumbered（memberCatalog.js）・定義（core/structuralEntities.js）以外に無い', () => {
+  const offenders = scanOffenders(FORBIDDEN_INDIVIDUAL_COLUMN_WIDTH_PATTERNS, ALLOWED_INDIVIDUAL_COLUMN_WIDTH_FILES);
+  assert.deepEqual(offenders, [], `column.woodColumnWidthMm の直接比較が残っている（columnWidthMm/columnSectionIdを使うこと）:\n${offenders.join('\n')}`);
 });
 
 // ---- 不変条件（実機QA指摘4・ステップ4 C-2）: 標準材の解決を採番パイプライン（collect/apply/

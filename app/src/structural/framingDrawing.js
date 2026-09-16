@@ -37,6 +37,14 @@ export function framingColumnGroups(drawing) {
   return [{ category: 'columnMap', symbol: 'section', outline: false }];
 }
 
+/** 構造リストの柱グループの一覧ソース（ステップ3・2026-09-17裁定「柱一覧は在来だけ自階柱□」）。
+ *  drawing.framingColumnSymbol==='crossBox'（在来木造）→ 'columnMapSelf'（自階柱□の供給階）。
+ *  それ以外（既定 'section'。未知値も含む）→ 'columnMap'（恒等写像＝従来どおり1つ下の実体階の柱）。
+ *  MemberListTab.jsx の柱グループの graph 解決（composition.resolveCategory）が唯一の消費先。 */
+export function columnListCategory(drawing) {
+  return drawing?.framingColumnSymbol === 'crossBox' ? 'columnMapSelf' : 'columnMap';
+}
+
 /** 伏図の部材線色。drawing.framingPlanColor: 'mono'（在来木造）→ 常に FRAMING_MONO_COLOR。
  *  'material'（既定）→ 引数の材種色をそのまま返す（恒等写像）。 */
 export function framingColor(drawing, materialColor) {

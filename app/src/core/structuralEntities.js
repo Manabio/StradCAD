@@ -127,7 +127,13 @@ export class WoodColumn extends StructuralColumn {
     super(id, StructuralMaterialType.WOOD, sectionDefId, verticalCL, horizontalCL, props);
     this.columnType  = props.columnType  ?? '管柱'; // '管柱' | '通し柱' | '隅柱'
     this.woodSpecies = props.woodSpecies ?? '杉';
-    makeObservable(this, { columnType: observable, woodSpecies: observable });
+    // 在来木造の柱寸（幅mm）の個別指定（ステップ3「共通と個別指定の2層」）。null＝共通＝階の値
+    // （structureRules.js woodColumnWidthMm「各階柱寸法」欄）に従う。値が入っていてもカタログの正角幅
+    // （sectionCatalog.js WOOD_SQUARE_WIDTHS）に無ければ無効（階の値へフォールバック）——唯一の解決子は
+    // structureRules.js columnWidthMm/columnSectionId（直接この値を読まない）。dimensionStatus とは独立
+    // （両者を混ぜると自動撤去ループ・手動固定の意味が衝突するため。.claude/structural-model.md 参照）。
+    this.woodColumnWidthMm = props.woodColumnWidthMm ?? null;
+    makeObservable(this, { columnType: observable, woodSpecies: observable, woodColumnWidthMm: observable });
   }
 }
 
