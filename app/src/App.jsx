@@ -189,6 +189,11 @@ const App = observer(() => {
   // 参照を安定させる（useCallback・依存なし。modeRef は ref なので常に最新を読む）——MemberListTab/MemberCard
   // の effect がこの関数を依存に持つため、App の再レンダーごとに新しい関数を渡すと effect が空回りする。
   const selectStructuralMembers = useCallback(ids => modeRef.current?.selectMembers?.(ids), []);
+  // 構造モードの空白タップ（伏図のどの部材にも当たらないタップ）で選択解除する——構造リストの展開中
+  // カードを閉じる合図（カウンタ。MemberListTab が expandedKey=null にし、その effect が選択集合も空に
+  // する）。構造モードには留まる（ユーザー裁定2026-09-17「外クリックで構造モードのまま無選択状態に」）。
+  const [memberDeselectRequest, setMemberDeselectRequest] = useState(0);
+  const deselectStructuralMembers = useCallback(() => setMemberDeselectRequest(n => n + 1), []);
 
   // ---- ポインタ/タッチ/長押しのジェスチャー配線（interaction/usePointerInteraction.js）----
   const {
@@ -210,6 +215,7 @@ const App = observer(() => {
     // 構造モード: 伏図の梁タップ（F4。Konvaのonclick/onTapは移動閾値を持たないため使わない——
     // usePointerInteraction.js のpointerUpが「パン未開始かつ長押し未成立」のときだけ呼ぶ）。
     onMemberClick: openMemberCard,
+    onMemberDeselect: deselectStructuralMembers,
   });
 
   // 起動時IDB復元の完了をマウント時1回だけ待ち、activeFloorId をproject.activePlaneIdへ同期する。
@@ -1963,6 +1969,7 @@ const App = observer(() => {
           focusRequest={memberFocusRequest}
           onToast={msg => setToast({ msg, key: Date.now() })}
           onSelectMembers={selectStructuralMembers}
+          deselectRequest={memberDeselectRequest}
           onStructureChanged={mutate => {
             // 主構造変更（mutate）→ 構造伏図に映る全グラフ（自階＋下階）を再計算し、下階の柱も実効主構造へ追従させる。
             // 構造リストタブ（MemberListTab.jsx）の「各階柱寸法」変更（mutateが自階graphの柱寸を書き換える。

@@ -33,10 +33,18 @@ import { conformToLedger } from './memberGroups.js';
  * @param {PlanGraph} targetGraph  再計算対象のグラフ（変異する）。
  * @param {Project}   project
  * @param {string}    mainStructure  生成・材変換に用いる主構造（構造伏図では1つ下の階の実効主構造）。
+ * @param {object|undefined} [precomputedBelowGraph] - 呼び出し側が既に手元に持つ「1つ下の実体階」の
+ *   graph（省略時=undefinedのときだけ自前でpeekする。現状の唯一の呼び出し元は非nullのgraphしか
+ *   渡さない——null明示の経路は呼び出し元・テストとも無いため契約に含めない）。
+ *   structuralOrchestration.js recomputeStructuralComposition の下階編集経路（3b柱追加等）の直後、
+ *   自階を再計算し直す2回目の呼び出しが使う——ここで自前peekすると、その下階編集がまだIDBへ
+ *   反映されていない（編集可能peekの保存は最大400msデバウンス、またはpeekしたてで未commit）ため
+ *   古い柱で梁分割・成算定を確定してしまう（ユーザー裁定2026-09-16「分割後に正しい距離を持つことが
+ *   最適解」）。呼び出し側が手元の最新graphをそのまま渡すことで、再peekによる読み取り待ちを避ける。
  * @returns {Promise<{changed: boolean, before: Uint8Array, after: Uint8Array}>}
  *   before/after は undo 用スナップショット。changed=false のとき after===before（再シリアライズしない）。
  */
-export async function recomputeStructuralForGraph(targetGraph, project, mainStructure) {
+export async function recomputeStructuralForGraph(targetGraph, project, mainStructure, precomputedBelowGraph = undefined) {
   // 建物フットプリント（部屋領域＝外壁線位置）の鉛直連続性で部材の有無を取捨するゲートを構築する
   // ＝自階かつ直下の全階で建物が連続する位置だけ部材を残す（直下に支えの無い梁・柱は省く）。
   // 非アクティブ下階は peek で覗く。自階に部屋が無い／屋根平面では null＝従来の全グリッド生成。wallGate.js 参照。
@@ -49,7 +57,9 @@ export async function recomputeStructuralForGraph(targetGraph, project, mainStru
   const wallGate = await buildStructuralWallGate(targetGraph.plane, project, targetGraph);
   // 壁由来の梁芯生成対象・木造梁成の下階柱（支持点）が使う1つ下の実体階のpeek。
   // どちらの用途も不要なら（RC造は自階のみ／非木造は梁成の算定自体が対象外）peekしない。
-  const belowGraph = (ownRules.wallBeamAxes === 'selfAndBelow' || ownRules.framing) ? await peekBelowGraph(targetGraph, project) : null;
+  const belowGraph = (ownRules.wallBeamAxes === 'selfAndBelow' || ownRules.framing)
+    ? (precomputedBelowGraph !== undefined ? precomputedBelowGraph : await peekBelowGraph(targetGraph, project))
+    : null;
   // 「梁を支える1つ下の実体階の柱寸」の派生値をgraph自身へ書く——この再計算が**唯一の書き込み元**
   // （structural/structureRules.js beamColumnWidthMmのJSDoc参照）。採番パイプライン
   // （collectFloorGroups/applyNumbers/renumberMembers）・UI（MemberListTab.jsx）・梁芯CL操作
@@ -70,7 +80,7 @@ export async function recomputeStructuralForGraph(targetGraph, project, mainStru
 
   // 構造体トポロジーから未定義の柱・梁・基礎（基礎伏図のみ）を検出し、自動補完する。
   // ユーザーが明示削除した箇所は除外集合（excludedColumnSlots 等）により復活しない。
-  const { newColumns, removedColumns, newFootings, newBeams, removedBeams } = runInAction(() => autoFillStructuralGrid(targetGraph, project, mainStructure, wallGate, wallSources, wallSegments, aboveColumns));
+  const { newColumns, removedColumns, newFootings, newBeams, removedBeams } = runInAction(() => autoFillStructuralGrid(targetGraph, project, mainStructure, wallGate, wallSources, wallSegments, aboveColumns, belowGraph?.columns ?? []));
   // べた基礎（木造）のマットスラブを基礎伏図に生成・撤去する（基礎種別で取捨。問題.md）。基礎伏図以外では no-op。
   const matFoundation = runInAction(() => autoFillMatFoundation(targetGraph, project));
   // 外周モデル（side ビュー）を1回構築し、柱芯オフセットと梁偏芯の両方に渡す——柱・梁で外側方向（内外定義）を一致させる。

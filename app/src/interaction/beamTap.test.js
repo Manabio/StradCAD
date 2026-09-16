@@ -76,7 +76,8 @@ test('【失敗系】beamAtKonvaTarget: beamId属性が無い・祖先も無い�
 
 test('【不変条件・QA指摘F4】usePointerInteraction.js: pointerUpがshouldFireMemberTapでゲートしbeamAtKonvaTargetで解決してからonMemberClickを呼ぶ', () => {
   const src = fs.readFileSync(path.resolve(import.meta.dirname, 'usePointerInteraction.js'), 'utf8');
-  assert.ok(/import\s*\{\s*beamAtKonvaTarget,\s*shouldFireMemberTap\s*\}\s*from\s*'\.\/beamTap\.js'/.test(src),
+  // 空白タップの選択解除（isBlankTapTarget。blankTapDeselect.test.js）など同じモジュールからの追加importを許す。
+  assert.ok(/import\s*\{[^}]*\bbeamAtKonvaTarget\b[^}]*\bshouldFireMemberTap\b[^}]*\}\s*from\s*'\.\/beamTap\.js'/.test(src),
     'beamTap.js からの import が見つからない');
   const callMatch = /if\s*\(\s*shouldFireMemberTap\(\{([\s\S]*?)\}\)\)\s*\{/.exec(src);
   assert.ok(callMatch, 'shouldFireMemberTap({ ... }) でのゲートが見つからない');

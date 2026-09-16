@@ -171,10 +171,14 @@ const WOOD_RULES = Object.freeze({
   // beamDepthMark＝非正角材（成≠幅）の梁の標記（'none'＝既定／'offsetLine'＝在来木造。45度線2本＋
   // 平行線1本＋「幅×成」文字。structural/framingDrawing.js beamDepthMarks が唯一の解決先）。
   // 伏図（framing plan）は在来木造だけ全黒・下階柱□に×／自階柱□（ユーザー指摘2026-09-15）。
+  // beamEndColumnMatch＝梁の端に取りつく柱の判定方法（'clId'＝既定。端の直交CLと柱のCLがid一致／
+  // 'coordinate'＝在来木造。id不一致でも座標一致で柱とみなす——下階柱は自階の梁芯CL・中心線と別idの
+  // per-floor CLに乗ることがあるため。core/structuralEntities.js _columnAtEnd が唯一の解決先。
+  // ステップ1-b・下階柱面トリム）。
   drawing: Object.freeze({
     columnFinishWrap: true, planColumnColor: 'material', planColumnLineWeight: 'thick',
     framingPlanColor: 'material', framingColumnSymbol: 'section', framingColumnLineWeight: 'fixed',
-    memberTags: 'show', beamDepthMark: 'none',
+    memberTags: 'show', beamDepthMark: 'none', beamEndColumnMatch: 'clId',
   }),
   // 壁由来の梁芯生成源（(3)）: 自階＋1つ下の実体階の下地オーナー壁（下地材の種別は問わない）。在来のみ。
   wallBeamAxes: null,
@@ -215,7 +219,7 @@ const RC_RULES = Object.freeze({
   drawing: Object.freeze({
     columnFinishWrap: true, planColumnColor: 'material', planColumnLineWeight: 'thick',
     framingPlanColor: 'material', framingColumnSymbol: 'section', framingColumnLineWeight: 'fixed',
-    memberTags: 'show', beamDepthMark: 'none',
+    memberTags: 'show', beamDepthMark: 'none', beamEndColumnMatch: 'clId',
   }),
   // 自階の下地オーナー壁のうち下地材がRC下地の壁のみ（上下階で壁が連続し自立するため下階は見ない）。
   wallBeamAxes: 'rcBacking',
@@ -267,7 +271,7 @@ export const STRUCTURE_RULES = Object.freeze({
       drawing: Object.freeze({
         columnFinishWrap: false, planColumnColor: 'wall', planColumnLineWeight: 'ultraThick',
         framingPlanColor: 'mono', framingColumnSymbol: 'crossBox', framingColumnLineWeight: 'byLod',
-        memberTags: 'hide', beamDepthMark: 'offsetLine',
+        memberTags: 'hide', beamDepthMark: 'offsetLine', beamEndColumnMatch: 'coordinate',
       }) },
     { column: TRADITIONAL_WOOD_FRAMING.columnSection, beam: TRADITIONAL_WOOD_FRAMING.columnSection }), // 梁の既定＝柱同寸の正角
   '木造（2"×4"）': withProfile('木造（2"×4"）', WOOD_RULES), // 壁自体が構造体＝壁下に梁を入れない（wallBeamAxes:null）

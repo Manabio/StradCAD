@@ -25,3 +25,17 @@ export function beamAtKonvaTarget(target, graph) {
 export function shouldFireMemberTap({ appMode, onMemberClick, menu, panned, longPressFired, busy }) {
   return appMode === 'structure' && !!onMemberClick && !menu && !panned && !longPressFired && !busy;
 }
+
+/**
+ * 構造モードの「空白タップ」（何の部材にも当たらないタップ）か。Konva は何もヒットしないとき
+ * イベントの target を Stage 自身にする——梁記号（beam-symbol）・部材タグなど listening な図形に
+ * 当たったときは target がその図形（またはその子孫）になるので Stage ではない。
+ * 空白タップは選択解除（展開中のカードを閉じ、伏図の強調を消す。構造モードには留まる）に使う
+ * （ユーザー裁定2026-09-17「外クリックで構造モードのまま無選択状態に」）。
+ * target が無い・Stage 判定 API を持たない（テストの擬似 target 等）場合は false（解除しない＝安全側）。
+ */
+export function isBlankTapTarget(target) {
+  if (!target || typeof target.getStage !== 'function') return false;
+  const stage = target.getStage();
+  return !!stage && target === stage;
+}

@@ -8,6 +8,7 @@ import { Plane } from './plane.js';
 import { CenterLineType, Discipline, StructuralMaterialType } from './constants.js';
 import { RIGID_JOINT_OFFSET_MM, SECONDARY_BEAM_CLEARANCE_MM, PIN_ROLES } from './structuralEntities.js';
 import { TRADITIONAL_WOOD_STRUCTURE } from '../structural/structureRules.js';
+import { CenterLine } from './centerLine.js';
 
 // X1=0 / X2=10000、Y1=0 / Y2=6000 の通り芯。梁はY方向（X1軸沿い）に張る。
 function setupGraph() {
@@ -170,4 +171,27 @@ test('joinsColumn: どちらの端部にも柱が無い梁（梁に接合する�
   const { graph, x1, y1, y2 } = setupGraph();
   const beam = addBeam(graph, x1, y1, y2, { role: 'secondary' });
   assert.equal(beam.joinsColumn([]), false);
+});
+
+// ---- _columnAtEnd/spanForColumns: 下階柱が自階と別idのCLに乗る場合の座標一致フォールバック ----
+// （ステップ1-b。structureRules.js beamEndColumnMatch: 'coordinate'は在来木造のみ）
+test('_columnAtEnd/spanForColumns: 在来木造は下階柱が自階と別idの梁芯CL/中心線上でも座標一致で端の柱とみなし面まで止める（beamEndColumnMatch:coordinate）', () => {
+  const { graph, x1, y1, y2 } = setupGraph();
+  graph.setStructureOverride(TRADITIONAL_WOOD_STRUCTURE);
+  // 下階柱は自階のy1とは別idだが同じ座標(y=0)の梁芯CL上（他階のgraphが持つCLを模す）。
+  const perFloorY1 = new CenterLine('other-y1', CenterLineType.HORIZONTAL, 0, { labeled: false, discipline: Discipline.FUSE });
+  const belowColumn = graph.addColumn(StructuralMaterialType.WOOD, 'WOOD-120x120', x1, perFloorY1, {});
+  const beam = graph.addBeam(StructuralMaterialType.WOOD, 'WOOD-120x120', x1, true, y1, y2, { role: 'primary' });
+  assert.equal(beam._columnAtEnd(y1, [belowColumn]), belowColumn, 'id不一致でも座標一致で見つかる');
+  assert.deepEqual(beam.spanForColumns([belowColumn]), { coord1: 60, coord2: 6000 }, '柱面(120/2=60)まで止める');
+});
+
+test('【失敗系】_columnAtEnd/spanForColumns: id一致がルール（在来木造以外）では座標が一致しても取りつく柱とみなさない', () => {
+  const { graph, x1, y1, y2 } = setupGraph();
+  // structureOverride無し（未指定ルール）＝beamEndColumnMatch既定'clId'。
+  const perFloorY1 = new CenterLine('other-y1', CenterLineType.HORIZONTAL, 0, { labeled: false, discipline: Discipline.FUSE });
+  const belowColumn = graph.addColumn(StructuralMaterialType.WOOD, 'WOOD-120x120', x1, perFloorY1, {});
+  const beam = graph.addBeam(StructuralMaterialType.WOOD, 'WOOD-120x120', x1, true, y1, y2, { role: 'primary' });
+  assert.equal(beam._columnAtEnd(y1, [belowColumn]), null, 'id不一致・座標一致でも既定ルールでは柱とみなさない');
+  assert.deepEqual(beam.spanForColumns([belowColumn]), { coord1: 0, coord2: 6000 }, 'CL位置まで通し（柱なし扱い）');
 });

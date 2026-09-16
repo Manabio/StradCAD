@@ -270,8 +270,14 @@ const MergeBar = observer(({ group, graph, project, structure, figureType, selec
   );
 });
 
-export const MemberListTab = observer(({ composition, project, focusRequest, onToast, onStructureChanged, onSelectMembers }) => {
+export const MemberListTab = observer(({ composition, project, focusRequest, onToast, onStructureChanged, onSelectMembers, deselectRequest = 0 }) => {
   const [expandedKey, setExpandedKey] = useState(null); // `${mapName}:${タグ}` | null
+
+  // 伏図の空白タップ（App.jsx deselectStructuralMembers。カウンタが進む）で展開中のカードを閉じる
+  // ——下の「expandedKey==null で onSelectMembers([])」の effect が伏図の強調も消す。初期値0は無視。
+  useEffect(() => {
+    if (deselectRequest > 0) setExpandedKey(null);
+  }, [deselectRequest]);
 
   // 描画エリアの選択状態（StructuralModeState.selectedMemberIds）は「展開中のカードの部材」を鏡写しにする
   // （ユーザー裁定2026-09-16）。展開中のカード自身が MemberCard の effect で自分の members を報告し、

@@ -21,7 +21,7 @@ import { CONTEXT, detectContext, buildMenuState } from './menuItems.js';
 import { centerLineKind, CenterLineType } from '@core';
 import { roundAbsToStep, calcStep } from '../renderer/clMoveMath.js';
 import { findHostWall } from '../openings/openingGeometry.js';
-import { beamAtKonvaTarget, shouldFireMemberTap } from './beamTap.js';
+import { beamAtKonvaTarget, shouldFireMemberTap, isBlankTapTarget } from './beamTap.js';
 import {
   openingMoveRange, openingSnapCandidates, resolveOpeningRefOffset, snapIndicatorAlong,
   elevationDragAlong, previewDxLocalMm,
@@ -42,7 +42,7 @@ import { isEligibleWallSpan } from '../finish/kneeDropWall.js';
 // （App.jsx の handleModeChange('floorplan')。境界処理を通す唯一の経路をそのまま呼ぶ）。
 export function usePointerInteraction({
   project, graph, size, appMode, columnAxisMode, modeRef,
-  menu, setMenu, onToast, onUndo, onRedo, onExitOpeningMode, onMemberClick,
+  menu, setMenu, onToast, onUndo, onRedo, onExitOpeningMode, onMemberClick, onMemberDeselect,
 }) {
   const [isPanning,   setIsPanning]   = useState(false);
   const [pressPos,    setPressPos]    = useState(null);
@@ -779,6 +779,10 @@ export function usePointerInteraction({
     })) {
       const beam = beamAtKonvaTarget(e.target, graph);
       if (beam) onMemberClick(beam, 'beamMap');
+      // 空白タップ（Stage 自身が target＝どの部材・タグにも当たらない）は選択解除。構造モードには
+      // 留まる（ユーザー裁定2026-09-17）。部材タグ（MemberTagLayer）のクリックは target がタグ図形に
+      // なるためここには来ない＝タグクリックで開いたカードを同じタップで閉じてしまわない。
+      else if (isBlankTapTarget(e.target)) onMemberDeselect?.();
     }
 
     // 平面モード: 通常タップで開口を選択（パレット表示）/ 空白タップで選択解除。

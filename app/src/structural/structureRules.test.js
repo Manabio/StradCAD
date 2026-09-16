@@ -344,18 +344,20 @@ test('【不変条件・実機QA指摘4】standardBeamSectionFor の呼び出し
   assert.deepEqual(offenders, [], `standardBeamSectionFor(...) が belowGraph を渡している呼び出しが残っている:\n${offenders.join('\n')}`);
 });
 
-test('structureRules: 描画ルール（柱包み・平面の柱線色・線幅・伏図の色/柱記号）は在来木造だけ包みなし・壁と同じ色・極太線・全黒・×/□記号', () => {
+test('structureRules: 描画ルール（柱包み・平面の柱線色・線幅・伏図の色/柱記号）は在来木造だけ包みなし・壁と同じ色・極太線・全黒・×/□記号、梁端の柱判定は座標一致（beamEndColumnMatch）', () => {
   // 在来は壁厚＝柱寸法で柱の輪郭が壁の下地帯の線と重なるため極太線（実機 moku1 2026-09-15「柱が消えた」）
+  // beamEndColumnMatch:'coordinate' は下階柱がper-floorの梁芯CL/中心線（自階と別id）に乗っても
+  // 座標一致で端の柱とみなし面までトリムするため（ステップ1-b・下階柱分割の可視化）。
   assert.deepEqual({ ...rulesFor(TRADITIONAL_WOOD_STRUCTURE).drawing }, {
     columnFinishWrap: false, planColumnColor: 'wall', planColumnLineWeight: 'ultraThick',
     framingPlanColor: 'mono', framingColumnSymbol: 'crossBox', framingColumnLineWeight: 'byLod',
-    memberTags: 'hide', beamDepthMark: 'offsetLine',
+    memberTags: 'hide', beamDepthMark: 'offsetLine', beamEndColumnMatch: 'coordinate',
   });
   for (const key of ['木造（2"×4"）', 'S造', 'SRC造', 'RC造(ラーメン)', 'RC造(壁式)', UNSPECIFIED_STRUCTURE]) {
     assert.deepEqual({ ...rulesFor(key).drawing }, {
       columnFinishWrap: true, planColumnColor: 'material', planColumnLineWeight: 'thick',
       framingPlanColor: 'material', framingColumnSymbol: 'section', framingColumnLineWeight: 'fixed',
-      memberTags: 'show', beamDepthMark: 'none',
+      memberTags: 'show', beamDepthMark: 'none', beamEndColumnMatch: 'clId',
     }, key);
   }
 });

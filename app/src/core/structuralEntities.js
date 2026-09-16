@@ -7,7 +7,7 @@
  * PlanGraph（core.js）が材種別→クラス解決表とキー生成関数を import して使う。
  */
 import { makeObservable, observable, computed, action } from 'mobx';
-import { StructuralMaterialType } from './constants.js';
+import { StructuralMaterialType, CL_OVERLAP_TOL_MM } from './constants.js';
 import { coordLo as _coordLo, coordHi as _coordHi } from './_internal.js';
 import { findSectionEntry, diaphragmProjection } from '../structural/sectionCatalog.js';
 import { rulesFor, effectiveStructure, PIN_BEAM_END_CLEARANCE_MM } from '../structural/structureRules.js';
@@ -273,12 +273,24 @@ export class StructuralBeam extends StructuralEntity {
   // 端部の直交CLに立つ柱を columns から探す（垂直梁はaxisCLが垂直CL・perpCLが水平CL、水平梁はその逆）。
   // columns は「その伏図に表示される柱集合」——構造モードでは1つ下の階の柱。梁はその表示中の柱の断面手前で
   // 止めるため、自階graph(_planGraph)固定ではなく描画対象の柱集合を外から受け取る（spanForColumns 経由）。
+  // id一致がまず優先（既定）。beamEndColumnMatch:'coordinate'（在来木造のみ。structureRules.js参照）は
+  // id不一致でも座標一致で柱とみなすフォールバックを追加する——通り芯は全階共有idだが梁芯CL・意匠中心線は
+  // 階ごとに別idのため、下階柱がper-floor CLに乗っていると自階の梁のperpCLとid一致しない
+  // （ステップ1-b・下階柱分割の可視化。分割せずに1本のまま描かれてしまう回帰の修正）。
   _columnAtEnd(perpCL, columns) {
     const verticalCL   = this.isVertical ? this.axisCL : perpCL;
     const horizontalCL  = this.isVertical ? perpCL : this.axisCL;
-    return columns.find(
+    const byId = columns.find(
       c => c.verticalCL.id === verticalCL.id && c.horizontalCL.id === horizontalCL.id
     ) ?? null;
+    if (byId) return byId;
+    if (rulesFor(effectiveStructure(this._planGraph)).drawing.beamEndColumnMatch !== 'coordinate') return null;
+    // 3d（woodAutoFill.js alongCoordOnAxis）と同じ述語: 走行方向座標がperpCL、法線方向座標がこの梁の軸線。
+    return columns.find(c => {
+      const along = this.isVertical ? c.y : c.x;
+      const axis  = this.isVertical ? c.x : c.y;
+      return Math.abs(along - perpCL.effectiveValue) < CL_OVERLAP_TOL_MM && Math.abs(axis - this.axisValue) < CL_OVERLAP_TOL_MM;
+    }) ?? null;
   }
   // 端部の中心座標と、柱断面の梁方向半幅（柱が無い端部は中心=CL位置+柱芯オフセット、半幅=0）。
   // 柱がある端部は柱の実位置（個別偏心込み）を中心とし、断面寸法を柱の回転角で投影した半幅だけ手前で止める。

@@ -33,6 +33,21 @@ function reportRenumberToast(renumbered, onToast) {
   onToast?.(`材寸の変更にともない部材番号を振り直しました（${first.from} → ${first.to}${extra > 0 ? ` 他${extra}件` : ''}）`);
 }
 
+// 下階（belowGraph）の柱集合の変更検知用シグネチャ（位置・役割のみ。順序に依存しない）。
+// 下階編集経路（主構造変更時・突入時の反映を含む）の直後、上階柱直下の柱（ステップ3b）が
+// 新たに立った/消えたかを見る——自階の梁分割（columnSplitPoints）・成算定（autoFillWoodBeamDepths）
+// は下階柱位置を参照するため、下階柱集合が変わったのに自階を再計算し直さないと、古い下階柱を
+// 前提にした分割・成のまま確定してしまう（ユーザー裁定2026-09-16「分割後に正しい距離を持つことが
+// 最適解」。.claude/structural-model.md 参照）。sectionDefId 等の材寸変更（位置は変わらない）は
+// 対象外——柱が増減・移動したときだけ別シグネチャになればよい。座標は浮動小数の誤差を避けるため
+// 0.1mm単位に丸める。
+export function columnSetSignature(columns) {
+  return columns
+    .map(c => `${Math.round(c.x * 10) / 10}:${Math.round(c.y * 10) / 10}:${c.role}`)
+    .sort()
+    .join('|');
+}
+
 // ---- 構造再計算コア（突入時・主構造変更時で共有）----
 // 既に activate 済みの composition を受け取り、構造伏図に映る全グラフ（自階＋1つ下の階）を再計算する。
 // mutate（主構造の変更操作）を渡すと、自階スナップショットの before 取得後・after 取得前に runInAction で
@@ -65,7 +80,7 @@ export async function recomputeStructuralComposition(composition, subjectGraph, 
   // 番号の確定（assignNumbers/applyNumbers）はまだ行わない——下階分の収集も済んでから1回だけ行う。
   // 自階の梁幅・梁成算定の材幅（beamColumnWidthMm）は内部で自前peekする下階graphを参照する
   // （↑のflushEditablePeekにより最新値が読める）。
-  const { changed } = await recomputeStructuralForGraph(subjectGraph, project, belowMainStructure);
+  let { changed } = await recomputeStructuralForGraph(subjectGraph, project, belowMainStructure);
 
   // 1つ下の階（構造伏図に映る柱の供給元）も実効主構造へ揃える。突入時は reflectStructuralToOtherFloors が
   // 事前に下階を反映・永続化済みのため、ここは peek 済みバインディングへの差分適用（通常は差分ゼロ）。
@@ -78,6 +93,10 @@ export async function recomputeStructuralComposition(composition, subjectGraph, 
   // if(belowGraph)ブロックの外＝applyNumbers呼び出し側からも参照するため外側スコープに置く）。
   let belowBelowGraph = null;
   if (belowGraph) {
+    // 突入時の順序（自階の再計算→下階の柱追加）により、直後の3b柱追加が自階の梁分割・成算定に
+    // 間に合わない不整合があるため、下階柱集合の変更検知用に処理前のシグネチャを控えておく
+    // （columnSetSignature参照）。
+    const belowColumnsBefore = columnSetSignature(belowGraph.columns);
     const belowGate = await buildStructuralWallGate(belowGraph.plane, project, subjectGraph);
     const belowLowestGraph = await resolveLowestGraph(project, belowGraph);
     const belowStructure = belowGraph.structureOverride ?? project.structuralInfo.mainStructure;
@@ -119,6 +138,30 @@ export async function recomputeStructuralComposition(composition, subjectGraph, 
       conformToLedger(belowGraph, project);
       collectFloorGroups(belowGraph, project);
     });
+
+    // 下階の柱集合が変わった（3b柱追加・削除等）ときだけ、自階をもう一度再計算し直す——
+    // この関数の先頭で行った自階再計算（recomputeStructuralForGraph）は「3b柱追加前」の下階柱で
+    // 梁分割・成算定を確定していたため、ここで確定し直さないと分割位置・成が古い下階柱のままになる
+    // （ユーザー裁定2026-09-16）。
+    // 下階の柱は自階に依存しない（3bは通り芯・壁・上階柱だけで決まる）ため、1回の再実行で収束する
+    // ——ループはしない。belowGraphを直接渡して再peekしない（下階編集はまだIDBへ未反映のため。
+    // structuralRecompute.js precomputedBelowGraphのJSDoc参照）。flushEditablePeekは主構造変更経路
+    // （mutateがbelowGraph自身の編集可能peekを書き換えた場合）の保留保存を確定する「読む前に書く」
+    // 規律を保つためのもので、突入時（編集可能peek未開始）はno-op。
+    // **屋根専用平面（subjectGraph.plane.isRoofPlane）は再実行しない**（QA3-1・2026-09-17）：
+    // composition の belowGraph（figure層の columnMap 供給階。drawingDesignation.js
+    // structuralPlaneBelow は屋根なら「最上階」を返す）と、recomputeStructuralForGraph が
+    // 自前peekする belowGraph（wallBeamAxes.js belowPlaneOf。屋根専用平面は project.planes に
+    // 含まれないため常に null＝「屋根に1つ下の実体階は無い」）は別概念で、屋根では一致しない。
+    // 一致しないまま precomputedBelowGraph（最上階の非null graph）を渡すと、1回目（belowGraph=null
+    // ＝屋根自身の柱寸へフォールバック）と2回目（belowGraph=最上階＝最上階の柱寸を参照）とで
+    // beamColumnWidthMm が食い違い、屋根伏図の軒桁材幅が最上階の柱寸へ静かに置き換わる
+    // （実測: 最上階=105・屋根自身=120のとき、1回目120→2回目105 ×該当本数）。
+    if (!subjectGraph.plane.isRoofPlane && columnSetSignature(belowGraph.columns) !== belowColumnsBefore) {
+      await floorSwapManager.flushEditablePeek();
+      const { changed: secondChanged } = await recomputeStructuralForGraph(subjectGraph, project, belowMainStructure, belowGraph);
+      changed = changed || secondChanged;
+    }
   }
 
   // 自階＋下階の収集が揃った時点の project.memberNumberIndex（直前の reflectStructuralToOtherFloors が

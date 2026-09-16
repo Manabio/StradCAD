@@ -216,12 +216,13 @@ export function pointsOnWallLines(points, segments, junctionTol) {
 }
 
 /**
- * 壁線上の通し梁の支持区間（3dの前提: 梁は途中の柱位置で切らず、両端＋下階柱を支持点として
- * 通しで架ける。端は壁の交点＝自由端へは伸ばさない）。points（線上の端点候補座標。重複・未ソート可）
- * を昇順・tol未満は同一点としてdedupし、隣り合う2点のペアが mergedIntervals（mergeWallIntervals
- * の結果を想定）のいずれか1つに収まる＝壁が途切れず続いているかを判定、覆われたペアが連続する
- * 最大の並びを1本の [lo,hi] にまとめる。壁が途中で切れている点（被覆区間の外）は端にできない。
- * 点が2点未満・非数混入・被覆ペアが無ければ空配列。
+ * 壁線上の通し梁の支持区間（run＝分割前の最大区間。壁が途切れず続く連続区間を両端で1本にまとめる。
+ * 端は壁の交点＝自由端へは伸ばさない。区間内部の下階柱による分割は columnSplitPoints が別に行う——
+ * 「壁が途切れているか」と「下階柱で区切るか」は別の判定軸のため、本関数は前者だけを持つ）。
+ * points（線上の端点候補座標。重複・未ソート可）を昇順・tol未満は同一点としてdedupし、隣り合う2点の
+ * ペアが mergedIntervals（mergeWallIntervals の結果を想定）のいずれか1つに収まる＝壁が途切れず
+ * 続いているかを判定、覆われたペアが連続する最大の並びを1本の [lo,hi] にまとめる。壁が途中で
+ * 切れている点（被覆区間の外）は端にできない。点が2点未満・非数混入・被覆ペアが無ければ空配列。
  * @param {number[]} points
  * @param {Array<{lo:number, hi:number}>} mergedIntervals
  * @param {number} [tol]
@@ -244,6 +245,38 @@ export function throughBeamRuns(points, mergedIntervals, tol = CL_OVERLAP_TOL_MM
   }
   if (runStart != null) out.push({ lo: runStart, hi: pts[pts.length - 1] });
   return out;
+}
+
+/**
+ * 壁線の通し区間run（throughBeamRuns の結果1件、{lo,hi}）を、区間内部の下階柱の位置で分割する
+ * （ユーザー裁定2026-09-16「梁は下階柱（面）から下階柱（面）で区切られる材ごとに区別する」。
+ * ステップ3c-2b）。分割点＝columnPoints のうち、法線方向座標（isVertical?柱x:柱y）がaxisCoordに
+ * tol以内で一致し、走行方向座標（isVertical?柱y:柱x）がrunの**厳密に内側**（run.lo+tol < along <
+ * run.hi-tol。両端に一致する柱は既存の端点そのもので分割点ではない）にあるもの。
+ * 【不変条件】axisCoordはaxisCL.effectiveValue（＝beam.axisValue）、tolはCL_OVERLAP_TOL_MMを渡すこと
+ * ——woodAutoFill.js の alongCoordOnAxis（3d・支持点判定）と同じ述語にすることで、「3cが切る位置」＝
+ * 「3dが支持点として数える位置」を一致させる（3cが切らない下階柱を3dが支持点に数える、またはその逆の
+ * 食い違いを起こさない）。role（'foundation'＝杭を候補から外す等）の絞り込みは呼び出し側の責務
+ * （woodAutoFill.js の3b・3dと同じ規律。ここではrole自体を見ない）。
+ * 近接点（tol未満）は同一点としてdedupCoords（他関数と共通のヘルパ）でまとめる。
+ * 分割点0件・columnPoints省略/空はrun両端のみ（[lo,hi]。分割しない従来どおりの結果）。
+ * run不正（非数・hi<=lo）・axisCoord非数は空配列（呼び出し側がrunを丸ごとスキップする合図）。
+ * @param {{lo:number, hi:number}} run
+ * @param {number} axisCoord - 梁が乗る通り芯／梁芯の座標（法線方向。axisCL.effectiveValue）
+ * @param {boolean} isVertical
+ * @param {Array<{x:number, y:number}>} columnPoints - 下階柱（role絞り込みは呼び出し側）
+ * @param {number} [tol]
+ * @returns {number[]} 昇順の端点列 [lo, ...内部の分割点, hi]
+ */
+export function columnSplitPoints(run, axisCoord, isVertical, columnPoints, tol = CL_OVERLAP_TOL_MM) {
+  if (!run || !Number.isFinite(run.lo) || !Number.isFinite(run.hi) || run.hi <= run.lo) return [];
+  if (!Number.isFinite(axisCoord)) return [];
+  const interior = (columnPoints ?? [])
+    .filter(p => Number.isFinite(p?.x) && Number.isFinite(p?.y))
+    .filter(p => Math.abs((isVertical ? p.x : p.y) - axisCoord) < tol)
+    .map(p => (isVertical ? p.y : p.x))
+    .filter(v => v > run.lo + tol && v < run.hi - tol);
+  return dedupCoords([run.lo, ...interior, run.hi], tol);
 }
 
 /**

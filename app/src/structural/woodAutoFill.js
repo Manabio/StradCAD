@@ -22,7 +22,7 @@ import { woodStudCodeFor } from '../finish/materials/backingClass.js';
 import { beamGridCells } from './framingCells.js';
 import {
   woodBeamDepthForSpans, woodBeamSectionForDepth, crossingBeamLoadCoords,
-  mergeWallIntervals, throughBeamRuns, propagateCarrierDepths, pointsOnWallLines,
+  mergeWallIntervals, throughBeamRuns, propagateCarrierDepths, pointsOnWallLines, columnSplitPoints,
 } from './woodFraming.js';
 
 // 壁の端部の取り合い許容(mm)。壁の端は**取り合う壁の半厚（仕上げ込み）ぶん控えて生成される**
@@ -219,18 +219,36 @@ export function wallLineThroughRuns(wallSegments) {
  * （beamPlacement:'wallRuns'）で振り分ける。
  *  - 候補＝壁線（wallSegments。自階＋1つ下の階、呼び出し側がマージせず渡す）を線（isVertical,coord）
  *    ごとにまとめ、各線の壁区間を mergeWallIntervals で連結、その線上の壁の交点（wallIntersectionPoints）
- *    をthroughBeamRuns へ通した「通しで架けられる区間」。柱の位置では切らない（3dの前提＝両端＋下階柱が
- *    支持点。支持点は端点候補であって分割規則ではない）。自由端には伸ばさない。
- *  - 各区間の端は通り芯または壁由来の梁芯CL（無ければ壁のある意匠中心線。柱と同じ findBeamAnchorCL /
- *    findCenterAnchorCL）へ解決する。軸線自身・端のいずれかが解決できない区間は生成しない（continue）。
- *  - wallGate.spanInBuilding で鉛直連続性をゲートする（host大梁がゲート済みなのと同じ規律）。
- *  - 除外集合（excludedBeamSlots）・既存梁との重複は spanKey で確認する（柱・小梁と同じ規律）。
+ *    をthroughBeamRuns へ通した「通しで架けられる区間」（run）。自由端には伸ばさない。
+ *  - **各runはさらに下階柱（belowColumns、role:'foundation'除外）の位置で分割する**（ユーザー裁定
+ *    2026-09-16「梁は下階柱（面）から下階柱（面）で区切られる材ごとに区別する」）。分割点の列挙は
+ *    columnSplitPoints（woodFraming.js）に委ねる——渡すaxisCoordはaxisCL.effectiveValue（3dの
+ *    alongCoordOnAxisと同じ座標基準）。
+ *  - 各分割点・runの端は通り芯または壁由来の梁芯CL（無ければ壁のある意匠中心線。柱と同じ
+ *    findBeamAnchorCL / findCenterAnchorCL）へ解決する。**run の両端**のいずれかが解決できなければ
+ *    そのrunは丸ごと生成しない（従来どおり）。**内部の分割点**がアンカー解決できない場合は新しいCLを
+ *    作らずそこで切ることを諦め、隣の区間と合流させる（`findBeamAnchorCL`は柱アンカーとも共有する
+ *    述語のため、ここでCLを新設すると次回掃引で柱まで生えてしまう。かつ`excludedWallBeamAxes`を
+ *    無視することにもなる）。
+ *  - wallGate.spanInBuilding で鉛直連続性をゲートする（host大梁がゲート済みなのと同じ規律。分割後は
+ *    区間ごとに呼ぶ）。
+ *  - 除外集合（excludedBeamSlots）は区間ごとのキーに加え、run全長のキー（spanKey(axisCL,run両端のCL)）
+ *    も見る——ユーザーが分割前の1本を丸ごと削除していれば、そのrunからは1本も生成しない（分割後の
+ *    個々の区間キーへ除外情報を書き換える移行処理は持たない）。ユーザーが分割後の特定区間だけを
+ *    削除した場合はその区間キー単体の除外で足りる。
+ *  - 既存梁との重複は spanKey で確認する（柱・小梁と同じ規律）。加えて、**実際に分割されたrun**
+ *    （下階柱で2区間以上に切れたrun）に限り、分割で生まれた区間キーが分割前の全長で手動固定
+ *    （dimensionStatus!=='auto'）された梁のspanKeyとは一致しないため、幾何的な重なりで二重生成を防ぐ
+ *    （lockedFullBeamOverlap。axisSpanOccupiedと同型・別関数）。分割されていないrun（下階柱が無い・
+ *    分割点が全てアンカー解決不能で端2点のみ）はこのガードを適用せず、従来どおりspanKey占有だけで
+ *    判定する（QA F2・2026-09-16。非分割runにまで幾何ガードを広げるとスコープが逸脱する）。
  *  - 壁が1本も無い階（wallSegments.length===0）・framing を持たない主構造は何もしない（生成も撤去もしない。
  *    autoFillWoodColumns と同じ「壁ゼロの階は既存部材を保全」裁定）。
  *  - 撤去は graph.beamMap.delete を直接使う（graph.removeBeam は使わない＝excludedBeamSlots を汚さない。
  *    deleteClassificationOverflow・resolveSecondaryBeamsForAxis と同じ規律）。子スリーブは連鎖削除する。
  *    対象は主構造材種の role:'primary'|'secondary' のうち dimensionStatus==='auto' のみ
- *    （locked/calculated は保持）。
+ *    （locked/calculated は保持）。分割前の旧・全長梁（auto）はここで候補から外れて撤去される
+ *    （移行専用の処理は持たない）。
  *  - **候補スロットに旧方式の小梁（role:'secondary'）が既に居座っている場合は、それを道を空けてから
  *    通し梁(role:'primary')へ置き換える**（`existing` 判定は role:'primary' の占有だけを「満たされた」と
  *    みなす——role を見ずに spanKey だけで判定すると、梁芯CL方式で生成された旧・小梁が同じ位置に残った
@@ -242,11 +260,15 @@ export function wallLineThroughRuns(wallSegments) {
  * @param {object} project
  * @param {Array<{isVertical:boolean, coord:number, lo:number, hi:number}>} wallSegments
  * @param {object|null} [wallGate]
+ * @param {Array<{x:number, y:number, role?:string}>} [belowColumns] - 1つ下の実体階の柱集合
+ *   （呼び出し側が peekBelowGraph(...).columns 等で渡す。3bのaboveColumns・3dのbelowColumnsと同じ
+ *   「role:'foundation'除外は呼び出し側」の規律。省略・null・[]はいずれも「分割しない」＝従来どおり）
  * @returns {{created: object[], removed: string[]}}
  */
-export function autoFillWoodWallBeams(graph, project, wallSegments, wallGate = null) {
+export function autoFillWoodWallBeams(graph, project, wallSegments, wallGate = null, belowColumns = []) {
   const rules = rulesFor(effectiveStructure(graph, project));
   if (!rules.framing || !(wallSegments?.length)) return { created: [], removed: [] };
+  const belowPts = (belowColumns ?? []).filter(c => c.role !== 'foundation').map(c => ({ x: c.x, y: c.y }));
 
   // spanKey -> その位置に既にある梁（同材種）。候補スロットの占有物判定（role:'primary'昇格）に使う。
   const byKey = new Map();
@@ -270,33 +292,60 @@ export function autoFillWoodWallBeams(graph, project, wallSegments, wallGate = n
     const crossType = line.isVertical ? CenterLineType.HORIZONTAL : CenterLineType.VERTICAL;
 
     for (const run of line.runs) {
-      const startCL = findBeamAnchorCL(graph, crossType, run.lo) ?? findCenterAnchorCL(graph, crossType, run.lo);
-      const endCL   = findBeamAnchorCL(graph, crossType, run.hi) ?? findCenterAnchorCL(graph, crossType, run.hi);
-      if (!startCL || !endCL) continue; // アンカー解決不能な端は生成しない（例外を投げない）
-      if (wallGate && !wallGate.spanInBuilding(axisCL, line.isVertical, startCL, endCL)) continue;
+      // run を下階柱の位置で分割する（3c-2b）。同じ述語・tolを3d（alongCoordOnAxis）と共有するため
+      // axisCoordはaxisCL.effectiveValueを渡す。
+      const pts = columnSplitPoints(run, axisCL.effectiveValue, line.isVertical, belowPts);
+      if (pts.length === 0) continue; // run自体が不正（columnSplitPointsの失敗系）。安全側で見送る
+      const resolvedEnds = pts.map(v => ({
+        cl: findBeamAnchorCL(graph, crossType, v) ?? findCenterAnchorCL(graph, crossType, v),
+      }));
+      if (!resolvedEnds[0].cl || !resolvedEnds[resolvedEnds.length - 1].cl) continue; // runの端が解決不能なら生成しない
+      // 内部の分割点（下階柱）がアンカー解決できなければそこで切らず隣の区間とつなぐ（新CLは作らない）。
+      // run の両端は直前のcontinueでcl非nullが確定済みなので、ここは単純にcl有無だけで絞ってよい（QA F6）。
+      const cls = resolvedEnds.filter(r => r.cl).map(r => r.cl);
 
-      const key = spanKey(axisCL, startCL, endCL);
-      // 除外スロット（手動削除の尊重）は candidateKeys に加えない——生成しないだけでなく、下段の撤去
-      // ループの対象（＝撤去してよい）にも含める。ここで加えてしまうと、除外スロットに居座る旧方式の
-      // auto小梁が「候補あり」として撤去も生成もされず永久に残る事故になる（QA指摘・再発防止）。
-      if (graph.excludedBeamSlots.has(key)) continue;
-      candidateKeys.add(key);
-      if (existingPrimaryKeys.has(key)) continue;
+      const fullKey = spanKey(axisCL, cls[0], cls[cls.length - 1]);
+      if (graph.excludedBeamSlots.has(fullKey)) continue; // run全長を丸ごと削除済みなら分割後も何も生成しない
 
-      // 候補スロットの占有物（旧方式の小梁等）を道を空ける。手動固定が占有していれば重複させず見送る。
-      const occupants = byKey.get(key) ?? [];
-      if (occupants.some(b => b.dimensionStatus !== 'auto')) continue;
-      for (const b of occupants) {
-        for (const s of [...graph.sleeveMap.values()]) if (s.hostBeamId === b.id) graph.sleeveMap.delete(s.id);
-        graph.beamMap.delete(b.id);
-        removed.push(b.id);
+      for (let i = 0; i < cls.length - 1; i++) {
+        const startCL = cls[i], endCL = cls[i + 1];
+        if (wallGate && !wallGate.spanInBuilding(axisCL, line.isVertical, startCL, endCL)) continue;
+
+        const key = spanKey(axisCL, startCL, endCL);
+        // 除外スロット（手動削除の尊重）は candidateKeys に加えない——生成しないだけでなく、下段の撤去
+        // ループの対象（＝撤去してよい）にも含める。ここで加えてしまうと、除外スロットに居座る旧方式の
+        // auto小梁が「候補あり」として撤去も生成もされず永久に残る事故になる（QA指摘・再発防止）。
+        if (graph.excludedBeamSlots.has(key)) continue;
+        candidateKeys.add(key);
+        if (existingPrimaryKeys.has(key)) continue;
+
+        // 二重防御: 分割前の全長で手動固定された梁と幾何的に重なっていれば重複生成しない
+        // （spanKeyが分割で変わるためexistingPrimaryKeysだけではすり抜ける）。**実際に分割されたrun
+        // （cls.length>2＝区間が2つ以上）だけに限る**（QA F2・2026-09-16）——分割されていないrun
+        // （cls.length===2＝端2点のみ）は従来どおりspanKey占有だけで判定する。分割していないのに
+        // 幾何的な重なりガードを効かせると、run全長の一部区間だけ手動固定した既存梁（分割は起きていない）
+        // で本来生成されるべき別区間の梁まで巻き込んで見送ってしまう（スコープの逸脱）。
+        if (cls.length > 2) {
+          const lo = Math.min(startCL.effectiveValue, endCL.effectiveValue);
+          const hi = Math.max(startCL.effectiveValue, endCL.effectiveValue);
+          if (lockedFullBeamOverlap(graph, rules.baseMaterial, line.isVertical, axisCL.effectiveValue, lo, hi, CL_OVERLAP_TOL_MM)) continue;
+        }
+
+        // 候補スロットの占有物（旧方式の小梁等）を道を空ける。手動固定が占有していれば重複させず見送る。
+        const occupants = byKey.get(key) ?? [];
+        if (occupants.some(b => b.dimensionStatus !== 'auto')) continue;
+        for (const b of occupants) {
+          for (const s of [...graph.sleeveMap.values()]) if (s.hostBeamId === b.id) graph.sleeveMap.delete(s.id);
+          graph.beamMap.delete(b.id);
+          removed.push(b.id);
+        }
+
+        created.push(graph.addBeam(
+          rules.baseMaterial, rules.defaultSections.beam, axisCL, line.isVertical, startCL, endCL,
+          { role: 'primary', beamType: '大梁' },
+        ));
+        existingPrimaryKeys.add(key);
       }
-
-      created.push(graph.addBeam(
-        rules.baseMaterial, rules.defaultSections.beam, axisCL, line.isVertical, startCL, endCL,
-        { role: 'primary', beamType: '大梁' },
-      ));
-      existingPrimaryKeys.add(key);
     }
   }
 
@@ -334,6 +383,22 @@ function floorBeamIsVertical(w, h) {
 function axisSpanOccupied(graph, materialType, isVertical, coord, lo, hi, tol) {
   return graph.beams.some(b =>
     b.materialType === materialType && (b.role === 'primary' || b.role === 'floor') &&
+    b.isVertical === isVertical && Math.abs(b.axisValue - coord) < tol &&
+    Math.min(b.clStart.effectiveValue, b.clEnd.effectiveValue) < hi - tol &&
+    Math.max(b.clStart.effectiveValue, b.clEnd.effectiveValue) > lo + tol);
+}
+
+// 二重防御（ステップ3c-2b・下階柱分割）: 下階柱で分割した区間[lo,hi]が、同一軸・同材種の手動固定
+// （dimensionStatus!=='auto'）のprimary/secondary梁と幾何的に重なっていないか。分割で生まれた
+// 区間キー（spanKey）は分割前の全長で固定された梁のspanKeyとは一致しないため、spanKeyだけの一致判定
+// （existingPrimaryKeys）ではすり抜けて重複生成してしまう——axisSpanOccupiedと同型の二重チェックだが、
+// 対象role（'primary'|'secondary'）・対象dimensionStatus（手動固定のみ）が異なるため汎用化せず独立させる。
+// 呼び出し側（autoFillWoodWallBeams）は実際に分割されたrun（cls.length>2）だけに絞って呼ぶ
+// （QA F2・2026-09-16。非分割runの旧spanKeyオンリー判定はこのガードの対象外のまま）。
+function lockedFullBeamOverlap(graph, materialType, isVertical, coord, lo, hi, tol) {
+  return graph.beams.some(b =>
+    b.materialType === materialType && (b.role === 'primary' || b.role === 'secondary') &&
+    b.dimensionStatus !== 'auto' &&
     b.isVertical === isVertical && Math.abs(b.axisValue - coord) < tol &&
     Math.min(b.clStart.effectiveValue, b.clEnd.effectiveValue) < hi - tol &&
     Math.max(b.clStart.effectiveValue, b.clEnd.effectiveValue) > lo + tol);
@@ -558,6 +623,17 @@ function alongCoordOnAxis(beam, x, y, tol) {
  *  - 伝播は`woodFraming.js`の`propagateCarrierDepths`に委ねる（host のさらに先の host へも荷重経路上を
  *    辿って不動点まで反映。host判定・グラフ探査の二重実装はしない——host集合は上記hostMapと同じ
  *    findHostPrimaryBeam呼び出しから作る）。
+ *  - **端が下階柱の位置ならhost登録しない**（ユーザー裁定2026-09-16「梁の端が下階柱なら受梁にしない」＝
+ *    F1）。下階柱で分割した通し梁は、分割点で2本の半梁が同じ端点を共有し、その点に取りつく直交梁から見ると
+ *    `findHostPrimaryBeam`のmin-tol/max+tol判定がどちらの半梁にも一致してしまう（実データで実測：収束後
+ *    （sweep3）の1パスで、`targets`の各梁の各端についてこの述語を満たす候補が2件以上になる回数を直接
+ *    数えるとmoku1で51件・moku2で57件——参考として3スイープ累計では152/170件相当。全件が候補の一方が
+ *    下階柱位置と一致するケースで、`Array.find`の走査順（挿入順）で片方だけに成が伝播しうる状態だった）。
+ *    下階柱がある位置は柱が受けるためどちらの半梁へも伝播させる必要が無く、`alongCoordOnAxis`と同じ
+ *    述語・tolで「その端が下階柱と同一点か」を判定し、一致すればhost探索自体をスキップする（あいまい
+ *    一致を起こす側で断つ——`findHostPrimaryBeam`は柱アンカーとも共有するため変更しない）。修正後は
+ *    上記の51/57件とも下階柱位置のスキップに含まれ0件になる（走査順依存の挙動自体、挿入順に依らず
+ *    再現しなくなったことを`woodAutoFill.test.js`のF1テストで固定：半梁の追加順を反転しても同じ成になる）。
  *  - dimensionStatus==='auto' の部材のみ更新する（locked/calculated は保持。conformWoodSections が
  *    dimensionStatus を問わず幅だけそろえるのとは意図的に非対称——柱寸法（幅）は階の値として恒久的に
  *    そろえる一方、成は支持・荷重の実況から決まる算定値のため、手動固定を上書きしない）。
@@ -595,6 +671,12 @@ export function autoFillWoodBeamDepths(graph, project, belowColumns = []) {
   const hostIdsByBeam = new Map();
   for (const x of targets) {
     for (const [endCL, otherCL] of [[x.clStart, x.clEnd], [x.clEnd, x.clStart]]) {
+      // F1（2026-09-16）: この端が下階柱の位置と同一点なら、柱が受けるためhostを探さない（あいまい一致の回避）。
+      const atBelowColumn = belowSupportColumns.some((c) => {
+        const along = alongCoordOnAxis(x, c.x, c.y, CL_OVERLAP_TOL_MM);
+        return along != null && Math.abs(along - endCL.effectiveValue) < CL_OVERLAP_TOL_MM;
+      });
+      if (atBelowColumn) continue;
       const host = findHostPrimaryBeam(targets, endCL.id, !x.isVertical, x.axisValue);
       if (!host) continue;
       if (x.role === 'floor') {

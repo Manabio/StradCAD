@@ -207,11 +207,13 @@ export function autoFillBeams(graph, project, role = 'primary', wallGate = null)
  *  （撤去も伴う）。role==='primary'（かつ在来木造）のときだけ壁線方式へ切り替える——基礎梁
  *  （role:'foundation'）・屋根の軒桁（role:'eaves'、autoFillRoofBeams）・踊り場受け梁は別経路の
  *  ままここを通らない。wallSegments は wallGate と同じ既存パターン（呼び出し側が await して渡す）。
+ *  belowColumns は在来木造の壁線通し梁が下階柱の位置で分割する（ステップ3c-2b）ために使う——
+ *  1つ下の実体階の柱集合（structuralRecompute.js の belowGraph?.columns 等）で、非在来では無視される。
  *  構造モード突入時の再計算（autoFillStructuralGrid）が共有する。
  *  @returns {{created: object[], removed: string[]}} */
-export function autoFillBeamsForStructure(graph, project, role, wallGate = null, wallSegments = []) {
+export function autoFillBeamsForStructure(graph, project, role, wallGate = null, wallSegments = [], belowColumns = []) {
   if (role === 'primary' && rulesFor(effectiveStructure(graph, project)).beamPlacement === 'wallRuns') {
-    return autoFillWoodWallBeams(graph, project, wallSegments, wallGate);
+    return autoFillWoodWallBeams(graph, project, wallSegments, wallGate, belowColumns);
   }
   return { created: autoFillBeams(graph, project, role, wallGate), removed: [] };
 }
@@ -381,8 +383,11 @@ export function autoFillStairLandingBeams(graph, project, wallGate = null) {
  *  （role:'floor'、woodAutoFill.js autoFillWoodFloorBeams。ステップ3e-2）も生成・撤去する。
  *  aboveColumns: 1つ上の実体階の柱集合（在来木造の上階柱直下の柱＝ステップ3bが候補列挙に使う。
  *  wallBeamAxes.js peekAboveGraph の結果。呼び出し側が主構造ルール(columnPlacement)がwallIntersections
- *  のときだけ渡す想定——非在来では autoFillColumnsForStructure 側で無視される）。 */
-export function autoFillStructuralGrid(graph, project, belowMainStructure, wallGate = null, wallSources = [], wallSegments = [], aboveColumns = []) {
+ *  のときだけ渡す想定——非在来では autoFillColumnsForStructure 側で無視される）。
+ *  belowColumns: 1つ下の実体階の柱集合（在来木造の壁線通し梁の下階柱分割＝ステップ3c-2bが使う。
+ *  structuralRecompute.js の belowGraph?.columns 等。非在来では autoFillBeamsForStructure 側で
+ *  無視される）。 */
+export function autoFillStructuralGrid(graph, project, belowMainStructure, wallGate = null, wallSources = [], wallSegments = [], aboveColumns = [], belowColumns = []) {
   const foundation = isFoundationPlane(graph.plane, project);
   const isRoof = graph.plane.isRoofPlane;
   // 自階帰属の柱・梁・基礎は自階の主構造が確定するまで生成しない（autoFillColumns は自前でも同ガード）。
@@ -405,7 +410,7 @@ export function autoFillStructuralGrid(graph, project, belowMainStructure, wallG
     && foundationGeneratesBase(structure, foundationType)) ? autoFillFootings(graph, wallGate) : [];
   const beamKind = foundation ? MEMBER_KIND.FOUNDATION_BEAM : MEMBER_KIND.BEAM;
   const beamsResult = (!isRoof && ownSpecified && structureHasMemberKind(beamKind, structure))
-    ? autoFillBeamsForStructure(graph, project, foundation ? 'foundation' : 'primary', wallGate, wallSegments)
+    ? autoFillBeamsForStructure(graph, project, foundation ? 'foundation' : 'primary', wallGate, wallSegments, belowColumns)
     : { created: [], removed: [] };
   const newBeams = beamsResult.created;
   const removedBeams = beamsResult.removed;

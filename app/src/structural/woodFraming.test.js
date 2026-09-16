@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { RoomFeature } from '../core/constants.js';
 import {
   woodBeamDepthMm, woodBeamSectionKey, woodBeamSectionForDepth, woodBeamDepthForSpans, crossingBeamLoadCoords,
-  mergeWallIntervals, throughBeamRuns, propagateCarrierDepths,
+  mergeWallIntervals, throughBeamRuns, columnSplitPoints, propagateCarrierDepths,
   studPositions, studSpec, openingJambSpec, entranceOpeningWidthMm, hipBraceAllowed,
   wallRunFaces, faceStudPositions,
 } from './woodFraming.js';
@@ -189,6 +189,70 @@ test('【失敗系】throughBeamRuns: 点2点未満・被覆なし・非数混�
   assert.deepEqual(throughBeamRuns([0, 1820], [{ lo: 5000, hi: 6000 }]), [], '被覆する区間が無い(別位置)');
   assert.deepEqual(throughBeamRuns([0, NaN, 1820], [{ lo: 0, hi: 1820 }]), [], '点に非数混入');
   assert.deepEqual(throughBeamRuns(null, [{ lo: 0, hi: 1820 }]), []);
+});
+
+// ---- columnSplitPoints（ステップ3c-2b: runを下階柱の位置で分割する端点列挙）----
+// isVertical=false（横壁線・axisCoord=y=0）: 法線方向座標=y、走行方向座標(along)=x。
+test('columnSplitPoints: 区間内部の下階柱1点で[lo,c,hi]の3点、2点なら4点（[lo,c1,c2,hi]）を返す', () => {
+  assert.deepEqual(columnSplitPoints({ lo: 0, hi: 3640 }, 0, false, [{ x: 1820, y: 0 }]), [0, 1820, 3640]);
+  assert.deepEqual(
+    columnSplitPoints({ lo: 0, hi: 3640 }, 0, false, [{ x: 1000, y: 0 }, { x: 2000, y: 0 }]),
+    [0, 1000, 2000, 3640],
+  );
+  assert.deepEqual(columnSplitPoints({ lo: 0, hi: 3640 }, 0, false, []), [0, 3640], '下階柱0件は分割しない');
+});
+
+test('columnSplitPoints: run両端（tol以内）に一致する下階柱は分割点にしない（既存の端点そのもの）', () => {
+  assert.deepEqual(columnSplitPoints({ lo: 0, hi: 3640 }, 0, false, [{ x: 0, y: 0 }]), [0, 3640], 'lo自体は分割点でない');
+  assert.deepEqual(columnSplitPoints({ lo: 0, hi: 3640 }, 0, false, [{ x: 3640, y: 0 }]), [0, 3640], 'hi自体は分割点でない');
+  assert.deepEqual(columnSplitPoints({ lo: 0, hi: 3640 }, 0, false, [{ x: 0.2, y: 0 }]), [0, 3640], 'lo+tol未満は端点扱い');
+  // 「厳密に内側」＝ちょうどtol分だけ内側の点（lo+tol, hi-tol）も等号側は端点扱い（分割点にしない）。
+  assert.deepEqual(columnSplitPoints({ lo: 0, hi: 3640 }, 0, false, [{ x: 0.5, y: 0 }], 0.5), [0, 3640], 'lo+tolちょうどは端点扱い（不等号は厳密<）');
+  assert.deepEqual(columnSplitPoints({ lo: 0, hi: 3640 }, 0, false, [{ x: 3639.5, y: 0 }], 0.5), [0, 3640], 'hi-tolちょうどは端点扱い（不等号は厳密<）');
+});
+
+test('columnSplitPoints: 法線方向の座標がaxisCoordからtol以上外れた点は無視する', () => {
+  assert.deepEqual(columnSplitPoints({ lo: 0, hi: 3640 }, 0, false, [{ x: 1820, y: 1000 }], 0.5), [0, 3640], '法線方向1000mm外れ・tol0.5では拾わない');
+});
+
+test('【対照】columnSplitPoints: tol指定で法線方向の許容を広げれば拾われる', () => {
+  assert.deepEqual(columnSplitPoints({ lo: 0, hi: 3640 }, 0, false, [{ x: 1820, y: 100 }], 0.5), [0, 3640], 'tol=0.5では法線方向100mm外れは拾わない');
+  assert.deepEqual(columnSplitPoints({ lo: 0, hi: 3640 }, 0, false, [{ x: 1820, y: 100 }], 150), [0, 1820, 3640], 'tol=150なら拾う');
+});
+
+test('columnSplitPoints: run範囲外の点は無視し、tol未満で近接する2点は1点にdedupする', () => {
+  assert.deepEqual(columnSplitPoints({ lo: 0, hi: 3640 }, 0, false, [{ x: -100, y: 0 }, { x: 5000, y: 0 }]), [0, 3640], '範囲外は無視');
+  assert.deepEqual(
+    columnSplitPoints({ lo: 0, hi: 3640 }, 0, false, [{ x: 1820, y: 0 }, { x: 1820.2, y: 0 }]),
+    [0, 1820, 3640],
+    'tol未満の近接2点は1点にまとまる',
+  );
+});
+
+test('columnSplitPoints: isVertical=trueの縦runは法線=x・走行=yで判定する（横runとx/yの役割が入れ替わる）', () => {
+  assert.deepEqual(
+    columnSplitPoints({ lo: 0, hi: 3640 }, 0, true, [{ x: 0, y: 1820 }, { x: 1820, y: 1820 }]),
+    [0, 1820, 3640],
+    '法線(x)がaxisCoordに一致するx=0の点だけ拾い、走行方向(y)の1820が分割点になる。x=1820の点は法線方向に外れて無視',
+  );
+});
+
+test('【失敗系】columnSplitPoints: run不正（非数・hi<=lo）・axisCoord非数は空配列、columnPoints省略/null/[]はいずれも[lo,hi]', () => {
+  assert.deepEqual(columnSplitPoints(null, 0, false, []), []);
+  assert.deepEqual(columnSplitPoints({ lo: NaN, hi: 3640 }, 0, false, []), []);
+  assert.deepEqual(columnSplitPoints({ lo: 3640, hi: 0 }, 0, false, []), []);
+  assert.deepEqual(columnSplitPoints({ lo: 0, hi: 0 }, 0, false, []), []);
+  assert.deepEqual(columnSplitPoints({ lo: 0, hi: 3640 }, NaN, false, []), []);
+  assert.deepEqual(columnSplitPoints({ lo: 0, hi: 3640 }, 0, false), [0, 3640]);
+  assert.deepEqual(columnSplitPoints({ lo: 0, hi: 3640 }, 0, false, null), [0, 3640]);
+  assert.deepEqual(columnSplitPoints({ lo: 0, hi: 3640 }, 0, false, []), [0, 3640]);
+  // 個々の点が非数混入でも例外を投げず、その点だけ無視する。
+  assert.doesNotThrow(() => {
+    assert.deepEqual(
+      columnSplitPoints({ lo: 0, hi: 3640 }, 0, false, [{ x: NaN, y: 0 }, { x: 1000, y: 0 }]),
+      [0, 1000, 3640],
+    );
+  });
 });
 
 test('propagateCarrierDepths: 1段伝播（carrierの成をhostへmaxで反映）', () => {
