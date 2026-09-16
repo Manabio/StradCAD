@@ -6,6 +6,8 @@ import { LodLevel } from '../viewport.js';
 import { COLOR_BY_MATERIAL, columnRenderSize, beamRenderWidth } from './StructuralLayer.jsx';
 import { groupPropsForStyle } from '../figure/figureStyle.js';
 import { PIN_ROLES } from '../core/structuralEntities.js';
+import { rulesFor, effectiveStructure } from '../structural/structureRules.js';
+import { showMemberTags } from '../structural/framingDrawing.js';
 
 const FONT_SIZE_PX = 22; // スクリーン上の表示サイズ(px)。RoomLabelsLayer と同じ逆補正方式。
 const SECONDARY_TAG_FONT_SIZE_PX = 18; // 小梁タグは大梁(G)より一回り小さく表示する
@@ -121,8 +123,16 @@ const MemberTag = observer(({ entity, mapName, x, y, offsetX, offsetY, rotation 
 // rotation の有無に関わらずその基準点が指定した (x, y) に来るようにしている。
 // 各カテゴリの供給グラフは図面合成（composition）から解決する（StructuralLayer.jsx の本体描画と
 // 対象を一致させる）。柱＝1つ下の階・床下材＝自階の帰属は FigureDef が決め、ここは委ねるだけ。
-export const MemberTagLayer = observer(({ composition, viewport, onTagClick, onStatusMenuRequest }) => {
+//
+// 在来木造は部材タグ自体を描かない（structural/structureRules.js drawing.memberTags:'hide'。
+// structural/framingDrawing.js showMemberTags が唯一の判定先）——主題階（自階＝床下材レイヤの供給階。
+// StructuralLayer.jsx と同じ 'beamMap' で取る）の実効主構造で早期returnする。タグクリックの代替は
+// 伏図の梁タップ（StructuralLayer.jsx pickMembersOnFigure。ステップ4第3単位①）——SceneLayers.jsx が
+// StructuralLayer.onMemberClick と本レイヤーの onTagClick へ同じ openMemberCard を渡す。
+export const MemberTagLayer = observer(({ composition, viewport, project, onTagClick, onStatusMenuRequest }) => {
   if (!composition) return null;
+  const figureGraph = composition.graphForCategory('beamMap');
+  if (!showMemberTags(rulesFor(effectiveStructure(figureGraph, project)).drawing)) return null;
   const fontSize = FONT_SIZE_PX / viewport.scaleX;
   const lod = viewport.lodLevel;
 

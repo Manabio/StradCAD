@@ -218,12 +218,14 @@ test('structureRules: 描画ルール（柱包み・平面の柱線色・線幅�
   // 在来は壁厚＝柱寸法で柱の輪郭が壁の下地帯の線と重なるため極太線（実機 moku1 2026-09-15「柱が消えた」）
   assert.deepEqual({ ...rulesFor(TRADITIONAL_WOOD_STRUCTURE).drawing }, {
     columnFinishWrap: false, planColumnColor: 'wall', planColumnLineWeight: 'ultraThick',
-    framingPlanColor: 'mono', framingColumnSymbol: 'crossBox',
+    framingPlanColor: 'mono', framingColumnSymbol: 'crossBox', framingColumnLineWeight: 'byLod',
+    memberTags: 'hide', beamDepthMark: 'offsetLine',
   });
   for (const key of ['木造（2"×4"）', 'S造', 'SRC造', 'RC造(ラーメン)', 'RC造(壁式)', UNSPECIFIED_STRUCTURE]) {
     assert.deepEqual({ ...rulesFor(key).drawing }, {
       columnFinishWrap: true, planColumnColor: 'material', planColumnLineWeight: 'thick',
-      framingPlanColor: 'material', framingColumnSymbol: 'section',
+      framingPlanColor: 'material', framingColumnSymbol: 'section', framingColumnLineWeight: 'fixed',
+      memberTags: 'show', beamDepthMark: 'none',
     }, key);
   }
 });

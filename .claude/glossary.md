@@ -204,3 +204,15 @@ WINDING/L_TURN/FLARED/OPEN_WELLは対象外＝従来面順へフォールバッ�
 丸め規約を持たない）。材マスタや生成規則を変えたら`WALL_KEY_VERSION`を上げて既存キーを一律
 不一致にする。設計意図は`.claude/data-model.md`「内周壁は鮮度キーが変わった境界で全削除・
 導出再生成する」節。
+
+## 非正角材の標記（伏図）
+成≠幅の梁（在来木造の伏図のみ）に付ける記号。梁線の端から梁幅の2倍内側へ45度線2本、梁幅の2.5倍
+離れた位置に平行線1本を引き、中点に「幅×成」の文字を置く（`structural/framingDrawing.js`の
+`beamDepthMarks`）。離れ・トリムは梁幅にのみ依存し梁成によらない。標記は寸法線に見立て、文字サイズ・
+ギャップ・線幅は`renderer/dimensionStyle.js`（`NUM_FONT_PX`/`TEXT_GAP_PX`/`DIMENSION_LINE_WEIGHT`）を
+寸法線と共有する（`renderer/StructuralLayer.jsx`）。設計意図は`.claude/structural-model.md`。
+
+## 袋綴じ（土台帯）
+基礎伏図の土台帯（線画2本）が、直交する基礎梁と交わる位置で自然に重なって閉じる描き方。端を閉じる
+専用のキャップ線は描かない——他の基礎梁と交わらない自由端は開いたままになる。設計意図は
+`.claude/structural-model.md`。

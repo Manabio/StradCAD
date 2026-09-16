@@ -8,8 +8,11 @@
 // 非在来の伏図を完全不変に保つ唯一の根拠（structureRules.js の値を直書きしない）。
 //
 // react/konva/store/.jsx を静的に引かない（team-lessons「抽出モジュールは本番経路をテストで守る」）。
+// viewport.js は mobx と @core しか import しない純モジュールのため、node:test 単体import制約に
+// 抵触しない（openings/openingPlanSymbolGeometry.js と同じ先例）。
 // ================================================================
 import { findSectionEntry } from './sectionCatalog.js';
+import { LodLevel } from '../viewport.js';
 
 /** 伏図の全黒色（PLAN_WALL_LINE_COLOR とは根拠が別＝「平面は柱断面を壁と同じ黒」に対し
  *  こちらは「伏図（躯体図）は全部材を黒で描く」という別の指示。統合しない。 */
@@ -47,6 +50,21 @@ export function framingColorOverride(drawing) {
   return drawing.framingPlanColor === 'mono' ? FRAMING_MONO_COLOR : null;
 }
 
+/** 伏図の柱記号の輪郭線幅（LINE_WEIGHT_MM のキー）。drawing.framingColumnLineWeight:
+ *  'byLod'（在来木造）→ 略図（SCHEMATIC）は medium、標準・詳細は thick。
+ *  それ以外（既定 'fixed'。未知値・drawing 自体が undefined/{} のときも含む）→ 常に medium（恒等写像）。 */
+export function framingColumnLineWeight(drawing, lod) {
+  if (drawing?.framingColumnLineWeight !== 'byLod') return 'medium';
+  return lod === LodLevel.SCHEMATIC ? 'medium' : 'thick';
+}
+
+/** 伏図の部材タグ（memberNo）を描くか。drawing.memberTags: 'hide'（在来木造）→ false。
+ *  それ以外（既定 'show'。未知値・drawing 自体が undefined/{} のときも含む）→ true（恒等写像）。
+ *  タグクリックの代替は伏図の梁タップ（pickMembersOnFigure。ステップ4第3単位①）。 */
+export function showMemberTags(drawing) {
+  return drawing?.memberTags !== 'hide';
+}
+
 /** 柱の断面外形寸法(mm)。カタログ未登録は COLUMN_FALLBACK_SIZE_MM 角にフォールバックする。 */
 export function columnSectionSize(column) {
   const sec = findSectionEntry(column.sectionDefId);
@@ -61,4 +79,87 @@ export function columnCrossPointsLocal(width, height) {
     [-hw, -hh, hw, hh],
     [-hw, hh, hw, -hh],
   ];
+}
+
+/** 基礎伏図の土台帯（bandLines へ渡す half・線幅キー）を主構造ルール（foundationRules）から解決する。
+ *  half は foundationRules.sillWidthMm の半分（帯の全幅=sillWidthMm）、線幅は常に'medium'（LINE_WEIGHT_MM
+ *  のキー）。structureRules.js の値を StructuralLayer.jsx が直接算出しない単一の入口
+ *  ——woodFoundationBands が bandLines へ渡す値と食い違わせないため。 */
+export function sillBandSpec(foundationRules) {
+  return { half: foundationRules.sillWidthMm / 2, weight: 'medium' };
+}
+
+// ---- 非正角材（成≠幅の梁）の標記（在来木造の伏図。ユーザー裁定2026-09-16。設計意図は
+// .claude/structural-model.md ステップ4 第2単位）----
+// 梁線の端部から梁内側に45度の単線を両端から2本、梁幅の2倍（トリム量）だけ内側で、梁幅の2.5倍
+// （離れ）だけ軸から離れた平行線1本に着地させる。離れ・トリムは梁幅wにのみ依存し梁成hによらない。
+// 梁幅×梁成の文字は平行線の中点に置く（配置props自体はrenderer/MemberTagLayer.jsx axisTagsの規約
+// ＝offsetX=推定幅/2・offsetY=fontSizeを流用し、ここではワールド座標のx/y/rotation/textだけ返す）。
+const BEAM_DEPTH_MARK_TRIM_W     = 2;   // 端からのトリム量・45度線の軸方向投影＝2w
+const BEAM_DEPTH_MARK_OFFSET_W   = 2.5; // 平行線の軸からの離れ＝2.5w
+const BEAM_DEPTH_MARK_MIN_SPAN_W = 4;   // スパンが4w以下（4w超のときだけ描く）
+
+// (along, across) → ワールド座標。isVertical=true の梁は軸がx方向固定（across=x, along=y）。
+function beamDepthMarkPoint(along, across, isVertical) {
+  return isVertical ? { x: across, y: along } : { x: along, y: across };
+}
+
+// 標記を描く側（+1/-1）。beam と同じ向き（isVertical一致）でスパンが重なる他の梁の位置関係から選ぶ。
+// 対称化（2026-09-16裁定）: 片側にしか他梁が無くても、その梁が2.5w以内に近ければ反対側（空いている側）
+// へ出す——「隣の梁の標記と重ならない」ことを常に優先する。+側にだけ他梁があり2.5w超なら+1、2.5w以内
+// なら−1（反対側は空いているため）。−側も対称に同じ規律。両側にあれば既定+1（ただし+側の最近傍が
+// 2.5w以内なら−1）。どちらにも無ければ+1。
+function chooseBeamDepthMarkSide(beam, w, lo, hi, others) {
+  const overlapsSpan = o => {
+    const oLo = Math.min(o.coord1, o.coord2), oHi = Math.max(o.coord1, o.coord2);
+    return oLo < hi && oHi > lo;
+  };
+  const neighbors = others.filter(o => o.id !== beam.id && o.isVertical === beam.isVertical && overlapsSpan(o));
+  const plus  = neighbors.filter(o => o.axisValue > beam.axisValue);
+  const minus = neighbors.filter(o => o.axisValue < beam.axisValue);
+  const threshold = BEAM_DEPTH_MARK_OFFSET_W * w;
+  const nearestPlusDist  = plus.length  > 0 ? Math.min(...plus.map(o => o.axisValue - beam.axisValue)) : Infinity;
+  const nearestMinusDist = minus.length > 0 ? Math.min(...minus.map(o => beam.axisValue - o.axisValue)) : Infinity;
+  if (plus.length > 0 && minus.length === 0) return nearestPlusDist <= threshold ? -1 : 1;
+  if (minus.length > 0 && plus.length === 0) return nearestMinusDist <= threshold ? 1 : -1;
+  if (plus.length === 0 && minus.length === 0) return 1;
+  return nearestPlusDist <= threshold ? -1 : 1;
+}
+
+/**
+ * 非正角材（成≠幅）の梁の標記を解決する。drawing.beamDepthMark!=='offsetLine'（既定 'none'。非在来）
+ * または lod===SCHEMATIC は常に空配列。beams は柱手前でトリム済みの描画スパン
+ * （[{id,isVertical,axisValue,coord1,coord2,sectionDefId,role,materialType}]）。
+ * 対象は「カタログで引けて成≠幅・role!=='foundation'・スパンが4w超」の梁のみ。
+ * @returns {{id, materialType, parallel:number[], slopes:number[][], label:{x,y,rotation,text}}[]}
+ */
+export function beamDepthMarks(drawing, lod, beams) {
+  if (drawing?.beamDepthMark !== 'offsetLine' || lod === LodLevel.SCHEMATIC) return [];
+  const marks = [];
+  for (const beam of beams ?? []) {
+    const sec = findSectionEntry(beam.sectionDefId);
+    if (!sec || sec.width === sec.height || beam.role === 'foundation') continue;
+    const w = sec.width, h = sec.height;
+    const lo = Math.min(beam.coord1, beam.coord2), hi = Math.max(beam.coord1, beam.coord2);
+    if (hi - lo <= BEAM_DEPTH_MARK_MIN_SPAN_W * w) continue;
+    const s = chooseBeamDepthMarkSide(beam, w, lo, hi, beams);
+    const edge     = beam.axisValue + s * w / 2;
+    const parallel = beam.axisValue + s * BEAM_DEPTH_MARK_OFFSET_W * w;
+    const trim     = BEAM_DEPTH_MARK_TRIM_W * w;
+    const p1 = beamDepthMarkPoint(lo + trim, parallel, beam.isVertical);
+    const p2 = beamDepthMarkPoint(hi - trim, parallel, beam.isVertical);
+    const loEdge = beamDepthMarkPoint(lo, edge, beam.isVertical);
+    const loPar  = beamDepthMarkPoint(lo + trim, parallel, beam.isVertical);
+    const hiEdge = beamDepthMarkPoint(hi, edge, beam.isVertical);
+    const hiPar  = beamDepthMarkPoint(hi - trim, parallel, beam.isVertical);
+    const mid = beamDepthMarkPoint((lo + hi) / 2, parallel, beam.isVertical);
+    marks.push({
+      id: beam.id,
+      materialType: beam.materialType,
+      parallel: [p1.x, p1.y, p2.x, p2.y],
+      slopes: [[loEdge.x, loEdge.y, loPar.x, loPar.y], [hiEdge.x, hiEdge.y, hiPar.x, hiPar.y]],
+      label: { x: mid.x, y: mid.y, rotation: beam.isVertical ? -90 : 0, text: `${w}×${h}` },
+    });
+  }
+  return marks;
 }

@@ -1,11 +1,12 @@
 import { observer } from 'mobx-react-lite';
-import { Line, Rect, Circle, Group } from 'react-konva';
+import { Line, Rect, Circle, Group, Text } from 'react-konva';
 import { StructuralMaterialType, LINE_WEIGHT_MM } from '../core.js';
 import { cellBoundsFromKey } from '../finish/gridCells.js';
 import { findSectionEntry, diaphragmProjection } from '../structural/sectionCatalog.js';
 import { rulesFor, effectiveStructure } from '../structural/structureRules.js';
 import {
-  framingColumnGroups, framingColor, framingColorOverride, columnSectionSize,
+  framingColumnGroups, framingColor, framingColorOverride, columnSectionSize, framingColumnLineWeight,
+  beamDepthMarks, sillBandSpec,
 } from '../structural/framingDrawing.js';
 import { planColumnWraps } from './wallDrawPlan.js';
 import { columnWrapRenderProps, columnWrapStrokeWidth } from '../structural/columnWrapLineJoin.js';
@@ -28,6 +29,19 @@ const PLAN_WALL_LINE_COLOR = '#000000';
 // （sectionDefId がカタログに無い場合）は structural/framingDrawing.js の COLUMN_FALLBACK_SIZE_MM を
 // 単一の実装として使う（二重管理しない）。BEAM_WIDTH_MM は梁の仮表示幅。
 const BEAM_WIDTH_MM  = 30;  // 梁の簡易表示の幅
+
+// 非正角材（成≠幅）の標記（renderer/StructuralLayer.jsx beamDepthMarks）の「幅×成」文字の
+// フォントサイズ・平行線からの離れ（画面px）。MemberTagLayer.jsx の FONT_SIZE_PX と同じ
+// 「スクリーン上の表示サイズ(px)。逆補正方式」——viewport.scaleX で割ってワールド座標へ換算する。
+const BEAM_DEPTH_LABEL_FONT_SIZE_PX = 11;
+const BEAM_DEPTH_LABEL_GAP_PX = 2;
+
+// タグ文字列のおおよその表示幅(px)。gutterPrimitives.jsx/StepSectionLayer.jsx と同じ
+// CHAR_WIDTH_RATIO(0.62)をレイヤーごとにローカル定義する既存パターン（Text実測を避ける）。
+const CHAR_WIDTH_RATIO = 0.62;
+function estimateTextWidth(text, fontSize) {
+  return text.length * fontSize * CHAR_WIDTH_RATIO;
+}
 
 // 剛接合（鉄骨）の継手記号。位置は構造芯から RIGID_JOINT_OFFSET_MM（core側の定数）内側で、
 // 梁を横断する線として描く。略図・標準は1本、詳細は2本（母材を切って突き合わせる継手の見え方。
@@ -116,7 +130,7 @@ function bandLines(keyPrefix, isVertical, axisValue, half, segments, stroke, str
 
 // 木造基礎伏図の「土台」「ベース」帯の振り分け寸法（問題.md）。通り芯・1階壁芯（＝基礎梁の軸）から
 // 土台は幅150（structureRules.js foundation.sillWidthMm）、ベースは幅600（foundation.sectionDefaults.baseWidth）を
-// 振り分けて描く。土台は袋とじ（交点で重ねて閉じる）、ベースは角でトリム（直交する基礎梁に突き当たる端を
+// 振り分けて描く。土台は袋綴じ（交点で重ねて閉じる）、ベースは角でトリム（直交する基礎梁に突き当たる端を
 // 半幅だけ控えて突合せにする）。
 const BAND_COORD_TOL = 1; // 端点一致判定の許容(mm)
 
@@ -128,9 +142,11 @@ function bandRect(beam, lo, hi, half) {
 }
 
 // 木造基礎伏図の土台・ベース帯を基礎梁から生成する。drawBase=false（べた基礎）ならベースは描かない。
-// 帯の幅は主構造ルール（foundationRules）から引く。
-function woodFoundationBands(foundationBeams, drawBase, sillColor, baseColor, strokeWidth, foundationRules) {
-  const SILL_HALF = foundationRules.sillWidthMm / 2;
+// 土台の half・線幅キーは呼び出し側が sillBandSpec(foundationRules) で解決して渡す（sillHalf・
+// sillStrokeWidthが唯一の入口。この関数の中で foundationRules.sillWidthMm を直接算出しない）。
+// 土台は線画（bandLines の2本線。自由端のキャップ線は描かない＝開いたまま。確認事項として
+// .claude/structural-model.mdに記録）、ベースは従来どおり塗り。
+function woodFoundationBands(foundationBeams, drawBase, { sillColor, baseColor, baseStrokeWidth, sillStrokeWidth, sillHalf }, foundationRules) {
   const BASE_HALF = foundationRules.sectionDefaults.baseWidth / 2;
   const spanLo = b => Math.min(b.clStart.value, b.clEnd.value);
   const spanHi = b => Math.max(b.clStart.value, b.clEnd.value);
@@ -148,15 +164,14 @@ function woodFoundationBands(foundationBeams, drawBase, sillColor, baseColor, st
       const hi = meetsPerp(b, spanHi(b)) ? spanHi(b) - BASE_HALF : spanHi(b);
       if (hi <= lo) continue;
       rects.push(<Rect key={`base:${b.id}`} {...bandRect(b, lo, hi, BASE_HALF)}
-        fill={baseColor} stroke={baseColor} strokeWidth={strokeWidth} opacity={0.12} listening={false} />);
+        fill={baseColor} stroke={baseColor} strokeWidth={baseStrokeWidth} opacity={0.12} listening={false} />);
     }
   }
-  // 土台（狭い・上）：常に全長（交点で重なって閉じる＝袋とじ）。
-  for (const b of foundationBeams) {
-    rects.push(<Rect key={`sill:${b.id}`} {...bandRect(b, spanLo(b), spanHi(b), SILL_HALF)}
-      fill={sillColor} stroke={sillColor} strokeWidth={strokeWidth} opacity={0.3} listening={false} />);
-  }
-  return rects;
+  // 土台（狭い・上）：常に全長（交点で重なって閉じる＝袋綴じ）。線画（bandLines の2本線）で描く——
+  // 自由端（他の基礎梁と交わらない端）にキャップ線は描かない（開いたまま。確認事項として記録）。
+  const sillLines = foundationBeams.flatMap(b =>
+    bandLines(`sill:${b.id}`, b.isVertical, b.axisValue, sillHalf, [[spanLo(b), spanHi(b)]], sillColor, sillStrokeWidth, null));
+  return [...rects, ...sillLines];
 }
 
 // 柱のダイヤフラム外形寸法(mm)。鋼管のみ（断面+e の四角）。鋼管以外・断面未登録は null。
@@ -179,8 +194,15 @@ function columnDiaphragmSize(column) {
 // outline props で明示する（既定false＝非在来・平面図経路は完全不変。ここで framingSymbol の有無から
 // 輪郭を判断すると、非在来の下階柱にも 'section' という非null値が渡るだけで輪郭が強制される回帰になる
 // ——実機QA指摘2026-09-15）。colorOverride は伏図の全黒指定（framingColor 'mono'）用。
+// outlineWeight（伏図専用。LINE_WEIGHT_MM のキーまたはnull）は柱記号の輪郭線幅を呼び出し側が明示する
+// props——**この柱の graph（下階柱は非アクティブな1つ下の平面）から rulesFor で自前に引いてはならない**
+// （QA指摘2026-09-16: 下階柱グループの graph が権威になり、階ごとに主構造が異なる建物で下階柱だけ
+// 線幅が割れる回帰。色・記号・輪郭と同じく、主題階（自階）の figureRules から
+// StructuralLayer.jsx が framingColumnLineWeight(figureRules.drawing, lod) を解決して渡す）。
+// 既定null＝'medium'（非伏図・平面図経路は渡さないため完全不変）。
 export const ColumnsLayer = observer(({
-  graph, viewport, diaphragm = false, finishWrap = false, framingSymbol = null, colorOverride = null, outline: outlineProp = false,
+  graph, viewport, diaphragm = false, finishWrap = false, framingSymbol = null, colorOverride = null,
+  outline: outlineProp = false, outlineWeight = null,
 }) => {
   if (!graph) return null;
   const scale   = Math.min(viewport.scaleX, viewport.scaleY);
@@ -191,7 +213,7 @@ export const ColumnsLayer = observer(({
   const drawing = rulesFor(effectiveStructure(graph)).drawing;
   const outline = finishWrap || viewport.lodLevel === LodLevel.STANDARD || outlineProp;
   const outlineStrokeWidth = resolveStrokeWidth(
-    finishWrap ? LINE_WEIGHT_MM[drawing.planColumnLineWeight] : LINE_WEIGHT_MM.medium, scale,
+    LINE_WEIGHT_MM[finishWrap ? drawing.planColumnLineWeight : (outlineWeight ?? 'medium')], scale,
     viewport.lineWeightsPx, viewport.pxPerMmX);
   const diaStrokeWidth = resolveStrokeWidth(
     LINE_WEIGHT_MM.thin, scale, viewport.lineWeightsPx, viewport.pxPerMmX);
@@ -310,6 +332,27 @@ export const StructuralLayer = observer(({ composition, viewport, project }) => 
   const foundationRules = figureRules.foundation;
   const woodFoundation = foundationBeams.length > 0 && foundationRules.drawsBands;
   const drawBase = woodFoundation && foundationRules.hasBase(project?.structuralInfo?.foundationType);
+  // 土台帯の half・線幅キーは structural/framingDrawing.js の sillBandSpec が唯一の入口
+  // （StructuralLayer.jsx が foundationRules.sillWidthMm を直接算出しない）。
+  const sillSpec = sillBandSpec(foundationRules);
+
+  // 梁の描画スパン（柱手前でトリム済み）を1箇所で解決する——梁本体の帯・継手記号と、非正角材の標記
+  // （beamDepthMarks）が同じスパンを読むようにするため（二重計算・食い違いの防止）。
+  const beamDrawSpans = (beam?.graph?.beams ?? []).map(b => {
+    const { coord1, coord2 } = b.spanForColumns(displayedColumns, { diaphragm: lod === LodLevel.DETAIL });
+    return { beam: b, coord1, coord2 };
+  });
+
+  // 非正角材（成≠幅）の梁の標記（在来木造のみ。structural/framingDrawing.js beamDepthMarks が
+  // 対象選定・幾何を丸ごと決める）。文字サイズ・平行線からの離れは BEAM_DEPTH_LABEL_FONT_SIZE_PX
+  // （逆補正方式はMemberTagLayer.jsxと同じ）、線幅は柱・壁と同じ thin。
+  const beamDepthMarkList = beamDepthMarks(figureRules.drawing, lod, beamDrawSpans.map(({ beam: b, coord1, coord2 }) => ({
+    id: b.id, isVertical: b.isVertical, axisValue: b.axisValue, coord1, coord2,
+    sectionDefId: b.sectionDefId, role: b.role, materialType: b.materialType,
+  })));
+  const beamDepthLabelFontSize = BEAM_DEPTH_LABEL_FONT_SIZE_PX / viewport.scaleX;
+  const beamDepthLabelGap = BEAM_DEPTH_LABEL_GAP_PX / viewport.scaleX;
+  const beamDepthMarkStrokeWidth = thin;
 
   // 柱グループ（z-order: 配列順＝下階柱→自階柱）は structural/framingDrawing.js の
   // framingColumnGroups が「どのカテゴリを・どの記号で・輪郭を強制するか」を丸ごと決める
@@ -333,14 +376,20 @@ export const StructuralLayer = observer(({ composition, viewport, project }) => 
               framingSymbol={g.symbol}
               colorOverride={columnColorOverride}
               outline={g.outline}
+              outlineWeight={framingColumnLineWeight(figureRules.drawing, lod)}
             />
           </Group>
         );
       })}
       {woodFoundation && (
         <Group {...groupPropsForStyle(footing?.spec.style)}>
-          {woodFoundationBands(foundationBeams, drawBase,
-            colorOf(StructuralMaterialType.WOOD), colorOf(StructuralMaterialType.RC), thin, foundationRules)}
+          {woodFoundationBands(foundationBeams, drawBase, {
+            sillColor: colorOf(StructuralMaterialType.WOOD),
+            baseColor: colorOf(StructuralMaterialType.RC),
+            baseStrokeWidth: thin,
+            sillStrokeWidth: resolveStrokeWidth(LINE_WEIGHT_MM[sillSpec.weight], scale, viewport.lineWeightsPx, viewport.pxPerMmX),
+            sillHalf: sillSpec.half,
+          }, foundationRules)}
         </Group>
       )}
       <Group {...groupPropsForStyle(footing?.spec.style)}>
@@ -373,10 +422,11 @@ export const StructuralLayer = observer(({ composition, viewport, project }) => 
         })}
       </Group>
       <Group {...groupPropsForStyle(beam?.spec.style)}>
-        {(beam?.graph?.beams ?? []).flatMap(b => {
+        {beamDrawSpans.flatMap(({ beam: b, coord1, coord2 }) => {
           const color = colorOf(b.materialType);
           // 詳細描画では梁を柱断面ではなくダイヤフラム端まで（鋼管柱のみ e 分だけ手前で止まる）。
-          const { coord1, coord2 } = b.spanForColumns(displayedColumns, { diaphragm: lod === LodLevel.DETAIL });
+          // スパン(coord1/coord2)は上でbeamDrawSpansとして解決済み——非正角材の標記（beamDepthMarks）と
+          // 同じスパンを読む（二重計算・食い違いの防止）。
           const p1 = b.isVertical ? { x: b.axisValue, y: coord1 } : { x: coord1, y: b.axisValue };
           const p2 = b.isVertical ? { x: b.axisValue, y: coord2 } : { x: coord2, y: b.axisValue };
           const width = beamRenderWidth(b, lod);
@@ -408,6 +458,27 @@ export const StructuralLayer = observer(({ composition, viewport, project }) => 
           return [
             ...bandLines(`beam:${b.id}`, b.isVertical, b.axisValue, width / 2, [[lo, hi]], color, medium, beamDash),
             ...jointMarks,
+          ];
+        })}
+      </Group>
+      <Group {...groupPropsForStyle(beam?.spec.style)}>
+        {beamDepthMarkList.flatMap(mark => {
+          const color = colorOf(mark.materialType);
+          return [
+            <Line key={`depthPar:${mark.id}`} points={mark.parallel} stroke={color} strokeWidth={beamDepthMarkStrokeWidth} listening={false} />,
+            <Line key={`depthS0:${mark.id}`} points={mark.slopes[0]} stroke={color} strokeWidth={beamDepthMarkStrokeWidth} listening={false} />,
+            <Line key={`depthS1:${mark.id}`} points={mark.slopes[1]} stroke={color} strokeWidth={beamDepthMarkStrokeWidth} listening={false} />,
+            <Text
+              key={`depthLabel:${mark.id}`}
+              x={mark.label.x} y={mark.label.y}
+              offsetX={estimateTextWidth(mark.label.text, beamDepthLabelFontSize) / 2}
+              offsetY={beamDepthLabelFontSize + beamDepthLabelGap}
+              rotation={mark.label.rotation}
+              text={mark.label.text}
+              fontSize={beamDepthLabelFontSize}
+              fill={color}
+              listening={false}
+            />,
           ];
         })}
       </Group>

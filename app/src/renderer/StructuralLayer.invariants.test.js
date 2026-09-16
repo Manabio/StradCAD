@@ -71,3 +71,63 @@ test('【不変条件・F1回帰】StructuralLayer.jsx: ColumnsLayer の輪郭�
   assert.ok(!/framingSymbol/.test(outlineDefLine),
     `outline の算出が framingSymbol を参照している（非在来の下階柱にも 'section'（非null）が渡り輪郭が強制される回帰）: ${outlineDefLine.trim()}`);
 });
+
+test('【不変条件】StructuralLayer.jsx: 非正角材の標記は beamDepthMarks( の戻り値を map して描き、梁本体（beamDrawSpans）と同じ描画スパンを読む', () => {
+  const src = readSource();
+  // 梁本体の帯・継手記号を描く flatMap が beamDrawSpans を読んでいる（spanForColumns を1つ上へ
+  // 持ち上げた結果を1箇所に集約——非正角材の標記と食い違わせないため）。
+  assert.ok(/beamDrawSpans\.flatMap\(/.test(src),
+    '梁本体の描画が beamDrawSpans.flatMap(...) を経由していない（spanForColumnsの二重計算・食い違いの回帰）');
+  const defMatch = /const\s+(\w+)\s*=\s*beamDepthMarks\(/.exec(src);
+  assert.ok(defMatch, 'beamDepthMarks(...) の呼び出し・代入が見つからない（非正角材の標記の判断が structural/framingDrawing.js に無い＝回帰）');
+  const marksVar = defMatch[1];
+  // beamDepthMarks(...) への入力が beamDrawSpans から作られている（梁本体と同じスパン）ことを確認する。
+  const inputMatch = new RegExp(`beamDepthMarks\\([^;]*beamDrawSpans\\.map\\(`, 's').exec(src);
+  assert.ok(inputMatch, 'beamDepthMarks(...) の第3引数が beamDrawSpans.map(...) 由来になっていない（梁本体と別のスパンを見る回帰）');
+  const mapMatch = new RegExp(`${marksVar}\\.flatMap\\(\\s*(\\w+)`).exec(src);
+  assert.ok(mapMatch, `${marksVar}.flatMap(...) の呼び出しが見つからない（beamDepthMarksの戻り値をmapして描いていない）`);
+});
+
+test('【不変条件・QA2026-09-16】StructuralLayer.jsx: ColumnsLayer の outlineStrokeWidth は props の outlineWeight から決め、graph 自前の drawing から framingColumnLineWeight を引かない', () => {
+  const src = readSource();
+  const match = /const outlineStrokeWidth = resolveStrokeWidth\(\s*\n\s*(.+),\s*scale,/.exec(src);
+  assert.ok(match, 'ColumnsLayer 内の `const outlineStrokeWidth = resolveStrokeWidth(...)` が見つからない');
+  const arg = match[1];
+  assert.ok(!/framingColumnLineWeight\(/.test(arg),
+    `ColumnsLayer 内で framingColumnLineWeight( を呼んでいる（下階柱グループの非アクティブな graph の drawing が権威になる回帰）: ${arg}`);
+  assert.ok(/outlineWeight/.test(arg),
+    `outlineStrokeWidth の算出が outlineWeight props を経由していない: ${arg}`);
+  assert.ok(!/LINE_WEIGHT_MM\.medium/.test(arg),
+    `outlineStrokeWidth の算出に LINE_WEIGHT_MM.medium の直書きが残っている: ${arg}`);
+  // StructuralLayer本体側: <ColumnsLayer ...> へ渡す outlineWeight は主題階（figureRules.drawing）から
+  // framingColumnLineWeight で解決したものでなければならない（下階柱グラフのdrawingではない）。
+  const propRe = /outlineWeight=\{\s*framingColumnLineWeight\(\s*figureRules\.drawing\s*,/;
+  assert.ok(propRe.test(src),
+    'outlineWeight props が framingColumnLineWeight(figureRules.drawing, ...) から渡されていない（主題階の権威が壊れている）');
+});
+
+test('【不変条件・ステップ4第3単位③】StructuralLayer.jsx: 非正角材の標記Textは mark.label の rotation を渡し、offsetX/offsetYはestimateTextWidthとフォントサイズ+ギャップ（寸法線見立て）から求める', () => {
+  const src = readSource();
+  assert.ok(/rotation=\{\s*mark\.label\.rotation\s*\}/.test(src),
+    'rotation={mark.label.rotation} が渡されていない（回転が固定値になっている回帰）');
+  const offsetXMatch = /offsetX=\{\s*estimateTextWidth\(\s*mark\.label\.text\s*,\s*(\w+)\s*\)\s*\/\s*2\s*\}/.exec(src);
+  assert.ok(offsetXMatch, 'offsetX={estimateTextWidth(mark.label.text, <fontSize>)/2} が見つからない');
+  const fontSizeVar = offsetXMatch[1];
+  // ユーザー裁定2026-09-16: 標記は寸法線に見立てる——文字の下端が平行線からgap分だけ離れる
+  // （寸法線のnormalNumCoordと同じ関係）。offsetY={fontSize}（gap無し）は回帰。
+  const offsetYMatch = new RegExp(`offsetY=\\{\\s*${fontSizeVar}\\s*\\+\\s*(\\w+)\\s*\\}`).exec(src);
+  assert.ok(offsetYMatch, `offsetY={${fontSizeVar} + <gap>} が見つからない（寸法線見立てのgapが抜けている回帰）`);
+});
+
+test('【不変条件】StructuralLayer.jsx: 土台帯のhalf・線幅は sillBandSpec(foundationRules) から解決し、bandLines へそのまま渡す', () => {
+  const src = readSource();
+  const specMatch = /const\s+(\w+)\s*=\s*sillBandSpec\(\s*foundationRules\s*\)/.exec(src);
+  assert.ok(specMatch, 'sillBandSpec(foundationRules) の呼び出し・代入が見つからない（土台帯のhalf・線幅算出がStructuralLayer.jsxに直書きされている回帰）');
+  const specVar = specMatch[1];
+  const halfRe = new RegExp(`sillHalf:\\s*${specVar}\\.half\\s*,`);
+  assert.ok(halfRe.test(src), `sillHalf: ${specVar}.half, の受け渡しが見つからない（半端な加工（倍率等）を挟まず素通ししているか）`);
+  const weightRe = new RegExp(`LINE_WEIGHT_MM\\[\\s*${specVar}\\.weight\\s*\\]`);
+  assert.ok(weightRe.test(src), `LINE_WEIGHT_MM[${specVar}.weight] の参照が見つからない（線幅キーをsillBandSpec経由で解決していない）`);
+  assert.ok(/bandLines\(`sill:\$\{b\.id\}`,\s*b\.isVertical,\s*b\.axisValue,\s*sillHalf,/.test(src),
+    'bandLines(...) 呼び出しが sillHalf を使っていない（土台帯のhalfが食い違う回帰）');
+});

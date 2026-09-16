@@ -127,6 +127,7 @@ export const SceneLayers = observer(({
               <MemberTagLayer
                 composition={structComposition}
                 viewport={viewport}
+                project={project}
                 onTagClick={(entity, mapName) => {
                   setShowStructuralInfoDialog(true);
                   setMemberFocusRequest({ mapName, tag: entity.memberNo, fieldKey: PRIMARY_DIMENSION_FIELD_BY_MAP[mapName] ?? null, entityId: entity.id });
