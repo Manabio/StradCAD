@@ -28,14 +28,22 @@ test('【不変条件】StructuralLayer.jsx: COLOR_BY_MATERIAL[ の直接参照�
   assert.ok(/framingColor\(/.test(colorOfHit.code), 'colorOf が framingColor を経由していない（恒等化の回帰・QA指摘E相当）');
 });
 
-test('【不変条件】StructuralLayer.jsx: 柱グループは framingColumnGroups の配列を map して描く（resolveCategory(group.category) の graph・group.symbol・colorOverride・group.outline をすべて橋渡しし、diaphragm は columnMap 判定で渡す）', () => {
+test('【不変条件・z-order修正2026-09-17】StructuralLayer.jsx: 柱グループは framingColumnGroups の配列を renderColumnGroup(g) で描く（resolveCategory(group.category) の graph・group.symbol・colorOverride・group.outline をすべて橋渡しし、diaphragm は columnMap 判定で渡す）。柱グループの描画はrenderColumnGroupへ関数化されている——QA指摘4（伏図で梁上の管柱タップが梁カードを開いてしまう）の修正で、pick対象（自階柱□・pickColumns）だけ梁の後に描く2箇所描画になったため（下のz-orderテストで固定）', () => {
   const src = readSource();
   const defMatch = /const\s+(\w+)\s*=\s*framingColumnGroups\(/.exec(src);
   assert.ok(defMatch, 'framingColumnGroups(...) の呼び出し・代入が見つからない（柱グループの判断が structural/framingDrawing.js に無い＝回帰）');
   const groupsVar = defMatch[1];
-  const mapMatch = new RegExp(`${groupsVar}\\.map\\(\\s*\\(?\\s*(\\w+)`).exec(src);
-  assert.ok(mapMatch, `${groupsVar}.map(...) の呼び出しが見つからない（配列をmapして描いていない）`);
-  const itemVar = mapMatch[1];
+  // 1グループぶんの描画は renderColumnGroup(g) に一本化されているはず（z-order修正で描画位置が
+  // 2箇所に分かれたための関数化。二重実装を避ける——旧テストは columnGroups.map( の直接呼び出しを
+  // 見ていたが、その形はもう存在しない。関数定義から itemVar を取る形へ最小限更新した）。
+  const renderFnMatch = /const renderColumnGroup = (\w+) => \{/.exec(src);
+  assert.ok(renderFnMatch, 'renderColumnGroup(g) の定義が見つからない（柱グループ描画の関数化が崩れている）');
+  const itemVar = renderFnMatch[1];
+  // z-order修正（下のQA指摘4テスト）が backColumnGroups/frontColumnGroups へ絞り込む元配列も
+  // 同じ groupsVar（framingColumnGroups の代入先）でなければならない——別配列を作って絞り込みだけ
+  // 差し替える回帰（下階柱×まで巻き込む等）を防ぐ。
+  const filterFromGroupsVarRe = new RegExp(`${groupsVar}\\.filter\\(`);
+  assert.ok(filterFromGroupsVarRe.test(src), `backColumnGroups/frontColumnGroups が ${groupsVar}.filter(...) から絞り込まれていない`);
   const resolveRe = new RegExp(`resolveCategory\\(\\s*${itemVar}\\.category\\s*\\)`);
   assert.ok(resolveRe.test(src), `resolveCategory(${itemVar}.category) 相当の呼び出しが見つからない（カテゴリごとの解決を配列に委ねていない）`);
   // resolveCategory(...) の代入先変数（graph の取得元）を捕まえる——ハードコードした別変数（例: 常に
@@ -59,6 +67,25 @@ test('【不変条件】StructuralLayer.jsx: 柱グループは framingColumnGro
   // QA指摘F7: diaphragm は「配列の先頭」という位置ではなく category==='columnMap'（下階柱）で判定する。
   const diaphragmPropRe = new RegExp(`diaphragm=\\{\\s*${itemVar}\\.category\\s*===\\s*'columnMap'\\s*&&`);
   assert.ok(diaphragmPropRe.test(src), `diaphragm が ${itemVar}.category === 'columnMap' で判定されていない（配列の位置(index===0)依存の回帰）`);
+});
+
+test('【不変条件・QA指摘4】StructuralLayer.jsx: 柱タップ対象（columnMapSelf かつ pickColumns）だけbackColumnGroupsから除いてfrontColumnGroupsとし、梁本体（beamDrawSpans）より後（前面）に描く——非pick（下階柱×・非在来）はbackColumnGroupsのまま梁より前で不変', () => {
+  const src = readSource();
+  const backMatch = /const backColumnGroups\s*=\s*columnGroups\.filter\(\s*(\w+)\s*=>\s*!\(pickColumns\s*&&\s*\1\.category\s*===\s*'columnMapSelf'\)\)/.exec(src);
+  assert.ok(backMatch, "backColumnGroups が columnGroups.filter(g => !(pickColumns && g.category === 'columnMapSelf')) 相当になっていない");
+  const frontMatch = /const frontColumnGroups\s*=\s*columnGroups\.filter\(\s*(\w+)\s*=>\s*pickColumns\s*&&\s*\1\.category\s*===\s*'columnMapSelf'\)/.exec(src);
+  assert.ok(frontMatch, "frontColumnGroups が columnGroups.filter(g => pickColumns && g.category === 'columnMapSelf') 相当になっていない");
+  assert.ok(/\{backColumnGroups\.map\(renderColumnGroup\)\}/.test(src), 'backColumnGroups.map(renderColumnGroup) の描画が見つからない');
+  assert.ok(/\{frontColumnGroups\.map\(renderColumnGroup\)\}/.test(src), 'frontColumnGroups.map(renderColumnGroup) の描画が見つからない');
+  // frontColumnGroups（pick対象の自階柱□）は梁本体（beamDrawSpans.flatMapのGroup）より後に描かれる
+  // ——梁が柱より後に描かれる既存z-orderのままだと、梁上に乗る管柱の中心タップが梁カードを開いてしまう
+  // （QA指摘4・実機観測）。
+  const beamBodyIdx = src.indexOf('beamDrawSpans.flatMap(');
+  const frontRenderIdx = src.indexOf('{frontColumnGroups.map(renderColumnGroup)}');
+  assert.ok(beamBodyIdx > 0, '梁本体の描画（beamDrawSpans.flatMap）が見つからない');
+  assert.ok(frontRenderIdx > 0, 'frontColumnGroups.map(renderColumnGroup) の描画が見つからない');
+  assert.ok(beamBodyIdx < frontRenderIdx,
+    'frontColumnGroups（pick対象の自階柱□）の描画が梁本体（beamDrawSpans）より前にある（QA指摘4の回帰: 梁上の管柱タップが梁カードを開いてしまう）');
 });
 
 // QA指摘F1（ブロッカー・非在来の回帰）の再発防止: ColumnsLayer 自身の outline 判定が framingSymbol
@@ -180,4 +207,21 @@ test('【不変条件】StructuralLayer.jsx: 土台帯のhalf・線幅は sillBa
   assert.ok(weightRe.test(src), `LINE_WEIGHT_MM[${specVar}.weight] の参照が見つからない（線幅キーをsillBandSpec経由で解決していない）`);
   assert.ok(/bandLines\(`sill:\$\{b\.id\}`,\s*b\.isVertical,\s*b\.axisValue,\s*sillHalf,/.test(src),
     'bandLines(...) 呼び出しが sillHalf を使っていない（土台帯のhalfが食い違う回帰）');
+});
+
+test('【不変条件・QA指摘1・ステップ4】StructuralLayer.jsx: 柱の当たり判定（ColumnsLayerのhitProps）はpick時のみlistening:true・fillEnabled:false・hitStrokeWidthがMath.max(とcolumnRenderSize(を含み、非pick時はモジュール定数COLUMN_HIT_PROPS_NONE（{ listening: false }）で、<ColumnSymbol>へhitProps={hitProps}として渡される', () => {
+  const src = readSource();
+  const propsMatch = /const hitProps = pick\s*\n\s*\?\s*\{([^}]*)\}\s*\n\s*:\s*(\w+);/.exec(src);
+  assert.ok(propsMatch, 'hitProps（pick=trueのprops）の定義が見つからない');
+  const pickProps = propsMatch[1];
+  const elseVar = propsMatch[2];
+  assert.ok(/listening:\s*true/.test(pickProps), 'pick時のhitPropsにlistening: trueが無い');
+  assert.ok(/fillEnabled:\s*false/.test(pickProps), 'pick時のhitPropsにfillEnabled: falseが無い（外形の外までヒット域が広がる回帰）');
+  assert.ok(/hitStrokeWidth:\s*Math\.max\(/.test(pickProps), 'hitStrokeWidthがMath.max(を使っていない');
+  assert.ok(/columnRenderSize\(/.test(pickProps), 'hitStrokeWidthの算出式がcolumnRenderSize(を含んでいない（柱記号の実寸辺長を見ていない回帰）');
+  // 非pick時は毎レンダー新規オブジェクトにしない（ColumnSymbolはobserverでReact.memo相当。QA指摘6）
+  // ——モジュールスコープ定数を参照しているかを変数名の定義自体で確認する。
+  const constMatch = new RegExp(`const\\s+${elseVar}\\s*=\\s*\\{\\s*listening:\\s*false\\s*\\};`).exec(src);
+  assert.ok(constMatch, `非pick時のhitPropsが{ listening: false }のモジュール定数（例:COLUMN_HIT_PROPS_NONE）を参照していない（変数=${elseVar}）`);
+  assert.ok(/<ColumnSymbol[\s\S]{0,300}?hitProps=\{hitProps\}/.test(src), '<ColumnSymbol>へhitProps={hitProps}が渡されていない');
 });

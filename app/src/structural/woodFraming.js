@@ -11,6 +11,16 @@ import { RoomFeature, CL_OVERLAP_TOL_MM } from '../core/constants.js';
 import { WOOD_BEAM_DEPTH_TABLE, TRADITIONAL_WOOD_FRAMING, TRADITIONAL_WOOD_BACKING, rulesFor, TRADITIONAL_WOOD_STRUCTURE } from './structureRules.js';
 import { woodRectSectionKey } from './sectionCatalog.js';
 
+// 壁の端部の取り合い許容(mm)。壁の端は**取り合う壁の半厚（仕上げ込み）ぶん控えて生成される**
+// （仕上げモードの壁生成。実機: x=0 の縦壁に突き当たる横壁は x=57.5 から始まる）ため、交点・T字・
+// コーナーの判定では範囲をこの値だけ外へ広げる。壁厚の上限（RC壁200＋仕上げ）の半分を超える値にし、
+// 材の半厚を個別に持ち回らない（壁の外周仕上げの有無で半厚が変わり、`materialRange` 由来の値では
+// 控え量に届かない例が実機であった）。壁同士がこれ以上離れて終わる構成は「交わっていない」とみなす。
+// 本体は woodAutoFill.js（壁交点柱・壁線通し梁）が主用途だが、woodColumnOffset.js（純モジュール。
+// core.js非依存を保つため woodAutoFill.js を import できない）も同じ値で壁を同定するため、
+// 依存の少ないこちらを真実のソースにし woodAutoFill.js は再exportする。
+export const WALL_JUNCTION_TOL_MM = 150;
+
 /**
  * 梁成（成D mm）を「支持する2点間距離」と「中間荷重の数」から梁成表で引く。
  * 距離は区分の上限以下で最初に当てはまる列（1820以下／2730以下／3640以下）。
@@ -197,7 +207,9 @@ export function mergeWallIntervals(intervals, tol = CL_OVERLAP_TOL_MM) {
  * @param {Array<{x:number, y:number}>} points
  * @param {Array<{isVertical:boolean, coord:number, lo:number, hi:number, halfDepth:number}>} segments
  * @param {number} junctionTol - 壁の端部の取り合い許容(mm)
- * @returns {Array<{x:number, y:number, isVertical:boolean, coord:number, along:number, dist:number}>}
+ * @returns {Array<{x:number, y:number, isVertical:boolean, coord:number, along:number, dist:number,
+ *   lo:number, hi:number}>} lo/hi は一致した壁区間そのもの（junctionTol抜きの生の範囲。
+ *   woodColumnOffset.js が自動判定の走行方向サンプリング候補を区間内に限定するために使う）。
  */
 export function pointsOnWallLines(points, segments, junctionTol) {
   const out = [];
@@ -209,7 +221,7 @@ export function pointsOnWallLines(points, segments, junctionTol) {
       if (dist > s.halfDepth) continue;
       const along = s.isVertical ? p.y : p.x;
       if (along < s.lo - junctionTol || along > s.hi + junctionTol) continue;
-      out.push({ x: p.x, y: p.y, isVertical: s.isVertical, coord: s.coord, along, dist });
+      out.push({ x: p.x, y: p.y, isVertical: s.isVertical, coord: s.coord, along, dist, lo: s.lo, hi: s.hi });
     }
   }
   return out;

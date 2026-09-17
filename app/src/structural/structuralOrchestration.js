@@ -41,9 +41,12 @@ function reportRenumberToast(renumbered, onToast) {
 // 最適解」。.claude/structural-model.md 参照）。sectionDefId 等の材寸変更（位置は変わらない）は
 // 対象外——柱が増減・移動したときだけ別シグネチャになればよい。座標は浮動小数の誤差を避けるため
 // 0.1mm単位に丸める。
+// AXIS（axisX/axisY。偏心を含まない）で座標を取る——個別柱の偏心（woodColumnOffset.js）だけが
+// 変わっても3b候補（上階柱直下の柱）の位置は変わらないため、無関係な再計算トリガーにしない
+// （.claude/structural-model.md「AXISで一致・ACTUALで止める」）。
 export function columnSetSignature(columns) {
   return columns
-    .map(c => `${Math.round(c.x * 10) / 10}:${Math.round(c.y * 10) / 10}:${c.role}`)
+    .map(c => `${Math.round(c.axisX * 10) / 10}:${Math.round(c.axisY * 10) / 10}:${c.role}`)
     .sort()
     .join('|');
 }

@@ -157,15 +157,17 @@ test('【ステップ3】memberGroupKey: 個別柱は signature#id（部材ご�
   assert.equal(memberGroupKey(individualA, 'columnMap', rules), `${memberSignature(individualA, 'columnMap')}#${individualA.id}`);
 });
 
-test('【ステップ3】memberOrderKey: columnMapの個別柱は座標(x,y)を返し、共通柱は空配列', () => {
+test('【ステップ3】memberOrderKey: columnMapの個別柱はAXIS座標(axisX,axisY。偏心を含まない)を返し、共通柱は空配列', () => {
   const rules = rulesFor(TRADITIONAL_WOOD_STRUCTURE);
-  const common = makeColumn('c1', 'WOOD-120x120', { materialType: 'WOOD', role: 'standard', woodColumnWidthMm: null, x: 100, y: 200 });
-  const individual = makeColumn('c2', 'WOOD-105x105', { materialType: 'WOOD', role: 'standard', woodColumnWidthMm: 105, x: 100, y: 200 });
+  // x/y（ACTUAL）はAXISと差をつけて仕込む——memberOrderKeyがAXISを読んでいることを固定する
+  // （.claude/structural-model.md「AXISで一致・ACTUALで止める」。B-1・個別柱の偏心）。
+  const common = makeColumn('c1', 'WOOD-120x120', { materialType: 'WOOD', role: 'standard', woodColumnWidthMm: null, axisX: 100, axisY: 200, x: 999, y: 999 });
+  const individual = makeColumn('c2', 'WOOD-105x105', { materialType: 'WOOD', role: 'standard', woodColumnWidthMm: 105, axisX: 100, axisY: 200, x: 999, y: 999 });
   assert.deepEqual(memberOrderKey(common, 'columnMap', rules), []);
   assert.deepEqual(memberOrderKey(individual, 'columnMap', rules), [100, 200]);
 });
 
-test('【失敗系・ステップ3】memberOrderKey: columnMapの個別柱でx/y未定義でも例外を投げず[0,0]にフォールバックする', () => {
+test('【失敗系・ステップ3】memberOrderKey: columnMapの個別柱でaxisX/axisY未定義でも例外を投げず[0,0]にフォールバックする', () => {
   const rules = rulesFor(TRADITIONAL_WOOD_STRUCTURE);
   const individual = makeColumn('c1', 'WOOD-105x105', { materialType: 'WOOD', role: 'standard', woodColumnWidthMm: 105 });
   assert.doesNotThrow(() => memberOrderKey(individual, 'columnMap', rules));
@@ -180,30 +182,52 @@ test('【不変条件・ステップ3】MemberListTab.jsx: 柱グループの一
     '柱グループの graph 解決が composition.resolveCategory(categoryFor(group)) を経由していない');
 });
 
-test('【不変条件・ステップ3】MemberListTab.jsx: MemberColumnWidthSelect（個別柱寸セレクト）のhandleChangeはonStructureChangedだけを呼び、setDimensionStatusを呼ばない', () => {
+test('【不変条件・ステップ4（ユーザー裁定2026-09-17「柱の全体／この部材ボタンを復活」）】MemberListTab.jsx: ColumnWidthScopeSelectのhandleChangeはresolveColumnWidthEditの判定に従いonStructureChangedだけを呼び、setDimensionStatusを呼ばない', () => {
   const src = fs.readFileSync(path.resolve(import.meta.dirname, 'MemberListTab.jsx'), 'utf8');
-  const compMatch = /const MemberColumnWidthSelect = observer\(\(\{ members, graph, project, readOnly, onStructureChanged \}\) => \{([\s\S]*?)\n\}\);/.exec(src);
-  assert.ok(compMatch, 'MemberColumnWidthSelect コンポーネント本体が見つからない');
+  const compMatch = /const ColumnWidthScopeSelect = observer\(\(\{ scope, focusedMember, graph, project, readOnly, allowUpsize = false, onStructureChanged, onPendingFocus \}\) => \{([\s\S]*?)\n\}\);/.exec(src);
+  assert.ok(compMatch, 'ColumnWidthScopeSelect コンポーネント本体が見つからない');
   const fnMatch = /function handleChange\(width\) \{([\s\S]*?)\n {2}\}/.exec(compMatch[1]);
-  assert.ok(fnMatch, 'MemberColumnWidthSelectのhandleChange関数本体が見つからない');
-  assert.ok(/onStructureChanged\(\(\) => \{ for \(const m of members\) m\.setField\('woodColumnWidthMm', next\); \}\);/.test(fnMatch[1]),
-    'handleChangeがonStructureChanged経由でwoodColumnWidthMmを書いていない');
+  assert.ok(fnMatch, 'ColumnWidthScopeSelectのhandleChange関数本体が見つからない');
+  assert.ok(/const \{ target, value: next \} = resolveColumnWidthEdit\(\{ scope, focusedMember, floorWidth, width \}\);/.test(fnMatch[1]),
+    'handleChangeがresolveColumnWidthEdit（structural/columnWidthScope.js）へ委譲していない（書き込み先判定の二重実装回帰）');
+  assert.ok(/onStructureChanged\(\(\) => \{\s*graph\.setWoodColumnWidthMm\(next\);\s*normalizeColumnOverridesToFloor\(graph, next\);\s*\}\);/.test(fnMatch[1]),
+    'handleChangeが全体（target===\'floor\'）でonStructureChanged経由のgraph.setWoodColumnWidthMm＋normalizeColumnOverridesToFloorを書いていない（QA指摘2026-09-17: 個別＝階の値の禁止状態が復活する回帰）');
+  assert.ok(/onStructureChanged\(\(\) => \{ focusedMember\.setField\('woodColumnWidthMm', next\); \}\);/.test(fnMatch[1]),
+    'handleChangeがこの部材（target===\'member\'）でonStructureChanged経由のfocusedMember.setFieldを書いていない');
   assert.ok(!fnMatch[1].includes('setDimensionStatus'),
     '個別化時にdimensionStatusを書き換えている（裁定: dimensionStatusは使わない。自動撤去ループ・手動固定の意味と衝突する）');
 });
 
-test('【QA裁定・ステップ3】MemberListTab.jsx: MemberColumnWidthSelectは選んだ幅が階の値（woodColumnWidthMm(graph, project)）と同じならnull（共通へ戻す）を書く（個別指定は階の値と排他）', () => {
+test('【QA指摘2026-09-17・失敗系】MemberListTab.jsx: ColumnWidthScopeSelectのhandleChangeはtarget===nullなら早期returnし、onPendingFocus/onStructureChangedのどちらも呼ばない', () => {
   const src = fs.readFileSync(path.resolve(import.meta.dirname, 'MemberListTab.jsx'), 'utf8');
-  const compMatch = /const MemberColumnWidthSelect = observer\(\(\{ members, graph, project, readOnly, onStructureChanged \}\) => \{([\s\S]*?)\n\}\);/.exec(src);
-  assert.ok(compMatch, 'MemberColumnWidthSelect コンポーネント本体が見つからない');
+  const compMatch = /const ColumnWidthScopeSelect = observer\(\(\{ scope, focusedMember, graph, project, readOnly, allowUpsize = false, onStructureChanged, onPendingFocus \}\) => \{([\s\S]*?)\n\}\);/.exec(src);
+  assert.ok(compMatch, 'ColumnWidthScopeSelect コンポーネント本体が見つからない');
   const fnMatch = /function handleChange\(width\) \{([\s\S]*?)\n {2}\}/.exec(compMatch[1]);
-  assert.ok(fnMatch, 'MemberColumnWidthSelectのhandleChange関数本体が見つからない');
-  assert.ok(/const commonWidth = woodColumnWidthMm\(graph, project\);/.test(fnMatch[1]),
-    'handleChangeが階の値(woodColumnWidthMm(graph, project))を解決していない');
-  assert.ok(/const next = width === commonWidth \? null : width;/.test(fnMatch[1]),
-    'handleChangeが「階の値と同じならnull」を書いていない（個別指定と階の値の排他が保証されない）');
-  assert.ok(/<select value=\{value\} onChange=\{e => handleChange\(Number\(e\.target\.value\)\)\} disabled=\{readOnly\}/.test(compMatch[1]),
-    'MemberColumnWidthSelectのselectがreadOnlyでdisabledされていない');
+  assert.ok(fnMatch, 'ColumnWidthScopeSelectのhandleChange関数本体が見つからない');
+  const lines = fnMatch[1].trim().split('\n').map(l => l.trim());
+  assert.ok(/^const \{ target, value: next \} = resolveColumnWidthEdit\(/.test(lines[0]), 'resolveColumnWidthEditの呼び出しが先頭にない');
+  assert.equal(lines[1], "if (target === null) return; // 書き込み先が無い（focusedMember不在・未知のscope）→何もしない",
+    'target===nullの早期returnが見つからない（このコメント文言込みで固定。onPendingFocus/onStructureChangedを一切呼ばないことを保証する分岐）');
+});
+
+test('【不変条件・ステップ4】MemberListTab.jsx: ColumnWidthScopeSelectのthis部材（target==="member"）書き込みはonPendingFocus(focusedMember.id)を先に呼んでから本来のonStructureChangedを呼ぶ（タップした柱の新しいカードへ追従するため。選んだ幅でC1/C2が反転してもここで決め打ちしない）', () => {
+  const src = fs.readFileSync(path.resolve(import.meta.dirname, 'MemberListTab.jsx'), 'utf8');
+  const compMatch = /const ColumnWidthScopeSelect = observer\(\(\{ scope, focusedMember, graph, project, readOnly, allowUpsize = false, onStructureChanged, onPendingFocus \}\) => \{([\s\S]*?)\n\}\);/.exec(src);
+  assert.ok(compMatch, 'ColumnWidthScopeSelect コンポーネント本体が見つからない');
+  const fnMatch = /function handleChange\(width\) \{([\s\S]*?)\n {2}\}/.exec(compMatch[1]);
+  assert.ok(fnMatch, 'ColumnWidthScopeSelectのhandleChange関数本体が見つからない');
+  const memberBranchMatch = /\} else if \(target === 'member'\) \{([\s\S]*?)\n {4}\}/.exec(fnMatch[1]);
+  assert.ok(memberBranchMatch, "target==='member' の分岐が見つからない");
+  const lines = memberBranchMatch[1].trim().split('\n').map(l => l.trim());
+  assert.ok(lines[0].startsWith("onPendingFocus?.(focusedMember.id);"), 'onPendingFocusがonStructureChangedより先に呼ばれていない');
+});
+
+test('【不変条件・ステップ4】MemberListTab.jsx: ColumnWidthScopeSelectのselectはreadOnlyまたはscope=entityかつfocusedMember不在でdisabledになる', () => {
+  const src = fs.readFileSync(path.resolve(import.meta.dirname, 'MemberListTab.jsx'), 'utf8');
+  assert.ok(/const disabled = readOnly \|\| \(scope === 'entity' && !focusedMember\);/.test(src),
+    'disabled の判定（readOnly または scope=entityかつfocusedMember不在）が見つからない');
+  assert.ok(/<select value=\{value\} onChange=\{e => handleChange\(Number\(e\.target\.value\)\)\} disabled=\{disabled\}/.test(src),
+    'ColumnWidthScopeSelectのselectがdisabled変数でdisabledされていない');
 });
 
 // ---- ステップ4第3単位②（非標準梁の個別採番）: groupKey導出の唯一の入口の不変条件 ----
@@ -326,15 +350,18 @@ test('【不変条件・ステップ4 C-2b／裁定2026-09-16】MemberListTab.js
     'MemberListTab が onStructureChanged を props として受け取っていない');
 });
 
-test('【不変条件・ステップ4 C-2b QA修正】MemberListTab.jsx: WoodColumnWidthSelectの変更ハンドラはonStructureChanged（主構造変更と同じ経路）だけを呼び、自前のconformWoodSections/renumberMembers/pushGraphUndoを持たない', () => {
+test('【不変条件・ステップ4 C-2b QA修正／QA指摘2026-09-17】MemberListTab.jsx: WoodColumnWidthSelectの変更ハンドラはonStructureChanged（主構造変更と同じ経路）内でgraph.setWoodColumnWidthMm＋normalizeColumnOverridesToFloorだけを呼び、自前のconformWoodSections/renumberMembers/pushGraphUndoを持たない', () => {
   const src = fs.readFileSync(path.resolve(import.meta.dirname, 'MemberListTab.jsx'), 'utf8');
   const compMatch = /const WoodColumnWidthSelect = observer\(\(\{ graph, project, onStructureChanged \}\) => \{([\s\S]*?)\n\}\);/.exec(src);
   assert.ok(compMatch, 'WoodColumnWidthSelect コンポーネント本体（onStructureChangedを受け取る形）が見つからない');
   const fnMatch = /function handleChange\(width\) \{([\s\S]*?)\n {2}\}/.exec(compMatch[1]);
   assert.ok(fnMatch, 'handleChange関数本体が見つからない');
   const body = fnMatch[1];
-  assert.ok(/onStructureChanged\(\(\) => \{\s*graph\.setWoodColumnWidthMm\(width\);\s*\}\);/.test(body),
-    'handleChangeがonStructureChanged(() => { graph.setWoodColumnWidthMm(width); })を呼んでいない（QA指摘: 主構造変更と同じ経路に統一）');
+  // QA指摘2026-09-17: 全体（階の値）を変えたとき、既存の個別指定と偶然同値になった柱を放置すると
+  // 「個別＝階の値」の禁止状態が復活する——normalizeColumnOverridesToFloorで正規化する（旧アサーション
+  // はgraph.setWoodColumnWidthMm(width)単独呼び出しを固定していたが、この追加呼び出しへ更新した）。
+  assert.ok(/onStructureChanged\(\(\) => \{\s*graph\.setWoodColumnWidthMm\(width\);\s*normalizeColumnOverridesToFloor\(graph, width\);\s*\}\);/.test(body),
+    'handleChangeがonStructureChanged(() => { graph.setWoodColumnWidthMm(width); normalizeColumnOverridesToFloor(graph, width); })を呼んでいない（QA指摘: 個別＝階の値の禁止状態が復活する回帰）');
   for (const forbidden of ['serializeGraph(', 'conformWoodSections(', 'renumberMembers(', 'pushGraphUndo(']) {
     assert.ok(!body.includes(forbidden),
       `handleChangeに${forbidden}...が残っている（QA指摘: 採番・undoの仕組みをonStructureChanged経由に一本化し、二重に持たない）`);
@@ -456,6 +483,96 @@ test('【QA指摘F4\'再発防止・純ロジック】composition変更リセッ
 test('【不変条件・QA指摘F6】MemberListTab.jsx: `\'(未採番)\'` の直書きが残っていない（UNNUMBERED_TAGへ一本化済み）', () => {
   const src = fs.readFileSync(path.resolve(import.meta.dirname, 'MemberListTab.jsx'), 'utf8');
   assert.ok(!/'\(未採番\)'/.test(src), "'(未採番)' の直書きが残っている（UNNUMBERED_TAGを使っていない箇所がある）");
+});
+
+// ---- ユーザー裁定2026-09-17「柱の『全体』『この部材』ボタンを復活」: 柱カードの適用範囲2択・柱寸行の統合 ----
+
+test('【不変条件・ユーザー裁定2026-09-17／QA指摘2026-09-17】MemberListTab.jsx: 在来木造の柱カード（共通・個別とも＝woodColumnCard）は適用範囲「全体」「この部材」の2ボタンだけを出し、「この階」「統合」は出さない。2ボタンは柱専用state（columnScope）を読み書きし、分割UI専用の`scope`は触らない', () => {
+  const src = fs.readFileSync(path.resolve(import.meta.dirname, 'MemberListTab.jsx'), 'utf8');
+  const blockMatch = /\{!readOnly && woodColumnCard && \(([\s\S]{0,900}?)\n {10}\)\}/.exec(src);
+  assert.ok(blockMatch, '柱カードの適用範囲2択ブロック（!readOnly && woodColumnCard でゲート）が見つからない');
+  const body = blockMatch[1];
+  assert.ok(/<ScopeButton active=\{columnScope === 'all'\} onClick=\{\(\) => setColumnScope\('all'\)\}>全体<\/ScopeButton>/.test(body),
+    '「全体」ボタンがcolumnScope/setColumnScopeを読み書きしていない（QA指摘・回帰: 分割UI専用の`scope`と共有すると柱の他フィールド編集で分割経路に迷い込む）');
+  assert.ok(/<ScopeButton active=\{columnScope === 'entity'\} disabled=\{!columnEntityTarget\} onClick=\{\(\) => setColumnScope\('entity'\)\}>この部材<\/ScopeButton>/.test(body),
+    '「この部材」ボタン（columnEntityTarget不在でdisabled）がcolumnScope/setColumnScopeを読み書きしていない');
+  assert.ok(!body.includes("この階") && !body.includes('統合'),
+    '柱カードの適用範囲ブロックに「この階」または「統合」が残っている（柱では出さない裁定への回帰）');
+  // 分割UI専用の`scope`/`setScope`をこのブロックが直接読み書きしていないこと（QA指摘・回帰の再発防止）。
+  assert.ok(!/\bsetScope\(/.test(body) && !/\bscope ===/.test(body),
+    '柱カードの適用範囲2択が分割UI専用のscope/setScopeを直接読み書きしている（columnScopeへ分離した意味が無くなる回帰）');
+});
+
+test('【不変条件・ユーザー裁定2026-09-17】MemberListTab.jsx: 柱寸行は共通・個別で1つに統合され（woodColumnCardでゲート）、ColumnWidthScopeSelectへcolumnScope（scope引数として）/columnEntityTargetを渡す', () => {
+  const src = fs.readFileSync(path.resolve(import.meta.dirname, 'MemberListTab.jsx'), 'utf8');
+  // B-1（ユーザー裁定2026-09-17）で柱寸アップcheckbox・偏心方向selectが同じブロックに追加され本文が
+  // 伸びたため上限を3000へ拡大（実測約2560文字。従来の900は柱寸行単体のみの時代の値）。
+  const rowMatch = /\{woodColumnCard && \(([\s\S]{0,3000}?)\n {10}\)\}/.exec(src);
+  assert.ok(rowMatch, '柱寸行（woodColumnCard でゲート）が見つからない');
+  const body = rowMatch[1];
+  assert.ok(/<ColumnWidthScopeSelect\s*\n\s*scope=\{columnScope\}\s*\n\s*focusedMember=\{columnEntityTarget\}\s*\n\s*graph=\{graph\}\s*\n\s*project=\{project\}\s*\n\s*readOnly=\{readOnly\}\s*\n\s*allowUpsize=\{allowUpsize\}\s*\n\s*onStructureChanged=\{onStructureChanged\}\s*\n\s*onPendingFocus=\{onPendingFocus\}\s*\n\s*\/>/.test(body),
+    'ColumnWidthScopeSelect scope={columnScope} focusedMember={columnEntityTarget} ... の配線が見つからない（分割UI専用のscopeを渡す旧配線への回帰）');
+  // 旧の個別柱寸専用コンポーネント（共通/個別で別実装を持っていた）が復活していないこと。
+  assert.ok(!src.includes('MemberColumnWidthSelect'),
+    '旧のMemberColumnWidthSelect（共通/個別で別実装）が残っている（柱寸行の統合が崩れている回帰）');
+});
+
+// ---- QA指摘2026-09-17: 柱カードの適用範囲2択が分割UI（commitScopedEdit/splitPreview）の`scope`と
+// 混線して番号分割の経路へ迷い込む回帰の修正 ----
+
+test('【不変条件・QA指摘2026-09-17】MemberListTab.jsx: commitScopedEditはwoodColumnCardなら常にmembers全員へ直接適用し、分割経路（resolveSplitTargets等）へ入らない', () => {
+  const src = fs.readFileSync(path.resolve(import.meta.dirname, 'MemberListTab.jsx'), 'utf8');
+  const fnMatch = /function commitScopedEdit\(mutateFn\) \{([\s\S]*?)\n {2}\}/.exec(src);
+  assert.ok(fnMatch, 'commitScopedEdit関数本体が見つからない');
+  assert.ok(/if \(woodColumnCard \|\| scope === 'all'\) \{ mutateFn\(members\); return; \}/.test(fnMatch[1]),
+    'commitScopedEditの入口にwoodColumnCardガード（woodColumnCard || scope===\'all\'）が無い（柱カードで上端/下端レベル等を編集すると分割経路に迷い込む回帰）');
+});
+
+test('【不変条件・QA指摘2026-09-17】MemberListTab.jsx: splitPreviewはwoodColumnCardなら常にnull（分割プレビューを計算しない）', () => {
+  const src = fs.readFileSync(path.resolve(import.meta.dirname, 'MemberListTab.jsx'), 'utf8');
+  assert.ok(/const splitPreview = \(!readOnly && !woodColumnCard && scope !== 'all'\) \? computeSplitPreview\(resolveSplitTargets\(\)\) : null;/.test(src),
+    'splitPreviewの計算条件に!woodColumnCardガードが無い');
+});
+
+// ---- コーディネーター指示2026-09-17: 個別カードを一覧から開いても自身の柱寸を編集できる（ステップ3退行の修正） ----
+
+test('【不変条件・コーディネーター指示2026-09-17】MemberListTab.jsx: columnEntityTargetは個別カード（isIndividualColumn）でfocusedMemberが無ければrepresentative（自分自身）にフォールバックし、共通カードはfocusedMemberのみを対象にする', () => {
+  const src = fs.readFileSync(path.resolve(import.meta.dirname, 'MemberListTab.jsx'), 'utf8');
+  assert.ok(/const columnEntityTarget = isIndividualColumn \? \(focusedMember \?\? representative\) : focusedMember;/.test(src),
+    'columnEntityTarget が isIndividualColumn ? (focusedMember ?? representative) : focusedMember で解決されていない（個別カードのrepresentativeフォールバックが無い＝ステップ3退行）');
+});
+
+test('【不変条件・コーディネーター指示2026-09-17／QA指摘2026-09-17】MemberListTab.jsx: 柱カードの既定columnScopeはcolumnEntityTargetの有無で決める（columnEntityTargetでない生のfocusedMemberへ戻すと個別カードの既定entity化が壊れる）。分割UI専用のscopeは常に既定"all"のまま', () => {
+  const src = fs.readFileSync(path.resolve(import.meta.dirname, 'MemberListTab.jsx'), 'utf8');
+  assert.ok(/if \(isExpanded\) setColumnScope\(woodColumnCard && columnEntityTarget \? 'entity' : 'all'\);/.test(src),
+    '既定columnScopeのeffectがwoodColumnCard && columnEntityTargetで判定していない');
+  // 分割UI専用のscopeは柱カードの都合で分岐させない（常に'all'固定。QA指摘・回帰の修正2026-09-17）。
+  assert.ok(/if \(isExpanded\) setScope\('all'\);/.test(src),
+    '分割UI専用のscopeが常に\'all\'固定の既定effectへ戻っていない（柱カード用の分岐が紛れ込む回帰）');
+});
+
+// ---- QA裁定・ステップ4: 個別指定直後のカード追従（setPendingFocusId → memberNo確定を待って展開） ----
+
+test('【不変条件・QA裁定】MemberListTab.jsx: pendingFocusIdはselfColumnGraph.columnMap.get(id)?.memberNoの確定（non-null）を観測してcolumnMap:<memberNo>を展開し、pendingを消す', () => {
+  const src = fs.readFileSync(path.resolve(import.meta.dirname, 'MemberListTab.jsx'), 'utf8');
+  assert.ok(/const \[pendingFocusId, setPendingFocusId\] = useState\(null\);/.test(src),
+    'pendingFocusId のstate定義が見つからない');
+  assert.ok(/const pendingFocusMemberNo = pendingFocusId \? \(selfColumnGraph\?\.columnMap\?\.get\(pendingFocusId\)\?\.memberNo \?\? null\) : null;/.test(src),
+    'pendingFocusMemberNo が selfColumnGraph.columnMap.get(pendingFocusId)?.memberNo から解決されていない（下階柱×側や別graphを見る回帰）');
+  const effectMatch = /useEffect\(\(\) => \{\s*\n\s*if \(pendingFocusId == null \|\| pendingFocusMemberNo == null\) return;\s*\n\s*setExpandedKey\(`columnMap:\$\{pendingFocusMemberNo\}`\);\s*\n\s*setPendingFocusId\(null\);\s*\n\s*\}, \[pendingFocusId, pendingFocusMemberNo\]\);/.exec(src);
+  assert.ok(effectMatch, 'pendingFocus effect（依存配列[pendingFocusId, pendingFocusMemberNo]でsetExpandedKeyしpendingを消す）が見つからない');
+});
+
+test('【不変条件・QA裁定】MemberListTab.jsx: onPendingFocus（setPendingFocusId）はMemberGroupSection・MemberCardへそのまま橋渡しされる（新しいpropsを増やしただけで別経路を作らない）', () => {
+  const src = fs.readFileSync(path.resolve(import.meta.dirname, 'MemberListTab.jsx'), 'utf8');
+  assert.ok(/onPendingFocus=\{setPendingFocusId\}/.test(src), 'MemberListTab→MemberGroupSectionへonPendingFocus={setPendingFocusId}が渡されていない');
+  assert.ok(/onPendingFocus=\{onPendingFocus\}/.test(src), 'MemberGroupSection→MemberCardへonPendingFocus={onPendingFocus}が素通しされていない');
+});
+
+test('【不変条件・ユーザー裁定2026-09-17】MemberListTab.jsx: ColumnWidthScopeSelectのvalueはscope=entityかつfocusedMemberがあるときだけその柱の解決値（個別??階）、それ以外は階の値', () => {
+  const src = fs.readFileSync(path.resolve(import.meta.dirname, 'MemberListTab.jsx'), 'utf8');
+  assert.ok(/const value = scope === 'entity' && focusedMember \? \(focusedMember\.woodColumnWidthMm \?\? floorWidth\) : floorWidth;/.test(src),
+    'ColumnWidthScopeSelectのvalueがscope=entity時に個別値（無ければ階の値）へフォールバックしていない（旧のmembers[0]参照への回帰）');
 });
 
 test('【失敗系・QA指摘F1】noJoinSignatureFor: 個別採番対象でなければnull（在来の標準材・非在来6種＋未定・柱等は常に既定のjoin=trueを維持する）', () => {

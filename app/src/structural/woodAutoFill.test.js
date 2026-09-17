@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { Plane, PlanGraph, Project, CenterLineType, Discipline, StructuralMaterialType, columnSlotKey, spanKey, centerLineKind as centerLineKindOf } from '../core.js';
 import {
   wallIntersectionPoints, autoFillWoodColumns, conformWoodSections, conformWoodBacking, WALL_JUNCTION_TOL_MM,
-  autoFillWoodBeamDepths, autoFillWoodWallBeams, autoFillWoodFloorBeams,
+  autoFillWoodBeamDepths, autoFillWoodWallBeams, autoFillWoodFloorBeams, conformWoodColumnEccentricity,
 } from './woodAutoFill.js';
 import { WOOD_STUD_CODE_BY_SIZE } from '../finish/materials/backingClass.js';
 import { autoFillColumnsForStructure, autoFillStructuralGrid, autoFillBeamsForStructure } from './structuralAutoFill.js';
@@ -153,7 +153,7 @@ test('autoFillWoodColumns（3b・1）: 上階柱直下—壁線上（交点で�
   graph.addCenterLine(CenterLineType.VERTICAL, 2000, { labeled: true, discipline: Discipline.STRUCT }); // 走行方向アンカー（壁は無い）
   const base = autoFillWoodColumns(graph, PROJECT, null, [], wallSegments); // 3aのみ確定（交点2本）
   assert.equal(base.created.length, 2);
-  const above = [{ x: 2000, y: 2000, role: 'standard' }];
+  const above = [{ x: 2000, y: 2000, axisX: 2000, axisY: 2000, role: 'standard' }];
   const { created, removed } = autoFillWoodColumns(graph, PROJECT, null, above, wallSegments);
   assert.equal(created.length, 1, '3b候補1本だけ新規に立つ');
   assert.deepEqual([created[0].x, created[0].y], [2000, 2000], '座標＝(壁線coord=2000, 上階柱along=2000)');
@@ -162,7 +162,7 @@ test('autoFillWoodColumns（3b・1）: 上階柱直下—壁線上（交点で�
 
 test('【失敗系】autoFillWoodColumns（3b・2）: 壁の無い位置には立たない', () => {
   const { graph, wallSegments } = makeWoodLineWithRunGraph();
-  const above = [{ x: 2000, y: 500, role: 'standard' }]; // y=500は壁(y=2000)から遠い
+  const above = [{ x: 2000, y: 500, axisX: 2000, axisY: 500, role: 'standard' }]; // y=500は壁(y=2000)から遠い
   const { created } = autoFillWoodColumns(graph, PROJECT, null, above, wallSegments);
   assert.equal(created.length, 2, '3aの交点2本のみ（3b候補は増えない）');
 });
@@ -170,7 +170,7 @@ test('【失敗系】autoFillWoodColumns（3b・2）: 壁の無い位置には�
 test('【失敗系】autoFillWoodColumns（3b・3）: 下地帯の外（halfDepth超）には立たない', () => {
   const { graph, wallSegments } = makeWoodLineWithRunGraph();
   graph.addCenterLine(CenterLineType.VERTICAL, 2000, { labeled: true, discipline: Discipline.STRUCT });
-  const above = [{ x: 2000, y: 2100, role: 'standard' }]; // halfDepth=60に対しperp差100
+  const above = [{ x: 2000, y: 2100, axisX: 2000, axisY: 2100, role: 'standard' }]; // halfDepth=60に対しperp差100
   const { created } = autoFillWoodColumns(graph, PROJECT, null, above, wallSegments);
   assert.equal(created.length, 2);
 });
@@ -179,7 +179,7 @@ test('【失敗系】autoFillWoodColumns（3b・4）: runの外（自由端側�
   const { graph, wallSegments } = makeWoodLineWithRunGraph();
   graph.addCenterLine(CenterLineType.VERTICAL, 3500, { labeled: true, discipline: Discipline.STRUCT });
   // x=3500は壁の物理範囲(0..4000)の内側だが、through-run[1000,3000]の外（自由端側）。
-  const above = [{ x: 3500, y: 2000, role: 'standard' }];
+  const above = [{ x: 3500, y: 2000, axisX: 3500, axisY: 2000, role: 'standard' }];
   const { created } = autoFillWoodColumns(graph, PROJECT, null, above, wallSegments);
   assert.equal(created.length, 2);
 });
@@ -188,7 +188,7 @@ test('autoFillWoodColumns（3b・T1）: 下地帯の内側（中心から外れ�
   const { graph, wallSegments } = makeWoodLineWithRunGraph();
   graph.addCenterLine(CenterLineType.VERTICAL, 2000, { labeled: true, discipline: Discipline.STRUCT }); // 走行方向アンカー（壁は無い）
   // halfDepth=60に対しperp差40（帯の内側だが中心からは外れる）。
-  const above = [{ x: 2000, y: 2040, role: 'standard' }];
+  const above = [{ x: 2000, y: 2040, axisX: 2000, axisY: 2040, role: 'standard' }];
   const { created } = autoFillWoodColumns(graph, PROJECT, null, above, wallSegments);
   assert.equal(created.length, 3, '3a交点2本＋3b候補1本');
   const col3b = created.find(c => c.x === 2000 && c.y === 2000);
@@ -198,7 +198,7 @@ test('autoFillWoodColumns（3b・T1）: 下地帯の内側（中心から外れ�
 test('【失敗系】autoFillWoodColumns（3b・T3）: 上階の基礎柱（role=\'foundation\'）は候補にしない（QA F3）', () => {
   const { graph, wallSegments } = makeWoodLineWithRunGraph();
   graph.addCenterLine(CenterLineType.VERTICAL, 2000, { labeled: true, discipline: Discipline.STRUCT });
-  const above = [{ x: 2000, y: 2000, role: 'foundation' }];
+  const above = [{ x: 2000, y: 2000, axisX: 2000, axisY: 2000, role: 'foundation' }];
   const { created } = autoFillWoodColumns(graph, PROJECT, null, above, wallSegments);
   assert.equal(created.length, 2, '基礎柱（杭）の直下には3b柱を立てない（3aの2本のみ）');
 });
@@ -230,7 +230,7 @@ test('autoFillWoodColumns（3b・T6）: 1点が複数の壁線に一致しても
     return { graph, wallSegments: selfWallSegments(graph) };
   }
 
-  const above = [{ x: 2000, y: 2055, role: 'standard' }];
+  const above = [{ x: 2000, y: 2055, axisX: 2000, axisY: 2055, role: 'standard' }];
   const results = new Set();
   for (const y2100First of [false, true]) {
     const { graph, wallSegments } = buildGraph(y2100First);
@@ -245,7 +245,7 @@ test('autoFillWoodColumns（3b・T6）: 1点が複数の壁線に一致しても
 test('【失敗系】autoFillWoodColumns（3b・5）: 走行方向にCLが無い（0.5mm一致なし）と立たず、CLも新設しない', () => {
   const { graph, wallSegments } = makeWoodLineWithRunGraph();
   const clCountBefore = graph.centerLines.length;
-  const above = [{ x: 2500, y: 2000, role: 'standard' }]; // x=2500は近傍の通り芯・梁芯から500mm以上離れている
+  const above = [{ x: 2500, y: 2000, axisX: 2500, axisY: 2000, role: 'standard' }]; // x=2500は近傍の通り芯・梁芯から500mm以上離れている
   const { created } = autoFillWoodColumns(graph, PROJECT, null, above, wallSegments);
   assert.equal(created.length, 2, 'アンカー解決不能な3b候補は見送られる（QA裁定F2で寄せは廃止済み。0.5mm一致が無ければ即見送り）');
   assert.equal(graph.centerLines.length, clCountBefore, 'CLは新設しない');
@@ -253,7 +253,7 @@ test('【失敗系】autoFillWoodColumns（3b・5）: 走行方向にCLが無い
 
 test('autoFillWoodColumns（3b・6）: 3aの交点と同スロットなら重複生成しない（created 0）', () => {
   const { graph, wallSegments } = makeWoodLineWithRunGraph();
-  const above = [{ x: 1000, y: 2000, role: 'standard' }]; // 既に3aの交点そのもの
+  const above = [{ x: 1000, y: 2000, axisX: 1000, axisY: 2000, role: 'standard' }]; // 既に3aの交点そのもの
   const { created } = autoFillWoodColumns(graph, PROJECT, null, above, wallSegments);
   assert.equal(created.length, 2, '3aの2本のみ（3b分の追加は無い）');
 });
@@ -261,7 +261,7 @@ test('autoFillWoodColumns（3b・6）: 3aの交点と同スロットなら重複
 test('autoFillWoodColumns（3b・7）: excludedColumnSlotsに記録された位置は復活しない', () => {
   const { graph, wallSegments } = makeWoodLineWithRunGraph();
   graph.addCenterLine(CenterLineType.VERTICAL, 2000, { labeled: true, discipline: Discipline.STRUCT });
-  const above = [{ x: 2000, y: 2000, role: 'standard' }];
+  const above = [{ x: 2000, y: 2000, axisX: 2000, axisY: 2000, role: 'standard' }];
   const first = autoFillWoodColumns(graph, PROJECT, null, above, wallSegments);
   const col3b = first.created.find(c => c.x === 2000 && c.y === 2000);
   assert.ok(col3b, '前提: 3b柱が立っている');
@@ -273,7 +273,7 @@ test('autoFillWoodColumns（3b・7）: excludedColumnSlotsに記録された位�
 test('autoFillWoodColumns（3b・8）: lockedにした3b柱は aboveColumns=[] でも撤去されない', () => {
   const { graph, wallSegments } = makeWoodLineWithRunGraph();
   graph.addCenterLine(CenterLineType.VERTICAL, 2000, { labeled: true, discipline: Discipline.STRUCT });
-  const above = [{ x: 2000, y: 2000, role: 'standard' }];
+  const above = [{ x: 2000, y: 2000, axisX: 2000, axisY: 2000, role: 'standard' }];
   const first = autoFillWoodColumns(graph, PROJECT, null, above, wallSegments);
   const col3b = first.created.find(c => c.x === 2000 && c.y === 2000);
   col3b.setDimensionStatus('locked');
@@ -285,7 +285,7 @@ test('autoFillWoodColumns（3b・8）: lockedにした3b柱は aboveColumns=[] �
 test('autoFillWoodColumns（3b・9）: 冪等（同じ入力で2回目はcreated 0・removed 0）', () => {
   const { graph, wallSegments } = makeWoodLineWithRunGraph();
   graph.addCenterLine(CenterLineType.VERTICAL, 2000, { labeled: true, discipline: Discipline.STRUCT });
-  const above = [{ x: 2000, y: 2000, role: 'standard' }];
+  const above = [{ x: 2000, y: 2000, axisX: 2000, axisY: 2000, role: 'standard' }];
   const first = autoFillWoodColumns(graph, PROJECT, null, above, wallSegments);
   assert.equal(first.created.length, 3, '3a(2)+3b(1)');
   const second = autoFillWoodColumns(graph, PROJECT, null, above, wallSegments);
@@ -306,7 +306,7 @@ test('autoFillWoodColumns（3b・10）: aboveColumns未指定・null・[]はい�
 test('【失敗系】autoFillWoodColumns（3b・11）: wallGateで外れる3b候補は立たない（3aは影響を受けない）', () => {
   const { graph, wallSegments } = makeWoodLineWithRunGraph();
   graph.addCenterLine(CenterLineType.VERTICAL, 2000, { labeled: true, discipline: Discipline.STRUCT });
-  const above = [{ x: 2000, y: 2000, role: 'standard' }];
+  const above = [{ x: 2000, y: 2000, axisX: 2000, axisY: 2000, role: 'standard' }];
   const gate = {
     intersectionInBuilding: (v, h) => !(v.effectiveValue === 2000 && h.effectiveValue === 2000),
     spanInBuilding: () => true,
@@ -319,7 +319,7 @@ test('【対照】autoFillColumnsForStructure（3b・12）: 非在来（S造）�
   const steel = makeGridGraph('S造');
   addBackingWall(steel.graph, { axisValue: 2000, clStart: steel.x1, clEnd: steel.x2, isVertical: false });
   addBackingWall(steel.graph, { axisValue: 1000, clStart: steel.y1, clEnd: steel.y2, isVertical: true });
-  const above = [{ x: 999999, y: 999999, role: 'standard' }]; // 通り芯交点方式では影響し得ない値
+  const above = [{ x: 999999, y: 999999, axisX: 999999, axisY: 999999, role: 'standard' }]; // 通り芯交点方式では影響し得ない値
   const withAbove = autoFillColumnsForStructure(steel.graph, PROJECT, null, above, []);
   const steel2 = makeGridGraph('S造');
   addBackingWall(steel2.graph, { axisValue: 2000, clStart: steel2.x1, clEnd: steel2.x2, isVertical: false });
@@ -744,7 +744,7 @@ test('autoFillWoodWallBeams: 撤去される梁に紐づくPenetrationSleeveはs
 test('autoFillWoodWallBeams（3c-2b・1）: 下階柱1本でrunが2本に分割され、端CLは柱位置、両方role:primaryで別spanKey', () => {
   const { graph, x0, x1, x2, y0 } = makeTwoRoomGraph();
   const segs = selfWallSegments(graph);
-  const belowColumns = [{ x: 3640, y: 0, role: 'standard' }];
+  const belowColumns = [{ x: 3640, y: 0, axisX: 3640, axisY: 0, role: 'standard' }];
   const { created } = autoFillWoodWallBeams(graph, PROJECT, segs, null, belowColumns);
   const top = created.filter(b => !b.isVertical && Math.abs(b.axisValue - y0.value) < 1);
   assert.equal(top.length, 2, '下階柱1本で2本に分割される');
@@ -758,7 +758,7 @@ test('autoFillWoodWallBeams（3c-2b・1）: 下階柱1本でrunが2本に分割�
 test('autoFillWoodWallBeams（3c-2b・2）: 冪等（同じbelowColumnsで2回目はcreated0・removed0）', () => {
   const { graph } = makeTwoRoomGraph();
   const segs = selfWallSegments(graph);
-  const belowColumns = [{ x: 3640, y: 0, role: 'standard' }];
+  const belowColumns = [{ x: 3640, y: 0, axisX: 3640, axisY: 0, role: 'standard' }];
   autoFillWoodWallBeams(graph, PROJECT, segs, null, belowColumns);
   const second = autoFillWoodWallBeams(graph, PROJECT, segs, null, belowColumns);
   assert.deepEqual([second.created.length, second.removed.length], [0, 0]);
@@ -768,7 +768,7 @@ test('autoFillWoodWallBeams（3c-2b・3）: 既存の全長auto梁（分割前�
   const { graph, x0, x2, y0 } = makeTwoRoomGraph();
   const segs = selfWallSegments(graph);
   const stale = graph.addBeam(StructuralMaterialType.WOOD, 'WOOD-120x120', y0, false, x0, x2, { role: 'primary' });
-  const belowColumns = [{ x: 3640, y: 0, role: 'standard' }];
+  const belowColumns = [{ x: 3640, y: 0, axisX: 3640, axisY: 0, role: 'standard' }];
   const { created, removed } = autoFillWoodWallBeams(graph, PROJECT, segs, null, belowColumns);
   assert.deepEqual(removed, [stale.id], '旧・全長梁のspanKeyはもう候補に無いため撤去される');
   const top = created.filter(b => !b.isVertical && Math.abs(b.axisValue - y0.value) < 1);
@@ -780,7 +780,7 @@ test('【失敗系】autoFillWoodWallBeams（3c-2b・4）: 手動固定した全
   const segs = selfWallSegments(graph);
   const locked = graph.addBeam(StructuralMaterialType.WOOD, 'WOOD-120x120', y0, false, x0, x2, { role: 'primary' });
   locked.setDimensionStatus('locked');
-  const belowColumns = [{ x: 3640, y: 0, role: 'standard' }];
+  const belowColumns = [{ x: 3640, y: 0, axisX: 3640, axisY: 0, role: 'standard' }];
   const { created } = autoFillWoodWallBeams(graph, PROJECT, segs, null, belowColumns);
   const top = created.filter(b => !b.isVertical && Math.abs(b.axisValue - y0.value) < 1);
   assert.equal(top.length, 0, '手動固定の全長梁と幾何的に重なる区間は生成しない');
@@ -806,7 +806,7 @@ test('autoFillWoodWallBeams（3c-2b・5）: run全長のキーがexcludedBeamSlo
   const { graph, x0, x2, y0 } = makeTwoRoomGraph();
   const segs = selfWallSegments(graph);
   graph.excludedBeamSlots.add(spanKey(y0, x0, x2)); // ユーザーが分割前の1本を丸ごと削除済みという想定
-  const belowColumns = [{ x: 3640, y: 0, role: 'standard' }];
+  const belowColumns = [{ x: 3640, y: 0, axisX: 3640, axisY: 0, role: 'standard' }];
   const { created } = autoFillWoodWallBeams(graph, PROJECT, segs, null, belowColumns);
   assert.equal(created.filter(b => !b.isVertical && Math.abs(b.axisValue - y0.value) < 1).length, 0, '全長キー除外で分割後も生成しない');
 });
@@ -815,7 +815,7 @@ test('【対照】autoFillWoodWallBeams（3c-2b・5b）: 分割後の区間キ�
   const { graph, x0, x1, x2, y0 } = makeTwoRoomGraph();
   const segs = selfWallSegments(graph);
   graph.excludedBeamSlots.add(spanKey(y0, x0, x1)); // 分割後の片方（x0..x1）だけ明示削除済み
-  const belowColumns = [{ x: 3640, y: 0, role: 'standard' }];
+  const belowColumns = [{ x: 3640, y: 0, axisX: 3640, axisY: 0, role: 'standard' }];
   const { created } = autoFillWoodWallBeams(graph, PROJECT, segs, null, belowColumns);
   const top = created.filter(b => !b.isVertical && Math.abs(b.axisValue - y0.value) < 1);
   assert.equal(top.length, 1, '除外されていないもう一方(x1..x2)だけ生成される');
@@ -826,7 +826,7 @@ test('【失敗系】autoFillWoodWallBeams（3c-2b・6）: アンカー解決で
   const { graph, x0, x2, y0 } = makeTwoRoomGraph();
   const segs = selfWallSegments(graph);
   const clCountBefore = graph.centerLines.length;
-  const belowColumns = [{ x: 2000, y: 0, role: 'standard' }]; // x=2000には通り芯・梁芯・意匠中心線が無い
+  const belowColumns = [{ x: 2000, y: 0, axisX: 2000, axisY: 0, role: 'standard' }]; // x=2000には通り芯・梁芯・意匠中心線が無い
   const { created } = autoFillWoodWallBeams(graph, PROJECT, segs, null, belowColumns);
   const top = created.filter(b => !b.isVertical && Math.abs(b.axisValue - y0.value) < 1);
   assert.equal(top.length, 1, 'アンカー解決できない分割点は隣とつながり1本のまま');
@@ -837,7 +837,7 @@ test('【失敗系】autoFillWoodWallBeams（3c-2b・6）: アンカー解決で
 test('【失敗系】autoFillWoodWallBeams（3c-2b・7）: role:foundation（杭）の下階柱は分割点にしない', () => {
   const { graph, x0, x2, y0 } = makeTwoRoomGraph();
   const segs = selfWallSegments(graph);
-  const belowColumns = [{ x: 3640, y: 0, role: 'foundation' }];
+  const belowColumns = [{ x: 3640, y: 0, axisX: 3640, axisY: 0, role: 'foundation' }];
   const { created } = autoFillWoodWallBeams(graph, PROJECT, segs, null, belowColumns);
   const top = created.filter(b => !b.isVertical && Math.abs(b.axisValue - y0.value) < 1);
   assert.equal(top.length, 1, '杭は分割点にしない');
@@ -846,7 +846,7 @@ test('【失敗系】autoFillWoodWallBeams（3c-2b・7）: role:foundation（杭
 
 test('【対照】autoFillBeamsForStructure（3c-2b・8）: S造（beamPlacement:gridEdges）はbelowColumnsを渡しても無視される', () => {
   const steel = makeGridGraph('S造'); // 4000角の通り芯グリッド（x1,x2,y1,y2）
-  const belowColumns = [{ x: 2000, y: 2000, role: 'standard' }];
+  const belowColumns = [{ x: 2000, y: 2000, axisX: 2000, axisY: 2000, role: 'standard' }];
   const withBelow = autoFillBeamsForStructure(steel.graph, PROJECT, 'primary', null, [], belowColumns);
   const without = autoFillBeamsForStructure(makeGridGraph('S造').graph, PROJECT, 'primary', null, [], []);
   assert.equal(withBelow.created.length, without.created.length, 'S造は従来どおり通り芯グリッド辺（beamPlacement:gridEdges）でbelowColumnsは読まない');
@@ -864,7 +864,7 @@ test('【統合・3c×3d】autoFillWoodWallBeams→autoFillWoodBeamDepths: 3640�
   const room = graph.addRoom(new Set([`${x0.id}:${y0.id}:${x1.id}:${y1.id}`]), 'A');
   generateRoomWallsFromOutline(graph, room);
   const segs = selfWallSegments(graph);
-  const belowColumns = [{ x: 1820, y: 0, role: 'standard' }];
+  const belowColumns = [{ x: 1820, y: 0, axisX: 1820, axisY: 0, role: 'standard' }];
   const { created } = autoFillWoodWallBeams(graph, PROJECT, segs, null, belowColumns);
   const top = created.filter(b => !b.isVertical && Math.abs(b.axisValue - y0.value) < 1);
   assert.equal(top.length, 2, '3640のrunが1820で2本に分割される');
@@ -1144,6 +1144,165 @@ test('不変条件: conformWoodBacking の呼び出し元は壁を直後に再�
   assert.deepEqual(callers.sort(), ['finish/finishBoundary.js', 'wallRefresh.js']);
 });
 
+// ---- conformWoodColumnEccentricity（B-1・ユーザー裁定2026-09-17: 個別柱が壁の中で偏心する）----
+// exterior は wallGate.js buildExteriorSide の代役（fixedExterior。ここでの sign は
+// buildExteriorSide().outsideSign が実際に返す値（QA指摘・実測: 名前に反し内側方向の符号。
+// JSDocどおり最小側+1）をそのまま模す——conformWoodColumnEccentricity 側で符号反転してから
+// woodColumnEccentricity へ渡すため、fixedExterior(1)（内側+1）は s_face=-1 として効く。
+// outsideSignを固定して純粋にconform側の配線＝columnWidthMm解決・segments収集・冪等・
+// スキップ条件だけを検証する（woodColumnEccentricity自体の計算はwoodColumnOffset.test.jsで検証済み）。
+function fixedExterior(sign) {
+  return { outsideSign: () => sign };
+}
+
+test('conformWoodColumnEccentricity: 個別柱寸（105、階の値120と異なる）を持つ壁上の柱に偏心を書く', () => {
+  const { graph, x2, y1, y2 } = makeGridGraph();
+  // x2(=4000)を通る縦壁を張り、柱をその壁上（x2, y1）に立てる。
+  addBackingWall(graph, { axisValue: 4000, clStart: y1, clEnd: y2, isVertical: true });
+  const column = graph.addColumn(StructuralMaterialType.WOOD, 'WOOD-105x105', x2, y1, { woodColumnWidthMm: 105 });
+  const updated = conformWoodColumnEccentricity(graph, PROJECT, fixedExterior(1));
+  assert.deepEqual(updated, [column.id]);
+  // fixedExterior(1)は「内側+1」（wallGateの実際の符号規約）。conform側が反転するためs_face=-1。
+  assert.equal(column.eccentricity.x, -7.5, 's_face=-1（内側+1を反転）・-1*(120-105)/2=-7.5');
+  assert.equal(column.eccentricity.y, 0, 'Y軸に一致する壁が無い');
+});
+
+test('conformWoodColumnEccentricity: 冪等（2回目は更新0件・同じ値のまま）', () => {
+  const { graph, x2, y1, y2 } = makeGridGraph();
+  addBackingWall(graph, { axisValue: 4000, clStart: y1, clEnd: y2, isVertical: true });
+  graph.addColumn(StructuralMaterialType.WOOD, 'WOOD-105x105', x2, y1, { woodColumnWidthMm: 105 });
+  conformWoodColumnEccentricity(graph, PROJECT, fixedExterior(1));
+  const second = conformWoodColumnEccentricity(graph, PROJECT, fixedExterior(1));
+  assert.deepEqual(second, []);
+});
+
+test('conformWoodColumnEccentricity: 共通柱（woodColumnWidthMm未指定）は常に偏心ゼロ（既に非ゼロなら書き戻して正規化）', () => {
+  const { graph, x2, y1, y2 } = makeGridGraph();
+  addBackingWall(graph, { axisValue: 4000, clStart: y1, clEnd: y2, isVertical: true });
+  const column = graph.addColumn(StructuralMaterialType.WOOD, 'WOOD-120x120', x2, y1, { eccentricity: { x: 5, y: 5 } });
+  const updated = conformWoodColumnEccentricity(graph, PROJECT, fixedExterior(1));
+  assert.deepEqual(updated, [column.id], '共通へ戻すため書く');
+  assert.deepEqual(column.eccentricity, { x: 0, y: 0 });
+});
+
+test('【失敗系】conformWoodColumnEccentricity: 非在来（framingを持たない主構造）は何もしない', () => {
+  const { graph, x2, y1, y2 } = makeGridGraph('S造');
+  addBackingWall(graph, { axisValue: 4000, clStart: y1, clEnd: y2, isVertical: true });
+  graph.addColumn(StructuralMaterialType.WOOD, 'WOOD-105x105', x2, y1, { woodColumnWidthMm: 105 });
+  assert.deepEqual(conformWoodColumnEccentricity(graph, PROJECT, fixedExterior(1)), []);
+});
+
+test('【失敗系】conformWoodColumnEccentricity: exterior未構築（null）は何もしない', () => {
+  const { graph, x2, y1, y2 } = makeGridGraph();
+  addBackingWall(graph, { axisValue: 4000, clStart: y1, clEnd: y2, isVertical: true });
+  graph.addColumn(StructuralMaterialType.WOOD, 'WOOD-105x105', x2, y1, { woodColumnWidthMm: 105 });
+  assert.deepEqual(conformWoodColumnEccentricity(graph, PROJECT, null), []);
+});
+
+test('【失敗系】conformWoodColumnEccentricity: 杭（role:foundation）・他材種の柱はスキップする', () => {
+  const { graph, x2, y1, y2 } = makeGridGraph();
+  addBackingWall(graph, { axisValue: 4000, clStart: y1, clEnd: y2, isVertical: true });
+  const pile = graph.addColumn(StructuralMaterialType.WOOD, 'WOOD-105x105', x2, y1, { role: 'foundation', woodColumnWidthMm: 105 });
+  const steel = graph.addColumn(StructuralMaterialType.STEEL, 'STEEL-SQ200x200x9.0', x2, y1, {});
+  const updated = conformWoodColumnEccentricity(graph, PROJECT, fixedExterior(1));
+  assert.deepEqual(updated, []);
+  assert.deepEqual(pile.eccentricity, { x: 0, y: 0 });
+  assert.deepEqual(steel.eccentricity, { x: 0, y: 0 });
+});
+
+test('conformWoodColumnEccentricity: woodOffsetSideの明示指定はoutsideSignより優先される', () => {
+  const { graph, x2, y1, y2 } = makeGridGraph();
+  addBackingWall(graph, { axisValue: 4000, clStart: y1, clEnd: y2, isVertical: true });
+  const column = graph.addColumn(StructuralMaterialType.WOOD, 'WOOD-105x105', x2, y1, { woodColumnWidthMm: 105, woodOffsetSide: { x: -1 } });
+  conformWoodColumnEccentricity(graph, PROJECT, fixedExterior(1));
+  assert.equal(column.eccentricity.x, -7.5, 'side.x=-1を優先（outsideSignは+1を返すが無視される）');
+});
+
+test('【QA指摘・B-1】conformWoodColumnEccentricity: 階の柱寸（各階柱寸法）を変えると個別柱（90）の偏心がW/wの新しい関係で再導出され、戻り値にidが載る', () => {
+  const { graph, x2, y1, y2 } = makeGridGraph(); // 階の値の既定は120角
+  addBackingWall(graph, { axisValue: 4000, clStart: y1, clEnd: y2, isVertical: true });
+  const column = graph.addColumn(StructuralMaterialType.WOOD, 'WOOD-90x90', x2, y1, { woodColumnWidthMm: 90 });
+  const first = conformWoodColumnEccentricity(graph, PROJECT, fixedExterior(1));
+  assert.deepEqual(first, [column.id]);
+  assert.equal(column.eccentricity.x, -15, '初回はW=120/w=90・s_face=-1(内側+1の反転)・-1*(120-90)/2=-15');
+
+  // 階の柱寸を105へ変更（個別柱の90はそのまま＝Wだけが変わる）。
+  graph.setWoodColumnWidthMm(105);
+  const second = conformWoodColumnEccentricity(graph, PROJECT, fixedExterior(1));
+  assert.deepEqual(second, [column.id], '階の値が変わるとW/wの関係も変わるため再導出され、戻り値にidが載る');
+  assert.equal(column.eccentricity.x, -7.5, '再導出後はW=105/w=90・-1*(105-90)/2=-7.5');
+});
+
+// ---- QA指摘（B-1）: AXIS/ACTUAL規律の振る舞い固定（3dの支持点・荷重点をACTUALへ戻す・conformへの
+// 入力をACTUALへ戻す退行を、フィクスチャの型ではなく実際のズレで検出する）----
+test('【QA指摘・B-1】conformWoodColumnEccentricity: 壁の同定・外側判定はAXIS（axisX/axisY）で行う——ACTUALでは一致しない', () => {
+  const { graph, x2, y1, y2 } = makeGridGraph();
+  addBackingWall(graph, { axisValue: 4000, clStart: y1, clEnd: y2, isVertical: true });
+  // 事前に古い偏心{x:7.5,y:30}を持たせ、ACTUAL(=AXIS+この値)をAXISから意図的にズラす。
+  const column = graph.addColumn(StructuralMaterialType.WOOD, 'WOOD-105x105', x2, y1, {
+    woodColumnWidthMm: 105, eccentricity: { x: 7.5, y: 30 },
+  });
+  assert.equal(column.axisX, 4000, '前提: AXISは通り芯位置（4000）');
+  assert.equal(column.x, 4007.5, '前提: ACTUALは偏心ぶんズレる（4007.5）');
+  // axisValue===4000（柱のAXIS.x）かつatCross===y1.value（柱のAXIS.y）のときだけ1を返すスタブ。
+  // conform側がACTUAL（4007.5・30）を渡すと一致せず常に0になる。
+  const outsideSign = (axisValue, isVertical, atCross) =>
+    (isVertical && axisValue === 4000 && atCross === y1.value) ? 1 : 0;
+  const updated = conformWoodColumnEccentricity(graph, PROJECT, { outsideSign });
+  assert.deepEqual(updated, [column.id]);
+  // outsideSignは「内側+1」規約（QA指摘・wallGate.jsの実際の符号）を模しているため、conform側の
+  // 符号反転でs_face=-1になる: -1*(120-105)/2=-7.5。
+  assert.equal(column.eccentricity.x, -7.5, 'AXISで一致すれば-7.5（ACTUALで渡すと一致せず0になる）');
+  assert.equal(column.eccentricity.y, 0, 'Y軸に一致する壁が無い');
+});
+
+test('【QA指摘・B-1】autoFillWoodBeamDepths: 下階支持点はAXIS（axisX/axisY）で判定する——ACTUALがズレていても区分は変わらない', () => {
+  const { graph, x0, x1, y0 } = makeBeamTestGraph();
+  const beam = graph.addBeam(StructuralMaterialType.WOOD, 'WOOD-120x300', y0, false, x0, x1, { role: 'primary' });
+  const below = new PlanGraph(new Plane('p0', -3000, '0階', 1, 1));
+  const bx = below.addCenterLine(CenterLineType.VERTICAL, 1820, { labeled: true, discipline: Discipline.STRUCT });
+  const by = below.addCenterLine(CenterLineType.HORIZONTAL, 0,  { labeled: true, discipline: Discipline.STRUCT });
+  // AXISはちょうど1820（B3と同じ支持位置）。ACTUALは偏心7.5でずらし1827.5にする——ACTUALで判定すると
+  // 区間が1827.5/1812.5に分かれ、1827.5側が表の次区分(2730)へ上がり成が変わってしまう（回帰の固定）。
+  below.addColumn(StructuralMaterialType.WOOD, 'WOOD-120x120', bx, by, { eccentricity: { x: 7.5, y: 0 } });
+  const belowColumn = below.columns[0];
+  assert.equal(belowColumn.axisX, 1820, '前提: AXISは1820（B3と同じ支持位置）');
+  assert.equal(belowColumn.x, 1827.5, '前提: ACTUALは偏心ぶんズレる（1827.5）');
+  const updated = autoFillWoodBeamDepths(graph, PROJECT, below.columns);
+  assert.deepEqual(updated, [beam.id]);
+  assert.equal(beam.sectionDefId, 'WOOD-120x120', 'AXIS(1820)で2区間×1820・荷重なし＝成120のまま（B3と同じ）');
+});
+
+test('【QA指摘・B-1】autoFillWoodBeamDepths: 自階荷重点の区間判定もAXIS——区間端ちょうどに置いた自階柱はACTUALが区間外へズレても結果は変わらない（境界のため元々内部荷重に数えない）', () => {
+  const { graph, x0, x1, y0 } = makeBeamTestGraph();
+  const beam = graph.addBeam(StructuralMaterialType.WOOD, 'WOOD-120x120', y0, false, x0, x1, { role: 'primary' });
+  // 自階柱をbeamの始端(lo=x0=0)ちょうどに置く。ACTUALは偏心-7.5で区間外(-7.5)へズレる。
+  const selfColumn = graph.addColumn(StructuralMaterialType.WOOD, 'WOOD-120x120', x0, y0, { eccentricity: { x: -7.5, y: 0 } });
+  assert.equal(selfColumn.axisX, 0, '前提: AXISは区間端ちょうど(0)');
+  assert.equal(selfColumn.x, -7.5, '前提: ACTUALは区間外(-7.5)へズレる');
+  const updated = autoFillWoodBeamDepths(graph, PROJECT);
+  // 区間端は「区間内部」ではないため、AXIS(0=lo)扱いでも元々内部荷重に数えない——ACTUAL(-7.5)で
+  // 区間外に落ちても結果は変わらない（B1と同じ荷重なし＝成300のまま）。この境界ケース自体は
+  // woodBeamDepthForSpansのstrict interior判定（l>lo+tol）によりAXIS/ACTUALどちらでも荷重0になる
+  // ため変異検出力を持たない（数学的に区別不能——下のテストが実際の検出役を担う）。
+  assert.deepEqual(updated, [beam.id]);
+  assert.equal(beam.sectionDefId, 'WOOD-120x300', '区間端の柱は内部荷重に数えない＝B1と同じ成300のまま');
+});
+
+test('【QA指摘・B-1・回帰検出用】autoFillWoodBeamDepths: 自階荷重点の区間判定はAXISが真——ACTUALだけを区間の外へ大きくズラすと荷重が消えて成が変わる（上のテストは境界ケースゆえ変異を検出できないため、区間内部のケースで固定する）', () => {
+  const { graph, x0, x1, y0 } = makeBeamTestGraph();
+  const beam = graph.addBeam(StructuralMaterialType.WOOD, 'WOOD-120x120', y0, false, x0, x1, { role: 'primary' });
+  // AXISはB2と同じ区間内部(x=1820)。ACTUALだけ偏心-3640で区間外(-1820)へ大きくズラす——
+  // ACTUALで判定すると外側フィルタ(v>=lo&&v<=hi)で除外され荷重0（成300）になってしまう。
+  const xMid = graph.addCenterLine(CenterLineType.VERTICAL, 1820, { labeled: true, discipline: Discipline.STRUCT });
+  const selfColumn = graph.addColumn(StructuralMaterialType.WOOD, 'WOOD-120x120', xMid, y0, { eccentricity: { x: -3640, y: 0 } });
+  assert.equal(selfColumn.axisX, 1820, '前提: AXISは区間内部(1820。B2と同じ)');
+  assert.equal(selfColumn.x, -1820, '前提: ACTUALは区間外(-1820)へ大きくズレる');
+  const updated = autoFillWoodBeamDepths(graph, PROJECT);
+  assert.deepEqual(updated, [beam.id]);
+  assert.equal(beam.sectionDefId, 'WOOD-120x330', 'AXIS(1820)で内部荷重1か所＝成330（B2と同じ。ACTUALだと除外され成300になってしまう）');
+});
+
 // ---- autoFillWoodBeamDepths（ステップ3d: 大梁・小梁の成を支持区間ごとの梁成表引きで自動更新）----
 // 実 core.js（Plane/PlanGraph/CenterLine/StructuralColumn/StructuralBeam）を使う（wallBeamAxes.test.js と同じ方針）。
 // 通り芯 x=0/x=3640, y=0 の横大梁1本を基本形にする（3640は表の最終列＝荷重なしで成300）。
@@ -1313,7 +1472,7 @@ test('autoFillWoodBeamDepths F1（QA2）: host候補が1本しかない端でも
   // carrierが取りつく点(xMid=1820, y0=0)そのものに下階柱を置く——host候補のあいまい一致は起きない
   // 状況でも、F1「梁の端が下階柱なら受梁にしない」は端が下階柱の位置というだけで適用されることを固定する。
   const withBelow = makeCarrierTestGraph();
-  const belowColumns = [{ x: withBelow.xMid.value, y: withBelow.y0.value, role: 'standard' }];
+  const belowColumns = [{ x: withBelow.xMid.value, y: withBelow.y0.value, axisX: withBelow.xMid.value, axisY: withBelow.y0.value, role: 'standard' }];
   autoFillWoodBeamDepths(withBelow.graph, PROJECT, belowColumns);
   assert.equal(
     withBelow.host.sectionDefId, 'WOOD-120x120',
@@ -1401,7 +1560,7 @@ function buildSplitHalvesWithCarrier(reverseOrder) {
   // 区間内部の自階柱3本(y910/1820/2730)でcarrier自身の成は360まで上がる（makeCarrierTestGraphと同じ）。
   const carrier = graph.addBeam(StructuralMaterialType.WOOD, 'WOOD-120x120', xMid, true, y0, yFar, { role: 'secondary' });
   for (const y of [y910, y1820, y2730]) graph.addColumn(StructuralMaterialType.WOOD, 'WOOD-120x120', xMid, y, {});
-  const belowColumns = [{ x: 1820, y: 0, role: 'standard' }]; // 半梁を分けた下階柱そのもの
+  const belowColumns = [{ x: 1820, y: 0, axisX: 1820, axisY: 0, role: 'standard' }]; // 半梁を分けた下階柱そのもの
   autoFillWoodBeamDepths(graph, PROJECT, belowColumns);
   return { half1, half2, carrier };
 }
@@ -1782,4 +1941,111 @@ test('【統合・3d】autoFillWoodBeamDepths: 大梁の両側から取りつく
   const updated = autoFillWoodBeamDepths(graph, PROJECT);
   assert.ok(updated.includes(host.id), 'hostの成も更新される');
   assert.equal(host.sectionDefId, 'WOOD-120x330', 'hostは荷重1か所（同位置2本をdedupしたもの）として成330。誤って十字貫通扱い（荷重0・成300）になっていない');
+});
+
+// ---- B-1回帰: 3c-2b分割点・3d支持点/荷重点はAXIS（axisX/axisY）で取る——下階柱に個別偏心が
+// 付いていても（ACTUAL=x/yが動いても）分割本数・成が偏心0のときと同一であること（.claude/
+// structural-model.md「AXISで一致・ACTUALで止める」の回帰の本丸）。----
+test('【B-1回帰】autoFillWoodWallBeams×autoFillWoodBeamDepths: 下階柱に偏心（ACTUAL≠AXIS）があっても分割本数・成は偏心0のときと同一', () => {
+  const baseline = makeTwoRoomGraph();
+  const baselineSegs = selfWallSegments(baseline.graph);
+  const baselineBelow = [{ x: 3640, y: 0, axisX: 3640, axisY: 0, role: 'standard' }]; // 偏心なし
+  const { created: baseCreated } = autoFillWoodWallBeams(baseline.graph, PROJECT, baselineSegs, null, baselineBelow);
+  autoFillWoodBeamDepths(baseline.graph, PROJECT, baselineBelow);
+  const baseTop = baseCreated.filter(b => !b.isVertical && Math.abs(b.axisValue - baseline.y0.value) < 1);
+
+  const eccentric = makeTwoRoomGraph();
+  const eccentricSegs = selfWallSegments(eccentric.graph);
+  // ACTUAL(x/y)は偏心で7.5ズレているが、AXIS(axisX/axisY)は同じ3640/0のまま。
+  const eccentricBelow = [{ x: 3647.5, y: 7.5, axisX: 3640, axisY: 0, role: 'standard' }];
+  const { created: eccCreated } = autoFillWoodWallBeams(eccentric.graph, PROJECT, eccentricSegs, null, eccentricBelow);
+  autoFillWoodBeamDepths(eccentric.graph, PROJECT, eccentricBelow);
+  const eccTop = eccCreated.filter(b => !b.isVertical && Math.abs(b.axisValue - eccentric.y0.value) < 1);
+
+  assert.equal(eccTop.length, baseTop.length, '分割本数はACTUALの偏心に依存せずAXISだけで決まる');
+  assert.equal(eccTop.length, 2, '前提: 下階柱1本で2本に分割される（3c-2b・1と同じ構成）');
+  // 2つのgraphは別インスタンス（CL idは一致しない）のため、分割区間は座標（effectiveValue）で比較する。
+  const sig = (top) => top.map(b => [b.clStart.effectiveValue, b.clEnd.effectiveValue].sort((a, b) => a - b).join(':')).sort();
+  assert.deepEqual(sig(eccTop), sig(baseTop), '分割区間（端の座標）も偏心の有無で変わらない');
+  assert.deepEqual(eccTop.map(b => b.sectionDefId).sort(), baseTop.map(b => b.sectionDefId).sort(), '成も偏心の有無で変わらない');
+});
+
+// ---- B-1: woodOffsetSideの永続化（graphSnapshot.js serializeGraph/restoreGraph往復）----
+test('【B-1】woodOffsetSide: serializeGraph→restoreGraphの往復で保持される（キー欠落の軸は自動=undefinedのまま復元）', () => {
+  const { graph, x1, y1 } = makeArchCLGraph();
+  const column = graph.addColumn(StructuralMaterialType.WOOD, 'WOOD-105x105', x1, y1, {
+    woodColumnWidthMm: 105, woodOffsetSide: { x: -1, y: 0 }, eccentricity: { x: -7.5, y: 0 },
+  });
+  const onlyX = graph.addColumn(StructuralMaterialType.WOOD, 'WOOD-105x105', x1, y1, { woodOffsetSide: { x: 1 } }, 'only-x-col');
+  const bytes = serializeGraph(graph);
+  const restored = new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
+  restoreGraph(restored, bytes);
+  const restoredColumn = restored.columnMap.get(column.id);
+  const restoredOnlyX = restored.columnMap.get(onlyX.id);
+  assert.deepEqual(restoredColumn.woodOffsetSide, { x: -1, y: 0 });
+  assert.deepEqual(restoredColumn.eccentricity, { x: -7.5, y: 0 });
+  assert.deepEqual(restoredOnlyX.woodOffsetSide, { x: 1 }, 'キー欠落のy軸は復元後も存在しない（自動のまま）');
+});
+
+test('【失敗系・B-1】woodOffsetSide: null（未指定＝共通の初期値）の柱はserializeGraph→restoreGraph往復後もnullのまま', () => {
+  const { graph, x1, y1 } = makeArchCLGraph();
+  const column = graph.addColumn(StructuralMaterialType.WOOD, 'WOOD-120x120', x1, y1, {});
+  assert.equal(column.woodOffsetSide, null);
+  const bytes = serializeGraph(graph);
+  const restored = new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
+  restoreGraph(restored, bytes);
+  assert.equal(restored.columnMap.get(column.id).woodOffsetSide, null);
+});
+
+// ---- B-1: recomputeStructuralForGraphへの配線（conformWoodColumnEccentricityがchangedに乗る・冪等）----
+test('【統合・B-1】recomputeStructuralForGraph: 個別柱寸を持つ壁上の柱は偏心し、changedへ反映され、再計算は冪等', async () => {
+  const { graph, x0, y0 } = makeTwoRoomGraph();
+  const project = new Project('proj', 'test'); // memberGroupLedger/memberNumberIndex等が必要（conformToLedger）
+
+  const first = await recomputeStructuralForGraph(graph, project, TRADITIONAL_WOOD_STRUCTURE);
+  assert.equal(first.changed, true, '初回は壁交点柱等の生成でchanged=true');
+  const corner = graph.columns.find(c => Math.abs(c.axisX - x0.value) < 1 && Math.abs(c.axisY - y0.value) < 1);
+  assert.ok(corner, '前提: (x0,y0)のコーナーに柱が立っている');
+  assert.deepEqual(corner.eccentricity, { x: 0, y: 0 }, '前提: 共通柱は偏心ゼロ');
+
+  const settled = await recomputeStructuralForGraph(graph, project, TRADITIONAL_WOOD_STRUCTURE);
+  assert.equal(settled.changed, false, '前提: 個別指定前の状態は既に収束している（冪等）');
+
+  // 個別柱寸（105。階の値120と異なる）へ変更 → 壁の中で偏心するはず。
+  corner.setField('woodColumnWidthMm', 105);
+  const afterOverride = await recomputeStructuralForGraph(graph, project, TRADITIONAL_WOOD_STRUCTURE);
+  assert.equal(afterOverride.changed, true, '偏心の更新がchangedのORに反映されている（加算漏れがあると常にfalseになる）');
+  assert.notDeepEqual({ ...corner.eccentricity }, { x: 0, y: 0 }, 'コーナー柱は外壁に接するため偏心する');
+
+  const afterOverrideSettled = await recomputeStructuralForGraph(graph, project, TRADITIONAL_WOOD_STRUCTURE);
+  assert.equal(afterOverrideSettled.changed, false, '偏心が既にconform済みなら再計算は冪等（changed=false）');
+
+  // 共通へ戻すと偏心ゼロへ戻る。
+  corner.setField('woodColumnWidthMm', null);
+  const afterRevert = await recomputeStructuralForGraph(graph, project, TRADITIONAL_WOOD_STRUCTURE);
+  assert.equal(afterRevert.changed, true);
+  assert.deepEqual({ ...corner.eccentricity }, { x: 0, y: 0 }, '共通へ戻すと偏心ゼロへ正規化される');
+});
+
+// 【F2・changed加算漏れの直接固定】上のテストは個別柱寸を変えた瞬間に conformWoodSections（sectionDefId）
+// も同時に変わるため、そちらのORだけでchanged=trueになってしまい「updatedColumnEccの加算漏れ」を
+// 単独では検出できない（両者は常に同時に変化するため）。ここでは sectionDefId 側を意図的に先に
+// 収束させたうえで eccentricity だけを人為的にズラし、conformWoodColumnEccentricity の更新“だけ”が
+// changed へ寄与することを確認する（QA裁定: 保存・undoが加算漏れで空になる事故の直接固定）。
+test('【統合・B-1・F2】recomputeStructuralForGraph: 断面(sectionDefId)は既に収束済みでeccentricityだけがズレている場合でも、その更新だけでchanged=trueになる', async () => {
+  const { graph, x0, y0 } = makeTwoRoomGraph();
+  const project = new Project('proj', 'test');
+  await recomputeStructuralForGraph(graph, project, TRADITIONAL_WOOD_STRUCTURE);
+  const corner = graph.columns.find(c => Math.abs(c.axisX - x0.value) < 1 && Math.abs(c.axisY - y0.value) < 1);
+  corner.setField('woodColumnWidthMm', 105);
+  await recomputeStructuralForGraph(graph, project, TRADITIONAL_WOOD_STRUCTURE); // sectionDefId・eccentricityとも収束
+  assert.equal(corner.sectionDefId, 'WOOD-105x105', '前提: 断面は既に個別柱寸へ収束済み');
+  const converged = { ...corner.eccentricity };
+  assert.notDeepEqual(converged, { x: 0, y: 0 }, '前提: 収束済みの偏心は非ゼロ');
+
+  // sectionDefIdはそのまま・eccentricityだけを直接ズラす（conformWoodSectionsは変化させない状況を作る）。
+  corner.setField('eccentricity', { x: 0, y: 0 });
+  const { changed } = await recomputeStructuralForGraph(graph, project, TRADITIONAL_WOOD_STRUCTURE);
+  assert.equal(changed, true, 'eccentricityの再conformだけでchangedがtrueになる（加算漏れがあるとfalseのまま）');
+  assert.deepEqual({ ...corner.eccentricity }, converged, '偏心は収束済みの値へ戻る');
 });

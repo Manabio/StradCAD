@@ -186,6 +186,19 @@ test('_columnAtEnd/spanForColumns: 在来木造は下階柱が自階と別idの�
   assert.deepEqual(beam.spanForColumns([belowColumn]), { coord1: 60, coord2: 6000 }, '柱面(120/2=60)まで止める');
 });
 
+// 【B-1・回帰】個別柱の偏心（woodColumnOffset.js）が付いていても座標一致はAXIS（axisX/axisY。
+// 偏心を含まない）で行う——ACTUAL（x/y）で判定すると偏心ぶんズレて一致しなくなる（再発防止）。
+test('_columnAtEnd: 座標一致（coordinate）はAXIS（axisX/axisY）で判定するため個別柱の偏心があっても取りつく柱を見失わない', () => {
+  const { graph, x1, y1, y2 } = setupGraph();
+  graph.setStructureOverride(TRADITIONAL_WOOD_STRUCTURE);
+  const perFloorY1 = new CenterLine('other-y1', CenterLineType.HORIZONTAL, 0, { labeled: false, discipline: Discipline.FUSE });
+  const belowColumn = graph.addColumn(StructuralMaterialType.WOOD, 'WOOD-105x105', x1, perFloorY1, { eccentricity: { x: 7.5, y: 0 } });
+  const beam = graph.addBeam(StructuralMaterialType.WOOD, 'WOOD-120x120', x1, true, y1, y2, { role: 'primary' });
+  assert.equal(belowColumn.axisX, 0, '前提: AXISは通り芯位置(0)のまま');
+  assert.equal(belowColumn.x, 7.5, '前提: ACTUALは偏心ぶんズレる(7.5)');
+  assert.equal(beam._columnAtEnd(y1, [belowColumn]), belowColumn, 'ACTUALがズレていてもAXISで一致し取りつく柱として見つかる');
+});
+
 test('【失敗系】_columnAtEnd/spanForColumns: id一致がルール（在来木造以外）では座標が一致しても取りつく柱とみなさない', () => {
   const { graph, x1, y1, y2 } = setupGraph();
   // structureOverride無し（未指定ルール）＝beamEndColumnMatch既定'clId'。

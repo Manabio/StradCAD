@@ -15,6 +15,15 @@ export function beamAtKonvaTarget(target, graph) {
   return id != null ? (graph?.beamMap?.get(id) ?? null) : null;
 }
 
+/** Konvaのイベントターゲット（<Group name="column-symbol" columnId={...}>本体、またはその子孫の図形）から
+ *  columnId属性を取り出し、graph.columnMapから実体を解決する。見つからなければnull。
+ *  beamAtKonvaTarget と同じ流儀（ステップ4「柱は共通と個別指定の2層」・自階柱□タップ）。 */
+export function columnAtKonvaTarget(target, graph) {
+  if (!target || typeof target.getAttr !== 'function') return null;
+  const id = target.getAttr('columnId') ?? target.findAncestor?.('.column-symbol')?.getAttr('columnId');
+  return id != null ? (graph?.columnMap?.get(id) ?? null) : null;
+}
+
 /**
  * 梁タップが成立する条件（呼び出し元＝usePointerInteraction.js の pointerUp が解決した信号を渡す
  * 純判定）。構造モードでも onMemberClick 未指定（省略時）・メニュー表示中・パン発生後（8px超移動。

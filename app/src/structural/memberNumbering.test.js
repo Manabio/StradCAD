@@ -349,10 +349,11 @@ function woodColumn(id, sectionDefId, extra = {}) {
 test('【ステップ3】collectFloorGroups/applyNumbers: 個別柱寸(105)を持つ柱2本はそれぞれ別タグになり、共通(120)の柱2本は1タグにまとまる（採番順はsizeKey降順優先＝断面が大きい共通120がC1、個別105は座標昇順でC2・C3）', () => {
   const project = makeProject([{ id: 'p1', startFloor: 1 }]);
   // 挿入順はあえて座標昇順と揃えない（orderKey=[x,y]での並び替えを検証するため）。
-  const individualB = woodColumn('c1', 'WOOD-105x105', { woodColumnWidthMm: 105, x: 2000, y: 0 });
-  const individualA = woodColumn('c2', 'WOOD-105x105', { woodColumnWidthMm: 105, x: 1000, y: 0 });
-  const commonA = woodColumn('c3', 'WOOD-120x120', { woodColumnWidthMm: null, x: 0, y: 0 });
-  const commonB = woodColumn('c4', 'WOOD-120x120', { woodColumnWidthMm: null, x: 3000, y: 0 });
+  // axisX/axisY（AXIS。偏心を含まない）で並び順を決める（memberOrderKeyのB-1切替。structuralModel参照）。
+  const individualB = woodColumn('c1', 'WOOD-105x105', { woodColumnWidthMm: 105, axisX: 2000, axisY: 0 });
+  const individualA = woodColumn('c2', 'WOOD-105x105', { woodColumnWidthMm: 105, axisX: 1000, axisY: 0 });
+  const commonA = woodColumn('c3', 'WOOD-120x120', { woodColumnWidthMm: null, axisX: 0, axisY: 0 });
+  const commonB = woodColumn('c4', 'WOOD-120x120', { woodColumnWidthMm: null, axisX: 3000, axisY: 0 });
   const g = makeGraph('p1', { columnMap: [individualB, individualA, commonA, commonB] });
   g.structureOverride = TRADITIONAL_WOOD_STRUCTURE;
 
@@ -366,9 +367,27 @@ test('【ステップ3】collectFloorGroups/applyNumbers: 個別柱寸(105)を�
   assert.equal(individualB.memberNo, 'C3', 'もう一方の個別指定の柱（x=2000）はC3');
 });
 
+test('【QA提案4・ステップ4】collectFloorGroups/applyNumbers: 共通(105)より断面の大きい個別柱(120)を作ると、sizeKey降順で個別柱がC1・共通がC2になる（前段のテストと共通/個別の大小関係が逆——MemberListTab側の「タップした柱の新しいカードへ追従する」修正が必要な理由の実測）', () => {
+  const project = makeProject([{ id: 'p1', startFloor: 1 }]);
+  const individual = woodColumn('c1', 'WOOD-120x120', { woodColumnWidthMm: 120, axisX: 500, axisY: 0 });
+  const commonA = woodColumn('c2', 'WOOD-105x105', { woodColumnWidthMm: null, axisX: 0, axisY: 0 });
+  const commonB = woodColumn('c3', 'WOOD-105x105', { woodColumnWidthMm: null, axisX: 1000, axisY: 0 });
+  const g = makeGraph('p1', { columnMap: [individual, commonA, commonB] });
+  g.structureOverride = TRADITIONAL_WOOD_STRUCTURE;
+
+  collectFloorGroups(g, project);
+  applyNumbers(g, project, assignNumbers(project));
+
+  // 断面積は個別(120×120=14400)が共通(105×105=11025)より大きい＝sizeKey降順でC1は個別のグループ
+  // （前段のテストとは逆転する組み合わせ——「共通の方が常にC1」ではなく、選んだ幅の大小で反転する）。
+  assert.equal(individual.memberNo, 'C1', '断面の大きい個別柱(120角)がC1のはず（タップした柱そのものの新タグ）');
+  assert.equal(commonA.memberNo, 'C2', '共通(105角)の柱はC2にまとまる');
+  assert.equal(commonB.memberNo, 'C2');
+});
+
 test('【QA裁定・ステップ3】renumberMembers: 共通柱グループに手動タグ（grp.join）があっても、own(105)が階の値(120)と異なる個別柱はconformToLedgerの署名一致で吸収されず別タグになる（QA実測: own=階の値の個別柱が吸収され1本1タグが消える事故の再発防止）', () => {
   const project = makeProject([{ id: 'p1', startFloor: 1 }]);
-  const c1 = woodColumn('c1', 'WOOD-120x120', { woodColumnWidthMm: null, x: 0, y: 0 }); // 共通（階の値120）
+  const c1 = woodColumn('c1', 'WOOD-120x120', { woodColumnWidthMm: null, axisX: 0, axisY: 0 }); // 共通（階の値120）
   const g = makeGraph('p1', { columnMap: [c1] });
   g.structureOverride = TRADITIONAL_WOOD_STRUCTURE;
 
@@ -382,7 +401,7 @@ test('【QA裁定・ステップ3】renumberMembers: 共通柱グループに手
   // own=105（階の値120とは異なる）の個別柱を追加。sectionDefIdは conformWoodSections が実際に
   // 生成する値（'WOOD-105x105'）を直接与える——本ファイルは duck-typed fixture のため conform自体は
   // シミュレートしない（既存の個別採番テストと同じ規約）。
-  const c2 = woodColumn('c2', 'WOOD-105x105', { woodColumnWidthMm: 105, x: 1000, y: 0 });
+  const c2 = woodColumn('c2', 'WOOD-105x105', { woodColumnWidthMm: 105, axisX: 1000, axisY: 0 });
   g.columnMap.set(c2.id, c2);
   renumberMembers(g, project, 'columnMap');
 
@@ -392,8 +411,8 @@ test('【QA裁定・ステップ3】renumberMembers: 共通柱グループに手
 
 test('【失敗系・ステップ3】collectFloorGroups/applyNumbers: 非在来（主構造未設定）は柱にwoodColumnWidthMmがあっても個別化されず1グループにまとまる', () => {
   const project = makeProject([{ id: 'p1', startFloor: 1 }]);
-  const c1 = woodColumn('c1', 'WOOD-105x105', { woodColumnWidthMm: 105, x: 0, y: 0 });
-  const c2 = woodColumn('c2', 'WOOD-105x105', { woodColumnWidthMm: 105, x: 1000, y: 0 });
+  const c1 = woodColumn('c1', 'WOOD-105x105', { woodColumnWidthMm: 105, axisX: 0, axisY: 0 });
+  const c2 = woodColumn('c2', 'WOOD-105x105', { woodColumnWidthMm: 105, axisX: 1000, axisY: 0 });
   const g = makeGraph('p1', { columnMap: [c1, c2] }); // structureOverride未設定＝主構造未定
 
   collectFloorGroups(g, project);

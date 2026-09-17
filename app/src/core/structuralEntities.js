@@ -19,17 +19,21 @@ function _axisOffset(planGraph, clId) {
   return planGraph?.columnAxisOffsets.get(clId) ?? 0;
 }
 
-// 柱・基礎・柱脚の平面位置 = 通り芯 effectiveValue + 柱芯オフセット + 個別偏心量。
+// 柱芯（AXIS）= 通り芯 effectiveValue + 柱芯オフセット（columnAxisOffsets。偏心量は含まない）。
+// StructuralColumn.axisX/axisY が公開する（.claude/structural-model.md「AXISで一致・ACTUALで止める」）。
+function _axisX(entity) {
+  return entity.verticalCL.effectiveValue + _axisOffset(entity._planGraph, entity.verticalCL.id);
+}
+function _axisY(entity) {
+  return entity.horizontalCL.effectiveValue + _axisOffset(entity._planGraph, entity.horizontalCL.id);
+}
+// 柱・基礎・柱脚の平面位置（ACTUAL）= 柱芯（AXIS） + 個別偏心量。
 // StructuralColumn / StructuralFooting が共通で使う（eccentricity は {x,y}）。
 function _gridX(entity) {
-  return entity.verticalCL.effectiveValue
-       + _axisOffset(entity._planGraph, entity.verticalCL.id)
-       + entity.eccentricity.x;
+  return _axisX(entity) + entity.eccentricity.x;
 }
 function _gridY(entity) {
-  return entity.horizontalCL.effectiveValue
-       + _axisOffset(entity._planGraph, entity.horizontalCL.id)
-       + entity.eccentricity.y;
+  return _axisY(entity) + entity.eccentricity.y;
 }
 
 // トポロジー自動補完の除外集合（PlanGraph.excludedColumnSlots/excludedBeamSlots）で使うキー生成。
@@ -115,11 +119,20 @@ export class StructuralColumn extends StructuralEntity {
       tributaryWidth: observable,
       x: computed,
       y: computed,
+      axisX: computed,
+      axisY: computed,
     });
   }
-  // x/y = 通り芯 + 柱芯オフセット（columnAxisOffsets。ラーメン系のみ非0） + 個別偏心量
+  // x/y（ACTUAL） = 通り芯 + 柱芯オフセット（columnAxisOffsets。ラーメン系のみ非0） + 個別偏心量。
+  // 描画・止め（finish/columnWrap.js・wallDrawPlan.js・梁の柱面トリム等）はこちら。
   get x() { return _gridX(this); }
   get y() { return _gridY(this); }
+  // axisX/axisY（AXIS） = 通り芯 + 柱芯オフセット（偏心量は含まない）。柱同士・梁との位置一致判定
+  // （3b候補・3c-2b分割点・3d支持点/荷重点・_columnAtEndの座標フォールバック・採番の順位キー等）は
+  // こちらを使う——個別柱の偏心（woodColumnOffset.js）で一致判定がずれないため
+  // （.claude/structural-model.md「在来木造の個別柱は壁の中で偏心する」参照）。
+  get axisX() { return _axisX(this); }
+  get axisY() { return _axisY(this); }
 }
 
 export class WoodColumn extends StructuralColumn {
@@ -133,7 +146,15 @@ export class WoodColumn extends StructuralColumn {
     // structureRules.js columnWidthMm/columnSectionId（直接この値を読まない）。dimensionStatus とは独立
     // （両者を混ぜると自動撤去ループ・手動固定の意味が衝突するため。.claude/structural-model.md 参照）。
     this.woodColumnWidthMm = props.woodColumnWidthMm ?? null;
-    makeObservable(this, { columnType: observable, woodSpecies: observable, woodColumnWidthMm: observable });
+    // 個別柱（柱寸≠階の柱寸）が壁の中で偏心する向きの指定（ユーザー裁定2026-09-17・B-1）。
+    // {x?:-1|0|1, y?:-1|0|1} | null。キー欠落＝自動（外面そろえの向きを壁位置から判定）、
+    // 0＝中央、±1＝その向きの面をそろえる。真実はこちら——eccentricity{x,y}はこの値と
+    // 柱寸・階幅・壁位置から conformWoodColumnEccentricity（woodAutoFill.js）が毎回導出する派生値
+    // （直接 setField('eccentricity', ...) しない。.claude/structural-model.md 参照）。
+    this.woodOffsetSide = props.woodOffsetSide ?? null;
+    makeObservable(this, {
+      columnType: observable, woodSpecies: observable, woodColumnWidthMm: observable, woodOffsetSide: observable,
+    });
   }
 }
 
@@ -292,9 +313,11 @@ export class StructuralBeam extends StructuralEntity {
     if (byId) return byId;
     if (rulesFor(effectiveStructure(this._planGraph)).drawing.beamEndColumnMatch !== 'coordinate') return null;
     // 3d（woodAutoFill.js alongCoordOnAxis）と同じ述語: 走行方向座標がperpCL、法線方向座標がこの梁の軸線。
+    // AXIS（axisX/axisY。偏心を含まない）で一致させる——個別柱の偏心（woodColumnOffset.js）で
+    // 一致判定がずれないため（.claude/structural-model.md「AXISで一致・ACTUALで止める」）。
     return columns.find(c => {
-      const along = this.isVertical ? c.y : c.x;
-      const axis  = this.isVertical ? c.x : c.y;
+      const along = this.isVertical ? c.axisY : c.axisX;
+      const axis  = this.isVertical ? c.axisX : c.axisY;
       return Math.abs(along - perpCL.effectiveValue) < CL_OVERLAP_TOL_MM && Math.abs(axis - this.axisValue) < CL_OVERLAP_TOL_MM;
     }) ?? null;
   }

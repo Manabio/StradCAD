@@ -232,3 +232,18 @@ WINDING/L_TURN/FLARED/OPEN_WELLは対象外＝従来面順へフォールバッ�
 基礎伏図の土台帯（線画2本）が、直交する基礎梁と交わる位置で自然に重なって閉じる描き方。端を閉じる
 専用のキャップ線は描かない——他の基礎梁と交わらない自由端は開いたままになる。設計意図は
 `.claude/structural-model.md`。
+
+## 柱寸アップ（B-1）
+在来木造の柱カードで、個別指定の柱寸として「階の柱寸（各階柱寸法欄）より大きい」値を選べるように
+するcheckboxの通称。既定は階の値以下に制限（`columnWidthScope.js`の`allowedColumnWidths`）——
+チェック時だけ全カタログ幅を選択肢に出す。既に階の値より大きい柱寸を個別指定済みの柱は
+チェックを外せない（`isUpsizedWidth`で判定・disabled固定）。設計意図は`.claude/structural-model.md`
+「在来木造の個別柱は壁の中で偏心する」節。
+
+## 偏心（柱）（B-1）
+在来木造の個別柱（柱寸が階の柱寸と異なる柱）が、壁の中で外面をそろえるために柱芯からずれる量
+（`StructuralColumn.eccentricity`）。真実は向きの指定`WoodColumn.woodOffsetSide`
+（`{x?,y?}`。キー欠落＝自動判定）で、偏心量自体は`structural/woodColumnOffset.js`の
+`woodColumnEccentricity`が壁位置・柱寸・階の柱寸から毎回導出する派生値（書き手は
+`woodAutoFill.js`の`conformWoodColumnEccentricity`のみ）。共通柱（柱寸＝階の値）は常に偏心ゼロ。
+設計意図は`.claude/structural-model.md`「在来木造の個別柱は壁の中で偏心する」節。

@@ -172,7 +172,7 @@ function buildSnapshot(graph) {
     columns: graph.columns.map(c => {
       const [extraKeys, extraVals] = packExtraFields(c,
         ['pileType', 'pileDiameter', 'columnType', 'woodSpecies', 'basePlateDefId', 'mainBars', 'hoopBars',
-          'dimensionStatus', 'tributaryWidth', 'numberGroupId', 'woodColumnWidthMm']);
+          'dimensionStatus', 'tributaryWidth', 'numberGroupId', 'woodColumnWidthMm', 'woodOffsetSide']);
       return {
         id: c.id, materialType: c.materialType, sectionDefId: c.sectionDefId,
         verticalCLId: c.verticalCL.id, horizontalCLId: c.horizontalCL.id,

@@ -6,7 +6,7 @@ import { findSectionEntry, diaphragmProjection } from '../structural/sectionCata
 import { rulesFor, effectiveStructure } from '../structural/structureRules.js';
 import {
   framingColumnGroups, framingColor, framingColorOverride, columnSectionSize, framingColumnLineWeight,
-  beamDepthMarks, sillBandSpec, pickMembersOnFigure,
+  beamDepthMarks, sillBandSpec, pickMembersOnFigure, pickColumnsOnFigure, columnRenderSize,
 } from '../structural/framingDrawing.js';
 import { planColumnWraps } from './wallDrawPlan.js';
 import { columnWrapRenderProps, columnWrapStrokeWidth } from '../structural/columnWrapLineJoin.js';
@@ -73,14 +73,17 @@ function jointMarkLines(keyBase, beam, along, half, color, strokeWidth, gap) {
   });
 }
 
-// 柱の実描画サイズ(mm)。LODに依らず常にsectionDefIdのカタログ実寸（矩形等で幅・高さが異なる場合は
-// 大きい方、カタログ未登録はCOLUMN_FALLBACK_SIZE_MM）。StructuralLayer.jsx・MemberTagLayer.jsxの両方が
-// これだけを参照する単一の実装。断面寸法の解決自体は framingDrawing.js の columnSectionSize と共用する
-// （柱記号の対角線が使う辺長とタグのマージンが同じ辺長を見るようにするため。二重実装しない）。
-export function columnRenderSize(column) {
-  const { width, height } = columnSectionSize(column);
-  return Math.max(width, height);
-}
+// 柱の実描画サイズ(mm)。実装は structural/framingDrawing.js の columnRenderSize（react-konvaを持たない
+// 純モジュール側。QA指摘・ステップ4: node:testから直接importして失敗系を検証できるようにするため
+// こちら側では二重定義せず re-export のみにした）。MemberTagLayer.jsx はこの再エクスポートを
+// './StructuralLayer.jsx' から import しており、そちらの import 文は変更していない。
+export { columnRenderSize };
+
+// pick=false時（下階柱×・非在来の柱・onMemberClick未指定など）の柱ヒット域props。モジュールスコープ
+// 定数にして毎レンダー新規オブジェクトを渡さない——ColumnSymbolはobserver（mobx-react-liteが内部で
+// React.memoを使う）で包まれているため、参照の変わるpropsを渡すと浅い比較が毎回falseになりmemoが
+// 効かなくなる（pick=falseの経路＝ほぼ全ての柱で常時発生する回帰。QA指摘・ステップ4）。
+const COLUMN_HIT_PROPS_NONE = { listening: false };
 
 // 梁の実描画幅(mm)。beamWidth（基礎梁の算定値）が設定済みならLOD・SCHEMATICに関わらず常にそれを使う
 // （フーチングと同じ「常に実寸」扱い）。未設定はSCHEMATIC=単線（戻り値null）/STANDARD=仮幅/DETAIL=カタログ実寸。
@@ -210,7 +213,7 @@ function columnDiaphragmSize(column) {
 // 既定null＝'medium'（非伏図・平面図経路は渡さないため完全不変）。
 export const ColumnsLayer = observer(({
   graph, viewport, diaphragm = false, finishWrap = false, framingSymbol = null, colorOverride = null,
-  outline: outlineProp = false, outlineWeight = null,
+  outline: outlineProp = false, outlineWeight = null, pick = false,
 }) => {
   if (!graph) return null;
   const scale   = Math.min(viewport.scaleX, viewport.scaleY);
@@ -274,6 +277,14 @@ export const ColumnsLayer = observer(({
         />
       );
     }
+    // 柱タップ（pick時のみ。自階柱□をタップして構造リストの共通カードを開く。ステップ4「柱は共通と
+    // 個別指定の2層」）のヒット域。梁タップ（pickBeams）と同じ流儀——既存の描画図形（ColumnSymbol）に
+    // 重ねる（openings/OpeningsLayer.jsx と同じく透明な当たり判定専用図形は新設しない）。
+    // fillEnabled:false は必須（中実断面の塗り部分だけでなく外形の外まで当たり判定が広がるのを防ぐ）。
+    // 辺長は columnRenderSize（このファイル冒頭。MemberTagLayer.jsxと共有する単一の実装）で解決する。
+    const hitProps = pick
+      ? { listening: true, fillEnabled: false, hitStrokeWidth: Math.max(MEMBER_HIT_PX / scale, columnRenderSize(column)) }
+      : COLUMN_HIT_PROPS_NONE;
     els.push(
       <ColumnSymbol
         key={column.id}
@@ -281,6 +292,7 @@ export const ColumnsLayer = observer(({
         color={color}
         outline={outline}
         outlineStrokeWidth={outlineStrokeWidth}
+        hitProps={hitProps}
       />
     );
     // 伏図の下階柱記号（×）。断面□の上に対角線2本を重ねる（在来木造 framingColumnSymbol:'boxCross' のみ）。
@@ -294,7 +306,22 @@ export const ColumnsLayer = observer(({
         />
       );
     }
-    return els;
+    // pick時だけ<Group name="column-symbol" columnId={column.id}>で包む。クリックの実行はここでは
+    // 行わない——梁タップ（QA指摘F4）と同じ理由でKonvaのonclick/onTapは使わず、実際のタップ判定は
+    // interaction/usePointerInteraction.jsのpointerUpがcolumnAtKonvaTargetで解決してonMemberClickを呼ぶ。
+    return pick
+      ? [
+          <Group
+            key={`pick:${column.id}`}
+            name="column-symbol"
+            columnId={column.id}
+            onMouseEnter={e => { e.target.getStage().container().style.cursor = 'pointer'; }}
+            onMouseLeave={e => { e.target.getStage().container().style.cursor = 'default'; }}
+          >
+            {els}
+          </Group>,
+        ]
+      : els;
   });
 });
 
@@ -338,6 +365,9 @@ export const StructuralLayer = observer(({ composition, viewport, project, onMem
   // 梁タップ（タグの代替。structural/framingDrawing.js pickMembersOnFigure が唯一の判定先）を
   // 有効にするか。onMemberClick が渡されない呼び出し元（省略時null）では常に無効＝Reactツリー不変。
   const pickBeams = onMemberClick && pickMembersOnFigure(figureRules.drawing);
+  // 柱タップ（自階柱□。ステップ4「柱は共通と個別指定の2層」）を有効にするか。onMemberClick未指定・
+  // 非在来（pickColumnsOnFigureの判定はstructural/framingDrawing.js）では常に無効＝Reactツリー不変。
+  const pickColumns = onMemberClick && pickColumnsOnFigure(figureRules.drawing);
 
   // 木造基礎伏図の土台・ベース帯（問題.md）。基礎梁(role:'foundation')がある＝基礎伏図、かつ実効主構造が木造のときのみ。
   // ベースの有無は基礎種別（べた基礎はベースなし＝土台のみ）。実効主構造は基礎伏図グラフ（=自階）の上書きを優先。
@@ -377,25 +407,37 @@ export const StructuralLayer = observer(({ composition, viewport, project, onMem
   // 変わっても意味を保つため（QA指摘F7）。自階柱にダイヤフラムは無い（従来どおり）。
   const columnColorOverride = framingColorOverride(figureRules.drawing);
   const columnGroups = framingColumnGroups(figureRules.drawing);
+  // 1グループぶんの<Group><ColumnsLayer/></Group>。QA指摘4（2026-09-17）のz-order修正で描画位置が
+  // 2箇所（後述backColumnGroups/frontColumnGroups）に分かれたため関数化し、二重実装を避ける。
+  const renderColumnGroup = g => {
+    const resolved = composition.resolveCategory(g.category);
+    return (
+      <Group key={g.category} {...groupPropsForStyle(resolved?.spec.style)}>
+        <ColumnsLayer
+          graph={resolved?.graph}
+          viewport={viewport}
+          diaphragm={g.category === 'columnMap' && lod === LodLevel.DETAIL}
+          framingSymbol={g.symbol}
+          colorOverride={columnColorOverride}
+          outline={g.outline}
+          outlineWeight={framingColumnLineWeight(figureRules.drawing, lod)}
+          pick={pickColumns && g.category === 'columnMapSelf'}
+        />
+      </Group>
+    );
+  };
+  // 柱タップ対象（columnMapSelf かつ pickColumns。在来木造の自階柱□のみ）だけ梁本体（beamDrawSpans）
+  // より後（前面）に描く——梁が柱より後に描かれる既存z-order（画面上は梁が上、当たり判定も梁が勝つ）
+  // のままだと、梁上に乗る管柱の中心タップが梁カードを開いてしまう（QA指摘4・実機観測）。非pickの
+  // グループ（下階柱×・非在来の柱）は従来どおり最初（footings・梁より前）に描く——出力・z-orderとも
+  // 完全不変。pickColumnsが偽（非在来・onMemberClick未指定）ならfrontColumnGroupsは常に空配列で
+  // Reactツリーも不変。
+  const backColumnGroups  = columnGroups.filter(g => !(pickColumns && g.category === 'columnMapSelf'));
+  const frontColumnGroups = columnGroups.filter(g => pickColumns && g.category === 'columnMapSelf');
 
   return (
     <>
-      {columnGroups.map(g => {
-        const resolved = composition.resolveCategory(g.category);
-        return (
-          <Group key={g.category} {...groupPropsForStyle(resolved?.spec.style)}>
-            <ColumnsLayer
-              graph={resolved?.graph}
-              viewport={viewport}
-              diaphragm={g.category === 'columnMap' && lod === LodLevel.DETAIL}
-              framingSymbol={g.symbol}
-              colorOverride={columnColorOverride}
-              outline={g.outline}
-              outlineWeight={framingColumnLineWeight(figureRules.drawing, lod)}
-            />
-          </Group>
-        );
-      })}
+      {backColumnGroups.map(renderColumnGroup)}
       {woodFoundation && (
         <Group {...groupPropsForStyle(footing?.spec.style)}>
           {woodFoundationBands(foundationBeams, drawBase, {
@@ -502,6 +544,7 @@ export const StructuralLayer = observer(({ composition, viewport, project, onMem
           ]);
         })}
       </Group>
+      {frontColumnGroups.map(renderColumnGroup)}
       <Group {...groupPropsForStyle(beam?.spec.style)}>
         {beamDepthMarkList.flatMap(mark => {
           const color = colorOf(mark.materialType);

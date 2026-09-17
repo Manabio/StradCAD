@@ -15,7 +15,7 @@ import { CL_OVERLAP_TOL_MM } from '../core/constants.js';
 import { findSectionEntry, woodRectSectionKey } from './sectionCatalog.js';
 import {
   rulesFor, effectiveStructure, TRADITIONAL_WOOD_FRAMING, WOOD_DEPTH_BEAM_ROLES,
-  woodColumnWidthMm, woodColumnSectionId, resolvedBeamColumnWidthMm, columnSectionId,
+  woodColumnWidthMm, woodColumnSectionId, resolvedBeamColumnWidthMm, columnSectionId, columnWidthMm,
 } from './structureRules.js';
 import { selfWallSegments, findBeamAnchorCL, wallBeamAxisExcludeKey, bracketExtent } from './wallBeamAxes.js';
 import { woodStudCodeFor } from '../finish/materials/backingClass.js';
@@ -23,14 +23,14 @@ import { beamGridCells } from './framingCells.js';
 import {
   woodBeamDepthForSpans, woodBeamSectionForDepth, crossingBeamLoadCoords,
   mergeWallIntervals, throughBeamRuns, propagateCarrierDepths, pointsOnWallLines, columnSplitPoints,
+  WALL_JUNCTION_TOL_MM,
 } from './woodFraming.js';
+import { woodColumnEccentricity } from './woodColumnOffset.js';
 
-// 壁の端部の取り合い許容(mm)。壁の端は**取り合う壁の半厚（仕上げ込み）ぶん控えて生成される**
-// （仕上げモードの壁生成。実機: x=0 の縦壁に突き当たる横壁は x=57.5 から始まる）ため、交点・T字・
-// コーナーの判定では範囲をこの値だけ外へ広げる。壁厚の上限（RC壁200＋仕上げ）の半分を超える値にし、
-// 材の半厚を個別に持ち回らない（壁の外周仕上げの有無で半厚が変わり、`materialRange` 由来の値では
-// 控え量に届かない例が実機であった）。壁同士がこれ以上離れて終わる構成は「交わっていない」とみなす。
-export const WALL_JUNCTION_TOL_MM = 150;
+// WALL_JUNCTION_TOL_MM（壁の端部の取り合い許容mm）の真実は woodFraming.js（woodColumnOffset.js との
+// 共有のため。純モジュールから core.js 依存の woodAutoFill.js を import できない）。既存の import 元
+// （本ファイルの他関数・woodAutoFill.test.js）を壊さないよう再exportする。
+export { WALL_JUNCTION_TOL_MM };
 
 /**
  * 壁区間（プレーン配列 [{isVertical, coord, lo, hi}]。coord＝下地帯の中心、lo/hi＝壁の走行範囲）から、
@@ -129,9 +129,11 @@ export function autoFillWoodColumns(graph, project, wallGate = null, aboveColumn
     const line = lineRuns.find(l => l.isVertical === isVertical && Math.abs(l.coord - coord) < CL_OVERLAP_TOL_MM);
     return !!line?.runs.some(r => along >= r.lo - CL_OVERLAP_TOL_MM && along <= r.hi + CL_OVERLAP_TOL_MM);
   };
+  // AXIS（axisX/axisY。偏心を含まない）で候補位置を取る——個別柱の偏心（woodColumnOffset.js）で
+  // 通り芯・梁芯との一致判定がずれないため（.claude/structural-model.md「AXISで一致・ACTUALで止める」）。
   const points = (aboveColumns ?? [])
     .filter(c => c.role !== 'foundation')
-    .map(c => ({ x: c.x, y: c.y }));
+    .map(c => ({ x: c.axisX, y: c.axisY }));
   // pointsOnWallLinesは1点が複数の壁線に一致する場合、すべての一致を並び順非依存で返す。ここで
   // 決定的タイブレークで1点につき1件へ絞る：runに入る線を優先→|perp-coord|(dist)最小→coord昇順
   // （QA F6・2026-09-16。旧実装はsegments/graph.wallsの走査順で最初に一致した線を採っており、
@@ -268,7 +270,8 @@ export function wallLineThroughRuns(wallSegments) {
 export function autoFillWoodWallBeams(graph, project, wallSegments, wallGate = null, belowColumns = []) {
   const rules = rulesFor(effectiveStructure(graph, project));
   if (!rules.framing || !(wallSegments?.length)) return { created: [], removed: [] };
-  const belowPts = (belowColumns ?? []).filter(c => c.role !== 'foundation').map(c => ({ x: c.x, y: c.y }));
+  // AXIS（axisX/axisY）で分割点を取る（3bと同じ理由。個別柱の偏心で分割位置がずれないため）。
+  const belowPts = (belowColumns ?? []).filter(c => c.role !== 'foundation').map(c => ({ x: c.axisX, y: c.axisY }));
 
   // spanKey -> その位置に既にある梁（同材種）。候補スロットの占有物判定（role:'primary'昇格）に使う。
   const byKey = new Map();
@@ -595,6 +598,47 @@ export function conformWoodSections(graph, project) {
   return updated;
 }
 
+/**
+ * 在来木造の個別柱（柱寸columnWidthMm ≠ 階の柱寸floorWidthMm）が壁の中で偏心する量
+ * （eccentricity{x,y}）を conform する（ユーザー裁定2026-09-17・B-1）。真実は
+ * column.woodOffsetSide（向きの指定）——eccentricity はここでだけ導出して書き込む派生値
+ * （column.setField('eccentricity', ...) の唯一の書き手。他所から直接書かない）。
+ *  - 共通柱（woodOffsetSideの有無に関わらず columnWidthMm(column,...)===floorWidthMm）は
+ *    woodColumnEccentricity 自身が {x:0,y:0} を返すため常に偏心ゼロへそろう。
+ *  - 非在来（framing を持たない主構造）・exterior未構築（呼び出し順序の不備）は何もしない。
+ *  - 対象は在来木造の柱（役柱=杭を除く）のみ。目標値と現在値が一致すれば書かない（冪等。
+ *    毎回書くと structuralRecompute.js の changed 判定が常に true になり undo が空でも積まれる）。
+ *  - 梁幅・梁成・壁厚・壁の鮮度キーには一切波及しない（呼び出し元はこの結果を他の conform へ渡さない）。
+ * @param {object} graph
+ * @param {object} project
+ * @param {{outsideSign: Function}|null} exterior - wallGate.js buildExteriorSide(graph) の結果
+ * @returns {string[]} 更新した柱id
+ */
+export function conformWoodColumnEccentricity(graph, project, exterior) {
+  const rules = rulesFor(effectiveStructure(graph, project));
+  if (!rules.framing || exterior == null) return [];
+  const floorWidthMm = woodColumnWidthMm(graph, project);
+  const segments = selfWallSegments(graph);
+  const updated = [];
+  for (const column of graph.columns) {
+    if (column.materialType !== rules.baseMaterial || column.role === 'foundation') continue;
+    const width = columnWidthMm(column, graph, project);
+    const target = woodColumnEccentricity({
+      axisX: column.axisX, axisY: column.axisY, floorWidthMm, columnWidthMm: width,
+      side: column.woodOffsetSide ?? {}, segments,
+      // QA指摘（B-1）: wallGate.js の outsideSign は名前に反し「内側」の符号を返す（JSDoc
+      // どおり最小側+1＝内側方向。実測: moku1/moku2でx=0の柱は+1・x=9100は-1・y=0は-1＝常に
+      // 建物内向き）。woodColumnEccentricity/s_faceは「外側方向」の符号を期待するため、ここで
+      // 反転してから渡す——明示指定side（±1）の意味・式（s_face*(W-w)/2）自体は変えない。
+      outsideSign: (axisValue, isVertical, atCross) => -exterior.outsideSign(axisValue, isVertical, atCross),
+    });
+    if (column.eccentricity.x === target.x && column.eccentricity.y === target.y) continue;
+    column.setField('eccentricity', target);
+    updated.push(column.id);
+  }
+  return updated;
+}
+
 // WOOD_DEPTH_BEAM_ROLES（在来木造の梁成自動更新の対象role）は structural/structureRules.js
 // （WOOD_BEAM_DEPTH_TABLE の隣。個別採番 numbering.individualBeamRoles と同じ集合を共有する）へ移設済み。
 
@@ -674,8 +718,9 @@ export function autoFillWoodBeamDepths(graph, project, belowColumns = []) {
   for (const x of targets) {
     for (const [endCL, otherCL] of [[x.clStart, x.clEnd], [x.clEnd, x.clStart]]) {
       // F1（2026-09-16）: この端が下階柱の位置と同一点なら、柱が受けるためhostを探さない（あいまい一致の回避）。
+      // AXIS（axisX/axisY）で判定する——個別柱の偏心で支持点判定がずれないため。
       const atBelowColumn = belowSupportColumns.some((c) => {
-        const along = alongCoordOnAxis(x, c.x, c.y, CL_OVERLAP_TOL_MM);
+        const along = alongCoordOnAxis(x, c.axisX, c.axisY, CL_OVERLAP_TOL_MM);
         return along != null && Math.abs(along - endCL.effectiveValue) < CL_OVERLAP_TOL_MM;
       });
       if (atBelowColumn) continue;
@@ -703,12 +748,14 @@ export function autoFillWoodBeamDepths(graph, project, belowColumns = []) {
   for (const beam of targets) {
     const endA = beam.clStart.effectiveValue, endB = beam.clEnd.effectiveValue;
     const lo = Math.min(endA, endB), hi = Math.max(endA, endB);
+    // AXIS（axisX/axisY）で支持点・荷重点を取る（3bと同じ理由。個別柱の偏心で支持区間の分け方が
+    // ずれないため）。
     const belowSupports = belowSupportColumns
-      .map(c => alongCoordOnAxis(beam, c.x, c.y, CL_OVERLAP_TOL_MM))
+      .map(c => alongCoordOnAxis(beam, c.axisX, c.axisY, CL_OVERLAP_TOL_MM))
       .filter(v => v != null && v >= lo && v <= hi);
     const supports = [endA, endB, ...belowSupports];
     const columnLoads = selfLoadColumns
-      .map(c => alongCoordOnAxis(beam, c.x, c.y, CL_OVERLAP_TOL_MM))
+      .map(c => alongCoordOnAxis(beam, c.axisX, c.axisY, CL_OVERLAP_TOL_MM))
       .filter(v => v != null && v >= lo && v <= hi);
     const crossLoads = crossingBeamLoadCoords(hostMap.get(beam.id) ?? []);
     const floorLoads = hostFloorMap.get(beam.id) ?? [];

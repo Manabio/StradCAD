@@ -5,7 +5,7 @@ import {
   FRAMING_MONO_COLOR, COLUMN_FALLBACK_SIZE_MM,
   framingColumnGroups, framingColor, framingColorOverride,
   columnSectionSize, columnCrossPointsLocal, COLUMN_CROSS_OVERHANG_RATIO, framingColumnLineWeight, showMemberTags, beamDepthMarks,
-  sillBandSpec, pickMembersOnFigure, columnListCategory,
+  sillBandSpec, pickMembersOnFigure, columnListCategory, pickColumnsOnFigure, columnRenderSize,
 } from './framingDrawing.js';
 import { rulesFor, TRADITIONAL_WOOD_STRUCTURE, UNSPECIFIED_STRUCTURE } from './structureRules.js';
 import { STRUCTURES } from './structuralClassification.js';
@@ -110,6 +110,21 @@ test('pickMembersOnFigure: showMemberTagsの否定（在来木造はtrue＝タ�
 test('【失敗系】pickMembersOnFigure: drawing自体が未知値・{}・undefinedはfalse（showMemberTagsの既定showの否定）', () => {
   for (const drawing of [{}, undefined, { memberTags: 'unknown' }, { memberTags: 'show' }]) {
     assert.equal(pickMembersOnFigure(drawing), false);
+  }
+});
+
+// ---- ステップ4「柱は共通と個別指定の2層」: 柱タップ（自階柱□のみ）の有効化判定 ----
+
+test('pickColumnsOnFigure: 在来木造はtrue（自階柱□のタップで共通カードを開ける）、他の主構造はfalse', () => {
+  assert.equal(pickColumnsOnFigure(rulesFor(TRADITIONAL_WOOD_STRUCTURE).drawing), true);
+  for (const key of NON_TRADITIONAL_KEYS) {
+    assert.equal(pickColumnsOnFigure(rulesFor(key).drawing), false, key);
+  }
+});
+
+test('【失敗系】pickColumnsOnFigure: drawing自体が未知値・{}・undefinedはfalse', () => {
+  for (const drawing of [{}, undefined, { memberTags: 'unknown', framingColumnSymbol: 'unknown' }, { memberTags: 'show', framingColumnSymbol: 'section' }]) {
+    assert.equal(pickColumnsOnFigure(drawing), false);
   }
 });
 
@@ -238,6 +253,21 @@ test('【失敗系】断面がカタログに無い柱は120角にフォール�
     const h = COLUMN_FALLBACK_SIZE_MM / 2;
     const corners = new Set([`${-h},${-h}`, `${h},${h}`, `${-h},${h}`, `${h},${-h}`]);
     assert.deepEqual(points, corners, '比率1の対角線2本の端点は矩形の4隅と一致するはず（式の写経ではなく意図の検査）');
+  }
+});
+
+// ---- QA指摘8・ステップ4: columnRenderSize（柱タップのhitStrokeWidthが常に正であることの土台） ----
+
+test('columnRenderSize: 矩形（幅≠成）はMath.max(width, height)、正方形は一辺と同じ', () => {
+  assert.equal(columnRenderSize({ sectionDefId: 'WOOD-120x330' }), 330, '幅120×成330は大きい方の330');
+  assert.equal(columnRenderSize({ sectionDefId: 'WOOD-120x120' }), 120, '正方形は一辺と同じ');
+});
+
+test('【失敗系・QA指摘8】columnRenderSize: 断面がカタログに無い柱はCOLUMN_FALLBACK_SIZE_MM（120）にフォールバックし、常に正の値を返す', () => {
+  for (const column of [{ sectionDefId: 'no-such' }, { sectionDefId: undefined }, {}]) {
+    const size = columnRenderSize(column);
+    assert.equal(size, COLUMN_FALLBACK_SIZE_MM, `カタログ外は${COLUMN_FALLBACK_SIZE_MM}角にフォールバックするはず: ${JSON.stringify(column)}`);
+    assert.ok(size > 0, 'hitStrokeWidth（MEMBER_HIT_PX/scaleとのMath.max）の算出元として常に正でなければならない');
   }
 });
 

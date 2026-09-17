@@ -756,19 +756,26 @@ test('recomputeStructuralComposition【実機再々QA指摘3】: 3階建て（be
 
 // ---- columnSetSignature（下階柱集合の変更検知。ユーザー裁定2026-09-16「分割後に正しい距離を
 // 持つことが最適解」の実装で使う純関数）----
+// AXIS（axisX/axisY。偏心を含まない）を読む（B-1・個別柱の偏心。.claude/structural-model.md参照）。
 
 test('columnSetSignature: 順序・浮動小数の丸め誤差(0.1mm未満)に依存せず同一シグネチャになる', () => {
-  const a = [{ x: 0, y: 0, role: 'standard' }, { x: 1820.02, y: 0, role: 'standard' }];
-  const b = [{ x: 1820.04, y: 0, role: 'standard' }, { x: 0, y: 0, role: 'standard' }]; // 順序違い・0.1mm未満の誤差
+  const a = [{ axisX: 0, axisY: 0, role: 'standard' }, { axisX: 1820.02, axisY: 0, role: 'standard' }];
+  const b = [{ axisX: 1820.04, axisY: 0, role: 'standard' }, { axisX: 0, axisY: 0, role: 'standard' }]; // 順序違い・0.1mm未満の誤差
   assert.equal(columnSetSignature(a), columnSetSignature(b));
 });
 
 test('columnSetSignature【失敗系】: 柱の位置・役割・本数のいずれかが変わると別シグネチャになる', () => {
-  const base = [{ x: 0, y: 0, role: 'standard' }];
-  assert.notEqual(columnSetSignature(base), columnSetSignature([{ x: 100, y: 0, role: 'standard' }]), '位置が変わると別シグネチャ');
-  assert.notEqual(columnSetSignature(base), columnSetSignature([{ x: 0, y: 0, role: 'foundation' }]), '役割が変わると別シグネチャ');
+  const base = [{ axisX: 0, axisY: 0, role: 'standard' }];
+  assert.notEqual(columnSetSignature(base), columnSetSignature([{ axisX: 100, axisY: 0, role: 'standard' }]), '位置が変わると別シグネチャ');
+  assert.notEqual(columnSetSignature(base), columnSetSignature([{ axisX: 0, axisY: 0, role: 'foundation' }]), '役割が変わると別シグネチャ');
   assert.notEqual(columnSetSignature(base), columnSetSignature([]), '柱が増減すると別シグネチャ');
   assert.equal(columnSetSignature([]), columnSetSignature([]), '空集合同士は同一シグネチャ');
+});
+
+test('columnSetSignature【B-1】: ACTUAL（x/y。偏心を含む）が異なっても AXIS（axisX/axisY）が同じなら同一シグネチャ（個別柱の偏心だけの変化は再計算トリガーにしない）', () => {
+  const a = [{ axisX: 0, axisY: 0, x: 0, y: 0, role: 'standard' }];
+  const b = [{ axisX: 0, axisY: 0, x: 7.5, y: -7.5, role: 'standard' }]; // 偏心が付いてもAXISは不変
+  assert.equal(columnSetSignature(a), columnSetSignature(b));
 });
 
 // ---- ユーザー裁定2026-09-16「分割後に正しい距離を持つことが最適解」: 突入時に下階へ3b柱が

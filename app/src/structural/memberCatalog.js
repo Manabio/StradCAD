@@ -293,10 +293,12 @@ export function memberGroupKey(entity, mapName, rules, standardSection = rules.d
 
 /** 採番の並び順キー（memberNumbering.compareGroupsDesc がsizeKey・出現階に次ぐタイブレークに使う）。
  *  個別採番対象は位置（柱＝座標(x,y)・梁＝軸方向→軸座標→区間下端）で決める——idに依存しないため、
- *  部材の再生成でidが変わっても番号が安定する。非個別・非梁・非柱は空配列（従来どおりsignatureでタイブレーク）。 */
+ *  部材の再生成でidが変わっても番号が安定する。非個別・非梁・非柱は空配列（従来どおりsignatureでタイブレーク）。
+ *  柱はAXIS（axisX/axisY。偏心を含まない）で取る——個別柱の偏心（woodColumnOffset.js）の値が変わっても
+ *  グリッド位置は変わらないため、無関係な採番順の揺れを避ける（.claude/structural-model.md参照）。 */
 export function memberOrderKey(entity, mapName, rules, standardSection = rules.defaultSections.beam) {
   if (!isIndividuallyNumbered(entity, mapName, rules, standardSection)) return [];
-  if (mapName === 'columnMap') return [entity.x ?? 0, entity.y ?? 0];
+  if (mapName === 'columnMap') return [entity.axisX ?? 0, entity.axisY ?? 0];
   return [entity.isVertical ? 1 : 0, entity.axisValue ?? 0, Math.min(entity.coord1 ?? 0, entity.coord2 ?? 0)];
 }
 

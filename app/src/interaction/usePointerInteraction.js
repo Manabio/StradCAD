@@ -21,7 +21,7 @@ import { CONTEXT, detectContext, buildMenuState } from './menuItems.js';
 import { centerLineKind, CenterLineType } from '@core';
 import { roundAbsToStep, calcStep } from '../renderer/clMoveMath.js';
 import { findHostWall } from '../openings/openingGeometry.js';
-import { beamAtKonvaTarget, shouldFireMemberTap, isBlankTapTarget } from './beamTap.js';
+import { beamAtKonvaTarget, columnAtKonvaTarget, shouldFireMemberTap, isBlankTapTarget } from './beamTap.js';
 import {
   openingMoveRange, openingSnapCandidates, resolveOpeningRefOffset, snapIndicatorAlong,
   elevationDragAlong, previewDxLocalMm,
@@ -778,7 +778,12 @@ export function usePointerInteraction({
       busy: !!drawDownRef.current || !!modeRef.current?.moveState || !!modeRef.current?.drawState,
     })) {
       const beam = beamAtKonvaTarget(e.target, graph);
+      // 柱タップ（自階柱□。ステップ4「柱は共通と個別指定の2層」）は梁タップと同じ流儀
+      // （interaction/beamTap.js columnAtKonvaTarget）——下階柱の×はlistening:falseのままなので
+      // ここに来るのは自階柱□だけ（StructuralLayer.jsxのpick propで在来木造のみ有効化）。
+      const column = columnAtKonvaTarget(e.target, graph);
       if (beam) onMemberClick(beam, 'beamMap');
+      else if (column) onMemberClick(column, 'columnMap');
       // 空白タップ（Stage 自身が target＝どの部材・タグにも当たらない）は選択解除。構造モードには
       // 留まる（ユーザー裁定2026-09-17）。部材タグ（MemberTagLayer）のクリックは target がタグ図形に
       // なるためここには来ない＝タグクリックで開いたカードを同じタップで閉じてしまわない。

@@ -80,10 +80,29 @@ export function pickMembersOnFigure(drawing) {
   return !showMemberTags(drawing);
 }
 
+/** 伏図の柱タップ（自階柱□をタップして構造リストの共通カードを開く。ステップ4「柱は共通と個別指定の
+ *  2層」）を有効にするか。梁タップ（pickMembersOnFigure）が有効な主構造（在来木造のみ）で、かつ
+ *  柱一覧の供給元が自階柱□（columnListCategory）のときだけ true。下階柱×は対象外
+ *  （renderer/StructuralLayer.jsx が category==='columnMapSelf' のグループにだけこの結果を渡す）。 */
+export function pickColumnsOnFigure(drawing) {
+  return pickMembersOnFigure(drawing) && columnListCategory(drawing) === 'columnMapSelf';
+}
+
 /** 柱の断面外形寸法(mm)。カタログ未登録は COLUMN_FALLBACK_SIZE_MM 角にフォールバックする。 */
 export function columnSectionSize(column) {
   const sec = findSectionEntry(column.sectionDefId);
   return { width: sec?.width ?? COLUMN_FALLBACK_SIZE_MM, height: sec?.height ?? COLUMN_FALLBACK_SIZE_MM };
+}
+
+/** 柱の実描画サイズ(mm)。LODに依らず常にsectionDefIdのカタログ実寸（矩形等で幅・高さが異なる場合は
+ *  大きい方、カタログ未登録はCOLUMN_FALLBACK_SIZE_MM）。renderer/StructuralLayer.jsx・
+ *  renderer/MemberTagLayer.jsxの両方がこれだけを参照する単一の実装——柱記号の対角線が使う辺長と
+ *  タグのマージン・柱タップの当たり判定幅（hitStrokeWidth）が同じ辺長を見るようにするため
+ *  （QA指摘・ステップ4: node:testから直接importして検証できるよう、react-konvaを持たない
+ *  この純モジュール側に置く。renderer/StructuralLayer.jsxは本関数を re-export するだけ）。 */
+export function columnRenderSize(column) {
+  const { width, height } = columnSectionSize(column);
+  return Math.max(width, height);
 }
 
 /** 下階柱の×が断面□からはみ出す比率（半幅・半成に掛ける倍率。1 なら×の端点は□の4隅ちょうど）。

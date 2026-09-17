@@ -33,8 +33,9 @@ import { MemberLayoutStudy } from './sectionFigure/MemberLayoutStudy.jsx';
 import { isStudyEnabled, layoutScopeFor, getLayoutOverrides, applyLayoutOverrides } from './sectionFigure/layoutStudy.js';
 import { isFoundationPlane } from './drawingDesignation.js';
 import { structureHasMemberKind, memberKindOf, MEMBER_KIND, FIGURE_TYPE } from './structuralClassification.js';
-import { foundationOptionsFor, rulesFor, woodColumnSectionId, woodColumnWidthMm } from './structureRules.js';
+import { foundationOptionsFor, rulesFor, woodColumnSectionId, woodColumnWidthMm, columnWidthMm } from './structureRules.js';
 import { columnListCategory } from './framingDrawing.js';
+import { resolveColumnWidthEdit, normalizeColumnOverridesToFloor, allowedColumnWidths, isUpsizedWidth } from './columnWidthScope.js';
 
 // この map グループが、その階・主構造で構造リストに出し得る部材種別（空グループの表示可否判定用）。
 // 梁グループだけは自階が基礎面か否かで「基礎梁」⇄「梁」に分かれる（自階＝床下材の供給グラフで判定）。
@@ -313,6 +314,22 @@ export const MemberListTab = observer(({ composition, project, focusRequest, onT
   const selfStructure = selfColumnGraph ? (selfColumnGraph.structureOverride ?? project.structuralInfo?.mainStructure) : null;
   const woodColumnWidthGraph = (!isRoofFigure && selfColumnGraph && rulesFor(selfStructure).columnSizing === 'fixed') ? selfColumnGraph : null;
 
+  // 個別指定直後のカード追従（QA裁定・ステップ4）: 共通カードの「この柱を個別指定」は
+  // onStructureChanged（recomputeStructuralComposition。非同期）を経由するため、呼び出した直後には
+  // 新タグがまだ確定していない——直後にsizeKey（断面積）で開くカードを決め打ちすると、選んだ幅が
+  // 共通より大きいか小さいかでC1/C2が入れ替わり「どのカードが開くか反転する」実機不具合になる
+  // （QA実測。memberNumbering.test.jsに再現テストあり）。裁定＝タップした柱そのものの新しいカードへ
+  // 追従する——setPendingFocusId(column.id)を「待ち」として持ち、observerの再レンダーで
+  // selfColumnGraph.columnMap.get(id)?.memberNoを読む（MobXの観測対象なので再計算のたびに
+  // 再レンダーされる）。タグが確定（non-null）したらそのタグのカードを開いてpendingを消す。
+  const [pendingFocusId, setPendingFocusId] = useState(null);
+  const pendingFocusMemberNo = pendingFocusId ? (selfColumnGraph?.columnMap?.get(pendingFocusId)?.memberNo ?? null) : null;
+  useEffect(() => {
+    if (pendingFocusId == null || pendingFocusMemberNo == null) return;
+    setExpandedKey(`columnMap:${pendingFocusMemberNo}`);
+    setPendingFocusId(null);
+  }, [pendingFocusId, pendingFocusMemberNo]);
+
   // 柱グループの一覧ソース（ステップ3・2026-09-17裁定「柱一覧は在来だけ自階柱□」）。columnMap以外の
   // グループ（footingMap/beamMap/slabMap/wallMap）は自身のmapNameがそのままカテゴリ名（従来どおり）。
   // selfStructure（自階の実効主構造。上のwoodColumnWidthGraphと同じ解決）で判定する——柱グループの
@@ -463,6 +480,7 @@ export const MemberListTab = observer(({ composition, project, focusRequest, onT
               onExpandKey={setExpandedKey}
               onRequestDelete={(ids, label) => setDeleteConfirm({ graph: g, mapName: group.mapName, ids, label })}
               onStructureChanged={onStructureChanged}
+              onPendingFocus={setPendingFocusId}
               focusRequest={focusRequest}
               onToast={onToast}
               mergeModeActiveAnywhere={!!mergeState}
@@ -559,10 +577,17 @@ const FoundationTypeSelect = observer(({ project, structure }) => {
 // 持たない（QA指摘: 採番・undoの仕組みを主構造変更と二重に持たない）。壁はその場で作り直さない——鍵
 // （finish/wallFreshnessKey.js の col=）に柱寸が乗るため、次の境界（仕上げ脱出／構造脱出／読込み）で
 // refreshWallsAllFloors が conformWoodBacking とともに再生成する（既存の鮮度キー設計）。
+// QA指摘2026-09-17: 全体（階の値）を変えたとき、既存の個別指定と偶然同値になった柱を放置すると
+// 「個別指定＝階の値と同値」の禁止状態（.claude/structural-model.md参照）が復活する——
+// normalizeColumnOverridesToFloor（columnWidthScope.js）で同値の個別指定をnull（共通）へ正規化する
+// （ColumnWidthScopeSelectのfloor分岐と対になる処理。二重実装を避けるため共通の純関数を呼ぶ）。
 const WoodColumnWidthSelect = observer(({ graph, project, onStructureChanged }) => {
   const value = woodColumnWidthMm(graph, project);
   function handleChange(width) {
-    onStructureChanged(() => { graph.setWoodColumnWidthMm(width); });
+    onStructureChanged(() => {
+      graph.setWoodColumnWidthMm(width);
+      normalizeColumnOverridesToFloor(graph, width);
+    });
   }
   return (
     <select
@@ -575,25 +600,93 @@ const WoodColumnWidthSelect = observer(({ graph, project, onStructureChanged }) 
   );
 });
 
-// 個別指定された在来木造の柱の柱寸セレクト（ステップ3）。WoodColumnWidthSelect（各階柱寸法欄・階の値）
-// とはシグネチャが異なる別コンポーネント（共通化しない。memberCatalog.test.jsが既存シグネチャを固定）。
-// 値・書き先は部材個体（members[*].woodColumnWidthMm）——変更は主構造変更と同じ経路（onStructureChanged）
-// に乗せる（幅変更・共通に戻すの両方が同じ経路。WoodColumnWidthSelectと同じ規律）。
-// QA裁定（個別指定は階の値と排他）: 選んだ幅が階の値（woodColumnWidthMm(graph, project)）と同じなら
-// null（共通へ戻す）を書く——「個別指定＝階の値と同値」を存在しない状態にする。台帳に手動タグ（grp.join）
-// を持つ共通柱グループへ、階の値と同幅の個別柱が signature 一致で conformToLedger に吸収され1本1タグが
-// 消える実測不具合の再発防止（isIndividuallyNumbered はカタログ幅か否かだけを見るため、この排他は
-// ここで保証する）。
-const MemberColumnWidthSelect = observer(({ members, graph, project, readOnly, onStructureChanged }) => {
-  const value = members[0]?.woodColumnWidthMm ?? '';
+// 在来木造の柱カード（共通・個別とも）の柱寸セレクト（ステップ3→ステップ4で適用範囲2択「全体／この部材」
+// に統合。ユーザー裁定2026-09-17）。WoodColumnWidthSelect（各階柱寸法欄・階の値専用）とはシグネチャが
+// 異なる別コンポーネント（共通化しない。memberCatalog.test.jsが既存シグネチャを固定）。
+// `scope`引数は呼び出し元（MemberCard）が柱カード専用state`columnScope`（'all'|'entity'のみ）から渡す
+// ——分割UIの`scope`（'all'|'floor'|'entity'。commitScopedEdit/splitPreviewが読む）とは別state
+// （QA指摘・回帰: 共有すると柱カードで上端/下端レベル等を編集したときsplit系へ迷い込む。
+// structural-model.md「柱の全体／この部材ボタン」節参照）。
+// scope='all'は階の値（各階柱寸法欄）、scope='entity'は`focusedMember`引数（entity scopeの対象。
+// 呼び出し側のMemberCardがcolumnEntityTarget＝共通カードはタップした柱・個別カードはタップした柱
+// ??自分自身、として解決してから渡す——本コンポーネント自身は「対象が誰か」を判定しない）の個別指定を
+// 表示・編集する（個別カードで scope='all' を選ぶと全体＝階の値を変える、という裁定どおりの挙動になる）。
+// 書き込み先・排他ルール（選んだ幅が階の値と同じなら null＝共通へ戻す。未知のscopeはtarget:null）の
+// 決定は resolveColumnWidthEdit（structural/columnWidthScope.js の純関数。契約は変えず、渡す
+// `focusedMember`引数の値を呼び出し側が決める）に集約し、二重実装を避ける。target===nullなら
+// onPendingFocus/onStructureChangedのどちらも呼ばない早期returnにする（QA指摘・失敗系の固定）。
+// 変更は主構造変更と同じ経路（onStructureChanged）に乗せる（WoodColumnWidthSelectと同じ規律）。
+// entity書き込み時は onPendingFocus（タップした柱の新しいカードへ追従。QA裁定。個別カードの自分自身
+// フォールバック時も同じ経路で同一idを渡すため無害）を先に呼ぶ。floor書き込み時は
+// normalizeColumnOverridesToFloor（新しい階の値と偶然同値になった個別指定をnullへ正規化。QA指摘
+// 2026-09-17: 「個別＝階の値」禁止状態の復活防止。WoodColumnWidthSelectと対になる処理）を続けて呼ぶ。
+// allowUpsize（ユーザー裁定2026-09-17・B-1「柱寸アップ」）: scope='entity'のときだけ選択肢を
+// allowedColumnWidths(floorWidth, allowUpsize) で絞る（既定=階の値以下。チェック時は全件）。
+// scope='all'（各階柱寸法欄そのものを変える）は絞り込みの対象外＝常に全件のまま（柱寸アップの概念は
+// 「個別指定が階の値を超える」ときの話であり、階の値自体の選択肢を制限する理由が無い）。
+const ColumnWidthScopeSelect = observer(({ scope, focusedMember, graph, project, readOnly, allowUpsize = false, onStructureChanged, onPendingFocus }) => {
+  const floorWidth = woodColumnWidthMm(graph, project);
+  // scope='entity'の表示値は「その柱の解決値（個別 ?? 階）」。focusedMemberが無い（一覧から開いた等）
+  // 場合はentityボタン自体がdisabledのため到達しないが、安全側で階の値へフォールバックする。
+  const value = scope === 'entity' && focusedMember ? (focusedMember.woodColumnWidthMm ?? floorWidth) : floorWidth;
+  const disabled = readOnly || (scope === 'entity' && !focusedMember);
+  const options = scope === 'entity' ? allowedColumnWidths(floorWidth, allowUpsize) : WOOD_SQUARE_WIDTHS;
   function handleChange(width) {
-    const commonWidth = woodColumnWidthMm(graph, project);
-    const next = width === commonWidth ? null : width;
-    onStructureChanged(() => { for (const m of members) m.setField('woodColumnWidthMm', next); });
+    const { target, value: next } = resolveColumnWidthEdit({ scope, focusedMember, floorWidth, width });
+    if (target === null) return; // 書き込み先が無い（focusedMember不在・未知のscope）→何もしない
+    if (target === 'floor') {
+      onStructureChanged(() => {
+        graph.setWoodColumnWidthMm(next);
+        normalizeColumnOverridesToFloor(graph, next);
+      });
+    } else if (target === 'member') {
+      onPendingFocus?.(focusedMember.id);
+      onStructureChanged(() => { focusedMember.setField('woodColumnWidthMm', next); });
+    }
   }
   return (
-    <select value={value} onChange={e => handleChange(Number(e.target.value))} disabled={readOnly} style={{ ...selectStyle, cursor: 'pointer' }}>
-      {WOOD_SQUARE_WIDTHS.map(w => <option key={w} value={w}>{w}角</option>)}
+    <select value={value} onChange={e => handleChange(Number(e.target.value))} disabled={disabled} style={{ ...selectStyle, cursor: 'pointer' }}>
+      {options.map(w => <option key={w} value={w}>{w}角</option>)}
+    </select>
+  );
+});
+
+// 個別柱の偏心方向（woodOffsetSide。ユーザー裁定2026-09-17・B-1）を軸ごとに選ばせるセレクト。
+// 真実はwoodOffsetSideのみで、eccentricity{x,y}はconformWoodColumnEccentricity（woodAutoFill.js）が
+// 導出して書く派生値のためここでは触らない。表示条件・配置は呼び出し側（MemberCard）が持つ
+// （woodColumnCard && columnEntityTarget && columnScope==='entity' && 解決柱寸 !== floorWidth）。
+// 選択肢の順序「自動／±面そろえ／中央」→値 undefined|-1|+1|0 は両軸共通（y軸下向き正のため上=-1）。
+const AXIS_OFFSET_OPTIONS = {
+  x: [
+    { value: undefined, label: '自動' },
+    { value: -1, label: '左面そろえ' },
+    { value: 1, label: '右面そろえ' },
+    { value: 0, label: '中央' },
+  ],
+  y: [
+    { value: undefined, label: '自動' },
+    { value: -1, label: '上面そろえ' },
+    { value: 1, label: '下面そろえ' },
+    { value: 0, label: '中央' },
+  ],
+};
+const offsetSelectValue = (v) => (v === undefined ? 'auto' : String(v));
+const parseOffsetSelectValue = (raw) => (raw === 'auto' ? undefined : Number(raw));
+
+const ColumnOffsetAxisSelect = observer(({ axis, target, readOnly, onStructureChanged, onPendingFocus }) => {
+  const current = target.woodOffsetSide?.[axis];
+  function handleChange(raw) {
+    const value = parseOffsetSelectValue(raw);
+    const next = { ...(target.woodOffsetSide ?? {}) };
+    if (value === undefined) delete next[axis]; else next[axis] = value; // 「自動」はキー削除
+    onPendingFocus?.(target.id);
+    onStructureChanged(() => target.setField('woodOffsetSide', next));
+  }
+  return (
+    <select value={offsetSelectValue(current)} onChange={e => handleChange(e.target.value)} disabled={readOnly} style={{ ...selectStyle, cursor: 'pointer' }}>
+      {AXIS_OFFSET_OPTIONS[axis].map(opt => (
+        <option key={offsetSelectValue(opt.value)} value={offsetSelectValue(opt.value)}>{opt.label}</option>
+      ))}
     </select>
   );
 });
@@ -604,7 +697,7 @@ const MemberColumnWidthSelect = observer(({ members, graph, project, readOnly, o
 const MemberGroupSection = observer(({
   group, graph, composition, project, structure, figureType, readOnly, expandedKey, onToggle, onExpandKey, onRequestDelete, focusRequest, onToast,
   mergeModeActiveAnywhere, mergeActive, mergeAnchorTag, mergeAnchorMaterialType, mergeSelectedTags, onStartMerge, onToggleMergeTag,
-  onSelectMembers, onStructureChanged,
+  onSelectMembers, onStructureChanged, onPendingFocus,
 }) => {
   // 構造種別が持たない部材種別（×）の個体は一覧から除外する（footing→ベース/柱脚、beam→梁/基礎梁を role で割る）。
   // structure=null（主構造未設定）は素通し。memberKindOf が null を返す表外部材（軒桁・杭）は structureHasMemberKind=true で残る。
@@ -668,6 +761,7 @@ const MemberGroupSection = observer(({
             onStartMerge={() => onStartMerge(tag, members[0].materialType)}
             onSelectMembers={onSelectMembers}
             onStructureChanged={onStructureChanged}
+            onPendingFocus={onPendingFocus}
           />
         );
       })}
@@ -681,7 +775,7 @@ const MemberGroupSection = observer(({
 const MemberCard = observer(({
   members, group, graph, composition, project, readOnly, isExpanded, onToggle, onExpandKey, onDelete, focusRequest, onToast,
   mergeModeActiveAnywhere, mergeActive, isMergeAnchor, isMergeSelected, mergeAnchorMaterialType, onToggleMerge, onStartMerge,
-  onSelectMembers, onStructureChanged,
+  onSelectMembers, onStructureChanged, onPendingFocus,
 }) => {
   // 展開中は自分の members（同一タグの全部材）を描画エリアの選択状態として報告する（ユーザー裁定2026-09-16
   // 「構造リストで材を選択すると描画エリアの当該材が選択状態に」）。members 配列は親の再計算で毎回新しい
@@ -732,13 +826,65 @@ const MemberCard = observer(({
   // mergeGroups側にも同じ防御があるが、UIでは選択自体をさせない——チェックボックス非表示＋トグル無効）。
   const isMergeSelectable = !mergeActive || isMergeAnchor || representative.materialType === mergeAnchorMaterialType;
 
+  // 図面上で部材タグをタップして開いた場合のみ「この部材」の対象が定まる（entityId が来る）。
+  // QA指摘7: entityIdだけでなくmapNameも一致させる——別mapName（例:beamMap）のfocusRequestが
+  // たまたま同じidを持つ他分類の部材とすれ違って一致してしまう事故を防ぐ（idはmapMapごとの
+  // 別名前空間のため理論上の懸念だが、突き合わせ条件は明示しておく）。
+  const focusedMember = (focusRequest?.mapName === group.mapName && focusRequest?.entityId)
+    ? members.find(m => m.id === focusRequest.entityId) ?? null
+    : null;
+  // 柱カードの「この部材」対象（コーディネーター指示2026-09-17・ステップ3退行の修正）。
+  // 個別カード（isIndividualColumn。members は常に1本＝自分自身）は一覧から開いても自身の柱寸を
+  // 編集できなければならない（ステップ3では個別カードに常に自身の柱寸セレクトがあった）——
+  // focusedMember（タップした柱）があればそれ、無ければ自分自身（representative）にフォールバックする。
+  // 共通カードは従来どおり focusedMember のみ（無ければ「この部材」はdisabledのまま。共通カードの
+  // members は同一タグの複数の共通柱を束ねており「自分自身」が1本に定まらないため対象にできない）。
+  const columnEntityTarget = isIndividualColumn ? (focusedMember ?? representative) : focusedMember;
+
   // ---- 適用範囲（分割UI。design-member-numbering-ui.md セクション2）----
   // スコープは sticky にしない: カード展開のたびに（＝isExpanded false→true）、
   // またフォーカス変更（新しいタップ、focusRequestの参照が変わる）のたびに「全体」へ戻す。
+  // この`scope`はcommitScopedEdit/resolveSplitTargets/splitPreview（番号の分割UI）専用——
+  // 柱カードの適用範囲2択（下記`columnScope`）とは完全に別state（QA指摘・回帰の修正2026-09-17）:
+  // かつて柱カードの2択もこの`scope`を共有していたため、柱カードで「この部材」を選んだ状態のまま
+  // 上端/下端レベル（MemberFieldInput→commitScopedEdit）を編集すると、一覧から開いた個別カードでは
+  // resolveSplitTargetsが素のfocusedMember(null)を見て編集が無言で破棄され、タップで開いたカードでは
+  // 柱の柱寸とは無関係な番号分割ダイアログが出てしまっていた。柱カードは`hideScopeAndMerge`で
+  // この分割UI自体を表示しないため、`scope`は柱カードでは常に既定の'all'のまま変化しない
+  // （下のcommitScopedEdit/splitPreviewにも`woodColumnCard`なら常に'all'扱いにする防御を重ねてある）。
   const [scope, setScope] = useState('all'); // 'all' | 'floor' | 'entity'
   useEffect(() => {
     if (isExpanded) setScope('all');
   }, [isExpanded, focusRequest]);
+
+  // 柱カード専用の適用範囲state（'all'|'entity'。ユーザー裁定2026-09-17「柱の『全体』『この部材』
+  // ボタンを復活」）。上の`scope`（分割UI専用）と共有しない——2ボタン・ColumnWidthScopeSelect・
+  // この既定effectだけが読み書きする。個別カードは`columnEntityTarget`が自分自身に常にフォールバック
+  // するため既定は常に'entity'、共通カードはタップして開いたときだけ最初から「この部材」を選んだ
+  // 状態にする。梁・非在来カードはこのstate自体を使わない。
+  const [columnScope, setColumnScope] = useState('all'); // 'all' | 'entity'
+  useEffect(() => {
+    if (isExpanded) setColumnScope(woodColumnCard && columnEntityTarget ? 'entity' : 'all');
+  // 依存配列はトリガー（展開・フォーカス変更）だけに絞る意図的な設計——woodColumnCard/columnEntityTargetは
+  // 判定時点の最新値を読むだけで、これら自体の変化で再発火させたくない（AxisFaceInput.jsxと同じ規律）。
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isExpanded, focusRequest]);
+
+  // 「柱寸アップ」チェック（階の柱寸より大きい柱を許可。ユーザー裁定2026-09-17・B-1）。card-local
+  // state（保存しない）——columnScopeと同じくカード展開・フォーカス変更のたびに未チェックへ戻す。
+  // 個別柱が既に階の値より大きい柱寸（forcedUp）を持つ場合はチェックを外せない（先に柱寸を階の値以下へ
+  // 戻す操作が必要——外すと選択肢からその値が消え、表示中の値と選択肢が矛盾する事故になるため）。
+  const [upChecked, setUpChecked] = useState(false);
+  useEffect(() => {
+    if (isExpanded) setUpChecked(false);
+  }, [isExpanded, focusRequest]);
+  const floorWidthForCard = woodColumnCard ? woodColumnWidthMm(graph, project) : null;
+  const forcedUp = woodColumnCard && isUpsizedWidth(columnEntityTarget?.woodColumnWidthMm, floorWidthForCard);
+  const allowUpsize = upChecked || forcedUp;
+  // 偏心方向コントロールの表示条件（架構決定E）: 柱カード・「この部材」・解決柱寸が階の値と異なるとき
+  // だけ出す（共通柱寸＝floorWidthなら偏心自体が発生しないため出す意味が無い）。
+  const showColumnOffsetControls = woodColumnCard && columnScope === 'entity' && !!columnEntityTarget
+    && columnWidthMm(columnEntityTarget, graph, project) !== floorWidthForCard;
 
   const floorLabel = makeFloorName(graph.plane.startFloor, graph.plane.stories ?? 1);
   // このグループが複数階にまたがるか（project.memberNumberIndex の派生キャッシュを読む。
@@ -753,8 +899,6 @@ const MemberCard = observer(({
   useEffect(() => {
     if (scope === 'floor' && !isMultiFloor) setScope('all');
   }, [scope, isMultiFloor]);
-  // 図面上で部材タグをタップして開いた場合のみ「この部材」の対象が定まる（entityId が来る）。
-  const focusedMember = focusRequest?.entityId ? members.find(m => m.id === focusRequest.entityId) ?? null : null;
 
   const [splitConfirm, setSplitConfirm] = useState(null); // { message, onConfirm } | null
   // 個別指定の柱寸を共通へ戻す確認（ステップ3）。onRequestDelete（部材そのものの削除）は呼ばない
@@ -784,16 +928,24 @@ const MemberCard = observer(({
     );
     return { count: targetMembers.length, tag };
   }
-  const splitPreview = (!readOnly && scope !== 'all') ? computeSplitPreview(resolveSplitTargets()) : null;
+  // 在来木造の柱カード（woodColumnCard）は分割UI自体を表示しない（hideScopeAndMerge）ため、`scope`は
+  // 常に既定の'all'のまま変化しないはずだが、QA指摘・回帰の修正2026-09-17として安全側の防御も重ねる
+  // ——柱カードなら`scope`の値に関わらず常にsplitPreview自体を計算しない（!woodColumnCardガード）。
+  const splitPreview = (!readOnly && !woodColumnCard && scope !== 'all') ? computeSplitPreview(resolveSplitTargets()) : null;
 
   // 全てのフィールド編集入口（setField/断面変更/図上寸法編集）が通る単一の分岐点。
   // scope==='all' は現行どおり members 全員へ即時ミューテート（分割なし）。
   // scope!=='all' は対象部材にだけ値を先に適用してから ConfirmDialog を出す——
   // キャンセル時は serializeGraph の before スナップショットへ復元し、編集自体を破棄する
   // （スコープ選択は維持。design-member-numbering-ui.md 2.5「キャンセル時は編集自体を破棄しスコープは維持」）。
+  // woodColumnCardは分割経路へ絶対に入らない（QA指摘・回帰の修正2026-09-17）——柱カードは柱寸の
+  // 適用範囲2択（columnScope）を別stateで持つため、この`scope`は本来常に'all'のはずだが、上端/下端
+  // レベル等（MemberFieldInput→ここ）の編集で万一`scope`が'all'以外になっていても、柱カードだけは
+  // 常にmembers全員へ直接適用する（分割経路に迷い込むと、一覧から開いた個別カードでは対象0件で
+  // 編集が無言破棄され、タップで開いたカードでは柱寸と無関係な番号分割ダイアログが出てしまう）。
   function commitScopedEdit(mutateFn) {
     if (readOnly) return;
-    if (scope === 'all') { mutateFn(members); return; }
+    if (woodColumnCard || scope === 'all') { mutateFn(members); return; }
     const targetMembers = resolveSplitTargets();
     if (!targetMembers.length) return;
     const before = serializeGraph(graph);
@@ -1182,27 +1334,90 @@ const MemberCard = observer(({
               </div>
             </div>
           )}
-          {/* 在来木造の柱カード（ステップ3）: 共通は階の値の読み取り専用行、個別指定は柱寸セレクトを出す。
-              共通の表示値は解決子（階の値）ではなく実体の断面幅（findSectionEntry）——梁幅行（下の
-              isWoodFoundationBeam近傍）と同じ規約。conformWoodSections未実行の一時的な不一致状態でも
-              カードは実体の断面が持つ実際の値を偽りなく表示する（structural-model.md参照）。 */}
-          {woodColumnCard && !isIndividualColumn && (
-            <div style={cardRowStyle}>
-              <div style={cardFieldStyle}>
-                <span style={cardLabelStyle}>柱寸：</span>
-                <span style={{ fontSize: 12, color: '#64748b' }}>{findSectionEntry(representative.sectionDefId)?.width}mm角（各階柱寸法より）</span>
+          {/* 在来木造の柱カード（共通・個別とも）の適用範囲2択（ユーザー裁定2026-09-17「柱の『全体』
+              『この部材』ボタンを復活」）：「この階」は出さない（柱寸は階の値なので階＝全体）、
+              「統合…」も出さない（従来どおりhideScopeAndMerge。下のボタン行参照）。
+              全体＝共通柱（個別指定を除く柱）の柱寸＝各階柱寸法欄を変える、この部材＝columnEntityTarget
+              の個別指定を変える——共通カードはタップした柱（focusedMember）のみ（柱カード自身の members
+              は同一タグの複数の共通柱を束ねており「自分自身」が1本に定まらないため対象にできない、
+              無ければ「この部材」はdisabledのまま）。個別カードは members が常に1本＝自分自身のため、
+              focusedMemberが無ければ自分自身（representative）にフォールバックする（コーディネーター
+              指示2026-09-17・ステップ3退行の修正——ステップ3では個別カードに常に自身の柱寸セレクトが
+              あった。一覧から開いても自身の柱寸を編集できる必要がある）。
+              適用範囲の分割プレビュー（splitPreview）・commitScopedEditの分割ロジックは柱では使わない
+              ——柱寸は下の柱寸行が resolveColumnWidthEdit 経由の専用書き込みで完結する。この2ボタンは
+              分割UI専用の`scope`ではなく柱カード専用の`columnScope`を読み書きする（QA指摘・回帰の修正
+              2026-09-17。上のscope宣言のコメント参照）。 */}
+          {!readOnly && woodColumnCard && (
+            <div style={{ margin: '6px 0' }}>
+              <div style={{ fontSize: 11, color: '#64748b', marginBottom: 4 }}>適用範囲</div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                <ScopeButton active={columnScope === 'all'} onClick={() => setColumnScope('all')}>全体</ScopeButton>
+                <ScopeButton active={columnScope === 'entity'} disabled={!columnEntityTarget} onClick={() => setColumnScope('entity')}>この部材</ScopeButton>
               </div>
+              {columnScope === 'entity' && !columnEntityTarget && (
+                <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 2 }}>図面上で柱をタップして選択してください</div>
+              )}
             </div>
           )}
-          {isIndividualColumn && (
-            <div style={cardRowStyle}>
-              <div style={cardFieldStyle}>
-                <span style={cardLabelStyle}>柱寸：</span>
-                <div style={cardInputWrapStyle}>
-                  <MemberColumnWidthSelect members={members} graph={graph} project={project} readOnly={readOnly} onStructureChanged={onStructureChanged} />
+          {/* 柱寸行（共通・個別を1つに統合。ユーザー裁定2026-09-17）：columnScope='all'は階の値
+              （各階柱寸法欄）、columnScope='entity'はcolumnEntityTargetの解決値（個別 ?? 階）を
+              表示・編集する。書き込み先の決定は resolveColumnWidthEdit（structural/columnWidthScope.js）
+              に集約する（呼び出し側＝ここが「この部材」の対象＝columnEntityTargetを決め、純関数の契約
+              自体は「scope引数='all'|'entity'・focusedMember引数=entity scopeの対象」のまま変えない）。
+              「柱寸アップ」チェック（B-1・ユーザー裁定2026-09-17）は scope='entity' のときだけ意味を持つ
+              （scope='all'は各階柱寸法欄自体の編集で絞り込み対象外のため出さない）。個別柱が既に階の値
+              より大きい柱寸を持つ（forcedUp）ときはチェックを外せない（disabled固定＋理由をtitleで示す）。 */}
+          {woodColumnCard && (
+            <>
+              {!readOnly && columnScope === 'entity' && (
+                <div style={cardRowStyle}>
+                  <label
+                    style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 11, color: '#64748b', cursor: forcedUp ? 'default' : 'pointer' }}
+                    title={forcedUp ? '柱寸を階の値以下へ戻すと解除できます' : undefined}
+                  >
+                    <input type="checkbox" checked={allowUpsize} disabled={forcedUp} onChange={e => setUpChecked(e.target.checked)} />
+                    柱寸アップ（階の柱寸より大きい柱を許可）
+                  </label>
+                </div>
+              )}
+              <div style={cardRowStyle}>
+                <div style={cardFieldStyle}>
+                  <span style={cardLabelStyle}>柱寸：</span>
+                  <div style={cardInputWrapStyle}>
+                    <ColumnWidthScopeSelect
+                      scope={columnScope}
+                      focusedMember={columnEntityTarget}
+                      graph={graph}
+                      project={project}
+                      readOnly={readOnly}
+                      allowUpsize={allowUpsize}
+                      onStructureChanged={onStructureChanged}
+                      onPendingFocus={onPendingFocus}
+                    />
+                  </div>
                 </div>
               </div>
-            </div>
+              {/* 偏心方向（woodOffsetSide。B-1）: 解決柱寸が階の値と異なる（＝壁の中で偏心が発生する）
+                  「この部材」カードでのみ出す。真実はwoodOffsetSideのみ——eccentricity{x,y}は
+                  conformWoodColumnEccentricity（woodAutoFill.js）が導出して書く派生値のためここでは触らない。 */}
+              {showColumnOffsetControls && (
+                <div style={cardRowStyle}>
+                  <div style={cardFieldStyle}>
+                    <span style={cardLabelStyle}>偏心（左右）：</span>
+                    <div style={cardInputWrapStyle}>
+                      <ColumnOffsetAxisSelect axis="x" target={columnEntityTarget} readOnly={readOnly} onStructureChanged={onStructureChanged} onPendingFocus={onPendingFocus} />
+                    </div>
+                  </div>
+                  <div style={cardFieldStyle}>
+                    <span style={cardLabelStyle}>偏心（上下）：</span>
+                    <div style={cardInputWrapStyle}>
+                      <ColumnOffsetAxisSelect axis="y" target={columnEntityTarget} readOnly={readOnly} onStructureChanged={onStructureChanged} onPendingFocus={onPendingFocus} />
+                    </div>
+                  </div>
+                </div>
+              )}
+            </>
           )}
           {/* 断面形状表示（寸法線付き・パネル幅に自動縮尺）。図上の[寸法]クリックで直接編集。
               表示枠は部材分類ごとに異なる（FIGURE_FRAME_BY_MAP、柱は密集するため広め）。 */}

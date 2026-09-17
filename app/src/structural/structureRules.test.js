@@ -366,14 +366,19 @@ test('【不変条件】在来木造の柱寸（framing.columnSection）は stru
 // （!=/==）は columnWidthMm/columnSectionId の実装（structureRules.js）・isIndividuallyNumbered の実装
 // （memberCatalog.js）・フィールド定義（core/structuralEntities.js）以外に無い。graph自身の「各階柱寸法」
 // （graph.woodColumnWidthMm。ステップ4 C-2、別の値）は対象外（否定先読みで除外）。
+// structural/columnWidthScope.js（QA指摘2026-09-17）も許可先に追加した——resolveColumnWidthEdit
+// （個別指定を書く側。width===floorWidthの判定はcolumn.woodColumnWidthMmを直接読まないため元々対象外）
+// と対になる normalizeColumnOverridesToFloor（全体側の変更で「個別＝階の値」の禁止状態が復活しないよう
+// 既存の個別指定を正規化する側）が、同じ排他規則を反対方向から保証するために直接比較を要る。
 const FORBIDDEN_INDIVIDUAL_COLUMN_WIDTH_PATTERNS = [/(?<!graph)(?<!snapshot)\.woodColumnWidthMm\s*(?:!==|===|!=|==)/];
 const ALLOWED_INDIVIDUAL_COLUMN_WIDTH_FILES = new Set([
   'structural/structureRules.js',
   'structural/memberCatalog.js',
   'core/structuralEntities.js',
+  'structural/columnWidthScope.js',
 ]);
 
-test('【不変条件・ステップ3】柱の個別柱寸（column.woodColumnWidthMm）の直接比較は columnWidthMm/columnSectionId（structureRules.js）・isIndividuallyNumbered（memberCatalog.js）・定義（core/structuralEntities.js）以外に無い', () => {
+test('【不変条件・ステップ3】柱の個別柱寸（column.woodColumnWidthMm）の直接比較は columnWidthMm/columnSectionId（structureRules.js）・isIndividuallyNumbered（memberCatalog.js）・定義（core/structuralEntities.js）・normalizeColumnOverridesToFloor（columnWidthScope.js）以外に無い', () => {
   const offenders = scanOffenders(FORBIDDEN_INDIVIDUAL_COLUMN_WIDTH_PATTERNS, ALLOWED_INDIVIDUAL_COLUMN_WIDTH_FILES);
   assert.deepEqual(offenders, [], `column.woodColumnWidthMm の直接比較が残っている（columnWidthMm/columnSectionIdを使うこと）:\n${offenders.join('\n')}`);
 });
@@ -469,4 +474,51 @@ test('backingClass: 柱同寸の間柱（120/105/90 × 45/30）が材マスタ�
   assert.deepEqual(wood.slice(0, 5).map(m => m.name), ['□-120×45', '□-120×30', '□-105×45', '□-105×30', '□-90×90']);
   // コードは一意。
   assert.equal(new Set(MATERIALS.map(m => m.code)).size, MATERIALS.length, '材コードが重複している');
+});
+
+// ---- 不変条件（B-1・ユーザー裁定2026-09-17）: 在来木造の個別柱は壁の中で偏心する ----
+// 座標一致判定はAXIS（axisX/axisY。偏心を含まない）を使う——woodAutoFill.js の3b候補点・3c-2b分割点・
+// 3d支持点/荷重点、core/structuralEntities.js の beamEndColumnMatch:'coordinate' フォールバックの
+// いずれも c.x/c.y（ACTUAL。個別柱の偏心を含む）を直接読まない（.claude/structural-model.md
+// 「AXISで一致・ACTUALで止める」）。単語境界一致（\bc\.x\b/\bc\.y\b）でこの2ファイルだけを走査する
+// ——変数名`c`は柱を指す既存の慣習（両ファイルの3b/3c/3d・_columnAtEnd で共通）。
+test('【不変条件・B-1】woodAutoFill.js（3b/3c-2b/3d）・core/structuralEntities.js（_columnAtEndの座標フォールバック）は c.x/c.y（ACTUAL）を直接読まない（axisX/axisYを使うこと）', () => {
+  const files = ['structural/woodAutoFill.js', 'core/structuralEntities.js'];
+  const offenders = scanOffenders([/\bc\.x\b/, /\bc\.y\b/], new Set());
+  const targeted = offenders.filter(o => files.some(f => o.startsWith(`${f}:`)));
+  assert.deepEqual(targeted, [], `c.x/c.y（ACTUAL）の直接参照が残っている（axisX/axisYを使うこと）:\n${targeted.join('\n')}`);
+});
+
+// eccentricity{x,y}（柱・梁とも）の書き手を既知の3箇所だけに限定する（QA指摘・変数名に依存しない
+// 走査へ拡張。以前は`\b(column|c)\.setField`で変数名`column`/`c`限定だったため、`beam`/`bm`/`m`等の
+// 別名で書く既存の書き手を素通ししていた）:
+//   - structural/woodAutoFill.js: 在来木造の柱（conformWoodColumnEccentricity。B-1・真実は
+//     woodOffsetSideで、ここから導出する派生値としての書き込みのみ）。
+//   - structural/structuralAutoFill.js: ラーメン系の梁（autoBeamEccentricity。faceGapから導出する
+//     派生値。B-1と無関係の既存の書き手）。
+//   - structural/MemberListTab.jsx: 断面変更ハンドラ（handleSectionChange）で、ラーメン系の柱・梁の
+//     手動断面変更時に柱芯オフセット基準で外側面をそろえ直す・faceGap基準で梁の偏芯を再算出する
+//     既存の書き手（在来木造の柱寸個別指定とは別経路——woodColumnCardの柱寸行はeccentricityを
+//     直接書かずwoodColumnWidthMm/woodOffsetSideだけを書く）。
+const FORBIDDEN_ECC_SETFIELD_PATTERNS = [/\.setField\('eccentricity'/];
+const ALLOWED_ECC_SETFIELD_FILES = new Set([
+  'structural/woodAutoFill.js',
+  'structural/structuralAutoFill.js',
+  'structural/MemberListTab.jsx',
+]);
+test('【不変条件・B-1】eccentricity（*.setField(\'eccentricity\', ...)）の書き手は woodAutoFill.js・structuralAutoFill.js・MemberListTab.jsx 以外に無い', () => {
+  const offenders = scanOffenders(FORBIDDEN_ECC_SETFIELD_PATTERNS, ALLOWED_ECC_SETFIELD_FILES);
+  assert.deepEqual(offenders, [], `*.setField('eccentricity', ...) の直接書き込みが既知の3ファイル以外に残っている:\n${offenders.join('\n')}`);
+});
+
+test('【不変条件・B-1】MemberListTab.jsx: 柱寸アップcheckbox（allowedColumnWidths）とwoodOffsetSide偏心selectの配線がある', () => {
+  const src = fs.readFileSync(path.resolve(import.meta.dirname, 'MemberListTab.jsx'), 'utf8');
+  assert.ok(/allowedColumnWidths\(floorWidth, allowUpsize\)/.test(src),
+    'ColumnWidthScopeSelectがallowedColumnWidthsで選択肢を絞っていない');
+  assert.ok(/isUpsizedWidth\(columnEntityTarget\?\.woodColumnWidthMm, floorWidthForCard\)/.test(src),
+    'forcedUpがisUpsizedWidthで判定されていない');
+  assert.ok(/target\.setField\('woodOffsetSide', next\)/.test(src),
+    'ColumnOffsetAxisSelectがwoodOffsetSideへ書き込んでいない');
+  assert.ok(/<ColumnOffsetAxisSelect axis="x"/.test(src) && /<ColumnOffsetAxisSelect axis="y"/.test(src),
+    '偏心（左右）/偏心（上下）の両軸セレクトが配線されていない');
 });

@@ -16,7 +16,7 @@ import {
   deleteClassificationOverflow,
 } from './structuralAutoFill.js';
 import { collectFloorGroups } from './memberNumbering.js';
-import { conformWoodSections, autoFillWoodBeamDepths } from './woodAutoFill.js';
+import { conformWoodSections, conformWoodColumnEccentricity, autoFillWoodBeamDepths } from './woodAutoFill.js';
 import { rulesFor, effectiveStructure, beamColumnWidthMm } from './structureRules.js';
 import { conformToLedger } from './memberGroups.js';
 
@@ -97,6 +97,10 @@ export async function recomputeStructuralForGraph(targetGraph, project, mainStru
   // 在来木造: 既存の柱・梁の断面を主構造ルール（柱120角・梁は「梁を支える1つ下の実体階の柱寸」幅）へ
   // そろえる（手動固定も含む。ユーザー裁定2026-09-14／梁幅の下階参照は実機裁定ステップ4 C-2 QA2）。
   const conformedSections = runInAction(() => conformWoodSections(targetGraph, project));
+  // 在来木造: 個別柱（柱寸≠階の柱寸）が壁の中で偏心する量（eccentricity）をconformする（B-1・
+  // ユーザー裁定2026-09-17）。外周モデル（exterior）は上で構築済みのものを使い回す
+  // （柱芯オフセット・梁偏芯と同じ外周モデルに揃える。二系統にしない）。
+  const updatedColumnEcc = runInAction(() => conformWoodColumnEccentricity(targetGraph, project, exterior));
   // 在来木造: 大梁・小梁の成を支持区間ごとの梁成表引きで自動更新する（ステップ3d。dimensionStatus==='auto'のみ。
   // 断面キー選定の材幅も同じ下階参照——上で書いたgraph.beamColumnWidthMmを内部で読む）。
   const updatedBeamDepths = runInAction(() => autoFillWoodBeamDepths(targetGraph, project, belowGraph?.columns ?? []));
@@ -129,7 +133,8 @@ export async function recomputeStructuralForGraph(targetGraph, project, mainStru
     || convertedColumns.length > 0 || convertedBeams.length > 0 || convertedFootings.length > 0 || conformedSections.length > 0
     || removedByClass.length > 0
     || updatedColumnSizes.length > 0 || updatedFootingSizes.length > 0 || updatedBeamSizes.length > 0
-    || updatedRoofBeamSizes.length > 0 || updatedBeamEcc.length > 0 || updatedBeamDepths.length > 0;
+    || updatedRoofBeamSizes.length > 0 || updatedBeamEcc.length > 0 || updatedBeamDepths.length > 0
+    || updatedColumnEcc.length > 0;
   const after = changed ? serializeGraph(targetGraph) : before;
   return { changed, before, after };
 }
