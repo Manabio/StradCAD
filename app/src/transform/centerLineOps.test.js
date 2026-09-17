@@ -2,7 +2,7 @@
 // centerLines・structGraph 連携の実挙動を再現できないため、実 core.js（Plane/PlanGraph/Project）を使う。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Plane, PlanGraph, Project, CenterLineType, Discipline } from '../core.js';
+import { Plane, PlanGraph, Project, CenterLineType, Discipline, centerLineKind } from '../core.js';
 import {
   ERR_CL_DUPLICATE, ERR_CL_CENTER_UPGRADED, ERR_CL_STRUCT_EXISTS,
   ERR_CL_CONVERT_ATTACHED, ERR_CL_CONVERT_NO_GRID, ERR_CL_CONVERT_DUP_FLOOR, ERR_CL_CONVERT_DUP_FLOOR_DEMOTE,
@@ -201,20 +201,80 @@ test('addCenterLineFromDialog: 既存通り芯と同座標へ中心線を追加�
   assert.equal(undoManager.peekUndo(), beforeTop, 'undoは積まれない');
 });
 
-test('addCenterLineFromDialog: 梁芯は他種別CLと同位置に双方向で共存できずdone:false', () => {
+test('addCenterLineFromDialog: 既存の梁芯（自動生成・平面では非表示）の位置へ中心線・補助線は追加でき、梁芯も残る', () => {
   const { project, graph } = makeProjectWithGraph();
+  const beam = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.FUSE });
+  const beforeTop = undoManager.peekUndo();
 
-  // 既存=梁芯、新規=中心線
-  graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.FUSE });
+  // 既存=梁芯、新規=中心線 → 拒否しない（下階の壁由来で自階に湧いた梁芯を障害物にしない）
   const r1 = addCenterLineFromDialog(
     graph, project,
     { clDialog: { type: 'vertical', worldCoord: 1000, perpCoord: 0 }, value: 1000, kind: 'center', refId: null, refOffset: 0 },
     null,
   );
-  assert.equal(r1.done, false);
-  assert.equal(r1.toast, ERR_CL_DUPLICATE('beam'));
+  assert.equal(r1.done, true);
+  assert.equal(r1.toast, null);
+  const vAt1000 = graph.centerLines.filter(cl => cl.centerLineType === CenterLineType.VERTICAL && cl.value === 1000);
+  assert.equal(vAt1000.length, 2, '梁芯と中心線が同位置に共存する');
+  assert.ok(vAt1000.some(cl => cl.id === beam.id), '既存の梁芯は削除されない');
+  assert.ok(vAt1000.some(cl => centerLineKind(cl) === 'center'), '中心線が追加される');
+  assert.notEqual(undoManager.peekUndo(), beforeTop, 'undoが積まれる');
 
-  // 既存=中心線、新規=梁芯（別軸で独立させる）
+  // 既存=梁芯、新規=補助線（別軸で独立させる） → 同様に拒否しない
+  graph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: false, discipline: Discipline.FUSE });
+  const r1b = addCenterLineFromDialog(
+    graph, project,
+    { clDialog: { type: 'horizontal', worldCoord: 3000, perpCoord: 0 }, value: 3000, kind: 'aux', refId: null, refOffset: 0 },
+    { scaleDenominator: 100 }, // aux の extent 計算（はね出し・丸め）が viewport.scaleDenominator を読む
+  );
+  assert.equal(r1b.done, true);
+  assert.equal(r1b.toast, null);
+  assert.ok(graph.centerLines.some(cl => cl.centerLineType === CenterLineType.HORIZONTAL && cl.value === 3000 && centerLineKind(cl) === 'aux'));
+});
+
+test('addCenterLineFromDialog: 梁芯と共存する中心線・補助線があるとき、同位置への2本目の同種別は先頭が梁芯でも拒否される', () => {
+  const { project, graph } = makeProjectWithGraph();
+  const vp = { scaleDenominator: 100 };
+
+  // 梁芯が先（＝下階由来の自動生成が先にある実機の状況）→ 中心線を追加 → もう1本中心線
+  graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.FUSE });
+  const payloadC = { clDialog: { type: 'vertical', worldCoord: 1000, perpCoord: 0 }, value: 1000, kind: 'center', refId: null, refOffset: 0 };
+  assert.equal(addCenterLineFromDialog(graph, project, payloadC, null).done, true);
+  const beforeTop = undoManager.peekUndo();
+  const r2 = addCenterLineFromDialog(graph, project, payloadC, null);
+  assert.equal(r2.done, false);
+  assert.equal(r2.toast, ERR_CL_DUPLICATE('center'));
+  assert.equal(graph.centerLines.filter(cl => cl.centerLineType === CenterLineType.VERTICAL && cl.value === 1000).length, 2, '梁芯＋中心線の2本のまま');
+  assert.equal(undoManager.peekUndo(), beforeTop, 'undoは積まれない');
+
+  // 補助線も同様（extent が重なる2本目は拒否）
+  graph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: false, discipline: Discipline.FUSE });
+  const payloadA = { clDialog: { type: 'horizontal', worldCoord: 3000, perpCoord: 0 }, value: 3000, kind: 'aux', refId: null, refOffset: 0 };
+  assert.equal(addCenterLineFromDialog(graph, project, payloadA, vp).done, true);
+  const r3 = addCenterLineFromDialog(graph, project, payloadA, vp);
+  assert.equal(r3.done, false);
+  assert.equal(r3.toast, ERR_CL_DUPLICATE('aux'));
+  assert.equal(graph.centerLines.filter(cl => cl.centerLineType === CenterLineType.HORIZONTAL && cl.value === 3000 && centerLineKind(cl) === 'aux').length, 1);
+
+  // 通り芯追加は梁芯と中心線の並び順によらず梁芯を理由に拒否する（中心線が先でも昇格経路へ入らない）
+  graph.addCenterLine(CenterLineType.VERTICAL, 5000, { labeled: false });                                  // 中心線が先
+  graph.addCenterLine(CenterLineType.VERTICAL, 5000, { labeled: false, discipline: Discipline.FUSE });    // 梁芯が後
+  const beforeTop2 = undoManager.peekUndo();
+  const r4 = addCenterLineFromDialog(
+    graph, project,
+    { clDialog: { type: 'vertical', worldCoord: 5000, perpCoord: 0 }, value: 5000, kind: 'struct', refId: null, refOffset: 0 },
+    null,
+  );
+  assert.equal(r4.done, false);
+  assert.equal(r4.toast, ERR_CL_DUPLICATE('beam'));
+  assert.equal(graph.centerLines.filter(cl => cl.centerLineType === CenterLineType.VERTICAL && cl.value === 5000).length, 2, '中心線は削除されず通り芯も増えない');
+  assert.equal(undoManager.peekUndo(), beforeTop2, 'undoは積まれない');
+});
+
+test('addCenterLineFromDialog: 梁芯の手動追加は既存の中心線・通り芯と同位置に共存できず、通り芯追加も既存の梁芯を拒否する', () => {
+  const { project, graph } = makeProjectWithGraph();
+
+  // 既存=中心線、新規=梁芯
   graph.addCenterLine(CenterLineType.HORIZONTAL, 2000, { labeled: false });
   const r2 = addCenterLineFromDialog(
     graph, project,
@@ -223,6 +283,18 @@ test('addCenterLineFromDialog: 梁芯は他種別CLと同位置に双方向で�
   );
   assert.equal(r2.done, false);
   assert.equal(r2.toast, ERR_CL_DUPLICATE('center'));
+
+  // 既存=梁芯、新規=通り芯 → 拒否（大梁と完全重複する小梁の生成防止）
+  graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.FUSE });
+  const beforeTop = undoManager.peekUndo();
+  const r3 = addCenterLineFromDialog(
+    graph, project,
+    { clDialog: { type: 'vertical', worldCoord: 1000, perpCoord: 0 }, value: 1000, kind: 'struct', refId: null, refOffset: 0 },
+    null,
+  );
+  assert.equal(r3.done, false);
+  assert.equal(r3.toast, ERR_CL_DUPLICATE('beam'));
+  assert.equal(undoManager.peekUndo(), beforeTop, 'undoは積まれない');
 });
 
 test('addCenterLineFromDialog: 既存中心線位置への通り芯追加は中心線を削除して昇格し、done:true+ERR_CL_CENTER_UPGRADEDでundo可能', () => {

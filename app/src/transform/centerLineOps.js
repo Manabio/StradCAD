@@ -441,9 +441,13 @@ export function addCenterLineFromDialog(graph, project, payload, viewport) {
   }
 
   // ---- 重複チェック（extent計算後に実施） ----
-  const existing = graph.centerLines.find(
+  // 同座標には梁芯と中心線・補助線が共存しうる（下記の梁芯ガード参照）ため、先頭1本ではなく全部を取り、
+  // 同種別があればそれを existing にする——先頭が梁芯だと同種別の extent 重なり判定・結合連鎖に入らず
+  // 同位置へ何本でも積めてしまう（QA指摘）。
+  const sameCoord = graph.centerLines.filter(
     cl => cl.centerLineType === clType && Math.abs(cl.value - value) < CL_OVERLAP_TOL_MM
   );
+  const existing = sameCoord.find(cl => centerLineKind(cl) === kind) ?? sameCoord[0];
   if (existing) {
     const existingKind = centerLineKind(existing);
 
@@ -475,10 +479,18 @@ export function addCenterLineFromDialog(graph, project, payload, viewport) {
       }
     }
 
-    // 梁芯は他種別（通り芯/中心/補助線）と同位置に共存できない（大梁と完全重複する小梁の生成防止）。
-    // 逆方向（既存が梁芯で新規が別種別）も同様に拒否する。
-    if (kind !== existingKind && (kind === 'beam' || existingKind === 'beam')) {
-      return { done: false, toast: ERR_CL_DUPLICATE(existingKind), suggestWood: null };
+    // 梁芯の手動追加は他種別（通り芯/中心/補助線）と同位置に共存できない（大梁と完全重複する小梁の
+    // 生成防止）。通り芯の追加も既存の梁芯を拒否する。
+    // ただし既存が梁芯で新規が中心線・補助線なら拒否しない——梁芯は在来木造の構造モードが「1つ下の階の壁」
+    // からも自階へ自動生成し（structural/wallBeamAxes.js）平面モードでは非表示のため、障害物にすると
+    // 「当該階に線が無いのに下階に線があると追加できない」になる。中心線・補助線の同位置不許可は同一図面内
+    // の同種別（上の extent 重なり判定）だけで、autoFillWallBeamAxes の重複ガード（意匠中心線・補助線は
+    // 障害物にしない）と対称にする。
+    // 通り芯側は existing（同種別優先＝中心線が先に選ばれうる）ではなく同座標全体で梁芯の有無を見る——
+    // 中心線→梁芯の順に並んでいても昇格経路（中心線削除→通り芯追加）へ入って梁芯を残さないため。
+    if ((kind === 'beam' && existingKind !== 'beam') ||
+        (kind === 'struct' && sameCoord.some(cl => centerLineKind(cl) === 'beam'))) {
+      return { done: false, toast: ERR_CL_DUPLICATE(kind === 'struct' ? 'beam' : existingKind), suggestWood: null };
     }
 
     if (kind === 'struct' && existingKind === 'center') {

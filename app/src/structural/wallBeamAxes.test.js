@@ -121,6 +121,17 @@ test('autoFillWallBeamAxes: 同方向の既存梁芯（fuse）とCL_OVERLAP_TOL_
   assert.equal(created.length, 0);
 });
 
+test('autoFillWallBeamAxes: 既存梁芯の位置に後から意匠中心線が追加されていても梁芯を重複生成しない', () => {
+  const { graph } = makeGridGraph('p1', 0);
+  // 平面モードで既存の梁芯（下階の壁由来・非表示）の位置へ中心線を追加できる（transform/centerLineOps.js）。
+  // その後の構造再計算で findBeamAnchorCL が既存梁芯にヒットし、中心線の有無に関係なく生成をスキップすること。
+  graph.addCenterLine(CenterLineType.HORIZONTAL, 2000, { labeled: false, discipline: Discipline.FUSE });
+  graph.addCenterLine(CenterLineType.HORIZONTAL, 2000, { labeled: false, discipline: Discipline.ARCH });
+  const created = autoFillWallBeamAxes(graph, [{ isVertical: false, coord: 2000, lo: 0, hi: 8000 }]);
+  assert.equal(created.length, 0);
+  assert.equal(graph.centerLines.filter(cl => cl.centerLineType === CenterLineType.HORIZONTAL && cl.value === 2000 && cl.discipline === Discipline.FUSE).length, 1);
+});
+
 test('autoFillWallBeamAxes: 同方向の意匠中心線・補助線とは同座標でも生成する（重複ガードの対象外）', () => {
   const { graph } = makeGridGraph('p1', 0);
   // 壁は意匠中心線に沿って生成されるのが常態（部屋境界＝中心線）。中心線・補助線は障害物にしない
