@@ -9,6 +9,8 @@
 //   衝突しないことを事前に確認する（複製自体は下記 propagateDemotedCenterLine）。
 // 降格（通り芯→中心）: アクティブ階にだけ中心線が現れるのは不整合（通り芯は全階共通だった）
 // なので、非アクティブの全階へ同一idで複製する（propagateDemotedCenterLine）。
+// **降格の移籍前に複製する**（通り芯が project.structGraph に残っている間に peek しないと、
+// 他階の壁が graphSnapshot.js の resolveCL で解決できず復元時に捨てられる。2026-09-17実測）。
 import { runInAction } from 'mobx';
 import { Discipline, CL_OVERLAP_TOL_MM } from '@core';
 import { floorSwapManager } from '../storage/FloorSwapManager.js';
@@ -54,7 +56,9 @@ export async function findFloorsWithCounterpartCL(project, activeGraph, cl) {
 // 呼び出し側は finally で呼ぶこと——finally を抜けた後、例外があれば自然に再スローされる
 // （catchしていないため）。saveFloorFn は呼び出し時に渡されたものを使う（往復テストのため、
 // undo/redo時の書き戻しもテスト用の差し替えに乗せられるようにする）。
-function amendFloorUndoRecords(project, undoEntry, undoRecords, saveFloorFn) {
+// centerLineOps.js の降格（複製フェーズをundoエントリ作成前に行う）からも呼べるよう export する
+// （undoEntry が無いうちは no-op で返るため、そこでの呼び出しは安全）。
+export function amendFloorUndoRecords(project, undoEntry, undoRecords, saveFloorFn = saveFloor) {
   if (!undoEntry || undoRecords.length === 0) return;
   const applyBytes = (which) => {
     for (const rec of undoRecords) {
@@ -69,21 +73,29 @@ function amendFloorUndoRecords(project, undoEntry, undoRecords, saveFloorFn) {
 }
 
 /**
- * 降格（通り芯→中心）後、アクティブ以外の全 Plane へ同一 id で中心線を複製する。
- * extent は昇格前と同じ最外郭通り芯2本への ref（loCL/hiCL）にする。
+ * 降格（通り芯→中心）の**移籍前**に、アクティブ以外の全 Plane へ同一 id で中心線を複製する
+ * （呼び出し側は centerLineConvert.js の applyDemoteToCenter より先にこれを呼ぶこと——通り芯が
+ * project.structGraph に残っている間に peek しないと、他階の壁の axisCL/clStart/clEnd が
+ * graphSnapshot.js の resolveCL で解決できず復元時に黙って捨てられる。2026-09-17実測）。
+ * extent は昇格前と同じ最外郭通り芯2本への ref（loCL/hiCL）にする。複製が読む
+ * cl.centerLineType/_value/trim/refId/refOffset は applyDemoteToCenter が変更しないフィールド
+ * なので、移籍前に読んでも複製内容は移籍後に読むのと同一。
  * undoEntry を渡すと、変更した各階の before/after を undoManager.amend で合成する
- * （eccentricityFloorSync.js の propagateCLEccentricities と同じパターン）。
+ * （eccentricityFloorSync.js の propagateCLEccentricities と同じパターン）。undoEntry が無い
+ * 呼び出し（centerLineOps.js の降格はまだ undo エントリを作っていない段階でこれを呼ぶ）でも
+ * before/after は常に undoRecords へ記録する——呼び出し側が opts.undoRecords に配列を渡せば、
+ * 例外発生時も途中まで積んだ記録を参照できる（ロールバックに使う）。
  * @param {object} project
- * @param {PlanGraph} activeGraph  降格を実行した階のグラフ（アクティブ階）
- * @param {CenterLine} cl          降格後の中心線（graph.adoptCenterLine 済み）
- * @param {{loCL, hiCL, undoEntry?: object|null, saveFloorFn?: Function}} opts
+ * @param {PlanGraph} activeGraph  降格を実行する階のグラフ（アクティブ階）
+ * @param {CenterLine} cl          降格前の通り芯（まだ project.structGraph に居る）
+ * @param {{loCL, hiCL, undoEntry?: object|null, saveFloorFn?: Function, undoRecords?: Array}} opts
+ * @returns {Promise<Array>} undoRecords（呼び出し側が渡した配列、省略時は内部で新規作成したもの）
  */
-export async function propagateDemotedCenterLine(project, activeGraph, cl, { loCL, hiCL, undoEntry = null, saveFloorFn = saveFloor }) {
-  const undoRecords = [];
+export async function propagateDemotedCenterLine(project, activeGraph, cl, { loCL, hiCL, undoEntry = null, saveFloorFn = saveFloor, undoRecords = [] }) {
   try {
     for (const plane of otherPlanes(project, activeGraph)) {
       const temp = await floorSwapManager.peek(plane, project.structGraph);
-      const before = undoEntry ? serializeGraph(temp) : null;
+      const before = serializeGraph(temp);
       runInAction(() => {
         temp.addCenterLine(cl.centerLineType, cl._value, {
           labeled: false, discipline: Discipline.ARCH, lineType: 'center', trim: cl.trim,
@@ -94,10 +106,25 @@ export async function propagateDemotedCenterLine(project, activeGraph, cl, { loC
         temp.columnAxisOffsets.delete(cl.id);
       });
       await saveFloorFn(plane.id, serializeGraph(temp));
-      if (undoEntry) undoRecords.push({ planeId: plane.id, before, after: serializeGraph(temp) });
+      undoRecords.push({ planeId: plane.id, before, after: serializeGraph(temp) });
     }
   } finally {
     amendFloorUndoRecords(project, undoEntry, undoRecords, saveFloorFn);
+  }
+  return undoRecords;
+}
+
+/**
+ * demoteGridToCenterWithUndo 専用の失敗時ロールバック: 複製フェーズ（propagateDemotedCenterLine）
+ * の途中で例外が起きた場合、または直後の applyDemoteToCenter がエラーを返した場合に、そこまでに
+ * saveFloorFn した階を before バイトで書き戻す（best effort）。undoManager には触れない
+ * （呼び出し側がまだ undo エントリを積んでいない段階でのみ使う）。
+ * @param {Array<{planeId, before}>} records
+ * @param {Function} [saveFloorFn]
+ */
+export async function rollbackFloorRecords(records, saveFloorFn = saveFloor) {
+  for (const rec of records) {
+    try { await saveFloorFn(rec.planeId, rec.before); } catch (err) { console.error(err); }
   }
 }
 

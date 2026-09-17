@@ -7,14 +7,14 @@ import { undoManager } from '../undoManager.js';
 import { serializeGraph, restoreGraph, serializeStructCLs, restoreStructCLs } from '../graphSnapshot.js';
 import {
   ERR_CL_DUPLICATE, ERR_CL_CENTER_UPGRADED, ERR_CL_STRUCT_EXISTS,
-  ERR_CL_CONVERT_DUP_FLOOR, ERR_CL_CONVERT_DUP_FLOOR_DEMOTE, ERR_CL_DELETE_LAST_GRID,
+  ERR_CL_CONVERT_DUP_FLOOR, ERR_CL_CONVERT_DUP_FLOOR_DEMOTE, ERR_CL_DELETE_LAST_GRID, ERR_CL_CONVERT_NO_GRID,
 } from '../error.js';
 import { findBracketingCLs, overhangMm } from '../snapGeometry.js';
 import { calcStep } from '../renderer/clMoveMath.js';
 import { mergeCenterLineChain, composeUndoWithMergeChain } from './centerLineMerge.js';
 import {
   applyPromoteToGrid, applyDemoteToCenter, checkPromoteToGridGuards, checkDemoteToCenterGuards,
-  isLastGridOnAxis,
+  isLastGridOnAxis, outermostGridExtentRefs,
 } from './centerLineConvert.js';
 import { resolveSecondaryBeamsForAxis } from '../structural/beamAxisMove.js';
 import { renumberMembers } from '../structural/memberNumbering.js';
@@ -229,10 +229,20 @@ export async function promoteCenterToGridWithUndo(graph, project, cl, opts = {})
 }
 
 // ---- 通り芯 → 中心線 ----
-// 成功時は非アクティブ全階へ同一idで複製し（propagateDemotedCenterLine）、同一undoエントリへ合成する。
 // 同期ガードを先に評価してから（N5。promoteCenterToGridWithUndoと同じ理由）、変換前に他階の
 // 同座標重複もチェックする（スキップ方式は不採用——片階だけ複製漏れすると壁参照が壊れるため、
 // 1階でも重複していれば全体を拒否する）。
+// 順序は「複製→移籍」（案A、2026-09-17裁定）: 通り芯が project.structGraph に残っている間に
+// 非アクティブ全階へ同一idで複製してから（propagateDemotedCenterLine）、本体を移籍する
+// （applyDemoteToCenter）。逆順（移籍→複製）だと、複製フェーズで他階を peek した時点で通り芯が
+// structGraph に無く、他階の壁の axisCL/clStart/clEnd が graphSnapshot.js の resolveCL で解決
+// できず復元時に黙って捨てられ、その欠落が saveFloor で永続化される（2026-09-17実測。昇格は
+// 逆に「移籍→回収」で正しい——promoteCenterToGridWithUndo参照）。
+// 複製フェーズが途中で失敗（例外）した場合、またはその直後の applyDemoteToCenter がエラーを
+// 返した場合は、そこまでに保存できた階を rollbackFloorRecords で before に書き戻す
+// （best effort）。前者は自階・structGraphとも未変更のため undo エントリを積まず例外を再スロー
+// （呼び出し側 App.jsx の catch が ERR_CL_CONVERT_SYNC_FAILED を出す）。後者は従来どおり
+// { toast: error } を返す。
 // @param {{saveFloorFn?: Function}} [opts] - saveFloorFn はテスト用の差し替え（既定値は
 //   centerLineFloorSync.js 側の saveFloor。呼び出し側（App.jsx）は無改造でよい）。
 // @returns {Promise<{ toast: string|null }>}
@@ -240,7 +250,8 @@ export async function demoteGridToCenterWithUndo(graph, project, cl, opts = {}) 
   const guardError = checkDemoteToCenterGuards(graph, project.structGraph, cl);
   if (guardError) return { toast: guardError };
 
-  const { findFloorsWithCounterpartCL } = await import('./centerLineFloorSync.js');
+  const { findFloorsWithCounterpartCL, propagateDemotedCenterLine, amendFloorUndoRecords, rollbackFloorRecords } =
+    await import('./centerLineFloorSync.js');
   const dupFloors = await findFloorsWithCounterpartCL(project, graph, cl);
   if (dupFloors.length > 0) {
     // 降格（通り芯→中心）専用の文言。ERR_CL_CONVERT_DUP_FLOOR（昇格用「…通り芯にできません」）を
@@ -248,11 +259,32 @@ export async function demoteGridToCenterWithUndo(graph, project, cl, opts = {}) 
     return { toast: ERR_CL_CONVERT_DUP_FLOOR_DEMOTE(dupFloors.map(p => p.name).join('・')) };
   }
 
+  // 複製フェーズ（通り芯はまだ structGraph にある。移籍前提のため applyDemoteToCenter と同じ
+  // outermostGridExtentRefs を呼ぶ——二重計算になるが純関数のため結果は同一）。
+  // 上の同期ガードから findFloorsWithCounterpartCL の await を挟むため、その間に直交通り芯が
+  // 消えて null になりうる——TypeError で汎用トーストに劣化させず、ガードを再評価して NO_GRID を返す。
+  const refs = outermostGridExtentRefs(graph, cl);
+  if (!refs) return { toast: checkDemoteToCenterGuards(graph, project.structGraph, cl) ?? ERR_CL_CONVERT_NO_GRID };
+  const { loCL, hiCL } = refs;
+  const propagationRecords = [];
+  try {
+    await propagateDemotedCenterLine(project, graph, cl, {
+      loCL, hiCL, undoRecords: propagationRecords,
+      ...(opts.saveFloorFn ? { saveFloorFn: opts.saveFloorFn } : {}),
+    });
+  } catch (e) {
+    await rollbackFloorRecords(propagationRecords, opts.saveFloorFn);
+    throw e;
+  }
+
   const beforeArch   = serializeGraph(graph);
   const beforeStruct = serializeStructCLs(project.structGraph, project.structuralInfo, project.memberGroupLedger);
   const result = applyDemoteToCenter(graph, project.structGraph, cl);
-  if (result.error) return { toast: result.error };
-  const { loCL, hiCL } = result;
+  if (result.error) {
+    // 複製済みの他階も巻き戻す（自階・structGraph はガード契約によりまだ未変更）。
+    await rollbackFloorRecords(propagationRecords, opts.saveFloorFn);
+    return { toast: result.error };
+  }
   const afterArch   = serializeGraph(graph);
   const afterStruct = serializeStructCLs(project.structGraph, project.structuralInfo, project.memberGroupLedger);
   const entry = undoManager.push(
@@ -265,12 +297,8 @@ export async function demoteGridToCenterWithUndo(graph, project, cl, opts = {}) 
       restoreGraph(graph, afterArch);
     },
   );
+  amendFloorUndoRecords(project, entry, propagationRecords, opts.saveFloorFn);
 
-  const { propagateDemotedCenterLine } = await import('./centerLineFloorSync.js');
-  await propagateDemotedCenterLine(project, graph, cl, {
-    loCL, hiCL, undoEntry: entry,
-    ...(opts.saveFloorFn ? { saveFloorFn: opts.saveFloorFn } : {}),
-  });
   return { toast: null };
 }
 

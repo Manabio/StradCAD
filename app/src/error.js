@@ -39,7 +39,8 @@ export const ERR_CL_CONVERT_ATTACHED  = 'この中心線には斜線・円弧が
 export const ERR_CL_CONVERT_DUP_FLOOR = (floors) => `${floors} の同じ位置に中心線があるため通り芯にできません。`;
 // 降格（通り芯→中心）専用: DUP_FLOORと逆方向のため文言を分ける（「通り芯にできません」の誤表示防止）
 export const ERR_CL_CONVERT_DUP_FLOOR_DEMOTE = (floors) => `${floors} の同じ位置に中心線があるため中心線にできません。`;
-// 中心⇔通り芯の入替え確定後、非アクティブ階への複製（propagateDemotedCenterLine）がIDB書込等で失敗した場合
+// 中心⇔通り芯の入替えの階またぎ同期（centerLineFloorSync.js）がIDB書込等で失敗した場合。
+// 昇格は確定後の回収失敗（途中分はundoエントリへ合成済み）、降格は確定前の複製失敗（全体ロールバック済み＝降格されていない）。
 export const ERR_CL_CONVERT_SYNC_FAILED = '他階への反映に失敗しました。';
 
 // CL削除（transform/centerLineOps.js deleteCenterLineWithUndo）専用: 同じ軸（X/Y）に他の通り芯が

@@ -1316,9 +1316,10 @@ const App = observer(() => {
         if (toast) setToast({ msg: toast, key: Date.now() });
         setFloorSyncTick(t => t + 1); // 連動先（他階）の複製・重複判定を反映させる（handleEccConfirmと同じ）
       })().catch(err => {
-        // 階またぎ複製（propagateDemotedCenterLine）はIDB書込を含むため失敗しうる——途中まで
-        // 保存できた分は centerLineFloorSync.js の finally で既にundoエントリへ合成済みなので、
-        // ここでは失敗をトースト表示するだけでよい（cl-move等の既存async IIFEと同じ形）。
+        // 階またぎ同期（centerLineFloorSync.js）はIDB書込を含むため失敗しうる——昇格の回収は
+        // 確定後の失敗で、途中まで保存できた分は finally で既にundoエントリへ合成済み。降格の複製は
+        // 確定前の失敗で、保存済みの階は rollbackFloorRecords で巻き戻し済み（自階・undoは未変更）。
+        // どちらもここでは失敗をトースト表示するだけでよい（cl-move等の既存async IIFEと同じ形）。
         console.error(err);
         setToast({ msg: ERR_CL_CONVERT_SYNC_FAILED, key: Date.now() });
       });
