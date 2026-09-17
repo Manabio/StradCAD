@@ -81,14 +81,19 @@ test('【QA指摘F10】previewSplitTag: 個別採番対象のプレビューはo
   // b1・b2の間（axisValue=200）に新しい個別採番対象（未収集）を仮に置いたときの予定タグ。
   const candidate = woodBeam('b3', { axisValue: 200 });
   const floorInfo = floorRankOf(g.plane, project);
+  // individual: true を両方に渡す（候補はWOOD-120x330の非標準梁＝個別採番対象。省略時のfalseだと
+  // 実グループ（b1・b2、individual=true）とcompareGroupsDescの共通/個別タイブレークで先に弾かれ、
+  // orderKeyの有無に関わらずG1に固定されてしまう——このテストの主眼であるorderKey比較まで
+  // 到達しなくなる。QA裁定2026-09-17のタイブレーク追加に伴う配線）。
   const previewWithoutOrderKey = previewSplitTag(
     project, 'beamMap', memberSymbol(candidate, 'beamMap'),
     memberSizeKey(candidate, 'beamMap'), memberSignature(candidate, 'beamMap'), floorInfo,
+    { individual: true },
   );
   const previewWithOrderKey = previewSplitTag(
     project, 'beamMap', memberSymbol(candidate, 'beamMap'),
     memberSizeKey(candidate, 'beamMap'), memberSignature(candidate, 'beamMap'), floorInfo,
-    { orderKey: memberOrderKey(candidate, 'beamMap', rules) },
+    { orderKey: memberOrderKey(candidate, 'beamMap', rules), individual: true },
   );
   assert.notEqual(previewWithoutOrderKey, 'G2', 'orderKey省略時はb1より前に誤って並ぶ（回帰の再現）');
   assert.equal(previewWithOrderKey, 'G2', 'orderKeyを渡せばb1とb2の間＝G2と正しく予測できる');

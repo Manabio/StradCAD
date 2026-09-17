@@ -29,8 +29,12 @@ export const COLUMN_FALLBACK_SIZE_MM = 120;
  *  未知の値もすべて非在来と同じ既定側（下階のみ・断面そのまま・輪郭強制なし）に倒す。 */
 export function framingColumnGroups(drawing) {
   if (drawing.framingColumnSymbol === 'crossBox') {
+    // 下階柱は×だけ（断面□は描かない）——在来では梁が下階柱の上に乗るため、伏図で見えるのは梁と
+    // 自階柱□であり、下階柱の断面外形は見えない。□まで描くと通しの梁の帯の中に柱寸の四角が残り
+    // 「柱断面らしきもの」に見える（実機指摘2026-09-17: 自階柱を小さくしても交点に四角が残る）。
+    // 通し柱の位置は自階柱□と下階柱×が重なって自然に「□に×」になる。
     return [
-      { category: 'columnMap', symbol: 'boxCross', outline: true },
+      { category: 'columnMap', symbol: 'cross', outline: false },
       { category: 'columnMapSelf', symbol: 'box', outline: true },
     ];
   }

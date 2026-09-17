@@ -175,10 +175,15 @@ const WOOD_RULES = Object.freeze({
   // 'coordinate'＝在来木造。id不一致でも座標一致で柱とみなす——下階柱は自階の梁芯CL・中心線と別idの
   // per-floor CLに乗ることがあるため。core/structuralEntities.js _columnAtEnd が唯一の解決先。
   // ステップ1-b・下階柱面トリム）。
+  // beamJunction＝伏図の梁の交点処理（'columnFace'＝既定。下階柱面で止めるだけ／'throughWins'＝在来木造。
+  // 通しの梁（両側に続く梁）が勝ち、T字で突き当たる梁が負け（勝者の面で止まる）。出隅は長い方が勝ち
+  // （同長はX方向）。structural/beamJunction.js の resolveBeamJunctionSpans が唯一の解決先——実体スパン
+  // （spanForColumns）は書き換えず、renderer/StructuralLayer.jsx が描画専用に上書きする。ユーザー裁定
+  // 2026-09-17・B-3）。
   drawing: Object.freeze({
     columnFinishWrap: true, planColumnColor: 'material', planColumnLineWeight: 'thick',
     framingPlanColor: 'material', framingColumnSymbol: 'section', framingColumnLineWeight: 'fixed',
-    memberTags: 'show', beamDepthMark: 'none', beamEndColumnMatch: 'clId',
+    memberTags: 'show', beamDepthMark: 'none', beamEndColumnMatch: 'clId', beamJunction: 'columnFace',
   }),
   // 壁由来の梁芯生成源（(3)）: 自階＋1つ下の実体階の下地オーナー壁（下地材の種別は問わない）。在来のみ。
   wallBeamAxes: null,
@@ -189,7 +194,11 @@ const WOOD_RULES = Object.freeze({
   // 既定null＝個別採番なし（同一材寸は常に1グループ）。在来木造だけ WOOD_DEPTH_BEAM_ROLES で上書きする。
   // individualColumns＝柱の個別採番（'widthOverride'＝柱寸の個別指定がある柱を1本1タグにする。ステップ3）。
   // 既定null＝個別採番なし。在来木造だけ 'widthOverride' で上書きする。
-  numbering: Object.freeze({ individualBeamRoles: null, individualColumns: null }),
+  // columnGroupScope＝柱の採番グループを建物全体でまとめるか（既定'building'。例1~3C1）／階ごとに分けるか
+  // （'floor'。在来木造だけ上書き。例1C1・2C1・3C1——管柱は階の部材であり階をまたがないため。
+  // ユーザー裁定2026-09-17）。memberCatalog.js memberGroupKey が唯一の消費先（columnMapにplaneIdを
+  // 付与するかどうかを分岐する）。
+  numbering: Object.freeze({ individualBeamRoles: null, individualColumns: null, columnGroupScope: 'building' }),
 });
 
 // RC系（ラーメン・壁式）に共通のルール。
@@ -221,12 +230,12 @@ const RC_RULES = Object.freeze({
   drawing: Object.freeze({
     columnFinishWrap: true, planColumnColor: 'material', planColumnLineWeight: 'thick',
     framingPlanColor: 'material', framingColumnSymbol: 'section', framingColumnLineWeight: 'fixed',
-    memberTags: 'show', beamDepthMark: 'none', beamEndColumnMatch: 'clId',
+    memberTags: 'show', beamDepthMark: 'none', beamEndColumnMatch: 'clId', beamJunction: 'columnFace',
   }),
   // 自階の下地オーナー壁のうち下地材がRC下地の壁のみ（上下階で壁が連続し自立するため下階は見ない）。
   wallBeamAxes: 'rcBacking',
   sashFinDirect: false,
-  numbering: Object.freeze({ individualBeamRoles: null, individualColumns: null }),
+  numbering: Object.freeze({ individualBeamRoles: null, individualColumns: null, columnGroupScope: 'building' }),
 });
 
 // 鉄骨系（S造・SRC造）に共通のルール。
@@ -265,15 +274,20 @@ export const STRUCTURE_RULES = Object.freeze({
       pinBeamEndClearanceMm: 0,
       // 標準材（defaultSections.beam＝柱同寸の正角）以外の梁は主要構造のrole（WOOD_DEPTH_BEAM_ROLES）
       // だけ材ごとに個別採番する（ユーザー裁定2026-09-16。memberCatalog.js isIndividuallyNumbered）。
-      numbering: Object.freeze({ individualBeamRoles: WOOD_DEPTH_BEAM_ROLES, individualColumns: 'widthOverride' }),
+      // columnGroupScope='floor': 柱（管柱）は階の部材で階をまたがないため、採番グループも階ごとに
+      // 分ける（例1C1・2C1・3C1。非在来は'building'のまま＝1~3C1のような建物全体の合算。
+      // ユーザー裁定2026-09-17）。
+      numbering: Object.freeze({ individualBeamRoles: WOOD_DEPTH_BEAM_ROLES, individualColumns: 'widthOverride', columnGroupScope: 'floor' }),
       // 在来木造の柱は壁の中に立つ管柱＝仕上げ包み（柱壁）は付けない。平面の柱断面は壁と同じ黒
       // （ユーザー指示2026-09-14「在来木造の柱に柱包みは不要」「茶色の断面…黒指定」）。輪郭は**極太線**——
       // 壁厚＝柱寸法（conformWoodBacking で下地120＝柱120）になると柱の輪郭が壁の下地帯の線と完全に重なり、
       // 壁と同じ太線では柱が見分けられない（実機 moku1 2026-09-15「中心線と取り合う壁の柱が消えた」）。
+      // 梁の交点は「通しが勝つ」（ユーザー裁定2026-09-17・B-3）。structural/beamJunction.js
+      // resolveBeamJunctionSpans が唯一の解決先。
       drawing: Object.freeze({
         columnFinishWrap: false, planColumnColor: 'wall', planColumnLineWeight: 'ultraThick',
         framingPlanColor: 'mono', framingColumnSymbol: 'crossBox', framingColumnLineWeight: 'byLod',
-        memberTags: 'hide', beamDepthMark: 'offsetLine', beamEndColumnMatch: 'coordinate',
+        memberTags: 'hide', beamDepthMark: 'offsetLine', beamEndColumnMatch: 'coordinate', beamJunction: 'throughWins',
       }) },
     { column: TRADITIONAL_WOOD_FRAMING.columnSection, beam: TRADITIONAL_WOOD_FRAMING.columnSection }), // 梁の既定＝柱同寸の正角
   '木造（2"×4"）': withProfile('木造（2"×4"）', WOOD_RULES), // 壁自体が構造体＝壁下に梁を入れない（wallBeamAxes:null）

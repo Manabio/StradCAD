@@ -1,4 +1,4 @@
-import { NUMBERED_MAPS, memberSymbol, memberSignature, memberSizeKey, memberGroupKey, memberOrderKey } from './memberCatalog.js';
+import { NUMBERED_MAPS, memberSymbol, memberSignature, memberSizeKey, memberGroupKey, memberOrderKey, isIndividuallyNumbered } from './memberCatalog.js';
 import { conformToLedger, getGroupManualTag } from './memberGroups.js';
 import { makeFloorLevelPrefix } from '../floorNumber.js';
 import { rulesFor, effectiveStructure, resolvedBeamColumnWidthMm, WOOD_BEAM_DEPTH_TABLE } from './structureRules.js';
@@ -25,12 +25,15 @@ export function standardBeamSectionFor(graph, project, rules) {
 
 // 部材タグ番号の採番ルール（材寸ベースグループ採番。設計意図は .claude/structural-model.md）:
 //
-// グループキー = memberCatalog.memberGroupKey(entity, mapName, rules) が唯一の入口
+// グループキー = memberCatalog.memberGroupKey(entity, mapName, rules, standardSection, planeId) が唯一の入口
 // （entity.numberGroupId を最優先し、無ければ在来木造の非標準梁（個別採番対象）は部材ごとに一意
 // （signature+id）、それ以外は signature（同一材寸＝同一グループ）——直書き `entity.numberGroupId ??
 // memberSignature(...)` はここに戻さない。ステップ4第3単位②）。分割・統合・手動採番というユーザーの
 // 明示操作だけが project.memberGroupLedger へ永続化され、numberGroupId として部材へ反映される
-// （memberGroups.js の conformToLedger）。
+// （memberGroups.js の conformToLedger）。columnMap かつ在来木造（columnGroupScope==='floor'）は
+// signature に `@<planeId>` を付けて階ごとに分ける（柱は階の部材。ユーザー裁定2026-09-17）——
+// collectFloorGroups/applyNumbers はこの graph.plane.id を渡すのが唯一の役目で、判定ロジック自体は
+// memberGroupKey に閉じる。
 //
 // 採番は2パスに分かれる（建物全体の情報が必要なため、単一graphでは完結しない）:
 //   パス1（各階）: conformToLedger → collectFloorGroups で project.memberNumberIndex（非永続キャッシュ）に
@@ -43,8 +46,11 @@ export function standardBeamSectionFor(graph, project, rules) {
 // 採番規則（assignNumbers）:
 //   1. 記号（memberSymbol）ごとに分ける。
 //   2. 手動タグ（台帳 grp.no:<gid>）があればそれを最優先で使う（導出はしない）。
-//   3. それ以外は sizeKey 降順（大きい方が若い番号）。同着は出現最下階（floorRanksの最小値）が下の方を先、
-//      それでも同着なら signature の辞書順（決定論性の担保）。
+//   3. それ以外は sizeKey 降順（大きい方が若い番号）。同着（sectionDefId未conform等で共通柱と個別柱の
+//      断面が一時的に一致する場合を含む）はまず共通（個別採番対象でない）を先・個別採番対象を後、
+//      それでも同着なら出現最下階（floorRanksの最小値）が下の方を先、それでもならorderKey
+//      （個別採番対象の位置ベースタイブレーク）昇順、それでも同着なら signature の辞書順
+//      （決定論性の担保。ユーザー裁定2026-09-17でcompareGroupsDescに共通/個別のタイブレークを追加）。
 //   4. 階プレフィックスは記号単位で要否判定: その記号の全グループの出現階集合が全て同一なら無し、
 //      一つでも異なれば全グループに付す（有無混在を作らない）。
 //   5. プレフィックス表記: 単一階=makeFloorLevelPrefix、連続階="2~4"、非連続="1,3"、屋根専用平面="R"。
@@ -108,10 +114,22 @@ export function collectFloorGroups(graph, project) {
       const signature = memberSignature(entity, mapName);
       const sizeKey = memberSizeKey(entity, mapName);
       const orderKey = memberOrderKey(entity, mapName, rules, standardSection);
-      const groupKey = memberGroupKey(entity, mapName, rules, standardSection);
+      const groupKey = memberGroupKey(entity, mapName, rules, standardSection, planeId);
+      // columnGroupScope: 'floor'（在来木造のcolumnMapだけ）は assignNumbers が自動採番のcounterを
+      // 記号全体ではなく階ごとにリセットする根拠として読む（グループキー自体は既に@planeIdで階ごとに
+      // 分かれているため、floorRanksは常に単一階に収束する。ユーザー裁定2026-09-17・A）。
+      // 注意（既知の穴・低優先）: 1つのgroupKeyを複数階（複数graph）が共有する構成では、この値は
+      // 「最後にcollectFloorGroupsを呼んだ階のrules」で上書きされる——階ごとに主構造が違う建物で、
+      // かつ非在来（columnGroupScope='building'。groupKeyがplaneIdを含まず複数階で共有され得る）の
+      // 柱グループに限って起こり得る（在来columnMapは既にgroupKey自体が@planeIdで階ごとに分かれるため
+      // 実際には単一階のgraphしかこのgroupKeyへ寄与せず影響しない）。
+      const columnGroupScope = mapName === 'columnMap' ? (rules.numbering?.columnGroupScope ?? 'building') : 'building';
+      // 個別採番対象か（compareGroupsDescのタイブレーク用。sizeKeyが同着＝sectionDefId未conformの
+      // 一時的な状態でも、共通柱を先・個別柱を後にする。QA裁定2026-09-17）。
+      const individual = isIndividuallyNumbered(entity, mapName, rules, standardSection);
       let group = project.memberNumberIndex.get(groupKey);
       if (!group) {
-        group = { mapName, symbol, sizeKey, signature, orderKey, floorRanks: new Set(), hasRoof: false, counts: new Map() };
+        group = { mapName, symbol, sizeKey, signature, orderKey, columnGroupScope, individual, floorRanks: new Set(), hasRoof: false, counts: new Map() };
         project.memberNumberIndex.set(groupKey, group);
         // project.memberNumberIndex は deep な observable.map（core.js）のため、set() に渡した plain
         // object/Map/Set はそのまま格納されず、MobXが別のobservableオブジェクトへ深変換した複製が
@@ -130,6 +148,8 @@ export function collectFloorGroups(graph, project) {
         group.sizeKey = sizeKey;
         group.signature = signature;
         group.orderKey = orderKey;
+        group.columnGroupScope = columnGroupScope;
+        group.individual = individual;
       }
       touchedGroups.set(groupKey, group);
       localCounts.set(groupKey, (localCounts.get(groupKey) ?? 0) + 1);
@@ -199,6 +219,11 @@ function compareGroupsDesc(a, b) {
     const va = a.sizeKey[i] ?? 0, vb = b.sizeKey[i] ?? 0;
     if (va !== vb) return vb - va; // 降順（大きい方が先＝若い番号）
   }
+  // sizeKeyが同着（sectionDefId未conform等で共通柱と個別柱の断面が一時的に一致する状態を含む）の
+  // ときは、共通（individual=false）を先・個別採番対象（individual=true）を後にする——挿入順や
+  // Map反復順に依存しない決定論的な順序にするため（QA裁定2026-09-17。groupにindividualが無い
+  // 呼び出し元＝古い手作りfixture等はundefined同士でここが効かず、従来どおり次のタイブレークへ落ちる）。
+  if (!!a.individual !== !!b.individual) return a.individual ? 1 : -1;
   const minA = a.floorRanks.size ? Math.min(...a.floorRanks) : Infinity;
   const minB = b.floorRanks.size ? Math.min(...b.floorRanks) : Infinity;
   if (minA !== minB) return minA - minB; // 出現最下階が下（rankが小さい）方を先
@@ -259,13 +284,21 @@ export function assignNumbers(project) {
       const manualTag = getGroupManualTag(project.memberGroupLedger, entry.groupKey);
       if (manualTag) { tags.set(entry.groupKey, manualTag); taken.add(manualTag); }
     }
-    let autoIndex = 0;
+    // 自動採番のcounterは既定では記号全体で1つ（連番）だが、columnGroupScope==='floor'
+    // （在来木造のcolumnMapグループ。groupKey自体が@planeIdで既に階ごとに分かれている）は
+    // 階ごとに専用counterを持たせ、番号が階をまたいで連番にならないようにする（1C1・2C1・3C1。
+    // ユーザー裁定2026-09-17・A——柱は階の部材で階をまたがないため）。taken（完成タグの衝突回避）
+    // 自体は記号全体で共有したまま（手動タグとの文字列衝突は階をまたいでも防ぐ）。
+    const autoCounters = new Map(); // counterKey → 直近のindex（'__all__' または floorIdentityKey）
     for (const entry of sorted) {
       if (tags.has(entry.groupKey)) continue; // 手動タグ済み
       const prefix = needsPrefix ? floorPrefixLabel(entry.group, project) : '';
+      const counterKey = entry.group.columnGroupScope === 'floor' ? `floor:${floorIdentityKey(entry.group)}` : '__all__';
       let candidate;
+      let autoIndex;
       do {
-        autoIndex += 1;
+        autoIndex = (autoCounters.get(counterKey) ?? 0) + 1;
+        autoCounters.set(counterKey, autoIndex);
         candidate = `${prefix}${entry.group.symbol}${autoIndex}`;
       } while (taken.has(candidate));
       tags.set(entry.groupKey, candidate);
@@ -290,11 +323,16 @@ export function assignNumbers(project) {
  *   採番順序キー。省略時は[]（非個別・従来どおりsignatureでタイブレーク）——QA指摘F10:
  *   実グループはcollectFloorGroupsがorderKeyを積むが、プレビューは実グループ化される前の
  *   使い捨てエントリのため呼び出し側が明示的に渡す必要がある。
+ * @param {boolean} [options.individual] 個別採番対象（memberCatalog.isIndividuallyNumbered）か。
+ *   省略時はfalse——compareGroupsDescの「共通が先・個別が後」タイブレーク（ユーザー裁定2026-09-17）が
+ *   実グループのgroup.individualと同じ形を要求するため、orderKeyと同じ理由で呼び出し側が明示的に
+ *   渡す必要がある（省略するとPREVIEW_KEYがindividual=falseの実グループより先に扱われ、対象が
+ *   個別採番グループのプレビューで位置がずれる）。
  * @returns {string|null} 予定タグ
  */
 export function previewSplitTag(project, mapName, symbol, sizeKey, signature, floorInfo, options = {}) {
   const PREVIEW_KEY = '__split_preview__';
-  const { remainderGroupKey, removeFromRemainder, orderKey = [] } = options;
+  const { remainderGroupKey, removeFromRemainder, orderKey = [], individual = false } = options;
   const cloned = new Map(project.memberNumberIndex);
   if (remainderGroupKey && removeFromRemainder && cloned.has(remainderGroupKey)) {
     const src = cloned.get(remainderGroupKey);
@@ -304,7 +342,7 @@ export function previewSplitTag(project, mapName, symbol, sizeKey, signature, fl
     cloned.set(remainderGroupKey, { ...src, floorRanks, hasRoof });
   }
   cloned.set(PREVIEW_KEY, {
-    mapName, symbol, sizeKey, signature, orderKey,
+    mapName, symbol, sizeKey, signature, orderKey, individual,
     floorRanks: !floorInfo.isRoof && floorInfo.rank >= 0 ? new Set([floorInfo.rank]) : new Set(),
     hasRoof: floorInfo.isRoof,
     counts: new Map(),
@@ -333,7 +371,7 @@ export function applyNumbers(graph, project, tags, onlyMapName = null) {
   const standardSection = standardBeamSectionFor(graph, project, rules);
   for (const mapName of maps) {
     for (const entity of graph[mapName].values()) {
-      const groupKey = memberGroupKey(entity, mapName, rules, standardSection);
+      const groupKey = memberGroupKey(entity, mapName, rules, standardSection, graph.plane.id);
       const tag = tags.get(groupKey);
       if (tag != null && tag !== entity.memberNo) {
         if (entity.memberNo != null) renumbered.push({ from: entity.memberNo, to: tag });
@@ -361,7 +399,9 @@ export function applyNumbers(graph, project, tags, onlyMapName = null) {
  * 相対順位で決まり、次のモード境界の反映パスで建物全体の順位に補正される。
  */
 export function renumberMembers(graph, project, mapName = null) {
-  conformToLedger(graph, project);
+  // conformToLedgerへrules/graph.plane.idを渡す——在来木造columnMapのjoin照合を階スコープの
+  // 加入署名（joinSignatureFor）で解決させるため（QA裁定2026-09-17）。
+  conformToLedger(graph, project, rulesFor(effectiveStructure(graph, project)), graph.plane.id);
   collectFloorGroups(graph, project);
   const tags = assignNumbers(project);
   applyNumbers(graph, project, tags, mapName);

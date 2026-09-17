@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {
   memberSymbol, MEMBER_GROUPS, NUMBERED_MAPS, FIELD_DEFS_BY_CATEGORY, SIGNATURE_FIELDS_BY_MAP, MEMBER_CATEGORY,
-  noJoinSignatureFor, memberSignature, isIndividuallyNumbered, memberGroupKey, memberOrderKey,
+  noJoinSignatureFor, joinSignatureFor, memberSignature, isIndividuallyNumbered, memberGroupKey, memberOrderKey,
 } from './memberCatalog.js';
 import { makeBeam, makeColumn } from './memberTestFixtures.js';
 import { rulesFor, TRADITIONAL_WOOD_STRUCTURE, UNSPECIFIED_STRUCTURE } from './structureRules.js';
@@ -492,8 +492,8 @@ test('【不変条件・ユーザー裁定2026-09-17／QA指摘2026-09-17】Memb
   const blockMatch = /\{!readOnly && woodColumnCard && \(([\s\S]{0,900}?)\n {10}\)\}/.exec(src);
   assert.ok(blockMatch, '柱カードの適用範囲2択ブロック（!readOnly && woodColumnCard でゲート）が見つからない');
   const body = blockMatch[1];
-  assert.ok(/<ScopeButton active=\{columnScope === 'all'\} onClick=\{\(\) => setColumnScope\('all'\)\}>全体<\/ScopeButton>/.test(body),
-    '「全体」ボタンがcolumnScope/setColumnScopeを読み書きしていない（QA指摘・回帰: 分割UI専用の`scope`と共有すると柱の他フィールド編集で分割経路に迷い込む）');
+  assert.ok(/<ScopeButton active=\{columnScope === 'all'\} disabled=\{isIndividualColumn\} onClick=\{\(\) => setColumnScope\('all'\)\}>全体<\/ScopeButton>/.test(body),
+    '「全体」ボタンがcolumnScope/setColumnScopeを読み書き・isIndividualColumnでdisabledしていない（QA指摘・回帰: 分割UI専用の`scope`と共有すると柱の他フィールド編集で分割経路に迷い込む／ユーザー裁定2026-09-17B: 個別カードは全体を押せない）');
   assert.ok(/<ScopeButton active=\{columnScope === 'entity'\} disabled=\{!columnEntityTarget\} onClick=\{\(\) => setColumnScope\('entity'\)\}>この部材<\/ScopeButton>/.test(body),
     '「この部材」ボタン（columnEntityTarget不在でdisabled）がcolumnScope/setColumnScopeを読み書きしていない');
   assert.ok(!body.includes("この階") && !body.includes('統合'),
@@ -575,7 +575,7 @@ test('【不変条件・ユーザー裁定2026-09-17】MemberListTab.jsx: Column
     'ColumnWidthScopeSelectのvalueがscope=entity時に個別値（無ければ階の値）へフォールバックしていない（旧のmembers[0]参照への回帰）');
 });
 
-test('【失敗系・QA指摘F1】noJoinSignatureFor: 個別採番対象でなければnull（在来の標準材・非在来6種＋未定・柱等は常に既定のjoin=trueを維持する）', () => {
+test('【失敗系・QA指摘F1】noJoinSignatureFor: 個別採番対象でなければnull（在来の標準梁・非在来6種＋未定は常に既定のjoin=trueを維持する）', () => {
   const woodRules = rulesFor(TRADITIONAL_WOOD_STRUCTURE);
   const standardBeam = makeBeam('b1', 'WOOD-120x120', { materialType: 'WOOD', role: 'primary' }); // 標準材
   assert.equal(noJoinSignatureFor(standardBeam, 'beamMap', woodRules), null);
@@ -583,5 +583,47 @@ test('【失敗系・QA指摘F1】noJoinSignatureFor: 個別採番対象でな�
   const nonStdOnUnspecified = makeBeam('b2', 'WOOD-120x330', { materialType: 'WOOD', role: 'primary' });
   assert.equal(noJoinSignatureFor(nonStdOnUnspecified, 'beamMap', unspecifiedRules), null, '非在来（未定）は個別採番自体が無い');
   const column = { id: 'c1', materialType: 'RC', sectionDefId: 'RC-300x300', role: 'standard' };
-  assert.equal(noJoinSignatureFor(column, 'columnMap', woodRules), null, '柱（beamMap以外）は対象外');
+  assert.equal(noJoinSignatureFor(column, 'columnMap', unspecifiedRules), null, '非在来（columnGroupScope="building"）の柱はbeamMap以外なので対象外＝既定のjoin=trueを維持する');
+});
+
+// ---- ステップA（2026-09-17裁定）: 在来木造は柱の採番グループを階ごとに分ける（columnGroupScope） ----
+// QA裁定（同日・joinは階スコープで残す）: noJoinSignatureForでの在来columnMapの全面抑止（共通柱も
+// join=false）は撤回した——在来木造の柱は壁交点から毎回自動生成されるため、手動タグ後に合流自体を
+// 止めると実害がある（同じ階の後発同寸柱が別グループのまま残る）。共通柱のjoin可否判定は非在来と
+// 同じ（常にjoin=true）に戻し、他階への波及だけをjoinSignatureFor（@planeId付き）で遮断する。
+test('【ステップA・QA裁定2026-09-17】noJoinSignatureFor: 在来木造（columnGroupScope==="floor"）でも共通柱はnullを返す（join=trueのまま。全面抑止の撤回）。個別柱は従来どおり「今の署名」でjoin=falseを強制する', () => {
+  const woodRules = rulesFor(TRADITIONAL_WOOD_STRUCTURE);
+  const common = makeColumn('c1', 'WOOD-120x120', { materialType: 'WOOD', role: 'standard', woodColumnWidthMm: null });
+  const individual = makeColumn('c2', 'WOOD-105x105', { materialType: 'WOOD', role: 'standard', woodColumnWidthMm: 105 });
+  assert.equal(noJoinSignatureFor(common, 'columnMap', woodRules), null,
+    '共通柱はjoin=trueのまま（在来木造は壁交点から毎回自動生成されるため、合流自体を止めてはいけない）');
+  assert.equal(noJoinSignatureFor(individual, 'columnMap', woodRules), memberSignature(individual, 'columnMap'),
+    '個別採番対象（1本1タグ）は従来どおりjoin=falseを強制する');
+});
+
+test('【ステップA・QA裁定2026-09-17】joinSignatureFor: 在来木造のcolumnMapは共通・個別いずれもsignatureに`@<planeId>`を付ける（他階への波及を遮断）。それ以外（非在来・非columnMap・planeId省略）はsignatureのまま', () => {
+  const woodRules = rulesFor(TRADITIONAL_WOOD_STRUCTURE);
+  const common = makeColumn('c1', 'WOOD-120x120', { materialType: 'WOOD', role: 'standard', woodColumnWidthMm: null });
+  const individual = makeColumn('c2', 'WOOD-105x105', { materialType: 'WOOD', role: 'standard', woodColumnWidthMm: 105 });
+  const sigCommon = memberSignature(common, 'columnMap');
+  const sigIndividual = memberSignature(individual, 'columnMap');
+  assert.equal(joinSignatureFor(common, 'columnMap', woodRules, 'p1'), `${sigCommon}@p1`);
+  assert.equal(joinSignatureFor(individual, 'columnMap', woodRules, 'p1'), `${sigIndividual}@p1`);
+  assert.equal(joinSignatureFor(common, 'columnMap', woodRules), sigCommon, 'planeId省略時はsignatureのまま（後方互換）');
+  const unspecifiedRules = rulesFor(UNSPECIFIED_STRUCTURE);
+  assert.equal(joinSignatureFor(common, 'columnMap', unspecifiedRules, 'p1'), sigCommon, '非在来（columnGroupScope="building"）はplaneId指定時もsignatureのまま');
+  const beam = makeBeam('b1', 'WOOD-120x120', { materialType: 'WOOD', role: 'primary' });
+  assert.equal(joinSignatureFor(beam, 'beamMap', woodRules, 'p1'), memberSignature(beam, 'beamMap'), 'beamMapはcolumnGroupScopeの対象外＝planeIdを付与しない');
+});
+
+test('【失敗系・ステップA】memberGroupKey: columnMapはrules.numbering.columnGroupScope==="floor"かつplaneId指定時だけ`@<planeId>`を付ける（省略時・非在来・非columnMapは付けない＝signature自体は不変）', () => {
+  const woodRules = rulesFor(TRADITIONAL_WOOD_STRUCTURE);
+  const common = makeColumn('c1', 'WOOD-120x120', { materialType: 'WOOD', role: 'standard', woodColumnWidthMm: null });
+  const sig = memberSignature(common, 'columnMap');
+  assert.equal(memberGroupKey(common, 'columnMap', woodRules), sig, 'planeId省略時は従来どおりsignatureのまま（後方互換）');
+  assert.equal(memberGroupKey(common, 'columnMap', woodRules, undefined, 'p1'), `${sig}@p1`, 'planeId指定時は@planeIdを付与する');
+  const unspecifiedRules = rulesFor(UNSPECIFIED_STRUCTURE);
+  assert.equal(memberGroupKey(common, 'columnMap', unspecifiedRules, undefined, 'p1'), sig, '非在来（columnGroupScope="building"）はplaneId指定時も付与しない');
+  const beam = makeBeam('b1', 'WOOD-120x120', { materialType: 'WOOD', role: 'primary' });
+  assert.equal(memberGroupKey(beam, 'beamMap', woodRules, undefined, 'p1'), memberSignature(beam, 'beamMap'), 'beamMapはcolumnGroupScopeの対象外＝planeIdを付与しない');
 });

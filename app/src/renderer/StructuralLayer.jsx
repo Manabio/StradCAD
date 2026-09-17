@@ -4,6 +4,7 @@ import { StructuralMaterialType, LINE_WEIGHT_MM } from '../core.js';
 import { cellBoundsFromKey } from '../finish/gridCells.js';
 import { findSectionEntry, diaphragmProjection } from '../structural/sectionCatalog.js';
 import { rulesFor, effectiveStructure } from '../structural/structureRules.js';
+import { resolveBeamJunctionSpans } from '../structural/beamJunction.js';
 import {
   framingColumnGroups, framingColor, framingColorOverride, columnSectionSize, framingColumnLineWeight,
   beamDepthMarks, sillBandSpec, pickMembersOnFigure, pickColumnsOnFigure, columnRenderSize,
@@ -137,6 +138,19 @@ function bandLines(keyPrefix, isVertical, axisValue, half, segments, stroke, str
       />
     );
   }));
+}
+
+// 帯のキャップ線（軸直交1本）。在来木造の梁の交点処理（structural/beamJunction.js
+// resolveBeamJunctionSpans。B-3・2026-09-17裁定「通しが勝つ」）で、出隅（L字）の勝者側を敗者の
+// 半幅ぶん控えたとき（ends[i].capped）、控えた端を閉じるための線——開いたままだと切りっぱなしに
+// 見える（bandLinesの2本線は端を閉じない。従来どおり）。extraProps はbandLinesと同じくpickShapeProps
+// を素通しするためだけに使う。
+function bandCapLine(key, isVertical, axisValue, half, coord, stroke, strokeWidth, dash, extraProps = {}) {
+  const p1 = isVertical ? { x: axisValue - half, y: coord } : { x: coord, y: axisValue - half };
+  const p2 = isVertical ? { x: axisValue + half, y: coord } : { x: coord, y: axisValue + half };
+  return (
+    <Line key={key} points={[p1.x, p1.y, p2.x, p2.y]} stroke={stroke} strokeWidth={strokeWidth} dash={dash} listening={false} {...extraProps} />
+  );
 }
 
 // 木造基礎伏図の「土台」「ベース」帯の振り分け寸法（問題.md）。通り芯・1階壁芯（＝基礎梁の軸）から
@@ -285,18 +299,24 @@ export const ColumnsLayer = observer(({
     const hitProps = pick
       ? { listening: true, fillEnabled: false, hitStrokeWidth: Math.max(MEMBER_HIT_PX / scale, columnRenderSize(column)) }
       : COLUMN_HIT_PROPS_NONE;
-    els.push(
-      <ColumnSymbol
-        key={column.id}
-        column={column}
-        color={color}
-        outline={outline}
-        outlineStrokeWidth={outlineStrokeWidth}
-        hitProps={hitProps}
-      />
-    );
-    // 伏図の下階柱記号（×）。断面□の上に対角線2本を重ねる（在来木造 framingColumnSymbol:'boxCross' のみ）。
-    if (framingSymbol === 'boxCross') {
+    // 伏図の下階柱記号 'cross'（在来木造）は×だけを描き、断面□は描かない——梁が下階柱の上に乗るため
+    // 断面外形は見えず、描くと通しの梁の帯の中に柱寸の四角が残る（structural/framingDrawing.js
+    // framingColumnGroups のコメント参照）。他の記号（null/'section'/'box'）は従来どおり断面を描く。
+    if (framingSymbol !== 'cross') {
+      els.push(
+        <ColumnSymbol
+          key={column.id}
+          column={column}
+          color={color}
+          outline={outline}
+          outlineStrokeWidth={outlineStrokeWidth}
+          hitProps={hitProps}
+        />
+      );
+    }
+    // 伏図の下階柱記号（×）。対角線2本（断面□からはみ出す長さ）を描く（在来木造 framingColumnSymbol:'crossBox' の
+    // 下階柱グループ＝symbol 'cross' のみ）。
+    if (framingSymbol === 'cross') {
       els.push(
         <ColumnCrossMark
           key={`cross:${column.id}`}
@@ -382,9 +402,24 @@ export const StructuralLayer = observer(({ composition, viewport, project, onMem
 
   // 梁の描画スパン（柱手前でトリム済み）を1箇所で解決する——梁本体の帯・継手記号と、非正角材の標記
   // （beamDepthMarks）が同じスパンを読むようにするため（二重計算・食い違いの防止）。
-  const beamDrawSpans = (beam?.graph?.beams ?? []).map(b => {
+  const baseSpans = (beam?.graph?.beams ?? []).map(b => {
     const { coord1, coord2 } = b.spanForColumns(displayedColumns, { diaphragm: lod === LodLevel.DETAIL });
     return { beam: b, coord1, coord2 };
+  });
+  // 在来木造の梁の交点処理（B-3・2026-09-17裁定「通しが勝つ」）。実体スパン（上のbaseSpans。
+  // 下階柱面での止め）はここでは書き換えず、描画専用の追加トリム（勝者面での止め・L字の角閉じ）だけを
+  // structural/beamJunction.js resolveBeamJunctionSpans が解決する——drawing.beamJunction!=='throughWins'
+  // （在来木造以外）は常に空Mapを返すため、非在来は完全不変（beamDrawSpansがbaseSpansとそのまま同じ）。
+  const junctions = resolveBeamJunctionSpans(figureRules.drawing, baseSpans.map(({ beam: b, coord1, coord2 }) => ({
+    id: b.id, role: b.role, isVertical: b.isVertical, axisValue: b.axisValue,
+    end1: b.clStart.effectiveValue, end2: b.clEnd.effectiveValue,
+    base1: coord1, base2: coord2,
+    halfWidth: (beamRenderWidth(b, lod) ?? 0) / 2,
+    sectionKey: b.sectionDefId,
+  })));
+  const beamDrawSpans = baseSpans.map(s => {
+    const j = junctions.get(s.beam.id);
+    return j ? { beam: s.beam, coord1: j.coord1, coord2: j.coord2, ends: j.ends } : s;
   });
 
   // 非正角材（成≠幅）の梁の標記（在来木造のみ。structural/framingDrawing.js beamDepthMarks が
@@ -479,7 +514,7 @@ export const StructuralLayer = observer(({ composition, viewport, project, onMem
         })}
       </Group>
       <Group {...groupPropsForStyle(beam?.spec.style)}>
-        {beamDrawSpans.flatMap(({ beam: b, coord1, coord2 }) => {
+        {beamDrawSpans.flatMap(({ beam: b, coord1, coord2, ends }) => {
           const color = colorOf(b.materialType);
           // 詳細描画では梁を柱断面ではなくダイヤフラム端まで（鋼管柱のみ e 分だけ手前で止まる）。
           // スパン(coord1/coord2)は上でbeamDrawSpansとして解決済み——非正角材の標記（beamDepthMarks）と
@@ -538,8 +573,16 @@ export const StructuralLayer = observer(({ composition, viewport, project, onMem
                 stroke={color} strokeWidth={medium} dash={beamDash} {...pickShapeProps} />,
             ]);
           }
+          // 在来木造の梁の交点処理（B-3。structural/beamJunction.js resolveBeamJunctionSpans）で
+          // 出隅の勝者側が敗者半幅ぶん控えられた端（ends[i].capped）だけ、控えた端を閉じるキャップ線を
+          // 追加する——単線LOD（width==null。上で早期returnする分岐）は対象外。非在来・非L字端は
+          // ends が無い/capped=falseのため常に空（Reactツリー不変）。
+          const capLines = (ends ?? []).flatMap((e, i) => (e?.capped
+            ? [bandCapLine(`cap:${b.id}:${i}`, b.isVertical, b.axisValue, width / 2, i === 0 ? coord1 : coord2, color, medium, beamDash, pickShapeProps)]
+            : []));
           return wrapPick([
             ...bandLines(`beam:${b.id}`, b.isVertical, b.axisValue, width / 2, [[lo, hi]], color, medium, beamDash, pickShapeProps),
+            ...capLines,
             ...jointMarks,
           ]);
         })}

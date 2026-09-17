@@ -13,10 +13,11 @@ import { LodLevel } from '../viewport.js';
 
 const NON_TRADITIONAL_KEYS = [...STRUCTURES.filter(k => k !== TRADITIONAL_WOOD_STRUCTURE), UNSPECIFIED_STRUCTURE];
 
-test('framingColumnGroups: 非在来は下階1群のみ・輪郭強制なし。在来は下階boxCross＋自階boxで両方輪郭強制', () => {
+test('framingColumnGroups: 非在来は下階1群のみ・輪郭強制なし。在来は下階cross（×のみ・断面□なし）＋自階box（輪郭強制）', () => {
+  // 下階柱は×だけ（実機指摘2026-09-17: 断面□まで描くと通しの梁の帯の中に柱寸の四角が残る）。
   const woodGroups = framingColumnGroups(rulesFor(TRADITIONAL_WOOD_STRUCTURE).drawing);
   assert.deepEqual(woodGroups, [
-    { category: 'columnMap', symbol: 'boxCross', outline: true },
+    { category: 'columnMap', symbol: 'cross', outline: false },
     { category: 'columnMapSelf', symbol: 'box', outline: true },
   ]);
   for (const key of NON_TRADITIONAL_KEYS) {

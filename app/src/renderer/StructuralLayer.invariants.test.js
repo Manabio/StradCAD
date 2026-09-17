@@ -209,6 +209,27 @@ test('【不変条件】StructuralLayer.jsx: 土台帯のhalf・線幅は sillBa
     'bandLines(...) 呼び出しが sillHalf を使っていない（土台帯のhalfが食い違う回帰）');
 });
 
+test('【不変条件・B-3】StructuralLayer.jsx: beamDrawSpansはresolveBeamJunctionSpans(の結果を通り、bandCapLineはends[...].cappedでゲートされている', () => {
+  const src = readSource();
+  assert.ok(/from '\.\.\/structural\/beamJunction\.js'/.test(src) && /resolveBeamJunctionSpans/.test(src),
+    'structural/beamJunction.js から resolveBeamJunctionSpans を import していない');
+  // baseSpans（spanForColumns由来）→ junctions（resolveBeamJunctionSpans）→ beamDrawSpans（junctionsで
+  // 上書き）という3段構成——resolveBeamJunctionSpansの結果を経由せずbeamDrawSpansを組み立てる回帰
+  // （実体スパンをそのまま描画に使ってしまい、在来木造の交点処理が効かなくなる）を検出する。
+  const junctionsMatch = /const\s+(\w+)\s*=\s*resolveBeamJunctionSpans\(\s*figureRules\.drawing\s*,/.exec(src);
+  assert.ok(junctionsMatch, 'resolveBeamJunctionSpans(figureRules.drawing, ...) の呼び出し・代入が見つからない');
+  const junctionsVar = junctionsMatch[1];
+  const beamDrawSpansMatch = new RegExp(`const beamDrawSpans = baseSpans\\.map\\(\\w+ => \\{[\\s\\S]*?${junctionsVar}\\.get\\(`).exec(src);
+  assert.ok(beamDrawSpansMatch, `beamDrawSpans が baseSpans.map(...) の中で ${junctionsVar}.get(...) を参照していない（交点処理の結果で上書きしていない回帰）`);
+  // 梁本体の描画（bandLines分岐）でends（beamDrawSpansの分割代入）を受け取り、cappedな端だけ
+  // bandCapLine(を呼んでいるか。1分岐でも落とすと検出できる形で固定する。
+  assert.ok(/beamDrawSpans\.flatMap\(\(\{\s*beam:\s*b,\s*coord1,\s*coord2,\s*ends\s*\}\)/.test(src),
+    'beamDrawSpansのflatMapがendsを分割代入していない（交点処理の結果を読んでいない回帰）');
+  const capMatch = /const capLines = \(ends \?\? \[\]\)\.flatMap\(\(e, i\) => \(e\?\.capped[\s\S]{0,120}?bandCapLine\(/.exec(src);
+  assert.ok(capMatch, 'capLines が e?.capped でゲートされたbandCapLine(呼び出しになっていない（capped=falseの端に誤ってキャップ線を描く／すべての端に描く回帰）');
+  assert.ok(/\.\.\.capLines,/.test(src), 'capLinesがbandLines分岐の描画配列に含まれていない');
+});
+
 test('【不変条件・QA指摘1・ステップ4】StructuralLayer.jsx: 柱の当たり判定（ColumnsLayerのhitProps）はpick時のみlistening:true・fillEnabled:false・hitStrokeWidthがMath.max(とcolumnRenderSize(を含み、非pick時はモジュール定数COLUMN_HIT_PROPS_NONE（{ listening: false }）で、<ColumnSymbol>へhitProps={hitProps}として渡される', () => {
   const src = readSource();
   const propsMatch = /const hitProps = pick\s*\n\s*\?\s*\{([^}]*)\}\s*\n\s*:\s*(\w+);/.exec(src);

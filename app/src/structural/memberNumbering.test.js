@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { collectFloorGroups, assignNumbers, applyNumbers, floorSpanLabel, renumberMembers } from './memberNumbering.js';
 import { splitGroup, setGroupManualTag } from './memberGroups.js';
 import { makeWall, makeBeam, makeColumn, makeGraph, makeProject } from './memberTestFixtures.js';
-import { isIndividuallyNumbered, memberOrderKey, noJoinSignatureFor } from './memberCatalog.js';
+import { isIndividuallyNumbered, memberOrderKey, noJoinSignatureFor, joinSignatureFor } from './memberCatalog.js';
 import { rulesFor, TRADITIONAL_WOOD_STRUCTURE } from './structureRules.js';
 
 // ---- QA1: collectFloorGroups は既存エントリを更新・除去する（材寸編集で旧グループが消える）----
@@ -485,4 +485,169 @@ test('【QA指摘F5】collectFloorGroups: 梁芯移動（axisValue変更）で�
 
   assert.equal(b2.memberNo, 'G1', 'axisValue=200（今は最小）のb2がG1になるはず（orderKeyが更新された証拠）');
   assert.equal(b1.memberNo, 'G2', '移動後300になったb1はG2になるはず');
+});
+
+// ---- ステップA（2026-09-17裁定）: 在来木造は柱の採番グループを階ごとに分ける（columnGroupScope） ----
+
+test('【ステップA】collectFloorGroups/applyNumbers: 在来木造の3階建てで各階の共通柱（同一120角）は階ごとに別グループになり1C1/2C1/3C1になる（floorSpreadBadgeも単一階）', () => {
+  const project = makeProject([{ id: 'p1', startFloor: 1 }, { id: 'p2', startFloor: 2 }, { id: 'p3', startFloor: 3 }]);
+  const c1 = woodColumn('c1', 'WOOD-120x120', { woodColumnWidthMm: null, axisX: 0, axisY: 0 });
+  const c2 = woodColumn('c2', 'WOOD-120x120', { woodColumnWidthMm: null, axisX: 0, axisY: 0 });
+  const c3 = woodColumn('c3', 'WOOD-120x120', { woodColumnWidthMm: null, axisX: 0, axisY: 0 });
+  const g1 = makeGraph('p1', { columnMap: [c1] });
+  const g2 = makeGraph('p2', { columnMap: [c2] });
+  const g3 = makeGraph('p3', { columnMap: [c3] });
+  g1.structureOverride = g2.structureOverride = g3.structureOverride = TRADITIONAL_WOOD_STRUCTURE;
+
+  collectFloorGroups(g1, project);
+  collectFloorGroups(g2, project);
+  collectFloorGroups(g3, project);
+  const tags = assignNumbers(project);
+  applyNumbers(g1, project, tags);
+  applyNumbers(g2, project, tags);
+  applyNumbers(g3, project, tags);
+
+  assert.equal(c1.memberNo, '1C1', '在来木造は柱グループが階ごとに分かれるため1階はプレフィックス1');
+  assert.equal(c2.memberNo, '2C1', '2階も別グループでC1（1階と同じ番号でよい。階ごとに独立採番）');
+  assert.equal(c3.memberNo, '3C1', '3階も別グループでC1');
+  assert.equal(project.memberNumberIndex.size, 3, '同じ材寸(120角)でも階ごとに3グループに分かれる（非在来なら1グループにまとまるところ）');
+
+  // 個別柱寸（1本1タグ）を1階に追加しても、階ごとの分離と両立する。
+  const individual = woodColumn('c4', 'WOOD-105x105', { woodColumnWidthMm: 105, axisX: 1000, axisY: 0 });
+  g1.columnMap.set(individual.id, individual);
+  collectFloorGroups(g1, project);
+  const tags2 = assignNumbers(project);
+  applyNumbers(g1, project, tags2);
+  applyNumbers(g2, project, tags2);
+  applyNumbers(g3, project, tags2);
+  assert.equal(individual.memberNo, '1C2', '1階の個別柱は1階の共通柱グループと同じ記号内でC2になる（他階へ波及しない）');
+  assert.equal(c2.memberNo, '2C1', '2階の共通柱グループは1階の個別柱追加の影響を受けない');
+});
+
+test('【失敗系・ステップA】collectFloorGroups/applyNumbers: 非在来（S造）は従来どおり柱グループが建物全体でまとまり、同一材寸なら単独グループはプレフィックスなし（1〜3階まとめてC1）、材寸違いが混在すれば"1~3C1"のような連続階表記になる（byte-identical維持の確認）', () => {
+  const project = makeProject([{ id: 'p1', startFloor: 1 }, { id: 'p2', startFloor: 2 }, { id: 'p3', startFloor: 3 }]);
+  const rcColumn = (id) => makeColumn(id, 'STEEL-SQ200x200x9.0', { materialType: 'STEEL', role: 'standard' });
+  const c1 = rcColumn('c1'), c2 = rcColumn('c2'), c3 = rcColumn('c3');
+  const g1 = makeGraph('p1', { columnMap: [c1] });
+  const g2 = makeGraph('p2', { columnMap: [c2] });
+  const g3 = makeGraph('p3', { columnMap: [c3] });
+  g1.structureOverride = g2.structureOverride = g3.structureOverride = 'S造';
+
+  collectFloorGroups(g1, project);
+  collectFloorGroups(g2, project);
+  collectFloorGroups(g3, project);
+  const tags = assignNumbers(project);
+  applyNumbers(g1, project, tags);
+  applyNumbers(g2, project, tags);
+  applyNumbers(g3, project, tags);
+
+  // 同一材寸の柱が3階すべてに存在し、記号"C"のグループがこれ1つだけなら、比較対象が無く
+  // needsPrefixがfalseのままプレフィックス無し（既存のbeamG（全階同一）と同じ規則。上の
+  // 「assignNumbers: sizeKey降順・階プレフィックス・タイブレークの規則」テスト参照）。
+  assert.equal(project.memberNumberIndex.size, 1, '非在来（S造）は同一材寸の柱が建物全体で1グループにまとまる（従来どおり）');
+  assert.equal(c1.memberNo, 'C1', '単独グループ（比較対象なし）はプレフィックス無し（従来どおり）');
+  assert.equal(c2.memberNo, 'C1');
+  assert.equal(c3.memberNo, 'C1');
+
+  // 材寸違いの柱（2階のみ・小さい断面）を混在させると、記号"C"内に出現階の異なる2グループが
+  // 生まれ、needsPrefixがtrueになり大きい方（1~3階の共通柱）が"1~3C1"になる
+  // （建物全体で1つにまとまる非在来の挙動。ユーザー裁定2026-09-17・A「非在来は'building'のまま」）。
+  const small = makeColumn('c4', 'STEEL-SQ150x150x9.0', { materialType: 'STEEL', role: 'standard' });
+  g2.columnMap.set(small.id, small);
+  collectFloorGroups(g2, project);
+  const tags2 = assignNumbers(project);
+  applyNumbers(g1, project, tags2);
+  applyNumbers(g2, project, tags2);
+  applyNumbers(g3, project, tags2);
+
+  assert.equal(project.memberNumberIndex.size, 2, '材寸違いの柱が加わり2グループになる');
+  assert.equal(c1.memberNo, '1~3C1', '大きい断面（1~3階共通）が"1~3C1"になる（連続階表記・建物全体で1グループ）');
+  assert.equal(c2.memberNo, '1~3C1');
+  assert.equal(c3.memberNo, '1~3C1');
+  assert.equal(small.memberNo, '2C2', '小さい断面（2階のみ）は"2C2"になる');
+});
+
+// ---- QA裁定2026-09-17（joinは階スコープで残す）: noJoinSignatureForでの在来columnMapの全面抑止は
+// 撤回し、joinSignatureFor（@planeId付きの加入署名）で「他階への波及だけ遮断・同一階内の合流は維持」
+// にする——在来木造の柱は壁交点から毎回自動生成されるため、手動タグ後に合流自体を止めると
+// 後発の同寸柱が別グループのまま残ってしまう実害があった。 ----
+test('【QA裁定2026-09-17・joinは階スコープ】renumberMembers: 共通柱に手動タグ(CX)を打った後、同じ階へ新規生成された同寸の共通柱は同じタグへ合流し、別の階の同寸共通柱はCXへ合流しない', () => {
+  const project = makeProject([{ id: 'p1', startFloor: 1 }, { id: 'p2', startFloor: 2 }]);
+  const c1 = woodColumn('c1', 'WOOD-120x120', { woodColumnWidthMm: null, axisX: 0, axisY: 0 });
+  const g1 = makeGraph('p1', { columnMap: [c1] });
+  const g2 = makeGraph('p2', { columnMap: [] });
+  g1.structureOverride = g2.structureOverride = TRADITIONAL_WOOD_STRUCTURE;
+  const rules = rulesFor(TRADITIONAL_WOOD_STRUCTURE);
+
+  // 1階の共通柱グループへ手動タグを打つ（MemberListTab.jsx commitManualNumberと同じ手順:
+  // noJoinSignatureFor＝null（共通柱は抑止対象外）→join=true、joinSignatureForが@p1付きの
+  // 階スコープ加入署名をgrp.joinへ書く）。
+  collectFloorGroups(g1, project);
+  const gid = splitGroup(project, 'columnMap', [c1], {
+    splitFromSignature: noJoinSignatureFor(c1, 'columnMap', rules),
+    joinSignature: joinSignatureFor(c1, 'columnMap', rules, g1.plane.id),
+  });
+  setGroupManualTag(project.memberGroupLedger, gid, 'CX');
+  renumberMembers(g1, project, 'columnMap');
+  assert.equal(c1.memberNo, 'CX', '前提: 1階の共通柱グループの手動タグがCXとして確定している');
+
+  // 同じ階（1階）へ壁交点から新たに自動生成された同寸(120角)の共通柱を追加する想定
+  // （実UIはautoFillColumnsForStructureが生成するが、本ファイルはduck-typedフィクスチャのため
+  // 直接追加して同じ材寸の後発共通柱を模す）。
+  const c2 = woodColumn('c2', 'WOOD-120x120', { woodColumnWidthMm: null, axisX: 1000, axisY: 0 });
+  g1.columnMap.set(c2.id, c2);
+  renumberMembers(g1, project, 'columnMap');
+  assert.equal(c2.memberNo, 'CX', '同じ階の後発同寸共通柱はCXへ合流する（在来木造の柱は壁交点から毎回自動生成されるため、合流自体を止めてはいけない）');
+
+  // 別の階（2階）に同寸(120角)の共通柱を追加してもCXへは合流しない（他階への波及は遮断されたまま）。
+  const c3 = woodColumn('c3', 'WOOD-120x120', { woodColumnWidthMm: null, axisX: 0, axisY: 0 });
+  g2.columnMap.set(c3.id, c3);
+  renumberMembers(g2, project, 'columnMap');
+  assert.notEqual(c3.memberNo, 'CX', '2階の同寸共通柱はCXへ合流しない（他階への波及はjoinSignatureForのplaneIdで遮断される）');
+  assert.equal(c1.memberNo, 'CX', '1階の手動タグは変更後も維持される');
+});
+
+// ---- QA裁定2026-09-17（中）: 同一階で共通柱と個別柱のsizeKeyが同着（sectionDefId未conform）のとき、
+// 挿入順に依存せず「共通が先・個別が後」になるようcompareGroupsDescにタイブレークを追加した。 ----
+test('【QA裁定2026-09-17・タイブレーク】collectFloorGroups/applyNumbers: sizeKeyが同着（sectionDefId未conform）の共通柱・個別柱は挿入順に関わらず共通=C1・個別=C2になる', () => {
+  function run(insertOrder) {
+    const project = makeProject([{ id: 'p1', startFloor: 1 }]);
+    const common = woodColumn('common', 'WOOD-120x120', { woodColumnWidthMm: null, axisX: 0, axisY: 0 });
+    // 個別指定は120（階の値と同値。conformWoodSections未実行のためsectionDefIdは直接'WOOD-120x120'を
+    // 与える＝共通と完全に同じsizeKeyになる「未conform」状態を再現する）。axisXを負値にする——
+    // 共通側はindividual=falseのためorderKeyが常に[]（0扱い）になり、個別側のorderKey[0]が0より
+    // 大きい値だと本タイブレーク無しでも「0<正の値」で偶然共通が先に並んでしまいテストが空振りする
+    // （実際に検証中に踏んだ）。負値にして「0>負の値」＝本タイブレークが無いと個別が先に来る配置にする。
+    const individual = woodColumn('individual', 'WOOD-120x120', { woodColumnWidthMm: 120, axisX: -1000, axisY: 0 });
+    const cols = insertOrder === 'common-first' ? [common, individual] : [individual, common];
+    const g = makeGraph('p1', { columnMap: cols });
+    g.structureOverride = TRADITIONAL_WOOD_STRUCTURE;
+    collectFloorGroups(g, project);
+    applyNumbers(g, project, assignNumbers(project));
+    return { common, individual };
+  }
+
+  const commonFirst = run('common-first');
+  assert.equal(commonFirst.common.memberNo, 'C1', '共通→個別の挿入順: 共通がC1のはず');
+  assert.equal(commonFirst.individual.memberNo, 'C2');
+
+  const individualFirst = run('individual-first');
+  assert.equal(individualFirst.common.memberNo, 'C1', '個別→共通の挿入順でも共通がC1のはず（挿入順に依存しない）');
+  assert.equal(individualFirst.individual.memberNo, 'C2');
+});
+
+// ---- QA裁定2026-09-17（低）: 在来の平屋（柱グループが1つだけ）は従来どおりプレフィックス無しのC1。 ----
+test('【QA裁定2026-09-17】collectFloorGroups/applyNumbers: 在来木造の平屋（柱グループが1つだけの建物）はプレフィックス無しのC1のまま（columnGroupScope="floor"導入後の回帰確認）', () => {
+  const project = makeProject([{ id: 'p1', startFloor: 1 }]);
+  const c1 = woodColumn('c1', 'WOOD-120x120', { woodColumnWidthMm: null, axisX: 0, axisY: 0 });
+  const c2 = woodColumn('c2', 'WOOD-120x120', { woodColumnWidthMm: null, axisX: 1000, axisY: 0 });
+  const g = makeGraph('p1', { columnMap: [c1, c2] });
+  g.structureOverride = TRADITIONAL_WOOD_STRUCTURE;
+
+  collectFloorGroups(g, project);
+  applyNumbers(g, project, assignNumbers(project));
+
+  assert.equal(project.memberNumberIndex.size, 1, '平屋・共通柱のみなのでグループは1つ');
+  assert.equal(c1.memberNo, 'C1', '柱グループが建物に1つだけならプレフィックス無しのC1のはず（比較対象が無くneedsPrefixがfalseのまま）');
+  assert.equal(c2.memberNo, 'C1');
 });

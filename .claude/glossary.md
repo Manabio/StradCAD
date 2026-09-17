@@ -95,7 +95,7 @@
 （実機裁定ステップ4 C-2 QA4: 標準材の解決がこの採番パイプラインとUI同期経路で二系統に分かれ、下階の柱寸変更後に構造リストの編集（`renumberMembers`）でタグが往復するバグが実機で見つかった。派生値方式で入口を1つに統一して解消した。）
 
 ## 個別採番
-在来木造で標準材以外の梁（成が同じでも）を材ごとに個別のグループとして採番する規律（`memberCatalog.isIndividuallyNumbered`/`memberGroupKey`/`memberOrderKey`）。伏図で梁をタップして選択する対象でもある。柱にも同じ規律を適用する（`woodColumnWidthMm`を個別指定した柱は1本1タグ。上記「共通／個別指定」参照）。設計意図は`.claude/structural-model.md`。
+在来木造で標準材以外の梁（成が同じでも）を材ごとに個別のグループとして採番する規律（`memberCatalog.isIndividuallyNumbered`/`memberGroupKey`/`memberOrderKey`）。伏図で梁をタップして選択する対象でもある。柱にも同じ規律を適用する（`woodColumnWidthMm`を個別指定した柱は1本1タグ。上記「共通／個別指定」参照）。設計意図は`.claude/structural-model.md`。柱はさらに`columnGroupScope`（在来のみ`'floor'`）で採番グループ自体を階ごとに分ける（共通柱も含む。例1C1/2C1/3C1）——非在来（`'building'`）は建物全体でまとまる従来どおりの挙動（例1~3C1）。
 
 ## 図面合成 / FigureDef / レイヤ / バインディング
 1枚の図面を「複数階×複数カテゴリの合成」として持つ仕組み（`.claude/figure.md`）。`FigureDef`＝レイヤ仕様の宣言的リスト。レイヤ＝`(供給階, カテゴリ, スタイル, 役割)`。バインディング＝レイヤが解決された自己完結グラフ（階固有CL＋通り芯参照を内包）。`composition.graphForCategory(mapName)` が描画・編集の対象グラフを一元的に返す。構造伏図は出演階＝`{自階, 自階−1}` の特殊例。
@@ -239,6 +239,13 @@ WINDING/L_TURN/FLARED/OPEN_WELLは対象外＝従来面順へフォールバッ�
 チェック時だけ全カタログ幅を選択肢に出す。既に階の値より大きい柱寸を個別指定済みの柱は
 チェックを外せない（`isUpsizedWidth`で判定・disabled固定）。設計意図は`.claude/structural-model.md`
 「在来木造の個別柱は壁の中で偏心する」節。
+
+## 通し勝ち（梁の交点処理・B-3）
+在来木造の伏図で梁が交わる箇所の描画専用トリム規律：通しの梁（両側に続く梁）が勝ち、T字で
+突き当たる梁は負けて勝者の面で止まる。出隅（L字）は長い方が勝ち、同長ならX方向。実体スパン
+（`spanForColumns`）は書き換えず、`structural/beamJunction.js`の`resolveBeamJunctionSpans`が
+解決した結果を`renderer/StructuralLayer.jsx`が描画時だけ上書きする。設計意図は
+`.claude/structural-model.md`「在来木造の梁は交点で『通しが勝つ』」節。
 
 ## 偏心（柱）（B-1）
 在来木造の個別柱（柱寸が階の柱寸と異なる柱）が、壁の中で外面をそろえるために柱芯からずれる量

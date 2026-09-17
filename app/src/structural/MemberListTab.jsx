@@ -13,7 +13,7 @@ import {
   MEMBER_GROUPS, REMOVE_FN_BY_MAP, FIELD_DEFS_BY_CATEGORY,
   materialLabel, sectionAspectRatio, sectionIconShape, memberSymbol, memberSignature, memberSizeKey,
   DEFAULT_SECTION_BY_MATERIAL,
-  FIGURE_FRAME_BY_MAP, DEFAULT_FIGURE_FRAME, UNNUMBERED_TAG, memberGroupKey, noJoinSignatureFor,
+  FIGURE_FRAME_BY_MAP, DEFAULT_FIGURE_FRAME, UNNUMBERED_TAG, memberGroupKey, noJoinSignatureFor, joinSignatureFor,
   memberOrderKey, isIndividuallyNumbered,
 } from './memberCatalog.js';
 import { alignToOuterFace, autoFillColumnSizes, autoFillColumnBaseSizes, isRigidFrameStructure, beamAxisCenterLines,
@@ -144,7 +144,7 @@ function tagSortTuple(tag, members, group, graph, project, structure) {
   const symbol = memberSymbol(rep, group.mapName);
   const symbolRank = SYMBOL_ORDER.indexOf(symbol);
   const num = tag === UNNUMBERED_TAG ? Infinity : Number(tag.match(/(\d+)$/)?.[1] ?? Infinity);
-  const groupKey = memberGroupKey(rep, group.mapName, rulesFor(structure), standardBeamSectionFor(graph, project, rulesFor(structure)));
+  const groupKey = memberGroupKey(rep, group.mapName, rulesFor(structure), standardBeamSectionFor(graph, project, rulesFor(structure)), graph.plane.id);
   const idxEntry = project.memberNumberIndex.get(groupKey);
   const floorRank = idxEntry?.floorRanks.size ? Math.min(...idxEntry.floorRanks) : Infinity;
   return [symbolRank < 0 ? 999 : symbolRank, num, floorRank];
@@ -889,7 +889,7 @@ const MemberCard = observer(({
   const floorLabel = makeFloorName(graph.plane.startFloor, graph.plane.stories ?? 1);
   // このグループが複数階にまたがるか（project.memberNumberIndex の派生キャッシュを読む。
   // モード境界の収集フェーズで再構築されるため、未収集時は「単一階」として扱う＝安全側のフォールバック）。
-  const groupKeyForIndex = memberGroupKey(representative, group.mapName, rulesFor(structure), standardBeamSectionFor(graph, project, rulesFor(structure)));
+  const groupKeyForIndex = memberGroupKey(representative, group.mapName, rulesFor(structure), standardBeamSectionFor(graph, project, rulesFor(structure)), graph.plane.id);
   const idxEntry = project.memberNumberIndex.get(groupKeyForIndex);
   const isMultiFloor = idxEntry ? (idxEntry.floorRanks.size + (idxEntry.hasRoof ? 1 : 0)) > 1 : false;
   // カードヘッダの広がりバッジ（例 "2~3F・計12本"）。design-member-numbering-ui.md 5節。
@@ -914,7 +914,7 @@ const MemberCard = observer(({
     if (!targetMembers.length) return null;
     const rules = rulesFor(structure);
     const standardSection = standardBeamSectionFor(graph, project, rules);
-    const remainderGroupKey = memberGroupKey(representative, group.mapName, rules, standardSection);
+    const remainderGroupKey = memberGroupKey(representative, group.mapName, rules, standardSection, graph.plane.id);
     // 「この階」は自階の対象が全部移動＝自階分は0本残る。「この部材」はこの階に他に残りが無い場合のみ0本。
     const removeFromRemainder = scope === 'floor' || (scope === 'entity' && members.length === 1);
     const floorInfo = floorRankOf(graph.plane, project);
@@ -924,6 +924,7 @@ const MemberCard = observer(({
       floorInfo, {
         remainderGroupKey, removeFromRemainder,
         orderKey: memberOrderKey(targetMembers[0], group.mapName, rules, standardSection),
+        individual: isIndividuallyNumbered(targetMembers[0], group.mapName, rules, standardSection),
       },
     );
     return { count: targetMembers.length, tag };
@@ -1031,7 +1032,7 @@ const MemberCard = observer(({
   //   (2) 台帳の grp.no 全値（他階にしか実体が無い＝まだ収集されていないグループの手動タグも拾う）
   function isManualTagUsedElsewhere(tag) {
     const ownGid = representative.numberGroupId;
-    const ownGroupKey = memberGroupKey(representative, group.mapName, rulesFor(structure), standardBeamSectionFor(graph, project, rulesFor(structure)));
+    const ownGroupKey = memberGroupKey(representative, group.mapName, rulesFor(structure), standardBeamSectionFor(graph, project, rulesFor(structure)), graph.plane.id);
     for (const [groupKey, t] of assignNumbers(project)) {
       if (groupKey !== ownGroupKey && t === tag) return true;
     }
@@ -1066,9 +1067,13 @@ const MemberCard = observer(({
       // 個別採番対象（isIndividuallyNumbered）はsplitFromSignatureに「今の署名」を渡し、
       // splitGroupのjoinを強制的に抑止する——渡さない（=null）と、常にjoin=trueで台帳へ書かれ、
       // 次のconformToLedgerが同署名の他の個別採番対象（別の非標準梁）まで吸収してしまう
-      // （QA指摘F1。noJoinSignatureForが唯一の判定先）。
+      // （QA指摘F1。noJoinSignatureForが唯一の判定先）。joinSignatureはjoin=true時に実際にgrp.joinへ
+      // 書く値——在来木造のcolumnMap（共通・個別とも）はjoinSignatureForがplaneIdを付け、
+      // 合流をこの階の中だけに限定する（他階の同署名共通柱まで手動タグへ吸収されるQA裁定2026-09-17の
+      // 修正。個別採番対象はどのみちjoin=falseになるため実質未使用だが、同じ入口に揃える）。
       if (!gid) gid = splitGroup(project, group.mapName, members, {
         splitFromSignature: noJoinSignatureFor(representative, group.mapName, rulesFor(structure), standardBeamSectionFor(graph, project, rulesFor(structure))),
+        joinSignature: joinSignatureFor(representative, group.mapName, rulesFor(structure), graph.plane.id),
       });
       setGroupManualTag(project.memberGroupLedger, gid, value);
       renumberMembers(graph, project, group.mapName);
@@ -1352,7 +1357,8 @@ const MemberCard = observer(({
             <div style={{ margin: '6px 0' }}>
               <div style={{ fontSize: 11, color: '#64748b', marginBottom: 4 }}>適用範囲</div>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
-                <ScopeButton active={columnScope === 'all'} onClick={() => setColumnScope('all')}>全体</ScopeButton>
+                {/* 個別カードは「全体」を無効化（ユーザー裁定2026-09-17B。分離した柱は常に自分自身）。 */}
+                <ScopeButton active={columnScope === 'all'} disabled={isIndividualColumn} onClick={() => setColumnScope('all')}>全体</ScopeButton>
                 <ScopeButton active={columnScope === 'entity'} disabled={!columnEntityTarget} onClick={() => setColumnScope('entity')}>この部材</ScopeButton>
               </div>
               {columnScope === 'entity' && !columnEntityTarget && (

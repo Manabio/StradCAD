@@ -6,13 +6,16 @@
  *
  * 格納 key/value（すべて string→string、fieldPacking.js と同じ「JSON を使わない」方針）:
  *   grp.spec:<gid>       = 材寸spec文字列（memberCatalog.memberSpecString と同形式）
- *   grp.join:<gid>       = 加入署名（materialize 時点の memberSignature。他階の同署名部材を次のモード境界で吸収する）
+ *   grp.join:<gid>       = 加入署名（既定は materialize 時点の memberSignature。同署名の部材を次のモード
+ *                          境界で吸収する。在来木造の columnMap は memberCatalog.joinSignatureFor が
+ *                          `signature@planeId` にし、吸収を「その階の中だけ」に限定する——他階へは
+ *                          波及しない。QA裁定2026-09-17）
  *   grp.no:<gid>         = 手動タグ文字列（任意。手動で番号を打った場合のみ）
  *   grp.mergedInto:<gid> = 統合により吸収された旧gid → 統合先gid（Phase C mergeGroups が書く。conformToLedger が
  *                          既に numberGroupId=<gid> を持つ他階の部材を、次のモード境界で統合先gidへ転送するための
  *                          転送先ポインタ。多段統合（統合先がさらに別統合に吸収される）にも追従できるよう連鎖解決する）
  */
-import { NUMBERED_MAPS, memberSymbol, memberSignature, memberSpecString } from './memberCatalog.js';
+import { NUMBERED_MAPS, memberSymbol, memberSignature, memberSpecString, joinSignatureFor } from './memberCatalog.js';
 
 const specKeyOf       = gid => `grp.spec:${gid}`;
 const joinKeyOf       = gid => `grp.join:${gid}`;
@@ -112,12 +115,21 @@ function applySpecToEntity(entity, spec) {
  *   - numberGroupId が既にある部材: まず grp.mergedInto を辿って統合先gidへ転送（Phase C mergeGroups が
  *     吸収した旧gidを持つ他階の部材を、次のモード境界で統合先へ合流させる経路）。その上で
  *     grp.spec:<gid> の材寸を部材へ conform（分割・統合で確定した材寸に揃える）。
- *   - numberGroupId が無い部材: signature が grp.join:<gid> のどれかと一致すれば、その gid（同様に
- *     mergedInto を解決した最終gid）を吸収し spec に conform。
+ *   - numberGroupId が無い部材: 加入署名（joinSignatureFor）が grp.join:<gid> のどれかと一致すれば、
+ *     その gid（同様に mergedInto を解決した最終gid）を吸収し spec に conform。
  * Phase A では台帳が常に空（split/merge の UI が無い）ため実質 no-op。Phase B/C の分割・統合が
  * 台帳へ書き込むようになった時点から機能する。
+ *
+ * @param {object} graph
+ * @param {object} project
+ * @param {object|null} [rules] 呼び出し側（structuralRecompute.js・structuralOrchestration.js・
+ *   memberNumbering.js renumberMembers）が effectiveStructure(graph, project) から解決して渡す。
+ *   joinSignatureFor が columnMap の階スコープ判定（columnGroupScope）に使う——省略時（null）は
+ *   memberSignature をそのまま使う従来どおりの建物全体joinにフォールバックする（rules を持たない
+ *   呼び出し元・既存テストの後方互換）。
+ * @param {string|null} [planeId] graph.plane.id。省略時は上と同じフォールバック。
  */
-export function conformToLedger(graph, project) {
+export function conformToLedger(graph, project, rules = null, planeId = null) {
   const ledger = project.memberGroupLedger;
   for (const mapName of NUMBERED_MAPS) {
     for (const entity of graph[mapName].values()) {
@@ -127,7 +139,7 @@ export function conformToLedger(graph, project) {
         applySpecToEntity(entity, getGroupSpec(ledger, resolved));
         continue;
       }
-      const signature = memberSignature(entity, mapName);
+      const signature = rules ? joinSignatureFor(entity, mapName, rules, planeId) : memberSignature(entity, mapName);
       const gid = findGidByJoinSignature(ledger, signature);
       if (gid) {
         const resolved = resolveMergedGid(ledger, gid);
@@ -158,11 +170,16 @@ function nextGroupSeq(ledger, symbol) {
  *
  * join=false は grp.join を書かない（＝同署名の他部材を吸収しない孤立グループにする）。
  * 署名フィールド以外の編集で分割したときに指定する（splitGroup の該当節を参照）。
+ *
+ * @param {string} [options.joinSignature] grp.join に書く実際の値（省略時は signature と同じ＝
+ *   従来どおり建物全体で合流）。呼び出し側が memberCatalog.joinSignatureFor で解決して渡す
+ *   （在来木造の共通/個別柱は `signature@planeId` にして合流を階の中だけに限定する。QA裁定
+ *   2026-09-17）——signature 自体（gid・grp.specの元）は変えない。
  */
-export function materializeGroup(ledger, symbol, signature, specString, { join = true } = {}) {
+export function materializeGroup(ledger, symbol, signature, specString, { join = true, joinSignature = signature } = {}) {
   const gid = `${symbol}#${nextGroupSeq(ledger, symbol)}`;
   setGroupSpec(ledger, gid, specString);
-  if (join) setGroupJoin(ledger, gid, signature);
+  if (join) setGroupJoin(ledger, gid, joinSignature);
   return gid;
 }
 
@@ -184,16 +201,20 @@ export function materializeGroup(ledger, symbol, signature, specString, { join =
  *
  * @param {string} [options.splitFromSignature] 編集前の署名。これと一致する場合 grp.join を書かない。
  *   省略時は従来どおり常に書く（手動採番からの materialize など、編集を伴わない呼び出し用）。
+ * @param {string} [options.joinSignature] grp.join に書く実際の値（materializeGroup へそのまま渡す。
+ *   省略時は signature と同じ）。呼び出し側（MemberListTab.jsx commitManualNumber）が
+ *   memberCatalog.joinSignatureFor で解決して渡す——在来木造の柱の手動タグは階スコープの加入署名
+ *   にすることで、他階への波及を遮断しつつ同一階内の合流（壁交点からの後発の同寸柱）は維持する。
  * @returns {string|null} 発行した gid（対象0件なら null）
  */
-export function splitGroup(project, mapName, targetMembers, { splitFromSignature = null } = {}) {
+export function splitGroup(project, mapName, targetMembers, { splitFromSignature = null, joinSignature = null } = {}) {
   if (!targetMembers.length) return null;
   const rep = targetMembers[0];
   const symbol = memberSymbol(rep, mapName);
   const signature = memberSignature(rep, mapName);
   const spec = memberSpecString(rep, mapName);
   const join = splitFromSignature == null || signature !== splitFromSignature;
-  const gid = materializeGroup(project.memberGroupLedger, symbol, signature, spec, { join });
+  const gid = materializeGroup(project.memberGroupLedger, symbol, signature, spec, { join, joinSignature: joinSignature ?? signature });
   for (const m of targetMembers) m.setNumberGroupId(gid);
   return gid;
 }

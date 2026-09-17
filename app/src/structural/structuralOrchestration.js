@@ -138,7 +138,9 @@ export async function recomputeStructuralComposition(composition, subjectGraph, 
       deleteClassificationOverflow(belowGraph, project);
       autoFillColumnAxisOffsets(belowGraph, project, belowLowestGraph);
       if (rulesFor(belowStructure).columnSizing !== 'fixed') autoFillColumnSizes(belowGraph, project, belowGraph.plane);
-      conformToLedger(belowGraph, project);
+      // 在来木造columnMapのjoin照合を階スコープの加入署名で解決させるためrules・graph.plane.idを渡す
+      // （QA裁定2026-09-17）。
+      conformToLedger(belowGraph, project, rulesFor(belowStructure), belowGraph.plane.id);
       collectFloorGroups(belowGraph, project);
     });
 
@@ -335,7 +337,9 @@ async function collectRoofPlaneGroups(project) {
   if (!roofPlane || roofPlane.id === project.activePlaneId) return; // アクティブなら既に収集済み
   const temp = await floorSwapManager.peek(roofPlane, project.structGraph);
   runInAction(() => {
-    conformToLedger(temp, project);
+    // 在来木造columnMapのjoin照合を階スコープの加入署名で解決させるためrules・graph.plane.idを渡す
+    // （QA裁定2026-09-17）。
+    conformToLedger(temp, project, rulesFor(effectiveStructure(temp, project)), temp.plane.id);
     collectFloorGroups(temp, project);
   });
 }

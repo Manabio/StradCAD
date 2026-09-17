@@ -123,7 +123,9 @@ export async function recomputeStructuralForGraph(targetGraph, project, mainStru
   // project.memberNumberIndex（建物全体、非永続キャッシュ）へ積む。番号の確定（assignNumbers/applyNumbers）
   // は建物全体の情報が必要なため、呼び出し側（structuralOrchestration.js の反映パス）が2パス目として行う。
   runInAction(() => {
-    conformToLedger(targetGraph, project);
+    // ownRulesは冒頭で集約済み（在来木造columnMapのjoin照合を階スコープの加入署名で解決させるため
+    // rules・graph.plane.idを渡す。QA裁定2026-09-17）。
+    conformToLedger(targetGraph, project, ownRules, targetGraph.plane.id);
     collectFloorGroups(targetGraph, project);
   });
 

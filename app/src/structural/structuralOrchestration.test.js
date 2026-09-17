@@ -247,8 +247,9 @@ test('recomputeStructuralComposition【実機裁定ステップ4 C-2 QA3】: und
   const y0 = project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
   const y1 = project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: true, discipline: Discipline.STRUCT });
 
-  // 1〜3階すべてに同じ「WOOD-120x120」柱グループへ寄与する柱を置く（建物全体スパン表記
-  // "1~3F"の再現に3階分が要る。3階はcompositionのbelowGraphではない＝undoで一切restoreGraphされない）。
+  // 1〜3階すべてに「WOOD-120x120」の柱を置く（在来木造は柱の採番グループを階ごとに分けるため
+  // ユーザー裁定2026-09-17・A、同じ材寸でも3グループに分かれる。3階はcompositionのbelowGraphでは
+  // ない＝undoで一切restoreGraphされない）。
   const col1F = g1.addColumn(StructuralMaterialType.WOOD, 'WOOD-120x120', x0, y0, {});
   g2.addColumn(StructuralMaterialType.WOOD, 'WOOD-120x120', x0, y1, {});
   g3.addColumn(StructuralMaterialType.WOOD, 'WOOD-120x120', x0, y0, {});
@@ -261,13 +262,16 @@ test('recomputeStructuralComposition【実機裁定ステップ4 C-2 QA3】: und
     collectFloorGroups(g2, project);
     collectFloorGroups(g3, project);
   });
-  const groupKey = memberGroupKey(col1F, 'columnMap', rulesFor(TRADITIONAL_WOOD_STRUCTURE));
+  // 在来木造は柱グループが階ごと（groupKeyに@planeIdが付く）に分かれるため、1階の「120×120」
+  // グループは1階専用（floorRanks=[0]・count=1）——建物全体で1つにまとまる非在来の挙動
+  // （旧テストが検証していた"1~3F"相当）とは異なる（ユーザー裁定2026-09-17・A）。
+  const groupKey = memberGroupKey(col1F, 'columnMap', rulesFor(TRADITIONAL_WOOD_STRUCTURE), undefined, g1.plane.id);
   const groupBefore = project.memberNumberIndex.get(groupKey);
-  assert.ok(groupBefore, '前提: 1階柱が属する柱グループが索引に存在する');
+  assert.ok(groupBefore, '前提: 1階の「120×120」柱グループ（1階専用）が索引に存在する');
   const floorRanksBefore = [...groupBefore.floorRanks].sort();
   const countBefore = totalCountOf(groupBefore);
-  assert.deepEqual(floorRanksBefore, [0, 1, 2], '前提: 1〜3階すべてが同じ柱グループに寄与している（"1~3F"相当）');
-  assert.equal(countBefore, 3);
+  assert.deepEqual(floorRanksBefore, [0], '前提: 在来木造は柱グループが階ごとに分かれるため1階のみ');
+  assert.equal(countBefore, 1);
 
   const peekMap = { p1: g1, p2: g2, p3: g3 };
   const originalPeek = floorSwapManager.peek;
@@ -278,22 +282,21 @@ test('recomputeStructuralComposition【実機裁定ステップ4 C-2 QA3】: und
       mutate: () => { g1.setWoodColumnWidthMm(105); },
     });
 
-    // 変更直後: 1階の柱が別グループ（105×105）へ移るため、「120×120」グループは2〜3階だけに縮む
-    // （実機観測どおり "1~3F・計106本" → "2~3F・計72本" 相当の変化）。
+    // 変更直後: 1階の柱が別グループ（105×105@1F）へ移る。旧グループ（120×120@1F）は1階専用だった
+    // ため寄与が0本になり索引からゴースト掃除で消える（非在来のように他階分が残って縮むのではなく
+    // 丸ごと消える——在来は柱グループが階をまたがないため）。
     const groupDuring = project.memberNumberIndex.get(groupKey);
-    assert.deepEqual([...groupDuring.floorRanks].sort(), [1, 2], '前提: 変更直後は1階が抜けて2~3階だけになる');
-    assert.equal(totalCountOf(groupDuring), 2);
+    assert.equal(groupDuring, undefined, '前提: 変更直後は120×120@1Fグループがゴースト掃除で消える');
 
     undoManager.undo();
     const groupAfterUndo = project.memberNumberIndex.get(groupKey);
-    assert.ok(groupAfterUndo, 'undo後に「120×120」柱グループの索引エントリが存在する（実機観測: 梁グループのバッジが消えた不具合の回帰防止）');
+    assert.ok(groupAfterUndo, 'undo後に「120×120」柱グループ（1階専用）の索引エントリが復元される（実機観測: 梁グループのバッジが消えた不具合の回帰防止）');
     assert.deepEqual([...groupAfterUndo.floorRanks].sort(), floorRanksBefore, 'undoで索引のfloorRanksが変更前と一致する（バッジ表示の食い違いの回帰防止）');
     assert.equal(totalCountOf(groupAfterUndo), countBefore, 'undoで索引のcountsが変更前と一致する');
 
     undoManager.redo();
     const groupAfterRedo = project.memberNumberIndex.get(groupKey);
-    assert.deepEqual([...groupAfterRedo.floorRanks].sort(), [1, 2], 'redoで索引のfloorRanksが変更後と一致する');
-    assert.equal(totalCountOf(groupAfterRedo), 2, 'redoで索引のcountsが変更後と一致する');
+    assert.equal(groupAfterRedo, undefined, 'redoで再び120×120@1Fグループが消える（変更後の状態と一致）');
   } finally {
     floorSwapManager.peek = originalPeek;
   }
@@ -688,6 +691,7 @@ test('recomputeStructuralComposition【実機再々QA指摘2】: 1階=105（既�
     const groupBefore = project.memberNumberIndex.get(groupKeyStd);
     assert.ok(groupBefore, '前提: 1階=105の時点で105×120グループが索引に存在する');
     assert.equal(totalCountOf(groupBefore), 2, '前提: 105×120グループは2本（標準材として1グループ）');
+    const floorRanksBefore = [...groupBefore.floorRanks].sort();
 
     const composition = { graphForCategory: () => g1 };
     // 柱寸法変更（105→120。標準材が変わり105×120は非標準＝個別採番へ移る）。
@@ -702,6 +706,7 @@ test('recomputeStructuralComposition【実機再々QA指摘2】: 1階=105（既�
     const groupAfterUndo = project.memberNumberIndex.get(groupKeyStd);
     assert.ok(groupAfterUndo, 'undo後に105×120グループの索引エントリが存在しない（resyncTouchedMemberGroupsが派生値を再導出できていない可能性）');
     assert.equal(totalCountOf(groupAfterUndo), 2, 'undo後は105×120グループが2本へ戻る（分裂したまま復元されない不具合の回帰防止）');
+    assert.deepEqual([...groupAfterUndo.floorRanks].sort(), floorRanksBefore, 'undo後にfloorRanksも変更前と一致する（floorRanks自体の復元の回帰防止。totalCountOfだけでなくfloorRanksも見る）');
     assert.equal(beamStdA.memberNo, beamStdB.memberNo, 'undo後も105×120の2本は実体レベルでも同一タグ');
   } finally {
     floorSwapManager.peek = originalPeek;

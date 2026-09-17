@@ -284,11 +284,20 @@ export function isIndividuallyNumbered(entity, mapName, rules, standardSection =
 
 /** グループキー（memberNumbering.js collectFloorGroups/applyNumbers・MemberListTab.jsx の groupKey導出の
  *  唯一の入口）。numberGroupId（分割・統合済み）を最優先し、無ければ個別採番対象は部材ごとに一意
- *  （signature+id）、それ以外は従来どおり signature（同一材寸＝同一グループ）。 */
-export function memberGroupKey(entity, mapName, rules, standardSection = rules.defaultSections.beam) {
+ *  （signature+id）、それ以外は従来どおり signature（同一材寸＝同一グループ）。
+ *  columnMap かつ rules.numbering.columnGroupScope==='floor'（在来木造。structureRules.js）のときだけ、
+ *  共通柱（個別採番対象でない柱）の groupKey に `@<planeId>` を付けて階ごとに分ける——柱（管柱）は
+ *  階の部材で建物全体をまたがないため（ユーザー裁定2026-09-17）。signature 自体（台帳 grp.join・
+ *  memberSignature の比較）は変えない——階の分離は groupKey だけの話（noJoinSignatureFor 参照）。
+ *  呼び出し側（memberNumbering.js・MemberListTab.jsx）が graph.plane.id を渡す——このファイルは
+ *  graph を持たない設計（循環import回避）のため引数で受け取るだけで、省略時（null）は従来どおり
+ *  建物全体で1グループ（既存テスト・非対応呼び出し元の後方互換）。 */
+export function memberGroupKey(entity, mapName, rules, standardSection = rules.defaultSections.beam, planeId = null) {
   if (entity.numberGroupId) return entity.numberGroupId;
   const signature = memberSignature(entity, mapName);
-  return isIndividuallyNumbered(entity, mapName, rules, standardSection) ? `${signature}#${entity.id}` : signature;
+  if (isIndividuallyNumbered(entity, mapName, rules, standardSection)) return `${signature}#${entity.id}`;
+  if (mapName === 'columnMap' && rules.numbering?.columnGroupScope === 'floor' && planeId != null) return `${signature}@${planeId}`;
+  return signature;
 }
 
 /** 採番の並び順キー（memberNumbering.compareGroupsDesc がsizeKey・出現階に次ぐタイブレークに使う）。
@@ -310,9 +319,34 @@ export function memberOrderKey(entity, mapName, rules, standardSection = rules.d
  *  （QA指摘F1: 120×330 ×3本で1本に手動タグを打つと3本ともそのタグに統合された。QA指摘F12: 統合
  *  経路も同じ穴＝個別採番4本のうち2本だけ統合しても4本とも同じタグになった）。個別採番対象で
  *  なければ null（従来どおり常にjoinする＝同署名の将来の部材も自動で同じタグに合流する。この既定
- *  挙動は個別採番と無関係の構造では維持する）。 */
+ *  挙動は個別採番と無関係の構造では維持する）。
+ *  **共通柱（在来木造・columnGroupScope='floor'）はここでは対象にしない**——QA裁定（2026-09-17）:
+ *  一時期ここで在来columnMapのjoinを個別/共通問わず全面抑止したが、在来木造の柱は壁交点から
+ *  毎回自動生成されるため、手動タグを打った直後に同じ階へ新たに生成された同寸の共通柱まで
+ *  join抑止で合流しなくなり実害が出た（実測: 2階の柱にCXと手動タグ→壁交点から生成された同寸の
+ *  後発共通柱が別グループのまま合流しない）。「他階への波及だけ遮断し、同一階内の合流は維持する」
+ *  ためのjoin値（階を含む）は joinSignatureFor が別に持つ——ここ（join可否そのものの判定）は
+ *  個別採番対象だけを見る素の判定に戻した。 */
 export function noJoinSignatureFor(entity, mapName, rules, standardSection = rules.defaultSections.beam) {
   return isIndividuallyNumbered(entity, mapName, rules, standardSection) ? memberSignature(entity, mapName) : null;
+}
+
+/** grp.join（加入署名）に書く/比較する値の唯一の入口（memberGroups.js の materializeGroup が書き手・
+ *  findGidByJoinSignature〔conformToLedger経由〕が読み手）。既定は memberSignature と同じ（従来どおり
+ *  建物全体で合流＝同署名の他階の部材も次のモード境界で同じグループへ吸収される）。
+ *  columnMap かつ rules.numbering.columnGroupScope==='floor'（在来木造）のときだけ signature に
+ *  `@<planeId>` を付け、join（同署名の部材の自動合流）を**その階の中だけ**に限定する——他階への
+ *  波及は遮断しつつ、同一階内で後から自動生成された同寸の柱（共通・個別を問わない）が既存の手動タグ
+ *  グループへ合流する経路は維持する（QA裁定2026-09-17。noJoinSignatureFor のJSDoc参照）。
+ *  standardSection は受け取らない（姉妹関数のmemberGroupKey/isIndividuallyNumberedと違い、floor-scope
+ *  判定は columnGroupScope だけで決まり isIndividuallyNumbered を呼ばないため——未使用引数を残さない）。
+ *  呼び出し側（memberGroups.js conformToLedger・MemberListTab.jsx commitManualNumber）が
+ *  graph.plane.id を渡す——このファイルは graph を持たない設計のため引数で受け取るだけで、
+ *  省略時（null）は従来どおり建物全体で1つの加入署名になる（後方互換）。 */
+export function joinSignatureFor(entity, mapName, rules, planeId = null) {
+  const signature = memberSignature(entity, mapName);
+  return (mapName === 'columnMap' && rules?.numbering?.columnGroupScope === 'floor' && planeId != null)
+    ? `${signature}@${planeId}` : signature;
 }
 
 // 配筋サイズ文字列（例 'D25'）から数値部分を取り出す（呼び径の大小比較用）。
