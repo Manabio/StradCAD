@@ -15,11 +15,22 @@ import { pointsOnWallLines, WALL_JUNCTION_TOL_MM } from './woodFraming.js';
 export const ALONG_PROBE_STEP_MM = 100;
 
 /**
- * 個別柱が壁の中で偏心する量(mm)。柱芯（axisX/axisY。偏心を含まない）が乗る壁を軸ごとに同定し
- * （X軸＝isVertical:trueの壁、Y軸＝isVertical:falseの壁。pointsOnWallLinesを再利用）、外面そろえの
- * 向き（side指定、未指定なら自動判定）から `ecc = s_face * (floorWidthMm - columnWidthMm) / 2` を
- * 軸ごとに求める。壁が無い軸・共通柱（columnWidthMm===floorWidthMm）・不正入力は例外を投げず
- * {x:0, y:0} を返す。
+ * 個別柱・共通柱の両方が壁の中で偏心する量(mm)。柱芯（axisX/axisY。偏心を含まない）が乗る壁を
+ * 軸ごとに同定し（X軸＝isVertical:trueの壁、Y軸＝isVertical:falseの壁。pointsOnWallLinesを再利用）、
+ * 軸ごとの偏心を **2項の和** で求める（ユーザー裁定2026-09-17・ステップ2）:
+ *   ecc = (その壁の帯の寄せ。segments[].bandOffset) + s_face * (floorWidthMm − columnWidthMm) / 2
+ * 第1項（bandOffset）は壁自身が真実——柱寸法が基準（120）より細い階の外壁下地帯シフト
+ * （structural/structureRules.js woodBaseColumnWidthMm・finish/wallGeneration.js
+ * generateExteriorWalls。core/wall.js Wall.bandOffset）で、外壁の外面を通り芯±60に固定するために
+ * 帯（＝柱の乗る位置）そのものが寄った量。共通柱（columnWidthMm===floorWidthMm）でも外壁上に乗って
+ * いれば非ゼロになる——共通柱は「壁の下地帯の中で自分だけ動く」向きの選択余地が無い（帯が動けば
+ * 柱も帯と一緒に動くだけ）ため、UI（MemberListTab.jsx ColumnOffsetAxisSelect）の表示条件
+ * 「解決柱寸≠階の値」は変えない。第2項（既存 B-1）は柱寸法が階の値と異なる（個別指定）柱が、
+ * 帯の中で外面をそろえるための偏心——side指定・outsideSign自動判定・ALONG_PROBE_STEP_MM再試行・
+ * 食い違いは中央、の規律は一切変えない。基準幅120（structureRules.js woodBaseColumnWidthMm）は
+ * ここには一切現れない——柱側は「階の値(floorWidthMm)との差」だけを見る一系統に統一し、
+ * 「基準(120)との差」という別系統を作らない（二重管理防止）。壁が無い軸・不正入力は例外を
+ * 投げず {x:0, y:0}（該当軸は0）を返す。
  * @param {object} args
  * @param {number} args.axisX - 柱芯のX座標（偏心を含まない。StructuralColumn.axisX）
  * @param {number} args.axisY - 柱芯のY座標（偏心を含まない。StructuralColumn.axisY）
@@ -27,8 +38,9 @@ export const ALONG_PROBE_STEP_MM = 100;
  * @param {number} args.columnWidthMm - この柱の実効柱寸（structureRules.js columnWidthMm）
  * @param {{x?:-1|0|1, y?:-1|0|1}} [args.side] - 向きの明示指定（WoodColumn.woodOffsetSide。
  *   キー欠落＝自動判定、0＝中央、±1＝その向きの面をそろえる）
- * @param {Array<{isVertical:boolean, coord:number, lo:number, hi:number, halfDepth:number}>} args.segments
- *   - 壁区間（wallBeamAxes.js selfWallSegments）
+ * @param {Array<{isVertical:boolean, coord:number, lo:number, hi:number, halfDepth:number, bandOffset?:number}>} args.segments
+ *   - 壁区間（wallBeamAxes.js selfWallSegments）。bandOffset は柱寸法シフト量(mm)。
+ *   null/undefined/NaNは0扱い（例外を投げない）。
  * @param {(axisValue:number, isVertical:boolean, atCross:number)=>(-1|0|1)} args.outsideSign
  *   - 外側方向の符号（+1＝atCross側の外周が座標増加方向）。**wallGate.js buildExteriorSide()の
  *   outsideSignは名前に反して内側方向の符号を返す**（JSDocどおり最小側+1＝内側。実測: 建物内側が
@@ -39,7 +51,13 @@ export const ALONG_PROBE_STEP_MM = 100;
 export function woodColumnEccentricity({ axisX, axisY, floorWidthMm, columnWidthMm, side, segments, outsideSign }) {
   if (!Number.isFinite(floorWidthMm) || !Number.isFinite(columnWidthMm)) return { x: 0, y: 0 };
   if (floorWidthMm <= 0 || columnWidthMm <= 0) return { x: 0, y: 0 };
-  if (floorWidthMm === columnWidthMm) return { x: 0, y: 0 };
+  // 早期return（最適化。フル計算と同値——共通柱(floorWidthMm===columnWidthMm)は第2項が0、かつ
+  // 全segmentにbandOffsetが無ければ第1項も0のため、結果は必ず{x:0,y:0}になる。この判定自体は
+  // 柱ごとにO(segments)——pointsOnWallLinesの壁当たり判定1回分を追加するだけ——なのでコストは
+  // ゼロではないが、それに続くpointsOnWallLines呼び出し・resolveSideの走行方向再試行を2軸分
+  // 丸ごと省ける）。
+  const noBandShift = (segments ?? []).every(s => !s?.bandOffset);
+  if (floorWidthMm === columnWidthMm && noBandShift) return { x: 0, y: 0 };
   const half = (floorWidthMm - columnWidthMm) / 2;
   return {
     x: axisEccentricity(axisX, axisY, true, half, side?.x, segments, outsideSign),
@@ -58,7 +76,12 @@ function axisEccentricity(axisX, axisY, isVertical, half, sideValue, segments, o
     return a.coord <= b.coord ? a : b;
   });
   const s = resolveSide(sideValue, isVertical, best, outsideSign);
-  return normalizeZero(s * half);
+  // 第1項: bestが一致した元segmentのbandOffset（壁自身の帯の寄せ量）。best.segはpointsOnWallLinesが
+  // 持ち帰る元segmentそのものの参照（QA指摘・2026-09-17: 以前はcoord/lo/hiの値一致で再同定していたが、
+  // 他軸に同じ(coord,lo,hi)を持つ壁区間があると誤って取り違える恐れがあった）。segが無い（旧形式の
+  // 呼び出し）・非数（null/undefined/NaN）は0扱い（例外は投げない）。
+  const bandOffset = Number.isFinite(best.seg?.bandOffset) ? best.seg.bandOffset : 0;
+  return normalizeZero(bandOffset + s * half);
 }
 
 // 外面そろえの向き（-1|0|1）。side指定があればそれを優先し、無ければ outsideSign で判定する。

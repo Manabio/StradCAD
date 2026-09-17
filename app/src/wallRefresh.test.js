@@ -23,6 +23,7 @@ import { wallFreshnessKey, WALL_KEY_VERSION } from './finish/wallFreshnessKey.js
 import { recomputeStructuralForGraph } from './structural/structuralRecompute.js';
 import { TRADITIONAL_WOOD_STRUCTURE } from './structural/structureRules.js';
 import { conformWoodBacking } from './structural/woodAutoFill.js';
+import { assignNumbers, applyNumbers } from './structural/memberNumbering.js';
 
 function makeSinglePlaneProject() {
   const project = new Project('proj', 'test');
@@ -59,7 +60,7 @@ function addAdjacentRooms(graph) {
  * （conformWoodBacking → regenerateWalls(project込み) → recomputeStructuralForGraph）を
  * 単体テストの最小構成（矩形2室・単一階）で再現する。
  * @param {number|null} columnWidthMm - graph.setWoodColumnWidthMm に渡す値（null=未設定→既定120）
- * @returns {Promise<import('./core.js').PlanGraph>}
+ * @returns {Promise<{graph: import('./core.js').PlanGraph, project: import('./core.js').Project}>}
  */
 async function buildAndCompute(columnWidthMm) {
   const { project, graph } = makeSinglePlaneProject();
@@ -70,7 +71,7 @@ async function buildAndCompute(columnWidthMm) {
   const materialMap = await loadMaterialMap();
   await regenerateWalls(graph, { materialMap, project, stairUnderEntries: [], extraStairOpenings: [] });
   await recomputeStructuralForGraph(graph, project, graph.structureOverride);
-  return graph;
+  return { graph, project };
 }
 
 function beamAxesList(graph) {
@@ -89,8 +90,8 @@ function columnCoordsList(graph) {
 // ---- QA結合1（F1の直接回帰）: 柱寸105でも梁芯CL・柱位置が柱寸120の場合と一致し、
 // 通り芯±7.5にCL・柱が湧かない ----
 test('【QA結合1・F1回帰】conformWoodBacking→regenerateWalls→recomputeStructuralForGraph: 柱寸105の梁芯CL・柱axisX/axisYは柱寸120の場合と一致する（通り芯±7.5に1本も無い）', async () => {
-  const g120 = await buildAndCompute(null); // 未設定→既定120
-  const g105 = await buildAndCompute(105);
+  const { graph: g120 } = await buildAndCompute(null); // 未設定→既定120
+  const { graph: g105 } = await buildAndCompute(105);
 
   assert.ok(g120.columns.length > 0, '前提: 柱寸120の階で柱が生成されている');
   assert.deepEqual(beamAxesList(g105), beamAxesList(g120), '梁芯CLの集合が柱寸120の場合と完全一致するはず');
@@ -116,8 +117,8 @@ test('【QA結合1・F1回帰】conformWoodBacking→regenerateWalls→recompute
 // ---- QA F8 test4（結合1の柱寸90版）: 既存の結合1は柱寸105のみだったため、最小柱寸90
 // （最大bandShift=(120-90)/2=15）でも同様に梁芯CL・柱が柱寸120の場合と一致することを確認する ----
 test('【QA F8 test4・F1回帰】conformWoodBacking→regenerateWalls→recomputeStructuralForGraph: 柱寸90でも梁芯CL・柱axisX/axisYは柱寸120の場合と一致する（通り芯±15に1本も無い）', async () => {
-  const g120 = await buildAndCompute(null); // 未設定→既定120
-  const g90 = await buildAndCompute(90);
+  const { graph: g120 } = await buildAndCompute(null); // 未設定→既定120
+  const { graph: g90 } = await buildAndCompute(90);
 
   assert.ok(g120.columns.length > 0, '前提: 柱寸120の階で柱が生成されている');
   assert.deepEqual(beamAxesList(g90), beamAxesList(g120), '梁芯CLの集合が柱寸120の場合と完全一致するはず');
@@ -140,7 +141,7 @@ test('【QA F8 test4・F1回帰】conformWoodBacking→regenerateWalls→recompu
 
 // ---- QA結合2: 柱寸105の外壁は backingRange の外面が通り芯±60、帯厚は柱寸そのもの(105) ----
 test('【QA結合2】conformWoodBacking→regenerateWalls: 柱寸105の全isExteriorWallはbackingRangeの遠位面が通り芯±60・帯厚105', async () => {
-  const g105 = await buildAndCompute(105);
+  const { graph: g105 } = await buildAndCompute(105);
   const extWalls = g105.walls.filter(w => w.isExteriorWall);
   assert.ok(extWalls.length > 0, '前提: 外壁が生成されている');
 
@@ -157,6 +158,113 @@ test('【QA結合2】conformWoodBacking→regenerateWalls: 柱寸105の全isExte
     assert.equal(Math.abs(Math.abs(farFace - axisV) - 60) < 1e-6, true,
       `外壁(${w.id})の外面(${farFace})が軸(${axisV})から±60になっていない`);
   }
+});
+
+// ---- ステップ2結合フィクスチャ: 部屋4室を2×2グリッドに配置（[0,3000]×[3000,6000]の各軸で
+// 4室）。中央(3000,3000)は「間仕切りどうしのX交点」＝両軸とも内壁——外壁を一切踏まない
+// 唯一の柱位置を作るため、ステップ1の矩形2室フィクスチャ（addAdjacentRooms）とは別に用意する。
+function addFourRooms(graph) {
+  const x0 = graph.addCenterLine(CenterLineType.VERTICAL, 0,    { labeled: false, discipline: Discipline.ARCH });
+  const xm = graph.addCenterLine(CenterLineType.VERTICAL, 3000, { labeled: false, discipline: Discipline.ARCH });
+  const x1 = graph.addCenterLine(CenterLineType.VERTICAL, 6000, { labeled: false, discipline: Discipline.ARCH });
+  const y0 = graph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: false, discipline: Discipline.ARCH });
+  const ym = graph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: false, discipline: Discipline.ARCH });
+  const y1 = graph.addCenterLine(CenterLineType.HORIZONTAL, 6000, { labeled: false, discipline: Discipline.ARCH });
+  graph.addRoom(new Set([`${x0.id}:${y0.id}:${xm.id}:${ym.id}`]), 'A');
+  graph.addRoom(new Set([`${xm.id}:${y0.id}:${x1.id}:${ym.id}`]), 'B');
+  graph.addRoom(new Set([`${x0.id}:${ym.id}:${xm.id}:${y1.id}`]), 'C');
+  graph.addRoom(new Set([`${xm.id}:${ym.id}:${x1.id}:${y1.id}`]), 'D');
+}
+
+async function buildFourRoomsAndCompute(columnWidthMm) {
+  const { project, graph } = makeSinglePlaneProject();
+  graph.structureOverride = TRADITIONAL_WOOD_STRUCTURE;
+  addFourRooms(graph);
+  if (columnWidthMm != null) graph.setWoodColumnWidthMm(columnWidthMm);
+  runInAction(() => conformWoodBacking(graph, project));
+  const materialMap = await loadMaterialMap();
+  await regenerateWalls(graph, { materialMap, project, stairUnderEntries: [], extraStairOpenings: [] });
+  await recomputeStructuralForGraph(graph, project, graph.structureOverride);
+  // 部材番号の確定（建物全体の情報が必要な2パス目。structuralOrchestration.jsの反映パスと同じ
+  // 2関数。recomputeStructuralForGraph自体はcollectFloorGroupsまでしか行わない）。
+  const tags = assignNumbers(project);
+  applyNumbers(graph, project, tags);
+  return { graph, project };
+}
+
+function columnMemberNumbers(graph) {
+  return graph.columns.filter(c => c.memberNo != null)
+    .map(c => `${Math.round(c.axisX * 10) / 10}:${Math.round(c.axisY * 10) / 10}:${c.memberNo}`)
+    .sort();
+}
+
+// ---- ステップ2結合: 外壁上の共通柱は帯の寄せ分（±7.5）へ、内壁上（間仕切りの交点）の柱は
+// {0,0}へ。柱のaxisX/axisY・部材番号は柱寸120の場合と完全一致する ----
+test('【ステップ2結合】conformWoodBacking→regenerateWalls→recomputeStructuralForGraph: 柱寸105で外壁上の共通柱はeccentricityが外側へ±7.5、内壁の交点（間仕切りどうし）の柱は{0,0}。axisX/axisY・部材番号は柱寸120と一致', async () => {
+  const { graph: g120 } = await buildFourRoomsAndCompute(null);
+  const { graph: g105 } = await buildFourRoomsAndCompute(105);
+
+  assert.ok(g120.columns.length > 0, '前提: 柱寸120の階で柱が生成されている');
+  assert.deepEqual(columnCoordsList(g105), columnCoordsList(g120), '柱のaxisX/axisYの集合が柱寸120の場合と完全一致するはず');
+  assert.deepEqual(columnMemberNumbers(g105), columnMemberNumbers(g120), '柱の部材番号（axisX:axisY:memberNo）も柱寸120の場合と完全一致するはず');
+
+  const extWalls105 = g105.walls.filter(w => w.isExteriorWall);
+  const isOnExteriorAxis = (axisValue, isVertical) => extWalls105.some(w =>
+    w.isVertical === isVertical && Math.abs(w.axisCL.effectiveValue - axisValue) < 1
+    && (() => { const r = w.backingRange; return r && axisValue >= Math.min(w.coord1, w.coord2) - 1 && axisValue <= Math.max(w.coord1, w.coord2) + 1; })());
+
+  let centerFound = false, cornerCount = 0;
+  for (const c of g105.columns) {
+    const onExtX = isOnExteriorAxis(c.axisX, true);  // X座標が外壁（縦壁）の軸に乗る
+    const onExtY = isOnExteriorAxis(c.axisY, false); // Y座標が外壁（横壁）の軸に乗る
+    if (!onExtX && !onExtY) {
+      // 中央(3000,3000)＝両軸とも内壁（間仕切りどうしのX交点）。
+      centerFound = true;
+      assert.deepEqual(c.eccentricity, { x: 0, y: 0 }, `内壁の交点の柱(${c.axisX},${c.axisY})はeccentricityが{0,0}のはず`);
+      continue;
+    }
+    if (onExtX) assert.equal(Math.abs(c.eccentricity.x), 7.5, `外壁(X軸)上の柱(${c.axisX},${c.axisY})はeccentricity.xが±7.5のはず`);
+    else assert.equal(c.eccentricity.x, 0, `内壁(X軸)上の柱(${c.axisX},${c.axisY})はeccentricity.xが0のはず`);
+    if (onExtY) assert.equal(Math.abs(c.eccentricity.y), 7.5, `外壁(Y軸)上の柱(${c.axisX},${c.axisY})はeccentricity.yが±7.5のはず`);
+    else assert.equal(c.eccentricity.y, 0, `内壁(Y軸)上の柱(${c.axisX},${c.axisY})はeccentricity.yが0のはず`);
+    if (onExtX && onExtY) cornerCount++;
+  }
+  assert.equal(centerFound, true, '前提: 中央(3000,3000)の内壁交点の柱が存在するはず');
+  assert.equal(cornerCount, 4, '前提: 建物四隅（両軸とも外壁）の柱が4本あるはず');
+});
+
+// ---- M2.3（QA指摘・2026-09-17）: 柱寸90（帯シフト15mm）でも外壁上の共通柱がeccentricity±15へ寄り、
+// 実位置の外面（axis+ecc+sign(ecc)*w/2）が通り芯±60に一致することを数で確認する ----
+test('【ステップ2結合・M2】conformWoodBacking→regenerateWalls→recomputeStructuralForGraph: 柱寸90（帯シフト15mm）でも外壁上の共通柱はeccentricityが外側へ±15、外面は通り芯±60に一致', async () => {
+  const { graph: g120 } = await buildFourRoomsAndCompute(null);
+  const { graph: g90 } = await buildFourRoomsAndCompute(90);
+
+  assert.deepEqual(columnCoordsList(g90), columnCoordsList(g120), '柱のaxisX/axisYの集合が柱寸120の場合と完全一致するはず');
+  assert.deepEqual(columnMemberNumbers(g90), columnMemberNumbers(g120), '柱の部材番号も柱寸120の場合と完全一致するはず');
+
+  const extWalls90 = g90.walls.filter(w => w.isExteriorWall);
+  const isOnExteriorAxis = (axisValue, isVertical) => extWalls90.some(w =>
+    w.isVertical === isVertical && Math.abs(w.axisCL.effectiveValue - axisValue) < 1
+    && (() => { const r = w.backingRange; return r && axisValue >= Math.min(w.coord1, w.coord2) - 1 && axisValue <= Math.max(w.coord1, w.coord2) + 1; })());
+
+  let cornerCount = 0;
+  for (const c of g90.columns) {
+    const onExtX = isOnExteriorAxis(c.axisX, true);
+    const onExtY = isOnExteriorAxis(c.axisY, false);
+    if (!onExtX && !onExtY) {
+      assert.deepEqual(c.eccentricity, { x: 0, y: 0 }, `内壁の交点の柱(${c.axisX},${c.axisY})はeccentricityが{0,0}のはず`);
+      continue;
+    }
+    for (const [onExt, axisValue, eccValue] of [[onExtX, c.axisX, c.eccentricity.x], [onExtY, c.axisY, c.eccentricity.y]]) {
+      if (!onExt) { assert.equal(eccValue, 0, `内壁側の軸はeccentricityが0のはず(柱${c.axisX},${c.axisY})`); continue; }
+      assert.equal(Math.abs(eccValue), 15, `外壁上の柱(${c.axisX},${c.axisY})はeccentricityが±15のはず（帯シフト15mm・共通柱）`);
+      // 実位置の外面: axis + ecc + sign(ecc)*(柱寸/2)。共通柱なので柱寸=floorWidthMm=90。
+      const face = axisValue + eccValue + Math.sign(eccValue) * (90 / 2);
+      assert.equal(Math.abs(face - axisValue), 60, `外壁上の柱(${c.axisX},${c.axisY})の外面は通り芯±60のはず`);
+    }
+    if (onExtX && onExtY) cornerCount++;
+  }
+  assert.equal(cornerCount, 4, '前提: 建物四隅（両軸とも外壁）の柱が4本あるはず');
 });
 
 // ---- S4-1裁定（壁0本・鍵nullの階はsweep対象外）により、壁0本・鍵nullの「未脱出」フィクスチャは

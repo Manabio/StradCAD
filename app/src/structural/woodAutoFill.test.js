@@ -36,10 +36,12 @@ function fillWoodColumns(graph, project = PROJECT, wallGate = null) {
 }
 
 // 下地オーナー壁を1本追加（wallBeamAxes.test.js の addBackingWall と同じ。backingOffset=0＝下地帯中心が axisValue）。
-function addBackingWall(graph, { axisValue, clStart, clEnd, isVertical }) {
+// bandOffset（柱寸法が基準120より細い階の外壁下地帯シフト量。ステップ2）は既定null
+// （帯シフト無し＝従来どおりの内壁相当）。外壁シナリオを模すテストだけ明示的に渡す。
+function addBackingWall(graph, { axisValue, clStart, clEnd, isVertical, bandOffset = null }) {
   const axisCL = graph.addCenterLine(
     isVertical ? CenterLineType.VERTICAL : CenterLineType.HORIZONTAL, axisValue, { labeled: false, discipline: Discipline.ARCH });
-  return graph.addWall(axisCL, 0, isVertical, clStart, 0, clEnd, 0, { backingOffset: 0, backingDepth: 120, wallFinish: 12.5 });
+  return graph.addWall(axisCL, 0, isVertical, clStart, 0, clEnd, 0, { backingOffset: 0, backingDepth: 120, wallFinish: 12.5, bandOffset });
 }
 
 test('wallIntersectionPoints: 縦壁×横壁の交点・T字・コーナーを返し、平行な壁同士・範囲外は返さない', () => {
@@ -1176,13 +1178,37 @@ test('conformWoodColumnEccentricity: 冪等（2回目は更新0件・同じ値�
   assert.deepEqual(second, []);
 });
 
-test('conformWoodColumnEccentricity: 共通柱（woodColumnWidthMm未指定）は常に偏心ゼロ（既に非ゼロなら書き戻して正規化）', () => {
+// ステップ2で共通柱も帯シフト（bandOffset）分だけ非ゼロになりうるようになったため、この主張は
+// 「bandOffset=0（帯シフト無し。addBackingWallの既定）の壁に乗る共通柱」に意味を狭める
+// （bandOffsetが無ければ従来どおり常に偏心ゼロであることは変わらない）。
+test('conformWoodColumnEccentricity: bandOffset=0の壁上の共通柱（woodColumnWidthMm未指定）は常に偏心ゼロ（既に非ゼロなら書き戻して正規化）', () => {
   const { graph, x2, y1, y2 } = makeGridGraph();
   addBackingWall(graph, { axisValue: 4000, clStart: y1, clEnd: y2, isVertical: true });
   const column = graph.addColumn(StructuralMaterialType.WOOD, 'WOOD-120x120', x2, y1, { eccentricity: { x: 5, y: 5 } });
   const updated = conformWoodColumnEccentricity(graph, PROJECT, fixedExterior(1));
   assert.deepEqual(updated, [column.id], '共通へ戻すため書く');
   assert.deepEqual(column.eccentricity, { x: 0, y: 0 });
+});
+
+// ---- ステップ2（ユーザー裁定2026-09-17）: 外壁上の共通柱は帯の寄せ（bandOffset）分だけ偏心する ----
+test('【ステップ2】conformWoodColumnEccentricity: 外壁上の共通柱（woodColumnWidthMm未指定）でもbandOffset分の偏心を書く', () => {
+  const { graph, x2, y1, y2 } = makeGridGraph();
+  // 柱寸法シフト（bandShift=7.5相当）を持つ外壁を模す。
+  addBackingWall(graph, { axisValue: 4000, clStart: y1, clEnd: y2, isVertical: true, bandOffset: 7.5 });
+  const column = graph.addColumn(StructuralMaterialType.WOOD, 'WOOD-120x120', x2, y1, {}); // 共通柱（woodColumnWidthMm未指定）
+  const updated = conformWoodColumnEccentricity(graph, PROJECT, fixedExterior(1));
+  assert.deepEqual(updated, [column.id], '共通柱でも帯の寄せ分の偏心を書く');
+  assert.equal(column.eccentricity.x, 7.5, '共通柱＝第2項は常に0。bandOffsetだけがそのまま乗る');
+  assert.equal(column.eccentricity.y, 0, 'Y軸に一致する壁が無い');
+});
+
+test('【ステップ2】conformWoodColumnEccentricity: bandOffset付き外壁上の共通柱も2回目はupdatedが空（冪等）', () => {
+  const { graph, x2, y1, y2 } = makeGridGraph();
+  addBackingWall(graph, { axisValue: 4000, clStart: y1, clEnd: y2, isVertical: true, bandOffset: 7.5 });
+  graph.addColumn(StructuralMaterialType.WOOD, 'WOOD-120x120', x2, y1, {});
+  conformWoodColumnEccentricity(graph, PROJECT, fixedExterior(1));
+  const second = conformWoodColumnEccentricity(graph, PROJECT, fixedExterior(1));
+  assert.deepEqual(second, [], '目標値（bandOffset分）と現在値が既に一致しているため書かない');
 });
 
 test('【失敗系】conformWoodColumnEccentricity: 非在来（framingを持たない主構造）は何もしない', () => {

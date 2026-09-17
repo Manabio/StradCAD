@@ -208,8 +208,10 @@ export function mergeWallIntervals(intervals, tol = CL_OVERLAP_TOL_MM) {
  * @param {Array<{isVertical:boolean, coord:number, lo:number, hi:number, halfDepth:number}>} segments
  * @param {number} junctionTol - 壁の端部の取り合い許容(mm)
  * @returns {Array<{x:number, y:number, isVertical:boolean, coord:number, along:number, dist:number,
- *   lo:number, hi:number}>} lo/hi は一致した壁区間そのもの（junctionTol抜きの生の範囲。
+ *   lo:number, hi:number, seg:object}>} lo/hi は一致した壁区間そのもの（junctionTol抜きの生の範囲。
  *   woodColumnOffset.js が自動判定の走行方向サンプリング候補を区間内に限定するために使う）。
+ *   seg は一致した元の segments 要素そのもの（参照。coord/lo/hi の値一致で再同定させない——
+ *   QA指摘・2026-09-17: woodColumnOffset.js が bandOffset を読むために使う）。
  */
 export function pointsOnWallLines(points, segments, junctionTol) {
   const out = [];
@@ -221,7 +223,7 @@ export function pointsOnWallLines(points, segments, junctionTol) {
       if (dist > s.halfDepth) continue;
       const along = s.isVertical ? p.y : p.x;
       if (along < s.lo - junctionTol || along > s.hi + junctionTol) continue;
-      out.push({ x: p.x, y: p.y, isVertical: s.isVertical, coord: s.coord, along, dist, lo: s.lo, hi: s.hi });
+      out.push({ x: p.x, y: p.y, isVertical: s.isVertical, coord: s.coord, along, dist, lo: s.lo, hi: s.hi, seg: s });
     }
   }
   return out;

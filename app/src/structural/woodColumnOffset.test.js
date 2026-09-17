@@ -6,11 +6,13 @@ import assert from 'node:assert/strict';
 import { woodColumnEccentricity, ALONG_PROBE_STEP_MM } from './woodColumnOffset.js';
 
 // 縦壁1本（X=0、Y方向に通し）。壁の外側はX<0側（outsideSignがX<0側で+1を返す想定）。
-function verticalWallSegment(coord = 0, halfDepth = 60) {
-  return { isVertical: true, coord, lo: -1000, hi: 1000, halfDepth };
+// bandOffset（柱寸法が基準120より細い階の外壁下地帯シフト量。ステップ2）は既定undefined
+// （0扱い＝帯シフト無し。内壁・柱寸120の階の既定と同じ）。
+function verticalWallSegment(coord = 0, halfDepth = 60, bandOffset = undefined) {
+  return { isVertical: true, coord, lo: -1000, hi: 1000, halfDepth, bandOffset };
 }
-function horizontalWallSegment(coord = 0, halfDepth = 60) {
-  return { isVertical: false, coord, lo: -1000, hi: 1000, halfDepth };
+function horizontalWallSegment(coord = 0, halfDepth = 60, bandOffset = undefined) {
+  return { isVertical: false, coord, lo: -1000, hi: 1000, halfDepth, bandOffset };
 }
 
 // outsideSignのテスト用スタブ: 指定した符号を固定で返す（呼び出し引数を記録する）。
@@ -82,7 +84,9 @@ test('【失敗系】woodColumnEccentricity: 壁が無い軸は0（segments=[]�
   assert.deepEqual(result, { x: 0, y: 0 });
 });
 
-test('【失敗系】woodColumnEccentricity: 共通柱（columnWidthMm===floorWidthMm）はsideがあっても常に{x:0,y:0}', () => {
+// ステップ2で共通柱も帯シフト分だけ非ゼロになりうるようになったため、この主張は
+// 「bandOffset=0（帯シフト無し）の共通柱」に意味を狭める（従来どおり{0,0}であることは変わらない）。
+test('【失敗系】woodColumnEccentricity: bandOffset=0の共通柱（columnWidthMm===floorWidthMm）はsideがあっても常に{x:0,y:0}', () => {
   const result = woodColumnEccentricity({
     axisX: 0, axisY: 0, floorWidthMm: 120, columnWidthMm: 120,
     side: { x: 1, y: -1 }, segments: [verticalWallSegment(0), horizontalWallSegment(0)], outsideSign: fixedOutsideSign(1),
@@ -182,4 +186,120 @@ test('woodColumnEccentricity: 同軸に複数の壁が一致する場合は距�
     segments: [far, near], outsideSign: fixedOutsideSign(1),
   });
   assert.equal(result.x, 7.5, 'dist最小(near, coord=1)が選ばれても符号自体はoutsideSignで決まる（結果は同じ）');
+});
+
+// ================================================================
+// ステップ2（ユーザー裁定2026-09-17）: ecc = (seg.bandOffset ?? 0) + s_face*(floorWidthMm-columnWidthMm)/2
+// 第1項＝壁自身の帯の寄せ（柱寸法が基準120より細い階の外壁下地帯シフト。selfWallSegments[].bandOffset）、
+// 第2項＝既存B-1の帯の中での外面そろえ。共通柱（floorWidthMm===columnWidthMm）も外壁上に乗っていれば
+// 第1項だけ非ゼロになる。
+// ================================================================
+
+test('【ステップ2・表1】共通 W=120 外壁: bandOffset=0（柱寸120の階は帯シフト無し）→ ecc=0', () => {
+  const result = woodColumnEccentricity({
+    axisX: 0, axisY: 0, floorWidthMm: 120, columnWidthMm: 120,
+    segments: [verticalWallSegment(0, 60, 0)], outsideSign: fixedOutsideSign(1),
+  });
+  assert.deepEqual(result, { x: 0, y: 0 });
+});
+
+test('【ステップ2・表2】共通 W=105 外壁: bandOffset=+7.5 → ecc=+7.5（第2項は共通柱なので0）', () => {
+  const result = woodColumnEccentricity({
+    axisX: 0, axisY: 0, floorWidthMm: 105, columnWidthMm: 105,
+    segments: [verticalWallSegment(0, 60, 7.5)], outsideSign: fixedOutsideSign(1),
+  });
+  assert.equal(result.x, 7.5);
+  assert.equal(result.y, 0);
+});
+
+test('【ステップ2・表3】共通 W=105 内壁: bandOffset=0（内壁は帯シフト対象外）→ ecc=0', () => {
+  const result = woodColumnEccentricity({
+    axisX: 0, axisY: 0, floorWidthMm: 105, columnWidthMm: 105,
+    segments: [verticalWallSegment(0, 60, 0)], outsideSign: fixedOutsideSign(0),
+  });
+  assert.deepEqual(result, { x: 0, y: 0 });
+});
+
+test('【ステップ2・表4】個別 W=105/w=90 外壁: bandOffset=+7.5・第2項=+7.5 → ecc=+15', () => {
+  const result = woodColumnEccentricity({
+    axisX: 0, axisY: 0, floorWidthMm: 105, columnWidthMm: 90,
+    segments: [verticalWallSegment(0, 60, 7.5)], outsideSign: fixedOutsideSign(1),
+  });
+  assert.equal(result.x, 15);
+});
+
+test('【ステップ2・表5】個別 W=105/w=120 外壁: bandOffset=+7.5・第2項=-7.5 → ecc=0（相殺）', () => {
+  const result = woodColumnEccentricity({
+    axisX: 0, axisY: 0, floorWidthMm: 105, columnWidthMm: 120,
+    segments: [verticalWallSegment(0, 60, 7.5)], outsideSign: fixedOutsideSign(1),
+  });
+  assert.equal(result.x, 0);
+});
+
+test('【ステップ2・表6】個別 W=105/w=90 内壁（side明示+1）: bandOffset=0 → ecc=+7.5（従来と同値）', () => {
+  const result = woodColumnEccentricity({
+    axisX: 0, axisY: 0, floorWidthMm: 105, columnWidthMm: 90,
+    side: { x: 1 }, segments: [verticalWallSegment(0, 60, 0)], outsideSign: fixedOutsideSign(0),
+  });
+  assert.equal(result.x, 7.5);
+});
+
+// ---- 失敗系 ----
+test('【ステップ2失敗系】woodColumnEccentricity: bandOffset未定義のsegmentは0扱いで例外なし', () => {
+  const result = woodColumnEccentricity({
+    axisX: 0, axisY: 0, floorWidthMm: 105, columnWidthMm: 90,
+    segments: [verticalWallSegment(0, 60, undefined)], outsideSign: fixedOutsideSign(1),
+  });
+  assert.equal(result.x, 7.5, 'bandOffset未定義は0扱い（第2項の+7.5だけが乗る）');
+});
+
+test('【ステップ2失敗系】woodColumnEccentricity: bandOffsetがNaNのsegmentは0扱いで例外なし', () => {
+  const result = woodColumnEccentricity({
+    axisX: 0, axisY: 0, floorWidthMm: 105, columnWidthMm: 90,
+    segments: [verticalWallSegment(0, 60, NaN)], outsideSign: fixedOutsideSign(1),
+  });
+  assert.equal(result.x, 7.5, 'bandOffset=NaNは0扱い（第2項の+7.5だけが乗る。NaN伝播しない）');
+});
+
+test('【ステップ2失敗系】woodColumnEccentricity: 壁に一致しない軸はbandOffsetがあっても{0,0}', () => {
+  // segmentは存在するが柱の座標が半厚帯の外（coord=500・halfDepth=60・柱はaxisX=0）＝不一致。
+  const farSegment = verticalWallSegment(500, 60, 7.5);
+  const result = woodColumnEccentricity({
+    axisX: 0, axisY: 0, floorWidthMm: 105, columnWidthMm: 90,
+    segments: [farSegment], outsideSign: fixedOutsideSign(1),
+  });
+  assert.deepEqual(result, { x: 0, y: 0 }, '一致する壁が無い軸はbandOffsetの値に関わらず0');
+});
+
+test('【ステップ2失敗系】woodColumnEccentricity: outsideSignがthrowしても0扱い（bandOffset分だけ残る）', () => {
+  const result = woodColumnEccentricity({
+    axisX: 0, axisY: 0, floorWidthMm: 105, columnWidthMm: 90,
+    segments: [verticalWallSegment(0, 60, 7.5)],
+    outsideSign: () => { throw new Error('boom'); },
+  });
+  assert.equal(result.x, 7.5, 'sideの自動判定が失敗(0扱い)でも第1項(bandOffset)は無条件に乗る');
+});
+
+// ---- M1回帰（QA指摘・2026-09-17）: segment再同定はcoord/lo/hiの値一致ではなくpointsOnWallLinesが
+// 持ち帰る元segment参照（best.seg）で行う——他軸に同一(coord,lo,hi)を持つ壁区間があっても
+// 取り違えないことを確認する。 ----
+test('【ステップ2・M1回帰】woodColumnEccentricity: 他軸に同一(coord,lo,hi)の壁があっても自軸のbandOffsetだけを採る', () => {
+  const result = woodColumnEccentricity({
+    axisX: 0, axisY: 0, floorWidthMm: 105, columnWidthMm: 105,
+    segments: [
+      { isVertical: true, coord: 0, lo: -1000, hi: 1000, halfDepth: 60, bandOffset: 7.5 },
+      { isVertical: false, coord: 0, lo: -1000, hi: 1000, halfDepth: 60, bandOffset: -99 },
+    ],
+    outsideSign: fixedOutsideSign(1),
+  });
+  assert.equal(result.x, 7.5, '縦壁(X軸)は自分のbandOffset=7.5だけを採る（横壁の-99を拾わない）');
+  assert.equal(result.y, -99, '横壁(Y軸)は自分のbandOffset=-99だけを採る（縦壁の7.5を拾わない）');
+});
+
+test('【ステップ2・M1回帰】woodColumnEccentricity: side={x:0}（中央指定）でも第1項(bandOffset)は残る', () => {
+  const result = woodColumnEccentricity({
+    axisX: 0, axisY: 0, floorWidthMm: 105, columnWidthMm: 90,
+    side: { x: 0 }, segments: [verticalWallSegment(0, 60, 7.5)], outsideSign: fixedOutsideSign(1),
+  });
+  assert.equal(result.x, 7.5, 'side.x=0は第2項(外面そろえ)だけを0にする。第1項(bandOffset)は柱自身の向き選択と無関係に残る');
 });

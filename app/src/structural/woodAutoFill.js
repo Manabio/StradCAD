@@ -599,12 +599,16 @@ export function conformWoodSections(graph, project) {
 }
 
 /**
- * 在来木造の個別柱（柱寸columnWidthMm ≠ 階の柱寸floorWidthMm）が壁の中で偏心する量
- * （eccentricity{x,y}）を conform する（ユーザー裁定2026-09-17・B-1）。真実は
+ * 在来木造の柱（共通柱・個別柱の両方）が壁の中で偏心する量（eccentricity{x,y}）を conform する
+ * （ユーザー裁定2026-09-17・B-1／ステップ2で共通柱の帯シフト追従を追加）。真実は
  * column.woodOffsetSide（向きの指定）——eccentricity はここでだけ導出して書き込む派生値
  * （column.setField('eccentricity', ...) の唯一の書き手。他所から直接書かない）。
- *  - 共通柱（woodOffsetSideの有無に関わらず columnWidthMm(column,...)===floorWidthMm）は
- *    woodColumnEccentricity 自身が {x:0,y:0} を返すため常に偏心ゼロへそろう。
+ *  - 共通柱（columnWidthMm(column,...)===floorWidthMm）は、外壁上に乗っていれば帯の寄せ分
+ *    （selfWallSegments[].bandOffset。柱寸法が基準120より細い階の外壁下地帯シフト）だけ偏心する
+ *    ——柱自身は「壁の中で自分だけ動く」向きの選択余地が無いため、常にゼロではない。内壁上の
+ *    共通柱・柱寸120の階・非在来は従来どおり偏心ゼロ（bandOffsetが無い/0のため）。
+ *  - 個別柱（columnWidthMm≠floorWidthMm）は上記に加え、帯の中で外面をそろえる第2項
+ *    （woodColumnOffset.js woodColumnEccentricity参照）が乗る。
  *  - 非在来（framing を持たない主構造）・exterior未構築（呼び出し順序の不備）は何もしない。
  *  - 対象は在来木造の柱（役柱=杭を除く）のみ。目標値と現在値が一致すれば書かない（冪等。
  *    毎回書くと structuralRecompute.js の changed 判定が常に true になり undo が空でも積まれる）。
