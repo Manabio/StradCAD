@@ -7,7 +7,9 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Project, CenterLineType, Discipline } from '../core.js';
 import { floorSwapManager } from '../storage/FloorSwapManager.js';
-import { findFloorsWithCounterpartCL } from './centerLineFloorSync.js';
+import { undoManager } from '../undoManager.js';
+import { applyPromoteToGrid } from './centerLineConvert.js';
+import { findFloorsWithCounterpartCL, recallPromotedCenterLineDuplicates } from './centerLineFloorSync.js';
 
 function makeProjectWithTwoFloors() {
   const project = new Project('proj', 'test');
@@ -58,4 +60,116 @@ test('findFloorsWithCounterpartCL: 同座標にあるのがlabeledな通り芯�
   const result = await withPeekOverride(otherGraph, () => findFloorsWithCounterpartCL(project, activeGraph, cl));
 
   assert.equal(result.length, 0);
+});
+
+// R8: 同一idの複製は「同じ線の分身」であり重複報告の対象にしない（昇格の回収対象）。
+test('findFloorsWithCounterpartCL: 同一idのCLは重複として報告しない', async () => {
+  const { project, activeGraph, otherGraph } = makeProjectWithTwoFloors();
+  const cl = activeGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
+  otherGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH }, cl.id); // 降格複製を模す（同一id）
+
+  const result = await withPeekOverride(otherGraph, () => findFloorsWithCounterpartCL(project, activeGraph, cl));
+
+  assert.equal(result.length, 0);
+});
+
+// ---- recallPromotedCenterLineDuplicates ----
+// 3階構成（p1アクティブ、p2/p3）でも peek を差し替えるため、複数階版の共通ヘルパを用意する。
+function makeProjectWithFloors(count) {
+  const project = new Project('proj', 'test');
+  const names = ['1階', '2階', '3階', '4階'];
+  const graphs = [];
+  for (let i = 0; i < count; i++) {
+    const { graph } = project.addPlane(i * 3000, names[i], `p${i + 1}`);
+    graphs.push(graph);
+  }
+  return { project, graphs };
+}
+
+async function withPeekOverrideMulti(graphsById, fn) {
+  const originalPeek = floorSwapManager.peek;
+  floorSwapManager.peek = async (plane) => graphsById.get(plane.id) ?? null;
+  try {
+    return await fn();
+  } finally {
+    floorSwapManager.peek = originalPeek;
+  }
+}
+
+test('recallPromotedCenterLineDuplicates: 他階の同一id複製だけを外し、その階の壁は残る', async () => {
+  const { project, graphs: [p1, p2] } = makeProjectWithFloors(2);
+  const y0 = project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+  const y3 = project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: true, discipline: Discipline.STRUCT });
+  project.structGraph.addCenterLine(CenterLineType.VERTICAL, 5000, { labeled: true, discipline: Discipline.STRUCT });
+
+  const cl1 = p1.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
+  const cl2 = p2.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH }, cl1.id); // 同一id複製
+  p2.addWall(cl2, 0, true, y0, 0, y3, 0, {});
+
+  const saved = [];
+  const saveFloorFn = async (planeId) => { saved.push(planeId); };
+
+  await withPeekOverrideMulti(new Map([[p2.plane.id, p2]]), () =>
+    recallPromotedCenterLineDuplicates(project, p1, cl1, { saveFloorFn })
+  );
+
+  assert.equal(p2.shapeMap.has(cl1.id), false, '複製は回収される');
+  assert.equal(p2.walls.length, 1, '壁は道連れ削除されず残る');
+  assert.deepEqual(saved, [p2.plane.id]);
+});
+
+test('recallPromotedCenterLineDuplicates: structGraph側の同id通り芯は消えない', async () => {
+  const { project, graphs: [p1, p2] } = makeProjectWithFloors(2);
+  const cl1 = p1.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
+  p2.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH }, cl1.id); // 同一id複製
+  applyPromoteToGrid(p1, project.structGraph, cl1); // 実際の昇格経路を経た状態を再現
+
+  await withPeekOverrideMulti(new Map([[p2.plane.id, p2]]), () =>
+    recallPromotedCenterLineDuplicates(project, p1, cl1, { saveFloorFn: async () => {} })
+  );
+
+  assert.equal(project.structGraph.shapeMap.has(cl1.id), true, '昇格後の通り芯本体は消えない');
+  assert.equal(p2.shapeMap.has(cl1.id), false, '他階の複製は消える');
+});
+
+test('recallPromotedCenterLineDuplicates: 同一id複製が無い階はsaveFloorせずスキップ', async () => {
+  const { project, graphs: [p1, p2] } = makeProjectWithFloors(2);
+  const cl1 = p1.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
+  p2.addCenterLine(CenterLineType.VERTICAL, 2000, { labeled: false, discipline: Discipline.ARCH }); // 別id・別座標
+
+  const saved = [];
+  await withPeekOverrideMulti(new Map([[p2.plane.id, p2]]), () =>
+    recallPromotedCenterLineDuplicates(project, p1, cl1, { saveFloorFn: async (planeId) => { saved.push(planeId); } })
+  );
+
+  assert.deepEqual(saved, []);
+});
+
+test('recallPromotedCenterLineDuplicates: 途中の階でsaveFloorFnがthrowしても、保存済みの階分はamendされ全体はrejectする', async () => {
+  const { project, graphs: [p1, p2, p3] } = makeProjectWithFloors(3);
+  const cl1 = p1.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
+  p2.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH }, cl1.id);
+  p3.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH }, cl1.id);
+
+  const calls = [];
+  const saveFloorFn = async (planeId) => {
+    calls.push(planeId);
+    if (planeId === p3.plane.id) throw new Error('p3 save failed');
+  };
+
+  const entry = undoManager.push(() => {}, () => {});
+  try {
+    await withPeekOverrideMulti(new Map([[p2.plane.id, p2], [p3.plane.id, p3]]), () =>
+      assert.rejects(() => recallPromotedCenterLineDuplicates(project, p1, cl1, { undoEntry: entry, saveFloorFn }))
+    );
+    assert.ok(calls.includes(p2.plane.id), 'p2は保存済み');
+    assert.equal(calls.filter(id => id === p2.plane.id).length, 1);
+
+    const callsBeforeUndo = calls.length;
+    undoManager.undo();
+    assert.equal(calls.length, callsBeforeUndo + 1, 'undo実行でp2への書き戻しが1回追加される');
+    assert.equal(calls[calls.length - 1], p2.plane.id, '書き戻し先はp2のみ（p3は保存されていないため対象外）');
+  } finally {
+    // undoManager.undo() 済みなので後始末は不要（redoスタックへ移動済み）
+  }
 });

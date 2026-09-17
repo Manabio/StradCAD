@@ -10,6 +10,7 @@ import {
 } from '../error.js';
 import { undoManager } from '../undoManager.js';
 import { floorSwapManager } from '../storage/FloorSwapManager.js';
+import { restoreGraph } from '../graphSnapshot.js';
 import {
   shouldSuggestWoodStructure, commitCLMoveOp, deleteCenterLineWithUndo, addCenterLineFromDialog,
   promoteCenterToGridWithUndo, demoteGridToCenterWithUndo,
@@ -538,6 +539,118 @@ test('demoteGridToCenterWithUndo: 他階（アクティブ階の移籍先では�
     assert.equal(project.structGraph.shapeMap.has(cl.id), true, '変換されずstructGraphに残る（片階だけ複製漏れを防ぐ）');
     assert.equal(activeGraph.shapeMap.has(cl.id), false);
     assert.equal(undoManager.peekUndo(), beforeTop, 'undoは積まれない');
+  } finally {
+    floorSwapManager.peek = originalPeek;
+  }
+});
+
+// ---- 同一id複製（降格が propagateDemotedCenterLine で他階へ複製した「同じ線の分身」）の
+// 往復シナリオ。saveFloorFn を注入して実IDBを経由せず記録だけで検証する（wallRefresh.js の
+// saveFloorFn 注入と同じ前例。promoteCenterToGridWithUndo/demoteGridToCenterWithUndo の第4引数）。
+
+test('promoteCenterToGridWithUndo: 他階にある同一idの複製は重複拒否の対象にせず昇格でき、複製は回収される', async () => {
+  const project = new Project('proj', 'test');
+  const { graph } = project.addPlane(0, '1階', 'p1');
+  const { graph: otherGraph } = project.addPlane(3000, '2階', 'p2');
+  const cl = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
+  otherGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH }, cl.id); // 降格複製を模す（同一id）
+  const clId = cl.id;
+
+  const saved = [];
+  const saveFloorFn = async (planeId) => { saved.push(planeId); };
+  const originalPeek = floorSwapManager.peek;
+  floorSwapManager.peek = async (plane) => (plane.id === otherGraph.plane.id ? otherGraph : null);
+  try {
+    const { toast } = await promoteCenterToGridWithUndo(graph, project, cl, { saveFloorFn });
+
+    assert.equal(toast, null, '同一idは重複扱いされず拒否されない');
+    assert.equal(project.structGraph.shapeMap.has(clId), true);
+    assert.equal(graph.shapeMap.has(clId), false);
+    assert.equal(otherGraph.shapeMap.has(clId), false, '他階の同一id複製は回収される');
+    assert.deepEqual(saved, [otherGraph.plane.id]);
+  } finally {
+    floorSwapManager.peek = originalPeek;
+  }
+});
+
+test('降格→昇格→降格の往復が通り、最終状態で他階に同一idの中心線が1本だけ残る（R7）', async () => {
+  const project = new Project('proj', 'test');
+  const { graph } = project.addPlane(0, '1階', 'p1');
+  const { graph: otherGraph } = project.addPlane(3000, '2階', 'p2');
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: true, discipline: Discipline.STRUCT });
+  const cl = project.structGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: true, discipline: Discipline.STRUCT });
+  project.structGraph.addCenterLine(CenterLineType.VERTICAL, 5000, { labeled: true, discipline: Discipline.STRUCT }); // 同軸にもう1本（isLastGridOnAxis対策）
+  const clId = cl.id;
+
+  const saveFloorFn = async () => {};
+  const originalPeek = floorSwapManager.peek;
+  floorSwapManager.peek = async (plane) => (plane.id === otherGraph.plane.id ? otherGraph : null);
+  try {
+    // 1回目: 降格
+    const d1 = await demoteGridToCenterWithUndo(graph, project, cl, { saveFloorFn });
+    assert.equal(d1.toast, null);
+    assert.equal(graph.shapeMap.has(clId), true);
+    assert.equal(otherGraph.shapeMap.has(clId), true, '他階へ複製される');
+
+    // 2回目: 昇格（他階の同一id複製が重複拒否せず回収される）
+    const p1r = await promoteCenterToGridWithUndo(graph, project, graph.shapeMap.get(clId), { saveFloorFn });
+    assert.equal(p1r.toast, null);
+    assert.equal(project.structGraph.shapeMap.has(clId), true);
+    assert.equal(graph.shapeMap.has(clId), false);
+    assert.equal(otherGraph.shapeMap.has(clId), false, '複製は回収される');
+
+    // 3回目: 再度降格
+    const d2 = await demoteGridToCenterWithUndo(graph, project, project.structGraph.shapeMap.get(clId), { saveFloorFn });
+    assert.equal(d2.toast, null);
+    assert.equal(graph.shapeMap.has(clId), true);
+    assert.equal(otherGraph.shapeMap.has(clId), true);
+    assert.equal(otherGraph.centerLines.filter(c => c.id === clId).length, 1, '最終状態でp2に同一idの中心線が1本だけ');
+  } finally {
+    floorSwapManager.peek = originalPeek;
+  }
+});
+
+test('promoteCenterToGridWithUndo: undoで他階の複製が復活し、redoで再び回収される（saveFloorFn記録で観測。R9）', async () => {
+  const project = new Project('proj', 'test');
+  const { graph } = project.addPlane(0, '1階', 'p1');
+  const { graph: otherGraph } = project.addPlane(3000, '2階', 'p2');
+  const otherPlane = otherGraph.plane;
+  const cl = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
+  otherGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH }, cl.id);
+  const clId = cl.id;
+
+  const saved = [];
+  const saveFloorFn = async (planeId, bytes) => { saved.push({ planeId, bytes }); };
+  // saveFloorFnで受け取ったバイト列を、peekと同じ手順（PlanGraph+_structGraph差し込み+restoreGraph）で
+  // 復号して中身を確認する（otherGraphは生きた同一インスタンスのため、そのshapeMapでは undo/redo の
+  // 書き戻しを観測できない——非アクティブ階はIDB書込のみが正であり、amendFloorUndoRecordsも
+  // saveFloorFn呼び出しのみを行い、生きたotherGraphオブジェクト自体は書き換えない）。
+  const decode = (bytes) => {
+    const tmp = new PlanGraph(otherPlane);
+    tmp._structGraph = project.structGraph;
+    restoreGraph(tmp, bytes);
+    return tmp;
+  };
+
+  const originalPeek = floorSwapManager.peek;
+  floorSwapManager.peek = async (plane) => (plane.id === otherPlane.id ? otherGraph : null);
+  try {
+    const { toast } = await promoteCenterToGridWithUndo(graph, project, cl, { saveFloorFn });
+    assert.equal(toast, null);
+    assert.equal(saved.length, 1, '昇格確定時に1回保存される');
+    assert.equal(decode(saved[0].bytes).shapeMap.has(clId), false, '昇格直後の保存バイトは複製回収後の状態');
+
+    saved.length = 0;
+    undoManager.undo();
+    assert.equal(saved.length, 1, 'undoでp2への書き戻しが記録される');
+    assert.equal(saved[0].planeId, otherPlane.id);
+    assert.equal(decode(saved[0].bytes).shapeMap.has(clId), true, 'undoで書き戻すバイトは複製が復活した状態');
+
+    saved.length = 0;
+    undoManager.redo();
+    assert.equal(saved.length, 1, 'redoでp2への書き戻しが記録される');
+    assert.equal(decode(saved[0].bytes).shapeMap.has(clId), false, 'redoで書き戻すバイトは複製が回収された状態');
   } finally {
     floorSwapManager.peek = originalPeek;
   }

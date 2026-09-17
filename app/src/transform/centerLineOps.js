@@ -188,8 +188,12 @@ export function deleteCenterLineWithUndo(graph, project, cl) {
 // 同期ガード（型・直交通り芯・図形干渉・同グラフ内重複）を先に評価してから、IDBを伴う
 // 他階重複チェック（findFloorsWithCounterpartCL）を呼ぶ——確実に失敗する同期ガードのために
 // 無駄な全階IDB読み込みが走り、本来と異なるトーストが先に出るのを防ぐ（N5）。
+// 成功後は非アクティブ全階にある同一idの複製（降格時にpropagateDemotedCenterLineが作った
+// 「同じ線の分身」）を回収する（recallPromotedCenterLineDuplicates）。
+// @param {{saveFloorFn?: Function}} [opts] - saveFloorFn はテスト用の差し替え（既定値は
+//   centerLineFloorSync.js 側の saveFloor。呼び出し側（App.jsx）は無改造でよい）。
 // @returns {Promise<{ toast: string|null }>}
-export async function promoteCenterToGridWithUndo(graph, project, cl) {
+export async function promoteCenterToGridWithUndo(graph, project, cl, opts = {}) {
   const guardError = checkPromoteToGridGuards(graph, project.structGraph, cl);
   if (guardError) return { toast: guardError };
 
@@ -205,7 +209,7 @@ export async function promoteCenterToGridWithUndo(graph, project, cl) {
   if (error) return { toast: error };
   const afterArch   = serializeGraph(graph);
   const afterStruct = serializeStructCLs(project.structGraph, project.structuralInfo, project.memberGroupLedger);
-  undoManager.push(
+  const entry = undoManager.push(
     () => {
       restoreStructCLs(project.structGraph, project.structuralInfo, beforeStruct, project.memberGroupLedger);
       restoreGraph(graph, beforeArch);
@@ -215,6 +219,12 @@ export async function promoteCenterToGridWithUndo(graph, project, cl) {
       restoreGraph(graph, afterArch);
     },
   );
+
+  const { recallPromotedCenterLineDuplicates } = await import('./centerLineFloorSync.js');
+  await recallPromotedCenterLineDuplicates(project, graph, cl, {
+    undoEntry: entry,
+    ...(opts.saveFloorFn ? { saveFloorFn: opts.saveFloorFn } : {}),
+  });
   return { toast: null };
 }
 
@@ -223,8 +233,10 @@ export async function promoteCenterToGridWithUndo(graph, project, cl) {
 // 同期ガードを先に評価してから（N5。promoteCenterToGridWithUndoと同じ理由）、変換前に他階の
 // 同座標重複もチェックする（スキップ方式は不採用——片階だけ複製漏れすると壁参照が壊れるため、
 // 1階でも重複していれば全体を拒否する）。
+// @param {{saveFloorFn?: Function}} [opts] - saveFloorFn はテスト用の差し替え（既定値は
+//   centerLineFloorSync.js 側の saveFloor。呼び出し側（App.jsx）は無改造でよい）。
 // @returns {Promise<{ toast: string|null }>}
-export async function demoteGridToCenterWithUndo(graph, project, cl) {
+export async function demoteGridToCenterWithUndo(graph, project, cl, opts = {}) {
   const guardError = checkDemoteToCenterGuards(graph, project.structGraph, cl);
   if (guardError) return { toast: guardError };
 
@@ -255,7 +267,10 @@ export async function demoteGridToCenterWithUndo(graph, project, cl) {
   );
 
   const { propagateDemotedCenterLine } = await import('./centerLineFloorSync.js');
-  await propagateDemotedCenterLine(project, graph, cl, { loCL, hiCL, undoEntry: entry });
+  await propagateDemotedCenterLine(project, graph, cl, {
+    loCL, hiCL, undoEntry: entry,
+    ...(opts.saveFloorFn ? { saveFloorFn: opts.saveFloorFn } : {}),
+  });
   return { toast: null };
 }
 
