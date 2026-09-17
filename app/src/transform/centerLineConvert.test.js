@@ -66,6 +66,21 @@ test('applyPromoteToGrid: refIdで階内の別CLを参照する中心線を昇�
   assert.equal(cl.value, 1000, '通り芯化後は参照先の移動に追従しない（ベイク済み・全階共通の座標が固定される）');
 });
 
+test('applyPromoteToGrid異常系: 階グラフの同座標・同軸に梁芯（fuse・平面では非表示）があればERR_CL_DUPLICATE(beam)でグラフ無変更（通り芯と梁芯は同位置に共存不可）', () => {
+  const { project, graph } = makeProjectWithGraph();
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: true, discipline: Discipline.STRUCT });
+  const cl   = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
+  const beam = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.FUSE }); // 同座標の梁芯
+
+  const result = applyPromoteToGrid(graph, project.structGraph, cl);
+
+  assert.equal(result.error, ERR_CL_DUPLICATE('beam'));
+  assert.equal(graph.shapeMap.has(cl.id), true, '階グラフに残ったまま（変換されない）');
+  assert.equal(project.structGraph.shapeMap.has(cl.id), false);
+  assert.equal(graph.shapeMap.has(beam.id), true, '梁芯は無傷');
+});
+
 test('applyPromoteToGrid異常系: structGraphに同座標・同軸の通り芯が既にあればERR_CL_DUPLICATEでグラフ無変更（F2）', () => {
   const { project, graph } = makeProjectWithGraph();
   project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
@@ -247,6 +262,22 @@ test('applyDemoteToCenter: 同軸(VERTICAL)に他の通り芯があれば（軸�
   assert.equal(result.error, undefined);
   assert.equal(project.structGraph.shapeMap.has(cl.id), false, 'structGraphから消滅');
   assert.equal(graph.shapeMap.has(cl.id), true, '階グラフへ移籍される');
+});
+
+test('applyDemoteToCenter: 移籍先の階グラフの同座標に梁芯（fuse・平面では非表示）があっても降格でき、梁芯と中心線が共存する', () => {
+  const { project, graph } = makeProjectWithGraph();
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: true, discipline: Discipline.STRUCT });
+  const cl = project.structGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: true, discipline: Discipline.STRUCT });
+  project.structGraph.addCenterLine(CenterLineType.VERTICAL, 5000, { labeled: true, discipline: Discipline.STRUCT }); // isLastGridOnAxis対策
+  const beam = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.FUSE }); // 移籍先の同座標に梁芯
+
+  const result = applyDemoteToCenter(graph, project.structGraph, cl);
+
+  assert.equal(result.error, undefined, '梁芯は障害物にならない');
+  assert.equal(project.structGraph.shapeMap.has(cl.id), false, 'structGraphから消滅');
+  assert.equal(graph.shapeMap.has(cl.id), true, '階グラフへ移籍される');
+  assert.equal(graph.shapeMap.has(beam.id), true, '梁芯は無傷で共存する');
 });
 
 test('applyDemoteToCenter異常系: 移籍先の階グラフに同座標・同軸の中心線が既にあればERR_CL_DUPLICATEでグラフ無変更（F3）', () => {

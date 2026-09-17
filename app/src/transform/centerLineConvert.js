@@ -98,6 +98,12 @@ export function checkPromoteToGridGuards(graph, structGraph, cl) {
     c.centerLineType === cl.centerLineType && Math.abs(c.value - cl.value) < CL_OVERLAP_TOL_MM
   );
   if (dupStruct) return ERR_CL_DUPLICATE('struct');
+  // 階グラフの同座標・同軸に梁芯（fuse。平面モードでは非表示）があれば拒否——通り芯と梁芯は同位置に
+  // 共存できない（大梁と完全重複する小梁の生成防止。AddCLDialog の通り芯追加と同じ規約）。
+  const dupBeam = graph.centerLines.some(c =>
+    centerLineKind(c) === 'beam' && c.centerLineType === cl.centerLineType && Math.abs(c.value - cl.value) < CL_OVERLAP_TOL_MM
+  );
+  if (dupBeam) return ERR_CL_DUPLICATE('beam');
   return null;
 }
 
@@ -152,10 +158,12 @@ export function checkDemoteToCenterGuards(graph, structGraph, cl) {
   // structGraph側の当該CLの交点（走査元）に、アクティブ階グラフ（図形の照会先）の図形が
   // 取り付いていれば拒否（昇格側の attachedShapeExists と対称。Shape本体は常に階グラフ側にある）。
   if (attachedShapeExists(structGraph, graph, cl.id)) return ERR_CL_CONVERT_ATTACHED;
-  // 移籍先の階グラフに同座標・同軸の非labeled CL（中心線・補助線・梁芯）が既にあれば拒否
-  // （同一階に同座標の中心線が2本並存する事故を防ぐ）。
+  // 移籍先の階グラフに同座標・同軸の中心線・補助線が既にあれば拒否
+  // （同一階に同座標の中心線が2本並存する事故を防ぐ）。梁芯（fuse）は対象外——在来木造では下階の壁からも
+  // 自階へ自動生成され平面モードでは非表示のため、障害物にすると「何も無い位置で降格できない」になる
+  // （中心線と梁芯の同位置共存は AddCLDialog の追加経路と同じ規約で許容）。
   const dupCenter = graph.centerLines.some(c =>
-    !c.labeled && c.centerLineType === cl.centerLineType && Math.abs(c.value - cl.value) < CL_OVERLAP_TOL_MM
+    !c.labeled && centerLineKind(c) !== 'beam' && c.centerLineType === cl.centerLineType && Math.abs(c.value - cl.value) < CL_OVERLAP_TOL_MM
   );
   if (dupCenter) return ERR_CL_DUPLICATE('center');
   return null;
