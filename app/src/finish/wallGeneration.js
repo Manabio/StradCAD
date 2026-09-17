@@ -389,11 +389,30 @@ export function isInteriorWallTarget(room, under2aRoomIds) {
  * stairOpenings（階段の上り口・下り口の開口辺。stairPortEdges の結果）上のエッジは
  * 壁を生成しない。フィルタはコーナーマップ構築前に行うため、開口辺に接する隣接壁の
  * 端点オフセットは登録されず（null → 0）、隣接壁は開口境界のCL位置で止まる。
+ *
+ * bandShift（柱寸法が基準より細い階の外壁下地帯シフト量。structural/structureRules.js
+ * woodBaseColumnWidthMm 参照）>0 のときは、建物外周に接する辺（classifyExteriorEdge が
+ * non-null を返す辺＝外壁と同じCL・スパンで重なる辺）だけを、外壁と同じ物理方向・同じ量
+ * （generateExteriorWalls の e と符号が逆なのは p.axisOffset がここでは室内向きのため）だけ
+ * 室外側へ寄せる。内部辺（隣室との間仕切り等）は不変。
  */
-export function generateRoomWallsFromOutline(graph, room, { wallBase = DEFAULT_WALL_BASE, wallFinish = DEFAULT_WALL_FINISH } = {}, stairOpenings = []) {
+export function generateRoomWallsFromOutline(graph, room, { wallBase = DEFAULT_WALL_BASE, wallFinish = DEFAULT_WALL_FINISH, bandShift = 0, cellToRoom = null } = {}, stairOpenings = []) {
   const offset = wallBase / 2 + wallFinish;
-  const rawParams = computeExternalEdgeParams(room, offset, graph)
+  let rawParams = computeExternalEdgeParams(room, offset, graph)
     .filter(p => !onStairOpening(p, graph, stairOpenings));
+
+  if (bandShift > 0) {
+    const ctr = cellToRoom ?? buildCellToRoom(graph);
+    rawParams = rawParams.map(p => {
+      if (!classifyExteriorEdge(room, p, graph, ctr)) return p; // 内部辺は不変
+      const e = -Math.sign(p.axisOffset) * bandShift;
+      // backingOffset・bandOffset の両方に同じシフト量を入れる——bandOffsetは「このシフトが
+      // どれだけか」だけを保持する専用フィールド（structural/wallBeamAxes.jsが梁芯・柱アンカーの
+      // 座標からこれだけを差し引いて通り芯基準を保つ。backingOffset全体を差し引くとCL偏芯等の
+      // 本来の偏芯まで打ち消してしまうため分離する。core/wall.js Wall.bandOffset参照）。
+      return { ...p, axisOffset: p.axisOffset + e, backingOffset: e || null, bandOffset: e || null };
+    });
+  }
 
   // コーナーマップ構築
   // key: "hCLId:vCLId" (水平CL id : 垂直CL id)
@@ -427,7 +446,7 @@ export function generateRoomWallsFromOutline(graph, room, { wallBase = DEFAULT_W
 
   const walls = [];
   for (const [, segs] of groups) {
-    const { axisCLId, axisOffset, isVertical } = segs[0];
+    const { axisCLId, axisOffset, isVertical, backingOffset, bandOffset } = segs[0];
     const axisCL = getShape(graph, axisCLId);
     if (!axisCL) continue;
 
@@ -452,7 +471,9 @@ export function generateRoomWallsFromOutline(graph, room, { wallBase = DEFAULT_W
       const clipped = clipToAxisExtent(axisCL, startCL, startOffset, endCL, endOffset, offset);
       if (!clipped) continue;
 
-      const w = graph.addWall(axisCL, axisOffset, isVertical, startCL, clipped.startOffset, endCL, clipped.endOffset, { isRoomWall: true, wallFinish });
+      const w = graph.addWall(axisCL, axisOffset, isVertical, startCL, clipped.startOffset, endCL, clipped.endOffset, {
+        isRoomWall: true, wallFinish, backingOffset: backingOffset ?? null, bandOffset: bandOffset ?? null,
+      });
       walls.push(w);
     }
   }
@@ -475,8 +496,14 @@ export function generateRoomWallsFromOutline(graph, room, { wallBase = DEFAULT_W
  * stairOpenings（階段の上り口・下り口の開口辺）上のエッジは、courtyard（両側とも部屋）
  * の場合のみ壁を生成しない。outer（外側が未割当＝部屋指定なし）は建物外周のため
  * 開口辺でも壁を残す。
+ *
+ * bandShift（柱寸法が基準より細い階の外壁下地帯シフト量。structural/structureRules.js
+ * woodBaseColumnWidthMm 参照）>0 のときは、下地帯の外面（軸CLから遠い側）を通り芯±60に
+ * 固定したまま、下地帯の中心をこの分だけ室外側（axisOffsetの向き）へ寄せる——壁厚（wallBase）
+ * 自体は変えないため、室内側の仕上げ面が同量だけ室外側へ動く。backingDepthは明示しない
+ * （既存の対称フォールバック式のまま。backingOffsetだけで帯の平行移動を表す）。
  */
-export function generateExteriorWalls(graph, { wallBase = DEFAULT_WALL_BASE, wallFinish = DEFAULT_WALL_FINISH } = {}, stairOpenings = []) {
+export function generateExteriorWalls(graph, { wallBase = DEFAULT_WALL_BASE, wallFinish = DEFAULT_WALL_FINISH, bandShift = 0 } = {}, stairOpenings = []) {
   const offset = wallBase / 2 + wallFinish;
 
   const cellToRoom = buildCellToRoom(graph);
@@ -491,10 +518,13 @@ export function generateExteriorWalls(graph, { wallBase = DEFAULT_WALL_BASE, wal
 
       // 外壁は常に「室外側（室内方向の逆）」に生成する
       // （p.axisOffset は常に室内方向を指すため、outer/courtyard とも反転する）
-      const axisOffset = -p.axisOffset;
+      let axisOffset = -p.axisOffset;
+      // 柱寸法シフト（axisOffsetは既に外向きなので同じ符号を掛ける＝さらに外側へ）。
+      const e = Math.sign(axisOffset) * bandShift;
+      axisOffset += e;
 
       if (!byLoopType.has(loopType)) byLoopType.set(loopType, []);
-      byLoopType.get(loopType).push({ ...p, axisOffset });
+      byLoopType.get(loopType).push({ ...p, axisOffset, backingOffset: e || null, bandOffset: e || null });
     }
   }
 
@@ -526,7 +556,7 @@ export function generateExteriorWalls(graph, { wallBase = DEFAULT_WALL_BASE, wal
     }
 
     for (const [, segs] of groups) {
-      const { axisCLId, axisOffset, isVertical } = segs[0];
+      const { axisCLId, axisOffset, isVertical, backingOffset, bandOffset } = segs[0];
       const axisCL = getShape(graph, axisCLId);
       if (!axisCL) continue;
 
@@ -544,14 +574,17 @@ export function generateExteriorWalls(graph, { wallBase = DEFAULT_WALL_BASE, wal
           endOffset   = cornerMap.get(`${seg.endCLId}:${axisCLId}`)?.hOffset   ?? 0;
         }
 
-        // 端点ルール: 軸CLの線分範囲を越える部分ははねだし付きで止める
-        const clipped = clipToAxisExtent(axisCL, startCL, startOffset, endCL, endOffset, offset);
+        // 端点ルール: 軸CLの線分範囲を越える部分ははねだし付きで止める（帯シフト分だけ
+        // 突出許容量も広げる——帯自体が外側へ寄っているため）。
+        const clipped = clipToAxisExtent(axisCL, startCL, startOffset, endCL, endOffset, offset + bandShift);
         if (!clipped) continue;
 
         const w = graph.addWall(axisCL, axisOffset, isVertical, startCL, clipped.startOffset, endCL, clipped.endOffset, {
           isRoomWall: true,
           isExteriorWall: true,
           wallFinish,
+          backingOffset: backingOffset ?? null,
+          bandOffset: bandOffset ?? null,
         });
         walls.push(w);
       }
@@ -667,11 +700,21 @@ function splitWallByOwnership(graph, w, ownerWalls, { claimUncovered = true } = 
 
   // オーナー側フィールド（claimUncovered=true の既定式でのみ使う）。sign は既存の finishSide を
   // 優先する（axisOffset===0では側を導出できないため。導出はWall.faceDir参照）。
+  // 帯中心基準（柱寸法シフトで w.backingOffset!=0 の外壁がオーナーになるケース。structural/
+  // structureRules.js woodBaseColumnWidthMm 参照）: 帯厚は axisOffset と帯中心
+  // （axisOffset - backingOffset ではなく axisOffset そのものからの距離ではなく）の差から
+  // 求める——axisOffsetは既にbandShift込みの位置なので、帯中心からの距離（axisOffset-
+  // backingOffset）を使わないとbandShift分だけ帯厚を過大評価する。backingOffsetがnull/0なら
+  // 従来式（2*(|axisOffset|-wallFinish)）と一致する。
+  // bandOffset（柱寸法シフト分。core/wall.js Wall.bandOffset参照）は所有権解決で値を変えない
+  // ——帯が物理的にどれだけ寄っているかという事実は covered/非covered の判定結果に関わらず
+  // 不変のため、両分岐とも w.bandOffset をそのまま引き継ぐ（分割後の新壁にも落とさない
+  // ——F1: wallBeamAxes.jsの梁芯・柱アンカー座標がここで途切れると通り芯脇に湧いてしまう）。
   const sign = w.faceDir;
-  const ownerBackingDepth = 2 * (Math.abs(w.axisOffset) - w.wallFinish);
+  const ownerBackingDepth = 2 * (Math.abs(w.axisOffset - (w.backingOffset ?? 0)) - w.wallFinish);
   const fieldsFor = (covered) => claimUncovered
-    ? { backingOffset: 0, backingDepth: covered ? 0 : ownerBackingDepth, finishSide: sign }
-    : { backingOffset: w.backingOffset, backingDepth: covered ? 0 : w.backingDepth, finishSide: w.finishSide };
+    ? { backingOffset: w.backingOffset ?? 0, backingDepth: covered ? 0 : ownerBackingDepth, finishSide: sign, bandOffset: w.bandOffset }
+    : { backingOffset: w.backingOffset, backingDepth: covered ? 0 : w.backingDepth, finishSide: w.finishSide, bandOffset: w.bandOffset };
 
   if (merged.length === 1) {
     const covered = merged[0].covered;
@@ -702,7 +745,7 @@ function splitWallByOwnership(graph, w, ownerWalls, { claimUncovered = true } = 
     if (!claimUncovered) return null; // 既存の解決結果を保持（何もしない）
     // フォールバック（安全側）: 分割せず、重なりが1か所でもあれば薄壁として扱う
     const anyCovered = merged.some(m => m.covered);
-    w.backingOffset = 0;
+    w.backingOffset = w.backingOffset ?? 0;
     w.backingDepth  = anyCovered ? 0 : ownerBackingDepth;
     w.finishSide    = sign;
     return null;
@@ -750,8 +793,12 @@ export function applyBackingOwnership(graph, ownerWalls, challengerWalls, { setO
   if (setOwnerFields) {
     for (const w of ownerWalls) {
       if (w.wallFinish == null) continue; // 手動壁等（生成時確定値が無い）は対象外
-      w.backingOffset = 0;
-      w.backingDepth  = 2 * (Math.abs(w.axisOffset) - w.wallFinish);
+      // 帯中心基準（柱寸法シフトで backingOffset!=0 の壁がオーナーになるケース。
+      // splitWallByOwnership の ownerBackingDepth と同じ式。backingOffset が null/0 なら
+      // 従来式と一致する）。
+      const bOff = w.backingOffset ?? 0;
+      w.backingOffset = bOff;
+      w.backingDepth  = 2 * (Math.abs(w.axisOffset - bOff) - w.wallFinish);
       // finishSide は既存値を優先する（既に確定済みの値を壊さない。導出はWall.faceDir参照）。
       w.finishSide    = w.faceDir;
     }
@@ -783,7 +830,10 @@ export function applyBackingOwnership(graph, ownerWalls, challengerWalls, { setO
  * 常にオーナー。−側の壁は、＋側の壁と重ならないサブ区間のみオーナー」。生成直後は
  * axisOffset = ±(wallBase/2+wallFinish) の対称式のため、符号＝側が成立する
  * （CL偏芯適用前のこの時点でのみ有効な前提。適用後は clEccentricity.js 側の isOwner が
- * 別途スパン重なりで再判定する）。＋側同士のスパン重なり（同じ側に複数Roomの壁が並んで
+ * 別途スパン重なりで再判定する）。柱寸法シフト（bandShift。structural/structureRules.js
+ * woodBaseColumnWidthMm 参照）を加えても、|axisOffset| ≥ 90/2+wallFinish−15 > 0
+ * （最小柱寸90・最大シフト量(120-90)/2=15）が常に成り立つため符号＝側の前提は崩れない。
+ * ＋側同士のスパン重なり（同じ側に複数Roomの壁が並んで
  * 重複するケース）は判定しない——Room.cells は部屋間で排他（同じセルを2部屋が持てない）
  * ため、同一CL・同一側に生成される壁のスパンは重ならない前提が成立する。
  *
@@ -809,8 +859,11 @@ export function resolveBackingOwnership(graph, walls) {
       // 触れない設計のため、この解決はここで直接行う）。
       for (const w of negWalls) {
         if (w.wallFinish == null) continue;
-        w.backingOffset = 0;
-        w.backingDepth  = 2 * (Math.abs(w.axisOffset) - w.wallFinish);
+        // 帯中心基準（applyBackingOwnershipのsetOwnerFields分岐・splitWallByOwnershipの
+        // ownerBackingDepthと同じ式。backingOffsetが null/0 なら従来式と一致する）。
+        const bOff = w.backingOffset ?? 0;
+        w.backingOffset = bOff;
+        w.backingDepth  = 2 * (Math.abs(w.axisOffset - bOff) - w.wallFinish);
         // finishSide は既存値を優先する（既に確定済みの値を壊さない。導出はWall.faceDir参照）。
         w.finishSide    = w.faceDir;
       }
@@ -841,6 +894,7 @@ export function snapshotWall(w) {
     backingOffset: w.backingOffset,
     backingDepth:  w.backingDepth,
     finishSide:  w.finishSide,
+    bandOffset:  w.bandOffset,
   };
 }
 
@@ -862,6 +916,7 @@ export function restoreWallsFromSnapshots(graph, snapshots) {
     if (s.backingOffset != null) props.backingOffset = s.backingOffset;
     if (s.backingDepth  != null) props.backingDepth  = s.backingDepth;
     if (s.finishSide    != null) props.finishSide    = s.finishSide;
+    if (s.bandOffset    != null) props.bandOffset    = s.bandOffset;
     const w = graph.addWall(axisCL, s.axisOffset, s.isVertical, startCL, s.startOffset ?? 0, endCL, s.endOffset ?? 0, props, s.id);
     walls.push(w);
   }

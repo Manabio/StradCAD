@@ -335,6 +335,19 @@ export function woodColumnWidthMm(graph, project = null) {
   const rules = rulesFor(effectiveStructure(graph, project));
   if (!rules.framing) return null;
   if (graph?.woodColumnWidthMm != null && WOOD_SQUARE_WIDTHS.includes(graph.woodColumnWidthMm)) return graph.woodColumnWidthMm;
+  return woodBaseColumnWidthMm(graph, project);
+}
+
+/**
+ * その階の在来木造の柱寸(mm)の**ルール既定値**（framing.columnSectionの幅。常に120）。
+ * graph.woodColumnWidthMm（「各階柱寸法」欄の上書き）は見ない——外壁の下地帯シフト
+ * （柱寸が基準120より細いとき、下地帯を外側へ寄せて外面を通り芯±60に固定する。ステップ1）が
+ * 「基準からどれだけ細いか」を求めるのに使う唯一の入口。在来木造以外（framingを持たない
+ * 主構造）はnull。
+ */
+export function woodBaseColumnWidthMm(graph, project = null) {
+  const rules = rulesFor(effectiveStructure(graph, project));
+  if (!rules.framing) return null;
   return findSectionEntry(rules.framing.columnSection)?.width ?? null;
 }
 

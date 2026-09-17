@@ -129,7 +129,10 @@ export function resolveEccentricity(graph, clId, materialMap, specOverride) {
 /**
  * CL偏芯を対象壁へフル再計算して焼き込む（毎回 spec＋現材から再計算する冪等な適用）。
  * spec が undefined（解除）の場合は roomWallDims の対称既定式へ戻し、
- * backingOffset/backingDepth/finishSide を null（現行式）に戻す。
+ * backingOffset/backingDepth/finishSide を null（現行式）に戻す。bandOffset（柱寸法シフトの
+ * 内訳。core/wall.js Wall.bandOffset）も両分岐で null に戻す——CL偏芯の axisOffset/
+ * backingOffset はbandShiftと無関係にフル再計算するため、古いbandOffsetを残すと
+ * structural/wallBeamAxes.js が誤って座標から差し引いてしまう。
  *
  * 対象: clId を軸CLに持つ、非外壁の room 生成壁（UNDEFINED の部屋は除く。階段ペアRoom・
  * 階段吹抜けも、新モデルでは通常のRoomと同じ経路で壁を持つため対象に含める。ただし
@@ -141,7 +144,7 @@ export function resolveEccentricity(graph, clId, materialMap, specOverride) {
  * @param {string} clId
  * @param {{materialMap: Map}} opts
  * @returns {{wall: import('@core').Wall, axisOffset:number, wallFinish:number|null, backingOffset:number|null,
- *   backingDepth:number|null, finishSide:number|null, startOffset:number, endOffset:number}[]}
+ *   backingDepth:number|null, finishSide:number|null, startOffset:number, endOffset:number, bandOffset:number|null}[]}
  *   変更した壁の変更前スナップショット（呼び出し側の undo 用、壁ごとに重複なし）。壁自体・
  *   コーナー追従で端点オフセットが変わった隣接壁の双方を含みうる。
  */
@@ -262,7 +265,7 @@ export function applyCLEccentricity(graph, clId, { materialMap } = {}) {
     changed.push({
       wall: w, axisOffset: w.axisOffset, wallFinish: w.wallFinish,
       backingOffset: w.backingOffset, backingDepth: w.backingDepth, finishSide: w.finishSide,
-      startOffset: w.startOffset, endOffset: w.endOffset,
+      startOffset: w.startOffset, endOffset: w.endOffset, bandOffset: w.bandOffset,
     });
   };
 
@@ -296,6 +299,7 @@ export function applyCLEccentricity(graph, clId, { materialMap } = {}) {
       w.backingOffset = null;
       w.backingDepth  = null;
       w.finishSide    = null;
+      w.bandOffset    = null; // CL偏芯の対称既定式に戻す——柱寸法シフトの痕跡は持ち越さない
     } else {
       const f = finishOf(t.room);
       const owner = isOwner(t);
@@ -304,6 +308,10 @@ export function applyCLEccentricity(graph, clId, { materialMap } = {}) {
       w.finishSide    = t.side;
       w.backingOffset = owner ? e : 0;
       w.backingDepth  = owner ? b : 0;
+      // CL偏芯は柱寸法シフト（bandShift）と独立に axisOffset/backingOffset をフル再計算するため、
+      // bandOffset（帯シフト量の内訳）はここでは無関係——古い値を残すとwallBeamAxes.jsが
+      // このwallの座標から誤ってbandOffset分を差し引いてしまう（F1と同じ事故）。
+      w.bandOffset    = null;
     }
 
     // 開口の側面追従（符号が非0→逆符号に反転した壁がホストする開口のみ wallSide を新符号へ更新。

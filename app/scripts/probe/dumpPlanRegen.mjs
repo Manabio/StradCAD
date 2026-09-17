@@ -16,17 +16,23 @@
 // 使い方: node --import ./scripts/testSetup.mjs scripts/probe/dumpPlanRegen.mjs <出力先ディレクトリ> <入力.stq>
 //   出力: plan-<階名>.json（詳細LOD。dumpPlan.mjs の plan-<階>.json と同形式）
 //
+// golden-regen/ はこのスクリプト（conformWoodBacking経由。実アプリの境界処理と同じ経路）で採取する
+// ——conformWoodBackingを経由しないと、各階柱寸法（graph.woodColumnWidthMm）と保存済み下地材コードが
+// 食い違っている文書（実データにありうる）で実アプリと異なる寸法のまま比較してしまう（QA F3裁定）。
+//
 // stairUnderEntries・extraStairOpenings は finish/stair/stairUnderRooms.js の resolveStairContext
 // （wallRefresh.js の全階sweep・finish/finishBoundary.js の仕上げ脱出境界と同じ単一ソース）へ、
 // 「project.graphMap に全階が既にメモリ展開済み」であることを利用した同期peek相当を注入して解決する
 // （IndexedDB抜き）。
 import fs from 'node:fs';
 import path from 'node:path';
+import { runInAction } from 'mobx';
 import { loadDocument } from './loadDoc.mjs';
 import { planWallSegments } from './planSegments.mjs';
 import { LodLevel } from '../../src/viewport.js';
 import { resolveStairContext } from '../../src/finish/stair/stairUnderRooms.js';
 import { regenerateWalls, loadMaterialMap } from '../../src/finish/wallRegeneration.js';
+import { conformWoodBacking } from '../../src/structural/woodAutoFill.js';
 
 const outDir = process.argv[2] ?? path.join(import.meta.dirname, 'golden-regen');
 const src = process.argv[3] ?? 'D:/tatsuya/Download/11.stq';
@@ -43,9 +49,15 @@ for (const p of planes) {
   const graph = project.graphMap.get(p.id);
   if (!graph) continue;
 
+  // 在来木造: 共通仕様の壁下地材を柱同寸×30へ自動選択する（実アプリの境界処理
+  // finishBoundary.js runFinishEntryBoundary/wallRefresh.js refreshWallsForGraph と同じ手順。
+  // QA F3: これを呼ばずに柱寸法だけ変えると、下地材コードがWに追従していない一時状態のまま
+  // bandShiftが発火し、実アプリの経路と食い違う）。
+  runInAction(() => conformWoodBacking(graph, project));
+
   const { stairUnderEntries, extraStairOpenings } = await resolveStairContext(graph, project, graphMapPeek);
 
-  await regenerateWalls(graph, { materialMap, stairUnderEntries, extraStairOpenings });
+  await regenerateWalls(graph, { materialMap, project, stairUnderEntries, extraStairOpenings });
 
   const segs = planWallSegments(graph, LodLevel.DETAIL);
   const name = p.name.replace(/[^\w一-龥ぁ-んァ-ヶー]/g, '_');

@@ -14,8 +14,11 @@ import { effectiveStructure, woodColumnSectionId } from '../structural/structure
  * 鍵の書式バージョン。材マスタ（壁材/壁仕上げ/下地材の実体）や壁生成規則
  * （wallGeneration.js / edgeComposition.js の導出式）を変えたら、鍵の入力が同じでも
  * 出力壁が変わりうるため、ここを上げて既存キーを一律不一致にする。
+ * v2: 柱寸法が基準（120）より細い階の外壁下地帯シフト導入（wallGeneration.js
+ * generateExteriorWalls/generateRoomWallsFromOutline の bandShift。鍵の入力は変えていないが
+ * 生成式が変わったため既存キーを一律不一致にする）。
  */
-export const WALL_KEY_VERSION = 'v1';
+export const WALL_KEY_VERSION = 'v2';
 
 /**
  * graph（1階分）の壁再生成に必要な入力から鍵文字列を作る。

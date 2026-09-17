@@ -78,7 +78,7 @@ async function runSweep() {
 
     const { stairUnderEntries, extraStairOpenings } = await resolveStairContext(graph, project, graphMapPeek);
     const backingCentersBefore = wallBackingCenters(graph);
-    const { regenerated } = await regenerateWalls(graph, { materialMap, stairUnderEntries, extraStairOpenings });
+    const { regenerated } = await regenerateWalls(graph, { materialMap, project, stairUnderEntries, extraStairOpenings });
     if (!regenerated) continue;
     const backingCentersAfter = wallBackingCenters(graph);
     const moves = mapBackingCenterMoves(backingCentersBefore, backingCentersAfter);

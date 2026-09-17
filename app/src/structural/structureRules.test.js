@@ -10,7 +10,7 @@ import {
   rulesFor, isWoodStructure, isTraditionalWoodStructure, foundationOptionsFor, defaultMaterialFor, effectiveStructure,
   RC_FOUNDATION_OPTIONS, WOOD_FOUNDATION_OPTIONS, WOOD_FOUNDATION_BEAM,
   BACKING_RULES, BackingClass, backingRulesFor,
-  woodColumnWidthMm, woodColumnSectionId, beamColumnWidthMm, resolvedBeamColumnWidthMm,
+  woodColumnWidthMm, woodColumnSectionId, woodBaseColumnWidthMm, beamColumnWidthMm, resolvedBeamColumnWidthMm,
   columnWidthMm, columnSectionId,
   PIN_BEAM_END_CLEARANCE_MM,
 } from './structureRules.js';
@@ -104,6 +104,24 @@ test('【失敗系】woodColumnWidthMm/woodColumnSectionId: カタログに無�
   graph.setWoodColumnWidthMm(100);
   assert.equal(woodColumnWidthMm(graph), 120, 'カタログ外の階の値は無効＝既定(120)を返す（生値100は返さない）');
   assert.equal(woodColumnSectionId(graph), 'WOOD-120x120');
+});
+
+// ---- woodBaseColumnWidthMm（外壁下地帯シフト量の入口。structural/structureRules.js woodColumnWidthMmの
+// 最終行フォールバックを抽出したもの。finish/wallRegeneration.js regenerateWalls が bandShift 算出に使う）----
+test('woodBaseColumnWidthMm: 在来木造はルール既定（120）を返す。graph.woodColumnWidthMm（各階柱寸法）の上書きは見ない', () => {
+  const graph = new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
+  graph.structureOverride = TRADITIONAL_WOOD_STRUCTURE;
+  assert.equal(woodBaseColumnWidthMm(graph), 120);
+  graph.setWoodColumnWidthMm(105); // 各階柱寸法の上書きがあっても常に120（基準値）を返す
+  assert.equal(woodBaseColumnWidthMm(graph), 120, '各階柱寸法の上書きは見ない（基準からのシフト量を求めるための入口のため）');
+});
+
+test('【失敗系】woodBaseColumnWidthMm: 在来木造以外（framingを持たない主構造）は常にnull', () => {
+  for (const structure of ['木造（2"×4"）', 'S造', 'RC造(ラーメン)', UNSPECIFIED_STRUCTURE]) {
+    const graph = new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
+    graph.structureOverride = structure;
+    assert.equal(woodBaseColumnWidthMm(graph), null, structure);
+  }
 });
 
 // ---- columnWidthMm/columnSectionId（ステップ3・2026-09-17裁定「柱は共通と個別指定の2層」）----

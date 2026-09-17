@@ -132,6 +132,7 @@ export async function runFinishExitBoundary(graph, project, fmode, { goingToStru
   const backingCentersBefore = wallBackingCenters(graph);
   const { regenerated, undoFns: wallUndoFns, redoFns: wallRedoFns } = await regenerateWalls(graph, {
     materialMap: fmode?.materialMap,
+    project,
     stairUnderEntries,
     extraStairOpenings,
   });
@@ -217,6 +218,7 @@ export async function runFinishExitBoundary(graph, project, fmode, { goingToStru
           eccTouched.set(c.wall.id, {
             axisOffset: c.axisOffset, wallFinish: c.wallFinish, backingOffset: c.backingOffset,
             backingDepth: c.backingDepth, finishSide: c.finishSide, startOffset: c.startOffset, endOffset: c.endOffset,
+            bandOffset: c.bandOffset,
           });
         }
       }
@@ -231,6 +233,7 @@ export async function runFinishExitBoundary(graph, project, fmode, { goingToStru
           after: {
             axisOffset: w.axisOffset, wallFinish: w.wallFinish, backingOffset: w.backingOffset,
             backingDepth: w.backingDepth, finishSide: w.finishSide, startOffset: w.startOffset, endOffset: w.endOffset,
+            bandOffset: w.bandOffset,
           },
         });
       }
@@ -240,6 +243,7 @@ export async function runFinishExitBoundary(graph, project, fmode, { goingToStru
         w.axisOffset = f.axisOffset; w.wallFinish = f.wallFinish;
         w.backingOffset = f.backingOffset; w.backingDepth = f.backingDepth;
         w.finishSide = f.finishSide; w.startOffset = f.startOffset; w.endOffset = f.endOffset;
+        w.bandOffset = f.bandOffset;
       });
       undoFns.push(() => eccChanges.forEach(c => applyFields(c.id, c.before)));
       redoFns.push(() => eccChanges.forEach(c => applyFields(c.id, c.after)));

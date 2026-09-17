@@ -142,7 +142,7 @@ const ER = { CL_ID: 0, WALL_ID: 1, OFFSET: 2 };
 // Point: 3 フィールド
 const PT = { ID: 0, X: 1, Y: 2 };
 
-// Wall: 21 フィールド
+// Wall: 23 フィールド
 const WL = {
   ID: 0, AXIS_CL: 1, AXIS_OFF: 2, IS_V: 3,
   CL_S: 4, S_OFF: 5, CL_E: 6, E_OFF: 7,
@@ -152,6 +152,8 @@ const WL = {
   HAS_BACKING_OFFSET: 16, BACKING_OFFSET: 17, // 下地帯中心のaxisCL.valueからの符号付きオフセット(mm)。null=対称（現行式）
   HAS_BACKING_DEPTH: 18, BACKING_DEPTH: 19,   // 下地帯深さ(mm)。null=現行式。0=下地なし（仕上げのみの薄壁）
   FINISH_SIDE: 20, // 仕上げ面が向く側（int8、-1/0/1）。0=未設定=null（従来どおり導出）
+  // 末尾追加（柱寸法が基準より細い階の外壁下地帯シフト。core/wall.js Wall.bandOffset参照）。
+  HAS_BAND_OFFSET: 21, BAND_OFFSET: 22, // backingOffsetの内訳のうち帯シフト分だけを保持する(mm)。null=帯シフトなし
 };
 
 // CLEccentricity（CL偏芯レコード）: 5 フィールド
@@ -406,8 +408,9 @@ function writeWall(b, w) {
   const hasWallFinish = w.wallFinish != null;
   const hasBackingOffset = w.backingOffset != null;
   const hasBackingDepth  = w.backingDepth  != null;
+  const hasBandOffset = w.bandOffset != null;
 
-  b.startObject(21);
+  b.startObject(23);
   b.addFieldOffset(WL.ID,      sId,   0);
   b.addFieldOffset(WL.AXIS_CL, sAxis, 0);
   b.addFieldFloat64(WL.AXIS_OFF, w.axisOffset ?? 0, 0.0);
@@ -429,6 +432,8 @@ function writeWall(b, w) {
   b.addFieldInt8(WL.HAS_BACKING_DEPTH, hasBackingDepth ? 1 : 0, 0);
   b.addFieldFloat64(WL.BACKING_DEPTH, hasBackingDepth ? w.backingDepth : 0, 0.0);
   b.addFieldInt8(WL.FINISH_SIDE, w.finishSide ?? 0, 0);
+  b.addFieldInt8(WL.HAS_BAND_OFFSET, hasBandOffset ? 1 : 0, 0);
+  b.addFieldFloat64(WL.BAND_OFFSET, hasBandOffset ? w.bandOffset : 0, 0.0);
   return b.endObject();
 }
 
@@ -1173,6 +1178,8 @@ function readWall(bb, tablePos) {
     backingDepth:  r.i8(WL.HAS_BACKING_DEPTH)  !== 0 ? r.f64(WL.BACKING_DEPTH)  : null,
     // 0 = 未設定（旧データ含む）→ null（Wall.faceDir が sign(axisOffset) から導出）
     finishSide:    r.i8(WL.FINISH_SIDE) || null,
+    // 旧データ（フィールド未保存）は HAS_ フラグが立たず null になる（=帯シフトなし）
+    bandOffset:    r.i8(WL.HAS_BAND_OFFSET) !== 0 ? r.f64(WL.BAND_OFFSET) : null,
   };
 }
 

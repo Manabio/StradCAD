@@ -24,6 +24,7 @@ import {
   resolveBackingOwnership, applyBackingOwnership, closeConvexCorners, isInteriorWallTarget,
 } from './wallGeneration.js';
 import { buildCellToRoom } from './edgeClassify.js';
+import { woodBaseColumnWidthMm, woodColumnWidthMm } from '../structural/structureRules.js';
 // edgeComposition.js は materialData.js（材マスタ全件）を静的に import するため、コード分割
 // 維持のため regenerateWalls 内で動的 import する（materialData.js のヘッダコメント参照。
 // clEccentricity.js と同じ理由——静的 import すると finishBoundary.js → App.jsx 経由で
@@ -47,6 +48,8 @@ export async function loadMaterialMap() {
  * @param {object} graph
  * @param {object} opts
  * @param {Map<string,object>|null|undefined} opts.materialMap - 無ければ何もせず空の undoFns/redoFns を返す
+ * @param {object|null} [opts.project] - 柱寸法シフト（bandShift）の実効主構造・階の上書き解決に使う
+ *   （structural/structureRules.js woodBaseColumnWidthMm。省略時は graph 単体の後方参照へフォールバック）
  * @param {Array<{stair, room, splitCLIds}>} [opts.stairUnderEntries] - 階段下部屋（2a）。
  *   FinishModeState.stairUnderRooms(graph) / finish/stair/stairUnderRooms.js の
  *   resolveStairUnderEntries(graph, …) の戻り相当
@@ -57,7 +60,7 @@ export async function loadMaterialMap() {
  *   （呼び出し側はこれをそのまま「壁が再生成されたか」の唯一の判定源にする——鮮度キーの
  *   書込み条件をここと二重管理しない。QA F1）。
  */
-export async function regenerateWalls(graph, { materialMap, stairUnderEntries = [], extraStairOpenings = [] } = {}) {
+export async function regenerateWalls(graph, { materialMap, project = null, stairUnderEntries = [], extraStairOpenings = [] } = {}) {
   const undoFns = [];
   const redoFns = [];
 
@@ -74,6 +77,25 @@ export async function regenerateWalls(graph, { materialMap, stairUnderEntries = 
   if (!materialMap) return { regenerated: false, undoFns, redoFns };
 
   const { roomWallDims, exteriorWallDims } = await import('./edgeComposition.js');
+
+  // 柱寸法が基準（120）より細い階の外壁下地帯シフト量（ステップ1。structural/structureRules.js
+  // woodBaseColumnWidthMm 参照）。外壁の外面（下地帯の遠い側）を通り芯±60に固定したまま、
+  // 下地帯の中心をこの分だけ室外側へ寄せる——壁厚（wallBase）自体は exteriorWallDims の値
+  // （＝柱寸法Wに追従済み。structural/woodAutoFill.js conformWoodBacking）のままなので、
+  // ここではルール既定(120)との差だけを見る。
+  // 発火条件は柱寸法W（woodColumnWidthMm）そのもの——下地材の実厚（exteriorWallDims.wallBase。
+  // conformWoodBackingがWへ追従させた結果）をフォールバックに使わない（QA F4: 下地材コードが
+  // 何らかの理由でまだWに追従していない一時状態でも判定はW自身を基準にする）。非在来
+  // （woodBaseColumnWidthMm===null。framingを持たない主構造）はbandShift=0。
+  // exteriorWallDimsがnull（下地材コードがmaterialMapに解決できない等のデータ不整合。通常
+  // 到達しない）の場合もbandShift=0——どの実wallBaseに対してシフトするかが不明な状態で
+  // W基準の量だけ動かすと、既定値（DEFAULT_WALL_BASE）にシフトを乗せた不整合な壁になるため。
+  // 負（柱寸法が基準以上）は0にクランプする。
+  const extDims = exteriorWallDims(graph, materialMap);
+  const baseColumnWidth = woodBaseColumnWidthMm(graph, project);
+  const bandShift = (extDims && baseColumnWidth != null)
+    ? Math.max(0, (baseColumnWidth - woodColumnWidthMm(graph, project)) / 2)
+    : 0;
 
   // 階段下部屋（破れ線先セルに部屋指定された領域。ステップ2a）。専用なのは生成手順
   // （固定ルールの偏芯・委譲・claim・既存壁との重なりスキップ・後追いトリム・生成順
@@ -195,7 +217,9 @@ export async function regenerateWalls(graph, { materialMap, stairUnderEntries = 
   for (const room of graph.rooms) {
     if (!isInteriorWallTarget(room, under2aRoomIds)) continue;
 
-    const walls = generateRoomWallsFromOutline(graph, room, roomWallDims(graph, room, materialMap) || {}, [...stairOpenings, ...underEdges]);
+    const walls = generateRoomWallsFromOutline(graph, room, {
+      ...(roomWallDims(graph, room, materialMap) || {}), bandShift, cellToRoom: stairUnderCellToRoom,
+    }, [...stairOpenings, ...underEdges]);
     if (walls.length === 0) continue;
 
     walls.forEach(w => { room.generatedWallIds.add(w.id); wallIdToRoom.set(w.id, room); });
@@ -283,7 +307,7 @@ export async function regenerateWalls(graph, { materialMap, stairUnderEntries = 
   if (oldExteriorSnapshots.length > 0) {
     oldExteriorSnapshots.forEach(s => graph.removeShape(s.id));
   }
-  const newExteriorWalls = generateExteriorWalls(graph, exteriorWallDims(graph, materialMap) || {}, [...stairOpenings, ...underEdges]);
+  const newExteriorWalls = generateExteriorWalls(graph, { ...(extDims || {}), bandShift }, [...stairOpenings, ...underEdges]);
 
   // 外壁オーナー化パス:「外周CLでは外壁が下地オーナー」の規則で、同一CLでスパンが重なる
   // 内周壁（ステップ2生成分）の covered 区間だけを薄壁化する（部分重なりは

@@ -6,6 +6,7 @@ import { Plane, PlanGraph, CenterLineType, Discipline } from '../core.js';
 import {
   collectWallBeamSources, autoFillWallBeamAxes, isTraditionalWoodStructure,
   wallBackingCenters, mapBackingCenterMoves, findWallBeamAxisCL, wallBeamAxisExcludeKey, peekBelowGraph,
+  selfWallSegments,
 } from './wallBeamAxes.js';
 import { RC_WALL_BACKING_CODES } from '../finish/materials/backingClass.js';
 import { MATERIALS } from '../finish/materials/materialData.js';
@@ -34,24 +35,29 @@ function makeGridGraph(planeId, elevation) {
 
 // 下地オーナー壁を1本追加する（axisCLは意匠中心線=discipline:archの想定。backingOffset=0固定なので
 // 下地帯中心=axisCLの位置になる）。isVertical=falseの壁＝水平方向に走る壁（axisCLはHORIZONTAL）。
-function addBackingWall(graph, { axisValue, clStart, clEnd, isVertical, backingDepth = 120, isExteriorWall = false, backingOffset = 0 }) {
+// bandOffset（柱寸法シフト量の内訳。core/wall.js Wall.bandOffset）は既定null＝本来の偏芯
+// （2a壁・CL偏芯等）を模す。外周辺由来の室生成壁（isExteriorWall:falseでもbandShiftを持つ壁）を
+// 模すときは bandOffset を明示すること。
+function addBackingWall(graph, {
+  axisValue, clStart, clEnd, isVertical, backingDepth = 120, isExteriorWall = false, backingOffset = 0, bandOffset = null,
+}) {
   // 壁のaxisCLは壁自身の走る向きと同じ種別（isVertical=falseの壁＝水平に走る＝HORIZONTAL軸）。
   const axisCL = graph.addCenterLine(
     isVertical ? CenterLineType.VERTICAL : CenterLineType.HORIZONTAL,
     axisValue, { labeled: false, discipline: Discipline.ARCH },
   );
   return graph.addWall(axisCL, 0, isVertical, clStart, 0, clEnd, 0, {
-    isExteriorWall, backingOffset, backingDepth, wallFinish: 12.5,
+    isExteriorWall, backingOffset, backingDepth, bandOffset, wallFinish: 12.5,
   });
 }
 
 // addBackingWall と異なり axisCL を呼び出し側から受け取る（「同じCL上で壁が再生成された」
 // 前後2状態を作るのに使う。壁idは再生成のたびに変わるが axisCL は不変という前提を再現する）。
 function addBackingWallOnCL(graph, axisCL, {
-  clStart, clEnd, isVertical, axisOffset = 0, backingOffset = 0, backingDepth = 120, isExteriorWall = false, finishSide = null,
+  clStart, clEnd, isVertical, axisOffset = 0, backingOffset = 0, backingDepth = 120, isExteriorWall = false, finishSide = null, bandOffset = null,
 }) {
   return graph.addWall(axisCL, axisOffset, isVertical, clStart, 0, clEnd, 0, {
-    isExteriorWall, backingOffset, backingDepth, finishSide, wallFinish: 12.5,
+    isExteriorWall, backingOffset, backingDepth, finishSide, bandOffset, wallFinish: 12.5,
   });
 }
 
@@ -369,6 +375,75 @@ test('【QA S3】wallBackingCenters: axisOffset:0でもfinishSide:-1が明示さ
   assert.equal(centers.length, 1);
   assert.equal(centers[0].side, -1, 'faceDirOr(0)はfinishSideを優先するためaxisOffset:0でも0に潰れない');
   assert.equal(centers[0].coord, 2000 - 57.5);
+});
+
+// ---- 柱寸法が基準（120）より細い階の外壁下地帯シフト（bandShift。structural/structureRules.js
+// woodBaseColumnWidthMm 参照。finish/wallGeneration.js generateExteriorWalls/
+// generateRoomWallsFromOutline）は「見た目の」帯移動であり、梁芯CL・壁交点柱のアンカー（通り芯位置
+// 基準）まで動かしてはいけない（ステップ1・QA F1）。判定は wall.bandOffset（専用フィールド。
+// core/wall.js Wall.bandOffset）で行う——isExteriorWallでは判定しない（外周辺に接する室生成壁
+// も同じ扱いにする必要があるため）。----
+test('selfWallSegments: 外壁がbandOffset!=0（柱寸法シフト）を持っていてもcoordは軸CL値のまま', () => {
+  const { graph, x1, x3 } = makeGridGraph('p1', 0);
+  // 柱寸105・bandShift=7.5相当（backingOffset=bandOffset=-7.5・backingDepth=105=wallBase）。
+  addBackingWall(graph, {
+    axisValue: 2000, clStart: x1, clEnd: x3, isVertical: false,
+    isExteriorWall: true, backingOffset: -7.5, bandOffset: -7.5, backingDepth: 105,
+  });
+  const segs = selfWallSegments(graph);
+  assert.equal(segs.length, 1);
+  assert.equal(segs[0].coord, 2000, 'coordは軸CL値のまま（bandOffsetの見た目の移動を相殺する）');
+  assert.equal(segs[0].bandOffset, -7.5, 'bandOffsetにシフト量がそのまま入る（ステップ2で柱が使う）');
+});
+
+test('【QA F1回帰】selfWallSegments: 外周辺由来の室生成壁（isExteriorWall=false・bandOffset!=0）もcoordは軸CL値のまま', () => {
+  // ownership解決で外周辺に接する室生成壁が非covered区間で下地オーナー（backingDepth=W）に
+  // なるケース（QA実測: moku2.stqで再現）。isExteriorWall=falseだがbandOffsetを持つ。
+  const { graph, x1, x3 } = makeGridGraph('p1', 0);
+  addBackingWall(graph, {
+    axisValue: 2000, clStart: x1, clEnd: x3, isVertical: false,
+    isExteriorWall: false, backingOffset: -7.5, bandOffset: -7.5, backingDepth: 105,
+  });
+  const segs = selfWallSegments(graph);
+  assert.equal(segs.length, 1);
+  assert.equal(segs[0].coord, 2000, 'isExteriorWall=falseでもbandOffsetがあれば相殺される（通り芯脇に梁芯・柱が湧かない）');
+  assert.equal(segs[0].bandOffset, -7.5);
+});
+
+test('selfWallSegments: bandOffset=null（本来の偏芯。2a壁・CL偏芯等）のbackingOffsetは従来どおりcoordに反映される', () => {
+  const { graph, x1, x3 } = makeGridGraph('p1', 0);
+  addBackingWall(graph, {
+    axisValue: 2000, clStart: x1, clEnd: x3, isVertical: false,
+    isExteriorWall: false, backingOffset: -7.5, bandOffset: null, backingDepth: 105,
+  });
+  const segs = selfWallSegments(graph);
+  assert.equal(segs.length, 1);
+  assert.equal(segs[0].coord, 2000 - 7.5, 'bandOffset無しの偏芯（2a壁等）は従来どおりbackingOffsetがcoordに反映される');
+  assert.equal(segs[0].bandOffset, 0);
+});
+
+test('wallBackingCenters: 外壁がbandOffset!=0（柱寸法シフト）を持っていてもcoordは軸CL値のまま', () => {
+  const { graph, x1, x3 } = makeGridGraph('p1', 0);
+  const axisCL = graph.addCenterLine(CenterLineType.HORIZONTAL, 2000, { labeled: false, discipline: Discipline.ARCH });
+  addBackingWallOnCL(graph, axisCL, {
+    clStart: x1, clEnd: x3, isVertical: false, isExteriorWall: true,
+    axisOffset: -72.5, backingOffset: -7.5, bandOffset: -7.5, backingDepth: 105,
+  });
+  const centers = wallBackingCenters(graph);
+  assert.equal(centers.length, 1);
+  assert.equal(centers[0].coord, 2000, '外壁のbandOffsetを相殺してaxisCL値のままになる');
+});
+
+test('【QA F1回帰】wallBackingCenters: 外周辺由来の室生成壁（isExteriorWall=false・bandOffset!=0）もcoordは軸CL値のまま', () => {
+  const { graph, x1, x3 } = makeGridGraph('p1', 0);
+  const axisCL = graph.addCenterLine(CenterLineType.HORIZONTAL, 2000, { labeled: false, discipline: Discipline.ARCH });
+  addBackingWallOnCL(graph, axisCL, {
+    clStart: x1, clEnd: x3, isVertical: false, isExteriorWall: false,
+    axisOffset: -57.5, backingOffset: -7.5, bandOffset: -7.5, backingDepth: 105,
+  });
+  const centers = wallBackingCenters(graph);
+  assert.equal(centers.length, 1);
+  assert.equal(centers[0].coord, 2000, 'isExteriorWall=falseでもbandOffsetがあれば相殺される');
 });
 
 test('mapBackingCenterMoves: 同じ(axisCLId,isVertical,side)でスパンが重なる旧↔新を対応づけ、動いた分だけ返す', () => {

@@ -11,6 +11,7 @@ import { runFinishEntryBoundary, runFinishExitBoundary } from './finishBoundary.
 import { loadMaterialMap } from './wallRegeneration.js';
 import { TRADITIONAL_WOOD_STRUCTURE } from '../structural/structureRules.js';
 import { cellsBeyondBreak } from './stair/stairGeometry.js';
+import { WALL_KEY_VERSION } from './wallFreshnessKey.js';
 
 function makeSinglePlaneProject() {
   const project = new Project('proj', 'test');
@@ -130,7 +131,7 @@ test('runFinishExitBoundary【QA F4回帰】: regenerated=trueの脱出は鮮度
 
   await runFinishExitBoundary(graph, project, fmode, { goingToStructure: false });
 
-  assert.ok(graph.wallFreshnessKey?.startsWith('v1|'), '鮮度キーがv1|始まりで書かれている');
+  assert.ok(graph.wallFreshnessKey?.startsWith(`${WALL_KEY_VERSION}|`), '鮮度キーがバージョン接頭辞付きで書かれている');
   assert.ok(graph.walls.length > 0, '壁が生成されている');
 
   undoManager.undo();
@@ -138,7 +139,7 @@ test('runFinishExitBoundary【QA F4回帰】: regenerated=trueの脱出は鮮度
   assert.equal(graph.walls.length, 0, 'undoで壁と同じ1エントリとして戻るため壁も消える');
 
   undoManager.redo();
-  assert.ok(graph.wallFreshnessKey?.startsWith('v1|'), 'redoで鍵が再度書かれる');
+  assert.ok(graph.wallFreshnessKey?.startsWith(`${WALL_KEY_VERSION}|`), 'redoで鍵が再度書かれる');
   assert.ok(graph.walls.length > 0, 'redoで壁も復帰する');
 });
 

@@ -11,11 +11,14 @@
 // 検証は同じ幾何を `lines` で言い直した。数値の期待値は移行前と同じ（差分は各テストの注記）。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Plane, PlanGraph, CenterLineType, Discipline, edgeKey, StructuralMaterialType } from '@core';
+import { runInAction } from 'mobx';
+import { Plane, PlanGraph, CenterLineType, Discipline, edgeKey, StructuralMaterialType, ShapeType } from '@core';
 import { TRADITIONAL_WOOD_STRUCTURE } from '../structural/structureRules.js';
 import { generateRoomWallsFromOutline } from '../finish/wallGeneration.js';
+import { regenerateWalls, loadMaterialMap } from '../finish/wallRegeneration.js';
+import { conformWoodBacking } from '../structural/woodAutoFill.js';
 import { LodLevel } from '../viewport.js';
-import { buildWallDrawPlan, resolveWallLines } from './wallDrawPlan.js';
+import { buildWallDrawPlan, resolveWallLines, resolveDeferredBackingIds } from './wallDrawPlan.js';
 import { resolveWallRegionLines } from './planWallRegion.js';
 
 const vCL = (g, v) => g.addCenterLine(CenterLineType.VERTICAL, v, { labeled: false, discipline: Discipline.ARCH });
@@ -463,4 +466,105 @@ test('【失敗系】buildWallDrawPlan: 仕上げのみの薄壁（下地なし�
   assert.ok(plan.wallStuds.has(w.id));
   assert.equal(plan.wallStuds.has(thin.id), false, '下地なしの薄壁');
   assert.equal(plan.wallStuds.has(manual.id), false, '手動壁');
+});
+
+// ---- resolveDeferredBackingIds（QA F5）: 柱寸法が基準より細い階の外壁下地帯シフト
+// （bandShift。structural/structureRules.js woodBaseColumnWidthMm 参照）は backingOffset に
+// wall.bandOffset（core/wall.js Wall.bandOffset）と同じ値だけを書く——これを「本来の偏芯」と
+// 区別できないと、中庭（同一CLの正負両側がともに外壁）の重複防止が bandShift>0 の階だけ
+// 効かなくなる。
+function mockWall(id, { axisCL, axisOffset, coord1, coord2, wallFinish = 12.5, backingOffset = null, bandOffset = null, backingDepth = null }) {
+  return { id, type: ShapeType.WALL, axisCL, axisOffset, coord1, coord2, wallFinish, backingOffset, bandOffset, backingDepth };
+}
+
+// ---- QA F7（Blocker）: 重複防止バケットの対象は「対称フォールバック式（backingDepth==null）の
+// 壁ペア」だけに限る。新モデルの所有権解決がbackingDepthを明示した壁（薄壁0・オーナーW）を
+// bandOffset一致だけで対象に含めると、外壁（負側）と「所有権解決前は正側の相手に見える」
+// 室生成壁の薄壁（backingDepth:0。下地を持たない）を誤って正側の相手と見なし、外壁側が
+// deferred（下地描画スキップ）になってしまう——結果、その帯の間柱を誰も描かない
+// （QA実測: moku2柱寸90で1階外壁14本中9本deferred、stud218→153）。----
+test('【QA F7回帰】resolveDeferredBackingIds: bandShift>0の外壁はdeferredにならない（正側の相手が薄壁backingDepth=0）', () => {
+  const axisCL = { id: 'cl-f7' };
+  // 外壁（負側。setOwnerFieldsの対象外のためbackingDepthは常にnull＝対称フォールバック式のまま）。
+  const extWall = mockWall('ext', {
+    axisCL, axisOffset: -72.5, coord1: 0, coord2: 1000, backingOffset: -15, bandOffset: -15, backingDepth: null,
+  });
+  // 外周辺に接する室生成壁（正側。所有権解決でbackingDepth=0＝薄壁と明示済み——下地を持たない）。
+  const roomWallThin = mockWall('room-thin', {
+    axisCL, axisOffset: 42.5, coord1: 100, coord2: 900, backingOffset: 15, bandOffset: 15, backingDepth: 0,
+  });
+  const deferred = resolveDeferredBackingIds([extWall, roomWallThin]);
+  assert.equal(deferred.size, 0, '薄壁(backingDepth:0)は対象外のためextWallの相手にならず、外壁はdeferredにならない');
+});
+
+// ---- QA F8 test2: 中庭（同一CLの正負とも外壁・ともにbackingDepth:null）はbandShift>0でも
+// 負側だけdeferred——外壁どうしのペアは従来どおり重複防止の対象になる（F7修正で対象を
+// backingDepth==nullに絞ってもこのケースは崩れないことの確認）。----
+test('【QA F8 test2】resolveDeferredBackingIds: 中庭（同一CLの正負とも外壁・ともにbackingDepth:null）はbandShift>0でも負側だけdeferred（backingOffsetがbandOffsetと一致する壁は従来どおり重複防止の対象になる）', () => {
+  const axisCL = { id: 'cl1' }; // 参照同一性だけが要件（wallDrawPlan.js の判定は === 比較）
+  const positive = mockWall('pos', { axisCL, axisOffset: 72.5, coord1: 0, coord2: 1000, backingOffset: 7.5, bandOffset: 7.5 });
+  const negative = mockWall('neg', { axisCL, axisOffset: -72.5, coord1: 200, coord2: 800, backingOffset: -7.5, bandOffset: -7.5 });
+  const deferred = resolveDeferredBackingIds([positive, negative]);
+  assert.equal(deferred.has('neg'), true, '負側は正側に下地描画を委ねる（帯シフトのみなら従来どおり）');
+  assert.equal(deferred.has('pos'), false, '正側は常に描画する');
+});
+
+test('【QA F5失敗系】resolveDeferredBackingIds: 帯シフト以外の明示偏芯（backingOffset!==bandOffset）を持つ壁は対象外のまま', () => {
+  const axisCL = { id: 'cl2' };
+  const positive = mockWall('pos2', { axisCL, axisOffset: 72.5, coord1: 0, coord2: 1000, backingOffset: 7.5, bandOffset: 7.5 });
+  // CL偏芯等の「本来の偏芯」を持つ壁（backingOffset=-20だがbandOffsetはnull=0で不一致）。
+  const eccentric = mockWall('ecc', { axisCL, axisOffset: -72.5, coord1: 200, coord2: 800, backingOffset: -20, bandOffset: null });
+  const deferred = resolveDeferredBackingIds([positive, eccentric]);
+  assert.equal(deferred.has('ecc'), false, '帯シフト以外の偏芯を持つ壁は重複防止の対象外（自分の下地を常に描画）');
+});
+
+test('resolveDeferredBackingIds: backingOffset===null（旧データ・対称壁）は従来どおり対象になる', () => {
+  const axisCL = { id: 'cl3' };
+  const positive = mockWall('pos3', { axisCL, axisOffset: 65, coord1: 0, coord2: 1000 });
+  const negative = mockWall('neg3', { axisCL, axisOffset: -65, coord1: 200, coord2: 800 });
+  const deferred = resolveDeferredBackingIds([positive, negative]);
+  assert.equal(deferred.has('neg3'), true);
+});
+
+// ---- 【QA F5回帰の回帰】backingOffset=0（bandShiftを経由しない新モデルのオーナー壁が明示する値）を
+// bandOffset=null（未設定）と同じに丸めてはならない。実データ11.stq（S造・bandShiftなし）で
+// 壁・下地材の生成結果が変わる回帰を実測した（0 と null を同一視すると、bandShiftを一切経由
+// していない通常のオーナー壁まで誤って重複防止バケットに含めてしまう）。----
+test('【QA F5回帰の回帰】resolveDeferredBackingIds: backingOffset=0（bandOffset=null。所有権解決が明示する非帯シフトの値）は対象外のまま（0とnullを混同しない）', () => {
+  const axisCL = { id: 'cl4' };
+  // 所有権解決後のオーナー壁はbandShiftを経由していなくてもbackingOffset=0を明示する
+  // （finish/wallGeneration.js applyBackingOwnershipのsetOwnerFields分岐）。bandOffsetはnullのまま。
+  const positive = mockWall('pos4', { axisCL, axisOffset: 65, coord1: 0, coord2: 1000, backingOffset: 0, bandOffset: null });
+  const negative = mockWall('neg4', { axisCL, axisOffset: -65, coord1: 200, coord2: 800, backingOffset: 0, bandOffset: null });
+  const deferred = resolveDeferredBackingIds([positive, negative]);
+  assert.equal(deferred.has('neg4'), false,
+    'backingOffset=0はbandOffset=nullと厳密に不一致（0!==null）——対象外のまま自分の下地を描画する');
+});
+
+// ---- QA F8 test3（結合）: generateExteriorWalls+applyBackingOwnershipで実生成した外壁が
+// wallStudsを持つことを確認する（mock不可——resolveDeferredBackingIdsの単体テストだけでは
+// buildWallDrawPlan（wallStudLayout.js への配線含む）の実際の呼び出し結果までは検証できない）。
+test('【結合・QA F8 test3】buildWallDrawPlan: 柱寸105で生成した外壁はwallStudsを持つ', async () => {
+  const graph = new PlanGraph(new Plane('p', 0, '1階', 1, 1));
+  graph.structureOverride = TRADITIONAL_WOOD_STRUCTURE;
+  graph.setWoodColumnWidthMm(105);
+  const x0 = vCL(graph, 0), x1 = vCL(graph, 4000);
+  const y0 = hCL(graph, 0), y1 = hCL(graph, 3000);
+  graph.addRoom(new Set([`${x0.id}:${y0.id}:${x1.id}:${y1.id}`]), 'A');
+
+  runInAction(() => conformWoodBacking(graph, null));
+  const materialMap = await loadMaterialMap();
+  const { regenerated } = await regenerateWalls(graph, {
+    materialMap, project: null, stairUnderEntries: [], extraStairOpenings: [],
+  });
+  assert.equal(regenerated, true);
+
+  const extWalls = graph.walls.filter(w => w.isExteriorWall);
+  assert.ok(extWalls.length > 0, '前提: 外壁が生成されている');
+
+  const plan = buildWallDrawPlan(graph, LodLevel.DETAIL);
+  for (const w of extWalls) {
+    assert.ok(plan.wallStuds.has(w.id),
+      `外壁(${w.id})にwallStudsが無い（F7回帰: bandShiftで外壁がdeferredになっていないか）`);
+  }
 });

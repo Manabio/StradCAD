@@ -59,6 +59,7 @@ function buildSnapshot(graph) {
       backingOffset: w.backingOffset ?? null,
       backingDepth: w.backingDepth ?? null,
       finishSide: w.finishSide ?? null,
+      bandOffset: w.bandOffset ?? null,
       ...baseProps(w),
     })),
     openings: gs.filter(s => s.type === ShapeType.OPENING).map(o => ({
@@ -565,7 +566,7 @@ function applySnapshot(graph, snapshot) {
       if (axisCL && clStart && clEnd) {
         const { axisOffset, finishSide } = normalizeLegacyFinishSide(d);
         graph.addWall(axisCL, axisOffset, d.isVertical, clStart, d.startOffset, clEnd, d.endOffset,
-          { discipline: d.discipline, lineWeight: d.lineWeight, lineType: d.lineType, color: d.color, isRoomWall: d.isRoomWall ?? false, isExteriorWall: d.isExteriorWall ?? false, wallFinish: d.wallFinish ?? null, backingOffset: d.backingOffset ?? null, backingDepth: d.backingDepth ?? null, finishSide }, d.id);
+          { discipline: d.discipline, lineWeight: d.lineWeight, lineType: d.lineType, color: d.color, isRoomWall: d.isRoomWall ?? false, isExteriorWall: d.isExteriorWall ?? false, wallFinish: d.wallFinish ?? null, backingOffset: d.backingOffset ?? null, backingDepth: d.backingDepth ?? null, finishSide, bandOffset: d.bandOffset ?? null }, d.id);
       }
     }
     graph.resolveExtentWallRefs();

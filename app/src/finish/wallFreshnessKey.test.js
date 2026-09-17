@@ -26,7 +26,7 @@ function makeRoom(graph, name = '部屋A') {
   return graph.addRoom(new Set([key]), name);
 }
 
-test('wallFreshnessKey: 書式は v1|ext=...|int=...|str=...|col=...|rooms=... で、バージョン定数と一致する', () => {
+test('wallFreshnessKey: 書式は {version}|ext=...|int=...|str=...|col=...|rooms=... で、バージョン定数と一致する', () => {
   const graph = makeGraph();
   const key = wallFreshnessKey(graph);
   assert.ok(key.startsWith(`${WALL_KEY_VERSION}|ext=`));

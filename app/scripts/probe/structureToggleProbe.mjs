@@ -36,7 +36,7 @@ async function runSweep() {
     if (wallFreshnessKey(graph, project) === graph.wallFreshnessKey) continue;
     const { stairUnderEntries, extraStairOpenings } = await resolveStairContext(graph, project, graphMapPeek);
     const before = wallBackingCenters(graph);
-    const { regenerated } = await regenerateWalls(graph, { materialMap, stairUnderEntries, extraStairOpenings });
+    const { regenerated } = await regenerateWalls(graph, { materialMap, project, stairUnderEntries, extraStairOpenings });
     if (!regenerated) continue;
     const moves = mapBackingCenterMoves(before, wallBackingCenters(graph));
     if (moves.length > 0) followWallBeamAxes(graph, moves);

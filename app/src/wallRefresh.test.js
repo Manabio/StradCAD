@@ -13,14 +13,16 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { Project, CenterLineType, Discipline, StructuralMaterialType } from './core.js';
+import { runInAction } from 'mobx';
+import { Project, CenterLineType, Discipline, StructuralMaterialType, centerLineKind } from './core.js';
 import { undoManager } from './undoManager.js';
 import { floorSwapManager } from './storage/FloorSwapManager.js';
 import { refreshWallsAllFloors } from './wallRefresh.js';
 import { regenerateWalls, loadMaterialMap } from './finish/wallRegeneration.js';
-import { wallFreshnessKey } from './finish/wallFreshnessKey.js';
+import { wallFreshnessKey, WALL_KEY_VERSION } from './finish/wallFreshnessKey.js';
 import { recomputeStructuralForGraph } from './structural/structuralRecompute.js';
 import { TRADITIONAL_WOOD_STRUCTURE } from './structural/structureRules.js';
+import { conformWoodBacking } from './structural/woodAutoFill.js';
 
 function makeSinglePlaneProject() {
   const project = new Project('proj', 'test');
@@ -36,6 +38,126 @@ function addRectRoom(graph, name = '部屋A') {
   const key = `${x0.id}:${y0.id}:${x1.id}:${y1.id}`;
   return graph.addRoom(new Set([key]), name);
 }
+
+// ---- 矩形2室（QA結合テスト1・2用フィクスチャ）: 部屋A[0,3000]x[0,3000]・部屋B[3000,6000]x[0,3000]が
+// x=3000で隣接する。部屋Aの左辺・部屋Bの右辺は建物外周（外壁下地帯シフトの対象）、共有辺(x=3000)は
+// 内部の間仕切り（対象外）——moku2.stq実測（QA F1バグ再現構成）と同じ「外周辺+内部辺」の組み合わせを
+// 最小構成で再現する。
+function addAdjacentRooms(graph) {
+  const x0 = graph.addCenterLine(CenterLineType.VERTICAL, 0,    { labeled: false, discipline: Discipline.ARCH });
+  const xm = graph.addCenterLine(CenterLineType.VERTICAL, 3000, { labeled: false, discipline: Discipline.ARCH });
+  const x1 = graph.addCenterLine(CenterLineType.VERTICAL, 6000, { labeled: false, discipline: Discipline.ARCH });
+  const y0 = graph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: false, discipline: Discipline.ARCH });
+  const y1 = graph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: false, discipline: Discipline.ARCH });
+  const roomA = graph.addRoom(new Set([`${x0.id}:${y0.id}:${xm.id}:${y1.id}`]), 'A');
+  const roomB = graph.addRoom(new Set([`${xm.id}:${y0.id}:${x1.id}:${y1.id}`]), 'B');
+  return { roomA, roomB, x0, xm, x1, y0, y1 };
+}
+
+/**
+ * QA実測（moku2.stqへの各階柱寸法1階120/2階105/3階90設定）と同じ経路
+ * （conformWoodBacking → regenerateWalls(project込み) → recomputeStructuralForGraph）を
+ * 単体テストの最小構成（矩形2室・単一階）で再現する。
+ * @param {number|null} columnWidthMm - graph.setWoodColumnWidthMm に渡す値（null=未設定→既定120）
+ * @returns {Promise<import('./core.js').PlanGraph>}
+ */
+async function buildAndCompute(columnWidthMm) {
+  const { project, graph } = makeSinglePlaneProject();
+  graph.structureOverride = TRADITIONAL_WOOD_STRUCTURE;
+  addAdjacentRooms(graph);
+  if (columnWidthMm != null) graph.setWoodColumnWidthMm(columnWidthMm);
+  runInAction(() => conformWoodBacking(graph, project));
+  const materialMap = await loadMaterialMap();
+  await regenerateWalls(graph, { materialMap, project, stairUnderEntries: [], extraStairOpenings: [] });
+  await recomputeStructuralForGraph(graph, project, graph.structureOverride);
+  return graph;
+}
+
+function beamAxesList(graph) {
+  return graph.centerLines
+    .filter(cl => centerLineKind(cl) === 'beam')
+    .map(cl => `${cl.centerLineType}:${Math.round(cl.value * 10) / 10}`)
+    .sort();
+}
+
+function columnCoordsList(graph) {
+  return graph.columns
+    .map(c => `${Math.round(c.axisX * 10) / 10}:${Math.round(c.axisY * 10) / 10}`)
+    .sort();
+}
+
+// ---- QA結合1（F1の直接回帰）: 柱寸105でも梁芯CL・柱位置が柱寸120の場合と一致し、
+// 通り芯±7.5にCL・柱が湧かない ----
+test('【QA結合1・F1回帰】conformWoodBacking→regenerateWalls→recomputeStructuralForGraph: 柱寸105の梁芯CL・柱axisX/axisYは柱寸120の場合と一致する（通り芯±7.5に1本も無い）', async () => {
+  const g120 = await buildAndCompute(null); // 未設定→既定120
+  const g105 = await buildAndCompute(105);
+
+  assert.ok(g120.columns.length > 0, '前提: 柱寸120の階で柱が生成されている');
+  assert.deepEqual(beamAxesList(g105), beamAxesList(g120), '梁芯CLの集合が柱寸120の場合と完全一致するはず');
+  assert.deepEqual(columnCoordsList(g105), columnCoordsList(g120), '柱のaxisX/axisYの集合が柱寸120の場合と完全一致するはず');
+
+  // 通り芯（グリッド）の位置（x=0,3000,6000・y=0,3000）±7.5に梁芯CL・柱が1本も無いことも直接確認する
+  // （bandShift=7.5そのものの値が誤って残っていないかを、集合比較とは別の観点で確かめる）。
+  const gridValues = [0, 3000, 6000];
+  for (const cl of g105.centerLines) {
+    if (centerLineKind(cl) !== 'beam') continue;
+    for (const gv of gridValues) {
+      assert.notEqual(Math.abs(cl.value - gv), 7.5, `梁芯CL(${cl.centerLineType}:${cl.value})が通り芯(${gv})±7.5に湧いている`);
+    }
+  }
+  for (const c of g105.columns) {
+    for (const gv of gridValues) {
+      assert.notEqual(Math.abs(c.axisX - gv), 7.5, `柱(axisX=${c.axisX})が通り芯(${gv})±7.5に湧いている`);
+      assert.notEqual(Math.abs(c.axisY - gv), 7.5, `柱(axisY=${c.axisY})が通り芯(${gv})±7.5に湧いている`);
+    }
+  }
+});
+
+// ---- QA F8 test4（結合1の柱寸90版）: 既存の結合1は柱寸105のみだったため、最小柱寸90
+// （最大bandShift=(120-90)/2=15）でも同様に梁芯CL・柱が柱寸120の場合と一致することを確認する ----
+test('【QA F8 test4・F1回帰】conformWoodBacking→regenerateWalls→recomputeStructuralForGraph: 柱寸90でも梁芯CL・柱axisX/axisYは柱寸120の場合と一致する（通り芯±15に1本も無い）', async () => {
+  const g120 = await buildAndCompute(null); // 未設定→既定120
+  const g90 = await buildAndCompute(90);
+
+  assert.ok(g120.columns.length > 0, '前提: 柱寸120の階で柱が生成されている');
+  assert.deepEqual(beamAxesList(g90), beamAxesList(g120), '梁芯CLの集合が柱寸120の場合と完全一致するはず');
+  assert.deepEqual(columnCoordsList(g90), columnCoordsList(g120), '柱のaxisX/axisYの集合が柱寸120の場合と完全一致するはず');
+
+  const gridValues = [0, 3000, 6000];
+  for (const cl of g90.centerLines) {
+    if (centerLineKind(cl) !== 'beam') continue;
+    for (const gv of gridValues) {
+      assert.notEqual(Math.abs(cl.value - gv), 15, `梁芯CL(${cl.centerLineType}:${cl.value})が通り芯(${gv})±15に湧いている`);
+    }
+  }
+  for (const c of g90.columns) {
+    for (const gv of gridValues) {
+      assert.notEqual(Math.abs(c.axisX - gv), 15, `柱(axisX=${c.axisX})が通り芯(${gv})±15に湧いている`);
+      assert.notEqual(Math.abs(c.axisY - gv), 15, `柱(axisY=${c.axisY})が通り芯(${gv})±15に湧いている`);
+    }
+  }
+});
+
+// ---- QA結合2: 柱寸105の外壁は backingRange の外面が通り芯±60、帯厚は柱寸そのもの(105) ----
+test('【QA結合2】conformWoodBacking→regenerateWalls: 柱寸105の全isExteriorWallはbackingRangeの遠位面が通り芯±60・帯厚105', async () => {
+  const g105 = await buildAndCompute(105);
+  const extWalls = g105.walls.filter(w => w.isExteriorWall);
+  assert.ok(extWalls.length > 0, '前提: 外壁が生成されている');
+
+  for (const w of extWalls) {
+    const range = w.backingRange;
+    assert.ok(range, `外壁(${w.id})のbackingRangeがnullではないはず`);
+    assert.equal(Math.round((range.hi - range.lo) * 10) / 10, 105, `外壁(${w.id})の帯厚は柱寸105のはず`);
+    // 外壁の外面（構造上の真の外側＝仕上げ面に隣接する側の帯端）が通り芯±60に固定されているはず。
+    // faceDir（仕上げ面が向く側）と同じ側の帯端が外面——finBoundary/faceVがdir方向の端にあるため
+    // （core/wall.js Wall.materialRange参照）。
+    const axisV = w.axisCL.effectiveValue;
+    const dir = w.faceDir;
+    const farFace = dir > 0 ? range.hi : range.lo; // 仕上げ面が向く側と同じ帯端＝外壁の外面
+    assert.equal(Math.abs(Math.abs(farFace - axisV) - 60) < 1e-6, true,
+      `外壁(${w.id})の外面(${farFace})が軸(${axisV})から±60になっていない`);
+  }
+});
 
 // ---- S4-1裁定（壁0本・鍵nullの階はsweep対象外）により、壁0本・鍵nullの「未脱出」フィクスチャは
 // もう refreshWallsAllFloors で壁を持てない。「一度は仕上げモードを通って壁を持った階」を
@@ -79,7 +201,7 @@ test('refreshWallsAllFloors: 主構造（structureOverride）を変えると自�
 
   assert.deepEqual(result.changedPlaneIds, ['p1']);
   assert.ok(graph.walls.length > 0, '壁が再生成されている');
-  assert.ok(graph.wallFreshnessKey?.startsWith('v1|'), '鍵が更新されている');
+  assert.ok(graph.wallFreshnessKey?.startsWith(`${WALL_KEY_VERSION}|`), '鍵が更新されている');
   assert.notEqual(graph.wallFreshnessKey, keyBefore);
 
   // 主構造の変更は壁交点柱の生成も伴うため、undoManagerには「壁+鍵」のエントリと

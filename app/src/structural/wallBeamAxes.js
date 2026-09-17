@@ -87,20 +87,35 @@ function wallBeamSourcesFromGraph(sourceGraph, requireBeamAxisBacking) {
     if (!isBackingOwnerWall(wall)) continue;
     if (requireBeamAxisBacking && !backingRulesFor(backingClassOf(wallBackingCode(sourceGraph, wall))).beamAxisSource) continue;
     // 梁芯位置＝下地帯の中心（wall.axisValueは仕上げ面の位置のため使わない。設計書§2.3(2)）。
-    const coord = (wall.backingRange.lo + wall.backingRange.hi) / 2;
+    const center = (wall.backingRange.lo + wall.backingRange.hi) / 2;
+    // 柱寸法が基準より細い階の外壁下地帯シフト（structural/structureRules.js
+    // woodBaseColumnWidthMm 参照。finish/wallGeneration.js generateExteriorWalls/
+    // generateRoomWallsFromOutline）は、外壁の外面を通り芯±60に固定するための「見た目の」帯
+    // 移動であり、梁芯CL・壁交点柱のアンカー（通り芯位置基準）まで動かしてはいけない——
+    // wall.bandOffset（帯シフト量だけを保持する専用フィールド。core/wall.js Wall.bandOffset
+    // 参照）を差し引いて相殺する。isExteriorWallでは判定しない——外周辺に接する「室生成壁」
+    // （generateRoomWallsFromOutlineがbandShiftを適用した非外壁）も同じ扱いにする必要がある
+    // （QA F1: isExteriorWall限定だと外周辺由来の室生成壁が非covered区間で下地オーナーになった
+    // ときに通り芯脇へ梁芯・柱が湧く）。bandOffsetを持たない壁（2a壁のCL偏芯等、本来の偏芯）は
+    // bandOffset===nullのため0になり、backingOffsetがcoordへそのまま反映される従来どおりの挙動。
+    const bandOffset = wall.bandOffset ?? 0;
     out.push({
       isVertical: wall.isVertical,
-      coord,
+      coord: center - bandOffset,
       lo: Math.min(wall.coord1, wall.coord2),
       hi: Math.max(wall.coord1, wall.coord2),
       halfDepth: (wall.backingRange.hi - wall.backingRange.lo) / 2,
+      // ステップ2（柱の壁内偏心。別タスク）が「壁の下地帯の内側」を判定する際に使う——ここでは
+      // 加算のみで既存の消費先（梁芯生成・小梁生成）の挙動は変えない。
+      bandOffset,
     });
   }
   return out;
 }
 
-/** 自階の下地オーナー壁の区間（プレーン配列 [{isVertical, coord, lo, hi, halfDepth}]。下地材の種別は
- *  問わず、下階は含まない）。在来木造の壁交点柱・上階柱直下の柱（woodAutoFill.js）が候補列挙に使う。 */
+/** 自階の下地オーナー壁の区間（プレーン配列 [{isVertical, coord, lo, hi, halfDepth, bandOffset}]。
+ *  下地材の種別は問わず、下階は含まない）。在来木造の壁交点柱・上階柱直下の柱（woodAutoFill.js）が
+ *  候補列挙に使う。 */
 export function selfWallSegments(graph) {
   return wallBeamSourcesFromGraph(graph, false);
 }
@@ -126,6 +141,10 @@ export function wallBackingCenters(graph) {
   const out = [];
   for (const wall of graph.walls) {
     if (!isBackingOwnerWall(wall)) continue;
+    // wallBeamSourcesFromGraph と同じ理由（柱寸法シフトの見た目の帯移動を追従対象に持ち込まない。
+    // 上記コメント参照）でwall.bandOffsetを差し引く（isExteriorWallでは判定しない。QA F1）。
+    const center = (wall.backingRange.lo + wall.backingRange.hi) / 2;
+    const bandOffset = wall.bandOffset ?? 0;
     out.push({
       axisCLId: wall.axisCL.id,
       isVertical: wall.isVertical,
@@ -134,7 +153,7 @@ export function wallBackingCenters(graph) {
       // 本来+/-で区別すべき2枚の壁が同じsideに丸められてしまう（QA S3）。偏芯なし（対称壁。
       // finishSide・axisOffsetともnull/0）は引き続き0。
       side: wall.faceDirOr(0),
-      coord: (wall.backingRange.lo + wall.backingRange.hi) / 2,
+      coord: center - bandOffset,
       lo: Math.min(wall.coord1, wall.coord2),
       hi: Math.max(wall.coord1, wall.coord2),
     });

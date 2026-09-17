@@ -54,6 +54,30 @@ const EMPTY_SET = new Set();
  * するため、この判定（backingOffset==null）の対象に自然に入らない——ここは旧データ
  * （backingOffset未設定の対称壁ペア）の表示互換のためのフォールバックとして残す。
  *
+ * 柱寸法が基準より細い階の外壁下地帯シフト（bandShift。structural/structureRules.js
+ * woodBaseColumnWidthMm 参照）は、backingOffset に「本来の偏芯」ではなく帯シフト量
+ * （wall.bandOffset。core/wall.js Wall.bandOffset）だけを書く——外壁自身は setOwnerFields
+ * の対象外のためbandShift>0の階でも backingOffset===null のまま残らない（=e）。この壁を
+ * 単純に backingOffset!=null で除外すると、中庭（同一CLの正負両側がともに外壁）の重複防止が
+ * bandShift>0の階だけ効かなくなる（QA F5）。backingOffset が bandOffset と厳密に同じ値
+ * （＝帯シフト以外の偏芯を持たない）壁だけを対象に含める——bandOffset側に `?? 0` を当てては
+ * ならない: 新モデルの所有権解決は非bandShift壁にも backingOffset=0 を明示するため
+ * （bandOffset=null（未設定）と 0 を同じ扱いにすると、bandShiftを一切経由していない
+ * ただのオーナー壁まで誤って対象に含めてしまう。実データ11.stqで壁・下地材の生成結果が
+ * 変わる回帰を実測——bandOffsetは「未設定(null)」と「帯シフト0(0)」を区別したまま比較する）。
+ *
+ * この重複防止バケットの対象は「対称フォールバック式（backingDepth==null）の壁ペア」だけに
+ * 限る（QA F7）——backingDepth!=null の壁（新モデルの所有権解決が明示した薄壁backingDepth=0・
+ * オーナーbackingDepth=W）は対象外にする。外壁は setOwnerFields の対象外のため
+ * backingDepth は常にnull（対称フォールバック式のまま）だが、bandShift>0の階では外周辺に接する
+ * 「室生成壁」もbackingOffset===bandOffsetの条件を満たしてバケットに入りうる——その室生成壁は
+ * 所有権解決で必ずbackingDepthを明示済み（covered=薄壁0・非covered=オーナーW）なので、
+ * この壁を負側の外壁の「正側の相手」として誤認すると、実際には下地を持たない薄壁を
+ * 正側と誤判定し、外壁側（負側）が deferred（下地描画スキップ）になってしまう——結果、
+ * その帯の間柱を誰も描かなくなる（QA実測: moku2柱寸90で1階外壁14本中9本deferred、
+ * stud218→153）。backingDepth!=nullの壁を最初から対象外にすれば、外壁（backingDepth常にnull）
+ * どうしの中庭ペアだけが従来どおり重複防止の対象になる。
+ *
  * 走査は axisCL 単位に束ねる（全壁の総当たりと結果は同一——判定条件が
  * `o.axisCL === w.axisCL` を含むため、別の軸CLの壁は元から一致しない）。
  * @param {object[]} generalShapes
@@ -63,7 +87,9 @@ export function resolveDeferredBackingIds(generalShapes) {
   const deferred = new Set();
   const byAxis = new Map(); // axisCL → 対象壁
   for (const s of generalShapes) {
-    if (s.type !== ShapeType.WALL || s.wallFinish == null || s.backingOffset != null) continue;
+    if (s.type !== ShapeType.WALL || s.wallFinish == null || s.backingDepth != null) continue;
+    const hasOtherEccentricity = s.backingOffset != null && s.backingOffset !== s.bandOffset;
+    if (hasOtherEccentricity) continue;
     const bucket = byAxis.get(s.axisCL);
     if (bucket) bucket.push(s);
     else byAxis.set(s.axisCL, [s]);

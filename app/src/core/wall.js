@@ -44,6 +44,15 @@ export class Wall extends Shape {
     // 仕上げ面が向く側（±1）。CL偏芯の「仕上げ面合わせ」でCL上に面が一致し dir 導出が
     // 不能になるケースの明示指定。null=Wall.faceDir が sign(axisOffset) から導出する。
     this.finishSide  = props?.finishSide ?? null;
+    // 柱寸法が基準（120）より細い階の外壁下地帯シフト量(mm、符号付き)。backingOffset の内訳の
+    // うち「外面を通り芯±60に固定するための帯シフト」分だけを別枠で保持する
+    // （structural/structureRules.js woodBaseColumnWidthMm・finish/wallGeneration.js
+    // generateExteriorWalls/generateRoomWallsFromOutline が設定）。backingOffsetは階段下部屋・
+    // CL偏芯等の「本来の偏芯」とこのシフトが同じフィールドに相乗りするため、梁芯・壁交点柱の
+    // アンカー（structural/wallBeamAxes.js）はこの量だけを差し引いて通り芯基準の座標を保つ
+    // ——backingOffset全体を差し引くと本来の偏芯（2a壁等）まで打ち消してしまう。null=0
+    // （帯シフトなし）。
+    this.bandOffset  = props?.bandOffset ?? null;
     makeObservable(this, {
       clStart:     observable.ref,
       clEnd:       observable.ref,
@@ -54,6 +63,7 @@ export class Wall extends Shape {
       backingOffset: observable,
       backingDepth:  observable,
       finishSide:    observable,
+      bandOffset:    observable,
       axisValue:     computed,
       coord1:        computed,
       coord2:        computed,
@@ -81,6 +91,14 @@ export class Wall extends Shape {
    * backingDepth が null（対称壁）の場合は axisValue〜axisCL.effectiveValue の対称範囲
    * （従来どおり）。backingDepth===0 は下地なし＝仕上げ帯のみ。
    * ShapesLayer の詳細LOD cap 描画、階段下壁のコーナートリム（stairUnderWalls.js）で共有する。
+   *
+   * backingDepth===null の枝は backingOffset を見ない（この壁自身の軸〜自面の片側だけを返す
+   * ——下地帯の反対側半分は対になる壁側の範囲に属する、という対称壁の前提のまま）。柱寸法が
+   * 細い階の外壁下地帯シフト（backingOffsetのみ設定・backingDepthはnullのまま。
+   * finish/wallGeneration.js generateExteriorWalls）でも、この枝の入力（axisV・faceVとも
+   * 既にシフト後の値）だけで完結するため個別の対応は不要——下地帯の実在範囲を厳密に描く側は
+   * backingRange（本ファイル）を実在する材として扱う renderer/planWallRegion.js（規則は
+   * .claude/plan-wall-region.md 参照）。
    * @returns {{lo:number, hi:number}}
    */
   get materialRange() {
@@ -104,10 +122,12 @@ export class Wall extends Shape {
 
   /**
    * 下地帯（間柱）だけの厚み方向範囲（materialRange から仕上げ帯を除いた部分）。
-   * backingDepth===0（下地なし＝仕上げのみの薄壁）は null。backingDepth/backingOffset が
-   * null（対称壁の既定式）は axisCL中心・2*(全厚-wallFinish) の対称範囲
-   * （ShapesLayer の詳細LOD下地描画の既定式と同じ）。wallFinish が不明（手動壁）な対称壁は
-   * 算出不能のため null。壁のT字取り合い描画解決（renderer/wallJunctionResolve.js）で使う。
+   * backingDepth===0（下地なし＝仕上げのみの薄壁）は null。backingDepth が null（対称壁の
+   * 既定式）は axisCL中心＋backingOffset・2*(全厚-wallFinish) の対称範囲
+   * （ShapesLayer の詳細LOD下地描画の既定式と同じ。backingOffsetがあれば帯ごと平行移動する
+   * ——柱寸法が基準より細い階の外壁下地帯シフト。structural/structureRules.js
+   * woodBaseColumnWidthMm参照）。wallFinish が不明（手動壁）な対称壁は算出不能のため null。
+   * 壁のT字取り合い描画解決（renderer/wallJunctionResolve.js）で使う。
    * @returns {{lo:number, hi:number}|null}
    */
   get backingRange() {
@@ -122,11 +142,15 @@ export class Wall extends Shape {
     // applyCLEccentricity）が設定する壁は finishSide とともに backingOffset/backingDepth も
     // 必ず明示するため、finishSide が非nullの壁はこの枝に到達しない前提——到達すると
     // 非対称な実位置と食い違う（対称仮定が破綻する）。
+    // backingOffset（帯の平行移動量）が入っていても厚み自体は変わらない——faceVとの距離は
+    // 移動の前後で不変なので depth の式はそのまま、範囲の中心だけを axisV+backingOffset へ
+    // ずらす（backingOffset が null/0 なら従来どおり axisV 中心のまま）。
     if (this.wallFinish == null) return null;
     const faceV = this.axisValue;
-    const depth = 2 * (Math.abs(faceV - axisV) - this.wallFinish);
+    const c = axisV + (this.backingOffset ?? 0);
+    const depth = 2 * (Math.abs(faceV - c) - this.wallFinish);
     if (!(depth > 0)) return null;
-    return { lo: axisV - depth / 2, hi: axisV + depth / 2 };
+    return { lo: c - depth / 2, hi: c + depth / 2 };
   }
 }
 

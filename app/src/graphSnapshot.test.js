@@ -39,6 +39,44 @@ test('Opening.fixtureType/sillHeight は FlatBuffers encode→decode で往復�
   assert.equal(o2.sillHeight, 800);
 });
 
+// ---- Wall.bandOffset（柱寸法が基準より細い階の外壁下地帯シフト。core/wall.js Wall.bandOffset
+// 参照）の FlatBuffers 往復（schema/graphFbs.js WL.HAS_BAND_OFFSET/BAND_OFFSET を末尾追加） ----
+test('Wall.bandOffset は FlatBuffers encode→decode で値ありのまま往復する', () => {
+  const graph = makeGraph();
+  const axisCL  = graph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: false, discipline: Discipline.ARCH });
+  const clStart = graph.addCenterLine(CenterLineType.VERTICAL,   0,    { labeled: false, discipline: Discipline.ARCH });
+  const clEnd   = graph.addCenterLine(CenterLineType.VERTICAL,   3000, { labeled: false, discipline: Discipline.ARCH });
+  const wall = graph.addWall(axisCL, -72.5, false, clStart, 0, clEnd, 0, {
+    isExteriorWall: true, backingOffset: -7.5, bandOffset: -7.5, backingDepth: 105, wallFinish: 12.5,
+  });
+
+  const bytes = serializeGraph(graph);
+  const restored = makeGraph();
+  restoreGraph(restored, bytes);
+
+  const w2 = restored.shapeMap.get(wall.id);
+  assert.ok(w2, '復元後に同一IDの壁が存在する');
+  assert.equal(w2.bandOffset, -7.5);
+  assert.equal(w2.backingOffset, -7.5, '前提: backingOffsetも往復する（既存フィールド）');
+});
+
+test('【失敗系】Wall.bandOffset 未設定（null。旧データ相当）は encode→decode 後も null のまま（既定値に化けない）', () => {
+  const graph = makeGraph();
+  const axisCL  = graph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: false, discipline: Discipline.ARCH });
+  const clStart = graph.addCenterLine(CenterLineType.VERTICAL,   0,    { labeled: false, discipline: Discipline.ARCH });
+  const clEnd   = graph.addCenterLine(CenterLineType.VERTICAL,   3000, { labeled: false, discipline: Discipline.ARCH });
+  // bandOffset は未設定のまま（旧データのフィールド欠落と同値の状態）
+  const wall = graph.addWall(axisCL, 75, false, clStart, 0, clEnd, 0, { isExteriorWall: true });
+
+  const bytes = serializeGraph(graph);
+  const restored = makeGraph();
+  restoreGraph(restored, bytes);
+
+  const w2 = restored.shapeMap.get(wall.id);
+  assert.ok(w2);
+  assert.equal(w2.bandOffset, null);
+});
+
 test('Opening.fixtureType/sillHeight 未設定（null）は encode→decode 後も null のまま（既定値に化けない）', () => {
   const { graph, opening } = makeGraphWithWindow({});
 
