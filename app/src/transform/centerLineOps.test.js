@@ -255,6 +255,25 @@ test('addCenterLineFromDialog: 補助線と中心線が共存する位置への�
   }
 });
 
+test('addCenterLineFromDialog: 直交する線・壁が無く extent が1点に退化した補助線でも、同座標の2本目は拒否される', () => {
+  const project = new Project('proj', 'test');
+  const { graph } = project.addPlane(0, '1階', 'p1'); // 直交CL・壁なし → フリー端点が両方 perpCoord に丸められ長さ0
+  const payload = { clDialog: { type: 'vertical', worldCoord: 1000, perpCoord: 0 }, value: 1000, kind: 'aux', refId: null, refOffset: 0 };
+  const vp = { scaleDenominator: 100 };
+
+  const r1 = addCenterLineFromDialog(graph, project, payload, vp);
+  assert.equal(r1.done, true);
+  const first = graph.centerLines.find(cl => centerLineKind(cl) === 'aux');
+  assert.equal(first.extentLo, first.extentHi, '前提: extent が1点に退化している');
+  const beforeTop = undoManager.peekUndo();
+
+  const r2 = addCenterLineFromDialog(graph, project, payload, vp);
+  assert.equal(r2.done, false);
+  assert.equal(r2.toast, ERR_CL_DUPLICATE('aux'));
+  assert.equal(graph.centerLines.filter(cl => centerLineKind(cl) === 'aux').length, 1, '補助線は1本のまま');
+  assert.equal(undoManager.peekUndo(), beforeTop, 'undoは積まれない');
+});
+
 test('addCenterLineFromDialog: 梁芯と共存する中心線・補助線があるとき、同位置への2本目の同種別は先頭が梁芯でも拒否される', () => {
   const { project, graph } = makeProjectWithGraph();
   const vp = { scaleDenominator: 100 };

@@ -506,13 +506,18 @@ export function addCenterLineFromDialog(graph, project, payload, viewport) {
       if (kind === 'struct') {
         return { done: false, toast: ERR_CL_DUPLICATE(kind), suggestWood: null };
       }
-      // center / aux: extent が重ならなければ追加を許可
+      // center / aux: extent が重ならなければ追加を許可（端点が接するだけなら下の結合連鎖へ）。
+      // どちらかの extent が1点に退化している（補助線のフリー端点が両方 perpCoord に丸められた
+      // 長さ0の線。直交する線・壁が無い位置で起きる）場合は、開区間の重なりが常に空になって同座標に
+      // 何本でも積めてしまうため、閉区間で点が含まれれば重なりとみなす（長さ0の補助線自体は許容）。
       const exLo = existing.extentLo;
       const exHi = existing.extentHi;
+      const degenerate = newExtentLo === newExtentHi || exLo === exHi;
       const extentsOverlap =
         newExtentLo == null || newExtentHi == null ||
         exLo == null || exHi == null ||
-        !(newExtentHi <= exLo || newExtentLo >= exHi);
+        (degenerate ? !(newExtentHi < exLo || newExtentLo > exHi)
+                    : !(newExtentHi <= exLo || newExtentLo >= exHi));
       if (extentsOverlap) {
         return { done: false, toast: ERR_CL_DUPLICATE(kind), suggestWood: null };
       }
