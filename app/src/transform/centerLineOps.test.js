@@ -233,6 +233,28 @@ test('addCenterLineFromDialog: 既存の梁芯（自動生成・平面では非�
   assert.ok(graph.centerLines.some(cl => cl.centerLineType === CenterLineType.HORIZONTAL && cl.value === 3000 && centerLineKind(cl) === 'aux'));
 });
 
+test('addCenterLineFromDialog: 補助線と中心線が共存する位置への通り芯追加は、並び順によらず中心線を削除して昇格する（相手選択は種別優先順）', () => {
+  const vp = { scaleDenominator: 100 };
+  for (const order of ['aux-first', 'center-first']) {
+    const { project, graph } = makeProjectWithGraph();
+    const addAux    = () => graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, lineType: 'dashed' });
+    const addCenter = () => graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false });
+    const [aux, center] = order === 'aux-first' ? [addAux(), addCenter()] : (() => { const c = addCenter(); const a = addAux(); return [a, c]; })();
+
+    const r = addCenterLineFromDialog(
+      graph, project,
+      { clDialog: { type: 'vertical', worldCoord: 1000, perpCoord: 0 }, value: 1000, kind: 'struct', refId: null, refOffset: 0 },
+      vp,
+    );
+    assert.equal(r.done, true, order);
+    assert.equal(r.toast, ERR_CL_CENTER_UPGRADED, `${order}: 中心線を削除して昇格する`);
+    assert.equal(graph.shapeMap.has(center.id), false, `${order}: 中心線は削除される`);
+    assert.equal(graph.shapeMap.has(aux.id), true, `${order}: 補助線は残る`);
+    const kinds = graph.centerLines.filter(cl => cl.centerLineType === CenterLineType.VERTICAL && cl.value === 1000).map(centerLineKind).sort();
+    assert.deepEqual(kinds, ['aux', 'struct'], `${order}: 通り芯＋補助線の2本になる`);
+  }
+});
+
 test('addCenterLineFromDialog: 梁芯と共存する中心線・補助線があるとき、同位置への2本目の同種別は先頭が梁芯でも拒否される', () => {
   const { project, graph } = makeProjectWithGraph();
   const vp = { scaleDenominator: 100 };

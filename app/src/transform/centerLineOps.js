@@ -320,6 +320,11 @@ export function shouldSuggestWoodStructure(graph, project, appMode, clType, newV
   });
 }
 
+// addCenterLineFromDialog の重複判定で「同種別が無いとき」に相手（existing）を選ぶ優先順。
+// 通り芯（存在チェック・昇格の相手）＞中心線（昇格で削除される相手）＞補助線＞梁芯。並び順に
+// 依存させないための規約であり、種別ごとの拒否・共存ルール自体はこの順に依存しない。
+const EXISTING_KIND_PRIORITY = ['struct', 'center', 'aux', 'beam'];
+
 // ---- AddCLDialog確定（handleCLDialogConfirm） ----
 // extent解決・重複判定（ERR_CL_DUPLICATE等）・結合連鎖（mergeCenterLineChain/composeUndoWithMergeChain）・
 // undo登録を行う。ダイアログを閉じる setState・木造提案 ConfirmDialog の表示は呼び出し側（App.jsx）。
@@ -486,11 +491,14 @@ export function addCenterLineFromDialog(graph, project, payload, viewport) {
   // ---- 重複チェック（extent計算後に実施） ----
   // 同座標には梁芯と中心線・補助線が共存しうる（下記の梁芯ガード参照）ため、先頭1本ではなく全部を取り、
   // 同種別があればそれを existing にする——先頭が梁芯だと同種別の extent 重なり判定・結合連鎖に入らず
-  // 同位置へ何本でも積めてしまう（QA指摘）。
+  // 同位置へ何本でも積めてしまう（QA指摘）。同種別が無いときも先頭順ではなく種別の優先順で相手を選ぶ
+  // ——補助線→中心線の順で並ぶ位置へ通り芯を足すと、先頭の補助線が相手になって昇格経路（中心線を
+  // 削除して通り芯化）に入らず、通り芯・中心線・補助線が3本併存する（並び順依存。QA指摘）。
   const sameCoord = graph.centerLines.filter(
     cl => cl.centerLineType === clType && Math.abs(cl.value - value) < CL_OVERLAP_TOL_MM
   );
-  const existing = sameCoord.find(cl => centerLineKind(cl) === kind) ?? sameCoord[0];
+  const existing = sameCoord.find(cl => centerLineKind(cl) === kind)
+    ?? EXISTING_KIND_PRIORITY.map(k => sameCoord.find(cl => centerLineKind(cl) === k)).find(Boolean);
   if (existing) {
     const existingKind = centerLineKind(existing);
 
