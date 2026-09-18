@@ -1,11 +1,13 @@
-// 11.stq の各階の構造（柱・梁の実体と、平面へ効く柱の仕上げ包み外形）をJSONへ落とす。
+// 13.stq の各階の構造（柱・梁の実体と、平面へ効く柱の仕上げ包み外形）をJSONへ落とす。
+// 検証データは 13.stq（非在来）と moku4.stq（在来木造）の2つに統一（ユーザー指示2026-09-19。他は不要）。
+// 基準は golden13/struct-*.json（旧 golden/struct-*.json＝11.stq は廃止）。
 import fs from 'node:fs';
 import path from 'node:path';
 import { loadDocument } from './loadDoc.mjs';
 import { columnWrapSolids } from '../../src/finish/columnWrap.js';
 
-const outDir = process.argv[2] ?? path.join(import.meta.dirname, 'golden');
-const src = process.argv[3] ?? 'D:/tatsuya/Download/11.stq';
+const outDir = process.argv[2] ?? path.join(import.meta.dirname, 'golden13');
+const src = process.argv[3] ?? 'D:/tatsuya/Download/13.stq';
 fs.mkdirSync(outDir, { recursive: true });
 const r = (v) => (typeof v === 'number' ? Math.round(v * 1000) / 1000 : null);
 

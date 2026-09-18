@@ -20,7 +20,7 @@ import { followWallBeamAxes } from '../../src/structural/wallBeamAxisFollow.js';
 import { recomputeStructuralForGraph } from '../../src/structural/structuralRecompute.js';
 import { centerLineKind } from '../../src/core/centerLine.js';
 
-const src = process.argv[2] ?? 'D:/tatsuya/Download/moku1.stq';
+const src = process.argv[2] ?? 'D:/tatsuya/Download/moku4.stq';
 const toStructure = process.argv[3] ?? 'S造';
 const { project } = loadDocument(src);
 const graphMapPeek = async (plane) => project.graphMap.get(plane.id) ?? null;

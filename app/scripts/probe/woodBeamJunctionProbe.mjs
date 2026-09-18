@@ -20,7 +20,7 @@ import { rulesFor, effectiveStructure, isTraditionalWoodStructure } from '../../
 import { resolveBeamJunctionSpans } from '../../src/structural/beamJunction.js';
 import { CL_OVERLAP_TOL_MM } from '../../src/core/constants.js';
 
-const src = process.argv[2] ?? 'D:/tatsuya/Download/moku1.stq';
+const src = process.argv[2] ?? 'D:/tatsuya/Download/moku4.stq';
 const { project } = loadDocument(src);
 // loadDoc.mjs は実IDBを使わないインメモリ復元のため、非アクティブ階のpeekはgraphMapから直接返す
 // （structureToggleProbe.mjs・woodBeamDepthProbe.mjsと同じ差し替え）。

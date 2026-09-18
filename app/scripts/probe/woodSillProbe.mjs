@@ -14,7 +14,7 @@ import { selfWallSegments } from '../../src/structural/wallBeamAxes.js';
 import { wallLineThroughRuns } from '../../src/structural/woodAutoFill.js';
 import { mergeWallIntervals } from '../../src/structural/woodFraming.js';
 
-const src = process.argv[2] ?? 'D:/tatsuya/Download/moku1.stq';
+const src = process.argv[2] ?? 'D:/tatsuya/Download/moku4.stq';
 const { project } = loadDocument(src);
 // loadDoc.mjs は実IDBを使わないインメモリ復元のため、非アクティブ階のpeekはgraphMapから直接返す
 // （woodTieBeamProbe.mjs等と同じ差し替え）。

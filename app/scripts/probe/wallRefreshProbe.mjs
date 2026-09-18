@@ -20,7 +20,7 @@ import { wallBackingCenters, mapBackingCenterMoves } from '../../src/structural/
 import { followWallBeamAxes } from '../../src/structural/wallBeamAxisFollow.js';
 import { recomputeStructuralForGraph } from '../../src/structural/structuralRecompute.js';
 
-const src = process.argv[2] ?? 'D:/tatsuya/Download/moku1.stq';
+const src = process.argv[2] ?? 'D:/tatsuya/Download/moku4.stq';
 const { project } = loadDocument(src);
 // graphMap に全階が既に展開済みのため peek は同期的に引くだけでよい（IDB抜き。
 // dumpPlanRegen.mjs・wallRefresh.js と同じ finish/stair/stairUnderRooms.js の
