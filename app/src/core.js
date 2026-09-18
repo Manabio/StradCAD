@@ -72,7 +72,7 @@ export { totalStepsFromSections, Stair } from './core/stair.js';
 // ================================================================
 
 export {
-  columnSlotKey, spanKey, findHostPrimaryBeam, HOST_BEAM_MATCH_TOL_MM,
+  columnSlotKey, columnAnchorKey, spanKey, beamExclusionKey, findHostPrimaryBeam, HOST_BEAM_MATCH_TOL_MM,
   StructuralColumn, WoodColumn, SteelColumn, RcColumn,
   StructuralBeam, WoodBeam, SteelBeam, RcBeam,
   IndependentFooting, ColumnBase,

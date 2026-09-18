@@ -3,14 +3,17 @@
  *
  * core.js から分離。CL を「座標の源泉」とする導出方式は core の Shape 系と共通だが、
  * これらは shapeMap・ngraph に参加せず PlanGraph の専用 Map で管理される。
- * 依存は constants / sectionCatalog / _internal のみ（core.js には依存しない＝循環なし）。
- * PlanGraph（core.js）が材種別→クラス解決表とキー生成関数を import して使う。
+ * 依存は constants / sectionCatalog / structureRules / woodFraming（純関数。core.js には依存しない
+ * ＝循環なし） のみ。PlanGraph（core.js）が材種別→クラス解決表とキー生成関数を import して使う。
+ * woodFraming.js（建具袖柱の走行方向座標の式 jambAxisValue）は既存の sectionCatalog/structureRules と
+ * 同じ「structural/ 配下の純関数モジュール」区分——柱の AXIS 導出（下記 _woodJambAxis）でだけ使う。
  */
 import { makeObservable, observable, computed, action } from 'mobx';
 import { StructuralMaterialType, CL_OVERLAP_TOL_MM } from './constants.js';
 import { coordLo as _coordLo, coordHi as _coordHi } from './_internal.js';
 import { findSectionEntry, diaphragmProjection } from '../structural/sectionCatalog.js';
 import { rulesFor, effectiveStructure, PIN_BEAM_END_CLEARANCE_MM } from '../structural/structureRules.js';
+import { jambAxisValue } from '../structural/woodFraming.js';
 
 // ---- module-private helpers（構造部材の平面位置導出。core/_internal とは別に構造専用） ----
 
@@ -22,10 +25,10 @@ function _axisOffset(planGraph, clId) {
 // 柱芯（AXIS）= 通り芯 effectiveValue + 柱芯オフセット（columnAxisOffsets。偏心量は含まない）。
 // StructuralColumn.axisX/axisY が公開する（.claude/structural-model.md「AXISで一致・ACTUALで止める」）。
 function _axisX(entity) {
-  return entity.verticalCL.effectiveValue + _axisOffset(entity._planGraph, entity.verticalCL.id);
+  return _woodJambAxis(entity, true) ?? _woodAxisOffset(entity, true) ?? entity.verticalCL.effectiveValue + _axisOffset(entity._planGraph, entity.verticalCL.id);
 }
 function _axisY(entity) {
-  return entity.horizontalCL.effectiveValue + _axisOffset(entity._planGraph, entity.horizontalCL.id);
+  return _woodJambAxis(entity, false) ?? _woodAxisOffset(entity, false) ?? entity.horizontalCL.effectiveValue + _axisOffset(entity._planGraph, entity.horizontalCL.id);
 }
 // 柱・基礎・柱脚の平面位置（ACTUAL）= 柱芯（AXIS） + 個別偏心量。
 // StructuralColumn / StructuralFooting が共通で使う（eccentricity は {x,y}）。
@@ -36,14 +39,77 @@ function _gridY(entity) {
   return _axisY(entity) + entity.eccentricity.y;
 }
 
+// 建具の袖柱（WoodColumn.woodJambRef={openingId, side, isVertical}）の走行方向AXIS。
+// isVertical は開口（Opening）の向き（＝法線方向がX＝verticalCL側になる開口かどうか）——法線方向
+// （isForXがisVerticalと一致する側）はCL位置のまま（下のresolveWoodColumnAnchorCLで解決済みの
+// 実CLが袖座標とほぼ一致するよう woodAutoFill.js が選ぶため）、走行方向（一致しない側）だけ、
+// 開口の外形coord1/coord2から都度導出する——柱・crossCLの「同一座標に一致する既存CLが無い」
+// 一般位置（開口の外形±クリアランス±柱寸/2）にAXISを置くには、CL位置に頼らずここで導出するしかない
+// （.claude/structural-model.md「建具の袖柱」節参照）。開口が見つからない・柱寸が引けない
+// （旧データ・削除済み開口の残骸。次のautoFillWoodColumnsパスで撤去される想定）はnullを返し、
+// 呼び出し側がCL位置へフォールバックする。
+function _woodJambAxis(entity, isForX) {
+  const ref = entity.woodJambRef;
+  if (!ref || ref.isVertical === isForX) return null; // 袖柱でない、またはこちらの軸は法線方向
+  const opening = entity._planGraph?.shapeMap?.get(ref.openingId) ?? null;
+  if (!opening || !Number.isFinite(opening.coord1) || !Number.isFinite(opening.coord2)) return null;
+  const width = findSectionEntry(entity.sectionDefId)?.width;
+  if (!Number.isFinite(width)) return null;
+  return jambAxisValue(ref.side, opening.coord1, opening.coord2, width);
+}
+
+// 頭つなぎ・受梁由来の柱（ステップ3h-2）で走行方向のCLが解決できない場合のオフセットアンカー
+// （WoodColumn.woodAxisOffset={isVertical, offset}|null）。isVertical=trueならAXIS X（verticalCL基準）
+// が、falseならAXIS Y（horizontalCL基準）が `そのCL.effectiveValue + offset` になる。verticalCL/
+// horizontalCLに入っているのは「走行方向で解決できた最寄りのCL」（woodAutoFill.js nearestAnchorCL。
+// 袖柱のcrossCLと同じプレースホルダ——CLは新設せず、実位置はここでオフセットして表す）。
+// .claude/structural-model.md「3h-2」節参照。
+function _woodAxisOffset(entity, isForX) {
+  const off = entity.woodAxisOffset;
+  if (!off || off.isVertical !== isForX) return null;
+  const cl = isForX ? entity.verticalCL : entity.horizontalCL;
+  const value = cl.effectiveValue + off.offset;
+  // _woodJambAxisと同じ安全策: 非数（旧データ・破損値）ならnullを返しCL値へ普通にフォールバックさせる。
+  return Number.isFinite(value) ? value : null;
+}
+
 // トポロジー自動補完の除外集合（PlanGraph.excludedColumnSlots/excludedBeamSlots）で使うキー生成。
 // structural/structuralAutoFill.js からも同じキー形式で参照するため export する。
 export function columnSlotKey(verticalCL, horizontalCL) {
   return `${verticalCL.id}:${horizontalCL.id}`;
 }
+// 柱の識別キー（トポロジー自動補完の除外集合・存在判定に使う唯一のキー）。建具の袖柱
+// （column.woodJambRef非null）は `jamb:${openingId}:${side}` ——袖柱はCLペア（法線方向は実在CLだが
+// 走行方向は「その線上で解決可能なCLのうち袖座標に最も近いもの」というアンカーに過ぎないプレース
+// ホルダー）では同一性を保証できない（開口移動でその都度最寄りCLが変わりうる）ため、開口idと
+// 袖side（-1|1）を真実の同一性にする。頭つなぎ・受梁由来のオフセットアンカー柱（3h-2。
+// column.woodAxisOffset非null）は `off:${Math.round(axisX)}:${Math.round(axisY)}`——**実位置
+// （AXIS）基準**（QA指摘Major-2・2026-09-18: CLペア+offsetをキーにしていた旧実装は、走行方向の
+// アンカーCLが同距離タイになる位置（nearestAnchorCLの先着勝ち）でCLの選び方が変わるとキーごと
+// 変わってしまい、永続化された除外キーが失効する・柱idが入れ替わる事故になっていた——実位置は
+// アンカーCLの選び方に依らず一意なので、袖柱が「開口id+side」を真実にしたのと同じ発想で、CLでは
+// なく実位置を同一性にする）。通常の柱（woodJambRef・woodAxisOffsetともnull/undefined。非在来を含む）は
+// 従来どおり columnSlotKey（CLペア）。woodAutoFill.js（3a/3b/3h-2/袖柱の既存判定・撤去）・
+// core/planGraph.js（addColumn/removeColumnの除外集合の記録・解除）・structuralOrchestration.js
+// （columnSetSignature）が消費する（.claude/structural-model.md「建具の袖柱」「3h-2」節参照）。
+export function columnAnchorKey(column) {
+  if (column.woodJambRef) return `jamb:${column.woodJambRef.openingId}:${column.woodJambRef.side}`;
+  if (column.woodAxisOffset) return `off:${Math.round(column.axisX)}:${Math.round(column.axisY)}`;
+  return columnSlotKey(column.verticalCL, column.horizontalCL);
+}
 // 梁・耐力壁のスパンキー。始端・終端の順序に依存しないよう CL id を昇順に正規化する。
 export function spanKey(axisCL, clA, clB) {
   return `${axisCL.id}:${[clA.id, clB.id].sort().join(':')}`;
+}
+// 除外集合（PlanGraph.excludedBeamSlots）専用のキー。既定は spanKey そのものだが、role:'sill'（土台）
+// だけは 'sill:' を前置して名前空間を分ける——土台と基礎梁（role:'foundation'）は同一 axisCL/clStart/
+// clEnd（同一spanKey）を共有しうる（同じ位置に両方が生成される。structural/woodAutoFill.js
+// autoFillWoodSillBeams 参照）ため、spanKey そのものを除外キーにすると片方を removeBeam しただけで
+// もう片方まで除外されてしまう（QA指摘Major-1・2026-09-18。実データで再現）。他roleは従来どおり
+// spanKey そのもの（PlanGraph.addBeam/removeBeam・挙動不変）。
+export function beamExclusionKey(role, axisCL, clA, clB) {
+  const key = spanKey(axisCL, clA, clB);
+  return role === 'sill' ? `sill:${key}` : key;
 }
 
 class StructuralEntity {
@@ -152,8 +218,25 @@ export class WoodColumn extends StructuralColumn {
     // 柱寸・階幅・壁位置から conformWoodColumnEccentricity（woodAutoFill.js）が毎回導出する派生値
     // （直接 setField('eccentricity', ...) しない。.claude/structural-model.md 参照）。
     this.woodOffsetSide = props.woodOffsetSide ?? null;
+    // 建具（Opening）の袖柱であることを示すアンカー。{openingId, side:-1|1, isVertical} | null。
+    // side=-1は開口の外形coord1側（走行方向の低座標側）、+1はcoord2側。isVerticalは開口の向き
+    // （Opening.isVertical。法線方向がX=verticalCL側になる開口ならtrue）——走行方向AXISの導出
+    // （_woodJambAxis）がどちらの軸を上書きするか決めるために持つ（架構本体の{openingId,side}に
+    // 対しisVerticalを追加した理由: structuralEntities.jsをOpeningドメインへ結合させず、
+    // グラフ再検索なしで軸を判定するため。.claude/structural-model.md「建具の袖柱」節参照）。
+    // 通常の柱（壁交点・上階柱直下・頭つなぎ／受梁交点）はnull。真実はwoodAutoFill.js
+    // autoFillWoodColumnsが唯一の書き手——他所から直接setFieldしない。
+    this.woodJambRef = props.woodJambRef ?? null;
+    // 頭つなぎ・受梁由来の柱（ステップ3h-2）で走行方向のCLが解決できないときのオフセットアンカー。
+    // {isVertical:boolean, offset:number} | null。isVertical=trueならAXIS X（verticalCL基準）、
+    // falseならAXIS Y（horizontalCL基準）が `そのCL.effectiveValue + offset` になる（CLは新設せず、
+    // verticalCL/horizontalCLには走行方向で解決できた最寄りのCLをプレースホルダとして持つ——袖柱の
+    // woodJambRefと同じ「AXISが実位置そのもの」規律。真実はこちら——他所から直接setFieldしない。
+    // 唯一の書き手はwoodAutoFill.js autoFillWoodColumns。.claude/structural-model.md「3h-2」節参照）。
+    this.woodAxisOffset = props.woodAxisOffset ?? null;
     makeObservable(this, {
       columnType: observable, woodSpecies: observable, woodColumnWidthMm: observable, woodOffsetSide: observable,
+      woodJambRef: observable, woodAxisOffset: observable,
     });
   }
 }
@@ -414,7 +497,7 @@ export class WoodBeam extends StructuralBeam {
       ...props,
       jointCondition: props.jointCondition ?? { start: 'PIN', end: 'PIN' }, // 木造は基本ピン接合
     });
-    this.beamType = props.beamType ?? '大梁'; // '大梁' | '小梁' | '桁' | '小屋梁'
+    this.beamType = props.beamType ?? '大梁'; // '大梁' | '小梁' | '桁' | '小屋梁' | '頭つなぎ' | '受梁' | '土台'
     makeObservable(this, { beamType: observable });
   }
 }

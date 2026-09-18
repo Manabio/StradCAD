@@ -45,7 +45,9 @@ console.log('主構造:', project.structuralInfo.mainStructure);
 // elevation昇順のスイープ順に由来して1階分遅れて反映されるため、moku1では2回のchangedスイープを経て
 // 3回目に収束する（.claude/structural-model.md 3b節「結果整合性」）。S造等の非対象構造はsweep1から
 // changed=[]で収束1回のはず。
-const MAX_SWEEPS = 4;
+// 在来木造の収束期待はsweep4以内（2026-09-18裁定で3から改定。woodTieBeamProbe.mjsと同じ根拠
+// ——3h-2の点源に床梁を加えたことで3階またぎの連鎖が成立し、1スイープでは1段ずつしか伝播しない）。
+const MAX_SWEEPS = 5;
 let convergedAt = null;
 let changedSweeps = 0;
 for (let i = 1; i <= MAX_SWEEPS; i++) {
@@ -74,7 +76,7 @@ console.log(`床梁の合計本数: ${totalFloor}`);
 
 // QA裁定（F8）：期待値を固定する——非在来はsweep1で収束（changed=[]）しなければNG、在来は
 // 昇順スイープ由来で3b・3dが互いに1スイープ遅れうるためsweep3までに収束しなければNG（緩めっぱなしにしない）。
-const convergeLimit = isTraditionalWoodStructure(project.structuralInfo.mainStructure) ? 3 : 1;
+const convergeLimit = isTraditionalWoodStructure(project.structuralInfo.mainStructure) ? 4 : 1;
 if (convergedAt != null && convergedAt <= convergeLimit) {
   console.log(`OK: 収束（sweep${convergedAt} で changed=[]。changed があったスイープ数=${changedSweeps}）`);
 } else if (convergedAt != null) {

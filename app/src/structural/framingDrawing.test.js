@@ -5,7 +5,7 @@ import {
   FRAMING_MONO_COLOR, COLUMN_FALLBACK_SIZE_MM,
   framingColumnGroups, framingColor, framingColorOverride,
   columnSectionSize, columnCrossPointsLocal, COLUMN_CROSS_OVERHANG_RATIO, framingColumnLineWeight, showMemberTags, beamDepthMarks,
-  sillBandSpec, pickMembersOnFigure, columnListCategory, pickColumnsOnFigure, columnRenderSize,
+  pickMembersOnFigure, columnListCategory, pickColumnsOnFigure, columnRenderSize,
 } from './framingDrawing.js';
 import { rulesFor, TRADITIONAL_WOOD_STRUCTURE, UNSPECIFIED_STRUCTURE } from './structureRules.js';
 import { STRUCTURES } from './structuralClassification.js';
@@ -229,15 +229,6 @@ test('【失敗系】beamDepthMarks: 非在来6種＋未知値のdrawingは常�
 test('【失敗系】beamDepthMarks: beamsがundefined/nullでも例外を投げず空配列を返す', () => {
   assert.deepEqual(beamDepthMarks(WOOD_DRAWING, LodLevel.STANDARD, undefined), []);
   assert.deepEqual(beamDepthMarks(WOOD_DRAWING, LodLevel.STANDARD, null), []);
-});
-
-test('sillBandSpec: halfはsillWidthMmの半分、weightは常にmedium（在来木造・非在来6種とも）', () => {
-  for (const key of [TRADITIONAL_WOOD_STRUCTURE, ...NON_TRADITIONAL_KEYS]) {
-    const foundationRules = rulesFor(key).foundation;
-    const spec = sillBandSpec(foundationRules);
-    assert.equal(spec.half, foundationRules.sillWidthMm / 2, `${key}: half`);
-    assert.equal(spec.weight, 'medium', `${key}: weight`);
-  }
 });
 
 test('【失敗系】断面がカタログに無い柱は120角にフォールバックし、対角線2本の端点集合＝矩形4隅を延長した集合（比率1なら4隅そのもの）', () => {

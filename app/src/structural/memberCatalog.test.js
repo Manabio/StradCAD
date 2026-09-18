@@ -90,6 +90,13 @@ test('【3e-2】memberSymbol: beamMapのrole:floorは記号FBを返す', () => {
   assert.equal(memberSymbol(floor, 'beamMap'), 'FB');
 });
 
+test('土台（role:sill）: memberSymbolは記号SLを返し、「梁」グループのfilterはfoundationと同じく除外しない（土台基礎見出しにFGと並ぶ）', () => {
+  const sill = makeBeam('b1', 'WOOD-120x120', { role: 'sill' });
+  assert.equal(memberSymbol(sill, 'beamMap'), 'SL');
+  const beamGroup = MEMBER_GROUPS.find(g => g.key === 'beam');
+  assert.equal(beamGroup.filter(sill), true, 'role:sillは「梁」グループのfilterで除外されない');
+});
+
 test('【3e-2】MEMBER_GROUPS: 「梁」グループのfilterはrole:floorも除外する', () => {
   const beamGroup = MEMBER_GROUPS.find(g => g.key === 'beam');
   const primary = makeBeam('b1', 'WOOD-120x120', { role: 'primary' });

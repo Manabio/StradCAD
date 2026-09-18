@@ -10,7 +10,7 @@ import { ERR_STRUCT_MAIN_UNSPECIFIED } from '../error.js';
 import { autoFillColumnsForStructure, autoFillColumnAxisOffsets, autoFillColumnSizes, resolveLowestGraph, convertMembersToEffectiveMaterial, deleteClassificationOverflow, UNSPECIFIED_STRUCTURE } from './structuralAutoFill.js';
 import { conformWoodSections } from './woodAutoFill.js';
 import { rulesFor, effectiveStructure, beamColumnWidthMm } from './structureRules.js';
-import { collectWallBeamSources, autoFillWallBeamAxes, peekBelowGraph, wallRunSegments } from './wallBeamAxes.js';
+import { collectWallBeamSources, autoFillWallBeamAxes, peekBelowGraph, wallRunSegments, tieBeamSegments } from './wallBeamAxes.js';
 import { structureHasMemberKind, MEMBER_KIND } from './structuralClassification.js';
 import { buildStructuralWallGate } from './wallGate.js';
 import { collectFloorGroups, assignNumbers, applyNumbers } from './memberNumbering.js';
@@ -44,6 +44,19 @@ function reportRenumberToast(renumbered, onToast) {
 // AXIS（axisX/axisY。偏心を含まない）で座標を取る——個別柱の偏心（woodColumnOffset.js）だけが
 // 変わっても3b候補（上階柱直下の柱）の位置は変わらないため、無関係な再計算トリガーにしない
 // （.claude/structural-model.md「AXISで一致・ACTUALで止める」）。
+// 建具の袖柱（column.woodJambRef非null）もAXISが開口位置から都度導出される値のため、この関数を
+// 変更せずにそのまま扱える——袖側（side:-1|1）ごとにAXIS座標そのものが異なるため、「同一CLペアの
+// 両袖」問題（袖柱がCLペアだけを見るcolumnSlotKeyでは区別できない）はAXIS導出の側で解消済み
+// （core/structuralEntities.js columnAnchorKey・_woodJambAxis参照）。ここへcolumnAnchorKeyを
+// 足すことも検討したが、本関数は下階柱の位置比較専用に軽量な {axisX,axisY,role} だけのプレーン
+// オブジェクトで呼ばれるテストが多数あり（structuralOrchestration.test.js）、verticalCL/
+// horizontalCLを要求するcolumnAnchorKeyを噛ませると実在しないプロパティの参照で例外になる。
+// 決定：この関数は現状のAXIS+role方式のまま据え置く（columnAnchorKeyは足さない）。AXISが柱ごとに
+// 一意であることは重なり判定（woodAutoFill.js rectsOverlap。3a/3b/3h-2(CL解決分)→3h-2(オフセット分)→
+// 袖柱の評価順で、既存柱・候補柱と重なる新規候補は生成しない）がAXIS基準で保証しており、
+// columnAnchorKeyが持つ追加の判別能力（jamb:/off:の由来区別）は本関数の用途（下階柱集合が
+// 増減・移動したかの検知）には効かない——由来が変わっても同じAXISに柱が1本立つだけなら
+// シグネチャは変わらなくてよく、変わるべきなのはAXIS集合そのものが変化したときだけのため。
 export function columnSetSignature(columns) {
   return columns
     .map(c => `${Math.round(c.axisX * 10) / 10}:${Math.round(c.axisY * 10) / 10}:${c.role}`)
@@ -119,6 +132,10 @@ export async function recomputeStructuralComposition(composition, subjectGraph, 
     // belowGraphから見た「1つ上の実体階」＝subjectGraph自身（メモリ上・peek不要）。ここを忘れると
     // 直前のreflectが作った下階の3b柱が、この再計算で候補から漏れて撤去されてしまう。
     const aboveColumnsForBelow = subjectGraph.columns;
+    // belowGraphから見た「1つ上の実体階」の頭つなぎ・受梁（ステップ3h-2）。aboveColumnsForBelowと同じ
+    // 「subjectGraph自身＝メモリ上・peek不要」（subjectGraphの3h-2生成分は直前のrecomputeStructuralForGraph
+    // で確定済みのため、この時点で読める）。
+    const aboveTieBeamsForBelow = tieBeamSegments(subjectGraph, rulesFor(effectiveStructure(subjectGraph, project)));
     // belowMainStructure 引数は軒桁(eaves)専用。通常階の下階に eaves は無いため自階の実効値で十分。
     const belowBelowMainStructure = belowGraph.structureOverride ?? project.structuralInfo.mainStructure;
     runInAction(() => {
@@ -133,7 +150,7 @@ export async function recomputeStructuralComposition(composition, subjectGraph, 
       // 主構造変更で柱が「×」化した場合は、下階の柱を生成せず既存の自動柱を削除する（「×は削除/○は生成」）。
       // 柱の配置源（通り芯交点／壁交点）は主構造ルールで振り分ける（autoFillColumnsForStructure）。
       if (structureHasMemberKind(MEMBER_KIND.COLUMN, belowStructure)) {
-        autoFillColumnsForStructure(belowGraph, project, belowGate, aboveColumnsForBelow, belowWallSegments);
+        autoFillColumnsForStructure(belowGraph, project, belowGate, aboveColumnsForBelow, belowWallSegments, aboveTieBeamsForBelow);
       }
       deleteClassificationOverflow(belowGraph, project);
       autoFillColumnAxisOffsets(belowGraph, project, belowLowestGraph);
@@ -148,8 +165,29 @@ export async function recomputeStructuralComposition(composition, subjectGraph, 
     // この関数の先頭で行った自階再計算（recomputeStructuralForGraph）は「3b柱追加前」の下階柱で
     // 梁分割・成算定を確定していたため、ここで確定し直さないと分割位置・成が古い下階柱のままになる
     // （ユーザー裁定2026-09-16）。
-    // 下階の柱は自階に依存しない（3bは通り芯・壁・上階柱だけで決まる）ため、1回の再実行で収束する
-    // ——ループはしない。belowGraphを直接渡して再peekしない（下階編集はまだIDBへ未反映のため。
+    // 1回の再実行で収束する（ループはしない）根拠——**この自階・下階の組についてのみ**（建物全体
+    // （全実体階）の収束はsweep4かかる場合がある。.claude/structural-model.md「3h-2」節参照。
+    // ここでの「1回」は本関数が対象にするsubjectGraph・belowGraphの1組の話で、他の階への波及は
+    // reflectStructuralToOtherFloors（1階につき1パスのみ）・複数回のモード境界通過に委ねる別の話）。
+    // 根拠（3h-2後に更新: 3h-2は下階柱を増やしうるが、
+    // その柱は既存の候補区間の**内部**にしか立たない——候補区間の両端（run・分割区間の外形）は
+    // emitted（フェーズA確定済み壁線通し梁）∪locked（手動固定梁）の最近傍直交梁で決まり、下階柱の
+    // 増減はcolumnSplitPointsの内部分割点を増減させるだけで外形自体は変えない。そのため自階の
+    // 再計算をもう一度回しても、そこで新たに変わる下階柱集合が3回目の再実行を要求することはない
+    // （区間外形が同じ＝次の候補列挙も同じ場所で止まる）。
+    // ⚠例外（QA第2巡・2026-09-18／QA裁定2026-09-18で前提が単純化）: 交点を作る壁の候補区間が
+    // 自階フットプリント外・excludedBeamSlotsでemittedに入らない場合、その壁は頭つなぎ自身の支持
+    // 候補にもならないため、頭つなぎ自身がその3h-2柱の位置で内部分割されうる（woodAutoFill.test.js
+    // 「頭つなぎを横切る下階壁の区間がexcludedBeamSlotsなら…」参照）。この場合もspanKeyの両端
+    // （emitted∪lockedの最近傍支持）は下階柱の増減に依存せず不変のままなので、収束の性質自体は
+    // 変わらない——1回の再実行で確定する。
+    // なお旧実装（下階柱の両端支持でwallGateを丸ごと免除する。指摘A・2026-09-18）はQA裁定2026-09-18で
+    // 撤回し、フェーズA・Bとも自階フットプリント単独（buildSelfFootprintGate。自階の部屋構成だけで
+    // 決まり、下階柱の状態を一切参照しない）でゲートするようになった——これにより「3h-2が下階柱を
+    // 追加するとwallGateの判定（＝emittedの内容）が変わる」というフィードバック経路自体が無くなり、
+    // 上記の収束根拠はさらに単純になった（自階フットプリント外・excludedBeamSlotsという静的な理由で
+    // emittedに入らない壁が残るだけで、これらは下階柱の増減と無関係）。
+    // belowGraphを直接渡して再peekしない（下階編集はまだIDBへ未反映のため。
     // structuralRecompute.js precomputedBelowGraphのJSDoc参照）。flushEditablePeekは主構造変更経路
     // （mutateがbelowGraph自身の編集可能peekを書き換えた場合）の保留保存を確定する「読む前に書く」
     // 規律を保つためのもので、突入時（編集可能peek未開始）はno-op。

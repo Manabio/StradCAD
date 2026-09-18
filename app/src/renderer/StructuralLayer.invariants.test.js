@@ -196,17 +196,10 @@ test('【不変条件・QA指摘F2】StructuralLayer.jsx: 梁本体の3分岐（
     '既定（bandLines）分岐がpickShapePropsを渡していない');
 });
 
-test('【不変条件】StructuralLayer.jsx: 土台帯のhalf・線幅は sillBandSpec(foundationRules) から解決し、bandLines へそのまま渡す', () => {
+test('【不変条件】StructuralLayer.jsx: 土台帯（sillBandSpec/sillHalf）は現れない——土台はrole:sillの実体梁として一般の帯描画に乗る（2026-09-18裁定）', () => {
   const src = readSource();
-  const specMatch = /const\s+(\w+)\s*=\s*sillBandSpec\(\s*foundationRules\s*\)/.exec(src);
-  assert.ok(specMatch, 'sillBandSpec(foundationRules) の呼び出し・代入が見つからない（土台帯のhalf・線幅算出がStructuralLayer.jsxに直書きされている回帰）');
-  const specVar = specMatch[1];
-  const halfRe = new RegExp(`sillHalf:\\s*${specVar}\\.half\\s*,`);
-  assert.ok(halfRe.test(src), `sillHalf: ${specVar}.half, の受け渡しが見つからない（半端な加工（倍率等）を挟まず素通ししているか）`);
-  const weightRe = new RegExp(`LINE_WEIGHT_MM\\[\\s*${specVar}\\.weight\\s*\\]`);
-  assert.ok(weightRe.test(src), `LINE_WEIGHT_MM[${specVar}.weight] の参照が見つからない（線幅キーをsillBandSpec経由で解決していない）`);
-  assert.ok(/bandLines\(`sill:\$\{b\.id\}`,\s*b\.isVertical,\s*b\.axisValue,\s*sillHalf,/.test(src),
-    'bandLines(...) 呼び出しが sillHalf を使っていない（土台帯のhalfが食い違う回帰）');
+  assert.ok(!/sillBandSpec/.test(src), 'sillBandSpec への参照が残っている（土台専用の帯描画が復活している回帰）');
+  assert.ok(!/sillHalf|sillStrokeWidth|sillColor/.test(src), '土台専用の帯パラメータ（sillHalf/sillStrokeWidth/sillColor）が残っている');
 });
 
 test('【不変条件・B-3】StructuralLayer.jsx: beamDrawSpansはresolveBeamJunctionSpans(の結果を通り、bandCapLineはends[...].cappedでゲートされている', () => {

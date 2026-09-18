@@ -90,6 +90,7 @@ export function memberSymbol(entity, mapName) {
         case 'secondary':  return 'B';  // 小梁
         case 'floor':      return 'FB'; // 床梁
         case 'foundation': return 'FG'; // 基礎梁
+        case 'sill':       return 'SL'; // 土台
         case 'eaves':      return 'EG'; // 軒桁
         case 'roof':       return entity.beamType === '垂木' ? 'RF' : 'PR'; // 垂木 / 母屋
         case 'landing':    return 'LG'; // 踊り場受け梁

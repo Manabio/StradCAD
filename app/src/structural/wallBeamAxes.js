@@ -4,6 +4,7 @@
 import { CenterLineType, Discipline, centerLineKind } from '../core.js';
 import { CL_OVERLAP_TOL_MM } from '../core/constants.js';
 import { backingClassOf } from '../finish/materials/backingClass.js';
+import { roomBounds } from '../finish/gridCells.js';
 import { floorSwapManager } from '../storage/FloorSwapManager.js';
 import { rulesFor, backingRulesFor, isTraditionalWoodStructure, effectiveStructure } from './structureRules.js';
 
@@ -68,6 +69,17 @@ function isBackingOwnerWall(wall) {
   return wall.backingRange != null;
 }
 
+/** 下地オーナー壁の下地帯中心の座標(mm)＝梁芯位置（wall.axisValueは仕上げ面の位置のため使わない）。
+ *  柱寸法が基準より細い階の外壁下地帯シフト（wall.bandOffset。core/wall.js参照）を差し引いて
+ *  相殺する——wallBeamSourcesFromGraph・wallBackingCenters・建具の袖柱の法線方向アンカー解決
+ *  （woodAutoFill.js autoFillWoodColumns）が同じ位置の定義を共有する単一の情報源。
+ *  wall.backingRange===null（下地オーナーでない）の呼び出しは想定しない（呼び出し側が
+ *  isBackingOwnerWallで絞り込み済みのこと）。 */
+export function wallBackingCenterCoord(wall) {
+  const center = (wall.backingRange.lo + wall.backingRange.hi) / 2;
+  return center - (wall.bandOffset ?? 0);
+}
+
 /** per-floor 設定から wall の下地材コードを引く（Edge個別上書きは対象外。設計書 §2.1 の割り切り）。 */
 function wallBackingCode(sourceGraph, wall) {
   return wall.isExteriorWall ? sourceGraph.exteriorWallBacking : sourceGraph.interiorWallBacking;
@@ -87,27 +99,25 @@ function wallBeamSourcesFromGraph(sourceGraph, requireBeamAxisBacking) {
     if (!isBackingOwnerWall(wall)) continue;
     if (requireBeamAxisBacking && !backingRulesFor(backingClassOf(wallBackingCode(sourceGraph, wall))).beamAxisSource) continue;
     // 梁芯位置＝下地帯の中心（wall.axisValueは仕上げ面の位置のため使わない。設計書§2.3(2)）。
-    const center = (wall.backingRange.lo + wall.backingRange.hi) / 2;
     // 柱寸法が基準より細い階の外壁下地帯シフト（structural/structureRules.js
     // woodBaseColumnWidthMm 参照。finish/wallGeneration.js generateExteriorWalls/
     // generateRoomWallsFromOutline）は、外壁の外面を通り芯±60に固定するための「見た目の」帯
     // 移動であり、梁芯CL・壁交点柱のアンカー（通り芯位置基準）まで動かしてはいけない——
     // wall.bandOffset（帯シフト量だけを保持する専用フィールド。core/wall.js Wall.bandOffset
-    // 参照）を差し引いて相殺する。isExteriorWallでは判定しない——外周辺に接する「室生成壁」
-    // （generateRoomWallsFromOutlineがbandShiftを適用した非外壁）も同じ扱いにする必要がある
-    // （QA F1: isExteriorWall限定だと外周辺由来の室生成壁が非covered区間で下地オーナーになった
-    // ときに通り芯脇へ梁芯・柱が湧く）。bandOffsetを持たない壁（2a壁のCL偏芯等、本来の偏芯）は
+    // 参照）を差し引いて相殺する（wallBackingCenterCoord）。isExteriorWallでは判定しない——外周辺に
+    // 接する「室生成壁」（generateRoomWallsFromOutlineがbandShiftを適用した非外壁）も同じ扱いに
+    // する必要がある（QA F1: isExteriorWall限定だと外周辺由来の室生成壁が非covered区間で下地オーナー
+    // になったときに通り芯脇へ梁芯・柱が湧く）。bandOffsetを持たない壁（2a壁のCL偏芯等、本来の偏芯）は
     // bandOffset===nullのため0になり、backingOffsetがcoordへそのまま反映される従来どおりの挙動。
-    const bandOffset = wall.bandOffset ?? 0;
     out.push({
       isVertical: wall.isVertical,
-      coord: center - bandOffset,
+      coord: wallBackingCenterCoord(wall),
       lo: Math.min(wall.coord1, wall.coord2),
       hi: Math.max(wall.coord1, wall.coord2),
       halfDepth: (wall.backingRange.hi - wall.backingRange.lo) / 2,
       // ステップ2（柱の壁内偏心。別タスク）が「壁の下地帯の内側」を判定する際に使う——ここでは
       // 加算のみで既存の消費先（梁芯生成・小梁生成）の挙動は変えない。
-      bandOffset,
+      bandOffset: wall.bandOffset ?? 0,
     });
   }
   return out;
@@ -142,9 +152,8 @@ export function wallBackingCenters(graph) {
   for (const wall of graph.walls) {
     if (!isBackingOwnerWall(wall)) continue;
     // wallBeamSourcesFromGraph と同じ理由（柱寸法シフトの見た目の帯移動を追従対象に持ち込まない。
-    // 上記コメント参照）でwall.bandOffsetを差し引く（isExteriorWallでは判定しない。QA F1）。
-    const center = (wall.backingRange.lo + wall.backingRange.hi) / 2;
-    const bandOffset = wall.bandOffset ?? 0;
+    // 上記コメント参照）でwall.bandOffsetを差し引く（isExteriorWallでは判定しない。QA F1。
+    // wallBackingCenterCoordに集約——単一の情報源）。
     out.push({
       axisCLId: wall.axisCL.id,
       isVertical: wall.isVertical,
@@ -153,7 +162,7 @@ export function wallBackingCenters(graph) {
       // 本来+/-で区別すべき2枚の壁が同じsideに丸められてしまう（QA S3）。偏芯なし（対称壁。
       // finishSide・axisOffsetともnull/0）は引き続き0。
       side: wall.faceDirOr(0),
-      coord: center - bandOffset,
+      coord: wallBackingCenterCoord(wall),
       lo: Math.min(wall.coord1, wall.coord2),
       hi: Math.max(wall.coord1, wall.coord2),
     });
@@ -300,7 +309,76 @@ export function wallRunSegments(graph, belowGraph, structure) {
   if (rulesFor(structure).wallBeamAxes !== 'selfAndBelow') return [];
   const self = wallBeamSourcesFromGraph(graph, false);
   const below = belowGraph ? wallBeamSourcesFromGraph(belowGraph, false) : [];
-  return self.concat(below);
+  // Major 6・2026-09-18裁定: 1つ下の実体階の階段の「床開口の外周4辺すべて」も、壁線と同じ扱いの
+  // 区間として合流させる（stairOpeningRuns参照）。
+  const openings = stairOpeningRuns(belowGraph);
+  return self.concat(below, openings);
+}
+
+/**
+ * 1つ下の実体階の階段（belowGraph.stairs）の全周矩形（roomBounds）の**4辺すべて**を、壁区間と
+ * 同じ扱いのプレーン区間として返す（Major 6・2026-09-18裁定。旧`stairArrivalRuns`＝「壁が一切かから
+ * ない1辺だけをN→S→W→E優先で選ぶ」は撤回した——QA指摘: 到達辺（上がり口）だけでなく、床開口の
+ * 周囲全体に縁梁が必要という構造的要求のほうが実態に合う。壁のある辺は`wallRunSegments`側の
+ * `mergeWallIntervals`で壁区間と自然に合体し、壁の無い辺（上がり口）は単独の区間として通し梁の
+ * runになる。壁被覆の判定（旧WALL_JUNCTION_TOL_MM許容）はここでは行わない——4辺とも無条件で候補に
+ * 加える。
+ * 【ガード（ASSUMED）】地階へ下る階段（自階の床に開口を作らない階段）を除外する判定は行っていない
+ * ——`belowGraph`は常に`graph`の直下の実体階であり（`belowPlaneOf`）、`Stair`は「設置階＝下階の
+ * グラフに帰属し上階へ投影される」（`core/stair.js`）ため、`belowGraph.stairs`の各エントリは
+ * 定義上すべて`graph`（1つ上）へ到達する——という前提に基づき除外していないが、この前提を破る
+ * 階段種別・状態（例: 上階に到達しない意匠的な階段）がモデル上存在しないことまでは確認できていない
+ * （`Stair`クラスに到達先を明示するフィールドが無いため）。
+ * @param {object|null} belowGraph - 1つ下の実体階のgraph（階段のcells解決・roomBounds算出に使う）
+ * @returns {Array<{isVertical:boolean, coord:number, lo:number, hi:number}>}
+ */
+export function stairOpeningRuns(belowGraph) {
+  if (!belowGraph) return [];
+  const out = [];
+  for (const stair of belowGraph.stairs) {
+    const b = roomBounds(stair.cells, belowGraph);
+    if (![b.x1, b.y1, b.x2, b.y2].every(Number.isFinite) || !(b.x2 > b.x1 && b.y2 > b.y1)) continue;
+    out.push(
+      { isVertical: false, coord: b.y1, lo: b.x1, hi: b.x2 }, // 北（y最小）
+      { isVertical: false, coord: b.y2, lo: b.x1, hi: b.x2 }, // 南（y最大）
+      { isVertical: true,  coord: b.x1, lo: b.y1, hi: b.y2 }, // 西（x最小）
+      { isVertical: true,  coord: b.x2, lo: b.y1, hi: b.y2 }, // 東（x最大）
+    );
+  }
+  return out;
+}
+
+/**
+ * graph（1つ上の実体階など。無ければnull）の「生成・延長した梁」（頭つなぎ・受梁＝role:'primary'、
+ * beamType:'頭つなぎ'|'受梁'。ステップ3h ／ 床梁＝role:'floor'。ステップ3e）を、下階の柱生成
+ * （3h-2。woodAutoFill.js autoFillWoodColumns の aboveTieBeams）が「壁とみなして」扱うための区間
+ * （プレーン配列）へ写す。座標基準は**axisCL.effectiveValue**（emitted・lockedSegmentsと同じ基準。
+ * b.axisValueは偏心・柱芯オフセットを加えた実位置のため、これらと混在させるとoverlaps等の同軸判定が
+ * ずれる。m6）・lo/hiはclStart/clEnd.effectiveValueのmin/max——3bのaboveColumns（他階graphからは
+ * 柱のx/y/roleしか読まない規律）を「梁の軸・範囲まで」広げたもの（.claude/structural-model.md参照）。
+ * **床梁（role:'floor'）を加えた理由**（2026-09-18裁定）：ユーザー指摘の4点のうち3点
+ * （(1820,-3640)・(5460,0)・(7280,0)）は、その点に端を持つのが頭つなぎ・受梁ではなく床梁だったため、
+ * 生成・延長した梁の下階柱生成という原則を守るには床梁も点源に含める必要があった。**壁線由来の
+ * 大梁（beamType:'大梁'）の端までは広げない**——診断の試算で連鎖が大きく、2026模試で梁片が消える
+ * 副作用があったため別承認扱い（.claude/structural-model.md参照）。
+ * rules.baseMaterialと一致しない材種の梁は含めない（呼び出し側が対象graphの実効主構造ルールを渡す）。
+ * structuralRecompute.js・structuralOrchestration.js の両方が共有する（追加peekは無い——3b用に
+ * peek済みのaboveGraphから読むだけ）。
+ * @param {object|null} graph
+ * @param {{baseMaterial:string}} rules
+ * @returns {Array<{isVertical:boolean, coord:number, lo:number, hi:number}>}
+ */
+export function tieBeamSegments(graph, rules) {
+  if (!graph) return [];
+  return graph.beams
+    .filter(b => b.materialType === rules.baseMaterial
+      && ((b.role === 'primary' && (b.beamType === '頭つなぎ' || b.beamType === '受梁')) || b.role === 'floor'))
+    .map(b => ({
+      isVertical: b.isVertical,
+      coord: b.axisCL.effectiveValue,
+      lo: Math.min(b.clStart.effectiveValue, b.clEnd.effectiveValue),
+      hi: Math.max(b.clStart.effectiveValue, b.clEnd.effectiveValue),
+    }));
 }
 
 /** gridCLs（value昇順）から、[lo,hi] を含む最小の直交通り芯ペアを返す（見つからない側はnull）。

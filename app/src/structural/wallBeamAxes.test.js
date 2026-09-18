@@ -2,16 +2,17 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { Plane, PlanGraph, CenterLineType, Discipline } from '../core.js';
+import { Plane, PlanGraph, CenterLineType, Discipline, StructuralMaterialType, StairType } from '../core.js';
 import {
   collectWallBeamSources, autoFillWallBeamAxes, isTraditionalWoodStructure,
   wallBackingCenters, mapBackingCenterMoves, findWallBeamAxisCL, wallBeamAxisExcludeKey, peekBelowGraph,
-  selfWallSegments,
+  selfWallSegments, tieBeamSegments, stairOpeningRuns, wallRunSegments,
 } from './wallBeamAxes.js';
 import { RC_WALL_BACKING_CODES } from '../finish/materials/backingClass.js';
 import { MATERIALS } from '../finish/materials/materialData.js';
 import { materialThickness } from '../finish/edgeComposition.js';
 import { floorSwapManager } from '../storage/FloorSwapManager.js';
+import { serializeGraph, restoreGraph } from '../graphSnapshot.js';
 
 // memberTestFixtures.js のダックタイピングでは effectiveValue・gridXs/gridYs・backingRange連携の
 // 実挙動を再現できないため、本ファイルは実 core.js（Plane/PlanGraph/Wall）を使う
@@ -608,4 +609,168 @@ test('【QA S4不変条件】centerLineOps.js の excludedWallBeamAxes.add(/.del
   // 前提: 走査対象の行が実在すること（0件だとテストが何も検出できず無意味に緑になるのを防ぐ）。
   const targetLines = lines.filter(l => /excludedWallBeamAxes\.(add|delete)\(/.test(l));
   assert.ok(targetLines.length >= 3, `前提: excludedWallBeamAxes.add/delete が3箇所以上あるはず（実際:${targetLines.length}）`);
+});
+
+// ---- tieBeamSegments（ステップ3h-2: 1つ上の実体階の頭つなぎ・受梁をプレーン区間へ写す。M3）----
+// 通り芯（labeled:true, discipline:STRUCT）はserializeGraphの階スナップショットから除外される
+// （project.structGraphが別チャンネルで持つ）ため、往復テストも視野に意匠中心線（Discipline.ARCH・
+// labeled:false）で組む（woodAutoFill.test.js makeArchCLGraphと同じ規約）。
+function makeTieBeamGraph() {
+  const graph = new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
+  const x0 = graph.addCenterLine(CenterLineType.VERTICAL,   0,    { labeled: false, discipline: Discipline.ARCH });
+  const x1 = graph.addCenterLine(CenterLineType.VERTICAL,   2000, { labeled: false, discipline: Discipline.ARCH });
+  const y0 = graph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: false, discipline: Discipline.ARCH });
+  const y1 = graph.addCenterLine(CenterLineType.HORIZONTAL, 1000, { labeled: false, discipline: Discipline.ARCH });
+  const y2 = graph.addCenterLine(CenterLineType.HORIZONTAL, 2000, { labeled: false, discipline: Discipline.ARCH });
+  const y3 = graph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: false, discipline: Discipline.ARCH });
+  const y4 = graph.addCenterLine(CenterLineType.HORIZONTAL, 4000, { labeled: false, discipline: Discipline.ARCH });
+  return { graph, x0, x1, y0, y1, y2, y3, y4 };
+}
+const TIE_BEAM_TEST_RULES = { baseMaterial: StructuralMaterialType.WOOD };
+
+test('tieBeamSegments: 大梁・小梁・床梁・頭つなぎ・受梁を1本ずつ置くと床梁・頭つなぎ・受梁の3件を{isVertical,coord,lo,hi}で返す', () => {
+  // 変更1（2026-09-18裁定）: 3h-2の点源を「生成・延長した梁」全体（頭つなぎ・受梁に加え床梁role:'floor'）
+  // へ広げた——ユーザー指摘4点のうち3点は床梁の端だったため（大梁・小梁は引き続き対象外）。
+  const { graph, x0, x1, y0, y1, y2, y3, y4 } = makeTieBeamGraph();
+  graph.addBeam(StructuralMaterialType.WOOD, 'WOOD-120x120', y0, false, x0, x1, { role: 'primary', beamType: '大梁' });
+  graph.addBeam(StructuralMaterialType.WOOD, 'WOOD-120x120', y1, false, x0, x1, { role: 'secondary', beamType: '小梁' });
+  graph.addBeam(StructuralMaterialType.WOOD, 'WOOD-120x120', y2, false, x0, x1, { role: 'floor', beamType: '床梁' });
+  graph.addBeam(StructuralMaterialType.WOOD, 'WOOD-120x120', y3, false, x0, x1, { role: 'primary', beamType: '頭つなぎ' });
+  graph.addBeam(StructuralMaterialType.WOOD, 'WOOD-120x120', y4, false, x0, x1, { role: 'primary', beamType: '受梁' });
+
+  const result = tieBeamSegments(graph, TIE_BEAM_TEST_RULES);
+  assert.equal(result.length, 3, '床梁・頭つなぎ・受梁の3件を拾う（大梁・小梁は含めない）');
+  assert.deepEqual(result.map(r => r.coord).sort((a, b) => a - b), [2000, 3000, 4000]);
+  for (const r of result) {
+    assert.deepEqual(r, { isVertical: false, coord: r.coord, lo: 0, hi: 2000 }, 'lo/hiはclStart/clEnd.effectiveValueのmin/max');
+  }
+});
+
+test('【失敗系】tieBeamSegments: role:floorはbeamTypeを問わず含める（beamTypeが頭つなぎ/受梁と異なっても対象）', () => {
+  const { graph, x0, x1, y2 } = makeTieBeamGraph();
+  graph.addBeam(StructuralMaterialType.WOOD, 'WOOD-120x120', y2, false, x0, x1, { role: 'floor', beamType: '床梁' });
+  const result = tieBeamSegments(graph, TIE_BEAM_TEST_RULES);
+  assert.equal(result.length, 1);
+  assert.deepEqual(result[0], { isVertical: false, coord: 2000, lo: 0, hi: 2000 });
+});
+
+test('【失敗系】tieBeamSegments: graph=nullは[]を返す', () => {
+  assert.deepEqual(tieBeamSegments(null, TIE_BEAM_TEST_RULES), []);
+});
+
+test('【失敗系】tieBeamSegments: rules.baseMaterialと材種が不一致（S造の頭つなぎ相当）の梁は除外する', () => {
+  const { graph, x0, x1, y3 } = makeTieBeamGraph();
+  graph.addBeam(StructuralMaterialType.STEEL, 'S-H300x150', y3, false, x0, x1, { role: 'primary', beamType: '頭つなぎ' });
+  assert.deepEqual(tieBeamSegments(graph, TIE_BEAM_TEST_RULES), [], 'rules.baseMaterial(WOOD)と一致しないS造梁は含めない');
+});
+
+test('【失敗系】tieBeamSegments: role:secondaryの梁はbeamTypeが頭つなぎ/受梁と同名でも除外する', () => {
+  const { graph, x0, x1, y3, y4 } = makeTieBeamGraph();
+  graph.addBeam(StructuralMaterialType.WOOD, 'WOOD-120x120', y3, false, x0, x1, { role: 'secondary', beamType: '頭つなぎ' });
+  graph.addBeam(StructuralMaterialType.WOOD, 'WOOD-120x120', y4, false, x0, x1, { role: 'secondary', beamType: '受梁' });
+  assert.deepEqual(tieBeamSegments(graph, TIE_BEAM_TEST_RULES), [], 'role!=primaryは対象外（3hは常にrole:primaryで生成する規律）');
+});
+
+test('tieBeamSegments: serializeGraph→restoreGraphの往復後のgraphからも拾える（beamType永続化の保険。M3）', () => {
+  const { graph, x0, x1, y3 } = makeTieBeamGraph();
+  const tie = graph.addBeam(StructuralMaterialType.WOOD, 'WOOD-120x120', y3, false, x0, x1, { role: 'primary', beamType: '頭つなぎ' });
+  const bytes = serializeGraph(graph);
+  const restored = new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
+  restoreGraph(restored, bytes);
+  assert.ok(restored.beamMap.has(tie.id), '前提: 復元後に同一IDの梁が存在する');
+  const result = tieBeamSegments(restored, TIE_BEAM_TEST_RULES);
+  assert.equal(result.length, 1);
+  assert.deepEqual(result[0], { isVertical: false, coord: 3000, lo: 0, hi: 2000 });
+});
+
+// ---- stairOpeningRuns（Major 6・2026-09-18裁定: 階段の「床開口の外周4辺すべて」を壁線と同じ扱いの
+// 区間にする。旧stairArrivalRuns＝「壁が一切かからない1辺だけ」は撤回）----
+// 1つ下の実体階（belowGraph）に矩形1セルの階段を置く。stair.cells のキー規約（gridCells.js
+// cellBoundsFromKey）は `leftId:topId:rightId:bottomId`（stairLanding.test.js
+// makeSwitchbackFixtureと同じ規約）。
+function makeStairBelowGraph({ x1 = 0, x2 = 2000, y1 = 0, y2 = 1500 } = {}) {
+  const graph = new PlanGraph(new Plane('below', 0, '下階', 1, 1));
+  const left   = graph.addCenterLine(CenterLineType.VERTICAL,   x1, { labeled: false, discipline: Discipline.ARCH });
+  const right  = graph.addCenterLine(CenterLineType.VERTICAL,   x2, { labeled: false, discipline: Discipline.ARCH });
+  const top    = graph.addCenterLine(CenterLineType.HORIZONTAL, y1, { labeled: false, discipline: Discipline.ARCH });
+  const bottom = graph.addCenterLine(CenterLineType.HORIZONTAL, y2, { labeled: false, discipline: Discipline.ARCH });
+  const cells = new Set([`${left.id}:${top.id}:${right.id}:${bottom.id}`]);
+  const stair = graph.addStair({ type: StairType.STRAIGHT, cells, sections: [2], upDirection: 'up', flip: false });
+  return { graph, stair, x1, x2, y1, y2 };
+}
+
+function makeSelfGraph() {
+  return new PlanGraph(new Plane('self', 3000, '自階', 1, 1));
+}
+
+test('stairOpeningRuns: 階段の全周矩形（roomBounds）の4辺すべてを返す（壁の有無は見ない）', () => {
+  const { graph: below } = makeStairBelowGraph();
+  const result = stairOpeningRuns(below);
+  assert.equal(result.length, 4);
+  assert.deepEqual(result, [
+    { isVertical: false, coord: 0,    lo: 0, hi: 2000 }, // 北
+    { isVertical: false, coord: 1500, lo: 0, hi: 2000 }, // 南
+    { isVertical: true,  coord: 0,    lo: 0, hi: 1500 }, // 西
+    { isVertical: true,  coord: 2000, lo: 0, hi: 1500 }, // 東
+  ]);
+});
+
+test('stairOpeningRuns: 複数の階段があれば階段ごとに4辺ずつ積む', () => {
+  const below = new PlanGraph(new Plane('below', 0, '下階', 1, 1));
+  const mk = (x1, x2, y1, y2) => {
+    const l = below.addCenterLine(CenterLineType.VERTICAL,   x1, { labeled: false, discipline: Discipline.ARCH });
+    const r = below.addCenterLine(CenterLineType.VERTICAL,   x2, { labeled: false, discipline: Discipline.ARCH });
+    const t = below.addCenterLine(CenterLineType.HORIZONTAL, y1, { labeled: false, discipline: Discipline.ARCH });
+    const b = below.addCenterLine(CenterLineType.HORIZONTAL, y2, { labeled: false, discipline: Discipline.ARCH });
+    return new Set([`${l.id}:${t.id}:${r.id}:${b.id}`]);
+  };
+  below.addStair({ type: StairType.STRAIGHT, cells: mk(0, 2000, 0, 1500), sections: [2] });
+  below.addStair({ type: StairType.STRAIGHT, cells: mk(5000, 6000, 0, 1000), sections: [2] });
+  assert.equal(stairOpeningRuns(below).length, 8);
+});
+
+test('【失敗系】stairOpeningRuns: belowGraphがnullなら[]', () => {
+  assert.deepEqual(stairOpeningRuns(null), []);
+});
+
+test('【失敗系】stairOpeningRuns: 階段が無ければ[]', () => {
+  const below = new PlanGraph(new Plane('below', 0, '下階', 1, 1));
+  assert.deepEqual(stairOpeningRuns(below), []);
+});
+
+test('wallRunSegments: 在来木造（selfAndBelow）では階段の開口4辺すべてが自階＋下階の壁区間に合流する', () => {
+  const { graph: below } = makeStairBelowGraph();
+  const self = makeSelfGraph();
+  const result = wallRunSegments(self, below, '木造（在来）');
+  const openingLike = result.filter(s =>
+    (s.isVertical === false && (s.coord === 0 || s.coord === 1500) && s.lo === 0 && s.hi === 2000) ||
+    (s.isVertical === true && (s.coord === 0 || s.coord === 2000) && s.lo === 0 && s.hi === 1500));
+  assert.equal(openingLike.length, 4, '階段の開口4辺すべてがwallRunSegmentsの結果に含まれる');
+});
+
+test('【失敗系】wallRunSegments: selfAndBelow以外の主構造では階段の開口を合流させない（従来どおり空配列）', () => {
+  const { graph: below } = makeStairBelowGraph();
+  const self = makeSelfGraph();
+  assert.deepEqual(wallRunSegments(self, below, 'S造'), []);
+});
+
+// バッチ1のQA残（追加の小タスク）: 階段開口辺だけが根拠でアンカーCL（通り芯・既存梁芯）が無い位置にも、
+// collectWallBeamSources→autoFillWallBeamAxesが梁芯CL(FUSE)を新設すること自体を固定する
+// （壁が無くても階段の床開口の周囲には梁芯が要るという意図。個々の関数の単体テストは既にあるが、
+// 「壁ゼロ・階段開口のみ」から実際にCenterLineが新設される終端までを結ぶ結合テストが無かった）。
+test('【意図の固定】collectWallBeamSources→autoFillWallBeamAxes: 階段開口辺だけが根拠でアンカーCLの無い位置には梁芯CL(FUSE)を新設する', async () => {
+  const { graph: below } = makeStairBelowGraph(); // 壁は無く、階段の開口4辺だけがある下階
+  const self = makeSelfGraph(); // 自階も壁なし・通り芯なし＝どの辺の位置にもアンカーCLが無い
+  self.structureOverride = '木造（在来）';
+  const project = { planes: [below.plane, self.plane], structuralInfo: { mainStructure: '未定' } };
+
+  const sources = await collectWallBeamSources(self, project, below);
+  assert.equal(sources.length, 4, '階段開口4辺だけが候補になる（壁は無い）');
+
+  const created = autoFillWallBeamAxes(self, sources);
+  assert.equal(created.length, 4, 'アンカーCLが無い4辺すべてに梁芯CLを新設する');
+  for (const cl of created) {
+    assert.equal(cl.discipline, Discipline.FUSE, '新設したCLはdiscipline:fuse（梁芯）');
+    assert.equal(cl.labeled, false, '梁芯は非ラベル');
+  }
 });

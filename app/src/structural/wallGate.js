@@ -92,12 +92,17 @@ export function outsideSignFromProbe(probe, axisValue, isVertical, atCross, eps 
 }
 
 /** 仕上げフットプリント未定義時のフォールバック probe：構造部材が参照するCL値の外接矩形を「建物内」とみなす。
- *  柱(verticalCL/horizontalCL)・梁(axisCL/clStart/clEnd)が実際に立つCLの範囲＝構造グリッドの実効外形。
- *  labeled に依存しない（非labeledなテスト・仕上げ未経由でも外周を出せる）。部材ゼロなら常に false。 */
+ *  柱(axisX/axisY)・梁(axisCL/clStart/clEnd)が実際に立つCLの範囲＝構造グリッドの実効外形。
+ *  labeled に依存しない（非labeledなテスト・仕上げ未経由でも外周を出せる）。部材ゼロなら常に false。
+ *  柱は`verticalCL.value/horizontalCL.value`ではなく`axisX/axisY`を読む（QA指摘・2026-09-18）——
+ *  袖柱（woodJambRef）・3h-2オフセットアンカー柱（woodAxisOffset）はverticalCL/horizontalCLの一方が
+ *  実位置と無関係なプレースホルダCLのため、そのままでは外接矩形が実際の建物外形より広がる／
+ *  ずれる（プレースホルダの座標を取り込んでしまう）。axisX/axisYは両者とも実位置（AXIS。偏心は
+ *  含まない）を返すため、外接矩形の入力として正しい。 */
 export function rectFootprintProbe(graph) {
   const xs = [];
   const ys = [];
-  for (const c of graph.columns) { xs.push(c.verticalCL.value); ys.push(c.horizontalCL.value); }
+  for (const c of graph.columns) { xs.push(c.axisX); ys.push(c.axisY); }
   for (const b of graph.beams) {
     if (b.isVertical) { xs.push(b.axisCL.value); ys.push(b.clStart.value, b.clEnd.value); }
     else              { ys.push(b.axisCL.value); xs.push(b.clStart.value, b.clEnd.value); }
@@ -140,6 +145,25 @@ function makeWallGate(probes) {
           || isBuilding(x - SAMPLE_EPS, y + SAMPLE_EPS) || isBuilding(x + SAMPLE_EPS, y + SAMPLE_EPS);
     },
   };
+}
+
+/** 自階単独のフットプリント（部屋領域）だけを見るWallGateを構築する（sync・鉛直連続性ANDは取らない）。
+ *  在来木造の壁線上の通し梁・頭つなぎ・受梁（woodAutoFill.js autoFillWoodWallBeams）が使う——壁線上の
+ *  梁は自階の床を支える部材であり、下階の連続性（ポーチ・吹抜け等）は柱・直交梁の支持で吸収されるため、
+ *  buildStructuralWallGate（自階＋直下全階AND）をそのまま使うと過剰にゲートしてしまう（QA実測:
+ *  下階柱の両端支持による免除で通過していた19区間中15区間が自階に部屋の無い位置＝床も屋根も無い
+ *  ところに梁を通そうとしていた。指摘A修正で判明・2026-09-18）。
+ *  自階に部屋（フットプリントの権威）が無ければ null（呼び出し側はゲートなし=全生成で動く）——
+ *  この「部屋が無ければゲートなし」は`buildStructuralWallGate`と同一条件（QA第2巡・Major5裁定
+ *  2026-09-18: 現状維持=案(a)）。階段吹抜け(STAIR_VOID)だけの階（例: moku1/moku2/2026模試の
+ *  3階）は`establishesFootprint`が権威を確立しないため`fp.size===0`→null になり、下階由来の壁線
+ *  runがゲートなしで全生成される——旧`wallGate`（自階＋直下全階AND）も同じ階では基準階側の
+ *  `fp.size===0`判定でnullを返していたため、これは回帰ではなく仕上げモード未着手階を保全する
+ *  既存の規律（他のautoFillXxxと同じ「部屋が無い階は保全」裁定）をそのまま引き継いだ挙動である。 */
+export function buildSelfFootprintGate(graph) {
+  const fp = footprintProbe(graph);
+  if (fp.size === 0) return null;
+  return makeWallGate([fp.probe]);
 }
 
 /** 構造モードの生成対象階(plane)について、基準階＋直下の全階のフットプリントをANDで束ねた WallGate を構築する

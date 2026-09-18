@@ -11,10 +11,11 @@
  * 構造梁は「その梁が実際に立つ階のgraph」に帰属するため（structural-model.md「柱は自階の柱を
  * 自階graphに持つ」と同じ規律を梁にも適用）、伏図と同じ帰属をそのまま展開図の高さ方向へ投影する
  * だけで正しい階の梁が正しい高さに出る。role（primary/secondary/landing等）でのフィルタは
- * **基礎梁(role:'foundation')の除外1件のみ**——踊り場受け梁(landing)専用ではなく、その切断が
- * 拾う全構造梁が対象、という原則は変えない（追加仕様2026-08「2.5D展開では、基礎、基礎梁の
- * 描画は不要」）。1平面に基礎伏図＋1階伏図の2スロットが乗る（App.jsx）ため、1階のgraph.beamsには
- * 基礎梁と1階の梁が同居する——除外しないと室内展開図の床下に基礎梁が細破線で出る。
+ * **基礎梁(role:'foundation')・土台(role:'sill')の除外のみ**——踊り場受け梁(landing)専用ではなく、
+ * その切断が拾う全構造梁が対象、という原則は変えない（追加仕様2026-08「2.5D展開では、基礎、基礎梁の
+ * 描画は不要」。土台の除外はQA裁定Minor-1・2026-09-18）。1平面に基礎伏図＋1階伏図の2スロットが乗る
+ * （App.jsx）ため、1階のgraph.beamsには基礎梁・土台と1階の梁が同居する——除外しないと室内展開図の
+ * 床下に基礎梁・土台が細破線で出る（階段帯はclipを通さないため床下線がそのまま見えてしまう）。
  * 基礎・柱脚（footingMap）・べた基礎（slab role:'mat_foundation'）は元々本モジュールの
  * 対象外（graph.beams/graph.columnsしか読まない）ため、追加の除外は要らない。
  */
@@ -34,6 +35,9 @@ const DEFAULT_DEPTH_MM = 105;
 
 // 基礎（梁=基礎梁・地中梁 / 柱=杭）を表すrole。展開図では一律に描かない（追加仕様2026-08）。
 const FOUNDATION_ROLE = 'foundation';
+// 梁のうち展開図に描かない役割（基礎梁に加え、土台=role:'sill'。床下の横架材で室内展開に寄与しない。
+// QA裁定Minor-1・2026-09-18——階段帯はclipを通さないため、除外しないと床下の土台線がそのまま出る）。
+const EXCLUDED_BEAM_ROLES = new Set([FOUNDATION_ROLE, 'sill']);
 
 /**
  * @typedef {{isVertical:boolean, axisWorld:number, spanLo:number, spanHi:number,
@@ -182,7 +186,7 @@ export function structuralContribution(layers) {
   const result = [];
   for (const layer of layers ?? []) {
     for (const beam of layer.graph?.beams ?? []) {
-      if (beam.role === FOUNDATION_ROLE) continue; // 追加仕様2026-08: 基礎梁は展開図に描かない
+      if (EXCLUDED_BEAM_ROLES.has(beam.role)) continue; // 追加仕様2026-08: 基礎梁／土台(role:'sill')は展開図に描かない
       if (isInsideWall(beam, walls)) continue;
       const entry = findSectionEntry(beam.sectionDefId);
       const depthMm = entry?.height ?? beam.beamDepth ?? DEFAULT_DEPTH_MM;

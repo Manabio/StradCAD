@@ -6,7 +6,7 @@ import { computeTributaryColumnWidth, computeColumnBaseSize, computeFoundationBe
 import { floorSwapManager } from '../storage/FloorSwapManager.js';
 import { isRigidFrameStructure, structureHasMemberKind, memberKindOf, MEMBER_KIND } from './structuralClassification.js';
 import { rulesFor, defaultMaterialFor, UNSPECIFIED_STRUCTURE, effectiveStructure } from './structureRules.js';
-import { autoFillWoodColumns, autoFillWoodWallBeams, autoFillWoodFloorBeams } from './woodAutoFill.js';
+import { autoFillWoodColumns, autoFillWoodWallBeams, autoFillWoodFloorBeams, autoFillWoodSillBeams } from './woodAutoFill.js';
 import { buildExteriorSide, footprintCellKeys } from './wallGate.js';
 import { autoFillWallBeamAxes } from './wallBeamAxes.js';
 import { landingEdgeCLs, landingZ } from '../finish/stair/stairLanding.js';
@@ -117,15 +117,16 @@ export function autoFillColumns(graph, project, wallGate = null) {
 }
 
 /** 柱の自動生成を主構造ルールの選択子（columnPlacement）で振り分ける単一の入口。
- *  通り芯交点（既定）＝autoFillColumns、壁交点＋上階柱直下（在来木造）＝autoFillWoodColumns（撤去も伴う）。
- *  aboveColumns・wallSegments は在来木造（columnPlacement:'wallIntersections'）のときだけ
- *  autoFillWoodColumns（ステップ3b）へ渡す——非在来では無視される。
+ *  通り芯交点（既定）＝autoFillColumns、壁交点＋上階柱直下＋上階頭つなぎ／受梁の壁交点（在来木造）＝
+ *  autoFillWoodColumns（撤去も伴う）。aboveColumns・wallSegments・aboveTieBeams は在来木造
+ *  （columnPlacement:'wallIntersections'）のときだけ autoFillWoodColumns（ステップ3b・3h-2）へ渡す
+ *  ——非在来では無視される。
  *  構造モード突入時の再計算（autoFillStructuralGrid）と、下階グラフへの反映（structuralOrchestration.js）が共有する。
  *  @returns {{created: object[], removed: string[]}} */
-export function autoFillColumnsForStructure(graph, project, wallGate = null, aboveColumns = [], wallSegments = []) {
+export function autoFillColumnsForStructure(graph, project, wallGate = null, aboveColumns = [], wallSegments = [], aboveTieBeams = []) {
   if (!isStructureSpecified(graph, project)) return { created: [], removed: [] };
   const rules = rulesFor(effectiveStructure(graph, project));
-  if (rules.columnPlacement === 'wallIntersections') return autoFillWoodColumns(graph, project, wallGate, aboveColumns, wallSegments);
+  if (rules.columnPlacement === 'wallIntersections') return autoFillWoodColumns(graph, project, wallGate, aboveColumns, wallSegments, aboveTieBeams);
   return { created: autoFillColumns(graph, project, wallGate), removed: [] };
 }
 
@@ -378,16 +379,22 @@ export function autoFillStairLandingBeams(graph, project, wallGate = null) {
  *  wallSources: 壁由来の梁芯生成対象（structural/wallBeamAxes.js collectWallBeamSources の結果。
  *  下階peekを含む非同期収集のため呼び出し側が await して渡す＝wallGateと同じ既存パターン）。
  *  wallSegments: 壁線上の通し梁（在来木造・beamPlacement:'wallRuns'）が候補列挙に使う壁区間
- *  （wallBeamAxes.js wallRunSegments の結果。マージ不要のプレーン配列。他構造は未使用）。
- *  在来木造（beamPlacement:'wallRuns'）は壁線上の通し梁の生成・撤去が確定した直後に、床梁
+ *  （wallBeamAxes.js wallRunSegments の結果。マージ不要のプレーン配列。他構造は未使用）。基礎伏図
+ *  （isFoundationPlane。最下階には下階が無いため自階=1階の壁区間のみ）では同じ配列を土台
+ *  （role:'sill'、woodAutoFill.js autoFillWoodSillBeams）の候補列挙にも渡す。
+ *  在来木造（beamPlacement:'wallRuns'）は基礎梁（role:'foundation'）の生成・撤去が確定した直後に土台
+ *  （role:'sill'。基礎伏図のみ）、続いて壁線上の通し梁の生成・撤去が確定した直後に床梁
  *  （role:'floor'、woodAutoFill.js autoFillWoodFloorBeams。ステップ3e-2）も生成・撤去する。
  *  aboveColumns: 1つ上の実体階の柱集合（在来木造の上階柱直下の柱＝ステップ3bが候補列挙に使う。
  *  wallBeamAxes.js peekAboveGraph の結果。呼び出し側が主構造ルール(columnPlacement)がwallIntersections
  *  のときだけ渡す想定——非在来では autoFillColumnsForStructure 側で無視される）。
  *  belowColumns: 1つ下の実体階の柱集合（在来木造の壁線通し梁の下階柱分割＝ステップ3c-2bが使う。
  *  structuralRecompute.js の belowGraph?.columns 等。非在来では autoFillBeamsForStructure 側で
- *  無視される）。 */
-export function autoFillStructuralGrid(graph, project, belowMainStructure, wallGate = null, wallSources = [], wallSegments = [], aboveColumns = [], belowColumns = []) {
+ *  無視される）。
+ *  aboveTieBeams: 1つ上の実体階の頭つなぎ・受梁の区間（在来木造の3h-2＝生成した梁が自階の壁と
+ *  交わる位置に下階柱を立てる、が候補列挙に使う。wallBeamAxes.js tieBeamSegments(aboveGraph, ...) の
+ *  結果。aboveColumnsと同じ「wallIntersectionsのときだけ渡す」規律。非在来では無視される）。 */
+export function autoFillStructuralGrid(graph, project, belowMainStructure, wallGate = null, wallSources = [], wallSegments = [], aboveColumns = [], belowColumns = [], aboveTieBeams = []) {
   const foundation = isFoundationPlane(graph.plane, project);
   const isRoof = graph.plane.isRoofPlane;
   // 自階帰属の柱・梁・基礎は自階の主構造が確定するまで生成しない（autoFillColumns は自前でも同ガード）。
@@ -402,7 +409,7 @@ export function autoFillStructuralGrid(graph, project, belowMainStructure, wallG
   const newWallBeamAxes = autoFillWallBeamAxes(graph, wallSources);
   // 柱は主構造ルールの配置源（通り芯交点／壁交点）で振り分ける。壁交点方式は候補に無い自動柱の撤去も返す。
   const columnsResult = (!isRoof && ownSpecified && structureHasMemberKind(MEMBER_KIND.COLUMN, structure))
-    ? autoFillColumnsForStructure(graph, project, wallGate, aboveColumns, wallSegments) : { created: [], removed: [] };
+    ? autoFillColumnsForStructure(graph, project, wallGate, aboveColumns, wallSegments, aboveTieBeams) : { created: [], removed: [] };
   const newColumns = columnsResult.created;
   const removedColumns = columnsResult.removed;
   // ベース（独立フーチング）は分類（表A）に加え、基礎種別でもゲートする（木造べた基礎時はベースなし。問題.md）。
@@ -414,6 +421,14 @@ export function autoFillStructuralGrid(graph, project, belowMainStructure, wallG
     : { created: [], removed: [] };
   const newBeams = beamsResult.created;
   const removedBeams = beamsResult.removed;
+  // 在来木造の土台（role:'sill'、記号SL。基礎伏図＝最下階専用。問題.md「1階の壁下ならびに、基礎上には
+  // 必ずある」）。基礎梁（role:'foundation'）の生成・撤去が確定した直後、床梁の前に呼ぶ——候補源(b)が
+  // 確定済みの基礎梁スパンを読むため。呼び出し条件は`foundation`のみ（`beamPlacement`条件は付けない。
+  // QA裁定Major-2・2026-09-18）——非在来へ切り替わった直後も本関数自身が自動生成分のrole:'sillを
+  // 撤去する（内部で`!rules.framing`分岐を持つ。woodAutoFill.js参照）ため、ここで呼び出し自体を
+  // 止めてしまうと非在来では撤去が走らず土台が取り残される。
+  const sillBeamsResult = foundation
+    ? autoFillWoodSillBeams(graph, project, wallSegments) : { created: [], removed: [] };
   // 在来木造の床梁（role:'floor'、ステップ3e-2）。壁線上の通し梁（大梁）の生成・撤去が確定した
   // 直後に呼ぶ——床梁のセル抽出・端部アンカーは確定済みの大梁（role:'primary'）を前提にするため。
   const floorBeamsResult = rulesFor(structure).beamPlacement === 'wallRuns'
@@ -430,8 +445,8 @@ export function autoFillStructuralGrid(graph, project, belowMainStructure, wallG
   const newSecondaryBeams = rulesFor(structure).beamPlacement === 'wallRuns' ? [] : autoFillSecondaryBeams(graph, project);
   return {
     newColumns, removedColumns, newFootings,
-    newBeams: [...newBeams, ...newRoofBeams, ...newWallBeamAxes, ...newLandingBeams, ...newSecondaryBeams, ...floorBeamsResult.created],
-    removedBeams: [...removedBeams, ...floorBeamsResult.removed],
+    newBeams: [...newBeams, ...newRoofBeams, ...newWallBeamAxes, ...newLandingBeams, ...newSecondaryBeams, ...sillBeamsResult.created, ...floorBeamsResult.created],
+    removedBeams: [...removedBeams, ...sillBeamsResult.removed, ...floorBeamsResult.removed],
   };
 }
 
@@ -439,6 +454,10 @@ export function autoFillStructuralGrid(graph, project, belowMainStructure, wallG
  *  耐力壁・スラブはRC専用クラスしか存在せず木造/S造では生成されないため対象外（core.js 参照）。
  *  基礎梁（role:'foundation'）と基礎・柱脚（footingMap全件）は主構造に関わらず常にRC造に固定する
  *  （autoFillFootings/autoFillBeamsと同じ理由。手動「＋追加」分やフロア切替時の取りこぼしもここで揃える）。
+ *  土台（role:'sill'）は変換対象外——在来木造専用の概念で、非在来へ切替えると自動生成分は
+ *  autoFillWoodSillBeams自身が撤去する（woodAutoFill.js参照）。手動固定（locked）で残った土台まで
+ *  ここで新主構造の材種へ変換すると、木造専用の断面（柱同寸の正角）が非木造の材種の断面へ書き換わり
+ *  実体が壊れる（QA裁定Major-2・2026-09-18。基礎梁の'foundation'特例の隣に置く）。
  *  柱は自階の柱を自階graphに持つため自階の実効主構造（resolveDefaultMaterialType）を対象材質にする。
  *  軒桁を含む横架材(role:'eaves')は屋根の1つ下の階（belowMainStructure）の実効主構造を対象材質にする
  *  （autoFillRoofBeamsが同じbelowMainStructureで生成するため）。それ以外の梁（通常階の床梁）も自階基準でよい。 */
@@ -461,6 +480,7 @@ export function convertMembersToEffectiveMaterial(graph, project, belowMainStruc
     }
   }
   for (const beam of [...graph.beamMap.values()]) {
+    if (beam.role === 'sill') continue; // 土台は変換対象外（上記コメント参照。QA裁定Major-2）
     // 基礎梁=主構造非依存の常時RC。軒桁=下階主構造、それ以外(床梁)=自階主構造。出所が未確定なら変換しない。
     if (beam.role !== 'foundation' && !(beam.role === 'eaves' ? belowSpecified : ownSpecified)) continue;
     const targetMaterial = beam.role === 'foundation' ? StructuralMaterialType.RC

@@ -45,6 +45,12 @@
 展開図では面をその位置で分割し、壁のない端部（`hasWallAtLocal0/Run=false`）として扱う（`elevation/elevationFaces.js`の
 `perpendicularWallsOnFace`。設計意図は`.claude/elevation-model.md`）。腰壁は同条件で`kneeDropWalls`にknee指定を持つもの。
 
+## 袖柱（構造・在来木造）
+建具（窓・扉・三方枠。全建具対象）の両側にクリアランス5mmを空けて自動生成する構造柱（役柱ではなく`WoodColumn`。階の柱寸と同寸）。展開図の「袖壁」とは無関係。`WoodColumn.woodJambRef={openingId, side, isVertical}`を持つ柱がこれで、走行方向の位置（AXIS）はCLではなく開口位置から都度導出する。他の柱と重なる場合は生成しない。設計意図は`.claude/structural-model.md`「建具の袖柱」節。
+
+## オフセットアンカー柱（構造・在来木造・3h-2）
+上階の頭つなぎ・受梁・床梁が下階の壁を横切る位置（3h-2）で、走行方向にCLが無いときに立てる柱。`WoodColumn.woodAxisOffset={isVertical, offset}`を持ち、走行方向のAXISは最寄りの解決可能なCL（袖柱と同じプレースホルダ）＋オフセットで決まる。袖柱と同じ「AXISが実位置そのもの」だが、CLの由来（開口位置か最寄りCLか）が異なる別概念。設計意図は`.claude/structural-model.md`「3h-2」節。
+
 ## 開放スパン（展開図）
 壁の無い部屋内部の境界を挟んで、同じ部屋の壁面（面）が「壁のある区間」から先へ連続して延長される区間
 （`elevation/elevationOpenSpan.js`のspans。`kind:'wall'|'open'`。openはその先に別の実効FLを持つセルが続き、そちらの床が
@@ -70,7 +76,7 @@
 **出幅**＝通り芯から柱外面までの距離。柱芯・偏芯量の真実値で、**1構造×1通り芯**（`structuralInfo.columnFaceProjections`）で持つ。図のX/Y出幅寸法、または描画エリアの○「柱芯」ラベルのロングタップで編集する。設計意図は`.claude/structural-model.md`。
 
 ## role（構造部材のrole）
-柱=`standard`/`foundation`、梁=`primary`/`secondary`/`foundation`/`eaves`/`roof`/`landing`（踊り場受け梁。記号`LG`）。伏図の慣習（基礎伏図に柱なし等）に対応する。
+柱=`standard`/`foundation`、梁=`primary`/`secondary`/`foundation`/`eaves`/`roof`/`landing`（踊り場受け梁。記号`LG`）/`sill`（土台。記号`SL`。在来木造の基礎伏図＝最下階専用）。伏図の慣習（基礎伏図に柱なし等）に対応する。
 
 ## 伏図記号
 伏図（framing plan）の柱記号。×＝下階柱（断面□に対角線2本）、□＝当該階（自階）柱（輪郭のみ）。在来木造のみ（他の主構造は断面そのまま）。設計意図は`.claude/structural-model.md`。
@@ -203,7 +209,7 @@ WINDING/L_TURN/FLARED/OPEN_WELLは対象外＝従来面順へフォールバッ�
 そちらは`cutDrawRange`＝面の外に断面を描かないための枠の情報源のまま。
 
 ## 梁 / 受梁 / 床梁 / 頭つなぎ / 火打ち梁（在来木造）
-**梁**＝2点間で荷重を支える横架材（梁天端FL−100・材幅は柱同寸）。**受梁**＝当該階の柱の下階に柱のない梁（受梁を受ける梁は受梁同寸）。**床梁**（記号FB）＝上下階とも壁・柱は無いが根太を受けるため柱間・梁間に1820を超えない位置に設ける梁。**頭つなぎ**＝上階に壁は無いが下階の壁上にある横架材（材の性格は梁同等）。**火打ち梁**＝梁の交差する隅角部（四隅）に斜めに架け床の水平剛性を保つ材（16㎡以下の四角の4隅。吹抜けは可、EV・階段内は不可）。値は`structural/structureRules.js`の`TRADITIONAL_WOOD_FRAMING`、適用は`woodFraming.js`。
+**梁**＝2点間で荷重を支える横架材（梁天端FL−100・材幅は柱同寸）。**受梁**＝当該階の柱の下階に柱のない梁（受梁を受ける梁は受梁同寸）。**床梁**（記号FB）＝上下階とも壁・柱は無いが根太を受けるため柱間・梁間に1820を超えない位置に設ける梁。**頭つなぎ**＝上階に壁は無いが下階の壁上にある横架材（材の性格は梁同等）。**火打ち梁**＝梁の交差する隅角部（四隅）に斜めに架け床の水平剛性を保つ材（16㎡以下の四角の4隅。吹抜けは可、EV・階段内は不可）。値は`structural/structureRules.js`の`TRADITIONAL_WOOD_FRAMING`、適用は`woodFraming.js`。**ステップ3h（頭つなぎ・受梁の自動生成）**では、壁交点から外れた柱（下階柱＝頭つなぎ、自階柱＝受梁）の直上・直下に両端支持の梁を`beamType`付きで新規生成する——用語自体は上記のまま、判定対象が「既存梁の内部荷重点からの導出（3c-3）」と「柱位置からの新規生成（3h）」の2系統になる。
 
 ## ルールセット（structureRules）
 主構造（6種）と壁下地材分類（木質/RC/その他）ごとに「値」と「処理の選択子」を1か所で持つ表
@@ -234,10 +240,19 @@ WINDING/L_TURN/FLARED/OPEN_WELLは対象外＝従来面順へフォールバッ�
 ギャップ・線幅は`renderer/dimensionStyle.js`（`NUM_FONT_PX`/`TEXT_GAP_PX`/`DIMENSION_LINE_WEIGHT`）を
 寸法線と共有する（`renderer/StructuralLayer.jsx`）。設計意図は`.claude/structural-model.md`。
 
-## 袋綴じ（土台帯）
-基礎伏図の土台帯（線画2本）が、直交する基礎梁と交わる位置で自然に重なって閉じる描き方。端を閉じる
-専用のキャップ線は描かない——他の基礎梁と交わらない自由端は開いたままになる。設計意図は
-`.claude/structural-model.md`。
+## 土台 / ネコ土台
+**土台**＝1階の壁下・基礎上に必ず設ける、柱同寸の横材（`role:'sill'`、記号`SL`。天端は1FL−100で梁天端と
+同じ値を共有）。`structural/woodAutoFill.js`の`autoFillWoodSillBeams`が壁線と基礎梁のスパンの和集合へ
+自動生成する。**ネコ土台**＝基礎天端の上に敷く厚み20mmの気密パッキン材（`TRADITIONAL_WOOD_FRAMING.
+sillPackingThicknessMm`）。基礎天端＝土台下端−この値という関係だけを定数として持ち、消費先（基礎の
+断面図）は未実装（意図的な未消費。基礎梁の`levelOffset`はまだ書かない）。設計意図は
+`.claude/structural-model.md`「土台」節。
+
+## 袋綴じ（伏図の帯の閉じ方）
+最下階の伏図で、柱記号を持たない（`displayedColumns`が空の）ため梁・土台の帯が全長のまま描かれ、
+直交する部材と交わる位置で自然に重なって閉じる描き方。土台（`role:'sill'`）は専用の帯描画を持たず、
+他の梁と同じ一般の帯描画（`bandLines`）でこの見え方になる。端を閉じる専用のキャップ線は描かない
+——他の部材と交わらない自由端は開いたままになる。設計意図は`.claude/structural-model.md`。
 
 ## 柱寸アップ（B-1）
 在来木造の柱カードで、個別指定の柱寸として「階の柱寸（各階柱寸法欄）より大きい」値を選べるように

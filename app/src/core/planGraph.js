@@ -40,7 +40,7 @@ import {
   COLUMN_CLASS_BY_MATERIAL, BEAM_CLASS_BY_MATERIAL,
   WALL_CLASS_BY_MATERIAL, SLAB_CLASS_BY_MATERIAL,
   IndependentFooting, ColumnBase, RcWallOpening, PenetrationSleeve,
-  columnSlotKey, spanKey,
+  columnSlotKey, columnAnchorKey, beamExclusionKey,
 } from './structuralEntities.js';
 
 // ---- module-private helpers ----
@@ -103,7 +103,8 @@ export class PlanGraph {
     this.kneeDropWalls = observable.map();
 
     // トポロジー自動補完で「ユーザーが明示的に削除した箇所」を記憶する除外集合（per-floor、永続化対象）。
-    // キーは柱・フーチング: `${verticalCL.id}:${horizontalCL.id}`、梁: spanKey()（始端終端の順序非依存）。
+    // キーは柱・フーチング: `${verticalCL.id}:${horizontalCL.id}`、梁: beamExclusionKey()（spanKey相当。
+    // 始端終端の順序非依存。role:'sill'だけ'sill:'で名前空間を分ける——土台・基礎梁の除外キー分離）。
     this.excludedColumnSlots  = observable.set();
     this.excludedBeamSlots    = observable.set();
     this.excludedFootingSlots = observable.set();
@@ -499,37 +500,43 @@ export class PlanGraph {
 
   /** materialType（StructuralMaterialType）に応じたサブクラスで柱を追加する。
    *  トポロジー自動補完の除外集合（excludedColumnSlots）からも対応キーを解除する
-   *  （ユーザーが「＋追加」等で明示的に再追加した場合、以後の自動補完対象に戻す）。 */
+   *  （ユーザーが「＋追加」等で明示的に再追加した場合、以後の自動補完対象に戻す）。
+   *  除外キーは columnAnchorKey（建具の袖柱＝woodJambRef非nullは`jamb:${openingId}:${side}`、
+   *  それ以外はCLペアのcolumnSlotKey）——生成した柱そのもの（props込み）で判定する。 */
   addColumn(materialType, sectionDefId, verticalCL, horizontalCL, props, id = crypto.randomUUID()) {
     const ColumnClass = COLUMN_CLASS_BY_MATERIAL[materialType];
     const c = new ColumnClass(id, sectionDefId, verticalCL, horizontalCL, props);
     c._planGraph = this;
     this.columnMap.set(c.id, c);
-    this.excludedColumnSlots.delete(columnSlotKey(verticalCL, horizontalCL));
+    this.excludedColumnSlots.delete(columnAnchorKey(c));
     return c;
   }
 
-  /** materialType（StructuralMaterialType）に応じたサブクラスで梁を追加する。excludedBeamSlots も同様に解除する。 */
+  /** materialType（StructuralMaterialType）に応じたサブクラスで梁を追加する。excludedBeamSlots も同様に解除する
+   *  （キーは beamExclusionKey——role:'sill' だけ 'sill:' で名前空間を分ける。土台・基礎梁の除外キー分離、
+   *  QA指摘Major-1・2026-09-18）。 */
   addBeam(materialType, sectionDefId, axisCL, isVertical, clStart, clEnd, props, id = crypto.randomUUID()) {
     const BeamClass = BEAM_CLASS_BY_MATERIAL[materialType];
     const b = new BeamClass(id, sectionDefId, axisCL, isVertical, clStart, clEnd, props);
     b._planGraph = this;
     this.beamMap.set(b.id, b);
-    this.excludedBeamSlots.delete(spanKey(axisCL, clStart, clEnd));
+    this.excludedBeamSlots.delete(beamExclusionKey(b.role, axisCL, clStart, clEnd));
     return b;
   }
 
-  /** 柱を削除する。対応スロットを excludedColumnSlots に記録し、次回以降の自動補完で復活しないようにする。 */
+  /** 柱を削除する。対応スロットを excludedColumnSlots に記録し、次回以降の自動補完で復活しないようにする
+   *  （キーは columnAnchorKey。建具の袖柱は開口id:sideで記録するため、その開口の別の柱と混同しない）。 */
   removeColumn(id) {
     const c = this.columnMap.get(id);
-    if (c) this.excludedColumnSlots.add(columnSlotKey(c.verticalCL, c.horizontalCL));
+    if (c) this.excludedColumnSlots.add(columnAnchorKey(c));
     this.columnMap.delete(id);
   }
 
-  /** 梁を削除する。対応スロットを excludedBeamSlots に記録し、子の PenetrationSleeve（梁ホスト）も連鎖削除する。 */
+  /** 梁を削除する。対応スロットを excludedBeamSlots に記録し（キーは beamExclusionKey）、
+   *  子の PenetrationSleeve（梁ホスト）も連鎖削除する。 */
   removeBeam(id) {
     const b = this.beamMap.get(id);
-    if (b) this.excludedBeamSlots.add(spanKey(b.axisCL, b.clStart, b.clEnd));
+    if (b) this.excludedBeamSlots.add(beamExclusionKey(b.role, b.axisCL, b.clStart, b.clEnd));
     [...this.sleeveMap.values()].filter(s => s.hostBeamId === id).forEach(s => this.sleeveMap.delete(s.id));
     this.beamMap.delete(id);
   }

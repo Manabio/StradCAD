@@ -30,9 +30,11 @@ console.log(`=== ${src} ===`);
 console.log('主構造:', project.structuralInfo.mainStructure);
 
 // 冪等収束チェック（woodBeamDepthProbe.mjsと同じ規律）: 最大4スイープまで全階再計算を回し、
-// changed=[]になった回を報告する。在来は3b・3dの1スイープ遅れによりsweep3までに収束する想定、
-// 非在来はsweep1で収束する想定（.claude/structural-model.md 3b節「結果整合性」）。
-const MAX_SWEEPS = 4;
+// changed=[]になった回を報告する。在来は3b・3dの1スイープ遅れによりsweep4までに収束する想定
+// （2026-09-18裁定で3から改定。woodTieBeamProbe.mjsと同じ根拠——3h-2の点源に床梁を加えたことで
+// 3階またぎの連鎖が成立し、1スイープでは1段ずつしか伝播しない）、非在来はsweep1で収束する想定
+// （.claude/structural-model.md 3b節「結果整合性」）。
+const MAX_SWEEPS = 5;
 let convergedAt = null;
 for (let i = 1; i <= MAX_SWEEPS; i++) {
   const changedPlanes = [];
@@ -44,7 +46,7 @@ for (let i = 1; i <= MAX_SWEEPS; i++) {
   console.log(`sweep${i}: changed=[${changedPlanes.join(',')}]`);
   if (changedPlanes.length === 0) { convergedAt = i; break; }
 }
-const convergeLimit = isTraditionalWoodStructure(project.structuralInfo.mainStructure) ? 3 : 1;
+const convergeLimit = isTraditionalWoodStructure(project.structuralInfo.mainStructure) ? 4 : 1;
 if (convergedAt != null && convergedAt <= convergeLimit) {
   console.log(`OK: 収束（sweep${convergedAt}で changed=[]）`);
 } else if (convergedAt != null) {

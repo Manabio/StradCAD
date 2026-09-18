@@ -77,9 +77,13 @@ export const TRADITIONAL_WOOD_FRAMING = Object.freeze({
   ridgeSection:    'WOOD-120x120', // 棟木は120角
   purlinSection:   'WOOD-90x90',   // 母屋は90角
   hipBraceSection: 'WOOD-90x90',   // 火打ち梁は90角
-  beamTopBelowFLMm: 100,           // 梁天端はFL−100
+  beamTopBelowFLMm: 100,           // 梁天端はFL−100（土台天端も同じ値。woodFraming.js sillTopLevelOffsetMm）
   floorBeamMaxPitchMm: 1820,       // 床梁は柱間・梁間に1820を超えない位置に設ける
   hipBraceMaxAreaM2: 16,           // 火打ち梁は16㎡以下の四角の4隅（吹抜け可・EV/階段内は不可）
+  // ネコ土台の厚み(mm)。仕様「基礎天端の上にネコ土台（厚20）を置いた上に設置」——基礎天端＝土台下端
+  // −この値。消費先は基礎の断面図（後続ステップ）。それまで基礎梁の levelOffset は書かない（断面・
+  // 展開図に基礎梁の消費者が無く、書くと全既存文書に無観測の差分と undo だけが生じるため。2026-09-18裁定）。
+  sillPackingThicknessMm: 20,
 });
 // 木造下地（壁下地材・外壁の開口まわり）。寸法は「柱寸×○」で柱寸に連動する係数として持つ
 // （適用は woodFraming.js の studSpec / openingJambSpec / studPositions）。
@@ -126,15 +130,14 @@ const WOOD_RULES = Object.freeze({
     hasMatSlab: foundationType => foundationType === MAT_FOUNDATION,
     // 基礎梁の断面算定（(3) 処理の選択）: 土台幅基準の標準寸法固定。
     beamSizing: Object.freeze({ kind: 'fixed', ...WOOD_FOUNDATION_BEAM }),
-    // 基礎伏図に土台・ベース帯を描く（StructuralLayer.jsx の woodFoundationBands）。
+    // 基礎伏図にベース帯を描く（StructuralLayer.jsx の woodFoundationBands）。土台は role:'sill' の
+    // 実体梁として一般の梁帯描画に乗るため、専用の帯描画は持たない（2026-09-18裁定）。
     drawsBands: true,
     // 構造リスト: 基礎伏図の梁グループ見出し・基礎梁の断面マスター選択の有無・断面図の種類。
     beamGroupLabel: '土台基礎',
     beamSectionField: false,
     sectionFigure: 'wood',
     sectionDefaults: WOOD_FOUNDATION_SECTION_DEFAULTS,
-    // 基礎伏図の土台帯（幅150の中線・袋綴じ）。ベース帯の幅は sectionDefaults.baseWidth。
-    sillWidthMm: 150,
     // 玄関建具部分は基礎・両袖取付柱とも「扉幅＋両端クリアランス」で開ける。
     entranceClearanceMm: 5,
   }),
@@ -215,7 +218,6 @@ const RC_RULES = Object.freeze({
     beamSectionField: true,
     sectionFigure: 'rc',
     sectionDefaults: null,
-    sillWidthMm: null,
     entranceClearanceMm: null,
   }),
   designation: Object.freeze({ roof: 'R階伏図', floorSuffix: '伏図' }),

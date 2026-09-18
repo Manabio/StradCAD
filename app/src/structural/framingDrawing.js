@@ -125,14 +125,6 @@ export function columnCrossPointsLocal(width, height, overhangRatio = COLUMN_CRO
   ];
 }
 
-/** 基礎伏図の土台帯（bandLines へ渡す half・線幅キー）を主構造ルール（foundationRules）から解決する。
- *  half は foundationRules.sillWidthMm の半分（帯の全幅=sillWidthMm）、線幅は常に'medium'（LINE_WEIGHT_MM
- *  のキー）。structureRules.js の値を StructuralLayer.jsx が直接算出しない単一の入口
- *  ——woodFoundationBands が bandLines へ渡す値と食い違わせないため。 */
-export function sillBandSpec(foundationRules) {
-  return { half: foundationRules.sillWidthMm / 2, weight: 'medium' };
-}
-
 // ---- 非正角材（成≠幅の梁）の標記（在来木造の伏図。ユーザー裁定2026-09-16。設計意図は
 // .claude/structural-model.md ステップ4 第2単位）----
 // 梁線の端部から梁内側に45度の単線を両端から2本、梁幅の2倍（トリム量）だけ内側で、梁幅の2.5倍

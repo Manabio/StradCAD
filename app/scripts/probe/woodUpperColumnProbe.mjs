@@ -24,8 +24,10 @@ floorSwapManager.peek = async (plane) => project.graphMap.get(plane.id) ?? null;
 // 報告する（他3つのprobeと同じ形式。.claude/structural-model.md 3b節「結果整合性」）。以降の候補
 // 計測（(i)〜(iv)）は、この収束後の安定状態に対して行う。
 // QA裁定（F8）：期待値を固定する——非在来はsweep1で収束（changed=[]）しなければNG、
-// 在来は昇順スイープ由来で3b・3dが互いに1スイープ遅れうるためsweep3までに収束しなければNG。
-const MAX_SWEEPS = 4;
+// 在来は昇順スイープ由来で3b・3dが互いに1スイープ遅れうるためsweep4までに収束しなければNG
+// （2026-09-18裁定で3から改定。woodTieBeamProbe.mjsと同じ根拠——3h-2の点源に床梁を加えたことで
+// 3階またぎの連鎖が成立し、1スイープでは1段ずつしか伝播しない）。
+const MAX_SWEEPS = 5;
 let convergedAt = null;
 let changedSweeps = 0;
 for (let i = 1; i <= MAX_SWEEPS; i++) {
@@ -40,7 +42,7 @@ for (let i = 1; i <= MAX_SWEEPS; i++) {
   changedSweeps++;
 }
 const isTraditional = isTraditionalWoodStructure(project.structuralInfo.mainStructure);
-const convergeLimit = isTraditional ? 3 : 1;
+const convergeLimit = isTraditional ? 4 : 1;
 if (convergedAt != null && convergedAt <= convergeLimit) {
   console.log(`OK: 収束（sweep${convergedAt} で changed=[]。changed があったスイープ数=${changedSweeps}）`);
 } else if (convergedAt != null) {
@@ -132,6 +134,10 @@ for (const plane of project.planes) {
       const key = best.isVertical ? columnSlotKey(axisCL, crossCL) : columnSlotKey(crossCL, axisCL);
       if (slots3a.has(key)) { sameAs3a++; totalSameAs3a++; }
       anchorCounts.exact++;
+    } else if (graph.columns.some(c => Math.abs(c.axisX - best.x) < 1 && Math.abs(c.axisY - best.y) < 1)) {
+      // 3bとしてはアンカー解決不能だが、その位置には別の点源（3h-2のオフセットアンカー等）で既に柱が
+      // 立っている——「上階柱の直下に柱が無い」取りこぼしではないので解決不能の割合には数えない。
+      anchorCounts.coveredByOther = (anchorCounts.coveredByOther ?? 0) + 1;
     } else {
       anchorCounts.unresolved++;
     }

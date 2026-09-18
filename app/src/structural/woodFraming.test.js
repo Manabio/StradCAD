@@ -4,9 +4,9 @@ import assert from 'node:assert/strict';
 import { RoomFeature } from '../core/constants.js';
 import {
   woodBeamDepthMm, woodBeamSectionKey, woodBeamSectionForDepth, woodBeamDepthForSpans, crossingBeamLoadCoords,
-  mergeWallIntervals, throughBeamRuns, columnSplitPoints, propagateCarrierDepths,
-  studPositions, studSpec, openingJambSpec, entranceOpeningWidthMm, hipBraceAllowed,
-  wallRunFaces, faceStudPositions,
+  mergeWallIntervals, subtractCoveredSpan, throughBeamRuns, columnSplitPoints, propagateCarrierDepths, columnSupportBeamCandidates,
+  beamWallCrossPoints, studPositions, studSpec, openingJambSpec, entranceOpeningWidthMm, hipBraceAllowed,
+  wallRunFaces, faceStudPositions, sillTopLevelOffsetMm, jambAxisValue, jambColumnPositions, rectsOverlap,
 } from './woodFraming.js';
 import { WOOD_BEAM_DEPTH_TABLE, TRADITIONAL_WOOD_FRAMING, TRADITIONAL_WOOD_BACKING, rulesFor, TRADITIONAL_WOOD_STRUCTURE } from './structureRules.js';
 import { findSectionEntry, woodRectSectionKey, SECTION_CATALOG } from './sectionCatalog.js';
@@ -151,6 +151,75 @@ test('【失敗系】mergeWallIntervals: 非数・hi<=loの不正区間は除去
   assert.deepEqual(mergeWallIntervals(null), []);
 });
 
+// ---- subtractCoveredSpan（土台の候補源(b)基礎梁スパンから候補源(a)壁線runの和集合を差し引く。
+// 「1階の土台が同軸で重複」修正・2026-09-18裁定）----
+test('subtractCoveredSpan: coveringが無ければtargetをそのまま1ピース（loCut/hiCutともfalse）で返す', () => {
+  assert.deepEqual(subtractCoveredSpan({ lo: 0, hi: 3640 }, []), [{ lo: 0, hi: 3640, loCut: false, hiCut: false }]);
+  assert.deepEqual(subtractCoveredSpan({ lo: 0, hi: 3640 }, null), [{ lo: 0, hi: 3640, loCut: false, hiCut: false }]);
+});
+
+test('subtractCoveredSpan: 完全に覆われれば空配列（土台は通し1本だけが残る＝候補源bを生成しない）', () => {
+  assert.deepEqual(subtractCoveredSpan({ lo: 0, hi: 3640 }, [{ lo: 0, hi: 3640 }]), []);
+  assert.deepEqual(subtractCoveredSpan({ lo: 0, hi: 3640 }, [{ lo: -100, hi: 4000 }]), [], '覆う側がtargetより広くても完全被覆');
+  // 複数のcoveringの合算で完全に覆われる場合も空配列。
+  assert.deepEqual(subtractCoveredSpan({ lo: 0, hi: 3640 }, [{ lo: 0, hi: 1820 }, { lo: 1820, hi: 3640 }]), []);
+});
+
+test('subtractCoveredSpan: 片側だけ覆われれば残りの片側だけを返し、覆われた側の端はhiCut/loCutがtrue', () => {
+  // [0,3640]を覆う候補源a([0,3640])に対し候補源bが[0,7280]なら残りは[3640,7280]（loCut:true=境界CL使用）。
+  assert.deepEqual(
+    subtractCoveredSpan({ lo: 0, hi: 7280 }, [{ lo: 0, hi: 3640 }]),
+    [{ lo: 3640, hi: 7280, loCut: true, hiCut: false }],
+  );
+  // 逆側（高い方が覆われる）。
+  assert.deepEqual(
+    subtractCoveredSpan({ lo: 0, hi: 7280 }, [{ lo: 3640, hi: 7280 }]),
+    [{ lo: 0, hi: 3640, loCut: false, hiCut: true }],
+  );
+});
+
+test('subtractCoveredSpan: 中間だけ覆われれば両側2ピースを返し、covering側の端はどちらもCut', () => {
+  assert.deepEqual(
+    subtractCoveredSpan({ lo: 0, hi: 9100 }, [{ lo: 3640, hi: 5460 }]),
+    [
+      { lo: 0, hi: 3640, loCut: false, hiCut: true },
+      { lo: 5460, hi: 9100, loCut: true, hiCut: false },
+    ],
+  );
+});
+
+test('subtractCoveredSpan: coveringは内部でmergeWallIntervalsされる（隣接・重複するcoveringも1つの覆いとして扱う）', () => {
+  // [0,1820]と[1820,3640]は隣接（隙間0）——merge後は[0,3640]の単一coveringとして扱われ、
+  // 覆う側の中間境界(x=1820)はピース境界として現れない。
+  assert.deepEqual(
+    subtractCoveredSpan({ lo: 0, hi: 7280 }, [{ lo: 0, hi: 1820 }, { lo: 1820, hi: 3640 }]),
+    [{ lo: 3640, hi: 7280, loCut: true, hiCut: false }],
+  );
+});
+
+test('【失敗系】subtractCoveredSpan: coveringが完全に外側（targetと重ならない）ならtargetをそのまま返す', () => {
+  assert.deepEqual(
+    subtractCoveredSpan({ lo: 0, hi: 3640 }, [{ lo: 5000, hi: 6000 }]),
+    [{ lo: 0, hi: 3640, loCut: false, hiCut: false }],
+    'coveringがtargetより後ろ',
+  );
+  assert.deepEqual(
+    subtractCoveredSpan({ lo: 0, hi: 3640 }, [{ lo: -2000, hi: -1000 }]),
+    [{ lo: 0, hi: 3640, loCut: false, hiCut: false }],
+    'coveringがtargetより前',
+  );
+});
+
+test('【失敗系】subtractCoveredSpan: targetが不正（非数・hi<=lo）は空配列', () => {
+  assert.deepEqual(subtractCoveredSpan({ lo: 100, hi: 100 }, [{ lo: 0, hi: 200 }]), []);
+  assert.deepEqual(subtractCoveredSpan({ lo: NaN, hi: 100 }, []), []);
+  assert.deepEqual(subtractCoveredSpan(null, []), []);
+});
+
+test('【失敗系】subtractCoveredSpan: tol以下に縮む断片は捨てる（境界がtol未満の差でぴったり重なる場合は完全被覆扱い）', () => {
+  assert.deepEqual(subtractCoveredSpan({ lo: 0, hi: 3640 }, [{ lo: 0, hi: 3639.8 }]), [], 'tol(0.5)未満の残りは捨てる');
+});
+
 test('throughBeamRuns: 連続する被覆ペアは1本の通し梁にまとめる（区間が分かれていても連続被覆なら1本）', () => {
   // 3点全被覆(1つの区間) → 通しで1本
   assert.deepEqual(throughBeamRuns([0, 1820, 3640], [{ lo: 0, hi: 3640 }]), [{ lo: 0, hi: 3640 }]);
@@ -255,6 +324,269 @@ test('【失敗系】columnSplitPoints: run不正（非数・hi<=lo）・axisCoo
   });
 });
 
+// ---- columnSupportBeamCandidates（ステップ3h: 頭つなぎ・受梁の候補区間）----
+// segments は {isVertical, coord, lo, hi} のプレーン配列（graph非依存の純関数のためオブジェクトを都度作る）。
+test('columnSupportBeamCandidates: 短い方向（縦）が選ばれる', () => {
+  // 矩形 x:0..5000, y:0..1000。点(2500,500)は縦方向(支持=横梁y=0,1000。距離1000)が横方向(支持=縦梁x=0,5000。距離5000)より短い。
+  const segments = [
+    { isVertical: false, coord: 0,    lo: 0, hi: 5000 }, // 横梁 y=0
+    { isVertical: false, coord: 1000, lo: 0, hi: 5000 }, // 横梁 y=1000
+    { isVertical: true,  coord: 0,    lo: 0, hi: 1000 }, // 縦梁 x=0
+    { isVertical: true,  coord: 5000, lo: 0, hi: 1000 }, // 縦梁 x=5000
+  ];
+  const points = [{ x: 2500, y: 500, kind: 'below' }];
+  const result = columnSupportBeamCandidates(points, segments);
+  assert.equal(result.length, 1);
+  assert.deepEqual(
+    { isVertical: result[0].isVertical, coord: result[0].coord, lo: result[0].lo, hi: result[0].hi },
+    { isVertical: true, coord: 2500, lo: 0, hi: 1000 },
+    '縦方向(支持間1000)が横方向(支持間5000)より短いため採用',
+  );
+  assert.equal(result[0].kind, 'below');
+});
+
+test('columnSupportBeamCandidates: 総長が同じなら横梁(isVertical:false)を優先する', () => {
+  // 正方形の中心(1000,1000)は縦横どちらも支持間2000で同長。
+  const segments = [
+    { isVertical: false, coord: 0,    lo: 0, hi: 2000 },
+    { isVertical: false, coord: 2000, lo: 0, hi: 2000 },
+    { isVertical: true,  coord: 0,    lo: 0, hi: 2000 },
+    { isVertical: true,  coord: 2000, lo: 0, hi: 2000 },
+  ];
+  const result = columnSupportBeamCandidates([{ x: 1000, y: 1000, kind: 'self' }], segments);
+  assert.equal(result.length, 1);
+  assert.equal(result[0].isVertical, false, '同長は横梁を優先');
+});
+
+test('【失敗系】columnSupportBeamCandidates: 片側にしか支持が無い方向は候補外（もう一方が使えればそちらを返す）', () => {
+  // 横梁はy=0のみ（y=1000が無い）→縦方向は片側支持のみで候補外。縦梁x=0,5000は両方あるので横方向は候補になる。
+  const segments = [
+    { isVertical: false, coord: 0, lo: 0, hi: 5000 },
+    { isVertical: true,  coord: 0,    lo: 0, hi: 1000 },
+    { isVertical: true,  coord: 5000, lo: 0, hi: 1000 },
+  ];
+  const result = columnSupportBeamCandidates([{ x: 2500, y: 500, kind: 'below' }], segments);
+  assert.equal(result.length, 1);
+  assert.equal(result[0].isVertical, false, '縦方向(片側支持)は候補外、横方向だけが残る');
+  assert.deepEqual([result[0].lo, result[0].hi], [0, 5000]);
+});
+
+test('【失敗系】columnSupportBeamCandidates: 両方向とも片側しか支持が無ければ点自体をスキップする', () => {
+  const segments = [
+    { isVertical: false, coord: 0, lo: 0, hi: 5000 }, // 横方向の片側のみ
+    { isVertical: true,  coord: 0, lo: 0, hi: 1000 }, // 縦方向の片側のみ
+  ];
+  assert.deepEqual(columnSupportBeamCandidates([{ x: 2500, y: 500, kind: 'below' }], segments), []);
+});
+
+test('【失敗系】columnSupportBeamCandidates: 既存梁区間の上（平行・直交とも）にある点はno-op（候補にしない）', () => {
+  const segments = [
+    { isVertical: true,  coord: 0,    lo: 0, hi: 2000 }, // 縦梁 x=0
+    { isVertical: false, coord: 0,    lo: 0, hi: 1000 }, // 横梁 y=0
+    { isVertical: false, coord: 2000, lo: 0, hi: 1000 },
+    { isVertical: true,  coord: 1000, lo: 0, hi: 2000 },
+  ];
+  assert.deepEqual(columnSupportBeamCandidates([{ x: 0, y: 500, kind: 'below' }], segments), [], '縦梁x=0の上（平行）');
+  assert.deepEqual(columnSupportBeamCandidates([{ x: 500, y: 0, kind: 'below' }], segments), [], '横梁y=0の上（直交）');
+});
+
+test('【指摘B】columnSupportBeamCandidates: 端点一致だが無支持（L字自由コーナー・単独の梁端）はno-opにせず、Pを含む側へトリムした延長候補を返す', () => {
+  const rect = [
+    { isVertical: false, coord: 0,    lo: 0, hi: 5000 },
+    { isVertical: false, coord: 1000, lo: 0, hi: 5000 },
+    { isVertical: true,  coord: 0,    lo: 0, hi: 1000 },
+    { isVertical: true,  coord: 5000, lo: 0, hi: 1000 },
+  ];
+  // Pは(2500,500)——単独の梁（dangling、x=2500・y:[500,2000]）の端(lo=500)に一致する。旧仕様は
+  // 「既存梁区間の上（端点含む）」で無条件no-opだったが、支持なし（supportPoints省略＝[]）の
+  // 端点一致は候補評価へ進み、縦方向候補[0,1000]がdanglingと重なるためPを含む側[0,500]へ
+  // トリムした延長候補になる。
+  const dangling = { isVertical: true, coord: 2500, lo: 500, hi: 2000 };
+  const segments = [...rect, dangling];
+  const result = columnSupportBeamCandidates([{ x: 2500, y: 500, kind: 'self' }], segments);
+  assert.equal(result.length, 1, '無支持の端点一致は候補評価へ進む');
+  assert.equal(result[0].isVertical, true);
+  assert.deepEqual([result[0].lo, result[0].hi], [0, 500]);
+  assert.equal(result[0].extendsHiSeg, dangling, 'danglingとの重なりをPを含む側へトリムした延長');
+  assert.equal(result[0].extendsLoSeg, null);
+});
+
+test('【指摘B】columnSupportBeamCandidates: 端点一致かつsupportPoints（下階柱）に一致する点があればno-op（従来どおり）', () => {
+  const rect = [
+    { isVertical: false, coord: 0,    lo: 0, hi: 5000 },
+    { isVertical: false, coord: 1000, lo: 0, hi: 5000 },
+    { isVertical: true,  coord: 0,    lo: 0, hi: 1000 },
+    { isVertical: true,  coord: 5000, lo: 0, hi: 1000 },
+  ];
+  const dangling = { isVertical: true, coord: 2500, lo: 500, hi: 2000 };
+  const segments = [...rect, dangling];
+  const supportPoints = [{ x: 2500, y: 500 }]; // Pと同じ位置に下階柱がある＝既に支持済み
+  const result = columnSupportBeamCandidates([{ x: 2500, y: 500, kind: 'self' }], segments, supportPoints);
+  assert.deepEqual(result, [], '端点一致かつsupportPoints一致はno-op');
+});
+
+test('【指摘B・T字】columnSupportBeamCandidates: 端点一致でも別の梁の内部（T字）ならno-op（interior判定が優先）', () => {
+  const rect = [
+    { isVertical: false, coord: 0,    lo: 0, hi: 5000 },
+    { isVertical: false, coord: 1000, lo: 0, hi: 5000 },
+    { isVertical: true,  coord: 0,    lo: 0, hi: 1000 },
+    { isVertical: true,  coord: 5000, lo: 0, hi: 1000 },
+  ];
+  const tBeam = { isVertical: false, coord: 500, lo: 0, hi: 5000 }; // y=500。Pはこの内部（T字の受け側）
+  const dangling = { isVertical: true, coord: 2500, lo: 500, hi: 2000 }; // Pはこの端
+  const result = columnSupportBeamCandidates([{ x: 2500, y: 500, kind: 'self' }], [...rect, tBeam, dangling]);
+  assert.deepEqual(result, [], 'T字（別梁の内部）はsupportPoints無しでもno-op');
+});
+
+test('【指摘B】columnSupportBeamCandidates: 延長トリム後の残りがtol以下ならその方向は候補外（もう一方の方向が候補外なら点自体スキップ）', () => {
+  // 縦方向候補窓は[0,1000]（y=0,y=1000の横梁で支持）。Pの along=500 を挟んで同軸(x=2500)に
+  // segA[0,499.8]・segB[500.2,1000]の2本があり、トリム後の残りは[499.8,500.2]=0.4mm(<tol=0.5)。
+  // 横方向は片側(x=0)しか支持が無く候補外——両方向とも候補外になり点自体がスキップされる。
+  const segA = { isVertical: true, coord: 2500, lo: 0,     hi: 499.8 };
+  const segB = { isVertical: true, coord: 2500, lo: 500.2, hi: 1000 };
+  const segments = [
+    { isVertical: false, coord: 0,    lo: 0, hi: 5000 },
+    { isVertical: false, coord: 1000, lo: 0, hi: 5000 },
+    { isVertical: true,  coord: 0,    lo: 0, hi: 1000 }, // 横方向は片側支持のみ（x=5000側が無い）
+    segA, segB,
+  ];
+  const result = columnSupportBeamCandidates([{ x: 2500, y: 500, kind: 'self' }], segments);
+  assert.deepEqual(result, [], '縦方向は残り0.4mm(<tol)で候補外、横方向も片側支持のみで候補外＝点自体スキップ');
+});
+
+test('columnSupportBeamCandidates: 同軸の既存梁区間と重なればPを含む側へトリムした延長候補にする、端点一致（隣接）はそのまま延長として許す', () => {
+  const base = [
+    { isVertical: true, coord: 0,    lo: 0, hi: 2000 },
+    { isVertical: true, coord: 3000, lo: 0, hi: 2000 },
+  ];
+  const point = [{ x: 2000, y: 1000, kind: 'self' }]; // 横方向候補: coord=1000, [loA,hiA]=[0,3000]
+  const overlapping = [...base, { isVertical: false, coord: 1000, lo: 500, hi: 1500 }]; // 候補区間の内側に重なる
+  // 指摘B（2026-09-18）: 旧仕様は「候補外」だったが、Pを含む側の残り区間（[1500,3000]。P.x=2000は
+  // 重なる既存区間[500,1500]より外側＝alongが既存区間のhi側）へトリムし、延長候補として返すよう
+  // 変更した（既存区間の延長。woodFraming.js columnSupportBeamCandidatesのJSDoc参照）。
+  const overlapResult = columnSupportBeamCandidates(point, overlapping);
+  assert.equal(overlapResult.length, 1, '内側に重なる既存梁があれば、Pを含む側の残りへトリムした延長候補になる');
+  assert.deepEqual([overlapResult[0].lo, overlapResult[0].hi], [1500, 3000]);
+  assert.equal(overlapResult[0].extendsLoSeg?.hi, 1500, 'extendsLoSegは重なった既存区間そのもの（loが延長元のhiへ寄る）');
+  assert.equal(overlapResult[0].extendsHiSeg, null);
+
+  const adjacent = [...base, { isVertical: false, coord: 1000, lo: 3000, hi: 4000 }]; // hiA=3000で端点一致
+  const result = columnSupportBeamCandidates(point, adjacent);
+  assert.equal(result.length, 1, '端点一致（隣接）は延長として許す');
+  assert.deepEqual([result[0].lo, result[0].hi], [0, 3000]);
+});
+
+test('columnSupportBeamCandidates: 同一線上の2点は同一区間にdedupeされ、loSeg/hiSegは入力segmentsの要素そのもの（===）', () => {
+  const yLo = { isVertical: false, coord: 0,    lo: 0, hi: 1000 };
+  const yHi = { isVertical: false, coord: 5000, lo: 0, hi: 1000 };
+  const segments = [yLo, yHi];
+  const points = [{ x: 500, y: 1000, kind: 'below' }, { x: 500, y: 4000, kind: 'below' }];
+  const result = columnSupportBeamCandidates(points, segments);
+  assert.equal(result.length, 1, '同一区間[0,5000]にdedupeされる');
+  assert.equal(result[0].loSeg, yLo, 'loSegは入力segmentsの要素そのもの');
+  assert.equal(result[0].hiSeg, yHi, 'hiSegは入力segmentsの要素そのもの');
+});
+
+// QA第2巡・(b)・m10: 同一区間へ下階柱(below)と自階柱(self)の両方が到達したら、pointsの並び順で
+// 先着したkindが勝つ（dedupeがseenへの先着で決まるため）。woodAutoFill.jsは
+// [...belowTiePts, ...selfCarrierPts] の順で渡すため below が self より優先される
+// （不変条件・ソース走査テストで固定。本テストは順序依存の性質そのものを固定する）。
+test('columnSupportBeamCandidates: 同一区間へ下階柱(below)と自階柱(self)の両方が到達したら先着が勝つ', () => {
+  const segments = [
+    { isVertical: true, coord: 0,    lo: 0, hi: 2000 },
+    { isVertical: true, coord: 3000, lo: 0, hi: 2000 },
+  ];
+  const belowFirst = [{ x: 500, y: 1000, kind: 'below' }, { x: 1500, y: 1000, kind: 'self' }];
+  const r1 = columnSupportBeamCandidates(belowFirst, segments);
+  assert.equal(r1.length, 1, '同一区間[0,3000]にdedupeされる');
+  assert.equal(r1[0].kind, 'below', 'belowが先着のためbelowが勝つ');
+
+  const selfFirst = [{ x: 1500, y: 1000, kind: 'self' }, { x: 500, y: 1000, kind: 'below' }];
+  const r2 = columnSupportBeamCandidates(selfFirst, segments);
+  assert.equal(r2.length, 1);
+  assert.equal(r2[0].kind, 'self', '逆順ならselfが先着のためselfが勝つ');
+});
+
+test('【失敗系】columnSupportBeamCandidates: 非数の点は無視、空入力は空配列、例外を投げない', () => {
+  const segments = [
+    { isVertical: false, coord: 0,    lo: 0, hi: 5000 },
+    { isVertical: false, coord: 1000, lo: 0, hi: 5000 },
+    { isVertical: true,  coord: 0,    lo: 0, hi: 1000 },
+    { isVertical: true,  coord: 5000, lo: 0, hi: 1000 },
+  ];
+  assert.deepEqual(columnSupportBeamCandidates([], segments), []);
+  assert.deepEqual(columnSupportBeamCandidates(null, segments), []);
+  assert.deepEqual(columnSupportBeamCandidates([{ x: NaN, y: 500, kind: 'below' }], segments), []);
+  assert.deepEqual(columnSupportBeamCandidates([{ x: 2500, y: NaN, kind: 'below' }], segments), []);
+  assert.doesNotThrow(() => columnSupportBeamCandidates([{ x: 2500, y: 500, kind: 'below' }], null));
+  assert.doesNotThrow(() => columnSupportBeamCandidates(undefined, undefined));
+});
+
+// ---- beamWallCrossPoints（ステップ3h-2: 上階の頭つなぎ・受梁を「壁とみなして」下階の壁と交わる点）----
+test('beamWallCrossPoints: 直交する梁区間×壁区間の交点を返す', () => {
+  const beams = [{ isVertical: false, coord: 2000, lo: 0, hi: 4000 }]; // 横梁 y=2000（x:0..4000）
+  const walls = [{ isVertical: true, coord: 1000, lo: 0, hi: 3000 }];  // 縦壁 x=1000（y:0..3000）
+  assert.deepEqual(beamWallCrossPoints(beams, walls), [{ x: 1000, y: 2000 }]);
+});
+
+test('beamWallCrossPoints: 梁端が壁区間の内側で終わる点（梁が壁上に載って終わる）も含める', () => {
+  const beams = [{ isVertical: false, coord: 0, lo: 0, hi: 2000 }]; // 横梁 y=0（x:0..2000）
+  const walls = [{ isVertical: false, coord: 0, lo: 1500, hi: 4000 }]; // 同軸(横壁 y=0)、x:1500..4000
+  assert.deepEqual(beamWallCrossPoints(beams, walls), [{ x: 2000, y: 0 }], '梁端(2000)が壁区間[1500,4000]内');
+});
+
+test('【失敗系】beamWallCrossPoints: 平行だが別coordは交点なし、範囲外の直交梁も交点なし', () => {
+  const beams = [{ isVertical: false, coord: 0, lo: 0, hi: 2000 }];
+  const walls = [{ isVertical: false, coord: 500, lo: 0, hi: 2000 }]; // 平行・別coord
+  assert.deepEqual(beamWallCrossPoints(beams, walls), []);
+  const orthoOutside = [{ isVertical: true, coord: 1000, lo: 3000, hi: 4000 }]; // x=1000は範囲内だがy範囲が梁の外
+  assert.deepEqual(beamWallCrossPoints(beams, orthoOutside), []);
+});
+
+test('beamWallCrossPoints: tol境界（既定CL_OVERLAP_TOL_MM=0.5mm）は交点扱い、それを超えると交点なし', () => {
+  const beams = [{ isVertical: false, coord: 2000, lo: 0, hi: 4000 }];
+  const withinTol = [{ isVertical: true, coord: 1000, lo: 2000.5, hi: 3000 }]; // beam.coord=2000, wall.lo-0.5=2000ちょうど
+  assert.deepEqual(beamWallCrossPoints(beams, withinTol), [{ x: 1000, y: 2000 }]);
+  const beyondTol = [{ isVertical: true, coord: 1000, lo: 2000.6, hi: 3000 }];
+  assert.deepEqual(beamWallCrossPoints(beams, beyondTol), []);
+  // tol引数を広げれば拾う。
+  assert.deepEqual(beamWallCrossPoints(beams, beyondTol, 1), [{ x: 1000, y: 2000 }]);
+});
+
+test('beamWallCrossPoints: 複数の交点・同軸端点を重複なく列挙し、x→yの順で決定的にソートする', () => {
+  const beams = [
+    { isVertical: false, coord: 0, lo: 0, hi: 4000 },
+    { isVertical: false, coord: 2000, lo: 0, hi: 4000 },
+  ];
+  const walls = [
+    { isVertical: true, coord: 1000, lo: 0, hi: 4000 },
+    { isVertical: true, coord: 3000, lo: 0, hi: 4000 },
+  ];
+  assert.deepEqual(beamWallCrossPoints(beams, walls), [
+    { x: 1000, y: 0 }, { x: 1000, y: 2000 }, { x: 3000, y: 0 }, { x: 3000, y: 2000 },
+  ]);
+  // 重複（同一点を複数経路で拾う）はdedupeされる。
+  const dup = beamWallCrossPoints(
+    [{ isVertical: false, coord: 0, lo: 0, hi: 1000 }],
+    [{ isVertical: true, coord: 1000, lo: 0, hi: 1000 }, { isVertical: true, coord: 1000, lo: 0, hi: 1000 }],
+  );
+  assert.deepEqual(dup, [{ x: 1000, y: 0 }]);
+});
+
+test('【失敗系】beamWallCrossPoints: 非数混入・空入力は無視して例外を投げない', () => {
+  const beams = [{ isVertical: false, coord: 2000, lo: 0, hi: 4000 }];
+  const walls = [{ isVertical: true, coord: 1000, lo: 0, hi: 3000 }];
+  assert.deepEqual(beamWallCrossPoints([], walls), []);
+  assert.deepEqual(beamWallCrossPoints(beams, []), []);
+  assert.doesNotThrow(() => beamWallCrossPoints(null, undefined));
+  assert.deepEqual(beamWallCrossPoints(null, undefined), []);
+  assert.deepEqual(
+    beamWallCrossPoints([{ isVertical: false, coord: NaN, lo: 0, hi: 4000 }, ...beams], walls),
+    [{ x: 1000, y: 2000 }],
+    '非数混入の要素だけ無視する',
+  );
+});
+
 test('propagateCarrierDepths: 1段伝播（carrierの成をhostへmaxで反映）', () => {
   const result = propagateCarrierDepths([
     { id: 'carrier', depth: 300, isCarrier: true, hostIds: ['host'] },
@@ -351,12 +683,65 @@ test('【失敗系】studSpec / openingJambSpec: 未知の種別・柱寸が非�
   assert.equal(openingJambSpec('window', NaN), null);
 });
 
+test('jambAxisValue: 建具の袖柱1本の走行方向座標＝開口の外形からclearance+柱寸/2だけ離れた位置', () => {
+  assert.equal(jambAxisValue(-1, 1550, 2450, 120), 1485, 'lo側: 1550-(5+60)');
+  assert.equal(jambAxisValue(1, 1550, 2450, 120), 2515, 'hi側: 2450+(5+60)');
+  assert.equal(jambAxisValue(-1, 1550, 2450, 120, 0), 1490, 'クリアランス0: 1550-60');
+  assert.equal(jambAxisValue(-1, 1550, 2450, 105), 1492.5, '柱寸105: 1550-(5+52.5)');
+});
+
+test('【失敗系】jambAxisValue: lo>=hi・非数・柱寸/クリアランス不正はnull', () => {
+  assert.equal(jambAxisValue(-1, 2450, 1550, 120), null, 'lo>hi');
+  assert.equal(jambAxisValue(-1, 1550, 1550, 120), null, 'lo===hi');
+  assert.equal(jambAxisValue(-1, NaN, 2450, 120), null);
+  assert.equal(jambAxisValue(-1, 1550, 2450, 0), null, '柱寸0');
+  assert.equal(jambAxisValue(-1, 1550, 2450, -10), null, '柱寸負');
+  assert.equal(jambAxisValue(-1, 1550, 2450, 120, -1), null, 'クリアランス負');
+  assert.equal(jambAxisValue(-1, 1550, 2450, NaN), null);
+});
+
+test('jambColumnPositions: 開口ごとに両袖(side:-1,1)の座標を返す', () => {
+  const result = jambColumnPositions([{ id: 'o1', lo: 1550, hi: 2450 }], 120);
+  assert.deepEqual(result, [
+    { id: 'o1', side: -1, jamb: 1485 },
+    { id: 'o1', side: 1, jamb: 2515 },
+  ]);
+});
+
+test('【失敗系】jambColumnPositions: 不正な開口要素は静かにスキップする（例外を投げない）', () => {
+  assert.deepEqual(jambColumnPositions(null, 120), []);
+  assert.deepEqual(jambColumnPositions(undefined, 120), []);
+  assert.deepEqual(jambColumnPositions([null, { id: 'x', lo: NaN, hi: 100 }], 120), [], 'lo非数の開口はjambAxisValueがnullを返しどちらのsideも積まれない');
+  assert.deepEqual(jambColumnPositions([{ lo: 1550, hi: 2450 }], 120), [], 'idの無い要素はスキップ');
+});
+
+test('rectsOverlap: 辺が接するだけは重なりなし、1mmでも重なれば重なりあり', () => {
+  const a = { xLo: 0, xHi: 100, yLo: 0, yHi: 100 };
+  const touching = { xLo: 100, xHi: 200, yLo: 0, yHi: 100 };
+  assert.equal(rectsOverlap(a, touching), false, '辺が接するだけは重なりなし');
+  const overlap1mm = { xLo: 99, xHi: 199, yLo: 0, yHi: 100 };
+  assert.equal(rectsOverlap(a, overlap1mm), true, '1mmの重なりはtrue');
+  assert.equal(rectsOverlap(a, overlap1mm, 1), false, 'tol=1を指定すると1mm以下の重なりは無視される');
+});
+
 test('entranceOpeningWidthMm: 玄関建具部分の基礎・両袖取付柱の開口＝扉幅＋両端5mm（既定はルール値）', () => {
   assert.equal(entranceOpeningWidthMm(900), 910);
   assert.equal(rulesFor(TRADITIONAL_WOOD_STRUCTURE).foundation.entranceClearanceMm, 5);
   assert.equal(entranceOpeningWidthMm(900, 10), 920);
   assert.equal(entranceOpeningWidthMm(0), null);
   assert.equal(entranceOpeningWidthMm(900, -1), null);
+});
+
+test('sillTopLevelOffsetMm: 土台天端はFL-100（梁天端beamTopBelowFLMmと同じ値を共有。既定引数は在来木造のframing）', () => {
+  assert.equal(sillTopLevelOffsetMm(), -100);
+  assert.equal(sillTopLevelOffsetMm(TRADITIONAL_WOOD_FRAMING), -TRADITIONAL_WOOD_FRAMING.beamTopBelowFLMm);
+  assert.equal(sillTopLevelOffsetMm({ beamTopBelowFLMm: 80 }), -80, '値を変えれば追従する');
+});
+
+test('【失敗系】sillTopLevelOffsetMm: framingがnull（非在来）・beamTopBelowFLMmが非数なら null', () => {
+  assert.equal(sillTopLevelOffsetMm(null), null);
+  assert.equal(sillTopLevelOffsetMm({ beamTopBelowFLMm: NaN }), null);
+  assert.equal(sillTopLevelOffsetMm({}), null);
 });
 
 test('hipBraceAllowed: 16㎡以下の四角は可、吹抜け(VOID)は可、階段(STAIR)・階段吹抜け(STAIR_VOID)・削除済み(UNDEFINED)・非四角・16㎡超は不可', () => {
@@ -383,7 +768,7 @@ test('structureRules: 在来木造だけが framing/backing を持ち、柱120�
   assert.equal(r.framing.beamTopBelowFLMm, 100);
   assert.equal(r.framing.floorBeamMaxPitchMm, 1820);
   assert.equal(r.backing.studDepthMm, 30);
-  assert.equal(r.foundation.sillWidthMm, 150);
+  assert.equal(r.framing.sillPackingThicknessMm, 20, 'ネコ土台の厚み');
   assert.equal(r.foundation.sectionDefaults.baseWidth, 600);
   for (const key of ['木造（2"×4"）', 'S造', 'SRC造', 'RC造(ラーメン)', 'RC造(壁式)', '未定']) {
     assert.equal(rulesFor(key).framing, null, `${key} は framing を持たない`);

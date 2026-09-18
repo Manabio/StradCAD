@@ -5,12 +5,14 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { runInAction } from 'mobx';
-import { Project, PlanGraph, CenterLineType, Discipline, StructuralMaterialType } from '../core.js';
+import { Project, PlanGraph, Plane, CenterLineType, Discipline, StructuralMaterialType, OpeningCategory } from '../core.js';
 import { undoManager } from '../undoManager.js';
 import { floorSwapManager } from '../storage/FloorSwapManager.js';
 import { serializeGraph, restoreGraph } from '../graphSnapshot.js';
 import { generateRoomWallsFromOutline } from '../finish/wallGeneration.js';
 import { TRADITIONAL_WOOD_STRUCTURE, rulesFor } from './structureRules.js';
+import { autoFillWoodColumns } from './woodAutoFill.js';
+import { autoFillWallBeamAxes, selfWallSegments } from './wallBeamAxes.js';
 import { collectFloorGroups, totalCountOf, renumberMembers } from './memberNumbering.js';
 import { memberGroupKey } from './memberCatalog.js';
 import { syncRoofPlane } from './roofPlane.js';
@@ -107,6 +109,52 @@ test('recomputeStructuralComposition: 下階編集経路は直前に立った下
     const composition = { graphForCategory: () => g1 }; // belowGraph=g1（下階編集経路を通す）
     await recomputeStructuralComposition(composition, g2, project, { mutate: () => {} });
     assert.ok(g1.columnMap.has(col3b.id), '1階の3b柱は下階編集経路の再計算で撤去されない');
+  } finally {
+    floorSwapManager.peek = originalPeek;
+  }
+});
+
+// ---- ステップ3h-2: 下階編集経路（主構造変更時等）は直前に立った下階の3h-2柱（上階の頭つなぎ・受梁が
+// 壁を横切る位置の柱）を撤去しない。QA F4（3b柱）と対称のシナリオ——1階の3a交点そのものにしない
+// よう、頭つなぎが横切る位置(1820,0)はコーナー(0,0)・(3640,0)とは別の壁上の点にする。 ----
+test('recomputeStructuralComposition: 下階編集経路は直前に立った下階の3h-2柱を撤去しない', async () => {
+  const project = new Project('proj-3h2', 'test');
+  const { graph: g1 } = project.addPlane(0, '1階', 'p1');    // 下階（belowGraph。3h-2柱の対象階）
+  const { graph: g2 } = project.addPlane(3000, '2階', 'p2'); // 主題階（subjectGraph。頭つなぎを持つ）
+  g1.structureOverride = TRADITIONAL_WOOD_STRUCTURE;
+  g2.structureOverride = TRADITIONAL_WOOD_STRUCTURE;
+
+  // 1階: 3640×1820の実壁の部屋（4隅が3a交点）＋走行方向アンカー用の通り芯 x=1820（壁は無い）。
+  const gx0 = g1.addCenterLine(CenterLineType.VERTICAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+  const gx1 = g1.addCenterLine(CenterLineType.VERTICAL, 3640, { labeled: true, discipline: Discipline.STRUCT });
+  const gy0 = g1.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+  const gy1 = g1.addCenterLine(CenterLineType.HORIZONTAL, 1820, { labeled: true, discipline: Discipline.STRUCT });
+  const room = g1.addRoom(new Set([`${gx0.id}:${gy0.id}:${gx1.id}:${gy1.id}`]), 'A');
+  generateRoomWallsFromOutline(g1, room);
+  const anchorX = g1.addCenterLine(CenterLineType.VERTICAL, 1820, { labeled: true, discipline: Discipline.STRUCT });
+
+  // 1階に「直前のreflectStructuralToOtherFloorsで立った」3h-2柱を模した既存の自動柱を置く（1820,0）。
+  const colTie = g1.addColumn(StructuralMaterialType.WOOD, 'WOOD-120x120', anchorX, gy0, {});
+  assert.equal(colTie.dimensionStatus, 'auto', '前提: 自動生成分（撤去対象になりうる）');
+
+  // 2階: 頭つなぎ（縦方向、x=1820、y:-1000..1000）——1階のy=0の壁を(1820,0)で横切る
+  // （aboveTieBeamsForBelow＝tieBeamSegments(subjectGraph,...)の対象）。
+  const xm = g2.addCenterLine(CenterLineType.VERTICAL, 1820, { labeled: true, discipline: Discipline.STRUCT });
+  const yA = g2.addCenterLine(CenterLineType.HORIZONTAL, -1000, { labeled: true, discipline: Discipline.STRUCT });
+  const yB = g2.addCenterLine(CenterLineType.HORIZONTAL, 1000,  { labeled: true, discipline: Discipline.STRUCT });
+  const tieBeam = g2.addBeam(StructuralMaterialType.WOOD, 'WOOD-120x120', xm, true, yA, yB, { role: 'primary', beamType: '頭つなぎ' });
+  // 2階自身の壁線上の通し梁再計算（wallRunSegmentsは自階＋1階の壁を合成するため、2階に壁が無くても
+  // 空にならない）にこの手作りの頭つなぎを巻き込まれないよう手動固定にする（tieBeamSegmentsは
+  // dimensionStatusを見ないため候補列挙には影響しない）。
+  tieBeam.setDimensionStatus('locked');
+
+  const peekMap = { p1: g1, p2: g2 };
+  const originalPeek = floorSwapManager.peek;
+  floorSwapManager.peek = async (plane) => peekMap[plane.id] ?? null;
+  try {
+    const composition = { graphForCategory: () => g1 }; // belowGraph=g1（下階編集経路を通す）
+    await recomputeStructuralComposition(composition, g2, project, { mutate: () => {} });
+    assert.ok(g1.columnMap.has(colTie.id), '1階の3h-2柱は下階編集経路の再計算で撤去されない');
   } finally {
     floorSwapManager.peek = originalPeek;
   }
@@ -324,23 +372,26 @@ test('reflectStructuralAfterFinishExit: 最上階（唯一の実体階）から�
   await assert.doesNotReject(reflectStructuralAfterFinishExit(graph.plane.id, false, project));
 });
 
-// ---- 不変条件・ソース走査: 下階編集経路（主構造変更時等）が、上階柱直下の柱（ステップ3b）に
-// 必要な aboveColumns（subjectGraph.columns。メモリ上・peek不要）と wallSegments（wallRunSegments）を
-// autoFillColumnsForStructure(belowGraph, ...) へ渡していること。これを渡し忘れると、直前の
-// reflectStructuralToOtherFloors が作った下階の3b柱が、この経路の再計算で候補から漏れて撤去される
-// （woodAutoFill.test.jsの同種テストと同じ手法。fs.readFileSync+正規表現）。----
-test('【不変条件・ソース走査】structuralOrchestration.js: 下階編集経路が autoFillColumnsForStructure に subjectGraph.columns と wallRunSegments(...) を渡している', async () => {
+// ---- 不変条件・ソース走査: 下階編集経路（主構造変更時等）が、上階柱直下の柱（ステップ3b）・上階の
+// 頭つなぎ／受梁が壁を横切る位置の柱（ステップ3h-2）に必要な aboveColumns（subjectGraph.columns。
+// メモリ上・peek不要）・wallSegments（wallRunSegments）・aboveTieBeams（tieBeamSegments(subjectGraph,...)。
+// 同じくメモリ上・peek不要）を autoFillColumnsForStructure(belowGraph, ...) へ渡していること。これを
+// 渡し忘れると、直前の reflectStructuralToOtherFloors が作った下階の3b・3h-2柱が、この経路の再計算で
+// 候補から漏れて撤去される（woodAutoFill.test.jsの同種テストと同じ手法。fs.readFileSync+正規表現）。----
+test('【不変条件・ソース走査】structuralOrchestration.js: 下階編集経路が autoFillColumnsForStructure に subjectGraph.columns・wallRunSegments(...)・tieBeamSegments(subjectGraph,...) を渡している', async () => {
   const fs = await import('node:fs');
   const path = await import('node:path');
   const url = await import('node:url');
   const here = path.dirname(url.fileURLToPath(import.meta.url));
   const src = fs.readFileSync(path.join(here, 'structuralOrchestration.js'), 'utf8');
-  assert.ok(/autoFillColumnsForStructure\(belowGraph, project, belowGate, aboveColumnsForBelow, belowWallSegments\)/.test(src),
-    'autoFillColumnsForStructure(belowGraph, ...) へ aboveColumnsForBelow・belowWallSegments を渡していない');
+  assert.ok(/autoFillColumnsForStructure\(belowGraph, project, belowGate, aboveColumnsForBelow, belowWallSegments, aboveTieBeamsForBelow\)/.test(src),
+    'autoFillColumnsForStructure(belowGraph, ...) へ aboveColumnsForBelow・belowWallSegments・aboveTieBeamsForBelow を渡していない');
   assert.ok(/aboveColumnsForBelow\s*=\s*subjectGraph\.columns/.test(src),
     'aboveColumnsForBelow が subjectGraph.columns（メモリ上）から来ていない（誤ってpeekしている可能性）');
   assert.ok(/belowWallSegments\s*=\s*wallRunSegments\(belowGraph, belowBelowGraph, belowStructure\)/.test(src),
     'belowWallSegments が wallRunSegments(belowGraph, belowBelowGraph, belowStructure) から来ていない');
+  assert.ok(/aboveTieBeamsForBelow\s*=\s*tieBeamSegments\(subjectGraph,\s*rulesFor\(effectiveStructure\(subjectGraph, project\)\)\)/.test(src),
+    'aboveTieBeamsForBelow が tieBeamSegments(subjectGraph, ...)（メモリ上）から来ていない（誤ってpeekしている可能性）');
 });
 
 // ---- 実機再QA指摘1: 標準材の解決が採番パイプライン（collect/apply）とUI同期経路（renumberMembers・
@@ -781,6 +832,25 @@ test('columnSetSignature【B-1】: ACTUAL（x/y。偏心を含む）が異なっ
   const a = [{ axisX: 0, axisY: 0, x: 0, y: 0, role: 'standard' }];
   const b = [{ axisX: 0, axisY: 0, x: 7.5, y: -7.5, role: 'standard' }]; // 偏心が付いてもAXISは不変
   assert.equal(columnSetSignature(a), columnSetSignature(b));
+});
+
+test('columnSetSignature（Minor-7）: 建具の袖柱が増えるとシグネチャが変わる（AXISが開口位置から導出されるため署名は衝突しない）', () => {
+  const graph = new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
+  graph.structureOverride = TRADITIONAL_WOOD_STRUCTURE;
+  const x1 = graph.addCenterLine(CenterLineType.VERTICAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+  const x2 = graph.addCenterLine(CenterLineType.VERTICAL, 4000, { labeled: true, discipline: Discipline.STRUCT });
+  const axisCL = graph.addCenterLine(CenterLineType.HORIZONTAL, 2000, { labeled: false, discipline: Discipline.ARCH });
+  const wall = graph.addWall(axisCL, 0, false, x1, 0, x2, 0, { backingOffset: 0, backingDepth: 120, wallFinish: 12.5 });
+  const project = { planes: [], structuralInfo: { mainStructure: '未定', foundationType: 'ベタ基礎' } };
+  autoFillWallBeamAxes(graph, selfWallSegments(graph));
+  autoFillWoodColumns(graph, project, null); // 開口なし＝袖柱0本
+  const before = columnSetSignature(graph.columns);
+
+  graph.addOpening(wall.axisCL, 1, false, x1, 2000, 900, OpeningCategory.WINDOW, 'doubleSliding', {});
+  autoFillWoodColumns(graph, project, null); // 開口追加＝袖柱2本
+  const after = columnSetSignature(graph.columns);
+
+  assert.notEqual(before, after, '袖柱の増加でAXIS座標の集合が変わるためシグネチャも変わる（既存柱と重なる位置には生成されないため衝突しない）');
 });
 
 // ---- ユーザー裁定2026-09-16「分割後に正しい距離を持つことが最適解」: 突入時に下階へ3b柱が

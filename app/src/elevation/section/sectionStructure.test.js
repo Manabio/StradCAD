@@ -54,6 +54,13 @@ test('【失敗系・WP-C】structuralContribution: layersが空配列・undefin
   assert.deepEqual(structuralContribution(undefined), []);
 });
 
+test('【Minor-1・QA裁定2026-09-18】structuralContribution: 土台（role:\'sill\'）は基礎梁と同じく展開図の加算寄与に含まれない', () => {
+  const graph = makeGraph();
+  addHorizontalBeam(graph, -100, 'sill');
+  const contribution = structuralContribution([{ graph, floorZMm: 0, role: 'self' }]);
+  assert.deepEqual(contribution, [], '土台は床下の横架材で室内展開に寄与しないため除外される（階段帯はclipを通さないため床下線が出る）');
+});
+
 // ---- structuralPrimitivesForCut ----
 test('【WP-C】structuralPrimitivesForCut: 切断線が梁を横切る（直交・spanが重なる）と幅×せいのCUT断面矩形(4本・太線)を出す', () => {
   const graph = makeGraph();
