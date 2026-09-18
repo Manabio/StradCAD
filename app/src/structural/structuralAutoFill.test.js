@@ -56,7 +56,7 @@ test('autoFillBeamsForStructure: role==="primary"の非在来（S造）は wallS
 test('【失敗系】autoFillBeamsForStructure: role==="primary"の在来木造は壁線方式へ委譲し、壁ゼロなら通り芯グリッドへフォールバックしない', () => {
   const { graph } = makeGridGraph(TRADITIONAL_WOOD_STRUCTURE);
   const { created, removed } = autoFillBeamsForStructure(graph, GRID_PROJECT, 'primary', null, []);
-  assert.deepEqual(created, []);
+  assert.equal(created.length, 0);
   assert.deepEqual(removed, []);
 });
 

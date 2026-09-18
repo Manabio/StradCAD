@@ -7,6 +7,7 @@ import {
   mergeWallIntervals, subtractCoveredSpan, throughBeamRuns, columnSplitPoints, propagateCarrierDepths, columnSupportBeamCandidates,
   beamWallCrossPoints, studPositions, studSpec, openingJambSpec, entranceOpeningWidthMm, hipBraceAllowed,
   wallRunFaces, faceStudPositions, sillTopLevelOffsetMm, jambAxisValue, jambColumnPositions, rectsOverlap,
+  supportSpanColumnPositions, mergePrimaryBeamRuns,
 } from './woodFraming.js';
 import { WOOD_BEAM_DEPTH_TABLE, TRADITIONAL_WOOD_FRAMING, TRADITIONAL_WOOD_BACKING, rulesFor, TRADITIONAL_WOOD_STRUCTURE } from './structureRules.js';
 import { findSectionEntry, woodRectSectionKey, SECTION_CATALOG } from './sectionCatalog.js';
@@ -829,4 +830,192 @@ test('【失敗系】faceStudPositions: 端部材と重なる割付材は落と�
   assert.deepEqual(faceStudPositions(NaN, {}), []);
   assert.deepEqual(faceStudPositions(1700, {}, { depthMm: 0 }), []);
   assert.deepEqual(faceStudPositions(1700, {}, { clearanceMm: -1 }), []);
+});
+
+// ================================================================
+// supportSpanColumnPositions（ステップ3i・2026-09-19）: 梁の支持長が1820を超える区間へ柱を足す位置。
+// 既定 maxSpanMm=1820・gridPitchMm=910・tol=CL_OVERLAP_TOL_MM(0.5)。
+// ================================================================
+
+test('supportSpanColumnPositions: 支持長が1820以下の区間には何も足さない', () => {
+  assert.deepEqual(supportSpanColumnPositions([0, 1820], [], () => true), []);
+  assert.deepEqual(supportSpanColumnPositions([0, 1000], [], () => true), []);
+});
+
+test('supportSpanColumnPositions: 支持長3640は中央(1820)に1本。直交CLがあればそこを使う', () => {
+  assert.deepEqual(
+    supportSpanColumnPositions([0, 3640], [1820], () => true),
+    [{ along: 1820, kind: 'struct' }], '数値のみのclAlongsは優先度struct扱い（後方互換）');
+});
+
+test('supportSpanColumnPositions: CLを優先し、窓内にCLが無ければ910グリッドへフォールバックする', () => {
+  // span=3000: 理想位置1500、採用窓[1180,1955]（CLが窓内にあれば理想との距離に関わらずCLを優先する）。
+  assert.deepEqual(
+    supportSpanColumnPositions([0, 3000], [1550], () => true),
+    [{ along: 1550, kind: 'struct' }], 'CLが窓内にあればグリッド候補(1820)より優先される');
+  assert.deepEqual(
+    supportSpanColumnPositions([0, 3000], [], () => true),
+    [{ along: 1820, kind: 'grid' }], 'CLが無ければ910グリッド（窓内で理想1500に最も近い1820）');
+});
+
+test('supportSpanColumnPositions（QA裁定2026-09-19）: 窓内に通り芯(struct)と意匠中心線(center)が両方あれば通り芯を優先する（距離で横断比較しない）', () => {
+  // span=3000: 実行可能範囲[1180,1820]（n=2,i=1: feasLo=max(tol,3000-1820)=1180,
+  // feasHi=min(1820,3000-tol)=1820）。center(1560)の方がstruct(1200)よりideal(1500)に近いが、
+  // struct群に1件でもあればcenter群は見ない。
+  assert.deepEqual(
+    supportSpanColumnPositions([0, 3000], [{ along: 1560, priority: 'center' }, { along: 1200, priority: 'struct' }], () => true),
+    [{ along: 1200, kind: 'struct' }], '距離はcenter(1560)の方が近いが、struct(1200)が優先される');
+  // structが範囲外・isAllowedで不可・存在しない場合はcenterへフォールバック。
+  assert.deepEqual(
+    supportSpanColumnPositions([0, 3000], [{ along: 1560, priority: 'center' }], () => true),
+    [{ along: 1560, kind: 'center' }], 'structが無ければcenterを使う');
+  // center・structともに実行不可能／isAllowed不可なら910グリッドへ（グリッドだけideal±455の窓で絞る）。
+  assert.deepEqual(
+    supportSpanColumnPositions([0, 3000], [{ along: 1560, priority: 'center' }], v => v !== 1560),
+    [{ along: 1820, kind: 'grid' }], 'centerもisAllowedで不可ならグリッドへ');
+});
+
+test('supportSpanColumnPositions（QA裁定2026-09-19・実行可能範囲）: 基準線は等分位置から離れていても支持長を1820以下に保てる位置なら採る（moku3実測の再現）', () => {
+  // span=2604（moku3 V x=9100 [-9884..-7280]相当。n=2,i=1）: ideal=1302、実行可能範囲は
+  // [784,1820]（feasLo=max(tol,2604-1820)=784, feasHi=min(1820,2604-tol)=1820）。
+  // struct(784)はideal(1302)から518mm離れ、旧実装の窓（ideal±455=[847,1757]）の外だったが、
+  // 実行可能範囲[784,1820]には入るため採用される——「支持長を1820以下に保てる位置に通り芯・中心線が
+  // あれば、等分位置から離れていてもそこを優先する」というユーザー仕様どおり。
+  assert.deepEqual(
+    supportSpanColumnPositions([0, 2604], [{ along: 784, priority: 'struct' }, { along: 1694, priority: 'center' }], () => true),
+    [{ along: 784, kind: 'struct' }], '等分位置(1302)から518mm離れたstruct(784)でも実行可能なら優先採用される');
+  // structが実行不可能な位置（600。残りの区間が2604-600=2004>1820になり支持長を満たせない）なら、
+  // 実行可能なcenter(1694)へフォールバックする。
+  assert.deepEqual(
+    supportSpanColumnPositions([0, 2604], [{ along: 600, priority: 'struct' }, { along: 1694, priority: 'center' }], () => true),
+    [{ along: 1694, kind: 'center' }], 'structが実行不可能(600)ならcenter(1694)を使う');
+  // struct・centerとも実行不可能な位置なら910グリッドへ（グリッドの窓はideal±455のまま）。
+  assert.deepEqual(
+    supportSpanColumnPositions([0, 2604], [{ along: 600, priority: 'struct' }, { along: 2500, priority: 'center' }], () => true),
+    [{ along: 910, kind: 'grid' }], 'struct(600)・center(2500)とも実行不可能なら910グリッドへ（ideal=1302に最も近い910）');
+});
+
+test('【失敗系】supportSpanColumnPositions: clAlongsの不正要素（along非数・priority未知）は無視する', () => {
+  assert.deepEqual(
+    supportSpanColumnPositions([0, 3640], [{ along: NaN, priority: 'struct' }, { along: 1820, priority: 'unknown' }, 'x', null], () => true),
+    [{ along: 1820, kind: 'grid' }], '不正な要素は無視され910グリッドへフォールバックする');
+});
+
+test('supportSpanColumnPositions: 支持長2000は910グリッド1本だけ（180mmの端数ピースを作らない）', () => {
+  const result = supportSpanColumnPositions([0, 2000], [], () => true);
+  assert.deepEqual(result, [{ along: 910, kind: 'grid' }]);
+  assert.ok(result[0].along >= 180 + 0.5, '端の180mm片ぎりぎりの位置を選ばない');
+});
+
+test('【失敗系】supportSpanColumnPositions: isAllowedが常にfalseなら候補が無いため空', () => {
+  assert.deepEqual(supportSpanColumnPositions([0, 3640], [1820], () => false), []);
+  assert.deepEqual(supportSpanColumnPositions([0, 3000], [1550], () => false), []);
+});
+
+test('supportSpanColumnPositions: 一部の理想位置がisAllowedで不可でも、attemptを増やして分割し直す', () => {
+  // span=3640・attempt=2（中央1820のみ）はisAllowedで拒否されるため、attempt=3（910・2730）へ増える。
+  const isAllowed = v => Math.abs(v - 1820) > 1;
+  assert.deepEqual(
+    supportSpanColumnPositions([0, 3640], [], isAllowed),
+    [{ along: 910, kind: 'grid' }, { along: 2730, kind: 'grid' }]);
+});
+
+test('【失敗系】supportSpanColumnPositions: どのattempt（n, n+1, n+2）でも1820以下に分割しきれない場合は、最後に試したattemptの部分的な結果を返す（0本より縮む方を優先）', () => {
+  // span=5460（n=3）: isAllowedがv<=2500だけを許すため、2500超の位置（1820超のグリッド）は使えず、
+  // attempt=3,4,5のいずれも全ピース1820以下にはならないが、見つかった範囲までは柱を追加する。
+  const isAllowed = v => v <= 2500;
+  const result = supportSpanColumnPositions([0, 5460], [], isAllowed);
+  assert.deepEqual(result, [{ along: 910, kind: 'grid' }, { along: 1820, kind: 'grid' }],
+    '見つけられた範囲（910・1820）までは柱を追加し、2500超で見つからない残りは支持長が長いまま（3dが大きい成を引く）');
+});
+
+test('【失敗系】supportSpanColumnPositions: 支持点が2点未満・非数混入は空', () => {
+  assert.deepEqual(supportSpanColumnPositions([], [1820], () => true), []);
+  assert.deepEqual(supportSpanColumnPositions([1000], [1820], () => true), []);
+  assert.deepEqual(supportSpanColumnPositions([0, NaN, 3640], [1820], () => true), []);
+  // dedupe後に1点未満になる場合も同様（tol=0.5未満は同一点）。
+  assert.deepEqual(supportSpanColumnPositions([1000, 1000.2], [1820], () => true), []);
+});
+
+test('【失敗系】supportSpanColumnPositions: 候補（CL・グリッドとも）が窓内に1つも無ければ空（例外を投げない）', () => {
+  // gridPitchMmを極端に大きくすると、窓[1820,1820]に910刻みの格子点が1つも入らない。
+  assert.deepEqual(
+    supportSpanColumnPositions([0, 3640], [], () => true, { gridPitchMm: 100000 }),
+    []);
+});
+
+test('supportSpanColumnPositions: 支持長が1820の倍数ちょうどで採用窓が1点に退化する（QA指摘・回帰固定）', () => {
+  // span=3640: 窓[1820,1820]（1点）。struct候補1821は窓外なので使われずグリッド1820が採用される。
+  assert.deepEqual(
+    supportSpanColumnPositions([0, 3640], [1821], () => true),
+    [{ along: 1820, kind: 'grid' }]);
+  // span=5460（=3×1820）: attempt=3で1820・3640ともグリッド（窓がそれぞれ1点に退化）。
+  assert.deepEqual(
+    supportSpanColumnPositions([0, 5460], [], () => true),
+    [{ along: 1820, kind: 'grid' }, { along: 3640, kind: 'grid' }]);
+});
+
+test('supportSpanColumnPositions: 同距離のタイは小さい座標を優先する（struct候補・グリッド候補とも）', () => {
+  // span=3000: ideal=1500、窓[1180,1955]。struct候補1250・1750は理想からの距離が同じ(250)。
+  assert.deepEqual(
+    supportSpanColumnPositions([0, 3000], [{ along: 1250, priority: 'struct' }, { along: 1750, priority: 'struct' }], () => true),
+    [{ along: 1250, kind: 'struct' }], '同距離のstruct候補は小さい座標(1250)を優先');
+});
+
+test('【失敗系】supportSpanColumnPositions: clAlongsがnullでも例外を投げずグリッドへフォールバックする', () => {
+  assert.deepEqual(supportSpanColumnPositions([0, 3640], null, () => true), [{ along: 1820, kind: 'grid' }]);
+});
+
+test('【失敗系】supportSpanColumnPositions: opts不正（maxSpanMm<=0・gridPitchMm非数/負・tol負）は空', () => {
+  assert.deepEqual(supportSpanColumnPositions([0, 3640], [], () => true, { maxSpanMm: 0 }), []);
+  assert.deepEqual(supportSpanColumnPositions([0, 3640], [], () => true, { maxSpanMm: -100 }), []);
+  assert.deepEqual(supportSpanColumnPositions([0, 3640], [], () => true, { gridPitchMm: NaN }), []);
+  assert.deepEqual(supportSpanColumnPositions([0, 3640], [], () => true, { gridPitchMm: -1 }), []);
+  assert.deepEqual(supportSpanColumnPositions([0, 3640], [], () => true, { tol: -1 }), []);
+});
+
+// ================================================================
+// mergePrimaryBeamRuns（QA裁定2026-09-19・Major-1）: role:'primary'の区間を同軸でrunへ束ね直す。
+// floor等は素通し。3iの収束先が階の処理順に依存する不具合の是正（下階柱による分割点を「梁端」から
+// 除くことで、点源が下階柱の増減と無関係な静的な量になる）。
+// ================================================================
+
+test('mergePrimaryBeamRuns: 同軸で端が接する2区間（下階柱による分割相当）を1本のrunへ束ね直す', () => {
+  const segs = [
+    { isVertical: true, coord: 9100, lo: -9884, hi: -9100, role: 'primary' },
+    { isVertical: true, coord: 9100, lo: -9100, hi: -7280, role: 'primary' },
+  ];
+  assert.deepEqual(mergePrimaryBeamRuns(segs), [
+    { isVertical: true, coord: 9100, lo: -9884, hi: -7280, role: 'primary' },
+  ]);
+});
+
+test('mergePrimaryBeamRuns: 隙間tol以下・重なりも連結し、別軸・別coordは束ねない。floorはそのまま素通しする', () => {
+  const segs = [
+    { isVertical: true, coord: 0, lo: 0, hi: 1000, role: 'primary' },
+    { isVertical: true, coord: 0, lo: 999.8, hi: 2000, role: 'primary' }, // 0.2mm重なり=tol以内
+    { isVertical: true, coord: 3640, lo: 0, hi: 1000, role: 'primary' },  // 別coord
+    { isVertical: false, coord: 0, lo: 0, hi: 1000, role: 'primary' },    // 別軸(isVertical違い)
+    { isVertical: true, coord: 0, lo: 5000, hi: 6000, role: 'floor' },    // floorは素通し
+  ];
+  const result = mergePrimaryBeamRuns(segs);
+  const primaries = result.filter(s => s.role === 'primary').sort((a, b) => a.coord - b.coord || a.lo - b.lo);
+  assert.deepEqual(primaries, [
+    { isVertical: true, coord: 0, lo: 0, hi: 2000, role: 'primary' },
+    { isVertical: false, coord: 0, lo: 0, hi: 1000, role: 'primary' },
+    { isVertical: true, coord: 3640, lo: 0, hi: 1000, role: 'primary' },
+  ].sort((a, b) => a.coord - b.coord || a.lo - b.lo));
+  assert.deepEqual(result.filter(s => s.role === 'floor'), [{ isVertical: true, coord: 0, lo: 5000, hi: 6000, role: 'floor' }]);
+});
+
+test('【失敗系】mergePrimaryBeamRuns: 非数混入・null/undefined要素・空/未指定入力は無視して例外を投げない', () => {
+  assert.deepEqual(mergePrimaryBeamRuns([]), []);
+  assert.deepEqual(mergePrimaryBeamRuns(undefined), []);
+  assert.deepEqual(mergePrimaryBeamRuns(null), []);
+  assert.deepEqual(mergePrimaryBeamRuns([
+    null, undefined,
+    { isVertical: true, coord: NaN, lo: 0, hi: 100, role: 'primary' },
+    { isVertical: true, coord: 0, lo: NaN, hi: 100, role: 'primary' },
+    { isVertical: true, coord: 0, lo: 0, hi: 100, role: 'primary' },
+  ]), [{ isVertical: true, coord: 0, lo: 0, hi: 100, role: 'primary' }]);
 });

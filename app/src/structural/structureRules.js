@@ -80,6 +80,11 @@ export const TRADITIONAL_WOOD_FRAMING = Object.freeze({
   beamTopBelowFLMm: 100,           // 梁天端はFL−100（土台天端も同じ値。woodFraming.js sillTopLevelOffsetMm）
   floorBeamMaxPitchMm: 1820,       // 床梁は柱間・梁間に1820を超えない位置に設ける
   hipBraceMaxAreaM2: 16,           // 火打ち梁は16㎡以下の四角の4隅（吹抜け可・EV/階段内は不可）
+  // 梁の支持長1820ルール（ステップ3i。ユーザー指示2026-09-19）。columnSupportMaxSpanMm と
+  // floorBeamMaxPitchMm は値がたまたま同じ(1820)だが概念は別（前者は梁の支持点間距離に柱を追加する
+  // 条件、後者は床梁を架けるセルの短辺の上限）——導出関係を持たず独立した定数として持つ。
+  columnSupportMaxSpanMm: 1820,    // 梁（primary）の支持長がこれを超えたら柱を追加する
+  gridModuleMm: 910,               // 直交CLが無いときのフォールバック格子ピッチ（lo側支持点からの相対）
   // ネコ土台の厚み(mm)。仕様「基礎天端の上にネコ土台（厚20）を置いた上に設置」——基礎天端＝土台下端
   // −この値。消費先は基礎の断面図（後続ステップ）。それまで基礎梁の levelOffset は書かない（断面・
   // 展開図に基礎梁の消費者が無く、書くと全既存文書に無観測の差分と undo だけが生じるため。2026-09-18裁定）。

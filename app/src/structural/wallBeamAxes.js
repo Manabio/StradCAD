@@ -349,35 +349,35 @@ export function stairOpeningRuns(belowGraph) {
 }
 
 /**
- * graph（1つ上の実体階など。無ければnull）の「生成・延長した梁」（頭つなぎ・受梁＝role:'primary'、
- * beamType:'頭つなぎ'|'受梁'。ステップ3h ／ 床梁＝role:'floor'。ステップ3e）を、下階の柱生成
- * （3h-2。woodAutoFill.js autoFillWoodColumns の aboveTieBeams）が「壁とみなして」扱うための区間
- * （プレーン配列）へ写す。座標基準は**axisCL.effectiveValue**（emitted・lockedSegmentsと同じ基準。
- * b.axisValueは偏心・柱芯オフセットを加えた実位置のため、これらと混在させるとoverlaps等の同軸判定が
- * ずれる。m6）・lo/hiはclStart/clEnd.effectiveValueのmin/max——3bのaboveColumns（他階graphからは
- * 柱のx/y/roleしか読まない規律）を「梁の軸・範囲まで」広げたもの（.claude/structural-model.md参照）。
- * **床梁（role:'floor'）を加えた理由**（2026-09-18裁定）：ユーザー指摘の4点のうち3点
- * （(1820,-3640)・(5460,0)・(7280,0)）は、その点に端を持つのが頭つなぎ・受梁ではなく床梁だったため、
- * 生成・延長した梁の下階柱生成という原則を守るには床梁も点源に含める必要があった。**壁線由来の
- * 大梁（beamType:'大梁'）の端までは広げない**——診断の試算で連鎖が大きく、2026模試で梁片が消える
- * 副作用があったため別承認扱い（.claude/structural-model.md参照）。
+ * graph（1つ上の実体階など。無ければnull）の柱生成の点源となる梁（role:'primary'（大梁・頭つなぎ・
+ * 受梁の別を問わない）または role:'floor'（床梁）。ステップ3h-2）を、下階の柱生成（woodAutoFill.js
+ * autoFillWoodColumns の aboveBeamSegments）が「壁とみなして」扱うための区間（プレーン配列）へ写す。
+ * 座標基準は**axisCL.effectiveValue**（emitted・lockedSegmentsと同じ基準。b.axisValueは偏心・柱芯
+ * オフセットを加えた実位置のため、これらと混在させるとoverlaps等の同軸判定がずれる。m6）・lo/hiは
+ * clStart/clEnd.effectiveValueのmin/max——3bのaboveColumns（他階graphからは柱のx/y/roleしか読まない
+ * 規律）を「梁の軸・範囲まで」広げたもの（.claude/structural-model.md参照）。
+ * **旧実装は頭つなぎ・受梁（beamType限定）＋床梁だけに絞っていたが、beamType列挙から漏れる壁線由来の
+ * 大梁（例：階段の床開口4辺由来の縁梁）が下階に柱を持たない不具合の原因だったため、role:'primary'全体
+ * （beamTypeを問わない）へ一般化した**（.claude/structural-model.md「点源の一般化」節参照）。
  * rules.baseMaterialと一致しない材種の梁は含めない（呼び出し側が対象graphの実効主構造ルールを渡す）。
+ * 返り値の`role`は3i（次段。支持長1820超のみを対象にする予定）が primary/floor を区別するために持つ
+ * だけで、本関数自身の消費（beamWallCrossPoints）はroleを見ない。
  * structuralRecompute.js・structuralOrchestration.js の両方が共有する（追加peekは無い——3b用に
  * peek済みのaboveGraphから読むだけ）。
  * @param {object|null} graph
  * @param {{baseMaterial:string}} rules
- * @returns {Array<{isVertical:boolean, coord:number, lo:number, hi:number}>}
+ * @returns {Array<{isVertical:boolean, coord:number, lo:number, hi:number, role:string}>}
  */
-export function tieBeamSegments(graph, rules) {
+export function columnSeedBeamSegments(graph, rules) {
   if (!graph) return [];
   return graph.beams
-    .filter(b => b.materialType === rules.baseMaterial
-      && ((b.role === 'primary' && (b.beamType === '頭つなぎ' || b.beamType === '受梁')) || b.role === 'floor'))
+    .filter(b => b.materialType === rules.baseMaterial && (b.role === 'primary' || b.role === 'floor'))
     .map(b => ({
       isVertical: b.isVertical,
       coord: b.axisCL.effectiveValue,
       lo: Math.min(b.clStart.effectiveValue, b.clEnd.effectiveValue),
       hi: Math.max(b.clStart.effectiveValue, b.clEnd.effectiveValue),
+      role: b.role,
     }));
 }
 

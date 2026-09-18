@@ -138,13 +138,13 @@ test('recomputeStructuralComposition: 下階編集経路は直前に立った下
   assert.equal(colTie.dimensionStatus, 'auto', '前提: 自動生成分（撤去対象になりうる）');
 
   // 2階: 頭つなぎ（縦方向、x=1820、y:-1000..1000）——1階のy=0の壁を(1820,0)で横切る
-  // （aboveTieBeamsForBelow＝tieBeamSegments(subjectGraph,...)の対象）。
+  // （aboveBeamSegmentsForBelow＝columnSeedBeamSegments(subjectGraph,...)の対象）。
   const xm = g2.addCenterLine(CenterLineType.VERTICAL, 1820, { labeled: true, discipline: Discipline.STRUCT });
   const yA = g2.addCenterLine(CenterLineType.HORIZONTAL, -1000, { labeled: true, discipline: Discipline.STRUCT });
   const yB = g2.addCenterLine(CenterLineType.HORIZONTAL, 1000,  { labeled: true, discipline: Discipline.STRUCT });
   const tieBeam = g2.addBeam(StructuralMaterialType.WOOD, 'WOOD-120x120', xm, true, yA, yB, { role: 'primary', beamType: '頭つなぎ' });
   // 2階自身の壁線上の通し梁再計算（wallRunSegmentsは自階＋1階の壁を合成するため、2階に壁が無くても
-  // 空にならない）にこの手作りの頭つなぎを巻き込まれないよう手動固定にする（tieBeamSegmentsは
+  // 空にならない）にこの手作りの頭つなぎを巻き込まれないよう手動固定にする（columnSeedBeamSegmentsは
   // dimensionStatusを見ないため候補列挙には影響しない）。
   tieBeam.setDimensionStatus('locked');
 
@@ -373,25 +373,26 @@ test('reflectStructuralAfterFinishExit: 最上階（唯一の実体階）から�
 });
 
 // ---- 不変条件・ソース走査: 下階編集経路（主構造変更時等）が、上階柱直下の柱（ステップ3b）・上階の
-// 頭つなぎ／受梁が壁を横切る位置の柱（ステップ3h-2）に必要な aboveColumns（subjectGraph.columns。
-// メモリ上・peek不要）・wallSegments（wallRunSegments）・aboveTieBeams（tieBeamSegments(subjectGraph,...)。
-// 同じくメモリ上・peek不要）を autoFillColumnsForStructure(belowGraph, ...) へ渡していること。これを
-// 渡し忘れると、直前の reflectStructuralToOtherFloors が作った下階の3b・3h-2柱が、この経路の再計算で
-// 候補から漏れて撤去される（woodAutoFill.test.jsの同種テストと同じ手法。fs.readFileSync+正規表現）。----
-test('【不変条件・ソース走査】structuralOrchestration.js: 下階編集経路が autoFillColumnsForStructure に subjectGraph.columns・wallRunSegments(...)・tieBeamSegments(subjectGraph,...) を渡している', async () => {
+// 柱生成の点源（role:'primary'|'floor'の梁）が壁を横切る位置の柱（ステップ3h-2）に必要な
+// aboveColumns（subjectGraph.columns。メモリ上・peek不要）・wallSegments（wallRunSegments）・
+// aboveBeamSegments（columnSeedBeamSegments(subjectGraph,...)。同じくメモリ上・peek不要）を
+// autoFillColumnsForStructure(belowGraph, ...) へ渡していること。これを渡し忘れると、直前の
+// reflectStructuralToOtherFloors が作った下階の3b・3h-2柱が、この経路の再計算で候補から漏れて
+// 撤去される（woodAutoFill.test.jsの同種テストと同じ手法。fs.readFileSync+正規表現）。----
+test('【不変条件・ソース走査】structuralOrchestration.js: 下階編集経路が autoFillColumnsForStructure に subjectGraph.columns・wallRunSegments(...)・columnSeedBeamSegments(subjectGraph,...) を渡している', async () => {
   const fs = await import('node:fs');
   const path = await import('node:path');
   const url = await import('node:url');
   const here = path.dirname(url.fileURLToPath(import.meta.url));
   const src = fs.readFileSync(path.join(here, 'structuralOrchestration.js'), 'utf8');
-  assert.ok(/autoFillColumnsForStructure\(belowGraph, project, belowGate, aboveColumnsForBelow, belowWallSegments, aboveTieBeamsForBelow\)/.test(src),
-    'autoFillColumnsForStructure(belowGraph, ...) へ aboveColumnsForBelow・belowWallSegments・aboveTieBeamsForBelow を渡していない');
+  assert.ok(/autoFillColumnsForStructure\(belowGraph, project, belowGate, aboveColumnsForBelow, belowWallSegments, aboveBeamSegmentsForBelow\)/.test(src),
+    'autoFillColumnsForStructure(belowGraph, ...) へ aboveColumnsForBelow・belowWallSegments・aboveBeamSegmentsForBelow を渡していない');
   assert.ok(/aboveColumnsForBelow\s*=\s*subjectGraph\.columns/.test(src),
     'aboveColumnsForBelow が subjectGraph.columns（メモリ上）から来ていない（誤ってpeekしている可能性）');
   assert.ok(/belowWallSegments\s*=\s*wallRunSegments\(belowGraph, belowBelowGraph, belowStructure\)/.test(src),
     'belowWallSegments が wallRunSegments(belowGraph, belowBelowGraph, belowStructure) から来ていない');
-  assert.ok(/aboveTieBeamsForBelow\s*=\s*tieBeamSegments\(subjectGraph,\s*rulesFor\(effectiveStructure\(subjectGraph, project\)\)\)/.test(src),
-    'aboveTieBeamsForBelow が tieBeamSegments(subjectGraph, ...)（メモリ上）から来ていない（誤ってpeekしている可能性）');
+  assert.ok(/aboveBeamSegmentsForBelow\s*=\s*columnSeedBeamSegments\(subjectGraph,\s*rulesFor\(effectiveStructure\(subjectGraph, project\)\)\)/.test(src),
+    'aboveBeamSegmentsForBelow が columnSeedBeamSegments(subjectGraph, ...)（メモリ上）から来ていない（誤ってpeekしている可能性）');
 });
 
 // ---- 実機再QA指摘1: 標準材の解決が採番パイプライン（collect/apply）とUI同期経路（renumberMembers・
@@ -696,6 +697,27 @@ test('【不変条件・実機再々QA指摘1】structuralOrchestration.js: refl
   assert.notEqual(setIdx, -1, 'project.activeGraph.setBeamColumnWidthMm(beamColumnWidthMm(...)) が見つからない（コメントアウトされている可能性）');
   assert.notEqual(collectIdx, -1, 'collectFloorGroups(project.activeGraph, project) が見つからない');
   assert.ok(setIdx < collectIdx, 'setBeamColumnWidthMm が collectFloorGroups(project.activeGraph, ...) より後にある（順序が逆）');
+});
+
+// ---- B-4（2026-09-19）: 反映パス（reflectStructuralToOtherFloors の再計算ループ）は最上階→最下階の
+// 降順で回す（ユーザー裁定「柱の追加は最上階から順に、最下階まで可能な限り同位置に」）。project.planes は
+// elevation昇順（core/project.js）のため、降順で回すには [...project.planes].reverse() を使う必要がある
+// ——挙動テスト（実際にpeek順序を記録する）はIDB依存（saveFloor）のため断念し、既存の不変条件テストと
+// 同じソース走査に留める（本ファイル冒頭コメント参照）。----
+test('【不変条件・B-4】structuralOrchestration.js: reflectStructuralToOtherFloors の再計算ループは project.planes を降順（reverse）で回す', async () => {
+  const fs = await import('node:fs');
+  const path = await import('node:path');
+  const url = await import('node:url');
+  const here = path.dirname(url.fileURLToPath(import.meta.url));
+  const src = stripComments(fs.readFileSync(path.join(here, 'structuralOrchestration.js'), 'utf8'));
+  const fnMatch = /export async function reflectStructuralToOtherFloors\(project\) \{([\s\S]*?)\r?\n\}/.exec(src);
+  assert.ok(fnMatch, 'reflectStructuralToOtherFloors関数本体が見つからない');
+  const body = fnMatch[1];
+  assert.ok(/for \(const plane of \[\.\.\.project\.planes\]\.reverse\(\)\) \{[\s\S]*?recomputeInactiveStructural\(plane, project\)/.test(body),
+    '再計算ループ（recomputeInactiveStructuralを呼ぶfor文）が [...project.planes].reverse() で回っていない');
+  // 採番の適用ループ（下段）は建物全体で1回・順序非依存のため昇順のまま据え置く（変更対象外）。
+  assert.ok(/for \(const plane of project\.planes\) \{[\s\S]*?applyMemberNumbersToFloor\(plane, tags, project/.test(body),
+    '採番の適用ループが project.planes（昇順のまま）を回っていない（意図せず変更されている可能性）');
 });
 
 // reflectStructuralToOtherFloors を直接呼ぶ挙動テスト（アクティブ階以外を実際に peek+recompute する）は

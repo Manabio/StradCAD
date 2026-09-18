@@ -4,7 +4,7 @@
 // 非在来（framingを持たない主構造）は袖柱が1本も生成されないことを確認する。
 //
 // 省略理由の内訳は、収束後にautoFillWoodColumnsを実アプリ（structuralRecompute.js）と同じ引数の
-// 組み立て（buildStructuralWallGate・wallRunSegments・peekAboveGraph・tieBeamSegments）で1回だけ
+// 組み立て（buildStructuralWallGate・wallRunSegments・peekAboveGraph・columnSeedBeamSegments）で1回だけ
 // 直接呼び直して得る——収束済みのため冪等（created/removedは空のまま）で、jambSkipped配列だけを
 // 診断用に読む（実アプリの前処理を省いた別実装を作らない。.claude/team-lessons「probeは実アプリと
 // 同じ関数列を通す」規律）。
@@ -15,10 +15,10 @@ import { floorSwapManager } from '../../src/storage/FloorSwapManager.js';
 import { recomputeStructuralForGraph } from '../../src/structural/structuralRecompute.js';
 import { isTraditionalWoodStructure, effectiveStructure, rulesFor } from '../../src/structural/structureRules.js';
 import { buildStructuralWallGate } from '../../src/structural/wallGate.js';
-import { wallRunSegments, tieBeamSegments, peekBelowGraph, peekAboveGraph } from '../../src/structural/wallBeamAxes.js';
+import { wallRunSegments, columnSeedBeamSegments, peekBelowGraph, peekAboveGraph } from '../../src/structural/wallBeamAxes.js';
 import { autoFillWoodColumns } from '../../src/structural/woodAutoFill.js';
 
-const src = process.argv[2] ?? 'D:/tatsuya/Download/moku1.stq';
+const src = process.argv[2] ?? 'D:/tatsuya/Download/moku4.stq';
 const { project } = loadDocument(src);
 // loadDoc.mjs は実IDBを使わないインメモリ復元のため、非アクティブ階のpeekはgraphMapから直接返す
 // （woodSillProbe.mjs・woodTieBeamProbe.mjs等と同じ差し替え）。
@@ -70,8 +70,8 @@ for (const p of project.planes) {
     const wallSegments = wallRunSegments(g, belowGraph, structure);
     const aboveColumns = aboveGraph?.columns ?? [];
     const ownRules = rulesFor(structure);
-    const aboveTieBeams = tieBeamSegments(aboveGraph, aboveGraph ? rulesFor(effectiveStructure(aboveGraph, project)) : ownRules);
-    const result = autoFillWoodColumns(g, project, wallGate, aboveColumns, wallSegments, aboveTieBeams);
+    const aboveBeamSegments = columnSeedBeamSegments(aboveGraph, aboveGraph ? rulesFor(effectiveStructure(aboveGraph, project)) : ownRules);
+    const result = autoFillWoodColumns(g, project, wallGate, aboveColumns, wallSegments, aboveBeamSegments);
     jambSkipped = result.jambSkipped ?? [];
     if (result.created.length !== 0 || result.removed.length !== 0) {
       console.log(`NG（${p.name}）: 診断のための呼び直しでcreated/removedが空でない（収束していない）: created=${result.created.length} removed=${result.removed.length}`);

@@ -1,6 +1,6 @@
 // 在来木造の頭つなぎ・受梁（ステップ3h・autoFillWoodWallBeamsフェーズB／columnSupportBeamCandidates）と、
 // それらを「壁とみなして」下階に立てる柱（ステップ3h-2・beamWallCrossPoints／autoFillWoodColumnsの
-// aboveTieBeams）の実データ確認用probe。woodWallBeamProbe.mjs を骨格に、全階 recomputeStructuralForGraph
+// aboveBeamSegments）の実データ確認用probe。woodWallBeamProbe.mjs を骨格に、全階 recomputeStructuralForGraph
 // を複数回回して階ごと・beamType別（頭つなぎ／受梁）の本数の前後と冪等（収束後に再度回してもchanged=false
 // で本数不変）を確認する。非在来（S造）は対象外（beamPlacement:'wallRuns'のときだけ生成する）。
 //
@@ -9,10 +9,10 @@ import { loadDocument } from './loadDoc.mjs';
 import { floorSwapManager } from '../../src/storage/FloorSwapManager.js';
 import { recomputeStructuralForGraph } from '../../src/structural/structuralRecompute.js';
 import { isTraditionalWoodStructure, rulesFor, effectiveStructure } from '../../src/structural/structureRules.js';
-import { selfWallSegments, peekAboveGraph, tieBeamSegments } from '../../src/structural/wallBeamAxes.js';
+import { selfWallSegments, peekAboveGraph, columnSeedBeamSegments } from '../../src/structural/wallBeamAxes.js';
 import { beamWallCrossPoints } from '../../src/structural/woodFraming.js';
 
-const src = process.argv[2] ?? 'D:/tatsuya/Download/moku1.stq';
+const src = process.argv[2] ?? 'D:/tatsuya/Download/moku4.stq';
 const { project } = loadDocument(src);
 // loadDoc.mjs は実IDBを使わないインメモリ復元のため、非アクティブ階のpeekはgraphMapから直接返す
 // （woodWallBeamProbe.mjs等と同じ差し替え）。
@@ -84,20 +84,22 @@ for (const p of project.planes) {
 }
 console.log(`合計: 柱 ${totalColBefore}→${totalColAfter}`);
 
-// ステップ3h-2: 頭つなぎ・受梁・床梁の下（beamWallCrossPointsの交点）に立った下階柱の本数
-// （収束後の安定状態に対して、本番と同じ関数列で交点を求め、既存柱と一致する数を数える）。
-// 変更1・2（2026-09-18）: 点源種別（頭つなぎ／受梁／床梁）ごとの内訳と、アンカー種別（CL解決／
-// オフセットアンカー＝woodAxisOffset非null）の内訳を追加する。同じ交点が複数の梁種別から
-// 重複して求まる場合があるため、種別ごとの件数の合計は「交点=」の件数と一致しないことがある
-// （診断目的の内訳であり、正味件数はdedupe後の「交点=」を参照する）。
-console.log('--- ステップ3h-2: 頭つなぎ／受梁／床梁の下に立った下階柱の本数（点源種別・アンカー種別の内訳付き） ---');
+// ステップ3h-2: 柱生成の点源（columnSeedBeamSegments。role:'primary'|'floor'）の下
+// （beamWallCrossPointsの交点）に立った下階柱の本数（収束後の安定状態に対して、本番と同じ関数列で
+// 交点を求め、既存柱と一致する数を数える）。
+// A-2（2026-09-19）: 点源はbeamType限定（頭つなぎ・受梁）から一般化され、壁線由来の大梁
+// （beamType:'大梁'）も含むようになった——bySourceの内訳（頭つなぎ／受梁／床梁／大梁）ごとの合計が
+// 「上階の柱生成点源=」の本数と一致するのはこの4種で全件をカバーできている場合のみ（role:'primary'
+// にこの4種以外のbeamTypeがあれば内訳の合計が総数を下回る。診断目的の内訳であり、正味件数は
+// dedupe後の「交点=」を参照する）。
+console.log('--- ステップ3h-2: 柱生成点源(role:primary|floor)の下に立った下階柱の本数（点源種別・アンカー種別の内訳付き） ---');
 let totalUnderTie = 0, totalCL = 0, totalOffset = 0;
 for (const p of project.planes) {
   const g = project.graphMap.get(p.id);
   const rules = rulesFor(effectiveStructure(g, project));
   if (!rules.framing) continue;
   const aboveGraph = await peekAboveGraph(g, project);
-  const ties = tieBeamSegments(aboveGraph, rules);
+  const ties = columnSeedBeamSegments(aboveGraph, rules);
   if (ties.length === 0) continue;
   const segs = selfWallSegments(g);
   const crossPoints = beamWallCrossPoints(ties, segs);
@@ -109,7 +111,7 @@ for (const p of project.planes) {
   totalUnderTie += underTie; totalCL += clCount; totalOffset += offsetCount;
   // 点源種別ごとの内訳（同じaboveGraphから beamType でフィルタして同じ変換を再適用。診断専用）。
   const bySource = {};
-  for (const beamType of ['頭つなぎ', '受梁', '床梁']) {
+  for (const beamType of ['頭つなぎ', '受梁', '床梁', '大梁']) {
     const subset = aboveGraph.beams
       .filter(b => b.materialType === rules.baseMaterial && b.beamType === beamType)
       .map(b => ({
@@ -120,9 +122,9 @@ for (const p of project.planes) {
     if (subset.length === 0) continue;
     bySource[beamType] = beamWallCrossPoints(subset, segs).length;
   }
-  console.log(`[${p.name}] 上階の頭つなぎ・受梁・床梁=${ties.length}本(内訳:${JSON.stringify(bySource)}) 交点=${crossPoints.length}件 うち柱あり=${underTie}件（CL解決=${clCount}／オフセット=${offsetCount}）`);
+  console.log(`[${p.name}] 上階の柱生成点源(primary|floor)=${ties.length}本(内訳:${JSON.stringify(bySource)}) 交点=${crossPoints.length}件 うち柱あり=${underTie}件（CL解決=${clCount}／オフセット=${offsetCount}）`);
 }
-console.log(`合計: 頭つなぎ・受梁・床梁の下に立つ柱=${totalUnderTie}件（CL解決=${totalCL}／オフセット=${totalOffset}）`);
+console.log(`合計: 柱生成点源(primary|floor)の下に立つ柱=${totalUnderTie}件（CL解決=${totalCL}／オフセット=${totalOffset}）`);
 
 // 冪等性の再確認: もう一度全階を回して、頭つなぎ・受梁の本数が変わらないこと（作って→撤去のチャーンが無いこと）。
 // 追加スイープ「前」の本数を別Mapに控えてから比較する（m13）——追加スイープ「後」に project.graphMap から
@@ -159,7 +161,7 @@ function beamsAt(graph, isVertical, coord, tolMm = 5) {
 // Minor10（QA第2巡・2026-09-18）: 下の座標（Y7=-12614等）はmoku3.stq固有の通り芯配置に基づく
 // ハードコードのため、srcがmoku3のときだけ出す（他文書に対して実行しても無意味な空/無関係な
 // 値を出さない）。
-if (/moku3/.test(src) && project.planes.length >= 3) {
+if (/moku[34]/.test(src) && project.planes.length >= 3) { // moku4 は moku3 と同じ通り芯配置（検証データは moku4／13 に統一。2026-09-19）
   const g2 = project.graphMap.get(project.planes[1].id);
   const g3 = project.graphMap.get(project.planes[2].id);
   console.log('=== 以下はmoku3.stq基準の座標（他文書には適用不可） ===');

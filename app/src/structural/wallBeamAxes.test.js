@@ -6,7 +6,7 @@ import { Plane, PlanGraph, CenterLineType, Discipline, StructuralMaterialType, S
 import {
   collectWallBeamSources, autoFillWallBeamAxes, isTraditionalWoodStructure,
   wallBackingCenters, mapBackingCenterMoves, findWallBeamAxisCL, wallBeamAxisExcludeKey, peekBelowGraph,
-  selfWallSegments, tieBeamSegments, stairOpeningRuns, wallRunSegments,
+  selfWallSegments, columnSeedBeamSegments, stairOpeningRuns, wallRunSegments,
 } from './wallBeamAxes.js';
 import { RC_WALL_BACKING_CODES } from '../finish/materials/backingClass.js';
 import { MATERIALS } from '../finish/materials/materialData.js';
@@ -611,7 +611,10 @@ test('【QA S4不変条件】centerLineOps.js の excludedWallBeamAxes.add(/.del
   assert.ok(targetLines.length >= 3, `前提: excludedWallBeamAxes.add/delete が3箇所以上あるはず（実際:${targetLines.length}）`);
 });
 
-// ---- tieBeamSegments（ステップ3h-2: 1つ上の実体階の頭つなぎ・受梁をプレーン区間へ写す。M3）----
+// ---- columnSeedBeamSegments（ステップ3h-2: 1つ上の実体階の柱生成の点源をプレーン区間へ写す。M3／
+//      A-2で「生成・延長した梁（beamType限定）」から「role:'primary'（beamType問わず）|'floor'」へ
+//      一般化——beamType列挙から漏れる壁線由来の大梁（階段の床開口4辺由来の縁梁等）が下階に柱を
+//      持たない不具合が原因。.claude/structural-model.md「点源の一般化」節参照）----
 // 通り芯（labeled:true, discipline:STRUCT）はserializeGraphの階スナップショットから除外される
 // （project.structGraphが別チャンネルで持つ）ため、往復テストも視野に意匠中心線（Discipline.ARCH・
 // labeled:false）で組む（woodAutoFill.test.js makeArchCLGraphと同じ規約）。
@@ -628,9 +631,12 @@ function makeTieBeamGraph() {
 }
 const TIE_BEAM_TEST_RULES = { baseMaterial: StructuralMaterialType.WOOD };
 
-test('tieBeamSegments: 大梁・小梁・床梁・頭つなぎ・受梁を1本ずつ置くと床梁・頭つなぎ・受梁の3件を{isVertical,coord,lo,hi}で返す', () => {
-  // 変更1（2026-09-18裁定）: 3h-2の点源を「生成・延長した梁」全体（頭つなぎ・受梁に加え床梁role:'floor'）
-  // へ広げた——ユーザー指摘4点のうち3点は床梁の端だったため（大梁・小梁は引き続き対象外）。
+test('columnSeedBeamSegments: 大梁・小梁・床梁・頭つなぎ・受梁を1本ずつ置くと大梁・床梁・頭つなぎ・受梁の4件をrole付きで返す（小梁のみ除外）', () => {
+  // A-2（2026-09-19裁定）: 点源をbeamType限定（頭つなぎ・受梁）から role:'primary' 全体（beamTypeを
+  // 問わない。大梁を含む）へ一般化した——moku3.stq 3階(1820,-9100)のように、階段の床開口4辺由来の
+  // 縁梁が壁線由来の「大梁」として生成され、beamType限定のままでは点源から漏れて下階に柱が立たない
+  // 不具合が原因（.claude/structural-model.md「点源の一般化」節参照）。role:'secondary'（小梁）だけが
+  // 引き続き対象外。
   const { graph, x0, x1, y0, y1, y2, y3, y4 } = makeTieBeamGraph();
   graph.addBeam(StructuralMaterialType.WOOD, 'WOOD-120x120', y0, false, x0, x1, { role: 'primary', beamType: '大梁' });
   graph.addBeam(StructuralMaterialType.WOOD, 'WOOD-120x120', y1, false, x0, x1, { role: 'secondary', beamType: '小梁' });
@@ -638,49 +644,50 @@ test('tieBeamSegments: 大梁・小梁・床梁・頭つなぎ・受梁を1本�
   graph.addBeam(StructuralMaterialType.WOOD, 'WOOD-120x120', y3, false, x0, x1, { role: 'primary', beamType: '頭つなぎ' });
   graph.addBeam(StructuralMaterialType.WOOD, 'WOOD-120x120', y4, false, x0, x1, { role: 'primary', beamType: '受梁' });
 
-  const result = tieBeamSegments(graph, TIE_BEAM_TEST_RULES);
-  assert.equal(result.length, 3, '床梁・頭つなぎ・受梁の3件を拾う（大梁・小梁は含めない）');
-  assert.deepEqual(result.map(r => r.coord).sort((a, b) => a - b), [2000, 3000, 4000]);
-  for (const r of result) {
-    assert.deepEqual(r, { isVertical: false, coord: r.coord, lo: 0, hi: 2000 }, 'lo/hiはclStart/clEnd.effectiveValueのmin/max');
-  }
+  const result = columnSeedBeamSegments(graph, TIE_BEAM_TEST_RULES);
+  assert.equal(result.length, 4, '大梁・床梁・頭つなぎ・受梁の4件を拾う（小梁のみ除外）');
+  const byCoord = new Map(result.map(r => [r.coord, r]));
+  assert.deepEqual(byCoord.get(0), { isVertical: false, coord: 0, lo: 0, hi: 2000, role: 'primary' }, '大梁も点源に含まれる');
+  assert.deepEqual(byCoord.get(2000), { isVertical: false, coord: 2000, lo: 0, hi: 2000, role: 'floor' });
+  assert.deepEqual(byCoord.get(3000), { isVertical: false, coord: 3000, lo: 0, hi: 2000, role: 'primary' });
+  assert.deepEqual(byCoord.get(4000), { isVertical: false, coord: 4000, lo: 0, hi: 2000, role: 'primary' });
 });
 
-test('【失敗系】tieBeamSegments: role:floorはbeamTypeを問わず含める（beamTypeが頭つなぎ/受梁と異なっても対象）', () => {
+test('【失敗系】columnSeedBeamSegments: role:floorはbeamTypeを問わず含める（beamTypeが頭つなぎ/受梁と異なっても対象）', () => {
   const { graph, x0, x1, y2 } = makeTieBeamGraph();
   graph.addBeam(StructuralMaterialType.WOOD, 'WOOD-120x120', y2, false, x0, x1, { role: 'floor', beamType: '床梁' });
-  const result = tieBeamSegments(graph, TIE_BEAM_TEST_RULES);
+  const result = columnSeedBeamSegments(graph, TIE_BEAM_TEST_RULES);
   assert.equal(result.length, 1);
-  assert.deepEqual(result[0], { isVertical: false, coord: 2000, lo: 0, hi: 2000 });
+  assert.deepEqual(result[0], { isVertical: false, coord: 2000, lo: 0, hi: 2000, role: 'floor' });
 });
 
-test('【失敗系】tieBeamSegments: graph=nullは[]を返す', () => {
-  assert.deepEqual(tieBeamSegments(null, TIE_BEAM_TEST_RULES), []);
+test('【失敗系】columnSeedBeamSegments: graph=nullは[]を返す', () => {
+  assert.deepEqual(columnSeedBeamSegments(null, TIE_BEAM_TEST_RULES), []);
 });
 
-test('【失敗系】tieBeamSegments: rules.baseMaterialと材種が不一致（S造の頭つなぎ相当）の梁は除外する', () => {
+test('【失敗系】columnSeedBeamSegments: rules.baseMaterialと材種が不一致（S造の頭つなぎ相当）の梁は除外する', () => {
   const { graph, x0, x1, y3 } = makeTieBeamGraph();
   graph.addBeam(StructuralMaterialType.STEEL, 'S-H300x150', y3, false, x0, x1, { role: 'primary', beamType: '頭つなぎ' });
-  assert.deepEqual(tieBeamSegments(graph, TIE_BEAM_TEST_RULES), [], 'rules.baseMaterial(WOOD)と一致しないS造梁は含めない');
+  assert.deepEqual(columnSeedBeamSegments(graph, TIE_BEAM_TEST_RULES), [], 'rules.baseMaterial(WOOD)と一致しないS造梁は含めない');
 });
 
-test('【失敗系】tieBeamSegments: role:secondaryの梁はbeamTypeが頭つなぎ/受梁と同名でも除外する', () => {
+test('【失敗系】columnSeedBeamSegments: role:secondaryの梁はbeamTypeが頭つなぎ/受梁と同名でも除外する', () => {
   const { graph, x0, x1, y3, y4 } = makeTieBeamGraph();
   graph.addBeam(StructuralMaterialType.WOOD, 'WOOD-120x120', y3, false, x0, x1, { role: 'secondary', beamType: '頭つなぎ' });
   graph.addBeam(StructuralMaterialType.WOOD, 'WOOD-120x120', y4, false, x0, x1, { role: 'secondary', beamType: '受梁' });
-  assert.deepEqual(tieBeamSegments(graph, TIE_BEAM_TEST_RULES), [], 'role!=primaryは対象外（3hは常にrole:primaryで生成する規律）');
+  assert.deepEqual(columnSeedBeamSegments(graph, TIE_BEAM_TEST_RULES), [], 'role:secondary（小梁）のみ対象外（beamTypeを問わない一般化後も変わらない境界）');
 });
 
-test('tieBeamSegments: serializeGraph→restoreGraphの往復後のgraphからも拾える（beamType永続化の保険。M3）', () => {
+test('columnSeedBeamSegments: serializeGraph→restoreGraphの往復後のgraphからも拾える（beamType永続化の保険。M3）', () => {
   const { graph, x0, x1, y3 } = makeTieBeamGraph();
   const tie = graph.addBeam(StructuralMaterialType.WOOD, 'WOOD-120x120', y3, false, x0, x1, { role: 'primary', beamType: '頭つなぎ' });
   const bytes = serializeGraph(graph);
   const restored = new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
   restoreGraph(restored, bytes);
   assert.ok(restored.beamMap.has(tie.id), '前提: 復元後に同一IDの梁が存在する');
-  const result = tieBeamSegments(restored, TIE_BEAM_TEST_RULES);
+  const result = columnSeedBeamSegments(restored, TIE_BEAM_TEST_RULES);
   assert.equal(result.length, 1);
-  assert.deepEqual(result[0], { isVertical: false, coord: 3000, lo: 0, hi: 2000 });
+  assert.deepEqual(result[0], { isVertical: false, coord: 3000, lo: 0, hi: 2000, role: 'primary' });
 });
 
 // ---- stairOpeningRuns（Major 6・2026-09-18裁定: 階段の「床開口の外周4辺すべて」を壁線と同じ扱いの

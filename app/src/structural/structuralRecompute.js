@@ -1,7 +1,7 @@
 import { runInAction } from 'mobx';
 import { serializeGraph } from '../graphSnapshot.js';
 import { buildStructuralWallGate, buildExteriorSide } from './wallGate.js';
-import { collectWallBeamSources, peekBelowGraph, peekAboveGraph, wallRunSegments, tieBeamSegments } from './wallBeamAxes.js';
+import { collectWallBeamSources, peekBelowGraph, peekAboveGraph, wallRunSegments, columnSeedBeamSegments } from './wallBeamAxes.js';
 import {
   autoFillStructuralGrid,
   autoFillColumnAxisOffsets,
@@ -77,17 +77,18 @@ export async function recomputeStructuralForGraph(targetGraph, project, mainStru
   // ルール軸をここでも読む——ownRulesはstructuralRecompute.js冒頭で集約済み）。
   const aboveGraph = ownRules.columnPlacement === 'wallIntersections' ? await peekAboveGraph(targetGraph, project) : null;
   const aboveColumns = aboveGraph?.columns ?? [];
-  // 在来木造の下階柱（ステップ3h-2）が候補列挙に使う、1つ上の実体階の頭つなぎ・受梁の区間
-  // （追加peek 0回——3b用に既にpeek済みのaboveGraphから読むだけ。「上階graphからは柱のx/y/roleしか
-  // 読まない」規律を頭つなぎ・受梁の軸・範囲まで広げる。tieBeamSegmentsはaboveGraph=nullで[]を返す）。
+  // 在来木造の下階柱（ステップ3h-2）が候補列挙に使う、1つ上の実体階の柱生成の点源（role:'primary'
+  // または'floor'の梁の軸・範囲。columnSeedBeamSegments）。追加peek 0回——3b用に既にpeek済みの
+  // aboveGraphから読むだけ。「上階graphからは柱のx/y/roleしか読まない」規律を梁の軸・範囲まで広げる。
+  // columnSeedBeamSegmentsはaboveGraph=nullで[]を返す。
   // ルールはaboveGraph自身の実効主構造から引く（ownRules=targetGraphのルールを流用しない——混構造
   // 建物ではaboveGraphの主構造がtargetGraphと異なりうるため。structuralOrchestration.jsの下階編集経路
-  // （tieBeamSegments(subjectGraph, rulesFor(effectiveStructure(subjectGraph, project)))）と対称）。
-  const aboveTieBeams = tieBeamSegments(aboveGraph, aboveGraph ? rulesFor(effectiveStructure(aboveGraph, project)) : ownRules);
+  // （columnSeedBeamSegments(subjectGraph, rulesFor(effectiveStructure(subjectGraph, project)))）と対称）。
+  const aboveBeamSegments = columnSeedBeamSegments(aboveGraph, aboveGraph ? rulesFor(effectiveStructure(aboveGraph, project)) : ownRules);
 
   // 構造体トポロジーから未定義の柱・梁・基礎（基礎伏図のみ）を検出し、自動補完する。
   // ユーザーが明示削除した箇所は除外集合（excludedColumnSlots 等）により復活しない。
-  const { newColumns, removedColumns, newFootings, newBeams, removedBeams } = runInAction(() => autoFillStructuralGrid(targetGraph, project, mainStructure, wallGate, wallSources, wallSegments, aboveColumns, belowGraph?.columns ?? [], aboveTieBeams));
+  const { newColumns, removedColumns, newFootings, newBeams, removedBeams } = runInAction(() => autoFillStructuralGrid(targetGraph, project, mainStructure, wallGate, wallSources, wallSegments, aboveColumns, belowGraph?.columns ?? [], aboveBeamSegments));
   // べた基礎（木造）のマットスラブを基礎伏図に生成・撤去する（基礎種別で取捨。問題.md）。基礎伏図以外では no-op。
   const matFoundation = runInAction(() => autoFillMatFoundation(targetGraph, project));
   // 外周モデル（side ビュー）を1回構築し、柱芯オフセットと梁偏芯の両方に渡す——柱・梁で外側方向（内外定義）を一致させる。

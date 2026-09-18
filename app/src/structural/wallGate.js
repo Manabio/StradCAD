@@ -13,8 +13,8 @@
 // 非アクティブな下階は floorSwapManager.peek で読み取り専用に覗き、各 graph 内で世界座標→セルを解決する
 // （世界座標は全階共通原点のため跨ぎ比較可。figure.md「他階部材を主題階の中心線へ再解決しない」規律を保つ）。
 
-import { RoomKind, RoomFeature } from '../core.js';
-import { worldToCell } from '../finish/gridCells.js';
+import { RoomKind, RoomFeature, CenterLineType } from '../core.js';
+import { worldToCell, dividerCLsBetween } from '../finish/gridCells.js';
 import { buildCellToRoom } from '../finish/edgeClassify.js';
 import { floorSwapManager } from '../storage/FloorSwapManager.js';
 
@@ -130,13 +130,21 @@ export function buildExteriorSide(graph) {
 function makeWallGate(probes) {
   const isBuilding = (wx, wy) => probes.every(p => p(wx, wy));
   return {
-    /** グリッド辺の両側(±EPS)のいずれかが「下まで連続して建物内」なら true（直下に支えの無い辺は false で省く）。 */
-    spanInBuilding(axisCL, isVertical, clStart, clEnd) {
-      const mid = (clStart.value + clEnd.value) / 2;
+    /** 軸線(axisCL.value)上の1点(along)の直交両側(±EPS)のいずれかが「下まで連続して建物内」なら true。
+     *  spanInBuilding・footprintBreakCLs（区間の分割粒度に依らない境界検出）が共有する唯一の点判定
+     *  ——判定式を二重化しない。 */
+    spanPointInBuilding(axisCL, isVertical, along) {
       const a = axisCL.value;
       return isVertical
-        ? isBuilding(a - SAMPLE_EPS, mid) || isBuilding(a + SAMPLE_EPS, mid)
-        : isBuilding(mid, a - SAMPLE_EPS) || isBuilding(mid, a + SAMPLE_EPS);
+        ? isBuilding(a - SAMPLE_EPS, along) || isBuilding(a + SAMPLE_EPS, along)
+        : isBuilding(along, a - SAMPLE_EPS) || isBuilding(along, a + SAMPLE_EPS);
+    },
+    /** グリッド辺の両側(±EPS)のいずれかが「下まで連続して建物内」なら true（直下に支えの無い辺は false で省く）。
+     *  区間中点でのspanPointInBuildingを見るだけ——分割粒度が粗いと中点が偶然どちら側に転ぶかで結果が
+     *  変わりうる（footprintBreakCLsで区間をあらかじめフットプリント境界で割っておくのが呼び出し側の責務）。 */
+    spanInBuilding(axisCL, isVertical, clStart, clEnd) {
+      const mid = (clStart.value + clEnd.value) / 2;
+      return this.spanPointInBuilding(axisCL, isVertical, mid);
     },
     /** グリッド交点まわり4象限(±EPS)のいずれかが「下まで連続して建物内」なら true（直下に支えの無い交点は false で省く）。 */
     intersectionInBuilding(verticalCL, horizontalCL) {
@@ -145,6 +153,39 @@ function makeWallGate(probes) {
           || isBuilding(x - SAMPLE_EPS, y + SAMPLE_EPS) || isBuilding(x + SAMPLE_EPS, y + SAMPLE_EPS);
     },
   };
+}
+
+/**
+ * 区間 (lo, hi) のうち、フットプリントの帰属（建物内/外）が変わる境界のCenterLineを value 昇順で返す
+ * （区間中点だけを見るspanInBuildingの粒度依存を解消するため、分割の手前で必ず呼ぶ）。
+ * 候補は区間内の直交divider CL（gridCells.js dividerCLsBetween＝通り芯または実線の意匠中心線。
+ * フットプリントのセル境界は必ずdivider CLで表現されるため、帰属が変わる位置は必ずこの候補集合の
+ * 中にある）。隣り合う小区間の中点でspanPointInBuildingを比べ、結果が変化する境界だけを返す
+ * （変化しない候補＝両側とも同じ帰属の通り芯・中心線は境界ではないため返さない）。
+ * gateがnull（フットプリント未定義・呼び出し側がゲートなしで動く階）なら常に空配列。
+ * @param {ReturnType<typeof makeWallGate>|null} gate
+ * @param {object} graph
+ * @param {{value:number}} axisCL - 軸線（法線方向の座標はaxisCL.value。spanInBuildingと同じ基準）
+ * @param {boolean} isVertical
+ * @param {number} lo
+ * @param {number} hi
+ * @returns {Array<object>} CenterLine実体の配列（value昇順）
+ */
+export function footprintBreakCLs(gate, graph, axisCL, isVertical, lo, hi) {
+  if (!gate) return [];
+  const crossType = isVertical ? CenterLineType.HORIZONTAL : CenterLineType.VERTICAL;
+  const candidates = dividerCLsBetween(graph, crossType, lo, hi); // value昇順・(lo,hi)の開区間
+  if (candidates.length === 0) return [];
+  const bounds = [lo, ...candidates.map(cl => cl.value), hi];
+  const insides = [];
+  for (let i = 0; i < bounds.length - 1; i++) {
+    insides.push(gate.spanPointInBuilding(axisCL, isVertical, (bounds[i] + bounds[i + 1]) / 2));
+  }
+  const out = [];
+  for (let i = 1; i < insides.length; i++) {
+    if (insides[i] !== insides[i - 1]) out.push(candidates[i - 1]);
+  }
+  return out;
 }
 
 /** 自階単独のフットプリント（部屋領域）だけを見るWallGateを構築する（sync・鉛直連続性ANDは取らない）。

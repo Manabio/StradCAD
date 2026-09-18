@@ -333,6 +333,190 @@ export function columnSplitPoints(run, axisCoord, isVertical, columnPoints, tol 
   return dedupCoords([run.lo, ...interior, run.hi], tol);
 }
 
+// clAlongsの優先度ランク（数値が小さいほど優先）。QA裁定2026-09-19「通り芯、中心があればそこ、なければ
+// …910グリッド」の語順どおり、通り芯(struct)を意匠中心線(center)より優先する——旧実装は両者を区別せず
+// 1つのプールから「理想位置に最も近いもの」を選んでいたため、窓内に通り芯と中心線の両方があるとき
+// どちらが選ばれるかが値の並びに依存し、上階・下階の処理順（3h-2の点源の分割状態）と絡んで結果が
+// 階の処理順に依存する一因になっていた（QA実測：moku3で昇順=通り芯Y4・降順=意匠中心線の別位置）。
+const CL_PRIORITY_RANK = Object.freeze({ struct: 0, center: 1 });
+
+// clAlongsの各要素を{along, priority}へ正規化する。数値のみの要素は後方互換のため優先度最上位(struct)
+// 扱い（既存の呼び出し側・テストの「1種類のCLしか渡さない」形を壊さない）。不正な要素（along非数・
+// priorityが未知）は無視する。
+function normalizeClEntries(clAlongs) {
+  const out = [];
+  for (const e of (clAlongs ?? [])) {
+    if (typeof e === 'number') { if (Number.isFinite(e)) out.push({ along: e, priority: 'struct' }); continue; }
+    if (e && Number.isFinite(e.along) && Object.prototype.hasOwnProperty.call(CL_PRIORITY_RANK, e.priority)) {
+      out.push({ along: e.along, priority: e.priority });
+    }
+  }
+  return out;
+}
+
+/**
+ * 梁の支持長が maxSpanMm を超える支持区間へ柱を足す位置（ステップ3i。ユーザー指示2026-09-19「梁の支持長が
+ * 1820を超える場合、1820以内の下階に壁あり直交する通り芯、中心があればそこ、なければ、支持長を1820以下に
+ * 分ける910グリッドに柱を追加。この柱の追加処理については、最上階から順に行い、最下階まで可能な限り、
+ * 同位置に柱を追加」）。graph依存（壁の下地帯内・through-run内・建具の外・既存柱と重ならない等）は
+ * isAllowed述語に閉じ込める純関数——woodAutoFill.js autoFillWoodColumns が3a/3b/3h-2/袖柱と同じ
+ * 壁条件・through-run・ゲート・重なり判定・除外集合・オフセットアンカーを共有する形で呼び出す。
+ * 隣接する支持点2点（supportAlongsをdedupe・昇順にした列の隣接ペア）ごとに独立して処理する:
+ *  - span（hi-lo）がmaxSpanMm以下（tol込み）ならそのペアには何もしない。
+ *  - attempt=n, n+1, n+2（n=ceil(span/maxSpanMm)）の順に、理想位置 lo+i*span/attempt（i=1..attempt-1）を
+ *    左から右へ試す。**基準線（clAlongs＝通り芯・意匠中心線）の採用範囲は「実行可能な全範囲」**
+ *    [max(prev+tol, hi-(attempt-i)*maxSpanMm), min(prev+maxSpanMm, hi-tol)]（理想位置±gridPitchMm/2の
+ *    制約は掛けない——QA裁定2026-09-19「支持長を1820以下に保てる位置に通り芯・中心線があれば、等分位置
+ *    から離れていてもそこを優先する」）。この範囲内・isAllowed通過分から**優先度順**（struct→center）に
+ *    理想に最も近いものを選ぶ——優先度の高い群に1件でも候補があれば、低い群に理想により近い候補があっても
+ *    採用しない。**910グリッドへのフォールバックだけ**理想位置±gridPitchMm/2（実行可能範囲との積）で
+ *    絞る（等分近傍からの端数の小片を作らないための制約はグリッドにのみ効く）。いずれも無ければその
+ *    理想位置はスキップする（prevは更新しない＝次の理想位置の窓がその分広がる）。支持点に極端に近い
+ *    基準線（柱寸未満の小片を作る位置）はここでは弾かない——isAllowed（呼び出し側の重なり判定）が
+ *    その位置を落とす前提（woodAutoFill.jsのrectsOverlap）。
+ *  - 採用した点列（lo, ...採用位置, hi）の全ピースがmaxSpanMm以下（tol込み）になれば、その時点のattemptで
+ *    成功として打ち切り、以降のattemptは試さない。
+ *  - どのattemptも成功しなければ、最後に試した attempt（n+2）の点列をそのまま返す（柱を足さないより
+ *    支持長が縮む方が良い——残る1820超は3d（梁成表引き）が大きい成を引いて吸収する）。
+ * 全体の返り値は各ペアの採用位置を合わせて昇順・tol以内はdedupeする。0件も正常系（span全て1820以下・
+ * isAllowedが常にfalse・候補が1つも無い等）。
+ * @param {number[]} supportAlongs - 既知の支持点（未ソート・重複可）
+ * @param {Array<number|{along:number, priority:'struct'|'center'}>} clAlongs - 走行方向の候補CL座標
+ *   （通り芯・意匠中心線。梁芯・補助線は含めないこと）。数値のみの要素は優先度'struct'扱い（後方互換）。
+ * @param {(along:number)=>boolean} isAllowed - その位置に柱を立てられるか（graph依存はここに閉じ込める）
+ * @param {{maxSpanMm?:number, gridPitchMm?:number, tol?:number}} [opts]
+ * @returns {Array<{along:number, kind:'struct'|'center'|'grid'}>} 昇順・dedupe（tol以内は同一点として先着を残す）
+ */
+export function supportSpanColumnPositions(supportAlongs, clAlongs, isAllowed, opts = {}) {
+  const {
+    maxSpanMm = TRADITIONAL_WOOD_FRAMING.columnSupportMaxSpanMm,
+    gridPitchMm = TRADITIONAL_WOOD_FRAMING.gridModuleMm,
+    tol = CL_OVERLAP_TOL_MM,
+  } = opts;
+  if (!Array.isArray(supportAlongs) || supportAlongs.some(v => !Number.isFinite(v))) return [];
+  if (!Number.isFinite(maxSpanMm) || maxSpanMm <= 0) return [];
+  if (!Number.isFinite(gridPitchMm) || gridPitchMm <= 0) return [];
+  if (!Number.isFinite(tol) || tol < 0) return [];
+  const supports = dedupCoords(supportAlongs, tol);
+  if (supports.length < 2) return [];
+  const clEntries = normalizeClEntries(clAlongs);
+  const allowed = typeof isAllowed === 'function' ? isAllowed : () => false;
+
+  // 窓[winLo,winHi]内でidealに最も近い候補を選ぶ（同距離は小さい値を優先）。純粋なローカルヘルパ。
+  function pickNearest(candidates, winLo, winHi, ideal) {
+    let best = null, bestDist = Infinity;
+    for (const c of candidates) {
+      if (c < winLo || c > winHi) continue;
+      const dist = Math.abs(c - ideal);
+      if (dist < bestDist || (dist === bestDist && (best == null || c < best))) { best = c; bestDist = dist; }
+    }
+    return best;
+  }
+
+  const results = [];
+  for (let s = 0; s < supports.length - 1; s++) {
+    const lo = supports[s], hi = supports[s + 1];
+    const span = hi - lo;
+    if (span <= maxSpanMm + tol) continue; // 1820以下（tol込み）は何もしない
+
+    const nBase = Math.ceil(span / maxSpanMm);
+    let lastAttemptPositions = [];
+    for (let attempt = nBase; attempt <= nBase + 2; attempt++) {
+      const positions = [];
+      let prev = lo;
+      for (let i = 1; i < attempt; i++) {
+        const ideal = lo + (i * span) / attempt;
+        // 【QA裁定2026-09-19】基準線（通り芯・意匠中心線）候補の採用窓は「実行可能な全範囲」——
+        // ideal±gridPitchMm/2の等分近傍制約を掛けない。ユーザー仕様「支持長を1820以下に保てる位置に
+        // 通り芯・中心線があれば、等分位置から離れていてもそこを優先する」ため（実測: moku3のV軸
+        // x=9100で、等分位置から784mm離れた通り芯Y4(-9100)が旧実装の窓[±455]から外れ、離れた意匠
+        // 中心線(-8190)が誤って選ばれていた）。910グリッドへのフォールバックだけ従来どおり
+        // ideal±gridPitchMm/2で絞る（等分近傍からの端数の小片を作らないための制約はグリッドにのみ効く）。
+        // 支持点に極端に近いCL（柱寸未満の小片を作る位置）は新たなガードを設けない——isAllowedの
+        // 重なり判定（3iではcolumnWidth基準のrectsOverlap）が既にその位置を落とすため（確認済み）。
+        const feasLo = Math.max(prev + tol, hi - (attempt - i) * maxSpanMm);
+        const feasHi = Math.min(prev + maxSpanMm, hi - tol);
+        if (feasLo > feasHi) continue; // 実行可能範囲が無い。スキップ（prevは更新しない）
+        // 優先度順（struct→center）に実行可能範囲・isAllowed通過の候補から選ぶ——高優先度に1件でも
+        // あれば低優先度・グリッドは見ない（距離で横断比較しない）。
+        let chosen = null, kind = null;
+        for (const priority of ['struct', 'center']) {
+          const candidates = clEntries.filter(e => e.priority === priority).map(e => e.along).filter(allowed);
+          chosen = pickNearest(candidates, feasLo, feasHi, ideal);
+          if (chosen != null) { kind = priority; break; }
+        }
+        if (chosen == null) {
+          const winLo = Math.max(feasLo, ideal - gridPitchMm / 2);
+          const winHi = Math.min(feasHi, ideal + gridPitchMm / 2);
+          if (winLo <= winHi) {
+            const kLo = Math.ceil((winLo - lo) / gridPitchMm);
+            const kHi = Math.floor((winHi - lo) / gridPitchMm);
+            const gridCandidates = [];
+            for (let k = kLo; k <= kHi; k++) gridCandidates.push(lo + gridPitchMm * k);
+            chosen = pickNearest(gridCandidates.filter(allowed), winLo, winHi, ideal);
+            kind = 'grid';
+          }
+        }
+        if (chosen == null) continue; // どれも無ければスキップ（prevは更新しない）
+        positions.push({ along: chosen, kind });
+        prev = chosen;
+      }
+      lastAttemptPositions = positions;
+      const seq = [lo, ...positions.map(p => p.along), hi];
+      const allWithinLimit = seq.every((v, idx) => idx === 0 || v - seq[idx - 1] <= maxSpanMm + tol);
+      if (allWithinLimit) break; // 成功。以降のattemptは試さない
+    }
+    results.push(...lastAttemptPositions);
+  }
+
+  results.sort((a, b) => a.along - b.along);
+  const out = [];
+  for (const r of results) {
+    if (out.length === 0 || r.along - out[out.length - 1].along >= tol) out.push(r);
+  }
+  return out;
+}
+
+/**
+ * aboveBeamSegments（columnSeedBeamSegments。1つ上の実体階の柱生成の点源）のうち role:'primary' の
+ * 区間を、同軸（同isVertical・coordがtol内）で端が接する／重なるもの同士runへ束ね直す（ステップ3i・
+ * 3h-2の点源。QA裁定2026-09-19「3iの収束先が階の処理順に依存する」是正）。
+ *
+ * 【背景】上階の梁は前回パスで下階柱（3b/3h-2/3i自身）によって複数本へ分割されて保存されている
+ * （3c-2b「梁は下階柱で区切られる材ごとに区別する」）。分割済みの区間をそのまま3h-2の交点計算・3iの
+ * 支持長計算の点源にすると、下階柱の位置（＝分割点＝梁の端）が「梁端」として現れ、3i/3h-2の出力
+ * （新しい下階柱）が次パスの入力（同じ梁の分割点）を変え、それがまた出力を変える……という自己参照
+ * ループになる——どの位置で分割するか（＝どの下階柱が先に立つか）は階の処理順に依存するため、結果が
+ * 順序依存になっていた（実データmoku3で確認：昇順=通り芯Y4に、降順=意匠中心線の別位置に収束）。
+ * 分割で生まれる区間の境界には必ず下階柱があるため、runへ戻して分割点を「梁端」から除いても失う情報は
+ * 無い——残る点源はrunの両端（自由端・他の壁との取り合い）・他軸の梁との交点・下階壁との交点だけになり、
+ * これらは下階柱の増減と無関係な静的な量になる。
+ * role!=='primary'（floor等）は対象外——そのまま素通しする（床梁は下階柱で分割されないため）。
+ * 純関数（graph非依存）。mergeWallIntervalsと同じ「隙間tol以下は連結」規約を共有する。
+ * @param {Array<{isVertical:boolean, coord:number, lo:number, hi:number, role:string}>} segments
+ * @param {number} [tol]
+ * @returns {Array<{isVertical:boolean, coord:number, lo:number, hi:number, role:string}>} primary分は
+ *   束ね直した区間、それ以外（floor等）はそのまま（順序は保証しない）。非数混入・不正要素は無視する。
+ */
+export function mergePrimaryBeamRuns(segments, tol = CL_OVERLAP_TOL_MM) {
+  const valid = (segments ?? []).filter(s => s && Number.isFinite(s.coord) && Number.isFinite(s.lo) && Number.isFinite(s.hi));
+  const primaries = valid.filter(s => s.role === 'primary');
+  const others = valid.filter(s => s.role !== 'primary');
+  const groups = [];
+  for (const s of primaries) {
+    let g = groups.find(g => g.isVertical === s.isVertical && Math.abs(g.coord - s.coord) < tol);
+    if (!g) { g = { isVertical: s.isVertical, coord: s.coord, intervals: [] }; groups.push(g); }
+    g.intervals.push({ lo: Math.min(s.lo, s.hi), hi: Math.max(s.lo, s.hi) });
+  }
+  const merged = [];
+  for (const g of groups) {
+    for (const iv of mergeWallIntervals(g.intervals, tol)) {
+      merged.push({ isVertical: g.isVertical, coord: g.coord, lo: iv.lo, hi: iv.hi, role: 'primary' });
+    }
+  }
+  return [...merged, ...others];
+}
+
 /**
  * 柱（下階柱＝頭つなぎ／自階柱＝受梁）の直上・直下に、両端が支持された梁を新設・延長するための候補区間を
  * 求める（ステップ3h。ユーザー裁定「下階柱／自階柱を中心に水平・垂直のうち、隣の梁までの総長が短い

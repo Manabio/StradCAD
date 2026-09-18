@@ -117,16 +117,16 @@ export function autoFillColumns(graph, project, wallGate = null) {
 }
 
 /** 柱の自動生成を主構造ルールの選択子（columnPlacement）で振り分ける単一の入口。
- *  通り芯交点（既定）＝autoFillColumns、壁交点＋上階柱直下＋上階頭つなぎ／受梁の壁交点（在来木造）＝
- *  autoFillWoodColumns（撤去も伴う）。aboveColumns・wallSegments・aboveTieBeams は在来木造
+ *  通り芯交点（既定）＝autoFillColumns、壁交点＋上階柱直下＋上階の柱生成点源の壁交点（在来木造）＝
+ *  autoFillWoodColumns（撤去も伴う）。aboveColumns・wallSegments・aboveBeamSegments は在来木造
  *  （columnPlacement:'wallIntersections'）のときだけ autoFillWoodColumns（ステップ3b・3h-2）へ渡す
  *  ——非在来では無視される。
  *  構造モード突入時の再計算（autoFillStructuralGrid）と、下階グラフへの反映（structuralOrchestration.js）が共有する。
  *  @returns {{created: object[], removed: string[]}} */
-export function autoFillColumnsForStructure(graph, project, wallGate = null, aboveColumns = [], wallSegments = [], aboveTieBeams = []) {
+export function autoFillColumnsForStructure(graph, project, wallGate = null, aboveColumns = [], wallSegments = [], aboveBeamSegments = []) {
   if (!isStructureSpecified(graph, project)) return { created: [], removed: [] };
   const rules = rulesFor(effectiveStructure(graph, project));
-  if (rules.columnPlacement === 'wallIntersections') return autoFillWoodColumns(graph, project, wallGate, aboveColumns, wallSegments, aboveTieBeams);
+  if (rules.columnPlacement === 'wallIntersections') return autoFillWoodColumns(graph, project, wallGate, aboveColumns, wallSegments, aboveBeamSegments);
   return { created: autoFillColumns(graph, project, wallGate), removed: [] };
 }
 
@@ -391,10 +391,11 @@ export function autoFillStairLandingBeams(graph, project, wallGate = null) {
  *  belowColumns: 1つ下の実体階の柱集合（在来木造の壁線通し梁の下階柱分割＝ステップ3c-2bが使う。
  *  structuralRecompute.js の belowGraph?.columns 等。非在来では autoFillBeamsForStructure 側で
  *  無視される）。
- *  aboveTieBeams: 1つ上の実体階の頭つなぎ・受梁の区間（在来木造の3h-2＝生成した梁が自階の壁と
- *  交わる位置に下階柱を立てる、が候補列挙に使う。wallBeamAxes.js tieBeamSegments(aboveGraph, ...) の
- *  結果。aboveColumnsと同じ「wallIntersectionsのときだけ渡す」規律。非在来では無視される）。 */
-export function autoFillStructuralGrid(graph, project, belowMainStructure, wallGate = null, wallSources = [], wallSegments = [], aboveColumns = [], belowColumns = [], aboveTieBeams = []) {
+ *  aboveBeamSegments: 1つ上の実体階の柱生成の点源（role:'primary'または'floor'の梁の区間。在来木造の
+ *  3h-2＝生成した梁が自階の壁と交わる位置に下階柱を立てる、が候補列挙に使う。wallBeamAxes.js
+ *  columnSeedBeamSegments(aboveGraph, ...) の結果。aboveColumnsと同じ「wallIntersectionsのときだけ
+ *  渡す」規律。非在来では無視される）。 */
+export function autoFillStructuralGrid(graph, project, belowMainStructure, wallGate = null, wallSources = [], wallSegments = [], aboveColumns = [], belowColumns = [], aboveBeamSegments = []) {
   const foundation = isFoundationPlane(graph.plane, project);
   const isRoof = graph.plane.isRoofPlane;
   // 自階帰属の柱・梁・基礎は自階の主構造が確定するまで生成しない（autoFillColumns は自前でも同ガード）。
@@ -409,7 +410,7 @@ export function autoFillStructuralGrid(graph, project, belowMainStructure, wallG
   const newWallBeamAxes = autoFillWallBeamAxes(graph, wallSources);
   // 柱は主構造ルールの配置源（通り芯交点／壁交点）で振り分ける。壁交点方式は候補に無い自動柱の撤去も返す。
   const columnsResult = (!isRoof && ownSpecified && structureHasMemberKind(MEMBER_KIND.COLUMN, structure))
-    ? autoFillColumnsForStructure(graph, project, wallGate, aboveColumns, wallSegments, aboveTieBeams) : { created: [], removed: [] };
+    ? autoFillColumnsForStructure(graph, project, wallGate, aboveColumns, wallSegments, aboveBeamSegments) : { created: [], removed: [] };
   const newColumns = columnsResult.created;
   const removedColumns = columnsResult.removed;
   // ベース（独立フーチング）は分類（表A）に加え、基礎種別でもゲートする（木造べた基礎時はベースなし。問題.md）。

@@ -10,7 +10,7 @@ import { ERR_STRUCT_MAIN_UNSPECIFIED } from '../error.js';
 import { autoFillColumnsForStructure, autoFillColumnAxisOffsets, autoFillColumnSizes, resolveLowestGraph, convertMembersToEffectiveMaterial, deleteClassificationOverflow, UNSPECIFIED_STRUCTURE } from './structuralAutoFill.js';
 import { conformWoodSections } from './woodAutoFill.js';
 import { rulesFor, effectiveStructure, beamColumnWidthMm } from './structureRules.js';
-import { collectWallBeamSources, autoFillWallBeamAxes, peekBelowGraph, wallRunSegments, tieBeamSegments } from './wallBeamAxes.js';
+import { collectWallBeamSources, autoFillWallBeamAxes, peekBelowGraph, wallRunSegments, columnSeedBeamSegments } from './wallBeamAxes.js';
 import { structureHasMemberKind, MEMBER_KIND } from './structuralClassification.js';
 import { buildStructuralWallGate } from './wallGate.js';
 import { collectFloorGroups, assignNumbers, applyNumbers } from './memberNumbering.js';
@@ -132,10 +132,10 @@ export async function recomputeStructuralComposition(composition, subjectGraph, 
     // belowGraphから見た「1つ上の実体階」＝subjectGraph自身（メモリ上・peek不要）。ここを忘れると
     // 直前のreflectが作った下階の3b柱が、この再計算で候補から漏れて撤去されてしまう。
     const aboveColumnsForBelow = subjectGraph.columns;
-    // belowGraphから見た「1つ上の実体階」の頭つなぎ・受梁（ステップ3h-2）。aboveColumnsForBelowと同じ
+    // belowGraphから見た「1つ上の実体階」の柱生成の点源（ステップ3h-2）。aboveColumnsForBelowと同じ
     // 「subjectGraph自身＝メモリ上・peek不要」（subjectGraphの3h-2生成分は直前のrecomputeStructuralForGraph
     // で確定済みのため、この時点で読める）。
-    const aboveTieBeamsForBelow = tieBeamSegments(subjectGraph, rulesFor(effectiveStructure(subjectGraph, project)));
+    const aboveBeamSegmentsForBelow = columnSeedBeamSegments(subjectGraph, rulesFor(effectiveStructure(subjectGraph, project)));
     // belowMainStructure 引数は軒桁(eaves)専用。通常階の下階に eaves は無いため自階の実効値で十分。
     const belowBelowMainStructure = belowGraph.structureOverride ?? project.structuralInfo.mainStructure;
     runInAction(() => {
@@ -150,7 +150,7 @@ export async function recomputeStructuralComposition(composition, subjectGraph, 
       // 主構造変更で柱が「×」化した場合は、下階の柱を生成せず既存の自動柱を削除する（「×は削除/○は生成」）。
       // 柱の配置源（通り芯交点／壁交点）は主構造ルールで振り分ける（autoFillColumnsForStructure）。
       if (structureHasMemberKind(MEMBER_KIND.COLUMN, belowStructure)) {
-        autoFillColumnsForStructure(belowGraph, project, belowGate, aboveColumnsForBelow, belowWallSegments, aboveTieBeamsForBelow);
+        autoFillColumnsForStructure(belowGraph, project, belowGate, aboveColumnsForBelow, belowWallSegments, aboveBeamSegmentsForBelow);
       }
       deleteClassificationOverflow(belowGraph, project);
       autoFillColumnAxisOffsets(belowGraph, project, belowLowestGraph);
@@ -412,8 +412,15 @@ export async function reflectStructuralToOtherFloors(project) {
   // 展開し続けない（同時に生きる非アクティブ階のgraphは常に1階分に戻す）。適用フェーズは
   // applyMemberNumbersToFloor が都度fresh peekし直し、保存しておいた数値を書き戻してから
   // applyNumbersを呼ぶ。
+  // 降順（最上階→最下階）で再計算する（ユーザー裁定2026-09-19「柱の追加は最上階から順に、最下階まで
+  // 可能な限り同位置に」）。project.planes は elevation 昇順（core/project.js）——各階は
+  // peek→recompute→保存を1階ずつ完結するため、降順なら階N−1の処理時に peekAboveGraph がこのループで
+  // 保存済みの階Nを読み、「上階の梁→下階の柱→さらに下階の柱」が1パスで最下階まで通る（3i・支持長1820
+  // ルールの柱生成が上階の梁の点源に依存するため）。逆向きの依存（下階柱→自階の梁分割・成）は1パス
+  // 遅れるが、伏図訪問時のrecomputeStructuralCompositionで吸収される（既存の結果整合性と同じ規律）。
+  // 採番の適用ループ（下記）は建物全体で1回・順序非依存のため変更しない。
   const beamColumnWidthByPlaneId = new Map();
-  for (const plane of project.planes) {
+  for (const plane of [...project.planes].reverse()) {
     if (plane.id === activeId) continue;
     const temp = await recomputeInactiveStructural(plane, project);
     beamColumnWidthByPlaneId.set(plane.id, temp.beamColumnWidthMm);
@@ -442,6 +449,11 @@ export async function reflectStructuralAfterFloorAdd(project) {
 // 退出先が構造モードのときは runStructuralModeSetup が自階を再計算するため、自階・番号確定は
 // そちら（reflectStructuralToOtherFloors）に委ねる。退出先が構造モードでない場合はここで
 // 採番も確定する（次に構造モードへ入るまで番号が未確定のままにならないよう、直近の収集結果で確定する）。
+// 【不変条件・QA裁定2026-09-19】ここは昇順（elevation順）のまま——reflectStructuralToOtherFloors
+// （降順。B-4節参照）とは処理順が異なるが、両者とも同じ結果に収束する（Major-1のrun合成
+// mergePrimaryBeamRuns.js適用後、moku1/moku2/moku3/2026模試の4文書で昇順・降順スイープの全構造部材
+// ダンプが一致することをprobeで確認済み——.claude/structural-model.md「3iの収束は処理順に依存しない」
+// 節参照）。このため本関数だけ降順へ揃える必要は無い。
 export async function reflectStructuralAfterFinishExit(currentPlaneId, goingToStructure, project) {
   if (!goingToStructure) await recomputeActiveStructural(project);
   const planes = project.planes; // elevation 昇順

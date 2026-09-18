@@ -14,7 +14,7 @@ import { CenterLineType, Discipline, centerLineKind, columnSlotKey, columnAnchor
 import { CL_OVERLAP_TOL_MM } from '../core/constants.js';
 import { findSectionEntry, woodRectSectionKey } from './sectionCatalog.js';
 import {
-  rulesFor, effectiveStructure, TRADITIONAL_WOOD_FRAMING, WOOD_DEPTH_BEAM_ROLES,
+  rulesFor, effectiveStructure, TRADITIONAL_WOOD_FRAMING, TRADITIONAL_WOOD_BACKING, WOOD_DEPTH_BEAM_ROLES,
   woodColumnWidthMm, woodColumnSectionId, resolvedBeamColumnWidthMm, columnSectionId, columnWidthMm,
 } from './structureRules.js';
 import { selfWallSegments, findBeamAnchorCL, wallBeamAxisExcludeKey, bracketExtent, wallBackingCenterCoord } from './wallBeamAxes.js';
@@ -24,10 +24,10 @@ import {
   woodBeamDepthForSpans, woodBeamSectionForDepth, crossingBeamLoadCoords,
   mergeWallIntervals, throughBeamRuns, propagateCarrierDepths, pointsOnWallLines, columnSplitPoints,
   columnSupportBeamCandidates, beamWallCrossPoints, WALL_JUNCTION_TOL_MM, sillTopLevelOffsetMm,
-  jambColumnPositions, rectsOverlap, subtractCoveredSpan,
+  jambColumnPositions, rectsOverlap, subtractCoveredSpan, supportSpanColumnPositions, mergePrimaryBeamRuns,
 } from './woodFraming.js';
 import { woodColumnEccentricity } from './woodColumnOffset.js';
-import { buildSelfFootprintGate } from './wallGate.js';
+import { buildSelfFootprintGate, footprintBreakCLs } from './wallGate.js';
 import { bareColumnRect } from '../finish/columnWrap.js';
 import { findHostWall } from '../openings/openingGeometry.js';
 
@@ -80,6 +80,23 @@ function findCenterAnchorCL(graph, centerLineType, coord) {
 // コピーだったため削除した——アンカーが無い候補はCLを新設せず素直に見送る。
 function resolveWoodColumnAnchorCL(graph, centerLineType, coord) {
   return findBeamAnchorCL(graph, centerLineType, coord) ?? findCenterAnchorCL(graph, centerLineType, coord);
+}
+
+// run（フェーズA・Bとも）をcolumnSplitPointsへ渡す前に、自階フットプリント境界（footprintBreakCLs）
+// も分割点候補へ足す（ステップA-1）——境界をまたいだままの区間は「中点が内側にたまたま入っている
+// から通る／分割で中点が外側に転げて丸ごと落ちる」という分割粒度依存になるため、フットプリントの
+// 帰属が変わる位置では必ず先に切っておく。返り値はcolumnSplitPointsのcolumnPoints引数と同じ形
+// （{x,y}）——垂直軸(perp=x)なら`x`をaxisCoordに固定しbreak値を`y`へ、水平軸ならその逆にする
+// （columnSplitPointsの`Math.abs((isVertical?p.x:p.y)-axisCoord)<tol`フィルタを通すため）。
+// axisCoordはcolumnSplitPoints呼び出し側と同じaxisCL.effectiveValueを使う（呼び出し側と単位を揃える）。
+function footprintBreakPoints(selfGate, graph, axisCL, isVertical, run) {
+  // 境界座標はcl.effectiveValue（分割点として使う値。CLがドラッグ中でも現在の暫定位置に追従する）。
+  // ゲート自体の内外判定（footprintBreakCLs内部が使う.value基準の判定）はここでは変更しない——
+  // footprintBreakCLsが返すCL実体そのものを読み替えるだけで、判定ロジックには触れない（QA指摘）。
+  return footprintBreakCLs(selfGate, graph, axisCL, isVertical, run.lo, run.hi)
+    .map(cl => (isVertical
+      ? { x: axisCL.effectiveValue, y: cl.effectiveValue }
+      : { x: cl.effectiveValue, y: axisCL.effectiveValue }));
 }
 
 // 建具の袖柱（下記）の走行方向アンカー: resolveWoodColumnAnchorCL は座標に厳密一致（CL_OVERLAP_TOL_MM
@@ -145,18 +162,17 @@ function findHostBackingWall(opening, graph) {
  *    その位置の梁は受梁のまま）。アンカーは壁線自身の座標（法線方向）と上階柱の走行方向座標を
  *    resolveWoodColumnAnchorCL（通り芯／梁芯→意匠中心線。3aと同じ2段。CLは新設しない）で解決し、
  *    いずれか解決できなければその候補は見送る。
- *  - 3h-2候補＝aboveTieBeams（1つ上の実体階の「生成・延長した梁」＝頭つなぎ・受梁・床梁。
- *    tieBeamSegments参照。beamWallCrossPointsが「壁とみなして」自階の壁（selfWallSegments）と交わる
- *    点を求める）を、3bのAXIS座標点（aboveColumns由来）とは**別の点源**（bestByPoint内で
- *    offsetAllowedフラグとしてORで合流）として扱い、pointsOnWallLines→bestByPoint（決定的タイブレーク）
- *    →isInRun（through-run判定）→2段アンカー解決という3bと同じ経路に通す（柱は壁の中にしか立たない
- *    ため「自階に壁が無ければ立たない」規律も3bとそのまま共有する）。**3h-2限定でオフセットアンカーに
- *    フォールバックする**（変更2・2026-09-18裁定）：法線方向のCL（axisCL）は解決できるが走行方向の
- *    CL（crossCL）が解決できない場合、3b由来の候補は従来どおり見送るが、3h-2由来の候補は見送らず
- *    走行方向の最寄りの解決可能なCL（nearestAnchorCL。袖柱と同じプレースホルダ）＋オフセット
- *    （WoodColumn.woodAxisOffset）で柱を立てる。CLは新設しない。3a・3bには適用しない（引き続きCL
- *    必須）——3bにも広げると上階の袖柱直下・ポーチにも柱が連鎖するため、指示された最小範囲に留める
- *    （.claude/structural-model.md「3h-2」節参照）。
+ *  - 3h-2候補＝aboveBeamSegments（1つ上の実体階の柱生成の点源＝role:'primary'（beamTypeを問わない。
+ *    壁線由来の大梁・頭つなぎ・受梁のいずれも含む）または'floor'（床梁）の梁の区間。
+ *    columnSeedBeamSegments参照。beamWallCrossPointsが「壁とみなして」自階の壁（selfWallSegments）と
+ *    交わる点を求める）を、3bのAXIS座標点（aboveColumns由来）と合流し、pointsOnWallLines→bestByPoint
+ *    （決定的タイブレーク）→isInRun（through-run判定）→2段アンカー解決という同じ経路に通す（柱は壁の
+ *    中にしか立たないため「自階に壁が無ければ立たない」規律も共有する）。**法線方向のCL（axisCL）は
+ *    解決できるが走行方向のCL（crossCL）が解決できない場合、3b・3h-2どちらの由来でもオフセットアンカー
+ *    （nearestAnchorCL＋WoodColumn.woodAxisOffset。袖柱と同じプレースホルダ方式）へフォールバックする**
+ *    （B-3・2026-09-19裁定「柱の追加は最上階から順に、最下階まで可能な限り同位置に」）——旧実装は
+ *    3h-2由来だけ救う設計だったが、上階柱の直下（3b。特に袖柱直下・ポーチ等、走行方向に厳密一致する
+ *    CLが無い位置）にも同じ理由で救う必要があるため、3bにも解禁した。CLは新設しない。
  *  - 袖柱候補（ステップ「建具の袖柱」）＝自階の全開口（graph.openings）の両袖に、開口の外形
  *    （coord1/coord2）からclearanceMm(5)+柱寸/2だけ離れた走行方向座標（woodFraming.js
  *    jambColumnPositions）。法線方向のアンカーは開口のホスト壁（openings/openingGeometry.js
@@ -187,18 +203,28 @@ function findHostBackingWall(opening, graph) {
  * @param {object[]} [aboveColumns] - 1つ上の実体階の柱集合（省略・null・[]はいずれも3b候補なし＝従来と同結果）
  * @param {Array<{isVertical:boolean, coord:number, lo:number, hi:number}>} [wallSegments] - 3cと同じ
  *   壁区間（自階＋1つ下の階、マージ不要のプレーン配列）。3b・3h-2のthrough-run判定に使う。
- * @param {Array<{isVertical:boolean, coord:number, lo:number, hi:number}>} [aboveTieBeams] - 1つ上の
- *   実体階の頭つなぎ・受梁の区間（省略・null・[]はいずれも3h-2候補なし＝従来と同結果。呼び出し側が
- *   structural/wallBeamAxes.js tieBeamSegments で peek 済みの上階graphから写して渡す）
- * @returns {{created: object[], removed: string[]}}
+ * @param {Array<{isVertical:boolean, coord:number, lo:number, hi:number, role:string}>} [aboveBeamSegments] -
+ *   1つ上の実体階の柱生成の点源（role:'primary'|'floor'の梁の区間。省略・null・[]はいずれも3h-2候補
+ *   なし＝従来と同結果。呼び出し側が structural/wallBeamAxes.js columnSeedBeamSegments で peek 済みの
+ *   上階graphから写して渡す）
+ * @returns {{created: object[], removed: string[], jambSkipped: object[], iiPicks: Array<{isVertical:boolean,
+ *   coord:number, along:number, kind:'struct'|'center'|'grid', x:number, y:number}>}} iiPicksは3iが採用した
+ *   候補の診断用一覧（生成の可否判定には使わない。probe woodSupportSpanProbe.mjsが由来内訳の報告に使う）
  */
-export function autoFillWoodColumns(graph, project, wallGate = null, aboveColumns = [], wallSegments = [], aboveTieBeams = []) {
+export function autoFillWoodColumns(graph, project, wallGate = null, aboveColumns = [], wallSegments = [], aboveBeamSegments = []) {
   const rules = rulesFor(effectiveStructure(graph, project));
   const segments = selfWallSegments(graph);
   // 壁が1本も無い階（仕上げモード未着手で壁が未生成）は何もしない＝既存の柱を保全する
   // （ユーザー裁定2026-09-14。候補0で全撤去すると、非アクティブ階がモード境界で無通知に柱を失う）。
   // 壁が生成された時点で壁交点方式へ切り替わる。
-  if (segments.length === 0) return { created: [], removed: [] };
+  if (segments.length === 0) return { created: [], removed: [], jambSkipped: [], iiPicks: [] };
+  // QA裁定2026-09-19（Major-1）: role:'primary'の区間はrunへ束ね直してから3h-2（beamWallCrossPoints）・
+  // 3iの両方へ渡す——素の区間（前回パスで下階柱によって分割済み）をそのまま使うと、下階柱の位置
+  // （＝分割点＝梁端）が点源に混ざり、3h-2/3iの出力（新しい下階柱）が次パスの入力（同じ梁の分割点）を
+  // 変える自己参照ループになる。どの位置で分割済みかは階の処理順（どちらの階を先に処理したか）に
+  // 依存するため、結果が順序依存になっていた（実データmoku3で確認。.claude/structural-model.md
+  // 「3iの収束は処理順に依存しない」節参照）。floor（床梁）は下階柱で分割されないため素通しする。
+  const mergedAboveBeamSegments = mergePrimaryBeamRuns(aboveBeamSegments);
   const slots = new Map();
   for (const p of wallIntersectionPoints(segments)) {
     // アンカーは通り芯または壁由来の梁芯CL（findBeamAnchorCL＝梁芯の重複ガードと同じ述語）。
@@ -220,51 +246,46 @@ export function autoFillWoodColumns(graph, project, wallGate = null, aboveColumn
   const abovePoints = (aboveColumns ?? [])
     .filter(c => c.role !== 'foundation')
     .map(c => ({ x: c.axisX, y: c.axisY }));
-  // 3h-2: 上階の「生成・延長した梁」（頭つなぎ・受梁・床梁。tieBeamSegments）を「壁とみなして」自階の
-  // 壁（segments）と交わる位置。柱は壁の中にしか立たない＝壁が無ければ3bと同じ理由で候補から外れる。
-  // 3bとは別の点源として扱う（オフセットアンカーへのフォールバックを3h-2限定にするため。下記参照）。
-  const tiePoints = beamWallCrossPoints(aboveTieBeams, segments);
+  // 3h-2: 上階の柱生成の点源（role:'primary'|'floor'の梁。columnSeedBeamSegments）を「壁とみなして」
+  // 自階の壁（segments）と交わる位置。柱は壁の中にしか立たない＝壁が無ければ3bと同じ理由で候補から
+  // 外れる。B-3（2026-09-19）以降は3bと同じオフセットアンカー可否を共有するため、以下では区別しない。
+  const tiePoints = beamWallCrossPoints(mergedAboveBeamSegments, segments);
   // pointsOnWallLinesは1点が複数の壁線に一致する場合、すべての一致を並び順非依存で返す。ここで
   // 決定的タイブレークで1点につき1件へ絞る：runに入る線を優先→|perp-coord|(dist)最小→coord昇順
   // （QA F6・2026-09-16。旧実装はsegments/graph.wallsの走査順で最初に一致した線を採っており、
-  // runに入らない線が先に見つかると本来立つはずの候補が消える不具合だった）。offsetAllowed（3h-2由来
-  // かどうか）は同じ点に3b・3h-2の両方が一致する場合はORで残す——実位置は同一のためどちらの点源で
-  // 見つかったかでオフセットアンカーの可否を分けない。
+  // runに入らない線が先に見つかると本来立つはずの候補が消える不具合だった）。
   const bestByPoint = new Map();
-  function considerPoints(matches, offsetAllowed) {
+  function considerPoints(matches) {
     for (const m of matches) {
       const key = `${m.x}:${m.y}`;
       const inRun = isInRun(m.isVertical, m.coord, m.along);
       const cur = bestByPoint.get(key);
-      const mergedOffsetAllowed = offsetAllowed || (cur?.offsetAllowed ?? false);
       if (!cur
         || (inRun && !cur.inRun)
         || (inRun === cur.inRun && m.dist < cur.dist)
         || (inRun === cur.inRun && m.dist === cur.dist && m.coord < cur.coord)) {
-        bestByPoint.set(key, { ...m, inRun, offsetAllowed: mergedOffsetAllowed });
-      } else {
-        cur.offsetAllowed = mergedOffsetAllowed;
+        bestByPoint.set(key, { ...m, inRun });
       }
     }
   }
-  considerPoints(pointsOnWallLines(abovePoints, segments, WALL_JUNCTION_TOL_MM), false);
-  considerPoints(pointsOnWallLines(tiePoints, segments, WALL_JUNCTION_TOL_MM), true);
-  // 3h-2限定のオフセットアンカー候補（変更2）: 走行方向のCLが解決できない場合はここでは確定させず
-  // pendingOffsetCandidatesへ積む——3a/3b/3h-2(CL解決分)のslotsが確定してから重なり判定する
-  // （評価順は 3a/3b/3h-2(CL解決分) → 3h-2(オフセット分) → 袖柱。下記参照）。
+  considerPoints(pointsOnWallLines(abovePoints, segments, WALL_JUNCTION_TOL_MM));
+  considerPoints(pointsOnWallLines(tiePoints, segments, WALL_JUNCTION_TOL_MM));
+  // オフセットアンカー候補: 走行方向のCLが解決できない場合はここでは確定させず pendingOffsetCandidates
+  // へ積む——3a/3b/3h-2(CL解決分)のslotsが確定してから重なり判定する（評価順は
+  // 3a/3b/3h-2(CL解決分) → オフセット分 → 袖柱。下記参照）。
   const pendingOffsetCandidates = [];
-  for (const { isVertical, coord, along, inRun, offsetAllowed } of bestByPoint.values()) {
+  for (const { isVertical, coord, along, inRun } of bestByPoint.values()) {
     if (!inRun) continue; // runの外（自由端側）、または壁の無い位置は立てない
     const axisType = isVertical ? CenterLineType.VERTICAL : CenterLineType.HORIZONTAL;
     const crossType = isVertical ? CenterLineType.HORIZONTAL : CenterLineType.VERTICAL;
     const axisCL = resolveWoodColumnAnchorCL(graph, axisType, coord);
     const crossCL = resolveWoodColumnAnchorCL(graph, crossType, along);
-    if (!axisCL) continue; // 法線方向のCLが無ければ3h-2でも見送る（アンカー解決不能な候補はCLを新設しない）
+    if (!axisCL) continue; // 法線方向のCLが無ければ見送る（アンカー解決不能な候補はCLを新設しない）
     if (!crossCL) {
-      // 変更2（3h-2限定・2026-09-18裁定）：走行方向のCLが解決できないとき、3bは従来どおり見送るが、
-      // 3h-2はここで見送らずpendingOffsetCandidatesへ積む（実際のオフセットアンカー解決・重なり判定は
-      // 3a/3b/3h-2(CL解決分)のslotsが確定してから行う）。
-      if (offsetAllowed) pendingOffsetCandidates.push({ isVertical, axisCL, crossType, along });
+      // B-3（2026-09-19裁定）：走行方向のCLが解決できないとき、3b・3h-2どちらの由来でも見送らず
+      // pendingOffsetCandidatesへ積む（実際のオフセットアンカー解決・重なり判定は3a/3b/3h-2(CL解決分)の
+      // slotsが確定してから行う）。旧実装（3h-2由来だけ救う）はこの一般化で不要になった。
+      pendingOffsetCandidates.push({ isVertical, axisCL, crossType, along });
       continue;
     }
     const verticalCL = isVertical ? axisCL : crossCL;
@@ -282,11 +303,12 @@ export function autoFillWoodColumns(graph, project, wallGate = null, aboveColumn
   // 非0。木造は常に0だが式は共通にする）を使う。
   const axisOffsetOf = (cl) => graph.columnAxisOffsets.get(cl.id) ?? 0;
 
-  // 3h-2オフセットアンカー候補の確定（変更2）: 3a/3b/3h-2(CL解決分)のslotsが確定した後に、走行方向の
-  // 最寄りの解決可能なCL（nearestAnchorCL。袖柱と同じプレースホルダ）＋オフセットでアンカーを立てる。
-  // 重なり判定は候補柱（slots）＋既存柱（locked含む。ただし既存のオフセット柱自身は除く——袖柱が
+  // オフセットアンカー候補の確定（B-3・3b/3h-2共通）: 3a/3b/3h-2(CL解決分)のslotsが確定した後に、
+  // 走行方向の最寄りの解決可能なCL（nearestAnchorCL。袖柱と同じプレースホルダ）＋オフセットでアンカーを
+  // 立てる。重なり判定は候補柱（slots）＋既存柱（locked含む。ただし既存のオフセット柱自身は除く——袖柱が
   // woodJambRef列を除くのと同じ「自分自身に自己ブロックされて撤去→再生成を繰り返す」事故を避けるため）
-  // の断面矩形（AXIS基準・rectsOverlapを袖柱と共有）。3a/3bは対象外（引き続きCL必須のまま）。
+  // の断面矩形（AXIS基準・rectsOverlapを袖柱と共有）。3aは対象外（壁交点は常に厳密一致CLで解決するため
+  // オフセット候補自体が生じない）。
   const offsetBlockingRects = [
     ...[...slots.values()].map(({ verticalCL, horizontalCL }) => bareColumnRect({
       sectionDefId: columnSection, rotation: 0,
@@ -382,6 +404,192 @@ export function autoFillWoodColumns(graph, project, wallGate = null, aboveColumn
     }
   }
 
+  // ---- 3i: 梁の支持長1820ルール（ユーザー指示2026-09-19「梁の支持長が1820を超える場合、1820以内の
+  // 下階に壁あり直交する通り芯、中心があればそこ、なければ、支持長を1820以下に分ける910グリッドに柱を
+  // 追加。最上階から順に行い、最下階まで可能な限り同位置に柱を追加」）。対象はmergedAboveBeamSegments
+  // のうちrole:'primary'（大梁・頭つなぎ・受梁。beamType不問）のみ——床梁・土台・軒桁等は対象外。
+  // 3a/3b/3h-2(CL解決・オフセット)・袖柱のslotsが確定した後に評価する（袖柱も支持点になるため最後に置く）。
+  // 純関数supportSpanColumnPositions（woodFraming.js）へ支持点・候補CL（優先度つき）・isAllowed述語を
+  // 渡すだけで、「支持長ごとの分割位置決め」自体はそちらに委ねる（graph依存の判定はisAllowedに閉じ込める）。
+  // 【既存の割り切り】重なり判定（isAllowed (e)・iiBlockingRects）は候補・既存柱とも階の共通柱幅
+  // （columnSection由来）で矩形を作り、既存柱の個別柱寸（woodColumnWidthMm）は見ない——個別柱寸が
+  // 共通値より細い階の柱に対しては実際より広めの矩形とみなし「立てない」側に倒れうる（過剰回避）。
+  // 個別柱寸は柱1本の見た目の寸法だけを変える機能で他の帰結に波及させない設計のため、3iの重なり判定
+  // もこれに合わせて共通値で近似する（3h-2オフセット候補と同じ既存の割り切り。個別柱寸の全既存柱への
+  // 波及テストは範囲外）。
+  // 診断用: 3iが採用した候補の一覧（3iが動かない階では常に空配列）。戻り値スコープの外で宣言する。
+  const iiPicks = [];
+  if (rules.framing && mergedAboveBeamSegments.some(s => s.role === 'primary')) {
+    // 【QA裁定2026-09-19】生成ループ（下記）と同じ「除外集合・wallGateで落ちるか」を共有する——
+    // 落ちるslot（ユーザーが消した位置・フットプリント外）をsupports/重なり判定の入力にそのまま含めると、
+    // 実際には生成されない位置を「もう支持されている／もう埋まっている」と誤認し、本来必要な3iの柱を
+    // 見送ってしまう（除外された3i柱の代替位置が立たない事故になる）。
+    const passesGate = (verticalCL, horizontalCL, woodJambRef, woodAxisOffset) => {
+      if (!wallGate || woodJambRef) return true; // 袖柱はゲート対象外（下地オーナー壁の中＝フットプリント内保証）
+      const gateVerticalCL = woodAxisOffset?.isVertical ? { value: verticalCL.value + woodAxisOffset.offset } : verticalCL;
+      const gateHorizontalCL = woodAxisOffset && !woodAxisOffset.isVertical ? { value: horizontalCL.value + woodAxisOffset.offset } : horizontalCL;
+      return wallGate.intersectionInBuilding(gateVerticalCL, gateHorizontalCL);
+    };
+
+    // このステージ開始時点のslots（3a/3b/3h-2/袖柱＝このパスで毎回フレッシュに再導出される。ただし
+    // 除外集合・wallGateで落ちる分＝実際には生成されないものは除く）＋既存柱のうち手動固定
+    // （dimensionStatus!=='auto'）分のAXIS座標——3iの支持点集合・重なり判定の両方がこれを参照する
+    // （3h-2オフセット候補と同じ式。woodAxisOffset分は実位置へ差し替える）。
+    // 【自己ブロック回避・冪等性】既存柱のうち auto（自動生成）分は含めない——3iが前回パスで生成した
+    // 自分自身の柱（撤去はこの関数の最後に行うため、このループの時点ではまだ graph.columns に残っている）
+    // を支持点・重なり判定の入力に混ぜると、「その位置はもう支持されている／もう埋まっている」と誤認して
+    // 今回パスで同じ柱を再導出しない（＝slotsに入らない）ため、最後の撤去ループが「候補に無い」として
+    // 削除してしまい、撤去→非生成→撤去…と冪等にならない（実データ回帰で発覚。3a/3b/3h-2/jambの出力は
+    // すべてslots側からフレッシュに供給されるため、autoの既存柱を除いても実害は無い）。
+    // 【注意・袖柱slot】slots内の袖柱エントリのverticalCL/horizontalCLは「走行方向はnearestAnchorCLの
+    // プレースホルダ」（実位置ではない。JSDoc「建具の袖柱」節参照）——woodAxisOffset分と同じ式で読むと
+    // 実位置とズレる。袖柱の実AXISは開口位置から都度導出する必要があるため、jamb block（上記）と同じ式
+    // （axisNormal＝axisCL.effectiveValue+axisOffsetOf、走行方向＝jambAxisValue）で個別に解決する。
+    const slotAxisPoint = ({ verticalCL, horizontalCL, woodAxisOffset, woodJambRef }) => {
+      if (woodJambRef) {
+        const opening = graph.openings.find(o => o.id === woodJambRef.openingId);
+        if (opening) {
+          const axisCL = woodJambRef.isVertical ? verticalCL : horizontalCL;
+          const axisNormal = axisCL.effectiveValue + axisOffsetOf(axisCL);
+          const jamb = jambColumnPositions([{ id: opening.id, lo: opening.coord1, hi: opening.coord2 }], columnWidth)
+            .find(j => j.side === woodJambRef.side)?.jamb;
+          if (Number.isFinite(jamb)) {
+            return { x: woodJambRef.isVertical ? axisNormal : jamb, y: woodJambRef.isVertical ? jamb : axisNormal };
+          }
+        }
+      }
+      return {
+        x: woodAxisOffset?.isVertical ? verticalCL.effectiveValue + woodAxisOffset.offset : verticalCL.effectiveValue + axisOffsetOf(verticalCL),
+        y: woodAxisOffset && !woodAxisOffset.isVertical ? horizontalCL.effectiveValue + woodAxisOffset.offset : horizontalCL.effectiveValue + axisOffsetOf(horizontalCL),
+      };
+    };
+    const iiAxisPoints = [
+      ...[...slots.entries()]
+        .filter(([key, { verticalCL, horizontalCL, woodJambRef, woodAxisOffset }]) =>
+          !graph.excludedColumnSlots.has(key) && passesGate(verticalCL, horizontalCL, woodJambRef, woodAxisOffset))
+        .map(([, entry]) => slotAxisPoint(entry)),
+      ...graph.columns.filter(c => c.role !== 'foundation' && c.dimensionStatus !== 'auto').map(c => ({ x: c.axisX, y: c.axisY })),
+    ];
+    // 重なり判定用の断面矩形。ステージ開始時点のスナップショットに加え、3i自身が採用した候補も
+    // pickごとに累積する（下記picks処理ループ）——同一パス内で別軸・別runの3i候補どうしが数mm差の
+    // 別キーで近接して立つのを防ぐ（QA指摘Minor）。
+    const iiBlockingRects = Number.isFinite(columnWidth)
+      ? iiAxisPoints.map(({ x, y }) => bareColumnRect({ sectionDefId: columnSection, rotation: 0, x, y }))
+      : [];
+
+    // 3iの1候補(along)を実CLペア／オフセットアンカーへ解決する（isAllowedの事前チェックとpicks処理の
+    // 両方から呼ぶ単一実装。二重実装しない）。法線方向のCL（壁自身の軸）が無ければnull。
+    function resolveIiCandidate(seg, axisType, crossType, along) {
+      const axisCL = resolveWoodColumnAnchorCL(graph, axisType, seg.coord);
+      if (!axisCL) return null;
+      const crossCL = resolveWoodColumnAnchorCL(graph, crossType, along);
+      if (crossCL) {
+        const verticalCL = seg.isVertical ? axisCL : crossCL;
+        const horizontalCL = seg.isVertical ? crossCL : axisCL;
+        return {
+          verticalCL, horizontalCL, woodAxisOffset: null, key: columnSlotKey(verticalCL, horizontalCL),
+          x: verticalCL.effectiveValue + axisOffsetOf(verticalCL), y: horizontalCL.effectiveValue + axisOffsetOf(horizontalCL),
+        };
+      }
+      // 910グリッド位置は通常CLを持たないため、3b/3h-2と同じオフセットアンカー
+      // （nearestAnchorCL＋woodAxisOffset）へフォールバックする（B-3以降3b/3h-2と共有する方式）。
+      const anchor = nearestAnchorCL(graph, crossType, along);
+      if (!anchor) return null; // 候補（通り芯／梁芯／意匠中心線）が1本も無ければ見送る
+      const woodAxisOffset = { isVertical: !seg.isVertical, offset: along - anchor.effectiveValue };
+      const verticalCL = seg.isVertical ? axisCL : anchor;
+      const horizontalCL = seg.isVertical ? anchor : axisCL;
+      const x = woodAxisOffset.isVertical ? verticalCL.effectiveValue + woodAxisOffset.offset : verticalCL.effectiveValue + axisOffsetOf(verticalCL);
+      const y = !woodAxisOffset.isVertical ? horizontalCL.effectiveValue + woodAxisOffset.offset : horizontalCL.effectiveValue + axisOffsetOf(horizontalCL);
+      return { verticalCL, horizontalCL, woodAxisOffset, key: `off:${Math.round(x)}:${Math.round(y)}`, x, y };
+    }
+
+    for (const seg of mergedAboveBeamSegments) {
+      if (seg.role !== 'primary') continue; // 床梁等は対象外（ユーザー指示は「梁」＝大梁・頭つなぎ・受梁）
+      const axisType = seg.isVertical ? CenterLineType.VERTICAL : CenterLineType.HORIZONTAL;
+      const crossType = seg.isVertical ? CenterLineType.HORIZONTAL : CenterLineType.VERTICAL;
+
+      // supports = 梁の両端 ＋ この軸上(tol内)かつ梁の範囲の**内側**にあるslots候補・既存柱のAXIS along
+      // （3dのalongCoordOnAxisと同じ「軸上判定」をここでも使う——3cが切る位置＝3dが数える位置の不変条件と
+      // 同じ考え方）。範囲外（seg.lo/hi の外）の点は支持点に数えない——数えてしまうと、別の梁区間・前回
+      // パスの3i柱（撤去はこの関数の最後に行うため、このループの時点ではまだ graph.columns に残っている）
+      // が「範囲外なのに支持済み」と誤認され、本来必要な区間の柱が消えてしまう（実データ回帰で発覚）。
+      const supports = new Set([seg.lo, seg.hi]);
+      for (const p of iiAxisPoints) {
+        const axisCoord = seg.isVertical ? p.x : p.y;
+        if (Math.abs(axisCoord - seg.coord) >= CL_OVERLAP_TOL_MM) continue;
+        const along = seg.isVertical ? p.y : p.x;
+        if (along <= seg.lo + CL_OVERLAP_TOL_MM || along >= seg.hi - CL_OVERLAP_TOL_MM) continue;
+        supports.add(along);
+      }
+
+      // 走行方向の候補CL＝通り芯(struct)＞意匠中心線(center)の優先度つき（梁芯・補助線は除く）。
+      // 優先度はcenterLineKind(cl)の値（'struct'|'center'）をそのままsupportSpanColumnPositionsの
+      // 優先度ラベルとして使う（QA裁定「通り芯、中心があればそこ」の語順を優先度として固定）。
+      const clAlongs = graph.centerLines
+        .filter(cl => cl.centerLineType === crossType && ['struct', 'center'].includes(centerLineKind(cl)))
+        .map(cl => ({ along: cl.effectiveValue, priority: centerLineKind(cl) }));
+
+      const isAllowed = (along) => {
+        const pt = seg.isVertical ? { x: seg.coord, y: along } : { x: along, y: seg.coord };
+        // (a) 自階の壁（梁と平行＝同じisVertical）の下地帯内、かつthrough-run内。pointsOnWallLinesは
+        // 向きを問わず幾何的に近い壁（直交する壁も）を返しうるため、ここでm.isVertical===seg.isVertical
+        // で明示的に絞る——絞らないと、梁と直交する壁（例: 頭つなぎがまたぐ間仕切り壁）を「梁の真下の
+        // 平行な壁」と誤認し、壁の無い位置にも柱を生成してしまう（実データ回帰で発覚。3b/3h-2は候補点
+        // 自体が壁との交点のため向き不問で正しいが、3iは「梁の真下」という平行前提があるため区別する）。
+        // タイブレークは3b/3h-2と同じ（runに入る線を優先→dist最小→coord昇順）。
+        let best = null;
+        for (const m of pointsOnWallLines([pt], segments, WALL_JUNCTION_TOL_MM)) {
+          if (m.isVertical !== seg.isVertical) continue;
+          const inRun = isInRun(m.isVertical, m.coord, m.along);
+          if (!best || (inRun && !best.inRun) || (inRun === best.inRun && m.dist < best.dist)
+            || (inRun === best.inRun && m.dist === best.dist && m.coord < best.coord)) {
+            best = { ...m, inRun };
+          }
+        }
+        if (!best || !best.inRun) return false;
+        if (Number.isFinite(columnWidth)) {
+          // (b) その壁上の建具の外形を柱寸/2+clearance広げた開区間には立てない（境界＝ちょうどは許容）。
+          const half = columnWidth / 2 + TRADITIONAL_WOOD_BACKING.jambClearanceMm;
+          for (const o of graph.openings) {
+            if (o.isVertical !== seg.isVertical) continue;
+            const hostWall = findHostBackingWall(o, graph);
+            if (!hostWall || Math.abs(wallBackingCenterCoord(hostWall) - best.coord) >= CL_OVERLAP_TOL_MM) continue;
+            const oLo = Math.min(o.coord1, o.coord2), oHi = Math.max(o.coord1, o.coord2);
+            if (along > oLo - half + CL_OVERLAP_TOL_MM && along < oHi + half - CL_OVERLAP_TOL_MM) return false;
+          }
+        }
+        // (c) 候補位置を実CLペア／オフセットアンカーへ解決できなければ見送る（新設しない）。
+        // (d) 除外集合（ユーザーが消した位置）・wallGate（フットプリント外）も生成ループと同じ述語で
+        // 事前チェックする（QA裁定）——ここで弾いておかないと、実際には生成されない位置に「支持長を
+        // 満たした」と判定してしまい、立てられるはずの代替位置（別のCL・別のグリッド点）を探しに行かない。
+        const cand = resolveIiCandidate(seg, axisType, crossType, along);
+        if (!cand) return false;
+        if (graph.excludedColumnSlots.has(cand.key)) return false;
+        if (!passesGate(cand.verticalCL, cand.horizontalCL, null, cand.woodAxisOffset)) return false;
+        if (Number.isFinite(columnWidth)) {
+          // (e) 既存柱・候補柱（袖柱含む）と断面矩形が重ならない（AXIS基準。実際に解決した位置で判定する）。
+          const rect = bareColumnRect({ sectionDefId: columnSection, rotation: 0, x: cand.x, y: cand.y });
+          if (iiBlockingRects.some(r => rectsOverlap(rect, r))) return false;
+        }
+        return true;
+      };
+
+      const picks = supportSpanColumnPositions([...supports], clAlongs, isAllowed, {
+        maxSpanMm: TRADITIONAL_WOOD_FRAMING.columnSupportMaxSpanMm,
+        gridPitchMm: TRADITIONAL_WOOD_FRAMING.gridModuleMm,
+      });
+      for (const { along, kind } of picks) {
+        const cand = resolveIiCandidate(seg, axisType, crossType, along);
+        if (!cand) continue; // isAllowedで確認済みだが、二重チェックとして安全側に残す（例外を投げない）
+        slots.set(cand.key, { verticalCL: cand.verticalCL, horizontalCL: cand.horizontalCL, woodAxisOffset: cand.woodAxisOffset });
+        iiPicks.push({ isVertical: seg.isVertical, coord: seg.coord, along, kind, x: cand.x, y: cand.y });
+        if (Number.isFinite(columnWidth)) {
+          iiBlockingRects.push(bareColumnRect({ sectionDefId: columnSection, rotation: 0, x: cand.x, y: cand.y }));
+        }
+      }
+    }
+  }
+
   const existing = new Set(graph.columns.map(c => columnAnchorKey(c)));
   const created = [];
   for (const [key, { verticalCL, horizontalCL, woodJambRef, woodAxisOffset }] of slots) {
@@ -410,7 +618,7 @@ export function autoFillWoodColumns(graph, project, wallGate = null, aboveColumn
     graph.columnMap.delete(column.id);
     removed.push(column.id);
   }
-  return { created, removed, jambSkipped };
+  return { created, removed, jambSkipped, iiPicks };
 }
 
 // wallSegments（自階＋1つ下の階の壁区間）を「線」（isVertical, coord）ごとにまとめる。同一線判定は
@@ -647,9 +855,10 @@ export function autoFillWoodWallBeams(graph, project, wallSegments, wallGate = n
     const crossType = line.isVertical ? CenterLineType.HORIZONTAL : CenterLineType.VERTICAL;
 
     for (const run of line.runs) {
-      // run を下階柱の位置で分割する（3c-2b）。同じ述語・tolを3d（alongCoordOnAxis）と共有するため
-      // axisCoordはaxisCL.effectiveValueを渡す。
-      const pts = columnSplitPoints(run, axisCL.effectiveValue, line.isVertical, belowPts);
+      // run を下階柱の位置（3c-2b）＋自階フットプリント境界（A-1）で分割する。同じ述語・tolを3d
+      // （alongCoordOnAxis）と共有するため axisCoordはaxisCL.effectiveValueを渡す。
+      const breakPts = footprintBreakPoints(selfGate, graph, axisCL, line.isVertical, run);
+      const pts = columnSplitPoints(run, axisCL.effectiveValue, line.isVertical, [...belowPts, ...breakPts]);
       if (pts.length === 0) continue; // run自体が不正（columnSplitPointsの失敗系）。安全側で見送る
       const resolvedEnds = pts.map(v => ({
         cl: findBeamAnchorCL(graph, crossType, v) ?? findCenterAnchorCL(graph, crossType, v),
@@ -695,7 +904,9 @@ export function autoFillWoodWallBeams(graph, project, wallSegments, wallGate = n
     if (!axisCL) continue; // アンカー解決不能な候補は見送る（CLは新設しない）
 
     const crossType = cand.isVertical ? CenterLineType.HORIZONTAL : CenterLineType.VERTICAL;
-    const splitVals = columnSplitPoints({ lo: cand.lo, hi: cand.hi }, axisCL.effectiveValue, cand.isVertical, belowPts);
+    const candRun = { lo: cand.lo, hi: cand.hi };
+    const breakPts = footprintBreakPoints(selfGate, graph, axisCL, cand.isVertical, candRun);
+    const splitVals = columnSplitPoints(candRun, axisCL.effectiveValue, cand.isVertical, [...belowPts, ...breakPts]);
     // 区間自体が不正（columnSplitPointsの失敗系）。安全側で見送る——cand.lo<cand.hiは
     // columnSupportBeamCandidatesの構築上常に成立するため現状は到達不能だが、columnSplitPointsの
     // 契約（run.hi<=run.loで[]を返す）が変わった場合の保険として残す。
