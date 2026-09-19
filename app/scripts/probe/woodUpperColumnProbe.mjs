@@ -13,6 +13,7 @@ import { wallIntersectionPoints, wallLineThroughRuns, WALL_JUNCTION_TOL_MM } fro
 import { pointsOnWallLines } from '../../src/structural/woodFraming.js';
 import { rulesFor, effectiveStructure, isTraditionalWoodStructure } from '../../src/structural/structureRules.js';
 import { recomputeStructuralForGraph } from '../../src/structural/structuralRecompute.js';
+import { sweepUntilConverged } from './sweepOrder.mjs';
 
 const src = process.argv[2] ?? 'D:/tatsuya/Download/moku4.stq';
 const { project } = loadDocument(src);
@@ -27,22 +28,16 @@ floorSwapManager.peek = async (plane) => project.graphMap.get(plane.id) ?? null;
 // 在来は昇順スイープ由来で3b・3dが互いに1スイープ遅れうるためsweep4までに収束しなければNG
 // （2026-09-18裁定で3から改定。woodTieBeamProbe.mjsと同じ根拠——3h-2の点源に床梁を加えたことで
 // 3階またぎの連鎖が成立し、1スイープでは1段ずつしか伝播しない）。
-const MAX_SWEEPS = 5;
-let convergedAt = null;
+// 【小屋伏図にも梁・柱ルールを適用する計画のステップ7・R-5是正】本番の反映パス
+// （reflectStructuralToOtherFloors）と同じ並び（在来なら降順・屋根が先頭）で回す（sweepOrder.mjs）。
+const MAX_SWEEPS = 8; // 【QA第2巡Minor-4】convergeLimit(5)に対して余裕を持たせる（below候補が階をまたぐ依存を1段追加するため。woodSupportSpanProbe.mjsと同じ8に統一）
 let changedSweeps = 0;
-for (let i = 1; i <= MAX_SWEEPS; i++) {
-  const changedPlanes = [];
-  for (const p of project.planes) {
-    const g = project.graphMap.get(p.id);
-    const { changed } = await recomputeStructuralForGraph(g, project, g.structureOverride ?? project.structuralInfo.mainStructure);
-    if (changed) changedPlanes.push(p.name);
-  }
+const convergedAt = await sweepUntilConverged(project, 'desc', MAX_SWEEPS, (i, changedPlanes) => {
   console.log(`sweep${i}: changed=[${changedPlanes.join(',')}]`);
-  if (changedPlanes.length === 0) { convergedAt = i; break; }
-  changedSweeps++;
-}
+  if (changedPlanes.length > 0) changedSweeps++;
+});
 const isTraditional = isTraditionalWoodStructure(project.structuralInfo.mainStructure);
-const convergeLimit = isTraditional ? 4 : 1;
+const convergeLimit = isTraditional ? 5 : 1; // 【QA第2巡Minor-4】below候補（3i）が階をまたぐ依存を1段追加するため4は余裕ゼロだった（moku4実測でも収束sweep4ちょうど）。5に緩和。5超はNGのまま
 if (convergedAt != null && convergedAt <= convergeLimit) {
   console.log(`OK: 収束（sweep${convergedAt} で changed=[]。changed があったスイープ数=${changedSweeps}）`);
 } else if (convergedAt != null) {
@@ -56,8 +51,13 @@ if (convergedAt != null && convergedAt <= convergeLimit) {
 function aboveGraphOf(graph) {
   const planes = project.planes; // elevation昇順
   const idx = planes.findIndex(p => p.id === graph.plane.id);
-  if (idx < 0 || idx + 1 >= planes.length) return null;
-  return project.graphMap.get(planes[idx + 1].id);
+  if (idx >= 0 && idx + 1 < planes.length) return project.graphMap.get(planes[idx + 1].id);
+  // 最上階（1つ上の実体階が無い）は直上の屋根専用平面をフォールバックする
+  // （wallBeamAxes.js peekRoofGraphAboveと同じ規約。R-5是正——これが無いと最上階が保存状態の
+  // 屋根（未収束）を素通しし、3h-2（屋根由来）の柱を見落として本数が過小報告される）。
+  const roofPlane = project.roofPlane;
+  if (roofPlane && roofPlane.roofForPlaneId === graph.plane.id) return project.graphMap.get(roofPlane.id);
+  return null;
 }
 
 // 壁のある意匠中心線アンカー（woodAutoFill.jsのfindCenterAnchorCLと同じ述語。private実装のため複製）。

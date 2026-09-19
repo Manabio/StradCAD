@@ -25,7 +25,7 @@
 
 ## 屋根専用平面（isRoofPlane）
 構造モードのみに存在する合成Plane。`project.planes`/`orderedTabs`から除外、`project.roofPlane`で個別アクセス。
-ぞー
+
 ## kind / feature（Roomの2軸区分）
 `kind`＝屋内/屋外（内外判定はこちらのみ参照）。`feature`＝階段/吹抜け/階段吹抜け/なし（属性）。旧enumの`void`は読込時に「屋内+吹抜け」へ移行される。設計意図は`.claude/data-model.md`。
 
@@ -278,3 +278,27 @@ sillPackingThicknessMm`）。基礎天端＝土台下端−この値という関
 `woodColumnEccentricity`が壁位置・柱寸・階の柱寸から毎回導出する派生値（書き手は
 `woodAutoFill.js`の`conformWoodColumnEccentricity`のみ）。共通柱（柱寸＝階の値）は常に偏心ゼロ。
 設計意図は`.claude/structural-model.md`「在来木造の個別柱は壁の中で偏心する」節。
+
+## 自由端（構造・在来木造）
+下地オーナー壁の同一線上の連続run（`mergeWallIntervals`で結合した物理区間）の端のうち、直交する
+下地オーナー壁が`WALL_JUNCTION_TOL_MM`（150mm）以内に無いもの。列挙は`woodFraming.js`
+`wallRunFreeEnds`（純関数）。2026-09-19裁定でここに柱を立て（`woodAutoFill.js`
+`autoFillWoodColumns`、3aの直後の点源）、通し梁・土台のrunも自由端まで伸ばす
+（`wallLineThroughRuns`の`freeEnds`引数）——2026-09-14裁定「自由端には柱を立てない」の撤回。
+腰壁・垂れ壁の指定がある辺の自由端は対象外（`isKneeDropFreeEnd`。この辺には代わりに下記の
+端部材が立つ）。壁自体の延長・平面描画の仕上げ回り込み（F-3・`wallFreeEnd:'columnWrap'`）は
+`finish/wallGeneration.js`・`renderer/planWallRegion.js`に実装済み。`wallRunFreeEnds`が返す点は
+壁の物理端ではなく**設計上の端**（`wallBeamAxes.js selfWallSegments`の`designLo`/`designHi`＝
+`clStart`/`clEnd`のeffectiveValue）——柱（F-1）と壁延長（F-3）を同時に有効化しても柱位置が
+ずれない（`.claude/plan-wall-region.md`「自由端の点＝設計上の端」節）。設計意図は
+`.claude/structural-model.md`「壁の自由端には柱を立て、梁・土台を伸ばす」節。
+
+## 端部材（腰壁・垂れ壁の自由端）
+腰壁・垂れ壁の指定がある辺の自由端に立つ、柱状の壁下地材（構造柱ではない。梁を支えない・
+床/天井に届かない）。階の柱寸と同寸・保存せず壁の描画のたびに導出する（`structural/wallEndMember.js`
+`kneeDropEndMembers`）。上記「自由端」の判定を`isKneeDropFreeEnd`で2分し、構造柱の点源
+（`wallFreeEnds.js` `selfWallFreeEnds`）と排他的に分担する——**この分担（合わせて全自由端になる
+不変条件）は在来木造の呼び出し文脈でのみ成立する**（`selfWallFreeEnds`は主構造を見ないため、
+非在来グラフへ直接呼ぶと`kneeDropEndMembers`（非在来は空）との間に漏れが生じる。両関数の実際の
+呼び出し元が在来木造限定のため実害は無い）。設計意図は`.claude/structural-model.md`
+「腰壁・垂れ壁の自由端は端部下地材」節。

@@ -97,6 +97,27 @@ test('【統合・3e-2】autoFillStructuralGrid: 在来木造は壁線上の通�
   assert.ok(floors.every(fb => r.newBeams.some(b => b.id === fb.id)), '生成された床梁はnewBeamsへ含まれる');
 });
 
+test('【3e・屋根ガード】autoFillStructuralGrid: 屋根専用平面(isRoofPlane)ではrole:primaryの梁があっても床梁(role:floor)を生成しない', () => {
+  // 小屋伏図に梁・柱ルールを適用する計画（.claude/structural-model.md）でも3e（床梁）は明示的に対象外
+  // ——屋根に自階の床は無いため。将来（ステップ5）屋根の梁がrole:'primary'へ切り替わっても3eだけは
+  // 対象外のままであることを、role:'primary'の梁を先に手動で置いた状態で固定する。
+  const graph = new PlanGraph(new Plane('roof1', 6000, '小屋伏図', 2, 1, false, null, 0, true, 'p1'));
+  graph.structureOverride = TRADITIONAL_WOOD_STRUCTURE;
+  const x0 = graph.addCenterLine(CenterLineType.VERTICAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+  const x1 = graph.addCenterLine(CenterLineType.VERTICAL, 3640, { labeled: true, discipline: Discipline.STRUCT });
+  const y0 = graph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+  const y1 = graph.addCenterLine(CenterLineType.HORIZONTAL, 5460, { labeled: true, discipline: Discipline.STRUCT });
+  const sec = 'WOOD-120x120';
+  graph.addBeam(StructuralMaterialType.WOOD, sec, y0, false, x0, x1, { role: 'primary' });
+  graph.addBeam(StructuralMaterialType.WOOD, sec, y1, false, x0, x1, { role: 'primary' });
+  graph.addBeam(StructuralMaterialType.WOOD, sec, x0, true, y0, y1, { role: 'primary' });
+  graph.addBeam(StructuralMaterialType.WOOD, sec, x1, true, y0, y1, { role: 'primary' });
+  const project = { planes: [new Plane('p1', 3000, '3階', 1, 1)], structuralInfo: { mainStructure: '未定', foundationType: 'ベタ基礎' } };
+  const r = autoFillStructuralGrid(graph, project, TRADITIONAL_WOOD_STRUCTURE);
+  assert.equal(graph.beams.filter(b => b.role === 'floor').length, 0, '屋根専用平面には床梁を生成しない');
+  assert.ok(!r.newBeams.some(b => b.role === 'floor'), 'newBeamsにも床梁を含めない');
+});
+
 test('【不変条件】structuralAutoFill.js: autoFillStructuralGrid はbeamPlacement==="wallRuns"のときautoFillWoodFloorBeamsを呼び、created/removedを戻り値へ含める（ステップ3e-2）', async () => {
   const fs = await import('node:fs');
   const path = await import('node:path');

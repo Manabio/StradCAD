@@ -8,6 +8,7 @@
 import { RoomKind, RoomFeature } from '@core';
 import { worldToCell, dividerCLsBetween, isActiveAcrossRange } from './gridCells.js';
 import { buildCellToRoom } from './edgeClassify.js';
+import { wallRunFreeEnds, WALL_JUNCTION_TOL_MM } from '../structural/woodFraming.js';
 
 export const DEFAULT_WALL_BASE   = 90;    // mm
 export const DEFAULT_WALL_FINISH = 12.5;  // mm
@@ -373,6 +374,57 @@ export function isInteriorWallTarget(room, under2aRoomIds) {
 }
 
 /**
+ * 壁の自由端（F-3・2026-09-19裁定。QA是正版）: 生成対象の辺（`rawParams`。階段開口辺は
+ * 既に除外済み）を `structural/woodFraming.js wallRunFreeEnds` へ渡すための薄いアダプタ。
+ * 判定ロジック自体（同一線上の連続runの端で直交する生成対象の壁が`WALL_JUNCTION_TOL_MM`以内に
+ * 無いもの）は複製せず同じ純関数を共有する——ここでは`rawParams`の各辺を`{isVertical, coord,
+ * lo, hi}`（coord=軸CLの実値+axisOffset、lo/hi=start/end CLの実値）へ写すだけ。
+ *
+ * 開口による同一直線上の中断（例: 横壁が階段開口で二分される）も、開口辺自体が`rawParams`から
+ * 既に除外されているため、被覆されない区間としてそのまま自由端になる（幻のコーナーを作らない。
+ * 旧実装＝コーナーマップの構築源を開口辺除外前の全辺へ広げる方式は、①開口と同一直線上（コーナー
+ * ではない）の自由端を拾えない②反対面の薄壁の自由端と食い違う③自由端が無い通し辺まで誤って
+ * 分断する、という3つの実データ不具合を生んだため廃止した）。
+ * @param {Array<object>} rawParams - computeExternalEdgeParams の結果（階段開口辺は除外済み）
+ * @param {object} graph
+ * @returns {Array<{isVertical:boolean, coord:number, along:number, x:number, y:number}>}
+ */
+function freeEndsOf(rawParams, graph) {
+  const segments = [];
+  for (const p of rawParams) {
+    const axisCL = getShape(graph, p.axisCLId);
+    const startCL = getShape(graph, p.startCLId);
+    const endCL = getShape(graph, p.endCLId);
+    if (!axisCL || !startCL || !endCL) continue;
+    const a = startCL.effectiveValue, b = endCL.effectiveValue;
+    segments.push({ isVertical: p.isVertical, coord: axisCL.effectiveValue + p.axisOffset, lo: Math.min(a, b), hi: Math.max(a, b) });
+  }
+  return wallRunFreeEnds(segments);
+}
+
+// freeEndsOf の結果から、指定の(isVertical, coord, along)が自由端かどうかを引く（tol一致）。
+function matchesFreeEnd(freeEnds, isVertical, coord, along, tol = WALL_JUNCTION_TOL_MM) {
+  return freeEnds.some(fe => fe.isVertical === isVertical && Math.abs(fe.coord - coord) < tol && Math.abs(fe.along - along) < tol);
+}
+
+/**
+ * mergeSegments後の1壁分の端点オフセット（コーナーマップ由来）に、自由端ぶんの外向き
+ * protrusionを上乗せする（F-3。wrapFreeEndsのときだけ）。壁の物理lo/hi方向とstartCL/endCLの
+ * 対応が壁ごとに異なりうる（startCL.effectiveValueがhi側のこともある）ため、符号は
+ * `endCL - startCL`の向きから決める——startCL側の自由端は外向き＝runより手前（負方向）、
+ * endCL側の自由端は外向き＝runより奥（正方向）になるようにする。
+ * @returns {{startOffset:number, endOffset:number}}
+ */
+function applyFreeEndProtrusion(freeEnds, isVertical, coord, startCL, endCL, startOffset, endOffset, protrusion) {
+  if (!freeEnds?.length) return { startOffset, endOffset };
+  const sign = Math.sign(endCL.effectiveValue - startCL.effectiveValue) || 1;
+  let s = startOffset, e = endOffset;
+  if (matchesFreeEnd(freeEnds, isVertical, coord, startCL.effectiveValue)) s -= sign * protrusion;
+  if (matchesFreeEnd(freeEnds, isVertical, coord, endCL.effectiveValue)) e += sign * protrusion;
+  return { startOffset: s, endOffset: e };
+}
+
+/**
  * 部屋の境界多角形を「閉じた形」として捉え、各辺の端点オフセットを
  * コーナーマップから直接決定して壁を生成する。
  *
@@ -396,14 +448,13 @@ export function isInteriorWallTarget(room, under2aRoomIds) {
  * （generateExteriorWalls の e と符号が逆なのは p.axisOffset がここでは室内向きのため）だけ
  * 室外側へ寄せる。内部辺（隣室との間仕切り等）は不変。
  */
-export function generateRoomWallsFromOutline(graph, room, { wallBase = DEFAULT_WALL_BASE, wallFinish = DEFAULT_WALL_FINISH, bandShift = 0, cellToRoom = null } = {}, stairOpenings = []) {
+export function generateRoomWallsFromOutline(graph, room, { wallBase = DEFAULT_WALL_BASE, wallFinish = DEFAULT_WALL_FINISH, bandShift = 0, cellToRoom = null, wrapFreeEnds = false } = {}, stairOpenings = []) {
   const offset = wallBase / 2 + wallFinish;
-  let rawParams = computeExternalEdgeParams(room, offset, graph)
-    .filter(p => !onStairOpening(p, graph, stairOpenings));
+  let allParams = computeExternalEdgeParams(room, offset, graph);
 
   if (bandShift > 0) {
     const ctr = cellToRoom ?? buildCellToRoom(graph);
-    rawParams = rawParams.map(p => {
+    allParams = allParams.map(p => {
       if (!classifyExteriorEdge(room, p, graph, ctr)) return p; // 内部辺は不変
       const e = -Math.sign(p.axisOffset) * bandShift;
       // backingOffset・bandOffset の両方に同じシフト量を入れる——bandOffsetは「このシフトが
@@ -414,7 +465,9 @@ export function generateRoomWallsFromOutline(graph, room, { wallBase = DEFAULT_W
     });
   }
 
-  // コーナーマップ構築
+  const rawParams = allParams.filter(p => !onStairOpening(p, graph, stairOpenings));
+
+  // コーナーマップ構築（生成対象の辺＝rawParamsだけを使う。従来どおり）
   // key: "hCLId:vCLId" (水平CL id : 垂直CL id)
   // 水平辺 → hOffset を登録、垂直辺 → vOffset を登録
   const cornerMap = new Map();
@@ -435,6 +488,12 @@ export function generateRoomWallsFromOutline(graph, room, { wallBase = DEFAULT_W
       ensureCorner(p.endCLId,   p.axisCLId).vOffset = p.axisOffset;
     }
   }
+
+  // 自由端の明示評価（F-3・2026-09-19裁定・QA是正版）: wrapFreeEnds（在来木造の柱包み）のときだけ、
+  // rawParams（開口辺除外後の生成対象の辺）を structural/woodFraming.js wallRunFreeEnds と同じ
+  // 述語で評価する。開口による同一直線上の中断（コーナーではない）も、通しの内部（自由端にならない）
+  // も判定ロジックを複製せず同じ純関数の結果に従う（freeEndsOf参照）。
+  const freeEnds = wrapFreeEnds ? freeEndsOf(rawParams, graph) : null;
 
   // (axisCLId, axisOffset) でグループ化してマージ
   const groups = new Map();
@@ -467,6 +526,11 @@ export function generateRoomWallsFromOutline(graph, room, { wallBase = DEFAULT_W
         endOffset   = cornerMap.get(`${seg.endCLId}:${axisCLId}`)?.hOffset   ?? 0;
       }
 
+      // 自由端ぶんの外向きprotrusionを上乗せする（F-3。腰壁・垂れ壁の辺でも延ばす——
+      // 構造柱だけを立てない判断はstructural/woodAutoFill.js側の責務でここでは見ない）。
+      ({ startOffset, endOffset } = applyFreeEndProtrusion(
+        freeEnds, isVertical, axisCL.effectiveValue + axisOffset, startCL, endCL, startOffset, endOffset, offset));
+
       // 端点ルール: 軸CLの線分範囲を越える部分ははねだし付きで止める
       const clipped = clipToAxisExtent(axisCL, startCL, startOffset, endCL, endOffset, offset);
       if (!clipped) continue;
@@ -495,7 +559,9 @@ export function generateRoomWallsFromOutline(graph, room, { wallBase = DEFAULT_W
  *
  * stairOpenings（階段の上り口・下り口の開口辺）上のエッジは、courtyard（両側とも部屋）
  * の場合のみ壁を生成しない。outer（外側が未割当＝部屋指定なし）は建物外周のため
- * 開口辺でも壁を残す。
+ * 開口辺でも壁を残す。wrapFreeEnds（在来木造の柱包み。F-3・2026-09-19裁定）のときは、
+ * loopTypeごとの生成対象の辺（courtyardの開口辺は除く）に自由端（`freeEndsOf`。
+ * generateRoomWallsFromOutlineと同じ判定）を明示評価し、該当端へ外向きprotrusionを与える。
  *
  * bandShift（柱寸法が基準より細い階の外壁下地帯シフト量。structural/structureRules.js
  * woodBaseColumnWidthMm 参照）>0 のときは、下地帯の外面（軸CLから遠い側）を通り芯±60に
@@ -503,12 +569,12 @@ export function generateRoomWallsFromOutline(graph, room, { wallBase = DEFAULT_W
  * 自体は変えないため、室内側の仕上げ面が同量だけ室外側へ動く。backingDepthは明示しない
  * （既存の対称フォールバック式のまま。backingOffsetだけで帯の平行移動を表す）。
  */
-export function generateExteriorWalls(graph, { wallBase = DEFAULT_WALL_BASE, wallFinish = DEFAULT_WALL_FINISH, bandShift = 0 } = {}, stairOpenings = []) {
+export function generateExteriorWalls(graph, { wallBase = DEFAULT_WALL_BASE, wallFinish = DEFAULT_WALL_FINISH, bandShift = 0, wrapFreeEnds = false } = {}, stairOpenings = []) {
   const offset = wallBase / 2 + wallFinish;
 
   const cellToRoom = buildCellToRoom(graph);
 
-  // loopType ごとに符号付きオフセット済みエッジを集約
+  // loopType ごとに符号付きオフセット済みエッジを集約（生成対象＝courtyardの開口辺は除く。従来どおり）。
   const byLoopType = new Map(); // loopType → rawParams[]
   for (const room of graph.rooms) {
     for (const p of computeExternalEdgeParams(room, offset, graph)) {
@@ -530,7 +596,7 @@ export function generateExteriorWalls(graph, { wallBase = DEFAULT_WALL_BASE, wal
 
   const walls = [];
   for (const [, rawParams] of byLoopType) {
-    // コーナーマップ構築（generateRoomWallsFromOutline と同様）
+    // コーナーマップ構築（generateRoomWallsFromOutline と同様。構築源はrawParamsのみ）
     const cornerMap = new Map();
     const ensureCorner = (hId, vId) => {
       const key = `${hId}:${vId}`;
@@ -546,6 +612,9 @@ export function generateExteriorWalls(graph, { wallBase = DEFAULT_WALL_BASE, wal
         ensureCorner(p.endCLId,   p.axisCLId).vOffset = p.axisOffset;
       }
     }
+    // 自由端の明示評価（F-3・QA是正版）。loopType（outer/courtyard）ごとの生成対象の辺で評価する
+    // ——このloopTypeで開口辺除外により生じた自由端も、通しの辺（自由端にならない）も同じ述語で判定する。
+    const freeEnds = wrapFreeEnds ? freeEndsOf(rawParams, graph) : null;
 
     // (axisCLId, axisOffset) でグループ化してマージ
     const groups = new Map();
@@ -573,6 +642,10 @@ export function generateExteriorWalls(graph, { wallBase = DEFAULT_WALL_BASE, wal
           startOffset = cornerMap.get(`${seg.startCLId}:${axisCLId}`)?.hOffset ?? 0;
           endOffset   = cornerMap.get(`${seg.endCLId}:${axisCLId}`)?.hOffset   ?? 0;
         }
+
+        // 自由端ぶんの外向きprotrusionを上乗せする（F-3）。
+        ({ startOffset, endOffset } = applyFreeEndProtrusion(
+          freeEnds, isVertical, axisCL.effectiveValue + axisOffset, startCL, endCL, startOffset, endOffset, offset));
 
         // 端点ルール: 軸CLの線分範囲を越える部分ははねだし付きで止める（帯シフト分だけ
         // 突出許容量も広げる——帯自体が外側へ寄っているため）。

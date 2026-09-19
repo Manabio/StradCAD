@@ -5,6 +5,7 @@ import { LodLevel, resolveStrokeWidth } from '../viewport.js';
 import { buildWallDrawPlan } from './wallDrawPlan.js';
 import { graphComputed } from './graphDerived.js';
 import { wallFinishLineWeight } from '../finish/wallFinishJoin.js';
+import { studRects } from './wallStudLayout.js';
 
 const DASH = {
   solid:     undefined,
@@ -186,26 +187,24 @@ export const ShapesLayer = observer(({ graph, viewport, stairUnderClips = null }
           />
         ));
 
-        // 詳細のみ: 下地（間柱断面）。位置と材厚の判断（下地帯の端の正規化・柱壁に取られた区間の除外・
-        // 固定ピッチ／在来木造の柱間面割付＋柱面から10mmの端部材）は wallDrawPlan.js → wallStudLayout.js が
-        // 主構造ルールの選択子 studLayout で解決済み（`wallStuds`）——ここは矩形へ写すだけ。
-        // 厚み方向は通り芯(axisCL)上の実材厚（core.js の Wall.backingRange）。
+        // 詳細のみ: 下地（間柱断面・腰壁垂れ壁の端部材）。位置と材厚の判断（下地帯の端の正規化・
+        // 柱壁に取られた区間の除外・固定ピッチ／在来木造の柱間面割付＋柱面から10mmの端部材・端部材の
+        // 区間）は wallDrawPlan.js → wallStudLayout.js が主構造ルールの選択子 studLayout で解決済み
+        // （`wallStuds`）——ここは wallStudLayout.js `studRects`（isVertical分岐の幾何を1箇所に
+        // 集約。scripts/probe/planSegments.mjs も同じ関数を使う）が返す矩形を <Rect> へ写すだけ
+        // （幾何計算をここへ書き戻さないこと。QA指摘2026-09-19: 書き戻すとテストが守れない）。
         const studs = wallStuds.get(shape.id);
         if (!studs) return finishLines;
 
         const elems = [...finishLines];
-        const backingBand = shape.backingRange;
-        const backingDepth = backingBand.hi - backingBand.lo;
-        const halfDepth = backingDepth / 2, halfWidth = studs.depth / 2;
-        const backingCenterV = (backingBand.lo + backingBand.hi) / 2;
-        for (const p of studs.centers) {
+        for (const rect of studRects(shape.isVertical, shape.backingRange, studs)) {
           elems.push(
             <Rect
-              key={`${shape.id}:stud:${p}`}
-              x={shape.isVertical ? backingCenterV - halfDepth : p - halfWidth}
-              y={shape.isVertical ? p - halfWidth : backingCenterV - halfDepth}
-              width={shape.isVertical ? backingDepth : studs.depth}
-              height={shape.isVertical ? studs.depth : backingDepth}
+              key={`${shape.id}:${rect.key}`}
+              x={rect.x}
+              y={rect.y}
+              width={rect.width}
+              height={rect.height}
               fill="transparent"
               stroke={sp.stroke}
               strokeWidth={sp.strokeWidth}

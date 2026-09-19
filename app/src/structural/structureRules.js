@@ -159,12 +159,24 @@ const WOOD_RULES = Object.freeze({
   // 小梁（role:'secondary'）の代わりに、壁線（自階＋1つ下の階の壁）上の壁の交点の並びを通しで1本の
   // role:'primary'（記号G）の梁として生成する（ステップ3c-2）。
   beamPlacement: 'gridEdges',
+  // (3) 屋根専用平面（小屋伏図／R階伏図）の梁の生成源: 通り芯グリッドの軒桁（既定。role:'eaves'。
+  // structuralAutoFill.js autoFillRoofBeams）／自階（＝最上階）の壁線上の通し梁（在来。role:'primary'。
+  // beamPlacementのwallRuns同様woodAutoFill.js autoFillWoodWallBeamsへ振り分ける。小屋伏図にも
+  // 梁・柱ルールを適用する計画（ユーザー指示2026-09-19「小屋伏図にも、梁、柱ルールを摘要する」）の
+  // 選択子。現時点（ステップ2）では未消費——呼び出し側の切替はステップ5で行う）。
+  roofBeamPlacement: 'gridEaves',
   // (2) ピン接合の梁（小梁・床梁）の端部クリアランス(mm)。在来木造だけ 0＝大梁面まで伸ばす。
   pinBeamEndClearanceMm: PIN_BEAM_END_CLEARANCE_MM,
   // (3) 平面詳細の壁下地材（間柱断面）の割付: 'fixedPitch'＝壁の始端から450固定ピッチ・見かけ幅45（既定。
   // renderer/wallStudLayout.js）／'betweenColumns'＝壁上の柱で区切った各面を studPositions で割り付け、
   // 面の両端は柱面から studColumnClearanceMm を空けて端部材を立てる（在来。woodFraming.js faceStudPositions）。
   studLayout: 'fixedPitch',
+  // (3) 壁の自由端（直交する取り合い相手が無い物理端）の扱い: 'flush'＝軸CL位置ちょうどで止める（既定。
+  // 従来どおり）／'columnWrap'＝柱包み分（wallBase/2+wallFinish）だけCL端からはね出して止め、仕上げ材が
+  // 端を回り込む（在来木造。ユーザー裁定2026-09-19「壁の自由端には柱を立てる／仕上げ材が柱をまく」で
+  // 2026-09-14裁定「自由端には柱を立てない」を撤回。finish/wallGeneration.js generateRoomWallsFromOutline/
+  // generateExteriorWalls・renderer/planWallRegion.js wrapEndsFor が唯一の消費先）。
+  wallFreeEnd: 'flush',
   // (2)(3) 柱の描き方: columnFinishWrap＝仕上げ包み（柱壁。finish/columnWrap.js）を平面・展開図に付けるか。
   // planColumnColor＝平面図の柱断面の線色（'material'＝材種色／'wall'＝壁と同じ線色）。
   // planColumnLineWeight＝平面図の柱断面の輪郭線幅（LINE_WEIGHT_MM のキー。'thick'＝壁の仕上げ線と同じ）。
@@ -232,8 +244,11 @@ const RC_RULES = Object.freeze({
   columnSizing: 'tributary',
   // (3) 梁(role:'primary')の生成源: 通り芯グリッドの辺（在来木造だけ壁線方式へ上書き。WOOD_RULES参照）。
   beamPlacement: 'gridEdges',
+  // (3) 屋根専用平面の梁の生成源: 通り芯グリッドの軒桁（在来木造だけ壁線方式へ上書き。WOOD_RULES参照）。
+  roofBeamPlacement: 'gridEaves',
   pinBeamEndClearanceMm: PIN_BEAM_END_CLEARANCE_MM,
   studLayout: 'fixedPitch',
+  wallFreeEnd: 'flush',
   drawing: Object.freeze({
     columnFinishWrap: true, planColumnColor: 'material', planColumnLineWeight: 'thick',
     framingPlanColor: 'material', framingColumnSymbol: 'section', framingColumnLineWeight: 'fixed',
@@ -277,6 +292,13 @@ export const STRUCTURE_RULES = Object.freeze({
       framing: TRADITIONAL_WOOD_FRAMING, backing: TRADITIONAL_WOOD_BACKING,
       columnPlacement: 'wallIntersections', columnSizing: 'fixed', studLayout: 'betweenColumns',
       beamPlacement: 'wallRuns',
+      // 小屋伏図にも梁・柱ルールを適用する（ユーザー指示2026-09-19）。屋根専用平面の既存の軒桁
+      // （role:'eaves'、通り芯グリッド方式）を、自階（最上階）の壁線上の通し梁（role:'primary'、
+      // beamPlacement同様woodAutoFill.js autoFillWoodWallBeams）へ置換する（在来限定。他の主構造は
+      // 'gridEaves'のまま完全不変）。
+      roofBeamPlacement: 'wallRuns',
+      // 壁の自由端は柱包み（ユーザー裁定2026-09-19）。他の主構造は既定'flush'のまま。
+      wallFreeEnd: 'columnWrap',
       // 大梁にとりつく小梁・床梁は大梁面まで伸ばす（鉄骨造にあった50mmの隙間は不要。ユーザー裁定2026-09-16）。
       pinBeamEndClearanceMm: 0,
       // 標準材（defaultSections.beam＝柱同寸の正角）以外の梁は主要構造のrole（WOOD_DEPTH_BEAM_ROLES）

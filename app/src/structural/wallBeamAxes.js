@@ -64,6 +64,39 @@ export async function peekAboveGraph(graph, project) {
   return await floorSwapManager.peek(abovePlane, project.structGraph);
 }
 
+/**
+ * 屋根専用平面（isRoofPlane）の「1つ下の実体階」＝roofForPlaneId が指す最上階のgraphをpeekする。
+ * belowPlaneOf（project.planes基準）は屋根専用平面がproject.planesに含まれないため常にnullを返す
+ * （小屋伏図にも梁・柱ルールを適用する計画のステップ4。ユーザー定義「在来木造の構造モードで言う
+ * 『最上階』とは、最上階にある『小屋伏図』を差す」の起点＝屋根の「自階」を最上階に置き換える経路）。
+ * graphが屋根専用平面でなければ（isRoofPlane!==true）null——通常階は peekBelowGraph を使うこと。
+ * roofForPlaneId が指す実体階が採用フロア一覧（project.planes）に見つからない場合もnull（防御）。
+ * @param {object} roofGraph
+ * @param {object} project
+ * @returns {Promise<object|null>}
+ */
+export async function peekRoofBelowGraph(roofGraph, project) {
+  if (!roofGraph.plane?.isRoofPlane) return null;
+  const topPlane = project.planes.find(p => p.id === roofGraph.plane.roofForPlaneId);
+  if (!topPlane) return null;
+  return await floorSwapManager.peek(topPlane, project.structGraph);
+}
+
+/**
+ * graph が「屋根専用平面の直下の実体階」（project.roofPlane.roofForPlaneId === graph.plane.id）のときだけ、
+ * その屋根専用平面のgraphをpeekする（peekRoofBelowGraphと対称）。屋根が無い・graphが最上階でない場合はnull。
+ * 呼び出し側がルールでゲートする（非在来はこの関数自体を呼ばない設計。structuralRecompute.js参照）——
+ * 解決子の中ではゲートしない（アーキ裁定・ステップ4）。
+ * @param {object} graph
+ * @param {object} project
+ * @returns {Promise<object|null>}
+ */
+export async function peekRoofGraphAbove(graph, project) {
+  const roofPlane = project.roofPlane;
+  if (!roofPlane || roofPlane.roofForPlaneId !== graph.plane.id) return null;
+  return await floorSwapManager.peek(roofPlane, project.structGraph);
+}
+
 /** wall が下地オーナー壁か（backingRange!=null。backingDepth===0の仕上げのみの薄壁は対象外）。 */
 function isBackingOwnerWall(wall) {
   return wall.backingRange != null;
@@ -89,10 +122,14 @@ function wallBackingCode(sourceGraph, wall) {
  *  requireBeamAxisBacking=true なら、per-floor 下地材コードの下地材分類が「梁芯の生成源」
  *  （structureRules.js BACKING_RULES.beamAxisSource＝RC壁下地）の壁だけに絞る（条件(a)）。
  *  false なら下地材の種別は問わない（条件(b)(c)）。
- *  返り値は CL 参照を持たないプレーン配列 [{isVertical, coord, lo, hi, halfDepth}]（世界座標mm）——
- *  他階実体を主題階へ持ち込まない（.claude/figure.md 規律）ため、下階peek分もここで座標へ還元する。
- *  halfDepth＝下地帯の半幅（coord±halfDepthが下地帯）。在来木造の上階柱直下の柱（ステップ3b）が
- *  「壁の下地帯の内側」判定に使う（他の消費先はこのフィールドを見ない＝加算のみで挙動不変）。 */
+ *  返り値は CL 参照を持たないプレーン配列 [{isVertical, coord, lo, hi, designLo, designHi, halfDepth}]
+ *  （世界座標mm）——他階実体を主題階へ持ち込まない（.claude/figure.md 規律）ため、下階peek分もここで
+ *  座標へ還元する。halfDepth＝下地帯の半幅（coord±halfDepthが下地帯）。在来木造の上階柱直下の柱
+ *  （ステップ3b）が「壁の下地帯の内側」判定に使う（他の消費先はこのフィールドを見ない＝加算のみで
+ *  挙動不変）。designLo/designHi＝設計上の端（壁のclStart/clEnd.effectiveValueをMath.min/maxで
+ *  揃えたもの。物理lo/hiの昇降とは独立——取り合いの控え・自由端の柱包み分のprotrusionを含まない）。
+ *  woodFraming.js wallRunFreeEnds が
+ *  自由端の点にこちらを使う（F-1×F-3是正）。 */
 function wallBeamSourcesFromGraph(sourceGraph, requireBeamAxisBacking) {
   const out = [];
   for (const wall of sourceGraph.walls) {
@@ -109,11 +146,21 @@ function wallBeamSourcesFromGraph(sourceGraph, requireBeamAxisBacking) {
     // する必要がある（QA F1: isExteriorWall限定だと外周辺由来の室生成壁が非covered区間で下地オーナー
     // になったときに通り芯脇へ梁芯・柱が湧く）。bandOffsetを持たない壁（2a壁のCL偏芯等、本来の偏芯）は
     // bandOffset===nullのため0になり、backingOffsetがcoordへそのまま反映される従来どおりの挙動。
+    // 設計上の端座標（F-1×F-3是正・2026-09-19裁定）: 壁は「CL＋オフセット」系アンカーで、
+    // 区間の端はCL（clStart/clEnd）で定義される——coord1/coord2の物理値はCLのeffectiveValueに
+    // startOffset/endOffset（取り合いの控え・自由端の柱包み分のprotrusion等）を足したもの
+    // （core/wall.js）。designLo/designHiはこのoffsetを差し引いた「設計上の端」——**物理lo/hiの
+    // 昇降とは独立にMath.min/maxで決める**（QA是正: 極端に短い壁でoffsetがCL間距離に対し
+    // 相対的に大きいと、coord1<=coord2の向きとdesignStart<=designEndの向きが食い違って反転
+    // しうるため、物理側の向きへ引きずられない）。
+    const designStart = wall.clStart.effectiveValue, designEnd = wall.clEnd.effectiveValue;
     out.push({
       isVertical: wall.isVertical,
       coord: wallBackingCenterCoord(wall),
       lo: Math.min(wall.coord1, wall.coord2),
       hi: Math.max(wall.coord1, wall.coord2),
+      designLo: Math.min(designStart, designEnd),
+      designHi: Math.max(designStart, designEnd),
       halfDepth: (wall.backingRange.hi - wall.backingRange.lo) / 2,
       // ステップ2（柱の壁内偏心。別タスク）が「壁の下地帯の内側」を判定する際に使う——ここでは
       // 加算のみで既存の消費先（梁芯生成・小梁生成）の挙動は変えない。

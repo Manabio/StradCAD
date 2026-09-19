@@ -46,6 +46,24 @@ test('structureRules: 6種の主構造キーすべてにルールがあり、isR
   }
 });
 
+test('structureRules（F-3・2026-09-19裁定）: wallFreeEndは在来木造だけcolumnWrap、他はflush', () => {
+  for (const key of STRUCTURES) {
+    const expected = key === TRADITIONAL_WOOD_STRUCTURE ? 'columnWrap' : 'flush';
+    assert.equal(rulesFor(key).wallFreeEnd, expected, `${key}: wallFreeEnd`);
+  }
+  assert.equal(UNSPECIFIED_RULES.wallFreeEnd, 'flush', '未指定はflush（STEEL_RULES継承）');
+});
+
+// 小屋伏図にも梁・柱ルールを適用する計画（ステップ2）: 屋根専用平面の梁の生成源選択子。
+// 在来木造だけ壁線方式('wallRuns')、他はすべて既定の通り芯グリッド軒桁('gridEaves')のまま。
+test('structureRules（小屋伏図ルール摘要・ステップ2）: roofBeamPlacementは在来木造だけwallRuns、他はgridEaves', () => {
+  for (const key of STRUCTURES) {
+    const expected = key === TRADITIONAL_WOOD_STRUCTURE ? 'wallRuns' : 'gridEaves';
+    assert.equal(rulesFor(key).roofBeamPlacement, expected, `${key}: roofBeamPlacement`);
+  }
+  assert.equal(UNSPECIFIED_RULES.roofBeamPlacement, 'gridEaves', '未指定はgridEaves（STEEL_RULES継承）');
+});
+
 test('structureRules: 木造系（在来・2×4）の判定・基礎種別・基礎梁寸法・呼称は従来の分岐と同じ値', () => {
   for (const key of ['木造（在来）', '木造（2"×4"）']) {
     const r = rulesFor(key);

@@ -47,6 +47,67 @@
 - 壁生成側のトリム（`closeConvexCorners`・`trimIntersectingWalls`・`trimStairUnderJunctions`）は残す。
 - 出力は壁ごと（`wallLines`）。2a壁の描画クリップ・線種・key が壁単位のため。
 
+## 壁の自由端の柱包み（F-3・2026-09-19裁定。QA是正版）
+在来木造（`structural/structureRules.js` `wallFreeEnd:'columnWrap'`）だけ、壁の自由端
+（直交する取り合い相手が無い物理端。唯一の判定は`structural/woodFraming.js` `wallRunFreeEnds`）で
+仕上げ材が端を回り込む。腰壁・垂れ壁の辺の自由端でも延び・巻きは行う（構造柱だけを立てないのは
+`structural/woodAutoFill.js`側の判断）。
+
+**壁生成側**（`finish/wallGeneration.js`）: 当初「コーナーマップの構築源を階段開口辺の除外前の
+全辺へ広げる」方式（幻コーナー）を試みたが、実データ（moku4）で3つの不具合を生んで廃止した——
+①開口と**同一直線上**（コーナーではない）の自由端を拾えない、②反対面の薄壁の自由端と食い違う、
+③自由端が無い通し辺まで誤って分断する（外壁・1階の回帰）。**採用した一般形**: `mergeSegments`後の
+生成対象区間（開口辺除外後）に対し`wallRunFreeEnds`と**同じ述語を共有**する薄いアダプタ
+（`freeEndsOf`。判定ロジックは複製しない）で自由端を明示評価し、該当端の`clipToAxisExtent`への
+`startOffset`/`endOffset`にrunの外向き+protrusion（wallBase/2+wallFinish）を上乗せする
+（`applyFreeEndProtrusion`）。開口による同一直線上の中断は、開口辺自体が生成対象から除外済みの
+まま「被覆されない区間」として自然に自由端になる——通しの内部（連続runの途中）は`wallRunFreeEnds`の
+runの被覆判定により自由端にならないため、③のような回帰は構造的に起きない。下地オーナー壁と対になる
+仕上げ薄壁は、生成呼び出し（部屋ごと・loopTypeごと）がそれぞれ独立に同じ開口除外・同じ述語で
+自由端を評価するため、明示的な突き合わせ機構を持たなくても両者が同じ端で同じ量だけ延びる
+（隣接する2部屋が同じstairOpeningsを参照するため。QA是正時の実データ・テストで確認済み）。
+`generateExteriorWalls`もloopType（outer/courtyard）ごとの生成対象区間で同じ`freeEndsOf`を使う。
+
+**描画側**（`renderer/planWallRegion.js` `wrapEndsFor`）: 第3条件として、呼び出し側
+（`renderer/wallDrawPlan.js`）が`selfWallSegments(graph)`から求めた自由端の世界座標一覧
+（`freeEndPoints`）を渡す——この純モジュール自体は自由端の判定をしない。座標の突き合わせは壁の
+下地帯中心（`backingAxisValue`。`structural/wallBeamAxes.js wallBackingCenterCoord`と同じ式）を
+軸に、壁の物理端（`spanLo`/`spanHi`）とtol（`WALL_JUNCTION_TOL_MM`）付きで行う——**`axisValue`
+（軸CL＋axisOffset）で突き合わせてはいけない**（落とし穴・再発防止）：`backingRange`の中心は
+`axisCL.effectiveValue + backingOffset`で決まりaxisOffsetとは無関係なため、帯シフト無し・偏芯無しの
+通常壁でもaxisValueで突き合わせるとaxisOffset分（半壁厚）だけずれて自由端を検出できない
+（実機相当のfixtureで発覚。テストで固定済み）。
+
+### 自由端の点＝設計上の端（F-1×F-3是正・2026-09-19裁定）
+柱の自由端生成（F-1。`.claude/structural-model.md`「壁の自由端には柱を立て…」節）は壁再生成の
+**後**（構造モード突入時再計算）に走るため、柱アンカーが壁の**物理端**（自由端延長でCL位置から
+protrusion分ずれた後の座標）を読むと、柱が設計交点ではなく延長後の壁端に立ってしまう。
+**壁は「CL＋オフセット」系アンカーで区間の端はCLで定義される**（腰壁・垂れ壁のキーも
+`edgeKey(axisCLId,startCLId,endCLId)`と同じ規律）、protrusionは描画・取り合いのための物理的な
+はね出しであって設計上の端ではない、という原則で是正した:
+- `structural/wallBeamAxes.js selfWallSegments`が各壁区間へ**設計上の端**（`designLo`/`designHi`。
+  壁の`clStart`/`clEnd`のeffectiveValueをMath.min/maxで揃えたもの。物理lo/hiの昇降とは独立）を積む。
+- `structural/woodFraming.js wallRunFreeEnds`は、直交壁の有無・runの被覆判定は**物理**lo/hi・
+  along のまま行うが、自由端の点として返すalong/x/yは**設計値**（design値が無いsegmentは従来どおり
+  物理端へフォールバック）。柱（F-1）・run端点（F-2。3c通し梁・土台）は壁の再生成でprotrusionが
+  0↔wallBase/2+wallFinishへ変わっても同じ点に解決する——3aの壁交点が控え・はね出しを
+  `WALL_JUNCTION_TOL_MM`で許容してCL座標へ解決するのと同じ規律に揃えた。
+- 描画側（`wrapEndsFor`）だけは物理端を基準にし、設計値の`freeEndPoints`とはtolで突き合わせる
+  （上記「壁の自由端の柱包み」節参照）。
+- Wallへのフラグ追加はしていない（`selfWallSegments`の派生フィールドだけで完結）。
+
+**実測条件と結果**（moku4・実アプリと同じ関数列で強制再生成→構造再計算を収束まで反復。
+`project.planes`の昇順・降順どちらで反復しても3スイープで収束し同じ結果になることを確認）:
+柱・梁は「F-3を'flush'に戻した状態」と完全一致（柱45/40/22、梁81/65/45。断面・roleまで含め差分0）。
+自由端3か所（2階(1820,-9100)は3h-2由来で不変、3階(910,-9100)・(1820,-9100)がF-1由来で新規）は
+いずれも設計交点(CL位置)のまま。壁は自由端の3か所付近だけ72.5mm延び、平面セグメントの差分
+（`dumpPlanRegen.mjs`＋`diffPlanRegen.mjs`）も1階0件・2階11件・3階32件でいずれも自由端近傍に限定
+（下地オーナー壁・対になる薄壁の両方が同じ端まで同じ量だけ延び、木口線(ecap)が出て素の下地面
+(face)の露出は無い）。13.stqは壁・柱・梁・平面セグメント・`golden13/struct-*.json`とも差分0。
+展開図（`dumpElevFigure.mjs`は壁を再生成しないため検証にならない——壁再生成を挟んだ別スクリプトで
+確認）: 2階・3階の「廊下」で開口（アキ）幅の表示が72.5mm縮み、`recessHi`/`recessLo`の縁取り線が
+1本増える（壁が物理的に延びたことの正しい反映）——寸法・見た目が変わるためユーザー目視の確認事項。
+
 ## 計測（回帰の基準）
 `app/scripts/probe/`（製品コードからは参照しない）。`11.stq` を Node へ復元し、描画セグメントを世界座標へ
 落として比較する。`planDefects.mjs`: `through`（相手の材を完全に横切る。目標0）／`join`（端が相手の材の中で

@@ -270,6 +270,77 @@ export function pointsOnWallLines(points, segments, junctionTol) {
 }
 
 /**
+ * 壁区間から「自由端」（下地オーナー壁の同一線上の連続runの端のうち、直交する下地オーナー壁が
+ * WALL_JUNCTION_TOL_MM以内に無いもの）を列挙する（ユーザー裁定2026-09-19「壁の自由端には柱を
+ * 立てる」——2026-09-14裁定「壁の自由端には柱を立てない」を撤回。structural-model.md参照）。
+ * 判定は wallIntersectionPoints と同じ「縦壁の位置が横壁の走行範囲内、かつ横壁の位置が縦壁の
+ * 走行範囲内」だが、こちらは1本の線を mergeWallIntervals で連続runへまとめたうえで、そのrunの
+ * 端点（along=run.lo/run.hi。物理座標）ごとに「直交する壁がその位置（along）に有るか」を問う——
+ * wallLineThroughRuns が返すrunは交点間に限定される（交点の外側の自由端側の壁尻尾を捨てる）ため、
+ * 自由端そのものの列挙には使えない。
+ *
+ * **返す点（along/x/y）は物理端ではなく設計上の端**（F-1×F-3是正・2026-09-19裁定）: 壁は
+ * 「CL＋オフセット」系アンカーで区間の端はCLで定義される（腰壁・垂れ壁のキーも
+ * `edgeKey(axisCLId,startCLId,endCLId)`と同じ規律）。protrusion（取り合いの控え・自由端の柱包み分の
+ * はね出し等）は描画・取り合いのための物理的なはね出しであって設計上の端ではないため、柱・梁の
+ * アンカーには使わない——3aの壁交点が控え・はね出しをWALL_JUNCTION_TOL_MMで許容して交点＝CL座標へ
+ * 解決するのと同じ規律に揃える。判定（直交壁の有無・runの被覆）は物理lo/hiのまま行い、
+ * 点として返す座標だけをsegmentsのdesignLo/designHi（wallBeamAxes.js selfWallSegments が
+ * wall.clStart/clEnd.effectiveValueから積む。壁がこれを持たない場合は物理端のままフォールバックし、
+ * そこから先の解決不能なCLへのスナップ・オフセットアンカーは呼び出し側
+ * （structural/woodAutoFill.js resolveWoodColumnAnchorCL→nearestAnchorCLの既存2段）に委ねる）へ
+ * 差し替える。純関数（graph非依存。失敗系は例外を投げず無視する）。
+ * @param {Array<{isVertical:boolean, coord:number, lo:number, hi:number, designLo?:number, designHi?:number}>} segments
+ * @param {number} [tol] - 直交壁の取り合い許容(mm)
+ * @returns {Array<{isVertical:boolean, coord:number, along:number, x:number, y:number}>}
+ *   isVertical/coord は自由端を持つ壁線自身の向き・位置、alongは設計上の端の座標（design値が
+ *   無ければ物理端）、x/yは世界座標（isVerticalならx=coord・y=along、そうでなければ逆）。
+ */
+export function wallRunFreeEnds(segments, tol = WALL_JUNCTION_TOL_MM) {
+  const valid = (segments ?? []).filter(s => s && Number.isFinite(s.coord) && Number.isFinite(s.lo) && Number.isFinite(s.hi));
+  const verticals = valid.filter(s => s.isVertical);
+  const horizontals = valid.filter(s => !s.isVertical);
+  const lines = [];
+  for (const s of valid) {
+    let line = lines.find(l => l.isVertical === s.isVertical && Math.abs(l.coord - s.coord) < tol);
+    if (!line) { line = { isVertical: s.isVertical, coord: s.coord, intervals: [], raw: [] }; lines.push(line); }
+    const lo = Math.min(s.lo, s.hi), hi = Math.max(s.lo, s.hi);
+    line.intervals.push({ lo, hi });
+    // designLo/designHiはsegmentのlo/hi（Math.min/max後）に対応する向きのまま持ち回る
+    // （wallBeamAxes.js selfWallSegmentsがこの向きで積んでいるため、ここで反転しない）。
+    line.raw.push({ lo, hi, designLo: s.designLo, designHi: s.designHi });
+  }
+  const out = [];
+  const seen = new Set();
+  for (const line of lines) {
+    const merged = mergeWallIntervals(line.intervals, tol);
+    const crossCandidates = line.isVertical ? horizontals : verticals;
+    for (const run of merged) {
+      for (const physicalAlong of [run.lo, run.hi]) {
+        const hasCross = crossCandidates.some(o =>
+          line.coord >= o.lo - tol && line.coord <= o.hi + tol && Math.abs(o.coord - physicalAlong) <= tol);
+        if (hasCross) continue;
+        // 設計上の端: このrun端（物理along）に物理的に一致する元segmentのdesignLo/designHiを使う
+        // （runは複数segmentのmergeWallIntervals結果のため、端に一致する元segmentを探し直す）。
+        // 一致するsegmentが無い・design値を持たない場合は物理端のままフォールバック。
+        let along = physicalAlong;
+        for (const r of line.raw) {
+          if (Math.abs(r.lo - physicalAlong) < tol && Number.isFinite(r.designLo)) { along = r.designLo; break; }
+          if (Math.abs(r.hi - physicalAlong) < tol && Number.isFinite(r.designHi)) { along = r.designHi; break; }
+        }
+        const x = line.isVertical ? line.coord : along;
+        const y = line.isVertical ? along : line.coord;
+        const key = `${line.isVertical}:${Math.round(x)}:${Math.round(y)}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        out.push({ isVertical: line.isVertical, coord: line.coord, along, x, y });
+      }
+    }
+  }
+  return out;
+}
+
+/**
  * 壁線上の通し梁の支持区間（run＝分割前の最大区間。壁が途切れず続く連続区間を両端で1本にまとめる。
  * 端は壁の交点＝自由端へは伸ばさない。区間内部の下階柱による分割は columnSplitPoints が別に行う——
  * 「壁が途切れているか」と「下階柱で区切るか」は別の判定軸のため、本関数は前者だけを持つ）。
@@ -338,7 +409,11 @@ export function columnSplitPoints(run, axisCoord, isVertical, columnPoints, tol 
 // 1つのプールから「理想位置に最も近いもの」を選んでいたため、窓内に通り芯と中心線の両方があるとき
 // どちらが選ばれるかが値の並びに依存し、上階・下階の処理順（3h-2の点源の分割状態）と絡んで結果が
 // 階の処理順に依存する一因になっていた（QA実測：moku3で昇順=通り芯Y4・降順=意匠中心線の別位置）。
-const CL_PRIORITY_RANK = Object.freeze({ struct: 0, center: 1 });
+// below（1つ下の実体階に既にある柱のAXIS位置）はcenterの次・910グリッドの手前（R-1是正・
+// 2026-09-19裁定「最下階まで可能な限り同位置に柱を追加」）——下階に柱があるならそこへ揃えれば
+// 柱が上下に通り、3bで下階へ通すときに新しい柱が生まれない。呼び出し側（woodAutoFill.js）が
+// belowColumnsから解決して渡す（本関数はgraph非依存のまま）。
+const CL_PRIORITY_RANK = Object.freeze({ struct: 0, center: 1, below: 2 });
 
 // clAlongsの各要素を{along, priority}へ正規化する。数値のみの要素は後方互換のため優先度最上位(struct)
 // 扱い（既存の呼び出し側・テストの「1種類のCLしか渡さない」形を壊さない）。不正な要素（along非数・
@@ -364,16 +439,22 @@ function normalizeClEntries(clAlongs) {
  * 隣接する支持点2点（supportAlongsをdedupe・昇順にした列の隣接ペア）ごとに独立して処理する:
  *  - span（hi-lo）がmaxSpanMm以下（tol込み）ならそのペアには何もしない。
  *  - attempt=n, n+1, n+2（n=ceil(span/maxSpanMm)）の順に、理想位置 lo+i*span/attempt（i=1..attempt-1）を
- *    左から右へ試す。**基準線（clAlongs＝通り芯・意匠中心線）の採用範囲は「実行可能な全範囲」**
- *    [max(prev+tol, hi-(attempt-i)*maxSpanMm), min(prev+maxSpanMm, hi-tol)]（理想位置±gridPitchMm/2の
- *    制約は掛けない——QA裁定2026-09-19「支持長を1820以下に保てる位置に通り芯・中心線があれば、等分位置
- *    から離れていてもそこを優先する」）。この範囲内・isAllowed通過分から**優先度順**（struct→center）に
- *    理想に最も近いものを選ぶ——優先度の高い群に1件でも候補があれば、低い群に理想により近い候補があっても
+ *    左から右へ試す。**基準線（clAlongs＝通り芯・意匠中心線・下階柱位置）の採用範囲は「実行可能な
+ *    全範囲」**[max(prev+tol, hi-(attempt-i)*maxSpanMm), min(prev+maxSpanMm, hi-tol)]（理想位置
+ *    ±gridPitchMm/2の制約は掛けない——QA裁定2026-09-19「支持長を1820以下に保てる位置に通り芯・中心線が
+ *    あれば、等分位置から離れていてもそこを優先する」）。この範囲内・isAllowed通過分から**優先度順**
+ *    （struct→center→below）に理想に最も近いものを選ぶ——優先度の高い群に1件でも候補があれば、低い群に理想により近い候補があっても
  *    採用しない。**910グリッドへのフォールバックだけ**理想位置±gridPitchMm/2（実行可能範囲との積）で
  *    絞る（等分近傍からの端数の小片を作らないための制約はグリッドにのみ効く）。いずれも無ければその
  *    理想位置はスキップする（prevは更新しない＝次の理想位置の窓がその分広がる）。支持点に極端に近い
  *    基準線（柱寸未満の小片を作る位置）はここでは弾かない——isAllowed（呼び出し側の重なり判定）が
- *    その位置を落とす前提（woodAutoFill.jsのrectsOverlap）。
+ *    その位置を落とす前提（woodAutoFill.jsのrectsOverlap）。**グリッドの基準点（位相）は既定で
+ *    このペアのlo**だが、opts.gridOriginMmが指定されればそちらを使う（R-1・2026-09-19是正:
+ *    支持点lo自身が910モジュール外の点（袖柱等）だと、lo基準の910グリッドが建物の通り芯グリッドと
+ *    位相ずれし、他階（3bで通した先）の既存柱と数十〜百mm程度しか離れない柱を生む——グリッド点は
+ *    「その軸方向の通り芯」を基準にすべきで、たまたま渡された支持点を基準にすべきではない。呼び出し側
+ *    〔woodAutoFill.js〕が対象軸のstruct種別センターラインから解決して渡す。本関数はgraph非依存の
+ *    ままpure：原点の値を受け取るだけで解決自体は行わない）。
  *  - 採用した点列（lo, ...採用位置, hi）の全ピースがmaxSpanMm以下（tol込み）になれば、その時点のattemptで
  *    成功として打ち切り、以降のattemptは試さない。
  *  - どのattemptも成功しなければ、最後に試した attempt（n+2）の点列をそのまま返す（柱を足さないより
@@ -381,17 +462,27 @@ function normalizeClEntries(clAlongs) {
  * 全体の返り値は各ペアの採用位置を合わせて昇順・tol以内はdedupeする。0件も正常系（span全て1820以下・
  * isAllowedが常にfalse・候補が1つも無い等）。
  * @param {number[]} supportAlongs - 既知の支持点（未ソート・重複可）
- * @param {Array<number|{along:number, priority:'struct'|'center'}>} clAlongs - 走行方向の候補CL座標
- *   （通り芯・意匠中心線。梁芯・補助線は含めないこと）。数値のみの要素は優先度'struct'扱い（後方互換）。
+ * @param {Array<number|{along:number, priority:'struct'|'center'|'below'}>} clAlongs - 走行方向の候補
+ *   （通り芯・意匠中心線・1つ下の実体階の柱のAXIS位置。梁芯・補助線は含めないこと）。数値のみの要素は
+ *   優先度'struct'扱い（後方互換）。'below'（ユーザー裁定2026-09-19「最下階まで可能な限り同位置に柱を
+ *   追加」）はcenterの次・910グリッドの手前——下階に柱があるならそこへ揃えれば柱が上下に通る。
  * @param {(along:number)=>boolean} isAllowed - その位置に柱を立てられるか（graph依存はここに閉じ込める）
- * @param {{maxSpanMm?:number, gridPitchMm?:number, tol?:number}} [opts]
- * @returns {Array<{along:number, kind:'struct'|'center'|'grid'}>} 昇順・dedupe（tol以内は同一点として先着を残す）
+ * @param {{maxSpanMm?:number, gridPitchMm?:number, tol?:number, gridOriginMm?:(number|((lo:number, hi:number)=>number|undefined))}} [opts]
+ *   gridOriginMm省略時（未指定・非数）は従来どおりペアのloを原点にする。**関数も渡せる**（R-1是正・
+ *   複数の支持点ペアが1回の呼び出しに含まれる場合、通り芯の位相はペアごとの[lo,hi]で解決すべきで
+ *   全ペア共通の1値では合わない——遠く離れた支持点lo（merge済みの長い run 全体の始端等）を基準に
+ *   固定してしまうと、途中のペアで別の位相の910グリッドを誤って採用しうる。呼び出し側が
+ *   `(lo, hi) => number|undefined` を渡せば、ペアごとに`(lo,hi)`で呼ばれる——本関数はgraph非依存の
+ *   ままで、解決自体は呼び出し側（graph.centerLinesを見られる側）に委ねる。数値を渡す場合は従来どおり
+ *   全ペア共通（後方互換）。
+ * @returns {Array<{along:number, kind:'struct'|'center'|'below'|'grid'}>} 昇順・dedupe（tol以内は同一点として先着を残す）
  */
 export function supportSpanColumnPositions(supportAlongs, clAlongs, isAllowed, opts = {}) {
   const {
     maxSpanMm = TRADITIONAL_WOOD_FRAMING.columnSupportMaxSpanMm,
     gridPitchMm = TRADITIONAL_WOOD_FRAMING.gridModuleMm,
     tol = CL_OVERLAP_TOL_MM,
+    gridOriginMm,
   } = opts;
   if (!Array.isArray(supportAlongs) || supportAlongs.some(v => !Number.isFinite(v))) return [];
   if (!Number.isFinite(maxSpanMm) || maxSpanMm <= 0) return [];
@@ -419,6 +510,9 @@ export function supportSpanColumnPositions(supportAlongs, clAlongs, isAllowed, o
     const span = hi - lo;
     if (span <= maxSpanMm + tol) continue; // 1820以下（tol込み）は何もしない
 
+    // このペア（[lo,hi]）の910グリッド原点。関数なら(lo,hi)で解決し直す（R-1是正：1回の呼び出しに
+    // 複数ペアが含まれる場合、通り芯の位相はペアごとに解決すべきで全ペア共通の1値では合わない）。
+    const pairGridOriginMm = typeof gridOriginMm === 'function' ? gridOriginMm(lo, hi) : gridOriginMm;
     const nBase = Math.ceil(span / maxSpanMm);
     let lastAttemptPositions = [];
     for (let attempt = nBase; attempt <= nBase + 2; attempt++) {
@@ -437,10 +531,10 @@ export function supportSpanColumnPositions(supportAlongs, clAlongs, isAllowed, o
         const feasLo = Math.max(prev + tol, hi - (attempt - i) * maxSpanMm);
         const feasHi = Math.min(prev + maxSpanMm, hi - tol);
         if (feasLo > feasHi) continue; // 実行可能範囲が無い。スキップ（prevは更新しない）
-        // 優先度順（struct→center）に実行可能範囲・isAllowed通過の候補から選ぶ——高優先度に1件でも
-        // あれば低優先度・グリッドは見ない（距離で横断比較しない）。
+        // 優先度順（struct→center→below）に実行可能範囲・isAllowed通過の候補から選ぶ——高優先度に
+        // 1件でもあれば低優先度・グリッドは見ない（距離で横断比較しない）。
         let chosen = null, kind = null;
-        for (const priority of ['struct', 'center']) {
+        for (const priority of ['struct', 'center', 'below']) {
           const candidates = clEntries.filter(e => e.priority === priority).map(e => e.along).filter(allowed);
           chosen = pickNearest(candidates, feasLo, feasHi, ideal);
           if (chosen != null) { kind = priority; break; }
@@ -449,10 +543,12 @@ export function supportSpanColumnPositions(supportAlongs, clAlongs, isAllowed, o
           const winLo = Math.max(feasLo, ideal - gridPitchMm / 2);
           const winHi = Math.min(feasHi, ideal + gridPitchMm / 2);
           if (winLo <= winHi) {
-            const kLo = Math.ceil((winLo - lo) / gridPitchMm);
-            const kHi = Math.floor((winHi - lo) / gridPitchMm);
+            // グリッドの位相は通り芯基準（gridOriginMm。R-1）。未指定はペアのlo基準（従来どおり）。
+            const origin = Number.isFinite(pairGridOriginMm) ? pairGridOriginMm : lo;
+            const kLo = Math.ceil((winLo - origin) / gridPitchMm);
+            const kHi = Math.floor((winHi - origin) / gridPitchMm);
             const gridCandidates = [];
-            for (let k = kLo; k <= kHi; k++) gridCandidates.push(lo + gridPitchMm * k);
+            for (let k = kLo; k <= kHi; k++) gridCandidates.push(origin + gridPitchMm * k);
             chosen = pickNearest(gridCandidates.filter(allowed), winLo, winHi, ideal);
             kind = 'grid';
           }

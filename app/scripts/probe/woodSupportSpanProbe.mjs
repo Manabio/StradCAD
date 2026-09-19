@@ -6,14 +6,14 @@
 // 使い方: node --import ./scripts/testSetup.mjs scripts/probe/woodSupportSpanProbe.mjs [入力.stq]
 import { loadDocument } from './loadDoc.mjs';
 import { floorSwapManager } from '../../src/storage/FloorSwapManager.js';
-import { recomputeStructuralForGraph } from '../../src/structural/structuralRecompute.js';
 import { isTraditionalWoodStructure, rulesFor, effectiveStructure, WOOD_DEPTH_BEAM_ROLES } from '../../src/structural/structureRules.js';
-import { selfWallSegments, peekBelowGraph, peekAboveGraph, findBeamAnchorCL, wallRunSegments, columnSeedBeamSegments } from '../../src/structural/wallBeamAxes.js';
+import { selfWallSegments, peekBelowGraph, peekAboveGraph, peekRoofGraphAbove, findBeamAnchorCL, wallRunSegments, columnSeedBeamSegments } from '../../src/structural/wallBeamAxes.js';
 import { columnSplitPoints, pointsOnWallLines } from '../../src/structural/woodFraming.js';
 import { wallLineThroughRuns, autoFillWoodColumns } from '../../src/structural/woodAutoFill.js';
 import { buildSelfFootprintGate, footprintBreakCLs, buildStructuralWallGate } from '../../src/structural/wallGate.js';
 import { CenterLineType, centerLineKind } from '../../src/core.js';
 import { CL_OVERLAP_TOL_MM } from '../../src/core/constants.js';
+import { sweepUntilConverged } from './sweepOrder.mjs';
 
 const SUPPORT_SPAN_LIMIT_MM = 1820;
 const GRID_STEP_MM = 910;
@@ -21,21 +21,11 @@ const MAX_SWEEPS = 8; // 「遅い」と「止まらない」を区別するた�
 
 const src = process.argv[2] ?? 'D:/tatsuya/Download/moku4.stq';
 
-/** 全階を指定順（昇順/降順）でMAX_SWEEPSまで再計算し、収束したsweep数（changed=[]になった回）を返す。
- *  収束しなければnull。document を独立に読み直してから回すこと（呼び出し側の責務）。 */
-async function sweepUntilConverged(project, order) {
-  const planes = order === 'desc' ? [...project.planes].reverse() : project.planes;
-  for (let i = 1; i <= MAX_SWEEPS; i++) {
-    const changedPlanes = [];
-    for (const p of planes) {
-      const g = project.graphMap.get(p.id);
-      const { changed } = await recomputeStructuralForGraph(g, project, g.structureOverride ?? project.structuralInfo.mainStructure);
-      if (changed) changedPlanes.push(p.name);
-    }
-    if (changedPlanes.length === 0) return i;
-  }
-  return null;
-}
+// sweepUntilConverged（本番の反映パスと同じ並び。屋根が在来なら降順の先頭・昇順の末尾）は
+// sweepOrder.mjs（9本のwood probeが共有する単一実装。コーディネーター指示「probeを本番と同じ
+// 順序・屋根込みに統一」）へ切り出した。降順（'desc'）が本番の反映パス（reflectStructuralToOtherFloors）
+// と同じ順序——convergeLimit（他probeのMAX_SWEEPS判定）は降順の実測値を基準にする。昇順（'asc'）は
+// 下記6bの順序不変チェック専用の比較走行であり、上限判定の対象ではない。
 
 function loadFresh() {
   const { project } = loadDocument(src);
@@ -64,7 +54,9 @@ console.log(`降順: ${descConverged ?? `NG(${MAX_SWEEPS}超もchangedあり)`}`
 // になったため——.claude/structural-model.md「収束は処理順に依存しない」節参照）。
 function normalizedStructuralDump(project) {
   const out = {};
-  for (const p of project.planes) {
+  const roofPlane = project.roofPlane;
+  const planes = roofPlane ? [...project.planes, roofPlane] : project.planes; // 屋根込み（在来のときだけ意味を持つ。柱は常に空配列）
+  for (const p of planes) {
     const g = project.graphMap.get(p.id);
     out[p.name] = {
       columns: g.columns.map(c => `${c.role}:${Math.round(c.x)},${Math.round(c.y)}:${c.sectionDefId}`).sort(),
@@ -255,13 +247,18 @@ for (const p of project.planes) {
   const rules = rulesFor(effectiveStructure(g, project));
   if (!rules.framing || rules.columnPlacement !== 'wallIntersections') continue;
   const belowGraph = await peekBelowGraph(g, project);
-  const aboveGraph = await peekAboveGraph(g, project);
+  // 最上階はpeekAboveGraphが対象外（project.planesに次の実体階が無い）——structuralRecompute.js
+  // （ステップ6）と同じくpeekRoofGraphAboveへフォールバックし、屋根の壁線方式の軒桁を3h-2/3iの
+  // 点源に含める（含めないと、収束済みのはずのgraphに対しdiagCreated.length>0の誤検知警告が出る）。
+  const aboveGraph = (await peekAboveGraph(g, project)) ?? (await peekRoofGraphAbove(g, project));
   const wallGate = await buildStructuralWallGate(g.plane, project, g);
   const structure = effectiveStructure(g, project);
   const wallSegmentsForFloor = wallRunSegments(g, belowGraph, structure);
   const aboveColumnsForFloor = aboveGraph?.columns ?? [];
   const aboveBeamSegmentsForFloor = columnSeedBeamSegments(aboveGraph, aboveGraph ? rulesFor(effectiveStructure(aboveGraph, project)) : rules);
-  const diag = autoFillWoodColumns(g, project, wallGate, aboveColumnsForFloor, wallSegmentsForFloor, aboveBeamSegmentsForFloor);
+  // R-1裁定（2026-09-19）: 3iのbelow優先候補（belowColumns）も本番と同じ入力で渡す
+  // ——省くと収束済みのはずのgraphに対しdiagCreated.length>0の誤検知警告が出る。
+  const diag = autoFillWoodColumns(g, project, wallGate, aboveColumnsForFloor, wallSegmentsForFloor, aboveBeamSegmentsForFloor, belowGraph?.columns ?? []);
   const { iiPicks, created: diagCreated } = diag;
   if (diagCreated.length > 0) console.log(`  ⚠ [${p.name}] 診断呼び出しで${diagCreated.length}件生成された（収束済みのはずが未収束の可能性）`);
 
@@ -273,12 +270,16 @@ for (const p of project.planes) {
   const clPair = autoColumns.filter(c => !c.woodJambRef && !matchesPick(c) && !c.woodAxisOffset);
   const struct = iiPicks.filter(pk => pk.kind === 'struct');
   const center = iiPicks.filter(pk => pk.kind === 'center');
+  // below（ユーザー裁定2026-09-19「最下階まで可能な限り同位置に柱を追加」）: 1つ下の実体階の柱位置に
+  // 揃えた3i候補。struct/centerに次ぐ優先度（woodFraming.js CL_PRIORITY_RANK参照）。
+  const below = iiPicks.filter(pk => pk.kind === 'below');
   const grid = iiPicks.filter(pk => pk.kind === 'grid');
   if (autoColumns.length === 0) continue;
-  console.log(`[${p.name}] auto柱=${autoColumns.length}本 内訳: 袖柱=${jamb.length} 3i(struct=${struct.length}/center=${center.length}/grid=${grid.length}) ` +
+  console.log(`[${p.name}] auto柱=${autoColumns.length}本 内訳: 袖柱=${jamb.length} 3i(struct=${struct.length}/center=${center.length}/below=${below.length}/grid=${grid.length}) ` +
     `3b・3h-2オフセット=${offsetOther.length} 梁端・壁交点(CLペア。3a/3b/3h-2)=${clPair.length}`);
   for (const pk of struct) console.log(`    3i(struct) (${pk.x.toFixed(0)},${pk.y.toFixed(0)})`);
   for (const pk of center) console.log(`    3i(center) (${pk.x.toFixed(0)},${pk.y.toFixed(0)})`);
+  for (const pk of below) console.log(`    3i(below)  (${pk.x.toFixed(0)},${pk.y.toFixed(0)})`);
   for (const pk of grid) console.log(`    3i(grid)   (${pk.x.toFixed(0)},${pk.y.toFixed(0)})`);
 }
 

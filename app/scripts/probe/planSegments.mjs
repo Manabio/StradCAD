@@ -3,6 +3,7 @@
 import { ShapeType } from '../../src/core.js';
 import { LodLevel } from '../../src/viewport.js';
 import { buildWallDrawPlan } from '../../src/renderer/wallDrawPlan.js';
+import { studRects } from '../../src/renderer/wallStudLayout.js';
 
 /**
  * @returns {Array<{key:string, kind:string, wallId:string, vertical:boolean, at:number, lo:number, hi:number}>}
@@ -32,16 +33,18 @@ export function planWallSegments(graph, lodLevel = LodLevel.DETAIL) {
     lines.forEach((l, i) => push(`${shape.id}:${l.kind}:${i}`, l.kind, shape.id, l.vertical, l.at, l.lo, l.hi,
       l.style ? { ids: l.ids, style: l.style } : { ids: l.ids }));
     if (kneeDropOverlays?.has(shape.id)) continue; // 天板の壁に下地スタッドは無い
-    // 下地スタッドの位置・材厚は wallDrawPlan.js → wallStudLayout.js が解決済み（ShapesLayer.jsx と同じ写像）。
+    // 下地スタッド・端部材の位置・材厚は wallDrawPlan.js → wallStudLayout.js が解決済み。矩形への
+    // 写像は studRects（renderer/ShapesLayer.jsx と同じ供給源。二重記述しない）——ここでは
+    // その矩形(x/y/width/height)を、このprobeの (at, lo, hi, depth) 形式へ変換するだけ。
     const studs = wallStuds.get(shape.id);
     if (!studs) continue;
-    const backingBand = shape.backingRange;
-    const backingDepth = backingBand.hi - backingBand.lo;
-    const halfWidth = studs.depth / 2;
-    const centerV = (backingBand.lo + backingBand.hi) / 2;
-    for (const p of studs.centers) {
-      out.push({ key: `${shape.id}:stud:${p}`, kind: 'stud', wallId: shape.id, vertical: vert,
-        at: r(centerV), lo: r(p - halfWidth), hi: r(p + halfWidth), depth: r(backingDepth) });
+    for (const rect of studRects(vert, shape.backingRange, studs)) {
+      const at = vert ? rect.x + rect.width / 2 : rect.y + rect.height / 2;
+      const lo = vert ? rect.y : rect.x;
+      const hi = vert ? rect.y + rect.height : rect.x + rect.width;
+      const depth = vert ? rect.width : rect.height;
+      out.push({ key: `${shape.id}:${rect.key}`, kind: rect.kind, wallId: shape.id, vertical: vert,
+        at: r(at), lo: r(lo), hi: r(hi), depth: r(depth) });
     }
   }
   out.sort((a, b) => a.key < b.key ? -1 : a.key > b.key ? 1 : 0);

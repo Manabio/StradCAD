@@ -24,7 +24,7 @@ import {
   resolveBackingOwnership, applyBackingOwnership, closeConvexCorners, isInteriorWallTarget,
 } from './wallGeneration.js';
 import { buildCellToRoom } from './edgeClassify.js';
-import { woodBaseColumnWidthMm, woodColumnWidthMm } from '../structural/structureRules.js';
+import { woodBaseColumnWidthMm, woodColumnWidthMm, rulesFor, effectiveStructure } from '../structural/structureRules.js';
 // edgeComposition.js は materialData.js（材マスタ全件）を静的に import するため、コード分割
 // 維持のため regenerateWalls 内で動的 import する（materialData.js のヘッダコメント参照。
 // clEccentricity.js と同じ理由——静的 import すると finishBoundary.js → App.jsx 経由で
@@ -96,6 +96,10 @@ export async function regenerateWalls(graph, { materialMap, project = null, stai
   const bandShift = (extDims && baseColumnWidth != null)
     ? Math.max(0, (baseColumnWidth - woodColumnWidthMm(graph, project)) / 2)
     : 0;
+  // 壁の自由端の扱い（F-3・2026-09-19裁定）: 在来木造だけ柱包み（自由端をCL端から柱包み分
+  // はね出して止め、仕上げ材が端を回り込む）。他の主構造は既定'flush'のまま（従来どおりCL位置で
+  // 止まる）。選択子は structural/structureRules.js `wallFreeEnd` が唯一の情報源。
+  const wrapFreeEnds = rulesFor(effectiveStructure(graph, project)).wallFreeEnd === 'columnWrap';
 
   // 階段下部屋（破れ線先セルに部屋指定された領域。ステップ2a）。専用なのは生成手順
   // （固定ルールの偏芯・委譲・claim・既存壁との重なりスキップ・後追いトリム・生成順
@@ -218,7 +222,7 @@ export async function regenerateWalls(graph, { materialMap, project = null, stai
     if (!isInteriorWallTarget(room, under2aRoomIds)) continue;
 
     const walls = generateRoomWallsFromOutline(graph, room, {
-      ...(roomWallDims(graph, room, materialMap) || {}), bandShift, cellToRoom: stairUnderCellToRoom,
+      ...(roomWallDims(graph, room, materialMap) || {}), bandShift, cellToRoom: stairUnderCellToRoom, wrapFreeEnds,
     }, [...stairOpenings, ...underEdges]);
     if (walls.length === 0) continue;
 
@@ -307,7 +311,7 @@ export async function regenerateWalls(graph, { materialMap, project = null, stai
   if (oldExteriorSnapshots.length > 0) {
     oldExteriorSnapshots.forEach(s => graph.removeShape(s.id));
   }
-  const newExteriorWalls = generateExteriorWalls(graph, { ...(extDims || {}), bandShift }, [...stairOpenings, ...underEdges]);
+  const newExteriorWalls = generateExteriorWalls(graph, { ...(extDims || {}), bandShift, wrapFreeEnds }, [...stairOpenings, ...underEdges]);
 
   // 外壁オーナー化パス:「外周CLでは外壁が下地オーナー」の規則で、同一CLでスパンが重なる
   // 内周壁（ステップ2生成分）の covered 区間だけを薄壁化する（部分重なりは

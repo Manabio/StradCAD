@@ -15,10 +15,10 @@
 // 使い方: node --import ./scripts/testSetup.mjs scripts/probe/woodBeamJunctionProbe.mjs [入力.stq]
 import { loadDocument } from './loadDoc.mjs';
 import { floorSwapManager } from '../../src/storage/FloorSwapManager.js';
-import { recomputeStructuralForGraph } from '../../src/structural/structuralRecompute.js';
 import { rulesFor, effectiveStructure, isTraditionalWoodStructure } from '../../src/structural/structureRules.js';
 import { resolveBeamJunctionSpans } from '../../src/structural/beamJunction.js';
 import { CL_OVERLAP_TOL_MM } from '../../src/core/constants.js';
+import { sweepUntilConverged, planeLabel } from './sweepOrder.mjs';
 
 const src = process.argv[2] ?? 'D:/tatsuya/Download/moku4.stq';
 const { project } = loadDocument(src);
@@ -34,19 +34,13 @@ console.log('主構造:', project.structuralInfo.mainStructure);
 // （2026-09-18裁定で3から改定。woodTieBeamProbe.mjsと同じ根拠——3h-2の点源に床梁を加えたことで
 // 3階またぎの連鎖が成立し、1スイープでは1段ずつしか伝播しない）、非在来はsweep1で収束する想定
 // （.claude/structural-model.md 3b節「結果整合性」）。
-const MAX_SWEEPS = 5;
-let convergedAt = null;
-for (let i = 1; i <= MAX_SWEEPS; i++) {
-  const changedPlanes = [];
-  for (const p of project.planes) {
-    const g = project.graphMap.get(p.id);
-    const { changed } = await recomputeStructuralForGraph(g, project, g.structureOverride ?? project.structuralInfo.mainStructure);
-    if (changed) changedPlanes.push(p.name);
-  }
-  console.log(`sweep${i}: changed=[${changedPlanes.join(',')}]`);
-  if (changedPlanes.length === 0) { convergedAt = i; break; }
-}
-const convergeLimit = isTraditionalWoodStructure(project.structuralInfo.mainStructure) ? 4 : 1;
+// 【小屋伏図にも梁・柱ルールを適用する計画のステップ7・R-5是正】本番の反映パス
+// （reflectStructuralToOtherFloors）と同じ並び（在来なら降順・屋根が先頭）で回す
+// （sweepOrder.mjs。9本のwood probeが共有する単一実装）。
+const MAX_SWEEPS = 8; // 【QA第2巡Minor-4】convergeLimit(5)に対して余裕を持たせる（below候補が階をまたぐ依存を1段追加するため。woodSupportSpanProbe.mjsと同じ8に統一）
+const convergedAt = await sweepUntilConverged(project, 'desc', MAX_SWEEPS,
+  (i, changedPlanes) => console.log(`sweep${i}: changed=[${changedPlanes.join(',')}]`));
+const convergeLimit = isTraditionalWoodStructure(project.structuralInfo.mainStructure) ? 5 : 1; // 【QA第2巡Minor-4】below候補（3i）が階をまたぐ依存を1段追加するため4は余裕ゼロだった（moku4実測でも収束sweep4ちょうど）。5に緩和。5超はNGのまま
 if (convergedAt != null && convergedAt <= convergeLimit) {
   console.log(`OK: 収束（sweep${convergedAt}で changed=[]）`);
 } else if (convergedAt != null) {
@@ -149,7 +143,11 @@ function classifyJunctions(beams, tol) {
 }
 
 console.log('\n--- 交点処理（B-3）診断 ---');
-for (const p of project.orderedTabs) {
+// project.orderedTabs（タブ表示順）は屋根専用平面を含まない——R-5是正: 在来木造は屋根の梁も
+// role:'primary'化済みのため、交点処理の診断対象に屋根も加える（末尾に追加。既存のタブ順は変えない）。
+const junctionTargets = project.roofPlane && isTraditionalWoodStructure(project.structuralInfo.mainStructure)
+  ? [...project.orderedTabs, project.roofPlane] : project.orderedTabs;
+for (const p of junctionTargets) {
   const graph = project.graphMap.get(p.id);
   if (!graph) continue;
   const rules = rulesFor(effectiveStructure(graph, project));
@@ -173,7 +171,7 @@ for (const p of project.orderedTabs) {
 
   const deltaH = coordDeltaHistogram(junctions, input);
 
-  console.log(`${p.name}（${rules.key}. beamJunction=${rules.drawing.beamJunction}）:`);
+  console.log(`${planeLabel(p)}（${rules.key}. beamJunction=${rules.drawing.beamJunction}）:`);
   console.log(`  端kind: through=${kindCounts.through}, winnerFace=${kindCounts.winnerFace}, cornerClose=${kindCounts.cornerClose}, base=${baseCount}（全${totalEnds}端）`);
   console.log(`  交点分類${clsNote}: 通し=${cls.through}, T=${cls.t}, L=${cls.l}, 十字=${cls.cross}, 断面違い=${cls.sectionBreak}, 孤立(柱なし)=${cls.isolated}`);
   console.log(`  座標差(実体base1/2との差分。描画だけがずれている実量): ${showDeltaHistogram(deltaH)}`);

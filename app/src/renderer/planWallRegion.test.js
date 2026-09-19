@@ -482,6 +482,48 @@ test('【条件C】柱壁の覆いは、畳まれた線（短い壁Bの区間）
   assert.deepEqual(result.lines.get('A').find(l => l.at === 57.5).ids, ['A', 'B'], '寄与した全壁のidを残す');
 });
 
+// ---- F-3（2026-09-19裁定）: 在来木造の柱包み。自由端（freeEndPoints）は下地を仕上げ厚ぶん
+// 縮め、木口線（ecap）を出す壁端の第3条件（wrapEndsFor）。呼び出し側（renderer/wallDrawPlan.js）が
+// structural/woodFraming.js wallRunFreeEnds の結果をそのまま渡す前提——この純モジュールは
+// 座標集合を受け取るだけで自由端の判定自体は行わない。----
+// axis(CL値)=0・face(axisValue=CL+axisOffset)=72.5 とわざと食い違わせる——下地帯center
+// （backingRange中心）はaxisCLの値+backingOffset(既定0)で決まりaxisOffsetとは無関係なので、
+// 実際の壁（axisOffset!=0が通常）ではbackingAxisValue(0)とaxisValue(72.5)が一致しない。
+// wrapEndsForがaxisValueで自由端を突き合わせる実装だと通常壁で一致せず巻きが効かない
+// 回帰があったため、この食い違いを固定するフィクスチャにしてある（再発防止）。
+function isolatedBackingWall() {
+  return stubWall({
+    id: 'W', isVertical: false, axis: 0, face: 72.5, faceDir: 1, coord1: 0, coord2: 1000,
+    backingRange: { lo: -60, hi: 60 }, materialRange: { lo: -60, hi: 72.5 },
+  });
+}
+
+test('【F-3】resolveWallRegionLines: freeEndPointsに含まれる物理端は下地を仕上げ厚(wallFinish)ぶん縮める（下地帯中心＝backingAxisValueで突き合わせる。axisValueとは食い違いうる）', () => {
+  const withFreeEnd = resolveWallRegionLines([isolatedBackingWall()], { freeEndPoints: [{ x: 0, y: 0 }] });
+  assert.deepEqual(withFreeEnd.backingSpans.get('W'), [12.5, 1000],
+    'lo端(x=0,y=0＝下地帯中心)が自由端のため下地はwallFinish(12.5)ぶん手前から始まる。hi端は自由端でないため物理端(1000)のまま');
+});
+
+// ---- F-1×F-3是正（2026-09-19裁定）: freeEndPointsは柱・梁のアンカーに使う「設計上の端」であり、
+// 壁の物理端（自由端の柱包み分だけ実際にはね出した後の座標）とは一致しない——tol
+// （WALL_JUNCTION_TOL_MM=150mm）付きで突き合わせる。3aの壁交点が控え・はね出しをtolで許容する
+// のと同じ規律。----
+test('【F-1×F-3是正】resolveWallRegionLines: freeEndPointsが設計上の端（物理端からprotrusion分ずれている）でもtol内なら自由端として下地を縮める', () => {
+  // isolatedBackingWallの物理lo端(x=0,y=0)に対し、設計上の端(y=72.5。protrusion相当ずれている)を渡す。
+  const withFreeEnd = resolveWallRegionLines([isolatedBackingWall()], { freeEndPoints: [{ x: 0, y: 72.5 }] });
+  assert.deepEqual(withFreeEnd.backingSpans.get('W'), [12.5, 1000], 'tol(150mm)内のずれは自由端として扱う');
+});
+
+test('【失敗系・F-1×F-3是正】resolveWallRegionLines: freeEndPointsがtolを超えて離れていれば自由端として扱わない', () => {
+  const tooFar = resolveWallRegionLines([isolatedBackingWall()], { freeEndPoints: [{ x: 0, y: 500 }] });
+  assert.deepEqual(tooFar.backingSpans.get('W'), [0, 1000], 'tol(150mm)を超えて離れた点は自由端とみなさない');
+});
+
+test('【失敗系・F-3】resolveWallRegionLines: freeEndPoints省略時は従来どおり自由端でも下地を縮めない', () => {
+  const without = resolveWallRegionLines([isolatedBackingWall()]);
+  assert.deepEqual(without.backingSpans.get('W'), [0, 1000], '在来以外・freeEndPoints未指定は物理端のまま');
+});
+
 test('【2a壁】描画クリップの単位（clipGroups）が違う壁の線は畳まない', () => {
   const merged = allLines(resolveWallRegionLines(collinearPair()));
   assert.deepEqual(at(merged, false, 57.5), [[0, 3500]], '既定では1本に畳む');

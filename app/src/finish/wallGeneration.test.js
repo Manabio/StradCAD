@@ -4,7 +4,7 @@
 // あった（QA指摘）。この穴を塞ぐ。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { PlanGraph, Plane, CenterLineType, Discipline, RoomKind, RoomFeature } from '@core';
+import { PlanGraph, Plane, CenterLineType, Discipline, RoomKind, RoomFeature, edgeKey } from '@core';
 import {
   applyBackingOwnership, computeExternalEdgeParams, generateExteriorWalls, generateRoomWallsFromOutline,
   isInteriorWallTarget,
@@ -325,4 +325,169 @@ test('applyBackingOwnership: 帯シフトを持つ壁（backingOffset!=0）が�
   assert.ok(uncovered, '非covered区間[0,1000]の壁が分割生成されるはず');
   assert.equal(uncovered.backingDepth, 105, 'backingDepthはwallBase(105)相当');
   assert.equal(uncovered.backingOffset, 7.5, 'backingOffsetはシフト量のまま保存される');
+});
+
+// ================================================================
+// F-3（2026-09-19裁定・QA是正版）: 在来木造の壁の自由端（wrapFreeEnds）。旧実装（コーナーマップの
+// 構築源を開口辺除外前の全辺へ広げる方式）は①開口と同一直線上（コーナーではない）の自由端を
+// 拾えない②反対面の薄壁の自由端と食い違う③自由端が無い通し辺まで誤って分断する、という3つの
+// 実データ不具合を生んだため廃止し、`mergeSegments`後の生成対象区間（開口辺除外後の`rawParams`）に
+// 対して`structural/woodFraming.js wallRunFreeEnds`と同じ述語を明示評価する方式（`freeEndsOf`）に
+// 置き換えた。自由端に接する壁は、その端をrunの外向きに+protrusion（wallBase/2+wallFinish）だけ
+// はね出す（`applyFreeEndProtrusion`）。
+// フィクスチャ: 1辺(1000mm四方)の部屋の上辺(y=0)を stairOpenings で除外する——左右の縦壁の
+// 上端(y=0)が自由端になる。wallBase=120・wallFinish=12.5 → offset=72.5。
+// ================================================================
+function makeSingleRoomGraphWithTopOpening() {
+  const graph = makeGraph();
+  const ARCH = { labeled: false, discipline: Discipline.ARCH };
+  const x0 = graph.addCenterLine(CenterLineType.VERTICAL, 0,    ARCH);
+  const x1 = graph.addCenterLine(CenterLineType.VERTICAL, 1000, ARCH);
+  const y0 = graph.addCenterLine(CenterLineType.HORIZONTAL, 0,    ARCH);
+  const y1 = graph.addCenterLine(CenterLineType.HORIZONTAL, 1000, ARCH);
+  const room = graph.addRoom(new Set([`${x0.id}:${y0.id}:${x1.id}:${y1.id}`]), 'A');
+  const stairOpenings = [{ isVertical: false, value: 0, lo: 0, hi: 1000 }]; // 上辺(y=0)
+  return { graph, x0, x1, y0, y1, room, stairOpenings };
+}
+
+test('generateRoomWallsFromOutline: wrapFreeEnds既定(false)は自由端がCL位置ちょうどで止まる（従来どおり）', () => {
+  const { graph, room, stairOpenings } = makeSingleRoomGraphWithTopOpening();
+  const walls = generateRoomWallsFromOutline(graph, room, { wallBase: 120, wallFinish: 12.5 }, stairOpenings);
+  const verticals = walls.filter(w => w.isVertical);
+  assert.equal(verticals.length, 2, '前提: 左右の縦壁2本が生成される（上辺は開口のため壁なし）');
+  for (const w of verticals) {
+    assert.equal(Math.min(w.coord1, w.coord2), 0, '上端(y=0)はCL位置ちょうどで止まる（開口辺のためオフセット無し）');
+  }
+});
+
+test('generateRoomWallsFromOutline（F-3）: wrapFreeEnds:trueの在来木造は自由端がwallBase/2+wallFinishだけはね出す', () => {
+  const { graph, room, stairOpenings } = makeSingleRoomGraphWithTopOpening();
+  const walls = generateRoomWallsFromOutline(graph, room, { wallBase: 120, wallFinish: 12.5, wrapFreeEnds: true }, stairOpenings);
+  const verticals = walls.filter(w => w.isVertical);
+  assert.equal(verticals.length, 2);
+  for (const w of verticals) {
+    // 上端(y=0)は自由端（QA是正版・2026-09-19）: runの外向き（壁の物理範囲y:0..1000の外＝
+    // y<0側）へ+72.5だけはね出す（CL位置y=0から-72.5）。下端(y=1000、開口とは無関係)は
+    // 従来どおり下地帯分控えられるだけ（自由端扱いではない）。
+    assert.equal(Math.min(w.coord1, w.coord2), -72.5, `上端がCLから外向き(-72.5)へはね出すはず（実際:${Math.min(w.coord1, w.coord2)}）`);
+    assert.equal(Math.max(w.coord1, w.coord2), 927.5, '下端(y=1000)は下地帯分控えられるだけで自由端扱いではない');
+  }
+});
+
+test('generateRoomWallsFromOutline（F-3）: wrapFreeEnds:trueでも腰壁・垂れ壁の指定がある辺の自由端は同じだけ延びる（構造柱だけが対象外。壁自体はkneeDropWallsを見ない）', () => {
+  const { graph, x0, x1, y1, room, stairOpenings } = makeSingleRoomGraphWithTopOpening();
+  // 下辺(y=1000)に腰壁指定を付けても、上辺(y=0)の自由端の延びには影響しない
+  // （壁生成はkneeDropWallsを参照しない設計——延びるかどうかは自由端かどうかだけで決まる）。
+  graph.setKneeDropWall(edgeKey(y1.id, x0.id, x1.id), { knee: { topHeight: 900 } });
+  const walls = generateRoomWallsFromOutline(graph, room, { wallBase: 120, wallFinish: 12.5, wrapFreeEnds: true }, stairOpenings);
+  const verticals = walls.filter(w => w.isVertical);
+  assert.equal(verticals.length, 2);
+  for (const w of verticals) {
+    assert.equal(Math.min(w.coord1, w.coord2), -72.5, '腰壁指定の有無に関わらず自由端は同じだけ延びる');
+  }
+});
+
+test('【対照】generateRoomWallsFromOutline（F-3）: wrapFreeEnds:falseなら在来木造以外と同じくCL位置ちょうどのまま（非在来は完全不変）', () => {
+  const { graph, room, stairOpenings } = makeSingleRoomGraphWithTopOpening();
+  const flush = generateRoomWallsFromOutline(graph, room, { wallBase: 120, wallFinish: 12.5, wrapFreeEnds: false }, stairOpenings);
+  for (const w of flush.filter(w => w.isVertical)) {
+    assert.equal(Math.min(w.coord1, w.coord2), 0);
+  }
+});
+
+// ---- QA是正版の追加テスト（2026-09-19。moku4実データ不具合の再現・固定） ----
+
+test('generateRoomWallsFromOutline（F-3・QA1）: 開口辺と同一直線上の壁の自由端も同じだけはね出す（コーナーではなく通しの中断）', () => {
+  const graph = makeGraph();
+  const ARCH = { labeled: false, discipline: Discipline.ARCH };
+  const x0 = graph.addCenterLine(CenterLineType.VERTICAL,   0,    ARCH);
+  const x1 = graph.addCenterLine(CenterLineType.VERTICAL,   1000, ARCH);
+  const x2 = graph.addCenterLine(CenterLineType.VERTICAL,   2000, ARCH);
+  const y0 = graph.addCenterLine(CenterLineType.HORIZONTAL, 0,    ARCH);
+  const y1 = graph.addCenterLine(CenterLineType.HORIZONTAL, 1000, ARCH);
+  // 1部屋・2セル（x:0..2000のうちx=1000で内部分割。外形は0..2000の1枚の矩形として辺が出る）。
+  const room = graph.addRoom(new Set([
+    `${x0.id}:${y0.id}:${x1.id}:${y1.id}`,
+    `${x1.id}:${y0.id}:${x2.id}:${y1.id}`,
+  ]), 'A');
+  // 上辺(y=0)のうち x:1000..2000 だけを階段開口として除外——x:0..1000 側は通しの中断（コーナーでは
+  // ない）による自由端になる。
+  const stairOpenings = [{ isVertical: false, value: 0, lo: 1000, hi: 2000 }];
+  const walls = generateRoomWallsFromOutline(graph, room, { wallBase: 120, wallFinish: 12.5, wrapFreeEnds: true }, stairOpenings);
+  const topWall = walls.find(w => !w.isVertical && Math.abs(w.axisCL.effectiveValue - y0.value) < 1);
+  assert.ok(topWall, `上辺(y=0)のx:0..1000側の壁が生成されるはず（実際:${walls.map(w => `${w.isVertical}:${w.axisCL.effectiveValue}:${w.coord1}-${w.coord2}`)}）`);
+  assert.equal(Math.max(topWall.coord1, topWall.coord2), 1072.5,
+    `x=1000側の端（開口との境界＝自由端）はrunの外向きに+72.5はね出すはず（実際:${Math.max(topWall.coord1, topWall.coord2)}）`);
+  assert.equal(Math.min(topWall.coord1, topWall.coord2), 72.5, 'x=0側（コーナー）は従来どおり下地帯分控えられるだけ');
+});
+
+test('generateRoomWallsFromOutline（F-3・QA2）: 自由端では下地オーナー壁と薄壁の両方（隣接する2部屋それぞれの生成分）が同じ向きに延びる', () => {
+  const graph = makeGraph();
+  const ARCH = { labeled: false, discipline: Discipline.ARCH };
+  const x0 = graph.addCenterLine(CenterLineType.VERTICAL,   0,    ARCH);
+  const x1 = graph.addCenterLine(CenterLineType.VERTICAL,   1000, ARCH);
+  const x2 = graph.addCenterLine(CenterLineType.VERTICAL,   2000, ARCH);
+  const y0 = graph.addCenterLine(CenterLineType.HORIZONTAL, 0,    ARCH);
+  const y1 = graph.addCenterLine(CenterLineType.HORIZONTAL, 1000, ARCH);
+  const roomA = graph.addRoom(new Set([`${x0.id}:${y0.id}:${x1.id}:${y1.id}`]), 'A');
+  const roomB = graph.addRoom(new Set([`${x1.id}:${y0.id}:${x2.id}:${y1.id}`]), 'B');
+  // 両部屋の上辺(y=0)全体が階段開口——共有柱状の間仕切り壁(x=1000)は両部屋とも上端が自由端になる。
+  const stairOpenings = [{ isVertical: false, value: 0, lo: 0, hi: 2000 }];
+  const opts = { wallBase: 120, wallFinish: 12.5, wrapFreeEnds: true };
+  const wallsA = generateRoomWallsFromOutline(graph, roomA, opts, stairOpenings);
+  const wallsB = generateRoomWallsFromOutline(graph, roomB, opts, stairOpenings);
+  const sharedA = wallsA.find(w => w.isVertical && Math.abs(w.axisCL.effectiveValue - x1.value) < 1);
+  const sharedB = wallsB.find(w => w.isVertical && Math.abs(w.axisCL.effectiveValue - x1.value) < 1);
+  assert.ok(sharedA && sharedB, '間仕切り壁(x=1000)がA・Bそれぞれの生成分として存在するはず');
+  // 将来resolveBackingOwnershipで下地オーナー／薄壁に分かれる対（axisOffsetの符号が逆）だが、
+  // 生成段階ではどちらも同じ端(y=0)が自由端であり、同じ向き（外向き）に同じ量だけ延びるはず。
+  assert.equal(Math.min(sharedA.coord1, sharedA.coord2), -72.5, 'A側生成分の自由端は外向き-72.5');
+  assert.equal(Math.min(sharedB.coord1, sharedB.coord2), -72.5, 'B側生成分の自由端も同じ向き・同じ量');
+});
+
+test('【失敗系】generateExteriorWalls（F-3・QA3）: 自由端でない通し辺はwrapFreeEnds:trueでも端が動かない（outerループは開口辺で分断しない）', () => {
+  const graph = makeGraph();
+  const ARCH = { labeled: false, discipline: Discipline.ARCH };
+  const x0 = graph.addCenterLine(CenterLineType.VERTICAL,   0,    ARCH);
+  const x1 = graph.addCenterLine(CenterLineType.VERTICAL,   4000, ARCH);
+  const y0 = graph.addCenterLine(CenterLineType.HORIZONTAL, 0,    ARCH);
+  const y1 = graph.addCenterLine(CenterLineType.HORIZONTAL, 3000, ARCH);
+  graph.addRoom(new Set([`${x0.id}:${y0.id}:${x1.id}:${y1.id}`]), '室内');
+  // 外周(outer)ループの辺の一部が階段開口と重なっていても、outerは開口辺があっても壁を残す
+  // （generateExteriorWallsの既存規律）ため通しのまま——自由端は生じない。
+  const stairOpenings = [{ isVertical: false, value: 0, lo: 1000, hi: 2000 }];
+  const flush = generateExteriorWalls(graph, { wallBase: 120, wallFinish: 12.5 }, stairOpenings);
+  const wrapped = generateExteriorWalls(graph, { wallBase: 120, wallFinish: 12.5, wrapFreeEnds: true }, stairOpenings);
+  const topFlush = flush.find(w => !w.isVertical && Math.abs(w.axisCL.effectiveValue - y0.value) < 1);
+  const topWrapped = wrapped.find(w => !w.isVertical && Math.abs(w.axisCL.effectiveValue - y0.value) < 1);
+  assert.ok(topFlush && topWrapped, '外周上辺の壁が両条件とも1本のまま生成される（分断されない）');
+  assert.equal(topWrapped.coord1, topFlush.coord1, 'wrapFreeEnds:trueでも端座標は従来と同一（自由端が無いため）');
+  assert.equal(topWrapped.coord2, topFlush.coord2, 'wrapFreeEnds:trueでも端座標は従来と同一（自由端が無いため）');
+});
+
+test('generateExteriorWalls（F-3・QA4）: 外壁の自由端は柱包み分はね出す（courtyard境界の一部が開口で欠ける構成）', () => {
+  const graph = makeGraph();
+  const ARCH = { labeled: false, discipline: Discipline.ARCH };
+  const x0 = graph.addCenterLine(CenterLineType.VERTICAL,   0,    ARCH);
+  const x1 = graph.addCenterLine(CenterLineType.VERTICAL,   4000, ARCH);
+  const x2 = graph.addCenterLine(CenterLineType.VERTICAL,   8000, ARCH);
+  const y0 = graph.addCenterLine(CenterLineType.HORIZONTAL, 0,    ARCH);
+  const yMid = graph.addCenterLine(CenterLineType.HORIZONTAL, 1500, ARCH); // courtyard境界をここで分割する
+  const y1 = graph.addCenterLine(CenterLineType.HORIZONTAL, 3000, ARCH);
+  // 室内側は2セル（y=1500で内部分割）——外形は0..3000の1枚の矩形だが、courtyard境界(x=4000)は
+  // y=1500で2辺に分かれて出る（QA1と同じ「通しの中断」の作り方）。
+  graph.addRoom(new Set([
+    `${x0.id}:${y0.id}:${x1.id}:${yMid.id}`,
+    `${x0.id}:${yMid.id}:${x1.id}:${y1.id}`,
+  ]), '室内');
+  const exterior = graph.addRoom(new Set([`${x1.id}:${y0.id}:${x2.id}:${y1.id}`]), 'テラス');
+  exterior.setKind(RoomKind.EXTERIOR);
+  // courtyard境界(x=4000)の一部(y:1500..3000)だけを階段開口として除外——残る(y:0..1500)側の
+  // y=1500端が自由端になる。
+  const stairOpenings = [{ isVertical: true, value: 4000, lo: 1500, hi: 3000 }];
+  const walls = generateExteriorWalls(graph, { wallBase: 120, wallFinish: 12.5, wrapFreeEnds: true }, stairOpenings);
+  const courtyardWall = walls.find(w => w.axisCL.id === x1.id);
+  assert.ok(courtyardWall, 'courtyard壁(x=4000)が生成されるはず');
+  assert.equal(Math.max(courtyardWall.coord1, courtyardWall.coord2), 1572.5,
+    `y=1500側の端（自由端）はrunの外向きに+72.5はね出すはず（実際:${Math.max(courtyardWall.coord1, courtyardWall.coord2)}）`);
 });

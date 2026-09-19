@@ -17,8 +17,11 @@ import { effectiveStructure, woodColumnSectionId } from '../structural/structure
  * v2: 柱寸法が基準（120）より細い階の外壁下地帯シフト導入（wallGeneration.js
  * generateExteriorWalls/generateRoomWallsFromOutline の bandShift。鍵の入力は変えていないが
  * 生成式が変わったため既存キーを一律不一致にする）。
+ * v3: 壁の自由端の柱包み導入（F-3・2026-09-19裁定。在来木造だけ`wallFreeEnd:'columnWrap'`。
+ * wallGeneration.js の cornerMap 構築源を広げ、自由端をCL端から柱包み分はね出す）。鍵の入力
+ * （実効主構造）は変えていないが生成式が変わったため既存キーを一律不一致にする。
  */
-export const WALL_KEY_VERSION = 'v2';
+export const WALL_KEY_VERSION = 'v3';
 
 /**
  * graph（1階分）の壁再生成に必要な入力から鍵文字列を作る。

@@ -7,8 +7,8 @@
 // 使い方: node --import ./scripts/testSetup.mjs scripts/probe/woodBeamDepthProbe.mjs [入力.stq]
 import { loadDocument } from './loadDoc.mjs';
 import { floorSwapManager } from '../../src/storage/FloorSwapManager.js';
-import { recomputeStructuralForGraph } from '../../src/structural/structuralRecompute.js';
 import { WOOD_DEPTH_BEAM_ROLES, isTraditionalWoodStructure } from '../../src/structural/structureRules.js';
+import { sweepUntilConverged, productionSweepPlanes, planeLabel } from './sweepOrder.mjs';
 
 const src = process.argv[2] ?? 'D:/tatsuya/Download/moku4.stq';
 const { project } = loadDocument(src);
@@ -20,7 +20,7 @@ floorSwapManager.peek = async (plane) => project.graphMap.get(plane.id) ?? null;
 // 材種は問わない——非木造の断面が1本も変わらないことを確認するのが目的の1つのため。
 function snapshotBeams() {
   const out = new Map(); // planeId -> Map<beamId, {role, materialType, sectionDefId}>
-  for (const p of project.planes) {
+  for (const p of productionSweepPlanes(project)) {
     const g = project.graphMap.get(p.id);
     const m = new Map();
     for (const b of g.beams) {
@@ -35,7 +35,7 @@ function snapshotBeams() {
 // 建物全体・全role・全材種の断面ヒストグラム（S造等の非対象構造で「前後完全一致」を確認する用）。
 function allBeamsHistogram() {
   const h = {};
-  for (const p of project.planes) {
+  for (const p of productionSweepPlanes(project)) {
     const g = project.graphMap.get(p.id);
     for (const b of g.beams) {
       const key = `${b.materialType}:${b.role}:${b.sectionDefId}`;
@@ -68,23 +68,18 @@ const allBefore = allBeamsHistogram();
 // 収束1回のはず（他3つのprobeと同じ形式）。
 // 在来木造の収束期待はsweep4以内（2026-09-18裁定で3から改定。woodTieBeamProbe.mjsと同じ根拠
 // ——3h-2の点源に床梁を加えたことで3階またぎの連鎖が成立し、1スイープでは1段ずつしか伝播しない）。
-const MAX_SWEEPS = 5;
-let convergedAt = null;
+// 【小屋伏図にも梁・柱ルールを適用する計画のステップ7・R-5是正】本番の反映パス
+// （reflectStructuralToOtherFloors）と同じ並び（在来なら降順・屋根が先頭）で回す
+// （sweepOrder.mjs。9本のwood probeが共有する単一実装）。
+const MAX_SWEEPS = 8; // 【QA第2巡Minor-4】convergeLimit(5)に対して余裕を持たせる（below候補が階をまたぐ依存を1段追加するため。woodSupportSpanProbe.mjsと同じ8に統一）
 let changedSweeps = 0;
-for (let i = 1; i <= MAX_SWEEPS; i++) {
-  const changedPlanes = [];
-  for (const p of project.planes) {
-    const g = project.graphMap.get(p.id);
-    const { changed } = await recomputeStructuralForGraph(g, project, g.structureOverride ?? project.structuralInfo.mainStructure);
-    if (changed) changedPlanes.push(p.name);
-  }
+const convergedAt = await sweepUntilConverged(project, 'desc', MAX_SWEEPS, (i, changedPlanes) => {
   console.log(`sweep${i}: changed=[${changedPlanes.join(',')}]`);
-  if (changedPlanes.length === 0) { convergedAt = i; break; }
-  changedSweeps++;
-}
+  if (changedPlanes.length > 0) changedSweeps++;
+});
 // QA裁定（F8）：期待値を固定する——非在来はsweep1で収束（changed=[]）しなければNG、在来は
-// 昇順スイープ由来で3b・3dが互いに1スイープ遅れうるためsweep3までに収束しなければNG（緩めっぱなしにしない）。
-const convergeLimit = isTraditionalWoodStructure(project.structuralInfo.mainStructure) ? 4 : 1;
+// 昇順スイープ由来で3b・3dが互いに1スイープ遅れうるためsweep5までに収束しなければNG（緩めっぱなしにしない。【QA第2巡Minor-4】below候補の追加で3→5へ緩和）。
+const convergeLimit = isTraditionalWoodStructure(project.structuralInfo.mainStructure) ? 5 : 1; // 【QA第2巡Minor-4】below候補（3i）が階をまたぐ依存を1段追加するため4は余裕ゼロだった（moku4実測でも収束sweep4ちょうど）。5に緩和。5超はNGのまま
 if (convergedAt != null && convergedAt <= convergeLimit) {
   console.log(`OK: 収束（sweep${convergedAt} で changed=[]。changed があったスイープ数=${changedSweeps}）`);
 } else if (convergedAt != null) {
@@ -100,9 +95,9 @@ const allAfter = allBeamsHistogram();
 
 let totalChanged = 0;
 let from120ToTable = 0;
-for (const p of project.planes) {
+for (const p of productionSweepPlanes(project)) {
   const b = before.get(p.id), a = after.get(p.id);
-  console.log(`--- ${p.name} ---`);
+  console.log(`--- ${planeLabel(p)} ---`);
   showHistogram('before', histogram(b));
   showHistogram('after ', histogram(a));
   for (const [id, bv] of b) {

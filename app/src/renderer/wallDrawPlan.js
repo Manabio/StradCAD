@@ -40,6 +40,9 @@ import { indexByAxis, findOpeningsOnWallIndexed } from '../openings/openingGeome
 import { resolveWallRegionLines, wallSpanIntervals } from './planWallRegion.js';
 import { graphComputed } from './graphDerived.js';
 import { rulesFor, effectiveStructure } from '../structural/structureRules.js';
+import { selfWallSegments } from '../structural/wallBeamAxes.js';
+import { wallRunFreeEnds } from '../structural/woodFraming.js';
+import { kneeDropEndMembers } from '../structural/wallEndMember.js';
 
 // 略図LOD で返す下地重複防止の空集合（読み取り専用として共有する）。
 const EMPTY_SET = new Set();
@@ -232,9 +235,14 @@ export function buildWallDrawPlan(graph, lodLevel, { clipGroups = null } = {}) {
       });
     }
   }
+  // 在来木造の柱包み（F-3・2026-09-19裁定）: 自由端（structural/woodFraming.js wallRunFreeEnds。
+  // 柱生成＝structural/woodAutoFill.js と同じ判定・同じ入力 selfWallSegments(graph)）の世界座標一覧。
+  // 腰壁・垂れ壁の辺の自由端でも壁端延長・巻きは行うため、ここでは絞り込まない。
+  const wrapFreeEnds = !schematic && rulesFor(effectiveStructure(graph)).wallFreeEnd === 'columnWrap';
+  const freeEndPoints = wrapFreeEnds ? wallRunFreeEnds(selfWallSegments(graph)) : null;
   const region = schematic ? null : resolveWallRegionLines(walls, {
     junctions: wallJunctions, openingsByWall, kneeDropOverlays, endpointAtByWall,
-    columnWraps, clipGroups, detail,
+    columnWraps, clipGroups, detail, freeEndPoints,
   });
 
   const wallLines = new Map();
@@ -258,12 +266,24 @@ export function buildWallDrawPlan(graph, lodLevel, { clipGroups = null } = {}) {
     const rules = rulesFor(effectiveStructure(graph));
     const columnRects = rules.studLayout === 'betweenColumns'
       ? graph.columns.filter(c => c.role !== 'foundation').map(c => bareColumnRect(c)) : [];
+    // 腰壁・垂れ壁の端部材（在来木造だけ・structural/wallEndMember.js）。1レンダー分まとめて1回解決し、
+    // 壁ごとに (a) columnIntervals へ端部材区間を合流（既存どおり柱面から studColumnClearanceMm(10) を
+    // 空けた間柱が立つ。二系統の割付を作らない）、(b) resolveWallStuds へ endMembers として渡す。
+    // このstudLayout==='betweenColumns'ゲートはkneeDropEndMembers内部のrules.framingゲートと実質
+    // 二重（QA指摘2026-09-19。両方在来木造のみを指すため片方だけの変異では検出できない——両方を守ること）。
+    const endMembersByWall = rules.studLayout === 'betweenColumns' ? kneeDropEndMembers(graph) : null;
     for (const wall of walls) {
       if (wall.wallFinish == null || !wall.backingRange || deferredBackingIds.has(wall.id)) continue;
+      const wallEndMembers = endMembersByWall?.get(wall.id) ?? [];
+      const columnIntervals = [
+        ...columnIntervalsOnWall(wall, columnRects),
+        ...wallEndMembers.map(e => [e.along - e.widthMm / 2, e.along + e.widthMm / 2]),
+      ];
       const studs = resolveWallStuds(wallLines.get(wall.id), {
         layout: rules.studLayout, backing: rules.backing,
-        columnIntervals: columnIntervalsOnWall(wall, columnRects),
+        columnIntervals,
         studCuts: columnCuts?.get(wall.id)?.backing ?? [],
+        endMembers: wallEndMembers,
       });
       if (studs) wallStuds.set(wall.id, studs);
     }

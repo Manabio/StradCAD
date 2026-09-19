@@ -1,7 +1,7 @@
 import { runInAction } from 'mobx';
 import { serializeGraph } from '../graphSnapshot.js';
-import { buildStructuralWallGate, buildExteriorSide } from './wallGate.js';
-import { collectWallBeamSources, peekBelowGraph, peekAboveGraph, wallRunSegments, columnSeedBeamSegments } from './wallBeamAxes.js';
+import { buildStructuralWallGate, buildExteriorSide, buildSelfFootprintGate } from './wallGate.js';
+import { collectWallBeamSources, peekBelowGraph, peekAboveGraph, wallRunSegments, columnSeedBeamSegments, peekRoofBelowGraph, peekRoofGraphAbove } from './wallBeamAxes.js';
 import {
   autoFillStructuralGrid,
   autoFillColumnAxisOffsets,
@@ -54,11 +54,20 @@ export async function recomputeStructuralForGraph(targetGraph, project, mainStru
   // rulesFor 呼び出しをここへ集約）。
   const structure = effectiveStructure(targetGraph, project);
   const ownRules = rulesFor(structure);
+  // 屋根専用平面（小屋伏図／R階伏図）か。ユーザー定義「在来木造の構造モードで言う『最上階』とは、
+  // 最上階にある『小屋伏図』を差す」（2026-09-19）——屋根の「自階」は実体を持たないため、以下の
+  // belowGraph・selfGate（小屋伏図にも梁・柱ルールを適用する計画）はどちらも「1つ下の実体階」を
+  // 「最上階」に置き換えて解決する。
+  const isRoof = targetGraph.plane.isRoofPlane;
   const wallGate = await buildStructuralWallGate(targetGraph.plane, project, targetGraph);
   // 壁由来の梁芯生成対象・木造梁成の下階柱（支持点）が使う1つ下の実体階のpeek。
   // どちらの用途も不要なら（RC造は自階のみ／非木造は梁成の算定自体が対象外）peekしない。
+  // 屋根専用平面は project.planes に含まれず belowPlaneOf（peekBelowGraph内部）が引けないため、
+  // 屋根専用のpeekRoofBelowGraph（roofForPlaneIdが指す最上階）へ切り替える（ステップ4）——
+  // 非在来（ownRules.framing・wallBeamAxesがいずれも偽）はこの分岐自体に入らずpeek 0回のまま。
   const belowGraph = (ownRules.wallBeamAxes === 'selfAndBelow' || ownRules.framing)
-    ? (precomputedBelowGraph !== undefined ? precomputedBelowGraph : await peekBelowGraph(targetGraph, project))
+    ? (precomputedBelowGraph !== undefined ? precomputedBelowGraph
+        : isRoof ? await peekRoofBelowGraph(targetGraph, project) : await peekBelowGraph(targetGraph, project))
     : null;
   // 「梁を支える1つ下の実体階の柱寸」の派生値をgraph自身へ書く——この再計算が**唯一の書き込み元**
   // （structural/structureRules.js beamColumnWidthMmのJSDoc参照）。採番パイプライン
@@ -75,7 +84,14 @@ export async function recomputeStructuralForGraph(targetGraph, project, mainStru
   // 在来木造の上階柱直下の柱（ステップ3b）が候補列挙に使う1つ上の実体階の柱。columnPlacementが
   // wallIntersections（在来木造）のときだけpeekする（非在来はpeek 0回。二重管理ではなく同じ主構造
   // ルール軸をここでも読む——ownRulesはstructuralRecompute.js冒頭で集約済み）。
-  const aboveGraph = ownRules.columnPlacement === 'wallIntersections' ? await peekAboveGraph(targetGraph, project) : null;
+  // 最上階（peekAboveGraphが対象外＝project.planesに次の実体階が無い）は、直上の屋根専用平面を
+  // 「1つ上の実体階」の代わりに見る（peekRoofGraphAbove。小屋伏図にも梁・柱ルールを適用する計画の
+  // ステップ6）——屋根の壁線方式の軒桁（ステップ5・role:'primary'）が3h-2/3iの点源になり、ユーザー
+  // 定義「最上階から順＝起点は小屋伏図」を反映する。peekAboveGraphが非nullを返す通常階（＝最上階
+  // ではない）はpeekRoofGraphAbove側の早期return（graph.plane.id!==roofForPlaneId）で追加peekなし。
+  const aboveGraph = ownRules.columnPlacement === 'wallIntersections'
+    ? (await peekAboveGraph(targetGraph, project)) ?? (await peekRoofGraphAbove(targetGraph, project))
+    : null;
   const aboveColumns = aboveGraph?.columns ?? [];
   // 在来木造の下階柱（ステップ3h-2）が候補列挙に使う、1つ上の実体階の柱生成の点源（role:'primary'
   // または'floor'の梁の軸・範囲。columnSeedBeamSegments）。追加peek 0回——3b用に既にpeek済みの
@@ -85,10 +101,23 @@ export async function recomputeStructuralForGraph(targetGraph, project, mainStru
   // 建物ではaboveGraphの主構造がtargetGraphと異なりうるため。structuralOrchestration.jsの下階編集経路
   // （columnSeedBeamSegments(subjectGraph, rulesFor(effectiveStructure(subjectGraph, project)))）と対称）。
   const aboveBeamSegments = columnSeedBeamSegments(aboveGraph, aboveGraph ? rulesFor(effectiveStructure(aboveGraph, project)) : ownRules);
+  // 自階フットプリント単独ゲート（wallGate.js buildSelfFootprintGate。壁線上の通し梁・土台が使う。
+  // 小屋伏図にも梁・柱ルールを適用する計画のステップ3）。屋根専用平面は自階に部屋を持たないため
+  // graph 自身を渡すと常にnull（ゲートなし）になってしまう——「自階」＝1つ下の実体階（＝最上階。
+  // ステップ4のpeekRoofBelowGraphで解決済み）のフットプリントを使う。belowGraph が解決不能
+  // （roofForPlaneId の実体階が見つからない等の防御的フォールバック。非在来では常にnull）の間は
+  // targetGraph 自身へフォールバックする（buildSelfFootprintGate(null)のクラッシュ回避）。
+  // 実体階（isRoof===false）は常に targetGraph自身＝autoFillWoodWallBeams/autoFillWoodSillBeamsが
+  // 省略時に自前計算する値と同じ＝従来どおり不変。
+  const selfGate = buildSelfFootprintGate(isRoof ? (belowGraph ?? targetGraph) : targetGraph);
+  // 自由端（F-2・selfWallFreeEnds）の判定基準（R-2・2026-09-19是正）。selfGateと同じ理由——屋根専用
+  // 平面は自階に壁が無いため、判定は「1つ下の実体階（＝最上階）」で行う。belowGraphはselfGateと
+  // 同じ値を使い回す（追加peekは無い）。実体階は常にtargetGraph自身（従来と同値）。
+  const freeEndGraph = isRoof ? (belowGraph ?? targetGraph) : targetGraph;
 
   // 構造体トポロジーから未定義の柱・梁・基礎（基礎伏図のみ）を検出し、自動補完する。
   // ユーザーが明示削除した箇所は除外集合（excludedColumnSlots 等）により復活しない。
-  const { newColumns, removedColumns, newFootings, newBeams, removedBeams } = runInAction(() => autoFillStructuralGrid(targetGraph, project, mainStructure, wallGate, wallSources, wallSegments, aboveColumns, belowGraph?.columns ?? [], aboveBeamSegments));
+  const { newColumns, removedColumns, newFootings, newBeams, removedBeams } = runInAction(() => autoFillStructuralGrid(targetGraph, project, mainStructure, wallGate, wallSources, wallSegments, aboveColumns, belowGraph?.columns ?? [], aboveBeamSegments, selfGate, freeEndGraph));
   // べた基礎（木造）のマットスラブを基礎伏図に生成・撤去する（基礎種別で取捨。問題.md）。基礎伏図以外では no-op。
   const matFoundation = runInAction(() => autoFillMatFoundation(targetGraph, project));
   // 外周モデル（side ビュー）を1回構築し、柱芯オフセットと梁偏芯の両方に渡す——柱・梁で外側方向（内外定義）を一致させる。

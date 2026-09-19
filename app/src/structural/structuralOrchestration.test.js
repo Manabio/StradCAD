@@ -5,9 +5,13 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { runInAction } from 'mobx';
-import { Project, PlanGraph, Plane, CenterLineType, Discipline, StructuralMaterialType, OpeningCategory } from '../core.js';
+import {
+  Project, PlanGraph, Plane, CenterLineType, Discipline, StructuralMaterialType, OpeningCategory,
+  HDimensionLine, VDimensionLine, DimensionKind, DimensionSide,
+} from '../core.js';
 import { undoManager } from '../undoManager.js';
 import { floorSwapManager } from '../storage/FloorSwapManager.js';
+import { saveFloor } from '../storage/db.js';
 import { serializeGraph, restoreGraph } from '../graphSnapshot.js';
 import { generateRoomWallsFromOutline } from '../finish/wallGeneration.js';
 import { TRADITIONAL_WOOD_STRUCTURE, rulesFor } from './structureRules.js';
@@ -16,9 +20,13 @@ import { autoFillWallBeamAxes, selfWallSegments } from './wallBeamAxes.js';
 import { collectFloorGroups, totalCountOf, renumberMembers } from './memberNumbering.js';
 import { memberGroupKey } from './memberCatalog.js';
 import { syncRoofPlane } from './roofPlane.js';
+import { recomputeStructuralForGraph } from './structuralRecompute.js';
+import { findSectionEntry } from './sectionCatalog.js';
 import {
-  recomputeStructuralComposition, reflectStructuralAfterFinishExit, columnSetSignature,
+  recomputeStructuralComposition, reflectStructuralAfterFinishExit, reflectStructuralToOtherFloors,
+  repeatReflectPassUntilConverged, MAX_REFLECT_PASSES, columnSetSignature, runStructuralModeSetup,
 } from './structuralOrchestration.js';
+import { figureBindingManager } from '../figure/FigureBindingManager.js';
 
 // 下階なし（基礎伏図相当）composition スタブ。recomputeStructuralComposition は
 // belowGraph=null のとき下階分岐（buildStructuralWallGate 等の非同期IDB経路）を一切通らない。
@@ -28,6 +36,49 @@ function makeSinglePlaneProject() {
   const project = new Project('proj', 'test');
   const { graph } = project.addPlane(0, '1階', 'p1');
   return { project, graph };
+}
+
+// ---- 反映パスの「収束するまで繰り返す」（リード裁定・2026-09-19）を直接検証するための最小限の
+// インメモリIndexedDBシム。----
+// 従来（下の「reflectStructuralToOtherFloorsを直接呼ぶ挙動テストは断念」コメント参照）はfake-indexeddb
+// 等のIDBモックが本リポジトリのdevDependenciesに無いことを理由に断念していたが、新規npm依存を
+// 追加せず自前で最小限のシムを書けば足りると判断し直した（storage/db.js openDB/saveFloor/loadFloorが
+// 使うAPIだけを模す。indexedDB.open→onupgradeneeded→onsuccessの非同期チェーンをqueueMicrotaskで
+// 再現するだけの薄いスタブで、実IndexedDBの仕様には準拠しない——このテストファイルの外では使わない）。
+function withFakeIndexedDB(fn) {
+  class FakeRequest { constructor() { this.onsuccess = null; this.onerror = null; } }
+  class FakeStore {
+    constructor() { this.data = new Map(); }
+    put(value) {
+      const req = new FakeRequest();
+      this.data.set(value.planeId ?? value.projectId, value);
+      queueMicrotask(() => req.onsuccess?.({ target: { result: undefined } }));
+      return req;
+    }
+    get(key) {
+      const req = new FakeRequest();
+      queueMicrotask(() => req.onsuccess?.({ target: { result: this.data.get(key) } }));
+      return req;
+    }
+  }
+  class FakeDB {
+    constructor() {
+      this.stores = new Map();
+      this.objectStoreNames = { contains: (n) => this.stores.has(n) };
+      for (const name of ['floors', 'projects', 'savedFloors']) this.stores.set(name, new FakeStore());
+    }
+    transaction(name) { const store = this.stores.get(name); return { objectStore: () => store }; }
+  }
+  const fakeDb = new FakeDB();
+  const original = globalThis.indexedDB;
+  globalThis.indexedDB = {
+    open() {
+      const req = new FakeRequest();
+      queueMicrotask(() => req.onsuccess?.({ target: { result: fakeDb } }));
+      return req;
+    },
+  };
+  return fn().finally(() => { globalThis.indexedDB = original; });
 }
 
 // ---- recomputeStructuralComposition ----
@@ -351,11 +402,13 @@ test('recomputeStructuralComposition【実機裁定ステップ4 C-2 QA3】: und
 });
 
 // ---- reflectStructuralAfterFinishExit ----
-// runStructuralModeSetup（syncRoofPlane→collectRoofPlaneGroupsが屋根専用平面をfloorSwapManager.peekし、
-// indexedDBに到達する。fake-indexeddb等のIDBモックは本リポジトリの devDependencies に無く新規依存の追加は
-// 本タスクの範囲外）は node:test 環境で indexedDB未定義のReferenceErrorになるため断念する（REASONED:
-// node --import ./scripts/testSetup.mjs -e での事前検証で実際に indexedDB is not defined を確認済み）。
-// reflectStructuralAfterFinishExit は idx===-1／最上階退出の2ケースに限りIDBを一切経由しないため対象にする。
+// runStructuralModeSetup（syncRoofPlane→reflectStructuralToOtherFloors内のreflectRoofPlaneが
+// 屋根専用平面をfloorSwapManager.peekし、indexedDBに到達する。fake-indexeddb等のIDBモックは本リポジトリの
+// devDependencies に無く新規依存の追加は本タスクの範囲外）は node:test 環境で indexedDB未定義の
+// ReferenceErrorになるため断念する（REASONED: node --import ./scripts/testSetup.mjs -e での事前検証で
+// 実際に indexedDB is not defined を確認済み）。
+// reflectStructuralAfterFinishExit は idx===-1／最上階退出の2ケースに限りIDBを一切経由しないため対象にする
+// （いずれもmakeSinglePlaneProjectが屋根専用平面を持たないためreflectRoofPlaneも早期returnする）。
 
 test('reflectStructuralAfterFinishExit: 存在しないplaneId（idx===-1）＋goingToStructure=trueは何もせず例外なし・undo不変', async () => {
   const { project } = makeSinglePlaneProject();
@@ -385,8 +438,8 @@ test('【不変条件・ソース走査】structuralOrchestration.js: 下階編�
   const url = await import('node:url');
   const here = path.dirname(url.fileURLToPath(import.meta.url));
   const src = fs.readFileSync(path.join(here, 'structuralOrchestration.js'), 'utf8');
-  assert.ok(/autoFillColumnsForStructure\(belowGraph, project, belowGate, aboveColumnsForBelow, belowWallSegments, aboveBeamSegmentsForBelow\)/.test(src),
-    'autoFillColumnsForStructure(belowGraph, ...) へ aboveColumnsForBelow・belowWallSegments・aboveBeamSegmentsForBelow を渡していない');
+  assert.ok(/autoFillColumnsForStructure\(belowGraph, project, belowGate, aboveColumnsForBelow, belowWallSegments, aboveBeamSegmentsForBelow, belowBelowGraph\?\.columns \?\? \[\]\)/.test(src),
+    'autoFillColumnsForStructure(belowGraph, ...) へ aboveColumnsForBelow・belowWallSegments・aboveBeamSegmentsForBelow・belowBelowGraph?.columnsを渡していない');
   assert.ok(/aboveColumnsForBelow\s*=\s*subjectGraph\.columns/.test(src),
     'aboveColumnsForBelow が subjectGraph.columns（メモリ上）から来ていない（誤ってpeekしている可能性）');
   assert.ok(/belowWallSegments\s*=\s*wallRunSegments\(belowGraph, belowBelowGraph, belowStructure\)/.test(src),
@@ -466,7 +519,7 @@ test('【不変条件・実機再QA指摘4】structuralOrchestration.js: applyMe
   // ではなく temp.beamColumnWidthMm（数値）だけを保持していること（同時展開を1階分に戻す配線側の固定）。
   assert.ok(/beamColumnWidthByPlaneId\.set\(plane\.id, temp\.beamColumnWidthMm\)/.test(src),
     'reflectStructuralToOtherFloorsがtempインスタンス自体を保持している（beamColumnWidthMm数値だけを保持する規律に反する）');
-  assert.ok(/touched\.push\(\{ plane: planes\[i\], beamColumnWidthMm: temp\.beamColumnWidthMm \}\)/.test(src),
+  assert.ok(/touchedByPlaneId\.set\(planes\[i\]\.id, temp\.beamColumnWidthMm\)/.test(src),
     'reflectStructuralAfterFinishExitがtempインスタンス自体を保持している（beamColumnWidthMm数値だけを保持する規律に反する）');
 });
 
@@ -558,15 +611,71 @@ test('recomputeStructuralComposition【QA3-6】: mutateと下階柱集合の変�
   }
 });
 
-// ---- QA3-1: 屋根専用平面の「下階」不一致（2026-09-17指摘）。composition の belowGraph
-// （drawingDesignation.js structuralPlaneBelow。屋根なら最上階を返す）と、
+// ---- QA3-1: 屋根専用平面の「下階」不一致（2026-09-17指摘、非在来のみ現存）。composition の
+// belowGraph（drawingDesignation.js structuralPlaneBelow。屋根なら最上階を返す）と、
 // recomputeStructuralForGraph が自前peekする belowGraph（wallBeamAxes.js belowPlaneOf。
 // 屋根専用平面はproject.planesに含まれないため常にnull）は別概念——屋根では一致しない。
 // 一致しないまま2回目にprecomputedBelowGraph（最上階）を渡すと、1回目（belowGraph=null＝
 // 屋根自身の柱寸へフォールバック）と2回目（belowGraph=最上階）とでbeamColumnWidthMmが食い違い、
 // 屋根伏図の軒桁材幅が最上階の柱寸へ静かに置き換わる。「屋根専用平面は再実行しない」ガードで
-// 固定する。----
-test('recomputeStructuralComposition【QA3-1・屋根専用平面】: 最上階の柱寸(105)と屋根自身の柱寸(120)が異なっても、下階(=最上階)柱集合の変化で自階(屋根)を再計算し直さない（軒桁材幅は屋根自身の120のまま）', async () => {
+// 固定していた。
+//
+// 【裁定変更・2026-09-19】在来木造は上の前提が失効した——小屋伏図にも梁・柱ルールを適用する計画
+// （.claude/structural-model.md）で「屋根の1つ下＝最上階」と定義し、structuralRecompute.js が
+// isRoof のとき peekBelowGraph の代わりに peekRoofBelowGraph（roofForPlaneIdが指す最上階）を使う
+// ようになった（ステップ4）ため、1回目・2回目のbelowGraphが常に同じ最上階になり「食い違い」自体が
+// 起きない。既存の確定規律「梁幅＝その梁を支える1つ下の実体階の柱寸」（ステップ4 C-2・2026-09-16）
+// に照らせば、小屋伏図の梁（軒桁・頭つなぎ）を支えるのは最上階の柱であり、最上階の柱寸(105)こそが
+// 正しい値——屋根 graph 自身の柱寸(120)は屋根に柱が無い以上、意味を持たない値である。
+// 在来木造は再実行抑止を解除し（structuralOrchestration.js roofReexecBlocked）、軒桁材幅が
+// 最上階の柱寸へ揃うことを期待値として固定する（下のテスト・裁定変更）。非在来（roofBeamPlacement:
+// 'gridEaves'。RC造・S造等）は旧裁定のまま——wallBeamAxes/framingがいずれも無くbelowGraphの
+// 解決自体が起きないため（structuralRecompute.js参照）、旧裁定の理由は非在来では今も有効。----
+
+test('recomputeStructuralComposition【QA3-1・非在来は維持】: 非在来（S造。roofBeamPlacement:gridEaves）は下階(=最上階)柱集合が変化しても自階(屋根)を再計算し直さない（旧裁定2026-09-17を維持）', async () => {
+  // 直接の観測対象（beamColumnWidthMm・conformWoodSections）は非在来では常にno-op（rules.framingが
+  // 無いため）なので材幅そのものでは「再実行されたか」を判別できない——2回目のrecomputeStructuralForGraph
+  // が走れば buildStructuralWallGate・resolveLowestGraph 等が発行する floorSwapManager.peek が
+  // 追加で発生するはず、という副作用でregression検知する（柱集合が変化する/しないの2条件を比較し、
+  // 変化しても peek 回数が増えない＝2回目が走っていないことを示す）。
+  async function run(withColumnGrid) {
+    const project = new Project(`proj-roof-steel-${withColumnGrid}`, 'test');
+    const { graph: g1 } = project.addPlane(0, '1階', 'p1');
+    const { graph: g2 } = project.addPlane(3000, '2階', 'p2'); // 最上階
+    g1.structureOverride = 'S造';
+    g2.structureOverride = 'S造';
+    const roofPlane = syncRoofPlane(project);
+    const roofGraph = project.graphMap.get(roofPlane.id);
+    assert.ok(roofGraph.plane.isRoofPlane, '前提: 屋根専用平面が生成されている');
+    roofGraph.structureOverride = 'S造';
+    if (withColumnGrid) {
+      // 柱グリッドを構成する通り芯（project.structGraph=全階共通）——S造はcolumnPlacement:
+      // 'gridIntersections'のため、これだけで2階（最上階）に柱が新規に立ち下階柱集合が変化する。
+      project.structGraph.addCenterLine(CenterLineType.VERTICAL,   0,    { labeled: true, discipline: Discipline.STRUCT });
+      project.structGraph.addCenterLine(CenterLineType.VERTICAL,   3640, { labeled: true, discipline: Discipline.STRUCT });
+      project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+      project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 1820, { labeled: true, discipline: Discipline.STRUCT });
+    }
+    const peekMap = { p1: g1, p2: g2 };
+    let peekCount = 0;
+    const originalPeek = floorSwapManager.peek;
+    floorSwapManager.peek = async (plane) => { peekCount++; return peekMap[plane.id] ?? null; };
+    try {
+      const composition = { graphForCategory: () => g2 };
+      await recomputeStructuralComposition(composition, roofGraph, project, {});
+      if (withColumnGrid) assert.ok(g2.columns.length > 0, '前提: 下階(=最上階)に柱が新規に立ち、下階柱集合が変化した');
+    } finally {
+      floorSwapManager.peek = originalPeek;
+    }
+    return peekCount;
+  }
+  const withoutChange = await run(false);
+  const withChange = await run(true);
+  assert.equal(withChange, withoutChange,
+    '非在来は柱集合が変化してもpeek回数が変わらない＝2回目のrecomputeStructuralForGraphが走っていない');
+});
+
+test('recomputeStructuralComposition【裁定変更・2026-09-19】: 在来木造は最上階の柱寸(105)と屋根自身の柱寸(120)が異なるとき、下階(=最上階)柱集合の変化で自階(屋根)を再計算し直し、軒桁材幅が最上階の柱寸(105)になる', async () => {
   const project = new Project('proj-roof-below-mismatch', 'test');
   const { graph: g1 } = project.addPlane(0, '1階', 'p1');
   const { graph: g2 } = project.addPlane(3000, '2階', 'p2'); // 最上階
@@ -578,7 +687,7 @@ test('recomputeStructuralComposition【QA3-1・屋根専用平面】: 最上階�
   const roofGraph = project.graphMap.get(roofPlane.id);
   assert.ok(roofGraph.plane.isRoofPlane, '前提: 屋根専用平面が生成されている');
   roofGraph.structureOverride = TRADITIONAL_WOOD_STRUCTURE;
-  roofGraph.setWoodColumnWidthMm(120); // 屋根自身の柱寸（下階が無いときのフォールバック値）
+  roofGraph.setWoodColumnWidthMm(120); // 屋根自身の柱寸（1つ下の実体階=最上階が解決できないときのフォールバック値）
 
   // 通り芯は project.structGraph（全階共通）に置く。
   const x0 = project.structGraph.addCenterLine(CenterLineType.VERTICAL,   0,    { labeled: true, discipline: Discipline.STRUCT });
@@ -591,8 +700,8 @@ test('recomputeStructuralComposition【QA3-1・屋根専用平面】: 最上階�
   const room = g2.addRoom(new Set([`${x0.id}:${y0.id}:${x1.id}:${y1.id}`]), 'A');
   generateRoomWallsFromOutline(g2, room);
 
-  // 屋根伏図の軒桁（role:'eaves'）。材幅は屋根自身の柱寸（120）にそろうはず。
-  const eavesBeam = roofGraph.addBeam(StructuralMaterialType.WOOD, 'WOOD-120x240', y0, false, x0, x1, { role: 'eaves' });
+  // 屋根伏図の軒桁は在来木造では壁線方式（ステップ5・role:'primary', beamType:'軒桁'）で自動生成される
+  // ため、ここでは事前に手動生成しない——生成される梁の材幅（幅）が最上階の柱寸（105）にそろうはず。
 
   const peekMap = { p1: g1, p2: g2 };
   const originalPeek = floorSwapManager.peek;
@@ -602,8 +711,118 @@ test('recomputeStructuralComposition【QA3-1・屋根専用平面】: 最上階�
     await recomputeStructuralComposition(composition, roofGraph, project, {});
 
     assert.ok(g2.columns.length > 0, '前提: 下階(=最上階)に3a柱が新規に立ち、下階柱集合が変化した');
-    assert.equal(eavesBeam.sectionDefId, 'WOOD-120x240',
-      '屋根伏図の軒桁の材幅は屋根自身の柱寸(120)のまま——最上階(105)へ静かに置き換わらない');
+    const eaveBeams = roofGraph.beams.filter(b => b.role === 'primary' && b.beamType === '軒桁');
+    assert.ok(eaveBeams.length > 0, '前提: 屋根伏図に壁線方式の軒桁(役割primary・beamType軒桁)が生成されている');
+    for (const b of eaveBeams) {
+      assert.equal(findSectionEntry(b.sectionDefId)?.width, 105,
+        '屋根伏図の軒桁の材幅は最上階の柱寸(105)になる（裁定変更・2026-09-19。屋根の1つ下=最上階）');
+    }
+  } finally {
+    floorSwapManager.peek = originalPeek;
+  }
+});
+
+// テストの穴（コーディネーター指摘）: roofReexecBlockedを常時trueへ全戻し（旧2026-09-17裁定のまま）
+// にする変異が上の「裁定変更」テスト2件のいずれでも赤くならなかった——どちらも1回目のrecompute
+// （peekRoofBelowGraph経由で既に最上階を見る。ステップ4）だけで観測値（材幅）が確定してしまうため、
+// 2回目の再実行（roofReexecBlocked=falseで許可される分岐）が実際に効くかどうかを区別できていなかった。
+// 本テストは「1回目の再計算後に下階(最上階)へ柱が新規に増える」ことそのものを2回目の再計算でしか
+// 拾えない観測値（屋根の壁線方式の軒桁が、その新規柱で分割され直るかどうか）で直接固定する。
+test('recomputeStructuralComposition【テストの穴・再発防止】: 在来木造の屋根は、1回目の再計算後に下階(最上階)の柱集合が変化したとき、2回目の再計算でその柱により軒桁が分割され直る', async () => {
+  const project = new Project('proj-roof-reexec-hole', 'test');
+  const { graph: g1 } = project.addPlane(0, '1階', 'p1');
+  const { graph: g2 } = project.addPlane(3000, '2階', 'p2'); // 最上階
+  g1.structureOverride = TRADITIONAL_WOOD_STRUCTURE;
+  g2.structureOverride = TRADITIONAL_WOOD_STRUCTURE;
+
+  const roofPlane = syncRoofPlane(project);
+  const roofGraph = project.graphMap.get(roofPlane.id);
+  roofGraph.structureOverride = TRADITIONAL_WOOD_STRUCTURE;
+
+  // 通り芯は project.structGraph（全階共通）に置く。x=1820は屋根自身にもアンカーCLとして必要
+  // （3c-2bの下階柱による分割はfindBeamAnchorCLで既存CLへの厳密一致を要求し、3iの柱生成が使う
+  // オフセットアンカー(nearestAnchorCL)のフォールバックを共有しない——分割点にする位置には実CLが
+  // 要る）。
+  const x0 = project.structGraph.addCenterLine(CenterLineType.VERTICAL,   0,    { labeled: true, discipline: Discipline.STRUCT });
+  const xm = project.structGraph.addCenterLine(CenterLineType.VERTICAL,   1820, { labeled: true, discipline: Discipline.STRUCT });
+  const x1 = project.structGraph.addCenterLine(CenterLineType.VERTICAL,   3640, { labeled: true, discipline: Discipline.STRUCT });
+  const y0 = project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+  const y1 = project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 1820, { labeled: true, discipline: Discipline.STRUCT });
+  void xm;
+
+  // 2階（最上階）に3640×1820の実壁の部屋——長辺(3640>1820)の壁は1回目のroofGraph再計算で
+  // 屋根の壁線方式の軒桁として通し1本のまま自動生成され（下階編集ブロックより前に1回目の
+  // recomputeStructuralForGraph(subjectGraph=roofGraph)が走るため、この時点ではg2に3i柱はまだ無い）、
+  // その後の下階編集ブロックでg2自身の3i（roofGraphの通し軒桁を「上階の梁」として見る）が
+  // (1820,0)に新規柱を立てる——columnSetSignatureが変化し、2回目のroofGraph再計算が走る条件になる。
+  const room = g2.addRoom(new Set([`${x0.id}:${y0.id}:${x1.id}:${y1.id}`]), 'A');
+  generateRoomWallsFromOutline(g2, room);
+
+  const peekMap = { p1: g1, p2: g2 };
+  const originalPeek = floorSwapManager.peek;
+  floorSwapManager.peek = async (plane) => peekMap[plane.id] ?? null;
+  try {
+    const composition = { graphForCategory: () => g2 };
+    await recomputeStructuralComposition(composition, roofGraph, project, {});
+
+    const newCol = g2.columns.find(c => c.role !== 'foundation' && Math.abs(c.axisX - 1820) < 1 && Math.abs(c.axisY) < 1);
+    assert.ok(newCol, '前提: 下階(最上階)に屋根の軒桁由来の3i柱(1820,0)が新規に立ち、柱集合が変化した');
+
+    const eaveSegmentsAtY0 = roofGraph.beams.filter(b => b.role === 'primary' && !b.isVertical && Math.abs(b.axisValue) < 1);
+    assert.equal(eaveSegmentsAtY0.length, 2,
+      `屋根の軒桁(y=0)は2回目の再計算で下階の新規柱(x=1820)により2本に分割され直る（実測=${eaveSegmentsAtY0.length}本）`);
+  } finally {
+    floorSwapManager.peek = originalPeek;
+  }
+});
+
+test('recomputeStructuralComposition【裁定変更・2026-09-19】: 在来木造の屋根は1回目（peekRoofBelowGraph経由）・2回目（precomputedBelowGraph）のbelowGraphが同じ最上階になり、軒桁材幅がチャーンしない', async () => {
+  const project = new Project('proj-roof-nochurn', 'test');
+  const { graph: g1 } = project.addPlane(0, '1階', 'p1');
+  const { graph: g2 } = project.addPlane(3000, '2階', 'p2'); // 最上階
+  g1.structureOverride = TRADITIONAL_WOOD_STRUCTURE;
+  g2.structureOverride = TRADITIONAL_WOOD_STRUCTURE;
+  g2.setWoodColumnWidthMm(105);
+
+  const roofPlane = syncRoofPlane(project);
+  const roofGraph = project.graphMap.get(roofPlane.id);
+  roofGraph.structureOverride = TRADITIONAL_WOOD_STRUCTURE;
+  roofGraph.setWoodColumnWidthMm(120);
+
+  const x0 = project.structGraph.addCenterLine(CenterLineType.VERTICAL,   0,    { labeled: true, discipline: Discipline.STRUCT });
+  const x1 = project.structGraph.addCenterLine(CenterLineType.VERTICAL,   3640, { labeled: true, discipline: Discipline.STRUCT });
+  const y0 = project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+  const y1 = project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 1820, { labeled: true, discipline: Discipline.STRUCT });
+  const room = g2.addRoom(new Set([`${x0.id}:${y0.id}:${x1.id}:${y1.id}`]), 'A');
+  generateRoomWallsFromOutline(g2, room);
+  // 屋根伏図の軒桁は在来木造では壁線方式（ステップ5）で自動生成される——事前に手動生成しない。
+
+  const peekMap = { p1: g1, p2: g2 };
+  const originalPeek = floorSwapManager.peek;
+  floorSwapManager.peek = async (plane) => peekMap[plane.id] ?? null;
+  try {
+    // 1回目相当: recomputeStructuralForGraph単体（structuralRecompute.jsのpeekRoofBelowGraphが
+    // 直接この時点で最上階g2を解決するため、1回目の時点で既に材幅(width)は105へそろっているはず）。
+    // 注意: 成(depth)はbelowGraph.columns（この時点ではg2にまだ3a柱が無い）に依存するため対象外
+    // ——チャーンしないと確定できるのは「梁幅＝支える1つ下の実体階の柱寸」の対象である材幅(width)
+    // だけで、支持点の増減で変わりうる成(depth)は含めない（3bの「1回遅れ」節と同種の既知の性質）。
+    await recomputeStructuralForGraph(roofGraph, project, TRADITIONAL_WOOD_STRUCTURE);
+    const afterFirstCallOnly = new Map(
+      roofGraph.beams.filter(b => b.role === 'primary' && b.beamType === '軒桁')
+        .map(b => [b.id, findSectionEntry(b.sectionDefId)?.width]));
+    assert.ok(afterFirstCallOnly.size > 0, '前提: 1回目で壁線方式の軒桁が生成されている');
+    for (const width of afterFirstCallOnly.values()) {
+      assert.equal(width, 105, '1回目の時点で既に最上階基準(105)——2回目を待たない');
+    }
+
+    // フル経路（1回目+条件付き2回目）を通しても、id・材幅(width)とも変わらない（チャーンしない＝
+    // 撤去→再生成が起きていない）。
+    const composition = { graphForCategory: () => g2 };
+    await recomputeStructuralComposition(composition, roofGraph, project, {});
+    const afterFullPath = new Map(
+      roofGraph.beams.filter(b => b.role === 'primary' && b.beamType === '軒桁')
+        .map(b => [b.id, findSectionEntry(b.sectionDefId)?.width]));
+    assert.deepEqual(afterFullPath, afterFirstCallOnly, '2回目が走っても軒桁のid・材幅(width)はチャーンしない');
   } finally {
     floorSwapManager.peek = originalPeek;
   }
@@ -718,6 +937,625 @@ test('【不変条件・B-4】structuralOrchestration.js: reflectStructuralToOth
   // 採番の適用ループ（下段）は建物全体で1回・順序非依存のため昇順のまま据え置く（変更対象外）。
   assert.ok(/for \(const plane of project\.planes\) \{[\s\S]*?applyMemberNumbersToFloor\(plane, tags, project/.test(body),
     '採番の適用ループが project.planes（昇順のまま）を回っていない（意図せず変更されている可能性）');
+});
+
+// ---- 小屋伏図にも梁・柱ルールを適用する計画（ステップ7）: 反映パスの降順ループの先頭に屋根 ----
+test('【不変条件・ステップ7】structuralOrchestration.js: reflectStructuralToOtherFloors は降順ループ（[...project.planes].reverse()）の前にreflectRoofPlaneを呼ぶ', async () => {
+  const fs = await import('node:fs');
+  const path = await import('node:path');
+  const url = await import('node:url');
+  const here = path.dirname(url.fileURLToPath(import.meta.url));
+  const src = stripComments(fs.readFileSync(path.join(here, 'structuralOrchestration.js'), 'utf8'));
+  const fnMatch = /export async function reflectStructuralToOtherFloors\(project\) \{([\s\S]*?)\r?\n\}/.exec(src);
+  assert.ok(fnMatch, 'reflectStructuralToOtherFloors関数本体が見つからない');
+  const body = fnMatch[1];
+  assert.ok(/await reflectRoofPlane\(project\);[\s\S]*?for \(const plane of \[\.\.\.project\.planes\]\.reverse\(\)\)/.test(body),
+    'reflectRoofPlane(project) の呼び出しが降順ループより前に無い（小屋伏図→最上階→…→最下階の順にならない）');
+});
+
+// ---- 反映は収束するまで繰り返す（リード裁定・2026-09-19）----
+
+// repeatReflectPassUntilConverged（純粋なループ本体。runPassをスタブに差し替えられる）を直接検証する。
+test('repeatReflectPassUntilConverged: sawWallRuns=falseなら1回で止まる（非在来だけの建物と同じ挙動）', async () => {
+  let calls = 0;
+  await repeatReflectPassUntilConverged(async () => { calls++; return { anyChanged: true, sawWallRuns: false }; }, 'test');
+  assert.equal(calls, 1, 'sawWallRunsが立たなければanyChangedがtrueでも1回で止まる');
+});
+
+test('repeatReflectPassUntilConverged: anyChanged=falseになった時点で止まる（収束）', async () => {
+  let calls = 0;
+  await repeatReflectPassUntilConverged(async () => {
+    calls++;
+    return { anyChanged: calls < 3, sawWallRuns: true }; // 1・2回目はchanged、3回目でfalse
+  }, 'test');
+  assert.equal(calls, 3, '3回目でanyChanged=falseになった時点（収束）で止まる');
+});
+
+test('【失敗系】repeatReflectPassUntilConverged: 常にchangedを返すスタブはMAX_REFLECT_PASSES回で打ち切り、console.warnで1回だけ知らせる', async () => {
+  let calls = 0;
+  const warnings = [];
+  const originalWarn = console.warn;
+  console.warn = (...args) => warnings.push(args.join(' '));
+  try {
+    await repeatReflectPassUntilConverged(async () => { calls++; return { anyChanged: true, sawWallRuns: true }; }, 'testLabel');
+  } finally {
+    console.warn = originalWarn;
+  }
+  assert.equal(calls, MAX_REFLECT_PASSES, `上限${MAX_REFLECT_PASSES}回で打ち切る（例外にしない）`);
+  assert.equal(warnings.length, 1, 'console.warnは1回だけ');
+  assert.ok(warnings[0].includes('testLabel') && warnings[0].includes(String(MAX_REFLECT_PASSES)), 'warnメッセージにlabelと上限回数を含む');
+});
+
+// 実際のreflectStructuralToOtherFloors/reflectStructuralAfterFinishExitを、最小限の自前IndexedDB
+// シム（withFakeIndexedDB）でsaveFloorまで通して検証する——従来「断念」していたIDB依存を、
+// 新規npm依存を追加しない自前シムで解消した（上のwithFakeIndexedDB定義のコメント参照）。
+// 【QA第2巡Major-3是正】floorSwapManager.peekを生きたgraphMapへの素通しにスタブしていたため
+// 「保存されたか」を検証できていなかった（同じ落とし穴はR-3の2テストにもあった）。real peek
+// （withFakeIndexedDB＋実saveFloor）に置き換え、CLもproject.structGraphへ移す（Major-1と同じ理由）。
+test('【統合・収束】reflectStructuralToOtherFloors: 在来木造の複数階＋屋根フィクスチャで、外部から1回呼ぶだけで収束する（続けてもう1回呼んでも部材ダンプが変わらない。本番peekで再読込して確認）', async () => {
+  await withFakeIndexedDB(async () => {
+    const project = new Project('proj-converge-once', 'test');
+    project.structuralInfo.mainStructure = TRADITIONAL_WOOD_STRUCTURE; // 屋根は未保存のまま最初にpeekされるため（Major-1と同じ理由）
+    const { graph: g1 } = project.addPlane(0, '1階', 'p1');
+    const { graph: g2 } = project.addPlane(3000, '2階', 'p2'); // 最上階
+    g1.structureOverride = TRADITIONAL_WOOD_STRUCTURE;
+    g2.structureOverride = TRADITIONAL_WOOD_STRUCTURE;
+
+    // 2階: 3640×1820の実壁の部屋（短辺1820・長辺3640>1820）。長辺の壁は内部に交点が無いため、
+    // 通し1本のまま3i（支持長1820超）の対象になり、x=1820の位置（走行方向アンカー用の通り芯を
+    // 別途置く）に2階自身の柱が立つ。
+    const gx0 = project.structGraph.addCenterLine(CenterLineType.VERTICAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+    const gx1 = project.structGraph.addCenterLine(CenterLineType.VERTICAL, 3640, { labeled: true, discipline: Discipline.STRUCT });
+    const gy0 = project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+    const gy1 = project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 1820, { labeled: true, discipline: Discipline.STRUCT });
+    const room = g2.addRoom(new Set([`${gx0.id}:${gy0.id}:${gx1.id}:${gy1.id}`]), 'A');
+    generateRoomWallsFromOutline(g2, room);
+    project.structGraph.addCenterLine(CenterLineType.VERTICAL, 1820, { labeled: true, discipline: Discipline.STRUCT });
+
+    const roofPlane = syncRoofPlane(project);
+    const roofGraph = project.graphMap.get(roofPlane.id);
+    roofGraph.structureOverride = TRADITIONAL_WOOD_STRUCTURE;
+    // syncRoofPlane（内部でproject.addPlaneを呼ぶ）は、activePlaneIdが未設定のときそのplaneを
+    // アクティブにする（core/project.js addPlane）——ここより前にnullへ戻すと屋根がアクティブに
+    // なってしまい reflectRoofPlane の「アクティブなら何もしない」ガードに掛かる。誰もアクティブで
+    // ない状態（全階を反映対象にする）にするのは、屋根を含む全plane生成が終わった後で行う。
+    project.activePlaneId = null;
+
+    // 実IDB往復のfloorSwapManager.peekが空の一時graphを返さないよう、g1・g2は事前に保存する
+    // （屋根はまだ一度も保存されていない前提のまま——reflectRoofPlaneの初回反映で生成・保存される）。
+    await saveFloor('p1', serializeGraph(g1));
+    await saveFloor('p2', serializeGraph(g2));
+
+    // このフィクスチャは内部で複数パスを要する（実測: 屋根→2階→1階の1パス目・2パス目はanyChanged=true、
+    // 3パス目でanyChanged=falseに収束）。ループ機構そのものの回帰は上のrepeatReflectPassUntilConverged
+    // 単体テスト（スタブでMAX_REFLECT_PASSES到達・収束を直接固定・変異で赤化確認済み）が担う——ここでは
+    // 実際のreflectStructuralToOtherFloors／reflectRoofPlane／recomputeInactiveStructuralが正しく配線され、
+    // 屋根込みで例外なく完全収束することをエンドツーエンドで確認する（peek回数は複数パスが実際に
+    // 走ったことの参考値。厳密な変異検知はしない）。
+    let peekCount = 0;
+    const originalPeek = floorSwapManager.peek.bind(floorSwapManager);
+    floorSwapManager.peek = async (...args) => { peekCount++; return originalPeek(...args); };
+    try {
+      await reflectStructuralToOtherFloors(project); // 外部からの呼び出しは1回だけ
+      assert.ok(peekCount > 6, `参考値: 内部で複数階×複数パス分のpeekが発生している（実測peek回数=${peekCount}）`);
+
+      // 実体階・屋根とも、非アクティブ階はrecomputeが本番同型peekの一時graphに対して行われ
+      // saveFloorされる。graphMapの生グラフは更新されないため、確認は再peekで行う（本番同型）。
+      async function dump() {
+        const out = {};
+        for (const p of [...project.planes, roofPlane]) {
+          const g = await floorSwapManager.peek(p, project.structGraph);
+          out[p.name] = {
+            columns: g.columns.map(c => `${c.role}:${Math.round(c.x)},${Math.round(c.y)}`).sort(),
+            beams: g.beams.map(b => `${b.role}:${b.beamType ?? ''}:${b.isVertical}:${Math.round(b.axisValue)}:` +
+              `${Math.round(Math.min(b.clStart.effectiveValue, b.clEnd.effectiveValue))}..${Math.round(Math.max(b.clStart.effectiveValue, b.clEnd.effectiveValue))}`).sort(),
+          };
+        }
+        return out;
+      }
+      const dumpAfterOnce = await dump();
+      assert.ok(dumpAfterOnce['2階'].columns.length > 0 && dumpAfterOnce['2階'].beams.length > 0,
+        '前提: 保存された2階は空ダンプであってはならない（save→本番peek往復で壁・CLが失われていないことの構造的な担保）');
+      assert.ok(dumpAfterOnce[''].beams.some(b => b.includes(':軒桁:')),
+        '前提: 屋根は壁線方式の軒桁(beamType=\'軒桁\')を1本以上持つ');
+      await reflectStructuralToOtherFloors(project); // もう1回呼んでも
+      const dumpAfterTwice = await dump();
+      assert.deepEqual(dumpAfterTwice, dumpAfterOnce, '外部からもう1回呼んでも部材ダンプが変わらない（1回目で既に収束している。本番peekで再読込して確認）');
+    } finally {
+      floorSwapManager.peek = originalPeek;
+    }
+  });
+});
+
+// ---- R-3（2026-09-19是正）: 採番の適用ループへ屋根を含める ----
+// 【QA第2巡Major-3是正】以前はfloorSwapManager.peekを生きたgraphMapへの素通しにスタブしており、
+// g2・roofGraph（ともに非アクティブ＝実際は本番同型peekの一時graphに対して再計算・保存される）を
+// 直接参照していたため「保存されたか」ではなく「同一オブジェクトか」を見ていた（saveFloor削除の
+// 変異で赤化しない）。real peek（withFakeIndexedDB＋実saveFloor）に置き換え、確認は全て
+// 再peekしたインスタンスに対して行う。CLもproject.structGraphへ移す（Major-1と同じ理由）。
+test('【R-3】reflectStructuralToOtherFloors: 屋根の梁（role:primary）にも採番が適用され、memberNoが保存される（同じ材寸グループの実体階の梁と同じタグ。本番peekで再読込して確認）', async () => {
+  await withFakeIndexedDB(async () => {
+    const project = new Project('proj-r3-roof-numbering', 'test');
+    project.structuralInfo.mainStructure = TRADITIONAL_WOOD_STRUCTURE; // 屋根は未保存のまま最初にpeekされるため（Major-1と同じ理由）
+    const { graph: g1 } = project.addPlane(0, '1階', 'p1');
+    const { graph: g2 } = project.addPlane(3000, '2階', 'p2'); // 最上階
+    g1.structureOverride = TRADITIONAL_WOOD_STRUCTURE;
+    g2.structureOverride = TRADITIONAL_WOOD_STRUCTURE;
+
+    // 1階: 遠く離れた小部屋（1000×1000。短スパン＝成表の最小値120で幅120角＝WOOD-120x120になる）。
+    // wallRunSegments(g2, g1, ...)経由でg2側の壁線にもこの小部屋の壁が合流し、g2にも同じ断面の梁が
+    // 生成される——屋根の梁（同じくWOOD-120x120）と実体階（g2）の梁が同じ材寸グループを共有する
+    // 状況を作る（あとで両者のタグが一致することを確認する）。
+    const hx0 = project.structGraph.addCenterLine(CenterLineType.VERTICAL, 10000, { labeled: true, discipline: Discipline.STRUCT });
+    const hx1 = project.structGraph.addCenterLine(CenterLineType.VERTICAL, 11000, { labeled: true, discipline: Discipline.STRUCT });
+    const hy0 = project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 10000, { labeled: true, discipline: Discipline.STRUCT });
+    const hy1 = project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 11000, { labeled: true, discipline: Discipline.STRUCT });
+    const hroom = g1.addRoom(new Set([`${hx0.id}:${hy0.id}:${hx1.id}:${hy1.id}`]), 'H');
+    generateRoomWallsFromOutline(g1, hroom);
+
+    const gx0 = project.structGraph.addCenterLine(CenterLineType.VERTICAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+    const gx1 = project.structGraph.addCenterLine(CenterLineType.VERTICAL, 3640, { labeled: true, discipline: Discipline.STRUCT });
+    const gy0 = project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+    const gy1 = project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 1820, { labeled: true, discipline: Discipline.STRUCT });
+    const room = g2.addRoom(new Set([`${gx0.id}:${gy0.id}:${gx1.id}:${gy1.id}`]), 'A');
+    generateRoomWallsFromOutline(g2, room);
+    project.structGraph.addCenterLine(CenterLineType.VERTICAL, 1820, { labeled: true, discipline: Discipline.STRUCT });
+
+    const roofPlane = syncRoofPlane(project);
+    const roofGraph = project.graphMap.get(roofPlane.id);
+    roofGraph.structureOverride = TRADITIONAL_WOOD_STRUCTURE;
+    project.activePlaneId = null;
+
+    // 実IDB往復のfloorSwapManager.peekが空の一時graphを返さないよう、g1・g2は事前に保存する。
+    await saveFloor('p1', serializeGraph(g1));
+    await saveFloor('p2', serializeGraph(g2));
+
+    await reflectStructuralToOtherFloors(project);
+
+    // g2・屋根とも非アクティブ＝recomputeは本番同型peekの一時graphに対して行われ保存される
+    // （graphMapの生グラフ g2・roofGraph 自体は更新されない）。確認は再peekしたインスタンスで行う。
+    const rePeekedG2 = await floorSwapManager.peek(project.planes.find(p => p.id === 'p2'), project.structGraph);
+    const rePeekedRoof = await floorSwapManager.peek(roofPlane, project.structGraph);
+    const roofBeams = rePeekedRoof.beams.filter(b => b.role === 'primary');
+    assert.ok(roofBeams.length > 0, '前提: 屋根に大梁(role:primary、壁線方式の軒桁)が生成されている');
+    for (const b of roofBeams) {
+      assert.ok(b.memberNo != null, `屋根の梁(${b.beamType}:${b.isVertical}:${Math.round(b.axisValue)})のmemberNoが再peekでも非null（saveFloor済み）`);
+    }
+    // 同じ断面(材寸グループ)の実体階(g2)側の梁と同じタグを共有する（WOOD-120x120グループ）。
+    const g2Small = rePeekedG2.beams.filter(b => b.role === 'primary' && b.sectionDefId === 'WOOD-120x120');
+    const roofSmall = roofBeams.filter(b => b.sectionDefId === 'WOOD-120x120');
+    assert.ok(g2Small.length > 0 && roofSmall.length > 0, '前提: g2・屋根とも WOOD-120x120 の大梁を持つ');
+    assert.ok(roofSmall.every(rb => rb.memberNo === g2Small[0].memberNo),
+      `同じ材寸グループ(WOOD-120x120)なら屋根の梁も実体階(g2)の梁と同じタグを共有する（g2=${g2Small[0].memberNo}, roof=${roofSmall.map(b => b.memberNo)}）`);
+    assert.ok(/R/.test(roofSmall[0].memberNo), `共有タグには屋根の階プレフィックス"R"が含まれるはず（実際:${roofSmall[0].memberNo}）`);
+  });
+});
+
+test('【失敗系・R-3】reflectStructuralToOtherFloors: 非在来（S造。roofBeamPlacement:gridEaves）の屋根はmemberNoを書き戻さない（従来どおり収集のみ）', async () => {
+  await withFakeIndexedDB(async () => {
+    const project = new Project('proj-r3-nonwood-roof', 'test');
+    const { graph: g1 } = project.addPlane(0, '1階', 'p1');
+    g1.structureOverride = 'S造';
+    project.structGraph.addCenterLine(CenterLineType.VERTICAL,   0,    { labeled: true, discipline: Discipline.STRUCT });
+    project.structGraph.addCenterLine(CenterLineType.VERTICAL,   3640, { labeled: true, discipline: Discipline.STRUCT });
+    project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+    project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 1820, { labeled: true, discipline: Discipline.STRUCT });
+    const roofPlane = syncRoofPlane(project);
+    const roofGraph = project.graphMap.get(roofPlane.id);
+    roofGraph.structureOverride = 'S造';
+    project.activePlaneId = null;
+
+    const originalPeek = floorSwapManager.peek;
+    floorSwapManager.peek = async (plane) => project.graphMap.get(plane.id) ?? null;
+    try {
+      // 非在来の屋根専用平面はreflectRoofPlaneが「収集だけ」（!roofRules.framing早期return）で
+      // 自階再計算・保存をしない（実際のジオメトリ生成はユーザーが屋根伏図を直接訪れたときの
+      // 通常経路に委ねる既存の割り切り）——ここでは「直接訪れた」を模して先に1回だけ自階再計算する。
+      await recomputeStructuralForGraph(roofGraph, project, 'S造');
+      const roofBeams = roofGraph.beams.filter(b => b.role === 'eaves');
+      assert.ok(roofBeams.length > 0, '前提: 屋根に軒桁(role:eaves、通り芯グリッド方式)が生成されている');
+      assert.equal(roofBeams.every(b => b.memberNo == null), true, '前提: 生成直後はmemberNo未確定');
+
+      await reflectStructuralToOtherFloors(project);
+      assert.ok(roofBeams.every(b => b.memberNo == null), '非在来の屋根はmemberNoを書き戻さない（従来どおり収集のみ）');
+    } finally {
+      floorSwapManager.peek = originalPeek;
+    }
+  });
+});
+
+test('【統合】reflectStructuralToOtherFloors: 非在来（S造）は各非アクティブ階が1パスだけ再計算される（peek回数固定。sawWallRunsが立たないため繰り返さない）', async () => {
+  await withFakeIndexedDB(async () => {
+    const project = new Project('proj-nonwood-onepass', 'test');
+    const { graph: g1 } = project.addPlane(0, '1階', 'p1');
+    const { graph: g2 } = project.addPlane(3000, '2階', 'p2');
+    project.activePlaneId = null;
+    g1.structureOverride = 'S造';
+    g2.structureOverride = 'S造';
+    // 柱グリッドを構成する通り芯（毎回changed=trueになるよう、まだ柱が無い状態から始める）。
+    project.structGraph.addCenterLine(CenterLineType.VERTICAL,   0,    { labeled: true, discipline: Discipline.STRUCT });
+    project.structGraph.addCenterLine(CenterLineType.VERTICAL,   3640, { labeled: true, discipline: Discipline.STRUCT });
+    project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+    project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 1820, { labeled: true, discipline: Discipline.STRUCT });
+
+    const peekCounts = new Map();
+    const originalPeek = floorSwapManager.peek;
+    floorSwapManager.peek = async (plane) => {
+      peekCounts.set(plane.id, (peekCounts.get(plane.id) ?? 0) + 1);
+      return project.graphMap.get(plane.id) ?? null;
+    };
+    try {
+      await reflectStructuralToOtherFloors(project);
+      // 実測（1内部パスのときの内訳。手動導出・再発検知用）: p1（最下階）=3
+      // （自身のrecomputeInactiveStructural由来1 + p2のbuildStructuralWallGate/resolveLowestGraphが
+      // 下階として参照する分2） + 採番の適用フェーズ（applyMemberNumbersToFloor。反映パスの繰り返しとは
+      // 無関係に建物全体で1回だけ回る）1 = 4ではなく3（p2の下階参照2件のうち1件は自身がidx=0＝
+      // 最下階のためbuildStructuralWallGateのループがp1自身をactiveGraphとして直接返しpeekを経由しない
+      // ケースと、p2からの2件の実測値）。p2（最上階）=2（自身のrecomputeInactiveStructural由来1 +
+      // 採番の適用フェーズ1）。**このテストの目的はpeek回数の内訳を厳密に説明することではなく**、
+      // 「反映対象に在来木造の階が無ければ、いずれかの階のchangedに関わらず内部パスが2回目へ進まない」
+      // ことを固定すること——sawWallRunsのガードを外す変異でこの値が増える（下のmutation testで実測）。
+      assert.equal(peekCounts.get('p1'), 3, '1階のpeek回数（内部パス1回分の基準値）');
+      assert.equal(peekCounts.get('p2'), 2, '2階のpeek回数（内部パス1回分の基準値）');
+    } finally {
+      floorSwapManager.peek = originalPeek;
+    }
+  });
+});
+
+// ---- B-1（リード裁定2026-09-19）: 構造モード突入の1回で、アクティブ階を含む全階を収束させる ----
+// 「REALなfloorSwapManager.peekをfake-IndexedDBの往復越しに使う（生グラフmapのスタブ禁止）」
+// （team-lessons「peekスタブは本番同型に」）に従い、floorSwapManager.peekは差し替えず、
+// withFakeIndexedDBでsaveFloor/loadFloorだけをフェイクIDBへ向ける。
+
+// 1階・2階・3階（全て在来木造・同一形状の部屋）＋屋根の4階建てフィクスチャ。
+// 各階同一位置（3640×1820、x=1820にアンカー用通り芯）にすることで、上階柱の直下（3b）・
+// 支持長超過候補の910グリッド（3i）が階をまたいで同じ位置に並び、上階の変化が下階へ伝播する
+// 状況を作る（B-1が無いと、アクティブ階の再計算で新たに生じた変化が他階の反映パスへ伝わらない）。
+// 【QA第2巡Major-1是正】通り芯は project.structGraph（全階共通）へ置く——階固有の
+// graph.addCenterLine でSTRUCT種別を作ると、壁のCL参照（axisCLId等）がsaveFloor→本番peek
+// （floorSwapManager.peek）のrestoreGraphで解決できず、壁が復元後に消える落とし穴がある
+// （R-6(2)で発見・回避したものと同じ。旧実装はここを踏んでおり、【統合・B-1】5本＋【R-4】が
+// 実は「save→peek往復で壁4→0・CLが消え、突入1回後は柱0梁0」という空ダンプ同士の比較になっていた）。
+// 全floorで共有する4本のCL（gx0/gx1/gy0/gy1）はbuildB1Fixtureが1回だけ生成し、ここへ渡す。
+// 実運用のフロアは store.js の addFloor が GRID/CENTER×4周の寸法線を常設で持たせる
+// （applySnapshot が復元後に欠けている行だけ補完する仕様＝グラフ側になければ復元時に新規追加される）。
+// テストのfixtureがこれを省くと、save→peekやundoのrestoreGraphの初回だけ寸法線が新規追加され、
+// 「復元後は変化しない」はずの比較（本テストのbyte比較や【統合・B-1】の2回目突入）が寸法線の
+// 有無だけで意図せず揺れる。本番のフロア生成と同じに揃えるためここでも追加する。
+function addDefaultDimensionLines(graph) {
+  graph.addDimensionLine(HDimensionLine, { dimensionKind: DimensionKind.GRID, side: DimensionSide.TOP });
+  graph.addDimensionLine(HDimensionLine, { dimensionKind: DimensionKind.GRID, side: DimensionSide.BOTTOM });
+  graph.addDimensionLine(VDimensionLine, { dimensionKind: DimensionKind.GRID, side: DimensionSide.LEFT });
+  graph.addDimensionLine(VDimensionLine, { dimensionKind: DimensionKind.GRID, side: DimensionSide.RIGHT });
+  graph.addDimensionLine(HDimensionLine, { dimensionKind: DimensionKind.CENTER, side: DimensionSide.TOP });
+  graph.addDimensionLine(HDimensionLine, { dimensionKind: DimensionKind.CENTER, side: DimensionSide.BOTTOM });
+  graph.addDimensionLine(VDimensionLine, { dimensionKind: DimensionKind.CENTER, side: DimensionSide.LEFT });
+  graph.addDimensionLine(VDimensionLine, { dimensionKind: DimensionKind.CENTER, side: DimensionSide.RIGHT });
+}
+
+function buildWoodFloorForB1(project, elevation, name, id, gridCLs) {
+  const { graph } = project.addPlane(elevation, name, id);
+  graph.structureOverride = TRADITIONAL_WOOD_STRUCTURE;
+  addDefaultDimensionLines(graph);
+  const { gx0, gx1, gy0, gy1 } = gridCLs;
+  const room = graph.addRoom(new Set([`${gx0.id}:${gy0.id}:${gx1.id}:${gy1.id}`]), 'A');
+  generateRoomWallsFromOutline(graph, room);
+  return graph;
+}
+
+function buildB1Fixture() {
+  const project = new Project('proj-b1', 'test');
+  // 【QA第2巡Major-1是正】屋根はsyncRoofPlane直後はまだ一度もsaveFloorされていないため、
+  // floorSwapManager.peekが返す一時graphはstructureOverrideを引き継がない（空のPlanGraphのまま
+  // ＝graph.structureOverrideを後から設定してもpeekした一時graphには乗らない）。建物全体既定値
+  // （project.structuralInfo.mainStructure）を在来木造にしておくことで、未保存の屋根もeffectiveStructure
+  // 経由で正しく在来木造に解決され、壁線方式の軒桁（role:primary）を通る（R-6(2)と同じ配線）。
+  project.structuralInfo.mainStructure = TRADITIONAL_WOOD_STRUCTURE;
+  const gx0 = project.structGraph.addCenterLine(CenterLineType.VERTICAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+  const gx1 = project.structGraph.addCenterLine(CenterLineType.VERTICAL, 3640, { labeled: true, discipline: Discipline.STRUCT });
+  const gy0 = project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+  const gy1 = project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 1820, { labeled: true, discipline: Discipline.STRUCT });
+  project.structGraph.addCenterLine(CenterLineType.VERTICAL, 1820, { labeled: true, discipline: Discipline.STRUCT }); // 走行方向アンカー
+  const gridCLs = { gx0, gx1, gy0, gy1 };
+  buildWoodFloorForB1(project, 0,    '1階', 'p1', gridCLs);
+  buildWoodFloorForB1(project, 3000, '2階', 'p2', gridCLs);
+  buildWoodFloorForB1(project, 6000, '3階', 'p3', gridCLs);
+  const roofPlane = syncRoofPlane(project); // project.addPlaneを内部で呼ぶ（activePlaneId未設定なら自動採用に注意）
+  const roofGraph = project.graphMap.get(roofPlane.id);
+  roofGraph.structureOverride = TRADITIONAL_WOOD_STRUCTURE; // アクティブ=屋根のときはメモリ直読みなので有効
+  project.activePlaneId = null; // syncRoofPlaneの後で（前だと屋根が自動でアクティブになる）
+  return { project, roofPlane };
+}
+
+// 【QA第2巡Major-1是正】空ダンプ同士の比較で緑になることを構造的に防ぐ——各実体階は柱・梁とも
+// 1本以上、屋根は壁線方式の軒桁（beamType='軒桁'）を1本以上持つことを直接アサートする。
+function assertB1NonEmpty(dump, label) {
+  for (const floorName of ['1階', '2階', '3階']) {
+    const d = dump[floorName];
+    assert.ok(d.columns.length > 0 && d.beams.length > 0,
+      `アクティブ=${label}: ${floorName}は空ダンプであってはならない（save→本番peek往復で壁・CLが失われていないことの構造的な担保。実際: columns=${d.columns.length} beams=${d.beams.length}）`);
+  }
+  const roofDump = dump['']; // 屋根専用平面のnameは常に''（syncRoofPlane参照）
+  assert.ok(roofDump.beams.some(b => b.includes(':軒桁:')),
+    `アクティブ=${label}: 屋根は壁線方式の軒桁(beamType='軒桁')を1本以上持つ（実際:${JSON.stringify(roofDump.beams)}）`);
+}
+
+async function saveB1InitialFloors(project) {
+  for (const p of project.planes) {
+    await saveFloor(p.id, serializeGraph(project.graphMap.get(p.id)));
+  }
+}
+
+// アクティブ階はメモリ（project.activeGraph）を直接読み、非アクティブ階だけ実peekで読む
+// （実運用と同じ——アクティブ階のauto-saveは確定保存されるまでdirty印だけのため）。
+async function dumpB1AllFloors(project) {
+  const out = {};
+  for (const p of [...project.planes, project.roofPlane].filter(Boolean)) {
+    const g = p.id === project.activePlaneId ? project.activeGraph : await floorSwapManager.peek(p, project.structGraph);
+    out[p.name] = {
+      columns: g.columns.map(c => `${c.role}:${Math.round(c.x)},${Math.round(c.y)}`).sort(),
+      beams: g.beams.map(b => `${b.role}:${b.beamType ?? ''}:${b.isVertical}:${Math.round(b.axisValue)}:` +
+        `${Math.round(Math.min(b.clStart.effectiveValue, b.clEnd.effectiveValue))}..${Math.round(Math.max(b.clStart.effectiveValue, b.clEnd.effectiveValue))}`).sort(),
+    };
+  }
+  return out;
+}
+
+for (const label of ['屋根', '3階', '2階', '1階']) {
+  test(`【統合・B-1】runStructuralModeSetup: アクティブ階=${label}でも突入1回で全階（屋根＋各実体階）が収束する（実IDB往復のfloorSwapManager.peek使用）`, async () => {
+    await withFakeIndexedDB(async () => {
+      const { project, roofPlane } = buildB1Fixture();
+      await saveB1InitialFloors(project);
+      const activePlane = label === '屋根' ? roofPlane : project.planes.find(p => p.name === label);
+      project.activePlaneId = activePlane.id;
+      try {
+        await runStructuralModeSetup(project.activeGraph, project, {});
+        const dumpAfterOnce = await dumpB1AllFloors(project);
+        assertB1NonEmpty(dumpAfterOnce, label);
+
+        // 突入1回の直後に「他階だけの反映」をもう一度外部から呼んでも変わらない＝突入の中で
+        // 他階もアクティブ階の最新状態を前提に収束済み（B-1が無いと、屋根／上階の再計算が生んだ
+        // 新しい柱・梁がまだ他階へ伝わっておらず、ここで初めて変化してしまう）。
+        await reflectStructuralToOtherFloors(project);
+        const dumpAfterExtraReflect = await dumpB1AllFloors(project);
+        assert.deepEqual(dumpAfterExtraReflect, dumpAfterOnce,
+          `アクティブ=${label}: 突入1回の後、他階だけの反映をさらに1回呼んでも部材ダンプが変わらない（他階も収束済み）`);
+
+        // 2回目の突入（構造モードを出て入り直した相当）でも同じ結果に安定する。
+        await runStructuralModeSetup(project.activeGraph, project, {});
+        const dumpAfterSecondEntry = await dumpB1AllFloors(project);
+        assert.deepEqual(dumpAfterSecondEntry, dumpAfterOnce,
+          `アクティブ=${label}: 2回目の突入でも部材ダンプが変わらない`);
+      } finally {
+        await figureBindingManager.deactivate();
+      }
+    });
+  });
+}
+
+// ---- R-4（2026-09-19）: 外側ループ（runStructuralModeSetup）本体が複数パス回ることを実測で固定する ----
+// 上のB-1テスト群は「収束後の最終状態」だけを比較しており、外側ループを1回でbreakする変異（前の
+// builderが報告した「外側ループ本体を1回でbreakする変異で5本が赤くならない」不具合）を検出できない
+// ——buildB1Fixtureは在来木造の初回突入で必ず2パス（1回目changed=true・2回目changed=falseで収束）
+// 実行するため、ここでは「初回突入のpeek回数」を実測し固定することで、外側ループが1回で打ち切られる
+// 変異（`for (let pass = 1; pass <= MAX_REFLECT_PASSES; pass++)` を `pass <= 1` 等にする）を検出する
+// ——1回で打ち切られると2パス目のreflectStructuralToOtherFloors・recomputeStructuralCompositionが
+// 呼ばれずpeek回数が実測値未満に減る。
+test('【R-4】runStructuralModeSetup: アクティブ階=3階の初回突入は外側ループが2パス実行される（peek回数で固定。1回でbreakする変異を検出）', async () => {
+  await withFakeIndexedDB(async () => {
+    const { project, roofPlane } = buildB1Fixture();
+    void roofPlane;
+    await saveB1InitialFloors(project);
+    const activePlane = project.planes.find(p => p.name === '3階');
+    project.activePlaneId = activePlane.id;
+    let peekCount = 0;
+    const originalPeek = floorSwapManager.peek.bind(floorSwapManager);
+    floorSwapManager.peek = async (...args) => { peekCount++; return originalPeek(...args); };
+    try {
+      await runStructuralModeSetup(project.activeGraph, project, {});
+      // 実測値（本番順・fake IndexedDB実peek経由。QA第2巡Major-1でフィクスチャを
+      // project.structGraph方式に是正した後の値=97。旧フィクスチャは壁・CLがsave→peek往復で
+      // 消えており、柱・梁が空のまま「収束」していたため回数が少なく出ていた＝40は誤った実測値）。
+      // 外側ループを1回でbreakする変異ではこれより少なくなる（2パス目のreflectStructuralToOtherFloors・
+      // recomputeStructuralCompositionが呼ばれないため）。
+      assert.equal(peekCount, 97, `初回突入（アクティブ=3階）のpeek回数（実測値。2パス分）。実際:${peekCount}`);
+    } finally {
+      floorSwapManager.peek = originalPeek;
+      await figureBindingManager.deactivate();
+    }
+  });
+});
+
+test('【統合・B-1】runStructuralModeSetup: 非在来（S造）は外側ループが1回で収束する（アクティブ階再計算のchangedが2回目には残らないため）', async () => {
+  await withFakeIndexedDB(async () => {
+    const project = new Project('proj-b1-nonwood', 'test');
+    const { graph: g1 } = project.addPlane(0, '1階', 'p1');
+    const { graph: g2 } = project.addPlane(3000, '2階', 'p2');
+    g1.structureOverride = 'S造';
+    g2.structureOverride = 'S造';
+    project.structGraph.addCenterLine(CenterLineType.VERTICAL,   0,    { labeled: true, discipline: Discipline.STRUCT });
+    project.structGraph.addCenterLine(CenterLineType.VERTICAL,   3640, { labeled: true, discipline: Discipline.STRUCT });
+    project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+    project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 1820, { labeled: true, discipline: Discipline.STRUCT });
+    await saveFloor('p1', serializeGraph(g1));
+    project.activePlaneId = 'p2';
+
+    let peekCount = 0;
+    const originalPeek = floorSwapManager.peek.bind(floorSwapManager);
+    floorSwapManager.peek = async (...args) => { peekCount++; return originalPeek(...args); };
+    const warnings = [];
+    const originalWarn = console.warn;
+    console.warn = (...args) => warnings.push(args.join(' '));
+    try {
+      await runStructuralModeSetup(g2, project, {});
+      assert.equal(warnings.length, 0, '非在来はMAX_REFLECT_PASSESまで回らない（1回で収束しwarnは出ない）');
+      const firstPeekCount = peekCount;
+      // 2回目の突入呼び出しでもpeek回数が変わらない＝外側ループは初回呼び出し内で既に1回しか
+      // 回っていない（非在来のrecomputeStructuralCompositionはchangedが1回目で決着しfalseになるため）。
+      peekCount = 0;
+      await runStructuralModeSetup(g2, project, {});
+      assert.equal(peekCount, firstPeekCount, '非在来は2回目の突入でもpeek回数が変わらない（毎回1パスで収束）');
+    } finally {
+      floorSwapManager.peek = originalPeek;
+      console.warn = originalWarn;
+      await figureBindingManager.deactivate();
+    }
+  });
+});
+
+// ---- Major-2（QA第2巡）: runStructuralModeSetupのundoが1エントリで機能することを直接検証する ----
+// 突入全体で1エントリだけpushされ、undoでアクティブ階が突入前の状態に戻り、canRedoが立つことを
+// 確認する（anyChangedのpushをif自体ごと消す変異／パス毎にpushする変異のいずれでも赤化する）。
+test('【Major-2】runStructuralModeSetup: 突入全体でundoが1件だけ積まれ、undoでアクティブ階が突入前に戻りcanRedoが立つ', async () => {
+  await withFakeIndexedDB(async () => {
+    const { project } = buildB1Fixture();
+    await saveB1InitialFloors(project);
+    const activePlane = project.planes.find(p => p.name === '3階');
+    project.activePlaneId = activePlane.id;
+    const entryBefore = serializeGraph(project.activeGraph);
+    const undoCountBefore = undoManager._undoStack.length;
+    try {
+      await runStructuralModeSetup(project.activeGraph, project, {});
+      assert.equal(undoManager._undoStack.length, undoCountBefore + 1,
+        '突入全体でundoエントリはちょうど1件だけ積まれる（外側ループのパス毎にではなく）');
+      assert.equal(undoManager.canRedo, false, '突入直後はredoスタックが空（pushがredoスタックをクリアするため）');
+      undoManager.undo();
+      assert.deepEqual(serializeGraph(project.activeGraph), entryBefore,
+        'undoでアクティブ階が突入前のスナップショットに戻る');
+      assert.equal(undoManager.canRedo, true, 'undo後はredoできる');
+    } finally {
+      await figureBindingManager.deactivate();
+    }
+  });
+});
+
+// ---- R-6(2)（2026-09-19）: reflectRoofPlaneの挙動を本番peek＋fake IDBで対比する ----
+// 在来は反映1回で屋根の梁が生成・保存される／非在来は屋根が保存されない（収集だけ）ことを、
+// floorSwapManager.peekをスタブせず（本番同型）、実際にsaveFloorされたか否かで確認する。
+test('【R-6(2)】reflectStructuralToOtherFloors: 在来木造は反映1回で屋根の梁が生成・保存される（本番peekで再読込して確認）', async () => {
+  await withFakeIndexedDB(async () => {
+    const project = new Project('proj-r6-2-wood', 'test');
+    // 建物全体既定値（project.structuralInfo.mainStructure）で在来木造にする——階別override
+    // （graph.structureOverride）は屋根がまだ一度もsaveFloorされていない間はfloorSwapManager.peekが
+    // 返す一時graphに引き継がれない（peekは「保存済みバイト列があれば復元、無ければ空のPlanGraph」
+    // なので、まだ保存の無い屋根はoverride未設定のまま——建物全体既定値でeffectiveStructureを
+    // 解決させるのが正しい配線。実機でも「未設定の階は建物既定値」という同じ規約）。
+    project.structuralInfo.mainStructure = TRADITIONAL_WOOD_STRUCTURE;
+    const { graph: g1 } = project.addPlane(0, '1階', 'p1');
+    // 通り芯はproject.structGraph（全階共通）へ置く——階固有のgraph.addCenterLineでSTRUCT種別を
+    // 作ると、壁のCL参照（axisCLId等）がsaveFloor→本番peek（floorSwapManager.peek）の
+    // restoreGraphで解決できず、壁が復元後に消える落とし穴がある（本番は通り芯を必ず
+    // project.structGraphへ置くため踏まない。ここで再発見・回避）。
+    const x0 = project.structGraph.addCenterLine(CenterLineType.VERTICAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+    const x1 = project.structGraph.addCenterLine(CenterLineType.VERTICAL, 3640, { labeled: true, discipline: Discipline.STRUCT });
+    const y0 = project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+    const y1 = project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 1820, { labeled: true, discipline: Discipline.STRUCT });
+    const room = g1.addRoom(new Set([`${x0.id}:${y0.id}:${x1.id}:${y1.id}`]), 'A');
+    generateRoomWallsFromOutline(g1, room);
+    await saveFloor('p1', serializeGraph(g1)); // 本番peek（peekRoofBelowGraph等）が読む「保存済みの1階」
+    const roofPlane = syncRoofPlane(project);
+    project.activePlaneId = null; // 誰もアクティブでない＝屋根もreflectRoofPlaneの対象になる
+    // floorSwapManager.peekはスタブしない（本番同型。fake IndexedDBの上で本番実装を通す）。
+    await reflectStructuralToOtherFloors(project);
+    const rePeeked = await floorSwapManager.peek(roofPlane, project.structGraph);
+    const roofBeams = rePeeked.beams.filter(b => b.role === 'primary');
+    assert.ok(roofBeams.length > 0,
+      `在来木造は反映1回で屋根の梁が生成・保存される（本番peekで再読込した屋根の梁本数=${rePeeked.beams.length}）`);
+    assert.ok(roofBeams.every(b => b.beamType === '軒桁'));
+  });
+});
+
+test('【失敗系・R-6(2)】reflectStructuralToOtherFloors: 非在来（S造）の屋根は反映しても保存されない（収集だけ。本番peekで再読込して確認）', async () => {
+  await withFakeIndexedDB(async () => {
+    const project = new Project('proj-r6-2-nonwood', 'test');
+    project.structuralInfo.mainStructure = 'S造'; // 建物全体既定値（屋根はまだ未保存のためoverrideに頼れない。上記コメント参照）
+    project.addPlane(0, '1階', 'p1');
+    const g1 = project.graphMap.get('p1');
+    project.structGraph.addCenterLine(CenterLineType.VERTICAL,   0,    { labeled: true, discipline: Discipline.STRUCT });
+    project.structGraph.addCenterLine(CenterLineType.VERTICAL,   3640, { labeled: true, discipline: Discipline.STRUCT });
+    project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+    project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 1820, { labeled: true, discipline: Discipline.STRUCT });
+    await saveFloor('p1', serializeGraph(g1));
+    const roofPlane = syncRoofPlane(project);
+    project.activePlaneId = null;
+    // floorSwapManager.peekはスタブしない（本番同型）。
+    await reflectStructuralToOtherFloors(project);
+    const rePeeked = await floorSwapManager.peek(roofPlane, project.structGraph);
+    assert.equal(rePeeked.beams.length, 0,
+      `非在来は反映しても屋根へ保存されない（収集だけ。本番peekで再読込した屋根の梁本数=${rePeeked.beams.length}のはず）`);
+  });
+});
+
+test('【不変条件・ステップ7】structuralOrchestration.js: reflectStructuralAfterFinishExit は昇順ループの直後にreflectRoofPlaneを呼ぶ（自階より上の末尾に屋根）', async () => {
+  const fs = await import('node:fs');
+  const path = await import('node:path');
+  const url = await import('node:url');
+  const here = path.dirname(url.fileURLToPath(import.meta.url));
+  const src = stripComments(fs.readFileSync(path.join(here, 'structuralOrchestration.js'), 'utf8'));
+  const fnMatch = /export async function reflectStructuralAfterFinishExit\([^)]*\) \{([\s\S]*?)\r?\n\}/.exec(src);
+  assert.ok(fnMatch, 'reflectStructuralAfterFinishExit関数本体が見つからない');
+  const body = fnMatch[1];
+  assert.ok(/for \(let i = idx \+ 1; i < planes\.length; i\+\+\) \{[\s\S]*?\}[\s\S]*?await reflectRoofPlane\(project\);/.test(body),
+    'reflectRoofPlane(project) の呼び出しが昇順ループ（自階より上）の後に無い');
+  // 昇順ループと同じ if (idx !== -1) ガードの内側にあること（idx===-1では屋根にも触れない）——
+  // 単純な正順序チェックだけでは「ガード外へ出す」変異を検出できない（実測・再発防止）。
+  assert.ok(/if \(idx !== -1\) \{[\s\S]*?await reflectRoofPlane\(project\);[\s\S]*?\n {2}\}/.test(body),
+    'reflectRoofPlane(project) が if (idx !== -1) ガードの内側に無い');
+});
+
+test('【失敗系・ステップ7】reflectStructuralAfterFinishExit: 存在しないplaneId（idx===-1）は屋根専用平面があってもreflectRoofPlaneを呼ばない（floorSwapManager.peekに到達しない）', async () => {
+  const project = new Project('proj-step7-idx-neg1', 'test');
+  const { graph } = project.addPlane(0, '1階', 'p1');
+  graph.structureOverride = TRADITIONAL_WOOD_STRUCTURE;
+  const roofPlane = syncRoofPlane(project);
+  assert.ok(roofPlane?.isRoofPlane, '前提: 屋根専用平面が生成されている');
+
+  // floorSwapManager.peekを未モックのまま（呼ばれれば実IndexedDBに到達してReferenceErrorになる）
+  // ——doesNotRejectが通ればreflectRoofPlaneが呼ばれていない証拠になる。
+  await assert.doesNotReject(
+    reflectStructuralAfterFinishExit('does-not-exist', true, project),
+    'idx===-1は屋根専用平面があってもfloorSwapManager.peekへ到達しない（reflectRoofPlaneを呼ばない）');
+});
+
+// ---- R-3（2026-09-19是正・reflectStructuralToOtherFloorsと同じ理由の機械的な横展開）----
+// reflectStructuralAfterFinishExitの採番の適用ループ（goingToStructure=falseのときだけ確定）も
+// project.planesのみを対象にしていたため、同じ理由で屋根の梁がmemberNo=nullのまま保存される
+// 不整合があった。withFakeIndexedDBで実際にsaveFloorまで通して確認する。
+// 【QA第2巡Major-3是正】以前はfloorSwapManager.peekをgraphMapへの素通しにスタブしており、
+// roofGraph（graphMap登録の生グラフ。recomputeは本番同型peekの一時graphに対して行われ保存される
+// ため実際は更新されない）を直接参照していた——saveFloor削除の変異で赤化しない。real peekに
+// 置き換え、確認は再peekしたインスタンスに対して行う。CLもproject.structGraphへ移す。
+test('【R-3】reflectStructuralAfterFinishExit: goingToStructure=falseのとき、屋根の梁（role:primary）にも採番が適用されmemberNoが保存される（本番peekで再読込して確認）', async () => {
+  await withFakeIndexedDB(async () => {
+    const project = new Project('proj-r3-finishexit-roof', 'test');
+    project.structuralInfo.mainStructure = TRADITIONAL_WOOD_STRUCTURE; // 屋根は未保存のまま最初にpeekされるため
+    const { graph: g1 } = project.addPlane(0, '1階', 'p1');
+    g1.structureOverride = TRADITIONAL_WOOD_STRUCTURE;
+    const x0 = project.structGraph.addCenterLine(CenterLineType.VERTICAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+    const x1 = project.structGraph.addCenterLine(CenterLineType.VERTICAL, 3640, { labeled: true, discipline: Discipline.STRUCT });
+    const y0 = project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+    const y1 = project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 1820, { labeled: true, discipline: Discipline.STRUCT });
+    const room = g1.addRoom(new Set([`${x0.id}:${y0.id}:${x1.id}:${y1.id}`]), 'A');
+    generateRoomWallsFromOutline(g1, room);
+
+    const roofPlane = syncRoofPlane(project);
+    const roofGraph = project.graphMap.get(roofPlane.id);
+    roofGraph.structureOverride = TRADITIONAL_WOOD_STRUCTURE;
+    project.activePlaneId = 'p1'; // g1（唯一の実体階＝自階より上は屋根だけ）から退出する想定
+
+    // 実IDB往復のfloorSwapManager.peekが空の一時graphを返さないよう、g1は事前に保存する
+    // （屋根の反映がpeekRoofBelowGraph経由で最上階=g1を無条件にpeekするため。本番では仕上げ
+    // モード退出フローが本関数を呼ぶ前にg1を保存済みという前提を模す）。
+    await saveFloor('p1', serializeGraph(g1));
+
+    await reflectStructuralAfterFinishExit('p1', false, project);
+    const rePeeked = await floorSwapManager.peek(roofPlane, project.structGraph);
+    const roofBeams = rePeeked.beams.filter(b => b.role === 'primary');
+    assert.ok(roofBeams.length > 0, '前提: 屋根に大梁(role:primary、壁線方式の軒桁)が生成されている');
+    assert.ok(roofBeams.every(b => b.memberNo != null),
+      '屋根の梁にもmemberNoが書き戻される（再peekでも非null＝saveFloor済み）');
+  });
 });
 
 // reflectStructuralToOtherFloors を直接呼ぶ挙動テスト（アクティブ階以外を実際に peek+recompute する）は

@@ -435,26 +435,55 @@ test('buildWallDrawPlan: 在来木造は壁上の柱（120角）で面に分け�
   const { g, w, cls, yAxis } = buildStudGraph(TRADITIONAL_WOOD_STRUCTURE);
   for (const cl of cls) g.addColumn(StructuralMaterialType.WOOD, 'WOOD-120x120', cl, yAxis, {});
   const plan = buildWallDrawPlan(g, LodLevel.DETAIL);
-  assert.deepEqual(plan.wallLines.get(w.id).backingSpan, [0, 3640], '取り合う相手が無い＝下地の端は物理端');
+  // 【F-3・2026-09-19裁定で期待値更新】このwは対辺の壁が無い単独の壁（取り合う相手が無い）ため
+  // 両端(x=0,x=3640)とも自由端——在来木造は柱包み（wrapFreeEnds）で下地がwallFinish(12.5)ぶん
+  // 手前から始まる（[0,3640]→[12.5,3627.5]）。柱で区切られる面（wallStuds、下記）自体はこの
+  // fixtureでは柱面〜柱面の内側の面だけを見るため影響を受けず不変。
+  assert.deepEqual(plan.wallLines.get(w.id).backingSpan, [12.5, 3627.5], '在来木造の自由端は仕上げ厚ぶん下地が縮む（F-3）');
   // 面 [60,1760]・[1880,3580]（柱面〜柱面 1700）: 端部材 25/1675 ＋ 395/850/1305（面の始端から）
   assert.deepEqual(plan.wallStuds.get(w.id), {
-    centers: [85, 455, 910, 1365, 1735, 1905, 2275, 2730, 3185, 3555], depth: 30,
+    centers: [85, 455, 910, 1365, 1735, 1905, 2275, 2730, 3185, 3555], depth: 30, endMembers: [],
   });
   // 標準LODでは解かない
   assert.equal(buildWallDrawPlan(g, LodLevel.STANDARD).wallStuds.size, 0);
 });
 
-test('buildWallDrawPlan: 在来木造でも柱の無い壁は面が1つ＝壁全長の455割付だけ（端部材なし）', () => {
+test('buildWallDrawPlan: 在来木造でも柱の無い壁は面が1つ＝下地帯全長の455割付だけ（端部材なし）', () => {
   const { g, w } = buildStudGraph(TRADITIONAL_WOOD_STRUCTURE);
   const plan = buildWallDrawPlan(g, LodLevel.DETAIL);
-  // L=3640: 商8 → 内側7ピッチ=3185、両端227.5
-  assert.deepEqual(plan.wallStuds.get(w.id).centers, [227.5, 682.5, 1137.5, 1592.5, 2047.5, 2502.5, 2957.5, 3412.5]);
+  // 【F-3・2026-09-19裁定で期待値更新】柱が無いため面＝下地帯全長がそのまま1面になる。下地帯は
+  // 自由端の柱包みでwallFinish(12.5)ぶん縮んだ[12.5,3627.5]（上のテストと同じ理由）——
+  // L=3615(=3627.5-12.5): 商7 → 内側6ピッチ=2730、両端442.5（+下地帯の始端12.5を加算）。
+  assert.deepEqual(plan.wallStuds.get(w.id).centers, [455, 910, 1365, 1820, 2275, 2730, 3185]);
 });
 
 test('buildWallDrawPlan: 在来以外（S造）は従来どおり壁の始端から450固定ピッチ・見かけ幅45', () => {
   const { g, w } = buildStudGraph('S造');
   const plan = buildWallDrawPlan(g, LodLevel.DETAIL);
-  assert.deepEqual(plan.wallStuds.get(w.id), { centers: [450, 900, 1350, 1800, 2250, 2700, 3150, 3600], depth: 45 });
+  assert.deepEqual(plan.wallStuds.get(w.id), { centers: [450, 900, 1350, 1800, 2250, 2700, 3150, 3600], depth: 45, endMembers: [] });
+});
+
+// ---- 腰壁・垂れ壁の自由端の端部材（structural/wallEndMember.js）の配線 ----
+test('buildWallDrawPlan: 在来木造は腰壁（1800）の自由端の壁にendMembersが載り、柱面から10mm空けた間柱が立つ', () => {
+  const { g, w, cls, yAxis } = buildStudGraph(TRADITIONAL_WOOD_STRUCTURE);
+  // wは対辺の壁が無い単独の壁のため両端(x=0,x=3640)とも自由端。全スパンに腰壁(topHeight=1800>1500)を
+  // 指定——切断高さを貫くため通常の壁帯のまま描かれ（backingSpanは非null）、両端に端部材が載る。
+  g.setKneeDropWall(edgeKey(yAxis.id, cls[0].id, cls[2].id), { knee: { topHeight: 1800 } });
+  const plan = buildWallDrawPlan(g, LodLevel.DETAIL);
+  assert.deepEqual(plan.wallLines.get(w.id).backingSpan, [12.5, 3627.5], '腰壁の指定は壁帯自体の延長・巻きには影響しない');
+  // 端部材区間([-60,60]・[3580,3700]。柱寸120)が柱区間として面[60,3580]を作り、柱面から10mm空けた
+  // 間柱（faceStudPositions）が立つ——buildStudGraph同様の柱面隣接式（wallStudLayout.test.jsと同じ計算）。
+  assert.deepEqual(plan.wallStuds.get(w.id), {
+    centers: [85, 455, 910, 1365, 1820, 2275, 2730, 3185, 3555], depth: 30,
+    endMembers: [{ center: 0, depth: 120 }, { center: 3640, depth: 120 }],
+  });
+});
+
+test('【失敗系】buildWallDrawPlan: 在来以外（S造）は腰壁の指定があってもendMembersを出さない', () => {
+  const { g, w, cls, yAxis } = buildStudGraph('S造');
+  g.setKneeDropWall(edgeKey(yAxis.id, cls[0].id, cls[2].id), { knee: { topHeight: 1800 } });
+  const plan = buildWallDrawPlan(g, LodLevel.DETAIL);
+  assert.deepEqual(plan.wallStuds.get(w.id), { centers: [450, 900, 1350, 1800, 2250, 2700, 3150, 3600], depth: 45, endMembers: [] });
 });
 
 test('【失敗系】buildWallDrawPlan: 仕上げのみの薄壁（下地なし）・手動壁（wallFinish=null）には下地材を出さない', () => {

@@ -11,6 +11,7 @@ import { recomputeStructuralForGraph } from '../../src/structural/structuralReco
 import { isTraditionalWoodStructure, rulesFor, effectiveStructure } from '../../src/structural/structureRules.js';
 import { selfWallSegments, peekAboveGraph, columnSeedBeamSegments } from '../../src/structural/wallBeamAxes.js';
 import { beamWallCrossPoints } from '../../src/structural/woodFraming.js';
+import { sweepUntilConverged, productionSweepPlanes, roofMainStructure, planeLabel } from './sweepOrder.mjs';
 
 const src = process.argv[2] ?? 'D:/tatsuya/Download/moku4.stq';
 const { project } = loadDocument(src);
@@ -37,8 +38,13 @@ console.log('主構造:', project.structuralInfo.mainStructure);
 
 const before = new Map();
 const columnsBefore = new Map();
-for (const p of project.planes) {
+// 頭つなぎ・受梁は屋根自身にも生成されうる（M-1・2026-09-19是正: 下階柱＝最上階の柱が起因する
+// 頭つなぎは屋根にも通常どおり生成される）ため before スナップショットは屋根込みで取る。
+// 柱（columnCount）は屋根に立たない（isRoofPlaneは柱の立つ階ではない）ため実体階のみのままでよい。
+for (const p of productionSweepPlanes(project)) {
   before.set(p.id, tieHistogram(project.graphMap.get(p.id)));
+}
+for (const p of project.planes) {
   columnsBefore.set(p.id, columnCount(project.graphMap.get(p.id)));
 }
 
@@ -48,26 +54,22 @@ for (const p of project.planes) {
 // 階順1→2→3の1スイープでは1段ずつしか伝播しないため（2026模試で実測sweep4。3bの「スイープ順に
 // よる1回遅れ」節と同種の遅れが1段深くなった）。sweep5以降もchangedが出ればNGのまま
 // （収束自体が壊れている＝チェーンが止まらない兆候として扱う）。
-const MAX_SWEEPS = 5;
-let convergedAt = null;
-for (let i = 1; i <= MAX_SWEEPS; i++) {
-  const changedPlanes = [];
-  for (const p of project.planes) {
-    const g = project.graphMap.get(p.id);
-    const { changed } = await recomputeStructuralForGraph(g, project, g.structureOverride ?? project.structuralInfo.mainStructure);
-    if (changed) changedPlanes.push(p.name);
-  }
-  console.log(`sweep${i}: changed=[${changedPlanes.join(',')}]`);
-  if (changedPlanes.length === 0) { convergedAt = i; break; }
-}
+// 【小屋伏図にも梁・柱ルールを適用する計画のステップ7】本番の反映パス（reflectStructuralToOtherFloors）
+// と同じ並び（在来なら降順・屋根が先頭）で回す（sweepOrder.mjs。9本のwood probeが共有する単一実装）。
+// convergeLimit(5)は本番順（降順・屋根込み）の実測（moku4: woodSupportSpanProbe.mjsで降順4・
+// 昇順3。昇順は順序不変チェック専用の比較走行で上限判定の対象外）に対して1の余裕を持たせた値
+// （【QA第2巡Minor-4】below候補が階をまたぐ依存を1段追加するため実測ちょうどの4は余裕ゼロだった）。
+const MAX_SWEEPS = 8; // 【QA第2巡Minor-4】convergeLimit(5)に対して余裕を持たせる（below候補が階をまたぐ依存を1段追加するため。woodSupportSpanProbe.mjsと同じ8に統一）
+const convergedAt = await sweepUntilConverged(project, 'desc', MAX_SWEEPS,
+  (i, changedPlanes) => console.log(`sweep${i}: changed=[${changedPlanes.join(',')}]`));
 
 console.log(`--- 収束後（sweep${convergedAt ?? MAX_SWEEPS}時点）の階ごと頭つなぎ・受梁本数 ---`);
 let totalTie = 0, totalCarrier = 0;
-for (const p of project.planes) {
+for (const p of productionSweepPlanes(project)) {
   const g = project.graphMap.get(p.id);
   const b = before.get(p.id);
   const a = tieHistogram(g);
-  console.log(`[${p.name}] 頭つなぎ: ${b.頭つなぎ}→${a.頭つなぎ}  受梁: ${b.受梁}→${a.受梁}`);
+  console.log(`[${planeLabel(p)}] 頭つなぎ: ${b.頭つなぎ}→${a.頭つなぎ}  受梁: ${b.受梁}→${a.受梁}`);
   totalTie += a.頭つなぎ; totalCarrier += a.受梁;
 }
 console.log(`合計: 頭つなぎ=${totalTie} 受梁=${totalCarrier}`);
@@ -126,22 +128,26 @@ for (const p of project.planes) {
 }
 console.log(`合計: 柱生成点源(primary|floor)の下に立つ柱=${totalUnderTie}件（CL解決=${totalCL}／オフセット=${totalOffset}）`);
 
-// 冪等性の再確認: もう一度全階を回して、頭つなぎ・受梁の本数が変わらないこと（作って→撤去のチャーンが無いこと）。
+// 冪等性の再確認: もう一度全階（＋屋根、在来のときだけ。sweepOrder.mjs productionSweepPlanes）を回して、
+// 頭つなぎ・受梁の本数が変わらないこと（作って→撤去のチャーンが無いこと）。R-5（2026-09-19是正）:
+// 本セクションは従来 project.planes（実体階のみ）しか回しておらず、屋根自身のチャーンを見逃していた。
 // 追加スイープ「前」の本数を別Mapに控えてから比較する（m13）——追加スイープ「後」に project.graphMap から
 // 読み直した値と afterExtra（同じ後の値）を比べるとトートロジーになり、実際にチャーンしていても常に
 // stable=true になってしまう（同一グラフを2回読んでいるだけで、再計算の前後比較になっていなかった）。
+const sweepPlanes = productionSweepPlanes(project);
 const beforeExtra = new Map();
-for (const p of project.planes) {
+for (const p of sweepPlanes) {
   beforeExtra.set(p.id, tieHistogram(project.graphMap.get(p.id)));
 }
 const afterExtra = new Map();
-for (const p of project.planes) {
+for (const p of sweepPlanes) {
   const g = project.graphMap.get(p.id);
-  await recomputeStructuralForGraph(g, project, g.structureOverride ?? project.structuralInfo.mainStructure);
+  const mainStructureForP = p.isRoofPlane ? roofMainStructure(project) : (g.structureOverride ?? project.structuralInfo.mainStructure);
+  await recomputeStructuralForGraph(g, project, mainStructureForP);
   afterExtra.set(p.id, tieHistogram(g));
 }
 let stable = true;
-for (const p of project.planes) {
+for (const p of sweepPlanes) {
   const b = beforeExtra.get(p.id);
   const a = afterExtra.get(p.id);
   if (a.頭つなぎ !== b.頭つなぎ || a.受梁 !== b.受梁) stable = false;
@@ -176,7 +182,7 @@ if (/moku[34]/.test(src) && project.planes.length >= 3) { // moku4 は moku3 と
 }
 
 // 在来木造の収束上限=4（2026-09-18裁定。上記MAX_SWEEPSのコメント参照）。非在来は従来どおり1。
-const convergeLimit = isTraditionalWoodStructure(project.structuralInfo.mainStructure) ? 4 : 1;
+const convergeLimit = isTraditionalWoodStructure(project.structuralInfo.mainStructure) ? 5 : 1; // 【QA第2巡Minor-4】below候補（3i）が階をまたぐ依存を1段追加するため4は余裕ゼロだった（moku4実測でも収束sweep4ちょうど）。5に緩和。5超はNGのまま
 if (convergedAt != null && convergedAt <= convergeLimit && stable) {
   console.log(`OK: 収束（sweep${convergedAt}で changed=[]）かつ頭つなぎ・受梁の本数が安定`);
 } else if (convergedAt == null) {

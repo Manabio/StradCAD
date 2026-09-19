@@ -51,6 +51,7 @@ import { subtractIntervals } from '../finish/stair/stairGeometry.js';
 import { ENDPOINT_EPS, resolveFinVisibility, finishJoinBoundary } from '../finish/wallFinishJoin.js';
 import { CAP_OVERHANG } from '../finish/kneeDropWall.js';
 import { q, unq, rectFromMm, unionBoundary, clipEdgeToInterior } from './orthoRegion.js';
+import { WALL_JUNCTION_TOL_MM } from '../structural/woodFraming.js';
 
 /**
  * 壁1本の「描画上のスパン区間」（開口とspanCutsで分割済み）を返す。
@@ -122,6 +123,15 @@ function wallInput(wall, { junction, openings, kneeDrop, clipGroup }) {
     wallFinish: wall.wallFinish,
     faceDir: wall.faceDir,
     axisValue: wall.axisValue,
+    // 下地帯の中心座標（structural/wallBeamAxes.js wallBackingCenterCoordと同じ式:
+    // 下地帯の中心 − bandOffset）。F-3の自由端マッチング（wrapEndsFor）専用——柱・梁の
+    // アンカー（structural/woodAutoFill.js）が使う座標と同じ基準に揃えるため、`axisValue`
+    // （軸CL＋axisOffset。仕上げ材の面位置に近い個々の壁固有の値）とは別に持つ（backingRange
+    // の中心は`axisCL.effectiveValue + backingOffset`で決まり、axisOffsetとは無関係——
+    // 落とし穴・再発防止: 単純にaxisValueで自由端座標と突き合わせると帯シフト無し・偏芯無しの
+    // 通常壁でもaxisOffset分（半壁厚）だけずれて一致しない）。backingが無い薄壁はaxisValueへ
+    // フォールバック（薄壁はbacking=nullのためwrapEndsの効果自体が生じず実害はない）。
+    backingAxisValue: backing ? (backing.lo + backing.hi) / 2 - (wall.bandOffset ?? 0) : wall.axisValue,
     symmetric: wall.backingDepth == null,
     // 取り合い先（内側線の位置と可視性）。規則の供給源は finish/wallFinishJoin.js。
     finLine: resolveFinVisibility(wall),
@@ -301,10 +311,22 @@ function endSpansFor(w, inputs, wrapEnds) {
 }
 
 /**
- * 端部を仕上げ材が回り込む端（木口線を出す端）。旧 `resolveWallLines` の ecap 判定と同じ2条件:
- * 低い壁の端部を覆った端（パス0の endWrap）と、軸CLの線分範囲を越えた端点はねだし。
+ * 端部を仕上げ材が回り込む端（木口線を出す端）。旧 `resolveWallLines` の ecap 判定と同じ2条件
+ * （低い壁の端部を覆った端＝パス0の endWrap、軸CLの線分範囲を越えた端点はねだし）に加え、
+ * 在来木造の柱包み（F-3・2026-09-19裁定）の第3条件: 自由端（直交する取り合い相手が無い物理端。
+ * `structural/woodFraming.js wallRunFreeEnds` が唯一の判定——呼び出し側 `wallDrawPlan.js` が
+ * `selfWallSegments(graph)` から求めた点集合を `freeEndPoints` として渡す。腰壁・垂れ壁の辺の
+ * 自由端でも壁端延長・巻きは行う＝ここでは絞り込まない。構造柱だけを立てない判断は
+ * `structural/woodAutoFill.js` 側の責務）。
+ * **突き合わせはtol（WALL_JUNCTION_TOL_MM）付き**（F-1×F-3是正・2026-09-19裁定）——
+ * `freeEndPoints`（wallRunFreeEnds由来）は柱・梁のアンカーに使う**設計上の端**（CLのeffectiveValue。
+ * protrusionを含まない）だが、ここで壁の物理端（`w.spanLo/spanHi`。F-3で自由端の柱包み分だけ
+ * 実際にはね出した後の座標）と突き合わせたい——両者は一致しない（設計上の端＋protrusion＝物理端）
+ * ため、3aの壁交点が控え・はね出しをtolで許容して同一視するのと同じ規律で、厳密一致ではなく
+ * tol以内かどうかで判定する。axisは下地帯中心（`backingAxisValue`。維持）で揃える。
+ * @param {Array<{x:number, y:number}>} [freeEndPoints] - 自由端の世界座標一覧（設計上の端）
  */
-function wrapEndsFor(w, junction, endpointAt) {
+function wrapEndsFor(w, junction, endpointAt, freeEndPoints) {
   const out = {};
   const finish = w.wallFinish > 0 ? w.wallFinish : 0;
   if (finish <= 0) return out;
@@ -312,6 +334,16 @@ function wrapEndsFor(w, junction, endpointAt) {
   if (junction?.endWrap?.hi) out.hi = true;
   if (w.extentLo != null && w.spanLo < w.extentLo && endpointAt?.lo) out.lo = true;
   if (w.extentHi != null && w.spanHi > w.extentHi && endpointAt?.hi) out.hi = true;
+  if (freeEndPoints?.length) {
+    const axis = w.backingAxisValue;
+    const matchesEnd = (coord) => freeEndPoints.some(fe => {
+      const feAxis = w.isVertical ? fe.x : fe.y;
+      const feAlong = w.isVertical ? fe.y : fe.x;
+      return Math.abs(feAxis - axis) <= WALL_JUNCTION_TOL_MM && Math.abs(feAlong - coord) <= WALL_JUNCTION_TOL_MM;
+    });
+    if (!out.lo && matchesEnd(w.spanLo)) out.lo = true;
+    if (!out.hi && matchesEnd(w.spanHi)) out.hi = true;
+  }
   return out;
 }
 
@@ -336,8 +368,10 @@ function wrapEndsFor(w, junction, endpointAt) {
  *     finishes:{xLo?:number,xHi?:number,yLo?:number,yHi?:number}}>|null,
  *   clipGroups?: Map<string, string>|null,
  *   detail?: boolean,
+ *   freeEndPoints?: Array<{x:number, y:number}>|null,
  * }} deps
  *   clipGroups: 壁id → 描画クリップの単位（同じ単位の壁とだけ線を畳む。上記 wallInput 参照）。
+ *   freeEndPoints: 在来木造の柱包み（F-3）用の自由端の世界座標一覧（省略時は従来どおり無効）。
  * @returns {{lines: Map<string, WallRegionLine[]>, backingSpans: Map<string, [number,number]|null>}}
  *   lines: 壁id → その壁が描く線分。
  *   backingSpans: 壁id → 下地スタッドを並べる長さ方向の範囲（取り合い・回り込みの正規化済み）。
@@ -345,6 +379,7 @@ function wrapEndsFor(w, junction, endpointAt) {
 export function resolveWallRegionLines(walls, {
   junctions = null, openingsByWall = null, kneeDropOverlays = null,
   endpointAtByWall = null, columnWraps = null, clipGroups = null, detail = true,
+  freeEndPoints = null,
 } = {}) {
   const inputs = [];
   for (const wall of walls) {
@@ -357,13 +392,18 @@ export function resolveWallRegionLines(walls, {
     }));
   }
   const active = inputs.filter(w => !w.capOutline && w.spans.length > 0);
+  // 在来木造の柱包み（F-3）: 自由端の世界座標一覧（設計上の端。structural/woodFraming.js
+  // wallRunFreeEnds が唯一の判定）——呼び出し側（renderer/wallDrawPlan.js）が
+  // selfWallSegments(graph) から求めたものをそのまま渡す（この純モジュールはgraphに触れないため、
+  // 算出は呼び出し側の責務）。壁の物理端とはtol付きで突き合わせる（wrapEndsFor参照）ため、
+  // ここでは丸めたSetにせず配列のまま渡す。
 
   const materialRects = [], backingRects = [];
   const backingSpans = new Map();
   for (const w of active) {
     const hide = w.symmetric ? seamSide(w.isVertical, w.faceDir) : undefined;
     const tag = { styleKey: w.drawKey, isVertical: w.isVertical };
-    const wrapEnds = wrapEndsFor(w, junctions?.get(w.id), endpointAtByWall?.get(w.id));
+    const wrapEnds = wrapEndsFor(w, junctions?.get(w.id), endpointAtByWall?.get(w.id), freeEndPoints);
     const { material: mSpan, backing: bSpan, studs } = endSpansFor(w, active, wrapEnds);
     backingSpans.set(w.id, studs);
     for (const [a, b] of w.spans) {

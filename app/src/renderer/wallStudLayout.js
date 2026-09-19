@@ -65,19 +65,59 @@ export function betweenColumnsStudCenters(segments, columnIntervals, spec) {
 /**
  * 壁1本の下地材の描画位置（長さ方向の中心）と材厚を、主構造ルールの選択子で解く。
  * @param {object} plan - resolveWallLines の結果（segments/spanLo/spanHi/backingSpan）
- * @param {{layout:string, backing:object|null, columnIntervals:Array<[number,number]>, studCuts:Array<[number,number]>}} deps
- *   layout: rules.studLayout／backing: rules.backing（'betweenColumns' の値。無ければ固定ピッチへ）
- * @returns {{centers:number[], depth:number}|null} 並べる区間が無ければ null
+ * @param {{layout:string, backing:object|null, columnIntervals:Array<[number,number]>, studCuts:Array<[number,number]>,
+ *   endMembers:Array<{along:number, widthMm:number}>}} deps
+ *   layout: rules.studLayout／backing: rules.backing（'betweenColumns' の値。無ければ固定ピッチへ）／
+ *   endMembers: 腰壁・垂れ壁の自由端の端部材（structural/wallEndMember.js kneeDropEndMembers。この壁id分だけ）。
+ *   意味・値（along/widthMm）は変えず center/depth へ写すだけ——layout!=='betweenColumns' は常に空。
+ * @returns {{centers:number[], depth:number, endMembers:Array<{center:number, depth:number}>}|null}
+ *   並べる区間が無ければ null（backingSpan:null＝天板輪郭で描かれる壁は端部材も出さない。既存の
+ *   「天板の壁に下地スタッドは無い」規約の帰結——追加の分岐を持たない）。
  */
-export function resolveWallStuds(plan, { layout, backing = null, columnIntervals = [], studCuts = [] }) {
+export function resolveWallStuds(plan, { layout, backing = null, columnIntervals = [], studCuts = [], endMembers = [] }) {
   if (!plan?.backingSpan) return null;
   const segments = studSegments(plan, studCuts);
   if (segments.length === 0) return null;
+  const resolvedEndMembers = layout === 'betweenColumns'
+    ? endMembers.map(e => ({ center: e.along, depth: e.widthMm }))
+    : [];
   if (layout === 'betweenColumns' && backing) {
     const spec = { pitchMm: backing.studPitchMm, depthMm: backing.studDepthMm, clearanceMm: backing.studColumnClearanceMm };
-    return { centers: betweenColumnsStudCenters(segments, columnIntervals, spec), depth: backing.studDepthMm };
+    return { centers: betweenColumnsStudCenters(segments, columnIntervals, spec), depth: backing.studDepthMm, endMembers: resolvedEndMembers };
   }
-  return { centers: fixedPitchStudCenters(segments, plan.spanLo), depth: WALL_STUD_WIDTH };
+  return { centers: fixedPitchStudCenters(segments, plan.spanLo), depth: WALL_STUD_WIDTH, endMembers: resolvedEndMembers };
+}
+
+/**
+ * 壁下地材（間柱・端部材）の描画矩形（世界mm座標。Konva Rectと同じ左上基準のx/y/width/height）。
+ * `renderer/ShapesLayer.jsx`（Konva描画）と`scripts/probe/planSegments.mjs`（回帰比較）が
+ * 同じ幾何（isVerticalによるx/y・幅/高さの入れ替え、下地帯中心backingCenterVからのオフセット）を
+ * 共有する単一の供給源（二重記述しない——QA指摘2026-09-19: JSX側に直接書くとテストが守れない）。
+ * 厚み方向は壁の下地帯（backingRange）全幅、長さ方向の幅は間柱＝`studs.depth`・端部材＝各要素の`depth`
+ * （柱寸）——値は`resolveWallStuds`が返したものをそのまま使うだけで、ここでは導出しない。
+ * @param {boolean} isVertical - 壁の向き（shape.isVertical）
+ * @param {{lo:number, hi:number}} backingRange - 壁の下地帯（shape.backingRange。plan/studsとは別に
+ *   Wall自身が持つため引数で受け取る）
+ * @param {{centers:number[], depth:number, endMembers:Array<{center:number, depth:number}>}} studs -
+ *   resolveWallStudsの結果
+ * @returns {Array<{kind:'stud'|'endMember', key:string, x:number, y:number, width:number, height:number}>}
+ *   key は`${kind}:${center}`（呼び出し側が壁idを前置してKonva keyやprobeのkeyにする）。
+ */
+export function studRects(isVertical, backingRange, studs) {
+  const backingDepth = backingRange.hi - backingRange.lo;
+  const halfDepth = backingDepth / 2;
+  const backingCenterV = (backingRange.lo + backingRange.hi) / 2;
+  const rect = (kind, center, depth) => ({
+    kind, key: `${kind}:${center}`,
+    x: isVertical ? backingCenterV - halfDepth : center - depth / 2,
+    y: isVertical ? center - depth / 2 : backingCenterV - halfDepth,
+    width: isVertical ? backingDepth : depth,
+    height: isVertical ? depth : backingDepth,
+  });
+  return [
+    ...studs.centers.map(p => rect('stud', p, studs.depth)),
+    ...studs.endMembers.map(e => rect('endMember', e.center, e.depth)),
+  ];
 }
 
 /**

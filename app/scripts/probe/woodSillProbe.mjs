@@ -13,6 +13,7 @@ import { spanKey } from '../../src/core.js';
 import { selfWallSegments } from '../../src/structural/wallBeamAxes.js';
 import { wallLineThroughRuns } from '../../src/structural/woodAutoFill.js';
 import { mergeWallIntervals } from '../../src/structural/woodFraming.js';
+import { sweepUntilConverged } from './sweepOrder.mjs';
 
 const src = process.argv[2] ?? 'D:/tatsuya/Download/moku4.stq';
 const { project } = loadDocument(src);
@@ -27,18 +28,13 @@ console.log('主構造:', project.structuralInfo.mainStructure);
 // 改定。woodTieBeamProbe.mjsと同じ根拠——3h-2の点源に床梁を加えたことで3階またぎの連鎖が成立し、
 // 1スイープでは1段ずつしか伝播しない。本probeは元々MAX_SWEEPS自体を上限として直接OK判定に使って
 // いた＝実測sweep4でちょうど通るだけの余裕ゼロだったため、超過を検知できるよう5へ引き上げる）。
+// 【小屋伏図にも梁・柱ルールを適用する計画のステップ7・R-5是正】本番の反映パス
+// （reflectStructuralToOtherFloors）と同じ並び（在来なら降順・屋根が先頭）で回す（sweepOrder.mjs）。
+// 土台（role:'sill'）自体は最下階（基礎伏図）専用で屋根には生成されないが、収束判定・スイープ回数は
+// 屋根込みの本番順で行う必要がある。
 const MAX_SWEEPS = 5;
-let convergedAt = null;
-for (let i = 1; i <= MAX_SWEEPS; i++) {
-  const changedPlanes = [];
-  for (const p of project.planes) {
-    const g = project.graphMap.get(p.id);
-    const { changed } = await recomputeStructuralForGraph(g, project, g.structureOverride ?? project.structuralInfo.mainStructure);
-    if (changed) changedPlanes.push(p.name);
-  }
-  console.log(`sweep${i}: changed=[${changedPlanes.join(',')}]`);
-  if (changedPlanes.length === 0) { convergedAt = i; break; }
-}
+const convergedAt = await sweepUntilConverged(project, 'desc', MAX_SWEEPS,
+  (i, changedPlanes) => console.log(`sweep${i}: changed=[${changedPlanes.join(',')}]`));
 
 // 最下階（基礎伏図）だけが対象（role:'sill'は最下階専用）。
 const lowest = project.planes[0];

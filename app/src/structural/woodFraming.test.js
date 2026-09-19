@@ -7,7 +7,7 @@ import {
   mergeWallIntervals, subtractCoveredSpan, throughBeamRuns, columnSplitPoints, propagateCarrierDepths, columnSupportBeamCandidates,
   beamWallCrossPoints, studPositions, studSpec, openingJambSpec, entranceOpeningWidthMm, hipBraceAllowed,
   wallRunFaces, faceStudPositions, sillTopLevelOffsetMm, jambAxisValue, jambColumnPositions, rectsOverlap,
-  supportSpanColumnPositions, mergePrimaryBeamRuns,
+  supportSpanColumnPositions, mergePrimaryBeamRuns, wallRunFreeEnds,
 } from './woodFraming.js';
 import { WOOD_BEAM_DEPTH_TABLE, TRADITIONAL_WOOD_FRAMING, TRADITIONAL_WOOD_BACKING, rulesFor, TRADITIONAL_WOOD_STRUCTURE } from './structureRules.js';
 import { findSectionEntry, woodRectSectionKey, SECTION_CATALOG } from './sectionCatalog.js';
@@ -974,6 +974,86 @@ test('【失敗系】supportSpanColumnPositions: opts不正（maxSpanMm<=0・gri
   assert.deepEqual(supportSpanColumnPositions([0, 3640], [], () => true, { tol: -1 }), []);
 });
 
+// ---- R-1（2026-09-19是正）: gridOriginMm（グリッドの位相をペアloではなく通り芯基準にする） ----
+test('supportSpanColumnPositions（R-1）: gridOriginMm指定時は910グリッドの位相がその原点基準になる（loがモジュール外の点でも通り芯基準に揃う）', () => {
+  // 支持点lo=-6370（袖柱等モジュール外の点を模す）。gridOriginMm=-7280（通り芯）を基準にすると、
+  // -7280+910k のうち区間[-6370,-3640]内は-5460（k=2）のみ——lo基準(-6370)なら-5460ではなく
+  // -6370+910=-5460と実は同じ値になってしまう単純例では区別できないため、位相がずれる例で確認する。
+  const result = supportSpanColumnPositions([-6370, -3640], [], () => true, { gridOriginMm: -7280 });
+  assert.deepEqual(result, [{ along: -5460, kind: 'grid' }],
+    'gridOriginMm=-7280基準の910グリッド(-7280,-6370,-5460,...)のうち窓内の-5460が採用される');
+});
+
+test('supportSpanColumnPositions（R-1）: gridOriginMm省略時は従来どおりペアのloが原点になる', () => {
+  const withOrigin = supportSpanColumnPositions([0, 3640], [], () => true);
+  const withoutOpt = supportSpanColumnPositions([0, 3640], [], () => true, {});
+  assert.deepEqual(withOrigin, [{ along: 1820, kind: 'grid' }]);
+  assert.deepEqual(withoutOpt, withOrigin, 'gridOriginMm省略時は挙動不変');
+});
+
+test('supportSpanColumnPositions（R-1）: gridOriginMmが原点自体を窓の外に持つ場合でも位相だけを継承する（原点が支持点loと異なる）', () => {
+  // lo=100・hi=2000（span=1900>1820）。gridOriginMm=0基準の910グリッドは910のみ窓内。
+  // lo基準(100)なら1010・1920のうち窓内は…同じ910グリッド系列にはならず位相がずれることを確認する。
+  const result = supportSpanColumnPositions([100, 2000], [], () => true, { gridOriginMm: 0 });
+  assert.deepEqual(result, [{ along: 910, kind: 'grid' }], '原点0基準の910グリッド上の910が採用される（loの100を基準にしていない）');
+});
+
+test('supportSpanColumnPositions（R-1是正）: gridOriginMmに関数を渡すと、複数の支持長超過ペアそれぞれの[lo,hi]で位相を解決し直す（1回の呼び出し内でペアごとに異なる原点を使える）', () => {
+  // 3つの支持点[0, 2000, 4100]から2ペア（[0,2000]・[2000,4100]、ともに>1820）。
+  // ペアごとに異なるgridOriginMmを返す関数を渡し、各ペアがそれぞれの原点で910グリッド計算されることを
+  // 固定する（実データ回帰・2026-09-19是正: 1回の呼び出しに複数ペアが含まれる場合、遠く離れた
+  // run全体の始端を全ペア共通の原点にすると、途中のペアで別の位相のグリッドを誤って採用しうる）。
+  const origins = new Map([[0, -455], [2000, 1550]]); // ペアloごとに異なる原点
+  const calls = [];
+  const gridOriginMm = (lo, hi) => { calls.push([lo, hi]); return origins.get(lo); };
+  const result = supportSpanColumnPositions([0, 2000, 4100], [], () => true, { gridOriginMm });
+  assert.deepEqual(calls, [[0, 2000], [2000, 4100]], 'gridOriginMmはペアごとに(lo,hi)で呼ばれる');
+  // ペア[0,2000](span2000): 原点-455基準の910グリッド(...,-455,455,1365,2275,...)のうちwindow内は1365。
+  // ペア[2000,4100](span2100): 原点1550基準の910グリッド(...,1550,2460,3370,...)のうちwindow内は3370。
+  // （いずれも実行結果を実測して固定——原点をペアloに共通化する変異では異なる値になる）。
+  assert.deepEqual(result, [{ along: 1365, kind: 'grid' }, { along: 3370, kind: 'grid' }]);
+});
+
+test('【失敗系】supportSpanColumnPositions（R-1是正）: gridOriginMm関数がundefinedを返すペアはそのペアのlo基準にフォールバックする', () => {
+  const gridOriginMm = () => undefined;
+  const result = supportSpanColumnPositions([0, 3640], [], () => true, { gridOriginMm });
+  assert.deepEqual(result, [{ along: 1820, kind: 'grid' }], '関数がundefinedを返せば従来どおりペアのlo基準');
+});
+
+// ---- 裁定（2026-09-19）: 3iの候補優先順に「下階の柱位置」（below）を追加 ----
+// 優先順は 通り芯(struct) ＞ 意匠中心線(center) ＞ 下階の柱位置(below) ＞ 910グリッド。
+test('supportSpanColumnPositions（裁定）: 下階に柱がある位置(below)は910グリッドより優先される', () => {
+  // span=3640・窓は中央1820のみ（feasLo=feasHi=1820）。struct/centerは無し・belowが1820にあれば採用。
+  const result = supportSpanColumnPositions([0, 3640], [{ along: 1820, priority: 'below' }], () => true);
+  assert.deepEqual(result, [{ along: 1820, kind: 'below' }]);
+});
+
+test('supportSpanColumnPositions（裁定）: 通り芯・意匠中心線があればbelowより優先される（距離で横断比較しない）', () => {
+  // 同じ窓に3種の候補を置き、struct優先を確認。
+  const clAlongs = [
+    { along: 1820, priority: 'struct' },
+    { along: 1825, priority: 'center' }, // structより理想(1820)に近くても採用されない
+    { along: 1830, priority: 'below' },
+  ];
+  const result = supportSpanColumnPositions([0, 3640], clAlongs, () => true);
+  assert.deepEqual(result, [{ along: 1820, kind: 'struct' }], 'structが1件でもあればcenter・belowは見ない');
+
+  // structが無く、center・belowがともに窓内なら、centerがbelowより優先される
+  // （span=3000・ideal=1500・窓[1180,1820]）。
+  const clAlongs2 = [
+    { along: 1700, priority: 'center' },
+    { along: 1650, priority: 'below' }, // centerより理想(1500)に近くても採用されない
+  ];
+  const result2 = supportSpanColumnPositions([0, 3000], clAlongs2, () => true);
+  assert.deepEqual(result2, [{ along: 1700, kind: 'center' }], 'centerが1件でもあればbelowは見ない');
+});
+
+test('【失敗系】supportSpanColumnPositions（裁定）: 下階の柱位置が実行可能範囲外なら使わず、910グリッドへフォールバックする', () => {
+  // span=3640・窓=[1820,1820]（1点）。below候補が窓外(1000)なら使われず910グリッド(1820)になる。
+  const result = supportSpanColumnPositions([0, 3640], [{ along: 1000, priority: 'below' }], () => true);
+  assert.deepEqual(result, [{ along: 1820, kind: 'grid' }]);
+});
+
 // ================================================================
 // mergePrimaryBeamRuns（QA裁定2026-09-19・Major-1）: role:'primary'の区間を同軸でrunへ束ね直す。
 // floor等は素通し。3iの収束先が階の処理順に依存する不具合の是正（下階柱による分割点を「梁端」から
@@ -1018,4 +1098,105 @@ test('【失敗系】mergePrimaryBeamRuns: 非数混入・null/undefined要素�
     { isVertical: true, coord: 0, lo: NaN, hi: 100, role: 'primary' },
     { isVertical: true, coord: 0, lo: 0, hi: 100, role: 'primary' },
   ]), [{ isVertical: true, coord: 0, lo: 0, hi: 100, role: 'primary' }]);
+});
+
+// ---- wallRunFreeEnds（F-1・F-2。2026-09-19裁定「壁の自由端には柱を立てる／梁を伸ばす」） ----
+
+test('wallRunFreeEnds: L字（縦壁×横壁が1点で交わる）は交点でない側の2端だけが自由端', () => {
+  const segments = [
+    { isVertical: true, coord: 0, lo: 0, hi: 1000 },      // 縦壁 x=0, y:0..1000
+    { isVertical: false, coord: 1000, lo: 0, hi: 500 },   // 横壁 y=1000, x:0..500
+  ];
+  const ends = wallRunFreeEnds(segments);
+  const key = e => `${e.isVertical}:${e.x}:${e.y}`;
+  assert.deepEqual(new Set(ends.map(key)), new Set(['true:0:0', 'false:500:1000']), '交点(0,1000)は自由端でない');
+});
+
+test('wallRunFreeEnds: コの字（3辺、下端が開放）は開放された2端だけが自由端', () => {
+  const segments = [
+    { isVertical: false, coord: 2000, lo: 0, hi: 3640 },  // 横壁 y=2000, x:0..3640
+    { isVertical: true, coord: 0,    lo: 0, hi: 2000 },   // 縦壁 x=0, y:0..2000
+    { isVertical: true, coord: 3640, lo: 0, hi: 2000 },   // 縦壁 x=3640, y:0..2000
+  ];
+  const ends = wallRunFreeEnds(segments);
+  const key = e => `${e.isVertical}:${e.x}:${e.y}`;
+  assert.deepEqual(new Set(ends.map(key)), new Set(['true:0:0', 'true:3640:0']),
+    '上端2つはT字（横壁と交わる）で自由端でない。下端2つ(0,0)(3640,0)だけが自由端');
+});
+
+test('wallRunFreeEnds: 閉じた矩形（4辺すべて交点）は自由端0', () => {
+  const segments = [
+    { isVertical: false, coord: 0,    lo: 0, hi: 1000 },
+    { isVertical: false, coord: 1000, lo: 0, hi: 1000 },
+    { isVertical: true, coord: 0,    lo: 0, hi: 1000 },
+    { isVertical: true, coord: 1000, lo: 0, hi: 1000 },
+  ];
+  assert.deepEqual(wallRunFreeEnds(segments), []);
+});
+
+test('wallRunFreeEnds: T字（連続runの端は直交壁で塞がれた交点、runの反対側の端だけが自由端）', () => {
+  const segments = [
+    { isVertical: false, coord: 0, lo: 0, hi: 2000 },  // 横壁 y=0, x:0..2000（通し）
+    { isVertical: true, coord: 1000, lo: 0, hi: 1000 }, // 縦壁 x=1000, y:0..1000（横壁の途中からT字で下りる）
+  ];
+  const ends = wallRunFreeEnds(segments);
+  const key = e => `${e.isVertical}:${e.x}:${e.y}`;
+  // 横壁runの両端(0,0)(2000,0)はどちらも直交壁が無い純物理端——横壁は縦壁とT字交差するだけで、
+  // 縦壁の位置(x=1000)は横壁runの内部であり端ではない。縦壁の下端(1000,1000)も自由端。
+  assert.deepEqual(new Set(ends.map(key)), new Set(['false:0:0', 'false:2000:0', 'true:1000:1000']));
+});
+
+test('wallRunFreeEnds: WALL_JUNCTION_TOL_MM以内の取り合い（隅の控え）は自由端でない', () => {
+  const segments = [
+    { isVertical: true, coord: 0, lo: 0, hi: 1000 },
+    { isVertical: false, coord: 1000 - 100, lo: 57.5, hi: 500 }, // 横壁の交点側の端が57.5だけ控えている
+  ];
+  const ends = wallRunFreeEnds(segments);
+  const key = e => `${e.isVertical}:${e.x}:${e.y}`;
+  // 縦壁の上端(0,1000)は控え分(tol=150以内)で横壁と取り合うとみなし自由端でない。
+  assert.deepEqual(new Set(ends.map(key)), new Set(['true:0:0', 'false:500:900']));
+});
+
+test('【失敗系】wallRunFreeEnds: 非数混入・null/undefined要素・空/未指定入力は無視して例外を投げない', () => {
+  assert.deepEqual(wallRunFreeEnds([]), []);
+  assert.deepEqual(wallRunFreeEnds(undefined), []);
+  assert.deepEqual(wallRunFreeEnds(null), []);
+  assert.doesNotThrow(() => wallRunFreeEnds([
+    null, undefined,
+    { isVertical: true, coord: NaN, lo: 0, hi: 100 },
+    { isVertical: true, coord: 0, lo: NaN, hi: 100 },
+  ]));
+});
+
+// ---- F-1×F-3是正（2026-09-19裁定）: 自由端の点は物理端ではなく設計上の端（designLo/designHi） ----
+// 壁の再生成でprotrusion（自由端の柱包み分のはね出し。0↔wallBase/2+wallFinish）が変わっても、
+// 柱・梁のアンカーに使う自由端の座標（along/x/y）は不変であること——F-3（壁の自由端延長）の
+// 有無に関わらず柱位置が動かない、という不変条件をここで固定する。
+test('wallRunFreeEnds（F-1×F-3是正）: designLo/designHiがあれば自由端の点は設計上の端を返し、protrusionの有無で変わらない', () => {
+  // L字: 縦壁 x=0(y:0..1000)、横壁 y=1000(x:0..500)。自由端は(0,0)・(500,1000)。
+  // protrusion無し（設計値＝物理値。従来のflush相当）。
+  const flush = [
+    { isVertical: true, coord: 0, lo: 0, hi: 1000, designLo: 0, designHi: 1000 },
+    { isVertical: false, coord: 1000, lo: 0, hi: 500, designLo: 0, designHi: 500 },
+  ];
+  // protrusion有り（F-3。自由端側の物理端が72.5だけ外側へ伸びるが設計値は変わらない）。
+  // 縦壁の自由端(0,0)側: 物理lo=-72.5、designLo=0のまま。横壁の自由端(500,1000)側: 物理hi=572.5、designHi=500のまま。
+  const extended = [
+    { isVertical: true, coord: 0, lo: -72.5, hi: 1000, designLo: 0, designHi: 1000 },
+    { isVertical: false, coord: 1000, lo: 0, hi: 572.5, designLo: 0, designHi: 500 },
+  ];
+  const keyOf = (fe) => `${fe.isVertical}:${fe.x}:${fe.y}`;
+  const flushEnds = wallRunFreeEnds(flush).map(keyOf).sort();
+  const extendedEnds = wallRunFreeEnds(extended).map(keyOf).sort();
+  assert.deepEqual(flushEnds, ['false:500:1000', 'true:0:0']);
+  assert.deepEqual(extendedEnds, flushEnds, '壁の再生成でprotrusionが0↔72.5に変わっても自由端の点（設計上の端）は不変');
+});
+
+test('【失敗系】wallRunFreeEnds（F-1×F-3是正）: designLo/designHiが無いsegmentは従来どおり物理端をそのまま返す（後方互換）', () => {
+  const noDesign = [
+    { isVertical: true, coord: 0, lo: -72.5, hi: 1000 },
+    { isVertical: false, coord: 1000, lo: 0, hi: 572.5 },
+  ];
+  const ends = wallRunFreeEnds(noDesign).map(fe => `${fe.isVertical}:${fe.x}:${fe.y}`).sort();
+  assert.deepEqual(ends, ['false:572.5:1000', 'true:0:-72.5'], 'design値が無ければ物理端のまま（既存呼び出し元との後方互換）');
 });

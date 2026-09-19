@@ -7,6 +7,7 @@ import {
   collectWallBeamSources, autoFillWallBeamAxes, isTraditionalWoodStructure,
   wallBackingCenters, mapBackingCenterMoves, findWallBeamAxisCL, wallBeamAxisExcludeKey, peekBelowGraph,
   selfWallSegments, columnSeedBeamSegments, stairOpeningRuns, wallRunSegments,
+  peekRoofBelowGraph, peekRoofGraphAbove,
 } from './wallBeamAxes.js';
 import { RC_WALL_BACKING_CODES } from '../finish/materials/backingClass.js';
 import { MATERIALS } from '../finish/materials/materialData.js';
@@ -273,6 +274,58 @@ test('peekBelowGraph: belowPlaneOf＋floorSwapManager.peekの合成。1つ下の
   } finally {
     floorSwapManager.peek = originalPeek;
   }
+});
+
+// ---- 小屋伏図にも梁・柱ルールを適用する計画（ステップ4）: peekRoofBelowGraph / peekRoofGraphAbove ----
+function makeRoofPlane(id, roofForPlaneId) {
+  return new Plane(id, 6000, `${id}`, 1, 1, false, null, 0, true, roofForPlaneId);
+}
+
+test('peekRoofBelowGraph: 屋根専用平面のroofForPlaneIdが指す実体階（project.planes基準）をpeekする', async () => {
+  const { graph: topGraph } = makeGridGraph('p2', 3000);
+  const roofGraph = new PlanGraph(makeRoofPlane('roof1', 'p2'));
+  const project = { planes: [topGraph.plane], structGraph: {} };
+  const originalPeek = floorSwapManager.peek;
+  floorSwapManager.peek = async (plane) => (plane.id === topGraph.plane.id ? topGraph : null);
+  try {
+    assert.equal(await peekRoofBelowGraph(roofGraph, project), topGraph);
+  } finally {
+    floorSwapManager.peek = originalPeek;
+  }
+});
+
+test('peekRoofBelowGraph: 屋根専用平面でなければnull（通常階はpeekBelowGraphを使う）', async () => {
+  const { graph: selfGraph } = makeGridGraph('p2', 3000);
+  const project = { planes: [selfGraph.plane], structGraph: {} };
+  assert.equal(await peekRoofBelowGraph(selfGraph, project), null);
+});
+
+test('peekRoofBelowGraph: roofForPlaneIdの実体階がproject.planes（採用フロア）に見つからなければnull（防御）', async () => {
+  const roofGraph = new PlanGraph(makeRoofPlane('roof1', 'missing'));
+  const project = { planes: [], structGraph: {} };
+  assert.equal(await peekRoofBelowGraph(roofGraph, project), null);
+});
+
+test('peekRoofGraphAbove: graphが屋根専用平面の直下の実体階（roofForPlaneId一致）のとき、その屋根専用平面をpeekする', async () => {
+  const { graph: topGraph } = makeGridGraph('p2', 3000);
+  const roofPlane = makeRoofPlane('roof1', 'p2');
+  const roofGraph = new PlanGraph(roofPlane);
+  const project = { roofPlane, structGraph: {} };
+  const originalPeek = floorSwapManager.peek;
+  floorSwapManager.peek = async (plane) => (plane.id === roofPlane.id ? roofGraph : null);
+  try {
+    assert.equal(await peekRoofGraphAbove(topGraph, project), roofGraph);
+  } finally {
+    floorSwapManager.peek = originalPeek;
+  }
+});
+
+test('peekRoofGraphAbove: graphが最上階でない（roofForPlaneId不一致）・屋根専用平面が無ければnull', async () => {
+  const { graph: notTopGraph } = makeGridGraph('p1', 0);
+  const { graph: topGraph } = makeGridGraph('p2', 3000);
+  const roofPlane = makeRoofPlane('roof1', 'p2');
+  assert.equal(await peekRoofGraphAbove(notTopGraph, { roofPlane, structGraph: {} }), null, '最上階でなければnull');
+  assert.equal(await peekRoofGraphAbove(topGraph, { roofPlane: null, structGraph: {} }), null, '屋根専用平面が無ければnull');
 });
 
 test('collectWallBeamSources: RC造は1つ下の実体階を対象にしない（自階のみ。要求どおり）', async () => {

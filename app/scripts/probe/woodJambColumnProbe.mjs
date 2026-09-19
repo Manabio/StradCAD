@@ -15,8 +15,9 @@ import { floorSwapManager } from '../../src/storage/FloorSwapManager.js';
 import { recomputeStructuralForGraph } from '../../src/structural/structuralRecompute.js';
 import { isTraditionalWoodStructure, effectiveStructure, rulesFor } from '../../src/structural/structureRules.js';
 import { buildStructuralWallGate } from '../../src/structural/wallGate.js';
-import { wallRunSegments, columnSeedBeamSegments, peekBelowGraph, peekAboveGraph } from '../../src/structural/wallBeamAxes.js';
+import { wallRunSegments, columnSeedBeamSegments, peekBelowGraph, peekAboveGraph, peekRoofGraphAbove } from '../../src/structural/wallBeamAxes.js';
 import { autoFillWoodColumns } from '../../src/structural/woodAutoFill.js';
+import { sweepUntilConverged, productionSweepPlanes, roofMainStructure } from './sweepOrder.mjs';
 
 const src = process.argv[2] ?? 'D:/tatsuya/Download/moku4.stq';
 const { project } = loadDocument(src);
@@ -31,18 +32,13 @@ console.log('主構造:', project.structuralInfo.mainStructure);
 // 改定。woodTieBeamProbe.mjsと同じ根拠——3h-2の点源に床梁を加えたことで3階またぎの連鎖が成立し、
 // 1スイープでは1段ずつしか伝播しない。本probeは元々MAX_SWEEPS自体を上限として直接OK判定に使って
 // いた＝実測sweep4でちょうど通るだけの余裕ゼロだったため、超過を検知できるよう5へ引き上げる）。
+// 【小屋伏図にも梁・柱ルールを適用する計画のステップ7・R-5是正】本番の反映パス
+// （reflectStructuralToOtherFloors）と同じ並び（在来なら降順・屋根が先頭）で回す（sweepOrder.mjs）。
+// 袖柱自体は屋根に生成されない（isRoofは柱の立つ階ではないため対象外）が、収束判定・スイープ回数は
+// 屋根込みの本番順で行う必要がある。
 const MAX_SWEEPS = 5;
-let convergedAt = null;
-for (let i = 1; i <= MAX_SWEEPS; i++) {
-  const changedPlanes = [];
-  for (const p of project.planes) {
-    const g = project.graphMap.get(p.id);
-    const { changed } = await recomputeStructuralForGraph(g, project, g.structureOverride ?? project.structuralInfo.mainStructure);
-    if (changed) changedPlanes.push(p.name);
-  }
-  console.log(`sweep${i}: changed=[${changedPlanes.join(',')}]`);
-  if (changedPlanes.length === 0) { convergedAt = i; break; }
-}
+const convergedAt = await sweepUntilConverged(project, 'desc', MAX_SWEEPS,
+  (i, changedPlanes) => console.log(`sweep${i}: changed=[${changedPlanes.join(',')}]`));
 if (convergedAt == null) {
   console.log(`NG: 収束しない（sweep${MAX_SWEEPS}までchangedの階がある）`);
   process.exitCode = 1;
@@ -64,14 +60,19 @@ for (const p of project.planes) {
   let jambSkipped = [];
   if (isWood) {
     // 実アプリ（structuralRecompute.js）と同じ引数の組み立て。収束済みのため冪等呼び直し。
+    // R-5是正: 最上階（peekAboveGraphが対象外）は直上の屋根専用平面をpeekRoofGraphAboveで
+    // フォールバックする——structuralRecompute.jsのaboveGraph解決と同じ式（省くと最上階の
+    // 3h-2（屋根由来）を診断が見落とし、収束済みのはずの呼び直しでcreated/removedが0でなくなる）。
     const belowGraph = await peekBelowGraph(g, project);
-    const aboveGraph = await peekAboveGraph(g, project);
+    const aboveGraph = (await peekAboveGraph(g, project)) ?? (await peekRoofGraphAbove(g, project));
     const wallGate = await buildStructuralWallGate(g.plane, project, g);
     const wallSegments = wallRunSegments(g, belowGraph, structure);
     const aboveColumns = aboveGraph?.columns ?? [];
     const ownRules = rulesFor(structure);
     const aboveBeamSegments = columnSeedBeamSegments(aboveGraph, aboveGraph ? rulesFor(effectiveStructure(aboveGraph, project)) : ownRules);
-    const result = autoFillWoodColumns(g, project, wallGate, aboveColumns, wallSegments, aboveBeamSegments);
+    // 裁定（2026-09-19）: 3iのbelow優先候補（belowColumns）も本番と同じ入力で渡す
+    // ——省くと収束済みのはずのgraphに対しcreated/removedが0でなくなる誤検知が出る。
+    const result = autoFillWoodColumns(g, project, wallGate, aboveColumns, wallSegments, aboveBeamSegments, belowGraph?.columns ?? []);
     jambSkipped = result.jambSkipped ?? [];
     if (result.created.length !== 0 || result.removed.length !== 0) {
       console.log(`NG（${p.name}）: 診断のための呼び直しでcreated/removedが空でない（収束していない）: created=${result.created.length} removed=${result.removed.length}`);
@@ -102,11 +103,13 @@ if (nonWoodWithJambs > 0) {
   process.exitCode = 1;
 }
 
-// 冪等性の再確認: もう一度全階回しても袖柱本数が変わらないこと（作って→撤去のチャーンが無いこと）。
+// 冪等性の再確認: もう一度全階（＋屋根、在来のときだけ）回しても袖柱本数が変わらないこと
+// （作って→撤去のチャーンが無いこと。R-5是正）。
 const before = totalJambs;
-for (const p of project.planes) {
+for (const p of productionSweepPlanes(project)) {
   const g = project.graphMap.get(p.id);
-  await recomputeStructuralForGraph(g, project, g.structureOverride ?? project.structuralInfo.mainStructure);
+  const mainStructureForP = p.isRoofPlane ? roofMainStructure(project) : (g.structureOverride ?? project.structuralInfo.mainStructure);
+  await recomputeStructuralForGraph(g, project, mainStructureForP);
 }
 let after = 0;
 for (const p of project.planes) after += project.graphMap.get(p.id).columns.filter(c => c.woodJambRef).length;
