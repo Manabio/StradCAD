@@ -5,7 +5,7 @@
 // これらの関数を必要とするケースがある）。snap.js は本モジュールを import して同名を再エクスポートし、
 // 既存の import 元（App.jsx・CenterLinesLayer.jsx 等）を壊さない。
 import { CenterLineType, DimensionKind, DimensionSide, centerLineKind } from './core.js';
-import { isMoveSnapTarget, sameDirectionObstacles } from './core/centerLineKindPolicy.js';
+import { isMoveSnapTarget, sameDirectionObstacles, spansEntireAxis } from './core/centerLineKindPolicy.js';
 
 // 中心線の端のはね出し量 (mm)。区分線形:
 //   denom <  BASE_DENOM         : (LOW_DENOM, LOW_MM) → (BASE_DENOM, BASE_MM) の直線
@@ -107,6 +107,78 @@ export function findBeamAxisMoveSnap(graph, movingCL, wx, wy, thresholdPx, scale
 }
 
 // ----------------------------------------------------------------
+// CLのポインタヒット判定（線上・端点）。
+// spatialIndex/store に依存しない純関数のため snap.js から分離（ファイル冒頭コメント参照）。
+// ----------------------------------------------------------------
+
+/**
+ * カーソルに最も近い中心線を返す。
+ * VERTICAL  → X 方向スクリーン距離
+ * HORIZONTAL → Y 方向スクリーン距離
+ * viewport を渡すと、ラベルなしCLの描画範囲（オーバーハング込み）外を除外する。
+ * kindFilter(centerLineKind(cl)) が true の種別だけを対象にする（既定は梁芯を除外＝非構造モード用。
+ * 構造モードの呼び出し元は `k => k === 'beam'` を渡し、梁芯だけをヒットテスト対象にする——
+ * 「通り芯上でマウスが反応しない」既存仕様は維持しつつ、梁芯だけは選択・削除・延長/短縮できるようにする
+ * ため appMode で無条件 null にせず kindFilter で絞る（interaction/usePointerInteraction.js updateSnap 参照）。
+ * 呼び出し元 snap.js resolvePointerTargets は kindFilter を centerLineKindPolicy.hitTestKinds(appMode)
+ * から導出する（k => hitTestKinds(appMode).includes(k)）。
+ */
+export function findNearestCenterLine(graph, wx, wy, thresholdPx, scaleX, scaleY, viewport = null, kindFilter = k => k !== 'beam') {
+  if (!graph) return null;
+  let nearest = null, minDist = Infinity;
+  for (const cl of graph.centerLines) {
+    if (!kindFilter(centerLineKind(cl))) continue;
+    const isV  = cl.centerLineType === CenterLineType.VERTICAL;
+    const isH  = cl.centerLineType === CenterLineType.HORIZONTAL;
+    const dist = isV ? Math.abs(cl.value - wx) * scaleX
+               : isH ? Math.abs(cl.value - wy) * scaleY
+               : Infinity;
+    if (dist >= thresholdPx || dist >= minDist) continue;
+    // ラベルなしCL: extentLo/Hi が設定されていれば描画範囲（オーバーハング込み）外を除外
+    if (!cl.labeled && cl.extentLo != null && cl.extentHi != null) {
+      const along    = isV ? wy : wx;
+      const overhang = viewport ? overhangMm(viewport, cl.trim) : 0;
+      if (along < cl.extentLo - overhang || along > cl.extentHi + overhang) continue;
+    }
+    minDist = dist;
+    nearest = cl;
+  }
+  return nearest;
+}
+
+/**
+ * 長押し位置に近接する中心線（ラベルなし）を参照元候補として返す。
+ * - clType を渡すと同種CLのみ（線分追加）。null なら垂直/水平両方（壁追加）。
+ * - はね出し（オーバーハング）部分は除外: 沿線座標が実範囲 [extentLo, extentHi] 内のCLのみ。
+ * - スクリーン距離が近い順にソート。
+ * 呼び出し元 App.jsx handleMenuSelect は、戻り値をさらに centerLineKindPolicy.hitTestKinds(appMode)
+ * で絞る（本関数自体は種別を問わず「ラベルなし＝非通り芯」全部を対象にする。ファイル冒頭コメント・
+ * core/centerLineKindPolicy.js の既知の乖離節も参照——本関数の `cl.labeled` 除外は種別条件の無い
+ * 「labeled以外＝aux/center/beam全部」の除外で、本ステップの移行対象外）。
+ */
+export function findNearbyCenterLines(graph, wx, wy, thresholdPx, scaleX, scaleY, clType = null) {
+  if (!graph) return [];
+  const hits = [];
+  for (const cl of graph.centerLines) {
+    if (cl.labeled) continue;
+    const isV = cl.centerLineType === CenterLineType.VERTICAL;
+    const isH = cl.centerLineType === CenterLineType.HORIZONTAL;
+    if (!isV && !isH) continue;
+    if (clType && cl.centerLineType !== clType) continue;
+    const scale = isV ? scaleX : scaleY;
+    const perp  = isV ? wx : wy;  // 線に垂直な座標
+    const along = isV ? wy : wx;  // 線に沿った座標
+    const dist  = Math.abs(cl.value - perp) * scale;
+    if (dist >= thresholdPx) continue;
+    // はね出し除外: 沿線座標が実範囲外なら候補から外す
+    if (cl.extentLo != null && cl.extentHi != null &&
+        (along < cl.extentLo || along > cl.extentHi)) continue;
+    hits.push({ cl, dist });
+  }
+  return hits.sort((a, b) => a.dist - b.dist).map(h => h.cl);
+}
+
+// ----------------------------------------------------------------
 // CENTER寸法（中心線寸法）「到達」判定・非ラベルCLの描画延伸範囲。
 // renderer/CenterLinesLayer.jsx の clExtent（非labeled分岐）と renderer/GutterLayer.jsx の
 // buildRowAnchors（centerBoundary到達判定）が使う純ロジックをここへ集約する。
@@ -164,15 +236,23 @@ export function clSideReachesCenterBoundary(cl, side, graph, viewport) {
  *   2) 外寸法側のはね出し線分上（extent〜突端。clSideReachesCenterBoundary が true の側のみ）——
  *      垂直距離判定は findNearestCenterLine の線上ヒットと同じ式。到達していない側・extent内側の
  *      線上ヒットは変更しない（findNearestCenterLine 側の挙動のまま）。
- * 通り芯（labeled:true）・RADIAL・extentLo/Hi未確定のCLは対象外。kindFilterは findNearestCenterLine
- * と同じ規約（既定は梁芯を除外、構造モードは `k => k === 'beam'` で梁芯だけに絞る）。
+ * 通り芯・RADIAL・extentLo/Hi未確定のCLは対象外。通り芯の除外は種別ベース
+ * （centerLineKindPolicy.spansEntireAxis。通り芯は常に全軸に及び「延長/短縮する端」という概念自体を
+ * 持たないため——FULL_SPAN_KINDS=['struct']）——2026-09-20移行前は生の `cl.labeled` を見ていたが、
+ * 通常経路で作られるCLは labeled と種別が必ず一致する（通り芯のみ labeled:true）ため実害は無い。
+ * 既知の乖離（旧データ限定）: `{labeled:true, discipline:'arch'}` のような旧データ（centerLineKindは
+ * 'center'）は、移行前は `cl.labeled` により対象外だったが、移行後は種別ベースのため対象になりうる
+ * （centerLineKindPolicy.test.js／snapGeometry.test.js の該当ピン留めテスト参照）。
+ * kindFilterは findNearestCenterLine と同じ規約（既定は梁芯を除外、構造モードは `k => k === 'beam'` で
+ * 梁芯だけに絞る。呼び出し元 snap.js resolvePointerTargets は centerLineKindPolicy.hitTestKinds(appMode)
+ * から導出する）。
  * @returns {{cl, side:'lo'|'hi'}|null}
  */
 export function findNearestCenterLineEndpoint(graph, wx, wy, thresholdPx, scaleX, scaleY, viewport, kindFilter = k => k !== 'beam') {
   if (!graph) return null;
   let nearest = null, minDist = Infinity;
   for (const cl of graph.centerLines) {
-    if (cl.labeled || !kindFilter(centerLineKind(cl))) continue;
+    if (spansEntireAxis(centerLineKind(cl)) || !kindFilter(centerLineKind(cl))) continue;
     const isV = cl.centerLineType === CenterLineType.VERTICAL;
     const isH = cl.centerLineType === CenterLineType.HORIZONTAL;
     if (!isV && !isH) continue;

@@ -18,11 +18,11 @@ import { PlanGraph } from './planGraph.js';
 import {
   CL_KINDS, APP_MODES, VISIBLE_KINDS_BY_MODE, HIT_EXCLUDED_KINDS_BY_MODE, COEXISTENCE,
   ORTHO_ANCHOR_OVERRIDE, WALL_ANCHOR_KINDS, EXTENT_ANCHOR_STYLE, ENDPOINT_RULE_KINDS, FULL_SPAN_KINDS,
-  CONVERT_BLOCKING_KINDS, CROSS_FLOOR_COUNTERPART_KINDS,
+  CONVERT_BLOCKING_KINDS, CROSS_FLOOR_COUNTERPART_KINDS, OPENING_BOUNDARY_KINDS,
   kindsVisibleIn, hitTestKinds, kindsVisibleWith, orthoAnchorKinds, sameDirectionObstacleKinds,
   moveSnapTargetKinds,
   coexistenceAt, convertBlockingKinds, mergeableKinds, allowsWallAnchor, extentAnchorStyle,
-  hasEndpointRule, spansEntireAxis,
+  hasEndpointRule, spansEntireAxis, isOpeningBoundaryKind,
   isOrthoAnchorCandidate, isSameDirectionObstacle, isMoveSnapTarget, isMergeCandidate,
   isRenderTarget, isHitTestTarget,
   coversAlongAxis, orthoAnchorCandidates, orthoAnchorCandidatesForNew, sameDirectionObstacles,
@@ -151,6 +151,11 @@ test('【不変条件】原始事実の表（VISIBLE_KINDS_BY_MODE・COEXISTENCE
   assert.ok(Object.isFrozen(CROSS_FLOOR_COUNTERPART_KINDS));
   assert.ok(Object.isFrozen(CL_KINDS));
   assert.ok(Object.isFrozen(APP_MODES));
+  assert.ok(Object.isFrozen(OPENING_BOUNDARY_KINDS));
+});
+
+test('OPENING_BOUNDARY_KINDS: 建具がまたげない境界種別は通り芯・中心線（補助線・梁芯はまたげる）', () => {
+  assert.deepEqual([...OPENING_BOUNDARY_KINDS], ['struct', 'center']);
 });
 
 // ================================================================
@@ -224,20 +229,22 @@ test('hitTestKinds: floorplan/finish/opening=通り芯・中心線・補助線�
   assert.deepEqual(hitTestKinds('finish'), ['struct', 'center', 'aux']);
   assert.deepEqual(hitTestKinds('opening'), ['struct', 'center', 'aux']);
   assert.deepEqual(hitTestKinds('structure'), ['beam']);
-  // site/elevation は可視モード表が空集合のため hitTestKinds も空になるが、現行 snap.js の
-  // clKindFilter（appMode==='structure'以外は一律「梁芯以外」を対象にする）は site/elevation を
-  // 特別扱いしていない——つまり現行 snap.js は「描画されないCLでもヒット対象になりうる」実装
-  // であり、この関数（可視モード表ベース）の予測とは食い違う。site/elevationで実際に
-  // resolvePointerTargets が呼ばれる経路があるかは未確認のまま残る（未裁定）。
+  // site/elevation は可視モード表が空集合のため hitTestKinds も空になる。snap.js
+  // resolvePointerTargets の clKindFilter はステップ6（2026-09-20）で hitTestKinds(appMode) 経由へ
+  // 移行済み——唯一の呼び出し元 usePointerInteraction.js updateSnap の到達可能性を確認済みのため
+  // （site はホイールズーム経由でのみ到達し結果は未使用、elevation は到達経路自体が無い。
+  // core/centerLineKindPolicy.js HIT_EXCLUDED_KINDS_BY_MODE コメント参照）、可視モード表に揃えても
+  // ユーザーに見える挙動は変わらない（「未裁定」は解消）。
   assert.deepEqual(hitTestKinds('site'), []);
   assert.deepEqual(hitTestKinds('elevation'), []);
 });
 
-test('allowsWallAnchor / extentAnchorStyle / hasEndpointRule / spansEntireAxis', () => {
+test('allowsWallAnchor / extentAnchorStyle / hasEndpointRule / spansEntireAxis / isOpeningBoundaryKind', () => {
   assert.deepEqual(CL_KINDS.map(allowsWallAnchor), [false, false, true, false]); // struct,center,aux,beam
   assert.deepEqual(CL_KINDS.map(extentAnchorStyle), ['none', 'ref', 'overhang', 'ref']);
   assert.deepEqual(CL_KINDS.map(hasEndpointRule), [false, true, false, true]);
   assert.deepEqual(CL_KINDS.map(spansEntireAxis), [true, false, false, false]);
+  assert.deepEqual(CL_KINDS.map(isOpeningBoundaryKind), [true, true, false, false]);
 });
 
 // ---- B1: CLレベルAPIの肯定側（骨抜き＝常に false/true 固定でも通ってしまう穴を塞ぐ）----
@@ -491,6 +498,28 @@ test('isRenderTarget / isHitTestTarget: 4種別×6appModeの全組み合わせ�
       assert.equal(isHitTestTarget(cl, mode), hitTestKinds(mode).includes(kind), `isHitTestTarget ${kind}×${mode}`);
     }
   }
+});
+
+// ---- renderer/CenterLinesLayer.jsx の描画可否移行（labeledベース→種別ベース）で反転した
+// 旧データ限定ピン留め（QA指摘Major2）。移行前は `!cl.labeled && cl.discipline===ARCH` で判定して
+// おり、labeled:trueだが種別がcenter/auxの旧データは構造モードでも除外されず描画されていた。
+// isRenderTargetは種別（centerLineKind）のみで判定するため、この種の旧データは構造モードで
+// 描画対象外になる（floorplan/finish/openingは旧コードもlabeledを見ておらず変化なし）。
+
+test('【旧データ限定・種別ベースへ統一】isRenderTarget: {labeled:true, discipline:ARCH}（種別 center）は構造モードで描画対象外（移行前は描画されていた）', () => {
+  const { graph } = makeProjectWithGraph();
+  const legacy = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: true, discipline: Discipline.ARCH });
+  assert.equal(centerLineKind(legacy), 'center', '前提: discipline=ARCHなのでcenter種別（labeled:trueだが種別は通り芯でない旧データ）');
+  assert.equal(isRenderTarget(legacy, 'structure'), false, '移行後は種別ベースのため構造モードでは描画対象外（移行前は isArchCL=!cl.labeled&&... がfalseになり描画されていた）');
+  assert.equal(isRenderTarget(legacy, 'floorplan'), true, 'floorplanは旧コードも種別ベース相当のため変化なし');
+});
+
+test('【旧データ限定・種別ベースへ統一】isRenderTarget: {labeled:true, lineType:dashed}（種別 aux）は構造モードで描画対象外（移行前は描画されていた）', () => {
+  const { graph } = makeProjectWithGraph();
+  const legacy = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: true, lineType: 'dashed' });
+  assert.equal(centerLineKind(legacy), 'aux', '前提: lineType=dashedなのでaux種別（labeled:trueだが種別は通り芯でない旧データ）');
+  assert.equal(isRenderTarget(legacy, 'structure'), false, '移行後は種別ベースのため構造モードでは描画対象外（移行前は isArchCL=!cl.labeled&&... がfalseになり描画されていた）');
+  assert.equal(isRenderTarget(legacy, 'floorplan'), true, 'floorplanは旧コードも種別ベース相当のため変化なし');
 });
 
 // ================================================================
@@ -891,6 +920,88 @@ test('【裁定反映済み】addCenterLineFromDialog(kind:aux) の直交端部�
 });
 
 // ================================================================
+// C2. ステップ6（可視モード表への集約）: 製品コードの呼び出し形そのものの不変条件
+// renderer/CenterLinesLayer.jsx・snap.js resolvePointerTargets・App.jsx handleMenuSelect は
+// いずれも react-konva/store.js/.jsx 依存のため import して実行できない——「呼び出し側が
+// ポリシー関数を実際に呼んでいるか」は挙動（isRenderTarget/hitTestKinds自体の一致）だけでは
+// 検出できない（floorplan/finish/opening/structureでは旧インライン条件とポリシー関数が数学的に
+// 同値なため、呼び出しを丸ごと削って旧インライン条件に戻しても既存の機能テストは赤にならない
+// ——QA実測: 3箇所とも無効化してnpm testを実行し3336 pass/0 failのまま）。
+// ソーステキストを読んで「ポリシー関数を実際に呼んでいるか／旧インライン条件が残っていないか」を
+// 固定する（renderer/MemberTagLayer.invariants.test.js・wallRefresh.test.js の
+// runStructuralExitBoundary不変条件・本ファイル冒頭のAPP_MODES/CROSS_FLOOR_KIND_ORDER不変条件と
+// 同じ「ソースを読む」流儀）。
+// ================================================================
+
+// 関数本体を波括弧の対応数で抽出する（引数の分割代入 `opts = {}` の直後、`) {` の { から対応する }
+// まで——先頭の { だと引数側の分割代入を拾ってしまう。wallRefresh.test.js の
+// runStructuralExitBoundary不変条件と同じ抽出法）。
+function extractFunctionBody(src, startMarker) {
+  const startIdx = src.indexOf(startMarker);
+  if (startIdx < 0) return null;
+  const parenCloseIdx = src.indexOf(') {', startIdx);
+  const braceStart = src.indexOf('{', parenCloseIdx);
+  let depth = 0, i = braceStart;
+  for (; i < src.length; i++) {
+    if (src[i] === '{') depth++;
+    else if (src[i] === '}') { depth--; if (depth === 0) break; }
+  }
+  return src.slice(braceStart, i + 1);
+}
+
+// 行コメントを落とす（コメント中の旧パターンの記述を「コードが残っている」と誤検知しないため）。
+function stripLineComments(text) {
+  return text.split(/\r?\n/).map(line => line.replace(/\/\/.*$/, '')).join('\n');
+}
+
+test('【不変条件】renderer/CenterLinesLayer.jsx: 描画スキップが isRenderTarget(cl, appMode) 単独で、旧インライン条件（isArchCL・isBeamAxis&&appMode の形そのもの）が残っていない', () => {
+  const src = fs.readFileSync(path.resolve(import.meta.dirname, '../renderer/CenterLinesLayer.jsx'), 'utf8');
+  const code = stripLineComments(src);
+  assert.ok(/if\s*\(\s*!isRenderTarget\(cl,\s*appMode\)\s*\)\s*return null;/.test(code),
+    'isRenderTarget(cl, appMode) による早期returnが見つからない（描画スキップがポリシー関数から外れている疑い）');
+  // 禁止パターンはHEAD（移行前）に実在した旧条件の形そのものに絞る（QA指摘Minor A: appMode===/!=='structure'
+  // 単体を禁止すると無害な将来コード（例: 描画スタイル用のisStructMode変数）で偽陽性になる。
+  // `git show HEAD:app/src/renderer/CenterLinesLayer.jsx` で確認した旧コード:
+  //   const isArchCL = !cl.labeled && cl.discipline === Discipline.ARCH;
+  //   if (isArchCL && appMode === 'structure') return null;
+  //   const isBeamAxis = centerLineKind(cl) === 'beam';
+  //   if (isBeamAxis && appMode !== 'structure') return null;
+  // のうち、`isBeamAxis`単体は現行コードでも描画スタイル判定用に正当に残るため、`isBeamAxis`と
+  // `appMode`の組合せ式・`isArchCL`という識別子そのものに限定する）。
+  assert.ok(!/\bisArchCL\b/.test(code),
+    '旧インライン条件の識別子（isArchCL = !cl.labeled && cl.discipline === Discipline.ARCH）が残っている');
+  assert.ok(!/isBeamAxis\s*&&\s*appMode\s*!==\s*'structure'/.test(code),
+    '旧インライン条件（isBeamAxis && appMode !== \'structure\'）の組合せ式が残っている');
+  assert.ok(!/appMode\s*===\s*'structure'\s*\)\s*return null/.test(code),
+    '旧インライン条件（... && appMode === \'structure\') return null; の形）が残っている');
+});
+
+test('【不変条件】snap.js: resolvePointerTargets の CL 種別フィルタがポリシー（hitTestKinds / isHitTestTarget）から導出され、\'beam\' のインライン比較が無い', () => {
+  const src = fs.readFileSync(path.resolve(import.meta.dirname, '../snap.js'), 'utf8');
+  const body = extractFunctionBody(src, 'export function resolvePointerTargets(');
+  assert.ok(body, 'resolvePointerTargets が見つからない');
+  const code = stripLineComments(body);
+  assert.ok(/hitTestKinds\(appMode\)/.test(code) || /isHitTestTarget\(/.test(code),
+    'hitTestKinds(appMode)／isHitTestTarget(...) の呼び出しが見つからない（clKindFilterが旧インライン三項へ戻っている疑い）');
+  assert.ok(!/'beam'/.test(code),
+    "'beam' のインライン比較が残っている（旧条件 appMode==='structure'?k==='beam':k!=='beam' への回帰）");
+});
+
+test('【不変条件】App.jsx: CL追加メニューの参照候補がポリシー（isHitTestTarget / hitTestKinds）で絞られる', () => {
+  const src = fs.readFileSync(path.resolve(import.meta.dirname, '../App.jsx'), 'utf8');
+  const idx = src.indexOf('findNearbyCenterLines(');
+  assert.ok(idx >= 0, 'findNearbyCenterLines( の呼び出しが見つからない');
+  const code = stripLineComments(src.slice(idx, idx + 500));
+  assert.ok(
+    /\.filter\(cl\s*=>\s*isHitTestTarget\(cl,\s*appMode\)\)/.test(code) ||
+    /\.filter\(cl\s*=>\s*hitTestKinds\(appMode\)\.includes\(centerLineKind\(cl\)\)\)/.test(code),
+    'findNearbyCenterLines(...) の直後にポリシー（isHitTestTarget/hitTestKinds）由来のフィルタが見つからない'
+  );
+  assert.ok(!/appMode\s*===\s*'structure'\s*\?\s*centerLineKind\(cl\)\s*===\s*'beam'/.test(code),
+    '旧インライン三項（appMode===\'structure\'?kind===\'beam\':kind!==\'beam\'）が残っている');
+});
+
+// ================================================================
 // D. 失敗系
 // ================================================================
 
@@ -906,6 +1017,7 @@ test('【失敗系】未知のCL種別は throw する', () => {
   assert.throws(() => hasEndpointRule('wood'), /未知のCL種別: wood/);
   assert.throws(() => spansEntireAxis('wood'), /未知のCL種別: wood/);
   assert.throws(() => kindsVisibleWith('wood'), /未知のCL種別: wood/);
+  assert.throws(() => isOpeningBoundaryKind('wood'), /未知のCL種別: wood/);
 });
 
 test('【失敗系】未知・未指定の appMode は throw する', () => {

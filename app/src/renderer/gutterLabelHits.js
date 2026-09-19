@@ -181,6 +181,10 @@ export function centerLineCoord(d, boundary, viewport, areaBounds) {
 // と寸法行の出し分けを一致させ、非表示の線が寸法だけ出る食い違いを防ぐ。
 // 逆に構造モードでは意匠中心線（discipline:'arch'）を対象外にする——CenterLinesLayer が同モードで
 // 意匠CLの描画をスキップするのと対にする（非表示の線に寸法だけ出る食い違いを防ぐ、上と同じ理由の逆方向）。
+// core/centerLineKindPolicy.js VISIBLE_KINDS_BY_MODE（可視モード表）とは別に独立実装している値——
+// 結果的に「可視な種別のうち中心線/梁芯だけの部分集合（補助線を除く）」と一致するが、これは
+// CENTER寸法行という別の事実（isRenderTargetとは判定軸が異なる）のため意図的に統合していない。
+// 可視モード表（VISIBLE_KINDS_BY_MODE）を変更した場合はこちらの一致も崩れうるので見直すこと。
 export function isCenterDimensionTarget(cl, appMode) {
   if (cl.labeled || cl.lineType === 'dashed') return false;
   if (appMode === 'structure') return cl.discipline === Discipline.FUSE;

@@ -32,6 +32,10 @@
 
 import { CenterLineType, centerLineKind } from '../core.js';
 import { findHostWall, findOpeningsOnWall } from './openingGeometry.js';
+// isOpeningBoundaryKind／kindsVisibleIn: core/centerLineKindPolicy.js は ./centerLine.js・
+// ./constants.js のみに依存する純モジュール（import ゼロに近い規約）のため、ここから引いても
+// react-konva/store.js/snap.js/.jsx を静的に引かない、という本ファイル冒頭の規約は壊れない。
+import { isOpeningBoundaryKind, kindsVisibleIn } from '../core/centerLineKindPolicy.js';
 
 /**
  * 壁と直交し、壁を横切る（または壁面に届く）CLか。建具がまたげない境界（通り芯・中心線）の判定。
@@ -48,11 +52,23 @@ export function clCrossesWall(cl, wall) {
   return cl.extentLo <= hi && cl.extentHi >= lo;
 }
 
-/** 建具がまたげないCLか（通り芯・中心線。補助線・梁芯は対象外） */
+/**
+ * 建具がまたげないCLか（通り芯・中心線。補助線・梁芯は対象外）。
+ * core/centerLineKindPolicy.js OPENING_BOUNDARY_KINDS（原始事実7）経由——可視性
+ * （kindsVisibleIn等）とは別軸の独立事実のため専用の表を持つ（同ファイルの当該コメント参照）。
+ */
 function isBlockingKind(cl) {
-  const kind = centerLineKind(cl);
-  return kind === 'struct' || kind === 'center';
+  return isOpeningBoundaryKind(centerLineKind(cl));
 }
+
+// 建具スナップ対象の種別（openingSnapCandidatesで使う）: 平面系モード（floorplan/finish/opening）
+// で可視な種別と同じ（通り芯・中心線・補助線。梁芯は除外）。建具の移動はappModeを問わず同じ関数を
+// 通る（interaction/usePointerInteraction.js startOpeningDrag は floorplan/opening 起点にも展開図
+// ドラッグにも共通で使われ、本ファイルの関数はappModeを引数に取らない）ため、特定のappModeではなく
+// 「平面系で可視な種別」というmode非依存の固定集合として扱う——floorplan/finish/openingの
+// VISIBLE_KINDS_BY_MODEはいずれも同じ['struct','center','aux']（centerLineKindPolicy.test.jsで
+// 一致を検証済み）なので、代表として kindsVisibleIn('floorplan') を使う。
+const OPENING_SNAP_CL_KINDS = kindsVisibleIn('floorplan');
 
 /**
  * 境界（host と同じ軸CL・同じ向きで開口位置を含む全壁＝両室の壁・下地オーナー壁・仕上げ薄壁）の
@@ -176,7 +192,7 @@ export function openingSnapCandidates(wall, opening, graph, range) {
   const half = opening.width / 2;
   for (const cl of graph.centerLines) {
     if (cl.centerLineType !== crossType) continue;
-    if (centerLineKind(cl) === 'beam') continue;
+    if (!OPENING_SNAP_CL_KINDS.includes(centerLineKind(cl))) continue;
     const v = cl.value;
     push(v,        'cl-center', { cl });
     push(v + half, 'cl-edge',   { cl });

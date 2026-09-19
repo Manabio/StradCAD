@@ -6,11 +6,13 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   Plane, PlanGraph, CenterLineType, Discipline, DimensionKind, DimensionSide, HDimensionLine, VDimensionLine,
+  centerLineKind,
 } from './core.js';
 import {
-  findNearestCenterLineEndpoint, findBracketingCLs, nonLabeledClExtent, clSideReachesCenterBoundary,
-  findCLMoveSnap, findBeamAxisMoveSnap,
+  findNearestCenterLine, findNearestCenterLineEndpoint, findBracketingCLs, nonLabeledClExtent,
+  clSideReachesCenterBoundary, findCLMoveSnap, findBeamAxisMoveSnap,
 } from './snapGeometry.js';
+import { CL_KINDS, APP_MODES, hitTestKinds, spansEntireAxis } from './core/centerLineKindPolicy.js';
 
 function makeGraph() {
   const plane = new Plane('p1', 0, '1階', 1, 1);
@@ -165,6 +167,124 @@ test('findNearestCenterLineEndpoint: 直交通り芯が0本ならCENTER寸法の
   const tip = findNearestCenterLineEndpoint(graph, 1500, 3300, THRESHOLD_PX, SCALE, SCALE, VIEWPORT);
   assert.ok(tip, '突端8px円は到達可否に関わらず維持されるはず');
   assert.equal(tip.side, 'hi');
+});
+
+// ---- 通り芯の除外は種別ベース（centerLineKindPolicy.spansEntireAxis）2026-09-20移行 ----
+
+test('findNearestCenterLineEndpoint: 通り芯（struct）は labeled の値に関わらず種別ベースで除外される（種別ベース移行の確認）', () => {
+  const graph = makeGraph();
+  addCenterDimensionRows(graph);
+  graph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: true });
+  graph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: true });
+  // 通常は起き得ない構成（通り芯にextentLo/Hiは設定されない）だが、除外が cl.labeled ではなく
+  // 種別（centerLineKind==='struct'）で行われていることを確認するため、labeled:falseでも
+  // discipline:STRUCTならcenterLineKindは'struct'になる点を利用する（移行前のcl.labeled判定なら
+  // labeled:falseなのでヒットしてしまっていたはず）。
+  const cl = graph.addCenterLine(CenterLineType.VERTICAL, 1500, {
+    labeled: false, discipline: Discipline.STRUCT, extentLo: 0, extentHi: 3000,
+  });
+  assert.equal(centerLineKind(cl), 'struct', '前提: labeled:falseでもdiscipline:STRUCTならkindはstruct');
+  const hit = findNearestCenterLineEndpoint(graph, 1500, 3150, THRESHOLD_PX, SCALE, SCALE, VIEWPORT);
+  assert.equal(hit, null, '種別が通り芯なら labeled の値に関わらず端点ヒット対象外');
+});
+
+test('【旧データ限定・種別ベースへ統一】findNearestCenterLineEndpoint: labeled:trueでも種別が通り芯でないCL（{labeled:true, discipline:ARCH}）は端点ヒット対象になる', () => {
+  const graph = makeGraph();
+  addCenterDimensionRows(graph);
+  graph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: true });
+  graph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: true });
+  const legacy = graph.addCenterLine(CenterLineType.VERTICAL, 1500, {
+    labeled: true, discipline: Discipline.ARCH, extentLo: 0, extentHi: 3000,
+  });
+  assert.equal(centerLineKind(legacy), 'center', '前提: discipline=ARCHなのでcenter種別（labeled:trueだが種別は通り芯でない旧データ）');
+  // 移行前はcl.labeledで除外されヒットしなかったが、移行後は種別ベースのため通常のcenterと同様にヒットする。
+  const hit = findNearestCenterLineEndpoint(graph, 1500, 3150, THRESHOLD_PX, SCALE, SCALE, VIEWPORT);
+  assert.ok(hit, '移行後は種別ベースのため、旧データでも通常のcenterと同様に端点ヒットする');
+  assert.equal(hit.cl.id, legacy.id);
+  assert.equal(hit.side, 'hi');
+});
+
+// ---- ヒット可能種別の4種別×6モード突き合わせ（core/centerLineKindPolicy.js hitTestKinds）----
+// snap.js resolvePointerTargets の clKindFilter は hitTestKinds(appMode) から導出する
+// （k => hitTestKinds(appMode).includes(k)）。resolvePointerTargets自体はstore.js依存のため
+// node:testから呼べないが、findNearestCenterLine/findNearestCenterLineEndpointはこの形の
+// kindFilterをそのまま渡せる純関数のため、ここで4種別×6モードの全組合せを突き合わせる
+// （centerLineKindPolicy.test.jsのisRenderTarget/isHitTestTargetテストは述語そのものの一致を
+// 見るが、こちらは実際にkindFilterを渡した製品関数の戻り値が一致することを見る）。
+// 期待値はリテラル表で固定する（hitTestKinds(mode)を呼んで期待値を作る自己参照にしない——
+// hitTestKindsの元になるVISIBLE_KINDS_BY_MODE/HIT_EXCLUDED_KINDS_BY_MODEを壊す変異があっても、
+// 期待値側が一緒に動いてしまうと変異が赤にならない。QA指摘Minor5）。
+// この表は centerLineKindPolicy.test.js の『hitTestKinds: floorplan/finish/opening=...』テストが
+// 別途固定している値と同じ（book-keeping: 両テストが独立に同じ値をリテラルで持つ）。
+const HIT_TEST_KINDS_LITERAL = {
+  floorplan: ['struct', 'center', 'aux'],
+  finish:    ['struct', 'center', 'aux'],
+  opening:   ['struct', 'center', 'aux'],
+  structure: ['beam'],
+  site:      [],
+  elevation: [],
+};
+
+// リテラル表が実装（hitTestKinds）から乖離していないことの一回きりの確認（このテストだけは
+// hitTestKindsを呼ぶ——下の2本は変異検出のためリテラル表を直接使う。両者の目的は別）。
+test('HIT_TEST_KINDS_LITERAL: 実装（hitTestKinds）の値と一致する（このテストファイル内リテラル表のドリフト検知）', () => {
+  for (const mode of APP_MODES) assert.deepEqual(HIT_TEST_KINDS_LITERAL[mode], hitTestKinds(mode), `mode=${mode}`);
+});
+
+test('findNearestCenterLine: 4種別×6モードの拾われる/拾われないがリテラル表（HIT_TEST_KINDS_LITERAL）と一致する', () => {
+  const clProps = {
+    struct: { labeled: true,  discipline: Discipline.STRUCT },
+    center: { labeled: false, discipline: Discipline.ARCH },
+    aux:    { labeled: false, lineType: 'dashed' },
+    beam:   { labeled: false, discipline: Discipline.FUSE },
+  };
+  for (const kind of CL_KINDS) {
+    const graph = makeGraph();
+    const cl = graph.addCenterLine(CenterLineType.VERTICAL, 1000, clProps[kind]);
+    for (const mode of APP_MODES) {
+      // kindFilterは実装（hitTestKinds）から作る——snap.js resolvePointerTargetsが実際に渡す形と
+      // 同じにすることで、VISIBLE_KINDS_BY_MODE/HIT_EXCLUDED_KINDS_BY_MODEを壊す変異が
+      // 製品関数の戻り値（hit）に反映される。期待値だけをリテラル表と突き合わせる（Minor5）。
+      const kindFilter = k => hitTestKinds(mode).includes(k);
+      const hit = findNearestCenterLine(graph, 1000, 0, THRESHOLD_PX, SCALE, SCALE, null, kindFilter);
+      const expected = HIT_TEST_KINDS_LITERAL[mode].includes(kind);
+      assert.equal(!!hit, expected, `kind=${kind} mode=${mode}`);
+      if (expected) assert.equal(hit.id, cl.id, `kind=${kind} mode=${mode}`);
+    }
+  }
+});
+
+test('findNearestCenterLineEndpoint: 4種別×6モードの拾われる/拾われないがリテラル表（HIT_TEST_KINDS_LITERAL）∧非struct と一致する（通り芯はリテラル表に含まれてもspansEntireAxisで別途除外される）', () => {
+  const clProps = {
+    struct: { labeled: true,  discipline: Discipline.STRUCT, extentLo: 0, extentHi: 3000 },
+    center: { labeled: false, discipline: Discipline.ARCH,   extentLo: 0, extentHi: 3000 },
+    aux:    { labeled: false, lineType: 'dashed',             extentLo: 0, extentHi: 3000 },
+    beam:   { labeled: false, discipline: Discipline.FUSE,    extentLo: 0, extentHi: 3000 },
+  };
+  for (const kind of CL_KINDS) {
+    const graph = makeGraph();
+    addCenterDimensionRows(graph);
+    graph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: true });
+    graph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: true });
+    const cl = graph.addCenterLine(CenterLineType.VERTICAL, 1500, clProps[kind]);
+    for (const mode of APP_MODES) {
+      // kindFilterは実装（hitTestKinds）から作る（上のfindNearestCenterLineテストと同じ理由）。
+      const kindFilter = k => hitTestKinds(mode).includes(k);
+      // 突端8px円（extentHi+overhang=3300ちょうど）でヒット判定する。
+      const hit = findNearestCenterLineEndpoint(graph, 1500, 3300, THRESHOLD_PX, SCALE, SCALE, VIEWPORT, kindFilter);
+      // 通り芯除外（spansEntireAxis）はリテラル表とは別軸の判定（種別そのものの性質）なので、
+      // ここだけは実装（spansEntireAxis）を呼ぶ——`kind === 'struct'` と書いても等価だが、
+      // 「通り芯は常に全軸に及ぶため端点を持たない」という実装の意図をそのまま参照するため
+      // spansEntireAxis を使う（このテストの主眼はモード別可視集合のリテラル固定であり、
+      // spansEntireAxis自体の正しさは centerLineKindPolicy.test.js 側で別途検証済み）。
+      const expected = HIT_TEST_KINDS_LITERAL[mode].includes(kind) && !spansEntireAxis(kind);
+      assert.equal(!!hit, expected, `kind=${kind} mode=${mode}`);
+      if (expected) {
+        assert.equal(hit.cl.id, cl.id, `kind=${kind} mode=${mode}`);
+        assert.equal(hit.side, 'hi');
+      }
+    }
+  }
 });
 
 // ---- 既存関数（findBracketingCLs）の再エクスポートが壊れていないことの最小回帰 ----

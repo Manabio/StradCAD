@@ -96,6 +96,27 @@ test('openingMoveRange: 補助線（破線）・梁芯はまたげる（境界�
   assert.deepEqual(openingMoveRange(wall, o, graph), { min: 400, max: 2600 });
 });
 
+// ---- isBlockingKind の4種別横断突き合わせ（core/centerLineKindPolicy.js OPENING_BOUNDARY_KINDS 移行の確認）----
+const CL_KIND_PROPS = {
+  struct: { labeled: true,  discipline: Discipline.STRUCT },
+  center: { labeled: false, discipline: Discipline.ARCH },
+  aux:    { labeled: false, lineType: 'dashed' },
+  beam:   { labeled: false, discipline: Discipline.FUSE },
+};
+
+test('openingMoveRange: 境界になるのは通り芯・中心線のみ（補助線・梁芯はまたげる。4種別横断）', () => {
+  const expectedBlocking = { struct: true, center: true, aux: false, beam: false };
+  for (const [kind, props] of Object.entries(CL_KIND_PROPS)) {
+    const graph = makeGraph();
+    const { wall } = makeHorizontalWall(graph);
+    graph.addCenterLine(CenterLineType.VERTICAL, 2000, props);
+    const o = addOpening(graph, wall, 1000, 800); // 600..1400
+    const range = openingMoveRange(wall, o, graph);
+    // 境界になるなら hi側はCL(2000)-半幅(400)=1600、ならないなら壁端3000-半幅=2600のまま。
+    assert.equal(range.max, expectedBlocking[kind] ? 1600 : 2600, `kind=${kind}`);
+  }
+});
+
 // ---- 直交壁がある CL は CL 値ではなく材の面で止める（建具枠が壁に埋まらない。実機指摘 2026-09-14） ----
 // 水平の host 壁（axisCL y=0・面 y=75）に、x=v の垂直 CL 上の直交壁を足す。spanLo/spanHi は y 方向のスパン。
 function addPerpWall(graph, host, v, { axisOffset = 75, spanLo = 0, spanHi = 3000, ...props } = {}) {
@@ -266,6 +287,24 @@ test('openingSnapCandidates: 壁と平行なCL（axisCL）・梁芯・範囲外�
   // clStart(x=0)は範囲外: 中心一致0・端一致-400 は落ち、端一致 +400 だけが残る
   assert.ok(!cands.some(c => c.value < range.min || c.value > range.max), '範囲外の候補は含まない');
   assert.ok(cands.some(c => c.kind === 'cl-edge' && c.value === 400), 'clStartへの端一致(400)は範囲内');
+});
+
+// ---- スナップ候補の4種別横断突き合わせ（kindsVisibleIn('floorplan')移行の確認）----
+test('openingSnapCandidates: 候補になるのは通り芯・中心線・補助線（梁芯は除外。4種別横断）', () => {
+  const expectedCandidate = { struct: true, center: true, aux: true, beam: false };
+  // openingMoveRangeを経由せず、候補生成だけを見るため十分広いrangeを直接渡す
+  // （struct/centerはまたげない境界のため、openingMoveRange経由だとCL自身の位置で範囲が
+  // 縮み、範囲外落ち（inRangeチェック）と候補対象外を区別できなくなるため）。
+  const wideRange = { min: -100000, max: 100000 };
+  for (const [kind, props] of Object.entries(CL_KIND_PROPS)) {
+    const graph = makeGraph();
+    const { wall } = makeHorizontalWall(graph);
+    graph.addCenterLine(CenterLineType.VERTICAL, 1500, props);
+    const o = addOpening(graph, wall, 1000, 800);
+    const cands = openingSnapCandidates(wall, o, graph, wideRange);
+    const has1500 = cands.some(c => c.kind === 'cl-center' && c.value === 1500);
+    assert.equal(has1500, expectedCandidate[kind], `kind=${kind}`);
+  }
 });
 
 test('openingSnapCandidates/openingMoveRange: 垂直壁では水平CLだけが横切るCL（垂直CLは範囲にも候補にも効かない）', () => {

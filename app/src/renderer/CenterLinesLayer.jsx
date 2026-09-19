@@ -1,8 +1,9 @@
 import { observer } from 'mobx-react-lite';
 import { Line, Circle } from 'react-konva';
-import { CenterLineType, DimensionSide, Discipline, centerLineKind } from '@core';
+import { CenterLineType, DimensionSide, centerLineKind } from '@core';
 import { nonLabeledClExtent } from '../snap.js';
 import { gutterEdgeCoord } from './gutterPrimitives.jsx';
+import { isRenderTarget } from '../core/centerLineKindPolicy.js';
 
 // ビューポートのワールド座標範囲 (フォールバック用)
 function viewportBounds(viewport, width, height) {
@@ -57,15 +58,22 @@ export const CenterLinesLayer = observer(({ graph, viewport, width, height, colu
     const isH = cl.centerLineType === CenterLineType.HORIZONTAL;
     if (!isV && !isH) return null;
 
-    // 梁芯CLは構造モード限定表示（柱芯線と同格の扱い）。
-    const isBeamAxis = centerLineKind(cl) === 'beam';
-    if (isBeamAxis && appMode !== 'structure') return null;
-
-    // 意匠系CL（中心線・補助線。labeled:false かつ discipline:'arch'）は逆に構造モードでは表示しない
-    // ——構造モードは梁芯（壁由来の自動生成含む）に一本化し、意匠CLを目印に使わせない設計。
+    // 可視種別は core/centerLineKindPolicy.js の可視モード表（VISIBLE_KINDS_BY_MODE）に一本化——
+    // 梁芯は構造モード限定（柱芯線と同格の扱い）、意匠系CL（中心線・補助線）は逆に構造モードでは
+    // 表示しない（構造モードは梁芯（壁由来の自動生成含む）に一本化し、意匠CLを目印に使わせない設計）。
     // データ（CenterLine実体）は残したまま描画だけスキップする（削除ではない。既存規律どおり）。
-    const isArchCL = !cl.labeled && cl.discipline === Discipline.ARCH;
-    if (isArchCL && appMode === 'structure') return null;
+    // 【旧データ限定・種別ベースへ統一】移行前（〜2026-09-20）は
+    // `const isArchCL = !cl.labeled && cl.discipline === Discipline.ARCH; if (isArchCL && appMode === 'structure') return null;`
+    // という labeled ベースの判定だった——`{labeled:true, discipline:ARCH}`（種別=center）・
+    // `{labeled:true, lineType:'dashed'}`（種別=aux）のような labeled と種別が食い違う旧データは
+    // `!cl.labeled` が false になるため isArchCL=false となり、構造モードでも除外されず
+    // 描画されていた。移行後は種別ベース（isRenderTarget＝VISIBLE_KINDS_BY_MODE.structureが
+    // struct/beamのみ）のため、種別が center/aux ならこの種の旧データでも構造モードでは描画対象外に
+    // なる（「描かれていた→描かれない」への変化。floorplan/finish/opening は旧コードも labeled を
+    // 見ておらず種別ベースと同値だったため変化なし。centerLineKindPolicy.test.js にピン留めテストあり）。
+    if (!isRenderTarget(cl, appMode)) return null;
+    // 描画スタイル判定用（stroke/opacityを柱芯線と同格にする。フィルタとは別の用途で残す）。
+    const isBeamAxis = centerLineKind(cl) === 'beam';
 
     const ext = clExtent(cl, graph, viewport, width, height);
     const [p1, p2] = ext ?? (isV ? [b.yMin, b.yMax] : [b.xMin, b.xMax]);

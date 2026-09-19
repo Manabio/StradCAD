@@ -2,25 +2,27 @@
 // threshold は px 単位で渡し、ワールド差分に scaleX/Y を掛けてスクリーン距離に換算する。
 import { spatialIndex } from './store.js';
 import { findHostWall, nearestWallHit } from './openings/openingGeometry.js';
-import { centerLineKind, CenterLineType } from './core.js';
+import { CenterLineType } from './core.js';
 import { inGutter as isInGutter } from './layout.js';
+import { hitTestKinds } from './core/centerLineKindPolicy.js';
 // CENTER寸法「足」上の端点ヒットは、描画（renderer/GutterLayer.jsx CenterDimensions）と単一の
 // 真実源を共有する必要がある（幅・高さ依存の areaBounds/lineCoord クランプを含むため snapGeometry.js
 // の純モジュール規約=静的importは./core.jsのみ、には置けない）。renderer/gutterLabelHits.js
 // （react-konva非依存の純関数レイヤ）から直接 import する。
 import { findCenterDimensionLegEndpoint } from './renderer/gutterLabelHits.js';
-// overhangMm・findBracketingCLs・nonLabeledClExtent・findNearestCenterLineEndpoint・
-// findCLMoveSnap・findBeamAxisMoveSnap は spatialIndex/store に依存しない純関数のため
-// snapGeometry.js へ分離済み（node:test から store非依存で import したいモジュール向け）。
-// ここでは同名を再エクスポートし、既存の import 元（App.jsx・interaction/usePointerInteraction.js 等）
-// を壊さない。
+// overhangMm・findBracketingCLs・nonLabeledClExtent・findNearestCenterLine・findNearbyCenterLines・
+// findNearestCenterLineEndpoint・findCLMoveSnap・findBeamAxisMoveSnap は spatialIndex/store に
+// 依存しない純関数のため snapGeometry.js へ分離済み（node:test から store非依存で import したい
+// モジュール向け。findNearestCenterLine・findNearbyCenterLines はステップ6・2026-09-20移行——
+// hitTestKinds(appMode) との4種別×6モード突き合わせテスト・実データprobeのため）。ここでは同名を
+// 再エクスポートし、既存の import 元（App.jsx・interaction/usePointerInteraction.js 等）を壊さない。
 import {
-  overhangMm, findBracketingCLs, nonLabeledClExtent, findNearestCenterLineEndpoint,
-  findCLMoveSnap, findBeamAxisMoveSnap,
+  overhangMm, findBracketingCLs, nonLabeledClExtent, findNearestCenterLine, findNearbyCenterLines,
+  findNearestCenterLineEndpoint, findCLMoveSnap, findBeamAxisMoveSnap,
 } from './snapGeometry.js';
 export {
-  overhangMm, findBracketingCLs, nonLabeledClExtent, findNearestCenterLineEndpoint,
-  findCLMoveSnap, findBeamAxisMoveSnap,
+  overhangMm, findBracketingCLs, nonLabeledClExtent, findNearestCenterLine, findNearbyCenterLines,
+  findNearestCenterLineEndpoint, findCLMoveSnap, findBeamAxisMoveSnap,
 };
 
 // ポインタ位置スナップ判定のスクリーン距離しきい値 (px)
@@ -48,67 +50,6 @@ export function findNearestIntersection(graph, wx, wy, thresholdPx, scaleX, scal
     if (dist < thresholdPx && dist < minDist) { minDist = dist; nearest = n; }
   }
   return nearest;
-}
-
-/**
- * カーソルに最も近い中心線を返す。
- * VERTICAL  → X 方向スクリーン距離
- * HORIZONTAL → Y 方向スクリーン距離
- * viewport を渡すと、ラベルなしCLの描画範囲（オーバーハング込み）外を除外する。
- * kindFilter(centerLineKind(cl)) が true の種別だけを対象にする（既定は梁芯を除外＝非構造モード用。
- * 構造モードの呼び出し元は `k => k === 'beam'` を渡し、梁芯だけをヒットテスト対象にする——
- * 「通り芯上でマウスが反応しない」既存仕様は維持しつつ、梁芯だけは選択・削除・延長/短縮できるようにする
- * ため appMode で無条件 null にせず kindFilter で絞る（interaction/usePointerInteraction.js updateSnap 参照）。
- */
-export function findNearestCenterLine(graph, wx, wy, thresholdPx, scaleX, scaleY, viewport = null, kindFilter = k => k !== 'beam') {
-  if (!graph) return null;
-  let nearest = null, minDist = Infinity;
-  for (const cl of graph.centerLines) {
-    if (!kindFilter(centerLineKind(cl))) continue;
-    const isV  = cl.centerLineType === 'X';
-    const isH  = cl.centerLineType === 'Y';
-    const dist = isV ? Math.abs(cl.value - wx) * scaleX
-               : isH ? Math.abs(cl.value - wy) * scaleY
-               : Infinity;
-    if (dist >= thresholdPx || dist >= minDist) continue;
-    // ラベルなしCL: extentLo/Hi が設定されていれば描画範囲（オーバーハング込み）外を除外
-    if (!cl.labeled && cl.extentLo != null && cl.extentHi != null) {
-      const along    = isV ? wy : wx;
-      const overhang = viewport ? overhangMm(viewport, cl.trim) : 0;
-      if (along < cl.extentLo - overhang || along > cl.extentHi + overhang) continue;
-    }
-    minDist = dist;
-    nearest = cl;
-  }
-  return nearest;
-}
-
-/**
- * 長押し位置に近接する中心線（ラベルなし）を参照元候補として返す。
- * - clType を渡すと同種CLのみ（線分追加）。null なら垂直/水平両方（壁追加）。
- * - はね出し（オーバーハング）部分は除外: 沿線座標が実範囲 [extentLo, extentHi] 内のCLのみ。
- * - スクリーン距離が近い順にソート。
- */
-export function findNearbyCenterLines(graph, wx, wy, thresholdPx, scaleX, scaleY, clType = null) {
-  if (!graph) return [];
-  const hits = [];
-  for (const cl of graph.centerLines) {
-    if (cl.labeled) continue;
-    const isV = cl.centerLineType === 'X';
-    const isH = cl.centerLineType === 'Y';
-    if (!isV && !isH) continue;
-    if (clType && cl.centerLineType !== clType) continue;
-    const scale = isV ? scaleX : scaleY;
-    const perp  = isV ? wx : wy;  // 線に垂直な座標
-    const along = isV ? wy : wx;  // 線に沿った座標
-    const dist  = Math.abs(cl.value - perp) * scale;
-    if (dist >= thresholdPx) continue;
-    // はね出し除外: 沿線座標が実範囲外なら候補から外す
-    if (cl.extentLo != null && cl.extentHi != null &&
-        (along < cl.extentLo || along > cl.extentHi)) continue;
-    hits.push({ cl, dist });
-  }
-  return hits.sort((a, b) => a.dist - b.dist).map(h => h.cl);
 }
 
 /**
@@ -159,8 +100,16 @@ function clEndpointPerpDist(cl, wx, wy, scaleX, scaleY) {
  * ポインタ位置（クライアント座標）から交点スナップ・近傍CL/CL端点/壁/開口の候補を解決する
  * （interaction/usePointerInteraction.js updateSnap の「候補解決」部分。setState への反映は呼び出し側の責務）。
  * ガター帯（描画エリア外周）内は全候補 null・world null を返す。
- * appMode==='structure' のときは梁芯のみ、それ以外は梁芯以外を CL/CL端点の対象にする
- * （findNearestCenterLine 等の kindFilter 既定値と同じ規約）。
+ * CL/CL端点の対象種別は core/centerLineKindPolicy.js hitTestKinds(appMode) に一本化——
+ * appMode==='structure' なら梁芯のみ、floorplan/finish/opening なら通り芯・中心線・補助線
+ * （梁芯は除外）。site/elevation は hitTestKinds が空集合になる（可視モード表＝VISIBLE_KINDS_BY_MODE
+ * が空のため）——唯一の呼び出し元 interaction/usePointerInteraction.js updateSnap は、site は
+ * ホイールズーム経由でのみ本関数へ到達し、その結果（nearCL 等）を参照するカーソル・メニューは
+ * site では別分岐に倒れて未使用、elevation は本関数へ到達する経路自体が無い（専用画面の早期
+ * return。pointerDown/Move が appMode==='elevation' で updateSnap を一切呼ばない）——ため、可視
+ * モード表に揃えても実際の挙動（カーソル・メニュー）は変わらない。呼び出し元は appMode に常に
+ * 既知の値（APP_MODES のいずれか）を渡す（App.jsx の useState 初期値・モード切替経路のいずれも
+ * 未知値を作らない）ため、hitTestKinds の未知 appMode throw は本経路では発生しない。
  * 交点スナップ中は CL/開口/壁の検出をスキップし、CL端点も返さない（候補計算自体は走るが結果は捨てる）。
  * CL・開口・壁は画面距離が最も近い候補のみを残す排他選択（同距離は cl > opening > wall）。
  * CL端点は「突端円・はね出し線分」（findNearestCenterLineEndpoint）と「CENTER寸法の足」
@@ -175,7 +124,10 @@ export function resolvePointerTargets(graph, viewport, clientX, clientY, opts = 
   }
   const world = viewport.screenToWorld(clientX, clientY);
   const snap  = findNearestIntersection(graph, world.x, world.y, SNAP_THRESHOLD_PX, viewport.scaleX, viewport.scaleY);
-  const clKindFilter = appMode === 'structure' ? (k => k === 'beam') : (k => k !== 'beam');
+  // hitTestKinds(appMode) は走査前に1回だけ呼ぶ（CLごとに新しい配列を作らない。未知appModeのthrowも
+  // 走査前に出る）。
+  const hitKinds = hitTestKinds(appMode);
+  const clKindFilter = k => hitKinds.includes(k);
   const clEndpointTip = findNearestCenterLineEndpoint(graph, world.x, world.y, CL_THRESHOLD_PX, viewport.scaleX, viewport.scaleY, viewport, clKindFilter);
   const clEndpointLeg = findCenterDimensionLegEndpoint(graph, world.x, world.y, CL_THRESHOLD_PX, viewport.scaleX, viewport.scaleY, viewport, width, height, appMode, columnAxisMode);
   let clEndpointCand = clEndpointTip;
