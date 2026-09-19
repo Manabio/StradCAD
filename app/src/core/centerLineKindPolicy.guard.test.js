@@ -1,0 +1,385 @@
+// ガードテスト（ステップ7、2026-09-20）。
+//
+// 背景: 「中心線・補助線の操作が非表示の梁芯に阻まれる」不具合が、追加→移動→延長と3回に分けて
+// 発覚した。3回とも原因は「誤った種別条件」ではなく「種別条件の無い素の graph.centerLines 走査」
+// だった。centerLineKindPolicy.js（本ディレクトリ）に相手選択・可視性判定を集約したうえで、
+// 本ファイルは「その入口を機械的に閉じる」——app/src 配下の製品コード（*.test.js を除く）を走査し、
+// 許可ドメイン外での新しい直接走査・labeled代用・インライン種別比較が増えたら即座に赤くする
+// （ラチェット）。
+//
+// G1: `.centerLines` の直接参照の禁止（許可ドメイン=core/・renderer/・schema/。それ以外は allowlist
+//     に載っている件数だけ許可）。
+// G2: 生の `.labeled` を種別（centerLineKind）の代用に読むことの禁止（許可ドメイン=core/・renderer/・
+//     schema/・graphSnapshot.js。`.labeled` は CenterLine 以外のプロパティ名として再利用されうる汎用語
+//     ではなく、このコードベースでは core/centerLine.js の CenterLine クラスだけが定義するフィールド
+//     ——誤検出のリスクは低いが、「CL由来の.labeledプロパティへのアクセスすべて」を機械的に数える
+//     ため、種別判定以外の用途（undoスナップショット等）も一緒に数えてしまう限界がある。allowlistの
+//     理由欄にその旨を明記する）。
+// G3: `centerLineKind(x) === '<リテラル>'` 形のインライン種別比較の禁止（許可ドメインはG2と同じ）。
+//     右辺が文字列リテラルの場合のみを対象にする——`centerLineKind(cl) === kind`（kindは変数）のような
+//     汎用的な同値比較はポリシー関係の重複実装ではなく通常の分岐ロジックのため対象外（限界として明記）。
+//
+// 数え方: ソースを1文字ずつ走査するトークナイザ（tokenize、下記）でコメント（`//`・`/* */`）・
+// 文字列リテラル（'・"・`）・正規表現リテラルの境界を認識したうえで、2種類のテキストを作る——
+// (a) codeOnly: コメントに加え文字列・正規表現リテラルの「中身」も空白に置換したテキスト（G1/G2用。
+//     エラーメッセージ等の文字列中に `.centerLines`/`.labeled` という語が偶然含まれていても実際の
+//     プロパティアクセスとして数えない）。
+// (b) withoutComments: コメントだけを除去し文字列リテラルはそのまま残したテキスト（G3用。
+//     `centerLineKind(cl) === 'struct'` のような比較はリテラルの引用符自体が検出対象の一部であり
+//     codeOnly では消えてしまうため別系統にする必要がある）。
+// 正規表現マッチ数は決定的・再現可能——allowlist の件数は tokenize を実際に各ファイルへ適用すれば
+// 誰でも再現できる。allowlist に載っているのに実際の件数が0（掃除漏れ・移行済みなのに項目が
+// 残っている）でも赤くなる。
+//
+// トークナイザの既知の限界（意図的な簡易実装。JS/JSXのフルパーサではない——QA指摘対応）:
+//  - 正規表現リテラルと除算演算子の判別はヒューリスティック（直前の非空白文字が識別子文字・数字・
+//    `)`・`]` なら除算、それ以外なら正規表現）。真のJS文法（直前トークンの意味）までは見ないため、
+//    稀な組み合わせでは誤判定しうる——このコードベースの実測では問題を起こしていない。
+//  - テンプレートリテラル（`...`）は `${}` 内の式を「コードとして」は解釈せず、リテラル全体を
+//    1つの文字列として扱う（`${}` の中に `.centerLines` 等が書かれても検出できない）。
+//  - 変数エイリアスは追跡しない（正規表現ベースのため）——`const cls = graph.centerLines;` の代入行
+//    自体は検出できるが、以後 `cls.filter(...)` のように別名を使い回す箇所は検出できない（同様に
+//    G3も `const k = centerLineKind(cl); k === 'beam'` のような変数経由の比較は検出しない）。
+//  - 許可ドメイン（renderer/等）の内部で同種の判定ロジックが並行実装されていても、ドメインごと対象外
+//    のため射程外（例: renderer/gutterLabelHits.js の isCenterDimensionTarget は cl.labeled 等の
+//    独自判定を持つが、renderer/ は描画層の正当な責務としてG1/G2/G3いずれも検査しない）。
+//
+// ガードが赤くなったら: (1) 相手選択（同座標・同方向・可視種別等でCLを選ぶ処理）なら
+// centerLineKindPolicy.js の走査API（orthoAnchorCandidates(ForNew)・sameDirectionObstacles・
+// sameCoordCounterparts・mergeCandidates・candidatesVisibleIn等。無ければ追加）経由に直す。
+// (2) 相手選択でない（シリアライズ・id解決・全件列挙・MobX reactionの依存収集・幾何署名判定等）なら、
+// このファイル末尾の allowlist に「ファイル＋理由＋件数」を追記する。
+// (3) 未移行（既存ロジックに手を入れると波及が大きく別タスクが要る）なら、その理由を allowlist に
+// 明記する。
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+
+const SRC_ROOT = path.resolve(import.meta.dirname, '..'); // app/src
+
+// ---- ソース走査ユーティリティ ----
+
+function listProductFiles(dir = SRC_ROOT, out = []) {
+  for (const ent of fs.readdirSync(dir, { withFileTypes: true })) {
+    const full = path.join(dir, ent.name);
+    if (ent.isDirectory()) {
+      listProductFiles(full, out);
+    } else if (/\.(js|jsx)$/.test(ent.name) && !ent.name.endsWith('.test.js')) {
+      out.push(full);
+    }
+  }
+  return out;
+}
+
+// トークナイザ本体。ソースを1文字ずつ走査し、コメント・文字列（'・"）・テンプレートリテラル（`）・
+// 正規表現リテラルの境界を認識する。改行はすべての出力で保持する（行数・全体長を変えず、正規表現の
+// `^`/`$`・行コメントのスコープ判定に影響しないようにするため）。
+// @returns {{codeOnly: string, withoutComments: string}}
+function tokenize(src) {
+  let codeOnly = '';
+  let withoutComments = '';
+  let i = 0;
+  const n = src.length;
+  const blank = (ch) => (ch === '\n' ? '\n' : ' ');
+
+  // codeOnly に積んだ最後の非空白文字（正規表現/除算の判別用ヒューリスティック）。
+  const lastSignificantChar = () => {
+    for (let j = codeOnly.length - 1; j >= 0; j--) {
+      const c = codeOnly[j];
+      if (c === ' ' || c === '\n' || c === '\t' || c === '\r') continue;
+      return c;
+    }
+    return '';
+  };
+  const isRegexContext = () => {
+    const c = lastSignificantChar();
+    if (c === '') return true;
+    return !/[A-Za-z0-9_$)\]]/.test(c);
+  };
+
+  while (i < n) {
+    const c = src[i];
+    const c2 = i + 1 < n ? src[i + 1] : '';
+
+    // 行コメント（文字列・正規表現の外でのみ、というのはこのif分岐に来る時点で保証されている）。
+    if (c === '/' && c2 === '/') {
+      i += 2;
+      while (i < n && src[i] !== '\n') i++;
+      continue;
+    }
+    // ブロックコメント。
+    if (c === '/' && c2 === '*') {
+      i += 2;
+      while (i < n && !(src[i] === '*' && src[i + 1] === '/')) {
+        const b = blank(src[i]);
+        codeOnly += b; withoutComments += b;
+        i++;
+      }
+      i += 2; // */ を読み飛ばす
+      continue;
+    }
+    // 文字列リテラル（'・"）・テンプレートリテラル（`）。中身は codeOnly では空白化、
+    // withoutComments ではそのまま保持する（G3がリテラル `'struct'` 等を見る必要があるため）。
+    if (c === "'" || c === '"' || c === '`') {
+      const quote = c;
+      codeOnly += ' '; withoutComments += quote;
+      i++;
+      while (i < n && src[i] !== quote) {
+        if (src[i] === '\\' && i + 1 < n) {
+          codeOnly += blank(src[i]); withoutComments += src[i];
+          i++;
+          codeOnly += blank(src[i]); withoutComments += src[i];
+          i++;
+          continue;
+        }
+        codeOnly += blank(src[i]); withoutComments += src[i];
+        i++;
+      }
+      if (i < n) { codeOnly += ' '; withoutComments += quote; i++; }
+      continue;
+    }
+    // 正規表現リテラル（ヒューリスティック判別。改行をまたがない・文字クラス[...]内の/は終端にしない）。
+    if (c === '/' && isRegexContext()) {
+      let j = i + 1;
+      let inClass = false;
+      let closed = false;
+      while (j < n) {
+        const cj = src[j];
+        if (cj === '\\') { j += 2; continue; }
+        if (cj === '\n') break;
+        if (cj === '[') inClass = true;
+        else if (cj === ']') inClass = false;
+        else if (cj === '/' && !inClass) { closed = true; break; }
+        j++;
+      }
+      if (closed) {
+        let k = j + 1;
+        while (k < n && /[a-zA-Z]/.test(src[k])) k++; // 末尾フラグ
+        for (let p = i; p < k; p++) { codeOnly += ' '; withoutComments += ' '; }
+        i = k;
+        continue;
+      }
+      // 閉じなかった＝実は除算演算子だった可能性が高い（誤判定の保険）。1文字だけ通常どおり出力する。
+    }
+    codeOnly += c; withoutComments += c;
+    i++;
+  }
+  return { codeOnly, withoutComments };
+}
+
+function relPath(file) {
+  return path.relative(SRC_ROOT, file).replace(/\\/g, '/');
+}
+
+function countMatches(text, regex) {
+  return (text.match(regex) || []).length;
+}
+
+const RE_CENTERLINES   = /\.centerLines\b/g;
+// 分割代入形（`{ centerLines }`・`{ centerLines: x }`。`,`や複数プロパティの並びにも対応）。
+// `{`または`,`の直後にプロパティ名centerLinesが来て、任意で`: 単純な識別子`のエイリアスを伴い、
+// 直後が`,`か`}`で終わるものだけを対象にする——`{ centerLines: graph.centerLines }`のような
+// オブジェクトリテラル構築（値がドットを含む式）はエイリアス部分が単純識別子でないため一致しない。
+const RE_DESTRUCTURE_CENTERLINES = /[{,]\s*centerLines\s*(?::\s*[A-Za-z_$][\w$]*\s*)?[,}]/g;
+const RE_LABELED       = /\.labeled\b/g;
+const RE_INLINE_KIND   = /centerLineKind\([^)]*\)\s*===\s*'(?:struct|center|aux|beam)'/g;
+
+function isUnderRoot(rel, root) {
+  return rel === root || rel.startsWith(`${root}/`);
+}
+// G1 許可ドメイン: ポリシー自身・描画層・シリアライズ層は生の graph.centerLines を扱うのが正当な責務。
+const G1_EXEMPT_ROOTS = ['core', 'renderer', 'schema'];
+function isG1Exempt(rel) {
+  return G1_EXEMPT_ROOTS.some(root => isUnderRoot(rel, root));
+}
+// G2/G3 許可ドメイン: G1と同じ3ディレクトリに加え、graphSnapshot.js（永続化からの全件復元は
+// 種別を問わず全フィールドを読み書きするのが正しい責務のため）。
+const G2G3_EXEMPT_FILES = new Set(['graphSnapshot.js']);
+function isG2G3Exempt(rel) {
+  return isG1Exempt(rel) || G2G3_EXEMPT_FILES.has(rel);
+}
+
+// ================================================================
+// allowlist（残課題の台帳）
+// ================================================================
+// 区分:
+//   'not-partner-selection' — 相手選択（種別ベースで候補を絞る処理）ではない
+//                              （シリアライズ・id解決・全件列挙・reactionの依存収集・幾何署名判定等）。
+//   'unmigrated'             — 相手選択だが、既存ロジックへの手入れが波及大のため本ステップでは
+//                              未移行（別タスクで種別ベースへ統一する）。
+
+// ---- G1: `.centerLines` 直接参照 ----
+const G1_ALLOWLIST = {
+  'App.jsx': { count: 1, category: 'unmigrated',
+    reason: 'handleWallConfirm（WallDialog確定）。graph.centerLines.filter(cl => cl.centerLineType===perpType)' +
+      'は種別条件の無い直交CL列挙そのもの（=相手選択）——ただしWallDialogを開く導線が無い死んだ経路' +
+      '（setWallDialogはnullを渡す閉じる側のみ）のため実害は無い。別タスクで削除候補。' },
+  'finish/stair/stairUnderSplit.js': { count: 1, category: 'not-partner-selection',
+    reason: 'findUnderStairSplitCLs。isSplitCLFor による幾何署名（座標一致）での同定であり種別を見ない。' },
+  'graphSnapshot.js': { count: 2, category: 'not-partner-selection',
+    reason: 'restoreStructCLs/applySnapshot。永続化からの全件復元（snapshot.centerLines）——種別を問わず' +
+      '全件を作り直す責務のため種別条件を持たない。' },
+  'interaction/gutterHitTest.js': { count: 1, category: 'unmigrated',
+    reason: 'findGutterCL。生の cl.labeled でガター内の通り芯を絞る（G2にも同じ理由で計上）。種別ベース化' +
+      'は旧データで挙動が変わりうるため未移行。' },
+  'openings/openingMove.js': { count: 1, category: 'not-partner-selection',
+    reason: 'openingMoveRange。perpendicularWallMaterial が種別を問わずCL上の直交壁材を先に確認する必要が' +
+      'あり、種別で絞り込んでからループすると素通りしてしまうため走査APIに畳めない。' },
+  'snapGeometry.js': { count: 5, category: 'not-partner-selection',
+    reason: 'findCLMoveSnap・findNearestCenterLine・findNearbyCenterLines・nonLabeledClExtent・' +
+      'findNearestCenterLineEndpoint。距離計算を伴う最近傍探索／フォールバック集計で、種別判定は' +
+      'isMoveSnapTarget・spansEntireAxis・kindFilter経由（ポリシー由来）——本ステップの変更対象3ファイル' +
+      '（centerLineMerge.js・openingMove.js・floorCLMap.js）に含まれないため未着手のまま。' },
+  'storage/FloorSwapManager.js': { count: 2, category: 'not-partner-selection',
+    reason: 'autorun内のdirty追跡（MobX reactionの依存収集）。cl._value/cl.refOffsetを読むためだけに全件を' +
+      '辿る——相手選択ではない。' },
+  'store.js': { count: 1, category: 'not-partner-selection',
+    reason: 'reaction() の依存収集（spatialIndex再構築のトリガー）。' },
+  'structural/structuralAutoFill.js': { count: 2, category: 'unmigrated',
+    reason: 'beamAxisCenterLines・resolveCLById。木造・構造の自動補完（柱のアンカー解決と共有する述語）。' +
+      '種別ベース化は柱の増減に直結するため構造golden（golden13/struct-*）で検証する独立タスク。' },
+  'structural/wallBeamAxes.js': { count: 2, category: 'unmigrated',
+    reason: 'findWallBeamAxisCL・findBeamAnchorCL。壁交点柱のアンカー解決・梁芯重複ガードが共有する述語' +
+      '（centerLineKindPolicy.js冒頭「既知の乖離」節参照）。同上の理由で独立タスク。' },
+  'structural/woodAutoFill.js': { count: 3, category: 'unmigrated',
+    reason: 'findCenterAnchorCL・nearestAnchorCL・柱直下解決。同上（木造の柱アンカー解決）。' },
+  'transform/centerLineExtend.js': { count: 1, category: 'not-partner-selection',
+    reason: 'isEndpointAt。refCLが生きて存在するかのid解決（同一参照 or 同id）——相手選択ではない。' },
+  'transform/followerGraph.js': { count: 3, category: 'not-partner-selection',
+    reason: 'gatherShapes・collectFollowerOffsets候補集め＋gatherShapesの戻り値 `{ centerLines, walls, ' +
+      'diagonals }`（shorthandオブジェクトリテラル構築。分割代入検出RE_DESTRUCTURE_CENTERLINESと同じ' +
+      'テキスト形のため一緒に数えられる——中身は既にwalk済みのローカル変数を束ねて返すだけで新規の走査' +
+      'ではない）。随伴（refId連鎖）はCL種別を問わず辿る規約のため種別で絞らない全件列挙——' +
+      'sameDirectionObstacles等の相手選択とは別物。' },
+};
+
+// ---- G2: 生の `.labeled` を種別の代用に読む ----
+const G2_ALLOWLIST = {
+  'finish/edgeClassify.js': { count: 1, category: 'unmigrated',
+    reason: '種別ベース化は仕上げモードの境界分類への影響範囲を読み切れておらず未移行。' },
+  'finish/gridCells.js': { count: 5, category: 'unmigrated',
+    reason: 'snapshotCL・分割格子の種別分類（labeled+disciplineの組合せで通り芯/意匠を判定）。分割格子は' +
+      '性能最適化のためのPOJOスナップショットで、cl.labeledをそのままコピー・分類に使っている——' +
+      '種別ベースへの統一は別タスク。' },
+  'finish/stair/stairUnderSplit.js': { count: 1, category: 'unmigrated',
+    reason: '同ファイルのG1と同じ関数群。座標同定ロジックに埋め込まれておりG1と合わせて独立タスク。' },
+  'finish/wallGeneration.js': { count: 1, category: 'unmigrated',
+    reason: '壁生成時のCL全域扱い判定（labeled軸は常に全域）。種別ベース化（spansEntireAxis）への統一は' +
+      '影響範囲未確認のため未移行。' },
+  'interaction/gutterHitTest.js': { count: 1, category: 'unmigrated', reason: 'G1と同じ（findGutterCL）。' },
+  'snapGeometry.js': { count: 3, category: 'unmigrated',
+    reason: 'findNearestCenterLine（!cl.labeledでオーバーハング除外判定）・findNearbyCenterLines（cl.labeled' +
+      'は種別を問わず除外する既存規約。centerLineKindPolicy.js冒頭「既知の乖離」節参照）・' +
+      'nonLabeledClExtent（labeled軸のmin/maxフォールバック）。G1と同じ理由で本ステップの対象外ファイル。' },
+  'interaction/usePointerInteraction.js': { count: 1, category: 'unmigrated',
+    reason: 'isLastGridOnAxis判定用のUIコンテキスト算出（centerLineConvert.jsの降格ガードと同じ判定式を' +
+      '共有する必要があり、片方だけ種別ベース化すると判定がずれる——両方まとめて移行する独立タスク。' +
+      '本ステップの対象外ファイル）。' },
+  'structural/wallBeamAxes.js': { count: 1, category: 'unmigrated', reason: 'G1と同じ（findBeamAnchorCL）。' },
+  'structural/woodAutoFill.js': { count: 2, category: 'unmigrated', reason: 'G1と同じ（柱アンカー解決）。' },
+  'transform/centerLineConvert.js': { count: 3, category: 'not-partner-selection',
+    reason: 'promoteToGrid/demoteToCenterのcl.labeled=true/false代入そのもの（昇格・降格操作の定義側）と' +
+      'STRUCT+labeledの妥当性ガード——種別の「代用読み取り」ではなくlabeledフィールド自体を変更・検証する' +
+      '操作のため対象外だが、機械的な文字列一致では区別できないためallowlistで扱う。' },
+  'transform/centerLineMerge.js': { count: 1, category: 'not-partner-selection',
+    reason: 'absorbCenterLine内のloserSnapshot（undo用にloserの状態をそのまま保存するため）。種別判定では' +
+      'ない。' },
+  'transform/centerLineOps.js': { count: 3, category: 'not-partner-selection',
+    reason: 'commitCLMoveOp（!cl.labeledで結合対象=通り芯以外かを判定。呼び出し元が保証する前提は' +
+      'centerLineKindPolicy.js冒頭コメント参照）・deleteCenterLineWithUndo（isStruct判定）・' +
+      'COEXISTENCE=promote分岐のdeletedProps（既存CLの状態をそのままコピーして復元用に保存）。' },
+  'transform/followerGraph.js': { count: 1, category: 'not-partner-selection',
+    reason: 'isSharedCL（通り芯=project.structGraph共有かの判定。centerLineKindPolicy側にkindsVisibleWith' +
+      '等の同値の述語が無く、centerLineKind==="struct"と同義だが本ステップの対象外ファイルのため未移行）。' },
+};
+
+// ---- G3: `centerLineKind(x) === '<リテラル>'` インライン種別比較 ----
+const G3_ALLOWLIST = {
+  'interaction/usePointerInteraction.js': { count: 4, category: 'unmigrated',
+    reason: 'canToGrid/canToCenter/isLastGridOnAxisの判定式・梁芯移動スナップの呼び分け。' +
+      'centerLineConvert.jsの降格・昇格ガードと同じ判定式を共有する必要があり、片方だけ移行すると' +
+      'UI側と処理側の判定が食い違う——まとめて移行する独立タスク。' },
+  'openings/openingMove.js': { count: 1, category: 'not-partner-selection',
+    reason: 'candidateTier（スナップ候補の優先順位付け。通り芯を最優先にするUI都合のロジックで、ポリシーの' +
+      '関係述語の代替ではない）。' },
+  'structural/structuralAutoFill.js': { count: 1, category: 'unmigrated',
+    reason: 'beamAxisCenterLines。G1と同じ理由（独立タスク）。' },
+  'structural/wallBeamAxes.js': { count: 2, category: 'unmigrated',
+    reason: 'findWallBeamAxisCL・findBeamAnchorCL内のcenterLineKind(cl)===\'beam\'。G1と同じ理由。' },
+  'structural/woodAutoFill.js': { count: 1, category: 'unmigrated',
+    reason: 'findCenterAnchorCL。G1と同じ理由。' },
+  'transform/centerLineOps.js': { count: 2, category: 'not-partner-selection',
+    reason: 'commitCLMoveOp（梁芯は専用のグラフスナップショット方式Undoに分岐）・COEXISTENCE同種別分岐の' +
+      '梁芯重複ガード（centerLineKind(cl)===\'beam\'を含むsameCoordの絞り込み）。それぞれ「kind===梁芯なら' +
+      '専用処理」という分岐そのもので、ポリシーの関係述語（例: coexistenceAt）の重複実装ではない。' },
+  'ui/circleRef.js': { count: 1, category: 'not-partner-selection',
+    reason: 'circleRefKindLabel。参照候補CLの表示ラベル文言（「梁芯」/「中心線」）を決めるUI表示ロジック。' },
+};
+
+// variant: 'codeOnly'（文字列・正規表現の中身も空白化。G1/G2用）または
+// 'withoutComments'（文字列はそのまま。G3用）。regexes は複数渡せば合算する（G1の
+// RE_CENTERLINES + RE_DESTRUCTURE_CENTERLINES 用）。
+function buildActual(files, regexes, predicate, variant) {
+  const list = Array.isArray(regexes) ? regexes : [regexes];
+  const actual = {};
+  for (const file of files) {
+    const rel = relPath(file);
+    if (predicate(rel)) continue;
+    const { codeOnly, withoutComments } = tokenize(fs.readFileSync(file, 'utf8'));
+    const text = variant === 'withoutComments' ? withoutComments : codeOnly;
+    const n = list.reduce((sum, re) => sum + countMatches(text, re), 0);
+    if (n > 0) actual[rel] = n;
+  }
+  return actual;
+}
+
+function assertAgainstAllowlist(actual, allowlist, label, guidance) {
+  const files = new Set([...Object.keys(actual), ...Object.keys(allowlist)]);
+  const mismatches = [];
+  for (const rel of files) {
+    const actualCount = actual[rel] ?? 0;
+    const expected = allowlist[rel]?.count ?? 0;
+    if (actualCount !== expected) {
+      mismatches.push(`  ${rel}: 実際=${actualCount} allowlist=${expected}`);
+    }
+  }
+  assert.deepEqual(mismatches, [], `${label} の件数が allowlist と食い違っています。\n${guidance}\n${mismatches.join('\n')}`);
+}
+
+const files = listProductFiles();
+
+test('【ガード G1】app/src 配下の製品コードは graph.centerLines を種別条件なしに直接走査しない（プロパティアクセス・分割代入の両形。許可ドメイン=core/・renderer/・schema/。それ以外は allowlist の件数のみ許可）', () => {
+  const actual = buildActual(files, [RE_CENTERLINES, RE_DESTRUCTURE_CENTERLINES], isG1Exempt, 'codeOnly');
+  assertAgainstAllowlist(actual, G1_ALLOWLIST, 'G1 (.centerLines / 分割代入)',
+    '相手選択（種別ベースで候補を絞る処理）なら centerLineKindPolicy.js の走査API（orthoAnchorCandidates' +
+    '(ForNew)・sameDirectionObstacles・sameCoordCounterparts・mergeCandidates・candidatesVisibleIn等。' +
+    '無ければ追加）経由に直してください。相手選択でなければ本ファイルの G1_ALLOWLIST に理由付きで追加' +
+    'してください。');
+});
+
+test('【ガード G2】app/src 配下の製品コードは生の .labeled を種別（centerLineKind）の代用に読まない（許可ドメイン=core/・renderer/・schema/・graphSnapshot.js）', () => {
+  const actual = buildActual(files, RE_LABELED, isG2G3Exempt, 'codeOnly');
+  assertAgainstAllowlist(actual, G2_ALLOWLIST, 'G2 (.labeled)',
+    'centerLineKind(cl) を使ってください（例: centerLineKind(cl)===\'struct\'）。種別判定でない場合' +
+    '（undoスナップショット・labeledフィールド自体の代入等）は本ファイルの G2_ALLOWLIST に理由付きで' +
+    '追加してください。');
+});
+
+test('【ガード G3】app/src 配下の製品コードは centerLineKind(x) === \'<リテラル>\' 形のインライン種別比較を新規に増やさない（右辺が変数の同値比較は対象外。許可ドメインはG2と同じ）', () => {
+  const actual = buildActual(files, RE_INLINE_KIND, isG2G3Exempt, 'withoutComments');
+  assertAgainstAllowlist(actual, G3_ALLOWLIST, 'G3 (centerLineKind(x)===\'literal\')',
+    'centerLineKindPolicy.js の述語（isOpeningBoundaryKind・isRenderTarget・isHitTestTarget・' +
+    'coexistenceAt等）で置き換えられないか検討してください。置き換えられない場合は本ファイルの' +
+    'G3_ALLOWLIST に理由付きで追加してください。');
+});
+
+test('【ガード自己診断】allowlist の全エントリは category が既定の2種のいずれかで、reason が空でない', () => {
+  for (const [name, table] of [['G1', G1_ALLOWLIST], ['G2', G2_ALLOWLIST], ['G3', G3_ALLOWLIST]]) {
+    for (const [rel, entry] of Object.entries(table)) {
+      assert.ok(['not-partner-selection', 'unmigrated'].includes(entry.category), `${name} ${rel}: 未知のcategory`);
+      assert.ok(entry.reason && entry.reason.length > 0, `${name} ${rel}: reasonが空`);
+      assert.ok(entry.count > 0, `${name} ${rel}: countは1以上のはず（0件ならallowlistから削除する）`);
+    }
+  }
+});
