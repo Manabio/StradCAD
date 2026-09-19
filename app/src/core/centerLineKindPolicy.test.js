@@ -20,10 +20,12 @@ import {
   ORTHO_ANCHOR_OVERRIDE, WALL_ANCHOR_KINDS, EXTENT_ANCHOR_STYLE, ENDPOINT_RULE_KINDS, FULL_SPAN_KINDS,
   CONVERT_BLOCKING_KINDS,
   kindsVisibleIn, hitTestKinds, kindsVisibleWith, orthoAnchorKinds, sameDirectionObstacleKinds,
+  moveSnapTargetKinds,
   coexistenceAt, convertBlockingKinds, mergeableKinds, allowsWallAnchor, extentAnchorStyle,
   hasEndpointRule, spansEntireAxis,
-  isOrthoAnchorCandidate, isSameDirectionObstacle, isMergeCandidate, isRenderTarget, isHitTestTarget,
-  coversAlongAxis, orthoAnchorCandidates, orthoAnchorCandidatesForNew,
+  isOrthoAnchorCandidate, isSameDirectionObstacle, isMoveSnapTarget, isMergeCandidate,
+  isRenderTarget, isHitTestTarget,
+  coversAlongAxis, orthoAnchorCandidates, orthoAnchorCandidatesForNew, sameDirectionObstacles,
 } from './centerLineKindPolicy.js';
 
 // ---- 製品コード（section C）との突き合わせに使う実装 ----
@@ -31,7 +33,7 @@ import { addCenterLineFromDialog } from '../transform/centerLineOps.js';
 import { computeMoveRange, collectFollowerOffsets } from '../transform/followerGraph.js';
 import { beamAxisMoveRange } from '../structural/beamAxisMove.js';
 import { checkPromoteToGridGuards, checkDemoteToCenterGuards } from '../transform/centerLineConvert.js';
-import { findBracketingCLs } from '../snapGeometry.js';
+import { findBracketingCLs, findCLMoveSnap, findBeamAxisMoveSnap } from '../snapGeometry.js';
 
 function makeGraph(planeId = 'p1') {
   const plane = new Plane(planeId, 0, `${planeId}階`, 1, 1);
@@ -164,6 +166,17 @@ test('【不変条件】双方向forbiddenの組（struct⇔struct・struct⇔be
   for (const [a, b] of symmetricForbiddenPairs) {
     assert.ok(sameDirectionObstacleKinds(a).includes(b), `${a}×${b} は双方向forbiddenなのに sameDirectionObstacleKinds(${a}) に ${b} が無い`);
   }
+});
+
+test('moveSnapTargetKinds: struct/center/auxはいずれも通り芯・中心線・補助線（梁芯を含まない）、beamは通り芯・梁芯', () => {
+  assert.deepEqual(moveSnapTargetKinds('struct'), ['struct', 'center', 'aux']);
+  assert.deepEqual(moveSnapTargetKinds('center'), ['struct', 'center', 'aux']);
+  assert.deepEqual(moveSnapTargetKinds('aux'), ['struct', 'center', 'aux']);
+  assert.deepEqual(moveSnapTargetKinds('beam'), ['struct', 'beam']);
+  // sameDirectionObstacleKinds（障害物集合）とは別の関係であることの確認: struct×beamは障害物集合では
+  // 含まれるが吸着先集合では含まれない（findCLMoveSnapがmoving=structでも梁芯へ吸着しない現行仕様）。
+  assert.ok(sameDirectionObstacleKinds('struct').includes('beam'));
+  assert.ok(!moveSnapTargetKinds('struct').includes('beam'));
 });
 
 test('coexistenceAt: 引数の向きで結果が変わる非対称セル（struct×centerはpromote、center×structはforbidden）', () => {
@@ -360,6 +373,40 @@ test('isSameDirectionObstacle: 肯定側（中心線subject×同方向の通り�
   assert.equal(isSameDirectionObstacle(subject, orthoStruct), false, '直交（centerLineType不一致）は対象外');
 });
 
+test('sameDirectionObstacles: graph.centerLines を isSameDirectionObstacle(subject, other) でフィルタした配列を返す（走査API）', () => {
+  const { graph } = makeProjectWithGraph();
+  const subject = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
+  const otherStruct = graph.addCenterLine(CenterLineType.VERTICAL, 2000, { labeled: true, discipline: Discipline.STRUCT });
+  const otherBeam   = graph.addCenterLine(CenterLineType.VERTICAL, 3000, { labeled: false, discipline: Discipline.FUSE });
+  graph.addCenterLine(CenterLineType.HORIZONTAL, 0, { labeled: true, discipline: Discipline.STRUCT }); // 直交（対象外）
+
+  const obstacles = sameDirectionObstacles(graph, subject);
+  // subject=center: sameDirectionObstacleKinds('center')=['struct','center','aux']→梁芯は含まれない。
+  assert.deepEqual(obstacles.map(c => c.id).sort(), [otherStruct.id].sort());
+  assert.equal(obstacles.some(c => c.id === otherBeam.id), false);
+
+  // 最小のダックタイピング（{centerLines}のみ）でも動く。
+  const duckGraph = { centerLines: graph.centerLines };
+  assert.deepEqual(sameDirectionObstacles(duckGraph, subject).map(c => c.id).sort(), obstacles.map(c => c.id).sort());
+});
+
+test('isMoveSnapTarget: 肯定側（subject=struct/center/aux は梁芯を対象にしない、subject=beamは通り芯・梁芯のみ対象）', () => {
+  const { graph } = makeProjectWithGraph();
+  const structSubject = graph.addCenterLine(CenterLineType.VERTICAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+  const beamSubject    = graph.addCenterLine(CenterLineType.VERTICAL, 100, { labeled: false, discipline: Discipline.FUSE });
+  const otherStruct = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: true, discipline: Discipline.STRUCT });
+  const otherCenter = graph.addCenterLine(CenterLineType.VERTICAL, 2000, { labeled: false, discipline: Discipline.ARCH });
+  const otherBeam   = graph.addCenterLine(CenterLineType.VERTICAL, 3000, { labeled: false, discipline: Discipline.FUSE });
+
+  assert.equal(isMoveSnapTarget(structSubject, otherStruct), true);
+  assert.equal(isMoveSnapTarget(structSubject, otherCenter), true);
+  assert.equal(isMoveSnapTarget(structSubject, otherBeam), false, 'subject=structでも梁芯は吸着先にならない');
+
+  assert.equal(isMoveSnapTarget(beamSubject, otherStruct), true);
+  assert.equal(isMoveSnapTarget(beamSubject, otherBeam), true);
+  assert.equal(isMoveSnapTarget(beamSubject, otherCenter), false, 'subject=beamは中心線を吸着先にしない');
+});
+
 test('isMergeCandidate: 肯定側（補助線×補助線=true、補助線×中心線=false、相手がlabeled:trueならfalse）', () => {
   const { graph } = makeProjectWithGraph();
   const auxA = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, lineType: 'dashed' });
@@ -512,6 +559,78 @@ test('beamAxisMoveRange: 障害物は sameDirectionObstacleKinds(beam) の予測
 
   assert.deepEqual(beamAxisMoveRange(graph, a), expectedRangeFor(a));
   assert.deepEqual(beamAxisMoveRange(graph, b), expectedRangeFor(b));
+});
+
+// ---- M-1(ステップ4QA指摘): labeled→種別ベース統一で解消された「既知の乖離」の反転ピン留め。
+// 移行前は生の `other.labeled` を見ていたため、旧データ（`{labeled:true, discipline:ARCH}` のような
+// labeled と種別が食い違う異常値）も障害物・スナップ吸着先になっていた。移行後は種別ベース
+// （sameDirectionObstacleKinds('beam')=['struct','beam']）のため、通り芯でない旧データは障害物に
+// ならない——この反転を明示的にピン留めする（transform/centerLineOps.js のm4/m5と同じ流儀）。
+
+test('【旧データ限定・種別ベースへ統一】beamAxisMoveRange: labeled:trueでも種別が通り芯でないCL（{labeled:true, discipline:ARCH}）は障害物にならない', () => {
+  const graph = makeGraph();
+  graph.addCenterLine(CenterLineType.VERTICAL, 0,     { labeled: true, discipline: Discipline.STRUCT });
+  graph.addCenterLine(CenterLineType.VERTICAL, 10000, { labeled: true, discipline: Discipline.STRUCT });
+  const legacy = graph.addCenterLine(CenterLineType.VERTICAL, 4000, { labeled: true, discipline: Discipline.ARCH });
+  assert.equal(centerLineKind(legacy), 'center', '前提: discipline=ARCHなのでcenter種別（labeled:trueだが種別は通り芯でない旧データ）');
+  const beam = graph.addCenterLine(CenterLineType.VERTICAL, 3000, { labeled: false, discipline: Discipline.FUSE });
+
+  const range = beamAxisMoveRange(graph, beam);
+  assert.equal(range.min, 0 + CL_OVERLAP_TOL_MM);
+  assert.equal(range.max, 10000 - CL_OVERLAP_TOL_MM, '移行前は旧データ(4000)で止まっていたが、移行後は種別ベースのため素通りし通り芯(10000)で止まる');
+});
+
+for (const movingKind of ['struct', 'center', 'aux']) {
+  test(`findCLMoveSnap: 移動種別=${movingKind} の吸着先種別は moveSnapTargetKinds(${movingKind}) の予測と一致する（梁芯を除外）`, () => {
+    const { graph } = makeProjectWithGraph();
+    const movingProps = {
+      struct: { labeled: true,  discipline: Discipline.STRUCT },
+      center: { labeled: false, discipline: Discipline.ARCH },
+      aux:    { labeled: false, lineType: 'dashed' },
+    }[movingKind];
+    const moving = graph.addCenterLine(CenterLineType.VERTICAL, 0, movingProps);
+    graph.addCenterLine(CenterLineType.VERTICAL, 3, { labeled: false, discipline: Discipline.FUSE }); // 梁芯（最も近い）
+    const struct = graph.addCenterLine(CenterLineType.VERTICAL, 6, { labeled: true, discipline: Discipline.STRUCT });
+
+    const targetKinds = moveSnapTargetKinds(movingKind);
+    assert.ok(!targetKinds.includes('beam'), '前提: moveSnapTargetKindsは梁芯を含まない');
+    const snap = findCLMoveSnap(graph, moving, 0, 0, 8, 1, 1);
+    assert.equal(snap, struct.value, `moving=${movingKind}: 梁芯(3)ではなく通り芯(6)へ吸着するはず`);
+  });
+}
+
+test('findBeamAxisMoveSnap: 障害物は sameDirectionObstacleKinds(beam) の予測（通り芯・梁芯のみ）と一致する', () => {
+  const graph = makeGraph();
+  graph.addCenterLine(CenterLineType.VERTICAL, 0,     { labeled: true, discipline: Discipline.STRUCT });
+  graph.addCenterLine(CenterLineType.VERTICAL, 10000, { labeled: true, discipline: Discipline.STRUCT });
+  graph.addCenterLine(CenterLineType.VERTICAL, 3000, { labeled: false, discipline: Discipline.ARCH }); // 中心線（障害物にならないはず）
+  graph.addCenterLine(CenterLineType.VERTICAL, 8000, { labeled: false, lineType: 'dashed' });          // 補助線（同上）
+  const moving = graph.addCenterLine(CenterLineType.VERTICAL, 4000, { labeled: false, discipline: Discipline.FUSE });
+
+  const allowedKinds = sameDirectionObstacleKinds('beam');
+  const obstacles = graph.centerLines.filter(c =>
+    c.centerLineType === CenterLineType.VERTICAL && c.id !== moving.id && allowedKinds.includes(centerLineKind(c)));
+  let lo = -Infinity, hi = Infinity;
+  for (const c of obstacles) {
+    if (c.value < moving.value && c.value > lo) lo = c.value;
+    if (c.value > moving.value && c.value < hi) hi = c.value;
+  }
+  const expectedMid = (lo + hi) / 2;
+
+  const snap = findBeamAxisMoveSnap(graph, moving, expectedMid, 0, 50, 1, 1);
+  assert.equal(snap, expectedMid, '中心線・補助線は障害物にならず通り芯0・10000の中点へ吸着するはず');
+});
+
+test('【旧データ限定・種別ベースへ統一】findBeamAxisMoveSnap: labeled:trueでも種別が通り芯でないCL（{labeled:true, lineType:dashed}）を挟んでも中点は通り芯基準のまま', () => {
+  const graph = makeGraph();
+  graph.addCenterLine(CenterLineType.VERTICAL, 0,     { labeled: true, discipline: Discipline.STRUCT });
+  graph.addCenterLine(CenterLineType.VERTICAL, 10000, { labeled: true, discipline: Discipline.STRUCT });
+  const legacy = graph.addCenterLine(CenterLineType.VERTICAL, 6000, { labeled: true, lineType: 'dashed' });
+  assert.equal(centerLineKind(legacy), 'aux', '前提: lineType=dashedなのでaux種別（labeled:trueだが種別は通り芯でない旧データ）');
+  const moving = graph.addCenterLine(CenterLineType.VERTICAL, 4000, { labeled: false, discipline: Discipline.FUSE });
+
+  const snap = findBeamAxisMoveSnap(graph, moving, 5000, 0, 50, 1, 1);
+  assert.equal(snap, 5000, '移行前は旧データ(6000)がhi側障害物になり中点が変わっていたが、移行後は種別ベースのため素通りし通り芯0・10000の中点(5000)へ吸着する');
 });
 
 test('checkPromoteToGridGuards: 拒否する既存種別は convertBlockingKinds(\'promote\') の予測と一致する', () => {
@@ -717,6 +836,7 @@ test('【失敗系】未知のCL種別は throw する', () => {
   assert.throws(() => coexistenceAt('struct', 'wood'), /未知のCL種別: wood/);
   assert.throws(() => orthoAnchorKinds('wood'), /未知のCL種別: wood/);
   assert.throws(() => sameDirectionObstacleKinds('wood'), /未知のCL種別: wood/);
+  assert.throws(() => moveSnapTargetKinds('wood'), /未知のCL種別: wood/);
   assert.throws(() => mergeableKinds('wood'), /未知のCL種別: wood/);
   assert.throws(() => allowsWallAnchor('wood'), /未知のCL種別: wood/);
   assert.throws(() => extentAnchorStyle('wood'), /未知のCL種別: wood/);
