@@ -6,7 +6,8 @@
 // 判定は型（VERTICAL/HORIZONTAL）を分岐せず、線分の始点・終点座標に対する
 // 共線判定＋端点一致判定という純粋な2Dベクトル演算1本で行う（RADIALは getCenterLineSegment
 // が null を返すため自動的に対象外になる。将来ジオメトリが定義されればそこに分岐を足すだけでよい）。
-import { CenterLineType, centerLineKind } from '@core';
+import { CenterLineType } from '@core';
+import { mergeCandidates } from '../core/centerLineKindPolicy.js';
 
 // 重複拒否(OVERLAP_TOL=0.5mm、緩い判定)とは別の、端点厳密一致用の許容誤差
 export const CL_MERGE_EPS_MM = 1e-6;
@@ -73,11 +74,11 @@ function hiDescriptor(owner) {
 
 // centerLineType・kind が一致し labeled:false な既存中心線から、segment と隣接（共線・端点一致）
 // するものを1つ探す。excludeIds は連鎖中に自分自身を除外するために使う。
+// 相手選択は centerLineKindPolicy.mergeCandidates 経由（種別条件の無い素の graph.centerLines 走査を
+// 個別に書かない——過去に3回、この種の走査が非表示の梁芯を障害物へ混入させる不具合の原因になった
+// 教訓。ステップ7、2026-09-20移行）。
 export function findCenterLineMergeMatch(graph, segment, centerLineType, kind, excludeIds = []) {
-  for (const cl of graph.centerLines) {
-    if (cl.centerLineType !== centerLineType || cl.labeled) continue;
-    if (excludeIds.includes(cl.id)) continue;
-    if (centerLineKind(cl) !== kind) continue;
+  for (const cl of mergeCandidates(graph, { centerLineType, kind, exclude: excludeIds })) {
     const candidateSeg = getCenterLineSegment(cl);
     if (!candidateSeg) continue;
     const touch = segmentsCollinearTouching(segment, candidateSeg);

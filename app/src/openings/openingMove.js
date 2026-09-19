@@ -35,7 +35,7 @@ import { findHostWall, findOpeningsOnWall } from './openingGeometry.js';
 // isOpeningBoundaryKind／kindsVisibleIn: core/centerLineKindPolicy.js は ./centerLine.js・
 // ./constants.js のみに依存する純モジュール（import ゼロに近い規約）のため、ここから引いても
 // react-konva/store.js/snap.js/.jsx を静的に引かない、という本ファイル冒頭の規約は壊れない。
-import { isOpeningBoundaryKind, kindsVisibleIn } from '../core/centerLineKindPolicy.js';
+import { isOpeningBoundaryKind, candidatesVisibleIn } from '../core/centerLineKindPolicy.js';
 
 /**
  * 壁と直交し、壁を横切る（または壁面に届く）CLか。建具がまたげない境界（通り芯・中心線）の判定。
@@ -67,8 +67,10 @@ function isBlockingKind(cl) {
 // ドラッグにも共通で使われ、本ファイルの関数はappModeを引数に取らない）ため、特定のappModeではなく
 // 「平面系で可視な種別」というmode非依存の固定集合として扱う——floorplan/finish/openingの
 // VISIBLE_KINDS_BY_MODEはいずれも同じ['struct','center','aux']（centerLineKindPolicy.test.jsで
-// 一致を検証済み）なので、代表として kindsVisibleIn('floorplan') を使う。
-const OPENING_SNAP_CL_KINDS = kindsVisibleIn('floorplan');
+// 一致を検証済み）なので、代表として appMode='floorplan' を使う（candidatesVisibleIn(graph,
+// {appMode:'floorplan', centerLineType}) 経由。ステップ7、2026-09-20移行——種別条件の無い素の
+// graph.centerLines 走査を個別に書かない）。
+const OPENING_SNAP_APP_MODE = 'floorplan';
 
 /**
  * 境界（host と同じ軸CL・同じ向きで開口位置を含む全壁＝両室の壁・下地オーナー壁・仕上げ薄壁）の
@@ -132,6 +134,10 @@ export function openingMoveRange(wall, opening, graph) {
     if (hi <= opening.coord1)      loBound = Math.max(loBound, hi);
     else if (lo >= opening.coord2) hiBound = Math.min(hiBound, lo);
   };
+  // ここは走査API（candidatesVisibleIn等）に畳めない: 種別を問わずCL上の直交壁材を先に確認する必要が
+  // あり（perpendicularWallMaterial は種別を見ない）、種別で絞り込んでからループするとその判定を
+  // 素通りしてしまう（isBlockingKindでの絞り込みはperpendicularWallMaterialが不発だった場合のみ）。
+  // ステップ7ガードテストの allowlist（core/centerLineKindPolicy.guard.test.js）参照。
   for (const cl of graph.centerLines) {
     if (cl.centerLineType !== crossType) continue;
     const mat = perpendicularWallMaterial(cl, wall, boundary, graph);
@@ -190,9 +196,7 @@ export function openingSnapCandidates(wall, opening, graph, range) {
   const push = (value, kind, extra) => { if (inRange(value)) out.push({ value, kind, ...extra }); };
   const crossType = wall.isVertical ? CenterLineType.HORIZONTAL : CenterLineType.VERTICAL;
   const half = opening.width / 2;
-  for (const cl of graph.centerLines) {
-    if (cl.centerLineType !== crossType) continue;
-    if (!OPENING_SNAP_CL_KINDS.includes(centerLineKind(cl))) continue;
+  for (const cl of candidatesVisibleIn(graph, { appMode: OPENING_SNAP_APP_MODE, centerLineType: crossType })) {
     const v = cl.value;
     push(v,        'cl-center', { cl });
     push(v + half, 'cl-edge',   { cl });
