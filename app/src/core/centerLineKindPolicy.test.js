@@ -18,7 +18,7 @@ import { PlanGraph } from './planGraph.js';
 import {
   CL_KINDS, APP_MODES, VISIBLE_KINDS_BY_MODE, HIT_EXCLUDED_KINDS_BY_MODE, COEXISTENCE,
   ORTHO_ANCHOR_OVERRIDE, WALL_ANCHOR_KINDS, EXTENT_ANCHOR_STYLE, ENDPOINT_RULE_KINDS, FULL_SPAN_KINDS,
-  CONVERT_BLOCKING_KINDS,
+  CONVERT_BLOCKING_KINDS, CROSS_FLOOR_COUNTERPART_KINDS,
   kindsVisibleIn, hitTestKinds, kindsVisibleWith, orthoAnchorKinds, sameDirectionObstacleKinds,
   moveSnapTargetKinds,
   coexistenceAt, convertBlockingKinds, mergeableKinds, allowsWallAnchor, extentAnchorStyle,
@@ -26,6 +26,7 @@ import {
   isOrthoAnchorCandidate, isSameDirectionObstacle, isMoveSnapTarget, isMergeCandidate,
   isRenderTarget, isHitTestTarget,
   coversAlongAxis, orthoAnchorCandidates, orthoAnchorCandidatesForNew, sameDirectionObstacles,
+  sameCoordCounterparts,
 } from './centerLineKindPolicy.js';
 
 // ---- 製品コード（section C）との突き合わせに使う実装 ----
@@ -109,6 +110,30 @@ test('小表: WALL_ANCHOR_KINDS・EXTENT_ANCHOR_STYLE・ENDPOINT_RULE_KINDS・FU
   );
 });
 
+test('CROSS_FLOOR_COUNTERPART_KINDS: 他階の入替え相手種別は中心線・補助線・梁芯（優先順つき。通り芯は含まない）', () => {
+  assert.deepEqual([...CROSS_FLOOR_COUNTERPART_KINDS], ['center', 'aux', 'beam']);
+});
+
+// QA指摘（ステップ5再QA）で判明した既存の穴: CL_KINDS 自体の並びを固定するリテラルテストが
+// 無かった——CL_KINDSは transform/centerLineOps.js addCenterLineFromDialog の existing 選択の
+// 優先順（同種別優先の次に使う順）としてそのままimportされて使われるため、この並びが壊れると
+// 追加・変換の帰結が広範囲で変わる（M-1参照）。
+test('【不変条件】CL_KINDS の並びは 通り芯・中心線・補助線・梁芯 で固定されている', () => {
+  assert.deepEqual([...CL_KINDS], ['struct', 'center', 'aux', 'beam']);
+});
+
+// 【不変条件】QA指摘m-2: error.js は無import（extractedModuleImportInvariant）のため
+// CROSS_FLOOR_COUNTERPART_KINDSと同じ並び順を`CROSS_FLOOR_KIND_ORDER`としてローカルに複写している
+// （error.js のformatFloorsByKind参照）——ソースを読むテスト（APP_MODES不変条件と同じ流儀）で
+// 複写元と複写先が食い違っていないことを固定する。
+test('【不変条件】error.js の CROSS_FLOOR_KIND_ORDER は centerLineKindPolicy.js の CROSS_FLOOR_COUNTERPART_KINDS と一致する', () => {
+  const src = fs.readFileSync(path.resolve(import.meta.dirname, '../error.js'), 'utf8');
+  const m = src.match(/CROSS_FLOOR_KIND_ORDER\s*=\s*\[([^\]]*)\]/);
+  assert.ok(m, 'error.js から CROSS_FLOOR_KIND_ORDER の配列リテラルを抽出できなかった（正規表現がソースと食い違っている可能性）');
+  const extracted = m[1].split(',').map(s => s.trim().replace(/^'|'$/g, '')).filter(Boolean);
+  assert.deepEqual(extracted, [...CROSS_FLOOR_COUNTERPART_KINDS]);
+});
+
 test('【不変条件】原始事実の表（VISIBLE_KINDS_BY_MODE・COEXISTENCE・ORTHO_ANCHOR_OVERRIDE 他）はすべて Object.freeze されている', () => {
   assert.ok(Object.isFrozen(VISIBLE_KINDS_BY_MODE));
   for (const v of Object.values(VISIBLE_KINDS_BY_MODE)) assert.ok(Object.isFrozen(v));
@@ -123,6 +148,7 @@ test('【不変条件】原始事実の表（VISIBLE_KINDS_BY_MODE・COEXISTENCE
   assert.ok(Object.isFrozen(FULL_SPAN_KINDS));
   assert.ok(Object.isFrozen(CONVERT_BLOCKING_KINDS));
   for (const v of Object.values(CONVERT_BLOCKING_KINDS)) assert.ok(Object.isFrozen(v));
+  assert.ok(Object.isFrozen(CROSS_FLOOR_COUNTERPART_KINDS));
   assert.ok(Object.isFrozen(CL_KINDS));
   assert.ok(Object.isFrozen(APP_MODES));
 });
@@ -388,6 +414,43 @@ test('sameDirectionObstacles: graph.centerLines を isSameDirectionObstacle(subj
   // 最小のダックタイピング（{centerLines}のみ）でも動く。
   const duckGraph = { centerLines: graph.centerLines };
   assert.deepEqual(sameDirectionObstacles(duckGraph, subject).map(c => c.id).sort(), obstacles.map(c => c.id).sort());
+});
+
+// ---- sameCoordCounterparts: 同座標の相手を列挙する走査API（種別による絞り込みは行わない）----
+
+test('sameCoordCounterparts: value・centerLineTypeが一致するCLを種別を問わず列挙する（tolMm境界・exclude）', () => {
+  const { graph } = makeProjectWithGraph();
+  const structCl = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: true, discipline: Discipline.STRUCT });
+  const centerCl = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
+  const farCl    = graph.addCenterLine(CenterLineType.VERTICAL, 2000, { labeled: false, discipline: Discipline.ARCH });
+  const orthoCl  = graph.addCenterLine(CenterLineType.HORIZONTAL, 1000, { labeled: false, discipline: Discipline.ARCH });
+
+  const result = sameCoordCounterparts(graph, { centerLineType: CenterLineType.VERTICAL, value: 1000 });
+  assert.deepEqual(result.map(c => c.id).sort(), [structCl.id, centerCl.id].sort(), '種別を問わず同座標・同方向のCLをすべて返す');
+  assert.equal(result.some(c => c.id === farCl.id), false, '座標が異なれば含まれない');
+  assert.equal(result.some(c => c.id === orthoCl.id), false, '方向が異なれば含まれない');
+
+  const withExclude = sameCoordCounterparts(graph, { centerLineType: CenterLineType.VERTICAL, value: 1000, exclude: structCl });
+  assert.deepEqual(withExclude.map(c => c.id), [centerCl.id], 'excludeで指定したCL自身は除外される（オブジェクト参照比較）');
+
+  // 最小のダックタイピング（{centerLines}のみ）でも動く（tolBoundary追加前の時点で比較する）。
+  const duckGraph = { centerLines: graph.centerLines };
+  assert.deepEqual(sameCoordCounterparts(duckGraph, { centerLineType: CenterLineType.VERTICAL, value: 1000 }).map(c => c.id).sort(), result.map(c => c.id).sort());
+
+  const tolBoundary = graph.addCenterLine(CenterLineType.VERTICAL, 1000.4, { labeled: false, discipline: Discipline.ARCH });
+  assert.equal(sameCoordCounterparts(graph, { centerLineType: CenterLineType.VERTICAL, value: 1000 }).some(c => c.id === tolBoundary.id), true, '既定tolMm(CL_OVERLAP_TOL_MM=0.5)未満の差はtrue（0.4<0.5）');
+  assert.equal(sameCoordCounterparts(graph, { centerLineType: CenterLineType.VERTICAL, value: 1000, tolMm: 0.3 }).some(c => c.id === tolBoundary.id), false, 'tolMmを狭めれば境界外になる');
+});
+
+test('【失敗系】sameCoordCounterparts: centerLineType未指定はthrow、valueが数値でなければthrow（未指定・undefined・NaN・文字列）', () => {
+  const { graph } = makeProjectWithGraph();
+  graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
+  assert.throws(() => sameCoordCounterparts(graph, { value: 1000 }), /centerLineType/);
+  assert.throws(() => sameCoordCounterparts(graph, { centerLineType: null, value: 1000 }), /centerLineType/);
+  assert.throws(() => sameCoordCounterparts(graph, { centerLineType: CenterLineType.VERTICAL }), /value/);
+  assert.throws(() => sameCoordCounterparts(graph, { centerLineType: CenterLineType.VERTICAL, value: undefined }), /value/);
+  assert.throws(() => sameCoordCounterparts(graph, { centerLineType: CenterLineType.VERTICAL, value: NaN }), /value/);
+  assert.throws(() => sameCoordCounterparts(graph, { centerLineType: CenterLineType.VERTICAL, value: '1000' }), /value/);
 });
 
 test('isMoveSnapTarget: 肯定側（subject=struct/center/aux は梁芯を対象にしない、subject=beamは通り芯・梁芯のみ対象）', () => {
