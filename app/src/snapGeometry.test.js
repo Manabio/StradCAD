@@ -5,10 +5,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  Plane, PlanGraph, CenterLineType, DimensionKind, DimensionSide, HDimensionLine, VDimensionLine,
+  Plane, PlanGraph, CenterLineType, Discipline, DimensionKind, DimensionSide, HDimensionLine, VDimensionLine,
 } from './core.js';
 import {
   findNearestCenterLineEndpoint, findBracketingCLs, nonLabeledClExtent, clSideReachesCenterBoundary,
+  findCLMoveSnap, findBeamAxisMoveSnap,
 } from './snapGeometry.js';
 
 function makeGraph() {
@@ -172,4 +173,58 @@ test('findBracketingCLs: 座標を挟むCLペアを返す（回帰）', () => {
   const [lo, hi] = findBracketingCLs(cls, 1500);
   assert.equal(lo.value, 1000);
   assert.equal(hi.value, 2000);
+});
+
+// ================================================================
+// findCLMoveSnap / findBeamAxisMoveSnap
+// snap.js から centerLineKindPolicy 経由へ移行（ステップ4、2026-09-19）。
+// spatialIndex/store に依存しない純関数のため snapGeometry.js へ分離済み。
+// ================================================================
+
+test('findCLMoveSnap: moving=struct/center/aux いずれでも梁芯へは吸着せず、通り芯・中心線・補助線へは吸着する', () => {
+  const movingProps = {
+    struct: { labeled: true,  discipline: Discipline.STRUCT },
+    center: { labeled: false, discipline: Discipline.ARCH },
+    aux:    { labeled: false, lineType: 'dashed' },
+  };
+  for (const movingKind of ['struct', 'center', 'aux']) {
+    const graph = makeGraph();
+    const moving = graph.addCenterLine(CenterLineType.VERTICAL, 0, movingProps[movingKind]);
+    graph.addCenterLine(CenterLineType.VERTICAL, 3, { labeled: false, discipline: Discipline.FUSE }); // 梁芯（最も近いが吸着対象外）
+    const struct = graph.addCenterLine(CenterLineType.VERTICAL, 6, { labeled: true, discipline: Discipline.STRUCT });
+
+    const snap = findCLMoveSnap(graph, moving, 0, 0, THRESHOLD_PX, SCALE, SCALE);
+    assert.equal(snap, struct.value, `moving=${movingKind}: 梁芯(3)ではなく通り芯(6)へ吸着するはず`);
+  }
+});
+
+test('【失敗系】findCLMoveSnap: 候補が梁芯のみ（吸着対象外種別のみ）で閾値内の場合はnullを返す', () => {
+  const graph = makeGraph();
+  const moving = graph.addCenterLine(CenterLineType.VERTICAL, 0, { labeled: false, discipline: Discipline.ARCH });
+  graph.addCenterLine(CenterLineType.VERTICAL, 3, { labeled: false, discipline: Discipline.FUSE }); // 梁芯のみ閾値内
+  const snap = findCLMoveSnap(graph, moving, 0, 0, THRESHOLD_PX, SCALE, SCALE);
+  assert.equal(snap, null);
+});
+
+test('findBeamAxisMoveSnap: 障害物は通り芯・他の梁芯のみ（中心線・補助線は中点計算に影響しない）', () => {
+  const graph = makeGraph();
+  graph.addCenterLine(CenterLineType.VERTICAL, 0,     { labeled: true, discipline: Discipline.STRUCT });
+  graph.addCenterLine(CenterLineType.VERTICAL, 10000, { labeled: true, discipline: Discipline.STRUCT });
+  // 中心線・補助線が誤って障害物に混入すると lo/hi がここへ引き寄せられ、中点が変わってしまう。
+  graph.addCenterLine(CenterLineType.VERTICAL, 3000, { labeled: false, discipline: Discipline.ARCH });
+  graph.addCenterLine(CenterLineType.VERTICAL, 8000, { labeled: false, lineType: 'dashed' });
+  const moving = graph.addCenterLine(CenterLineType.VERTICAL, 4000, { labeled: false, discipline: Discipline.FUSE });
+
+  // 正しい障害物（struct 0・10000）による中点は5000。中心線・補助線混入なら中点は5500になるはず。
+  const snap = findBeamAxisMoveSnap(graph, moving, 5000, 0, 50, SCALE, SCALE);
+  assert.equal(snap, 5000, '中心線(3000)・補助線(8000)は障害物にならず、通り芯0・10000の中点(5000)へ吸着するはず');
+});
+
+test('【失敗系】findBeamAxisMoveSnap: 片側に障害物（通り芯・梁芯）が無ければnullを返す', () => {
+  const graph = makeGraph();
+  graph.addCenterLine(CenterLineType.VERTICAL, 0, { labeled: true, discipline: Discipline.STRUCT });
+  const moving = graph.addCenterLine(CenterLineType.VERTICAL, 5000, { labeled: false, discipline: Discipline.FUSE });
+  // hi側に通り芯・梁芯が無い
+  const snap = findBeamAxisMoveSnap(graph, moving, 6000, 0, 50, SCALE, SCALE);
+  assert.equal(snap, null);
 });

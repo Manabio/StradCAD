@@ -5,6 +5,7 @@
 // これらの関数を必要とするケースがある）。snap.js は本モジュールを import して同名を再エクスポートし、
 // 既存の import 元（App.jsx・CenterLinesLayer.jsx 等）を壊さない。
 import { CenterLineType, DimensionKind, DimensionSide, centerLineKind } from './core.js';
+import { isMoveSnapTarget, sameDirectionObstacles } from './core/centerLineKindPolicy.js';
 
 // 中心線の端のはね出し量 (mm)。区分線形:
 //   denom <  BASE_DENOM         : (LOW_DENOM, LOW_MM) → (BASE_DENOM, BASE_MM) の直線
@@ -39,6 +40,70 @@ export function findBracketingCLs(cls, coord) {
     if (d > 0  && d  < hiDist) { hiDist = d;  hi = cl; }
   }
   return [lo, hi];
+}
+
+// ----------------------------------------------------------------
+// 中心線移動中のスナップ値計算（findCLMoveSnap・findBeamAxisMoveSnap）。
+// spatialIndex/store に依存しない純関数のため snap.js から分離（ファイル冒頭コメント参照）。
+// ----------------------------------------------------------------
+
+/**
+ * 中心線移動中、同種の他中心線へのスナップ値を返す（平面モードの通り芯・中心線・補助線が対象）。
+ * 吸着先は centerLineKindPolicy.isMoveSnapTarget（moveSnapTargetKindsベース。障害物集合とは別の
+ * 関係）——moving が struct でも梁芯へは吸着しない（moveSnapTargetKinds('struct') は 'beam' を
+ * 含まない。障害物集合 sameDirectionObstacleKinds('struct') は 'beam' を含むため流用不可）。
+ * moveSnapTargetKinds の導出は VISIBLE_KINDS_BY_MODE に連動する——site/elevation のヒットを有効化
+ * するには可視表（VISIBLE_KINDS_BY_MODE）を非空にする必要があり、その時点で吸着先も自動的に広がる
+ * （吸着先だけを個別に拡張することはできない設計）。梁芯の移動は専用の findBeamAxisMoveSnap を使う
+ * （呼び出し元 interaction/usePointerInteraction.js の updatePointer が
+ * `appMode === 'structure' && centerLineKind(cl) === 'beam'` で呼び分ける——appMode==='structure'
+ * かつ梁芯のときのみ findBeamAxisMoveSnap、それ以外は本関数）。
+ */
+export function findCLMoveSnap(graph, movingCL, wx, wy, thresholdPx, scaleX, scaleY) {
+  if (!graph) return null;
+  const isV   = movingCL.centerLineType === CenterLineType.VERTICAL;
+  const scale = isV ? scaleX : scaleY;
+  const coord = isV ? wx : wy;
+  let best = null, minDist = Infinity;
+  for (const cl of graph.centerLines) {
+    if (cl.id === movingCL.id || cl.centerLineType !== movingCL.centerLineType) continue;
+    if (!isMoveSnapTarget(movingCL, cl)) continue;
+    const dist = Math.abs(cl.value - coord) * scale;
+    if (dist < thresholdPx && dist < minDist) { minDist = dist; best = cl.value; }
+  }
+  return best;
+}
+
+/**
+ * 梁芯CL（centerLineKind==='beam'）移動中のスナップ値を返す。findCLMoveSnap と違い通り芯・他の梁芯の
+ * 値そのものへは吸着しない（beamAxisMoveRange が到達不能にしている禁止位置のため）。吸着先は「両隣の
+ * 障害物（通り芯・他の梁芯）に挟まれた区間」の中点・3等分点（1/3, 2/3）——「大梁間の中央に小梁1本」
+ * 「小梁2本を等間隔」という実務上よくある配置。障害物の定義は structural/beamAxisMove.js の
+ * beamAxisMoveRange と同じ centerLineKindPolicy.sameDirectionObstacles（'beam'→通り芯・他の梁芯のみ）
+ * を共有する（ポリシーは core/ に置くことで、snap.js/structural/ 双方から参照でき「レイヤ分離のため
+ * 独立実装」だった重複が解消済み）。中心線・補助線（labeled:falseの通常CL）とは同位置に到達し得るが、
+ * 小梁の生成はhost（大梁の有無）だけで決まるため実害はない（beamAxisMoveRange参照）。
+ * 等ピッチスナップ（3本以上）・複数梁芯の一括移動は次フェーズ（.claude/structural-model.md参照）。
+ */
+export function findBeamAxisMoveSnap(graph, movingCL, wx, wy, thresholdPx, scaleX, scaleY) {
+  if (!graph) return null;
+  const isV   = movingCL.centerLineType === CenterLineType.VERTICAL;
+  const scale = isV ? scaleX : scaleY;
+  const coord = isV ? wx : wy;
+  let lo = -Infinity, hi = Infinity;
+  for (const other of sameDirectionObstacles(graph, movingCL)) {
+    const v = other.effectiveValue;
+    if (v < movingCL.value) { if (v > lo) lo = v; }
+    else if (v > movingCL.value) { if (v < hi) hi = v; }
+  }
+  if (lo === -Infinity || hi === Infinity) return null; // 片側に障害物が無ければ中点・3等分点は定義できない
+  const candidates = [(lo + hi) / 2, lo + (hi - lo) / 3, lo + (hi - lo) * 2 / 3];
+  let best = null, minDist = Infinity;
+  for (const v of candidates) {
+    const dist = Math.abs(v - coord) * scale;
+    if (dist < thresholdPx && dist < minDist) { minDist = dist; best = v; }
+  }
+  return best;
 }
 
 // ----------------------------------------------------------------

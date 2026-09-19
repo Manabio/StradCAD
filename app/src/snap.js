@@ -9,12 +9,19 @@ import { inGutter as isInGutter } from './layout.js';
 // の純モジュール規約=静的importは./core.jsのみ、には置けない）。renderer/gutterLabelHits.js
 // （react-konva非依存の純関数レイヤ）から直接 import する。
 import { findCenterDimensionLegEndpoint } from './renderer/gutterLabelHits.js';
-// overhangMm・findBracketingCLs・nonLabeledClExtent・findNearestCenterLineEndpoint は
-// spatialIndex/store に依存しない純関数のため snapGeometry.js へ分離済み（node:test から
-// store非依存で import したいモジュール向け）。ここでは同名を再エクスポートし、
-// 既存の import 元（App.jsx・CenterLinesLayer.jsx 等）を壊さない。
-import { overhangMm, findBracketingCLs, nonLabeledClExtent, findNearestCenterLineEndpoint } from './snapGeometry.js';
-export { overhangMm, findBracketingCLs, nonLabeledClExtent, findNearestCenterLineEndpoint };
+// overhangMm・findBracketingCLs・nonLabeledClExtent・findNearestCenterLineEndpoint・
+// findCLMoveSnap・findBeamAxisMoveSnap は spatialIndex/store に依存しない純関数のため
+// snapGeometry.js へ分離済み（node:test から store非依存で import したいモジュール向け）。
+// ここでは同名を再エクスポートし、既存の import 元（App.jsx・interaction/usePointerInteraction.js 等）
+// を壊さない。
+import {
+  overhangMm, findBracketingCLs, nonLabeledClExtent, findNearestCenterLineEndpoint,
+  findCLMoveSnap, findBeamAxisMoveSnap,
+} from './snapGeometry.js';
+export {
+  overhangMm, findBracketingCLs, nonLabeledClExtent, findNearestCenterLineEndpoint,
+  findCLMoveSnap, findBeamAxisMoveSnap,
+};
 
 // ポインタ位置スナップ判定のスクリーン距離しきい値 (px)
 export const SNAP_THRESHOLD_PX = 20;
@@ -74,61 +81,6 @@ export function findNearestCenterLine(graph, wx, wy, thresholdPx, scaleX, scaleY
     nearest = cl;
   }
   return nearest;
-}
-
-/**
- * 中心線移動中、同種の他中心線へのスナップ値を返す（平面モードの通り芯・中心線・補助線が対象）。
- * 梁芯（centerLineKind==='beam'）は対象から無条件除外する——通り芯・他の梁芯の値は梁芯の移動範囲
- * （structural/beamAxisMove.js beamAxisMoveRange）にとって到達不能な禁止位置（他種別CLと同位置に
- * 共存不可という追加時ガードに抵触するため）で、吸着先として意味的に間違っている。梁芯の移動は
- * 専用の findBeamAxisMoveSnap を使う（呼び出し元 interaction/usePointerInteraction.js が centerLineKind(cl)==='beam' で呼び分ける）。
- */
-export function findCLMoveSnap(graph, movingCL, wx, wy, thresholdPx, scaleX, scaleY) {
-  if (!graph) return null;
-  const isV   = movingCL.centerLineType === 'X';
-  const scale = isV ? scaleX : scaleY;
-  const coord = isV ? wx : wy;
-  let best = null, minDist = Infinity;
-  for (const cl of graph.centerLines) {
-    if (cl.id === movingCL.id || cl.centerLineType !== movingCL.centerLineType) continue;
-    if (centerLineKind(cl) === 'beam') continue;
-    const dist = Math.abs(cl.value - coord) * scale;
-    if (dist < thresholdPx && dist < minDist) { minDist = dist; best = cl.value; }
-  }
-  return best;
-}
-
-/**
- * 梁芯CL（centerLineKind==='beam'）移動中のスナップ値を返す。findCLMoveSnap と違い通り芯・他の梁芯の
- * 値そのものへは吸着しない（beamAxisMoveRange が到達不能にしている禁止位置のため）。吸着先は「両隣の
- * 障害物（通り芯・他の梁芯）に挟まれた区間」の中点・3等分点（1/3, 2/3）——「大梁間の中央に小梁1本」
- * 「小梁2本を等間隔」という実務上よくある配置。障害物の定義は beamAxisMoveRange と同じ（同じ
- * centerLineType・自分以外・labeled または他の梁芯）だが、レイヤ分離（snap.js は structural/ に依存
- * しない）のため実装は独立に持つ。中心線・補助線（labeled:falseの通常CL）とは同位置に到達し得るが、
- * 小梁の生成はhost（大梁の有無）だけで決まるため実害はない（beamAxisMoveRange参照）。
- * 等ピッチスナップ（3本以上）・複数梁芯の一括移動は次フェーズ（.claude/structural-model.md参照）。
- */
-export function findBeamAxisMoveSnap(graph, movingCL, wx, wy, thresholdPx, scaleX, scaleY) {
-  if (!graph) return null;
-  const isV   = movingCL.centerLineType === 'X';
-  const scale = isV ? scaleX : scaleY;
-  const coord = isV ? wx : wy;
-  let lo = -Infinity, hi = Infinity;
-  for (const other of graph.centerLines) {
-    if (other.id === movingCL.id || other.centerLineType !== movingCL.centerLineType) continue;
-    if (!(other.labeled || centerLineKind(other) === 'beam')) continue;
-    const v = other.effectiveValue;
-    if (v < movingCL.value) { if (v > lo) lo = v; }
-    else if (v > movingCL.value) { if (v < hi) hi = v; }
-  }
-  if (lo === -Infinity || hi === Infinity) return null; // 片側に障害物が無ければ中点・3等分点は定義できない
-  const candidates = [(lo + hi) / 2, lo + (hi - lo) / 3, lo + (hi - lo) * 2 / 3];
-  let best = null, minDist = Infinity;
-  for (const v of candidates) {
-    const dist = Math.abs(v - coord) * scale;
-    if (dist < thresholdPx && dist < minDist) { minDist = dist; best = v; }
-  }
-  return best;
 }
 
 /**
