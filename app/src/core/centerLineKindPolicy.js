@@ -10,15 +10,16 @@
  * 導出関数を集約する——将来、各呼び出し元をこの表を引く形へ移行することで、同じ規約の重複実装が
  * 食い違って起きる不具合（例: 非表示の梁芯だけが延長操作の境界になってしまう）を無くすのが目的。
  *
- * 本ファイル導入の時点では製品コードから未接続——特性テスト（centerLineKindPolicy.test.js）が
+ * 本ファイル導入の時点では製品コードから未接続だった——特性テスト（centerLineKindPolicy.test.js）が
  * 既存4地点（centerLineOps.js 追加extent・followerGraph.js 移動範囲・beamAxisMove.js・
- * centerLineConvert.js 入替えガード）の現行動作と導出結果が一致することを固定するのみ。
- * 製品コード側の呼び出し元をこの表へ移行する作業は本ファイルの範囲外（未着手）。
+ * centerLineConvert.js 入替えガード）の現行動作と導出結果が一致することを固定するだけの段階を経て、
+ * transform/centerLineExtend.js（延長・短縮。2026-09-19）・transform/centerLineOps.js
+ * 追加extent（同・ステップ3）が orthoAnchorCandidates 経由へ移行済み。
+ * beamAxisMove.js・centerLineConvert.js の呼び出し元は本ファイルの範囲外（未着手）。
  *
- * 既知の乖離（旧データ限定）: 上記4地点のうち3箇所は、種別（centerLineKind）ではなく生の
+ * 既知の乖離（旧データ限定）: 未移行の2地点は、種別（centerLineKind）ではなく生の
  * `labeled` フラグで「通り芯扱いするか」を判定している
- * （transform/centerLineOps.js の梁芯extent候補フィルタ`return cl.labeled`、
- *   structural/beamAxisMove.js の梁芯移動障害物判定`other.labeled || centerLineKind(other)==='beam'`、
+ * （structural/beamAxisMove.js の梁芯移動障害物判定`other.labeled || centerLineKind(other)==='beam'`、
  *   transform/centerLineConvert.js の降格重複判定`!c.labeled && centerLineKind(c)!=='beam'`）。
  * 通常経路（AddCLDialog等）で作られるCLは種別と labeled が必ず一致する
  * （通り芯のみ labeled:true）ため実害は無いが、`{labeled:true, discipline:'arch'}` のような
@@ -26,6 +27,7 @@
  * 製品コードの実際の結果が割れる。本モジュールの挙動は変えず、この割れをピン留めテストで
  * 固定してある（centerLineKindPolicy.test.js内、「既知の乖離」と付記したテストを参照）。
  * 種別ベースへ統一するか labeled ベースを維持するかは製品コード移行時に裁定が要る。
+ * transform/centerLineOps.js 追加extentは移行済み（種別ベースへ統一。旧「既知の乖離」は解消）。
  *
  * import ゼロに近い規約（extractedModuleImportInvariant）: ./centerLine.js（centerLineKind）と
  * ./constants.js（CenterLineType）のみに依存する。store.js/snap.js/.jsx/core.js バレル/error.js は
@@ -90,15 +92,12 @@ export const COEXISTENCE = Object.freeze({
 });
 
 // ---- 原始事実4: 直交端部アンカーの特例 ----
-// transform/centerLineOps.js L368-372: 梁芯の端部候補は通り芯（labeled）のみに限定する
-// （autoFillSecondaryBeamsが見るgraph.gridXs/Ysは通り芯のみのため、中心線・補助線を候補に含めると
-// 直交グリッドに存在しない区画へextentが確定し小梁0本事故になる）。可視性（kindsVisibleWith）からは
-// 導けない唯一の上書き。
-// 既知の乖離（旧データ限定）: centerLineOps.js L372 の実装は `cl.labeled` を見ており、
-// `centerLineKind(cl)==='struct'` を見ていない——通常経路のCLは種別struct⇔labeled:trueが必ず一致する
-// ため実害は無いが、`{labeled:true, discipline:'arch'}`（centerLineKindは'center'）のような旧データが
-// あると、この表（=種別ベース）の予測より製品コードの実際の選択（=labeledベース）が広くなりうる
-// （centerLineKindPolicy.test.js の「既知の乖離」テストでピン留め済み）。
+// transform/centerLineOps.js 追加extent・transform/centerLineExtend.js 延長短縮: 梁芯の端部候補は
+// 通り芯のみに限定する（autoFillSecondaryBeamsが見るgraph.gridXs/Ysは通り芯のみのため、中心線・
+// 補助線を候補に含めると直交グリッドに存在しない区画へextentが確定し小梁0本事故になる）。可視性
+// （kindsVisibleWith）からは導けない唯一の上書き。両呼び出し元とも orthoAnchorCandidates 経由に
+// 移行済み（2026-09-19）——種別ベースで判定するため、旧データ（`{labeled:true, discipline:'arch'}`
+// のような labeled と種別が食い違う異常値）による乖離は解消済み。
 export const ORTHO_ANCHOR_OVERRIDE = Object.freeze({
   beam: Object.freeze(['struct']),
 });
@@ -251,6 +250,25 @@ export function coversAlongAxis(cl, coord, tolMm = 0) {
 }
 
 /**
+ * 直交端部アンカー候補の判定本体（種別許可＋方向＋範囲被覆）。isOrthoAnchorCandidate（既存CL同士の
+ * 単発判定）と orthoAnchorCandidatesForNew（まだグラフに存在しない新規CL用の走査）が共有する唯一の
+ * 実装——呼び出し元ごとに再実装すると同じ規約が個別に食い違う（transform/centerLineOps.js・
+ * transform/centerLineExtend.js 移行時の教訓。過去に3回、種別条件の無い素の graph.centerLines 走査が
+ * 個別に混入して不具合になった）。RADIAL の other は常に false（直交判定が成立しないため）。
+ * subject 側の RADIAL 除外は呼び出し元（isOrthoAnchorCandidate／orthoAnchorCandidatesForNew）が担う
+ * （前者はsubjectオブジェクトから、後者はcenterLineType引数から判定する——本関数はsubjectオブジェクト
+ * 自体を受け取らないため、ここでは判定できない）。
+ */
+function matchesOrthoAnchor(kind, subjectCenterLineType, other, coord, tolMm) {
+  if (other.centerLineType === CenterLineType.RADIAL) return false;
+  const subjectIsV = subjectCenterLineType === CenterLineType.VERTICAL;
+  const otherIsV   = other.centerLineType === CenterLineType.VERTICAL;
+  if (subjectIsV === otherIsV) return false;
+  if (!orthoAnchorKinds(kind).includes(centerLineKind(other))) return false;
+  return coversAlongAxis(other, coord, tolMm);
+}
+
+/**
  * other が subject の直交端部アンカー候補か（追加extent・延長・短縮で使う）。
  * 自身除外＋直交（VERTICAL⇔HORIZONTAL）＋種別（orthoAnchorKinds）＋coversAlongAxis(other, coord, tolMm)
  * を満たすこと。RADIAL は subject・other どちらでも false（直交判定が成立しないため）。
@@ -259,12 +277,7 @@ export function coversAlongAxis(cl, coord, tolMm = 0) {
 export function isOrthoAnchorCandidate(subject, other, { coord = subject.value, tolMm = 0 } = {}) {
   if (subject === other) return false;
   if (subject.centerLineType === CenterLineType.RADIAL) return false;
-  if (other.centerLineType === CenterLineType.RADIAL) return false;
-  const subjectIsV = subject.centerLineType === CenterLineType.VERTICAL;
-  const otherIsV   = other.centerLineType === CenterLineType.VERTICAL;
-  if (subjectIsV === otherIsV) return false;
-  if (!orthoAnchorKinds(centerLineKind(subject)).includes(centerLineKind(other))) return false;
-  return coversAlongAxis(other, coord, tolMm);
+  return matchesOrthoAnchor(centerLineKind(subject), subject.centerLineType, other, coord, tolMm);
 }
 
 /** other が subject と同方向（同 centerLineType）の移動障害物候補か（移動範囲・移動スナップで使う）。 */
@@ -291,19 +304,50 @@ export function isMergeCandidate(subject, other) {
 }
 
 /**
+ * まだグラフに存在しない新規CL（AddCLDialog確定前など）の直交端部アンカー候補を graph.centerLines
+ * から列挙する走査API。subject が実CLオブジェクトとして存在しない場面（追加ダイアログ確定前）向け——
+ * isOrthoAnchorCandidate／orthoAnchorCandidates は既存CLオブジェクトの centerLineType/value に依存
+ * するため、生成前に候補を絞りたい呼び出し元がダック型の仮オブジェクトを作ると、value の代わりに
+ * coord を渡し忘れても例外にならず非labeled候補だけが静かに脱落する事故になりうる（QA実測:
+ * 該当箇所で2件あるべき候補が1件になった）。kind・centerLineType・coord を必須の明示引数にすることで
+ * この種の事故を型（呼び出し時の引数不足）で防ぐ。
+ * graph は `{ centerLines: Array }` を持つオブジェクトとして引数で受けるだけで、PlanGraph自体は
+ * import しない（import ゼロに近い規約を維持し、node:test から単体 import 可能に保つ）。
+ * @param {{centerLines: Array}} graph
+ * @param {{kind: string, centerLineType: string, coord: number, tolMm?: number, exclude?: object|null}} opts
+ * @returns {Array} matchesOrthoAnchor(kind, centerLineType, other, coord, tolMm) を満たし、exclude
+ *   自身は除く CenterLine の配列
+ */
+export function orthoAnchorCandidatesForNew(graph, { kind, centerLineType, coord, tolMm = 0, exclude = null }) {
+  assertKnownKind(kind);
+  if (typeof coord !== 'number' || Number.isNaN(coord)) {
+    throw new Error(`orthoAnchorCandidatesForNew: coordは数値である必要があります（実際: ${coord}）`);
+  }
+  if (centerLineType === CenterLineType.RADIAL) return [];
+  return graph.centerLines.filter(other =>
+    other !== exclude && matchesOrthoAnchor(kind, centerLineType, other, coord, tolMm));
+}
+
+/**
  * subject の直交端部アンカー候補となる CenterLine を graph.centerLines から列挙する
  * （走査API。過去の不具合（追加→移動→延長の3回に分けて発覚した「非表示の梁芯が障害物になる」）は
  * いずれも「誤った種別条件」ではなく「種別条件の無い素の graph.centerLines 走査」が原因だった——
  * 呼び出し元がこの関数経由で相手を選ぶことで、同じ規約の再実装が個別に食い違うのを防ぐ）。
- * graph は `{ centerLines: Array }` を持つオブジェクトとして引数で受けるだけで、PlanGraph自体は
- * import しない（import ゼロに近い規約を維持し、node:test から単体 import 可能に保つ）。
+ * subject が既存CLオブジェクト（centerLineType/valueを持つ）である場面専用——orthoAnchorCandidatesForNew
+ * へ委譲する薄いラッパー（判定の本体は matchesOrthoAnchor に一本化してある）。
  * @param {{centerLines: Array}} graph
  * @param {object} subject
  * @param {{coord?: number, tolMm?: number}} [opts]
  * @returns {Array} isOrthoAnchorCandidate(subject, other, opts) を満たす CenterLine の配列
  */
 export function orthoAnchorCandidates(graph, subject, opts = {}) {
-  return graph.centerLines.filter(other => isOrthoAnchorCandidate(subject, other, opts));
+  return orthoAnchorCandidatesForNew(graph, {
+    kind:           centerLineKind(subject),
+    centerLineType: subject.centerLineType,
+    coord:          opts.coord ?? subject.value,
+    tolMm:          opts.tolMm ?? 0,
+    exclude:        subject,
+  });
 }
 
 /** cl が appMode で描画対象か（可視モード表そのもの）。 */
@@ -314,4 +358,26 @@ export function isRenderTarget(cl, appMode) {
 /** cl が appMode でポインタヒット対象か。 */
 export function isHitTestTarget(cl, appMode) {
   return hitTestKinds(appMode).includes(centerLineKind(cl));
+}
+
+/**
+ * target が既存の補助線から extentLoRef/HiRef で参照されているか（走査API。追加extent・延長で
+ * 「はね出し（静的値）」か「直交CL参照（リアクティブ追従）」かの分岐に使う——他の補助線が同じ
+ * target を既に参照していれば ref 化する。transform/centerLineOps.js の anyAuxRefsCL・
+ * transform/centerLineExtend.js の同名関数を統合したもの。
+ * 素の `ex.lineType==='dashed' && !ex.labeled` を見ている（centerLineKind(ex)==='aux' そのものでは
+ * ない）——既知の乖離（旧データ限定）: centerLineKind は lineType==='dashed' のみで aux と判定するため
+ * `{lineType:'dashed', labeled:true}` のような旧データがあると centerLineKind ベースでは aux 扱いに
+ * なるが、本関数（labeled:false も要求）は候補にしない。通常経路（AddCLDialogのaux分岐）で作られる
+ * 補助線は必ず labeled:false のため実害は無い。種別ベースへ統一するかは製品コード移行時の裁定が要る
+ * （本関数は挙動を変えず、既存2箇所の実装をそのまま集約しただけ）。
+ * @param {{centerLines: Array}} graph
+ * @param {object} target
+ * @returns {boolean}
+ */
+export function isReferencedByAux(graph, target) {
+  return graph.centerLines.some(ex =>
+    ex.lineType === 'dashed' && !ex.labeled &&
+    (ex.extentLoRef?.clId === target.id || ex.extentHiRef?.clId === target.id)
+  );
 }

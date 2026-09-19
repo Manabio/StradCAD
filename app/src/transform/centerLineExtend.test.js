@@ -211,6 +211,24 @@ test('findExtendBoundary: 補助線の延長は壁を境界候補に含め、手
   assert.equal(boundary.item.id, wall.id);
 });
 
+test('extendCenterLine: 延長先CLが既に別の補助線から参照済みならref化される（はね出しにならない）', () => {
+  const graph = makeGraph();
+  const boundary = graph.addCenterLine(CenterLineType.VERTICAL, 3640, { labeled: true, discipline: Discipline.STRUCT }); // 通り芯X3
+  // 既に別の補助線がboundaryをextentHiRefで参照している状態を作る（cl自身とは別方向=HORIZONTALにして
+  // cl自身の直交候補探索には混ざらないようにする——isReferencedByAuxの走査対象になることだけが目的）。
+  graph.addCenterLine(CenterLineType.HORIZONTAL, -3000, {
+    labeled: false, lineType: 'dashed', extentHiRef: { clId: boundary.id, offset: 0 }, extentLo: -4000,
+  });
+  const cl = graph.addCenterLine(CenterLineType.HORIZONTAL, -8190, {
+    labeled: false, lineType: 'dashed', extentLo: 0, extentHi: 1820,
+  });
+
+  const result = extendCenterLine(graph, cl, 'hi', null);
+  assert.equal(result.extended, true);
+  assert.deepEqual(cl.extentHiRef, { clId: boundary.id, offset: 0 }, '境界CLが既に別のauxから参照済みなのでref化される');
+  assert.equal(cl.extentHi, 3640, 'boundaryの値そのまま（overhangを足していない）');
+});
+
 // ---- 旧データ（labeled:trueなのに種別が通り芯でないCL。通常のAddCLDialog経路では作られない異常値）の
 // 扱いが移行前後で変わる2通り（ファイル冒頭コメント参照。現行の生成経路は0件の理論上の差分）。
 

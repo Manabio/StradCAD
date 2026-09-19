@@ -11,6 +11,9 @@ import {
 } from '../error.js';
 import { findBracketingCLs, overhangMm } from '../snapGeometry.js';
 import { calcStep } from '../renderer/clMoveMath.js';
+import {
+  orthoAnchorCandidatesForNew, allowsWallAnchor, extentAnchorStyle, isReferencedByAux,
+} from '../core/centerLineKindPolicy.js';
 import { mergeCenterLineChain, composeUndoWithMergeChain } from './centerLineMerge.js';
 import {
   applyPromoteToGrid, applyDemoteToCenter, checkPromoteToGridGuards, checkDemoteToCenterGuards,
@@ -302,7 +305,7 @@ export async function demoteGridToCenterWithUndo(graph, project, cl, opts = {}) 
   return { toast: null };
 }
 
-// 木造（在来）の自動判定（問題.md）: 平面モードで主構造が未指定のとき、追加した通り芯が
+// 木造（在来）の自動判定: 平面モードで主構造が未指定のとき、追加した通り芯が
 // 既存グリッドと910の倍数間隔をなすなら「木造（在来）」を提案する確認ダイアログを出す。
 // 「寸法指定を910で割った余りが0」を、隣接グリッドCLとの最小間隔で判定する（参照なし絶対座標入力にも効く）。
 // この関数は「提案すべきか」の判定部のみを行う純関数。ダイアログ表示（setFloorConfirm）は呼び出し側（App.jsx）。
@@ -361,25 +364,17 @@ export function addCenterLineFromDialog(graph, project, payload, viewport) {
   let extentProps = {};
   let newExtentLo = null, newExtentHi = null;
   if (kind === 'center' || kind === 'beam') {
-    const perpType = clType === CenterLineType.VERTICAL ? CenterLineType.HORIZONTAL : CenterLineType.VERTICAL;
+    // 直交端部候補は orthoAnchorCandidatesForNew（core/centerLineKindPolicy.js）経由で選ぶ——
+    // 種別の許可（center: 通り芯・中心線・補助線／beam: 通り芯のみ。ORTHO_ANCHOR_OVERRIDE特例。
+    // autoFillSecondaryBeamsが見るgraph.gridXs/Ysは通り芯のみのため、梁芯の候補を中心線・補助線
+    // まで広げると直交グリッドに存在しない区画へextentが確定し小梁0本事故になる）と、範囲被覆
+    // （coversAlongAxis。非ラベルCLはextentLo/Hiの実範囲に新規CLの座標=wcが含まれるものだけ）を
+    // 一括で判定する。coord には新規CL自身の「自軸座標」（perpCLsの extentLo/Hi と同じ軸=wc）を渡す
+    // ——clDialog.perpCoord（findBracketingCLsが見るブラケット探索軸）とは別物。
+    // kind・centerLineType・coord を明示引数で渡す（ダック型の仮オブジェクトを作らない——
+    // valueの代わりにcoordを渡し忘れると例外なしに非labeled候補だけが静かに脱落する事故を防ぐ）。
     const wc = clDialog.worldCoord;
-    const perpCLs = graph.centerLines.filter(cl => {
-      if (cl.centerLineType !== perpType) return false;
-      if (kind === 'beam') {
-        // 梁芯の端部候補は通り芯（labeled）のみに限定する。中心線・補助線を候補に含めると
-        // 直交グリッド（autoFillSecondaryBeamsが見るgraph.gridXs/Ys＝通り芯のみ）に存在しない
-        // 区画へextentが確定してしまい、小梁が0本になる事故になる（QA指摘）。
-        return cl.labeled;
-      }
-      // center: 梁芯（discipline:'fuse'。構造モード専用表示で他モードでは非表示）は
-      // 端部候補から除外する——非表示の線が中心線のextent端部に選ばれるのを防ぐ。
-      if (centerLineKind(cl) === 'beam') return false;
-      // 非ラベルCL: extentLo/Hi の実範囲（はね出し前）に新規CLの座標が含まれるものだけ対象
-      if (!cl.labeled && cl.extentLo != null && cl.extentHi != null) {
-        if (wc < cl.extentLo || wc > cl.extentHi) return false;
-      }
-      return true;
-    });
+    const perpCLs = orthoAnchorCandidatesForNew(graph, { kind, centerLineType: clType, coord: wc });
     const [loCL, hiCL] = findBracketingCLs(perpCLs, clDialog.perpCoord);
     newExtentLo = loCL ? loCL.value : (perpCLs.length ? Math.min(...perpCLs.map(c => c.value)) : null);
     newExtentHi = hiCL ? hiCL.value : (perpCLs.length ? Math.max(...perpCLs.map(c => c.value)) : null);
@@ -391,7 +386,6 @@ export function addCenterLineFromDialog(graph, project, payload, viewport) {
       extentHi:    !hiCL ? newExtentHi : null,
     };
   } else if (kind === 'aux') {
-    const perpType = clType === CenterLineType.VERTICAL ? CenterLineType.HORIZONTAL : CenterLineType.VERTICAL;
     const isNewV   = clType === CenterLineType.VERTICAL;
     const wc       = clDialog.worldCoord;
     const pc       = clDialog.perpCoord;
@@ -402,32 +396,27 @@ export function addCenterLineFromDialog(graph, project, payload, viewport) {
     const roundToNiceCoord = (coord) =>
       niceStep > 0 ? Math.round(coord / niceStep) * niceStep : Math.round(coord);
 
-    // 直交壁を検出（新CLの座標が壁の長手範囲に含まれるもの）
-    const perpWalls = graph.walls.filter(w => {
-      if (w.isVertical === isNewV) return false;
-      const c1 = Math.min(w.coord1, w.coord2), c2 = Math.max(w.coord1, w.coord2);
-      return c1 <= wc && wc <= c2;
-    });
+    // 直交壁を検出（新CLの座標が壁の長手範囲に含まれるもの）。allowsWallAnchor('aux')は常にtrueだが、
+    // 壁候補の可否をポリシー経由で明示する（centerLineExtend.jsのfindExtendBoundaryと同じif形に揃える
+    // ——三項演算子の`: []`は到達不能に見え誤読を招くため使わない）。
+    let perpWalls = [];
+    if (allowsWallAnchor('aux')) {
+      perpWalls = graph.walls.filter(w => {
+        if (w.isVertical === isNewV) return false;
+        const c1 = Math.min(w.coord1, w.coord2), c2 = Math.max(w.coord1, w.coord2);
+        return c1 <= wc && wc <= c2;
+      });
+    }
     const loWall = perpWalls.filter(w => w.axisValue <= pc)
       .reduce((best, w) => !best || w.axisValue > best.axisValue ? w : best, null);
     const hiWall = perpWalls.filter(w => w.axisValue >= pc)
       .reduce((best, w) => !best || w.axisValue < best.axisValue ? w : best, null);
 
-    // 直交CLを検出（非ラベルCLは延伸範囲内のもののみ）
-    const allPerpCLs = graph.centerLines.filter(cl => {
-      if (cl.centerLineType !== perpType) return false;
-      if (!cl.labeled && cl.extentLo != null && cl.extentHi != null) {
-        if (wc < cl.extentLo || wc > cl.extentHi) return false;
-      }
-      return true;
-    });
+    // 直交CLを検出（orthoAnchorCandidatesForNew経由。2026-09-18裁定: 梁芯は端部候補から除外する——
+    // 補助線は壁になれず、端が壁で止まるのは作図上のトリムだけのため、追加extentと同じ
+    // 「主体と同じモードで可視な種別」＝通り芯・中心線・補助線に揃える）。
+    const allPerpCLs = orthoAnchorCandidatesForNew(graph, { kind: 'aux', centerLineType: clType, coord: wc });
     const [loCL, hiCL] = findBracketingCLs(allPerpCLs, pc);
-
-    // 既存補助線が指定CLを extentLoRef/HiRef で参照しているか
-    const anyAuxRefsCL = (cl) => graph.centerLines.some(ex =>
-      ex.lineType === 'dashed' && !ex.labeled &&
-      (ex.extentLoRef?.clId === cl.id || ex.extentHiRef?.clId === cl.id)
-    );
 
     // lo側境界の決定: 壁とCLのうち perpCoordに近い（値が大きい）ものを優先
     let loRef = null, loStaticVal = null;
@@ -440,14 +429,14 @@ export function addCenterLineFromDialog(graph, project, payload, viewport) {
       loRef       = { wallId: bestLo.item.id };
       newExtentLo = bestLo.val;
     } else if (bestLo?.type === 'cl') {
-      if (anyAuxRefsCL(bestLo.item)) {
-        // 既存補助線が同じCLを参照 → リアクティブ参照（CLと連動してトリム）
-        loRef       = { clId: bestLo.item.id, offset: 0 };
-        newExtentLo = bestLo.val;
-      } else {
+      if (extentAnchorStyle('aux') === 'overhang' && !isReferencedByAux(graph, bestLo.item)) {
         // 既存参照なし → はね出し（静的座標）
         loStaticVal = bestLo.val - overhang;
         newExtentLo = loStaticVal;
+      } else {
+        // 既存補助線が同じCLを参照 → リアクティブ参照（CLと連動してトリム）
+        loRef       = { clId: bestLo.item.id, offset: 0 };
+        newExtentLo = bestLo.val;
       }
     } else {
       // フリーエンドポイント: ポインティング座標をキリ良い数値に丸めて採用
@@ -466,12 +455,12 @@ export function addCenterLineFromDialog(graph, project, payload, viewport) {
       hiRef       = { wallId: bestHi.item.id };
       newExtentHi = bestHi.val;
     } else if (bestHi?.type === 'cl') {
-      if (anyAuxRefsCL(bestHi.item)) {
-        hiRef       = { clId: bestHi.item.id, offset: 0 };
-        newExtentHi = bestHi.val;
-      } else {
+      if (extentAnchorStyle('aux') === 'overhang' && !isReferencedByAux(graph, bestHi.item)) {
         hiStaticVal = bestHi.val + overhang;
         newExtentHi = hiStaticVal;
+      } else {
+        hiRef       = { clId: bestHi.item.id, offset: 0 };
+        newExtentHi = bestHi.val;
       }
     } else {
       // フリーエンドポイント: ポインティング座標をキリ良い数値に丸めて採用

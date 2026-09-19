@@ -23,7 +23,7 @@ import {
   coexistenceAt, convertBlockingKinds, mergeableKinds, allowsWallAnchor, extentAnchorStyle,
   hasEndpointRule, spansEntireAxis,
   isOrthoAnchorCandidate, isSameDirectionObstacle, isMergeCandidate, isRenderTarget, isHitTestTarget,
-  coversAlongAxis, orthoAnchorCandidates,
+  coversAlongAxis, orthoAnchorCandidates, orthoAnchorCandidatesForNew,
 } from './centerLineKindPolicy.js';
 
 // ---- 製品コード（section C）との突き合わせに使う実装 ----
@@ -132,11 +132,10 @@ test('【不変条件】原始事実の表（VISIBLE_KINDS_BY_MODE・COEXISTENCE
 test('orthoAnchorKinds: center/aux は通り芯・中心線・補助線、beam は通り芯のみ（特例）', () => {
   assert.deepEqual(orthoAnchorKinds('center'), ['struct', 'center', 'aux']);
   assert.deepEqual(orthoAnchorKinds('aux'), ['struct', 'center', 'aux']);
-  // 現行 transform/centerLineOps.js の allPerpCLs（aux分岐 ~L417）は種別を絞らず全種別（梁芯含む）を
-  // 直交端部候補にしている——ポリシー（このテストが固定する orthoAnchorKinds('aux') の値。梁芯除外）
-  // とは異なる。この関数自体は正しい導出結果を返しており、製品コード側（centerLineOps.js の
-  // aux分岐）を後日この関数へ移行するときに挙動が変わる（＝梁芯が端部候補から外れる）対象——
-  // 現行の実際の挙動（梁芯を含む）は下記セクションCの「m5: 既知の乖離」テストでピン留めしてある。
+  // transform/centerLineOps.js の allPerpCLs（aux分岐）は2026-09-19（ステップ3）に
+  // orthoAnchorCandidates 経由へ移行済み——aux も beam を直交端部候補から除外する
+  // （このテストが固定する orthoAnchorKinds('aux') の値と一致。移行前の挙動は下記セクションCの
+  // 「m5」テストでピン留めしていたが、移行に伴い期待値を反転済み）。
   assert.deepEqual(orthoAnchorKinds('beam'), ['struct']);
 });
 
@@ -263,6 +262,85 @@ test('orthoAnchorCandidates: graph.centerLines を isOrthoAnchorCandidate(subjec
   });
   assert.equal(orthoAnchorCandidates(graph, subject, { tolMm: 100 }).some(c => c.id === tolBoundary.id), true);
   assert.equal(orthoAnchorCandidates(graph, subject, { tolMm: 99 }).some(c => c.id === tolBoundary.id), false);
+});
+
+// ---- orthoAnchorCandidatesForNew: まだグラフに存在しない新規CL用の走査API ----
+// （まだ生成されていないCL向け。ダック型の仮オブジェクトを作らせる代わりにkind・centerLineType・
+// coordを明示引数にして、coordの渡し忘れ事故を型で防ぐのが目的。判定本体はisOrthoAnchorCandidateと
+// 共有——orthoAnchorCandidatesが薄いラッパーとしてこれへ委譲していることを別テストで確認する）。
+
+test('orthoAnchorCandidatesForNew: kindごとの候補集合はorthoAnchorKindsの予測と一致する（center/aux=通り芯・中心線・補助線、beam=通り芯のみ）', () => {
+  const { project, graph } = makeProjectWithGraph();
+  const structLo  = project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, -500, { labeled: true, discipline: Discipline.STRUCT });
+  const centerCL  = graph.addCenterLine(CenterLineType.HORIZONTAL, 0, { labeled: false, discipline: Discipline.ARCH });
+  const auxCL     = graph.addCenterLine(CenterLineType.HORIZONTAL, 200, { labeled: false, lineType: 'dashed' });
+  const beamCL    = graph.addCenterLine(CenterLineType.HORIZONTAL, 400, { labeled: false, discipline: Discipline.FUSE });
+  graph.addCenterLine(CenterLineType.VERTICAL, 0, { labeled: false, discipline: Discipline.ARCH }); // 同方向（直交ではないので常に除外）
+
+  for (const kind of ['center', 'aux', 'beam']) {
+    const candidates = orthoAnchorCandidatesForNew(graph, { kind, centerLineType: CenterLineType.VERTICAL, coord: 1000 });
+    const allowedKinds = orthoAnchorKinds(kind);
+    assert.deepEqual(
+      candidates.map(c => c.id).sort(),
+      [structLo, centerCL, auxCL, beamCL].filter(c => allowedKinds.includes(centerLineKind(c))).map(c => c.id).sort(),
+      `kind=${kind}`,
+    );
+  }
+});
+
+test('orthoAnchorCandidatesForNew: excludeで指定したCLは候補から除外される', () => {
+  const { graph } = makeProjectWithGraph();
+  const a = graph.addCenterLine(CenterLineType.HORIZONTAL, 0, { labeled: false, discipline: Discipline.ARCH });
+  const b = graph.addCenterLine(CenterLineType.HORIZONTAL, 500, { labeled: false, discipline: Discipline.ARCH });
+
+  const withoutExclude = orthoAnchorCandidatesForNew(graph, { kind: 'center', centerLineType: CenterLineType.VERTICAL, coord: 1000 });
+  assert.deepEqual(withoutExclude.map(c => c.id).sort(), [a.id, b.id].sort());
+
+  const withExclude = orthoAnchorCandidatesForNew(graph, { kind: 'center', centerLineType: CenterLineType.VERTICAL, coord: 1000, exclude: a });
+  assert.deepEqual(withExclude.map(c => c.id), [b.id]);
+});
+
+test('orthoAnchorCandidatesForNew: centerLineTypeがRADIALなら常に空配列（isOrthoAnchorCandidateのsubject RADIAL除外と同型）', () => {
+  const { graph } = makeProjectWithGraph();
+  graph.addCenterLine(CenterLineType.HORIZONTAL, 0, { labeled: false, discipline: Discipline.ARCH });
+  assert.deepEqual(orthoAnchorCandidatesForNew(graph, { kind: 'center', centerLineType: CenterLineType.RADIAL, coord: 1000 }), []);
+});
+
+test('【失敗系】orthoAnchorCandidatesForNew: 未知のkindはthrowする', () => {
+  const { graph } = makeProjectWithGraph();
+  assert.throws(
+    () => orthoAnchorCandidatesForNew(graph, { kind: 'wood', centerLineType: CenterLineType.VERTICAL, coord: 1000 }),
+    /未知のCL種別: wood/,
+  );
+});
+
+test('【失敗系】orthoAnchorCandidatesForNew: coordが数値でなければthrowする（未指定・undefined・NaN・文字列）', () => {
+  const { graph } = makeProjectWithGraph();
+  assert.throws(() => orthoAnchorCandidatesForNew(graph, { kind: 'center', centerLineType: CenterLineType.VERTICAL }), /coord/);
+  assert.throws(() => orthoAnchorCandidatesForNew(graph, { kind: 'center', centerLineType: CenterLineType.VERTICAL, coord: undefined }), /coord/);
+  assert.throws(() => orthoAnchorCandidatesForNew(graph, { kind: 'center', centerLineType: CenterLineType.VERTICAL, coord: NaN }), /coord/);
+  assert.throws(() => orthoAnchorCandidatesForNew(graph, { kind: 'center', centerLineType: CenterLineType.VERTICAL, coord: '1000' }), /coord/);
+});
+
+test('orthoAnchorCandidates: 既存CLオブジェクトのsubjectに対し、orthoAnchorCandidatesForNewへの委譲後も同じ結果を返す（委譲の回帰確認）', () => {
+  const { graph } = makeProjectWithGraph();
+  const subject = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
+  graph.addCenterLine(CenterLineType.HORIZONTAL, 0, {
+    labeled: false, lineType: 'dashed', extentLo: 500, extentHi: 1500,
+  });
+  graph.addCenterLine(CenterLineType.HORIZONTAL, 2000, {
+    labeled: false, lineType: 'dashed', extentLo: 1500, extentHi: 1800,
+  });
+  graph.addCenterLine(CenterLineType.HORIZONTAL, 3000, {
+    labeled: false, discipline: Discipline.FUSE, extentLo: 500, extentHi: 1500,
+  });
+
+  const viaWrapper = orthoAnchorCandidates(graph, subject);
+  const viaForNew = orthoAnchorCandidatesForNew(graph, {
+    kind: centerLineKind(subject), centerLineType: subject.centerLineType, coord: subject.value, exclude: subject,
+  });
+  assert.deepEqual(viaWrapper.map(c => c.id).sort(), viaForNew.map(c => c.id).sort());
+  assert.ok(viaWrapper.length > 0, '前提: 候補が実際に1件以上ある（空配列同士の一致で通ってしまう骨抜きを防ぐ）');
 });
 
 test('isSameDirectionObstacle: 肯定側（中心線subject×同方向の通り芯・中心線・補助線・梁芯、直交の通り芯は対象外）', () => {
@@ -566,14 +644,14 @@ test('COEXISTENCE: 製品コード addCenterLineFromDialog の帰結が coexiste
   }
 });
 
-// ---- M4(b): 既知の乖離（旧データ限定）のピン留めテスト ----
-// 製品コードが centerLineKind ではなく生の labeled フラグで判定している地点は、通常経路では
-// 種別と labeled が必ず一致するため実害が無い。だが `{labeled:true, discipline:'arch'}`
-// （centerLineKindは'center'）のような旧データ・異常値は実際に graph.addCenterLine で作れる
-// （AddCLDialog経由の通常追加は必ず labeled:false を明示するため、この状態はダイアログ経由では
-// 作れない——直接 graph.addCenterLine で模した「旧データ」としてのみ再現する）。
+// ---- M4(b): 追加extentのステップ3移行（centerLineOps.js を orthoAnchorCandidates 経由へ移行）で
+// 種別ベースへ統一されたピン留めテスト。旧データ（`{labeled:true, discipline:'arch'}` のような
+// labeled と種別が食い違う異常値。AddCLDialog経由の通常追加は必ず labeled:false を明示するため
+// ダイアログ経由では作れない——直接 graph.addCenterLine で模した「旧データ」としてのみ再現する）は、
+// 移行前は生の labeled フラグで候補に混ざっていたが、移行後は orthoAnchorKinds の種別ベース予測と
+// 一致するようになった（現行の生成経路は0件・旧データ限定の理論上のケース）。
 
-test('【既知の乖離】addCenterLineFromDialog(kind:beam) の直交端部候補は生のlabeledで絞る（centerLineOps.js L372 `return cl.labeled`）——旧データの{labeled:true,discipline:ARCH}CL（centerLineKindは\'center\'）も候補に混ざり、ポリシーの種別ベース予測（orthoAnchorKinds(beam)=[struct]のみ）とはこの旧データ限定シナリオで割れる', () => {
+test('【旧データ限定・種別ベースへ統一】addCenterLineFromDialog(kind:beam) の直交端部候補は種別ベース（orthoAnchorKinds(beam)=[struct]のみ）——labeled:trueでも種別が通り芯でない旧データは候補にしない', () => {
   const { project, graph } = makeProjectWithGraph();
   const structFar = project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, -500, { labeled: true, discipline: Discipline.STRUCT });
   const legacyLabeledCenter = graph.addCenterLine(CenterLineType.HORIZONTAL, -100, { labeled: true, discipline: Discipline.ARCH });
@@ -587,21 +665,24 @@ test('【既知の乖離】addCenterLineFromDialog(kind:beam) の直交端部候
 
   assert.equal(result.done, true);
   const added = graph.centerLines.find(cl => cl.centerLineType === CenterLineType.VERTICAL && cl.value === 1000 && centerLineKind(cl) === 'beam');
-  // 現行の実際の挙動（ピン留め）: labeled:trueなので legacyLabeledCenter(-100) が struct(-500) より
-  // 近く、端部として選ばれる。
-  assert.equal(added.extentLoRef?.clId, legacyLabeledCenter.id, '現行は生のlabeledで絞るため、種別上は中心線でもlabeled:trueなら候補に入り近い方が選ばれる');
+  // 移行後の実際の挙動: orthoAnchorCandidates は種別ベースで判定するため、labeled:trueでも
+  // centerLineKindが'center'の旧データ（legacyLabeledCenter, -100）は候補にならず、
+  // struct(-500)が選ばれる。
+  assert.equal(added.extentLoRef?.clId, structFar.id, '移行後は種別ベースで絞るため、labeled:trueでも中心線（centerLineKind==="center"）は候補にならずstruct(-500)が選ばれる');
 
-  // ポリシーの種別ベース予測（orthoAnchorKinds('beam')は'struct'のみ）はこの旧データを候補にしない。
+  // ポリシーの種別ベース予測（orthoAnchorKinds('beam')は'struct'のみ）と一致することを確認する。
   const allowedKinds = orthoAnchorKinds('beam');
   const policyCandidates = graph.centerLines.filter(cl => cl.centerLineType === CenterLineType.HORIZONTAL && allowedKinds.includes(centerLineKind(cl)));
   const [policyExpectedLo] = findBracketingCLs(policyCandidates, 0);
   assert.equal(policyExpectedLo?.id, structFar.id, 'ポリシー予測は種別ベースなのでlegacyLabeledCenterを候補にせずstruct(-500)を選ぶ');
-  assert.notEqual(added.extentLoRef?.clId, policyExpectedLo?.id, '現行の実際の結果とポリシー予測は、この旧データ限定シナリオで割れる（既知・意図的にピン留め。ポリシー本体の挙動は変えていない）');
+  assert.equal(added.extentLoRef?.clId, policyExpectedLo?.id, '移行後は製品コードの実際の結果とポリシー予測が一致する（旧データ限定シナリオでの乖離は解消）');
 });
 
-// ---- m5: 既知の乖離（後続の移行ステップで期待値が反転する予定）のピン留めテスト ----
+// ---- m5: 追加extentのステップ3移行で反転したピン留めテスト（2026-09-18裁定: 補助線の追加extentは
+// 梁芯を端部候補にしない。補助線は壁になれず、端が壁で止まるのは作図上のトリムだけのため、追加extentも
+// 「主体と同じモードで可視な種別」＝通り芯・中心線・補助線に揃える）。
 
-test('【既知の乖離・後続ステップで反転予定】addCenterLineFromDialog(kind:aux) の直交端部候補は現行では梁芯も含む（allPerpCLsが種別を絞らないため）。ポリシー（orthoAnchorKinds(\'aux\')は梁芯を除外）とはこの点で食い違う', () => {
+test('【裁定反映済み】addCenterLineFromDialog(kind:aux) の直交端部候補は梁芯を含まない（2026-09-18裁定。orthoAnchorKinds(\'aux\')と一致）', () => {
   const { project, graph } = makeProjectWithGraph();
   const nearBeam  = graph.addCenterLine(CenterLineType.HORIZONTAL, -100, { labeled: false, discipline: Discipline.FUSE });
   const farStruct = project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, -500, { labeled: true, discipline: Discipline.STRUCT });
@@ -614,18 +695,17 @@ test('【既知の乖離・後続ステップで反転予定】addCenterLineFrom
 
   assert.equal(result.done, true);
   const added = graph.centerLines.find(cl => centerLineKind(cl) === 'aux' && cl.centerLineType === CenterLineType.VERTICAL);
-  // aux は初回追加時（anyAuxRefsCLがfalse）は直交CL参照ではなく、はね出し量を引いた静的値になる
+  // aux は初回追加時（isReferencedByAuxがfalse）は直交CL参照ではなく、はね出し量を引いた静的値になる
   // （EXTENT_ANCHOR_STYLE.auxの'overhang'）ため、extentLoRefではなくextentLoの数値で確認する。
   assert.equal(added.extentLoRef, null, '前提: 初回追加のためref化されず静的値になる');
   const OVERHANG_AT_DENOM_100 = 300; // snapGeometry.js overhangMm: denom===100はBASE_MM(300)そのもの
-  assert.equal(added.extentLo, nearBeam.value - OVERHANG_AT_DENOM_100, '現行は梁芯(-100)がstruct(-500)より近いため端部として選ばれる（allPerpCLsは種別を絞らない）');
+  // 移行後の実際の挙動: orthoAnchorCandidates は梁芯(-100)を候補から除外するため、struct(-500)が選ばれる。
+  assert.equal(added.extentLo, farStruct.value - OVERHANG_AT_DENOM_100, '移行後は梁芯(-100)が候補から除外され、struct(-500)が端部として選ばれる');
 
-  // ポリシー予測（orthoAnchorKinds('aux')は梁芯を含まない）で候補を絞ると struct(-500) が選ばれる
-  // はずで、実際の結果（梁芯ベース）とは異なる——後続の追加extent移行ステップで挙動を反転する対象
-  // （反転後はこのテストの期待値も struct(-500) 側へ書き換える）。
+  // ポリシー予測（orthoAnchorKinds('aux')は梁芯を含まない）と実際の結果が一致することを確認する。
   const allowedKinds = orthoAnchorKinds('aux');
   assert.ok(!allowedKinds.includes('beam'), '前提: ポリシーのorthoAnchorKinds(aux)は梁芯を含まない');
-  assert.notEqual(added.extentLo, farStruct.value - OVERHANG_AT_DENOM_100, '現行の実際の結果はfarStruct基準ではない（=梁芯が割り込んでいることの確認）');
+  assert.notEqual(added.extentLo, nearBeam.value - OVERHANG_AT_DENOM_100, '移行後の実際の結果はnearBeam基準ではない（=梁芯が候補から除外されていることの確認）');
 });
 
 // ================================================================

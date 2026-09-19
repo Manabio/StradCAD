@@ -11,6 +11,7 @@ import {
 import { undoManager } from '../undoManager.js';
 import { floorSwapManager } from '../storage/FloorSwapManager.js';
 import { serializeGraph, restoreGraph } from '../graphSnapshot.js';
+import { calcStep } from '../renderer/clMoveMath.js';
 import {
   shouldSuggestWoodStructure, commitCLMoveOp, deleteCenterLineWithUndo, addCenterLineFromDialog,
   promoteCenterToGridWithUndo, demoteGridToCenterWithUndo,
@@ -359,6 +360,113 @@ test('addCenterLineFromDialog: 既存中心線位置への通り芯追加は中�
   undoManager.undo();
   assert.ok(graph.shapeMap.has(centerId), 'undoで中心線が復元される');
   assert.equal(project.structGraph.centerLines.some(cl => cl.value === 1000), false, 'undoで通り芯は消える');
+});
+
+// ---- ステップ3: addCenterLineFromDialog の直交端部走査を orthoAnchorCandidates（core/centerLineKindPolicy.js）
+// 経由へ移行したことの回帰確認（centerLineKindPolicy.test.js の特性テストと対をなす、centerLineOps.js
+// 側からの直接確認）。
+
+test('addCenterLineFromDialog: 補助線の追加extentは梁芯を端部候補にしない（手前に梁芯、奥に通り芯→通り芯＋はね出し。2026-09-18裁定）', () => {
+  const { project, graph } = makeProjectWithGraph();
+  const vp = { scaleDenominator: 100 };
+  graph.addCenterLine(CenterLineType.HORIZONTAL, -100, { labeled: false, discipline: Discipline.FUSE }); // 梁芯（手前・候補にならない）
+  const structFar = project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, -500, { labeled: true, discipline: Discipline.STRUCT });
+
+  const result = addCenterLineFromDialog(
+    graph, project,
+    { clDialog: { type: 'vertical', worldCoord: 1000, perpCoord: 0 }, value: 1000, kind: 'aux', refId: null, refOffset: 0 },
+    vp,
+  );
+
+  assert.equal(result.done, true);
+  const added = graph.centerLines.find(cl => centerLineKind(cl) === 'aux' && cl.centerLineType === CenterLineType.VERTICAL);
+  assert.equal(added.extentLoRef, null, '初回追加のためref化されず静的値（はね出し）になる');
+  const OVERHANG_AT_DENOM_100 = 300; // snapGeometry.js overhangMm: denom===100はBASE_MM(300)そのもの
+  assert.equal(added.extentLo, structFar.value - OVERHANG_AT_DENOM_100, '梁芯(-100)は候補にならず通り芯(-500)がはね出し込みで選ばれる');
+});
+
+test('addCenterLineFromDialog: 補助線の追加extentは壁を境界候補に含める（CLより壁が近ければ壁を優先。現行どおり・移行で変わらない）', () => {
+  const { project, graph } = makeProjectWithGraph();
+  const vp = { scaleDenominator: 100 };
+  const wallAxis  = project.structGraph.addCenterLine(CenterLineType.VERTICAL, 3000, { labeled: true, discipline: Discipline.STRUCT });
+  const wallStart = project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, -1000, { labeled: true, discipline: Discipline.STRUCT });
+  const wallEnd   = project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 1000,  { labeled: true, discipline: Discipline.STRUCT });
+  const wall = graph.addWall(wallAxis, 0, true, wallStart, 0, wallEnd, 0, { isExteriorWall: false });
+  project.structGraph.addCenterLine(CenterLineType.VERTICAL, 5000, { labeled: true, discipline: Discipline.STRUCT }); // 壁より遠いCL候補（選ばれない）
+
+  const result = addCenterLineFromDialog(
+    graph, project,
+    { clDialog: { type: 'horizontal', worldCoord: 0, perpCoord: 1000 }, value: 0, kind: 'aux', refId: null, refOffset: 0 },
+    vp,
+  );
+
+  assert.equal(result.done, true);
+  const added = graph.centerLines.find(cl => centerLineKind(cl) === 'aux' && cl.centerLineType === CenterLineType.HORIZONTAL && cl.value === 0);
+  assert.deepEqual(added.extentHiRef, { wallId: wall.id }, '壁(3000)が通り芯(5000)より近いため優先される');
+});
+
+test('addCenterLineFromDialog: 既存の補助線が同じ直交CLを参照済みなら、新規補助線の端部ははね出しではなく直交CL参照（ref）になる（lo側）', () => {
+  const { project, graph } = makeProjectWithGraph();
+  const vp = { scaleDenominator: 100 };
+  const structLo = project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, -500, { labeled: true, discipline: Discipline.STRUCT });
+  // 既存の補助線が structLo を extentLoRef で既に参照している状態を作る（同方向=VERTICALにして
+  // 新規補助線自身の直交候補探索には混ざらないようにする——isReferencedByAuxの走査対象になる
+  // ことだけが目的）。
+  graph.addCenterLine(CenterLineType.VERTICAL, 2000, {
+    labeled: false, lineType: 'dashed', extentLoRef: { clId: structLo.id, offset: 0 }, extentHi: 5000,
+  });
+
+  const result = addCenterLineFromDialog(
+    graph, project,
+    { clDialog: { type: 'vertical', worldCoord: 1000, perpCoord: 0 }, value: 1000, kind: 'aux', refId: null, refOffset: 0 },
+    vp,
+  );
+
+  assert.equal(result.done, true);
+  const added = graph.centerLines.find(cl => centerLineKind(cl) === 'aux' && cl.centerLineType === CenterLineType.VERTICAL && cl.value === 1000);
+  assert.deepEqual(added.extentLoRef, { clId: structLo.id, offset: 0 }, '既存補助線が参照済みなのでref化される（はね出しを引かない）');
+  assert.equal(added.extentLo, -500, 'structLoの値そのまま（overhangを引いていない）');
+});
+
+test('addCenterLineFromDialog: 既存の補助線が同じ直交CLを参照済みなら、新規補助線の端部ははね出しではなく直交CL参照（ref）になる（hi側）', () => {
+  const { project, graph } = makeProjectWithGraph();
+  const vp = { scaleDenominator: 100 };
+  const structHi = project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 5000, { labeled: true, discipline: Discipline.STRUCT });
+  graph.addCenterLine(CenterLineType.VERTICAL, 2000, {
+    labeled: false, lineType: 'dashed', extentHiRef: { clId: structHi.id, offset: 0 }, extentLo: -3000,
+  });
+
+  const result = addCenterLineFromDialog(
+    graph, project,
+    { clDialog: { type: 'vertical', worldCoord: 1000, perpCoord: 0 }, value: 1000, kind: 'aux', refId: null, refOffset: 0 },
+    vp,
+  );
+
+  assert.equal(result.done, true);
+  const added = graph.centerLines.find(cl => centerLineKind(cl) === 'aux' && cl.centerLineType === CenterLineType.VERTICAL && cl.value === 1000);
+  assert.deepEqual(added.extentHiRef, { clId: structHi.id, offset: 0 }, '既存補助線が参照済みなのでref化される（はね出しを足さない）');
+  assert.equal(added.extentHi, 5000, 'structHiの値そのまま（overhangを足していない）');
+});
+
+test('【失敗系】addCenterLineFromDialog: 補助線の追加extentは直交CL・壁が無ければフリー端点（perpCoordをキリ良く丸めた値）になり、lo/hiとも同じ値に退化する', () => {
+  const { project, graph } = makeProjectWithGraph(); // 直交CL・壁を一切置かない
+  const vp = { scaleDenominator: 100 };
+  const perpCoord = 137;
+
+  const result = addCenterLineFromDialog(
+    graph, project,
+    { clDialog: { type: 'vertical', worldCoord: 1000, perpCoord }, value: 1000, kind: 'aux', refId: null, refOffset: 0 },
+    vp,
+  );
+
+  assert.equal(result.done, true);
+  const added = graph.centerLines.find(cl => centerLineKind(cl) === 'aux');
+  assert.equal(added.extentLoRef, null, '直交CLが無いためref化されない');
+  assert.equal(added.extentHiRef, null);
+  const niceStep = calcStep(vp.scaleDenominator);
+  const expected = Math.round(perpCoord / niceStep) * niceStep;
+  assert.equal(added.extentLo, expected, 'lo側はperpCoordをキリ良く丸めたフリー端点になる');
+  assert.equal(added.extentHi, expected, 'hi側も同じ丸め値になり、線分は長さ0に退化する');
 });
 
 // ---- promoteCenterToGridWithUndo / demoteGridToCenterWithUndo ----

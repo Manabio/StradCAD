@@ -26,6 +26,7 @@ import { overhangMm } from '../snapGeometry.js';
 import { mergeCenterLineChain } from './centerLineMerge.js';
 import {
   hasEndpointRule, allowsWallAnchor, extentAnchorStyle, coversAlongAxis, orthoAnchorCandidates,
+  isReferencedByAux,
 } from '../core/centerLineKindPolicy.js';
 
 // 端点判定の座標一致許容誤差(mm)。端点は直交CLの value を直接コピーして作られるため
@@ -90,16 +91,6 @@ function crossingPerpWalls(graph, cl) {
   });
 }
 
-// 他の補助線が target を extentLoRef/HiRef で既に参照しているか（AddCLDialog と同じ判定。
-// 素の graph.centerLines 走査だが、centerLineOps.js の同型実装とまとめて扱う対象のため
-// このステップでは触らない）
-function anyAuxRefsCL(graph, target) {
-  return graph.centerLines.some(ex =>
-    ex.lineType === 'dashed' && !ex.labeled &&
-    (ex.extentLoRef?.clId === target.id || ex.extentHiRef?.clId === target.id)
-  );
-}
-
 // side側の外側で最も近い境界（CLまたは壁）を探す。無ければ null（延長不可）。
 export function findExtendBoundary(graph, cl, side) {
   const coord     = side === 'lo' ? cl.extentLo : cl.extentHi;
@@ -150,7 +141,7 @@ export function extendCenterLine(graph, cl, side, viewport) {
 
   if (boundary.type === 'wall') {
     ref = { wallId: boundary.item.id };
-  } else if (extentAnchorStyle(kind) === 'overhang' && !anyAuxRefsCL(graph, boundary.item)) {
+  } else if (extentAnchorStyle(kind) === 'overhang' && !isReferencedByAux(graph, boundary.item)) {
     const overhang = overhangMm(viewport, cl.trim);
     staticValue = boundary.item.value + (side === 'lo' ? -overhang : overhang);
   } else {
