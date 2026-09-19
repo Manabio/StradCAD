@@ -22,8 +22,6 @@
  *
  * 既知の乖離（旧データ限定）: 未移行の地点は、種別（centerLineKind）ではなく生の `labeled` フラグで
  * 判定している——
- *   - transform/centerLineConvert.js の降格重複判定`!c.labeled && centerLineKind(c)!=='beam'`
- *     （checkDemoteToCenterGuards内のdupCenter）。
  *   - structural/wallBeamAxes.js の findBeamAnchorCL（L293）`cl.labeled || centerLineKind(cl)==='beam'`
  *     ——壁交点柱のアンカー解決・梁芯重複ガード（autoFillWallBeamAxes）が共有する述語。本ファイルの
  *     sameDirectionObstacleKinds('beam')=['struct','beam']と同じ意図だが未移行（L472呼び出し元含め
@@ -41,13 +39,18 @@
  * structural/beamAxisMove.js（梁芯移動障害物判定）・snap.js findBeamAxisMoveSnap（梁芯移動スナップの
  * 障害物判定。同じ規約をレイヤ分離のため独立実装していたもの）は本ファイルの sameDirectionObstacles
  * 経由へ移行済み（種別ベースへ統一。旧「既知の乖離」は解消。ステップ4、2026-09-19）。
+ * transform/centerLineOps.js addCenterLineFromDialog の重複判定（同座標CLの列挙）・
+ * transform/centerLineConvert.js の入替えガード（checkPromoteToGridGuards/checkDemoteToCenterGuards）・
+ * transform/centerLineFloorSync.js findFloorsWithCounterpartCL（他階の同座標CL探索）は
+ * sameCoordCounterparts（走査API）経由へ移行済み（ステップ5、2026-09-20）。checkDemoteToCenterGuards の
+ * dupCenter判定も種別ベースへ統一し、旧「既知の乖離」は解消済み。
  *
  * import ゼロに近い規約（extractedModuleImportInvariant）: ./centerLine.js（centerLineKind）と
  * ./constants.js（CenterLineType）のみに依存する。store.js/snap.js/.jsx/core.js バレル/error.js は
  * 静的 import しない——node:test から本ファイルを単体 import 可能に保つため。
  */
 import { centerLineKind } from './centerLine.js';
-import { CenterLineType } from './constants.js';
+import { CenterLineType, CL_OVERLAP_TOL_MM } from './constants.js';
 
 export const CL_KINDS = Object.freeze(['struct', 'center', 'aux', 'beam']);
 
@@ -147,6 +150,18 @@ export const CONVERT_BLOCKING_KINDS = Object.freeze({
   promote: Object.freeze(['struct', 'beam']),
   demote:  Object.freeze(['center', 'aux']),
 });
+
+// ---- 原始事実6: 他階の入替え相手種別（優先順つき） ----
+// transform/centerLineFloorSync.js findFloorsWithCounterpartCL: 通り芯は全階共有（project.structGraph）
+// のため、同一座標の他階CLはCONVERT_BLOCKING_KINDS（同階内の入替えガード。方向ごとに別集合）とは
+// 別の関係になる——通り芯自身（同じ全階共有オブジェクト）は他階の「別の相手」たりえない一方、
+// 中心線・補助線・梁芯はいずれも階ローカルの実体のため、他階に同座標のものがあれば入替え後に座標が
+// 重複する衝突相手になる（昇格・降格どちらの方向でも同じ集合）。
+// 並び順は優先順（1つの階に複数種別が同座標にあるとき、報告に使う1種別を選ぶ規約）も兼ねる——
+// transform/centerLineOps.js addCenterLineFromDialog の重複判定が同座標の相手を選ぶ優先順
+// （通り芯＞中心線＞補助線＞梁芯。CL_KINDSの並びそのもの）から通り芯を除いたものと同じ
+// （中心線・補助線 ＞ 梁芯）。
+export const CROSS_FLOOR_COUNTERPART_KINDS = Object.freeze(['center', 'aux', 'beam']);
 
 // ================================================================
 // 種別レベルAPI
@@ -404,6 +419,31 @@ export function orthoAnchorCandidates(graph, subject, opts = {}) {
  */
 export function sameDirectionObstacles(graph, subject) {
   return graph.centerLines.filter(other => isSameDirectionObstacle(subject, other));
+}
+
+/**
+ * value（座標）・centerLineType（方向）が一致するCLを graph.centerLines から列挙する走査API
+ * （同座標の重複判定・入替えガード・他階の相手探索で使う。orthoAnchorCandidates／sameDirectionObstacles
+ * と同じ理由——過去に3回、種別条件の無い素の graph.centerLines 走査が不具合の原因になった——で
+ * 一本化する）。種別（kind）による絞り込みは行わない——呼び出し側が coexistenceAt／
+ * convertBlockingKinds／CROSS_FLOOR_COUNTERPART_KINDS の結果で判定する（本APIは「同座標の候補を
+ * 集める」役割のみを持つ）。
+ * exclude は同一グラフ内の既存CLを自分自身として除外する用途（オブジェクト参照比較）——異なる
+ * グラフインスタンス間（例: 他階を peek した一時グラフ）の同一id除外にはならない。呼び出し側が
+ * id で別途除外すること（transform/centerLineFloorSync.js findFloorsWithCounterpartCL 参照）。
+ * @param {{centerLines: Array}} graph
+ * @param {{centerLineType: string, value: number, tolMm?: number, exclude?: object|null}} opts
+ * @returns {Array}
+ */
+export function sameCoordCounterparts(graph, { centerLineType, value, tolMm = CL_OVERLAP_TOL_MM, exclude = null }) {
+  if (centerLineType == null) {
+    throw new Error(`sameCoordCounterparts: centerLineTypeは必須です（実際: ${centerLineType}）`);
+  }
+  if (typeof value !== 'number' || Number.isNaN(value)) {
+    throw new Error(`sameCoordCounterparts: valueは数値である必要があります（実際: ${value}）`);
+  }
+  return graph.centerLines.filter(other =>
+    other !== exclude && other.centerLineType === centerLineType && Math.abs(other.value - value) < tolMm);
 }
 
 /** cl が appMode で描画対象か（可視モード表そのもの）。 */
