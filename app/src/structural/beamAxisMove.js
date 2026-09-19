@@ -1,14 +1,16 @@
 // 梁芯CL（discipline:'fuse'、centerLineKind==='beam'）の移動UI専用ロジック（純関数、UI非依存）。
 // 設計意図は .claude/structural-model.md「梁芯CL（discipline:'fuse'）と小梁は既存の仕組みへ薄く乗せる」参照。
-import { CenterLineType, centerLineKind, spanKey } from '../core.js';
+import { CenterLineType, spanKey } from '../core.js';
 import { CL_OVERLAP_TOL_MM } from '../core/constants.js';
+import { sameDirectionObstacles } from '../core/centerLineKindPolicy.js';
 import { secondaryBeamSpansFor, isStructureSpecified, effectiveStructure } from './structuralAutoFill.js';
 import { rulesFor } from './structureRules.js';
 import { structureHasMemberKind, MEMBER_KIND } from './structuralClassification.js';
 
 /**
  * 梁芯CL cl の移動可能範囲 [min, max]（絶対座標value）。
- * 障害物＝cl自身以外・同じcenterLineTypeの「通り芯（labeled:true）」または「他の梁芯（centerLineKind==='beam'）」。
+ * 障害物＝cl自身以外の同方向CLのうち centerLineKindPolicy.sameDirectionObstacles（'beam'→通り芯・
+ * 他の梁芯のみ）が選ぶもの（種別ベース。種別条件の無い素の graph.centerLines 走査を避ける）。
  * 両隣の障害物の内側へ CL_OVERLAP_TOL_MM（追加時の重複ガードと同じ値）だけ内寄せする——通り芯・他の
  * 梁芯と同一座標に到達させない（梁芯の追加経路が持つ「他種別CLと同位置に共存不可」ガード＝大梁と完全
  * 重複する小梁の生成防止、を移動でも素通りさせないため）。中心線・補助線（labeled:falseの通常CL）とは
@@ -19,9 +21,7 @@ import { structureHasMemberKind, MEMBER_KIND } from './structuralClassification.
  */
 export function beamAxisMoveRange(graph, cl) {
   let min = -Infinity, max = Infinity;
-  for (const other of graph.centerLines) {
-    if (other.id === cl.id || other.centerLineType !== cl.centerLineType) continue;
-    if (!(other.labeled || centerLineKind(other) === 'beam')) continue;
+  for (const other of sameDirectionObstacles(graph, cl)) {
     const v = other.effectiveValue;
     if (v < cl.value) { if (v > min) min = v; }
     else if (v > cl.value) { if (v < max) max = v; }

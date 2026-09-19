@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Plane, PlanGraph, CenterLineType, Discipline, StructuralMaterialType, spanKey } from '../core.js';
+import { CL_OVERLAP_TOL_MM } from '../core/constants.js';
 import { beamAxisMoveRange, resolveSecondaryBeamsForAxis } from './beamAxisMove.js';
 import { DEFAULT_BEAM_SECTION_BY_MATERIAL } from './memberCatalog.js';
 import { TRADITIONAL_WOOD_STRUCTURE } from './structureRules.js';
@@ -37,6 +38,19 @@ test('beamAxisMoveRange: 片側に障害物が無ければ Infinity', () => {
   const range = beamAxisMoveRange(graph, cl);
   assert.equal(range.min, 5000.5);
   assert.equal(range.max, Infinity);
+});
+
+test('beamAxisMoveRange: 中心線・補助線は障害物にならない（通り芯・他の梁芯のみ）', () => {
+  const graph = makeGraph();
+  graph.addCenterLine(CenterLineType.VERTICAL, 0,     { labeled: true, discipline: Discipline.STRUCT });
+  graph.addCenterLine(CenterLineType.VERTICAL, 10000, { labeled: true, discipline: Discipline.STRUCT });
+  graph.addCenterLine(CenterLineType.VERTICAL, 3500, { labeled: false, discipline: Discipline.ARCH }); // 中心線（障害物にならないはず）
+  graph.addCenterLine(CenterLineType.VERTICAL, 6500, { labeled: false, lineType: 'dashed' });           // 補助線（同上）
+  const cl = graph.addCenterLine(CenterLineType.VERTICAL, 3000, { labeled: false, discipline: Discipline.FUSE });
+
+  const range = beamAxisMoveRange(graph, cl);
+  assert.equal(range.min, 0 + CL_OVERLAP_TOL_MM);
+  assert.equal(range.max, 10000 - CL_OVERLAP_TOL_MM, '中心線(3500)・補助線(6500)を素通りし通り芯(10000)で止まる');
 });
 
 // ---- resolveSecondaryBeamsForAxis 共通セットアップ ----
