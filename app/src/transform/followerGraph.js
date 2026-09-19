@@ -6,8 +6,9 @@
 // movingCLが通り芯（project.structGraph 共有）の場合、他フロア（採用・検討問わず）にも
 // 随伴CL・随伴壁が存在し得るため、resolveMoveRange はそれらを IndexedDB から一時的に
 // 読み込んで（アクティブ化はしない「peek」）走査範囲に含める。
-import { CenterLine, ShapeType, Discipline, Point, centerLineKind } from '@core';
+import { CenterLine, ShapeType, Discipline, Point } from '@core';
 import { floorSwapManager } from '../storage/FloorSwapManager.js';
+import { sameDirectionObstacles } from '../core/centerLineKindPolicy.js';
 
 // 「ユーザーが一目で確認できる随伴範囲」を基準にした目安値（性能上の限界ではない）。
 // 運用しながら必要に応じて調整する。
@@ -118,18 +119,16 @@ export function computeMoveRange(shapesBundle, movingCL, offsetOf) {
   };
   const offsets = [...offsetOf.values()];
 
-  // 移動する線が中心線・補助線（'center'/'aux'）のときは梁芯（discipline:'fuse'）を障害物から除外する。
-  // 梁芯は下階の壁からも自階へ自動生成され平面モードでは非表示（CenterLinesLayer.jsx）のため、
-  // 除外しないと「画面に何も無いのに移動が止まる」体験になる。structural/beamAxisMove.js の
-  // beamAxisMoveRange（障害物＝通り芯・他の梁芯のみ）と対称の規約。移動する線が通り芯（struct）の
-  // ときは梁芯を障害物のまま残す（通り芯⇔梁芯は大梁と小梁の完全重複防止のため同位置に共存不可の規約）。
-  const movingKind = centerLineKind(movingCL);
-  const skipBeamAxes = movingKind === 'center' || movingKind === 'aux';
-
-  for (const cl of shapesBundle.centerLines) {
-    if (cl.centerLineType !== movingCL.centerLineType) continue;
+  // 同方向の移動障害物候補は centerLineKindPolicy.sameDirectionObstacles 経由で選ぶ（種別条件の無い
+  // 素の graph.centerLines 走査を避ける——過去に3回、この種の走査が非表示の梁芯を障害物へ混入させる
+  // 不具合の原因になった）。移動する線が中心線・補助線（'center'/'aux'）のときは梁芯（discipline:'fuse'）
+  // が自動的に障害物から除外される——梁芯は下階の壁からも自階へ自動生成され平面モードでは非表示
+  // （CenterLinesLayer.jsx）のため、除外しないと「画面に何も無いのに移動が止まる」体験になる。
+  // structural/beamAxisMove.js の beamAxisMoveRange（障害物＝通り芯・他の梁芯のみ）と対称の規約。
+  // 移動する線が通り芯（struct）のときは梁芯が障害物のまま残る（通り芯⇔梁芯は大梁と小梁の完全重複
+  // 防止のため同位置に共存不可の規約）。
+  for (const cl of sameDirectionObstacles(shapesBundle, movingCL)) {
     if (offsetOf.has(cl)) continue;
-    if (skipBeamAxes && centerLineKind(cl) === 'beam') continue;
     for (const off of offsets) consider(cl.effectiveValue - off);
   }
   for (const wall of shapesBundle.walls) {
