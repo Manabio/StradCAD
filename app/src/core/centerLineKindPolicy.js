@@ -2,64 +2,30 @@
  * CL（通り芯・中心線・補助線・梁芯）種別間の関係を導出する純粋ポリシーモジュール。
  *
  * 「CL種別ごとにどのappModeで可視か」「同座標に2種別が共存できるか」「直交端部の候補になれるか」
- * 「同方向の移動障害物になれるか」「通り芯⇔中心線の入替えを拒否するか」——これらは現状、
- * transform/centerLineOps.js（追加extent・重複判定）・transform/followerGraph.js（移動範囲）・
- * structural/beamAxisMove.js（梁芯移動範囲）・transform/centerLineConvert.js（入替えガード）・
- * snap.js（ヒット判定）・renderer/CenterLinesLayer.jsx（描画可否）に、種別ごとのインライン条件として
- * 別々に手書きされている。本モジュールはそれらが本来従うべき単一の表（原始事実）と、そこからの
- * 導出関数を集約する——将来、各呼び出し元をこの表を引く形へ移行することで、同じ規約の重複実装が
- * 食い違って起きる不具合（例: 非表示の梁芯だけが延長操作の境界になってしまう）を無くすのが目的。
+ * 「同方向の移動障害物になれるか」「通り芯⇔中心線の入替えを拒否するか」「結合しうるか」——これらは
+ * 元々、呼び出し元ごとに種別条件をインラインで手書きしていた（重複実装が食い違って起きる不具合の
+ * 温床）。本モジュールはそれらが本来従うべき単一の表（原始事実）と、そこからの導出関数
+ * （種別レベルAPI）・graph.centerLines を種別条件で絞り込む走査API（orthoAnchorCandidates(ForNew)・
+ * sameDirectionObstacles・sameCoordCounterparts・mergeCandidates・candidatesVisibleIn等）を集約する。
  *
- * 本ファイル導入の時点では製品コードから未接続だった——特性テスト（centerLineKindPolicy.test.js）が
- * 既存4地点（centerLineOps.js 追加extent・followerGraph.js 移動範囲・beamAxisMove.js・
- * centerLineConvert.js 入替えガード）の現行動作と導出結果が一致することを固定するだけの段階を経て、
- * transform/centerLineExtend.js（延長・短縮。2026-09-19）・transform/centerLineOps.js
- * 追加extent（同・ステップ3）が orthoAnchorCandidates 経由へ移行済み。続いて同方向の移動障害物・
- * 移動スナップ吸着先（ステップ4、2026-09-19）: transform/followerGraph.js computeMoveRange・
- * structural/beamAxisMove.js beamAxisMoveRange・snap.js findCLMoveSnap/findBeamAxisMoveSnap が
- * sameDirectionObstacles／moveSnapTargetKinds 経由へ移行済み。
- * centerLineConvert.js の呼び出し元は本ファイルの範囲外（未着手）。
+ * 移行の経緯（ステップ1〜7、2026-09-18〜2026-09-20）: 特性テスト（centerLineKindPolicy.test.js）で
+ * 既存呼び出し元の現行動作と導出結果の一致を固定する段階を経て、centerLineOps.js・
+ * centerLineExtend.js・followerGraph.js・beamAxisMove.js・snap.js・snapGeometry.js・
+ * centerLineConvert.js・centerLineFloorSync.js・CenterLinesLayer.jsx・App.jsx・openingMove.js・
+ * centerLineMerge.js・floorCLMap.js の主要な相手選択・可視性判定を順次、種別レベルAPI／走査API経由へ
+ * 移行した（各移行時に生じた「旧データ限定の既知の乖離」の解消はcenterLineKindPolicy.test.js内の
+ * 「旧データ限定・種別ベースへ統一」と付記したテストにピン留めしてある）。
  *
- * 既知の乖離（旧データ限定）: 未移行の地点は、種別（centerLineKind）ではなく生の `labeled` フラグで
- * 判定している——
- *   - structural/wallBeamAxes.js の findBeamAnchorCL（L293）`cl.labeled || centerLineKind(cl)==='beam'`
- *     ——壁交点柱のアンカー解決・梁芯重複ガード（autoFillWallBeamAxes）が共有する述語。本ファイルの
- *     sameDirectionObstacleKinds('beam')=['struct','beam']と同じ意図だが未移行（L472呼び出し元含め
- *     4地点の対象外として本ステップでは未着手）。
- *   - snap.js の findNearbyCenterLines（L96）`if (cl.labeled) continue;`——長押し位置に近接する
- *     ラベルなしCL（参照元候補）を探す走査で、実質的には「labeled以外＝aux/center/beam全部」を
- *     対象にしている（種別を問わない除外）。
- * 通常経路（AddCLDialog等）で作られるCLは種別と labeled が必ず一致する
- * （通り芯のみ labeled:true）ため実害は無いが、`{labeled:true, discipline:'arch'}` のような
- * 旧データ・異常値が存在すると、本モジュールの種別ベースの予測（orthoAnchorKinds等）と
- * 製品コードの実際の結果が割れる。本モジュールの挙動は変えず、この割れをピン留めテストで
- * 固定してある（centerLineKindPolicy.test.js内、「既知の乖離」と付記したテストを参照）。
- * 種別ベースへ統一するか labeled ベースを維持するかは製品コード移行時に裁定が要る。
- * transform/centerLineOps.js 追加extentは移行済み（種別ベースへ統一。旧「既知の乖離」は解消）。
- * structural/beamAxisMove.js（梁芯移動障害物判定）・snap.js findBeamAxisMoveSnap（梁芯移動スナップの
- * 障害物判定。同じ規約をレイヤ分離のため独立実装していたもの）は本ファイルの sameDirectionObstacles
- * 経由へ移行済み（種別ベースへ統一。旧「既知の乖離」は解消。ステップ4、2026-09-19）。
- * transform/centerLineOps.js addCenterLineFromDialog の重複判定（同座標CLの列挙）・
- * transform/centerLineConvert.js の入替えガード（checkPromoteToGridGuards/checkDemoteToCenterGuards）・
- * transform/centerLineFloorSync.js findFloorsWithCounterpartCL（他階の同座標CL探索）は
- * sameCoordCounterparts（走査API）経由へ移行済み（ステップ5、2026-09-20）。checkDemoteToCenterGuards の
- * dupCenter判定も種別ベースへ統一し、旧「既知の乖離」は解消済み。
- * ステップ6（可視モード表への集約。2026-09-20）: renderer/CenterLinesLayer.jsx（描画可否）は
- * isRenderTarget 経由へ、snap.js resolvePointerTargets（ヒット判定のkindFilter計算）は
- * hitTestKinds 経由へ、App.jsx handleMenuSelect（CL追加ダイアログの参照候補）は
- * isHitTestTarget（hitTestKinds 由来の CL レベル API）経由へ移行済み。snapGeometry.js
- * findNearestCenterLineEndpoint の通り芯除外は、生の `cl.labeled`
- * から種別ベース（spansEntireAxis。通り芯=FULL_SPAN_KINDSは常に全軸に及び「延長/短縮する端」を
- * 持たないため）へ移行済み（種別ベースへ統一。旧「既知の乖離」は解消——ピン留めテストは
- * snapGeometry.test.js参照）。openings/openingMove.js の建具移動障害物（isBlockingKind）は新設の
- * OPENING_BOUNDARY_KINDS（原始事実7。可視性とは別軸の独立事実）へ、スナップ候補
- * （openingSnapCandidates）は kindsVisibleIn('floorplan')（floorplan/finish/openingは可視集合が
- * 同一のため代表値として使用）へ移行済み。site/elevation のヒット可否（HIT_EXCLUDED_KINDS_BY_MODE
- * コメント参照）は、唯一の呼び出し元 usePointerInteraction.js updateSnap の到達可能性を確認済み
- * （site はホイールズーム経由でのみ到達し結果は未使用、elevation は到達経路自体が無い）——
- * 「未裁定」ではなく「可視モード表どおりで実害なし」に確定した。centerLineConvert.js・
- * structural/wallBeamAxes.js findBeamAnchorCL・snap.js findNearbyCenterLines 自身の内部判定は
- * 本ステップの対象外（未着手のまま）。
+ * ステップ7（ガード有効化、2026-09-20）で移行の入口を機械的に閉じた: core/centerLineKindPolicy.guard.test.js
+ * が app/src 配下の製品コードを走査し、(G1) graph.centerLines の種別条件なし直接走査・(G2) 生の
+ * labeled を種別の代用に読む・(G3) centerLineKind(x)==='<リテラル>' のインライン比較、の3種を
+ * allowlist の件数を超えて増やせないようにする——「未移行地点の一覧」は同ガードテストの
+ * G1_ALLOWLIST/G2_ALLOWLIST/G3_ALLOWLIST を唯一の供給源とする（本コメントには重複して書かない。
+ * 各エントリの理由・対象関数はそちらを参照）。structural/wallBeamAxes.js・structural/woodAutoFill.js・
+ * structural/structuralAutoFill.js（柱アンカー解決と共有する述語のため構造goldenでの検証が要る独立
+ * タスク）・interaction/gutterHitTest.js・snapGeometry.js・interaction/usePointerInteraction.js
+ * （centerLineConvert.jsの降格・昇格ガードと同じ判定式を共有するため両方まとめて移行する独立タスク）・
+ * finish/gridCells.js 等はガードのallowlistに「未移行（unmigrated）」区分で残っている。
  *
  * import ゼロに近い規約（extractedModuleImportInvariant）: ./centerLine.js（centerLineKind）と
  * ./constants.js（CenterLineType）のみに依存する。store.js/snap.js/.jsx/core.js バレル/error.js は
@@ -88,10 +54,11 @@ function assertKnownMode(appMode) {
 // しか呼ばれない。site は `appMode !== 'site'` で GutterLayer 自体を描かない／elevation は専用画面
 // （早期return）で GutterLayer を含む共有レイヤ群を一切通らない）の統合。
 // floorplan の可視集合を変えると連動する箇所（ステップ6、2026-09-20）: openings/openingMove.js
-// OPENING_SNAP_CL_KINDS（=kindsVisibleIn('floorplan')。建具の吸着候補）、および
-// moveSnapTargetKinds（struct/center/auxの移動スナップ吸着先。floorplan で可視な種別の和で決まる。
-// 下記コメント参照）が自動的に広がる/狭まる——floorplan は他の可視モード表と違い、複数の独立した
-// 導出先を持つため変更時は影響範囲をこの2箇所も含めて確認すること。
+// openingSnapCandidates 内の candidatesVisibleIn(graph, {appMode:'floorplan', centerLineType})
+// （建具の吸着候補。ステップ7、2026-09-20で走査API化）、および moveSnapTargetKinds（struct/center/aux
+// の移動スナップ吸着先。floorplan で可視な種別の和で決まる。下記コメント参照）が自動的に広がる/
+// 狭まる——floorplan は他の可視モード表と違い、複数の独立した導出先を持つため変更時は影響範囲を
+// この2箇所も含めて確認すること。
 export const VISIBLE_KINDS_BY_MODE = Object.freeze({
   floorplan: Object.freeze(['struct', 'center', 'aux']),
   finish:    Object.freeze(['struct', 'center', 'aux']),
@@ -390,13 +357,20 @@ export function isMoveSnapTarget(subject, other) {
 }
 
 /**
- * other が subject と結合しうるか（transform/centerLineMerge.js findCenterLineMergeMatch の
- * 種別条件と同型: 同 centerLineType・同種別・両者 labeled:false）。
- * 製品コードの findCenterLineMergeMatch（centerLineMerge.js L77-79）は candidate（=other相当）の
- * `!cl.labeled` だけを見ており、segment 側（=subject相当）が labeled:false であることは呼び出し元
- * （centerLineOps.js commitCLMoveOp 等の `if (!cl.labeled) mergeCenterLineChain(...)`）が保証する
- * 前提になっている。isMergeCandidate は特定の呼び出し文脈に依存させたくないため、
- * subject.labeled も対称にチェックする（呼び出し元の保証に頼らない安全側の既定）。
+ * other が subject と結合しうるか（同 centerLineType・同種別・両者 labeled:false）。
+ *
+ * 製品コード（transform/centerLineMerge.js findCenterLineMergeMatch）は本述語ではなく走査API
+ * mergeCandidates(graph, {centerLineType, kind, exclude}) 経由へステップ7（2026-09-20）で移行済み——
+ * kind を呼び出し元が明示引数で渡す設計のため、本述語は製品コードから未参照（0件）のまま意図的に
+ * 残してある（削除しない。centerLineKindPolicy.test.js の特性テストが本述語を直接参照する）。
+ * 本述語（subjectオブジェクトからcenterLineKind(subject)を導出する形）が製品コードに向かない理由:
+ * 結合の主体（subject）はまだグラフに存在しない仮想候補（centerLineOps.js の virtualCandidate。
+ * addCenterLineFromDialog の同種別extent分岐）のことがあり、discipline/lineType を持たないため
+ * centerLineKind(subject) が常に既定値 'center' に落ちてしまう（kind='aux'/'beam'の仮想候補を
+ * 誤った種別で判定する事故になる）。つまり isMergeCandidate は **subject が実CLオブジェクト
+ * （discipline/lineTypeを含む）である場面専用**——仮想候補が絡む場面では使えない。
+ * mergeCandidates 側の設計・移行判断の詳細は centerLineMerge.test.js「仮想候補（discipline/lineType
+ * 無し）でもkind引数どおりの種別だけを結合相手に選ぶ」参照。
  */
 export function isMergeCandidate(subject, other) {
   if (subject === other) return false;
@@ -519,4 +493,40 @@ export function isReferencedByAux(graph, target) {
     ex.lineType === 'dashed' && !ex.labeled &&
     (ex.extentLoRef?.clId === target.id || ex.extentHiRef?.clId === target.id)
   );
+}
+
+/**
+ * centerLineType・kind が一致し labeled:false な CenterLine を graph.centerLines から列挙する走査API
+ * （中心線の結合相手選択で使う。transform/centerLineMerge.js findCenterLineMergeMatch 参照。ステップ7、
+ * 2026-09-20移行）。kind は呼び出し元が明示する（isMergeCandidate のように subject オブジェクトから
+ * centerLineKind(subject) を自動導出しない）——結合の主体（subject）はまだグラフに存在しない仮想候補
+ * （centerLineOps.js の virtualCandidate。addCenterLineFromDialog の同種別extent分岐）のことがあり、
+ * discipline/lineType を持たないため centerLineKind(subject) が常に既定値'center'になってしまい、
+ * kind='aux'/'beam'では誤った種別で絞り込む事故になる（製品コードは元々 kind を明示引数で受け取り、
+ * この問題を避けていた）。orthoAnchorCandidatesForNew と同じ理由（型で事故を防ぐ）で kind を必須の
+ * 明示引数にする。
+ * @param {{centerLines: Array}} graph
+ * @param {{centerLineType: string, kind: string, exclude?: string[]}} opts
+ * @returns {Array} mergeableKinds(kind).includes(centerLineKind(other)) かつ !other.labeled かつ
+ *   other.centerLineType===centerLineType かつ exclude に含まれない CenterLine の配列
+ */
+export function mergeCandidates(graph, { centerLineType, kind, exclude = [] }) {
+  assertKnownKind(kind);
+  return graph.centerLines.filter(other =>
+    other.centerLineType === centerLineType && !other.labeled &&
+    !exclude.includes(other.id) && mergeableKinds(kind).includes(centerLineKind(other)));
+}
+
+/**
+ * appMode で可視な種別のうち centerLineType が一致する CenterLine を graph.centerLines から列挙する
+ * 走査API（建具のスナップ候補選定で使う。openings/openingMove.js openingSnapCandidates 参照。
+ * ステップ7、2026-09-20移行）。kindsVisibleIn(appMode) と centerLineType の単純な絞り込みのみを行う——
+ * 幾何条件（壁との位置関係・可動範囲等）は呼び出し側の責務。
+ * @param {{centerLines: Array}} graph
+ * @param {{appMode: string, centerLineType: string}} opts
+ * @returns {Array}
+ */
+export function candidatesVisibleIn(graph, { appMode, centerLineType }) {
+  const kinds = kindsVisibleIn(appMode);
+  return graph.centerLines.filter(other => other.centerLineType === centerLineType && kinds.includes(centerLineKind(other)));
 }

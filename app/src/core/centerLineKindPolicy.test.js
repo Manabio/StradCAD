@@ -26,7 +26,7 @@ import {
   isOrthoAnchorCandidate, isSameDirectionObstacle, isMoveSnapTarget, isMergeCandidate,
   isRenderTarget, isHitTestTarget,
   coversAlongAxis, orthoAnchorCandidates, orthoAnchorCandidatesForNew, sameDirectionObstacles,
-  sameCoordCounterparts,
+  sameCoordCounterparts, mergeCandidates, candidatesVisibleIn,
 } from './centerLineKindPolicy.js';
 
 // ---- 製品コード（section C）との突き合わせに使う実装 ----
@@ -447,6 +447,108 @@ test('sameCoordCounterparts: value・centerLineTypeが一致するCLを種別を
   const tolBoundary = graph.addCenterLine(CenterLineType.VERTICAL, 1000.4, { labeled: false, discipline: Discipline.ARCH });
   assert.equal(sameCoordCounterparts(graph, { centerLineType: CenterLineType.VERTICAL, value: 1000 }).some(c => c.id === tolBoundary.id), true, '既定tolMm(CL_OVERLAP_TOL_MM=0.5)未満の差はtrue（0.4<0.5）');
   assert.equal(sameCoordCounterparts(graph, { centerLineType: CenterLineType.VERTICAL, value: 1000, tolMm: 0.3 }).some(c => c.id === tolBoundary.id), false, 'tolMmを狭めれば境界外になる');
+});
+
+// QA指摘（ステップ7再QA・Minor E）: 許容誤差が「開区間」（`<`であって`<=`ではない）であることを
+// 直接固定するテストが無かった（`<`→`<=`の変異がフルsuiteで緑になっていた）。
+// 浮動小数の丸め誤差で不安定にならないよう、CL位置は0・照合値はCL_OVERLAP_TOL_MM自体（=0.5、2進で
+// 正確に表現できる値）を使う——`0.5`や`0.25`は2進浮動小数点で誤差なく表現できるため、
+// `Math.abs(0 - 0.5)`は必ず厳密に`0.5`になり、`0.5 < 0.5`の判定が決定的にfalseになる。
+test('【失敗系】sameCoordCounterparts: 差がちょうど既定tolMm(CL_OVERLAP_TOL_MM)のCLは一致しない（開区間。`<`であって`<=`ではない）', () => {
+  const { graph } = makeProjectWithGraph();
+  const cl = graph.addCenterLine(CenterLineType.VERTICAL, 0, { labeled: false, discipline: Discipline.ARCH });
+  assert.equal(
+    sameCoordCounterparts(graph, { centerLineType: CenterLineType.VERTICAL, value: CL_OVERLAP_TOL_MM }).some(c => c.id === cl.id),
+    false, '差がちょうどtolMm（開区間の境界そのもの）は含まれない',
+  );
+  assert.equal(
+    sameCoordCounterparts(graph, { centerLineType: CenterLineType.VERTICAL, value: CL_OVERLAP_TOL_MM / 2 }).some(c => c.id === cl.id),
+    true, '差がtolMm未満なら含まれる',
+  );
+});
+
+// ---- mergeCandidates: kind・centerLineTypeが一致しlabeled:falseな結合候補を列挙する走査API ----
+// （transform/centerLineMerge.js findCenterLineMergeMatch が使う。centerLineOps.js virtualCandidateの
+// ようにdiscipline/lineTypeを持たない仮想候補向けに、kindを明示引数で受け取る——isMergeCandidateの
+// ようにsubjectオブジェクトからcenterLineKind(subject)を導出しない。ステップ7、2026-09-20）。
+
+test('mergeCandidates: centerLineType・kindが一致しlabeled:falseなCLだけを列挙する（tolMmではなくlabeled/kind/excludeで絞る）', () => {
+  const { graph } = makeProjectWithGraph();
+  const auxA = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, lineType: 'dashed' });
+  const auxB = graph.addCenterLine(CenterLineType.VERTICAL, 2000, { labeled: false, lineType: 'dashed' });
+  const centerCl = graph.addCenterLine(CenterLineType.VERTICAL, 3000, { labeled: false, discipline: Discipline.ARCH });
+  const labeledAux = graph.addCenterLine(CenterLineType.VERTICAL, 4000, { labeled: true, lineType: 'dashed' });
+  const orthoAux = graph.addCenterLine(CenterLineType.HORIZONTAL, 0, { labeled: false, lineType: 'dashed' });
+
+  const result = mergeCandidates(graph, { centerLineType: CenterLineType.VERTICAL, kind: 'aux' });
+  assert.deepEqual(result.map(c => c.id).sort(), [auxA.id, auxB.id].sort(), 'labeled:false・kind一致・centerLineType一致のみ');
+  assert.equal(result.some(c => c.id === centerCl.id), false, '種別違いは含まれない');
+  assert.equal(result.some(c => c.id === labeledAux.id), false, 'labeled:trueは含まれない（kindはauxで一致していても）');
+  assert.equal(result.some(c => c.id === orthoAux.id), false, 'centerLineType違いは含まれない');
+
+  const withExclude = mergeCandidates(graph, { centerLineType: CenterLineType.VERTICAL, kind: 'aux', exclude: [auxA.id] });
+  assert.deepEqual(withExclude.map(c => c.id), [auxB.id], 'excludeのidは除外される');
+
+  // 最小のダックタイピング（{centerLines}のみ）でも動く。
+  const duckGraph = { centerLines: graph.centerLines };
+  assert.deepEqual(mergeCandidates(duckGraph, { centerLineType: CenterLineType.VERTICAL, kind: 'aux' }).map(c => c.id).sort(), result.map(c => c.id).sort());
+});
+
+test('【失敗系】mergeCandidates: 未知のkindはthrowする', () => {
+  const { graph } = makeProjectWithGraph();
+  assert.throws(() => mergeCandidates(graph, { centerLineType: CenterLineType.VERTICAL, kind: 'wood' }), /未知のCL種別: wood/);
+});
+
+// ---- candidatesVisibleIn: appModeで可視な種別のうちcenterLineTypeが一致するCLを列挙する走査API ----
+// （openings/openingMove.js openingSnapCandidates が使う。ステップ7、2026-09-20）。
+
+// QA指摘（ステップ7再QA・Minor F）: 期待値を kindsVisibleIn(appMode) から組む自己参照テストだった
+// （kindsVisibleIn は candidatesVisibleIn 自身が内部で呼ぶ関数そのもの——VISIBLE_KINDS_BY_MODE を
+// 壊す変異があっても期待値側が一緒に動いてしまい赤にならない）。snapGeometry.test.js の
+// HIT_TEST_KINDS_LITERAL と同じ流儀でリテラル表に差し替える。
+const VISIBLE_KINDS_LITERAL = {
+  floorplan: ['struct', 'center', 'aux'],
+  finish:    ['struct', 'center', 'aux'],
+  opening:   ['struct', 'center', 'aux'],
+  structure: ['struct', 'beam'],
+  site:      [],
+  elevation: [],
+};
+
+// リテラル表が実装（VISIBLE_KINDS_BY_MODE）から乖離していないことの一回きりの確認（このテストだけは
+// VISIBLE_KINDS_BY_MODEを参照する——下のテストは変異検出のためリテラル表を直接使う）。
+test('VISIBLE_KINDS_LITERAL: VISIBLE_KINDS_BY_MODE の値と一致する（このテストファイル内リテラル表のドリフト検知）', () => {
+  for (const mode of APP_MODES) assert.deepEqual(VISIBLE_KINDS_LITERAL[mode], [...VISIBLE_KINDS_BY_MODE[mode]], `mode=${mode}`);
+});
+
+test('candidatesVisibleIn: VISIBLE_KINDS_LITERAL(appMode)とcenterLineTypeの両方で絞り込む', () => {
+  const { project, graph } = makeProjectWithGraph();
+  for (const kind of CL_KINDS) {
+    addCLOfKind(graph, project, CenterLineType.VERTICAL, (CL_KINDS.indexOf(kind) + 1) * 1000, kind);
+  }
+  graph.addCenterLine(CenterLineType.HORIZONTAL, 0, { labeled: false, discipline: Discipline.ARCH }); // centerLineType違い
+
+  for (const appMode of APP_MODES) {
+    const result = candidatesVisibleIn(graph, { appMode, centerLineType: CenterLineType.VERTICAL });
+    assert.deepEqual(
+      result.map(c => centerLineKind(c)).sort(),
+      [...VISIBLE_KINDS_LITERAL[appMode]].sort(),
+      `appMode=${appMode}`,
+    );
+    assert.ok(result.every(c => c.centerLineType === CenterLineType.VERTICAL), `appMode=${appMode}: centerLineType違いは含まれない`);
+  }
+
+  // 最小のダックタイピング（{centerLines}のみ）でも動く。
+  const duckGraph = { centerLines: graph.centerLines };
+  assert.deepEqual(
+    candidatesVisibleIn(duckGraph, { appMode: 'floorplan', centerLineType: CenterLineType.VERTICAL }).map(c => c.id).sort(),
+    candidatesVisibleIn(graph, { appMode: 'floorplan', centerLineType: CenterLineType.VERTICAL }).map(c => c.id).sort(),
+  );
+});
+
+test('【失敗系】candidatesVisibleIn: 未知のappModeはthrowする', () => {
+  const { graph } = makeProjectWithGraph();
+  assert.throws(() => candidatesVisibleIn(graph, { appMode: 'renovation', centerLineType: CenterLineType.VERTICAL }), /未知のappMode: renovation/);
 });
 
 test('【失敗系】sameCoordCounterparts: centerLineType未指定はthrow、valueが数値でなければthrow（未指定・undefined・NaN・文字列）', () => {
