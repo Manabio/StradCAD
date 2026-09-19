@@ -44,6 +44,22 @@
  * transform/centerLineFloorSync.js findFloorsWithCounterpartCL（他階の同座標CL探索）は
  * sameCoordCounterparts（走査API）経由へ移行済み（ステップ5、2026-09-20）。checkDemoteToCenterGuards の
  * dupCenter判定も種別ベースへ統一し、旧「既知の乖離」は解消済み。
+ * ステップ6（可視モード表への集約。2026-09-20）: renderer/CenterLinesLayer.jsx（描画可否）は
+ * isRenderTarget 経由へ、snap.js resolvePointerTargets（ヒット判定のkindFilter計算）は
+ * hitTestKinds 経由へ、App.jsx handleMenuSelect（CL追加ダイアログの参照候補）は
+ * isHitTestTarget（hitTestKinds 由来の CL レベル API）経由へ移行済み。snapGeometry.js
+ * findNearestCenterLineEndpoint の通り芯除外は、生の `cl.labeled`
+ * から種別ベース（spansEntireAxis。通り芯=FULL_SPAN_KINDSは常に全軸に及び「延長/短縮する端」を
+ * 持たないため）へ移行済み（種別ベースへ統一。旧「既知の乖離」は解消——ピン留めテストは
+ * snapGeometry.test.js参照）。openings/openingMove.js の建具移動障害物（isBlockingKind）は新設の
+ * OPENING_BOUNDARY_KINDS（原始事実7。可視性とは別軸の独立事実）へ、スナップ候補
+ * （openingSnapCandidates）は kindsVisibleIn('floorplan')（floorplan/finish/openingは可視集合が
+ * 同一のため代表値として使用）へ移行済み。site/elevation のヒット可否（HIT_EXCLUDED_KINDS_BY_MODE
+ * コメント参照）は、唯一の呼び出し元 usePointerInteraction.js updateSnap の到達可能性を確認済み
+ * （site はホイールズーム経由でのみ到達し結果は未使用、elevation は到達経路自体が無い）——
+ * 「未裁定」ではなく「可視モード表どおりで実害なし」に確定した。centerLineConvert.js・
+ * structural/wallBeamAxes.js findBeamAnchorCL・snap.js findNearbyCenterLines 自身の内部判定は
+ * 本ステップの対象外（未着手のまま）。
  *
  * import ゼロに近い規約（extractedModuleImportInvariant）: ./centerLine.js（centerLineKind）と
  * ./constants.js（CenterLineType）のみに依存する。store.js/snap.js/.jsx/core.js バレル/error.js は
@@ -71,6 +87,11 @@ function assertKnownMode(appMode) {
 // 補助線は構造モードでは非表示）＋ renderer/SceneLayers.jsx（CenterLinesLayer は GutterLayer 経由で
 // しか呼ばれない。site は `appMode !== 'site'` で GutterLayer 自体を描かない／elevation は専用画面
 // （早期return）で GutterLayer を含む共有レイヤ群を一切通らない）の統合。
+// floorplan の可視集合を変えると連動する箇所（ステップ6、2026-09-20）: openings/openingMove.js
+// OPENING_SNAP_CL_KINDS（=kindsVisibleIn('floorplan')。建具の吸着候補）、および
+// moveSnapTargetKinds（struct/center/auxの移動スナップ吸着先。floorplan で可視な種別の和で決まる。
+// 下記コメント参照）が自動的に広がる/狭まる——floorplan は他の可視モード表と違い、複数の独立した
+// 導出先を持つため変更時は影響範囲をこの2箇所も含めて確認すること。
 export const VISIBLE_KINDS_BY_MODE = Object.freeze({
   floorplan: Object.freeze(['struct', 'center', 'aux']),
   finish:    Object.freeze(['struct', 'center', 'aux']),
@@ -81,14 +102,20 @@ export const VISIBLE_KINDS_BY_MODE = Object.freeze({
 });
 
 // ---- 原始事実2: ヒット除外表 ----
-// snap.js:226 resolvePointerTargets の clKindFilter（structureモードは梁芯のみ・それ以外は梁芯以外）
-// を「可視種別からの除外」として表現したもの。site/elevation はこの表に現れない＝除外なしだが、
-// 可視モード表では両モードとも空集合——現行 snap.js は appMode==='structure' 以外を一律「梁芯以外
-// 全部ヒット対象」として扱い、site/elevationを特別扱いしていない。つまり現行 snap.js は「描画され
-// ないCLでもヒット対象になりうる」実装になっている（site/elevationで実際に resolvePointerTargets が
-// 呼ばれる経路が存在するかどうかは未確認のまま残る）。この食い違いは未裁定——hitTestKinds() は
-// あくまで「可視モード表 ∩ (全種別 − ヒット除外表)」を計算するだけで、上記の食い違いを解消しない
-// （製品コード移行時に、site/elevationのヒット可否をどちらの表に合わせるか裁定が要る）。
+// snap.js resolvePointerTargets の clKindFilter（structureモードは梁芯のみ・それ以外は梁芯以外）を
+// 「可視種別からの除外」として表現したもの。site/elevation はこの表に現れない＝除外なしだが、可視
+// モード表では両モードとも空集合——hitTestKinds() は「可視モード表 ∩ (全種別 − ヒット除外表)」を
+// 計算するため、site/elevationはこの表の値に関わらず可視モード表（空集合）に揃う。
+// 【可視表どおり（根拠: 到達可能性を確認済み）】snap.js resolvePointerTargets は
+// interaction/usePointerInteraction.js updateSnap からのみ呼ばれる（唯一の呼び出し元）——
+// pointerDown/pointerMoveはappMode==='site'|'elevation'で専用処理の後に早期returnし、updateSnap・
+// longPress.begin に到達しない。site は handleWheel（appModeで分岐しない）経由でのみ updateSnap に
+// 到達するが、その結果（nearCL/nearCLEndpoint/snapPoint等）を参照するカーソル・メニュー
+// （App.jsx cursor算出・interaction/menuItems.js detectContext）はいずれも site 専用の別分岐
+// （mode?.siteDrawState依存のcursor・longPress不発火）に倒れて未使用。elevation は resolvePointerTargets
+// へ到達する経路自体が無い（pointerDown/Move/Wheelいずれもappmode==='elevation'で専用処理のみ）。
+// よって可視モード表（VISIBLE_KINDS_BY_MODE.site/elevation=[]）に揃えてもユーザーに見える挙動は
+// 変わらない（2026-09-20 ステップ6で確認・snap.js側もこの表に統一済み）。
 export const HIT_EXCLUDED_KINDS_BY_MODE = Object.freeze({
   structure: Object.freeze(['struct']),
 });
@@ -162,6 +189,16 @@ export const CONVERT_BLOCKING_KINDS = Object.freeze({
 // （通り芯＞中心線＞補助線＞梁芯。CL_KINDSの並びそのもの）から通り芯を除いたものと同じ
 // （中心線・補助線 ＞ 梁芯）。
 export const CROSS_FLOOR_COUNTERPART_KINDS = Object.freeze(['center', 'aux', 'beam']);
+
+// ---- 原始事実7: 建具がまたげない境界種別 ----
+// openings/openingMove.js isBlockingKind（ステップ6、2026-09-20移行）: 建具の可動範囲を区切る境界
+// （壁を横切ってもまたげないCL）になるのは通り芯・中心線のみ——どちらも壁の実際の区画（間仕切り・
+// 通り芯）を表すのに対し、補助線は作図補助のための参照線（壁の区画ではない）、梁芯は構造専用の軸
+// （間仕切りではない）でどちらも実体の間仕切りを持たないためまたげる（ユーザー裁定 2026-09-14。
+// openingMove.js冒頭コメント参照）。可視性由来の集合（kindsVisibleIn等）からは導出できない独立の
+// 事実——可視性は「appModeで描かれるか」、こちらは「建具移動の物理境界になるか」で判定軸が異なる
+// （事実、VISIBLE_KINDS_BY_MODEのどのモードの可視集合ともstruct+centerの2つだけの組合せは一致しない）。
+export const OPENING_BOUNDARY_KINDS = Object.freeze(['struct', 'center']);
 
 // ================================================================
 // 種別レベルAPI
@@ -262,6 +299,12 @@ export function mergeableKinds(kind) {
 export function allowsWallAnchor(kind) {
   assertKnownKind(kind);
   return WALL_ANCHOR_KINDS.includes(kind);
+}
+
+/** kind が建具の可動範囲の境界（またげない）になるか。 */
+export function isOpeningBoundaryKind(kind) {
+  assertKnownKind(kind);
+  return OPENING_BOUNDARY_KINDS.includes(kind);
 }
 
 /** kind の extent 境界解決方式。 */
