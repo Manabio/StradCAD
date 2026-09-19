@@ -2,11 +2,15 @@
 // 実挙動を再現できないため、実 core.js（Plane/PlanGraph/Project）を使う。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Project, CenterLineType, Discipline } from '../core.js';
+import { Project, CenterLineType, Discipline, centerLineKind } from '../core.js';
 import { serializeGraph, restoreGraph, serializeStructCLs, restoreStructCLs } from '../graphSnapshot.js';
-import { ERR_CL_CONVERT_NO_GRID, ERR_CL_CONVERT_LAST_GRID, ERR_CL_CONVERT_ATTACHED, ERR_CL_DUPLICATE } from '../error.js';
+import {
+  ERR_CL_CONVERT_NO_GRID, ERR_CL_CONVERT_LAST_GRID, ERR_CL_CONVERT_ATTACHED,
+  ERR_CL_CONVERT_DUP, ERR_CL_CONVERT_DUP_DEMOTE,
+} from '../error.js';
 import {
   outermostGridExtentRefs, isLastGridOnAxis, attachedShapeExists, applyPromoteToGrid, applyDemoteToCenter,
+  checkDemoteToCenterGuards,
 } from './centerLineConvert.js';
 
 // project.structGraph・graph._structGraph の連携が必要なテスト用。
@@ -75,7 +79,10 @@ test('applyPromoteToGrid異常系: 階グラフの同座標・同軸に梁芯（
 
   const result = applyPromoteToGrid(graph, project.structGraph, cl);
 
-  assert.equal(result.error, ERR_CL_DUPLICATE('beam'));
+  assert.equal(result.error, ERR_CL_CONVERT_DUP('beam'));
+  // ERR_CL_CONVERT_DUP自体を呼んで期待値を作ると、その関数がkind引数を無視する変異を検出できない
+  // ——リテラル文字列で固定する。
+  assert.equal(result.error, '同じ位置に梁芯があるため通り芯にできません。');
   assert.equal(graph.shapeMap.has(cl.id), true, '階グラフに残ったまま（変換されない）');
   assert.equal(project.structGraph.shapeMap.has(cl.id), false);
   assert.equal(graph.shapeMap.has(beam.id), true, '梁芯は無傷');
@@ -90,7 +97,8 @@ test('applyPromoteToGrid異常系: structGraphに同座標・同軸の通り芯�
 
   const result = applyPromoteToGrid(graph, project.structGraph, cl);
 
-  assert.equal(result.error, ERR_CL_DUPLICATE('struct'));
+  assert.equal(result.error, ERR_CL_CONVERT_DUP('struct'));
+  assert.equal(result.error, '同じ位置に通り芯があるため通り芯にできません。');
   assert.equal(graph.shapeMap.has(cl.id), true, '階グラフに残ったまま（変換されない）');
   assert.equal(cl.discipline, Discipline.ARCH);
   assert.equal(cl.labeled, false);
@@ -291,10 +299,98 @@ test('applyDemoteToCenter異常系: 移籍先の階グラフに同座標・同�
 
   const result = applyDemoteToCenter(graph, project.structGraph, cl);
 
-  assert.equal(result.error, ERR_CL_DUPLICATE('center'));
+  assert.equal(result.error, ERR_CL_CONVERT_DUP_DEMOTE('center'));
+  // ERR_CL_CONVERT_DUP_DEMOTE自体を呼んで期待値を作ると、その関数がkind引数を無視する変異を
+  // 検出できない——リテラル文字列で固定する（QA指摘m-1）。
+  assert.equal(result.error, '同じ位置に中心線があるため中心線にできません。');
   assert.equal(project.structGraph.shapeMap.has(cl.id), true, 'structGraphに残ったまま（変換されない）');
   assert.equal(cl.discipline, Discipline.STRUCT);
   assert.equal(cl.labeled, true);
+});
+
+test('applyDemoteToCenter異常系: 移籍先の階グラフに同座標・同軸の補助線が既にあればERR_CL_CONVERT_DUP_DEMOTE(\'aux\')でグラフ無変更（実際の種別を表示。共存表より厳しく補助線も拒否する現行維持の裁定）', () => {
+  const { project, graph } = makeProjectWithGraph();
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: true, discipline: Discipline.STRUCT });
+  const cl = project.structGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: true, discipline: Discipline.STRUCT });
+  project.structGraph.addCenterLine(CenterLineType.VERTICAL, 5000, { labeled: true, discipline: Discipline.STRUCT }); // isLastGridOnAxis対策
+  graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, lineType: 'dashed' }); // 移籍先に既存の補助線
+
+  const result = applyDemoteToCenter(graph, project.structGraph, cl);
+
+  assert.equal(result.error, ERR_CL_CONVERT_DUP_DEMOTE('aux'), '相手が補助線のとき実際の種別（aux）を表示する');
+  // ERR_CL_CONVERT_DUP_DEMOTE自体を呼んで期待値を作ると、その関数がkind引数を無視する変異を
+  // 検出できない（期待値・実測値の双方が同じ壊れた関数を経由するため）——リテラル文字列で固定する。
+  assert.equal(result.error, '同じ位置に補助線があるため中心線にできません。');
+  assert.equal(project.structGraph.shapeMap.has(cl.id), true, 'structGraphに残ったまま（変換されない）');
+});
+
+test('applyDemoteToCenter異常系: 移籍先に中心線・補助線が両方あれば中心線を優先して表示する（convertBlockingKindsの並び順）', () => {
+  const { project, graph } = makeProjectWithGraph();
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: true, discipline: Discipline.STRUCT });
+  const cl = project.structGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: true, discipline: Discipline.STRUCT });
+  project.structGraph.addCenterLine(CenterLineType.VERTICAL, 5000, { labeled: true, discipline: Discipline.STRUCT }); // isLastGridOnAxis対策
+  graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, lineType: 'dashed' }); // 補助線
+  graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH }); // 中心線
+
+  const result = applyDemoteToCenter(graph, project.structGraph, cl);
+
+  assert.equal(result.error, ERR_CL_CONVERT_DUP_DEMOTE('center'));
+  assert.equal(result.error, '同じ位置に中心線があるため中心線にできません。', 'リテラル文字列で固定（QA指摘m-1）');
+});
+
+// ---- 旧データ限定・種別ベースへ統一（ステップ5、2026-09-20）: checkDemoteToCenterGuards の
+// dupCenter判定を種別ベース（centerLineKind）へ統一したことによる反転ピン留め。移行前は生の
+// `!c.labeled` を見ていたため、labeled:true の旧データ（種別は中心線・補助線）は「labeled付き」
+// として除外され障害物にならなかった。移行後は種別ベースのため、labeledの値によらず障害物になる。
+
+test('【旧データ限定・種別ベースへ統一】checkDemoteToCenterGuards: labeled:trueでも種別が中心線の旧データ（{labeled:true, discipline:ARCH}）は障害物になる（移行前は見逃していた）', () => {
+  const { project, graph } = makeProjectWithGraph();
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: true, discipline: Discipline.STRUCT });
+  const cl = project.structGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: true, discipline: Discipline.STRUCT });
+  project.structGraph.addCenterLine(CenterLineType.VERTICAL, 5000, { labeled: true, discipline: Discipline.STRUCT }); // isLastGridOnAxis対策
+  const legacy = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: true, discipline: Discipline.ARCH });
+  assert.equal(centerLineKind(legacy), 'center', '前提: discipline=ARCHなのでcenter種別（labeled:trueだが種別は通り芯でない旧データ）');
+
+  const error = checkDemoteToCenterGuards(graph, project.structGraph, cl);
+
+  assert.equal(error, ERR_CL_CONVERT_DUP_DEMOTE('center'), '移行前は!labeledがfalseのため見逃していたが、移行後は種別ベースで検出する');
+  assert.equal(error, '同じ位置に中心線があるため中心線にできません。', 'リテラル文字列で固定（QA指摘m-1）');
+});
+
+test('【旧データ限定・種別ベースへ統一】checkDemoteToCenterGuards: labeled:trueでも種別が補助線の旧データ（{labeled:true, lineType:dashed}）は障害物になる（移行前は見逃していた）', () => {
+  const { project, graph } = makeProjectWithGraph();
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: true, discipline: Discipline.STRUCT });
+  const cl = project.structGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: true, discipline: Discipline.STRUCT });
+  project.structGraph.addCenterLine(CenterLineType.VERTICAL, 5000, { labeled: true, discipline: Discipline.STRUCT }); // isLastGridOnAxis対策
+  const legacy = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: true, lineType: 'dashed' });
+  assert.equal(centerLineKind(legacy), 'aux', '前提: lineType=dashedなのでaux種別（labeled:trueだが種別は通り芯でない旧データ）');
+
+  const error = checkDemoteToCenterGuards(graph, project.structGraph, cl);
+
+  assert.equal(error, ERR_CL_CONVERT_DUP_DEMOTE('aux'), '移行前は!labeledがfalseのため見逃していたが、移行後は種別ベースで検出する');
+  assert.equal(error, '同じ位置に補助線があるため中心線にできません。', 'リテラル文字列で固定（QA指摘m-1）');
+});
+
+// QA指摘m-5: 逆方向の乖離——labeled:falseだが種別はstructの旧データ・異常値は、移行前は
+// 障害物として拒否していたが移行後は見逃す（拒否しない）方向に割れる。通常経路では
+// discipline:STRUCTかつlabeled:falseのCLは作れないため実害は無い（checkDemoteToCenterGuardsの
+// コメント参照）。
+test('【旧データ限定・種別ベースへ統一（逆方向）】checkDemoteToCenterGuards: labeled:falseで種別がstructの異常値（{labeled:false, discipline:STRUCT}）は障害物にならない（移行前は拒否していた）', () => {
+  const { project, graph } = makeProjectWithGraph();
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: true, discipline: Discipline.STRUCT });
+  const cl = project.structGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: true, discipline: Discipline.STRUCT });
+  project.structGraph.addCenterLine(CenterLineType.VERTICAL, 5000, { labeled: true, discipline: Discipline.STRUCT }); // isLastGridOnAxis対策
+  const legacy = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.STRUCT });
+  assert.equal(centerLineKind(legacy), 'struct', '前提: discipline=STRUCTなのでstruct種別（labeled:falseだが種別は通り芯の異常値。通常経路では作れない）');
+
+  const error = checkDemoteToCenterGuards(graph, project.structGraph, cl);
+
+  assert.equal(error, null, '移行前は!labeledがtrueのため拒否していたが、移行後は種別ベース（structはconvertBlockingKinds(demote)に含まれない）のため見逃す');
 });
 
 test('applyDemoteToCenter異常系: アクティブ階グラフ側に斜線が取り付いていればERR_CL_CONVERT_ATTACHEDでグラフ無変更（F7・N2再修正）', () => {
@@ -375,4 +471,25 @@ test('往復: 昇格→降格でarch/中心線の状態に戻り、シリアラ�
   assert.equal(restored.labeled, false);
   assert.equal(restored.extentLoRef.clId, y1.id);
   assert.equal(restored.extentHiRef.clId, y2.id);
+});
+
+// ---- 【失敗系】QA指摘m-3: 変換用文言（ERR_CL_CONVERT_DUP/_DEMOTE）は未知種別でthrowする ----
+// （追加用のERR_CL_DUPLICATEは挙動を変えていない。undefined埋め込みのまま）
+
+test('【失敗系】ERR_CL_CONVERT_DUP: 未知種別・未指定はthrowする', () => {
+  assert.throws(() => ERR_CL_CONVERT_DUP('wood'), /未知のCL種別: wood/);
+  assert.throws(() => ERR_CL_CONVERT_DUP(undefined), /未知のCL種別: undefined/);
+  assert.throws(() => ERR_CL_CONVERT_DUP(null), /未知のCL種別: null/);
+});
+
+test('【失敗系】ERR_CL_CONVERT_DUP_DEMOTE: 未知種別・未指定はthrowする', () => {
+  assert.throws(() => ERR_CL_CONVERT_DUP_DEMOTE('wood'), /未知のCL種別: wood/);
+  assert.throws(() => ERR_CL_CONVERT_DUP_DEMOTE(undefined), /未知のCL種別: undefined/);
+});
+
+test('ERR_CL_CONVERT_DUP/_DEMOTEは既知の4種別すべてでthrowしない', () => {
+  for (const kind of ['struct', 'center', 'aux', 'beam']) {
+    assert.doesNotThrow(() => ERR_CL_CONVERT_DUP(kind));
+    assert.doesNotThrow(() => ERR_CL_CONVERT_DUP_DEMOTE(kind));
+  }
 });

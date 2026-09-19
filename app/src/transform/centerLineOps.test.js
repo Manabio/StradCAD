@@ -6,7 +6,7 @@ import { Plane, PlanGraph, Project, CenterLineType, Discipline, centerLineKind, 
 import {
   ERR_CL_DUPLICATE, ERR_CL_CENTER_UPGRADED, ERR_CL_STRUCT_EXISTS,
   ERR_CL_CONVERT_ATTACHED, ERR_CL_CONVERT_NO_GRID, ERR_CL_CONVERT_DUP_FLOOR, ERR_CL_CONVERT_DUP_FLOOR_DEMOTE,
-  ERR_CL_DELETE_LAST_GRID,
+  ERR_CL_CONVERT_DUP_DEMOTE, ERR_CL_DELETE_LAST_GRID,
 } from '../error.js';
 import { undoManager } from '../undoManager.js';
 import { floorSwapManager } from '../storage/FloorSwapManager.js';
@@ -16,6 +16,7 @@ import {
   shouldSuggestWoodStructure, commitCLMoveOp, deleteCenterLineWithUndo, addCenterLineFromDialog,
   promoteCenterToGridWithUndo, demoteGridToCenterWithUndo,
 } from './centerLineOps.js';
+import { CL_KINDS, coexistenceAt } from '../core/centerLineKindPolicy.js';
 
 function makeGraph(planeId = 'p1') {
   const plane = new Plane(planeId, 0, `${planeId}階`, 1, 1);
@@ -170,6 +171,70 @@ test('deleteCenterLineWithUndo: 中心線（非struct）の削除は同軸の通
 });
 
 // ---- addCenterLineFromDialog ----
+
+// ---- スパン配列バッチモード（kind='struct' かつ value が配列。QA指摘m-4）----
+// 既存テストが無かった経路（QA実測）。sameCoordCounterparts経由への移行後も、重複除外の
+// 述語（tolMm既定=CL_OVERLAP_TOL_MM）が従来の`< CL_OVERLAP_TOL_MM`と完全一致することを固定する。
+
+test('addCenterLineFromDialog: スパン配列バッチモードは重複する値を除外し、新規の値だけ通り芯として追加する', () => {
+  const { project, graph } = makeProjectWithGraph();
+  project.structGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: true, discipline: Discipline.STRUCT }); // 既存
+  const beforeTop = undoManager.peekUndo();
+
+  const result = addCenterLineFromDialog(
+    graph, project,
+    { clDialog: { type: 'vertical' }, value: [1000, 2000, 3000], kind: 'struct', refId: null, refOffset: 0 },
+    null,
+  );
+
+  assert.equal(result.done, true);
+  assert.equal(result.toast, null);
+  assert.deepEqual(result.suggestWood.newValues, [2000, 3000], '既存の1000は除外され、新規の2本だけが追加対象になる');
+  const values = project.structGraph.centerLines
+    .filter(cl => cl.centerLineType === CenterLineType.VERTICAL)
+    .map(cl => cl.value).sort((a, b) => a - b);
+  assert.deepEqual(values, [1000, 2000, 3000]);
+  assert.notEqual(undoManager.peekUndo(), beforeTop, 'undoが積まれる');
+
+  undoManager.undo();
+  const valuesAfterUndo = project.structGraph.centerLines
+    .filter(cl => cl.centerLineType === CenterLineType.VERTICAL)
+    .map(cl => cl.value);
+  assert.deepEqual(valuesAfterUndo, [1000], 'undoで新規2本が消え既存の1本だけ残る');
+});
+
+test('addCenterLineFromDialog: スパン配列バッチモードは全値が重複すればdone:trueかつERR_CL_DUPLICATEでundoを積まない', () => {
+  const { project, graph } = makeProjectWithGraph();
+  project.structGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: true, discipline: Discipline.STRUCT });
+  project.structGraph.addCenterLine(CenterLineType.VERTICAL, 2000, { labeled: true, discipline: Discipline.STRUCT });
+  const beforeTop = undoManager.peekUndo();
+
+  const result = addCenterLineFromDialog(
+    graph, project,
+    { clDialog: { type: 'vertical' }, value: [1000, 2000], kind: 'struct', refId: null, refOffset: 0 },
+    null,
+  );
+
+  assert.equal(result.done, true);
+  assert.equal(result.toast, ERR_CL_DUPLICATE('struct'));
+  assert.equal(undoManager.peekUndo(), beforeTop, 'undoは積まれない');
+});
+
+test('【失敗系】addCenterLineFromDialog: スパン配列バッチモードの重複除外はtolMm境界（CL_OVERLAP_TOL_MM未満は重複扱い）', () => {
+  const { project, graph } = makeProjectWithGraph();
+  project.structGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: true, discipline: Discipline.STRUCT }); // 既存
+
+  const result = addCenterLineFromDialog(
+    graph, project,
+    // 1000.4は既存(1000)との差が0.4mm（既定tolMm=CL_OVERLAP_TOL_MM=0.5未満）で重複扱いになるはず
+    // ——tolMmが0に壊れる変異（QA指摘m-4）が注入されるとこのケースだけ非重複扱いに変わり検出できる。
+    { clDialog: { type: 'vertical' }, value: [1000.4, 5000], kind: 'struct', refId: null, refOffset: 0 },
+    null,
+  );
+
+  assert.equal(result.done, true);
+  assert.deepEqual(result.suggestWood.newValues, [5000], '1000.4は既存1000の重複としてtolMm境界内で除外される');
+});
 
 test('addCenterLineFromDialog: 通り芯を既存通り芯と同座標に追加しようとするとdone:falseでERR_CL_DUPLICATE、undoは積まれない', () => {
   const { project, graph } = makeProjectWithGraph();
@@ -469,13 +534,139 @@ test('【失敗系】addCenterLineFromDialog: 補助線の追加extentは直交C
   assert.equal(added.extentHi, expected, 'hi側も同じ丸め値になり、線分は長さ0に退化する');
 });
 
+// ---- M-1（QA指摘）: 同座標に「複数種別」が同時にある場合の重複判定の総当り ----
+// 従来のCOEXISTENCE 16セルテスト（centerLineKindPolicy.test.js）は既存が単一種別のときしか
+// 見ておらず、「同座標に複数種別が同時にある」ケース（例: 既存=中心線+補助線の状態へ通り芯を
+// 追加）を検証できていなかった——実データprobe（clCoexistProbe.mjs）はCL_KINDSの並び逆転の
+// ような変異を検出できず（実データに「同座標に複数種別」がほぼ無いため）、QAがscratchpadの
+// combi.mjs（新規4種別×既存部分集合16通り×extent配置2通り=128ケースの総当り）で16/128件の
+// 回帰を実測した。本テストはそれを単体テストとして取り込む。
+// 期待値は「製品コードのexisting選択規則（新規と同種別の既存があれば最優先、無ければ優先順で
+// 1つ選ぶ）」と「coexistenceAt」から導出する——ただし newKind==='struct' のとき同座標に
+// 梁芯が1本でもあれば拒否、という規約は coexistenceAt(newKind, existingKind) という2引数の関係
+// （priorityで選ばれた1本だけを見る）では表現できない特例（centerLineOps.js のコメント参照。
+// 表駆動へは寄せず走査のAPI化のみに留めた箇所）として明示的に加える。
+// 優先順はCL_KINDSをそのままimportして使わず、リテラルでハードコードする——製品コード
+// （centerLineOps.js）もCL_KINDSをそのまま使うため、importして使うと期待値・実測値の両方が
+// 同じ壊れたCL_KINDSを経由してしまい、CL_KINDS自体の並びが壊れる変異を検出できない
+// （QA指摘M-1・QAのcombi.mjsと同じ方針。下のassertで現在値と一致することは別途確認する）。
+test('addCenterLineFromDialog: 同座標に複数種別が同時にある場合の重複判定を総当りで照合する（新規4種別×既存部分集合16通り×extent2通り=128ケース、QA指摘M-1）', () => {
+  const KINDS = ['struct', 'center', 'aux', 'beam'];
+  assert.deepEqual(KINDS, [...CL_KINDS], '前提: ハードコードした優先順はCL_KINDSの現在値と一致する（CL_KINDS自体が壊れたらこのassertで検出する）');
+  const VALUE = 1000;
+  const clType = CenterLineType.VERTICAL;
+  const perpType = CenterLineType.HORIZONTAL;
+  const vp = { scaleDenominator: 100 };
+
+  // 製品コード（centerLineOps.js addCenterLineFromDialog）の existing 選択規則そのもの
+  // （優先順はKINDS＝上でハードコードしたリテラル配列を使う。CL_KINDSは使わない）。
+  function pickExistingKind(newKind, present) {
+    if (present.includes(newKind)) return newKind;
+    return KINDS.find(k => present.includes(k)) ?? null;
+  }
+
+  // ポリシー（coexistenceAt）から導出した帰結の分類。
+  function decideOutcome(newKind, present) {
+    if (present.length === 0) return 'allowed';
+    const existingKind = pickExistingKind(newKind, present);
+    if (newKind === existingKind) {
+      return coexistenceAt(newKind, existingKind) === 'forbidden' ? 'forbidden-same' : 'extent';
+    }
+    if (newKind === 'beam' && coexistenceAt(newKind, existingKind) === 'forbidden') return 'forbidden-beam-existing';
+    if (newKind === 'struct' && present.includes('beam')) return 'forbidden-beam-anywhere';
+    if (coexistenceAt(newKind, existingKind) === 'promote') return 'promote';
+    if (newKind === 'center' && coexistenceAt(newKind, existingKind) === 'forbidden') return 'struct-exists';
+    return 'allowed';
+  }
+
+  function seed(graph, project, kind, ext) {
+    const e = ext ? { extentLo: -3000, extentHi: -1000 } : {};
+    switch (kind) {
+      case 'struct': return project.structGraph.addCenterLine(clType, VALUE, { labeled: true, discipline: Discipline.STRUCT });
+      case 'center': return graph.addCenterLine(clType, VALUE, { labeled: false, discipline: Discipline.ARCH, ...e });
+      case 'aux':    return graph.addCenterLine(clType, VALUE, { labeled: false, lineType: 'dashed', ...e });
+      case 'beam':   return graph.addCenterLine(clType, VALUE, { labeled: false, discipline: Discipline.FUSE, ...e });
+      default: throw new Error(`未知のCL種別: ${kind}`);
+    }
+  }
+
+  let caseCount = 0;
+  for (const newKind of KINDS) {
+    for (let mask = 0; mask < 16; mask++) {
+      const present = KINDS.filter((_, i) => mask & (1 << i));
+      for (const ext of [false, true]) {
+        caseCount++;
+        const label = `newKind=${newKind} present=[${present.join(',')}] ext=${ext}`;
+        const project = new Project('proj', 'test');
+        const { graph } = project.addPlane(0, '1階', 'p1');
+        // 直交通り芯2本（新規のextentを解決させる。perpCoord=2000でブラケットする）
+        project.structGraph.addCenterLine(perpType, 1000, { labeled: true, discipline: Discipline.STRUCT });
+        project.structGraph.addCenterLine(perpType, 3000, { labeled: true, discipline: Discipline.STRUCT });
+        const seeded = present.map(k => ({ k, cl: seed(graph, project, k, ext) }));
+
+        const outcome = decideOutcome(newKind, present);
+        const result = addCenterLineFromDialog(
+          graph, project,
+          { clDialog: { type: 'vertical', worldCoord: VALUE, perpCoord: 2000 }, value: VALUE, kind: newKind, refId: null, refOffset: 0 },
+          vp,
+        );
+
+        const survivedKinds = seeded
+          .filter(s => graph.shapeMap.has(s.cl.id) || project.structGraph.shapeMap.has(s.cl.id))
+          .map(s => s.k).sort();
+        const addedKinds = graph.centerLines
+          .filter(c => c.centerLineType === clType && Math.abs(c.value - VALUE) < 1 && !seeded.some(s => s.cl.id === c.id))
+          .map(centerLineKind);
+
+        if (outcome === 'forbidden-same' || outcome === 'forbidden-beam-existing'
+          || outcome === 'forbidden-beam-anywhere' || outcome === 'struct-exists') {
+          assert.equal(result.done, false, label);
+          assert.deepEqual(survivedKinds, [...present].sort(), `${label}: 既存は全て残る`);
+          assert.deepEqual(addedKinds, [], `${label}: 何も追加されない`);
+        } else if (outcome === 'extent' && !ext) {
+          // 既存extentが未指定(null)のため常に重なり扱い→拒否（centerLineOps.jsの
+          // 「exLo==null||exHi==null → extentsOverlap=true」短絡）。
+          assert.equal(result.done, false, label);
+          assert.deepEqual(survivedKinds, [...present].sort(), label);
+          assert.deepEqual(addedKinds, [], label);
+        } else if (outcome === 'extent' && ext) {
+          // 既存extentが[-3000,-1000]で新規extent（[1000,3000]付近）と重ならない→2本目を許可
+          // （隣接もしないため結合もしない）。
+          assert.equal(result.done, true, label);
+          assert.deepEqual(survivedKinds, [...present].sort(), `${label}: 既存は全て残る`);
+          assert.deepEqual(addedKinds, [newKind], `${label}: 同種別が2本目として追加される`);
+        } else if (outcome === 'promote') {
+          assert.equal(result.done, true, label);
+          assert.equal(result.toast, ERR_CL_CENTER_UPGRADED, label);
+          assert.equal(pickExistingKind(newKind, present), 'center', label);
+          assert.deepEqual(survivedKinds, present.filter(k => k !== 'center').sort(), `${label}: centerだけ削除され他は残る`);
+          assert.ok(
+            project.structGraph.centerLines.some(c => c.centerLineType === clType && Math.abs(c.value - VALUE) < 1),
+            `${label}: structGraphに通り芯が増える`,
+          );
+        } else if (outcome === 'allowed') {
+          assert.equal(result.done, true, label);
+          assert.deepEqual(survivedKinds, [...present].sort(), `${label}: 既存は全て残る`);
+          assert.deepEqual(addedKinds, [newKind], `${label}: 新規が追加される`);
+        } else {
+          assert.fail(`未知のoutcome: ${outcome} (${label})`);
+        }
+      }
+    }
+  }
+  assert.equal(caseCount, 128, '4種別×16マスク×2extent=128ケースを網羅する');
+});
+
 // ---- promoteCenterToGridWithUndo / demoteGridToCenterWithUndo ----
 // findFloorsWithCounterpartCL・propagateDemotedCenterLine は project.planeMap の「アクティブ以外の
 // 全Plane」を floorSwapManager.peek（IndexedDB経由）する。単一階の project では対象階が0件となり
 // peek は発生しないため、そのまま node:test で検証できる（下の大半のテスト）。複数階をまたぐ
-// シナリオ（重複ガード・複製伝播）は structural/wallBeamAxes.test.js:197-207 と同じ方式——
+// シナリオ（重複ガード・複製伝播）は structural/wallBeamAxes.test.js:231-234 と同じ方式——
 // floorSwapManager.peek をテスト中だけ差し替え（try/finallyで必ず復元）、実IDBを経由せずに
-// ロジックだけを検証する。IDB不在を理由に断念しない。
+// ロジックだけを検証する。IDB不在を理由に断念しない（QA指摘m-6: 旧コメントは:197-207を指しており
+// 誤記だった）。ただしこの単純な「生きたグラフをそのまま返す」形は、peekの戻り値を読むだけで
+// 書き込み（saveFloorFn経由の再シリアライズ）を経ない検証（同期ガード・重複判定の可否）に限る——
+// シリアライズ往復を伴う複製・回収の検証は本番同型peek（下記 withProductionPeek）を使う。
 
 test('promoteCenterToGridWithUndo: 直交通り芯があれば通り芯化しundoで中心線に戻る', async () => {
   const { project, graph } = makeProjectWithGraph();
@@ -652,16 +843,89 @@ test('promoteCenterToGridWithUndo: 他階に同座標の中心線があればフ
   const beforeTop = undoManager.peekUndo();
 
   // floorSwapManager.peek はIndexedDBに依存するため、テスト用に一時的に差し替える
-  // （structural/wallBeamAxes.test.js:197-207 と同じ方式。floorSwapManagerはシングルトンインスタンス）。
+  // （structural/wallBeamAxes.test.js:231-234 と同じ方式。floorSwapManagerはシングルトンインスタンス）。
   const originalPeek = floorSwapManager.peek;
   floorSwapManager.peek = async (plane) => (plane.id === otherGraph.plane.id ? otherGraph : null);
   try {
     const { toast } = await promoteCenterToGridWithUndo(activeGraph, project, cl);
 
-    assert.equal(toast, ERR_CL_CONVERT_DUP_FLOOR('2階'));
+    assert.equal(toast, ERR_CL_CONVERT_DUP_FLOOR([{ name: '2階', kind: 'center' }]));
+    // ERR_CL_CONVERT_DUP_FLOOR自体を呼んで期待値を作ると、その関数がkindを無視する変異を
+    // 検出できない——リテラル文字列で固定する（QA指摘m-1）。
+    assert.equal(toast, '2階 の同じ位置に中心線があるため通り芯にできません。');
     assert.equal(activeGraph.shapeMap.has(cl.id), true, '変換されず階グラフに残る');
     assert.equal(project.structGraph.shapeMap.has(cl.id), false);
     assert.equal(undoManager.peekUndo(), beforeTop, 'undoは積まれない');
+  } finally {
+    floorSwapManager.peek = originalPeek;
+  }
+});
+
+test('promoteCenterToGridWithUndo: 他階の相手が梁芯のみのときはトースト文言に「梁芯」と表示される', async () => {
+  const project = new Project('proj', 'test');
+  const { graph: activeGraph } = project.addPlane(0, '1階', 'p1');
+  const { graph: otherGraph }  = project.addPlane(3000, '2階', 'p2');
+  otherGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.FUSE }); // 梁芯のみ
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: true, discipline: Discipline.STRUCT });
+  const cl = activeGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
+
+  const originalPeek = floorSwapManager.peek;
+  floorSwapManager.peek = async (plane) => (plane.id === otherGraph.plane.id ? otherGraph : null);
+  try {
+    const { toast } = await promoteCenterToGridWithUndo(activeGraph, project, cl);
+    assert.equal(toast, ERR_CL_CONVERT_DUP_FLOOR([{ name: '2階', kind: 'beam' }]));
+    assert.equal(toast, '2階 の同じ位置に梁芯があるため通り芯にできません。', 'リテラル文字列で固定（QA指摘m-1）');
+  } finally {
+    floorSwapManager.peek = originalPeek;
+  }
+});
+
+test('promoteCenterToGridWithUndo: 同じ他階に中心線と梁芯の両方があれば中心線を優先して表示する（優先順: 中心線＞補助線＞梁芯）', async () => {
+  const project = new Project('proj', 'test');
+  const { graph: activeGraph } = project.addPlane(0, '1階', 'p1');
+  const { graph: otherGraph }  = project.addPlane(3000, '2階', 'p2');
+  otherGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.FUSE }); // 梁芯
+  otherGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH }); // 中心線（同座標に共存）
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: true, discipline: Discipline.STRUCT });
+  const cl = activeGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
+
+  const originalPeek = floorSwapManager.peek;
+  floorSwapManager.peek = async (plane) => (plane.id === otherGraph.plane.id ? otherGraph : null);
+  try {
+    const { toast } = await promoteCenterToGridWithUndo(activeGraph, project, cl);
+    assert.equal(toast, ERR_CL_CONVERT_DUP_FLOOR([{ name: '2階', kind: 'center' }]), '梁芯より中心線を優先して表示する');
+    assert.equal(toast, '2階 の同じ位置に中心線があるため通り芯にできません。', 'リテラル文字列で固定（QA指摘m-1）');
+  } finally {
+    floorSwapManager.peek = originalPeek;
+  }
+});
+
+test('promoteCenterToGridWithUndo: 複数階・種別混在のトーストは種別ごとにまとめ「、」で連結する（種別の並び順は中心線→補助線→梁芯）', async () => {
+  const project = new Project('proj', 'test');
+  const { graph: activeGraph } = project.addPlane(0, '1階', 'p1');
+  const { graph: g2 } = project.addPlane(3000, '2階', 'p2');
+  const { graph: g3 } = project.addPlane(6000, '3階', 'p3');
+  const { graph: g4 } = project.addPlane(9000, '4階', 'p4');
+  g4.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH }); // 4階=中心線
+  g2.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.FUSE });  // 2階=梁芯
+  g3.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.FUSE });  // 3階=梁芯
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: true, discipline: Discipline.STRUCT });
+  const cl = activeGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
+
+  const graphsById = new Map([[g2.plane.id, g2], [g3.plane.id, g3], [g4.plane.id, g4]]);
+  const originalPeek = floorSwapManager.peek;
+  floorSwapManager.peek = async (plane) => graphsById.get(plane.id) ?? null;
+  try {
+    const { toast } = await promoteCenterToGridWithUndo(activeGraph, project, cl);
+    // 種別の並び順（中心線→補助線→梁芯）が優先され、階の登録順（2階・3階・4階）ではなく
+    // 「4階（中心線）」が先に来る。同種別の階（2階・3階）は「・」で連結する。
+    assert.equal(
+      toast,
+      '4階 の同じ位置に中心線、2階・3階 の同じ位置に梁芯があるため通り芯にできません。',
+    );
   } finally {
     floorSwapManager.peek = originalPeek;
   }
@@ -684,10 +948,32 @@ test('demoteGridToCenterWithUndo: 他階（アクティブ階の移籍先では�
   try {
     const { toast } = await demoteGridToCenterWithUndo(activeGraph, project, cl);
 
-    assert.equal(toast, ERR_CL_CONVERT_DUP_FLOOR_DEMOTE('2階'), '降格専用の文言（「中心線にできません」）が使われる（N1）');
+    assert.equal(toast, ERR_CL_CONVERT_DUP_FLOOR_DEMOTE([{ name: '2階', kind: 'center' }]), '降格専用の文言（「中心線にできません」）が使われる（N1）');
+    assert.equal(toast, '2階 の同じ位置に中心線があるため中心線にできません。', 'リテラル文字列で固定（QA指摘m-1）');
     assert.equal(project.structGraph.shapeMap.has(cl.id), true, '変換されずstructGraphに残る（片階だけ複製漏れを防ぐ）');
     assert.equal(activeGraph.shapeMap.has(cl.id), false);
     assert.equal(undoManager.peekUndo(), beforeTop, 'undoは積まれない');
+  } finally {
+    floorSwapManager.peek = originalPeek;
+  }
+});
+
+test('demoteGridToCenterWithUndo: 他階の相手が補助線のみのときはトースト文言に「補助線」と表示される', async () => {
+  const project = new Project('proj', 'test');
+  const { graph: activeGraph } = project.addPlane(0, '1階', 'p1');
+  const { graph: otherGraph }  = project.addPlane(3000, '2階', 'p2');
+  otherGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, lineType: 'dashed' }); // 補助線
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: true, discipline: Discipline.STRUCT });
+  const cl = project.structGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: true, discipline: Discipline.STRUCT });
+  project.structGraph.addCenterLine(CenterLineType.VERTICAL, 5000, { labeled: true, discipline: Discipline.STRUCT }); // isLastGridOnAxis対策
+
+  const originalPeek = floorSwapManager.peek;
+  floorSwapManager.peek = async (plane) => (plane.id === otherGraph.plane.id ? otherGraph : null);
+  try {
+    const { toast } = await demoteGridToCenterWithUndo(activeGraph, project, cl);
+    assert.equal(toast, ERR_CL_CONVERT_DUP_FLOOR_DEMOTE([{ name: '2階', kind: 'aux' }]));
+    assert.equal(toast, '2階 の同じ位置に補助線があるため中心線にできません。', 'リテラル文字列で固定（QA指摘m-1）');
   } finally {
     floorSwapManager.peek = originalPeek;
   }
@@ -996,7 +1282,7 @@ test('demoteGridToCenterWithUndo: 複製後にapplyDemoteToCenterがエラーを
   const store = new Map([[p2.plane.id, serializeGraph(p2)]]);
   let intruded = false;
   // IDB待ち（saveFloorFn の await）の間に、自階の同座標へ中心線が割り込み追加される状況を模擬する
-  // → 複製は済んでいるが applyDemoteToCenter が ERR_CL_DUPLICATE('center') を返す経路。
+  // → 複製は済んでいるが applyDemoteToCenter が ERR_CL_CONVERT_DUP_DEMOTE('center') を返す経路。
   const saveFloorFn = async (planeId, bytes) => {
     store.set(planeId, bytes);
     if (!intruded) {
@@ -1009,7 +1295,8 @@ test('demoteGridToCenterWithUndo: 複製後にapplyDemoteToCenterがエラーを
   await withProductionPeek(project, store, async () => {
     const { toast } = await demoteGridToCenterWithUndo(p1, project, cl, { saveFloorFn });
 
-    assert.equal(toast, ERR_CL_DUPLICATE('center'));
+    assert.equal(toast, ERR_CL_CONVERT_DUP_DEMOTE('center'));
+    assert.equal(toast, '同じ位置に中心線があるため中心線にできません。', 'リテラル文字列で固定（QA指摘m-1）');
     assert.equal(project.structGraph.shapeMap.has(clId), true, 'structGraph側の通り芯は未変更');
     assert.equal(p1.shapeMap.has(clId), false, '自階へは移籍していない');
     assert.equal(undoManager.peekUndo(), beforeTop, 'undoは積まれない');
@@ -1039,4 +1326,26 @@ test('demoteGridToCenterWithUndo: ロールバックの書き戻しも失敗し�
     assert.equal(p1.shapeMap.has(clId), false, '自階は未変更');
     assert.equal(undoManager.peekUndo(), beforeTop, 'undoは積まれない');
   });
+});
+
+// ---- 【失敗系】QA指摘m-3: ERR_CL_CONVERT_DUP_FLOOR/_DEMOTE は未知種別でthrowする ----
+// 'struct'はCL種別としては既知だが、他階の入替え相手（CROSS_FLOOR_COUNTERPART_KINDS＝
+// center/aux/beam）としては無効——通り芯は全階共有オブジェクトのため他階の「別の相手」には
+// なりえない（原理上そのようなfloorsByKindは作られないはずだが、防御的にthrowで検出する）。
+
+test('【失敗系】ERR_CL_CONVERT_DUP_FLOOR: floorsByKindの要素に未知種別・struct種別があればthrowする', () => {
+  assert.throws(() => ERR_CL_CONVERT_DUP_FLOOR([{ name: '2階', kind: 'wood' }]), /未知のCL種別: wood/);
+  assert.throws(() => ERR_CL_CONVERT_DUP_FLOOR([{ name: '2階', kind: 'struct' }]), /未知のCL種別: struct/);
+});
+
+test('【失敗系】ERR_CL_CONVERT_DUP_FLOOR_DEMOTE: floorsByKindの要素に未知種別・struct種別があればthrowする', () => {
+  assert.throws(() => ERR_CL_CONVERT_DUP_FLOOR_DEMOTE([{ name: '2階', kind: 'wood' }]), /未知のCL種別: wood/);
+  assert.throws(() => ERR_CL_CONVERT_DUP_FLOOR_DEMOTE([{ name: '2階', kind: 'struct' }]), /未知のCL種別: struct/);
+});
+
+test('ERR_CL_CONVERT_DUP_FLOOR/_DEMOTEはcenter/aux/beamすべてでthrowせず、混在・複数階も正しく連結する', () => {
+  for (const kind of ['center', 'aux', 'beam']) {
+    assert.doesNotThrow(() => ERR_CL_CONVERT_DUP_FLOOR([{ name: '2階', kind }]));
+    assert.doesNotThrow(() => ERR_CL_CONVERT_DUP_FLOOR_DEMOTE([{ name: '2階', kind }]));
+  }
 });

@@ -22,8 +22,9 @@
 // 判定可能な失敗（型不一致・直交通り芯不足・軸最後の1本（降格のみ）・図形干渉・同グラフ内重複）で無駄なIDB読み込みが
 // 走り、本来と異なるトーストが先に出るのを防ぐ。
 import { runInAction } from 'mobx';
-import { CenterLine, CenterLineType, Discipline, centerLineKind, CL_OVERLAP_TOL_MM } from '@core';
-import { ERR_CL_CONVERT_NO_GRID, ERR_CL_CONVERT_LAST_GRID, ERR_CL_CONVERT_ATTACHED, ERR_CL_DUPLICATE } from '../error.js';
+import { CenterLine, CenterLineType, Discipline, centerLineKind } from '@core';
+import { ERR_CL_CONVERT_NO_GRID, ERR_CL_CONVERT_LAST_GRID, ERR_CL_CONVERT_ATTACHED, ERR_CL_CONVERT_DUP, ERR_CL_CONVERT_DUP_DEMOTE } from '../error.js';
+import { sameCoordCounterparts, convertBlockingKinds } from '../core/centerLineKindPolicy.js';
 
 // UIからは到達しない想定の防御的ガード（instanceof/kind/type 不一致）専用。menu が canToGrid/canToCenter
 // で事前に絞り込むため実運用では表示されないが、ガード契約（上記コメント）を満たすため文言を持つ。
@@ -92,18 +93,20 @@ export function checkPromoteToGridGuards(graph, structGraph, cl) {
   // 直交通り芯2本未満のまま昇格したCLは直交側に通り芯を追加するまで降格できない（降格側の
   // ガードは技術的必然のため維持。下記）が、これは仕様として許容する。
   if (attachedShapeExists(graph, graph, cl.id)) return ERR_CL_CONVERT_ATTACHED;
-  // structGraphに同座標・同軸の通り芯が既にあれば拒否（centerLineOps.js の重複判定式と同型。
-  // 通り芯化した瞬間に全階へ同じ座標のグリッド線が現れるため、同座標の既存通り芯と衝突させない）。
-  const dupStruct = structGraph.centerLines.some(c =>
-    c.centerLineType === cl.centerLineType && Math.abs(c.value - cl.value) < CL_OVERLAP_TOL_MM
-  );
-  if (dupStruct) return ERR_CL_DUPLICATE('struct');
-  // 階グラフの同座標・同軸に梁芯（fuse。平面モードでは非表示）があれば拒否——通り芯と梁芯は同位置に
-  // 共存できない（大梁と完全重複する小梁の生成防止。AddCLDialog の通り芯追加と同じ規約）。
-  const dupBeam = graph.centerLines.some(c =>
-    centerLineKind(c) === 'beam' && c.centerLineType === cl.centerLineType && Math.abs(c.value - cl.value) < CL_OVERLAP_TOL_MM
-  );
-  if (dupBeam) return ERR_CL_DUPLICATE('beam');
+  // 拒否する既存種別は convertBlockingKinds('promote')=['struct','beam']（centerLineKindPolicy.js）。
+  // 通り芯（structGraphに同座標・同軸のものが既にあれば拒否——通り芯化した瞬間に全階へ同じ座標の
+  // グリッド線が現れるため、同座標の既存通り芯と衝突させない）は structGraph を、梁芯（fuse。
+  // 階グラフの同座標・同軸にあれば拒否——通り芯と梁芯は同位置に共存できない。大梁と完全重複する
+  // 小梁の生成防止。AddCLDialogの通り芯追加と同じ規約）は graph（階グラフ）を走査する——通り芯は
+  // 全階共有オブジェクト（project.structGraph）、梁芯は階ローカルの実体のため、走査元のグラフが
+  // 種別ごとに異なる（走査自体は sameCoordCounterparts 経由に一本化——素の .some 走査を個別に書かない）。
+  // 順序（struct優先）は convertBlockingKinds('promote') の並び順どおり。
+  for (const blockedKind of convertBlockingKinds('promote')) {
+    const scanGraph = blockedKind === 'struct' ? structGraph : graph;
+    const dup = sameCoordCounterparts(scanGraph, { centerLineType: cl.centerLineType, value: cl.value, exclude: cl })
+      .find(c => centerLineKind(c) === blockedKind);
+    if (dup) return ERR_CL_CONVERT_DUP(blockedKind);
+  }
   return null;
 }
 
@@ -159,13 +162,29 @@ export function checkDemoteToCenterGuards(graph, structGraph, cl) {
   // 取り付いていれば拒否（昇格側の attachedShapeExists と対称。Shape本体は常に階グラフ側にある）。
   if (attachedShapeExists(structGraph, graph, cl.id)) return ERR_CL_CONVERT_ATTACHED;
   // 移籍先の階グラフに同座標・同軸の中心線・補助線が既にあれば拒否
-  // （同一階に同座標の中心線が2本並存する事故を防ぐ）。梁芯（fuse）は対象外——在来木造では下階の壁からも
-  // 自階へ自動生成され平面モードでは非表示のため、障害物にすると「何も無い位置で降格できない」になる
-  // （中心線と梁芯の同位置共存は AddCLDialog の追加経路と同じ規約で許容）。
-  const dupCenter = graph.centerLines.some(c =>
-    !c.labeled && centerLineKind(c) !== 'beam' && c.centerLineType === cl.centerLineType && Math.abs(c.value - cl.value) < CL_OVERLAP_TOL_MM
-  );
-  if (dupCenter) return ERR_CL_DUPLICATE('center');
+  // （同一階に同座標の中心線が2本並存する事故を防ぐ）。拒否する既存種別は
+  // convertBlockingKinds('demote')=['center','aux']（centerLineKindPolicy.js）——COEXISTENCE表
+  // （struct×aux='allowed'）より厳しい（補助線も拒否する）現行仕様を維持する裁定
+  // （2026-09-20）。梁芯（fuse）は対象外——在来木造では下階の壁からも自階へ自動生成され平面モードでは
+  // 非表示のため、障害物にすると「何も無い位置で降格できない」になる（中心線と梁芯の同位置共存は
+  // AddCLDialog の追加経路と同じ規約で許容）。
+  // 走査は sameCoordCounterparts 経由。種別ベース（centerLineKind）で判定する——旧データ
+  // （`{labeled:true, lineType:'dashed'}` のような labeled と種別が食い違う異常値）は、移行前は
+  // 生の `!c.labeled` を見ていたため障害物にならなかったが、移行後は種別ベースのため障害物になる
+  // （ピン留めテスト参照。2026-09-20統一）。
+  // 逆方向の乖離（QA指摘m-5）: `{labeled:false, discipline:STRUCT}`（centerLineKindは'struct'）の
+  // ような旧データ・異常値があった場合、移行前は `!c.labeled` が true（labeled:falseのため）かつ
+  // centerLineKind(c)!=='beam' が true となり障害物として拒否していたが、移行後は種別ベースの
+  // convertBlockingKinds('demote')=['center','aux']に'struct'が含まれないため拒否しない（見逃す）
+  // 方向に割れる。通常経路（AddCLDialog等）で作られるCLは種別とlabeledが必ず一致する
+  // （通り芯のみlabeled:true）ため、`discipline:STRUCT`かつ`labeled:false`は通常経路では作れず
+  // 実害は無い（挙動を変えないため意図的に許容する）。
+  // 両方（中心線・補助線）が同座標に共存しうる（COEXISTENCE center×aux='allowed'）ため、
+  // .find()の走査順（graph.centerLinesの並び順）に結果を依存させず、convertBlockingKinds('demote')
+  // の並び順（中心線＞補助線）で優先的に選ぶ（centerLineOps.js の priority pick と同じ規約）。
+  const candidates = sameCoordCounterparts(graph, { centerLineType: cl.centerLineType, value: cl.value, exclude: cl });
+  const dup = convertBlockingKinds('demote').map(k => candidates.find(c => centerLineKind(c) === k)).find(Boolean);
+  if (dup) return ERR_CL_CONVERT_DUP_DEMOTE(centerLineKind(dup));
   return null;
 }
 

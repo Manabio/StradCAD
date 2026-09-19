@@ -2,7 +2,7 @@
 // AddCLDialog確定・木造提案判定）の実処理＋Undo登録。App.jsx から状態を持たない純粋な形へ
 // 抽出したもの（挙動は元コードのまま。呼び出し側の setState・modeRef 操作だけを App.jsx に残す）。
 import { runInAction } from 'mobx';
-import { CenterLineType, Discipline, centerLineKind, CL_OVERLAP_TOL_MM } from '@core';
+import { CenterLineType, Discipline, centerLineKind } from '@core';
 import { undoManager } from '../undoManager.js';
 import { serializeGraph, restoreGraph, serializeStructCLs, restoreStructCLs } from '../graphSnapshot.js';
 import {
@@ -13,6 +13,7 @@ import { findBracketingCLs, overhangMm } from '../snapGeometry.js';
 import { calcStep } from '../renderer/clMoveMath.js';
 import {
   orthoAnchorCandidatesForNew, allowsWallAnchor, extentAnchorStyle, isReferencedByAux,
+  sameCoordCounterparts, coexistenceAt, CL_KINDS,
 } from '../core/centerLineKindPolicy.js';
 import { mergeCenterLineChain, composeUndoWithMergeChain } from './centerLineMerge.js';
 import {
@@ -203,7 +204,7 @@ export async function promoteCenterToGridWithUndo(graph, project, cl, opts = {})
   const { findFloorsWithCounterpartCL } = await import('./centerLineFloorSync.js');
   const dupFloors = await findFloorsWithCounterpartCL(project, graph, cl);
   if (dupFloors.length > 0) {
-    return { toast: ERR_CL_CONVERT_DUP_FLOOR(dupFloors.map(p => p.name).join('・')) };
+    return { toast: ERR_CL_CONVERT_DUP_FLOOR(dupFloors.map(f => ({ name: f.plane.name, kind: f.kind }))) };
   }
 
   const beforeArch   = serializeGraph(graph);
@@ -259,7 +260,7 @@ export async function demoteGridToCenterWithUndo(graph, project, cl, opts = {}) 
   if (dupFloors.length > 0) {
     // 降格（通り芯→中心）専用の文言。ERR_CL_CONVERT_DUP_FLOOR（昇格用「…通り芯にできません」）を
     // 流用すると方向が逆の誤表示になるため、DEMOTE専用の文言を使う（N1）。
-    return { toast: ERR_CL_CONVERT_DUP_FLOOR_DEMOTE(dupFloors.map(p => p.name).join('・')) };
+    return { toast: ERR_CL_CONVERT_DUP_FLOOR_DEMOTE(dupFloors.map(f => ({ name: f.plane.name, kind: f.kind }))) };
   }
 
   // 複製フェーズ（通り芯はまだ structGraph にある。移籍前提のため applyDemoteToCenter と同じ
@@ -323,11 +324,6 @@ export function shouldSuggestWoodStructure(graph, project, appMode, clType, newV
   });
 }
 
-// addCenterLineFromDialog の重複判定で「同種別が無いとき」に相手（existing）を選ぶ優先順。
-// 通り芯（存在チェック・昇格の相手）＞中心線（昇格で削除される相手）＞補助線＞梁芯。並び順に
-// 依存させないための規約であり、種別ごとの拒否・共存ルール自体はこの順に依存しない。
-const EXISTING_KIND_PRIORITY = ['struct', 'center', 'aux', 'beam'];
-
 // ---- AddCLDialog確定（handleCLDialogConfirm） ----
 // extent解決・重複判定（ERR_CL_DUPLICATE等）・結合連鎖（mergeCenterLineChain/composeUndoWithMergeChain）・
 // undo登録を行う。ダイアログを閉じる setState・木造提案 ConfirmDialog の表示は呼び出し側（App.jsx）。
@@ -339,8 +335,11 @@ export function addCenterLineFromDialog(graph, project, payload, viewport) {
 
   // ---- スパン配列バッチモード（kind='struct' かつ value が配列）----
   if (Array.isArray(value)) {
+    // 走査は sameCoordCounterparts（core/centerLineKindPolicy.js）経由——種別条件の無い素の
+    // graph.centerLines 走査を個別に書かない（QA指摘m-4。述語はtolMm既定=CL_OVERLAP_TOL_MMで
+    // 従来の `< CL_OVERLAP_TOL_MM` と完全一致）。
     const newValues = value.filter(v =>
-      !graph.centerLines.some(cl => cl.centerLineType === clType && Math.abs(cl.value - v) < CL_OVERLAP_TOL_MM)
+      sameCoordCounterparts(graph, { centerLineType: clType, value: v }).length === 0
     );
     if (newValues.length === 0) {
       return { done: true, toast: ERR_CL_DUPLICATE('struct'), suggestWood: null };
@@ -483,19 +482,22 @@ export function addCenterLineFromDialog(graph, project, payload, viewport) {
   // 同位置へ何本でも積めてしまう（QA指摘）。同種別が無いときも先頭順ではなく種別の優先順で相手を選ぶ
   // ——補助線→中心線の順で並ぶ位置へ通り芯を足すと、先頭の補助線が相手になって昇格経路（中心線を
   // 削除して通り芯化）に入らず、通り芯・中心線・補助線が3本併存する（並び順依存。QA指摘）。
-  const sameCoord = graph.centerLines.filter(
-    cl => cl.centerLineType === clType && Math.abs(cl.value - value) < CL_OVERLAP_TOL_MM
-  );
+  // 走査は sameCoordCounterparts（core/centerLineKindPolicy.js）経由——種別条件の無い素の
+  // graph.centerLines 走査を個別に書かない（過去に3回、非表示の梁芯が誤って障害物に混入した教訓）。
+  const sameCoord = sameCoordCounterparts(graph, { centerLineType: clType, value });
+  // 優先順は CL_KINDS の並びそのもの（通り芯＞中心線＞補助線＞梁芯）——並び順に依存させないための
+  // 規約であり、種別ごとの拒否・共存ルール自体はこの順に依存しない。
   const existing = sameCoord.find(cl => centerLineKind(cl) === kind)
-    ?? EXISTING_KIND_PRIORITY.map(k => sameCoord.find(cl => centerLineKind(cl) === k)).find(Boolean);
+    ?? CL_KINDS.map(k => sameCoord.find(cl => centerLineKind(cl) === k)).find(Boolean);
   if (existing) {
     const existingKind = centerLineKind(existing);
 
     if (kind === existingKind) {
-      if (kind === 'struct') {
+      // COEXISTENCE の対角セル: struct×structのみforbidden、center/aux/beamはextent（重なり判定）。
+      if (coexistenceAt(kind, existingKind) === 'forbidden') {
         return { done: false, toast: ERR_CL_DUPLICATE(kind), suggestWood: null };
       }
-      // center / aux: extent が重ならなければ追加を許可（端点が接するだけなら下の結合連鎖へ）。
+      // center / aux / beam: extent が重ならなければ追加を許可（端点が接するだけなら下の結合連鎖へ）。
       // どちらかの extent が1点に退化している（補助線のフリー端点が両方 perpCoord に丸められた
       // 長さ0の線。直交する線・壁が無い位置で起きる）場合は、開区間の重なりが常に空になって同座標に
       // 何本でも積めてしまうため、閉区間で点が含まれれば重なりとみなす（長さ0の補助線自体は許容）。
@@ -531,14 +533,18 @@ export function addCenterLineFromDialog(graph, project, payload, viewport) {
     // 「当該階に線が無いのに下階に線があると追加できない」になる。中心線・補助線の同位置不許可は同一図面内
     // の同種別（上の extent 重なり判定）だけで、autoFillWallBeamAxes の重複ガード（意匠中心線・補助線は
     // 障害物にしない）と対称にする。
-    // 通り芯側は existing（同種別優先＝中心線が先に選ばれうる）ではなく同座標全体で梁芯の有無を見る——
-    // 中心線→梁芯の順に並んでいても昇格経路（中心線削除→通り芯追加）へ入って梁芯を残さないため。
-    if ((kind === 'beam' && existingKind !== 'beam') ||
+    // kind==='beam'側は coexistenceAt(kind, existingKind) で判定できる（beam行はbeam自身以外すべて
+    // forbiddenのため、existingKind!=='beam'と同値）。kind==='struct'側は existing（同種別優先＝
+    // 中心線が先に選ばれうる）ではなく同座標全体で梁芯の有無を見る必要がある——中心線→梁芯の順に
+    // 並んでいても昇格経路（中心線削除→通り芯追加）へ入って梁芯を残さないため。この2点目は
+    // coexistenceAt(newKind, existingKind)（priority選択された1本だけを見る関係）では表現できない
+    // （sameCoord全体を見る必要がある）ため、走査のAPI化のみに留める（表駆動へは寄せない）。
+    if ((kind === 'beam' && coexistenceAt(kind, existingKind) === 'forbidden') ||
         (kind === 'struct' && sameCoord.some(cl => centerLineKind(cl) === 'beam'))) {
       return { done: false, toast: ERR_CL_DUPLICATE(kind === 'struct' ? 'beam' : existingKind), suggestWood: null };
     }
 
-    if (kind === 'struct' && existingKind === 'center') {
+    if (coexistenceAt(kind, existingKind) === 'promote') {
       // 既存の中心線を削除して通り芯を新規追加
       const deletedId = existing.id;
       const deletedType = existing.centerLineType;
@@ -575,7 +581,9 @@ export function addCenterLineFromDialog(graph, project, payload, viewport) {
       return { done: true, toast: ERR_CL_CENTER_UPGRADED, suggestWood: { clType, newValues: [value] } };
     }
 
-    if (kind === 'center' && existingKind === 'struct') {
+    // center行でforbiddenなのはstructのみ（COEXISTENCE.center.struct）。ERR_CL_DUPLICATEの
+    // 「追加できません」ではなく専用文言（ERR_CL_STRUCT_EXISTS）を使う。
+    if (kind === 'center' && coexistenceAt(kind, existingKind) === 'forbidden') {
       return { done: false, toast: ERR_CL_STRUCT_EXISTS, suggestWood: null };
     }
   }

@@ -12,7 +12,8 @@
 // **降格の移籍前に複製する**（通り芯が project.structGraph に残っている間に peek しないと、
 // 他階の壁が graphSnapshot.js の resolveCL で解決できず復元時に捨てられる。2026-09-17実測）。
 import { runInAction } from 'mobx';
-import { Discipline, CL_OVERLAP_TOL_MM } from '@core';
+import { Discipline, centerLineKind } from '@core';
+import { sameCoordCounterparts, CROSS_FLOOR_COUNTERPART_KINDS } from '../core/centerLineKindPolicy.js';
 import { floorSwapManager } from '../storage/FloorSwapManager.js';
 import { serializeGraph, restoreGraph } from '../graphSnapshot.js';
 import { saveFloor } from '../storage/db.js';
@@ -25,27 +26,34 @@ function otherPlanes(project, activeGraph) {
 }
 
 /**
- * 昇格・降格双方の事前ガードとして使う: cl と同じ centerLineType・ほぼ同じ座標に非labeled CL
- * （中心線・補助線・梁芯）を持つ Plane を、アクティブ以外の全 Plane から探す。
- * 昇格（centerLineOps.js の promoteCenterToGridWithUndo）は cl がまだ中心線のときに呼び、
+ * 昇格・降格双方の事前ガードとして使う: cl と同じ centerLineType・ほぼ同じ座標に非通り芯CL
+ * （中心線・補助線・梁芯。CROSS_FLOOR_COUNTERPART_KINDS）を持つ Plane を、アクティブ以外の全 Plane
+ * から探す。昇格（centerLineOps.js の promoteCenterToGridWithUndo）は cl がまだ中心線のときに呼び、
  * 降格（demoteGridToCenterWithUndo）は cl がまだ通り芯のときに呼ぶ——どちらも
  * cl.centerLineType/cl.value は変換前の値をそのまま使えるため、呼び出し側の型は同じでよい。
  * 同一 id の CL は重複として報告しない——降格（propagateDemotedCenterLine）が非アクティブ全階へ
  * 複製した「同じ線の分身」であり、昇格の回収対象（recallPromotedCenterLineDuplicates）である
  * ため、ここで重複扱いにすると同じ線の往復（降格→昇格）が永久に塞がれてしまう。
- * @returns {Promise<Plane[]>} 見つかった Plane（0件なら変換して問題ない）
+ * id による除外は sameCoordCounterparts の exclude（オブジェクト参照比較）では表現できない——
+ * temp は他階を peek した別グラフインスタンスのため、そこに含まれる CenterLine は cl と id が
+ * 同じでも参照が別（別オブジェクト）になる。呼び出し側（ここ）で id 比較により明示的に除外する。
+ * 対象種別（CROSS_FLOOR_COUNTERPART_KINDS）は同階内の入替えガード（CONVERT_BLOCKING_KINDS。
+ * 方向ごとに別集合）とは別の関係——通り芯は全階共有オブジェクトのため他階では相手たりえない一方、
+ * 中心線・補助線・梁芯はいずれも階ローカルの実体のため、方向（昇格・降格）を問わず同じ集合になる
+ * （centerLineKindPolicy.js「原始事実6」参照）。
+ * 1つの階に複数種別が同座標にあるときは、CROSS_FLOOR_COUNTERPART_KINDS の並び順（中心線＞補助線＞
+ * 梁芯。centerLineOps.js addCenterLineFromDialog の優先順と同じ規約）で1つ選んで報告する。
+ * @returns {Promise<Array<{plane: Plane, kind: string}>>} 見つかった Plane と相手種別（0件なら変換して問題ない）
  */
 export async function findFloorsWithCounterpartCL(project, activeGraph, cl) {
   const result = [];
   for (const plane of otherPlanes(project, activeGraph)) {
     const temp = await floorSwapManager.peek(plane, project.structGraph);
-    const hasCounterpart = temp.centerLines.some(other =>
-      other.id !== cl.id
-      && !other.labeled
-      && other.centerLineType === cl.centerLineType
-      && Math.abs(other.value - cl.value) < CL_OVERLAP_TOL_MM
-    );
-    if (hasCounterpart) result.push(plane);
+    const counterparts = sameCoordCounterparts(temp, { centerLineType: cl.centerLineType, value: cl.value })
+      .filter(other => other.id !== cl.id && CROSS_FLOOR_COUNTERPART_KINDS.includes(centerLineKind(other)));
+    if (counterparts.length === 0) continue;
+    const kind = CROSS_FLOOR_COUNTERPART_KINDS.find(k => counterparts.some(c => centerLineKind(c) === k));
+    result.push({ plane, kind });
   }
   return result;
 }
