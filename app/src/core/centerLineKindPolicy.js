@@ -14,13 +14,23 @@
  * 既存4地点（centerLineOps.js 追加extent・followerGraph.js 移動範囲・beamAxisMove.js・
  * centerLineConvert.js 入替えガード）の現行動作と導出結果が一致することを固定するだけの段階を経て、
  * transform/centerLineExtend.js（延長・短縮。2026-09-19）・transform/centerLineOps.js
- * 追加extent（同・ステップ3）が orthoAnchorCandidates 経由へ移行済み。
- * beamAxisMove.js・centerLineConvert.js の呼び出し元は本ファイルの範囲外（未着手）。
+ * 追加extent（同・ステップ3）が orthoAnchorCandidates 経由へ移行済み。続いて同方向の移動障害物・
+ * 移動スナップ吸着先（ステップ4、2026-09-19）: transform/followerGraph.js computeMoveRange・
+ * structural/beamAxisMove.js beamAxisMoveRange・snap.js findCLMoveSnap/findBeamAxisMoveSnap が
+ * sameDirectionObstacles／moveSnapTargetKinds 経由へ移行済み。
+ * centerLineConvert.js の呼び出し元は本ファイルの範囲外（未着手）。
  *
- * 既知の乖離（旧データ限定）: 未移行の2地点は、種別（centerLineKind）ではなく生の
- * `labeled` フラグで「通り芯扱いするか」を判定している
- * （structural/beamAxisMove.js の梁芯移動障害物判定`other.labeled || centerLineKind(other)==='beam'`、
- *   transform/centerLineConvert.js の降格重複判定`!c.labeled && centerLineKind(c)!=='beam'`）。
+ * 既知の乖離（旧データ限定）: 未移行の地点は、種別（centerLineKind）ではなく生の `labeled` フラグで
+ * 判定している——
+ *   - transform/centerLineConvert.js の降格重複判定`!c.labeled && centerLineKind(c)!=='beam'`
+ *     （checkDemoteToCenterGuards内のdupCenter）。
+ *   - structural/wallBeamAxes.js の findBeamAnchorCL（L293）`cl.labeled || centerLineKind(cl)==='beam'`
+ *     ——壁交点柱のアンカー解決・梁芯重複ガード（autoFillWallBeamAxes）が共有する述語。本ファイルの
+ *     sameDirectionObstacleKinds('beam')=['struct','beam']と同じ意図だが未移行（L472呼び出し元含め
+ *     4地点の対象外として本ステップでは未着手）。
+ *   - snap.js の findNearbyCenterLines（L96）`if (cl.labeled) continue;`——長押し位置に近接する
+ *     ラベルなしCL（参照元候補）を探す走査で、実質的には「labeled以外＝aux/center/beam全部」を
+ *     対象にしている（種別を問わない除外）。
  * 通常経路（AddCLDialog等）で作られるCLは種別と labeled が必ず一致する
  * （通り芯のみ labeled:true）ため実害は無いが、`{labeled:true, discipline:'arch'}` のような
  * 旧データ・異常値が存在すると、本モジュールの種別ベースの予測（orthoAnchorKinds等）と
@@ -28,6 +38,9 @@
  * 固定してある（centerLineKindPolicy.test.js内、「既知の乖離」と付記したテストを参照）。
  * 種別ベースへ統一するか labeled ベースを維持するかは製品コード移行時に裁定が要る。
  * transform/centerLineOps.js 追加extentは移行済み（種別ベースへ統一。旧「既知の乖離」は解消）。
+ * structural/beamAxisMove.js（梁芯移動障害物判定）・snap.js findBeamAxisMoveSnap（梁芯移動スナップの
+ * 障害物判定。同じ規約をレイヤ分離のため独立実装していたもの）は本ファイルの sameDirectionObstacles
+ * 経由へ移行済み（種別ベースへ統一。旧「既知の乖離」は解消。ステップ4、2026-09-19）。
  *
  * import ゼロに近い規約（extractedModuleImportInvariant）: ./centerLine.js（centerLineKind）と
  * ./constants.js（CenterLineType）のみに依存する。store.js/snap.js/.jsx/core.js バレル/error.js は
@@ -174,15 +187,39 @@ export function orthoAnchorKinds(kind) {
 
 /**
  * kind の同方向（同centerLineType）移動障害物候補種別。
- * 既知の乖離（旧データ限定）: structural/beamAxisMove.js L25 の梁芯移動障害物判定は
- * `other.labeled || centerLineKind(other)==='beam'` で、前者（通り芯を指すはずの条件）が
- * `centerLineKind(other)==='struct'` ではなく生の `other.labeled` を見ている——
- * `{labeled:true, discipline:'arch'}` のような旧データがあると、この関数（=種別ベース）の予測
- * （sameDirectionObstacleKinds('beam')=['struct','beam']）より製品コードの実際の障害物判定が
- * 広くなりうる。
+ * structural/beamAxisMove.js（beamAxisMoveRange）・snap.js（findBeamAxisMoveSnap）の梁芯移動障害物
+ * 判定は本関数（sameDirectionObstacles経由）へ移行済み（種別ベースへ統一。旧「既知の乖離」＝生の
+ * `other.labeled` で通り芯扱いを判定していた分は解消。ステップ4、2026-09-19）。
  */
 export function sameDirectionObstacleKinds(kind) {
   return kindsVisibleWith(kind);
+}
+
+/**
+ * kind の移動スナップ吸着先種別（障害物候補とは別の関係）。findCLMoveSnap（moving=struct/center/aux）は
+ * 障害物集合（sameDirectionObstacleKinds）と異なり、moving=structでもbeamへは吸着しない——吸着先は
+ * 「主体がヒット可能ないずれかのappModeで可視な種別の和」= ⋃{VISIBLE_KINDS_BY_MODE[m] : kind ∈ hitTestKinds(m)}。
+ * struct/center/aux はいずれも hitTestKinds経由でfloorplan/finish/openingにしか現れないため、この3種は
+ * 同じ結果（['struct','center','aux']）になる——現行 findCLMoveSnap（moving種別を問わずbeamを無条件除外）
+ * と一致することを centerLineKindPolicy.test.js で固定している。beam自身は findCLMoveSnap を通らない
+ * （呼び出し元 interaction/usePointerInteraction.js の updatePointer が
+ * `appMode === 'structure' && centerLineKind(cl) === 'beam'` の場合のみ findBeamAxisMoveSnap を、
+ * それ以外（appMode!=='structure'、または appMode==='structure'でもcl種別がbeam以外——後者は現行
+ * hitTestKinds('structure')=['beam']のため実際には発生しない組み合わせ）は findCLMoveSnap を呼ぶ）。
+ * 導出は VISIBLE_KINDS_BY_MODE に連動する——site/elevation のヒットを有効化するには可視表
+ * （VISIBLE_KINDS_BY_MODE.site/elevation、現状どちらも空配列）を非空にする必要があり、その時点で
+ * hitTestKinds(site/elevation)も非空になり、moveSnapTargetKindsの吸着先も自動的に広がる（吸着先だけを
+ * 個別に拡張することはできない設計）。
+ */
+export function moveSnapTargetKinds(kind) {
+  assertKnownKind(kind);
+  const set = new Set();
+  for (const mode of APP_MODES) {
+    if (hitTestKinds(mode).includes(kind)) {
+      VISIBLE_KINDS_BY_MODE[mode].forEach(k => set.add(k));
+    }
+  }
+  return CL_KINDS.filter(k => set.has(k));
 }
 
 /** newKind を existingKind と同座標へ追加しようとしたときの帰結（COEXISTENCE行列）。 */
@@ -287,6 +324,13 @@ export function isSameDirectionObstacle(subject, other) {
   return sameDirectionObstacleKinds(centerLineKind(subject)).includes(centerLineKind(other));
 }
 
+/** other が subject の移動スナップ吸着先候補か（moveSnapTargetKinds ベース。findCLMoveSnap で使う）。 */
+export function isMoveSnapTarget(subject, other) {
+  if (subject === other) return false;
+  if (subject.centerLineType !== other.centerLineType) return false;
+  return moveSnapTargetKinds(centerLineKind(subject)).includes(centerLineKind(other));
+}
+
 /**
  * other が subject と結合しうるか（transform/centerLineMerge.js findCenterLineMergeMatch の
  * 種別条件と同型: 同 centerLineType・同種別・両者 labeled:false）。
@@ -348,6 +392,18 @@ export function orthoAnchorCandidates(graph, subject, opts = {}) {
     tolMm:          opts.tolMm ?? 0,
     exclude:        subject,
   });
+}
+
+/**
+ * subject の同方向移動障害物候補となる CenterLine を graph.centerLines から列挙する走査API
+ * （移動範囲・移動スナップで使う。orthoAnchorCandidates と同じ理由——過去に3回、種別条件の無い素の
+ * graph.centerLines 走査が非表示の梁芯を障害物へ混入させる不具合の原因になった——で一本化する）。
+ * @param {{centerLines: Array}} graph
+ * @param {object} subject
+ * @returns {Array} isSameDirectionObstacle(subject, other) を満たす CenterLine の配列
+ */
+export function sameDirectionObstacles(graph, subject) {
+  return graph.centerLines.filter(other => isSameDirectionObstacle(subject, other));
 }
 
 /** cl が appMode で描画対象か（可視モード表そのもの）。 */
