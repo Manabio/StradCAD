@@ -60,7 +60,7 @@ const CARD_SECTIONS = [
   ] },
 ];
 
-// CH 文字列に 0 以下の数値が含まれるか（問題.md: CHは0より大きい）。
+// CH 文字列に 0 以下の数値が含まれるか（CHは0より大きい）。
 // 全角数字は半角へ正規化し、レンジ表記「2300～3500」の各数値トークンを個別に検査する。
 function chContainsZero(text) {
   const s = String(text).replace(/[０-９]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xFEE0));

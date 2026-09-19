@@ -4,7 +4,7 @@ import { StairType, totalStepsFromSections } from '@core';
 // 直進階段の標準比率ヒント（踏面方向:走行長 ≒ 3:14）。段数推定の妥当性チェック用。
 export const STRAIGHT_RATIO = 14 / 3;
 
-// mm — 踊り場の最小長さ（問題.md）。stairGeometry.jsが本ファイルをimportするため
+// mm — 踊り場の最小長さ。stairGeometry.jsが本ファイルをimportするため
 // （measureStairSpans/detectUTurn）、循環import回避のため定義側は本ファイルに置き、
 // stairGeometry.jsはre-exportする（WP-A1: resolveSwitchbackSpanLengthsが必要とするため）。
 export const MIN_LANDING = 1200;

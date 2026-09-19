@@ -7,7 +7,7 @@
  *   resolveCenterLineRefs は「まだ解決できていない参照だけ」を埋める（既存の解決済み参照を
  *   上書きしない）。addCenterLine は呼び出し時点で shapeMap にある CL しか解決できないため、
  *   restoreGraph 等で参照先が自分より後に追加される順序だと解決漏れが起きる
- *   （問題.md: フロア切替でCLの短縮が解除されY2まで延長される不具合の原因）。
+ *   （フロア切替でCLの短縮が解除されY2まで延長される不具合の原因）。
  *   全 CL 追加後に resolveCenterLineRefs を呼び、未解決分だけ解決し直す設計を維持する。
  *
  * CenterLine/ShapeType は呼び出し側（core/planGraph.js）から引数として受け取る

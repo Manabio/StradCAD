@@ -153,7 +153,7 @@ function bandCapLine(key, isVertical, axisValue, half, coord, stroke, strokeWidt
   );
 }
 
-// 木造基礎伏図の「ベース」帯の寸法（問題.md）。1階壁芯（＝基礎梁の軸）から幅600
+// 木造基礎伏図の「ベース」帯の寸法。1階壁芯（＝基礎梁の軸）から幅600
 // （foundation.sectionDefaults.baseWidth）を振り分けて描く。角でトリム（直交する基礎梁に突き当たる端を
 // 半幅だけ控えて突合せにする）。土台（幅150の中線）は role:'sill' の実体梁として一般の梁帯描画
 // （bandLines）に乗るため、ここでは描かない（2026-09-18裁定。structural/woodAutoFill.js
@@ -381,7 +381,7 @@ export const StructuralLayer = observer(({ composition, viewport, project, onMem
   // 非在来（pickColumnsOnFigureの判定はstructural/framingDrawing.js）では常に無効＝Reactツリー不変。
   const pickColumns = onMemberClick && pickColumnsOnFigure(figureRules.drawing);
 
-  // 木造基礎伏図の土台・ベース帯（問題.md）。基礎梁(role:'foundation')がある＝基礎伏図、かつ実効主構造が木造のときのみ。
+  // 木造基礎伏図の土台・ベース帯。基礎梁(role:'foundation')がある＝基礎伏図、かつ実効主構造が木造のときのみ。
   // ベースの有無は基礎種別（べた基礎はベースなし＝土台のみ）。実効主構造は基礎伏図グラフ（=自階）の上書きを優先。
   // 帯の有無・ベース（独立フーチング）の有無は主構造ルール（structureRules.js foundation.drawsBands / hasBase）。
   const foundationBeams = (beam?.graph?.beams ?? []).filter(b => b.role === 'foundation');

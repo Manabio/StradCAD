@@ -24,7 +24,7 @@ export function floorHeightBelow(project, plane) {
   return plane.elevation - planes[idx - 1].elevation;
 }
 
-// 基準法上の寸法制限（問題.md より）
+// 基準法上の寸法制限
 export const STAIR_LIMITS = {
   residential:    { minWidth: 750, maxRiser: 230, minTread: 150 }, // 住宅
   nonResidential: { ratioMin: 600, ratioMax: 640 },                // 住宅以外: 2R+T

@@ -1,7 +1,7 @@
 // ================================================================
 // 部材別 断面図ジェネレータ（entity → ジオメトリ プリミティブ）
 //
-// 問題.md の各断面図仕様を、sectionGeometry.js のプリミティブ列へ変換する。
+// 各断面図仕様を、sectionGeometry.js のプリミティブ列へ変換する。
 // 返り値は AutoScaledFigure / Konva（Phase 6）が共通に消費する純データ。
 // core.js には依存せず、断面マスター（sectionCatalog.js）と entity のフィールドのみ使う。
 //
@@ -279,7 +279,7 @@ function beamFigure(beam, ctx) {
   if (beam.materialType === 'RC') {
     return rcRectBeamFigure(beam, ctx, ctx.flLabel ?? 'FL');
   }
-  // SRC造は次フェーズ（問題.md L102 空欄）
+  // SRC造は次フェーズ（仕様上は空欄）
   return { primitives: [{ type: 'text', x: 0, y: 0, text: 'SRC造 梁は次フェーズ', anchor: 'middle', size: 11 }] };
 }
 
@@ -301,7 +301,7 @@ function rcRectBeamFigure(beam, ctx, levelLabel) {
   return { primitives: prims };
 }
 
-// 木造基礎の断面詳細の既定寸法（問題.md。実体は structureRules.js WOOD_FOUNDATION_SECTION_DEFAULTS）。
+// 木造基礎の断面詳細の既定寸法（実体は structureRules.js WOOD_FOUNDATION_SECTION_DEFAULTS）。
 // beam.foundationSection に保存された編集値があれば上書きする（未編集分はこの既定で補完）。
 const WOOD_FOUNDATION_DEFAULTS = WOOD_FOUNDATION_SECTION_DEFAULTS;
 
@@ -310,7 +310,7 @@ function editMatDim(dir, from, to, edge, side, value, g, target, fieldKey, opts 
   return materialDim(dir, from, to, edge, side, value, g, { editable: true, target, fieldKey, ...opts });
 }
 
-// --- 基礎梁（RC矩形 ＋ GL線）。木造は基礎種別ごとにベース／べた基礎マットを合成し、問題.md の寸法を
+// --- 基礎梁（RC矩形 ＋ GL線）。木造は基礎種別ごとにベース／べた基礎マットを合成し、仕様上の寸法を
 //     すべて編集可能フィールドとして配置する（ctx.woodFoundation）。非木造は従来どおり梁天端=GL・read-only。
 function foundationBeamFigure(beam, ctx) {
   const b = beam.beamWidth ?? 350;
@@ -338,7 +338,7 @@ function foundationBeamFigure(beam, ctx) {
     return { primitives: prims };
   }
 
-  // ---- 木造：問題.md の基礎断面（全寸法を編集可能フィールドとして配置）----
+  // ---- 木造：基礎断面（全寸法を編集可能フィールドとして配置）----
   const fs = { ...WOOD_FOUNDATION_DEFAULTS, ...(beam.foundationSection ?? {}) };
   const isMat = ctx.foundationType === MAT_FOUNDATION;
   const embed = Math.min(fs.embedDepth, D); // 地中部（GL下）
@@ -451,7 +451,7 @@ function slabFigure(slab, ctx) {
   const prims = [{ type: 'levelLine', y: 0, label: ctx.flLabel ?? 'FL' }];
   if (slab.slabKind === 'deck') {
     prims.push(...deckProfile(-width / 2, 0, width, t));
-    // 描画エリアの両矢印クリックで90度回転する「デッキ方向」（問題.md L117-119）。断面図では方向ラベルで示す。
+    // 描画エリアの両矢印クリックで90度回転する「デッキ方向」。断面図では方向ラベルで示す。
     prims.push({ type: 'text', x: 0, y: t + g * 0.95, text: `デッキ方向 ${slab.deckDirection === 'y' ? 'Y' : 'X'}`, anchor: 'middle', size: 11 });
   } else {
     prims.push({ type: 'rect', x: -width / 2, y: 0, w: width, h: t, hatch: 'concrete' });

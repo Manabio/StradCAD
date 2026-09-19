@@ -50,14 +50,14 @@ export function resolveDefaultMaterialType(graph, project) {
   return defaultMaterialType(effectiveStructure(graph, project));
 }
 
-/** 基礎伏図で「ベース（独立フーチング）」を自動生成するか（問題.md：木造べた基礎時はベースなし）。
+/** 基礎伏図で「ベース（独立フーチング）」を自動生成するか（木造べた基礎時はベースなし）。
  *  木造のなし／土間コンは基礎梁＋ベースの合成のためベースを生成する。非木造は常に生成する。
  *  判定は主構造ルール（structureRules.js の foundation.hasBase）。 */
 export function foundationGeneratesBase(structure, foundationType) {
   return rulesFor(structure).foundation.hasBase(foundationType);
 }
 
-/** 基礎伏図で「べた基礎（マットスラブ role:'mat_foundation'）」を自動生成するか（問題.md：木造べた基礎時のみ）。
+/** 基礎伏図で「べた基礎（マットスラブ role:'mat_foundation'）」を自動生成するか（木造べた基礎時のみ）。
  *  非木造の基礎スラブは手動配置（自動生成しない）。判定は主構造ルール（foundation.hasMatSlab）。 */
 export function foundationGeneratesMatSlab(structure, foundationType) {
   return rulesFor(structure).foundation.hasMatSlab(foundationType);
@@ -420,7 +420,7 @@ export function autoFillStructuralGrid(graph, project, belowMainStructure, wallG
   // 自階帰属の柱・梁・基礎は自階の主構造が確定するまで生成しない（autoFillColumns は自前でも同ガード）。
   // 屋根の軒桁(eaves)は下階の主構造に従うため、判定軸は belowMainStructure 側で別に行う。
   const ownSpecified = isStructureSpecified(graph, project);
-  // 構造種別による部材の取捨（問題.md 表A＝structuralClassification）。柱・梁（地上）は構造でゲートし、
+  // 構造種別による部材の取捨（structuralClassification.js 表A）。柱・梁（地上）は構造でゲートし、
   // 基礎梁・ベース（基礎）は常に○のため実質ゲートされない。地階＝RC固定の地中梁図も常に○。
   const structure = effectiveStructure(graph, project);
   const foundationType = project.structuralInfo.foundationType;
@@ -432,7 +432,7 @@ export function autoFillStructuralGrid(graph, project, belowMainStructure, wallG
     ? autoFillColumnsForStructure(graph, project, wallGate, aboveColumns, wallSegments, aboveBeamSegments, belowColumns) : { created: [], removed: [] };
   const newColumns = columnsResult.created;
   const removedColumns = columnsResult.removed;
-  // ベース（独立フーチング）は分類（表A）に加え、基礎種別でもゲートする（木造べた基礎時はベースなし。問題.md）。
+  // ベース（独立フーチング）は分類（表A）に加え、基礎種別でもゲートする（木造べた基礎時はベースなし）。
   const newFootings = (foundation && ownSpecified && structureHasMemberKind(MEMBER_KIND.INDEPENDENT_FOOTING, structure)
     && foundationGeneratesBase(structure, foundationType)) ? autoFillFootings(graph, wallGate) : [];
   const beamKind = foundation ? MEMBER_KIND.FOUNDATION_BEAM : MEMBER_KIND.BEAM;
@@ -441,7 +441,7 @@ export function autoFillStructuralGrid(graph, project, belowMainStructure, wallG
     : { created: [], removed: [] };
   const newBeams = beamsResult.created;
   const removedBeams = beamsResult.removed;
-  // 在来木造の土台（role:'sill'、記号SL。基礎伏図＝最下階専用。問題.md「1階の壁下ならびに、基礎上には
+  // 在来木造の土台（role:'sill'、記号SL。基礎伏図＝最下階専用。「1階の壁下ならびに、基礎上には
   // 必ずある」）。基礎梁（role:'foundation'）の生成・撤去が確定した直後、床梁の前に呼ぶ——候補源(b)が
   // 確定済みの基礎梁スパンを読むため。呼び出し条件は`foundation`のみ（`beamPlacement`条件は付けない。
   // QA裁定Major-2・2026-09-18）——非在来へ切り替わった直後も本関数自身が自動生成分のrole:'sillを
@@ -547,7 +547,7 @@ export function convertMembersToEffectiveMaterial(graph, project, belowMainStruc
 const CLASSIFICATION_MAPS = ['columnMap', 'footingMap', 'beamMap', 'slabMap', 'wallMap'];
 
 /** 主構造変更で「×」化した部材（その構造が持たない部材種別）のうち、自動生成分（dimensionStatus==='auto'）を削除する。
- *  問題.md「構造変更の場合、×は削除、○は生成」の削除側。生成側は autoFillStructuralGrid の構造ゲートが担う。
+ *  「構造変更の場合、×は削除、○は生成」の削除側。生成側は autoFillStructuralGrid の構造ゲートが担う。
  *  手動固定/検査済み（dimensionStatus!=='auto'）は手動部材として保持する（フットプリント削除と同じ規律）——
  *  残った手動部材は構造リスト側で同じ分類ゲートにより非表示になる。除外集合には記録しない
  *  （構造を戻せば autoFill で再生成されるべきため。フットプリント削除と同様に可逆）。

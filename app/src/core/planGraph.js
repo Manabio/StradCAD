@@ -679,7 +679,7 @@ export class PlanGraph {
    * refId / extentLoRef.clId / extentHiRef.clId が指す CenterLine を再解決する。
    * addCenterLine は呼び出し時点で shapeMap にある CL しか解決できないため、
    * restoreGraph 等で参照先が自分より後に追加される順序だと解決漏れが起きる
-   * （問題.md: フロア切替でCLの短縮が解除されY2まで延長される不具合の原因）。
+   * （フロア切替でCLの短縮が解除されY2まで延長される不具合の原因）。
    * 全 CL 追加後に呼び、未解決分だけ解決し直す（解決済みの参照は上書きしない）。
    */
   resolveCenterLineRefs() {

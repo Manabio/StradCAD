@@ -1,5 +1,5 @@
 // 梁の接合方法（剛接合／ピン接合）の既定値・描画分岐・継手位置の単体テスト。
-// 仕様（問題.md）: 初期値は剛接合、ただし梁芯CL追加で自動生成される小梁（role:'secondary'）はピン接合。
+// 仕様: 初期値は剛接合、ただし梁芯CL追加で自動生成される小梁（role:'secondary'）はピン接合。
 // 接合は鉄骨の梁でのみ意味を持ち、剛接合は構造芯から900内側に継手記号を描く。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';

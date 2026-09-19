@@ -118,7 +118,7 @@ export async function recomputeStructuralForGraph(targetGraph, project, mainStru
   // 構造体トポロジーから未定義の柱・梁・基礎（基礎伏図のみ）を検出し、自動補完する。
   // ユーザーが明示削除した箇所は除外集合（excludedColumnSlots 等）により復活しない。
   const { newColumns, removedColumns, newFootings, newBeams, removedBeams } = runInAction(() => autoFillStructuralGrid(targetGraph, project, mainStructure, wallGate, wallSources, wallSegments, aboveColumns, belowGraph?.columns ?? [], aboveBeamSegments, selfGate, freeEndGraph));
-  // べた基礎（木造）のマットスラブを基礎伏図に生成・撤去する（基礎種別で取捨。問題.md）。基礎伏図以外では no-op。
+  // べた基礎（木造）のマットスラブを基礎伏図に生成・撤去する（基礎種別で取捨）。基礎伏図以外では no-op。
   const matFoundation = runInAction(() => autoFillMatFoundation(targetGraph, project));
   // 外周モデル（side ビュー）を1回構築し、柱芯オフセットと梁偏芯の両方に渡す——柱・梁で外側方向（内外定義）を一致させる。
   // 自動補完の後に作るので、矩形フォールバック（仕上げ未定義時）は生成済み部材CLの外接矩形を見る。主題階基準で sync。
@@ -145,7 +145,7 @@ export async function recomputeStructuralForGraph(targetGraph, project, mainStru
   // 構造再計算は壁を再生成できないため、ここで下地材だけ変えると「共通仕様は120×30なのに壁は90のまま」
   // のズレを作る（実機 2026-09-14）。在来の柱同寸×30への自動選択は壁生成の直前＝仕上げ突入
   // （finish/finishBoundary.js runFinishEntryBoundary → conformWoodBacking）だけで行う。
-  // 構造変更で「×」化した部材の自動生成分を削除する（問題.md「×は削除」。生成側は autoFillStructuralGrid の構造ゲート）。
+  // 構造変更で「×」化した部材の自動生成分を削除する（「×は削除」。生成側は autoFillStructuralGrid の構造ゲート）。
   const removedByClass = runInAction(() => deleteClassificationOverflow(targetGraph, project));
   // 柱の負担床面積から柱幅・柱脚サイズを再算定する（dimensionStatus==='auto'の部材のみ。ロック済みは保持）。
   // 柱は自階graphに属するため、支える階数(N)も自階（targetGraph.plane）基準で算定する。

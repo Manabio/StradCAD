@@ -1,5 +1,5 @@
 // ================================================================
-// 構造由来の分類の「単一の真実」（問題.md のデータ化）。
+// 構造由来の分類の「単一の真実」。
 //
 // 「主構造 × (図面種別・部材role ／ スライダースロット種別) → 有無」を1テーブルに集約する。
 // 各consumer が *データだけ* をここから読む：
@@ -44,7 +44,7 @@ export function isRigidFrameStructure(structure) {
 }
 
 // ----------------------------------------------------------------
-// A. 図面種別 × 部材の有無（問題.md「構造リストの図に表示される構造ごと分類」）
+// A. 図面種別 × 部材の有無（「構造リストの図に表示される構造ごと分類」）
 // ----------------------------------------------------------------
 
 // 図面種別（部材の出し分けの軸）。地階躯体図・小屋伏図は Phase B でスロットと共に追加する。
@@ -55,7 +55,7 @@ export const FIGURE_TYPE = Object.freeze({
   UNDERGROUND_BEAM: 'undergroundBeam', // 地中梁図（地階≥2のとき最下）
 });
 
-// 部材種別（出し分けの粒度）。footing/beam は role まで割る——問題.md がベース/柱脚・梁/基礎梁を別行に持つため。
+// 部材種別（出し分けの粒度）。footing/beam は role まで割る——ベース/柱脚・梁/基礎梁を別行に持つため。
 export const MEMBER_KIND = Object.freeze({
   COLUMN:              'column',             // 柱
   BEAM:                'beam',               // 梁（大梁・小梁。role:'primary'/'secondary'）
@@ -66,7 +66,7 @@ export const MEMBER_KIND = Object.freeze({
   WALL:                'wall',               // 壁（耐力壁 wallMap）
 });
 
-// 図面種別 × 部材 → 有無（問題.md 表A）。値は STRUCTURES と同順の boolean 配列。
+// 図面種別 × 部材 → 有無（表A）。値は STRUCTURES と同順の boolean 配列。
 // 未登録の (figureType, memberKind) は figureShowsMember が true（出し分けしない＝常に表示・生成）を返す。
 //                                            RCラ   RC壁    S      SRC    木在   木2×4
 export const FIGURE_MEMBERS = Object.freeze({
@@ -131,7 +131,7 @@ export function figureShowsMember(figureType, memberKind, structure) {
 }
 
 // 部材種別 → 生成・削除・表示を支配する図面種別。各部材は「地上階伏図の部材」か「基礎伏図の部材」の
-// いずれかに属する（問題.md 表Aの2グループ）。1枚の平面が複数カテゴリの部材を生成しても
+// いずれかに属する（表Aの2グループ）。1枚の平面が複数カテゴリの部材を生成しても
 // （基礎面＝自階の柱＋床下の基礎）、部材ごとに正しい行で取捨できる
 // （柱は常に地上階の柱ルール、基礎梁は常に基礎ルール）。地中梁図(UNDERGROUND_BEAM)は専用平面の
 // figureType を直接渡す Phase B 側で扱うため、ここには現れない（FOUNDATION と同値＝常に○のため実害なし）。
@@ -156,7 +156,7 @@ export function structureHasMemberKind(memberKind, structure, figureType = null)
 }
 
 // ----------------------------------------------------------------
-// B. スライダー図面スロットの有無（問題.md「平面と構造の移動スライダーのラベル対応」）
+// B. スライダー図面スロットの有無（「平面と構造の移動スライダーのラベル対応」）
 // ----------------------------------------------------------------
 
 // スライダー図面スロット種別（下→上の概念順）。Phase B で buildStructuralFigureSlots が消費する。
@@ -170,7 +170,7 @@ export const SLOT_TYPE = Object.freeze({
   ROOF_FRAME:       'roofFrame',       // 屋根+ →（選択時）小屋伏図（最上）
 });
 
-// スロット種別 × 主構造 → 出現（問題.md 表B）。値は STRUCTURES と同順の boolean 配列。
+// スロット種別 × 主構造 → 出現（表B）。値は STRUCTURES と同順の boolean 配列。
 //                                       RCラ   RC壁    S      SRC    木在   木2×4
 export const SLOT_PRESENCE = Object.freeze({
   [SLOT_TYPE.UNDERGROUND_BEAM]: [true,  true,  true,  true,  true,  true ],

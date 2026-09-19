@@ -87,7 +87,7 @@ function buildFigureCtx(entity, mapName, graph, project, isRoof = false) {
       ecc: typeof entity.eccentricity === 'number' ? entity.eccentricity : 0,
       flLabel: isRoof ? 'RFL' : 'FL', // R階伏図の梁の図のみ RFL（他階は FL）
       glLabel: 'GL（FL）',
-      // 木造基礎梁の断面図は基礎種別ごとのベース／べた基礎の合成を反映する（問題.md）。
+      // 木造基礎梁の断面図は基礎種別ごとのベース／べた基礎の合成を反映する。
       // foundationType は 'ベタ基礎' が木造・RC共通表記のため、woodFoundation（木造の基礎梁か）と併用して分岐する。
       foundationType: project?.structuralInfo?.foundationType,
       woodFoundation: entity.role === 'foundation' && rulesFor(structure).foundation.sectionFigure === 'wood',
@@ -454,7 +454,7 @@ export const MemberListTab = observer(({ composition, project, focusRequest, onT
           const resolved = composition?.resolveCategory(categoryFor(group));
           if (!resolved) return null; // 下階が無い（基礎伏図）場合は柱グループを非表示
           const g = resolved.graph;
-          // 構造種別が持たない部材分類はカテゴリごと隠す（問題.md「×はカテゴリ自体表示しない」＝structuralClassification）。
+          // 構造種別が持たない部材分類はカテゴリごと隠す（「×はカテゴリ自体表示しない」＝structuralClassification）。
           // 構造変更で「×」化した自動部材は recomputeStructuralForGraph が削除済みのため、空グループ＝非表示で齟齬は出ない。
           // R階伏図は figureType=ROOF で取捨（壁・基礎系はカテゴリ非表示。柱・梁・スラブのみ）。
           const effectiveStructure = g.structureOverride ?? project.structuralInfo?.mainStructure;
@@ -812,7 +812,7 @@ const MemberCard = observer(({
   const allFields = (FIELD_DEFS_BY_CATEGORY[group.category] ?? [])
     .filter(f => f.key in representative && !FIGURE_DIM_KEYS.has(f.key) && (!f.when || f.when(representative)));
   // 木造の基礎梁は断面が構造算定（b×D・常にRC）で決まり、断面マスター選択は意味を持たないため「断面」を隠す
-  // （問題.md。有無は主構造ルール structureRules.js foundation.beamSectionField）。
+  // （有無は主構造ルール structureRules.js foundation.beamSectionField）。
   const isWoodFoundationBeam = group.mapName === 'beamMap' && representative.role === 'foundation'
     && !rulesFor(structure).foundation.beamSectionField;
   // 「断面」は部材番号の直下（図の上）に置く。残りは図の下に並べる。
@@ -1645,7 +1645,7 @@ const NewIntersectionMemberSelector = observer(({ group, graph, project, structu
   const [vId, setVId] = useState('');
   const [hId, setHId] = useState('');
   const [footingKind, setFootingKind] = useState('independent'); // 'independent'=独立基礎 | 'base'=柱脚
-  // 柱脚が「×」の構造では追加候補から外す（問題.md「×はカテゴリ自体表示しない」）。
+  // 柱脚が「×」の構造では追加候補から外す（「×はカテゴリ自体表示しない」）。
   const allowColumnBase = structureHasMemberKind(MEMBER_KIND.COLUMN_BASE, structure);
 
   // 柱は自階の実効主構造を材質・既定断面に使う（柱は各階が自階graphに持つ）。基礎・柱脚は常にRC固定。

@@ -329,7 +329,7 @@ export class StructuralBeam extends StructuralEntity {
     // sectionDefId（カタログ断面）には連動しない参考値（columnのtributaryWidthと同じ位置づけ）。
     this.beamWidth = props.beamWidth ?? null;
     this.beamDepth = props.beamDepth ?? null;
-    // 木造基礎梁（role:'foundation'）の断面詳細寸法（問題.md）。基礎種別ごとのベース／べた基礎の合成断面を
+    // 木造基礎梁（role:'foundation'）の断面詳細寸法。基礎種別ごとのベース／べた基礎の合成断面を
     // 編集可能フィールドとして保持する。非基礎梁は null（断面図がデフォルト値で補完するため未編集分は持たない）。
     //   embedDepth    : 基礎梁の地中部（GL下。立ち上がり = beamDepth − embedDepth）
     //   baseWidth/baseThickness/baseOverhang : ベース幅・厚・屋外側張り出し（なし／土間コン）
@@ -625,7 +625,7 @@ export class StructuralWall extends StructuralEntity {
     this.thickness    = props.thickness    ?? 180; // 壁厚(mm) — 連続値の設計パラメータのため直接保持
     this.bottomLevel  = props.bottomLevel  ?? 0;    // 高さ範囲・下端レベル(mm、floorDatum基準)
     this.topLevel     = props.topLevel     ?? null; // 高さ範囲・上端レベル(mm)。null=階高から自動
-    // 耐力壁の種別（問題.md）。RC造='rc'（厚指定）／S造='none'|'brace'|'steelPlate'。
+    // 耐力壁の種別。RC造='rc'（厚指定）／S造='none'|'brace'|'steelPlate'。
     // 現状クラスはRC専用だが、S造の種別選択はメタ属性として保持する（新クラスは次フェーズ）。
     this.wallType     = props.wallType     ?? 'rc'; // 'rc' | 'none' | 'brace' | 'steelPlate'
     makeObservable(this, {
@@ -719,7 +719,7 @@ export class StructuralSlab extends StructuralEntity {
     this.levelRef       = props.levelRef       ?? 'top';  // 基準レベルが上端基準か下端基準か
     this.slopeDirection = props.slopeDirection ?? null;    // {dx,dy} | null（水平面内の勾配方向、屋根版用）
     this.slopeAngle     = props.slopeAngle     ?? 0;       // 勾配角度(度、0=水平)
-    // 厚指定の種別（問題.md）。'slab'=コンクリートスラブ / 'deck'=デッキプレート。
+    // 厚指定の種別。'slab'=コンクリートスラブ / 'deck'=デッキプレート。
     this.slabKind       = props.slabKind       ?? 'slab'; // 'slab' | 'deck'
     // デッキ方向（slabKind==='deck'のみ意味を持つ）。'x'=X方向 / 'y'=Y方向。描画エリアの両矢印クリックで90度回転。
     this.deckDirection  = props.deckDirection  ?? 'x';   // 'x' | 'y'

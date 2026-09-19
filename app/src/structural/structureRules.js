@@ -477,7 +477,7 @@ export function defaultMaterialFor(structure) {
 export const STRUCTURE_KEYS = STRUCTURES;
 
 // ----------------------------------------------------------------
-// 壁下地材ごとのルール（問題.md「壁下地材ごとに入替え」）。下地材の分類は finish/materials/backingClass.js
+// 壁下地材ごとのルール（「壁下地材ごとに入替え」）。下地材の分類は finish/materials/backingClass.js
 // の材コード集合（真実のソース）で決まり、ここはその分類ごとの選択子だけを持つ。
 // ----------------------------------------------------------------
 export { BackingClass };

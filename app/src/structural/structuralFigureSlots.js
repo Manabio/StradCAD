@@ -1,7 +1,7 @@
 // 構造モードの「図面スロット列」——スライダー（FloorDrum）のナビゲーション単位。
 //
 // 構造モードのスライダーは平面と 1:1 ではなく、構造種別に依存して可変個の図面スロットを持つ
-// （問題.md「平面と構造の移動スライダーのラベル対応」）。その「単一の真実」をここに集約し、
+// （「平面と構造の移動スライダーのラベル対応」）。その「単一の真実」をここに集約し、
 // スライダー描画・図面呼称・ナビゲーションをスロットから解決する。
 //
 // スロット = { key, plane, planeId, slotType, figureType }
@@ -34,7 +34,7 @@ function makeSlot(slotType, plane) {
 }
 
 /** 構造モードのスライダーに並ぶ図面スロット列（下＝最下階 → 上＝屋根）を返す。
- *  出現可否は建物全体の主構造で SLOT_PRESENCE（問題.md 表B）によりゲートする。 */
+ *  出現可否は建物全体の主構造で SLOT_PRESENCE（structuralClassification.js 表B）によりゲートする。 */
 export function buildStructuralFigureSlots(project) {
   const structure = project.structuralInfo?.mainStructure;
   const has = slotType => slotPresent(slotType, structure);
@@ -70,7 +70,7 @@ export function buildStructuralFigureSlots(project) {
 }
 
 /** スロットの図面呼称（スライダーに出すラベル）。slotType と階番号から決まる。
- *  屋根+（ROOF_FRAME）だけは選択時に「小屋伏図」へ変わる（問題.md：「屋根+」が選択されると「小屋伏図」）。 */
+ *  屋根+（ROOF_FRAME）だけは選択時に「小屋伏図」へ変わる（「屋根+」が選択されると「小屋伏図」）。 */
 export function designationForSlot(slot, isActive = false) {
   const sf = slot.plane.startFloor;
   switch (slot.slotType) {

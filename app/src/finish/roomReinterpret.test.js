@@ -85,11 +85,11 @@ test('normalizePartialDominance: 入れ替え時、他の部分指定の参照�
   assert.deepEqual([...small.referenceRoomIds], [big.id], '兄弟の部分指定は新しい親を参照するはず');
 });
 
-// ---- 問題.md のシナリオ実寸: 「3」=e+f+g、「3'」=e+f（部分指定・床高100）----
+// ---- シナリオ実寸: 「3」=e+f+g、「3'」=e+f（部分指定・床高100）----
 // このテストグリッドは全CLが全延長のため、g（中心2..中心5 × 中心3..中心4）は中心7でも
 // 分割され上下2セルになる。f は縦線（中心5・中心6）で3セルに分割される。
 // 部分指定 e+f（計11.4M mm²）＞残余 g上下（計1.2M mm²）で入れ替えが起きる。
-test('normalizePartialDominance: 問題.mdシナリオ（e+f>g）で親子が入れ替わり、「3」のラベルが g に移る', () => {
+test('normalizePartialDominance: シナリオ（e+f>g）で親子が入れ替わり、「3」のラベルが g に移る', () => {
   const graph = new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
   const opts = { labeled: false, discipline: Discipline.ARCH };
   for (const x of [0, 3400, 4600, 6000, 7000]) graph.addCenterLine(CenterLineType.VERTICAL, x, opts);

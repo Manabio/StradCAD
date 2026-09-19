@@ -1098,7 +1098,7 @@ export function autoFillWoodWallBeams(graph, project, wallSegments, wallGate = n
 }
 
 /**
- * 在来木造の土台（role:'sill'、記号SL。基礎伏図＝最下階専用。問題.md「土台：1階の1FL-100に天端を
+ * 在来木造の土台（role:'sill'、記号SL。基礎伏図＝最下階専用。「土台：1階の1FL-100に天端を
  * 合わせた、柱同寸の横材」「1階の壁下ならびに、基礎上には、必ずある」）を、1階の壁線through-runと
  * 既存の基礎梁（role:'foundation'）のスパンの和集合へ自動生成し、候補に無い自動生成の土台を撤去する。
  *  - 断面は生成時点ではrules.defaultSections.beam（在来木造は柱同寸の正角がルール既定値そのもの）で
@@ -1510,7 +1510,7 @@ export function autoFillWoodFloorBeams(graph, project) {
  *    成は現在の断面の成を保つ（正角105→正角120、105×240→120×240）。graph.beamColumnWidthMm が
  *    未再計算（null）の間は自階の値へ暫定フォールバックする（resolvedBeamColumnWidthMm 自体の規約）。
  *    カタログに無い組み合わせ（断面が引けない・成が未収録）はそろえない（成を無言で縮めない）。
- *  - 土台（role:'sill'）は例外——「柱同寸の横材」（問題.md）は幅・成とも常に自階の柱寸（既に上で
+ *  - 土台（role:'sill'）は例外——「柱同寸の横材」は幅・成とも常に自階の柱寸（既に上で
  *    解決済みのcolumnSection）にそろえる（他の梁のように現在の成を保つと、階の柱寸が変わった際に
  *    幅だけ動いて非正角になり「柱同寸」の仕様に反するため）。
  *  dimensionStatus に関わらず書き換える（105角のまま残す選択肢は裁定で退けられた）——柱は解決した値
