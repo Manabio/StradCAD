@@ -157,7 +157,8 @@ export function mirrorPrimitiveX(p, width) {
  * RADIAL（放射CL。value=角度deg）は座標軸を持たずgeometry未対応のため除外する
  * （structural/structuralAutoFill.js の secondaryBeamSpansFor と同じガード）。
  * 通り芯かどうかの判定は`isGridCenterLine`（core/centerLine.js）へ一本化する
- * ——`labeled`だけでは中心線（UI経路の既定でlabeled:true）まで拾ってしまう。
+ * ——`labeled`だけでは旧データの中心線（`labeled:true`かつ`discipline:ARCH`の組合せ。
+ * isGridCenterLineのJSDoc参照）まで拾ってしまう。
  */
 export function collectGridCLs(graph) {
   return (graphList(graph, 'centerLines') ?? []).filter(cl =>
