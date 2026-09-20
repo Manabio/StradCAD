@@ -314,10 +314,11 @@ const G2_ALLOWLIST = {
       '本ステップの対象外ファイル）。' },
   'structural/wallBeamAxes.js': { count: 1, category: 'unmigrated', reason: 'G1と同じ（findBeamAnchorCL）。' },
   'structural/woodAutoFill.js': { count: 2, category: 'unmigrated', reason: 'G1と同じ（柱アンカー解決）。' },
-  'transform/centerLineConvert.js': { count: 3, category: 'not-partner-selection',
-    reason: 'promoteToGrid/demoteToCenterのcl.labeled=true/false代入そのもの（昇格・降格操作の定義側）と' +
-      'STRUCT+labeledの妥当性ガード——種別の「代用読み取り」ではなくlabeledフィールド自体を変更・検証する' +
-      '操作のため対象外だが、機械的な文字列一致では区別できないためallowlistで扱う。' },
+  'transform/centerLineConvert.js': { count: 2, category: 'not-partner-selection',
+    reason: 'promoteToGrid/demoteToCenterのcl.labeled=true/false代入そのもの（昇格・降格操作の定義側）——' +
+      '種別の「代用読み取り」ではなくlabeledフィールド自体を変更する操作のため対象外だが、機械的な' +
+      '文字列一致では区別できないためallowlistで扱う。cl自身が変換元として妥当かの妥当性ガードは' +
+      'isConvertSubject（centerLineKindPolicy.js。core/配下のためG2対象外）へ移行済み。' },
   'transform/centerLineMerge.js': { count: 1, category: 'not-partner-selection',
     reason: 'absorbCenterLine内のloserSnapshot（undo用にloserの状態をそのまま保存するため）。種別判定では' +
       'ない。' },
@@ -347,9 +348,6 @@ const G3_ALLOWLIST = {
     reason: 'findWallBeamAxisCL・findBeamAnchorCL内のcenterLineKind(cl)===\'beam\'。G1と同じ理由。' },
   'structural/woodAutoFill.js': { count: 1, category: 'unmigrated',
     reason: 'findCenterAnchorCL。G1と同じ理由。' },
-  'transform/centerLineConvert.js': { count: 1, category: 'not-partner-selection',
-    reason: 'checkPromoteToGridGuards冒頭のcenterLineKind(cl)!==\'center\'（渡されたclが中心線かどうかの' +
-      '入力ガード。複数候補から相手を選ぶ処理ではない）。' },
   'transform/centerLineOps.js': { count: 3, category: 'not-partner-selection',
     reason: 'commitCLMoveOp（centerLineKind(cl)!==\'beam\'／===\'beam\'で通常経路と梁芯専用のグラフ' +
       'スナップショット方式Undoに分岐する対の判定）・COEXISTENCE同種別分岐の梁芯重複ガード' +
@@ -377,13 +375,6 @@ const G4_ALLOWLIST = {
       'ARCH実線（centerLineKindでいう center 相当）」かを判定する——種別判定の代用に当たる' +
       '（G1のreasonはQA指摘m-4で「種別を見ない」から実態どおりに訂正済み。G2の同エントリの訂正は' +
       '本ステップの対象外のため据え置き）。G1/G2と合わせて独立タスク。' },
-  'transform/centerLineConvert.js': { count: 3, category: 'unmigrated',
-    reason: 'outermostGridExtentRefs・isLastGridOnAxis（discipline===STRUCTで軸上の通り芯候補を' +
-      '絞り込む相手選択。未移行）・checkDemoteToCenterGuards冒頭のdiscipline===STRUCT&&labeled' +
-      '（cl自身が通り芯かどうかの入力ガード。cl.discipline===Discipline.STRUCT&&cl.labeledは' +
-      'isGridCenterLine（core/centerLine.js）で置換可能——QA指摘M-2。isGridCenterLineは' +
-      'lineType!==\'dashed\'まで見るため異常値（labeled:true&&discipline:STRUCT&&lineType:\'dashed\'）' +
-      'では判定が変わりうる点はG4のfinish/edgeClassify.jsエントリと同じ。件数はまとめて計上する）。' },
   'transform/centerLineOps.js': { count: 1, category: 'unmigrated',
     reason: 'deleteCenterLineWithUndoのisStruct判定（cl.discipline===Discipline.STRUCT&&cl.labeledで' +
       '通り芯かどうかを確認し、二重スナップショット方式Undoに分岐するかを決める）。isGridCenterLine' +

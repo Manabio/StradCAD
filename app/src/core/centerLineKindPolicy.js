@@ -26,9 +26,11 @@
  * G1_ALLOWLIST/G2_ALLOWLIST/G3_ALLOWLIST を唯一の供給源とする（本コメントには重複して書かない。
  * 各エントリの理由・対象関数はそちらを参照）。structural/wallBeamAxes.js・structural/woodAutoFill.js・
  * structural/structuralAutoFill.js（柱アンカー解決と共有する述語のため構造goldenでの検証が要る独立
- * タスク）・snapGeometry.js・interaction/usePointerInteraction.js
- * （centerLineConvert.jsの降格・昇格ガードと同じ判定式を共有するため両方まとめて移行する独立タスク）・
- * finish/gridCells.js 等はガードのallowlistに「未移行（unmigrated）」区分で残っている。
+ * タスク）・snapGeometry.js・finish/gridCells.js 等はガードのallowlistに
+ * 「未移行（unmigrated）」区分で残っている。interaction/usePointerInteraction.js の中心⇔通り芯入替え
+ * メニュー可否（canToGrid/canToCenter/isLastGridOnAxis）は interaction/clMenuGating.js（isConvertSubject
+ * 経由）へ移行済み——centerLineConvert.jsの昇格・降格ガードと同じ主体判定を共有する。梁芯移動スナップの
+ * 呼び分けはclMenuGating.jsを経由せず、usePointerInteraction.jsがusesBeamAxisMoveSnapを直接利用する。
  *
  * import ゼロに近い規約（extractedModuleImportInvariant）: ./centerLine.js（centerLineKind・
  * isGridCenterLine）と ./constants.js（CenterLineType）のみに依存する。store.js/snap.js/.jsx/
@@ -138,11 +140,10 @@ export const ENDPOINT_RULE_KINDS = Object.freeze(['center', 'beam']);
 export const FULL_SPAN_KINDS = Object.freeze(['struct']);
 // 入替え方向（'promote'=中心線→通り芯／'demote'=通り芯→中心線）が拒否する既存種別
 // （transform/centerLineConvert.js checkPromoteToGridGuards の dupStruct/dupBeam、
-//   checkDemoteToCenterGuards の dupCenter＝labeled:falseかつ非梁芯）。
-// 既知の乖離（旧データ限定）: dupCenter（centerLineConvert.js L165-166）は `!c.labeled` を見ており、
-// `centerLineKind(c)` が center/aux かどうかを直接見ていない——`{labeled:true, discipline:'arch'}` の
-// ような旧データがあると、この表（=種別ベース）が拒否を予測しても製品コードは`!c.labeled`がfalseに
-// なるため拒否しない（見逃す）方向に割れうる。
+//   checkDemoteToCenterGuards の dupCenter）。dupCenter は種別ベース（centerLineKind(c)）で判定して
+// おり、`!c.labeled` のような生フィールド代用ではない——`{labeled:true, discipline:'arch'}` のような
+// 旧データも種別（center/aux）どおりに拒否する（centerLineConvert.test.js「旧データ限定・種別ベースへ
+// 統一」参照。以前ここに記載していた「既知の乖離」は移行前の実装を指す古い記述だったため訂正した）。
 export const CONVERT_BLOCKING_KINDS = Object.freeze({
   promote: Object.freeze(['struct', 'beam']),
   demote:  Object.freeze(['center', 'aux']),
@@ -169,6 +170,21 @@ export const CROSS_FLOOR_COUNTERPART_KINDS = Object.freeze(['center', 'aux', 'be
 // 事実——可視性は「appModeで描かれるか」、こちらは「建具移動の物理境界になるか」で判定軸が異なる
 // （事実、VISIBLE_KINDS_BY_MODEのどのモードの可視集合ともstruct+centerの2つだけの組合せは一致しない）。
 export const OPENING_BOUNDARY_KINDS = Object.freeze(['struct', 'center']);
+
+// ---- 原始事実8: 入替えの主体種別（CONVERT_BLOCKING_KINDSの対になる表） ----
+// transform/centerLineConvert.js checkPromoteToGridGuards／checkDemoteToCenterGuardsの「渡されたclが
+// 変換元として妥当か」（CONVERT_BLOCKING_KINDSは「変換先に既にある相手を拒否するか」で別の関係）。
+// promoteの主体は中心線（centerLineKind==='center'）、demoteの主体は通り芯（isGridCenterLine。
+// centerLineKind==='struct'だけでなくlabeledも要求——旧データ{labeled:false, discipline:STRUCT}を
+// 主体から除外するのはisConvertSubjectの責務）。
+export const CONVERT_SUBJECT_KINDS = Object.freeze({ promote: 'center', demote: 'struct' });
+
+// ---- 原始事実9: 梁芯専用の移動スナップ許可表（HIT_EXCLUDED_KINDS_BY_MODEと同じ形の小表） ----
+// interaction/usePointerInteraction.js のCL移動中pointermoveが、梁芯専用スナップ
+// （findBeamAxisMoveSnap）と通常スナップ（findCLMoveSnap）のどちらを呼ぶかを appMode×kind で決める。
+// 現行は構造モードで梁芯を動かすときのみ梁芯専用スナップを使う——hitTestKinds('structure')=['beam']の
+// ため、構造モードでCL移動できるのは実質梁芯のみ（他種別はヒットしない）。
+export const BEAM_AXIS_MOVE_SNAP_KINDS_BY_MODE = Object.freeze({ structure: Object.freeze(['beam']) });
 
 // ================================================================
 // 種別レベルAPI
@@ -259,6 +275,14 @@ export function convertBlockingKinds(direction) {
   return CONVERT_BLOCKING_KINDS[direction];
 }
 
+/** 変換方向（'promote'/'demote'）の変換元として妥当な種別（CONVERT_SUBJECT_KINDS）。 */
+export function convertSubjectKind(direction) {
+  if (!Object.prototype.hasOwnProperty.call(CONVERT_SUBJECT_KINDS, direction)) {
+    throw new Error(`未知の変換方向: ${direction}`);
+  }
+  return CONVERT_SUBJECT_KINDS[direction];
+}
+
 /** kind と結合しうる種別（現行は同種別のみ）。 */
 export function mergeableKinds(kind) {
   assertKnownKind(kind);
@@ -298,6 +322,35 @@ export function spansEntireAxis(kind) {
 // ================================================================
 // CLレベルAPI
 // ================================================================
+
+/**
+ * cl が direction（'promote'=中心線→通り芯／'demote'=通り芯→中心線）の変換元として妥当か
+ * （transform/centerLineConvert.js checkPromoteToGridGuards／checkDemoteToCenterGuardsの入力ガードと、
+ * UI側のメニュー可否判定（interaction/clMenuGating.js）が共有する唯一の述語）。
+ * RADIAL は変換の対象外（centerLineConvert.jsのV/Hガードと同じ）。
+ * @param {object} cl
+ * @param {'promote'|'demote'} direction
+ * @returns {boolean}
+ */
+export function isConvertSubject(cl, direction) {
+  if (!cl) throw new Error(`isConvertSubject: clは必須です（実際: ${cl}）`);
+  const kind = convertSubjectKind(direction);
+  if (cl.centerLineType !== CenterLineType.VERTICAL && cl.centerLineType !== CenterLineType.HORIZONTAL) return false;
+  return kind === 'struct' ? isGridCenterLine(cl) : centerLineKind(cl) === kind;
+}
+
+/**
+ * cl の移動中、appMode で梁芯専用の移動スナップ（findBeamAxisMoveSnap）を使うか
+ * （使わない場合は通常のfindCLMoveSnapを使う。interaction/usePointerInteraction.js のCL移動
+ * pointermoveハンドラが呼び分けに使う）。
+ * @param {object} cl
+ * @param {string} appMode
+ * @returns {boolean}
+ */
+export function usesBeamAxisMoveSnap(cl, appMode) {
+  assertKnownMode(appMode);
+  return (BEAM_AXIS_MOVE_SNAP_KINDS_BY_MODE[appMode] ?? []).includes(centerLineKind(cl));
+}
 
 /**
  * cl が coord を軸方向に覆っているか（延長・追加extentの境界判定で使う）。
@@ -552,4 +605,21 @@ export function candidatesVisibleIn(graph, { appMode, centerLineType }) {
  */
 export function gridCenterLines(graph) {
   return graph.centerLines.filter(isGridCenterLine);
+}
+
+/**
+ * gridCenterLines(graph) のうち centerLineType が一致するものを value 昇順で列挙する走査API
+ * （軸ごとの通り芯本数・最外郭2本を求める場面で使う。transform/centerLineConvert.js
+ * outermostGridExtentRefs・isLastGridOnAxis 参照）。
+ * @param {{centerLines: Array}} graph
+ * @param {string} centerLineType
+ * @returns {Array}
+ */
+export function gridCenterLinesOnAxis(graph, centerLineType) {
+  if (centerLineType == null) {
+    throw new Error(`gridCenterLinesOnAxis: centerLineTypeは必須です（実際: ${centerLineType}）`);
+  }
+  return gridCenterLines(graph)
+    .filter(cl => cl.centerLineType === centerLineType)
+    .sort((a, b) => a.value - b.value);
 }

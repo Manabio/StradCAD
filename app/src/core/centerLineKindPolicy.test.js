@@ -19,14 +19,16 @@ import {
   CL_KINDS, APP_MODES, VISIBLE_KINDS_BY_MODE, HIT_EXCLUDED_KINDS_BY_MODE, COEXISTENCE,
   ORTHO_ANCHOR_OVERRIDE, WALL_ANCHOR_KINDS, EXTENT_ANCHOR_STYLE, ENDPOINT_RULE_KINDS, FULL_SPAN_KINDS,
   CONVERT_BLOCKING_KINDS, CROSS_FLOOR_COUNTERPART_KINDS, OPENING_BOUNDARY_KINDS,
+  CONVERT_SUBJECT_KINDS, BEAM_AXIS_MOVE_SNAP_KINDS_BY_MODE,
   kindsVisibleIn, hitTestKinds, kindsVisibleWith, orthoAnchorKinds, sameDirectionObstacleKinds,
   moveSnapTargetKinds,
-  coexistenceAt, convertBlockingKinds, mergeableKinds, allowsWallAnchor, extentAnchorStyle,
+  coexistenceAt, convertBlockingKinds, convertSubjectKind, mergeableKinds, allowsWallAnchor, extentAnchorStyle,
   hasEndpointRule, spansEntireAxis, isOpeningBoundaryKind,
-  isOrthoAnchorCandidate, isSameDirectionObstacle, isMoveSnapTarget, isMergeCandidate,
+  isOrthoAnchorCandidate, isSameDirectionObstacle, isMoveSnapTarget, isMergeCandidate, isConvertSubject,
+  usesBeamAxisMoveSnap,
   isRenderTarget, isHitTestTarget,
   coversAlongAxis, orthoAnchorCandidates, orthoAnchorCandidatesForNew, sameDirectionObstacles,
-  sameCoordCounterparts, mergeCandidates, candidatesVisibleIn,
+  sameCoordCounterparts, mergeCandidates, candidatesVisibleIn, gridCenterLinesOnAxis,
 } from './centerLineKindPolicy.js';
 
 // ---- 製品コード（section C）との突き合わせに使う実装 ----
@@ -152,6 +154,9 @@ test('【不変条件】原始事実の表（VISIBLE_KINDS_BY_MODE・COEXISTENCE
   assert.ok(Object.isFrozen(CL_KINDS));
   assert.ok(Object.isFrozen(APP_MODES));
   assert.ok(Object.isFrozen(OPENING_BOUNDARY_KINDS));
+  assert.ok(Object.isFrozen(CONVERT_SUBJECT_KINDS));
+  assert.ok(Object.isFrozen(BEAM_AXIS_MOVE_SNAP_KINDS_BY_MODE));
+  for (const v of Object.values(BEAM_AXIS_MOVE_SNAP_KINDS_BY_MODE)) assert.ok(Object.isFrozen(v));
 });
 
 test('OPENING_BOUNDARY_KINDS: 建具がまたげない境界種別は通り芯・中心線（補助線・梁芯はまたげる）', () => {
@@ -222,6 +227,91 @@ test('convertBlockingKinds: promote(中心線→通り芯)は通り芯・梁芯�
 
 test('mergeableKinds: 現行は同種別のみ', () => {
   for (const kind of CL_KINDS) assert.deepEqual(mergeableKinds(kind), [kind]);
+});
+
+// ---- CONVERT_SUBJECT_KINDS・isConvertSubject（変換元として妥当かの判定。
+// transform/centerLineConvert.js の入力ガードと interaction/clMenuGating.js が共有する）----
+
+test('CONVERT_SUBJECT_KINDS: promoteの主体は中心線、demoteの主体は通り芯', () => {
+  assert.deepEqual({ ...CONVERT_SUBJECT_KINDS }, { promote: 'center', demote: 'struct' });
+});
+
+test('convertSubjectKind: promote/demoteそれぞれの主体種別を返す', () => {
+  assert.equal(convertSubjectKind('promote'), 'center');
+  assert.equal(convertSubjectKind('demote'), 'struct');
+});
+
+// 種別ごとのduckオブジェクト（centerLineKind/isGridCenterLineが見るフィールドのみ持つ）。
+function makeDuckCL(kind, labeled, centerLineType) {
+  const base = { centerLineType, labeled };
+  switch (kind) {
+    case 'struct': return { ...base, discipline: Discipline.STRUCT, lineType: 'center' };
+    case 'center': return { ...base, discipline: Discipline.ARCH,   lineType: 'center' };
+    case 'aux':    return { ...base, discipline: Discipline.ARCH,   lineType: 'dashed' };
+    case 'beam':   return { ...base, discipline: Discipline.FUSE,   lineType: 'center' };
+    default: throw new Error(`未知のCL種別: ${kind}`);
+  }
+}
+
+// isConvertSubject総当り: 4種別（kind）×labeled(2値)×centerLineType(3値)×direction(2値)=48通り。
+// 期待値はリテラルの表で固定する（isConvertSubject自身の式を再計算しない）。
+// [labeled:false, labeled:true] の順。centerLineType===RADIALは表を使わず常にfalse（除外）。
+const ISCONVERT_SUBJECT_EXPECTED = {
+  promote: { struct: [false, false], center: [true, true], aux: [false, false], beam: [false, false] },
+  demote:  { struct: [false, true],  center: [false, false], aux: [false, false], beam: [false, false] },
+};
+
+test('isConvertSubject: 総当り（4種別×labeled2値×centerLineType3値×direction2値）', () => {
+  for (const direction of ['promote', 'demote']) {
+    for (const kind of CL_KINDS) {
+      for (const [i, labeled] of [false, true].entries()) {
+        for (const centerLineType of [CenterLineType.VERTICAL, CenterLineType.HORIZONTAL, CenterLineType.RADIAL]) {
+          const cl = makeDuckCL(kind, labeled, centerLineType);
+          const expected = centerLineType === CenterLineType.RADIAL
+            ? false
+            : ISCONVERT_SUBJECT_EXPECTED[direction][kind][i];
+          assert.equal(
+            isConvertSubject(cl, direction), expected,
+            `direction=${direction} kind=${kind} labeled=${labeled} centerLineType=${centerLineType}`,
+          );
+        }
+      }
+    }
+  }
+});
+
+test('【失敗系】isConvertSubject: clがfalsyならthrowする', () => {
+  assert.throws(() => isConvertSubject(null, 'promote'), /isConvertSubject: clは必須です/);
+  assert.throws(() => isConvertSubject(undefined, 'demote'), /isConvertSubject: clは必須です/);
+});
+
+test('【失敗系】convertSubjectKind/isConvertSubject: 未知の変換方向はthrowする', () => {
+  assert.throws(() => convertSubjectKind('sideways'), /未知の変換方向: sideways/);
+  assert.throws(() => convertSubjectKind(undefined), /未知の変換方向: undefined/);
+  const cl = makeDuckCL('center', false, CenterLineType.VERTICAL);
+  assert.throws(() => isConvertSubject(cl, 'sideways'), /未知の変換方向: sideways/);
+});
+
+// ---- BEAM_AXIS_MOVE_SNAP_KINDS_BY_MODE・usesBeamAxisMoveSnap（CL移動中pointermoveの梁芯専用
+// スナップ呼び分け。interaction/usePointerInteraction.js が使う）----
+
+test('BEAM_AXIS_MOVE_SNAP_KINDS_BY_MODE: structureモードのみ梁芯を対象とする', () => {
+  assert.deepEqual({ ...BEAM_AXIS_MOVE_SNAP_KINDS_BY_MODE }, { structure: ['beam'] });
+});
+
+test('usesBeamAxisMoveSnap: 総当り（4種別×全appMode。structureかつ梁芯のときのみtrue）', () => {
+  for (const appMode of APP_MODES) {
+    for (const kind of CL_KINDS) {
+      const cl = makeDuckCL(kind, true, CenterLineType.VERTICAL);
+      const expected = appMode === 'structure' && kind === 'beam';
+      assert.equal(usesBeamAxisMoveSnap(cl, appMode), expected, `appMode=${appMode} kind=${kind}`);
+    }
+  }
+});
+
+test('【失敗系】usesBeamAxisMoveSnap: 未知のappModeはthrowする', () => {
+  const cl = makeDuckCL('beam', true, CenterLineType.VERTICAL);
+  assert.throws(() => usesBeamAxisMoveSnap(cl, 'unknown'), /未知のappMode: unknown/);
 });
 
 test('hitTestKinds: floorplan/finish/opening=通り芯・中心線・補助線、structure=梁芯のみ', () => {
@@ -497,6 +587,29 @@ test('mergeCandidates: centerLineType・kindが一致しlabeled:falseなCLだけ
 test('【失敗系】mergeCandidates: 未知のkindはthrowする', () => {
   const { graph } = makeProjectWithGraph();
   assert.throws(() => mergeCandidates(graph, { centerLineType: CenterLineType.VERTICAL, kind: 'wood' }), /未知のCL種別: wood/);
+});
+
+// ---- gridCenterLinesOnAxis: gridCenterLines(graph)の方向つき・昇順版（走査API。
+// transform/centerLineConvert.js outermostGridExtentRefs・isLastGridOnAxis が使う）----
+
+test('gridCenterLinesOnAxis: centerLineType一致の通り芯をvalue昇順で返す（非昇順に挿入しても並べ替える）', () => {
+  const { project, graph } = makeProjectWithGraph();
+  const v3000 = project.structGraph.addCenterLine(CenterLineType.VERTICAL, 3000, { labeled: true, discipline: Discipline.STRUCT });
+  const v0    = project.structGraph.addCenterLine(CenterLineType.VERTICAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+  const v1000 = project.structGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: true, discipline: Discipline.STRUCT });
+  const h0    = project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0,  { labeled: true, discipline: Discipline.STRUCT }); // 直交（方向違い）
+  graph.addCenterLine(CenterLineType.VERTICAL, 2000, { labeled: false, discipline: Discipline.ARCH }); // 通り芯でない（中心線）は含まない
+
+  const result = gridCenterLinesOnAxis(graph, CenterLineType.VERTICAL);
+
+  assert.deepEqual(result, [v0, v1000, v3000], '挿入順（3000→0→1000）に関わらずvalue昇順で返す');
+  assert.equal(result.some(c => c.id === h0.id), false, '方向違いは含まれない');
+});
+
+test('【失敗系】gridCenterLinesOnAxis: centerLineTypeが未指定/nullはthrowする', () => {
+  const { graph } = makeProjectWithGraph();
+  assert.throws(() => gridCenterLinesOnAxis(graph, undefined), /gridCenterLinesOnAxis: centerLineTypeは必須です/);
+  assert.throws(() => gridCenterLinesOnAxis(graph, null), /gridCenterLinesOnAxis: centerLineTypeは必須です/);
 });
 
 // ---- candidatesVisibleIn: appModeで可視な種別のうちcenterLineTypeが一致するCLを列挙する走査API ----

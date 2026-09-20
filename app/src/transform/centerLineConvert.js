@@ -24,33 +24,29 @@
 import { runInAction } from 'mobx';
 import { CenterLine, CenterLineType, Discipline, centerLineKind } from '@core';
 import { ERR_CL_CONVERT_NO_GRID, ERR_CL_CONVERT_LAST_GRID, ERR_CL_CONVERT_ATTACHED, ERR_CL_CONVERT_DUP, ERR_CL_CONVERT_DUP_DEMOTE } from '../error.js';
-import { sameCoordCounterparts, convertBlockingKinds } from '../core/centerLineKindPolicy.js';
+import { sameCoordCounterparts, convertBlockingKinds, isConvertSubject, gridCenterLinesOnAxis } from '../core/centerLineKindPolicy.js';
 
 // UIからは到達しない想定の防御的ガード（instanceof/kind/type 不一致）専用。menu が canToGrid/canToCenter
 // で事前に絞り込むため実運用では表示されないが、ガード契約（上記コメント）を満たすため文言を持つ。
 const ERR_CL_CONVERT_INVALID = 'この中心線は変換できません。';
 
-// cl と直交する通り芯（labeled struct CL）を value 昇順に見た最外郭2本を返す。
-// graph.gridXs/gridYs は structGraph 込み・value昇順（core/planGraph.js）——discipline===STRUCT の
-// ものだけに絞り込む（同名の labeled:true な意匠CLが将来増えても混同しない）。
+// cl と直交する通り芯（gridCenterLinesOnAxis＝labeled struct CL）を value 昇順に見た最外郭2本を返す。
 // @returns {{loCL, hiCL}|null} 2本未満なら null
 export function outermostGridExtentRefs(graph, cl) {
-  const perp = cl.centerLineType === CenterLineType.VERTICAL ? graph.gridYs : graph.gridXs;
-  const structCLs = perp.filter(c => c.discipline === Discipline.STRUCT);
+  const orthoType = cl.centerLineType === CenterLineType.VERTICAL ? CenterLineType.HORIZONTAL : CenterLineType.VERTICAL;
+  const structCLs = gridCenterLinesOnAxis(graph, orthoType);
   if (structCLs.length < 2) return null;
   return { loCL: structCLs[0], hiCL: structCLs[structCLs.length - 1] };
 }
 
-// cl と同じ軸（centerLineType）の通り芯（labeled struct CL）が cl 自身しか無いか（＝その軸最後の1本）。
-// 全体で最後の1本は直交0本になるためoutermostGridExtentRefsのNO_GRIDで既にブロックされる——
-// このチェックが意味を持つのは「直交軸には2本以上あるが、自分の軸だけは自分1本」のケース。
-// 降格ガード（checkDemoteToCenterGuards）とメニューのグレー化判定
+// cl と同じ軸（centerLineType）の通り芯（gridCenterLinesOnAxis＝labeled struct CL）が cl 自身しか
+// 無いか（＝その軸最後の1本）。全体で最後の1本は直交0本になるためoutermostGridExtentRefsのNO_GRIDで
+// 既にブロックされる——このチェックが意味を持つのは「直交軸には2本以上あるが、自分の軸だけは
+// 自分1本」のケース。降格ガード（checkDemoteToCenterGuards）とメニューのグレー化判定
 // （interaction/usePointerInteraction.js の isLastGridOnAxis 算出）の両方がこの関数を共有する
 // （二重実装によるズレを防ぐ）。
 export function isLastGridOnAxis(graph, cl) {
-  const same = cl.centerLineType === CenterLineType.VERTICAL ? graph.gridXs : graph.gridYs;
-  const structCLs = same.filter(c => c.discipline === Discipline.STRUCT);
-  return structCLs.length <= 1;
+  return gridCenterLinesOnAxis(graph, cl.centerLineType).length <= 1;
 }
 
 // clId が関わる Intersection のいずれかに Shape（斜線・円弧等）が取り付いているか。
@@ -78,10 +74,7 @@ export function attachedShapeExists(ixGraph, shapeGraph, clId) {
  */
 export function checkPromoteToGridGuards(graph, structGraph, cl) {
   if (!(cl instanceof CenterLine)) return ERR_CL_CONVERT_INVALID;
-  if (centerLineKind(cl) !== 'center') return ERR_CL_CONVERT_INVALID;
-  if (cl.centerLineType !== CenterLineType.VERTICAL && cl.centerLineType !== CenterLineType.HORIZONTAL) {
-    return ERR_CL_CONVERT_INVALID;
-  }
+  if (!isConvertSubject(cl, 'promote')) return ERR_CL_CONVERT_INVALID;
   // 直交通り芯の本数は昇格の技術的前提ではない（ユーザー判断で撤去。.claude/data-model.md参照）。
   // adoptCenterLine→_createIntersectionsは直交labeled CLが0本でも0個の交点を作るだけで破綻せず、
   // AddCLDialogで最初の通り芯を1本だけ追加する通常運用と同じコードパス。昇格はcl.trim=falseを
@@ -150,10 +143,7 @@ export function applyPromoteToGrid(graph, structGraph, cl) {
  */
 export function checkDemoteToCenterGuards(graph, structGraph, cl) {
   if (!(cl instanceof CenterLine)) return ERR_CL_CONVERT_INVALID;
-  if (!(cl.discipline === Discipline.STRUCT && cl.labeled)) return ERR_CL_CONVERT_INVALID;
-  if (cl.centerLineType !== CenterLineType.VERTICAL && cl.centerLineType !== CenterLineType.HORIZONTAL) {
-    return ERR_CL_CONVERT_INVALID;
-  }
+  if (!isConvertSubject(cl, 'demote')) return ERR_CL_CONVERT_INVALID;
   if (!outermostGridExtentRefs(graph, cl)) return ERR_CL_CONVERT_NO_GRID;
   // 直交軸には2本以上あっても、自分の軸の通り芯が自分しか無ければ降格させない
   // （軸最後の1本が消えるのを防ぐ。ユーザー要望で新設。全体最後は上のNO_GRIDで既にブロック済み）。

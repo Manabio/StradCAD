@@ -10,7 +10,7 @@ import {
 } from '../error.js';
 import {
   outermostGridExtentRefs, isLastGridOnAxis, attachedShapeExists, applyPromoteToGrid, applyDemoteToCenter,
-  checkDemoteToCenterGuards,
+  checkPromoteToGridGuards, checkDemoteToCenterGuards,
 } from './centerLineConvert.js';
 
 // project.structGraph・graph._structGraph の連携が必要なテスト用。
@@ -391,6 +391,98 @@ test('【旧データ限定・種別ベースへ統一（逆方向）】checkDem
   const error = checkDemoteToCenterGuards(graph, project.structGraph, cl);
 
   assert.equal(error, null, '移行前は!labeledがtrueのため拒否していたが、移行後は種別ベース（structはconvertBlockingKinds(demote)に含まれない）のため見逃す');
+});
+
+// ---- 【旧データ限定・種別ベースへ統一】cl自身（変換元）の主体判定を isConvertSubject（種別ベース）へ
+// 統一したことによる反転ピン留め。移行前は checkDemoteToCenterGuards が cl 自身を
+// `discipline===STRUCT && labeled` の生フィールドで判定していたため、lineType:'dashed' な異常値
+// （通常経路では生成されない）でもガードを通過していた。移行後は isGridCenterLine
+// （centerLineKind(cl)==='struct'まで見る）で判定するため、この異常値はガード自体で拒否される。
+// outermostGridExtentRefs/isLastGridOnAxis も同様に discipline===STRUCT の生比較から
+// gridCenterLinesOnAxis（isGridCenterLine経由）へ統一したため、直交軸・同軸の走査対象からも
+// この異常値が外れる。
+
+test('【旧データ限定・種別ベースへ統一】checkDemoteToCenterGuards: cl自身が{labeled:true, discipline:STRUCT, lineType:dashed}の異常値だとERR_CL_CONVERT_INVALIDで拒否される（移行前はdiscipline===STRUCT&&labeledのみでガードを通過していた）', () => {
+  const { project, graph } = makeProjectWithGraph();
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: true, discipline: Discipline.STRUCT });
+  const cl = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: true, discipline: Discipline.STRUCT, lineType: 'dashed' });
+  assert.equal(centerLineKind(cl), 'aux', '前提: lineType=dashedなのでaux種別（labeled:true・discipline:STRUCTの異常値。通常経路では作れない）');
+
+  const error = checkDemoteToCenterGuards(graph, project.structGraph, cl);
+
+  assert.equal(error, 'この中心線は変換できません。', '移行前はdiscipline===STRUCT&&labeledのみを見ておりガードを通過していたが、移行後はisGridCenterLine（種別ベース）で拒否する');
+});
+
+test('【旧データ限定・種別ベースへ統一】outermostGridExtentRefs: 直交軸の異常値（{labeled:true, discipline:STRUCT, lineType:dashed}）は最外郭候補から除外される（移行前はdiscipline===STRUCTのみで採用していた）', () => {
+  const { project, graph } = makeProjectWithGraph();
+  const y1 = project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+  const y2 = project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: true, discipline: Discipline.STRUCT });
+  // 異常値: 直交軸のさらに外側（5000）にあるが lineType:dashed のため通り芯として扱われない。
+  const legacy = project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 5000, { labeled: true, discipline: Discipline.STRUCT, lineType: 'dashed' });
+  assert.equal(centerLineKind(legacy), 'aux', '前提: lineType=dashedなのでaux種別（通常経路では生成されない異常値）');
+  const cl = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
+
+  const refs = outermostGridExtentRefs(graph, cl);
+
+  assert.equal(refs.loCL, y1);
+  assert.equal(refs.hiCL, y2, '異常値(5000)は最外郭に採用されない（移行前はdiscipline===STRUCTのみで見ておりy2の代わりにlegacyが選ばれていた）');
+});
+
+test('【旧データ限定・種別ベースへ統一】isLastGridOnAxis: 同軸の異常値（{labeled:true, discipline:STRUCT, lineType:dashed}）は本数に含めない（移行前はdiscipline===STRUCTのみで数えていた）', () => {
+  const { project, graph } = makeProjectWithGraph();
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: true, discipline: Discipline.STRUCT });
+  const cl = project.structGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: true, discipline: Discipline.STRUCT }); // VERTICAL軸唯一の"本物"通り芯
+  const legacy = project.structGraph.addCenterLine(CenterLineType.VERTICAL, 5000, { labeled: true, discipline: Discipline.STRUCT, lineType: 'dashed' }); // 異常値・同軸
+  assert.equal(centerLineKind(legacy), 'aux', '前提: lineType=dashedなのでaux種別（通常経路では生成されない異常値）');
+
+  assert.equal(isLastGridOnAxis(graph, cl), true, '異常値は本数に含めないため、clが軸最後の1本のまま（移行前はlegacyを数に入れてfalseになっていた）');
+});
+
+// 【到達不能経路・軸選択の正常化】isLastGridOnAxisはHEADでは三項演算子のelse分岐で常にHORIZONTAL軸
+// （graph.gridYs）を数えていたため、RADIALの通り芯を渡すと同軸（RADIAL）ではなくHORIZONTAL軸の本数を
+// 誤って返していた。gridCenterLinesOnAxis(graph, cl.centerLineType)への統一でRADIAL軸自体を数えるよう
+// 正常化する——UIからは到達不能（メニューのヒットテストがRADIALを除外するため、RADIALの通り芯に
+// isLastGridOnAxisが呼ばれる経路自体が無い）だが、関数としての正しさを固定する。
+// 同じ正常化はtransform/centerLineOps.js deleteCenterLineWithUndoの軸最後ガード（isStruct成立後に
+// 向きを見ずisLastGridOnAxisを呼ぶ）にも波及する——ここも同様にUIからは到達不能（snapGeometry.js
+// findNearestCenterLineはRADIALのCLに対しdist=Infinityを返すため、CENTER_LINE文脈自体に入らず
+// cl-del長押しメニューにも到達しない）。
+test('【到達不能経路・軸選択の正常化】isLastGridOnAxis: RADIALの通り芯に対してはRADIAL軸自体を数える（移行前はelse分岐でHORIZONTAL軸を誤って数えていた）', () => {
+  const { project, graph } = makeProjectWithGraph();
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: true, discipline: Discipline.STRUCT });
+  const radial = project.structGraph.addCenterLine(CenterLineType.RADIAL, 30, { labeled: true, discipline: Discipline.STRUCT }); // RADIAL軸唯一の通り芯
+
+  assert.equal(isLastGridOnAxis(graph, radial), true, 'RADIAL軸には自分しかいないためtrue（移行前はHORIZONTAL軸2本を数えfalseを返していた）');
+});
+
+test('checkPromoteToGridGuards/checkDemoteToCenterGuards: RADIALの中心線・通り芯はERR_CL_CONVERT_INVALIDで拒否される（V/Hのみ変換対象）', () => {
+  const { project, graph } = makeProjectWithGraph();
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: true, discipline: Discipline.STRUCT });
+  const radialCenter = graph.addCenterLine(CenterLineType.RADIAL, 30, { labeled: false, discipline: Discipline.ARCH });
+  const radialGrid    = project.structGraph.addCenterLine(CenterLineType.RADIAL, 30, { labeled: true, discipline: Discipline.STRUCT });
+
+  const promoteError = checkPromoteToGridGuards(graph, project.structGraph, radialCenter);
+  const demoteError  = checkDemoteToCenterGuards(graph, project.structGraph, radialGrid);
+
+  assert.equal(promoteError, 'この中心線は変換できません。');
+  assert.equal(demoteError, 'この中心線は変換できません。');
+});
+
+test('outermostGridExtentRefs: 直交軸に非昇順で挿入した通り芯でも最外郭2本（value最小・最大）を返す', () => {
+  const { project, graph } = makeProjectWithGraph();
+  const y1 = project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: true, discipline: Discipline.STRUCT }); // 先に大きい値を挿入
+  const y2 = project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: true, discipline: Discipline.STRUCT }); // 後で小さい値を挿入
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 1500, { labeled: true, discipline: Discipline.STRUCT }); // 中間
+  const cl = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
+
+  const refs = outermostGridExtentRefs(graph, cl);
+
+  assert.equal(refs.loCL, y2, '挿入順に関わらずvalue最小(0)が最外郭lo');
+  assert.equal(refs.hiCL, y1, '挿入順に関わらずvalue最大(3000)が最外郭hi');
 });
 
 test('applyDemoteToCenter異常系: アクティブ階グラフ側に斜線が取り付いていればERR_CL_CONVERT_ATTACHEDでグラフ無変更（F7・N2再修正）', () => {
