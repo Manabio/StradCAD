@@ -519,9 +519,9 @@ ROW1側に既にある「通り芯と同位置の一点鎖線は重複させな�
 （下記の述語不整合のため）ので、これは「死んでいた分岐を生かしたら実機で不要と判明したので畳んだ」経緯。
 
 **「通り芯か」の判定は`isGridCenterLine`（`core/centerLine.js`）に一本化する**（不良修正2026-08）——
-`cl.labeled`だけで判定してはいけない。UI経路（`transform/centerLineOps.js`の`addCenterLineAt`。
-kind='center'）で作られる**中心線も`labeled:true`**（`CenterLine`コンストラクタの既定値）になるため、
-`labeled`単独では中心線まで通り芯扱いになる。実際この誤りでROW1のS3（面に届く非通り芯中心線での分割）は
+`cl.labeled`だけで判定してはいけない。**`labeled:true`（`CenterLine`コンストラクタの既定値）のまま残った
+中心線**がありうる（旧データ。現行の`transform/centerLineOps.js`の`addCenterLineFromDialog`は中心線を
+`labeled:false`と明示して作るので新規には発生しない）ため、`labeled`単独では中心線まで通り芯扱いになる。実際この誤りでROW1のS3（面に届く非通り芯中心線での分割）は
 `if (cl.labeled) continue`が中心線ごと弾き、**本番で一度も発火しない死んだ分岐**だった（既存テストと
 Round Fフィクスチャが中心線を明示的に`labeled:false`で作っていたため長く検出されなかった）。
 `core/clQuery.js`の**系統A（`_labeledCLs`＝discipline不問。`gridXs`/`gridYs`＝交点を張るグリッド軸）と

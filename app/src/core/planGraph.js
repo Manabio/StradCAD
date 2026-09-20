@@ -78,7 +78,7 @@ export class PlanGraph {
     this.exteriorRows        = observable.array([]); // 外部仕上げ行
     this.exteriorFittingRows = observable.array([]); // 外部建具仕上げ行
     this.structureRows       = observable.array([]); // 構造仕上げ行
-    this.backingMaterialMap  = observable.map(); // id → WallBackingMaterial（手動 WallDialog 用に温存）
+    this.backingMaterialMap  = observable.map(); // id → WallBackingMaterial（手動壁用に温存。下記「壁下地材操作」参照）
     this.edgeMap             = observable.map(); // edgeKey → Edge（仕上げモード境界）
     this.columnMap           = observable.map(); // id → StructuralColumn（構造モード、shapeMap外で管理）
     this.beamMap             = observable.map(); // id → StructuralBeam（構造モード、shapeMap外で管理）
@@ -470,7 +470,10 @@ export class PlanGraph {
     return this.effectiveFloorLevel(roomB) - this.effectiveFloorLevel(roomA);
   }
 
-  // ---- 壁下地材操作（手動 WallDialog 用）----
+  // ---- 壁下地材操作（手動壁用）----
+  // 手動で壁を追加するダイアログ（旧 ui/WallDialog.jsx）は、開く導線が無いまま残っていたため
+  // 2026-09-20 に削除した。手動壁は今後実装する予定のため、この API だけを温存している
+  // （現在の利用者は store.js の初期データ登録のみ）。
 
   get backingMaterials() { return [...this.backingMaterialMap.values()]; }
 

@@ -144,21 +144,23 @@ test('【失敗系】collectRow1SplitPoints: spans[i].hiCLIdがnull（面端そ�
   assert.equal(pts.length, 0, '内部境界が無ければS4からの分割点は無いはず');
 });
 
-// ---- 不良修正2026-08（実機「6」B）: UI経路の中心線でも寸法は割らない ----
-// 実アプリ経路（transform/centerLineOps.js の addCenterLineAt。kind='center'）で作られる
-// 中心線は labeled:true（CenterLineの既定値）・discipline:ARCH になる。この生成でも分割点が
-// 出ないこと＝旧S3の撤去が実データ条件でも効いていることを固定する（フィクスチャはこれまで
-// 中心線を明示的に labeled:false で作っており、実アプリの既定値と食い違っていた）。
-test('【不良修正】collectRow1SplitPoints: UI経路の中心線（labeled既定=true・ARCH）でも寸法を割らない', () => {
+// ---- 不良修正2026-08（実機「6」B）: labeled:true のまま残った中心線でも寸法は割らない ----
+// 種別が中心線（discipline:ARCH・実線）なのに labeled:true（CenterLineコンストラクタの既定値）の
+// 線は、旧データに残りうる組合せ。現行の生成経路（transform/centerLineOps.js の
+// addCenterLineFromDialog）は中心線を labeled:false と明示して作るため、新規には発生しない
+// （core/centerLine.js isGridCenterLine のJSDoc参照）。この組合せでも分割点が出ないこと＝
+// 「通り芯か」を labeled 単独でなく isGridCenterLine で判定していることを固定する
+// （他のフィクスチャは中心線を明示的に labeled:false で作っており、この組合せを踏まない）。
+test('【不良修正】collectRow1SplitPoints: labeled:trueのまま残った中心線（旧データ。labeled既定=true・ARCH）でも寸法を割らない', () => {
   const graph = makeGraph();
   // 通り芯（kind='struct'相当）で囲った部屋。
   const x0 = graph.addCenterLine(CenterLineType.VERTICAL, 0,    { discipline: Discipline.STRUCT });
   const x1 = graph.addCenterLine(CenterLineType.VERTICAL, 4000, { discipline: Discipline.STRUCT });
   const y0 = graph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { discipline: Discipline.STRUCT });
   const y1 = graph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { discipline: Discipline.STRUCT });
-  // 中心線（kind='center'）= propsなし。実アプリと同じ既定値になる。
+  // 中心線（kind='center'）= propsなし。コンストラクタの既定値（labeled:true・ARCH）＝旧データと同じ組合せになる。
   const mid = graph.addCenterLine(CenterLineType.VERTICAL, 2000, {});
-  assert.equal(mid.labeled, true, '前提: UI経路の中心線はlabeled:trueになる');
+  assert.equal(mid.labeled, true, '前提: propsなしの中心線はlabeled:true（コンストラクタの既定値）になる');
 
   const room = graph.addRoom(new Set([`${x0.id}:${y0.id}:${x1.id}:${y1.id}`]), 'LDK');
   generateRoomWallsFromOutline(graph, room);
