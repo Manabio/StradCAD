@@ -32,7 +32,7 @@ export const SceneLayers = observer(({
   graph, project, appMode, mode, modeRef, viewport, size, columnAxisMode,
   isStairMode, installEntries, upperEntries, stairLaneGapMm, stairBreakOverhangMm, stairUnderClips,
   structComposition, upperVoidCrosses, stairSlabOpeningEdges = [],
-  snapPoint, cursorWorld, clPreview, clDialog, wallDialog, menu,
+  snapPoint, cursorWorld, clPreview, clDialog, menu,
   onMemberClick, setStatusMenu,
   onOpeningTagClick, onElevationOpeningClick,
 }) => {
@@ -176,13 +176,6 @@ export const SceneLayers = observer(({
 
       <Layer name="overlay">
         {!menu && <SnapIndicator snap={snapPoint} viewport={viewport} />}
-        {wallDialog && wallDialog.nearbyCLs?.length > 0 && (
-          <WallRefIndicator
-            nearbyCLs={wallDialog.nearbyCLs}
-            worldPos={wallDialog.worldPos}
-            viewport={viewport}
-          />
-        )}
         {clDialog && clDialog.nearbyCLs?.length > 0 && (
           <WallRefIndicator
             nearbyCLs={clDialog.nearbyCLs}

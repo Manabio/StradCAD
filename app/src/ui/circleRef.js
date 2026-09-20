@@ -1,5 +1,5 @@
 // ラベルなしCL（中心線・補助線・梁芯）を参照候補として示す「丸数字」表記の単一ソース。
-// AddCLDialog.jsx・WallDialog.jsx（参照候補ドロップダウン）・renderer/WallRefIndicator.jsx（キャンバス
+// AddCLDialog.jsx（参照候補ドロップダウン）・renderer/WallRefIndicator.jsx（キャンバス
 // オーバーレイ）が同じ配列・同じ index を共有することで、ダイアログの候補列とキャンバス表示の番号を
 // 二系統に分岐させない（採番の一貫性。.claude/structural-model.md 参照）。
 import { centerLineKind } from '../core.js';

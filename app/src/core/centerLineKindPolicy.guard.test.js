@@ -251,10 +251,6 @@ function isG2G3Exempt(rel) {
 
 // ---- G1: `.centerLines` 直接参照 ----
 const G1_ALLOWLIST = {
-  'App.jsx': { count: 1, category: 'unmigrated',
-    reason: 'handleWallConfirm（WallDialog確定）。graph.centerLines.filter(cl => cl.centerLineType===perpType)' +
-      'は種別条件の無い直交CL列挙そのもの（=相手選択）——ただしWallDialogを開く導線が無い死んだ経路' +
-      '（setWallDialogはnullを渡す閉じる側のみ）のため実害は無い。別タスクで削除候補。' },
   'finish/stair/stairUnderSplit.js': { count: 1, category: 'unmigrated',
     reason: 'findUnderStairSplitCLs（graph.centerLines走査）→isSplitCLForによる同定。座標' +
       '（extentLo/Hiが外形の直交範囲と一致）に加え、labeled／discipline!==ARCH／lineType===\'dashed\'' +

@@ -20,7 +20,7 @@ function wallFinishLabel(room, materialMap) {
 
 /**
  * CL偏芯ダイアログ（内壁指定のあるCLの偏芯仕様を編集する）。
- * WallDialog.jsx と同パターン（AddCLDialog.css を流用）。
+ * AddCLDialog.jsx と同パターン（AddCLDialog.css を流用）。
  *
  * 材データ（下地材選択肢・仕上げ面合わせの解決に使う materialMap）は平面図モードでは
  * 未ロードのため、ダイアログ内で動的 import する（ロード中は確定を無効化する）。

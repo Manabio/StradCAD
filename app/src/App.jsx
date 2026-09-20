@@ -8,7 +8,6 @@ import { useStore, addFloor, switchFloor, addAlternativeFloor, removeFloor, rese
 import { isDirty, markDirty } from './dirtyState.js';
 import { viewport } from './appViewport.js';
 import {
-  findBracketingCLs,
   findNearbyCenterLines,
   overhangMm,
   SNAP_THRESHOLD_PX,
@@ -44,7 +43,6 @@ import { CLMoveInput } from './renderer/CLMoveInput.jsx';
 import { AxisFaceInput }     from './renderer/AxisFaceInput.jsx';
 import { RadialMenu }     from './ui/RadialMenu.jsx';
 import { AddCLDialog }    from './ui/AddCLDialog.jsx';
-import { WallDialog }          from './ui/WallDialog.jsx';
 import { CalibrationDialog }  from './ui/CalibrationDialog.jsx';
 import { SiteDialog }          from './ui/SiteDialog.jsx';
 import { BuildingInfoDialog }  from './ui/BuildingInfoDialog.jsx';
@@ -119,7 +117,6 @@ const App = observer(() => {
   const [memberFocusRequest, setMemberFocusRequest] = useState(null); // { mapName, tag, fieldKey, entityId } | null — 部材タグクリックで構造リストの該当寸法欄を開く（entityIdは「この部材」スコープの対象特定に使う）
   const [clDialog,    setClDialog]    = useState(null); // { type, worldCoord }
   const [clPreview,   setClPreview]   = useState(null);
-  const [wallDialog,     setWallDialog]     = useState(null); // { worldPos }
   const [eccDialog,      setEccDialog]      = useState(null); // { cl } — CL偏芯ダイアログ
   const [kneeDropWallDialog, setKneeDropWallDialog] = useState(null); // { spanKey, anchor } — 腰壁・垂れ壁ダイアログ
   const [floorDialog,    setFloorDialog]    = useState(null); // { isLowest }
@@ -406,7 +403,6 @@ const App = observer(() => {
       setCursorWorld(null);
       setMenu(null);
       setClDialog(null);
-      setWallDialog(null);
     }
     if (ctx.mode && ctx.mode !== appMode) {
       if (appMode === 'structure' && ctx.mode !== 'structure') {
@@ -560,7 +556,6 @@ const App = observer(() => {
         setActiveStructSlotKey(firstSlotKeyForPlane(buildStructuralFigureSlots(project), planeId));
         setMode(null);
         setClDialog(null);
-        setWallDialog(null);
       },
     },
     opening: {
@@ -638,7 +633,6 @@ const App = observer(() => {
     setCursorWorld(null);
     setMenu(null);
     setClDialog(null);
-    setWallDialog(null);
   }
 
   // ---- フロア切替（モード維持）：現モードを抜けずに別階の同種図面へ移動する ----
@@ -1378,43 +1372,6 @@ const App = observer(() => {
     handleModeChange('opening');
   }
 
-  // ---- 壁追加 ----
-  function handleWallConfirm(refCL, dist) {
-    if (!wallDialog) return;
-    const { worldPos } = wallDialog;
-    const isRefV     = refCL.centerLineType === CenterLineType.VERTICAL;
-    const coord      = isRefV ? worldPos.x : worldPos.y;
-    const dir        = coord >= refCL.value ? 1 : -1;
-    const axisOffset = dir * dist;
-
-    // 直交方向の CL を 2 本取得して壁の端点とする
-    const perpType  = isRefV ? CenterLineType.HORIZONTAL : CenterLineType.VERTICAL;
-    const perpCoord = isRefV ? worldPos.y : worldPos.x;
-    const perpCLs   = graph.centerLines.filter(cl => cl.centerLineType === perpType);
-    const [clA, clB] = findBracketingCLs(perpCLs, perpCoord);
-    if (!clA || !clB) { setWallDialog(null); return; }
-
-    const w = graph.addWall(refCL, axisOffset, isRefV, clA, 0, clB, 0);
-    const affected = graph.trimIntersectingWalls(w);
-
-    undoManager.push(
-      () => {
-        graph.removeShape(w.id);
-        for (const snap of affected) {
-          snap.wall.clStart    = snap.clStart;
-          snap.wall.startOffset = snap.startOffset;
-          snap.wall.clEnd      = snap.clEnd;
-          snap.wall.endOffset  = snap.endOffset;
-        }
-      },
-      () => {
-        const rw = graph.addWall(refCL, axisOffset, isRefV, clA, 0, clB, 0);
-        graph.trimIntersectingWalls(rw);
-      },
-    );
-    setWallDialog(null);
-  }
-
   // ---- CL偏芯 ----
   async function handleEccConfirm(rec, materialMap) {
     if (!eccDialog) return;
@@ -1677,17 +1634,6 @@ const App = observer(() => {
         />
       )}
 
-      {wallDialog && (
-        <WallDialog
-          worldPos={wallDialog.worldPos}
-          allCLs={[...graph.gridXs, ...graph.gridYs]}
-          nearbyCLs={wallDialog.nearbyCLs ?? []}
-          backingMaterials={graph.backingMaterials}
-          onConfirm={handleWallConfirm}
-          onCancel={() => setWallDialog(null)}
-        />
-      )}
-
       {eccDialog && (
         <EccentricityDialog
           graph={graph}
@@ -1797,7 +1743,6 @@ const App = observer(() => {
             clDialog={clDialog}
             onOpeningTagClick={id => { if (!didOpeningDragEnd()) enterOpeningMode(id); }}
             onElevationOpeningClick={id => modeRef.current?.selectOpening(id)}
-            wallDialog={wallDialog}
             menu={menu}
             onMemberClick={openMemberCard}
             setStatusMenu={setStatusMenu}
