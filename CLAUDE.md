@@ -38,7 +38,7 @@ app/src/
 ## ドキュメント索引
 | 領域 | 参照先 |
 |---|---|
-| データモデルの設計意図 | `.claude/data-model.md` |
+| データモデルの設計意図。CL種別間の関係（種別ポリシー）の節を含む | `.claude/data-model.md` |
 | 構造モードの設計意図 | `.claude/structural-model.md` |
 | 建具モードの設計意図 | `.claude/opening-model.md` |
 | 図面合成（複数階×複数カテゴリ）の設計意図 | `.claude/figure.md` |

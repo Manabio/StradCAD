@@ -11,11 +11,17 @@
 | 補助線 | `arch` | `false` | ラベルなし破線（フロア固有） |
 | 梁芯 | `fuse` | `false` | ラベルなし中心線（フロア固有）。小梁の自動生成トリガー。構造モード（`appMode==='structure'`）のAddCLDialogではこれのみ選択可 |
 
-ガターラベル・ガター丸の表示対象は「`discipline==='struct'` かつ `labeled===true`」のみ。梁芯は「中心」と同じ表現形式（extentLoRef/HiRef）を使う別種別（`centerLineKind()`が`'beam'`を返す）。設計意図は`.claude/structural-model.md`。
+ガターラベル・ガター丸の表示対象は「`discipline==='struct'` かつ `labeled===true`」のみ。梁芯は「中心」と同じ表現形式（extentLoRef/HiRef）を使う別種別（`centerLineKind()`が`'beam'`を返す）。設計意図は`.claude/structural-model.md`。種別間の関係（可視モード表・直交端部の特例・同位置共存・入替えガード等）の真実は`core/centerLineKindPolicy.js`、未移行地点の台帳は`core/centerLineKindPolicy.guard.test.js`のallowlist。
 
 平面モード限定で「通り芯」⇔「中心」は相互変換できる（CL端点のロングタップ→「通り芯に」、通り芯の線上ロングタップ→「中心に」）。id維持のグラフ間移籍（delete+再生成ではない）。設計意図は`.claude/data-model.md`。
 
-構造モード（`appMode==='structure'`）では「中心」「補助線」（`discipline:'arch'`かつ`labeled:false`）は描画・寸法対象から外れる（データは残る。削除ではない）。構造モードで目印にする浮いた線は梁芯に一本化する設計。
+構造モード（`appMode==='structure'`）では「中心」「補助線」（`discipline:'arch'`かつ`labeled:false`）は描画・寸法対象から外れる（データは残る。削除ではない）。構造モードで目印にする浮いた線は梁芯に一本化する設計——つまり構造モードで見えている「中心線のような線」は梁芯。
+
+## 可視モード表（VISIBLE_KINDS_BY_MODE）
+appModeごとにCL種別が**描画対象**になるかだけを持つ表（`core/centerLineKindPolicy.js`）。ヒット対象は本表そのものではなく、本表からの例外（`HIT_EXCLUDED_KINDS_BY_MODE`。構造モードは通り芯がヒットしない等）を引いて別途導出する。直交端部候補・同方向障害物・移動スナップ吸着先はここから自動導出されるため、表を変えると連動先も一緒に動く。設計意図は`.claude/data-model.md`「CL種別間の関係は単一のポリシーから導出し…」節。
+
+## 走査API（centerLineKindPolicy）
+`graph.centerLines`を種別条件で絞り込んで相手候補を返す関数群（`orthoAnchorCandidates(ForNew)`・`sameDirectionObstacles`・`sameCoordCounterparts`・`mergeCandidates`・`candidatesVisibleIn`等）。呼び出し元が種別条件を個別実装すると非表示種別を巻き込む不具合の温床になるため、相手選択はすべてこの経由に統一する（`core/centerLineKindPolicy.guard.test.js`が新規の素の直接走査を禁じる）。
 
 ## discipline（分野）
 `arch`(意匠・既定) / `struct`(構造) / `fuse`(伏図) / `mep`(設備) / `elec`(電気)。
@@ -113,7 +119,7 @@
 `SCHEMATIC`/`STANDARD`/`DETAIL`の3段階描画詳細度。壁・開口・構造部材（柱梁耐力壁スラブ）が共通の意味で参照する。
 
 ## 端点（CL端点ルール）
-線分編集の結果、直交CLとの交点を失った中心線の端。座標がその場に固定され、延長・短縮の対象外。壁は端点ノードに壁があったと想定した分（下地偏芯量＋仕上げ厚）だけはね出して止まる。設計意図は`.claude/data-model.md`。
+線分編集の結果、直交CLとの交点を失った中心線の端。座標がその場に固定され、延長・短縮の対象外。壁は端点ノードに壁があったと想定した分（下地偏芯量＋仕上げ厚）だけはね出して止まる。判定は種別を問わず参照先優先（端の参照先CLが生きて自身の座標に届いていれば端点ではない）。設計意図は`.claude/data-model.md`。
 
 ## bake
 ドラッグ確定時に`pendingDelta`を`value`へ書き込み0に戻す操作（`bakeCLValue`）。
