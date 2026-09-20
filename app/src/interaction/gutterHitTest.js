@@ -5,6 +5,11 @@ import { INSET } from '../layout.js';
 // GutterLayer.jsx（.jsx・react-konva依存）ではなく、純関数レイヤの gutterLabelHits.js を参照する
 // （node:test から import 可能にするため。GutterLayer.jsx 側もここを参照し実装は単一）。
 import { columnAxisLabelHits } from '../renderer/gutterLabelHits.js';
+// gridCenterLines（core/centerLineKindPolicy.js）経由で通り芯のみを種別ベースに絞る（ステップ8、
+// 2026-09-20移行。旧実装は生の cl.labeled で絞っていた——ガイド: 直パスでimportし @core バレルに
+// 載せない。centerLineKindPolicy.js側もstore.js/snap.js/.jsx/core.jsバレルを静的に引かないため
+// node:testから単体import可能なまま）。
+import { gridCenterLines } from '../core/centerLineKindPolicy.js';
 
 // ---- 描画エリア内の○「柱芯」ラベル ヒット判定 ----
 // ヒットしたラベルの cl と、窓を固定するためのラベル中心スクリーン座標を返す。
@@ -21,7 +26,7 @@ export function findColumnAxisLabel(graph, viewport, width, height, sx, sy) {
 // ---- ガター内の通り芯ヒット判定 ----
 export function findGutterCL(graph, viewport, width, height, sx, sy) {
   const HIT = 24; // px
-  const cls = graph.centerLines.filter(cl => cl.labeled);
+  const cls = gridCenterLines(graph);
   if (sy < INSET.top || sy > height - INSET.bottom) {
     for (const cl of cls) {
       if (cl.centerLineType !== CenterLineType.VERTICAL) continue;

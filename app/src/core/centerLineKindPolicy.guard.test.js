@@ -260,9 +260,6 @@ const G1_ALLOWLIST = {
   'graphSnapshot.js': { count: 2, category: 'not-partner-selection',
     reason: 'restoreStructCLs/applySnapshot。永続化からの全件復元（snapshot.centerLines）——種別を問わず' +
       '全件を作り直す責務のため種別条件を持たない。' },
-  'interaction/gutterHitTest.js': { count: 1, category: 'unmigrated',
-    reason: 'findGutterCL。生の cl.labeled でガター内の通り芯を絞る（G2にも同じ理由で計上）。種別ベース化' +
-      'は旧データで挙動が変わりうるため未移行。' },
   'openings/openingMove.js': { count: 1, category: 'not-partner-selection',
     reason: 'openingMoveRange。perpendicularWallMaterial が種別を問わずCL上の直交壁材を先に確認する必要が' +
       'あり、種別で絞り込んでからループすると素通りしてしまうため走査APIに畳めない。' },
@@ -307,7 +304,6 @@ const G2_ALLOWLIST = {
   'finish/wallGeneration.js': { count: 1, category: 'unmigrated',
     reason: '壁生成時のCL全域扱い判定（labeled軸は常に全域）。種別ベース化（spansEntireAxis）への統一は' +
       '影響範囲未確認のため未移行。' },
-  'interaction/gutterHitTest.js': { count: 1, category: 'unmigrated', reason: 'G1と同じ（findGutterCL）。' },
   'snapGeometry.js': { count: 3, category: 'unmigrated',
     reason: 'findNearestCenterLine（!cl.labeledでオーバーハング除外判定）・findNearbyCenterLines（cl.labeled' +
       'は種別を問わず除外する既存規約。centerLineKindPolicy.js冒頭「既知の乖離」節参照）・' +

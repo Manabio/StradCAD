@@ -8,13 +8,16 @@
  * （種別レベルAPI）・graph.centerLines を種別条件で絞り込む走査API（orthoAnchorCandidates(ForNew)・
  * sameDirectionObstacles・sameCoordCounterparts・mergeCandidates・candidatesVisibleIn等）を集約する。
  *
- * 移行の経緯（ステップ1〜7、2026-09-18〜2026-09-20）: 特性テスト（centerLineKindPolicy.test.js）で
+ * 移行の経緯（ステップ1〜8、2026-09-18〜2026-09-20）: 特性テスト（centerLineKindPolicy.test.js）で
  * 既存呼び出し元の現行動作と導出結果の一致を固定する段階を経て、centerLineOps.js・
  * centerLineExtend.js・followerGraph.js・beamAxisMove.js・snap.js・snapGeometry.js・
  * centerLineConvert.js・centerLineFloorSync.js・CenterLinesLayer.jsx・App.jsx・openingMove.js・
- * centerLineMerge.js・floorCLMap.js の主要な相手選択・可視性判定を順次、種別レベルAPI／走査API経由へ
- * 移行した（各移行時に生じた「旧データ限定の既知の乖離」の解消はcenterLineKindPolicy.test.js内の
- * 「旧データ限定・種別ベースへ統一」と付記したテストにピン留めしてある）。
+ * centerLineMerge.js・floorCLMap.js・interaction/gutterHitTest.js の主要な相手選択・可視性判定を
+ * 順次、種別レベルAPI／走査API経由へ移行した（各移行時に生じた「旧データ限定の既知の乖離」の解消は
+ * centerLineKindPolicy.test.js内の「旧データ限定・種別ベースへ統一」と付記したテストにピン留めしてある。
+ * interaction/gutterHitTest.js findGutterCL の乖離ピン留めは同ファイルのテスト
+ * interaction/gutterHitTest.test.js 側に置く——同ファイルはinteraction/配下の慣例に合わせ、
+ * 対象関数と同じディレクトリにテストを置くため）。
  *
  * ステップ7（ガード有効化、2026-09-20）で移行の入口を機械的に閉じた: core/centerLineKindPolicy.guard.test.js
  * が app/src 配下の製品コードを走査し、(G1) graph.centerLines の種別条件なし直接走査・(G2) 生の
@@ -23,15 +26,15 @@
  * G1_ALLOWLIST/G2_ALLOWLIST/G3_ALLOWLIST を唯一の供給源とする（本コメントには重複して書かない。
  * 各エントリの理由・対象関数はそちらを参照）。structural/wallBeamAxes.js・structural/woodAutoFill.js・
  * structural/structuralAutoFill.js（柱アンカー解決と共有する述語のため構造goldenでの検証が要る独立
- * タスク）・interaction/gutterHitTest.js・snapGeometry.js・interaction/usePointerInteraction.js
+ * タスク）・snapGeometry.js・interaction/usePointerInteraction.js
  * （centerLineConvert.jsの降格・昇格ガードと同じ判定式を共有するため両方まとめて移行する独立タスク）・
  * finish/gridCells.js 等はガードのallowlistに「未移行（unmigrated）」区分で残っている。
  *
- * import ゼロに近い規約（extractedModuleImportInvariant）: ./centerLine.js（centerLineKind）と
- * ./constants.js（CenterLineType）のみに依存する。store.js/snap.js/.jsx/core.js バレル/error.js は
- * 静的 import しない——node:test から本ファイルを単体 import 可能に保つため。
+ * import ゼロに近い規約（extractedModuleImportInvariant）: ./centerLine.js（centerLineKind・
+ * isGridCenterLine）と ./constants.js（CenterLineType）のみに依存する。store.js/snap.js/.jsx/
+ * core.js バレル/error.js は静的 import しない——node:test から本ファイルを単体 import 可能に保つため。
  */
-import { centerLineKind } from './centerLine.js';
+import { centerLineKind, isGridCenterLine } from './centerLine.js';
 import { CenterLineType, CL_OVERLAP_TOL_MM } from './constants.js';
 
 export const CL_KINDS = Object.freeze(['struct', 'center', 'aux', 'beam']);
@@ -529,4 +532,24 @@ export function mergeCandidates(graph, { centerLineType, kind, exclude = [] }) {
 export function candidatesVisibleIn(graph, { appMode, centerLineType }) {
   const kinds = kindsVisibleIn(appMode);
   return graph.centerLines.filter(other => other.centerLineType === centerLineType && kinds.includes(centerLineKind(other)));
+}
+
+/**
+ * graph.centerLines から通り芯（isGridCenterLine＝labeled かつ種別struct）のみを列挙する走査API
+ * （「描かれている通り芯」の一覧を掃く場面で使う。interaction/gutterHitTest.js findGutterCL 参照。
+ * ステップ8、2026-09-20移行——旧実装は生の cl.labeled で絞っていた）。
+ * renderer/GutterLayer.jsx GutterCircleLabels（ガター内○ラベルの描画条件、
+ * `cl.labeled && cl.discipline === Discipline.STRUCT`）と通常データでは同値——lineType==='dashed'な
+ * discipline:STRUCT（本関数がisGridCenterLine経由でaux扱いにする組合せ）は通常経路で生じない異常値
+ * のみのため、ヒット判定を描画条件に一致させられる。
+ * 旧データの{labeled:true, discipline!==STRUCT}な中心線・補助線は、discipline を見ない別系統
+ * （core/clQuery.js _labeledCLs＝graph.gridXs/gridYsの供給元。GRID寸法・renderer/gutterLabelHits.js
+ * columnAxisLabelHitsの柱芯ラベルが参照）には残るが、本APIの対象（isGridCenterLine）からは外れる
+ * ——「通り芯として長押し選択できるか」は種別ベースへ統一済みだが、系統Aは discipline 不問のままの
+ * 独立した表であるため、この乖離は本移行の対象外（意図的に残る）。
+ * @param {{centerLines: Array}} graph
+ * @returns {Array}
+ */
+export function gridCenterLines(graph) {
+  return graph.centerLines.filter(isGridCenterLine);
 }
