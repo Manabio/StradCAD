@@ -12,6 +12,7 @@
 // extent の短い梁芯CLが永続化され、後の重複ガードで固定される）。
 import { CenterLineType, Discipline, centerLineKind, columnSlotKey, columnAnchorKey, spanKey, beamExclusionKey, findHostPrimaryBeam } from '../core.js';
 import { CL_OVERLAP_TOL_MM } from '../core/constants.js';
+import { structuralAnchorAt, structuralAnchorCandidates, supportSpanColumnCandidates, spansEntireAxis } from '../core/centerLineKindPolicy.js';
 import { findSectionEntry, woodRectSectionKey } from './sectionCatalog.js';
 import {
   rulesFor, effectiveStructure, TRADITIONAL_WOOD_FRAMING, TRADITIONAL_WOOD_BACKING, WOOD_DEPTH_BEAM_ROLES,
@@ -71,10 +72,7 @@ export function wallIntersectionPoints(segments, tol = WALL_JUNCTION_TOL_MM) {
 // 無い位置——梁芯の除外集合で梁芯CLが作られない壁など——でも、壁が乗っている中心線があれば柱を立てる。
 // 中心線は構造モードで非表示だが、柱の位置は effectiveValue から導出されるので描画には影響しない。
 function findCenterAnchorCL(graph, centerLineType, coord) {
-  return graph.centerLines.find(cl =>
-    cl.centerLineType === centerLineType &&
-    centerLineKind(cl) === 'center' &&
-    Math.abs(cl.effectiveValue - coord) < CL_OVERLAP_TOL_MM) ?? null;
+  return structuralAnchorAt(graph, { centerLineType, coord, tier: 'secondary' });
 }
 
 // 上階柱直下の柱（ステップ3b）のアンカー解決: 通り芯／梁芯（findBeamAnchorCL）→ 壁のある意匠中心線
@@ -118,10 +116,7 @@ function footprintBreakPoints(selfGate, graph, axisCL, isVertical, run) {
 // 本関数を共有するため同じ恩恵を受ける。
 export function nearestAnchorCL(graph, centerLineType, coord) {
   let best = null, bestDist = Infinity;
-  for (const cl of graph.centerLines) {
-    if (cl.centerLineType !== centerLineType) continue;
-    const kind = centerLineKind(cl);
-    if (!(cl.labeled || kind === 'beam' || kind === 'center')) continue;
+  for (const cl of structuralAnchorCandidates(graph, { centerLineType, tier: 'any' })) {
     const dist = Math.abs(cl.effectiveValue - coord);
     if (!best || dist < bestDist
       || (dist === bestDist && cl.effectiveValue < best.effectiveValue)
@@ -602,9 +597,8 @@ export function autoFillWoodColumns(graph, project, wallGate = null, aboveColumn
         .filter(c => Math.abs((seg.isVertical ? c.axisX : c.axisY) - seg.coord) < CL_OVERLAP_TOL_MM)
         .map(c => ({ along: seg.isVertical ? c.axisY : c.axisX, priority: 'below' }));
       const clAlongs = [
-        ...graph.centerLines
-          .filter(cl => cl.centerLineType === crossType && ['struct', 'center'].includes(centerLineKind(cl)))
-          .map(cl => ({ along: cl.effectiveValue, priority: centerLineKind(cl) })),
+        ...supportSpanColumnCandidates(graph, { centerLineType: crossType })
+          .map(({ cl, kind }) => ({ along: cl.effectiveValue, priority: kind })),
         ...belowAlongs,
       ];
 
@@ -1471,7 +1465,7 @@ export function autoFillWoodFloorBeams(graph, project) {
       // 【N2】extent未確定（extentLo==null または extentHi==null＝全幅扱いのCL）は触らない——
       // 触ると「全幅」から有限範囲へ縮めることになってしまう。
       // 冪等性: 2回目呼び出しはexistingFloorKeysで先にcontinueするためこのブロックへは到達しない。
-      if (axisCL.labeled === false && axisCL.extentLo != null && axisCL.extentHi != null) {
+      if (!spansEntireAxis(centerLineKind(axisCL)) && axisCL.extentLo != null && axisCL.extentHi != null) {
         const unionLo = Math.min(axisCL.extentLo, shortLo);
         const unionHi = Math.max(axisCL.extentHi, shortHi);
         const gridCLs = isVertical ? graph.gridYs : graph.gridXs; // 直交通り芯（value昇順。wallBeamAxes.jsと同じ規約）

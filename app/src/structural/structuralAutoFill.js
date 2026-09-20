@@ -1,4 +1,5 @@
-import { StructuralMaterialType, CenterLineType, columnSlotKey, spanKey, centerLineKind, findHostPrimaryBeam } from '../core.js';
+import { StructuralMaterialType, CenterLineType, columnSlotKey, spanKey, findHostPrimaryBeam } from '../core.js';
+import { beamAxisCenterLines as policyBeamAxisCenterLines } from '../core/centerLineKindPolicy.js';
 import { DEFAULT_SECTION_BY_MATERIAL, DEFAULT_BEAM_SECTION_BY_MATERIAL } from './memberCatalog.js';
 import { findSectionEntry } from './sectionCatalog.js';
 import { isFoundationPlane } from './drawingDesignation.js';
@@ -228,9 +229,10 @@ export function autoFillBeamsForStructure(graph, project, role, wallGate = null,
 // 梁芯CL（direct discipline:'fuse'、labeled:false）の追加座標許容誤差(mm)。
 const SPAN_EPS = 0.5;
 
-/** 階固有の梁芯CL（centerLineKind==='beam'）を列挙する。 */
+/** 階固有の梁芯CL（centerLineKind==='beam'）を列挙する。core/centerLineKindPolicy.js
+ *  beamAxisCenterLinesへ委譲する再export——既存のexport名はstructural/MemberListTab.jsxが直接importしている。 */
 export function beamAxisCenterLines(graph) {
-  return graph.centerLines.filter(cl => centerLineKind(cl) === 'beam');
+  return policyBeamAxisCenterLines(graph);
 }
 
 /** 梁芯CL cl の「hostとなる直交大梁(role:'primary')を持つ通り芯」配列（value昇順、extentでフィルタ済み）を

@@ -5,7 +5,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Plane, PlanGraph, Project, CenterLineType, Discipline, StairType, StructuralMaterialType } from '../core.js';
 import { generateRoomWallsFromOutline } from '../finish/wallGeneration.js';
-import { autoFillStairLandingBeams, autoFillBeamsForStructure, autoFillStructuralGrid } from './structuralAutoFill.js';
+import { autoFillStairLandingBeams, autoFillBeamsForStructure, autoFillStructuralGrid, beamAxisCenterLines } from './structuralAutoFill.js';
 import { TRADITIONAL_WOOD_STRUCTURE } from './structureRules.js';
 import { selfWallSegments } from './wallBeamAxes.js';
 
@@ -34,6 +34,14 @@ function beamKey(b) {
   const ends = [b.clStart.effectiveValue, b.clEnd.effectiveValue].sort((x, y) => x - y);
   return `${b.role}:${b.isVertical}:${Math.round(b.axisValue)}:${Math.round(ends[0])}:${Math.round(ends[1])}`;
 }
+
+test('beamAxisCenterLines: core/centerLineKindPolicy.jsへの委譲後もcenterLineKind===\'beam\'のCLをgraph順のまま返す（既存export名はstructural/MemberListTab.jsxが直接importする）', () => {
+  const { graph } = makeGridGraph(TRADITIONAL_WOOD_STRUCTURE);
+  const beamV = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.FUSE });
+  const beamH = graph.addCenterLine(CenterLineType.HORIZONTAL, 2000, { labeled: false, discipline: Discipline.FUSE });
+  graph.addCenterLine(CenterLineType.VERTICAL, 3000, { labeled: false, discipline: Discipline.ARCH }); // 中心線は含まない
+  assert.deepEqual(beamAxisCenterLines(graph), [beamV, beamH]);
+});
 
 test('autoFillBeamsForStructure: role!=="primary"（基礎梁等）は在来木造でも通り芯グリッド方式のまま（wallSegmentsは使われない）', () => {
   const { graph } = makeGridGraph(TRADITIONAL_WOOD_STRUCTURE);

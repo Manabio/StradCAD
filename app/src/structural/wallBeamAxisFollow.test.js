@@ -57,6 +57,17 @@ test('【QA S1・重複ガード】followWallBeamAxes: toに通り芯（labeled�
   assert.deepEqual(clsAt2060.map(cl => cl.id), [gridCL.id], 'to位置には元の通り芯1本だけが残る（梁芯が並ばない）');
 });
 
+test('【旧データ限定・種別ベースへ統一】followWallBeamAxes: toに{labeled:true, discipline:ARCH}（種別center。通り芯でも梁芯でもない旧データ）があっても重複ガードに引っかからず追従する——移行前はcl.labeledで一致しskipped:\'duplicate\'にしていた', () => {
+  const graph = makeGraph();
+  const beamCL = addFuseCL(graph, 2045);
+  graph.addCenterLine(CenterLineType.HORIZONTAL, 2060, { labeled: true, discipline: Discipline.ARCH }); // 種別center・旧データ
+  const { moved, skipped } = followWallBeamAxes(graph, [{ axisCLId: 'ax1', isVertical: false, from: 2045, to: 2060 }]);
+  assert.deepEqual(skipped, [],
+    '種別ベース（tier:primary=[struct,beam]）は中心線を重複ガードの対象にしないため追従する（移行前はcl.labeledで一致しskipped:duplicateにしていた）');
+  assert.equal(moved.length, 1);
+  assert.equal(beamCL.value, 2060);
+});
+
 test('followWallBeamAxes: excludedWallBeamAxesの旧キーが新キーへ張り替わる', () => {
   const graph = makeGraph();
   addFuseCL(graph, 2045);

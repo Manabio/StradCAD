@@ -24,10 +24,7 @@
  * labeled を種別の代用に読む・(G3) centerLineKind(x)==='<リテラル>' のインライン比較、の3種を
  * allowlist の件数を超えて増やせないようにする——「未移行地点の一覧」は同ガードテストの
  * G1_ALLOWLIST/G2_ALLOWLIST/G3_ALLOWLIST を唯一の供給源とする（本コメントには重複して書かない。
- * 各エントリの理由・対象関数はそちらを参照）。structural/wallBeamAxes.js・structural/woodAutoFill.js・
- * structural/structuralAutoFill.js（柱アンカー解決と共有する述語のため構造goldenでの検証が要る独立
- * タスク）等はガードのallowlistに
- * 「未移行（unmigrated）」区分で残っている（snapGeometry.jsの3地点＝findNearestCenterLine・
+ * 各エントリの理由・対象関数はそちらを参照）。（snapGeometry.jsの3地点＝findNearestCenterLine・
  * findNearbyCenterLines・nonLabeledClExtentは2026-09-20に種別ベース（spansEntireAxis／
  * gridCenterLinesOnAxis）へ移行済み——ガードのG2からは外れた。距離計算を伴う最近傍探索自体の
  * graph.centerLines直接走査（G1）は性能上の理由でnot-partner-selection区分のまま残る。
@@ -36,6 +33,14 @@
  * isFinishCellDivider／isUnderStairSplitKind／axisLineKindOf／isGridCenterLine／spansEntireAxis
  * 経由へ移行済み——gridCells.jsのsnapshotCLコピー1件（G2）とstairUnderSplit.jsの幾何署名走査1件
  * （G1）のみnot-partner-selection区分で残る）。
+ * structural/wallBeamAxes.js（findBeamAnchorCL・findWallBeamAxisCL）・structural/woodAutoFill.js
+ * （findCenterAnchorCL・nearestAnchorCL・支持長超過候補）・structural/structuralAutoFill.js
+ * （beamAxisCenterLines）の柱アンカー解決の一群はステップ7（柱アンカー解決の移行、2026-09-20）で
+ * STRUCTURAL_ANCHOR_KINDS／BEAM_AXIS_KINDS／SUPPORT_SPAN_COLUMN_KINDS（原始事実12）経由の
+ * structuralAnchorAt／structuralAnchorCandidates／beamAxisAt／beamAxisCenterLines／
+ * supportSpanColumnCandidates へ移行済み——ガードのallowlistから外れ、`unmigrated` 区分は0件に
+ * なった。resolveCLById（structuralAutoFill.js。id文字列からの実CL解決）だけはid解決であり相手選択
+ * ではないため not-partner-selection のまま残る。
  * interaction/usePointerInteraction.js の中心⇔通り芯入替え
  * メニュー可否（canToGrid/canToCenter/isLastGridOnAxis）は interaction/clMenuGating.js（isConvertSubject
  * 経由）へ移行済み——centerLineConvert.jsの昇格・降格ガードと同じ主体判定を共有する。梁芯移動スナップの
@@ -215,6 +220,39 @@ export const FINISH_CELL_DIVIDER_KINDS = Object.freeze(['center']);
 // のため、FINISH_CELL_DIVIDER_KINDSは流用しない）。
 export const UNDER_STAIR_SPLIT_KINDS = Object.freeze(['center']);
 
+// ---- 原始事実12: 柱アンカー解決の対象種別（小表3つ） ----
+// structural/wallBeamAxes.js findBeamAnchorCL・structural/woodAutoFill.js resolveWoodColumnAnchorCL
+// （findBeamAnchorCL ?? findCenterAnchorCL）が共有する2段のアンカー解決——在来木造の壁交点柱・上階柱
+// 直下の柱・建具の袖柱・支持長超過の追加柱がCL座標へ解決する相手。第1候補＝通り芯・梁芯、第2候補＝壁の
+// ある意匠中心線（ユーザー指示2026-09-14「壁のある『中心』との交点にも柱は立つ」。通り芯・梁芯が無い
+// 位置——梁芯の除外集合で梁芯CLが作られない壁など——でも、壁が乗っている中心線があれば柱を立てる）。
+export const STRUCTURAL_ANCHOR_KINDS = Object.freeze({
+  primary:   Object.freeze(['struct', 'beam']),
+  secondary: Object.freeze(['center']),
+});
+// STRUCTURAL_ANCHOR_KINDS.primary の通り芯側は labeled を要求しない（centerLineKind==='struct'のみで
+// 判定する）——梁芯の重複ガード（wallBeamAxes.js autoFillWallBeamAxes）が「beamAxisMoveRangeの障害物
+// 集合と同じ規約に揃える」ため（sameDirectionObstacleKinds経由の集合は種別のみで判定する）。梁芯の
+// 重複ガード（autoFillWallBeamAxes・wallBeamAxisFollow.js followWallBeamAxes）と柱アンカー第1候補は
+// 同じ集合を共有する——片方だけ変えると柱が湧く／消える。VISIBLE_KINDS_BY_MODE.structure（['struct',
+// 'beam']）と primary の集合は結果として一致するが、そちらから導出してはいない（可視モード表を変えても
+// アンカーは動かしてはいけない別の事実のため）。
+// 'any'（primary∪secondary。CL_KINDSの並び順）はモジュールレベルで1度だけ生成しfreezeする。
+const STRUCTURAL_ANCHOR_KINDS_ANY = Object.freeze(CL_KINDS.filter(k =>
+  STRUCTURAL_ANCHOR_KINDS.primary.includes(k) || STRUCTURAL_ANCHOR_KINDS.secondary.includes(k)));
+
+// wallBeamAxisFollow.js followWallBeamAxes の追従元探索（findWallBeamAxisCL。通り芯を動かさないため
+// STRUCTURAL_ANCHOR_KINDS.primaryは使わない）と、structuralAutoFill.js の梁芯CL全件列挙
+// （beamAxisCenterLines）が共有する。
+export const BEAM_AXIS_KINDS = Object.freeze(['beam']);
+
+// woodAutoFill.js 支持長超過時の追加柱の走行方向候補（ユーザー指示2026-09-19「梁の支持長が1820を超える
+// 場合、1820以内の下階に壁あり直交する通り芯、中心があればそこ、なければ…910グリッドに柱を追加」の
+// 語順どおり通り芯＞中心線の優先度——並び＝優先度。woodAutoFill.js 3iのコメント参照）。梁芯を候補から
+// 除くのは、梁芯は壁から自動で生成・撤去される線であり柱の位置の基準にしないため（通り芯・中心線は
+// ユーザーが引いた線。2026-09-20確認）。
+export const SUPPORT_SPAN_COLUMN_KINDS = Object.freeze(['struct', 'center']);
+
 // ================================================================
 // 種別レベルAPI
 // ================================================================
@@ -318,6 +356,19 @@ export function mergeableKinds(kind) {
   return [kind];
 }
 
+/**
+ * 柱アンカー解決の候補種別（STRUCTURAL_ANCHOR_KINDS参照）。tier='primary'|'secondary'|'any'。
+ * 未知のtierはthrow——呼び出し元の引数ミスをその場で気付けるようにする。
+ * @param {'primary'|'secondary'|'any'} tier
+ * @returns {ReadonlyArray<string>}
+ */
+export function structuralAnchorKinds(tier) {
+  if (tier === 'primary') return STRUCTURAL_ANCHOR_KINDS.primary;
+  if (tier === 'secondary') return STRUCTURAL_ANCHOR_KINDS.secondary;
+  if (tier === 'any') return STRUCTURAL_ANCHOR_KINDS_ANY;
+  throw new Error(`未知のtier: ${tier}`);
+}
+
 /** kind が壁を extent アンカーにしうるか。 */
 export function allowsWallAnchor(kind) {
   assertKnownKind(kind);
@@ -379,6 +430,19 @@ export function isConvertSubject(cl, direction) {
 export function usesBeamAxisMoveSnap(cl, appMode) {
   assertKnownMode(appMode);
   return (BEAM_AXIS_MOVE_SNAP_KINDS_BY_MODE[appMode] ?? []).includes(centerLineKind(cl));
+}
+
+/**
+ * cl が tier（'primary'|'secondary'|'any'）の柱アンカー候補か（structuralAnchorKinds参照）。
+ * 実在の CenterLine またはその POJO スナップショット専用——未生成の仮想候補（discipline／lineType を
+ * 持たないダック型オブジェクト）を渡すと、centerLineKind が黙って既定種別'center'に落ちる。
+ * @param {object} cl
+ * @param {'primary'|'secondary'|'any'} tier
+ * @returns {boolean}
+ */
+export function isStructuralAnchor(cl, tier) {
+  if (!cl) throw new Error(`isStructuralAnchor: clは必須です（実際: ${cl}）`);
+  return structuralAnchorKinds(tier).includes(centerLineKind(cl));
 }
 
 /**
@@ -706,4 +770,102 @@ export function gridCenterLinesOnAxis(graph, centerLineType) {
   return gridCenterLines(graph)
     .filter(cl => cl.centerLineType === centerLineType)
     .sort((a, b) => a.value - b.value);
+}
+
+/**
+ * coord（effectiveValue基準、tolMm以内）に一致する tier の柱アンカーCLを graph.centerLines から
+ * 1本返す走査API（structural/wallBeamAxes.js findBeamAnchorCL・structural/woodAutoFill.js
+ * findCenterAnchorCL が共有する述語。柱アンカー解決・梁芯の重複ガードが同じ結果を共有する——
+ * 片方だけ条件を変えると柱が湧く／消える）。単一パスの `.find()`——複数ヒットは配列順で最初
+ * （sortしない。呼び出し元は `structuralAnchorAt(..., tier:'primary') ?? structuralAnchorAt(...,
+ * tier:'secondary')` の `??` チェーンをそのまま維持すること——単発の tier:'any' に畳むと、同座標に
+ * 中心線と梁芯が両方あるとき「配列順で最初」になり、チェーンが保証する「梁芯（第1候補）優先」が
+ * 崩れる）。ホットパス（構造再計算1回あたり多数回呼ばれる）のため
+ * `structuralAnchorCandidates(...).find(...)` には委譲しない（毎回配列を割り当てることになるため）。
+ * @param {{centerLines: Array}} graph
+ * @param {{centerLineType: string, coord: number, tier: 'primary'|'secondary'|'any', tolMm?: number}} opts
+ * @returns {object|null}
+ */
+export function structuralAnchorAt(graph, { centerLineType, coord, tier, tolMm = CL_OVERLAP_TOL_MM }) {
+  if (centerLineType == null) {
+    throw new Error(`structuralAnchorAt: centerLineTypeは必須です（実際: ${centerLineType}）`);
+  }
+  if (typeof coord !== 'number' || Number.isNaN(coord)) {
+    throw new Error(`structuralAnchorAt: coordは数値である必要があります（実際: ${coord}）`);
+  }
+  const kinds = structuralAnchorKinds(tier); // ループの外で1度だけ解決する
+  return graph.centerLines.find(cl =>
+    cl.centerLineType === centerLineType &&
+    kinds.includes(centerLineKind(cl)) &&
+    Math.abs(cl.effectiveValue - coord) < tolMm) ?? null;
+}
+
+/**
+ * tier の柱アンカー候補となる CenterLine を graph.centerLines から centerLineType 一致で列挙する
+ * 走査API（structural/woodAutoFill.js nearestAnchorCL の候補集合。距離によるタイブレークは
+ * 呼び出し側=structural/の責務——本APIは候補を絞るだけで並べ替えない）。
+ * @param {{centerLines: Array}} graph
+ * @param {{centerLineType: string, tier: 'primary'|'secondary'|'any'}} opts
+ * @returns {Array}
+ */
+export function structuralAnchorCandidates(graph, { centerLineType, tier }) {
+  if (centerLineType == null) {
+    throw new Error(`structuralAnchorCandidates: centerLineTypeは必須です（実際: ${centerLineType}）`);
+  }
+  const kinds = structuralAnchorKinds(tier);
+  return graph.centerLines.filter(cl =>
+    cl.centerLineType === centerLineType && kinds.includes(centerLineKind(cl)));
+}
+
+/**
+ * coord（effectiveValue基準、tolMm以内）に一致する梁芯CL（BEAM_AXIS_KINDS）を graph.centerLines から
+ * 1本返す走査API（structural/wallBeamAxes.js findWallBeamAxisCL——壁由来梁芯の追従元探索。通り芯は
+ * 対象にしない。追従処理が通り芯を動かす事故を防ぐため意図的に structuralAnchorAt(tier:'primary') とは
+ * 別にする）。単一パスの `.find()`。
+ * @param {{centerLines: Array}} graph
+ * @param {{centerLineType: string, coord: number, tolMm?: number}} opts
+ * @returns {object|null}
+ */
+export function beamAxisAt(graph, { centerLineType, coord, tolMm = CL_OVERLAP_TOL_MM }) {
+  if (centerLineType == null) {
+    throw new Error(`beamAxisAt: centerLineTypeは必須です（実際: ${centerLineType}）`);
+  }
+  if (typeof coord !== 'number' || Number.isNaN(coord)) {
+    throw new Error(`beamAxisAt: coordは数値である必要があります（実際: ${coord}）`);
+  }
+  return graph.centerLines.find(cl =>
+    cl.centerLineType === centerLineType &&
+    BEAM_AXIS_KINDS.includes(centerLineKind(cl)) &&
+    Math.abs(cl.effectiveValue - coord) < tolMm) ?? null;
+}
+
+/**
+ * graph.centerLines から梁芯CL（BEAM_AXIS_KINDS）を列挙する走査API（structural/structuralAutoFill.js
+ * beamAxisCenterLinesが使う。同ファイルの再export経由でstructural/MemberListTab.jsxが使う）。
+ * centerLineType を渡せばその軸だけに絞る（省略時=nullは全軸）。
+ * @param {{centerLines: Array}} graph
+ * @param {{centerLineType?: string|null}} [opts]
+ * @returns {Array}
+ */
+export function beamAxisCenterLines(graph, { centerLineType = null } = {}) {
+  return graph.centerLines.filter(cl =>
+    (centerLineType == null || cl.centerLineType === centerLineType) &&
+    BEAM_AXIS_KINDS.includes(centerLineKind(cl)));
+}
+
+/**
+ * centerLineType が一致する SUPPORT_SPAN_COLUMN_KINDS（通り芯・中心線）の CenterLine を
+ * graph.centerLines から列挙する走査API（structural/woodAutoFill.js 支持長超過時の追加柱の走行方向
+ * 候補。kind は呼び出し側が優先度ラベルとしてそのまま使う）。
+ * @param {{centerLines: Array}} graph
+ * @param {{centerLineType: string}} opts
+ * @returns {Array<{cl: object, kind: string}>}
+ */
+export function supportSpanColumnCandidates(graph, { centerLineType }) {
+  if (centerLineType == null) {
+    throw new Error(`supportSpanColumnCandidates: centerLineTypeは必須です（実際: ${centerLineType}）`);
+  }
+  return graph.centerLines
+    .filter(cl => cl.centerLineType === centerLineType && SUPPORT_SPAN_COLUMN_KINDS.includes(centerLineKind(cl)))
+    .map(cl => ({ cl, kind: centerLineKind(cl) }));
 }

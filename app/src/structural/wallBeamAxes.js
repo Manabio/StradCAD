@@ -1,8 +1,9 @@
 // 壁（仕上げモードの下地オーナー壁）から梁芯CL（discipline:'fuse'）を自動生成する。
 // 生成された梁芯CLは既存の autoFillSecondaryBeams がそのまま拾う（梁芯の出自を見ない実装のため、
 // 小梁の生成・端部トリム・除外集合・採番はすべて既存経路）。設計意図は .claude/structural-model.md 参照。
-import { CenterLineType, Discipline, centerLineKind } from '../core.js';
+import { CenterLineType, Discipline } from '../core.js';
 import { CL_OVERLAP_TOL_MM } from '../core/constants.js';
+import { structuralAnchorAt, beamAxisAt } from '../core/centerLineKindPolicy.js';
 import { backingClassOf } from '../finish/materials/backingClass.js';
 import { roomBounds } from '../finish/gridCells.js';
 import { floorSwapManager } from '../storage/FloorSwapManager.js';
@@ -278,20 +279,15 @@ export function wallBeamAxisExcludeKey(isVertical, coord) {
 
 export function findWallBeamAxisCL(graph, isVertical, coord) {
   const centerLineType = isVertical ? CenterLineType.VERTICAL : CenterLineType.HORIZONTAL;
-  return graph.centerLines.find(cl =>
-    cl.centerLineType === centerLineType &&
-    centerLineKind(cl) === 'beam' &&
-    Math.abs(cl.effectiveValue - coord) < CL_OVERLAP_TOL_MM) ?? null;
+  return beamAxisAt(graph, { centerLineType, coord });
 }
 
-/** coord に一致（CL_OVERLAP_TOL_MM以内）する通り芯（labeled）または梁芯（fuse。centerLineKind==='beam'）を返す。
- *  意匠中心線・補助線は対象にしない。梁芯の重複ガード（autoFillWallBeamAxes）と壁交点柱のアンカー解決
- *  （woodAutoFill.js）が共有する単一の述語——片方だけ条件を変えると柱が湧く／消えるため。無ければ null。 */
+/** coord に一致（CL_OVERLAP_TOL_MM以内）する通り芯または梁芯（柱アンカー第1候補。
+ *  core/centerLineKindPolicy.js structuralAnchorAt(tier:'primary')）を返す。意匠中心線・補助線は
+ *  対象にしない。梁芯の重複ガード（autoFillWallBeamAxes）と壁交点柱のアンカー解決（woodAutoFill.js）が
+ *  共有する単一の述語——片方だけ条件を変えると柱が湧く／消えるため。無ければ null。 */
 export function findBeamAnchorCL(graph, centerLineType, coord) {
-  return graph.centerLines.find(cl =>
-    cl.centerLineType === centerLineType &&
-    (cl.labeled || centerLineKind(cl) === 'beam') &&
-    Math.abs(cl.effectiveValue - coord) < CL_OVERLAP_TOL_MM) ?? null;
+  return structuralAnchorAt(graph, { centerLineType, coord, tier: 'primary' });
 }
 
 /** 同一方向・近接座標（CL_OVERLAP_TOL_MM以内）のソースを1本にまとめ、extentは和集合（min/max）にする。

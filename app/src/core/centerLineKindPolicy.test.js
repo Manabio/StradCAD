@@ -3,9 +3,8 @@
 // C. 製品コードとの一致（centerLineOps.js・followerGraph.js・beamAxisMove.js・centerLineConvert.js の
 //    現行動作をポリシーの導出結果から計算した期待値と突き合わせる。「既知の乖離」と付記したテストは、
 //    製品コードが生の labeled フラグで判定しておりポリシーの種別ベース判定と割れる旧データ限定の
-//    ケースを、挙動を変えずにピン留めする）／D. 失敗系。
-// この段階ではポリシーは製品コードから未接続（centerLineOps.js等はこれまで通りインラインの種別比較を
-// 使う）。製品コード側をこの表へ移行する作業は本ファイルの範囲外（未着手）。
+//    ケースを、挙動を変えずにピン留めする）／D. 失敗系／E. 柱アンカー解決（structural/配下が共有する
+//    アンカー述語の単体テスト。製品経路（呼び出し側）の突き合わせはstructural/配下の各*.test.jsに置く）。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -31,6 +30,9 @@ import {
   sameCoordCounterparts, mergeCandidates, candidatesVisibleIn, gridCenterLinesOnAxis,
   FINISH_CELL_DIVIDER_KINDS, isFinishCellDivider,
   UNDER_STAIR_SPLIT_KINDS, isUnderStairSplitKind, axisLineKindOf,
+  STRUCTURAL_ANCHOR_KINDS, BEAM_AXIS_KINDS, SUPPORT_SPAN_COLUMN_KINDS,
+  structuralAnchorKinds, isStructuralAnchor, structuralAnchorAt, structuralAnchorCandidates,
+  beamAxisAt, beamAxisCenterLines, supportSpanColumnCandidates,
 } from './centerLineKindPolicy.js';
 
 // ---- 製品コード（section C）との突き合わせに使う実装 ----
@@ -1404,4 +1406,189 @@ test('【失敗系】isRenderTarget/isHitTestTarget も未知のappModeでthrow�
   const cl = graph.addCenterLine(CenterLineType.VERTICAL, 0, { labeled: false, discipline: Discipline.ARCH });
   assert.throws(() => isRenderTarget(cl, 'renovation'), /未知のappMode: renovation/);
   assert.throws(() => isHitTestTarget(cl, 'renovation'), /未知のappMode: renovation/);
+});
+
+// ================================================================
+// E. 柱アンカー解決（structural/wallBeamAxes.js・woodAutoFill.js・structuralAutoFill.js が共有する述語）
+// ================================================================
+
+// addCLOfKind と同じ生成規約だが labeled を明示できる版（旧データ＝labeledと種別が食い違うCLを作るため）。
+function addCLOfKindLabeled(graph, project, clType, value, kind, labeled) {
+  switch (kind) {
+    case 'struct': return project.structGraph.addCenterLine(clType, value, { labeled, discipline: Discipline.STRUCT });
+    case 'center': return graph.addCenterLine(clType, value, { labeled, discipline: Discipline.ARCH });
+    case 'aux':    return graph.addCenterLine(clType, value, { labeled, lineType: 'dashed' });
+    case 'beam':   return graph.addCenterLine(clType, value, { labeled, discipline: Discipline.FUSE });
+    default: throw new Error(`未知のCL種別: ${kind}`);
+  }
+}
+
+test('structuralAnchorKinds: primary=[struct,beam]、secondary=[center]、any=[struct,center,beam]（CL_KINDS順）', () => {
+  assert.deepEqual([...structuralAnchorKinds('primary')], ['struct', 'beam']);
+  assert.deepEqual([...structuralAnchorKinds('secondary')], ['center']);
+  assert.deepEqual([...structuralAnchorKinds('any')], ['struct', 'center', 'beam']);
+  assert.deepEqual({ ...STRUCTURAL_ANCHOR_KINDS }, { primary: ['struct', 'beam'], secondary: ['center'] });
+  assert.deepEqual([...BEAM_AXIS_KINDS], ['beam']);
+  assert.deepEqual([...SUPPORT_SPAN_COLUMN_KINDS], ['struct', 'center']);
+});
+
+test('isStructuralAnchor: 4種別×labeled2値×tier3段の総当り（labeledの値は結果を左右しない——通り芯側もlabeled不問）', () => {
+  const EXPECTED = {
+    primary:   { struct: true,  center: false, aux: false, beam: true },
+    secondary: { struct: false, center: true,  aux: false, beam: false },
+    any:       { struct: true,  center: true,  aux: false, beam: true },
+  };
+  for (const tier of ['primary', 'secondary', 'any']) {
+    for (const kind of CL_KINDS) {
+      for (const labeled of [true, false]) {
+        const { graph, project } = makeProjectWithGraph();
+        const cl = addCLOfKindLabeled(graph, project, CenterLineType.VERTICAL, 1000, kind, labeled);
+        assert.equal(isStructuralAnchor(cl, tier), EXPECTED[tier][kind],
+          `tier=${tier} kind=${kind} labeled=${labeled}`);
+      }
+    }
+  }
+});
+
+test('【旧データ限定・種別ベースへ統一】isStructuralAnchor: {labeled:false, discipline:STRUCT}（種別struct）はtier=primaryでtrue', () => {
+  // HEADのfindBeamAnchorCLは `cl.labeled || kind==='beam'` のため、labeled:falseなstruct種別は一致しなかった
+  // （非該当）。isStructuralAnchorは種別（centerLineKind）のみで判定するため一致する（該当）——
+  // 製品経路でのD7ピン留めはstructural/wallBeamAxes.test.jsに置く。
+  const { graph, project } = makeProjectWithGraph();
+  const legacy = addCLOfKindLabeled(graph, project, CenterLineType.VERTICAL, 1000, 'struct', false);
+  assert.equal(centerLineKind(legacy), 'struct');
+  assert.equal(isStructuralAnchor(legacy, 'primary'), true);
+});
+
+test('structuralAnchorAt: tol境界（|Δ|=0.5は不一致・0.4999は一致）', () => {
+  const { graph, project } = makeProjectWithGraph();
+  const struct = addCLOfKind(graph, project, CenterLineType.VERTICAL, 1000, 'struct');
+  assert.equal(structuralAnchorAt(graph, { centerLineType: CenterLineType.VERTICAL, coord: 1000 + CL_OVERLAP_TOL_MM, tier: 'primary' }), null,
+    '|Δ|=CL_OVERLAP_TOL_MM(0.5)ちょうどは不一致（< であって <= ではない）');
+  assert.equal(structuralAnchorAt(graph, { centerLineType: CenterLineType.VERTICAL, coord: 1000 + CL_OVERLAP_TOL_MM - 0.0001, tier: 'primary' }), struct,
+    '|Δ|=0.4999は一致');
+});
+
+test('structuralAnchorAt: 座標比較はeffectiveValue基準（pendingDelta込み）——valueでは一致しない', () => {
+  const { graph, project } = makeProjectWithGraph();
+  const struct = addCLOfKind(graph, project, CenterLineType.VERTICAL, 1000, 'struct');
+  struct.pendingDelta = 50;
+  assert.equal(struct.effectiveValue, 1050);
+  assert.equal(structuralAnchorAt(graph, { centerLineType: CenterLineType.VERTICAL, coord: 1050, tier: 'primary' }), struct,
+    'effectiveValue(1050)に一致する座標で見つかる');
+  assert.equal(structuralAnchorAt(graph, { centerLineType: CenterLineType.VERTICAL, coord: 1000, tier: 'primary' }), null,
+    'value(1000)そのものでは見つからない（pendingDelta込みのeffectiveValueで判定するため）');
+});
+
+test('structuralAnchorAt: 同tierに2本あるとき graph 追加順で最初が返る（sortしない）', () => {
+  const { graph, project } = makeProjectWithGraph();
+  const first = addCLOfKind(graph, project, CenterLineType.VERTICAL, 1000, 'center');
+  addCLOfKind(graph, project, CenterLineType.VERTICAL, 1000, 'center');
+  assert.equal(structuralAnchorAt(graph, { centerLineType: CenterLineType.VERTICAL, coord: 1000, tier: 'secondary' }), first);
+});
+
+test('structuralAnchorAt: 値の大小と追加順が逆でも、tol内の複数候補からgraph追加順で最初が返る（value昇順sortではない）', () => {
+  const { graph, project } = makeProjectWithGraph();
+  // 追加順=1000.3(先)→999.8(後)。value昇順にsortすると999.8が先頭になり結果が変わってしまう。
+  const addedFirst = addCLOfKind(graph, project, CenterLineType.VERTICAL, 1000.3, 'center');
+  addCLOfKind(graph, project, CenterLineType.VERTICAL, 999.8, 'center');
+  assert.equal(structuralAnchorAt(graph, { centerLineType: CenterLineType.VERTICAL, coord: 1000, tier: 'secondary' }), addedFirst,
+    'graph追加順で先に現れる1000.3側が返る（value昇順にsortして探索していれば999.8が返ってしまう）');
+});
+
+test('structuralAnchorAt: 同座標(tol内)に通り芯＋中心線があるとき、tierごとに一致する種別だけが返る', () => {
+  const { graph, project } = makeProjectWithGraph();
+  const struct = addCLOfKind(graph, project, CenterLineType.VERTICAL, 1000, 'struct');
+  const center = addCLOfKind(graph, project, CenterLineType.VERTICAL, 1000, 'center');
+  assert.equal(structuralAnchorAt(graph, { centerLineType: CenterLineType.VERTICAL, coord: 1000, tier: 'primary' }), struct);
+  assert.equal(structuralAnchorAt(graph, { centerLineType: CenterLineType.VERTICAL, coord: 1000, tier: 'secondary' }), center);
+});
+
+test('structuralAnchorAt: 同座標(tol内)に補助線＋梁芯があるとき、補助線はどのtierにも一致しない', () => {
+  const { graph, project } = makeProjectWithGraph();
+  addCLOfKind(graph, project, CenterLineType.VERTICAL, 1000, 'aux');
+  const beam = addCLOfKind(graph, project, CenterLineType.VERTICAL, 1000, 'beam');
+  assert.equal(structuralAnchorAt(graph, { centerLineType: CenterLineType.VERTICAL, coord: 1000, tier: 'primary' }), beam);
+  assert.equal(structuralAnchorAt(graph, { centerLineType: CenterLineType.VERTICAL, coord: 1000, tier: 'secondary' }), null);
+});
+
+test('【最大の罠】同座標に中心線と梁芯が両方あるとき、tier=primary→secondaryのチェーンは配列順に関係なく梁芯を返す（tier=any単発に畳むと配列順で中心線が返ってしまう）', () => {
+  const { graph, project } = makeProjectWithGraph();
+  // 追加順=中心線→梁芯（配列でも中心線が先）。
+  const center = addCLOfKind(graph, project, CenterLineType.VERTICAL, 1000, 'center');
+  const beam = addCLOfKind(graph, project, CenterLineType.VERTICAL, 1000, 'beam');
+  const coord = 1000;
+  const chainResult =
+    structuralAnchorAt(graph, { centerLineType: CenterLineType.VERTICAL, coord, tier: 'primary' }) ??
+    structuralAnchorAt(graph, { centerLineType: CenterLineType.VERTICAL, coord, tier: 'secondary' });
+  assert.equal(chainResult, beam, 'チェーン（primary→secondaryの??）は中心線が配列で先でも梁芯（第1候補）を返す');
+  const collapsedResult = structuralAnchorAt(graph, { centerLineType: CenterLineType.VERTICAL, coord, tier: 'any' });
+  assert.equal(collapsedResult, center,
+    '対照: tier=any単発に畳むと配列順で先に現れる中心線を返してしまう（チェーンを畳んではいけない理由の実証）');
+});
+
+test('structuralAnchorCandidates: tier=anyはcenterLineType一致・struct/center/beamのみをgraph順で返す（補助線を含まない）', () => {
+  const { graph, project } = makeProjectWithGraph();
+  const struct = addCLOfKind(graph, project, CenterLineType.VERTICAL, 1000, 'struct');
+  const center = addCLOfKind(graph, project, CenterLineType.VERTICAL, 2000, 'center');
+  addCLOfKind(graph, project, CenterLineType.VERTICAL, 2500, 'aux');
+  const beam = addCLOfKind(graph, project, CenterLineType.VERTICAL, 3000, 'beam');
+  addCLOfKind(graph, project, CenterLineType.HORIZONTAL, 1000, 'struct'); // 別軸は含まれない
+  assert.deepEqual(
+    structuralAnchorCandidates(graph, { centerLineType: CenterLineType.VERTICAL, tier: 'any' }),
+    [struct, center, beam]);
+});
+
+test('beamAxisAt: 梁芯のみに一致する（通り芯には一致しない——findWallBeamAxisCLと同じ意図的な区別）', () => {
+  const { graph, project } = makeProjectWithGraph();
+  addCLOfKind(graph, project, CenterLineType.VERTICAL, 1000, 'struct');
+  const beam = addCLOfKind(graph, project, CenterLineType.VERTICAL, 2000, 'beam');
+  assert.equal(beamAxisAt(graph, { centerLineType: CenterLineType.VERTICAL, coord: 1000 }), null,
+    '通り芯には一致しない（壁由来梁芯の追従が通り芯を動かす事故を防ぐため）');
+  assert.equal(beamAxisAt(graph, { centerLineType: CenterLineType.VERTICAL, coord: 2000 }), beam);
+});
+
+test('beamAxisCenterLines: centerLineType省略時は全軸の梁芯を、指定時はその軸だけを返す', () => {
+  const { graph, project } = makeProjectWithGraph();
+  const beamV = addCLOfKind(graph, project, CenterLineType.VERTICAL, 1000, 'beam');
+  const beamH = addCLOfKind(graph, project, CenterLineType.HORIZONTAL, 2000, 'beam');
+  addCLOfKind(graph, project, CenterLineType.VERTICAL, 3000, 'struct');
+  assert.deepEqual(beamAxisCenterLines(graph), [beamV, beamH]);
+  assert.deepEqual(beamAxisCenterLines(graph, { centerLineType: CenterLineType.VERTICAL }), [beamV]);
+});
+
+test('supportSpanColumnCandidates: centerLineType一致のstruct/centerだけをkind付きでgraph順に返す（梁芯・補助線を含まない）', () => {
+  const { graph, project } = makeProjectWithGraph();
+  const struct = addCLOfKind(graph, project, CenterLineType.HORIZONTAL, 1000, 'struct');
+  const center = addCLOfKind(graph, project, CenterLineType.HORIZONTAL, 2000, 'center');
+  addCLOfKind(graph, project, CenterLineType.HORIZONTAL, 3000, 'beam');
+  addCLOfKind(graph, project, CenterLineType.HORIZONTAL, 4000, 'aux');
+  assert.deepEqual(
+    supportSpanColumnCandidates(graph, { centerLineType: CenterLineType.HORIZONTAL }),
+    [{ cl: struct, kind: 'struct' }, { cl: center, kind: 'center' }]);
+});
+
+test('【失敗系】structuralAnchorKinds/isStructuralAnchor/structuralAnchorAt/structuralAnchorCandidates: 未知のtier・必須引数欠落はthrowする', () => {
+  const { graph } = makeProjectWithGraph();
+  assert.throws(() => structuralAnchorKinds('unknown'), /未知のtier: unknown/);
+  assert.throws(() => isStructuralAnchor(null, 'primary'), /clは必須/);
+  assert.throws(() => isStructuralAnchor(undefined, 'primary'), /clは必須/);
+  assert.throws(() => isStructuralAnchor({ discipline: Discipline.STRUCT, labeled: true }, 'unknown'), /未知のtier: unknown/);
+  assert.throws(() => structuralAnchorAt(graph, { coord: 1000, tier: 'primary' }), /centerLineType/);
+  assert.throws(() => structuralAnchorAt(graph, { centerLineType: null, coord: 1000, tier: 'primary' }), /centerLineType/);
+  assert.throws(() => structuralAnchorAt(graph, { centerLineType: CenterLineType.VERTICAL, tier: 'primary' }), /coord/);
+  assert.throws(() => structuralAnchorAt(graph, { centerLineType: CenterLineType.VERTICAL, coord: NaN, tier: 'primary' }), /coord/);
+  assert.throws(() => structuralAnchorAt(graph, { centerLineType: CenterLineType.VERTICAL, coord: '1000', tier: 'primary' }), /coord/);
+  assert.throws(() => structuralAnchorAt(graph, { centerLineType: CenterLineType.VERTICAL, coord: 1000, tier: 'unknown' }), /未知のtier: unknown/);
+  assert.throws(() => structuralAnchorCandidates(graph, { tier: 'any' }), /centerLineType/);
+  assert.throws(() => structuralAnchorCandidates(graph, { centerLineType: CenterLineType.VERTICAL, tier: 'unknown' }), /未知のtier: unknown/);
+});
+
+test('【失敗系】beamAxisAt/supportSpanColumnCandidates: centerLineType欠落・coord非数値はthrowする', () => {
+  const { graph } = makeProjectWithGraph();
+  assert.throws(() => beamAxisAt(graph, { coord: 1000 }), /centerLineType/);
+  assert.throws(() => beamAxisAt(graph, { centerLineType: CenterLineType.VERTICAL }), /coord/);
+  assert.throws(() => beamAxisAt(graph, { centerLineType: CenterLineType.VERTICAL, coord: NaN }), /coord/);
+  assert.throws(() => supportSpanColumnCandidates(graph, {}), /centerLineType/);
+  assert.throws(() => supportSpanColumnCandidates(graph, { centerLineType: null }), /centerLineType/);
 });

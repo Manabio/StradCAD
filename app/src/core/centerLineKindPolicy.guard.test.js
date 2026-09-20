@@ -276,14 +276,11 @@ const G1_ALLOWLIST = {
       '辿る——相手選択ではない。' },
   'store.js': { count: 1, category: 'not-partner-selection',
     reason: 'reaction() の依存収集（spatialIndex再構築のトリガー）。' },
-  'structural/structuralAutoFill.js': { count: 2, category: 'unmigrated',
-    reason: 'beamAxisCenterLines・resolveCLById。木造・構造の自動補完（柱のアンカー解決と共有する述語）。' +
-      '種別ベース化は柱の増減に直結するため構造golden（golden13/struct-*）で検証する独立タスク。' },
-  'structural/wallBeamAxes.js': { count: 2, category: 'unmigrated',
-    reason: 'findWallBeamAxisCL・findBeamAnchorCL。壁交点柱のアンカー解決・梁芯重複ガードが共有する述語' +
-      '（centerLineKindPolicy.js冒頭「既知の乖離」節参照）。同上の理由で独立タスク。' },
-  'structural/woodAutoFill.js': { count: 3, category: 'unmigrated',
-    reason: 'findCenterAnchorCL・nearestAnchorCL・柱直下解決。同上（木造の柱アンカー解決）。' },
+  'structural/structuralAutoFill.js': { count: 1, category: 'not-partner-selection',
+    reason: 'resolveCLById。landingEdgeCLsが返すCL id文字列（踊り場外周の境界壁。階固有CL・通り芯CLの' +
+      'どちらもあり得る）から実CLオブジェクトを引くid解決——種別を問わず全件から同一idを探すため' +
+      '相手選択ではない。beamAxisCenterLinesはcore/centerLineKindPolicy.jsへ委譲済み（ステップ7、' +
+      '2026-09-20）。' },
   'transform/centerLineExtend.js': { count: 1, category: 'not-partner-selection',
     reason: 'isEndpointAt。refCLが生きて存在するかのid解決（同一参照 or 同id）——相手選択ではない。' },
   'transform/followerGraph.js': { count: 3, category: 'not-partner-selection',
@@ -303,8 +300,6 @@ const G2_ALLOWLIST = {
       'ステップ6、2026-09-20）。gridDividerSegmentsの全長判定（isGridCenterLine）は、手前の' +
       'isDividerCLを通る入力では新旧の式が常に一致するため挙動テストでは守れず、生フィールド比較の' +
       '再混入は本ガードが検出する。' },
-  'structural/wallBeamAxes.js': { count: 1, category: 'unmigrated', reason: 'G1と同じ（findBeamAnchorCL）。' },
-  'structural/woodAutoFill.js': { count: 2, category: 'unmigrated', reason: 'G1と同じ（柱アンカー解決）。' },
   'transform/centerLineConvert.js': { count: 2, category: 'not-partner-selection',
     reason: 'promoteToGrid/demoteToCenterのcl.labeled=true/false代入そのもの（昇格・降格操作の定義側）——' +
       '種別の「代用読み取り」ではなくlabeledフィールド自体を変更する操作のため対象外だが、機械的な' +
@@ -325,12 +320,6 @@ const G3_ALLOWLIST = {
   'openings/openingMove.js': { count: 1, category: 'not-partner-selection',
     reason: 'candidateTier（スナップ候補の優先順位付け。通り芯を最優先にするUI都合のロジックで、ポリシーの' +
       '関係述語の代替ではない）。' },
-  'structural/structuralAutoFill.js': { count: 1, category: 'unmigrated',
-    reason: 'beamAxisCenterLines。G1と同じ理由（独立タスク）。' },
-  'structural/wallBeamAxes.js': { count: 2, category: 'unmigrated',
-    reason: 'findWallBeamAxisCL・findBeamAnchorCL内のcenterLineKind(cl)===\'beam\'。G1と同じ理由。' },
-  'structural/woodAutoFill.js': { count: 1, category: 'unmigrated',
-    reason: 'findCenterAnchorCL。G1と同じ理由。' },
   'transform/centerLineOps.js': { count: 3, category: 'not-partner-selection',
     reason: 'commitCLMoveOp（centerLineKind(cl)!==\'beam\'／===\'beam\'で通常経路と梁芯専用のグラフ' +
       'スナップショット方式Undoに分岐する対の判定）・COEXISTENCE同種別分岐の梁芯重複ガード' +

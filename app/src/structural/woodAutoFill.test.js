@@ -683,6 +683,32 @@ test('nearestAnchorCL: 同距離の候補が2本あるとき、CenterLineの追�
   assert.equal(c2.effectiveValue, -7280, 'CenterLineの追加順を逆にしても同じCLが選ばれる（走査順に依存しない）');
 });
 
+test('【旧データ限定・種別ベースへ統一】nearestAnchorCL: {labeled:true, lineType:dashed}（種別aux）のみが近傍にある場合、移行後は解決不能（null）になる——移行前はcl.labeledで一致していた', () => {
+  const graph = new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
+  const legacyAux = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: true, lineType: 'dashed' });
+  assert.equal(centerLineKindOf(legacyAux), 'aux', '前提: lineType=dashedなのでaux種別（labeled:trueだが種別は補助線の旧データ）');
+  assert.equal(nearestAnchorCL(graph, CenterLineType.VERTICAL, 1000), null,
+    '種別ベース（tier:any=[struct,center,beam]）は補助線を対象にしないため候補が無い（移行前はcl.labeledで一致し返していた）');
+});
+
+test('【旧データ限定・種別ベースへ統一】nearestAnchorCL: {labeled:true, discipline:STRUCT, lineType:dashed}（種別aux）は候補から外れ、より遠い通り芯が最寄りとして選ばれる——移行前は近いaux(labeled)が優先されていた', () => {
+  const graph = new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
+  const legacyAux = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: true, discipline: Discipline.STRUCT, lineType: 'dashed' });
+  const farStruct = graph.addCenterLine(CenterLineType.VERTICAL, 1500, { labeled: true, discipline: Discipline.STRUCT });
+  assert.equal(centerLineKindOf(legacyAux), 'aux', '前提: lineType=dashedが優先されaux種別になる（labeled:true・discipline:STRUCTでも通り芯ではない旧データ）');
+  assert.equal(nearestAnchorCL(graph, CenterLineType.VERTICAL, 1000), farStruct,
+    '種別ベースは補助線を候補から外すため、より遠い通り芯(1500)が最寄りとして選ばれる（移行前は近いaux(labeled、距離0)が優先されていた）');
+});
+
+test('【旧データ限定・種別ベースへ統一】nearestAnchorCL: {labeled:false, discipline:STRUCT}（種別struct・旧データ）が候補に加わり、より近いそのCLが選ばれる——移行前はlabeledがfalseのため候補外で遠い中心線が選ばれていた', () => {
+  const graph = new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
+  const legacyStruct = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.STRUCT });
+  graph.addCenterLine(CenterLineType.VERTICAL, 1500, { labeled: false, discipline: Discipline.ARCH }); // farCenter（移行前に選ばれていた側。距離500）
+  assert.equal(centerLineKindOf(legacyStruct), 'struct', '前提: discipline=STRUCTなのでstruct種別（labeled:falseだが通り芯として作図されない旧データ）');
+  assert.equal(nearestAnchorCL(graph, CenterLineType.VERTICAL, 1000), legacyStruct,
+    '種別ベース（tier:any）はlabeledを問わずstruct種別を候補にするため、距離0のlegacyStructが選ばれる（移行前はcl.labeled===falseのため候補外になり、距離500のfarCenterが選ばれていた）');
+});
+
 test('【Major-2】autoFillWoodColumns（3h-2・オフセット）: 走行方向のアンカーCLが同距離タイのときeffectiveValue昇順で決定的に選ぶ', () => {
   const { graph, wallSegments } = makeWoodLineWithRunGraph();
   // x=2000はx=1000・x=3000の両方から距離1000で完全同距離タイ。
@@ -2740,6 +2766,47 @@ test('autoFillWoodColumns: 梁芯CLを削除（除外集合）しても、壁の
   assert.equal(Math.round(secondTarget[0].x), 1000);
 });
 
+test('【旧データ限定・種別ベースへ統一】autoFillWoodColumns: 縦壁の軸CLが{labeled:true, discipline:ARCH}（種別center。旧UI由来のデータ）でも、resolveWoodColumnAnchorCLの合成結果（findBeamAnchorCL ?? findCenterAnchorCL）は変化しない——同じCLがアンカーとして選ばれる', () => {
+  const { graph, x1, x2, y1, y2 } = makeGridGraph();
+  // 通常経路（addCenterLineFromDialog）は種別centerをlabeled:falseで生成するため現行では発生しないが、
+  // 旧UI由来のデータで壁の軸CL自体がlabeled:trueのまま残っているケースを模す。
+  const legacyAxis = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: true, discipline: Discipline.ARCH });
+  graph.addWall(legacyAxis, 0, true, y1, 0, y2, 0, { backingOffset: 0, backingDepth: 120, wallFinish: 12.5, bandOffset: null });
+  addBackingWall(graph, { axisValue: 2000, clStart: x1, clEnd: x2, isVertical: false }); // 横壁 y=2000（交点(1000,2000)）
+  // 壁由来の梁芯CL（autoFillWallBeamAxes）はまだ生成していない状態でresolveWoodColumnAnchorCLの
+  // ??チェーン単独の挙動を見る（フルパイプライン=fillWoodColumnsだとD2でx=1000に新規梁芯が
+  // 生成され別の検証になる。wallBeamAxes.test.jsのD2ピン留め参照）。
+  const { created } = autoFillWoodColumns(graph, PROJECT);
+  const target = splitFreeEndColumns(graph, created, [[1000, 2000]]);
+  assert.equal(target.length, 1);
+  assert.equal(target[0].verticalCL, legacyAxis,
+    '第1候補(structuralAnchorAt tier:primary)はcenter種別を対象にしないためmissするが、第2候補(tier:secondary)が同じCLを返すため合成結果は変化しない（移行前はlabeled:trueで第1候補が直接同じCLに一致していた）');
+});
+
+test('【旧データ限定・種別ベースへ統一】autoFillWoodColumns: 縦壁の軸CLが{labeled:true, lineType:dashed}（種別aux。旧データ）だと、移行後はアンカー解決できず柱が立たない——移行前はcl.labeledで一致し柱が立っていた', () => {
+  const { graph, x1, x2, y1, y2 } = makeGridGraph();
+  const legacyAux = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: true, lineType: 'dashed' });
+  assert.equal(centerLineKindOf(legacyAux), 'aux', '前提: lineType=dashedなのでaux種別（labeled:trueだが補助線の旧データ）');
+  graph.addWall(legacyAux, 0, true, y1, 0, y2, 0, { backingOffset: 0, backingDepth: 120, wallFinish: 12.5, bandOffset: null });
+  addBackingWall(graph, { axisValue: 2000, clStart: x1, clEnd: x2, isVertical: false }); // 横壁 y=2000（交点(1000,2000)）
+  const { created } = autoFillWoodColumns(graph, PROJECT);
+  const atIntersection = created.filter(c => Math.abs(c.x - 1000) < 1 && Math.abs(c.y - 2000) < 1);
+  assert.equal(atIntersection.length, 0,
+    '種別ベース（primary=[struct,beam]・secondary=[center]のどちらも補助線を対象にしない）ではアンカー解決できず柱が立たない（移行前はlegacyAux.labeled=trueでfindBeamAnchorCLの第1候補に直接一致し柱が立っていた）');
+});
+
+test('【最大の罠】resolveWoodColumnAnchorCL（?? チェーン）: 同座標に中心線（壁自身の軸）と梁芯が両方あるとき、配列順に関係なく梁芯が優先される', () => {
+  const { graph, x1, x2, y1, y2 } = makeGridGraph();
+  addBackingWall(graph, { axisValue: 1000, clStart: y1, clEnd: y2, isVertical: true }); // 縦壁の軸CL＝中心線（配列で先に追加）
+  graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.FUSE }); // 同座標の梁芯（配列で後）
+  addBackingWall(graph, { axisValue: 2000, clStart: x1, clEnd: x2, isVertical: false });
+  const { created } = autoFillWoodColumns(graph, PROJECT);
+  const target = splitFreeEndColumns(graph, created, [[1000, 2000]]);
+  assert.equal(target.length, 1);
+  assert.equal(centerLineKindOf(target[0].verticalCL), 'beam',
+    '配列で中心線が先でも梁芯（第1候補=tier:primary）が優先される（tier:anyの単発に畳むと配列順で中心線が返ってしまう）');
+});
+
 test('【失敗系】conformWoodSections: 在来木造以外（S造・2×4）は何も変えない', () => {
   for (const structure of ['S造', '木造（2"×4"）']) {
     const { graph, x1, x2, y1 } = makeGridGraph(structure);
@@ -3802,6 +3869,55 @@ test('autoFillWoodFloorBeams（F1・D1再ブラケット）: 位置に既存の�
   assert.deepEqual(pre.extentHiRef, { clId: x1.id, offset: 0 });
 });
 
+test('【旧データ限定・種別ベースへ統一】autoFillWoodFloorBeams: 既存の梁芯CL（fuse）が{labeled:true}（種別beam。通り芯として作図されない旧データ）でも再ブラケットする——移行前はaxisCL.labeled===falseを要求しスキップしていた', () => {
+  const { graph, x0, x1 } = buildClosedCellGraph(TRADITIONAL_WOOD_STRUCTURE);
+  const pre = graph.addCenterLine(CenterLineType.HORIZONTAL, 1820, {
+    labeled: true, discipline: Discipline.FUSE, extentLo: 500, extentHi: 800,
+  });
+  assert.equal(centerLineKindOf(pre), 'beam', '前提: discipline=FUSEなのでbeam種別（labeled:trueだが通り芯ではない旧データ）');
+  const { created } = autoFillWoodFloorBeams(graph, PROJECT);
+  const beam = created.find(b => Math.abs(b.axisValue - 1820) < 1);
+  assert.equal(beam.axisCL.id, pre.id, '既存の梁芯CLを再利用する（前提）');
+  assert.deepEqual(pre.extentLoRef, { clId: x0.id, offset: 0 },
+    '種別ベース（!spansEntireAxis(centerLineKind)）はlabeledを問わず再ブラケットする（移行前はaxisCL.labeled===falseの条件が満たされず据え置かれていた＝500..800のまま）');
+  assert.deepEqual(pre.extentHiRef, { clId: x1.id, offset: 0 });
+  assert.equal(pre.extentLo, 0);
+  assert.equal(pre.extentHi, 2730, '床梁スパン(0..2730)を覆う');
+});
+
+test('【旧データ限定・種別ベースへ統一】autoFillWoodFloorBeams: 床梁の軸位置に{labeled:true, discipline:ARCH}（種別center・旧データ）があるとき、移行後は再利用せず新規の梁芯CL(FUSE)を立てる——移行前はそのCLを床梁の軸に再利用していた', () => {
+  const { graph } = buildClosedCellGraph(TRADITIONAL_WOOD_STRUCTURE);
+  const before = graph.centerLines.length;
+  const legacy = graph.addCenterLine(CenterLineType.HORIZONTAL, 1820, { labeled: true, discipline: Discipline.ARCH });
+  assert.equal(centerLineKindOf(legacy), 'center', '前提: discipline=ARCHなのでcenter種別（labeled:trueだが通り芯ではない旧データ）');
+  assert.equal(graph.centerLines.length, before + 1);
+  const { created } = autoFillWoodFloorBeams(graph, PROJECT);
+  const beam = created.find(b => Math.abs(b.axisValue - 1820) < 1);
+  assert.notEqual(beam.axisCL, legacy,
+    '種別ベース（structuralAnchorAt tier:primary=[struct,beam]）は中心線を対象にしないため既存CLを再利用せず新規の梁芯CLを立てる（移行前はcl.labeledで一致し既存CLを再利用していた）');
+  assert.equal(centerLineKindOf(beam.axisCL), 'beam');
+  assert.equal(beam.axisCL.extentLo, 0, '新規CLのextentは床梁スパン(0..2730)をそのまま覆う');
+  assert.equal(beam.axisCL.extentHi, 2730);
+  assert.equal(legacy.extentLo, null, '旧データのCL自体はextentLo/Hi省略のまま触られない');
+  assert.equal(graph.centerLines.length, before + 3, '2本の床梁(1820・3640)がいずれも新規梁芯CLを立てる（1820は再利用されない）');
+});
+
+test('【旧データ限定・種別ベースへ統一】autoFillWoodFloorBeams: 床梁の軸位置に{labeled:false, discipline:STRUCT}（種別struct・有限extent）があると、その線を軸に再利用し、extentは再ブラケットしない（全長扱いの種別のため）', () => {
+  const { graph } = buildClosedCellGraph(TRADITIONAL_WOOD_STRUCTURE);
+  const before = graph.centerLines.length;
+  const legacy = graph.addCenterLine(CenterLineType.HORIZONTAL, 1820, {
+    labeled: false, discipline: Discipline.STRUCT, extentLo: 500, extentHi: 800,
+  });
+  assert.equal(centerLineKindOf(legacy), 'struct', '前提: discipline=STRUCTなのでstruct種別（labeled:falseだが通り芯として作図されない旧データ）');
+  const { created } = autoFillWoodFloorBeams(graph, PROJECT);
+  const beam = created.find(b => Math.abs(b.axisValue - 1820) < 1);
+  assert.equal(beam.axisCL, legacy,
+    '種別ベース（tier:primaryはlabeledを問わずstruct種別を対象にする）は既存のstruct CLを再利用する（移行前はcl.labeled===falseのため見つからず新規FUSE CLを立てていた）');
+  assert.equal(legacy.extentLo, 500, 'struct種別はspansEntireAxis=trueのため再ブラケット条件から外れ、extentは据え置かれる（移行前は新規CLのextentが床梁スパン0..2730になっていた）');
+  assert.equal(legacy.extentHi, 800);
+  assert.equal(graph.centerLines.length, before + 2, '1820は既存のlegacyを再利用し、3640だけ新規梁芯CLを立てる');
+});
+
 test('autoFillWoodFloorBeams（F1b・D1再ブラケット）: 位置に既存の非ラベル梁芯CL（ref付きextent＝別の通り芯ブラケット）を再利用した場合も、和集合を再ブラケットする（実データmoku1/moku2 2階 x=5460の再現: wallBeamAxes.jsのbracketExtentが別の壁のために設定した通り芯ブラケットが床梁スパンと無関係に遠い）', () => {
   // 縦梁（isVertical:true）のセル（w=5460,h=3640。短辺=Y方向）。内部位置x=1820は実データx=5460と同型。
   const { graph, y1 } = buildClosedCellGraph(TRADITIONAL_WOOD_STRUCTURE, { width: 5460, height: 3640 });
@@ -4598,6 +4714,22 @@ test('autoFillWoodColumns（3i・2）: 走行方向に厳密一致する通り�
   assert.ok(col, '前提: 3iの柱が(1820,2000)に立つ');
   assert.equal(col.woodAxisOffset, null, '通り芯に厳密一致したのでオフセットではなく通常のCLペア');
   assert.equal(iiPicks.find(p => p.x === 1820 && p.y === 2000)?.kind, 'struct', 'iiPicksのkindはstruct（通り芯に厳密一致）');
+});
+
+test('autoFillWoodColumns（支持長超過）: 走行方向の追加柱の候補は通り芯・中心線のみで、同座標の梁芯CLは候補にならない（910グリッドの位置がそのまま採用される）', () => {
+  const { graph, wallSegments, aboveBeamSegments } = makeSupportSpanWallGraph();
+  // 走行方向(x)の1000（910グリッドの自然な位置1820とは異なる、実行可能範囲内の位置）に梁芯CLだけを置く。
+  // SUPPORT_SPAN_COLUMN_KINDS=['struct','center']は梁芯を候補にしないため、この梁芯は無視され、
+  // 3i・2の通り芯版とは異なり3i・1と同じ910グリッド中央(1820)に柱が立つはず（梁芯の位置(1000)には立たない）。
+  graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.FUSE });
+  const { created, iiPicks } = autoFillWoodColumns(graph, PROJECT, null, [], wallSegments, aboveBeamSegments);
+  const col = created.find(c => Math.abs(c.axisY - 2000) < 1
+    && !SUPPORT_SPAN_3A_TARGET.some(([x, y]) => Math.abs(c.axisX - x) < 1 && Math.abs(c.axisY - y) < 1));
+  assert.ok(col, '前提: 3iの柱が1本立つ');
+  assert.equal(Math.round(col.axisX), 1820, '梁芯の位置(1000)ではなく910グリッドの中央(1820)に立つ');
+  assert.ok(col.woodAxisOffset, '梁芯は候補にならないため、走行方向に厳密一致するCLが無い扱い＝オフセットアンカー（910グリッド）のまま');
+  assert.equal(iiPicks.find(p => Math.abs(p.x - 1820) < 1 && p.y === 2000)?.kind, 'grid',
+    'iiPicksのkindはgrid（梁芯は候補に入らないため3i・1と同じ結果）');
 });
 
 test('【失敗系】autoFillWoodColumns（3i・3）: 自階に平行な壁が無ければ柱を追加しない', () => {

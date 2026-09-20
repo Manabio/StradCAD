@@ -148,6 +148,26 @@ test('autoFillWallBeamAxes: 同方向の意匠中心線・補助線とは同座�
   assert.equal(created.length, 2);
 });
 
+test('【旧データ限定・種別ベースへ統一】autoFillWallBeamAxes: {labeled:true, discipline:ARCH}（種別center。通り芯でも梁芯でもない旧データ）は重複ガードの対象外になり梁芯を1本生成する——移行前は生labeledで一致し生成をスキップしていた', () => {
+  const { graph } = makeGridGraph('p1', 0);
+  // 旧UI経路等でlabeled:trueのまま残った意匠中心線（種別はcenter。addCenterLineFromDialogは
+  // kind:'center'生成時にlabeled:falseを明示するため現行経路では発生しない）。
+  graph.addCenterLine(CenterLineType.HORIZONTAL, 2000, { labeled: true, discipline: Discipline.ARCH });
+  const wallSources = [{ isVertical: false, coord: 2000, lo: 0, hi: 8000 }];
+  const created = autoFillWallBeamAxes(graph, wallSources);
+  assert.equal(created.length, 1,
+    '種別ベース（tier:primary=[struct,beam]）は中心線を対象にしないため梁芯を1本生成する（移行前はcl.labeledで一致しスキップしていた）');
+});
+
+test('【旧データ限定・種別ベースへ統一】autoFillWallBeamAxes: {labeled:false, discipline:STRUCT}（種別struct。通り芯として作図されない旧データ）は重複ガードの対象になり生成をスキップする——移行前はcl.labeledがfalseのため対象外で重複生成していた', () => {
+  const { graph } = makeGridGraph('p1', 0);
+  graph.addCenterLine(CenterLineType.HORIZONTAL, 2000, { labeled: false, discipline: Discipline.STRUCT });
+  const wallSources = [{ isVertical: false, coord: 2000, lo: 0, hi: 8000 }];
+  const created = autoFillWallBeamAxes(graph, wallSources);
+  assert.equal(created.length, 0,
+    '種別ベース（tier:primary）はlabeledを問わずstruct種別を対象にするため生成をスキップする（移行前はcl.labeled===falseのため対象外になり重複生成していた）');
+});
+
 test('autoFillWallBeamAxes: excludedWallBeamAxesにあるキーは生成しない（手動削除・移動元の尊重）', () => {
   const { graph } = makeGridGraph('p1', 0);
   graph.excludedWallBeamAxes.add('Y:2000');
