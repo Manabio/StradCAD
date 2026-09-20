@@ -2,7 +2,7 @@
 // AddCLDialog確定・木造提案判定）の実処理＋Undo登録。App.jsx から状態を持たない純粋な形へ
 // 抽出したもの（挙動は元コードのまま。呼び出し側の setState・modeRef 操作だけを App.jsx に残す）。
 import { runInAction } from 'mobx';
-import { CenterLineType, Discipline, centerLineKind } from '@core';
+import { CenterLineType, Discipline, centerLineKind, isGridCenterLine } from '@core';
 import { undoManager } from '../undoManager.js';
 import { serializeGraph, restoreGraph, serializeStructCLs, restoreStructCLs } from '../graphSnapshot.js';
 import {
@@ -128,18 +128,20 @@ export function commitStretchWithUndo(ss) {
 }
 
 // ---- CL削除（メニューの cl-del）----
-// 通り芯（discipline:STRUCT かつ labeled）は structGraph 経由でスナップショット方式のUndo、
+// 通り芯（isGridCenterLine＝labeled かつ種別struct）は structGraph 経由でスナップショット方式のUndo、
 // それ以外（中心線・補助線・梁芯）は excludedWallBeamAxes 記録（梁芯のみ）＋removeCenterLine。
 // 呼び出し側（App.jsx）はメニューを閉じる等の setState を行う。
 // 戻り値 {toast}: 通り芯側のみ拒否がありうる（軸最後の1本）ため、promoteCenterToGridWithUndo等の
 // 変換系と同じ {toast: string|null} 契約に揃える——呼び出し側は toast があればトースト表示するだけでよい。
 export function deleteCenterLineWithUndo(graph, project, cl) {
-  const isStruct = cl.discipline === Discipline.STRUCT && cl.labeled;
+  const isStruct = isGridCenterLine(cl);
   if (isStruct) {
     // 軸最後の通り芯は削除できない（ユーザー要望。中心線化ガードERR_CL_CONVERT_LAST_GRIDと同じ
     // isLastGridOnAxis判定を共有——二重実装によるズレを防ぐ。UI側の長押しメニューのグレー化
     // （interaction/usePointerInteraction.js・menuItems.js）はこの防御ガードの多層防御であり、
-    // グレー化を回避して呼ばれても最終的にここで拒否される）。
+    // グレー化を回避して呼ばれても最終的にここで拒否される）。isStruct成立後は向き（V/H/RADIAL）を
+    // 問わず呼ぶため、RADIALの通り芯に対しても呼ばれうるが、実際にはUIから到達不能
+    // （centerLineConvert.test.jsの【到達不能経路・軸選択の正常化】参照）。
     if (isLastGridOnAxis(graph, cl)) return { toast: ERR_CL_DELETE_LAST_GRID };
     // 通り芯の削除 — structGraph をスナップショット経由で Undo。
     // structGraph の teardown は階グラフの図形に届かないため、アクティブ階グラフ側の

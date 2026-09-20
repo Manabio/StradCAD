@@ -170,6 +170,27 @@ test('deleteCenterLineWithUndo: 中心線（非struct）の削除は同軸の通
   assert.equal(graph.shapeMap.has(cl.id), false, '削除される');
 });
 
+// 【旧データ限定・種別ベースへ統一】isStruct判定を `discipline===STRUCT && labeled` の生フィールドから
+// isGridCenterLine（centerLineKind経由）へ統一したことによる反転ピン留め。移行前は
+// lineType:'dashed' な異常値（通常経路では生成されない）でも通り芯扱いされ、structGraphの
+// スナップショット方式Undo（軸最後の1本ガードを含む）に入っていた。移行後はisGridCenterLineが
+// centerLineKind(cl)==='struct'まで見るため、この異常値は通り芯扱いされず（削除は
+// excludedWallBeamAxes記録＋removeCenterLine経由の通常分岐になる）、軸最後の1本ガードの対象にも
+// ならない。
+test('【旧データ限定・種別ベースへ統一】deleteCenterLineWithUndo: {labeled:true, discipline:STRUCT, lineType:dashed}の異常値は通り芯扱いされず、軸最後の1本でも削除できる（移行前はstructGraph側の通り芯として扱いERR_CL_DELETE_LAST_GRIDで拒否していた）', () => {
+  const { project, graph } = makeProjectWithGraph();
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: true, discipline: Discipline.STRUCT });
+  // VERTICAL軸唯一の"通り芯のつもりの"CLだが、旧UI経路のlineType:'dashed'異常値（通常経路では作れない）。
+  const legacy = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: true, discipline: Discipline.STRUCT, lineType: 'dashed' });
+  assert.equal(centerLineKind(legacy), 'aux', '前提: lineType=dashedなのでaux種別（labeled:true・discipline:STRUCTの異常値）');
+
+  const { toast } = deleteCenterLineWithUndo(graph, project, legacy);
+
+  assert.equal(toast, null, '移行前はisStruct=trueとなり軸最後の1本ガード（ERR_CL_DELETE_LAST_GRID）で拒否していたが、移行後は通常のCL削除経路（軸最後ガードの対象外）になる');
+  assert.equal(graph.shapeMap.has(legacy.id), false, '削除される');
+});
+
 // ---- addCenterLineFromDialog ----
 
 // ---- スパン配列バッチモード（kind='struct' かつ value が配列。QA指摘m-4）----

@@ -318,10 +318,11 @@ const G2_ALLOWLIST = {
   'transform/centerLineMerge.js': { count: 1, category: 'not-partner-selection',
     reason: 'absorbCenterLine内のloserSnapshot（undo用にloserの状態をそのまま保存するため）。種別判定では' +
       'ない。' },
-  'transform/centerLineOps.js': { count: 3, category: 'not-partner-selection',
+  'transform/centerLineOps.js': { count: 2, category: 'not-partner-selection',
     reason: 'commitCLMoveOp（!cl.labeledで結合対象=通り芯以外かを判定。呼び出し元が保証する前提は' +
-      'centerLineKindPolicy.js冒頭コメント参照）・deleteCenterLineWithUndo（isStruct判定）・' +
-      'COEXISTENCE=promote分岐のdeletedProps（既存CLの状態をそのままコピーして復元用に保存）。' },
+      'centerLineKindPolicy.js冒頭コメント参照）・COEXISTENCE=promote分岐のdeletedProps（既存CLの状態を' +
+      'そのままコピーして復元用に保存）。deleteCenterLineWithUndoのisStruct判定はisGridCenterLine' +
+      '（core/centerLine.js。core/配下のためG2対象外）へ移行済み。' },
   'transform/followerGraph.js': { count: 1, category: 'unmigrated',
     reason: 'isSharedCL（通り芯=project.structGraph共有かの判定。cl.discipline===Discipline.STRUCT&&' +
       'cl.labeledはisGridCenterLine（core/centerLine.js）で置換可能——「同値の述語が無く」としていた' +
@@ -367,11 +368,6 @@ const G4_ALLOWLIST = {
       'ARCH実線（centerLineKindでいう center 相当）」かを判定する——種別判定の代用に当たる' +
       '（G1のreasonはQA指摘m-4で「種別を見ない」から実態どおりに訂正済み。G2の同エントリの訂正は' +
       '本ステップの対象外のため据え置き）。G1/G2と合わせて独立タスク。' },
-  'transform/centerLineOps.js': { count: 1, category: 'unmigrated',
-    reason: 'deleteCenterLineWithUndoのisStruct判定（cl.discipline===Discipline.STRUCT&&cl.labeledで' +
-      '通り芯かどうかを確認し、二重スナップショット方式Undoに分岐するかを決める）。isGridCenterLine' +
-      '（core/centerLine.js）で置換可能——QA指摘M-2により0リスクの残作業のためunmigratedへ変更' +
-      '（同じ式の.labeled部分はG2で計上済み・本エントリはdiscipline部分のみ）。' },
   'transform/followerGraph.js': { count: 1, category: 'unmigrated',
     reason: 'isSharedCL（G2と同じ関数）。cl.discipline===Discipline.STRUCT&&cl.labeledはisGridCenterLine' +
       '（core/centerLine.js）で置換可能——QA指摘M-2により0リスクの残作業のためunmigratedへ変更' +
