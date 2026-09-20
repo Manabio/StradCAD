@@ -4,8 +4,8 @@
 // 発覚した。3回とも原因は「誤った種別条件」ではなく「種別条件の無い素の graph.centerLines 走査」
 // だった。centerLineKindPolicy.js（本ディレクトリ）に相手選択・可視性判定を集約したうえで、
 // 本ファイルは「その入口を機械的に閉じる」——app/src 配下の製品コード（*.test.js を除く）を走査し、
-// 許可ドメイン外での新しい直接走査・labeled代用・インライン種別比較が増えたら即座に赤くする
-// （ラチェット）。
+// 許可ドメイン外での新しい直接走査・labeled代用・インライン種別比較・discipline/lineType生比較が
+// 増えたら即座に赤くする（ラチェット）。
 //
 // G1: `.centerLines` の直接参照の禁止（許可ドメイン=core/・renderer/・schema/。それ以外は allowlist
 //     に載っている件数だけ許可）。
@@ -15,18 +15,30 @@
 //     ——誤検出のリスクは低いが、「CL由来の.labeledプロパティへのアクセスすべて」を機械的に数える
 //     ため、種別判定以外の用途（undoスナップショット等）も一緒に数えてしまう限界がある。allowlistの
 //     理由欄にその旨を明記する）。
-// G3: `centerLineKind(x) === '<リテラル>'` 形のインライン種別比較の禁止（許可ドメインはG2と同じ）。
-//     右辺が文字列リテラルの場合のみを対象にする——`centerLineKind(cl) === kind`（kindは変数）のような
-//     汎用的な同値比較はポリシー関係の重複実装ではなく通常の分岐ロジックのため対象外（限界として明記）。
+// G3: `centerLineKind(x) <op> '<リテラル>'`（<op>は===/!==/==/!=、リテラルは比較の左右どちらの辺でも
+//     よい）形のインライン種別比較の禁止（許可ドメインはG2と同じ）。リテラル側が文字列リテラルの
+//     場合のみを対象にする——`centerLineKind(cl) === kind`（kindは変数）のような汎用的な同値比較は
+//     ポリシー関係の重複実装ではなく通常の分岐ロジックのため対象外（限界として明記）。
+// G4: CL の種別判定を `discipline`／`lineType` の生フィールド比較で代用することの禁止（許可ドメインは
+//     G2/G3と同じ）。`.discipline <op> (Discipline.<定数>|'<リテラル>'|"<リテラル>")` および
+//     `.lineType <op> ('<リテラル>'|"<リテラル>")`（<op>・左右の扱いはG3と同じ）の形を対象にする——
+//     `Discipline` は core/constants.js で素の文字列定数（'arch'/'struct'/'fuse'…）のため、
+//     `cl.discipline === Discipline.STRUCT` と `cl.discipline === 'struct'` は等価な抜け道であり
+//     両方を検出する（QA指摘M-1。lineType側はもともと文字列リテラル形のみのため、ダブルクォートにも
+//     対応を広げて左右対称にした）。`.discipline`／`.lineType` は `{ discipline: cl.discipline }` の
+//     ような代入・コピーにも使われる汎用フィールド名（Shape基底クラス由来。CenterLine専用ではない）で、
+//     それらは種別判定ではないため「比較演算子を伴う場合」だけに絞ることで機械的に除外する（限界:
+//     CenterLine以外のShape（Wall等）が同名フィールドを比較する将来のコードは区別できず誤検出になり
+//     うるが、実測ではapp/src中の比較演算子つき出現はすべてCenterLineに対するものだった）。
 //
 // 数え方: ソースを1文字ずつ走査するトークナイザ（tokenize、下記）でコメント（`//`・`/* */`）・
 // 文字列リテラル（'・"・`）・正規表現リテラルの境界を認識したうえで、2種類のテキストを作る——
 // (a) codeOnly: コメントに加え文字列・正規表現リテラルの「中身」も空白に置換したテキスト（G1/G2用。
 //     エラーメッセージ等の文字列中に `.centerLines`/`.labeled` という語が偶然含まれていても実際の
 //     プロパティアクセスとして数えない）。
-// (b) withoutComments: コメントだけを除去し文字列リテラルはそのまま残したテキスト（G3用。
-//     `centerLineKind(cl) === 'struct'` のような比較はリテラルの引用符自体が検出対象の一部であり
-//     codeOnly では消えてしまうため別系統にする必要がある）。
+// (b) withoutComments: コメントだけを除去し文字列リテラルはそのまま残したテキスト（G3・G4用。
+//     `centerLineKind(cl) === 'struct'` や `cl.lineType === 'dashed'` のような比較はリテラルの
+//     引用符自体が検出対象の一部であり codeOnly では消えてしまうため別系統にする必要がある）。
 // 正規表現マッチ数は決定的・再現可能——allowlist の件数は tokenize を実際に各ファイルへ適用すれば
 // 誰でも再現できる。allowlist に載っているのに実際の件数が0（掃除漏れ・移行済みなのに項目が
 // 残っている）でも赤くなる。
@@ -39,10 +51,24 @@
 //    1つの文字列として扱う（`${}` の中に `.centerLines` 等が書かれても検出できない）。
 //  - 変数エイリアスは追跡しない（正規表現ベースのため）——`const cls = graph.centerLines;` の代入行
 //    自体は検出できるが、以後 `cls.filter(...)` のように別名を使い回す箇所は検出できない（同様に
-//    G3も `const k = centerLineKind(cl); k === 'beam'` のような変数経由の比較は検出しない）。
+//    G3も `const k = centerLineKind(cl); k === 'beam'` のような変数経由の比較は検出しない。G4も
+//    `const { discipline, lineType } = cl; discipline === Discipline.STRUCT` のように分割代入で
+//    フィールドを取り出してから比較する形は、比較式に `.discipline`／`.lineType` という文字列が
+//    現れないため検出できない）。
 //  - 許可ドメイン（renderer/等）の内部で同種の判定ロジックが並行実装されていても、ドメインごと対象外
 //    のため射程外（例: renderer/gutterLabelHits.js の isCenterDimensionTarget は cl.labeled 等の
-//    独自判定を持つが、renderer/ は描画層の正当な責務としてG1/G2/G3いずれも検査しない）。
+//    独自判定を持つが、renderer/ は描画層の正当な責務としてG1〜G4いずれも検査しない）。
+//  - G4は `.discipline`／`.lineType` というフィールド名そのもので判別するため、Shape基底クラスを
+//    共有する CenterLine 以外のオブジェクト（Wall等）への比較演算が将来増えると誤検出になりうる
+//    （代入・コピーは比較演算子を伴わないため自然に対象外になる）。
+//  - G3・G4は withoutComments（文字列リテラルの中身を残す）を見るため、エラーメッセージ等の
+//    文字列リテラルの中に判定パターン全体（例: `"旧実装は centerLineKind(cl) !== 'aux' だった"`）が
+//    そのまま埋め込まれていると誤検出する（実測で確認済み）。文字列内にキーワード単体
+//    （例: `"'aux' 表記"`）が現れるだけでは判定パターン全体に一致しないため誤検出しない。
+//  - G4は比較演算子（===等）を伴う形のみ対象——`switch (cl.lineType) { case 'dashed': ... }` や
+//    `[Discipline.STRUCT, Discipline.FUSE].includes(cl.discipline)` のように比較演算子を伴わずに
+//    種別判定を代用する形は検出できない（app/src 中には現存しない。実測でapp/src中の
+//    `.discipline`／`.lineType` 出現はすべて代入・コピー・比較演算子つき比較のいずれかだった）。
 //
 // ガードが赤くなったら: (1) 相手選択（同座標・同方向・可視種別等でCLを選ぶ処理）なら
 // centerLineKindPolicy.js の走査API（orthoAnchorCandidates(ForNew)・sameDirectionObstacles・
@@ -50,7 +76,8 @@
 // (2) 相手選択でない（シリアライズ・id解決・全件列挙・MobX reactionの依存収集・幾何署名判定等）なら、
 // このファイル末尾の allowlist に「ファイル＋理由＋件数」を追記する。
 // (3) 未移行（既存ロジックに手を入れると波及が大きく別タスクが要る）なら、その理由を allowlist に
-// 明記する。
+// 明記する。G4（discipline/lineType生比較）の場合はまず centerLineKind(cl) を使った判定に
+// 置き換えられないか検討し、無理なら同様に allowlist へ追記する。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -183,7 +210,20 @@ const RE_CENTERLINES   = /\.centerLines\b/g;
 // オブジェクトリテラル構築（値がドットを含む式）はエイリアス部分が単純識別子でないため一致しない。
 const RE_DESTRUCTURE_CENTERLINES = /[{,]\s*centerLines\s*(?::\s*[A-Za-z_$][\w$]*\s*)?[,}]/g;
 const RE_LABELED       = /\.labeled\b/g;
-const RE_INLINE_KIND   = /centerLineKind\([^)]*\)\s*===\s*'(?:struct|center|aux|beam)'/g;
+// centerLineKind(x) <op> 'kind' は左右どちらの辺にリテラルが来てもよい形に対応する
+// （op = ===/!==/==/!=。`[!=]==?` は「!か=」+「=」+「省略可能な=」の3要素で4通りの演算子を
+// 1本の文字クラスで拾う——例: '===' は '='(class)+'='(必須)+'='(任意)、'!=' は '!'(class)+'='(必須)）。
+const RE_INLINE_KIND   =
+  /centerLineKind\([^)]*\)\s*[!=]==?\s*'(?:struct|center|aux|beam)'|'(?:struct|center|aux|beam)'\s*[!=]==?\s*centerLineKind\([^)]*\)/g;
+// G4: `.discipline`／`.lineType` を比較演算子つきで使う形のみ対象（代入・コピーは対象外）。
+// 定数側（Discipline.<定数> / 文字列リテラル。'・"どちらも）は比較の左右どちらの辺に来てもよい。
+// Discipline.<定数>は core/constants.js で素の文字列（'arch'/'struct'/'fuse'…）のため、
+// `cl.discipline === Discipline.STRUCT` と `cl.discipline === 'struct'` は等価な抜け道——
+// 両方を1本の選択（Discipline.\w+|'...'|"..."）で拾う（QA指摘M-1）。
+const RE_DISCIPLINE    =
+  /\.discipline\s*[!=]==?\s*(?:Discipline\.\w+|'[^'\n]*'|"[^"\n]*")|(?:Discipline\.\w+|'[^'\n]*'|"[^"\n]*")\s*[!=]==?\s*[\w$]+(?:\.[\w$]+)*\.discipline/g;
+const RE_LINETYPE      =
+  /\.lineType\s*[!=]==?\s*(?:'[^'\n]*'|"[^"\n]*")|(?:'[^'\n]*'|"[^"\n]*")\s*[!=]==?\s*[\w$]+(?:\.[\w$]+)*\.lineType/g;
 
 function isUnderRoot(rel, root) {
   return rel === root || rel.startsWith(`${root}/`);
@@ -215,8 +255,12 @@ const G1_ALLOWLIST = {
     reason: 'handleWallConfirm（WallDialog確定）。graph.centerLines.filter(cl => cl.centerLineType===perpType)' +
       'は種別条件の無い直交CL列挙そのもの（=相手選択）——ただしWallDialogを開く導線が無い死んだ経路' +
       '（setWallDialogはnullを渡す閉じる側のみ）のため実害は無い。別タスクで削除候補。' },
-  'finish/stair/stairUnderSplit.js': { count: 1, category: 'not-partner-selection',
-    reason: 'findUnderStairSplitCLs。isSplitCLFor による幾何署名（座標一致）での同定であり種別を見ない。' },
+  'finish/stair/stairUnderSplit.js': { count: 1, category: 'unmigrated',
+    reason: 'findUnderStairSplitCLs（graph.centerLines走査）→isSplitCLForによる同定。座標' +
+      '（extentLo/Hiが外形の直交範囲と一致）に加え、labeled／discipline!==ARCH／lineType===\'dashed\'' +
+      'という種別代用フィールドでも絞り込んでいる——「種別を見ない」としていた旧reasonは事実と違った' +
+      'ため訂正（QA指摘m-4）。種別条件を伴う絞り込み（相手選択）に該当するためcategoryも' +
+      'not-partner-selection→unmigratedへ変更（同ファイルのG2/G4エントリと合わせて独立タスク）。' },
   'graphSnapshot.js': { count: 2, category: 'not-partner-selection',
     reason: 'restoreStructCLs/applySnapshot。永続化からの全件復元（snapshot.centerLines）——種別を問わず' +
       '全件を作り直す責務のため種別条件を持たない。' },
@@ -289,9 +333,11 @@ const G2_ALLOWLIST = {
     reason: 'commitCLMoveOp（!cl.labeledで結合対象=通り芯以外かを判定。呼び出し元が保証する前提は' +
       'centerLineKindPolicy.js冒頭コメント参照）・deleteCenterLineWithUndo（isStruct判定）・' +
       'COEXISTENCE=promote分岐のdeletedProps（既存CLの状態をそのままコピーして復元用に保存）。' },
-  'transform/followerGraph.js': { count: 1, category: 'not-partner-selection',
-    reason: 'isSharedCL（通り芯=project.structGraph共有かの判定。centerLineKindPolicy側にkindsVisibleWith' +
-      '等の同値の述語が無く、centerLineKind==="struct"と同義だが本ステップの対象外ファイルのため未移行）。' },
+  'transform/followerGraph.js': { count: 1, category: 'unmigrated',
+    reason: 'isSharedCL（通り芯=project.structGraph共有かの判定。cl.discipline===Discipline.STRUCT&&' +
+      'cl.labeledはisGridCenterLine（core/centerLine.js）で置換可能——「同値の述語が無く」としていた' +
+      '旧reasonは事実と違ったため訂正（QA指摘M-2）。centerLineKindPolicy.js側には無いが述語自体は' +
+      'core/centerLine.jsに既存。本ステップの対象外ファイルのため未移行のまま）。' },
 };
 
 // ---- G3: `centerLineKind(x) === '<リテラル>'` インライン種別比較 ----
@@ -309,17 +355,57 @@ const G3_ALLOWLIST = {
     reason: 'findWallBeamAxisCL・findBeamAnchorCL内のcenterLineKind(cl)===\'beam\'。G1と同じ理由。' },
   'structural/woodAutoFill.js': { count: 1, category: 'unmigrated',
     reason: 'findCenterAnchorCL。G1と同じ理由。' },
-  'transform/centerLineOps.js': { count: 2, category: 'not-partner-selection',
-    reason: 'commitCLMoveOp（梁芯は専用のグラフスナップショット方式Undoに分岐）・COEXISTENCE同種別分岐の' +
-      '梁芯重複ガード（centerLineKind(cl)===\'beam\'を含むsameCoordの絞り込み）。それぞれ「kind===梁芯なら' +
-      '専用処理」という分岐そのもので、ポリシーの関係述語（例: coexistenceAt）の重複実装ではない。' },
+  'transform/centerLineConvert.js': { count: 1, category: 'not-partner-selection',
+    reason: 'checkPromoteToGridGuards冒頭のcenterLineKind(cl)!==\'center\'（渡されたclが中心線かどうかの' +
+      '入力ガード。複数候補から相手を選ぶ処理ではない）。' },
+  'transform/centerLineOps.js': { count: 3, category: 'not-partner-selection',
+    reason: 'commitCLMoveOp（centerLineKind(cl)!==\'beam\'／===\'beam\'で通常経路と梁芯専用のグラフ' +
+      'スナップショット方式Undoに分岐する対の判定）・COEXISTENCE同種別分岐の梁芯重複ガード' +
+      '（centerLineKind(cl)===\'beam\'を含むsameCoordの絞り込み）。それぞれ「kind===梁芯なら専用処理」' +
+      'という分岐そのもので、ポリシーの関係述語（例: coexistenceAt）の重複実装ではない。' },
   'ui/circleRef.js': { count: 1, category: 'not-partner-selection',
     reason: 'circleRefKindLabel。参照候補CLの表示ラベル文言（「梁芯」/「中心線」）を決めるUI表示ロジック。' },
 };
 
+// ---- G4: 生の `discipline`／`lineType` を比較演算子つきで種別の代用に読む ----
+const G4_ALLOWLIST = {
+  'finish/edgeClassify.js': { count: 2, category: 'unmigrated',
+    reason: 'classifyAxisLineType（G2と同じ関数）。1件目のcl.discipline===Discipline.STRUCT&&cl.labeled' +
+      '（通り芯判定）はisGridCenterLine（core/centerLine.js）で置換可能（QA指摘M-2）——ただし' +
+      'isGridCenterLineはcl.lineType!==\'dashed\'まで見るため、discipline:STRUCT&&labeled:trueかつ' +
+      'lineType:\'dashed\'という異常値では判定が変わりうる（通常経路では起きない）。2件目の' +
+      'lineType===\'dashed\'（補助線判定）はcenterLineKind(cl)の重複実装。G2と同じ理由' +
+      '（仕上げモードの境界分類への影響範囲未確認）で未移行。' },
+  'finish/gridCells.js': { count: 5, category: 'unmigrated',
+    reason: 'isDividerCL・isActiveAcrossRange・gridDividerSegments内のpush（いずれもG2のsnapshotCL経由' +
+      'のCL種別分類）。discipline===STRUCT/ARCH・lineType!==\'dashed\'の組合せで通り芯/中心線/補助線を' +
+      '判定する——G2と同じ理由（分割格子は性能最適化用POJOで種別ベースへの統一は別タスク）で未移行。' },
+  'finish/stair/stairUnderSplit.js': { count: 2, category: 'unmigrated',
+    reason: 'isSplitCLFor（G1/G2と同じ関数）。discipline!==ARCH・lineType===\'dashed\'で「無ラベル' +
+      'ARCH実線（centerLineKindでいう center 相当）」かを判定する——種別判定の代用に当たる' +
+      '（G1のreasonはQA指摘m-4で「種別を見ない」から実態どおりに訂正済み。G2の同エントリの訂正は' +
+      '本ステップの対象外のため据え置き）。G1/G2と合わせて独立タスク。' },
+  'transform/centerLineConvert.js': { count: 3, category: 'unmigrated',
+    reason: 'outermostGridExtentRefs・isLastGridOnAxis（discipline===STRUCTで軸上の通り芯候補を' +
+      '絞り込む相手選択。未移行）・checkDemoteToCenterGuards冒頭のdiscipline===STRUCT&&labeled' +
+      '（cl自身が通り芯かどうかの入力ガード。cl.discipline===Discipline.STRUCT&&cl.labeledは' +
+      'isGridCenterLine（core/centerLine.js）で置換可能——QA指摘M-2。isGridCenterLineは' +
+      'lineType!==\'dashed\'まで見るため異常値（labeled:true&&discipline:STRUCT&&lineType:\'dashed\'）' +
+      'では判定が変わりうる点はG4のfinish/edgeClassify.jsエントリと同じ。件数はまとめて計上する）。' },
+  'transform/centerLineOps.js': { count: 1, category: 'unmigrated',
+    reason: 'deleteCenterLineWithUndoのisStruct判定（cl.discipline===Discipline.STRUCT&&cl.labeledで' +
+      '通り芯かどうかを確認し、二重スナップショット方式Undoに分岐するかを決める）。isGridCenterLine' +
+      '（core/centerLine.js）で置換可能——QA指摘M-2により0リスクの残作業のためunmigratedへ変更' +
+      '（同じ式の.labeled部分はG2で計上済み・本エントリはdiscipline部分のみ）。' },
+  'transform/followerGraph.js': { count: 1, category: 'unmigrated',
+    reason: 'isSharedCL（G2と同じ関数）。cl.discipline===Discipline.STRUCT&&cl.labeledはisGridCenterLine' +
+      '（core/centerLine.js）で置換可能——QA指摘M-2により0リスクの残作業のためunmigratedへ変更' +
+      '（同じ式の.labeled部分はG2で計上済み・本エントリはdiscipline部分のみ）。' },
+};
+
 // variant: 'codeOnly'（文字列・正規表現の中身も空白化。G1/G2用）または
-// 'withoutComments'（文字列はそのまま。G3用）。regexes は複数渡せば合算する（G1の
-// RE_CENTERLINES + RE_DESTRUCTURE_CENTERLINES 用）。
+// 'withoutComments'（文字列はそのまま。G3/G4用）。regexes は複数渡せば合算する（G1の
+// RE_CENTERLINES + RE_DESTRUCTURE_CENTERLINES、G4の RE_DISCIPLINE + RE_LINETYPE 用）。
 function buildActual(files, regexes, predicate, variant) {
   const list = Array.isArray(regexes) ? regexes : [regexes];
   const actual = {};
@@ -366,7 +452,7 @@ test('【ガード G2】app/src 配下の製品コードは生の .labeled を�
     '追加してください。');
 });
 
-test('【ガード G3】app/src 配下の製品コードは centerLineKind(x) === \'<リテラル>\' 形のインライン種別比較を新規に増やさない（右辺が変数の同値比較は対象外。許可ドメインはG2と同じ）', () => {
+test('【ガード G3】app/src 配下の製品コードは centerLineKind(x) === \'<リテラル>\' 形のインライン種別比較を新規に増やさない（変数同士の同値比較は対象外。左右どちらの辺にリテラルが来ても対象。許可ドメインはG2と同じ）', () => {
   const actual = buildActual(files, RE_INLINE_KIND, isG2G3Exempt, 'withoutComments');
   assertAgainstAllowlist(actual, G3_ALLOWLIST, 'G3 (centerLineKind(x)===\'literal\')',
     'centerLineKindPolicy.js の述語（isOpeningBoundaryKind・isRenderTarget・isHitTestTarget・' +
@@ -374,8 +460,49 @@ test('【ガード G3】app/src 配下の製品コードは centerLineKind(x) ==
     'G3_ALLOWLIST に理由付きで追加してください。');
 });
 
+test('【ガード G4】app/src 配下の製品コードは discipline／lineType の生フィールドを比較演算子つきで種別（centerLineKind）の代用に使わない（代入・コピー等の非比較用途は対象外。許可ドメインはG2と同じ）', () => {
+  const actual = buildActual(files, [RE_DISCIPLINE, RE_LINETYPE], isG2G3Exempt, 'withoutComments');
+  assertAgainstAllowlist(actual, G4_ALLOWLIST, 'G4 (discipline/lineType生比較)',
+    'centerLineKind(cl) を使ってください（例: centerLineKind(cl)===\'struct\'）。種別判定でない場合' +
+    '（代入・コピー等はそもそも比較演算子を伴わないため本ガードの対象外）は本ファイルの G4_ALLOWLIST ' +
+    'に理由付きで追加してください。');
+});
+
+test('【ガード自己診断】G3・G4 の検出正規表現が意図した形だけに一致する', () => {
+  // countMatches は String.prototype.match を使う——global正規表現でも毎回lastIndex=0から
+  // 走査し直すため（match()自体の仕様）、同じ正規表現オブジェクトを使い回しても持ち越しは無い
+  // （test()と違い安全。QA指摘m-3）。
+  const ALL_G3G4_REGEXES = [RE_INLINE_KIND, RE_DISCIPLINE, RE_LINETYPE];
+  const totalMatches = (s) => ALL_G3G4_REGEXES.reduce((sum, re) => sum + countMatches(s, re), 0);
+
+  // 一致すべき形（各1件）。
+  const shouldMatchOnce = [
+    "centerLineKind(cl) !== 'beam'",           // G3: !==（M-1前は===のみだった）
+    "'beam' === centerLineKind(cl)",           // G3: リテラル左辺
+    'cl.discipline === Discipline.STRUCT',     // G4: discipline×定数
+    'Discipline.FUSE !== a.b.discipline',      // G4: discipline×定数・リテラル左辺・!==
+    "cl.discipline === 'struct'",              // G4: discipline×生文字列リテラル（QA指摘M-1の抜け道）
+    "cl?.lineType === 'center'",               // G4: lineType（オプショナルチェイニング経由でも一致）
+    'cl.discipline\n  !== Discipline.ARCH',    // G4: 改行をまたぐ比較（\sは改行も含むため一致する）
+  ];
+  for (const s of shouldMatchOnce) {
+    assert.equal(totalMatches(s), 1, `一致すべき形が一致しない: ${JSON.stringify(s)}`);
+  }
+
+  // 一致してはいけない形（各0件）。
+  const shouldNotMatch = [
+    'cl.discipline = Discipline.STRUCT',   // 代入（比較演算子ではない）
+    '{ discipline: cl.discipline }',       // オブジェクトリテラルのコピー
+    'cl => cl.discipline',                 // アロー関数本体（比較を伴わない参照のみ）
+    'centerLineKind(cl) === kind',         // 右辺が変数（リテラルではない同値比較）
+  ];
+  for (const s of shouldNotMatch) {
+    assert.equal(totalMatches(s), 0, `一致してはいけない形が一致した: ${JSON.stringify(s)}`);
+  }
+});
+
 test('【ガード自己診断】allowlist の全エントリは category が既定の2種のいずれかで、reason が空でない', () => {
-  for (const [name, table] of [['G1', G1_ALLOWLIST], ['G2', G2_ALLOWLIST], ['G3', G3_ALLOWLIST]]) {
+  for (const [name, table] of [['G1', G1_ALLOWLIST], ['G2', G2_ALLOWLIST], ['G3', G3_ALLOWLIST], ['G4', G4_ALLOWLIST]]) {
     for (const [rel, entry] of Object.entries(table)) {
       assert.ok(['not-partner-selection', 'unmigrated'].includes(entry.category), `${name} ${rel}: 未知のcategory`);
       assert.ok(entry.reason && entry.reason.length > 0, `${name} ${rel}: reasonが空`);
