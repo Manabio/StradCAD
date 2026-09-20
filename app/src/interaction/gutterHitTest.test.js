@@ -141,6 +141,41 @@ test('【旧データ限定・種別ベースへ統一】findGutterCL: labeled:t
 });
 
 // ================================================================
+// ドラッグ中（pendingDelta≠0）の座標（effectiveValue）
+// ================================================================
+
+test('findGutterCL: ドラッグ中（pendingDelta≠0）の縦の通り芯は、描画位置（effectiveValue）で当たり確定値（value）の位置では当たらない', () => {
+  const graph = makeGraph();
+  const cl = graph.addCenterLine(CenterLineType.VERTICAL, 300, { labeled: true, discipline: Discipline.STRUCT });
+  cl.pendingDelta = 200; // ドラッグ中の未確定変位（確定前）——effectiveValue(500)を使うべき
+  assert.equal(hit(graph, 500, TOP_GUTTER_SY), cl, 'effectiveValue(300+200=500)の位置で当たる');
+  assert.equal(hit(graph, 300, TOP_GUTTER_SY), null, '確定値value(300)の位置ではもう当たらない');
+});
+
+test('findGutterCL: ドラッグ中（pendingDelta≠0）の横の通り芯は、描画位置（effectiveValue）で当たり確定値（value）の位置では当たらない', () => {
+  const graph = makeGraph();
+  const cl = graph.addCenterLine(CenterLineType.HORIZONTAL, 300, { labeled: true, discipline: Discipline.STRUCT });
+  cl.pendingDelta = 200; // ドラッグ中の未確定変位（確定前）——effectiveValue(500)を使うべき
+  assert.equal(hit(graph, LEFT_GUTTER_SX, 500), cl, 'effectiveValue(300+200=500)の位置で当たる');
+  assert.equal(hit(graph, LEFT_GUTTER_SX, 300), null, '確定値value(300)の位置ではもう当たらない');
+});
+
+test('findGutterCL: 参照先CL（refId）がドラッグ中のとき、参照する側もeffectiveValueの位置で当たる', () => {
+  const graph = makeGraph();
+  // refOffset=300（0以外）にして、anchor自身のeffectiveValueとclのeffectiveValueが重ならないようにする
+  // （refOffset=0だと両者が同座標になり、先に追加されたanchor側がヒットしてclと区別できないため）。
+  const anchor = graph.addCenterLine(CenterLineType.VERTICAL, 300, { labeled: true, discipline: Discipline.STRUCT });
+  const cl = graph.addCenterLine(CenterLineType.VERTICAL, 300, {
+    labeled: true, discipline: Discipline.STRUCT, refId: anchor.id, refOffset: 300,
+  });
+  assert.equal(cl.value, 600, '前提: refId経由でanchor.value(300)+refOffset(300)=600を返す');
+  anchor.pendingDelta = 200; // 参照先がドラッグ中の未確定変位（確定前）
+  assert.equal(cl.effectiveValue, 800, '前提: anchor.effectiveValue(500)+refOffset(300)+pendingDelta(0)=800に追従する');
+  assert.equal(hit(graph, 800, TOP_GUTTER_SY), cl, '参照先の未確定変位に追従したeffectiveValue(800)の位置で当たる');
+  assert.equal(hit(graph, 600, TOP_GUTTER_SY), null, '確定値value(600)の位置ではもう当たらない');
+});
+
+// ================================================================
 // 失敗系
 // ================================================================
 

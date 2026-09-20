@@ -24,19 +24,23 @@ export function findColumnAxisLabel(graph, viewport, width, height, sx, sy) {
 }
 
 // ---- ガター内の通り芯ヒット判定 ----
+// 座標は描画（GutterLayer.jsx の○ラベル＝GutterCircleLabels）と同じ cl.effectiveValue を使う。
+// ドラッグしていない（pendingDelta===0）ときは value と同値。snapGeometry.js の線上ヒット
+// （findNearestCenterLine 等）は確定値 value を使うが、あちらは移動スナップの吸着先・範囲判定に
+// 使うためのもので別の判断であり、ここには合わせない。
 export function findGutterCL(graph, viewport, width, height, sx, sy) {
   const HIT = 24; // px
   const cls = gridCenterLines(graph);
   if (sy < INSET.top || sy > height - INSET.bottom) {
     for (const cl of cls) {
       if (cl.centerLineType !== CenterLineType.VERTICAL) continue;
-      if (Math.abs(cl.value * viewport.scaleX + viewport.offsetX - sx) < HIT) return cl;
+      if (Math.abs(cl.effectiveValue * viewport.scaleX + viewport.offsetX - sx) < HIT) return cl;
     }
   }
   if (sx < INSET.left || sx > width - INSET.right) {
     for (const cl of cls) {
       if (cl.centerLineType !== CenterLineType.HORIZONTAL) continue;
-      if (Math.abs(cl.value * viewport.scaleY + viewport.offsetY - sy) < HIT) return cl;
+      if (Math.abs(cl.effectiveValue * viewport.scaleY + viewport.offsetY - sy) < HIT) return cl;
     }
   }
   return null;
