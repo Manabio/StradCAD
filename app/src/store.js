@@ -94,7 +94,7 @@ reaction(
   () => {
     const activeGraph = project.activeGraph;
     if (!activeGraph) return; // フロア切替の遷移中など、瞬間的に未定義になり得るための防御
-    spatialIndex.rebuild(activeGraph.intersections, activeGraph.points);
+    spatialIndex.rebuild(activeGraph.intersections);
   },
   { fireImmediately: true },
 );

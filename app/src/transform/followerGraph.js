@@ -6,7 +6,7 @@
 // movingCLが通り芯（project.structGraph 共有）の場合、他フロア（採用・検討問わず）にも
 // 随伴CL・随伴壁が存在し得るため、resolveMoveRange はそれらを IndexedDB から一時的に
 // 読み込んで（アクティブ化はしない「peek」）走査範囲に含める。
-import { CenterLine, ShapeType, isGridCenterLine, Point } from '@core';
+import { CenterLine, ShapeType, isGridCenterLine } from '@core';
 import { floorSwapManager } from '../storage/FloorSwapManager.js';
 import { sameDirectionObstacles } from '../core/centerLineKindPolicy.js';
 
@@ -48,7 +48,6 @@ export function isSharedCL(cl) {
 
 // Intersection | Point から、移動軸方向の座標（ドラッグ中の表示位置）を取り出す。
 function nodeAxisCoord(node, isV) {
-  if (node instanceof Point) return isV ? node.effectiveX : node.effectiveY;
   return isV ? node.x : node.y;
 }
 

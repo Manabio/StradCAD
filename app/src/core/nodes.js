@@ -14,19 +14,11 @@ export class Point {
     this.id       = id;
     this.x        = x;
     this.y        = y;
-    this.pendingDX = 0;
-    this.pendingDY = 0;
     makeObservable(this, {
-      x:          observable,
-      y:          observable,
-      pendingDX:  observable,
-      pendingDY:  observable,
-      effectiveX: computed,
-      effectiveY: computed,
+      x: observable,
+      y: observable,
     });
   }
-  get effectiveX() { return this.x + this.pendingDX; }
-  get effectiveY() { return this.y + this.pendingDY; }
 }
 
 // ================================================================

@@ -39,7 +39,7 @@ export function findNearestIntersection(graph, wx, wy, thresholdPx, scaleX, scal
   if (!graph) return null;
   // R-Tree でワールド半径の候補を絞り込む（O(log n)）
   const worldRadius = thresholdPx / Math.min(scaleX, scaleY);
-  const { intersections: candidates } = spatialIndex.query(wx, wy, worldRadius);
+  const candidates = spatialIndex.query(wx, wy, worldRadius);
   if (candidates.length === 0) return null;
   // スクリーン距離で最終判定（n.x/y は effectiveValue = 描画位置）
   let nearest = null, minDist = Infinity;

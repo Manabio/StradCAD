@@ -6,7 +6,7 @@
 Intersection・Shape・Wall・Opening・構造部材はすべて自前の座標を持たず、参照するCLの`effectiveValue`から導出する。CLを動かすと連鎖的に全図形が追従する。
 
 ## pendingDelta遅延評価とbake
-ドラッグ中は`pendingDelta`(CL)/`pendingDX,DY`(Point)のみ更新し`value`は変えない。**reaction（chamferWalls等）は`effectiveValue`ではなく`value`を直接監視すること**——`effectiveValue`を監視するとドラッグ中の毎フレームで誤発火する。確定時`bakeCLValue`で`value`に書き込み`pendingDelta`を0に戻す。SpatialIndexもbake後（`value`変化時）にのみ自動再構築される。
+ドラッグ中は`pendingDelta`(CL)のみ更新し`value`は変えない。**reaction（chamferWalls等）は`effectiveValue`ではなく`value`を直接監視すること**——`effectiveValue`を監視するとドラッグ中の毎フレームで誤発火する。確定時`bakeCLValue`で`value`に書き込み`pendingDelta`を0に戻す。SpatialIndexもbake後（`value`変化時）にのみ自動再構築される。
 
 ## CL移動範囲は型非依存の随伴図形BFSで決定する（transform/followerGraph.js）
 「movingCLと一体で動く図形」を`ANCHOR_RESOLVERS`（型ごとのルール）で不動点反復し収集する。新しい型（給排水・構造等）を随伴対象に加える場合はここに1エントリ追加するだけでよい。随伴連鎖が`MAX_DEPTH`(3)/`MAX_COUNT`(30)を超えると移動自体を開始させない——パフォーマンス上の限界ではなく「ユーザーが一目で確認できる範囲」という目安値。
