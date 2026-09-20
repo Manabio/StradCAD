@@ -18,7 +18,8 @@ import {
 import { useLongPress } from './useLongPress.js';
 import { findColumnAxisLabel, findGutterCL } from './gutterHitTest.js';
 import { CONTEXT, detectContext, buildMenuState } from './menuItems.js';
-import { centerLineKind, CenterLineType } from '@core';
+import { convertMenuFlags } from './clMenuGating.js';
+import { usesBeamAxisMoveSnap } from '../core/centerLineKindPolicy.js';
 import { roundAbsToStep, calcStep } from '../renderer/clMoveMath.js';
 import { findHostWall } from '../openings/openingGeometry.js';
 import { beamAtKonvaTarget, columnAtKonvaTarget, shouldFireMemberTap, isBlankTapTarget } from './beamTap.js';
@@ -31,7 +32,6 @@ import { inGutter as isInGutter } from '../layout.js';
 import { commitCLMoveOp, commitStretchWithUndo } from '../transform/centerLineOps.js';
 import { commitSiteTapLine } from '../transform/siteEdit.js';
 import { canExtendCenterLine, canShortenCenterLine } from '../transform/centerLineExtend.js';
-import { isLastGridOnAxis } from '../transform/centerLineConvert.js';
 import { interiorWallSpans } from '../finish/edgeClassify.js';
 import { isEligibleWallSpan } from '../finish/kneeDropWall.js';
 
@@ -135,9 +135,10 @@ export function usePointerInteraction({
       // context 判定・メニュー items 生成は menuItems.js に集約（建具モードは壁・開口以外は null）。
       // menuItems.js は import ゼロ（node:test対応）に保つため、graph 依存の判定値はここで算出して渡す。
       const menuContext = detectContext(snap, cl, opening, wall, clEndpoint);
-      // 中心⇔通り芯の入替え（平面モード限定）: RADIAL(R) は _createIntersections がV/H専用・
-      // findNearestCenterLine も対象外のため除外する（isPlanar）。
-      const isPlanar = (c) => c.centerLineType === CenterLineType.VERTICAL || c.centerLineType === CenterLineType.HORIZONTAL;
+      // 中心⇔通り芯の入替え可否（canToGrid/canToCenter）・軸最後の1本グレー化（isLastGridOnAxis）は
+      // clMenuGating.js（centerLineConvert.jsの昇格・降格ガードと同じ主体判定isConvertSubjectを共有）
+      // へ集約——ここで個別にインライン種別比較を持つと、処理側ガードと片方だけ直った場合に
+      // UI（メニューの表示・グレー化）と処理（実際の変換可否）が食い違う事故になる。
       const state = buildMenuState(appMode, {
         snap, cl, clEndpoint, opening, wall,
         canMove: typeof modeRef.current?.startMove === 'function',
@@ -145,23 +146,7 @@ export function usePointerInteraction({
         canShorten: clEndpoint ? canShortenCenterLine(graph, clEndpoint.cl, clEndpoint.side) : undefined,
         hasInteriorWall: menuContext === CONTEXT.CENTER_LINE ? interiorWallSpans(graph, cl.id).length > 0 : undefined,
         wallEligible:    menuContext === CONTEXT.WALL ? isEligibleWallSpan(wall, graph) : undefined,
-        canToGrid: appMode === 'floorplan' && !!clEndpoint
-          && centerLineKind(clEndpoint.cl) === 'center' && isPlanar(clEndpoint.cl),
-        canToCenter: appMode === 'floorplan' && menuContext === CONTEXT.CENTER_LINE
-          && centerLineKind(cl) === 'struct' && isPlanar(cl),
-        // cl-to-center・cl-delの両方のグレー化判定に使う共有値（降格ガードcheckDemoteToCenterGuardsの
-        // ERR_CL_CONVERT_LAST_GRID・削除ガードdeleteCenterLineWithUndoのERR_CL_DELETE_LAST_GRIDと
-        // 同じisLastGridOnAxis判定式）。cl-to-centerはappMode==='floorplan'限定だがcl-del（通り芯の
-        // 削除）はモードを問わないため、ここではappMode条件を付けない——struct(通り芯)以外に対して
-        // isLastGridOnAxisを呼ぶと同軸通り芯0本でtrueを返しかねないため、centerLineKind(cl)==='struct'
-        // のガードだけは必須（menuItems.jsのcl-to-center/cl-del双方がこの値をそのまま使う前提）。
-        // cl.labeledも明示的に要求する——処理側ガード（centerLineOps.js deleteCenterLineWithUndoの
-        // isStruct = discipline===STRUCT && labeled）と条件を揃え、discipline:STRUCTかつlabeled:false
-        // という現状は生成経路が無く到達不能な組合せ（将来demoteToAuxiliary相当が復活した場合の保険）でも
-        // UI側と処理側の判定が食い違わないようにする（canToCenterは降格ガードのERR_CL_CONVERT_INVALID
-        // 判定=centerLineKind(cl)==='struct'のみと整合させる必要があるため、こちらは変えない）。
-        isLastGridOnAxis: menuContext === CONTEXT.CENTER_LINE && centerLineKind(cl) === 'struct' && cl.labeled && isPlanar(cl)
-          ? isLastGridOnAxis(graph, cl) : undefined,
+        ...convertMenuFlags(graph, { appMode, menuContext, cl, clEndpoint }),
       });
       if (!state) return;
       // 移動を選ばれたときに備え、移動範囲の計算（他フロアのIDB読み込みを含む）を先読みしておく。
@@ -528,7 +513,7 @@ export function usePointerInteraction({
       const cl    = ms.cl;
       const isV   = cl.centerLineType === 'X';
       const rawVal  = isV ? world.x : world.y;
-      const snapVal = appMode === 'structure' && centerLineKind(cl) === 'beam'
+      const snapVal = usesBeamAxisMoveSnap(cl, appMode)
         ? findBeamAxisMoveSnap(graph, cl, world.x, world.y, SNAP_THRESHOLD_PX, viewport.scaleX, viewport.scaleY)
         : findCLMoveSnap(graph, cl, world.x, world.y, SNAP_THRESHOLD_PX, viewport.scaleX, viewport.scaleY);
       const candidate = snapVal ?? roundAbsToStep(rawVal, cl, isV, viewport.scaleDenominator, graph, appMode === 'structure');

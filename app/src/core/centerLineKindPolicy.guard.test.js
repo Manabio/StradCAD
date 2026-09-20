@@ -308,10 +308,6 @@ const G2_ALLOWLIST = {
     reason: 'findNearestCenterLine（!cl.labeledでオーバーハング除外判定）・findNearbyCenterLines（cl.labeled' +
       'は種別を問わず除外する既存規約。centerLineKindPolicy.js冒頭「既知の乖離」節参照）・' +
       'nonLabeledClExtent（labeled軸のmin/maxフォールバック）。G1と同じ理由で本ステップの対象外ファイル。' },
-  'interaction/usePointerInteraction.js': { count: 1, category: 'unmigrated',
-    reason: 'isLastGridOnAxis判定用のUIコンテキスト算出（centerLineConvert.jsの降格ガードと同じ判定式を' +
-      '共有する必要があり、片方だけ種別ベース化すると判定がずれる——両方まとめて移行する独立タスク。' +
-      '本ステップの対象外ファイル）。' },
   'structural/wallBeamAxes.js': { count: 1, category: 'unmigrated', reason: 'G1と同じ（findBeamAnchorCL）。' },
   'structural/woodAutoFill.js': { count: 2, category: 'unmigrated', reason: 'G1と同じ（柱アンカー解決）。' },
   'transform/centerLineConvert.js': { count: 2, category: 'not-partner-selection',
@@ -335,10 +331,6 @@ const G2_ALLOWLIST = {
 
 // ---- G3: `centerLineKind(x) === '<リテラル>'` インライン種別比較 ----
 const G3_ALLOWLIST = {
-  'interaction/usePointerInteraction.js': { count: 4, category: 'unmigrated',
-    reason: 'canToGrid/canToCenter/isLastGridOnAxisの判定式・梁芯移動スナップの呼び分け。' +
-      'centerLineConvert.jsの降格・昇格ガードと同じ判定式を共有する必要があり、片方だけ移行すると' +
-      'UI側と処理側の判定が食い違う——まとめて移行する独立タスク。' },
   'openings/openingMove.js': { count: 1, category: 'not-partner-selection',
     reason: 'candidateTier（スナップ候補の優先順位付け。通り芯を最優先にするUI都合のロジックで、ポリシーの' +
       '関係述語の代替ではない）。' },
