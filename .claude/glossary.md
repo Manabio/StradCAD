@@ -11,7 +11,7 @@
 | 補助線 | `arch` | `false` | ラベルなし破線（フロア固有） |
 | 梁芯 | `fuse` | `false` | ラベルなし中心線（フロア固有）。小梁の自動生成トリガー。構造モード（`appMode==='structure'`）のAddCLDialogではこれのみ選択可 |
 
-ガターラベル・ガター丸の表示対象は「`discipline==='struct'` かつ `labeled===true`」のみ。梁芯は「中心」と同じ表現形式（extentLoRef/HiRef）を使う別種別（`centerLineKind()`が`'beam'`を返す）。設計意図は`.claude/structural-model.md`。種別間の関係（可視モード表・直交端部の特例・同位置共存・入替えガード等）の真実は`core/centerLineKindPolicy.js`、未移行地点の台帳は`core/centerLineKindPolicy.guard.test.js`のallowlist。
+ガターラベル・ガター丸の表示対象は「`discipline==='struct'` かつ `labeled===true`」のみ。梁芯は「中心」と同じ表現形式（extentLoRef/HiRef）を使う別種別（`centerLineKind()`が`'beam'`を返す）。設計意図は`.claude/structural-model.md`。種別間の関係（可視モード表・直交端部の特例・同位置共存・入替えガード等）の真実は`core/centerLineKindPolicy.js`、直接走査・生フィールド読みの例外（理由つき）の台帳は`core/centerLineKindPolicy.guard.test.js`のallowlist。
 
 平面モード限定で「通り芯」⇔「中心」は相互変換できる（CL端点のロングタップ→「通り芯に」、通り芯の線上ロングタップ→「中心に」）。id維持のグラフ間移籍（delete+再生成ではない）。設計意図は`.claude/data-model.md`。
 
@@ -21,7 +21,10 @@
 appModeごとにCL種別が**描画対象**になるかだけを持つ表（`core/centerLineKindPolicy.js`）。ヒット対象は本表そのものではなく、本表からの例外（`HIT_EXCLUDED_KINDS_BY_MODE`。構造モードは通り芯がヒットしない等）を引いて別途導出する。直交端部候補・同方向障害物・移動スナップ吸着先はここから自動導出されるため、表を変えると連動先も一緒に動く。設計意図は`.claude/data-model.md`「CL種別間の関係は単一のポリシーから導出し…」節。
 
 ## 走査API（centerLineKindPolicy）
-`graph.centerLines`を種別条件で絞り込んで相手候補を返す関数群（`orthoAnchorCandidates(ForNew)`・`sameDirectionObstacles`・`sameCoordCounterparts`・`mergeCandidates`・`candidatesVisibleIn`等）。呼び出し元が種別条件を個別実装すると非表示種別を巻き込む不具合の温床になるため、相手選択はすべてこの経由に統一する（`core/centerLineKindPolicy.guard.test.js`が新規の素の直接走査を禁じる）。
+`graph.centerLines`を種別条件で絞り込んで相手候補を返す関数群（`orthoAnchorCandidates(ForNew)`・`sameDirectionObstacles`・`sameCoordCounterparts`・`mergeCandidates`・`candidatesVisibleIn`・`gridCenterLines(OnAxis)`・`structuralAnchorAt`／`structuralAnchorCandidates`・`beamAxisCenterLines`等）。呼び出し元が種別条件を個別実装すると非表示種別を巻き込む不具合の温床になるため、相手選択はすべてこの経由に統一する（`core/centerLineKindPolicy.guard.test.js`が新規の素の直接走査を禁じる）。
+
+## 構造アンカー種別（STRUCTURAL_ANCHOR_KINDS）
+在来木造の柱・通し梁・土台・床梁が点をCLへ解決するときの相手になれる種別の表。第1候補＝通り芯・梁芯、第2候補＝壁の乗る意匠中心線（補助線は対象外）。梁芯の重複ガードも第1候補を共有する。設計意図は`.claude/structural-model.md`「在来木造の柱は『壁が交差する位置』に立てる」節。
 
 ## discipline（分野）
 `arch`(意匠・既定) / `struct`(構造) / `fuse`(伏図) / `mep`(設備) / `elec`(電気)。
