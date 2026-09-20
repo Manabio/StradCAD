@@ -5,7 +5,6 @@ import { resolveMoveRange } from '../transform/followerGraph.js';
 export class FloorplanModeState {
   drawState    = null; // { mode, startSnap, startWorld } | null
   moveState    = null; // { cl, originalValue, range } | null
-  stretchState = null; // { target, originalVVal?, originalHVal?, originalX?, originalY? } | null
   selectedOpeningId = null; // 平面パレットで内容表示中の開口ID | null
   _pendingPreload = null; // { clId, promise } | null — ガター長押し中の先読み結果
 
@@ -15,12 +14,10 @@ export class FloorplanModeState {
     makeObservable(this, {
       drawState:    observable.ref,
       moveState:    observable.ref,
-      stretchState: observable.ref,
       selectedOpeningId: observable,
       selectOpening:     action,
       isDrawing:    computed,
       isMoving:     computed,
-      isStretching: computed,
       startDraw:      action,
       completeDraw:   action,
       cancelDraw:     action,
@@ -28,10 +25,6 @@ export class FloorplanModeState {
       updateMove:     action,
       commitMove:     action,
       cancelMove:     action,
-      startStretch:   action,
-      updateStretch:  action,
-      commitStretch:  action,
-      cancelStretch:  action,
     });
   }
 
@@ -125,66 +118,12 @@ export class FloorplanModeState {
     this.moveState = null;
   }
 
-  get isMoving()     { return this.moveState    !== null; }
-  get isStretching() { return this.stretchState !== null; }
-
-  // ---- Stretch（交点・自由点の 2D ドラッグ）----
-
-  startStretch(target) {
-    const { type, vertex } = target;
-    if (type === 'intersection') {
-      this.stretchState = {
-        target,
-        originalVVal: vertex.clVertical.value,
-        originalHVal: vertex.clHorizontal.value,
-      };
-    } else {
-      this.stretchState = {
-        target,
-        originalX: vertex.x,
-        originalY: vertex.y,
-      };
-    }
-  }
-
-  updateStretch(wx, wy) {
-    if (!this.stretchState) return;
-    const { target } = this.stretchState;
-    runInAction(() => {
-      if (target.type === 'intersection') {
-        // cl.value（確定座標）との差分を pendingDelta にセット
-        target.vertex.clVertical.pendingDelta   = wx - target.vertex.clVertical.value;
-        target.vertex.clHorizontal.pendingDelta = wy - target.vertex.clHorizontal.value;
-      } else {
-        target.vertex.pendingDX = wx - target.vertex.x;
-        target.vertex.pendingDY = wy - target.vertex.y;
-      }
-    });
-  }
-
-  commitStretch() { this.stretchState = null; }
-
-  cancelStretch() {
-    if (this.stretchState) {
-      runInAction(() => {
-        const { target } = this.stretchState;
-        if (target.type === 'intersection') {
-          target.vertex.clVertical.pendingDelta   = 0;
-          target.vertex.clHorizontal.pendingDelta = 0;
-        } else {
-          target.vertex.pendingDX = 0;
-          target.vertex.pendingDY = 0;
-        }
-      });
-    }
-    this.stretchState = null;
-  }
+  get isMoving() { return this.moveState !== null; }
 
   // ---- Lifecycle ----
 
   dispose() {
     this.cancelDraw();
     this.cancelMove();
-    this.cancelStretch();
   }
 }

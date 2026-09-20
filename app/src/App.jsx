@@ -469,7 +469,6 @@ const App = observer(() => {
       modeRef.current?.cancelDraw?.();
       modeRef.current?.cancelMove?.();
       modeRef.current?.cancelAxisEdit?.();
-      modeRef.current?.cancelStretch?.();
       modeRef.current?.cancelSiteDraw?.();
       resetGestureRefsRef.current?.();
     };

@@ -5,7 +5,7 @@
 // 外から検証する手段が無い）。ここでは usePointerInteraction.js が useLongPress.hasFired()・
 // drag.current から解決した信号（panned/longPressFired）を受け取った後の「成立条件」の純判定
 // （shouldFireMemberTap）だけを検証する——panned/longPressFired 自体を作る8px・500msの閾値ロジックは
-// CL移動・ストレッチ・建具ドラッグ等の既存ジェスチャーと共有する未変更のプリミティブ（drag.current・
+// CL移動・建具ドラッグ等の既存ジェスチャーと共有する未変更のプリミティブ（drag.current・
 // useLongPress.js）に委ねている（ASSUMED: 既存の共有プリミティブの正しさに依存）。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';

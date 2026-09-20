@@ -29,7 +29,7 @@ import {
 } from '../openings/openingMove.js';
 import { snapshotOpening, pushOpeningUndo } from '../openings/openingEdit.js';
 import { inGutter as isInGutter } from '../layout.js';
-import { commitCLMoveOp, commitStretchWithUndo } from '../transform/centerLineOps.js';
+import { commitCLMoveOp } from '../transform/centerLineOps.js';
 import { commitSiteTapLine } from '../transform/siteEdit.js';
 import { canExtendCenterLine, canShortenCenterLine } from '../transform/centerLineExtend.js';
 import { interiorWallSpans } from '../finish/edgeClassify.js';
@@ -75,7 +75,6 @@ export function usePointerInteraction({
   const touchTapRef   = useRef(null);
   const drawDownRef       = useRef(null);
   const moveDownRef       = useRef(null); // CL移動: pointer-down 記録用
-  const stretchDownRef    = useRef(null); // ストレッチ開始判定用: { clientX, clientY, snap }
   const gutterCLRef       = useRef(null); // ガター長押し中のCL
   const axisLabelRef      = useRef(null); // 柱芯ラベル長押し中: { cl, sx, sy }
   const finishDragDownRef = useRef(null); // 仕上げモード: pointerDown 座標
@@ -126,7 +125,6 @@ export function usePointerInteraction({
     onStart:  (sx, sy) => setPressPos({ x: sx, y: sy }),
     onFire:   (sx, sy) => {
       setPressPos(null);
-      stretchDownRef.current = null; // ストレッチ意図をキャンセルしてメニューを開く
       const snap         = snapRef.current;
       const clEndpoint   = nearCLEndpointRef.current;
       const cl           = nearCLRef.current;
@@ -157,7 +155,7 @@ export function usePointerInteraction({
         clEndpointSide: clEndpoint ? clEndpoint.side : null,
       });
     },
-    onCancel: () => { setPressPos(null); stretchDownRef.current = null; },
+    onCancel: () => setPressPos(null),
   });
 
   // ---- ホイールズーム ----
@@ -263,14 +261,12 @@ export function usePointerInteraction({
     }
     // 建具ドラッグの起点候補（平面/建具モード）: 記号丸・平面記号の線分（Konva ヒット。openingId 属性）
     // または壁線近傍の建具本体（nearOpening）。ここでは押下を記録するだけで、8px超の移動で開始する
-    // （交点ストレッチと同じ規約。長押しが先に成立すれば従来どおりメニュー）。
+    // （長押しが先に成立すれば従来どおりメニュー）。
     openingDragEndedRef.current = false;
     if (appMode === 'floorplan' || appMode === 'opening') {
       const opening = openingAtKonvaTarget(e.target) ?? nearOpeningRef.current;
       if (opening) openingDownRef.current = { clientX, clientY, opening };
     }
-    // 交点スナップ中なら押下位置を記録（移動閾値超えでストレッチへ）
-    if (snapRef.current) stretchDownRef.current = { clientX, clientY, snap: snapRef.current };
     longPress.begin(clientX, clientY);
   };
 
@@ -532,28 +528,6 @@ export function usePointerInteraction({
       return;
     }
 
-    // ---- ストレッチモード（交点・自由点の 2D ドラッグ）----
-    const ss = modeRef.current?.stretchState;
-    if (ss) {
-      const world = viewport.screenToWorld(clientX, clientY);
-      const { type, vertex } = ss.target;
-      let finalX = world.x;
-      let finalY = world.y;
-      if (type === 'intersection') {
-        const snapX = findCLMoveSnap(graph, vertex.clVertical,   world.x, world.y, SNAP_THRESHOLD_PX, viewport.scaleX, viewport.scaleY);
-        const snapY = findCLMoveSnap(graph, vertex.clHorizontal, world.x, world.y, SNAP_THRESHOLD_PX, viewport.scaleX, viewport.scaleY);
-        finalX = snapX ?? world.x;
-        finalY = snapY ?? world.y;
-        setSnapPoint((snapX != null || snapY != null) ? { x: finalX, y: finalY } : null);
-      } else {
-        setSnapPoint(null);
-      }
-      modeRef.current.updateStretch(finalX, finalY);
-      setCursorWorld(world);
-      setCursorScreen({ x: clientX, y: clientY });
-      return;
-    }
-
     // ---- 描画モード ----
     if (modeRef.current?.drawState) {
       if (drawDownRef.current) {
@@ -571,50 +545,22 @@ export function usePointerInteraction({
     }
 
     // ---- 通常モード ----
-    // 建具ドラッグ起動判定: 建具ターゲットからの 8px 超のドラッグ（長押し成立前）。ストレッチ・
-    // パンより優先する。開始できない（ホスト壁なし・収まる余地なし）ときは従来の判定へ落とす。
+    // 建具ドラッグ起動判定: 建具ターゲットからの 8px 超のドラッグ（長押し成立前）。パンより優先する。
+    // 開始できない（ホスト壁なし・収まる余地なし）ときは従来の判定へ落とす。
     if (openingDownRef.current) {
       const { clientX: dX, clientY: dY, opening } = openingDownRef.current;
       if (Math.hypot(clientX - dX, clientY - dY) > 8) {
         openingDownRef.current = null;
         if (startOpeningDrag(opening, wall => planAlongAt(wall, dX, dY))) {
-          stretchDownRef.current = null;
           longPress.abort();
           updatePlanOpeningDrag(clientX, clientY);
           return;
         }
       }
     }
-    // ストレッチ起動判定: 交点近傍からのドラッグを検出して longPress パンより優先
-    if (stretchDownRef.current) {
-      const { clientX: dX, clientY: dY, snap } = stretchDownRef.current;
-      if (Math.hypot(clientX - dX, clientY - dY) > 8) {
-        stretchDownRef.current = null;
-        if (snap) {
-          const shapes = graph?.getShapesAtNode(snap) ?? [];
-          const target = { type: 'intersection', vertex: snap, shapes };
-          longPress.abort();
-          modeRef.current?.startStretch(target);
-          // 起動フレームで即座に位置更新
-          const world = viewport.screenToWorld(clientX, clientY);
-          const snapX = findCLMoveSnap(graph, snap.clVertical,   world.x, world.y, SNAP_THRESHOLD_PX, viewport.scaleX, viewport.scaleY);
-          const snapY = findCLMoveSnap(graph, snap.clHorizontal, world.x, world.y, SNAP_THRESHOLD_PX, viewport.scaleX, viewport.scaleY);
-          modeRef.current?.updateStretch(snapX ?? world.x, snapY ?? world.y);
-          setCursorWorld(world);
-          setCursorScreen({ x: clientX, y: clientY });
-          setSnapPoint((snapX != null || snapY != null) ? { x: snapX ?? world.x, y: snapY ?? world.y } : null);
-          return;
-        }
-        // snap なし → パンへフォールバック
-        drag.current = { lastX: clientX, lastY: clientY };
-        setIsPanning(true);
-        return;
-      }
-    }
 
     const shouldPan = longPress.move(clientX, clientY);
     if (shouldPan) {
-      stretchDownRef.current = null;
       drag.current = { lastX: clientX, lastY: clientY };
       setIsPanning(true);
       return;
@@ -726,16 +672,6 @@ export function usePointerInteraction({
     }
     openingDownRef.current = null;
 
-    // ---- ストレッチ確定 ----
-    const ss = modeRef.current?.stretchState;
-    if (ss) {
-      commitStretchWithUndo(ss);
-      modeRef.current.commitStretch();
-      stretchDownRef.current = null;
-      drag.current = null;
-      return;
-    }
-
     const ms2 = modeRef.current?.moveState;
     if (ms2) {
       const { cl, originalValue } = ms2;
@@ -805,7 +741,6 @@ export function usePointerInteraction({
       }
     }
     drawDownRef.current    = null;
-    stretchDownRef.current = null;
     longPress.abort();
     gutterLongPress.abort();
     gutterCLRef.current = null;
@@ -910,11 +845,10 @@ export function usePointerInteraction({
   };
 
   // ESC（App.jsx のキーボードハンドラ effect）からの呼び出し用: ドラッグ中意図の記録refをクリアする。
-  // 元は App.jsx が siteDrawDownRef.current = null; stretchDownRef.current = null; を直接行っていたが、
-  // 両refがこのフックへ移動したため、同じ2行をアクセサとして公開する（挙動は変えない）。
+  // 元は App.jsx が siteDrawDownRef.current = null; を直接行っていたが、
+  // このrefがこのフックへ移動したため、同じ行をアクセサとして公開する（挙動は変えない）。
   function resetGestureRefs() {
     siteDrawDownRef.current = null;
-    stretchDownRef.current = null;
     // 建具ドラッグ中の ESC は開始前へ戻す（CL移動の cancelMove と同じ扱い）
     if (openingDragRef.current) cancelOpeningDrag();
     openingDownRef.current = null;

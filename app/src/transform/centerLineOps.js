@@ -1,4 +1,4 @@
-// CL（通り芯・中心線・補助線・梁芯）に対するユーザー操作（移動確定・ストレッチ確定・削除・
+// CL（通り芯・中心線・補助線・梁芯）に対するユーザー操作（移動確定・削除・
 // AddCLDialog確定・木造提案判定）の実処理＋Undo登録。App.jsx から状態を持たない純粋な形へ
 // 抽出したもの（挙動は元コードのまま。呼び出し側の setState・modeRef 操作だけを App.jsx に残す）。
 import { runInAction } from 'mobx';
@@ -87,44 +87,6 @@ export function commitCLMoveOp(graph, project, cl, originalValue) {
     return { toast: `小梁を${counts.before}本 → ${counts.after}本 に再構成しました` };
   }
   return { toast: null };
-}
-
-// ---- ストレッチ確定（交点 or 自由点のドラッグをbake→Undo登録）----
-// ジェスチャー判定（stretchState の有無・commitStretch()呼び出し・ref のクリア）は呼び出し側（App.jsx）
-// が担う。ここでは「graph 変更＋undo push」だけを行う。
-// @param {{ target, originalVVal?, originalHVal?, originalX?, originalY? }} ss modeRef.current.stretchState
-export function commitStretchWithUndo(ss) {
-  const { target } = ss;
-  if (target.type === 'intersection') {
-    const clV = target.vertex.clVertical;
-    const clH = target.vertex.clHorizontal;
-    const newVVal  = clV.effectiveValue;
-    const newHVal  = clH.effectiveValue;
-    const origVVal = ss.originalVVal;
-    const origHVal = ss.originalHVal;
-    if (newVVal !== origVVal || newHVal !== origHVal) {
-      runInAction(() => { bakeCLValue(clV, newVVal); bakeCLValue(clH, newHVal); });
-      undoManager.push(
-        () => runInAction(() => { bakeCLValue(clV, origVVal); bakeCLValue(clH, origHVal); }),
-        () => runInAction(() => { bakeCLValue(clV, newVVal);  bakeCLValue(clH, newHVal);  }),
-      );
-    } else {
-      runInAction(() => { clV.pendingDelta = 0; clH.pendingDelta = 0; });
-    }
-  } else {
-    const pt   = target.vertex;
-    const newX = pt.effectiveX, newY = pt.effectiveY;
-    const origX = ss.originalX,  origY = ss.originalY;
-    if (newX !== origX || newY !== origY) {
-      runInAction(() => { pt.x = newX; pt.y = newY; pt.pendingDX = 0; pt.pendingDY = 0; });
-      undoManager.push(
-        () => runInAction(() => { pt.x = origX; pt.y = origY; }),
-        () => runInAction(() => { pt.x = newX;  pt.y = newY;  }),
-      );
-    } else {
-      runInAction(() => { pt.pendingDX = 0; pt.pendingDY = 0; });
-    }
-  }
 }
 
 // ---- CL削除（メニューの cl-del）----
