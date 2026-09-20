@@ -10,7 +10,7 @@ import {
 } from './core.js';
 import {
   findNearestCenterLine, findNearestCenterLineEndpoint, findBracketingCLs, nonLabeledClExtent,
-  clSideReachesCenterBoundary, findCLMoveSnap, findBeamAxisMoveSnap,
+  findNearbyCenterLines, clSideReachesCenterBoundary, findCLMoveSnap, findBeamAxisMoveSnap,
 } from './snapGeometry.js';
 import { CL_KINDS, APP_MODES, hitTestKinds, spansEntireAxis } from './core/centerLineKindPolicy.js';
 
@@ -135,6 +135,24 @@ test('clSideReachesCenterBoundary: renderer/gutterLabelHits.js の buildCenterRo
       );
     }
   }
+});
+
+test('【旧データ限定・種別ベースへ統一】clSideReachesCenterBoundary: 直交CLが{labeled:true, discipline:ARCH}のみ・subjectのextent未確定なら到達なし', () => {
+  // centerBoundary（core/dimension.js）はdiscipline不問のgridYs（系統A。labeledのみ要求）で境界を出すため
+  // 3000を返すが、nonLabeledClExtentは種別ベース（gridCenterLinesOnAxis＝isGridCenterLine）のため
+  // discipline:ARCHの直交CLを集計対象にせずnullを返す——旧データ限定でこの非対称が生じる。
+  const graph = makeGraph();
+  addCenterDimensionRows(graph);
+  const legacy = graph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: true, discipline: Discipline.ARCH });
+  assert.equal(centerLineKind(legacy), 'center', '前提: discipline=ARCHなのでcenter種別（labeled:trueだが種別は通り芯でない旧データ）');
+  const cl = graph.addCenterLine(CenterLineType.VERTICAL, 1500, { labeled: false, discipline: Discipline.ARCH });
+
+  const row = graph.dimensionLines.find(d => d.dimensionKind === DimensionKind.CENTER && d.side === DimensionSide.TOP);
+  assert.equal(row.centerBoundary, 3000, '前提: centerBoundaryはdiscipline不問のためlegacyのvalueを拾う');
+  assert.equal(nonLabeledClExtent(cl, graph, VIEWPORT), null, '前提: nonLabeledClExtentは種別ベースのためlegacyを集計せずnull');
+
+  assert.equal(clSideReachesCenterBoundary(cl, 'lo', graph, VIEWPORT), false);
+  assert.equal(clSideReachesCenterBoundary(cl, 'hi', graph, VIEWPORT), false);
 });
 
 test('findNearestCenterLineEndpoint: 水平CLでもLEFT/RIGHTの向きを正しく判定する（垂直CLのTOP/BOTTOMと取り違えない）', () => {
@@ -285,6 +303,218 @@ test('findNearestCenterLineEndpoint: 4種別×6モードの拾われる/拾わ�
       }
     }
   }
+});
+
+// ================================================================
+// findNearestCenterLine: 線上ヒットのextent範囲判定（種別ベース化）
+// 2026-09-20移行: `!cl.labeled && extentLo/Hi` → `!spansEntireAxis(centerLineKind(cl)) && extentLo/Hi`
+// ================================================================
+
+test('findNearestCenterLine: 非通り芯CLはextent+overhang範囲外で線上ヒットしない、境界ちょうど（lo/hi両側）はヒットする', () => {
+  const { graph, cl } = setupVerticalCLGeneric(3000, 0, 3000, { discipline: Discipline.ARCH });
+  // overhang=300（denom=100）。hi側範囲外(extentHi+overhang+1=3301)はヒットしない
+  assert.equal(findNearestCenterLine(graph, 1500, 3301, THRESHOLD_PX, SCALE, SCALE, VIEWPORT), null);
+  // hi側境界ちょうど(3300)はヒットする
+  assert.equal(findNearestCenterLine(graph, 1500, 3300, THRESHOLD_PX, SCALE, SCALE, VIEWPORT)?.id, cl.id);
+  // lo側範囲外(extentLo-overhang-1=-301)はヒットしない
+  assert.equal(findNearestCenterLine(graph, 1500, -301, THRESHOLD_PX, SCALE, SCALE, VIEWPORT), null);
+  // lo側境界ちょうど(-300)はヒットする
+  assert.equal(findNearestCenterLine(graph, 1500, -300, THRESHOLD_PX, SCALE, SCALE, VIEWPORT)?.id, cl.id);
+});
+
+test('findNearestCenterLine: 通り芯CL（struct）はextentLo/Hiの値に関わらず常にヒットする（全軸に及ぶ扱い。通常は通り芯にextentLo/Hiは設定されないが境界条件として確認する）', () => {
+  const { graph, cl } = setupVerticalCLGeneric(3000, 0, 3000, { labeled: true, discipline: Discipline.STRUCT });
+  const hit = findNearestCenterLine(graph, 1500, 100000, THRESHOLD_PX, SCALE, SCALE, VIEWPORT);
+  assert.equal(hit?.id, cl.id, '通り芯は全軸に及ぶためextentLo/Hiの値に関わらずヒットする');
+});
+
+test('findNearestCenterLine: scaleX/scaleYが非対称な水平CLでも垂直距離判定・範囲判定が独立して機能する', () => {
+  const { graph } = setupHorizontalCL(5000); // y=1500, extent=[0,3000]
+  const scaleX = 3, scaleY = 0.5;
+  // along=x=3301はextentHi(3000)+overhang(300)=3300を1超過 → 除外
+  assert.equal(findNearestCenterLine(graph, 3301, 1500, THRESHOLD_PX, scaleX, scaleY, VIEWPORT), null);
+  // 垂直距離（y方向）: 20mm×scaleY(0.5)=10px > threshold(8px) → ヒットしない
+  assert.equal(findNearestCenterLine(graph, 1500, 1520, THRESHOLD_PX, scaleX, scaleY, VIEWPORT), null);
+  // 10mm×scaleY(0.5)=5px < threshold(8px) → ヒットする
+  assert.ok(findNearestCenterLine(graph, 1500, 1510, THRESHOLD_PX, scaleX, scaleY, VIEWPORT));
+});
+
+test('findNearestCenterLine: スクリーン距離が閾値ちょうど（8px）ならヒットしない（閾値未満はヒットする）', () => {
+  const { graph } = setupVerticalCL(3000); // x=1500, extent=[0,3000]
+  // |1500-1508|*1=8px（thresholdPx=8）→ `dist >= thresholdPx` によりヒットしない
+  assert.equal(findNearestCenterLine(graph, 1508, 1500, THRESHOLD_PX, SCALE, SCALE), null);
+  // |1500-1507|*1=7px（閾値未満）→ ヒットする
+  assert.ok(findNearestCenterLine(graph, 1507, 1500, THRESHOLD_PX, SCALE, SCALE));
+});
+
+test('【失敗系】findNearestCenterLine: graphがnullならnull、該当CLが無ければnullを返す', () => {
+  assert.equal(findNearestCenterLine(null, 0, 0, THRESHOLD_PX, SCALE, SCALE), null);
+  const graph = makeGraph();
+  assert.equal(findNearestCenterLine(graph, 0, 0, THRESHOLD_PX, SCALE, SCALE), null);
+});
+
+// ---- 旧データ限定・種別ベースへ統一 ----
+
+test('【旧データ限定・種別ベースへ統一】findNearestCenterLine: labeled:falseでも種別が通り芯（{labeled:false, discipline:STRUCT}）ならextent範囲外でも常にヒットする', () => {
+  const { graph, cl } = setupVerticalCLGeneric(3000, 0, 3000, { labeled: false, discipline: Discipline.STRUCT });
+  assert.equal(centerLineKind(cl), 'struct', '前提: labeled:falseでもdiscipline:STRUCTならkindはstruct');
+  // 移行前は !cl.labeled が true のため範囲外(3301)は除外されていたはず
+  const hit = findNearestCenterLine(graph, 1500, 3301, THRESHOLD_PX, SCALE, SCALE, VIEWPORT);
+  assert.ok(hit, '移行後は種別ベースのため、通り芯は範囲外でも常にヒットする');
+  assert.equal(hit.id, cl.id);
+});
+
+test('【旧データ限定・種別ベースへ統一】findNearestCenterLine: labeled:trueでも種別が通り芯でない（{labeled:true, discipline:ARCH}）ならextent範囲外は線上ヒットしない', () => {
+  const { graph } = setupVerticalCLGeneric(3000, 0, 3000, { labeled: true, discipline: Discipline.ARCH });
+  // 移行前は !cl.labeled が false のため範囲外でも常にヒットしていたはず
+  const hit = findNearestCenterLine(graph, 1500, 3301, THRESHOLD_PX, SCALE, SCALE, VIEWPORT);
+  assert.equal(hit, null, '移行後は種別ベースのため、範囲外は線上ヒットしない');
+});
+
+// ================================================================
+// findNearbyCenterLines: 参照候補からの通り芯除外（種別ベース化）
+// 2026-09-20移行: `if (cl.labeled) continue;` → `if (spansEntireAxis(centerLineKind(cl))) continue;`
+// ================================================================
+
+test('findNearbyCenterLines: 4種別のうち通り芯（struct）だけを参照候補から除外する', () => {
+  const clProps = {
+    struct: { labeled: true,  discipline: Discipline.STRUCT },
+    center: { labeled: false, discipline: Discipline.ARCH },
+    aux:    { labeled: false, lineType: 'dashed' },
+    beam:   { labeled: false, discipline: Discipline.FUSE },
+  };
+  for (const kind of CL_KINDS) {
+    const graph = makeGraph();
+    const cl = graph.addCenterLine(CenterLineType.VERTICAL, 1500, clProps[kind]);
+    const hits = findNearbyCenterLines(graph, 1500, 0, THRESHOLD_PX, SCALE, SCALE);
+    const expected = kind !== 'struct';
+    assert.equal(hits.length, expected ? 1 : 0, `kind=${kind}`);
+    if (expected) assert.equal(hits[0].id, cl.id, `kind=${kind}`);
+  }
+});
+
+test('findNearbyCenterLines: clTypeを渡すと同じ向きのCLのみ返す', () => {
+  const graph = makeGraph();
+  const v = graph.addCenterLine(CenterLineType.VERTICAL,   1500, { labeled: false, discipline: Discipline.ARCH });
+  graph.addCenterLine(CenterLineType.HORIZONTAL, 1500, { labeled: false, discipline: Discipline.ARCH });
+  const hitsBoth = findNearbyCenterLines(graph, 1500, 1500, THRESHOLD_PX, SCALE, SCALE, null);
+  assert.equal(hitsBoth.length, 2, 'clType未指定なら垂直・水平どちらも候補になる');
+  const hitsV = findNearbyCenterLines(graph, 1500, 1500, THRESHOLD_PX, SCALE, SCALE, CenterLineType.VERTICAL);
+  assert.deepEqual(hitsV.map(c => c.id), [v.id]);
+});
+
+test('findNearbyCenterLines: はね出し範囲（along が extentLo/Hi の外）は候補から外れる（境界ちょうどは含む）', () => {
+  const graph = makeGraph();
+  const cl = graph.addCenterLine(CenterLineType.VERTICAL, 1500, {
+    labeled: false, discipline: Discipline.ARCH, extentLo: 0, extentHi: 3000,
+  });
+  assert.equal(findNearbyCenterLines(graph, 1500, -1,   THRESHOLD_PX, SCALE, SCALE).length, 0, '下限未満は候補外');
+  assert.equal(findNearbyCenterLines(graph, 1500, 0,    THRESHOLD_PX, SCALE, SCALE)[0]?.id, cl.id, '下限ちょうどは候補');
+  assert.equal(findNearbyCenterLines(graph, 1500, 3000, THRESHOLD_PX, SCALE, SCALE)[0]?.id, cl.id, '上限ちょうどは候補');
+  assert.equal(findNearbyCenterLines(graph, 1500, 3001, THRESHOLD_PX, SCALE, SCALE).length, 0, '上限超過は候補外');
+});
+
+test('findNearbyCenterLines: スクリーン距離が近い順にソートして返す', () => {
+  const graph = makeGraph();
+  const far  = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
+  const near = graph.addCenterLine(CenterLineType.VERTICAL, 1005, { labeled: false, discipline: Discipline.ARCH });
+  const hits = findNearbyCenterLines(graph, 1003, 0, THRESHOLD_PX, SCALE, SCALE);
+  assert.deepEqual(hits.map(c => c.id), [near.id, far.id]);
+});
+
+test('【失敗系】findNearbyCenterLines: graphがnullなら空配列、該当候補が無ければ空配列を返す', () => {
+  assert.deepEqual(findNearbyCenterLines(null, 0, 0, THRESHOLD_PX, SCALE, SCALE), []);
+  const graph = makeGraph();
+  assert.deepEqual(findNearbyCenterLines(graph, 0, 0, THRESHOLD_PX, SCALE, SCALE), []);
+});
+
+// ---- 旧データ限定・種別ベースへ統一 ----
+
+test('【旧データ限定・種別ベースへ統一】findNearbyCenterLines: labeled:trueでも種別が通り芯でない（{labeled:true, discipline:ARCH}）CLは参照候補になる', () => {
+  const graph = makeGraph();
+  const legacy = graph.addCenterLine(CenterLineType.VERTICAL, 1500, { labeled: true, discipline: Discipline.ARCH });
+  assert.equal(centerLineKind(legacy), 'center', '前提: discipline=ARCHなのでcenter種別（labeled:trueだが種別は通り芯でない旧データ）');
+  // 移行前は cl.labeled により対象外だったはず
+  const hits = findNearbyCenterLines(graph, 1500, 0, THRESHOLD_PX, SCALE, SCALE);
+  assert.deepEqual(hits.map(c => c.id), [legacy.id], '移行後は種別ベースのため参照候補になる');
+});
+
+test('【旧データ限定・種別ベースへ統一】findNearbyCenterLines: labeled:falseでも種別が通り芯（{labeled:false, discipline:STRUCT}）のCLは参照候補にならない', () => {
+  const graph = makeGraph();
+  const cl = graph.addCenterLine(CenterLineType.VERTICAL, 1500, { labeled: false, discipline: Discipline.STRUCT });
+  assert.equal(centerLineKind(cl), 'struct', '前提: labeled:falseでもdiscipline:STRUCTならkindはstruct');
+  // 移行前は cl.labeled=false のため参照候補に含まれていたはず
+  assert.deepEqual(findNearbyCenterLines(graph, 1500, 0, THRESHOLD_PX, SCALE, SCALE), [], '移行後は種別ベースのため参照候補から除外される');
+});
+
+// ================================================================
+// nonLabeledClExtent: extentLo/Hi未確定時の直交通り芯フォールバック（種別ベース化）
+// 2026-09-20移行: `p.labeled` → centerLineKindPolicy.gridCenterLinesOnAxis（isGridCenterLine）
+// ================================================================
+
+test('nonLabeledClExtent: extentLo/Hi未確定なら直交する通り芯（struct）のmin/maxへフォールバックする（同方向の通り芯は集計しない）', () => {
+  const graph = makeGraph();
+  graph.addCenterLine(CenterLineType.HORIZONTAL, 500,  { labeled: true, discipline: Discipline.STRUCT });
+  graph.addCenterLine(CenterLineType.HORIZONTAL, 4000, { labeled: true, discipline: Discipline.STRUCT });
+  graph.addCenterLine(CenterLineType.VERTICAL,   9999, { labeled: true, discipline: Discipline.STRUCT }); // 同方向は対象外
+  const cl = graph.addCenterLine(CenterLineType.VERTICAL, 1500, { labeled: false, discipline: Discipline.ARCH });
+
+  // overhang=300（denom=100）
+  assert.deepEqual(nonLabeledClExtent(cl, graph, VIEWPORT), [500 - 300, 4000 + 300]);
+});
+
+test('nonLabeledClExtent: extentLo/Hi未確定時のフォールバックは、ドラッグ中（pendingDelta≠0）の直交通り芯のeffectiveValueに追従する', () => {
+  const graph = makeGraph();
+  graph.addCenterLine(CenterLineType.HORIZONTAL, 0, { labeled: true, discipline: Discipline.STRUCT });
+  const dragging = graph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: true, discipline: Discipline.STRUCT });
+  dragging.pendingDelta = 500; // ドラッグ中の未確定変位（確定前）——集計はvalue(3000)ではなくeffectiveValue(3500)を使うべき
+  const cl = graph.addCenterLine(CenterLineType.VERTICAL, 1500, { labeled: false, discipline: Discipline.ARCH });
+
+  // overhang=300（denom=100、他のフォールバック正常系テストと同じVIEWPORT）
+  assert.deepEqual(nonLabeledClExtent(cl, graph, VIEWPORT), [0 - 300, 3500 + 300]);
+});
+
+test('nonLabeledClExtent: 直交する通り芯が0本ならnullを返す', () => {
+  const graph = makeGraph();
+  const cl = graph.addCenterLine(CenterLineType.VERTICAL, 1500, { labeled: false, discipline: Discipline.ARCH });
+  assert.equal(nonLabeledClExtent(cl, graph, VIEWPORT), null);
+});
+
+test('nonLabeledClExtent: extentLo/Hiが設定済みなら直交CLが無くてもフォールバックせずその値を使う（overhang込み）', () => {
+  const graph = makeGraph();
+  const cl = graph.addCenterLine(CenterLineType.VERTICAL, 1500, {
+    labeled: false, discipline: Discipline.ARCH, extentLo: 0, extentHi: 3000,
+  });
+  assert.deepEqual(nonLabeledClExtent(cl, graph, VIEWPORT), [0 - 300, 3000 + 300]);
+});
+
+test('nonLabeledClExtent: trim指定CLはoverhangが0になる', () => {
+  const graph = makeGraph();
+  graph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+  graph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: true, discipline: Discipline.STRUCT });
+  const cl = graph.addCenterLine(CenterLineType.VERTICAL, 1500, { labeled: false, discipline: Discipline.ARCH, trim: true });
+  assert.deepEqual(nonLabeledClExtent(cl, graph, VIEWPORT), [0, 3000]);
+});
+
+test('nonLabeledClExtent: scaleDenominatorが大きい（denom>=500）とoverhangは0になる', () => {
+  const graph = makeGraph();
+  graph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+  graph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: true, discipline: Discipline.STRUCT });
+  const cl = graph.addCenterLine(CenterLineType.VERTICAL, 1500, { labeled: false, discipline: Discipline.ARCH });
+  assert.deepEqual(nonLabeledClExtent(cl, graph, { scaleDenominator: 500 }), [0, 3000]);
+});
+
+// ---- 旧データ限定・種別ベースへ統一 ----
+
+test('【旧データ限定・種別ベースへ統一】nonLabeledClExtent: labeled:trueでも種別が通り芯でない（{labeled:true, discipline:ARCH}）直交CLはフォールバック集計に含めない', () => {
+  const graph = makeGraph();
+  const legacy1 = graph.addCenterLine(CenterLineType.HORIZONTAL, 500,  { labeled: true, discipline: Discipline.ARCH });
+  graph.addCenterLine(CenterLineType.HORIZONTAL, 4000, { labeled: true, discipline: Discipline.ARCH });
+  assert.equal(centerLineKind(legacy1), 'center', '前提: discipline=ARCHなのでcenter種別（labeled:trueだが種別は通り芯でない旧データ）');
+  const cl = graph.addCenterLine(CenterLineType.VERTICAL, 1500, { labeled: false, discipline: Discipline.ARCH });
+
+  // 移行前は p.labeled によりlegacy1・legacy2が集計対象になり [500-300, 4000+300] を返していたはず
+  assert.equal(nonLabeledClExtent(cl, graph, VIEWPORT), null, '移行後は種別ベースのため通り芯（struct）が0本ならnull');
 });
 
 // ---- 既存関数（findBracketingCLs）の再エクスポートが壊れていないことの最小回帰 ----

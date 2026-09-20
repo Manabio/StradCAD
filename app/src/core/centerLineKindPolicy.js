@@ -26,8 +26,12 @@
  * G1_ALLOWLIST/G2_ALLOWLIST/G3_ALLOWLIST を唯一の供給源とする（本コメントには重複して書かない。
  * 各エントリの理由・対象関数はそちらを参照）。structural/wallBeamAxes.js・structural/woodAutoFill.js・
  * structural/structuralAutoFill.js（柱アンカー解決と共有する述語のため構造goldenでの検証が要る独立
- * タスク）・snapGeometry.js・finish/gridCells.js 等はガードのallowlistに
- * 「未移行（unmigrated）」区分で残っている。interaction/usePointerInteraction.js の中心⇔通り芯入替え
+ * タスク）・finish/gridCells.js 等はガードのallowlistに
+ * 「未移行（unmigrated）」区分で残っている（snapGeometry.jsの3地点＝findNearestCenterLine・
+ * findNearbyCenterLines・nonLabeledClExtentは2026-09-20に種別ベース（spansEntireAxis／
+ * gridCenterLinesOnAxis）へ移行済み——ガードのG2からは外れた。距離計算を伴う最近傍探索自体の
+ * graph.centerLines直接走査（G1）は性能上の理由でnot-partner-selection区分のまま残る）。
+ * interaction/usePointerInteraction.js の中心⇔通り芯入替え
  * メニュー可否（canToGrid/canToCenter/isLastGridOnAxis）は interaction/clMenuGating.js（isConvertSubject
  * 経由）へ移行済み——centerLineConvert.jsの昇格・降格ガードと同じ主体判定を共有する。梁芯移動スナップの
  * 呼び分けはclMenuGating.jsを経由せず、usePointerInteraction.jsがusesBeamAxisMoveSnapを直接利用する。

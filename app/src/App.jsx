@@ -1253,7 +1253,8 @@ const App = observer(() => {
       // findNearbyCenterLines は全モード共通（構造モードの梁芯追加ダイアログでも使う）ため、
       // 種別の絞り込みはここ（appMode既知の呼び出し側）で行う——ヒット可能種別
       // （core/centerLineKindPolicy.js isHitTestTarget）に揃える。findNearbyCenterLines自体が
-      // `cl.labeled` で通り芯を常に除外するため、ここでの絞り込みは実質「梁芯かどうか」だけが効く
+      // 種別ベース（centerLineKindPolicy.spansEntireAxis）で通り芯を常に除外するため、ここでの
+      // 絞り込みは実質「梁芯かどうか」だけが効く
       // ——isHitTestTarget(cl,'structure')はkind==='beam'のみtrue・それ以外の4モードは
       // ['struct','center','aux']（通り芯は上記で既に除外済みのため center/aux のみ通る）で、従来の
       // `appMode==='structure' ? beam : !beam` と同じ結果になる。

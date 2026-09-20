@@ -263,11 +263,14 @@ const G1_ALLOWLIST = {
   'openings/openingMove.js': { count: 1, category: 'not-partner-selection',
     reason: 'openingMoveRange。perpendicularWallMaterial が種別を問わずCL上の直交壁材を先に確認する必要が' +
       'あり、種別で絞り込んでからループすると素通りしてしまうため走査APIに畳めない。' },
-  'snapGeometry.js': { count: 5, category: 'not-partner-selection',
-    reason: 'findCLMoveSnap・findNearestCenterLine・findNearbyCenterLines・nonLabeledClExtent・' +
-      'findNearestCenterLineEndpoint。距離計算を伴う最近傍探索／フォールバック集計で、種別判定は' +
-      'isMoveSnapTarget・spansEntireAxis・kindFilter経由（ポリシー由来）——本ステップの変更対象3ファイル' +
-      '（centerLineMerge.js・openingMove.js・floorCLMap.js）に含まれないため未着手のまま。' },
+  'snapGeometry.js': { count: 4, category: 'not-partner-selection',
+    reason: 'findCLMoveSnap・findNearestCenterLine・findNearbyCenterLines・findNearestCenterLineEndpoint。' +
+      '距離計算を伴う最近傍探索（ポインタ移動毎フレーム呼ばれうる）で、種別判定はisMoveSnapTarget・' +
+      'spansEntireAxis・kindFilter経由（ポリシー由来）——候補選定自体は種別ベースだが、ループの走査元' +
+      '（graph.centerLines）を毎回filter/sortする走査APIに置き換えると性能上の理由で不利なため、' +
+      'ループ内条件だけを種別ベースへ寄せている。nonLabeledClExtentは2026-09-20に' +
+      'gridCenterLinesOnAxis（走査API）へ移行しG1から外れた（extentLo/Hi未確定の古いデータのみが' +
+      '通る稀な分岐のため性能上の懸念はない）。' },
   'storage/FloorSwapManager.js': { count: 2, category: 'not-partner-selection',
     reason: 'autorun内のdirty追跡（MobX reactionの依存収集）。cl._value/cl.refOffsetを読むためだけに全件を' +
       '辿る——相手選択ではない。' },
@@ -304,10 +307,6 @@ const G2_ALLOWLIST = {
   'finish/wallGeneration.js': { count: 1, category: 'unmigrated',
     reason: '壁生成時のCL全域扱い判定（labeled軸は常に全域）。種別ベース化（spansEntireAxis）への統一は' +
       '影響範囲未確認のため未移行。' },
-  'snapGeometry.js': { count: 3, category: 'unmigrated',
-    reason: 'findNearestCenterLine（!cl.labeledでオーバーハング除外判定）・findNearbyCenterLines（cl.labeled' +
-      'は種別を問わず除外する既存規約。centerLineKindPolicy.js冒頭「既知の乖離」節参照）・' +
-      'nonLabeledClExtent（labeled軸のmin/maxフォールバック）。G1と同じ理由で本ステップの対象外ファイル。' },
   'structural/wallBeamAxes.js': { count: 1, category: 'unmigrated', reason: 'G1と同じ（findBeamAnchorCL）。' },
   'structural/woodAutoFill.js': { count: 2, category: 'unmigrated', reason: 'G1と同じ（柱アンカー解決）。' },
   'transform/centerLineConvert.js': { count: 2, category: 'not-partner-selection',
