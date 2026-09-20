@@ -1,4 +1,5 @@
-import { CenterLineType, Discipline } from '@core';
+import { CenterLineType, isGridCenterLine } from '@core';
+import { isFinishCellDivider } from '../core/centerLineKindPolicy.js';
 import { scopedValue, graphList } from '../graphReadScope.js';
 
 // ================================================================
@@ -68,15 +69,26 @@ export function gridIndexOf(graph) {
 // 内部ヘルパー
 // ================================================================
 
-// 領域分割に使う CL かどうか（補助線は除外）
+// 領域分割に使う CL かどうか（補助線・梁芯は除外。centerLineKindPolicy.js
+// FINISH_CELL_DIVIDER_KINDS・isFinishCellDivider 参照）。
+//
+// 【旧データ限定・種別ベースへ統一】旧実装は `labeled && discipline===STRUCT` /
+// `!labeled && lineType!=='dashed' && discipline===ARCH` の生フィールド判定だった。
+// `{labeled:true, discipline:STRUCT, lineType:'dashed'}`（旧データの異常値）は
+// HEADでは前者の条件（labeledとdisciplineのみ見る）に合致し分割線扱いだったが、
+// 種別ベース（isGridCenterLine。centerLineKindがlineType:'dashed'を先に見てauxと判定する）
+// では分割線扱いにならない。
 export function isDividerCL(cl) {
-  return (cl.labeled && cl.discipline === Discipline.STRUCT) ||
-         (!cl.labeled && cl.lineType !== 'dashed' && cl.discipline === Discipline.ARCH);
+  return isFinishCellDivider(cl);
 }
 
-// cl の延長区間 [extentLo, extentHi] が [rangeLo, rangeHi] と重なるか（通り芯は常にアクティブ）
+// cl の延長区間 [extentLo, extentHi] が [rangeLo, rangeHi] と重なるか（通り芯は常にアクティブ）。
+//
+// 【旧データ限定・種別ベースへ統一】isDividerCLと同じ旧データ（{labeled:true, discipline:STRUCT,
+// lineType:'dashed'}）で、HEADは常にアクティブ（true）だったが、種別ベース（isGridCenterLine）
+// では通り芯扱いにならず、以降のextent判定に進む。
 export function isActiveAcrossRange(cl, rangeLo, rangeHi) {
-  if (cl.labeled && cl.discipline === Discipline.STRUCT) return true;
+  if (isGridCenterLine(cl)) return true;
   const lo = cl.extentLo, hi = cl.extentHi;
   if (lo == null || hi == null) return true;
   return lo < rangeHi && hi > rangeLo;
@@ -309,9 +321,12 @@ export function gridDividerSegments(graph) {
   const xMin = verticals[0].value,   xMax = verticals[verticals.length - 1].value;
   const yMin = horizontals[0].value, yMax = horizontals[horizontals.length - 1].value;
 
+  // 【旧データ限定・種別ベースへ統一】isDividerCLと同じ旧データ（{labeled:true, discipline:STRUCT,
+  // lineType:'dashed'}）で、HEADは常に全長（full:true）だったが、種別ベース（isGridCenterLine）
+  // では通り芯扱いにならず extent でクリップされる。
   const segs = [];
   const push = (cl, isVertical, rangeLo, rangeHi) => {
-    const full = cl.labeled && cl.discipline === Discipline.STRUCT; // 通り芯は常に全長
+    const full = isGridCenterLine(cl); // 通り芯は常に全長
     const lo = full ? rangeLo : Math.max(cl.extentLo ?? -Infinity, rangeLo);
     const hi = full ? rangeHi : Math.min(cl.extentHi ?? Infinity, rangeHi);
     if (lo < hi) segs.push({ key: cl.id, isVertical, value: cl.value, lo, hi });

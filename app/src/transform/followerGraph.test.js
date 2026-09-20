@@ -3,7 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Project, CenterLineType, Discipline } from '../core.js';
-import { computeMoveRange, collectFollowerOffsets, resolveMoveRange } from './followerGraph.js';
+import { computeMoveRange, collectFollowerOffsets, resolveMoveRange, isSharedCL } from './followerGraph.js';
 
 // project.structGraph（全階共通の通り芯）+ 自グラフ（階固有の中心線・補助線・梁芯）を持つ最小プロジェクト。
 function makeProjectWithGraph() {
@@ -79,4 +79,35 @@ test('resolveMoveRange（本番経路）: 中心線の移動は梁芯を素通�
   const result = await resolveMoveRange(project, graph, moving);
 
   assert.equal(result.range.max, 3000, '呼び出し側が computeMoveRange に渡す bundle 経路でも梁芯を素通りする');
+});
+
+// ---- isSharedCL: 「全階共有（project.structGraph）か」の判定（種別ベース。isGridCenterLine） ----
+test('isSharedCL: 4種別×labeled2値の総当り（通り芯=labeled必須、それ以外は常にfalse）', () => {
+  const { graph, project } = makeProjectWithGraph();
+  let v = 0;
+  const cases = [
+    ['struct', Discipline.STRUCT, 'center'],
+    ['center', Discipline.ARCH,   'center'],
+    ['aux',    Discipline.ARCH,   'dashed'],
+    ['beam',   Discipline.FUSE,   'center'],
+  ];
+  for (const [kind, discipline, lineType] of cases) {
+    for (const labeled of [true, false]) {
+      const cl = kind === 'struct'
+        ? project.structGraph.addCenterLine(CenterLineType.VERTICAL, v, { labeled, discipline })
+        : graph.addCenterLine(CenterLineType.VERTICAL, v, { labeled, discipline, lineType });
+      v += 1000;
+      const expected = kind === 'struct' && labeled;
+      assert.equal(isSharedCL(cl), expected, `kind=${kind} labeled=${labeled}`);
+    }
+  }
+});
+
+test('【旧データ限定・種別ベースへ統一】isSharedCL: {discipline:STRUCT, labeled:true, lineType:dashed}はHEADの共有(true)から、移行後は非共有(false)になる', () => {
+  const { graph } = makeProjectWithGraph();
+  const legacy = graph.addCenterLine(CenterLineType.VERTICAL, 0,
+    { labeled: true, discipline: Discipline.STRUCT, lineType: 'dashed' });
+  assert.equal(isSharedCL(legacy), false,
+    '旧実装（discipline===STRUCT&&labeled）はtrueだったが、種別ベース（isGridCenterLine。' +
+    'centerLineKindがlineType:dashedを先に見る）ではfalseになる');
 });

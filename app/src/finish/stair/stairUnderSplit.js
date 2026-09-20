@@ -16,7 +16,8 @@
 // 同定は縦横両軸で照合し、upDirection の軸違いの旧分割CLも拾う。
 // ================================================================
 
-import { CenterLineType, Discipline, RoomFeature, StairType } from '@core';
+import { CenterLineType, RoomFeature, StairType } from '@core';
+import { isUnderStairSplitKind } from '../../core/centerLineKindPolicy.js';
 import { cellBoundsFromKey, getCellsInRect, roomBounds } from '../gridCells.js';
 import { straightBreakMm } from './stairGeometry.js';
 
@@ -32,9 +33,19 @@ function stairBounds(stair, graph) {
 
 // cl が stair 外形 b の階段下分割CLとみなせるか。
 // 「外形の内部を横切り、extent が外形の直交範囲と一致する（＝この階段のためだけの分割線）」
-// 無ラベルARCH実線（isDividerCL 相当）であること。value は蹴上依存で動くため照合しない。
+// 中心線（isUnderStairSplitKind。core/centerLineKindPolicy.js）であること。
+// value は蹴上依存で動くため照合しない。
+//
+// 【旧データ限定・種別ベースへ統一】旧実装は `labeled || discipline!==ARCH || lineType==='dashed'`
+// の生フィールド判定だった（通過条件は `!labeled && discipline===ARCH && lineType!=='dashed'`）。
+// 種別ベース（centerLineKind(cl)==='center'）は labeled を問わないため、
+// `{labeled:true, discipline:ARCH, lineType:'center'}`（旧データの異常値。通り芯でも補助線でもない
+// のに labeled:true な中心線）は、HEADでは分割線と認めなかったが（labeled:trueで即false）、
+// 移行後は分割線として認める。同様に discipline が arch/struct/fuse 以外（Discipline.MEP／ELEC。
+// 現行の CL 生成・デコード経路には存在しない）も種別上は中心線になる——移行前の式
+// （discipline===ARCH の直比較）はこれらを除外していた。
 function isSplitCLFor(cl, b) {
-  if (cl.labeled || cl.discipline !== Discipline.ARCH || cl.lineType === 'dashed') return false;
+  if (!isUnderStairSplitKind(cl)) return false;
   if (cl.extentLo == null || cl.extentHi == null) return false;
   if (cl.centerLineType === CenterLineType.HORIZONTAL) {
     return cl.value > b.y1 + EPS && cl.value < b.y2 - EPS &&

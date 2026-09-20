@@ -29,6 +29,8 @@ import {
   isRenderTarget, isHitTestTarget,
   coversAlongAxis, orthoAnchorCandidates, orthoAnchorCandidatesForNew, sameDirectionObstacles,
   sameCoordCounterparts, mergeCandidates, candidatesVisibleIn, gridCenterLinesOnAxis,
+  FINISH_CELL_DIVIDER_KINDS, isFinishCellDivider,
+  UNDER_STAIR_SPLIT_KINDS, isUnderStairSplitKind, axisLineKindOf,
 } from './centerLineKindPolicy.js';
 
 // ---- 製品コード（section C）との突き合わせに使う実装 ----
@@ -735,6 +737,116 @@ test('【旧データ限定・種別ベースへ統一】isRenderTarget: {labele
   assert.equal(centerLineKind(legacy), 'aux', '前提: lineType=dashedなのでaux種別（labeled:trueだが種別は通り芯でない旧データ）');
   assert.equal(isRenderTarget(legacy, 'structure'), false, '移行後は種別ベースのため構造モードでは描画対象外（移行前は isArchCL=!cl.labeled&&... がfalseになり描画されていた）');
   assert.equal(isRenderTarget(legacy, 'floorplan'), true, 'floorplanは旧コードも種別ベース相当のため変化なし');
+});
+
+// ---- isFinishCellDivider: finish/gridCells.js isDividerCL の判定本体（FINISH_CELL_DIVIDER_KINDS） ----
+// 中心線側は種別（centerLineKind）のみで判定し labeled は見ない——線上ヒットの範囲判定
+// （snapGeometry.js findNearestCenterLine）は既に種別ベース（spansEntireAxis）のため、同じ
+// 旧データの線についてセル分割線としての扱いだけ生labeledを残すと、「ヒットは種別で判定される
+// のにセル分割はlabeled依存のまま」という食い違いが残る。
+test('FINISH_CELL_DIVIDER_KINDS: セル分割線になる種別（通り芯側を除く）は中心線のみ（labeledの値は問わない）', () => {
+  assert.deepEqual([...FINISH_CELL_DIVIDER_KINDS], ['center']);
+});
+
+test('isFinishCellDivider: 4種別×labeled2値の総当り（通り芯=labeled必須、中心線=labeledの値を問わず常にtrue、補助線・梁芯=常にfalse）', () => {
+  const { graph, project } = makeProjectWithGraph();
+  let v = 1000;
+  for (const kind of CL_KINDS) {
+    for (const labeled of [true, false]) {
+      const cl = kind === 'struct'
+        ? project.structGraph.addCenterLine(CenterLineType.VERTICAL, v, { labeled, discipline: Discipline.STRUCT })
+        : graph.addCenterLine(CenterLineType.VERTICAL, v, {
+          labeled,
+          discipline: kind === 'beam' ? Discipline.FUSE : Discipline.ARCH,
+          lineType: kind === 'aux' ? 'dashed' : 'center',
+        });
+      v += 1000;
+      const expected = kind === 'struct' ? labeled : kind === 'center';
+      assert.equal(isFinishCellDivider(cl), expected, `kind=${kind} labeled=${labeled}`);
+    }
+  }
+});
+
+test('【旧データ限定・種別ベースへ統一】isFinishCellDivider: {labeled:true, discipline:ARCH, lineType:center}（通り芯でも補助線でもないのにlabeled:trueな旧データ）はHEADの不参加から、移行後は分割線に参加する', () => {
+  const { graph } = makeProjectWithGraph();
+  const legacy = graph.addCenterLine(CenterLineType.VERTICAL, 1000,
+    { labeled: true, discipline: Discipline.ARCH, lineType: 'center' });
+  assert.equal(centerLineKind(legacy), 'center', '前提: 通り芯でも補助線でもないためcenter種別になる');
+  assert.equal(isFinishCellDivider(legacy), true,
+    '旧実装（!labeled && lineType!==dashed && discipline===ARCH）はlabeled:trueで即falseだったが、' +
+    '種別ベース（centerLineKind(cl)==="center"。labeledを問わない）ではtrueになる');
+});
+
+test('【旧データ限定・種別ベースへ統一】isFinishCellDivider: {labeled:true, discipline:STRUCT, lineType:dashed}は通り芯側（isGridCenterLine）にもcenter側にも該当せずfalse', () => {
+  const { graph } = makeProjectWithGraph();
+  const legacy = graph.addCenterLine(CenterLineType.VERTICAL, 1000,
+    { labeled: true, discipline: Discipline.STRUCT, lineType: 'dashed' });
+  assert.equal(centerLineKind(legacy), 'aux', '前提: lineType=dashedが最優先されaux種別になる');
+  assert.equal(isFinishCellDivider(legacy), false,
+    '旧実装（labeled&&discipline===STRUCT）はtrueだったが、種別ベース（isGridCenterLine）はlineType:dashedをauxと判定しfalseになる');
+});
+
+// ---- isUnderStairSplitKind: finish/stair/stairUnderSplit.js isSplitCLFor の種別判定本体 ----
+test('UNDER_STAIR_SPLIT_KINDS: 階段下分割CLとして認める種別は中心線のみ（labeledの値は問わない）', () => {
+  assert.deepEqual([...UNDER_STAIR_SPLIT_KINDS], ['center']);
+});
+
+test('isUnderStairSplitKind: 4種別×labeled2値の総当り（中心線のみtrue。labeledの値を問わない）', () => {
+  const { graph, project } = makeProjectWithGraph();
+  let v = 1000;
+  for (const kind of CL_KINDS) {
+    for (const labeled of [true, false]) {
+      const cl = kind === 'struct'
+        ? project.structGraph.addCenterLine(CenterLineType.VERTICAL, v, { labeled, discipline: Discipline.STRUCT })
+        : graph.addCenterLine(CenterLineType.VERTICAL, v, {
+          labeled,
+          discipline: kind === 'beam' ? Discipline.FUSE : Discipline.ARCH,
+          lineType: kind === 'aux' ? 'dashed' : 'center',
+        });
+      v += 1000;
+      assert.equal(isUnderStairSplitKind(cl), kind === 'center', `kind=${kind} labeled=${labeled}`);
+    }
+  }
+});
+
+// ---- axisLineKindOf: finish/edgeClassify.js classifyAxisLineType の判定本体 ----
+test('axisLineKindOf: 4種別×labeled2値の総当り（struct=labeled必須でgrid、aux=常にaux、center/beam=常にcenter）', () => {
+  const { graph, project } = makeProjectWithGraph();
+  let v = 1000;
+  for (const kind of CL_KINDS) {
+    for (const labeled of [true, false]) {
+      const cl = kind === 'struct'
+        ? project.structGraph.addCenterLine(CenterLineType.VERTICAL, v, { labeled, discipline: Discipline.STRUCT })
+        : graph.addCenterLine(CenterLineType.VERTICAL, v, {
+          labeled,
+          discipline: kind === 'beam' ? Discipline.FUSE : Discipline.ARCH,
+          lineType: kind === 'aux' ? 'dashed' : 'center',
+        });
+      v += 1000;
+      const expected = kind === 'struct' && labeled ? 'grid' : kind === 'aux' ? 'aux' : 'center';
+      assert.equal(axisLineKindOf(cl), expected, `kind=${kind} labeled=${labeled}`);
+    }
+  }
+});
+
+test('【旧データ限定・種別ベースへ統一】axisLineKindOf: {labeled:true, discipline:STRUCT, lineType:dashed}はHEADの「通り芯(grid)」から、移行後は「補助線(aux)」になる', () => {
+  const { graph } = makeProjectWithGraph();
+  const legacy = graph.addCenterLine(CenterLineType.VERTICAL, 1000,
+    { labeled: true, discipline: Discipline.STRUCT, lineType: 'dashed' });
+  assert.equal(axisLineKindOf(legacy), 'aux',
+    '旧実装（discipline===STRUCT&&labeled優先）はgrid（通り芯）だったが、種別ベース（isGridCenterLine。' +
+    'centerLineKindがlineType:dashedを先に見る）ではauxになる');
+});
+
+// ---- 【失敗系】isFinishCellDivider・isUnderStairSplitKind・axisLineKindOf: discipline／lineType を
+// 持たない未生成の仮想候補（ダック型オブジェクト）を渡すと、centerLineKind が黙って既定種別
+// 'center' に落ちるため、実CLへの適用を前提とするこれらの述語も「中心線扱い」の結果を返す
+// （現行挙動のピン留め。呼び出し側は実CL／POJOスナップショット以外を渡さない前提を守ること）。
+test('【失敗系】isFinishCellDivider・isUnderStairSplitKind・axisLineKindOf: discipline/lineTypeを持たない仮想候補は黙って中心線扱い（center）になる', () => {
+  const virtual = { labeled: false };
+  assert.equal(isFinishCellDivider(virtual), true);
+  assert.equal(isUnderStairSplitKind(virtual), true);
+  assert.equal(axisLineKindOf(virtual), 'center');
 });
 
 // ================================================================

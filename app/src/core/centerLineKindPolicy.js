@@ -26,11 +26,16 @@
  * G1_ALLOWLIST/G2_ALLOWLIST/G3_ALLOWLIST を唯一の供給源とする（本コメントには重複して書かない。
  * 各エントリの理由・対象関数はそちらを参照）。structural/wallBeamAxes.js・structural/woodAutoFill.js・
  * structural/structuralAutoFill.js（柱アンカー解決と共有する述語のため構造goldenでの検証が要る独立
- * タスク）・finish/gridCells.js 等はガードのallowlistに
+ * タスク）等はガードのallowlistに
  * 「未移行（unmigrated）」区分で残っている（snapGeometry.jsの3地点＝findNearestCenterLine・
  * findNearbyCenterLines・nonLabeledClExtentは2026-09-20に種別ベース（spansEntireAxis／
  * gridCenterLinesOnAxis）へ移行済み——ガードのG2からは外れた。距離計算を伴う最近傍探索自体の
- * graph.centerLines直接走査（G1）は性能上の理由でnot-partner-selection区分のまま残る）。
+ * graph.centerLines直接走査（G1）は性能上の理由でnot-partner-selection区分のまま残る。
+ * finish/gridCells.js・finish/edgeClassify.js・finish/wallGeneration.js・finish/stair/
+ * stairUnderSplit.js・transform/followerGraph.js のCL種別分類はステップ6（2026-09-20）で
+ * isFinishCellDivider／isUnderStairSplitKind／axisLineKindOf／isGridCenterLine／spansEntireAxis
+ * 経由へ移行済み——gridCells.jsのsnapshotCLコピー1件（G2）とstairUnderSplit.jsの幾何署名走査1件
+ * （G1）のみnot-partner-selection区分で残る）。
  * interaction/usePointerInteraction.js の中心⇔通り芯入替え
  * メニュー可否（canToGrid/canToCenter/isLastGridOnAxis）は interaction/clMenuGating.js（isConvertSubject
  * 経由）へ移行済み——centerLineConvert.jsの昇格・降格ガードと同じ主体判定を共有する。梁芯移動スナップの
@@ -189,6 +194,26 @@ export const CONVERT_SUBJECT_KINDS = Object.freeze({ promote: 'center', demote: 
 // 現行は構造モードで梁芯を動かすときのみ梁芯専用スナップを使う——hitTestKinds('structure')=['beam']の
 // ため、構造モードでCL移動できるのは実質梁芯のみ（他種別はヒットしない）。
 export const BEAM_AXIS_MOVE_SNAP_KINDS_BY_MODE = Object.freeze({ structure: Object.freeze(['beam']) });
+
+// ---- 原始事実10: 仕上げモードのセル分割線になる種別（通り芯側を除く） ----
+// finish/gridCells.js isDividerCL: 部屋領域のセル分割線として扱われるのは「通り芯
+// （isGridCenterLine。labeled必須）」または「中心線（center。labeledの値は問わない）」の
+// 2通りのみ——補助線(aux)・梁芯(beam)は分割線にならない。
+//
+// 【旧データ限定・種別ベースへ統一】中心線側は種別（centerLineKind）のみで判定し、labeled は
+// 見ない。`{labeled:true, discipline:ARCH, lineType:'center'}`（通り芯でも補助線でもないのに
+// labeled:true な旧データ）は、HEAD（`!labeled && lineType!=='dashed' && discipline===ARCH`の
+// 生フィールド判定）では分割線に不参加だったが、種別ベースでは参加する
+// （finish/gridCells.test.js「【旧データ限定・種別ベースへ統一】」参照）。
+export const FINISH_CELL_DIVIDER_KINDS = Object.freeze(['center']);
+
+// ---- 原始事実11: 階段下分割CLとして認める種別 ----
+// finish/stair/stairUnderSplit.js ensureUnderStairSplit が生成し、isSplitCLFor が幾何署名
+// （外形内部を横切り、extentが外形の直交範囲と一致する）と組み合わせて同定する「階段下の
+// 分割線」は中心線（center）のみ——通り芯・補助線・梁芯はこの用途の分割線として認めない
+// （「階段下の分割線は中心線」という、原始事実10（セル分割線。通り芯もOR対象）とは別の事実
+// のため、FINISH_CELL_DIVIDER_KINDSは流用しない）。
+export const UNDER_STAIR_SPLIT_KINDS = Object.freeze(['center']);
 
 // ================================================================
 // 種別レベルAPI
@@ -531,6 +556,61 @@ export function isRenderTarget(cl, appMode) {
 /** cl が appMode でポインタヒット対象か。 */
 export function isHitTestTarget(cl, appMode) {
   return hitTestKinds(appMode).includes(centerLineKind(cl));
+}
+
+/**
+ * cl が仕上げモードのセル分割線（finish/gridCells.js isDividerCL）として扱われるか
+ * （FINISH_CELL_DIVIDER_KINDS参照。通り芯はisGridCenterLine経由、それ以外は種別が中心線
+ * （center）であること——labeledの値は問わない）。
+ * discipline が arch/struct/fuse 以外（Discipline.MEP／ELEC。現行の CL 生成・デコード経路には
+ * 存在しない）も centerLineKind 経由で種別上は中心線になるため true になる。
+ *
+ * 実在の CenterLine またはその POJO スナップショット（finish/gridCells.js snapshotCL 等、
+ * labeled/discipline/lineType フィールドを持つもの）専用——未生成の仮想候補（discipline／
+ * lineType を持たないダック型オブジェクト）を渡すと、centerLineKind が黙って既定種別'center'に
+ * 落ちる（isFinishCellDivider.test『【失敗系】』参照）。
+ * @param {object} cl
+ * @returns {boolean}
+ */
+export function isFinishCellDivider(cl) {
+  return isGridCenterLine(cl) || FINISH_CELL_DIVIDER_KINDS.includes(centerLineKind(cl));
+}
+
+/**
+ * cl が階段下分割CL（finish/stair/stairUnderSplit.js isSplitCLFor）として認めうる種別か
+ * （UNDER_STAIR_SPLIT_KINDS参照。幾何署名との組合せで最終判定するのは呼び出し側の責務）。
+ * discipline が arch/struct/fuse 以外（Discipline.MEP／ELEC。現行の CL 生成・デコード経路には
+ * 存在しない）も centerLineKind 経由で種別上は中心線になるため true になる。
+ *
+ * 実在の CenterLine またはその POJO スナップショット専用——未生成の仮想候補（discipline／
+ * lineType を持たないダック型オブジェクト）を渡すと、centerLineKind が黙って既定種別'center'に
+ * 落ちる（isUnderStairSplitKind.test『【失敗系】』参照）。
+ * @param {object} cl
+ * @returns {boolean}
+ */
+export function isUnderStairSplitKind(cl) {
+  return UNDER_STAIR_SPLIT_KINDS.includes(centerLineKind(cl));
+}
+
+/**
+ * cl の境界エッジ軸線区分（'grid'|'aux'|'center'）を返す。finish/edgeClassify.js
+ * classifyAxisLineType が表示名（通り芯／補助線／中心線）へ変換する前の区分キー
+ * （境界マスター選定 selectBoundaryMaster が「無名屋外×有名屋外」のペアで
+ * OUTDOOR_FACILITY/CANTILEVER_WALLを分ける唯一の入力）。
+ * 'grid'はisGridCenterLine（labeled必須）経由、それ以外はcenterLineKindが'aux'かどうかだけを見る
+ * ——'beam'（梁芯）も'center'側にまとめる（HEADのclassifyAxisLineTypeが元々
+ * discipline===STRUCT&&labeledだけを特別扱いし、それ以外はlineType==='dashed'かどうかだけで
+ * 補助線/中心線を分けていたため、梁芯も「中心線」表示になる。この対応関係は変えない）。
+ *
+ * 実在の CenterLine またはその POJO スナップショット専用——未生成の仮想候補（discipline／
+ * lineType を持たないダック型オブジェクト）を渡すと、centerLineKind が黙って既定種別'center'に
+ * 落ちる（axisLineKindOf.test『【失敗系】』参照）。
+ * @param {object} cl
+ * @returns {'grid'|'aux'|'center'}
+ */
+export function axisLineKindOf(cl) {
+  if (isGridCenterLine(cl)) return 'grid';
+  return centerLineKind(cl) === 'aux' ? 'aux' : 'center';
 }
 
 /**

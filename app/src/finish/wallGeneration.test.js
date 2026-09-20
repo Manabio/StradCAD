@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import { PlanGraph, Plane, CenterLineType, Discipline, RoomKind, RoomFeature, edgeKey } from '@core';
 import {
   applyBackingOwnership, computeExternalEdgeParams, generateExteriorWalls, generateRoomWallsFromOutline,
-  isInteriorWallTarget,
+  isInteriorWallTarget, clipToAxisExtent,
 } from './wallGeneration.js';
 
 function makeGraph() {
@@ -490,4 +490,74 @@ test('generateExteriorWalls（F-3・QA4）: 外壁の自由端は柱包み分は
   assert.ok(courtyardWall, 'courtyard壁(x=4000)が生成されるはず');
   assert.equal(Math.max(courtyardWall.coord1, courtyardWall.coord2), 1572.5,
     `y=1500側の端（自由端）はrunの外向きに+72.5はね出すはず（実際:${Math.max(courtyardWall.coord1, courtyardWall.coord2)}）`);
+});
+
+// ---- clipToAxisExtent: 種別ベース（spansEntireAxis(centerLineKind(axisCL))）への統一 ----
+// axisCL は HORIZONTAL・extentLo=1000/extentHi=2000。start/endCL は 0/3000（extentの外側まで
+// 伸びる壁セグメント）で、常に全軸に及ぶ種別（struct）ならクリップされず、それ以外（center/
+// aux/beam）なら extentLo/Hi でクリップされる（両側とも protrusion=57.5 だけはね出す）ことを見る。
+function clipFixture(axisProps) {
+  const graph = makeGraph();
+  const axisCL  = graph.addCenterLine(CenterLineType.HORIZONTAL, 0, { extentLo: 1000, extentHi: 2000, ...axisProps });
+  const startCL = graph.addCenterLine(CenterLineType.VERTICAL, 0,    { labeled: false, discipline: Discipline.ARCH });
+  const endCL   = graph.addCenterLine(CenterLineType.VERTICAL, 3000, { labeled: false, discipline: Discipline.ARCH });
+  return { axisCL, startCL, endCL };
+}
+
+test('clipToAxisExtent: struct（通り芯）は extentLo/Hi があっても常に全軸（クリップされない）', () => {
+  const { axisCL, startCL, endCL } = clipFixture({ labeled: true, discipline: Discipline.STRUCT });
+  const clipped = clipToAxisExtent(axisCL, startCL, 0, endCL, 0, 57.5);
+  assert.deepEqual(clipped, { startOffset: 0, endOffset: 0 });
+});
+
+test('clipToAxisExtent: center（中心線）は extentLo/Hi の外側をprotrusion分はね出してクリップする', () => {
+  const { axisCL, startCL, endCL } = clipFixture({ labeled: false, discipline: Discipline.ARCH });
+  const clipped = clipToAxisExtent(axisCL, startCL, 0, endCL, 0, 57.5);
+  assert.deepEqual(clipped, { startOffset: 942.5, endOffset: -942.5 });
+});
+
+test('clipToAxisExtent: aux（補助線）も center と同様にクリップする', () => {
+  const { axisCL, startCL, endCL } = clipFixture({ labeled: false, discipline: Discipline.ARCH, lineType: 'dashed' });
+  const clipped = clipToAxisExtent(axisCL, startCL, 0, endCL, 0, 57.5);
+  assert.deepEqual(clipped, { startOffset: 942.5, endOffset: -942.5 });
+});
+
+test('clipToAxisExtent: beam（梁芯）も center と同様にクリップする', () => {
+  const { axisCL, startCL, endCL } = clipFixture({ labeled: false, discipline: Discipline.FUSE });
+  const clipped = clipToAxisExtent(axisCL, startCL, 0, endCL, 0, 57.5);
+  assert.deepEqual(clipped, { startOffset: 942.5, endOffset: -942.5 });
+});
+
+// ---- 【旧データ限定・種別ベースへ統一】labeledと種別が食い違う旧データでHEADと結果が変わる2点 ----
+test('【旧データ限定・種別ベースへ統一】clipToAxisExtent: {labeled:true, ARCH}（通り芯でないのにlabeled:trueな旧データ）はHEADのクリップなしから、移行後はextentでクリップされる', () => {
+  const { axisCL, startCL, endCL } = clipFixture({ labeled: true, discipline: Discipline.ARCH });
+  const clipped = clipToAxisExtent(axisCL, startCL, 0, endCL, 0, 57.5);
+  assert.deepEqual(clipped, { startOffset: 942.5, endOffset: -942.5 },
+    'HEAD（axisCL.labeled判定）はクリップなし{0,0}だったが、種別（center）ベースではクリップされる');
+});
+
+test('【旧データ限定・種別ベースへ統一】clipToAxisExtent: {labeled:false, STRUCT}（通り芯なのにlabeled:falseな旧データ）はHEADのクリップありから、移行後はクリップされない', () => {
+  const { axisCL, startCL, endCL } = clipFixture({ labeled: false, discipline: Discipline.STRUCT });
+  const clipped = clipToAxisExtent(axisCL, startCL, 0, endCL, 0, 57.5);
+  assert.deepEqual(clipped, { startOffset: 0, endOffset: 0 },
+    'HEAD（axisCL.labeled判定）はextentでクリップされていたが、種別（struct）ベースでは常に全軸でクリップされない');
+});
+
+test('【旧データ限定・種別ベースへ統一】clipToAxisExtent: {labeled:true, STRUCT, dashed}（通り芯でも中心線でもない旧データ）はHEADのクリップなしから、移行後はextentでクリップされる', () => {
+  const { axisCL, startCL, endCL } = clipFixture({ labeled: true, discipline: Discipline.STRUCT, lineType: 'dashed' });
+  const clipped = clipToAxisExtent(axisCL, startCL, 0, endCL, 0, 57.5);
+  assert.deepEqual(clipped, { startOffset: 942.5, endOffset: -942.5 },
+    'HEAD（axisCL.labeled判定。lineTypeを見ない）はクリップなし{0,0}だったが、種別ベース' +
+    '（centerLineKindがlineType:dashedを先に見てauxと判定するためspansEntireAxisがfalseになる）では' +
+    'extentでクリップされる');
+});
+
+// ---- 不変条件: extentLo/Hi 未確定（null）のCLはクリップしない（種別を問わない。null判定は移行対象外） ----
+test('【不変条件】clipToAxisExtent: extentLo/Hiが未確定（null）のCLは種別を問わずクリップしない', () => {
+  const graph = makeGraph();
+  const axisCL  = graph.addCenterLine(CenterLineType.HORIZONTAL, 0, { labeled: false, discipline: Discipline.ARCH });
+  const startCL = graph.addCenterLine(CenterLineType.VERTICAL, 0,    { labeled: false, discipline: Discipline.ARCH });
+  const endCL   = graph.addCenterLine(CenterLineType.VERTICAL, 3000, { labeled: false, discipline: Discipline.ARCH });
+  const clipped = clipToAxisExtent(axisCL, startCL, 0, endCL, 0, 57.5);
+  assert.deepEqual(clipped, { startOffset: 0, endOffset: 0 });
 });

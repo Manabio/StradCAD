@@ -251,12 +251,12 @@ function isG2G3Exempt(rel) {
 
 // ---- G1: `.centerLines` 直接参照 ----
 const G1_ALLOWLIST = {
-  'finish/stair/stairUnderSplit.js': { count: 1, category: 'unmigrated',
-    reason: 'findUnderStairSplitCLs（graph.centerLines走査）→isSplitCLForによる同定。座標' +
-      '（extentLo/Hiが外形の直交範囲と一致）に加え、labeled／discipline!==ARCH／lineType===\'dashed\'' +
-      'という種別代用フィールドでも絞り込んでいる——「種別を見ない」としていた旧reasonは事実と違った' +
-      'ため訂正（QA指摘m-4）。種別条件を伴う絞り込み（相手選択）に該当するためcategoryも' +
-      'not-partner-selection→unmigratedへ変更（同ファイルのG2/G4エントリと合わせて独立タスク）。' },
+  'finish/stair/stairUnderSplit.js': { count: 1, category: 'not-partner-selection',
+    reason: 'findUnderStairSplitCLs（graph.centerLines走査）→isSplitCLForによる同定。種別条件は' +
+      'isUnderStairSplitKind（core/centerLineKindPolicy.js。UNDER_STAIR_SPLIT_KINDS）へ移行済み' +
+      '（ステップ6、2026-09-20）——残る絞り込みは幾何署名（外形内を横切り、extentが外形の直交範囲と' +
+      '一致する）による同定で、既存の走査API（orthoAnchorCandidates等）が扱う「同座標・同方向・' +
+      '可視種別」の形に合わないため、走査API化は対象外（相手選択ではなく幾何署名判定）。' },
   'graphSnapshot.js': { count: 2, category: 'not-partner-selection',
     reason: 'restoreStructCLs/applySnapshot。永続化からの全件復元（snapshot.centerLines）——種別を問わず' +
       '全件を作り直す責務のため種別条件を持たない。' },
@@ -296,17 +296,13 @@ const G1_ALLOWLIST = {
 
 // ---- G2: 生の `.labeled` を種別の代用に読む ----
 const G2_ALLOWLIST = {
-  'finish/edgeClassify.js': { count: 1, category: 'unmigrated',
-    reason: '種別ベース化は仕上げモードの境界分類への影響範囲を読み切れておらず未移行。' },
-  'finish/gridCells.js': { count: 5, category: 'unmigrated',
-    reason: 'snapshotCL・分割格子の種別分類（labeled+disciplineの組合せで通り芯/意匠を判定）。分割格子は' +
-      '性能最適化のためのPOJOスナップショットで、cl.labeledをそのままコピー・分類に使っている——' +
-      '種別ベースへの統一は別タスク。' },
-  'finish/stair/stairUnderSplit.js': { count: 1, category: 'unmigrated',
-    reason: '同ファイルのG1と同じ関数群。座標同定ロジックに埋め込まれておりG1と合わせて独立タスク。' },
-  'finish/wallGeneration.js': { count: 1, category: 'unmigrated',
-    reason: '壁生成時のCL全域扱い判定（labeled軸は常に全域）。種別ベース化（spansEntireAxis）への統一は' +
-      '影響範囲未確認のため未移行。' },
+  'finish/gridCells.js': { count: 1, category: 'not-partner-selection',
+    reason: 'snapshotCL の labeled: cl.labeled（性能最適化のためのPOJOスナップショットへの生フィールド' +
+      'コピーそのもの。isDividerCL・isActiveAcrossRange・gridDividerSegmentsの種別分類自体は' +
+      'isFinishCellDivider・isGridCenterLine（centerLineKindPolicy.js/core.js）へ移行済み——' +
+      'ステップ6、2026-09-20）。gridDividerSegmentsの全長判定（isGridCenterLine）は、手前の' +
+      'isDividerCLを通る入力では新旧の式が常に一致するため挙動テストでは守れず、生フィールド比較の' +
+      '再混入は本ガードが検出する。' },
   'structural/wallBeamAxes.js': { count: 1, category: 'unmigrated', reason: 'G1と同じ（findBeamAnchorCL）。' },
   'structural/woodAutoFill.js': { count: 2, category: 'unmigrated', reason: 'G1と同じ（柱アンカー解決）。' },
   'transform/centerLineConvert.js': { count: 2, category: 'not-partner-selection',
@@ -322,11 +318,6 @@ const G2_ALLOWLIST = {
       'centerLineKindPolicy.js冒頭コメント参照）・COEXISTENCE=promote分岐のdeletedProps（既存CLの状態を' +
       'そのままコピーして復元用に保存）。deleteCenterLineWithUndoのisStruct判定はisGridCenterLine' +
       '（core/centerLine.js。core/配下のためG2対象外）へ移行済み。' },
-  'transform/followerGraph.js': { count: 1, category: 'unmigrated',
-    reason: 'isSharedCL（通り芯=project.structGraph共有かの判定。cl.discipline===Discipline.STRUCT&&' +
-      'cl.labeledはisGridCenterLine（core/centerLine.js）で置換可能——「同値の述語が無く」としていた' +
-      '旧reasonは事実と違ったため訂正（QA指摘M-2）。centerLineKindPolicy.js側には無いが述語自体は' +
-      'core/centerLine.jsに既存。本ステップの対象外ファイルのため未移行のまま）。' },
 };
 
 // ---- G3: `centerLineKind(x) === '<リテラル>'` インライン種別比較 ----
@@ -351,26 +342,6 @@ const G3_ALLOWLIST = {
 
 // ---- G4: 生の `discipline`／`lineType` を比較演算子つきで種別の代用に読む ----
 const G4_ALLOWLIST = {
-  'finish/edgeClassify.js': { count: 2, category: 'unmigrated',
-    reason: 'classifyAxisLineType（G2と同じ関数）。1件目のcl.discipline===Discipline.STRUCT&&cl.labeled' +
-      '（通り芯判定）はisGridCenterLine（core/centerLine.js）で置換可能（QA指摘M-2）——ただし' +
-      'isGridCenterLineはcl.lineType!==\'dashed\'まで見るため、discipline:STRUCT&&labeled:trueかつ' +
-      'lineType:\'dashed\'という異常値では判定が変わりうる（通常経路では起きない）。2件目の' +
-      'lineType===\'dashed\'（補助線判定）はcenterLineKind(cl)の重複実装。G2と同じ理由' +
-      '（仕上げモードの境界分類への影響範囲未確認）で未移行。' },
-  'finish/gridCells.js': { count: 5, category: 'unmigrated',
-    reason: 'isDividerCL・isActiveAcrossRange・gridDividerSegments内のpush（いずれもG2のsnapshotCL経由' +
-      'のCL種別分類）。discipline===STRUCT/ARCH・lineType!==\'dashed\'の組合せで通り芯/中心線/補助線を' +
-      '判定する——G2と同じ理由（分割格子は性能最適化用POJOで種別ベースへの統一は別タスク）で未移行。' },
-  'finish/stair/stairUnderSplit.js': { count: 2, category: 'unmigrated',
-    reason: 'isSplitCLFor（G1/G2と同じ関数）。discipline!==ARCH・lineType===\'dashed\'で「無ラベル' +
-      'ARCH実線（centerLineKindでいう center 相当）」かを判定する——種別判定の代用に当たる' +
-      '（G1のreasonはQA指摘m-4で「種別を見ない」から実態どおりに訂正済み。G2の同エントリの訂正は' +
-      '本ステップの対象外のため据え置き）。G1/G2と合わせて独立タスク。' },
-  'transform/followerGraph.js': { count: 1, category: 'unmigrated',
-    reason: 'isSharedCL（G2と同じ関数）。cl.discipline===Discipline.STRUCT&&cl.labeledはisGridCenterLine' +
-      '（core/centerLine.js）で置換可能——QA指摘M-2により0リスクの残作業のためunmigratedへ変更' +
-      '（同じ式の.labeled部分はG2で計上済み・本エントリはdiscipline部分のみ）。' },
 };
 
 // variant: 'codeOnly'（文字列・正規表現の中身も空白化。G1/G2用）または

@@ -13,7 +13,8 @@
 //    選定はトポロジー論理のみで、材データには依存しない。
 // ================================================================
 
-import { CenterLineType, RoomKind, RoomFeature, Discipline, edgeKey } from '@core';
+import { CenterLineType, RoomKind, RoomFeature, edgeKey } from '@core';
+import { axisLineKindOf } from '../core/centerLineKindPolicy.js';
 import { worldToCell, refreshCells } from './gridCells.js';
 
 // 隣接セル判定時、境界線からこの距離(mm)だけ内側をサンプリングする。
@@ -40,11 +41,22 @@ function regionOf(room) {
   return room.kind === RoomKind.EXTERIOR ? REGION.NAMED_EXTERIOR : REGION.INTERIOR;
 }
 
-/** 軸CLの線種を分類する（補助線 / 中心線 / 通り芯）。 */
+// axisLineKindOf（core/centerLineKindPolicy.js）の区分キー→表示名。表示名への対応づけは
+// この仕上げモード側の責務（ポリシー側は区分キーまでを返す）。
+const AXIS_LINE_TYPE_LABELS = Object.freeze({ grid: '通り芯', aux: '補助線', center: '中心線' });
+
+/**
+ * 軸CLの線種を分類する（補助線 / 中心線 / 通り芯）。判定本体は
+ * core/centerLineKindPolicy.js axisLineKindOf に集約する。
+ *
+ * 【旧データ限定・種別ベースへ統一】旧実装は `discipline===STRUCT && labeled` /
+ * `lineType==='dashed'` の生フィールド判定だった。`{discipline:STRUCT, labeled:true,
+ * lineType:'dashed'}`（旧データの異常値）は、HEADでは1行目の条件（labeledとdisciplineのみ見る）に
+ * 合致し「通り芯」だったが、種別ベース（axisLineKindOf内のisGridCenterLine。centerLineKindが
+ * lineType:'dashed'を先に見てauxと判定する）では「補助線」になる。
+ */
 export function classifyAxisLineType(cl) {
-  if (cl.discipline === Discipline.STRUCT && cl.labeled) return '通り芯';
-  if (cl.lineType === 'dashed') return '補助線';
-  return '中心線';
+  return AXIS_LINE_TYPE_LABELS[axisLineKindOf(cl)];
 }
 
 // ----------------------------------------------------------------

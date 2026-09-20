@@ -5,7 +5,8 @@
  * デフォルト: wallBase=90, wallFinish=12.5 → 57.5mm
  */
 
-import { RoomKind, RoomFeature } from '@core';
+import { RoomKind, RoomFeature, centerLineKind } from '@core';
+import { spansEntireAxis } from '../core/centerLineKindPolicy.js';
 import { worldToCell, dividerCLsBetween, isActiveAcrossRange } from './gridCells.js';
 import { buildCellToRoom } from './edgeClassify.js';
 import { wallRunFreeEnds, WALL_JUNCTION_TOL_MM } from '../structural/woodFraming.js';
@@ -335,13 +336,22 @@ const ENDPOINT_EPS = 0.5;
  * 生成セグメントが軸CLの実在範囲（extentLo〜extentHi）を越えることがある。
  * 越えた端は「端点」であり、端点ノードに壁があったと想定した protrusion
  * （下地偏芯量＋仕上げ厚）だけCL端からはね出して止める。範囲外へ完全に出る
- * セグメントは壁を作らない（null）。通り芯・範囲未確定のCLはクリップしない。
+ * セグメントは壁を作らない（null）。常に全軸に及ぶ種別（通り芯。spansEntireAxis）・
+ * 範囲未確定のCLはクリップしない。
+ *
+ * 【旧データ限定・種別ベースへ統一】旧実装は `axisCL.labeled` で判定していたため、
+ * `{labeled:true, discipline:'arch'}`（通り芯でないのに labeled が立った旧データ）は
+ * クリップされず、`{labeled:false, discipline:'struct'}`（通り芯なのに labeled が
+ * 立っていない旧データ）はクリップされていた。種別（spansEntireAxis(centerLineKind(axisCL))）
+ * ベースに統一したことで、この2パターンの挙動が入れ替わる——線上ヒットの範囲判定
+ * （snapGeometry.js findNearestCenterLine）は既に spansEntireAxis を使っており、
+ * 「ヒットは範囲で切るのに壁はクリップしない（またはその逆）」という食い違いを解消する。
  *
  * seg は mergeSegments 後（startCL.value <= endCL.value）であること。
  * @returns {{ startOffset, endOffset } | null}
  */
 export function clipToAxisExtent(axisCL, startCL, startOffset, endCL, endOffset, protrusion) {
-  if (axisCL.labeled || axisCL.extentLo == null || axisCL.extentHi == null) {
+  if (spansEntireAxis(centerLineKind(axisCL)) || axisCL.extentLo == null || axisCL.extentHi == null) {
     return { startOffset, endOffset };
   }
   const lo = axisCL.extentLo, hi = axisCL.extentHi;

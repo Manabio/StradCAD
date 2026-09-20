@@ -6,7 +6,7 @@
 // movingCLが通り芯（project.structGraph 共有）の場合、他フロア（採用・検討問わず）にも
 // 随伴CL・随伴壁が存在し得るため、resolveMoveRange はそれらを IndexedDB から一時的に
 // 読み込んで（アクティブ化はしない「peek」）走査範囲に含める。
-import { CenterLine, ShapeType, Discipline, Point } from '@core';
+import { CenterLine, ShapeType, isGridCenterLine, Point } from '@core';
 import { floorSwapManager } from '../storage/FloorSwapManager.js';
 import { sameDirectionObstacles } from '../core/centerLineKindPolicy.js';
 
@@ -38,8 +38,12 @@ function resolveAnchor(shape) {
   return null;
 }
 
+// 【旧データ限定・種別ベースへ統一】旧実装は `discipline===STRUCT && labeled` の生フィールド判定
+// だった。`{discipline:STRUCT, labeled:true, lineType:'dashed'}`（旧データの異常値）は、HEADでは
+// 「共有（全階通り芯）」扱いだったが、種別ベース（isGridCenterLine。centerLineKindがlineType:
+// 'dashed'を先に見てauxと判定する）では「共有でない（階ローカル）」扱いになる。
 export function isSharedCL(cl) {
-  return cl.discipline === Discipline.STRUCT && cl.labeled;
+  return isGridCenterLine(cl);
 }
 
 // Intersection | Point から、移動軸方向の座標（ドラッグ中の表示位置）を取り出す。
