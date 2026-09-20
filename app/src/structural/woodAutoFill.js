@@ -217,12 +217,15 @@ function findHostBackingWall(opening, graph) {
  *   上階graphから写して渡す）
  * @param {Array<{axisX:number, axisY:number, role?:string}>} [belowColumns] - 1つ下の実体階の柱集合
  *   （ユーザー裁定2026-09-19「柱の追加は最上階から順に、最下階まで可能な限り同位置に」——3iの候補
- *   優先順struct＞center＞**below**＞910グリッドの'below'に使う。呼び出し側はautoFillBeamsForStructure
- *   の同名引数（3c-2b）と同じ値をそのまま渡せる——structuralRecompute.jsの`belowGraph?.columns`。
- *   省略・null・[]は従来どおり（belowの候補なし）。role:'foundation'（杭）は候補にしない）。
+ *   優先度ラベル'below'に使う。優先順自体の唯一の出どころはwoodFraming.jsのSUPPORT_SPAN_PRIORITY_ORDER
+ *   （現状struct＞center＞below。どれも採れなければ910グリッドへフォールバック）。呼び出し側は
+ *   autoFillBeamsForStructureの同名引数（3c-2b）と同じ値をそのまま渡せる——
+ *   structuralRecompute.jsの`belowGraph?.columns`。省略・null・[]は従来どおり（belowの候補なし）。
+ *   role:'foundation'（杭）は候補にしない）。
  * @returns {{created: object[], removed: string[], jambSkipped: object[], iiPicks: Array<{isVertical:boolean,
- *   coord:number, along:number, kind:'struct'|'center'|'below'|'grid', x:number, y:number}>}} iiPicksは3iが
- *   採用した候補の診断用一覧（生成の可否判定には使わない。probe woodSupportSpanProbe.mjsが由来内訳の報告に使う）
+ *   coord:number, along:number, kind:string, x:number, y:number}>}} kindはSUPPORT_SPAN_PRIORITY_ORDERの
+ *   要素、または'grid'。iiPicksは3iが採用した候補の診断用一覧（生成の可否判定には使わない。
+ *   probe woodSupportSpanProbe.mjsが由来内訳の報告に使う）
  */
 export function autoFillWoodColumns(graph, project, wallGate = null, aboveColumns = [], wallSegments = [], aboveBeamSegments = [], belowColumns = []) {
   const rules = rulesFor(effectiveStructure(graph, project));
@@ -585,9 +588,10 @@ export function autoFillWoodColumns(graph, project, wallGate = null, aboveColumn
         supports.add(along);
       }
 
-      // 走行方向の候補CL＝通り芯(struct)＞意匠中心線(center)の優先度つき（梁芯・補助線は除く）。
-      // 優先度はcenterLineKind(cl)の値（'struct'|'center'）をそのままsupportSpanColumnPositionsの
-      // 優先度ラベルとして使う（QA裁定「通り芯、中心があればそこ」の語順を優先度として固定）。
+      // 走行方向の候補CL＝supportSpanColumnCandidates（SUPPORT_SPAN_COLUMN_KINDS＝通り芯・意匠中心線。
+      // 梁芯・補助線は除く）が返すkindをそのままsupportSpanColumnPositionsの優先度ラベルとして使う——
+      // どのkindがどの順で優先されるか（並び）はwoodFraming.js側のSUPPORT_SPAN_PRIORITY_ORDERが唯一の
+      // 出どころで、ここ（呼び出し側）は優先順を知らない・保持しない。
       // below（ユーザー裁定2026-09-19「最下階まで可能な限り同位置に柱を追加」）: 1つ下の実体階の柱の
       // うち、この壁線（seg自身の軸＝法線方向がseg.coordにtol内で一致）に乗っているものを候補に足す
       // ——下階に柱があるならそこへ揃えれば柱が上下に通り、3bで下階へ通すときに新しい柱が生まれない。
@@ -612,6 +616,9 @@ export function autoFillWoodColumns(graph, project, wallGate = null, aboveColumn
       // 採用してしまう（実測: moku4の屋根V x=7280で、run全体の始端-12614を原点にすると、本来
       // 隣接の通り芯Y3(-7280)基準であるべき区間が-12614基準の-5334を選び、1階・2階の既存柱(-5460)と
       // 126mmしか離れない）。supportSpanColumnPositionsがペアごとに`(lo,hi)`で呼ぶ。
+      // 910グリッドの位相の基準は常に通り芯（'struct'固定。.claude/structural-model.md「910グリッドの
+      // 基準は『通り芯』にする」節）——SUPPORT_SPAN_COLUMN_KINDSに種別を足しても、ここのフィルタは増やさない
+      // （3iの候補優先順とは別の決まりのため）。
       const structAlongs = clAlongs.filter(e => e.priority === 'struct').map(e => e.along);
       const resolveGridOriginMm = (pairLo) => {
         const below = structAlongs.filter(v => v <= pairLo + CL_OVERLAP_TOL_MM);

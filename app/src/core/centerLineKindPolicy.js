@@ -251,6 +251,8 @@ export const BEAM_AXIS_KINDS = Object.freeze(['beam']);
 // 語順どおり通り芯＞中心線の優先度——並び＝優先度。woodAutoFill.js 3iのコメント参照）。梁芯を候補から
 // 除くのは、梁芯は壁から自動で生成・撤去される線であり柱の位置の基準にしないため（通り芯・中心線は
 // ユーザーが引いた線。2026-09-20確認）。
+// structural/woodFraming.js の支持長超過候補の優先順（SUPPORT_SPAN_PRIORITY_ORDER。CL以外の候補源
+// belowを本表の後に足したもの）はこの並びから導出される——構造側にこの並びを重複して書かない。
 export const SUPPORT_SPAN_COLUMN_KINDS = Object.freeze(['struct', 'center']);
 
 // ================================================================

@@ -10,6 +10,11 @@
 import { RoomFeature, CL_OVERLAP_TOL_MM } from '../core/constants.js';
 import { WOOD_BEAM_DEPTH_TABLE, TRADITIONAL_WOOD_FRAMING, TRADITIONAL_WOOD_BACKING, rulesFor, TRADITIONAL_WOOD_STRUCTURE } from './structureRules.js';
 import { woodRectSectionKey } from './sectionCatalog.js';
+// SUPPORT_SPAN_COLUMN_KINDS参照のみ（core/centerLineKindPolicy.js自体は./centerLine.js・./constants.js
+// にしか依存しない宣言だが、centerLine.jsが./shapeBase.js経由でmobxを推移的に引く——store.js／
+// snap.js／.jsx／@coreバレルには到達しないため、node:testから単体import可能な性質は保たれる。
+// @coreバレルは経由しない——直パスimportで依存を最小に保つ）。
+import { SUPPORT_SPAN_COLUMN_KINDS } from '../core/centerLineKindPolicy.js';
 
 // 壁の端部の取り合い許容(mm)。壁の端は**取り合う壁の半厚（仕上げ込み）ぶん控えて生成される**
 // （仕上げモードの壁生成。実機: x=0 の縦壁に突き当たる横壁は x=57.5 から始まる）ため、交点・T字・
@@ -404,25 +409,30 @@ export function columnSplitPoints(run, axisCoord, isVertical, columnPoints, tol 
   return dedupCoords([run.lo, ...interior, run.hi], tol);
 }
 
-// clAlongsの優先度ランク（数値が小さいほど優先）。QA裁定2026-09-19「通り芯、中心があればそこ、なければ
-// …910グリッド」の語順どおり、通り芯(struct)を意匠中心線(center)より優先する——旧実装は両者を区別せず
-// 1つのプールから「理想位置に最も近いもの」を選んでいたため、窓内に通り芯と中心線の両方があるとき
-// どちらが選ばれるかが値の並びに依存し、上階・下階の処理順（3h-2の点源の分割状態）と絡んで結果が
-// 階の処理順に依存する一因になっていた（QA実測：moku3で昇順=通り芯Y4・降順=意匠中心線の別位置）。
-// below（1つ下の実体階に既にある柱のAXIS位置）はcenterの次・910グリッドの手前（R-1是正・
-// 2026-09-19裁定「最下階まで可能な限り同位置に柱を追加」）——下階に柱があるならそこへ揃えれば
-// 柱が上下に通り、3bで下階へ通すときに新しい柱が生まれない。呼び出し側（woodAutoFill.js）が
-// belowColumnsから解決して渡す（本関数はgraph非依存のまま）。
-const CL_PRIORITY_RANK = Object.freeze({ struct: 0, center: 1, below: 2 });
+// clAlongsの優先順（配列の並び＝優先度。先頭が最優先）。CL由来の候補（通り芯・意匠中心線……）の
+// 種別と順序は core/centerLineKindPolicy.js の SUPPORT_SPAN_COLUMN_KINDS を**唯一の出どころ**とする
+// ——同じ並びをここへ重複して書かない（QA裁定2026-09-19「通り芯、中心があればそこ、なければ…910
+// グリッド」の語順どおり、通り芯(struct)を意匠中心線(center)より優先する根拠・旧実装が両者を区別
+// しなかったことによる階の処理順依存の不具合は同ファイルのJSDoc参照）。
+// below（CLでない唯一の候補源。1つ下の実体階に既にある柱のAXIS位置）はポリシー表に無い構造側だけの
+// 概念のため、ここで「CL由来の全種別の後・910グリッドの手前」と位置づけて追加する（R-1是正・
+// 2026-09-19裁定「最下階まで可能な限り同位置に柱を追加」）——下階に柱があるならそこへ揃えれば柱が
+// 上下に通り、3bで下階へ通すときに新しい柱が生まれない。呼び出し側（woodAutoFill.js）が
+// belowColumnsから解決してpriority:'below'のエントリとして渡すだけで、優先順自体は知らない
+// （本関数はgraph非依存のまま。SUPPORT_SPAN_COLUMN_KINDSに種別を足す・別のCLでない候補源を足す、
+// どちらの拡張もこの1行の並びを変えるだけで済み、下のnormalizeClEntries・supportSpanColumnPositionsの
+// ループは書き換えなくてよい）。
+const NON_CL_PRIORITIES = Object.freeze(['below']);
+export const SUPPORT_SPAN_PRIORITY_ORDER = Object.freeze([...SUPPORT_SPAN_COLUMN_KINDS, ...NON_CL_PRIORITIES]);
 
-// clAlongsの各要素を{along, priority}へ正規化する。数値のみの要素は後方互換のため優先度最上位(struct)
-// 扱い（既存の呼び出し側・テストの「1種類のCLしか渡さない」形を壊さない）。不正な要素（along非数・
-// priorityが未知）は無視する。
+// clAlongsの各要素を{along, priority}へ正規化する。数値のみの要素は後方互換のため優先度最上位
+// （SUPPORT_SPAN_PRIORITY_ORDERの先頭。現状はstruct）扱い（既存の呼び出し側・テストの「1種類のCLしか
+// 渡さない」形を壊さない）。不正な要素（along非数・priorityが未知）は無視する。
 function normalizeClEntries(clAlongs) {
   const out = [];
   for (const e of (clAlongs ?? [])) {
-    if (typeof e === 'number') { if (Number.isFinite(e)) out.push({ along: e, priority: 'struct' }); continue; }
-    if (e && Number.isFinite(e.along) && Object.prototype.hasOwnProperty.call(CL_PRIORITY_RANK, e.priority)) {
+    if (typeof e === 'number') { if (Number.isFinite(e)) out.push({ along: e, priority: SUPPORT_SPAN_PRIORITY_ORDER[0] }); continue; }
+    if (e && Number.isFinite(e.along) && SUPPORT_SPAN_PRIORITY_ORDER.includes(e.priority)) {
       out.push({ along: e.along, priority: e.priority });
     }
   }
@@ -443,7 +453,8 @@ function normalizeClEntries(clAlongs) {
  *    全範囲」**[max(prev+tol, hi-(attempt-i)*maxSpanMm), min(prev+maxSpanMm, hi-tol)]（理想位置
  *    ±gridPitchMm/2の制約は掛けない——QA裁定2026-09-19「支持長を1820以下に保てる位置に通り芯・中心線が
  *    あれば、等分位置から離れていてもそこを優先する」）。この範囲内・isAllowed通過分から**優先度順**
- *    （struct→center→below）に理想に最も近いものを選ぶ——優先度の高い群に1件でも候補があれば、低い群に理想により近い候補があっても
+ *    （SUPPORT_SPAN_PRIORITY_ORDERの並び。現状struct→center→below）に理想に最も近いものを選ぶ
+ *    ——優先度の高い群に1件でも候補があれば、低い群に理想により近い候補があっても
  *    採用しない。**910グリッドへのフォールバックだけ**理想位置±gridPitchMm/2（実行可能範囲との積）で
  *    絞る（等分近傍からの端数の小片を作らないための制約はグリッドにのみ効く）。いずれも無ければその
  *    理想位置はスキップする（prevは更新しない＝次の理想位置の窓がその分広がる）。支持点に極端に近い
@@ -462,10 +473,11 @@ function normalizeClEntries(clAlongs) {
  * 全体の返り値は各ペアの採用位置を合わせて昇順・tol以内はdedupeする。0件も正常系（span全て1820以下・
  * isAllowedが常にfalse・候補が1つも無い等）。
  * @param {number[]} supportAlongs - 既知の支持点（未ソート・重複可）
- * @param {Array<number|{along:number, priority:'struct'|'center'|'below'}>} clAlongs - 走行方向の候補
- *   （通り芯・意匠中心線・1つ下の実体階の柱のAXIS位置。梁芯・補助線は含めないこと）。数値のみの要素は
- *   優先度'struct'扱い（後方互換）。'below'（ユーザー裁定2026-09-19「最下階まで可能な限り同位置に柱を
- *   追加」）はcenterの次・910グリッドの手前——下階に柱があるならそこへ揃えれば柱が上下に通る。
+ * @param {Array<number|{along:number, priority:string}>} clAlongs - 走行方向の候補（通り芯・意匠中心線・
+ *   1つ下の実体階の柱のAXIS位置等）。priorityはSUPPORT_SPAN_PRIORITY_ORDERに含まれる値のみ有効
+ *   （未知の値は無視される。normalizeClEntries参照）。数値のみの要素は優先度最上位扱い（後方互換）。
+ *   'below'（ユーザー裁定2026-09-19「最下階まで可能な限り同位置に柱を追加」）はcenterの次・910グリッド
+ *   の手前——下階に柱があるならそこへ揃えれば柱が上下に通る（SUPPORT_SPAN_PRIORITY_ORDER参照）。
  * @param {(along:number)=>boolean} isAllowed - その位置に柱を立てられるか（graph依存はここに閉じ込める）
  * @param {{maxSpanMm?:number, gridPitchMm?:number, tol?:number, gridOriginMm?:(number|((lo:number, hi:number)=>number|undefined))}} [opts]
  *   gridOriginMm省略時（未指定・非数）は従来どおりペアのloを原点にする。**関数も渡せる**（R-1是正・
@@ -475,7 +487,8 @@ function normalizeClEntries(clAlongs) {
  *   `(lo, hi) => number|undefined` を渡せば、ペアごとに`(lo,hi)`で呼ばれる——本関数はgraph非依存の
  *   ままで、解決自体は呼び出し側（graph.centerLinesを見られる側）に委ねる。数値を渡す場合は従来どおり
  *   全ペア共通（後方互換）。
- * @returns {Array<{along:number, kind:'struct'|'center'|'below'|'grid'}>} 昇順・dedupe（tol以内は同一点として先着を残す）
+ * @returns {Array<{along:number, kind:string}>} kindはSUPPORT_SPAN_PRIORITY_ORDERの要素、または'grid'
+ *   （どの候補も採れず910グリッドへフォールバックした場合）。昇順・dedupe（tol以内は同一点として先着を残す）
  */
 export function supportSpanColumnPositions(supportAlongs, clAlongs, isAllowed, opts = {}) {
   const {
@@ -531,10 +544,10 @@ export function supportSpanColumnPositions(supportAlongs, clAlongs, isAllowed, o
         const feasLo = Math.max(prev + tol, hi - (attempt - i) * maxSpanMm);
         const feasHi = Math.min(prev + maxSpanMm, hi - tol);
         if (feasLo > feasHi) continue; // 実行可能範囲が無い。スキップ（prevは更新しない）
-        // 優先度順（struct→center→below）に実行可能範囲・isAllowed通過の候補から選ぶ——高優先度に
-        // 1件でもあれば低優先度・グリッドは見ない（距離で横断比較しない）。
+        // 優先度順（SUPPORT_SPAN_PRIORITY_ORDER。現状struct→center→below）に実行可能範囲・isAllowed
+        // 通過の候補から選ぶ——高優先度に1件でもあれば低優先度・グリッドは見ない（距離で横断比較しない）。
         let chosen = null, kind = null;
-        for (const priority of ['struct', 'center', 'below']) {
+        for (const priority of SUPPORT_SPAN_PRIORITY_ORDER) {
           const candidates = clEntries.filter(e => e.priority === priority).map(e => e.along).filter(allowed);
           chosen = pickNearest(candidates, feasLo, feasHi, ideal);
           if (chosen != null) { kind = priority; break; }

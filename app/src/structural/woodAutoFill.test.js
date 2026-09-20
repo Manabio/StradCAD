@@ -4716,17 +4716,24 @@ test('autoFillWoodColumns（3i・2）: 走行方向に厳密一致する通り�
   assert.equal(iiPicks.find(p => p.x === 1820 && p.y === 2000)?.kind, 'struct', 'iiPicksのkindはstruct（通り芯に厳密一致）');
 });
 
-test('autoFillWoodColumns（支持長超過）: 走行方向の追加柱の候補は通り芯・中心線のみで、同座標の梁芯CLは候補にならない（910グリッドの位置がそのまま採用される）', () => {
-  const { graph, wallSegments, aboveBeamSegments } = makeSupportSpanWallGraph();
-  // 走行方向(x)の1000（910グリッドの自然な位置1820とは異なる、実行可能範囲内の位置）に梁芯CLだけを置く。
+test('autoFillWoodColumns（支持長超過）: 走行方向の追加柱の候補は通り芯・中心線のみで、採用窓の内側にある梁芯CLは候補にならない（910グリッドの位置がそのまま採用される）', () => {
+  // span=3000にする（既定span=3640だとsupportSpanColumnPositions内部の採用窓が[1820,1820]の1点に
+  // 退化し、梁芯の位置がその1点に無い限り「候補から除外されたから採用されない」のか「そもそも窓の外
+  // だから採用されない」のか区別できない——2026-09-21一般化のQA実測: SUPPORT_SPAN_COLUMN_KINDSに'beam'
+  // を足す変異でもこの穴のせいで本テストは緑のままだった）。span=3000は窓[1180,1820]（ideal=1500）に
+  // 幅を持たせるため、梁芯を窓内・かつグリッド採用位置(1820)とは別の点(1400)に置いて区別できる。
+  const span = 3000;
+  const { graph, wallSegments, aboveBeamSegments } = makeSupportSpanWallGraph({ span });
+  const target = [[0, 2000], [span, 2000]]; // makeSupportSpanWallGraphのコの字コーナー（3aの交点）
+  // 走行方向(x)の1400（採用窓[1180,1820]内・910グリッドの採用位置1820とは異なる点）に梁芯CLだけを置く。
   // SUPPORT_SPAN_COLUMN_KINDS=['struct','center']は梁芯を候補にしないため、この梁芯は無視され、
-  // 3i・2の通り芯版とは異なり3i・1と同じ910グリッド中央(1820)に柱が立つはず（梁芯の位置(1000)には立たない）。
-  graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.FUSE });
+  // 3i・2の通り芯版とは異なり3i・1と同じ910グリッド(1820)に柱が立つはず（梁芯の位置(1400)には立たない）。
+  graph.addCenterLine(CenterLineType.VERTICAL, 1400, { labeled: false, discipline: Discipline.FUSE });
   const { created, iiPicks } = autoFillWoodColumns(graph, PROJECT, null, [], wallSegments, aboveBeamSegments);
   const col = created.find(c => Math.abs(c.axisY - 2000) < 1
-    && !SUPPORT_SPAN_3A_TARGET.some(([x, y]) => Math.abs(c.axisX - x) < 1 && Math.abs(c.axisY - y) < 1));
+    && !target.some(([x, y]) => Math.abs(c.axisX - x) < 1 && Math.abs(c.axisY - y) < 1));
   assert.ok(col, '前提: 3iの柱が1本立つ');
-  assert.equal(Math.round(col.axisX), 1820, '梁芯の位置(1000)ではなく910グリッドの中央(1820)に立つ');
+  assert.equal(Math.round(col.axisX), 1820, '梁芯の位置(1400)ではなく910グリッド(1820)に立つ');
   assert.ok(col.woodAxisOffset, '梁芯は候補にならないため、走行方向に厳密一致するCLが無い扱い＝オフセットアンカー（910グリッド）のまま');
   assert.equal(iiPicks.find(p => Math.abs(p.x - 1820) < 1 && p.y === 2000)?.kind, 'grid',
     'iiPicksのkindはgrid（梁芯は候補に入らないため3i・1と同じ結果）');

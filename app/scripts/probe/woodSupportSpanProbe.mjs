@@ -271,7 +271,7 @@ for (const p of project.planes) {
   const struct = iiPicks.filter(pk => pk.kind === 'struct');
   const center = iiPicks.filter(pk => pk.kind === 'center');
   // below（ユーザー裁定2026-09-19「最下階まで可能な限り同位置に柱を追加」）: 1つ下の実体階の柱位置に
-  // 揃えた3i候補。struct/centerに次ぐ優先度（woodFraming.js CL_PRIORITY_RANK参照）。
+  // 揃えた3i候補。struct/centerに次ぐ優先度（woodFraming.js SUPPORT_SPAN_PRIORITY_ORDER参照）。
   const below = iiPicks.filter(pk => pk.kind === 'below');
   const grid = iiPicks.filter(pk => pk.kind === 'grid');
   if (autoColumns.length === 0) continue;

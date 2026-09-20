@@ -1,13 +1,15 @@
 // woodFraming.js（在来木造の梁成表・下地割付・袖材・玄関開口・火打ち条件）の単体テスト。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
 import { RoomFeature } from '../core/constants.js';
 import {
   woodBeamDepthMm, woodBeamSectionKey, woodBeamSectionForDepth, woodBeamDepthForSpans, crossingBeamLoadCoords,
   mergeWallIntervals, subtractCoveredSpan, throughBeamRuns, columnSplitPoints, propagateCarrierDepths, columnSupportBeamCandidates,
   beamWallCrossPoints, studPositions, studSpec, openingJambSpec, entranceOpeningWidthMm, hipBraceAllowed,
   wallRunFaces, faceStudPositions, sillTopLevelOffsetMm, jambAxisValue, jambColumnPositions, rectsOverlap,
-  supportSpanColumnPositions, mergePrimaryBeamRuns, wallRunFreeEnds,
+  supportSpanColumnPositions, mergePrimaryBeamRuns, wallRunFreeEnds, SUPPORT_SPAN_PRIORITY_ORDER,
 } from './woodFraming.js';
 import { WOOD_BEAM_DEPTH_TABLE, TRADITIONAL_WOOD_FRAMING, TRADITIONAL_WOOD_BACKING, rulesFor, TRADITIONAL_WOOD_STRUCTURE } from './structureRules.js';
 import { findSectionEntry, woodRectSectionKey, SECTION_CATALOG } from './sectionCatalog.js';
@@ -1052,6 +1054,76 @@ test('【失敗系】supportSpanColumnPositions（裁定）: 下階の柱位置�
   // span=3640・窓=[1820,1820]（1点）。below候補が窓外(1000)なら使われず910グリッド(1820)になる。
   const result = supportSpanColumnPositions([0, 3640], [{ along: 1000, priority: 'below' }], () => true);
   assert.deepEqual(result, [{ along: 1820, kind: 'grid' }]);
+});
+
+// 一般化（優先順の出どころを1つにする、2026-09-21）: SUPPORT_SPAN_PRIORITY_ORDERは
+// core/centerLineKindPolicy.jsのSUPPORT_SPAN_COLUMN_KINDS（CL由来の種別と順序の唯一の出どころ）に
+// belowを足しただけの配列であることをピン留めする。値そのものはリテラルで固定し、被テスト関数・
+// ポリシー表から組み立てない（表側が壊れても検出できるように）。
+test('SUPPORT_SPAN_PRIORITY_ORDER: 現行の並びは通り芯＞意匠中心線＞下階柱位置（below）', () => {
+  assert.deepEqual(SUPPORT_SPAN_PRIORITY_ORDER, ['struct', 'center', 'below']);
+});
+
+// ---- 【不変条件】優先順の出どころが1つのまま（二重書きの再導入を検出する） ----
+// SUPPORT_SPAN_PRIORITY_ORDERへ一般化した後も、supportSpanColumnPositions内のループだけが
+// リテラル配列['struct','center','below']へ静かに戻る（＝ポリシー表を増やしても効かなくなる）
+// 再発を、ソース文字列を直接読んで検出する（team-lessons「委譲先が形だけ満たして達成と報告する」
+// 「同じ型の不良が走査地点ごとに1つずつ発覚する」——ヘルパを直接呼ぶテストだけでは、
+// woodFraming.js自身が二重書きへ戻っていないかは検証できない）。
+
+// 文字列リテラル（'..'・".."・`..`）の中身は保持し、それ以外の//行コメント・/* */ブロックコメント
+// （JSDoc含む）だけを取り除く簡易ストリッパー（フルパーサではない。本ファイルの構文範囲で十分——
+// 正規表現リテラルは無く、テンプレートリテラルの中身に対象キーワードは含まれない）。
+function stripComments(src) {
+  let out = '';
+  for (let i = 0; i < src.length;) {
+    const two = src.slice(i, i + 2);
+    if (two === '//') {
+      const nl = src.indexOf('\n', i);
+      i = nl === -1 ? src.length : nl;
+      continue;
+    }
+    if (two === '/*') {
+      const end = src.indexOf('*/', i + 2);
+      i = end === -1 ? src.length : end + 2;
+      continue;
+    }
+    const ch = src[i];
+    if (ch === '\'' || ch === '"' || ch === '`') {
+      let j = i + 1;
+      while (j < src.length && src[j] !== ch) {
+        j += src[j] === '\\' ? 2 : 1;
+      }
+      out += src.slice(i, Math.min(j + 1, src.length));
+      i = j + 1;
+      continue;
+    }
+    out += ch;
+    i += 1;
+  }
+  return out;
+}
+
+test('【不変条件】woodFraming.js: 支持長超過の優先順ループが SUPPORT_SPAN_PRIORITY_ORDER だけを走り、種別リテラルの配列を再定義していない', () => {
+  const src = fs.readFileSync(path.resolve(import.meta.dirname, './woodFraming.js'), 'utf8');
+  const code = stripComments(src);
+
+  assert.ok(/for \(const priority of SUPPORT_SPAN_PRIORITY_ORDER\)/.test(code),
+    '優先順ループが SUPPORT_SPAN_PRIORITY_ORDER を走査していない（リテラル配列に戻っている疑い）');
+
+  const KEYWORDS = ['struct', 'center', 'below'];
+  const arrayLiterals = code.match(/\[[^[\]]*\]/g) ?? [];
+  for (const lit of arrayLiterals) {
+    const hit = KEYWORDS.filter(k => lit.includes(`'${k}'`));
+    assert.ok(hit.length < 2,
+      `配列リテラル ${lit} に struct/center/below のうち2つ以上（${hit.join('・')}）が並んでいる——優先順の重複定義の疑い`);
+  }
+
+  // 'struct'という文字列リテラルはコード部に現れない（実測: 一般化前は@returns等のJSDoc union型に
+  // 残っていたが、それらもSUPPORT_SPAN_PRIORITY_ORDER参照へ書き換え済み。数値のみの要素の既定優先度は
+  // SUPPORT_SPAN_PRIORITY_ORDER[0]経由にすること——'struct'に後戻りしていないかのガード）。
+  assert.equal((code.match(/'struct'/g) ?? []).length, 0,
+    "コード中に'struct'という文字列リテラルが残っている（優先度最上位の後方互換値がSUPPORT_SPAN_PRIORITY_ORDER[0]経由から後戻りしている疑い）");
 });
 
 // ================================================================
