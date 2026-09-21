@@ -10,7 +10,7 @@ import { ERR_STRUCT_MAIN_UNSPECIFIED } from '../error.js';
 import { autoFillColumnsForStructure, autoFillColumnAxisOffsets, autoFillColumnSizes, resolveLowestGraph, convertMembersToEffectiveMaterial, deleteClassificationOverflow, UNSPECIFIED_STRUCTURE } from './structuralAutoFill.js';
 import { conformWoodSections } from './woodAutoFill.js';
 import { rulesFor, effectiveStructure, beamColumnWidthMm } from './structureRules.js';
-import { collectWallBeamSources, autoFillWallBeamAxes, peekBelowGraph, wallRunSegments, columnSeedBeamSegments } from './wallBeamAxes.js';
+import { collectWallBeamSources, autoFillWallBeamAxes, peekBelowGraph, wallRunSegments, columnSeedBeamSegments, createWallSourceCache } from './wallBeamAxes.js';
 import { structureHasMemberKind, MEMBER_KIND } from './structuralClassification.js';
 import { buildStructuralWallGate } from './wallGate.js';
 import { collectFloorGroups, assignNumbers, applyNumbers } from './memberNumbering.js';
@@ -169,10 +169,17 @@ export async function recomputeStructuralComposition(composition, subjectGraph, 
       ? await peekBelowGraph(belowGraph, project) : null;
     // 壁由来の梁芯CL（マージ済み・下階込み）。在来木造の壁交点柱はこのCLをアンカーにするため、柱より先に生成する
     //（structuralRecompute.js の主経路と同じ順序。自階だけの未マージ source で作ると extent の短いCLが永続化される）。
-    const belowWallSources = await collectWallBeamSources(belowGraph, project, belowBelowGraph);
+    // ステップC: この2呼び出し（collectWallBeamSources→内部でwallRunSegments・直後の明示的wallRunSegments）は
+    // 同じbelowGraph・belowBelowGraphの壁区間を2度全走査していたため、ここでローカルに1個だけ
+    // キャッシュを作って共有する（寿命はこの下階編集経路1回分。recomputeStructuralForGraph側の
+    // wallSourceCacheとは別物——ここで生成する下階柱（autoFillColumnsForStructure(belowGraph,...)）内部の
+    // selfWallSegments(belowGraph)までは届けない。「その場でローカルに1個作って2つの呼び出しで共有する
+    // 程度に留める」というリード裁定のスコープ内）。
+    const belowWallSourceCache = createWallSourceCache();
+    const belowWallSources = await collectWallBeamSources(belowGraph, project, belowBelowGraph, belowWallSourceCache);
     // 在来木造の壁線上の通し梁（3c）・上階柱直下の柱（3b）が候補列挙に使う壁区間（マージ不要）。
     // structuralRecompute.js の主経路（wallRunSegments）と同じ組み立て。
-    const belowWallSegments = wallRunSegments(belowGraph, belowBelowGraph, belowStructure);
+    const belowWallSegments = wallRunSegments(belowGraph, belowBelowGraph, belowStructure, belowWallSourceCache);
     // belowGraphから見た「1つ上の実体階」＝subjectGraph自身（メモリ上・peek不要）。ここを忘れると
     // 直前のreflectが作った下階の3b柱が、この再計算で候補から漏れて撤去されてしまう。
     const aboveColumnsForBelow = subjectGraph.columns;

@@ -483,8 +483,8 @@ test('【不変条件・ソース走査】structuralOrchestration.js: 下階編�
     'autoFillColumnsForStructure(belowGraph, ...) へ aboveColumnsForBelow・belowWallSegments・aboveBeamSegmentsForBelow・belowBelowGraph?.columnsを渡していない');
   assert.ok(/aboveColumnsForBelow\s*=\s*subjectGraph\.columns/.test(src),
     'aboveColumnsForBelow が subjectGraph.columns（メモリ上）から来ていない（誤ってpeekしている可能性）');
-  assert.ok(/belowWallSegments\s*=\s*wallRunSegments\(belowGraph, belowBelowGraph, belowStructure\)/.test(src),
-    'belowWallSegments が wallRunSegments(belowGraph, belowBelowGraph, belowStructure) から来ていない');
+  assert.ok(/belowWallSegments\s*=\s*wallRunSegments\(belowGraph, belowBelowGraph, belowStructure, belowWallSourceCache\)/.test(src),
+    'belowWallSegments が wallRunSegments(belowGraph, belowBelowGraph, belowStructure, belowWallSourceCache) から来ていない');
   assert.ok(/aboveBeamSegmentsForBelow\s*=\s*columnSeedBeamSegments\(subjectGraph,\s*rulesFor\(effectiveStructure\(subjectGraph, project\)\)\)/.test(src),
     'aboveBeamSegmentsForBelow が columnSeedBeamSegments(subjectGraph, ...)（メモリ上）から来ていない（誤ってpeekしている可能性）');
 });

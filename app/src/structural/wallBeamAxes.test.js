@@ -7,7 +7,7 @@ import {
   collectWallBeamSources, autoFillWallBeamAxes, isTraditionalWoodStructure,
   wallBackingCenters, mapBackingCenterMoves, findWallBeamAxisCL, wallBeamAxisExcludeKey, peekBelowGraph,
   selfWallSegments, columnSeedBeamSegments, stairOpeningRuns, wallRunSegments,
-  peekRoofBelowGraph, peekRoofGraphAbove,
+  peekRoofBelowGraph, peekRoofGraphAbove, createWallSourceCache,
 } from './wallBeamAxes.js';
 import { RC_WALL_BACKING_CODES } from '../finish/materials/backingClass.js';
 import { MATERIALS } from '../finish/materials/materialData.js';
@@ -853,4 +853,77 @@ test('【意図の固定】collectWallBeamSources→autoFillWallBeamAxes: 階段
     assert.equal(cl.discipline, Discipline.FUSE, '新設したCLはdiscipline:fuse（梁芯）');
     assert.equal(cl.labeled, false, '梁芯は非ラベル');
   }
+});
+
+// ---- ステップC: createWallSourceCache（1回の再計算内での壁区間memo）----
+test('createWallSourceCache: 同じcacheで同じgraphを2回引くと壁の走査は1回（走査後に足した壁は2回目に反映されない＝memoが効いている証拠）', () => {
+  const { graph, x1, x2 } = makeGridGraph('p1', 0);
+  addBackingWall(graph, { axisValue: 1000, clStart: x1, clEnd: x2, isVertical: false });
+  const cache = createWallSourceCache();
+  const first = selfWallSegments(graph, cache);
+  assert.equal(first.length, 1);
+  // memo済みの後に壁を追加——2回目がこれを拾えば「走査していない」ことにならない。
+  addBackingWall(graph, { axisValue: 2000, clStart: x1, clEnd: x2, isVertical: false });
+  const second = selfWallSegments(graph, cache);
+  assert.equal(second.length, 1, '2回目はmemoされた1回目の結果のまま（全走査していない）');
+});
+
+test('【失敗系】createWallSourceCache: 壁を変えた後、新しいcache（＝次の再計算）では新しい壁区間が返る。cache省略時は常に最新', () => {
+  const { graph, x1, x2 } = makeGridGraph('p1', 0);
+  addBackingWall(graph, { axisValue: 1000, clStart: x1, clEnd: x2, isVertical: false });
+  const cache1 = createWallSourceCache();
+  assert.equal(selfWallSegments(graph, cache1).length, 1);
+
+  addBackingWall(graph, { axisValue: 2000, clStart: x1, clEnd: x2, isVertical: false });
+  // 新しい再計算=新しいcacheインスタンス。古いcache1を使い回さない。
+  const cache2 = createWallSourceCache();
+  assert.equal(selfWallSegments(graph, cache2).length, 2, '新しいcacheは古いcache1の値を引き継がず最新を走査する');
+  // cache省略時は今までどおり呼ぶたびに最新を返す。
+  assert.equal(selfWallSegments(graph).length, 2, 'cache省略時は常に最新の壁区間を返す');
+});
+
+test('createWallSourceCache: 返り値の要素を書き換えても（lo破壊・要素push）、同じcacheの次の取得結果に影響しない', () => {
+  const { graph, x1, x2 } = makeGridGraph('p1', 0);
+  addBackingWall(graph, { axisValue: 1000, clStart: x1, clEnd: x2, isVertical: false });
+  const cache = createWallSourceCache();
+  const first = selfWallSegments(graph, cache);
+  assert.equal(first.length, 1);
+  first[0].lo = -99999; // 消費側が要素を破壊的に書き換える想定
+  first.push({ isVertical: true, coord: 0, lo: 0, hi: 1, halfDepth: 0, bandOffset: 0 }); // 配列へpush
+
+  const second = selfWallSegments(graph, cache);
+  assert.equal(second.length, 1, 'pushした要素はmemo本体を汚さない');
+  assert.notEqual(second[0].lo, -99999, 'loの破壊的書き換えはmemo本体を汚さない');
+  assert.equal(second[0].lo, 0, '元の壁のloがそのまま返る');
+});
+
+test('createWallSourceCache: graphごとに別キー——別graphの結果が混ざらない（自階と下階を同じcacheで引く主経路の前提）', () => {
+  const a = makeGridGraph('p1', 0);
+  const b = makeGridGraph('p2', 3000);
+  addBackingWall(a.graph, { axisValue: 1000, clStart: a.x1, clEnd: a.x2, isVertical: false });
+  addBackingWall(b.graph, { axisValue: 1000, clStart: b.x1, clEnd: b.x2, isVertical: false });
+  addBackingWall(b.graph, { axisValue: 2000, clStart: b.x1, clEnd: b.x2, isVertical: false });
+  const cache = createWallSourceCache();
+  assert.equal(selfWallSegments(a.graph, cache).length, 1, 'graphAは壁1本');
+  assert.equal(selfWallSegments(b.graph, cache).length, 2, 'graphBは壁2本——graphAのmemoが返って来ない');
+  assert.equal(selfWallSegments(a.graph, cache).length, 1, 'graphAはgraphBの呼び出し後も1本のまま');
+});
+
+test('createWallSourceCache: requireBeamAxisBacking（true/false）は別キーで混ざらない', async () => {
+  const { graph, x1, x3 } = makeGridGraph('p1', 0);
+  // 既定の下地材（interiorWallBackingの既定値）はRC下地でない＝true側（rcBacking）では対象外の壁。
+  addBackingWall(graph, { axisValue: 2000, clStart: x1, clEnd: x3, isVertical: false });
+  const cache = createWallSourceCache();
+
+  // false側（種別を問わない。selfWallSegments）を先に引いて1件をmemoさせる。
+  assert.equal(selfWallSegments(graph, cache).length, 1, '種別を問わない方は壁を拾う');
+
+  // true側（collectWallBeamSourcesのRC造経路＝rcBacking）を同じcacheで引く。
+  graph.structureOverride = 'RC造(ラーメン)';
+  const project = { planes: [graph.plane], structuralInfo: { mainStructure: '未定' } };
+  const trueFlagSources = await collectWallBeamSources(graph, project, undefined, cache);
+  assert.equal(trueFlagSources.length, 0, 'RC下地でない壁はtrue側では対象外——false側の1件が混ざって来ない');
+
+  // false側を再度引いても、true側の呼び出しに壊されていない（同じcacheを共有していても別キー）。
+  assert.equal(selfWallSegments(graph, cache).length, 1, 'false側はtrue側の呼び出し後も1件のまま');
 });

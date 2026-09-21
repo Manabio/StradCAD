@@ -124,11 +124,13 @@ export function autoFillColumns(graph, project, wallGate = null) {
  *  3iのbelow優先候補）へ渡す——非在来では無視される。belowColumnsは同名のautoFillBeamsForStructure
  *  引数（3c-2b）と同じ値をそのまま渡せる。
  *  構造モード突入時の再計算（autoFillStructuralGrid）と、下階グラフへの反映（structuralOrchestration.js）が共有する。
+ *  wallSourceCache: 1回の再計算内で壁区間（wallBeamAxes.js wallBeamSourcesFromGraph）をmemoする
+ *  キャッシュ（wallBeamAxes.js createWallSourceCache。ステップC）。省略時は従来どおり自前で全走査する。
  *  @returns {{created: object[], removed: string[]}} */
-export function autoFillColumnsForStructure(graph, project, wallGate = null, aboveColumns = [], wallSegments = [], aboveBeamSegments = [], belowColumns = []) {
+export function autoFillColumnsForStructure(graph, project, wallGate = null, aboveColumns = [], wallSegments = [], aboveBeamSegments = [], belowColumns = [], wallSourceCache = undefined) {
   if (!isStructureSpecified(graph, project)) return { created: [], removed: [] };
   const rules = rulesFor(effectiveStructure(graph, project));
-  if (rules.columnPlacement === 'wallIntersections') return autoFillWoodColumns(graph, project, wallGate, aboveColumns, wallSegments, aboveBeamSegments, belowColumns);
+  if (rules.columnPlacement === 'wallIntersections') return autoFillWoodColumns(graph, project, wallGate, aboveColumns, wallSegments, aboveBeamSegments, belowColumns, wallSourceCache);
   return { created: autoFillColumns(graph, project, wallGate), removed: [] };
 }
 
@@ -218,10 +220,12 @@ export function autoFillBeams(graph, project, role = 'primary', wallGate = null)
  *  従来と同値（小屋伏図にも梁・柱ルールを適用する計画のステップ3。呼び出し側の切替はステップ5以降）。
  *  freeEndGraph は autoFillWoodWallBeams の同名引数（R-2・2026-09-19是正）をそのまま素通しする——
  *  省略時（undefined）はそちら側が既定値（graph自身）を使うため実体階は従来と同値。
+ *  wallSourceCache は autoFillWoodWallBeams の同名引数（ステップC）をそのまま素通しする——
+ *  省略時（undefined）はそちら側が毎回全走査するため従来と同値。
  *  @returns {{created: object[], removed: string[]}} */
-export function autoFillBeamsForStructure(graph, project, role, wallGate = null, wallSegments = [], belowColumns = [], selfGate = undefined, freeEndGraph = undefined) {
+export function autoFillBeamsForStructure(graph, project, role, wallGate = null, wallSegments = [], belowColumns = [], selfGate = undefined, freeEndGraph = undefined, wallSourceCache = undefined) {
   if (role === 'primary' && rulesFor(effectiveStructure(graph, project)).beamPlacement === 'wallRuns') {
-    return autoFillWoodWallBeams(graph, project, wallSegments, wallGate, belowColumns, selfGate, freeEndGraph ?? graph);
+    return autoFillWoodWallBeams(graph, project, wallSegments, wallGate, belowColumns, selfGate, freeEndGraph ?? graph, wallSourceCache);
   }
   return { created: autoFillBeams(graph, project, role, wallGate), removed: [] };
 }
@@ -415,8 +419,13 @@ export function autoFillStairLandingBeams(graph, project, wallGate = null) {
  *  freeEndGraph: 自由端（F-2・selfWallFreeEnds）の判定に使うgraph（R-2・2026-09-19是正）。
  *  autoFillWoodWallBeamsの同名引数へそのまま素通しする——省略時（undefined）はそちら側の既定値
  *  （graph自身）になるため実体階は従来と同値。呼び出し側（structuralRecompute.js）が屋根専用平面の
- *  ときだけ「1つ下の実体階（＝最上階）」のgraphを渡す。 */
-export function autoFillStructuralGrid(graph, project, belowMainStructure, wallGate = null, wallSources = [], wallSegments = [], aboveColumns = [], belowColumns = [], aboveBeamSegments = [], selfGate = undefined, freeEndGraph = undefined) {
+ *  ときだけ「1つ下の実体階（＝最上階）」のgraphを渡す。
+ *  wallSourceCache: 1回の再計算内で壁区間をmemoするキャッシュ（wallBeamAxes.js createWallSourceCache。
+ *  ステップC）。省略時（undefined）は従来どおり呼び出しのたびに壁区間を全走査する——本関数自身は
+ *  wallSources/wallSegments（呼び出し側が既に導出済みの結果）を直接使うだけで消費しないが、内部で
+ *  さらに壁区間を導出し直す autoFillColumnsForStructure（在来木造の壁交点柱）・autoFillWoodWallBeams
+ *  （在来木造の壁線上の通し梁・屋根の軒桁）へそのまま素通しする。 */
+export function autoFillStructuralGrid(graph, project, belowMainStructure, wallGate = null, wallSources = [], wallSegments = [], aboveColumns = [], belowColumns = [], aboveBeamSegments = [], selfGate = undefined, freeEndGraph = undefined, wallSourceCache = undefined) {
   const foundation = isFoundationPlane(graph.plane, project);
   const isRoof = graph.plane.isRoofPlane;
   // 自階帰属の柱・梁・基礎は自階の主構造が確定するまで生成しない（autoFillColumns は自前でも同ガード）。
@@ -431,7 +440,7 @@ export function autoFillStructuralGrid(graph, project, belowMainStructure, wallG
   const newWallBeamAxes = autoFillWallBeamAxes(graph, wallSources);
   // 柱は主構造ルールの配置源（通り芯交点／壁交点）で振り分ける。壁交点方式は候補に無い自動柱の撤去も返す。
   const columnsResult = (!isRoof && ownSpecified && structureHasMemberKind(MEMBER_KIND.COLUMN, structure))
-    ? autoFillColumnsForStructure(graph, project, wallGate, aboveColumns, wallSegments, aboveBeamSegments, belowColumns) : { created: [], removed: [] };
+    ? autoFillColumnsForStructure(graph, project, wallGate, aboveColumns, wallSegments, aboveBeamSegments, belowColumns, wallSourceCache) : { created: [], removed: [] };
   const newColumns = columnsResult.created;
   const removedColumns = columnsResult.removed;
   // ベース（独立フーチング）は分類（表A）に加え、基礎種別でもゲートする（木造べた基礎時はベースなし）。
@@ -439,7 +448,7 @@ export function autoFillStructuralGrid(graph, project, belowMainStructure, wallG
     && foundationGeneratesBase(structure, foundationType)) ? autoFillFootings(graph, wallGate) : [];
   const beamKind = foundation ? MEMBER_KIND.FOUNDATION_BEAM : MEMBER_KIND.BEAM;
   const beamsResult = (!isRoof && ownSpecified && structureHasMemberKind(beamKind, structure))
-    ? autoFillBeamsForStructure(graph, project, foundation ? 'foundation' : 'primary', wallGate, wallSegments, belowColumns, selfGate, freeEndGraph)
+    ? autoFillBeamsForStructure(graph, project, foundation ? 'foundation' : 'primary', wallGate, wallSegments, belowColumns, selfGate, freeEndGraph, wallSourceCache)
     : { created: [], removed: [] };
   const newBeams = beamsResult.created;
   const removedBeams = beamsResult.removed;
@@ -470,7 +479,7 @@ export function autoFillStructuralGrid(graph, project, belowMainStructure, wallG
   // （autoFillRoofBeamsの材種決定に使う「1つ下の階」の値）とは別軸。
   const roofBeamsResult = (isRoof && belowMainStructure !== UNSPECIFIED_STRUCTURE)
     ? (rulesFor(structure).roofBeamPlacement === 'wallRuns'
-        ? autoFillWoodWallBeams(graph, project, wallSegments, wallGate, belowColumns, selfGate, freeEndGraph ?? graph)
+        ? autoFillWoodWallBeams(graph, project, wallSegments, wallGate, belowColumns, selfGate, freeEndGraph ?? graph, wallSourceCache)
         : { created: autoFillRoofBeams(graph, project, belowMainStructure, wallGate), removed: [] })
     : { created: [], removed: [] };
   const newRoofBeams = roofBeamsResult.created;

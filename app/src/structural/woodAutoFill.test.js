@@ -12,7 +12,7 @@ import { wallRunFreeEnds } from './woodFraming.js';
 import { WOOD_STUD_CODE_BY_SIZE } from '../finish/materials/backingClass.js';
 import { autoFillColumnsForStructure, autoFillStructuralGrid, autoFillBeamsForStructure, convertMembersToEffectiveMaterial } from './structuralAutoFill.js';
 import { TRADITIONAL_WOOD_STRUCTURE, rulesFor } from './structureRules.js';
-import { selfWallSegments, autoFillWallBeamAxes, wallBeamAxisExcludeKey } from './wallBeamAxes.js';
+import { selfWallSegments, autoFillWallBeamAxes, wallBeamAxisExcludeKey, createWallSourceCache } from './wallBeamAxes.js';
 import { generateRoomWallsFromOutline } from '../finish/wallGeneration.js';
 import { floorSwapManager } from '../storage/FloorSwapManager.js';
 import { recomputeStructuralForGraph } from './structuralRecompute.js';
@@ -3532,6 +3532,33 @@ test('【統合・ステップD】recomputeStructuralForGraph: captureSnapshots:
   }
 });
 
+// ---- 【統合・ステップC】recomputeStructuralForGraph: options.wallSourceCache（1回の再計算内での壁区間memo）----
+test('【統合・ステップC】recomputeStructuralForGraph: options.wallSourceCacheを明示しても、省略時と同じ結果になる（壁交点柱・壁線上の通し梁とも）', async () => {
+  // idは生成順で変わるため、位置・役割・断面の安定キーで比べる。
+  const dump = (g) => ({
+    columns: g.columns.map(c => `${c.role}:${Math.round(c.x)},${Math.round(c.y)}:${c.sectionDefId}`).sort(),
+    beams: g.beams.map(b => `${b.role}:${b.isVertical ? 'V' : 'H'}:${Math.round(b.axisValue)}:`
+      + `${Math.round(Math.min(b.clStart.effectiveValue, b.clEnd.effectiveValue))}..`
+      + `${Math.round(Math.max(b.clStart.effectiveValue, b.clEnd.effectiveValue))}:${b.sectionDefId}`).sort(),
+  });
+  const run = async (options) => {
+    // フィクスチャは呼ぶたびに独立したProjectを作る＝cacheあり／なしを同じ入力から比べられる。
+    const { project, g2, peekMap } = buildRoomGraphForSnapshotTest();
+    const originalPeek = floorSwapManager.peek;
+    floorSwapManager.peek = async (plane) => peekMap[plane.id] ?? null;
+    try {
+      const result = await recomputeStructuralForGraph(g2, project, TRADITIONAL_WOOD_STRUCTURE, undefined, options);
+      return { changed: result.changed, ...dump(g2) };
+    } finally {
+      floorSwapManager.peek = originalPeek;
+    }
+  };
+  const without = await run(undefined);
+  const withCache = await run({ wallSourceCache: createWallSourceCache() });
+  assert.ok(without.columns.length > 0 && without.beams.length > 0, '前提: 壁交点柱・壁線上の通し梁が生成される');
+  assert.deepEqual(withCache, without, 'cache指定は省略時と同一の解（柱・梁のダンプとchanged）を返す');
+});
+
 // ---- 不変条件: structuralRecompute.js が wallRunSegments を autoFillStructuralGrid に渡し、removedBeams を changed に含める ----
 test('【不変条件】structuralRecompute.js: wallRunSegments を autoFillStructuralGrid に渡し、removedBeams を changed に含める（ステップ3c-2）', async () => {
   const fs = await import('node:fs');
@@ -3539,16 +3566,18 @@ test('【不変条件】structuralRecompute.js: wallRunSegments を autoFillStru
   const url = await import('node:url');
   const here = path.dirname(url.fileURLToPath(import.meta.url));
   const src = fs.readFileSync(path.join(here, 'structuralRecompute.js'), 'utf8');
-  assert.ok(/wallRunSegments\(targetGraph,\s*belowGraph,\s*structure\)/.test(src),
-    'wallRunSegments(targetGraph, belowGraph, structure) の呼び出しが無い');
+  assert.ok(/wallRunSegments\(targetGraph,\s*belowGraph,\s*structure,\s*wallSourceCache\)/.test(src),
+    'wallRunSegments(targetGraph, belowGraph, structure, wallSourceCache) の呼び出しが無い');
   // ステップ3c-2b（下階柱分割）でbelowColumnsが8番目の引数として加わった（belowGraph?.columns ?? []）。
   // ステップ3h-2で9番目の引数としてaboveBeamSegments（columnSeedBeamSegments(aboveGraph, ...)）が
   // 加わった（A-2で columnSeedBeamSegments へ改名・一般化）。小屋伏図にも梁・柱ルールを適用する計画の
   // ステップ3で10番目の引数としてselfGate（自階フットプリント単独ゲート。屋根専用平面のときだけ
   // 1つ下の実体階=最上階のgraphから計算する）が加わった。R-2（2026-09-19是正）で11番目の引数として
   // freeEndGraph（自由端の判定基準。屋根専用平面のときだけ1つ下の実体階=最上階のgraphを渡す）が加わった。
-  assert.ok(/autoFillStructuralGrid\(targetGraph, project, mainStructure, wallGate, wallSources, wallSegments, aboveColumns, belowGraph\?\.columns \?\? \[\], aboveBeamSegments, selfGate, freeEndGraph\)/.test(src),
-    'autoFillStructuralGrid へ wallSegments・aboveColumns・belowColumns・aboveBeamSegments・selfGate・freeEndGraph を渡していない');
+  // ステップCで12番目の引数としてwallSourceCache（1回の再計算内の壁区間memo。wallBeamAxes.js
+  // createWallSourceCache）が加わった。
+  assert.ok(/autoFillStructuralGrid\(targetGraph, project, mainStructure, wallGate, wallSources, wallSegments, aboveColumns, belowGraph\?\.columns \?\? \[\], aboveBeamSegments, selfGate, freeEndGraph, wallSourceCache\)/.test(src),
+    'autoFillStructuralGrid へ wallSegments・aboveColumns・belowColumns・aboveBeamSegments・selfGate・freeEndGraph・wallSourceCache を渡していない');
   assert.ok(/removedBeams\.length > 0/.test(src), 'removedBeams が changed の判定に含まれていない');
 });
 

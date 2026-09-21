@@ -119,6 +119,36 @@ function wallBackingCode(sourceGraph, wall) {
   return wall.isExteriorWall ? sourceGraph.exteriorWallBacking : sourceGraph.interiorWallBacking;
 }
 
+/**
+ * wallBeamSourcesFromGraph の結果を「graph インスタンス×requireBeamAxisBacking」でmemoする
+ * キャッシュを作る（ステップC・構造再計算の高速化）。1回の recomputeStructuralForGraph の呼び出しの
+ * 間、同じ graph の壁区間は不変（構造再計算は壁を生成・変更しない。structuralRecompute.js冒頭の
+ * コメント参照）——にもかかわらず、collectWallBeamSources・wallRunSegments・selfWallSegments経由で
+ * 同じ graph が1回の再計算中に何度も全走査されていた（wallGate.js等と違い、この壁区間の解決だけが
+ * 唯一横断的にキャッシュされていなかった）。
+ *
+ * **モジュール変数・graphへの恒久WeakMapにしない**——壁は仕上げモード脱出等、この再計算の外側で
+ * 変わりうる（graphに紐づく長寿命キャッシュは古い壁区間を返す事故になる）。呼び出し側
+ * （structuralRecompute.js・structuralOrchestration.js）が「1回の再計算」の寿命でこのキャッシュを
+ * 生成し、消費側の関数チェーンへ明示的に引数で渡す——省略時（undefined）は一切memoせず、
+ * 呼び出しのたびに毎回全走査する（既存の挙動と完全に同じ）。
+ *
+ * @returns {{get(graph:object, flag:boolean):Array|undefined, set(graph:object, flag:boolean, value:Array):void}}
+ */
+export function createWallSourceCache() {
+  const byGraph = new Map(); // graph -> Map<requireBeamAxisBacking, 生成済み配列>
+  return {
+    get(graph, flag) {
+      return byGraph.get(graph)?.get(flag);
+    },
+    set(graph, flag, value) {
+      let byFlag = byGraph.get(graph);
+      if (!byFlag) { byFlag = new Map(); byGraph.set(graph, byFlag); }
+      byFlag.set(flag, value);
+    },
+  };
+}
+
 /** sourceGraph の下地オーナー壁から wallSources 断片（プレーン配列）を抽出する。
  *  requireBeamAxisBacking=true なら、per-floor 下地材コードの下地材分類が「梁芯の生成源」
  *  （structureRules.js BACKING_RULES.beamAxisSource＝RC壁下地）の壁だけに絞る（条件(a)）。
@@ -130,8 +160,15 @@ function wallBackingCode(sourceGraph, wall) {
  *  挙動不変）。designLo/designHi＝設計上の端（壁のclStart/clEnd.effectiveValueをMath.min/maxで
  *  揃えたもの。物理lo/hiの昇降とは独立——取り合いの控え・自由端の柱包み分のprotrusionを含まない）。
  *  woodFraming.js wallRunFreeEnds が
- *  自由端の点にこちらを使う（F-1×F-3是正）。 */
-function wallBeamSourcesFromGraph(sourceGraph, requireBeamAxisBacking) {
+ *  自由端の点にこちらを使う（F-1×F-3是正）。
+ *  cache（createWallSourceCache）指定時は「sourceGraph×requireBeamAxisBacking」でmemoする——
+ *  cache指定時は、ヒット時も新規計算時も、返り値は必ず要素を複製した新しい配列（呼び出し側が
+ *  lo/hi等を書き換えてもmemo本体は汚れない。他の消費側の書き換え有無はwallBeamAxes.jsのJSDoc・
+ *  呼び出し元の調査済み——現状は読み取りのみ）。省略時は従来どおり毎回全走査し、走査結果を
+ *  そのまま返す（どこにも保持しないため複製は不要）。 */
+function wallBeamSourcesFromGraph(sourceGraph, requireBeamAxisBacking, cache = undefined) {
+  const cached = cache?.get(sourceGraph, requireBeamAxisBacking);
+  if (cached) return cached.map(s => ({ ...s }));
   const out = [];
   for (const wall of sourceGraph.walls) {
     if (!isBackingOwnerWall(wall)) continue;
@@ -168,14 +205,18 @@ function wallBeamSourcesFromGraph(sourceGraph, requireBeamAxisBacking) {
       bandOffset: wall.bandOffset ?? 0,
     });
   }
-  return out;
+  if (!cache) return out;
+  cache.set(sourceGraph, requireBeamAxisBacking, out);
+  return out.map(s => ({ ...s }));
 }
 
 /** 自階の下地オーナー壁の区間（プレーン配列 [{isVertical, coord, lo, hi, halfDepth, bandOffset}]。
  *  下地材の種別は問わず、下階は含まない）。在来木造の壁交点柱・上階柱直下の柱（woodAutoFill.js）が
- *  候補列挙に使う。 */
-export function selfWallSegments(graph) {
-  return wallBeamSourcesFromGraph(graph, false);
+ *  候補列挙に使う。
+ *  @param {object} graph
+ *  @param {ReturnType<typeof createWallSourceCache>} [cache] - 省略時は毎回全走査（従来どおり）。 */
+export function selfWallSegments(graph, cache = undefined) {
+  return wallBeamSourcesFromGraph(graph, false, cache);
 }
 
 // ================================================================
@@ -321,17 +362,18 @@ function mergeWallBeamSources(sources) {
  * @param {object|null} [belowGraph] - 1つ下の実体階のgraph（省略時=undefinedのときだけ自前でpeekする。
  *   nullを明示すれば「下階なし」として扱い、peekしない——呼び出し側（structuralRecompute.js）が
  *   木造梁成（ステップ3d）と同じpeek結果を使い回し、1回の再計算で下階を二重にpeekしないための引数）。
+ * @param {ReturnType<typeof createWallSourceCache>} [cache] - 省略時は毎回全走査（従来どおり）。
  */
-export async function collectWallBeamSources(graph, project, belowGraph = undefined) {
+export async function collectWallBeamSources(graph, project, belowGraph = undefined, cache = undefined) {
   const structure = effectiveStructure(graph, project);
   // 生成源の選択は主構造ルール（structureRules.js wallBeamAxes: 'rcBacking' | 'selfAndBelow' | null）。
   const mode = rulesFor(structure).wallBeamAxes;
   let sources = [];
   if (mode === 'rcBacking') {
-    sources = wallBeamSourcesFromGraph(graph, true);
+    sources = wallBeamSourcesFromGraph(graph, true, cache);
   } else if (mode === 'selfAndBelow') {
     const below = belowGraph === undefined ? await peekBelowGraph(graph, project) : belowGraph;
-    sources = wallRunSegments(graph, below, structure);
+    sources = wallRunSegments(graph, below, structure, cache);
   }
   return mergeWallBeamSources(sources);
 }
@@ -346,12 +388,13 @@ export async function collectWallBeamSources(graph, project, belowGraph = undefi
  * @param {object} graph
  * @param {object|null} belowGraph
  * @param {string} structure
+ * @param {ReturnType<typeof createWallSourceCache>} [cache] - 省略時は毎回全走査（従来どおり）。
  * @returns {Array<{isVertical:boolean, coord:number, lo:number, hi:number}>}
  */
-export function wallRunSegments(graph, belowGraph, structure) {
+export function wallRunSegments(graph, belowGraph, structure, cache = undefined) {
   if (rulesFor(structure).wallBeamAxes !== 'selfAndBelow') return [];
-  const self = wallBeamSourcesFromGraph(graph, false);
-  const below = belowGraph ? wallBeamSourcesFromGraph(belowGraph, false) : [];
+  const self = wallBeamSourcesFromGraph(graph, false, cache);
+  const below = belowGraph ? wallBeamSourcesFromGraph(belowGraph, false, cache) : [];
   // Major 6・2026-09-18裁定: 1つ下の実体階の階段の「床開口の外周4辺すべて」も、壁線と同じ扱いの
   // 区間として合流させる（stairOpeningRuns参照）。
   const openings = stairOpeningRuns(belowGraph);

@@ -222,14 +222,17 @@ function findHostBackingWall(opening, graph) {
  *   autoFillBeamsForStructureの同名引数（3c-2b）と同じ値をそのまま渡せる——
  *   structuralRecompute.jsの`belowGraph?.columns`。省略・null・[]は従来どおり（belowの候補なし）。
  *   role:'foundation'（杭）は候補にしない）。
+ * @param {ReturnType<import('./wallBeamAxes.js').createWallSourceCache>} [wallSourceCache] - 1回の
+ *   再計算内で壁区間（selfWallSegments）をmemoするキャッシュ（ステップC）。省略時は従来どおり
+ *   自前で全走査する。
  * @returns {{created: object[], removed: string[], jambSkipped: object[], iiPicks: Array<{isVertical:boolean,
  *   coord:number, along:number, kind:string, x:number, y:number}>}} kindはSUPPORT_SPAN_PRIORITY_ORDERの
  *   要素、または'grid'。iiPicksは3iが採用した候補の診断用一覧（生成の可否判定には使わない。
  *   probe woodSupportSpanProbe.mjsが由来内訳の報告に使う）
  */
-export function autoFillWoodColumns(graph, project, wallGate = null, aboveColumns = [], wallSegments = [], aboveBeamSegments = [], belowColumns = []) {
+export function autoFillWoodColumns(graph, project, wallGate = null, aboveColumns = [], wallSegments = [], aboveBeamSegments = [], belowColumns = [], wallSourceCache = undefined) {
   const rules = rulesFor(effectiveStructure(graph, project));
-  const segments = selfWallSegments(graph);
+  const segments = selfWallSegments(graph, wallSourceCache);
   // 壁が1本も無い階（仕上げモード未着手で壁が未生成）は何もしない＝既存の柱を保全する
   // （ユーザー裁定2026-09-14。候補0で全撤去すると、非アクティブ階がモード境界で無通知に柱を失う）。
   // 壁が生成された時点で壁交点方式へ切り替わる。
@@ -891,9 +894,13 @@ export function wallLineThroughRuns(wallSegments, freeEnds = []) {
  *   最上階の壁線の自由端（唯一の被覆漏れ区間）に軒桁が届かない——呼び出し側（structuralRecompute.js）
  *   が屋根のときだけ「1つ下の実体階（＝最上階）」のgraphを渡すことで、最上階の壁のkneeDropWalls判定
  *   （腰壁・垂れ壁の辺は対象外）も含めて最上階基準に揃える。実体階は従来どおり省略（graph自身）。
+ * @param {ReturnType<import('./wallBeamAxes.js').createWallSourceCache>} [wallSourceCache] - 1回の
+ *   再計算内で壁区間（selfWallSegments）をmemoするキャッシュ（ステップC）。省略時は従来どおり
+ *   自前で全走査する（freeEndGraphのselfWallFreeEnds算出にだけ使う——wallSegments自体は呼び出し側が
+ *   渡す値をそのまま使う）。
  * @returns {{created: object[], removed: string[]}}
  */
-export function autoFillWoodWallBeams(graph, project, wallSegments, wallGate = null, belowColumns = [], selfGate = buildSelfFootprintGate(graph), freeEndGraph = graph) {
+export function autoFillWoodWallBeams(graph, project, wallSegments, wallGate = null, belowColumns = [], selfGate = buildSelfFootprintGate(graph), freeEndGraph = graph, wallSourceCache = undefined) {
   void wallGate; // 未使用（互換のため残置。QA裁定2026-09-18）。ゲートは末尾のselfGateが担う——理由は上記JSDoc参照。
   const rules = rulesFor(effectiveStructure(graph, project));
   if (!rules.framing || !(wallSegments?.length)) return { created: [], removed: [] };
@@ -909,7 +916,7 @@ export function autoFillWoodWallBeams(graph, project, wallSegments, wallGate = n
   // フェーズAの通し梁run延長点源に加える（F-1と同じselfWallFreeEnds。柱と同じ点源を共有する）。
   // R-2（2026-09-19是正）: 屋根専用平面は自階（graph自身）に壁が無いため、呼び出し側が渡す
   // freeEndGraph（屋根なら「1つ下の実体階＝最上階」、実体階なら省略時にgraph自身）を判定基準にする。
-  const freeEnds = selfWallFreeEnds(freeEndGraph, selfWallSegments(freeEndGraph));
+  const freeEnds = selfWallFreeEnds(freeEndGraph, selfWallSegments(freeEndGraph, wallSourceCache));
 
   // spanKey -> その位置に既にある梁（同材種）。候補スロットの占有物判定（role:'primary'昇格）に使う。
   const byKey = new Map();
@@ -1575,13 +1582,16 @@ export function conformWoodSections(graph, project) {
  * @param {object} graph
  * @param {object} project
  * @param {{outsideSign: Function}|null} exterior - wallGate.js buildExteriorSide(graph) の結果
+ * @param {ReturnType<import('./wallBeamAxes.js').createWallSourceCache>} [wallSourceCache] - 1回の
+ *   再計算内で壁区間（selfWallSegments）をmemoするキャッシュ（ステップC）。省略時は従来どおり
+ *   自前で全走査する。
  * @returns {string[]} 更新した柱id
  */
-export function conformWoodColumnEccentricity(graph, project, exterior) {
+export function conformWoodColumnEccentricity(graph, project, exterior, wallSourceCache = undefined) {
   const rules = rulesFor(effectiveStructure(graph, project));
   if (!rules.framing || exterior == null) return [];
   const floorWidthMm = woodColumnWidthMm(graph, project);
-  const segments = selfWallSegments(graph);
+  const segments = selfWallSegments(graph, wallSourceCache);
   const updated = [];
   for (const column of graph.columns) {
     if (column.materialType !== rules.baseMaterial || column.role === 'foundation') continue;

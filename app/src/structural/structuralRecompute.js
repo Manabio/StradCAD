@@ -1,7 +1,7 @@
 import { runInAction } from 'mobx';
 import { serializeGraph } from '../graphSnapshot.js';
 import { buildStructuralWallGate, buildExteriorSide, buildSelfFootprintGate } from './wallGate.js';
-import { collectWallBeamSources, peekBelowGraph, peekAboveGraph, wallRunSegments, columnSeedBeamSegments, peekRoofBelowGraph, peekRoofGraphAbove } from './wallBeamAxes.js';
+import { collectWallBeamSources, peekBelowGraph, peekAboveGraph, wallRunSegments, columnSeedBeamSegments, peekRoofBelowGraph, peekRoofGraphAbove, createWallSourceCache } from './wallBeamAxes.js';
 import {
   autoFillStructuralGrid,
   autoFillColumnAxisOffsets,
@@ -46,12 +46,22 @@ import { conformToLedger } from './memberGroups.js';
  *   を取る。既定はfalse（before/after=null・serializeGraphを呼ばない）——実際にundoへ積むのは
  *   structuralOrchestration.js recomputeActiveStructural だけで、他の呼び出し元はchangedしか読まない
  *   ため、そこ以外では無駄なシリアライズになっていた（ステップD）。
+ * @param {ReturnType<typeof createWallSourceCache>} [options.wallSourceCache] - 壁区間
+ *   （wallBeamAxes.js wallBeamSourcesFromGraph）を「1回のこの呼び出しの間」memoするキャッシュ
+ *   （ステップC）。省略時は本関数が自前で1個作り、内部の全消費点（collectWallBeamSources・
+ *   wallRunSegments・autoFillStructuralGrid経由のselfWallSegments・conformWoodColumnEccentricity）へ
+ *   配る——構造再計算は壁を生成・変更しない（このJSDoc冒頭のとおり）ため、1回の呼び出しの間は
+ *   同じgraphの壁区間は不変で、何度も全走査し直す必要が無い。壁区間は最初の消費点の時点で
+ *   固定され、その後に残るawait（上階peek・resolveLowestGraph）を跨いでも読み直さない——壁の
+ *   書き手（仕上げ脱出・wallRefresh）はこの再計算の外側にしか居ない。外から渡せるようにしておくのは、
+ *   後続ステップB（1回の境界処理の解決コンテキストへの格上げ）のための下ごしらえ——現時点で
+ *   外から渡す呼び出し元は無い（常に省略時のデフォルト生成のまま）。
  * @returns {Promise<{changed: boolean, before: Uint8Array|null, after: Uint8Array|null}>}
  *   before/after はcaptureSnapshots:true時のみ非null（undo用スナップショット）。changed=false かつ
  *   captureSnapshots:trueのとき after===before（再シリアライズしない）。
  */
 export async function recomputeStructuralForGraph(targetGraph, project, mainStructure, precomputedBelowGraph = undefined, options = {}) {
-  const { captureSnapshots = false } = options;
+  const { captureSnapshots = false, wallSourceCache = createWallSourceCache() } = options;
   // 建物フットプリント（部屋領域＝外壁線位置）の鉛直連続性で部材の有無を取捨するゲートを構築する
   // ＝自階かつ直下の全階で建物が連続する位置だけ部材を残す（直下に支えの無い梁・柱は省く）。
   // 非アクティブ下階は peek で覗く。自階に部屋が無い／屋根平面では null＝従来の全グリッド生成。wallGate.js 参照。
@@ -84,10 +94,12 @@ export async function recomputeStructuralForGraph(targetGraph, project, mainStru
   // バグの修正。ステップ4 C-2 QA4）。非永続フィールドのため保存はしない。
   runInAction(() => targetGraph.setBeamColumnWidthMm(beamColumnWidthMm(targetGraph, belowGraph, project)));
   // 壁由来の梁芯生成対象（下階peekを含む非同期収集。wallGateと同じパターンで先に await する）。
-  const wallSources = await collectWallBeamSources(targetGraph, project, belowGraph);
+  const wallSources = await collectWallBeamSources(targetGraph, project, belowGraph, wallSourceCache);
   // 在来木造（beamPlacement:'wallRuns'）の壁線上の通し梁が候補列挙に使う壁区間（マージ不要のプレーン配列。
   // belowGraphはwallSourcesと同じpeek結果を使い回す＝1回の再計算で下階を二重にpeekしない）。
-  const wallSegments = wallRunSegments(targetGraph, belowGraph, structure);
+  // wallSourceCache共有により、直前のcollectWallBeamSources（selfAndBelowの内部でも同じ壁区間を
+  // 導出済み）と合わせて自階・下階とも壁の全走査は1回で済む（ステップC）。
+  const wallSegments = wallRunSegments(targetGraph, belowGraph, structure, wallSourceCache);
   // 在来木造の上階柱直下の柱（ステップ3b）が候補列挙に使う1つ上の実体階の柱。columnPlacementが
   // wallIntersections（在来木造）のときだけpeekする（非在来はpeek 0回。二重管理ではなく同じ主構造
   // ルール軸をここでも読む——ownRulesはstructuralRecompute.js冒頭で集約済み）。
@@ -124,7 +136,7 @@ export async function recomputeStructuralForGraph(targetGraph, project, mainStru
 
   // 構造体トポロジーから未定義の柱・梁・基礎（基礎伏図のみ）を検出し、自動補完する。
   // ユーザーが明示削除した箇所は除外集合（excludedColumnSlots 等）により復活しない。
-  const { newColumns, removedColumns, newFootings, newBeams, removedBeams } = runInAction(() => autoFillStructuralGrid(targetGraph, project, mainStructure, wallGate, wallSources, wallSegments, aboveColumns, belowGraph?.columns ?? [], aboveBeamSegments, selfGate, freeEndGraph));
+  const { newColumns, removedColumns, newFootings, newBeams, removedBeams } = runInAction(() => autoFillStructuralGrid(targetGraph, project, mainStructure, wallGate, wallSources, wallSegments, aboveColumns, belowGraph?.columns ?? [], aboveBeamSegments, selfGate, freeEndGraph, wallSourceCache));
   // べた基礎（木造）のマットスラブを基礎伏図に生成・撤去する（基礎種別で取捨）。基礎伏図以外では no-op。
   const matFoundation = runInAction(() => autoFillMatFoundation(targetGraph, project));
   // 外周モデル（side ビュー）を1回構築し、柱芯オフセットと梁偏芯の両方に渡す——柱・梁で外側方向（内外定義）を一致させる。
@@ -144,7 +156,7 @@ export async function recomputeStructuralForGraph(targetGraph, project, mainStru
   // 在来木造: 個別柱（柱寸≠階の柱寸）が壁の中で偏心する量（eccentricity）をconformする（B-1・
   // ユーザー裁定2026-09-17）。外周モデル（exterior）は上で構築済みのものを使い回す
   // （柱芯オフセット・梁偏芯と同じ外周モデルに揃える。二系統にしない）。
-  const updatedColumnEcc = runInAction(() => conformWoodColumnEccentricity(targetGraph, project, exterior));
+  const updatedColumnEcc = runInAction(() => conformWoodColumnEccentricity(targetGraph, project, exterior, wallSourceCache));
   // 在来木造: 大梁・小梁の成を支持区間ごとの梁成表引きで自動更新する（ステップ3d。dimensionStatus==='auto'のみ。
   // 断面キー選定の材幅も同じ下階参照——上で書いたgraph.beamColumnWidthMmを内部で読む）。
   const updatedBeamDepths = runInAction(() => autoFillWoodBeamDepths(targetGraph, project, belowGraph?.columns ?? []));
