@@ -12,6 +12,9 @@
 // 使い方: 単体では効果を持たない。structPerfSetup.mjs を node --import で先に登録してから使う。
 // 実データが踏まない経路: 本フックはstorage層・計測点のみを差し替えるため、経路自体は
 // structPerfEntry.mjs/structPerfScenario.mjs 側のコメントを参照。
+// ステップB-1: メモリ版saveFloorに差し替えても floorWriteGeneration.js の世代は本物のdb.jsと同じく
+// 進む（差し替え後のsaveFloor内でnoteFloorWriteを呼ぶ）——解決コンテキスト（後続ステップB）の
+// 鮮度判定がprobe上でも本番同型に検証できるようにするため。
 
 function must(src, from, to, label) {
   if (!src.includes(from)) throw new Error(`[structPerfHooks] 置換対象が見つからない: ${label}`);
@@ -28,8 +31,10 @@ export async function load(url, context, nextLoad) {
     src = must(src, 'export async function saveFloor(', 'async function __o_saveFloor(', 'saveFloor');
     src = must(src, 'export async function loadFloor(', 'async function __o_loadFloor(', 'loadFloor');
     src += `
+import { noteFloorWrite as __b1_noteFloorWrite } from './floorWriteGeneration.js';
 const __M = (globalThis.__STRUCT_PERF_MEM ??= { floors: new Map(), stat: { load: 0, save: 0 } });
 export async function saveFloor(planeId, bytes) {
+  __b1_noteFloorWrite(planeId);
   __M.stat.save++; __M.floors.set(planeId, bytes);
 }
 export async function loadFloor(planeId) { __M.stat.load++; return __M.floors.get(planeId) ?? null; }

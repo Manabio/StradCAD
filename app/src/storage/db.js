@@ -31,6 +31,7 @@
 import { computeSavedFloorDiff } from './floorDocumentDiff.js';
 import { isSessionOwner } from './sessionLock.js';
 import { ERR_SESSION_LOCKED } from '../error.js';
+import { noteFloorWrite, noteAllFloorsWritten } from './floorWriteGeneration.js';
 
 const DB_NAME    = 'strad';
 // v5: バージョンのみ4に上がりストアが欠損したDB（開発中の中間状態コードで開かれたもの）を
@@ -108,9 +109,12 @@ function openDB() {
 
 // ----------------------------------------------------------------
 // floors ストア
+// floors ストアを書く関数は必ず floorWriteGeneration.js の世代を進める（openDB() の await より
+// 前——IDB失敗・セッションロックのthrowでも取りこぼさない「書込み前に進める」契約）。
 // ----------------------------------------------------------------
 
 export async function saveFloor(planeId, bytes) {
+  noteFloorWrite(planeId);
   const db = await openDB();
   return new Promise((resolve, reject) => {
     const tx  = db.transaction(STORE_FLOORS, 'readwrite');
@@ -131,6 +135,7 @@ export async function loadFloor(planeId) {
 }
 
 export async function deleteFloor(planeId) {
+  noteFloorWrite(planeId);
   const db = await openDB();
   return new Promise((resolve, reject) => {
     const tx  = db.transaction(STORE_FLOORS, 'readwrite');
@@ -165,6 +170,7 @@ export async function saveProject(projectId, bytes) {
 }
 
 export async function clearAllStores() {
+  noteAllFloorsWritten();
   const db = await openDB();
   return new Promise((resolve, reject) => {
     const tx = db.transaction([STORE_FLOORS, STORE_PROJECTS, STORE_SAVED_FLOORS], 'readwrite');
@@ -302,6 +308,7 @@ export async function loadProjectInfo(projectId) {
 
 /** floors を savedFloors の内容で作り直す（起動時、明示保存済みプロジェクトの復元用）。 */
 export async function seedFloorsFromDocument() {
+  noteAllFloorsWritten();
   const db = await openDB();
   return new Promise((resolve, reject) => {
     if (!db.objectStoreNames.contains(STORE_SAVED_FLOORS)) {

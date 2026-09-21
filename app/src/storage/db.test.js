@@ -5,7 +5,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { acquireSessionLock } from './sessionLock.js';
-import { saveFloor } from './db.js';
+import { saveFloor, deleteFloor } from './db.js';
+import { floorWriteGeneration } from './floorWriteGeneration.js';
 
 // sessionLock.test.js と同じ順序戦略: sessionLock.js の _status はモジュールスコープの
 // 状態で、本ファイル内の複数testで共有される。このtestは必ず先頭（acquireSessionLockを
@@ -35,4 +36,21 @@ test('【失敗系】openDB: セッションロックを保持していない（
     /別のタブ/,
     'indexedDB is not defined ではなく専用エラーで落ちる＝openDB()がindexedDB.openへ到達していない証跡',
   );
+});
+
+// floorWriteGeneration.js（ステップB-1）: 「書込み前に世代を進める」契約は、openDB() が
+// セッションロックで即座にthrowする失敗系でも世代が進むことで検証できる——上のtestで
+// このファイル内の _status は既に 'blocked' に確定済みのため、以降の saveFloor/deleteFloor は
+// 必ず ERR_SESSION_LOCKED で reject する（indexedDB.open へは到達しない）。
+test('【失敗系】saveFloor/deleteFloor: セッションロック未保持でthrowしても floorWriteGeneration の世代は進んでいる（書込み前に進める契約）', async () => {
+  const planeId = 'p-gen-throw';
+  const before = floorWriteGeneration(planeId);
+
+  await assert.rejects(saveFloor(planeId, new Uint8Array()), /別のタブ/);
+  const afterSave = floorWriteGeneration(planeId);
+  assert.notEqual(afterSave, before, 'saveFloorがthrowしても世代は進んでいる');
+
+  await assert.rejects(deleteFloor(planeId), /別のタブ/);
+  const afterDelete = floorWriteGeneration(planeId);
+  assert.notEqual(afterDelete, afterSave, 'deleteFloorがthrowしても世代はさらに進んでいる');
 });
