@@ -35,7 +35,7 @@ import { isFoundationPlane } from './drawingDesignation.js';
 import { structureHasMemberKind, memberKindOf, MEMBER_KIND, FIGURE_TYPE } from './structuralClassification.js';
 import { foundationOptionsFor, rulesFor, woodColumnSectionId, woodColumnWidthMm, columnWidthMm } from './structureRules.js';
 import { columnListCategory } from './framingDrawing.js';
-import { resolveColumnWidthEdit, normalizeColumnOverridesToFloor, allowedColumnWidths, isUpsizedWidth } from './columnWidthScope.js';
+import { resolveColumnWidthEdit, normalizeColumnOverridesToFloor, allowedColumnWidths, isUpsizedWidth, columnWidthChangeNotice } from './columnWidthScope.js';
 
 // この map グループが、その階・主構造で構造リストに出し得る部材種別（空グループの表示可否判定用）。
 // 梁グループだけは自階が基礎面か否かで「基礎梁」⇄「梁」に分かれる（自階＝床下材の供給グラフで判定）。
@@ -293,6 +293,10 @@ export const MemberListTab = observer(({ composition, project, focusRequest, onT
   onSelectMembersRef.current = onSelectMembers;
   useEffect(() => () => onSelectMembersRef.current?.([]), []);
   const [deleteConfirm, setDeleteConfirm] = useState(null); // { mapName, ids, label } | null
+  // 階の柱寸変更（縮小・拡大）の注意（ユーザー裁定2026-09-22）: WoodColumnWidthSelect・ColumnWidthScopeSelect（全体）から
+  // columnWidthChangeNotice（columnWidthScope.js）の判定結果（文言）を受け取ってOKボタン1つのConfirmDialogで
+  // 表示するだけの state。判断自体はcolumnWidthChangeNoticeのみが下す（ここでは表示するだけ）。
+  const [columnWidthNotice, setColumnWidthNotice] = useState(null); // string | null
   // 統合選択モード（design-member-numbering-ui.md セクション3）。対象は同一セクション（mapName+group.key）内のみ
   // ＝有効な group/graph/structure/figureType を [統合…] 押下時点のコンテキストのまま保持する
   // （MemberGroupSection が既に解決済みの値をそのまま渡す。ここで再解決はしない）。
@@ -445,7 +449,7 @@ export const MemberListTab = observer(({ composition, project, focusRequest, onT
             padding: '6px 10px', background: '#f1f5f9', marginBottom: 16,
           }}>
             <span>各階柱寸法（{woodColumnWidthGraph.plane.name}柱 □）</span>
-            <WoodColumnWidthSelect graph={woodColumnWidthGraph} project={project} onStructureChanged={onStructureChanged} />
+            <WoodColumnWidthSelect graph={woodColumnWidthGraph} project={project} onStructureChanged={onStructureChanged} onColumnWidthNotice={setColumnWidthNotice} />
           </div>
         )}
         {MEMBER_GROUPS.map(group => {
@@ -481,6 +485,7 @@ export const MemberListTab = observer(({ composition, project, focusRequest, onT
               onRequestDelete={(ids, label) => setDeleteConfirm({ graph: g, mapName: group.mapName, ids, label })}
               onStructureChanged={onStructureChanged}
               onPendingFocus={setPendingFocusId}
+              onColumnWidthNotice={setColumnWidthNotice}
               focusRequest={focusRequest}
               onToast={onToast}
               mergeModeActiveAnywhere={!!mergeState}
@@ -539,6 +544,13 @@ export const MemberListTab = observer(({ composition, project, focusRequest, onT
           onConfirm={handleConfirmMerge}
         />
       )}
+      {columnWidthNotice && (
+        <ConfirmDialog
+          message={columnWidthNotice}
+          buttons={[{ label: 'OK', value: 'ok', primary: true }]}
+          onSelect={() => setColumnWidthNotice(null)}
+        />
+      )}
     </div>
   );
 });
@@ -581,13 +593,20 @@ const FoundationTypeSelect = observer(({ project, structure }) => {
 // 「個別指定＝階の値と同値」の禁止状態（.claude/structural-model.md参照）が復活する——
 // normalizeColumnOverridesToFloor（columnWidthScope.js）で同値の個別指定をnull（共通）へ正規化する
 // （ColumnWidthScopeSelectのfloor分岐と対になる処理。二重実装を避けるため共通の純関数を呼ぶ）。
-const WoodColumnWidthSelect = observer(({ graph, project, onStructureChanged }) => {
+// 階の柱寸変更の注意（ユーザー裁定2026-09-22）: 壁はその場で作り直さない（直上のコメント）ため、外壁まわりの
+// 柱の位置もその場では変わらず、次の境界（構造モードを出るとき）で初めて変わる（縮小＝外壁側へ寄る／
+// 拡大＝寄りが戻る）——その場で壁を作り直す案は不採用（建具付き壁の再生成が重いため）。この乖離を
+// columnWidthChangeNotice（columnWidthScope.js）の判定でOKボタン付きの注意として伝える（親の
+// columnWidthNotice stateへ通知するだけ。判断は純関数のみが下す）。
+const WoodColumnWidthSelect = observer(({ graph, project, onStructureChanged, onColumnWidthNotice }) => {
   const value = woodColumnWidthMm(graph, project);
   function handleChange(width) {
+    const notice = columnWidthChangeNotice({ prevWidth: value, nextWidth: width, wallCount: graph.walls.length });
     onStructureChanged(() => {
       graph.setWoodColumnWidthMm(width);
       normalizeColumnOverridesToFloor(graph, width);
     });
+    if (notice) onColumnWidthNotice?.(notice);
   }
   return (
     <select
@@ -624,7 +643,10 @@ const WoodColumnWidthSelect = observer(({ graph, project, onStructureChanged }) 
 // allowedColumnWidths(floorWidth, allowUpsize) で絞る（既定=階の値以下。チェック時は全件）。
 // scope='all'（各階柱寸法欄そのものを変える）は絞り込みの対象外＝常に全件のまま（柱寸アップの概念は
 // 「個別指定が階の値を超える」ときの話であり、階の値自体の選択肢を制限する理由が無い）。
-const ColumnWidthScopeSelect = observer(({ scope, focusedMember, graph, project, readOnly, allowUpsize = false, onStructureChanged, onPendingFocus }) => {
+// 階の柱寸変更の注意（ユーザー裁定2026-09-22）: target==='floor'（全体＝階の値を変える）のときだけ
+// columnWidthChangeNotice（columnWidthScope.js）を呼ぶ——target==='member'（この部材）は個別柱の偏心の第2項が
+// その場の再計算（woodColumnOffset.js woodColumnEccentricity）で反映されるため乖離が無く、出さない。
+const ColumnWidthScopeSelect = observer(({ scope, focusedMember, graph, project, readOnly, allowUpsize = false, onStructureChanged, onPendingFocus, onColumnWidthNotice }) => {
   const floorWidth = woodColumnWidthMm(graph, project);
   // scope='entity'の表示値は「その柱の解決値（個別 ?? 階）」。focusedMemberが無い（一覧から開いた等）
   // 場合はentityボタン自体がdisabledのため到達しないが、安全側で階の値へフォールバックする。
@@ -635,10 +657,12 @@ const ColumnWidthScopeSelect = observer(({ scope, focusedMember, graph, project,
     const { target, value: next } = resolveColumnWidthEdit({ scope, focusedMember, floorWidth, width });
     if (target === null) return; // 書き込み先が無い（focusedMember不在・未知のscope）→何もしない
     if (target === 'floor') {
+      const notice = columnWidthChangeNotice({ prevWidth: floorWidth, nextWidth: next, wallCount: graph.walls.length });
       onStructureChanged(() => {
         graph.setWoodColumnWidthMm(next);
         normalizeColumnOverridesToFloor(graph, next);
       });
+      if (notice) onColumnWidthNotice?.(notice);
     } else if (target === 'member') {
       onPendingFocus?.(focusedMember.id);
       onStructureChanged(() => { focusedMember.setField('woodColumnWidthMm', next); });
@@ -697,7 +721,7 @@ const ColumnOffsetAxisSelect = observer(({ axis, target, readOnly, onStructureCh
 const MemberGroupSection = observer(({
   group, graph, composition, project, structure, figureType, readOnly, expandedKey, onToggle, onExpandKey, onRequestDelete, focusRequest, onToast,
   mergeModeActiveAnywhere, mergeActive, mergeAnchorTag, mergeAnchorMaterialType, mergeSelectedTags, onStartMerge, onToggleMergeTag,
-  onSelectMembers, onStructureChanged, onPendingFocus,
+  onSelectMembers, onStructureChanged, onPendingFocus, onColumnWidthNotice,
 }) => {
   // 構造種別が持たない部材種別（×）の個体は一覧から除外する（footing→ベース/柱脚、beam→梁/基礎梁を role で割る）。
   // structure=null（主構造未設定）は素通し。memberKindOf が null を返す表外部材（軒桁・杭）は structureHasMemberKind=true で残る。
@@ -762,6 +786,7 @@ const MemberGroupSection = observer(({
             onSelectMembers={onSelectMembers}
             onStructureChanged={onStructureChanged}
             onPendingFocus={onPendingFocus}
+            onColumnWidthNotice={onColumnWidthNotice}
           />
         );
       })}
@@ -775,7 +800,7 @@ const MemberGroupSection = observer(({
 const MemberCard = observer(({
   members, group, graph, composition, project, readOnly, isExpanded, onToggle, onExpandKey, onDelete, focusRequest, onToast,
   mergeModeActiveAnywhere, mergeActive, isMergeAnchor, isMergeSelected, mergeAnchorMaterialType, onToggleMerge, onStartMerge,
-  onSelectMembers, onStructureChanged, onPendingFocus,
+  onSelectMembers, onStructureChanged, onPendingFocus, onColumnWidthNotice,
 }) => {
   // 展開中は自分の members（同一タグの全部材）を描画エリアの選択状態として報告する（ユーザー裁定2026-09-16
   // 「構造リストで材を選択すると描画エリアの当該材が選択状態に」）。members 配列は親の再計算で毎回新しい
@@ -1400,6 +1425,7 @@ const MemberCard = observer(({
                       allowUpsize={allowUpsize}
                       onStructureChanged={onStructureChanged}
                       onPendingFocus={onPendingFocus}
+                      onColumnWidthNotice={onColumnWidthNotice}
                     />
                   </div>
                 </div>

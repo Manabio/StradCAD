@@ -191,7 +191,7 @@ test('【不変条件・ステップ3】MemberListTab.jsx: 柱グループの一
 
 test('【不変条件・ステップ4（ユーザー裁定2026-09-17「柱の全体／この部材ボタンを復活」）】MemberListTab.jsx: ColumnWidthScopeSelectのhandleChangeはresolveColumnWidthEditの判定に従いonStructureChangedだけを呼び、setDimensionStatusを呼ばない', () => {
   const src = fs.readFileSync(path.resolve(import.meta.dirname, 'MemberListTab.jsx'), 'utf8');
-  const compMatch = /const ColumnWidthScopeSelect = observer\(\(\{ scope, focusedMember, graph, project, readOnly, allowUpsize = false, onStructureChanged, onPendingFocus \}\) => \{([\s\S]*?)\n\}\);/.exec(src);
+  const compMatch = /const ColumnWidthScopeSelect = observer\(\(\{ scope, focusedMember, graph, project, readOnly, allowUpsize = false, onStructureChanged, onPendingFocus, onColumnWidthNotice \}\) => \{([\s\S]*?)\n\}\);/.exec(src);
   assert.ok(compMatch, 'ColumnWidthScopeSelect コンポーネント本体が見つからない');
   const fnMatch = /function handleChange\(width\) \{([\s\S]*?)\n {2}\}/.exec(compMatch[1]);
   assert.ok(fnMatch, 'ColumnWidthScopeSelectのhandleChange関数本体が見つからない');
@@ -207,7 +207,7 @@ test('【不変条件・ステップ4（ユーザー裁定2026-09-17「柱の全
 
 test('【QA指摘2026-09-17・失敗系】MemberListTab.jsx: ColumnWidthScopeSelectのhandleChangeはtarget===nullなら早期returnし、onPendingFocus/onStructureChangedのどちらも呼ばない', () => {
   const src = fs.readFileSync(path.resolve(import.meta.dirname, 'MemberListTab.jsx'), 'utf8');
-  const compMatch = /const ColumnWidthScopeSelect = observer\(\(\{ scope, focusedMember, graph, project, readOnly, allowUpsize = false, onStructureChanged, onPendingFocus \}\) => \{([\s\S]*?)\n\}\);/.exec(src);
+  const compMatch = /const ColumnWidthScopeSelect = observer\(\(\{ scope, focusedMember, graph, project, readOnly, allowUpsize = false, onStructureChanged, onPendingFocus, onColumnWidthNotice \}\) => \{([\s\S]*?)\n\}\);/.exec(src);
   assert.ok(compMatch, 'ColumnWidthScopeSelect コンポーネント本体が見つからない');
   const fnMatch = /function handleChange\(width\) \{([\s\S]*?)\n {2}\}/.exec(compMatch[1]);
   assert.ok(fnMatch, 'ColumnWidthScopeSelectのhandleChange関数本体が見つからない');
@@ -219,7 +219,7 @@ test('【QA指摘2026-09-17・失敗系】MemberListTab.jsx: ColumnWidthScopeSel
 
 test('【不変条件・ステップ4】MemberListTab.jsx: ColumnWidthScopeSelectのthis部材（target==="member"）書き込みはonPendingFocus(focusedMember.id)を先に呼んでから本来のonStructureChangedを呼ぶ（タップした柱の新しいカードへ追従するため。選んだ幅でC1/C2が反転してもここで決め打ちしない）', () => {
   const src = fs.readFileSync(path.resolve(import.meta.dirname, 'MemberListTab.jsx'), 'utf8');
-  const compMatch = /const ColumnWidthScopeSelect = observer\(\(\{ scope, focusedMember, graph, project, readOnly, allowUpsize = false, onStructureChanged, onPendingFocus \}\) => \{([\s\S]*?)\n\}\);/.exec(src);
+  const compMatch = /const ColumnWidthScopeSelect = observer\(\(\{ scope, focusedMember, graph, project, readOnly, allowUpsize = false, onStructureChanged, onPendingFocus, onColumnWidthNotice \}\) => \{([\s\S]*?)\n\}\);/.exec(src);
   assert.ok(compMatch, 'ColumnWidthScopeSelect コンポーネント本体が見つからない');
   const fnMatch = /function handleChange\(width\) \{([\s\S]*?)\n {2}\}/.exec(compMatch[1]);
   assert.ok(fnMatch, 'ColumnWidthScopeSelectのhandleChange関数本体が見つからない');
@@ -335,8 +335,8 @@ test('【不変条件・ステップ4 C-2b／裁定2026-09-16】MemberListTab.js
   assert.ok(/const woodColumnWidthGraph = \(!isRoofFigure && selfColumnGraph && rulesFor\(selfStructure\)\.columnSizing === 'fixed'\) \? selfColumnGraph : null;/.test(src),
     'woodColumnWidthGraph の表示条件（非R階 && 自階柱graphあり && columnSizing===\'fixed\'）が見つからない');
   assert.ok(/\{woodColumnWidthGraph\s*&&\s*\(/.test(src), '{woodColumnWidthGraph && (...)} の分岐が見つからない');
-  assert.ok(/<WoodColumnWidthSelect\s+graph=\{woodColumnWidthGraph\}\s+project=\{project\}\s+onStructureChanged=\{onStructureChanged\}\s*\/>/.test(src),
-    '<WoodColumnWidthSelect graph={woodColumnWidthGraph} project={project} onStructureChanged={onStructureChanged} /> の配線が見つからない（実機裁定ステップ4 C-2 QA2: 主構造変更と同じ経路に統一／裁定2026-09-16: 対象は自階）');
+  assert.ok(/<WoodColumnWidthSelect\s+graph=\{woodColumnWidthGraph\}\s+project=\{project\}\s+onStructureChanged=\{onStructureChanged\}\s+onColumnWidthNotice=\{setColumnWidthNotice\}\s*\/>/.test(src),
+    '<WoodColumnWidthSelect graph={woodColumnWidthGraph} project={project} onStructureChanged={onStructureChanged} onColumnWidthNotice={setColumnWidthNotice} /> の配線が見つからない（実機裁定ステップ4 C-2 QA2: 主構造変更と同じ経路に統一／裁定2026-09-16: 対象は自階／ユーザー裁定2026-09-22: 階の柱寸変更の注意）');
   assert.ok(!/<WoodColumnWidthSelect\s+graph=\{graph\}/.test(src), '欄が一覧側の graph（下階柱）を書き換える旧配線が残っている');
   // 欄は柱グループ（MEMBER_GROUPS.map の中＝下階の無い基礎伏図では丸ごと非表示）の外＝一覧の先頭に置く
   // （QA指摘2026-09-16: 柱グループ見出しに置くと最下階の柱寸を変える手段が無くなる）。
@@ -359,7 +359,7 @@ test('【不変条件・ステップ4 C-2b／裁定2026-09-16】MemberListTab.js
 
 test('【不変条件・ステップ4 C-2b QA修正／QA指摘2026-09-17】MemberListTab.jsx: WoodColumnWidthSelectの変更ハンドラはonStructureChanged（主構造変更と同じ経路）内でgraph.setWoodColumnWidthMm＋normalizeColumnOverridesToFloorだけを呼び、自前のconformWoodSections/renumberMembers/pushGraphUndoを持たない', () => {
   const src = fs.readFileSync(path.resolve(import.meta.dirname, 'MemberListTab.jsx'), 'utf8');
-  const compMatch = /const WoodColumnWidthSelect = observer\(\(\{ graph, project, onStructureChanged \}\) => \{([\s\S]*?)\n\}\);/.exec(src);
+  const compMatch = /const WoodColumnWidthSelect = observer\(\(\{ graph, project, onStructureChanged, onColumnWidthNotice \}\) => \{([\s\S]*?)\n\}\);/.exec(src);
   assert.ok(compMatch, 'WoodColumnWidthSelect コンポーネント本体（onStructureChangedを受け取る形）が見つからない');
   const fnMatch = /function handleChange\(width\) \{([\s\S]*?)\n {2}\}/.exec(compMatch[1]);
   assert.ok(fnMatch, 'handleChange関数本体が見つからない');
@@ -373,6 +373,50 @@ test('【不変条件・ステップ4 C-2b QA修正／QA指摘2026-09-17】Membe
     assert.ok(!body.includes(forbidden),
       `handleChangeに${forbidden}...が残っている（QA指摘: 採番・undoの仕組みをonStructureChanged経由に一本化し、二重に持たない）`);
   }
+});
+
+// ---- 階の柱寸変更の注意（ユーザー裁定2026-09-22）: 「出すかどうか・文言」は columnWidthScope.js
+// columnWidthChangeNotice が下すが、「どの値を変更前/変更後に渡すか・どの分岐で呼ぶか」は呼び出し側に残る。
+// JSXは単体テストできないため、呼び出しの形そのものを固定する（引数の入れ替え・通知の消失・
+// 個別柱での誤発火は、純関数のテストでは1つも赤にならない）。----
+test('【不変条件・裁定2026-09-22】MemberListTab.jsx: 階の柱寸を書き換える2箇所は columnWidthChangeNotice へ「変更前の階柱寸・変更後の柱寸・書き換える graph の壁本数」を渡し、返った文言を onColumnWidthNotice で親へ渡す', () => {
+  const src = fs.readFileSync(path.resolve(import.meta.dirname, 'MemberListTab.jsx'), 'utf8');
+  const handleChangeOf = (re, name) => {
+    const compMatch = re.exec(src);
+    assert.ok(compMatch, `${name} コンポーネント本体が見つからない`);
+    const fnMatch = /function handleChange\(width\) \{([\s\S]*?)\n {2}\}/.exec(compMatch[1]);
+    assert.ok(fnMatch, `${name} のhandleChange関数本体が見つからない`);
+    return fnMatch[1];
+  };
+  const woodBody = handleChangeOf(/const WoodColumnWidthSelect = observer\(\(\{ graph, project, onStructureChanged, onColumnWidthNotice \}\) => \{([\s\S]*?)\n\}\);/, 'WoodColumnWidthSelect');
+  assert.ok(/const notice = columnWidthChangeNotice\(\{ prevWidth: value, nextWidth: width, wallCount: graph\.walls\.length \}\);/.test(woodBody),
+    'WoodColumnWidthSelect: columnWidthChangeNotice({ prevWidth: value, nextWidth: width, wallCount: graph.walls.length }) の呼び出しが無い（変更前後の入れ替え・壁本数の渡し忘れで注意が出なくなる/拡大で出る回帰）');
+  assert.ok(/if \(notice\) onColumnWidthNotice\?\.\(notice\);/.test(woodBody), 'WoodColumnWidthSelect: 文言を onColumnWidthNotice で親へ渡していない（注意が表示されない回帰）');
+
+  const scopeBody = handleChangeOf(/const ColumnWidthScopeSelect = observer\(\(\{ scope, focusedMember, graph, project, readOnly, allowUpsize = false, onStructureChanged, onPendingFocus, onColumnWidthNotice \}\) => \{([\s\S]*?)\n\}\);/, 'ColumnWidthScopeSelect');
+  const floorBranchMatch = /if \(target === 'floor'\) \{([\s\S]*?)\n {4}\} else if/.exec(scopeBody);
+  assert.ok(floorBranchMatch, "ColumnWidthScopeSelect: target==='floor' の分岐が見つからない");
+  assert.ok(/const notice = columnWidthChangeNotice\(\{ prevWidth: floorWidth, nextWidth: next, wallCount: graph\.walls\.length \}\);/.test(floorBranchMatch[1]),
+    "ColumnWidthScopeSelect（全体）: columnWidthChangeNotice({ prevWidth: floorWidth, nextWidth: next, wallCount: graph.walls.length }) の呼び出しが target==='floor' 分岐に無い");
+  assert.ok(/if \(notice\) onColumnWidthNotice\?\.\(notice\);/.test(floorBranchMatch[1]), 'ColumnWidthScopeSelect（全体）: 文言を onColumnWidthNotice で親へ渡していない');
+});
+
+test('【失敗系・裁定2026-09-22】MemberListTab.jsx: 個別柱の柱寸変更（target==="member"）では階の柱寸変更の注意を出さない（個別柱の偏心の第2項はその場の再計算で反映されるため）', () => {
+  const src = fs.readFileSync(path.resolve(import.meta.dirname, 'MemberListTab.jsx'), 'utf8');
+  const compMatch = /const ColumnWidthScopeSelect = observer\(\(\{ scope, focusedMember, graph, project, readOnly, allowUpsize = false, onStructureChanged, onPendingFocus, onColumnWidthNotice \}\) => \{([\s\S]*?)\n\}\);/.exec(src);
+  assert.ok(compMatch, 'ColumnWidthScopeSelect コンポーネント本体が見つからない');
+  const fnMatch = /function handleChange\(width\) \{([\s\S]*?)\n {2}\}/.exec(compMatch[1]);
+  assert.ok(fnMatch, 'ColumnWidthScopeSelectのhandleChange関数本体が見つからない');
+  const memberBranchMatch = /\} else if \(target === 'member'\) \{([\s\S]*?)\n {4}\}/.exec(fnMatch[1]);
+  assert.ok(memberBranchMatch, "target==='member' の分岐が見つからない");
+  assert.ok(!memberBranchMatch[1].includes('columnWidthChangeNotice') && !memberBranchMatch[1].includes('onColumnWidthNotice'),
+    "target==='member'（この部材）の分岐で階の柱寸変更の注意を出している（裁定2026-09-22: 対象は階の柱寸の変更だけ）");
+});
+
+test('【不変条件・裁定2026-09-22】MemberListTab.jsx: 階の柱寸変更の注意は OK ボタン1つの ConfirmDialog で、選択は閉じるだけ（柱寸変更をブロック・取消ししない通知）', () => {
+  const src = fs.readFileSync(path.resolve(import.meta.dirname, 'MemberListTab.jsx'), 'utf8');
+  assert.ok(/\{columnWidthNotice && \(\s*<ConfirmDialog\s+message=\{columnWidthNotice\}\s+buttons=\{\[\{ label: 'OK', value: 'ok', primary: true \}\]\}\s+onSelect=\{\(\) => setColumnWidthNotice\(null\)\}\s*\/>\s*\)\}/.test(src),
+    'columnWidthNotice の ConfirmDialog（OK 1つ・onSelect は setColumnWidthNotice(null) だけ）の配線が見つからない');
 });
 
 test('【不変条件・ステップ4 C-2b】MemberListTab.jsx: 断面欄（sectionField）のreadOnlyはdisabledWhenを見ており、fieldCtxはwoodFixedSectionを解決して渡す', () => {
@@ -517,8 +561,8 @@ test('【不変条件・ユーザー裁定2026-09-17】MemberListTab.jsx: 柱寸
   const rowMatch = /\{woodColumnCard && \(([\s\S]{0,3000}?)\n {10}\)\}/.exec(src);
   assert.ok(rowMatch, '柱寸行（woodColumnCard でゲート）が見つからない');
   const body = rowMatch[1];
-  assert.ok(/<ColumnWidthScopeSelect\s*\n\s*scope=\{columnScope\}\s*\n\s*focusedMember=\{columnEntityTarget\}\s*\n\s*graph=\{graph\}\s*\n\s*project=\{project\}\s*\n\s*readOnly=\{readOnly\}\s*\n\s*allowUpsize=\{allowUpsize\}\s*\n\s*onStructureChanged=\{onStructureChanged\}\s*\n\s*onPendingFocus=\{onPendingFocus\}\s*\n\s*\/>/.test(body),
-    'ColumnWidthScopeSelect scope={columnScope} focusedMember={columnEntityTarget} ... の配線が見つからない（分割UI専用のscopeを渡す旧配線への回帰）');
+  assert.ok(/<ColumnWidthScopeSelect\s*\n\s*scope=\{columnScope\}\s*\n\s*focusedMember=\{columnEntityTarget\}\s*\n\s*graph=\{graph\}\s*\n\s*project=\{project\}\s*\n\s*readOnly=\{readOnly\}\s*\n\s*allowUpsize=\{allowUpsize\}\s*\n\s*onStructureChanged=\{onStructureChanged\}\s*\n\s*onPendingFocus=\{onPendingFocus\}\s*\n\s*onColumnWidthNotice=\{onColumnWidthNotice\}\s*\n\s*\/>/.test(body),
+    'ColumnWidthScopeSelect scope={columnScope} focusedMember={columnEntityTarget} ... の配線が見つからない（分割UI専用のscopeを渡す旧配線への回帰／ユーザー裁定2026-09-22: 階の柱寸変更の注意）');
   // 旧の個別柱寸専用コンポーネント（共通/個別で別実装を持っていた）が復活していないこと。
   assert.ok(!src.includes('MemberColumnWidthSelect'),
     '旧のMemberColumnWidthSelect（共通/個別で別実装）が残っている（柱寸行の統合が崩れている回帰）');

@@ -64,3 +64,33 @@ export function allowedColumnWidths(floorWidth, allowUpsize) {
 export function isUpsizedWidth(width, floorWidth) {
   return Number.isFinite(width) && Number.isFinite(floorWidth) && width > floorWidth;
 }
+
+// ---- 階の柱寸変更の注意（ユーザー裁定2026-09-22）----
+// 外壁まわりの柱の寄せの真実はWall.bandOffset（壁側）で、壁は構造モードを出る境界（App.jsx
+// runStructuralExitBoundary→wallRefresh.js refreshWallsAllFloors）でだけ作り直される（.claude/
+// structural-model.md「外壁の面は通り芯±60に固定する（案1）」）。階の柱寸をその場で変えても、柱は
+// 古い壁の寄せのまま残り、脱出後に初めて正しい位置になる（縮小＝外壁側へ寄る／拡大＝寄りが戻る。
+// 式 ecc = bandOffset + s_face×(W−w)/2 の第1項が壁由来のため、向きによらず対称に起きる）——その場で
+// 壁を作り直す案はユーザー裁定2026-09-22で不採用（壁に建具が付くとさらに重くなるため）。代わりに
+// OKボタン付きの注意を出すための純関数。
+// 呼び出し元はMemberListTab.jsxのWoodColumnWidthSelect（各階柱寸法欄）とColumnWidthScopeSelectの
+// target==='floor'分岐（柱カード「全体」）の2箇所——個別柱（target==='member'）では呼ばない。個別柱の
+// 偏心の第2項（floorWidthMmとcolumnWidthMmの差）はwoodColumnOffset.js woodColumnEccentricityがその場の
+// 再計算（conformWoodColumnEccentricity）で反映するため、この乖離が無い。
+/** 階の柱寸を変えたとき、平面モードなどへ切り替えるまで（＝構造モードを出るまで）は外壁まわりの柱の
+ *  位置がその場では変わらないことを伝える注意文言。出す条件: 階の柱寸が変わった（どちらも有限の数で
+ *  nextWidth ≠ prevWidth。縮小と拡大で文言を分ける）かつ その階に壁がある（wallCount > 0。壁が無い階
+ *  では寄せも偏心も起きないため出すと嘘になる）。同値・prev/nextが非数・壁0／壁本数が非数はnull。
+ * @param {{prevWidth: number, nextWidth: number, wallCount: number}} args
+ * @returns {string|null} */
+export function columnWidthChangeNotice({ prevWidth, nextWidth, wallCount }) {
+  if (!Number.isFinite(prevWidth) || !Number.isFinite(nextWidth)) return null;
+  if (!(wallCount > 0)) return null;
+  if (nextWidth < prevWidth) {
+    return '柱寸が縮小されました。外壁まわりの柱は、平面モードなどへ切り替えたとき（構造モードを出たとき）に外壁側へ寄せられます。';
+  }
+  if (nextWidth > prevWidth) {
+    return '柱寸が拡大されました。外壁まわりの柱の位置は、平面モードなどへ切り替えたとき（構造モードを出たとき）に調整されます。';
+  }
+  return null;
+}

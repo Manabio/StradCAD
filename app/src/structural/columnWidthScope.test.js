@@ -1,7 +1,7 @@
 // columnWidthScope.js（在来木造の柱カード「柱寸」欄・適用範囲2択の書き込み先決定）の単体テスト。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { resolveColumnWidthEdit, normalizeColumnOverridesToFloor, allowedColumnWidths, isUpsizedWidth } from './columnWidthScope.js';
+import { resolveColumnWidthEdit, normalizeColumnOverridesToFloor, allowedColumnWidths, isUpsizedWidth, columnWidthChangeNotice } from './columnWidthScope.js';
 import { makeColumn, makeGraph } from './memberTestFixtures.js';
 
 test('【ユーザー裁定2026-09-17】resolveColumnWidthEdit: scope=allは常にfloorへ選んだ幅をそのまま書く', () => {
@@ -72,4 +72,46 @@ test('【失敗系・B-1】isUpsizedWidth: 非数の入力は例外を投げずf
   assert.equal(isUpsizedWidth(null, 105), false);
   assert.equal(isUpsizedWidth(120, null), false);
   assert.equal(isUpsizedWidth(undefined, undefined), false);
+});
+
+// ---- 階の柱寸変更（縮小・拡大）の注意（ユーザー裁定2026-09-22） ----
+
+test('【ユーザー裁定2026-09-22】columnWidthChangeNotice: 縮小＋壁ありは固定文言を返す', () => {
+  const message = columnWidthChangeNotice({ prevWidth: 120, nextWidth: 105, wallCount: 3 });
+  assert.equal(message, '柱寸が縮小されました。外壁まわりの柱は、平面モードなどへ切り替えたとき（構造モードを出たとき）に外壁側へ寄せられます。');
+});
+
+test('【失敗系・ユーザー裁定2026-09-22】columnWidthChangeNotice: 同値はnull', () => {
+  assert.equal(columnWidthChangeNotice({ prevWidth: 120, nextWidth: 120, wallCount: 3 }), null);
+});
+
+// 拡大も同じ乖離を持つ（壁が細い柱寸で作られている階を太くすると、構造モードを出るまで柱は寄った
+// まま残る）ため、別文言で知らせる（ユーザー裁定2026-09-22・当初の「拡大はnull」から変更）。
+test('【ユーザー裁定2026-09-22】columnWidthChangeNotice: 拡大＋壁ありは拡大用の固定文言を返す（縮小の文言とは別）', () => {
+  const message = columnWidthChangeNotice({ prevWidth: 105, nextWidth: 120, wallCount: 3 });
+  assert.equal(message, '柱寸が拡大されました。外壁まわりの柱の位置は、平面モードなどへ切り替えたとき（構造モードを出たとき）に調整されます。');
+  assert.notEqual(message, columnWidthChangeNotice({ prevWidth: 120, nextWidth: 105, wallCount: 3 }), '縮小と拡大で文言を取り違えていない');
+});
+
+test('【失敗系・ユーザー裁定2026-09-22】columnWidthChangeNotice: 拡大でも壁0はnull', () => {
+  assert.equal(columnWidthChangeNotice({ prevWidth: 105, nextWidth: 120, wallCount: 0 }), null);
+});
+
+test('【失敗系・ユーザー裁定2026-09-22】columnWidthChangeNotice: 壁0はnull（壁が無い階では寄せも偏心も起きない）', () => {
+  assert.equal(columnWidthChangeNotice({ prevWidth: 120, nextWidth: 105, wallCount: 0 }), null);
+  // 壁本数が数でない（渡し忘れ等）も「出さない」側へ倒す。
+  assert.equal(columnWidthChangeNotice({ prevWidth: 120, nextWidth: 105, wallCount: undefined }), null);
+  assert.equal(columnWidthChangeNotice({ prevWidth: 120, nextWidth: 105, wallCount: null }), null);
+  assert.equal(columnWidthChangeNotice({ prevWidth: 120, nextWidth: 105, wallCount: NaN }), null);
+});
+
+test('【失敗系・ユーザー裁定2026-09-22】columnWidthChangeNotice: prevWidthがnull/undefined/NaNはnull', () => {
+  assert.equal(columnWidthChangeNotice({ prevWidth: null, nextWidth: 105, wallCount: 3 }), null);
+  assert.equal(columnWidthChangeNotice({ prevWidth: undefined, nextWidth: 105, wallCount: 3 }), null);
+  assert.equal(columnWidthChangeNotice({ prevWidth: NaN, nextWidth: 105, wallCount: 3 }), null);
+});
+
+test('【失敗系・ユーザー裁定2026-09-22】columnWidthChangeNotice: nextWidthがnull/NaNはnull', () => {
+  assert.equal(columnWidthChangeNotice({ prevWidth: 120, nextWidth: null, wallCount: 3 }), null);
+  assert.equal(columnWidthChangeNotice({ prevWidth: 120, nextWidth: NaN, wallCount: 3 }), null);
 });
