@@ -41,19 +41,24 @@ const establishesFootprint = (room) =>
   && room.feature !== RoomFeature.STAIR_VOID;
 
 /**
- * フットプリント索引（分割格子＋cellToRoom）の寿命を「1回の recomputeStructuralForGraph 呼び出し」に
- * 固定するキャッシュを作る（ステップA・構造再計算の高速化。wallBeamAxes.js createWallSourceCacheと
- * 同じ設計）。footprintProbe は同じ graph に対し1回の再計算で何度も呼ばれる（buildStructuralWallGate・
- * buildSelfFootprintGate・buildExteriorSide、autoFillColumnAxisOffsets内のbuildExteriorSide(lowestGraph)
- * 等）うえ、返り値の probe(wx,wy) 自体も生成後に何度も呼ばれる（spanInBuilding・intersectionInBuilding
- * 等）。cache指定時は最初に索引を確定した時点（withGraphReadScope内で1回だけ buildCellToRoom・
- * gridIndexOf を確定）で固定し、以降は同じ graph・同じ点への問い合わせを組み直さない。
+ * フットプリント索引（分割格子＋cellToRoom）をmemoするキャッシュを作る（ステップA・構造再計算の
+ * 高速化。wallBeamAxes.js createWallSourceCacheと同じ設計）。footprintProbe は同じ graph に対し
+ * 1回の再計算で何度も呼ばれる（buildStructuralWallGate・buildSelfFootprintGate・buildExteriorSide、
+ * autoFillColumnAxisOffsets内のbuildExteriorSide(lowestGraph)等）うえ、返り値の probe(wx,wy) 自体も
+ * 生成後に何度も呼ばれる（spanInBuilding・intersectionInBuilding等）。cache指定時は最初に索引を
+ * 確定した時点（withGraphReadScope内で1回だけ buildCellToRoom・gridIndexOf を確定）で固定し、
+ * 以降は同じ graph・同じ点への問い合わせを組み直さない。
  *
  * **モジュール変数・graphへのWeakMapにしない**——アクティブ階のgraphインスタンスはモードをまたいで
  * 生き続け、部屋・分割線は仕上げモードやundoのrestoreGraphで変わるため、graphに紐づく寿命では古い
- * 索引が残る。呼び出し側（structuralRecompute.js）が「1回の再計算」の寿命でこのキャッシュを生成し、
- * 消費側の関数チェーンへ明示的に引数で渡す——省略時（undefined）は一切memoせず、現行どおり毎回
- * 組み直す（前提: 構造再計算は部屋・分割線を変更しない。wallGate.js冒頭のJSDoc参照）。
+ * 索引が残る。呼び出し側（structuralRecompute.js）が明示的な寿命でこのキャッシュを生成し、消費側の
+ * 関数チェーンへ明示的に引数で渡す——省略時（undefined）は一切memoせず、現行どおり毎回組み直す
+ * （前提: 構造再計算は部屋・分割線を変更しない。wallGate.js冒頭のJSDoc参照）。寿命は2通り:
+ * (a) options.footprintCacheを省略したrecomputeStructuralForGraph単体呼び出しでは「1回のその
+ * 呼び出しの間」（従来どおり）。(b) 解決コンテキスト（structuralResolveContext.js）があるときは
+ * 「1回の反映処理の間」、同じ graph インスタンスに対して複数回のrecomputeStructuralForGraph呼び出しを
+ * またいで使い回す（ステップB-6）——保持が世代不一致で捨てられて読み直されると別インスタンスに
+ * なるので、cache（graphインスタンスをキーにしている）も自然に外れる。
  *
  * @returns {{get(graph:object):{probe:Function,size:number}|undefined, set(graph:object, entry:object):void}}
  */

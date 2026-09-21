@@ -70,7 +70,10 @@ class StructuralResolveContext {
     this._inflight = new Map(); // planeId → 進行中の読み（Promise）
     this._disposed = false;
     this._warnedAfterDispose = false;
-    // B-6で使う枠（今回は生成して持つだけ・まだどの消費点にも配らない）。
+    // ステップC/Aのキャッシュ（壁区間・フットプリント索引）。structuralRecompute.js
+    // recomputeStructuralForGraphがoptions.wallSourceCache/footprintCacheを省略した呼び出しで
+    // これを使い回す（ステップB-6）——寿命が「1回のrecompute呼び出し」から「このコンテキストが
+    // 生きている間＝1回の境界処理」へ広がる。
     this.wallSourceCache = createWallSourceCache();
     this.footprintCache = createFootprintCache();
     this.stats = { peek: 0, hit: 0, invalidated: 0 };

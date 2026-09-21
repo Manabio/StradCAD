@@ -46,22 +46,30 @@ import { conformToLedger } from './memberGroups.js';
  *   を取る。既定はfalse（before/after=null・serializeGraphを呼ばない）——実際にundoへ積むのは
  *   structuralOrchestration.js recomputeActiveStructural だけで、他の呼び出し元はchangedしか読まない
  *   ため、そこ以外では無駄なシリアライズになっていた（ステップD）。
- * @param {ReturnType<typeof createWallSourceCache>} [options.wallSourceCache] - 壁区間
- *   （wallBeamAxes.js wallBeamSourcesFromGraph）を「1回のこの呼び出しの間」memoするキャッシュ
- *   （ステップC）。省略時は本関数が自前で1個作り、内部の全消費点（collectWallBeamSources・
- *   wallRunSegments・autoFillStructuralGrid経由のselfWallSegments・conformWoodColumnEccentricity）へ
- *   配る——構造再計算は壁を生成・変更しない（このJSDoc冒頭のとおり）ため、1回の呼び出しの間は
- *   同じgraphの壁区間は不変で、何度も全走査し直す必要が無い。壁区間は最初の消費点の時点で
- *   固定され、その後に残るawait（上階peek・resolveLowestGraph）を跨いでも読み直さない——壁の
- *   書き手（仕上げ脱出・wallRefresh）はこの再計算の外側にしか居ない。外から渡せるようにしておくのは、
- *   後続ステップB（1回の境界処理の解決コンテキストへの格上げ）のための下ごしらえ——現時点で
- *   外から渡す呼び出し元は無い（常に省略時のデフォルト生成のまま）。
- * @param {ReturnType<typeof createFootprintCache>} [options.footprintCache] - フットプリント索引
- *   （wallGate.js footprintProbe＝分割格子＋部屋セルの索引）を「1回のこの呼び出しの間」memoする
- *   キャッシュ（ステップA）。省略時は本関数が自前で1個作り、内部の全消費点（buildStructuralWallGate・
- *   buildSelfFootprintGate・buildExteriorSide・autoFillColumnAxisOffsets内のbuildExteriorSide(lowestGraph)）
- *   へ配る——構造再計算は部屋・分割線を変更しないため、1回の呼び出しの間は同じgraphのフットプリント
- *   索引は不変。wallSourceCacheと同じ理由で外からは渡さない（今回は下ごしらえのみ）。
+ * @param {ReturnType<typeof createWallSourceCache>|null} [options.wallSourceCache] - 壁区間
+ *   （wallBeamAxes.js wallBeamSourcesFromGraph）をmemoするキャッシュ（ステップC）。内部の全消費点
+ *   （collectWallBeamSources・wallRunSegments・autoFillStructuralGrid経由のselfWallSegments・
+ *   conformWoodColumnEccentricity）へ配る——構造再計算は壁を生成・変更しない（このJSDoc冒頭のとおり）
+ *   ため、同じgraphの壁区間はキャッシュの生存期間中不変で、何度も全走査し直す必要が無い。
+ *   決め方は3通り（ステップB-6）:
+ *     (1) 明示指定（nullを含む）——それをそのまま使う。nullは「memoしない」旧来の対照経路。
+ *     (2) 省略（undefined）かつ ctx があり ctx.wallSourceCache が生きている（dispose後はnull）——
+ *         ctx のキャッシュを使う。寿命は「1回のこの呼び出しの間」から「ctxが生きている間＝1回の
+ *         境界処理（反映処理）の間」へ広がる——ctxは同じ非アクティブ階のgraphインスタンスを
+ *         複数回のrecomputeStructuralForGraph呼び出し・applyNumbers/conformToLedgerをまたいで
+ *         保持し続けるため（structuralResolveContext.js参照）、その間は壁区間の全走査・フットプリント
+ *         索引の構築を1回だけで済ませられる。保持が世代不一致で捨てられて読み直されると別インスタンス
+ *         になるので、cache も（graphインスタンスをキーにしているため）自然に外れる。
+ *     (3) 省略かつ ctx が無い、または dispose 済み——本関数が自前で1個作る（従来どおり・寿命は
+ *         「1回のこの呼び出しの間」）。
+ *   壁区間は最初の消費点の時点で固定され、その後に残るawait（上階peek・resolveLowestGraph）を
+ *   跨いでも読み直さない——壁の書き手（仕上げ脱出・wallRefresh）はこの再計算の外側にしか居ない。
+ * @param {ReturnType<typeof createFootprintCache>|null} [options.footprintCache] - フットプリント索引
+ *   （wallGate.js footprintProbe＝分割格子＋部屋セルの索引）をmemoするキャッシュ（ステップA）。
+ *   内部の全消費点（buildStructuralWallGate・buildSelfFootprintGate・buildExteriorSide・
+ *   autoFillColumnAxisOffsets内のbuildExteriorSide(lowestGraph)）へ配る——構造再計算は部屋・分割線を
+ *   変更しないため、キャッシュの生存期間中は同じgraphのフットプリント索引は不変。決め方は
+ *   wallSourceCacheと同じ3通り（ステップB-6・ctx.footprintCacheを見る点以外は同じ）。
  *   wallSourceCache・footprintCacheとも、nullを明示するとmemoせず従来どおり毎回組み直す
  *   （cacheあり／なしの解が一致することを確かめるテストの対照経路）。
  * @param {ReturnType<typeof import('./structuralResolveContext.js').createStructuralResolveContext>} [options.ctx] -
@@ -69,13 +77,21 @@ import { conformToLedger } from './memberGroups.js';
  *   （buildStructuralWallGate・peekBelowGraph・peekAboveGraph・peekRoofBelowGraph・
  *   peekRoofGraphAbove・resolveLowestGraph）がfloorSwapManager.peek直呼びのまま（従来どおり・
  *   挙動不変）。生成元は structuralOrchestration.js の境界処理（突入・反映3経路。withResolveContext）
- *   ——本関数は受け取って下へ渡すだけで、自分では生成しない。
+ *   ——本関数は受け取って下へ渡すだけで、自分では生成しない。ctxがあり、options.wallSourceCache・
+ *   options.footprintCacheをどちらも省略した場合は、上記のとおりctxのキャッシュも併せて使う
+ *   （ステップB-6）。
  * @returns {Promise<{changed: boolean, before: Uint8Array|null, after: Uint8Array|null}>}
  *   before/after はcaptureSnapshots:true時のみ非null（undo用スナップショット）。changed=false かつ
  *   captureSnapshots:trueのとき after===before（再シリアライズしない）。
  */
 export async function recomputeStructuralForGraph(targetGraph, project, mainStructure, precomputedBelowGraph = undefined, options = {}) {
-  const { captureSnapshots = false, wallSourceCache = createWallSourceCache(), footprintCache = createFootprintCache(), ctx = undefined } = options;
+  const { captureSnapshots = false, wallSourceCache: wallSourceCacheOpt, footprintCache: footprintCacheOpt, ctx = undefined } = options;
+  // 3通り（ステップB-6。上記JSDoc参照）: 明示指定（nullを含む）はそのまま使う。省略（undefined）は
+  // ctxが生きていれば（dispose後はnull）ctxのキャッシュを使い回し、無ければ従来どおり新規生成する。
+  // `??` はnull・undefinedの両方を拾うため、ctx自体が無い（undefined）場合もctx.wallSourceCacheが
+  // dispose後（null）の場合も、同じくcreateWallSourceCache()へフォールバックする。
+  const wallSourceCache = wallSourceCacheOpt !== undefined ? wallSourceCacheOpt : (ctx?.wallSourceCache ?? createWallSourceCache());
+  const footprintCache = footprintCacheOpt !== undefined ? footprintCacheOpt : (ctx?.footprintCache ?? createFootprintCache());
   // 建物フットプリント（部屋領域＝外壁線位置）の鉛直連続性で部材の有無を取捨するゲートを構築する
   // ＝自階かつ直下の全階で建物が連続する位置だけ部材を残す（直下に支えの無い梁・柱は省く）。
   // 非アクティブ下階は peek で覗く。自階に部屋が無い／屋根平面では null＝従来の全グリッド生成。wallGate.js 参照。

@@ -18,6 +18,8 @@ import { generateRoomWallsFromOutline } from '../finish/wallGeneration.js';
 import { TRADITIONAL_WOOD_STRUCTURE, rulesFor } from './structureRules.js';
 import { autoFillWoodColumns } from './woodAutoFill.js';
 import { autoFillWallBeamAxes, selfWallSegments } from './wallBeamAxes.js';
+import { gridIndexOf } from '../finish/gridCells.js';
+import { buildCellToRoom } from '../finish/edgeClassify.js';
 import { collectFloorGroups, totalCountOf, renumberMembers } from './memberNumbering.js';
 import { memberGroupKey } from './memberCatalog.js';
 import { syncRoofPlane } from './roofPlane.js';
@@ -48,20 +50,19 @@ function makeSinglePlaneProject() {
 // 追加せず自前で最小限のシムを書けば足りると判断し直した（storage/db.js openDB/saveFloor/loadFloorが
 // 使うAPIだけを模す。indexedDB.open→onupgradeneeded→onsuccessの非同期チェーンをqueueMicrotaskで
 // 再現するだけの薄いスタブで、実IndexedDBの仕様には準拠しない——このテストファイルの外では使わない）。
-// onFloorsPut（省略可。Minor 2是正・2026-09-21）: 'floors'ストアへのput呼び出しのたびに同期で呼ばれる
-// フック（value = {planeId, bytes, ...}）。saveFloor直呼び・ctx経由（saveAndNote）のどちらでも最終的に
-// この同じputへ到達するため、「floors書込みが何回目か」という、ctx有無に依存しない（読み取り側の
-// peekキャッシュに左右されない）共通の観測点として使う——floorSwapManager.peekのフックは、ctx経路では
-// キャッシュヒット時に物理peekが起きず発火しないため使えない（QA指摘。書込みは changed フラグ由来で
-// ctxの有無に関係なく同じ回数・同じ順序で起こる）。既定（省略時）は何もしない——挙動不変。
-function withFakeIndexedDB(fn, { onFloorsPut } = {}) {
+// 旧onFloorsPutフック（'floors'ストアへのput呼び出しを観測する干渉トリガ）は、本ファイル内の他の
+// 多数のtest()が先にopenDB()を成功させるとstorage/db.jsの_dbPromiseキャッシュ越しに一度も発火しない
+// 空振りになることが判明したため、それに依存するテストは structuralOrchestration.interference.test.js
+// （専用ファイル・fakeDbをモジュールレベルで1個だけ生成）へ移設した（差し戻し対応・2026-09-21）。
+// このファイルに残る withFakeIndexedDB の利用者はどれもonFloorsPutフックを使わないため、
+// オプション自体を削除した（使われないオプションを残さない）。
+function withFakeIndexedDB(fn) {
   class FakeRequest { constructor() { this.onsuccess = null; this.onerror = null; } }
   class FakeStore {
-    constructor(hook) { this.data = new Map(); this.hook = hook; }
+    constructor() { this.data = new Map(); }
     put(value) {
       const req = new FakeRequest();
       this.data.set(value.planeId ?? value.projectId, value);
-      this.hook?.(value);
       queueMicrotask(() => req.onsuccess?.({ target: { result: undefined } }));
       return req;
     }
@@ -76,7 +77,7 @@ function withFakeIndexedDB(fn, { onFloorsPut } = {}) {
       this.stores = new Map();
       this.objectStoreNames = { contains: (n) => this.stores.has(n) };
       for (const name of ['floors', 'projects', 'savedFloors']) {
-        this.stores.set(name, new FakeStore(name === 'floors' ? onFloorsPut : undefined));
+        this.stores.set(name, new FakeStore());
       }
     }
     transaction(name) { const store = this.stores.get(name); return { objectStore: () => store }; }
@@ -2271,108 +2272,11 @@ test('【B-5・アクティブ保持破棄】runStructuralModeSetup: アクテ�
   });
 });
 
-// ---- 4c. 失敗系・collect完了後の他経路の書換え（コーディネーター差し戻し・Minor 2・2026-09-21）----
-// 上の【B-4・失敗系】（アクティブ=2階のrunStructuralModeSetup向け）は、干渉が「対象階がpeek済み・
-// 再計算中」のタイミングで入るため、直後にその階自身の（干渉を知らない）再計算結果で上書きされてしまい
-// （collectフェーズが複数パス収束するまで繰り返すため、干渉後もその階の自動補完が回り続ける）、世代
-// 検知の有無で最終内容が変わらない（QA実証: invalidatedのassertを無力化しても緑のまま）。
-// 干渉を「その階のcollect＋保存が完全に完了した後、apply フェーズ（applyMemberNumbersToFloor）の
-// 再読込みより前」に置く必要がある——floorSwapManager.peekのフックは、ctx経路ではapply時に
-// キャッシュヒットして物理peekが起きないため使えない（ctx:nullとctx省略で発火回数が変わってしまう）。
-// 共通トリガとして、withFakeIndexedDBのonFloorsPutフック（'floors'ストアへのput回数。書込みは
-// changedフラグ由来でctxの有無に関係なく同じ回数・同じ順序になる）を使う。
-// 【設計上の注意】buildB1Fixture（3階建て＋屋根。上階柱直下の柱が階をまたいで伝播する構成）は、
-// 収束に要する内部パス数が実行のたびに（crypto.randomUUID()由来の順序が自動補完の同点判定に
-// 影響しうるため）1回だけ揺れることを実測で確認した——put回数を固定値で数える本テストの土台には
-// 使えない（実測: ある回はcollect5回書込みで収束、別の回は8回書込みで収束した）。そのため本テストは
-// 専用の最小フィクスチャ（非アクティブ階1つだけ・屋根なし＝reflectRoofPlaneは早期returnで無関与）を
-// 使う——収束に要する依存階が無いため、対象階の収束は常にpeek+recompute 1回で決まる
-// （2回目のcollectパスは「確認のみ・書込みなし」で必ず収束する。実測でput回数が常に固定であることを
-// 確認済み）。
-// 1階・2階の id をサフィックスで振り分ける——両シナリオ（ctx:null／ctx省略）を「1回の
-// withFakeIndexedDBスコープの中で順番に」走らせるため（下記関数のJSDoc参照。id を分けて
-// 共有fakeストア内で衝突しないようにする）。
-function buildMinimalReflectFixture(idSuffix) {
-  const project = new Project(`proj-minor2-${idSuffix}`, 'test');
-  project.structuralInfo.mainStructure = TRADITIONAL_WOOD_STRUCTURE;
-  const gx0 = project.structGraph.addCenterLine(CenterLineType.VERTICAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
-  const gx1 = project.structGraph.addCenterLine(CenterLineType.VERTICAL, 3640, { labeled: true, discipline: Discipline.STRUCT });
-  const gy0 = project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
-  const gy1 = project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 1820, { labeled: true, discipline: Discipline.STRUCT });
-  const gridCLs = { gx0, gx1, gy0, gy1 };
-  const g1 = buildWoodFloorForB1(project, 0,    '1階', `m1${idSuffix}`, gridCLs);
-  const g2 = buildWoodFloorForB1(project, 3000, '2階', `m2${idSuffix}`, gridCLs);
-  // 屋根は意図的に作らない（syncRoofPlaneを呼ばない）——project.roofPlaneがnullのまま残り、
-  // reflectRoofPlane（reflectStructuralToOtherFloors内）は早期returnして無関与になる
-  // （収束パス数を対象階1つの収束だけに単純化するため）。
-  return { project, g1, g2 };
-}
-
-// 【重要・実装上の注意】storage/db.js の openDB() はDB接続Promiseをモジュール内 let（_dbPromise。
-// 非export）へキャッシュし、以後は globalThis.indexedDB の差し替えを無視して同じ接続を使い続ける。
-// そのため withFakeIndexedDB を「1つのtest内で2回」呼ぶと、2回目の呼び出しが用意した新しい
-// fakeDb・onFloorsPutフックは（_dbPromiseがまだ1回目のfakeDbを指したままのため）一度も使われず、
-// 実際の読み書きは1回目のfakeDb・1回目のフック（既にn>3まで進んだ古いクロージャ）へ届いてしまう
-// （実測で発見: 2回目の干渉が一度も発火しないまま緑を装う静かな不具合になっていた）。他の
-// 既存テスト（runB1等を複数回呼ぶA/B等価テスト群）はこの問題の影響を受けない——各呼び出しの
-// 冒頭でsaveB1InitialFloorsが該当idを毎回上書きするだけで、フックの新鮮さに依存しないため。
-// 本テストはonFloorsPutフックの「今回の呼び出し用に取り直したカウンタ」に依存するため、
-// 2シナリオ（ctx:null／ctx省略）を「1回のwithFakeIndexedDBスコープ・1個の共有フック」の中で
-// 順番に走らせる（idSuffixで1階・2階のidを分け、共有fakeストア内で2シナリオのデータが
-// 衝突しないようにする。stateオブジェクトでシナリオごとにフックの参照先を切り替える）。
-async function runMinimalReflectScenario(state, idSuffix, ctxOption) {
-  const { project, g1, g2 } = buildMinimalReflectFixture(idSuffix);
-  const plane2 = project.planes[1];
-  // 初期保存2回（put順序1-2）も含めてこのシナリオのカウンタ（n=0起点）で数える——
-  // state.phaseは初期保存より前にセットする（前回の実装は初期保存の後にセットしており、
-  // put順序1-2が数えられずトリガのnがずれて干渉が一度も発火しない不具合になっていた）。
-  state.phase = { n: 0, project, plane2, interferenceDone: null };
-  await saveFloor(project.planes[0].id, serializeGraph(g1));
-  await saveFloor(project.planes[1].id, serializeGraph(g2));
-  project.activePlaneId = project.planes[0].id; // 1階をアクティブにする（2階だけが反映対象）
-  await reflectStructuralToOtherFloors(project, ctxOption);
-  // 干渉（onFloorsPutフック内で非同期に開始）の完了を待ってから返す——待たずに次のシナリオへ
-  // 進むと、干渉のsaveFloorが未完了のまま次シナリオのput回数とフックへ紛れ込む恐れがある。
-  if (state.phase.interferenceDone) await state.phase.interferenceDone;
-  state.phase = null;
-  return dumpB1AllFloorsAllFields(project);
-}
-
-test('【B-5・失敗系】reflectStructuralToOtherFloors: collect完了後・採番適用前に他経路が保持済み階を書き換えても、古い保持を返さず最終結果がctx:null（従来経路）と全フィールド一致する', async () => {
-  const state = { phase: null };
-  let traditional, owned;
-  await withFakeIndexedDB(async () => {
-    // ---- シナリオ1: ctx:null（従来経路）----
-    traditional = await runMinimalReflectScenario(state, 'n', null);
-    // ---- シナリオ2: ctx省略（自前生成）----
-    owned = await runMinimalReflectScenario(state, 'u', undefined);
-  }, {
-    // put順序（本フィクスチャでの実測・固定値。シナリオごとに1-2=初期保存(1階,2階)
-    // 3=collectの2階書込み——屋根が無いため1パスで収束・2パス目は書込み無しの確認のみ）
-    // 4-=apply（2階のみ）。3回目のput（collectの2階書込み）の直後に割り込む——2階の柱を1本
-    // `removeColumn`で削除する（excludedColumnSlotsへ記録されるため、確認パス・apply処理では
-    // 自動補完で復活しない「再計算で復活しない変更」）。干渉後にapplyMemberNumbersToFloor(2階)が
-    // 読む内容が、干渉を正しく検知して読み直した場合と、古い保持を返す場合とで分かれる——
-    // このテストにはinvalidatedカウンタのassertを入れず、最終ダンプの内容だけで判定する
-    // （コーディネーター指示）。
-    onFloorsPut: () => {
-      const phase = state.phase;
-      if (!phase) return;
-      phase.n++;
-      if (phase.n === 3) {
-        phase.interferenceDone = (async () => {
-          const other = await floorSwapManager.peek(phase.plane2, phase.project.structGraph);
-          const victim = other.columns[0];
-          if (victim) runInAction(() => other.removeColumn(victim.id));
-          await saveFloor(phase.plane2.id, serializeGraph(other));
-        })();
-      }
-    },
-  });
-
-  assert.deepEqual(owned, traditional,
-    'collect完了後・apply直前に他経路が2階を書き換えても、ctx省略の最終結果はctx:null（従来経路）で同じ干渉を入れた場合と全フィールド一致する');
-});
+// ---- 4c. 失敗系（柱1本の削除で干渉）: structuralOrchestration.interference.test.js へ移設
+// （差し戻し対応・2026-09-21）。onFloorsPutフックに依存する干渉系テストは、本ファイル内の他の
+// 多数のtest()が先にopenDB()を成功させると_dbPromiseキャッシュ越しに干渉が一度も発火しない
+// 空振りになる（storage/db.js openDB()参照。node --testはファイル単位でプロセスが分離されるため、
+// 専用ファイルへ切り出すことで確実に発火する新品のfakeDbを使える）。移設先を参照。
 
 // ---- 4d. 収束・ctx省略（既定経路）（コーディネーター差し戻し・Minor 3・2026-09-21）----
 // 上の【統合・収束】は【B-5是正】でctx:null固定にしたため（peek回数の参考値を保つため。上記
@@ -2845,3 +2749,73 @@ test('【B-5】reflectStructuralAfterFloorAdd・reflectStructuralAfterFinishExit
     }
   });
 });
+
+// ==== B-6（構造再計算の高速化・2026-09-21）: recomputeStructuralForGraphがoptions.wallSourceCache/
+// footprintCacheの既定をctx優先へ変える（cacheの寿命が「1回のrecompute呼び出し」から「1回の
+// 反映処理」へ広がる）。単体レベルの3通りの場合分け・cache共有の直接観測・dispose時フォールバックは
+// woodAutoFill.test.jsの【統合・ステップB-6】節を参照——ここでは反映処理レベルの前提固定・干渉系を扱う。
+// 既存のA/Bテスト（【B-4・A/B等価】【B-5・A/B等価】。上記）はB-6適用後もそのまま全て緑のまま
+// （recomputeStructuralForGraphの呼び出し元はどこもwallSourceCache/footprintCacheを明示しないため、
+// ctxがあるときは自動的にctxのcacheを使う経路へ切り替わるが、解自体は変わらない）——individual A/B
+// equivalence の追加テストは不要と判断（本ファイル全体のtest実行結果で確認済み。報告参照）。
+
+// ---- 前提の固定（不変条件）: 反映処理をまたいでも各階の壁区間・分割格子・cellToRoomの対応は不変 ----
+// C/Aのキャッシュ（wallSourceCache/footprintCache）の寿命を「1回のrecompute呼び出し」から「1回の
+// 反映処理」へ広げてよい根拠——複数回のrecomputeStructuralForGraph呼び出し・applyNumbers/
+// conformToLedgerを跨いでも、壁（selfWallSegments。cache無しで毎回全走査）・分割格子
+// （gridIndexOf。isDividerCLが真のCLのvalue/extent）・cellToRoom（buildCellToRoom。Room.cells/kind/
+// featureから決まる）が一切変わらないことを、実際の反映パイプライン（突入→他階反映→仕上げ退出後の
+// 反映、を1つのフィクスチャで連続して回す）で固定する。崩れる変更（例: 将来どこかが分割CLを足す）が
+// 入ったら赤くなる。
+function wallSegmentsSnapshot(g) {
+  return selfWallSegments(g)
+    .map(s => `${s.isVertical}:${Math.round(s.coord)}:${Math.round(s.lo)}..${Math.round(s.hi)}:${Math.round(s.halfDepth)}`)
+    .sort();
+}
+function gridIndexSnapshot(g) {
+  const { verticals, horizontals } = gridIndexOf(g);
+  const line = (cl) => `${Math.round(cl.value)}:${cl.extentLo == null ? 'null' : Math.round(cl.extentLo)}..${cl.extentHi == null ? 'null' : Math.round(cl.extentHi)}`;
+  return { verticals: verticals.map(line).sort(), horizontals: horizontals.map(line).sort() };
+}
+function cellToRoomSnapshot(g) {
+  return [...buildCellToRoom(g)].map(([key, room]) => `${key}=${room.kind}:${room.feature ?? 'null'}`).sort();
+}
+async function wallGridSnapshotForAllRealFloors(project) {
+  const out = {};
+  for (const p of project.planes) {
+    const g = p.id === project.activePlaneId ? project.activeGraph : await floorSwapManager.peek(p, project.structGraph);
+    out[p.name] = { walls: wallSegmentsSnapshot(g), grid: gridIndexSnapshot(g), cellToRoom: cellToRoomSnapshot(g) };
+  }
+  return out;
+}
+
+test('【不変条件・B-6】在来木造・3階建て＋屋根のフィクスチャで反映処理（突入→他階反映→仕上げ退出後の反映）を連続して回しても、各階の壁区間（selfWallSegments）・分割格子（gridIndexOf）・cellToRoom（buildCellToRoom）の対応が変わらない（構造再計算は壁・部屋・分割CLを書かない前提の固定）', async () => {
+  await withFakeIndexedDB(async () => {
+    const { project } = buildB1Fixture();
+    await saveB1InitialFloors(project);
+    project.activePlaneId = project.planes.find(p => p.name === '1階').id;
+    try {
+      const before = await wallGridSnapshotForAllRealFloors(project);
+      for (const name of ['1階', '2階', '3階']) {
+        assert.ok(before[name].walls.length > 0, `前提: ${name}に壁がある`);
+        assert.ok(before[name].cellToRoom.length > 0, `前提: ${name}に部屋セルがある`);
+      }
+
+      await runStructuralModeSetup(project.activeGraph, project, {});
+      await reflectStructuralToOtherFloors(project);
+      await reflectStructuralAfterFinishExit(project.activePlaneId, false, project);
+
+      const after = await wallGridSnapshotForAllRealFloors(project);
+      assert.deepEqual(after, before,
+        '反映処理（突入・他階反映・仕上げ退出後の反映）をまたいでも壁区間・分割格子・cellToRoomの対応は不変のまま');
+    } finally {
+      await figureBindingManager.deactivate();
+    }
+  });
+});
+
+// ---- 失敗系（壁を1枚追加する干渉）: structuralOrchestration.interference.test.js へ移設（差し戻し対応・
+// 2026-09-21）。onFloorsPutフックに依存する干渉系テストは、本ファイル内の他の多数のtest()が先に
+// openDB()を成功させると_dbPromiseキャッシュ越しに干渉が一度も発火しない空振りになる
+// （storage/db.js openDB()参照。node --testはファイル単位でプロセスが分離されるため、専用ファイルへ
+// 切り出すことで確実に発火する新品のfakeDbを使える）。移設先を参照。

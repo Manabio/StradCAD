@@ -127,17 +127,21 @@ function wallBackingCode(sourceGraph, wall) {
 
 /**
  * wallBeamSourcesFromGraph の結果を「graph インスタンス×requireBeamAxisBacking」でmemoする
- * キャッシュを作る（ステップC・構造再計算の高速化）。1回の recomputeStructuralForGraph の呼び出しの
- * 間、同じ graph の壁区間は不変（構造再計算は壁を生成・変更しない。structuralRecompute.js冒頭の
- * コメント参照）——にもかかわらず、collectWallBeamSources・wallRunSegments・selfWallSegments経由で
- * 同じ graph が1回の再計算中に何度も全走査されていた（wallGate.js等と違い、この壁区間の解決だけが
- * 唯一横断的にキャッシュされていなかった）。
+ * キャッシュを作る（ステップC・構造再計算の高速化）。同じ graph の壁区間はこのキャッシュの生存期間中
+ * 不変（構造再計算は壁を生成・変更しない。structuralRecompute.js冒頭のコメント参照）——にもかかわらず、
+ * collectWallBeamSources・wallRunSegments・selfWallSegments経由で同じ graph が1回の再計算中に何度も
+ * 全走査されていた（wallGate.js等と違い、この壁区間の解決だけが唯一横断的にキャッシュされていなかった）。
  *
  * **モジュール変数・graphへの恒久WeakMapにしない**——壁は仕上げモード脱出等、この再計算の外側で
  * 変わりうる（graphに紐づく長寿命キャッシュは古い壁区間を返す事故になる）。呼び出し側
- * （structuralRecompute.js・structuralOrchestration.js）が「1回の再計算」の寿命でこのキャッシュを
- * 生成し、消費側の関数チェーンへ明示的に引数で渡す——省略時（undefined）は一切memoせず、
- * 呼び出しのたびに毎回全走査する（既存の挙動と完全に同じ）。
+ * （structuralRecompute.js・structuralOrchestration.js）が明示的な寿命でこのキャッシュを生成し、
+ * 消費側の関数チェーンへ明示的に引数で渡す——省略時（undefined）は一切memoせず、呼び出しのたびに
+ * 毎回全走査する（既存の挙動と完全に同じ）。寿命は2通り: (a) options.wallSourceCacheを省略した
+ * recomputeStructuralForGraph単体呼び出しでは「1回のその呼び出しの間」（従来どおり）。
+ * (b) 解決コンテキスト（structuralResolveContext.js）があるときは「1回の反映処理の間」、同じ
+ * graph インスタンスに対して複数回のrecomputeStructuralForGraph呼び出しをまたいで使い回す
+ * （ステップB-6）——保持が世代不一致で捨てられて読み直されると別インスタンスになるので、
+ * cache（graphインスタンスをキーにしている）も自然に外れる。
  *
  * @returns {{get(graph:object, flag:boolean):Array|undefined, set(graph:object, flag:boolean, value:Array):void}}
  */

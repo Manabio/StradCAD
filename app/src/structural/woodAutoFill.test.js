@@ -3647,6 +3647,116 @@ test('【統合・ステップB-3】recomputeStructuralForGraph: options.ctxを�
   assert.ok(ctx.stats.hit >= 1, 'ctx.stats.hitが1以上（2回目以降の解決地点がヒットしている）');
 });
 
+// ---- 【統合・ステップB-6】recomputeStructuralForGraph: options.wallSourceCache/footprintCacheの
+// 既定生成が「ctx優先・無ければ新規生成」になる（ctxがあるときの3通りの場合分け）----
+test('【統合・ステップB-6】recomputeStructuralForGraph: ctxがあるとき、options.wallSourceCache/footprintCacheの明示指定（cache・null）・省略の3通りいずれも同じ解になり、cacheの実際の使われ方（どのcacheオブジェクトへ書かれるか）が仕様どおりに分かれる', async () => {
+  const dump = (g) => ({
+    columns: g.columns.map(c => `${c.role}:${Math.round(c.x)},${Math.round(c.y)}:${c.sectionDefId}`).sort(),
+    beams: g.beams.map(b => `${b.role}:${b.isVertical ? 'V' : 'H'}:${Math.round(b.axisValue)}:`
+      + `${Math.round(Math.min(b.clStart.effectiveValue, b.clEnd.effectiveValue))}..`
+      + `${Math.round(Math.max(b.clStart.effectiveValue, b.clEnd.effectiveValue))}:${b.sectionDefId}`).sort(),
+  });
+  const run = async (optionsFactory) => {
+    const { project, g2, peekMap } = buildRoomGraphForSnapshotTest();
+    const originalPeek = floorSwapManager.peek;
+    floorSwapManager.peek = async (plane) => peekMap[plane.id] ?? null;
+    const ctx = createStructuralResolveContext();
+    try {
+      const options = optionsFactory(ctx);
+      const result = await recomputeStructuralForGraph(g2, project, TRADITIONAL_WOOD_STRUCTURE, undefined, options);
+      return { ctx, g2, dump: { changed: result.changed, ...dump(g2) } };
+    } finally {
+      floorSwapManager.peek = originalPeek;
+    }
+  };
+
+  // 対照: ctx:null（コンテキストを使わない従来経路）の解。
+  const baseline = await run(() => ({ ctx: null }));
+  assert.ok(baseline.dump.columns.length > 0 && baseline.dump.beams.length > 0, '前提: 壁交点柱・壁線上の通し梁が生成される');
+
+  // (1) 明示指定（cacheオブジェクト）: ctxがあってもそちらを使う——ctx側のcacheには何も書かれない。
+  const explicitCache = { wallSourceCache: createWallSourceCache(), footprintCache: createFootprintCache() };
+  const withExplicit = await run((ctx) => ({ ctx, wallSourceCache: explicitCache.wallSourceCache, footprintCache: explicitCache.footprintCache }));
+  assert.deepEqual(withExplicit.dump, baseline.dump, '明示cache指定はctx:null（従来経路）と同一の解になる');
+  assert.notEqual(explicitCache.wallSourceCache.get(withExplicit.g2, false), undefined, '明示指定したcacheオブジェクトへ実際に書かれている');
+  assert.equal(withExplicit.ctx.wallSourceCache.get(withExplicit.g2, false), undefined, 'ctx側のwallSourceCacheへは書かれない（明示指定が優先）');
+  assert.equal(withExplicit.ctx.footprintCache.get(withExplicit.g2), undefined, 'ctx側のfootprintCacheへは書かれない（明示指定が優先）');
+
+  // (2) 明示null: ctxがあってもmemoしない（旧来の対照経路のまま）。
+  const withNull = await run((ctx) => ({ ctx, wallSourceCache: null, footprintCache: null }));
+  assert.deepEqual(withNull.dump, baseline.dump, '明示null指定はctx:null（従来経路）と同一の解になる（ctxがあってもmemoしない）');
+  assert.equal(withNull.ctx.wallSourceCache.get(withNull.g2, false), undefined, 'null明示時はctx側のwallSourceCacheへも書かれない');
+  assert.equal(withNull.ctx.footprintCache.get(withNull.g2), undefined, 'null明示時はctx側のfootprintCacheへも書かれない');
+
+  // (3) 省略: ctxのcacheを使い回す（ステップB-6の本題）——ctx側に実際に書かれる。
+  const withOmitted = await run((ctx) => ({ ctx }));
+  assert.deepEqual(withOmitted.dump, baseline.dump, 'options省略はctx:null（従来経路）と同一の解になる（ctxのcacheを使ってもchanged/柱/梁は不変）');
+  assert.notEqual(withOmitted.ctx.wallSourceCache.get(withOmitted.g2, false), undefined, '省略時はctx側のwallSourceCacheへ実際に書かれる');
+  assert.notEqual(withOmitted.ctx.footprintCache.get(withOmitted.g2), undefined, '省略時はctx側のfootprintCacheへ実際に書かれる');
+});
+
+// ---- 【統合・ステップB-6】recomputeStructuralForGraph: 同じctx・同じgraphで2回呼ぶと、2回目は壁区間の
+// 全走査・フットプリント索引の構築をやり直さない（cache.set呼び出し回数で観測）----
+// 観測方法: cache.set は「cache.get()がミスした（＝実際に走査・構築し直した）ときだけ」呼ばれる
+// （wallBeamAxes.js wallBeamSourcesFromGraph・wallGate.js footprintProbeの実装。cache.get()がヒットすれば
+// 即returnしcache.set()を呼ばない）。ctx.wallSourceCache.set/footprintCache.setをスパイし、1回目の後の
+// 呼び出し回数を基準に、2回目で増えない（＝全てヒット）ことを確認する。
+test('【統合・ステップB-6】recomputeStructuralForGraph: options省略・ctx指定で同じgraphを2回再計算すると、2回目はctxのcacheへの書き込みが増えない（全走査・索引構築をやり直していない証拠）', async () => {
+  const { project, g2, peekMap } = buildRoomGraphForSnapshotTest();
+  const originalPeek = floorSwapManager.peek;
+  floorSwapManager.peek = async (plane) => peekMap[plane.id] ?? null;
+  const ctx = createStructuralResolveContext();
+  let wallSets = 0, footprintSets = 0;
+  const originalWallSet = ctx.wallSourceCache.set.bind(ctx.wallSourceCache);
+  ctx.wallSourceCache.set = (...args) => { wallSets++; originalWallSet(...args); };
+  const originalFootprintSet = ctx.footprintCache.set.bind(ctx.footprintCache);
+  ctx.footprintCache.set = (...args) => { footprintSets++; originalFootprintSet(...args); };
+  try {
+    await recomputeStructuralForGraph(g2, project, TRADITIONAL_WOOD_STRUCTURE, undefined, { ctx });
+    const wallSetsAfterFirst = wallSets, footprintSetsAfterFirst = footprintSets;
+    assert.ok(wallSetsAfterFirst > 0, '前提: 1回目はwallSourceCacheへ書き込みがある（壁を全走査した）');
+    assert.ok(footprintSetsAfterFirst > 0, '前提: 1回目はfootprintCacheへ書き込みがある（索引を構築した）');
+
+    await recomputeStructuralForGraph(g2, project, TRADITIONAL_WOOD_STRUCTURE, undefined, { ctx });
+    assert.equal(wallSets, wallSetsAfterFirst, '2回目はwallSourceCacheへの書き込みが増えない（同じgraphの壁区間を再走査していない）');
+    assert.equal(footprintSets, footprintSetsAfterFirst, '2回目はfootprintCacheへの書き込みが増えない（同じgraphのフットプリント索引を組み直していない）');
+  } finally {
+    floorSwapManager.peek = originalPeek;
+  }
+});
+
+// ---- 【統合・ステップB-6】recomputeStructuralForGraph: dispose済みctxを渡しても例外にならず、
+// 新規cacheへフォールバックして同じ解になる ----
+test('【統合・ステップB-6・失敗系】recomputeStructuralForGraph: dispose済みctx（wallSourceCache/footprintCacheがnull）を渡しても例外にならず、新規cacheへフォールバックしてctx:null（従来経路）と同じ解になる', async () => {
+  const dump = (g) => ({
+    columns: g.columns.map(c => `${c.role}:${Math.round(c.x)},${Math.round(c.y)}:${c.sectionDefId}`).sort(),
+    beams: g.beams.map(b => `${b.role}:${b.isVertical ? 'V' : 'H'}:${Math.round(b.axisValue)}:`
+      + `${Math.round(Math.min(b.clStart.effectiveValue, b.clEnd.effectiveValue))}..`
+      + `${Math.round(Math.max(b.clStart.effectiveValue, b.clEnd.effectiveValue))}:${b.sectionDefId}`).sort(),
+  });
+  const run = async (ctxOption) => {
+    const { project, g2, peekMap } = buildRoomGraphForSnapshotTest();
+    const originalPeek = floorSwapManager.peek;
+    floorSwapManager.peek = async (plane) => peekMap[plane.id] ?? null;
+    try {
+      const result = await recomputeStructuralForGraph(g2, project, TRADITIONAL_WOOD_STRUCTURE, undefined, { ctx: ctxOption });
+      return { changed: result.changed, ...dump(g2) };
+    } finally {
+      floorSwapManager.peek = originalPeek;
+    }
+  };
+  const baseline = await run(null);
+  assert.ok(baseline.columns.length > 0 && baseline.beams.length > 0, '前提: 壁交点柱・壁線上の通し梁が生成される');
+
+  const disposedCtx = createStructuralResolveContext();
+  disposedCtx.dispose();
+  assert.equal(disposedCtx.wallSourceCache, null, '前提: dispose後はwallSourceCacheがnull');
+  assert.equal(disposedCtx.footprintCache, null, '前提: dispose後はfootprintCacheがnull');
+
+  const withDisposedCtx = await run(disposedCtx);
+  assert.deepEqual(withDisposedCtx, baseline, 'dispose済みctxを渡しても例外にならず、新規cacheへフォールバックしてctx:null（従来経路）と同じ解になる');
+});
+
 // ---- 不変条件: structuralRecompute.js が footprintCache を全消費点（wallGate/exterior/selfGate/columnAxisOffsets）へ配る ----
 test('【不変条件】structuralRecompute.js: options.footprintCacheをbuildStructuralWallGate・buildSelfFootprintGate・buildExteriorSide・autoFillColumnAxisOffsetsへ配る（ステップA）', async () => {
   const fs = await import('node:fs');
@@ -3654,7 +3764,10 @@ test('【不変条件】structuralRecompute.js: options.footprintCacheをbuildSt
   const url = await import('node:url');
   const here = path.dirname(url.fileURLToPath(import.meta.url));
   const src = fs.readFileSync(path.join(here, 'structuralRecompute.js'), 'utf8');
-  assert.ok(/footprintCache = createFootprintCache\(\)/.test(src), 'footprintCacheの既定生成が無い');
+  // ステップB-6で既定生成の決め方が「省略時は常に新規生成」から「省略時はctxのcacheを優先し、
+  // 無ければ新規生成」へ変わった（3通りの場合分け。structuralRecompute.js JSDoc参照）。
+  assert.ok(/footprintCacheOpt !== undefined \? footprintCacheOpt : \(ctx\?\.footprintCache \?\? createFootprintCache\(\)\)/.test(src),
+    'footprintCacheの既定生成（ctx優先・無ければ新規生成）が無い');
   // ステップB-3でctx（解決コンテキスト。省略可・既定undefined）が5番目の引数として加わった。
   assert.ok(/buildStructuralWallGate\(targetGraph\.plane, project, targetGraph, footprintCache, ctx\)/.test(src),
     'buildStructuralWallGateへfootprintCache・ctxを渡していない');
