@@ -42,8 +42,8 @@ function abovePlaneOf(plane, project) {
  * @param {object} graph
  * @param {object} project
  * @param {ReturnType<typeof import('./structuralResolveContext.js').createStructuralResolveContext>} [ctx] -
- *   解決コンテキスト（省略時はfloorSwapManager.peek直呼び・従来どおり。ステップB-3の下ごしらえのみ——
- *   現時点でどの呼び出し元もctxを生成しない＝常にundefined）。
+ *   解決コンテキスト（省略時はfloorSwapManager.peek直呼び・従来どおり。生成元は
+ *   structuralOrchestration.js の境界処理——本関数は受け取って使うだけ）。
  * @returns {Promise<object|null>}
  */
 export async function peekBelowGraph(graph, project, ctx = undefined) {

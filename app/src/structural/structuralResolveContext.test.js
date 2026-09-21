@@ -11,7 +11,7 @@ import { serializeGraph, restoreGraph } from '../graphSnapshot.js';
 import { noteFloorWrite, noteAllFloorsWritten } from '../storage/floorWriteGeneration.js';
 import { floorSwapManager } from '../storage/FloorSwapManager.js';
 import { createStructuralResolveContext } from './structuralResolveContext.js';
-import { peekVia } from './structuralPeek.js';
+import { peekVia, saveVia } from './structuralPeek.js';
 
 // structGraph は project.structGraph と同じ「全階共通の通り芯専用PlanGraph」実体で代用する
 // （core/planGraph.js の centerLines 等のcomputedゲッターが _structGraph.shapeMap を読むため、
@@ -382,4 +382,35 @@ test('peekVia: ctxがnull/undefinedならfloorSwapManager.peekへ直接委ねる
     floorSwapManager.peek = original;
   }
   assert.equal(calls, 2, 'ctx未指定はfloorSwapManager.peekへ委ねている（2回呼ばれた）');
+});
+
+// ---- 9. saveVia: ctx指定時はctx.saveAndNoteへ、ctx省略時（null/undefined）はsaveFloorへ ----
+test('saveVia: ctx指定時はctx.saveAndNoteへ委ね、直後のgraphForが同一インスタンスを返す', async () => {
+  const planeId = uniquePlaneId('p-savevia-ctx');
+  const plane = new Plane(planeId, 0, '1階');
+  const structGraph = makeStructGraph();
+  const store = makeStore();
+  writeContent(store, plane, structGraph, 100);
+  const ctx = createStructuralResolveContext({ peek: makePeek(store), save: makeSave(store) });
+
+  const g1 = await ctx.graphFor(plane, structGraph);
+  await saveVia(ctx, planeId, serializeGraph(g1), g1);
+  const g2 = await ctx.graphFor(plane, structGraph);
+
+  assert.equal(g2, g1, 'saveVia経由の保存はctx.saveAndNoteに委ねられ、直後のgraphForは読み直さない（同一インスタンス）');
+  assert.equal(ctx.stats.peek, 1, 'saveVia後のgraphForはpeekし直さない');
+});
+
+test('saveVia: ctxがnull/undefinedならsaveFloorへ直接委ねる', async () => {
+  const planeId = uniquePlaneId('p-savevia-fallback');
+  const plane = new Plane(planeId, 0, '1階');
+  const structGraph = makeStructGraph();
+  const g = new PlanGraph(plane);
+  g._structGraph = structGraph;
+  const bytes = serializeGraph(g);
+  // saveFloor（storage/db.js）はESM importバインディングのため差し替えられない（peekViaの既存
+  // テストと同じ制約）——node環境ではindexedDB未定義のため、saveFloorへ到達すればrejectする。
+  // 到達すること自体が「ctxへ委ねずsaveFloorへ直接委ねた」ことの確認になる。
+  await assert.rejects(saveVia(null, planeId, bytes, g), 'ctx:nullはsaveFloorへ直接委ねる（実IDB未定義でreject）');
+  await assert.rejects(saveVia(undefined, planeId, bytes, g), 'ctx省略はsaveFloorへ直接委ねる（実IDB未定義でreject）');
 });

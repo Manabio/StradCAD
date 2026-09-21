@@ -46,6 +46,7 @@ const outDir = opts.out ?? path.join(import.meta.dirname, 'out', 'structperf');
 const goldenDir = path.join(import.meta.dirname, 'golden-structperf');
 const outName = `scenario-${docBase}.json`;
 
+const S = (globalThis.__STRUCT_PERF_STAT = { peek: 0, peekMs: 0, rec: 0, recMs: 0, ctxCreated: 0, ctxHit: 0, ctxInvalidated: 0 });
 const { project, doc } = loadDocument(src);
 const allPlanes = [...project.planeMap.values()];
 const label = (p) => (p.isRoofPlane ? '屋根' : p.name);
@@ -79,7 +80,9 @@ async function snapshot(step) {
     out[label(p)] = dumpG(g);
   }
   log[step] = out;
-  console.log(`${step}: ` + allPlanes.map(p => `${label(p)} 柱${out[label(p)].columns.length}/梁${out[label(p)].beams.length}/壁${out[label(p)].walls}`).join('  '));
+  console.log(`${step}: ` + allPlanes.map(p => `${label(p)} 柱${out[label(p)].columns.length}/梁${out[label(p)].beams.length}/壁${out[label(p)].walls}`).join('  ') +
+    `  [recompute=${S.rec}回 peek=${S.peek}回 ctx生成=${S.ctxCreated}回 hit=${S.ctxHit} invalidated=${S.ctxInvalidated}]`);
+  Object.assign(S, { peek: 0, peekMs: 0, rec: 0, recMs: 0, ctxCreated: 0, ctxHit: 0, ctxInvalidated: 0 });
 }
 
 let comp = null;

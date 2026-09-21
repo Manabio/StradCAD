@@ -56,7 +56,7 @@ const outDir = opts.out ?? path.join(import.meta.dirname, 'out', 'structperf');
 const goldenDir = path.join(import.meta.dirname, 'golden-structperf');
 const outName = `entry-${docBase}-a${activeIdx}.json`;
 
-const S = (globalThis.__STRUCT_PERF_STAT = { peek: 0, peekMs: 0, rec: 0, recMs: 0 });
+const S = (globalThis.__STRUCT_PERF_STAT = { peek: 0, peekMs: 0, rec: 0, recMs: 0, ctxCreated: 0, ctxHit: 0, ctxInvalidated: 0 });
 
 const { project } = loadDocument(src);
 const active = project.planes[activeIdx];
@@ -85,14 +85,15 @@ function dump(g) {
 const label = (p) => (p.isRoofPlane ? '屋根' : p.name);
 
 async function entry(tag) {
-  Object.assign(S, { peek: 0, peekMs: 0, rec: 0, recMs: 0 });
+  Object.assign(S, { peek: 0, peekMs: 0, rec: 0, recMs: 0, ctxCreated: 0, ctxHit: 0, ctxInvalidated: 0 });
   const M = globalThis.__STRUCT_PERF_MEM.stat;
   M.load = 0; M.save = 0;
   const t = performance.now();
   const comp = await runStructuralModeSetup(project.activeGraph, project, {});
   const ms = performance.now() - t;
   await floorSwapManager.flushEditablePeek?.();
-  console.log(`${tag}: ${ms.toFixed(0)}ms  recompute=${S.rec}回/${S.recMs.toFixed(0)}ms  peek=${S.peek}回/${S.peekMs.toFixed(0)}ms  IDB load=${M.load} save=${M.save}`);
+  console.log(`${tag}: ${ms.toFixed(0)}ms  recompute=${S.rec}回/${S.recMs.toFixed(0)}ms  peek=${S.peek}回/${S.peekMs.toFixed(0)}ms  ` +
+    `IDB load=${M.load} save=${M.save}  ctx生成=${S.ctxCreated}回 hit=${S.ctxHit} invalidated=${S.ctxInvalidated}`);
   return comp;
 }
 

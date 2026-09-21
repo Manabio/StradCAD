@@ -15,6 +15,10 @@
 // ステップB-1: メモリ版saveFloorに差し替えても floorWriteGeneration.js の世代は本物のdb.jsと同じく
 // 進む（差し替え後のsaveFloor内でnoteFloorWriteを呼ぶ）——解決コンテキスト（後続ステップB）の
 // 鮮度判定がprobe上でも本番同型に検証できるようにするため。
+// ステップB-4: structural/structuralResolveContext.js の createStructuralResolveContext をラップし、
+// コンテキストの生成数・dispose時点でのhit/invalidated累計を globalThis.__STRUCT_PERF_STAT へ集計する
+// （製品コードには一切手を入れない。golden の JSON には含めない——structPerfEntry.mjs/
+// structPerfScenario.mjs 側でコンソール表示だけに使う）。
 
 function must(src, from, to, label) {
   if (!src.includes(from)) throw new Error(`[structPerfHooks] 置換対象が見つからない: ${label}`);
@@ -61,6 +65,22 @@ export async function recomputeStructuralForGraph(...a) {
   try { return await __o_recompute(...a); } finally { __S.rec++; __S.recMs += performance.now() - t; }
 }
 `;
+  }
+
+  if (url.endsWith('/structural/structuralResolveContext.js')) {
+    src = must(src, 'export function createStructuralResolveContext(opts = {}) {\n  return new StructuralResolveContext(opts);\n}', `export function createStructuralResolveContext(opts = {}) {
+  const __S = (globalThis.__STRUCT_PERF_STAT ??= { peek: 0, peekMs: 0, rec: 0, recMs: 0 });
+  __S.ctxCreated = (__S.ctxCreated ?? 0) + 1;
+  const ctx = new StructuralResolveContext(opts);
+  const __origDispose = ctx.dispose.bind(ctx);
+  ctx.dispose = (...args) => {
+    __S.ctxHit = (__S.ctxHit ?? 0) + ctx.stats.hit;
+    __S.ctxInvalidated = (__S.ctxInvalidated ?? 0) + ctx.stats.invalidated;
+    return __origDispose(...args);
+  };
+  return ctx;
+}
+`, 'createStructuralResolveContext');
   }
 
   return { ...r, source: src, shortCircuit: false };

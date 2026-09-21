@@ -10,7 +10,7 @@
  *   1. 明示的な引数でのみ渡す。floorSwapManager.peek自体は変えない。モジュール変数・WeakMap・
  *      graphへのプロパティ付与・composition/React stateへの保持は禁止（保持の生存期間を
  *      呼び出し側のスコープでしか区切れない設計にするため）。
- *   2. 寿命は1回の境界処理。使い終えたら必ず dispose() する（try/finally化はB-4以降）。
+ *   2. 寿命は1回の境界処理。生成した側が try/finally で必ず dispose() する。
  *   3. 保存は現行どおり即時書込み（デバウンス・バッチ化はしない）。
  *   4. 他者の書込みは「階ごとの書込み世代」（storage/floorWriteGeneration.js）の変化で検知して
  *      保持を捨てる（floorsストアを書く全経路を個別に列挙しない）。
@@ -26,8 +26,8 @@
  * 旧裁定「非アクティブ階のgraphは常に1階分だけ生かす」（structuralOrchestration.js
  * reflectStructuralToOtherFloors・recomputeInactiveStructuralのJSDoc参照）は、本コンテキストの
  * 導入により「1回の境界処理の間は複数階分のpeek結果を保持してよい」へ改める（2026-09-21）。
- * ただし実際に複数階を同時保持し始めるのはB-4以降の配線から——本ステップ（B-2）はコンテキスト
- * 本体のみで、まだどこからも生成・注入されない。
+ * 生成・注入するのは structuralOrchestration.js の境界処理（runStructuralModeSetup。突入1回＝
+ * コンテキスト1個）。
  *
  * 世代検知の設計（graphFor）: 保持エントリの gen と現在の世代が一致すればヒット。不一致（無し／
  * 他者が書いた）ならpeekし直す。peekは非同期のため、await中に他者が書く窓が生じうる——
