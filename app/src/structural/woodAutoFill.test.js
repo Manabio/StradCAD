@@ -3469,6 +3469,69 @@ test('【統合】recomputeStructuralForGraph: 在来木造は壁線上に通し
   }
 });
 
+// ---- 【統合・ステップD】recomputeStructuralForGraph: captureSnapshotsオプション（既定はbefore/after=null）----
+function buildRoomGraphForSnapshotTest() {
+  const project = new Project('proj-stepD', 'test');
+  const { graph: g1 } = project.addPlane(0, '1階', 'p1');
+  const { graph: g2 } = project.addPlane(3000, '2階', 'p2');
+  project.activePlaneId = 'p2';
+  g1.structureOverride = TRADITIONAL_WOOD_STRUCTURE;
+  g2.structureOverride = TRADITIONAL_WOOD_STRUCTURE;
+  const x0 = g2.addCenterLine(CenterLineType.VERTICAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+  const x1 = g2.addCenterLine(CenterLineType.VERTICAL, 3640, { labeled: true, discipline: Discipline.STRUCT });
+  const y0 = g2.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+  const y1 = g2.addCenterLine(CenterLineType.HORIZONTAL, 3640, { labeled: true, discipline: Discipline.STRUCT });
+  const room = g2.addRoom(new Set([`${x0.id}:${y0.id}:${x1.id}:${y1.id}`]), 'A');
+  generateRoomWallsFromOutline(g2, room);
+  const peekMap = { p1: g1, p2: g2 };
+  return { project, g2, peekMap };
+}
+
+test('【統合・ステップD】recomputeStructuralForGraph: オプション省略時はbefore/afterがnullで、changedは従来どおり', async () => {
+  const { project, g2, peekMap } = buildRoomGraphForSnapshotTest();
+  const originalPeek = floorSwapManager.peek;
+  floorSwapManager.peek = async (plane) => peekMap[plane.id] ?? null;
+  try {
+    const result = await recomputeStructuralForGraph(g2, project, TRADITIONAL_WOOD_STRUCTURE);
+    assert.equal(result.changed, true, '壁線上に柱・梁が生成されchangedになる（従来どおり）');
+    assert.equal(result.before, null, 'captureSnapshots省略時はbeforeを取らない');
+    assert.equal(result.after, null, 'captureSnapshots省略時はafterを取らない');
+  } finally {
+    floorSwapManager.peek = originalPeek;
+  }
+});
+
+test('【統合・ステップD】recomputeStructuralForGraph: captureSnapshots:trueは変化ありでbefore≠afterを返し、beforeへrestoreGraphすると再計算前の柱・梁本数へ戻る。変化なしはafter===before', async () => {
+  const { project, g2, peekMap } = buildRoomGraphForSnapshotTest();
+  const originalPeek = floorSwapManager.peek;
+  floorSwapManager.peek = async (plane) => peekMap[plane.id] ?? null;
+  try {
+    const columnsBefore = g2.columns.length;
+    const beamsBefore = g2.beams.length;
+
+    const first = await recomputeStructuralForGraph(g2, project, TRADITIONAL_WOOD_STRUCTURE, undefined, { captureSnapshots: true });
+    assert.equal(first.changed, true);
+    assert.notEqual(first.before, null, 'captureSnapshots:trueならbeforeを取る');
+    assert.notEqual(first.after, null, 'captureSnapshots:trueならafterを取る');
+    assert.notDeepEqual(first.before, first.after, 'changed=trueならbefore≠after');
+    assert.ok(g2.columns.length > columnsBefore, '前提: 柱が生成されている');
+    assert.ok(g2.beams.length > beamsBefore, '前提: 壁線上の梁が生成されている');
+
+    restoreGraph(g2, first.before);
+    assert.equal(g2.columns.length, columnsBefore, 'restoreGraphで再計算前の柱本数に戻る');
+    assert.equal(g2.beams.length, beamsBefore, 'restoreGraphで再計算前の梁本数に戻る');
+
+    // 直前のrestoreGraphで再計算前の状態へ戻したため、再計算し直すと同じ結果になる（changed:true）。
+    await recomputeStructuralForGraph(g2, project, TRADITIONAL_WOOD_STRUCTURE, undefined, { captureSnapshots: true });
+    // 収束済みの状態からもう一度呼ぶと差分なし（冪等）＝after===before（再シリアライズしない・同一参照）。
+    const settled = await recomputeStructuralForGraph(g2, project, TRADITIONAL_WOOD_STRUCTURE, undefined, { captureSnapshots: true });
+    assert.equal(settled.changed, false, '前提: 収束済みで変化なし');
+    assert.equal(settled.after, settled.before, '変化なしはafterとbeforeが同一参照（再シリアライズしない）');
+  } finally {
+    floorSwapManager.peek = originalPeek;
+  }
+});
+
 // ---- 不変条件: structuralRecompute.js が wallRunSegments を autoFillStructuralGrid に渡し、removedBeams を changed に含める ----
 test('【不変条件】structuralRecompute.js: wallRunSegments を autoFillStructuralGrid に渡し、removedBeams を changed に含める（ステップ3c-2）', async () => {
   const fs = await import('node:fs');

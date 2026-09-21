@@ -416,7 +416,8 @@ export async function runStructuralModeSetup(targetGraph, project, { onToast } =
 export async function recomputeActiveStructural(project, pushUndo = true) {
   const g = project.activeGraph;
   const mainStructure = g.structureOverride ?? project.structuralInfo.mainStructure;
-  const { changed, before, after } = await recomputeStructuralForGraph(g, project, mainStructure);
+  // before/after は undo に積むときだけ要る（pushUndo=false の経路では誰も読まないので取らない）。
+  const { changed, before, after } = await recomputeStructuralForGraph(g, project, mainStructure, undefined, { captureSnapshots: pushUndo });
   if (changed && pushUndo) {
     undoManager.push(
       () => restoreGraph(g, before),

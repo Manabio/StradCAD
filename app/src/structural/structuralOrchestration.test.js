@@ -25,6 +25,7 @@ import { findSectionEntry } from './sectionCatalog.js';
 import {
   recomputeStructuralComposition, reflectStructuralAfterFinishExit, reflectStructuralToOtherFloors,
   repeatReflectPassUntilConverged, MAX_REFLECT_PASSES, columnSetSignature, runStructuralModeSetup,
+  recomputeActiveStructural,
 } from './structuralOrchestration.js';
 import { figureBindingManager } from '../figure/FigureBindingManager.js';
 
@@ -125,6 +126,46 @@ test('recomputeStructuralComposition: onToast未指定でも例外を投げな�
       mutate: () => { graph.setStructureOverride('S造'); },
     }),
   );
+});
+
+// ---- ステップD: recomputeActiveStructural（唯一のbefore/after=captureSnapshots利用元）のundoが生きていること ----
+test('recomputeActiveStructural: 変化があればundoに1件積まれ、undoで再計算前（柱0本）へ戻る', async () => {
+  const { project, graph } = makeSinglePlaneProject();
+  project.structuralInfo.mainStructure = 'S造';
+  // recomputeStructuralComposition の「mutateなし・差分なし」テストと同じ2x2グリッド
+  // （wallGate=null フォールバックで交点4箇所に柱が自動生成される）。
+  project.structGraph.addCenterLine(CenterLineType.VERTICAL,   0,    { labeled: true, discipline: Discipline.STRUCT });
+  project.structGraph.addCenterLine(CenterLineType.VERTICAL,   3000, { labeled: true, discipline: Discipline.STRUCT });
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: true, discipline: Discipline.STRUCT });
+
+  const beforeTop = undoManager.peekUndo();
+  await recomputeActiveStructural(project);
+  assert.equal(graph.columns.length, 4, '交点4箇所に柱が自動生成される');
+  assert.notEqual(undoManager.peekUndo(), beforeTop, '変化があったのでundoが積まれる');
+
+  undoManager.undo();
+  assert.equal(graph.columns.length, 0, 'undoで再計算前（柱0本）へ戻る');
+
+  undoManager.redo();
+  assert.equal(graph.columns.length, 4, 'redoで再計算後（柱4本）へ戻る');
+});
+
+test('recomputeActiveStructural: 差分なし（同一入力2回目）ならundoを積まない', async () => {
+  const { project, graph } = makeSinglePlaneProject();
+  project.structuralInfo.mainStructure = 'S造';
+  project.structGraph.addCenterLine(CenterLineType.VERTICAL,   0,    { labeled: true, discipline: Discipline.STRUCT });
+  project.structGraph.addCenterLine(CenterLineType.VERTICAL,   3000, { labeled: true, discipline: Discipline.STRUCT });
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: true, discipline: Discipline.STRUCT });
+
+  await recomputeActiveStructural(project);
+  assert.equal(graph.columns.length, 4, '前提: 初回は交点4箇所に柱が自動生成される');
+  const afterFirst = undoManager.peekUndo();
+
+  await recomputeActiveStructural(project);
+  assert.equal(graph.columns.length, 4, '2回目は柱本数が変わらない（冪等）');
+  assert.equal(undoManager.peekUndo(), afterFirst, '2回目は差分なしのためundoを積まない');
 });
 
 // ---- QA F4: 下階編集経路（主構造変更時等）は直前に立った下階の3b柱を撤去しない ----

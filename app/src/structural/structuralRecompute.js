@@ -41,14 +41,21 @@ import { conformToLedger } from './memberGroups.js';
  *   反映されていない（編集可能peekの保存は最大400msデバウンス、またはpeekしたてで未commit）ため
  *   古い柱で梁分割・成算定を確定してしまう（ユーザー裁定2026-09-16「分割後に正しい距離を持つことが
  *   最適解」）。呼び出し側が手元の最新graphをそのまま渡すことで、再peekによる読み取り待ちを避ける。
- * @returns {Promise<{changed: boolean, before: Uint8Array, after: Uint8Array}>}
- *   before/after は undo 用スナップショット。changed=false のとき after===before（再シリアライズしない）。
+ * @param {object} [options] - オプション。
+ * @param {boolean} [options.captureSnapshots=false] - trueのときだけ before/after（undo用シリアライズ）
+ *   を取る。既定はfalse（before/after=null・serializeGraphを呼ばない）——実際にundoへ積むのは
+ *   structuralOrchestration.js recomputeActiveStructural だけで、他の呼び出し元はchangedしか読まない
+ *   ため、そこ以外では無駄なシリアライズになっていた（ステップD）。
+ * @returns {Promise<{changed: boolean, before: Uint8Array|null, after: Uint8Array|null}>}
+ *   before/after はcaptureSnapshots:true時のみ非null（undo用スナップショット）。changed=false かつ
+ *   captureSnapshots:trueのとき after===before（再シリアライズしない）。
  */
-export async function recomputeStructuralForGraph(targetGraph, project, mainStructure, precomputedBelowGraph = undefined) {
+export async function recomputeStructuralForGraph(targetGraph, project, mainStructure, precomputedBelowGraph = undefined, options = {}) {
+  const { captureSnapshots = false } = options;
   // 建物フットプリント（部屋領域＝外壁線位置）の鉛直連続性で部材の有無を取捨するゲートを構築する
   // ＝自階かつ直下の全階で建物が連続する位置だけ部材を残す（直下に支えの無い梁・柱は省く）。
   // 非アクティブ下階は peek で覗く。自階に部屋が無い／屋根平面では null＝従来の全グリッド生成。wallGate.js 参照。
-  const before = serializeGraph(targetGraph);
+  const before = captureSnapshots ? serializeGraph(targetGraph) : null;
   // 主構造ルール（自階の実効値）。壁由来梁芯の下階peek要否・在来木造の柱寸算定スキップ・
   // 木造梁成の自動更新（autoFillWoodBeamDepths、ステップ3d）が共有する（旧: 下方で重複していた
   // rulesFor 呼び出しをここへ集約）。
@@ -174,6 +181,6 @@ export async function recomputeStructuralForGraph(targetGraph, project, mainStru
     || updatedColumnSizes.length > 0 || updatedFootingSizes.length > 0 || updatedBeamSizes.length > 0
     || updatedRoofBeamSizes.length > 0 || updatedBeamEcc.length > 0 || updatedBeamDepths.length > 0
     || updatedColumnEcc.length > 0;
-  const after = changed ? serializeGraph(targetGraph) : before;
+  const after = captureSnapshots ? (changed ? serializeGraph(targetGraph) : before) : null;
   return { changed, before, after };
 }
