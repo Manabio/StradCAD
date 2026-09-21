@@ -1,0 +1,65 @@
+{
+ "1階": {
+  "columns": [
+   "standard:-3190,-275:STEEL-SQ200x200x9.0:C1",
+   "standard:-3190,-6725:STEEL-SQ200x200x9.0:C1",
+   "standard:-7725,-275:STEEL-SQ200x200x9.0:C1",
+   "standard:-7725,-6725:STEEL-SQ200x200x9.0:C1",
+   "standard:190,-275:STEEL-SQ200x200x9.0:C1",
+   "standard:190,-6725:STEEL-SQ200x200x9.0:C1",
+   "standard:6725,-275:STEEL-SQ200x200x9.0:C1",
+   "standard:6725,-6725:STEEL-SQ200x200x9.0:C1"
+  ],
+  "beams": [
+   "foundation::H:-275:-3000..0:RC-300x300:FG1",
+   "foundation::H:-275:-8000..-3000:RC-300x300:FG1",
+   "foundation::H:-275:0..7000:RC-300x300:FG1",
+   "foundation::H:-6725:-3000..0:RC-300x300:FG1",
+   "foundation::H:-6725:-8000..-3000:RC-300x300:FG1",
+   "foundation::H:-6725:0..7000:RC-300x300:FG1",
+   "foundation::V:-3190:-7000..0:RC-300x300:FG1",
+   "foundation::V:-7725:-7000..0:RC-300x300:FG1",
+   "foundation::V:190:-7000..0:RC-300x300:FG1",
+   "foundation::V:6725:-7000..0:RC-300x300:FG1"
+  ]
+ },
+ "2階": {
+  "columns": [
+   "standard:-3190,-275:STEEL-SQ200x200x9.0:C1",
+   "standard:-3190,-6725:STEEL-SQ200x200x9.0:C1",
+   "standard:-7725,-275:STEEL-SQ200x200x9.0:C1",
+   "standard:-7725,-6725:STEEL-SQ200x200x9.0:C1",
+   "standard:190,-275:STEEL-SQ200x200x9.0:C1",
+   "standard:190,-6725:STEEL-SQ200x200x9.0:C1",
+   "standard:6725,-275:STEEL-SQ200x200x9.0:C1",
+   "standard:6725,-6725:STEEL-SQ200x200x9.0:C1"
+  ],
+  "beams": [
+   "primary::H:-225:-3000..0:STEEL-H200x100:G1",
+   "primary::H:-225:-8000..-3000:STEEL-H200x100:G1",
+   "primary::H:-225:0..7000:STEEL-H200x100:G1",
+   "primary::H:-6775:-3000..0:STEEL-H200x100:G1",
+   "primary::H:-6775:-8000..-3000:STEEL-H200x100:G1",
+   "primary::H:-6775:0..7000:STEEL-H200x100:G1",
+   "primary::V:-3140:-7000..0:STEEL-H200x100:G1",
+   "primary::V:-7775:-7000..0:STEEL-H200x100:G1",
+   "primary::V:140:-7000..0:STEEL-H200x100:G1",
+   "primary::V:6775:-7000..0:STEEL-H200x100:G1"
+  ]
+ },
+ "屋根": {
+  "columns": [],
+  "beams": [
+   "eaves::H:-225:-3000..0:STEEL-H200x100:EG1",
+   "eaves::H:-225:-8000..-3000:STEEL-H200x100:EG1",
+   "eaves::H:-225:0..7000:STEEL-H200x100:EG1",
+   "eaves::H:-6775:-3000..0:STEEL-H200x100:EG1",
+   "eaves::H:-6775:-8000..-3000:STEEL-H200x100:EG1",
+   "eaves::H:-6775:0..7000:STEEL-H200x100:EG1",
+   "eaves::V:-3140:-7000..0:STEEL-H200x100:EG1",
+   "eaves::V:-7775:-7000..0:STEEL-H200x100:EG1",
+   "eaves::V:140:-7000..0:STEEL-H200x100:EG1",
+   "eaves::V:6775:-7000..0:STEEL-H200x100:EG1"
+  ]
+ }
+}
