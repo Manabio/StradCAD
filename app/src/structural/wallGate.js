@@ -282,7 +282,8 @@ export function buildSelfFootprintGate(graph, cache = undefined) {
  *      権威を確立する部屋が無い＝階段・階段吹抜けRoomのみの階も同じ扱い。establishesFootprint 参照）
  *  @param {ReturnType<typeof createFootprintCache>} [cache] - 省略時は毎回組み直す（従来どおり）。
  *  @param {ReturnType<typeof import('./structuralResolveContext.js').createStructuralResolveContext>} [ctx] -
- *    解決コンテキスト（省略時はfloorSwapManager.peek直呼び・従来どおり。ステップB-3の下ごしらえのみ）。 */
+ *    解決コンテキスト（省略時は floorSwapManager.peek 直呼び。反映処理（structuralOrchestration.js
+ *    の境界処理）からは解決コンテキストが渡る）。 */
 export async function buildStructuralWallGate(plane, project, activeGraph, cache = undefined, ctx = undefined) {
   const planes = project.planes; // elevation 昇順、屋根・検討を除く採用フロア
   const baseId = plane.isRoofPlane ? plane.roofForPlaneId : plane.id;

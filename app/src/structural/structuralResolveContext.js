@@ -2,11 +2,11 @@
  * 構造モードの「解決コンテキスト」（構造再計算高速化・ステップB-2、2026-09-21）。
  *
  * 背景: 1回の境界処理（構造モード突入・他階への反映・仕上げ脱出後の反映等）の中で、同じ
- * 非アクティブ階を floorSwapManager.peek（IDB読込→restoreGraph→heal）で何十回も読み直している
- * （moku5実測: 初回突入でpeek 98回・約1000ms）。本モジュールは「1回の境界処理」の間だけ各階の
+ * 非アクティブ階を floorSwapManager.peek（IDB読込→restoreGraph→heal）で何十回も読み直していた
+ * （本モジュール導入前のmoku5実測: 初回突入でpeek 98回・約1000ms）。本モジュールは「1回の境界処理」の間だけ各階の
  * peek結果を使い回すための明示的なコンテキストオブジェクトを提供する。
  *
- * ユーザー裁定（2026-09-21）——この設計が従う規律:
+ * 現行の規律（ユーザー裁定2026-09-21）——この設計が従う:
  *   1. 明示的な引数でのみ渡す。floorSwapManager.peek自体は変えない。モジュール変数・WeakMap・
  *      graphへのプロパティ付与・composition/React stateへの保持は禁止（保持の生存期間を
  *      呼び出し側のスコープでしか区切れない設計にするため）。
@@ -23,13 +23,27 @@
  *      フォールバックする（storage/db.js・storage/sessionLock.js・structuralOrchestration.js
  *      MAX_REFLECT_PASSESと同じ「フォールバックしつつ警告する」流儀）。
  *
- * 旧裁定「非アクティブ階のgraphは常に1階分だけ生かす」（structuralOrchestration.js
- * reflectStructuralToOtherFloors・recomputeInactiveStructuralのJSDoc参照）は、本コンテキストの
- * 導入により「1回の境界処理の間は複数階分のpeek結果を保持してよい」へ改める（2026-09-21）。
+ * コンテキスト経路が標準で、1回の境界処理の間は複数階分のpeek結果を同時に保持してよい
+ * （structuralOrchestration.js reflectStructuralToOtherFloors・recomputeInactiveStructuralのJSDoc
+ * 参照）。`ctx: null` を明示する経路は、コンテキスト経路と解が一致することを確かめるための対照用
+ * （floorSwapManager.peek直呼びの従来経路。「非アクティブ階のgraphは1階分だけ生かす」という
+ * 節約は、この対照経路だけが保つ性質——コンテキストが対象階を保持していれば複数階分が同時に
+ * 生き続ける）として残している。
  * 生成・注入するのは structuralOrchestration.js の境界処理（runStructuralModeSetup・
  * reflectStructuralToOtherFloors・reflectStructuralAfterFinishExit・reflectStructuralAfterFloorAdd。
  * withResolveContext の3値規約＝省略なら自前生成して破棄・明示なら借り物・nullなら従来経路）。
  * 1回の反映処理につきコンテキスト1個（突入は内側の反映へ自分のコンテキストを渡す）。
+ *
+ * (a) wallSourceCache・footprintCache（下記コンストラクタ）も本コンテキストと同じ寿命で保持する。
+ *     キーはgraphインスタンス（Map。wallBeamAxes.js createWallSourceCache・wallGate.js
+ *     createFootprintCache）のため、世代不一致で_heldが読み直されて新しいgraphインスタンスに
+ *     差し替わると、cache側も新しいキーを引くだけで自然に外れる（古いエントリを明示的に消す
+ *     必要はない）。
+ * (b) 保持コスト: 世代不一致で無効化された古いgraphインスタンスは、cacheのキーとしては
+ *     dispose()まで残る（Mapは強参照のため）。ただし無効化は他者の書込みが割り込んだときだけ
+ *     起こるため、1回の境界処理の間に増えるのは数個程度（有界）——際限なく増え続けることはない。
+ * (c) 全階同時保持のヒープ増分の目安は .claude/structural-model.md「反映処理の間だけ各階の
+ *     peek結果を使い回す」節を参照。
  *
  * 世代検知の設計（graphFor）: 保持エントリの gen と現在の世代が一致すればヒット。不一致（無し／
  * 他者が書いた）ならpeekし直す。peekは非同期のため、await中に他者が書く窓が生じうる——
@@ -176,7 +190,8 @@ class StructuralResolveContext {
     }
   }
 
-  /** 指定階の保持だけを手放す（他者書込みの検知に頼らず明示的に無効化したいときに使う）。 */
+  /** 指定階の保持だけを手放す。世代検知で足りているため、現状の呼び出し元は単体テストだけ
+   *  （db.js を通さずに階を書き換える経路を足すときの明示的な無効化口として残している）。 */
   drop(planeId) {
     this._held.delete(planeId);
   }

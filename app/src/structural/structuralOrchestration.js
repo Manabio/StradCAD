@@ -108,8 +108,9 @@ export function columnSetSignature(columns) {
 // （resyncTouchedMemberGroupsが必要とする引数と同じ）。
 // ctx（解決コンテキスト。構造再計算高速化ステップB）は省略可能——受け取って内部のpeek地点
 // （buildStructuralWallGate・resolveLowestGraph・peekBelowGraph・recomputeStructuralForGraph）へ
-// 下へ渡すだけで、自分では生成しない（生成はB-4/B-5）。belowFootprintCache・belowWallSourceCacheは
-// この下階編集経路専用のローカルキャッシュのまま据え置く（ctx由来にはしない。ステップB-3の合意）。
+// 下へ渡すだけで、自分では生成しない（生成は境界処理側のwithResolveContextが担う）。
+// belowFootprintCache・belowWallSourceCacheはこの下階編集経路専用のローカルキャッシュのまま
+// 据え置く（ctx由来にはしない）。
 export async function recomputeStructuralComposition(composition, subjectGraph, project, { mutate, onToast, pushUndo = true, ctx = undefined } = {}) {
   const before = serializeGraph(subjectGraph);
   // 自階床下材＝subjectGraph、1つ下の階の柱＝belowGraph。基礎伏図（1つ下が無い）は belowGraph=null。
@@ -491,11 +492,12 @@ export async function recomputeActiveStructural(project, pushUndo = true, ctx = 
 // 採番は収集（conformToLedger + collectFloorGroups。structuralRecompute.js）のみ行い、番号の確定は
 // 呼び出し側（reflectStructuralToOtherFloors 等）が全階の収集後に1回だけ行う。
 // 戻り値の peek 済み graph（temp）はこの関数の呼び出し元だけが直後に使い、beamColumnWidthMm
-// （非永続の派生値。collect時点の値）を読み終えたら手放す——ctx省略時（またはctxが対象階を保持しない
-// 場合）は建物全体の非アクティブ階を同時にメモリ上へ展開し続けず「今処理している1階分」だけを生かす。
-// **ctxが対象階を保持している場合（B-4以降）は、apply側（applyMemberNumbersToFloor）の再peekが
-// 同一インスタンスを返しうる**——1回の境界処理の間だけ複数階分のpeek結果を保持してよいという
-// structuralResolveContext.jsの規律に従う（旧裁定「非アクティブ階は常に1階分」はctx非使用時のみ有効）。
+// （非永続の派生値。collect時点の値）を読み終えたら手放す——コンテキスト経路（ctx指定・対象階を
+// 保持している場合）では、apply側（applyMemberNumbersToFloor）の再peekが同じgraphインスタンスを
+// collect→applyで使い回す（structuralResolveContext.jsの規律どおり、1回の境界処理の間は複数階分を
+// 同時に保持してよい）。ctx省略・ctx:null（対照用の従来経路）では対象階を保持しないため、apply側は
+// 毎回fresh peekし直す——いずれの経路でも読む値は同じになる（下記beamColumnWidthMm書き戻しの
+// 規律参照）。
 // 戻り値に changed・isWallRuns（在来木造＝beamPlacement:'wallRuns'）を加えたのは、反映パスを
 // 「収束するまで繰り返す」判定（下記 MAX_REFLECT_PASSES 節。小屋伏図にも梁・柱ルールを適用する
 // 計画のリード裁定）に使うため——呼び出し側は temp（既存どおりbeamColumnWidthMm読み取り用）と
@@ -512,12 +514,14 @@ async function recomputeInactiveStructural(plane, project, ctx = undefined) {
 }
 
 // 採番パス2: 直前に収集済みの project.memberNumberIndex を使って番号を適用し、変化があれば保存する。
-// graph は peekVia で取得する——ctx省略時（またはctxが対象階を保持しない場合）は fresh peek
-// （collect時に使ったtempインスタンスをここまで生かし続けない）、ctxが対象階を保持していれば
-// （B-4以降）collect側と同一インスタンスを使い回す。いずれの場合も beamColumnWidthMmValue には
+// graph は peekVia で取得する——コンテキスト経路（ctx指定・対象階を保持）ならcollect側と同一
+// インスタンスを使い回し、ctx省略・ctx:null（対照用の従来経路）は fresh peek し直す（collect時に
+// 使ったtempインスタンスをここまで生かし続けない）。いずれの経路でも beamColumnWidthMmValue には
 // collect フェーズで求めた同じ階の派生値（下階の柱寸。数値または未解決null）を渡し、apply対象へ
-// 書き戻してから applyNumbers を呼ぶ——standardBeamSectionFor（groupKey算定）がこれを読むため、
-// 書き戻さないとcollect時点の標準材と食い違ってタグが引けなくなる（QA指摘4）。
+// 無条件で書き戻してから applyNumbers を呼ぶ——同じインスタンスを使い回すコンテキスト経路では
+// before状態の値が残っているため、fresh peekし直す従来経路と同じ値を読ませるにはこの書き戻しが
+// 両経路で欠かせない（standardBeamSectionFor（groupKey算定）がこれを読むため、書き戻さないと
+// collect時点の標準材と食い違ってタグが引けなくなる。QA指摘4）。
 async function applyMemberNumbersToFloor(plane, tags, project, beamColumnWidthMmValue, ctx = undefined) {
   const temp = await peekVia(ctx, plane, project.structGraph);
   let changed = false;
@@ -618,8 +622,8 @@ async function applyMemberNumbersToRoof(tags, project, beamColumnWidthMmValue, i
   if (!isWallRuns) return; // 非在来は収集のみ（既存の割り切り）
   const temp = await peekVia(ctx, roofPlane, project.structGraph);
   let changed = false;
-  // beamColumnWidthMmValueは無条件で書く（applyMemberNumbersToFloorと同じ規律。B-4是正）——
-  // null判定で書き分けると、ctxが保持インスタンスを使い回す構成（B-4以降）で「前回の数値」が
+  // beamColumnWidthMmValueは無条件で書く（applyMemberNumbersToFloorと同じ規律）——
+  // null判定で書き分けると、コンテキスト経路（保持インスタンスを使い回す構成）で「前回の数値」が
   // 残ったまま読まれうる（保持インスタンスはfreshなIDB復元と違い、before状態がクリアされない）。
   // 前提: isWallRuns===trueに絞った時点でbeamColumnWidthMmValueは常に数値（在来木造の
   // beamColumnWidthMm()は柱寸未設定でも既定値へフォールバックする。structureRules.js）。もしnullが
@@ -666,11 +670,12 @@ export async function reflectStructuralToOtherFloors(project, ctxArg = undefined
       runInAction(() => collectFloorGroups(project.activeGraph, project));
     }
     // 収集フェーズで求めた beamColumnWidthMm（下階基準の派生値。数値のみ）はbeamColumnWidthByPlaneIdへ
-    // 控えておく。コンテキストがあるときは1回の境界処理の間だけ各階のpeek結果を保持してよい（2026-09-21
-    // 裁定・B-4/B-5）——peek済みgraphインスタンスを次のplaneへ進む前に手放す規律はコンテキスト無しの
-    // 従来経路（ctx: null）のためのもの。適用フェーズは applyMemberNumbersToFloor が peekVia
-    // （ctxが対象階を保持していれば同一インスタンス、無ければfresh peek）で取得し、保存しておいた数値を
-    // 書き戻してから applyNumbersを呼ぶ。
+    // 控えておく。コンテキスト経路では同じgraphインスタンスをcollect→applyで使い回す（1回の境界処理の
+    // 間は複数階分のpeek結果を同時に保持してよい・2026-09-21裁定）。peek済みインスタンスを次のplaneへ
+    // 進む前に手放す規律は対照用の従来経路（ctx: null）だけのもの。適用フェーズは applyMemberNumbersToFloor
+    // が peekVia（コンテキスト経路なら同一インスタンス、従来経路ならfresh peek）で取得し、控えておいた
+    // 数値を無条件で書き戻してから applyNumbersを呼ぶ——同一インスタンス・fresh peekいずれの経路でも
+    // 同じ値を保証するための規律（applyMemberNumbersToFloorのJSDoc参照）。
     // 降順（最上階→最下階）で再計算する（ユーザー裁定2026-09-19「柱の追加は最上階から順に、最下階まで
     // 可能な限り同位置に」）。project.planes は elevation 昇順（core/project.js）——各階は
     // peek→recompute→保存を1階ずつ完結するため、降順なら階N−1の処理時に peekAboveGraph がこのループで
@@ -758,7 +763,7 @@ export async function reflectStructuralAfterFinishExit(currentPlaneId, goingToSt
     if (!goingToStructure) await recomputeActiveStructural(project, undefined, ctx);
     const planes = project.planes; // elevation 昇順
     const idx = planes.findIndex(p => p.id === currentPlaneId);
-    const touchedByPlaneId = new Map(); // planeId → beamColumnWidthMm（数値のみ保持。graphインスタンスは手放す——上記コメント参照）
+    const touchedByPlaneId = new Map(); // planeId → beamColumnWidthMm（数値のみ控える。階の保持は解決コンテキストの役目——reflectStructuralToOtherFloors の同種のコメント参照）
     let roofBeamColumnWidthMm = null;
     let roofIsWallRuns = false;
     if (idx !== -1) {

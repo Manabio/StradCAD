@@ -22,24 +22,23 @@
 // (a) 各 test の先頭で floors/projects/savedFloors を空にする、(b) planeId のサフィックスを
 // シナリオごとに変える、の両方で防ぐ。
 //
-// buildWoodFloorForB1・buildMinimalReflectFixture・dumpB1AllFloorsAllFields 一式は
-// structuralOrchestration.test.js から複製している（あちらは他の多数の test が使い続けるため移動できない。
-// export もされていないテスト内部ヘルパのため import 共有もできない）。内容の乖離を避けたい場合は
-// 両ファイルを見比べること。
+// addDefaultDimensionLines・buildWoodFloorForB1・buildCLResolver・normalizeStructEntity・
+// allFieldsDumpForGraph・dumpB1AllFloorsAllFields は structuralOrchestration.test.js と共有する
+// structuralOrchestrationFixtures.js（同ディレクトリ・非test.jsの共有モジュール）から import する
+// （B-7是正・2026-09-21。かつては複製していたが、内容の乖離を避けるため集約した）。
+// buildMinimalReflectFixture・buildMinimalReflectFixtureFootprint は本ファイル固有（他のテスト
+// ファイルは使わない最小フィクスチャのため、共有モジュールへは出さない）。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { runInAction } from 'mobx';
-import {
-  Project, CenterLineType, Discipline,
-  HDimensionLine, VDimensionLine, DimensionKind, DimensionSide,
-} from '../core.js';
+import { Project, CenterLineType, Discipline } from '../core.js';
 import { floorSwapManager } from '../storage/FloorSwapManager.js';
 import { saveFloor } from '../storage/db.js';
 import { serializeGraph } from '../graphSnapshot.js';
-import { decode } from '../schema/graphFbs.js';
 import { generateRoomWallsFromOutline } from '../finish/wallGeneration.js';
 import { TRADITIONAL_WOOD_STRUCTURE } from './structureRules.js';
 import { reflectStructuralToOtherFloors } from './structuralOrchestration.js';
+import { addDefaultDimensionLines, buildWoodFloorForB1, dumpB1AllFloorsAllFields } from './structuralOrchestrationFixtures.js';
 
 // ---- module-level fake IndexedDB（このファイルで1個だけ。storage/floorWriteGeneration.db.test.jsと同じ方針）----
 class FakeRequest { constructor() { this.onsuccess = null; this.onerror = null; } }
@@ -85,28 +84,6 @@ function resetFakeStores() {
   fakeStores.savedFloors.data.clear();
 }
 
-// ---- buildWoodFloorForB1・buildMinimalReflectFixture（structuralOrchestration.test.jsから複製）----
-function addDefaultDimensionLines(graph) {
-  graph.addDimensionLine(HDimensionLine, { dimensionKind: DimensionKind.GRID, side: DimensionSide.TOP });
-  graph.addDimensionLine(HDimensionLine, { dimensionKind: DimensionKind.GRID, side: DimensionSide.BOTTOM });
-  graph.addDimensionLine(VDimensionLine, { dimensionKind: DimensionKind.GRID, side: DimensionSide.LEFT });
-  graph.addDimensionLine(VDimensionLine, { dimensionKind: DimensionKind.GRID, side: DimensionSide.RIGHT });
-  graph.addDimensionLine(HDimensionLine, { dimensionKind: DimensionKind.CENTER, side: DimensionSide.TOP });
-  graph.addDimensionLine(HDimensionLine, { dimensionKind: DimensionKind.CENTER, side: DimensionSide.BOTTOM });
-  graph.addDimensionLine(VDimensionLine, { dimensionKind: DimensionKind.CENTER, side: DimensionSide.LEFT });
-  graph.addDimensionLine(VDimensionLine, { dimensionKind: DimensionKind.CENTER, side: DimensionSide.RIGHT });
-}
-
-function buildWoodFloorForB1(project, elevation, name, id, gridCLs) {
-  const { graph } = project.addPlane(elevation, name, id);
-  graph.structureOverride = TRADITIONAL_WOOD_STRUCTURE;
-  addDefaultDimensionLines(graph);
-  const { gx0, gx1, gy0, gy1 } = gridCLs;
-  const room = graph.addRoom(new Set([`${gx0.id}:${gy0.id}:${gx1.id}:${gy1.id}`]), 'A');
-  generateRoomWallsFromOutline(graph, room);
-  return graph;
-}
-
 // 1階・2階のid をサフィックスで振り分ける——両シナリオ（ctx:null／ctx省略）を「1回のフックスコープの
 // 中で順番に」走らせるため（id を分けて共有fakeストア内で衝突しないようにする）。
 function buildMinimalReflectFixture(idSuffix) {
@@ -125,84 +102,40 @@ function buildMinimalReflectFixture(idSuffix) {
   return { project, g1, g2 };
 }
 
-// ---- 全フィールド意味ダンプ（structuralOrchestration.test.jsのallFieldsDumpForGraph一式を複製）----
-const UUID_RE_GLOBAL = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
-const CL_REF_FIELD_KEYS = new Set(['verticalCLId', 'horizontalCLId', 'axisCLId', 'clStartId', 'clEndId', 'clId']);
+// 【B-6・失敗系（フットプリント版）】専用フィクスチャ: buildMinimalReflectFixtureと同じ土台に、
+// X方向のグリッドをもう1コマ（gx1..gx2）足し、1階はその2コマ分を最初から1部屋（矩形1つ）で覆う一方、
+// 2階は手前のコマ（gx0..gx1）だけの部屋にしておく——奥のコマ（gx1..gx2）を「部屋の無いセル」として
+// 用意する（1階には既に奥コマまで届く壁があるため、干渉で2階側のRoom.cellsへ奥コマを追加するだけで
+// 鉛直連続性ゲート（wallGate.js buildStructuralWallGate＝基準階＋直下の全階のAND。本フィクスチャは
+// 2階建てなので2階×1階）が変わり、1階の壁から
+// 導かれる梁のスパン・本数が変わる——壁を1枚も増やさずにfootprintCacheの陳腐化だけを検出できる構成。
+// scratchpad実験（node --import ./scripts/testSetup.mjs で直接recomputeStructuralForGraphを往復）で
+// 確認済み: 2階のRoom.cellsへ奥コマを追加するだけで、1階の奥コマ分の壁（x:3640..7280）に沿う通し梁が
+// 2階側にも新たに生成される（cellB追加前は通し梁が0..3640で止まっていたが、追加後は0..7280まで伸びる）。
+function buildMinimalReflectFixtureFootprint(idSuffix) {
+  const project = new Project(`proj-minor2fp-${idSuffix}`, 'test');
+  project.structuralInfo.mainStructure = TRADITIONAL_WOOD_STRUCTURE;
+  const gx0 = project.structGraph.addCenterLine(CenterLineType.VERTICAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+  const gx1 = project.structGraph.addCenterLine(CenterLineType.VERTICAL, 3640, { labeled: true, discipline: Discipline.STRUCT });
+  const gx2 = project.structGraph.addCenterLine(CenterLineType.VERTICAL, 7280, { labeled: true, discipline: Discipline.STRUCT });
+  const gy0 = project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+  const gy1 = project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 1820, { labeled: true, discipline: Discipline.STRUCT });
+  const cellA = `${gx0.id}:${gy0.id}:${gx1.id}:${gy1.id}`; // 手前コマ（両階とも最初から部屋あり）
+  const cellB = `${gx1.id}:${gy0.id}:${gx2.id}:${gy1.id}`; // 奥コマ（1階のみ最初から部屋あり）
 
-function buildCLResolver(g) {
-  const clById = new Map(g.centerLines.map(cl => [cl.id, cl]));
-  const resolveId = (id) => {
-    if (id == null) return 'null';
-    const cl = clById.get(id);
-    return cl ? `${cl.centerLineType}:${Math.round(cl.effectiveValue)}` : `?${id}`;
-  };
-  const resolveComposite = (s) => s.replace(UUID_RE_GLOBAL, (id) => {
-    const cl = clById.get(id);
-    return cl ? `${cl.centerLineType}:${Math.round(cl.effectiveValue)}` : id;
-  });
-  return { resolveId, resolveComposite };
-}
+  const { graph: g1 } = project.addPlane(0, '1階', `f1${idSuffix}`);
+  g1.structureOverride = TRADITIONAL_WOOD_STRUCTURE;
+  addDefaultDimensionLines(g1);
+  const room1 = g1.addRoom(new Set([`${gx0.id}:${gy0.id}:${gx2.id}:${gy1.id}`]), 'A'); // 手前+奥を1矩形で
+  generateRoomWallsFromOutline(g1, room1);
 
-function normalizeStructEntity(v, resolver) {
-  const parts = [];
-  for (const k of Object.keys(v).sort()) {
-    if (k === 'id' || k === 'extraKeys' || k === 'extraVals') continue;
-    if (CL_REF_FIELD_KEYS.has(k)) {
-      parts.push(`${k}=${v[k] == null ? 'null' : resolver.resolveId(v[k])}`);
-    } else {
-      parts.push(`${k}=${JSON.stringify(v[k])}`);
-    }
-  }
-  if (Array.isArray(v.extraKeys)) {
-    v.extraKeys.forEach((k, i) => parts.push(`extra.${k}=${v.extraVals[i]}`));
-  }
-  return parts.join('|');
-}
+  const { graph: g2 } = project.addPlane(3000, '2階', `f2${idSuffix}`);
+  g2.structureOverride = TRADITIONAL_WOOD_STRUCTURE;
+  addDefaultDimensionLines(g2);
+  const room2 = g2.addRoom(new Set([cellA]), 'A'); // 手前コマだけ
+  generateRoomWallsFromOutline(g2, room2);
 
-function allFieldsDumpForGraph(g) {
-  const snap = decode(serializeGraph(g));
-  const resolver = buildCLResolver(g);
-  const columns = snap.columns.map(c => normalizeStructEntity(c, resolver)).sort();
-  const beams = snap.beams.map(b => normalizeStructEntity(b, resolver)).sort();
-  const footings = snap.footings.map(f => normalizeStructEntity(f, resolver)).sort();
-  const slabs = snap.slabs.map(s => {
-    const parts = [];
-    for (const k of Object.keys(s).sort()) {
-      if (k === 'id' || k === 'extraKeys' || k === 'extraVals' || k === 'cells') continue;
-      parts.push(`${k}=${JSON.stringify(s[k])}`);
-    }
-    parts.push(`cells=${JSON.stringify([...s.cells].map(resolver.resolveComposite).sort())}`);
-    if (Array.isArray(s.extraKeys)) s.extraKeys.forEach((k, i) => parts.push(`extra.${k}=${s.extraVals[i]}`));
-    return parts.join('|');
-  }).sort();
-  const excludedColumnSlots  = snap.excludedColumnSlots.map(resolver.resolveComposite).sort();
-  const excludedBeamSlots    = snap.excludedBeamSlots.map(resolver.resolveComposite).sort();
-  const excludedFootingSlots = snap.excludedFootingSlots.map(resolver.resolveComposite).sort();
-  const excludedWallBeamAxes = snap.excludedWallBeamAxes.map(resolver.resolveComposite).sort();
-  const columnAxisOffsets = snap.columnAxisOffsetKeys
-    .map((clId, i) => `${resolver.resolveId(clId)}=${snap.columnAxisOffsetVals[i]}`)
-    .sort();
-  const fuseCLs = g.centerLines
-    .filter(cl => cl.discipline === Discipline.FUSE)
-    .map(cl => `${cl.centerLineType}:${Math.round(cl.effectiveValue)}:` +
-      `${cl.extentLo == null ? 'null' : Math.round(cl.extentLo)}..${cl.extentHi == null ? 'null' : Math.round(cl.extentHi)}`)
-    .sort();
-  const clEccentricities = snap.clEccentricities.map(e => normalizeStructEntity(e, resolver)).sort();
-  const structureOverride = snap.structureOverride ?? 'null';
-  const woodColumnWidthMm = snap.woodColumnWidthMm ?? 'null';
-  return {
-    columns, beams, footings, slabs, excludedColumnSlots, excludedBeamSlots, excludedFootingSlots, excludedWallBeamAxes,
-    columnAxisOffsets, fuseCLs, clEccentricities, structureOverride, woodColumnWidthMm,
-  };
-}
-
-async function dumpB1AllFloorsAllFields(project) {
-  const out = {};
-  for (const p of [...project.planes, project.roofPlane].filter(Boolean)) {
-    const g = p.id === project.activePlaneId ? project.activeGraph : await floorSwapManager.peek(p, project.structGraph);
-    out[p.name] = allFieldsDumpForGraph(g);
-  }
-  return out;
+  return { project, g1, g2, cellB };
 }
 
 // ==== 【B-5・失敗系】反映の最中に他経路が保持済み階を柱ごと書き換えても最終結果は一致する ====
@@ -324,6 +257,71 @@ test('【B-6・失敗系】reflectStructuralToOtherFloors: collect完了後・�
     assert.equal(fired, 2, '干渉が発火していない＝このテストは何も検証していない（ctx:null・ctx省略の両シナリオで1回ずつ発火するはず）');
     assert.deepEqual(owned, traditional,
       '壁を1枚追加する干渉が同じタイミングで入っても、ctx省略の最終結果はctx:null（従来経路）で同じ干渉を入れた場合と全フィールド一致する');
+  } finally {
+    onFloorsPutHook = null;
+  }
+});
+
+// ==== 【B-6・失敗系】反映の最中に他経路が保持済み階をフットプリント（部屋セル）ごと書き換えても
+// 最終結果は一致する ====
+// 上記2本（柱の削除・壁の追加）はどちらもwallSourceCache寄りの干渉——柱削除はcolumnAxisOffsets等
+// 経由の間接効果、壁追加はwallSourceCacheが直接キーにする壁区間そのものを変える。footprintCache
+// （wallGate.js createFootprintCache。鉛直連続性ゲート＝基準階＋直下の全階のフットプリントAND）の陳腐化は
+// このどちらでも検出できない——柱削除・壁追加はどちらも「壁は動かすが部屋（フットプリント）は動かさない」
+// 干渉のため、footprintCacheが古いインスタンスを誤って返しても、footprintの中身自体は変わっていない
+// （プローブの答えが同じ）ので結果が分かれない。
+// そこで干渉の中身を「保持済みの階（2階）のRoomへセルを1つ追加してフットプリントを広げる」に変える。
+// buildMinimalReflectFixtureFootprint（上記）が用意する「部屋の無いセル」（1階は最初から手前+奥の
+// 2コマを1部屋で覆うが、2階は手前コマだけ）を使う——1階には既に奥コマまで届く壁があるため、2階の
+// フットプリントが奥コマへ広がると鉛直連続性ゲートが変わり、1階の壁から導かれる通し梁のスパンが
+// 0..3640から0..7280へ伸びる（壁は1枚も増やしていない。scratchpad実験で確認済み・上記フィクスチャの
+// コメント参照）。fresh cache（正しく再走査）は広がったフットプリントを反映するが、stale cache
+// （古いインスタンスのフットプリント索引を誤って流用）は広がりを見落とす——両者の最終ダンプが必ず
+// 分かれるため、footprintCacheの陳腐化を検出できる。
+// タイミング・put回数の数え方は上記2本と同じ最小フィクスチャの2階建て・屋根なし・同じonFloorsPutフック
+// の規律（n===3＝2階のcollect書込み直後）を再利用する。
+async function runMinimalReflectScenarioFootprintInterference(state, idSuffix, ctxOption) {
+  const { project, g1, g2, cellB } = buildMinimalReflectFixtureFootprint(idSuffix);
+  const plane2 = project.planes[1];
+  state.phase = { n: 0, project, plane2, cellB, interferenceDone: null };
+  await saveFloor(project.planes[0].id, serializeGraph(g1));
+  await saveFloor(project.planes[1].id, serializeGraph(g2));
+  project.activePlaneId = project.planes[0].id; // 1階をアクティブにする（2階だけが反映対象）
+  await reflectStructuralToOtherFloors(project, ctxOption);
+  if (state.phase.interferenceDone) await state.phase.interferenceDone;
+  state.phase = null;
+  return dumpB1AllFloorsAllFields(project);
+}
+
+test('【B-6・失敗系】reflectStructuralToOtherFloors: collect完了後・採番適用前に他経路が保持済み階へ部屋（フットプリント）を1つ追加しても、古い保持を返さず最終結果がctx:null（従来経路）と全フィールド一致する', async () => {
+  resetFakeStores();
+  const state = { phase: null };
+  let fired = 0; // 干渉フックが実際に発火した回数（両シナリオで1回ずつ＝期待2）
+  onFloorsPutHook = () => {
+    const phase = state.phase;
+    if (!phase) return;
+    phase.n++;
+    if (phase.n === 3) {
+      fired++;
+      phase.interferenceDone = (async () => {
+        const other = await floorSwapManager.peek(phase.plane2, phase.project.structGraph);
+        // buildMinimalReflectFixtureFootprintが2階に作った唯一の部屋（名前'A'）へ、奥コマ（cellB）を
+        // 追加する——壁は一切増やさない（Room.cellsだけを拡張する。既存Roomのcellsを1セル拡張する版）。
+        const room = other.rooms.find(r => r.name === 'A');
+        runInAction(() => { room.addCell(phase.cellB); });
+        await saveFloor(phase.plane2.id, serializeGraph(other));
+      })();
+    }
+  };
+  try {
+    // ---- シナリオ1: ctx:null（従来経路）----
+    const traditional = await runMinimalReflectScenarioFootprintInterference(state, 'fn', null);
+    // ---- シナリオ2: ctx省略（自前生成）----
+    const owned = await runMinimalReflectScenarioFootprintInterference(state, 'fu', undefined);
+
+    assert.equal(fired, 2, '干渉が発火していない＝このテストは何も検証していない（ctx:null・ctx省略の両シナリオで1回ずつ発火するはず）');
+    assert.deepEqual(owned, traditional,
+      'フットプリントを広げる干渉が同じタイミングで入っても、ctx省略の最終結果はctx:null（従来経路）で同じ干渉を入れた場合と全フィールド一致する');
   } finally {
     onFloorsPutHook = null;
   }

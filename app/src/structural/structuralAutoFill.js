@@ -656,7 +656,8 @@ export function autoFillColumnAxisOffsets(graph, project, lowestGraph = graph, e
  *  @param {object} project
  *  @param {object} activeGraph
  *  @param {ReturnType<typeof import('./structuralResolveContext.js').createStructuralResolveContext>} [ctx] -
- *    解決コンテキスト（省略時はfloorSwapManager.peek直呼び・従来どおり。ステップB-3の下ごしらえのみ）。 */
+ *    解決コンテキスト（省略時は floorSwapManager.peek 直呼び。反映処理（structuralOrchestration.js
+ *    の境界処理）からは解決コンテキストが渡る）。 */
 export async function resolveLowestGraph(project, activeGraph, ctx = undefined) {
   const planes = project.planes; // elevation 昇順、屋根・検討を除く採用フロア
   const lowest = planes[0];

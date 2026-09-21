@@ -311,3 +311,18 @@ sillPackingThicknessMm`）。基礎天端＝土台下端−この値という関
 非在来グラフへ直接呼ぶと`kneeDropEndMembers`（非在来は空）との間に漏れが生じる。両関数の実際の
 呼び出し元が在来木造限定のため実害は無い）。設計意図は`.claude/structural-model.md`
 「腰壁・垂れ壁の自由端は端部下地材」節。
+
+## 反映処理 / 解決コンテキスト（構造）
+反映処理＝構造部材を他階へ反映・永続化する1回の処理（構造突入 `runStructuralModeSetup`・
+`reflectStructuralToOtherFloors`・`reflectStructuralAfterFinishExit`・`reflectStructuralAfterFloorAdd`）。
+解決コンテキスト（`structural/structuralResolveContext.js`）＝その1回の間だけ、各階のpeek済みgraphと
+壁区間・フットプリント索引を保持して使い回す明示的なオブジェクト（終了時に必ず破棄。モード中は保持
+しない）。従来経路＝コンテキストを渡さず毎回IDBから復元する経路。`ctx: null`の明示はコンテキスト
+経路と解が一致することを確かめるテストの対照用だが、製品コードにも意図的に残した非コンテキスト
+経路がある（構造モード中の柱寸・主構造変更など。次に挙げる節の「従来経路のままの箇所」）。
+設計意図は`.claude/structural-model.md`「反映処理の間だけ各階のpeek結果を使い回す」節。
+
+## 書込み世代（floors）
+`storage/floorWriteGeneration.js`が持つ、階ごとの書込み回数とストア全体の作り直し回数を合わせた
+不透明な値（メモリ上のみ・永続化しない。`===`での比較専用）。解決コンテキストが、保持している階のコピーが他者の書込みで古くなっていないかを
+判定するのに使う。`db.js`のfloorsを書く関数が書込み前に進める。

@@ -281,6 +281,13 @@ const G1_ALLOWLIST = {
       'どちらもあり得る）から実CLオブジェクトを引くid解決——種別を問わず全件から同一idを探すため' +
       '相手選択ではない。beamAxisCenterLinesはcore/centerLineKindPolicy.jsへ委譲済み（ステップ7、' +
       '2026-09-20）。' },
+  'structural/structuralOrchestrationFixtures.js': { count: 2, category: 'not-partner-selection',
+    reason: 'structuralOrchestration.test.js／structuralOrchestration.interference.test.jsが共有する' +
+      'テスト専用ダンプヘルパ（構造再計算の高速化・B-7是正・2026-09-21で*.test.jsから抽出）。' +
+      'buildCLResolverのg.centerLines.map(cl=>[cl.id,cl])はCL参照フィールド（raw id）を' +
+      '「型:丸めた実効値」へ解決するためのid→CL全件索引作り、allFieldsDumpForGraphのg.centerLines.' +
+      'filter(...)は梁芯CL（discipline:FUSE）だけをダンプへ含めるための全件列挙——いずれも相手選択では' +
+      'ない（*.test.js側にあった頃は本ガードの対象外だった同じコードで、挙動は変えていない）。' },
   'transform/centerLineExtend.js': { count: 1, category: 'not-partner-selection',
     reason: 'isEndpointAt。refCLが生きて存在するかのid解決（同一参照 or 同id）——相手選択ではない。' },
   'transform/followerGraph.js': { count: 3, category: 'not-partner-selection',
@@ -331,6 +338,10 @@ const G3_ALLOWLIST = {
 
 // ---- G4: 生の `discipline`／`lineType` を比較演算子つきで種別の代用に読む ----
 const G4_ALLOWLIST = {
+  'structural/structuralOrchestrationFixtures.js': { count: 1, category: 'not-partner-selection',
+    reason: 'allFieldsDumpForGraphのcl.discipline===Discipline.FUSE（G1のreason参照。梁芯CLだけを' +
+      'ダンプへ含めるための全件列挙条件で、相手選択ではない。*.test.js側にあった頃は本ガードの対象外' +
+      'だった同じコードで、挙動は変えていない）。' },
 };
 
 // variant: 'codeOnly'（文字列・正規表現の中身も空白化。G1/G2用）または

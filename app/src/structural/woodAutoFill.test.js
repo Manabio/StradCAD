@@ -3693,6 +3693,13 @@ test('【統合・ステップB-6】recomputeStructuralForGraph: ctxがあると
   assert.deepEqual(withOmitted.dump, baseline.dump, 'options省略はctx:null（従来経路）と同一の解になる（ctxのcacheを使ってもchanged/柱/梁は不変）');
   assert.notEqual(withOmitted.ctx.wallSourceCache.get(withOmitted.g2, false), undefined, '省略時はctx側のwallSourceCacheへ実際に書かれる');
   assert.notEqual(withOmitted.ctx.footprintCache.get(withOmitted.g2), undefined, '省略時はctx側のfootprintCacheへ実際に書かれる');
+
+  // (4) 片方だけ明示: wallSourceCacheだけnull・footprintCacheは省略——2つのoptionが独立に3通りの
+  // 場合分けを決めることを確認する（明示・省略が対で扱われて片方が引きずられる実装だと壊れる）。
+  const withMixed = await run((ctx) => ({ ctx, wallSourceCache: null }));
+  assert.deepEqual(withMixed.dump, baseline.dump, '片方だけ明示（wallSourceCache:null・footprintCache省略）でもctx:null（従来経路）と同一の解になる');
+  assert.equal(withMixed.ctx.wallSourceCache.get(withMixed.g2, false), undefined, 'wallSourceCache:null明示時はctx側のwallSourceCacheへ書かれない');
+  assert.notEqual(withMixed.ctx.footprintCache.get(withMixed.g2), undefined, 'footprintCache省略時はwallSourceCacheの指定に関わらずctx側のfootprintCacheへ実際に書かれる');
 });
 
 // ---- 【統合・ステップB-6】recomputeStructuralForGraph: 同じctx・同じgraphで2回呼ぶと、2回目は壁区間の

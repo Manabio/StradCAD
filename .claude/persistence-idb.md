@@ -20,6 +20,9 @@
 ## floorsは「セッション作業領域」、savedFloors+projectsは「保存ドキュメント」
 `deactivate`（階切替のスワップアウト）は明示保存の有無に関わらず`floors`へ無条件で書く——`floors`単独では「未保存の編集」と「保存済みの編集」を区別できない。区別を担うのは`savedFloors`（`commitFloorsToDocument`が明示保存時のみ確定コピー）で、起動のたびに`seedFloorsFromDocument`が`savedFloors`の内容で`floors`を必ず作り直す。これにより「前回セッションで階切替を経ただけの未保存編集」は起動時に消え、「明示保存した内容だけが次回起動で復元される」という一貫した意味論になる。
 
+## floorsストアを書く関数は「書込み世代」を進める
+`db.js`でfloorsストアへ書く関数（`saveFloor`・`deleteFloor`・`clearAllStores`・`seedFloorsFromDocument`）は、書込みの前（最初のawaitより前）に`floorWriteGeneration.js`の世代を進める。構造の解決コンテキスト（`.claude/structural-model.md`「反映処理の間だけ各階のpeek結果を使い回す」節）が、保持している階のコピーの鮮度をこの世代で判定するため——非アクティブ階を書く経路は多く（階段同期・偏芯同期・またぎundo・編集可能peek・`deactivate`）、経路の列挙ではなくストアへの書込み1点で検知する。floorsを書く関数を足すとき・`db.js`を通さずfloorsへ書く経路を作るときは、世代を進めないと「他者の書込み後に古いコピーを使う」静かな不整合になる。
+
 ## 文書ファイル（.stq）＝保存ドキュメントの読み戻しを包んだもの
 「保存」の`exportDocument`は、まず`saveToIDB`で保存ドキュメントを確定してから、その確定内容（savedFloors全件＋projectsの通り芯/plane一覧/敷地/調査・計画情報）をIDBから読み戻してJSONエンベロープ（`format:'stq-document'`、バイト列はbase64。調査・計画情報`info`のみ元がJSONのためオブジェクトのまま）に包む——**ファイルの中身＝次回起動で復元される内容**を常に一致させるための順序で、in-memoryから直接シリアライズしてはならない（非アクティブ階はスワップアウト済みでメモリに実体がない）。読み込み（`importDocument`）は検証を通してから全ストアを消去して書き込み、in-memoryへは反映せず`location.reload()`で通常のブート復元経路を再利用する（`resetAll`と同じ理由）。projectIdはファイルに保存せず現行タブのものを使い続ける。エンベロープをJSONにしたのは「読込み」の先頭バイト判別（`{`=JSON）を変えずに旧形式（単一グラフFlatBuffers・旧JSONスナップショット→アクティブ階のみ復元）と共存させるため。構築・パースは純モジュール`storage/documentFile.js`（node:testから単体import可能に保つ）。
 
