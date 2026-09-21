@@ -87,12 +87,25 @@ const SRC_ROOT = path.resolve(import.meta.dirname, '..'); // app/src
 
 // ---- ソース走査ユーティリティ ----
 
+// テスト専用ヘルパ（*.test.js から import されるだけで製品には載らない）。本ガードの対象は製品コード
+// なので走査から外す（ユーザー裁定2026-09-22。allowlist に載せると、フィクスチャを直すたびに件数の
+// 調整が要りラチェットの意味が薄れる）。**ファイル名パターンではなく明示列挙にする**——将来
+// 「…Fixtures.js」という名前の製品モジュールが現れても、黙って対象外にならないようにするため。
+// ここへ足すときは、そのファイルを製品コード（非 *.test.js）が import していないことを確かめること
+// （下の「テスト専用ヘルパ」テストが機械的に確かめる）。
+const TEST_ONLY_HELPERS = new Set([
+  'structural/memberTestFixtures.js',
+  'structural/structuralOrchestrationFixtures.js',
+]);
+
+const relFromSrc = (full) => path.relative(SRC_ROOT, full).split(path.sep).join('/');
+
 function listProductFiles(dir = SRC_ROOT, out = []) {
   for (const ent of fs.readdirSync(dir, { withFileTypes: true })) {
     const full = path.join(dir, ent.name);
     if (ent.isDirectory()) {
       listProductFiles(full, out);
-    } else if (/\.(js|jsx)$/.test(ent.name) && !ent.name.endsWith('.test.js')) {
+    } else if (/\.(js|jsx)$/.test(ent.name) && !ent.name.endsWith('.test.js') && !TEST_ONLY_HELPERS.has(relFromSrc(full))) {
       out.push(full);
     }
   }
@@ -281,13 +294,6 @@ const G1_ALLOWLIST = {
       'どちらもあり得る）から実CLオブジェクトを引くid解決——種別を問わず全件から同一idを探すため' +
       '相手選択ではない。beamAxisCenterLinesはcore/centerLineKindPolicy.jsへ委譲済み（ステップ7、' +
       '2026-09-20）。' },
-  'structural/structuralOrchestrationFixtures.js': { count: 2, category: 'not-partner-selection',
-    reason: 'structuralOrchestration.test.js／structuralOrchestration.interference.test.jsが共有する' +
-      'テスト専用ダンプヘルパ（構造再計算の高速化・B-7是正・2026-09-21で*.test.jsから抽出）。' +
-      'buildCLResolverのg.centerLines.map(cl=>[cl.id,cl])はCL参照フィールド（raw id）を' +
-      '「型:丸めた実効値」へ解決するためのid→CL全件索引作り、allFieldsDumpForGraphのg.centerLines.' +
-      'filter(...)は梁芯CL（discipline:FUSE）だけをダンプへ含めるための全件列挙——いずれも相手選択では' +
-      'ない（*.test.js側にあった頃は本ガードの対象外だった同じコードで、挙動は変えていない）。' },
   'transform/centerLineExtend.js': { count: 1, category: 'not-partner-selection',
     reason: 'isEndpointAt。refCLが生きて存在するかのid解決（同一参照 or 同id）——相手選択ではない。' },
   'transform/followerGraph.js': { count: 3, category: 'not-partner-selection',
@@ -338,10 +344,6 @@ const G3_ALLOWLIST = {
 
 // ---- G4: 生の `discipline`／`lineType` を比較演算子つきで種別の代用に読む ----
 const G4_ALLOWLIST = {
-  'structural/structuralOrchestrationFixtures.js': { count: 1, category: 'not-partner-selection',
-    reason: 'allFieldsDumpForGraphのcl.discipline===Discipline.FUSE（G1のreason参照。梁芯CLだけを' +
-      'ダンプへ含めるための全件列挙条件で、相手選択ではない。*.test.js側にあった頃は本ガードの対象外' +
-      'だった同じコードで、挙動は変えていない）。' },
 };
 
 // variant: 'codeOnly'（文字列・正規表現の中身も空白化。G1/G2用）または
@@ -449,5 +451,17 @@ test('【ガード自己診断】allowlist の全エントリは category が既
       assert.ok(entry.reason && entry.reason.length > 0, `${name} ${rel}: reasonが空`);
       assert.ok(entry.count > 0, `${name} ${rel}: countは1以上のはず（0件ならallowlistから削除する）`);
     }
+  }
+});
+
+// 走査から外した「テスト専用ヘルパ」が本当にテスト専用であること——製品コードが import していたら、
+// そのファイルは製品に載るので本ガードの対象に戻さなければならない（除外リストが抜け穴にならないための固定）。
+test('【ガード自己診断】TEST_ONLY_HELPERS は実在し、製品コード（非 *.test.js）から import されていない', () => {
+  const productFiles = listProductFiles();
+  for (const rel of TEST_ONLY_HELPERS) {
+    assert.ok(fs.existsSync(path.join(SRC_ROOT, rel)), `${rel}: 除外リストにあるが実在しない（リネーム・削除したらリストも直す）`);
+    const base = path.basename(rel, '.js');
+    const importers = productFiles.filter(f => new RegExp(`from\\s+['"][^'"]*/${base}(\\.js)?['"]`).test(fs.readFileSync(f, 'utf8')));
+    assert.deepEqual(importers.map(relFromSrc), [], `${rel}: 製品コードが import している＝テスト専用ではない。除外リストから外して本ガードの対象へ戻すこと`);
   }
 });
