@@ -26,8 +26,10 @@
  * 旧裁定「非アクティブ階のgraphは常に1階分だけ生かす」（structuralOrchestration.js
  * reflectStructuralToOtherFloors・recomputeInactiveStructuralのJSDoc参照）は、本コンテキストの
  * 導入により「1回の境界処理の間は複数階分のpeek結果を保持してよい」へ改める（2026-09-21）。
- * 生成・注入するのは structuralOrchestration.js の境界処理（runStructuralModeSetup。突入1回＝
- * コンテキスト1個）。
+ * 生成・注入するのは structuralOrchestration.js の境界処理（runStructuralModeSetup・
+ * reflectStructuralToOtherFloors・reflectStructuralAfterFinishExit・reflectStructuralAfterFloorAdd。
+ * withResolveContext の3値規約＝省略なら自前生成して破棄・明示なら借り物・nullなら従来経路）。
+ * 1回の反映処理につきコンテキスト1個（突入は内側の反映へ自分のコンテキストを渡す）。
  *
  * 世代検知の設計（graphFor）: 保持エントリの gen と現在の世代が一致すればヒット。不一致（無し／
  * 他者が書いた）ならpeekし直す。peekは非同期のため、await中に他者が書く窓が生じうる——

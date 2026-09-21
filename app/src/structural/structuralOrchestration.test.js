@@ -13,6 +13,7 @@ import { undoManager } from '../undoManager.js';
 import { floorSwapManager } from '../storage/FloorSwapManager.js';
 import { saveFloor } from '../storage/db.js';
 import { serializeGraph, restoreGraph } from '../graphSnapshot.js';
+import { decode } from '../schema/graphFbs.js';
 import { generateRoomWallsFromOutline } from '../finish/wallGeneration.js';
 import { TRADITIONAL_WOOD_STRUCTURE, rulesFor } from './structureRules.js';
 import { autoFillWoodColumns } from './woodAutoFill.js';
@@ -25,7 +26,7 @@ import { findSectionEntry } from './sectionCatalog.js';
 import {
   recomputeStructuralComposition, reflectStructuralAfterFinishExit, reflectStructuralToOtherFloors,
   repeatReflectPassUntilConverged, MAX_REFLECT_PASSES, columnSetSignature, runStructuralModeSetup,
-  recomputeActiveStructural,
+  recomputeActiveStructural, reflectStructuralAfterFloorAdd,
 } from './structuralOrchestration.js';
 import { figureBindingManager } from '../figure/FigureBindingManager.js';
 import { createStructuralResolveContext } from './structuralResolveContext.js';
@@ -47,13 +48,20 @@ function makeSinglePlaneProject() {
 // 追加せず自前で最小限のシムを書けば足りると判断し直した（storage/db.js openDB/saveFloor/loadFloorが
 // 使うAPIだけを模す。indexedDB.open→onupgradeneeded→onsuccessの非同期チェーンをqueueMicrotaskで
 // 再現するだけの薄いスタブで、実IndexedDBの仕様には準拠しない——このテストファイルの外では使わない）。
-function withFakeIndexedDB(fn) {
+// onFloorsPut（省略可。Minor 2是正・2026-09-21）: 'floors'ストアへのput呼び出しのたびに同期で呼ばれる
+// フック（value = {planeId, bytes, ...}）。saveFloor直呼び・ctx経由（saveAndNote）のどちらでも最終的に
+// この同じputへ到達するため、「floors書込みが何回目か」という、ctx有無に依存しない（読み取り側の
+// peekキャッシュに左右されない）共通の観測点として使う——floorSwapManager.peekのフックは、ctx経路では
+// キャッシュヒット時に物理peekが起きず発火しないため使えない（QA指摘。書込みは changed フラグ由来で
+// ctxの有無に関係なく同じ回数・同じ順序で起こる）。既定（省略時）は何もしない——挙動不変。
+function withFakeIndexedDB(fn, { onFloorsPut } = {}) {
   class FakeRequest { constructor() { this.onsuccess = null; this.onerror = null; } }
   class FakeStore {
-    constructor() { this.data = new Map(); }
+    constructor(hook) { this.data = new Map(); this.hook = hook; }
     put(value) {
       const req = new FakeRequest();
       this.data.set(value.planeId ?? value.projectId, value);
+      this.hook?.(value);
       queueMicrotask(() => req.onsuccess?.({ target: { result: undefined } }));
       return req;
     }
@@ -67,7 +75,9 @@ function withFakeIndexedDB(fn) {
     constructor() {
       this.stores = new Map();
       this.objectStoreNames = { contains: (n) => this.stores.has(n) };
-      for (const name of ['floors', 'projects', 'savedFloors']) this.stores.set(name, new FakeStore());
+      for (const name of ['floors', 'projects', 'savedFloors']) {
+        this.stores.set(name, new FakeStore(name === 'floors' ? onFloorsPut : undefined));
+      }
     }
     transaction(name) { const store = this.stores.get(name); return { objectStore: () => store }; }
   }
@@ -953,8 +963,9 @@ test('【不変条件・実機再々QA指摘1】structuralOrchestration.js: refl
   // 「setBeamColumnWidthMm(...) の呼び出し」→「collectFloorGroups(project.activeGraph, project)」の順に
   // 現れることを確認する（間に他の分岐が挟まっても良いが、setBeamColumnWidthMmが必ず先に実行される
   // ソース上の位置関係を固定する）。
-  // ステップB-3でctx（解決コンテキスト。省略可・既定undefined）が2番目の引数として加わった。
-  const fnMatch = /export async function reflectStructuralToOtherFloors\(project, ctx = undefined\) \{([\s\S]*?)\r?\n\}/.exec(src);
+  // ステップB-5でctx引数はctxArgへ改名され、本体全体がwithResolveContext(ctxArg, async (ctx) => {...})の
+  // コールバックへ包まれた（省略時に自分でコンテキストを生成してdisposeするため）。
+  const fnMatch = /export async function reflectStructuralToOtherFloors\(project, ctxArg = undefined\) \{\r?\n\s*return withResolveContext\(ctxArg, async \(ctx\) => \{([\s\S]*?)\r?\n\s*\}\);\r?\n\}/.exec(src);
   assert.ok(fnMatch, 'reflectStructuralToOtherFloors関数本体が見つからない');
   const body = fnMatch[1];
   const setIdx = body.search(/project\.activeGraph\.setBeamColumnWidthMm\(beamColumnWidthMm\(project\.activeGraph, belowForActive, project\)\)/);
@@ -975,8 +986,9 @@ test('【不変条件・B-4】structuralOrchestration.js: reflectStructuralToOth
   const url = await import('node:url');
   const here = path.dirname(url.fileURLToPath(import.meta.url));
   const src = stripComments(fs.readFileSync(path.join(here, 'structuralOrchestration.js'), 'utf8'));
-  // ステップB-3でctx（解決コンテキスト。省略可・既定undefined）が2番目の引数として加わった。
-  const fnMatch = /export async function reflectStructuralToOtherFloors\(project, ctx = undefined\) \{([\s\S]*?)\r?\n\}/.exec(src);
+  // ステップB-5でctx引数はctxArgへ改名され、本体全体がwithResolveContext(ctxArg, async (ctx) => {...})の
+  // コールバックへ包まれた（省略時に自分でコンテキストを生成してdisposeするため）。
+  const fnMatch = /export async function reflectStructuralToOtherFloors\(project, ctxArg = undefined\) \{\r?\n\s*return withResolveContext\(ctxArg, async \(ctx\) => \{([\s\S]*?)\r?\n\s*\}\);\r?\n\}/.exec(src);
   assert.ok(fnMatch, 'reflectStructuralToOtherFloors関数本体が見つからない');
   const body = fnMatch[1];
   assert.ok(/for \(const plane of \[\.\.\.project\.planes\]\.reverse\(\)\) \{[\s\S]*?recomputeInactiveStructural\(plane, project, ctx\)/.test(body),
@@ -993,8 +1005,9 @@ test('【不変条件・ステップ7】structuralOrchestration.js: reflectStruc
   const url = await import('node:url');
   const here = path.dirname(url.fileURLToPath(import.meta.url));
   const src = stripComments(fs.readFileSync(path.join(here, 'structuralOrchestration.js'), 'utf8'));
-  // ステップB-3でctx（解決コンテキスト。省略可・既定undefined）が2番目の引数として加わった。
-  const fnMatch = /export async function reflectStructuralToOtherFloors\(project, ctx = undefined\) \{([\s\S]*?)\r?\n\}/.exec(src);
+  // ステップB-5でctx引数はctxArgへ改名され、本体全体がwithResolveContext(ctxArg, async (ctx) => {...})の
+  // コールバックへ包まれた（省略時に自分でコンテキストを生成してdisposeするため）。
+  const fnMatch = /export async function reflectStructuralToOtherFloors\(project, ctxArg = undefined\) \{\r?\n\s*return withResolveContext\(ctxArg, async \(ctx\) => \{([\s\S]*?)\r?\n\s*\}\);\r?\n\}/.exec(src);
   assert.ok(fnMatch, 'reflectStructuralToOtherFloors関数本体が見つからない');
   const body = fnMatch[1];
   assert.ok(/await reflectRoofPlane\(project, ctx\);[\s\S]*?for \(const plane of \[\.\.\.project\.planes\]\.reverse\(\)\)/.test(body),
@@ -1080,11 +1093,16 @@ test('【統合・収束】reflectStructuralToOtherFloors: 在来木造の複数
     // 実際のreflectStructuralToOtherFloors／reflectRoofPlane／recomputeInactiveStructuralが正しく配線され、
     // 屋根込みで例外なく完全収束することをエンドツーエンドで確認する（peek回数は複数パスが実際に
     // 走ったことの参考値。厳密な変異検知はしない）。
+    // 【B-5是正・2026-09-21】ctx: null を明示し「コンテキストを使わない従来経路」に固定する——
+    // 省略（自前生成）だと1回の反映処理の間に同じ階のpeek結果が使い回されるため、この参考値
+    // （複数階×複数パス分のpeekが実際に発生したこと）の指標にならない（B-4の同型是正と同じ理由。
+    // 上のコメント参照）。コンテキスト経路のpeek削減はstructuralResolveContext.test.js（B-5節）の
+    // 専用テストで別途検証する。
     let peekCount = 0;
     const originalPeek = floorSwapManager.peek.bind(floorSwapManager);
     floorSwapManager.peek = async (...args) => { peekCount++; return originalPeek(...args); };
     try {
-      await reflectStructuralToOtherFloors(project); // 外部からの呼び出しは1回だけ
+      await reflectStructuralToOtherFloors(project, null); // 外部からの呼び出しは1回だけ
       assert.ok(peekCount > 6, `参考値: 内部で複数階×複数パス分のpeekが発生している（実測peek回数=${peekCount}）`);
 
       // 実体階・屋根とも、非アクティブ階はrecomputeが本番同型peekの一時graphに対して行われ
@@ -1233,7 +1251,11 @@ test('【統合】reflectStructuralToOtherFloors: 非在来（S造）は各非�
       return project.graphMap.get(plane.id) ?? null;
     };
     try {
-      await reflectStructuralToOtherFloors(project);
+      // 【B-5是正・2026-09-21】ctx: null を明示し「コンテキストを使わない従来経路」に固定する——
+      // 省略（自前生成）だと同じ階への複数箇所からのpeekがコンテキスト経由で使い回され、下記の
+      // 手動導出した内訳（実peek回数）の前提が崩れる（B-4の同型是正と同じ理由）。コンテキスト経路の
+      // peek削減はstructuralResolveContext.test.js（B-5節）の専用テストで別途検証する。
+      await reflectStructuralToOtherFloors(project, null);
       // 実測（1内部パスのときの内訳。手動導出・再発検知用）: p1（最下階）=3
       // （自身のrecomputeInactiveStructural由来1 + p2のbuildStructuralWallGate/resolveLowestGraphが
       // 下階として参照する分2） + 採番の適用フェーズ（applyMemberNumbersToFloor。反映パスの繰り返しとは
@@ -1877,22 +1899,164 @@ test('recomputeStructuralComposition: 下階の柱集合が変わらない（2�
 // recomputeInactiveStructural・applyMemberNumbersToFloor・applyMemberNumbersToRoof・
 // recomputeStructuralComposition内のbelow/lowest peek）を1回の突入で踏む。
 
-// dumpB1AllFloorsは柱・梁の位置のみ（【統合・B-1】の収束確認用）。B-4のA/B等価は「採番まで含めて
-// 変わらない」ことが条件のため、sectionDefId・memberNoも含めた別ダンプを使う
-// （structPerfEntry.mjsのdump()と同じ規約）。
-async function dumpB1AllFloorsFull(project) {
+// dumpB1AllFloorsは柱・梁の位置のみ（【統合・B-1】の収束確認用）。
+
+// ==== 全フィールド意味ダンプ（コーディネーター差し戻し・2026-09-21。Minor 1是正で追記）====
+// 旧dumpB1AllFloorsFull（柱・梁の位置/sectionDefId/memberNoのみ）ではA/B等価の検出力が不足するため、
+// decode(serializeGraph(g))が返す「保存されたバイト列を復元した」全フィールドをそのまま比較する版へ
+// 差し替える（旧関数は全呼び出し元をこちらへ置き換えたため削除済み）。
+// 【Minor 1是正】「decode()そのもの——手で列挙し直さないため漏れない」は事実と異なる（decode()は
+// walls/rooms/openings/dimensionLines等、構造再計算（B-5が対象にするreflectStructuralToOtherFloors
+// 等の経路）が一切書かないフィールドも多数含む——これらまで比較対象にすると無関係な差分でA/Bテストが
+// 揺れる）。実際にはdecode()の返すキーのうち、構造再計算が書きうるグループを手で列挙している
+// （columns/beams/footings/slabs・除外集合4種・columnAxisOffsets・centerLines(FUSE discipline限定)・
+// clEccentricities・structureOverride・woodColumnWidthMmの計13グループ）。
+// id・配列順は除く。ただしCL参照（verticalCLId/horizontalCLId/axisCLId/clStartId/clEndId/clId・除外集合4種の
+// キー文字列に埋め込まれたCL id・columnAxisOffsetsのキー＝CL id自体・slabs.cellsの複合キー）は、
+// buildB1Fixture()を呼ぶたびcrypto.randomUUID()で毎回変わる生idのため、raw idのまま比較すると
+// （同一内容でも）常に不一致になる——「型:丸めた実効値」（resolveCL）へ解決してから比較する
+// （resolveCLは対象graphのg.centerLines＝floor-local CL＋project.structGraphのマージ済みライブCLから
+// 解決する。scratchpad reflectAB.mjsのstrip/norm方式は「同一ドキュメントを2回ロードするためid自体が
+// 一致する」前提に依存しており、ここ（buildB1Fixture()を2回呼び毎回新しいidを振る）では使えない
+// ため、CL参照だけはid比較ではなく値比較へ切り替える点が異なる）。梁芯CL（discipline:FUSE。壁由来の
+// 通り芯）自体はtype・effectiveValue・extentの多重集合として別途含める（除外集合・columnAxisOffsetsの
+// 「解決先」であると同時に、生成漏れ・extentずれを直接検出する対象でもあるため）。
+const UUID_RE_GLOBAL = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
+
+// CL参照フィールド（raw id→ `type:値` へ解決する対象キー）。id自体は意味を持たないため、
+// 解決できたCLの「型+丸めた実効値」に置き換えて比較する（解決できなければ`?${id}`のまま残し、
+// 参照切れ自体を検出できるようにする）。clIdはclEccentricitiesのCL参照（Minor 1是正で追加）。
+const CL_REF_FIELD_KEYS = new Set(['verticalCLId', 'horizontalCLId', 'axisCLId', 'clStartId', 'clEndId', 'clId']);
+
+function buildCLResolver(g) {
+  const clById = new Map(g.centerLines.map(cl => [cl.id, cl]));
+  const resolveId = (id) => {
+    if (id == null) return 'null';
+    const cl = clById.get(id);
+    return cl ? `${cl.centerLineType}:${Math.round(cl.effectiveValue)}` : `?${id}`;
+  };
+  // 除外集合4種のキー文字列（columnSlotKey `${vCL.id}:${hCL.id}`／spanKey `${axisCL.id}:${clA.id}:${clB.id}`
+  // （sillは`sill:`前置）／slabs.cellsの複合キー）に埋め込まれたCL id（UUID形式）だけを置換する
+  // （jamb:${openingId}:${side}・off:${axisX}:${axisY}・wallBeamAxisExcludeKey `${'X'|'Y'}:${coord}` は
+  // CL idを含まないためそのまま残る——openingIdがUUID形式でも本フィクスチャに建具は無いため無害）。
+  const resolveComposite = (s) => s.replace(UUID_RE_GLOBAL, (id) => {
+    const cl = clById.get(id);
+    return cl ? `${cl.centerLineType}:${Math.round(cl.effectiveValue)}` : id;
+  });
+  return { resolveId, resolveComposite };
+}
+
+// 柱・梁・基礎の1件をid非依存の文字列へ正規化する（decode済みの生オブジェクトを渡す）。
+// extraKeys/extraVals（packExtraFields方式）はkey=val文字列へ展開して比較する。
+function normalizeStructEntity(v, resolver) {
+  const parts = [];
+  for (const k of Object.keys(v).sort()) {
+    if (k === 'id' || k === 'extraKeys' || k === 'extraVals') continue;
+    if (CL_REF_FIELD_KEYS.has(k)) {
+      parts.push(`${k}=${v[k] == null ? 'null' : resolver.resolveId(v[k])}`);
+    } else {
+      parts.push(`${k}=${JSON.stringify(v[k])}`);
+    }
+  }
+  if (Array.isArray(v.extraKeys)) {
+    v.extraKeys.forEach((k, i) => parts.push(`extra.${k}=${v.extraVals[i]}`));
+  }
+  return parts.join('|');
+}
+
+// 1階分のグラフを全フィールド意味ダンプへ変換する（decode(serializeGraph(g)) + CL参照の値解決）。
+function allFieldsDumpForGraph(g) {
+  const snap = decode(serializeGraph(g));
+  const resolver = buildCLResolver(g);
+  const columns = snap.columns.map(c => normalizeStructEntity(c, resolver)).sort();
+  const beams = snap.beams.map(b => normalizeStructEntity(b, resolver)).sort();
+  const footings = snap.footings.map(f => normalizeStructEntity(f, resolver)).sort();
+  const slabs = snap.slabs.map(s => {
+    const parts = [];
+    for (const k of Object.keys(s).sort()) {
+      if (k === 'id' || k === 'extraKeys' || k === 'extraVals' || k === 'cells') continue;
+      parts.push(`${k}=${JSON.stringify(s[k])}`);
+    }
+    parts.push(`cells=${JSON.stringify([...s.cells].map(resolver.resolveComposite).sort())}`);
+    if (Array.isArray(s.extraKeys)) s.extraKeys.forEach((k, i) => parts.push(`extra.${k}=${s.extraVals[i]}`));
+    return parts.join('|');
+  }).sort();
+  const excludedColumnSlots  = snap.excludedColumnSlots.map(resolver.resolveComposite).sort();
+  const excludedBeamSlots    = snap.excludedBeamSlots.map(resolver.resolveComposite).sort();
+  const excludedFootingSlots = snap.excludedFootingSlots.map(resolver.resolveComposite).sort();
+  const excludedWallBeamAxes = snap.excludedWallBeamAxes.map(resolver.resolveComposite).sort();
+  const columnAxisOffsets = snap.columnAxisOffsetKeys
+    .map((clId, i) => `${resolver.resolveId(clId)}=${snap.columnAxisOffsetVals[i]}`)
+    .sort();
+  // 梁芯CL（discipline:FUSE）自体。ライブのg.centerLinesから直接取る——decode済みcenterLines.valueは
+  // refId連鎖を解決していない生の値のため、effectiveValue（連鎖解決済み）が要るここではライブ値を使う。
+  const fuseCLs = g.centerLines
+    .filter(cl => cl.discipline === Discipline.FUSE)
+    .map(cl => `${cl.centerLineType}:${Math.round(cl.effectiveValue)}:` +
+      `${cl.extentLo == null ? 'null' : Math.round(cl.extentLo)}..${cl.extentHi == null ? 'null' : Math.round(cl.extentHi)}`)
+    .sort();
+  // 【Minor 1是正・2026-09-21】clEccentricities（CL偏心。clIdはCL参照のためnormalizeStructEntity経由で
+  // 値解決する）・structureOverride・woodColumnWidthMm（ともにCL参照を含まないスカラー）を追加する。
+  const clEccentricities = snap.clEccentricities.map(e => normalizeStructEntity(e, resolver)).sort();
+  const structureOverride = snap.structureOverride ?? 'null';
+  const woodColumnWidthMm = snap.woodColumnWidthMm ?? 'null';
+  return {
+    columns, beams, footings, slabs, excludedColumnSlots, excludedBeamSlots, excludedFootingSlots, excludedWallBeamAxes,
+    columnAxisOffsets, fuseCLs, clEccentricities, structureOverride, woodColumnWidthMm,
+  };
+}
+
+async function dumpB1AllFloorsAllFields(project) {
   const out = {};
   for (const p of [...project.planes, project.roofPlane].filter(Boolean)) {
     const g = p.id === project.activePlaneId ? project.activeGraph : await floorSwapManager.peek(p, project.structGraph);
-    out[p.name] = {
-      columns: g.columns.map(c => `${c.role}:${Math.round(c.x)},${Math.round(c.y)}:${c.sectionDefId}:${c.memberNo ?? ''}`).sort(),
-      beams: g.beams.map(b => `${b.role}:${b.beamType ?? ''}:${b.isVertical}:${Math.round(b.axisValue)}:` +
-        `${Math.round(Math.min(b.clStart.effectiveValue, b.clEnd.effectiveValue))}..${Math.round(Math.max(b.clStart.effectiveValue, b.clEnd.effectiveValue))}:` +
-        `${b.sectionDefId}:${b.memberNo ?? ''}`).sort(),
-    };
+    out[p.name] = allFieldsDumpForGraph(g);
   }
   return out;
 }
+
+// ---- 検出力の確認（コーディネーター差し戻し 1）: dumpB1AllFloorsAllFields が
+//      柱・梁のnumberGroupId・除外集合の差を実際に拾うことを直接確かめる（1回きり）。
+//      保存済みグラフの柱1本を直接書き換えてから再保存・再ダンプし、変更前後で不一致になることを
+//      確認する——旧dumpB1AllFloorsFull（位置/sectionDefId/memberNoのみ）ならこの種の差は拾えない。
+test('【全フィールド化・検出力確認】dumpB1AllFloorsAllFields: 柱のnumberGroupIdの変更・除外集合への追加を不一致として検出する', async () => {
+  await withFakeIndexedDB(async () => {
+    const { project } = buildB1Fixture();
+    await saveB1InitialFloors(project);
+    // アクティブ=1階にする（対象は非アクティブ階の2階）——dumpB1AllFloorsAllFieldsはアクティブ階だけ
+    // project.activeGraph（生きたメモリ上のインスタンス）を直接読むため、対象をアクティブ階にすると
+    // floorSwapManager.peek経由で保存した変更が反映されない（活アクティブ階以外＝常にpeekで読む階を
+    // 対象にする）。
+    project.activePlaneId = project.planes.find(p => p.name === '1階').id;
+    try {
+      await runStructuralModeSetup(project.activeGraph, project, { ctx: null });
+      const before = await dumpB1AllFloorsAllFields(project);
+
+      // (a) 2階の柱1本のnumberGroupIdを書き換えてから再ダンプ→不一致になることを確認する。
+      const plane2 = project.planes.find(p => p.name === '2階');
+      const g2 = await floorSwapManager.peek(plane2, project.structGraph);
+      const victim = g2.columns[0];
+      assert.ok(victim, '前提: 2階に柱が1本以上ある');
+      runInAction(() => victim.setNumberGroupId('DETECT-TEST-GROUP'));
+      await saveFloor(plane2.id, serializeGraph(g2));
+      const afterNumberGroupChange = await dumpB1AllFloorsAllFields(project);
+      assert.notDeepEqual(afterNumberGroupChange, before,
+        'numberGroupIdの変更が全フィールドダンプの不一致として検出される');
+
+      // (b) (a)を元に戻し、代わりに除外集合へ1件追加してから再ダンプ→不一致になることを確認する。
+      runInAction(() => victim.setNumberGroupId(null));
+      runInAction(() => g2.excludedColumnSlots.add('DETECT-TEST-KEY'));
+      await saveFloor(plane2.id, serializeGraph(g2));
+      const afterExclusionAdd = await dumpB1AllFloorsAllFields(project);
+      assert.notDeepEqual(afterExclusionAdd, before,
+        '除外集合（excludedColumnSlots）への追加が全フィールドダンプの不一致として検出される');
+      assert.notDeepEqual(afterExclusionAdd, afterNumberGroupChange,
+        '前提: (a)と(b)は別の差分である（(a)を元に戻し(b)だけを入れたダンプが(a)のダンプと一致しない）');
+    } finally {
+      await figureBindingManager.deactivate();
+    }
+  });
+});
 
 // StructuralResolveContext.prototype.dispose をスパイする。createStructuralResolveContextは
 // 関数エクスポート（ESMのimportバインディングは書換不可）のため差し替えられないが、全インスタンスが
@@ -1903,6 +2067,9 @@ function spyOnContextDispose() {
   const probe = createStructuralResolveContext();
   const proto = Object.getPrototypeOf(probe);
   const original = proto.dispose;
+  // probe自身を破棄する——スパイ（proto.dispose差し替え）を設置する前に呼ぶことで、この呼び出しは
+  // callsに数えられない（前回QA指摘Nit4: probeが未破棄のまま残っていた）。
+  probe.dispose();
   const calls = [];
   proto.dispose = function (...args) {
     calls.push(this);
@@ -1911,6 +2078,8 @@ function spyOnContextDispose() {
   return { calls, restore: () => { proto.dispose = original; } };
 }
 
+// 【全フィールド化・2026-09-21】A/B等価の検出力を上げるため、柱・梁・memberNoのみのdumpB1AllFloorsFullから
+// 全フィールド版（dumpB1AllFloorsAllFields）へ切り替える（コーディネーター差し戻し 1）。
 async function runB1(label, ctxOption) {
   return withFakeIndexedDB(async () => {
     const { project, roofPlane } = buildB1Fixture();
@@ -1919,20 +2088,20 @@ async function runB1(label, ctxOption) {
     project.activePlaneId = activePlane.id;
     try {
       await runStructuralModeSetup(project.activeGraph, project, ctxOption === undefined ? {} : { ctx: ctxOption });
-      return await dumpB1AllFloorsFull(project);
+      return await dumpB1AllFloorsAllFields(project);
     } finally {
       await figureBindingManager.deactivate();
     }
   });
 }
 
-// ---- 1. A/B等価: ctx省略（生成）とctx:null（従来経路）で全階の柱・梁・memberNoが完全一致する ----
+// ---- 1. A/B等価: ctx省略（生成）とctx:null（従来経路）で全階の全フィールドが完全一致する ----
 for (const label of ['1階', '2階', '3階', '屋根']) {
-  test(`【B-4・A/B等価】runStructuralModeSetup: アクティブ=${label}でctx省略とctx:nullが同じ結果になる（柱・梁・memberNo一致）`, async () => {
+  test(`【B-4・A/B等価】runStructuralModeSetup: アクティブ=${label}でctx省略とctx:nullが同じ結果になる（柱・梁・footings/slabs・除外集合・columnAxisOffsets・梁芯CLを含む全フィールド一致）`, async () => {
     const traditional = await runB1(label, null);
     const owned = await runB1(label, undefined);
     assert.deepEqual(owned, traditional,
-      `アクティブ=${label}: ctx省略（コンテキスト生成）とctx:null（従来経路）で柱・梁・memberNoのダンプが一致する`);
+      `アクティブ=${label}: ctx省略（コンテキスト生成）とctx:null（従来経路）で全フィールドのダンプが一致する`);
   });
 }
 
@@ -2004,51 +2173,282 @@ test('【B-4・失敗系】runStructuralModeSetup: 例外が呼び出し元へ�
   });
 });
 
-// ---- 4. 失敗系・他者の書込み: 突入の最中に別経路のsaveFloorで保持済みの非アクティブ階が書き換わっても
-//         古い保持を返さず読み直し、最終結果は干渉なしの場合と同じになる ----
-test('【B-4・失敗系】runStructuralModeSetup: 突入の最中に他経路のsaveFloorで保持済みの非アクティブ階が書き換わっても、古い保持を返さず読み直し、結果は干渉なしの場合と同じになる', async () => {
-  // ベースライン（干渉なし）: あとで比較する。
-  const baselineDump = await runB1('1階', undefined);
+// ---- 4. 失敗系・他者の書込み: 突入の最中に別経路のsaveFloorで保持済みの非アクティブ階が内容ごと
+//         書き換わっても、古い保持を返さず読み直し、最終結果は「同じ干渉をctx:null（従来経路）で
+//         入れた場合」と一致する ----
+// 【コーディネーター差し戻し 2・2026-09-21】旧実装は干渉側が3階を「同一内容のまま」再保存していたため、
+// 最終ダンプの一致では新旧（古い保持の内容 vs 読み直した後の内容）を判別できず、検出点が
+// ctx.stats.invalidated のカウンタだけだった。干渉側で内容を変える（3階の柱を1本、excludedColumnSlots
+// に記録される形で削除する——removeColumnは除外集合へ記録するため次回以降の自動補完で復活しない
+// 「再計算で復活しない変更」）。ベースラインも「干渉なし」ではなく「同じ干渉をctx:null（従来経路）で
+// 入れた場合」に変える——ctx:nullは保持を持たないため常に最新を読み、干渉のタイミング（reflectの
+// どの時点で発生するか）に依存せず収束後の結果が一意に決まる、という前提のもとでの対照群にする。
+function makeInterferingPeek(project, originalPeek) {
+  const plane2 = project.planes.find(p => p.name === '2階');
+  const plane3 = project.planes.find(p => p.name === '3階');
+  let interfered = false;
+  return async (plane, structGraph) => {
+    if (plane.id === plane2.id && !interfered) {
+      interfered = true;
+      // 別経路（このctxを介さない）による3階の書換え——柱を1本削除する（同一内容の再保存ではなく
+      // 内容そのものを変える。removeColumnがexcludedColumnSlotsへ記録するため、直後の自動補完で
+      // 復活しない）。
+      const other = await originalPeek(plane3, project.structGraph);
+      const victim = other.columns[0];
+      if (victim) runInAction(() => other.removeColumn(victim.id));
+      await saveFloor(plane3.id, serializeGraph(other));
+    }
+    return originalPeek(plane, structGraph);
+  };
+}
 
-  await withFakeIndexedDB(async () => {
+async function runB1WithInterference(ctxOption) {
+  return withFakeIndexedDB(async () => {
     const { project } = buildB1Fixture();
     await saveB1InitialFloors(project);
     const activePlane = project.planes.find(p => p.name === '1階');
     project.activePlaneId = activePlane.id;
-    // 降順の反映ループ（reflectStructuralToOtherFloors）はroof→3階→2階の順にcollectする（activeは1階）。
-    // 3階のcollectでctxに保持させたあと、2階のcollect中（floorSwapManager.peek呼び出し時）に、
-    // このctxを介さない別経路が3階を書き換える——保持は「1回の境界処理の間だけ使い回す」設計だが、
-    // 世代不一致を検知して古い保持を返さないことを確認する。
-    const plane2 = project.planes.find(p => p.name === '2階');
-    const plane3 = project.planes.find(p => p.name === '3階');
-    const ctx = createStructuralResolveContext();
     const originalPeek = floorSwapManager.peek.bind(floorSwapManager);
-    let interfered = false;
-    floorSwapManager.peek = async (plane, structGraph) => {
-      if (plane.id === plane2.id && !interfered) {
-        interfered = true;
-        // 別経路（このctxを介さない）による3階の書換え。内容はそのまま再保存するだけでよい——
-        // saveFloor自体がnoteFloorWriteで世代を進めるため、ctxの保持（3階）が世代不一致で無効化
-        // されることの確認が目的（内容の差異は問わない）。
-        const other = await originalPeek(plane3, project.structGraph);
-        await saveFloor(plane3.id, serializeGraph(other));
-      }
-      return originalPeek(plane, structGraph);
-    };
+    floorSwapManager.peek = makeInterferingPeek(project, originalPeek);
+    const ctx = ctxOption === null ? null : createStructuralResolveContext();
     try {
       await runStructuralModeSetup(project.activeGraph, project, { ctx });
-      // 実測値（本フィクスチャ・この干渉手順での固定値）。世代比較を外す変異（graphForが常にヒット
-      // する）だとinvalidatedが2→1に減る——>=1のような緩い下限だと「1」も通ってしまい変異を
-      // 検出できないため、厳密に一致させる。
-      assert.equal(ctx.stats.invalidated, 2,
-        `2階のpeek中に3階が外部で書き換えられ、3階の保持が無効化される（invalidated実測値。実際:${ctx.stats.invalidated}）`);
-      const finalDump = await dumpB1AllFloorsFull(project);
-      assert.deepEqual(finalDump, baselineDump,
-        '他経路の書込みによる干渉があっても、最終結果は干渉なしの場合と同じになる');
+      const dump = await dumpB1AllFloorsAllFields(project);
+      return { dump, invalidated: ctx ? ctx.stats.invalidated : null };
     } finally {
       floorSwapManager.peek = originalPeek;
+      if (ctx) ctx.dispose();
+      await figureBindingManager.deactivate();
+    }
+  });
+}
+
+test('【B-4・失敗系】runStructuralModeSetup: 突入の最中に他経路のsaveFloorで保持済みの非アクティブ階が内容ごと書き換わっても、古い保持を返さず読み直し、最終結果は同じ干渉をctx:null（従来経路）で入れた場合と一致する', async () => {
+  const traditional = await runB1WithInterference(null);
+  const owned = await runB1WithInterference(undefined);
+  // 実測値（本フィクスチャ・この干渉手順での固定値）。世代比較を外す変異（graphForが常にヒット
+  // する）だとinvalidatedが2→1に減る——>=1のような緩い下限だと「1」も通ってしまい変異を
+  // 検出できないため、厳密に一致させる。
+  assert.equal(owned.invalidated, 2,
+    `2階のpeek中に3階が外部で書き換えられ、3階の保持が無効化される（invalidated実測値。実際:${owned.invalidated}）`);
+  assert.deepEqual(owned.dump, traditional.dump,
+    '内容を変える干渉があっても、最終結果は同じ干渉をctx:null（従来経路）で入れた場合と一致する（全フィールド）');
+});
+
+// ---- 4b. アクティブ階の保持が破棄されることを守る（コーディネーター差し戻し 3・2026-09-21）----
+// アクティブ=2階で突入すると、3階の再計算（recomputeInactiveStructural→recomputeStructuralForGraph→
+// peekBelowGraph等）が「1つ下の実体階」として2階をctx.graphFor経由でpeekする——peekBelowGraph/
+// buildStructuralWallGateはplaneが「たまたまアクティブかどうか」を見ずにpeekVia(ctx,...)を呼ぶため、
+// ctxはアクティブ階（2階）の「別インスタンス（IDBからのコピー）」も保持しうる。runStructuralModeSetupの
+// 外側ループが2パス目へ進む前に自階（targetGraph＝生きたactiveGraph）を`saveVia(ctx, ...)`で保存する
+// ——このsaveAndNoteは「保持インスタンス（3階処理が保持した2階の古いコピー）」と「bytesの元になった
+// graph（targetGraph）」が別インスタンスであることを検知し、保持を破棄する（invalidatedが増える）。
+// 破棄されないと、次パス（2パス目）で3階側が読む2階の内容が「保存前の古い（3b柱がまだ無い）コピー」の
+// ままになり、収束後の最終結果がctx:null（従来経路）とずれる可能性がある——本テストは(1)invalidatedが
+// 増えること、(2)それでも最終結果はctx:nullと全フィールド一致することの両方を守る。
+test('【B-5・アクティブ保持破棄】runStructuralModeSetup: アクティブ=2階への突入中に3階の下階参照が2階のIDBコピーを保持しても、自階保存後に保持が破棄され、最終結果はctx:null（従来経路）と全フィールド一致する', async () => {
+  const baselineDump = await runB1('2階', null);
+
+  await withFakeIndexedDB(async () => {
+    const { project } = buildB1Fixture();
+    await saveB1InitialFloors(project);
+    const activePlane = project.planes.find(p => p.name === '2階');
+    project.activePlaneId = activePlane.id;
+    const ctx = createStructuralResolveContext();
+    try {
+      await runStructuralModeSetup(project.activeGraph, project, { ctx });
+      // 実測値（本フィクスチャ・アクティブ=2階での固定値。3階の下階参照が2階を保持したのち、
+      // 自階保存で別インスタンス保存として無効化される）。
+      assert.equal(ctx.stats.invalidated, 1,
+        `3階の下階参照が2階のIDBコピーを保持したのち、自階（2階）保存で無効化される（invalidated実測値。実際:${ctx.stats.invalidated}）`);
+      const finalDump = await dumpB1AllFloorsAllFields(project);
+      assert.deepEqual(finalDump, baselineDump,
+        'アクティブ階の保持が破棄されても、最終結果はctx:null（従来経路）と全フィールド一致する');
+    } finally {
       ctx.dispose();
       await figureBindingManager.deactivate();
+    }
+  });
+});
+
+// ---- 4c. 失敗系・collect完了後の他経路の書換え（コーディネーター差し戻し・Minor 2・2026-09-21）----
+// 上の【B-4・失敗系】（アクティブ=2階のrunStructuralModeSetup向け）は、干渉が「対象階がpeek済み・
+// 再計算中」のタイミングで入るため、直後にその階自身の（干渉を知らない）再計算結果で上書きされてしまい
+// （collectフェーズが複数パス収束するまで繰り返すため、干渉後もその階の自動補完が回り続ける）、世代
+// 検知の有無で最終内容が変わらない（QA実証: invalidatedのassertを無力化しても緑のまま）。
+// 干渉を「その階のcollect＋保存が完全に完了した後、apply フェーズ（applyMemberNumbersToFloor）の
+// 再読込みより前」に置く必要がある——floorSwapManager.peekのフックは、ctx経路ではapply時に
+// キャッシュヒットして物理peekが起きないため使えない（ctx:nullとctx省略で発火回数が変わってしまう）。
+// 共通トリガとして、withFakeIndexedDBのonFloorsPutフック（'floors'ストアへのput回数。書込みは
+// changedフラグ由来でctxの有無に関係なく同じ回数・同じ順序になる）を使う。
+// 【設計上の注意】buildB1Fixture（3階建て＋屋根。上階柱直下の柱が階をまたいで伝播する構成）は、
+// 収束に要する内部パス数が実行のたびに（crypto.randomUUID()由来の順序が自動補完の同点判定に
+// 影響しうるため）1回だけ揺れることを実測で確認した——put回数を固定値で数える本テストの土台には
+// 使えない（実測: ある回はcollect5回書込みで収束、別の回は8回書込みで収束した）。そのため本テストは
+// 専用の最小フィクスチャ（非アクティブ階1つだけ・屋根なし＝reflectRoofPlaneは早期returnで無関与）を
+// 使う——収束に要する依存階が無いため、対象階の収束は常にpeek+recompute 1回で決まる
+// （2回目のcollectパスは「確認のみ・書込みなし」で必ず収束する。実測でput回数が常に固定であることを
+// 確認済み）。
+// 1階・2階の id をサフィックスで振り分ける——両シナリオ（ctx:null／ctx省略）を「1回の
+// withFakeIndexedDBスコープの中で順番に」走らせるため（下記関数のJSDoc参照。id を分けて
+// 共有fakeストア内で衝突しないようにする）。
+function buildMinimalReflectFixture(idSuffix) {
+  const project = new Project(`proj-minor2-${idSuffix}`, 'test');
+  project.structuralInfo.mainStructure = TRADITIONAL_WOOD_STRUCTURE;
+  const gx0 = project.structGraph.addCenterLine(CenterLineType.VERTICAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+  const gx1 = project.structGraph.addCenterLine(CenterLineType.VERTICAL, 3640, { labeled: true, discipline: Discipline.STRUCT });
+  const gy0 = project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+  const gy1 = project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 1820, { labeled: true, discipline: Discipline.STRUCT });
+  const gridCLs = { gx0, gx1, gy0, gy1 };
+  const g1 = buildWoodFloorForB1(project, 0,    '1階', `m1${idSuffix}`, gridCLs);
+  const g2 = buildWoodFloorForB1(project, 3000, '2階', `m2${idSuffix}`, gridCLs);
+  // 屋根は意図的に作らない（syncRoofPlaneを呼ばない）——project.roofPlaneがnullのまま残り、
+  // reflectRoofPlane（reflectStructuralToOtherFloors内）は早期returnして無関与になる
+  // （収束パス数を対象階1つの収束だけに単純化するため）。
+  return { project, g1, g2 };
+}
+
+// 【重要・実装上の注意】storage/db.js の openDB() はDB接続Promiseをモジュール内 let（_dbPromise。
+// 非export）へキャッシュし、以後は globalThis.indexedDB の差し替えを無視して同じ接続を使い続ける。
+// そのため withFakeIndexedDB を「1つのtest内で2回」呼ぶと、2回目の呼び出しが用意した新しい
+// fakeDb・onFloorsPutフックは（_dbPromiseがまだ1回目のfakeDbを指したままのため）一度も使われず、
+// 実際の読み書きは1回目のfakeDb・1回目のフック（既にn>3まで進んだ古いクロージャ）へ届いてしまう
+// （実測で発見: 2回目の干渉が一度も発火しないまま緑を装う静かな不具合になっていた）。他の
+// 既存テスト（runB1等を複数回呼ぶA/B等価テスト群）はこの問題の影響を受けない——各呼び出しの
+// 冒頭でsaveB1InitialFloorsが該当idを毎回上書きするだけで、フックの新鮮さに依存しないため。
+// 本テストはonFloorsPutフックの「今回の呼び出し用に取り直したカウンタ」に依存するため、
+// 2シナリオ（ctx:null／ctx省略）を「1回のwithFakeIndexedDBスコープ・1個の共有フック」の中で
+// 順番に走らせる（idSuffixで1階・2階のidを分け、共有fakeストア内で2シナリオのデータが
+// 衝突しないようにする。stateオブジェクトでシナリオごとにフックの参照先を切り替える）。
+async function runMinimalReflectScenario(state, idSuffix, ctxOption) {
+  const { project, g1, g2 } = buildMinimalReflectFixture(idSuffix);
+  const plane2 = project.planes[1];
+  // 初期保存2回（put順序1-2）も含めてこのシナリオのカウンタ（n=0起点）で数える——
+  // state.phaseは初期保存より前にセットする（前回の実装は初期保存の後にセットしており、
+  // put順序1-2が数えられずトリガのnがずれて干渉が一度も発火しない不具合になっていた）。
+  state.phase = { n: 0, project, plane2, interferenceDone: null };
+  await saveFloor(project.planes[0].id, serializeGraph(g1));
+  await saveFloor(project.planes[1].id, serializeGraph(g2));
+  project.activePlaneId = project.planes[0].id; // 1階をアクティブにする（2階だけが反映対象）
+  await reflectStructuralToOtherFloors(project, ctxOption);
+  // 干渉（onFloorsPutフック内で非同期に開始）の完了を待ってから返す——待たずに次のシナリオへ
+  // 進むと、干渉のsaveFloorが未完了のまま次シナリオのput回数とフックへ紛れ込む恐れがある。
+  if (state.phase.interferenceDone) await state.phase.interferenceDone;
+  state.phase = null;
+  return dumpB1AllFloorsAllFields(project);
+}
+
+test('【B-5・失敗系】reflectStructuralToOtherFloors: collect完了後・採番適用前に他経路が保持済み階を書き換えても、古い保持を返さず最終結果がctx:null（従来経路）と全フィールド一致する', async () => {
+  const state = { phase: null };
+  let traditional, owned;
+  await withFakeIndexedDB(async () => {
+    // ---- シナリオ1: ctx:null（従来経路）----
+    traditional = await runMinimalReflectScenario(state, 'n', null);
+    // ---- シナリオ2: ctx省略（自前生成）----
+    owned = await runMinimalReflectScenario(state, 'u', undefined);
+  }, {
+    // put順序（本フィクスチャでの実測・固定値。シナリオごとに1-2=初期保存(1階,2階)
+    // 3=collectの2階書込み——屋根が無いため1パスで収束・2パス目は書込み無しの確認のみ）
+    // 4-=apply（2階のみ）。3回目のput（collectの2階書込み）の直後に割り込む——2階の柱を1本
+    // `removeColumn`で削除する（excludedColumnSlotsへ記録されるため、確認パス・apply処理では
+    // 自動補完で復活しない「再計算で復活しない変更」）。干渉後にapplyMemberNumbersToFloor(2階)が
+    // 読む内容が、干渉を正しく検知して読み直した場合と、古い保持を返す場合とで分かれる——
+    // このテストにはinvalidatedカウンタのassertを入れず、最終ダンプの内容だけで判定する
+    // （コーディネーター指示）。
+    onFloorsPut: () => {
+      const phase = state.phase;
+      if (!phase) return;
+      phase.n++;
+      if (phase.n === 3) {
+        phase.interferenceDone = (async () => {
+          const other = await floorSwapManager.peek(phase.plane2, phase.project.structGraph);
+          const victim = other.columns[0];
+          if (victim) runInAction(() => other.removeColumn(victim.id));
+          await saveFloor(phase.plane2.id, serializeGraph(other));
+        })();
+      }
+    },
+  });
+
+  assert.deepEqual(owned, traditional,
+    'collect完了後・apply直前に他経路が2階を書き換えても、ctx省略の最終結果はctx:null（従来経路）で同じ干渉を入れた場合と全フィールド一致する');
+});
+
+// ---- 4d. 収束・ctx省略（既定経路）（コーディネーター差し戻し・Minor 3・2026-09-21）----
+// 上の【統合・収束】は【B-5是正】でctx:null固定にしたため（peek回数の参考値を保つため。上記
+// コメント参照）、本番の既定経路（ctx省略＝自前生成）での収束は未検証のまま残っていた。
+// buildB1Fixture・saveB1InitialFloors（【統合・B-1】節）を使い、アクティブ=1階でctxを省略して
+// 外部から1回だけ呼び、続けてもう1回呼んでも全フィールドダンプが変わらない（＝1回目で収束済み）
+// ことを確認する。
+test('【B-5・収束】reflectStructuralToOtherFloors: ctx省略（既定経路）でも外部から1回呼ぶだけで収束する（続けてもう1回呼んでもダンプが変わらない）', async () => {
+  await withFakeIndexedDB(async () => {
+    const { project } = buildB1Fixture();
+    await saveB1InitialFloors(project);
+    project.activePlaneId = project.planes.find(p => p.name === '1階').id;
+
+    await reflectStructuralToOtherFloors(project); // ctx省略・外部からの呼び出しは1回だけ
+    const dumpAfterOnce = await dumpB1AllFloorsAllFields(project);
+    // 前提: 非アクティブ階（2階・3階・屋根）は空ダンプであってはならない（save→本番peek往復で
+    // 壁・CLが失われていないことの構造的な担保。1階はアクティブのためreflectStructuralToOtherFloors
+    // 単体では構造部材を計算しない——assertB1NonEmptyは全実体階を対象にするためここでは使えない）。
+    for (const floorName of ['2階', '3階']) {
+      assert.ok(dumpAfterOnce[floorName].columns.length > 0 && dumpAfterOnce[floorName].beams.length > 0,
+        `${floorName}は空ダンプであってはならない（実際: columns=${dumpAfterOnce[floorName].columns.length} beams=${dumpAfterOnce[floorName].beams.length}）`);
+    }
+    assert.ok(dumpAfterOnce[''].fuseCLs.length > 0 || dumpAfterOnce[''].beams.length > 0,
+      '屋根は壁線方式の軒桁を1本以上持つ（空ダンプであってはならない）');
+
+    await reflectStructuralToOtherFloors(project); // もう1回呼んでも（ctx省略・別コンテキストを生成）
+    const dumpAfterTwice = await dumpB1AllFloorsAllFields(project);
+    assert.deepEqual(dumpAfterTwice, dumpAfterOnce,
+      'ctx省略（既定経路）でも、外部からもう1回呼んでも全フィールドダンプが変わらない（1回目で既に収束している）');
+  });
+});
+
+// ---- 4e. 非在来（S造）のctx経路での再計算回数（コーディネーター差し戻し・Minor 4・2026-09-21）----
+// 既存の【統合】非在来1パス固定テストは【B-5是正】でctx:null固定にした（floorSwapManager.peekの
+// 実回数を手動導出して固定する既存の検証手段が、ctx経由だとキャッシュヒットで発火しなくなり
+// 意味を変えるため）。ctx経路では「反映対象の各非アクティブ階が1パスだけ再計算される」こと
+// （sawWallRunsが立たないため内部パスを2回目へ進めない）を、物理peek回数（floorSwapManager.peek。
+// ctxのキャッシュヒット時は発火しない）ではなく、graphFor呼び出し回数そのもの
+// （ctx.stats.hit+ctx.stats.peek。キャッシュヒットでも必ず加算される——
+// structuralResolveContext.js graphFor参照）で数える——これは「反映対象の各階が何回peekを
+// “試みた”か」を、物理I/Oの有無に関わらず正確に捉える（recomputeStructuralForGraph自体は
+// named export の関数でありESM live bindingのため本ファイル側から呼び出し元の参照を
+// 差し替えられず、直接ラップできない。fake IDBの書込み回数は「変化があった時だけ」しか
+// 増えないため、変化なしの繰り返しパスを検出できない——graphFor呼び出し回数だけがパス数を
+// 過不足なく反映する）。
+// ctxは省略（自前生成）ではなく明示的に生成して渡す——.statsを読むため（借り物として渡すだけで、
+// 挙動はctx省略時と同一であることは【B-5・A/B等価】群で別途確認済み）。
+test('【B-5・統合】reflectStructuralToOtherFloors: 非在来（S造）はctx経路でも各非アクティブ階のgraphFor呼び出し回数が1回のまま変わらない（sawWallRunsが立たないため内部パスを繰り返さない）', async () => {
+  await withFakeIndexedDB(async () => {
+    const project = new Project('proj-nonwood-onepass-b5', 'test');
+    const { graph: g1 } = project.addPlane(0, '1階', 'p1');
+    const { graph: g2 } = project.addPlane(3000, '2階', 'p2');
+    project.activePlaneId = null;
+    g1.structureOverride = 'S造';
+    g2.structureOverride = 'S造';
+    // 柱グリッドを構成する通り芯（毎回changed=trueになるよう、まだ柱が無い状態から始める）。
+    project.structGraph.addCenterLine(CenterLineType.VERTICAL,   0,    { labeled: true, discipline: Discipline.STRUCT });
+    project.structGraph.addCenterLine(CenterLineType.VERTICAL,   3640, { labeled: true, discipline: Discipline.STRUCT });
+    project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+    project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 1820, { labeled: true, discipline: Discipline.STRUCT });
+    await saveFloor('p1', serializeGraph(g1));
+    await saveFloor('p2', serializeGraph(g2));
+
+    const ctx = createStructuralResolveContext();
+    try {
+      await reflectStructuralToOtherFloors(project, ctx);
+      // 実測値（本フィクスチャでの固定値）。収集フェーズ・採番適用フェーズそれぞれ各階1回に加え、
+      // recomputeStructuralForGraph内部（buildStructuralWallGate・resolveLowestGraph等）が
+      // 「下の実体階」「1つ上の実体階」を求めるために階をまたいでもう1回graphForを呼ぶ分
+      // （非在来でも基礎伏図の解決に使われる）を含めた合計——sawWallRunsが立たない非在来は
+      // 収集の内部パスが2回目へ進まないため、この値を超えない（内部パスが2回目へ進む変異が
+      // 起きれば、この合計値がさらに増える）。
+      assert.equal(ctx.stats.hit + ctx.stats.peek, 5,
+        `非在来はgraphFor呼び出し合計がこの上限で頭打ちになる（実際:${ctx.stats.hit + ctx.stats.peek}）`);
+    } finally {
+      ctx.dispose();
     }
   });
 });
@@ -2086,6 +2486,362 @@ test('【B-4】runStructuralModeSetup: ctx:null を明示するとコンテキ�
     } finally {
       spy.restore();
       await figureBindingManager.deactivate();
+    }
+  });
+});
+
+// ==== B-5（構造再計算の高速化・2026-09-21）: 反映3経路（reflectStructuralToOtherFloors・
+// reflectStructuralAfterFinishExit・reflectStructuralAfterFloorAdd）が自分でコンテキストを生成する ====
+// buildB1Fixture/saveB1InitialFloors/dumpB1AllFloorsAllFields/spyOnContextDispose（【B-4】節）を再利用する。
+// A/B等価の比較はdumpB1AllFloorsAllFields（全フィールド）を使う（コーディネーター差し戻し 1）。
+
+async function runReflectB1(activeLabel, ctxOption) {
+  return withFakeIndexedDB(async () => {
+    const { project, roofPlane } = buildB1Fixture();
+    await saveB1InitialFloors(project);
+    const activePlane = activeLabel === '屋根' ? roofPlane : project.planes.find(p => p.name === activeLabel);
+    project.activePlaneId = activePlane.id;
+    await reflectStructuralToOtherFloors(project, ctxOption);
+    return await dumpB1AllFloorsAllFields(project);
+  });
+}
+
+async function runFloorAddB1(activeLabel, ctxOption) {
+  return withFakeIndexedDB(async () => {
+    const { project, roofPlane } = buildB1Fixture();
+    await saveB1InitialFloors(project);
+    // 「階追加直後相当の状態」＝追加直後の表示階（新設階）がアクティブなまま反映を呼ぶ。
+    const activePlane = activeLabel === '屋根' ? roofPlane : project.planes.find(p => p.name === activeLabel);
+    project.activePlaneId = activePlane.id;
+    await reflectStructuralAfterFloorAdd(project, ctxOption);
+    return await dumpB1AllFloorsAllFields(project);
+  });
+}
+
+async function runFinishExitB1(currentLabel, goingToStructure, ctxOption) {
+  return withFakeIndexedDB(async () => {
+    const { project } = buildB1Fixture();
+    await saveB1InitialFloors(project);
+    // finishBoundary.js の実配線と同じく、脱出元の階（graph.plane）がアクティブのまま呼ぶ。
+    const currentPlane = project.planes.find(p => p.name === currentLabel);
+    project.activePlaneId = currentPlane.id;
+    await reflectStructuralAfterFinishExit(currentPlane.id, goingToStructure, project, ctxOption);
+    return await dumpB1AllFloorsAllFields(project);
+  });
+}
+
+// ---- 1. A/B等価: ctx省略（生成）とctx:null（従来経路）で全階の全フィールドが完全一致する ----
+for (const label of ['1階', '2階', '3階', '屋根']) {
+  test(`【B-5・A/B等価】reflectStructuralToOtherFloors: アクティブ=${label}でctx省略とctx:nullが同じ結果になる（柱・梁・footings/slabs・除外集合・columnAxisOffsets・梁芯CLを含む全フィールド一致）`, async () => {
+    const traditional = await runReflectB1(label, null);
+    const owned = await runReflectB1(label, undefined);
+    assert.deepEqual(owned, traditional,
+      `アクティブ=${label}: ctx省略（コンテキスト生成）とctx:null（従来経路）で全フィールドのダンプが一致する`);
+  });
+}
+
+for (const label of ['1階', '2階', '3階', '屋根']) {
+  test(`【B-5・A/B等価】reflectStructuralAfterFloorAdd: アクティブ=${label}でctx省略とctx:nullが同じ結果になる（柱・梁・footings/slabs・除外集合・columnAxisOffsets・梁芯CLを含む全フィールド一致）`, async () => {
+    const traditional = await runFloorAddB1(label, null);
+    const owned = await runFloorAddB1(label, undefined);
+    assert.deepEqual(owned, traditional,
+      `アクティブ=${label}: ctx省略（コンテキスト生成）とctx:null（従来経路）で全フィールドのダンプが一致する`);
+  });
+}
+
+for (const currentLabel of ['1階', '2階']) {
+  for (const goingToStructure of [false, true]) {
+    test(`【B-5・A/B等価】reflectStructuralAfterFinishExit: currentPlane=${currentLabel}・goingToStructure=${goingToStructure}でctx省略とctx:nullが同じ結果になる（柱・梁・footings/slabs・除外集合・columnAxisOffsets・梁芯CLを含む全フィールド一致）`, async () => {
+      const traditional = await runFinishExitB1(currentLabel, goingToStructure, null);
+      const owned = await runFinishExitB1(currentLabel, goingToStructure, undefined);
+      assert.deepEqual(owned, traditional,
+        `currentPlane=${currentLabel}・goingToStructure=${goingToStructure}: ctx省略とctx:nullで全フィールドのダンプが一致する`);
+    });
+  }
+}
+
+// ---- 2. peek削減: ctx省略はctx:nullより実peek回数が少ない ----
+test('【B-5・peek削減】reflectStructuralToOtherFloors: ctx省略（生成）はctx:null（従来経路）よりfloorSwapManager.peek実回数が少ない', async () => {
+  async function countPeeks(ctxOption) {
+    return withFakeIndexedDB(async () => {
+      const { project } = buildB1Fixture();
+      await saveB1InitialFloors(project);
+      project.activePlaneId = project.planes.find(p => p.name === '3階').id;
+      let count = 0;
+      const originalPeek = floorSwapManager.peek.bind(floorSwapManager);
+      floorSwapManager.peek = async (...args) => { count++; return originalPeek(...args); };
+      try {
+        await reflectStructuralToOtherFloors(project, ctxOption);
+      } finally {
+        floorSwapManager.peek = originalPeek;
+      }
+      return count;
+    });
+  }
+  const traditionalCount = await countPeeks(null);
+  const ownedCount = await countPeeks(undefined);
+  assert.equal(traditionalCount, 43, `ctx:null（従来経路）のpeek実回数（実測値）。実際:${traditionalCount}`);
+  assert.equal(ownedCount, 4, `ctx省略（コンテキスト生成）のpeek実回数（実測値）。実際:${ownedCount}`);
+  assert.ok(ownedCount < traditionalCount, 'ctx省略の方が実peek回数が少ない');
+});
+
+test('【B-5・peek削減】reflectStructuralAfterFloorAdd: ctx省略（生成）はctx:null（従来経路）よりfloorSwapManager.peek実回数が少ない', async () => {
+  async function countPeeks(ctxOption) {
+    return withFakeIndexedDB(async () => {
+      const { project } = buildB1Fixture();
+      await saveB1InitialFloors(project);
+      project.activePlaneId = project.planes.find(p => p.name === '3階').id;
+      let count = 0;
+      const originalPeek = floorSwapManager.peek.bind(floorSwapManager);
+      floorSwapManager.peek = async (...args) => { count++; return originalPeek(...args); };
+      try {
+        await reflectStructuralAfterFloorAdd(project, ctxOption);
+      } finally {
+        floorSwapManager.peek = originalPeek;
+      }
+      return count;
+    });
+  }
+  const traditionalCount = await countPeeks(null);
+  const ownedCount = await countPeeks(undefined);
+  assert.equal(traditionalCount, 48, `ctx:null（従来経路）のpeek実回数（実測値）。実際:${traditionalCount}`);
+  assert.equal(ownedCount, 4, `ctx省略（コンテキスト生成）のpeek実回数（実測値）。実際:${ownedCount}`);
+  assert.ok(ownedCount < traditionalCount, 'ctx省略の方が実peek回数が少ない');
+});
+
+test('【B-5・peek削減】reflectStructuralAfterFinishExit: ctx省略（生成）はctx:null（従来経路）よりfloorSwapManager.peek実回数が少ない', async () => {
+  async function countPeeks(ctxOption) {
+    return withFakeIndexedDB(async () => {
+      const { project } = buildB1Fixture();
+      await saveB1InitialFloors(project);
+      const currentPlane = project.planes.find(p => p.name === '1階');
+      project.activePlaneId = currentPlane.id;
+      let count = 0;
+      const originalPeek = floorSwapManager.peek.bind(floorSwapManager);
+      floorSwapManager.peek = async (...args) => { count++; return originalPeek(...args); };
+      try {
+        await reflectStructuralAfterFinishExit(currentPlane.id, false, project, ctxOption);
+      } finally {
+        floorSwapManager.peek = originalPeek;
+      }
+      return count;
+    });
+  }
+  const traditionalCount = await countPeeks(null);
+  const ownedCount = await countPeeks(undefined);
+  assert.equal(traditionalCount, 58, `ctx:null（従来経路）のpeek実回数（実測値）。実際:${traditionalCount}`);
+  assert.equal(ownedCount, 4, `ctx省略（コンテキスト生成）のpeek実回数（実測値）。実際:${ownedCount}`);
+  assert.ok(ownedCount < traditionalCount, 'ctx省略の方が実peek回数が少ない');
+});
+
+// ---- 3. 失敗系・例外時も破棄: 例外が伝播し、ownedなコンテキストはdisposeされ、渡されたctxはdisposeされない ----
+test('【B-5・失敗系】reflectStructuralToOtherFloors: 例外が呼び出し元へ伝播し、ownedなコンテキストはdisposeされ、渡されたctxはdisposeされない', async () => {
+  await withFakeIndexedDB(async () => {
+    const { project } = buildB1Fixture();
+    await saveB1InitialFloors(project);
+    project.activePlaneId = project.planes.find(p => p.name === '3階').id;
+
+    const spy = spyOnContextDispose();
+    const originalPeek = floorSwapManager.peek;
+    floorSwapManager.peek = async () => { throw new Error('注入した失敗（peek）'); };
+    try {
+      await assert.rejects(
+        reflectStructuralToOtherFloors(project, undefined),
+        /注入した失敗/,
+        '例外が呼び出し元へ伝播する',
+      );
+      assert.equal(spy.calls.length, 1, '例外時もownedなコンテキストがdisposeされる（finallyで1回）');
+
+      spy.calls.length = 0;
+      const passedCtx = createStructuralResolveContext();
+      await assert.rejects(
+        reflectStructuralToOtherFloors(project, passedCtx),
+        /注入した失敗/,
+      );
+      assert.equal(spy.calls.length, 0, '渡されたctxは例外時もdisposeされない（所有者は呼び出し側のまま）');
+      passedCtx.dispose();
+    } finally {
+      floorSwapManager.peek = originalPeek;
+      spy.restore();
+    }
+  });
+});
+
+test('【B-5・失敗系】reflectStructuralAfterFloorAdd: 例外が呼び出し元へ伝播し、ownedなコンテキストはdisposeされ、渡されたctxはdisposeされない', async () => {
+  await withFakeIndexedDB(async () => {
+    const { project } = buildB1Fixture();
+    await saveB1InitialFloors(project);
+    project.activePlaneId = project.planes.find(p => p.name === '3階').id;
+
+    const spy = spyOnContextDispose();
+    const originalPeek = floorSwapManager.peek;
+    floorSwapManager.peek = async () => { throw new Error('注入した失敗（peek）'); };
+    try {
+      await assert.rejects(
+        reflectStructuralAfterFloorAdd(project, undefined),
+        /注入した失敗/,
+        '例外が呼び出し元へ伝播する',
+      );
+      assert.equal(spy.calls.length, 1, '例外時もownedなコンテキストがdisposeされる（finallyで1回）');
+
+      spy.calls.length = 0;
+      const passedCtx = createStructuralResolveContext();
+      await assert.rejects(
+        reflectStructuralAfterFloorAdd(project, passedCtx),
+        /注入した失敗/,
+      );
+      assert.equal(spy.calls.length, 0, '渡されたctxは例外時もdisposeされない（所有者は呼び出し側のまま）');
+      passedCtx.dispose();
+    } finally {
+      floorSwapManager.peek = originalPeek;
+      spy.restore();
+    }
+  });
+});
+
+test('【B-5・失敗系】reflectStructuralAfterFinishExit: 例外が呼び出し元へ伝播し、ownedなコンテキストはdisposeされ、渡されたctxはdisposeされない', async () => {
+  await withFakeIndexedDB(async () => {
+    const { project } = buildB1Fixture();
+    await saveB1InitialFloors(project);
+    const currentPlane = project.planes.find(p => p.name === '1階');
+    project.activePlaneId = currentPlane.id;
+
+    const spy = spyOnContextDispose();
+    const originalPeek = floorSwapManager.peek;
+    floorSwapManager.peek = async () => { throw new Error('注入した失敗（peek）'); };
+    try {
+      await assert.rejects(
+        reflectStructuralAfterFinishExit(currentPlane.id, false, project, undefined),
+        /注入した失敗/,
+        '例外が呼び出し元へ伝播する',
+      );
+      assert.equal(spy.calls.length, 1, '例外時もownedなコンテキストがdisposeされる（finallyで1回）');
+
+      spy.calls.length = 0;
+      const passedCtx = createStructuralResolveContext();
+      await assert.rejects(
+        reflectStructuralAfterFinishExit(currentPlane.id, false, project, passedCtx),
+        /注入した失敗/,
+      );
+      assert.equal(spy.calls.length, 0, '渡されたctxは例外時もdisposeされない（所有者は呼び出し側のまま）');
+      passedCtx.dispose();
+    } finally {
+      floorSwapManager.peek = originalPeek;
+      spy.restore();
+    }
+  });
+});
+
+// ---- 4. 二重生成しない: 1回の反映につきコンテキスト生成（＝dispose呼び出し）は1個だけ ----
+test('【B-5・二重生成】reflectStructuralToOtherFloors: ctx省略時、1回の呼び出しで生成・破棄されるコンテキストは1個だけ', async () => {
+  await withFakeIndexedDB(async () => {
+    const { project } = buildB1Fixture();
+    await saveB1InitialFloors(project);
+    project.activePlaneId = project.planes.find(p => p.name === '3階').id;
+    const spy = spyOnContextDispose();
+    try {
+      await reflectStructuralToOtherFloors(project, undefined);
+      assert.equal(spy.calls.length, 1, '1回の呼び出しでdisposeされるコンテキストは1個だけ（二重生成していない）');
+    } finally {
+      spy.restore();
+    }
+  });
+});
+
+test('【B-5・二重生成】reflectStructuralAfterFloorAdd: ctx省略時、1回の呼び出しで生成・破棄されるコンテキストは1個だけ（内側のreflectStructuralToOtherFloorsが自前生成していない）', async () => {
+  await withFakeIndexedDB(async () => {
+    const { project } = buildB1Fixture();
+    await saveB1InitialFloors(project);
+    project.activePlaneId = project.planes.find(p => p.name === '3階').id;
+    const spy = spyOnContextDispose();
+    try {
+      await reflectStructuralAfterFloorAdd(project, undefined);
+      assert.equal(spy.calls.length, 1, '1回の呼び出しでdisposeされるコンテキストは1個だけ（recomputeActiveStructural・reflectStructuralToOtherFloorsが同じctxを共有する）');
+    } finally {
+      spy.restore();
+    }
+  });
+});
+
+test('【B-5・二重生成】reflectStructuralAfterFinishExit: ctx省略時、1回の呼び出しで生成・破棄されるコンテキストは1個だけ', async () => {
+  await withFakeIndexedDB(async () => {
+    const { project } = buildB1Fixture();
+    await saveB1InitialFloors(project);
+    const currentPlane = project.planes.find(p => p.name === '1階');
+    project.activePlaneId = currentPlane.id;
+    const spy = spyOnContextDispose();
+    try {
+      await reflectStructuralAfterFinishExit(currentPlane.id, false, project, undefined);
+      assert.equal(spy.calls.length, 1, '1回の呼び出しでdisposeされるコンテキストは1個だけ（内部のrecomputeInactiveStructural・reflectRoofPlane・applyMemberNumbers*が同じctxを共有する）');
+    } finally {
+      spy.restore();
+    }
+  });
+});
+
+test('【B-5・二重生成】runStructuralModeSetup: ctx省略時、1回の突入で生成・破棄されるコンテキストは1個だけ（内側のreflectStructuralToOtherFloorsが自前生成していない）', async () => {
+  await withFakeIndexedDB(async () => {
+    const { project } = buildB1Fixture();
+    await saveB1InitialFloors(project);
+    const activePlane = project.planes.find(p => p.name === '3階');
+    project.activePlaneId = activePlane.id;
+    const spy = spyOnContextDispose();
+    try {
+      await runStructuralModeSetup(project.activeGraph, project, {});
+      assert.equal(spy.calls.length, 1, '1回の突入でdisposeされるコンテキストは1個だけ（二重生成していない）');
+    } finally {
+      spy.restore();
+      await figureBindingManager.deactivate();
+    }
+  });
+});
+
+// ---- 5. 渡されたctxはdisposeしない（正常終了時）／ctx:nullはコンテキストを生成しない ----
+test('【B-5】reflectStructuralAfterFloorAdd・reflectStructuralAfterFinishExit: 渡されたctxは正常終了時もdisposeされず、ctx:null明示時は生成しない', async () => {
+  await withFakeIndexedDB(async () => {
+    const { project } = buildB1Fixture();
+    await saveB1InitialFloors(project);
+    const p3 = project.planes.find(p => p.name === '3階');
+    const p1 = project.planes.find(p => p.name === '1階');
+
+    project.activePlaneId = p3.id;
+    const spy1 = spyOnContextDispose();
+    const ctx1 = createStructuralResolveContext();
+    try {
+      await reflectStructuralAfterFloorAdd(project, ctx1);
+      assert.equal(spy1.calls.length, 0, 'reflectStructuralAfterFloorAdd: 渡されたctxは正常終了時もdisposeされない');
+    } finally {
+      spy1.restore();
+      ctx1.dispose();
+    }
+
+    project.activePlaneId = p1.id;
+    const spy2 = spyOnContextDispose();
+    try {
+      await reflectStructuralAfterFloorAdd(project, null);
+      assert.equal(spy2.calls.length, 0, 'reflectStructuralAfterFloorAdd: ctx:null明示時はコンテキストを生成しない');
+    } finally {
+      spy2.restore();
+    }
+
+    project.activePlaneId = p1.id;
+    const spy3 = spyOnContextDispose();
+    const ctx3 = createStructuralResolveContext();
+    try {
+      await reflectStructuralAfterFinishExit(p1.id, false, project, ctx3);
+      assert.equal(spy3.calls.length, 0, 'reflectStructuralAfterFinishExit: 渡されたctxは正常終了時もdisposeされない');
+    } finally {
+      spy3.restore();
+      ctx3.dispose();
+    }
+
+    project.activePlaneId = p1.id;
+    const spy4 = spyOnContextDispose();
+    try {
+      await reflectStructuralAfterFinishExit(p1.id, false, project, null);
+      assert.equal(spy4.calls.length, 0, 'reflectStructuralAfterFinishExit: ctx:null明示時はコンテキストを生成しない');
+    } finally {
+      spy4.restore();
     }
   });
 });

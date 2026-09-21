@@ -68,8 +68,8 @@ import { conformToLedger } from './memberGroups.js';
  *   解決コンテキスト（構造再計算高速化ステップB）。省略時（既定undefined）は内部の全peek地点
  *   （buildStructuralWallGate・peekBelowGraph・peekAboveGraph・peekRoofBelowGraph・
  *   peekRoofGraphAbove・resolveLowestGraph）がfloorSwapManager.peek直呼びのまま（従来どおり・
- *   挙動不変）。生成元は structuralOrchestration.js runStructuralModeSetup（突入1回＝コンテキスト
- *   1個）——本関数は受け取って下へ渡すだけで、自分では生成しない。
+ *   挙動不変）。生成元は structuralOrchestration.js の境界処理（突入・反映3経路。withResolveContext）
+ *   ——本関数は受け取って下へ渡すだけで、自分では生成しない。
  * @returns {Promise<{changed: boolean, before: Uint8Array|null, after: Uint8Array|null}>}
  *   before/after はcaptureSnapshots:true時のみ非null（undo用スナップショット）。changed=false かつ
  *   captureSnapshots:trueのとき after===before（再シリアライズしない）。
