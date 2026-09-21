@@ -16,7 +16,7 @@
 import { RoomKind, RoomFeature, CenterLineType } from '../core.js';
 import { worldToCell, worldToCellInIndex, gridIndexOf, dividerCLsBetween } from '../finish/gridCells.js';
 import { buildCellToRoom } from '../finish/edgeClassify.js';
-import { floorSwapManager } from '../storage/FloorSwapManager.js';
+import { peekVia } from './structuralPeek.js';
 import { withGraphReadScope } from '../graphReadScope.js';
 
 // 軸線・交点から±この距離(mm)だけ離してセルをサンプリングする（finish/edgeClassify.js の ADJACENT_SAMPLE_EPS と同値）。
@@ -275,15 +275,19 @@ export function buildSelfFootprintGate(graph, cache = undefined) {
  *    - 基準階が採用フロアでない
  *    - 基準階に部屋(フットプリント)が未定義（仕上げモード未使用の従来プロジェクトを壊さないため。
  *      権威を確立する部屋が無い＝階段・階段吹抜けRoomのみの階も同じ扱い。establishesFootprint 参照）
- *  @param {ReturnType<typeof createFootprintCache>} [cache] - 省略時は毎回組み直す（従来どおり）。 */
-export async function buildStructuralWallGate(plane, project, activeGraph, cache = undefined) {
+ *  @param {ReturnType<typeof createFootprintCache>} [cache] - 省略時は毎回組み直す（従来どおり）。
+ *  @param {ReturnType<typeof import('./structuralResolveContext.js').createStructuralResolveContext>} [ctx] -
+ *    解決コンテキスト（省略時はfloorSwapManager.peek直呼び・従来どおり。ステップB-3の下ごしらえのみ）。 */
+export async function buildStructuralWallGate(plane, project, activeGraph, cache = undefined, ctx = undefined) {
   const planes = project.planes; // elevation 昇順、屋根・検討を除く採用フロア
   const baseId = plane.isRoofPlane ? plane.roofForPlaneId : plane.id;
   const idx = planes.findIndex(p => p.id === baseId);
   if (idx === -1) return null;
 
+  // 規律5: 主題階(activeGraph)はそのまま・他はpeek経由（ctx指定時はコンテキスト経由）——この分岐は
+  // ctxの有無に関わらず変えない。
   const graphFor = async (p) =>
-    p.id === activeGraph.plane.id ? activeGraph : await floorSwapManager.peek(p, project.structGraph);
+    p.id === activeGraph.plane.id ? activeGraph : await peekVia(ctx, p, project.structGraph);
 
   // 基準階(idx)＋直下の全階(idx-1 ... 0)のANDで「下まで連続して建物がある」位置に絞る。
   const probes = [];

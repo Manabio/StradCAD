@@ -14,6 +14,7 @@ import { autoFillColumnsForStructure, autoFillStructuralGrid, autoFillBeamsForSt
 import { TRADITIONAL_WOOD_STRUCTURE, rulesFor } from './structureRules.js';
 import { selfWallSegments, autoFillWallBeamAxes, wallBeamAxisExcludeKey, createWallSourceCache } from './wallBeamAxes.js';
 import { createFootprintCache } from './wallGate.js';
+import { createStructuralResolveContext } from './structuralResolveContext.js';
 import { generateRoomWallsFromOutline } from '../finish/wallGeneration.js';
 import { floorSwapManager } from '../storage/FloorSwapManager.js';
 import { recomputeStructuralForGraph } from './structuralRecompute.js';
@@ -3595,6 +3596,57 @@ test('【統合・ステップA】recomputeStructuralForGraph: options.footprint
   assert.deepEqual(byDefault, without, '省略時（既定のcache）もcache無しと同一の解を返す');
 });
 
+// ---- 【統合・ステップB-3】recomputeStructuralForGraph: options.ctx（構造再計算高速化・解決コンテキスト）----
+// buildRoomGraphForSnapshotTest は g2（2階・アクティブ）の下に g1（1階・最下階）を持つ2階建て——
+// g2自身の再計算は「1つ下の実体階」（peekBelowGraph・在来木造のwallBeamAxes）と「最下階」
+// （resolveLowestGraph・柱芯の外面合わせ基準）の両方でp1を解決するため、ctx無し（従来経路）では
+// 同じp1を2回peekする（別々のfloorSwapManager.peek呼び出し）。ctx指定時はこの2回目がキャッシュ
+// ヒットになる（peekは1回だけ）ことを確認する。
+test('【統合・ステップB-3】recomputeStructuralForGraph: options.ctxを渡すと内部のpeekがコンテキスト経由になり、同じ階(1つ下の実体階=最下階のp1)を2回読む経路でもpeekは1回だけになる。省略・ctx:null・ctx指定のいずれも同じ解になる', async () => {
+  const dump = (g) => ({
+    columns: g.columns.map(c => `${c.role}:${Math.round(c.x)},${Math.round(c.y)}:${c.sectionDefId}`).sort(),
+    beams: g.beams.map(b => `${b.role}:${b.isVertical ? 'V' : 'H'}:${Math.round(b.axisValue)}:`
+      + `${Math.round(Math.min(b.clStart.effectiveValue, b.clEnd.effectiveValue))}..`
+      + `${Math.round(Math.max(b.clStart.effectiveValue, b.clEnd.effectiveValue))}:${b.sectionDefId}`).sort(),
+  });
+  const runWithoutCtx = async (options) => {
+    const { project, g2, peekMap } = buildRoomGraphForSnapshotTest();
+    const originalPeek = floorSwapManager.peek;
+    floorSwapManager.peek = async (plane) => peekMap[plane.id] ?? null;
+    try {
+      const result = await recomputeStructuralForGraph(g2, project, TRADITIONAL_WOOD_STRUCTURE, undefined, options);
+      return { changed: result.changed, ...dump(g2) };
+    } finally {
+      floorSwapManager.peek = originalPeek;
+    }
+  };
+  // 対照はctx:null（＝コンテキストを使わない従来経路。peekViaがfloorSwapManager.peek直呼びへ委ねる）。
+  // 省略(undefined)も同じ経路になる（options.ctx省略時のデフォルトはundefinedでpeekVia(undefined,...)も
+  // 同じくfloorSwapManager.peek直呼びのため）——恒真にならないよう対照はctx:null明示、省略との一致は
+  // 別アサーションで確かめる。
+  const withNullCtx = await runWithoutCtx({ ctx: null });
+  const byDefault = await runWithoutCtx(undefined);
+  assert.ok(withNullCtx.columns.length > 0 && withNullCtx.beams.length > 0, '前提: 壁交点柱・壁線上の通し梁が生成される');
+  assert.deepEqual(byDefault, withNullCtx, '省略とctx:null明示は同じ経路（floorSwapManager.peek直呼び）で同じ解になる');
+
+  // ctx指定時: 注入peekの呼び出し回数・ctx.statsで「同じ階を2回読む経路がpeek 1回に減っている」ことを確認する。
+  const { project: projectWithCtx, g2: g2WithCtx, peekMap: peekMapWithCtx } = buildRoomGraphForSnapshotTest();
+  let peekCalls = 0;
+  const ctx = createStructuralResolveContext({
+    peek: async (plane) => { peekCalls++; return peekMapWithCtx[plane.id] ?? null; },
+  });
+  const result = await recomputeStructuralForGraph(g2WithCtx, projectWithCtx, TRADITIONAL_WOOD_STRUCTURE, undefined, { ctx });
+  assert.deepEqual({ changed: result.changed, ...dump(g2WithCtx) }, withNullCtx, 'ctx指定でもctx:null（従来経路）と同一の解になる');
+  // 実測: p1はpeekBelowGraph・resolveLowestGraph以外にも解決地点があり、この経路では計3回解決される
+  // （1回だけ実際にpeekし、残り2回はctxのキャッシュがヒットする）——正確な内訳（何箇所が解決するか）は
+  // structuralRecompute.jsの実装詳細に依存するため固定値でアサートせず、「実peekは1回だけ・残りは
+  // すべてhit」という不変条件だけを確認する（peekBelowGraph自体がctxを無視する変異には
+  // 「実peekが1回に収まらなくなる＝peekCalls>1」で赤化する）。
+  assert.equal(peekCalls, 1, '同じ階(p1)への複数の解決地点のうち、注入peekが実際に呼ばれるのは1回だけ');
+  assert.equal(ctx.stats.peek, 1, 'ctx.stats.peekも1');
+  assert.ok(ctx.stats.hit >= 1, 'ctx.stats.hitが1以上（2回目以降の解決地点がヒットしている）');
+});
+
 // ---- 不変条件: structuralRecompute.js が footprintCache を全消費点（wallGate/exterior/selfGate/columnAxisOffsets）へ配る ----
 test('【不変条件】structuralRecompute.js: options.footprintCacheをbuildStructuralWallGate・buildSelfFootprintGate・buildExteriorSide・autoFillColumnAxisOffsetsへ配る（ステップA）', async () => {
   const fs = await import('node:fs');
@@ -3603,8 +3655,9 @@ test('【不変条件】structuralRecompute.js: options.footprintCacheをbuildSt
   const here = path.dirname(url.fileURLToPath(import.meta.url));
   const src = fs.readFileSync(path.join(here, 'structuralRecompute.js'), 'utf8');
   assert.ok(/footprintCache = createFootprintCache\(\)/.test(src), 'footprintCacheの既定生成が無い');
-  assert.ok(/buildStructuralWallGate\(targetGraph\.plane, project, targetGraph, footprintCache\)/.test(src),
-    'buildStructuralWallGateへfootprintCacheを渡していない');
+  // ステップB-3でctx（解決コンテキスト。省略可・既定undefined）が5番目の引数として加わった。
+  assert.ok(/buildStructuralWallGate\(targetGraph\.plane, project, targetGraph, footprintCache, ctx\)/.test(src),
+    'buildStructuralWallGateへfootprintCache・ctxを渡していない');
   assert.ok(/buildSelfFootprintGate\(isRoof \? \(belowGraph \?\? targetGraph\) : targetGraph, footprintCache\)/.test(src),
     'buildSelfFootprintGateへfootprintCacheを渡していない');
   assert.ok(/buildExteriorSide\(targetGraph, footprintCache\)/.test(src),

@@ -4,7 +4,7 @@ import { DEFAULT_SECTION_BY_MATERIAL, DEFAULT_BEAM_SECTION_BY_MATERIAL } from '.
 import { findSectionEntry } from './sectionCatalog.js';
 import { isFoundationPlane } from './drawingDesignation.js';
 import { computeTributaryColumnWidth, computeColumnBaseSize, computeFoundationBeamSize, computeRoofBeamSize } from './memberSizing.js';
-import { floorSwapManager } from '../storage/FloorSwapManager.js';
+import { peekVia } from './structuralPeek.js';
 import { isRigidFrameStructure, structureHasMemberKind, memberKindOf, MEMBER_KIND } from './structuralClassification.js';
 import { rulesFor, defaultMaterialFor, UNSPECIFIED_STRUCTURE, effectiveStructure } from './structureRules.js';
 import { autoFillWoodColumns, autoFillWoodWallBeams, autoFillWoodFloorBeams, autoFillWoodSillBeams } from './woodAutoFill.js';
@@ -652,12 +652,16 @@ export function autoFillColumnAxisOffsets(graph, project, lowestGraph = graph, e
 }
 
 /** 建物の最下階（elevation昇順の先頭採用フロア）のgraphを返す。非アクティブならpeekで読み取り専用に覗く。
- *  柱芯の外面合わせ（autoFillColumnAxisOffsets）が最下階の柱を基準にするために使う。 */
-export async function resolveLowestGraph(project, activeGraph) {
+ *  柱芯の外面合わせ（autoFillColumnAxisOffsets）が最下階の柱を基準にするために使う。
+ *  @param {object} project
+ *  @param {object} activeGraph
+ *  @param {ReturnType<typeof import('./structuralResolveContext.js').createStructuralResolveContext>} [ctx] -
+ *    解決コンテキスト（省略時はfloorSwapManager.peek直呼び・従来どおり。ステップB-3の下ごしらえのみ）。 */
+export async function resolveLowestGraph(project, activeGraph, ctx = undefined) {
   const planes = project.planes; // elevation 昇順、屋根・検討を除く採用フロア
   const lowest = planes[0];
   if (!lowest || lowest.id === activeGraph.plane.id) return activeGraph;
-  return floorSwapManager.peek(lowest, project.structGraph);
+  return peekVia(ctx, lowest, project.structGraph);
 }
 
 /** 柱の負担床面積から柱幅(tributaryWidth)を再算定する。dimensionStatus==='auto'の柱のみ対象

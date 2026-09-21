@@ -64,12 +64,17 @@ import { conformToLedger } from './memberGroups.js';
  *   索引は不変。wallSourceCacheと同じ理由で外からは渡さない（今回は下ごしらえのみ）。
  *   wallSourceCache・footprintCacheとも、nullを明示するとmemoせず従来どおり毎回組み直す
  *   （cacheあり／なしの解が一致することを確かめるテストの対照経路）。
+ * @param {ReturnType<typeof import('./structuralResolveContext.js').createStructuralResolveContext>} [options.ctx] -
+ *   解決コンテキスト（構造再計算高速化ステップB）。省略時（既定undefined）は内部の全peek地点
+ *   （buildStructuralWallGate・peekBelowGraph・peekAboveGraph・peekRoofBelowGraph・
+ *   peekRoofGraphAbove・resolveLowestGraph）がfloorSwapManager.peek直呼びのまま（従来どおり・
+ *   挙動不変）。ステップB-3の下ごしらえのみ——現時点でどの呼び出し元もctxを生成しない。
  * @returns {Promise<{changed: boolean, before: Uint8Array|null, after: Uint8Array|null}>}
  *   before/after はcaptureSnapshots:true時のみ非null（undo用スナップショット）。changed=false かつ
  *   captureSnapshots:trueのとき after===before（再シリアライズしない）。
  */
 export async function recomputeStructuralForGraph(targetGraph, project, mainStructure, precomputedBelowGraph = undefined, options = {}) {
-  const { captureSnapshots = false, wallSourceCache = createWallSourceCache(), footprintCache = createFootprintCache() } = options;
+  const { captureSnapshots = false, wallSourceCache = createWallSourceCache(), footprintCache = createFootprintCache(), ctx = undefined } = options;
   // 建物フットプリント（部屋領域＝外壁線位置）の鉛直連続性で部材の有無を取捨するゲートを構築する
   // ＝自階かつ直下の全階で建物が連続する位置だけ部材を残す（直下に支えの無い梁・柱は省く）。
   // 非アクティブ下階は peek で覗く。自階に部屋が無い／屋根平面では null＝従来の全グリッド生成。wallGate.js 参照。
@@ -84,7 +89,7 @@ export async function recomputeStructuralForGraph(targetGraph, project, mainStru
   // belowGraph・selfGate（小屋伏図にも梁・柱ルールを適用する計画）はどちらも「1つ下の実体階」を
   // 「最上階」に置き換えて解決する。
   const isRoof = targetGraph.plane.isRoofPlane;
-  const wallGate = await buildStructuralWallGate(targetGraph.plane, project, targetGraph, footprintCache);
+  const wallGate = await buildStructuralWallGate(targetGraph.plane, project, targetGraph, footprintCache, ctx);
   // 壁由来の梁芯生成対象・木造梁成の下階柱（支持点）が使う1つ下の実体階のpeek。
   // どちらの用途も不要なら（RC造は自階のみ／非木造は梁成の算定自体が対象外）peekしない。
   // 屋根専用平面は project.planes に含まれず belowPlaneOf（peekBelowGraph内部）が引けないため、
@@ -92,7 +97,7 @@ export async function recomputeStructuralForGraph(targetGraph, project, mainStru
   // 非在来（ownRules.framing・wallBeamAxesがいずれも偽）はこの分岐自体に入らずpeek 0回のまま。
   const belowGraph = (ownRules.wallBeamAxes === 'selfAndBelow' || ownRules.framing)
     ? (precomputedBelowGraph !== undefined ? precomputedBelowGraph
-        : isRoof ? await peekRoofBelowGraph(targetGraph, project) : await peekBelowGraph(targetGraph, project))
+        : isRoof ? await peekRoofBelowGraph(targetGraph, project, ctx) : await peekBelowGraph(targetGraph, project, ctx))
     : null;
   // 「梁を支える1つ下の実体階の柱寸」の派生値をgraph自身へ書く——この再計算が**唯一の書き込み元**
   // （structural/structureRules.js beamColumnWidthMmのJSDoc参照）。採番パイプライン
@@ -102,7 +107,7 @@ export async function recomputeStructuralForGraph(targetGraph, project, mainStru
   // バグの修正。ステップ4 C-2 QA4）。非永続フィールドのため保存はしない。
   runInAction(() => targetGraph.setBeamColumnWidthMm(beamColumnWidthMm(targetGraph, belowGraph, project)));
   // 壁由来の梁芯生成対象（下階peekを含む非同期収集。wallGateと同じパターンで先に await する）。
-  const wallSources = await collectWallBeamSources(targetGraph, project, belowGraph, wallSourceCache);
+  const wallSources = await collectWallBeamSources(targetGraph, project, belowGraph, wallSourceCache, ctx);
   // 在来木造（beamPlacement:'wallRuns'）の壁線上の通し梁が候補列挙に使う壁区間（マージ不要のプレーン配列。
   // belowGraphはwallSourcesと同じpeek結果を使い回す＝1回の再計算で下階を二重にpeekしない）。
   // wallSourceCache共有により、直前のcollectWallBeamSources（selfAndBelowの内部でも同じ壁区間を
@@ -117,7 +122,7 @@ export async function recomputeStructuralForGraph(targetGraph, project, mainStru
   // 定義「最上階から順＝起点は小屋伏図」を反映する。peekAboveGraphが非nullを返す通常階（＝最上階
   // ではない）はpeekRoofGraphAbove側の早期return（graph.plane.id!==roofForPlaneId）で追加peekなし。
   const aboveGraph = ownRules.columnPlacement === 'wallIntersections'
-    ? (await peekAboveGraph(targetGraph, project)) ?? (await peekRoofGraphAbove(targetGraph, project))
+    ? (await peekAboveGraph(targetGraph, project, ctx)) ?? (await peekRoofGraphAbove(targetGraph, project, ctx))
     : null;
   const aboveColumns = aboveGraph?.columns ?? [];
   // 在来木造の下階柱（ステップ3h-2）が候補列挙に使う、1つ上の実体階の柱生成の点源（role:'primary'
@@ -152,7 +157,7 @@ export async function recomputeStructuralForGraph(targetGraph, project, mainStru
   const exterior = buildExteriorSide(targetGraph, footprintCache);
   // 柱芯（ColumnAxis）を自動生成・整合する（ラーメン系以外は0にリセット。差分のみ補完）。
   // 外面合わせの基準となる最下階graphを解決してから適用する（非アクティブ階は peek）。
-  const lowestGraph = await resolveLowestGraph(project, targetGraph);
+  const lowestGraph = await resolveLowestGraph(project, targetGraph, ctx);
   runInAction(() => autoFillColumnAxisOffsets(targetGraph, project, lowestGraph, exterior, footprintCache));
   // 梁の偏芯量（柱芯⇄材芯）を faceGap から再算出し、柱外面と梁縁の一致（柱寸法・梁寸法変更に追従）を保つ。
   const updatedBeamEcc = runInAction(() => autoFillBeamEccentricity(targetGraph, project));

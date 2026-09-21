@@ -551,10 +551,13 @@ test('【不変条件・実機再QA指摘4】structuralOrchestration.js: applyMe
   const url = await import('node:url');
   const here = path.dirname(url.fileURLToPath(import.meta.url));
   const src = stripComments(fs.readFileSync(path.join(here, 'structuralOrchestration.js'), 'utf8'));
-  const fnMatch = /async function applyMemberNumbersToFloor\(plane, tags, project, beamColumnWidthMmValue\) \{([\s\S]*?)\r?\n\}/.exec(src);
-  assert.ok(fnMatch, 'applyMemberNumbersToFloor(plane, tags, project, beamColumnWidthMmValue)（数値を引数で受け取る宣言）が見つからない');
+  // ステップB-3でctx（解決コンテキスト。省略可・既定undefined）が5番目の引数として加わった。
+  const fnMatch = /async function applyMemberNumbersToFloor\(plane, tags, project, beamColumnWidthMmValue, ctx = undefined\) \{([\s\S]*?)\r?\n\}/.exec(src);
+  assert.ok(fnMatch, 'applyMemberNumbersToFloor(plane, tags, project, beamColumnWidthMmValue, ctx)（数値を引数で受け取る宣言）が見つからない');
   const body = fnMatch[1];
-  assert.ok(/floorSwapManager\.peek\(/.test(body), 'applyMemberNumbersToFloor が fresh peek していない（tempインスタンスを跨いで保持する実装に戻っている）');
+  // fresh peekはctx経由（peekVia）に寄せた——ctx省略時はfloorSwapManager.peek直呼びと同じ経路になる
+  // （structuralPeek.js peekVia参照）。
+  assert.ok(/peekVia\(ctx, plane, project\.structGraph\)/.test(body), 'applyMemberNumbersToFloor が fresh peek していない（tempインスタンスを跨いで保持する実装に戻っている、またはpeekViaを経由していない）');
   assert.ok(/setBeamColumnWidthMm\(beamColumnWidthMmValue\)/.test(body), 'applyMemberNumbersToFloor が保存済みの beamColumnWidthMm 数値を書き戻していない（standardBeamSectionFor の判定がcollect時点と食い違う。コメントアウトされている可能性）');
   // 呼び出し側（reflectStructuralToOtherFloors/reflectStructuralAfterFinishExit）が temp インスタンス自体
   // ではなく temp.beamColumnWidthMm（数値）だけを保持していること（同時展開を1階分に戻す配線側の固定）。
@@ -949,7 +952,8 @@ test('【不変条件・実機再々QA指摘1】structuralOrchestration.js: refl
   // 「setBeamColumnWidthMm(...) の呼び出し」→「collectFloorGroups(project.activeGraph, project)」の順に
   // 現れることを確認する（間に他の分岐が挟まっても良いが、setBeamColumnWidthMmが必ず先に実行される
   // ソース上の位置関係を固定する）。
-  const fnMatch = /export async function reflectStructuralToOtherFloors\(project\) \{([\s\S]*?)\r?\n\}/.exec(src);
+  // ステップB-3でctx（解決コンテキスト。省略可・既定undefined）が2番目の引数として加わった。
+  const fnMatch = /export async function reflectStructuralToOtherFloors\(project, ctx = undefined\) \{([\s\S]*?)\r?\n\}/.exec(src);
   assert.ok(fnMatch, 'reflectStructuralToOtherFloors関数本体が見つからない');
   const body = fnMatch[1];
   const setIdx = body.search(/project\.activeGraph\.setBeamColumnWidthMm\(beamColumnWidthMm\(project\.activeGraph, belowForActive, project\)\)/);
@@ -970,10 +974,11 @@ test('【不変条件・B-4】structuralOrchestration.js: reflectStructuralToOth
   const url = await import('node:url');
   const here = path.dirname(url.fileURLToPath(import.meta.url));
   const src = stripComments(fs.readFileSync(path.join(here, 'structuralOrchestration.js'), 'utf8'));
-  const fnMatch = /export async function reflectStructuralToOtherFloors\(project\) \{([\s\S]*?)\r?\n\}/.exec(src);
+  // ステップB-3でctx（解決コンテキスト。省略可・既定undefined）が2番目の引数として加わった。
+  const fnMatch = /export async function reflectStructuralToOtherFloors\(project, ctx = undefined\) \{([\s\S]*?)\r?\n\}/.exec(src);
   assert.ok(fnMatch, 'reflectStructuralToOtherFloors関数本体が見つからない');
   const body = fnMatch[1];
-  assert.ok(/for \(const plane of \[\.\.\.project\.planes\]\.reverse\(\)\) \{[\s\S]*?recomputeInactiveStructural\(plane, project\)/.test(body),
+  assert.ok(/for \(const plane of \[\.\.\.project\.planes\]\.reverse\(\)\) \{[\s\S]*?recomputeInactiveStructural\(plane, project, ctx\)/.test(body),
     '再計算ループ（recomputeInactiveStructuralを呼ぶfor文）が [...project.planes].reverse() で回っていない');
   // 採番の適用ループ（下段）は建物全体で1回・順序非依存のため昇順のまま据え置く（変更対象外）。
   assert.ok(/for \(const plane of project\.planes\) \{[\s\S]*?applyMemberNumbersToFloor\(plane, tags, project/.test(body),
@@ -987,11 +992,12 @@ test('【不変条件・ステップ7】structuralOrchestration.js: reflectStruc
   const url = await import('node:url');
   const here = path.dirname(url.fileURLToPath(import.meta.url));
   const src = stripComments(fs.readFileSync(path.join(here, 'structuralOrchestration.js'), 'utf8'));
-  const fnMatch = /export async function reflectStructuralToOtherFloors\(project\) \{([\s\S]*?)\r?\n\}/.exec(src);
+  // ステップB-3でctx（解決コンテキスト。省略可・既定undefined）が2番目の引数として加わった。
+  const fnMatch = /export async function reflectStructuralToOtherFloors\(project, ctx = undefined\) \{([\s\S]*?)\r?\n\}/.exec(src);
   assert.ok(fnMatch, 'reflectStructuralToOtherFloors関数本体が見つからない');
   const body = fnMatch[1];
-  assert.ok(/await reflectRoofPlane\(project\);[\s\S]*?for \(const plane of \[\.\.\.project\.planes\]\.reverse\(\)\)/.test(body),
-    'reflectRoofPlane(project) の呼び出しが降順ループより前に無い（小屋伏図→最上階→…→最下階の順にならない）');
+  assert.ok(/await reflectRoofPlane\(project, ctx\);[\s\S]*?for \(const plane of \[\.\.\.project\.planes\]\.reverse\(\)\)/.test(body),
+    'reflectRoofPlane(project, ctx) の呼び出しが降順ループより前に無い（小屋伏図→最上階→…→最下階の順にならない）');
 });
 
 // ---- 反映は収束するまで繰り返す（リード裁定・2026-09-19）----
@@ -1537,12 +1543,13 @@ test('【不変条件・ステップ7】structuralOrchestration.js: reflectStruc
   const fnMatch = /export async function reflectStructuralAfterFinishExit\([^)]*\) \{([\s\S]*?)\r?\n\}/.exec(src);
   assert.ok(fnMatch, 'reflectStructuralAfterFinishExit関数本体が見つからない');
   const body = fnMatch[1];
-  assert.ok(/for \(let i = idx \+ 1; i < planes\.length; i\+\+\) \{[\s\S]*?\}[\s\S]*?await reflectRoofPlane\(project\);/.test(body),
-    'reflectRoofPlane(project) の呼び出しが昇順ループ（自階より上）の後に無い');
+  // ステップB-3でctx（解決コンテキスト。省略可・既定undefined）が2番目の引数として加わった。
+  assert.ok(/for \(let i = idx \+ 1; i < planes\.length; i\+\+\) \{[\s\S]*?\}[\s\S]*?await reflectRoofPlane\(project, ctx\);/.test(body),
+    'reflectRoofPlane(project, ctx) の呼び出しが昇順ループ（自階より上）の後に無い');
   // 昇順ループと同じ if (idx !== -1) ガードの内側にあること（idx===-1では屋根にも触れない）——
   // 単純な正順序チェックだけでは「ガード外へ出す」変異を検出できない（実測・再発防止）。
-  assert.ok(/if \(idx !== -1\) \{[\s\S]*?await reflectRoofPlane\(project\);[\s\S]*?\n {2}\}/.test(body),
-    'reflectRoofPlane(project) が if (idx !== -1) ガードの内側に無い');
+  assert.ok(/if \(idx !== -1\) \{[\s\S]*?await reflectRoofPlane\(project, ctx\);[\s\S]*?\n {2}\}/.test(body),
+    'reflectRoofPlane(project, ctx) が if (idx !== -1) ガードの内側に無い');
 });
 
 test('【失敗系・ステップ7】reflectStructuralAfterFinishExit: 存在しないplaneId（idx===-1）は屋根専用平面があってもreflectRoofPlaneを呼ばない（floorSwapManager.peekに到達しない）', async () => {

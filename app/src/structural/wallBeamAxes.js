@@ -6,7 +6,7 @@ import { CL_OVERLAP_TOL_MM } from '../core/constants.js';
 import { structuralAnchorAt, beamAxisAt } from '../core/centerLineKindPolicy.js';
 import { backingClassOf } from '../finish/materials/backingClass.js';
 import { roomBounds } from '../finish/gridCells.js';
-import { floorSwapManager } from '../storage/FloorSwapManager.js';
+import { peekVia } from './structuralPeek.js';
 import { rulesFor, backingRulesFor, isTraditionalWoodStructure, effectiveStructure } from './structureRules.js';
 
 // 通り芯の座標一致判定の許容誤差(mm)。secondaryBeamSpansFor の SPAN_EPS と同じ考え方。
@@ -41,12 +41,15 @@ function abovePlaneOf(plane, project) {
  * ステップ3d）が同じpeekを共有する——別々にpeekすると1回の再計算で下階を2回読みに行くため。
  * @param {object} graph
  * @param {object} project
+ * @param {ReturnType<typeof import('./structuralResolveContext.js').createStructuralResolveContext>} [ctx] -
+ *   解決コンテキスト（省略時はfloorSwapManager.peek直呼び・従来どおり。ステップB-3の下ごしらえのみ——
+ *   現時点でどの呼び出し元もctxを生成しない＝常にundefined）。
  * @returns {Promise<object|null>}
  */
-export async function peekBelowGraph(graph, project) {
+export async function peekBelowGraph(graph, project, ctx = undefined) {
   const belowPlane = belowPlaneOf(graph.plane, project);
   if (!belowPlane) return null;
-  return await floorSwapManager.peek(belowPlane, project.structGraph);
+  return await peekVia(ctx, belowPlane, project.structGraph);
 }
 
 /**
@@ -57,12 +60,13 @@ export async function peekBelowGraph(graph, project) {
  * 在来木造のみ）のときだけ呼ぶ（非在来はpeekしない）。
  * @param {object} graph
  * @param {object} project
+ * @param {ReturnType<typeof import('./structuralResolveContext.js').createStructuralResolveContext>} [ctx] - peekBelowGraphと同じ（省略可）。
  * @returns {Promise<object|null>}
  */
-export async function peekAboveGraph(graph, project) {
+export async function peekAboveGraph(graph, project, ctx = undefined) {
   const abovePlane = abovePlaneOf(graph.plane, project);
   if (!abovePlane) return null;
-  return await floorSwapManager.peek(abovePlane, project.structGraph);
+  return await peekVia(ctx, abovePlane, project.structGraph);
 }
 
 /**
@@ -74,13 +78,14 @@ export async function peekAboveGraph(graph, project) {
  * roofForPlaneId が指す実体階が採用フロア一覧（project.planes）に見つからない場合もnull（防御）。
  * @param {object} roofGraph
  * @param {object} project
+ * @param {ReturnType<typeof import('./structuralResolveContext.js').createStructuralResolveContext>} [ctx] - peekBelowGraphと同じ（省略可）。
  * @returns {Promise<object|null>}
  */
-export async function peekRoofBelowGraph(roofGraph, project) {
+export async function peekRoofBelowGraph(roofGraph, project, ctx = undefined) {
   if (!roofGraph.plane?.isRoofPlane) return null;
   const topPlane = project.planes.find(p => p.id === roofGraph.plane.roofForPlaneId);
   if (!topPlane) return null;
-  return await floorSwapManager.peek(topPlane, project.structGraph);
+  return await peekVia(ctx, topPlane, project.structGraph);
 }
 
 /**
@@ -90,12 +95,13 @@ export async function peekRoofBelowGraph(roofGraph, project) {
  * 解決子の中ではゲートしない（アーキ裁定・ステップ4）。
  * @param {object} graph
  * @param {object} project
+ * @param {ReturnType<typeof import('./structuralResolveContext.js').createStructuralResolveContext>} [ctx] - peekBelowGraphと同じ（省略可）。
  * @returns {Promise<object|null>}
  */
-export async function peekRoofGraphAbove(graph, project) {
+export async function peekRoofGraphAbove(graph, project, ctx = undefined) {
   const roofPlane = project.roofPlane;
   if (!roofPlane || roofPlane.roofForPlaneId !== graph.plane.id) return null;
-  return await floorSwapManager.peek(roofPlane, project.structGraph);
+  return await peekVia(ctx, roofPlane, project.structGraph);
 }
 
 /** wall が下地オーナー壁か（backingRange!=null。backingDepth===0の仕上げのみの薄壁は対象外）。 */
@@ -363,8 +369,9 @@ function mergeWallBeamSources(sources) {
  *   nullを明示すれば「下階なし」として扱い、peekしない——呼び出し側（structuralRecompute.js）が
  *   木造梁成（ステップ3d）と同じpeek結果を使い回し、1回の再計算で下階を二重にpeekしないための引数）。
  * @param {ReturnType<typeof createWallSourceCache>} [cache] - 省略時は毎回全走査（従来どおり）。
+ * @param {object} [ctx] - 解決コンテキスト（自前peekするときだけ使う。peekBelowGraphと同じ・省略可）。
  */
-export async function collectWallBeamSources(graph, project, belowGraph = undefined, cache = undefined) {
+export async function collectWallBeamSources(graph, project, belowGraph = undefined, cache = undefined, ctx = undefined) {
   const structure = effectiveStructure(graph, project);
   // 生成源の選択は主構造ルール（structureRules.js wallBeamAxes: 'rcBacking' | 'selfAndBelow' | null）。
   const mode = rulesFor(structure).wallBeamAxes;
@@ -372,7 +379,7 @@ export async function collectWallBeamSources(graph, project, belowGraph = undefi
   if (mode === 'rcBacking') {
     sources = wallBeamSourcesFromGraph(graph, true, cache);
   } else if (mode === 'selfAndBelow') {
-    const below = belowGraph === undefined ? await peekBelowGraph(graph, project) : belowGraph;
+    const below = belowGraph === undefined ? await peekBelowGraph(graph, project, ctx) : belowGraph;
     sources = wallRunSegments(graph, below, structure, cache);
   }
   return mergeWallBeamSources(sources);
