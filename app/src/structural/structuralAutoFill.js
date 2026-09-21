@@ -618,8 +618,13 @@ export function axisExteriorSign(exterior, graph, cl, isVertical) {
  *  外側符号 s だけは最下階フットプリント(exterior)を権威に求める（lowestGraph を peek。R階伏図など
  *  自階に部屋が無い階で外周モデルが部材CL外接矩形へ縮退し、L字外周の中通りを内部と誤判定するのを回避。
  *  axisExteriorSign で軸線を全交差走査）。ユーザー上書きは出幅へ一本化したため、各CLは毎回上書きする。
- *  ラーメン系（S造/SRC造/RC造(ラーメン)）でなければ柱芯オフセットをすべて0に戻す（対象外＝通り芯と一致）。 */
-export function autoFillColumnAxisOffsets(graph, project, lowestGraph = graph, exterior = buildExteriorSide(graph)) {
+ *  ラーメン系（S造/SRC造/RC造(ラーメン)）でなければ柱芯オフセットをすべて0に戻す（対象外＝通り芯と一致）。
+ *  @param {ReturnType<import('./wallGate.js').createFootprintCache>} [footprintCache] - 1回の再計算内で
+ *   フットプリント索引（wallGate.js footprintProbe）をmemoするキャッシュ（ステップA）。isLowestがfalseの
+ *   ときだけ内部でbuildExteriorSide(lowestGraph)を呼ぶため、その1点にだけ渡す——exterior自体は既に
+ *   呼び出し側が確定済みの値（省略時はbuildExteriorSide(graph)がデフォルト引数として評価されるため
+ *   footprintCacheより先に確定してしまい、この引数の恩恵を受けない。省略時は毎回組み直す従来どおり）。 */
+export function autoFillColumnAxisOffsets(graph, project, lowestGraph = graph, exterior = buildExteriorSide(graph), footprintCache = undefined) {
   const effective = graph.structureOverride ?? project.structuralInfo.mainStructure;
   if (!isRigidFrameStructure(effective)) {
     graph.columnAxisOffsets.clear();
@@ -627,7 +632,7 @@ export function autoFillColumnAxisOffsets(graph, project, lowestGraph = graph, e
   }
   const halfThis   = defaultColumnWidth(effective) / 2;
   const isLowest   = lowestGraph.plane?.id === graph.plane?.id;
-  const ex         = isLowest ? exterior : buildExteriorSide(lowestGraph); // 符号権威＝最下階フットプリント
+  const ex         = isLowest ? exterior : buildExteriorSide(lowestGraph, footprintCache); // 符号権威＝最下階フットプリント
   for (const [axisCLs, isVertical] of [[graph.gridXs, true], [graph.gridYs, false]]) {
     for (const cl of axisCLs) {
       const s = axisExteriorSign(ex, lowestGraph, cl, isVertical);

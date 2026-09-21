@@ -7,8 +7,8 @@ import assert from 'node:assert/strict';
 import { Plane, PlanGraph, CenterLineType, Discipline } from '@core';
 import { withGraphReadScope } from '../graphReadScope.js';
 import {
-  worldToCell, getCellsInRect, getAllCells, refreshCells, cellBoundsFromKey, gridDividerSegments,
-  isDividerCL, isActiveAcrossRange,
+  worldToCell, worldToCellInIndex, gridIndexOf, getCellsInRect, getAllCells, refreshCells, cellBoundsFromKey,
+  gridDividerSegments, isDividerCL, isActiveAcrossRange,
 } from './gridCells.js';
 
 // 3x3セルの格子（値0/1000/2000/3000。中央の縦CLだけextent制限してL字結合も踏ませる）
@@ -67,6 +67,15 @@ test('gridCells: スコープを抜けた後のCL移動は次の呼び出しに�
   vs[2].value = 2400; // 2本目の分割CLを移動
   const after = withGraphReadScope(graph, () => worldToCell(2500, 500, graph));
   assert.equal(after.x1, 2400);
+});
+
+// ---- ステップA: worldToCellInIndex（確定済み索引だけで解く。wallGate.js footprintProbeのcache経路が使う）----
+test('worldToCellInIndex: gridIndexOfで確定した索引に対し、同じ格子でworldToCellと同じ結果を返す（L字結合を含む）', () => {
+  const { graph } = makeGraph();
+  const index = gridIndexOf(graph);
+  for (const [x, y] of PROBES) {
+    assert.deepEqual(worldToCellInIndex(x, y, index), worldToCell(x, y, graph), `(${x},${y})`);
+  }
 });
 
 // ---- isDividerCL / isActiveAcrossRange: 種別ベース（isFinishCellDivider / isGridCenterLine）への統一 ----

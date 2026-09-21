@@ -1,6 +1,6 @@
 import { runInAction } from 'mobx';
 import { serializeGraph } from '../graphSnapshot.js';
-import { buildStructuralWallGate, buildExteriorSide, buildSelfFootprintGate } from './wallGate.js';
+import { buildStructuralWallGate, buildExteriorSide, buildSelfFootprintGate, createFootprintCache } from './wallGate.js';
 import { collectWallBeamSources, peekBelowGraph, peekAboveGraph, wallRunSegments, columnSeedBeamSegments, peekRoofBelowGraph, peekRoofGraphAbove, createWallSourceCache } from './wallBeamAxes.js';
 import {
   autoFillStructuralGrid,
@@ -56,12 +56,20 @@ import { conformToLedger } from './memberGroups.js';
  *   書き手（仕上げ脱出・wallRefresh）はこの再計算の外側にしか居ない。外から渡せるようにしておくのは、
  *   後続ステップB（1回の境界処理の解決コンテキストへの格上げ）のための下ごしらえ——現時点で
  *   外から渡す呼び出し元は無い（常に省略時のデフォルト生成のまま）。
+ * @param {ReturnType<typeof createFootprintCache>} [options.footprintCache] - フットプリント索引
+ *   （wallGate.js footprintProbe＝分割格子＋部屋セルの索引）を「1回のこの呼び出しの間」memoする
+ *   キャッシュ（ステップA）。省略時は本関数が自前で1個作り、内部の全消費点（buildStructuralWallGate・
+ *   buildSelfFootprintGate・buildExteriorSide・autoFillColumnAxisOffsets内のbuildExteriorSide(lowestGraph)）
+ *   へ配る——構造再計算は部屋・分割線を変更しないため、1回の呼び出しの間は同じgraphのフットプリント
+ *   索引は不変。wallSourceCacheと同じ理由で外からは渡さない（今回は下ごしらえのみ）。
+ *   wallSourceCache・footprintCacheとも、nullを明示するとmemoせず従来どおり毎回組み直す
+ *   （cacheあり／なしの解が一致することを確かめるテストの対照経路）。
  * @returns {Promise<{changed: boolean, before: Uint8Array|null, after: Uint8Array|null}>}
  *   before/after はcaptureSnapshots:true時のみ非null（undo用スナップショット）。changed=false かつ
  *   captureSnapshots:trueのとき after===before（再シリアライズしない）。
  */
 export async function recomputeStructuralForGraph(targetGraph, project, mainStructure, precomputedBelowGraph = undefined, options = {}) {
-  const { captureSnapshots = false, wallSourceCache = createWallSourceCache() } = options;
+  const { captureSnapshots = false, wallSourceCache = createWallSourceCache(), footprintCache = createFootprintCache() } = options;
   // 建物フットプリント（部屋領域＝外壁線位置）の鉛直連続性で部材の有無を取捨するゲートを構築する
   // ＝自階かつ直下の全階で建物が連続する位置だけ部材を残す（直下に支えの無い梁・柱は省く）。
   // 非アクティブ下階は peek で覗く。自階に部屋が無い／屋根平面では null＝従来の全グリッド生成。wallGate.js 参照。
@@ -76,7 +84,7 @@ export async function recomputeStructuralForGraph(targetGraph, project, mainStru
   // belowGraph・selfGate（小屋伏図にも梁・柱ルールを適用する計画）はどちらも「1つ下の実体階」を
   // 「最上階」に置き換えて解決する。
   const isRoof = targetGraph.plane.isRoofPlane;
-  const wallGate = await buildStructuralWallGate(targetGraph.plane, project, targetGraph);
+  const wallGate = await buildStructuralWallGate(targetGraph.plane, project, targetGraph, footprintCache);
   // 壁由来の梁芯生成対象・木造梁成の下階柱（支持点）が使う1つ下の実体階のpeek。
   // どちらの用途も不要なら（RC造は自階のみ／非木造は梁成の算定自体が対象外）peekしない。
   // 屋根専用平面は project.planes に含まれず belowPlaneOf（peekBelowGraph内部）が引けないため、
@@ -128,7 +136,7 @@ export async function recomputeStructuralForGraph(targetGraph, project, mainStru
   // targetGraph 自身へフォールバックする（buildSelfFootprintGate(null)のクラッシュ回避）。
   // 実体階（isRoof===false）は常に targetGraph自身＝autoFillWoodWallBeams/autoFillWoodSillBeamsが
   // 省略時に自前計算する値と同じ＝従来どおり不変。
-  const selfGate = buildSelfFootprintGate(isRoof ? (belowGraph ?? targetGraph) : targetGraph);
+  const selfGate = buildSelfFootprintGate(isRoof ? (belowGraph ?? targetGraph) : targetGraph, footprintCache);
   // 自由端（F-2・selfWallFreeEnds）の判定基準（R-2・2026-09-19是正）。selfGateと同じ理由——屋根専用
   // 平面は自階に壁が無いため、判定は「1つ下の実体階（＝最上階）」で行う。belowGraphはselfGateと
   // 同じ値を使い回す（追加peekは無い）。実体階は常にtargetGraph自身（従来と同値）。
@@ -141,11 +149,11 @@ export async function recomputeStructuralForGraph(targetGraph, project, mainStru
   const matFoundation = runInAction(() => autoFillMatFoundation(targetGraph, project));
   // 外周モデル（side ビュー）を1回構築し、柱芯オフセットと梁偏芯の両方に渡す——柱・梁で外側方向（内外定義）を一致させる。
   // 自動補完の後に作るので、矩形フォールバック（仕上げ未定義時）は生成済み部材CLの外接矩形を見る。主題階基準で sync。
-  const exterior = buildExteriorSide(targetGraph);
+  const exterior = buildExteriorSide(targetGraph, footprintCache);
   // 柱芯（ColumnAxis）を自動生成・整合する（ラーメン系以外は0にリセット。差分のみ補完）。
   // 外面合わせの基準となる最下階graphを解決してから適用する（非アクティブ階は peek）。
   const lowestGraph = await resolveLowestGraph(project, targetGraph);
-  runInAction(() => autoFillColumnAxisOffsets(targetGraph, project, lowestGraph, exterior));
+  runInAction(() => autoFillColumnAxisOffsets(targetGraph, project, lowestGraph, exterior, footprintCache));
   // 梁の偏芯量（柱芯⇄材芯）を faceGap から再算出し、柱外面と梁縁の一致（柱寸法・梁寸法変更に追従）を保つ。
   const updatedBeamEcc = runInAction(() => autoFillBeamEccentricity(targetGraph, project));
   // 別フロアにいる間に主要構造が変更された等で取りこぼした柱・梁を、実効主構造に合わせて変換する。

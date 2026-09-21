@@ -14,9 +14,10 @@
 // （世界座標は全階共通原点のため跨ぎ比較可。figure.md「他階部材を主題階の中心線へ再解決しない」規律を保つ）。
 
 import { RoomKind, RoomFeature, CenterLineType } from '../core.js';
-import { worldToCell, dividerCLsBetween } from '../finish/gridCells.js';
+import { worldToCell, worldToCellInIndex, gridIndexOf, dividerCLsBetween } from '../finish/gridCells.js';
 import { buildCellToRoom } from '../finish/edgeClassify.js';
 import { floorSwapManager } from '../storage/FloorSwapManager.js';
+import { withGraphReadScope } from '../graphReadScope.js';
 
 // 軸線・交点から±この距離(mm)だけ離してセルをサンプリングする（finish/edgeClassify.js の ADJACENT_SAMPLE_EPS と同値）。
 const SAMPLE_EPS = 10;
@@ -39,20 +40,73 @@ const establishesFootprint = (room) =>
   && room.feature !== RoomFeature.STAIR
   && room.feature !== RoomFeature.STAIR_VOID;
 
+/**
+ * フットプリント索引（分割格子＋cellToRoom）の寿命を「1回の recomputeStructuralForGraph 呼び出し」に
+ * 固定するキャッシュを作る（ステップA・構造再計算の高速化。wallBeamAxes.js createWallSourceCacheと
+ * 同じ設計）。footprintProbe は同じ graph に対し1回の再計算で何度も呼ばれる（buildStructuralWallGate・
+ * buildSelfFootprintGate・buildExteriorSide、autoFillColumnAxisOffsets内のbuildExteriorSide(lowestGraph)
+ * 等）うえ、返り値の probe(wx,wy) 自体も生成後に何度も呼ばれる（spanInBuilding・intersectionInBuilding
+ * 等）。cache指定時は最初に索引を確定した時点（withGraphReadScope内で1回だけ buildCellToRoom・
+ * gridIndexOf を確定）で固定し、以降は同じ graph・同じ点への問い合わせを組み直さない。
+ *
+ * **モジュール変数・graphへのWeakMapにしない**——アクティブ階のgraphインスタンスはモードをまたいで
+ * 生き続け、部屋・分割線は仕上げモードやundoのrestoreGraphで変わるため、graphに紐づく寿命では古い
+ * 索引が残る。呼び出し側（structuralRecompute.js）が「1回の再計算」の寿命でこのキャッシュを生成し、
+ * 消費側の関数チェーンへ明示的に引数で渡す——省略時（undefined）は一切memoせず、現行どおり毎回
+ * 組み直す（前提: 構造再計算は部屋・分割線を変更しない。wallGate.js冒頭のJSDoc参照）。
+ *
+ * @returns {{get(graph:object):{probe:Function,size:number}|undefined, set(graph:object, entry:object):void}}
+ */
+export function createFootprintCache() {
+  const byGraph = new Map(); // graph -> { probe, size }
+  return {
+    get(graph) { return byGraph.get(graph); },
+    set(graph, entry) { byGraph.set(graph, entry); },
+  };
+}
+
 /** あるグラフの建物フットプリント述語を作る。屋内(kind === INTERIOR)のみ建物内とみなす。
+ *  @param {object} graph
+ *  @param {ReturnType<typeof createFootprintCache>} [cache] - 省略時は毎回組み直す（従来どおり）。
  *  @returns {{ probe: (wx:number, wy:number)=>boolean, size: number }}
  *  size=権威を確立するフットプリントセル数（0なら「フットプリント未定義」扱い。
  *  屋外部屋・階段/階段吹抜けのみの階で全部材を消さないよう、これらは数えない）。 */
-function footprintProbe(graph) {
-  const cellToRoom = buildCellToRoom(graph);
-  let size = 0;
-  for (const room of cellToRoom.values()) if (establishesFootprint(room)) size++;
+function footprintProbe(graph, cache = undefined) {
+  if (!cache) {
+    const cellToRoom = buildCellToRoom(graph);
+    let size = 0;
+    for (const room of cellToRoom.values()) if (establishesFootprint(room)) size++;
+    const probe = (wx, wy) => {
+      const cell = worldToCell(wx, wy, graph);
+      if (!cell) return false;
+      return isBuildingRoom(cellToRoom.get(cell.key));
+    };
+    return { probe, size };
+  }
+  const cached = cache.get(graph);
+  if (cached) return cached;
+  // 分割格子・cellToRoomをwithGraphReadScope内で1回だけ確定する（スコープ外だと点判定のたびに
+  // buildGridIndexが組み直される。structural/配下はgraphReadScopeの外のため通常はこの恩恵が無い）。
+  const { cellToRoom, index, size } = withGraphReadScope(graph, () => {
+    const cellToRoom = buildCellToRoom(graph);
+    const index = gridIndexOf(graph);
+    let size = 0;
+    for (const room of cellToRoom.values()) if (establishesFootprint(room)) size++;
+    return { cellToRoom, index, size };
+  });
+  const points = new Map(); // "wx,wy" -> boolean（確定済み索引だけで解くため、点判定もこの寿命でmemo化する）
   const probe = (wx, wy) => {
-    const cell = worldToCell(wx, wy, graph);
-    if (!cell) return false;
-    return isBuildingRoom(cellToRoom.get(cell.key));
+    const key = `${wx},${wy}`;
+    const hit = points.get(key);
+    if (hit !== undefined) return hit;
+    const cell = worldToCellInIndex(wx, wy, index);
+    const result = cell ? isBuildingRoom(cellToRoom.get(cell.key)) : false;
+    points.set(key, result);
+    return result;
   };
-  return { probe, size };
+  const entry = { probe, size };
+  cache.set(graph, entry);
+  return entry;
 }
 
 /** 建物フットプリント（屋内 kind === INTERIOR の部屋セル）のセルキー集合を返す。
@@ -116,9 +170,11 @@ export function rectFootprintProbe(graph) {
 /** 構造外周モデル（side ビュー・sync・常に非null）を構築する。外側方向の判定にのみ使う。
  *  権威：主題階の仕上げフットプリント（部屋セル）。部屋が無ければ構造部材CLの外接矩形をフォールバックに用いる
  *  （同一 outsideSign に矩形フットプリントを与えた縮退ケース。labeled・仕上げ非依存）。
- *  存在（鉛直連続AND）は別ビュー＝buildStructuralWallGate(async) が担う。side は主題階基準。 */
-export function buildExteriorSide(graph) {
-  const fp = footprintProbe(graph);
+ *  存在（鉛直連続AND）は別ビュー＝buildStructuralWallGate(async) が担う。side は主題階基準。
+ *  @param {object} graph
+ *  @param {ReturnType<typeof createFootprintCache>} [cache] - 省略時は毎回組み直す（従来どおり）。 */
+export function buildExteriorSide(graph, cache = undefined) {
+  const fp = footprintProbe(graph, cache);
   const probe = fp.size > 0 ? fp.probe : rectFootprintProbe(graph);
   return {
     outsideSign: (axisValue, isVertical, atCross) => outsideSignFromProbe(probe, axisValue, isVertical, atCross),
@@ -200,9 +256,11 @@ export function footprintBreakCLs(gate, graph, axisCL, isVertical, lo, hi) {
  *  3階）は`establishesFootprint`が権威を確立しないため`fp.size===0`→null になり、下階由来の壁線
  *  runがゲートなしで全生成される——旧`wallGate`（自階＋直下全階AND）も同じ階では基準階側の
  *  `fp.size===0`判定でnullを返していたため、これは回帰ではなく仕上げモード未着手階を保全する
- *  既存の規律（他のautoFillXxxと同じ「部屋が無い階は保全」裁定）をそのまま引き継いだ挙動である。 */
-export function buildSelfFootprintGate(graph) {
-  const fp = footprintProbe(graph);
+ *  既存の規律（他のautoFillXxxと同じ「部屋が無い階は保全」裁定）をそのまま引き継いだ挙動である。
+ *  @param {object} graph
+ *  @param {ReturnType<typeof createFootprintCache>} [cache] - 省略時は毎回組み直す（従来どおり）。 */
+export function buildSelfFootprintGate(graph, cache = undefined) {
+  const fp = footprintProbe(graph, cache);
   if (fp.size === 0) return null;
   return makeWallGate([fp.probe]);
 }
@@ -216,8 +274,9 @@ export function buildSelfFootprintGate(graph) {
  *  以下の場合は null を返し、呼び出し側はゲートなし(全グリッド生成＝従来挙動)で動く：
  *    - 基準階が採用フロアでない
  *    - 基準階に部屋(フットプリント)が未定義（仕上げモード未使用の従来プロジェクトを壊さないため。
- *      権威を確立する部屋が無い＝階段・階段吹抜けRoomのみの階も同じ扱い。establishesFootprint 参照） */
-export async function buildStructuralWallGate(plane, project, activeGraph) {
+ *      権威を確立する部屋が無い＝階段・階段吹抜けRoomのみの階も同じ扱い。establishesFootprint 参照）
+ *  @param {ReturnType<typeof createFootprintCache>} [cache] - 省略時は毎回組み直す（従来どおり）。 */
+export async function buildStructuralWallGate(plane, project, activeGraph, cache = undefined) {
   const planes = project.planes; // elevation 昇順、屋根・検討を除く採用フロア
   const baseId = plane.isRoofPlane ? plane.roofForPlaneId : plane.id;
   const idx = planes.findIndex(p => p.id === baseId);
@@ -229,7 +288,7 @@ export async function buildStructuralWallGate(plane, project, activeGraph) {
   // 基準階(idx)＋直下の全階(idx-1 ... 0)のANDで「下まで連続して建物がある」位置に絞る。
   const probes = [];
   for (let i = idx; i >= 0; i--) {
-    const fp = footprintProbe(await graphFor(planes[i]));
+    const fp = footprintProbe(await graphFor(planes[i]), cache);
     if (i === idx && fp.size === 0) return null; // 基準階に部屋が無ければゲートなし
     if (fp.size > 0) probes.push(fp.probe);
   }

@@ -12,7 +12,7 @@ import { conformWoodSections } from './woodAutoFill.js';
 import { rulesFor, effectiveStructure, beamColumnWidthMm } from './structureRules.js';
 import { collectWallBeamSources, autoFillWallBeamAxes, peekBelowGraph, wallRunSegments, columnSeedBeamSegments, createWallSourceCache } from './wallBeamAxes.js';
 import { structureHasMemberKind, MEMBER_KIND } from './structuralClassification.js';
-import { buildStructuralWallGate } from './wallGate.js';
+import { buildStructuralWallGate, createFootprintCache } from './wallGate.js';
 import { collectFloorGroups, assignNumbers, applyNumbers } from './memberNumbering.js';
 import { conformToLedger } from './memberGroups.js';
 import { recomputeStructuralForGraph } from './structuralRecompute.js';
@@ -156,7 +156,12 @@ export async function recomputeStructuralComposition(composition, subjectGraph, 
     // 間に合わない不整合があるため、下階柱集合の変更検知用に処理前のシグネチャを控えておく
     // （columnSetSignature参照）。
     const belowColumnsBefore = columnSetSignature(belowGraph.columns);
-    const belowGate = await buildStructuralWallGate(belowGraph.plane, project, subjectGraph);
+    // ステップA: belowGateのspanInBuilding/intersectionInBuildingはこの後（autoFillColumnsForStructure等）
+    // 何度も呼ばれる——その場でローカルに1個だけキャッシュを作り、この1回のbuildStructuralWallGate呼び出しの
+    // 間だけフットプリント索引を確定する（belowWallSourceCacheと同じ「その場で作って近接する呼び出しで
+    // 共有する程度に留める」リード裁定のスコープ内）。
+    const belowFootprintCache = createFootprintCache();
+    const belowGate = await buildStructuralWallGate(belowGraph.plane, project, subjectGraph, belowFootprintCache);
     const belowLowestGraph = await resolveLowestGraph(project, belowGraph);
     const belowStructure = belowGraph.structureOverride ?? project.structuralInfo.mainStructure;
     isWallRuns = isWallRuns || rulesFor(belowStructure).beamPlacement === 'wallRuns';

@@ -13,6 +13,7 @@ import { WOOD_STUD_CODE_BY_SIZE } from '../finish/materials/backingClass.js';
 import { autoFillColumnsForStructure, autoFillStructuralGrid, autoFillBeamsForStructure, convertMembersToEffectiveMaterial } from './structuralAutoFill.js';
 import { TRADITIONAL_WOOD_STRUCTURE, rulesFor } from './structureRules.js';
 import { selfWallSegments, autoFillWallBeamAxes, wallBeamAxisExcludeKey, createWallSourceCache } from './wallBeamAxes.js';
+import { createFootprintCache } from './wallGate.js';
 import { generateRoomWallsFromOutline } from '../finish/wallGeneration.js';
 import { floorSwapManager } from '../storage/FloorSwapManager.js';
 import { recomputeStructuralForGraph } from './structuralRecompute.js';
@@ -3553,10 +3554,63 @@ test('【統合・ステップC】recomputeStructuralForGraph: options.wallSourc
       floorSwapManager.peek = originalPeek;
     }
   };
-  const without = await run(undefined);
+  // 対照は null（＝memoしない従来経路）。省略(undefined)だと既定のcacheが作られ、cache経路どうしの
+  // 比較になってしまう（恒真）。
+  const without = await run({ wallSourceCache: null });
   const withCache = await run({ wallSourceCache: createWallSourceCache() });
+  const byDefault = await run(undefined);
   assert.ok(without.columns.length > 0 && without.beams.length > 0, '前提: 壁交点柱・壁線上の通し梁が生成される');
-  assert.deepEqual(withCache, without, 'cache指定は省略時と同一の解（柱・梁のダンプとchanged）を返す');
+  assert.deepEqual(withCache, without, 'cache指定はcache無し（従来経路）と同一の解（柱・梁のダンプとchanged）を返す');
+  assert.deepEqual(byDefault, without, '省略時（既定のcache）もcache無しと同一の解を返す');
+});
+
+// ---- 【統合・ステップA】recomputeStructuralForGraph: options.footprintCache（1回の再計算内でのフットプリント索引memo）----
+test('【統合・ステップA】recomputeStructuralForGraph: options.footprintCacheを明示しても、省略時と同じ結果になる（壁交点柱・壁線上の通し梁とも）', async () => {
+  // idは生成順で変わるため、位置・役割・断面の安定キーで比べる（ステップCの同名テストと同じダンプ形式）。
+  const dump = (g) => ({
+    columns: g.columns.map(c => `${c.role}:${Math.round(c.x)},${Math.round(c.y)}:${c.sectionDefId}`).sort(),
+    beams: g.beams.map(b => `${b.role}:${b.isVertical ? 'V' : 'H'}:${Math.round(b.axisValue)}:`
+      + `${Math.round(Math.min(b.clStart.effectiveValue, b.clEnd.effectiveValue))}..`
+      + `${Math.round(Math.max(b.clStart.effectiveValue, b.clEnd.effectiveValue))}:${b.sectionDefId}`).sort(),
+  });
+  const run = async (options) => {
+    // フィクスチャは呼ぶたびに独立したProjectを作る＝cacheあり／なしを同じ入力から比べられる。
+    const { project, g2, peekMap } = buildRoomGraphForSnapshotTest();
+    const originalPeek = floorSwapManager.peek;
+    floorSwapManager.peek = async (plane) => peekMap[plane.id] ?? null;
+    try {
+      const result = await recomputeStructuralForGraph(g2, project, TRADITIONAL_WOOD_STRUCTURE, undefined, options);
+      return { changed: result.changed, ...dump(g2) };
+    } finally {
+      floorSwapManager.peek = originalPeek;
+    }
+  };
+  // 対照は null（＝memoしない従来経路）。省略(undefined)だと既定のcacheが作られ、cache経路どうしの
+  // 比較になってしまう（恒真）。
+  const without = await run({ footprintCache: null });
+  const withCache = await run({ footprintCache: createFootprintCache() });
+  const byDefault = await run(undefined);
+  assert.ok(without.columns.length > 0 && without.beams.length > 0, '前提: 壁交点柱・壁線上の通し梁が生成される');
+  assert.deepEqual(withCache, without, 'cache指定はcache無し（従来経路）と同一の解（柱・梁のダンプとchanged）を返す');
+  assert.deepEqual(byDefault, without, '省略時（既定のcache）もcache無しと同一の解を返す');
+});
+
+// ---- 不変条件: structuralRecompute.js が footprintCache を全消費点（wallGate/exterior/selfGate/columnAxisOffsets）へ配る ----
+test('【不変条件】structuralRecompute.js: options.footprintCacheをbuildStructuralWallGate・buildSelfFootprintGate・buildExteriorSide・autoFillColumnAxisOffsetsへ配る（ステップA）', async () => {
+  const fs = await import('node:fs');
+  const path = await import('node:path');
+  const url = await import('node:url');
+  const here = path.dirname(url.fileURLToPath(import.meta.url));
+  const src = fs.readFileSync(path.join(here, 'structuralRecompute.js'), 'utf8');
+  assert.ok(/footprintCache = createFootprintCache\(\)/.test(src), 'footprintCacheの既定生成が無い');
+  assert.ok(/buildStructuralWallGate\(targetGraph\.plane, project, targetGraph, footprintCache\)/.test(src),
+    'buildStructuralWallGateへfootprintCacheを渡していない');
+  assert.ok(/buildSelfFootprintGate\(isRoof \? \(belowGraph \?\? targetGraph\) : targetGraph, footprintCache\)/.test(src),
+    'buildSelfFootprintGateへfootprintCacheを渡していない');
+  assert.ok(/buildExteriorSide\(targetGraph, footprintCache\)/.test(src),
+    'buildExteriorSideへfootprintCacheを渡していない');
+  assert.ok(/autoFillColumnAxisOffsets\(targetGraph, project, lowestGraph, exterior, footprintCache\)/.test(src),
+    'autoFillColumnAxisOffsetsへfootprintCacheを渡していない');
 });
 
 // ---- 不変条件: structuralRecompute.js が wallRunSegments を autoFillStructuralGrid に渡し、removedBeams を changed に含める ----

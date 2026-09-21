@@ -173,8 +173,24 @@ export function worldToCell(wx, wy, graph) {
   return scopedValue(graph, `gridCells:p:${wx},${wy}`, () => _worldToCell(wx, wy, graph));
 }
 
+/**
+ * gridIndexOf(graph) が返す確定済みの格子索引を直接使って worldToCell と同じ判定を行う。
+ * graph・MobXを読まない——索引を1回だけ確定してから多数の点を判定する呼び出し側
+ * （wallGate.js footprintProbe の cache 指定時。ステップA）向けの入口。
+ * @param {number} wx
+ * @param {number} wy
+ * @param {ReturnType<typeof gridIndexOf>} index
+ */
+export function worldToCellInIndex(wx, wy, index) {
+  return _worldToCellFromIndex(wx, wy, index);
+}
+
 function _worldToCell(wx, wy, graph) {
-  const { verticals, horizontals, xValues, xIndex } = gridIndexOf(graph);
+  return _worldToCellFromIndex(wx, wy, gridIndexOf(graph));
+}
+
+function _worldToCellFromIndex(wx, wy, index) {
+  const { verticals, horizontals, xValues, xIndex } = index;
   if (verticals.length < 2 || horizontals.length < 2) return null;
 
   const col = microInterval(xValues, wx);
