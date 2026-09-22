@@ -181,9 +181,16 @@ test('【失敗系】applyResolveDecisions: その場面で許可されていな
   assert.throws(() => applyResolveDecisions(rows, new Map([[rows[0].id, { action: 'markOverride' }]])), /許可されていない操作/);
 });
 
-test('【失敗系】applyResolveDecisions: pickでpickキー省略は例外', () => {
+// ステップ7d QA指摘Major-1（2026-09-23）: pickキー省略はもう例外にしない——1行の入力漏れが
+// まとめて承認の適用全体（他の行の決定）を巻き込んで失敗させないため、rejected＋保留へ回す。
+test('【失敗系・ステップ7d QA指摘Major-1】applyResolveDecisions: pickでpickキー省略は例外を投げずrejected（理由「代替を指定してください」）＋保留に回る', () => {
   const rows = buildResolveRows({ unresolved: [{ code: '111111111500', location: 'room' }] });
-  assert.throws(() => applyResolveDecisions(rows, new Map([[rows[0].id, { action: 'pick' }]])), /pick/);
+  const { aliasPairs, deferredRowIds, rejected } = applyResolveDecisions(rows, new Map([[rows[0].id, { action: 'pick' }]]));
+  assert.deepEqual(aliasPairs, []);
+  assert.deepEqual(deferredRowIds, [rows[0].id]);
+  assert.equal(rejected.length, 1);
+  assert.equal(rejected[0].rowId, rows[0].id);
+  assert.equal(rejected[0].reason, '代替を指定してください');
 });
 
 test('【失敗系】applyResolveDecisions: 未知の操作は例外', () => {
@@ -191,12 +198,17 @@ test('【失敗系】applyResolveDecisions: 未知の操作は例外', () => {
   assert.throws(() => applyResolveDecisions(rows, new Map([[rows[0].id, { action: 'nope' }]])));
 });
 
-// ---- QA指摘Major-1（2026-09-22）: pick/approveの代替材キーはvalidKeysに実在しなければ保留へ戻す ----
+// ---- QA指摘Major-1（2026-09-22）→ステップ7d QA指摘Major-2（2026-09-23）: pick/approveの
+// 代替キーはvalidKeysByKind（Map<kind,Set>）で行のkindごとに実在確認し、無ければ保留へ戻す ----
+function validKeysByKindOf(kind, keys) {
+  return new Map([[kind, new Set(keys)]]);
+}
+
 test('【失敗系・QA指摘Major-1】applyResolveDecisions: pickで未知のキーを指定するとaliasPairsに積まれず保留＋rejectedに理由が入る', () => {
   const rows = buildResolveRows({ unresolved: [{ code: '111111111500', location: 'room' }] });
-  const validKeys = new Set(['301000000001']); // '999999999999'は含まれない
+  const validKeysByKind = validKeysByKindOf(CatalogKind.MATERIAL, ['301000000001']); // '999999999999'は含まれない
   const { aliasPairs, deferredRowIds, rejected } = applyResolveDecisions(
-    rows, new Map([[rows[0].id, { action: 'pick', pick: '999999999999' }]]), { validKeys },
+    rows, new Map([[rows[0].id, { action: 'pick', pick: '999999999999' }]]), { validKeysByKind },
   );
   assert.deepEqual(aliasPairs, [], '未知コードはaliasPairsに積まれない（文書の参照が実体の無いコードへ書き換わらない）');
   assert.deepEqual(deferredRowIds, [rows[0].id], '弾かれた行は保留に戻る');
@@ -208,9 +220,9 @@ test('【失敗系・QA指摘Major-1】applyResolveDecisions: pickで未知の�
 
 test('【失敗系・QA指摘Major-1】applyResolveDecisions: pickで空白のみのキーを指定するとaliasPairsに積まれず保留＋rejectedに理由が入る', () => {
   const rows = buildResolveRows({ unresolved: [{ code: '111111111500', location: 'room' }] });
-  const validKeys = new Set(['301000000001']);
+  const validKeysByKind = validKeysByKindOf(CatalogKind.MATERIAL, ['301000000001']);
   const { aliasPairs, deferredRowIds, rejected } = applyResolveDecisions(
-    rows, new Map([[rows[0].id, { action: 'pick', pick: '   ' }]]), { validKeys },
+    rows, new Map([[rows[0].id, { action: 'pick', pick: '   ' }]]), { validKeysByKind },
   );
   assert.deepEqual(aliasPairs, [], '空白のみのキーはaliasPairsに積まれない');
   assert.deepEqual(deferredRowIds, [rows[0].id]);
@@ -218,23 +230,23 @@ test('【失敗系・QA指摘Major-1】applyResolveDecisions: pickで空白の�
   assert.equal(rejected[0].key, '   ');
 });
 
-test('applyResolveDecisions: pickで実在するキー（validKeysに含まれる）を指定すればaliasPairsに積まれる', () => {
+test('applyResolveDecisions: pickで実在するキー（validKeysByKindに含まれる）を指定すればaliasPairsに積まれる', () => {
   const rows = buildResolveRows({ unresolved: [{ code: '111111111500', location: 'room' }] });
-  const validKeys = new Set(['301000000001']);
+  const validKeysByKind = validKeysByKindOf(CatalogKind.MATERIAL, ['301000000001']);
   const { aliasPairs, deferredRowIds, rejected } = applyResolveDecisions(
-    rows, new Map([[rows[0].id, { action: 'pick', pick: '301000000001' }]]), { validKeys },
+    rows, new Map([[rows[0].id, { action: 'pick', pick: '301000000001' }]]), { validKeysByKind },
   );
   assert.deepEqual(aliasPairs, [{ kind: CatalogKind.MATERIAL, from: '111111111500', to: '301000000001' }]);
   assert.deepEqual(deferredRowIds, []);
   assert.deepEqual(rejected, []);
 });
 
-test('【失敗系・QA指摘Major-1】applyResolveDecisions: approveの候補先頭がvalidKeysに無ければaliasPairsに積まれず保留＋rejectedに理由が入る', () => {
-  const candidate = material({ code: '301000099999' }); // validKeysに含めない（存在しない想定）
+test('【失敗系・QA指摘Major-1】applyResolveDecisions: approveの候補先頭がvalidKeysByKindに無ければaliasPairsに積まれず保留＋rejectedに理由が入る', () => {
+  const candidate = material({ code: '301000099999' }); // validKeysByKindに含めない（存在しない想定）
   const rows = buildResolveRows({ proposals: [{ from: '999999999999', candidates: [candidate], entry: material({ code: '999999999999' }) }] });
-  const validKeys = new Set(['301000000001']); // candidate.codeを含まない
+  const validKeysByKind = validKeysByKindOf(CatalogKind.MATERIAL, ['301000000001']); // candidate.codeを含まない
   const { aliasPairs, deferredRowIds, rejected } = applyResolveDecisions(
-    rows, new Map([[rows[0].id, { action: 'approve' }]]), { validKeys },
+    rows, new Map([[rows[0].id, { action: 'approve' }]]), { validKeysByKind },
   );
   assert.deepEqual(aliasPairs, []);
   assert.deepEqual(deferredRowIds, [rows[0].id]);
@@ -242,22 +254,72 @@ test('【失敗系・QA指摘Major-1】applyResolveDecisions: approveの候補�
   assert.equal(rejected[0].key, '301000099999');
 });
 
-test('applyResolveDecisions: approveの候補先頭がvalidKeysに実在すればaliasPairsに積まれる', () => {
+test('applyResolveDecisions: approveの候補先頭がvalidKeysByKindに実在すればaliasPairsに積まれる', () => {
   const candidate = material({ code: '301000000001' });
   const rows = buildResolveRows({ proposals: [{ from: '999999999999', candidates: [candidate], entry: material({ code: '999999999999' }) }] });
-  const validKeys = new Set(['301000000001']);
+  const validKeysByKind = validKeysByKindOf(CatalogKind.MATERIAL, ['301000000001']);
   const { aliasPairs, rejected } = applyResolveDecisions(
-    rows, new Map([[rows[0].id, { action: 'approve' }]]), { validKeys },
+    rows, new Map([[rows[0].id, { action: 'approve' }]]), { validKeysByKind },
   );
   assert.deepEqual(aliasPairs, [{ kind: CatalogKind.MATERIAL, from: '999999999999', to: '301000000001' }]);
   assert.deepEqual(rejected, []);
 });
 
-test('applyResolveDecisions: validKeys省略時は検証しない（後方互換。既存の自由ピッカーテストと同じ挙動）', () => {
+test('applyResolveDecisions: validKeysByKind省略時は検証しない（後方互換。既存の自由ピッカーテストと同じ挙動）', () => {
   const rows = buildResolveRows({ unresolved: [{ code: '111111111500', location: 'room' }] });
   const { aliasPairs, rejected } = applyResolveDecisions(rows, new Map([[rows[0].id, { action: 'pick', pick: '000000000000' }]]));
   assert.deepEqual(aliasPairs, [{ kind: CatalogKind.MATERIAL, from: '111111111500', to: '000000000000' }]);
   assert.deepEqual(rejected, []);
+});
+
+// ---- ステップ7d QA指摘Major-2: validKeysByKindは種別ごとに合流する（単一Setへ潰さない）----
+test('【失敗系・ステップ7d QA指摘Major-2】applyResolveDecisions: interiorMaster行にmaterialの実在コードをpickしても、種別が違うのでrejected（変異=単一Setへ合流すると通ってしまう）', () => {
+  const rows = buildResolveRows({
+    kind: CatalogKind.INTERIOR_MASTER,
+    unresolved: [{ code: 'GHOST_ROOM', location: 'room', roomId: 'r1' }],
+  });
+  const validKeysByKind = new Map([
+    [CatalogKind.MATERIAL, new Set(['301000000001'])], // interiorMasterには実在しないキー
+    [CatalogKind.INTERIOR_MASTER, new Set(['LIVING_ROOM'])],
+  ]);
+  const { aliasPairs, deferredRowIds, rejected } = applyResolveDecisions(
+    rows, new Map([[rows[0].id, { action: 'pick', pick: '301000000001' }]]), { validKeysByKind },
+  );
+  assert.deepEqual(aliasPairs, [], 'material側にだけ実在するキーはinteriorMaster行には通らない');
+  assert.deepEqual(deferredRowIds, [rows[0].id]);
+  assert.equal(rejected.length, 1);
+});
+
+// ---- ステップ7d QA指摘Major-1: 混在行（候補0件のinteriorMaster行にpick未指定＋material行にapprove）----
+test('【ステップ7d QA指摘Major-1】applyResolveDecisions: 候補0件のinteriorMaster行にpick未指定＋material行にapprove → 例外なし・materialのaliasは適用・interiorMaster行はrejected/deferred', () => {
+  const materialCandidate = material({ code: '301000000001' });
+  const materialRows = buildResolveRows({
+    kind: CatalogKind.MATERIAL,
+    proposals: [{ from: '999999999999', candidates: [materialCandidate], entry: material({ code: '999999999999' }) }],
+  });
+  const interiorRows = buildResolveRows({
+    kind: CatalogKind.INTERIOR_MASTER,
+    unresolved: [{ code: 'GHOST_ROOM', location: 'room', roomId: 'r1' }], // 候補0件（材料コード専用のsuggestByClassのため）
+  });
+  assert.deepEqual(interiorRows[0].candidates, []);
+  const rows = [...materialRows, ...interiorRows];
+  const validKeysByKind = new Map([[CatalogKind.MATERIAL, new Set(['301000000001'])]]);
+
+  const { aliasPairs, deferredRowIds, rejected } = applyResolveDecisions(
+    rows,
+    new Map([
+      [materialRows[0].id, { action: 'approve' }],
+      [interiorRows[0].id, { action: 'pick' }], // pick未指定
+    ]),
+    { validKeysByKind },
+  );
+
+  assert.deepEqual(aliasPairs, [{ kind: CatalogKind.MATERIAL, from: '999999999999', to: '301000000001' }],
+    'materialのapproveは適用される（interiorMaster行のpick未指定に巻き込まれない）');
+  assert.deepEqual(deferredRowIds, [interiorRows[0].id]);
+  assert.equal(rejected.length, 1);
+  assert.equal(rejected[0].rowId, interiorRows[0].id);
+  assert.equal(rejected[0].reason, '代替を指定してください');
 });
 
 // ---- QA指摘Minor-1（2026-09-22・D1）: 候補を持つpropose行をdeferしてもaliasPairsに出ない ----

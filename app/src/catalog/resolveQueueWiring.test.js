@@ -52,22 +52,41 @@ test('【不変条件・ステップ6-3】store.js: reconcileIncomingCatalogsは
   );
 });
 
-// ---- store.js: applyCatalogResolutions（決定の反映） ----
-test('【不変条件・ステップ6-3】store.js: applyCatalogResolutionsはapplyResolveDecisionsの前にvalidKeys（composeCatalog由来）を組み立てて渡す', () => {
+// ---- store.js: applyCatalogResolutions（決定の反映。ステップ7d: 行が複数種別を持つため
+// kindsをrowsから集めてkindDef(kind).loadBuiltin()経由でvalidKeysByKindを種別ごとに組み立てる） ----
+test('【不変条件・ステップ7d QA指摘Major-2】store.js: applyCatalogResolutionsはrowsからkindの集合を集め、kindDef(kind).loadBuiltin()経由でcomposeCatalogしたvalidKeysByKind（Map<kind,Set>）をapplyResolveDecisionsの前に組み立てて渡す（単一Setへ合流しない）', () => {
   const src = readSrc('store.js');
   const body = extractBalancedBody(src, 'export async function applyCatalogResolutions(decisions) {');
   assert.ok(body, 'store.js に applyCatalogResolutions が見つからない');
   assert.ok(
-    /validKeys\s*=\s*new Set\(\s*composeCatalog\(\s*kind,\s*matMod\.MATERIALS\s*\)\.keys\(\)\s*\)/.test(body),
-    'validKeysをcomposeCatalog(kind, matMod.MATERIALS).keys()から組み立てていない（QA指摘Major-1）',
+    /const kinds = \[\.\.\.new Set\(\s*rows\.map\(r => r\.kind\)\s*\)\]/.test(body),
+    'applyCatalogResolutions が rows から kind の集合（kinds）を組み立てていない（複数種別対応への一般化が欠落）',
   );
+  assert.ok(
+    /const validKeysByKind = new Map\(\)/.test(body),
+    'applyCatalogResolutions が validKeysByKind を Map として組み立てていない（単一Setへの合流への退行）',
+  );
+  const loopMatch = /for\s*\(\s*const kind of kinds\s*\)\s*\{/.exec(body);
+  assert.ok(loopMatch, 'applyCatalogResolutions が kinds をforループしていない');
+  const loopBody = extractBalancedBody(body, loopMatch[0]);
+  assert.ok(loopBody, 'for (const kind of kinds) { ... } の中身を取得できない');
+  assert.ok(/kindDef\(\s*kind\s*\)\.loadBuiltin\(\)/.test(loopBody), 'kindごとのbuiltin取得がkindDef(kind).loadBuiltin()経由になっていない（本体標準マスタを直接importする退行）');
+  assert.ok(
+    /validKeysByKind\.set\(\s*kind,\s*new Set\(\s*composeCatalog\(\s*kind,\s*builtinList\s*\)\.keys\(\)\s*\)\s*\)/.test(loopBody),
+    'validKeysByKindの組み立てがkindごとにvalidKeysByKind.set(kind, new Set(composeCatalog(kind, builtinList).keys()))になっていない（種別をまたいだ合流への退行）',
+  );
+  assert.ok(
+    !/import\(\s*['"]\.\/finish\/materials\//.test(body),
+    'applyCatalogResolutions が本体標準マスタを直接動的importしている（kindDef(kind).loadBuiltin()未経由への退行）',
+  );
+
   const applyIdx = body.indexOf('applyResolveDecisions(');
   assert.ok(applyIdx >= 0, 'applyCatalogResolutions が applyResolveDecisions を呼んでいない');
   assert.ok(
-    /applyResolveDecisions\(\s*rows,\s*decisions,\s*\{\s*validKeys\s*\}\s*\)/.test(body),
-    'applyResolveDecisions に { validKeys } を渡していない（QA指摘Major-1: 未知コード・空白のみのpickを保留に戻せない）',
+    /applyResolveDecisions\(\s*rows,\s*decisions,\s*\{\s*validKeysByKind\s*\}\s*\)/.test(body),
+    'applyResolveDecisions に { validKeysByKind } を渡していない（QA指摘Major-1/ステップ7d QA指摘Major-2）',
   );
-  assert.ok(body.indexOf('validKeys') < applyIdx, 'validKeysの組み立てはapplyResolveDecisions呼び出しより前でなければならない');
+  assert.ok(body.indexOf('validKeysByKind') < applyIdx, 'validKeysByKindの組み立てはapplyResolveDecisions呼び出しより前でなければならない');
 });
 
 test('【不変条件・ステップ6-3・QA指摘Major-1】store.js: applyCatalogResolutionsはrejectedが非空ならproject.setCatalogErrorで通知する', () => {
@@ -79,8 +98,8 @@ test('【不変条件・ステップ6-3・QA指摘Major-1】store.js: applyCatal
   const guardBody = extractBalancedBody(body, guardMatch[0]);
   assert.ok(guardBody, 'if (rejected.length > 0) { ... } の中身を取得できない');
   assert.ok(
-    /project\.setCatalogError\(\s*`指定した代替材が見つかりません/.test(guardBody),
-    'rejectedの通知メッセージが「指定した代替材が見つかりません」で始まっていない',
+    /project\.setCatalogError\(\s*`指定した代替が見つかりません/.test(guardBody),
+    'rejectedの通知メッセージが「指定した代替が見つかりません」（種別非依存の文言）で始まっていない',
   );
 });
 
@@ -145,8 +164,8 @@ test('【不変条件・QA指摘Major-1・2026-09-23】store.js: applyCatalogRes
   assert.ok(restoreIdx > removeIdx, 'restoreGraph（往復）が removeDocEntry より後になっていない');
 });
 
-// ---- store.js: applyCatalogResolutions（ステップ7a Minor: 複数種別混入の防御） ----
-test('【不変条件・ステップ7a Minor】store.js: applyCatalogResolutionsのaliasPairsブロックがkind混在（material以外の混入）を例外で止める', () => {
+// ---- store.js: applyCatalogResolutions（ステップ7d: kind混在は例外にせずkindでグループ化する） ----
+test('【不変条件・ステップ7d】store.js: applyCatalogResolutionsのaliasPairsブロックはp.kindでグループ化し、種別ごとにaddDocumentAliases(kind, pairs)・removeDocEntry(kind, from)を呼ぶ（kind混在例外は無い）', () => {
   const src = readSrc('store.js');
   const body = extractBalancedBody(src, 'export async function applyCatalogResolutions(decisions) {');
   assert.ok(body, 'store.js に applyCatalogResolutions が見つからない');
@@ -155,16 +174,30 @@ test('【不変条件・ステップ7a Minor】store.js: applyCatalogResolutions
   const aliasBlock = extractBalancedBody(body, aliasGuardMatch[0]);
   assert.ok(aliasBlock, 'aliasPairsブロックの中身を取得できない');
   assert.ok(
-    /p\.kind\s*!==\s*kind/.test(aliasBlock),
-    'aliasPairsブロックがp.kind !== kind（material以外の混入）を検査していない（7d未対応のまま多種別が来た場合の防御）',
+    !/複数種別のaliasPairsは未対応です/.test(aliasBlock),
+    'kind混在を例外で止める旧ガード（複数種別のaliasPairsは未対応です）が残っている（ステップ7dでkindグループ化へ一般化する契約への退行）',
   );
-  assert.ok(
-    /throw new Error\(\s*`複数種別のaliasPairsは未対応です/.test(aliasBlock),
-    'kind混在検出時に「複数種別のaliasPairsは未対応です」で始まる例外を投げていない',
-  );
-  const mixedGuardIdx = aliasBlock.search(/p\.kind\s*!==\s*kind/);
-  const addAliasesIdx = aliasBlock.indexOf('addDocumentAliases(');
-  assert.ok(mixedGuardIdx >= 0 && addAliasesIdx > mixedGuardIdx, 'kind混在チェックはaddDocumentAliasesより前でなければならない');
+  const groupMatch = /for\s*\(\s*const \[pKind, pairs\] of pairsByKind\s*\)\s*\{/.exec(aliasBlock);
+  assert.ok(groupMatch, 'aliasPairsブロックが pairsByKind を for (const [pKind, pairs] of pairsByKind) でループしていない（kindでのグループ化が欠落）');
+  const groupBody = extractBalancedBody(aliasBlock, groupMatch[0]);
+  assert.ok(groupBody, 'for (const [pKind, pairs] of pairsByKind) { ... } の中身を取得できない');
+  assert.ok(/addDocumentAliases\(\s*pKind,\s*pairs\s*\)/.test(groupBody), 'グループ化ループが addDocumentAliases(pKind, pairs) を呼んでいない');
+  assert.ok(/removeDocEntry\(\s*pKind,\s*from\s*\)/.test(groupBody), 'グループ化ループが removeDocEntry(pKind, from) を呼んでいない');
+});
+
+test('【不変条件・ステップ7d】store.js: applyCatalogResolutionsのuserOpsブロックはop.kindでグループ化し、種別ごとにcommitUserEntries(opKind, ...)を呼ぶ', () => {
+  const src = readSrc('store.js');
+  const body = extractBalancedBody(src, 'export async function applyCatalogResolutions(decisions) {');
+  assert.ok(body, 'store.js に applyCatalogResolutions が見つからない');
+  const userOpsGuardMatch = /if\s*\(\s*userOps\.length\s*>\s*0\s*\)\s*\{/.exec(body);
+  assert.ok(userOpsGuardMatch, 'if (userOps.length > 0) { ... } ブロックが見つからない');
+  const userOpsBlock = extractBalancedBody(body, userOpsGuardMatch[0]);
+  assert.ok(userOpsBlock, 'userOpsブロックの中身を取得できない');
+  const groupMatch = /for\s*\(\s*const \[opKind, ops\] of opsByKind\s*\)\s*\{/.exec(userOpsBlock);
+  assert.ok(groupMatch, 'userOpsブロックが opsByKind を for (const [opKind, ops] of opsByKind) でループしていない（kindでのグループ化が欠落）');
+  const groupBody = extractBalancedBody(userOpsBlock, groupMatch[0]);
+  assert.ok(groupBody, 'for (const [opKind, ops] of opsByKind) { ... } の中身を取得できない');
+  assert.ok(/commitUserEntries\(\s*opKind,/.test(groupBody), 'グループ化ループが commitUserEntries(opKind, ...) を呼んでいない');
 });
 
 // ---- store.js: resetAll ----
@@ -218,11 +251,22 @@ test('【不変条件・ステップ6-3】App.jsx: モードロード後にs.cat
   );
 });
 
-// ---- ui/CatalogResolveDialog.jsx: 純ロジックはcatalog/*.js経由、buildMaterialRowsの再利用 ----
-test('【不変条件・ステップ6-3】ui/CatalogResolveDialog.jsx: 代替材ピッカーはcatalog/catalogMaintenance.jsのbuildMaterialRowsを再利用する', () => {
+// ---- ui/CatalogResolveDialog.jsx: 純ロジックはcatalog/*.js経由、buildCatalogRowsの再利用 ----
+// ステップ7d QA指摘Major-1: 代替ピッカーはMaterialPicker→EntryPickerへ一般化し、
+// buildMaterialRows（material専用）ではなくbuildCatalogRows（kind引数を取る汎用版）を使う。
+test('【不変条件・ステップ7d QA指摘Major-1】ui/CatalogResolveDialog.jsx: 代替ピッカー（EntryPicker）はcatalog/catalogMaintenance.jsのbuildCatalogRowsをkind付きで再利用し、row.kindでbuiltinListByKindを引く', () => {
   const src = readSrc('ui/CatalogResolveDialog.jsx');
   assert.ok(/from ['"]\.\.\/catalog\/catalogMaintenance\.js['"]/.test(src), 'CatalogResolveDialog.jsx が catalog/catalogMaintenance.js を import していない');
-  assert.ok(/\bbuildMaterialRows\(/.test(src), 'CatalogResolveDialog.jsx が buildMaterialRows を呼んでいない');
+  assert.ok(/\bbuildCatalogRows\(/.test(src), 'CatalogResolveDialog.jsx が buildCatalogRows を呼んでいない（material専用buildMaterialRowsへの退行）');
+  assert.ok(
+    !/\bbuildMaterialRows\(/.test(src),
+    'CatalogResolveDialog.jsx が buildMaterialRows を呼んでいる（material専用ピッカーへの退行。非material行のpickが機能しない）',
+  );
+  assert.ok(
+    /decision\.action === 'pick' && builtinListByKind\?\.\[row\.kind\]/.test(src),
+    'ResolveRowのピッカー表示条件が row.kind で builtinListByKind を引いていない（material限定条件への退行）',
+  );
+  assert.ok(/kindDef\(\s*kind\s*\)\.keyOf\(/.test(src), 'EntryPickerがkindDef(kind).keyOf(...)で値を組み立てていない');
 });
 
 test('【不変条件・ステップ6-3・QA指摘Minor-5】ui/CatalogResolveDialog.jsx: フッターに保存するまで確定しない旨の注記がある', () => {

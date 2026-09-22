@@ -89,21 +89,21 @@ test('planIncomingReconcile: 複数docEntriesを種類ごとに振り分ける',
 // ---- formatReconcileNotice: R12 通知文の4ケース ----
 test('formatReconcileNotice: 不一致のみ（adds無し）→ 件数を含む1文', () => {
   const plan = { adoptDoc: [{ key: 'k', diffFields: ['name'], notify: true, label: 'A材' }], adds: [] };
-  const msg = formatReconcileNotice(plan);
+  const msg = formatReconcileNotice(plan, { kind: CatalogKind.MATERIAL });
   assert.match(msg, /1件/);
   assert.match(msg, /A材/);
 });
 
 test('formatReconcileNotice: 追加のみ（不一致無し）→ addedCountで件数を含む1文', () => {
   const plan = { adoptDoc: [], adds: [material({ code: '999999999999', name: 'B材' })] };
-  const msg = formatReconcileNotice(plan, { addedCount: 1 });
+  const msg = formatReconcileNotice(plan, { kind: CatalogKind.MATERIAL, addedCount: 1 });
   assert.match(msg, /1件/);
   assert.match(msg, /B材/);
 });
 
 test('formatReconcileNotice: addedCountを渡さなければ（既定0）plan.adds非空でも「追加」文は出ない', () => {
   const plan = { adoptDoc: [], adds: [material({ code: '999999999999', name: 'B材' })] };
-  assert.equal(formatReconcileNotice(plan), null, 'addedCount省略時は0扱い（R17で全て弾かれた場合に「追加されました」と誤報しないため）');
+  assert.equal(formatReconcileNotice(plan, { kind: CatalogKind.MATERIAL }), null, 'addedCount省略時は0扱い（R17で全て弾かれた場合に「追加されました」と誤報しないため）');
 });
 
 test('formatReconcileNotice: 不一致＋追加の両方 → 2文をまとめて1本にする', () => {
@@ -111,19 +111,19 @@ test('formatReconcileNotice: 不一致＋追加の両方 → 2文をまとめて
     adoptDoc: [{ key: 'k', diffFields: ['name'], notify: true, label: 'A材' }],
     adds: [material({ code: '999999999999', name: 'B材' })],
   };
-  const msg = formatReconcileNotice(plan, { addedCount: 1 });
+  const msg = formatReconcileNotice(plan, { kind: CatalogKind.MATERIAL, addedCount: 1 });
   assert.match(msg, /A材/);
   assert.match(msg, /B材/);
 });
 
 test('formatReconcileNotice: 全セクション0件（不一致・追加・スキップ・読み替え）ならnull', () => {
-  assert.equal(formatReconcileNotice({ adoptDoc: [], adds: [], aliases: [] }), null);
-  assert.equal(formatReconcileNotice({ adoptDoc: [], adds: [], aliases: [] }, { addedCount: 0, skippedCount: 0 }), null);
+  assert.equal(formatReconcileNotice({ adoptDoc: [], adds: [], aliases: [] }, { kind: CatalogKind.MATERIAL }), null);
+  assert.equal(formatReconcileNotice({ adoptDoc: [], adds: [], aliases: [] }, { kind: CatalogKind.MATERIAL, addedCount: 0, skippedCount: 0 }), null);
 });
 
 test('formatReconcileNotice: notify:falseの不一致は数えない（他セクションも0ならnull）', () => {
   const plan = { adoptDoc: [{ key: 'k', diffFields: ['spec'], notify: false, label: 'A材' }], adds: [] };
-  assert.equal(formatReconcileNotice(plan), null);
+  assert.equal(formatReconcileNotice(plan, { kind: CatalogKind.MATERIAL }), null);
 });
 
 test('formatReconcileNotice: 名称は最大2件＋「ほかN件」', () => {
@@ -135,34 +135,34 @@ test('formatReconcileNotice: 名称は最大2件＋「ほかN件」', () => {
       material({ code: '999999999993', name: '材3' }),
     ],
   };
-  const msg = formatReconcileNotice(plan, { addedCount: 3 });
+  const msg = formatReconcileNotice(plan, { kind: CatalogKind.MATERIAL, addedCount: 3 });
   assert.match(msg, /材1・材2ほか1件/);
 });
 
 // ---- QA指摘2: skippedCountの補足文 ----
 test('formatReconcileNotice: skippedCountが非空なら「N件は同じ内容の材料が既にあるため追加しませんでした」を1文足す', () => {
   const plan = { adoptDoc: [], adds: [material({ code: '999999999999', name: 'B材' })] };
-  const msg = formatReconcileNotice(plan, { addedCount: 1, skippedCount: 1 });
+  const msg = formatReconcileNotice(plan, { kind: CatalogKind.MATERIAL, addedCount: 1, skippedCount: 1 });
   assert.match(msg, /1件.*追加されました/);
   assert.match(msg, /1件は同じ内容の材料が既にあるため追加しませんでした/);
 });
 
 test('formatReconcileNotice: addedCount=0でもskippedCountが非空ならスキップ文だけ出る', () => {
   const plan = { adoptDoc: [], adds: [] };
-  const msg = formatReconcileNotice(plan, { addedCount: 0, skippedCount: 2 });
+  const msg = formatReconcileNotice(plan, { kind: CatalogKind.MATERIAL, addedCount: 0, skippedCount: 2 });
   assert.equal(msg, '2件は同じ内容の材料が既にあるため追加しませんでした');
 });
 
 // ---- QA指摘3: aliasのみ適用のときも通知する ----
 test('formatReconcileNotice: aliasのみ（不一致・追加・スキップ無し）→ 読み替え適用の1文だけ出る', () => {
   const plan = { adoptDoc: [], adds: [], aliases: [{ from: 'a', to: 'b' }, { from: 'c', to: 'd' }] };
-  const msg = formatReconcileNotice(plan);
+  const msg = formatReconcileNotice(plan, { kind: CatalogKind.MATERIAL });
   assert.equal(msg, '材料コードの読み替えを2件適用しました（保存すると確定します）');
 });
 
 test('formatReconcileNotice: alias0件なら読み替え文は省略される（他セクションで確認）', () => {
   const plan = { adoptDoc: [], adds: [material({ code: '999999999999', name: 'B材' })], aliases: [] };
-  const msg = formatReconcileNotice(plan, { addedCount: 1 });
+  const msg = formatReconcileNotice(plan, { kind: CatalogKind.MATERIAL, addedCount: 1 });
   assert.doesNotMatch(msg, /読み替え/);
 });
 
@@ -172,11 +172,18 @@ test('formatReconcileNotice: 不一致・追加・スキップ・読み替えの
     adds: [material({ code: '999999999999', name: 'B材' })],
     aliases: [{ from: 'a', to: 'b' }],
   };
-  const msg = formatReconcileNotice(plan, { addedCount: 1, skippedCount: 1 });
+  const msg = formatReconcileNotice(plan, { kind: CatalogKind.MATERIAL, addedCount: 1, skippedCount: 1 });
   assert.match(msg, /A材/);
   assert.match(msg, /B材/);
   assert.match(msg, /1件は同じ内容の材料が既にあるため追加しませんでした/);
   assert.match(msg, /材料コードの読み替えを1件適用しました/);
+});
+
+// ---- ステップ7d QA指摘Minor-1: kind省略は例外（7aの「既定でmaterialに落とさない」規約と統一）----
+test('【失敗系・ステップ7d QA指摘Minor-1】formatReconcileNotice: kind省略は日本語例外', () => {
+  const plan = { adoptDoc: [], adds: [], aliases: [{ from: 'a', to: 'b' }] };
+  assert.throws(() => formatReconcileNotice(plan), /kindの指定が必須/);
+  assert.throws(() => formatReconcileNotice(plan, {}), /kindの指定が必須/);
 });
 
 // ---- applyReconcilePlan ----
@@ -372,6 +379,80 @@ test('結合【QA指摘Major-1の再現ケース】: 内容完全一致・別コ
 });
 
 // ---- 結合: store.jsの実際の呼び出し方（applyReconcilePlanの結果をformatReconcileNoticeへ渡す）----
+// ---- ステップ7d: kind別の挙動（内装・境界マスターは完全一致のみ・通知文の種別名出し分け） ----
+function interiorMaster(overrides) {
+  return { key: 'LIVING_ROOM', label: 'リビング', wallMaterial: 'クロス', wallFinish: 'AEP', ceilingHeight: 2400, ...overrides };
+}
+
+test('planIncomingReconcile: kind=interiorMasterは1項目違いでもproposalsに積まれずadds（完全一致のみ。段を外さない契約）', () => {
+  const existing = interiorMaster({ key: 'LIVING_ROOM' });
+  // ceilingHeightだけ違う（matchFields=wallMaterial/wallFinish/ceilingHeightの3つでminMatchFields=3
+  // ＝段を外さない。部分一致でも候補が出ない設計）
+  const doc = interiorMaster({ key: 'GUEST_ROOM', ceilingHeight: 2600 });
+  const plan = planIncomingReconcile({
+    kind: CatalogKind.INTERIOR_MASTER, docEntries: [doc], appEntries: [existing],
+  });
+  assert.deepEqual(plan.proposals, [], '1項目違いはproposeではなくadd（内装マスターは完全一致のみ）');
+  assert.deepEqual(plan.adds, [doc]);
+});
+
+test('planIncomingReconcile: kind=interiorMasterは内容完全一致・別キーならaliasesへ（proposalsではなく自動読み替え）', () => {
+  const existing = interiorMaster({ key: 'LIVING_ROOM' });
+  const doc = interiorMaster({ key: 'GUEST_ROOM' }); // wallMaterial/wallFinish/ceilingHeight完全一致・keyだけ違う
+  const plan = planIncomingReconcile({
+    kind: CatalogKind.INTERIOR_MASTER, docEntries: [doc], appEntries: [existing],
+  });
+  assert.deepEqual(plan.aliases, [{ from: 'GUEST_ROOM', to: 'LIVING_ROOM' }]);
+  assert.deepEqual(plan.proposals, []);
+});
+
+test('applyReconcilePlan: kind=interiorMasterの追加を2回reconcileしてもuserが増えない（1回目の結果を反映して再planすると重複しない）', async () => {
+  const addEntry = interiorMaster({ key: 'USER_ROOM', label: 'ユーザー部屋' });
+
+  const firstPlan = planIncomingReconcile({
+    kind: CatalogKind.INTERIOR_MASTER, docEntries: [addEntry], appEntries: [],
+  });
+  assert.deepEqual(firstPlan.adds, [addEntry]);
+
+  let userLib = [];
+  await applyReconcilePlan(firstPlan, {
+    kind: CatalogKind.INTERIOR_MASTER,
+    currentUser: userLib,
+    commitUserFn: async (nextUser) => { userLib = nextUser; },
+    addAliasesFn: () => {},
+  });
+  assert.deepEqual(userLib, [addEntry]);
+
+  const secondPlan = planIncomingReconcile({
+    kind: CatalogKind.INTERIOR_MASTER, docEntries: [addEntry], appEntries: userLib,
+  });
+  assert.deepEqual(secondPlan.adds, [], '2回目はuserライブラリに既にあるのでaddsは空');
+  const commitCalls2 = [];
+  await applyReconcilePlan(secondPlan, {
+    kind: CatalogKind.INTERIOR_MASTER,
+    currentUser: userLib,
+    commitUserFn: async (nextUser) => { commitCalls2.push(nextUser); },
+    addAliasesFn: () => {},
+  });
+  assert.equal(commitCalls2.length, 0, '2回目はcommitUserFnが呼ばれずuserは増えない');
+});
+
+test('formatReconcileNotice: kind=interiorMasterは名詞が「内装マスター」・読み替え文は「キー」（コードではない）', () => {
+  const plan = { adoptDoc: [], adds: [], aliases: [{ from: 'a', to: 'b' }] };
+  const msg = formatReconcileNotice(plan, { kind: CatalogKind.INTERIOR_MASTER });
+  assert.equal(msg, '内装マスターキーの読み替えを1件適用しました（保存すると確定します）');
+});
+
+test('formatReconcileNotice: kind=boundaryMasterは不一致・追加の文にも「境界マスター」が入る', () => {
+  const plan = {
+    adoptDoc: [{ key: 'k', diffFields: ['layers'], notify: true, label: '外壁' }],
+    adds: [{ key: 'X', label: '新境界' }],
+  };
+  const msg = formatReconcileNotice(plan, { kind: CatalogKind.BOUNDARY_MASTER, addedCount: 1 });
+  assert.match(msg, /同梱カタログと内容が異なる境界マスターが1件あります/);
+  assert.match(msg, /ライブラリに新しい境界マスターが1件追加されました/);
+});
+
 test('結合: R17で1件skipされた場合、applyReconcilePlanの結果(addedKeys.length/skipped.length)をformatReconcileNoticeへ渡すと追加文＋スキップ文が出る', async () => {
   const dupA = material({ code: '999999999991', name: '同じ内容' });
   const dupB = material({ code: '999999999992', name: '同じ内容' });
@@ -383,6 +464,7 @@ test('結合: R17で1件skipされた場合、applyReconcilePlanの結果(addedK
     addAliasesFn: () => {},
   });
   const msg = formatReconcileNotice(plan, {
+    kind: CatalogKind.MATERIAL,
     addedCount: result.addedKeys.length,
     skippedCount: result.skipped.length,
   });

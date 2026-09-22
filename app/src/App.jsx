@@ -9,6 +9,7 @@ import {
   exportDocument, importDocument, applyCatalogResolutions,
 } from './store.js';
 import { replaceRowsByScenario } from './catalog/resolveQueue.js';
+import { kindDef } from './catalog/catalogKinds.js';
 import { isDirty, markDirty } from './dirtyState.js';
 import { viewport } from './appViewport.js';
 import {
@@ -132,7 +133,9 @@ const App = observer(() => {
   const [showBuildingInfoDialog, setShowBuildingInfoDialog] = useState(false);
   const [CatalogMaintenancePanelComp, setCatalogMaintenancePanelComp] = useState(null); // 動的import済みのパネル本体（null=未ロード/非表示）
   const [CatalogResolveDialogComp, setCatalogResolveDialogComp] = useState(null); // 指示UI（ステップ6-3）ダイアログ本体（動的import済み。null=未ロード/非表示）
-  const [catalogResolveBuiltinList, setCatalogResolveBuiltinList] = useState(null); // 代替材ピッカー用のbuiltin一覧（materialData.js。動的import）
+  // 代替材ピッカー用のbuiltin一覧（ステップ7d: 行のkind集合ぶん kindDef(kind).loadBuiltin() で
+  // 動的importし、kind → builtinList のオブジェクトにする。materialData.js単独固定をやめる）。
+  const [catalogResolveBuiltinListByKind, setCatalogResolveBuiltinListByKind] = useState(null);
   // カタログの指示UI適用後にモード状態を作り直させるトリガー（新しい読み替え・ユーザーライブラリを
   // 反映した状態でinit()し直すため。モード切替effectのdepsに含める）。
   const [catalogReloadKey, setCatalogReloadKey] = useState(0);
@@ -258,24 +261,31 @@ const App = observer(() => {
     return () => { cancelled = true; disposeCatalogErrorReaction(); };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // 指示UI（ステップ6-3）: project.catalogResolveRows が非空になったらダイアログを動的import
-  // して開く（React.lazy+Suspenseは不採用——CatalogMaintenancePanel.jsx等と同じ
-  // 「import().then().catch()」型に揃える。連打ガードはref）。代替材ピッカー用のbuiltin一覧
-  // （materialData.js）も同時に動的importする。
+  // 指示UI（ステップ6-3→ステップ7d）: project.catalogResolveRows が非空になったらダイアログを
+  // 動的importして開く（React.lazy+Suspenseは不採用——CatalogMaintenancePanel.jsx等と同じ
+  // 「import().then().catch()」型に揃える。連打ガードはref）。代替材ピッカー用のbuiltin一覧は
+  // 行のkind集合ぶん kindDef(kind).loadBuiltin() で動的importし、kind → builtinList へ積み上げる
+  // （対応する種別のbuiltinListが無ければCatalogResolveDialog.jsx側で候補なし＋pick不可になる）。
+  // depsは件数だけでなく種別の構成（kind集合の署名）も見る——件数が同じまま種別だけ入れ替わると
+  // （例: material 1行 → interiorMaster 1行）その種別のbuiltinListが未ロードのままになり、
+  // ピッカーが出ずに pick が保留へ落ちる（理由が利用者に見えない）ため。
+  const catalogResolveKindsSig = [...new Set(project.catalogResolveRows.map(r => r.kind))].sort().join(',');
   useEffect(() => {
     if (project.catalogResolveRows.length === 0) return;
-    if (CatalogResolveDialogComp && catalogResolveBuiltinList) return; // 読込み済み
+    const kinds = [...new Set(project.catalogResolveRows.map(r => r.kind))];
+    const missingKinds = kinds.filter(k => !catalogResolveBuiltinListByKind?.[k]);
+    if (CatalogResolveDialogComp && missingKinds.length === 0) return; // 読込み済み
     if (catalogResolveLoadingRef.current) return;
     catalogResolveLoadingRef.current = true;
     Promise.all([
       import('./ui/CatalogResolveDialog.jsx'),
-      import('./finish/materials/materialData.js'),
+      ...missingKinds.map(k => kindDef(k).loadBuiltin().then(list => [k, list])),
     ])
-      .then(([dlgMod, matMod]) => {
+      .then(([dlgMod, ...pairs]) => {
         if (!catalogResolveLoadingRef.current) return; // 後出し（既に処理済み）は捨てる
         catalogResolveLoadingRef.current = false;
         setCatalogResolveDialogComp(() => dlgMod.CatalogResolveDialog);
-        setCatalogResolveBuiltinList(matMod.MATERIALS);
+        setCatalogResolveBuiltinListByKind(prev => ({ ...prev, ...Object.fromEntries(pairs) }));
       })
       .catch(() => {
         if (!catalogResolveLoadingRef.current) return;
@@ -283,7 +293,7 @@ const App = observer(() => {
         setToast({ msg: '確認ダイアログの読み込みに失敗しました', key: Date.now() });
       });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [project.catalogResolveRows.length]);
+  }, [project.catalogResolveRows.length, catalogResolveKindsSig]);
 
   /** 指示UIダイアログの「まとめて承認」。適用後、承認済み行が除去された最新のcatalogResolveRowsで
    * モードを作り直す（新しい読み替え・ユーザーライブラリを反映した状態で再init()させる）。 */
@@ -2008,12 +2018,13 @@ const App = observer(() => {
         <CatalogMaintenancePanelComp onClose={() => setCatalogMaintenancePanelComp(null)} />
       )}
 
-      {CatalogResolveDialogComp && catalogResolveBuiltinList && project.catalogResolveRows.length > 0 && (
-        // 指示UI（ステップ6-3・R10）。承認・保留は「まとめて」1画面で行う。保留は記録しない
-        // （行は project.catalogResolveRows に残ったまま＝次回の再計算で再掲される）。
+      {CatalogResolveDialogComp && catalogResolveBuiltinListByKind && project.catalogResolveRows.length > 0 && (
+        // 指示UI（ステップ6-3・R10→ステップ7d: builtinListByKindへ一般化）。承認・保留は
+        // 「まとめて」1画面で行う。保留は記録しない（行は project.catalogResolveRows に残った
+        // まま＝次回の再計算で再掲される）。
         <CatalogResolveDialogComp
           rows={project.catalogResolveRows}
-          builtinList={catalogResolveBuiltinList}
+          builtinListByKind={catalogResolveBuiltinListByKind}
           onApply={handleApplyCatalogResolutions}
           onClose={() => setCatalogResolveDialogComp(null)}
         />

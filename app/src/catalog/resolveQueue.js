@@ -194,31 +194,39 @@ function decisionOf(decisions, id) {
  * 行」を表すだけで、この関数自身は状態を持たない（呼び出し側が deferredRowIds に残る行を
  * project.catalogResolveRows に残せば「次回再掲」になる）。
  *
- * QA指摘Major-1（2026-09-22）: `pick`（と `approve` の候補先）の `to` は、呼び出し側が渡す
- * `validKeys`（Set<string>。現在のカタログに実在するキーの集合。他の集合引数=originsや
- * removedMaterials と同じ「集合を渡す」型）に無ければ**その行を保留へ戻す**——未知コード・
- * 空白のみの文字列が alias（文書の参照）に積まれ、実体の無いコードが保存で焼き付くのを防ぐ。
- * 弾いた行は deferredRowIds にも積み、`rejected`（{rowId, key, reason}の配列）で理由を返す
- * （呼び出し側=store.jsがproject.setCatalogErrorで通知する）。`validKeys` 省略時は検証しない
- * （既存の呼び出し・テストとの後方互換。renumber/markOverride/addToLibraryは既存キーを参照
- * しない操作のため検証対象外）。「候補に縛らず全ライブラリから選べる」は維持する——縛るのは
- * 「実在するキーか」だけ。
+ * QA指摘Major-1（2026-09-22）→ステップ7d QA指摘Major-2（2026-09-23）: `pick`（と `approve` の
+ * 候補先）の `to` は、呼び出し側が渡す `validKeysByKind`（Map<kind, Set<string>>。種別ごとに
+ * 実在するキーの集合を持つ——ステップ7dで行が複数種別を持つようになったため、種別をまたいだ
+ * 単一Setへ合流すると他種別の実在キーを誤って通してしまう。行ごとに `row.kind` で引く）に
+ * 無ければ**その行を保留へ戻す**——未知コード・空白のみの文字列が alias（文書の参照）に積まれ、
+ * 実体の無いコードが保存で焼き付くのを防ぐ。弾いた行は deferredRowIds にも積み、
+ * `rejected`（{rowId, key, reason}の配列）で理由を返す（呼び出し側=store.jsがproject.setCatalogErrorで
+ * 通知する）。`validKeysByKind` 省略時は検証しない（既存の呼び出し・テストとの後方互換。
+ * renumber/markOverride/addToLibraryは既存キーを参照しない操作のため検証対象外）。
+ * 「候補に縛らず全ライブラリから選べる」は維持する——縛るのは「実在するキーか」だけ。
+ *
+ * ステップ7d QA指摘Major-1（2026-09-23）: pick で pick が未指定（空文字・非文字列）の行は
+ * 例外を投げず rejected（理由「代替を指定してください」）＋保留へ回す——1行の入力漏れで
+ * まとめて承認の適用全体が失敗し、他の行の決定（material の alias 等）まで失われる事故を防ぐ。
  * @param {object[]} rows buildResolveRows の戻り値
  * @param {Map<string, {action:string, pick?:string}>|Object<string,{action:string,pick?:string}>} decisions
- * @param {{ validKeys?: Set<string> }} [opts]
+ * @param {{ validKeysByKind?: Map<string, Set<string>> }} [opts]
  * @returns {{ aliasPairs: Array<{kind:string,from:string,to:string}>,
  *             userOps: Array<{op:'upsert'|'remove'|'renumber', kind:string, [k:string]: unknown}>,
  *             deferredRowIds: string[],
  *             rejected: Array<{rowId:string, key:string, reason:string}> }}
  */
-export function applyResolveDecisions(rows, decisions, { validKeys } = {}) {
+export function applyResolveDecisions(rows, decisions, { validKeysByKind } = {}) {
   const aliasPairs = [];
   const userOps = [];
   const deferredRowIds = [];
   const rejected = [];
 
-  // validKeys省略時は検証しない（後方互換。呼び出し側=store.jsは常に渡す）。
-  const keyIsValid = key => !validKeys || validKeys.has(key);
+  // validKeysByKind省略時は検証しない（後方互換。呼び出し側=store.jsは常に渡す）。
+  const keyIsValid = (row, key) => {
+    const validKeys = validKeysByKind?.get(row.kind);
+    return !validKeys || validKeys.has(key);
+  };
 
   function rejectToDeferred(row, key, reason) {
     deferredRowIds.push(row.id);
@@ -248,8 +256,8 @@ export function applyResolveDecisions(rows, decisions, { validKeys } = {}) {
           const top = row.candidates[0];
           if (!top) { deferredRowIds.push(row.id); break; } // 候補なし→承認しようがない
           const toKey = kindDef(row.kind).keyOf(top);
-          if (!keyIsValid(toKey)) {
-            rejectToDeferred(row, toKey, '候補の材料が現在のライブラリに見つかりません');
+          if (!keyIsValid(row, toKey)) {
+            rejectToDeferred(row, toKey, '候補が現在のライブラリに見つかりません');
             break;
           }
           aliasPairs.push({ kind: row.kind, from: row.targetKey, to: toKey });
@@ -259,10 +267,11 @@ export function applyResolveDecisions(rows, decisions, { validKeys } = {}) {
       case 'pick': {
         const pick = decision?.pick;
         if (typeof pick !== 'string' || pick === '') {
-          throw new Error(`行 ${row.id}: pick には代替材のキーが必要です`);
+          rejectToDeferred(row, pick, '代替を指定してください');
+          break;
         }
-        if (!keyIsValid(pick)) {
-          rejectToDeferred(row, pick, '指定した代替材が現在のライブラリに見つかりません');
+        if (!keyIsValid(row, pick)) {
+          rejectToDeferred(row, pick, '指定した代替が現在のライブラリに見つかりません');
           break;
         }
         aliasPairs.push({ kind: row.kind, from: row.targetKey, to: pick });

@@ -37,7 +37,7 @@ import {
 } from './catalog/codeNormalization.js';
 import { loadCatalogOverlaysFromIDB as applyCatalogOverlays } from './catalog/catalogOverlayLoader.js';
 import { planIncomingReconcile, formatReconcileNotice, applyReconcilePlan } from './catalog/incomingReconcile.js';
-import { commitUserEntries, upsertUserMaterialEntry } from './catalog/catalogMaintenance.js';
+import { commitUserEntries, upsertUserCatalogEntry } from './catalog/catalogMaintenance.js';
 import { buildResolveRows, applyResolveDecisions, replaceRowsByScenario } from './catalog/resolveQueue.js';
 import { REMOVED_MATERIALS } from './catalog/legacyMaterialCodes.js';
 
@@ -242,100 +242,128 @@ export async function loadCatalogOverlaysFromIDB({
 }
 
 /**
- * 起動時の同梱カタログ照合（ステップ6-1）。loadCatalogOverlaysFromIDB が立てた overlay
- * （catalog/catalogRegistry.js の overlayFor('material')）の doc（文書同梱）を、アプリ側
- * （user＋builtin。doc は含まない）と catalog/incomingReconcile.js の
- * planIncomingReconcile/applyReconcilePlan で照合する。
+ * 起動時の同梱カタログ照合の対象種別（ステップ6-1は material 単独だったが、ステップ7dで
+ * 内装マスター・境界マスターへ一般化した。section・openingSubType は選択UIが無いためまだ含めない
+ * ——BUNDLED_KINDS（同梱の一般化。ステップ7c）と同じ3種別）。
+ */
+const RECONCILE_KINDS = [CatalogKind.MATERIAL, CatalogKind.INTERIOR_MASTER, CatalogKind.BOUNDARY_MASTER];
+
+/**
+ * 起動時の同梱カタログ照合（ステップ6-1→ステップ7d: 種別ループへ一般化）。loadCatalogOverlaysFromIDB
+ * が立てた overlay（catalog/catalogRegistry.js の overlayFor(kind)）の doc（文書同梱）を、
+ * アプリ側（user＋builtin。doc は含まない）と catalog/incomingReconcile.js の
+ * planIncomingReconcile/applyReconcilePlan で種別ごとに照合する。内装マスター・境界マスターは
+ * compareFields=matchFields（段を外さない）のため classifyIncoming が 'propose' を返すことは
+ * 構造的に無い（完全一致のみ。incomingReconcile.test.js で固定）。
  *
- * 失敗（builtinの動的import失敗・commitUserFnのreject等）はここで握り、bootReady 自体は
- * 失敗させない——materialError と同じ経路で project.setCatalogError(e.message) にだけ載せる
- * （overlay には触らない。読込み直後の overlay は既に立っているのでそのまま使い続けられる）。
- * 成功時は formatReconcileNotice(plan, { addedCount: result.addedKeys.length,
- * skippedCount: result.skipped.length }) の結果を project.setCatalogError へ1回だけ渡す
- * （null なら呼ばない——通知するものが無いのに空メッセージでトーストを出さないため）。
+ * RECONCILE_KINDS を1種別ずつ処理する。種別ごとに doc・userとも空なら照合するものも
+ * 場面(a)library-conflictの検出対象も無いためスキップする（不変条件7-1の一般化: builtin の
+ * 動的import＝kindDef(kind).loadBuiltin() は新規文書の起動では読まない。6-1 QA Minor1の維持）。
+ * 種別ごとの失敗（builtinの動的import失敗・commitUserFnのreject等）はその種別だけ握り、他の
+ * 種別の処理は継続する——bootReady 自体は失敗させない（materialError と同じ割り切り）。
+ * 通知文は種別ごとの formatReconcileNotice(plan, { kind, addedCount, skippedCount }) を集め、
+ * 全種別ぶんを「。」で連結して project.setCatalogError を最後に1回だけ呼ぶ（null は集めない
+ * ——通知するものが無いのに空メッセージでトーストを出さないため）。
  *
  * ステップ6-3: 指示UI（catalog/resolveQueue.js）の行のうち、場面(a)library-conflict・
  * (c)unsupported・proposeはdoc単独の有無ではなく（(a)はuser⇔builtinの衝突検出でdocと無関係の
- * ため）ここで組み立てて project.setCatalogResolveRows へ積む——materialData.js の動的import
- * （不変条件7-1）がこの理由でも発生するようになる（doc reconcileと同じ理由での拡張。仕上げ
- * モード突入時・保存時に加えて起動時にも読む）。ただしdoc・userが両方空（同梱もライブラリも
- * 無い新規文書）なら照合・検出とも対象が無いため、materialData.jsを読まずに即returnする
- * （不変条件7-1・6-1 QA Minor1の維持）。場面(b)unresolved-codeはここでは分からない
- * （floor未読込みのため）——modes/FinishModeState.js init が担当し、catalog/resolveQueue.js
- * replaceRowsByScenario で自分の場面の行だけを置き換える。
+ * ため）ここで種別ごとに組み立てる。project.setCatalogResolveRows への反映は全種別の行を集めてから
+ * ループの外で replaceRowsByScenario を1回だけ呼ぶ（他検出元の行・保留中の行を種別またぎで
+ * 消さないため）。場面(b)unresolved-codeはここでは分からない（floor未読込みのため）——
+ * modes/FinishModeState.js init が担当し、catalog/resolveQueue.js replaceRowsByScenario で
+ * 自分の場面の行だけを置き換える。
  */
 export async function reconcileIncomingCatalogs() {
-  const kind = CatalogKind.MATERIAL;
-  const { doc, user } = overlayFor(kind);
-  // doc・userとも空なら照合するものも場面(a)library-conflictの検出対象も無い（不変条件7-1:
-  // materialData.jsは新規文書の起動では読まない。6-1 QA Minor1の退行防止）。
-  if (doc.length === 0 && user.length === 0) return;
+  // 通知は「成功時の内容通知」と「種別ごとの失敗」を分けて集め、最後に失敗分を先頭に寄せて
+  // 1本の文へ連結する（Minor-3・2026-09-23 QA指摘: 利用者が先に失敗を目にできるようにする）。
+  const successNotices = [];
+  const failureNotices = [];
+  const rowsByKind = [];
 
-  let plan = { proposals: [], unsupported: [] };
-  try {
-    const matMod = await import('./finish/materials/materialData.js');
-    const builtinList = matMod.MATERIALS;
-    let currentUser = user;
+  for (const kind of RECONCILE_KINDS) {
+    const { doc, user } = overlayFor(kind);
+    // 種別ごとにdoc・userとも空なら照合するものも場面(a)library-conflictの検出対象も無い
+    // （不変条件7-1: 本体標準マスタは新規文書の起動では読まない。6-1 QA Minor1の退行防止）。
+    if (doc.length === 0 && user.length === 0) continue;
 
-    if (doc.length > 0) {
-      // appEntries/origins は doc を含めない（user+builtinのみ）——docは「今回照合する側」なので、
-      // 既に合成済みのアプリ側と比べないと同一キー扱いで自明にsameになってしまうため。
-      const appEntries = [...resolveCatalog(kind, { user, builtin: builtinList }).values()];
-      const origins = resolveOrigins(kind, { user, builtin: builtinList });
+    let plan = { proposals: [], unsupported: [] };
+    try {
+      const builtinList = await kindDef(kind).loadBuiltin();
+      let currentUser = user;
 
-      plan = planIncomingReconcile({ kind, docEntries: doc, appEntries, origins });
-      const result = await applyReconcilePlan(plan, {
+      if (doc.length > 0) {
+        // appEntries/origins は doc を含めない（user+builtinのみ）——docは「今回照合する側」なので、
+        // 既に合成済みのアプリ側と比べないと同一キー扱いで自明にsameになってしまうため。
+        const appEntries = [...resolveCatalog(kind, { user, builtin: builtinList }).values()];
+        const origins = resolveOrigins(kind, { user, builtin: builtinList });
+
+        plan = planIncomingReconcile({ kind, docEntries: doc, appEntries, origins });
+        const result = await applyReconcilePlan(plan, {
+          kind,
+          currentUser: user,
+          commitUserFn: (nextUser) => commitUserEntries(kind, nextUser, user, { saveFn: saveUserCatalog }),
+          onSkipped: (entry, e) => console.warn(`カタログ照合: 追加候補がR17で弾かれたためスキップしました: ${entry?.code ?? entry}`, e),
+        });
+        if (result.aliasPairs.length > 0) markDirty();
+        if (result.addedKeys.length > 0) currentUser = overlayFor(kind).user; // commitUserFn後のuserを引き直す
+
+        const notice = formatReconcileNotice(plan, {
+          kind,
+          addedCount: result.addedKeys.length,
+          skippedCount: result.skipped.length,
+        });
+        if (notice) successNotices.push(notice);
+      }
+
+      const libraryConflicts = detectLibraryConflicts(kind, { user: currentUser, builtin: builtinList });
+      const appEntriesForRows = [...resolveCatalog(kind, { user: currentUser, builtin: builtinList }).values()];
+      const originsForRows = resolveOrigins(kind, { user: currentUser, builtin: builtinList });
+      rowsByKind.push(...buildResolveRows({
         kind,
-        currentUser: user,
-        commitUserFn: (nextUser) => commitUserEntries(nextUser, user, { saveFn: saveUserCatalog }),
-        onSkipped: (entry, e) => console.warn(`カタログ照合: 追加候補がR17で弾かれたためスキップしました: ${entry?.code ?? entry}`, e),
-      });
-      if (result.aliasPairs.length > 0) markDirty();
-      if (result.addedKeys.length > 0) currentUser = overlayFor(kind).user; // commitUserFn後のuserを引き直す
-
-      const notice = formatReconcileNotice(plan, {
-        addedCount: result.addedKeys.length,
-        skippedCount: result.skipped.length,
-      });
-      if (notice) project.setCatalogError(notice);
+        proposals: plan.proposals,
+        libraryConflicts,
+        unsupported: plan.unsupported,
+        appEntries: appEntriesForRows,
+        userEntries: currentUser,
+        builtinEntries: builtinList,
+        origins: originsForRows,
+        removedMaterials: kind === CatalogKind.MATERIAL ? REMOVED_MATERIALS : [],
+      }));
+    } catch (e) {
+      failureNotices.push(`${KIND_LABELS[kind] ?? kind}の照合に失敗しました: ${e.message}`);
     }
-
-    const libraryConflicts = detectLibraryConflicts(kind, { user: currentUser, builtin: builtinList });
-    const appEntriesForRows = [...resolveCatalog(kind, { user: currentUser, builtin: builtinList }).values()];
-    const originsForRows = resolveOrigins(kind, { user: currentUser, builtin: builtinList });
-    const rows = buildResolveRows({
-      kind,
-      proposals: plan.proposals,
-      libraryConflicts,
-      unsupported: plan.unsupported,
-      appEntries: appEntriesForRows,
-      userEntries: currentUser,
-      builtinEntries: builtinList,
-      origins: originsForRows,
-      removedMaterials: REMOVED_MATERIALS,
-    });
-    project.setCatalogResolveRows(
-      replaceRowsByScenario(project.catalogResolveRows, rows, ['library-conflict', 'unsupported', 'propose']),
-    );
-  } catch (e) {
-    project.setCatalogError(e.message);
   }
+
+  project.setCatalogResolveRows(
+    replaceRowsByScenario(project.catalogResolveRows, rowsByKind, ['library-conflict', 'unsupported', 'propose']),
+  );
+  const notices = [...failureNotices, ...successNotices];
+  if (notices.length > 0) project.setCatalogError(notices.join('。'));
 }
 
 /**
- * 指示UI（ステップ6-3）の決定を反映する。
- * 手順: (0) 現在のカタログ（builtin+user。materialData.jsを動的import）から validKeys
- *     （実在するキーの集合）を組み立てる (1) applyResolveDecisions（validKeys付き）で
+ * 指示UI（ステップ6-3→ステップ7d: 行が複数種別（material・interiorMaster・boundaryMaster）を
+ * 持つようになったため kind でグループ化して一般化）の決定を反映する。
+ * 手順: (0) rows に現れる kind ごとに現在のカタログ（builtin+user。kindDef(kind).loadBuiltin()
+ *     を動的import）から composeCatalog(kind, builtinList).keys() を組み立て、
+ *     validKeysByKind（Map<kind, Set<実在キー>>）へ種別ごとに保持する（ステップ7d QA指摘Major-2:
+ *     単一Setへ合流すると、他種別にだけ実在するキーを誤って「実在する」と判定してしまうため、
+ *     種別をまたがず kind ごとに検証する）。(1) applyResolveDecisions（validKeysByKind付き）で
  *     行＋決定から aliasPairs/userOps/deferredRowIds/rejected を組み立てる——未知コード・
- *     空白のみを指定した行は保留へ戻り rejected に積まれる（QA指摘Major-1）。rejectedが
- *     非空なら project.setCatalogError で通知する。
- * (2) userOpsがあればユーザーライブラリ（upsert/remove/renumber）へ適用し commitUserEntries
- *     で永続化してから markDirty()（ライブラリの変更は往復と無関係に dirty 化する）。
- * (3) aliasPairsがあれば addDocumentAliases で文書固有の読み替え表へ追記し、続けて各 from が
- *     overlay の doc に実在すれば removeDocEntry で外す（QA指摘Major-1・2026-09-23:
- *     alias確定したdocエントリを残すと、内容完全一致のまま別キーでbuiltin/userと併存し、R17
- *     （合成後の重複禁止検査）が例外を投げる。場面(b)=unresolved-code由来のaliasはfromが
- *     グラフ参照の旧コードでdocに無いため、無いキーの例外を投げさせず何もしない）。
+ *     空白のみ・pick未指定を指定した行は保留へ戻り rejected に積まれる（QA指摘Major-1・
+ *     ステップ7d QA指摘Major-1: pick未指定はもう例外にしない。1行の入力漏れが他の行の決定
+ *     ごと失敗させないため）。rejectedが非空なら project.setCatalogError で通知する。
+ * (2) userOpsがあれば op.kind でグループ化し、種別ごとにユーザーライブラリ
+ *     （upsert/remove/renumber。renumberはmaterial専用——library-conflict場面の付け替え先
+ *     nextFreeCodeInSameClassがmaterial以外はnullを返し保留へ回る契約のため）へ適用し
+ *     commitUserEntries(kind, …) で種別ごとに永続化してから markDirty()（ライブラリの変更は
+ *     往復と無関係に dirty 化する）。
+ * (3) aliasPairsがあれば p.kind でグループ化し、種別ごとに addDocumentAliases(kind, pairs) で
+ *     文書固有の読み替え表へ追記し、続けて各 from が overlay の doc に実在すれば
+ *     removeDocEntry(kind, from) で外す（QA指摘Major-1・2026-09-23: alias確定したdocエントリを
+ *     残すと、内容完全一致のまま別キーでbuiltin/userと併存し、R17（合成後の重複禁止検査）が
+ *     例外を投げる。場面(b)=unresolved-code由来のaliasはfromがグラフ参照の旧コードでdocに
+ *     無いため、無いキーの例外を投げさせず何もしない）。
  *     その後アクティブ階だけ restoreGraph(activeGraph, serializeGraph(activeGraph)) で往復させて
  *     新しい読み替えをその場で反映してから markDirty()（graphSnapshot.test.js の仮定確認テストで
  *     安全性を確認済み。restoreGraphが内部でapplyDocumentCodeNormalizationを通すため）。往復は
@@ -347,47 +375,60 @@ export async function reconcileIncomingCatalogs() {
  * @param {Map<string,{action:string,pick?:string}>|Object} decisions
  */
 export async function applyCatalogResolutions(decisions) {
-  const kind = CatalogKind.MATERIAL;
   const rows = project.catalogResolveRows;
+  const kinds = [...new Set(rows.map(r => r.kind))];
 
-  const matMod = await import('./finish/materials/materialData.js');
-  const validKeys = new Set(composeCatalog(kind, matMod.MATERIALS).keys());
-  const { aliasPairs, userOps, deferredRowIds, rejected } = applyResolveDecisions(rows, decisions, { validKeys });
+  const validKeysByKind = new Map();
+  for (const kind of kinds) {
+    const builtinList = await kindDef(kind).loadBuiltin();
+    validKeysByKind.set(kind, new Set(composeCatalog(kind, builtinList).keys()));
+  }
+  const { aliasPairs, userOps, deferredRowIds, rejected } = applyResolveDecisions(rows, decisions, { validKeysByKind });
 
   if (rejected.length > 0) {
-    project.setCatalogError(`指定した代替材が見つかりません: ${rejected.map(r => r.key).join(', ')}`);
+    project.setCatalogError(`指定した代替が見つかりません: ${rejected.map(r => r.key).join(', ')}`);
   }
 
   if (userOps.length > 0) {
-    const { user } = overlayFor(kind);
-    let nextUser = user;
+    const opsByKind = new Map();
     for (const op of userOps) {
-      if (op.op === 'upsert') nextUser = upsertUserMaterialEntry(nextUser, op.entry);
-      else if (op.op === 'remove') nextUser = nextUser.filter(e => e.code !== op.key);
-      else if (op.op === 'renumber') nextUser = nextUser.map(e => (e.code === op.from ? { ...e, code: op.to } : e));
-      else throw new Error(`未知のuserOpsです: ${op.op}`);
+      if (!opsByKind.has(op.kind)) opsByKind.set(op.kind, []);
+      opsByKind.get(op.kind).push(op);
     }
-    await commitUserEntries(nextUser, user, { saveFn: saveUserCatalog });
+    for (const [opKind, ops] of opsByKind) {
+      const def = kindDef(opKind);
+      const { user } = overlayFor(opKind);
+      let nextUser = user;
+      for (const op of ops) {
+        if (op.op === 'upsert') nextUser = upsertUserCatalogEntry(opKind, nextUser, op.entry);
+        else if (op.op === 'remove') nextUser = nextUser.filter(e => def.keyOf(e) !== op.key);
+        else if (op.op === 'renumber') {
+          if (opKind !== CatalogKind.MATERIAL) {
+            throw new Error(`renumberはmaterial専用です（library-conflictの付け替え先はmaterialのみ解決可能）: ${opKind}`);
+          }
+          nextUser = nextUser.map(e => (e.code === op.from ? { ...e, code: op.to } : e));
+        } else throw new Error(`未知のuserOpsです: ${op.op}`);
+      }
+      await commitUserEntries(opKind, nextUser, user, { saveFn: saveUserCatalog });
+    }
     markDirty();
   }
 
   if (aliasPairs.length > 0) {
-    // ステップ7a: addDocumentAliasesはkind必須引数になった。applyCatalogResolutionsは現状
-    // material専用（rows/validKeysともmaterialだけを扱う）なので、行ごとのaliasPairs[].kindを
-    // 集計せずローカルのkind（=CatalogKind.MATERIAL）をそのまま渡す（多種別対応はステップ7dで
-    // このUI自体がmaterial以外の行を扱うようになってから拡張する）。
-    // 防御: 万一material以外のkindが混入していたら（7d未対応のまま多種別行が来た場合）、
-    // 誤ってmaterialとして読み替えてしまう前に例外で止める。
-    const mixedKindPair = aliasPairs.find(p => p.kind !== kind);
-    if (mixedKindPair) {
-      throw new Error(`複数種別のaliasPairsは未対応です（ステップ7dで対応）: ${mixedKindPair.kind}`);
+    const pairsByKind = new Map();
+    for (const p of aliasPairs) {
+      if (!pairsByKind.has(p.kind)) pairsByKind.set(p.kind, []);
+      pairsByKind.get(p.kind).push({ from: p.from, to: p.to });
     }
-    addDocumentAliases(kind, aliasPairs);
-    // QA指摘Major-1: alias確定したdocエントリはoverlayに残さない。場面(b)（unresolved-code）
-    // 由来のfromはグラフ参照の旧コードでdocに無いため、無いキーの例外を投げさせず何もしない。
-    const docKeys = new Set(overlayFor(kind).doc.map(e => e.code));
-    for (const { from } of aliasPairs) {
-      if (docKeys.has(from)) removeDocEntry(kind, from);
+    for (const [pKind, pairs] of pairsByKind) {
+      addDocumentAliases(pKind, pairs);
+      // QA指摘Major-1: alias確定したdocエントリはoverlayに残さない。場面(b)（unresolved-code）
+      // 由来のfromはグラフ参照の旧コードでdocに無いため、無いキーの例外を投げさせず何もしない。
+      const def = kindDef(pKind);
+      const docKeys = new Set(overlayFor(pKind).doc.map(e => def.keyOf(e)));
+      for (const { from } of pairs) {
+        if (docKeys.has(from)) removeDocEntry(pKind, from);
+      }
     }
     const activeGraph = project.activeGraph;
     if (activeGraph) restoreGraph(activeGraph, serializeGraph(activeGraph));

@@ -140,9 +140,10 @@ export class FinishModeState {
       }
     });
 
-    const [matMod, masterMod, compMod] = await Promise.all([
+    const [matMod, masterMod, boundaryMod, compMod] = await Promise.all([
       import('../finish/materials/materialData.js'),
       import('../finish/materials/interiorMasters.js'),
+      import('../finish/materials/boundaryMasters.js'),
       import('../finish/edgeComposition.js'),
     ]);
 
@@ -151,21 +152,36 @@ export class FinishModeState {
     const materialDiffs = docDiffMap(CatalogKind.MATERIAL, matMod.MATERIALS); // R13: 同梱材の本体との不一致
     // ステップ7b: 内装マスターもregistry合成（doc/userの読み替え・同梱を反映）。
     const interiorMasters = composeCatalog(CatalogKind.INTERIOR_MASTER, interiorMasterBuiltinList(masterMod));
+    // ステップ7d: 境界マスターは場面(b)unresolved-code検出専用（読者は無し。selectBoundaryMaster
+    // は閉じた7キーのリテラルから再導出するため registry を持ち回らない。F2参照）。
+    const boundaryMasters = composeCatalog(CatalogKind.BOUNDARY_MASTER, Object.values(boundaryMod.BOUNDARY_MASTERS));
     this._composition = compMod; // 層構成→寸法解決（壁生成で使用）
 
-    // 照合: 永続化データが参照する材コードがすべてマスタに存在するか
-    const missing = [];
-    for (const code of this._collectReferencedCodes()) {
-      if (!materialMap.has(code)) missing.push(code);
-    }
-    const error = missing.length > 0 ? ERR_MATERIAL_MISMATCH : null;
+    // 照合: 永続化データが参照する材コードがすべてマスタに存在するか（materialErrorは材のみ。
+    // マスター未解決は壁再生成を止めない契約）。missingUsageは_missingUsageForKindから種別ごとに
+    // 1回だけ導出し、_buildUnresolvedCodeRowsへそのまま渡す（ステップ7d QA指摘Minor-4・
+    // 2026-09-23: 従来は_buildUnresolvedCodeRows内部でも同じ走査をやり直していた二重計算を解消。
+    // errorの算出はmaterialのmissingUsageだけを見る——内装・境界マスターの未解決を合算しない
+    // （materialErrorは材のみという契約。FinishModeState.test.jsで固定）。
+    const materialMissingUsage = this._missingUsageForKind(CatalogKind.MATERIAL, materialMap);
+    const error = materialMissingUsage.length > 0 ? ERR_MATERIAL_MISMATCH : null;
+    const interiorMissingUsage = this._missingUsageForKind(CatalogKind.INTERIOR_MASTER, interiorMasters);
+    const boundaryMissingUsage = this._missingUsageForKind(CatalogKind.BOUNDARY_MASTER, boundaryMasters);
 
-    // 指示UI（ステップ6-3）場面(b)unresolved-code: missing（自階の未知コード）＋
-    // peekUnresolvedCodes()（全階累積の未解決コード。削除材の旧コード等）を、今のコード表
-    // （文書固有の読み替え+本体の振り直し表）とmaterialMapで再フィルタする——解決できる
-    // （読み替え後にmaterialMapへ存在する）ものはここで捨てる。前回の解決UIで読み替えが
-    // 付いた後（同じセッションで再度仕上げモードに入り直した等）に古い行を再掲しないため。
-    const catalogResolveRows = this._buildUnresolvedCodeRows(missing, materialMap, materials);
+    // 指示UI（ステップ6-3→ステップ7d: material・interiorMaster・boundaryMasterの3種別ぶん）
+    // 場面(b)unresolved-code: 自階の未知キー（missingUsage）＋peekUnresolvedCodes()（全階累積の
+    // 未解決コード。削除材の旧コード等）を、今のコード表（文書固有の読み替え+本体の振り直し表）と
+    // 各composeCatalogの結果で再フィルタする——解決できる（読み替え後に実在するようになった）
+    // ものはここで捨てる。前回の解決UIで読み替えが付いた後（同じセッションで再度仕上げモードに
+    // 入り直した等）に古い行を再掲しないため。
+    // boundaryMasterの未解決行は次のモード境界でsyncEdgesFromTopologyがmasterTypeを再導出して
+    // 上書きするため一過性（F2: edgeClassify.js selectBoundaryMaster が閉じた7キーのリテラルから
+    // 再導出する。行として一瞬見えても、モード境界を跨げば自然に消える）。
+    const catalogResolveRows = [
+      ...this._buildUnresolvedCodeRows(CatalogKind.MATERIAL, materialMap, materials, materialMissingUsage),
+      ...this._buildUnresolvedCodeRows(CatalogKind.INTERIOR_MASTER, interiorMasters, [...interiorMasters.values()], interiorMissingUsage),
+      ...this._buildUnresolvedCodeRows(CatalogKind.BOUNDARY_MASTER, boundaryMasters, [...boundaryMasters.values()], boundaryMissingUsage),
+    ];
 
     runInAction(() => {
       this.materials       = materials;
@@ -183,27 +199,52 @@ export class FinishModeState {
   }
 
   /**
-   * 場面(b)unresolved-codeの行を組み立てる（catalog/resolveQueue.js buildResolveRows）。
-   * missing（自階の未知コード）は floor 参照として、peekUnresolvedCodes()（全階累積）は
-   * 今のコード表で再解決できないものだけを usage として渡す。
+   * 場面(b)unresolved-codeの行を kind ごとに組み立てる（catalog/resolveQueue.js buildResolveRows。
+   * ステップ7d: material専用だったものを一般化）。missingUsage（呼び出し側=init()が
+   * _missingUsageForKind(kind, appMap)で1回だけ計算したもの。二重計算をやめる＝Minor-4）と
+   * peekUnresolvedCodes()（全階累積。kindでフィルタ）を今のコード表で再解決できないものだけ
+   * usage として渡す。
    */
-  _buildUnresolvedCodeRows(missing, materialMap, appEntries) {
-    const table = buildCodeTable({ aliases: currentDocumentAliases(CatalogKind.MATERIAL) });
-    // peekUnresolvedCodes()は全種別（ステップ7a）の未解決コードを返す——ここはmaterialの
-    // unresolved-code行だけを扱う（他種別の行はステップ7dで別途組み立てる）。
-    const stillUnresolved = peekUnresolvedCodes().filter(u => u.kind === CatalogKind.MATERIAL).filter(u => {
+  _buildUnresolvedCodeRows(kind, appMap, appEntries, missingUsage) {
+    const table = buildCodeTable({ aliases: currentDocumentAliases(kind) });
+    // peekUnresolvedCodes()は全種別（ステップ7a）の未解決コードを返す——kindでフィルタする。
+    const stillUnresolved = peekUnresolvedCodes().filter(u => u.kind === kind).filter(u => {
       const mapped = table.has(u.code) ? table.get(u.code) : u.code;
-      return mapped == null || !materialMap.has(mapped);
+      return mapped == null || !appMap.has(mapped);
     });
-    const missingUsage = missing.map(code => ({
-      code, location: 'floor', planeId: this.project?.activePlane?.id ?? null,
-    }));
     return buildResolveRows({
-      kind: CatalogKind.MATERIAL,
+      kind,
       unresolved: [...missingUsage, ...stillUnresolved],
       appEntries,
-      removedMaterials: REMOVED_MATERIALS,
+      removedMaterials: kind === CatalogKind.MATERIAL ? REMOVED_MATERIALS : [],
     });
+  }
+
+  /**
+   * kind ごとの「自階が参照する未知キー」usage配列（buildResolveRowsのunresolved引数の形）。
+   * material: _collectReferencedCodes()（永続化データが参照する材コード4系統）のうちmaterialMapに
+   * 無いもの。interiorMaster: rooms[].templateKeyのうちinteriorMasterMapに無いもの。
+   * boundaryMaster: edges[].masterTypeのうちboundaryMasterMapに無いもの。
+   */
+  _missingUsageForKind(kind, appMap) {
+    if (kind === CatalogKind.MATERIAL) {
+      const codes = [];
+      for (const code of this._collectReferencedCodes()) {
+        if (!appMap.has(code)) codes.push(code);
+      }
+      return codes.map(code => ({ code, location: 'floor', planeId: this.project?.activePlane?.id ?? null }));
+    }
+    if (kind === CatalogKind.INTERIOR_MASTER) {
+      return this.graph.rooms
+        .filter(room => room.templateKey && !appMap.has(room.templateKey))
+        .map(room => ({ code: room.templateKey, location: 'room', roomId: room.id }));
+    }
+    if (kind === CatalogKind.BOUNDARY_MASTER) {
+      return this.graph.edges
+        .filter(edge => edge.masterType && !appMap.has(edge.masterType))
+        .map(edge => ({ code: edge.masterType, location: 'edge', edgeKey: edge.key }));
+    }
+    return [];
   }
 
   /**

@@ -1,31 +1,45 @@
 import { useState } from 'react';
 import './CatalogResolveDialog.css';
-import { CatalogKind, kindDef } from '../catalog/catalogKinds.js';
+import { kindDef } from '../catalog/catalogKinds.js';
 import { displayNameOf } from '../catalog/catalogMatch.js';
 import { CATALOG_DIFF_COLOR, CATALOG_DIFF_MARK, diffPairs } from '../catalog/catalogDiffView.js';
-import { buildMaterialRows } from '../catalog/catalogMaintenance.js';
+import { buildCatalogRows } from '../catalog/catalogMaintenance.js';
 
 const SCENARIO_LABELS = Object.freeze({
   'library-conflict': '(a) ライブラリ内の衝突',
-  'unresolved-code':  '(b) 未解決の材コード',
+  'unresolved-code':  '(b) 未解決の参照',
   unsupported:        '(c) 未対応の項目',
-  propose:            '類似材の提案',
+  propose:            '類似項目の提案',
 });
 
-function actionLabel(scenario, action) {
+// ステップ7d QA指摘Minor-2: 「材料」固定の文言を種別非依存にする（材以外の行でも意味が通るように）。
+function actionLabel(action) {
   if (action === 'approve') return '承認';
-  if (action === 'pick') return scenario === 'propose' ? '別材を指示' : '代替材を指示';
-  if (action === 'markOverride') return '本体材の編集として扱う';
+  if (action === 'pick') return '代替を指示';
+  if (action === 'markOverride') return '本体の編集として扱う';
   if (action === 'addToLibrary') return '置きかえずにライブラリへ追加';
   if (action === 'defer') return '保留';
   return action;
 }
 
+// ステップ7d QA指摘Minor-5: usage の location（参照箇所の種類）を日本語化する唯一の対応表。
+const LOCATION_LABELS = Object.freeze({
+  floor: '階',
+  room: '部屋',
+  edge: '境界',
+  clEccentricity: 'CL偏芯',
+  exteriorWallBacking: '外壁下地',
+  interiorWallBacking: '内壁下地',
+  ceilingBacking: '天井下地',
+  floorBacking: '床下地',
+  opening: '建具',
+});
+
 function usageSummary(usage) {
   if (!usage || usage.length === 0) return null;
   const byLocation = new Map();
   for (const u of usage) byLocation.set(u.location, (byLocation.get(u.location) ?? 0) + 1);
-  return [...byLocation.entries()].map(([loc, n]) => `${loc}×${n}`).join('・');
+  return [...byLocation.entries()].map(([loc, n]) => `${LOCATION_LABELS[loc] ?? loc}×${n}`).join('・');
 }
 
 /** 既定の決定: 候補があれば承認、無ければ保留。 */
@@ -45,29 +59,35 @@ function keyOfCandidate(row, candidate) {
   }
 }
 
-/** 代替材ピッカー（buildMaterialRows再利用）。候補に無い材料も検索して選べる。 */
-function MaterialPicker({ builtinList, value, onChange }) {
+/**
+ * 代替の汎用ピッカー（ステップ7d QA指摘Major-1: 種別非依存のEntryPicker。旧MaterialPickerを
+ * 一般化）。buildCatalogRows({kind, builtinList, search}) で kind の一覧を合成し、候補に無い
+ * 項目も検索して選べる。value/optionの値は kindDef(kind).keyOf(entry)、表示名は displayNameOf。
+ */
+function EntryPicker({ kind, builtinList, value, onChange }) {
   const [search, setSearch] = useState('');
-  const rows = builtinList ? buildMaterialRows({ builtinList, search }) : [];
+  const def = kindDef(kind);
+  const rows = builtinList ? buildCatalogRows({ kind, builtinList, search }) : [];
   return (
     <div className="catresolve-picker">
       <input
         className="catresolve-picker-search"
-        placeholder="材料名で検索"
+        placeholder="名称で検索"
         value={search}
         onChange={e => setSearch(e.target.value)}
       />
       <select className="catresolve-picker-select" value={value ?? ''} onChange={e => onChange(e.target.value || null)}>
         <option value="">（ライブラリから選ぶ）</option>
-        {rows.map(r => (
-          <option key={r.entry.code} value={r.entry.code}>{r.entry.name}（{r.entry.code}）</option>
-        ))}
+        {rows.map(r => {
+          const key = def.keyOf(r.entry);
+          return <option key={key} value={key}>{displayNameOf(r.entry)}（{key}）</option>;
+        })}
       </select>
     </div>
   );
 }
 
-function ResolveRow({ row, decision, onChange, builtinList }) {
+function ResolveRow({ row, decision, onChange, builtinListByKind }) {
   const pickedCandidate = row.candidates.find(c => keyOfCandidate(row, c) === decision.pick) ?? row.candidates[0] ?? null;
   const diffTargetEntry = row.scenario === 'unresolved-code' ? null : row.targetEntry;
   const diffs = (diffTargetEntry && pickedCandidate) ? diffPairs(row.kind, diffTargetEntry, pickedCandidate) : [];
@@ -105,7 +125,7 @@ function ResolveRow({ row, decision, onChange, builtinList }) {
               checked={decision.action === action}
               onChange={() => onChange({ ...decision, action })}
             />
-            {actionLabel(row.scenario, action)}
+            {actionLabel(action)}
           </label>
         ))}
       </div>
@@ -125,9 +145,10 @@ function ResolveRow({ row, decision, onChange, builtinList }) {
         </div>
       )}
 
-      {decision.action === 'pick' && row.kind === CatalogKind.MATERIAL && (
-        <MaterialPicker
-          builtinList={builtinList}
+      {decision.action === 'pick' && builtinListByKind?.[row.kind] && (
+        <EntryPicker
+          kind={row.kind}
+          builtinList={builtinListByKind[row.kind]}
           value={decision.pick}
           onChange={pick => onChange({ ...decision, pick })}
         />
@@ -142,9 +163,9 @@ function ResolveRow({ row, decision, onChange, builtinList }) {
  * 対象→差分→候補→操作、フッタに「まとめて承認」「すべて保留（閉じる）」。
  * 保留は記録しない——「すべて保留」はdecisionsを送らずonCloseするだけで、行はproject側に
  * 残ったまま次回の再計算で再掲される。
- * @param {{ rows: object[], builtinList: object[], onApply: (decisions: Map) => void, onClose: () => void }} props
+ * @param {{ rows: object[], builtinListByKind: Record<string, object[]>, onApply: (decisions: Map) => void, onClose: () => void }} props
  */
-export function CatalogResolveDialog({ rows, builtinList, onApply, onClose }) {
+export function CatalogResolveDialog({ rows, builtinListByKind, onApply, onClose }) {
   // 明示的にユーザーが触った行の決定だけを持つ（疎なMap）。rows は App.jsx 側で場面ごとに
   // 置き換えられる（replaceRowsByScenario）が、ここでは触っていない行の決定
   // （既定値=defaultDecision(row)）を都度row自身から算出するため、rowsが変わっても
@@ -185,12 +206,12 @@ export function CatalogResolveDialog({ rows, builtinList, onApply, onClose }) {
               row={row}
               decision={decisions.get(row.id) ?? defaultDecision(row)}
               onChange={next => updateDecision(row.id, next)}
-              builtinList={builtinList}
+              builtinListByKind={builtinListByKind}
             />
           ))}
         </div>
         <div className="catresolve-footer">
-          <span className="catresolve-footer-note">材料コードの読み替えは文書を保存するまで確定しません（保存前に閉じると次回また確認します）。ライブラリへの追加・変更は承認時に保存されます</span>
+          <span className="catresolve-footer-note">読み替えは文書を保存するまで確定しません（保存前に閉じると次回また確認します）。ライブラリへの追加・変更は承認時に保存されます</span>
           <button className="catresolve-btn catresolve-btn--primary" onClick={handleApplyAll}>まとめて承認</button>
           <button className="catresolve-btn catresolve-btn--secondary" onClick={onClose}>すべて保留（閉じる）</button>
         </div>

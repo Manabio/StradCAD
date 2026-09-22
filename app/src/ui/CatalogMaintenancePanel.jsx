@@ -1,13 +1,13 @@
 import { useEffect, useMemo, useState } from 'react';
 import './CatalogMaintenancePanel.css';
-import { CatalogKind, MATERIAL_CLASSES } from '../catalog/catalogKinds.js';
+import { CatalogKind, kindDef, MATERIAL_CLASSES } from '../catalog/catalogKinds.js';
 import { parseMaterialCode } from '../catalog/materialCode.js';
 import { docDiffMap, overlayFor, removeDocEntry } from '../catalog/catalogRegistry.js';
 import { CATALOG_DIFF_COLOR, CATALOG_DIFF_MARK, diffPairs, diffTooltip } from '../catalog/catalogDiffView.js';
 import { saveUserCatalog } from '../storage/db.js';
 import { markDirty } from '../dirtyState.js';
 import {
-  buildKindTabs, buildMaterialRows, collectKnownMaterialCodes, nextMaterialCode,
+  buildKindTabs, buildMaterialRows, buildCatalogRows, collectKnownMaterialCodes, nextMaterialCode,
   buildMaterialEntry, duplicateMaterialEntry, validateMaterialEntry,
   upsertUserMaterialEntry, removeUserMaterialEntry, commitUserEntries, planRealign, realignTargets,
   canEditMaterialRow, isEditableMaterialCategory, parseThicknessInput, MATERIAL_CATEGORY,
@@ -22,6 +22,44 @@ const CATEGORY_LABELS = Object.freeze({
   [MATERIAL_CATEGORY.BACKING]: '下地材',
 });
 const ORIGIN_LABELS = Object.freeze({ doc: '同梱', user: 'ライブラリ', builtin: '標準' });
+
+// ステップ7d: 内装マスター・境界マスターの閲覧タブ（読み取り専用）に並べる項目。
+// 追加・複製・編集・削除・合わせ直しボタンは出さない（選ぶ経路が無い・layers/fieldsの編集UIは
+// 複雑・編集はステップ12でまとめて着手する裁定）。
+const READONLY_KIND_FIELDS = Object.freeze({
+  [CatalogKind.INTERIOR_MASTER]: Object.freeze([
+    { field: 'label', label: '呼称' },
+    { field: 'wallMaterial', label: '壁材' },
+    { field: 'wallFinish', label: '壁仕上げ' },
+    { field: 'ceilingHeight', label: '天井高' },
+  ]),
+  [CatalogKind.BOUNDARY_MASTER]: Object.freeze([
+    { field: 'label', label: '呼称' },
+    { field: 'kind', label: '種類' },
+    { field: 'layers', label: '層構成' },
+    { field: 'derivedFrom', label: '継承元' },
+    { field: 'fields', label: '項目' },
+  ]),
+});
+
+/** layers（境界マスター）1件を「役割: コード or src」の1行文字列にする。 */
+function formatLayerLine(layer) {
+  const source = layer.code ?? layer.src ?? '（未指定）';
+  return `${layer.role}: ${source}`;
+}
+
+/** READONLY_KIND_FIELDSの1項目値を読み取り専用表示用の文字列にする。 */
+function formatReadonlyFieldValue(field, value) {
+  if (field === 'layers') {
+    return Array.isArray(value) && value.length > 0 ? value.map(formatLayerLine).join(' / ') : '（なし）';
+  }
+  if (field === 'fields') {
+    const entries = value ? Object.entries(value) : [];
+    return entries.length > 0 ? entries.map(([k, v]) => `${k}=${v ?? 'null'}`).join(', ') : '（なし）';
+  }
+  if (value === null || value === undefined || value === '') return '（未設定）';
+  return String(value);
+}
 
 function firstMajor() {
   return Number(Object.keys(MATERIAL_CLASSES)[0]);
@@ -87,6 +125,12 @@ export function CatalogMaintenancePanel({ onClose }) {
   // ステップ6b（4.7 合わせ直し）: null | { keys: string[] }（単一行=1件、「すべて合わせ直す」=複数件）
   const [realignConfirm, setRealignConfirm] = useState(null);
 
+  // ステップ7d: 内装マスター・境界マスターの閲覧タブ（読み取り専用）用の状態。material（左記の
+  // builtinList/selectedCode等）とは別に持つ——編集フォーム系のstateを閲覧タブへ誤って持ち込まない。
+  const [readonlyBuiltinByKind, setReadonlyBuiltinByKind] = useState({}); // kind -> builtin一覧
+  const [readonlySearch, setReadonlySearch] = useState('');
+  const [readonlySelectedKey, setReadonlySelectedKey] = useState(null);
+
   useEffect(() => {
     let cancelled = false;
     import('../finish/materials/materialData.js').then(m => {
@@ -94,6 +138,18 @@ export function CatalogMaintenancePanel({ onClose }) {
     }).catch(() => { if (!cancelled) setLoadError(true); });
     return () => { cancelled = true; };
   }, []);
+
+  // 閲覧タブを開いたとき（activeKindが内装・境界マスターへ切り替わったとき）だけ
+  // kindDef(kind).loadBuiltin() で動的importする（一度読んだ種別はキャッシュして読み直さない）。
+  useEffect(() => {
+    if (!READONLY_KIND_FIELDS[activeKind]) return;
+    if (readonlyBuiltinByKind[activeKind]) return;
+    let cancelled = false;
+    kindDef(activeKind).loadBuiltin().then(list => {
+      if (!cancelled) setReadonlyBuiltinByKind(prev => ({ ...prev, [activeKind]: list }));
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [activeKind, readonlyBuiltinByKind]);
 
   // catalogRegistry.js の overlay はモジュール単位の可変状態（Reactが追跡しない）ため、
   // useMemoでキャッシュせず毎レンダー computeDerived を呼び直す（保存・削除後の他state更新に
@@ -197,7 +253,7 @@ export function CatalogMaintenancePanel({ onClose }) {
     const { user } = overlayFor(CatalogKind.MATERIAL);
     const nextUser = upsertUserMaterialEntry(user, entry);
     try {
-      await commitUserEntries(nextUser, user, { saveFn: saveUserCatalog });
+      await commitUserEntries(CatalogKind.MATERIAL, nextUser, user, { saveFn: saveUserCatalog });
     } catch (e) {
       setFormError(`保存に失敗しました: ${e.message}`);
       return;
@@ -220,7 +276,7 @@ export function CatalogMaintenancePanel({ onClose }) {
       return;
     }
     try {
-      await commitUserEntries(nextUser, user, { saveFn: saveUserCatalog });
+      await commitUserEntries(CatalogKind.MATERIAL, nextUser, user, { saveFn: saveUserCatalog });
     } catch (e) {
       setFormError(`削除に失敗しました: ${e.message}`);
       setConfirmingDelete(false);
@@ -278,14 +334,21 @@ export function CatalogMaintenancePanel({ onClose }) {
         </div>
 
         <div className="catmnt-body">
-          {/* 左: 種別タブ（第1段は材料のみ実装。他は登録表から器だけ出して無効化） */}
+          {/* 左: 種別タブ（材料は追加・編集・削除まで実装。内装・境界マスターは閲覧のみ。
+              section/openingSubTypeは登録表から器だけ出して無効化） */}
           <div className="catmnt-kind-tabs">
             {kindTabs.map(tab => (
               <button
                 key={tab.kind}
                 className={`catmnt-kind-tab${tab.kind === activeKind ? ' catmnt-kind-tab--active' : ''}`}
                 disabled={!tab.enabled}
-                onClick={() => tab.enabled && setActiveKind(tab.kind)}
+                onClick={() => {
+                  if (!tab.enabled) return;
+                  setActiveKind(tab.kind);
+                  // タブを切り替えたら閲覧タブの検索・選択をリセットする（前のタブの選択を持ち越さない）。
+                  setReadonlySearch('');
+                  setReadonlySelectedKey(null);
+                }}
               >
                 {tab.label}
                 {!tab.enabled && <span className="catmnt-kind-tab-note">準備中</span>}
@@ -574,8 +637,102 @@ export function CatalogMaintenancePanel({ onClose }) {
               </div>
             </>
           )}
+
+          {/* ステップ7d: 内装マスター・境界マスターの閲覧タブ（読み取り専用。追加・複製・編集・
+              削除・合わせ直しボタンは出さない——選ぶ経路が無い・layers/fieldsの編集UIは複雑・
+              編集はステップ12でまとめて着手する裁定） */}
+          {READONLY_KIND_FIELDS[activeKind] && (
+            <ReadonlyKindTab
+              kind={activeKind}
+              builtinList={readonlyBuiltinByKind[activeKind] ?? null}
+              search={readonlySearch}
+              setSearch={setReadonlySearch}
+              selectedKey={readonlySelectedKey}
+              setSelectedKey={setReadonlySelectedKey}
+            />
+          )}
         </div>
       </div>
     </div>
+  );
+}
+
+/**
+ * ステップ7d: 内装マスター・境界マスターの閲覧タブ本体（読み取り専用）。
+ * builtin一覧・overlay（catalog/catalogRegistry.js）を buildCatalogRows で合成し、出所バッジ・
+ * R13差分（≠＋オレンジ＋diffTooltip）付きの一覧と、選択行の詳細（READONLY_KIND_FIELDS）を表示する
+ * だけ——追加・複製・編集・削除・合わせ直しの手段は一切持たない。
+ */
+function ReadonlyKindTab({ kind, builtinList, search, setSearch, selectedKey, setSelectedKey }) {
+  const def = kindDef(kind);
+  const diffMap = builtinList ? docDiffMap(kind, builtinList) : new Map();
+  const rows = builtinList ? buildCatalogRows({ kind, builtinList, search, diffMap }) : [];
+  const selectedRow = selectedKey ? rows.find(r => def.keyOf(r.entry) === selectedKey) ?? null : null;
+  const fieldDefs = READONLY_KIND_FIELDS[kind] ?? [];
+
+  return (
+    <>
+      <div className="catmnt-list-col">
+        <div className="catmnt-list-toolbar">
+          <input
+            className="catmnt-search-input"
+            placeholder="名称で検索"
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+          />
+        </div>
+        <div className="catmnt-rows">
+          {!builtinList && <div className="catmnt-row-empty">読み込み中…</div>}
+          {builtinList && rows.length === 0 && <div className="catmnt-row-empty">該当する項目がありません</div>}
+          {rows.map(row => {
+            const key = def.keyOf(row.entry);
+            return (
+              <div
+                key={key}
+                className={`catmnt-row${key === selectedKey ? ' catmnt-row--selected' : ''}`}
+                onClick={() => setSelectedKey(key)}
+              >
+                <span className={`catmnt-badge catmnt-badge--${row.origin ?? 'builtin'}`}>
+                  {ORIGIN_LABELS[row.origin] ?? '?'}
+                </span>
+                <span
+                  className="catmnt-row-name"
+                  style={row.diff ? { color: CATALOG_DIFF_COLOR } : undefined}
+                  title={row.diff ? diffTooltip(kind, row.diff.diffFields, row.entry, row.diff.baseEntry) : undefined}
+                >
+                  {row.entry.label ?? key}{row.diff ? ` ${CATALOG_DIFF_MARK}` : ''}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      <div className="catmnt-form-col">
+        {!selectedRow && (
+          <div className="catmnt-form-empty">左の一覧から項目を選択してください（このタブは閲覧のみです）</div>
+        )}
+        {selectedRow && (
+          <>
+            <div className="catmnt-form-note">閲覧のみです（追加・編集・削除・合わせ直しは未対応）</div>
+            <div className="catmnt-form-row">
+              <span className="catmnt-form-label">キー</span>
+              <span className="catmnt-code-readout">{def.keyOf(selectedRow.entry)}</span>
+            </div>
+            {fieldDefs.map(({ field, label }) => (
+              <div className="catmnt-form-row" key={field}>
+                <span className="catmnt-form-label">{label}</span>
+                <span
+                  className="catmnt-code-readout"
+                  style={selectedRow.diff?.diffFields?.includes(field) ? { color: CATALOG_DIFF_COLOR } : undefined}
+                >
+                  {formatReadonlyFieldValue(field, selectedRow.entry[field])}
+                </span>
+              </div>
+            ))}
+          </>
+        )}
+      </div>
+    </>
   );
 }

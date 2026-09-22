@@ -172,38 +172,34 @@ test('【不変条件・ステップ6-1】store.js: bootReadyがreconcileIncomin
   );
 });
 
-// ステップ6-1・QA Minor1 → ステップ6-3改訂（コーディネーターQA指摘・退行修正）: 場面(a)
-// library-conflictの検出（detectLibraryConflicts）はdocが無くてもuserがあれば必要——しかし
-// doc・userが両方空（同梱もライブラリも無い新規文書）なら照合・検出とも対象が無いため、
-// materialData.jsを読まずに即returnする契約（設計3.1）。guardは
-// `if (doc.length === 0 && user.length === 0) return;` で、doc固有処理（planIncomingReconcile/
-// applyReconcilePlan/通知）はさらに `if (doc.length > 0)` で条件分岐し、
-// materialData.jsの動的import自体とlibraryConflicts検出はguardを通過すれば常に行う。
-test('【不変条件・ステップ6-3・QA指摘修正】store.js: reconcileIncomingCatalogsはdoc・user両方空ならmaterialData.jsを読まず即returnし、userだけあれば読む（場面(a)のため）', () => {
+// ステップ7d: reconcileIncomingCatalogsはRECONCILE_KINDS（material・interiorMaster・
+// boundaryMaster）の種別ループに一般化された。種別ごとにdoc・userが両方空なら
+// continueでスキップし（不変条件7-1: 本体標準マスタは新規文書の起動では読まない）、
+// builtinはkindDef(kind).loadBuiltin()経由で読む（materialData.js等の直接動的importが
+// reconcileIncomingCatalogs本体から消える）。
+test('【不変条件・ステップ7d】store.js: reconcileIncomingCatalogsはRECONCILE_KINDS = [MATERIAL, INTERIOR_MASTER, BOUNDARY_MASTER]の種別ループで、種別ごとに doc・user両方空ならcontinueし、kindDef(kind).loadBuiltin()経由でbuiltinを読む', () => {
   const src = readSrc('store.js');
+  assert.ok(
+    /const RECONCILE_KINDS = \[CatalogKind\.MATERIAL, CatalogKind\.INTERIOR_MASTER, CatalogKind\.BOUNDARY_MASTER\];/.test(src),
+    'store.js に RECONCILE_KINDS = [CatalogKind.MATERIAL, CatalogKind.INTERIOR_MASTER, CatalogKind.BOUNDARY_MASTER] が見つからない',
+  );
   const body = extractBalancedBody(src, 'export async function reconcileIncomingCatalogs() {');
   assert.ok(body, 'store.js に reconcileIncomingCatalogs が見つからない');
+  assert.ok(/for\s*\(\s*const kind of RECONCILE_KINDS\s*\)\s*\{/.test(body), 'reconcileIncomingCatalogs が RECONCILE_KINDS をforループしていない（種別ループへの一般化が欠落）');
 
-  const guardMatch = /if\s*\(\s*doc\.length\s*===\s*0\s*&&\s*user\.length\s*===\s*0\s*\)\s*return;/.exec(body);
-  assert.ok(guardMatch, 'reconcileIncomingCatalogs にdoc・user両方空のearly returnガードが無い（新規文書起動でmaterialData.jsを読んでしまう退行）');
-  assert.ok(
-    !/if\s*\(\s*doc\.length\s*===\s*0\s*\)\s*return;/.test(body),
-    'docだけを見るearly returnが残っている（userだけあれば場面(a)検出のため読む契約に反する）',
-  );
+  const guardMatch = /if\s*\(\s*doc\.length\s*===\s*0\s*&&\s*user\.length\s*===\s*0\s*\)\s*continue;/.exec(body);
+  assert.ok(guardMatch, 'reconcileIncomingCatalogs にdoc・user両方空のスキップガード（continue）が無い（新規文書起動でbuiltinを読んでしまう退行）');
 
-  const importIdx = body.indexOf("import('./finish/materials/materialData.js')");
-  assert.ok(importIdx >= 0, 'reconcileIncomingCatalogs が materialData.js を動的importしていない');
+  const loadIdx = body.indexOf('kindDef(kind).loadBuiltin()');
+  assert.ok(loadIdx >= 0, 'reconcileIncomingCatalogs が kindDef(kind).loadBuiltin() を呼んでいない（本体標準マスタを直接importする退行）');
+  assert.ok(guardMatch.index < loadIdx, 'doc・user両方空のスキップガードは kindDef(kind).loadBuiltin() より前になければならない（不変条件7-1）');
   assert.ok(
-    guardMatch.index < importIdx,
-    'doc・user両方空のearly returnガードは materialData.js の動的importより前になければならない（不変条件7-1）',
+    !/import\(\s*['"]\.\/finish\/materials\//.test(body),
+    'reconcileIncomingCatalogs が本体標準マスタを直接動的importしている（kindDef(kind).loadBuiltin()未経由への退行）',
   );
 
   const docGuardMatch = /if\s*\(\s*doc\.length\s*>\s*0\s*\)\s*\{/.exec(body);
   assert.ok(docGuardMatch, 'doc固有処理（planIncomingReconcile等）を if (doc.length > 0) で分岐していない');
-  assert.ok(
-    importIdx < docGuardMatch.index,
-    'materialData.jsの動的importはdoc固有分岐より前（＝docが空でもuserがあれば読む）でなければならない',
-  );
   const docBlock = extractBalancedBody(body, 'if (doc.length > 0) {');
   assert.ok(docBlock, 'if (doc.length > 0) { ... } ブロックの中身を取得できない');
   assert.ok(!/detectLibraryConflicts\(/.test(docBlock), 'detectLibraryConflicts がif (doc.length > 0)ブロックの中にある（docが空だと呼ばれない退行）');
@@ -211,33 +207,51 @@ test('【不変条件・ステップ6-3・QA指摘修正】store.js: reconcileIn
   assert.ok(/detectLibraryConflicts\(/.test(afterDocBlock), 'detectLibraryConflicts の呼び出しがif (doc.length > 0)ブロックの外に見つからない');
 });
 
-// ステップ6-1: reconcileIncomingCatalogsは失敗（builtinロード失敗・commitUserFnのreject等）を
-// try/catchで握りproject.setCatalogError(e.message)だけを立てる（bootReady自体を落とさない）。
-test('【不変条件・ステップ6-1】store.js: reconcileIncomingCatalogsはtry/catchで失敗を握りproject.setCatalogError(e.message)を立てる', () => {
+// ステップ7d: 種別ごとの失敗（builtinロード失敗・commitUserFnのreject等）はその種別だけ
+// try/catchで握りfailureNoticesへ「${種別名}の照合に失敗しました: ...」を積む（他種別の処理は
+// 継続する）——bootReady自体は落とさない契約は維持。全種別ループの外でfailureNotices/
+// successNoticesを合流し（Minor-3・2026-09-23 QA指摘: 失敗分を先頭に寄せる）、非空なら
+// project.setCatalogError を「。」区切りで1回だけ呼ぶ。
+test('【不変条件・ステップ7d Minor-3】store.js: reconcileIncomingCatalogsは種別ごとにtry/catchで失敗をKIND_LABELS付きでfailureNoticesへ積み、ループの外でfailureNoticesを先頭にしてproject.setCatalogErrorを1回だけ呼ぶ', () => {
   const src = readSrc('store.js');
   const body = extractBalancedBody(src, 'export async function reconcileIncomingCatalogs() {');
   assert.ok(body, 'store.js に reconcileIncomingCatalogs が見つからない');
   assert.ok(/\btry\s*\{/.test(body), 'reconcileIncomingCatalogs が try を持っていない');
-  const catchMatch = /catch\s*\(\s*e\s*\)\s*\{([\s\S]*?)\n {2}\}/.exec(body);
+  const catchMatch = /catch\s*\(\s*e\s*\)\s*\{([\s\S]*?)\n {4}\}/.exec(body);
   assert.ok(catchMatch, 'reconcileIncomingCatalogs が catch(e) を持っていない');
   assert.ok(
-    /project\.setCatalogError\(e\.message\)/.test(catchMatch[1]),
-    'reconcileIncomingCatalogs の catch が project.setCatalogError(e.message) を呼んでいない',
+    /failureNotices\.push\(\s*`\$\{KIND_LABELS\[kind\] \?\? kind\}の照合に失敗しました: \$\{e\.message\}`\s*\)/.test(catchMatch[1]),
+    'reconcileIncomingCatalogs の catch が `${KIND_LABELS[kind] ?? kind}の照合に失敗しました: ${e.message}` をfailureNoticesへ積んでいない（Minor-3）',
   );
-});
 
-// ステップ6-1: formatReconcileNoticeの結果がnullでなければproject.setCatalogErrorを1回だけ
-// 呼ぶ（2回呼ぶと2本目が潰す既存の規約と同じ）。tryブロック内でsetCatalogErrorの呼び出しが
-// 1箇所（notice用の1回）だけであることを固定する。
-test('【不変条件・ステップ6-1】store.js: reconcileIncomingCatalogsはtry内でproject.setCatalogErrorを通知用に1回だけ呼ぶ', () => {
-  const src = readSrc('store.js');
-  const body = extractBalancedBody(src, 'export async function reconcileIncomingCatalogs() {');
-  assert.ok(body, 'store.js に reconcileIncomingCatalogs が見つからない');
-  const tryMatch = /try\s*\{([\s\S]*?)\n {2}\} catch/.exec(body);
-  assert.ok(tryMatch, 'reconcileIncomingCatalogs の try ブロックが見つからない');
-  const setCalls = tryMatch[1].match(/project\.setCatalogError\(/g) ?? [];
-  assert.equal(setCalls.length, 1, `try内のproject.setCatalogError呼び出しは1回のみの契約（実際: ${setCalls.length}回）`);
-  assert.ok(/if\s*\(\s*notice\s*\)\s*project\.setCatalogError\(notice\)/.test(tryMatch[1]), 'notice が null なら setCatalogError を呼ばないガードが無い');
+  // ループの外（forブロックの後）でfailureNotices/successNoticesを合流し1回だけjoinしてsetCatalogErrorする
+  // （extractBalancedBodyでforループ自体の本体を切り出し、その後続だけを見る。改行コードに依存しない）。
+  const forBodyText = extractBalancedBody(body, 'for (const kind of RECONCILE_KINDS) {');
+  assert.ok(forBodyText, 'for (const kind of RECONCILE_KINDS) { ... } の中身を取得できない');
+  const afterLoop = body.slice(body.indexOf(forBodyText) + forBodyText.length);
+  assert.ok(/project\.setCatalogResolveRows\(/.test(afterLoop), 'forループの直後にproject.setCatalogResolveRowsが続いていない（種別ループの外で1回だけ行う契約）');
+  assert.ok(
+    /const notices = \[\s*\.\.\.failureNotices,\s*\.\.\.successNotices\s*\]/.test(afterLoop),
+    'notices を [...failureNotices, ...successNotices] の順（失敗分が先頭）で組み立てていない（Minor-3）',
+  );
+  assert.ok(
+    /if\s*\(\s*notices\.length\s*>\s*0\s*\)\s*project\.setCatalogError\(\s*notices\.join\('。'\)\s*\)/.test(afterLoop),
+    'ループの外で notices.length > 0 のとき project.setCatalogError(notices.join(\'。\')) を呼んでいない',
+  );
+  assert.equal(
+    (afterLoop.match(/project\.setCatalogError\(/g) ?? []).length, 1,
+    'ループの外でのproject.setCatalogError呼び出しは1回のみの契約',
+  );
+
+  // 種別ごとの通知はfailureNotices/successNoticesへpushするだけ——ループの中でproject.setCatalogErrorを
+  // 呼ぶと（種別数ぶん複数回＋最後の1回で）計2回以上呼ばれてしまう（変異=notice検出時にその場で
+  // setCatalogErrorも呼ぶ、で赤）。
+  const loopBodyText = extractBalancedBody(body, 'for (const kind of RECONCILE_KINDS) {');
+  assert.ok(loopBodyText, 'for (const kind of RECONCILE_KINDS) { ... } の中身を取得できない');
+  assert.ok(
+    !/project\.setCatalogError\(/.test(loopBodyText),
+    'ループの中でproject.setCatalogErrorを呼んでいる（種別ごとに複数回呼ばれる退行。noticesへpushしてループの外で1回だけ呼ぶ契約）',
+  );
 });
 
 // コーディネーターQA指摘2（ステップ6-1）: formatReconcileNoticeへ渡すaddedCount/skippedCountは

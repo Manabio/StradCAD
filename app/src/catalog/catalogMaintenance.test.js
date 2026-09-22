@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  buildKindTabs, buildMaterialRows, collectKnownMaterialCodes, nextMaterialCode,
+  buildKindTabs, buildMaterialRows, buildCatalogRows, collectKnownMaterialCodes, nextMaterialCode,
   buildMaterialEntry, duplicateMaterialEntry, validateMaterialEntry,
   upsertUserMaterialEntry, removeUserMaterialEntry, buildUserMaterialBundle, commitUserEntries,
   isEditableMaterialCategory, MATERIAL_CATEGORY, canEditMaterialRow, parseThicknessInput,
@@ -21,17 +21,52 @@ function material(overrides) {
 }
 
 // ---- buildKindTabs ----
-test('buildKindTabs: listKinds()から導出し、material以外はenabled:false', () => {
+test('buildKindTabs: listKinds()から導出し、material・interiorMaster・boundaryMasterはenabled:true（閲覧のみ。ステップ7d）、section/openingSubTypeはenabled:false', () => {
   const tabs = buildKindTabs();
   const materialTab = tabs.find(t => t.kind === CatalogKind.MATERIAL);
   assert.equal(materialTab.enabled, true);
   assert.equal(materialTab.label, '材料');
-  const others = tabs.filter(t => t.kind !== CatalogKind.MATERIAL);
-  assert.ok(others.length > 0);
-  assert.ok(others.every(t => t.enabled === false));
+  const interiorTab = tabs.find(t => t.kind === CatalogKind.INTERIOR_MASTER);
+  assert.equal(interiorTab.enabled, true);
+  assert.equal(interiorTab.label, '内装マスター');
+  const boundaryTab = tabs.find(t => t.kind === CatalogKind.BOUNDARY_MASTER);
+  assert.equal(boundaryTab.enabled, true);
+  assert.equal(boundaryTab.label, '境界マスター');
+  const notYet = tabs.filter(t => t.kind === CatalogKind.SECTION || t.kind === CatalogKind.OPENING_SUB_TYPE);
+  assert.ok(notYet.length > 0);
+  assert.ok(notYet.every(t => t.enabled === false));
 });
 
-// ---- buildMaterialRows: 一覧の合成（出所付き）----
+// ---- buildCatalogRows（ステップ7d: buildMaterialRowsの一般化。3種別）----
+test('buildCatalogRows: kind:interiorMasterでも出所・searchが効く', () => {
+  const builtin = [
+    { key: 'LIVING_ROOM', label: 'リビング', wallMaterial: 'クロス', wallFinish: 'AEP', ceilingHeight: 2400 },
+    { key: 'BEDROOM', label: '寝室', wallMaterial: 'クロス', wallFinish: 'AEP', ceilingHeight: 2400 },
+  ];
+  setOverlay(CatalogKind.INTERIOR_MASTER, {
+    user: [{ key: 'USER_ROOM', label: 'ユーザー部屋', wallMaterial: 'クロス', wallFinish: 'AEP', ceilingHeight: 2400 }],
+  });
+  const rows = buildCatalogRows({ kind: CatalogKind.INTERIOR_MASTER, builtinList: builtin });
+  const byKey = new Map(rows.map(r => [r.entry.key, r.origin]));
+  assert.equal(byKey.get('LIVING_ROOM'), 'builtin');
+  assert.equal(byKey.get('USER_ROOM'), 'user');
+
+  const filtered = buildCatalogRows({ kind: CatalogKind.INTERIOR_MASTER, builtinList: builtin, search: 'リビング' });
+  assert.deepEqual(filtered.map(r => r.entry.key), ['LIVING_ROOM']);
+});
+
+test('buildCatalogRows: kind:boundaryMasterでdiffMapを渡すと差分情報が付く', () => {
+  const builtin = [{ key: 'EXTERIOR_WALL', label: '外壁', kind: 'layered', layers: [] }];
+  setOverlay(CatalogKind.BOUNDARY_MASTER, {
+    // compareFields=['kind','layers','derivedFrom','fields']（labelは含まない）— layersを変えて差分を作る
+    doc: [{ key: 'EXTERIOR_WALL', label: '外壁', kind: 'layered', layers: [{ role: '外壁材', code: null }] }],
+  });
+  const diffMap = docDiffMap(CatalogKind.BOUNDARY_MASTER, builtin);
+  const rows = buildCatalogRows({ kind: CatalogKind.BOUNDARY_MASTER, builtinList: builtin, diffMap });
+  assert.ok(rows[0].diff, '差分のある行はdiffが付く');
+});
+
+// ---- buildMaterialRows: buildCatalogRows(kind:material)の薄いラッパ。一覧の合成（出所付き）----
 test('buildMaterialRows: builtin・doc・userを合成し出所を付ける', () => {
   const builtin = [material({ code: '301000000001', name: 'A' })];
   setOverlay(CatalogKind.MATERIAL, {
@@ -235,7 +270,7 @@ test('commitUserEntries: saveFnがresolveすればoverlayはnextUserのまま', 
 
   const calls = [];
   const saveFn = async (kind, bytes) => { calls.push({ kind, bytes }); };
-  await commitUserEntries(nextUser, prevUser, { saveFn });
+  await commitUserEntries(CatalogKind.MATERIAL, nextUser, prevUser, { saveFn });
 
   assert.equal(calls.length, 1);
   assert.equal(calls[0].kind, CatalogKind.MATERIAL);
@@ -251,7 +286,7 @@ test('【失敗系】commitUserEntries: saveFnがrejectしたらoverlayはprevUs
   const nextUser = [material({ code: '301000000001' }), material({ code: '301000000002', name: '新規' })];
 
   const saveFn = async () => { throw new Error('IDB書込み失敗'); };
-  await assert.rejects(() => commitUserEntries(nextUser, prevUser, { saveFn }), /IDB書込み失敗/);
+  await assert.rejects(() => commitUserEntries(CatalogKind.MATERIAL, nextUser, prevUser, { saveFn }), /IDB書込み失敗/);
 
   assert.deepEqual(overlayFor(CatalogKind.MATERIAL).user, prevUser); // ロールバック済み
 });

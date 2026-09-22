@@ -17,7 +17,7 @@
 
 import { CatalogKind, kindDef, listKinds, KIND_LABELS } from './catalogKinds.js';
 import { composeList, docDiffMap, originOf, overlayFor, setOverlay } from './catalogRegistry.js';
-import { assertNoDuplicate } from './catalogMatch.js';
+import { assertNoDuplicate, displayNameOf } from './catalogMatch.js';
 import { diffPairs } from './catalogDiffView.js';
 import { nextSerial, parseMaterialCode, formatMaterialCode } from './materialCode.js';
 import { emptyBundle, withEntries } from './catalogBundle.js';
@@ -77,35 +77,49 @@ export function parseThicknessInput(raw) {
 
 /**
  * 種別タブの器（左タブ）。listKinds() から導出する——登録表に種別が増えたらタブも増える。
- * 第1段では material 以外は enabled:false（「準備中」表示用）。
+ * ステップ7d: 内装マスター・境界マスターは閲覧のみ（追加・複製・編集・削除なし）で enabled:true。
+ * section・openingSubType は選択UIが無いためまだ enabled:false（「準備中」表示用）。
  */
+const VIEWABLE_KINDS = Object.freeze([CatalogKind.MATERIAL, CatalogKind.INTERIOR_MASTER, CatalogKind.BOUNDARY_MASTER]);
+
 export function buildKindTabs() {
   return listKinds().map(kind => ({
     kind,
     label: KIND_LABELS[kind] ?? kind,
-    enabled: kind === CatalogKind.MATERIAL,
+    enabled: VIEWABLE_KINDS.includes(kind),
   }));
 }
 
 /**
- * 材の一覧行（出所付き）。builtin一覧・overlay（catalogRegistry.jsの現在の状態）を
- * composeList/originOf で合成し、search（名称部分一致・大小文字区別なし）・category（完全一致。
- * null/空なら絞り込みなし）で絞り込む。
+ * kind の一覧行（出所付き）。builtin一覧・overlay（catalogRegistry.jsの現在の状態）を
+ * composeList/originOf で合成し、search（表示名の部分一致・大小文字区別なし）で絞り込む。
  * diffMap（catalogRegistry.js の docDiffMap の戻り値）を渡すと、各行に R13 の差分情報
  * （{baseOrigin, diffFields, baseEntry}）を diff として付ける（省略時は null）。
+ * category による絞り込みは material 専用のため持たない（buildMaterialRows 側で行う）。
+ * @param {{ kind: string, builtinList: object[], search?: string, diffMap?: Map }} args
+ * @returns {Array<{ entry: object, origin: 'doc'|'user'|'builtin'|null, diff: object|null }>}
+ */
+export function buildCatalogRows({ kind, builtinList, search = '', diffMap = null }) {
+  const def = kindDef(kind);
+  const needle = (search ?? '').trim().toLowerCase();
+  return composeList(kind, builtinList)
+    .map(entry => ({
+      entry,
+      origin: originOf(kind, def.keyOf(entry), builtinList),
+      diff: diffMap?.get(def.keyOf(entry)) ?? null,
+    }))
+    .filter(row => !needle || displayNameOf(row.entry).toLowerCase().includes(needle));
+}
+
+/**
+ * 材の一覧行（出所付き）。buildCatalogRows(kind:material) の薄いラッパ——category（完全一致。
+ * null/空なら絞り込みなし）による絞り込みだけ材専用にここへ残す。
  * @param {{ builtinList: object[], search?: string, category?: string|null, diffMap?: Map }} args
  * @returns {Array<{ entry: object, origin: 'doc'|'user'|'builtin'|null, diff: object|null }>}
  */
 export function buildMaterialRows({ builtinList, search = '', category = null, diffMap = null }) {
-  const needle = (search ?? '').trim().toLowerCase();
-  return composeList(CatalogKind.MATERIAL, builtinList)
-    .map(entry => ({
-      entry,
-      origin: originOf(CatalogKind.MATERIAL, entry.code, builtinList),
-      diff: diffMap?.get(entry.code) ?? null,
-    }))
-    .filter(row => !category || row.entry.category === category)
-    .filter(row => !needle || (row.entry.name ?? '').toLowerCase().includes(needle));
+  return buildCatalogRows({ kind: CatalogKind.MATERIAL, builtinList, search, diffMap })
+    .filter(row => !category || row.entry.category === category);
 }
 
 /**
@@ -192,13 +206,20 @@ export function validateMaterialEntry(entry, builtinList) {
   return { ok: true };
 }
 
-/** ユーザーライブラリ配列へ追加・更新する（同コードなら上書き）。非破壊。 */
-export function upsertUserMaterialEntry(userEntries, entry) {
-  const idx = userEntries.findIndex(e => e.code === entry.code);
+/** ユーザーライブラリ配列へ追加・更新する（kindDef(kind).keyOfが同じなら上書き）。非破壊。 */
+export function upsertUserCatalogEntry(kind, userEntries, entry) {
+  const def = kindDef(kind);
+  const key = def.keyOf(entry);
+  const idx = userEntries.findIndex(e => def.keyOf(e) === key);
   if (idx === -1) return [...userEntries, entry];
   const next = [...userEntries];
   next[idx] = entry;
   return next;
+}
+
+/** upsertUserCatalogEntry(material, ...) の薄いラッパ（既存呼び出し・テストを変えない）。 */
+export function upsertUserMaterialEntry(userEntries, entry) {
+  return upsertUserCatalogEntry(CatalogKind.MATERIAL, userEntries, entry);
 }
 
 /**
@@ -214,18 +235,23 @@ export function removeUserMaterialEntry(userEntries, code, origin) {
 }
 
 /**
- * ユーザーライブラリ（catalogsストア `user:material` レコード）として保存する束を組み立てる
- * （catalogOverlayLoader.js が読む形と同じ: {version, catalogs:{material:[…]}, encodings:{material:'json'}, aliases:{}}）。
+ * ユーザーライブラリ（catalogsストア `user:<kind>` レコード）として保存する束を組み立てる
+ * （catalogOverlayLoader.js が読む形と同じ: {version, catalogs:{<kind>:[…]}, encodings:{<kind>:'json'}, aliases:{}}）。
  * バイト列化（encodeCatalogBundle）・実際の永続化（storage/db.js saveUserCatalog）は
- * 呼び出し側（CatalogMaintenancePanel.jsx）が行う。
+ * 呼び出し側（commitUserEntries）が行う。
  */
-export function buildUserMaterialBundle(userEntries) {
-  let bundle = withEntries(emptyBundle(), CatalogKind.MATERIAL, userEntries);
+export function buildUserCatalogBundle(kind, userEntries) {
+  let bundle = withEntries(emptyBundle(), kind, userEntries);
   bundle = {
     ...bundle,
-    encodings: { ...bundle.encodings, [CatalogKind.MATERIAL]: kindDef(CatalogKind.MATERIAL).encoding },
+    encodings: { ...bundle.encodings, [kind]: kindDef(kind).encoding },
   };
   return bundle;
+}
+
+/** buildUserCatalogBundle(material, ...) の薄いラッパ（既存呼び出し・テストを変えない）。 */
+export function buildUserMaterialBundle(userEntries) {
+  return buildUserCatalogBundle(CatalogKind.MATERIAL, userEntries);
 }
 
 /**
@@ -240,18 +266,21 @@ export function buildUserMaterialBundle(userEntries) {
  * 同じ例外を再throwする（黙って握りつぶさない。呼び出し側がメッセージを利用者へ出せるように）。
  * 成功時は overlay は nextUser のまま。
  *
+ * ステップ7d: kind を必須引数にした（省略時material固定をやめる。reconcileIncomingCatalogsが
+ * 種別ループでinteriorMaster・boundaryMasterぶんも呼ぶため）。
+ * @param {string} kind
  * @param {object[]} nextUser 保存後のユーザーライブラリ配列
  * @param {object[]} prevUser 失敗時に戻す元のユーザーライブラリ配列
  * @param {{ saveFn: (kind: string, bytes: Uint8Array) => Promise<void> }} deps
  * @returns {Promise<void>}
  */
-export async function commitUserEntries(nextUser, prevUser, { saveFn }) {
-  const { doc } = overlayFor(CatalogKind.MATERIAL);
-  setOverlay(CatalogKind.MATERIAL, { doc, user: nextUser });
+export async function commitUserEntries(kind, nextUser, prevUser, { saveFn }) {
+  const { doc } = overlayFor(kind);
+  setOverlay(kind, { doc, user: nextUser });
   try {
-    await saveFn(CatalogKind.MATERIAL, encodeCatalogBundle(buildUserMaterialBundle(nextUser)));
+    await saveFn(kind, encodeCatalogBundle(buildUserCatalogBundle(kind, nextUser)));
   } catch (e) {
-    setOverlay(CatalogKind.MATERIAL, { doc, user: prevUser }); // 保存失敗はoverlayを戻す
+    setOverlay(kind, { doc, user: prevUser }); // 保存失敗はoverlayを戻す
     throw e;
   }
 }

@@ -10,7 +10,7 @@
 // overlayに触れずに呼び出し確認できるようにする）。
 // ================================================================
 
-import { kindDef } from './catalogKinds.js';
+import { CatalogKind, kindDef, KIND_LABELS } from './catalogKinds.js';
 import { classifyIncoming, assertNoDuplicate, displayNameOf } from './catalogMatch.js';
 import { addDocumentAliases } from './codeNormalization.js';
 import { overlayFor, removeDocEntry } from './catalogRegistry.js';
@@ -91,28 +91,37 @@ function namesLine(names) {
  *   誤って報告しないため）。skippedCount が非空なら追加のスキップ件数を1文足す
  *   （呼び出し側が result.skipped.length を渡す）。
  * - 読み替え: plan.aliases の件数（alias適用は保存until確定なので「保存すると確定します」を添える）。
+ * kind は必須（ステップ7d QA指摘Minor-1・2026-09-23: 7aの「既定でmaterialに落とさない」規約と
+ * 揃える。省略は日本語例外）。文言の名詞は KIND_LABELS[kind] へ出し分ける。読み替え文の対象語は
+ * material＝「コード」／他種別＝「キー」（store.js saveCatalogDocument の同梱できないメッセージと
+ * 同じ出し分け。ステップ7c踏襲）。
  * @param {ReturnType<typeof planIncomingReconcile>} plan
- * @param {{ addedCount?: number, skippedCount?: number }} [counts]
+ * @param {{ kind: string, addedCount?: number, skippedCount?: number }} opts
  * @returns {string|null}
  */
-export function formatReconcileNotice(plan, { addedCount = 0, skippedCount = 0 } = {}) {
+export function formatReconcileNotice(plan, { kind, addedCount = 0, skippedCount = 0 } = {}) {
+  if (!kind) {
+    throw new Error('formatReconcileNoticeはkindの指定が必須です（省略できません）');
+  }
   const mismatches = (plan?.adoptDoc ?? []).filter(d => d.notify);
   const aliasCount = plan?.aliases?.length ?? 0;
   const parts = [];
+  const label = KIND_LABELS[kind] ?? kind;
+  const noun = kind === CatalogKind.MATERIAL ? 'コード' : 'キー';
 
   if (mismatches.length > 0) {
     const names = namesLine(mismatches.map(d => d.label));
-    parts.push(`同梱カタログと内容が異なる材料が${mismatches.length}件あります${names ? `（${names}）` : ''}`);
+    parts.push(`同梱カタログと内容が異なる${label}が${mismatches.length}件あります${names ? `（${names}）` : ''}`);
   }
   if (addedCount > 0) {
     const names = namesLine((plan?.adds ?? []).map(displayNameOf));
-    parts.push(`ライブラリに新しい材料が${addedCount}件追加されました${names ? `（${names}）` : ''}`);
+    parts.push(`ライブラリに新しい${label}が${addedCount}件追加されました${names ? `（${names}）` : ''}`);
   }
   if (skippedCount > 0) {
-    parts.push(`${skippedCount}件は同じ内容の材料が既にあるため追加しませんでした`);
+    parts.push(`${skippedCount}件は同じ内容の${label}が既にあるため追加しませんでした`);
   }
   if (aliasCount > 0) {
-    parts.push(`材料コードの読み替えを${aliasCount}件適用しました（保存すると確定します）`);
+    parts.push(`${label}${noun}の読み替えを${aliasCount}件適用しました（保存すると確定します）`);
   }
   if (parts.length === 0) return null;
   return parts.join('。');

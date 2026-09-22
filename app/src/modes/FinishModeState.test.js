@@ -321,3 +321,83 @@ test('FinishModeState.init: 読み替え（addDocumentAliases）が付いた後�
   assert.equal(result.catalogResolveRows.find(r => r.targetKey === '111111111211'), undefined,
     '読み替え後にmaterialMapへ存在するようになったコードは再掲されないはず');
 });
+
+// ---- ステップ7d: 内装マスター・境界マスターの未知キーもcatalogResolveRowsに行として現れる ----
+test('FinishModeState.init: 部屋のtemplateKeyが本体・同梱・ユーザーライブラリのどこにも無いキーなら、interiorMasterのunresolved-code行が現れる', async () => {
+  takeUnresolvedCodes();
+  const graph = makeSingleCellGraph();
+  const room = graph.addRoom(new Set(['dummy']), 'テスト');
+  room.setTemplateKey('GHOST_ROOM');
+  const state = new FinishModeState(graph, null);
+
+  const result = await state.init();
+
+  const row = result.catalogResolveRows.find(r => r.kind === CatalogKind.INTERIOR_MASTER);
+  assert.ok(row, '内装マスターの未知キーがcatalogResolveRowsに現れるはず');
+  assert.equal(row.scenario, 'unresolved-code');
+  assert.equal(row.targetKey, 'GHOST_ROOM');
+  assert.ok(row.usage.some(u => u.location === 'room' && u.roomId === room.id));
+  assert.deepEqual(row.candidates, [], '内装マスターのunresolved-codeは候補が出ない契約（材料コード専用のsuggestByClass）');
+});
+
+test('FinishModeState.init: 部屋のtemplateKeyが解決できるキーならinteriorMasterの行は現れない', async () => {
+  takeUnresolvedCodes();
+  const graph = makeSingleCellGraph();
+  const room = graph.addRoom(new Set(['dummy']), 'テスト');
+  room.setTemplateKey('LIVING_ROOM'); // 本体INTERIOR_MASTERSに実在するキー
+  const state = new FinishModeState(graph, null);
+
+  const result = await state.init();
+
+  assert.equal(result.catalogResolveRows.find(r => r.kind === CatalogKind.INTERIOR_MASTER), undefined);
+});
+
+test('FinishModeState.init: edgeのmasterTypeが7キーのどれでもなければboundaryMasterのunresolved-code行が現れる（次のモード境界で消える一過性）', async () => {
+  takeUnresolvedCodes();
+  const graph = makeSingleCellGraph();
+  graph.addEdge('a:b:c', 'GHOST_MASTER');
+  const state = new FinishModeState(graph, null);
+
+  const result = await state.init();
+
+  const row = result.catalogResolveRows.find(r => r.kind === CatalogKind.BOUNDARY_MASTER);
+  assert.ok(row, '境界マスターの未知キーがcatalogResolveRowsに現れるはず');
+  assert.equal(row.targetKey, 'GHOST_MASTER');
+  assert.ok(row.usage.some(u => u.location === 'edge' && u.edgeKey === 'a:b:c'));
+});
+
+test('FinishModeState.init: edgeのmasterTypeが7キーのいずれかならboundaryMasterの行は現れない', async () => {
+  takeUnresolvedCodes();
+  const graph = makeSingleCellGraph();
+  graph.addEdge('a:b:c', 'EXTERIOR_WALL'); // BOUNDARY_MASTERSに実在するキー
+  const state = new FinishModeState(graph, null);
+
+  const result = await state.init();
+
+  assert.equal(result.catalogResolveRows.find(r => r.kind === CatalogKind.BOUNDARY_MASTER), undefined);
+});
+
+// ---- ステップ7d QA指摘Minor-4: materialErrorはmaterialのmissingUsageだけから算出する
+// （内装・境界マスターの未解決を合算しない）。errorの算出を全種別合算に広げる変異で赤になる ----
+test('【ステップ7d QA指摘Minor-4】FinishModeState.init: 内装・境界マスターだけが未解決（材は全解決）なら materialError は null・ok:true になり、かつ内装・境界のunresolved-code行は両方現れる', async () => {
+  takeUnresolvedCodes();
+  const graph = makeSingleCellGraph();
+  const room = graph.addRoom(new Set(['dummy']), 'テスト');
+  room.setTemplateKey('GHOST_ROOM'); // 内装マスターだけ未解決
+  graph.addEdge('a:b:c', 'GHOST_MASTER'); // 境界マスターだけ未解決
+  const state = new FinishModeState(graph, null);
+
+  const result = await state.init();
+
+  assert.equal(result.error, null, '材は未解決が無いのでerrorはnullのはず（変異=全種別合算で赤）');
+  assert.equal(result.ok, true);
+  assert.equal(state.materialError, null, '材は未解決が無いのでmaterialErrorはnullのはず');
+  assert.ok(
+    result.catalogResolveRows.some(r => r.kind === CatalogKind.INTERIOR_MASTER),
+    '内装マスターのunresolved-code行は現れるはず',
+  );
+  assert.ok(
+    result.catalogResolveRows.some(r => r.kind === CatalogKind.BOUNDARY_MASTER),
+    '境界マスターのunresolved-code行は現れるはず',
+  );
+});
