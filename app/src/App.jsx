@@ -4,7 +4,11 @@ import { runInAction, reaction } from 'mobx';
 import { undoManager } from './undoManager.js';
 import { serializeGraph, restoreGraph } from './graphSnapshot.js';
 import { Stage } from 'react-konva';
-import { useStore, addFloor, switchFloor, addAlternativeFloor, removeFloor, resetAll, bootReady, exportDocument, importDocument } from './store.js';
+import {
+  useStore, addFloor, switchFloor, addAlternativeFloor, removeFloor, resetAll, bootReady,
+  exportDocument, importDocument, applyCatalogResolutions,
+} from './store.js';
+import { replaceRowsByScenario } from './catalog/resolveQueue.js';
 import { isDirty, markDirty } from './dirtyState.js';
 import { viewport } from './appViewport.js';
 import {
@@ -127,6 +131,11 @@ const App = observer(() => {
   const [saveDialogDefaultName, setSaveDialogDefaultName] = useState(null); // 非null=保存ファイル名ダイアログ表示中
   const [showBuildingInfoDialog, setShowBuildingInfoDialog] = useState(false);
   const [CatalogMaintenancePanelComp, setCatalogMaintenancePanelComp] = useState(null); // 動的import済みのパネル本体（null=未ロード/非表示）
+  const [CatalogResolveDialogComp, setCatalogResolveDialogComp] = useState(null); // 指示UI（ステップ6-3）ダイアログ本体（動的import済み。null=未ロード/非表示）
+  const [catalogResolveBuiltinList, setCatalogResolveBuiltinList] = useState(null); // 代替材ピッカー用のbuiltin一覧（materialData.js。動的import）
+  // カタログの指示UI適用後にモード状態を作り直させるトリガー（新しい読み替え・ユーザーライブラリを
+  // 反映した状態でinit()し直すため。モード切替effectのdepsに含める）。
+  const [catalogReloadKey, setCatalogReloadKey] = useState(0);
   const [showStructuralInfoDialog, setShowStructuralInfoDialog] = useState(false);
   const [toast,           setToast]           = useState(null); // { msg, key }
   const [appMode,         setAppMode]         = useState('floorplan'); // 'floorplan' | 'finish' | 'structure' | 'site'
@@ -156,6 +165,7 @@ const App = observer(() => {
   const fileInputRef  = useRef(null);
   const openingSelectRef  = useRef(null); // 建具モードへの遷移直後に選択する開口ID（モードロード時に読み取って消費）
   const catalogMaintenanceLoadingRef = useRef(false); // カタログ保守パネルの動的import中フラグ（二重クリック無視・後出し防止用）
+  const catalogResolveLoadingRef = useRef(false); // 指示UIダイアログの動的import中フラグ（連打ガード）
 
   // アクティブなモード状態 (FloorplanModeState | FinishModeState | null)
   // modeRef: イベントハンドラから同期的にアクセス
@@ -248,6 +258,45 @@ const App = observer(() => {
     return () => { cancelled = true; disposeCatalogErrorReaction(); };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // 指示UI（ステップ6-3）: project.catalogResolveRows が非空になったらダイアログを動的import
+  // して開く（React.lazy+Suspenseは不採用——CatalogMaintenancePanel.jsx等と同じ
+  // 「import().then().catch()」型に揃える。連打ガードはref）。代替材ピッカー用のbuiltin一覧
+  // （materialData.js）も同時に動的importする。
+  useEffect(() => {
+    if (project.catalogResolveRows.length === 0) return;
+    if (CatalogResolveDialogComp && catalogResolveBuiltinList) return; // 読込み済み
+    if (catalogResolveLoadingRef.current) return;
+    catalogResolveLoadingRef.current = true;
+    Promise.all([
+      import('./ui/CatalogResolveDialog.jsx'),
+      import('./finish/materials/materialData.js'),
+    ])
+      .then(([dlgMod, matMod]) => {
+        if (!catalogResolveLoadingRef.current) return; // 後出し（既に処理済み）は捨てる
+        catalogResolveLoadingRef.current = false;
+        setCatalogResolveDialogComp(() => dlgMod.CatalogResolveDialog);
+        setCatalogResolveBuiltinList(matMod.MATERIALS);
+      })
+      .catch(() => {
+        if (!catalogResolveLoadingRef.current) return;
+        catalogResolveLoadingRef.current = false;
+        setToast({ msg: '確認ダイアログの読み込みに失敗しました', key: Date.now() });
+      });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [project.catalogResolveRows.length]);
+
+  /** 指示UIダイアログの「まとめて承認」。適用後、承認済み行が除去された最新のcatalogResolveRowsで
+   * モードを作り直す（新しい読み替え・ユーザーライブラリを反映した状態で再init()させる）。 */
+  async function handleApplyCatalogResolutions(decisions) {
+    try {
+      await applyCatalogResolutions(decisions);
+      setCatalogReloadKey(k => k + 1);
+    } catch (e) {
+      console.error('カタログの指示UI適用に失敗しました:', e);
+      setToast({ msg: '反映に失敗しました', key: Date.now() });
+    }
+  }
+
   // モード切替: 旧モードを破棄してから新モジュールを動的ロード
   useEffect(() => {
     let cancelled = false;
@@ -290,10 +339,18 @@ const App = observer(() => {
       setMode(s);
       // 仕上げモード突入時に材データの照合エラーがあれば通知
       if (s.materialError) setToast({ msg: s.materialError, key: Date.now() });
+      // 指示UI（ステップ6-3）場面(b)unresolved-code: FinishModeState.init()が組み立てた行を
+      // project.catalogResolveRowsへマージする（自分の場面の行だけを置き換え、store.jsの
+      // 起動時reconcileが積んだ(a)/(c)/proposeの行・保留中の行は残す）。
+      if (s.catalogResolveRows) {
+        project.setCatalogResolveRows(
+          replaceRowsByScenario(project.catalogResolveRows, s.catalogResolveRows, ['unresolved-code']),
+        );
+      }
     });
 
     return () => { cancelled = true; };
-  }, [appMode, activeFloorId]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [appMode, activeFloorId, catalogReloadKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ---- 平面モードの建具記号: 採番キャッシュ(project.openingNumberIndex)の鮮度を保つ ----
   // index を変異するだけで graph は不変 → undoエントリ不要（.claude/opening-model.md）。
@@ -1949,6 +2006,17 @@ const App = observer(() => {
         // （動的import。使わないユーザーは読み込まない）。編集内容はIDBへ即時永続化されるため、
         // 開いている仕上げモード等への即時反映はしない（次回突入時にcomposeし直して反映）。
         <CatalogMaintenancePanelComp onClose={() => setCatalogMaintenancePanelComp(null)} />
+      )}
+
+      {CatalogResolveDialogComp && catalogResolveBuiltinList && project.catalogResolveRows.length > 0 && (
+        // 指示UI（ステップ6-3・R10）。承認・保留は「まとめて」1画面で行う。保留は記録しない
+        // （行は project.catalogResolveRows に残ったまま＝次回の再計算で再掲される）。
+        <CatalogResolveDialogComp
+          rows={project.catalogResolveRows}
+          builtinList={catalogResolveBuiltinList}
+          onApply={handleApplyCatalogResolutions}
+          onClose={() => setCatalogResolveDialogComp(null)}
+        />
       )}
 
       {showStructuralInfoDialog && (

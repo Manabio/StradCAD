@@ -62,12 +62,21 @@ export class Project {
     // store.js saveMaterialCatalogDocument はこれだけを見て、文書同梱の保存可否を決める。
     this.catalogOverlayUntrusted = false;
 
+    // 指示UI（ステップ6-3・R10）の行一覧（catalog/resolveQueue.js buildResolveRows の戻り値）。
+    // observable.ref——行内のエントリ（targetEntry/candidates）の===同一性を壊さないため
+    // （MobXに中身までプロキシ化させない。catalogMap/materialDiffsと同じ理由）。
+    // store.js の起動時reconcile（(a)library-conflict/(c)unsupported/propose）と
+    // modes/FinishModeState.js init（(b)unresolved-code。モード突入のたびに再計算）の
+    // 双方が積む——setCatalogResolveRows は全置換のため、呼び出し側が既存行とマージしてから渡す。
+    this.catalogResolveRows = [];
+
     makeObservable(this, {
       name:          observable,
       activePlaneId: observable,
       catalogError:  observable,
       catalogErrorSeq: observable,
       catalogOverlayUntrusted: observable,
+      catalogResolveRows: observable.ref,
       activeGraph:   computed,
       activePlane:   computed,
       planes:        computed,
@@ -81,6 +90,8 @@ export class Project {
       setBuildingInfo: action,
       setCatalogError: action,
       setCatalogOverlayUntrusted: action,
+      setCatalogResolveRows: action,
+      clearCatalogResolveRows: action,
     });
   }
 
@@ -89,6 +100,9 @@ export class Project {
   /** 都度発火（同一文言でも再通知できるよう毎回 catalogErrorSeq を進める）。 */
   setCatalogError(msg)  { this.catalogError = msg; this.catalogErrorSeq++; }
   setCatalogOverlayUntrusted(v) { this.catalogOverlayUntrusted = v; }
+  /** 指示UI（ステップ6-3）の行一覧を全置換する（呼び出し側が既存行とマージ済みのものを渡す）。 */
+  setCatalogResolveRows(rows) { this.catalogResolveRows = rows; }
+  clearCatalogResolveRows()   { this.catalogResolveRows = []; }
 
   clearMemberNumberIndex() { this.memberNumberIndex.clear(); }
   clearOpeningNumberIndex() { this.openingNumberIndex.clear(); }

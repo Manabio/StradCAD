@@ -172,26 +172,43 @@ test('【不変条件・ステップ6-1】store.js: bootReadyがreconcileIncomin
   );
 });
 
-// ステップ6-1・QA Minor1: reconcileIncomingCatalogsは doc（文書同梱）が空なら materialData.js を
-// 動的importせず即returnする（不変条件7-1）。userだけがあってdocが空のとき（照合対象=docが無い）
-// でも読まない契約——guardが user.length を条件に含めていないこと（両方空の場合のみに限定する
-// 退行）も合わせて固定する。関数本体の先頭でのearly returnであることを固定する。
-test('【不変条件・ステップ6-1・QA Minor1】store.js: reconcileIncomingCatalogsはdocが空ならmaterialData.jsを読まず即returnする（userだけあっても読まない）', () => {
+// ステップ6-1・QA Minor1 → ステップ6-3改訂（コーディネーターQA指摘・退行修正）: 場面(a)
+// library-conflictの検出（detectLibraryConflicts）はdocが無くてもuserがあれば必要——しかし
+// doc・userが両方空（同梱もライブラリも無い新規文書）なら照合・検出とも対象が無いため、
+// materialData.jsを読まずに即returnする契約（設計3.1）。guardは
+// `if (doc.length === 0 && user.length === 0) return;` で、doc固有処理（planIncomingReconcile/
+// applyReconcilePlan/通知）はさらに `if (doc.length > 0)` で条件分岐し、
+// materialData.jsの動的import自体とlibraryConflicts検出はguardを通過すれば常に行う。
+test('【不変条件・ステップ6-3・QA指摘修正】store.js: reconcileIncomingCatalogsはdoc・user両方空ならmaterialData.jsを読まず即returnし、userだけあれば読む（場面(a)のため）', () => {
   const src = readSrc('store.js');
   const body = extractBalancedBody(src, 'export async function reconcileIncomingCatalogs() {');
   assert.ok(body, 'store.js に reconcileIncomingCatalogs が見つからない');
-  const guardMatch = /if\s*\(\s*doc\.length\s*===\s*0\s*\)\s*return;/.exec(body);
-  assert.ok(guardMatch, 'reconcileIncomingCatalogs にdocが空のearly returnガードが無い');
+
+  const guardMatch = /if\s*\(\s*doc\.length\s*===\s*0\s*&&\s*user\.length\s*===\s*0\s*\)\s*return;/.exec(body);
+  assert.ok(guardMatch, 'reconcileIncomingCatalogs にdoc・user両方空のearly returnガードが無い（新規文書起動でmaterialData.jsを読んでしまう退行）');
   assert.ok(
-    !/if\s*\(\s*doc\.length\s*===\s*0\s*&&\s*user\.length\s*===\s*0\s*\)\s*return;/.test(body),
-    'guardがuser.lengthも条件にしている（doc空・user非空でもmaterialData.jsを読んでしまう退行）',
+    !/if\s*\(\s*doc\.length\s*===\s*0\s*\)\s*return;/.test(body),
+    'docだけを見るearly returnが残っている（userだけあれば場面(a)検出のため読む契約に反する）',
   );
+
   const importIdx = body.indexOf("import('./finish/materials/materialData.js')");
   assert.ok(importIdx >= 0, 'reconcileIncomingCatalogs が materialData.js を動的importしていない');
   assert.ok(
     guardMatch.index < importIdx,
-    'early returnガードは materialData.js の動的importより前になければならない（不変条件7-1）',
+    'doc・user両方空のearly returnガードは materialData.js の動的importより前になければならない（不変条件7-1）',
   );
+
+  const docGuardMatch = /if\s*\(\s*doc\.length\s*>\s*0\s*\)\s*\{/.exec(body);
+  assert.ok(docGuardMatch, 'doc固有処理（planIncomingReconcile等）を if (doc.length > 0) で分岐していない');
+  assert.ok(
+    importIdx < docGuardMatch.index,
+    'materialData.jsの動的importはdoc固有分岐より前（＝docが空でもuserがあれば読む）でなければならない',
+  );
+  const docBlock = extractBalancedBody(body, 'if (doc.length > 0) {');
+  assert.ok(docBlock, 'if (doc.length > 0) { ... } ブロックの中身を取得できない');
+  assert.ok(!/detectLibraryConflicts\(/.test(docBlock), 'detectLibraryConflicts がif (doc.length > 0)ブロックの中にある（docが空だと呼ばれない退行）');
+  const afterDocBlock = body.slice(body.indexOf(docBlock) + docBlock.length);
+  assert.ok(/detectLibraryConflicts\(/.test(afterDocBlock), 'detectLibraryConflicts の呼び出しがif (doc.length > 0)ブロックの外に見つからない');
 });
 
 // ステップ6-1: reconcileIncomingCatalogsは失敗（builtinロード失敗・commitUserFnのreject等）を

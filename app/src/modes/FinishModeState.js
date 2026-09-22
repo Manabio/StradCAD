@@ -14,6 +14,9 @@ import { RoomFeature, RoomKind, applyDefaultBaseboard } from '@core';
 import { CatalogKind } from '../catalog/catalogKinds.js';
 import { composeCatalog, composeList, docDiffMap } from '../catalog/catalogRegistry.js';
 import { isMaterialCode } from '../catalog/materialCode.js';
+import { buildCodeTable, currentDocumentAliases, peekUnresolvedCodes } from '../catalog/codeNormalization.js';
+import { buildResolveRows } from '../catalog/resolveQueue.js';
+import { REMOVED_MATERIALS } from '../catalog/legacyMaterialCodes.js';
 
 function setsEqual(a, b) {
   if (a.size !== b.size) return false;
@@ -54,6 +57,11 @@ export class FinishModeState {
   materialMap     = null;        // Map<code, material>
   materialDiffs   = null;        // R13: docDiffMap(material)。Map<code, {baseOrigin, diffFields, baseEntry}>
   interiorMasters = null;        // 内装マスター（key → 定義）
+  // 指示UI（ステップ6-3）場面(b)unresolved-codeの行。init()で組み立て、App.jsxが
+  // project.catalogResolveRows（catalog/resolveQueue.js replaceRowsByScenarioで自分の場面だけ置換）
+  // へマージする。モード側からproject.setCatalogResolveRowsを直接呼ばない（materialErrorと同じ
+  // 「initの戻り値で運ぶ」型に合わせる）。
+  catalogResolveRows = [];
 
   constructor(graph, project = null) {
     this.graph = graph;
@@ -92,6 +100,7 @@ export class FinishModeState {
       // docDiffMapの契約）を保つためと、材数百件を毎回プロキシ化しない性能のため。
       materialMap:     observable.ref,
       materialDiffs:   observable.ref,
+      catalogResolveRows: observable.ref,
       isDragging:     computed,
       previewCells:   computed,
       startDrag:    action,
@@ -143,6 +152,13 @@ export class FinishModeState {
     }
     const error = missing.length > 0 ? ERR_MATERIAL_MISMATCH : null;
 
+    // 指示UI（ステップ6-3）場面(b)unresolved-code: missing（自階の未知コード）＋
+    // peekUnresolvedCodes()（全階累積の未解決コード。削除材の旧コード等）を、今のコード表
+    // （文書固有の読み替え+本体の振り直し表）とmaterialMapで再フィルタする——解決できる
+    // （読み替え後にmaterialMapへ存在する）ものはここで捨てる。前回の解決UIで読み替えが
+    // 付いた後（同じセッションで再度仕上げモードに入り直した等）に古い行を再掲しないため。
+    const catalogResolveRows = this._buildUnresolvedCodeRows(missing, materialMap, materials);
+
     runInAction(() => {
       this.materials       = materials;
       this.materialMap     = materialMap;
@@ -150,11 +166,34 @@ export class FinishModeState {
       this.interiorMasters = masterMod.INTERIOR_MASTERS;
       this.materialsLoaded = true;
       this.materialError   = error;
+      this.catalogResolveRows = catalogResolveRows;
     });
 
     await Promise.all([this._loadLowerStairs(), this._loadUpperVoids()]);
 
-    return { ok: error === null, error };
+    return { ok: error === null, error, catalogResolveRows };
+  }
+
+  /**
+   * 場面(b)unresolved-codeの行を組み立てる（catalog/resolveQueue.js buildResolveRows）。
+   * missing（自階の未知コード）は floor 参照として、peekUnresolvedCodes()（全階累積）は
+   * 今のコード表で再解決できないものだけを usage として渡す。
+   */
+  _buildUnresolvedCodeRows(missing, materialMap, appEntries) {
+    const table = buildCodeTable({ aliases: currentDocumentAliases() });
+    const stillUnresolved = peekUnresolvedCodes().filter(u => {
+      const mapped = table.has(u.code) ? table.get(u.code) : u.code;
+      return mapped == null || !materialMap.has(mapped);
+    });
+    const missingUsage = missing.map(code => ({
+      code, location: 'floor', planeId: this.project?.activePlane?.id ?? null,
+    }));
+    return buildResolveRows({
+      kind: CatalogKind.MATERIAL,
+      unresolved: [...missingUsage, ...stillUnresolved],
+      appEntries,
+      removedMaterials: REMOVED_MATERIALS,
+    });
   }
 
   /**
@@ -913,6 +952,7 @@ export class FinishModeState {
     this.materials       = null;
     this.materialMap     = null;
     this.materialDiffs   = null;
+    this.catalogResolveRows = [];
     this.interiorMasters = null;
     this._composition    = null;
     this.materialsLoaded = false;

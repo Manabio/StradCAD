@@ -6,6 +6,8 @@ import { Plane, PlanGraph, CenterLineType, Discipline, applyDefaultBaseboard, Ro
 import { FinishModeState } from './FinishModeState.js';
 import { CatalogKind } from '../catalog/catalogKinds.js';
 import { setOverlay, clearOverlays } from '../catalog/catalogRegistry.js';
+import { restoreGraph, serializeGraph } from '../graphSnapshot.js';
+import { takeUnresolvedCodes, addDocumentAliases, setDocumentAliases } from '../catalog/codeNormalization.js';
 
 function makeGraph() {
   const plane = new Plane('p1', 0, '1階', 1, 1);
@@ -234,4 +236,74 @@ test('FinishModeState.init: 同梱材の重ねが無ければ materialDiff は�
   await state.init();
 
   assert.equal(state.materialDiff('301000000002'), null);
+});
+
+// ---- 指示UI（ステップ6-3）場面(b)unresolved-code: catalogResolveRows ----
+test.afterEach(() => { setDocumentAliases(null); takeUnresolvedCodes(); }); // 後始末（他テストへ蓄積を持ち越さない）
+
+test('FinishModeState.init: 自階が参照する未知コード（missing）はcatalogResolveRowsにunresolved-code行として現れ、usageにfloor参照が付く', async () => {
+  takeUnresolvedCodes(); // 前のテストの蓄積を持ち越さない
+  const graph = makeSingleCellGraph();
+  const cl = graph.centerLines[0];
+  graph.setCLEccentricity(cl.id, { mode: 'value', value: 0, side: 1, backing: '999999999999' });
+  const state = new FinishModeState(graph, null);
+
+  const result = await state.init();
+
+  assert.equal(result.catalogResolveRows.length, 1);
+  const row = result.catalogResolveRows[0];
+  assert.equal(row.scenario, 'unresolved-code');
+  assert.equal(row.targetKey, '999999999999');
+  assert.ok(row.usage.some(u => u.location === 'floor'), 'missing由来のusageはlocation:floorのはず');
+  assert.equal(state.catalogResolveRows, result.catalogResolveRows, 'stateにも同じ配列が反映される');
+});
+
+test('FinishModeState.init: 解決済み・存在するコードはcatalogResolveRowsに行を作らない', async () => {
+  takeUnresolvedCodes();
+  const graph = makeSingleCellGraph();
+  const cl = graph.centerLines[0];
+  graph.setCLEccentricity(cl.id, { mode: 'value', value: 0, side: 1, backing: '201000000001' }); // 既知コード
+  const state = new FinishModeState(graph, null);
+
+  const result = await state.init();
+
+  assert.deepEqual(result.catalogResolveRows, []);
+});
+
+test('FinishModeState.init: 削除材（peekUnresolvedCodesの全階累積）を参照する旧コード文書は、自階のmissingとは別ソースとしてcatalogResolveRowsに現れる', async () => {
+  takeUnresolvedCodes();
+  // 「他の階が既にデコードされ、削除材(111111111211=アスファルトプライマー)への参照が
+  // 未解決として蓄積された」状態を restoreGraph 経由で再現する（本番の起動時peek/activateと同じ経路）。
+  const otherFloorGraph = makeSingleCellGraph();
+  otherFloorGraph.setExteriorWallBacking('111111111211');
+  restoreGraph(otherFloorGraph, serializeGraph(otherFloorGraph)); // applyDocumentCodeNormalizationを通す
+
+  // 今回テスト対象の（別の）階は、この削除材コードを一切参照しない。
+  const graph = makeSingleCellGraph();
+  const state = new FinishModeState(graph, null);
+
+  const result = await state.init();
+
+  const row = result.catalogResolveRows.find(r => r.targetKey === '111111111211');
+  assert.ok(row, '全階累積由来の未解決コードも行に現れるはず');
+  assert.equal(row.usage[0].location, 'exteriorWallBacking');
+  assert.equal(row.targetLabel, 'アスファルトプライマー', 'REMOVED_MATERIALSの旧名称がtargetLabelになる');
+  assert.ok(row.candidates.length >= 0); // 候補の有無は問わない（0でもよい）
+});
+
+test('FinishModeState.init: 読み替え（addDocumentAliases）が付いた後は、同じ未解決コードが再掲されない（今のコード表とmaterialMapで再フィルタ）', async () => {
+  takeUnresolvedCodes();
+  const otherFloorGraph = makeSingleCellGraph();
+  otherFloorGraph.setExteriorWallBacking('111111111211');
+  restoreGraph(otherFloorGraph, serializeGraph(otherFloorGraph));
+
+  // ユーザーが指示UIで「せっこうボード t=9.5(301000000001)」を代替材として指示した想定。
+  addDocumentAliases([{ from: '111111111211', to: '301000000001' }]);
+
+  const graph = makeSingleCellGraph();
+  const state = new FinishModeState(graph, null);
+  const result = await state.init();
+
+  assert.equal(result.catalogResolveRows.find(r => r.targetKey === '111111111211'), undefined,
+    '読み替え後にmaterialMapへ存在するようになったコードは再掲されないはず');
 });

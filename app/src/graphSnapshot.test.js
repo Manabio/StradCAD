@@ -916,6 +916,73 @@ test('graph.beamColumnWidthMm は非永続——encode→decode（restoreGraph�
 });
 
 // ----------------------------------------------------------------
+// ステップ6-3 着手前の確認（最初に確かめる仮定）: 同一の生きたグラフに対する
+// restoreGraph(graph, serializeGraph(graph)) が安全か（id・部屋/辺/CL偏芯・観測者が壊れないか）。
+// カタログの指示UI適用（materialコードの読み替え確定後、アクティブ階を往復させて新コードを
+// 反映する）で使う想定の呼び出し形そのもの。
+//
+// 結論（VERIFIED・このテストで確認）: 安全。serializeGraph(graph) は encode() で完全に独立した
+// バイト列を返すため、その後の restoreGraph(graph, bytes) は「別文書をこのgraphへ読み込む」の
+// と同じ経路（applySnapshot が graph.clear() してから再構築する）。id・値は保持される
+// （既存の往復テスト群と同じ保証）。ただし graph.clear() は shapeMap/roomMap の**実体**を
+// 作り直すため、復元前に取得した Room/Wall 等のオブジェクト参照は復元後は「別オブジェクト」
+// になる（id は同じでも === では一致しない）——この関数を「今生きているgraph」に対して呼ぶ
+// 呼び出し側は、復元後は必ず graph.roomMap.get(id) 等で**引き直す**こと（直接保持した参照を
+// 使い続けない）。これは既存の undo/redo（centerLineOps.js等）が同じ restoreGraph(graph, bytes)
+// パターンを使う際に既に前提としている制約と同じ（.claude/undo-redo.md「フロア切替は
+// 同一graphオブジェクトへ復元される」）。
+// ----------------------------------------------------------------
+test('【仮定確認・ステップ6-3着手前】restoreGraph(graph, serializeGraph(graph))は同一の生きたグラフに対して安全: id・部屋のcustomOverrides・CL偏芯backingは保持される', () => {
+  const graph = makeGraph();
+  const x0 = graph.addCenterLine(CenterLineType.VERTICAL,   0,    { labeled: false, discipline: Discipline.ARCH });
+  const x1 = graph.addCenterLine(CenterLineType.VERTICAL,   4000, { labeled: false, discipline: Discipline.ARCH });
+  const y0 = graph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: false, discipline: Discipline.ARCH });
+  const y1 = graph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: false, discipline: Discipline.ARCH });
+  const key = `${x0.id}:${y0.id}:${x1.id}:${y1.id}`;
+  const room = graph.addRoom(new Set([key]), 'LDK');
+  room.setOverride('wallMaterial', '301000000001');
+  graph.setCLEccentricity(y0.id, { mode: 'value', value: 0, side: 1, backing: '101400000007' });
+  const roomIdBefore = room.id;
+  const roomRefBefore = room; // 復元後にこの参照が生きたグラフの一部で「無くなる」ことを確認する
+
+  // カタログ解決の反映と同じ呼び出し形: 同一グラフを自分自身のバイト列で復元する。
+  restoreGraph(graph, serializeGraph(graph));
+
+  // id・値は保持される
+  assert.ok(graph.roomMap.has(roomIdBefore), '同一IDの部屋が復元後も存在する');
+  const roomAfter = graph.roomMap.get(roomIdBefore);
+  assert.equal(roomAfter.customOverrides.get('wallMaterial'), '301000000001');
+  assert.equal(graph.clEccentricities.get(y0.id)?.backing, '101400000007');
+
+  // 観測者への影響: clear()で実体が作り直されるため、復元前に握っていたオブジェクト参照は
+  // 復元後のgraphの一部ではなくなる（=== では別物）。呼び出し側はidで引き直す必要がある。
+  assert.notEqual(roomAfter, roomRefBefore, '復元後のRoomは新しいオブジェクト（clear()で作り直される）');
+  assert.equal(graph.roomMap.size, 1, '部屋は重複せず1件のまま');
+});
+
+// QA指摘Minor-3（2026-09-22）: 上記の仮定確認に、構造参照（structGraph由来）のaxisCLを持つ壁と
+// Edge.overridesを含むグラフの自己往復を1本追加する——restoreGraphは自グラフをclear()するが
+// graph._structGraph（project.structGraph）はclear()しないため、通り芯参照の壁も無音消失せず
+// 復元されるはず（順序不変条件テスト「通り芯→フロアの順」と同じ解決経路。ただしこちらは
+// structGraphを再構築しない自己往復のケース）。
+test('【仮定確認・ステップ6-3・QA指摘Minor-3】restoreGraph(graph, serializeGraph(graph))は構造参照(structGraph由来)のaxisCLを持つ壁・Edge.overridesも保ったまま安全に往復する', () => {
+  const { graph, wall } = makeProjectWithStructWall();
+  const wallCountBefore = graph.walls.length;
+  const edge = graph.addEdge('e1');
+  edge.setOverride('wallFinish', '301000000002');
+
+  restoreGraph(graph, serializeGraph(graph));
+
+  assert.equal(graph.walls.length, wallCountBefore, '壁本数が保たれる（構造参照CLを解決できず無音消失していない）');
+  const w2 = graph.shapeMap.get(wall.id);
+  assert.ok(w2, '壁が同一IDで復元される');
+  assert.equal(w2.isExteriorWall, true, '壁のプロパティも保たれる');
+  const e2 = graph.getEdge('e1');
+  assert.ok(e2, 'エッジが復元される');
+  assert.equal(e2.overrides.get('wallFinish'), '301000000002', 'Edge.overridesが保たれる');
+});
+
+// ----------------------------------------------------------------
 // 材コードの正規化（4.6・R7・ステップ3b）: restoreGraph は3経路
 // （FlatBuffersバイト列・旧JSON文字列・plain object）のどこから来た snapshot でも
 // applyDocumentCodeNormalization を1回通す。対象4箇所（*_BACKING・rooms[].overrides・
