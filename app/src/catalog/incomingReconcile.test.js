@@ -281,10 +281,10 @@ test('applyReconcilePlan: aliasesが非空ならaddAliasesFnが1回呼ばれ、a
     kind: CatalogKind.MATERIAL,
     currentUser: [],
     commitUserFn: async () => {},
-    addAliasesFn: (pairs) => addAliasesCalls.push(pairs),
+    addAliasesFn: (kind, pairs) => addAliasesCalls.push({ kind, pairs }),
   });
   assert.equal(addAliasesCalls.length, 1);
-  assert.deepEqual(addAliasesCalls[0], [{ from: 'a', to: 'b' }]);
+  assert.deepEqual(addAliasesCalls[0], { kind: CatalogKind.MATERIAL, pairs: [{ from: 'a', to: 'b' }] });
   assert.deepEqual(result.aliasPairs, [{ from: 'a', to: 'b' }]);
 });
 
@@ -296,7 +296,7 @@ test('applyReconcilePlan: aliases/adds両方空ならaddAliasesFn・commitUserFn
     kind: CatalogKind.MATERIAL,
     currentUser: [],
     commitUserFn: async (nextUser) => commitCalls.push(nextUser),
-    addAliasesFn: (pairs) => addAliasesCalls.push(pairs),
+    addAliasesFn: (kind, pairs) => addAliasesCalls.push({ kind, pairs }),
   });
   assert.equal(addAliasesCalls.length, 0);
   assert.equal(commitCalls.length, 0);

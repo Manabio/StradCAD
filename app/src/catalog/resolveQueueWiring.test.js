@@ -145,6 +145,28 @@ test('【不変条件・QA指摘Major-1・2026-09-23】store.js: applyCatalogRes
   assert.ok(restoreIdx > removeIdx, 'restoreGraph（往復）が removeDocEntry より後になっていない');
 });
 
+// ---- store.js: applyCatalogResolutions（ステップ7a Minor: 複数種別混入の防御） ----
+test('【不変条件・ステップ7a Minor】store.js: applyCatalogResolutionsのaliasPairsブロックがkind混在（material以外の混入）を例外で止める', () => {
+  const src = readSrc('store.js');
+  const body = extractBalancedBody(src, 'export async function applyCatalogResolutions(decisions) {');
+  assert.ok(body, 'store.js に applyCatalogResolutions が見つからない');
+  const aliasGuardMatch = /if\s*\(\s*aliasPairs\.length\s*>\s*0\s*\)\s*\{/.exec(body);
+  assert.ok(aliasGuardMatch, 'if (aliasPairs.length > 0) { ... } ブロックが見つからない');
+  const aliasBlock = extractBalancedBody(body, aliasGuardMatch[0]);
+  assert.ok(aliasBlock, 'aliasPairsブロックの中身を取得できない');
+  assert.ok(
+    /p\.kind\s*!==\s*kind/.test(aliasBlock),
+    'aliasPairsブロックがp.kind !== kind（material以外の混入）を検査していない（7d未対応のまま多種別が来た場合の防御）',
+  );
+  assert.ok(
+    /throw new Error\(\s*`複数種別のaliasPairsは未対応です/.test(aliasBlock),
+    'kind混在検出時に「複数種別のaliasPairsは未対応です」で始まる例外を投げていない',
+  );
+  const mixedGuardIdx = aliasBlock.search(/p\.kind\s*!==\s*kind/);
+  const addAliasesIdx = aliasBlock.indexOf('addDocumentAliases(');
+  assert.ok(mixedGuardIdx >= 0 && addAliasesIdx > mixedGuardIdx, 'kind混在チェックはaddDocumentAliasesより前でなければならない');
+});
+
 // ---- store.js: resetAll ----
 test('【不変条件・ステップ6-3】store.js: resetAllがproject.clearCatalogResolveRows()を呼んでいる', () => {
   const src = readSrc('store.js');

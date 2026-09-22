@@ -65,16 +65,16 @@ test('【不変条件】modes/FinishModeState.js: 材コード判定はcatalog/m
 });
 
 // ステップ4: 「新規（全消去）」= store.js の resetAll が clearOverlays（catalogRegistry.js）・
-// setDocumentCodeTable(null)（codeNormalization.js）・project.setCatalogError(null) を呼ぶ配線。
+// clearDocumentAliases（codeNormalization.js）・project.setCatalogError(null) を呼ぶ配線。
 // 予告どおりソーステキスト検査で固定する（他の不変条件テストと同じ型）。
-test('【不変条件・ステップ4→6-1改訂】store.js: resetAllの関数本体がclearOverlays・takeUnresolvedCodes・setDocumentAliases(null)・project.setCatalogError(null)を呼んでいる', () => {
+test('【不変条件・ステップ4→7a改訂】store.js: resetAllの関数本体がclearOverlays・takeUnresolvedCodes・clearDocumentAliases・project.setCatalogError(null)を呼んでいる', () => {
   const src = readSrc('store.js');
   const m = /export async function resetAll\(\) \{([\s\S]*?)\n\}/.exec(src);
   assert.ok(m, 'store.js に resetAll 関数が見つからない');
   const body = m[1];
   assert.ok(/\bclearOverlays\(\)/.test(body), 'resetAll が clearOverlays() を呼んでいない');
   assert.ok(/\btakeUnresolvedCodes\(\)/.test(body), 'resetAll が takeUnresolvedCodes() を呼んでいない（未解決コードの蓄積を捨てる契約）');
-  assert.ok(/\bsetDocumentAliases\(null\)/.test(body), 'resetAll が setDocumentAliases(null) を呼んでいない（ステップ6-1でsetDocumentCodeTable(null)から移行）');
+  assert.ok(/\bclearDocumentAliases\(\)/.test(body), 'resetAll が clearDocumentAliases() を呼んでいない（ステップ7aでsetDocumentAliases(null)から移行。全種別解除の契約）');
   assert.ok(/\bproject\.setCatalogError\(null\)/.test(body), 'resetAll が project.setCatalogError(null) を呼んでいない');
 });
 
@@ -363,11 +363,12 @@ test('【不変条件・ステップ4・QA指摘A】store.js: saveMaterialCatalo
   assert.ok(recoverIdx < saveIdx, 'recoverUnresolvedEntries は saveDocumentCatalog より前に呼ぶ契約');
 });
 
-// ステップ6-1・既存バグ修正: saveMaterialCatalogDocumentのbuildDocumentBundle呼び出しに
-// aliases（currentDocumentAliases()）を渡していないと、保存のたびに文書aliasesが空で
-// 上書きされる（読み替え表が消える）。本文が aliases: { [CatalogKind.MATERIAL]:
-// currentDocumentAliases() } をbuildDocumentBundleへ渡していることを固定する。
-test('【不変条件・ステップ6-1】store.js: saveMaterialCatalogDocumentはbuildDocumentBundleにaliases（currentDocumentAliases）を渡している', () => {
+// ステップ6-1・既存バグ修正 → ステップ7a改訂: saveMaterialCatalogDocumentのbuildDocumentBundle
+// 呼び出しに aliases（currentDocumentAliases(kind)）を渡していないと、保存のたびに文書aliasesが
+// 空で上書きされる（読み替え表が消える）。本文が aliases: { [CatalogKind.MATERIAL]:
+// currentDocumentAliases(CatalogKind.MATERIAL) } をbuildDocumentBundleへ渡していることを固定する
+// （currentDocumentAliasesがkind必須引数になったための署名追従。7cで他種別へ拡張予定）。
+test('【不変条件・ステップ7a】store.js: saveMaterialCatalogDocumentはbuildDocumentBundleにaliases（currentDocumentAliases(kind)）を渡している', () => {
   const src = readSrc('store.js');
   const body = extractBalancedBody(src, 'async function saveMaterialCatalogDocument(floorRecords) {');
   assert.ok(body, 'store.js に saveMaterialCatalogDocument が見つからない');
@@ -375,7 +376,7 @@ test('【不変条件・ステップ6-1】store.js: saveMaterialCatalogDocument�
   assert.ok(callMatch, 'store.js に buildDocumentBundle(...) 呼び出しが見つからない');
   const args = callMatch[1];
   assert.ok(
-    /aliases\s*:\s*\{\s*\[CatalogKind\.MATERIAL\]\s*:\s*currentDocumentAliases\(\)\s*\}/.test(args),
-    'buildDocumentBundle の呼び出しに aliases: { [CatalogKind.MATERIAL]: currentDocumentAliases() } が渡されていない（保存のたびに文書aliasesが空で上書きされる退行）',
+    /aliases\s*:\s*\{\s*\[CatalogKind\.MATERIAL\]\s*:\s*currentDocumentAliases\(\s*CatalogKind\.MATERIAL\s*\)\s*\}/.test(args),
+    'buildDocumentBundle の呼び出しに aliases: { [CatalogKind.MATERIAL]: currentDocumentAliases(CatalogKind.MATERIAL) } が渡されていない（保存のたびに文書aliasesが空で上書きされる退行）',
   );
 });

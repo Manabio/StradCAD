@@ -136,7 +136,7 @@ export function formatReconcileNotice(plan, { addedCount = 0, skippedCount = 0 }
  * @param {ReturnType<typeof planIncomingReconcile>} plan
  * @param {{ kind: string, currentUser: object[],
  *           commitUserFn: (nextUser: object[]) => Promise<void>,
- *           addAliasesFn?: (pairs: Array<{from:string,to:string}>) => void,
+ *           addAliasesFn?: (kind: string, pairs: Array<{from:string,to:string}>) => void,
  *           removeDocEntryFn?: (kind: string, key: string) => void,
  *           onSkipped?: (entry: object, error: Error) => void }} args
  * @returns {Promise<{ addedKeys: string[], aliasPairs: Array<{from:string,to:string}>, skipped: Array<{entry:object, reason:string}> }>}
@@ -148,7 +148,7 @@ export async function applyReconcilePlan(plan, {
   const def = kindDef(kind);
 
   if (plan.aliases.length > 0) {
-    addAliasesFn(plan.aliases);
+    addAliasesFn(kind, plan.aliases);
     // QA指摘Major-1: alias確定したdocエントリはoverlayに残さない（doc起源のキーだけを対象に、
     // 現在のoverlay.docに実在するものだけremoveDocEntryFnへ渡す）。
     const docKeys = new Set(overlayFor(kind).doc.map(e => def.keyOf(e)));

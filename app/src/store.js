@@ -33,7 +33,7 @@ import {
   recoverUnresolvedEntries,
 } from './catalog/usedEntries.js';
 import {
-  setDocumentAliases, currentDocumentAliases, takeUnresolvedCodes, addDocumentAliases,
+  clearDocumentAliases, currentDocumentAliases, takeUnresolvedCodes, addDocumentAliases,
 } from './catalog/codeNormalization.js';
 import { loadCatalogOverlaysFromIDB as applyCatalogOverlays } from './catalog/catalogOverlayLoader.js';
 import { planIncomingReconcile, formatReconcileNotice, applyReconcilePlan } from './catalog/incomingReconcile.js';
@@ -371,7 +371,17 @@ export async function applyCatalogResolutions(decisions) {
   }
 
   if (aliasPairs.length > 0) {
-    addDocumentAliases(aliasPairs);
+    // ステップ7a: addDocumentAliasesはkind必須引数になった。applyCatalogResolutionsは現状
+    // material専用（rows/validKeysともmaterialだけを扱う）なので、行ごとのaliasPairs[].kindを
+    // 集計せずローカルのkind（=CatalogKind.MATERIAL）をそのまま渡す（多種別対応はステップ7dで
+    // このUI自体がmaterial以外の行を扱うようになってから拡張する）。
+    // 防御: 万一material以外のkindが混入していたら（7d未対応のまま多種別行が来た場合）、
+    // 誤ってmaterialとして読み替えてしまう前に例外で止める。
+    const mixedKindPair = aliasPairs.find(p => p.kind !== kind);
+    if (mixedKindPair) {
+      throw new Error(`複数種別のaliasPairsは未対応です（ステップ7dで対応）: ${mixedKindPair.kind}`);
+    }
+    addDocumentAliases(kind, aliasPairs);
     // QA指摘Major-1: alias確定したdocエントリはoverlayに残さない。場面(b)（unresolved-code）
     // 由来のfromはグラフ参照の旧コードでdocに無いため、無いキーの例外を投げさせず何もしない。
     const docKeys = new Set(overlayFor(kind).doc.map(e => e.code));
@@ -621,7 +631,7 @@ async function saveMaterialCatalogDocument(floorRecords) {
   const { bundle: draftBundle, unresolvedKeys } = buildDocumentBundle({
     usedKeysByKind: new Map([[CatalogKind.MATERIAL, expandedMaterialCodes]]),
     resolvedByKind: new Map([[CatalogKind.MATERIAL, materialMap]]),
-    aliases: { [CatalogKind.MATERIAL]: currentDocumentAliases() },
+    aliases: { [CatalogKind.MATERIAL]: currentDocumentAliases(CatalogKind.MATERIAL) },
   });
 
   let finalBundle = draftBundle;
@@ -758,7 +768,7 @@ export async function resetAll() {
   clearDirty();
   clearOverlays();
   takeUnresolvedCodes(); // 蓄積を捨てる（戻り値は使わない）
-  setDocumentAliases(null);
+  clearDocumentAliases(); // 全種別のalias・正規化表を解除する
   project.setCatalogError(null);
   project.setCatalogOverlayUntrusted(false);
   project.clearCatalogResolveRows();

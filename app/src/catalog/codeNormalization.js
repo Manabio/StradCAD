@@ -1,12 +1,15 @@
 // ================================================================
-// スナップショットの材コード正規化（4.6）。
+// スナップショットのカタログコード正規化（4.6→ステップ7a: 種別化）。
 //
-// 正規化表の入力は2つ: (1) 本体の振り直し表（legacyMaterialCodes.js・全文書共通）、
-// (2) 文書固有の読み替え（束の aliases。R8の内容一致・4.6.1の承認で積む）。
+// 正規化表の入力は2つ: (1) 本体の振り直し表（legacyMaterialCodes.js・material種別のみの既定入力。
+// 他種別は空表）、(2) 文書固有の読み替え（束の aliases。R8の内容一致・4.6.1の承認で積む）。
 // 参照値そのものを直す方式に一本化する（解決のたびに表を引く経路は作らない）。
 //
+// ステップ7a: alias状態・正規化表・未解決コードの蓄積を種別（kind）ごとに持つ。参照の
+// 「どのフィールドが対象か」は SNAPSHOT_REF_WALKERS（kind → {enumerate, rewrite}）に集約する——
+// catalog/usedEntries.js collectUsedKeys がこの enumerate を共有する（二重実装を作らない）。
+//
 // ゼロ依存の葉モジュール（legacyMaterialCodes.js だけ import可）。
-// graphSnapshot.js へはまだ繋がない（接続はステップ3）。
 // ================================================================
 
 import { LEGACY_MATERIAL_CODE_ALIASES } from './legacyMaterialCodes.js';
@@ -38,6 +41,7 @@ function resolveChain(start, raw) {
   }
 }
 
+/** table でコード1件を正規化する（種別非依存の共通ロジック）。 */
 function normalizeCode(code, table, unresolved, context) {
   if (!table.has(code)) return code;
   const target = table.get(code);
@@ -49,7 +53,7 @@ function normalizeCode(code, table, unresolved, context) {
 }
 
 // ----------------------------------------------------------------
-// 材コード参照4系統の「対象かどうか」の判定（唯一の定義箇所）。
+// material: 材コード参照4系統の「対象かどうか」の判定（唯一の定義箇所）。
 // normalizeSnapshotCodes（変換）と catalog/usedEntries.js の collectUsedMaterialCodes（保存時の
 // 使用コード収集）が同じ判定を共有する——一方だけ直して他方が古いまま、という分岐を防ぐため
 // （enumerateMaterialCodeRefs が両方の唯一の入口）。
@@ -195,83 +199,254 @@ export function normalizeSnapshotCodes(snapshot, table) {
 }
 
 // ----------------------------------------------------------------
-// 文書単位の正規化表（読込み時に1回設定し、各階がデコードされるたびに適用する）。
+// interiorMaster: rooms[].templateKey・boundaryMaster: edges[].masterType の
+// enumerate/rewrite（material と同じ normalizeCode を共有する）。
+// ----------------------------------------------------------------
+function enumerateInteriorMasterRefs(snapshot) {
+  if (!snapshot) return [];
+  const refs = [];
+  for (const room of snapshot.rooms ?? []) {
+    if (room?.templateKey) refs.push({ code: room.templateKey, location: 'room', roomId: room.id });
+  }
+  return refs;
+}
+
+function normalizeRoomTemplateKeys(rooms, table, unresolved) {
+  if (!Array.isArray(rooms)) return rooms;
+  let changedAny = false;
+  const next = rooms.map(room => {
+    if (!room?.templateKey) return room;
+    const mapped = normalizeCode(room.templateKey, table, unresolved, { location: 'room', roomId: room.id });
+    if (mapped === room.templateKey) return room;
+    changedAny = true;
+    return { ...room, templateKey: mapped };
+  });
+  return changedAny ? next : rooms;
+}
+
+function rewriteInteriorMasterRefs(snapshot, table) {
+  if (!snapshot) return { snapshot, unresolved: [] };
+  const unresolved = [];
+  const rooms = normalizeRoomTemplateKeys(snapshot.rooms, table, unresolved);
+  if (rooms === snapshot.rooms) return { snapshot, unresolved };
+  return { snapshot: { ...snapshot, rooms }, unresolved };
+}
+
+function enumerateBoundaryMasterRefs(snapshot) {
+  if (!snapshot) return [];
+  const refs = [];
+  for (const edge of snapshot.edges ?? []) {
+    if (edge?.masterType) refs.push({ code: edge.masterType, location: 'edge', edgeKey: edge.key });
+  }
+  return refs;
+}
+
+function normalizeEdgeMasterTypes(edges, table, unresolved) {
+  if (!Array.isArray(edges)) return edges;
+  let changedAny = false;
+  const next = edges.map(edge => {
+    if (!edge?.masterType) return edge;
+    const mapped = normalizeCode(edge.masterType, table, unresolved, { location: 'edge', edgeKey: edge.key });
+    if (mapped === edge.masterType) return edge;
+    changedAny = true;
+    return { ...edge, masterType: mapped };
+  });
+  return changedAny ? next : edges;
+}
+
+function rewriteBoundaryMasterRefs(snapshot, table) {
+  if (!snapshot) return { snapshot, unresolved: [] };
+  const unresolved = [];
+  const edges = normalizeEdgeMasterTypes(snapshot.edges, table, unresolved);
+  if (edges === snapshot.edges) return { snapshot, unresolved };
+  return { snapshot: { ...snapshot, edges }, unresolved };
+}
+
+// ----------------------------------------------------------------
+// section: columns/beams/structuralWalls/slabs/footings[].sectionDefId・
+// openingSubType: openings[] の `${category}:${subType}`（catalogKinds.js の keyOf と同型）。
+// どちらも現状は読み取り専用（rewrite:null。ステップ8/10で参照の書換え先を実装するまでは
+// 書換えの入口を持たない——alias を積もうとしたら例外にする＝黙って効かないaliasを作らない）。
+// ----------------------------------------------------------------
+const SECTION_MEMBER_LISTS = ['columns', 'beams', 'structuralWalls', 'slabs', 'footings'];
+
+function enumerateSectionRefs(snapshot) {
+  if (!snapshot) return [];
+  const refs = [];
+  for (const listName of SECTION_MEMBER_LISTS) {
+    for (const member of snapshot[listName] ?? []) {
+      if (member?.sectionDefId) refs.push({ code: member.sectionDefId, location: listName, memberId: member.id });
+    }
+  }
+  return refs;
+}
+
+function enumerateOpeningSubTypeRefs(snapshot) {
+  if (!snapshot) return [];
+  const refs = [];
+  for (const opening of snapshot.openings ?? []) {
+    if (opening?.category && opening?.subType) {
+      refs.push({ code: `${opening.category}:${opening.subType}`, location: 'opening', openingId: opening.id });
+    }
+  }
+  return refs;
+}
+
+/**
+ * 参照所在の唯一の集約点（kind → {enumerate(snapshot), rewrite(snapshot, table)|null}）。
+ * enumerate は catalog/usedEntries.js collectUsedKeys（保存時の使用キー収集）と
+ * applyDocumentCodeNormalization の unresolved 検出が共有する。rewrite が null の種別は
+ * まだ参照の書換え先を持たない（section=ステップ8・openingSubType=ステップ10）——
+ * setDocumentAliases/addDocumentAliases でその種別に非空のaliasesを積もうとすると例外になる。
+ */
+export const SNAPSHOT_REF_WALKERS = Object.freeze({
+  material: Object.freeze({
+    enumerate: enumerateMaterialCodeRefs,
+    rewrite: (snapshot, table) => normalizeSnapshotCodes(snapshot, table),
+  }),
+  interiorMaster: Object.freeze({
+    enumerate: enumerateInteriorMasterRefs,
+    rewrite: rewriteInteriorMasterRefs,
+  }),
+  boundaryMaster: Object.freeze({
+    enumerate: enumerateBoundaryMasterRefs,
+    rewrite: rewriteBoundaryMasterRefs,
+  }),
+  section: Object.freeze({
+    enumerate: enumerateSectionRefs,
+    rewrite: null,
+  }),
+  openingSubType: Object.freeze({
+    enumerate: enumerateOpeningSubTypeRefs,
+    rewrite: null,
+  }),
+});
+
+// ----------------------------------------------------------------
+// 文書単位の正規化表（種別ごと。読込み時に1回設定し、各階がデコードされるたびに適用する）。
 //
-// 文書固有の読み替え（束の aliases）は catalogOverlayLoader.js（読込み時）・
+// 文書固有の読み替え（束の aliases[kind]）は catalogOverlayLoader.js（読込み時）・
 // catalog/incomingReconcile.js（起動時照合。ステップ6-1）が setDocumentAliases/
 // addDocumentAliases を通して設定する。その段階でも本体の振り直し表
-// （LEGACY_MATERIAL_CODE_ALIASES）だけは常に効かせる——「表が未設定＝正規化しない」ではなく
-// 「表が未設定＝本体表だけで正規化する」が既定（2026-09-22 裁定）。setDocumentAliases(null) は
-// 文書固有の上書きを解除するだけで、本体表による正規化そのものは止めない。
+// （LEGACY_MATERIAL_CODE_ALIASES。material種別のみの既定入力）だけは常に効かせる——
+// 「表が未設定＝正規化しない」ではなく「表が未設定＝本体表だけで正規化する」が既定
+// （2026-09-22 裁定）。setDocumentAliases(kind, null) は文書固有の上書きを解除するだけで、
+// 本体表による正規化そのものは止めない。material以外の種別は本体表が空（{}）——文書固有の
+// 読み替えが無ければ実質no-op。
 //
-// 状態の持ち主はこのモジュール1つ（documentAliases が生の {from:to}・documentCodeTable は
+// 状態はkindごとにMapで持つ（documentAliasesByKind が生の {from:to}・documentCodeTableByKind は
 // それから導出したMap）。setDocumentCodeTable は低レベルAPIとして残す（catalogOverlayLoader.js
 // の失敗路の巻き戻し等、表そのものを直接扱いたい呼び出しのため）。
 // ----------------------------------------------------------------
-let documentAliases = {}; // 生の読み替え表（後からaddDocumentAliasesで追記される）
-let documentCodeTable = null;
-let defaultCodeTable = null; // buildCodeTable({}) の遅延キャッシュ（本体表のみ・不変）
+const documentAliasesByKind = new Map(); // kind -> 生の読み替え表（後からaddDocumentAliasesで追記される）
+const documentCodeTableByKind = new Map(); // kind -> Map|null（明示設定された表）
+const defaultCodeTableByKind = new Map(); // kind -> buildCodeTable({legacy: legacyTableFor(kind)}) の遅延キャッシュ
 let unresolvedAccumulator = [];
-// 重複排除キー（code+location）の集合。同じ箇所（例: 同一フィールド名・room/edge/clEccentricityの種別）
-// が繰り返し未解決になっても単調増加させない（ステップ6の消費者が付くまでの暫定対応。
-// 2026-09-22 QAコメント: 消費者側の実装までは「どのコード・どの箇所種別が未解決か」が分かれば
-// 十分で、件数そのものに意味を持たせない）。
+// 重複排除キー（kind+code+location）の集合。同じ箇所（例: 同一フィールド名・room/edge/
+// clEccentricityの種別）が繰り返し未解決になっても単調増加させない。
 let unresolvedKeys = new Set();
 
-function unresolvedDedupeKey(u) {
-  return `${u.code}::${u.location}`;
+function requireKind(kind) {
+  if (kind === undefined) {
+    throw new Error('カタログ種別(kind)の指定は必須です（省略できません）');
+  }
+  if (!SNAPSHOT_REF_WALKERS[kind]) {
+    throw new Error(`未知のカタログ種別です: ${kind}`);
+  }
 }
 
-function effectiveCodeTable() {
-  if (documentCodeTable) return documentCodeTable;
-  if (!defaultCodeTable) defaultCodeTable = buildCodeTable({});
-  return defaultCodeTable;
+/** kindの本体振り直し表の既定入力。material のみ LEGACY_MATERIAL_CODE_ALIASES、他は空表。 */
+function legacyTableFor(kind) {
+  return kind === 'material' ? LEGACY_MATERIAL_CODE_ALIASES : {};
+}
+
+function defaultCodeTableFor(kind) {
+  if (!defaultCodeTableByKind.has(kind)) {
+    defaultCodeTableByKind.set(kind, buildCodeTable({ legacy: legacyTableFor(kind) }));
+  }
+  return defaultCodeTableByKind.get(kind);
+}
+
+function effectiveCodeTable(kind) {
+  const override = documentCodeTableByKind.get(kind);
+  if (override) return override;
+  return defaultCodeTableFor(kind);
+}
+
+function unresolvedDedupeKey(kind, u) {
+  return `${kind}::${u.code}::${u.location}`;
 }
 
 /**
  * 読込み時に文書固有の正規化表を設定する（低レベルAPI。表は消さずに持ち続ける。
- * 閉じるときは null で解除）。documentAliases（生の読み替え表）とは独立に表だけを
+ * 閉じるときは null で解除）。documentAliasesByKind（生の読み替え表）とは独立に表だけを
  * 直接差し替えたい呼び出し（catalogOverlayLoader.js の失敗路の巻き戻し等）のために残す。
+ * @param {string} kind
+ * @param {Map<string,string|null>|null} table
  */
-export function setDocumentCodeTable(table) {
-  documentCodeTable = table ?? null;
+export function setDocumentCodeTable(kind, table) {
+  requireKind(kind);
+  if (table == null) documentCodeTableByKind.delete(kind);
+  else documentCodeTableByKind.set(kind, table);
 }
 
-/** 現在設定されている文書固有の正規化表（未設定は null。既定＝本体表の適用有無はこの値では分からない）。 */
-export function currentCodeTable() {
-  return documentCodeTable;
+/** kindに現在設定されている文書固有の正規化表（未設定は null）。 */
+export function currentCodeTable(kind) {
+  requireKind(kind);
+  return documentCodeTableByKind.get(kind) ?? null;
 }
 
 /**
- * 読込み時に文書固有の読み替え（束の aliases.material 相当。生の {from:to}）を設定する。
- * 内部で setDocumentCodeTable(buildCodeTable({ aliases })) を組み立てて即座に反映する
- * （文書固有表の唯一の入口）。null を渡すと文書固有の読み替えを解除する（本体の
- * 振り直し表はこの操作では止まらない——effectiveCodeTable の既定と同じ）。
+ * 読込み時に文書固有の読み替え（束の aliases[kind] 相当。生の {from:to}）を設定する。
+ * 内部で setDocumentCodeTable(kind, buildCodeTable({ legacy: legacyTableFor(kind), aliases })) を
+ * 組み立てて即座に反映する（文書固有表の唯一の入口）。null を渡すと文書固有の読み替えを解除する
+ * （本体の振り直し表はこの操作では止まらない——effectiveCodeTable の既定と同じ）。
+ * SNAPSHOT_REF_WALKERS[kind].rewrite が null（参照の書換え先が未実装）の種別へ非空の aliases を
+ * 積もうとすると例外——黙って効かない alias を作らないため。
+ * @param {string} kind
  * @param {object|null} aliasesOrNull
  */
-export function setDocumentAliases(aliasesOrNull) {
-  documentAliases = aliasesOrNull ?? {};
+export function setDocumentAliases(kind, aliasesOrNull) {
+  requireKind(kind);
+  const next = aliasesOrNull ?? {};
+  const hasAliases = Object.keys(next).length > 0;
+  if (hasAliases && !SNAPSHOT_REF_WALKERS[kind].rewrite) {
+    throw new Error(`種別「${kind}」は参照の読み替え（alias）にまだ対応していません`);
+  }
+  documentAliasesByKind.set(kind, next);
   // aliasesが空なら「文書固有の上書きなし」= documentCodeTableをnullに戻し、effectiveCodeTable()の
-  // 遅延キャッシュ（defaultCodeTable）へ委ねる（従来のsetDocumentCodeTable(null)と同じ既定）。
-  const hasAliases = Object.keys(documentAliases).length > 0;
-  setDocumentCodeTable(hasAliases ? buildCodeTable({ aliases: documentAliases }) : null);
+  // 遅延キャッシュ（defaultCodeTableByKind）へ委ねる（従来のsetDocumentCodeTable(kind, null)と同じ既定）。
+  setDocumentCodeTable(kind, hasAliases ? buildCodeTable({ legacy: legacyTableFor(kind), aliases: next }) : null);
 }
 
-/** 現在の文書固有の読み替え（生の {from:to}。未設定時は空オブジェクト）。 */
-export function currentDocumentAliases() {
-  return documentAliases;
+/** kindの現在の文書固有の読み替え（生の {from:to}。未設定時は空オブジェクト）。 */
+export function currentDocumentAliases(kind) {
+  requireKind(kind);
+  return documentAliasesByKind.get(kind) ?? {};
 }
 
 /**
- * 文書固有の読み替えへ {from,to} の組を追記し、正規化表を作り直す（後効き）。
- * 既存の documentAliases に後勝ちでマージする——連鎖（a→b, b→c）はbuildCodeTableが
- * 潰し、循環は例外を投げる（buildCodeTableと同じ規約）。
+ * kindの文書固有の読み替えへ {from,to} の組を追記し、正規化表を作り直す（後効き）。
+ * 既存の documentAliasesByKind に後勝ちでマージする——連鎖（a→b, b→c）はbuildCodeTableが
+ * 潰し、循環は例外を投げる（buildCodeTableと同じ規約）。rewrite:null の種別への例外は
+ * setDocumentAliases 経由で同じく発生する。
+ * @param {string} kind
  * @param {Array<{from: string, to: string}>} pairs
  */
-export function addDocumentAliases(pairs) {
-  const next = { ...documentAliases };
+export function addDocumentAliases(kind, pairs) {
+  requireKind(kind);
+  const current = documentAliasesByKind.get(kind) ?? {};
+  const next = { ...current };
   for (const { from, to } of pairs ?? []) next[from] = to;
-  setDocumentAliases(next);
+  setDocumentAliases(kind, next);
+}
+
+/** 全種別の文書固有の読み替え・正規化表を解除する（本体の振り直し表は止まらない）。 */
+export function clearDocumentAliases() {
+  for (const kind of Object.keys(SNAPSHOT_REF_WALKERS)) {
+    documentAliasesByKind.delete(kind);
+    documentCodeTableByKind.delete(kind);
+  }
 }
 
 /** これまでに蓄積した未解決コードを非破壊で覗く（takeUnresolvedCodesと違い蓄積をリセットしない）。 */
@@ -280,19 +455,31 @@ export function peekUnresolvedCodes() {
 }
 
 /**
- * 実効中の正規化表を snapshot に適用する（文書固有の表が無ければ本体表だけで正規化する）。
- * 未解決コードは code+location（`unresolvedDedupeKey`）で重複排除して蓄積する——同じ snapshot
- * （階）を繰り返し適用しても（undo/redo・再読込み等）蓄積が単調増加しない。
+ * 実効中の正規化表を snapshot に適用する（全種別。文書固有の表が無ければ種別ごとの
+ * 本体表だけで正規化する。material以外は本体表が空のため、文書固有の読み替えが無ければ
+ * 実質no-op）。rewrite:null の種別（section/openingSubType）はここでは読み飛ばす
+ * （書換え先が無いため。enumerateは別途 collectUsedKeys 等が使う）。
+ * 未解決コードは kind+code+location（`unresolvedDedupeKey`）で重複排除して蓄積する——同じ
+ * snapshot（階）を繰り返し適用しても（undo/redo・再読込み等）蓄積が単調増加しない。
+ * 署名は変更しない（呼び出し側=graphSnapshot.js は snapshot だけを渡す）。
  */
 export function applyDocumentCodeNormalization(snapshot) {
-  const { snapshot: next, unresolved } = normalizeSnapshotCodes(snapshot, effectiveCodeTable());
-  for (const u of unresolved) {
-    const key = unresolvedDedupeKey(u);
-    if (unresolvedKeys.has(key)) continue;
-    unresolvedKeys.add(key);
-    unresolvedAccumulator.push(u);
+  let current = snapshot;
+  for (const kind of Object.keys(SNAPSHOT_REF_WALKERS)) {
+    const walker = SNAPSHOT_REF_WALKERS[kind];
+    if (!walker.rewrite) continue;
+    const table = effectiveCodeTable(kind);
+    if (!table || table.size === 0) continue;
+    const { snapshot: next, unresolved } = walker.rewrite(current, table);
+    current = next;
+    for (const u of unresolved) {
+      const key = unresolvedDedupeKey(kind, u);
+      if (unresolvedKeys.has(key)) continue;
+      unresolvedKeys.add(key);
+      unresolvedAccumulator.push({ kind, ...u });
+    }
   }
-  return next;
+  return current;
 }
 
 /** これまでに蓄積した未解決コードを取り出し、蓄積（重複排除キーも含め）をリセットする。 */

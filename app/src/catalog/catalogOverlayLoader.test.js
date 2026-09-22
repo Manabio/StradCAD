@@ -8,7 +8,7 @@ import { loadCatalogOverlaysFromIDB } from './catalogOverlayLoader.js';
 import { setOverlay, clearOverlays, overlayFor, composeCatalog } from './catalogRegistry.js';
 import { encodeCatalogBundle } from './catalogCodec.js';
 import { emptyBundle, withEntries, withAlias } from './catalogBundle.js';
-import { currentCodeTable, setDocumentAliases } from './codeNormalization.js';
+import { currentCodeTable, clearDocumentAliases, setDocumentAliases } from './codeNormalization.js';
 import { CatalogKind } from './catalogKinds.js';
 
 function material(overrides) {
@@ -22,9 +22,13 @@ function section(overrides) {
   return { key: 'S1', materialType: 'STEEL', shape: 'H', width: 200, height: 100, label: 'H-200x100', ...overrides };
 }
 
+function interiorMaster(overrides) {
+  return { key: 'LIVING', label: 'LDK', wallMaterial: '301000000001', wallFinish: '301000000001', ceilingHeight: 2400, ...overrides };
+}
+
 test.afterEach(() => {
   clearOverlays();
-  setDocumentAliases(null);
+  clearDocumentAliases();
 });
 
 function makeDeps(overrides) {
@@ -69,8 +73,35 @@ test('正常: 束のaliases.materialがsetDocumentAliases経由でcurrentCodeTab
     loadDocumentCatalogs: async () => [{ kind: CatalogKind.MATERIAL, bytes: encodeCatalogBundle(docBundle) }],
   });
   await loadCatalogOverlaysFromIDB(deps);
-  const table = currentCodeTable();
+  const table = currentCodeTable(CatalogKind.MATERIAL);
   assert.equal(table.get('111111111150'), '301000000001');
+});
+
+// ---- ステップ7a Minor: 全種別ぶんsetDocumentAliasesFnが呼ばれる（material限定への退行を検知）----
+test('正常: doc束がmaterialとinteriorMasterの両方にaliasesを持つとき、setDocumentAliasesFnが両kindで呼ばれる', async () => {
+  const materialDoc = withAlias(
+    withEntries(emptyBundle(), CatalogKind.MATERIAL, [material()]),
+    CatalogKind.MATERIAL, '111111111150', '301000000001',
+  );
+  const interiorDoc = withAlias(
+    withEntries(emptyBundle(), CatalogKind.INTERIOR_MASTER, [interiorMaster()]),
+    CatalogKind.INTERIOR_MASTER, 'OLD_LIVING', 'LIVING',
+  );
+  const setAliasesCalls = [];
+  const { deps } = makeDeps({
+    loadDocumentCatalogs: async () => [
+      { kind: CatalogKind.MATERIAL, bytes: encodeCatalogBundle(materialDoc) },
+      { kind: CatalogKind.INTERIOR_MASTER, bytes: encodeCatalogBundle(interiorDoc) },
+    ],
+    setDocumentAliasesFn: (kind, aliases) => { setAliasesCalls.push({ kind, aliases }); setDocumentAliases(kind, aliases); },
+  });
+  await loadCatalogOverlaysFromIDB(deps);
+
+  const byKind = new Map(setAliasesCalls.map(c => [c.kind, c.aliases]));
+  assert.deepEqual(byKind.get(CatalogKind.MATERIAL), { '111111111150': '301000000001' });
+  assert.deepEqual(byKind.get(CatalogKind.INTERIOR_MASTER), { OLD_LIVING: 'LIVING' });
+  assert.equal(currentCodeTable(CatalogKind.MATERIAL).get('111111111150'), '301000000001');
+  assert.equal(currentCodeTable(CatalogKind.INTERIOR_MASTER).get('OLD_LIVING'), 'LIVING');
 });
 
 // ---- 壊れたレコード ----
@@ -98,19 +129,19 @@ test('【失敗系】壊れたレコード（decode自体は通るがvalidateBun
 });
 
 // 2026-09-22 再QA指摘Minor-A: 外側のcatch（decode/validate失敗。setOverlayへ到達する前）でも
-// clearOverlaysFn/setDocumentCodeTableFnが呼ばれることを確認する（内側catchと同じ後始末）。
-test('【失敗系・Minor-A】壊れたレコード（decode失敗。setOverlayへ到達する前）でも外側catchでclearOverlaysFn/setDocumentAliasesFnが呼ばれる', async () => {
+// clearOverlaysFn/clearDocumentAliasesFnが呼ばれることを確認する（内側catchと同じ後始末）。
+test('【失敗系・Minor-A】壊れたレコード（decode失敗。setOverlayへ到達する前）でも外側catchでclearOverlaysFn/clearDocumentAliasesFnが呼ばれる', async () => {
   let clearCalls = 0;
-  const setAliasesCalls = [];
+  let clearAliasesCalls = 0;
   const { deps, calls } = makeDeps({
     loadDocumentCatalogs: async () => [{ kind: CatalogKind.MATERIAL, bytes: new TextEncoder().encode('{not-json') }],
     clearOverlaysFn: () => { clearCalls++; clearOverlays(); },
-    setDocumentAliasesFn: (v) => { setAliasesCalls.push(v); setDocumentAliases(v); },
+    clearDocumentAliasesFn: () => { clearAliasesCalls++; clearDocumentAliases(); },
   });
   await loadCatalogOverlaysFromIDB(deps);
   assert.equal(calls.errors.length, 1);
   assert.equal(clearCalls, 1, '外側catch（decode失敗）でclearOverlaysFnが呼ばれていない');
-  assert.deepEqual(setAliasesCalls, [null], '外側catch（decode失敗）でsetDocumentAliasesFn(null)が呼ばれていない');
+  assert.equal(clearAliasesCalls, 1, '外側catch（decode失敗）でclearDocumentAliasesFnが呼ばれていない');
 });
 
 test('【失敗系】文書同梱レコードが壊れていれば、他の（正常な）ユーザーライブラリのレコードもoverlayに立たない（部分適用しない）', async () => {

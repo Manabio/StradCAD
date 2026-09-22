@@ -206,7 +206,7 @@ function decisionOf(decisions, id) {
  * @param {object[]} rows buildResolveRows の戻り値
  * @param {Map<string, {action:string, pick?:string}>|Object<string,{action:string,pick?:string}>} decisions
  * @param {{ validKeys?: Set<string> }} [opts]
- * @returns {{ aliasPairs: Array<{from:string,to:string}>,
+ * @returns {{ aliasPairs: Array<{kind:string,from:string,to:string}>,
  *             userOps: Array<{op:'upsert'|'remove'|'renumber', kind:string, [k:string]: unknown}>,
  *             deferredRowIds: string[],
  *             rejected: Array<{rowId:string, key:string, reason:string}> }}
@@ -252,7 +252,7 @@ export function applyResolveDecisions(rows, decisions, { validKeys } = {}) {
             rejectToDeferred(row, toKey, '候補の材料が現在のライブラリに見つかりません');
             break;
           }
-          aliasPairs.push({ from: row.targetKey, to: toKey });
+          aliasPairs.push({ kind: row.kind, from: row.targetKey, to: toKey });
         }
         break;
 
@@ -265,7 +265,7 @@ export function applyResolveDecisions(rows, decisions, { validKeys } = {}) {
           rejectToDeferred(row, pick, '指定した代替材が現在のライブラリに見つかりません');
           break;
         }
-        aliasPairs.push({ from: row.targetKey, to: pick });
+        aliasPairs.push({ kind: row.kind, from: row.targetKey, to: pick });
         if (row.scenario === 'library-conflict') {
           userOps.push({ op: 'remove', kind: row.kind, key: row.targetKey });
         }

@@ -95,7 +95,7 @@ test('applyResolveDecisions: approve（propose/unresolved-code/unsupported）は
   const candidate = material({ code: '301000000001' });
   const rows = buildResolveRows({ proposals: [{ from: '999999999999', candidates: [candidate], entry: material({ code: '999999999999' }) }] });
   const { aliasPairs, userOps, deferredRowIds } = applyResolveDecisions(rows, new Map([[rows[0].id, { action: 'approve' }]]));
-  assert.deepEqual(aliasPairs, [{ from: '999999999999', to: '301000000001' }]);
+  assert.deepEqual(aliasPairs, [{ kind: CatalogKind.MATERIAL, from: '999999999999', to: '301000000001' }]);
   assert.deepEqual(userOps, []);
   assert.deepEqual(deferredRowIds, []);
 });
@@ -103,7 +103,7 @@ test('applyResolveDecisions: approve（propose/unresolved-code/unsupported）は
 test('applyResolveDecisions: pick（代替材を指示）はcandidatesに縛られず任意のキーへaliasする（自由ピッカー対応）', () => {
   const rows = buildResolveRows({ unresolved: [{ code: '111111111500', location: 'room' }] });
   const { aliasPairs } = applyResolveDecisions(rows, new Map([[rows[0].id, { action: 'pick', pick: '301000000009' }]]));
-  assert.deepEqual(aliasPairs, [{ from: '111111111500', to: '301000000009' }]);
+  assert.deepEqual(aliasPairs, [{ kind: CatalogKind.MATERIAL, from: '111111111500', to: '301000000009' }]);
 });
 
 test('applyResolveDecisions: pick（library-conflict）はaliasに加えてユーザーエントリのremoveを積む', () => {
@@ -113,7 +113,7 @@ test('applyResolveDecisions: pick（library-conflict）はaliasに加えてユ�
     userEntries: [userEntry], appEntries: [userEntry],
   });
   const { aliasPairs, userOps } = applyResolveDecisions(rows, new Map([[rows[0].id, { action: 'pick', pick: '301000000099' }]]));
-  assert.deepEqual(aliasPairs, [{ from: '301000000001', to: '301000000099' }]);
+  assert.deepEqual(aliasPairs, [{ kind: CatalogKind.MATERIAL, from: '301000000001', to: '301000000099' }]);
   assert.deepEqual(userOps, [{ op: 'remove', kind: CatalogKind.MATERIAL, key: '301000000001' }]);
 });
 
@@ -164,7 +164,7 @@ test('applyResolveDecisions: プレーンオブジェクト形式の decisions�
   const candidate = material({ code: '301000000001' });
   const rows = buildResolveRows({ proposals: [{ from: '999999999999', candidates: [candidate], entry: material({ code: '999999999999' }) }] });
   const { aliasPairs } = applyResolveDecisions(rows, { [rows[0].id]: { action: 'approve' } });
-  assert.deepEqual(aliasPairs, [{ from: '999999999999', to: '301000000001' }]);
+  assert.deepEqual(aliasPairs, [{ kind: CatalogKind.MATERIAL, from: '999999999999', to: '301000000001' }]);
 });
 
 // ---- 失敗系 ----
@@ -224,7 +224,7 @@ test('applyResolveDecisions: pickで実在するキー（validKeysに含まれ�
   const { aliasPairs, deferredRowIds, rejected } = applyResolveDecisions(
     rows, new Map([[rows[0].id, { action: 'pick', pick: '301000000001' }]]), { validKeys },
   );
-  assert.deepEqual(aliasPairs, [{ from: '111111111500', to: '301000000001' }]);
+  assert.deepEqual(aliasPairs, [{ kind: CatalogKind.MATERIAL, from: '111111111500', to: '301000000001' }]);
   assert.deepEqual(deferredRowIds, []);
   assert.deepEqual(rejected, []);
 });
@@ -249,14 +249,14 @@ test('applyResolveDecisions: approveの候補先頭がvalidKeysに実在すれ�
   const { aliasPairs, rejected } = applyResolveDecisions(
     rows, new Map([[rows[0].id, { action: 'approve' }]]), { validKeys },
   );
-  assert.deepEqual(aliasPairs, [{ from: '999999999999', to: '301000000001' }]);
+  assert.deepEqual(aliasPairs, [{ kind: CatalogKind.MATERIAL, from: '999999999999', to: '301000000001' }]);
   assert.deepEqual(rejected, []);
 });
 
 test('applyResolveDecisions: validKeys省略時は検証しない（後方互換。既存の自由ピッカーテストと同じ挙動）', () => {
   const rows = buildResolveRows({ unresolved: [{ code: '111111111500', location: 'room' }] });
   const { aliasPairs, rejected } = applyResolveDecisions(rows, new Map([[rows[0].id, { action: 'pick', pick: '000000000000' }]]));
-  assert.deepEqual(aliasPairs, [{ from: '111111111500', to: '000000000000' }]);
+  assert.deepEqual(aliasPairs, [{ kind: CatalogKind.MATERIAL, from: '111111111500', to: '000000000000' }]);
   assert.deepEqual(rejected, []);
 });
 

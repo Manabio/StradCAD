@@ -9,7 +9,7 @@
 // （いずれも葉）にのみ依存する。store.js / snap.js / .jsx を静的 import しない。
 // ================================================================
 
-import { enumerateMaterialCodeRefs } from './codeNormalization.js';
+import { enumerateMaterialCodeRefs, SNAPSHOT_REF_WALKERS } from './codeNormalization.js';
 import { isMaterialCode } from './materialCode.js';
 import { kindDef } from './catalogKinds.js';
 import { emptyBundle, withEntries, bundleEntries } from './catalogBundle.js';
@@ -28,7 +28,10 @@ export function collectUsedMaterialCodes(snapshot) {
 }
 
 /**
- * snapshot（1階分）が参照するカタログキーを種別ごとに収集する。
+ * snapshot（1階分）が参照するカタログキーを種別ごとに収集する。走査は
+ * codeNormalization.js の SNAPSHOT_REF_WALKERS（kind → enumerate）を共有する——
+ * 「どのフィールドが対象か」を二重実装しない（collectUsedMaterialCodesが
+ * enumerateMaterialCodeRefsを共有しているのと同型）。
  * - interiorMaster: rooms[].templateKey
  * - boundaryMaster: edges[].masterType
  * - section: columns/beams/structuralWalls/slabs/footings の sectionDefId
@@ -42,23 +45,11 @@ export function collectUsedKeys(snapshot) {
   const openingSubType = new Set();
   if (!snapshot) return { interiorMaster, boundaryMaster, section, openingSubType };
 
-  for (const room of snapshot.rooms ?? []) {
-    if (room?.templateKey) interiorMaster.add(room.templateKey);
-  }
-  for (const edge of snapshot.edges ?? []) {
-    if (edge?.masterType) boundaryMaster.add(edge.masterType);
-  }
-  const memberLists = [
-    snapshot.columns, snapshot.beams, snapshot.structuralWalls, snapshot.slabs, snapshot.footings,
-  ];
-  for (const list of memberLists) {
-    for (const member of list ?? []) {
-      if (member?.sectionDefId) section.add(member.sectionDefId);
-    }
-  }
-  for (const opening of snapshot.openings ?? []) {
-    if (opening?.category && opening?.subType) openingSubType.add(`${opening.category}:${opening.subType}`);
-  }
+  for (const ref of SNAPSHOT_REF_WALKERS.interiorMaster.enumerate(snapshot)) interiorMaster.add(ref.code);
+  for (const ref of SNAPSHOT_REF_WALKERS.boundaryMaster.enumerate(snapshot)) boundaryMaster.add(ref.code);
+  for (const ref of SNAPSHOT_REF_WALKERS.section.enumerate(snapshot)) section.add(ref.code);
+  for (const ref of SNAPSHOT_REF_WALKERS.openingSubType.enumerate(snapshot)) openingSubType.add(ref.code);
+
   return { interiorMaster, boundaryMaster, section, openingSubType };
 }
 

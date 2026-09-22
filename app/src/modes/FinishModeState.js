@@ -180,8 +180,10 @@ export class FinishModeState {
    * 今のコード表で再解決できないものだけを usage として渡す。
    */
   _buildUnresolvedCodeRows(missing, materialMap, appEntries) {
-    const table = buildCodeTable({ aliases: currentDocumentAliases() });
-    const stillUnresolved = peekUnresolvedCodes().filter(u => {
+    const table = buildCodeTable({ aliases: currentDocumentAliases(CatalogKind.MATERIAL) });
+    // peekUnresolvedCodes()は全種別（ステップ7a）の未解決コードを返す——ここはmaterialの
+    // unresolved-code行だけを扱う（他種別の行はステップ7dで別途組み立てる）。
+    const stillUnresolved = peekUnresolvedCodes().filter(u => u.kind === CatalogKind.MATERIAL).filter(u => {
       const mapped = table.has(u.code) ? table.get(u.code) : u.code;
       return mapped == null || !materialMap.has(mapped);
     });

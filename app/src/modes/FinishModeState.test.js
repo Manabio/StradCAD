@@ -7,7 +7,7 @@ import { FinishModeState } from './FinishModeState.js';
 import { CatalogKind } from '../catalog/catalogKinds.js';
 import { setOverlay, clearOverlays } from '../catalog/catalogRegistry.js';
 import { restoreGraph, serializeGraph } from '../graphSnapshot.js';
-import { takeUnresolvedCodes, addDocumentAliases, setDocumentAliases } from '../catalog/codeNormalization.js';
+import { takeUnresolvedCodes, addDocumentAliases, clearDocumentAliases } from '../catalog/codeNormalization.js';
 
 function makeGraph() {
   const plane = new Plane('p1', 0, '1階', 1, 1);
@@ -239,7 +239,7 @@ test('FinishModeState.init: 同梱材の重ねが無ければ materialDiff は�
 });
 
 // ---- 指示UI（ステップ6-3）場面(b)unresolved-code: catalogResolveRows ----
-test.afterEach(() => { setDocumentAliases(null); takeUnresolvedCodes(); }); // 後始末（他テストへ蓄積を持ち越さない）
+test.afterEach(() => { clearDocumentAliases(); takeUnresolvedCodes(); }); // 後始末（他テストへ蓄積を持ち越さない）
 
 test('FinishModeState.init: 自階が参照する未知コード（missing）はcatalogResolveRowsにunresolved-code行として現れ、usageにfloor参照が付く', async () => {
   takeUnresolvedCodes(); // 前のテストの蓄積を持ち越さない
@@ -298,7 +298,7 @@ test('FinishModeState.init: 読み替え（addDocumentAliases）が付いた後�
   restoreGraph(otherFloorGraph, serializeGraph(otherFloorGraph));
 
   // ユーザーが指示UIで「せっこうボード t=9.5(301000000001)」を代替材として指示した想定。
-  addDocumentAliases([{ from: '111111111211', to: '301000000001' }]);
+  addDocumentAliases(CatalogKind.MATERIAL, [{ from: '111111111211', to: '301000000001' }]);
 
   const graph = makeSingleCellGraph();
   const state = new FinishModeState(graph, null);

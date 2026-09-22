@@ -12,14 +12,13 @@ import { listKinds } from './catalogKinds.js';
 import { decodeCatalogBundle } from './catalogCodec.js';
 import { validateBundle, bundleEntries, bundleAliases } from './catalogBundle.js';
 import { setOverlay, clearOverlays } from './catalogRegistry.js';
-import { setDocumentAliases } from './codeNormalization.js';
-import { CatalogKind } from './catalogKinds.js';
+import { setDocumentAliases, clearDocumentAliases } from './codeNormalization.js';
 
 /**
  * IndexedDB から読み込んだカタログ束（文書同梱・ユーザーライブラリ）を catalogRegistry.js の
- * overlay として設定する。文書固有のコード正規化表（束の aliases.material）も
- * setDocumentCodeTable へ設定する（aliases が空でも本体の振り直し表だけで正規化される既定は
- * codeNormalization.js 側で保たれる）。
+ * overlay として設定する。文書固有のコード正規化表（束の aliases[kind]。全種別）も
+ * setDocumentAliases(kind, …) へ設定する（aliases が空でも本体の振り直し表だけで正規化される
+ * 既定は codeNormalization.js 側で保たれる）。
  *
  * - 未知の種別（このビルドの登録表 listKinds() に無い kind）のレコードは触らない
  *   （4.5-5: IDB には残したまま、overlay 適用の対象外にする。kindDef(未知kind) が例外を
@@ -32,7 +31,7 @@ import { CatalogKind } from './catalogKinds.js';
  *   decode/validate失敗時はまだ何もsetOverlayしていないため実害は無いが、将来この関数の前段が
  *   増えたときに「まだ何もしていないから大丈夫」という前提が崩れても壊れないようにする防御）。
  *
- * `setOverlayFn`/`clearOverlaysFn`/`setDocumentAliasesFn` は省略時
+ * `setOverlayFn`/`clearOverlaysFn`/`setDocumentAliasesFn`/`clearDocumentAliasesFn` は省略時
  * catalogRegistry.js/codeNormalization.js の本物を使う——テストが「setOverlay が例外を
  * 投げた場合に全 clear されること」を検証するための注入口（本番では常に既定値のまま）。
  *
@@ -40,12 +39,13 @@ import { CatalogKind } from './catalogKinds.js';
  *           loadUserCatalogs: () => Promise<Array<{kind:string, bytes:Uint8Array}>>,
  *           onError: (message: string) => void,
  *           setOverlayFn?: typeof setOverlay, clearOverlaysFn?: typeof clearOverlays,
- *           setDocumentAliasesFn?: typeof setDocumentAliases }} deps
+ *           setDocumentAliasesFn?: typeof setDocumentAliases,
+ *           clearDocumentAliasesFn?: typeof clearDocumentAliases }} deps
  */
 export async function loadCatalogOverlaysFromIDB({
   loadDocumentCatalogs, loadUserCatalogs, onError,
   setOverlayFn = setOverlay, clearOverlaysFn = clearOverlays,
-  setDocumentAliasesFn = setDocumentAliases,
+  setDocumentAliasesFn = setDocumentAliases, clearDocumentAliasesFn = clearDocumentAliases,
 }) {
   try {
     const [docRecords, userRecords] = await Promise.all([
@@ -70,22 +70,24 @@ export async function loadCatalogOverlaysFromIDB({
     const userEntriesByKind = new Map(userBundles.map(({ kind, bundle }) => [kind, bundleEntries(bundle, kind)]));
 
     try {
-      let materialAliases = {};
+      // 前回読込み分の全種別aliasesを一旦リセットしてから、今回のdoc束のaliasesだけ積み直す
+      // （7a: material限定を廃止。全種別ぶん「読込みのたびに束の内容で上書きする」既定を保つ）。
+      clearDocumentAliasesFn();
       const docKinds = new Set();
       for (const { kind, bundle } of docBundles) {
         setOverlayFn(kind, { doc: bundleEntries(bundle, kind), user: userEntriesByKind.get(kind) ?? [] });
         docKinds.add(kind);
-        if (kind === CatalogKind.MATERIAL) materialAliases = bundleAliases(bundle, kind);
+        const aliases = bundleAliases(bundle, kind);
+        if (Object.keys(aliases).length > 0) setDocumentAliasesFn(kind, aliases);
       }
       for (const [kind, entries] of userEntriesByKind) {
         if (docKinds.has(kind)) continue; // 文書同梱側で既にuser込みでsetOverlay済み
         setOverlayFn(kind, { doc: [], user: entries });
       }
-      setDocumentAliasesFn(materialAliases);
     } catch (applyErr) {
       // setOverlay 自体が例外を投げた場合（通常は起きない防御）: 部分適用を残さない。
       clearOverlaysFn();
-      setDocumentAliasesFn(null);
+      clearDocumentAliasesFn();
       throw applyErr;
     }
   } catch (e) {
@@ -93,7 +95,7 @@ export async function loadCatalogOverlaysFromIDB({
     // のどちらでもここへ来る。二重にclearOverlaysFn()を呼んでも副作用は無い（冪等）ため、
     // 内側catchの有無に関わらずここでも必ず後始末してからonErrorへ渡す。
     clearOverlaysFn();
-    setDocumentAliasesFn(null);
+    clearDocumentAliasesFn();
     onError(e.message);
   }
 }
