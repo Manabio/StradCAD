@@ -10,7 +10,7 @@
 
 import { kindDef } from './catalogKinds.js';
 import { resolveCatalog, resolveOrigins } from './catalogBundle.js';
-import { formatDuplicateError } from './catalogMatch.js';
+import { diffEntries, formatDuplicateError } from './catalogMatch.js';
 
 /** kind → { doc, user }（未設定の種別は空）。 */
 const overlays = new Map();
@@ -190,4 +190,41 @@ export function composeList(kind, builtinList) {
 export function originOf(kind, key, builtinList) {
   const { origins } = resolveMergedAndOrigins(kind, builtinList);
   return origins.get(key) ?? null;
+}
+
+/**
+ * R13: doc（文書同梱）起源のキーのうち、本体（user優先・無ければbuiltin）と内容が異なる
+ * ものだけを集めた Map（doc>user>builtinの解決順ではdocが常に勝つため、docが存在する
+ * キーの合成結果は必ずdoc——ここでいう「本体」はdocを除いた場合に採用されていたはずの
+ * エントリを指す）。判定は diffEntries のみ（唯一の判定箇所）。
+ * user起源（doc無し）のキーはここに現れない（user⇔builtin衝突はdetectLibraryConflicts側の
+ * 指示UIが担当）。docと同キーのuser/builtinが無い（新規追加材）場合は比較相手が無いため
+ * 差分なし＝このMapに含めない。
+ * baseEntry は表示側（diffTooltip/diffPairs）が本体値を併記するために必要なため、設計の
+ * {baseOrigin, diffFields} に加えて同梱する（2026-09-22 ステップ6-2）。
+ * @returns {Map<string, {baseOrigin:'user'|'builtin', diffFields:string[], baseEntry:object}>}
+ */
+export function docDiffMap(kind, builtinList) {
+  const def = kindDef(kind);
+  const { doc, user } = overlayFor(kind);
+  const result = new Map();
+  if (doc.length === 0) return result;
+  const userMap = new Map(user.map(e => [def.keyOf(e), e]));
+  const builtinMap = new Map(builtinList.map(e => [def.keyOf(e), e]));
+  for (const docEntry of doc) {
+    const key = def.keyOf(docEntry);
+    let baseEntry, baseOrigin;
+    if (userMap.has(key)) { baseEntry = userMap.get(key); baseOrigin = 'user'; }
+    else if (builtinMap.has(key)) { baseEntry = builtinMap.get(key); baseOrigin = 'builtin'; }
+    else continue; // 比較相手が無い新規材は差分なし
+    const diffFields = diffEntries(kind, baseEntry, docEntry);
+    if (diffFields.length === 0) continue;
+    result.set(key, { baseOrigin, diffFields, baseEntry });
+  }
+  return result;
+}
+
+/** docDiffMap(kind, builtinList) のうち key のエントリの diffFields。無ければ null。 */
+export function docDiffFields(kind, key, builtinList) {
+  return docDiffMap(kind, builtinList).get(key)?.diffFields ?? null;
 }

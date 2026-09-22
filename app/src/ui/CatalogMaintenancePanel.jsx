@@ -2,7 +2,8 @@ import { useEffect, useMemo, useState } from 'react';
 import './CatalogMaintenancePanel.css';
 import { CatalogKind, MATERIAL_CLASSES } from '../catalog/catalogKinds.js';
 import { parseMaterialCode } from '../catalog/materialCode.js';
-import { overlayFor } from '../catalog/catalogRegistry.js';
+import { docDiffMap, overlayFor } from '../catalog/catalogRegistry.js';
+import { CATALOG_DIFF_COLOR, CATALOG_DIFF_MARK, diffPairs, diffTooltip } from '../catalog/catalogDiffView.js';
 import { saveUserCatalog } from '../storage/db.js';
 import {
   buildKindTabs, buildMaterialRows, collectKnownMaterialCodes, nextMaterialCode,
@@ -37,8 +38,11 @@ function firstMinor(major) {
  */
 function computeDerived(list, search, category) {
   if (!list) return { allRows: [], visibleRows: [], knownCodes: new Set() };
-  const allRows = buildMaterialRows({ builtinList: list });
-  const visibleRows = buildMaterialRows({ builtinList: list, search, category: category || null });
+  // R13: doc（文書同梱）起源の材が本体と不一致な分だけを集める（毎レンダー取り直し。
+  // overlayFor と同じくモジュール単位の可変状態のため useMemo でキャッシュしない）。
+  const diffMap = docDiffMap(CatalogKind.MATERIAL, list);
+  const allRows = buildMaterialRows({ builtinList: list, diffMap });
+  const visibleRows = buildMaterialRows({ builtinList: list, search, category: category || null, diffMap });
   const { doc, user } = overlayFor(CatalogKind.MATERIAL);
   const knownCodes = collectKnownMaterialCodes({ builtinList: list, doc, user });
   return { allRows, visibleRows, knownCodes };
@@ -102,6 +106,17 @@ export function CatalogMaintenancePanel({ onClose }) {
   const selectedRow = (!isAdding && selectedCode)
     ? allRows.find(r => r.entry.code === selectedCode) ?? null
     : null;
+
+  // R13: 選択行が doc（文書同梱）起源で本体と不一致のとき、違っている項目だけを
+  // フォームでオレンジ表示＋本体値併記する（doc は編集不可＝表示のみ）。
+  // diffPairs(kind, from=本体, to=doc, diffFields) — diffFields は row.diff（docDiffMap）が
+  // 既に持つものをそのまま渡し、等価判定を再計算しない。
+  const docDiffByField = (selectedRow?.origin === 'doc' && selectedRow?.diff)
+    ? new Map(diffPairs(
+        CatalogKind.MATERIAL, selectedRow.diff.baseEntry, selectedRow.entry, selectedRow.diff.diffFields,
+      ).map(p => [p.field, p]))
+    : new Map();
+  const fmtDiffValue = v => (v === null || v === undefined || v === '' ? '未設定' : String(v));
 
   // canEditMaterialRow（QA指摘Major-A）: category=backing・origin=builtin・origin=docは編集不可。
   // 新規追加（isAdding）はまだoriginを持たないためnull（=保存前提の編集可能扱い）で判定する。
@@ -268,7 +283,13 @@ export function CatalogMaintenancePanel({ onClose }) {
                       <span className={`catmnt-badge catmnt-badge--${row.origin ?? 'builtin'}`}>
                         {ORIGIN_LABELS[row.origin] ?? '?'}
                       </span>
-                      <span className="catmnt-row-name">{row.entry.name}</span>
+                      <span
+                        className="catmnt-row-name"
+                        style={row.diff ? { color: CATALOG_DIFF_COLOR } : undefined}
+                        title={row.diff ? diffTooltip(CatalogKind.MATERIAL, row.diff.diffFields, row.entry, row.diff.baseEntry) : undefined}
+                      >
+                        {row.entry.name}{row.diff ? ` ${CATALOG_DIFF_MARK}` : ''}
+                      </span>
                       <span className="catmnt-cat-badge">{CATEGORY_LABELS[row.entry.category] ?? row.entry.category}</span>
                     </div>
                   ))}
@@ -324,6 +345,7 @@ export function CatalogMaintenancePanel({ onClose }) {
                       <select
                         value={form.category}
                         disabled={!!disabledReason}
+                        style={docDiffByField.has('category') ? { color: CATALOG_DIFF_COLOR } : undefined}
                         onChange={e => setForm(f => ({ ...f, category: e.target.value }))}
                       >
                         <option value={MATERIAL_CATEGORY.PANEL}>面材</option>
@@ -334,6 +356,12 @@ export function CatalogMaintenancePanel({ onClose }) {
                           <option value={MATERIAL_CATEGORY.BACKING}>下地材</option>
                         )}
                       </select>
+                      {/* R13: doc（文書同梱）が本体と不一致の項目だけ、本体値をオレンジで併記する */}
+                      {docDiffByField.has('category') && (
+                        <span className="catmnt-diff-note" style={{ color: CATALOG_DIFF_COLOR, fontSize: 11 }}>
+                          （本体 {CATEGORY_LABELS[docDiffByField.get('category').from] ?? fmtDiffValue(docDiffByField.get('category').from)}）
+                        </span>
+                      )}
                     </div>
 
                     <div className="catmnt-form-row">
@@ -341,8 +369,14 @@ export function CatalogMaintenancePanel({ onClose }) {
                       <input
                         value={form.name}
                         disabled={!!disabledReason}
+                        style={docDiffByField.has('name') ? { color: CATALOG_DIFF_COLOR } : undefined}
                         onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
                       />
+                      {docDiffByField.has('name') && (
+                        <span className="catmnt-diff-note" style={{ color: CATALOG_DIFF_COLOR, fontSize: 11 }}>
+                          （本体 {fmtDiffValue(docDiffByField.get('name').from)}）
+                        </span>
+                      )}
                     </div>
 
                     <div className="catmnt-form-row">
@@ -350,8 +384,14 @@ export function CatalogMaintenancePanel({ onClose }) {
                       <input
                         value={form.spec}
                         disabled={!!disabledReason}
+                        style={docDiffByField.has('spec') ? { color: CATALOG_DIFF_COLOR } : undefined}
                         onChange={e => setForm(f => ({ ...f, spec: e.target.value }))}
                       />
+                      {docDiffByField.has('spec') && (
+                        <span className="catmnt-diff-note" style={{ color: CATALOG_DIFF_COLOR, fontSize: 11 }}>
+                          （本体 {fmtDiffValue(docDiffByField.get('spec').from)}）
+                        </span>
+                      )}
                     </div>
 
                     <div className="catmnt-form-row">
@@ -366,8 +406,14 @@ export function CatalogMaintenancePanel({ onClose }) {
                       <input
                         value={form.thickness}
                         disabled={!!disabledReason}
+                        style={docDiffByField.has('thickness') ? { color: CATALOG_DIFF_COLOR } : undefined}
                         onChange={e => setForm(f => ({ ...f, thickness: e.target.value }))}
                       />
+                      {docDiffByField.has('thickness') && (
+                        <span className="catmnt-diff-note" style={{ color: CATALOG_DIFF_COLOR, fontSize: 11 }}>
+                          （本体 {fmtDiffValue(docDiffByField.get('thickness').from)}）
+                        </span>
+                      )}
                     </div>
 
                     <div className="catmnt-form-row">
@@ -375,8 +421,14 @@ export function CatalogMaintenancePanel({ onClose }) {
                       <input
                         value={form.note}
                         disabled={!!disabledReason}
+                        style={docDiffByField.has('note') ? { color: CATALOG_DIFF_COLOR } : undefined}
                         onChange={e => setForm(f => ({ ...f, note: e.target.value }))}
                       />
+                      {docDiffByField.has('note') && (
+                        <span className="catmnt-diff-note" style={{ color: CATALOG_DIFF_COLOR, fontSize: 11 }}>
+                          （本体 {fmtDiffValue(docDiffByField.get('note').from)}）
+                        </span>
+                      )}
                     </div>
 
                     {formError && <div className="catmnt-form-error">{formError}</div>}

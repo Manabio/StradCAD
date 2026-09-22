@@ -99,13 +99,19 @@ export function buildKindTabs() {
  * 材の一覧行（出所付き）。builtin一覧・overlay（catalogRegistry.jsの現在の状態）を
  * composeList/originOf で合成し、search（名称部分一致・大小文字区別なし）・category（完全一致。
  * null/空なら絞り込みなし）で絞り込む。
- * @param {{ builtinList: object[], search?: string, category?: string|null }} args
- * @returns {Array<{ entry: object, origin: 'doc'|'user'|'builtin'|null }>}
+ * diffMap（catalogRegistry.js の docDiffMap の戻り値）を渡すと、各行に R13 の差分情報
+ * （{baseOrigin, diffFields, baseEntry}）を diff として付ける（省略時は null）。
+ * @param {{ builtinList: object[], search?: string, category?: string|null, diffMap?: Map }} args
+ * @returns {Array<{ entry: object, origin: 'doc'|'user'|'builtin'|null, diff: object|null }>}
  */
-export function buildMaterialRows({ builtinList, search = '', category = null }) {
+export function buildMaterialRows({ builtinList, search = '', category = null, diffMap = null }) {
   const needle = (search ?? '').trim().toLowerCase();
   return composeList(CatalogKind.MATERIAL, builtinList)
-    .map(entry => ({ entry, origin: originOf(CatalogKind.MATERIAL, entry.code, builtinList) }))
+    .map(entry => ({
+      entry,
+      origin: originOf(CatalogKind.MATERIAL, entry.code, builtinList),
+      diff: diffMap?.get(entry.code) ?? null,
+    }))
     .filter(row => !category || row.entry.category === category)
     .filter(row => !needle || (row.entry.name ?? '').toLowerCase().includes(needle));
 }

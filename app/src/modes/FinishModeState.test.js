@@ -4,6 +4,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Plane, PlanGraph, CenterLineType, Discipline, applyDefaultBaseboard, RoomKind, RoomFeature } from '@core';
 import { FinishModeState } from './FinishModeState.js';
+import { CatalogKind } from '../catalog/catalogKinds.js';
+import { setOverlay, clearOverlays } from '../catalog/catalogRegistry.js';
 
 function makeGraph() {
   const plane = new Plane('p1', 0, '1階', 1, 1);
@@ -200,4 +202,36 @@ test('FinishModeState.init: CL偏芯のbackingが既知コードならmaterialEr
 
   assert.equal(result.ok, true);
   assert.equal(state.materialError, null);
+});
+
+// ---- R13: 材照合の材データロード（init）でmaterialDiffs（docDiffMap）も張る ----
+test.afterEach(() => clearOverlays());
+
+test('FinishModeState.init: 文書同梱材が本体と不一致なら materialDiff(code) が差分情報を返す', async () => {
+  // 実材コード（せっこうボード t=12.5）に厚さの違う同梱材を重ねる（設計の例: 厚15（本体12.5）と同じ材）。
+  setOverlay(CatalogKind.MATERIAL, {
+    doc: [{
+      code: '301000000002', name: 'せっこうボード t=12.5', spec: 'JIS A 6901',
+      x: 0, y: 0, thickness: 15, note: '壁・天井下地の主流（GB-R）', category: 'panel',
+    }],
+  });
+  const graph = makeSingleCellGraph();
+  const state = new FinishModeState(graph, null);
+
+  await state.init();
+
+  const diff = state.materialDiff('301000000002');
+  assert.ok(diff, 'materialDiffが差分情報を返すはず');
+  assert.deepEqual(diff.diffFields, ['thickness']);
+  assert.equal(diff.baseOrigin, 'builtin');
+  assert.equal(state.materialDiff('201000000001'), null, '差分の無い材はnull');
+});
+
+test('FinishModeState.init: 同梱材の重ねが無ければ materialDiff は常にnull', async () => {
+  const graph = makeSingleCellGraph();
+  const state = new FinishModeState(graph, null);
+
+  await state.init();
+
+  assert.equal(state.materialDiff('301000000002'), null);
 });

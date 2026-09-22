@@ -8,6 +8,8 @@ import { roomCeilingHeight } from './roomMetrics.js';
 import { parseSlopeInput } from './exteriorLevelInput.js';
 import { RoomFeature, RoomKind, ExteriorLevelRef, DEFAULT_ROOM_FLOOR_LEVEL, DEFAULT_ROOM_CEILING_HEIGHT } from '@core';
 import { rulesFor, effectiveStructure } from '../structural/structureRules.js';
+import { CatalogKind } from '../catalog/catalogKinds.js';
+import { CATALOG_DIFF_COLOR, CATALOG_DIFF_MARK, diffTooltip } from '../catalog/catalogDiffView.js';
 
 // ---- 内部仕上げ表 ----
 
@@ -194,6 +196,8 @@ const TAB_TO_CATEGORY = {
 // ================================================================
 
 // 材選択ドロップダウン（カテゴリで材マスタをフィルタ。値は材コード）
+// R13: 文書同梱材が本体（user/builtin）と不一致の材は、名称の後ろに≠を付けオレンジで示す
+// （<option>の色は実機で効かない可能性があるため、≠とtitleは必ず付ける）。
 const MaterialSelect = observer(({ mode, category, value, onChange, style, disabled = false, title }) => {
   const materials = mode?.getMaterialsByCategory(category) ?? [];
   return (
@@ -206,9 +210,19 @@ const MaterialSelect = observer(({ mode, category, value, onChange, style, disab
       style={{ ...cellInputStyle, cursor: disabled ? 'default' : 'pointer', ...style }}
     >
       <option value="">（未選択）</option>
-      {materials.map(m => (
-        <option key={m.code} value={m.code}>{m.name}</option>
-      ))}
+      {materials.map(m => {
+        const diff = mode?.materialDiff?.(m.code);
+        return (
+          <option
+            key={m.code}
+            value={m.code}
+            style={diff ? { color: CATALOG_DIFF_COLOR } : undefined}
+            title={diff ? diffTooltip(CatalogKind.MATERIAL, diff.diffFields, m, diff.baseEntry) : undefined}
+          >
+            {diff ? `${m.name} ${CATALOG_DIFF_MARK}` : m.name}
+          </option>
+        );
+      })}
     </select>
   );
 });

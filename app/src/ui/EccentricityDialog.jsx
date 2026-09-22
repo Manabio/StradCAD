@@ -6,7 +6,8 @@ import { AutoScaledFigure } from '../structural/sectionFigure/AutoScaledFigure.j
 import { eccentricityFigurePrimitives } from './eccentricityFigure.js';
 import { CenterLineType } from '@core';
 import { CatalogKind } from '../catalog/catalogKinds.js';
-import { composeCatalog, composeList } from '../catalog/catalogRegistry.js';
+import { composeCatalog, composeList, docDiffMap } from '../catalog/catalogRegistry.js';
+import { CATALOG_DIFF_COLOR, CATALOG_DIFF_MARK, diffTooltip } from '../catalog/catalogDiffView.js';
 
 // finish/clEccentricity.js は edgeComposition.js 経由で materials/materialData.js（材マスタ全件）を
 // 静的に引くため、materialData.js と合わせて動的 import する（コード分割維持。ヘッダコメント参照）。
@@ -38,6 +39,7 @@ export function EccentricityDialog({ graph, cl, onConfirm, onCancel }) {
 
   const [materialMap,        setMaterialMap]        = useState(null);
   const [materials,          setMaterials]          = useState(null);
+  const [materialDiffs,      setMaterialDiffs]      = useState(null); // R13: docDiffMap(material)
   const [backingCat,         setBackingCat]         = useState(null);
   const [resolveEccentricity, setResolveEccentricity] = useState(null); // 関数参照（useState更新は関数化して渡す）
   const [loadFailed,         setLoadFailed]         = useState(false);
@@ -57,6 +59,7 @@ export function EccentricityDialog({ graph, cl, onConfirm, onCancel }) {
       setMaterials(composeList(CatalogKind.MATERIAL, matMod.MATERIALS));
       setBackingCat(matMod.MATERIAL_CATEGORY.BACKING);
       setMaterialMap(composeCatalog(CatalogKind.MATERIAL, matMod.MATERIALS));
+      setMaterialDiffs(docDiffMap(CatalogKind.MATERIAL, matMod.MATERIALS));
       setResolveEccentricity(() => eccMod.resolveEccentricity);
     }).catch(() => { if (!cancelled) setLoadFailed(true); });
     return () => { cancelled = true; };
@@ -173,9 +176,19 @@ export function EccentricityDialog({ graph, cl, onConfirm, onCancel }) {
               <span className="cl-dialog-label">下地材</span>
               <select value={backingCode} onChange={e => setBackingCode(e.target.value)}>
                 <option value="">{`（共通仕様に従う: ${commonBackingName}）`}</option>
-                {backingMaterials.map(m => (
-                  <option key={m.code} value={m.code}>{m.name}</option>
-                ))}
+                {backingMaterials.map(m => {
+                  const diff = materialDiffs?.get(m.code);
+                  return (
+                    <option
+                      key={m.code}
+                      value={m.code}
+                      style={diff ? { color: CATALOG_DIFF_COLOR } : undefined}
+                      title={diff ? diffTooltip(CatalogKind.MATERIAL, diff.diffFields, m, diff.baseEntry) : undefined}
+                    >
+                      {diff ? `${m.name} ${CATALOG_DIFF_MARK}` : m.name}
+                    </option>
+                  );
+                })}
               </select>
             </label>
 

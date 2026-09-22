@@ -12,7 +12,7 @@ import { roomNameAnchor } from '../finish/roomLabel.js';
 import { ERR_MATERIAL_MISMATCH } from '../error.js';
 import { RoomFeature, RoomKind, applyDefaultBaseboard } from '@core';
 import { CatalogKind } from '../catalog/catalogKinds.js';
-import { composeCatalog, composeList } from '../catalog/catalogRegistry.js';
+import { composeCatalog, composeList, docDiffMap } from '../catalog/catalogRegistry.js';
 import { isMaterialCode } from '../catalog/materialCode.js';
 
 function setsEqual(a, b) {
@@ -52,6 +52,7 @@ export class FinishModeState {
   materialError   = null;        // 照合エラーメッセージ | null
   materials       = null;        // 材マスタ配列（読み取り専用）
   materialMap     = null;        // Map<code, material>
+  materialDiffs   = null;        // R13: docDiffMap(material)。Map<code, {baseOrigin, diffFields, baseEntry}>
   interiorMasters = null;        // 内装マスター（key → 定義）
 
   constructor(graph, project = null) {
@@ -86,7 +87,11 @@ export class FinishModeState {
       upperFloorHeight: observable,
       materialsLoaded: observable,
       materialError:   observable,
+      // materialMap/materialDiffs は observable.ref（中身は深追いしない）——MobXにMapや
+      // builtinエントリをディープ変換させない。builtinエントリとの===同一性（composeCatalog/
+      // docDiffMapの契約）を保つためと、材数百件を毎回プロキシ化しない性能のため。
       materialMap:     observable.ref,
+      materialDiffs:   observable.ref,
       isDragging:     computed,
       previewCells:   computed,
       startDrag:    action,
@@ -128,6 +133,7 @@ export class FinishModeState {
 
     const materials = composeList(CatalogKind.MATERIAL, matMod.MATERIALS);
     const materialMap = composeCatalog(CatalogKind.MATERIAL, matMod.MATERIALS);
+    const materialDiffs = docDiffMap(CatalogKind.MATERIAL, matMod.MATERIALS); // R13: 同梱材の本体との不一致
     this._composition = compMod; // 層構成→寸法解決（壁生成で使用）
 
     // 照合: 永続化データが参照する材コードがすべてマスタに存在するか
@@ -140,6 +146,7 @@ export class FinishModeState {
     runInAction(() => {
       this.materials       = materials;
       this.materialMap     = materialMap;
+      this.materialDiffs   = materialDiffs;
       this.interiorMasters = masterMod.INTERIOR_MASTERS;
       this.materialsLoaded = true;
       this.materialError   = error;
@@ -335,6 +342,9 @@ export class FinishModeState {
 
   /** 材コードから材を取得（未ロード・未登録なら null）。 */
   getMaterial(code) { return this.materialMap?.get(code) ?? null; }
+
+  /** R13: 材コードの docDiffMap エントリ（{baseOrigin, diffFields, baseEntry}）。差分なし・未ロードは null。 */
+  materialDiff(code) { return this.materialDiffs?.get(code) ?? null; }
 
   /** カテゴリ（'backing' / 'panel' / 'finish'）で材選択肢をフィルタ。 */
   getMaterialsByCategory(category) {
@@ -902,6 +912,7 @@ export class FinishModeState {
     // 材データを破棄（仕上げモード離脱時）
     this.materials       = null;
     this.materialMap     = null;
+    this.materialDiffs   = null;
     this.interiorMasters = null;
     this._composition    = null;
     this.materialsLoaded = false;

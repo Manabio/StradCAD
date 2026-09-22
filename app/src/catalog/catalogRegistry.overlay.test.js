@@ -4,7 +4,10 @@
 // clearOverlays → 空に戻ることを、発火回数を assert する形で確認する（空振り防止）。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { setOverlay, clearOverlays, overlayFor, composeCatalog, composeList, originOf } from './catalogRegistry.js';
+import {
+  setOverlay, clearOverlays, overlayFor, composeCatalog, composeList, originOf,
+  docDiffMap, docDiffFields,
+} from './catalogRegistry.js';
 import { ERR_CATALOG_DUPLICATE } from '../error.js';
 import { assertNoDuplicate } from './catalogMatch.js';
 
@@ -238,6 +241,89 @@ test('【2026-09-22 QA指摘E・T3】registryのO(n)正規化: null と 0 は別
   const docEntry = material({ code: '301000000002', thickness: null });
   setOverlay('material', { doc: [docEntry] });
   assert.doesNotThrow(() => composeCatalog('material', [builtinEntry]));
+});
+
+// ---- R13: docDiffMap/docDiffFields（ステップ6-2）----
+// 判定はcatalogMatch.jsのdiffEntries一本（このファイルでは「doc起源のキーだけが対象」
+// 「本体（user優先・無ければbuiltin）との比較」という配線側の規約を確認する）。
+
+test('docDiffMap: docがbuiltinと完全一致なら差分Mapに含まれない', () => {
+  const builtinEntry = material({ code: '301000000001' });
+  const docEntry = material({ code: '301000000001' }); // 全項目同じ
+  setOverlay('material', { doc: [docEntry] });
+  const diffs = docDiffMap('material', [builtinEntry]);
+  assert.equal(diffs.size, 0);
+  assert.equal(docDiffFields('material', '301000000001', [builtinEntry]), null);
+});
+
+test('docDiffMap: spec/thicknessだけの差（通知なしのsilentDiffFields）でも差分Mapに含まれる（オレンジ表示は通知と独立）', () => {
+  const builtinEntry = material({ code: '301000000002', name: 'せっこうボード t=12.5', thickness: 12.5 });
+  const docEntry = material({ code: '301000000002', name: 'せっこうボード t=12.5', thickness: 15 }); // thicknessのみ差
+  setOverlay('material', { doc: [docEntry] });
+  const diffs = docDiffMap('material', [builtinEntry]);
+  assert.equal(diffs.size, 1);
+  const entry = diffs.get('301000000002');
+  assert.deepEqual(entry.diffFields, ['thickness']);
+  assert.equal(entry.baseOrigin, 'builtin');
+  assert.equal(entry.baseEntry, builtinEntry); // === 同一性
+  assert.deepEqual(docDiffFields('material', '301000000002', [builtinEntry]), ['thickness']);
+});
+
+test('docDiffMap: docに同キーのuser/builtinが無ければ（新規追加材）差分Mapに含まれない（比較相手が無い）', () => {
+  const builtinEntry = material({ code: '301000000001' });
+  const newDocEntry = material({ code: '999999999999', name: '新規同梱材' }); // builtin/userどちらにも無いキー
+  setOverlay('material', { doc: [newDocEntry] });
+  const diffs = docDiffMap('material', [builtinEntry]);
+  assert.equal(diffs.size, 0);
+  assert.equal(docDiffFields('material', '999999999999', [builtinEntry]), null);
+});
+
+test('docDiffMap: docが無くuserだけがbuiltinと不一致でも差分Mapに含まれない（user起源はオレンジにしない。衝突は別UI）', () => {
+  const builtinEntry = material({ code: '301000000001', note: 'builtin' });
+  const conflictingUser = material({ code: '301000000001', note: 'user' });
+  setOverlay('material', { user: [conflictingUser] });
+  const diffs = docDiffMap('material', [builtinEntry]);
+  assert.equal(diffs.size, 0);
+});
+
+// 2026-09-22 QA指摘Minor-1: 上のテストはdoc空で早期returnするため、走査元をdoc→[...doc,...user]に
+// 変える変異（W1）でも緑のままになってしまう（空振り）。docを非空にしたまま、別キーのuserだけが
+// builtinと不一致、という構成で「user起源のキー自体がMapに現れない」ことを固定する。
+test('docDiffMap: docが非空でも、docとは別キーのuser不一致エントリはMapに現れない（W1の空振り対策）', () => {
+  const builtinA = material({ code: '301000000001', note: 'builtin-A' }); // docで上書き
+  const builtinB = material({ code: '301000000002', note: 'builtin-B' }); // userだけが不一致（別キー）
+  const docA = material({ code: '301000000001', note: 'doc-A' }); // builtinAと不一致→Mapに入るはず
+  const conflictingUserB = material({ code: '301000000002', note: 'user-B' }); // builtinBと不一致・docなし
+  setOverlay('material', { doc: [docA], user: [conflictingUserB] });
+  const diffs = docDiffMap('material', [builtinA, builtinB]);
+  assert.deepEqual([...diffs.keys()], ['301000000001'], 'docのキーだけが現れ、userだけのキーは現れない');
+  assert.equal(diffs.has('301000000002'), false);
+});
+
+test('docDiffMap: 判定はdiffEntries一本（catalogMatch.jsのvaluesEqualと同じtrim規則）——前後空白だけ違う名称は同値で差分Mapに含まれない', () => {
+  const builtinEntry = material({ code: '301000000001', name: 'せっこうボード t=9.5' });
+  const docEntry = material({ code: '301000000001', name: '  せっこうボード t=9.5  ' }); // 前後空白のみ
+  setOverlay('material', { doc: [docEntry] });
+  const diffs = docDiffMap('material', [builtinEntry]);
+  assert.equal(diffs.size, 0);
+});
+
+test('docDiffMap: baseOriginはuserがあればuser、無ければbuiltin（両方存在する場合はuserを本体とする）', () => {
+  const builtinA = material({ code: '301000000001', note: 'builtin-A' });
+  const userA    = material({ code: '301000000001', note: 'user-A' }); // docと同キーのuser上書きあり
+  const builtinB = material({ code: '301000000002', note: 'builtin-B' });
+  const docA = material({ code: '301000000001', note: 'doc-A' });
+  const docB = material({ code: '301000000002', note: 'doc-B' }); // userに同キー無し→builtinが本体
+  setOverlay('material', { doc: [docA, docB], user: [userA] });
+  const diffs = docDiffMap('material', [builtinA, builtinB]);
+
+  const entryA = diffs.get('301000000001');
+  assert.equal(entryA.baseOrigin, 'user');
+  assert.equal(entryA.baseEntry, userA);
+
+  const entryB = diffs.get('301000000002');
+  assert.equal(entryB.baseOrigin, 'builtin');
+  assert.equal(entryB.baseEntry, builtinB);
 });
 
 // ---- clearOverlaysで空に戻ったことをcomposeCatalogでも確認（発火回数を明示） ----

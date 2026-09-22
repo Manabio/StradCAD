@@ -6,7 +6,7 @@ import {
   upsertUserMaterialEntry, removeUserMaterialEntry, buildUserMaterialBundle, commitUserEntries,
   isEditableMaterialCategory, MATERIAL_CATEGORY, canEditMaterialRow, parseThicknessInput,
 } from './catalogMaintenance.js';
-import { setOverlay, clearOverlays, overlayFor } from './catalogRegistry.js';
+import { setOverlay, clearOverlays, overlayFor, docDiffMap } from './catalogRegistry.js';
 import { CatalogKind } from './catalogKinds.js';
 
 test.afterEach(() => clearOverlays());
@@ -64,6 +64,27 @@ test('buildMaterialRows: categoryで絞り込む（backingは表示のみ・除�
 
   const all = buildMaterialRows({ builtinList: builtin });
   assert.equal(all.length, 3); // backingも一覧には出る（編集不可なだけ）
+});
+
+// ---- buildMaterialRows: R13 diffMap（ステップ6-2） ----
+test('buildMaterialRows: diffMapを渡すと各行に差分情報(diff)が付く。無ければnull', () => {
+  const builtin = [
+    material({ code: '301000000001', name: 'A' }),
+    material({ code: '301000000002', name: 'B' }),
+  ];
+  setOverlay('material', { doc: [material({ code: '301000000002', name: 'B(doc)' })] });
+  const diffMap = docDiffMap('material', builtin);
+  const rows = buildMaterialRows({ builtinList: builtin, diffMap });
+  const byCode = new Map(rows.map(r => [r.entry.code, r.diff]));
+  assert.equal(byCode.get('301000000001'), null, '差分の無い行はnull');
+  assert.ok(byCode.get('301000000002'), '差分のある行はdiffが付く');
+  assert.deepEqual(byCode.get('301000000002').diffFields, ['name']);
+});
+
+test('buildMaterialRows: diffMapを渡さなければ全行diff:null（省略時の既定）', () => {
+  const builtin = [material({ code: '301000000001', name: 'A' })];
+  const rows = buildMaterialRows({ builtinList: builtin });
+  assert.equal(rows[0].diff, null);
 });
 
 // ---- collectKnownMaterialCodes / nextMaterialCode: 採番 ----
