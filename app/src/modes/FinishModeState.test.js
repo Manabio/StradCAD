@@ -164,3 +164,40 @@ test('_syncExteriorRows: 屋外階段で連動行が無ければ部位「階段�
   assert.equal(rows.length, 1);
   assert.equal(rows[0].part, '階段');
 });
+
+// ---- CL偏芯（clEccentricities）の下地材個別指定も材照合対象に含める（欠落修正） ----
+test('FinishModeState.init: CL偏芯のbackingに未知コードがあるとmaterialErrorが立つ', async () => {
+  const graph = makeSingleCellGraph();
+  const cl = graph.centerLines[0];
+  graph.setCLEccentricity(cl.id, { mode: 'value', value: 0, side: 1, backing: '999999999999' });
+  const state = new FinishModeState(graph, null);
+
+  const result = await state.init();
+
+  assert.equal(result.ok, false);
+  assert.ok(state.materialError, 'materialErrorが設定されるはず');
+});
+
+test('FinishModeState.init: CL偏芯のbacking===\'\'（per-floor既定を参照する合図）はmaterialErrorを立てない', async () => {
+  const graph = makeSingleCellGraph();
+  const cl = graph.centerLines[0];
+  graph.setCLEccentricity(cl.id, { mode: 'value', value: 0, side: 1, backing: '' });
+  const state = new FinishModeState(graph, null);
+
+  const result = await state.init();
+
+  assert.equal(result.ok, true);
+  assert.equal(state.materialError, null);
+});
+
+test('FinishModeState.init: CL偏芯のbackingが既知コードならmaterialErrorを立てない', async () => {
+  const graph = makeSingleCellGraph();
+  const cl = graph.centerLines[0];
+  graph.setCLEccentricity(cl.id, { mode: 'value', value: 0, side: 1, backing: '111111111111' });
+  const state = new FinishModeState(graph, null);
+
+  const result = await state.init();
+
+  assert.equal(result.ok, true);
+  assert.equal(state.materialError, null);
+});

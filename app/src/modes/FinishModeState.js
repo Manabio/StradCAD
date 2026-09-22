@@ -325,6 +325,11 @@ export class FinishModeState {
         if (isMaterialCode(v)) codes.add(v);
       }
     }
+
+    // CL偏芯の下地材個別指定（backing===''はper-floor既定を参照する合図のため対象外）
+    for (const rec of g?.clEccentricities?.values() ?? []) {
+      if (isMaterialCode(rec?.backing)) codes.add(rec.backing);
+    }
     return codes;
   }
 
