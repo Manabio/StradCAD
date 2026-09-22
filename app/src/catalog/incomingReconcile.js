@@ -3,14 +3,17 @@
 // 照合し、読み替え（alias）・ライブラリ追加（add）・通知（adopt-doc/proposals）へ振り分ける。
 //
 // 純モジュール（葉）。同ディレクトリの兄弟モジュール（catalogKinds.js・catalogMatch.js・
-// codeNormalization.js）にのみ依存する（catalogImports.test.js の許可リストに従う）。
-// I/O（IDB永続化）は applyReconcilePlan の呼び出し側が commitUserFn/addAliasesFn として注入する
-// ——catalogOverlayLoader.js/catalogMaintenance.js と同じDI型。
+// codeNormalization.js・catalogRegistry.js）にのみ依存する（catalogImports.test.js の許可リストに
+// 従う）。I/O（IDB永続化）は applyReconcilePlan の呼び出し側が commitUserFn/addAliasesFn として
+// 注入する——catalogOverlayLoader.js/catalogMaintenance.js と同じDI型。removeDocEntryFn は
+// I/Oではないoverlay操作だが同じ注入口を使う（既定は catalogRegistry.js の本物。テストが
+// overlayに触れずに呼び出し確認できるようにする）。
 // ================================================================
 
 import { kindDef } from './catalogKinds.js';
 import { classifyIncoming, assertNoDuplicate, displayNameOf } from './catalogMatch.js';
 import { addDocumentAliases } from './codeNormalization.js';
+import { overlayFor, removeDocEntry } from './catalogRegistry.js';
 
 /**
  * 文書同梱（docEntries）を appEntries（user+builtin。docは含まない）と照合し、
@@ -118,6 +121,13 @@ export function formatReconcileNotice(plan, { addedCount = 0, skippedCount = 0 }
 /**
  * plan（planIncomingReconcileの戻り値）を実際に反映する。
  * - aliases: addAliasesFn(plan.aliases) を（非空なら）1回呼ぶ——文書固有の読み替え表へ追記する。
+ *   続けて、alias確定した doc エントリ（from＝そのdocEntry自身のキー）を removeDocEntryFn(kind, from)
+ *   で overlay の doc から外す（QA指摘Major-1・2026-09-23: 読み替えは「参照をどのキーへ向けるか」を
+ *   決めるだけで、docエントリ自体を overlay に残すと、内容完全一致のまま別キーで builtin/user と
+ *   併存することになり、R17（合成後の重複禁止検査）が「同内容が複数キーで存在する」として例外を
+ *   投げる——仕上げモードinit・壁再生成・保存が軒並み止まり、利用者に直す手段が無くなる。
+ *   次の保存では overlay 合成結果から束を作るため、doc を外した分は自然に消える）。
+ *   from が（既に外れている等で）doc に無い場合は何もしない（無いキーの例外を投げさせない）。
  * - adds: R17（assertNoDuplicate。dedupeFields完全一致）に弾かれた追加は例外を投げず skipped へ積み、
  *   onSkipped(entry, error) を呼ぶ（複数のdocEntryが互いに同一内容を持つ場合の保険。planning時点の
  *   appEntriesには無かったため'add'判定されたが、adds同士が重複することはあり得るため）。
@@ -127,15 +137,25 @@ export function formatReconcileNotice(plan, { addedCount = 0, skippedCount = 0 }
  * @param {{ kind: string, currentUser: object[],
  *           commitUserFn: (nextUser: object[]) => Promise<void>,
  *           addAliasesFn?: (pairs: Array<{from:string,to:string}>) => void,
+ *           removeDocEntryFn?: (kind: string, key: string) => void,
  *           onSkipped?: (entry: object, error: Error) => void }} args
  * @returns {Promise<{ addedKeys: string[], aliasPairs: Array<{from:string,to:string}>, skipped: Array<{entry:object, reason:string}> }>}
  */
 export async function applyReconcilePlan(plan, {
-  kind, currentUser, commitUserFn, addAliasesFn = addDocumentAliases, onSkipped,
+  kind, currentUser, commitUserFn, addAliasesFn = addDocumentAliases,
+  removeDocEntryFn = removeDocEntry, onSkipped,
 }) {
   const def = kindDef(kind);
 
-  if (plan.aliases.length > 0) addAliasesFn(plan.aliases);
+  if (plan.aliases.length > 0) {
+    addAliasesFn(plan.aliases);
+    // QA指摘Major-1: alias確定したdocエントリはoverlayに残さない（doc起源のキーだけを対象に、
+    // 現在のoverlay.docに実在するものだけremoveDocEntryFnへ渡す）。
+    const docKeys = new Set(overlayFor(kind).doc.map(e => def.keyOf(e)));
+    for (const { from } of plan.aliases) {
+      if (docKeys.has(from)) removeDocEntryFn(kind, from);
+    }
+  }
 
   let nextUser = currentUser;
   const addedKeys = [];

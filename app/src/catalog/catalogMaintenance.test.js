@@ -5,6 +5,7 @@ import {
   buildMaterialEntry, duplicateMaterialEntry, validateMaterialEntry,
   upsertUserMaterialEntry, removeUserMaterialEntry, buildUserMaterialBundle, commitUserEntries,
   isEditableMaterialCategory, MATERIAL_CATEGORY, canEditMaterialRow, parseThicknessInput,
+  planRealign, realignTargets,
 } from './catalogMaintenance.js';
 import { setOverlay, clearOverlays, overlayFor, docDiffMap } from './catalogRegistry.js';
 import { CatalogKind } from './catalogKinds.js';
@@ -85,6 +86,28 @@ test('buildMaterialRows: diffMapを渡さなければ全行diff:null（省略時
   const builtin = [material({ code: '301000000001', name: 'A' })];
   const rows = buildMaterialRows({ builtinList: builtin });
   assert.equal(rows[0].diff, null);
+});
+
+// ---- realignTargets（ステップ6b Minor-1: 一括「合わせ直す」対象の絞り込みを切り出し）----
+test('realignTargets: diffが付いている行だけを返す（変異=filter除去/条件反転で赤）', () => {
+  const rows = [
+    { entry: { code: 'A' }, origin: 'doc', diff: { diffFields: ['name'] } },
+    { entry: { code: 'B' }, origin: 'user', diff: null },
+    { entry: { code: 'C' }, origin: 'doc', diff: { diffFields: ['thickness'] } },
+  ];
+  assert.deepEqual(realignTargets(rows).map(r => r.entry.code), ['A', 'C']);
+});
+
+test('realignTargets: diffの行が1つも無ければ空配列', () => {
+  const rows = [
+    { entry: { code: 'A' }, origin: 'builtin', diff: null },
+    { entry: { code: 'B' }, origin: 'user', diff: null },
+  ];
+  assert.deepEqual(realignTargets(rows), []);
+});
+
+test('realignTargets: 空配列を渡せば空配列', () => {
+  assert.deepEqual(realignTargets([]), []);
 });
 
 // ---- collectKnownMaterialCodes / nextMaterialCode: 採番 ----
@@ -297,4 +320,68 @@ test('buildMaterialEntry: name/spec/noteの前後の空白を除く', () => {
   assert.equal(entry.name, '材A');
   assert.equal(entry.spec, 'S');
   assert.equal(entry.note, '備考');
+});
+
+// ---- planRealign（ステップ6b: 4.7 文書同梱を本体の内容に合わせ直す差分プラン）----
+test('planRealign: 差分があればok:true・diffPairs（from=doc現在値, to=本体値）・baseOrigin・baseEntryを返す', () => {
+  const builtinEntry = material({ code: '301000000001', name: 'A', thickness: 12.5 });
+  const docEntry = material({ code: '301000000001', name: 'A', thickness: 15 });
+  setOverlay(CatalogKind.MATERIAL, { doc: [docEntry] });
+  const plan = planRealign(CatalogKind.MATERIAL, '301000000001', { builtinList: [builtinEntry] });
+  assert.equal(plan.ok, true);
+  assert.equal(plan.baseOrigin, 'builtin');
+  assert.equal(plan.baseEntry, builtinEntry);
+  assert.deepEqual(plan.diffPairs, [{ field: 'thickness', label: '厚', from: 15, to: 12.5 }]);
+});
+
+test('planRealign: baseがuser（doc>userの上書き）なら baseOrigin=\'user\'・diffPairsはuserとの差', () => {
+  const builtinEntry = material({ code: '301000000001', name: 'A', note: 'builtin' });
+  const userEntry = material({ code: '301000000001', name: 'A', note: 'user' });
+  const docEntry = material({ code: '301000000001', name: 'A', note: 'doc' });
+  setOverlay(CatalogKind.MATERIAL, { doc: [docEntry], user: [userEntry] });
+  const plan = planRealign(CatalogKind.MATERIAL, '301000000001', { builtinList: [builtinEntry] });
+  assert.equal(plan.ok, true);
+  assert.equal(plan.baseOrigin, 'user');
+  assert.equal(plan.baseEntry, userEntry);
+  assert.deepEqual(plan.diffPairs, [{ field: 'note', label: '備考', from: 'doc', to: 'user' }]);
+});
+
+test('【失敗系・変異=差分なし判定を外すと赤】planRealign: docがbuiltinと完全一致なら ok:false・reason:\'本体と同じ内容です\'', () => {
+  const builtinEntry = material({ code: '301000000001' });
+  const docEntry = material({ code: '301000000001' }); // 全項目同じ
+  setOverlay(CatalogKind.MATERIAL, { doc: [docEntry] });
+  const plan = planRealign(CatalogKind.MATERIAL, '301000000001', { builtinList: [builtinEntry] });
+  assert.deepEqual(plan, { ok: false, reason: '本体と同じ内容です' });
+});
+
+test('【失敗系・変異=差分なし判定を外すと赤】planRealign: docがuserと完全一致（builtinには無い）なら ok:false・reason:\'本体と同じ内容です\'', () => {
+  const userEntry = material({ code: '301000000001' });
+  const docEntry = material({ code: '301000000001' }); // 全項目同じ
+  setOverlay(CatalogKind.MATERIAL, { doc: [docEntry], user: [userEntry] });
+  const plan = planRealign(CatalogKind.MATERIAL, '301000000001', { builtinList: [] });
+  assert.deepEqual(plan, { ok: false, reason: '本体と同じ内容です' });
+});
+
+// ---- QA指摘Minor-3（2026-09-23）: 「相手なし」と「同内容」を同キーのuser/builtinの有無で分ける ----
+test('【QA指摘Minor-3】planRealign: 同キーのuser/builtinが無い（新規追加材）なら ok:false・reason:\'相手なし（合わせ直す先の本体エントリがありません）\'', () => {
+  const docEntry = material({ code: '999999999999', name: '新規同梱材' }); // builtin/userどちらにも無いキー
+  setOverlay(CatalogKind.MATERIAL, { doc: [docEntry] });
+  const plan = planRealign(CatalogKind.MATERIAL, '999999999999', { builtinList: [material({ code: '301000000001' })] });
+  assert.deepEqual(plan, { ok: false, reason: '相手なし（合わせ直す先の本体エントリがありません）' });
+});
+
+test('【QA指摘Minor-3】planRealign: 同キーのbuiltinが有り内容も一致なら reason:\'本体と同じ内容です\'（相手なしと混同しない）', () => {
+  const builtinEntry = material({ code: '301000000001' });
+  const docEntry = material({ code: '301000000001' }); // 全項目同じ
+  setOverlay(CatalogKind.MATERIAL, { doc: [docEntry] });
+  const plan = planRealign(CatalogKind.MATERIAL, '301000000001', { builtinList: [builtinEntry] });
+  assert.deepEqual(plan, { ok: false, reason: '本体と同じ内容です' });
+});
+
+test('【失敗系】planRealign: 文書同梱(doc)に無いキーは例外', () => {
+  setOverlay(CatalogKind.MATERIAL, { doc: [material({ code: '301000000001' })] });
+  assert.throws(
+    () => planRealign(CatalogKind.MATERIAL, '999999999999', { builtinList: [] }),
+    /文書同梱に無いキーです/,
+  );
 });

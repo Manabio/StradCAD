@@ -119,6 +119,32 @@ test('【不変条件・ステップ6-3・QA指摘Minor-2】store.js: applyCatal
   );
 });
 
+// ---- store.js: applyCatalogResolutions（QA指摘Major-1・2026-09-23: alias確定でdocを外す） ----
+test('【不変条件・QA指摘Major-1・2026-09-23】store.js: applyCatalogResolutionsのaliasPairsブロックがremoveDocEntryを呼び、docに無いfromは呼ばない（場面(b)対応）', () => {
+  const src = readSrc('store.js');
+  assert.ok(
+    /\{[^}]*\bremoveDocEntry\b[^}]*\}\s*from\s*['"]\.\/catalog\/catalogRegistry\.js['"]/.test(src),
+    'store.js が removeDocEntry を catalog/catalogRegistry.js から import していない',
+  );
+  const body = extractBalancedBody(src, 'export async function applyCatalogResolutions(decisions) {');
+  assert.ok(body, 'store.js に applyCatalogResolutions が見つからない');
+  const aliasGuardMatch = /if\s*\(\s*aliasPairs\.length\s*>\s*0\s*\)\s*\{/.exec(body);
+  assert.ok(aliasGuardMatch, 'if (aliasPairs.length > 0) { ... } ブロックが見つからない');
+  const aliasBlock = extractBalancedBody(body, aliasGuardMatch[0]);
+  assert.ok(aliasBlock, 'aliasPairsブロックの中身を取得できない');
+  assert.ok(/\bremoveDocEntry\(/.test(aliasBlock), 'aliasPairsブロックが removeDocEntry を呼んでいない（QA指摘Major-1）');
+  assert.ok(
+    /docKeys\.has\(\s*from\s*\)/.test(aliasBlock),
+    'aliasPairsブロックが docKeys.has(from) で存在確認してから removeDocEntry を呼んでいない（場面(b)＝docに無いfromでは何もしない契約）',
+  );
+  // addDocumentAliases（読み替え追記）→ removeDocEntry（doc除去）→ restoreGraph（往復）の順序。
+  const aliasesIdx = aliasBlock.indexOf('addDocumentAliases(');
+  const removeIdx = aliasBlock.indexOf('removeDocEntry(');
+  const restoreIdx = aliasBlock.indexOf('restoreGraph(');
+  assert.ok(aliasesIdx >= 0 && removeIdx > aliasesIdx, 'removeDocEntry の呼び出しが addDocumentAliases より後になっていない');
+  assert.ok(restoreIdx > removeIdx, 'restoreGraph（往復）が removeDocEntry より後になっていない');
+});
+
 // ---- store.js: resetAll ----
 test('【不変条件・ステップ6-3】store.js: resetAllがproject.clearCatalogResolveRows()を呼んでいる', () => {
   const src = readSrc('store.js');

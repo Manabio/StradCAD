@@ -16,8 +16,9 @@
 // ================================================================
 
 import { CatalogKind, kindDef, listKinds } from './catalogKinds.js';
-import { composeList, originOf, overlayFor, setOverlay } from './catalogRegistry.js';
+import { composeList, docDiffMap, originOf, overlayFor, setOverlay } from './catalogRegistry.js';
 import { assertNoDuplicate } from './catalogMatch.js';
+import { diffPairs } from './catalogDiffView.js';
 import { nextSerial, parseMaterialCode, formatMaterialCode } from './materialCode.js';
 import { emptyBundle, withEntries } from './catalogBundle.js';
 import { encodeCatalogBundle } from './catalogCodec.js';
@@ -114,6 +115,19 @@ export function buildMaterialRows({ builtinList, search = '', category = null, d
     }))
     .filter(row => !category || row.entry.category === category)
     .filter(row => !needle || (row.entry.name ?? '').toLowerCase().includes(needle));
+}
+
+/**
+ * buildMaterialRows の戻り値から、R13の差分（diff）が付いている行だけを絞り込む
+ * （ステップ6b「合わせ直す」一括対象の唯一の判定箇所。QA指摘Minor-1・2026-09-23:
+ * CatalogMaintenancePanel.jsx に直書きされていた allRows.filter(r => r.diff) をこちらへ切り出し、
+ * 単体テストできるようにする——一括ボタンは検索・カテゴリ絞り込みの影響を受けない
+ * allRows（絞り込み前の全行）に対して呼ぶ契約）。
+ * @param {ReturnType<typeof buildMaterialRows>} rows
+ * @returns {ReturnType<typeof buildMaterialRows>}
+ */
+export function realignTargets(rows) {
+  return rows.filter(row => row.diff);
 }
 
 /**
@@ -249,4 +263,42 @@ export async function commitUserEntries(nextUser, prevUser, { saveFn }) {
     setOverlay(CatalogKind.MATERIAL, { doc, user: prevUser }); // 保存失敗はoverlayを戻す
     throw e;
   }
+}
+
+/**
+ * ステップ6b（4.7 合わせ直し）: 文書同梱材を本体（catalogRegistry.js docDiffMap の
+ * baseOrigin='user'|'builtin'の内容）に合わせ直す差分プラン（純関数。I/Oしない）。
+ * key が文書同梱（doc）に無ければ日本語例外。差分が無ければ ok:false——このとき同キーの
+ * user/builtinエントリの有無で理由を分ける（QA指摘Minor-3・2026-09-23）:
+ *   - 同キーのuser/builtinが有る（=docDiffMap側で比較済み・内容が一致） → reason:'本体と同じ内容です'
+ *   - 同キーのuser/builtinが無い（=新規追加材。docDiffMapは比較相手が無いため最初から対象外）
+ *     → reason:'相手なし（合わせ直す先の本体エントリがありません）'
+ * 差分があれば { ok: true, diffPairs, baseOrigin, baseEntry }——diffPairs は catalogDiffView.js の
+ * diffPairs（[{field,label,from,to}]）で from=doc（現在の同梱内容）・to=baseEntry
+ * （合わせ直す先の本体内容）（例:「厚 15 → 12.5」）。
+ * 実際に doc から外す（removeDocEntry）・永続化は呼び出し側の責務——本関数はプランのみ返す。
+ * @param {string} kind
+ * @param {string} key
+ * @param {{ builtinList: object[] }} args
+ * @returns {{ ok: true, diffPairs: object[], baseOrigin: 'user'|'builtin', baseEntry: object }
+ *         | { ok: false, reason: string }}
+ */
+export function planRealign(kind, key, { builtinList }) {
+  const def = kindDef(kind);
+  const { doc, user } = overlayFor(kind);
+  const docEntry = doc.find(e => def.keyOf(e) === key);
+  if (!docEntry) throw new Error(`文書同梱に無いキーです: ${key}`);
+  const diff = docDiffMap(kind, builtinList).get(key);
+  if (!diff) {
+    const hasPartner = user.some(e => def.keyOf(e) === key) || (builtinList ?? []).some(e => def.keyOf(e) === key);
+    return hasPartner
+      ? { ok: false, reason: '本体と同じ内容です' }
+      : { ok: false, reason: '相手なし（合わせ直す先の本体エントリがありません）' };
+  }
+  return {
+    ok: true,
+    diffPairs: diffPairs(kind, docEntry, diff.baseEntry, diff.diffFields),
+    baseOrigin: diff.baseOrigin,
+    baseEntry: diff.baseEntry,
+  };
 }

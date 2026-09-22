@@ -2,6 +2,9 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { planIncomingReconcile, formatReconcileNotice, applyReconcilePlan } from './incomingReconcile.js';
 import { CatalogKind } from './catalogKinds.js';
+import { setOverlay, clearOverlays, overlayFor, composeCatalog } from './catalogRegistry.js';
+
+test.afterEach(() => clearOverlays());
 
 function material(overrides) {
   return {
@@ -298,6 +301,74 @@ test('applyReconcilePlan: aliases/adds両方空ならaddAliasesFn・commitUserFn
   assert.equal(addAliasesCalls.length, 0);
   assert.equal(commitCalls.length, 0);
   assert.deepEqual(result, { addedKeys: [], aliasPairs: [], skipped: [] });
+});
+
+// ---- QA指摘Major-1（2026-09-23）: alias確定したdocエントリはoverlayから外す ----
+// 根本原因: 6-1の自動alias（内容完全一致・別コード）は参照だけ読み替えてdocエントリを
+// overlayに残していたため、composeCatalogのR17合成後検査が「同内容がbuiltinとdocに併存」で
+// 例外になり、仕上げモードinit・壁再生成・保存が止まっていた（step6-1-test.stqを本番起動経路
+// で読むと再現。修正後は再現しないことをrepro-major1.mjs相当の手順で実測——報告参照）。
+
+test('applyReconcilePlan: aliasを確定したdocエントリはoverlayのdocから外れる（変異=removeDocEntry呼び出し除去で赤）', async () => {
+  const docEntry = material({ code: '999999999999' });
+  const otherDoc = material({ code: '999999999998', name: '他の同梱材' });
+  setOverlay(CatalogKind.MATERIAL, { doc: [docEntry, otherDoc] });
+  const plan = makePlan({ aliases: [{ from: '999999999999', to: '301000000001' }] });
+
+  await applyReconcilePlan(plan, {
+    kind: CatalogKind.MATERIAL,
+    currentUser: [],
+    commitUserFn: async () => {},
+    addAliasesFn: () => {},
+  });
+
+  assert.deepEqual(
+    overlayFor(CatalogKind.MATERIAL).doc.map(e => e.code), ['999999999998'],
+    'alias確定した999999999999だけがdocから外れ、無関係な999999999998は残る',
+  );
+});
+
+test('applyReconcilePlan: fromがdocに無いaliasはremoveDocEntryFnを呼ばない（場面(b)=unresolved-code由来。無いキーの例外を投げさせない）', async () => {
+  setOverlay(CatalogKind.MATERIAL, { doc: [material({ code: '999999999998' })] });
+  const removeDocEntryCalls = [];
+  // docに無いキー（グラフ参照の旧コード相当）をfromに持つalias
+  const plan = makePlan({ aliases: [{ from: '999999999999', to: '301000000001' }] });
+
+  await assert.doesNotReject(() => applyReconcilePlan(plan, {
+    kind: CatalogKind.MATERIAL,
+    currentUser: [],
+    commitUserFn: async () => {},
+    addAliasesFn: () => {},
+    removeDocEntryFn: (kind, key) => removeDocEntryCalls.push(key),
+  }));
+
+  assert.deepEqual(removeDocEntryCalls, [], 'docに無いfromではremoveDocEntryFnを呼ばない');
+  assert.deepEqual(overlayFor(CatalogKind.MATERIAL).doc.map(e => e.code), ['999999999998'], 'docの中身は変わらない');
+});
+
+test('結合【QA指摘Major-1の再現ケース】: 内容完全一致・別コードのdocを含む束をoverlayに立て、reconcile(plan→apply)後はcomposeCatalogが例外にならない', async () => {
+  const builtinEntry = material({ code: '301000000001', name: 'せっこうボード t=9.5' });
+  // builtinと内容完全一致（name/spec/x/y/thickness）・codeだけ違うdocエントリ
+  const docEntry = material({ code: '999900000001', name: 'せっこうボード t=9.5' });
+  setOverlay(CatalogKind.MATERIAL, { doc: [docEntry] });
+
+  const plan = planIncomingReconcile({
+    kind: CatalogKind.MATERIAL, docEntries: [docEntry], appEntries: [builtinEntry],
+  });
+  assert.deepEqual(plan.aliases, [{ from: '999900000001', to: '301000000001' }]);
+
+  await applyReconcilePlan(plan, {
+    kind: CatalogKind.MATERIAL,
+    currentUser: [],
+    commitUserFn: async () => {},
+    addAliasesFn: () => {},
+  });
+
+  assert.deepEqual(overlayFor(CatalogKind.MATERIAL).doc, [], 'aliasを確定したdocエントリがoverlayから外れている');
+  assert.doesNotThrow(
+    () => composeCatalog(CatalogKind.MATERIAL, [builtinEntry]),
+    'reconcile後はR17（合成後の重複禁止検査）に引っかからず composeCatalog が通る（QA指摘Major-1）',
+  );
 });
 
 // ---- 結合: store.jsの実際の呼び出し方（applyReconcilePlanの結果をformatReconcileNoticeへ渡す）----

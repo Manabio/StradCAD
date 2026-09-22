@@ -88,6 +88,44 @@ test('【不変条件・ステップ5】ui/CatalogMaintenancePanel.jsx: 純ロ�
   assert.ok(!/\bassertNoDuplicate\(/.test(src), 'CatalogMaintenancePanel.jsx が assertNoDuplicate を直接呼んでいる（catalogMaintenance.js経由に一本化する契約への退行）');
 });
 
+// ---- ステップ6b（4.7 合わせ直し）: 「本体の内容に合わせ直す」はcatalogMaintenance.js/catalogRegistry.js
+// 経由（.jsx側で差分判定・overlay操作を再実装しない）----
+test('【不変条件・ステップ6b】ui/CatalogMaintenancePanel.jsx: 「本体の内容に合わせ直す」はcatalog/catalogMaintenance.jsのplanRealignとcatalog/catalogRegistry.jsのremoveDocEntry経由', () => {
+  const src = readSrc('ui/CatalogMaintenancePanel.jsx');
+  assert.ok(/from ['"]\.\.\/catalog\/catalogMaintenance\.js['"]/.test(src), 'CatalogMaintenancePanel.jsx が catalog/catalogMaintenance.js を import していない');
+  assert.ok(/\bplanRealign\(/.test(src), 'CatalogMaintenancePanel.jsx が planRealign を呼んでいない');
+  assert.ok(/from ['"]\.\.\/catalog\/catalogRegistry\.js['"]/.test(src), 'CatalogMaintenancePanel.jsx が catalog/catalogRegistry.js を import していない');
+  assert.ok(/\bremoveDocEntry\(/.test(src), 'CatalogMaintenancePanel.jsx が removeDocEntry を呼んでいない');
+  // 差分判定（diffEntries/valuesEqual）はcatalogMatch.jsの責務——.jsxが直接importして再実装しない
+  // （docDiffMap/diffPairs/planRealignの間接経由に一本化する契約）。
+  assert.ok(
+    !/from ['"]\.\.\/catalog\/catalogMatch\.js['"]/.test(src),
+    'CatalogMaintenancePanel.jsx が catalog/catalogMatch.js を直接importしている（差分判定の直書きへの退行）',
+  );
+});
+
+test('【不変条件・ステップ6b】ui/CatalogMaintenancePanel.jsx: 合わせ直し承認でdirtyState.jsのmarkDirtyを呼ぶ（removeDocEntryはoverlayのみ変えるI/O無し操作のため明示的にdirty化する）', () => {
+  const src = readSrc('ui/CatalogMaintenancePanel.jsx');
+  assert.ok(/from ['"]\.\.\/dirtyState\.js['"]/.test(src), 'CatalogMaintenancePanel.jsx が ../dirtyState.js を import していない');
+  assert.ok(/\bmarkDirty\(\)/.test(src), 'CatalogMaintenancePanel.jsx が markDirty() を呼んでいない');
+});
+
+// ---- QA指摘Minor（2026-09-23）: 一括対象の絞り込みはcatalogMaintenance.jsのrealignTargets経由 ----
+test('【不変条件・QA指摘Minor-1・2026-09-23】ui/CatalogMaintenancePanel.jsx: 一括「合わせ直す」対象はcatalog/catalogMaintenance.jsのrealignTargets経由（.jsx側でr.diffのfilterを直書きしない）', () => {
+  const src = readSrc('ui/CatalogMaintenancePanel.jsx');
+  assert.ok(/\brealignTargets\(/.test(src), 'CatalogMaintenancePanel.jsx が realignTargets を呼んでいない');
+  assert.ok(
+    !/\.filter\(\s*r\s*=>\s*r\.diff\s*\)/.test(src),
+    'CatalogMaintenancePanel.jsx が r.diff の filter を直書きしている（realignTargets経由への一本化への退行）',
+  );
+});
+
+// ---- QA指摘Minor-2（2026-09-23）: 一括ボタンのラベルに絞り込み無関係の旨を明記 ----
+test('【不変条件・QA指摘Minor-2・2026-09-23】ui/CatalogMaintenancePanel.jsx: 一括「合わせ直す」ボタンのラベルに「絞り込みに関わらず全件」を明記する', () => {
+  const src = readSrc('ui/CatalogMaintenancePanel.jsx');
+  assert.ok(/絞り込みに関わらず全件/.test(src), 'CatalogMaintenancePanel.jsx の一括ボタンラベルに「絞り込みに関わらず全件」の文言が無い');
+});
+
 test('【不変条件・ステップ5】materialData.js: CatalogMaintenancePanel.jsxからも動的importのみ（静的import禁止。独立チャンク維持）', () => {
   const src = readSrc('ui/CatalogMaintenancePanel.jsx');
   const staticImportLines = src.split(/\r?\n/).filter(l => /^\s*import /.test(l));

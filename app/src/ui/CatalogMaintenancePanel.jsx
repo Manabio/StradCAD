@@ -2,13 +2,14 @@ import { useEffect, useMemo, useState } from 'react';
 import './CatalogMaintenancePanel.css';
 import { CatalogKind, MATERIAL_CLASSES } from '../catalog/catalogKinds.js';
 import { parseMaterialCode } from '../catalog/materialCode.js';
-import { docDiffMap, overlayFor } from '../catalog/catalogRegistry.js';
+import { docDiffMap, overlayFor, removeDocEntry } from '../catalog/catalogRegistry.js';
 import { CATALOG_DIFF_COLOR, CATALOG_DIFF_MARK, diffPairs, diffTooltip } from '../catalog/catalogDiffView.js';
 import { saveUserCatalog } from '../storage/db.js';
+import { markDirty } from '../dirtyState.js';
 import {
   buildKindTabs, buildMaterialRows, collectKnownMaterialCodes, nextMaterialCode,
   buildMaterialEntry, duplicateMaterialEntry, validateMaterialEntry,
-  upsertUserMaterialEntry, removeUserMaterialEntry, commitUserEntries,
+  upsertUserMaterialEntry, removeUserMaterialEntry, commitUserEntries, planRealign, realignTargets,
   canEditMaterialRow, isEditableMaterialCategory, parseThicknessInput, MATERIAL_CATEGORY,
 } from '../catalog/catalogMaintenance.js';
 
@@ -83,6 +84,8 @@ export function CatalogMaintenancePanel({ onClose }) {
   const [formError, setFormError] = useState(null);
   const [formMessage, setFormMessage] = useState(null);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
+  // ステップ6b（4.7 合わせ直し）: null | { keys: string[] }（単一行=1件、「すべて合わせ直す」=複数件）
+  const [realignConfirm, setRealignConfirm] = useState(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -117,6 +120,25 @@ export function CatalogMaintenancePanel({ onClose }) {
       ).map(p => [p.field, p]))
     : new Map();
   const fmtDiffValue = v => (v === null || v === undefined || v === '' ? '未設定' : String(v));
+
+  // ステップ6b（4.7 合わせ直し）: 出所「同梱」で差分ありの行（realignTargets。allRows基準——
+  // 検索・カテゴリ絞り込みの影響を受けない＝一覧全体が対象。ボタンのラベルにもその旨を明記する
+  // QA指摘Minor-2・2026-09-23）。realignConfirm が立っているあいだは、対象キーごとに
+  // planRealign（catalogMaintenance.js）でプラン（diffPairs/reason）を取り直す
+  // （承認直前の最新overlay状態を反映するため、useMemoでキャッシュしない）。
+  const diffRows = realignTargets(allRows);
+  const realignPlans = (realignConfirm && builtinList)
+    ? realignConfirm.keys.map(key => {
+        let plan;
+        try {
+          plan = planRealign(CatalogKind.MATERIAL, key, { builtinList });
+        } catch (e) {
+          plan = { ok: false, reason: e.message };
+        }
+        const row = allRows.find(r => r.entry.code === key);
+        return { key, plan, name: row?.entry?.name ?? key };
+      })
+    : [];
 
   // canEditMaterialRow（QA指摘Major-A）: category=backing・origin=builtin・origin=docは編集不可。
   // 新規追加（isAdding）はまだoriginを持たないためnull（=保存前提の編集可能扱い）で判定する。
@@ -211,6 +233,34 @@ export function CatalogMaintenancePanel({ onClose }) {
     setFormMessage('削除しました');
   }
 
+  // ステップ6b（4.7 合わせ直し）: 承認された対象キーを removeDocEntry（catalog/catalogRegistry.js）で
+  // 文書同梱（doc）から外す。永続化I/Oはしない——次の保存で同梱がbuiltin/user内容で書き直される
+  // （saveMaterialCatalogDocument が overlay 合成結果から束を作るため）。dirtyState.js の markDirty で
+  // 保存を促す（他の overlay 変更＝commitUserEntries経由はcommitUserEntries内で永続化まで行うのに対し、
+  // removeDocEntryはoverlayのみ変えるIn-memory操作のため、ここで明示的にmarkDirtyする）。
+  function handleRealignConfirmed() {
+    if (!realignConfirm) return;
+    try {
+      for (const key of realignConfirm.keys) {
+        removeDocEntry(CatalogKind.MATERIAL, key);
+      }
+    } catch (e) {
+      setFormError(e.message);
+      setRealignConfirm(null);
+      return;
+    }
+    markDirty();
+    // 選択中の行が合わせ直し対象に含まれていた場合、出所（doc→user/builtin）が変わり
+    // formが古い同梱値のままになるため、選択を外して再選択を促す（削除確認と同じ扱い）。
+    if (selectedCode && realignConfirm.keys.includes(selectedCode)) {
+      setIsAdding(false);
+      setSelectedCode(null);
+      setForm(null);
+    }
+    setRealignConfirm(null);
+    setFormMessage('本体の内容に合わせ直しました（保存すると同梱が本体の内容で更新され、通知が止まります）');
+  }
+
   function handleKeyDown(e) {
     if (e.key === 'Escape') { e.stopPropagation(); onClose?.(); }
   }
@@ -267,7 +317,52 @@ export function CatalogMaintenancePanel({ onClose }) {
                   <button className="catmnt-add-btn" disabled={!builtinList} onClick={handleAddNew}>
                     + 新規追加
                   </button>
+                  {diffRows.length > 0 && (
+                    <button
+                      className="catmnt-btn catmnt-btn--secondary"
+                      onClick={() => setRealignConfirm({ keys: diffRows.map(r => r.entry.code) })}
+                    >
+                      すべて本体の内容に合わせ直す（{diffRows.length}件・絞り込みに関わらず全件）
+                    </button>
+                  )}
                 </div>
+
+                {/* ステップ6b: 合わせ直しの確認（単一行・一括のどちらも同じ型。削除確認と同様インライン） */}
+                {realignConfirm && (
+                  <div className="catmnt-realign-confirm">
+                    <div className="catmnt-realign-confirm-title">
+                      本体の内容に合わせ直しますか？（{realignConfirm.keys.length}件）
+                    </div>
+                    {realignPlans.map(({ key, plan, name }) => (
+                      <div key={key} className="catmnt-realign-item">
+                        <div className="catmnt-realign-item-name">{name}</div>
+                        {plan.ok ? (
+                          <ul className="catmnt-realign-diff-list">
+                            {plan.diffPairs.map(p => (
+                              <li key={p.field} style={{ color: CATALOG_DIFF_COLOR }}>
+                                {p.label} {fmtDiffValue(p.from)} → {fmtDiffValue(p.to)}
+                              </li>
+                            ))}
+                          </ul>
+                        ) : (
+                          <div className="catmnt-realign-diff-none">{plan.reason}</div>
+                        )}
+                      </div>
+                    ))}
+                    <div className="catmnt-realign-confirm-note">
+                      保存すると同梱が本体の内容で更新され、通知が止まります。
+                    </div>
+                    <div className="catmnt-form-actions">
+                      <button className="catmnt-btn catmnt-btn--primary" onClick={handleRealignConfirmed}>
+                        承認する
+                      </button>
+                      <button className="catmnt-btn catmnt-btn--secondary" onClick={() => setRealignConfirm(null)}>
+                        キャンセル
+                      </button>
+                    </div>
+                  </div>
+                )}
+
                 <div className="catmnt-rows">
                   {!builtinList && !loadError && <div className="catmnt-row-empty">読み込み中…</div>}
                   {loadError && <div className="catmnt-row-empty">材料データの読み込みに失敗しました</div>}
@@ -291,6 +386,15 @@ export function CatalogMaintenancePanel({ onClose }) {
                         {row.entry.name}{row.diff ? ` ${CATALOG_DIFF_MARK}` : ''}
                       </span>
                       <span className="catmnt-cat-badge">{CATEGORY_LABELS[row.entry.category] ?? row.entry.category}</span>
+                      {row.diff && (
+                        <button
+                          className="catmnt-realign-btn"
+                          title="本体の内容に合わせ直す"
+                          onClick={e => { e.stopPropagation(); setRealignConfirm({ keys: [row.entry.code] }); }}
+                        >
+                          合わせ直す
+                        </button>
+                      )}
                     </div>
                   ))}
                 </div>

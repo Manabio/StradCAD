@@ -6,7 +6,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   setOverlay, clearOverlays, overlayFor, composeCatalog, composeList, originOf,
-  docDiffMap, docDiffFields,
+  docDiffMap, docDiffFields, removeDocEntry,
 } from './catalogRegistry.js';
 import { ERR_CATALOG_DUPLICATE } from '../error.js';
 import { assertNoDuplicate } from './catalogMatch.js';
@@ -324,6 +324,49 @@ test('docDiffMap: baseOriginはuserがあればuser、無ければbuiltin（両�
   const entryB = diffs.get('301000000002');
   assert.equal(entryB.baseOrigin, 'builtin');
   assert.equal(entryB.baseEntry, builtinB);
+});
+
+// ---- removeDocEntry（ステップ6b: 4.7 文書同梱から1件外す。次の保存でbuiltin/user内容が同梱し直される）----
+
+test('removeDocEntry: 指定キーがdocから外れる（userは不変。変異=userも消すと赤）', () => {
+  const docA = material({ code: '301000000001', note: 'doc-A' });
+  const docB = material({ code: '301000000002', note: 'doc-B' });
+  const userEntry = material({ code: '301000000003', note: 'user' });
+  setOverlay('material', { doc: [docA, docB], user: [userEntry] });
+  removeDocEntry('material', '301000000001');
+  const overlay = overlayFor('material');
+  assert.deepEqual(overlay.doc.map(e => e.code), ['301000000002']);
+  assert.equal(overlay.doc[0], docB); // 残った方は===同一性を保つ（コピーしない）
+  assert.equal(overlay.user.length, 1);
+  assert.equal(overlay.user[0], userEntry); // userは触らない（===同一性）
+});
+
+test('removeDocEntry: docと同キーのuser上書きが存在しても消えない（変異=同キーでuserも一緒に消すと赤。この構成が無いと上のテストは空振り）', () => {
+  const docEntry = material({ code: '301000000001', note: 'doc' });
+  const userOverride = material({ code: '301000000001', note: 'user' }); // docと同キー
+  setOverlay('material', { doc: [docEntry], user: [userOverride] });
+  removeDocEntry('material', '301000000001');
+  const overlay = overlayFor('material');
+  assert.deepEqual(overlay.doc, []);
+  assert.equal(overlay.user.length, 1, 'docと同キーのuserエントリも一緒に消えてはいけない');
+  assert.equal(overlay.user[0], userOverride);
+});
+
+test('removeDocEntry: doc/userとも空になれば overlayFor が既定値(空配列の組)に戻る（setOverlayの仕様を継承）', () => {
+  setOverlay('material', { doc: [material({ code: '301000000001' })] });
+  removeDocEntry('material', '301000000001');
+  assert.deepEqual(overlayFor('material'), { doc: [], user: [] });
+});
+
+test('【失敗系】removeDocEntry: docに無いキーは例外（overlayは書き換わらない）', () => {
+  const docEntry = material({ code: '301000000001' });
+  setOverlay('material', { doc: [docEntry] });
+  assert.throws(() => removeDocEntry('material', '999999999999'), /文書同梱に無いキーです/);
+  assert.deepEqual(overlayFor('material').doc, [docEntry]); // 例外時は既存overlayが消えない
+});
+
+test('【失敗系】removeDocEntry: docが空（未設定）のkindで呼ぶと例外', () => {
+  assert.throws(() => removeDocEntry('material', '301000000001'), /文書同梱に無いキーです/);
 });
 
 // ---- clearOverlaysで空に戻ったことをcomposeCatalogでも確認（発火回数を明示） ----

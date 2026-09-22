@@ -25,7 +25,7 @@ import { clearLocalAutosave } from './storage/localSnapshot.js';
 import { refreshWallsAllFloors } from './wallRefresh.js';
 import { ERR_CATALOG_DUPLICATE } from './error.js';
 import { CatalogKind } from './catalog/catalogKinds.js';
-import { composeCatalog, clearOverlays, overlayFor } from './catalog/catalogRegistry.js';
+import { composeCatalog, clearOverlays, overlayFor, removeDocEntry } from './catalog/catalogRegistry.js';
 import { decodeCatalogBundle, encodeCatalogBundle } from './catalog/catalogCodec.js';
 import { mergeBundles, splitBundleByKind, resolveCatalog, resolveOrigins, detectLibraryConflicts } from './catalog/catalogBundle.js';
 import {
@@ -330,10 +330,14 @@ export async function reconcileIncomingCatalogs() {
  *     非空なら project.setCatalogError で通知する。
  * (2) userOpsがあればユーザーライブラリ（upsert/remove/renumber）へ適用し commitUserEntries
  *     で永続化してから markDirty()（ライブラリの変更は往復と無関係に dirty 化する）。
- * (3) aliasPairsがあれば addDocumentAliases で文書固有の読み替え表へ追記し、アクティブ階だけ
- *     restoreGraph(activeGraph, serializeGraph(activeGraph)) で往復させて新しい読み替えを
- *     その場で反映してから markDirty()（graphSnapshot.test.js の仮定確認テストで安全性を
- *     確認済み。restoreGraphが内部でapplyDocumentCodeNormalizationを通すため）。往復は
+ * (3) aliasPairsがあれば addDocumentAliases で文書固有の読み替え表へ追記し、続けて各 from が
+ *     overlay の doc に実在すれば removeDocEntry で外す（QA指摘Major-1・2026-09-23:
+ *     alias確定したdocエントリを残すと、内容完全一致のまま別キーでbuiltin/userと併存し、R17
+ *     （合成後の重複禁止検査）が例外を投げる。場面(b)=unresolved-code由来のaliasはfromが
+ *     グラフ参照の旧コードでdocに無いため、無いキーの例外を投げさせず何もしない）。
+ *     その後アクティブ階だけ restoreGraph(activeGraph, serializeGraph(activeGraph)) で往復させて
+ *     新しい読み替えをその場で反映してから markDirty()（graphSnapshot.test.js の仮定確認テストで
+ *     安全性を確認済み。restoreGraphが内部でapplyDocumentCodeNormalizationを通すため）。往復は
  *     aliasPairsがある場合のみ——userOps（ユーザーライブラリの変更）はcodeNormalizationの
  *     表を変えないため、往復してもグラフの参照コードは変わらない（QA指摘Minor-2）。
  *     非アクティブ階は次にデコードされたとき（peek/activate）に自然に効く。
@@ -368,6 +372,12 @@ export async function applyCatalogResolutions(decisions) {
 
   if (aliasPairs.length > 0) {
     addDocumentAliases(aliasPairs);
+    // QA指摘Major-1: alias確定したdocエントリはoverlayに残さない。場面(b)（unresolved-code）
+    // 由来のfromはグラフ参照の旧コードでdocに無いため、無いキーの例外を投げさせず何もしない。
+    const docKeys = new Set(overlayFor(kind).doc.map(e => e.code));
+    for (const { from } of aliasPairs) {
+      if (docKeys.has(from)) removeDocEntry(kind, from);
+    }
     const activeGraph = project.activeGraph;
     if (activeGraph) restoreGraph(activeGraph, serializeGraph(activeGraph));
     markDirty();
