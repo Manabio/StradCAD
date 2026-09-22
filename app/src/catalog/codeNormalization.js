@@ -48,6 +48,59 @@ function normalizeCode(code, table, unresolved, context) {
   return target;
 }
 
+// ----------------------------------------------------------------
+// 材コード参照4系統の「対象かどうか」の判定（唯一の定義箇所）。
+// normalizeSnapshotCodes（変換）と catalog/usedEntries.js の collectUsedMaterialCodes（保存時の
+// 使用コード収集）が同じ判定を共有する——一方だけ直して他方が古いまま、という分岐を防ぐため
+// （enumerateMaterialCodeRefs が両方の唯一の入口）。
+// ----------------------------------------------------------------
+const BACKING_FIELDS = ['exteriorWallBacking', 'interiorWallBacking', 'ceilingBacking', 'floorBacking'];
+
+function isRoomMaterialOverride(ov) {
+  return !!ov && (ov.key === 'wallMaterial' || ov.key === 'wallFinish');
+}
+
+function isEdgeMaterialOverride(ov) {
+  return !!ov && typeof ov.value === 'string' && /^\d{12}$/.test(ov.value);
+}
+
+function isNormalizableEccentricity(item) {
+  // backing==='' は per-floor 既定の合図（4.4のD裁定）——対象にしない。
+  return !!item && item.backing !== '' && item.backing != null;
+}
+
+/**
+ * snapshot 内の材コード参照4系統（4フィールド・rooms[].overrides・edges[].overrides・
+ * clEccentricities[].backing）を読み取り専用で列挙する（変換はしない）。
+ * @returns {Array<{code: string, location: string, [key: string]: unknown}>}
+ */
+export function enumerateMaterialCodeRefs(snapshot) {
+  if (!snapshot) return [];
+  const refs = [];
+  for (const field of BACKING_FIELDS) {
+    const code = snapshot[field];
+    if (code == null) continue;
+    refs.push({ code, location: field });
+  }
+  for (const room of snapshot.rooms ?? []) {
+    for (const ov of room?.overrides ?? []) {
+      if (!isRoomMaterialOverride(ov)) continue;
+      refs.push({ code: ov.value, location: 'room', roomId: room.id, key: ov.key });
+    }
+  }
+  for (const edge of snapshot.edges ?? []) {
+    for (const ov of edge?.overrides ?? []) {
+      if (!isEdgeMaterialOverride(ov)) continue;
+      refs.push({ code: ov.value, location: 'edge', edgeKey: edge.key, key: ov.key });
+    }
+  }
+  for (const item of snapshot.clEccentricities ?? []) {
+    if (!isNormalizableEccentricity(item)) continue;
+    refs.push({ code: item.backing, location: 'clEccentricity', clId: item.clId });
+  }
+  return refs;
+}
+
 function normalizeRooms(rooms, table, unresolved) {
   if (!Array.isArray(rooms)) return rooms;
   let changedAny = false;
@@ -56,7 +109,7 @@ function normalizeRooms(rooms, table, unresolved) {
     if (!Array.isArray(overrides)) return room;
     let changed = false;
     const nextOverrides = overrides.map(ov => {
-      if (!ov || (ov.key !== 'wallMaterial' && ov.key !== 'wallFinish')) return ov;
+      if (!isRoomMaterialOverride(ov)) return ov;
       const mapped = normalizeCode(ov.value, table, unresolved, { location: 'room', roomId: room.id, key: ov.key });
       if (mapped === ov.value) return ov;
       changed = true;
@@ -77,7 +130,7 @@ function normalizeEdges(edges, table, unresolved) {
     if (!Array.isArray(overrides)) return edge;
     let changed = false;
     const nextOverrides = overrides.map(ov => {
-      if (!ov || typeof ov.value !== 'string' || !/^\d{12}$/.test(ov.value)) return ov;
+      if (!isEdgeMaterialOverride(ov)) return ov;
       const mapped = normalizeCode(ov.value, table, unresolved, { location: 'edge', edgeKey: edge.key, key: ov.key });
       if (mapped === ov.value) return ov;
       changed = true;
@@ -94,8 +147,7 @@ function normalizeEccentricities(list, table, unresolved) {
   if (!Array.isArray(list)) return list;
   let changedAny = false;
   const next = list.map(item => {
-    // backing==='' は per-floor 既定の合図（4.4のD裁定）——正規化の対象にしない。
-    if (!item || item.backing === '' || item.backing == null) return item;
+    if (!isNormalizableEccentricity(item)) return item;
     const mapped = normalizeCode(item.backing, table, unresolved, { location: 'clEccentricity', clId: item.clId });
     if (mapped === item.backing) return item;
     changedAny = true;
@@ -121,7 +173,7 @@ export function normalizeSnapshotCodes(snapshot, table) {
   let changed = false;
 
   const backingFields = {};
-  for (const field of ['exteriorWallBacking', 'interiorWallBacking', 'ceilingBacking', 'floorBacking']) {
+  for (const field of BACKING_FIELDS) {
     const code = snapshot[field];
     if (code == null) { backingFields[field] = code; continue; }
     const mapped = normalizeCode(code, table, unresolved, { location: field });

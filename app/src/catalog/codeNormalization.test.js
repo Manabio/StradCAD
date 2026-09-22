@@ -62,6 +62,16 @@ test('normalizeSnapshotCodes: rooms[].overridesはkey∈{wallMaterial,wallFinish
   assert.equal(snapshot.rooms[0].overrides[1].value, 'x'); // key='other'は対象外・不変
 });
 
+// wallFinish単体（上のテストはwallMaterialしか対象にしていなかったので別途固定する）
+test('normalizeSnapshotCodes: rooms[].overridesのkey=wallFinishも正規化する', () => {
+  const table = buildCodeTable({ legacy: { '111111111150': '102000000001' } });
+  const snapshot = baseSnapshot({
+    rooms: [{ id: 'r1', overrides: [{ key: 'wallFinish', value: '111111111150' }] }],
+  });
+  const { snapshot: result } = normalizeSnapshotCodes(snapshot, table);
+  assert.equal(result.rooms[0].overrides[0].value, '102000000001');
+});
+
 test('normalizeSnapshotCodes: edges[].overridesは12桁コード形式のvalueだけ正規化する', () => {
   const table = buildCodeTable({ legacy: { '111111111150': '102000000001' } });
   const { snapshot } = normalizeSnapshotCodes(baseSnapshot(), table);

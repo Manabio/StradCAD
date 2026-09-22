@@ -44,22 +44,30 @@ export class Project {
     // signature → { symbol, subType, width, height, sillHeight, counts:Map<planeId,number>, tag }）。
     this.openingNumberIndex = observable.map();
 
-    // カタログのR17（重複登録禁止）合成後例外のメッセージ（2026-09-22 QA指摘B）。
+    // カタログのR17（重複登録禁止）合成後例外・overlay読込み失敗等のメッセージ通知
+    // （2026-09-22 QA指摘B。2026-09-22 再QA指摘Major-Dで通知専用に整理）。
     // store.js の bootReady は失敗させない設計のため、catch内でconsole.errorに流す代わりに
-    // ここへ観測可能な形で残す——App.jsxがmaterialErrorと同じトースト経路で表示する。
-    // 他のエラー（IDB読込失敗等）は従来どおりconsole.errorのまま（catalogErrorは立てない）。
-    // 【前提・2026-09-22 QA指摘・Minor】現状は resetAll／importDocument 後に必ず
-    // location.reload() で再起動する設計（store.js のコメント参照）のため、catalogError は
-    // 明示的にクリアしなくてもリロードでモジュール自体が作り直されて消える。将来 in-memory
-    // 再初期化（reloadを伴わない全消去・再読込）へ移行する場合は、その経路で
-    // setCatalogError(null) を明示的に呼ぶこと——ステップ4で catalog/catalogRegistry.js の
-    // clearOverlays を resetAll 等へ配線する際に、同じタイミングで対応するのが自然。
+    // ここへ観測可能な形で残す——App.jsxがmaterialErrorと同じトースト経路で表示する
+    // （reaction購読。catalogErrorSeq参照）。他のエラー（IDB読込失敗等）は従来どおり
+    // console.errorのまま（catalogErrorは立てない）。
+    // catalogErrorSeq: setCatalogErrorを呼ぶたびに増分する（同一文言のメッセージでも
+    // App.jsxのreactionが再度発火できるようにするため——MobXの変更検知は値の同一性で
+    // 決まるため、同じ文字列を再代入しただけでは反応しない。reactionはこちらを観測する）。
     this.catalogError = null;
+    this.catalogErrorSeq = 0;
+    // 保存ガード専用のboolean（2026-09-22 再QA指摘Major-D）。catalogOverlayLoaderの
+    // overlay読込みに失敗したときだけtrueにする——catalogErrorは「メッセージの内容」に
+    // 依存する通知専用のフィールドのため、保存可否の判定（真偽の分岐）と兼用しない
+    // （通知文言を変えると保存ガードの意味まで変わってしまう結合を避ける）。
+    // store.js saveMaterialCatalogDocument はこれだけを見て、文書同梱の保存可否を決める。
+    this.catalogOverlayUntrusted = false;
 
     makeObservable(this, {
       name:          observable,
       activePlaneId: observable,
       catalogError:  observable,
+      catalogErrorSeq: observable,
+      catalogOverlayUntrusted: observable,
       activeGraph:   computed,
       activePlane:   computed,
       planes:        computed,
@@ -72,12 +80,15 @@ export class Project {
       setSiteInfo:     action,
       setBuildingInfo: action,
       setCatalogError: action,
+      setCatalogOverlayUntrusted: action,
     });
   }
 
   setSiteInfo(info)     { this.projectInfo.siteInfo = info; }
   setBuildingInfo(info) { this.projectInfo.buildingInfo = info; }
-  setCatalogError(msg)  { this.catalogError = msg; }
+  /** 都度発火（同一文言でも再通知できるよう毎回 catalogErrorSeq を進める）。 */
+  setCatalogError(msg)  { this.catalogError = msg; this.catalogErrorSeq++; }
+  setCatalogOverlayUntrusted(v) { this.catalogOverlayUntrusted = v; }
 
   clearMemberNumberIndex() { this.memberNumberIndex.clear(); }
   clearOpeningNumberIndex() { this.openingNumberIndex.clear(); }

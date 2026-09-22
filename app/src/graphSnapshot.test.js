@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { Plane, PlanGraph, CenterLineType, Discipline, OpeningCategory, Project, Site, SiteLineKind, RoomKind, ExteriorLevelRef } from './core.js';
 import {
   serializeGraph, restoreGraph, serializeStructCLs, restoreStructCLs, serializePlanes, decodePlanes,
-  serializeSite, decodeSite, restoreSite,
+  serializeSite, decodeSite, restoreSite, decodeFloorSnapshot,
 } from './graphSnapshot.js';
 import { editSiteLineLength } from './transform/siteEdit.js';
 import { decode } from './schema/graphFbs.js';
@@ -510,6 +510,27 @@ test('decodePlanes: 不正なバイト列（他データの断片）を渡して
   const { planes, activePlaneId } = decodePlanes(garbage);
   assert.deepEqual(planes, []);
   assert.equal(activePlaneId, null);
+});
+
+// ---- decodeFloorSnapshot（保存時の使用エントリ収集専用。restoreGraphの「実グラフへ適用する」
+// 部分を持たない薄い再公開。catalog/usedEntries.js から使う）----
+test('decodeFloorSnapshot: decode()結果にrestoreGraphと同じ材コード正規化（applyDocumentCodeNormalization）を通す', () => {
+  const graph = makeGraph();
+  graph.exteriorWallBacking = '111111111150'; // 旧体系（振り直し前）のコード
+  const bytes = serializeGraph(graph);
+
+  const snapshot = decodeFloorSnapshot(bytes);
+  assert.notEqual(snapshot.exteriorWallBacking, '111111111150', '本体の振り直し表で正規化されている');
+
+  const restored = makeGraph();
+  restoreGraph(restored, bytes);
+  assert.equal(snapshot.exteriorWallBacking, restored.exteriorWallBacking, 'restoreGraphが実グラフへ適用する値と同一');
+});
+
+test('decodeFloorSnapshot: PlanGraphへ適用しない（呼び出しに graph 引数を取らない）——バイト列を渡すだけで完結する', () => {
+  const graph = makeGraph();
+  const bytes = serializeGraph(graph);
+  assert.doesNotThrow(() => decodeFloorSnapshot(bytes));
 });
 
 // ---- 敷地（project.site）の FlatBuffers 往復（serializeSite/decodeSite/restoreSite）----

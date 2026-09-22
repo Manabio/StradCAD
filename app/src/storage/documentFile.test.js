@@ -5,6 +5,15 @@ import {
   bytesToBase64, base64ToBytes,
 } from './documentFile.js';
 
+function sampleBundle() {
+  return {
+    version: 1,
+    catalogs: { material: [{ code: '101000000001', name: 'テスト材', spec: '', x: 0, y: 0, thickness: 12.5, category: 'panel' }] },
+    encodings: { material: 'json' },
+    aliases: {},
+  };
+}
+
 test('bytesToBase64/base64ToBytes: 全バイト値(0-255)がラウンドトリップする', () => {
   const bytes = new Uint8Array(256).map((_, i) => i);
   assert.deepEqual(base64ToBytes(bytesToBase64(bytes)), bytes);
@@ -72,4 +81,63 @@ test('【失敗系】parseDocumentEnvelope: floorsが配列でない・要素が
   const badItem = base();
   badItem.floors = [{ planeId: 'p1' }]; // bytes 欠落
   assert.throws(() => parseDocumentEnvelope(badItem), /フロアデータが不正/);
+});
+
+// ---- catalogs（カタログ束の同梱。4.5）----
+
+test('buildDocumentJson→parseDocumentEnvelope: catalogsがラウンドトリップする', () => {
+  const bundle = sampleBundle();
+  const doc = { floors: [], struct: null, planes: null, site: null, info: null, bootPlaneId: null, catalogs: bundle };
+  const json = buildDocumentJson(doc);
+  assert.equal(json[0], '{', 'JSON判別（先頭バイト）はcatalogs追加後も変わらない');
+  const parsed = parseDocumentEnvelope(JSON.parse(json));
+  assert.deepEqual(parsed.catalogs, bundle);
+});
+
+test('buildDocumentJson: version は catalogs 追加後も 1 のまま', () => {
+  const data = JSON.parse(buildDocumentJson({
+    floors: [], struct: null, planes: null, site: null, info: null, bootPlaneId: null, catalogs: sampleBundle(),
+  }));
+  assert.equal(data.version, 1);
+});
+
+test('旧 .stq（catalogsキー自体が無い）はそのまま開ける: catalogsはnullになる', () => {
+  const legacyEnvelope = JSON.parse(buildDocumentJson({
+    floors: [], struct: null, planes: null, site: null, info: null, bootPlaneId: null,
+  }));
+  delete legacyEnvelope.catalogs; // 「catalogsフィールド追加前の.stq」を模す（キー自体が無い）
+  const parsed = parseDocumentEnvelope(legacyEnvelope);
+  assert.equal(parsed.catalogs, null);
+});
+
+test('catalogs未指定（呼び出し側が渡さない）はnullとして保存される', () => {
+  const parsed = parseDocumentEnvelope(JSON.parse(
+    buildDocumentJson({ floors: [], struct: null, planes: null, site: null, info: null, bootPlaneId: null }),
+  ));
+  assert.equal(parsed.catalogs, null);
+});
+
+test('【失敗系】parseDocumentEnvelope: catalogsが不正なJSON（decodeCatalogBundle失敗）なら例外を投げる', () => {
+  const data = JSON.parse(buildDocumentJson({
+    floors: [], struct: null, planes: null, site: null, info: null, bootPlaneId: null,
+  }));
+  data.catalogs = bytesToBase64(new TextEncoder().encode('{not-json'));
+  assert.throws(() => parseDocumentEnvelope(data), /カタログ束のJSONが不正/);
+});
+
+test('【失敗系】parseDocumentEnvelope: catalogsがvalidateBundle失敗（キー重複）なら例外を投げる', () => {
+  const bundle = sampleBundle();
+  bundle.catalogs.material.push({ ...bundle.catalogs.material[0] }); // 同一codeを重複させる
+  const data = JSON.parse(buildDocumentJson({
+    floors: [], struct: null, planes: null, site: null, info: null, bootPlaneId: null, catalogs: bundle,
+  }));
+  assert.throws(() => parseDocumentEnvelope(data), /キーが重複/);
+});
+
+test('【失敗系】parseDocumentEnvelope: catalogsが文字列でなければ例外を投げる', () => {
+  const data = JSON.parse(buildDocumentJson({
+    floors: [], struct: null, planes: null, site: null, info: null, bootPlaneId: null,
+  }));
+  data.catalogs = { not: 'a base64 string' };
+  assert.throws(() => parseDocumentEnvelope(data), /カタログ同梱データが不正/);
 });

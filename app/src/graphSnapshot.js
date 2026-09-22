@@ -484,6 +484,18 @@ export function restoreGraph(graph, data) {
   applySnapshot(graph, snapshot);
 }
 
+/**
+ * フロアの FlatBuffers バイト列を snapshot（plain object）へ復元する（PlanGraph へは適用しない）。
+ * 保存時の使用エントリ収集（catalog/usedEntries.js）専用——非アクティブ階を含む全階のバイト列を
+ * 実体化する唯一の場所（restoreGraph は実グラフへの適用を伴うため、保存対象外の非アクティブ階には
+ * 使えない）。restoreGraph と同じ正規化（applyDocumentCodeNormalization）を通す——ここで数える
+ * 材コードは「実際に解決される値」であるべきで、振り直し前の旧コードのまま数えると同梱に旧コードが
+ * 混入するため。decodePlanes/decodeSite と同型の薄い再公開（store.js が schema/ を直接引かない）。
+ */
+export function decodeFloorSnapshot(bytes) {
+  return applyDocumentCodeNormalization(decode(bytes));
+}
+
 // ----------------------------------------------------------------
 // デシリアライズ: Uint8Array | plain object → 通り芯グラフ
 // ----------------------------------------------------------------

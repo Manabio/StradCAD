@@ -136,6 +136,45 @@ export function resolveOrigins(kind, { doc = [], user = [], builtin = [] } = {})
 }
 
 /**
+ * 複数の束を1つに統合する（IDBの種別ごとの束＝${projectId}:catalogs:<kind> レコード群 →
+ * .stq エンベロープの単一 catalogs フィールドへの変換用。splitBundleByKind の逆）。
+ * catalogs/aliases/encodings をそれぞれマージする。同じ種別が複数の束に含まれる場合は
+ * 後勝ち（現状の呼び出し側は種別ごとに1つの束しか作らないため衝突しない）。
+ */
+export function mergeBundles(bundles) {
+  let merged = emptyBundle();
+  for (const bundle of bundles) {
+    if (!bundle) continue;
+    for (const [kind, entries] of Object.entries(bundle.catalogs ?? {})) {
+      merged = withEntries(merged, kind, entries);
+    }
+    for (const [kind, table] of Object.entries(bundle.aliases ?? {})) {
+      for (const [from, to] of Object.entries(table)) merged = withAlias(merged, kind, from, to);
+    }
+    merged = { ...merged, encodings: { ...merged.encodings, ...(bundle.encodings ?? {}) } };
+  }
+  return merged;
+}
+
+/**
+ * 束を種別ごとに分割する（mergeBundles の逆）。IDBの種別ごとレコード保存
+ * （${projectId}:catalogs:<kind>）用——1種別だけを含む束を種別数ぶん返す。
+ * @returns {Map<string, object>} kind → その種別だけを含む束
+ */
+export function splitBundleByKind(bundle) {
+  const result = new Map();
+  for (const kind of Object.keys(bundle?.catalogs ?? {})) {
+    let sub = withEntries(emptyBundle(), kind, bundleEntries(bundle, kind));
+    const aliases = bundleAliases(bundle, kind);
+    if (Object.keys(aliases).length > 0) sub = { ...sub, aliases: { [kind]: aliases } };
+    const encoding = bundle.encodings?.[kind];
+    if (encoding) sub = { ...sub, encodings: { [kind]: encoding } };
+    result.set(kind, sub);
+  }
+  return result;
+}
+
+/**
  * 4.4: overridesBuiltin の印が無いのに builtin と同キー・内容不一致の user エントリを検出する。
  * 印がある（本体材の編集として作った）ものは衝突にしない。
  */

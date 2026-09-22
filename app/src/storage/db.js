@@ -1,12 +1,16 @@
 /**
  * IndexedDB アクセス層
  *
- * データベース:  strad  (バージョン 5)
+ * データベース:  strad  (バージョン 6)
  * オブジェクトストア:
  *   floors      — keyPath: planeId — フロアごとの FlatBuffers バイナリ（セッション作業領域）
  *   projects    — keyPath: projectId — 通り芯（全階共通）の FlatBuffers バイナリ。
- *                 別レコード（`${projectId}:planes`/`${projectId}:site`）で plane一覧・敷地も同ストアに同居する
+ *                 別レコード（`${projectId}:planes`/`${projectId}:site`/`${projectId}:info`/
+ *                 `${projectId}:catalogs:<kind>`）で plane一覧・敷地・調査計画情報・カタログ文書同梱も
+ *                 同ストアに同居する
  *   savedFloors — keyPath: planeId — 明示保存された floors のスナップショット（保存ドキュメント本体）
+ *   catalogs    — keyPath: key — ユーザーカタログライブラリ（アプリ単位・プロジェクトをまたぐ。
+ *                 キー: `user:<kind>`）。clearAllStores の対象外
  *
  * 公開 API:
  *   saveFloor(planeId, bytes)       → Promise<void>
@@ -21,11 +25,17 @@
  *   loadSiteData(projectId)          → Promise<Uint8Array | null>
  *   saveProjectInfo(projectId, bytes) → Promise<void>  （projects ストアの別レコード。キー: `${projectId}:info`）
  *   loadProjectInfo(projectId)        → Promise<Uint8Array | null>
+ *   saveDocumentCatalog(projectId, kind, bytes) → Promise<void>  （projects ストアの別レコード。
+ *                                       キー: `${projectId}:catalogs:<kind>`。種別ごとに1レコード）
+ *   loadDocumentCatalogs(projectId)   → Promise<Array<{kind, bytes}>>（範囲取得。未知の種別も取りこぼさない）
+ *   deleteDocumentCatalogs(projectId) → Promise<void>  （文書同梱カタログを全種別削除）
+ *   saveUserCatalog(kind, bytes)      → Promise<void>  （catalogs ストア。キー: `user:<kind>`）
+ *   loadUserCatalogs()                → Promise<Array<{kind, bytes}>>
  *   seedFloorsFromDocument()         → Promise<void>   （floorsをclear→savedFloors全件をfloorsへput）
  *   commitFloorsToDocument(planeIds) → Promise<void>   （planeIds分をsavedFloorsへ反映＋含まれない分を削除）
  *   loadAllSavedFloors()             → Promise<Array<{planeId, bytes}>>（文書ファイル書き出し用）
  *   saveSavedFloor(planeId, bytes)   → Promise<void>   （文書ファイル読み込み用）
- *   clearAllStores()                → Promise<void>
+ *   clearAllStores()                → Promise<void>   （catalogs ストア＝ユーザーライブラリは対象外）
  */
 
 import { computeSavedFloorDiff } from './floorDocumentDiff.js';
@@ -34,13 +44,15 @@ import { ERR_SESSION_LOCKED } from '../error.js';
 import { noteFloorWrite, noteAllFloorsWritten } from './floorWriteGeneration.js';
 
 const DB_NAME    = 'strad';
-// v5: バージョンのみ4に上がりストアが欠損したDB（開発中の中間状態コードで開かれたもの）を
-// 自己修復するための再アップグレード。onupgradeneeded は同一バージョンでは二度と走らないため、
-// ストア欠損は必ずバージョンを上げて修復する（clearAllStores が NotFoundError で失敗する実害があった）。
-const DB_VERSION = 5;
+// v6: カタログ束（.stq 同梱／ユーザーライブラリ、catalog/catalogBundle.js）の永続化のため
+// ユーザーライブラリ専用ストア catalogs を新設。既存ストア（floors/projects/savedFloors）は
+// v5 と同じ判定（!contains のときだけ createObjectStore）のため触れない——ストア欠損の自己修復も
+// 同じ仕組みで v6 でも引き続き効く（v5 のコメント参照）。
+export const DB_VERSION = 6;
 const STORE_FLOORS       = 'floors';
 const STORE_PROJECTS     = 'projects';
 const STORE_SAVED_FLOORS = 'savedFloors';
+const STORE_CATALOGS     = 'catalogs'; // ユーザーカタログライブラリ（keyPath: 'key'。アプリ単位）
 
 // ----------------------------------------------------------------
 // openDB: Promise をキャッシュして並列呼び出しでも 1 回だけ開く
@@ -70,6 +82,9 @@ function openDB() {
       const savedFloorsCreated = !db.objectStoreNames.contains(STORE_SAVED_FLOORS);
       if (savedFloorsCreated) {
         db.createObjectStore(STORE_SAVED_FLOORS, { keyPath: 'planeId' });
+      }
+      if (!db.objectStoreNames.contains(STORE_CATALOGS)) {
+        db.createObjectStore(STORE_CATALOGS, { keyPath: 'key' });
       }
       // migration: savedFloors を今回のアップグレードで新設した場合（バージョン1〜3からの
       // アップグレード、およびストア欠損のままバージョンだけ4になっていた修復対象DB）、
@@ -293,6 +308,114 @@ export async function loadProjectInfo(projectId) {
     const req = tx.objectStore(STORE_PROJECTS).get(infoKey(projectId));
     req.onsuccess = (e) => resolve(e.target.result?.bytes ?? null);
     req.onerror   = (e) => reject(e.target.error);
+  });
+}
+
+// ----------------------------------------------------------------
+// カタログ文書同梱（.stq 同梱）— projects ストアの別レコード（種別ごとに1レコード）。
+// 内部キーは projectId とは衝突しない `${projectId}:catalogs:<kind>` を使う（同一ストア・別レコード）。
+// 範囲取得（IDBKeyRange.bound）で全種別を1回で読む——listKinds() でループしない。未知の種別
+// （このビルドの登録表に無い kind）で保存されたレコードも取りこぼさないため（4.5-5）。
+// ----------------------------------------------------------------
+
+// prefix範囲取得の上限境界（UTF-16の最大コード単位）。documentCatalogPrefix(projectId) で
+// 始まるキーをすべて含む範囲を IDBKeyRange.bound(prefix, prefix + LAST_UNICODE_CHAR) で作る。
+const LAST_UNICODE_CHAR = String.fromCharCode(0xffff);
+
+function documentCatalogPrefix(projectId) {
+  return `${projectId}:catalogs:`;
+}
+
+function documentCatalogKey(projectId, kind) {
+  return `${documentCatalogPrefix(projectId)}${kind}`;
+}
+
+export async function saveDocumentCatalog(projectId, kind, bytes) {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const tx  = db.transaction(STORE_PROJECTS, 'readwrite');
+    const req = tx.objectStore(STORE_PROJECTS).put({ projectId: documentCatalogKey(projectId, kind), bytes });
+    req.onsuccess = () => resolve();
+    req.onerror   = (e) => reject(e.target.error);
+  });
+}
+
+export async function loadDocumentCatalogs(projectId) {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    if (!db.objectStoreNames.contains(STORE_PROJECTS)) {
+      resolve([]);
+      return;
+    }
+    const prefix = documentCatalogPrefix(projectId);
+    const range  = IDBKeyRange.bound(prefix, prefix + LAST_UNICODE_CHAR);
+    const tx     = db.transaction(STORE_PROJECTS, 'readonly');
+    const req    = tx.objectStore(STORE_PROJECTS).openCursor(range);
+    const results = [];
+    req.onsuccess = (e) => {
+      const cursor = e.target.result;
+      if (!cursor) { resolve(results); return; }
+      results.push({ kind: cursor.value.projectId.slice(prefix.length), bytes: cursor.value.bytes });
+      cursor.continue();
+    };
+    req.onerror = (e) => reject(e.target.error);
+  });
+}
+
+export async function deleteDocumentCatalogs(projectId) {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    if (!db.objectStoreNames.contains(STORE_PROJECTS)) {
+      resolve();
+      return;
+    }
+    const prefix = documentCatalogPrefix(projectId);
+    const range  = IDBKeyRange.bound(prefix, prefix + LAST_UNICODE_CHAR);
+    const tx     = db.transaction(STORE_PROJECTS, 'readwrite');
+    const req    = tx.objectStore(STORE_PROJECTS).openCursor(range);
+    req.onsuccess = (e) => {
+      const cursor = e.target.result;
+      if (!cursor) return;
+      cursor.delete();
+      cursor.continue();
+    };
+    tx.oncomplete = () => resolve();
+    tx.onerror    = (e) => reject(e.target.error);
+  });
+}
+
+// ----------------------------------------------------------------
+// ユーザーカタログライブラリ — catalogs ストア（keyPath: 'key'。アプリ単位・プロジェクトをまたぐ）。
+// 内部キーは `user:<kind>`。clearAllStores の対象外（「新規（全消去）」でも消えない）。
+// ----------------------------------------------------------------
+
+function userCatalogKey(kind) {
+  return `user:${kind}`;
+}
+
+export async function saveUserCatalog(kind, bytes) {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const tx  = db.transaction(STORE_CATALOGS, 'readwrite');
+    const req = tx.objectStore(STORE_CATALOGS).put({ key: userCatalogKey(kind), bytes });
+    req.onsuccess = () => resolve();
+    req.onerror   = (e) => reject(e.target.error);
+  });
+}
+
+export async function loadUserCatalogs() {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    if (!db.objectStoreNames.contains(STORE_CATALOGS)) {
+      resolve([]);
+      return;
+    }
+    const tx  = db.transaction(STORE_CATALOGS, 'readonly');
+    const req = tx.objectStore(STORE_CATALOGS).getAll();
+    req.onsuccess = (e) => resolve(
+      e.target.result.map(r => ({ kind: r.key.slice('user:'.length), bytes: r.bytes })),
+    );
+    req.onerror = (e) => reject(e.target.error);
   });
 }
 

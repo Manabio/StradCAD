@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   emptyBundle, validateBundle, bundleEntries, withEntries, bundleAliases, withAlias,
-  resolveCatalog, resolveOrigins, detectLibraryConflicts,
+  resolveCatalog, resolveOrigins, detectLibraryConflicts, mergeBundles, splitBundleByKind,
 } from './catalogBundle.js';
 
 function material(overrides) {
@@ -184,4 +184,45 @@ test('detectLibraryConflicts: 内容が完全一致なら衝突にしない', ()
   const userEntry = material();
   const conflicts = detectLibraryConflicts('material', { user: [userEntry], builtin: [builtinEntry] });
   assert.equal(conflicts.length, 0);
+});
+
+// ---- mergeBundles / splitBundleByKind（IDB種別ごとの束 ⇔ .stq単一catalogsの変換。ステップ4）----
+test('splitBundleByKind→mergeBundles: 単一の束から分割→統合するとラウンドトリップする', () => {
+  const bundle = withAlias(
+    withEntries(withEntries(emptyBundle(), 'material', [material()]), 'section', []),
+    'material', '111111111150', '102000000001',
+  );
+  const split = splitBundleByKind(bundle);
+  assert.deepEqual([...split.keys()].sort(), ['material', 'section']);
+  const merged = mergeBundles([...split.values()]);
+  assert.deepEqual(bundleEntries(merged, 'material'), [material()]);
+  assert.deepEqual(bundleEntries(merged, 'section'), []);
+  assert.deepEqual(bundleAliases(merged, 'material'), { '111111111150': '102000000001' });
+});
+
+test('splitBundleByKind: 種別ごとに1種別だけを含む束を返す（他種別のcatalogsキーを持たない）', () => {
+  const bundle = withEntries(withEntries(emptyBundle(), 'material', [material()]), 'section', [{ key: 'S1' }]);
+  const split = splitBundleByKind(bundle);
+  assert.deepEqual(Object.keys(split.get('material').catalogs), ['material']);
+  assert.deepEqual(Object.keys(split.get('section').catalogs), ['section']);
+});
+
+test('mergeBundles: 複数の束のcatalogs/aliases/encodingsを統合する（種別ごとに1つの束しか持たない前提）', () => {
+  const materialBundle = { ...emptyBundle(), catalogs: { material: [material()] }, encodings: { material: 'json' } };
+  const sectionBundle = { ...emptyBundle(), catalogs: { section: [{ key: 'S1' }] }, aliases: { section: { OLD: 'S1' } } };
+  const merged = mergeBundles([materialBundle, sectionBundle]);
+  assert.deepEqual(bundleEntries(merged, 'material'), [material()]);
+  assert.deepEqual(bundleEntries(merged, 'section'), [{ key: 'S1' }]);
+  assert.deepEqual(bundleAliases(merged, 'section'), { OLD: 'S1' });
+  assert.equal(merged.encodings.material, 'json');
+});
+
+test('mergeBundles: null/undefinedの束は無視する', () => {
+  const bundle = withEntries(emptyBundle(), 'material', [material()]);
+  const merged = mergeBundles([null, bundle, undefined]);
+  assert.deepEqual(bundleEntries(merged, 'material'), [material()]);
+});
+
+test('mergeBundles: 空配列はemptyBundleと同値', () => {
+  assert.deepEqual(mergeBundles([]), emptyBundle());
 });

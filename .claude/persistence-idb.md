@@ -17,6 +17,9 @@
 ## projectsストアの同居レコード規約
 `projects`ストアはkeyPath:projectIdの通り芯レコード本体に加え、`${projectId}:planes`（plane一覧）・`${projectId}:site`（敷地）・`${projectId}:info`（調査・計画情報＝敷地情報/建築情報ダイアログの入力値。FBSでなくUTF-8 JSON、`storage/projectInfo.js`参照）を別レコードとして同居させる。フロアと独立した建物全体データを新たに永続化する際は、新規ストアを作らずこの規約（`${projectId}:<種別名>`キー）に従う。
 
+- カタログ束の文書同梱は`${projectId}:catalogs:<kind>`（種別ごとに1レコード・`catalog/catalogBundle.js`参照）。範囲取得のため`listKinds()`ループにしない＝未知の種別も取りこぼさない。
+- ユーザーカタログライブラリ（アプリ単位・プロジェクトをまたぐ）だけは上記の規約に乗せず、専用ストア`catalogs`（keyPath:'key'、キー`user:<kind>`）に持つ。`clearAllStores`の対象外（「新規（全消去）」でも消えない）。
+
 ## floorsは「セッション作業領域」、savedFloors+projectsは「保存ドキュメント」
 `deactivate`（階切替のスワップアウト）は明示保存の有無に関わらず`floors`へ無条件で書く——`floors`単独では「未保存の編集」と「保存済みの編集」を区別できない。区別を担うのは`savedFloors`（`commitFloorsToDocument`が明示保存時のみ確定コピー）で、起動のたびに`seedFloorsFromDocument`が`savedFloors`の内容で`floors`を必ず作り直す。これにより「前回セッションで階切替を経ただけの未保存編集」は起動時に消え、「明示保存した内容だけが次回起動で復元される」という一貫した意味論になる。
 

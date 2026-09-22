@@ -230,11 +230,20 @@ const App = observer(() => {
       if (cancelled) return;
       setActiveFloorId(project.activePlaneId);
       setLockedOut(!isSessionOwner());
-      // 読込み時sweepでR17（カタログ重複登録禁止）例外が起きていればトースト表示する
-      // （2026-09-22 QA指摘B残存。materialErrorと同じ経路）。
-      if (project.catalogError) setToast({ msg: project.catalogError, key: Date.now() });
     }).catch(console.error);
-    return () => { cancelled = true; };
+    // カタログ関連の通知（読込み時sweepのR17重複登録禁止例外・overlay読込み失敗・保存時の
+    // 未解決材コード等）をトースト表示する（2026-09-22 QA指摘B残存→再QA指摘Major-D）。
+    // 起動時の1回読み（bootReady.then内の旧チェック）はこの reaction に統合した——
+    // project.catalogErrorSeq を観測することで、保存操作等により起動後にも何度でも
+    // （同一文言のメッセージが来ても毎回）発火する。fireImmediately: true により、
+    // このeffectが購読を始める前に既にエラーが立っていた場合（bootReadyが早く終わっていた等）
+    // も初回評価で拾う。
+    const disposeCatalogErrorReaction = reaction(
+      () => project.catalogErrorSeq,
+      () => { if (project.catalogError) setToast({ msg: project.catalogError, key: Date.now() }); },
+      { fireImmediately: true },
+    );
+    return () => { cancelled = true; disposeCatalogErrorReaction(); };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // モード切替: 旧モードを破棄してから新モジュールを動的ロード
