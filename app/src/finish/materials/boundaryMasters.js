@@ -31,10 +31,10 @@ export const BOUNDARY_MASTER_KIND = Object.freeze({
 });
 
 // 材コード定数（materialData.js 参照）— マスター内で使う固定材
-const SIDING_FIBER_14     = '111111111217'; // 窯業系サイディング 14mm
-const FURRING_45x15       = '111111111159'; // □-45×15 通気胴縁
-const VAPOR_PERMEABLE     = '111111111202'; // 透湿防水シート
-const AIRTIGHT_FILM       = '111111111205'; // 防湿気密フィルム
+const SIDING_FIBER_14     = '301600000001'; // 窯業系サイディング 14mm
+const FURRING_45x15       = '101400000009'; // □-45×15 通気胴縁
+const VAPOR_PERMEABLE     = '302000000002'; // 透湿防水シート
+const AIRTIGHT_FILM       = '302000000005'; // 防湿気密フィルム
 
 // ----------------------------------------------------------------
 // 外壁（片側が無名屋外）— 単一情報源。内外壁・はね出し外壁はここから導出する。

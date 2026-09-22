@@ -158,7 +158,7 @@ test('runFinishExitBoundary【ステップ2統合】: 下地材コード変更�
   const keyAfter1st = graph.wallFreshnessKey;
 
   // 2回目: 下地コードB（□-120×45。thickness 120）へ変更 → CL偏芯壁の下地帯中心が動く
-  graph.setInteriorWallBacking('111111111239');
+  graph.setInteriorWallBacking('101400000001');
   await runFinishExitBoundary(graph, project, fmode, { goingToStructure: false });
 
   const ownerAfter = ownerWallOn(graph, ym.id);
@@ -204,7 +204,7 @@ test('【失敗系・ステップ2】runFinishExitBoundary: 新中心の位置�
     labeled: false, discipline: Discipline.FUSE,
   });
 
-  graph.setInteriorWallBacking('111111111239');
+  graph.setInteriorWallBacking('101400000001');
   await runFinishExitBoundary(graph, project, fmode, { goingToStructure: false });
 
   const ownerAfter = ownerWallOn(graph, ym.id);
@@ -232,7 +232,7 @@ test('runFinishExitBoundary【ステップ3統合】: 下地材コード変更�
 
   // 下地コードを変更（□-90×45→□-120×45）して2回目脱出 → 2a壁も他の壁と同じく作り直され、
   // backingDepthが変わる（ステップ3裁定「案B」で初めて2a壁が材変更に追従できるようになった）。
-  graph.setExteriorWallBacking('111111111239'); // roomWallDimsはexteriorWallBacking由来（edgeComposition.js）
+  graph.setExteriorWallBacking('101400000001'); // roomWallDimsはexteriorWallBacking由来（edgeComposition.js）
   await runFinishExitBoundary(graph, project, fmode, { goingToStructure: false });
 
   const laneWallAfter = graph.walls.find(w => w.axisCL.id === xm.id && w.backingDepth > 0);

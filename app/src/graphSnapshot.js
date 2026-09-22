@@ -2,6 +2,7 @@ import { runInAction } from 'mobx';
 import { ShapeType, CenterLine, isGridCenterLine, HDimensionLine, VDimensionLine, DimensionAnchor, DimensionKind, DimensionSide, Room, RoomKind, RoomFeature, IndependentFooting, ExteriorFinishRow } from '@core';
 import { encode, decode } from './schema/graphFbs.js';
 import { packExtraFields, unpackExtraFields } from './structural/fieldPacking.js';
+import { applyDocumentCodeNormalization } from './catalog/codeNormalization.js';
 
 // ----------------------------------------------------------------
 // 共通: 通り芯かどうかの判定
@@ -477,6 +478,9 @@ export function restoreGraph(graph, data) {
   } else {
     snapshot = data;
   }
+  // 材コードの正規化（4.6・R7）: FlatBuffers・旧JSON文字列・plain objectの3経路が
+  // ここで合流した直後、適用の直前に1回だけ通す（undoスナップショット経路でも通るため冪等）。
+  snapshot = applyDocumentCodeNormalization(snapshot);
   applySnapshot(graph, snapshot);
 }
 

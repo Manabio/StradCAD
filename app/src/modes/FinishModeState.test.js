@@ -193,7 +193,7 @@ test('FinishModeState.init: CL偏芯のbacking===\'\'（per-floor既定を参照
 test('FinishModeState.init: CL偏芯のbackingが既知コードならmaterialErrorを立てない', async () => {
   const graph = makeSingleCellGraph();
   const cl = graph.centerLines[0];
-  graph.setCLEccentricity(cl.id, { mode: 'value', value: 0, side: 1, backing: '111111111111' });
+  graph.setCLEccentricity(cl.id, { mode: 'value', value: 0, side: 1, backing: '201000000001' }); // L-90×90×7（既知コード。ステップ3振り直し後）
   const state = new FinishModeState(graph, null);
 
   const result = await state.init();

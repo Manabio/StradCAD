@@ -144,31 +144,62 @@ export function normalizeSnapshotCodes(snapshot, table) {
 
 // ----------------------------------------------------------------
 // 文書単位の正規化表（読込み時に1回設定し、各階がデコードされるたびに適用する）。
+//
+// 文書固有の読み替え（束の aliases）はまだどこからも setDocumentCodeTable() を呼ばない
+// （束の読込み経路への接続は後続ステップ）。その段階でも本体の振り直し表
+// （LEGACY_MATERIAL_CODE_ALIASES）だけは常に効かせる——「表が未設定＝正規化しない」ではなく
+// 「表が未設定＝本体表だけで正規化する」が既定（2026-09-22 裁定）。setDocumentCodeTable(null) は
+// 文書固有の上書きを解除するだけで、本体表による正規化そのものは止めない。
 // ----------------------------------------------------------------
 let documentCodeTable = null;
+let defaultCodeTable = null; // buildCodeTable({}) の遅延キャッシュ（本体表のみ・不変）
 let unresolvedAccumulator = [];
+// 重複排除キー（code+location）の集合。同じ箇所（例: 同一フィールド名・room/edge/clEccentricityの種別）
+// が繰り返し未解決になっても単調増加させない（ステップ6の消費者が付くまでの暫定対応。
+// 2026-09-22 QAコメント: 消費者側の実装までは「どのコード・どの箇所種別が未解決か」が分かれば
+// 十分で、件数そのものに意味を持たせない）。
+let unresolvedKeys = new Set();
 
-/** 読込み時に文書の正規化表を設定する（表は消さずに持ち続ける。閉じるときは null で解除）。 */
+function unresolvedDedupeKey(u) {
+  return `${u.code}::${u.location}`;
+}
+
+function effectiveCodeTable() {
+  if (documentCodeTable) return documentCodeTable;
+  if (!defaultCodeTable) defaultCodeTable = buildCodeTable({});
+  return defaultCodeTable;
+}
+
+/** 読込み時に文書固有の正規化表を設定する（表は消さずに持ち続ける。閉じるときは null で解除）。 */
 export function setDocumentCodeTable(table) {
   documentCodeTable = table ?? null;
 }
 
-/** 現在設定されている文書の正規化表（未設定は null）。 */
+/** 現在設定されている文書固有の正規化表（未設定は null。既定＝本体表の適用有無はこの値では分からない）。 */
 export function currentCodeTable() {
   return documentCodeTable;
 }
 
-/** 現在の文書正規化表を snapshot に適用する（表が無ければ snapshot をそのまま返す）。 */
+/**
+ * 実効中の正規化表を snapshot に適用する（文書固有の表が無ければ本体表だけで正規化する）。
+ * 未解決コードは code+location（`unresolvedDedupeKey`）で重複排除して蓄積する——同じ snapshot
+ * （階）を繰り返し適用しても（undo/redo・再読込み等）蓄積が単調増加しない。
+ */
 export function applyDocumentCodeNormalization(snapshot) {
-  if (!documentCodeTable) return snapshot;
-  const { snapshot: next, unresolved } = normalizeSnapshotCodes(snapshot, documentCodeTable);
-  if (unresolved.length > 0) unresolvedAccumulator.push(...unresolved);
+  const { snapshot: next, unresolved } = normalizeSnapshotCodes(snapshot, effectiveCodeTable());
+  for (const u of unresolved) {
+    const key = unresolvedDedupeKey(u);
+    if (unresolvedKeys.has(key)) continue;
+    unresolvedKeys.add(key);
+    unresolvedAccumulator.push(u);
+  }
   return next;
 }
 
-/** これまでに蓄積した未解決コードを取り出し、蓄積をリセットする。 */
+/** これまでに蓄積した未解決コードを取り出し、蓄積（重複排除キーも含め）をリセットする。 */
 export function takeUnresolvedCodes() {
   const taken = unresolvedAccumulator;
   unresolvedAccumulator = [];
+  unresolvedKeys = new Set();
   return taken;
 }

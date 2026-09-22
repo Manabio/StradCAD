@@ -4,6 +4,7 @@ import {
   buildCodeTable, normalizeSnapshotCodes,
   setDocumentCodeTable, currentCodeTable, applyDocumentCodeNormalization, takeUnresolvedCodes,
 } from './codeNormalization.js';
+import { normalizeMaterialCode } from './legacyMaterialCodes.js';
 
 function baseSnapshot(overrides) {
   return {
@@ -137,26 +138,62 @@ test('setDocumentCodeTable/currentCodeTable/applyDocumentCodeNormalization/takeU
   setDocumentCodeTable(null); // 後始末（他テストへ影響させない）
 });
 
-test('applyDocumentCodeNormalization: 表が未設定ならsnapshotをそのまま返す', () => {
+// 2026-09-22 ステップ3裁定: 文書固有の表(aliases)が無くても、既定＝本体の振り直し表
+// （LEGACY_MATERIAL_CODE_ALIASES）だけで正規化が効く（「未設定＝正規化しない」ではない）。
+// baseSnapshot()の4コード（150/160/170/180）は本体表に実在する旧コードなので変化する。
+test('applyDocumentCodeNormalization: 文書固有表が未設定でも既定＝本体の振り直し表で正規化する', () => {
   setDocumentCodeTable(null);
   const snapshot = baseSnapshot();
+  const applied = applyDocumentCodeNormalization(snapshot);
+  assert.notEqual(applied, snapshot);
+  assert.notEqual(applied.exteriorWallBacking, '111111111150'); // 本体表に実在する旧コードは正規化される
+  assert.equal(applied.exteriorWallBacking, normalizeMaterialCode('111111111150'));
+});
+
+test('applyDocumentCodeNormalization: 本体表に無いコードのみのsnapshotはそのまま返す（本体表適用でも変化なし）', () => {
+  setDocumentCodeTable(null);
+  const snapshot = baseSnapshot({
+    exteriorWallBacking: '999999999999', interiorWallBacking: '999999999999',
+    ceilingBacking: '999999999999', floorBacking: '999999999999',
+    rooms: [], edges: [], clEccentricities: [],
+  });
   assert.equal(applyDocumentCodeNormalization(snapshot), snapshot);
 });
 
-// ---- QA指摘M3: unresolved蓄積・リセットの空振り（削除材を含む階を2回適用）----
-test('takeUnresolvedCodes: 削除材(null)を含む階を2回適用→件数≥6で全て該当コード、2回目のtakeは[]', () => {
+// ---- QA指摘M3→2026-09-22改訂: unresolvedはcode+locationで重複排除する（ステップ6の消費者が
+// 付くまで単調増加させない）。同じ形のsnapshot（同じroomId/edgeKey/clId）を繰り返し適用しても、
+// 箇所種別（location）ごとに1件しか積まれない。----
+test('takeUnresolvedCodes: 削除材(null)を含む階を2回適用→code+locationで重複排除され4件（exteriorWallBacking/room/edge/clEccentricity）、2回目のtakeは[]', () => {
   const table = buildCodeTable({ legacy: { '111111111150': null } }); // 削除・廃止
   setDocumentCodeTable(table);
   takeUnresolvedCodes(); // 前のテストの蓄積が残っていないようにリセットしておく
 
   applyDocumentCodeNormalization(baseSnapshot()); // 1階目（4箇所が'111111111150'を参照）
-  applyDocumentCodeNormalization(baseSnapshot()); // 2階目（別階の同じ形のsnapshotを想定）
+  applyDocumentCodeNormalization(baseSnapshot()); // 2階目相当（同じ形のsnapshotを再適用）
 
   const taken = takeUnresolvedCodes();
-  assert.ok(taken.length >= 6, `unresolvedの件数が想定より少ない: ${taken.length}`);
+  assert.equal(taken.length, 4, `重複排除後の件数が想定と異なる: ${taken.length}`);
   assert.ok(taken.every(u => u.code === '111111111150'), '該当コード以外が混入している');
+  assert.deepEqual(
+    taken.map(u => u.location).sort(),
+    ['clEccentricity', 'edge', 'exteriorWallBacking', 'room'],
+  );
 
   assert.deepEqual(takeUnresolvedCodes(), []); // 取り出し後はリセットされ、2回目は空
+
+  setDocumentCodeTable(null); // 後始末
+});
+
+// ---- 2026-09-22 QAコメント: 同じsnapshotを50回適用しても件数が増えない（単調増加させない）----
+test('applyDocumentCodeNormalization: 同じ削除材参照のsnapshotを50回適用しても未解決の蓄積件数が増えない', () => {
+  const table = buildCodeTable({ legacy: { '111111111150': null } });
+  setDocumentCodeTable(table);
+  takeUnresolvedCodes(); // リセット
+
+  for (let i = 0; i < 50; i++) applyDocumentCodeNormalization(baseSnapshot());
+
+  const taken = takeUnresolvedCodes();
+  assert.equal(taken.length, 4, `50回適用しても4件（location種別ごと）から増えないはず: ${taken.length}`);
 
   setDocumentCodeTable(null); // 後始末
 });

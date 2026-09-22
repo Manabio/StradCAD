@@ -397,8 +397,8 @@ test('refreshWallsAllFloors: 在来木造へ切替えると下地材コードが
 
   await refreshWallsAllFloors(project, { pushUndo: false });
 
-  assert.equal(graph.exteriorWallBacking, '111111111240', '柱120角×30（柱同寸×30）の材コード');
-  assert.equal(graph.interiorWallBacking, '111111111240');
+  assert.equal(graph.exteriorWallBacking, '101400000002', '柱120角×30（柱同寸×30）の材コード');
+  assert.equal(graph.interiorWallBacking, '101400000002');
   // 単室のみのフィクスチャでは全周が外壁になり、対称壁（backingOffset未指定）は
   // backingDepth が明示されない（Wall.backingRangeのフォールバック式で導出される）ため、
   // backingRange（下地帯の実範囲）の幅で壁厚を確認する。

@@ -8,14 +8,14 @@ import { ERR_CATALOG_DUPLICATE } from '../error.js';
 
 function material(overrides) {
   return {
-    code: '111111111165', name: 'せっこうボード t=9.5', spec: 'JIS A 6901', x: 0, y: 0, thickness: 9.5, note: '', category: 'panel',
+    code: '301000000001', name: 'せっこうボード t=9.5', spec: 'JIS A 6901', x: 0, y: 0, thickness: 9.5, note: '', category: 'panel',
     ...overrides,
   };
 }
 
 // ---- overlay空 ----
 test('composeCatalog: overlay空のとき new Map(builtin.map(e => [keyOf(e), e])) と同じもの（コピー・凍結・ラップしない）', () => {
-  const builtin = [material(), material({ code: '111111111166', name: '別材' })];
+  const builtin = [material(), material({ code: '301000000002', name: '別材' })];
   const map = composeCatalog('material', builtin);
   const expected = new Map(builtin.map(e => [e.code, e]));
   assert.equal(map.size, expected.size);
@@ -31,7 +31,7 @@ test('composeCatalog: overlay空のときエントリの参照はbuiltin配列�
 });
 
 test('composeList: overlay空ならbuiltinと同じ要素・同じ順序', () => {
-  const builtin = [material({ code: '111111111165' }), material({ code: '111111111166', name: 'B' }), material({ code: '111111111167', name: 'C' })];
+  const builtin = [material({ code: '301000000001' }), material({ code: '301000000002', name: 'B' }), material({ code: '301000000003', name: 'C' })];
   const list = composeList('material', builtin);
   assert.deepEqual(list, builtin);
   for (let i = 0; i < builtin.length; i++) assert.equal(list[i], builtin[i]); // === 同一性・同順序
@@ -49,14 +49,14 @@ test('originOf: 未知のキーはnull', () => {
 
 // ---- R17 合成後の強制（裁定A）: overlay空でもbuiltin自身が重複していれば検出する ----
 test('【失敗系】composeCatalog: builtin同士がdedupeFields完全一致（category違いも含む）なら例外', () => {
-  const a = material({ code: '111111111165', category: 'panel' });
-  const b = material({ code: '111111111166', category: 'backing' }); // 5項目一致・categoryだけ違う
+  const a = material({ code: '301000000001', category: 'panel' });
+  const b = material({ code: '301000000002', category: 'backing' }); // 5項目一致・categoryだけ違う
   assert.throws(() => composeCatalog('material', [a, b]), /既に登録されています/);
 });
 
 test('【失敗系】composeList: builtin同士がdedupeFields完全一致なら例外', () => {
-  const a = material({ code: '111111111165', category: 'panel' });
-  const b = material({ code: '111111111166', category: 'backing' });
+  const a = material({ code: '301000000001', category: 'panel' });
+  const b = material({ code: '301000000002', category: 'backing' });
   assert.throws(() => composeList('material', [a, b]), /既に登録されています/);
 });
 
@@ -69,8 +69,8 @@ test('composeCatalog/composeList: dedupeFieldsを持たない種別（section）
 
 // ---- 2026-09-22 QA指摘B/C: R17例外の.codeと文言（出所つき） ----
 test('【失敗系・2026-09-22 QA指摘B】composeCatalog: R17例外は.code=ERR_CATALOG_DUPLICATEを持つ', () => {
-  const a = material({ code: '111111111165', category: 'panel' });
-  const b = material({ code: '111111111166', category: 'backing' });
+  const a = material({ code: '301000000001', category: 'panel' });
+  const b = material({ code: '301000000002', category: 'backing' });
   try {
     composeCatalog('material', [a, b]);
     assert.fail('例外が投げられなかった');
@@ -90,8 +90,8 @@ test('【2026-09-22 QA指摘C】composeCatalog: R17例外メッセージは両�
 
 // ---- 2026-09-22 QA指摘・Minor: originOfもR17検査を掛けて挙動を揃える ----
 test('【失敗系・2026-09-22 QA指摘・Minor】originOf: builtin同士がdedupeFields完全一致なら例外（composeCatalog/composeListと挙動を揃える）', () => {
-  const a = material({ code: '111111111165', category: 'panel' });
-  const b = material({ code: '111111111166', category: 'backing' });
+  const a = material({ code: '301000000001', category: 'panel' });
+  const b = material({ code: '301000000002', category: 'backing' });
   assert.throws(() => originOf('material', a.code, [a, b]), /既に登録されています/);
 });
 

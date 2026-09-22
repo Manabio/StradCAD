@@ -9,8 +9,10 @@ import { valuesEqual, matchByContent } from './catalogMatch.js';
 import { withEntries, emptyBundle, validateBundle, resolveCatalog } from './catalogBundle.js';
 import { MATERIALS } from '../finish/materials/materialData.js';
 
-test('MATERIALS: 132件（旧132件・振り直しはステップ3）', () => {
-  assert.equal(MATERIALS.length, 132);
+// ステップ3（2026-09-22）で振り直し済み。旧132件のうち廃止・削除2件（アスファルトプライマー・
+// 吸音テックス用捨て糊。legacyMaterialCodes.js の REMOVED_MATERIALS）を除いた130件。
+test('MATERIALS: 130件（旧132件−廃止・削除2件。振り直し済み・新体系）', () => {
+  assert.equal(MATERIALS.length, 130);
 });
 
 test('MATERIALS: 全件がmaterial.validateを通る', () => {

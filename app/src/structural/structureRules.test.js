@@ -286,7 +286,7 @@ test('【失敗系】structureRules: 未指定（\'未定\'）・未知の主構
 test('structureRules: 壁下地材ルールは材コード集合（backingClass.js）の分類で引ける', () => {
   assert.equal(backingClassOf(RC_WALL_BACKING_CODES[0]), BackingClass.RC);
   assert.equal(backingClassOf(WOOD_WALL_BACKING_CODES[0]), BackingClass.WOOD);
-  assert.equal(backingClassOf('111111111134'), BackingClass.OTHER, '軽鉄スタッドは other');
+  assert.equal(backingClassOf('201200000001'), BackingClass.OTHER, '軽鉄スタッドは other');
   assert.equal(backingClassOf(undefined), BackingClass.OTHER);
   assert.equal(backingRulesFor(BackingClass.RC).beamAxisSource, true, 'RC壁下地だけが梁芯の生成源');
   assert.equal(backingRulesFor(BackingClass.WOOD).beamAxisSource, false);

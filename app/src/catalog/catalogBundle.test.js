@@ -7,7 +7,7 @@ import {
 
 function material(overrides) {
   return {
-    code: '111111111165', name: 'せっこうボード t=9.5', spec: 'JIS A 6901', x: 0, y: 0, thickness: 9.5, note: '', category: 'panel',
+    code: '301000000001', name: 'せっこうボード t=9.5', spec: 'JIS A 6901', x: 0, y: 0, thickness: 9.5, note: '', category: 'panel',
     ...overrides,
   };
 }
@@ -41,7 +41,7 @@ test('【失敗系】validateBundle: 型違い（エントリ内部）は例外'
 });
 
 test('【失敗系】validateBundle: 必須欠落は例外', () => {
-  const bundle = withEntries(emptyBundle(), 'material', [{ code: '111111111165' }]);
+  const bundle = withEntries(emptyBundle(), 'material', [{ code: '301000000001' }]);
   assert.throws(() => validateBundle(bundle), /必須項目が欠落/);
 });
 
@@ -51,8 +51,8 @@ test('【失敗系】validateBundle: キー重複は例外', () => {
 });
 
 test('【失敗系】validateBundle: dedupeFields重複（R17・category違いも不可）は例外', () => {
-  const a = material({ code: '111111111165', category: 'panel' });
-  const b = material({ code: '111111111166', category: 'backing' }); // 5項目同一・categoryだけ違う
+  const a = material({ code: '301000000001', category: 'panel' });
+  const b = material({ code: '301000000002', category: 'backing' }); // 5項目同一・categoryだけ違う
   const bundle = withEntries(emptyBundle(), 'material', [a, b]);
   assert.throws(() => validateBundle(bundle), /内容が重複/);
 });
@@ -76,12 +76,12 @@ test('【失敗系・積み残し2026-09-22】validateBundle: openingSubTypeのa
 });
 
 test('【失敗系・積み残し2026-09-22】validateBundle: materialのaliasesが12桁コード形式でなければ例外', () => {
-  const bundle = { ...emptyBundle(), aliases: { material: { 'not-a-code': '111111111165' } } };
+  const bundle = { ...emptyBundle(), aliases: { material: { 'not-a-code': '301000000001' } } };
   assert.throws(() => validateBundle(bundle), /キー（コード）が不正/);
 });
 
 test('積み残し2026-09-22: validateBundle: aliasesのtoがnull（廃止）ならfromのキー形式だけ検査する', () => {
-  const bundle = { ...emptyBundle(), aliases: { material: { '111111111165': null } } };
+  const bundle = { ...emptyBundle(), aliases: { material: { '301000000001': null } } };
   assert.equal(validateBundle(bundle), true);
 });
 
@@ -99,9 +99,9 @@ test('bundleEntries/withEntries: 非破壊（元の束は変わらない）', ()
 
 test('bundleAliases/withAlias: 非破壊で1件追記できる', () => {
   const base = emptyBundle();
-  const next = withAlias(base, 'material', '999999999999', '111111111165');
+  const next = withAlias(base, 'material', '999999999999', '301000000001');
   assert.deepEqual(bundleAliases(base, 'material'), {});
-  assert.deepEqual(bundleAliases(next, 'material'), { '999999999999': '111111111165' });
+  assert.deepEqual(bundleAliases(next, 'material'), { '999999999999': '301000000001' });
 });
 
 // ---- 解決順（doc>user>builtin）と同一性 ----

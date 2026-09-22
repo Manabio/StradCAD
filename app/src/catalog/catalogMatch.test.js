@@ -9,7 +9,7 @@ import { ERR_CATALOG_DUPLICATE } from '../error.js';
 
 function material(overrides) {
   return {
-    code: '111111111165', name: 'せっこうボード t=9.5', spec: 'JIS A 6901', x: 0, y: 0, thickness: 9.5, note: '', category: 'panel',
+    code: '301000000001', name: 'せっこうボード t=9.5', spec: 'JIS A 6901', x: 0, y: 0, thickness: 9.5, note: '', category: 'panel',
     ...overrides,
   };
 }
@@ -179,7 +179,7 @@ test('matchByContent: 何も一致しなければ空配列（全滅=追加）。
 });
 
 test('matchByContent: 内装マスターは完全一致のみ（1項目違えば見つからない＝段を外さない）', () => {
-  const base = { key: 'LIVING_ROOM', label: '居室', wallMaterial: '111111111166', wallFinish: '111111111201', ceilingHeight: 2700 };
+  const base = { key: 'LIVING_ROOM', label: '居室', wallMaterial: '301000000002', wallFinish: '302000000001', ceilingHeight: 2700 };
   const target = { ...base, key: 'X', ceilingHeight: 2400 }; // ceilingHeightだけ違う
   const result = matchByContent('interiorMaster', target, [base]);
   assert.equal(result.hits.length, 0);
@@ -203,10 +203,10 @@ test('matchByContent: 境界マスターはderivedFromが違うと完全一致�
 // ---- 候補の順位（同段複数）----
 test('rankCandidates: builtin優先 → 数値差が小さい順 → キー昇順', () => {
   const target = material({ code: '999999999999', thickness: 10 });
-  const closeUser    = material({ code: '111111111200', thickness: 9,  category: undefined }); // 数値差1・user
-  const farBuiltin    = material({ code: '111111111100', thickness: 20, category: undefined }); // 数値差10・builtin
-  const closeBuiltinA = material({ code: '111111111300', thickness: 11, category: undefined }); // 数値差1・builtin
-  const closeBuiltinB = material({ code: '111111111050', thickness: 9,  category: undefined }); // 数値差1・builtin・キーが小さい
+  const closeUser    = material({ code: '301000000020', thickness: 9,  category: undefined }); // 数値差1・user
+  const farBuiltin    = material({ code: '301000000040', thickness: 20, category: undefined }); // 数値差10・builtin
+  const closeBuiltinA = material({ code: '301000000030', thickness: 11, category: undefined }); // 数値差1・builtin
+  const closeBuiltinB = material({ code: '301000000005', thickness: 9,  category: undefined }); // 数値差1・builtin・キーが小さい
   const origins = new Map([
     [closeUser.code, 'user'], [farBuiltin.code, 'builtin'],
     [closeBuiltinA.code, 'builtin'], [closeBuiltinB.code, 'builtin'],
@@ -269,25 +269,25 @@ test('classifyIncoming: idが一致し内容が違うがspec差のみ → adopt-
 });
 
 test('classifyIncoming: idは不一致だが内容が完全一致 → alias自動（承認不要）', () => {
-  const existing = material({ code: '111111111165' });
+  const existing = material({ code: '301000000001' });
   const docEntry = material({ code: '999999999999' }); // 5項目は同じ、codeだけ違う
   const result = classifyIncoming('material', docEntry, [existing], new Map());
   assert.equal(result.action, 'alias');
   assert.equal(result.from, '999999999999');
-  assert.equal(result.to, '111111111165');
+  assert.equal(result.to, '301000000001');
 });
 
 test('classifyIncoming: idは不一致・部分一致（2-1〜2-4段） → propose（候補付き・承認UI行き）', () => {
-  const existing = material({ code: '111111111165' });
+  const existing = material({ code: '301000000001' });
   const docEntry = material({ code: '999999999999', thickness: 15 }); // thicknessだけ違う=段1
   const result = classifyIncoming('material', docEntry, [existing], new Map());
   assert.equal(result.action, 'propose');
   assert.equal(result.candidates.length, 1);
-  assert.equal(result.candidates[0].code, '111111111165');
+  assert.equal(result.candidates[0].code, '301000000001');
 });
 
 test('classifyIncoming: 何も一致しない → add', () => {
-  const existing = material({ code: '111111111165' });
+  const existing = material({ code: '301000000001' });
   const docEntry = material({ code: '999999999999', name: '無関係の材' });
   const result = classifyIncoming('material', docEntry, [existing], new Map());
   assert.equal(result.action, 'add');
@@ -295,8 +295,8 @@ test('classifyIncoming: 何も一致しない → add', () => {
 });
 
 test('classifyIncoming: 内装マスターは1項目違えばpropose/aliasではなくadd（完全一致のみ）', () => {
-  const existing = { key: 'LIVING_ROOM', label: '居室', wallMaterial: '111111111166', wallFinish: '111111111201', ceilingHeight: 2700 };
-  const docEntry = { key: 'DOC_ROOM', label: '居室(文書)', wallMaterial: '111111111166', wallFinish: '111111111201', ceilingHeight: 2400 };
+  const existing = { key: 'LIVING_ROOM', label: '居室', wallMaterial: '301000000002', wallFinish: '302000000001', ceilingHeight: 2700 };
+  const docEntry = { key: 'DOC_ROOM', label: '居室(文書)', wallMaterial: '301000000002', wallFinish: '302000000001', ceilingHeight: 2400 };
   const result = classifyIncoming('interiorMaster', docEntry, [existing], new Map());
   assert.equal(result.action, 'add');
 });
@@ -327,14 +327,14 @@ test('classifyIncoming(openingSubType): fitting/windowで同じkeyでも複合�
 
 // ---- R17: 重複登録の禁止 ----
 test('assertNoDuplicate: 5項目一致（categoryが違っても）は例外を投げる', () => {
-  const entries = [material({ code: '111111111165', category: 'panel' })];
+  const entries = [material({ code: '301000000001', category: 'panel' })];
   const incoming = material({ code: '999999999999', category: 'backing' });
   assert.throws(() => assertNoDuplicate('material', incoming, entries), /既に登録されています/);
 });
 
 // ---- 2026-09-22 QA指摘B/C: R17例外の.codeと文言（両方のキー＋名称） ----
 test('【失敗系・2026-09-22 QA指摘B】assertNoDuplicate: 投げるErrorは.code=ERR_CATALOG_DUPLICATEを持つ（wallRefresh.jsが握りつぶさず再throwする判別に使う）', () => {
-  const entries = [material({ code: '111111111165' })];
+  const entries = [material({ code: '301000000001' })];
   const incoming = material({ code: '999999999999' });
   try {
     assertNoDuplicate('material', incoming, entries);
@@ -345,11 +345,11 @@ test('【失敗系・2026-09-22 QA指摘B】assertNoDuplicate: 投げるErrorは
 });
 
 test('【2026-09-22 QA指摘C】assertNoDuplicate: 例外メッセージは両方のキー＋名称(name)を含む', () => {
-  const entries = [material({ code: '111111111165', name: 'せっこうボード t=12.5' })];
+  const entries = [material({ code: '301000000001', name: 'せっこうボード t=12.5' })];
   const incoming = material({ code: '999999999999', name: 'せっこうボード t=12.5' });
   assert.throws(
     () => assertNoDuplicate('material', incoming, entries),
-    /111111111165（せっこうボード t=12\.5）.*⇔.*999999999999（せっこうボード t=12\.5）/,
+    /301000000001（せっこうボード t=12\.5）.*⇔.*999999999999（せっこうボード t=12\.5）/,
   );
 });
 
@@ -366,7 +366,7 @@ test('formatDuplicateError: origins を渡すと出所(doc/user/builtin)も併�
 
 test('formatDuplicateError: originsを渡さなければ出所なしの文言になる', () => {
   const def = kindDef('material');
-  const a = material({ code: '111111111165' });
+  const a = material({ code: '301000000001' });
   const b = material({ code: '999999999999' });
   const err = formatDuplicateError('material', def, a, b);
   assert.doesNotMatch(err.message, /・builtin|・doc|・user/);
@@ -374,36 +374,36 @@ test('formatDuplicateError: originsを渡さなければ出所なしの文言に
 
 test('【失敗系・2026-09-22 QA指摘・Minor】formatDuplicateError: 名称・出所ともに無ければ括弧ごと省く（二重括弧「（（名称なし））」にしない）', () => {
   const def = kindDef('material');
-  const a = material({ code: '111111111165', name: '' });
+  const a = material({ code: '301000000001', name: '' });
   const b = material({ code: '999999999999', name: '' });
   const err = formatDuplicateError('material', def, a, b); // originsも渡さない
-  assert.ok(err.message.includes('111111111165 ⇔ 999999999999'), `括弧なしでキーだけが出る想定: ${err.message}`);
-  assert.doesNotMatch(err.message, /111111111165（|999999999999（/); // 各キーの直後に括弧が続かない
+  assert.ok(err.message.includes('301000000001 ⇔ 999999999999'), `括弧なしでキーだけが出る想定: ${err.message}`);
+  assert.doesNotMatch(err.message, /301000000001（|999999999999（/); // 各キーの直後に括弧が続かない
   assert.doesNotMatch(err.message, /名称なし/);
 });
 
 test('formatDuplicateError: 名称が空でも出所があれば出所だけを括弧内に出す（二重括弧にしない）', () => {
   const def = kindDef('material');
-  const a = material({ code: '111111111165', name: '' });
+  const a = material({ code: '301000000001', name: '' });
   const b = material({ code: '999999999999', name: '' });
   const origins = new Map([[a.code, 'builtin'], [b.code, 'doc']]);
   const err = formatDuplicateError('material', def, a, b, origins);
-  assert.match(err.message, /111111111165（builtin）/);
+  assert.match(err.message, /301000000001（builtin）/);
   assert.match(err.message, /999999999999（doc）/);
   assert.doesNotMatch(err.message, /（（/);
 });
 
 test('assertNoDuplicate: 同一キーのエントリ自身は重複扱いにしない（Minor指摘）', () => {
-  const self = material({ code: '111111111165' });
+  const self = material({ code: '301000000001' });
   const entries = [self]; // リストに自分自身が既に含まれる状態（編集時の再検証を想定）
   assert.doesNotThrow(() => assertNoDuplicate('material', self, entries));
   // 内容が同一の「別オブジェクト・同じキー」も自己とみなして弾かない
-  const sameKeyClone = material({ code: '111111111165' });
+  const sameKeyClone = material({ code: '301000000001' });
   assert.doesNotThrow(() => assertNoDuplicate('material', sameKeyClone, entries));
 });
 
 test('assertNoDuplicate: 1項目でも違えば通す', () => {
-  const entries = [material({ code: '111111111165' })];
+  const entries = [material({ code: '301000000001' })];
   const incoming = material({ code: '999999999999', thickness: 12 });
   assert.doesNotThrow(() => assertNoDuplicate('material', incoming, entries));
 });

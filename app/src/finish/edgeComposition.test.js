@@ -21,7 +21,7 @@ test('materialThickness: RC壁下地3件はそれぞれ thickness(150/180/200) �
 
 // ---- 既存挙動の回帰固定: 木・鋼下地はx/yの大きい方のまま ----
 test('materialThickness: 既存の木・鋼下地（thickness:null）は従来どおり断面の大きい辺を返す（回帰固定）', () => {
-  const stud = findMaterial('111111111157'); // □-60×45
+  const stud = findMaterial('101400000007'); // □-60×45
   assert.equal(stud.thickness, null, '既存下地材はthickness:nullであることが前提');
   assert.equal(materialThickness(stud), 60);
 });

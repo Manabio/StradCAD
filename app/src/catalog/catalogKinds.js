@@ -72,6 +72,12 @@ export const MATERIAL_CLASSES = Object.freeze({
     label: '塗装',
     minors: Object.freeze({ 10: '塗料', 12: '防水' }),
   }),
+  // 暫定分類（2026-09-22 ステップ3・R6追補）。後日RC造図面で構造材へ昇格予定——
+  // 現状は仕上げモードの下地材（材データのcategory:'backing'）としてのみ扱う。
+  50: Object.freeze({
+    label: 'コンクリート',
+    minors: Object.freeze({ 10: 'RC壁' }),
+  }),
 });
 
 /** 大分類・中分類の数値 → {major,majorLabel,minor,minorLabel}。未定義の組合せは null。 */

@@ -6,11 +6,11 @@ const sampleBundle = {
   version: 1,
   catalogs: {
     material: [
-      { code: '111111111165', name: 'せっこうボード', spec: 'JIS A 6901', x: 0, y: 0, thickness: 9.5, note: '備考', category: 'panel' },
+      { code: '301000000001', name: 'せっこうボード', spec: 'JIS A 6901', x: 0, y: 0, thickness: 9.5, note: '備考', category: 'panel' },
     ],
   },
   encodings: { material: 'json' },
-  aliases: { material: { '999999999999': '111111111165' } },
+  aliases: { material: { '999999999999': '301000000001' } },
 };
 
 test('encodeCatalogBundle→decodeCatalogBundle: ラウンドトリップする', () => {
@@ -22,7 +22,7 @@ test('decodeCatalogBundle: 未知の種別・未知の項目は往復で保持�
   const bundle = {
     version: 1,
     catalogs: {
-      material: [{ code: '111111111165', name: 'x', 未来の項目: 'keep-me' }],
+      material: [{ code: '301000000001', name: 'x', 未来の項目: 'keep-me' }],
       未来の種別: [{ key: 'a', label: 'b' }],
     },
     encodings: {},

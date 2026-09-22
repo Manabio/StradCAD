@@ -71,7 +71,7 @@ test('【失敗系・積み残し2026-09-22】openingSubType.keyOf: category/key
 });
 
 test('material/section/interiorMaster/boundaryMaster.keyOf: 単一フィールド', () => {
-  assert.equal(kindDef('material').keyOf({ code: '111111111165' }), '111111111165');
+  assert.equal(kindDef('material').keyOf({ code: '301000000001' }), '301000000001');
   assert.equal(kindDef('section').keyOf({ key: 'WOOD-90x90' }), 'WOOD-90x90');
   assert.equal(kindDef('interiorMaster').keyOf({ key: 'LIVING_ROOM' }), 'LIVING_ROOM');
   assert.equal(kindDef('boundaryMaster').keyOf({ key: 'EXTERIOR_WALL' }), 'EXTERIOR_WALL');
@@ -96,7 +96,7 @@ test('openingSubType.matchFields: category,mechanism,機構パラメータ,wallK
 
 // ---- parseKey（keyOfの逆変換。積み残し2026-09-22。ステップ6でOpening.subTypeへ戻すのに使う予定）----
 test('【積み残し2026-09-22】material.parseKey: 12桁コードを{code}へ戻す', () => {
-  assert.deepEqual(kindDef('material').parseKey('111111111165'), { code: '111111111165' });
+  assert.deepEqual(kindDef('material').parseKey('301000000001'), { code: '301000000001' });
 });
 
 test('【失敗系・積み残し2026-09-22】material.parseKey: 12桁数字でなければ例外を投げる', () => {
@@ -152,17 +152,18 @@ test('classOf: 未知の大分類・中分類はnull', () => {
   assert.equal(classOf(99, 10), null);
 });
 
+test('classOf: 50コンクリート/10RC壁（暫定分類・ステップ3追加）', () => {
+  assert.deepEqual(classOf(50, 10), { major: 50, majorLabel: 'コンクリート', minor: 10, minorLabel: 'RC壁' });
+});
+
 test('MATERIAL_CLASSES: 中分類は全大分類で10始まりの2刻み・11欠番（R6の分類表そのまま）', () => {
   assert.equal(MATERIAL_CLASSES[11], undefined);
-  assert.equal(Object.keys(MATERIAL_CLASSES).length, 4);
+  assert.equal(Object.keys(MATERIAL_CLASSES).length, 5);
 });
 
 // QA指摘M6: 中分類全件をclassOfで固定する（保存データに焼き付く数値のため）。
-// 注記: QA指摘は「19個」としているが、設計書（2026-09-22 QA後の追加裁定）に記載の分類表
-// （RC壁50/10は「ステップ3で表に追加」と明記＝ステップ1ではまだ表に無い）から数えると
-// 3(木材)+4(鋼材)+9(その他建材)+2(塗装)=18個。ステップ1では表に無い数値を憶測で追加せず、
-// 現在の設計書どおり18個を固定する。19個との食い違いはコーディネーターへ報告する。
-test('MATERIAL_CLASSES: 中分類18個全件をclassOfで固定する（保存データに焼き付く数値）', () => {
+// ステップ3（2026-09-22）でコンクリート/RC壁（50/10）を分類表へ追加し、19個になった。
+test('MATERIAL_CLASSES: 中分類19個全件をclassOfで固定する（保存データに焼き付く数値）', () => {
   const expected = [
     [10, 10, '木材', '正角材'], [10, 12, '木材', '面材'], [10, 14, '木材', '線材'],
     [20, 10, '鋼材', '構造材'], [20, 12, '鋼材', '軽量鉄骨'], [20, 14, '鋼材', '鉄筋'], [20, 16, '鋼材', 'デッキプレート'],
@@ -170,26 +171,27 @@ test('MATERIAL_CLASSES: 中分類18個全件をclassOfで固定する（保存�
     [30, 16, 'その他建材', 'サイディング'], [30, 18, 'その他建材', '床仕上げ'], [30, 20, 'その他建材', 'シート'],
     [30, 22, 'その他建材', '断熱'], [30, 24, 'その他建材', '左官'], [30, 26, 'その他建材', '石工'],
     [40, 10, '塗装', '塗料'], [40, 12, '塗装', '防水'],
+    [50, 10, 'コンクリート', 'RC壁'],
   ];
-  assert.equal(expected.length, 18);
+  assert.equal(expected.length, 19);
   for (const [major, minor, majorLabel, minorLabel] of expected) {
     assert.deepEqual(classOf(major, minor), { major, majorLabel, minor, minorLabel });
   }
   // MATERIAL_CLASSESの実体からも同じ総数が出ることを確認（表の変更に追随して壊れる形にする）
   const totalFromTable = Object.values(MATERIAL_CLASSES)
     .reduce((sum, majorClass) => sum + Object.keys(majorClass.minors).length, 0);
-  assert.equal(totalFromTable, 18);
+  assert.equal(totalFromTable, 19);
 });
 
 // ---- validate（型違い・必須欠落の失敗路）----
 test('material.validate: 正常なエントリは例外を投げない', () => {
   assert.doesNotThrow(() => kindDef('material').validate({
-    code: '111111111165', name: 'せっこうボード', spec: 'JIS A 6901', x: 0, y: 0, thickness: 9.5, note: '', category: 'panel',
+    code: '301000000001', name: 'せっこうボード', spec: 'JIS A 6901', x: 0, y: 0, thickness: 9.5, note: '', category: 'panel',
   }));
 });
 
 test('【失敗系】material.validate: 必須項目(name)欠落は例外を投げる', () => {
-  assert.throws(() => kindDef('material').validate({ code: '111111111165' }), /必須項目が欠落/);
+  assert.throws(() => kindDef('material').validate({ code: '301000000001' }), /必須項目が欠落/);
 });
 
 test('【失敗系】material.validate: codeが12桁数字でなければ例外を投げる', () => {
@@ -203,7 +205,7 @@ test('【失敗系】material.validate: 型違い（xが文字列）は例外を
 
 // QA指摘・Minor（4.5-2）: 未設定はnull・省略は不可。spec/x/y/thicknessの省略を弾く。
 function fullMaterial(overrides) {
-  return { code: '111111111165', name: 'x', spec: 'JIS A 6901', x: 0, y: 0, thickness: 9.5, ...overrides };
+  return { code: '301000000001', name: 'x', spec: 'JIS A 6901', x: 0, y: 0, thickness: 9.5, ...overrides };
 }
 
 test('【失敗系】material.validate: spec省略（undefined）は例外を投げる（nullは許容しない＝4.5-2はthicknessのみnull許容）', () => {
@@ -258,7 +260,7 @@ test('【失敗系】openingSubType.validate: category不正（fitting/window以
 
 test('interiorMaster.validate: 正常系', () => {
   assert.doesNotThrow(() => kindDef('interiorMaster').validate({
-    key: 'LIVING_ROOM', label: '居室', wallMaterial: '111111111166', wallFinish: '111111111201', ceilingHeight: 2700,
+    key: 'LIVING_ROOM', label: '居室', wallMaterial: '301000000002', wallFinish: '302000000001', ceilingHeight: 2700,
   }));
 });
 

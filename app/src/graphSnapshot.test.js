@@ -6,6 +6,7 @@ import {
   serializeSite, decodeSite, restoreSite,
 } from './graphSnapshot.js';
 import { editSiteLineLength } from './transform/siteEdit.js';
+import { decode } from './schema/graphFbs.js';
 
 // wallBeamAxes.test.js と同じ方針: ダックタイピングでは effectiveValue 等の実挙動を
 // 再現できないため、実 core.js（Plane/PlanGraph）を使う。
@@ -891,4 +892,60 @@ test('graph.beamColumnWidthMm は非永続——encode→decode（restoreGraph�
 
   assert.equal(restored.beamColumnWidthMm, null,
     'beamColumnWidthMmがFlatBuffers往復で復元されている（非永続フィールドのはずが永続化されてしまっている）');
+});
+
+// ----------------------------------------------------------------
+// 材コードの正規化（4.6・R7・ステップ3b）: restoreGraph は3経路
+// （FlatBuffersバイト列・旧JSON文字列・plain object）のどこから来た snapshot でも
+// applyDocumentCodeNormalization を1回通す。対象4箇所（*_BACKING・rooms[].overrides・
+// edges[].overrides・clEccentricities[].backing）が旧コードから新コードへ変わることを確認する。
+// ----------------------------------------------------------------
+test('restoreGraph: 旧材コードは3経路（FlatBuffersバイト列・旧JSON文字列・plain object）すべてで新コードに正規化される', () => {
+  const graph = makeGraph();
+  graph.setExteriorWallBacking('111111111150'); // → 201200000017（振れ止め-25×10）
+  graph.setInteriorWallBacking('111111111160'); // → 101400000010（□-45×30）
+  graph.setCeilingBacking('111111111170');      // → 301000000006（強化せっこうボード t=15）
+  graph.setFloorBacking('111111111180');        // → 101200000008（構造用合板 t=12）
+
+  const x0 = graph.addCenterLine(CenterLineType.VERTICAL,   0,    { labeled: false, discipline: Discipline.ARCH });
+  const x1 = graph.addCenterLine(CenterLineType.VERTICAL,   3000, { labeled: false, discipline: Discipline.ARCH });
+  const y0 = graph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: false, discipline: Discipline.ARCH });
+  const y1 = graph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: false, discipline: Discipline.ARCH });
+  const roomKey = `${x0.id}:${y0.id}:${x1.id}:${y1.id}`;
+  const room = graph.addRoom(new Set([roomKey]), '部屋A');
+  room.setOverride('wallMaterial', '111111111165'); // → 301000000001（せっこうボード t=9.5）
+
+  const edge = graph.addEdge('e1');
+  edge.setOverride('wallFinish', '111111111166'); // → 301000000002（せっこうボード t=12.5）
+
+  graph.setCLEccentricity(y0.id, { mode: 'value', value: 0, side: 1, backing: '111111111157' }); // → 101400000007（□-60×45）
+
+  const bytes = serializeGraph(graph);
+  const snapshotObj = decode(bytes); // plain object 経路・JSON文字列経路の元ネタ（デコード済みの完全なsnapshot形）
+  const jsonStr = JSON.stringify(snapshotObj);
+
+  const paths = [
+    ['FlatBuffersバイト列', bytes],
+    ['旧JSON文字列', jsonStr],
+    ['plain object', snapshotObj],
+  ];
+  for (const [label, data] of paths) {
+    const restored = makeGraph();
+    restoreGraph(restored, data);
+
+    assert.equal(restored.exteriorWallBacking, '201200000017', `${label}: exteriorWallBacking`);
+    assert.equal(restored.interiorWallBacking, '101400000010', `${label}: interiorWallBacking`);
+    assert.equal(restored.ceilingBacking,      '301000000006', `${label}: ceilingBacking`);
+    assert.equal(restored.floorBacking,        '101200000008', `${label}: floorBacking`);
+
+    const r2 = restored.roomMap.get(room.id);
+    assert.ok(r2, `${label}: 部屋が復元されている`);
+    assert.equal(r2.customOverrides.get('wallMaterial'), '301000000001', `${label}: rooms[].overrides`);
+
+    const e2 = restored.getEdge('e1');
+    assert.ok(e2, `${label}: エッジが復元されている`);
+    assert.equal(e2.overrides.get('wallFinish'), '301000000002', `${label}: edges[].overrides`);
+
+    assert.equal(restored.clEccentricities.get(y0.id)?.backing, '101400000007', `${label}: clEccentricities[].backing`);
+  }
 });

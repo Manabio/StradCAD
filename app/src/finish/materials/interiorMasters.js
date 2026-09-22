@@ -19,15 +19,15 @@ export const INTERIOR_MASTERS = Object.freeze({
   // 居室
   LIVING_ROOM: Object.freeze({
     label:         '居室',
-    wallMaterial:  '111111111166', // せっこうボード t=12.5
-    wallFinish:    '111111111201', // ビニールクロス
+    wallMaterial:  '301000000002', // せっこうボード t=12.5
+    wallFinish:    '302000000001', // ビニールクロス
     ceilingHeight: 2700,
   }),
   // 便所
   RESTROOM: Object.freeze({
     label:         '便所',
-    wallMaterial:  '111111111166', // せっこうボード t=12.5
-    wallFinish:    '111111111201', // ビニールクロス
+    wallMaterial:  '301000000002', // せっこうボード t=12.5
+    wallFinish:    '302000000001', // ビニールクロス
     ceilingHeight: 2400,
   }),
 });

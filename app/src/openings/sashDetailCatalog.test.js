@@ -75,20 +75,28 @@ test('SASH_DETAIL_CATALOG: 全10件がkey重複なく、必須フィールドを
 
 test('isWoodWallBacking: WOOD_WALL_BACKING_CODES はtrue、鋼・RCの材コードはfalse', () => {
   for (const code of WOOD_WALL_BACKING_CODES) assert.equal(isWoodWallBacking(code), true, code);
-  assert.equal(isWoodWallBacking('111111111138'), false); // スタッド-90×45（溶融亜鉛めっき鋼板＝鋼）
-  assert.equal(isWoodWallBacking('111111111236'), false); // RC壁 t=150
+  // 2026-09-22 QAコメント: RC材の実在を先にassert（振り直し後のコードが本当にmaterialData.jsに
+  // 存在するかを、isWoodWallBackingの判定結果だけに頼らず裏取りする）。
+  const rc150 = findMaterial('501000000001'); // RC壁 t=150（振り直し後の新コード）
+  assert.ok(rc150, 'RC壁 t=150（501000000001）がMATERIALSに存在しない');
+  assert.equal(rc150.thickness, 150);
+  assert.equal(isWoodWallBacking('201200000005'), false); // スタッド-90×45（溶融亜鉛めっき鋼板＝鋼）
+  assert.equal(isWoodWallBacking(rc150.code), false); // RC壁 t=150
   assert.equal(isWoodWallBacking(undefined), false);
 });
 
 test('woodBackingDepth: 木質下地は thickness/x,y から見込み寸法を返す', () => {
-  const m = findMaterial('111111111155'); // □-90×45 杉・松等（間柱/大壁用）
+  const m = findMaterial('101400000005'); // □-90×45 杉・松等（間柱/大壁用）
   assert.equal(woodBackingDepth(m), 90); // Math.max(90,45)
 });
 
 test('woodBackingDepth: 非木質下地（LGSスタッド・RC）は spec に関わらず 0（「木造下地材の断面寸法」条件を誤爆させない）', () => {
-  const stud = findMaterial('111111111138'); // スタッド-90×45（鋼、90mm）
+  const stud = findMaterial('201200000005'); // スタッド-90×45（鋼、90mm）
   assert.equal(woodBackingDepth(stud), 0);
-  const rc = findMaterial('111111111236'); // RC壁 t=150
+  // 2026-09-22 QAコメント: RC材の実在を先にassert（振り直し後のコードの裏取り）。
+  const rc = findMaterial('501000000001'); // RC壁 t=150
+  assert.ok(rc, 'RC壁 t=150（501000000001）がMATERIALSに存在しない');
+  assert.equal(rc.thickness, 150);
   assert.equal(woodBackingDepth(rc), 0);
 });
 
@@ -117,41 +125,41 @@ test('WOOD_WALL_BACKING_CODES: materialData.js の下地材（category=backing�
 // ---- resolveSashDetailForGraph（graph/project/materialMap経由。主要構造は effectiveStructure 由来）----
 
 test('QA1回帰: 主要構造が木造（在来）なら下地がLGS（スタッド-90×45）でもフィン直付け(fin)になる', () => {
-  const graph = { exteriorWallBacking: '111111111138', structureOverride: null };
+  const graph = { exteriorWallBacking: '201200000005', structureOverride: null };
   const project = { structuralInfo: { mainStructure: '木造（在来）' } };
-  const materialMap = materialMapOf('111111111138');
+  const materialMap = materialMapOf('201200000005');
   const d = resolveSashDetailForGraph(graph, project, materialMap);
   assert.equal(d.positioning, SashPositioning.FIN);
 });
 
 test('QA2: S造＋木胴縁 □-45×45（見込み45mm）は下地90mm未満のためフィンにならない(finish)', () => {
-  const graph = { exteriorWallBacking: '111111111158', structureOverride: null };
+  const graph = { exteriorWallBacking: '101400000008', structureOverride: null };
   const project = { structuralInfo: { mainStructure: 'S造' } };
-  const materialMap = materialMapOf('111111111158');
+  const materialMap = materialMapOf('101400000008');
   const d = resolveSashDetailForGraph(graph, project, materialMap);
   assert.equal(d.positioning, SashPositioning.FINISH);
 });
 
 test('QA3回帰止め: S造＋木下地 □-90×45（見込み90mm）はgraph経路でも backingDepth>=90 節が生き、フィンになる(fin)', () => {
-  const graph = { exteriorWallBacking: '111111111155', structureOverride: null };
+  const graph = { exteriorWallBacking: '101400000005', structureOverride: null };
   const project = { structuralInfo: { mainStructure: 'S造' } };
-  const materialMap = materialMapOf('111111111155');
+  const materialMap = materialMapOf('101400000005');
   const d = resolveSashDetailForGraph(graph, project, materialMap);
   assert.equal(d.positioning, SashPositioning.FIN);
 });
 
 test('resolveSashDetailForGraph: S造＋LGSスタッド-90×45（鋼90mm）はfinish（鋼下地90mmが≥90節を誤爆させない）', () => {
-  const graph = { exteriorWallBacking: '111111111138', structureOverride: null }; // スタッド-90×45（溶融亜鉛めっき鋼板）
+  const graph = { exteriorWallBacking: '201200000005', structureOverride: null }; // スタッド-90×45（溶融亜鉛めっき鋼板）
   const project = { structuralInfo: { mainStructure: 'S造' } };
-  const materialMap = materialMapOf('111111111138');
+  const materialMap = materialMapOf('201200000005');
   const d = resolveSashDetailForGraph(graph, project, materialMap);
   assert.equal(d.positioning, SashPositioning.FINISH);
 });
 
 test('resolveSashDetailForGraph: 階のstructureOverrideが建物全体値より優先される', () => {
-  const graph = { exteriorWallBacking: '111111111138', structureOverride: '木造（在来）' };
+  const graph = { exteriorWallBacking: '201200000005', structureOverride: '木造（在来）' };
   const project = { structuralInfo: { mainStructure: 'RC造(ラーメン)' } };
-  const materialMap = materialMapOf('111111111138');
+  const materialMap = materialMapOf('201200000005');
   const d = resolveSashDetailForGraph(graph, project, materialMap);
   assert.equal(d.positioning, SashPositioning.FIN, 'structureOverride=木造が優先されfinになる');
 });
@@ -164,7 +172,7 @@ test('resolveSashDetailForGraph: materialMapに該当なし（未ロード・コ
 });
 
 test('resolveSashDetailForGraph: materialMap自体がnull（未ロード）でも例外にならない', () => {
-  const graph = { exteriorWallBacking: '111111111155', structureOverride: null };
+  const graph = { exteriorWallBacking: '101400000005', structureOverride: null };
   const project = { structuralInfo: { mainStructure: 'S造' } };
   const d = resolveSashDetailForGraph(graph, project, null);
   assert.equal(d.positioning, SashPositioning.FINISH);

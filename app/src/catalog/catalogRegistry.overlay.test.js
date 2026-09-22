@@ -10,7 +10,7 @@ import { assertNoDuplicate } from './catalogMatch.js';
 
 function material(overrides) {
   return {
-    code: '111111111165', name: 'せっこうボード t=9.5', spec: 'JIS A 6901', x: 0, y: 0, thickness: 9.5, note: '', category: 'panel',
+    code: '301000000001', name: 'せっこうボード t=9.5', spec: 'JIS A 6901', x: 0, y: 0, thickness: 9.5, note: '', category: 'panel',
     ...overrides,
   };
 }
@@ -43,7 +43,7 @@ test('【失敗系・2026-09-22 QA指摘A】setOverlay: userのエントリ不�
 test('setOverlay: 検証に失敗したら overlay は書き換わらない（前の内容が残る）', () => {
   const docEntry = material({ code: '999999999999' });
   setOverlay('material', { doc: [docEntry] });
-  assert.throws(() => setOverlay('material', { doc: [{ code: '111111111165' }] })); // name等欠落で例外
+  assert.throws(() => setOverlay('material', { doc: [{ code: '301000000001' }] })); // name等欠落で例外
   assert.deepEqual(overlayFor('material').doc, [docEntry]); // 前の内容のまま
 });
 
@@ -129,9 +129,9 @@ test('composeCatalog: docが無ければuserがbuiltinに勝つ', () => {
 
 // ---- composeList の位置規則 ----
 test('composeList: 同キーの上書き(user)はbuiltinの位置に置かれる（並びは変わらない）', () => {
-  const b1 = material({ code: '111111111165', name: 'A' });
-  const b2 = material({ code: '111111111166', name: 'B' });
-  const userOverride = material({ code: '111111111165', name: 'A(user上書き)' });
+  const b1 = material({ code: '301000000001', name: 'A' });
+  const b2 = material({ code: '301000000002', name: 'B' });
+  const userOverride = material({ code: '301000000001', name: 'A(user上書き)' });
   setOverlay('material', { user: [userOverride] });
   const list = composeList('material', [b1, b2]);
   assert.equal(list.length, 2);
@@ -140,7 +140,7 @@ test('composeList: 同キーの上書き(user)はbuiltinの位置に置かれる
 });
 
 test('composeList: builtinに無いuser/docの追加分は末尾に置かれる', () => {
-  const b1 = material({ code: '111111111165', name: 'A' });
+  const b1 = material({ code: '301000000001', name: 'A' });
   const extraUser = material({ code: '999999999998', name: '追加(user)' });
   const extraDoc = material({ code: '999999999999', name: '追加(doc)' });
   setOverlay('material', { user: [extraUser], doc: [extraDoc] });
@@ -152,10 +152,10 @@ test('composeList: builtinに無いuser/docの追加分は末尾に置かれる'
 
 // ---- originOf ----
 test('originOf: 設定したoverlayに応じてdoc/user/builtinを返す', () => {
-  const builtinEntry = material({ code: '111111111165' });
+  const builtinEntry = material({ code: '301000000001' });
   // dedupeFields（name等）まで同じにするとR17の合成後検査（本テスト追加時に揃えた挙動）に
   // 引っかかってしまうため、docEntryはnameを変えて別内容にする（2026-09-22 QA指摘・Minor対応）。
-  const docEntry = material({ code: '111111111166', name: '別材(doc)' });
+  const docEntry = material({ code: '301000000002', name: '別材(doc)' });
   setOverlay('material', { doc: [docEntry] });
   assert.equal(originOf('material', builtinEntry.code, [builtinEntry]), 'builtin');
   assert.equal(originOf('material', docEntry.code, [builtinEntry]), 'doc');
@@ -163,15 +163,15 @@ test('originOf: 設定したoverlayに応じてdoc/user/builtinを返す', () =>
 
 // ---- R17 合成後の強制（裁定A）----
 test('【失敗系】composeCatalog: builtinと5項目一致・categoryだけ違うuserエントリは合成後に例外（裁定A）', () => {
-  const builtinEntry = material({ code: '111111111165', category: 'panel' });
-  const conflictingUser = material({ code: '111111111199', category: 'backing' }); // 5項目一致・categoryだけ違う
+  const builtinEntry = material({ code: '301000000001', category: 'panel' });
+  const conflictingUser = material({ code: '301200000002', category: 'backing' }); // 5項目一致・categoryだけ違う
   setOverlay('material', { user: [conflictingUser] });
   assert.throws(() => composeCatalog('material', [builtinEntry]), /既に登録されています/);
 });
 
 test('【失敗系】composeList: builtinと5項目一致・categoryだけ違うdocエントリは合成後に例外（裁定A）', () => {
-  const builtinEntry = material({ code: '111111111165', category: 'panel' });
-  const conflictingDoc = material({ code: '111111111199', category: 'backing' });
+  const builtinEntry = material({ code: '301000000001', category: 'panel' });
+  const conflictingDoc = material({ code: '301200000002', category: 'backing' });
   setOverlay('material', { doc: [conflictingDoc] });
   assert.throws(() => composeList('material', [builtinEntry]), /既に登録されています/);
 });
@@ -192,8 +192,8 @@ test('【失敗系・2026-09-22 QA指摘B/C】composeCatalog: builtin⇔docの�
 });
 
 test('【失敗系・2026-09-22 QA指摘・Minor】originOf: overlay込みでdedupeFields完全一致があれば例外（composeCatalog/composeListと挙動を揃える）', () => {
-  const builtinEntry = material({ code: '111111111165', category: 'panel' });
-  const conflictingUser = material({ code: '111111111199', category: 'backing' });
+  const builtinEntry = material({ code: '301000000001', category: 'panel' });
+  const conflictingUser = material({ code: '301200000002', category: 'backing' });
   setOverlay('material', { user: [conflictingUser] });
   assert.throws(() => originOf('material', builtinEntry.code, [builtinEntry]), /既に登録されています/);
 });
@@ -204,8 +204,8 @@ test('【失敗系・2026-09-22 QA指摘・Minor】originOf: overlay込みでded
 
 // T1: 前後空白だけ違う（別code）のdocエントリは重複とみなし例外（trim規則）
 test('【失敗系・2026-09-22 QA指摘E・T1】registryのO(n)正規化: 前後空白だけ違う名称は同値とみなし重複例外にする（trim）', () => {
-  const builtinEntry = material({ code: '111111111165', name: 'せっこうボード t=9.5' });
-  const docEntry = material({ code: '111111111166', name: '  せっこうボード t=9.5  ' }); // 前後空白のみ違う
+  const builtinEntry = material({ code: '301000000001', name: 'せっこうボード t=9.5' });
+  const docEntry = material({ code: '301000000002', name: '  せっこうボード t=9.5  ' }); // 前後空白のみ違う
   setOverlay('material', { doc: [docEntry] });
   assert.throws(() => composeCatalog('material', [builtinEntry]), /既に登録されています/);
 });
@@ -213,29 +213,29 @@ test('【失敗系・2026-09-22 QA指摘E・T1】registryのO(n)正規化: 前�
 // T2: thickness:null同士は同値で重複例外。片方省略(undefined)も同様（registry・
 // assertNoDuplicate単体の両方で確認）
 test('【失敗系・2026-09-22 QA指摘E・T2】registryのO(n)正規化: thickness:null同士は同値とみなし重複例外にする', () => {
-  const builtinEntry = material({ code: '111111111165', thickness: null });
-  const docEntry = material({ code: '111111111166', thickness: null });
+  const builtinEntry = material({ code: '301000000001', thickness: null });
+  const docEntry = material({ code: '301000000002', thickness: null });
   setOverlay('material', { doc: [docEntry] });
   assert.throws(() => composeCatalog('material', [builtinEntry]), /既に登録されています/);
 });
 
 test('【失敗系・2026-09-22 QA指摘E・T2】registryのO(n)正規化: thickness省略(undefined)とnull明示も同値とみなし重複例外にする', () => {
-  const builtinEntry = material({ code: '111111111167', thickness: undefined }); // 省略と同義
-  const docEntry = material({ code: '111111111168', thickness: null });
+  const builtinEntry = material({ code: '301000000003', thickness: undefined }); // 省略と同義
+  const docEntry = material({ code: '301000000004', thickness: null });
   setOverlay('material', { doc: [docEntry] });
   assert.throws(() => composeCatalog('material', [builtinEntry]), /既に登録されています/);
 });
 
 test('【失敗系・2026-09-22 QA指摘E・T2】assertNoDuplicate単体でも thickness省略とnull明示は同値（トップレベル同値規則側の確認）', () => {
-  const entries = [material({ code: '111111111169', thickness: undefined })];
+  const entries = [material({ code: '301000000005', thickness: undefined })];
   const incoming = material({ code: '999999999999', thickness: null });
   assert.throws(() => assertNoDuplicate('material', incoming, entries), /既に登録されています/);
 });
 
 // T3: null と 0 は別材として通る（区別は維持）
 test('【2026-09-22 QA指摘E・T3】registryのO(n)正規化: null と 0 は別材として通る（区別は維持）', () => {
-  const builtinEntry = material({ code: '111111111165', thickness: 0 });
-  const docEntry = material({ code: '111111111166', thickness: null });
+  const builtinEntry = material({ code: '301000000001', thickness: 0 });
+  const docEntry = material({ code: '301000000002', thickness: null });
   setOverlay('material', { doc: [docEntry] });
   assert.doesNotThrow(() => composeCatalog('material', [builtinEntry]));
 });

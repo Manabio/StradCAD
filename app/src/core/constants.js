@@ -110,11 +110,11 @@ export const DimensionSide = Object.freeze({
 });
 
 // 既定材コード（材マスタ materialData.js 参照）
-export const DEFAULT_WALL_MATERIAL         = '111111111166'; // 部屋の壁材既定: せっこうボード t=12.5（面材）
-export const DEFAULT_EXTERIOR_WALL_BACKING = '111111111155'; // 外壁下地: □-90×45 間柱（下地材）
-export const DEFAULT_INTERIOR_WALL_BACKING = '111111111155'; // 内壁下地: □-90×45 間柱（下地材）
-export const DEFAULT_CEILING_BACKING       = '111111111162'; // 天井下地: □-45×36 杉等・野縁（下地材、表示のみ）
-export const DEFAULT_FLOOR_BACKING         = '111111111157'; // 床下地: □-60×45 杉・松等・床根太（下地材、表示のみ）
+export const DEFAULT_WALL_MATERIAL         = '301000000002'; // 部屋の壁材既定: せっこうボード t=12.5（面材）
+export const DEFAULT_EXTERIOR_WALL_BACKING = '101400000005'; // 外壁下地: □-90×45 間柱（下地材）
+export const DEFAULT_INTERIOR_WALL_BACKING = '101400000005'; // 内壁下地: □-90×45 間柱（下地材）
+export const DEFAULT_CEILING_BACKING       = '101400000012'; // 天井下地: □-45×36 杉等・野縁（下地材、表示のみ）
+export const DEFAULT_FLOOR_BACKING         = '101400000007'; // 床下地: □-60×45 杉・松等・床根太（下地材、表示のみ）
 
 // 部屋の既定値（共通仕様タブで per-floor に変更可能）
 export const DEFAULT_ROOM_FLOOR_LEVEL    = 0;    // FL初期値: 当該階FLからの相対高さmm（±0）
