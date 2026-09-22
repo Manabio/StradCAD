@@ -8,6 +8,7 @@ const FILE_ITEMS = [
   { id: 'open',     label: '読込み' },  // 文書ファイル(.stq)の読み込み。旧localStorage退避「読込み/書出し」は廃止済み
   { id: 'save',     label: '保存' },
   { id: 'settings', label: '画面校正' },
+  { id: 'catalog-maintenance', label: 'カタログ保守' }, // カタログ保守パネル（材料の面材・仕上げ材の追加・編集）
 ];
 
 export function HamburgerMenu({ onSelect }) {

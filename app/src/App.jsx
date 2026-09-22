@@ -126,6 +126,7 @@ const App = observer(() => {
   const [showSiteDialog,  setShowSiteDialog]  = useState(false);
   const [saveDialogDefaultName, setSaveDialogDefaultName] = useState(null); // 非null=保存ファイル名ダイアログ表示中
   const [showBuildingInfoDialog, setShowBuildingInfoDialog] = useState(false);
+  const [CatalogMaintenancePanelComp, setCatalogMaintenancePanelComp] = useState(null); // 動的import済みのパネル本体（null=未ロード/非表示）
   const [showStructuralInfoDialog, setShowStructuralInfoDialog] = useState(false);
   const [toast,           setToast]           = useState(null); // { msg, key }
   const [appMode,         setAppMode]         = useState('floorplan'); // 'floorplan' | 'finish' | 'structure' | 'site'
@@ -154,6 +155,7 @@ const App = observer(() => {
 
   const fileInputRef  = useRef(null);
   const openingSelectRef  = useRef(null); // 建具モードへの遷移直後に選択する開口ID（モードロード時に読み取って消費）
+  const catalogMaintenanceLoadingRef = useRef(false); // カタログ保守パネルの動的import中フラグ（二重クリック無視・後出し防止用）
 
   // アクティブなモード状態 (FloorplanModeState | FinishModeState | null)
   // modeRef: イベントハンドラから同期的にアクセス
@@ -1145,6 +1147,27 @@ const App = observer(() => {
     }
     if (id === 'site-info')      { setShowSiteDialog(true);       return; }
     if (id === 'building-info')  { setShowBuildingInfoDialog(true); return; }
+    if (id === 'catalog-maintenance') {
+      // 全画面パネルは使うときだけ動的importする（モードと同じ考え方。.claude/mode-system.md）。
+      // React.lazy+SuspenseはErrorBoundary無しではチャンク読込み失敗時にroot全体が白画面になるため
+      // 不採用——EccentricityDialog.jsx等と同じ「import().then().catch()」型に揃える（QA指摘Major-B）。
+      // ロード中フラグ（ref）: 連打で複数の読込みが並走するのを防ぎ、フラグが降りた後（読込み完了・
+      // 失敗のどちらかを既に処理した後）に来た後出しの解決は捨てる（QA指摘Minor・再指摘）。
+      if (catalogMaintenanceLoadingRef.current) return;
+      catalogMaintenanceLoadingRef.current = true;
+      import('./ui/CatalogMaintenancePanel.jsx')
+        .then(m => {
+          if (!catalogMaintenanceLoadingRef.current) return; // 後出し（既に処理済み）は捨てる
+          catalogMaintenanceLoadingRef.current = false;
+          setCatalogMaintenancePanelComp(() => m.CatalogMaintenancePanel);
+        })
+        .catch(() => {
+          if (!catalogMaintenanceLoadingRef.current) return;
+          catalogMaintenanceLoadingRef.current = false;
+          setToast({ msg: 'カタログ保守パネルの読み込みに失敗しました', key: Date.now() });
+        });
+      return;
+    }
     if (id === 'open') {
       fileInputRef.current?.click();
       return;
@@ -1919,6 +1942,13 @@ const App = observer(() => {
             setShowBuildingInfoDialog(false);
           }}
         />
+      )}
+
+      {CatalogMaintenancePanelComp && (
+        // 全画面パネル。materialData.js/CatalogMaintenancePanel.jsx自体ともに独立チャンクのまま
+        // （動的import。使わないユーザーは読み込まない）。編集内容はIDBへ即時永続化されるため、
+        // 開いている仕上げモード等への即時反映はしない（次回突入時にcomposeし直して反映）。
+        <CatalogMaintenancePanelComp onClose={() => setCatalogMaintenancePanelComp(null)} />
       )}
 
       {showStructuralInfoDialog && (

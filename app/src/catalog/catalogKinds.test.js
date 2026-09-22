@@ -229,6 +229,13 @@ test('【失敗系】material.validate: thickness省略は例外を投げる（n
   assert.doesNotThrow(() => kindDef('material').validate(fullMaterial({ thickness: null })));
 });
 
+// QA指摘Minor2（カタログ保守パネル・2026-09-22）: 負の厚さは拒否する。0・null・正の数は許容。
+test('【失敗系】material.validate: thicknessが負の数値なら例外を投げる', () => {
+  assert.throws(() => kindDef('material').validate(fullMaterial({ thickness: -1 })), /thicknessが不正/);
+  assert.doesNotThrow(() => kindDef('material').validate(fullMaterial({ thickness: 0 })));
+  assert.doesNotThrow(() => kindDef('material').validate(fullMaterial({ thickness: null })));
+});
+
 test('section.validate: 正常系（RECT=形状別寸法無し／H形鋼=有り）は例外を投げない', () => {
   assert.doesNotThrow(() => kindDef('section').validate({
     key: 'WOOD-90x90', materialType: 'WOOD', shape: 'rect', width: 90, height: 90, label: '90×90',

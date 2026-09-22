@@ -138,6 +138,10 @@ const REGISTRY = Object.assign(Object.create(null), {
       if (!isNullableFiniteNumber(entry.thickness)) {
         throw new Error('材エントリのthicknessが不正です（数値またはnull）');
       }
+      // QA指摘Minor2（2026-09-22）: 負の厚さは物理的に無意味。本体マスタ130件は全件0以上かnull。
+      if (typeof entry.thickness === 'number' && entry.thickness < 0) {
+        throw new Error('材エントリのthicknessが不正です（0以上の数値またはnullが必要）');
+      }
       if (entry.note !== undefined && typeof entry.note !== 'string') throw new Error('材エントリのnoteが不正です');
       if (entry.category !== undefined && typeof entry.category !== 'string') {
         throw new Error('材エントリのcategoryが不正です');

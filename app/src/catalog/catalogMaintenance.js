@@ -1,0 +1,246 @@
+// ================================================================
+// カタログ保守パネル（ステップ5・ハンバーガー「カタログ保守」）の純ロジック。
+//
+// 第1段の範囲＝材料（material）の面材（panel）・仕上げ材（finish）のみ。
+// 下地材（backing）は一覧に出所バッジ付きで表示してよいが、追加・編集・削除は不可。
+//
+// 純モジュール（葉）。同ディレクトリの兄弟モジュール（catalogKinds.js・catalogRegistry.js・
+// catalogMatch.js・materialCode.js・catalogBundle.js・catalogCodec.js）にのみ依存する。
+// .jsx / store.js を静的 import しない（catalogImports.test.js の許可リストに従う）。
+// 永続化I/O（storage/db.js の saveUserCatalog）は commitUserEntries の呼び出し側が
+// saveFn として注入する（catalogOverlayLoader.js と同じDI型。本ファイルはstorage/db.jsを
+// 一切importしない）。
+//
+// builtin一覧（materialData.js の MATERIALS）は呼び出し側（CatalogMaintenancePanel.jsx）が
+// パネルを開いたときに動的 import で読んで渡す——本ファイルは本体標準マスタを一切読まない。
+// ================================================================
+
+import { CatalogKind, kindDef, listKinds } from './catalogKinds.js';
+import { composeList, originOf, overlayFor, setOverlay } from './catalogRegistry.js';
+import { assertNoDuplicate } from './catalogMatch.js';
+import { nextSerial, parseMaterialCode, formatMaterialCode } from './materialCode.js';
+import { emptyBundle, withEntries } from './catalogBundle.js';
+import { encodeCatalogBundle } from './catalogCodec.js';
+
+/** 材の役割（カテゴリ）。materialData.js の MATERIAL_CATEGORY と同じ3値
+ * （本体マスタは静的 import できないため、ここでは値の集合だけを持つ）。 */
+export const MATERIAL_CATEGORY = Object.freeze({
+  BACKING: 'backing',
+  PANEL:   'panel',
+  FINISH:  'finish',
+});
+
+/** このパネルで追加・編集できるカテゴリ（第1段の範囲。下地材は対象外）。 */
+export const EDITABLE_MATERIAL_CATEGORIES = Object.freeze([MATERIAL_CATEGORY.PANEL, MATERIAL_CATEGORY.FINISH]);
+
+/** category が追加・編集可能（面材・仕上げ材）かどうか。 */
+export function isEditableMaterialCategory(category) {
+  return EDITABLE_MATERIAL_CATEGORIES.includes(category);
+}
+
+/**
+ * 1行（材エントリ）が編集可能かどうか（QA指摘Major-A・2026-09-22）。
+ * category が面材・仕上げ材以外（下地材）→ 不可。origin が 'builtin'・'doc' → 不可
+ * （doc=文書同梱は解決順doc>userでdocが勝つため、userだけを更新しても一覧・解決結果に反映されず
+ * 「保存しました」だけが出る黙って効かない状態になる——複製してユーザーライブラリの新規エントリに
+ * してから編集する経路のみ許す）。origin が 'user'（またはまだ保存前＝null/undefined＝新規追加）
+ * かつ編集可能categoryのときのみ ok:true。
+ * @param {'doc'|'user'|'builtin'|null|undefined} origin
+ * @param {string} category
+ * @returns {{ ok: boolean, reason: string|null }}
+ */
+export function canEditMaterialRow(origin, category) {
+  if (!isEditableMaterialCategory(category)) {
+    return { ok: false, reason: '下地材はこのパネルでは編集できません（一覧の表示のみ）' };
+  }
+  if (origin === 'builtin') {
+    return { ok: false, reason: '標準材料の編集は未対応です（複製してから編集してください）' };
+  }
+  if (origin === 'doc') {
+    return { ok: false, reason: '文書同梱の材料の編集は未対応です。複製してから編集してください' };
+  }
+  return { ok: true, reason: null };
+}
+
+/**
+ * 厚さ入力欄の文字列をパースする（QA指摘Minor1）。前後の空白を除いてから空文字判定するため、
+ * 空白だけの入力（'  '）が Number('  ')===0 に化けて意図せず厚さ0として保存される事故を防ぐ。
+ * 空（トリム後）は null。それ以外は Number(...)（数値でなければ NaN——呼び出し側で弾く）。
+ * @param {string} raw
+ * @returns {number|null} 空ならnull、数値ならその値（不正な入力はNaN）
+ */
+export function parseThicknessInput(raw) {
+  const trimmed = (raw ?? '').trim();
+  return trimmed === '' ? null : Number(trimmed);
+}
+
+/** 種別タブ表示名（登録表の種別に対する固定の日本語ラベル。catalogKinds.jsヘッダコメントと同じ命名）。 */
+const KIND_LABELS = Object.freeze({
+  [CatalogKind.MATERIAL]:         '材料',
+  [CatalogKind.INTERIOR_MASTER]:  '内装マスター',
+  [CatalogKind.BOUNDARY_MASTER]:  '境界マスター',
+  [CatalogKind.SECTION]:          '断面',
+  [CatalogKind.OPENING_SUB_TYPE]: '建具種別',
+});
+
+/**
+ * 種別タブの器（左タブ）。listKinds() から導出する——登録表に種別が増えたらタブも増える。
+ * 第1段では material 以外は enabled:false（「準備中」表示用）。
+ */
+export function buildKindTabs() {
+  return listKinds().map(kind => ({
+    kind,
+    label: KIND_LABELS[kind] ?? kind,
+    enabled: kind === CatalogKind.MATERIAL,
+  }));
+}
+
+/**
+ * 材の一覧行（出所付き）。builtin一覧・overlay（catalogRegistry.jsの現在の状態）を
+ * composeList/originOf で合成し、search（名称部分一致・大小文字区別なし）・category（完全一致。
+ * null/空なら絞り込みなし）で絞り込む。
+ * @param {{ builtinList: object[], search?: string, category?: string|null }} args
+ * @returns {Array<{ entry: object, origin: 'doc'|'user'|'builtin'|null }>}
+ */
+export function buildMaterialRows({ builtinList, search = '', category = null }) {
+  const needle = (search ?? '').trim().toLowerCase();
+  return composeList(CatalogKind.MATERIAL, builtinList)
+    .map(entry => ({ entry, origin: originOf(CatalogKind.MATERIAL, entry.code, builtinList) }))
+    .filter(row => !category || row.entry.category === category)
+    .filter(row => !needle || (row.entry.name ?? '').toLowerCase().includes(needle));
+}
+
+/**
+ * 採番用の既知コード集合（builtin＋ユーザーライブラリ＋文書同梱の全コード）。
+ * @param {{ builtinList: object[], doc?: object[], user?: object[] }} args
+ * @returns {Set<string>}
+ */
+export function collectKnownMaterialCodes({ builtinList, doc = [], user = [] }) {
+  const codes = new Set();
+  for (const list of [builtinList, doc, user]) {
+    for (const entry of list ?? []) {
+      if (typeof entry?.code === 'string') codes.add(entry.code);
+    }
+  }
+  return codes;
+}
+
+/** major・minor の帯で空いている材料コードを1件採番する（表示専用。手入力不可）。 */
+export function nextMaterialCode(major, minor, knownCodes) {
+  return formatMaterialCode(major, minor, Number(nextSerial(major, minor, knownCodes)));
+}
+
+/**
+ * フォーム入力から材エントリを組み立てる。x/yは面材・仕上げ材の規約どおり常に0固定
+ * （materialData.js「面材・仕上げ材は寸法なし→0,0」と同じ）。
+ * QA指摘Minor3（再指摘）: name/spec/noteの前後の空白を除く責務をこの関数1箇所に寄せる
+ * （呼び出し側でtrimしてから渡す約束にすると、呼び出し側が増えたときにtrimし忘れが起こる）。
+ */
+export function buildMaterialEntry({ code, name, spec = '', thickness = null, note = '', category }) {
+  return { code, name: name.trim(), spec: spec.trim(), x: 0, y: 0, thickness, note: note.trim(), category };
+}
+
+/**
+ * 複製元エントリと同内容・新コードのエントリを組み立てる（複製）。
+ * dedupeFields（name/spec/x/y/thickness）が複製元と一致するため、名称を変えるまでは
+ * validateMaterialEntry がR17で拒否する（意図した挙動。呼び出し側は保存前に必ず
+ * validateMaterialEntry を通すこと）。
+ */
+export function duplicateMaterialEntry(sourceEntry, knownCodes) {
+  const parsed = parseMaterialCode(sourceEntry?.code);
+  if (!parsed) throw new Error(`複製元の材料コードが不正です: ${sourceEntry?.code}`);
+  const code = nextMaterialCode(parsed.major, parsed.minor, knownCodes);
+  return { ...sourceEntry, code };
+}
+
+/**
+ * 保存前検証: (1) カテゴリが編集可能（panel/finish）であること、(2) kindDef('material').validate、
+ * (3) assertNoDuplicate（R17。builtinList から合成した全エントリに対して検査）。
+ * 失敗は日本語メッセージで返す（例外を投げない——フォーム表示用）。
+ * @returns {{ ok: true } | { ok: false, message: string }}
+ */
+export function validateMaterialEntry(entry, builtinList) {
+  if (!isEditableMaterialCategory(entry?.category)) {
+    return {
+      ok: false,
+      message: `このカテゴリの材料はここでは編集できません（面材・仕上げ材のみ）: ${entry?.category}`,
+    };
+  }
+  const def = kindDef(CatalogKind.MATERIAL);
+  try {
+    def.validate(entry);
+  } catch (e) {
+    return { ok: false, message: e.message };
+  }
+  const merged = composeList(CatalogKind.MATERIAL, builtinList);
+  try {
+    assertNoDuplicate(CatalogKind.MATERIAL, entry, merged);
+  } catch (e) {
+    return { ok: false, message: e.message };
+  }
+  return { ok: true };
+}
+
+/** ユーザーライブラリ配列へ追加・更新する（同コードなら上書き）。非破壊。 */
+export function upsertUserMaterialEntry(userEntries, entry) {
+  const idx = userEntries.findIndex(e => e.code === entry.code);
+  if (idx === -1) return [...userEntries, entry];
+  const next = [...userEntries];
+  next[idx] = entry;
+  return next;
+}
+
+/**
+ * ユーザーライブラリから1件外す（削除）。裁定: 削除はユーザーライブラリから外すだけの操作——
+ * origin が 'user' 以外（builtin・doc）は削除不可で例外を投げる（文書同梱分は参照が無くなるまで
+ * 残る＝この操作の対象外。builtin はそもそも削除できない）。
+ */
+export function removeUserMaterialEntry(userEntries, code, origin) {
+  if (origin !== 'user') {
+    throw new Error('ユーザーライブラリのエントリ以外は削除できません（builtin・文書同梱は対象外）');
+  }
+  return userEntries.filter(e => e.code !== code);
+}
+
+/**
+ * ユーザーライブラリ（catalogsストア `user:material` レコード）として保存する束を組み立てる
+ * （catalogOverlayLoader.js が読む形と同じ: {version, catalogs:{material:[…]}, encodings:{material:'json'}, aliases:{}}）。
+ * バイト列化（encodeCatalogBundle）・実際の永続化（storage/db.js saveUserCatalog）は
+ * 呼び出し側（CatalogMaintenancePanel.jsx）が行う。
+ */
+export function buildUserMaterialBundle(userEntries) {
+  let bundle = withEntries(emptyBundle(), CatalogKind.MATERIAL, userEntries);
+  bundle = {
+    ...bundle,
+    encodings: { ...bundle.encodings, [CatalogKind.MATERIAL]: kindDef(CatalogKind.MATERIAL).encoding },
+  };
+  return bundle;
+}
+
+/**
+ * ユーザーライブラリの更新（追加・編集・削除で共通）を1箇所にまとめる（QA指摘Minor・再指摘:
+ * CatalogMaintenancePanel.jsxに直書きされていたoverlay更新→encode→永続化→ロールバックの手順を
+ * こちらへ移し、永続化I/O（storage/db.js saveUserCatalog）は saveFn として呼び出し側に注入させる
+ * ——catalogOverlayLoader.js の loadDocumentCatalogs/loadUserCatalogs と同じDI型（本ファイルは
+ * storage/db.js を静的importしない。catalogImports.test.js の許可リストに従う）。
+ *
+ * 手順: (1) overlay の user を nextUser へ更新 (2) saveFn(kind, bytes) で永続化
+ * (3) 失敗（saveFnがreject）した場合は overlay の user を prevUser へ戻してから、
+ * 同じ例外を再throwする（黙って握りつぶさない。呼び出し側がメッセージを利用者へ出せるように）。
+ * 成功時は overlay は nextUser のまま。
+ *
+ * @param {object[]} nextUser 保存後のユーザーライブラリ配列
+ * @param {object[]} prevUser 失敗時に戻す元のユーザーライブラリ配列
+ * @param {{ saveFn: (kind: string, bytes: Uint8Array) => Promise<void> }} deps
+ * @returns {Promise<void>}
+ */
+export async function commitUserEntries(nextUser, prevUser, { saveFn }) {
+  const { doc } = overlayFor(CatalogKind.MATERIAL);
+  setOverlay(CatalogKind.MATERIAL, { doc, user: nextUser });
+  try {
+    await saveFn(CatalogKind.MATERIAL, encodeCatalogBundle(buildUserMaterialBundle(nextUser)));
+  } catch (e) {
+    setOverlay(CatalogKind.MATERIAL, { doc, user: prevUser }); // 保存失敗はoverlayを戻す
+    throw e;
+  }
+}
