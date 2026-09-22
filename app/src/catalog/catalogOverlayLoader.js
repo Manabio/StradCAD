@@ -12,7 +12,7 @@ import { listKinds } from './catalogKinds.js';
 import { decodeCatalogBundle } from './catalogCodec.js';
 import { validateBundle, bundleEntries, bundleAliases } from './catalogBundle.js';
 import { setOverlay, clearOverlays } from './catalogRegistry.js';
-import { buildCodeTable, setDocumentCodeTable } from './codeNormalization.js';
+import { setDocumentAliases } from './codeNormalization.js';
 import { CatalogKind } from './catalogKinds.js';
 
 /**
@@ -32,7 +32,7 @@ import { CatalogKind } from './catalogKinds.js';
  *   decode/validate失敗時はまだ何もsetOverlayしていないため実害は無いが、将来この関数の前段が
  *   増えたときに「まだ何もしていないから大丈夫」という前提が崩れても壊れないようにする防御）。
  *
- * `setOverlayFn`/`clearOverlaysFn`/`setDocumentCodeTableFn`/`buildCodeTableFn` は省略時
+ * `setOverlayFn`/`clearOverlaysFn`/`setDocumentAliasesFn` は省略時
  * catalogRegistry.js/codeNormalization.js の本物を使う——テストが「setOverlay が例外を
  * 投げた場合に全 clear されること」を検証するための注入口（本番では常に既定値のまま）。
  *
@@ -40,12 +40,12 @@ import { CatalogKind } from './catalogKinds.js';
  *           loadUserCatalogs: () => Promise<Array<{kind:string, bytes:Uint8Array}>>,
  *           onError: (message: string) => void,
  *           setOverlayFn?: typeof setOverlay, clearOverlaysFn?: typeof clearOverlays,
- *           setDocumentCodeTableFn?: typeof setDocumentCodeTable, buildCodeTableFn?: typeof buildCodeTable }} deps
+ *           setDocumentAliasesFn?: typeof setDocumentAliases }} deps
  */
 export async function loadCatalogOverlaysFromIDB({
   loadDocumentCatalogs, loadUserCatalogs, onError,
   setOverlayFn = setOverlay, clearOverlaysFn = clearOverlays,
-  setDocumentCodeTableFn = setDocumentCodeTable, buildCodeTableFn = buildCodeTable,
+  setDocumentAliasesFn = setDocumentAliases,
 }) {
   try {
     const [docRecords, userRecords] = await Promise.all([
@@ -81,11 +81,11 @@ export async function loadCatalogOverlaysFromIDB({
         if (docKinds.has(kind)) continue; // 文書同梱側で既にuser込みでsetOverlay済み
         setOverlayFn(kind, { doc: [], user: entries });
       }
-      setDocumentCodeTableFn(buildCodeTableFn({ aliases: materialAliases }));
+      setDocumentAliasesFn(materialAliases);
     } catch (applyErr) {
       // setOverlay 自体が例外を投げた場合（通常は起きない防御）: 部分適用を残さない。
       clearOverlaysFn();
-      setDocumentCodeTableFn(null);
+      setDocumentAliasesFn(null);
       throw applyErr;
     }
   } catch (e) {
@@ -93,7 +93,7 @@ export async function loadCatalogOverlaysFromIDB({
     // のどちらでもここへ来る。二重にclearOverlaysFn()を呼んでも副作用は無い（冪等）ため、
     // 内側catchの有無に関わらずここでも必ず後始末してからonErrorへ渡す。
     clearOverlaysFn();
-    setDocumentCodeTableFn(null);
+    setDocumentAliasesFn(null);
     onError(e.message);
   }
 }

@@ -8,7 +8,7 @@ import { loadCatalogOverlaysFromIDB } from './catalogOverlayLoader.js';
 import { setOverlay, clearOverlays, overlayFor, composeCatalog } from './catalogRegistry.js';
 import { encodeCatalogBundle } from './catalogCodec.js';
 import { emptyBundle, withEntries, withAlias } from './catalogBundle.js';
-import { currentCodeTable, setDocumentCodeTable } from './codeNormalization.js';
+import { currentCodeTable, setDocumentAliases } from './codeNormalization.js';
 import { CatalogKind } from './catalogKinds.js';
 
 function material(overrides) {
@@ -24,7 +24,7 @@ function section(overrides) {
 
 test.afterEach(() => {
   clearOverlays();
-  setDocumentCodeTable(null);
+  setDocumentAliases(null);
 });
 
 function makeDeps(overrides) {
@@ -60,7 +60,7 @@ test('正常: 文書同梱・ユーザーライブラリのレコードがoverla
   assert.deepEqual(composeCatalog(CatalogKind.MATERIAL, []).get('301000000010'), docEntry);
 });
 
-test('正常: 束のaliases.materialがsetDocumentCodeTableへ渡る', async () => {
+test('正常: 束のaliases.materialがsetDocumentAliases経由でcurrentCodeTableへ渡る', async () => {
   const docBundle = withAlias(
     withEntries(emptyBundle(), CatalogKind.MATERIAL, [material()]),
     CatalogKind.MATERIAL, '111111111150', '301000000001',
@@ -99,18 +99,18 @@ test('【失敗系】壊れたレコード（decode自体は通るがvalidateBun
 
 // 2026-09-22 再QA指摘Minor-A: 外側のcatch（decode/validate失敗。setOverlayへ到達する前）でも
 // clearOverlaysFn/setDocumentCodeTableFnが呼ばれることを確認する（内側catchと同じ後始末）。
-test('【失敗系・Minor-A】壊れたレコード（decode失敗。setOverlayへ到達する前）でも外側catchでclearOverlaysFn/setDocumentCodeTableFnが呼ばれる', async () => {
+test('【失敗系・Minor-A】壊れたレコード（decode失敗。setOverlayへ到達する前）でも外側catchでclearOverlaysFn/setDocumentAliasesFnが呼ばれる', async () => {
   let clearCalls = 0;
-  const setTableCalls = [];
+  const setAliasesCalls = [];
   const { deps, calls } = makeDeps({
     loadDocumentCatalogs: async () => [{ kind: CatalogKind.MATERIAL, bytes: new TextEncoder().encode('{not-json') }],
     clearOverlaysFn: () => { clearCalls++; clearOverlays(); },
-    setDocumentCodeTableFn: (v) => { setTableCalls.push(v); setDocumentCodeTable(v); },
+    setDocumentAliasesFn: (v) => { setAliasesCalls.push(v); setDocumentAliases(v); },
   });
   await loadCatalogOverlaysFromIDB(deps);
   assert.equal(calls.errors.length, 1);
   assert.equal(clearCalls, 1, '外側catch（decode失敗）でclearOverlaysFnが呼ばれていない');
-  assert.deepEqual(setTableCalls, [null], '外側catch（decode失敗）でsetDocumentCodeTableFn(null)が呼ばれていない');
+  assert.deepEqual(setAliasesCalls, [null], '外側catch（decode失敗）でsetDocumentAliasesFn(null)が呼ばれていない');
 });
 
 test('【失敗系】文書同梱レコードが壊れていれば、他の（正常な）ユーザーライブラリのレコードもoverlayに立たない（部分適用しない）', async () => {

@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   buildCodeTable, normalizeSnapshotCodes,
   setDocumentCodeTable, currentCodeTable, applyDocumentCodeNormalization, takeUnresolvedCodes,
+  setDocumentAliases, currentDocumentAliases, addDocumentAliases, peekUnresolvedCodes,
 } from './codeNormalization.js';
 import { normalizeMaterialCode } from './legacyMaterialCodes.js';
 
@@ -204,6 +205,82 @@ test('applyDocumentCodeNormalization: 同じ削除材参照のsnapshotを50回�
 
   const taken = takeUnresolvedCodes();
   assert.equal(taken.length, 4, `50回適用しても4件（location種別ごと）から増えないはず: ${taken.length}`);
+
+  setDocumentCodeTable(null); // 後始末
+});
+
+// ---- ステップ6-1: 文書単位の読み替え（setDocumentAliases/currentDocumentAliases/addDocumentAliases/peekUnresolvedCodes）----
+test('setDocumentAliases/currentDocumentAliases: 生のaliasesを保持し、内部でbuildCodeTableした表を即座に反映する', () => {
+  setDocumentAliases({ '111111111150': '102000000001' });
+  assert.deepEqual(currentDocumentAliases(), { '111111111150': '102000000001' });
+  assert.equal(currentCodeTable().get('111111111150'), '102000000001');
+  setDocumentAliases(null); // 後始末
+});
+
+test('setDocumentAliases(null): 文書固有の読み替えを解除する（currentDocumentAliasesは空オブジェクトに戻る）', () => {
+  setDocumentAliases({ '111111111150': '102000000001' });
+  setDocumentAliases(null);
+  assert.deepEqual(currentDocumentAliases(), {});
+  assert.equal(currentCodeTable(), null);
+});
+
+test('setDocumentAliases: 冪等（同じaliasesを2回設定しても結果は同じ）', () => {
+  setDocumentAliases({ '111111111150': '102000000001' });
+  const once = currentCodeTable();
+  setDocumentAliases({ '111111111150': '102000000001' });
+  const twice = currentCodeTable();
+  assert.deepEqual([...once.entries()], [...twice.entries()]);
+  setDocumentAliases(null); // 後始末
+});
+
+// 後効き: 先にsnapshot（旧コード）を作っておき、addDocumentAliases後にapplyDocumentCodeNormalization
+// すると新コードへ変換される——documentCodeTableは呼び出しのたびに実効表を引く（スナップショット
+// された表を固定で使い回さない）ことの確認。
+test('addDocumentAliases: 後効き（先に作った旧コードsnapshotがaddDocumentAliases後に新コードへ正規化される）', () => {
+  setDocumentAliases(null);
+  const snapshot = baseSnapshot({
+    exteriorWallBacking: '999999999998',
+    interiorWallBacking: null, ceilingBacking: null, floorBacking: null,
+    rooms: [], edges: [], clEccentricities: [],
+  });
+  // addDocumentAliases前: 未知コードなので変化なし
+  assert.equal(applyDocumentCodeNormalization(snapshot), snapshot);
+
+  addDocumentAliases([{ from: '999999999998', to: '102000000009' }]);
+  const applied = applyDocumentCodeNormalization(snapshot); // 同じsnapshot（旧コードのまま）を再適用
+  assert.equal(applied.exteriorWallBacking, '102000000009');
+
+  setDocumentAliases(null); // 後始末
+});
+
+test('addDocumentAliases: 既存のdocumentAliasesへ後勝ちでマージする（連鎖はbuildCodeTableが潰す）', () => {
+  setDocumentAliases({ a: 'b' });
+  addDocumentAliases([{ from: 'b', to: 'c' }]);
+  assert.deepEqual(currentDocumentAliases(), { a: 'b', b: 'c' });
+  assert.equal(currentCodeTable().get('a'), 'c'); // a→b, b→c の連鎖がa→cへ潰れる
+  setDocumentAliases(null); // 後始末
+});
+
+test('【失敗系】addDocumentAliases: 循環（a→b, b→a）を追記すると例外を投げる', () => {
+  setDocumentAliases({ a: 'b' });
+  assert.throws(() => addDocumentAliases([{ from: 'b', to: 'a' }]), /循環/);
+  setDocumentAliases(null); // 後始末
+});
+
+test('peekUnresolvedCodes: 非破壊（呼んでも蓄積をリセットしない。takeUnresolvedCodesと違う）', () => {
+  const table = buildCodeTable({ legacy: { '111111111150': null } });
+  setDocumentCodeTable(table);
+  takeUnresolvedCodes(); // リセット
+
+  applyDocumentCodeNormalization(baseSnapshot());
+  const peeked1 = peekUnresolvedCodes();
+  assert.ok(peeked1.length > 0);
+  const peeked2 = peekUnresolvedCodes();
+  assert.deepEqual(peeked1, peeked2, 'peekを2回呼んでも同じ内容（リセットされていない）');
+
+  const taken = takeUnresolvedCodes(); // 実際に取り出す
+  assert.deepEqual(taken, peeked2, 'peekの内容はtakeの内容と一致する');
+  assert.deepEqual(takeUnresolvedCodes(), []); // takeAfterはリセット済み
 
   setDocumentCodeTable(null); // 後始末
 });

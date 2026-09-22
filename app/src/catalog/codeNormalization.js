@@ -197,12 +197,18 @@ export function normalizeSnapshotCodes(snapshot, table) {
 // ----------------------------------------------------------------
 // 文書単位の正規化表（読込み時に1回設定し、各階がデコードされるたびに適用する）。
 //
-// 文書固有の読み替え（束の aliases）はまだどこからも setDocumentCodeTable() を呼ばない
-// （束の読込み経路への接続は後続ステップ）。その段階でも本体の振り直し表
+// 文書固有の読み替え（束の aliases）は catalogOverlayLoader.js（読込み時）・
+// catalog/incomingReconcile.js（起動時照合。ステップ6-1）が setDocumentAliases/
+// addDocumentAliases を通して設定する。その段階でも本体の振り直し表
 // （LEGACY_MATERIAL_CODE_ALIASES）だけは常に効かせる——「表が未設定＝正規化しない」ではなく
-// 「表が未設定＝本体表だけで正規化する」が既定（2026-09-22 裁定）。setDocumentCodeTable(null) は
+// 「表が未設定＝本体表だけで正規化する」が既定（2026-09-22 裁定）。setDocumentAliases(null) は
 // 文書固有の上書きを解除するだけで、本体表による正規化そのものは止めない。
+//
+// 状態の持ち主はこのモジュール1つ（documentAliases が生の {from:to}・documentCodeTable は
+// それから導出したMap）。setDocumentCodeTable は低レベルAPIとして残す（catalogOverlayLoader.js
+// の失敗路の巻き戻し等、表そのものを直接扱いたい呼び出しのため）。
 // ----------------------------------------------------------------
+let documentAliases = {}; // 生の読み替え表（後からaddDocumentAliasesで追記される）
 let documentCodeTable = null;
 let defaultCodeTable = null; // buildCodeTable({}) の遅延キャッシュ（本体表のみ・不変）
 let unresolvedAccumulator = [];
@@ -222,7 +228,11 @@ function effectiveCodeTable() {
   return defaultCodeTable;
 }
 
-/** 読込み時に文書固有の正規化表を設定する（表は消さずに持ち続ける。閉じるときは null で解除）。 */
+/**
+ * 読込み時に文書固有の正規化表を設定する（低レベルAPI。表は消さずに持ち続ける。
+ * 閉じるときは null で解除）。documentAliases（生の読み替え表）とは独立に表だけを
+ * 直接差し替えたい呼び出し（catalogOverlayLoader.js の失敗路の巻き戻し等）のために残す。
+ */
 export function setDocumentCodeTable(table) {
   documentCodeTable = table ?? null;
 }
@@ -230,6 +240,43 @@ export function setDocumentCodeTable(table) {
 /** 現在設定されている文書固有の正規化表（未設定は null。既定＝本体表の適用有無はこの値では分からない）。 */
 export function currentCodeTable() {
   return documentCodeTable;
+}
+
+/**
+ * 読込み時に文書固有の読み替え（束の aliases.material 相当。生の {from:to}）を設定する。
+ * 内部で setDocumentCodeTable(buildCodeTable({ aliases })) を組み立てて即座に反映する
+ * （文書固有表の唯一の入口）。null を渡すと文書固有の読み替えを解除する（本体の
+ * 振り直し表はこの操作では止まらない——effectiveCodeTable の既定と同じ）。
+ * @param {object|null} aliasesOrNull
+ */
+export function setDocumentAliases(aliasesOrNull) {
+  documentAliases = aliasesOrNull ?? {};
+  // aliasesが空なら「文書固有の上書きなし」= documentCodeTableをnullに戻し、effectiveCodeTable()の
+  // 遅延キャッシュ（defaultCodeTable）へ委ねる（従来のsetDocumentCodeTable(null)と同じ既定）。
+  const hasAliases = Object.keys(documentAliases).length > 0;
+  setDocumentCodeTable(hasAliases ? buildCodeTable({ aliases: documentAliases }) : null);
+}
+
+/** 現在の文書固有の読み替え（生の {from:to}。未設定時は空オブジェクト）。 */
+export function currentDocumentAliases() {
+  return documentAliases;
+}
+
+/**
+ * 文書固有の読み替えへ {from,to} の組を追記し、正規化表を作り直す（後効き）。
+ * 既存の documentAliases に後勝ちでマージする——連鎖（a→b, b→c）はbuildCodeTableが
+ * 潰し、循環は例外を投げる（buildCodeTableと同じ規約）。
+ * @param {Array<{from: string, to: string}>} pairs
+ */
+export function addDocumentAliases(pairs) {
+  const next = { ...documentAliases };
+  for (const { from, to } of pairs ?? []) next[from] = to;
+  setDocumentAliases(next);
+}
+
+/** これまでに蓄積した未解決コードを非破壊で覗く（takeUnresolvedCodesと違い蓄積をリセットしない）。 */
+export function peekUnresolvedCodes() {
+  return [...unresolvedAccumulator];
 }
 
 /**

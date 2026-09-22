@@ -172,7 +172,7 @@ export function classifyIncoming(kind, docEntry, appEntries, origins) {
 }
 
 /** entryの名称（表示用）。material=name、他4種別=label。どちらも無ければ空文字。 */
-function displayNameOf(entry) {
+export function displayNameOf(entry) {
   return entry?.name || entry?.label || '';
 }
 

@@ -67,13 +67,14 @@ test('【不変条件】modes/FinishModeState.js: 材コード判定はcatalog/m
 // ステップ4: 「新規（全消去）」= store.js の resetAll が clearOverlays（catalogRegistry.js）・
 // setDocumentCodeTable(null)（codeNormalization.js）・project.setCatalogError(null) を呼ぶ配線。
 // 予告どおりソーステキスト検査で固定する（他の不変条件テストと同じ型）。
-test('【不変条件・ステップ4】store.js: resetAllの関数本体がclearOverlays・setDocumentCodeTable(null)・project.setCatalogError(null)を呼んでいる', () => {
+test('【不変条件・ステップ4→6-1改訂】store.js: resetAllの関数本体がclearOverlays・takeUnresolvedCodes・setDocumentAliases(null)・project.setCatalogError(null)を呼んでいる', () => {
   const src = readSrc('store.js');
   const m = /export async function resetAll\(\) \{([\s\S]*?)\n\}/.exec(src);
   assert.ok(m, 'store.js に resetAll 関数が見つからない');
   const body = m[1];
   assert.ok(/\bclearOverlays\(\)/.test(body), 'resetAll が clearOverlays() を呼んでいない');
-  assert.ok(/\bsetDocumentCodeTable\(null\)/.test(body), 'resetAll が setDocumentCodeTable(null) を呼んでいない');
+  assert.ok(/\btakeUnresolvedCodes\(\)/.test(body), 'resetAll が takeUnresolvedCodes() を呼んでいない（未解決コードの蓄積を捨てる契約）');
+  assert.ok(/\bsetDocumentAliases\(null\)/.test(body), 'resetAll が setDocumentAliases(null) を呼んでいない（ステップ6-1でsetDocumentCodeTable(null)から移行）');
   assert.ok(/\bproject\.setCatalogError\(null\)/.test(body), 'resetAll が project.setCatalogError(null) を呼んでいない');
 });
 
@@ -145,6 +146,101 @@ test('【不変条件・ステップ4】store.js: bootReadyがloadCatalogOverlay
   assert.ok(
     overlayIdx < structIdx,
     'loadCatalogOverlaysFromIDB は setupStructGraph より前に呼ぶ契約（overlayが立ってから壁生成・材照合が走る。後ろへの移動への退行）',
+  );
+});
+
+// ステップ6-1: bootReadyがreconcileIncomingCatalogsをloadCatalogOverlaysFromIDBの直後・
+// setupStructGraphより前に呼んでいることを固定する（順序不変条件。overlayが立ってから照合し、
+// 構造復元より前に文書同梱・ユーザーライブラリの整合を取る）。
+test('【不変条件・ステップ6-1】store.js: bootReadyがreconcileIncomingCatalogsをloadCatalogOverlaysFromIDBの直後・setupStructGraphより前に呼んでいる', () => {
+  const src = readSrc('store.js');
+  const body = extractBalancedBody(src, 'export const bootReady', { isArrowIife: true });
+  assert.ok(body, 'store.js に bootReady のIIFE本体が見つからない');
+  const overlayIdx = body.indexOf('loadCatalogOverlaysFromIDB(');
+  const reconcileIdx = body.indexOf('reconcileIncomingCatalogs(');
+  const structIdx  = body.indexOf('setupStructGraph(');
+  assert.ok(overlayIdx >= 0, 'bootReady が loadCatalogOverlaysFromIDB を呼んでいない');
+  assert.ok(reconcileIdx >= 0, 'bootReady が reconcileIncomingCatalogs を呼んでいない（呼び出し削除への退行）');
+  assert.ok(structIdx >= 0, 'bootReady が setupStructGraph を呼んでいない');
+  assert.ok(
+    overlayIdx < reconcileIdx,
+    'reconcileIncomingCatalogs は loadCatalogOverlaysFromIDB より後に呼ぶ契約（overlayが立ってから照合する）',
+  );
+  assert.ok(
+    reconcileIdx < structIdx,
+    'reconcileIncomingCatalogs は setupStructGraph より前に呼ぶ契約（後ろへの移動への退行）',
+  );
+});
+
+// ステップ6-1・QA Minor1: reconcileIncomingCatalogsは doc（文書同梱）が空なら materialData.js を
+// 動的importせず即returnする（不変条件7-1）。userだけがあってdocが空のとき（照合対象=docが無い）
+// でも読まない契約——guardが user.length を条件に含めていないこと（両方空の場合のみに限定する
+// 退行）も合わせて固定する。関数本体の先頭でのearly returnであることを固定する。
+test('【不変条件・ステップ6-1・QA Minor1】store.js: reconcileIncomingCatalogsはdocが空ならmaterialData.jsを読まず即returnする（userだけあっても読まない）', () => {
+  const src = readSrc('store.js');
+  const body = extractBalancedBody(src, 'export async function reconcileIncomingCatalogs() {');
+  assert.ok(body, 'store.js に reconcileIncomingCatalogs が見つからない');
+  const guardMatch = /if\s*\(\s*doc\.length\s*===\s*0\s*\)\s*return;/.exec(body);
+  assert.ok(guardMatch, 'reconcileIncomingCatalogs にdocが空のearly returnガードが無い');
+  assert.ok(
+    !/if\s*\(\s*doc\.length\s*===\s*0\s*&&\s*user\.length\s*===\s*0\s*\)\s*return;/.test(body),
+    'guardがuser.lengthも条件にしている（doc空・user非空でもmaterialData.jsを読んでしまう退行）',
+  );
+  const importIdx = body.indexOf("import('./finish/materials/materialData.js')");
+  assert.ok(importIdx >= 0, 'reconcileIncomingCatalogs が materialData.js を動的importしていない');
+  assert.ok(
+    guardMatch.index < importIdx,
+    'early returnガードは materialData.js の動的importより前になければならない（不変条件7-1）',
+  );
+});
+
+// ステップ6-1: reconcileIncomingCatalogsは失敗（builtinロード失敗・commitUserFnのreject等）を
+// try/catchで握りproject.setCatalogError(e.message)だけを立てる（bootReady自体を落とさない）。
+test('【不変条件・ステップ6-1】store.js: reconcileIncomingCatalogsはtry/catchで失敗を握りproject.setCatalogError(e.message)を立てる', () => {
+  const src = readSrc('store.js');
+  const body = extractBalancedBody(src, 'export async function reconcileIncomingCatalogs() {');
+  assert.ok(body, 'store.js に reconcileIncomingCatalogs が見つからない');
+  assert.ok(/\btry\s*\{/.test(body), 'reconcileIncomingCatalogs が try を持っていない');
+  const catchMatch = /catch\s*\(\s*e\s*\)\s*\{([\s\S]*?)\n {2}\}/.exec(body);
+  assert.ok(catchMatch, 'reconcileIncomingCatalogs が catch(e) を持っていない');
+  assert.ok(
+    /project\.setCatalogError\(e\.message\)/.test(catchMatch[1]),
+    'reconcileIncomingCatalogs の catch が project.setCatalogError(e.message) を呼んでいない',
+  );
+});
+
+// ステップ6-1: formatReconcileNoticeの結果がnullでなければproject.setCatalogErrorを1回だけ
+// 呼ぶ（2回呼ぶと2本目が潰す既存の規約と同じ）。tryブロック内でsetCatalogErrorの呼び出しが
+// 1箇所（notice用の1回）だけであることを固定する。
+test('【不変条件・ステップ6-1】store.js: reconcileIncomingCatalogsはtry内でproject.setCatalogErrorを通知用に1回だけ呼ぶ', () => {
+  const src = readSrc('store.js');
+  const body = extractBalancedBody(src, 'export async function reconcileIncomingCatalogs() {');
+  assert.ok(body, 'store.js に reconcileIncomingCatalogs が見つからない');
+  const tryMatch = /try\s*\{([\s\S]*?)\n {2}\} catch/.exec(body);
+  assert.ok(tryMatch, 'reconcileIncomingCatalogs の try ブロックが見つからない');
+  const setCalls = tryMatch[1].match(/project\.setCatalogError\(/g) ?? [];
+  assert.equal(setCalls.length, 1, `try内のproject.setCatalogError呼び出しは1回のみの契約（実際: ${setCalls.length}回）`);
+  assert.ok(/if\s*\(\s*notice\s*\)\s*project\.setCatalogError\(notice\)/.test(tryMatch[1]), 'notice が null なら setCatalogError を呼ばないガードが無い');
+});
+
+// コーディネーターQA指摘2（ステップ6-1）: formatReconcileNoticeへ渡すaddedCount/skippedCountは
+// plan.adds.lengthではなくapplyReconcilePlanの実際の結果（result.addedKeys.length/
+// result.skipped.length）を使う契約を固定する（R17で弾かれた追加を「追加されました」と
+// 誤って報告しないため）。
+test('【不変条件・ステップ6-1・QA指摘2】store.js: reconcileIncomingCatalogsはformatReconcileNoticeにresult.addedKeys.length/result.skipped.lengthを渡している', () => {
+  const src = readSrc('store.js');
+  const body = extractBalancedBody(src, 'export async function reconcileIncomingCatalogs() {');
+  assert.ok(body, 'store.js に reconcileIncomingCatalogs が見つからない');
+  const noticeCallMatch = /formatReconcileNotice\(plan,\s*\{([\s\S]*?)\}\)/.exec(body);
+  assert.ok(noticeCallMatch, 'formatReconcileNotice(plan, {...}) 呼び出しが見つからない（第2引数省略への退行）');
+  const args = noticeCallMatch[1];
+  assert.ok(
+    /addedCount\s*:\s*result\.addedKeys\.length/.test(args),
+    'formatReconcileNoticeにaddedCount: result.addedKeys.lengthを渡していない',
+  );
+  assert.ok(
+    /skippedCount\s*:\s*result\.skipped\.length/.test(args),
+    'formatReconcileNoticeにskippedCount: result.skipped.lengthを渡していない',
   );
 });
 
@@ -248,4 +344,21 @@ test('【不変条件・ステップ4・QA指摘A】store.js: saveMaterialCatalo
   const saveIdx = body.indexOf('saveDocumentCatalog(');
   assert.ok(recoverIdx >= 0, 'saveMaterialCatalogDocument が recoverUnresolvedEntries を呼んでいない');
   assert.ok(recoverIdx < saveIdx, 'recoverUnresolvedEntries は saveDocumentCatalog より前に呼ぶ契約');
+});
+
+// ステップ6-1・既存バグ修正: saveMaterialCatalogDocumentのbuildDocumentBundle呼び出しに
+// aliases（currentDocumentAliases()）を渡していないと、保存のたびに文書aliasesが空で
+// 上書きされる（読み替え表が消える）。本文が aliases: { [CatalogKind.MATERIAL]:
+// currentDocumentAliases() } をbuildDocumentBundleへ渡していることを固定する。
+test('【不変条件・ステップ6-1】store.js: saveMaterialCatalogDocumentはbuildDocumentBundleにaliases（currentDocumentAliases）を渡している', () => {
+  const src = readSrc('store.js');
+  const body = extractBalancedBody(src, 'async function saveMaterialCatalogDocument(floorRecords) {');
+  assert.ok(body, 'store.js に saveMaterialCatalogDocument が見つからない');
+  const callMatch = /buildDocumentBundle\(\{([\s\S]*?)\}\);/.exec(body);
+  assert.ok(callMatch, 'store.js に buildDocumentBundle(...) 呼び出しが見つからない');
+  const args = callMatch[1];
+  assert.ok(
+    /aliases\s*:\s*\{\s*\[CatalogKind\.MATERIAL\]\s*:\s*currentDocumentAliases\(\)\s*\}/.test(args),
+    'buildDocumentBundle の呼び出しに aliases: { [CatalogKind.MATERIAL]: currentDocumentAliases() } が渡されていない（保存のたびに文書aliasesが空で上書きされる退行）',
+  );
 });

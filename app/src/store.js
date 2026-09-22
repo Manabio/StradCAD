@@ -9,7 +9,7 @@ import {
   deleteFloor as dbDeleteFloor, clearAllStores, loadFloor, savePlanesMeta, loadPlanesMeta,
   saveSiteData, loadSiteData, saveProject, loadProject, saveProjectInfo, loadProjectInfo,
   seedFloorsFromDocument, commitFloorsToDocument, loadAllSavedFloors, saveSavedFloor,
-  saveDocumentCatalog, loadDocumentCatalogs, loadUserCatalogs,
+  saveDocumentCatalog, loadDocumentCatalogs, loadUserCatalogs, saveUserCatalog,
 } from './storage/db.js';
 import { buildDocumentJson, parseDocumentEnvelope } from './storage/documentFile.js';
 import { encodeProjectInfo, decodeProjectInfo } from './storage/projectInfo.js';
@@ -24,15 +24,17 @@ import { clearLocalAutosave } from './storage/localSnapshot.js';
 import { refreshWallsAllFloors } from './wallRefresh.js';
 import { ERR_CATALOG_DUPLICATE } from './error.js';
 import { CatalogKind } from './catalog/catalogKinds.js';
-import { composeCatalog, clearOverlays } from './catalog/catalogRegistry.js';
+import { composeCatalog, clearOverlays, overlayFor } from './catalog/catalogRegistry.js';
 import { decodeCatalogBundle, encodeCatalogBundle } from './catalog/catalogCodec.js';
-import { mergeBundles, splitBundleByKind } from './catalog/catalogBundle.js';
+import { mergeBundles, splitBundleByKind, resolveCatalog, resolveOrigins } from './catalog/catalogBundle.js';
 import {
   collectUsedMaterialCodes, collectUsedKeys, expandTransitiveMaterials, buildDocumentBundle,
   recoverUnresolvedEntries,
 } from './catalog/usedEntries.js';
-import { setDocumentCodeTable } from './catalog/codeNormalization.js';
+import { setDocumentAliases, currentDocumentAliases, takeUnresolvedCodes } from './catalog/codeNormalization.js';
 import { loadCatalogOverlaysFromIDB as applyCatalogOverlays } from './catalog/catalogOverlayLoader.js';
+import { planIncomingReconcile, formatReconcileNotice, applyReconcilePlan } from './catalog/incomingReconcile.js';
+import { commitUserEntries } from './catalog/catalogMaintenance.js';
 
 // ----------------------------------------------------------------
 // ID の永続化
@@ -234,6 +236,55 @@ export async function loadCatalogOverlaysFromIDB({
 }
 
 /**
+ * 起動時の同梱カタログ照合（ステップ6-1）。loadCatalogOverlaysFromIDB が立てた overlay
+ * （catalog/catalogRegistry.js の overlayFor('material')）の doc（文書同梱）を、アプリ側
+ * （user＋builtin。doc は含まない）と catalog/incomingReconcile.js の
+ * planIncomingReconcile/applyReconcilePlan で照合する。
+ *
+ * doc（文書同梱）が空なら materialData.js を読まずに即 return する（照合対象=docが無ければ
+ * user単独でも照合するものが無い。不変条件7-1: materialData.js は仕上げモード突入時・
+ * 保存時のみ動的 import）。
+ *
+ * 失敗（builtinの動的import失敗・commitUserFnのreject等）はここで握り、bootReady 自体は
+ * 失敗させない——materialError と同じ経路で project.setCatalogError(e.message) にだけ載せる
+ * （overlay には触らない。読込み直後の overlay は既に立っているのでそのまま使い続けられる）。
+ * 成功時は formatReconcileNotice(plan, { addedCount: result.addedKeys.length,
+ * skippedCount: result.skipped.length }) の結果を project.setCatalogError へ1回だけ渡す
+ * （null なら呼ばない——通知するものが無いのに空メッセージでトーストを出さないため）。
+ */
+export async function reconcileIncomingCatalogs() {
+  const kind = CatalogKind.MATERIAL;
+  const { doc, user } = overlayFor(kind);
+  if (doc.length === 0) return;
+
+  try {
+    const matMod = await import('./finish/materials/materialData.js');
+    const builtinList = matMod.MATERIALS;
+    // appEntries/origins は doc を含めない（user+builtinのみ）——docは「今回照合する側」なので、
+    // 既に合成済みのアプリ側と比べないと同一キー扱いで自明にsameになってしまうため。
+    const appEntries = [...resolveCatalog(kind, { user, builtin: builtinList }).values()];
+    const origins = resolveOrigins(kind, { user, builtin: builtinList });
+
+    const plan = planIncomingReconcile({ kind, docEntries: doc, appEntries, origins });
+    const result = await applyReconcilePlan(plan, {
+      kind,
+      currentUser: user,
+      commitUserFn: (nextUser) => commitUserEntries(nextUser, user, { saveFn: saveUserCatalog }),
+      onSkipped: (entry, e) => console.warn(`カタログ照合: 追加候補がR17で弾かれたためスキップしました: ${entry?.code ?? entry}`, e),
+    });
+    if (result.aliasPairs.length > 0) markDirty();
+
+    const notice = formatReconcileNotice(plan, {
+      addedCount: result.addedKeys.length,
+      skippedCount: result.skipped.length,
+    });
+    if (notice) project.setCatalogError(notice);
+  } catch (e) {
+    project.setCatalogError(e.message);
+  }
+}
+
+/**
  * 起動時IDB初期化の完了を表すPromise。App.jsx がマウント時に一度だけ購読し、
  * 完了後の project.activePlaneId（restorePlanesFromIDB が差し替え得る）を
  * React state（activeFloorId）へ反映する（QA Finding 1）。
@@ -255,6 +306,9 @@ export const bootReady = (async () => {
   // 最初の restoreGraph（floorSwapManager.activate）より前——overlayが立ってから壁生成・
   // 材照合が走るようにする（ステップ4）。
   await loadCatalogOverlaysFromIDB();
+  // 起動時の同梱カタログ照合（ステップ6-1）: overlayが立った直後・setupStructGraphより前に
+  // 1回だけ行う（reconcileIncomingCatalogs自体が失敗を握るため、ここではtry/catchしない）。
+  await reconcileIncomingCatalogs();
   // 順序不変条件: 通り芯（structGraph）の復元を完了させてからフロアを復元すること。
   // restoreGraph は壁の軸CL・端点CLを structGraph から解決し、解決できない壁を
   // 無音で捨てるため、並行実行すると通り芯参照の壁・寸法線が失われる。
@@ -464,6 +518,7 @@ async function saveMaterialCatalogDocument(floorRecords) {
   const { bundle: draftBundle, unresolvedKeys } = buildDocumentBundle({
     usedKeysByKind: new Map([[CatalogKind.MATERIAL, expandedMaterialCodes]]),
     resolvedByKind: new Map([[CatalogKind.MATERIAL, materialMap]]),
+    aliases: { [CatalogKind.MATERIAL]: currentDocumentAliases() },
   });
 
   let finalBundle = draftBundle;
@@ -599,7 +654,8 @@ export async function resetAll() {
   clearLocalAutosave();
   clearDirty();
   clearOverlays();
-  setDocumentCodeTable(null);
+  takeUnresolvedCodes(); // 蓄積を捨てる（戻り値は使わない）
+  setDocumentAliases(null);
   project.setCatalogError(null);
   project.setCatalogOverlayUntrusted(false);
 }
