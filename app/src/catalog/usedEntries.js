@@ -55,7 +55,12 @@ export function collectUsedKeys(snapshot) {
 
 /**
  * 使用材コードの集合に、内装マスター・境界マスターが内部で参照する材コードを推移的に追加する
- * （4.3）。LAYER_SOURCE の層（実行時解決）は辿らない——固定コード（layer.code）だけを見る。
+ * （4.3）。LAYER_SOURCE の層（実行時解決）は辿らない——固定コード（layer.code）だけを見る
+ * （ステップ7b）。理由: LAYER_SOURCE.FLOOR_EXTERIOR_BACKING/FLOOR_INTERIOR_BACKING の実体は
+ * graph.exteriorWallBacking/interiorWallBacking（codeNormalization.js BACKING_FIELDS 経由で
+ * collectUsedMaterialCodes が既に収集済み）、ROOM_WALL_MATERIAL/ROOM_FINISH の実体は
+ * room.customOverrides の wallMaterial/wallFinish（同じく isRoomMaterialOverride 経由で
+ * 別経路収集済み）——ここで LAYER_SOURCE を辿ると同じ材コードを二重収集するだけになる。
  * @param {Set<string>|Iterable<string>} codes 直接参照された材コード
  * @param {{ interiorMasters?: Iterable<{wallMaterial?: string, wallFinish?: string}>,
  *           boundaryMasters?: Iterable<{layers?: Array<{code?: string|null}>}> }} used

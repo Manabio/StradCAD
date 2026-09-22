@@ -250,6 +250,15 @@ test('【失敗系】section.validate: 必須項目(label)欠落は例外を投�
   assert.throws(() => kindDef('section').validate({ key: 'k', materialType: 'WOOD', shape: 'rect', width: 90, height: 90 }), /必須項目が欠落/);
 });
 
+// 2026-09-23 QA指摘Minor-2: keyが空文字だとvalidateは通ってしまうがkeyOfは例外を投げる
+// 「遅延爆弾」（setOverlayは成功するがcomposeCatalogで初めて落ちる）になっていたため、
+// materialのcodeと同じ非空文字列チェックに揃えた。
+test('【失敗系・2026-09-23 QA指摘Minor-2】section.validate: keyが空文字は例外を投げる（typeof==="string"だけでは空文字を通していた）', () => {
+  assert.throws(() => kindDef('section').validate({
+    key: '', materialType: 'WOOD', shape: 'rect', width: 90, height: 90, label: '90×90',
+  }), /keyが不正/);
+});
+
 test('openingSubType.validate: 正常系（category=fitting/window）', () => {
   assert.doesNotThrow(() => kindDef('openingSubType').validate({
     category: 'fitting', key: 'singleSwing', label: '片開き戸', mechanism: 'swing', defaultWidth: 800, defaultHeight: 2000,
@@ -277,6 +286,12 @@ test('【失敗系】interiorMaster.validate: 必須項目(ceilingHeight)欠落�
   }), /必須項目が欠落/);
 });
 
+test('【失敗系・2026-09-23 QA指摘Minor-2】interiorMaster.validate: keyが空文字は例外を投げる（遅延爆弾防止。sectionと同型）', () => {
+  assert.throws(() => kindDef('interiorMaster').validate({
+    key: '', label: '居室', wallMaterial: '301000000002', wallFinish: '302000000001', ceilingHeight: 2700,
+  }), /keyが不正/);
+});
+
 test('boundaryMaster.validate: layered=layers必須／meta=layers不要', () => {
   assert.doesNotThrow(() => kindDef('boundaryMaster').validate({
     key: 'EXTERIOR_WALL', label: '外壁', kind: 'layered', layers: [{ role: 'x', code: null }],
@@ -296,6 +311,12 @@ test('【失敗系】boundaryMaster.validate: kindが不正な値なら例外を
   assert.throws(() => kindDef('boundaryMaster').validate({
     key: 'k', label: 'x', kind: 'other',
   }), /kindが不正/);
+});
+
+test('【失敗系・2026-09-23 QA指摘Minor-2】boundaryMaster.validate: keyが空文字は例外を投げる（遅延爆弾防止。sectionと同型）', () => {
+  assert.throws(() => kindDef('boundaryMaster').validate({
+    key: '', label: '外壁', kind: 'layered', layers: [{ role: 'x', code: null }],
+  }), /keyが不正/);
 });
 
 // QA指摘B2: derivedFromの型検証（compareFields/matchFieldsに追加されたフィールド）

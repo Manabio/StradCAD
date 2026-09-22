@@ -11,7 +11,7 @@ import { FINISH_FIELDS, normalizePartialDominance } from '../finish/roomReinterp
 import { roomNameAnchor } from '../finish/roomLabel.js';
 import { ERR_MATERIAL_MISMATCH } from '../error.js';
 import { RoomFeature, RoomKind, applyDefaultBaseboard } from '@core';
-import { CatalogKind } from '../catalog/catalogKinds.js';
+import { CatalogKind, interiorMasterBuiltinList } from '../catalog/catalogKinds.js';
 import { composeCatalog, composeList, docDiffMap } from '../catalog/catalogRegistry.js';
 import { isMaterialCode } from '../catalog/materialCode.js';
 import { buildCodeTable, currentDocumentAliases, peekUnresolvedCodes } from '../catalog/codeNormalization.js';
@@ -56,7 +56,7 @@ export class FinishModeState {
   materials       = null;        // 材マスタ配列（読み取り専用）
   materialMap     = null;        // Map<code, material>
   materialDiffs   = null;        // R13: docDiffMap(material)。Map<code, {baseOrigin, diffFields, baseEntry}>
-  interiorMasters = null;        // 内装マスター（key → 定義）
+  interiorMasters = null;        // composeCatalog(INTERIOR_MASTER)の結果。Map<key, 定義>（ステップ7b）
   // 指示UI（ステップ6-3）場面(b)unresolved-codeの行。init()で組み立て、App.jsxが
   // project.catalogResolveRows（catalog/resolveQueue.js replaceRowsByScenarioで自分の場面だけ置換）
   // へマージする。モード側からproject.setCatalogResolveRowsを直接呼ばない（materialErrorと同じ
@@ -95,11 +95,12 @@ export class FinishModeState {
       upperFloorHeight: observable,
       materialsLoaded: observable,
       materialError:   observable,
-      // materialMap/materialDiffs は observable.ref（中身は深追いしない）——MobXにMapや
-      // builtinエントリをディープ変換させない。builtinエントリとの===同一性（composeCatalog/
-      // docDiffMapの契約）を保つためと、材数百件を毎回プロキシ化しない性能のため。
+      // materialMap/materialDiffs/interiorMasters は observable.ref（中身は深追いしない）——
+      // MobXにMapやbuiltinエントリをディープ変換させない。builtinエントリとの===同一性
+      // （composeCatalog/docDiffMapの契約）を保つためと、材数百件を毎回プロキシ化しない性能のため。
       materialMap:     observable.ref,
       materialDiffs:   observable.ref,
+      interiorMasters: observable.ref,
       catalogResolveRows: observable.ref,
       isDragging:     computed,
       previewCells:   computed,
@@ -122,7 +123,12 @@ export class FinishModeState {
 
   /**
    * 材データ・内装マスターを動的 import でロードし、永続化データと照合する。
-   * 不一致があれば this.materialError に ERR_MATERIAL_MISMATCH を設定する（throw はしない）。
+   * 材コードの不一致（自階が参照する材コードがマスタに無い）は this.materialError に
+   * ERR_MATERIAL_MISMATCH を設定するだけで throw しない。一方 composeCatalog（material・
+   * interiorMasterの両方）は catalog/catalogRegistry.js の R17（builtin/user/doc合成後の
+   * 内容重複）等で例外を投げることがあり、これは呼び出し元（App.jsx のモード切替）まで
+   * 素通しする——material は元からこの扱いで、ステップ7bで interiorMaster も同じ扱いに
+   * 揃えた（2026-09-23 QA指摘Minor-4: 旧コメントの「throw はしない」は誤解を招くため訂正）。
    * @returns {Promise<{ ok: boolean, error: string|null }>}
    */
   async init() {
@@ -143,6 +149,8 @@ export class FinishModeState {
     const materials = composeList(CatalogKind.MATERIAL, matMod.MATERIALS);
     const materialMap = composeCatalog(CatalogKind.MATERIAL, matMod.MATERIALS);
     const materialDiffs = docDiffMap(CatalogKind.MATERIAL, matMod.MATERIALS); // R13: 同梱材の本体との不一致
+    // ステップ7b: 内装マスターもregistry合成（doc/userの読み替え・同梱を反映）。
+    const interiorMasters = composeCatalog(CatalogKind.INTERIOR_MASTER, interiorMasterBuiltinList(masterMod));
     this._composition = compMod; // 層構成→寸法解決（壁生成で使用）
 
     // 照合: 永続化データが参照する材コードがすべてマスタに存在するか
@@ -163,7 +171,7 @@ export class FinishModeState {
       this.materials       = materials;
       this.materialMap     = materialMap;
       this.materialDiffs   = materialDiffs;
-      this.interiorMasters = masterMod.INTERIOR_MASTERS;
+      this.interiorMasters = interiorMasters;
       this.materialsLoaded = true;
       this.materialError   = error;
       this.catalogResolveRows = catalogResolveRows;
@@ -392,8 +400,8 @@ export class FinishModeState {
     return (this.materials ?? []).filter(m => m.category === category);
   }
 
-  /** 内装マスターを key から取得（未ロード・未登録なら null）。 */
-  getInteriorMaster(key) { return this.interiorMasters?.[key] ?? null; }
+  /** 内装マスターを key から取得（未ロード・未登録なら null。読者は現状ゼロ）。 */
+  getInteriorMaster(key) { return this.interiorMasters?.get(key) ?? null; }
 
   /** 部屋外周壁の寸法 {wallBase, wallFinish}（実材厚から導出）。未解決なら null。 */
   roomWallDims(graph, room) {

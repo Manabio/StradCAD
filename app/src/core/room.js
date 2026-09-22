@@ -5,6 +5,15 @@
 import { makeObservable, observable, action } from 'mobx';
 import { RoomKind, ExteriorLevelRef, DEFAULT_WALL_MATERIAL } from './constants.js';
 import { INTERIOR_MASTERS } from '../finish/materials/interiorMasters.js';
+import { CatalogKind, interiorMasterBuiltinList } from '../catalog/catalogKinds.js';
+import { composeCatalog } from '../catalog/catalogRegistry.js';
+
+// registry（doc/userのoverlay）合成用のbuiltin一覧。catalogKinds.js の interiorMasterBuiltinList
+// （catalogKinds.js loadBuiltin・store.js・modes/FinishModeState.js と共通の1本化された関数、
+// 2026-09-23 QA指摘Minor-1）でモジュールロード時に1回だけ変換する——catalogRegistry.js/
+// catalogKinds.js は葉のため core からの静的importで悪化しない（core→仕上げドメインの依存は
+// 本ファイルの INTERIOR_MASTERS 静的importで既に存在する）。
+const INTERIOR_MASTER_BUILTIN = interiorMasterBuiltinList({ INTERIOR_MASTERS });
 
 // ================================================================
 // WALL BACKING MATERIAL (壁下地材)
@@ -197,11 +206,35 @@ export class Room {
   setTemplateKey(key)        { this.templateKey = key; }
 
   /**
+   * templateKey が指す内装マスターの実効値（registry合成＝doc/userの読み替え・同梱を反映）。
+   * key のみ除去して返す——composeCatalog が返すエントリは loadBuiltin 形式
+   * （{key, label, wallMaterial, ...}）で key を持つが、旧 INTERIOR_MASTERS[key] 直参照には
+   * key が無いため、除去しないと getFinishInfo() の戻り値形状が変わる（退行）。label は
+   * INTERIOR_MASTERS の各エントリ自体が持つフィールド（例: LIVING_ROOM.label==='居室'）
+   * なので、旧実装でも getFinishInfo() の戻り値に含まれていた——key と違い除去しない
+   * （2026-09-23 QA指摘Major-1: 誤ってlabelも除去していた退行を修正）。
+   * templateKey が null（現行データで常にこちら）なら registry には一切触れない短絡を先頭に
+   * 置く——getFinishInfo は wallFreshnessKey・elevationFigure・spaceModel 等から頻繁に
+   * 呼ばれるホットパスのため。
+   * （メモ化は今回不要——templateKeyは常にnullで短絡するため呼ばれない。将来templateKeyを
+   * 設定するUIが付いたら、overlayの世代キー（catalogRegistry.jsに現状無い）と組んだ
+   * メモ化を検討する。）
+   */
+  _master() {
+    if (!this.templateKey) return {};
+    const entry = composeCatalog(CatalogKind.INTERIOR_MASTER, INTERIOR_MASTER_BUILTIN).get(this.templateKey);
+    if (!entry) return {};
+    const rest = { ...entry };
+    delete rest.key;
+    return rest;
+  }
+
+  /**
    * 個別上書き。マスター値と同値なら override を削除し、ポケットを空に保つ。
    * （数値フィールドの型差を吸収するため緩く比較）
    */
   setOverride(field, value) {
-    const master = INTERIOR_MASTERS[this.templateKey] ?? {};
+    const master = this._master();
     if (field in master && String(master[field]) === String(value)) {
       this.customOverrides.delete(field);
     } else {
@@ -216,7 +249,7 @@ export class Room {
    * フォールバックする（壁描画の仕上げ厚導出が部屋の壁材を単一情報源とするため）。
    */
   getFinishInfo() {
-    const master = INTERIOR_MASTERS[this.templateKey] ?? {};
+    const master = this._master();
     const info = { ...master, ...Object.fromEntries(this.customOverrides) };
     if (!info.wallMaterial) info.wallMaterial = DEFAULT_WALL_MATERIAL;
     return info;

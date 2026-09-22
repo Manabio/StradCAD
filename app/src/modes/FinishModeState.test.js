@@ -206,6 +206,20 @@ test('FinishModeState.init: CL偏芯のbackingが既知コードならmaterialEr
   assert.equal(state.materialError, null);
 });
 
+// ---- ステップ7b: interiorMastersはcomposeCatalog(INTERIOR_MASTER)の結果（Map）----
+// （2026-09-23 QA指摘Major-2: 生のINTERIOR_MASTERSオブジェクトへの退行を検知する）。
+test('FinishModeState.init: interiorMastersはcomposeCatalog(INTERIOR_MASTER)の結果（Mapインスタンス）になる', async () => {
+  const graph = makeSingleCellGraph();
+  const state = new FinishModeState(graph, null);
+
+  const result = await state.init();
+
+  assert.equal(result.ok, true);
+  assert.ok(state.interiorMasters instanceof Map, 'interiorMastersはMapであるはず（旧実装は生のINTERIOR_MASTERSオブジェクトだった）');
+  assert.equal(state.getInteriorMaster('LIVING_ROOM').label, '居室');
+  assert.equal(state.getInteriorMaster('NOT_A_REAL_KEY'), null, '未登録キーはnull');
+});
+
 // ---- R13: 材照合の材データロード（init）でmaterialDiffs（docDiffMap）も張る ----
 test.afterEach(() => clearOverlays());
 

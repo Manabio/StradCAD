@@ -24,7 +24,7 @@ import { reconcilePlanes } from './floorOps.js';
 import { clearLocalAutosave } from './storage/localSnapshot.js';
 import { refreshWallsAllFloors } from './wallRefresh.js';
 import { ERR_CATALOG_DUPLICATE } from './error.js';
-import { CatalogKind } from './catalog/catalogKinds.js';
+import { CatalogKind, interiorMasterBuiltinList } from './catalog/catalogKinds.js';
 import { composeCatalog, clearOverlays, overlayFor, removeDocEntry } from './catalog/catalogRegistry.js';
 import { decodeCatalogBundle, encodeCatalogBundle } from './catalog/catalogCodec.js';
 import { mergeBundles, splitBundleByKind, resolveCatalog, resolveOrigins, detectLibraryConflicts } from './catalog/catalogBundle.js';
@@ -615,10 +615,7 @@ async function saveMaterialCatalogDocument(floorRecords) {
     import('./finish/materials/boundaryMasters.js'),
   ]);
   const materialMap = composeCatalog(CatalogKind.MATERIAL, matMod.MATERIALS);
-  const interiorMasterMap = composeCatalog(
-    CatalogKind.INTERIOR_MASTER,
-    Object.entries(interiorMod.INTERIOR_MASTERS).map(([key, v]) => ({ key, ...v })),
-  );
+  const interiorMasterMap = composeCatalog(CatalogKind.INTERIOR_MASTER, interiorMasterBuiltinList(interiorMod));
   const boundaryMasterMap = composeCatalog(CatalogKind.BOUNDARY_MASTER, Object.values(boundaryMod.BOUNDARY_MASTERS));
 
   const usedInteriorMasters = [...interiorMasterKeys].map(k => interiorMasterMap.get(k)).filter(Boolean);

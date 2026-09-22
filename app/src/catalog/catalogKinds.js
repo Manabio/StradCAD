@@ -89,6 +89,17 @@ export function classOf(major, minor) {
   return { major, majorLabel: majorClass.label, minor, minorLabel };
 }
 
+/**
+ * INTERIOR_MASTER の builtinList（{key, ...v}[]）を組み立てる純関数（2026-09-23 QA指摘Minor-1）。
+ * INTERIOR_MASTER の loadBuiltin（動的import thunk）・store.js・modes/FinishModeState.js・
+ * core/room.js の4箇所で同じ変換式が重複していたため1本化する。
+ * @param {{ INTERIOR_MASTERS: Record<string, object> }} mod interiorMasters.js のモジュール
+ *        （または同じ形の {INTERIOR_MASTERS} オブジェクト）
+ */
+export function interiorMasterBuiltinList(mod) {
+  return Object.entries(mod.INTERIOR_MASTERS).map(([key, v]) => ({ key, ...v }));
+}
+
 // ----------------------------------------------------------------
 // 登録表本体。Object.create(null) でプロトタイプ無しにする——kindDef('toString') や
 // kindDef('constructor') が Object.prototype の継承メンバーを拾って「動く」ことを防ぐ
@@ -177,7 +188,10 @@ const REGISTRY = Object.assign(Object.create(null), {
     dedupeFields: null,
     validate(entry) {
       requireFields(entry, ['key', 'materialType', 'shape', 'width', 'height', 'label'], '断面エントリ');
-      if (typeof entry.key !== 'string') throw new Error('断面エントリのkeyが不正です');
+      // 2026-09-23 QA指摘Minor-2: 空文字のkeyはvalidateを通ったのにkeyOfが例外を投げる
+      // 「遅延爆弾」になる（setOverlayは成功するがcomposeCatalogで初めて落ちる）ため、
+      // materialのcodeと同型に非空文字列を要求する（typeof==='string'だけでは空文字を通す）。
+      if (!isNonEmptyString(entry.key)) throw new Error('断面エントリのkeyが不正です（非空文字列が必要）');
       if (typeof entry.materialType !== 'string') throw new Error('断面エントリのmaterialTypeが不正です');
       if (typeof entry.shape !== 'string') throw new Error('断面エントリのshapeが不正です');
       if (!isFiniteNumber(entry.width) || !isFiniteNumber(entry.height)) {
@@ -284,15 +298,14 @@ const REGISTRY = Object.assign(Object.create(null), {
     dedupeFields: null,
     validate(entry) {
       requireFields(entry, ['key', 'label', 'wallMaterial', 'wallFinish', 'ceilingHeight'], '内装マスターエントリ');
-      if (typeof entry.key !== 'string') throw new Error('内装マスターエントリのkeyが不正です');
+      // 2026-09-23 QA指摘Minor-2: 空文字のkeyを通さない（section/boundaryMasterと同型。理由は同じ）。
+      if (!isNonEmptyString(entry.key)) throw new Error('内装マスターエントリのkeyが不正です（非空文字列が必要）');
       if (typeof entry.label !== 'string') throw new Error('内装マスターエントリのlabelが不正です');
       if (typeof entry.wallMaterial !== 'string') throw new Error('内装マスターエントリのwallMaterialが不正です');
       if (typeof entry.wallFinish !== 'string') throw new Error('内装マスターエントリのwallFinishが不正です');
       if (!isFiniteNumber(entry.ceilingHeight)) throw new Error('内装マスターエントリのceilingHeightが不正です');
     },
-    loadBuiltin: () => import('../finish/materials/interiorMasters.js').then(m => (
-      Object.entries(m.INTERIOR_MASTERS).map(([key, v]) => ({ key, ...v }))
-    )),
+    loadBuiltin: () => import('../finish/materials/interiorMasters.js').then(interiorMasterBuiltinList),
   },
 
   [CatalogKind.BOUNDARY_MASTER]: {
@@ -320,7 +333,8 @@ const REGISTRY = Object.assign(Object.create(null), {
     dedupeFields: null,
     validate(entry) {
       requireFields(entry, ['key', 'label', 'kind'], '境界マスターエントリ');
-      if (typeof entry.key !== 'string') throw new Error('境界マスターエントリのkeyが不正です');
+      // 2026-09-23 QA指摘Minor-2: 空文字のkeyを通さない（section/interiorMasterと同型。理由は同じ）。
+      if (!isNonEmptyString(entry.key)) throw new Error('境界マスターエントリのkeyが不正です（非空文字列が必要）');
       if (typeof entry.label !== 'string') throw new Error('境界マスターエントリのlabelが不正です');
       if (entry.kind !== 'layered' && entry.kind !== 'meta') {
         throw new Error(`境界マスターエントリのkindが不正です: ${entry.kind}`);

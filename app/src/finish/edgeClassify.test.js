@@ -3,8 +3,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Plane, PlanGraph, CenterLineType, Discipline, RoomKind, edgeKey } from '@core';
+import fs from 'node:fs';
 import { classifyAxisLineType, selectBoundaryMaster, buildCellToRoom } from './edgeClassify.js';
 import { worldToCell } from './gridCells.js';
+import { BOUNDARY_MASTERS } from './materials/boundaryMasters.js';
 
 function makeGraph() {
   return new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
@@ -89,4 +91,22 @@ test('【旧データ限定・種別ベースへ統一】selectBoundaryMaster: �
     '旧実装のclassifyAxisLineTypeはdiscipline===STRUCT&&labeledを最優先するため「通り芯」になり' +
     'CANTILEVER_WALLだったが、種別ベース（axisLineKindOf。centerLineKindがlineType:dashedを先に見る）' +
     'では「補助線」になりOUTDOOR_FACILITYになる');
+});
+
+// ---- ステップ7b 不変条件: selectBoundaryMaster が返し得るキーは全て BOUNDARY_MASTERS に実在する ----
+// 境界マスターの読み出し口は切替なし（registry合成はしない・設計7b）——ハードコードした
+// キー一覧ではなく selectBoundaryMaster 本体のソーステキストから `return 'XXX'` の
+// リテラルを実際に抽出して照合する（新しい masterType 分岐がBOUNDARY_MASTERSに無いキーを
+// 返す退行を、一覧の手動更新漏れに関係なく検知するため）。
+test('【不変条件・ステップ7b】selectBoundaryMasterがソース中で返し得るキーは全てBOUNDARY_MASTERSに実在する（ハードコード一覧ではなくソースから抽出）', () => {
+  const src = fs.readFileSync(new URL('./edgeClassify.js', import.meta.url), 'utf8');
+  const bodyMatch = /export function selectBoundaryMaster\([\s\S]*?\n\}/.exec(src);
+  assert.ok(bodyMatch, 'selectBoundaryMasterの関数本体がソースから見つからない');
+  const body = bodyMatch[0];
+  const keys = [...body.matchAll(/return '([A-Z_]+)'/g)].map(m => m[1]);
+  assert.ok(keys.length >= 6, `抽出できたキーが少なすぎる（抽出漏れの疑い）: ${keys.join(',')}`);
+  for (const key of keys) {
+    assert.ok(BOUNDARY_MASTERS[key], `BOUNDARY_MASTERSに${key}が存在しない（selectBoundaryMasterのソース中で返している）`);
+    assert.equal(BOUNDARY_MASTERS[key].key, key);
+  }
 });
