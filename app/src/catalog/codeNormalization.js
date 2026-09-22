@@ -1,0 +1,174 @@
+// ================================================================
+// スナップショットの材コード正規化（4.6）。
+//
+// 正規化表の入力は2つ: (1) 本体の振り直し表（legacyMaterialCodes.js・全文書共通）、
+// (2) 文書固有の読み替え（束の aliases。R8の内容一致・4.6.1の承認で積む）。
+// 参照値そのものを直す方式に一本化する（解決のたびに表を引く経路は作らない）。
+//
+// ゼロ依存の葉モジュール（legacyMaterialCodes.js だけ import可）。
+// graphSnapshot.js へはまだ繋がない（接続はステップ3）。
+// ================================================================
+
+import { LEGACY_MATERIAL_CODE_ALIASES } from './legacyMaterialCodes.js';
+
+/**
+ * {legacy, aliases} → 潰し済みの読み替え表 Map<旧コード, 新コード|null>。
+ * 文書側(aliases)が後勝ち。連鎖（a→b, b→c）は構築時に a→c へ潰す。循環は例外。
+ */
+export function buildCodeTable({ legacy = LEGACY_MATERIAL_CODE_ALIASES, aliases = {} } = {}) {
+  const raw = new Map();
+  for (const [from, to] of Object.entries(legacy)) raw.set(from, to);
+  for (const [from, to] of Object.entries(aliases)) raw.set(from, to); // 文書側後勝ち
+
+  const resolved = new Map();
+  for (const from of raw.keys()) resolved.set(from, resolveChain(from, raw));
+  return resolved;
+}
+
+function resolveChain(start, raw) {
+  let current = start;
+  const path = new Set([start]);
+  for (;;) {
+    if (!raw.has(current)) return current;
+    const next = raw.get(current);
+    if (next === null) return null; // 削除・廃止まで潰す
+    if (path.has(next)) throw new Error(`カタログコードの読み替えが循環しています: ${start}`);
+    path.add(next);
+    current = next;
+  }
+}
+
+function normalizeCode(code, table, unresolved, context) {
+  if (!table.has(code)) return code;
+  const target = table.get(code);
+  if (target === null) {
+    unresolved.push({ code, ...context });
+    return code; // 解決できないので値は据え置き、unresolvedへ積む
+  }
+  return target;
+}
+
+function normalizeRooms(rooms, table, unresolved) {
+  if (!Array.isArray(rooms)) return rooms;
+  let changedAny = false;
+  const next = rooms.map(room => {
+    const overrides = room?.overrides;
+    if (!Array.isArray(overrides)) return room;
+    let changed = false;
+    const nextOverrides = overrides.map(ov => {
+      if (!ov || (ov.key !== 'wallMaterial' && ov.key !== 'wallFinish')) return ov;
+      const mapped = normalizeCode(ov.value, table, unresolved, { location: 'room', roomId: room.id, key: ov.key });
+      if (mapped === ov.value) return ov;
+      changed = true;
+      return { ...ov, value: mapped };
+    });
+    if (!changed) return room;
+    changedAny = true;
+    return { ...room, overrides: nextOverrides };
+  });
+  return changedAny ? next : rooms;
+}
+
+function normalizeEdges(edges, table, unresolved) {
+  if (!Array.isArray(edges)) return edges;
+  let changedAny = false;
+  const next = edges.map(edge => {
+    const overrides = edge?.overrides;
+    if (!Array.isArray(overrides)) return edge;
+    let changed = false;
+    const nextOverrides = overrides.map(ov => {
+      if (!ov || typeof ov.value !== 'string' || !/^\d{12}$/.test(ov.value)) return ov;
+      const mapped = normalizeCode(ov.value, table, unresolved, { location: 'edge', edgeKey: edge.key, key: ov.key });
+      if (mapped === ov.value) return ov;
+      changed = true;
+      return { ...ov, value: mapped };
+    });
+    if (!changed) return edge;
+    changedAny = true;
+    return { ...edge, overrides: nextOverrides };
+  });
+  return changedAny ? next : edges;
+}
+
+function normalizeEccentricities(list, table, unresolved) {
+  if (!Array.isArray(list)) return list;
+  let changedAny = false;
+  const next = list.map(item => {
+    // backing==='' は per-floor 既定の合図（4.4のD裁定）——正規化の対象にしない。
+    if (!item || item.backing === '' || item.backing == null) return item;
+    const mapped = normalizeCode(item.backing, table, unresolved, { location: 'clEccentricity', clId: item.clId });
+    if (mapped === item.backing) return item;
+    changedAny = true;
+    return { ...item, backing: mapped };
+  });
+  return changedAny ? next : list;
+}
+
+/**
+ * snapshot 内の材コード参照4系統（4フィールド・rooms[].overrides・edges[].overrides・
+ * clEccentricities[].backing）を table で正規化する。非破壊（copy-on-write）。
+ * 変化が無ければ snapshot は同一参照のまま返す。table の値が null（削除・廃止）の場合は
+ * 値を据え置き、その箇所を unresolved に積む。
+ * @returns {{ snapshot: object, unresolved: Array<object> }}
+ */
+export function normalizeSnapshotCodes(snapshot, table) {
+  if (!snapshot) return { snapshot, unresolved: [] };
+  if (table == null) return { snapshot, unresolved: [] }; // 表なし＝no-op（既存の合図）
+  if (!(table instanceof Map)) throw new Error('コード正規化表はMapである必要があります');
+  if (table.size === 0) return { snapshot, unresolved: [] };
+
+  const unresolved = [];
+  let changed = false;
+
+  const backingFields = {};
+  for (const field of ['exteriorWallBacking', 'interiorWallBacking', 'ceilingBacking', 'floorBacking']) {
+    const code = snapshot[field];
+    if (code == null) { backingFields[field] = code; continue; }
+    const mapped = normalizeCode(code, table, unresolved, { location: field });
+    if (mapped !== code) changed = true;
+    backingFields[field] = mapped;
+  }
+
+  const rooms = normalizeRooms(snapshot.rooms, table, unresolved);
+  if (rooms !== snapshot.rooms) changed = true;
+
+  const edges = normalizeEdges(snapshot.edges, table, unresolved);
+  if (edges !== snapshot.edges) changed = true;
+
+  const clEccentricities = normalizeEccentricities(snapshot.clEccentricities, table, unresolved);
+  if (clEccentricities !== snapshot.clEccentricities) changed = true;
+
+  if (!changed) return { snapshot, unresolved };
+  return { snapshot: { ...snapshot, ...backingFields, rooms, edges, clEccentricities }, unresolved };
+}
+
+// ----------------------------------------------------------------
+// 文書単位の正規化表（読込み時に1回設定し、各階がデコードされるたびに適用する）。
+// ----------------------------------------------------------------
+let documentCodeTable = null;
+let unresolvedAccumulator = [];
+
+/** 読込み時に文書の正規化表を設定する（表は消さずに持ち続ける。閉じるときは null で解除）。 */
+export function setDocumentCodeTable(table) {
+  documentCodeTable = table ?? null;
+}
+
+/** 現在設定されている文書の正規化表（未設定は null）。 */
+export function currentCodeTable() {
+  return documentCodeTable;
+}
+
+/** 現在の文書正規化表を snapshot に適用する（表が無ければ snapshot をそのまま返す）。 */
+export function applyDocumentCodeNormalization(snapshot) {
+  if (!documentCodeTable) return snapshot;
+  const { snapshot: next, unresolved } = normalizeSnapshotCodes(snapshot, documentCodeTable);
+  if (unresolved.length > 0) unresolvedAccumulator.push(...unresolved);
+  return next;
+}
+
+/** これまでに蓄積した未解決コードを取り出し、蓄積をリセットする。 */
+export function takeUnresolvedCodes() {
+  const taken = unresolvedAccumulator;
+  unresolvedAccumulator = [];
+  return taken;
+}

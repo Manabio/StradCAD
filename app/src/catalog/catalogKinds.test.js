@@ -1,0 +1,242 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { CatalogKind, CATALOG_KINDS, kindDef, listKinds, MATERIAL_CLASSES, classOf } from './catalogKinds.js';
+
+test('listKinds: 登録済み5種別を返す', () => {
+  assert.deepEqual(new Set(listKinds()), new Set([
+    'material', 'interiorMaster', 'boundaryMaster', 'section', 'openingSubType',
+  ]));
+  assert.deepEqual(Object.values(CatalogKind).sort(), listKinds().sort());
+});
+
+test('CATALOG_KINDS: キー配列の複製ではなく「kind→定義」の登録表そのもの（凍結）', () => {
+  assert.deepEqual(Object.keys(CATALOG_KINDS).sort(), listKinds().sort());
+  assert.equal(CATALOG_KINDS.material.kind, 'material');
+  assert.equal(typeof CATALOG_KINDS.material.keyOf, 'function');
+  assert.ok(Object.isFrozen(CATALOG_KINDS));
+  // listKinds()はCATALOG_KINDSから導出（列挙手段の三重化を解消。QA指摘・Minor）
+  assert.equal(kindDef('material'), CATALOG_KINDS.material);
+});
+
+test('kindDef: 各種別の行はkeyOf/matchFields/minMatchFieldsを持つ', () => {
+  for (const kind of listKinds()) {
+    const def = kindDef(kind);
+    assert.equal(def.kind, kind);
+    assert.equal(typeof def.keyOf, 'function');
+    assert.ok(Array.isArray(def.matchFields));
+    assert.equal(typeof def.minMatchFields, 'number');
+    assert.equal(typeof def.validate, 'function');
+    assert.equal(typeof def.loadBuiltin, 'function');
+  }
+});
+
+test('【失敗系】kindDef: 未知の種別は例外を投げる', () => {
+  assert.throws(() => kindDef('unknownKind'), /未知のカタログ種別/);
+});
+
+test('【失敗系・QA指摘M2】kindDef: Object.prototypeの継承メンバー名（toString/constructor等）は未知の種別として例外を投げる', () => {
+  assert.throws(() => kindDef('toString'), /未知のカタログ種別/);
+  assert.throws(() => kindDef('constructor'), /未知のカタログ種別/);
+  assert.throws(() => kindDef('hasOwnProperty'), /未知のカタログ種別/);
+  assert.throws(() => kindDef('__proto__'), /未知のカタログ種別/);
+});
+
+// ---- keyOf（QA指摘B1: openingSubTypeは複合キー）----
+test('openingSubType.keyOf: category:key の複合キーを返す（FITTING/WINDOWのkey衝突を区別する）', () => {
+  const def = kindDef('openingSubType');
+  assert.equal(def.keyOf({ category: 'fitting', key: 'doubleSliding' }), 'fitting:doubleSliding');
+  assert.equal(def.keyOf({ category: 'window', key: 'doubleSliding' }), 'window:doubleSliding');
+  assert.notEqual(
+    def.keyOf({ category: 'fitting', key: 'doubleSliding' }),
+    def.keyOf({ category: 'window', key: 'doubleSliding' }),
+  );
+});
+
+test('material/section/interiorMaster/boundaryMaster.keyOf: 単一フィールド', () => {
+  assert.equal(kindDef('material').keyOf({ code: '111111111165' }), '111111111165');
+  assert.equal(kindDef('section').keyOf({ key: 'WOOD-90x90' }), 'WOOD-90x90');
+  assert.equal(kindDef('interiorMaster').keyOf({ key: 'LIVING_ROOM' }), 'LIVING_ROOM');
+  assert.equal(kindDef('boundaryMaster').keyOf({ key: 'EXTERIOR_WALL' }), 'EXTERIOR_WALL');
+});
+
+// ---- QA指摘M1: openingSubTypeのmatchFields順・B2: boundaryMasterのcompareFields/matchFields ----
+test('openingSubType.matchFields: category,mechanism,機構パラメータ,wallKinds,defaultWidth,defaultHeight,labelの順（末尾から外す）', () => {
+  assert.deepEqual(kindDef('openingSubType').matchFields, [
+    'category', 'mechanism', 'childRatio', 'fireLeaves', 'fireAngle', 'slideLayout',
+    'wallKinds', 'defaultWidth', 'defaultHeight', 'label',
+  ]);
+});
+
+test('boundaryMaster.compareFields/matchFields: kind,layers,derivedFrom,fieldsの4項目・minMatchFields=4（完全一致のみ）', () => {
+  const def = kindDef('boundaryMaster');
+  assert.deepEqual(def.compareFields, ['kind', 'layers', 'derivedFrom', 'fields']);
+  assert.deepEqual(def.matchFields, ['kind', 'layers', 'derivedFrom', 'fields']);
+  assert.equal(def.minMatchFields, 4);
+});
+
+// ---- classOf（材料分類。R4/R6/R18・Q13確定2026-09-22）----
+test('classOf: 既知の大分類・中分類はラベルを返す', () => {
+  assert.deepEqual(classOf(10, 12), { major: 10, majorLabel: '木材', minor: 12, minorLabel: '面材' });
+  assert.deepEqual(classOf(30, 24), { major: 30, majorLabel: 'その他建材', minor: 24, minorLabel: '左官' });
+  assert.deepEqual(classOf(30, 26), { major: 30, majorLabel: 'その他建材', minor: 26, minorLabel: '石工' });
+  assert.deepEqual(classOf(40, 12), { major: 40, majorLabel: '塗装', minor: 12, minorLabel: '防水' });
+});
+
+test('classOf: 未知の大分類・中分類はnull', () => {
+  assert.equal(classOf(11, 11), null); // 旧体系（未分類）は登録しない
+  assert.equal(classOf(10, 99), null);
+  assert.equal(classOf(99, 10), null);
+});
+
+test('MATERIAL_CLASSES: 中分類は全大分類で10始まりの2刻み・11欠番（R6の分類表そのまま）', () => {
+  assert.equal(MATERIAL_CLASSES[11], undefined);
+  assert.equal(Object.keys(MATERIAL_CLASSES).length, 4);
+});
+
+// QA指摘M6: 中分類全件をclassOfで固定する（保存データに焼き付く数値のため）。
+// 注記: QA指摘は「19個」としているが、設計書（2026-09-22 QA後の追加裁定）に記載の分類表
+// （RC壁50/10は「ステップ3で表に追加」と明記＝ステップ1ではまだ表に無い）から数えると
+// 3(木材)+4(鋼材)+9(その他建材)+2(塗装)=18個。ステップ1では表に無い数値を憶測で追加せず、
+// 現在の設計書どおり18個を固定する。19個との食い違いはコーディネーターへ報告する。
+test('MATERIAL_CLASSES: 中分類18個全件をclassOfで固定する（保存データに焼き付く数値）', () => {
+  const expected = [
+    [10, 10, '木材', '正角材'], [10, 12, '木材', '面材'], [10, 14, '木材', '線材'],
+    [20, 10, '鋼材', '構造材'], [20, 12, '鋼材', '軽量鉄骨'], [20, 14, '鋼材', '鉄筋'], [20, 16, '鋼材', 'デッキプレート'],
+    [30, 10, 'その他建材', '面材'], [30, 12, 'その他建材', 'ALC'], [30, 14, 'その他建材', '屋根'],
+    [30, 16, 'その他建材', 'サイディング'], [30, 18, 'その他建材', '床仕上げ'], [30, 20, 'その他建材', 'シート'],
+    [30, 22, 'その他建材', '断熱'], [30, 24, 'その他建材', '左官'], [30, 26, 'その他建材', '石工'],
+    [40, 10, '塗装', '塗料'], [40, 12, '塗装', '防水'],
+  ];
+  assert.equal(expected.length, 18);
+  for (const [major, minor, majorLabel, minorLabel] of expected) {
+    assert.deepEqual(classOf(major, minor), { major, majorLabel, minor, minorLabel });
+  }
+  // MATERIAL_CLASSESの実体からも同じ総数が出ることを確認（表の変更に追随して壊れる形にする）
+  const totalFromTable = Object.values(MATERIAL_CLASSES)
+    .reduce((sum, majorClass) => sum + Object.keys(majorClass.minors).length, 0);
+  assert.equal(totalFromTable, 18);
+});
+
+// ---- validate（型違い・必須欠落の失敗路）----
+test('material.validate: 正常なエントリは例外を投げない', () => {
+  assert.doesNotThrow(() => kindDef('material').validate({
+    code: '111111111165', name: 'せっこうボード', spec: 'JIS A 6901', x: 0, y: 0, thickness: 9.5, note: '', category: 'panel',
+  }));
+});
+
+test('【失敗系】material.validate: 必須項目(name)欠落は例外を投げる', () => {
+  assert.throws(() => kindDef('material').validate({ code: '111111111165' }), /必須項目が欠落/);
+});
+
+test('【失敗系】material.validate: codeが12桁数字でなければ例外を投げる', () => {
+  assert.throws(() => kindDef('material').validate(fullMaterial({ code: 'abc' })), /codeが不正/);
+  assert.throws(() => kindDef('material').validate(fullMaterial({ code: '123' })), /codeが不正/);
+});
+
+test('【失敗系】material.validate: 型違い（xが文字列）は例外を投げる', () => {
+  assert.throws(() => kindDef('material').validate(fullMaterial({ x: '10' })), /xが不正/);
+});
+
+// QA指摘・Minor（4.5-2）: 未設定はnull・省略は不可。spec/x/y/thicknessの省略を弾く。
+function fullMaterial(overrides) {
+  return { code: '111111111165', name: 'x', spec: 'JIS A 6901', x: 0, y: 0, thickness: 9.5, ...overrides };
+}
+
+test('【失敗系】material.validate: spec省略（undefined）は例外を投げる（nullは許容しない＝4.5-2はthicknessのみnull許容）', () => {
+  const e = fullMaterial(); delete e.spec;
+  assert.throws(() => kindDef('material').validate(e), /必須項目が欠落.*spec/);
+});
+
+test('【失敗系】material.validate: x省略は例外を投げる', () => {
+  const e = fullMaterial(); delete e.x;
+  assert.throws(() => kindDef('material').validate(e), /必須項目が欠落.*x/);
+});
+
+test('【失敗系】material.validate: y省略は例外を投げる', () => {
+  const e = fullMaterial(); delete e.y;
+  assert.throws(() => kindDef('material').validate(e), /必須項目が欠落.*y/);
+});
+
+test('【失敗系】material.validate: thickness省略は例外を投げる（null自体は許容）', () => {
+  const e = fullMaterial(); delete e.thickness;
+  assert.throws(() => kindDef('material').validate(e), /必須項目が欠落.*thickness/);
+  assert.doesNotThrow(() => kindDef('material').validate(fullMaterial({ thickness: null })));
+});
+
+test('section.validate: 正常系（RECT=形状別寸法無し／H形鋼=有り）は例外を投げない', () => {
+  assert.doesNotThrow(() => kindDef('section').validate({
+    key: 'WOOD-90x90', materialType: 'WOOD', shape: 'rect', width: 90, height: 90, label: '90×90',
+  }));
+  assert.doesNotThrow(() => kindDef('section').validate({
+    key: 'STEEL-H300x150', materialType: 'STEEL', shape: 'hSection', width: 150, height: 300,
+    webThickness: 6.5, flangeThickness: 9, label: 'H-300×150×6.5×9',
+  }));
+});
+
+test('【失敗系】section.validate: 必須項目(label)欠落は例外を投げる', () => {
+  assert.throws(() => kindDef('section').validate({ key: 'k', materialType: 'WOOD', shape: 'rect', width: 90, height: 90 }), /必須項目が欠落/);
+});
+
+test('openingSubType.validate: 正常系（category=fitting/window）', () => {
+  assert.doesNotThrow(() => kindDef('openingSubType').validate({
+    category: 'fitting', key: 'singleSwing', label: '片開き戸', mechanism: 'swing', defaultWidth: 800, defaultHeight: 2000,
+  }));
+  assert.doesNotThrow(() => kindDef('openingSubType').validate({
+    category: 'window', key: 'doubleSliding', label: '引き違い窓', mechanism: 'slideDouble', defaultWidth: 1690, defaultHeight: 1170,
+  }));
+});
+
+test('【失敗系】openingSubType.validate: category不正（fitting/window以外）は例外を投げる', () => {
+  assert.throws(() => kindDef('openingSubType').validate({
+    category: 'door', key: 'k', label: 'x', mechanism: 'swing', defaultWidth: 1, defaultHeight: 1,
+  }), /categoryが不正/);
+});
+
+test('interiorMaster.validate: 正常系', () => {
+  assert.doesNotThrow(() => kindDef('interiorMaster').validate({
+    key: 'LIVING_ROOM', label: '居室', wallMaterial: '111111111166', wallFinish: '111111111201', ceilingHeight: 2700,
+  }));
+});
+
+test('【失敗系】interiorMaster.validate: 必須項目(ceilingHeight)欠落は例外を投げる', () => {
+  assert.throws(() => kindDef('interiorMaster').validate({
+    key: 'k', label: 'x', wallMaterial: 'a', wallFinish: 'b',
+  }), /必須項目が欠落/);
+});
+
+test('boundaryMaster.validate: layered=layers必須／meta=layers不要', () => {
+  assert.doesNotThrow(() => kindDef('boundaryMaster').validate({
+    key: 'EXTERIOR_WALL', label: '外壁', kind: 'layered', layers: [{ role: 'x', code: null }],
+  }));
+  assert.doesNotThrow(() => kindDef('boundaryMaster').validate({
+    key: 'STEP', label: '段差', kind: 'meta', fields: {},
+  }));
+});
+
+test('【失敗系】boundaryMaster.validate: layeredなのにlayersが無ければ例外を投げる', () => {
+  assert.throws(() => kindDef('boundaryMaster').validate({
+    key: 'k', label: 'x', kind: 'layered',
+  }), /layers.*が必要/);
+});
+
+test('【失敗系】boundaryMaster.validate: kindが不正な値なら例外を投げる', () => {
+  assert.throws(() => kindDef('boundaryMaster').validate({
+    key: 'k', label: 'x', kind: 'other',
+  }), /kindが不正/);
+});
+
+// QA指摘B2: derivedFromの型検証（compareFields/matchFieldsに追加されたフィールド）
+test('boundaryMaster.validate: derivedFromは省略可・文字列なら例外を投げない', () => {
+  assert.doesNotThrow(() => kindDef('boundaryMaster').validate({
+    key: 'CANTILEVER_WALL', label: 'はね出し外壁', kind: 'layered', layers: [], derivedFrom: 'EXTERIOR_WALL',
+  }));
+  assert.doesNotThrow(() => kindDef('boundaryMaster').validate({
+    key: 'EXTERIOR_WALL', label: '外壁', kind: 'layered', layers: [],
+  }));
+});
+
+test('【失敗系】boundaryMaster.validate: derivedFromが文字列でなければ例外を投げる', () => {
+  assert.throws(() => kindDef('boundaryMaster').validate({
+    key: 'k', label: 'x', kind: 'layered', layers: [], derivedFrom: 123,
+  }), /derivedFromが不正/);
+});
