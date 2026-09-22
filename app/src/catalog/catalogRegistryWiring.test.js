@@ -78,16 +78,16 @@ test('【不変条件・ステップ4→7a改訂】store.js: resetAllの関数�
   assert.ok(/\bproject\.setCatalogError\(null\)/.test(body), 'resetAll が project.setCatalogError(null) を呼んでいない');
 });
 
-test('【不変条件・ステップ4】store.js: saveToIDBはcommitFloorsToDocumentの後に使用材コードを収集・保存している（saveMaterialCatalogDocument呼び出しが後）', () => {
+test('【不変条件・ステップ4→7c改名】store.js: saveToIDBはcommitFloorsToDocumentの後に使用キーを収集・保存している（saveCatalogDocument呼び出しが後）', () => {
   const src = readSrc('store.js');
   const m = /export async function saveToIDB\(\) \{([\s\S]*?)\n\}/.exec(src);
   assert.ok(m, 'store.js に saveToIDB 関数が見つからない');
   const body = m[1];
   const commitIdx = body.indexOf('commitFloorsToDocument(');
-  const saveCatalogIdx = body.indexOf('saveMaterialCatalogDocument(');
+  const saveCatalogIdx = body.indexOf('saveCatalogDocument(');
   assert.ok(commitIdx >= 0, 'saveToIDB が commitFloorsToDocument を呼んでいない');
-  assert.ok(saveCatalogIdx >= 0, 'saveToIDB が saveMaterialCatalogDocument を呼んでいない');
-  assert.ok(saveCatalogIdx > commitIdx, 'saveMaterialCatalogDocument はcommitFloorsToDocumentより後に呼ぶ契約（floors確定後に全階を収集する）');
+  assert.ok(saveCatalogIdx >= 0, 'saveToIDB が saveCatalogDocument を呼んでいない');
+  assert.ok(saveCatalogIdx > commitIdx, 'saveCatalogDocument はcommitFloorsToDocumentより後に呼ぶ契約（floors確定後に全階を収集する）');
 });
 
 test('【不変条件・ステップ4】store.js: exportDocumentはIDBから読み戻したdocCatalogRecords（loadDocumentCatalogs）をcatalogsへ載せる（二重走査しない）', () => {
@@ -277,23 +277,23 @@ test('【不変条件・ステップ4】catalog/catalogOverlayLoader.js: validat
 
 // 2026-09-22 QA指摘A→再QA指摘Major-D: overlay未読込み（project.catalogOverlayUntrustedが
 // 立っている）状態で保存すると既存の同梱レコードを上書きしてしまうため、
-// saveMaterialCatalogDocumentはcatalogOverlayUntrustedが立っている間saveDocumentCatalogを
-// 呼ばない（早期return）契約を固定する。catalogErrorは「メッセージ内容」の通知専用フィールド
-// であり保存可否の判定には使わない契約（兼用しない）ため、ガードにcatalogErrorが使われて
-// いないことも合わせて固定する（ガードをcatalogErrorに戻す退行を検知）。
-test('【不変条件・ステップ4・Major-D】store.js: saveMaterialCatalogDocumentはproject.catalogOverlayUntrustedが立っている間、saveDocumentCatalogを呼ばない（catalogErrorはガードに使わない）', () => {
+// saveCatalogDocument（旧saveMaterialCatalogDocument。ステップ7cで改名）はcatalogOverlayUntrusted
+// が立っている間saveDocumentCatalogを呼ばない（早期return）契約を固定する。catalogErrorは
+// 「メッセージ内容」の通知専用フィールドであり保存可否の判定には使わない契約（兼用しない）ため、
+// ガードにcatalogErrorが使われていないことも合わせて固定する（ガードをcatalogErrorに戻す退行を検知）。
+test('【不変条件・ステップ4・Major-D→7c改名・Major-1】store.js: saveCatalogDocumentはproject.catalogOverlayUntrustedが立っている間、saveDocumentCatalogsを呼ばない（catalogErrorはガードに使わない）', () => {
   const src = readSrc('store.js');
-  const body = extractBalancedBody(src, 'async function saveMaterialCatalogDocument(floorRecords) {');
-  assert.ok(body, 'store.js に saveMaterialCatalogDocument が見つからない');
+  const body = extractBalancedBody(src, 'async function saveCatalogDocument(floorRecords) {');
+  assert.ok(body, 'store.js に saveCatalogDocument が見つからない');
   const guardMatch = /if\s*\(\s*project\.catalogOverlayUntrusted\s*\)/.exec(body);
-  assert.ok(guardMatch, 'saveMaterialCatalogDocument の先頭に catalogOverlayUntrusted ガード（if (project.catalogOverlayUntrusted)）が無い');
+  assert.ok(guardMatch, 'saveCatalogDocument の先頭に catalogOverlayUntrusted ガード（if (project.catalogOverlayUntrusted)）が無い');
   assert.ok(
     !/if\s*\(\s*project\.catalogError\s*\)/.test(body),
-    'saveMaterialCatalogDocument が project.catalogError をガードに使っている（catalogErrorは通知専用・保存可否と兼用しない契約への退行）',
+    'saveCatalogDocument が project.catalogError をガードに使っている（catalogErrorは通知専用・保存可否と兼用しない契約への退行）',
   );
-  const saveIdx = body.indexOf('saveDocumentCatalog(');
-  assert.ok(saveIdx >= 0, 'saveMaterialCatalogDocument が saveDocumentCatalog を呼んでいない');
-  assert.ok(guardMatch.index < saveIdx, 'catalogOverlayUntrusted ガードは saveDocumentCatalog より前になければならない');
+  const saveIdx = body.indexOf('saveDocumentCatalogs(');
+  assert.ok(saveIdx >= 0, 'saveCatalogDocument が saveDocumentCatalogs を呼んでいない（QA指摘Major-1: 種別ごとのループ保存への退行）');
+  assert.ok(guardMatch.index < saveIdx, 'catalogOverlayUntrusted ガードは saveDocumentCatalogs より前になければならない');
 });
 
 // 2026-09-22 再QA指摘Major-D: catalogOverlayLoaderのonError（store.jsのラッパー側）が
@@ -352,31 +352,143 @@ test('【不変条件・ステップ4・Major-D】App.jsx: project.catalogError�
 
 // 2026-09-22 QA指摘A: unresolvedKeysが非空のとき、既存の同梱レコードから回収
 // （recoverUnresolvedEntries）してから保存していることを固定する（黙って落とす退行を検知）。
-test('【不変条件・ステップ4・QA指摘A】store.js: saveMaterialCatalogDocumentはunresolvedKeysをrecoverUnresolvedEntriesで既存レコードから回収してから保存している', () => {
+test('【不変条件・ステップ4・QA指摘A→7c改名】store.js: saveCatalogDocumentはunresolvedKeysをrecoverUnresolvedEntriesで既存レコードから回収してから保存している', () => {
   const src = readSrc('store.js');
-  const body = extractBalancedBody(src, 'async function saveMaterialCatalogDocument(floorRecords) {');
-  assert.ok(body, 'store.js に saveMaterialCatalogDocument が見つからない');
-  assert.ok(/\bunresolvedKeys\b/.test(body), 'saveMaterialCatalogDocument が buildDocumentBundle の unresolvedKeys を使っていない');
+  const body = extractBalancedBody(src, 'async function saveCatalogDocument(floorRecords) {');
+  assert.ok(body, 'store.js に saveCatalogDocument が見つからない');
+  assert.ok(/\bunresolvedKeys\b/.test(body), 'saveCatalogDocument が buildDocumentBundle の unresolvedKeys を使っていない');
   const recoverIdx = body.indexOf('recoverUnresolvedEntries(');
-  const saveIdx = body.indexOf('saveDocumentCatalog(');
-  assert.ok(recoverIdx >= 0, 'saveMaterialCatalogDocument が recoverUnresolvedEntries を呼んでいない');
-  assert.ok(recoverIdx < saveIdx, 'recoverUnresolvedEntries は saveDocumentCatalog より前に呼ぶ契約');
+  const saveIdx = body.indexOf('saveDocumentCatalogs(');
+  assert.ok(recoverIdx >= 0, 'saveCatalogDocument が recoverUnresolvedEntries を呼んでいない');
+  assert.ok(recoverIdx < saveIdx, 'recoverUnresolvedEntries は saveDocumentCatalogs より前に呼ぶ契約');
 });
 
-// ステップ6-1・既存バグ修正 → ステップ7a改訂: saveMaterialCatalogDocumentのbuildDocumentBundle
-// 呼び出しに aliases（currentDocumentAliases(kind)）を渡していないと、保存のたびに文書aliasesが
-// 空で上書きされる（読み替え表が消える）。本文が aliases: { [CatalogKind.MATERIAL]:
-// currentDocumentAliases(CatalogKind.MATERIAL) } をbuildDocumentBundleへ渡していることを固定する
-// （currentDocumentAliasesがkind必須引数になったための署名追従。7cで他種別へ拡張予定）。
-test('【不変条件・ステップ7a】store.js: saveMaterialCatalogDocumentはbuildDocumentBundleにaliases（currentDocumentAliases(kind)）を渡している', () => {
+// QA指摘Minor-2: 回収された interiorMaster/boundaryMaster が参照する材コードは、最初の
+// expandTransitiveMaterials の時点ではまだ material 束に無い——reexpandTransitiveMaterials で
+// 推移展開をやり直し、不足分を解決して追記していることを固定する（回収分の材が漏れる退行を検知）。
+test('【不変条件・ステップ7c・Minor-2】store.js: saveCatalogDocumentはrecoverUnresolvedEntriesの後にreexpandTransitiveMaterialsで回収分の推移展開をやり直している', () => {
   const src = readSrc('store.js');
-  const body = extractBalancedBody(src, 'async function saveMaterialCatalogDocument(floorRecords) {');
-  assert.ok(body, 'store.js に saveMaterialCatalogDocument が見つからない');
+  const body = extractBalancedBody(src, 'async function saveCatalogDocument(floorRecords) {');
+  assert.ok(body, 'store.js に saveCatalogDocument が見つからない');
+  const recoverIdx = body.indexOf('recoverUnresolvedEntries(');
+  const reexpandIdx = body.indexOf('reexpandTransitiveMaterials(');
+  assert.ok(reexpandIdx >= 0, 'saveCatalogDocument が reexpandTransitiveMaterials を呼んでいない（回収分の推移展開が欠落）');
+  assert.ok(recoverIdx < reexpandIdx, 'reexpandTransitiveMaterials は recoverUnresolvedEntries（1回目）より後に呼ぶ契約');
+  // 2回目の recoverUnresolvedEntries（再展開後に足りない材を既存束から回収する1回だけの追試行）が
+  // reexpandTransitiveMaterials より後にあること。
+  const secondRecoverIdx = body.indexOf('recoverUnresolvedEntries(', reexpandIdx);
+  assert.ok(secondRecoverIdx >= 0, 'reexpandTransitiveMaterials後にrecoverUnresolvedEntriesの再試行が無い（回収分から生じた未解決材の救済が欠落）');
+});
+
+// ステップ6-1・既存バグ修正 → ステップ7a → ステップ7c → QA指摘Minor-4改訂: saveCatalogDocumentの
+// buildDocumentBundle 呼び出しに aliases（BUNDLED_KINDSの各種別ぶんcurrentDocumentAliases(kind)を
+// 集めたオブジェクト）を渡していないと、保存のたびに文書aliasesが空で上書きされる
+// （読み替え表が消える）。空の種別を手元でふるい落とす個別フィルタは持たない
+// （splitBundleByKind側の「非空のときだけ添える」判定に一本化する。QA指摘Minor-4=P5）。
+test('【不変条件・ステップ7c・Minor-4/P5】store.js: saveCatalogDocumentはBUNDLED_KINDSの各種別ぶんcurrentDocumentAliases(kind)を集めてbuildDocumentBundleへ渡し、空の種別を個別にはふるい落とさない', () => {
+  const src = readSrc('store.js');
+  const body = extractBalancedBody(src, 'async function saveCatalogDocument(floorRecords) {');
+  assert.ok(body, 'store.js に saveCatalogDocument が見つからない');
+  assert.ok(
+    /const aliases = Object\.fromEntries\(BUNDLED_KINDS\.map\(kind => \[kind, currentDocumentAliases\(kind\)\]\)\);/.test(body),
+    'saveCatalogDocument が BUNDLED_KINDS の各種別ぶん currentDocumentAliases(kind) を集めていない（種別ごとのalias収集への退行）',
+  );
+  // 空の種別を個別にふるい落とすフィルタ（Object.keys(table).length > 0 のような判定）を
+  // このオブジェクト組み立てに再導入していないことを固定する——判定はsplitBundleByKind側に一本化する。
+  assert.ok(
+    !/Object\.keys\([^)]*\)\.length > 0\)\s*aliases\[/.test(body),
+    'aliases 組み立てに空チェックのフィルタが再導入されている（splitBundleByKindへの一本化から後退）',
+  );
   const callMatch = /buildDocumentBundle\(\{([\s\S]*?)\}\);/.exec(body);
   assert.ok(callMatch, 'store.js に buildDocumentBundle(...) 呼び出しが見つからない');
-  const args = callMatch[1];
   assert.ok(
-    /aliases\s*:\s*\{\s*\[CatalogKind\.MATERIAL\]\s*:\s*currentDocumentAliases\(\s*CatalogKind\.MATERIAL\s*\)\s*\}/.test(args),
-    'buildDocumentBundle の呼び出しに aliases: { [CatalogKind.MATERIAL]: currentDocumentAliases(CatalogKind.MATERIAL) } が渡されていない（保存のたびに文書aliasesが空で上書きされる退行）',
+    /\busedKeysByKind\b.*\bresolvedByKind\b.*\baliases\b/.test(callMatch[1]),
+    'buildDocumentBundle の呼び出しに usedKeysByKind/resolvedByKind/aliases が渡されていない',
+  );
+});
+
+// ステップ7c: 同梱の一般化。BUNDLED_KINDS（material・interiorMaster・boundaryMaster）を
+// 定義し、saveCatalogDocumentがそれをbuiltinのloadBuiltin経由の解決・保存の両方で回している
+// ことを固定する（material固定への退行・splitBundleByKind未使用への退行を検知）。
+test('【不変条件・ステップ7c】store.js: BUNDLED_KINDSはmaterial・interiorMaster・boundaryMasterの3種別で、saveCatalogDocumentがkindDef(kind).loadBuiltin()とsplitBundleByKindを使っている', () => {
+  const src = readSrc('store.js');
+  assert.ok(
+    /const BUNDLED_KINDS = \[CatalogKind\.MATERIAL, CatalogKind\.INTERIOR_MASTER, CatalogKind\.BOUNDARY_MASTER\];/.test(src),
+    'store.js に BUNDLED_KINDS = [CatalogKind.MATERIAL, CatalogKind.INTERIOR_MASTER, CatalogKind.BOUNDARY_MASTER] が見つからない',
+  );
+  const body = extractBalancedBody(src, 'async function saveCatalogDocument(floorRecords) {');
+  assert.ok(body, 'store.js に saveCatalogDocument が見つからない');
+  assert.ok(
+    /kindDef\(\s*kind\s*\)\.loadBuiltin\(\)/.test(body),
+    'saveCatalogDocument が kindDef(kind).loadBuiltin() を呼んでいない（本体マスタを直接importする退行）',
+  );
+  assert.ok(
+    !/import\(\s*['"]\.\/finish\/materials\//.test(body),
+    'saveCatalogDocument が本体標準マスタを直接動的importしている（kindDef(kind).loadBuiltin()未経由への退行）',
+  );
+  assert.ok(/splitBundleByKind\(/.test(body), 'saveCatalogDocument が splitBundleByKind を使っていない（種別ごとの保存への一般化が欠落）');
+  const splitIdx = body.indexOf('splitBundleByKind(');
+  const saveIdx = body.indexOf('saveDocumentCatalogs(');
+  assert.ok(saveIdx >= 0, 'saveCatalogDocument が saveDocumentCatalogs を呼んでいない（QA指摘Major-1）');
+  assert.ok(splitIdx < saveIdx, 'splitBundleByKind は saveDocumentCatalogs より前に呼ぶ契約');
+});
+
+// ステップ7c: collectCatalogUsageAcrossFloors（旧collectMaterialUsageAcrossFloors）が
+// floorRecordsをdecodeし、純ロジック（catalog/usedEntries.js collectUsedKeysByKind。
+// BUNDLED_KINDSの3種別ぶんの使用キーを空Setで立ててから埋める）へ委譲していることを固定する
+// （QA指摘Major-1: 収集ロジック自体はusedEntries.test.js側の単体テストで検証する）。
+test('【不変条件・ステップ7c・Major-1】store.js: collectCatalogUsageAcrossFloorsはdecodeFloorSnapshotしてcollectUsedKeysByKind(snapshots, BUNDLED_KINDS)へ委譲し、saveCatalogDocumentから呼ばれている', () => {
+  const src = readSrc('store.js');
+  const collectBody = extractBalancedBody(src, 'async function collectCatalogUsageAcrossFloors(floorRecords) {');
+  assert.ok(collectBody, 'store.js に collectCatalogUsageAcrossFloors が見つからない');
+  assert.ok(/decodeFloorSnapshot\(/.test(collectBody), 'collectCatalogUsageAcrossFloors が decodeFloorSnapshot を呼んでいない');
+  assert.ok(
+    /collectUsedKeysByKind\(\s*snapshots,\s*BUNDLED_KINDS\s*\)/.test(collectBody),
+    'collectCatalogUsageAcrossFloors が collectUsedKeysByKind(snapshots, BUNDLED_KINDS) へ委譲していない（純ロジックの二重実装への退行）',
+  );
+
+  const saveBody = extractBalancedBody(src, 'async function saveCatalogDocument(floorRecords) {');
+  assert.ok(saveBody, 'store.js に saveCatalogDocument が見つからない');
+  assert.ok(
+    /collectCatalogUsageAcrossFloors\(/.test(saveBody),
+    'saveCatalogDocument が collectCatalogUsageAcrossFloors を呼んでいない',
+  );
+});
+
+// ステップ7c: 内装マスター・境界マスターが参照する材コードを推移的にmaterial側へ含める経路
+// （expandTransitiveMaterialsへ両方の使用済みマスターを渡す）を固定する。片方だけ外す退行を検知。
+test('【不変条件・ステップ7c】store.js: saveCatalogDocumentはexpandTransitiveMaterialsにusedInteriorMasters・usedBoundaryMastersの両方を渡している', () => {
+  const src = readSrc('store.js');
+  const body = extractBalancedBody(src, 'async function saveCatalogDocument(floorRecords) {');
+  assert.ok(body, 'store.js に saveCatalogDocument が見つからない');
+  const callMatch = /expandTransitiveMaterials\(([\s\S]*?)\)\)/.exec(body);
+  assert.ok(callMatch, 'saveCatalogDocument が expandTransitiveMaterials を呼んでいない');
+  const args = callMatch[1];
+  assert.ok(/interiorMasters\s*:\s*usedInteriorMasters/.test(args), 'expandTransitiveMaterials に interiorMasters: usedInteriorMasters が渡されていない（内装マスター経路が外れる退行）');
+  assert.ok(/boundaryMasters\s*:\s*usedBoundaryMasters/.test(args), 'expandTransitiveMaterials に boundaryMasters: usedBoundaryMasters が渡されていない（境界マスター経路が外れる退行）');
+});
+
+// ステップ7c→QA指摘Major-1改訂: 使用0件の種別も空配列で必ず書く（4.3「参照されなくなった
+// エントリは次回保存時に外す」の一般化）——splitBundleByKindの結果を無条件に（配列長で
+// フィルタせず）全種別ぶん bytesByKind へ写し、単一の saveDocumentCatalogs 呼び出しに渡す
+// ことを固定する（0件をスキップする退行・種別ごとにsaveDocumentCatalogをループして部分保存の
+// リスクを持ち込む退行の両方を検知）。
+test('【不変条件・ステップ7c・Major-1】store.js: saveCatalogDocumentはsplitBundleByKindの結果を無条件にbytesByKindへ写し、単一のsaveDocumentCatalogs呼び出しで保存する（種別ごとの個別saveDocumentCatalogループへの退行を検知）', () => {
+  const src = readSrc('store.js');
+  const body = extractBalancedBody(src, 'async function saveCatalogDocument(floorRecords) {');
+  assert.ok(body, 'store.js に saveCatalogDocument が見つからない');
+  assert.ok(
+    /const bytesByKind = new Map\(\s*\[\.\.\.splitBundleByKind\(finalBundle\)\]\.map\(\(\[kind, subBundle\]\) => \[kind, encodeCatalogBundle\(subBundle\)\]\),?\s*\);/.test(body),
+    'saveCatalogDocument が splitBundleByKind の結果を無条件に bytesByKind へ写していない（.filter等での0件スキップ、またはbytesByKind自体の欠落）',
+  );
+  assert.ok(
+    !/for\s*\(\s*const \[kind, subBundle\] of splitBundleByKind/.test(body),
+    'saveCatalogDocument が splitBundleByKind の結果を種別ごとにループしてsaveDocumentCatalogを呼んでいる（QA指摘Major-1: 部分保存を許すループへの退行。saveDocumentCatalogsへの一本化から後退）',
+  );
+  const saveCallMatch = /await saveDocumentCatalogs\(savedProjectId, bytesByKind\);/.exec(body);
+  assert.ok(saveCallMatch, 'saveCatalogDocument が saveDocumentCatalogs(savedProjectId, bytesByKind) を1回だけ呼んでいない');
+  assert.equal(
+    (body.match(/saveDocumentCatalogs\(/g) ?? []).length, 1,
+    'saveDocumentCatalogs の呼び出しが複数ある（単一トランザクションに一本化する契約に反する）',
   );
 });

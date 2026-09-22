@@ -11,7 +11,7 @@
 
 import { enumerateMaterialCodeRefs, SNAPSHOT_REF_WALKERS } from './codeNormalization.js';
 import { isMaterialCode } from './materialCode.js';
-import { kindDef } from './catalogKinds.js';
+import { CatalogKind, kindDef } from './catalogKinds.js';
 import { emptyBundle, withEntries, bundleEntries } from './catalogBundle.js';
 
 /**
@@ -51,6 +51,39 @@ export function collectUsedKeys(snapshot) {
   for (const ref of SNAPSHOT_REF_WALKERS.openingSubType.enumerate(snapshot)) openingSubType.add(ref.code);
 
   return { interiorMaster, boundaryMaster, section, openingSubType };
+}
+
+/**
+ * snapshot群（複数階分。decode済み）から、指定した種別（kinds）ぶんの使用キーを集めて返す
+ * （4.3・ステップ7c QA指摘Major-1）。kinds に渡した種別は、使用0件でも戻り値の Map に必ず
+ * 空Setとして持つ——呼び出し側（store.js collectCatalogUsageAcrossFloors）が「全種別を空Setで
+ * 立ててから全階を回して埋める」という手順を個別に実装していたところを純関数として抽出した
+ * もの（store.js は decode してこれに渡すだけにする）。material の直接参照（4フィールド）は
+ * collectUsedMaterialCodes を、他種別は collectUsedKeys を使う——collectUsedKeys が返す
+ * フィールド名（interiorMaster/boundaryMaster/section/openingSubType）は catalogKinds.js の
+ * CatalogKind の値と文字列として一致するため、種別名からそのまま引ける。
+ * @param {Iterable<object>} snapshots decode済みスナップショット（複数階分）
+ * @param {Iterable<string>} kinds 収集対象の種別（catalogKinds.js CatalogKind の値）
+ * @returns {Map<string, Set<string>>} kind → 使用キーのSet（kinds に渡した全種別ぶん、
+ *          使用0件でも空Setとして存在する）
+ */
+export function collectUsedKeysByKind(snapshots, kinds) {
+  const usedKeysByKind = new Map([...kinds].map(kind => [kind, new Set()]));
+  for (const snapshot of snapshots) {
+    if (usedKeysByKind.has(CatalogKind.MATERIAL)) {
+      for (const code of collectUsedMaterialCodes(snapshot)) usedKeysByKind.get(CatalogKind.MATERIAL).add(code);
+    }
+    const used = collectUsedKeys(snapshot);
+    for (const [kind, set] of usedKeysByKind) {
+      if (kind === CatalogKind.MATERIAL) continue;
+      const keys = used[kind]; // フィールド名はCatalogKindの値と一致する
+      // 一致が崩れた種別を黙って「使用0件」扱いにすると、空配列で同梱され前回のレコードを
+      // 消してしまう。登録表にはあるが収集に未対応の種別は例外で止める。
+      if (!keys) throw new Error(`使用キーの収集に未対応の種別です: ${kind}`);
+      for (const key of keys) set.add(key);
+    }
+  }
+  return usedKeysByKind;
 }
 
 /**
@@ -147,4 +180,41 @@ export function recoverUnresolvedEntries(bundle, unresolvedKeys, existingBundles
     if (stillUnresolved.size > 0) stillUnresolvedByKind.set(kind, stillUnresolved);
   }
   return { bundle: result, stillUnresolvedByKind };
+}
+
+/**
+ * recoverUnresolvedEntries が既存の同梱束から回収した interiorMaster/boundaryMaster エントリも
+ * 含め、bundle 上の interiorMaster/boundaryMaster 全エントリから material への推移的展開を
+ * やり直す（QA指摘Minor-2・回収分の推移展開）。saveCatalogDocument が最初に呼ぶ
+ * expandTransitiveMaterials は「builtin/overlayで直接解決できた使用マスター」しか見ておらず、
+ * 回収によって新たに束へ入った内装・境界マスターが参照する材コードはまだ material 束に無い
+ * ——ここで改めて展開し、不足分を materialMap（composeCatalog(MATERIAL, ...)の結果）で解決して
+ * material 束へ追記する。それでも解決できない材コードは unresolvedMaterialKeys として返す
+ * （呼び出し側がさらに既存の材束から回収するか、それでも無ければ通知するかを決める）。
+ * @param {object} bundle 束（withEntriesされたcatalogsを持つ。recoverUnresolvedEntries後の想定）
+ * @param {Map<string, object>|undefined} materialMap 材の解決済みMap（省略時は全て未解決扱い）
+ * @returns {{ bundle: object, unresolvedMaterialKeys: Set<string> }}
+ */
+export function reexpandTransitiveMaterials(bundle, materialMap) {
+  const interiorMasters = bundleEntries(bundle, CatalogKind.INTERIOR_MASTER);
+  const boundaryMasters = bundleEntries(bundle, CatalogKind.BOUNDARY_MASTER);
+  const materialDef = kindDef(CatalogKind.MATERIAL);
+  const existingMaterials = bundleEntries(bundle, CatalogKind.MATERIAL);
+  const existingCodes = new Set(existingMaterials.map(e => materialDef.keyOf(e)));
+
+  const expanded = expandTransitiveMaterials(existingCodes, { interiorMasters, boundaryMasters });
+
+  const newEntries = [];
+  const unresolvedMaterialKeys = new Set();
+  for (const code of expanded) {
+    if (existingCodes.has(code)) continue;
+    const entry = materialMap?.get(code);
+    if (entry) newEntries.push(entry);
+    else unresolvedMaterialKeys.add(code);
+  }
+  if (newEntries.length === 0) return { bundle, unresolvedMaterialKeys };
+  return {
+    bundle: withEntries(bundle, CatalogKind.MATERIAL, [...existingMaterials, ...newEntries]),
+    unresolvedMaterialKeys,
+  };
 }

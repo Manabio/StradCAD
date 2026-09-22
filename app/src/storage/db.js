@@ -27,6 +27,8 @@
  *   loadProjectInfo(projectId)        → Promise<Uint8Array | null>
  *   saveDocumentCatalog(projectId, kind, bytes) → Promise<void>  （projects ストアの別レコード。
  *                                       キー: `${projectId}:catalogs:<kind>`。種別ごとに1レコード）
+ *   saveDocumentCatalogs(projectId, bytesByKind) → Promise<void>  （上記を複数種別ぶん単一
+ *                                       トランザクションでatomicに保存。Map<kind, bytes>）
  *   loadDocumentCatalogs(projectId)   → Promise<Array<{kind, bytes}>>（範囲取得。未知の種別も取りこぼさない）
  *   deleteDocumentCatalogs(projectId) → Promise<void>  （文書同梱カタログを全種別削除）
  *   saveUserCatalog(kind, bytes)      → Promise<void>  （catalogs ストア。キー: `user:<kind>`）
@@ -337,6 +339,28 @@ export async function saveDocumentCatalog(projectId, kind, bytes) {
     const req = tx.objectStore(STORE_PROJECTS).put({ projectId: documentCatalogKey(projectId, kind), bytes });
     req.onsuccess = () => resolve();
     req.onerror   = (e) => reject(e.target.error);
+  });
+}
+
+/**
+ * カタログ文書同梱を種別ごとの複数レコードとして単一トランザクションで保存する
+ * （ステップ7c QA指摘Major-1対応）。saveDocumentCatalog を種別ぶんループで呼ぶと、途中の
+ * put が失敗した場合に一部の種別だけ新しい内容・残りは古い内容という部分保存が起きる。
+ * commitFloorsToDocument と同じ作法——複数 put を1つの readwrite トランザクションにまとめ、
+ * トランザクション全体を IndexedDB のatomicity（1つでも失敗すれば全体がロールバック）に乗せる。
+ * @param {string} projectId
+ * @param {Map<string, Uint8Array>} bytesByKind kind → 束バイト列
+ */
+export async function saveDocumentCatalogs(projectId, bytesByKind) {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const tx    = db.transaction(STORE_PROJECTS, 'readwrite');
+    const store = tx.objectStore(STORE_PROJECTS);
+    for (const [kind, bytes] of bytesByKind) {
+      store.put({ projectId: documentCatalogKey(projectId, kind), bytes });
+    }
+    tx.oncomplete = () => resolve();
+    tx.onerror    = (e) => reject(e.target.error);
   });
 }
 

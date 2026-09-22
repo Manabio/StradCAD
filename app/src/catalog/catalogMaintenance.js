@@ -15,7 +15,7 @@
 // パネルを開いたときに動的 import で読んで渡す——本ファイルは本体標準マスタを一切読まない。
 // ================================================================
 
-import { CatalogKind, kindDef, listKinds } from './catalogKinds.js';
+import { CatalogKind, kindDef, listKinds, KIND_LABELS } from './catalogKinds.js';
 import { composeList, docDiffMap, originOf, overlayFor, setOverlay } from './catalogRegistry.js';
 import { assertNoDuplicate } from './catalogMatch.js';
 import { diffPairs } from './catalogDiffView.js';
@@ -74,15 +74,6 @@ export function parseThicknessInput(raw) {
   const trimmed = (raw ?? '').trim();
   return trimmed === '' ? null : Number(trimmed);
 }
-
-/** 種別タブ表示名（登録表の種別に対する固定の日本語ラベル。catalogKinds.jsヘッダコメントと同じ命名）。 */
-const KIND_LABELS = Object.freeze({
-  [CatalogKind.MATERIAL]:         '材料',
-  [CatalogKind.INTERIOR_MASTER]:  '内装マスター',
-  [CatalogKind.BOUNDARY_MASTER]:  '境界マスター',
-  [CatalogKind.SECTION]:          '断面',
-  [CatalogKind.OPENING_SUB_TYPE]: '建具種別',
-});
 
 /**
  * 種別タブの器（左タブ）。listKinds() から導出する——登録表に種別が増えたらタブも増える。

@@ -9,7 +9,7 @@ import {
   deleteFloor as dbDeleteFloor, clearAllStores, loadFloor, savePlanesMeta, loadPlanesMeta,
   saveSiteData, loadSiteData, saveProject, loadProject, saveProjectInfo, loadProjectInfo,
   seedFloorsFromDocument, commitFloorsToDocument, loadAllSavedFloors, saveSavedFloor,
-  saveDocumentCatalog, loadDocumentCatalogs, loadUserCatalogs, saveUserCatalog,
+  saveDocumentCatalog, saveDocumentCatalogs, loadDocumentCatalogs, loadUserCatalogs, saveUserCatalog,
 } from './storage/db.js';
 import { buildDocumentJson, parseDocumentEnvelope } from './storage/documentFile.js';
 import { encodeProjectInfo, decodeProjectInfo } from './storage/projectInfo.js';
@@ -24,13 +24,13 @@ import { reconcilePlanes } from './floorOps.js';
 import { clearLocalAutosave } from './storage/localSnapshot.js';
 import { refreshWallsAllFloors } from './wallRefresh.js';
 import { ERR_CATALOG_DUPLICATE } from './error.js';
-import { CatalogKind, interiorMasterBuiltinList } from './catalog/catalogKinds.js';
+import { CatalogKind, kindDef, KIND_LABELS } from './catalog/catalogKinds.js';
 import { composeCatalog, clearOverlays, overlayFor, removeDocEntry } from './catalog/catalogRegistry.js';
 import { decodeCatalogBundle, encodeCatalogBundle } from './catalog/catalogCodec.js';
 import { mergeBundles, splitBundleByKind, resolveCatalog, resolveOrigins, detectLibraryConflicts } from './catalog/catalogBundle.js';
 import {
-  collectUsedMaterialCodes, collectUsedKeys, expandTransitiveMaterials, buildDocumentBundle,
-  recoverUnresolvedEntries,
+  collectUsedKeysByKind, expandTransitiveMaterials, buildDocumentBundle,
+  recoverUnresolvedEntries, reexpandTransitiveMaterials,
 } from './catalog/usedEntries.js';
 import {
   clearDocumentAliases, currentDocumentAliases, takeUnresolvedCodes, addDocumentAliases,
@@ -204,7 +204,8 @@ async function restoreProjectInfoFromIDB() {
 }
 
 /**
- * IndexedDB からカタログ束（文書同梱・ステップ4は material のみ／ユーザーライブラリ）を読み、
+ * IndexedDB からカタログ束（文書同梱・ステップ7cで material のみから BUNDLED_KINDS 全種別へ
+ * 拡張／ユーザーライブラリ）を読み、
  * catalog/catalogRegistry.js の overlay として設定する薄いラッパー。実体（decode/validate・
  * 未知種別の除外・部分適用防止・setOverlay失敗時の全clear）は catalog/catalogOverlayLoader.js
  * （葉。store.js を import しない）に持つ——store.js は起動時副作用が大きく単体テストに向かないため、
@@ -214,7 +215,7 @@ async function restoreProjectInfoFromIDB() {
  * 壊れたレコードがあっても bootReady 自体は失敗させない——materialError と同じ経路で
  * project.catalogError にメッセージを載せてトースト通知し、overlay は一切立てない。
  * 加えて project.catalogOverlayUntrusted を true にする（2026-09-22 再QA指摘Major-D）——
- * こちらは保存ガード専用の boolean で、store.js saveMaterialCatalogDocument はこれだけを見て
+ * こちらは保存ガード専用の boolean で、store.js saveCatalogDocument はこれだけを見て
  * 文書同梱の保存をスキップする（catalogError はメッセージ通知専用にし、両者を兼用しない）。
  *
  * floorSwapManager.setupStructGraph（の呼び出し）・最初の restoreGraph
@@ -559,77 +560,85 @@ export async function switchFloor(nextPlaneId) {
 }
 
 /**
- * 全階のバイト列を decode し、使用材コード・使用マスターキーを集めて返す（4.3）。
- * floorRecords は commitFloorsToDocument で確定した savedFloors から読む（loadAllSavedFloors。
- * 削除済みの階は commitFloorsToDocument が savedFloors からも消しているため含まれない）
- * ——非アクティブ階を含む全階バイト列を1箇所で decode する唯一の場所。
+ * 文書同梱する種別の一覧（ステップ7c: 同梱の一般化。それまでは material のみだった）。
+ * section・openingSubType は使用キー収集経路（columns/beams等のsectionDefId・openingsの
+ * subType）はusedEntries.jsに既にあるが、選択UI自体が無いためまだここには含めない
+ * （ステップ8/10で追加予定）。
  */
-async function collectMaterialUsageAcrossFloors(floorRecords) {
-  const materialCodes = new Set();
-  const interiorMasterKeys = new Set();
-  const boundaryMasterKeys = new Set();
-  for (const { bytes } of floorRecords) {
-    const snapshot = decodeFloorSnapshot(bytes);
-    for (const code of collectUsedMaterialCodes(snapshot)) materialCodes.add(code);
-    const used = collectUsedKeys(snapshot);
-    for (const key of used.interiorMaster) interiorMasterKeys.add(key);
-    for (const key of used.boundaryMaster) boundaryMasterKeys.add(key);
-  }
-  return { materialCodes, interiorMasterKeys, boundaryMasterKeys };
+const BUNDLED_KINDS = [CatalogKind.MATERIAL, CatalogKind.INTERIOR_MASTER, CatalogKind.BOUNDARY_MASTER];
+
+/**
+ * 全階のバイト列を decode し、BUNDLED_KINDS の使用キーを種別ごとに集めて返す（4.3・
+ * ステップ7c QA指摘Major-1）。floorRecords は commitFloorsToDocument で確定した savedFloors
+ * から読む（loadAllSavedFloors。削除済みの階は commitFloorsToDocument が savedFloors からも
+ * 消しているため含まれない）——非アクティブ階を含む全階バイト列を1箇所で decode する唯一の
+ * 場所。収集の純ロジック（使用0件の種別も空Setで必ず持つ・全階を回して埋める）は
+ * catalog/usedEntries.js の collectUsedKeysByKind へ抽出済み——store.js は decode してそれに
+ * 渡すだけ（単体テストは usedEntries.test.js 側で行う）。
+ * @returns {Map<string, Set<string>>} kind → 使用キーのSet
+ */
+async function collectCatalogUsageAcrossFloors(floorRecords) {
+  const snapshots = floorRecords.map(({ bytes }) => decodeFloorSnapshot(bytes));
+  return collectUsedKeysByKind(snapshots, BUNDLED_KINDS);
 }
 
 /**
- * 使用材コードを全階から収集し、解決済み実体を文書同梱（'material'）として保存する（4.3・
- * ステップ4）。内装マスター・境界マスターが内部で参照する材コードも推移的に含める——この
- * 2種別自体の同梱はステップ7（第1段は material のみ・4.7外の裁定どおり）。
+ * 使用キーをBUNDLED_KINDSの各種別ぶん全階から収集し、解決済み実体を文書同梱として保存する
+ * （4.3・ステップ4→7c: material のみだった同梱を interiorMaster・boundaryMaster にも一般化）。
+ * 内装マスター・境界マスターが内部で参照する材コードも推移的に material 側へ含める。
+ * builtin の取得は kindDef(kind).loadBuiltin()（動的import thunk）に寄せる——store.js が
+ * 本体標準マスタ（materialData.js/interiorMasters.js/boundaryMasters.js）を直接importしない。
  * 不変条件7-1（materialData.js は仕上げモード突入時のみ動的 import）は、保存時にも動的
  * import が必要になる形で適用範囲が広がる（wallRegeneration.js と同じ注記。npm run build で
  * 独立チャンクのままであることを確認すること）。
  *
  * 2026-09-22 QA指摘A→再QA指摘Major-D: overlay 未読込み（project.catalogOverlayUntrusted が
  * true）状態で保存すると、overlay に乗っていないユーザー材の使用キーが composeCatalog で
- * 解決できず buildDocumentBundle が黙って落とし、そのまま saveDocumentCatalog すると既存の
- * 同梱レコード（前回保存分にはユーザー材が入っていたかもしれない）を上書きしてしまう。
- * これを防ぐため:
- * (1) catalogOverlayUntrusted が立っている間は saveDocumentCatalog を呼ばず、既存レコードを
- *     そのまま温存する（早期return。catalogError は「メッセージ内容」の通知専用フィールドの
- *     ため保存可否の判定には使わない——通知文言を変えると保存ガードの意味まで変わる結合を
- *     避ける。project.catalogOverlayUntrustedだけを見る）。
+ * 解決できず buildDocumentBundle が黙って落とし、そのまま保存すると既存の同梱レコード
+ * （前回保存分にはユーザー材が入っていたかもしれない）を上書きしてしまう。これを防ぐため:
+ * (1) catalogOverlayUntrusted が立っている間は保存自体をせず、既存レコードをそのまま温存する
+ *     （早期return。catalogError は「メッセージ内容」の通知専用フィールドのため保存可否の
+ *     判定には使わない——通知文言を変えると保存ガードの意味まで変わる結合を避ける。
+ *     project.catalogOverlayUntrustedだけを見る）。
  * (2) catalogOverlayUntrusted が立っていなくても unresolvedKeys が非空なら、既存の同梱レコード
- *     （loadDocumentCatalogs で読める）から回収して温存する（recoverUnresolvedEntries）。
- * (3) それでも残る未解決キーは黙って落とさず project.catalogError に件数とコードを載せて
- *     通知する（保存自体は行う——回収できた分は保存し、既存レコードにも無い＝本当に実体が
- *     無い分だけを通知する）。
+ *     （loadDocumentCatalogs で読める）から回収して温存する（recoverUnresolvedEntries）。回収
+ *     された interiorMaster/boundaryMaster が参照する材コードは、最初の expandTransitiveMaterials
+ *     の時点ではまだ material 束に無いため、reexpandTransitiveMaterials で推移展開をやり直し、
+ *     不足する材を resolvedByKind(material) で解決して追記する（QA指摘Minor-2）。それでも
+ *     解決できない材コードは既存の material 束からの回収を1回だけ試みる。
+ * (3) それでも残る未解決キーは黙って落とさず project.catalogError に種別名込みで件数とキー/
+ *     コードを載せて通知する（保存自体は行う——回収できた分は保存し、既存レコードにも無い
+ *     ＝本当に実体が無い分だけを通知する）。
+ * 保存は IDB の規約（${projectId}:catalogs:<kind>）どおり種別ごとのレコードだが、
+ * saveDocumentCatalogs（storage/db.js）で単一トランザクションにまとめて atomic に書く
+ * （QA指摘Major-1: 種別ごとに別々の保存呼び出しをループすると、途中の失敗で一部の種別だけ
+ * 新しい内容・残りは古い内容という部分保存が起きるため）。使用0件の種別も空配列で必ず書く。
  */
-async function saveMaterialCatalogDocument(floorRecords) {
+async function saveCatalogDocument(floorRecords) {
   if (project.catalogOverlayUntrusted) {
-    console.warn('カタログoverlayが未読込み（信頼できない）ため、文書同梱（material）の保存をスキップしました。既存レコードを温存します。');
+    console.warn('カタログoverlayが未読込み（信頼できない）ため、文書同梱の保存をスキップしました。既存レコードを温存します。');
     return;
   }
 
-  const { materialCodes, interiorMasterKeys, boundaryMasterKeys } = await collectMaterialUsageAcrossFloors(floorRecords);
+  const usedKeysByKind = await collectCatalogUsageAcrossFloors(floorRecords);
 
-  const [matMod, interiorMod, boundaryMod] = await Promise.all([
-    import('./finish/materials/materialData.js'),
-    import('./finish/materials/interiorMasters.js'),
-    import('./finish/materials/boundaryMasters.js'),
-  ]);
-  const materialMap = composeCatalog(CatalogKind.MATERIAL, matMod.MATERIALS);
-  const interiorMasterMap = composeCatalog(CatalogKind.INTERIOR_MASTER, interiorMasterBuiltinList(interiorMod));
-  const boundaryMasterMap = composeCatalog(CatalogKind.BOUNDARY_MASTER, Object.values(boundaryMod.BOUNDARY_MASTERS));
+  const builtinLists = await Promise.all(BUNDLED_KINDS.map(kind => kindDef(kind).loadBuiltin()));
+  const resolvedByKind = new Map(BUNDLED_KINDS.map((kind, i) => [kind, composeCatalog(kind, builtinLists[i])]));
 
-  const usedInteriorMasters = [...interiorMasterKeys].map(k => interiorMasterMap.get(k)).filter(Boolean);
-  const usedBoundaryMasters = [...boundaryMasterKeys].map(k => boundaryMasterMap.get(k)).filter(Boolean);
-  const expandedMaterialCodes = expandTransitiveMaterials(materialCodes, {
+  const usedInteriorMasters = [...usedKeysByKind.get(CatalogKind.INTERIOR_MASTER)]
+    .map(k => resolvedByKind.get(CatalogKind.INTERIOR_MASTER).get(k)).filter(Boolean);
+  const usedBoundaryMasters = [...usedKeysByKind.get(CatalogKind.BOUNDARY_MASTER)]
+    .map(k => resolvedByKind.get(CatalogKind.BOUNDARY_MASTER).get(k)).filter(Boolean);
+  usedKeysByKind.set(CatalogKind.MATERIAL, expandTransitiveMaterials(usedKeysByKind.get(CatalogKind.MATERIAL), {
     interiorMasters: usedInteriorMasters,
     boundaryMasters: usedBoundaryMasters,
-  });
+  }));
 
-  const { bundle: draftBundle, unresolvedKeys } = buildDocumentBundle({
-    usedKeysByKind: new Map([[CatalogKind.MATERIAL, expandedMaterialCodes]]),
-    resolvedByKind: new Map([[CatalogKind.MATERIAL, materialMap]]),
-    aliases: { [CatalogKind.MATERIAL]: currentDocumentAliases(CatalogKind.MATERIAL) },
-  });
+  // QA指摘Minor-4: 空の種別を手元でふるい落とさなくても、splitBundleByKindのbundleAliases側が
+  // 「非空のときだけ添える」判定を持つため設計上は同値——フィルタの唯一の判定箇所をそちらに寄せる。
+  const aliases = Object.fromEntries(BUNDLED_KINDS.map(kind => [kind, currentDocumentAliases(kind)]));
+
+  const { bundle: draftBundle, unresolvedKeys } = buildDocumentBundle({ usedKeysByKind, resolvedByKind, aliases });
 
   let finalBundle = draftBundle;
   if ([...unresolvedKeys.values()].some(keys => keys.size > 0)) {
@@ -639,12 +648,36 @@ async function saveMaterialCatalogDocument(floorRecords) {
       draftBundle, unresolvedKeys, existingBundlesByKind,
     );
     finalBundle = recoveredBundle;
+
+    // QA指摘Minor-2: 回収分の内装・境界マスターから推移展開をやり直し、不足する材を追記する。
+    const { bundle: reexpandedBundle, unresolvedMaterialKeys } = reexpandTransitiveMaterials(
+      finalBundle, resolvedByKind.get(CatalogKind.MATERIAL),
+    );
+    finalBundle = reexpandedBundle;
+    if (unresolvedMaterialKeys.size > 0) {
+      const { bundle: recoveredAgain, stillUnresolvedByKind: stillMaterial } = recoverUnresolvedEntries(
+        finalBundle, new Map([[CatalogKind.MATERIAL, unresolvedMaterialKeys]]), existingBundlesByKind,
+      );
+      finalBundle = recoveredAgain;
+      for (const [kind, keys] of stillMaterial) {
+        stillUnresolvedByKind.set(kind, new Set([...(stillUnresolvedByKind.get(kind) ?? []), ...keys]));
+      }
+    }
+
     if (stillUnresolvedByKind.size > 0) {
-      const codes = [...stillUnresolvedByKind.values()].flatMap(s => [...s]);
-      project.setCatalogError(`同梱できない材コードが${codes.length}件あります: ${codes.join(', ')}`);
+      // QA指摘Minor-5: material=「コード」、内装/境界マスター=「キー」で出し分ける。
+      const messages = [...stillUnresolvedByKind].map(([kind, keys]) => {
+        const noun = kind === CatalogKind.MATERIAL ? 'コード' : 'キー';
+        return `同梱できない${KIND_LABELS[kind] ?? kind}${noun}が${keys.size}件あります: ${[...keys].join(', ')}`;
+      });
+      project.setCatalogError(messages.join('。'));
     }
   }
-  await saveDocumentCatalog(savedProjectId, CatalogKind.MATERIAL, encodeCatalogBundle(finalBundle));
+
+  const bytesByKind = new Map(
+    [...splitBundleByKind(finalBundle)].map(([kind, subBundle]) => [kind, encodeCatalogBundle(subBundle)]),
+  );
+  await saveDocumentCatalogs(savedProjectId, bytesByKind);
 }
 
 /**
@@ -671,10 +704,11 @@ export async function saveToIDB() {
   // ④ floors（作業領域）の現在値を保存ドキュメント（savedFloors）へ確定コピー。
   //    project.planeMap に無い（削除済みの）階は savedFloors からも消える。
   await commitFloorsToDocument([...project.planeMap.keys()]);
-  // ④.5 使用材コードを、commitFloorsToDocument で確定した savedFloors から（削除済み階を
-  // 含まないため）全階ぶん収集し、文書同梱（'material'）として保存する（4.3・ステップ4）。
+  // ④.5 使用キーを、commitFloorsToDocument で確定した savedFloors から（削除済み階を
+  // 含まないため）全階ぶん収集し、文書同梱（BUNDLED_KINDS＝material・interiorMaster・
+  // boundaryMaster）として保存する（4.3・ステップ4→7c）。
   const floorRecords = await loadAllSavedFloors();
-  await saveMaterialCatalogDocument(floorRecords);
+  await saveCatalogDocument(floorRecords);
   // ⑤ 次回起動時のブートplane（PLANE_ID_KEY）を最下階の採用planeへ揃える。保存文書の実在planeと
   // 同一IDになり、起動時 reconcilePlanes での無駄な削除・再生成（toRemove→toAdd往復）を防ぐ。
   // project.planes[0] が無い（採用フロアが1件も無い）ことは通常起きないが、undefined を

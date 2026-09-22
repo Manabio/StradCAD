@@ -1,8 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  collectUsedMaterialCodes, collectUsedKeys, expandTransitiveMaterials, buildDocumentBundle,
-  recoverUnresolvedEntries,
+  collectUsedMaterialCodes, collectUsedKeys, collectUsedKeysByKind, expandTransitiveMaterials,
+  buildDocumentBundle, recoverUnresolvedEntries, reexpandTransitiveMaterials,
 } from './usedEntries.js';
 import { emptyBundle, withEntries } from './catalogBundle.js';
 import { CatalogKind } from './catalogKinds.js';
@@ -102,6 +102,47 @@ test('collectUsedKeys: snapshotがnullなら全種別が空Set', () => {
   assert.deepEqual(used.openingSubType, new Set());
 });
 
+// ---- collectUsedKeysByKind: 純ロジック（store.jsから抽出。ステップ7c QA指摘Major-1）----
+test('collectUsedKeysByKind: rooms・edgesが空のスナップショット1件でも戻り値は指定した全種別を空Setで持つ', () => {
+  const emptySnapshot = { rooms: [], edges: [] };
+  const kinds = [CatalogKind.MATERIAL, CatalogKind.INTERIOR_MASTER, CatalogKind.BOUNDARY_MASTER];
+  const result = collectUsedKeysByKind([emptySnapshot], kinds);
+  assert.equal(result.size, 3, '渡した種別ぶんのキーがMapに無い');
+  for (const kind of kinds) {
+    assert.ok(result.has(kind), `${kind}がMapに無い（使用0件の種別も空Setで持つ契約に反する）`);
+    assert.deepEqual(result.get(kind), new Set(), `${kind}が空Setでない`);
+  }
+});
+
+test('collectUsedKeysByKind: snapshotsが空配列（floorRecordsが1件も無い）でも指定した全種別を空Setで持つ', () => {
+  const kinds = [CatalogKind.MATERIAL, CatalogKind.INTERIOR_MASTER, CatalogKind.BOUNDARY_MASTER];
+  const result = collectUsedKeysByKind([], kinds);
+  assert.equal(result.size, 3);
+  for (const kind of kinds) assert.deepEqual(result.get(kind), new Set());
+});
+
+test('collectUsedKeysByKind: 複数階のsnapshotから種別ごとに使用キー・材コードを集める（baseSnapshotで検証）', () => {
+  const kinds = [CatalogKind.MATERIAL, CatalogKind.INTERIOR_MASTER, CatalogKind.BOUNDARY_MASTER];
+  const result = collectUsedKeysByKind([baseSnapshot()], kinds);
+  assert.ok(result.get(CatalogKind.MATERIAL).size > 0, 'materialが収集されていない');
+  assert.deepEqual([...result.get(CatalogKind.INTERIOR_MASTER)], ['LIVING_ROOM']);
+  assert.deepEqual([...result.get(CatalogKind.BOUNDARY_MASTER)], ['EXTERIOR_WALL']);
+});
+
+test('collectUsedKeysByKind: kindsに含めなかった種別は戻り値に現れない', () => {
+  const result = collectUsedKeysByKind([baseSnapshot()], [CatalogKind.MATERIAL]);
+  assert.equal(result.size, 1);
+  assert.ok(!result.has(CatalogKind.INTERIOR_MASTER));
+  assert.ok(!result.has(CatalogKind.BOUNDARY_MASTER));
+});
+
+test('【失敗系】collectUsedKeysByKind: 収集に未対応の種別を渡すと空Setを返さず日本語例外（黙って空配列で同梱し前回レコードを消す退行を防ぐ）', () => {
+  assert.throws(
+    () => collectUsedKeysByKind([baseSnapshot()], ['someNewKind']),
+    /使用キーの収集に未対応の種別です: someNewKind/,
+  );
+});
+
 // ---- expandTransitiveMaterials: 内装マスター・境界マスターの推移的展開 ----
 test('expandTransitiveMaterials: 内装マスターのwallMaterial/wallFinishを追加する', () => {
   const expanded = expandTransitiveMaterials(new Set(['101000000001']), {
@@ -196,6 +237,32 @@ test('buildDocumentBundle: 束のversionは1（catalogBundle.jsのemptyBundleと
   assert.equal(bundle.version, 1);
 });
 
+// ステップ7c: 使用0件の種別も usedKeysByKind に空Setとして渡せば bundle.catalogs[kind] = [] と
+// して必ず現れる（4.3「参照されなくなったエントリは次回保存時に外す」の一般化。呼び出し側
+// （store.js collectCatalogUsageAcrossFloors）が使用0件の種別を Map から省略すると、この種別は
+// bundle.catalogs に一切現れず、splitBundleByKind で保存対象から漏れて前回レコードが残ってしまう
+// ——そのため呼び出し側は必ず空Setで渡す契約になっている。ここではbuildDocumentBundle自身の
+// 挙動として「渡された種別は使用数0でも空配列で書かれる」ことを固定する）。
+test('buildDocumentBundle: 使用0件の種別（空Set）を渡すと同梱に空配列として現れる', () => {
+  const { bundle, unresolvedKeys } = buildDocumentBundle({
+    usedKeysByKind: new Map([
+      [CatalogKind.MATERIAL, new Set(['101000000001'])],
+      [CatalogKind.INTERIOR_MASTER, new Set()], // 使用0件
+      [CatalogKind.BOUNDARY_MASTER, new Set()], // 使用0件
+    ]),
+    resolvedByKind: new Map([
+      [CatalogKind.MATERIAL, new Map([['101000000001', { code: '101000000001', name: 'A', spec: '', x: 0, y: 0, thickness: null }]])],
+      [CatalogKind.INTERIOR_MASTER, new Map()],
+      [CatalogKind.BOUNDARY_MASTER, new Map()],
+    ]),
+  });
+  assert.deepEqual(bundle.catalogs.interiorMaster, []);
+  assert.deepEqual(bundle.catalogs.boundaryMaster, []);
+  assert.equal(bundle.encodings.interiorMaster, 'json');
+  assert.equal(bundle.encodings.boundaryMaster, 'json');
+  assert.equal(unresolvedKeys.size, 0, '使用0件なので未解決キーは無い');
+});
+
 // ---- recoverUnresolvedEntries: 未解決キーを既存の同梱束から回収する（2026-09-22 QA指摘A）----
 test('recoverUnresolvedEntries: 既存の同梱束に実体が残っていれば回収してbundleへ追記する', () => {
   const recoveredEntry = { code: '301000000020', name: 'ユーザー材', spec: '', x: 0, y: 0, thickness: 15 };
@@ -246,4 +313,71 @@ test('recoverUnresolvedEntries: unresolvedKeysが空なら何もせずbundleを�
   const { bundle: recovered, stillUnresolvedByKind } = recoverUnresolvedEntries(draft, unresolvedKeys, new Map());
   assert.deepEqual(recovered, draft);
   assert.deepEqual(stillUnresolvedByKind, new Map());
+});
+
+// ---- reexpandTransitiveMaterials: 回収分（recoverUnresolvedEntries後）の推移展開のやり直し
+// （QA指摘Minor-2） ----
+test('reexpandTransitiveMaterials: 回収されたinteriorMasterのwallMaterial/wallFinishをmaterial束へ追記する', () => {
+  const recoveredMaster = {
+    key: 'USER_ROOM', label: 'ユーザー部屋', wallMaterial: '301000000002', wallFinish: '302000000001', ceilingHeight: 2600,
+  };
+  let bundle = withEntries(emptyBundle(), CatalogKind.INTERIOR_MASTER, [recoveredMaster]);
+  bundle = withEntries(bundle, CatalogKind.MATERIAL, []); // 回収時点ではまだmaterial束に無い
+
+  const materialEntryA = { code: '301000000002', name: 'せっこうボード', spec: '', x: 0, y: 0, thickness: 12.5 };
+  const materialEntryB = { code: '302000000001', name: 'ビニールクロス', spec: '', x: 0, y: 0, thickness: null };
+  const materialMap = new Map([[materialEntryA.code, materialEntryA], [materialEntryB.code, materialEntryB]]);
+
+  const { bundle: result, unresolvedMaterialKeys } = reexpandTransitiveMaterials(bundle, materialMap);
+  assert.deepEqual(
+    result.catalogs.material.map(e => e.code).sort(),
+    ['301000000002', '302000000001'],
+  );
+  assert.equal(unresolvedMaterialKeys.size, 0);
+});
+
+test('reexpandTransitiveMaterials: 回収されたboundaryMasterの固定層codeもmaterial束へ追記する', () => {
+  const recoveredMaster = { key: 'USER_BOUNDARY', label: 'ユーザー境界', kind: 'layered', layers: [{ role: '外壁材', code: '301600000001' }] };
+  let bundle = withEntries(emptyBundle(), CatalogKind.BOUNDARY_MASTER, [recoveredMaster]);
+  bundle = withEntries(bundle, CatalogKind.MATERIAL, []);
+
+  const entry = { code: '301600000001', name: 'サイディング', spec: '', x: 0, y: 0, thickness: 16 };
+  const materialMap = new Map([[entry.code, entry]]);
+
+  const { bundle: result, unresolvedMaterialKeys } = reexpandTransitiveMaterials(bundle, materialMap);
+  assert.deepEqual(result.catalogs.material.map(e => e.code), ['301600000001']);
+  assert.equal(unresolvedMaterialKeys.size, 0);
+});
+
+test('reexpandTransitiveMaterials: materialMapに無い（解決できない）材コードはunresolvedMaterialKeysに積み、material束には追記しない', () => {
+  const recoveredMaster = {
+    key: 'USER_ROOM', label: 'ユーザー部屋', wallMaterial: '999999999999', wallFinish: '302000000001', ceilingHeight: 2600,
+  };
+  let bundle = withEntries(emptyBundle(), CatalogKind.INTERIOR_MASTER, [recoveredMaster]);
+  bundle = withEntries(bundle, CatalogKind.MATERIAL, []);
+  const entry = { code: '302000000001', name: 'ビニールクロス', spec: '', x: 0, y: 0, thickness: null };
+  const materialMap = new Map([[entry.code, entry]]);
+
+  const { bundle: result, unresolvedMaterialKeys } = reexpandTransitiveMaterials(bundle, materialMap);
+  assert.deepEqual(result.catalogs.material.map(e => e.code), ['302000000001']);
+  assert.deepEqual(unresolvedMaterialKeys, new Set(['999999999999']));
+});
+
+test('reexpandTransitiveMaterials: 追加で展開される材が無ければbundleをそのまま返す（同一参照）', () => {
+  let bundle = withEntries(emptyBundle(), CatalogKind.INTERIOR_MASTER, []);
+  bundle = withEntries(bundle, CatalogKind.MATERIAL, [{ code: '101000000001', name: 'A', spec: '', x: 0, y: 0, thickness: null }]);
+  const { bundle: result, unresolvedMaterialKeys } = reexpandTransitiveMaterials(bundle, new Map());
+  assert.equal(result, bundle, '展開すべき材が無いのに新しいbundleオブジェクトを作っている');
+  assert.equal(unresolvedMaterialKeys.size, 0);
+});
+
+test('reexpandTransitiveMaterials: 既にmaterial束にあるコードは重複追加しない', () => {
+  const recoveredMaster = { key: 'USER_ROOM', label: '部屋', wallMaterial: '301000000002', wallFinish: null, ceilingHeight: 2600 };
+  let bundle = withEntries(emptyBundle(), CatalogKind.INTERIOR_MASTER, [recoveredMaster]);
+  const existingEntry = { code: '301000000002', name: 'せっこうボード', spec: '', x: 0, y: 0, thickness: 12.5 };
+  bundle = withEntries(bundle, CatalogKind.MATERIAL, [existingEntry]);
+  const materialMap = new Map([[existingEntry.code, existingEntry]]);
+
+  const { bundle: result } = reexpandTransitiveMaterials(bundle, materialMap);
+  assert.deepEqual(result.catalogs.material, [existingEntry]);
 });

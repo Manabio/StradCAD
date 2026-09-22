@@ -48,6 +48,19 @@ export const CatalogKind = Object.freeze({
   OPENING_SUB_TYPE: 'openingSubType',
 });
 
+/**
+ * 種別タブ表示名（登録表の種別に対する固定の日本語ラベル）。唯一の定義箇所——
+ * ステップ7c までは catalog/catalogMaintenance.js にあったが、store.js（同梱の通知文）も
+ * 種別名を必要としたためここへ移設した。catalogMaintenance.js は再輸出のみ行う。
+ */
+export const KIND_LABELS = Object.freeze({
+  [CatalogKind.MATERIAL]:         '材料',
+  [CatalogKind.INTERIOR_MASTER]:  '内装マスター',
+  [CatalogKind.BOUNDARY_MASTER]:  '境界マスター',
+  [CatalogKind.SECTION]:          '断面',
+  [CatalogKind.OPENING_SUB_TYPE]: '建具種別',
+});
+
 // ----------------------------------------------------------------
 // 材料コード分類表（R4・R6・R18・Q13確定 2026-09-22）。数値割当・名称の唯一の定義箇所。
 // 中分類は全大分類で「10始まりの2刻み」（`11`は旧体系＝未分類として欠番）。

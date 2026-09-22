@@ -232,7 +232,7 @@ export function docDiffFields(kind, key, builtinList) {
 /**
  * ステップ6b（4.7 合わせ直し）: 文書同梱（doc）から key のエントリを1件外す。
  * setOverlay(kind, { doc: doc.filter(...), user }) の薄いラッパ——user は触らない。
- * 次の保存で（doc が外れた分）builtin/user の内容が同梱し直される（saveMaterialCatalogDocument
+ * 次の保存で（doc が外れた分）builtin/user の内容が同梱し直される（saveCatalogDocument
  * は overlay 合成結果から束を作るため自然にそうなる）。
  * doc に key のエントリが無ければ日本語例外（削除UIの「無いものを消そうとした」誤操作を防ぐ）。
  */

@@ -235,7 +235,7 @@ export function CatalogMaintenancePanel({ onClose }) {
 
   // ステップ6b（4.7 合わせ直し）: 承認された対象キーを removeDocEntry（catalog/catalogRegistry.js）で
   // 文書同梱（doc）から外す。永続化I/Oはしない——次の保存で同梱がbuiltin/user内容で書き直される
-  // （saveMaterialCatalogDocument が overlay 合成結果から束を作るため）。dirtyState.js の markDirty で
+  // （saveCatalogDocument が overlay 合成結果から束を作るため）。dirtyState.js の markDirty で
   // 保存を促す（他の overlay 変更＝commitUserEntries経由はcommitUserEntries内で永続化まで行うのに対し、
   // removeDocEntryはoverlayのみ変えるIn-memory操作のため、ここで明示的にmarkDirtyする）。
   function handleRealignConfirmed() {

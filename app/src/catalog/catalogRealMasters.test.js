@@ -4,10 +4,13 @@
 // （動的importのthunk）を実際に呼び、node:test から単体で本体マスタへ到達できることも兼ねて確認する。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { kindDef, listKinds } from './catalogKinds.js';
+import { kindDef, listKinds, CatalogKind } from './catalogKinds.js';
 import { valuesEqual, matchByContent } from './catalogMatch.js';
 import { withEntries, emptyBundle, validateBundle, resolveCatalog } from './catalogBundle.js';
+import { composeCatalog } from './catalogRegistry.js';
+import { collectUsedKeys, collectUsedMaterialCodes, expandTransitiveMaterials, buildDocumentBundle } from './usedEntries.js';
 import { MATERIALS } from '../finish/materials/materialData.js';
+import { INTERIOR_MASTERS } from '../finish/materials/interiorMasters.js';
 
 // ステップ3（2026-09-22）で振り直し済み。旧132件のうち廃止・削除2件（アスファルトプライマー・
 // 吸音テックス用捨て糊。legacyMaterialCodes.js の REMOVED_MATERIALS）を除いた130件。
@@ -86,6 +89,41 @@ for (const kind of listKinds()) {
     }
   });
 }
+
+// ---- QA記録-1（欠落テスト・ステップ7c）: 実データでの collect→expand→build 固定 ----
+// templateKeyを持つ部屋がある文書を保存すると、その内装マスター（INTERIOR_MASTERS.LIVING_ROOM）
+// が参照する材コード（wallMaterial/wallFinish）が推移的に同梱束（material）へ含まれることを、
+// saveCatalogDocument（store.js。node:testからimport不可）ではなく、その純ロジック部分
+// （collectUsedKeys → expandTransitiveMaterials → buildDocumentBundle。いずれもusedEntries.js
+// の既存export）を実データ（本体標準マスタ）で通す形で固定する。
+test('QA記録-1: templateKeyを持つ部屋の内装マスターが参照する材コード（wallMaterial/wallFinish）が推移的にmaterial束へ含まれる', async () => {
+  const snapshot = { rooms: [{ id: 'r1', templateKey: 'LIVING_ROOM' }], edges: [] };
+
+  const directMaterialCodes = collectUsedMaterialCodes(snapshot);
+  assert.equal(directMaterialCodes.size, 0, 'このスナップショットには材コードへの直接参照が無い（推移的展開だけで入るはず）');
+
+  const { interiorMaster: interiorMasterKeys } = collectUsedKeys(snapshot);
+  assert.deepEqual([...interiorMasterKeys], ['LIVING_ROOM']);
+
+  const interiorBuiltin = await kindDef(CatalogKind.INTERIOR_MASTER).loadBuiltin();
+  const interiorMasterMap = composeCatalog(CatalogKind.INTERIOR_MASTER, interiorBuiltin);
+  const usedInteriorMasters = [...interiorMasterKeys].map(k => interiorMasterMap.get(k)).filter(Boolean);
+  assert.equal(usedInteriorMasters.length, 1, 'LIVING_ROOMがinteriorMasterMapで解決できない');
+
+  const expandedMaterialCodes = expandTransitiveMaterials(directMaterialCodes, { interiorMasters: usedInteriorMasters });
+  assert.ok(expandedMaterialCodes.has(INTERIOR_MASTERS.LIVING_ROOM.wallMaterial), 'wallMaterialが推移的に展開されていない');
+  assert.ok(expandedMaterialCodes.has(INTERIOR_MASTERS.LIVING_ROOM.wallFinish), 'wallFinishが推移的に展開されていない');
+
+  const materialMap = composeCatalog(CatalogKind.MATERIAL, MATERIALS);
+  const { bundle, unresolvedKeys } = buildDocumentBundle({
+    usedKeysByKind: new Map([[CatalogKind.MATERIAL, expandedMaterialCodes]]),
+    resolvedByKind: new Map([[CatalogKind.MATERIAL, materialMap]]),
+  });
+  assert.equal(unresolvedKeys.size, 0, '実データのためwallMaterial/wallFinishとも本体マスタで解決できるはず');
+  const codesInBundle = bundle.catalogs.material.map(e => e.code);
+  assert.ok(codesInBundle.includes(INTERIOR_MASTERS.LIVING_ROOM.wallMaterial), '同梱束にwallMaterialが含まれていない');
+  assert.ok(codesInBundle.includes(INTERIOR_MASTERS.LIVING_ROOM.wallFinish), '同梱束にwallFinishが含まれていない');
+});
 
 // ---- 必須テスト T2: 各種別で全件×全件、自分以外に対しmatchByContentのexactヒットが0件（誤alias防止） ----
 for (const kind of listKinds()) {

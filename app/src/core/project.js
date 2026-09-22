@@ -59,7 +59,7 @@ export class Project {
     // overlay読込みに失敗したときだけtrueにする——catalogErrorは「メッセージの内容」に
     // 依存する通知専用のフィールドのため、保存可否の判定（真偽の分岐）と兼用しない
     // （通知文言を変えると保存ガードの意味まで変わってしまう結合を避ける）。
-    // store.js saveMaterialCatalogDocument はこれだけを見て、文書同梱の保存可否を決める。
+    // store.js saveCatalogDocument はこれだけを見て、文書同梱の保存可否を決める。
     this.catalogOverlayUntrusted = false;
 
     // 指示UI（ステップ6-3・R10）の行一覧（catalog/resolveQueue.js buildResolveRows の戻り値）。

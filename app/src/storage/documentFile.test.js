@@ -94,6 +94,27 @@ test('buildDocumentJson→parseDocumentEnvelope: catalogsがラウンドトリ�
   assert.deepEqual(parsed.catalogs, bundle);
 });
 
+// ステップ7c: 同梱の一般化（material・interiorMaster・boundaryMasterの3種別）。documentFile.js
+// 自体は種別非依存のはず（catalogs はそのままbase64化するだけ）——3種別を含む束でも
+// ラウンドトリップすることを固定する。
+test('buildDocumentJson→parseDocumentEnvelope: material・interiorMaster・boundaryMasterの3種別を含むcatalogsがラウンドトリップする', () => {
+  const bundle = {
+    version: 1,
+    catalogs: {
+      material: [{ code: '101000000001', name: 'テスト材', spec: '', x: 0, y: 0, thickness: 12.5, category: 'panel' }],
+      interiorMaster: [{ key: 'LIVING_ROOM', label: 'LDK', wallMaterial: '301000000001', wallFinish: '302000000001', ceilingHeight: 2400 }],
+      boundaryMaster: [{ key: 'EXTERIOR_WALL', label: '外壁', kind: 'layered', layers: [{ role: '外壁材', code: '301600000001' }] }],
+    },
+    encodings: { material: 'json', interiorMaster: 'json', boundaryMaster: 'json' },
+    aliases: {},
+  };
+  const doc = { floors: [], struct: null, planes: null, site: null, info: null, bootPlaneId: null, catalogs: bundle };
+  const parsed = parseDocumentEnvelope(JSON.parse(buildDocumentJson(doc)));
+  assert.deepEqual(parsed.catalogs, bundle);
+  assert.equal(parsed.catalogs.catalogs.interiorMaster.length, 1);
+  assert.equal(parsed.catalogs.catalogs.boundaryMaster.length, 1);
+});
+
 test('buildDocumentJson: version は catalogs 追加後も 1 のまま', () => {
   const data = JSON.parse(buildDocumentJson({
     floors: [], struct: null, planes: null, site: null, info: null, bootPlaneId: null, catalogs: sampleBundle(),
