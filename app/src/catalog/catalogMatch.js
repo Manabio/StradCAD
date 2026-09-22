@@ -1,33 +1,64 @@
 // ================================================================
 // カタログの照合・不一致検出・候補選定（R8/R12/R14/R17）。
 //
-// 純モジュール（葉）。catalogKinds.js（登録表）と materialCode.js（コードのパース）だけに依存する。
+// 純モジュール（葉）。catalogKinds.js（登録表）・materialCode.js（コードのパース）・
+// error.js（ERR_CATALOG_DUPLICATE。葉モジュールで .claude/ の不変条件に反しない）に依存する。
 // ================================================================
 
 import { kindDef } from './catalogKinds.js';
 import { parseMaterialCode } from './materialCode.js';
+import { ERR_CATALOG_DUPLICATE } from '../error.js';
 
 function isPlainObject(v) {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
 }
 
 /**
- * 値の等価判定（4.5-3・4.6の規約）:
- *   文字列は前後の空白を除いて完全一致／数値は null と 0 を区別／
- *   配列・オブジェクトは項目ごとの深い比較（文字列化比較はしない）。
+ * 深い比較（厳密。2026-09-22追加裁定）: 配列・オブジェクトの「中」で使う。
+ * null と undefined は同値にしない（キーの有無を区別する——`fields`・`layers`の各要素・
+ * `slideLayout`等のオブジェクトのキー集合は項目名の集合＝意味を持つため）。
+ * 文字列のtrim比較は維持する。
  */
-export function valuesEqual(a, b) {
+function deepValuesEqualStrict(a, b) {
   if (a === b) return true;
   if (typeof a === 'string' && typeof b === 'string') return a.trim() === b.trim();
   if (a === null || b === null || a === undefined || b === undefined) return false;
   if (Array.isArray(a) && Array.isArray(b)) {
     if (a.length !== b.length) return false;
-    return a.every((v, i) => valuesEqual(v, b[i]));
+    return a.every((v, i) => deepValuesEqualStrict(v, b[i]));
   }
   if (isPlainObject(a) && isPlainObject(b)) {
-    const keys = new Set([...Object.keys(a), ...Object.keys(b)]);
-    for (const k of keys) if (!valuesEqual(a[k], b[k])) return false;
-    return true;
+    const keysA = Object.keys(a);
+    const keysB = Object.keys(b);
+    if (keysA.length !== keysB.length) return false; // キーの有無を区別する（{框:null}≠{}）
+    return keysA.every(k => (
+      Object.prototype.hasOwnProperty.call(b, k) && deepValuesEqualStrict(a[k], b[k])
+    ));
+  }
+  return false;
+}
+
+/**
+ * 値の等価判定（4.5-3・4.6の規約。エントリ直下の項目＝compareFields/matchFields/dedupeFields
+ * で名指しされる値に使う）:
+ *   文字列は前後の空白を除いて完全一致／数値は null と 0 を区別／
+ *   null と undefined（省略）は同値（2026-09-22裁定。本体マスタは触らない。「未設定はnull」は
+ *   エントリの項目の話であって、項目の値がオブジェクト・配列のときその「中」までは及ばない）／
+ *   配列・オブジェクトの「中」（fields・layersの各要素・slideLayout等の入れ子）は
+ *   deepValuesEqualStrictで厳密に比較する（キーの有無・入れ子内のnull/undefinedを区別する）。
+ */
+export function valuesEqual(a, b) {
+  const aNullish = a === null || a === undefined;
+  const bNullish = b === null || b === undefined;
+  if (aNullish || bNullish) return aNullish && bNullish;
+  if (a === b) return true;
+  if (typeof a === 'string' && typeof b === 'string') return a.trim() === b.trim();
+  if (Array.isArray(a) && Array.isArray(b)) {
+    if (a.length !== b.length) return false;
+    return a.every((v, i) => deepValuesEqualStrict(v, b[i]));
+  }
+  if (isPlainObject(a) && isPlainObject(b)) {
+    return deepValuesEqualStrict(a, b);
   }
   return false;
 }
@@ -72,18 +103,12 @@ export function matchByContent(kind, target, entries) {
 }
 
 /**
- * 同じ段の候補の順位付け: 登録表の行が `compareCandidates(a,b,target)` を指定していれば
- * それを使う（QA指摘 M7）。未指定なら共通規則——builtin優先 → matchFieldsのうち数値項目の
- * 絶対差の合計が小さい順 → キー（keyOf）昇順。現状は全種別未指定（共通規則のみで運用）。
- *
- * kind には種別文字列（本番経路。kindDef(kind)で登録表を引く）のほか、
- * `{ keyOf, matchFields, compareCandidates? }` を満たす行オブジェクトを直接渡せる
- * （テストで compareCandidates の口が実際に効くことを、凍結された本番登録表を書き換えずに
- * 確認するため）。
+ * rankCandidatesの本体。登録表の行（またはそれと同じ形のダミー行）を直接受け取る
+ * （積み残し2026-09-22: 本番経路のrankCandidatesは種別文字列専用に戻し、行オブジェクトを
+ * 受ける経路はここへ分離した。テストで compareCandidates の口が実際に効くことを、凍結された
+ * 本番登録表を書き換えずに確認するのに使う）。
  */
-export function rankCandidates(kind, target, hits, origins) {
-  const def = typeof kind === 'string' ? kindDef(kind) : kind;
-
+export function rankCandidatesWith(def, target, hits, origins) {
   if (typeof def.compareCandidates === 'function') {
     return [...hits].sort((a, b) => def.compareCandidates(a, b, target));
   }
@@ -108,6 +133,16 @@ export function rankCandidates(kind, target, hits, origins) {
     const keyA = def.keyOf(a), keyB = def.keyOf(b);
     return keyA < keyB ? -1 : keyA > keyB ? 1 : 0;
   });
+}
+
+/**
+ * 同じ段の候補の順位付け（本番経路。kind は種別文字列専用——kindDef(kind)で登録表を引く）。
+ * 登録表の行が `compareCandidates(a,b,target)` を指定していればそれを使う（QA指摘 M7）。
+ * 未指定なら共通規則——builtin優先 → matchFieldsのうち数値項目の絶対差の合計が小さい順 →
+ * キー（keyOf）昇順。現状は全種別未指定（共通規則のみで運用）。
+ */
+export function rankCandidates(kind, target, hits, origins) {
+  return rankCandidatesWith(kindDef(kind), target, hits, origins);
 }
 
 /**
@@ -136,6 +171,32 @@ export function classifyIncoming(kind, docEntry, appEntries, origins) {
   return { action: 'add', entry: docEntry };
 }
 
+/** entryの名称（表示用）。material=name、他4種別=label。どちらも無ければ空文字。 */
+function displayNameOf(entry) {
+  return entry?.name || entry?.label || '';
+}
+
+/**
+ * R17重複エラーを組み立てる（2026-09-22 QA指摘C）。両エントリのキー＋名称を含める。
+ * origins（Map<key,'doc'|'user'|'builtin'>）を渡せば出所も併記する（registry の合成後検査用。
+ * assertNoDuplicate 単体からは出所を持たないため省略）。code は ERR_CATALOG_DUPLICATE
+ * （wallRefresh.js 等の呼び出し側が「握りつぶさず再throwすべきエラー」と識別するのに使う）。
+ * 2026-09-22 QA指摘・Minor: 名称（displayNameOf）が空のとき「（（名称なし））」のような
+ * 二重括弧にしない——名称・出所のどちらも無ければ括弧ごと省き、キーだけを出す。
+ */
+export function formatDuplicateError(kind, def, a, b, origins) {
+  const tag = e => {
+    const origin = origins?.get(def.keyOf(e));
+    const parts = [displayNameOf(e), origin].filter(Boolean).join('・');
+    return parts ? `${def.keyOf(e)}（${parts}）` : def.keyOf(e);
+  };
+  const err = new Error(
+    `同じ内容の${kind}が既に登録されています（重複禁止）: ${tag(a)} ⇔ ${tag(b)}`,
+  );
+  err.code = ERR_CATALOG_DUPLICATE;
+  return err;
+}
+
 /**
  * R17: 同じ内容（dedupeFields完全一致）の重複登録を弾く（category違いも不可）。
  * dedupeFields を持たない種別は常に許容（no-op）。
@@ -149,9 +210,7 @@ export function assertNoDuplicate(kind, entry, entries) {
     def.keyOf(e) !== entryKey
     && dedupeFields.every(f => valuesEqual(e[f], entry[f]))
   ));
-  if (conflict) {
-    throw new Error(`同じ内容の${kind}が既に登録されています（重複禁止）: ${def.keyOf(conflict)}`);
-  }
+  if (conflict) throw formatDuplicateError(kind, def, conflict, entry);
 }
 
 /**

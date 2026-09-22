@@ -24,6 +24,7 @@ import { recomputeStructuralForGraph } from './structural/structuralRecompute.js
 import { TRADITIONAL_WOOD_STRUCTURE } from './structural/structureRules.js';
 import { conformWoodBacking } from './structural/woodAutoFill.js';
 import { assignNumbers, applyNumbers } from './structural/memberNumbering.js';
+import { ERR_CATALOG_DUPLICATE } from './error.js';
 
 function makeSinglePlaneProject() {
   const project = new Project('proj', 'test');
@@ -637,6 +638,31 @@ test('【失敗系】refreshWallsAllFloors: materialMapのロードに失敗し�
   assert.equal(graph.wallFreshnessKey, keyBefore, '鍵も書き換えない（壁が実際には変わっていないため）');
 });
 
+// ---- 2026-09-22 QA指摘B: R17（カタログ重複登録禁止）の例外は握りつぶさず再throwする ----
+test('【失敗系・2026-09-22 QA指摘B】refreshWallsAllFloors: getMaterialMapがERR_CATALOG_DUPLICATEで例外を投げたら、握りつぶさず同じエラーでrejectする（壁は古いまま）', async () => {
+  const { project, graph } = makeSinglePlaneProject();
+  addRectRoom(graph);
+  await seedInitialWalls(graph, project);
+  const wallsBefore = graph.walls.length;
+  const keyBefore = graph.wallFreshnessKey;
+  assert.ok(wallsBefore > 0, '前提: 壁が生成されている');
+  graph.structureOverride = TRADITIONAL_WOOD_STRUCTURE; // 鍵不一致を作る
+
+  const duplicateError = new Error('同じ内容のmaterialが既に登録されています（重複禁止）: dummy');
+  duplicateError.code = ERR_CATALOG_DUPLICATE;
+
+  await assert.rejects(
+    () => refreshWallsAllFloors(project, {
+      pushUndo: false,
+      loadMaterialMapFn: async () => { throw duplicateError; },
+    }),
+    (e) => e === duplicateError, // 握りつぶさず同一のエラーで伝播する
+  );
+
+  assert.equal(graph.walls.length, wallsBefore, '壁は一切作り直さない（本数不変）');
+  assert.equal(graph.wallFreshnessKey, keyBefore, '鍵も書き換えない');
+});
+
 // ---- QA ステップ5: materialMapは鍵不一致の階が無ければロードされない（遅延ロード）。
 // 不一致があれば、複数階分あっても1回だけロードされる ----
 test('【QAステップ5】refreshWallsAllFloors: 鍵一致のみの全階ではloadMaterialMapFnが呼ばれず、鍵不一致があれば1回だけ呼ばれる', async () => {
@@ -912,4 +938,41 @@ test('【不変条件・ステップ5】store.js: bootReady本体がrefreshWalls
   const ifCond = before.slice(lastIfIdx, before.indexOf(')', lastIfIdx) + 1);
   assert.match(ifCond, /changedPlaneIds\.length\s*>\s*0/,
     'markDirty() の条件が「変更があったときだけ」（changedPlaneIds.length > 0）になっていない');
+});
+
+// ---- 不変条件・2026-09-22 QA指摘B残存(T7): store.js の bootReady の catch は
+// R17(ERR_CATALOG_DUPLICATE)ならconsole.errorで終わらずproject.catalogErrorを立て、
+// それ以外は従来どおりconsole.errorのみにする。store.js自体はlocalStorage/indexedDBに
+// 依存するモジュール初期化がありnode:testから実行できないため、上のテストと同じ型
+// （ソーステキストを正規表現で検査する不変条件テスト）で固定する ----
+test('【不変条件・2026-09-22 QA指摘B残存・T7】store.js: bootReadyのcatchはERR_CATALOG_DUPLICATEならproject.catalogErrorを立て、それ以外は従来どおりconsole.errorする', () => {
+  const src = fs.readFileSync(path.resolve(import.meta.dirname, 'store.js'), 'utf8');
+  const startIdx = src.indexOf('export const bootReady');
+  assert.ok(startIdx >= 0, 'bootReady が見つからない');
+  const arrowIdx = src.indexOf('=> {', startIdx);
+  const braceStart = src.indexOf('{', arrowIdx);
+  let depth = 0, i = braceStart;
+  for (; i < src.length; i++) {
+    if (src[i] === '{') depth++;
+    else if (src[i] === '}') { depth--; if (depth === 0) break; }
+  }
+  const body = src.slice(braceStart, i + 1);
+  const codeOnly = body.split(/\r?\n/).filter(line => !line.trim().startsWith('//')).join('\n');
+
+  const catchIdx = codeOnly.indexOf('} catch (e) {');
+  assert.ok(catchIdx >= 0, 'bootReady の本体に catch (e) が見つからない');
+  const catchBraceStart = codeOnly.indexOf('{', catchIdx + 1);
+  let cdepth = 0, j = catchBraceStart;
+  for (; j < codeOnly.length; j++) {
+    if (codeOnly[j] === '{') cdepth++;
+    else if (codeOnly[j] === '}') { cdepth--; if (cdepth === 0) break; }
+  }
+  const catchBody = codeOnly.slice(catchBraceStart, j + 1);
+
+  assert.match(catchBody, /e\?\.code === ERR_CATALOG_DUPLICATE/,
+    'catchがERR_CATALOG_DUPLICATEを判別していない');
+  assert.match(catchBody, /project\.setCatalogError\(/,
+    'ERR_CATALOG_DUPLICATE時にproject.setCatalogErrorを呼んでいない');
+  assert.match(catchBody, /console\.error\(e\)/,
+    'それ以外のエラー用のconsole.error(e)が残っていない（従来挙動が失われている）');
 });

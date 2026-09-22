@@ -1,10 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  valuesEqual, diffEntries, shouldNotifyDiff, matchByContent, rankCandidates,
-  classifyIncoming, assertNoDuplicate, suggestByClass,
+  valuesEqual, diffEntries, shouldNotifyDiff, matchByContent, rankCandidates, rankCandidatesWith,
+  classifyIncoming, assertNoDuplicate, formatDuplicateError, suggestByClass,
 } from './catalogMatch.js';
 import { kindDef } from './catalogKinds.js';
+import { ERR_CATALOG_DUPLICATE } from '../error.js';
 
 function material(overrides) {
   return {
@@ -18,6 +19,40 @@ test('valuesEqual: nullと0を区別する', () => {
   assert.equal(valuesEqual(null, 0), false);
   assert.equal(valuesEqual(0, 0), true);
   assert.equal(valuesEqual(null, null), true);
+});
+
+test('valuesEqual: nullとundefined（省略）は同値（2026-09-22裁定）', () => {
+  assert.equal(valuesEqual(null, undefined), true);
+  assert.equal(valuesEqual(undefined, null), true);
+  assert.equal(valuesEqual(undefined, undefined), true);
+});
+
+test('valuesEqual: null/undefinedと0は依然として不一致', () => {
+  assert.equal(valuesEqual(null, 0), false);
+  assert.equal(valuesEqual(undefined, 0), false);
+  assert.equal(valuesEqual(0, undefined), false);
+});
+
+// ---- 2026-09-22追加裁定: null≡undefinedはエントリ直下の項目にだけ適用し、入れ子の中では
+// キーの有無を厳密に比較する（{框:null}≠{}）----
+test('valuesEqual: 入れ子オブジェクトの中はキーの有無を厳密に比較する（{框:null} ≠ {}）', () => {
+  assert.equal(valuesEqual({ 框: null }, {}), false);
+  assert.equal(valuesEqual({}, { 框: null }), false);
+});
+
+test('valuesEqual: 入れ子オブジェクトの中のnullとundefinedは区別する', () => {
+  assert.equal(valuesEqual({ a: null }, { a: undefined }), false);
+  assert.equal(valuesEqual({ a: 1, b: null }, { a: 1, b: null }), true); // 同じキー・同じnull値は一致
+});
+
+test('valuesEqual: 配列要素（入れ子）の中もキーの有無を厳密に比較する', () => {
+  assert.equal(valuesEqual([{ role: 'a', code: null }], [{ role: 'a' }]), false);
+  assert.equal(valuesEqual([{ role: 'a', code: null }], [{ role: 'a', code: null }]), true);
+});
+
+test('valuesEqual: エントリ直下（トップレベル）の項目自体はnullとundefinedが同値のまま（入れ子との違い）', () => {
+  assert.equal(valuesEqual(null, undefined), true); // トップレベルの項目値そのもの
+  assert.equal(valuesEqual({ 框: null }, {}), false); // 同じ呼び出しでも値がオブジェクトなら中は厳密
 });
 
 test('valuesEqual: 文字列は前後の空白を除いて完全一致', () => {
@@ -42,6 +77,30 @@ test('diffEntries: x・y・categoryの差も拾う（Minor指摘）', () => {
   const a = material();
   const b = material({ x: 10, y: 20, category: 'backing' });
   assert.deepEqual(diffEntries('material', a, b).sort(), ['category', 'x', 'y'].sort());
+});
+
+// ---- null と省略の同値（2026-09-22裁定）: 断面webThicknessの省略(builtin)とnull明示(user) ----
+function section(overrides) {
+  return { key: 'STEEL-H300x150', materialType: 'STEEL', shape: 'hSection', width: 150, height: 300, label: 'H-300×150', ...overrides };
+}
+
+test('diffEntries: 断面のwebThickness省略(builtin)とnull明示(user)は同値で差分なし（2026-09-22裁定）', () => {
+  const builtin = section(); // webThickness省略（キーなし）
+  const user = section({ webThickness: null }); // null明示
+  assert.deepEqual(diffEntries('section', builtin, user), []);
+});
+
+test('classifyIncoming: 断面のwebThickness省略とnull明示は同一キーで内容一致 → same（2026-09-22裁定）', () => {
+  const appEntries = [section()]; // webThickness省略
+  const docEntry = section({ webThickness: null }); // null明示
+  const result = classifyIncoming('section', docEntry, appEntries, new Map());
+  assert.equal(result.action, 'same');
+});
+
+test('diffEntries: nullと0は依然として不一致（2026-09-22裁定でも区別は維持）', () => {
+  const builtin = section({ width: 0 });
+  const user = section({ width: null });
+  assert.deepEqual(diffEntries('section', builtin, user), ['width']);
 });
 
 test('diffEntries: 境界マスターはderivedFrom/fieldsの差も拾う（QA指摘B2）', () => {
@@ -158,19 +217,25 @@ test('rankCandidates: builtin優先 → 数値差が小さい順 → キー昇�
   assert.deepEqual(ranked.map(e => e.code), [closeBuiltinB.code, closeBuiltinA.code, farBuiltin.code, closeUser.code]);
 });
 
-// ---- QA指摘M7: compareCandidatesの口 ----
-test('rankCandidates: 登録表の行がcompareCandidates(a,b,target)を指定していればそれを使う（共通規則より優先）', () => {
+// ---- QA指摘M7: compareCandidatesの口（積み残し2026-09-22: rankCandidatesは種別文字列専用に戻し、
+// 行オブジェクトを受ける経路はrankCandidatesWithへ分離）----
+test('rankCandidatesWith: 登録表の行がcompareCandidates(a,b,target)を指定していればそれを使う（共通規則より優先）', () => {
   // 凍結された本番登録表（kindDef経由）は書き換えず、行と同じ形（keyOf/matchFields/compareCandidates）の
-  // オブジェクトを直接渡して口が実際に効くことを確認する。
+  // ダミー行を直接渡して口が実際に効くことを確認する。
   const def = {
     keyOf: e => e.id,
     matchFields: ['value'],
     compareCandidates: (a, b) => (a.id < b.id ? 1 : a.id > b.id ? -1 : 0), // わざとキー降順にする
   };
   const hits = [{ id: 'a', value: 1 }, { id: 'b', value: 1 }, { id: 'c', value: 1 }];
-  const ranked = rankCandidates(def, { value: 1 }, hits, new Map());
+  const ranked = rankCandidatesWith(def, { value: 1 }, hits, new Map());
   // 共通規則（キー昇順）ならa,b,cのはずが、compareCandidates指定により降順になる
   assert.deepEqual(ranked.map(e => e.id), ['c', 'b', 'a']);
+});
+
+test('【失敗系・積み残し2026-09-22】rankCandidates: 行オブジェクトを直接渡すと種別文字列扱いでkindDefが例外を投げる（rankCandidatesWithを使うこと）', () => {
+  const def = { keyOf: e => e.id, matchFields: ['value'] };
+  assert.throws(() => rankCandidates(def, { value: 1 }, [], new Map()), /未知のカタログ種別/);
 });
 
 test('rankCandidates: compareCandidates未指定なら共通規則（builtin優先→数値差→キー昇順）を使う（現状は全種別未指定）', () => {
@@ -265,6 +330,67 @@ test('assertNoDuplicate: 5項目一致（categoryが違っても）は例外を�
   const entries = [material({ code: '111111111165', category: 'panel' })];
   const incoming = material({ code: '999999999999', category: 'backing' });
   assert.throws(() => assertNoDuplicate('material', incoming, entries), /既に登録されています/);
+});
+
+// ---- 2026-09-22 QA指摘B/C: R17例外の.codeと文言（両方のキー＋名称） ----
+test('【失敗系・2026-09-22 QA指摘B】assertNoDuplicate: 投げるErrorは.code=ERR_CATALOG_DUPLICATEを持つ（wallRefresh.jsが握りつぶさず再throwする判別に使う）', () => {
+  const entries = [material({ code: '111111111165' })];
+  const incoming = material({ code: '999999999999' });
+  try {
+    assertNoDuplicate('material', incoming, entries);
+    assert.fail('例外が投げられなかった');
+  } catch (e) {
+    assert.equal(e.code, ERR_CATALOG_DUPLICATE);
+  }
+});
+
+test('【2026-09-22 QA指摘C】assertNoDuplicate: 例外メッセージは両方のキー＋名称(name)を含む', () => {
+  const entries = [material({ code: '111111111165', name: 'せっこうボード t=12.5' })];
+  const incoming = material({ code: '999999999999', name: 'せっこうボード t=12.5' });
+  assert.throws(
+    () => assertNoDuplicate('material', incoming, entries),
+    /111111111165（せっこうボード t=12\.5）.*⇔.*999999999999（せっこうボード t=12\.5）/,
+  );
+});
+
+test('formatDuplicateError: origins を渡すと出所(doc/user/builtin)も併記する', () => {
+  const def = kindDef('material');
+  const a = material({ code: '102000000003', name: 'せっこうボード t=12.5' });
+  const b = material({ code: '302000000001', name: 'せっこうボード t=12.5' });
+  const origins = new Map([[a.code, 'builtin'], [b.code, 'doc']]);
+  const err = formatDuplicateError('material', def, a, b, origins);
+  assert.equal(err.code, ERR_CATALOG_DUPLICATE);
+  assert.match(err.message, /102000000003（せっこうボード t=12\.5・builtin）/);
+  assert.match(err.message, /302000000001（せっこうボード t=12\.5・doc）/);
+});
+
+test('formatDuplicateError: originsを渡さなければ出所なしの文言になる', () => {
+  const def = kindDef('material');
+  const a = material({ code: '111111111165' });
+  const b = material({ code: '999999999999' });
+  const err = formatDuplicateError('material', def, a, b);
+  assert.doesNotMatch(err.message, /・builtin|・doc|・user/);
+});
+
+test('【失敗系・2026-09-22 QA指摘・Minor】formatDuplicateError: 名称・出所ともに無ければ括弧ごと省く（二重括弧「（（名称なし））」にしない）', () => {
+  const def = kindDef('material');
+  const a = material({ code: '111111111165', name: '' });
+  const b = material({ code: '999999999999', name: '' });
+  const err = formatDuplicateError('material', def, a, b); // originsも渡さない
+  assert.ok(err.message.includes('111111111165 ⇔ 999999999999'), `括弧なしでキーだけが出る想定: ${err.message}`);
+  assert.doesNotMatch(err.message, /111111111165（|999999999999（/); // 各キーの直後に括弧が続かない
+  assert.doesNotMatch(err.message, /名称なし/);
+});
+
+test('formatDuplicateError: 名称が空でも出所があれば出所だけを括弧内に出す（二重括弧にしない）', () => {
+  const def = kindDef('material');
+  const a = material({ code: '111111111165', name: '' });
+  const b = material({ code: '999999999999', name: '' });
+  const origins = new Map([[a.code, 'builtin'], [b.code, 'doc']]);
+  const err = formatDuplicateError('material', def, a, b, origins);
+  assert.match(err.message, /111111111165（builtin）/);
+  assert.match(err.message, /999999999999（doc）/);
+  assert.doesNotMatch(err.message, /（（/);
 });
 
 test('assertNoDuplicate: 同一キーのエントリ自身は重複扱いにしない（Minor指摘）', () => {

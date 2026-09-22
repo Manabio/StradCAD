@@ -27,6 +27,8 @@ import {
 // ——appViewport.jsのヘッダコメント参照）からのみ取得する。ElevationModeState.js自体は
 // node:testから単体importできる状態を保つ（ElevationModeState.test.js参照）。
 import { DEFAULT_PX_PER_MM as DEFAULT_SCREEN_PX_PER_MM, resolveLineWeightsPx } from '../viewport.js';
+import { CatalogKind } from '../catalog/catalogKinds.js';
+import { composeCatalog } from '../catalog/catalogRegistry.js';
 
 // 項目2: 階ごとのビュー位置記憶（Map<floorId, {focusedRoomId, precedingRoomId, scrollY,
 // faceScroll}>）。セッション内のメモリ保持のみ（IDB永続化なし。undo・graph変更とは無関係の
@@ -119,7 +121,7 @@ export class ElevationModeState {
       ]);
       if (this._disposed) return { ok: true, error: null };
 
-      const materialMap = new Map(matMod.MATERIALS.map(m => [m.code, m]));
+      const materialMap = composeCatalog(CatalogKind.MATERIAL, matMod.MATERIALS);
       // WP-V1: 直上階（階段の吹抜けクリップ用）・直下階（吹抜けの2層帯用）を並行して解決する。
       const [upperGraph, lowerGraph] = await Promise.all([
         this._peekAboveGraph(),

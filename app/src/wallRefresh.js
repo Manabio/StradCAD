@@ -20,6 +20,7 @@ import { conformWoodBacking } from './structural/woodAutoFill.js';
 import { wallBackingCenters, mapBackingCenterMoves } from './structural/wallBeamAxes.js';
 import { followWallBeamAxes } from './structural/wallBeamAxisFollow.js';
 import { recomputeActiveStructural, reflectStructuralToOtherFloors } from './structural/structuralOrchestration.js';
+import { ERR_CATALOG_DUPLICATE } from './error.js';
 
 /**
  * graph 1件分の「鍵不一致なら壁を作り直す」処理本体。ステップ1〜3で finishBoundary.js の
@@ -55,10 +56,15 @@ async function refreshWallsForGraph(graph, project, getMaterialMap, { peek, push
   let materialMap;
   try {
     materialMap = await getMaterialMap();
-  } catch {
-    // materialMap が無ければ壁を再生成できない。conformWoodBacking の変更はここでは戻さない
-    // （次回また同じ値に収束するため実害なし）。鍵も書かない——壁は実際には変わっていないため、
-    // 鍵だけ新しい値にすると以後ずっと「鍵一致なのに壁は古いまま」に固定されてしまう。
+  } catch (e) {
+    // R17（カタログの重複登録禁止）の合成後例外は握りつぶさず再throwする（2026-09-22 QA指摘B）。
+    // 黙って壁を古いまま残すと利用者に気付かれないため、この場合だけは呼び出し元まで伝播させて
+    // 止める（finishBoundary.js→App.jsxへの伝播は現状のまま。未処理のまま止まるのが裁定）。
+    if (e?.code === ERR_CATALOG_DUPLICATE) throw e;
+    // それ以外（IDB読込失敗等）は従来どおり: materialMap が無ければ壁を再生成できない。
+    // conformWoodBacking の変更はここでは戻さない（次回また同じ値に収束するため実害なし）。
+    // 鍵も書かない——壁は実際には変わっていないため、鍵だけ新しい値にすると以後ずっと
+    // 「鍵一致なのに壁は古いまま」に固定されてしまう。
     return false;
   }
 

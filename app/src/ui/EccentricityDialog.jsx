@@ -5,6 +5,8 @@ import { evalNumpadExpr } from './numpadUtils.js';
 import { AutoScaledFigure } from '../structural/sectionFigure/AutoScaledFigure.jsx';
 import { eccentricityFigurePrimitives } from './eccentricityFigure.js';
 import { CenterLineType } from '@core';
+import { CatalogKind } from '../catalog/catalogKinds.js';
+import { composeCatalog, composeList } from '../catalog/catalogRegistry.js';
 
 // finish/clEccentricity.js は edgeComposition.js 経由で materials/materialData.js（材マスタ全件）を
 // 静的に引くため、materialData.js と合わせて動的 import する（コード分割維持。ヘッダコメント参照）。
@@ -52,9 +54,9 @@ export function EccentricityDialog({ graph, cl, onConfirm, onCancel }) {
       import('../finish/clEccentricity.js'),
     ]).then(([matMod, eccMod]) => {
       if (cancelled) return;
-      setMaterials(matMod.MATERIALS);
+      setMaterials(composeList(CatalogKind.MATERIAL, matMod.MATERIALS));
       setBackingCat(matMod.MATERIAL_CATEGORY.BACKING);
-      setMaterialMap(new Map(matMod.MATERIALS.map(m => [m.code, m])));
+      setMaterialMap(composeCatalog(CatalogKind.MATERIAL, matMod.MATERIALS));
       setResolveEccentricity(() => eccMod.resolveEccentricity);
     }).catch(() => { if (!cancelled) setLoadFailed(true); });
     return () => { cancelled = true; };

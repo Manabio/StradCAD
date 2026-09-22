@@ -65,9 +65,15 @@ export function validateBundle(bundle) {
     if (!isPlainObject(bundle.aliases)) throw new Error('カタログ束のaliasesが不正です');
     for (const [kind, table] of Object.entries(bundle.aliases)) {
       if (!isPlainObject(table)) throw new Error(`カタログ束のaliases.${kind}が不正です`);
+      // 既知種別のみ from/to のキー形式を検査する（未知の種別は他の検証と同様スキップして保持）。
+      const def = knownKinds.has(kind) ? kindDef(kind) : null;
       for (const [from, to] of Object.entries(table)) {
         if (to !== null && typeof to !== 'string') {
           throw new Error(`カタログ束のaliases.${kind}.${from}が不正です`);
+        }
+        if (def) {
+          def.parseKey(from); // 当該種別のkeyOf形式でなければparseKeyが例外を投げる
+          if (to !== null) def.parseKey(to);
         }
       }
     }

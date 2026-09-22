@@ -18,6 +18,15 @@ test('CATALOG_KINDS: キー配列の複製ではなく「kind→定義」の登�
   assert.equal(kindDef('material'), CATALOG_KINDS.material);
 });
 
+test('【積み残し2026-09-22】CATALOG_KINDS: 行・配列（matchFields等）まで再帰的に凍結されている', () => {
+  assert.ok(Object.isFrozen(CATALOG_KINDS.material));
+  assert.ok(Object.isFrozen(CATALOG_KINDS.material.matchFields));
+  assert.ok(Object.isFrozen(CATALOG_KINDS.material.compareFields));
+  assert.ok(Object.isFrozen(CATALOG_KINDS.material.knownFields));
+  assert.ok(Object.isFrozen(CATALOG_KINDS.material.dedupeFields));
+  assert.ok(Object.isFrozen(CATALOG_KINDS.openingSubType.matchFields));
+});
+
 test('kindDef: 各種別の行はkeyOf/matchFields/minMatchFieldsを持つ', () => {
   for (const kind of listKinds()) {
     const def = kindDef(kind);
@@ -52,11 +61,29 @@ test('openingSubType.keyOf: category:key の複合キーを返す（FITTING/WIND
   );
 });
 
+test('【失敗系・積み残し2026-09-22】openingSubType.keyOf: category/keyが非空文字列でなければ例外（"undefined:…"を作らない）', () => {
+  const def = kindDef('openingSubType');
+  assert.throws(() => def.keyOf({ key: 'x' }), /category\/key/);
+  assert.throws(() => def.keyOf({ category: 'fitting' }), /category\/key/);
+  assert.throws(() => def.keyOf({ category: '', key: 'x' }), /category\/key/);
+  assert.throws(() => def.keyOf({ category: 'fitting', key: '' }), /category\/key/);
+  assert.throws(() => def.keyOf({}), /category\/key/);
+});
+
 test('material/section/interiorMaster/boundaryMaster.keyOf: 単一フィールド', () => {
   assert.equal(kindDef('material').keyOf({ code: '111111111165' }), '111111111165');
   assert.equal(kindDef('section').keyOf({ key: 'WOOD-90x90' }), 'WOOD-90x90');
   assert.equal(kindDef('interiorMaster').keyOf({ key: 'LIVING_ROOM' }), 'LIVING_ROOM');
   assert.equal(kindDef('boundaryMaster').keyOf({ key: 'EXTERIOR_WALL' }), 'EXTERIOR_WALL');
+});
+
+test('【失敗系・2026-09-22 QA指摘A】material/section/interiorMaster/boundaryMaster.keyOf: キーが非空文字列でなければ例外（openingSubTypeと同じ欠落検査を全種別に揃える）', () => {
+  assert.throws(() => kindDef('material').keyOf({}), /codeが不正/);
+  assert.throws(() => kindDef('material').keyOf({ code: '' }), /codeが不正/);
+  assert.throws(() => kindDef('section').keyOf({}), /keyが不正/);
+  assert.throws(() => kindDef('section').keyOf({ key: '' }), /keyが不正/);
+  assert.throws(() => kindDef('interiorMaster').keyOf({}), /keyが不正/);
+  assert.throws(() => kindDef('boundaryMaster').keyOf({}), /keyが不正/);
 });
 
 // ---- QA指摘M1: openingSubTypeのmatchFields順・B2: boundaryMasterのcompareFields/matchFields ----
@@ -65,6 +92,43 @@ test('openingSubType.matchFields: category,mechanism,機構パラメータ,wallK
     'category', 'mechanism', 'childRatio', 'fireLeaves', 'fireAngle', 'slideLayout',
     'wallKinds', 'defaultWidth', 'defaultHeight', 'label',
   ]);
+});
+
+// ---- parseKey（keyOfの逆変換。積み残し2026-09-22。ステップ6でOpening.subTypeへ戻すのに使う予定）----
+test('【積み残し2026-09-22】material.parseKey: 12桁コードを{code}へ戻す', () => {
+  assert.deepEqual(kindDef('material').parseKey('111111111165'), { code: '111111111165' });
+});
+
+test('【失敗系・積み残し2026-09-22】material.parseKey: 12桁数字でなければ例外を投げる', () => {
+  assert.throws(() => kindDef('material').parseKey('abc'), /キー（コード）が不正/);
+  assert.throws(() => kindDef('material').parseKey(''), /キー（コード）が不正/);
+});
+
+test('【積み残し2026-09-22】section/interiorMaster/boundaryMaster.parseKey: {key}を返す', () => {
+  assert.deepEqual(kindDef('section').parseKey('WOOD-90x90'), { key: 'WOOD-90x90' });
+  assert.deepEqual(kindDef('interiorMaster').parseKey('LIVING_ROOM'), { key: 'LIVING_ROOM' });
+  assert.deepEqual(kindDef('boundaryMaster').parseKey('EXTERIOR_WALL'), { key: 'EXTERIOR_WALL' });
+});
+
+test('【失敗系・積み残し2026-09-22】section/interiorMaster/boundaryMaster.parseKey: 空文字は例外を投げる', () => {
+  assert.throws(() => kindDef('section').parseKey(''), /キーが不正/);
+  assert.throws(() => kindDef('interiorMaster').parseKey(''), /キーが不正/);
+  assert.throws(() => kindDef('boundaryMaster').parseKey(''), /キーが不正/);
+});
+
+test('【積み残し2026-09-22】openingSubType.parseKey: "category:key"を{category,key}へ戻す（keyOfの逆変換）', () => {
+  assert.deepEqual(kindDef('openingSubType').parseKey('fitting:doubleSliding'), { category: 'fitting', key: 'doubleSliding' });
+  assert.deepEqual(kindDef('openingSubType').parseKey('window:doubleSliding'), { category: 'window', key: 'doubleSliding' });
+  // keyOf自体と往復できることを確認
+  const def = kindDef('openingSubType');
+  const entry = { category: 'fitting', key: 'singleSwing' };
+  assert.deepEqual(def.parseKey(def.keyOf(entry)), { category: entry.category, key: entry.key });
+});
+
+test('【失敗系・積み残し2026-09-22】openingSubType.parseKey: fitting:/window:以外の形式は例外を投げる', () => {
+  assert.throws(() => kindDef('openingSubType').parseKey('door:singleSwing'), /fitting:\.\.\.またはwindow:/);
+  assert.throws(() => kindDef('openingSubType').parseKey('singleSwing'), /fitting:\.\.\.またはwindow:/);
+  assert.throws(() => kindDef('openingSubType').parseKey(''), /fitting:\.\.\.またはwindow:/);
 });
 
 test('boundaryMaster.compareFields/matchFields: kind,layers,derivedFrom,fieldsの4項目・minMatchFields=4（完全一致のみ）', () => {

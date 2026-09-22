@@ -101,3 +101,11 @@ export const ERR_CL_DELETE_LAST_GRID = 'この軸の最後の通り芯のため�
 // セッション排他ロック（storage/sessionLock.js）: 別タブが編集セッションを保持している場合、
 // storage/db.js の openDB() がこの文言で reject する。App.jsx は同じ文言を全画面案内に表示する。
 export const ERR_SESSION_LOCKED = 'このアプリは別のタブで開いています。編集できるのは1つのタブだけです。';
+
+// カタログのR17重複検出（catalog/catalogMatch.js の assertNoDuplicate・catalog/catalogRegistry.js
+// の合成後検査）専用のエラーコード。throwするErrorの.codeにこの値を持たせる
+// （2026-09-22 QA指摘B）。文言そのもの（重複した両エントリのキー・名称・出所）は都度組み立てる
+// ため、ERR_SESSION_LOCKEDのような固定文言ではなく識別用の定数のみを持つ。
+// wallRefresh.js の getMaterialMap 呼び出しの catch は、このコードのときだけ再throwし
+// （黙って壁を古いまま残さない）、それ以外は従来どおり materialMap 無しとして扱う。
+export const ERR_CATALOG_DUPLICATE = 'ERR_CATALOG_DUPLICATE';

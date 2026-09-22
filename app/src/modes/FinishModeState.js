@@ -11,6 +11,9 @@ import { FINISH_FIELDS, normalizePartialDominance } from '../finish/roomReinterp
 import { roomNameAnchor } from '../finish/roomLabel.js';
 import { ERR_MATERIAL_MISMATCH } from '../error.js';
 import { RoomFeature, RoomKind, applyDefaultBaseboard } from '@core';
+import { CatalogKind } from '../catalog/catalogKinds.js';
+import { composeCatalog, composeList } from '../catalog/catalogRegistry.js';
+import { isMaterialCode } from '../catalog/materialCode.js';
 
 function setsEqual(a, b) {
   if (a.size !== b.size) return false;
@@ -123,8 +126,8 @@ export class FinishModeState {
       import('../finish/edgeComposition.js'),
     ]);
 
-    const materials = matMod.MATERIALS;
-    const materialMap = new Map(materials.map(m => [m.code, m]));
+    const materials = composeList(CatalogKind.MATERIAL, matMod.MATERIALS);
+    const materialMap = composeCatalog(CatalogKind.MATERIAL, matMod.MATERIALS);
     this._composition = compMod; // 層構成→寸法解決（壁生成で使用）
 
     // 照合: 永続化データが参照する材コードがすべてマスタに存在するか
@@ -319,7 +322,7 @@ export class FinishModeState {
       if (!ov) continue;
       const vals = ov instanceof Map ? ov.values() : Object.values(ov);
       for (const v of vals) {
-        if (typeof v === 'string' && /^\d{12}$/.test(v)) codes.add(v);
+        if (isMaterialCode(v)) codes.add(v);
       }
     }
     return codes;

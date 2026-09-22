@@ -8,6 +8,15 @@
 // 純モジュール（葉）。store.js / snap.js / .jsx を静的 import しない。
 // `loadBuiltin` だけが本体標準マスタへの**動的 import の thunk**——node:test では
 // thunk を呼ばない限り何も読み込まれない（既存コード分割を維持する）。
+//
+// `npm run build` で出る [INEFFECTIVE_DYNAMIC_IMPORT] 警告3件
+// （interiorMasters.js/sectionCatalog.js/openingCatalog.js）は想定どおり——この3本は既に
+// core/room.js・structural/structuralEntities.js 等から静的 import されており独立チャンクに
+// ならない。ここでの動的 import は「コード分割」目的ではなく node:test から本ファイルを
+// 静的import しても何も読み込まれない純モジュールを維持するための thunk（catalogImports.test.js
+// が固定）。**materialData.js がこの警告に現れたら不変条件7-1（materialDataの独立チャンク
+// 維持）の退行——materialData.js は他のどこからも静的importされていないため、警告3件から
+// 増えていないかを都度確認すること。
 // ================================================================
 
 function isPlainObject(v) {
@@ -83,7 +92,21 @@ export function classOf(major, minor) {
 const REGISTRY = Object.assign(Object.create(null), {
   [CatalogKind.MATERIAL]: {
     kind: CatalogKind.MATERIAL,
-    keyOf: entry => entry.code,
+    // codeが非空文字列でなければ例外（2026-09-22 QA指摘A: openingSubTypeと同じ欠落検査を
+    // 全種別に揃える。"undefined"のような壊れたキーを作らない）。
+    keyOf: entry => {
+      if (!isNonEmptyString(entry?.code)) {
+        throw new Error(`材エントリのcodeが不正です（キーを組み立てられません）: ${JSON.stringify(entry)}`);
+      }
+      return entry.code;
+    },
+    // keyOf の逆変換（積み残し2026-09-22）。材はkeyがそのままcodeなので{code}を返す。
+    parseKey(key) {
+      if (!isNonEmptyString(key) || !/^\d{12}$/.test(key)) {
+        throw new Error(`材のキー（コード）が不正です（12桁数字が必要）: ${key}`);
+      }
+      return { code: key };
+    },
     encoding: 'json',
     knownFields: ['code', 'name', 'spec', 'x', 'y', 'thickness', 'note', 'category', 'backingClass'],
     requiredFields: ['code', 'name'],
@@ -122,7 +145,18 @@ const REGISTRY = Object.assign(Object.create(null), {
 
   [CatalogKind.SECTION]: {
     kind: CatalogKind.SECTION,
-    keyOf: entry => entry.key,
+    // keyが非空文字列でなければ例外（2026-09-22 QA指摘A）。
+    keyOf: entry => {
+      if (!isNonEmptyString(entry?.key)) {
+        throw new Error(`断面エントリのkeyが不正です（キーを組み立てられません）: ${JSON.stringify(entry)}`);
+      }
+      return entry.key;
+    },
+    // keyOf の逆変換（積み残し2026-09-22）。
+    parseKey(key) {
+      if (!isNonEmptyString(key)) throw new Error(`断面のキーが不正です: ${key}`);
+      return { key };
+    },
     encoding: 'json',
     knownFields: ['key', 'materialType', 'shape', 'width', 'height', 'webThickness', 'flangeThickness', 'wallThickness', 'label'],
     requiredFields: ['key', 'materialType', 'shape', 'width', 'height', 'label'],
@@ -154,7 +188,23 @@ const REGISTRY = Object.assign(Object.create(null), {
     // 複合キー（QA指摘 B1・2026-09-22）: FITTING_CATALOG/WINDOW_CATALOGはcategoryが違えば
     // 同じkeyを持ちうる（例: 'doubleSliding'が引き違い戸/引き違い窓の両方に存在）。
     // findCatalogEntry(category, subType)・LEGACY_SUBTYPE_ALIASESのcategory層分けと同型にする。
-    keyOf: entry => `${entry.category}:${entry.key}`,
+    // category/keyが非空文字列でなければ例外（積み残し2026-09-22: "undefined:…"のような
+    // 壊れたキーを作らない）。
+    keyOf: entry => {
+      if (!isNonEmptyString(entry?.category) || !isNonEmptyString(entry?.key)) {
+        throw new Error(`建具種別エントリのcategory/keyが不正です（キーを組み立てられません）: ${JSON.stringify(entry)}`);
+      }
+      return `${entry.category}:${entry.key}`;
+    },
+    // keyOf の逆変換（積み残し2026-09-22）。ステップ6で Opening.subType（category, key）へ
+    // 戻すときに使う想定（doc/user由来のaliasesをOpening側へ適用する経路）。
+    parseKey(key) {
+      const m = /^(fitting|window):(.+)$/.exec(key ?? '');
+      if (!m) {
+        throw new Error(`建具種別のキーが不正です（fitting:...またはwindow:...の形式が必要）: ${key}`);
+      }
+      return { category: m[1], key: m[2] };
+    },
     encoding: 'json',
     knownFields: ['category', 'key', 'label', 'mechanism', 'wallKinds', 'defaultWidth', 'defaultHeight', 'childRatio', 'fireLeaves', 'fireAngle', 'slideLayout'],
     requiredFields: ['category', 'key', 'label', 'mechanism', 'defaultWidth', 'defaultHeight'],
@@ -201,7 +251,18 @@ const REGISTRY = Object.assign(Object.create(null), {
 
   [CatalogKind.INTERIOR_MASTER]: {
     kind: CatalogKind.INTERIOR_MASTER,
-    keyOf: entry => entry.key,
+    // keyが非空文字列でなければ例外（2026-09-22 QA指摘A）。
+    keyOf: entry => {
+      if (!isNonEmptyString(entry?.key)) {
+        throw new Error(`内装マスターエントリのkeyが不正です（キーを組み立てられません）: ${JSON.stringify(entry)}`);
+      }
+      return entry.key;
+    },
+    // keyOf の逆変換（積み残し2026-09-22）。
+    parseKey(key) {
+      if (!isNonEmptyString(key)) throw new Error(`内装マスターのキーが不正です: ${key}`);
+      return { key };
+    },
     encoding: 'json',
     knownFields: ['key', 'label', 'wallMaterial', 'wallFinish', 'ceilingHeight'],
     requiredFields: ['key', 'label', 'wallMaterial', 'wallFinish', 'ceilingHeight'],
@@ -226,7 +287,18 @@ const REGISTRY = Object.assign(Object.create(null), {
 
   [CatalogKind.BOUNDARY_MASTER]: {
     kind: CatalogKind.BOUNDARY_MASTER,
-    keyOf: entry => entry.key,
+    // keyが非空文字列でなければ例外（2026-09-22 QA指摘A）。
+    keyOf: entry => {
+      if (!isNonEmptyString(entry?.key)) {
+        throw new Error(`境界マスターエントリのkeyが不正です（キーを組み立てられません）: ${JSON.stringify(entry)}`);
+      }
+      return entry.key;
+    },
+    // keyOf の逆変換（積み残し2026-09-22）。
+    parseKey(key) {
+      if (!isNonEmptyString(key)) throw new Error(`境界マスターのキーが不正です: ${key}`);
+      return { key };
+    },
     encoding: 'json',
     knownFields: ['key', 'label', 'kind', 'layers', 'derivedFrom', 'fields'],
     requiredFields: ['key', 'label', 'kind'],
@@ -260,8 +332,23 @@ const REGISTRY = Object.assign(Object.create(null), {
   },
 });
 
-/** 登録済みカタログ種別の定義表そのもの（kind→定義。プロトタイプ無し・凍結。QA指摘・Minor）。 */
-export const CATALOG_KINDS = Object.freeze(REGISTRY);
+/**
+ * 登録表を行・配列まで再帰的に凍結する（積み残し2026-09-22）。matchFields等の配列は
+ * Object.freeze(REGISTRY) だけでは凍結されない（浅い凍結のため）——呼び出し側が誤って
+ * 登録表の配列をpush等で書き換えることを防ぐ。
+ */
+function deepFreezeRegistry(registry) {
+  for (const row of Object.values(registry)) {
+    for (const value of Object.values(row)) {
+      if (Array.isArray(value)) Object.freeze(value);
+    }
+    Object.freeze(row);
+  }
+  return Object.freeze(registry);
+}
+
+/** 登録済みカタログ種別の定義表そのもの（kind→定義。プロトタイプ無し・行・配列まで凍結。QA指摘・Minor）。 */
+export const CATALOG_KINDS = deepFreezeRegistry(REGISTRY);
 
 /** kind → 登録表の行。未知の種別（Object.prototypeの継承メンバー名を含む）は例外。 */
 export function kindDef(kind) {

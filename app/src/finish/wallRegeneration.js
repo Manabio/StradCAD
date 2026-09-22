@@ -25,6 +25,8 @@ import {
 } from './wallGeneration.js';
 import { buildCellToRoom } from './edgeClassify.js';
 import { woodBaseColumnWidthMm, woodColumnWidthMm, rulesFor, effectiveStructure } from '../structural/structureRules.js';
+import { CatalogKind } from '../catalog/catalogKinds.js';
+import { composeCatalog } from '../catalog/catalogRegistry.js';
 // edgeComposition.js は materialData.js（材マスタ全件）を静的に import するため、コード分割
 // 維持のため regenerateWalls 内で動的 import する（materialData.js のヘッダコメント参照。
 // clEccentricity.js と同じ理由——静的 import すると finishBoundary.js → App.jsx 経由で
@@ -39,7 +41,7 @@ import { woodBaseColumnWidthMm, woodColumnWidthMm, rulesFor, effectiveStructure 
  */
 export async function loadMaterialMap() {
   const { MATERIALS } = await import('./materials/materialData.js');
-  return new Map(MATERIALS.map(m => [m.code, m]));
+  return composeCatalog(CatalogKind.MATERIAL, MATERIALS);
 }
 
 /**

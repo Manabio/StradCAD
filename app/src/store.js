@@ -19,6 +19,7 @@ import { serializePlanes, decodePlanes, serializeSite, decodeSite, restoreSite }
 import { reconcilePlanes } from './floorOps.js';
 import { clearLocalAutosave } from './storage/localSnapshot.js';
 import { refreshWallsAllFloors } from './wallRefresh.js';
+import { ERR_CATALOG_DUPLICATE } from './error.js';
 
 // ----------------------------------------------------------------
 // ID の永続化
@@ -224,7 +225,15 @@ export const bootReady = (async () => {
     const { changedPlaneIds } = await refreshWallsAllFloors(project, { pushUndo: false, pushActiveStructuralUndo: false });
     if (changedPlaneIds.length > 0) markDirty();
   } catch (e) {
-    console.error(e);
+    // R17（カタログ重複登録禁止）の合成後例外は握りつぶさず利用者に伝える（2026-09-22 QA指摘B
+    // 残存）——bootReady自体は失敗させない設計のまま、project.catalogError（観測可能な
+    // フィールド。App.jsxがmaterialErrorと同じトースト経路で表示する）に載せる。
+    // それ以外（IDB読込失敗等）は従来どおりconsole.errorのみ（catalogErrorは立てない）。
+    if (e?.code === ERR_CATALOG_DUPLICATE) {
+      project.setCatalogError(e.message);
+    } else {
+      console.error(e);
+    }
   }
 })();
 bootReady.catch(console.error);

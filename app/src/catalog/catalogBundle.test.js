@@ -62,6 +62,34 @@ test('【失敗系】validateBundle: aliasesの値が文字列/null以外なら�
   assert.throws(() => validateBundle(bundle), /aliases\.material\.a/);
 });
 
+// ---- 積み残し2026-09-22: aliasesのfrom/toは当該種別のkeyOf形式であること ----
+test('validateBundle: openingSubTypeのaliasesはfitting:/window:形式なら例外を投げない', () => {
+  const bundle = { ...emptyBundle(), aliases: { openingSubType: { 'fitting:oldKey': 'fitting:singleSwing' } } };
+  assert.equal(validateBundle(bundle), true);
+});
+
+test('【失敗系・積み残し2026-09-22】validateBundle: openingSubTypeのaliasesがfitting:/window:形式でなければ例外', () => {
+  const bundleFrom = { ...emptyBundle(), aliases: { openingSubType: { oldKey: 'fitting:singleSwing' } } };
+  assert.throws(() => validateBundle(bundleFrom), /fitting:\.\.\.またはwindow:/);
+  const bundleTo = { ...emptyBundle(), aliases: { openingSubType: { 'fitting:oldKey': 'singleSwing' } } };
+  assert.throws(() => validateBundle(bundleTo), /fitting:\.\.\.またはwindow:/);
+});
+
+test('【失敗系・積み残し2026-09-22】validateBundle: materialのaliasesが12桁コード形式でなければ例外', () => {
+  const bundle = { ...emptyBundle(), aliases: { material: { 'not-a-code': '111111111165' } } };
+  assert.throws(() => validateBundle(bundle), /キー（コード）が不正/);
+});
+
+test('積み残し2026-09-22: validateBundle: aliasesのtoがnull（廃止）ならfromのキー形式だけ検査する', () => {
+  const bundle = { ...emptyBundle(), aliases: { material: { '111111111165': null } } };
+  assert.equal(validateBundle(bundle), true);
+});
+
+test('積み残し2026-09-22: validateBundle: 未知の種別のaliasesはキー形式の検証をスキップする', () => {
+  const bundle = { ...emptyBundle(), aliases: { 将来の種別: { 何でも: 'ok' } } };
+  assert.equal(validateBundle(bundle), true);
+});
+
 test('bundleEntries/withEntries: 非破壊（元の束は変わらない）', () => {
   const base = emptyBundle();
   const next = withEntries(base, 'material', [material()]);

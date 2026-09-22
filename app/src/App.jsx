@@ -230,6 +230,9 @@ const App = observer(() => {
       if (cancelled) return;
       setActiveFloorId(project.activePlaneId);
       setLockedOut(!isSessionOwner());
+      // 読込み時sweepでR17（カタログ重複登録禁止）例外が起きていればトースト表示する
+      // （2026-09-22 QA指摘B残存。materialErrorと同じ経路）。
+      if (project.catalogError) setToast({ msg: project.catalogError, key: Date.now() });
     }).catch(console.error);
     return () => { cancelled = true; };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
