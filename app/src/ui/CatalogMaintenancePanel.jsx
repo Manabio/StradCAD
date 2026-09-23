@@ -20,6 +20,9 @@ import {
   buildFixtureSymbolEntry, validateFixtureSymbolForm, fixtureSymbolFormFieldsFor,
   fixtureSymbolRowDisabledReason, collectKnownCatalogKeys,
   fixtureSymbolFormFromEntry, fixtureSymbolPreviewEntry, categoryOptionsFor,
+  nextInteriorMasterKey, interiorMasterFormFromEntry, buildInteriorMasterEntry,
+  validateInteriorMasterForm, interiorMasterRowDisabledReason,
+  sectionFormFromEntry, buildSectionEntry, validateSectionForm, sectionRowDisabledReason,
 } from '../catalog/catalogMaintenance.js';
 import { parseSectionSpecList } from '../structural/sectionCatalog.js';
 import { CatalogPreview } from './CatalogPreview.jsx';
@@ -49,18 +52,14 @@ const ORIGIN_LABELS = Object.freeze({ doc: '同梱', user: 'ライブラリ', bu
 // 同時に出る二重定義を防ぐ）。
 // 追加・複製・編集・削除・合わせ直しボタンは出さない（選ぶ経路が無い・layers/fieldsの編集UIは
 // 複雑・編集はステップ12でまとめて着手する裁定）。
+// ステップ12g: 内装マスター（InteriorMasterTab）・断面（SectionTab）は編集タブへ移行したため、
+// ここには含めない（12fのfixtureSymbol移行と同型）。境界マスターは範囲外のため引き続き閲覧のみ。
 const READONLY_KIND_FIELDS = Object.freeze({
-  [CatalogKind.INTERIOR_MASTER]: Object.freeze(['label', 'wallMaterial', 'wallFinish', 'ceilingHeight']),
   [CatalogKind.BOUNDARY_MASTER]: Object.freeze(['label', 'kind', 'layers', 'derivedFrom', 'fields']),
-  [CatalogKind.SECTION]: Object.freeze([
-    'label', 'materialType', 'shape', 'width', 'height', 'webThickness', 'flangeThickness', 'wallThickness',
-  ]),
   [CatalogKind.OPENING_SUB_TYPE]: Object.freeze([
     'label', 'category', 'mechanism', 'wallKinds', 'defaultWidth', 'defaultHeight',
     'childRatio', 'fireLeaves', 'fireAngle', 'slideLayout',
   ]),
-  // ステップ12f: 建具記号（fixtureSymbol）は編集タブ（FixtureSymbolTab）へ移行したため、
-  // ここには含めない（ReadonlyKindTabの対象から外れる）。
 });
 
 /** layers（境界マスター）1件を「役割: コード or src」の1行文字列にする。 */
@@ -972,9 +971,9 @@ export function CatalogMaintenancePanel({ onClose }) {
             </>
           )}
 
-          {/* ステップ7d: 内装マスター・境界マスターの閲覧タブ（読み取り専用。追加・複製・編集・
+          {/* ステップ7d: 境界マスター・建具種別の閲覧タブ（読み取り専用。追加・複製・編集・
               削除・合わせ直しボタンは出さない——選ぶ経路が無い・layers/fieldsの編集UIは複雑・
-              編集はステップ12でまとめて着手する裁定） */}
+              境界マスターは範囲外の裁定。内装マスター・断面・建具記号は12f/12gで編集タブへ移行済み）。 */}
           {READONLY_KIND_FIELDS[activeKind] && (
             <ReadonlyKindTab
               kind={activeKind}
@@ -993,6 +992,19 @@ export function CatalogMaintenancePanel({ onClose }) {
           {activeKind === CatalogKind.FIXTURE_SYMBOL && (
             <FixtureSymbolTab materialList={builtinList} />
           )}
+
+          {/* ステップ12g: 内装マスター（interiorMaster）タブ（全操作＋標準の上書き）。
+              materialListは壁材・壁仕上げコードの実在検査（QA指摘M1）用——材料タブが動的importで
+              読み込んだbuiltin一覧をそのまま渡す（未読込みなら保存ボタンをdisabledにする）。 */}
+          {activeKind === CatalogKind.INTERIOR_MASTER && (
+            <InteriorMasterTab materialList={builtinList} />
+          )}
+
+          {/* ステップ12g: 断面（section）タブ（呼称の編集・標準の上書き・userの削除。
+              追加は既存の「規格文字列から追加」＝SectionBulkImportのみ）。 */}
+          {activeKind === CatalogKind.SECTION && (
+            <SectionTab />
+          )}
         </div>
       </div>
     </div>
@@ -1000,18 +1012,14 @@ export function CatalogMaintenancePanel({ onClose }) {
 }
 
 /**
- * ステップ7d: 内装マスター・境界マスターの閲覧タブ本体（読み取り専用）。
- * builtin一覧・overlay（catalog/catalogRegistry.js）を buildCatalogRows で合成し、出所バッジ・
- * R13差分（≠＋オレンジ＋diffTooltip）付きの一覧と、選択行の詳細（READONLY_KIND_FIELDS）を表示する
- * だけ——追加・複製・編集・削除・合わせ直しの手段は一切持たない。
+ * ステップ7d: 境界マスター・建具種別の閲覧タブ本体（読み取り専用。ステップ12g時点で
+ * READONLY_KIND_FIELDSに残るのはこの2種別のみ——内装マスター・断面は12f/12gで専用の編集タブへ
+ * 移行した）。builtin一覧・overlay（catalog/catalogRegistry.js）を buildCatalogRows で合成し、
+ * 出所バッジ・R13差分（≠＋オレンジ＋diffTooltip）付きの一覧と、選択行の詳細
+ * （READONLY_KIND_FIELDS）を表示するだけ——追加・複製・編集・削除・合わせ直しの手段は一切持たない。
  */
 function ReadonlyKindTab({ kind, builtinList, search, setSearch, selectedKey, setSelectedKey, materialList }) {
   const def = kindDef(kind);
-  // ステップ8i: 規格文字列の一括入力（断面タブのみ）でユーザーライブラリへ追加した直後、
-  // overlay（catalog/catalogRegistry.jsのモジュール単位の可変状態。Reactが追跡しない）の
-  // 変化を一覧へ反映するため、増分だけを持つローカルstateで強制的に再レンダーする
-  // （computeDerived相当のrows計算は毎レンダー取り直しのため、これだけで足りる）。
-  const [refreshTick, setRefreshTick] = useState(0);
   const diffMap = builtinList ? docDiffMap(kind, builtinList) : new Map();
   const rows = builtinList ? buildCatalogRows({ kind, builtinList, search, diffMap }) : [];
   const selectedRow = selectedKey ? rows.find(r => def.keyOf(r.entry) === selectedKey) ?? null : null;
@@ -1019,7 +1027,7 @@ function ReadonlyKindTab({ kind, builtinList, search, setSearch, selectedKey, se
 
   return (
     <>
-      <div className="catmnt-list-col" data-refresh-tick={refreshTick}>
+      <div className="catmnt-list-col">
         <div className="catmnt-list-toolbar">
           <input
             className="catmnt-search-input"
@@ -1028,9 +1036,6 @@ function ReadonlyKindTab({ kind, builtinList, search, setSearch, selectedKey, se
             onChange={e => setSearch(e.target.value)}
           />
         </div>
-        {kind === CatalogKind.SECTION && builtinList && (
-          <SectionBulkImport builtinList={builtinList} onImported={() => setRefreshTick(t => t + 1)} />
-        )}
         <div className="catmnt-rows">
           {!builtinList && <div className="catmnt-row-empty">読み込み中…</div>}
           {builtinList && rows.length === 0 && <div className="catmnt-row-empty">該当する項目がありません</div>}
@@ -1092,8 +1097,8 @@ function ReadonlyKindTab({ kind, builtinList, search, setSearch, selectedKey, se
 }
 
 /**
- * ステップ8i: 断面の「規格文字列から追加」（折りたたみ）。断面タブ（ReadonlyKindTab）専用——
- * 他の閲覧タブ（内装マスター・境界マスター）には出さない。解析（planBulkSectionImport）→
+ * ステップ8i: 断面の「規格文字列から追加」（折りたたみ）。断面タブ（ステップ12g以降は
+ * SectionTab）専用——他のタブには出さない。解析（planBulkSectionImport）→
  * 結果一覧（追加される行・除外行とその理由・解析できなかった行）→「ライブラリへ追加」
  * （commitUserEntries）の順。純ロジックはcatalog/catalogMaintenance.jsのplanBulkSectionImportへ
  * 寄せ、本コンポーネントは表示・保存I/Oの配線のみ持つ（パーサの直書きをしない）。
@@ -1232,16 +1237,15 @@ const FIXTURE_SYMBOL_PROFILE_LABELS = Object.freeze({
 // （保存・削除・標準に戻す）と、その確認状態・busyガードを1箇所にまとめるフック＋確認ブロック用
 // コンポーネント。
 //
-// 現状の適用範囲（報告事項）: FixtureSymbolTabはこのフック・コンポーネントへ移行済み。材料タブ
-// （CatalogMaintenancePanel本体）は本ラウンドでは未移行——材料タブは同じ確認state群に加えて
-// 「合わせ直す」（realignConfirm）・R13/標準差分のフィールド別オレンジ表示・下地区分selectの
-// 表示値解決など、確認フロー本体だけでは括れない付随ロジックが同じハンドラへ深く絡んでおり、
-// 移行するには材料タブの十数本の既存wiringテスト（performSave/handleDeleteConfirmed/
-// handleRevertConfirmedの関数シグネチャ・busy state宣言・確認ボタンJSXを正規表現で直接検査する
-// もの）を書き直す必要がある。本セッションでは目視確認の手段が無い状態でその一括書き換えを
-// 行うリスクが高いと判断し、材料タブは現状のまま維持し、この報告として明記する
-// （フック・確認ブロック自体は次段（12g/12h）で新設するタブ、および材料タブの将来の移行先として
-// 用意しておく）。
+// 現状の適用範囲（報告事項）: FixtureSymbolTab（12f）・InteriorMasterTab・SectionTab（12g）は
+// このフック・コンポーネントへ移行済み。材料タブ（CatalogMaintenancePanel本体）は本ラウンドでも
+// 未移行——材料タブは同じ確認state群に加えて「合わせ直す」（realignConfirm）・R13/標準差分の
+// フィールド別オレンジ表示・下地区分selectの表示値解決など、確認フロー本体だけでは括れない
+// 付随ロジックが同じハンドラへ深く絡んでおり、移行するには材料タブの十数本の既存wiringテスト
+// （performSave/handleDeleteConfirmed/handleRevertConfirmedの関数シグネチャ・busy state宣言・
+// 確認ボタンJSXを正規表現で直接検査するもの）を書き直す必要がある。本セッションでは目視確認の
+// 手段が無い状態でその一括書き換えを行うリスクが高いと判断し、材料タブは現状のまま維持し、この
+// 報告として明記する（材料タブの将来の移行先として引き続き用意しておく）。
 // ================================================================
 
 /**
@@ -1816,6 +1820,625 @@ function FixtureSymbolTab({ materialList }) {
             {previewEntry && (
               <CatalogPreview kind={CatalogKind.FIXTURE_SYMBOL} entry={previewEntry} materialList={materialList} />
             )}
+          </>
+        )}
+      </div>
+    </>
+  );
+}
+
+// ステップ12g: 内装マスター（interiorMaster）タブの新規追加フォーム初期値。keyはnextInteriorMasterKey
+// が決めた値（USER_連番）をそのまま持つ——ユーザーが直接入力する欄は無い。
+function emptyInteriorMasterForm(key) {
+  return { key, label: '', wallMaterial: '', wallFinish: '', ceilingHeight: '' };
+}
+
+/**
+ * ステップ12g: 内装マスター（interiorMaster）タブ本体。建具記号タブ（FixtureSymbolTab・
+ * ステップ12f）と同じ共通ロジック（rowEditState/lockedFieldsFor/planSaveEntry/planRevertToBuiltin/
+ * planRemoveUserEntry/applyCatalogEditPlan・useCatalogEditActions）を使う——追加・複製・編集・
+ * 標準の上書き・標準に戻す・削除の全操作。キー（key）はユーザーが直接入力せず、
+ * nextInteriorMasterKey（USER_連番。欠番の再利用）で採番する。作図プレビューは持たない
+ * （ui/catalogPreview.js PREVIEW_BUILDERSに内装マスターの登録が無い——壁材・壁仕上げ・天井高の
+ * 数値データのみで図を持たない）。
+ * QA指摘M1（12g再報告）: materialListは材料タブが動的importで読み込んだ材料builtin一覧
+ * （CatalogMaintenancePanel本体のbuiltinList）をそのまま渡す——壁材・壁仕上げコードが材料カタログに
+ * 実在するかをvalidateInteriorMasterFormへmaterialKeys（collectKnownCatalogKeys(MATERIAL,…)）として
+ * 注入する。未読込みの間はinteriorMasterRowDisabledReasonがmaterialListLoaded:falseで保存ボタンを
+ * disabledにする。
+ * @param {{ materialList: object[]|null }} props
+ */
+function InteriorMasterTab({ materialList }) {
+  const [builtinList, setBuiltinList] = useState(null);
+  const [loadError, setLoadError] = useState(false);
+  const [search, setSearch] = useState('');
+
+  const [selectedKey, setSelectedKey] = useState(null);
+  const [isAdding, setIsAdding] = useState(false);
+  const [form, setForm] = useState(null);
+  const [formError, setFormError] = useState(null);
+  const [formMessage, setFormMessage] = useState(null);
+
+  function onInteriorMasterSaved(entryKey, meta) {
+    setIsAdding(false);
+    setSelectedKey(entryKey);
+    setFormMessage(catalogSaveMessage(CatalogKind.INTERIOR_MASTER, meta));
+  }
+  function onInteriorMasterDeleted(plan) {
+    setIsAdding(false);
+    setSelectedKey(null);
+    setForm(null);
+    setFormMessage(removeMessageFor(plan));
+  }
+  function onInteriorMasterReverted() {
+    setIsAdding(false);
+    setSelectedKey(null);
+    setForm(null);
+    setFormMessage('標準に戻しました');
+  }
+  const actions = useCatalogEditActions(CatalogKind.INTERIOR_MASTER, {
+    onSaved: onInteriorMasterSaved,
+    onDeleted: onInteriorMasterDeleted,
+    onReverted: onInteriorMasterReverted,
+    onError: setFormError,
+  });
+  const { busy } = actions;
+
+  useEffect(() => {
+    let cancelled = false;
+    kindDef(CatalogKind.INTERIOR_MASTER).loadBuiltin().then(list => {
+      if (!cancelled) setBuiltinList(list);
+    }).catch(() => { if (!cancelled) setLoadError(true); });
+    return () => { cancelled = true; };
+  }, []);
+
+  const builtinKeys = useMemo(() => new Set((builtinList ?? []).map(e => e.key)), [builtinList]);
+  // QA指摘M1（12g再報告）: 壁材・壁仕上げコードの実在検査に使う材料キー集合。materialListが
+  // 未読込み（null）ならmaterialKeysもnull——validateInteriorMasterFormの「materialKeys省略時は
+  // 保存不可」規約と同じnull規約を呼び出し側でも保つ。
+  const materialKeys = useMemo(
+    () => (materialList ? collectKnownCatalogKeys(CatalogKind.MATERIAL, materialList) : null),
+    [materialList],
+  );
+
+  const diffMap = builtinList ? docDiffMap(CatalogKind.INTERIOR_MASTER, builtinList) : new Map();
+  const rows = builtinList ? buildCatalogRows({ kind: CatalogKind.INTERIOR_MASTER, builtinList, search, diffMap }) : [];
+
+  const selectedRow = (!isAdding && selectedKey) ? rows.find(r => r.entry.key === selectedKey) ?? null : null;
+  const editState = selectedRow ? rowEditState(CatalogKind.INTERIOR_MASTER, selectedRow, { builtinKeys }) : null;
+  const disabledReason = form
+    ? interiorMasterRowDisabledReason({ isAdding, editState, materialListLoaded: Boolean(materialList) })
+    : null;
+  // keyBoundFields（catalogKinds.js INTERIOR_MASTER登録表）はkeyのみ——lockedFields.has('key')は
+  // 追加・編集のどちらでも常にtrueになるが、他タブ（材料・建具記号）と同じ「固定項目はlockedFieldsFor
+  // 経由で判定する」規約を崩さないためここでも呼ぶ（キー読取欄のツールチップに使う）。
+  const lockedFields = form ? lockedFieldsFor(CatalogKind.INTERIOR_MASTER, form.key, { builtinKeys }) : new Set();
+
+  const docDiffByField = (selectedRow?.origin === 'doc' && selectedRow?.diff)
+    ? new Map(diffPairs(
+        CatalogKind.INTERIOR_MASTER, selectedRow.diff.baseEntry, selectedRow.entry, selectedRow.diff.diffFields,
+      ).map(p => [p.field, p]))
+    : new Map();
+  const builtinDiffByField = (editState?.state === 'override' && selectedRow?.builtinEntry)
+    ? new Map(diffPairs(CatalogKind.INTERIOR_MASTER, selectedRow.builtinEntry, selectedRow.entry).map(p => [p.field, p]))
+    : new Map();
+  const fmtDiffValue = v => (v === null || v === undefined || v === '' ? '未設定' : String(v));
+
+  function handleAddNew() {
+    const allKeys = collectKnownCatalogKeys(CatalogKind.INTERIOR_MASTER, builtinList);
+    setIsAdding(true);
+    setSelectedKey(null);
+    actions.resetConfirmState();
+    setForm(emptyInteriorMasterForm(nextInteriorMasterKey(allKeys)));
+    setFormError(null);
+    setFormMessage(null);
+  }
+
+  function handleSelectRow(row) {
+    setIsAdding(false);
+    setSelectedKey(row.entry.key);
+    actions.resetConfirmState();
+    setForm(interiorMasterFormFromEntry(row.entry));
+    setFormError(null);
+    setFormMessage(null);
+  }
+
+  function handleDuplicateClick(row) {
+    const allKeys = collectKnownCatalogKeys(CatalogKind.INTERIOR_MASTER, builtinList);
+    setIsAdding(true);
+    setSelectedKey(null);
+    actions.resetConfirmState();
+    setForm({ ...interiorMasterFormFromEntry(row.entry), key: nextInteriorMasterKey(allKeys) });
+    setFormError('複製しました。内容を確認して保存してください');
+    setFormMessage(null);
+  }
+
+  async function handleSave() {
+    if (!form || !builtinList) return;
+    setFormError(null);
+    setFormMessage(null);
+    const entry = buildInteriorMasterEntry(form);
+
+    if (isAdding) {
+      const allKeys = collectKnownCatalogKeys(CatalogKind.INTERIOR_MASTER, builtinList);
+      const check = validateInteriorMasterForm(form, { isAdding: true, allKeys, builtinKeys, materialKeys });
+      if (!check.ok) { setFormError(check.message); return; }
+      const plan = planSaveEntry(CatalogKind.INTERIOR_MASTER, entry, { builtinList, rowState: null });
+      if (!plan.ok) { setFormError(plan.message); return; }
+      await actions.performSave(plan, entry.key, { overridesBuiltin: plan.overridesBuiltin });
+      return;
+    }
+
+    const check = validateInteriorMasterForm(form, { isAdding: false, materialKeys });
+    if (!check.ok) { setFormError(check.message); return; }
+    const prevEntry = selectedRow?.entry ?? null;
+    const plan = planSaveEntry(CatalogKind.INTERIOR_MASTER, entry, {
+      builtinList, rowState: editState?.state ?? null, prevEntry,
+    });
+    if (!plan.ok) { setFormError(plan.message); return; }
+    if (plan.noop) { setFormMessage('変更はありません'); return; }
+
+    if (plan.needsConfirm) {
+      actions.setSaveConfirm({ plan, entryKey: entry.key, confirmPairs: plan.confirmPairs, overridesBuiltin: plan.overridesBuiltin });
+      return;
+    }
+    await actions.performSave(plan, entry.key, { overridesBuiltin: plan.overridesBuiltin });
+  }
+
+  function handleDeleteClick() {
+    setFormError(null);
+    actions.handleDeleteClick();
+  }
+
+  function handleRevertClick() {
+    if (!selectedRow) return;
+    actions.handleRevertClick(selectedRow.entry.key);
+  }
+
+  const duplicatable = !!form;
+
+  return (
+    <>
+      <div className="catmnt-list-col">
+        <div className="catmnt-list-toolbar">
+          <input
+            className="catmnt-search-input"
+            placeholder="呼称・キーで検索"
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+          />
+          <button className="catmnt-add-btn" disabled={!builtinList} onClick={handleAddNew}>
+            + 新規追加
+          </button>
+        </div>
+
+        <div className="catmnt-rows">
+          {!builtinList && !loadError && <div className="catmnt-row-empty">読み込み中…</div>}
+          {loadError && <div className="catmnt-row-empty">内装マスターデータの読み込みに失敗しました</div>}
+          {builtinList && rows.length === 0 && <div className="catmnt-row-empty">該当する内装マスターがありません</div>}
+          {rows.map(row => (
+            <div
+              key={row.entry.key}
+              className={`catmnt-row${(!isAdding && row.entry.key === selectedKey) ? ' catmnt-row--selected' : ''}`}
+              onClick={() => handleSelectRow(row)}
+            >
+              <span className={`catmnt-badge catmnt-badge--${row.origin ?? 'builtin'}`}>
+                {ORIGIN_LABELS[row.origin] ?? '?'}
+              </span>
+              {row.overridesBuiltin && (
+                <span className="catmnt-badge catmnt-badge--override">標準を編集</span>
+              )}
+              <span
+                className="catmnt-row-name"
+                style={row.diff ? { color: CATALOG_DIFF_COLOR } : undefined}
+                title={row.diff ? diffTooltip(CatalogKind.INTERIOR_MASTER, row.diff.diffFields, row.entry, row.diff.baseEntry) : undefined}
+              >
+                {row.entry.label}{row.diff ? ` ${CATALOG_DIFF_MARK}` : ''}
+              </span>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className="catmnt-form-col">
+        {!form && (
+          <div className="catmnt-form-empty">左の一覧から内装マスターを選択するか、「+ 新規追加」してください</div>
+        )}
+        {form && (
+          <>
+            {disabledReason && <div className="catmnt-form-note">{disabledReason}</div>}
+
+            <div className="catmnt-form-row">
+              <span className="catmnt-form-label">キー</span>
+              <span
+                className="catmnt-code-readout"
+                title={lockedFields.has('key') ? lockedFieldReason(CatalogKind.INTERIOR_MASTER, 'key') : undefined}
+              >
+                {form.key}
+              </span>
+            </div>
+
+            <div className="catmnt-form-row">
+              <span className="catmnt-form-label">呼称</span>
+              <input
+                value={form.label}
+                disabled={!!disabledReason}
+                style={docDiffByField.has('label') ? { color: CATALOG_DIFF_COLOR } : undefined}
+                onChange={e => setForm(f => ({ ...f, label: e.target.value }))}
+              />
+              {docDiffByField.has('label') && (
+                <span className="catmnt-diff-note" style={{ color: CATALOG_DIFF_COLOR, fontSize: 11 }}>
+                  （本体 {fmtDiffValue(docDiffByField.get('label').from)}）
+                </span>
+              )}
+              {builtinDiffByField.has('label') && (
+                <span className="catmnt-diff-note" style={{ color: '#64748b', fontSize: 11 }}>
+                  （標準 {fmtDiffValue(builtinDiffByField.get('label').from)}）
+                </span>
+              )}
+            </div>
+
+            <div className="catmnt-form-row">
+              <span className="catmnt-form-label">壁材（材料コード）</span>
+              <input
+                value={form.wallMaterial}
+                placeholder="12桁数字"
+                disabled={!!disabledReason}
+                style={docDiffByField.has('wallMaterial') ? { color: CATALOG_DIFF_COLOR } : undefined}
+                onChange={e => setForm(f => ({ ...f, wallMaterial: e.target.value }))}
+              />
+              {docDiffByField.has('wallMaterial') && (
+                <span className="catmnt-diff-note" style={{ color: CATALOG_DIFF_COLOR, fontSize: 11 }}>
+                  （本体 {fmtDiffValue(docDiffByField.get('wallMaterial').from)}）
+                </span>
+              )}
+              {builtinDiffByField.has('wallMaterial') && (
+                <span className="catmnt-diff-note" style={{ color: '#64748b', fontSize: 11 }}>
+                  （標準 {fmtDiffValue(builtinDiffByField.get('wallMaterial').from)}）
+                </span>
+              )}
+            </div>
+
+            <div className="catmnt-form-row">
+              <span className="catmnt-form-label">壁仕上げ（材料コード）</span>
+              <input
+                value={form.wallFinish}
+                placeholder="12桁数字"
+                disabled={!!disabledReason}
+                style={docDiffByField.has('wallFinish') ? { color: CATALOG_DIFF_COLOR } : undefined}
+                onChange={e => setForm(f => ({ ...f, wallFinish: e.target.value }))}
+              />
+              {docDiffByField.has('wallFinish') && (
+                <span className="catmnt-diff-note" style={{ color: CATALOG_DIFF_COLOR, fontSize: 11 }}>
+                  （本体 {fmtDiffValue(docDiffByField.get('wallFinish').from)}）
+                </span>
+              )}
+              {builtinDiffByField.has('wallFinish') && (
+                <span className="catmnt-diff-note" style={{ color: '#64748b', fontSize: 11 }}>
+                  （標準 {fmtDiffValue(builtinDiffByField.get('wallFinish').from)}）
+                </span>
+              )}
+            </div>
+
+            <div className="catmnt-form-row">
+              <span className="catmnt-form-label">天井高（mm）</span>
+              <input
+                value={form.ceilingHeight}
+                disabled={!!disabledReason}
+                style={docDiffByField.has('ceilingHeight') ? { color: CATALOG_DIFF_COLOR } : undefined}
+                onChange={e => setForm(f => ({ ...f, ceilingHeight: e.target.value }))}
+              />
+              {docDiffByField.has('ceilingHeight') && (
+                <span className="catmnt-diff-note" style={{ color: CATALOG_DIFF_COLOR, fontSize: 11 }}>
+                  （本体 {fmtDiffValue(docDiffByField.get('ceilingHeight').from)}）
+                </span>
+              )}
+              {builtinDiffByField.has('ceilingHeight') && (
+                <span className="catmnt-diff-note" style={{ color: '#64748b', fontSize: 11 }}>
+                  （標準 {fmtDiffValue(builtinDiffByField.get('ceilingHeight').from)}）
+                </span>
+              )}
+            </div>
+
+            {formError && <div className="catmnt-form-error">{formError}</div>}
+            {formMessage && <div className="catmnt-form-message">{formMessage}</div>}
+
+            {actions.confirmingDelete ? (
+              <DeleteConfirmBlock
+                deleteUsage={actions.deleteUsage}
+                isUsed={actions.deleteUsage?.status === 'ready' && actions.deleteUsage.usedKeys.has(selectedRow?.entry.key)}
+                busy={busy}
+                onConfirm={() => actions.handleDeleteConfirmed(selectedRow?.entry.key)}
+                onCancel={actions.cancelDelete}
+              />
+            ) : actions.revertConfirm ? (
+              <RevertConfirmBlock
+                revertConfirm={actions.revertConfirm}
+                setRevertConfirm={actions.setRevertConfirm}
+                busy={busy}
+                onConfirm={actions.handleRevertConfirmed}
+                onCancel={() => actions.setRevertConfirm(null)}
+              />
+            ) : actions.saveConfirm ? (
+              <SaveConfirmBlock
+                saveConfirm={actions.saveConfirm}
+                busy={busy}
+                onConfirm={actions.handleSaveConfirmed}
+                onCancel={() => actions.setSaveConfirm(null)}
+              />
+            ) : (
+              <div className="catmnt-form-actions">
+                <button className="catmnt-btn catmnt-btn--primary" disabled={!!disabledReason || busy} onClick={handleSave}>
+                  {isAdding ? '追加' : '保存'}
+                </button>
+                {!isAdding && selectedRow && (
+                  <button
+                    className="catmnt-btn catmnt-btn--secondary"
+                    disabled={!duplicatable}
+                    onClick={() => handleDuplicateClick(selectedRow)}
+                  >
+                    複製
+                  </button>
+                )}
+                {!isAdding && editState?.canRevert && (
+                  <button className="catmnt-btn catmnt-btn--secondary" onClick={handleRevertClick}>
+                    標準に戻す
+                  </button>
+                )}
+                {!isAdding && editState?.canDelete && (
+                  <button className="catmnt-btn catmnt-btn--danger" onClick={handleDeleteClick}>
+                    削除
+                  </button>
+                )}
+              </div>
+            )}
+          </>
+        )}
+      </div>
+    </>
+  );
+}
+
+/**
+ * ステップ12g: 断面（section）タブ本体。設計スコープは「呼称（label）の編集・標準の上書き・
+ * userの削除」のみ——寸法系（materialType/shape/width/height等）はkeyBoundFieldsで常に固定
+ * （lockedFieldsFor/planSaveEntryが値の変更を拒否する）ため読み取り専用表示のみ、新規追加フォーム・
+ * 複製ボタンは持たない（追加は既存の「規格文字列から追加」＝SectionBulkImportのみ）。
+ */
+function SectionTab() {
+  const [builtinList, setBuiltinList] = useState(null);
+  const [loadError, setLoadError] = useState(false);
+  const [search, setSearch] = useState('');
+  const [refreshTick, setRefreshTick] = useState(0);
+
+  const [selectedKey, setSelectedKey] = useState(null);
+  const [form, setForm] = useState(null);
+  const [formError, setFormError] = useState(null);
+  const [formMessage, setFormMessage] = useState(null);
+
+  function onSectionSaved(entryKey, meta) {
+    setSelectedKey(entryKey);
+    setFormMessage(catalogSaveMessage(CatalogKind.SECTION, meta));
+  }
+  function onSectionDeleted(plan) {
+    setSelectedKey(null);
+    setForm(null);
+    setFormMessage(removeMessageFor(plan));
+  }
+  function onSectionReverted() {
+    setSelectedKey(null);
+    setForm(null);
+    setFormMessage('標準に戻しました');
+  }
+  const actions = useCatalogEditActions(CatalogKind.SECTION, {
+    onSaved: onSectionSaved,
+    onDeleted: onSectionDeleted,
+    onReverted: onSectionReverted,
+    onError: setFormError,
+  });
+  const { busy } = actions;
+
+  useEffect(() => {
+    let cancelled = false;
+    kindDef(CatalogKind.SECTION).loadBuiltin().then(list => {
+      if (!cancelled) setBuiltinList(list);
+    }).catch(() => { if (!cancelled) setLoadError(true); });
+    return () => { cancelled = true; };
+  }, []);
+
+  const builtinKeys = useMemo(() => new Set((builtinList ?? []).map(e => e.key)), [builtinList]);
+
+  const diffMap = builtinList ? docDiffMap(CatalogKind.SECTION, builtinList) : new Map();
+  const rows = builtinList ? buildCatalogRows({ kind: CatalogKind.SECTION, builtinList, search, diffMap }) : [];
+
+  const selectedRow = selectedKey ? rows.find(r => r.entry.key === selectedKey) ?? null : null;
+  const editState = selectedRow ? rowEditState(CatalogKind.SECTION, selectedRow, { builtinKeys }) : null;
+  const disabledReason = form ? sectionRowDisabledReason({ isAdding: false, editState }) : null;
+  // 寸法系の固定表示項目はlockedFieldsFor（catalogKinds.js SECTION登録表のkeyBoundFields）から
+  // 導出する——別に手書きの一覧を持たず、固定項目の唯一の出所（catalogKinds.js）と表示項目を
+  // 一致させる（'key'は別欄で表示済みのため除く）。
+  const lockedFields = selectedRow
+    ? lockedFieldsFor(CatalogKind.SECTION, selectedRow.entry.key, { builtinKeys })
+    : new Set();
+  const fixedDisplayFields = [...lockedFields].filter(f => f !== 'key');
+
+  const docDiffByField = (selectedRow?.origin === 'doc' && selectedRow?.diff)
+    ? new Map(diffPairs(
+        CatalogKind.SECTION, selectedRow.diff.baseEntry, selectedRow.entry, selectedRow.diff.diffFields,
+      ).map(p => [p.field, p]))
+    : new Map();
+  const builtinDiffByField = (editState?.state === 'override' && selectedRow?.builtinEntry)
+    ? new Map(diffPairs(CatalogKind.SECTION, selectedRow.builtinEntry, selectedRow.entry).map(p => [p.field, p]))
+    : new Map();
+  const fmtDiffValue = v => (v === null || v === undefined || v === '' ? '未設定' : String(v));
+
+  function handleSelectRow(row) {
+    setSelectedKey(row.entry.key);
+    actions.resetConfirmState();
+    setForm(sectionFormFromEntry(row.entry));
+    setFormError(null);
+    setFormMessage(null);
+  }
+
+  async function handleSave() {
+    if (!form || !selectedRow) return;
+    setFormError(null);
+    setFormMessage(null);
+    const check = validateSectionForm(form);
+    if (!check.ok) { setFormError(check.message); return; }
+    const entry = buildSectionEntry(selectedRow.entry, form);
+    const plan = planSaveEntry(CatalogKind.SECTION, entry, {
+      builtinList, rowState: editState?.state ?? null, prevEntry: selectedRow.entry,
+    });
+    if (!plan.ok) { setFormError(plan.message); return; }
+    if (plan.noop) { setFormMessage('変更はありません'); return; }
+
+    if (plan.needsConfirm) {
+      actions.setSaveConfirm({ plan, entryKey: entry.key, confirmPairs: plan.confirmPairs, overridesBuiltin: plan.overridesBuiltin });
+      return;
+    }
+    await actions.performSave(plan, entry.key, { overridesBuiltin: plan.overridesBuiltin });
+  }
+
+  function handleDeleteClick() {
+    setFormError(null);
+    actions.handleDeleteClick();
+  }
+
+  function handleRevertClick() {
+    if (!selectedRow) return;
+    actions.handleRevertClick(selectedRow.entry.key);
+  }
+
+  return (
+    <>
+      <div className="catmnt-list-col" data-refresh-tick={refreshTick}>
+        <div className="catmnt-list-toolbar">
+          <input
+            className="catmnt-search-input"
+            placeholder="呼称・キーで検索"
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+          />
+        </div>
+        {builtinList && (
+          <SectionBulkImport builtinList={builtinList} onImported={() => setRefreshTick(t => t + 1)} />
+        )}
+        <div className="catmnt-rows">
+          {!builtinList && !loadError && <div className="catmnt-row-empty">読み込み中…</div>}
+          {loadError && <div className="catmnt-row-empty">断面データの読み込みに失敗しました</div>}
+          {builtinList && rows.length === 0 && <div className="catmnt-row-empty">該当する断面がありません</div>}
+          {rows.map(row => (
+            <div
+              key={row.entry.key}
+              className={`catmnt-row${row.entry.key === selectedKey ? ' catmnt-row--selected' : ''}`}
+              onClick={() => handleSelectRow(row)}
+            >
+              <span className={`catmnt-badge catmnt-badge--${row.origin ?? 'builtin'}`}>
+                {ORIGIN_LABELS[row.origin] ?? '?'}
+              </span>
+              {row.overridesBuiltin && (
+                <span className="catmnt-badge catmnt-badge--override">標準を編集</span>
+              )}
+              <span
+                className="catmnt-row-name"
+                style={row.diff ? { color: CATALOG_DIFF_COLOR } : undefined}
+                title={row.diff ? diffTooltip(CatalogKind.SECTION, row.diff.diffFields, row.entry, row.diff.baseEntry) : undefined}
+              >
+                {row.entry.label}{row.diff ? ` ${CATALOG_DIFF_MARK}` : ''}
+              </span>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className="catmnt-form-col">
+        {!form && (
+          <div className="catmnt-form-empty">
+            左の一覧から断面を選択してください（追加は「規格文字列から追加」を使ってください）
+          </div>
+        )}
+        {form && (
+          <>
+            {disabledReason && <div className="catmnt-form-note">{disabledReason}</div>}
+
+            <div className="catmnt-form-row">
+              <span className="catmnt-form-label">キー</span>
+              <span className="catmnt-code-readout">{form.key}</span>
+            </div>
+
+            <div className="catmnt-form-row">
+              <span className="catmnt-form-label">呼称</span>
+              <input
+                value={form.label}
+                disabled={!!disabledReason}
+                style={docDiffByField.has('label') ? { color: CATALOG_DIFF_COLOR } : undefined}
+                onChange={e => setForm(f => ({ ...f, label: e.target.value }))}
+              />
+              {docDiffByField.has('label') && (
+                <span className="catmnt-diff-note" style={{ color: CATALOG_DIFF_COLOR, fontSize: 11 }}>
+                  （本体 {fmtDiffValue(docDiffByField.get('label').from)}）
+                </span>
+              )}
+              {builtinDiffByField.has('label') && (
+                <span className="catmnt-diff-note" style={{ color: '#64748b', fontSize: 11 }}>
+                  （標準 {fmtDiffValue(builtinDiffByField.get('label').from)}）
+                </span>
+              )}
+            </div>
+
+            {fixedDisplayFields.filter(f => selectedRow?.entry?.[f] !== undefined).map(field => (
+              <div className="catmnt-form-row" key={field}>
+                <span className="catmnt-form-label">{fieldLabel(CatalogKind.SECTION, field)}</span>
+                <span className="catmnt-code-readout">{formatReadonlyValue(selectedRow?.entry?.[field])}</span>
+              </div>
+            ))}
+
+            {formError && <div className="catmnt-form-error">{formError}</div>}
+            {formMessage && <div className="catmnt-form-message">{formMessage}</div>}
+
+            {actions.confirmingDelete ? (
+              <DeleteConfirmBlock
+                deleteUsage={actions.deleteUsage}
+                isUsed={actions.deleteUsage?.status === 'ready' && actions.deleteUsage.usedKeys.has(selectedRow?.entry.key)}
+                busy={busy}
+                onConfirm={() => actions.handleDeleteConfirmed(selectedRow?.entry.key)}
+                onCancel={actions.cancelDelete}
+              />
+            ) : actions.revertConfirm ? (
+              <RevertConfirmBlock
+                revertConfirm={actions.revertConfirm}
+                setRevertConfirm={actions.setRevertConfirm}
+                busy={busy}
+                onConfirm={actions.handleRevertConfirmed}
+                onCancel={() => actions.setRevertConfirm(null)}
+              />
+            ) : actions.saveConfirm ? (
+              <SaveConfirmBlock
+                saveConfirm={actions.saveConfirm}
+                busy={busy}
+                onConfirm={actions.handleSaveConfirmed}
+                onCancel={() => actions.setSaveConfirm(null)}
+              />
+            ) : (
+              <div className="catmnt-form-actions">
+                <button className="catmnt-btn catmnt-btn--primary" disabled={!!disabledReason || busy} onClick={handleSave}>
+                  保存
+                </button>
+                {editState?.canRevert && (
+                  <button className="catmnt-btn catmnt-btn--secondary" onClick={handleRevertClick}>
+                    標準に戻す
+                  </button>
+                )}
+                {editState?.canDelete && (
+                  <button className="catmnt-btn catmnt-btn--danger" onClick={handleDeleteClick}>
+                    削除
+                  </button>
+                )}
+              </div>
+            )}
+
+            {selectedRow && <CatalogPreview kind={CatalogKind.SECTION} entry={selectedRow.entry} />}
           </>
         )}
       </div>

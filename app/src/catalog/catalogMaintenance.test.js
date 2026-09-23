@@ -12,12 +12,16 @@ import {
   buildFixtureSymbolEntry, validateFixtureSymbolForm, fixtureSymbolFormFieldsFor,
   fixtureSymbolRowDisabledReason, collectKnownCatalogKeys, FIXTURE_SYMBOL_FRAME_ONLY_MECHANISM,
   FIXTURE_SYMBOL_KEY_PATTERN, fixtureSymbolFormFromEntry, fixtureSymbolPreviewEntry, categoryOptionsFor,
+  nextInteriorMasterKey, interiorMasterFormFromEntry, buildInteriorMasterEntry,
+  validateInteriorMasterForm, interiorMasterRowDisabledReason,
+  sectionFormFromEntry, buildSectionEntry, validateSectionForm, sectionRowDisabledReason,
 } from './catalogMaintenance.js';
 import { setOverlay, clearOverlays, overlayFor, docDiffMap, composeCatalog } from './catalogRegistry.js';
 import { valuesEqual } from './catalogMatch.js';
-import { CatalogKind, FIXTURE_SYMBOL_PROFILES } from './catalogKinds.js';
+import { CatalogKind, FIXTURE_SYMBOL_PROFILES, interiorMasterBuiltinList } from './catalogKinds.js';
 import { parseSectionSpecList } from '../structural/sectionCatalog.js';
 import { openingSubTypeBuiltinList, fixtureSymbolBuiltinList } from '../openings/openingCatalog.js';
+import { INTERIOR_MASTERS } from '../finish/materials/interiorMasters.js';
 
 test.afterEach(() => clearOverlays());
 
@@ -1819,4 +1823,311 @@ test('FIXTURE_SYMBOL_PROFILES: buildFixtureSymbolEntryが受け付けるprofile�
   }
   const rejected = buildFixtureSymbolEntry({ key: 'ZZ', label: 'x', category: 'fitting', frameOnly: true, profile: 'bogus' });
   assert.equal('profile' in rejected, false, 'FIXTURE_SYMBOL_PROFILESに無い値は保存されないはず');
+});
+
+// ================================================================
+// ステップ12g（内装マスター（全操作＋標準の上書き）と断面（呼称の編集・標準の上書き・
+// userの削除）を編集タブにする）: InteriorMasterTab・SectionTab専用のフォーム純関数。
+// ================================================================
+
+// ---- nextInteriorMasterKey（設計「keyはUSER_1…から未使用の最小番号を自動採番」） ----
+test('nextInteriorMasterKey: allKeysが空なら\'USER_1\'', () => {
+  assert.equal(nextInteriorMasterKey(new Set()), 'USER_1');
+});
+
+test('nextInteriorMasterKey: USER_1が使用済みなら\'USER_2\'', () => {
+  assert.equal(nextInteriorMasterKey(new Set(['USER_1'])), 'USER_2');
+});
+
+test('nextInteriorMasterKey: 欠番（USER_1・USER_3使用済み）は最小の空きUSER_2を返す', () => {
+  assert.equal(nextInteriorMasterKey(new Set(['USER_1', 'USER_3'])), 'USER_2');
+});
+
+test('nextInteriorMasterKey: builtinのキー（USER_連番の書式に一致しないもの）は無視される', () => {
+  assert.equal(nextInteriorMasterKey(new Set(['LIVING_ROOM', 'RESTROOM'])), 'USER_1');
+});
+
+test('【失敗系】nextInteriorMasterKey: USER_連番の書式に一致しない紛らわしいキー（USER_2x等）は無視され採番に影響しない', () => {
+  assert.equal(nextInteriorMasterKey(new Set(['USER_2x', 'USER_1'])), 'USER_2');
+});
+
+// ---- interiorMasterFormFromEntry ⇄ buildInteriorMasterEntry ----
+test('interiorMasterFormFromEntry ⇄ buildInteriorMasterEntry: 本体の内装マスター全件で往復してもエントリが一致する', () => {
+  const builtin = interiorMasterBuiltinList({ INTERIOR_MASTERS });
+  assert.ok(builtin.length > 0, '前提: INTERIOR_MASTERSは1件以上あるはず');
+  for (const entry of builtin) {
+    const roundTripped = buildInteriorMasterEntry(interiorMasterFormFromEntry(entry));
+    assert.deepEqual(roundTripped, entry, `key=${entry.key}の往復が一致しない`);
+  }
+});
+
+test('interiorMasterFormFromEntry: ceilingHeightが未設定（null/undefined）ならフォームでは空文字になる', () => {
+  assert.equal(interiorMasterFormFromEntry({ key: 'X', label: 'x', wallMaterial: '', wallFinish: '' }).ceilingHeight, '');
+  assert.equal(interiorMasterFormFromEntry({ key: 'X', label: 'x', ceilingHeight: null }).ceilingHeight, '');
+});
+
+test('buildInteriorMasterEntry: key/label/wallMaterial/wallFinishの前後の空白を除く', () => {
+  const entry = buildInteriorMasterEntry({
+    key: ' USER_1 ', label: ' 予備室 ', wallMaterial: ' 301000000002 ', wallFinish: ' 302000000001 ', ceilingHeight: '2400',
+  });
+  assert.deepEqual(entry, {
+    key: 'USER_1', label: '予備室', wallMaterial: '301000000002', wallFinish: '302000000001', ceilingHeight: 2400,
+  });
+});
+
+test('【失敗系】buildInteriorMasterEntry: ceilingHeightが空文字（トリム後）ならNaN（validateInteriorMasterForm側で拒否する）', () => {
+  const entry = buildInteriorMasterEntry({ key: 'USER_1', label: 'x', wallMaterial: 'a', wallFinish: 'b', ceilingHeight: '  ' });
+  assert.ok(Number.isNaN(entry.ceilingHeight));
+});
+
+// ---- validateInteriorMasterForm ----
+function interiorMasterForm(overrides) {
+  return {
+    key: 'USER_1', label: '予備室', wallMaterial: '301000000002', wallFinish: '302000000001', ceilingHeight: '2400',
+    ...overrides,
+  };
+}
+
+// QA指摘M1（12g再報告）: interiorMasterForm()の既定wallMaterial/wallFinishが材料カタログに
+// 実在する体でmaterialKeysを組み立てる（他のテストが意図した検査（キー重複・ceilingHeight等）へ
+// 到達できるように——materialKeys省略時は「材料カタログ未読込み」で必ず拒否されるため）。
+const INTERIOR_MASTER_MATERIAL_KEYS = new Set(['301000000002', '302000000001']);
+
+test('validateInteriorMasterForm: 呼称が空なら拒否（追加・編集とも）', () => {
+  assert.equal(validateInteriorMasterForm(interiorMasterForm({ label: '  ' }), { isAdding: true }).ok, false);
+  assert.equal(validateInteriorMasterForm(interiorMasterForm({ label: '  ' }), { isAdding: false }).ok, false);
+});
+
+test('【失敗系】validateInteriorMasterForm: wallMaterialが12桁数字でなければ拒否', () => {
+  const result = validateInteriorMasterForm(interiorMasterForm({ wallMaterial: 'クロス' }), { isAdding: false });
+  assert.equal(result.ok, false);
+  assert.match(result.message, /壁材は材料コード（12桁数字）/);
+});
+
+test('【失敗系】validateInteriorMasterForm: wallFinishが12桁数字でなければ拒否', () => {
+  const result = validateInteriorMasterForm(interiorMasterForm({ wallFinish: '123' }), { isAdding: false });
+  assert.equal(result.ok, false);
+  assert.match(result.message, /壁仕上げは材料コード（12桁数字）/);
+});
+
+test('【失敗系】validateInteriorMasterForm: ceilingHeightが0以下・NaNなら拒否', () => {
+  for (const ceilingHeight of ['0', '-100', 'abc', '']) {
+    const result = validateInteriorMasterForm(interiorMasterForm({ ceilingHeight }), { isAdding: false });
+    assert.equal(result.ok, false, `ceilingHeight=${ceilingHeight}`);
+    assert.match(result.message, /天井高は0より大きい数値/, `ceilingHeight=${ceilingHeight}`);
+  }
+});
+
+test('validateInteriorMasterForm: 有効な入力（編集時）はok:true', () => {
+  assert.equal(
+    validateInteriorMasterForm(interiorMasterForm(), { isAdding: false, materialKeys: INTERIOR_MASTER_MATERIAL_KEYS }).ok,
+    true,
+  );
+});
+
+test('【失敗系】validateInteriorMasterForm: 追加時にbuiltinKeysと同じキーは拒否', () => {
+  const result = validateInteriorMasterForm(interiorMasterForm({ key: 'LIVING_ROOM' }), {
+    isAdding: true, builtinKeys: new Set(['LIVING_ROOM']), allKeys: new Set(['LIVING_ROOM']),
+    materialKeys: INTERIOR_MASTER_MATERIAL_KEYS,
+  });
+  assert.equal(result.ok, false);
+  assert.match(result.message, /既に使われているキーです/);
+});
+
+test('【失敗系】validateInteriorMasterForm: 追加時にallKeysと同じキー（builtinKeysには無い＝ユーザー追加分と衝突）は拒否', () => {
+  const result = validateInteriorMasterForm(interiorMasterForm({ key: 'USER_1' }), {
+    isAdding: true, builtinKeys: new Set(), allKeys: new Set(['USER_1']), materialKeys: INTERIOR_MASTER_MATERIAL_KEYS,
+  });
+  assert.equal(result.ok, false);
+  assert.match(result.message, /既に使われているキーです: USER_1/);
+});
+
+test('validateInteriorMasterForm: 追加時に未使用キーならok:true', () => {
+  const result = validateInteriorMasterForm(interiorMasterForm({ key: 'USER_2' }), {
+    isAdding: true, builtinKeys: new Set(['LIVING_ROOM']), allKeys: new Set(['LIVING_ROOM', 'USER_1']),
+    materialKeys: INTERIOR_MASTER_MATERIAL_KEYS,
+  });
+  assert.equal(result.ok, true);
+});
+
+test('【失敗系】validateInteriorMasterForm: 追加時にキーが空（割り当て漏れ）なら拒否', () => {
+  const result = validateInteriorMasterForm(interiorMasterForm({ key: '  ' }), {
+    isAdding: true, materialKeys: INTERIOR_MASTER_MATERIAL_KEYS,
+  });
+  assert.equal(result.ok, false);
+  assert.match(result.message, /キーが割り当てられていません/);
+});
+
+test('validateInteriorMasterForm: 編集時（isAdding:false）はキーの重複検査をしない', () => {
+  const result = validateInteriorMasterForm(interiorMasterForm({ key: 'LIVING_ROOM' }), {
+    isAdding: false, builtinKeys: new Set(['LIVING_ROOM']), allKeys: new Set(['LIVING_ROOM']),
+    materialKeys: INTERIOR_MASTER_MATERIAL_KEYS,
+  });
+  assert.equal(result.ok, true);
+});
+
+// ---- QA指摘M1（12g再報告・リード裁定「拒否」）: materialKeys（材料カタログの実在検査） ----
+test('【失敗系・QA指摘M1】validateInteriorMasterForm: 12桁だがmaterialKeysに無いwallFinishは拒否', () => {
+  const result = validateInteriorMasterForm(interiorMasterForm({ wallFinish: '999999999999' }), {
+    isAdding: false, materialKeys: INTERIOR_MASTER_MATERIAL_KEYS,
+  });
+  assert.equal(result.ok, false);
+  assert.match(result.message, /壁仕上げは材料カタログに無いコードです/);
+});
+
+test('【失敗系・QA指摘M1】validateInteriorMasterForm: 12桁だがmaterialKeysに無いwallMaterialは拒否', () => {
+  const result = validateInteriorMasterForm(interiorMasterForm({ wallMaterial: '999999999999' }), {
+    isAdding: false, materialKeys: INTERIOR_MASTER_MATERIAL_KEYS,
+  });
+  assert.equal(result.ok, false);
+  assert.match(result.message, /壁材は材料カタログに無いコードです/);
+});
+
+test('【失敗系・QA指摘M1】validateInteriorMasterForm: materialKeys未指定（null）は保存不可の理由を返す', () => {
+  const result = validateInteriorMasterForm(interiorMasterForm(), { isAdding: false });
+  assert.equal(result.ok, false);
+  assert.match(result.message, /材料カタログが読み込まれていません/);
+});
+
+test('【失敗系・QA指摘M1】validateInteriorMasterForm: materialKeysを省略した既定呼び出し（isAddingのみ指定）も保存不可になる', () => {
+  // 前提確認: interiorMasterForm()自体は他の検査（呼称・書式・天井高）をすべて満たす有効な入力
+  // ——materialKeys省略が「他の検査に埋もれず」単独で拒否理由になることを固定する。
+  const result = validateInteriorMasterForm(interiorMasterForm(), { isAdding: true });
+  assert.equal(result.ok, false);
+  assert.match(result.message, /材料カタログが読み込まれていません/);
+});
+
+// ---- interiorMasterRowDisabledReason ----
+test('interiorMasterRowDisabledReason: 新規追加（isAdding:true）は常にnull', () => {
+  assert.equal(interiorMasterRowDisabledReason({ isAdding: true, editState: { canEdit: false, reason: 'x' } }), null);
+});
+
+test('interiorMasterRowDisabledReason: editState.canEdit:trueはnull、falseはeditState.reasonを返す', () => {
+  assert.equal(interiorMasterRowDisabledReason({ isAdding: false, editState: { canEdit: true, reason: null } }), null);
+  assert.equal(
+    interiorMasterRowDisabledReason({ isAdding: false, editState: { canEdit: false, reason: '文書にのみ存在します（複製してください）' } }),
+    '文書にのみ存在します（複製してください）',
+  );
+});
+
+test('【失敗系】interiorMasterRowDisabledReason: editState省略・isAdding:falseはnull', () => {
+  assert.equal(interiorMasterRowDisabledReason({ isAdding: false }), null);
+  assert.equal(interiorMasterRowDisabledReason(), null);
+});
+
+// ---- QA指摘M1（12g再報告）: materialListLoaded（材料カタログの読込み状態）----
+test('【失敗系・QA指摘M1】interiorMasterRowDisabledReason: materialListLoaded:falseはisAdding:true・editState.canEdit:trueでも保存不可の理由を返す', () => {
+  assert.match(
+    interiorMasterRowDisabledReason({ isAdding: true, materialListLoaded: false }),
+    /材料カタログを読み込んでいます/,
+  );
+  assert.match(
+    interiorMasterRowDisabledReason({ isAdding: false, editState: { canEdit: true, reason: null }, materialListLoaded: false }),
+    /材料カタログを読み込んでいます/,
+  );
+});
+
+test('interiorMasterRowDisabledReason: materialListLoaded省略時は既定true（従来どおりisAdding/editStateだけで判定する）', () => {
+  assert.equal(interiorMasterRowDisabledReason({ isAdding: true }), null);
+  assert.equal(interiorMasterRowDisabledReason({ isAdding: false, editState: { canEdit: true, reason: null } }), null);
+});
+
+// ---- rowEditState(INTERIOR_MASTER): keyBoundFieldsはkeyのみ（他項目は全て編集可） ----
+test('rowEditState(INTERIOR_MASTER)/lockedFieldsFor: keyのみ固定（label/wallMaterial/wallFinish/ceilingHeightは編集可）', () => {
+  const builtin = [{ key: 'LIVING_ROOM', label: '居室', wallMaterial: 'a', wallFinish: 'b', ceilingHeight: 2700 }];
+  const row = { entry: builtin[0], origin: 'builtin', diff: null };
+  const state = rowEditState(CatalogKind.INTERIOR_MASTER, row, { builtinKeys: new Set(['LIVING_ROOM']) });
+  assert.equal(state.state, 'builtin');
+  assert.equal(state.canEdit, true);
+  const locked = lockedFieldsFor(CatalogKind.INTERIOR_MASTER, 'LIVING_ROOM', { builtinKeys: new Set(['LIVING_ROOM']) });
+  assert.deepEqual([...locked], ['key']);
+});
+
+// ---- sectionFormFromEntry ⇄ buildSectionEntry（設計「断面は元entryをそのままlabel以外」）----
+test('sectionFormFromEntry: {key,label}のみを持つ', () => {
+  const entry = sectionEntry({ label: 'H-200×100×5.5×8' });
+  assert.deepEqual(sectionFormFromEntry(entry), { key: 'STEEL-H200x100', label: 'H-200×100×5.5×8' });
+});
+
+test('buildSectionEntry: prevEntryをそのまま複製し、labelだけフォーム値へ差し替える', () => {
+  const prevEntry = sectionEntry();
+  const entry = buildSectionEntry(prevEntry, { label: '新しい呼称' });
+  assert.deepEqual(entry, { ...prevEntry, label: '新しい呼称' });
+});
+
+test('buildSectionEntry: labelの前後の空白を除く', () => {
+  const prevEntry = sectionEntry();
+  const entry = buildSectionEntry(prevEntry, { label: '  新しい呼称  ' });
+  assert.equal(entry.label, '新しい呼称');
+});
+
+test('sectionFormFromEntry ⇄ buildSectionEntry: 呼称を変えずに往復するとprevEntryと完全一致する', () => {
+  const prevEntry = sectionEntry();
+  const roundTripped = buildSectionEntry(prevEntry, sectionFormFromEntry(prevEntry));
+  assert.deepEqual(roundTripped, prevEntry);
+});
+
+test('【失敗系】buildSectionEntry: フォームに寸法系（width等）を混ぜても保存値には反映されない（prevEntryの値のまま）', () => {
+  const prevEntry = sectionEntry({ width: 100 });
+  const entry = buildSectionEntry(prevEntry, { label: prevEntry.label, width: 9999 });
+  assert.equal(entry.width, 100, 'buildSectionEntryはlabel以外をフォームから受け取らない設計のはず');
+});
+
+// ---- validateSectionForm ----
+test('validateSectionForm: 呼称が空なら拒否', () => {
+  const result = validateSectionForm({ label: '  ' });
+  assert.equal(result.ok, false);
+  assert.match(result.message, /呼称を入力してください/);
+});
+
+test('validateSectionForm: 呼称があればok:true', () => {
+  assert.equal(validateSectionForm({ label: 'H-200×100×5.5×8' }).ok, true);
+});
+
+// ---- sectionRowDisabledReason ----
+test('sectionRowDisabledReason: editState.canEdit:trueはnull、falseはeditState.reasonを返す', () => {
+  assert.equal(sectionRowDisabledReason({ isAdding: false, editState: { canEdit: true, reason: null } }), null);
+  assert.equal(
+    sectionRowDisabledReason({ isAdding: false, editState: { canEdit: false, reason: '文書の内容が本体と異なります。合わせ直すか複製してください' } }),
+    '文書の内容が本体と異なります。合わせ直すか複製してください',
+  );
+});
+
+test('【失敗系】sectionRowDisabledReason: editState省略・isAdding:falseはnull', () => {
+  assert.equal(sectionRowDisabledReason({ isAdding: false }), null);
+  assert.equal(sectionRowDisabledReason(), null);
+});
+
+// ---- QA指摘M2（12g再報告）: doc-only/doc-diffは断面タブ専用の文言（複製・合わせ直しの案内をしない） ----
+test('【失敗系・QA指摘M2】sectionRowDisabledReason: editState.state===\'doc-only\'は断面専用文言（rowEditStateの既定reasonではない）', () => {
+  const result = sectionRowDisabledReason({
+    isAdding: false, editState: { canEdit: false, state: 'doc-only', reason: '文書にのみ存在します（複製してください）' },
+  });
+  assert.equal(result, '文書にのみ存在する断面です。呼称は変更できません');
+  assert.notEqual(result, '文書にのみ存在します（複製してください）', '断面タブに無い「複製してください」の案内を出してはいけない');
+});
+
+test('【失敗系・QA指摘M2】sectionRowDisabledReason: editState.state===\'doc-diff\'は断面専用文言（rowEditStateの既定reasonではない）', () => {
+  const result = sectionRowDisabledReason({
+    isAdding: false,
+    editState: { canEdit: false, state: 'doc-diff', reason: '文書の内容が本体と異なります。合わせ直すか複製してください' },
+  });
+  assert.equal(result, '文書の内容が本体と異なる断面です。呼称は変更できません');
+  assert.notEqual(
+    result, '文書の内容が本体と異なります。合わせ直すか複製してください',
+    '断面タブに無い「合わせ直すか複製」の案内を出してはいけない',
+  );
+});
+
+// ---- planSaveEntry(SECTION)経由の統合確認: 断面はlabelの上書き・編集が通り、builtin同キーは
+// overridesBuiltin:trueが付く（fixtureSymbolの同種テストと同型）----
+test('planSaveEntry(SECTION): labelの変更はbuiltin行でも通り、overridesBuiltin:trueが付く', () => {
+  const prevEntry = sectionEntry();
+  const entry = buildSectionEntry(prevEntry, { label: '新しい呼称' });
+  const result = planSaveEntry(CatalogKind.SECTION, entry, {
+    builtinList: [prevEntry], rowState: 'builtin', prevEntry,
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.nextUser[0].overridesBuiltin, true);
+  assert.equal(result.nextUser[0].label, '新しい呼称');
 });

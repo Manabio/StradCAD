@@ -23,7 +23,7 @@ import {
 } from './catalogRegistry.js';
 import { assertNoDuplicate, displayNameOf, matchByContent, valuesEqual } from './catalogMatch.js';
 import { diffPairs, fieldLabel } from './catalogDiffView.js';
-import { nextSerial, parseMaterialCode, formatMaterialCode } from './materialCode.js';
+import { nextSerial, parseMaterialCode, formatMaterialCode, isMaterialCode } from './materialCode.js';
 import { emptyBundle, withEntries } from './catalogBundle.js';
 import { encodeCatalogBundle } from './catalogCodec.js';
 import { stripOverridesBuiltin } from './usedEntries.js';
@@ -103,6 +103,11 @@ export function parseThicknessInput(raw) {
  * 専用タブ（ui/CatalogMaintenancePanel.jsx FixtureSymbolTab）へ差し替えた——VIEWABLE_KINDSは
  * enabled判定だけを持つ表であり、タブの中身（閲覧専用か編集可能か）はここでは決めない。
  * これで登録表の全種別が enabled:true になる。
+ * ステップ12g: 内装マスター（interiorMaster）は全操作（追加・複製・編集・標準の上書き・標準に
+ * 戻す・削除）まで開放した専用タブ（InteriorMasterTab）、断面（section）は呼称（label）の編集・
+ * 標準の上書き・userの削除まで開放した専用タブ（SectionTab。寸法系は固定のまま・新規追加は
+ * 引き続き規格文字列の一括入力のみ）へそれぞれ差し替えた——ReadonlyKindTabに残るのは境界マスター・
+ * 建具種別の2種別のみ（境界マスターは範囲外の裁定、建具種別はステップ12hで着手予定）。
  */
 const VIEWABLE_KINDS = Object.freeze([
   CatalogKind.MATERIAL, CatalogKind.INTERIOR_MASTER, CatalogKind.BOUNDARY_MASTER, CatalogKind.SECTION,
@@ -1165,4 +1170,205 @@ export function validateFixtureSymbolForm(form, { isAdding, allKeys = new Set(),
  */
 export function fixtureSymbolRowDisabledReason({ isAdding, editState = null } = {}) {
   return editStateDisabledReason({ isAdding, editState });
+}
+
+// ================================================================
+// ステップ12g（内装マスター（全操作＋標準の上書き）と断面（呼称の編集・標準の上書き・
+// userの削除）を編集タブにする）: 内装マスタータブ・断面タブ専用のフォーム純関数。
+// 追加・複製・編集・標準の上書き・標準に戻す・削除は12aの共通ロジック（rowEditState/
+// lockedFieldsFor/planSaveEntry/planRevertToBuiltin/planRemoveUserEntry/applyCatalogEditPlan）を
+// そのまま使う——ここに持つのは「フォーム値からエントリを組み立てる」「新規追加時のキー採番」
+// 「フォーム側の検証」という、各種別固有の判断だけ（12fのfixtureSymbol系と同じ役割分担）。
+// ================================================================
+
+/** 内装マスターの新規追加キーの採番書式（USER_連番）。 */
+const INTERIOR_MASTER_KEY_PATTERN = /^USER_(\d+)$/;
+
+/**
+ * ステップ12g（設計「keyはUSER_1…から未使用の最小番号を自動採番」）: allKeys（builtin・
+ * ユーザーライブラリ・文書同梱の合成キー集合。collectKnownCatalogKeysで組み立てる）のうち
+ * USER_連番の欠番を含めて最小の未使用番号を返す——materialCode.jsのnextSerialと同じ
+ * 「最小の空き番号」規約（欠番の再利用）。ユーザーがキーを直接入力する経路は無い
+ * （追加・複製のどちらもこの関数で決めたキーをフォームへ渡す）。
+ * @param {Set<string>} allKeys
+ * @returns {string} 'USER_1'・'USER_2'…
+ */
+export function nextInteriorMasterKey(allKeys) {
+  const used = new Set();
+  for (const key of allKeys ?? []) {
+    const m = INTERIOR_MASTER_KEY_PATTERN.exec(key);
+    if (m) used.add(Number(m[1]));
+  }
+  let n = 1;
+  while (used.has(n)) n++;
+  return `USER_${n}`;
+}
+
+/**
+ * 保存済みエントリ（builtin/user/doc）からフォーム値を組み立てる（buildInteriorMasterEntryの
+ * 逆変換）。ceilingHeightは数値入力欄のためparseThicknessInputと同じ文字列化規約（未設定は空文字）。
+ * @param {object} entry
+ * @returns {{ key: string, label: string, wallMaterial: string, wallFinish: string, ceilingHeight: string }}
+ */
+export function interiorMasterFormFromEntry(entry) {
+  return {
+    key: entry?.key ?? '',
+    label: entry?.label ?? '',
+    wallMaterial: entry?.wallMaterial ?? '',
+    wallFinish: entry?.wallFinish ?? '',
+    ceilingHeight: entry?.ceilingHeight == null ? '' : String(entry.ceilingHeight),
+  };
+}
+
+/**
+ * フォーム入力から内装マスターエントリを組み立てる。key/label/wallMaterial/wallFinishは前後の
+ * 空白を除く（他種別のbuildMaterialEntry等と同じトリム規約）。ceilingHeightは空白を除いてから
+ * Numberへ変換する（空文字はNaN——validateInteriorMasterForm側で拒否する。parseThicknessInputは
+ * 空文字をnullにするが、ceilingHeightはmaterialのthicknessと違い必須項目のためnull許容にしない）。
+ * @param {{ key?: string, label?: string, wallMaterial?: string, wallFinish?: string, ceilingHeight?: string|number }} form
+ * @returns {{ key: string, label: string, wallMaterial: string, wallFinish: string, ceilingHeight: number }}
+ */
+export function buildInteriorMasterEntry({
+  key, label, wallMaterial, wallFinish, ceilingHeight,
+} = {}) {
+  const trimmed = String(ceilingHeight ?? '').trim();
+  return {
+    key: (key ?? '').trim(),
+    label: (label ?? '').trim(),
+    wallMaterial: (wallMaterial ?? '').trim(),
+    wallFinish: (wallFinish ?? '').trim(),
+    ceilingHeight: trimmed === '' ? NaN : Number(trimmed),
+  };
+}
+
+/**
+ * ステップ12g: 内装マスターフォームの検証。label必須・wallMaterial/wallFinishは材料コード
+ * （12桁数字。materialCode.js isMaterialCode）必須・ceilingHeightは0より大きい有限数値が必須。
+ * 追加時（isAdding）だけキーの重複を検査する（キー自体はnextInteriorMasterKeyが未使用の番号を
+ * 選ぶため通常は起こらないが、呼び出し側の取り違え等に備えた保険）。
+ *
+ * QA指摘M1（12g再報告・リード裁定「拒否」2026-09-24）: 12桁検査だけでは材料カタログに実在しない
+ * コード（存在しない材料コード）を保存できてしまう——本関数は材料カタログ本体を静的importできない
+ * （catalog/*.js は finish/materials/* を持たない不変条件）ため、呼び出し側（jsx）が合成済みの
+ * 材料キー集合を`materialKeys`として注入する（DI型。collectKnownCatalogKeys(CatalogKind.MATERIAL,
+ * materialBuiltinList)と同じ形）。`materialKeys`省略時（null）は「材料カタログを読み込んでいない
+ * のに検証だけ通す」事故を防ぐため、既定で保存不可（読み込み未完了の理由）を返す——他の引数
+ * （allKeys/builtinKeys）のような空Set既定にしない。呼び出し側は材料一覧を読み込むまで保存ボタンを
+ * disabledにする想定（interiorMasterRowDisabledReasonのmaterialListLoaded引数）。
+ * @param {{ key?: string, label?: string, wallMaterial?: string, wallFinish?: string, ceilingHeight?: string|number }} form
+ * @param {{ isAdding: boolean, allKeys?: Set<string>, builtinKeys?: Set<string>, materialKeys?: Set<string>|null }} args
+ * @returns {{ ok: true } | { ok: false, message: string }}
+ */
+export function validateInteriorMasterForm(form, {
+  isAdding, allKeys = new Set(), builtinKeys = new Set(), materialKeys = null,
+} = {}) {
+  const label = (form?.label ?? '').trim();
+  const wallMaterial = (form?.wallMaterial ?? '').trim();
+  const wallFinish = (form?.wallFinish ?? '').trim();
+  const ceilingHeight = Number(String(form?.ceilingHeight ?? '').trim());
+  if (!label) return { ok: false, message: '呼称を入力してください' };
+  if (!isMaterialCode(wallMaterial)) {
+    return { ok: false, message: '壁材は材料コード（12桁数字）で入力してください' };
+  }
+  if (!isMaterialCode(wallFinish)) {
+    return { ok: false, message: '壁仕上げは材料コード（12桁数字）で入力してください' };
+  }
+  if (!Number.isFinite(ceilingHeight) || ceilingHeight <= 0) {
+    return { ok: false, message: '天井高は0より大きい数値を入力してください' };
+  }
+  if (!materialKeys) {
+    return { ok: false, message: '材料カタログが読み込まれていません（しばらく待ってから保存してください）' };
+  }
+  if (!materialKeys.has(wallMaterial)) {
+    return { ok: false, message: '壁材は材料カタログに無いコードです' };
+  }
+  if (!materialKeys.has(wallFinish)) {
+    return { ok: false, message: '壁仕上げは材料カタログに無いコードです' };
+  }
+  if (isAdding) {
+    const key = (form?.key ?? '').trim();
+    if (!key) return { ok: false, message: 'キーが割り当てられていません' };
+    if (builtinKeys.has(key) || allKeys.has(key)) {
+      return { ok: false, message: `既に使われているキーです: ${key}` };
+    }
+  }
+  return { ok: true };
+}
+
+/**
+ * ステップ12g: 内装マスタータブのフォーム無効化理由（fixtureSymbolRowDisabledReasonと同型。
+ * 内装マスターはどの行もカテゴリ単位の一律拒否を持たない）。
+ * QA指摘M1（12g再報告）: materialListLoaded:false（材料カタログの動的importが完了していない）のときは
+ * isAdding・editStateの状態に関わらず保存不可の理由を返す——validateInteriorMasterFormが
+ * materialKeys省略時に拒否する仕組みと対にして、呼び出し側（jsx）は保存ボタンをdisabledにできる。
+ * @param {{ isAdding: boolean, editState?: { canEdit: boolean, reason: string|null } | null,
+ *           materialListLoaded?: boolean }} args
+ * @returns {string|null}
+ */
+export function interiorMasterRowDisabledReason({ isAdding, editState = null, materialListLoaded = true } = {}) {
+  if (!materialListLoaded) return '材料カタログを読み込んでいます…';
+  return editStateDisabledReason({ isAdding, editState });
+}
+
+/**
+ * ステップ12g（設計「断面は元entryをそのままlabel以外」）: 保存済み断面エントリからフォーム値
+ * （呼称のみ）を組み立てる。他の全項目（materialType/shape/width/height等）はkeyBoundFields
+ * （catalogKinds.js SECTION登録表）で常に固定のため、フォームに持たせず選択行のentryをそのまま
+ * 参照表示する（sectionRowDisabledReason・呼び出し側jsxの責務）。
+ * @param {object} entry
+ * @returns {{ key: string, label: string }}
+ */
+export function sectionFormFromEntry(entry) {
+  return { key: entry?.key ?? '', label: entry?.label ?? '' };
+}
+
+/**
+ * ステップ12g: 断面エントリを組み立てる。prevEntry（選択行の元エントリ）をそのまま複製し、
+ * labelだけフォーム値（前後の空白を除く）へ差し替える——寸法系はkeyBoundFieldsで常に固定のため
+ * ここで書き換える経路を持たない（他項目をフォームから受け取らないことで、呼び出し側が
+ * 誤って寸法を変更したエントリを組み立てられないようにする設計）。
+ * @param {object} prevEntry 選択行の元エントリ（必須。断面には新規追加フォームが無い——
+ *   追加は既存の「規格文字列から追加」のみ）
+ * @param {{ label?: string }} form
+ * @returns {object}
+ */
+export function buildSectionEntry(prevEntry, form) {
+  return { ...prevEntry, label: (form?.label ?? '').trim() };
+}
+
+/**
+ * ステップ12g: 断面フォームの検証（呼称必須のみ——寸法系はbuildSectionEntryがprevEntryから
+ * 引き継ぐため検証対象に無い）。
+ * @param {{ label?: string }} form
+ * @returns {{ ok: true } | { ok: false, message: string }}
+ */
+export function validateSectionForm(form) {
+  const label = (form?.label ?? '').trim();
+  if (!label) return { ok: false, message: '呼称を入力してください' };
+  return { ok: true };
+}
+
+/**
+ * ステップ12g: 断面タブのフォーム無効化理由。断面には新規追加フォームが無いため isAdding は
+ * 常に false で呼ばれる想定だが、他種別と同じ引数形を保つ。
+ * QA指摘M2（12g再報告）: editStateDisabledReason（fixtureSymbolRowDisabledReason等と共有する
+ * 汎用委譲）はrowEditStateの共通文言（「複製してください」「合わせ直すか複製してください」）を
+ * そのまま返すが、断面タブには複製・合わせ直しの手段が無い（設計12g「追加は既存の一括入力のみ」で
+ * 複製ボタン自体を持たない）ため、その文言のまま出すと利用者に無い操作を示してしまう。
+ * doc-only・doc-diffの2状態だけは断面タブ専用の文言（呼称は変更できない旨）に差し替える——
+ * それ以外の状態（builtin/user/override/doc-same/doc-override。すべてcanEdit:true）は
+ * editStateDisabledReasonの既定どおりnullを返す。
+ * @param {{ isAdding: boolean, editState?: { canEdit: boolean, state?: string, reason: string|null } | null }} args
+ * @returns {string|null}
+ */
+export function sectionRowDisabledReason({ isAdding, editState = null } = {}) {
+  if (isAdding) return null;
+  if (editState?.canEdit) return null;
+  if (editState?.state === 'doc-only') {
+    return '文書にのみ存在する断面です。呼称は変更できません';
+  }
+  if (editState?.state === 'doc-diff') {
+    return '文書の内容が本体と異なる断面です。呼称は変更できません';
+  }
+  return editState?.reason ?? null;
 }

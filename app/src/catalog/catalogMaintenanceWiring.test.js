@@ -183,25 +183,39 @@ test('【不変条件・ステップ8h】catalog/catalogMaintenance.js: buildKin
   assert.ok(/CatalogKind\.SECTION/.test(m[1]), 'VIEWABLE_KINDS に CatalogKind.SECTION が含まれていない（断面タブが閲覧できない）');
 });
 
-test('【不変条件・ステップ8h・QA指摘Minor-1で更新】ui/CatalogMaintenancePanel.jsx: READONLY_KIND_FIELDSにCatalogKind.SECTIONの表示項目（label/materialType/shape/width/height/webThickness/flangeThickness/wallThickness）をfield名で持ち、ReadonlyKindTab（追加・複製・編集・削除・合わせ直しボタン無し）で扱う', () => {
+// ステップ12gでSECTIONはREADONLY_KIND_FIELDS（ReadonlyKindTab）から専用タブ（SectionTab。
+// 呼称の編集・標準の上書き・userの削除）へ移行した——12fのfixtureSymbol移行と同型。
+test('【不変条件・ステップ12g】ui/CatalogMaintenancePanel.jsx: READONLY_KIND_FIELDSにCatalogKind.SECTIONが無い（閲覧タブから編集タブへ移行済み）', () => {
   const src = readSrc('ui/CatalogMaintenancePanel.jsx');
-  const m = /\[CatalogKind\.SECTION\]: Object\.freeze\(\[([\s\S]*?)\]\),/.exec(src);
-  assert.ok(m, 'CatalogMaintenancePanel.jsx の READONLY_KIND_FIELDS に [CatalogKind.SECTION] が見つからない');
-  const body = m[1];
-  for (const field of [
-    'label', 'materialType', 'shape', 'width', 'height', 'webThickness', 'flangeThickness', 'wallThickness',
-  ]) {
-    assert.ok(
-      new RegExp(`'${field}'`).test(body),
-      `READONLY_KIND_FIELDS[CatalogKind.SECTION] に ${field} が無い`,
-    );
-  }
-  // ReadonlyKindTabはREADONLY_KIND_FIELDSに載る種別（interiorMaster/boundaryMaster/section）を
-  // 汎用に扱う唯一のコンポーネント——上のステップ7dテストが既に「追加・複製・削除・保存・
-  // 合わせ直しの操作系ハンドラを呼んでいない」ことを固定しているため、断面用の専用ボタンを
-  // 別途持たないことはその不変条件がそのまま覆う（同じ関数に相乗りする設計であることの確認）。
-  const fnMatch = /function ReadonlyKindTab\(\{[\s\S]*?\n\}/.exec(src);
-  assert.ok(fnMatch, 'CatalogMaintenancePanel.jsx に ReadonlyKindTab コンポーネントが見つからない');
+  assert.ok(
+    !/\[CatalogKind\.SECTION\]: Object\.freeze\(\[/.test(src),
+    'CatalogMaintenancePanel.jsx の READONLY_KIND_FIELDS に [CatalogKind.SECTION] がまだ残っている',
+  );
+});
+
+// 寸法系（常に固定=編集不可）の表示項目は別表を持たず、lockedFieldsFor（catalogKinds.js SECTION
+// 登録表のkeyBoundFields）から導出する——固定項目の出所を1本化する（QA指摘M2・2026-09-24再報告の
+// 「本体編集の判定は1つの式を共有する」と同じ趣旨）。
+test('【不変条件・ステップ12g】ui/CatalogMaintenancePanel.jsx: activeKind===SECTIONのときSectionTabを描き、寸法系の固定表示項目はlockedFieldsForから導出しfieldLabel経由で表示する（別表を持たない）', () => {
+  const src = readSrc('ui/CatalogMaintenancePanel.jsx');
+  assert.ok(
+    /activeKind === CatalogKind\.SECTION[\s\S]{0,80}<SectionTab/.test(src),
+    'activeKind===CatalogKind.SECTIONの条件付きで<SectionTabが描かれていない',
+  );
+  assert.ok(
+    !/SECTION_FIXED_DISPLAY_FIELDS/.test(src),
+    'CatalogMaintenancePanel.jsx に SECTION_FIXED_DISPLAY_FIELDS の手書き表が残っている（lockedFieldsFor経由への一本化への退行）',
+  );
+  const tabBody = extractBalancedBody(src, 'function SectionTab() {');
+  assert.ok(tabBody, 'CatalogMaintenancePanel.jsx に SectionTab コンポーネントが見つからない');
+  assert.ok(
+    /lockedFieldsFor\(CatalogKind\.SECTION,/.test(tabBody) && /\.filter\(f => f !== 'key'\)/.test(tabBody),
+    'SectionTab が lockedFieldsFor(CatalogKind.SECTION, …) から\'key\'を除いた固定表示項目を導出していない',
+  );
+  assert.ok(
+    /fieldLabel\(CatalogKind\.SECTION, field\)/.test(tabBody),
+    'SectionTab が固定表示項目のラベルを fieldLabel(CatalogKind.SECTION, field) 経由で表示していない',
+  );
 });
 
 // ---- ステップ8i: 断面の「規格文字列から追加」（一括入力）はcatalog/catalogMaintenance.jsの
@@ -227,12 +241,17 @@ test('【不変条件・ステップ8i】ui/CatalogMaintenancePanel.jsx: 断面�
   assert.ok(!/\[×xX\]/.test(src), 'CatalogMaintenancePanel.jsx に断面規格表記の区切り正規表現が直書きされている（parseSectionSpecList経由への一本化への退行）');
 });
 
-test('【不変条件・ステップ8i】ui/CatalogMaintenancePanel.jsx: SectionBulkImportは断面タブ（CatalogKind.SECTION）専用で、他の閲覧タブには出ない', () => {
+// ステップ12g: SectionBulkImportはSectionTab（断面タブ専用コンポーネント）の内側でだけ描かれる
+// （ReadonlyKindTabへ相乗りしていた8i時点の配線から移行）。
+test('【不変条件・ステップ12g】ui/CatalogMaintenancePanel.jsx: SectionBulkImportはSectionTab専用で、ReadonlyKindTabには出ない', () => {
   const src = readSrc('ui/CatalogMaintenancePanel.jsx');
-  assert.ok(
-    /kind === CatalogKind\.SECTION[\s\S]{0,80}<SectionBulkImport/.test(src),
-    'SectionBulkImportがCatalogKind.SECTION条件付きでレンダーされていない',
-  );
+  const sectionTabBody = extractBalancedBody(src, 'function SectionTab() {');
+  assert.ok(sectionTabBody, 'CatalogMaintenancePanel.jsx に SectionTab コンポーネントが見つからない');
+  assert.ok(/<SectionBulkImport\b/.test(sectionTabBody), 'SectionTab が <SectionBulkImport を描いていない');
+
+  const readonlyTabBody = extractBalancedBody(src, 'function ReadonlyKindTab({ kind, builtinList, search, setSearch, selectedKey, setSelectedKey, materialList }) {');
+  assert.ok(readonlyTabBody, 'CatalogMaintenancePanel.jsx に ReadonlyKindTab コンポーネントが見つからない');
+  assert.ok(!/<SectionBulkImport\b/.test(readonlyTabBody), 'ReadonlyKindTab が <SectionBulkImport を描いている（SectionTabへの一本化への退行）');
 });
 
 // ---- ステップ10f: 建具種別（openingSubType）の閲覧タブ（内装マスター・境界マスター・断面と
@@ -688,5 +707,172 @@ test('【不変条件・ステップ12c QA指摘m2】ui/CatalogMaintenancePanel.
   assert.ok(
     /<select[\s\S]{0,40}value=\{backingClassSelectValue\}/.test(src),
     '下地区分のselectがbackingClassSelectValue（backingClassDisplayFor由来）をvalueに使っていない',
+  );
+});
+
+// ================================================================
+// ステップ12g: 内装マスター（InteriorMasterTab）・断面（SectionTab）タブ
+// ================================================================
+
+test('【不変条件・ステップ12g】ui/CatalogMaintenancePanel.jsx: READONLY_KIND_FIELDSにCatalogKind.INTERIOR_MASTER/CatalogKind.SECTIONが無い（閲覧タブから編集タブへ移行済み）', () => {
+  const src = readSrc('ui/CatalogMaintenancePanel.jsx');
+  assert.ok(
+    !/\[CatalogKind\.INTERIOR_MASTER\]: Object\.freeze\(\[/.test(src),
+    'CatalogMaintenancePanel.jsx の READONLY_KIND_FIELDS に [CatalogKind.INTERIOR_MASTER] がまだ残っている',
+  );
+  assert.ok(
+    !/\[CatalogKind\.SECTION\]: Object\.freeze\(\[/.test(src),
+    'CatalogMaintenancePanel.jsx の READONLY_KIND_FIELDS に [CatalogKind.SECTION] がまだ残っている',
+  );
+});
+
+test('【不変条件・ステップ12g】ui/CatalogMaintenancePanel.jsx: activeKind===INTERIOR_MASTERのときInteriorMasterTabをmaterialList付きで描き、12aの共通ロジック（rowEditState/lockedFieldsFor/planSaveEntry）をCatalogKind.INTERIOR_MASTER付きで直接呼ぶ', () => {
+  const src = readSrc('ui/CatalogMaintenancePanel.jsx');
+  assert.ok(
+    /activeKind === CatalogKind\.INTERIOR_MASTER[\s\S]{0,120}<InteriorMasterTab materialList=\{builtinList\}/.test(src),
+    'activeKind===CatalogKind.INTERIOR_MASTERの条件付きで<InteriorMasterTab materialList={builtinList}が描かれていない',
+  );
+  const body = extractBalancedBody(src, 'function InteriorMasterTab({ materialList }) {');
+  assert.ok(body, 'CatalogMaintenancePanel.jsx に InteriorMasterTab コンポーネントが見つからない');
+  for (const fn of ['rowEditState', 'lockedFieldsFor', 'planSaveEntry']) {
+    assert.ok(
+      new RegExp(`${fn}\\(CatalogKind\\.INTERIOR_MASTER`).test(body),
+      `InteriorMasterTab が ${fn}(CatalogKind.INTERIOR_MASTER, …) を呼んでいない`,
+    );
+  }
+});
+
+test('【不変条件・ステップ12g】ui/CatalogMaintenancePanel.jsx: InteriorMasterTabはuseCatalogEditActions(CatalogKind.INTERIOR_MASTER, …)を呼び、削除・標準に戻す・保存の確認ブロックをDeleteConfirmBlock/RevertConfirmBlock/SaveConfirmBlockへ委譲する', () => {
+  const src = readSrc('ui/CatalogMaintenancePanel.jsx');
+  const body = extractBalancedBody(src, 'function InteriorMasterTab({ materialList }) {');
+  assert.ok(body, 'CatalogMaintenancePanel.jsx に InteriorMasterTab コンポーネントが見つからない');
+  assert.ok(
+    /useCatalogEditActions\(CatalogKind\.INTERIOR_MASTER,/.test(body),
+    'InteriorMasterTab が useCatalogEditActions(CatalogKind.INTERIOR_MASTER, …) を呼んでいない',
+  );
+  for (const component of ['DeleteConfirmBlock', 'RevertConfirmBlock', 'SaveConfirmBlock']) {
+    assert.ok(new RegExp(`<${component}\\b`).test(body), `InteriorMasterTab が <${component} を描いていない`);
+  }
+});
+
+test('【不変条件・ステップ12g】ui/CatalogMaintenancePanel.jsx: InteriorMasterTabの追加・複製はnextInteriorMasterKeyでキーを採番し、追加時だけvalidateInteriorMasterFormへisAdding:trueを渡す（ユーザーがキーを直接入力する欄が無い）', () => {
+  const src = readSrc('ui/CatalogMaintenancePanel.jsx');
+  const body = extractBalancedBody(src, 'function InteriorMasterTab({ materialList }) {');
+  assert.ok(body, 'CatalogMaintenancePanel.jsx に InteriorMasterTab コンポーネントが見つからない');
+  assert.ok(/\bnextInteriorMasterKey\(/.test(body), 'InteriorMasterTab が nextInteriorMasterKey を呼んでいない');
+  assert.ok(
+    /validateInteriorMasterForm\(form, \{ isAdding: true/.test(body),
+    'InteriorMasterTab の新規追加経路が validateInteriorMasterForm(form, { isAdding: true, … }) を呼んでいない',
+  );
+  // キーの直接入力欄（<input ... form.key ...>）が無いことの確認——記号（fixtureSymbol）の
+  // 追加時と違い、キーは常にnextInteriorMasterKeyの採番値をそのまま表示する。
+  assert.ok(
+    !/<input[\s\S]{0,120}value=\{form\.key\}/.test(body),
+    'InteriorMasterTab に form.key を直接編集するinputがある（キーは自動採番のみのはず）',
+  );
+});
+
+// ---- QA指摘M1（12g再報告）: 壁材・壁仕上げコードの実在検査（materialKeys）の配線 ----
+test('【不変条件・QA指摘M1・12g再報告】ui/CatalogMaintenancePanel.jsx: InteriorMasterTabはcollectKnownCatalogKeys(CatalogKind.MATERIAL, materialList)でmaterialKeysを組み立て、追加・編集どちらのvalidateInteriorMasterFormにも渡す', () => {
+  const src = readSrc('ui/CatalogMaintenancePanel.jsx');
+  const body = extractBalancedBody(src, 'function InteriorMasterTab({ materialList }) {');
+  assert.ok(body, 'CatalogMaintenancePanel.jsx に InteriorMasterTab コンポーネントが見つからない');
+  assert.ok(
+    /collectKnownCatalogKeys\(CatalogKind\.MATERIAL, materialList\)/.test(body),
+    'InteriorMasterTab が collectKnownCatalogKeys(CatalogKind.MATERIAL, materialList) でmaterialKeysを組み立てていない',
+  );
+  assert.ok(
+    /validateInteriorMasterForm\(form, \{ isAdding: true, allKeys, builtinKeys, materialKeys \}\)/.test(body),
+    'InteriorMasterTab の新規追加経路が validateInteriorMasterForm(…, { …, materialKeys }) へmaterialKeysを渡していない',
+  );
+  assert.ok(
+    /validateInteriorMasterForm\(form, \{ isAdding: false, materialKeys \}\)/.test(body),
+    'InteriorMasterTab の編集経路が validateInteriorMasterForm(…, { isAdding: false, materialKeys }) へmaterialKeysを渡していない',
+  );
+});
+
+test('【不変条件・QA指摘M1・12g再報告】ui/CatalogMaintenancePanel.jsx: InteriorMasterTabはmaterialListLoaded: Boolean(materialList)をinteriorMasterRowDisabledReasonへ渡し、未読込みの間は保存ボタンをdisabledにする', () => {
+  const src = readSrc('ui/CatalogMaintenancePanel.jsx');
+  const body = extractBalancedBody(src, 'function InteriorMasterTab({ materialList }) {');
+  assert.ok(body, 'CatalogMaintenancePanel.jsx に InteriorMasterTab コンポーネントが見つからない');
+  assert.ok(
+    /interiorMasterRowDisabledReason\(\{ isAdding, editState, materialListLoaded: Boolean\(materialList\) \}\)/.test(body),
+    'InteriorMasterTab が interiorMasterRowDisabledReason へ materialListLoaded: Boolean(materialList) を渡していない',
+  );
+});
+
+test('【不変条件・ステップ12g】ui/CatalogMaintenancePanel.jsx: activeKind===SECTIONのときSectionTabを描き、12aの共通ロジック（rowEditState/lockedFieldsFor/planSaveEntry）をCatalogKind.SECTION付きで直接呼ぶ', () => {
+  const src = readSrc('ui/CatalogMaintenancePanel.jsx');
+  assert.ok(
+    /activeKind === CatalogKind\.SECTION[\s\S]{0,80}<SectionTab/.test(src),
+    'activeKind===CatalogKind.SECTIONの条件付きで<SectionTabが描かれていない',
+  );
+  const body = extractBalancedBody(src, 'function SectionTab() {');
+  assert.ok(body, 'CatalogMaintenancePanel.jsx に SectionTab コンポーネントが見つからない');
+  for (const fn of ['rowEditState', 'lockedFieldsFor', 'planSaveEntry']) {
+    assert.ok(
+      new RegExp(`${fn}\\(CatalogKind\\.SECTION`).test(body),
+      `SectionTab が ${fn}(CatalogKind.SECTION, …) を呼んでいない`,
+    );
+  }
+});
+
+test('【不変条件・ステップ12g】ui/CatalogMaintenancePanel.jsx: SectionTabはuseCatalogEditActions(CatalogKind.SECTION, …)を呼び、削除・標準に戻す・保存の確認ブロックをDeleteConfirmBlock/RevertConfirmBlock/SaveConfirmBlockへ委譲する', () => {
+  const src = readSrc('ui/CatalogMaintenancePanel.jsx');
+  const body = extractBalancedBody(src, 'function SectionTab() {');
+  assert.ok(body, 'CatalogMaintenancePanel.jsx に SectionTab コンポーネントが見つからない');
+  assert.ok(
+    /useCatalogEditActions\(CatalogKind\.SECTION,/.test(body),
+    'SectionTab が useCatalogEditActions(CatalogKind.SECTION, …) を呼んでいない',
+  );
+  for (const component of ['DeleteConfirmBlock', 'RevertConfirmBlock', 'SaveConfirmBlock']) {
+    assert.ok(new RegExp(`<${component}\\b`).test(body), `SectionTab が <${component} を描いていない`);
+  }
+});
+
+// 設計12g「断面は追加は既存の『規格文字列から追加』のみ」: SectionTabは新規追加フォーム
+// （+ 新規追加ボタン・isAdding分岐）を持たない——寸法系を利用者が直接組み立てる経路を増やさない。
+test('【不変条件・ステップ12g】ui/CatalogMaintenancePanel.jsx: SectionTabは「+ 新規追加」ボタン・複製ボタンを持たない（追加は規格文字列の一括入力のみ）', () => {
+  const src = readSrc('ui/CatalogMaintenancePanel.jsx');
+  const body = extractBalancedBody(src, 'function SectionTab() {');
+  assert.ok(body, 'CatalogMaintenancePanel.jsx に SectionTab コンポーネントが見つからない');
+  assert.ok(!/新規追加/.test(body), 'SectionTab に「新規追加」ボタンがある（設計スコープ外）');
+  assert.ok(!/複製/.test(body), 'SectionTab に「複製」ボタンがある（設計スコープ外）');
+  assert.ok(/<SectionBulkImport\b/.test(body), 'SectionTab が <SectionBulkImport を描いていない（追加は規格文字列の一括入力のみ）');
+});
+
+// buildSectionEntryはprevEntry（選択行の元エントリ）を必須で受け取る設計——SectionTabが
+// selectedRow.entryを渡していることを固定する（寸法系を勝手に組み立てさせない歯止め）。
+test('【不変条件・ステップ12g】ui/CatalogMaintenancePanel.jsx: SectionTabのhandleSaveはbuildSectionEntry(selectedRow.entry, form)を呼ぶ（寸法系をprevEntryから引き継ぐ）', () => {
+  const src = readSrc('ui/CatalogMaintenancePanel.jsx');
+  const body = extractBalancedBody(src, 'function SectionTab() {');
+  assert.ok(body, 'CatalogMaintenancePanel.jsx に SectionTab コンポーネントが見つからない');
+  assert.ok(
+    /buildSectionEntry\(selectedRow\.entry, form\)/.test(body),
+    'SectionTab の handleSave が buildSectionEntry(selectedRow.entry, form) を呼んでいない',
+  );
+});
+
+// QA指摘「足りないテスト」（12g再報告）: SectionTabが選択行の作図プレビューをCatalogPreview経由で
+// 描いていること（断面タブでも9b/9cと同じ作図プレビューが見える契約）を固定する。
+test('【不変条件・ステップ12g】ui/CatalogMaintenancePanel.jsx: SectionTabは選択行を<CatalogPreview kind={CatalogKind.SECTION} entry={selectedRow.entry}で描く', () => {
+  const src = readSrc('ui/CatalogMaintenancePanel.jsx');
+  const body = extractBalancedBody(src, 'function SectionTab() {');
+  assert.ok(body, 'CatalogMaintenancePanel.jsx に SectionTab コンポーネントが見つからない');
+  assert.ok(
+    /<CatalogPreview kind=\{CatalogKind\.SECTION\} entry=\{selectedRow\.entry\}/.test(body),
+    'SectionTab が <CatalogPreview kind={CatalogKind.SECTION} entry={selectedRow.entry} を描いていない',
+  );
+});
+
+// QA指摘M2（12g再報告）の配線確認: SectionTabがrowEditStateの戻り値（stateを含むeditState）を
+// そのままsectionRowDisabledReasonへ渡していること（.state分岐が実際に機能する形で呼ばれている）。
+test('【不変条件・QA指摘M2・12g再報告】ui/CatalogMaintenancePanel.jsx: SectionTabはsectionRowDisabledReason({ isAdding: false, editState })を呼ぶ（editStateはrowEditStateの戻り値そのもの＝.stateを含む）', () => {
+  const src = readSrc('ui/CatalogMaintenancePanel.jsx');
+  const body = extractBalancedBody(src, 'function SectionTab() {');
+  assert.ok(body, 'CatalogMaintenancePanel.jsx に SectionTab コンポーネントが見つからない');
+  assert.ok(
+    /sectionRowDisabledReason\(\{ isAdding: false, editState \}\)/.test(body),
+    'SectionTab が sectionRowDisabledReason({ isAdding: false, editState }) を呼んでいない',
   );
 });
