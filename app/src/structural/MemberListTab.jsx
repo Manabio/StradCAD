@@ -19,7 +19,7 @@ import {
 import { alignToOuterFace, autoFillColumnSizes, autoFillColumnBaseSizes, isRigidFrameStructure, beamAxisCenterLines,
   autoFillBeamEccentricity, autoBeamEccentricity, faceGapForEccentricity, autoFillColumnAxisOffsets, axisExteriorSign, resolveLowestGraph } from './structuralAutoFill.js';
 import { buildExteriorSide } from './wallGate.js';
-import { SECTION_CATALOG, findSectionEntry, SectionShape, WOOD_SQUARE_WIDTHS } from './sectionCatalog.js';
+import { findSectionEntry, sectionList, SectionShape, WOOD_SQUARE_WIDTHS } from './sectionCatalog.js';
 import { renumberMembers, floorRankOf, previewSplitTag, floorSpanLabel, assignNumbers, standardBeamSectionFor } from './memberNumbering.js';
 import { splitGroup, releaseFromGroup, mergeGroups, getGroupManualTag, setGroupManualTag, clearGroupManualTag, snapshotLedger, restoreLedger, allManualTags } from './memberGroups.js';
 import { serializeGraph, restoreGraph } from '../graphSnapshot.js';
@@ -1577,7 +1577,7 @@ const MemberFieldInput = observer(({ members, fieldDef, graph, group, project, r
   }
   if (fieldDef.kind === 'section') {
     // 柱は正角材を想定（仕様）——木造の梁断面（幅<成）は柱の選択肢に出さない。
-    const options = SECTION_CATALOG.filter(s => s.materialType === members[0].materialType
+    const options = sectionList().filter(s => s.materialType === members[0].materialType
       && (group.mapName !== 'columnMap' || s.materialType !== 'WOOD' || s.width === s.height));
     // 断面変更時、柱芯オフセットが入っている軸については「外側面で揃える」よう個別偏心量を補正する
     // （alignToOuterFace。基準幅=その材料の既定断面幅、補正方向=既存オフセットの符号）。

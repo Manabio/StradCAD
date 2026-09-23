@@ -8,7 +8,17 @@
 // 規格鋼材（H形鋼・角形鋼管）は数が多いため、規格表記文字列から展開する
 // ビルダー（buildHSections / buildSquarePipes）で生成する。木・RCは点数が
 // 少ないため従来どおり明示エントリで持つ。
+//
+// findSectionEntry・woodRectSectionKey は catalog/catalogRegistry.js の overlay
+// （文書同梱doc・ユーザーライブラリuser）込みで解決する（ステップ8d・2026-09-23）。
+// 本ファイル自身は catalog/*.js の純モジュール不変条件（catalogImports.test.js）の
+// 対象外——sectionCatalog.js は catalog/ 配下ではないため、catalogRegistry.js・
+// catalogKinds.js を静的 import してよい（本ファイルが本体標準マスタとして動的
+// import(...) される側であることと矛盾しない）。
 // ================================================================
+
+import { CatalogKind } from '../catalog/catalogKinds.js';
+import { composeCatalog, composeList, overlayGeneration } from '../catalog/catalogRegistry.js';
 
 export const SectionShape = Object.freeze({
   SQUARE_PIPE: 'squarePipe', // 角形鋼管
@@ -79,10 +89,14 @@ function buildWoodRects() {
   return out;
 }
 
-/** 木造の矩形断面キー（幅×成）。カタログに無い組み合わせは null。 */
+/**
+ * 木造の矩形断面キー（幅×成）。カタログに無い組み合わせは null。
+ * overlay込み（裁定Q-A・2026-09-23）——ユーザーがoverlayに `WOOD-{幅}x{成}` を追加登録
+ * すれば、その組み合わせもここで拾える（catalogMapを見るため。下記catalogMap参照）。
+ */
 export function woodRectSectionKey(width, height) {
   const key = `WOOD-${width}x${height}`;
-  return SECTION_CATALOG.some(s => s.key === key) ? key : null;
+  return catalogMap().has(key) ? key : null;
 }
 
 // --- カタログ本体 --------------------------------------------------------------
@@ -99,8 +113,55 @@ export const SECTION_CATALOG = [
   { key: 'RC-ROUND350', materialType: 'RC', shape: SectionShape.ROUND, width: 350, height: 350, label: 'RC丸 φ350' },
 ];
 
+// --- registry 経由の読み出し口＋メモ化（ステップ8d・2026-09-23） --------------------
+//
+// findSectionEntry・woodRectSectionKey は平面描画（StructuralLayer.jsx）・断面図
+// （sectionFigure/）・柱寸法欄等から部材ごとに呼ばれるホットパスのため、overlay合成
+// （composeCatalog）の結果Mapをモジュールスコープでメモ化する。キーは
+// catalogRegistry.js の overlay世代カウンタ overlayGeneration()——setOverlay/
+// clearOverlaysが呼ばれる度に必ず++されるので、世代が変わらない間はcomposeCatalogを
+// 呼び直さずキャッシュしたMapを返す。overlayが空のときcomposeCatalogは
+// SECTION_CATALOGの各要素と同一参照を持つMapを返す（コピーしない）——本キャッシュも
+// そのMapをそのまま保持するだけなので、overlay無しの環境では常に同一オブジェクト
+// 参照を返す。
+//
+// 【明示引数方式からの意図的な逸脱】structural/structuralResolveContext.js の規律
+// （構造再計算の「解決コンテキスト」は明示引数でのみ渡す・モジュール変数保持は禁止）は
+// 1回の境界処理という寿命が区切れる呼び出し経路のためのもの。findSectionEntry等は
+// getter（描画・断面図から直接呼ばれ、呼び出し側が構造コンテキストを持たない場面がある）
+// であり、境界処理の呼び出しツリーに乗らないため同じ規律を適用できない——世代カウンタに
+// よる自己無効化に留める（overlayが変わらない限り安全に共有できる）。
+//
+// composeCatalogはR17（登録表のdedupeFields完全一致による重複検出。未知kindなら
+// kindDefが例外）を毎回検査するため例外を投げうる経路を持つが、section の
+// dedupeFields は null（catalogKinds.js registry参照）でR17はno-op、かつ本キャッシュ
+// によりcomposeCatalogが実際に呼ばれるのはoverlayが変化した直後の1回だけ（以降は
+// 世代一致でMapを再利用）——描画・計算のたびに例外パスを通ることはない。
+let _map = null;
+let _gen = -1;
+
+function catalogMap() {
+  const gen = overlayGeneration();
+  if (_map === null || _gen !== gen) {
+    _map = composeCatalog(CatalogKind.SECTION, SECTION_CATALOG);
+    _gen = gen;
+  }
+  return _map;
+}
+
+/** 断面キー → エントリ（overlay込み。無ければnull）。 */
 export function findSectionEntry(sectionDefId) {
-  return SECTION_CATALOG.find(s => s.key === sectionDefId) ?? null;
+  return catalogMap().get(sectionDefId) ?? null;
+}
+
+/**
+ * 一覧UI用（保守パネル断面タブ・MemberListTabの断面プルダウン等）: builtinの並びを保ち、
+ * user/doc追加分（builtinに無いキー）を末尾に置く。overlayが空ならSECTION_CATALOGと
+ * 同じ要素・同じ順序。呼ぶ度に合成し直す（一覧UIはfindSectionEntryほどの高頻度呼び出し
+ * ではないためメモ化しない）。
+ */
+export function sectionList() {
+  return composeList(CatalogKind.SECTION, SECTION_CATALOG);
 }
 
 // ダイヤフラム出寸法 e の既定値（mm）。スキンプレート厚 t の境界 28mm で切り替える。
