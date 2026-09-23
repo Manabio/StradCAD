@@ -20,18 +20,18 @@ import {
 import { arcPathD } from './ShapesLayer.jsx';
 import { LodLevel, resolveStrokeWidth } from '../viewport.js';
 import { wallFinishLineWeight } from '../finish/wallFinishJoin.js';
-import { buildOpeningPlanSymbol, tickEndpoints } from '../openings/openingPlanSymbol.js';
+import { buildOpeningPlanSymbol, tickEndpoints, FRAME_HINGE_INSET_MM, FRAME_LATCH_INSET_MM } from '../openings/openingPlanSymbol.js';
 
 // 引き違い 詳細LOD用（すべて mm）
 const SLIDE_TRACK_INSET_MM = 4;       // 枠から戸先・召し合わせレールまでの隙間
 const WEATHERSTRIP_DASH    = [6, 4];  // 召し合わせ部・気密材(モヘア)の破線パターン
 
-// 開き戸 詳細LOD用 枠寸法（すべて mm）
-const DOOR_HINGE_GAP_MM       = 5;  // 開いた扉と吊元側の方立との隙間
-// 吊元側後退量: 方立の全幅(30) - 吊元と方立の隙間(5)
-const FRAME_HINGE_INSET_MM = FRAME_JAMB_WIDTH_MM - DOOR_HINGE_GAP_MM;
-// 戸先側後退量: 反対側の方立の「本体20mm」境界にぴったり納まる位置
-const FRAME_LATCH_INSET_MM = FRAME_JAMB_WIDTH_MM - FRAME_KAKARI_WIDTH_MM;
+// 開き戸 詳細LOD用 枠寸法（FRAME_HINGE_INSET_MM/FRAME_LATCH_INSET_MMはopenings/openingPlanSymbol.js
+// へ移設——ステップ11b-1でSWINGを移行し呼び出し元がswingSymbol経由の旧経路のみになったため、
+// 定数の唯一の定義箇所をそちらに一本化する（TICK_HALF_MMと同じ扱い）。この節の下のswingSymbol等は
+// 11b-1で移行していない他の蝶番系（SWING_DOUBLE/SWING_CHILD/FREE/FREE_DOUBLE/FIRE_DOOR/FIRE_FOLD）が
+// 引き続き使うため残す。SWING分岐（renderOpeningSymbol内、本ファイル816-830行）自体は
+// buildOpeningPlanSymbolが非nullを返すため11b-1以降は到達しない（11eでnull経路ごと削除）。
 
 // 新機構用の記号寸法（すべて mm）
 const FOLD_AMPLITUDE_MM  = 120; // 折れ戸・折りたたみ窓のジグザグ振幅
