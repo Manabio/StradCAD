@@ -5,10 +5,11 @@ import {
   buildMaterialEntry, duplicateMaterialEntry, validateMaterialEntry,
   upsertUserMaterialEntry, removeUserMaterialEntry, buildUserMaterialBundle, commitUserEntries,
   isEditableMaterialCategory, MATERIAL_CATEGORY, canEditMaterialRow, parseThicknessInput,
-  planRealign, realignTargets,
+  planRealign, realignTargets, planBulkSectionImport,
 } from './catalogMaintenance.js';
 import { setOverlay, clearOverlays, overlayFor, docDiffMap } from './catalogRegistry.js';
 import { CatalogKind } from './catalogKinds.js';
+import { parseSectionSpecList } from '../structural/sectionCatalog.js';
 
 test.afterEach(() => clearOverlays());
 
@@ -436,4 +437,115 @@ test('【失敗系】planRealign: 文書同梱(doc)に無いキーは例外', ()
     () => planRealign(CatalogKind.MATERIAL, '999999999999', { builtinList: [] }),
     /文書同梱に無いキーです/,
   );
+});
+
+// ---- planBulkSectionImport（ステップ8i: 断面の規格文字列一括入力）----
+function sectionEntry(overrides) {
+  return {
+    key: 'STEEL-H200x100', materialType: 'STEEL', shape: 'hSection',
+    width: 100, height: 200, webThickness: 5.5, flangeThickness: 8, label: 'H-200×100×5.5×8',
+    ...overrides,
+  };
+}
+
+test('planBulkSectionImport: 解析できた行はtoAddへ（builtin・overlayどちらにも無いキー）', () => {
+  const builtin = [sectionEntry()]; // STEEL-H200x100のみ
+  const result = planBulkSectionImport('H400×200×8×13 / □250×250×9', { builtinList: builtin, parseSpecList: parseSectionSpecList });
+  assert.deepEqual(result.toAdd.map(e => e.key), ['STEEL-H400x200', 'STEEL-SQ250x250x9']);
+  assert.deepEqual(result.skipped, []);
+  assert.deepEqual(result.errors, []);
+});
+
+test('【失敗系】planBulkSectionImport: builtinと衝突する行は「既にあります（標準）」でskippedへ、toAddに含めない', () => {
+  const builtin = [sectionEntry()]; // STEEL-H200x100
+  const result = planBulkSectionImport('H200×100×5.5×8', { builtinList: builtin, parseSpecList: parseSectionSpecList });
+  assert.deepEqual(result.toAdd, []);
+  assert.equal(result.skipped.length, 1);
+  assert.equal(result.skipped[0].line, 'H-200×100×5.5×8');
+  assert.match(result.skipped[0].reason, /既にあります（標準）/);
+});
+
+test('【失敗系】planBulkSectionImport: userライブラリと衝突する行は「既にあります（ライブラリ）」でskippedへ', () => {
+  const builtin = [];
+  setOverlay(CatalogKind.SECTION, { user: [sectionEntry()] });
+  const result = planBulkSectionImport('H200×100×5.5×8', { builtinList: builtin, parseSpecList: parseSectionSpecList });
+  assert.deepEqual(result.toAdd, []);
+  assert.match(result.skipped[0].reason, /既にあります（ライブラリ）/);
+});
+
+test('【失敗系】planBulkSectionImport: 文書同梱(doc)と衝突する行は「既にあります（同梱）」でskippedへ', () => {
+  const builtin = [];
+  setOverlay(CatalogKind.SECTION, { doc: [sectionEntry()] });
+  const result = planBulkSectionImport('H200×100×5.5×8', { builtinList: builtin, parseSpecList: parseSectionSpecList });
+  assert.deepEqual(result.toAdd, []);
+  assert.match(result.skipped[0].reason, /既にあります（同梱）/);
+});
+
+// ---- QA指摘Minor-B1（2026-09-23）: キーが違っても内容（matchFields）完全一致なら重複として除外する ----
+// 角形鋼管はキーに板厚の文字列表現をそのまま使うため、'□250×250×9'（parseSectionSpec由来のキーは
+// 'STEEL-SQ250x250x9'）と builtin の 'STEEL-SQ250x250x9.0' はキーが別だが内容は同一。
+function squarePipeEntry(overrides) {
+  return {
+    key: 'STEEL-SQ250x250x9.0', materialType: 'STEEL', shape: 'squarePipe',
+    width: 250, height: 250, wallThickness: 9, label: '□-250×250×9.0',
+    ...overrides,
+  };
+}
+
+test('【QA指摘Minor-B1】planBulkSectionImport: キーが違っても内容が完全一致すれば「既にあります（出所）」でskippedへ、内容が違えばtoAdd', () => {
+  const builtin = [squarePipeEntry()]; // STEEL-SQ250x250x9.0（板厚9）
+  const result = planBulkSectionImport('□250×250×9 / □250×250×9.0 / □250×250×12', {
+    builtinList: builtin, parseSpecList: parseSectionSpecList,
+  });
+  // □250×250×9（キーはSTEEL-SQ250x250x9で別キーだが内容は同一）→ 内容一致でskipped
+  // □250×250×9.0（キーも内容も同一）→ 既存キー一致でskipped
+  assert.equal(result.skipped.length, 2, `skipped=${JSON.stringify(result.skipped)}`);
+  assert.ok(result.skipped.every(s => /既にあります（標準）/.test(s.reason)), 'skippedの理由が「既にあります（標準）」でない行がある');
+  assert.deepEqual(result.skipped.map(s => s.line), ['□-250×250×9', '□-250×250×9.0']);
+  // □250×250×12（板厚12。builtinに同内容の断面が無い）→ toAdd
+  assert.deepEqual(result.toAdd.map(e => e.key), ['STEEL-SQ250x250x12']);
+  assert.deepEqual(result.errors, []);
+});
+
+test('【QA指摘Minor-B1】planBulkSectionImport: 内容一致の出所はuser/docでも同様に判定される（ライブラリ/同梱）', () => {
+  setOverlay(CatalogKind.SECTION, { user: [squarePipeEntry({ key: 'STEEL-SQ250x250x9.0' })] });
+  const result = planBulkSectionImport('□250×250×9', { builtinList: [], parseSpecList: parseSectionSpecList });
+  assert.equal(result.skipped.length, 1);
+  assert.match(result.skipped[0].reason, /既にあります（ライブラリ）/);
+});
+
+// ---- QA指摘Minor-B2（2026-09-23）: parseSpecListが返すエントリの形が壊れていてもvalidateで捕まり、
+// 他行の処理は継続する（key不正／width・height不正の2種） ----
+test('【QA指摘Minor-B2】planBulkSectionImport: parseSpecListが不正な形のエントリを返してもvalidateでerrorsへ回り、正常な行は続行する', () => {
+  const badKey = { key: '', materialType: 'STEEL', shape: 'hSection', width: 100, height: 100, label: 'key不正' };
+  const badWidth = { key: 'STEEL-BADWIDTH', materialType: 'STEEL', shape: 'hSection', width: 'x', height: 100, label: 'width不正' };
+  const ok = { key: 'STEEL-H400x200', materialType: 'STEEL', shape: 'hSection', width: 200, height: 400, webThickness: 8, flangeThickness: 13, label: 'H-400×200×8×13' };
+  const fakeParseSpecList = () => ({ entries: [badKey, badWidth, ok], errors: [] });
+
+  const result = planBulkSectionImport('（テスト用ダミー文字列。fakeParseSpecListは中身を見ない）', {
+    builtinList: [], parseSpecList: fakeParseSpecList,
+  });
+
+  assert.equal(result.errors.length, 2, `errors=${JSON.stringify(result.errors)}`);
+  assert.match(result.errors[0].reason, /keyが不正です/);
+  assert.match(result.errors[1].reason, /width\/heightが不正です/);
+  assert.deepEqual(result.toAdd.map(e => e.key), ['STEEL-H400x200']);
+  assert.deepEqual(result.skipped, []);
+});
+
+test('【失敗系】planBulkSectionImport: 解析できない行はerrorsへ回り、他行のtoAdd判定は続行する（変異=エラー行で全体が壊れると赤）', () => {
+  const builtin = [sectionEntry()];
+  const result = planBulkSectionImport('H400×200×8×13 / bogus / H200×100×5.5×8', {
+    builtinList: builtin, parseSpecList: parseSectionSpecList,
+  });
+  assert.deepEqual(result.toAdd.map(e => e.key), ['STEEL-H400x200']);
+  assert.equal(result.skipped.length, 1, 'builtinと衝突するH200x100はskipped');
+  assert.equal(result.errors.length, 1);
+  assert.equal(result.errors[0].line, 'bogus');
+  assert.match(result.errors[0].reason, /未対応の断面記号/);
+});
+
+test('planBulkSectionImport: 空文字は toAdd/skipped/errors すべて空', () => {
+  const result = planBulkSectionImport('', { builtinList: [], parseSpecList: parseSectionSpecList });
+  assert.deepEqual(result, { toAdd: [], skipped: [], errors: [] });
 });

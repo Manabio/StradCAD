@@ -45,31 +45,94 @@ function splitSpecs(specs) {
   return specs.trim().split('/').map(s => s.trim()).filter(Boolean);
 }
 
-// "H300×150×6.5×9" → H形鋼エントリ。成=height, 幅=width。
-function buildHSections() {
-  return splitSpecs(H_SECTION_SPECS).map(spec => {
-    const [height, width, web, flange] = spec.replace(/^H/, '').split('×').map(Number);
+// 全角英数字・全角×・全角．を半角へ変換する（規格文字列の一括入力欄からの貼り付け対策。
+// 全角ASCII互換ブロック U+FF01-FF5E は半角へ -0xFEE0 する規則で数字・記号・アルファベットとも揃う）。
+function toHalfWidth(s) {
+  return s.replace(/[！-～]/g, ch => String.fromCharCode(ch.charCodeAt(0) - 0xFEE0));
+}
+
+/**
+ * 規格表記の文字列1件を断面エントリへ変換する（ステップ8i・一括入力用。H形鋼・角形鋼管のみ対応——
+ * 丸形鋼管・木造・RCは規格表記リストを持たない個別エントリのため対象外）。
+ * 対応形式: 'H300×150×6.5×9'（成×幅×ウェブ厚×フランジ厚）・'□200×200×9.0'（辺×辺×板厚）。
+ * 区切りは ×/x/X（全角含む）を許容、前後の空白・全角数字も許容する（toHalfWidthで正規化）。
+ * buildHSections/buildSquarePipes は本関数経由でSECTION_CATALOGを組み立てる（唯一の解釈ロジック——
+ * 二重実装しない）。解釈できなければ日本語例外を投げる。
+ * @param {string} spec
+ * @returns {{key:string, materialType:string, shape:string, width:number, height:number, label:string}}
+ */
+export function parseSectionSpec(spec) {
+  if (typeof spec !== 'string') throw new Error(`断面の規格表記が不正です: ${spec}`);
+  const trimmed = toHalfWidth(spec).trim();
+  if (trimmed === '') throw new Error('断面の規格表記が空です');
+
+  if (/^H/i.test(trimmed)) {
+    const parts = trimmed.slice(1).split(/[×xX]/).map(s => s.trim()).filter(Boolean);
+    if (parts.length !== 4) {
+      throw new Error(`H形鋼の規格表記が不正です（成×幅×ウェブ厚×フランジ厚の4項目が必要です）: ${spec}`);
+    }
+    const [height, width, web, flange] = parts.map(Number);
+    if (![height, width, web, flange].every(Number.isFinite)) {
+      throw new Error(`H形鋼の規格表記に数値でない項目があります: ${spec}`);
+    }
     return {
       key: `STEEL-H${height}x${width}`,
       materialType: 'STEEL', shape: SectionShape.H_SECTION,
       width, height, webThickness: web, flangeThickness: flange,
       label: `H-${height}×${width}×${web}×${flange}`,
     };
-  });
-}
+  }
 
-// "□200×200×9.0" → 角形鋼管エントリ。板厚はキー・描画（中空表現）の両方で使うため文字列・数値とも保持。
-function buildSquarePipes() {
-  return splitSpecs(SQUARE_PIPE_SPECS).map(spec => {
-    const [w, h, t] = spec.replace(/^□/, '').split('×');
-    const width = Number(w), height = Number(h);
+  if (trimmed.startsWith('□')) {
+    const parts = trimmed.slice('□'.length).split(/[×xX]/).map(s => s.trim()).filter(Boolean);
+    if (parts.length !== 3) {
+      throw new Error(`角形鋼管の規格表記が不正です（辺×辺×板厚の3項目が必要です）: ${spec}`);
+    }
+    const [w, h, t] = parts;
+    const width = Number(w), height = Number(h), wallThickness = Number(t);
+    if (![width, height, wallThickness].every(Number.isFinite)) {
+      throw new Error(`角形鋼管の規格表記に数値でない項目があります: ${spec}`);
+    }
     return {
       key: `STEEL-SQ${width}x${height}x${t}`,
       materialType: 'STEEL', shape: SectionShape.SQUARE_PIPE,
-      width, height, wallThickness: Number(t),
+      width, height, wallThickness,
       label: `□-${width}×${height}×${t}`,
     };
-  });
+  }
+
+  throw new Error(`未対応の断面記号です（H形鋼はH、角形鋼管は□で始まる表記に対応しています）: ${spec}`);
+}
+
+/**
+ * 規格表記の一括文字列（' / '・改行・','区切り）を解析する（ステップ8i・保守パネルの一括入力用）。
+ * 失敗した行は捨てず理由付きで errors に積み、他行の解析は継続する。
+ * @param {string} specs
+ * @returns {{ entries: object[], errors: Array<{line:string, reason:string}> }}
+ */
+export function parseSectionSpecList(specs) {
+  const lines = (specs ?? '').split(/[/,\n]/).map(s => s.trim()).filter(Boolean);
+  const entries = [];
+  const errors = [];
+  for (const line of lines) {
+    try {
+      entries.push(parseSectionSpec(line));
+    } catch (e) {
+      errors.push({ line, reason: e.message });
+    }
+  }
+  return { entries, errors };
+}
+
+// "H300×150×6.5×9" → H形鋼エントリ。成=height, 幅=width。parseSectionSpec経由（唯一の解釈ロジック）。
+function buildHSections() {
+  return splitSpecs(H_SECTION_SPECS).map(parseSectionSpec);
+}
+
+// "□200×200×9.0" → 角形鋼管エントリ。板厚はキー・描画（中空表現）の両方で使うため文字列・数値とも保持。
+// parseSectionSpec経由（唯一の解釈ロジック）。
+function buildSquarePipes() {
+  return splitSpecs(SQUARE_PIPE_SPECS).map(parseSectionSpec);
 }
 
 // 木造製材（幅×成）。正角材の幅（柱寸法の候補: 90/105/120。柱・棟木・火打ち・母屋・旧既定105角）ごとに、

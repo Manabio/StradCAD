@@ -186,3 +186,34 @@ test('【不変条件・ステップ8h】ui/CatalogMaintenancePanel.jsx: READONL
   const fnMatch = /function ReadonlyKindTab\(\{[\s\S]*?\n\}/.exec(src);
   assert.ok(fnMatch, 'CatalogMaintenancePanel.jsx に ReadonlyKindTab コンポーネントが見つからない');
 });
+
+// ---- ステップ8i: 断面の「規格文字列から追加」（一括入力）はcatalog/catalogMaintenance.jsの
+// planBulkSectionImport・commitUserEntries経由。.jsx側にパーサ（×/x/X分割等）を直書きしない ----
+test('【不変条件・ステップ8i】ui/CatalogMaintenancePanel.jsx: 断面の一括入力はplanBulkSectionImport・commitUserEntries経由で、パーサをjsxへ直書きしていない', () => {
+  const src = readSrc('ui/CatalogMaintenancePanel.jsx');
+  assert.ok(/\bplanBulkSectionImport\(/.test(src), 'CatalogMaintenancePanel.jsx が planBulkSectionImport を呼んでいない');
+  assert.ok(
+    /commitUserEntries\(\s*CatalogKind\.SECTION/.test(src),
+    'CatalogMaintenancePanel.jsx が commitUserEntries(CatalogKind.SECTION, …) を呼んでいない',
+  );
+  assert.ok(
+    /from ['"]\.\.\/structural\/sectionCatalog\.js['"]/.test(src),
+    'CatalogMaintenancePanel.jsx が structural/sectionCatalog.js から parseSectionSpecList を import していない',
+  );
+  assert.ok(
+    /\bparseSpecList:\s*parseSectionSpecList\b/.test(src),
+    'CatalogMaintenancePanel.jsx が parseSectionSpecList を planBulkSectionImport へ注入していない',
+  );
+  // パーサの直書き（区切り文字の分割・正規表現でのH/□判定）が.jsx側に無いことを確認する
+  // （parseSectionSpecList/parseSectionSpecに一本化する契約。汎用の正規表現使用自体は他機能に
+  // あるため、断面規格表記特有の区切り正規表現 /[×xX]/ が無いことだけを見る）。
+  assert.ok(!/\[×xX\]/.test(src), 'CatalogMaintenancePanel.jsx に断面規格表記の区切り正規表現が直書きされている（parseSectionSpecList経由への一本化への退行）');
+});
+
+test('【不変条件・ステップ8i】ui/CatalogMaintenancePanel.jsx: SectionBulkImportは断面タブ（CatalogKind.SECTION）専用で、他の閲覧タブには出ない', () => {
+  const src = readSrc('ui/CatalogMaintenancePanel.jsx');
+  assert.ok(
+    /kind === CatalogKind\.SECTION[\s\S]{0,80}<SectionBulkImport/.test(src),
+    'SectionBulkImportがCatalogKind.SECTION条件付きでレンダーされていない',
+  );
+});

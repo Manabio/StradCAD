@@ -16,8 +16,8 @@
 // ================================================================
 
 import { CatalogKind, kindDef, listKinds, KIND_LABELS } from './catalogKinds.js';
-import { composeList, docDiffMap, originOf, overlayFor, setOverlay } from './catalogRegistry.js';
-import { assertNoDuplicate, displayNameOf } from './catalogMatch.js';
+import { composeCatalog, composeList, docDiffMap, originOf, overlayFor, setOverlay } from './catalogRegistry.js';
+import { assertNoDuplicate, displayNameOf, matchByContent } from './catalogMatch.js';
 import { diffPairs } from './catalogDiffView.js';
 import { nextSerial, parseMaterialCode, formatMaterialCode } from './materialCode.js';
 import { emptyBundle, withEntries } from './catalogBundle.js';
@@ -312,6 +312,66 @@ export async function commitUserEntries(kind, nextUser, prevUser, { saveFn }) {
  * @returns {{ ok: true, diffPairs: object[], baseOrigin: 'user'|'builtin', baseEntry: object }
  *         | { ok: false, reason: string }}
  */
+/** ステップ8i: 一括入力の衝突行の理由文言に使う出所ラベル（ui/CatalogMaintenancePanel.jsxのORIGIN_LABELSと同じ日本語）。 */
+const SECTION_IMPORT_ORIGIN_LABELS = Object.freeze({ doc: '同梱', user: 'ライブラリ', builtin: '標準' });
+
+/**
+ * ステップ8i（規格文字列の一括入力）: 断面の規格文字列（一括）から追加するエントリのプランを
+ * 組み立てる純関数（I/Oしない）。specText の解析自体は structural/sectionCatalog.js の
+ * parseSectionSpecList が担う——catalog/*.js は本体標準マスタ（structural/sectionCatalog.js含む）を
+ * 静的importできない不変条件（catalogImports.test.js）のため、呼び出し側が parseSpecList として
+ * 注入する（commitUserEntriesのsaveFnと同じDI型。「純関数（I/Oしない）」の契約上、本関数の中では
+ * import(...)しない）。
+ *
+ * 手順: (1) parseSpecList(specText) で解析（解釈できない行はerrors） (2) 各エントリを
+ * kindDef(section).validate（parseSpecListが返す形が壊れていないかの保険） (3) 既存キー
+ * （builtin+user+doc合成後。composeCatalogは常に最新のoverlay状態=overlayFor(kind)を読む）と
+ * 衝突する行は「既にあります（出所）」でskippedへ（builtinと同キーの編集はこのパネルでは不可——
+ * ステップ12。上書きしない） (4) キーが違っても内容（matchFields）完全一致なら同じく
+ * 「既にあります（出所）」でskippedへ（QA指摘Minor-B1・2026-09-23: 角形鋼管はキーに板厚の文字列
+ * 表現をそのまま使うため、'□250×250×9' と builtin の 'STEEL-SQ250x250x9.0' のように内容が
+ * 同一でもキーが別になりうる——catalogMatch.jsのmatchByContent（既存のR14照合ロジック。
+ * 二重実装しない）で exact 判定できた行は、一致先エントリの出所を理由に添えて除外する）。
+ * (5) 残りをtoAddへ。
+ * @param {string} specText
+ * @param {{ builtinList: object[], parseSpecList: (specText: string) => { entries: object[], errors: Array<{line:string, reason:string}> } }} args
+ * @returns {{ toAdd: object[], skipped: Array<{line:string, reason:string}>, errors: Array<{line:string, reason:string}> }}
+ */
+export function planBulkSectionImport(specText, { builtinList, parseSpecList }) {
+  const def = kindDef(CatalogKind.SECTION);
+  const { entries, errors: parseErrors } = parseSpecList(specText);
+  const errors = [...parseErrors];
+  const merged = composeCatalog(CatalogKind.SECTION, builtinList);
+  const mergedEntries = [...merged.values()];
+
+  const toAdd = [];
+  const skipped = [];
+  for (const entry of entries) {
+    try {
+      def.validate(entry);
+    } catch (e) {
+      errors.push({ line: entry.label ?? entry.key ?? '(不明)', reason: e.message });
+      continue;
+    }
+    const key = def.keyOf(entry);
+    if (merged.has(key)) {
+      const origin = originOf(CatalogKind.SECTION, key, builtinList) ?? 'builtin';
+      skipped.push({ line: entry.label, reason: `既にあります（${SECTION_IMPORT_ORIGIN_LABELS[origin] ?? origin}）` });
+      continue;
+    }
+    // QA指摘Minor-B1: キーが違っても内容（matchFields）完全一致なら重複として除外する。
+    const { exact, hits } = matchByContent(CatalogKind.SECTION, entry, mergedEntries);
+    if (exact && hits.length > 0) {
+      const hitKey = def.keyOf(hits[0]);
+      const origin = originOf(CatalogKind.SECTION, hitKey, builtinList) ?? 'builtin';
+      skipped.push({ line: entry.label, reason: `既にあります（${SECTION_IMPORT_ORIGIN_LABELS[origin] ?? origin}）` });
+      continue;
+    }
+    toAdd.push(entry);
+  }
+  return { toAdd, skipped, errors };
+}
+
 export function planRealign(kind, key, { builtinList }) {
   const def = kindDef(kind);
   const { doc, user } = overlayFor(kind);

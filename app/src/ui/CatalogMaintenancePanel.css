@@ -334,3 +334,49 @@
 .catmnt-btn--secondary:hover { background: #e2e8f0; }
 .catmnt-btn--danger { background: #fef2f2; color: #dc2626; }
 .catmnt-btn--danger:hover { background: #fee2e2; }
+
+/* ---- ステップ8i: 断面「規格文字列から追加」（一括入力） ---- */
+.catmnt-bulk-import {
+  padding: 8px 12px;
+  border-bottom: 1px solid #e2e8f0;
+  flex-shrink: 0;
+}
+
+.catmnt-bulk-import-body {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.catmnt-bulk-import-textarea {
+  font-size: 12px;
+  padding: 6px 8px;
+  border: 1px solid #cbd5e1;
+  border-radius: 4px;
+  background: #f8fafc;
+  outline: none;
+  min-height: 64px;
+  resize: vertical;
+  font-family: inherit;
+}
+.catmnt-bulk-import-textarea:focus { border-color: #2563eb; }
+
+.catmnt-bulk-import-result {
+  font-size: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.catmnt-bulk-import-result ul {
+  margin: 2px 0 0;
+  padding-left: 18px;
+}
+
+.catmnt-bulk-import-result-title {
+  font-weight: 600;
+  color: #1e293b;
+}
+.catmnt-bulk-import-result-title--error { color: #dc2626; }
+
+.catmnt-bulk-import-error-list { color: #dc2626; }

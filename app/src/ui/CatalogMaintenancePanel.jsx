@@ -9,12 +9,18 @@ import { markDirty } from '../dirtyState.js';
 import {
   buildKindTabs, buildMaterialRows, buildCatalogRows, collectKnownMaterialCodes, nextMaterialCode,
   buildMaterialEntry, duplicateMaterialEntry, validateMaterialEntry,
-  upsertUserMaterialEntry, removeUserMaterialEntry, commitUserEntries, planRealign, realignTargets,
+  upsertUserMaterialEntry, removeUserMaterialEntry, upsertUserCatalogEntry, commitUserEntries,
+  planRealign, realignTargets, planBulkSectionImport,
   canEditMaterialRow, isEditableMaterialCategory, parseThicknessInput, MATERIAL_CATEGORY,
 } from '../catalog/catalogMaintenance.js';
+import { parseSectionSpecList } from '../structural/sectionCatalog.js';
 
 // materialData.js（本体マスタ）は仕上げモードと同じ理由でここでも動的 import する
 // （EccentricityDialog.jsxと同型。コード分割維持——materialData.jsは独立チャンクのまま）。
+// structural/sectionCatalog.jsは既にstructural/structuralEntities.js等から静的importされており
+// 独立チャンクにならない（catalogKinds.jsのコメント参照）ため、ここでは静的importでよい
+// （規格文字列の一括入力パーサ parseSectionSpecList を呼ぶためだけに使う。SECTION_CATALOG自体は
+// 引き続きkindDef(section).loadBuiltin()の動的importで読む）。
 
 const CATEGORY_LABELS = Object.freeze({
   [MATERIAL_CATEGORY.PANEL]:   '面材',
@@ -676,6 +682,11 @@ export function CatalogMaintenancePanel({ onClose }) {
  */
 function ReadonlyKindTab({ kind, builtinList, search, setSearch, selectedKey, setSelectedKey }) {
   const def = kindDef(kind);
+  // ステップ8i: 規格文字列の一括入力（断面タブのみ）でユーザーライブラリへ追加した直後、
+  // overlay（catalog/catalogRegistry.jsのモジュール単位の可変状態。Reactが追跡しない）の
+  // 変化を一覧へ反映するため、増分だけを持つローカルstateで強制的に再レンダーする
+  // （computeDerived相当のrows計算は毎レンダー取り直しのため、これだけで足りる）。
+  const [refreshTick, setRefreshTick] = useState(0);
   const diffMap = builtinList ? docDiffMap(kind, builtinList) : new Map();
   const rows = builtinList ? buildCatalogRows({ kind, builtinList, search, diffMap }) : [];
   const selectedRow = selectedKey ? rows.find(r => def.keyOf(r.entry) === selectedKey) ?? null : null;
@@ -683,7 +694,7 @@ function ReadonlyKindTab({ kind, builtinList, search, setSearch, selectedKey, se
 
   return (
     <>
-      <div className="catmnt-list-col">
+      <div className="catmnt-list-col" data-refresh-tick={refreshTick}>
         <div className="catmnt-list-toolbar">
           <input
             className="catmnt-search-input"
@@ -692,6 +703,9 @@ function ReadonlyKindTab({ kind, builtinList, search, setSearch, selectedKey, se
             onChange={e => setSearch(e.target.value)}
           />
         </div>
+        {kind === CatalogKind.SECTION && builtinList && (
+          <SectionBulkImport builtinList={builtinList} onImported={() => setRefreshTick(t => t + 1)} />
+        )}
         <div className="catmnt-rows">
           {!builtinList && <div className="catmnt-row-empty">読み込み中…</div>}
           {builtinList && rows.length === 0 && <div className="catmnt-row-empty">該当する項目がありません</div>}
@@ -745,5 +759,108 @@ function ReadonlyKindTab({ kind, builtinList, search, setSearch, selectedKey, se
         )}
       </div>
     </>
+  );
+}
+
+/**
+ * ステップ8i: 断面の「規格文字列から追加」（折りたたみ）。断面タブ（ReadonlyKindTab）専用——
+ * 他の閲覧タブ（内装マスター・境界マスター）には出さない。解析（planBulkSectionImport）→
+ * 結果一覧（追加される行・除外行とその理由・解析できなかった行）→「ライブラリへ追加」
+ * （commitUserEntries）の順。純ロジックはcatalog/catalogMaintenance.jsのplanBulkSectionImportへ
+ * 寄せ、本コンポーネントは表示・保存I/Oの配線のみ持つ（パーサの直書きをしない）。
+ */
+function SectionBulkImport({ builtinList, onImported }) {
+  const [open, setOpen] = useState(false);
+  const [text, setText] = useState('');
+  const [plan, setPlan] = useState(null); // {toAdd, skipped, errors} | null
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+
+  function handleParse() {
+    setError(null);
+    setPlan(planBulkSectionImport(text, { builtinList, parseSpecList: parseSectionSpecList }));
+  }
+
+  async function handleCommit() {
+    if (!plan || plan.toAdd.length === 0) return;
+    setBusy(true);
+    setError(null);
+    const { user } = overlayFor(CatalogKind.SECTION);
+    let nextUser = user;
+    for (const entry of plan.toAdd) {
+      nextUser = upsertUserCatalogEntry(CatalogKind.SECTION, nextUser, entry);
+    }
+    try {
+      await commitUserEntries(CatalogKind.SECTION, nextUser, user, { saveFn: saveUserCatalog });
+    } catch (e) {
+      setBusy(false);
+      setError(`保存に失敗しました: ${e.message}`);
+      return;
+    }
+    setBusy(false);
+    setText('');
+    setPlan(null);
+    onImported?.();
+  }
+
+  return (
+    <div className="catmnt-bulk-import">
+      <button
+        className="catmnt-btn catmnt-btn--secondary"
+        onClick={() => setOpen(o => !o)}
+      >
+        規格文字列から追加{open ? '（閉じる）' : ''}
+      </button>
+      {open && (
+        <div className="catmnt-bulk-import-body">
+          <textarea
+            className="catmnt-bulk-import-textarea"
+            placeholder={'例: H400×200×8×13 / □250×250×9'}
+            value={text}
+            onChange={e => { setText(e.target.value); setPlan(null); }}
+          />
+          <div className="catmnt-form-actions">
+            <button className="catmnt-btn catmnt-btn--secondary" disabled={!text.trim()} onClick={handleParse}>
+              解析
+            </button>
+            <button
+              className="catmnt-btn catmnt-btn--primary"
+              disabled={!plan || plan.toAdd.length === 0 || busy}
+              onClick={handleCommit}
+            >
+              ライブラリへ追加{plan ? `（${plan.toAdd.length}件）` : ''}
+            </button>
+          </div>
+          {error && <div className="catmnt-form-error">{error}</div>}
+          {plan && (
+            <div className="catmnt-bulk-import-result">
+              {plan.toAdd.length > 0 && (
+                <div>
+                  <div className="catmnt-bulk-import-result-title">追加される行（{plan.toAdd.length}件）</div>
+                  <ul>{plan.toAdd.map(e => <li key={e.key}>{e.label}</li>)}</ul>
+                </div>
+              )}
+              {plan.skipped.length > 0 && (
+                <div>
+                  <div className="catmnt-bulk-import-result-title">除外された行（{plan.skipped.length}件）</div>
+                  <ul>{plan.skipped.map((s, i) => <li key={i}>{s.line} — {s.reason}</li>)}</ul>
+                </div>
+              )}
+              {plan.errors.length > 0 && (
+                <div>
+                  <div className="catmnt-bulk-import-result-title catmnt-bulk-import-result-title--error">
+                    解析できなかった行（{plan.errors.length}件）
+                  </div>
+                  <ul className="catmnt-bulk-import-error-list">{plan.errors.map((e, i) => <li key={i}>{e.line} — {e.reason}</li>)}</ul>
+                </div>
+              )}
+              {plan.toAdd.length === 0 && plan.skipped.length === 0 && plan.errors.length === 0 && (
+                <div className="catmnt-row-empty">解析できる行がありません</div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
   );
 }
