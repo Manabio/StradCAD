@@ -16,7 +16,7 @@
 // ================================================================
 
 import {
-  CatalogKind, kindDef, listKinds, KIND_LABELS, FIXTURE_SYMBOL_PROFILES,
+  CatalogKind, kindDef, listKinds, KIND_LABELS, FIXTURE_SYMBOL_PROFILES, KNOWN_OPENING_MECHANISMS,
 } from './catalogKinds.js';
 import {
   appendDocEntry, composeCatalog, composeList, docDiffMap, originOf, overlayFor, removeDocEntry, setOverlay,
@@ -200,6 +200,58 @@ export function formatCategoryLabel(kind, value) {
 export function categoryOptionsFor(kind) {
   const labels = CATEGORY_LABELS_BY_KIND[kind];
   return labels ? Object.entries(labels).map(([value, label]) => ({ value, label })) : [];
+}
+
+/**
+ * QA指摘m4（2026-09-24再々報告）: 建具種別（openingSubType）の機構(mechanism)の表示名。
+ * 旧: ui/CatalogMaintenancePanel.jsx に直書きされていた OPENING_SUB_TYPE_MECHANISM_LABELS を
+ * こちらへ移設した——formatCategoryLabel/CATEGORY_LABELS_BY_KINDと同じ層（catalog/*.js に
+ * 対応表を持ち、.jsx側は薄いgetterだけを呼ぶ）に揃える。キー集合は catalogKinds.js の
+ * KNOWN_OPENING_MECHANISMS（openings/openingCatalog.js OpeningMechanismの値の複製）と一致する
+ * ことを catalog/catalogMaintenance.test.js（T3）で固定する。日本語文言は
+ * openings/openingCatalog.js OpeningMechanismの定義コメントをそのまま転記したもの。
+ */
+export const OPENING_SUB_TYPE_MECHANISM_LABELS = Object.freeze({
+  swing: 'swing（片開き・蝶番）',
+  slideDouble: 'slideDouble（引き違い）',
+  slideSingle: 'slideSingle（片引き）',
+  fold: 'fold（折れ戸・折りたたみ窓）',
+  free: 'free（自由蝶番）',
+  fixed: 'fixed（開閉なし）',
+  hung: 'hung（上げ下げ窓）',
+  awning: 'awning（横すべり出し窓）',
+  tilt: 'tilt（内倒し窓）',
+  louver: 'louver（ガラスルーバー窓）',
+  pivot: 'pivot（縦軸回転窓）',
+  swingDouble: 'swingDouble（両開き）',
+  swingChild: 'swingChild（親子扉）',
+  swingIn: 'swingIn（内開き窓）',
+  freeDouble: 'freeDouble（自由両開き扉）',
+  shutter: 'shutter（シャッター）',
+  overhead: 'overhead（オーバーヘッドドア）',
+  emergency: 'emergency（非常用進入口）',
+  fireDoor: 'fireDoor（常時開放式防火戸）',
+  fireFold: 'fireFold（常時開放式防火折戸）',
+  slideLayout: 'slideLayout（多枚建て引違い等）',
+  projectVertical: 'projectVertical（縦すべり出し窓）',
+  projectOut: 'projectOut（突出し窓）',
+  tiltOut: 'tiltOut（外倒し窓）',
+  pivotHorizontal: 'pivotHorizontal（横軸回転窓）',
+  drehKipp: 'drehKipp（ドレーキップ窓）',
+  awningMulti: 'awningMulti（オーニング窓）',
+  garari: 'garari（ガラリ・固定）',
+  glassBlock: 'glassBlock（ガラスブロック）',
+  frameOnly: 'frameOnly（三方枠・枠のみ）',
+});
+
+/**
+ * mechanism値の表示名（唯一の読み出し口）。対応表に無い値（未知の複製漏れ等）は
+ * mechanismの生値へフォールバックする（formatCategoryLabelと同じフォールバック規約）。
+ * @param {string} mechanism
+ * @returns {string}
+ */
+export function formatMechanismLabel(mechanism) {
+  return OPENING_SUB_TYPE_MECHANISM_LABELS[mechanism] ?? mechanism;
 }
 
 /**
@@ -1371,4 +1423,385 @@ export function sectionRowDisabledReason({ isAdding, editState = null } = {}) {
     return '文書の内容が本体と異なる断面です。呼称は変更できません';
   }
   return editState?.reason ?? null;
+}
+
+// ================================================================
+// ステップ12h（建具種別（openingSubType）の追加・複製・編集・削除・標準の上書きを保守パネルの
+// 編集タブにする）: OpeningSubTypeTab専用のフォーム純関数。追加・複製・編集・標準の上書き・
+// 標準に戻す・削除は12aの共通ロジック（rowEditState/lockedFieldsFor/planSaveEntry/
+// planRevertToBuiltin/planRemoveUserEntry/applyCatalogEditPlan）をそのまま使う——ここに持つのは
+// 「フォーム値からエントリを組み立てる」「新規追加時のキー採番（同カテゴリ内でuser1…）」
+// 「フォーム側の検証（機構別の欄を含む）」「slideLayoutの文字列表記⇄オブジェクトの変換」という、
+// 建具種別固有の判断だけ（12f/12gの役割分担と同型）。
+// ================================================================
+
+// openings/openingCatalog.js OpeningMechanism の該当値を複製する（catalog/*.js は openings/*.js を
+// 静的importできない——catalogImports.test.jsの許可リスト。KNOWN_OPENING_MECHANISMSと同じ
+// 複製規約。catalogRealMasters.test.jsでOpeningMechanismの値と一致することを固定する想定）。
+export const OPENING_SUB_TYPE_SWING_CHILD_MECHANISM = 'swingChild';
+export const OPENING_SUB_TYPE_FIRE_DOOR_MECHANISM = 'fireDoor';
+export const OPENING_SUB_TYPE_FIRE_FOLD_MECHANISM = 'fireFold';
+export const OPENING_SUB_TYPE_SLIDE_LAYOUT_MECHANISM = 'slideLayout';
+
+// slideLayout.panels の要素で使う矢印向き（openings/openingCatalog.js builtin の全slideLayout
+// エントリから列挙した値の集合——'both'は引き分け窓の中央2枚等で使う）。
+const SLIDE_LAYOUT_ARROW_VALUES = new Set(['pos', 'neg', 'both']);
+
+// QA指摘m3（リード裁定・実ソース確認 2026-09-24再々報告）: fireLeaves/fireAngleの許容値。
+// openings/openingCatalog.js FITTING_CATALOGの実データ（fireDoorDouble/Single/180系・
+// fireFold90/180）がいずれもfireLeaves∈{1,2}・fireAngle∈{90,180}しか持たず、描画側
+// （openings/openingPlanSymbolGeometry.js fireDoorLeafSpecs="fireLeaves===2"・
+// fireFoldLeafSpecs="fireAngle===180"、openingCatalog.js hingeSideMatters）もこの2値の
+// 二値分岐しかしない——任意の正数を許可すると描画側が想定しない値（例:3枚）を保存できてしまう。
+const FIRE_LEAVES_VALUES = new Set([1, 2]);
+const FIRE_ANGLE_VALUES = new Set([90, 180]);
+
+/**
+ * ステップ12h（設計「slideLayoutは文字列表記。tracks=2; pos fix の parse/format」）:
+ * slideLayoutオブジェクト（{tracks:number, panels:Array<{arrow:'pos'|'neg'|'both'}|{fix:true}>}）を
+ * 文字列表記（`tracks=<N>; <トークン> <トークン> …`。トークンはpanelsを左から順に、
+ * {fix:true}は'fix'・{arrow:'pos'|'neg'|'both'}はその値）へ整形する。parseSlideLayoutの逆変換
+ * （parse(format(x))がbuiltin全件でxとdeepEqualになることをテストで固定する）。
+ * 不正な形（tracksが正整数でない・panelsが空/不正要素を含む）は日本語例外を投げる——
+ * openingSubTypeFormFromEntryは呼び出し側でtry/catchして空文字へフォールバックする。
+ * @param {{ tracks: number, panels: Array<object> }} slideLayout
+ * @returns {string}
+ */
+export function formatSlideLayout(slideLayout) {
+  const isPlainSlideLayoutObject = typeof slideLayout === 'object' && slideLayout !== null && !Array.isArray(slideLayout);
+  if (!isPlainSlideLayoutObject) {
+    throw new Error('引違い配置が不正です（オブジェクトが必要です）');
+  }
+  const { tracks, panels } = slideLayout;
+  if (!(Number.isInteger(tracks) && tracks > 0)) {
+    throw new Error('引違い配置のtracksは1以上の整数で指定してください');
+  }
+  if (!Array.isArray(panels) || panels.length === 0) {
+    throw new Error('引違い配置のpanelsは1件以上必要です');
+  }
+  // QA指摘n1（2026-09-24再々報告）: 要素は{fix:true}または{arrow:'pos'|'neg'|'both'}の
+  // どちらか一方の形だけを許す——キー集合を厳密に見る（Object.keysの個数と名前）ことで、
+  // 余計なキーを含む要素（例: {arrow:'pos', fix:true}）を「fixが先に見つかったので黙って
+  // arrowを捨てる」形で通さない（旧実装はp.fix===trueを先に見るだけでarrowの有無を見ていなかった）。
+  const tokens = panels.map(p => {
+    if (!p || typeof p !== 'object' || Array.isArray(p)) {
+      throw new Error(`引違い配置のpanelsに不正な要素があります: ${JSON.stringify(p)}`);
+    }
+    const keys = Object.keys(p);
+    if (keys.length === 1 && keys[0] === 'fix' && p.fix === true) return 'fix';
+    if (keys.length === 1 && keys[0] === 'arrow' && SLIDE_LAYOUT_ARROW_VALUES.has(p.arrow)) return p.arrow;
+    throw new Error(`引違い配置のpanelsに不正な要素があります: ${JSON.stringify(p)}`);
+  });
+  return `tracks=${tracks}; ${tokens.join(' ')}`;
+}
+
+// QA指摘n1（2026-09-24再々報告）: tracksは先頭0無しの正の整数のみ（'0'や'02'のような
+// 前ゼロ表記は拒否してよい——リード裁定）。上限は設けない。
+const SLIDE_LAYOUT_TEXT_PATTERN = /^tracks=([1-9]\d*);\s*(.+)$/;
+
+/**
+ * ステップ12h: formatSlideLayoutの逆変換。書式は`tracks=<N>; <トークン> <トークン> …`
+ * （トークンは空白区切り。'fix'または'pos'|'neg'|'both'）。不正な入力は日本語例外を投げる
+ * （呼び出し側のvalidateOpeningSubTypeFormがそのままフォーム用エラーメッセージとして使う）。
+ * tracks=0・tracks=02のような前ゼロ・0以下・非整数は書式不正として拒否する（上限なし）。
+ * @param {string} text
+ * @returns {{ tracks: number, panels: Array<{arrow:string}|{fix:true}> }}
+ */
+export function parseSlideLayout(text) {
+  const trimmed = (text ?? '').trim();
+  if (trimmed === '') {
+    throw new Error('引違い配置を入力してください（例: tracks=2; pos fix）');
+  }
+  const m = SLIDE_LAYOUT_TEXT_PATTERN.exec(trimmed);
+  if (!m) {
+    throw new Error('引違い配置の書式が不正です（例: tracks=2; pos fix）');
+  }
+  const tracks = Number(m[1]);
+  const tokens = m[2].trim().split(/\s+/).filter(t => t !== '');
+  if (tokens.length === 0) {
+    throw new Error('引違い配置のpanelsは1件以上必要です（例: tracks=2; pos fix）');
+  }
+  const panels = tokens.map(tok => {
+    if (tok === 'fix') return { fix: true };
+    if (SLIDE_LAYOUT_ARROW_VALUES.has(tok)) return { arrow: tok };
+    throw new Error(`引違い配置に不明な記号があります: ${tok}（pos/neg/both/fixのいずれか）`);
+  });
+  return { tracks, panels };
+}
+
+// keyOf(entry)は複合キー（`${category}:${key}`）を返すため、採番用の書式検査は複合キーから
+// category: を除いた残りの部分に対して行う（nextInteriorMasterKeyと同じ「未使用の最小番号」規約）。
+const OPENING_SUB_TYPE_USER_KEY_PATTERN = /^user(\d+)$/;
+
+/**
+ * ステップ12h（設計「keyは同カテゴリ内でuser1…を自動採番」）: allKeys（builtin・ユーザー
+ * ライブラリ・文書同梱の合成キー集合。collectKnownCatalogKeys(OPENING_SUB_TYPE, builtinList)で
+ * 組み立てる複合キー`category:key`の集合）のうち、同じcategoryに属するuser連番の欠番を含めて
+ * 最小の未使用番号を返す（bareなkey——`${category}:`は付けない。buildOpeningSubTypeEntryの
+ * categoryフィールドと組み合わせてkeyOfが複合キーを組み立てる）。
+ * @param {string} category 'fitting'|'window'
+ * @param {Set<string>} allKeys 複合キー（`${category}:${key}`）の集合
+ * @returns {string} 'user1'・'user2'…
+ */
+export function nextOpeningSubTypeKey(category, allKeys) {
+  const prefix = `${category}:`;
+  const used = new Set();
+  for (const key of allKeys ?? []) {
+    if (!key.startsWith(prefix)) continue;
+    const m = OPENING_SUB_TYPE_USER_KEY_PATTERN.exec(key.slice(prefix.length));
+    if (m) used.add(Number(m[1]));
+  }
+  let n = 1;
+  while (used.has(n)) n++;
+  return `user${n}`;
+}
+
+/**
+ * 保存済みエントリ（builtin/user/doc）からフォーム値を組み立てる（buildOpeningSubTypeEntryの
+ * 逆変換）。wallKindsは配列のまま持たず、interior/exteriorそれぞれのチェック状態
+ * （wallInterior/wallExterior。両方falseはwallKinds省略＝両方に出せる、と同じ意味——
+ * openingCatalog.js「wallKinds省略可（両方に出す）」の規約）へ開く。数値項目は未設定なら空文字
+ * （parseThicknessInputと同じ文字列化規約）。slideLayoutは文字列表記（formatSlideLayout）——
+ * 不正な形（壊れた同梱データ等）はフォーム表示だけ空文字にフォールバックする（投げない。
+ * このタブはentryを直接書き換えないため、表示不能な同梱データがあってもクラッシュさせない）。
+ * QA指摘m1（2026-09-24再々報告・最優先）: 元entryが明示的に`wallKinds: []`（どちらの壁種にも
+ * 出ない。builtinには存在しないがuser/doc行では起こりうる）を持つ場合、`wallKindsExplicitEmpty`を
+ * trueにする——両チェックボックスがfalseの状態が「未設定（両方に出せる）」なのか「明示的に
+ * 空（どちらにも出ない）」なのかをフォームが覚えていないと、何も編集せず保存しただけで
+ * `wallKinds:[]`が黙ってキー省略（＝両方に出せる、の意味）へ反転してしまう
+ * （buildOpeningSubTypeEntryがこのフラグを見て`[]`のまま保存する）。
+ * @param {object} entry
+ * @returns {{ category: string, key: string, label: string, mechanism: string,
+ *             wallInterior: boolean, wallExterior: boolean, wallKindsExplicitEmpty: boolean,
+ *             defaultWidth: string, defaultHeight: string,
+ *             childRatio: string, fireLeaves: string, fireAngle: string, slideLayoutText: string }}
+ */
+export function openingSubTypeFormFromEntry(entry) {
+  const hasWallKinds = Array.isArray(entry?.wallKinds);
+  const wallKinds = hasWallKinds ? entry.wallKinds : [];
+  let slideLayoutText = '';
+  if (entry?.slideLayout) {
+    try {
+      slideLayoutText = formatSlideLayout(entry.slideLayout);
+    } catch {
+      slideLayoutText = '';
+    }
+  }
+  return {
+    category: entry?.category === 'window' ? 'window' : 'fitting',
+    key: entry?.key ?? '',
+    label: entry?.label ?? '',
+    mechanism: entry?.mechanism ?? '',
+    wallInterior: wallKinds.includes('interior'),
+    wallExterior: wallKinds.includes('exterior'),
+    wallKindsExplicitEmpty: hasWallKinds && wallKinds.length === 0,
+    defaultWidth: entry?.defaultWidth == null ? '' : String(entry.defaultWidth),
+    defaultHeight: entry?.defaultHeight == null ? '' : String(entry.defaultHeight),
+    childRatio: entry?.childRatio == null ? '' : String(entry.childRatio),
+    fireLeaves: entry?.fireLeaves == null ? '' : String(entry.fireLeaves),
+    fireAngle: entry?.fireAngle == null ? '' : String(entry.fireAngle),
+    slideLayoutText,
+  };
+}
+
+/**
+ * フォーム入力から建具種別エントリを組み立てる。key/labelの前後の空白を除く（他種別の
+ * buildMaterialEntry等と同じトリム規約）。wallInterior/wallExteriorのどちらか一方でもtrueなら
+ * 選択どおりのwallKinds配列を持たせる。どちらもfalseのときは、`wallKindsExplicitEmpty`
+ * （QA指摘m1・openingSubTypeFormFromEntryが元entryの`wallKinds:[]`から立てるフラグ）がtrueなら
+ * `wallKinds: []`をそのまま保持し、falseならwallKinds自体を持たせない
+ * （openingSubTypeFormFromEntryの逆＝「未設定＝両方に出せる」の意味を保つ——空配列`[]`は
+ * 「どちらにも出ない」という別の意味になるためbuildMaterialEntryのbackingClassと同様、
+ * 意味が変わる値は明示フラグ無しに作り出さない）。mechanism別の欄（childRatio/fireLeaves/
+ * fireAngle/slideLayout）は現在のmechanismに対応するものだけをentryへ持たせる——他の機構へ
+ * 切り替えたときに前の機構の入力値が保存値へ紛れ込まない（buildFixtureSymbolEntryのprofile
+ * 省略と同じ設計）。slideLayoutTextの解析（parseSlideLayout）が例外を投げた場合はここでは
+ * 黙って持たせない（validateOpeningSubTypeFormが同じ文字列を独立に再解析し、保存前に同じ例外
+ * メッセージを返す——buildInteriorMasterEntryのceilingHeight→NaNと同じ「buildは投げない・
+ * validateが再検査する」役割分担）。
+ * @param {{ category?: string, key?: string, label?: string, mechanism?: string,
+ *           wallInterior?: boolean, wallExterior?: boolean, wallKindsExplicitEmpty?: boolean,
+ *           defaultWidth?: string|number, defaultHeight?: string|number, childRatio?: string|number,
+ *           fireLeaves?: string|number, fireAngle?: string|number, slideLayoutText?: string }} form
+ * @returns {object}
+ */
+export function buildOpeningSubTypeEntry(form) {
+  const category = form?.category === 'window' ? 'window' : 'fitting';
+  const mechanism = (form?.mechanism ?? '').trim();
+  const entry = {
+    category,
+    key: (form?.key ?? '').trim(),
+    label: (form?.label ?? '').trim(),
+    mechanism,
+    defaultWidth: Number(String(form?.defaultWidth ?? '').trim()),
+    defaultHeight: Number(String(form?.defaultHeight ?? '').trim()),
+  };
+  const wallKinds = [];
+  if (form?.wallInterior) wallKinds.push('interior');
+  if (form?.wallExterior) wallKinds.push('exterior');
+  if (wallKinds.length > 0) {
+    entry.wallKinds = wallKinds;
+  } else if (form?.wallKindsExplicitEmpty) {
+    entry.wallKinds = [];
+  }
+
+  // ステップ12h（往復テストで判明）: 未入力（トリム後空文字）はNumber('')===0という有限数に
+  // 化けるため、childRatio/fireLeaves/fireAngleは「トリム後の文字列が空でない」ことを先に確認
+  // してからNumberへ変換する——空欄のままのbuiltin行（fireFold90等はfireLeavesを持たない）を
+  // 「0」で新規に持たせてしまう事故を防ぐ（buildMaterialEntryのbackingClass省略と同じ考え方）。
+  if (mechanism === OPENING_SUB_TYPE_SWING_CHILD_MECHANISM) {
+    const childRatioText = (form?.childRatio ?? '').trim();
+    if (childRatioText !== '') {
+      const childRatio = Number(childRatioText);
+      if (Number.isFinite(childRatio)) entry.childRatio = childRatio;
+    }
+  }
+  // QA指摘m3（リード裁定・実ソース確認）: openings/openingPlanSymbol.js の機構別分岐は
+  // FIRE_DOOR（fireDoorLeafSpecs呼び出し行）が fireLeaves と fireAngle の両方を読み、
+  // FIRE_FOLD（fireFoldLeafSpecs呼び出し行）は fireAngle だけを読む（fireLeavesは参照しない）。
+  // fireLeavesの欄はFIRE_DOORのときだけ持たせる——FIRE_FOLDにfireLeavesを持たせても描画側は
+  // 一切参照しないため、無意味な値が保存値に紛れ込むのを防ぐ。
+  if (mechanism === OPENING_SUB_TYPE_FIRE_DOOR_MECHANISM) {
+    const fireLeavesText = (form?.fireLeaves ?? '').trim();
+    if (fireLeavesText !== '') {
+      const fireLeaves = Number(fireLeavesText);
+      if (Number.isFinite(fireLeaves)) entry.fireLeaves = fireLeaves;
+    }
+  }
+  if (mechanism === OPENING_SUB_TYPE_FIRE_DOOR_MECHANISM || mechanism === OPENING_SUB_TYPE_FIRE_FOLD_MECHANISM) {
+    const fireAngleText = (form?.fireAngle ?? '').trim();
+    if (fireAngleText !== '') {
+      const fireAngle = Number(fireAngleText);
+      if (Number.isFinite(fireAngle)) entry.fireAngle = fireAngle;
+    }
+  }
+  if (mechanism === OPENING_SUB_TYPE_SLIDE_LAYOUT_MECHANISM) {
+    const text = (form?.slideLayoutText ?? '').trim();
+    if (text !== '') {
+      try {
+        entry.slideLayout = parseSlideLayout(text);
+      } catch {
+        // 不正な入力はここでは黙って持たせない——validateOpeningSubTypeForm が同じ文字列を
+        // 独立にparseSlideLayoutへ通し、保存前に同じ例外メッセージを日本語で返す。
+      }
+    }
+  }
+  return entry;
+}
+
+/**
+ * ステップ12h（QA指摘m3で分離・リード裁定）: 建具種別フォームの入力から、機構別の欄
+ * （childRatio/fireLeaves/fireAngle/slideLayoutText）の表示要否を判定する（.jsx側にmechanism
+ * 直書きの条件分岐を残さない——fixtureSymbolFormFieldsForと同じ役割）。fireLeavesと
+ * fireAngleを別フラグに分けたのは、実ソース（openings/openingPlanSymbol.js）でFIRE_DOORが
+ * fireLeaves・fireAngleの両方を読み、FIRE_FOLDはfireAngleだけを読む（fireLeavesを参照しない）
+ * ため——旧実装は両方を同じshowFireFieldsで束ねており、FIRE_FOLDの欄にfireLeavesを出して
+ * いた（意味を持たない入力を許す不具合）。
+ * @param {{ mechanism?: string }|null} form
+ * @returns {{ showChildRatio: boolean, showFireLeaves: boolean, showFireAngle: boolean, showSlideLayout: boolean }}
+ */
+export function openingSubTypeFormFieldsFor(form) {
+  const mechanism = form?.mechanism;
+  return {
+    showChildRatio: mechanism === OPENING_SUB_TYPE_SWING_CHILD_MECHANISM,
+    showFireLeaves: mechanism === OPENING_SUB_TYPE_FIRE_DOOR_MECHANISM,
+    showFireAngle: mechanism === OPENING_SUB_TYPE_FIRE_DOOR_MECHANISM || mechanism === OPENING_SUB_TYPE_FIRE_FOLD_MECHANISM,
+    showSlideLayout: mechanism === OPENING_SUB_TYPE_SLIDE_LAYOUT_MECHANISM,
+  };
+}
+
+/**
+ * ステップ12h: 建具種別フォームの検証。呼称・区分・機構（KNOWN_OPENING_MECHANISMSのいずれか）・
+ * 既定幅／既定高（0より大きい数値）は追加・編集の両方で検査する。機構別の欄は、対応する
+ * mechanismのときだけ・値が入力されていれば範囲を検査する（未入力は許容——openings側にも
+ * 既定値フォールバックがある。openingElevationFigure.js/openingPlanSymbol.jsのentry?.childRatio
+ * ?? 0.3等）。追加時（isAdding）だけキー（同カテゴリ内で採番済みのはず）の重複を検査する
+ * （nextOpeningSubTypeKeyが未使用の番号を選ぶため通常は起こらないが、呼び出し側の取り違え等に
+ * 備えた保険——他種別のvalidateXxxFormと同じ位置付け）。
+ * @param {ReturnType<typeof openingSubTypeFormFromEntry>} form
+ * @param {{ isAdding: boolean, allKeys?: Set<string>, builtinKeys?: Set<string> }} args
+ * @returns {{ ok: true } | { ok: false, message: string }}
+ */
+export function validateOpeningSubTypeForm(form, { isAdding, allKeys = new Set(), builtinKeys = new Set() } = {}) {
+  const category = form?.category;
+  if (category !== 'fitting' && category !== 'window') {
+    return { ok: false, message: '区分は建具または窓のいずれかです' };
+  }
+  const label = (form?.label ?? '').trim();
+  if (!label) return { ok: false, message: '呼称を入力してください' };
+  const mechanism = (form?.mechanism ?? '').trim();
+  if (!KNOWN_OPENING_MECHANISMS.includes(mechanism)) {
+    return { ok: false, message: '機構を選択してください' };
+  }
+  const defaultWidth = Number(String(form?.defaultWidth ?? '').trim());
+  if (!(Number.isFinite(defaultWidth) && defaultWidth > 0)) {
+    return { ok: false, message: '既定幅は0より大きい数値を入力してください' };
+  }
+  const defaultHeight = Number(String(form?.defaultHeight ?? '').trim());
+  if (!(Number.isFinite(defaultHeight) && defaultHeight > 0)) {
+    return { ok: false, message: '既定高は0より大きい数値を入力してください' };
+  }
+
+  if (mechanism === OPENING_SUB_TYPE_SWING_CHILD_MECHANISM) {
+    const childRatioText = (form?.childRatio ?? '').trim();
+    if (childRatioText !== '') {
+      const childRatio = Number(childRatioText);
+      if (!(Number.isFinite(childRatio) && childRatio > 0 && childRatio < 1)) {
+        return { ok: false, message: '子扉比率は0より大きく1より小さい数値を入力してください' };
+      }
+    }
+  }
+  // QA指摘m3（リード裁定）: fireLeaves/fireAngleは本体（openings/openingCatalog.js
+  // FITTING_CATALOG）の実データがいずれも{1,2}・{90,180}の2値しか取らず、描画側
+  // （openings/openingPlanSymbolGeometry.js fireDoorLeafSpecs/fireFoldLeafSpecs、
+  // openingCatalog.js hingeSideMatters）も「2か否か」「180か否か」の二値分岐しかしないため、
+  // 任意の正数ではなくこの2値だけを許可する（FIRE_LEAVES_VALUES/FIRE_ANGLE_VALUES）。
+  // fireLeavesの欄はFIRE_DOORのときだけ検査する——FIRE_FOLDは描画側がfireLeavesを一切
+  // 参照しないため検査対象に含めない（openingSubTypeFormFieldsForのshowFireLeavesと同じ判定）。
+  if (mechanism === OPENING_SUB_TYPE_FIRE_DOOR_MECHANISM) {
+    const fireLeavesText = (form?.fireLeaves ?? '').trim();
+    if (fireLeavesText !== '' && !FIRE_LEAVES_VALUES.has(Number(fireLeavesText))) {
+      return { ok: false, message: '防火枚数は1または2のみ入力できます' };
+    }
+  }
+  if (mechanism === OPENING_SUB_TYPE_FIRE_DOOR_MECHANISM || mechanism === OPENING_SUB_TYPE_FIRE_FOLD_MECHANISM) {
+    const fireAngleText = (form?.fireAngle ?? '').trim();
+    if (fireAngleText !== '') {
+      const fireAngle = Number(fireAngleText);
+      if (!FIRE_ANGLE_VALUES.has(fireAngle)) {
+        return { ok: false, message: '防火角度は90または180のみ入力できます' };
+      }
+    }
+  }
+  if (mechanism === OPENING_SUB_TYPE_SLIDE_LAYOUT_MECHANISM) {
+    const text = (form?.slideLayoutText ?? '').trim();
+    if (text === '') {
+      return { ok: false, message: '引違い配置を入力してください（例: tracks=2; pos fix）' };
+    }
+    try {
+      parseSlideLayout(text);
+    } catch (e) {
+      return { ok: false, message: e.message };
+    }
+  }
+
+  if (isAdding) {
+    const key = (form?.key ?? '').trim();
+    if (!key) return { ok: false, message: 'キーが割り当てられていません' };
+    const composite = `${category}:${key}`;
+    if (builtinKeys.has(composite) || allKeys.has(composite)) {
+      return { ok: false, message: `既に使われているキーです: ${composite}` };
+    }
+  }
+  return { ok: true };
+}
+
+/**
+ * ステップ12h: 建具種別タブのフォーム無効化理由（fixtureSymbolRowDisabledReasonと同型。
+ * 建具種別はどの行もカテゴリ単位の一律拒否を持たない）。
+ * @param {{ isAdding: boolean, editState?: { canEdit: boolean, reason: string|null } | null }} args
+ * @returns {string|null}
+ */
+export function openingSubTypeRowDisabledReason({ isAdding, editState = null } = {}) {
+  return editStateDisabledReason({ isAdding, editState });
 }

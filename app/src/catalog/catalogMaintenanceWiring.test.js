@@ -263,25 +263,119 @@ test('【不変条件・ステップ10f】catalog/catalogMaintenance.js: buildKi
   assert.ok(/CatalogKind\.OPENING_SUB_TYPE/.test(m[1]), 'VIEWABLE_KINDS に CatalogKind.OPENING_SUB_TYPE が含まれていない（建具種別タブが閲覧できない）');
 });
 
-test('【不変条件・ステップ10f・QA指摘Minor-1で更新】ui/CatalogMaintenancePanel.jsx: READONLY_KIND_FIELDSにCatalogKind.OPENING_SUB_TYPEの表示項目（label/category/mechanism/wallKinds/defaultWidth/defaultHeight/childRatio/fireLeaves/fireAngle/slideLayout）をfield名で持ち、ReadonlyKindTab（追加・複製・編集・削除・合わせ直しボタン無し）で扱う', () => {
+// ステップ12hでOPENING_SUB_TYPEはREADONLY_KIND_FIELDS（ReadonlyKindTab）から専用タブ
+// （OpeningSubTypeTab。追加・複製・編集・標準の上書き・標準に戻す・削除）へ移行した——12f/12gの
+// fixtureSymbol/interiorMaster/section移行と同型。
+test('【不変条件・ステップ12h】ui/CatalogMaintenancePanel.jsx: READONLY_KIND_FIELDSにCatalogKind.OPENING_SUB_TYPEが無い（閲覧タブから編集タブへ移行済み）', () => {
   const src = readSrc('ui/CatalogMaintenancePanel.jsx');
-  const m = /\[CatalogKind\.OPENING_SUB_TYPE\]: Object\.freeze\(\[([\s\S]*?)\]\),/.exec(src);
-  assert.ok(m, 'CatalogMaintenancePanel.jsx の READONLY_KIND_FIELDS に [CatalogKind.OPENING_SUB_TYPE] が見つからない');
-  const body = m[1];
-  for (const field of [
-    'label', 'category', 'mechanism', 'wallKinds', 'defaultWidth', 'defaultHeight',
-    'childRatio', 'fireLeaves', 'fireAngle', 'slideLayout',
-  ]) {
+  assert.ok(
+    !/\[CatalogKind\.OPENING_SUB_TYPE\]: Object\.freeze\(\[/.test(src),
+    'CatalogMaintenancePanel.jsx の READONLY_KIND_FIELDS に [CatalogKind.OPENING_SUB_TYPE] がまだ残っている',
+  );
+});
+
+test('【不変条件・ステップ12h】ui/CatalogMaintenancePanel.jsx: activeKind===OPENING_SUB_TYPEのときOpeningSubTypeTabをmaterialList付きで描き、12aの共通ロジック（rowEditState/lockedFieldsFor/planSaveEntry）をCatalogKind.OPENING_SUB_TYPE付きで直接呼ぶ', () => {
+  const src = readSrc('ui/CatalogMaintenancePanel.jsx');
+  assert.ok(
+    /activeKind === CatalogKind\.OPENING_SUB_TYPE[\s\S]{0,120}<OpeningSubTypeTab materialList=\{builtinList\}/.test(src),
+    'activeKind===CatalogKind.OPENING_SUB_TYPEの条件付きで<OpeningSubTypeTab materialList={builtinList}が描かれていない',
+  );
+  const body = extractBalancedBody(src, 'function OpeningSubTypeTab({ materialList }) {');
+  assert.ok(body, 'CatalogMaintenancePanel.jsx に OpeningSubTypeTab コンポーネントが見つからない');
+  for (const fn of ['rowEditState', 'lockedFieldsFor', 'planSaveEntry']) {
     assert.ok(
-      new RegExp(`'${field}'`).test(body),
-      `READONLY_KIND_FIELDS[CatalogKind.OPENING_SUB_TYPE] に ${field} が無い`,
+      new RegExp(`${fn}\\(CatalogKind\\.OPENING_SUB_TYPE`).test(body),
+      `OpeningSubTypeTab が ${fn}(CatalogKind.OPENING_SUB_TYPE, …) を呼んでいない`,
     );
   }
-  // ReadonlyKindTabはREADONLY_KIND_FIELDSに載る種別を汎用に扱う唯一のコンポーネント——上の
-  // ステップ7dテストが既に「追加・複製・削除・保存・合わせ直しの操作系ハンドラを呼んでいない」
-  // ことを固定しているため、建具種別用の専用ボタンを別途持たないことはその不変条件がそのまま覆う。
-  const fnMatch = /function ReadonlyKindTab\(\{[\s\S]*?\n\}/.exec(src);
-  assert.ok(fnMatch, 'CatalogMaintenancePanel.jsx に ReadonlyKindTab コンポーネントが見つからない');
+});
+
+test('【不変条件・ステップ12h】ui/CatalogMaintenancePanel.jsx: OpeningSubTypeTabはuseCatalogEditActions(CatalogKind.OPENING_SUB_TYPE, …)を呼び、削除・標準に戻す・保存の確認ブロックをDeleteConfirmBlock/RevertConfirmBlock/SaveConfirmBlockへ委譲する', () => {
+  const src = readSrc('ui/CatalogMaintenancePanel.jsx');
+  const body = extractBalancedBody(src, 'function OpeningSubTypeTab({ materialList }) {');
+  assert.ok(body, 'CatalogMaintenancePanel.jsx に OpeningSubTypeTab コンポーネントが見つからない');
+  assert.ok(
+    /useCatalogEditActions\(CatalogKind\.OPENING_SUB_TYPE,/.test(body),
+    'OpeningSubTypeTab が useCatalogEditActions(CatalogKind.OPENING_SUB_TYPE, …) を呼んでいない',
+  );
+  for (const component of ['DeleteConfirmBlock', 'RevertConfirmBlock', 'SaveConfirmBlock']) {
+    assert.ok(new RegExp(`<${component}\\b`).test(body), `OpeningSubTypeTab が <${component} を描いていない`);
+  }
+});
+
+test('【不変条件・ステップ12h】ui/CatalogMaintenancePanel.jsx: OpeningSubTypeTabの追加・複製はnextOpeningSubTypeKeyでキーを採番し、追加時だけvalidateOpeningSubTypeFormへisAdding:trueを渡す（ユーザーがキーを直接入力する欄が無い）', () => {
+  const src = readSrc('ui/CatalogMaintenancePanel.jsx');
+  const body = extractBalancedBody(src, 'function OpeningSubTypeTab({ materialList }) {');
+  assert.ok(body, 'CatalogMaintenancePanel.jsx に OpeningSubTypeTab コンポーネントが見つからない');
+  assert.ok(/\bnextOpeningSubTypeKey\(/.test(body), 'OpeningSubTypeTab が nextOpeningSubTypeKey を呼んでいない');
+  assert.ok(
+    /validateOpeningSubTypeForm\(form, \{ isAdding: true/.test(body),
+    'OpeningSubTypeTab の新規追加経路が validateOpeningSubTypeForm(form, { isAdding: true, … }) を呼んでいない',
+  );
+  // キーの直接入力欄（<input ... form.key ...>）が無いことの確認——内装マスターと同じく、
+  // キーは常にnextOpeningSubTypeKeyの採番値をそのまま表示する。
+  assert.ok(
+    !/<input[\s\S]{0,120}value=\{form\.key\}/.test(body),
+    'OpeningSubTypeTab に form.key を直接編集するinputがある（キーは自動採番のみのはず）',
+  );
+});
+
+test('【不変条件・ステップ12h・QA指摘m3で分離】ui/CatalogMaintenancePanel.jsx: OpeningSubTypeTabは機構別の欄（子扉比率・防火枚数・防火角度・引違い配置）の表示要否をopeningSubTypeFormFieldsFor(form)経由で判定し、mechanism直書きの条件分岐を持たない', () => {
+  const src = readSrc('ui/CatalogMaintenancePanel.jsx');
+  const body = extractBalancedBody(src, 'function OpeningSubTypeTab({ materialList }) {');
+  assert.ok(body, 'CatalogMaintenancePanel.jsx に OpeningSubTypeTab コンポーネントが見つからない');
+  assert.ok(
+    /const \{ showChildRatio, showFireLeaves, showFireAngle, showSlideLayout \} = openingSubTypeFormFieldsFor\(form\);/.test(body),
+    'OpeningSubTypeTab が openingSubTypeFormFieldsFor(form) の戻り値（showFireLeaves/showFireAngleを含む）を分割代入していない',
+  );
+  assert.ok(
+    !/form\.mechanism === '(swingChild|fireDoor|fireFold|slideLayout)'/.test(body),
+    'OpeningSubTypeTab に機構名を直書きした条件分岐がある（openingSubTypeFormFieldsFor経由への一本化から後退）',
+  );
+});
+
+// ---- QA指摘m4（2026-09-24再々報告）: 機構(mechanism)の表示名はcatalog/catalogMaintenance.jsの
+// formatMechanismLabel経由——.jsx側に手書きの対応表（OPENING_SUB_TYPE_MECHANISM_LABELS等）を
+// 持たない ----
+test('【不変条件・QA指摘m4・2026-09-24再々報告】ui/CatalogMaintenancePanel.jsx: 機構selectの表示名はcatalog/catalogMaintenance.jsのformatMechanismLabel経由で、.jsx側に対応表を直書きしない', () => {
+  const src = readSrc('ui/CatalogMaintenancePanel.jsx');
+  assert.ok(
+    /from ['"]\.\.\/catalog\/catalogMaintenance\.js['"]/.test(src) && /\bformatMechanismLabel\(/.test(src),
+    'CatalogMaintenancePanel.jsx が catalog/catalogMaintenance.js の formatMechanismLabel を呼んでいない',
+  );
+  assert.ok(
+    !/OPENING_SUB_TYPE_MECHANISM_LABELS\s*=\s*Object\.freeze/.test(src),
+    'CatalogMaintenancePanel.jsx に機構ラベルの対応表が直書きされている（formatMechanismLabel経由への一本化への退行）',
+  );
+  const body = extractBalancedBody(src, 'function OpeningSubTypeTab({ materialList }) {');
+  assert.ok(body, 'CatalogMaintenancePanel.jsx に OpeningSubTypeTab コンポーネントが見つからない');
+  assert.ok(
+    /\{formatMechanismLabel\(m\)\}/.test(body),
+    'OpeningSubTypeTab が機構selectのoption文言をformatMechanismLabel(m)経由で描いていない',
+  );
+});
+
+// ---- QA指摘m1（2026-09-24再々報告・最優先）: wallKinds:[]（どちらにも出ない）の保持 ----
+test('【不変条件・QA指摘m1・2026-09-24再々報告・最優先】ui/CatalogMaintenancePanel.jsx: OpeningSubTypeTabのwallInterior/wallExteriorチェックボックスはwallKindsExplicitEmpty:falseも同時にsetForm し、フォームの明示空フラグをcatalog/catalogMaintenance.jsのbuildOpeningSubTypeEntryへ渡す', () => {
+  const src = readSrc('ui/CatalogMaintenancePanel.jsx');
+  const body = extractBalancedBody(src, 'function OpeningSubTypeTab({ materialList }) {');
+  assert.ok(body, 'CatalogMaintenancePanel.jsx に OpeningSubTypeTab コンポーネントが見つからない');
+  const wallToggleCount = (body.match(/wallKindsExplicitEmpty:\s*false/g) ?? []).length;
+  assert.ok(
+    wallToggleCount >= 2,
+    'OpeningSubTypeTab の対応壁種チェックボックス（内部・外部）の両方がwallKindsExplicitEmpty:falseをsetFormしていない',
+  );
+});
+
+test('【不変条件・ステップ12h】ui/CatalogMaintenancePanel.jsx: OpeningSubTypeTabはbuildOpeningSubTypeEntry(form)でエントリを組み立て、slideLayoutの文字列⇄オブジェクト変換をcatalog/catalogMaintenance.jsのparseSlideLayout/formatSlideLayout経由に一本化する（jsx側に区切り文字の分割等を直書きしない）', () => {
+  const src = readSrc('ui/CatalogMaintenancePanel.jsx');
+  const body = extractBalancedBody(src, 'function OpeningSubTypeTab({ materialList }) {');
+  assert.ok(body, 'CatalogMaintenancePanel.jsx に OpeningSubTypeTab コンポーネントが見つからない');
+  assert.ok(/\bbuildOpeningSubTypeEntry\(form\)/.test(body), 'OpeningSubTypeTab が buildOpeningSubTypeEntry(form) を呼んでいない');
+  assert.ok(
+    !/slideLayoutText\.split\(/.test(src),
+    'CatalogMaintenancePanel.jsx にslideLayoutTextの分割処理が直書きされている（parseSlideLayout経由への一本化への退行）',
+  );
 });
 
 // ---- ステップ12d: 建具記号（fixtureSymbol）はenabled:true。ステップ12fで閲覧タブ

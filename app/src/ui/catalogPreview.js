@@ -30,6 +30,18 @@ import { DEFAULT_WALL_BASE, DEFAULT_WALL_FINISH } from '../finish/wallGeneration
 
 function isNonEmptyString(v) { return typeof v === 'string' && v.length > 0; }
 
+// QA指摘m2（2026-09-24再々報告）: 既定幅・既定高（entry.defaultWidth/defaultHeight）が空欄・
+// 非数・0以下だと、姿図（openingSubTypePreview）はNaN/0寸法のopeningをそのままジェネレータへ
+// 渡して崩れたprimitivesをok:trueで返し、平面記号（openingSubTypePlanPreview）は
+// `defaultWidth > 0 ? defaultWidth : 800`のフォールバックで実際には入力していない800mmの
+// 開口を黙って描いていた——どちらも「入力途中のフォームをそのまま見せている」という実情を
+// 隠してしまう。両ビュー共通の唯一の判定にする（姿図・平面記号で別の閾値・別のフォールバックを
+// 持たせない）。
+const OPENING_SUB_TYPE_DIMENSION_REASON = '既定幅・既定高を入力すると作図します';
+function hasValidOpeningDimensions(entry) {
+  return entry.defaultWidth > 0 && entry.defaultHeight > 0;
+}
+
 // 断面（SECTION）: 柱の平断面（columnMap）として描く。entry.key を resolveSection の権威で
 // 直接返す——保存済み(overlay登録済み)エントリでも未保存ドラフトでも同じ注入経路に一本化する
 // （ctx.rigid は渡さない＝偏芯・柱芯線は出さない素の断面のみ）。
@@ -51,6 +63,9 @@ function sectionPreview(entry, { frame } = {}) {
 function openingSubTypePreview(entry) {
   if (!entry || !isNonEmptyString(entry.key) || !isNonEmptyString(entry.category)) {
     return { ok: false, reason: '建具種別エントリのkey/categoryが不正です（プレビューできません）' };
+  }
+  if (!hasValidOpeningDimensions(entry)) {
+    return { ok: false, reason: OPENING_SUB_TYPE_DIMENSION_REASON };
   }
   const opening = {
     category: entry.category, subType: entry.key,
@@ -254,7 +269,14 @@ function openingSubTypePlanPreview(entry, { materialList, fixtureType, profile }
   if (!entry || !isNonEmptyString(entry.key) || !isNonEmptyString(entry.category)) {
     return { ok: false, reason: '建具種別エントリのkey/categoryが不正です（プレビューできません）' };
   }
-  const width = entry.defaultWidth > 0 ? entry.defaultWidth : 800;
+  // QA指摘m2（2026-09-24再々報告）: 旧実装は`entry.defaultWidth > 0 ? entry.defaultWidth : 800`で
+  // 未入力（NaN・0以下）を黙って800mmへフォールバックし、実際には入力していない幅で描いていた。
+  // hasValidOpeningDimensionsのガードにより、ここへ来る時点でdefaultWidth/defaultHeightはともに
+  // 0より大きいことが保証される（フォールバックは不要）。
+  if (!hasValidOpeningDimensions(entry)) {
+    return { ok: false, reason: OPENING_SUB_TYPE_DIMENSION_REASON };
+  }
+  const width = entry.defaultWidth;
   const thicknessMm = previewWallThicknessFor(entry, materialList);
   const opening = {
     coord1: 0, coord2: width, centerCoord: width / 2, width, isVertical: false,

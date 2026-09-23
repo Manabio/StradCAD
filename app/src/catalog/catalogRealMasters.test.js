@@ -12,7 +12,11 @@ import { collectUsedKeys, collectUsedMaterialCodes, expandTransitiveMaterials, b
 import { MATERIALS } from '../finish/materials/materialData.js';
 import { INTERIOR_MASTERS } from '../finish/materials/interiorMasters.js';
 import { OpeningMechanism, IMPLEMENTED_MECHANISMS } from '../openings/openingCatalog.js';
-import { FIXTURE_SYMBOL_FRAME_ONLY_MECHANISM } from './catalogMaintenance.js';
+import {
+  FIXTURE_SYMBOL_FRAME_ONLY_MECHANISM,
+  OPENING_SUB_TYPE_SWING_CHILD_MECHANISM, OPENING_SUB_TYPE_FIRE_DOOR_MECHANISM,
+  OPENING_SUB_TYPE_FIRE_FOLD_MECHANISM, OPENING_SUB_TYPE_SLIDE_LAYOUT_MECHANISM,
+} from './catalogMaintenance.js';
 
 // ステップ3（2026-09-22）で振り直し済み。旧132件のうち廃止・削除2件（アスファルトプライマー・
 // 吸音テックス用捨て糊。legacyMaterialCodes.js の REMOVED_MATERIALS）を除いた130件。
@@ -116,6 +120,15 @@ test('【失敗系】fixtureSymbol.isSupported: 未知のmechanism/profileはfal
 // と一致することを固定する（コメントの「想定」を実測にする）。 ----
 test('FIXTURE_SYMBOL_FRAME_ONLY_MECHANISM: catalog/catalogMaintenance.jsの複製値がOpeningMechanism.FRAME_ONLYと一致する', () => {
   assert.equal(FIXTURE_SYMBOL_FRAME_ONLY_MECHANISM, OpeningMechanism.FRAME_ONLY);
+});
+
+// ---- QA指摘m4（2026-09-24再々報告・T2）: ステップ12h（建具種別タブ）で複製した機構定数4つが
+// 実マスタOpeningMechanismと一致することを固定する（コメントの「想定」を実測にする）。 ----
+test('T2: catalog/catalogMaintenance.jsの建具種別（openingSubType）機構複製定数4つがOpeningMechanismと一致する', () => {
+  assert.equal(OPENING_SUB_TYPE_SWING_CHILD_MECHANISM, OpeningMechanism.SWING_CHILD);
+  assert.equal(OPENING_SUB_TYPE_FIRE_DOOR_MECHANISM, OpeningMechanism.FIRE_DOOR);
+  assert.equal(OPENING_SUB_TYPE_FIRE_FOLD_MECHANISM, OpeningMechanism.FIRE_FOLD);
+  assert.equal(OPENING_SUB_TYPE_SLIDE_LAYOUT_MECHANISM, OpeningMechanism.SLIDE_LAYOUT);
 });
 
 test('interiorMaster: INTERIOR_MASTERS全件がinteriorMaster.validateを通る', async () => {

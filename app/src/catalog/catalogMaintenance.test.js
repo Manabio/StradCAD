@@ -15,10 +15,14 @@ import {
   nextInteriorMasterKey, interiorMasterFormFromEntry, buildInteriorMasterEntry,
   validateInteriorMasterForm, interiorMasterRowDisabledReason,
   sectionFormFromEntry, buildSectionEntry, validateSectionForm, sectionRowDisabledReason,
+  parseSlideLayout, formatSlideLayout, nextOpeningSubTypeKey,
+  openingSubTypeFormFromEntry, buildOpeningSubTypeEntry, validateOpeningSubTypeForm,
+  openingSubTypeFormFieldsFor, openingSubTypeRowDisabledReason,
+  formatMechanismLabel, OPENING_SUB_TYPE_MECHANISM_LABELS,
 } from './catalogMaintenance.js';
 import { setOverlay, clearOverlays, overlayFor, docDiffMap, composeCatalog } from './catalogRegistry.js';
 import { valuesEqual } from './catalogMatch.js';
-import { CatalogKind, FIXTURE_SYMBOL_PROFILES, interiorMasterBuiltinList } from './catalogKinds.js';
+import { CatalogKind, FIXTURE_SYMBOL_PROFILES, KNOWN_OPENING_MECHANISMS, interiorMasterBuiltinList } from './catalogKinds.js';
 import { parseSectionSpecList } from '../structural/sectionCatalog.js';
 import { openingSubTypeBuiltinList, fixtureSymbolBuiltinList } from '../openings/openingCatalog.js';
 import { INTERIOR_MASTERS } from '../finish/materials/interiorMasters.js';
@@ -2127,6 +2131,491 @@ test('planSaveEntry(SECTION): labelの変更はbuiltin行でも通り、override
   const result = planSaveEntry(CatalogKind.SECTION, entry, {
     builtinList: [prevEntry], rowState: 'builtin', prevEntry,
   });
+  assert.equal(result.ok, true);
+  assert.equal(result.nextUser[0].overridesBuiltin, true);
+  assert.equal(result.nextUser[0].label, '新しい呼称');
+});
+
+// ================================================================
+// ステップ12h（建具種別（openingSubType）の追加・複製・編集・削除・標準の上書きを保守パネルの
+// 編集タブにする。slideLayoutは文字列表記のparse/format）: OpeningSubTypeTab専用のフォーム純関数。
+// ================================================================
+
+// ---- formatSlideLayout ⇄ parseSlideLayout ----
+test('formatSlideLayout: {tracks:2, panels:[{arrow:"pos"},{fix:true}]} は "tracks=2; pos fix"', () => {
+  assert.equal(
+    formatSlideLayout({ tracks: 2, panels: [{ arrow: 'pos' }, { fix: true }] }),
+    'tracks=2; pos fix',
+  );
+});
+
+test('formatSlideLayout: 3トラック・both を含む配置も整形できる', () => {
+  assert.equal(
+    formatSlideLayout({ tracks: 3, panels: [{ arrow: 'neg' }, { arrow: 'both' }, { arrow: 'pos' }] }),
+    'tracks=3; neg both pos',
+  );
+});
+
+test('【失敗系】formatSlideLayout: tracksが0・非整数・欠落なら拒否', () => {
+  assert.throws(() => formatSlideLayout({ tracks: 0, panels: [{ fix: true }] }), /tracks/);
+  assert.throws(() => formatSlideLayout({ tracks: 1.5, panels: [{ fix: true }] }), /tracks/);
+  assert.throws(() => formatSlideLayout({ panels: [{ fix: true }] }), /tracks/);
+});
+
+test('【失敗系】formatSlideLayout: panelsが空・不正要素を含むなら拒否', () => {
+  assert.throws(() => formatSlideLayout({ tracks: 2, panels: [] }), /panels/);
+  assert.throws(() => formatSlideLayout({ tracks: 2, panels: [{ arrow: 'bogus' }] }), /panelsに不正な要素/);
+});
+
+test('【失敗系】formatSlideLayout: オブジェクトでない・nullは拒否', () => {
+  assert.throws(() => formatSlideLayout(null), /オブジェクトが必要/);
+  assert.throws(() => formatSlideLayout('tracks=2; pos fix'), /オブジェクトが必要/);
+});
+
+test('parseSlideLayout: "tracks=2; pos fix" は {tracks:2, panels:[{arrow:"pos"},{fix:true}]}', () => {
+  assert.deepEqual(parseSlideLayout('tracks=2; pos fix'), { tracks: 2, panels: [{ arrow: 'pos' }, { fix: true }] });
+});
+
+test('parseSlideLayout: 前後の空白・トークン間の連続空白を許容する', () => {
+  assert.deepEqual(
+    parseSlideLayout('  tracks=3;   neg   both  pos  '),
+    { tracks: 3, panels: [{ arrow: 'neg' }, { arrow: 'both' }, { arrow: 'pos' }] },
+  );
+});
+
+test('【失敗系】parseSlideLayout: 空文字は拒否', () => {
+  assert.throws(() => parseSlideLayout(''), /引違い配置を入力してください/);
+  assert.throws(() => parseSlideLayout('   '), /引違い配置を入力してください/);
+  assert.throws(() => parseSlideLayout(undefined), /引違い配置を入力してください/);
+});
+
+test('【失敗系】parseSlideLayout: tracks=0は拒否', () => {
+  assert.throws(() => parseSlideLayout('tracks=0; fix'), /書式が不正/);
+});
+
+test('【失敗系・QA指摘n1】parseSlideLayout: 前ゼロ表記（tracks=02等）は拒否される（上限は無い）', () => {
+  assert.throws(() => parseSlideLayout('tracks=02; fix'), /書式が不正/);
+  // 前ゼロが無ければ3桁以上でも受理する（上限なしの確認）。
+  assert.deepEqual(parseSlideLayout('tracks=100; fix'), { tracks: 100, panels: [{ fix: true }] });
+});
+
+test('【失敗系・QA指摘n1】formatSlideLayout: panel要素が{fix:true}・{arrow:...}以外の余計なキーを持つと拒否される', () => {
+  assert.throws(
+    () => formatSlideLayout({ tracks: 2, panels: [{ arrow: 'pos', fix: true }, { fix: true }] }),
+    /panelsに不正な要素があります/,
+  );
+  assert.throws(
+    () => formatSlideLayout({ tracks: 2, panels: [{ arrow: 'pos', extra: 1 }] }),
+    /panelsに不正な要素があります/,
+  );
+});
+
+test('【失敗系】parseSlideLayout: 書式が不正（tracks=が無い等）は拒否', () => {
+  assert.throws(() => parseSlideLayout('2; pos fix'), /書式が不正/);
+  assert.throws(() => parseSlideLayout('tracks=2'), /書式が不正/);
+});
+
+test('【失敗系】parseSlideLayout: 未知のトークンは拒否', () => {
+  assert.throws(() => parseSlideLayout('tracks=2; up fix'), /不明な記号があります: up/);
+});
+
+test('formatSlideLayout ⇄ parseSlideLayout: builtin全件のslideLayoutで往復が一致する（parse(format(x)) deepEqual x）', () => {
+  const withSlideLayout = openingSubTypeBuiltinList().filter(e => e.slideLayout);
+  assert.ok(withSlideLayout.length > 0, '前提: slideLayoutを持つbuiltinが1件以上あるはず');
+  for (const entry of withSlideLayout) {
+    const roundTripped = parseSlideLayout(formatSlideLayout(entry.slideLayout));
+    assert.deepEqual(roundTripped, entry.slideLayout, `key=${entry.key}のslideLayout往復が一致しない`);
+  }
+});
+
+// ---- QA指摘m4（2026-09-24再々報告・T3）: formatMechanismLabel/OPENING_SUB_TYPE_MECHANISM_LABELS ----
+test('【T3】OPENING_SUB_TYPE_MECHANISM_LABELS: 表のキー集合がKNOWN_OPENING_MECHANISMSと一致する', () => {
+  assert.deepEqual(
+    new Set(Object.keys(OPENING_SUB_TYPE_MECHANISM_LABELS)),
+    new Set(KNOWN_OPENING_MECHANISMS),
+  );
+});
+
+test('formatMechanismLabel: KNOWN_OPENING_MECHANISMSの全値で、表の文言をそのまま返す', () => {
+  for (const mechanism of KNOWN_OPENING_MECHANISMS) {
+    assert.equal(formatMechanismLabel(mechanism), OPENING_SUB_TYPE_MECHANISM_LABELS[mechanism]);
+  }
+});
+
+test('【失敗系】formatMechanismLabel: 対応表に無い値は生値へフォールバックする（投げない）', () => {
+  assert.equal(formatMechanismLabel('bogus'), 'bogus');
+  assert.equal(formatMechanismLabel(undefined), undefined);
+});
+
+// ---- nextOpeningSubTypeKey（設計「keyは同カテゴリ内でuser1…を自動採番」） ----
+test('nextOpeningSubTypeKey: allKeysが空なら\'user1\'', () => {
+  assert.equal(nextOpeningSubTypeKey('fitting', new Set()), 'user1');
+});
+
+test('nextOpeningSubTypeKey: fitting:user1が使用済みなら\'user2\'', () => {
+  assert.equal(nextOpeningSubTypeKey('fitting', new Set(['fitting:user1'])), 'user2');
+});
+
+test('nextOpeningSubTypeKey: 欠番（user1・user3使用済み）は最小の空きuser2を返す', () => {
+  assert.equal(nextOpeningSubTypeKey('fitting', new Set(['fitting:user1', 'fitting:user3'])), 'user2');
+});
+
+test('nextOpeningSubTypeKey: カテゴリごとに独立した連番（window:user1が使用済みでもfittingはuser1から）', () => {
+  assert.equal(nextOpeningSubTypeKey('fitting', new Set(['window:user1'])), 'user1');
+});
+
+test('nextOpeningSubTypeKey: builtinのキー（user連番の書式に一致しないもの）は無視される', () => {
+  assert.equal(nextOpeningSubTypeKey('fitting', new Set(['fitting:singleSwing', 'fitting:sliding'])), 'user1');
+});
+
+test('【失敗系】nextOpeningSubTypeKey: user連番の書式に一致しない紛らわしいキー（user2x等）は無視され採番に影響しない', () => {
+  assert.equal(nextOpeningSubTypeKey('fitting', new Set(['fitting:user2x', 'fitting:user1'])), 'user2');
+});
+
+// ---- openingSubTypeFormFromEntry ⇄ buildOpeningSubTypeEntry ----
+test('openingSubTypeFormFromEntry ⇄ buildOpeningSubTypeEntry: 本体の建具種別全45件で往復してもエントリが一致する', () => {
+  const builtin = openingSubTypeBuiltinList();
+  assert.equal(builtin.length, 45, '前提: FITTING_CATALOG(20)+WINDOW_CATALOG(25)=45件のはず');
+  for (const entry of builtin) {
+    const roundTripped = buildOpeningSubTypeEntry(openingSubTypeFormFromEntry(entry));
+    assert.deepEqual(roundTripped, entry, `category:key=${entry.category}:${entry.key}の往復が一致しない`);
+  }
+});
+
+test('openingSubTypeFormFromEntry: wallKinds未設定はwallInterior/wallExteriorとも false・wallKindsExplicitEmptyもfalse', () => {
+  const form = openingSubTypeFormFromEntry({ category: 'window', key: 'fixed', label: 'x', mechanism: 'fixed' });
+  assert.equal(form.wallInterior, false);
+  assert.equal(form.wallExterior, false);
+  assert.equal(form.wallKindsExplicitEmpty, false);
+});
+
+// ---- QA指摘m1（2026-09-24再々報告・最優先）: wallKinds:[]（どちらにも出ない）の保持 ----
+test('【最優先・m1】openingSubTypeFormFromEntry: wallKinds:[]（明示的に空）はwallInterior/wallExteriorともfalseだがwallKindsExplicitEmpty:true', () => {
+  const form = openingSubTypeFormFromEntry({
+    category: 'fitting', key: 'x', label: 'x', mechanism: 'swing', wallKinds: [],
+  });
+  assert.equal(form.wallInterior, false);
+  assert.equal(form.wallExterior, false);
+  assert.equal(form.wallKindsExplicitEmpty, true);
+});
+
+test('【最優先・T1】openingSubTypeFormFromEntry ⇄ buildOpeningSubTypeEntry: wallKinds:[]を持つuser行は、往復（編集せず保存）してもwallKinds:[]のままでplanSaveEntryがnoopになる', () => {
+  const prevEntry = {
+    category: 'fitting', key: 'user1', label: '予備建具', mechanism: 'swing',
+    defaultWidth: 800, defaultHeight: 2000, wallKinds: [],
+  };
+  // jsxが実際に渡す経路: 選択行のentry→openingSubTypeFormFromEntryでフォームへ→
+  // 何も編集せずbuildOpeningSubTypeEntryでエントリへ戻す。
+  const rebuilt = buildOpeningSubTypeEntry(openingSubTypeFormFromEntry(prevEntry));
+  assert.deepEqual(rebuilt, prevEntry, 'wallKinds:[]が往復で保持されていない（黙って省略＝両方に出せる、へ反転した）');
+  assert.deepEqual(rebuilt.wallKinds, [], 'wallKindsが[]のままでない');
+
+  const plan = planSaveEntry(CatalogKind.OPENING_SUB_TYPE, rebuilt, {
+    builtinList: [], rowState: 'user', prevEntry,
+  });
+  assert.equal(plan.ok, true);
+  assert.equal(plan.noop, true, '編集していないのにnoop:trueにならない（wallKinds:[]の反転が保存プランへ伝播している）');
+});
+
+test('openingSubTypeFormFromEntry: 数値項目が未設定（null/undefined）ならフォームでは空文字になる', () => {
+  const form = openingSubTypeFormFromEntry({ category: 'fitting', key: 'x', label: 'x', mechanism: 'swing' });
+  assert.equal(form.defaultWidth, '');
+  assert.equal(form.defaultHeight, '');
+  assert.equal(form.childRatio, '');
+  assert.equal(form.fireLeaves, '');
+  assert.equal(form.fireAngle, '');
+  assert.equal(form.slideLayoutText, '');
+});
+
+test('【失敗系】openingSubTypeFormFromEntry: 壊れたslideLayout（parseできない形）はslideLayoutTextを空文字にフォールバックする（投げない）', () => {
+  const form = openingSubTypeFormFromEntry({
+    category: 'window', key: 'x', label: 'x', mechanism: 'slideLayout', slideLayout: { tracks: 0, panels: [] },
+  });
+  assert.equal(form.slideLayoutText, '');
+});
+
+test('buildOpeningSubTypeEntry: key/labelの前後の空白を除く', () => {
+  const entry = buildOpeningSubTypeEntry({
+    category: 'fitting', key: ' user1 ', label: ' 予備建具 ', mechanism: 'swing',
+    defaultWidth: '800', defaultHeight: '2000',
+  });
+  assert.equal(entry.key, 'user1');
+  assert.equal(entry.label, '予備建具');
+});
+
+test('buildOpeningSubTypeEntry: wallInterior/wallExteriorとも falseならwallKinds自体を持たない', () => {
+  const entry = buildOpeningSubTypeEntry({
+    category: 'window', key: 'user1', label: 'x', mechanism: 'fixed', defaultWidth: '600', defaultHeight: '600',
+  });
+  assert.equal('wallKinds' in entry, false);
+});
+
+test('buildOpeningSubTypeEntry: mechanismがswingChild以外ならchildRatioを入力してもエントリへ持たせない', () => {
+  const entry = buildOpeningSubTypeEntry({
+    category: 'fitting', key: 'user1', label: 'x', mechanism: 'swing',
+    defaultWidth: '800', defaultHeight: '2000', childRatio: '0.3',
+  });
+  assert.equal('childRatio' in entry, false);
+});
+
+test('【失敗系】buildOpeningSubTypeEntry: slideLayoutTextが不正（parseできない）ならslideLayoutを持たせない（validateOpeningSubTypeForm側で拒否する）', () => {
+  const entry = buildOpeningSubTypeEntry({
+    category: 'window', key: 'user1', label: 'x', mechanism: 'slideLayout',
+    defaultWidth: '1200', defaultHeight: '1170', slideLayoutText: 'tracks=0; fix',
+  });
+  assert.equal('slideLayout' in entry, false);
+});
+
+// ---- validateOpeningSubTypeForm ----
+function openingSubTypeForm(overrides) {
+  return {
+    category: 'fitting', key: 'user1', label: '予備建具', mechanism: 'swing',
+    wallInterior: true, wallExterior: false, defaultWidth: '800', defaultHeight: '2000',
+    childRatio: '', fireLeaves: '', fireAngle: '', slideLayoutText: '',
+    ...overrides,
+  };
+}
+
+test('validateOpeningSubTypeForm: 呼称が空なら拒否（追加・編集とも）', () => {
+  assert.equal(validateOpeningSubTypeForm(openingSubTypeForm({ label: '' }), { isAdding: false }).ok, false);
+  assert.equal(validateOpeningSubTypeForm(openingSubTypeForm({ label: '  ' }), { isAdding: true }).ok, false);
+});
+
+test('【失敗系】validateOpeningSubTypeForm: categoryがfitting/window以外なら拒否', () => {
+  const result = validateOpeningSubTypeForm(openingSubTypeForm({ category: 'other' }), { isAdding: false });
+  assert.equal(result.ok, false);
+});
+
+test('【失敗系】validateOpeningSubTypeForm: mechanismがKNOWN_OPENING_MECHANISMSに無ければ拒否', () => {
+  const result = validateOpeningSubTypeForm(openingSubTypeForm({ mechanism: 'bogus' }), { isAdding: false });
+  assert.equal(result.ok, false);
+});
+
+test('validateOpeningSubTypeForm: mechanismがKNOWN_OPENING_MECHANISMSの全値で有効（slideLayoutだけslideLayoutTextも必要）', () => {
+  for (const mechanism of KNOWN_OPENING_MECHANISMS) {
+    const slideLayoutText = mechanism === 'slideLayout' ? 'tracks=2; pos fix' : '';
+    const result = validateOpeningSubTypeForm(openingSubTypeForm({ mechanism, slideLayoutText }), { isAdding: false });
+    assert.equal(result.ok, true, `mechanism=${mechanism}が拒否された: ${result.message}`);
+  }
+});
+
+test('【失敗系】validateOpeningSubTypeForm: 既定幅・既定高が0以下・NaNなら拒否', () => {
+  assert.equal(validateOpeningSubTypeForm(openingSubTypeForm({ defaultWidth: '0' }), { isAdding: false }).ok, false);
+  assert.equal(validateOpeningSubTypeForm(openingSubTypeForm({ defaultWidth: 'x' }), { isAdding: false }).ok, false);
+  assert.equal(validateOpeningSubTypeForm(openingSubTypeForm({ defaultHeight: '-1' }), { isAdding: false }).ok, false);
+});
+
+test('validateOpeningSubTypeForm: 機構別の欄は未入力なら検査をスキップする（既定値へフォールバックするため）', () => {
+  const result = validateOpeningSubTypeForm(
+    openingSubTypeForm({ mechanism: 'swingChild', childRatio: '' }), { isAdding: false },
+  );
+  assert.equal(result.ok, true);
+});
+
+test('【失敗系】validateOpeningSubTypeForm: mechanism=swingChildのchildRatioは0より大きく1より小さい数値でなければ拒否', () => {
+  for (const childRatio of ['0', '1', '-0.1', '1.5', 'x']) {
+    const result = validateOpeningSubTypeForm(
+      openingSubTypeForm({ mechanism: 'swingChild', childRatio }), { isAdding: false },
+    );
+    assert.equal(result.ok, false, `childRatio=${childRatio}が受理された`);
+  }
+});
+
+test('validateOpeningSubTypeForm: mechanism=swingChildのchildRatioが0〜1の間ならok:true', () => {
+  const result = validateOpeningSubTypeForm(
+    openingSubTypeForm({ mechanism: 'swingChild', childRatio: '0.3' }), { isAdding: false },
+  );
+  assert.equal(result.ok, true);
+});
+
+// ---- QA指摘m3（リード裁定・T5）: fireLeaves∈{1,2}・fireAngle∈{90,180}の2値のみ許可 ----
+test('【失敗系・T5】validateOpeningSubTypeForm: mechanism=fireDoorのfireLeavesは1・2以外なら拒否（3や非数値も含む）', () => {
+  for (const fireLeaves of ['0', '3', '1.5', 'x', '-1']) {
+    const result = validateOpeningSubTypeForm(
+      openingSubTypeForm({ mechanism: 'fireDoor', fireLeaves }), { isAdding: false },
+    );
+    assert.equal(result.ok, false, `fireLeaves=${fireLeaves}が受理された`);
+  }
+});
+
+test('【失敗系・T5】validateOpeningSubTypeForm: mechanism=fireDoor/fireFoldのfireAngleは90・180以外なら拒否（400や0も含む）', () => {
+  for (const mechanism of ['fireDoor', 'fireFold']) {
+    for (const fireAngle of ['0', '400', '91', 'x']) {
+      const result = validateOpeningSubTypeForm(
+        openingSubTypeForm({ mechanism, fireAngle }), { isAdding: false },
+      );
+      assert.equal(result.ok, false, `mechanism=${mechanism} fireAngle=${fireAngle}が受理された`);
+    }
+  }
+});
+
+test('validateOpeningSubTypeForm: mechanism=fireDoorのfireLeaves（1・2）/fireAngle（90・180）が有効ならok:true', () => {
+  for (const fireLeaves of ['1', '2']) {
+    for (const fireAngle of ['90', '180']) {
+      const result = validateOpeningSubTypeForm(
+        openingSubTypeForm({ mechanism: 'fireDoor', fireLeaves, fireAngle }), { isAdding: false },
+      );
+      assert.equal(result.ok, true, `fireLeaves=${fireLeaves} fireAngle=${fireAngle}が拒否された: ${result.message}`);
+    }
+  }
+});
+
+test('validateOpeningSubTypeForm: mechanism=fireFoldはfireAngle（90・180）のみ検査し、fireLeavesは無視する（描画側が参照しないため）', () => {
+  const result = validateOpeningSubTypeForm(
+    openingSubTypeForm({ mechanism: 'fireFold', fireLeaves: '99', fireAngle: '180' }), { isAdding: false },
+  );
+  assert.equal(result.ok, true, `fireFoldでfireLeavesが検査対象に入っている: ${result.message}`);
+});
+
+test('【失敗系】validateOpeningSubTypeForm: mechanism=slideLayoutはslideLayoutText必須（空なら拒否）', () => {
+  const result = validateOpeningSubTypeForm(
+    openingSubTypeForm({ mechanism: 'slideLayout', slideLayoutText: '' }), { isAdding: false },
+  );
+  assert.equal(result.ok, false);
+});
+
+test('【失敗系】validateOpeningSubTypeForm: mechanism=slideLayoutはslideLayoutTextの書式が不正なら拒否（parseSlideLayoutと同じ例外メッセージ）', () => {
+  const result = validateOpeningSubTypeForm(
+    openingSubTypeForm({ mechanism: 'slideLayout', slideLayoutText: 'tracks=0; fix' }), { isAdding: false },
+  );
+  assert.equal(result.ok, false);
+  assert.match(result.message, /書式が不正/);
+});
+
+test('validateOpeningSubTypeForm: mechanism=slideLayoutのslideLayoutTextが有効ならok:true', () => {
+  const result = validateOpeningSubTypeForm(
+    openingSubTypeForm({ mechanism: 'slideLayout', slideLayoutText: 'tracks=2; pos fix' }), { isAdding: false },
+  );
+  assert.equal(result.ok, true);
+});
+
+test('【失敗系】validateOpeningSubTypeForm: 追加時にキーが空（割り当て漏れ）なら拒否', () => {
+  const result = validateOpeningSubTypeForm(openingSubTypeForm({ key: '' }), { isAdding: true });
+  assert.equal(result.ok, false);
+});
+
+test('【失敗系】validateOpeningSubTypeForm: 追加時にbuiltinKeysと同じ複合キー（category:key）は拒否', () => {
+  const result = validateOpeningSubTypeForm(
+    openingSubTypeForm({ category: 'fitting', key: 'singleSwing' }),
+    { isAdding: true, builtinKeys: new Set(['fitting:singleSwing']) },
+  );
+  assert.equal(result.ok, false);
+});
+
+test('【失敗系】validateOpeningSubTypeForm: 追加時にallKeysと同じ複合キー（builtinKeysには無い＝ユーザー追加分と衝突）は拒否', () => {
+  const result = validateOpeningSubTypeForm(
+    openingSubTypeForm({ category: 'fitting', key: 'user1' }),
+    { isAdding: true, allKeys: new Set(['fitting:user1']) },
+  );
+  assert.equal(result.ok, false);
+});
+
+test('validateOpeningSubTypeForm: 追加時に未使用の複合キーならok:true', () => {
+  const result = validateOpeningSubTypeForm(
+    openingSubTypeForm({ category: 'fitting', key: 'user1' }),
+    { isAdding: true, allKeys: new Set(['window:user1']), builtinKeys: new Set(['fitting:singleSwing']) },
+  );
+  assert.equal(result.ok, true);
+});
+
+test('validateOpeningSubTypeForm: 編集時（isAdding:false）はキーの重複検査をしない', () => {
+  const result = validateOpeningSubTypeForm(
+    openingSubTypeForm({ category: 'fitting', key: 'singleSwing' }),
+    { isAdding: false, builtinKeys: new Set(['fitting:singleSwing']) },
+  );
+  assert.equal(result.ok, true);
+});
+
+// ---- openingSubTypeFormFieldsFor ----
+test('openingSubTypeFormFieldsFor: mechanism=swingChildのときだけshowChildRatio:true', () => {
+  assert.deepEqual(
+    openingSubTypeFormFieldsFor({ mechanism: 'swingChild' }),
+    { showChildRatio: true, showFireLeaves: false, showFireAngle: false, showSlideLayout: false },
+  );
+});
+
+// ---- QA指摘m3（リード裁定）: fireLeavesはfireDoorのときだけ・fireAngleはfireDoor/fireFoldの両方 ----
+test('openingSubTypeFormFieldsFor: mechanism=fireDoorのときだけshowFireLeaves:true（fireFoldはfalse）', () => {
+  assert.equal(openingSubTypeFormFieldsFor({ mechanism: 'fireDoor' }).showFireLeaves, true);
+  assert.equal(openingSubTypeFormFieldsFor({ mechanism: 'fireFold' }).showFireLeaves, false);
+  assert.equal(openingSubTypeFormFieldsFor({ mechanism: 'swing' }).showFireLeaves, false);
+});
+
+test('openingSubTypeFormFieldsFor: mechanism=fireDoor/fireFoldのときだけshowFireAngle:true', () => {
+  assert.equal(openingSubTypeFormFieldsFor({ mechanism: 'fireDoor' }).showFireAngle, true);
+  assert.equal(openingSubTypeFormFieldsFor({ mechanism: 'fireFold' }).showFireAngle, true);
+  assert.equal(openingSubTypeFormFieldsFor({ mechanism: 'swing' }).showFireAngle, false);
+});
+
+test('openingSubTypeFormFieldsFor: mechanism=slideLayoutのときだけshowSlideLayout:true', () => {
+  assert.equal(openingSubTypeFormFieldsFor({ mechanism: 'slideLayout' }).showSlideLayout, true);
+  assert.equal(openingSubTypeFormFieldsFor({ mechanism: 'swing' }).showSlideLayout, false);
+});
+
+test('【失敗系】openingSubTypeFormFieldsFor: form省略・mechanism未設定はすべてfalse', () => {
+  const allFalse = { showChildRatio: false, showFireLeaves: false, showFireAngle: false, showSlideLayout: false };
+  assert.deepEqual(openingSubTypeFormFieldsFor(null), allFalse);
+  assert.deepEqual(openingSubTypeFormFieldsFor({}), allFalse);
+});
+
+// ---- openingSubTypeRowDisabledReason ----
+test('openingSubTypeRowDisabledReason: 新規追加（isAdding:true）は常にnull', () => {
+  assert.equal(openingSubTypeRowDisabledReason({ isAdding: true, editState: { canEdit: false, reason: 'x' } }), null);
+});
+
+test('openingSubTypeRowDisabledReason: editState.canEdit:trueはnull、falseはeditState.reasonを返す', () => {
+  assert.equal(openingSubTypeRowDisabledReason({ isAdding: false, editState: { canEdit: true, reason: null } }), null);
+  assert.equal(
+    openingSubTypeRowDisabledReason({ isAdding: false, editState: { canEdit: false, reason: '複製してください' } }),
+    '複製してください',
+  );
+});
+
+test('【失敗系】openingSubTypeRowDisabledReason: editState省略・isAdding:falseはnull', () => {
+  assert.equal(openingSubTypeRowDisabledReason({ isAdding: false }), null);
+  assert.equal(openingSubTypeRowDisabledReason(), null);
+});
+
+// ---- rowEditState/lockedFieldsFor/planSaveEntry(OPENING_SUB_TYPE)経由の統合確認 ----
+test('rowEditState(OPENING_SUB_TYPE): builtin行はcanEdit:true・canRevert:false・canDelete:false（上書きは編集経由）', () => {
+  const builtinList = openingSubTypeBuiltinList();
+  const entry = builtinList.find(e => e.category === 'fitting' && e.key === 'singleSwing');
+  const row = { entry, origin: 'builtin', diff: null };
+  const result = rowEditState(CatalogKind.OPENING_SUB_TYPE, row, {});
+  assert.equal(result.state, 'builtin');
+  assert.equal(result.canEdit, true);
+  assert.equal(result.canRevert, false);
+  assert.equal(result.canDelete, false);
+});
+
+test('planSaveEntry(OPENING_SUB_TYPE): 既存行のcategory/key/mechanismを変えると拒否される（固定項目）', () => {
+  const builtinList = openingSubTypeBuiltinList();
+  const prevEntry = builtinList.find(e => e.category === 'fitting' && e.key === 'singleSwing');
+  const builtinKeys = new Set(builtinList.map(e => `${e.category}:${e.key}`));
+
+  const categoryChanged = { ...prevEntry, category: 'window' };
+  assert.equal(
+    planSaveEntry(CatalogKind.OPENING_SUB_TYPE, categoryChanged, { builtinList, rowState: 'builtin', prevEntry }).ok,
+    false,
+  );
+  const keyChanged = { ...prevEntry, key: 'renamed' };
+  assert.equal(
+    planSaveEntry(CatalogKind.OPENING_SUB_TYPE, keyChanged, { builtinList, rowState: 'builtin', prevEntry }).ok,
+    false,
+  );
+  const mechanismChanged = { ...prevEntry, mechanism: 'slideSingle' };
+  assert.equal(
+    planSaveEntry(CatalogKind.OPENING_SUB_TYPE, mechanismChanged, { builtinList, rowState: 'builtin', prevEntry }).ok,
+    false,
+  );
+  assert.ok(builtinKeys.has(`${prevEntry.category}:${prevEntry.key}`), '前提: prevEntryはbuiltinのキーを持つはず');
+});
+
+test('planSaveEntry(OPENING_SUB_TYPE): labelの変更はbuiltin行でも通り、overridesBuiltin:trueが付く', () => {
+  const builtinList = openingSubTypeBuiltinList();
+  const prevEntry = builtinList.find(e => e.category === 'fitting' && e.key === 'singleSwing');
+  const entry = { ...prevEntry, label: '新しい呼称' };
+  const result = planSaveEntry(CatalogKind.OPENING_SUB_TYPE, entry, { builtinList, rowState: 'builtin', prevEntry });
   assert.equal(result.ok, true);
   assert.equal(result.nextUser[0].overridesBuiltin, true);
   assert.equal(result.nextUser[0].label, '新しい呼称');

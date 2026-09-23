@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { CatalogKind, KIND_LABELS, kindDef } from '../catalog/catalogKinds.js';
 import { findSectionEntry, parseSectionSpec, parseSectionSpecList } from '../structural/sectionCatalog.js';
-import { planBulkSectionImport } from '../catalog/catalogMaintenance.js';
+import { planBulkSectionImport, buildOpeningSubTypeEntry } from '../catalog/catalogMaintenance.js';
 import { OpeningMechanism } from '../openings/openingCatalog.js';
 import { figureBounds } from '../structural/sectionFigure/sectionGeometry.js';
 import { FIGURE_FRAME_BY_MAP } from '../structural/memberCatalog.js';
@@ -164,6 +164,49 @@ test('buildCatalogPreview(openingSubType): entryがkey/categoryを持たない�
   const result = buildCatalogPreview(CatalogKind.OPENING_SUB_TYPE, { label: 'x' });
   assert.equal(result.ok, false);
   assert.equal(typeof result.reason, 'string');
+});
+
+// ---- QA指摘m2（2026-09-24再々報告・T4）: 既定幅・既定高が未入力・非数・負数のドラフトは、
+// 姿図・平面記号のどちらもok:falseで理由を返す（崩れたprimitivesをok:trueで返さない）。
+// jsxが実際に渡す形＝OpeningSubTypeTab（ui/CatalogMaintenancePanel.jsx）のemptyOpeningSubTypeForm
+// と同じフォーム形を組み立て、buildOpeningSubTypeEntry(form)で組み立てたエントリをそのまま渡す
+// （catalog/catalogMaintenance.jsのbuild関数を通す＝jsxが渡す形でテストする規約）。 ----
+function draftOpeningSubTypeForm(overrides) {
+  return {
+    category: 'fitting', key: 'user1', label: '予備建具', mechanism: 'swing',
+    wallInterior: false, wallExterior: false, wallKindsExplicitEmpty: false,
+    defaultWidth: '', defaultHeight: '',
+    childRatio: '', fireLeaves: '', fireAngle: '', slideLayoutText: '',
+    ...overrides,
+  };
+}
+
+for (const [label, formOverrides] of [
+  ['未入力', {}],
+  ['非数', { defaultWidth: 'abc', defaultHeight: 'xyz' }],
+  ['負数', { defaultWidth: '-100', defaultHeight: '-200' }],
+]) {
+  test(`【T4】buildCatalogPreview(openingSubType, elevation): 既定幅・既定高が${label}のドラフトはok:falseで理由を返す（崩れた姿図を描かない）`, () => {
+    const entry = buildOpeningSubTypeEntry(draftOpeningSubTypeForm(formOverrides));
+    const result = buildCatalogPreview(CatalogKind.OPENING_SUB_TYPE, entry, { view: 'elevation' });
+    assert.equal(result.ok, false, `姿図がok:trueになった（${label}）`);
+    assert.equal(result.reason, '既定幅・既定高を入力すると作図します');
+  });
+
+  test(`【T4】buildCatalogPreview(openingSubType, plan): 既定幅・既定高が${label}のドラフトはok:falseで理由を返す（崩れた平面記号を描かない）`, () => {
+    const entry = buildOpeningSubTypeEntry(draftOpeningSubTypeForm(formOverrides));
+    const result = buildCatalogPreview(CatalogKind.OPENING_SUB_TYPE, entry, { view: 'plan' });
+    assert.equal(result.ok, false, `平面記号がok:trueになった（${label}）`);
+    assert.equal(result.reason, '既定幅・既定高を入力すると作図します');
+  });
+}
+
+test('【T4】buildCatalogPreview(openingSubType, elevation/plan): 既定幅・既定高が有効な正数ならok:true（ガードの過剰弾き無し）', () => {
+  const entry = buildOpeningSubTypeEntry(draftOpeningSubTypeForm({ defaultWidth: '800', defaultHeight: '2000' }));
+  const elev = buildCatalogPreview(CatalogKind.OPENING_SUB_TYPE, entry, { view: 'elevation' });
+  assert.equal(elev.ok, true, `姿図がok:falseになった: ${elev.ok ? '' : elev.reason}`);
+  const plan = buildCatalogPreview(CatalogKind.OPENING_SUB_TYPE, entry, { view: 'plan' });
+  assert.equal(plan.ok, true, `平面記号がok:falseになった: ${plan.ok ? '' : plan.reason}`);
 });
 
 // ---- 9. ステップ9c: 一括入力（planBulkSectionImport）の解析結果を1件分プレビューへ渡す縦の1本 ----

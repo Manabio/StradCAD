@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import './CatalogMaintenancePanel.css';
-import { CatalogKind, kindDef, MATERIAL_CLASSES, FIXTURE_SYMBOL_PROFILES } from '../catalog/catalogKinds.js';
+import {
+  CatalogKind, kindDef, MATERIAL_CLASSES, FIXTURE_SYMBOL_PROFILES, KNOWN_OPENING_MECHANISMS,
+} from '../catalog/catalogKinds.js';
 import { parseMaterialCode } from '../catalog/materialCode.js';
 import { docDiffMap, overlayFor, removeDocEntry } from '../catalog/catalogRegistry.js';
 import { CATALOG_DIFF_COLOR, CATALOG_DIFF_MARK, diffPairs, diffTooltip, fieldLabel } from '../catalog/catalogDiffView.js';
@@ -23,6 +25,9 @@ import {
   nextInteriorMasterKey, interiorMasterFormFromEntry, buildInteriorMasterEntry,
   validateInteriorMasterForm, interiorMasterRowDisabledReason,
   sectionFormFromEntry, buildSectionEntry, validateSectionForm, sectionRowDisabledReason,
+  nextOpeningSubTypeKey, openingSubTypeFormFromEntry, buildOpeningSubTypeEntry,
+  validateOpeningSubTypeForm, openingSubTypeFormFieldsFor, openingSubTypeRowDisabledReason,
+  formatMechanismLabel,
 } from '../catalog/catalogMaintenance.js';
 import { parseSectionSpecList } from '../structural/sectionCatalog.js';
 import { CatalogPreview } from './CatalogPreview.jsx';
@@ -54,12 +59,10 @@ const ORIGIN_LABELS = Object.freeze({ doc: '同梱', user: 'ライブラリ', bu
 // 複雑・編集はステップ12でまとめて着手する裁定）。
 // ステップ12g: 内装マスター（InteriorMasterTab）・断面（SectionTab）は編集タブへ移行したため、
 // ここには含めない（12fのfixtureSymbol移行と同型）。境界マスターは範囲外のため引き続き閲覧のみ。
+// ステップ12h: 建具種別（openingSubType）も専用の編集タブ（OpeningSubTypeTab）へ移行したため、
+// READONLY_KIND_FIELDSに残るのは境界マスターのみになった。
 const READONLY_KIND_FIELDS = Object.freeze({
   [CatalogKind.BOUNDARY_MASTER]: Object.freeze(['label', 'kind', 'layers', 'derivedFrom', 'fields']),
-  [CatalogKind.OPENING_SUB_TYPE]: Object.freeze([
-    'label', 'category', 'mechanism', 'wallKinds', 'defaultWidth', 'defaultHeight',
-    'childRatio', 'fireLeaves', 'fireAngle', 'slideLayout',
-  ]),
 });
 
 /** layers（境界マスター）1件を「役割: コード or src」の1行文字列にする。 */
@@ -971,9 +974,10 @@ export function CatalogMaintenancePanel({ onClose }) {
             </>
           )}
 
-          {/* ステップ7d: 境界マスター・建具種別の閲覧タブ（読み取り専用。追加・複製・編集・
-              削除・合わせ直しボタンは出さない——選ぶ経路が無い・layers/fieldsの編集UIは複雑・
-              境界マスターは範囲外の裁定。内装マスター・断面・建具記号は12f/12gで編集タブへ移行済み）。 */}
+          {/* ステップ7d: 境界マスターの閲覧タブ（読み取り専用。追加・複製・編集・削除・
+              合わせ直しボタンは出さない——選ぶ経路が無い・layers/fieldsの編集UIは複雑・範囲外の
+              裁定。内装マスター・断面・建具記号・建具種別は12f/12g/12hで編集タブへ移行済みのため、
+              ステップ12h時点でREADONLY_KIND_FIELDSに残るのは境界マスターのみ）。 */}
           {READONLY_KIND_FIELDS[activeKind] && (
             <ReadonlyKindTab
               kind={activeKind}
@@ -1005,6 +1009,13 @@ export function CatalogMaintenancePanel({ onClose }) {
           {activeKind === CatalogKind.SECTION && (
             <SectionTab />
           )}
+
+          {/* ステップ12h: 建具種別（openingSubType）タブ（追加・複製・編集・標準の上書き・
+              標準に戻す・削除）。materialListは平面記号プレビューのダミー壁厚導出用（材料タブが
+              動的importで読み込んだbuiltin一覧をそのまま渡す）。 */}
+          {activeKind === CatalogKind.OPENING_SUB_TYPE && (
+            <OpeningSubTypeTab materialList={builtinList} />
+          )}
         </div>
       </div>
     </div>
@@ -1012,11 +1023,12 @@ export function CatalogMaintenancePanel({ onClose }) {
 }
 
 /**
- * ステップ7d: 境界マスター・建具種別の閲覧タブ本体（読み取り専用。ステップ12g時点で
- * READONLY_KIND_FIELDSに残るのはこの2種別のみ——内装マスター・断面は12f/12gで専用の編集タブへ
- * 移行した）。builtin一覧・overlay（catalog/catalogRegistry.js）を buildCatalogRows で合成し、
- * 出所バッジ・R13差分（≠＋オレンジ＋diffTooltip）付きの一覧と、選択行の詳細
- * （READONLY_KIND_FIELDS）を表示するだけ——追加・複製・編集・削除・合わせ直しの手段は一切持たない。
+ * ステップ7d: 境界マスターの閲覧タブ本体（読み取り専用。ステップ12h時点で
+ * READONLY_KIND_FIELDSに残るのはこの1種別のみ——内装マスター・断面・建具記号・建具種別は
+ * 12f/12g/12hで専用の編集タブへ移行した）。builtin一覧・overlay（catalog/catalogRegistry.js）を
+ * buildCatalogRows で合成し、出所バッジ・R13差分（≠＋オレンジ＋diffTooltip）付きの一覧と、
+ * 選択行の詳細（READONLY_KIND_FIELDS）を表示するだけ——追加・複製・編集・削除・合わせ直しの
+ * 手段は一切持たない。
  */
 function ReadonlyKindTab({ kind, builtinList, search, setSearch, selectedKey, setSelectedKey, materialList }) {
   const def = kindDef(kind);
@@ -2439,6 +2451,538 @@ function SectionTab() {
             )}
 
             {selectedRow && <CatalogPreview kind={CatalogKind.SECTION} entry={selectedRow.entry} />}
+          </>
+        )}
+      </div>
+    </>
+  );
+}
+
+// ステップ12h: 建具種別（openingSubType）タブの新規追加フォーム初期値。key はnextOpeningSubTypeKey
+// が同カテゴリ内で決めた値（user連番）をそのまま持つ——内装マスターと同じくユーザーが直接
+// キーを入力する欄は無い。mechanismは既定でKNOWN_OPENING_MECHANISMSの先頭値にしておく
+// （selectは常に有効な値を持たせるcontrolled component契約）。
+function emptyOpeningSubTypeForm(category, key) {
+  return {
+    category, key, label: '', mechanism: KNOWN_OPENING_MECHANISMS[0],
+    wallInterior: false, wallExterior: false, wallKindsExplicitEmpty: false,
+    defaultWidth: '', defaultHeight: '',
+    childRatio: '', fireLeaves: '', fireAngle: '', slideLayoutText: '',
+  };
+}
+
+/**
+ * ステップ12h: 建具種別（openingSubType）タブ本体。建具記号タブ（FixtureSymbolTab・12f）・
+ * 内装マスタータブ（InteriorMasterTab・12g）と同じ共通ロジック（rowEditState/lockedFieldsFor/
+ * planSaveEntry/planRevertToBuiltin/planRemoveUserEntry/applyCatalogEditPlan・
+ * useCatalogEditActions）を使う——追加・複製・編集・標準の上書き・標準に戻す・削除の全操作。
+ * キー（key）はカテゴリ（区分）ごとに独立した連番（nextOpeningSubTypeKey。'user1'…）で採番する
+ * ——区分（category）を追加中に切り替えると、その区分の次の空き番号へ採番し直す
+ * （handleCategoryChange）。区分・キー・機構（mechanism）はkeyBoundFields（catalogKinds.js
+ * OPENING_SUB_TYPE登録表）のため既存行では固定（lockedFields）——編集できるのは呼称・対応壁種・
+ * 既定幅／既定高・機構別の欄（子扉比率・防火枚数／防火角度・引違い配置）のみ。
+ * 作図プレビューは姿図＋平面記号の両方を持つ（ui/catalogPreview.js openingSubTypePreview・
+ * openingSubTypePlanPreview。CatalogPreview.jsxがkindを見てview:'plan'も自動で並べる）。
+ * @param {{ materialList: object[]|null }} props materialListは平面記号プレビューのダミー壁厚
+ *   導出用（材料タブが動的importで読み込んだbuiltin一覧。未指定なら既定壁厚に落ちる）。
+ */
+function OpeningSubTypeTab({ materialList }) {
+  const def = kindDef(CatalogKind.OPENING_SUB_TYPE);
+  const [builtinList, setBuiltinList] = useState(null);
+  const [loadError, setLoadError] = useState(false);
+  const [search, setSearch] = useState('');
+
+  const [selectedKey, setSelectedKey] = useState(null);
+  const [isAdding, setIsAdding] = useState(false);
+  const [form, setForm] = useState(null);
+  const [formError, setFormError] = useState(null);
+  const [formMessage, setFormMessage] = useState(null);
+
+  function onOpeningSubTypeSaved(entryKey, meta) {
+    setIsAdding(false);
+    setSelectedKey(entryKey);
+    setFormMessage(catalogSaveMessage(CatalogKind.OPENING_SUB_TYPE, meta));
+  }
+  function onOpeningSubTypeDeleted(plan) {
+    setIsAdding(false);
+    setSelectedKey(null);
+    setForm(null);
+    setFormMessage(removeMessageFor(plan));
+  }
+  function onOpeningSubTypeReverted() {
+    setIsAdding(false);
+    setSelectedKey(null);
+    setForm(null);
+    setFormMessage('標準に戻しました');
+  }
+  const actions = useCatalogEditActions(CatalogKind.OPENING_SUB_TYPE, {
+    onSaved: onOpeningSubTypeSaved,
+    onDeleted: onOpeningSubTypeDeleted,
+    onReverted: onOpeningSubTypeReverted,
+    onError: setFormError,
+  });
+  const { busy } = actions;
+
+  useEffect(() => {
+    let cancelled = false;
+    kindDef(CatalogKind.OPENING_SUB_TYPE).loadBuiltin().then(list => {
+      if (!cancelled) setBuiltinList(list);
+    }).catch(() => { if (!cancelled) setLoadError(true); });
+    return () => { cancelled = true; };
+  }, []);
+
+  const builtinKeys = useMemo(() => new Set((builtinList ?? []).map(e => def.keyOf(e))), [builtinList, def]);
+
+  const diffMap = builtinList ? docDiffMap(CatalogKind.OPENING_SUB_TYPE, builtinList) : new Map();
+  const rows = builtinList ? buildCatalogRows({ kind: CatalogKind.OPENING_SUB_TYPE, builtinList, search, diffMap }) : [];
+
+  const selectedRow = (!isAdding && selectedKey) ? rows.find(r => def.keyOf(r.entry) === selectedKey) ?? null : null;
+  const editState = selectedRow ? rowEditState(CatalogKind.OPENING_SUB_TYPE, selectedRow, { builtinKeys }) : null;
+  const lockedFields = selectedRow
+    ? lockedFieldsFor(CatalogKind.OPENING_SUB_TYPE, def.keyOf(selectedRow.entry), { builtinKeys })
+    : new Set();
+  const disabledReason = form ? openingSubTypeRowDisabledReason({ isAdding, editState }) : null;
+  const { showChildRatio, showFireLeaves, showFireAngle, showSlideLayout } = openingSubTypeFormFieldsFor(form);
+
+  const docDiffByField = (selectedRow?.origin === 'doc' && selectedRow?.diff)
+    ? new Map(diffPairs(
+        CatalogKind.OPENING_SUB_TYPE, selectedRow.diff.baseEntry, selectedRow.entry, selectedRow.diff.diffFields,
+      ).map(p => [p.field, p]))
+    : new Map();
+  const builtinDiffByField = (editState?.state === 'override' && selectedRow?.builtinEntry)
+    ? new Map(diffPairs(CatalogKind.OPENING_SUB_TYPE, selectedRow.builtinEntry, selectedRow.entry).map(p => [p.field, p]))
+    : new Map();
+  // wallKinds/slideLayoutは配列・オブジェクトのためformatReadonlyValue（汎用整形）で文字列化する。
+  const fmtDiffValue = (field, v) => {
+    if (field === 'wallKinds' || field === 'slideLayout') return formatReadonlyValue(v);
+    return v === null || v === undefined || v === '' ? '未設定' : String(v);
+  };
+
+  function handleAddNew() {
+    if (!builtinList) return;
+    const allKeys = collectKnownCatalogKeys(CatalogKind.OPENING_SUB_TYPE, builtinList);
+    const category = 'fitting';
+    setIsAdding(true);
+    setSelectedKey(null);
+    actions.resetConfirmState();
+    setForm(emptyOpeningSubTypeForm(category, nextOpeningSubTypeKey(category, allKeys)));
+    setFormError(null);
+    setFormMessage(null);
+  }
+
+  function handleSelectRow(row) {
+    setIsAdding(false);
+    setSelectedKey(def.keyOf(row.entry));
+    actions.resetConfirmState();
+    setForm(openingSubTypeFormFromEntry(row.entry));
+    setFormError(null);
+    setFormMessage(null);
+  }
+
+  function handleDuplicateClick(row) {
+    if (!builtinList) return;
+    const allKeys = collectKnownCatalogKeys(CatalogKind.OPENING_SUB_TYPE, builtinList);
+    setIsAdding(true);
+    setSelectedKey(null);
+    actions.resetConfirmState();
+    setForm({ ...openingSubTypeFormFromEntry(row.entry), key: nextOpeningSubTypeKey(row.entry.category, allKeys) });
+    setFormError('複製しました。内容を確認して保存してください');
+    setFormMessage(null);
+  }
+
+  // 追加中に区分（category）を切り替えたときは、その区分の次の空き番号へキーを採番し直す
+  // （区分ごとに独立した連番のため——設計12h「keyは同カテゴリ内でuser1…」）。編集中は区分自体が
+  // 固定（lockedFields.has('category')でselectがdisabled）なので、このハンドラは呼ばれない。
+  function handleCategoryChange(nextCategory) {
+    if (isAdding && builtinList) {
+      const allKeys = collectKnownCatalogKeys(CatalogKind.OPENING_SUB_TYPE, builtinList);
+      setForm(f => ({ ...f, category: nextCategory, key: nextOpeningSubTypeKey(nextCategory, allKeys) }));
+      return;
+    }
+    setForm(f => ({ ...f, category: nextCategory }));
+  }
+
+  async function handleSave() {
+    if (!form || !builtinList) return;
+    setFormError(null);
+    setFormMessage(null);
+    const entry = buildOpeningSubTypeEntry(form);
+
+    if (isAdding) {
+      const allKeys = collectKnownCatalogKeys(CatalogKind.OPENING_SUB_TYPE, builtinList);
+      const check = validateOpeningSubTypeForm(form, { isAdding: true, allKeys, builtinKeys });
+      if (!check.ok) { setFormError(check.message); return; }
+      const plan = planSaveEntry(CatalogKind.OPENING_SUB_TYPE, entry, { builtinList, rowState: null });
+      if (!plan.ok) { setFormError(plan.message); return; }
+      await actions.performSave(plan, def.keyOf(entry), { overridesBuiltin: plan.overridesBuiltin });
+      return;
+    }
+
+    const check = validateOpeningSubTypeForm(form, { isAdding: false });
+    if (!check.ok) { setFormError(check.message); return; }
+    const prevEntry = selectedRow?.entry ?? null;
+    const plan = planSaveEntry(CatalogKind.OPENING_SUB_TYPE, entry, {
+      builtinList, rowState: editState?.state ?? null, prevEntry,
+    });
+    if (!plan.ok) { setFormError(plan.message); return; }
+    if (plan.noop) { setFormMessage('変更はありません'); return; }
+
+    if (plan.needsConfirm) {
+      actions.setSaveConfirm({ plan, entryKey: def.keyOf(entry), confirmPairs: plan.confirmPairs, overridesBuiltin: plan.overridesBuiltin });
+      return;
+    }
+    await actions.performSave(plan, def.keyOf(entry), { overridesBuiltin: plan.overridesBuiltin });
+  }
+
+  function handleDeleteClick() {
+    setFormError(null);
+    actions.handleDeleteClick();
+  }
+
+  function handleRevertClick() {
+    if (!selectedRow) return;
+    actions.handleRevertClick(def.keyOf(selectedRow.entry));
+  }
+
+  const duplicatable = !!form;
+  const previewEntry = form ? buildOpeningSubTypeEntry(form) : null;
+
+  return (
+    <>
+      <div className="catmnt-list-col">
+        <div className="catmnt-list-toolbar">
+          <input
+            className="catmnt-search-input"
+            placeholder="呼称・キーで検索"
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+          />
+          <button className="catmnt-add-btn" disabled={!builtinList} onClick={handleAddNew}>
+            + 新規追加
+          </button>
+        </div>
+
+        <div className="catmnt-rows">
+          {!builtinList && !loadError && <div className="catmnt-row-empty">読み込み中…</div>}
+          {loadError && <div className="catmnt-row-empty">建具種別データの読み込みに失敗しました</div>}
+          {builtinList && rows.length === 0 && <div className="catmnt-row-empty">該当する建具種別がありません</div>}
+          {rows.map(row => {
+            const key = def.keyOf(row.entry);
+            return (
+              <div
+                key={key}
+                className={`catmnt-row${(!isAdding && key === selectedKey) ? ' catmnt-row--selected' : ''}`}
+                onClick={() => handleSelectRow(row)}
+              >
+                <span className={`catmnt-badge catmnt-badge--${row.origin ?? 'builtin'}`}>
+                  {ORIGIN_LABELS[row.origin] ?? '?'}
+                </span>
+                {row.overridesBuiltin && (
+                  <span className="catmnt-badge catmnt-badge--override">標準を編集</span>
+                )}
+                <span
+                  className="catmnt-row-name"
+                  style={row.diff ? { color: CATALOG_DIFF_COLOR } : undefined}
+                  title={row.diff ? diffTooltip(CatalogKind.OPENING_SUB_TYPE, row.diff.diffFields, row.entry, row.diff.baseEntry) : undefined}
+                >
+                  {row.entry.label}{row.diff ? ` ${CATALOG_DIFF_MARK}` : ''}
+                </span>
+                <span className="catmnt-cat-badge">{formatCategoryLabel(CatalogKind.OPENING_SUB_TYPE, row.entry.category)}</span>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      <div className="catmnt-form-col">
+        {!form && (
+          <div className="catmnt-form-empty">左の一覧から建具種別を選択するか、「+ 新規追加」してください</div>
+        )}
+        {form && (
+          <>
+            {disabledReason && <div className="catmnt-form-note">{disabledReason}</div>}
+
+            <div className="catmnt-form-row">
+              <span className="catmnt-form-label">キー</span>
+              <span className="catmnt-code-readout">{form.category}:{form.key}</span>
+            </div>
+
+            <div className="catmnt-form-row">
+              <span className="catmnt-form-label">呼称</span>
+              <input
+                value={form.label}
+                disabled={!!disabledReason}
+                style={docDiffByField.has('label') ? { color: CATALOG_DIFF_COLOR } : undefined}
+                onChange={e => setForm(f => ({ ...f, label: e.target.value }))}
+              />
+              {docDiffByField.has('label') && (
+                <span className="catmnt-diff-note" style={{ color: CATALOG_DIFF_COLOR, fontSize: 11 }}>
+                  （本体 {fmtDiffValue('label', docDiffByField.get('label').from)}）
+                </span>
+              )}
+              {builtinDiffByField.has('label') && (
+                <span className="catmnt-diff-note" style={{ color: '#64748b', fontSize: 11 }}>
+                  （標準 {fmtDiffValue('label', builtinDiffByField.get('label').from)}）
+                </span>
+              )}
+            </div>
+
+            <div className="catmnt-form-row">
+              <span className="catmnt-form-label">区分</span>
+              <select
+                value={form.category}
+                disabled={!!disabledReason || lockedFields.has('category')}
+                title={lockedFields.has('category') ? lockedFieldReason(CatalogKind.OPENING_SUB_TYPE, 'category') : undefined}
+                onChange={e => handleCategoryChange(e.target.value)}
+              >
+                {categoryOptionsFor(CatalogKind.OPENING_SUB_TYPE).map(opt => (
+                  <option key={opt.value} value={opt.value}>{opt.label}</option>
+                ))}
+              </select>
+            </div>
+
+            <div className="catmnt-form-row">
+              <span className="catmnt-form-label">機構</span>
+              <select
+                value={form.mechanism}
+                disabled={!!disabledReason || lockedFields.has('mechanism')}
+                title={lockedFields.has('mechanism') ? lockedFieldReason(CatalogKind.OPENING_SUB_TYPE, 'mechanism') : undefined}
+                style={docDiffByField.has('mechanism') ? { color: CATALOG_DIFF_COLOR } : undefined}
+                onChange={e => setForm(f => ({ ...f, mechanism: e.target.value }))}
+              >
+                {KNOWN_OPENING_MECHANISMS.map(m => (
+                  <option key={m} value={m}>{formatMechanismLabel(m)}</option>
+                ))}
+              </select>
+              {docDiffByField.has('mechanism') && (
+                <span className="catmnt-diff-note" style={{ color: CATALOG_DIFF_COLOR, fontSize: 11 }}>
+                  （本体 {fmtDiffValue('mechanism', docDiffByField.get('mechanism').from)}）
+                </span>
+              )}
+            </div>
+
+            <div className="catmnt-form-row">
+              <span className="catmnt-form-label">対応壁種</span>
+              <label style={{ fontSize: 12, color: '#1e293b', display: 'flex', alignItems: 'center', gap: 4 }}>
+                <input
+                  type="checkbox"
+                  checked={form.wallInterior}
+                  disabled={!!disabledReason}
+                  onChange={e => setForm(f => ({ ...f, wallInterior: e.target.checked, wallKindsExplicitEmpty: false }))}
+                />
+                内部
+              </label>
+              <label style={{ fontSize: 12, color: '#1e293b', display: 'flex', alignItems: 'center', gap: 4 }}>
+                <input
+                  type="checkbox"
+                  checked={form.wallExterior}
+                  disabled={!!disabledReason}
+                  onChange={e => setForm(f => ({ ...f, wallExterior: e.target.checked, wallKindsExplicitEmpty: false }))}
+                />
+                外部
+              </label>
+              {docDiffByField.has('wallKinds') && (
+                <span className="catmnt-diff-note" style={{ color: CATALOG_DIFF_COLOR, fontSize: 11 }}>
+                  （本体 {fmtDiffValue('wallKinds', docDiffByField.get('wallKinds').from)}）
+                </span>
+              )}
+              {builtinDiffByField.has('wallKinds') && (
+                <span className="catmnt-diff-note" style={{ color: '#64748b', fontSize: 11 }}>
+                  （標準 {fmtDiffValue('wallKinds', builtinDiffByField.get('wallKinds').from)}）
+                </span>
+              )}
+            </div>
+
+            <div className="catmnt-form-row">
+              <span className="catmnt-form-label">既定幅（mm）</span>
+              <input
+                value={form.defaultWidth}
+                disabled={!!disabledReason}
+                style={docDiffByField.has('defaultWidth') ? { color: CATALOG_DIFF_COLOR } : undefined}
+                onChange={e => setForm(f => ({ ...f, defaultWidth: e.target.value }))}
+              />
+              {docDiffByField.has('defaultWidth') && (
+                <span className="catmnt-diff-note" style={{ color: CATALOG_DIFF_COLOR, fontSize: 11 }}>
+                  （本体 {fmtDiffValue('defaultWidth', docDiffByField.get('defaultWidth').from)}）
+                </span>
+              )}
+              {builtinDiffByField.has('defaultWidth') && (
+                <span className="catmnt-diff-note" style={{ color: '#64748b', fontSize: 11 }}>
+                  （標準 {fmtDiffValue('defaultWidth', builtinDiffByField.get('defaultWidth').from)}）
+                </span>
+              )}
+            </div>
+
+            <div className="catmnt-form-row">
+              <span className="catmnt-form-label">既定高（mm）</span>
+              <input
+                value={form.defaultHeight}
+                disabled={!!disabledReason}
+                style={docDiffByField.has('defaultHeight') ? { color: CATALOG_DIFF_COLOR } : undefined}
+                onChange={e => setForm(f => ({ ...f, defaultHeight: e.target.value }))}
+              />
+              {docDiffByField.has('defaultHeight') && (
+                <span className="catmnt-diff-note" style={{ color: CATALOG_DIFF_COLOR, fontSize: 11 }}>
+                  （本体 {fmtDiffValue('defaultHeight', docDiffByField.get('defaultHeight').from)}）
+                </span>
+              )}
+              {builtinDiffByField.has('defaultHeight') && (
+                <span className="catmnt-diff-note" style={{ color: '#64748b', fontSize: 11 }}>
+                  （標準 {fmtDiffValue('defaultHeight', builtinDiffByField.get('defaultHeight').from)}）
+                </span>
+              )}
+            </div>
+
+            {showChildRatio && (
+              <div className="catmnt-form-row">
+                <span className="catmnt-form-label">子扉比率</span>
+                <input
+                  value={form.childRatio}
+                  placeholder="例: 0.3（未入力は既定0.3）"
+                  disabled={!!disabledReason}
+                  style={docDiffByField.has('childRatio') ? { color: CATALOG_DIFF_COLOR } : undefined}
+                  onChange={e => setForm(f => ({ ...f, childRatio: e.target.value }))}
+                />
+                {docDiffByField.has('childRatio') && (
+                  <span className="catmnt-diff-note" style={{ color: CATALOG_DIFF_COLOR, fontSize: 11 }}>
+                    （本体 {fmtDiffValue('childRatio', docDiffByField.get('childRatio').from)}）
+                  </span>
+                )}
+                {builtinDiffByField.has('childRatio') && (
+                  <span className="catmnt-diff-note" style={{ color: '#64748b', fontSize: 11 }}>
+                    （標準 {fmtDiffValue('childRatio', builtinDiffByField.get('childRatio').from)}）
+                  </span>
+                )}
+              </div>
+            )}
+
+            {/* QA指摘m3（リード裁定）: fireLeavesはFIRE_DOORのときだけ（FIRE_FOLDは描画側が
+                参照しない）・fireAngleはFIRE_DOOR/FIRE_FOLD両方——showFireLeaves/showFireAngleを
+                別々に判定する（openingSubTypeFormFieldsFor参照）。値域は1・2／90・180のみ。 */}
+            {showFireLeaves && (
+              <div className="catmnt-form-row">
+                <span className="catmnt-form-label">防火枚数</span>
+                <input
+                  value={form.fireLeaves}
+                  placeholder="1 または 2（未入力は既定1）"
+                  disabled={!!disabledReason}
+                  style={docDiffByField.has('fireLeaves') ? { color: CATALOG_DIFF_COLOR } : undefined}
+                  onChange={e => setForm(f => ({ ...f, fireLeaves: e.target.value }))}
+                />
+                {docDiffByField.has('fireLeaves') && (
+                  <span className="catmnt-diff-note" style={{ color: CATALOG_DIFF_COLOR, fontSize: 11 }}>
+                    （本体 {fmtDiffValue('fireLeaves', docDiffByField.get('fireLeaves').from)}）
+                  </span>
+                )}
+                {builtinDiffByField.has('fireLeaves') && (
+                  <span className="catmnt-diff-note" style={{ color: '#64748b', fontSize: 11 }}>
+                    （標準 {fmtDiffValue('fireLeaves', builtinDiffByField.get('fireLeaves').from)}）
+                  </span>
+                )}
+              </div>
+            )}
+            {showFireAngle && (
+              <div className="catmnt-form-row">
+                <span className="catmnt-form-label">防火角度</span>
+                <input
+                  value={form.fireAngle}
+                  placeholder="90 または 180（未入力は既定90）"
+                  disabled={!!disabledReason}
+                  style={docDiffByField.has('fireAngle') ? { color: CATALOG_DIFF_COLOR } : undefined}
+                  onChange={e => setForm(f => ({ ...f, fireAngle: e.target.value }))}
+                />
+                {docDiffByField.has('fireAngle') && (
+                  <span className="catmnt-diff-note" style={{ color: CATALOG_DIFF_COLOR, fontSize: 11 }}>
+                    （本体 {fmtDiffValue('fireAngle', docDiffByField.get('fireAngle').from)}）
+                  </span>
+                )}
+                {builtinDiffByField.has('fireAngle') && (
+                  <span className="catmnt-diff-note" style={{ color: '#64748b', fontSize: 11 }}>
+                    （標準 {fmtDiffValue('fireAngle', builtinDiffByField.get('fireAngle').from)}）
+                  </span>
+                )}
+              </div>
+            )}
+
+            {showSlideLayout && (
+              <div className="catmnt-form-row">
+                <span className="catmnt-form-label">引違い配置</span>
+                <input
+                  value={form.slideLayoutText}
+                  placeholder="例: tracks=2; pos fix"
+                  disabled={!!disabledReason}
+                  style={docDiffByField.has('slideLayout') ? { color: CATALOG_DIFF_COLOR } : undefined}
+                  onChange={e => setForm(f => ({ ...f, slideLayoutText: e.target.value }))}
+                />
+                {docDiffByField.has('slideLayout') && (
+                  <span className="catmnt-diff-note" style={{ color: CATALOG_DIFF_COLOR, fontSize: 11 }}>
+                    （本体 {fmtDiffValue('slideLayout', docDiffByField.get('slideLayout').from)}）
+                  </span>
+                )}
+                {builtinDiffByField.has('slideLayout') && (
+                  <span className="catmnt-diff-note" style={{ color: '#64748b', fontSize: 11 }}>
+                    （標準 {fmtDiffValue('slideLayout', builtinDiffByField.get('slideLayout').from)}）
+                  </span>
+                )}
+              </div>
+            )}
+
+            {formError && <div className="catmnt-form-error">{formError}</div>}
+            {formMessage && <div className="catmnt-form-message">{formMessage}</div>}
+
+            {actions.confirmingDelete ? (
+              <DeleteConfirmBlock
+                deleteUsage={actions.deleteUsage}
+                isUsed={actions.deleteUsage?.status === 'ready' && actions.deleteUsage.usedKeys.has(selectedRow ? def.keyOf(selectedRow.entry) : null)}
+                busy={busy}
+                onConfirm={() => actions.handleDeleteConfirmed(selectedRow ? def.keyOf(selectedRow.entry) : null)}
+                onCancel={actions.cancelDelete}
+              />
+            ) : actions.revertConfirm ? (
+              <RevertConfirmBlock
+                revertConfirm={actions.revertConfirm}
+                setRevertConfirm={actions.setRevertConfirm}
+                busy={busy}
+                onConfirm={actions.handleRevertConfirmed}
+                onCancel={() => actions.setRevertConfirm(null)}
+              />
+            ) : actions.saveConfirm ? (
+              <SaveConfirmBlock
+                saveConfirm={actions.saveConfirm}
+                busy={busy}
+                onConfirm={actions.handleSaveConfirmed}
+                onCancel={() => actions.setSaveConfirm(null)}
+              />
+            ) : (
+              <div className="catmnt-form-actions">
+                <button className="catmnt-btn catmnt-btn--primary" disabled={!!disabledReason || busy} onClick={handleSave}>
+                  {isAdding ? '追加' : '保存'}
+                </button>
+                {!isAdding && selectedRow && (
+                  <button
+                    className="catmnt-btn catmnt-btn--secondary"
+                    disabled={!duplicatable}
+                    onClick={() => handleDuplicateClick(selectedRow)}
+                  >
+                    複製
+                  </button>
+                )}
+                {!isAdding && editState?.canRevert && (
+                  <button className="catmnt-btn catmnt-btn--secondary" onClick={handleRevertClick}>
+                    標準に戻す
+                  </button>
+                )}
+                {!isAdding && editState?.canDelete && (
+                  <button className="catmnt-btn catmnt-btn--danger" onClick={handleDeleteClick}>
+                    削除
+                  </button>
+                )}
+              </div>
+            )}
+
+            {previewEntry && (
+              <CatalogPreview kind={CatalogKind.OPENING_SUB_TYPE} entry={previewEntry} materialList={materialList} />
+            )}
           </>
         )}
       </div>
