@@ -114,7 +114,7 @@ export function translatePrimitive(p, dx, dy) {
  * プリミティブを x=0..width の範囲内で左右反転する（x → width − x。yは不変）。
  * 開口の姿図（openings/openingElevationFigure.js）は「世界座標昇順＝図のx昇順」の
  * 正準向きで生成される（吊元 hingeSide<0＝coord1側＝図のx=0。平面記号
- * renderer/OpeningsLayer.jsx swingSymbol の hingeAlong と同じ世界アンカー）ため、
+ * openings/openingPlanSymbol.js swingPrimitives の hingeAlong と同じ世界アンカー）ため、
  * 世界順とローカル順が反転する面（dirSign<0）ではこの反転を掛けてから配置する——
  * 掛けないと吊元・親子扉の子・レバーハンドル等の非対称要素が逆端に描かれる。
  * translatePrimitive と対を成す幾何変換——両関数は同じプリミティブ型集合を扱うこと。

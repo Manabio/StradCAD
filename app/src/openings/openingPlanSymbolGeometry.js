@@ -45,8 +45,8 @@ export function swingOpenPerpDir(isVertical, hingeSide, swingSide, mechanism, en
 
 /**
  * 蝶番(hinge)から見た「閉じ位置」の方向角(度、ワールド空間)。hingeSide<0→長さ座標が増える
- * 方向、hingeSide>0→減る方向へ閉じる（swingLeafSymbol・freeLeafSymbol・fireLeafSymbol・
- * fireFoldPanel が共有する規約）。
+ * 方向、hingeSide>0→減る方向へ閉じる（openings/openingPlanSymbol.js swingLeafPrimitives・
+ * freeLeafPrimitives・fireFoldPanelPrimitives が共有する規約）。
  */
 export function closedAngleFor(isVertical, hingeSide) {
   const towardFar = hingeSide < 0 ? 1 : -1;
@@ -78,8 +78,8 @@ export function angleVectors(angleDeg) {
  * 詳細LODの片開き戸「閉じた状態の扉」の矩形区間（長さ方向 along・直交方向 perp）。
  *
  * 扉は開いた位置を1本線＋円弧で示し、厚みのある四角は閉じた位置に描く（ユーザー指示2026-09）。
- * 閉じ位置の扉は方立の欠き込み（pivotPerp から壁中心側へ扉厚ぶん。OpeningsLayer.jsx
- * swingFrameSymbol の notchFar と同じ区間）にそのまま納まる——欠き込みの向き outward は
+ * 閉じ位置の扉は方立の欠き込み（pivotPerp から壁中心側へ扉厚ぶん。openings/openingPlanSymbol.js
+ * swingFramePrimitives の notchFar と同じ区間）にそのまま納まる——欠き込みの向き outward は
  * 呼び出し側が Math.sign(host.axisOffset) で与える。
  * 長さ方向は吊元 hingeAlong から閉じ方向（closedAngleFor と同じ towardFar の規約）へ leafLength。
  */
@@ -104,9 +104,9 @@ export function swingChildLengths(width, childRatio) {
  * SWING_DOUBLE（両開き）のleaf仕様（{hingeAlong, hingeSide, sense, leafLength}[]）。
  * 左右の枠端それぞれを吊元に、各leaf長=width/2。coord2側は対向leaf（hingeSideが反転する）
  * のため、同じ物理側（perpDir）へ開かせるべくsenseをswingSideの符号反転で渡す
- * （leafOpenAngleのコメント参照。呼び出し側（OpeningsLayer.jsx）はこの配列を
- * `.map(s => swingLeafSymbol(isVertical, host, s.hingeAlong, s.hingeSide, s.sense, s.leafLength, sp))`
- * するだけで、leaf仕様の決定ロジック自体はここに一本化される）。
+ * （leafOpenAngleのコメント参照。呼び出し側（openings/openingPlanSymbol.js
+ * leafSpecGroupPrimitives）はこの配列を`.flatMap(s => swingLeafPrimitives(...))`するだけで、
+ * leaf仕様の決定ロジック自体はここに一本化される）。
  */
 export function swingDoubleLeafSpecs(coord1, coord2, width, swingSide) {
   const leafLength = width / 2;
@@ -204,7 +204,7 @@ export function trackPerp(axisValue, track, tracks, sashDepth) {
 
 /**
  * SLIDE_LAYOUT: entryから安全にpanels配列を取り出す。未定義entry・slideLayout未設定・
- * panels:[]（空配列）はすべて空配列[]を返す——呼び出し側（OpeningsLayer.jsx slideLayoutSymbol・
+ * panels:[]（空配列）はすべて空配列[]を返す——呼び出し側（openingPlanSymbol.js slideLayoutPrimitives・
  * openingElevationFigure.js slideLayoutPrimitives）は`.map()`するだけで自然に0要素＝0本の
  * leaf線/プリミティブになり、それぞれが個別に空判定・例外処理を持つ必要がない（平面・姿図の
  * 両方が同じ1つの関数の振る舞いに従うため、片方だけ直しても揃う）。
@@ -282,15 +282,15 @@ export function frameInnerSpan(coord1, coord2, jambWidth) {
  * 過去にもleaf仕様決定を*LeafSpecs関数へ一本化した際に同種の指摘を受けている）。
  *
  * - frame: 'notched'  蝶番系（HINGED_MECHANISMS。SWING含む）——扉が通過するため方立に欠き込みが
- *            要る（呼び出し側はswingFrameSymbolを使う。SWING自身は既存のFRAME_HINGE_INSET_MM等
+ *            要る（呼び出し側はswingFramePrimitivesを使う。SWING自身は既存のFRAME_HINGE_INSET_MM等
  *            専用inset方式のままで、innerSpanは使わない＝現状維持）。
  *          'sashOpen' 記号自身が開口全幅の枠矩形を描く非蝶番系（SASH_OPEN_MECHANISMS）——方立は
  *            内側の縦線を持たない3辺（コの字）で描く（記号側の枠矩形と同一座標の二重描画防止。F5）。
  *          'sash'     それ以外の非蝶番系（記号が枠矩形を描かない）——方立は閉じた矩形。
- *            SLIDE_DOUBLEもここに分類されるが、OpeningsLayer.jsxはSLIDE_DOUBLEを専用ブランチ
- *            （slideDoubleDetailSymbol）で早期returnして消費するため、この'sash'は実際には
- *            参照されない（IMPLEMENTED_MECHANISMSの29機構を漏れなく分類する総関数にするための
- *            既定値。呼び出し側が実際にsashFrameSymbolを描く「sash」機構は5件）。
+ *            SLIDE_DOUBLEもここに分類されるが、openings/openingPlanSymbol.jsはSLIDE_DOUBLEを
+ *            専用ブランチ（buildSlideDoublePrimitives）で早期returnして消費するため、この'sash'は
+ *            実際には参照されない（IMPLEMENTED_MECHANISMSの29機構を漏れなく分類する総関数にするための
+ *            既定値。呼び出し側が実際にsashFramePrimitivesを描く「sash」機構は5件）。
  *          'none'     SCHEMATIC/STANDARD（lodLevelがDETAILでない）。
  *          'frameOnly' 三方枠（FRAME_ONLY）——lodLevelに関わらず常にこの値を返す意図的な例外。
  *            三方枠は「枠自身が記号」であり、他機構のような「一般記号（simplified）と詳細記号
@@ -401,7 +401,8 @@ export function frameOnlyJambProfiles({ coord1, coord2, faceLo, faceHi, axisValu
  * `makeObservable`でinstanceにenumerable:falseとして定義される）を**own enumerable property
  * として拾えない**ため、上書きしない限りcenterCoordは必ずundefinedになる——実装時に一度この形で
  * 落とし、実Openingインスタンスで再現・修正した実バグ（PIVOT/EMERGENCYの記号が詳細LODで消える・
- * overheadSymbol/emergencySymbolのalong=undefined化でexteriorSideDirのsegmented判定が壊れる）。
+ * overheadPrimitives/emergencyPrimitivesのalong=undefined化でexteriorSideDirのsegmented判定が
+ * 壊れる）。
  * 将来Openingにcomputedフィールドが増えたときも同じ形で再発しうるため、この関数へ一本化する。
  */
 export function innerSpanOpening(opening, span) {

@@ -1092,7 +1092,7 @@ export function buildFaceFigure(face, ctx) {
   // （枠・吊元表示・レバーハンドル・機構表現は残す）。座標系は両モジュールともFL=y0・
   // 上方向が負で共通のため、(x, 0)の平行移動だけで面のローカル座標へそのまま乗る。
   // 姿図の正準向きは「世界座標昇順＝図のx昇順」（吊元 hingeSide<0＝coord1側＝図のx=0。
-  // 平面記号 OpeningsLayer.jsx swingSymbol の hingeAlong と同じ世界アンカー）のため、
+  // 平面記号 openings/openingPlanSymbol.js swingPrimitives の hingeAlong と同じ世界アンカー）のため、
   // 世界順とローカル順が反転する面（dirSign<0）では左右反転してから置く——反転しないと
   // 吊元・親子扉の子・レバーハンドル等の非対称要素が逆端に描かれる（裏側から見る面も
   // dirSign が逆になるため、この同じ反転で物理的に正しい見えがかりになる）。

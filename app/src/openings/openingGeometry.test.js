@@ -1,4 +1,4 @@
-// swingSideTowardPerp の符号は OpeningsLayer.jsx swingSymbol の開き角度式
+// swingSideTowardPerp の符号は openings/openingPlanSymbol.js swingLeafPrimitives の開き角度式
 // （closedAngle = isVertical? (towardFar>0?90:-90) : (towardFar>0?0:180) /
 //   openAngle = closedAngle + swingSide*90）を三角関数でそのまま再現し、
 // dir=(cos,sin) の perp成分（isVertical壁ならx＝world.x、水平壁ならy＝world.y）の符号と
@@ -18,7 +18,8 @@ function makeGraph(planeId = 'p1') {
   return new PlanGraph(plane);
 }
 
-// OpeningsLayer.jsx swingSymbol の角度式をそのまま複製し、開いた状態(dir)のperp成分符号を返す。
+// openings/openingPlanSymbol.js swingLeafPrimitives の角度式をそのまま複製し、開いた状態(dir)の
+// perp成分符号を返す。
 function openDirPerpSign(isVertical, hingeSide, swingSide) {
   const towardFar = hingeSide < 0 ? 1 : -1;
   const closedAngle = isVertical
@@ -32,7 +33,7 @@ function openDirPerpSign(isVertical, hingeSide, swingSide) {
   return Math.sign(Math.round(perpComponent * 1e9) / 1e9);
 }
 
-test('swingSideTowardPerp: isVertical×hingeSide×swingSideの全8通りでswingSymbolの開き角度式（三角関数で独立計算）と一致する', () => {
+test('swingSideTowardPerp: isVertical×hingeSide×swingSideの全8通りでswingLeafPrimitivesの開き角度式（三角関数で独立計算）と一致する', () => {
   for (const isVertical of [true, false]) {
     for (const hingeSide of [-1, 1]) {
       for (const swingSide of [-1, 1]) {

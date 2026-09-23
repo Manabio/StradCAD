@@ -157,7 +157,7 @@ test('fireFoldLeafSpecs: fireAngle:180は2枚のbulge符号が一致し、fireAn
 });
 
 // ================================================================
-// 【幾何バグ3】overheadSymbol/emergencySymbol: host.axisOffsetの符号ではなくexteriorSideDir基準
+// 【幾何バグ3】overheadPrimitives/emergencyPrimitives: host.axisOffsetの符号ではなくexteriorSideDir基準
 // ================================================================
 
 // 1つの外壁境界に2枚のWall（.claude/opening-model.md参照）: 室内向き壁(isExteriorWall:false)と
@@ -203,7 +203,7 @@ test('【失敗系】resolveSlideLayoutPanels: entry未定義／slideLayout未�
 });
 
 // openingElevationFigure.js の slideLayoutPrimitives も resolveSlideLayoutPanels を共有するため、
-// ここでの確認は平面側（OpeningsLayer.jsx slideLayoutSymbol）にもそのまま及ぶ
+// ここでの確認は平面側（openings/openingPlanSymbol.js slideLayoutPrimitives）にもそのまま及ぶ
 // （.claude/opening-model.md「平面記号の幾何計算はopeningPlanSymbolGeometry.jsへ抽出」参照）。
 test('【失敗系】buildOpeningElevation: SLIDE_LAYOUTでpanels:[]・slideLayout未設定でも例外なく、パネル由来プリミティブは0本', () => {
   const opening = { width: 1200, height: 1170, sillHeight: 800, category: OpeningCategory.WINDOW, subType: 'x', hingeSide: -1, swingSide: 1 };
@@ -345,11 +345,12 @@ test('【失敗系】SASH_OPEN_MECHANISMS/HINGED_MECHANISMSはIMPLEMENTED_MECHAN
   }
 });
 
-// 【T1】MUT1（sashFrameSymbol等の呼び出しをnullにする＝frame判定を握りつぶす類の変異）を殺す:
+// 【T1】MUT1（sashFramePrimitives等の呼び出しをnullにする＝frame判定を握りつぶす類の変異）を殺す:
 // IMPLEMENTED_MECHANISMS(29件)すべてがDETAILでframe!=='none'になり、かつHINGED_MECHANISMS(10件)は
 // 'notched'、SASH_OPEN_MECHANISMS(13件)は'sashOpen'、残り(6件)は'sash'に分類される。
-// 【QA所見R3】この6件のうちSLIDE_DOUBLEはOpeningsLayer.jsxの専用ブランチ（slideDoubleDetailSymbol）
-// で早期returnされるため、実際にsashFrameSymbolへ到達する「sash」機構は5件（FOLD/PIVOT/SHUTTER/
+// 【QA所見R3】この6件のうちSLIDE_DOUBLEはopenings/openingPlanSymbol.jsの専用ブランチ
+// （buildSlideDoublePrimitives）で早期returnされるため、実際にsashFramePrimitivesへ到達する
+// 「sash」機構は5件（FOLD/PIVOT/SHUTTER/
 // OVERHEAD/EMERGENCY）——planSymbolPlan自体はIMPLEMENTED_MECHANISMS全29件を漏れなく分類する
 // 総関数であることをここでは検証している（openingPlanSymbolGeometry.js側のJSDoc参照）。
 // FRAME_ONLY（三方枠）は notched/sashOpen/sash のどれにも属さない別枠の'frameOnly'に分類される
@@ -685,7 +686,7 @@ test('planSymbolPlan: 一般LOD（STANDARD）は便宜的なbandでクランプ�
 //   ・円弧の中心 = 閉じた扉の吊元側・外面（開く側の壁面）の角
 //   ・半径       = 扉長（＝閉じた扉の戸先側・外面の角まで）
 //   ・1/4円で、終点＝開いた扉の先端に一致する（開いた扉が動作線に届く）
-// renderer/OpeningsLayer.jsx swingLeafSymbol / swingSymbol はこの3点を合成するだけなので、
+// openings/openingPlanSymbol.js swingLeafPrimitives / swingPrimitives はこの3点を合成するだけなので、
 // 合成元（closedAngleFor / leafOpenAngle / angleVectors / swingClosedLeafSpan）の整合をここで固定する。
 // ================================================================
 

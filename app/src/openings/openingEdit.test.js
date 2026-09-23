@@ -754,7 +754,7 @@ test('【Finding B 回帰】textFieldのtrim変換を経れば前後空白だけ
 // ================================================================
 
 // 平面記号が実際に開く直交方向（perp。isVertical壁ならx、水平壁ならy）の符号。
-// OpeningsLayer.jsx swingLeafSymbol と同じ経路（closedAngleFor → leafOpenAngle → angleVectors）
+// openings/openingPlanSymbol.js swingLeafPrimitives と同じ経路（closedAngleFor → leafOpenAngle → angleVectors）
 // で求める——「hingeSide/swingSideの積」ではなく描画結果の向きで検証する。
 function openPerpSign(isVertical, hingeSide, swingSide) {
   const closed = closedAngleFor(isVertical, hingeSide);

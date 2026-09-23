@@ -626,6 +626,103 @@ test('ピン留め: PIVOT・isVertical・STANDARD → alongAngle/perpAngleが入
 });
 
 // ================================================================
+// (a''''') ピン留め: 残り4機構（ステップ11e。SHUTTER・OVERHEAD・EMERGENCY・FRAME_ONLY）。
+// SHUTTER/OVERHEAD/EMERGENCYはSASH_GROUP_MECHANISMS拡張分（FOLD・PIVOTと同じframe='sash'経路）。
+// FRAME_ONLYは専用ディスパッチ（frameOnlyPrimitives。planSymbolPlanがlodLevelに関わらず常に
+// frame='frameOnly'を返す唯一の機構）。probe（openingPlanSymbolProbe.mjs。実データ3文書×通常＋
+// sweepの6本。sweepはcomboKeyにcategoryを含めるよう本ステップで修正——戸/窓で同キーが衝突していた）
+// で旧renderer/OpeningsLayer.jsxの出力と完全一致することを確認した後の出力を固定。
+// ================================================================
+
+test('ピン留め: SHUTTER・STANDARD → 一点鎖線1本(symbol)＋tick2本（枠なし）', () => {
+  const opening = makeOpening();
+  const ctx = makeCtx({ entry: { mechanism: OpeningMechanism.SHUTTER }, lodLevel: LodLevel.STANDARD, axisValue: 500 });
+  const prims = buildOpeningPlanSymbol(opening, ctx);
+  assert.deepEqual(prims.map(p => JSON.stringify(p)), [
+    '{"type":"line","x1":0,"y1":500,"x2":1000,"y2":500,"role":"symbol","weightMm":0.35,"dash":[14,4,4,4]}',
+    '{"type":"line","x1":0,"y1":470,"x2":0,"y2":530,"role":"symbol","weightMm":0.35}',
+    '{"type":"line","x1":1000,"y1":470,"x2":1000,"y2":530,"role":"symbol","weightMm":0.35}',
+  ]);
+});
+
+test('ピン留め: SHUTTER・DETAIL → 方立2本(frame・閉じた矩形)＋内法へ寄せた一点鎖線＋tick2本', () => {
+  const opening = makeOpening();
+  const ctx = makeCtx({ entry: { mechanism: OpeningMechanism.SHUTTER }, lodLevel: LodLevel.DETAIL, faceLo: -60, faceHi: 60, axisValue: 0 });
+  const prims = buildOpeningPlanSymbol(opening, ctx);
+  assert.deepEqual(prims.map(p => JSON.stringify(p)), [
+    '{"type":"rect","x":0,"y":-72,"w":30,"h":144,"role":"frame","weightMm":0.35}',
+    '{"type":"rect","x":970,"y":-72,"w":30,"h":144,"role":"frame","weightMm":0.35}',
+    '{"type":"line","x1":30,"y1":0,"x2":970,"y2":0,"role":"symbol","weightMm":0.35,"dash":[14,4,4,4]}',
+    '{"type":"line","x1":30,"y1":-30,"x2":30,"y2":30,"role":"symbol","weightMm":0.35}',
+    '{"type":"line","x1":970,"y1":-30,"x2":970,"y2":30,"role":"symbol","weightMm":0.35}',
+  ]);
+});
+
+test('ピン留め: OVERHEAD・STANDARD・exteriorDir=+1 → 破線矩形(symbol)が室内側(perp>axisValue)へ200mm＋実線1本', () => {
+  const opening = makeOpening();
+  const ctx = makeCtx({ entry: { mechanism: OpeningMechanism.OVERHEAD }, lodLevel: LodLevel.STANDARD, axisValue: 500, exteriorDirOf: () => 1 });
+  const prims = buildOpeningPlanSymbol(opening, ctx);
+  assert.deepEqual(prims.map(p => JSON.stringify(p)), [
+    '{"type":"rect","x":0,"y":300,"w":1000,"h":200,"role":"symbol","weightMm":0.35,"dash":[10,6]}',
+    '{"type":"line","x1":0,"y1":500,"x2":1000,"y2":500,"role":"symbol","weightMm":0.35}',
+  ]);
+});
+
+test('ピン留め: OVERHEAD・DETAIL・exteriorDir=+1 → 方立2本(frame)＋内法へ寄せた破線矩形(symbol)＋実線1本', () => {
+  const opening = makeOpening();
+  const ctx = makeCtx({ entry: { mechanism: OpeningMechanism.OVERHEAD }, lodLevel: LodLevel.DETAIL, faceLo: -60, faceHi: 60, axisValue: 0, exteriorDirOf: () => 1 });
+  const prims = buildOpeningPlanSymbol(opening, ctx);
+  assert.deepEqual(prims.map(p => JSON.stringify(p)), [
+    '{"type":"rect","x":0,"y":-72,"w":30,"h":144,"role":"frame","weightMm":0.35}',
+    '{"type":"rect","x":970,"y":-72,"w":30,"h":144,"role":"frame","weightMm":0.35}',
+    '{"type":"rect","x":30,"y":-200,"w":940,"h":200,"role":"symbol","weightMm":0.35,"dash":[10,6]}',
+    '{"type":"line","x1":30,"y1":0,"x2":970,"y2":0,"role":"symbol","weightMm":0.35}',
+  ]);
+});
+
+test('ピン留め: EMERGENCY・STANDARD・exteriorDir=+1 → 実線1本＋逆三角形(polyline・closed)。頂点は室内側(perp>axisValue)', () => {
+  const opening = makeOpening();
+  const ctx = makeCtx({ entry: { mechanism: OpeningMechanism.EMERGENCY }, lodLevel: LodLevel.STANDARD, axisValue: 500, exteriorDirOf: () => 1 });
+  const prims = buildOpeningPlanSymbol(opening, ctx);
+  assert.deepEqual(prims.map(p => JSON.stringify(p)), [
+    '{"type":"line","x1":0,"y1":500,"x2":1000,"y2":500,"role":"symbol","weightMm":0.35}',
+    '{"type":"polyline","points":[300,500,700,500,500,153.58983848622455],"closed":true,"role":"symbol","weightMm":0.35}',
+  ]);
+});
+
+test('ピン留め: EMERGENCY・DETAIL・exteriorDir=+1 → 方立2本(frame)＋内法へ寄せた実線＋逆三角形', () => {
+  const opening = makeOpening();
+  const ctx = makeCtx({ entry: { mechanism: OpeningMechanism.EMERGENCY }, lodLevel: LodLevel.DETAIL, faceLo: -60, faceHi: 60, axisValue: 0, exteriorDirOf: () => 1 });
+  const prims = buildOpeningPlanSymbol(opening, ctx);
+  assert.deepEqual(prims.map(p => JSON.stringify(p)), [
+    '{"type":"rect","x":0,"y":-72,"w":30,"h":144,"role":"frame","weightMm":0.35}',
+    '{"type":"rect","x":970,"y":-72,"w":30,"h":144,"role":"frame","weightMm":0.35}',
+    '{"type":"line","x1":30,"y1":0,"x2":970,"y2":0,"role":"symbol","weightMm":0.35}',
+    '{"type":"polyline","points":[300,0,700,0,500,-346.41016151377545],"closed":true,"role":"symbol","weightMm":0.35}',
+  ]);
+});
+
+test("ピン留め: FRAME_ONLY・STANDARD・fixtureType=WF（木製。profile='solid'）→ 方立2本(frame・閉じた矩形)。見付/出幅は既定20/12", () => {
+  const opening = makeOpening({ fixtureType: 'WF' });
+  const ctx = makeCtx({ entry: { mechanism: OpeningMechanism.FRAME_ONLY }, lodLevel: LodLevel.STANDARD, axisValue: 0, faceLo: -60, faceHi: 60 });
+  const prims = buildOpeningPlanSymbol(opening, ctx);
+  assert.deepEqual(prims.map(p => JSON.stringify(p)), [
+    '{"type":"polyline","points":[0,-72,20,-72,20,72,0,72],"closed":true,"role":"frame","weightMm":0.25}',
+    '{"type":"polyline","points":[1000,-72,980,-72,980,72,1000,72],"closed":true,"role":"frame","weightMm":0.25}',
+  ]);
+});
+
+test("ピン留め: FRAME_ONLY・DETAIL・fixtureType=SF（鋼製。profile='bent'）→ 方立2本(frame・開いたコの字＋返し。closed=false)", () => {
+  const opening = makeOpening({ fixtureType: 'SF' });
+  const ctx = makeCtx({ entry: { mechanism: OpeningMechanism.FRAME_ONLY }, lodLevel: LodLevel.DETAIL, axisValue: 0, faceLo: -60, faceHi: 60 });
+  const prims = buildOpeningPlanSymbol(opening, ctx);
+  assert.deepEqual(prims.map(p => JSON.stringify(p)), [
+    '{"type":"polyline","points":[0,-60,0,-72,20,-72,20,72,0,72,0,60],"closed":false,"role":"frame","weightMm":0.35}',
+    '{"type":"polyline","points":[1000,-60,1000,-72,980,-72,980,72,1000,72,1000,60],"closed":false,"role":"frame","weightMm":0.35}',
+  ]);
+});
+
+// ================================================================
 // (b) 不変条件
 // ================================================================
 
@@ -1057,6 +1154,66 @@ test('不変条件: SLIDE_LAYOUT・tracks:2・panels全てarrow（hasFix:false�
   assert.deepEqual(leafPerps, [490, 510, 490, 510]);
 });
 
+// ---- 残り4機構（ステップ11e）専用の不変条件 ----
+
+test('不変条件: OVERHEADはexteriorDirOfの符号が反転すると破線矩形(symbol)の向きが反転する（跳ね上げ投影が室内外どちらへ出るか）', () => {
+  const base = makeCtx({ entry: { mechanism: OpeningMechanism.OVERHEAD }, lodLevel: LodLevel.STANDARD, axisValue: 500 });
+  const rectY = (exteriorDir) => {
+    const prims = buildOpeningPlanSymbol(makeOpening(), { ...base, exteriorDirOf: () => exteriorDir });
+    return prims.find(p => p.type === 'rect').y;
+  };
+  const outward = rectY(1);
+  const inward = rectY(-1);
+  assert.notEqual(outward, inward, 'exteriorDir反転で破線矩形の向きが変わらない');
+});
+
+test('不変条件: EMERGENCYはexteriorDirOfの符号が反転すると逆三角形の頂点(apex)側が反転する（室内側を指す不変条件）', () => {
+  const base = makeCtx({ entry: { mechanism: OpeningMechanism.EMERGENCY }, lodLevel: LodLevel.STANDARD, axisValue: 500 });
+  const apexY = (exteriorDir) => {
+    const prims = buildOpeningPlanSymbol(makeOpening(), { ...base, exteriorDirOf: () => exteriorDir });
+    const tri = prims.find(p => p.type === 'polyline');
+    return tri.points[5]; // apexのy成分（baseL, baseR, apexの順でflatMapしたうちの3点目）
+  };
+  const apexAtPlus1 = apexY(1);
+  const apexAtMinus1 = apexY(-1);
+  assert.notEqual(apexAtPlus1, apexAtMinus1, 'exteriorDir反転で逆三角形の頂点が変わらない');
+  // apex = axisValue - exteriorDir*height（室内側＝exteriorDirと逆方向）なので、exteriorDir=+1では
+  // axisValue(500)より小さい側、-1では大きい側に来る。
+  assert.ok(apexAtPlus1 < 500 && apexAtMinus1 > 500, `頂点が期待した側に来ていない: +1→${apexAtPlus1} -1→${apexAtMinus1}`);
+});
+
+test('不変条件: FRAME_ONLYはfixtureType(profile)でWF(solid)=閉じた矩形・SF/SSF(bent)=開いたコの字＋返しに描き分ける', () => {
+  const forSymbol = (fixtureType) => {
+    const ctx = makeCtx({ entry: { mechanism: OpeningMechanism.FRAME_ONLY }, lodLevel: LodLevel.DETAIL, axisValue: 0, faceLo: -60, faceHi: 60 });
+    return buildOpeningPlanSymbol(makeOpening({ fixtureType }), ctx);
+  };
+  const wf = forSymbol('WF');
+  assert.ok(wf.every(p => p.closed === true && p.points.length === 8), 'WF(solid)は閉じた矩形(4点)のはず');
+  for (const symbol of ['SF', 'SSF']) {
+    const bent = forSymbol(symbol);
+    assert.ok(bent.every(p => p.closed === false && p.points.length === 12), `${symbol}(bent)は開いたコの字＋返し(6点)のはず`);
+  }
+});
+
+test("不変条件: FRAME_ONLYはfixtureTypeが未知（未設定／カタログに無い記号）でもprofile='solid'（frameProfileForの既定）に落ちて閉じた矩形2本（各4点・closed=true）を描く（例外・NaN無し）", () => {
+  const ctx = makeCtx({ entry: { mechanism: OpeningMechanism.FRAME_ONLY }, lodLevel: LodLevel.STANDARD, axisValue: 0, faceLo: -60, faceHi: 60 });
+  for (const fixtureType of [undefined, 'XX']) {
+    const prims = buildOpeningPlanSymbol(makeOpening({ fixtureType }), ctx);
+    assert.equal(prims.length, 2, `fixtureType=${fixtureType}`);
+    assert.ok(prims.every(p => p.type === 'polyline' && p.closed === true && p.points.length === 8), `fixtureType=${fixtureType}: solid(閉じた矩形4点)になっていない`);
+  }
+});
+
+test('不変条件: SCHEMATICではSHUTTER・OVERHEAD・EMERGENCYもtick（機構を問わず簡略表示。引き違い以外は追加線も無い）', () => {
+  for (const mechanism of [OpeningMechanism.SHUTTER, OpeningMechanism.OVERHEAD, OpeningMechanism.EMERGENCY]) {
+    const opening = makeOpening();
+    const ctx = makeCtx({ entry: { mechanism }, lodLevel: LodLevel.SCHEMATIC });
+    const prims = buildOpeningPlanSymbol(opening, ctx);
+    assert.equal(prims.length, 2, `${mechanism}: tick以外の線が混じっている`);
+    assert.ok(prims.every(p => p.type === 'line' && p.role === 'symbol'), `${mechanism}`);
+  }
+});
+
 // ================================================================
 // (c) 失敗系
 // ================================================================
@@ -1208,10 +1365,10 @@ test('失敗系: DETAIL・entry無し・frameDepth=0ではexteriorDirOfを呼ば
   assert.equal(calls, 0);
 });
 
-// SWING（本ステップ11b-1で移行済み）ではなく、まだ未移行のSHUTTER（11eで移行予定）で暫定契約を
-// 確認する（移行済み以外は引き続きnull＋band計算ゼロ＝exteriorDirOf未呼び出し。11dでFIXED
-// （windowLine群）・FOLD・PIVOTを移行したため、このテストの主語をSHUTTERへ差し替えた）。
-test('失敗系: DETAIL・実装済み機構(SHUTTER・未移行)・frameDepth=50はnullを返し、exteriorDirOfも呼ばない（暫定契約の副作用ゼロ）', () => {
+// 11eでSHUTTERを移行したため、このテストは「未移行機構のnull＋副作用ゼロ」ではなく
+// 「SHUTTER自身はexteriorDirOfを参照しないので、帯計算（frameDepth>0）ぶんの1回だけに留まる
+// （OVERHEAD/EMERGENCYのように記号自身がもう1回呼ぶことはない）」を確認する内容に差し替えた。
+test('失敗系: DETAIL・SHUTTER・frameDepth=50はexteriorDirOfをちょうど1回だけ呼ぶ（帯計算のみ。SHUTTER自身は参照しない）', () => {
   const opening = makeOpening({ frameDepth: 50 });
   let calls = 0;
   const ctx = makeCtx({
@@ -1219,8 +1376,8 @@ test('失敗系: DETAIL・実装済み機構(SHUTTER・未移行)・frameDepth=5
     exteriorDirOf: () => { calls += 1; return 1; },
   });
   const prims = buildOpeningPlanSymbol(opening, ctx);
-  assert.equal(prims, null);
-  assert.equal(calls, 0);
+  assert.ok(prims.length > 0);
+  assert.equal(calls, 1);
 });
 
 // ピン留め: DETAIL・entry無し・frameDepth=50・exteriorDir=±1 → 帯（見込み）が室外側へ寄るため
@@ -1478,120 +1635,141 @@ test('失敗系: FOLD・PIVOTはhingeSide/swingSideを問わず出力が同じ�
   }
 });
 
-// ================================================================
-// (d) STANDARD/DETAILの実装済み機構はnull（一時契約。SWING_GROUP_MECHANISMS
-// （SWING・SWING_IN・PROJECT_V・DREH_KIPP。11b-1で移行済み）・HINGE_GROUP2_MECHANISMS
-// （SWING_DOUBLE・SWING_CHILD・FREE・FREE_DOUBLE・FIRE_DOOR・FIRE_FOLD。11b-2で移行済み）・
-// SLIDE_DOUBLE・SASH_OPEN_GROUP_MECHANISMS（SLIDE_SINGLE・SLIDE_LAYOUT・HUNG＋windowLine群10機構
-// ＝FIXED/TILT/TILT_OUT/AWNING/PROJECT_OUT/LOUVER/AWNING_MULTI/GARARI/GLASS_BLOCK/PIVOT_H。11c・
-// 11dで移行済み）・SASH_GROUP_MECHANISMS（FOLD・PIVOT。11dで移行済み）を除く残りの機構
-// （SHUTTER/OVERHEAD/EMERGENCY/FRAME_ONLY）が対象。11eで機構ごとに置き換える）
-// ================================================================
+// ---- 残り4機構（ステップ11e）専用の失敗系 ----
 
-test('暫定契約: STANDARD・実装済み機構(SHUTTER・未移行。11eで移行予定)はnull', () => {
-  const opening = makeOpening();
-  const ctx = makeCtx({ entry: { mechanism: OpeningMechanism.SHUTTER }, lodLevel: LodLevel.STANDARD });
-  assert.equal(buildOpeningPlanSymbol(opening, ctx), null);
-});
-
-test('暫定契約: SWING_GROUP_MECHANISMSはSTANDARD/DETAILともnullにならない（11b-1で移行済み）', () => {
-  const mechanisms = [OpeningMechanism.SWING, OpeningMechanism.SWING_IN, OpeningMechanism.PROJECT_V, OpeningMechanism.DREH_KIPP];
-  for (const mechanism of mechanisms) {
+test('失敗系: SHUTTER・OVERHEAD・EMERGENCYはhingeSide/swingSideを問わず出力が同じ（非蝶番系のため無関係）', () => {
+  const entries = [{ mechanism: OpeningMechanism.SHUTTER }, { mechanism: OpeningMechanism.OVERHEAD }, { mechanism: OpeningMechanism.EMERGENCY }];
+  for (const entry of entries) {
     for (const lodLevel of [LodLevel.STANDARD, LodLevel.DETAIL]) {
-      const opening = makeOpening();
-      const ctx = makeCtx({ entry: { mechanism }, lodLevel, faceLo: -60, faceHi: 60, axisValue: 0 });
-      assert.notEqual(buildOpeningPlanSymbol(opening, ctx), null, `${mechanism}/${lodLevel}`);
+      const ctx = makeCtx({ entry, lodLevel, faceLo: -60, faceHi: 60, axisValue: 0 });
+      const base = buildOpeningPlanSymbol(makeOpening({ hingeSide: -1, swingSide: 1 }), ctx);
+      const flipped = buildOpeningPlanSymbol(makeOpening({ hingeSide: 1, swingSide: -1 }), ctx);
+      assert.deepEqual(base.map(p => JSON.stringify(p)), flipped.map(p => JSON.stringify(p)), `${entry.mechanism}/${lodLevel}`);
     }
   }
 });
 
-test('暫定契約: HINGE_GROUP2_MECHANISMSはSTANDARD/DETAILともnullにならない（11b-2で移行済み）', () => {
-  const mechanisms = [
-    OpeningMechanism.SWING_DOUBLE, OpeningMechanism.SWING_CHILD, OpeningMechanism.FREE,
-    OpeningMechanism.FREE_DOUBLE, OpeningMechanism.FIRE_DOOR, OpeningMechanism.FIRE_FOLD,
-  ];
-  for (const mechanism of mechanisms) {
-    for (const lodLevel of [LodLevel.STANDARD, LodLevel.DETAIL]) {
-      const opening = makeOpening();
-      const ctx = makeCtx({ entry: { mechanism }, lodLevel, faceLo: -60, faceHi: 60, axisValue: 0 });
-      assert.notEqual(buildOpeningPlanSymbol(opening, ctx), null, `${mechanism}/${lodLevel}`);
-    }
-  }
-});
-
-test('暫定契約: DETAIL・実装済み機構(SHUTTER・未移行)はnull', () => {
-  const opening = makeOpening();
-  const ctx = makeCtx({
-    entry: { mechanism: OpeningMechanism.SHUTTER }, lodLevel: LodLevel.DETAIL, faceLo: -60, faceHi: 60,
-  });
-  assert.equal(buildOpeningPlanSymbol(opening, ctx), null);
-});
-
-test('暫定契約: SLIDE_DOUBLEはSTANDARD/DETAILともnullにならない（11cで移行済み）', () => {
+test('失敗系: FRAME_ONLYはhingeSide/swingSideを問わず出力が同じ（扉を持たないため無関係。DOORLESS_MECHANISMS）', () => {
   for (const lodLevel of [LodLevel.STANDARD, LodLevel.DETAIL]) {
-    const opening = makeOpening();
-    const ctx = makeCtx({ entry: { mechanism: OpeningMechanism.SLIDE_DOUBLE }, lodLevel, faceLo: -60, faceHi: 60, axisValue: 0 });
-    assert.notEqual(buildOpeningPlanSymbol(opening, ctx), null, `${lodLevel}`);
+    const ctx = makeCtx({ entry: { mechanism: OpeningMechanism.FRAME_ONLY }, lodLevel, faceLo: -60, faceHi: 60, axisValue: 0 });
+    const base = buildOpeningPlanSymbol(makeOpening({ hingeSide: -1, swingSide: 1, fixtureType: 'WF' }), ctx);
+    const flipped = buildOpeningPlanSymbol(makeOpening({ hingeSide: 1, swingSide: -1, fixtureType: 'WF' }), ctx);
+    assert.deepEqual(base.map(p => JSON.stringify(p)), flipped.map(p => JSON.stringify(p)), `${lodLevel}`);
   }
 });
 
-test('暫定契約: SASH_OPEN_GROUP_MECHANISMS（SLIDE_SINGLE・SLIDE_LAYOUT・HUNG）はSTANDARD/DETAILともnullにならない（11cで移行済み）', () => {
-  const mechanisms = [OpeningMechanism.SLIDE_SINGLE, OpeningMechanism.SLIDE_LAYOUT, OpeningMechanism.HUNG];
-  for (const mechanism of mechanisms) {
-    for (const lodLevel of [LodLevel.STANDARD, LodLevel.DETAIL]) {
-      const opening = makeOpening();
-      const ctx = makeCtx({ entry: { mechanism }, lodLevel, faceLo: -60, faceHi: 60, axisValue: 0 });
-      assert.notEqual(buildOpeningPlanSymbol(opening, ctx), null, `${mechanism}/${lodLevel}`);
-    }
-  }
-});
-
-test('暫定契約: SASH_OPEN_GROUP_MECHANISMS拡張分（windowLine群10機構）はSTANDARD/DETAILともnullにならない（11dで移行済み）', () => {
-  const mechanisms = [
-    OpeningMechanism.FIXED, OpeningMechanism.TILT, OpeningMechanism.TILT_OUT, OpeningMechanism.AWNING,
-    OpeningMechanism.PROJECT_OUT, OpeningMechanism.LOUVER, OpeningMechanism.AWNING_MULTI,
-    OpeningMechanism.GARARI, OpeningMechanism.GLASS_BLOCK, OpeningMechanism.PIVOT_H,
+test('失敗系: SHUTTER・OVERHEAD・EMERGENCY・FRAME_ONLYはwidth<60（開口が狭い）でもNaNが混入しない', () => {
+  const entries = [
+    { mechanism: OpeningMechanism.SHUTTER }, { mechanism: OpeningMechanism.OVERHEAD },
+    { mechanism: OpeningMechanism.EMERGENCY }, { mechanism: OpeningMechanism.FRAME_ONLY },
   ];
-  for (const mechanism of mechanisms) {
+  for (const entry of entries) {
     for (const lodLevel of [LodLevel.STANDARD, LodLevel.DETAIL]) {
-      const opening = makeOpening();
-      const ctx = makeCtx({ entry: { mechanism }, lodLevel, faceLo: -60, faceHi: 60, axisValue: 0 });
-      assert.notEqual(buildOpeningPlanSymbol(opening, ctx), null, `${mechanism}/${lodLevel}`);
+      const opening = makeOpening({ coord1: 0, coord2: 40, centerCoord: 20, width: 40, fixtureType: 'WF' });
+      const ctx = makeCtx({ entry, lodLevel, faceLo: -60, faceHi: 60, axisValue: 20 });
+      const prims = buildOpeningPlanSymbol(opening, ctx);
+      for (const p of prims) {
+        for (const k of ['x1', 'y1', 'x2', 'y2', 'x', 'y', 'w', 'h', 'cx', 'cy', 'r']) {
+          if (k in p) assert.ok(Number.isFinite(p[k]), `${entry.mechanism}/${lodLevel}: ${k}が有限でない: ${p[k]}`);
+        }
+        if (p.type === 'polyline') {
+          for (const v of p.points) assert.ok(Number.isFinite(v), `${entry.mechanism}/${lodLevel}: polyline座標が有限でない: ${v}`);
+        }
+      }
     }
   }
 });
 
-test('暫定契約: SASH_GROUP_MECHANISMS（FOLD・PIVOT）はSTANDARD/DETAILともnullにならない（11dで移行済み）', () => {
-  const mechanisms = [OpeningMechanism.FOLD, OpeningMechanism.PIVOT];
-  for (const mechanism of mechanisms) {
-    for (const lodLevel of [LodLevel.STANDARD, LodLevel.DETAIL]) {
-      const opening = makeOpening();
-      const ctx = makeCtx({ entry: { mechanism }, lodLevel, faceLo: -60, faceHi: 60, axisValue: 0 });
-      assert.notEqual(buildOpeningPlanSymbol(opening, ctx), null, `${mechanism}/${lodLevel}`);
-    }
+// exteriorDirOf呼び出し回数（メモ化の検証）。SHUTTER/FRAME_ONLYは開口の外部側方向を参照しない
+// ため0回、OVERHEAD/EMERGENCYは記号自身が参照するため1回——STANDARD・frameDepth=0（帯計算も
+// 呼ばない条件）で確認することで、帯計算とは独立にOVERHEAD/EMERGENCY自身が呼んでいることを
+// 個別に検出する（「帯が呼ぶから1回」という別の変異と区別する）。
+test('失敗系: STANDARD・frameDepth=0でSHUTTER/FRAME_ONLYはexteriorDirOfを呼ばない（0回）', () => {
+  for (const entry of [{ mechanism: OpeningMechanism.SHUTTER }, { mechanism: OpeningMechanism.FRAME_ONLY }]) {
+    const opening = makeOpening({ frameDepth: 0, fixtureType: 'WF' });
+    let calls = 0;
+    const ctx = makeCtx({ entry, lodLevel: LodLevel.STANDARD, axisValue: 500, exteriorDirOf: () => { calls += 1; return 1; } });
+    buildOpeningPlanSymbol(opening, ctx);
+    assert.equal(calls, 0, `${entry.mechanism}`);
   }
 });
 
-test('暫定契約: SCHEMATICは実装済み機構(SWING)でもnullにならない（tickを返す）', () => {
-  const opening = makeOpening();
-  const ctx = makeCtx({ entry: { mechanism: OpeningMechanism.SWING }, lodLevel: LodLevel.SCHEMATIC });
-  assert.notEqual(buildOpeningPlanSymbol(opening, ctx), null);
+test('失敗系: STANDARD・frameDepth=0でもOVERHEAD/EMERGENCYはexteriorDirOfをちょうど1回呼ぶ（記号自身が参照するため。帯計算は0回のはずの条件でも呼ばれる）', () => {
+  for (const entry of [{ mechanism: OpeningMechanism.OVERHEAD }, { mechanism: OpeningMechanism.EMERGENCY }]) {
+    const opening = makeOpening({ frameDepth: 0 });
+    let calls = 0;
+    const ctx = makeCtx({ entry, lodLevel: LodLevel.STANDARD, axisValue: 500, exteriorDirOf: () => { calls += 1; return 1; } });
+    buildOpeningPlanSymbol(opening, ctx);
+    assert.equal(calls, 1, `${entry.mechanism}`);
+  }
 });
 
-// 11d QA指摘（2026-09-23）: 全機構を列挙して「null を返すのは未移行の4機構だけ」を固定する。
-// グループ単位の非 null テストだけでは、OVERHEAD 等が誤って非 null になる退行や、IMPLEMENTED_MECHANISMS に
-// 機構を足したときのグループ入れ忘れを検出できない。11e でこの集合が空になる＝移行完了の指標。
-test('暫定契約: IMPLEMENTED_MECHANISMS 全機構のうち STANDARD/DETAIL で null を返すのは SHUTTER/OVERHEAD/EMERGENCY/FRAME_ONLY の4機構だけ', () => {
-  const nullMechanisms = new Set();
+test('失敗系: DETAIL・frameDepth>0でOVERHEADはexteriorDirOfをちょうど1回だけ呼ぶ（帯計算と記号自身の参照が同じメモ化thunkを共有）', () => {
+  const opening = makeOpening({ frameDepth: 50 });
+  let calls = 0;
+  const ctx = makeCtx({
+    entry: { mechanism: OpeningMechanism.OVERHEAD }, lodLevel: LodLevel.DETAIL, faceLo: -60, faceHi: 60, axisValue: 0,
+    exteriorDirOf: () => { calls += 1; return 1; },
+  });
+  buildOpeningPlanSymbol(opening, ctx);
+  assert.equal(calls, 1);
+});
+
+test('失敗系: FRAME_ONLY・frameFaceWidth/frameProjection未設定 → 既定値20/12（明示20/12と出力が一致）', () => {
+  const ctx = makeCtx({ entry: { mechanism: OpeningMechanism.FRAME_ONLY }, lodLevel: LodLevel.STANDARD, axisValue: 0, faceLo: -60, faceHi: 60 });
+  const omitted = buildOpeningPlanSymbol(makeOpening({ fixtureType: 'WF' }), ctx);
+  const explicit = buildOpeningPlanSymbol(makeOpening({ fixtureType: 'WF', frameFaceWidth: 20, frameProjection: 12 }), ctx);
+  assert.deepEqual(omitted.map(p => JSON.stringify(p)), explicit.map(p => JSON.stringify(p)));
+  // 既定値と異なる値を指定すると出力が変わることも確認する（既定値テストが「常に無視される」偽陽性を防ぐ）。
+  const changed = buildOpeningPlanSymbol(makeOpening({ fixtureType: 'WF', frameFaceWidth: 40, frameProjection: 30 }), ctx);
+  assert.notDeepEqual(omitted.map(p => JSON.stringify(p)), changed.map(p => JSON.stringify(p)));
+});
+
+test("不変条件: 残り4機構はopening.lineWeightが0.5でもrole='symbol'はopening.lineWeightのまま・role='frame'はwallFinishLineWeight(detail)固定（枠↔記号の取り違え検出）", () => {
+  const entries = [
+    { mechanism: OpeningMechanism.SHUTTER }, { mechanism: OpeningMechanism.OVERHEAD },
+    { mechanism: OpeningMechanism.EMERGENCY }, { mechanism: OpeningMechanism.FRAME_ONLY },
+  ];
+  for (const entry of entries) {
+    const opening = makeOpening({ lineWeight: 0.5, fixtureType: 'WF' });
+    const ctx = makeCtx({ entry, lodLevel: LodLevel.DETAIL, faceLo: -60, faceHi: 60, axisValue: 0 });
+    const prims = buildOpeningPlanSymbol(opening, ctx);
+    const symbolPrims = prims.filter(p => p.role === 'symbol');
+    const framePrims = prims.filter(p => p.role === 'frame');
+    // FRAME_ONLYはrole=symbolのプリミティブを持たない（方立=frameのみ。frameOnlyPrimitives参照）
+    // ため、この機構だけsymbolPrims.length>0を要求しない——他3機構は空配列だとevery()が真になり
+    // 検出力ゼロの偽陽性になるため、必ず1本以上あることも合わせて固定する。
+    if (entry.mechanism !== OpeningMechanism.FRAME_ONLY) {
+      assert.ok(symbolPrims.length > 0, `${entry.mechanism}: role=symbolのプリミティブが無い（テストの検出力がゼロになる）`);
+    }
+    assert.ok(symbolPrims.every(p => p.weightMm === 0.5), `${entry.mechanism}: role=symbolがopening.lineWeightに追従していない`);
+    assert.ok(framePrims.length > 0, `${entry.mechanism}: role=frameのプリミティブが無い（テストの検出力がゼロになる）`);
+    assert.ok(framePrims.every(p => p.weightMm === LINE_WEIGHT_MM.thick), `${entry.mechanism}: role=frameがwallFinishLineWeight(true)固定でない`);
+  }
+});
+
+// ================================================================
+// (d) STANDARD/DETAILの実装済み機構は「entry:nullのtick出力」に落ちない（11eで全30機構の移行が
+// 完了し、buildOpeningPlanSymbolのnull経路自体を削除した。null経路が無い以上「nullを返さない」は
+// 構造的に恒真になった——旧(d)節の「暫定契約: ○○グループはnullにならない」という形の9テストは
+// 検出力ゼロ（QA指摘。例: SASH_OPEN_GROUP_MECHANISMSからGLASS_BLOCKを外す変異を入れても、
+// buildOpeningPlanSymbolは最後のtickPrimitivesフォールバックへ黙って落ちるだけで、結果は非null
+// のまま＝旧テストは気付けない）。ここでは「実際に機構ごとの記号を描けているか」を、より強い
+// 形（tick出力＝entry:null相当の出力と一致しないこと）で検証する——グループへの入れ忘れは
+// tickへの黙った縮退として現れるため、この比較で退行を検出できる。9件の個別グループテストは
+// この1テストに包含されるため削除した。
+// ================================================================
+
+test('不変条件: IMPLEMENTED_MECHANISMSの全機構はSTANDARD/DETAILどちらも、entry:null（tick）の出力とは一致しない（グループ入れ忘れで黙ってtickへ縮退する退行を検出）', () => {
+  const collided = [];
   for (const mechanism of IMPLEMENTED_MECHANISMS) {
     for (const lodLevel of [LodLevel.STANDARD, LodLevel.DETAIL]) {
-      const opening = makeOpening();
-      const ctx = makeCtx({ entry: { mechanism }, lodLevel, faceLo: -60, faceHi: 60, axisValue: 0 });
-      if (buildOpeningPlanSymbol(opening, ctx) === null) nullMechanisms.add(mechanism);
+      const opening = makeOpening({ fixtureType: 'WF' });
+      const prims = buildOpeningPlanSymbol(opening, makeCtx({ entry: { mechanism }, lodLevel, faceLo: -60, faceHi: 60, axisValue: 0 }));
+      const tickPrims = buildOpeningPlanSymbol(opening, makeCtx({ entry: null, lodLevel, faceLo: -60, faceHi: 60, axisValue: 0 }));
+      const same = JSON.stringify(prims.map(p => JSON.stringify(p))) === JSON.stringify(tickPrims.map(p => JSON.stringify(p)));
+      if (same) collided.push(`${mechanism}/${lodLevel}`);
     }
   }
-  assert.deepEqual(
-    [...nullMechanisms].sort(),
-    [OpeningMechanism.SHUTTER, OpeningMechanism.OVERHEAD, OpeningMechanism.EMERGENCY, OpeningMechanism.FRAME_ONLY].sort(),
-  );
+  assert.deepEqual(collided, []);
 });

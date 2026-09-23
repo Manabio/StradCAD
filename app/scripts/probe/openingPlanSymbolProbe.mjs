@@ -248,7 +248,11 @@ function runSweep(project) {
                 const el = elements[idx];
                 const rows = [];
                 if (el) flattenNode(el.props?.children, rows);
-                const comboKey = `${baseKey}|${variant.label}|${hingeSide}|${swingSide}|${frameDepth}|${lodLevel}`;
+                // comboKeyにvariant.categoryを含める（11e QA指摘: FITTING_CATALOG/WINDOW_CATALOGの
+                // 両方にkey:'doubleSliding'・mechanism:SLIDE_DOUBLEを持つ組（戸/窓）があり、
+                // variant.labelだけでは`slideDouble:doubleSliding`が同じ文字列になって衝突していた
+                // ——後勝ちでMap化されるopeningPlanSymbolDiff.mjs側では片方の検出力が黙って0になる）。
+                const comboKey = `${baseKey}|${variant.category}:${variant.label}|${hingeSide}|${swingSide}|${frameDepth}|${lodLevel}`;
                 items.push({ comboKey, rows });
                 combosRun += 1;
               }

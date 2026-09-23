@@ -617,7 +617,7 @@ defer: 天井高さが異なる内部境界（壁の無い部屋内部）の
 **`openingsOnFace`は`wallSide`で絞らない**——開口は物理的にその場所の壁すべてを貫通するため、共有壁の建具は両側の部屋の面に出る
 （旧仕様「配置時にクリックした側の面にのみ表示」は、反対側の部屋の展開図に建具が一切出ない実機不具合の原因だったため撤回。
 `findOpeningsOnWall`と同じ考え方）。**姿図の正準向きは「世界座標昇順＝図のx昇順」**（吊元`hingeSide<0`＝`coord1`側＝図のx=0。
-平面記号`OpeningsLayer.jsx swingSymbol`の`hingeAlong`と同じ世界アンカー）のため、世界順とローカル順が反転する面
+平面記号`openings/openingPlanSymbol.js swingPrimitives`の`hingeAlong`と同じ世界アンカー）のため、世界順とローカル順が反転する面
 （`dirSign<0`。裏側から見る面もここに含まれる）では`mirrorPrimitiveX`（`elevationPrimitives.js`）で左右反転してから置く——
 反転しないと吊元・親子扉の子・レバーハンドル等の非対称要素が逆端に描かれる。
 **床に高低差がある面（部分指定の段差＝`floorSegments`）では、建具・直交壁の建具断面ともその位置の実際の床に乗せる**——

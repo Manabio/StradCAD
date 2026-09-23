@@ -81,7 +81,7 @@ export function hingeSideMatters(mechanism, entry) {
 // 非蝶番系のうち、一般記号自身が開口全幅の枠矩形（サッシ枠rect）を描く機構の集合（唯一の定義箇所）。
 // 詳細LODの方立（縦枠）はこれらの機構では記号側の枠矩形と内側の縦線が同一座標で重なるため、
 // 方立側は内側の縦線を持たない3辺（コの字）で描く必要がある——閉じた矩形のまま重ねると
-// 「開口の縁の二重描画」になる（renderer/OpeningsLayer.jsx sashFrameOpenSymbol・
+// 「開口の縁の二重描画」になる（openings/openingPlanSymbol.js sashFrameOpenPrimitives・
 // openingPlanSymbolGeometry.js planSymbolPlan の frame:'sashOpen' が参照）。
 //
 // 既知の例外（未解消・軽微）: SHUTTER/OVERHEADは含めていない。どちらも記号自身が「開口全幅の

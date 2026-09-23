@@ -23,7 +23,7 @@ export function shouldShowOpeningTags(appMode, lodLevel) {
   return false;
 }
 
-// 長さ方向(along)・直交方向(perp)のワールド座標 → {x, y}（OpeningsLayer.jsx の toWorld と同じ変換）。
+// 長さ方向(along)・直交方向(perp)のワールド座標 → {x, y}（openings/openingPlanSymbol.js の toWorld と同じ変換）。
 function toWorld(isVertical, along, perp) {
   return isVertical ? { x: perp, y: along } : { x: along, y: perp };
 }
@@ -48,7 +48,8 @@ function swingGeometry(opening, host) {
   const { hingeSide, swingSide, width, isVertical } = opening;
   const hingeAlong = hingeSide < 0 ? opening.coord1 : opening.coord2;
   const hinge = toWorld(isVertical, hingeAlong, host.axisValue);
-  // 蝶番から見た「閉じ位置」の方向角（OpeningsLayer.jsx swingSymbol と同じ式で一致させる）
+  // 蝶番から見た「閉じ位置」の方向角（openings/openingPlanSymbol.js swingLeafPrimitives と
+  // 同じ式で一致させる）
   const towardFar = hingeSide < 0 ? 1 : -1;
   const closedAngle = isVertical
     ? (towardFar > 0 ? 90 : -90)

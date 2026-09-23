@@ -58,7 +58,7 @@ export function findOpeningsOnWall(wall, graph) {
 
 /**
  * 開き戸が直交方向(perp)の指定側（±1。isVertical壁ならx、水平壁ならy）へ開くための
- * swingSide（±1）を返す。OpeningsLayer.jsx swingSymbol の開き角度式
+ * swingSide（±1）を返す。openings/openingPlanSymbol.js swingLeafPrimitives の開き角度式
  * （perpDir = (isVertical?1:-1) * swingSide * hingeSide）の逆解き。
  * perpDir に0を渡した場合は1（fallback扱い）として扱い、0/NaNを返さない。
  */

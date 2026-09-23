@@ -1083,7 +1083,7 @@ test('【項目1】buildFaceFigure: 建具(fitting)×SWINGは吊元表示(一点
 });
 
 // ---- 姿図の左右反転: 正準向き（世界座標昇順＝図のx昇順）に対し dirSign<0 の面では反転する ----
-// 吊元 hingeSide=-1 は世界座標 coord1 側（平面記号 swingSymbol の hingeAlong と同じアンカー）。
+// 吊元 hingeSide=-1 は世界座標 coord1 側（平面記号 swingPrimitives の hingeAlong と同じアンカー）。
 // SWING の吊元表示（一点鎖線V）の頂点xが、面のローカル座標で「世界coord1の位置」に来ることを固定する。
 test('buildFaceFigure: dirSign=-1の面では姿図が左右反転され、吊元が正しい世界端に描かれる', () => {
   const opening = {
