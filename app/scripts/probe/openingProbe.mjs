@@ -1,9 +1,10 @@
 // 建具カタログ（openings/openingCatalog.js）変更の実データ検証probe。sectionProbe.mjs /
 // sectionDiff.mjs と同じ実行形式・ヘッダ・終了コード規約・出力形・diffの表示形を踏襲する。
 //
-// 【golden系との位置づけ】既存の golden JSON（golden13/struct-*.json・elevfig-*.json 等）は
-// 建具のsubType/fixtureType/mechanismを一切含まない（openingIdの参照のみ・実測で確認済み）ため
-// 検出力ゼロ——本probeが建具カタログ変更に対する唯一の実データ検証。
+// 【golden系との位置づけ】既存の golden JSON は建具のsubType/fixtureType/mechanismを文字列としては
+// 含まない。golden13/struct-*.json は建具カタログ変更に無反応（実測）。golden13/elevfig-*.json は
+// 展開図の姿図（buildOpeningElevation）経由で mechanism 変更に**反応する**（2026-09-23 実測: 74→71件）
+// が、記号・採番・既定寸法・未解決キーは持たない——それらは本probeだけが固定する。
 //
 // 通す関数列（App.jsx collectOpeningNumbersAllFloors と同じ「建具モード突入」境界を再現）:
 //   project.planes（採用階のみ・検討/屋根は対象外）を順に collectFloorOpeningGroups →
