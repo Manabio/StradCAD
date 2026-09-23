@@ -194,6 +194,9 @@ test('【失敗系】配置可能な建具カタログが無い場合はopening:
   // FITTING_CATALOG を一時的に空にして「配置できる建具が無い」状態を再現する（openingCatalog.js の
   // カタログは通常どのwallKindでも1件以上あるため、この分岐は実運用では到達しない防御コード——
   // 直接テストするにはカタログを一時的に空にする以外に手段が無い）。
+  // 注意（ステップ10c）: FITTING_CATALOG/WINDOW_CATALOG の直接変更は openingSubTypeList/getFittingOptions
+  // （非メモ化）にのみ反映され、findCatalogEntry（overlay 世代キーでメモ化）には追従しない。この窓の中で
+  // findCatalogEntry の戻り値に依存するアサーションを書かないこと。
   const saved = FITTING_CATALOG.splice(0, FITTING_CATALOG.length);
   try {
     const { opening, error } = placeOpeningWithDefaults(graph, project, wall, { x: 1500, y: 0 }, OpeningCategory.FITTING);
@@ -690,6 +693,7 @@ test('placeOpeningWithDefaults: 配置entryの機構がSWING_INなら外壁で�
 
   const { graph, wall } = makeWallGraph(3000, { isExteriorWall: true, axisOffset: 75 }); // faceDir=+1（外壁は常に室外=faceDir側へ開く既定）
   const project = makeProject();
+  // 注意（ステップ10c）: 直接変更は findCatalogEntry（メモ化）には追従しない（上の FITTING_CATALOG.splice の注記参照）。
   const saved = WINDOW_CATALOG.splice(0, WINDOW_CATALOG.length);
   try {
     WINDOW_CATALOG.push(inswingEntry, ...saved.filter(e => e.key !== 'inswing'));

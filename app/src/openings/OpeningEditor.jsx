@@ -1,7 +1,7 @@
 import { useRef } from 'react';
 import { observer } from 'mobx-react-lite';
 import { runInAction } from 'mobx';
-import { getFittingOptions, WINDOW_CATALOG, getFixtureSymbols, findCatalogEntry, defaultOpeningHeight, HINGED_MECHANISMS, hingeSideMatters, OpeningMechanism } from './openingCatalog.js';
+import { getFittingOptions, openingSubTypeList, getFixtureSymbols, findCatalogEntry, defaultOpeningHeight, HINGED_MECHANISMS, hingeSideMatters, OpeningMechanism } from './openingCatalog.js';
 import { OpeningCategory } from '../core.js';
 import { findHostWall, maxOpeningWidthAt, findOpeningsOnWall, wallFaceRange } from './openingGeometry.js';
 import { frameOnlyPerpRange } from './openingPlanSymbolGeometry.js';
@@ -49,7 +49,7 @@ export const OpeningEditor = observer(function OpeningEditor({ graph, project, o
   const wall = findHostWall(opening, graph);
   const wallKind = wall?.isExteriorWall ? 'exterior' : 'interior';
   const isWindow = opening.category === OpeningCategory.WINDOW;
-  const catalog  = isWindow ? WINDOW_CATALOG : getFittingOptions(wallKind);
+  const catalog  = isWindow ? openingSubTypeList('window') : getFittingOptions(wallKind);
   const entry    = findCatalogEntry(opening.category, opening.subType);
   const tag      = openingTagOf(opening, project);
   const mountLocation = openingMountLocation(opening, graph);

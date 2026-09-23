@@ -279,11 +279,9 @@ const REGISTRY = Object.assign(Object.create(null), {
         throw new Error('建具種別エントリのslideLayoutが不正です（オブジェクトが必要）');
       }
     },
-    // FITTING_CATALOG（fitting）とWINDOW_CATALOG（window）を category 付きで合成する。
-    loadBuiltin: () => import('../openings/openingCatalog.js').then(m => [
-      ...m.FITTING_CATALOG.map(e => ({ category: 'fitting', ...e })),
-      ...m.WINDOW_CATALOG.map(e => ({ category: 'window', ...e })),
-    ]),
+    // FITTING_CATALOG（fitting）とWINDOW_CATALOG（window）を category 付きで合成する（唯一の
+    // 合成式は openingCatalog.js の openingSubTypeBuiltinList。ここでの二重実装はしない）。
+    loadBuiltin: () => import('../openings/openingCatalog.js').then(m => m.openingSubTypeBuiltinList()),
   },
 
   [CatalogKind.INTERIOR_MASTER]: {

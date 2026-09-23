@@ -18,7 +18,7 @@ import { runInAction } from 'mobx';
 import { undoManager } from '../undoManager.js';
 import { OpeningCategory } from '../core.js';
 import {
-  getFittingOptions, WINDOW_CATALOG, defaultFixtureSymbolFor, defaultOpeningHeight, defaultMaterialGlassFor, defaultNoteFor,
+  getFittingOptions, openingSubTypeList, defaultFixtureSymbolFor, defaultOpeningHeight, defaultMaterialGlassFor, defaultNoteFor,
   getFixtureSymbols, OpeningMechanism, DEFAULT_FRAME_FACE_MM, DEFAULT_FRAME_PROJECTION_MM,
 } from './openingCatalog.js';
 import { findHostWall, validateOpeningPlacement, maxOpeningWidthAt, findOpeningsOnWall, swingSideTowardPerp, exteriorSideDir } from './openingGeometry.js';
@@ -154,7 +154,7 @@ export function endOpeningFieldUndo(graph, project, opening) {
  */
 export function placeOpeningWithDefaults(graph, project, wall, worldPos, category, subType = null) {
   const wallKind = wall.isExteriorWall ? 'exterior' : 'interior';
-  const catalog = category === OpeningCategory.WINDOW ? WINDOW_CATALOG : getFittingOptions(wallKind);
+  const catalog = category === OpeningCategory.WINDOW ? openingSubTypeList('window') : getFittingOptions(wallKind);
   const entry = (subType && catalog.find(e => e.key === subType)) ?? catalog[0];
   if (!entry) return { opening: null, error: 'この壁に配置できる建具がありません' };
 

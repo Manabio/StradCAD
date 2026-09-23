@@ -4,7 +4,17 @@
 // 仕上げモードの材マスタ（finish/materials/*）とは異なり、開口カタログは
 // フロアプランモードでも使うため動的 import にせず静的 import する
 // （小さな静的データのため interiorMasters.js と同じ扱い）。
+//
+// findCatalogEntry・openingSubTypeList は catalog/catalogRegistry.js の overlay
+// （文書同梱doc・ユーザーライブラリuser）込みで解決する（ステップ10c・2026-09-23。
+// structural/sectionCatalog.js findSectionEntry と同型）。本ファイルは catalog/*.js
+// ではないため catalogRegistry.js・catalogKinds.js を静的 import してよい
+// （catalogKinds.js 側の openingSubType.loadBuiltin は本ファイルを動的 import
+// する thunk であり、本ファイルからの静的 import と循環しない）。
 // ================================================================
+
+import { CatalogKind } from '../catalog/catalogKinds.js';
+import { composeCatalog, composeList, overlayGeneration } from '../catalog/catalogRegistry.js';
 
 export const OpeningMechanism = Object.freeze({
   SWING:        'swing',       // 1枚の扉が蝶番で回転して開く
@@ -237,9 +247,65 @@ export function frameProfileFor(symbol) {
   return FIXTURE_SYMBOLS.find(f => f.key === symbol)?.profile ?? 'solid';
 }
 
-/** wallKind ('interior' | 'exterior') に応じた建具カタログの絞り込み。 */
+/**
+ * FITTING_CATALOG・WINDOW_CATALOG を category 付きで合成した一覧（builtin一覧。唯一の合成式）。
+ * catalogKinds.js の openingSubType.loadBuiltin・findCatalogEntry・openingSubTypeList が
+ * 共通して使う。呼ぶ度に現在の FITTING_CATALOG/WINDOW_CATALOG から作り直す——固定配列として
+ * モジュール読込み時に1回だけ作ってモジュールスコープにキャッシュすると、openingEdit.test.js
+ * の一時的な FITTING_CATALOG.splice()/WINDOW_CATALOG.splice() によるカタログ欠如再現テストが
+ * 反映されなくなる（sectionCatalog.js の SECTION_CATALOG とは異なり、本カタログは直接
+ * splice されるテストが既存で存在するため、静的スナップショットにしない）。
+ */
+export function openingSubTypeBuiltinList() {
+  return [
+    ...FITTING_CATALOG.map(e => ({ ...e, category: 'fitting' })),
+    ...WINDOW_CATALOG.map(e => ({ ...e, category: 'window' })),
+  ];
+}
+
+// registry 経由の読み出し口＋メモ化（ステップ10c・2026-09-23）。
+//
+// findCatalogEntry はフロアプラン・建具モードの描画・パネルから種別ごとに呼ばれるホットパスのため、
+// overlay合成（composeCatalog）の結果Mapをモジュールスコープでメモ化する。キーは
+// catalog/catalogRegistry.js の overlay世代カウンタ overlayGeneration()——setOverlay/
+// clearOverlaysが呼ばれる度に必ず++されるので、世代が変わらない間はcomposeCatalogを
+// 呼び直さずキャッシュしたMapを返す（sectionCatalog.js findSectionEntry と同型）。
+//
+// 【sectionCatalog.js との差異】section は builtin（SECTION_CATALOG）が静的な配列そのものなので
+// キャッシュMapがoverlay世代の間ずっと有効だが、openingSubType は builtin が
+// openingSubTypeBuiltinList()（FITTING_CATALOG/WINDOW_CATALOGから作り直す関数）から来るため、
+// overlay世代が変わらない間にFITTING_CATALOG/WINDOW_CATALOGが直接splice等で変更された場合
+// （上記splice系テストの一時変更ウィンドウ）はキャッシュが追従しない。既存のsplice系テストは
+// いずれもその変更ウィンドウ中にfindCatalogEntryを呼ばないため実害はない（openingSubTypeList/
+// getFittingOptionsは非メモ化＝毎回composeListで直接FITTING_CATALOG/WINDOW_CATALOGの現在値を
+// 読むため、splice系テストはそちらの経路で正しく反映される）。
+let _map = null;
+let _gen = -1;
+
+function catalogMap() {
+  const gen = overlayGeneration();
+  if (_map === null || _gen !== gen) {
+    _map = composeCatalog(CatalogKind.OPENING_SUB_TYPE, openingSubTypeBuiltinList());
+    _gen = gen;
+  }
+  return _map;
+}
+
+/**
+ * category ('fitting'|'window') に一致する開口種別一覧（overlay込み）。builtinの並びを保ち、
+ * user/doc追加分（builtinに無いキー）を末尾に置く（composeList）。呼ぶ度に合成し直す
+ * （一覧UIはfindCatalogEntryほどの高頻度呼び出しではないためメモ化しない。sectionList と同型）。
+ */
+export function openingSubTypeList(category) {
+  return composeList(CatalogKind.OPENING_SUB_TYPE, openingSubTypeBuiltinList())
+    .filter(e => e.category === category);
+}
+
+/** wallKind ('interior' | 'exterior') に応じた建具カタログの絞り込み。user/docエントリは
+ * wallKinds省略可（両方に出す）。`wallKinds: []` はどちらにも出ない（一覧 openingSubTypeList には出る）。
+ * builtinは全件wallKindsを持つため挙動は従来のまま。 */
 export function getFittingOptions(wallKind) {
-  return FITTING_CATALOG.filter(o => o.wallKinds.includes(wallKind));
+  return openingSubTypeList('fitting').filter(o => !o.wallKinds || o.wallKinds.includes(wallKind));
 }
 
 // 廃止した種別キー → 現行キーの読み替え表（唯一の定義箇所）。旧データのデコード時に正規化する
@@ -256,9 +322,10 @@ export function normalizeSubType(category, subType) {
   return LEGACY_SUBTYPE_ALIASES[category === 'window' ? 'window' : 'fitting'][subType] ?? subType;
 }
 
+/** category ('window'|それ以外はfitting扱い。現行規約維持) ・subType → カタログエントリ（overlay込み・無ければnull）。 */
 export function findCatalogEntry(category, subType) {
-  const list = category === 'window' ? WINDOW_CATALOG : FITTING_CATALOG;
-  return list.find(o => o.key === subType) ?? null;
+  const cat = category === 'window' ? 'window' : 'fitting';
+  return catalogMap().get(`${cat}:${subType}`) ?? null;
 }
 
 /**
