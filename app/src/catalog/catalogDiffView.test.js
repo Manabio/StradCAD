@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { CATALOG_DIFF_COLOR, CATALOG_DIFF_MARK, diffTooltip, diffPairs } from './catalogDiffView.js';
+import { CATALOG_DIFF_COLOR, CATALOG_DIFF_MARK, diffTooltip, diffPairs, fieldLabel } from './catalogDiffView.js';
 
 // ---- 定数 ----
 test('CATALOG_DIFF_COLOR: #f97316（renderer/SiteLinesLayer.jsxの隣地境界線と同じ値。意味は別）', () => {
@@ -90,6 +90,25 @@ test('diffPairs: 第4引数(diffFields)を渡すと再計算せずそのまま�
 
 test('【失敗系】diffPairs: 未知の種別は例外', () => {
   assert.throws(() => diffPairs('no-such-kind', {}, {}), /未知のカタログ種別/);
+});
+
+// ---- fieldLabel（QA指摘Minor-1・ステップ10f・2026-09-23）: FIELD_LABELSの唯一の読み出し口。
+// ui/CatalogMaintenancePanel.jsx の閲覧タブ（ReadonlyKindTab）詳細欄もこれ経由でラベルを引く
+// ——ツールチップ（diffTooltip）と詳細欄で別の日本語名が同時に出る二重定義を防ぐ。 ----
+test('fieldLabel: FIELD_LABELSに登録済みの項目はその日本語ラベルを返す（material/section/openingSubType）', () => {
+  assert.equal(fieldLabel('material', 'thickness'), '厚');
+  assert.equal(fieldLabel('section', 'height'), 'せい');
+  assert.equal(fieldLabel('section', 'wallThickness'), '管厚');
+  assert.equal(fieldLabel('section', 'shape'), '断面形状');
+  assert.equal(fieldLabel('openingSubType', 'wallKinds'), '対応壁種');
+  assert.equal(fieldLabel('openingSubType', 'fireLeaves'), '防火枚数');
+  assert.equal(fieldLabel('openingSubType', 'fireAngle'), '防火角度');
+  assert.equal(fieldLabel('openingSubType', 'slideLayout'), '引違い配置');
+});
+
+test('fieldLabel: 未知の項目・種別はfield名をそのまま返す（投げない）', () => {
+  assert.equal(fieldLabel('material', 'noSuchField'), 'noSuchField');
+  assert.equal(fieldLabel('no-such-kind', 'name'), 'name');
 });
 
 // Q11裁定（renderer/・figure/ がこのモジュールをimportしないこと）は

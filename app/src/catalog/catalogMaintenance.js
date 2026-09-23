@@ -79,10 +79,12 @@ export function parseThicknessInput(raw) {
  * 種別タブの器（左タブ）。listKinds() から導出する——登録表に種別が増えたらタブも増える。
  * ステップ7d: 内装マスター・境界マスターは閲覧のみ（追加・複製・編集・削除なし）で enabled:true。
  * ステップ8h: 断面も閲覧のみで enabled:true（規格文字列の一括入力はステップ8iで別途着手）。
- * openingSubType は選択UIが無いためまだ enabled:false（「準備中」表示用）。
+ * ステップ10f: 建具種別（openingSubType）も同じ閲覧のみで enabled:true（姿図プレビュー付き。
+ * 追加・編集・削除はステップ12）。これで登録表の全種別が enabled:true になる。
  */
 const VIEWABLE_KINDS = Object.freeze([
   CatalogKind.MATERIAL, CatalogKind.INTERIOR_MASTER, CatalogKind.BOUNDARY_MASTER, CatalogKind.SECTION,
+  CatalogKind.OPENING_SUB_TYPE,
 ]);
 
 export function buildKindTabs() {
@@ -91,6 +93,70 @@ export function buildKindTabs() {
     label: KIND_LABELS[kind] ?? kind,
     enabled: VIEWABLE_KINDS.includes(kind),
   }));
+}
+
+/**
+ * ステップ10f: 閲覧タブ（ui/CatalogMaintenancePanel.jsx の ReadonlyKindTab）の詳細欄で、
+ * READONLY_KIND_FIELDS の値を読み取り専用表示用の文字列にする汎用の整形（.jsx側に判断を
+ * 残さない——catalogDiffView.js の diffTooltip/formatFieldValue と同じく、表示整形ロジックは
+ * catalog/*.js 側に置く）。
+ * - 未設定（null/undefined/空文字）は「（未設定）」。
+ * - 配列は要素を「・」で連結する。例: openingSubType の wallKinds=['interior','exterior']
+ *   → 'interior・exterior'。
+ *   QA指摘Minor-3（2026-09-23）: 要素にオブジェクトを含む配列は、要素境界が読めるよう
+ *   各要素を「〔…〕」で包み「／」で連結する（プリミティブ配列と同じ「・」区切りのままだと
+ *   親（plainオブジェクト）の「・」と衝突し、要素の切れ目が読めなくなるため）。例:
+ *   slideLayout.panels=[{arrow:'neg'},{fix:true}] → '〔arrow:neg〕／〔fix:true〕'。
+ * - plainオブジェクトは「key:value」を「・」で連結する。例: openingSubType の
+ *   slideLayout={tracks:2, panels:[{arrow:'neg'},{fix:true}]} →
+ *   'tracks:2・panels:〔arrow:neg〕／〔fix:true〕'（panelsは要素にオブジェクトを含む配列のため
+ *   上の規則で「〔…〕／」区切りに開く）。
+ * - 空配列・空オブジェクトは「（なし）」。
+ * layers（境界マスター）・fields（境界マスター）は ui/CatalogMaintenancePanel.jsx 側に既に
+ * 個別のフォーマット（formatLayerLine等）があるため、この関数はそれ以外の項目
+ * （openingSubType の wallKinds/slideLayout 等）向けの汎用フォールバックとして使う。
+ * @param {*} value
+ * @returns {string}
+ */
+export function formatReadonlyValue(value) {
+  if (value === null || value === undefined || value === '') return '（未設定）';
+  if (Array.isArray(value)) {
+    if (value.length === 0) return '（なし）';
+    const hasObjectElement = value.some(v => v !== null && typeof v === 'object' && !Array.isArray(v));
+    return hasObjectElement
+      ? value.map(v => `〔${formatReadonlyValue(v)}〕`).join('／')
+      : value.map(formatReadonlyValue).join('・');
+  }
+  if (typeof value === 'object') {
+    const entries = Object.entries(value);
+    return entries.length > 0 ? entries.map(([k, v]) => `${k}:${formatReadonlyValue(v)}`).join('・') : '（なし）';
+  }
+  return String(value);
+}
+
+// ステップ10f QA指摘Minor-2（2026-09-23）: category値→表示名の対応を種別ごとにここへ集約する
+// （ui/CatalogMaintenancePanel.jsx側にあったCATEGORY_LABELS（material用）・
+// OPENING_CATEGORY_LABELS（openingSubType用）の重複定義をやめ、ここへ委譲させる。
+// formatReadonlyFieldValueのcategory分岐がkindを見ずに動いていたため、材料にopeningSubType用の
+// 対応表が誤って効く／その逆の衝突があった——kindごとに分けて持つことで解消する）。
+const CATEGORY_LABELS_BY_KIND = Object.freeze({
+  [CatalogKind.MATERIAL]: Object.freeze({
+    [MATERIAL_CATEGORY.PANEL]:   '面材',
+    [MATERIAL_CATEGORY.FINISH]:  '仕上げ材',
+    [MATERIAL_CATEGORY.BACKING]: '下地材',
+  }),
+  [CatalogKind.OPENING_SUB_TYPE]: Object.freeze({ fitting: '建具', window: '窓' }),
+});
+
+/**
+ * category値の表示名（kindごとの対応表から引く）。対応表に無い種別・値は
+ * formatReadonlyValue(value) にフォールバックする（未知の値でも投げない）。
+ * @param {string} kind
+ * @param {*} value
+ * @returns {string}
+ */
+export function formatCategoryLabel(kind, value) {
+  return CATEGORY_LABELS_BY_KIND[kind]?.[value] ?? formatReadonlyValue(value);
 }
 
 /**

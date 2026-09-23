@@ -5,11 +5,12 @@ import {
   buildMaterialEntry, duplicateMaterialEntry, validateMaterialEntry,
   upsertUserMaterialEntry, removeUserMaterialEntry, buildUserMaterialBundle, commitUserEntries,
   isEditableMaterialCategory, MATERIAL_CATEGORY, canEditMaterialRow, parseThicknessInput,
-  planRealign, realignTargets, planBulkSectionImport,
+  planRealign, realignTargets, planBulkSectionImport, formatReadonlyValue, formatCategoryLabel,
 } from './catalogMaintenance.js';
 import { setOverlay, clearOverlays, overlayFor, docDiffMap } from './catalogRegistry.js';
 import { CatalogKind } from './catalogKinds.js';
 import { parseSectionSpecList } from '../structural/sectionCatalog.js';
+import { openingSubTypeBuiltinList } from '../openings/openingCatalog.js';
 
 test.afterEach(() => clearOverlays());
 
@@ -22,7 +23,7 @@ function material(overrides) {
 }
 
 // ---- buildKindTabs ----
-test('buildKindTabs: listKinds()から導出し、material・interiorMaster・boundaryMaster・sectionはenabled:true（閲覧のみ。ステップ7d・8h）、openingSubTypeはenabled:false', () => {
+test('buildKindTabs: listKinds()から導出し、全種別（material・interiorMaster・boundaryMaster・section・openingSubType）がenabled:true（閲覧のみ。ステップ7d・8h・10f）', () => {
   const tabs = buildKindTabs();
   const materialTab = tabs.find(t => t.kind === CatalogKind.MATERIAL);
   assert.equal(materialTab.enabled, true);
@@ -36,9 +37,9 @@ test('buildKindTabs: listKinds()から導出し、material・interiorMaster・bo
   const sectionTab = tabs.find(t => t.kind === CatalogKind.SECTION);
   assert.equal(sectionTab.enabled, true);
   assert.equal(sectionTab.label, '断面');
-  const notYet = tabs.filter(t => t.kind === CatalogKind.OPENING_SUB_TYPE);
-  assert.ok(notYet.length > 0);
-  assert.ok(notYet.every(t => t.enabled === false));
+  const openingSubTypeTab = tabs.find(t => t.kind === CatalogKind.OPENING_SUB_TYPE);
+  assert.equal(openingSubTypeTab.enabled, true);
+  assert.equal(openingSubTypeTab.label, '建具種別');
 });
 
 // ---- buildCatalogRows（ステップ7d: buildMaterialRowsの一般化。3種別）----
@@ -566,4 +567,90 @@ test('【失敗系】planBulkSectionImport: 解析できない行はerrorsへ回
 test('planBulkSectionImport: 空文字は toAdd/skipped/errors すべて空', () => {
   const result = planBulkSectionImport('', { builtinList: [], parseSpecList: parseSectionSpecList });
   assert.deepEqual(result, { toAdd: [], skipped: [], errors: [] });
+});
+
+// ---- ステップ10f: 建具種別（openingSubType）の閲覧タブ ----
+// buildCatalogRows(kind:openingSubType)のkeyOfは`${category}:${key}`の複合キー（catalogKinds.js）。
+// 8h同様、searchはlabel（呼称）にもkeyOf（複合キー）にも一致すること。
+test('buildCatalogRows: kind:openingSubTypeでsearchはlabel（呼称）にも複合キー（category:key）にも一致する', () => {
+  const builtin = [
+    { category: 'fitting', key: 'singleSwing', label: '片開き戸', mechanism: 'swing', wallKinds: ['interior'], defaultWidth: 800, defaultHeight: 2000 },
+    { category: 'window', key: 'doubleSliding', label: '引き違い窓', mechanism: 'slideDouble', defaultWidth: 1690, defaultHeight: 1170 },
+  ];
+  // labelに含まれない語だが複合キー（fitting:singleSwing）には含まれる。
+  const byKey = buildCatalogRows({ kind: CatalogKind.OPENING_SUB_TYPE, builtinList: builtin, search: 'fitting:single' });
+  assert.deepEqual(byKey.map(r => r.entry.key), ['singleSwing']);
+
+  const byLabel = buildCatalogRows({ kind: CatalogKind.OPENING_SUB_TYPE, builtinList: builtin, search: '引き違い窓' });
+  assert.deepEqual(byLabel.map(r => r.entry.key), ['doubleSliding']);
+});
+
+// ---- formatReadonlyValue（ステップ10f: ReadonlyKindTabの詳細欄の汎用整形） ----
+test('formatReadonlyValue: 未設定（null/undefined/空文字）は「（未設定）」', () => {
+  assert.equal(formatReadonlyValue(null), '（未設定）');
+  assert.equal(formatReadonlyValue(undefined), '（未設定）');
+  assert.equal(formatReadonlyValue(''), '（未設定）');
+});
+
+test('formatReadonlyValue: プリミティブはString()化する', () => {
+  assert.equal(formatReadonlyValue('interior'), 'interior');
+  assert.equal(formatReadonlyValue(800), '800');
+});
+
+test('formatReadonlyValue: 配列（wallKinds相当）は要素を「・」で連結する。空配列は「（なし）」', () => {
+  assert.equal(formatReadonlyValue(['interior', 'exterior']), 'interior・exterior');
+  assert.equal(formatReadonlyValue([]), '（なし）');
+});
+
+test('formatReadonlyValue: plainオブジェクトは「key:value」を「・」で連結する。空オブジェクトは「（なし）」', () => {
+  assert.equal(formatReadonlyValue({ tracks: 2 }), 'tracks:2');
+  assert.equal(formatReadonlyValue({}), '（なし）');
+});
+
+// ---- QA指摘Minor-3（2026-09-23）: オブジェクト要素を含む配列は「〔…〕／」区切りで要素境界を示す ----
+test('formatReadonlyValue: オブジェクト要素を含む配列は各要素を「〔…〕」で包み「／」で連結する（プリミティブ配列の「・」と衝突させない）', () => {
+  assert.equal(formatReadonlyValue([{ arrow: 'neg' }, { fix: true }]), '〔arrow:neg〕／〔fix:true〕');
+});
+
+test('formatReadonlyValue: slideLayout相当（オブジェクトの中に、オブジェクト要素を含む配列）を再帰的に整形する。要素境界が「〔…〕／」で読み取れる', () => {
+  const slideLayout = { tracks: 2, panels: [{ fix: true }, { arrow: 'neg' }, { arrow: 'pos' }, { fix: true }] };
+  assert.equal(formatReadonlyValue(slideLayout), 'tracks:2・panels:〔fix:true〕／〔arrow:neg〕／〔arrow:pos〕／〔fix:true〕');
+});
+
+// ---- formatCategoryLabel（QA指摘Minor-2: category値の表示名はkindごとの対応表から引く） ----
+test('formatCategoryLabel: openingSubTypeはfitting→建具・window→窓', () => {
+  assert.equal(formatCategoryLabel(CatalogKind.OPENING_SUB_TYPE, 'fitting'), '建具');
+  assert.equal(formatCategoryLabel(CatalogKind.OPENING_SUB_TYPE, 'window'), '窓');
+});
+
+test('formatCategoryLabel: materialはpanel→面材・finish→仕上げ材・backing→下地材', () => {
+  assert.equal(formatCategoryLabel(CatalogKind.MATERIAL, 'panel'), '面材');
+  assert.equal(formatCategoryLabel(CatalogKind.MATERIAL, 'finish'), '仕上げ材');
+  assert.equal(formatCategoryLabel(CatalogKind.MATERIAL, 'backing'), '下地材');
+});
+
+test('formatCategoryLabel: 対応表に無い種別・値でも投げずformatReadonlyValueへフォールバックする（未知値・null）', () => {
+  assert.equal(formatCategoryLabel(CatalogKind.OPENING_SUB_TYPE, 'sash'), 'sash');
+  assert.equal(formatCategoryLabel(CatalogKind.MATERIAL, 'sash'), 'sash');
+  assert.equal(formatCategoryLabel(CatalogKind.OPENING_SUB_TYPE, null), '（未設定）');
+  assert.equal(formatCategoryLabel(CatalogKind.INTERIOR_MASTER, 'anything'), 'anything');
+});
+
+// ---- ステップ10f QA指摘: builtin全件を汎用整形に通しても壊れない（実データ網羅） ----
+test('formatReadonlyValue: openingSubTypeBuiltinList()の全件×READONLY項目を通してもクラッシュせず、文字列化できる（[object Object]・undefinedを含まない）', () => {
+  const builtin = openingSubTypeBuiltinList();
+  assert.ok(builtin.length > 0, 'openingSubTypeBuiltinList()が空');
+  const fields = [
+    'label', 'category', 'mechanism', 'wallKinds', 'defaultWidth', 'defaultHeight',
+    'childRatio', 'fireLeaves', 'fireAngle', 'slideLayout',
+  ];
+  for (const entry of builtin) {
+    for (const field of fields) {
+      let text;
+      assert.doesNotThrow(() => { text = formatReadonlyValue(entry[field]); }, `${entry.category}:${entry.key} の ${field} でthrowした`);
+      assert.equal(typeof text, 'string', `${entry.category}:${entry.key} の ${field} が文字列化されていない`);
+      assert.ok(!/\[object/.test(text), `${entry.category}:${entry.key} の ${field} が[object ...]のままになっている: ${text}`);
+      assert.ok(!/undefined/.test(text), `${entry.category}:${entry.key} の ${field} にundefinedが出ている: ${text}`);
+    }
+  }
 });

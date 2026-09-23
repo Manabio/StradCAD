@@ -46,7 +46,17 @@ const FIELD_LABELS = Object.freeze({
   }),
 });
 
-function fieldLabel(kind, field) {
+/**
+ * 項目名 → 日本語ラベル（FIELD_LABELSの唯一の読み出し口）。QA指摘Minor-1（ステップ10f・
+ * 2026-09-23）: ui/CatalogMaintenancePanel.jsx の閲覧タブ（ReadonlyKindTab）詳細欄も
+ * このfieldLabelを使う——ツールチップ（diffTooltip）と詳細欄で別の日本語名が同時に出る
+ * 二重定義を防ぐため、ラベル文字列はFIELD_LABELS（本ファイル）にだけ持つ。
+ * 未知の種別・項目はfield名そのものを返す（投げない）。
+ * @param {string} kind
+ * @param {string} field
+ * @returns {string}
+ */
+export function fieldLabel(kind, field) {
   return FIELD_LABELS[kind]?.[field] ?? field;
 }
 

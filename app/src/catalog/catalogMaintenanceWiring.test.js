@@ -166,7 +166,7 @@ test('【不変条件・ステップ8h】catalog/catalogMaintenance.js: buildKin
   assert.ok(/CatalogKind\.SECTION/.test(m[1]), 'VIEWABLE_KINDS に CatalogKind.SECTION が含まれていない（断面タブが閲覧できない）');
 });
 
-test('【不変条件・ステップ8h】ui/CatalogMaintenancePanel.jsx: READONLY_KIND_FIELDSにCatalogKind.SECTIONの表示項目（label/materialType/shape/width/height/webThickness/flangeThickness/wallThickness）を持ち、ReadonlyKindTab（追加・複製・編集・削除・合わせ直しボタン無し）で扱う', () => {
+test('【不変条件・ステップ8h・QA指摘Minor-1で更新】ui/CatalogMaintenancePanel.jsx: READONLY_KIND_FIELDSにCatalogKind.SECTIONの表示項目（label/materialType/shape/width/height/webThickness/flangeThickness/wallThickness）をfield名で持ち、ReadonlyKindTab（追加・複製・編集・削除・合わせ直しボタン無し）で扱う', () => {
   const src = readSrc('ui/CatalogMaintenancePanel.jsx');
   const m = /\[CatalogKind\.SECTION\]: Object\.freeze\(\[([\s\S]*?)\]\),/.exec(src);
   assert.ok(m, 'CatalogMaintenancePanel.jsx の READONLY_KIND_FIELDS に [CatalogKind.SECTION] が見つからない');
@@ -175,7 +175,7 @@ test('【不変条件・ステップ8h】ui/CatalogMaintenancePanel.jsx: READONL
     'label', 'materialType', 'shape', 'width', 'height', 'webThickness', 'flangeThickness', 'wallThickness',
   ]) {
     assert.ok(
-      new RegExp(`field:\\s*'${field}'`).test(body),
+      new RegExp(`'${field}'`).test(body),
       `READONLY_KIND_FIELDS[CatalogKind.SECTION] に ${field} が無い`,
     );
   }
@@ -215,5 +215,103 @@ test('【不変条件・ステップ8i】ui/CatalogMaintenancePanel.jsx: Section
   assert.ok(
     /kind === CatalogKind\.SECTION[\s\S]{0,80}<SectionBulkImport/.test(src),
     'SectionBulkImportがCatalogKind.SECTION条件付きでレンダーされていない',
+  );
+});
+
+// ---- ステップ10f: 建具種別（openingSubType）の閲覧タブ（内装マスター・境界マスター・断面と
+// 同じReadonlyKindTabに相乗り。姿図プレビューはCatalogPreviewへ無条件に配線済みのため追加配線ゼロ） ----
+test('【不変条件・ステップ10f】catalog/catalogMaintenance.js: buildKindTabsでopeningSubTypeがenabled:true（閲覧タブ）', () => {
+  const src = readSrc('catalog/catalogMaintenance.js');
+  const m = /const VIEWABLE_KINDS = Object\.freeze\(\[([\s\S]*?)\]\);/.exec(src);
+  assert.ok(m, 'catalogMaintenance.js に VIEWABLE_KINDS が見つからない');
+  assert.ok(/CatalogKind\.OPENING_SUB_TYPE/.test(m[1]), 'VIEWABLE_KINDS に CatalogKind.OPENING_SUB_TYPE が含まれていない（建具種別タブが閲覧できない）');
+});
+
+test('【不変条件・ステップ10f・QA指摘Minor-1で更新】ui/CatalogMaintenancePanel.jsx: READONLY_KIND_FIELDSにCatalogKind.OPENING_SUB_TYPEの表示項目（label/category/mechanism/wallKinds/defaultWidth/defaultHeight/childRatio/fireLeaves/fireAngle/slideLayout）をfield名で持ち、ReadonlyKindTab（追加・複製・編集・削除・合わせ直しボタン無し）で扱う', () => {
+  const src = readSrc('ui/CatalogMaintenancePanel.jsx');
+  const m = /\[CatalogKind\.OPENING_SUB_TYPE\]: Object\.freeze\(\[([\s\S]*?)\]\),/.exec(src);
+  assert.ok(m, 'CatalogMaintenancePanel.jsx の READONLY_KIND_FIELDS に [CatalogKind.OPENING_SUB_TYPE] が見つからない');
+  const body = m[1];
+  for (const field of [
+    'label', 'category', 'mechanism', 'wallKinds', 'defaultWidth', 'defaultHeight',
+    'childRatio', 'fireLeaves', 'fireAngle', 'slideLayout',
+  ]) {
+    assert.ok(
+      new RegExp(`'${field}'`).test(body),
+      `READONLY_KIND_FIELDS[CatalogKind.OPENING_SUB_TYPE] に ${field} が無い`,
+    );
+  }
+  // ReadonlyKindTabはREADONLY_KIND_FIELDSに載る種別を汎用に扱う唯一のコンポーネント——上の
+  // ステップ7dテストが既に「追加・複製・削除・保存・合わせ直しの操作系ハンドラを呼んでいない」
+  // ことを固定しているため、建具種別用の専用ボタンを別途持たないことはその不変条件がそのまま覆う。
+  const fnMatch = /function ReadonlyKindTab\(\{[\s\S]*?\n\}/.exec(src);
+  assert.ok(fnMatch, 'CatalogMaintenancePanel.jsx に ReadonlyKindTab コンポーネントが見つからない');
+});
+
+// ---- ステップ10f: READONLY_KIND_FIELDSの値整形は.jsx側に判断を残さず
+// catalog/catalogMaintenance.jsのformatReadonlyValue（汎用の配列/plainオブジェクト整形）に委ねる ----
+test('【不変条件・ステップ10f】ui/CatalogMaintenancePanel.jsx: formatReadonlyFieldValueの汎用フォールバックはcatalog/catalogMaintenance.jsのformatReadonlyValue経由（配列/plainオブジェクトの整形を.jsx側で再実装しない）', () => {
+  const src = readSrc('ui/CatalogMaintenancePanel.jsx');
+  assert.ok(
+    /from ['"]\.\.\/catalog\/catalogMaintenance\.js['"]/.test(src) && /\bformatReadonlyValue\b/.test(src),
+    'CatalogMaintenancePanel.jsx が catalog/catalogMaintenance.js の formatReadonlyValue を import・使用していない',
+  );
+  const fnMatch = /function formatReadonlyFieldValue\([\s\S]*?\n\}/.exec(src);
+  assert.ok(fnMatch, 'CatalogMaintenancePanel.jsx に formatReadonlyFieldValue 関数が見つからない');
+  // Array.isArray直書きはlayers専用分岐の1箇所だけであること（汎用の配列判定を新設していない証跡）。
+  const arrayIsArrayCount = (fnMatch[0].match(/Array\.isArray\(/g) ?? []).length;
+  assert.equal(arrayIsArrayCount, 1, 'formatReadonlyFieldValue にArray.isArrayの直書きがlayers専用分岐以外にもある（formatReadonlyValue経由への一本化への退行）');
+});
+
+// ---- QA指摘Minor-1（2026-09-23）: 項目ラベルはcatalog/catalogDiffView.jsのFIELD_LABELS
+// （「唯一の定義箇所」）に一本化し、READONLY_KIND_FIELDSはfield名の配列だけを持つ
+// （ツールチップ(diffTooltip)と詳細欄で別名が同時に出る二重定義への退行を検知する） ----
+test('【不変条件・QA指摘Minor-1・2026-09-23】ui/CatalogMaintenancePanel.jsx: READONLY_KIND_FIELDSはfield名の配列のみを持ち、ラベル文字列を直書きしない（ラベルはcatalog/catalogDiffView.jsのfieldLabel経由）', () => {
+  const src = readSrc('ui/CatalogMaintenancePanel.jsx');
+  const m = /const READONLY_KIND_FIELDS = Object\.freeze\(\{([\s\S]*?)\n\}\);/.exec(src);
+  assert.ok(m, 'CatalogMaintenancePanel.jsx に READONLY_KIND_FIELDS が見つからない');
+  assert.ok(
+    !/field:\s*'/.test(m[1]),
+    'READONLY_KIND_FIELDS が { field: ..., label: ... } 形式のまま残っている（field名の配列への一本化への退行）',
+  );
+  assert.ok(
+    /from ['"]\.\.\/catalog\/catalogDiffView\.js['"]/.test(src),
+    'CatalogMaintenancePanel.jsx が catalog/catalogDiffView.js を import していない',
+  );
+  // コメント中の言及だけでは満たされないよう、ReadonlyKindTab関数本体（実際のJSXレンダー）の
+  // 中で fieldLabel(kind, field) を呼んでいることを確認する（whole-source検索だとコメント文中の
+  // 「fieldLabel(kind, field)」という言及だけで誤って緑になる——変異テストで実際に検知漏れを確認済み）。
+  const fnMatch = /function ReadonlyKindTab\(\{[\s\S]*?\n\}/.exec(src);
+  assert.ok(fnMatch, 'CatalogMaintenancePanel.jsx に ReadonlyKindTab コンポーネントが見つからない');
+  assert.ok(
+    /\{fieldLabel\(kind,\s*field\)\}/.test(fnMatch[0]),
+    'ReadonlyKindTab が fieldLabel(kind, field) をJSXレンダーで呼んでいない（ラベルの二重定義・直書きへの退行）',
+  );
+});
+
+// ---- QA指摘Minor-2（2026-09-23）: category値→表示名の対応はcatalog/catalogMaintenance.jsの
+// formatCategoryLabel(kind, value)に一本化し、.jsx側にmaterial用・openingSubType用の重複した
+// 対応表（CATEGORY_LABELS/OPENING_CATEGORY_LABELS）を持たない ----
+test('【不変条件・QA指摘Minor-2・2026-09-23】ui/CatalogMaintenancePanel.jsx: category表示はcatalog/catalogMaintenance.jsのformatCategoryLabel(kind, value)経由で、.jsx側に対応表を直書きしない', () => {
+  const src = readSrc('ui/CatalogMaintenancePanel.jsx');
+  assert.ok(
+    /from ['"]\.\.\/catalog\/catalogMaintenance\.js['"]/.test(src) && /\bformatCategoryLabel\(/.test(src),
+    'CatalogMaintenancePanel.jsx が catalog/catalogMaintenance.js の formatCategoryLabel を呼んでいない',
+  );
+  assert.ok(
+    !/CATEGORY_LABELS\s*=\s*Object\.freeze/.test(src),
+    'CatalogMaintenancePanel.jsx に CATEGORY_LABELS/OPENING_CATEGORY_LABELS 相当の対応表が直書きされている（formatCategoryLabel経由への一本化への退行）',
+  );
+  // formatReadonlyFieldValue(kind, field, value) が category を kind 付きで判定していること
+  // （field名だけの判定はmaterial/openingSubTypeの衝突を招く——上のQA指摘Minor-2本体）。
+  assert.ok(
+    /function formatReadonlyFieldValue\(kind, field, value\)/.test(src),
+    'formatReadonlyFieldValue が kind を引数に取っていない（categoryの種別間衝突への退行）',
+  );
+  // category分岐がformatCategoryLabel(kind, value)への単純委譲であること（種別ごとの分岐や
+  // 対応表をこの分岐内に直書きする退行——例:「materialだけ別の対応表を条件分岐で使う」——を検知する）。
+  assert.ok(
+    /if \(field === 'category'\) \{\s*return formatCategoryLabel\(kind, value\);\s*\}/.test(src),
+    'formatReadonlyFieldValue の category 分岐が formatCategoryLabel(kind, value) への単純委譲になっていない（種別別の対応表・条件分岐の直書きへの退行）',
   );
 });

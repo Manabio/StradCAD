@@ -3,14 +3,14 @@ import './CatalogMaintenancePanel.css';
 import { CatalogKind, kindDef, MATERIAL_CLASSES } from '../catalog/catalogKinds.js';
 import { parseMaterialCode } from '../catalog/materialCode.js';
 import { docDiffMap, overlayFor, removeDocEntry } from '../catalog/catalogRegistry.js';
-import { CATALOG_DIFF_COLOR, CATALOG_DIFF_MARK, diffPairs, diffTooltip } from '../catalog/catalogDiffView.js';
+import { CATALOG_DIFF_COLOR, CATALOG_DIFF_MARK, diffPairs, diffTooltip, fieldLabel } from '../catalog/catalogDiffView.js';
 import { saveUserCatalog } from '../storage/db.js';
 import { markDirty } from '../dirtyState.js';
 import {
   buildKindTabs, buildMaterialRows, buildCatalogRows, collectKnownMaterialCodes, nextMaterialCode,
   buildMaterialEntry, duplicateMaterialEntry, validateMaterialEntry,
   upsertUserMaterialEntry, removeUserMaterialEntry, upsertUserCatalogEntry, commitUserEntries,
-  planRealign, realignTargets, planBulkSectionImport,
+  planRealign, realignTargets, planBulkSectionImport, formatReadonlyValue, formatCategoryLabel,
   canEditMaterialRow, isEditableMaterialCategory, parseThicknessInput, MATERIAL_CATEGORY,
 } from '../catalog/catalogMaintenance.js';
 import { parseSectionSpecList } from '../structural/sectionCatalog.js';
@@ -23,40 +23,26 @@ import { CatalogPreview } from './CatalogPreview.jsx';
 // （規格文字列の一括入力パーサ parseSectionSpecList を呼ぶためだけに使う。SECTION_CATALOG自体は
 // 引き続きkindDef(section).loadBuiltin()の動的importで読む）。
 
-const CATEGORY_LABELS = Object.freeze({
-  [MATERIAL_CATEGORY.PANEL]:   '面材',
-  [MATERIAL_CATEGORY.FINISH]:  '仕上げ材',
-  [MATERIAL_CATEGORY.BACKING]: '下地材',
-});
 const ORIGIN_LABELS = Object.freeze({ doc: '同梱', user: 'ライブラリ', builtin: '標準' });
 
 // ステップ7d: 内装マスター・境界マスターの閲覧タブ（読み取り専用）に並べる項目。
 // ステップ8h: 断面も同じ閲覧タブ（ReadonlyKindTab）に並べる項目を追加。
+// ステップ10f: 建具種別（openingSubType）も追加。
+// QA指摘Minor-1（2026-09-23）: ラベル文字列はここでは持たない——catalog/catalogDiffView.js の
+// FIELD_LABELS（「唯一の定義箇所」と宣言済み）を fieldLabel(kind, field) で引く。ここは
+// field名の配列だけを持つ（同じタブ内でツールチップ（diffTooltip）と詳細欄で別の日本語名が
+// 同時に出る二重定義を防ぐ）。
 // 追加・複製・編集・削除・合わせ直しボタンは出さない（選ぶ経路が無い・layers/fieldsの編集UIは
 // 複雑・編集はステップ12でまとめて着手する裁定）。
 const READONLY_KIND_FIELDS = Object.freeze({
-  [CatalogKind.INTERIOR_MASTER]: Object.freeze([
-    { field: 'label', label: '呼称' },
-    { field: 'wallMaterial', label: '壁材' },
-    { field: 'wallFinish', label: '壁仕上げ' },
-    { field: 'ceilingHeight', label: '天井高' },
-  ]),
-  [CatalogKind.BOUNDARY_MASTER]: Object.freeze([
-    { field: 'label', label: '呼称' },
-    { field: 'kind', label: '種類' },
-    { field: 'layers', label: '層構成' },
-    { field: 'derivedFrom', label: '継承元' },
-    { field: 'fields', label: '項目' },
-  ]),
+  [CatalogKind.INTERIOR_MASTER]: Object.freeze(['label', 'wallMaterial', 'wallFinish', 'ceilingHeight']),
+  [CatalogKind.BOUNDARY_MASTER]: Object.freeze(['label', 'kind', 'layers', 'derivedFrom', 'fields']),
   [CatalogKind.SECTION]: Object.freeze([
-    { field: 'label', label: '呼称' },
-    { field: 'materialType', label: '材種' },
-    { field: 'shape', label: '形状' },
-    { field: 'width', label: '幅' },
-    { field: 'height', label: '成' },
-    { field: 'webThickness', label: 'ウェブ厚' },
-    { field: 'flangeThickness', label: 'フランジ厚' },
-    { field: 'wallThickness', label: '板厚' },
+    'label', 'materialType', 'shape', 'width', 'height', 'webThickness', 'flangeThickness', 'wallThickness',
+  ]),
+  [CatalogKind.OPENING_SUB_TYPE]: Object.freeze([
+    'label', 'category', 'mechanism', 'wallKinds', 'defaultWidth', 'defaultHeight',
+    'childRatio', 'fireLeaves', 'fireAngle', 'slideLayout',
   ]),
 });
 
@@ -66,8 +52,15 @@ function formatLayerLine(layer) {
   return `${layer.role}: ${source}`;
 }
 
-/** READONLY_KIND_FIELDSの1項目値を読み取り専用表示用の文字列にする。 */
-function formatReadonlyFieldValue(field, value) {
+/**
+ * READONLY_KIND_FIELDSの1項目値を読み取り専用表示用の文字列にする。layers・fields（境界マスター）は
+ * 専用の書式を持つためここで個別に扱う。category（QA指摘Minor-2・2026-09-23: material/openingSubType
+ * 双方が持つfield名のためkindも渡し、catalog/catalogMaintenance.jsのformatCategoryLabel(kind, value)
+ * で種別ごとに和訳する——field名だけで分岐すると他種別のcategoryと衝突するため）。それ以外
+ * （openingSubTypeのwallKinds/slideLayout等の配列・plainオブジェクトを含む）は
+ * catalog/catalogMaintenance.jsのformatReadonlyValue（汎用整形。ステップ10f）に委ねる。
+ */
+function formatReadonlyFieldValue(kind, field, value) {
   if (field === 'layers') {
     return Array.isArray(value) && value.length > 0 ? value.map(formatLayerLine).join(' / ') : '（なし）';
   }
@@ -75,8 +68,10 @@ function formatReadonlyFieldValue(field, value) {
     const entries = value ? Object.entries(value) : [];
     return entries.length > 0 ? entries.map(([k, v]) => `${k}=${v ?? 'null'}`).join(', ') : '（なし）';
   }
-  if (value === null || value === undefined || value === '') return '（未設定）';
-  return String(value);
+  if (field === 'category') {
+    return formatCategoryLabel(kind, value);
+  }
+  return formatReadonlyValue(value);
 }
 
 function firstMajor() {
@@ -352,8 +347,8 @@ export function CatalogMaintenancePanel({ onClose }) {
         </div>
 
         <div className="catmnt-body">
-          {/* 左: 種別タブ（材料は追加・編集・削除まで実装。内装・境界マスターは閲覧のみ。
-              section/openingSubTypeは登録表から器だけ出して無効化） */}
+          {/* 左: 種別タブ（材料は追加・編集・削除まで実装。内装マスター・境界マスター・断面・
+              建具種別（openingSubType）は閲覧のみ。ステップ10fで全種別がenabled:trueになった） */}
           <div className="catmnt-kind-tabs">
             {kindTabs.map(tab => (
               <button
@@ -466,7 +461,7 @@ export function CatalogMaintenancePanel({ onClose }) {
                       >
                         {row.entry.name}{row.diff ? ` ${CATALOG_DIFF_MARK}` : ''}
                       </span>
-                      <span className="catmnt-cat-badge">{CATEGORY_LABELS[row.entry.category] ?? row.entry.category}</span>
+                      <span className="catmnt-cat-badge">{formatCategoryLabel(CatalogKind.MATERIAL, row.entry.category)}</span>
                       {row.diff && (
                         <button
                           className="catmnt-realign-btn"
@@ -544,7 +539,7 @@ export function CatalogMaintenancePanel({ onClose }) {
                       {/* R13: doc（文書同梱）が本体と不一致の項目だけ、本体値をオレンジで併記する */}
                       {docDiffByField.has('category') && (
                         <span className="catmnt-diff-note" style={{ color: CATALOG_DIFF_COLOR, fontSize: 11 }}>
-                          （本体 {CATEGORY_LABELS[docDiffByField.get('category').from] ?? fmtDiffValue(docDiffByField.get('category').from)}）
+                          （本体 {formatCategoryLabel(CatalogKind.MATERIAL, docDiffByField.get('category').from)}）
                         </span>
                       )}
                     </div>
@@ -745,14 +740,14 @@ function ReadonlyKindTab({ kind, builtinList, search, setSearch, selectedKey, se
               <span className="catmnt-form-label">キー</span>
               <span className="catmnt-code-readout">{def.keyOf(selectedRow.entry)}</span>
             </div>
-            {fieldDefs.map(({ field, label }) => (
+            {fieldDefs.map(field => (
               <div className="catmnt-form-row" key={field}>
-                <span className="catmnt-form-label">{label}</span>
+                <span className="catmnt-form-label">{fieldLabel(kind, field)}</span>
                 <span
                   className="catmnt-code-readout"
                   style={selectedRow.diff?.diffFields?.includes(field) ? { color: CATALOG_DIFF_COLOR } : undefined}
                 >
-                  {formatReadonlyFieldValue(field, selectedRow.entry[field])}
+                  {formatReadonlyFieldValue(kind, field, selectedRow.entry[field])}
                 </span>
               </div>
             ))}
