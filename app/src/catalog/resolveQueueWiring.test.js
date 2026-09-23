@@ -257,11 +257,11 @@ test('【不変条件・ステップ8g】modes/StructuralModeState.js: catalogRe
   );
 });
 
-test('【不変条件・ステップ10e】modes/OpeningModeState.js: catalogResolveKindsが[CatalogKind.OPENING_SUB_TYPE]', () => {
+test('【不変条件・ステップ10e→12d】modes/OpeningModeState.js: catalogResolveKindsが[CatalogKind.OPENING_SUB_TYPE, CatalogKind.FIXTURE_SYMBOL]', () => {
   const src = readSrc('modes/OpeningModeState.js');
   assert.ok(
-    /catalogResolveKinds\s*=\s*\[CatalogKind\.OPENING_SUB_TYPE\];/.test(src),
-    'OpeningModeState.js に catalogResolveKinds = [CatalogKind.OPENING_SUB_TYPE] が見つからない',
+    /catalogResolveKinds\s*=\s*\[CatalogKind\.OPENING_SUB_TYPE,\s*CatalogKind\.FIXTURE_SYMBOL\];/.test(src),
+    'OpeningModeState.js に catalogResolveKinds = [CatalogKind.OPENING_SUB_TYPE, CatalogKind.FIXTURE_SYMBOL] が見つからない',
   );
 });
 
@@ -375,6 +375,16 @@ test('【不変条件・ステップ10e】modes/OpeningModeState.js: initがkind
   assert.ok(/from ['"]\.\.\/catalog\/codeNormalization\.js['"]/.test(src), 'OpeningModeState.js が catalog/codeNormalization.js を import していない');
   assert.ok(/\bpeekUnresolvedCodes\(\)/.test(initBody), 'init() が peekUnresolvedCodes() を呼んでいない（StructuralModeState.init と同型で全階累積の未解決をopeningSubTypeでフィルタして合流する契約）');
   assert.ok(!/\btakeUnresolvedCodes\(\)/.test(src), 'OpeningModeState.js がtakeUnresolvedCodesを呼んでいる（他の消費者の蓄積を消してしまう退行。peekUnresolvedCodesを使う契約）');
+});
+
+// ---- modes/OpeningModeState.js: 場面(b)の行組み立て・建具記号（fixtureSymbol。ステップ12d） ----
+test('【不変条件・ステップ12d】modes/OpeningModeState.js: initがkindDef(FIXTURE_SYMBOL).loadBuiltin→composeCatalog→buildResolveRows(kind:FIXTURE_SYMBOL)で行を組み立てる', () => {
+  const src = readSrc('modes/OpeningModeState.js');
+  const initBody = extractBalancedBody(src, 'async init() {');
+  assert.ok(initBody, 'OpeningModeState.js に init() が見つからない');
+  assert.ok(/kindDef\(\s*CatalogKind\.FIXTURE_SYMBOL\s*\)\.loadBuiltin\(\)/.test(initBody), 'init() が kindDef(CatalogKind.FIXTURE_SYMBOL).loadBuiltin() を呼んでいない（本体標準マスタを直接importする退行）');
+  assert.ok(/composeCatalog\(\s*CatalogKind\.FIXTURE_SYMBOL,/.test(initBody), 'init() が composeCatalog(CatalogKind.FIXTURE_SYMBOL, ...) を呼んでいない');
+  assert.ok(/buildResolveRows\(\s*\{\s*kind:\s*CatalogKind\.FIXTURE_SYMBOL,/.test(initBody), 'init() が buildResolveRows({ kind: CatalogKind.FIXTURE_SYMBOL, ... }) を呼んでいない');
 });
 
 // ---- modes/StructuralModeState.js: 場面(b)の行組み立て（ステップ8g） ----

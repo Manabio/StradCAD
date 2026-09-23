@@ -38,6 +38,10 @@ const FIELD_LABELS = Object.freeze({
     defaultWidth: '既定幅', defaultHeight: '既定高', childRatio: '子扉比率',
     fireLeaves: '防火枚数', fireAngle: '防火角度', slideLayout: '引違い配置',
   }),
+  fixtureSymbol: Object.freeze({
+    key: '記号', label: '呼称', category: '区分', mechanism: '機構',
+    profile: '枠断面', defaultMaterialGlass: '材料・ガラス（既定）',
+  }),
   interiorMaster: Object.freeze({
     key: 'キー', label: '呼称', wallMaterial: '壁材', wallFinish: '壁仕上げ', ceilingHeight: '天井高',
   }),

@@ -382,6 +382,46 @@ function rewriteOpeningSubTypeRefs(snapshot, table) {
   return { snapshot: { ...snapshot, openings }, unresolved };
 }
 
+// ----------------------------------------------------------------
+// fixtureSymbol: openings[].fixtureType（ステップ12d）。単一文字列キー（catalogKinds.js
+// CatalogKind.FIXTURE_SYMBOL の keyOf/parseKey と同型）。カテゴリ跨ぎの検査はしない——
+// fixtureType はスコープ無し記号なら category を問わず使い回せる（openings/openingCatalog.js
+// getFixtureSymbols参照）ため、openingSubTypeのようなcategory不一致検査の対象にならない。
+// 対象は「明示的に空でない文字列のfixtureType」のみ（null=未設定はカテゴリ既定へフォールバックする
+// 契約のため対象外。schema/graphFbs.js FIXTURE_TYPE_STRコメント・core/wall.js参照）。
+// ----------------------------------------------------------------
+function enumerateFixtureSymbolRefs(snapshot) {
+  if (!snapshot) return [];
+  const refs = [];
+  for (const opening of snapshot.openings ?? []) {
+    if (typeof opening?.fixtureType === 'string' && opening.fixtureType !== '') {
+      refs.push({ code: opening.fixtureType, location: 'opening', openingId: opening.id });
+    }
+  }
+  return refs;
+}
+
+function normalizeFixtureTypes(openings, table, unresolved) {
+  if (!Array.isArray(openings)) return openings;
+  let changedAny = false;
+  const next = openings.map(opening => {
+    if (typeof opening?.fixtureType !== 'string' || opening.fixtureType === '') return opening;
+    const mapped = normalizeCode(opening.fixtureType, table, unresolved, { location: 'opening', openingId: opening.id });
+    if (mapped === opening.fixtureType) return opening;
+    changedAny = true;
+    return { ...opening, fixtureType: mapped };
+  });
+  return changedAny ? next : openings;
+}
+
+function rewriteFixtureSymbolRefs(snapshot, table) {
+  if (!snapshot) return { snapshot, unresolved: [] };
+  const unresolved = [];
+  const openings = normalizeFixtureTypes(snapshot.openings, table, unresolved);
+  if (openings === snapshot.openings) return { snapshot, unresolved };
+  return { snapshot: { ...snapshot, openings }, unresolved };
+}
+
 /**
  * 参照所在の唯一の集約点（kind → {enumerate(snapshot), rewrite(snapshot, table)|null}）。
  * enumerate は catalog/usedEntries.js collectUsedKeys（保存時の使用キー収集）と
@@ -409,6 +449,10 @@ export const SNAPSHOT_REF_WALKERS = Object.freeze({
   openingSubType: Object.freeze({
     enumerate: enumerateOpeningSubTypeRefs,
     rewrite: rewriteOpeningSubTypeRefs,
+  }),
+  fixtureSymbol: Object.freeze({
+    enumerate: enumerateFixtureSymbolRefs,
+    rewrite: rewriteFixtureSymbolRefs,
   }),
 });
 

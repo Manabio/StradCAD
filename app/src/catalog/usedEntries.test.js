@@ -36,8 +36,8 @@ function baseSnapshot(overrides) {
     structuralWalls: [{ id: 'sw1', sectionDefId: 'SEC_A' }], // 重複キーはSetで畳まれる
     slabs: [], footings: [],
     openings: [
-      { id: 'o1', category: 'fitting', subType: 'singleSwing' },
-      { id: 'o2', category: 'window', subType: null }, // subTypeなしは含めない
+      { id: 'o1', category: 'fitting', subType: 'singleSwing', fixtureType: 'WD' },
+      { id: 'o2', category: 'window', subType: null, fixtureType: null }, // subType/fixtureTypeなしは含めない
     ],
     ...overrides,
   };
@@ -95,12 +95,18 @@ test('collectUsedKeys: openings[]のcategory:subTypeをopeningSubTypeとして�
   assert.deepEqual([...openingSubType], ['fitting:singleSwing']);
 });
 
+test('collectUsedKeys: openings[].fixtureTypeをfixtureSymbolとして収集する（空でない文字列のみ）', () => {
+  const { fixtureSymbol } = collectUsedKeys(baseSnapshot());
+  assert.deepEqual([...fixtureSymbol], ['WD']);
+});
+
 test('collectUsedKeys: snapshotがnullなら全種別が空Set', () => {
   const used = collectUsedKeys(null);
   assert.deepEqual(used.interiorMaster, new Set());
   assert.deepEqual(used.boundaryMaster, new Set());
   assert.deepEqual(used.section, new Set());
   assert.deepEqual(used.openingSubType, new Set());
+  assert.deepEqual(used.fixtureSymbol, new Set());
 });
 
 // ---- collectUsedKeysByKind: 純ロジック（store.jsから抽出。ステップ7c QA指摘Major-1）----
@@ -142,6 +148,22 @@ test('【失敗系】collectUsedKeysByKind: 収集に未対応の種別を渡す
     () => collectUsedKeysByKind([baseSnapshot()], ['someNewKind']),
     /使用キーの収集に未対応の種別です: someNewKind/,
   );
+});
+
+// ---- ステップ12d: collectUsedKeysByKind(FIXTURE_SYMBOL) → buildDocumentBundle の往復 ----
+test('collectUsedKeysByKind: CatalogKind.FIXTURE_SYMBOLを渡すとopenings[].fixtureTypeを収集し、例外を出さない', () => {
+  const result = collectUsedKeysByKind([baseSnapshot()], [CatalogKind.FIXTURE_SYMBOL]);
+  assert.deepEqual([...result.get(CatalogKind.FIXTURE_SYMBOL)], ['WD']);
+});
+
+test('buildDocumentBundle: 使用中の建具記号（fixtureSymbol）が同梱束に入る', () => {
+  const usedKeysByKind = collectUsedKeysByKind([baseSnapshot()], [CatalogKind.FIXTURE_SYMBOL]);
+  const resolvedByKind = new Map([
+    [CatalogKind.FIXTURE_SYMBOL, new Map([['WD', { key: 'WD', label: 'WD（木製建具）', category: 'fitting' }]])],
+  ]);
+  const { bundle, unresolvedKeys } = buildDocumentBundle({ usedKeysByKind, resolvedByKind });
+  assert.equal(unresolvedKeys.size, 0);
+  assert.deepEqual(bundle.catalogs.fixtureSymbol.map(e => e.key), ['WD']);
 });
 
 // ---- expandTransitiveMaterials: 内装マスター・境界マスターの推移的展開 ----

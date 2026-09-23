@@ -95,11 +95,14 @@ export function parseThicknessInput(raw) {
  * ステップ7d: 内装マスター・境界マスターは閲覧のみ（追加・複製・編集・削除なし）で enabled:true。
  * ステップ8h: 断面も閲覧のみで enabled:true（規格文字列の一括入力はステップ8iで別途着手）。
  * ステップ10f: 建具種別（openingSubType）も同じ閲覧のみで enabled:true（姿図プレビュー付き。
- * 追加・編集・削除はステップ12）。これで登録表の全種別が enabled:true になる。
+ * 追加・編集・削除はステップ12）。
+ * ステップ12d: 建具記号（fixtureSymbol）もまず閲覧のみで enabled:true（プレビューはステップ12fまで
+ * 持たない——ui/catalogPreview.js の PREVIEW_BUILDERS に載せていないため ok:false 理由付きへ
+ * 落ちる。追加・編集・削除はステップ12f）。これで登録表の全種別が enabled:true になる。
  */
 const VIEWABLE_KINDS = Object.freeze([
   CatalogKind.MATERIAL, CatalogKind.INTERIOR_MASTER, CatalogKind.BOUNDARY_MASTER, CatalogKind.SECTION,
-  CatalogKind.OPENING_SUB_TYPE,
+  CatalogKind.OPENING_SUB_TYPE, CatalogKind.FIXTURE_SYMBOL,
 ]);
 
 export function buildKindTabs() {

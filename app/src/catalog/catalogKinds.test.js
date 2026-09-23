@@ -2,9 +2,9 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { CatalogKind, CATALOG_KINDS, kindDef, listKinds, MATERIAL_CLASSES, classOf } from './catalogKinds.js';
 
-test('listKinds: 登録済み5種別を返す', () => {
+test('listKinds: 登録済み6種別を返す', () => {
   assert.deepEqual(new Set(listKinds()), new Set([
-    'material', 'interiorMaster', 'boundaryMaster', 'section', 'openingSubType',
+    'material', 'interiorMaster', 'boundaryMaster', 'section', 'openingSubType', 'fixtureSymbol',
   ]));
   assert.deepEqual(Object.values(CatalogKind).sort(), listKinds().sort());
 });
@@ -147,7 +147,7 @@ test('material.compareFields: backingClassを含み、silentDiffFieldsには含�
 });
 
 // ---- ステップ12a: keyBoundFields/overrideLockedFields（Q-B確定 2026-09-23）----
-test('keyBoundFields/overrideLockedFields: 登録表の5種別が表どおりの固定項目を持つ', () => {
+test('keyBoundFields/overrideLockedFields: 登録表の6種別が表どおりの固定項目を持つ', () => {
   assert.deepEqual(kindDef('material').keyBoundFields, ['code']);
   assert.deepEqual(kindDef('material').overrideLockedFields, ['category', 'backingClass']);
 
@@ -164,6 +164,9 @@ test('keyBoundFields/overrideLockedFields: 登録表の5種別が表どおりの
 
   assert.deepEqual(kindDef('boundaryMaster').keyBoundFields, ['key']);
   assert.deepEqual(kindDef('boundaryMaster').overrideLockedFields, []);
+
+  assert.deepEqual(kindDef('fixtureSymbol').keyBoundFields, ['key', 'category', 'mechanism']);
+  assert.deepEqual(kindDef('fixtureSymbol').overrideLockedFields, []);
 });
 
 test('keyBoundFields/overrideLockedFields: 行・配列まで凍結されている（deepFreezeRegistryの対象）', () => {
@@ -320,6 +323,91 @@ test('【失敗系】openingSubType.validate: category不正（fitting/window以
   assert.throws(() => kindDef('openingSubType').validate({
     category: 'door', key: 'k', label: 'x', mechanism: 'swing', defaultWidth: 1, defaultHeight: 1,
   }), /categoryが不正/);
+});
+
+// ---- fixtureSymbol（ステップ12d） ----
+test('fixtureSymbol.keyOf: keyをそのまま返す（単一フィールド）', () => {
+  assert.equal(kindDef('fixtureSymbol').keyOf({ key: 'AW' }), 'AW');
+});
+
+test('【失敗系】fixtureSymbol.keyOf: keyが非空文字列でなければ例外', () => {
+  assert.throws(() => kindDef('fixtureSymbol').keyOf({}), /keyが不正/);
+  assert.throws(() => kindDef('fixtureSymbol').keyOf({ key: '' }), /keyが不正/);
+});
+
+test('fixtureSymbol.parseKey: {key}を返す', () => {
+  assert.deepEqual(kindDef('fixtureSymbol').parseKey('AW'), { key: 'AW' });
+});
+
+test('【失敗系】fixtureSymbol.parseKey: 空文字は例外を投げる', () => {
+  assert.throws(() => kindDef('fixtureSymbol').parseKey(''), /キーが不正/);
+});
+
+test('fixtureSymbol.validate: 正常系（スコープ無し記号・三方枠専用記号とも）。Q-D確定: keyの書式（英大文字2〜4文字）は検査しない', () => {
+  assert.doesNotThrow(() => kindDef('fixtureSymbol').validate({ key: 'AW', label: 'AW（アルミ製窓）', category: 'window' }));
+  assert.doesNotThrow(() => kindDef('fixtureSymbol').validate({
+    key: 'SF', label: 'SF（鉄製三方枠）', category: 'fitting', mechanism: 'frameOnly', profile: 'bent',
+  }));
+  // 書式検査なし: 小文字・1文字・5文字以上でもvalidateは通す（保守パネルの追加時だけ検査する契約）。
+  assert.doesNotThrow(() => kindDef('fixtureSymbol').validate({ key: 'pw-legacy', label: '旧記号', category: 'window' }));
+});
+
+test('【失敗系】fixtureSymbol.validate: 必須項目(label)欠落は例外を投げる', () => {
+  assert.throws(() => kindDef('fixtureSymbol').validate({ key: 'ZZ', category: 'window' }), /必須項目が欠落/);
+});
+
+test('【失敗系】fixtureSymbol.validate: keyが空文字は例外を投げる（遅延爆弾防止。section等と同型）', () => {
+  assert.throws(() => kindDef('fixtureSymbol').validate({
+    key: '', label: 'x', category: 'window',
+  }), /keyが不正/);
+});
+
+test('【失敗系】fixtureSymbol.validate: category不正（fitting/window以外）は例外を投げる', () => {
+  assert.throws(() => kindDef('fixtureSymbol').validate({
+    key: 'ZZ', label: 'x', category: 'door',
+  }), /categoryが不正/);
+});
+
+test('【失敗系】fixtureSymbol.validate: mechanism/profile/defaultMaterialGlassが文字列・null・undefined以外は例外を投げる', () => {
+  assert.throws(() => kindDef('fixtureSymbol').validate({
+    key: 'ZZ', label: 'x', category: 'window', mechanism: 123,
+  }), /mechanismが不正/);
+  assert.throws(() => kindDef('fixtureSymbol').validate({
+    key: 'ZZ', label: 'x', category: 'window', profile: 123,
+  }), /profileが不正/);
+  assert.throws(() => kindDef('fixtureSymbol').validate({
+    key: 'ZZ', label: 'x', category: 'window', defaultMaterialGlass: 123,
+  }), /defaultMaterialGlassが不正/);
+  // null/undefinedはどちらも許容（既定なし）。
+  assert.doesNotThrow(() => kindDef('fixtureSymbol').validate({
+    key: 'ZZ', label: 'x', category: 'window', mechanism: null, profile: null, defaultMaterialGlass: null,
+  }));
+});
+
+test('fixtureSymbol.isSupported: mechanism無し／frameOnlyのみ既知。profile無し／solid・bentのみ既知', () => {
+  const def = kindDef('fixtureSymbol');
+  assert.equal(def.isSupported({ key: 'AW', category: 'window' }), true);
+  assert.equal(def.isSupported({ key: 'WF', category: 'fitting', mechanism: 'frameOnly', profile: 'solid' }), true);
+  assert.equal(def.isSupported({ key: 'SF', category: 'fitting', mechanism: 'frameOnly', profile: 'bent' }), true);
+});
+
+test('【失敗系】fixtureSymbol.isSupported: 未知のmechanism・未知のprofileはfalse', () => {
+  const def = kindDef('fixtureSymbol');
+  assert.equal(def.isSupported({ mechanism: 'swing' }), false, 'frameOnly以外のmechanismは未知');
+  assert.equal(def.isSupported({ profile: 'hollow' }), false, 'solid/bent以外のprofileは未知');
+});
+
+test('fixtureSymbol.matchFields: category,mechanism,profile,defaultMaterialGlass,labelの順（末尾から外す）・minMatchFields=2', () => {
+  assert.deepEqual(kindDef('fixtureSymbol').matchFields, ['category', 'mechanism', 'profile', 'defaultMaterialGlass', 'label']);
+  assert.equal(kindDef('fixtureSymbol').minMatchFields, 2);
+});
+
+test('fixtureSymbol.silentDiffFields: labelのみ（呼称差は通知しない。openingSubTypeと同じ割り切り）', () => {
+  assert.deepEqual(kindDef('fixtureSymbol').silentDiffFields, ['label']);
+});
+
+test('fixtureSymbol.dedupeFields: null（重複禁止の対象外）', () => {
+  assert.equal(kindDef('fixtureSymbol').dedupeFields, null);
 });
 
 test('interiorMaster.validate: 正常系', () => {

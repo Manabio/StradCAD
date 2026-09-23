@@ -91,6 +91,25 @@ test('【失敗系】openingSubType.isSupported: 未知のmechanismはfalse', ()
   assert.equal(def.isSupported(null), false);
 });
 
+// ---- fixtureSymbol（ステップ12d） ----
+test('fixtureSymbol: FIXTURE_SYMBOLS全件（10件）がfixtureSymbol.validateを通り、isSupported=trueである', async () => {
+  const def = kindDef('fixtureSymbol');
+  const entries = await def.loadBuiltin();
+  assert.equal(entries.length, 10);
+  for (const f of entries) {
+    assert.doesNotThrow(() => def.validate(f), `key=${f.key}`);
+    assert.equal(def.isSupported(f), true, `key=${f.key} mechanism=${f.mechanism} profile=${f.profile}`);
+  }
+});
+
+test('【失敗系】fixtureSymbol.isSupported: 未知のmechanism/profileはfalse', () => {
+  const def = kindDef('fixtureSymbol');
+  assert.equal(def.isSupported({ mechanism: 'swing' }), false);
+  assert.equal(def.isSupported({ profile: 'hollow' }), false);
+  assert.equal(def.isSupported({}), true); // mechanism/profileとも未設定は既知（スコープ無し記号）
+  assert.equal(def.isSupported(null), true); // entry?.mechanism/entry?.profileともnullish → 既知扱い
+});
+
 test('interiorMaster: INTERIOR_MASTERS全件がinteriorMaster.validateを通る', async () => {
   const def = kindDef('interiorMaster');
   const entries = await def.loadBuiltin();
@@ -106,7 +125,7 @@ test('boundaryMaster: BOUNDARY_MASTERS全件がboundaryMaster.validateを通る'
 });
 
 // ---- 必須テスト T1: 5種別すべて loadBuiltin()→withEntries→validateBundle 無例外・resolveCatalogのsizeが件数と一致 ----
-const EXPECTED_SIZE = { openingSubType: 45 };
+const EXPECTED_SIZE = { openingSubType: 45, fixtureSymbol: 10 };
 
 for (const kind of listKinds()) {
   test(`T1 ${kind}: loadBuiltin()の結果がvalidateBundleを無例外で通り、resolveCatalogのsizeが件数と一致する`, async () => {

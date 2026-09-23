@@ -36,21 +36,25 @@ export function collectUsedMaterialCodes(snapshot) {
  * - boundaryMaster: edges[].masterType
  * - section: columns/beams/structuralWalls/slabs/footings の sectionDefId
  * - openingSubType: openings[] の `${category}:${subType}`（catalogKinds.js の keyOf と同型）
- * @returns {{ interiorMaster: Set<string>, boundaryMaster: Set<string>, section: Set<string>, openingSubType: Set<string> }}
+ * - fixtureSymbol: openings[].fixtureType（空でない文字列のみ）
+ * @returns {{ interiorMaster: Set<string>, boundaryMaster: Set<string>, section: Set<string>,
+ *             openingSubType: Set<string>, fixtureSymbol: Set<string> }}
  */
 export function collectUsedKeys(snapshot) {
   const interiorMaster = new Set();
   const boundaryMaster = new Set();
   const section = new Set();
   const openingSubType = new Set();
-  if (!snapshot) return { interiorMaster, boundaryMaster, section, openingSubType };
+  const fixtureSymbol = new Set();
+  if (!snapshot) return { interiorMaster, boundaryMaster, section, openingSubType, fixtureSymbol };
 
   for (const ref of SNAPSHOT_REF_WALKERS.interiorMaster.enumerate(snapshot)) interiorMaster.add(ref.code);
   for (const ref of SNAPSHOT_REF_WALKERS.boundaryMaster.enumerate(snapshot)) boundaryMaster.add(ref.code);
   for (const ref of SNAPSHOT_REF_WALKERS.section.enumerate(snapshot)) section.add(ref.code);
   for (const ref of SNAPSHOT_REF_WALKERS.openingSubType.enumerate(snapshot)) openingSubType.add(ref.code);
+  for (const ref of SNAPSHOT_REF_WALKERS.fixtureSymbol.enumerate(snapshot)) fixtureSymbol.add(ref.code);
 
-  return { interiorMaster, boundaryMaster, section, openingSubType };
+  return { interiorMaster, boundaryMaster, section, openingSubType, fixtureSymbol };
 }
 
 /**

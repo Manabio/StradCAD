@@ -618,6 +618,95 @@ test('【失敗系】openingSubType: alias先が ":" を含まないときは据
   clearDocumentAliases();
 });
 
+// ---- ステップ12d: fixtureSymbol（openings[].fixtureType）の書換え実装 ----
+function fixtureSymbolSnapshot(overrides) {
+  return {
+    openings: [
+      { id: 'o1', fixtureType: 'oldSym' },
+      { id: 'o2', fixtureType: 'AW' },
+      { id: 'o3', fixtureType: null }, // 未設定は対象外
+      { id: 'o4', fixtureType: '' }, // 空文字も対象外
+    ],
+    ...overrides,
+  };
+}
+
+test('SNAPSHOT_REF_WALKERS.fixtureSymbol: openings[]の空でないfixtureTypeだけを列挙する（nullは対象外）', () => {
+  const refs = SNAPSHOT_REF_WALKERS.fixtureSymbol.enumerate(fixtureSymbolSnapshot());
+  assert.deepEqual(refs, [
+    { code: 'oldSym', location: 'opening', openingId: 'o1' },
+    { code: 'AW', location: 'opening', openingId: 'o2' },
+  ]);
+});
+
+test('fixtureSymbol: aliasでfixtureTypeが書換わる（対象外の開口は不変）', () => {
+  addDocumentAliases(CatalogKind.FIXTURE_SYMBOL, [{ from: 'oldSym', to: 'newSym' }]);
+  const applied = applyDocumentCodeNormalization(fixtureSymbolSnapshot());
+  assert.equal(applied.openings[0].fixtureType, 'newSym');
+  assert.equal(applied.openings[1].fixtureType, 'AW', '対象外の開口は不変');
+  assert.equal(applied.openings[2].fixtureType, null, 'null（未設定）は対象外のまま');
+  clearDocumentAliases();
+});
+
+test('fixtureSymbol: 書換えは冪等（2回適用で結果が同じ・2回目は変化が無いので同一参照）', () => {
+  addDocumentAliases(CatalogKind.FIXTURE_SYMBOL, [{ from: 'oldSym', to: 'newSym' }]);
+  const once = applyDocumentCodeNormalization(fixtureSymbolSnapshot());
+  const twice = applyDocumentCodeNormalization(once);
+  assert.deepEqual(once, twice);
+  assert.equal(applyDocumentCodeNormalization(once), once);
+  clearDocumentAliases();
+});
+
+test('fixtureSymbol: copy-on-write（該当なしは完全に同一参照。該当ありは新配列・該当開口だけ新オブジェクト）', () => {
+  setDocumentAliases(CatalogKind.FIXTURE_SYMBOL, null);
+  const noMatch = fixtureSymbolSnapshot();
+  assert.equal(applyDocumentCodeNormalization(noMatch), noMatch, '該当なしは完全に同一参照');
+
+  addDocumentAliases(CatalogKind.FIXTURE_SYMBOL, [{ from: 'noSuchSym', to: 'x' }]);
+  const irrelevantAlias = fixtureSymbolSnapshot();
+  const appliedIrrelevant = applyDocumentCodeNormalization(irrelevantAlias);
+  assert.equal(appliedIrrelevant, irrelevantAlias, '表が非空でも該当が無ければ完全に同一参照');
+  assert.equal(appliedIrrelevant.openings, irrelevantAlias.openings, 'openings配列も同一参照');
+
+  addDocumentAliases(CatalogKind.FIXTURE_SYMBOL, [{ from: 'oldSym', to: 'newSym' }]);
+  const snapshot = fixtureSymbolSnapshot();
+  const applied = applyDocumentCodeNormalization(snapshot);
+  assert.notEqual(applied, snapshot);
+  assert.notEqual(applied.openings, snapshot.openings, '書換えのあったopeningsは新しい配列');
+  assert.notEqual(applied.openings[0], snapshot.openings[0], '書換わったopeningは新オブジェクト');
+  assert.equal(applied.openings[1], snapshot.openings[1], '対象外のopeningは同一参照');
+  clearDocumentAliases();
+});
+
+test('【失敗系】fixtureSymbol: 廃止済み(null)のfixtureTypeは値を据え置き、kind:fixtureSymbolでunresolvedに積む', () => {
+  addDocumentAliases(CatalogKind.FIXTURE_SYMBOL, [{ from: 'oldSym', to: null }]);
+  applyDocumentCodeNormalization(fixtureSymbolSnapshot());
+  const taken = takeUnresolvedCodes();
+  assert.deepEqual(taken, [{ kind: CatalogKind.FIXTURE_SYMBOL, code: 'oldSym', location: 'opening', openingId: 'o1' }]);
+  clearDocumentAliases();
+});
+
+// 10b QA指摘Missing-1と同型: 壊れたopening（fixtureType欠け・非文字列・空文字・null要素・openings非配列）でも落ちず据え置き。
+test('【失敗系】fixtureSymbol: 壊れたopeningでも落ちず据え置き（fixtureType欠け・非文字列・空文字・null要素・openings非配列）', () => {
+  addDocumentAliases(CatalogKind.FIXTURE_SYMBOL, [{ from: 'oldSym', to: 'newSym' }]);
+  const broken = [null, {}, { id: 'x' }, { id: 'y', fixtureType: 123 }, { id: 'z', fixtureType: '' }];
+  const ok = { id: 'o1', fixtureType: 'oldSym' };
+  const applied = applyDocumentCodeNormalization({ openings: [...broken, ok] });
+  for (let i = 0; i < broken.length; i++) assert.equal(applied.openings[i], broken[i], `壊れた要素 ${i} は同一参照`);
+  assert.equal(applied.openings[broken.length].fixtureType, 'newSym');
+  assert.deepEqual(takeUnresolvedCodes(), []);
+  const nul = { openings: null };
+  assert.equal(applyDocumentCodeNormalization(nul), nul, 'openings が非配列ならスナップショットごと同一参照');
+  clearDocumentAliases();
+});
+
+test('fixtureSymbol: keyOf/parseKeyがcatalogKinds.js kindDef(FIXTURE_SYMBOL)と一致する（単一文字列キー）', () => {
+  const def = kindDef(CatalogKind.FIXTURE_SYMBOL);
+  const refs = SNAPSHOT_REF_WALKERS.fixtureSymbol.enumerate({ openings: [{ id: 'x', fixtureType: 'ZZ' }] });
+  assert.equal(refs[0].code, def.keyOf({ key: 'ZZ' }));
+  assert.deepEqual(def.parseKey(refs[0].code), { key: 'ZZ' });
+});
+
 // ---- clearDocumentAliases: 全種別解除 ----
 test('clearDocumentAliases: material・interiorMasterの両方のaliasesを解除する（全種別解除）', () => {
   setDocumentAliases(CatalogKind.MATERIAL, { a: 'b' });

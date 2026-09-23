@@ -242,9 +242,41 @@ export const DEFAULT_MATERIALS = {
 export const DEFAULT_FRAME_FACE_MM = 20;      // 見付
 export const DEFAULT_FRAME_PROJECTION_MM = 12; // 壁面からの出幅（チリ）
 
+/**
+ * FIXTURE_SYMBOLS を builtin一覧（{key, ...v}[]）へ変換する（唯一の合成式。ステップ12d）。
+ * catalogKinds.js の fixtureSymbol.loadBuiltin・findFixtureSymbol・getFixtureSymbols が使う。
+ * defaultMaterialGlass は DEFAULT_MATERIALS[key]（無ければ null）を1つの項目として持たせる——
+ * defaultMaterialGlassFor はこの合成後の overlay Map を引くだけにする（DEFAULT_MATERIALS を
+ * 二重に持ち歩かない）。
+ */
+export function fixtureSymbolBuiltinList() {
+  return FIXTURE_SYMBOLS.map(f => ({ ...f, defaultMaterialGlass: DEFAULT_MATERIALS[f.key] ?? null }));
+}
+
+// registry 経由の読み出し口＋メモ化（ステップ12d）。findFixtureSymbol・frameProfileFor・
+// defaultMaterialGlassFor は建具の描画・編集・建具表から種別ごとに呼ばれるホットパスのため、
+// openingSubType/sectionCatalogと同型でoverlay世代キーによりメモ化する。
+let _fixtureSymbolMap = null;
+let _fixtureSymbolGen = -1;
+
+function fixtureSymbolMap() {
+  const gen = overlayGeneration();
+  if (_fixtureSymbolMap === null || _fixtureSymbolGen !== gen) {
+    _fixtureSymbolMap = composeCatalog(CatalogKind.FIXTURE_SYMBOL, fixtureSymbolBuiltinList());
+    _fixtureSymbolGen = gen;
+  }
+  return _fixtureSymbolMap;
+}
+
+/** 建具記号キー → エントリ（overlay込み。無ければnull）。 */
+export function findFixtureSymbol(key) {
+  if (typeof key !== 'string' || key === '') return null;
+  return fixtureSymbolMap().get(key) ?? null;
+}
+
 /** 建具記号の平面断面プロファイル（frameOnlyJambProfiles参照）。未定義の記号は'solid'。唯一の定義箇所。 */
 export function frameProfileFor(symbol) {
-  return FIXTURE_SYMBOLS.find(f => f.key === symbol)?.profile ?? 'solid';
+  return findFixtureSymbol(symbol)?.profile ?? 'solid';
 }
 
 /**
@@ -329,15 +361,18 @@ export function findCatalogEntry(category, subType) {
 }
 
 /**
- * category ('window' | 'fitting') に一致する建具記号一覧。mechanism が FRAME_ONLY のときは
- * 三方枠専用記号（WF/SF/SSF）のみ、それ以外（未指定含む）はスコープ無しの記号のみを返す
- * （mechanism省略時は従来どおり全スコープ無し記号＝既存呼び出しの互換を維持）。
+ * category ('window' | 'fitting') に一致する建具記号一覧（overlay込み。ステップ12d）。mechanism が
+ * FRAME_ONLY のときは三方枠専用記号（WF/SF/SSF＋user/doc追加分）のみ、それ以外（未指定含む）は
+ * スコープ無しの記号のみを返す（mechanism省略時は従来どおり全スコープ無し記号＝既存呼び出しの
+ * 互換を維持）。絞り込み規則自体は不変——composeList（builtinの並びを保ち、user/doc追加分を
+ * 末尾に置く）経由で合成した一覧に対して同じフィルタを掛けるだけ。
  */
 export function getFixtureSymbols(category, mechanism) {
+  const list = composeList(CatalogKind.FIXTURE_SYMBOL, fixtureSymbolBuiltinList());
   if (mechanism === OpeningMechanism.FRAME_ONLY) {
-    return FIXTURE_SYMBOLS.filter(f => f.category === category && f.mechanism === OpeningMechanism.FRAME_ONLY);
+    return list.filter(f => f.category === category && f.mechanism === OpeningMechanism.FRAME_ONLY);
   }
-  return FIXTURE_SYMBOLS.filter(f => f.category === category && f.mechanism == null);
+  return list.filter(f => f.category === category && f.mechanism == null);
 }
 
 /** 建具記号未設定（旧データ）時のカテゴリ既定記号。唯一の定義箇所。 */
@@ -357,10 +392,15 @@ export function defaultOpeningHeight(category, subType) {
   return findCatalogEntry(category, subType)?.defaultHeight ?? (category === 'window' ? 1100 : 2000);
 }
 
-/** 建具記号に応じた「材料・ガラス」欄の既定値（DEFAULT_MATERIALS参照）。未知の記号はnull。 */
+/**
+ * 建具記号に応じた「材料・ガラス」欄の既定値（overlay込み。ステップ12d）。未知の記号・
+ * defaultMaterialGlassが文字列でないエントリ（overlay由来の壊れたエントリを含む）はnull。
+ * findFixtureSymbol が非文字列・空文字のsymbolをnullへ落とす（Mapのget自体はplain objectと
+ * 違いprototype名でも安全だが、findFixtureSymbolの既存ガードに委ねる）。
+ */
 export function defaultMaterialGlassFor(symbol) {
-  // plain object の prototype 名（'constructor' 等）がユーザー記号として来ても関数を返さない（QA指摘・2026-09-23）
-  return (typeof symbol === 'string' && Object.hasOwn(DEFAULT_MATERIALS, symbol)) ? DEFAULT_MATERIALS[symbol] : null;
+  const entry = findFixtureSymbol(symbol);
+  return typeof entry?.defaultMaterialGlass === 'string' ? entry.defaultMaterialGlass : null;
 }
 
 /**

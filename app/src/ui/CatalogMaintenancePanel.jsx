@@ -56,6 +56,11 @@ const READONLY_KIND_FIELDS = Object.freeze({
     'label', 'category', 'mechanism', 'wallKinds', 'defaultWidth', 'defaultHeight',
     'childRatio', 'fireLeaves', 'fireAngle', 'slideLayout',
   ]),
+  // ステップ12d: 建具記号（fixtureSymbol）も同じ閲覧タブへ。追加・複製・編集・削除・合わせ直し
+  // ボタンはステップ12fまで出さない（VIEWABLE_KINDSのコメント参照）。
+  [CatalogKind.FIXTURE_SYMBOL]: Object.freeze([
+    'key', 'label', 'category', 'mechanism', 'profile', 'defaultMaterialGlass',
+  ]),
 });
 
 /** layers（境界マスター）1件を「役割: コード or src」の1行文字列にする。 */

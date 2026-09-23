@@ -265,6 +265,28 @@ test('【不変条件・ステップ10f・QA指摘Minor-1で更新】ui/CatalogM
   assert.ok(fnMatch, 'CatalogMaintenancePanel.jsx に ReadonlyKindTab コンポーネントが見つからない');
 });
 
+// ---- ステップ12d: 建具記号（fixtureSymbol）の閲覧タブ（openingSubTypeと同じReadonlyKindTabに
+// 相乗り。プレビューはステップ12fまで持たない） ----
+test('【不変条件・ステップ12d】catalog/catalogMaintenance.js: buildKindTabsでfixtureSymbolがenabled:true（閲覧タブ）', () => {
+  const src = readSrc('catalog/catalogMaintenance.js');
+  const m = /const VIEWABLE_KINDS = Object\.freeze\(\[([\s\S]*?)\]\);/.exec(src);
+  assert.ok(m, 'catalogMaintenance.js に VIEWABLE_KINDS が見つからない');
+  assert.ok(/CatalogKind\.FIXTURE_SYMBOL/.test(m[1]), 'VIEWABLE_KINDS に CatalogKind.FIXTURE_SYMBOL が含まれていない（建具記号タブが閲覧できない）');
+});
+
+test('【不変条件・ステップ12d】ui/CatalogMaintenancePanel.jsx: READONLY_KIND_FIELDSにCatalogKind.FIXTURE_SYMBOLの表示項目（key/label/category/mechanism/profile/defaultMaterialGlass）をfield名で持ち、ReadonlyKindTab（追加・複製・編集・削除・合わせ直しボタン無し）で扱う', () => {
+  const src = readSrc('ui/CatalogMaintenancePanel.jsx');
+  const m = /\[CatalogKind\.FIXTURE_SYMBOL\]: Object\.freeze\(\[([\s\S]*?)\]\),/.exec(src);
+  assert.ok(m, 'CatalogMaintenancePanel.jsx の READONLY_KIND_FIELDS に [CatalogKind.FIXTURE_SYMBOL] が見つからない');
+  const body = m[1];
+  for (const field of ['key', 'label', 'category', 'mechanism', 'profile', 'defaultMaterialGlass']) {
+    assert.ok(
+      new RegExp(`'${field}'`).test(body),
+      `READONLY_KIND_FIELDS[CatalogKind.FIXTURE_SYMBOL] に ${field} が無い`,
+    );
+  }
+});
+
 // ---- ステップ10f: READONLY_KIND_FIELDSの値整形は.jsx側に判断を残さず
 // catalog/catalogMaintenance.jsのformatReadonlyValue（汎用の配列/plainオブジェクト整形）に委ねる ----
 test('【不変条件・ステップ10f】ui/CatalogMaintenancePanel.jsx: formatReadonlyFieldValueの汎用フォールバックはcatalog/catalogMaintenance.jsのformatReadonlyValue経由（配列/plainオブジェクトの整形を.jsx側で再実装しない）', () => {

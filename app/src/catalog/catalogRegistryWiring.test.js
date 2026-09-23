@@ -172,16 +172,16 @@ test('【不変条件・ステップ6-1】store.js: bootReadyがreconcileIncomin
   );
 });
 
-// ステップ7d→8f→10d: reconcileIncomingCatalogsはRECONCILE_KINDS（material・interiorMaster・
-// boundaryMaster・section・openingSubType）の種別ループに一般化された。種別ごとにdoc・userが
-// 両方空ならcontinueでスキップし（不変条件7-1: 本体標準マスタは新規文書の起動では読まない）、
-// builtinはkindDef(kind).loadBuiltin()経由で読む（materialData.js等の直接動的importが
+// ステップ7d→8f→10d→12d: reconcileIncomingCatalogsはRECONCILE_KINDS（material・interiorMaster・
+// boundaryMaster・section・openingSubType・fixtureSymbol）の種別ループに一般化された。種別ごとに
+// doc・userが両方空ならcontinueでスキップし（不変条件7-1: 本体標準マスタは新規文書の起動では
+// 読まない）、builtinはkindDef(kind).loadBuiltin()経由で読む（materialData.js等の直接動的importが
 // reconcileIncomingCatalogs本体から消える）。
-test('【不変条件・ステップ7d→8f→10d】store.js: reconcileIncomingCatalogsはRECONCILE_KINDS = [MATERIAL, INTERIOR_MASTER, BOUNDARY_MASTER, SECTION, OPENING_SUB_TYPE]の種別ループで、種別ごとに doc・user両方空ならcontinueし、kindDef(kind).loadBuiltin()経由でbuiltinを読む', () => {
+test('【不変条件・ステップ7d→8f→10d→12d】store.js: reconcileIncomingCatalogsはRECONCILE_KINDS = [MATERIAL, INTERIOR_MASTER, BOUNDARY_MASTER, SECTION, OPENING_SUB_TYPE, FIXTURE_SYMBOL]の種別ループで、種別ごとに doc・user両方空ならcontinueし、kindDef(kind).loadBuiltin()経由でbuiltinを読む', () => {
   const src = readSrc('store.js');
   assert.ok(
-    /const RECONCILE_KINDS = \[CatalogKind\.MATERIAL, CatalogKind\.INTERIOR_MASTER, CatalogKind\.BOUNDARY_MASTER, CatalogKind\.SECTION, CatalogKind\.OPENING_SUB_TYPE\];/.test(src),
-    'store.js に RECONCILE_KINDS = [CatalogKind.MATERIAL, CatalogKind.INTERIOR_MASTER, CatalogKind.BOUNDARY_MASTER, CatalogKind.SECTION, CatalogKind.OPENING_SUB_TYPE] が見つからない',
+    /const RECONCILE_KINDS = \[CatalogKind\.MATERIAL, CatalogKind\.INTERIOR_MASTER, CatalogKind\.BOUNDARY_MASTER, CatalogKind\.SECTION, CatalogKind\.OPENING_SUB_TYPE, CatalogKind\.FIXTURE_SYMBOL\];/.test(src),
+    'store.js に RECONCILE_KINDS = [CatalogKind.MATERIAL, CatalogKind.INTERIOR_MASTER, CatalogKind.BOUNDARY_MASTER, CatalogKind.SECTION, CatalogKind.OPENING_SUB_TYPE, CatalogKind.FIXTURE_SYMBOL] が見つからない',
   );
   const body = extractBalancedBody(src, 'export async function reconcileIncomingCatalogs() {');
   assert.ok(body, 'store.js に reconcileIncomingCatalogs が見つからない');
@@ -421,15 +421,15 @@ test('【不変条件・ステップ7c・Minor-4/P5】store.js: saveCatalogDocum
   );
 });
 
-// ステップ7c→8f→10d: 同梱の一般化。BUNDLED_KINDS（material・interiorMaster・boundaryMaster・
-// section・openingSubType）を定義し、saveCatalogDocumentがそれをbuiltinのloadBuiltin経由の
-// 解決・保存の両方で回していることを固定する（material固定への退行・splitBundleByKind
-// 未使用への退行を検知）。
-test('【不変条件・ステップ7c→8f→10d】store.js: BUNDLED_KINDSはmaterial・interiorMaster・boundaryMaster・section・openingSubTypeの5種別で、saveCatalogDocumentがkindDef(kind).loadBuiltin()とsplitBundleByKindを使っている', () => {
+// ステップ7c→8f→10d→12d: 同梱の一般化。BUNDLED_KINDS（material・interiorMaster・boundaryMaster・
+// section・openingSubType・fixtureSymbol）を定義し、saveCatalogDocumentがそれをbuiltinの
+// loadBuiltin経由の解決・保存の両方で回していることを固定する（material固定への退行・
+// splitBundleByKind未使用への退行を検知）。
+test('【不変条件・ステップ7c→8f→10d→12d】store.js: BUNDLED_KINDSはmaterial・interiorMaster・boundaryMaster・section・openingSubType・fixtureSymbolの6種別で、saveCatalogDocumentがkindDef(kind).loadBuiltin()とsplitBundleByKindを使っている', () => {
   const src = readSrc('store.js');
   assert.ok(
-    /const BUNDLED_KINDS = \[CatalogKind\.MATERIAL, CatalogKind\.INTERIOR_MASTER, CatalogKind\.BOUNDARY_MASTER, CatalogKind\.SECTION, CatalogKind\.OPENING_SUB_TYPE\];/.test(src),
-    'store.js に BUNDLED_KINDS = [CatalogKind.MATERIAL, CatalogKind.INTERIOR_MASTER, CatalogKind.BOUNDARY_MASTER, CatalogKind.SECTION, CatalogKind.OPENING_SUB_TYPE] が見つからない',
+    /const BUNDLED_KINDS = \[CatalogKind\.MATERIAL, CatalogKind\.INTERIOR_MASTER, CatalogKind\.BOUNDARY_MASTER, CatalogKind\.SECTION, CatalogKind\.OPENING_SUB_TYPE, CatalogKind\.FIXTURE_SYMBOL\];/.test(src),
+    'store.js に BUNDLED_KINDS = [CatalogKind.MATERIAL, CatalogKind.INTERIOR_MASTER, CatalogKind.BOUNDARY_MASTER, CatalogKind.SECTION, CatalogKind.OPENING_SUB_TYPE, CatalogKind.FIXTURE_SYMBOL] が見つからない',
   );
   const body = extractBalancedBody(src, 'async function saveCatalogDocument(floorRecords) {');
   assert.ok(body, 'store.js に saveCatalogDocument が見つからない');

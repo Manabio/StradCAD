@@ -61,6 +61,7 @@ export const CatalogKind = Object.freeze({
   BOUNDARY_MASTER:  'boundaryMaster',
   SECTION:          'section',
   OPENING_SUB_TYPE: 'openingSubType',
+  FIXTURE_SYMBOL:   'fixtureSymbol',
 });
 
 /**
@@ -74,6 +75,7 @@ export const KIND_LABELS = Object.freeze({
   [CatalogKind.BOUNDARY_MASTER]:  '境界マスター',
   [CatalogKind.SECTION]:          '断面',
   [CatalogKind.OPENING_SUB_TYPE]: '建具種別',
+  [CatalogKind.FIXTURE_SYMBOL]:   '建具記号',
 });
 
 // ----------------------------------------------------------------
@@ -332,6 +334,67 @@ const REGISTRY = Object.assign(Object.create(null), {
     // FITTING_CATALOG（fitting）とWINDOW_CATALOG（window）を category 付きで合成する（唯一の
     // 合成式は openingCatalog.js の openingSubTypeBuiltinList。ここでの二重実装はしない）。
     loadBuiltin: () => import('../openings/openingCatalog.js').then(m => m.openingSubTypeBuiltinList()),
+  },
+
+  [CatalogKind.FIXTURE_SYMBOL]: {
+    kind: CatalogKind.FIXTURE_SYMBOL,
+    // keyが非空文字列でなければ例外（2026-09-22 QA指摘Aと同型）。
+    keyOf: entry => {
+      if (!isNonEmptyString(entry?.key)) {
+        throw new Error(`建具記号エントリのkeyが不正です（キーを組み立てられません）: ${JSON.stringify(entry)}`);
+      }
+      return entry.key;
+    },
+    parseKey(key) {
+      if (!isNonEmptyString(key)) throw new Error(`建具記号のキーが不正です: ${key}`);
+      return { key };
+    },
+    encoding: 'json',
+    knownFields: ['key', 'label', 'category', 'mechanism', 'profile', 'defaultMaterialGlass'],
+    requiredFields: ['key', 'label', 'category'],
+    // ステップ12d（Q-D確定 2026-09-24）: keyの書式（英大文字2〜4文字）は登録表のvalidateでは
+    // 検査しない——未知書式の同梱（他アプリ・将来バージョンの記号等）で読込み全体が例外に
+    // ならないようにするため。書式検査は保守パネルの追加時だけ行う（openingEdit.js側。12f）。
+    // category/mechanismはWF/SF/SSFのような機構専用記号のスコープそのもの（getFixtureSymbolsの
+    // 絞り込みキー）のため固定——openingSubTypeと同じ理由。
+    keyBoundFields: ['key', 'category', 'mechanism'],
+    overrideLockedFields: [],
+    compareFields: ['label', 'category', 'mechanism', 'profile', 'defaultMaterialGlass'],
+    // Q-B系の割り切り（openingSubTypeのlabelと同型）: 呼称差は通知しない。
+    silentDiffFields: ['label'],
+    matchFields: ['category', 'mechanism', 'profile', 'defaultMaterialGlass', 'label'],
+    minMatchFields: 2,
+    dedupeFields: null,
+    validate(entry) {
+      requireFields(entry, ['key', 'label', 'category'], '建具記号エントリ');
+      if (!isNonEmptyString(entry.key)) throw new Error('建具記号エントリのkeyが不正です（非空文字列が必要）');
+      if (typeof entry.label !== 'string') throw new Error('建具記号エントリのlabelが不正です');
+      if (entry.category !== 'fitting' && entry.category !== 'window') {
+        throw new Error(`建具記号エントリのcategoryが不正です: ${entry.category}`);
+      }
+      if (entry.mechanism !== undefined && entry.mechanism !== null && typeof entry.mechanism !== 'string') {
+        throw new Error('建具記号エントリのmechanismが不正です（文字列またはnull/undefinedが必要）');
+      }
+      if (entry.profile !== undefined && entry.profile !== null && typeof entry.profile !== 'string') {
+        throw new Error('建具記号エントリのprofileが不正です（文字列またはnull/undefinedが必要）');
+      }
+      if (entry.defaultMaterialGlass !== undefined && entry.defaultMaterialGlass !== null
+        && typeof entry.defaultMaterialGlass !== 'string') {
+        throw new Error('建具記号エントリのdefaultMaterialGlassが不正です（文字列またはnull/undefinedが必要）');
+      }
+    },
+    // 場面(c)unsupported: mechanismは「無し」または三方枠専用スコープ'frameOnly'のみ既知
+    // （openings/openingCatalog.js getFixtureSymbolsのFRAME_ONLY分岐と同じ前提）。profileは
+    // 「無し」または'solid'|'bent'のみ既知（frameProfileForの既定フォールバック'solid'に無い
+    // 値=未知の断面描き分けを持つ同梱記号を、正しい平面記号を描けないまま受け入れない）。
+    isSupported: entry => {
+      const mechanism = entry?.mechanism;
+      if (mechanism != null && mechanism !== 'frameOnly') return false;
+      const profile = entry?.profile;
+      if (profile != null && profile !== 'solid' && profile !== 'bent') return false;
+      return true;
+    },
+    loadBuiltin: () => import('../openings/openingCatalog.js').then(m => m.fixtureSymbolBuiltinList()),
   },
 
   [CatalogKind.INTERIOR_MASTER]: {

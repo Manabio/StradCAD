@@ -619,6 +619,115 @@ test('formatReconcileNotice: kind=openingSubTypeは名詞が「建具種別」',
   assert.equal(msg, '建具種別キーの読み替えを1件適用しました（保存すると確定します）');
 });
 
+// ---- ステップ12d: kind=fixtureSymbol（建具記号）の照合。matchFields=['category','mechanism',
+// 'profile','defaultMaterialGlass','label']・minMatchFields=2（catalogKinds.js登録表）。
+// silentDiffFields=['label']（openingSubTypeと同じ割り切り）。isSupportedフックが未知
+// mechanism/profileを場面(c)unsupportedへ回す。 ----
+function fixtureSymbol(overrides) {
+  return { key: 'AW', label: 'AW（アルミ製窓）', category: 'window', ...overrides };
+}
+
+test('planIncomingReconcile: kind=fixtureSymbolは同キー・全内容一致→same', () => {
+  const existing = fixtureSymbol();
+  const plan = planIncomingReconcile({
+    kind: CatalogKind.FIXTURE_SYMBOL, docEntries: [fixtureSymbol()], appEntries: [existing],
+  });
+  assert.deepEqual(plan.same, ['AW']);
+  assert.deepEqual(plan.adoptDoc, []);
+  assert.deepEqual(plan.unsupported, []);
+});
+
+test('planIncomingReconcile: kind=fixtureSymbolは同キー・label違いのみ→adoptDocだがnotify:false（silentDiffFields=label）', () => {
+  const existing = fixtureSymbol({ label: 'AW（本体）' });
+  const plan = planIncomingReconcile({
+    kind: CatalogKind.FIXTURE_SYMBOL, docEntries: [fixtureSymbol({ label: 'AW（同梱）' })], appEntries: [existing],
+  });
+  assert.equal(plan.adoptDoc.length, 1);
+  assert.deepEqual(plan.adoptDoc[0].diffFields, ['label']);
+  assert.equal(plan.adoptDoc[0].notify, false, 'labelだけの差は通知しない契約');
+});
+
+test('planIncomingReconcile: kind=fixtureSymbolは同キー・category違い→adoptDocでnotify:true（silentDiffFields対象外）', () => {
+  const existing = fixtureSymbol({ category: 'window' });
+  const plan = planIncomingReconcile({
+    kind: CatalogKind.FIXTURE_SYMBOL, docEntries: [fixtureSymbol({ category: 'fitting' })], appEntries: [existing],
+  });
+  assert.deepEqual(plan.adoptDoc[0].diffFields, ['category']);
+  assert.equal(plan.adoptDoc[0].notify, true);
+});
+
+test('planIncomingReconcile: kind=fixtureSymbolは別キー・全内容一致→aliasesへ（自動読み替え）', () => {
+  const existing = fixtureSymbol({ key: 'AW' });
+  const doc = fixtureSymbol({ key: 'MYW', label: 'AW（アルミ製窓）' }); // 全matchFields一致・keyだけ違う
+  const plan = planIncomingReconcile({
+    kind: CatalogKind.FIXTURE_SYMBOL, docEntries: [doc], appEntries: [existing],
+  });
+  assert.deepEqual(plan.aliases, [{ from: 'MYW', to: 'AW' }]);
+  assert.deepEqual(plan.proposals, []);
+  assert.deepEqual(plan.adds, []);
+});
+
+test('planIncomingReconcile: kind=fixtureSymbolはcategory・mechanism一致・profile違いでproposalsへ（matchFields先頭2項目=category,mechanismで段を外せる）', () => {
+  const existing = fixtureSymbol({ key: 'WF', category: 'fitting', mechanism: 'frameOnly', profile: 'solid' });
+  const doc = fixtureSymbol({ key: 'MYF', category: 'fitting', mechanism: 'frameOnly', profile: 'bent', label: 'MYF（試験）' });
+  const plan = planIncomingReconcile({
+    kind: CatalogKind.FIXTURE_SYMBOL, docEntries: [doc], appEntries: [existing],
+  });
+  assert.equal(plan.proposals.length, 1, 'category+mechanism一致のみ（profile以降が違う）は完全一致ではないためproposalsへ');
+  assert.equal(plan.proposals[0].from, 'MYF');
+  assert.deepEqual(plan.adds, []);
+});
+
+test('planIncomingReconcile: kind=fixtureSymbolはcategoryも一致しなければ（minMatchFields未満）addsへ', () => {
+  const existing = fixtureSymbol({ key: 'AW', category: 'window' });
+  const doc = fixtureSymbol({ key: 'MYD', category: 'fitting', label: 'MYD（試験ドア）' });
+  const plan = planIncomingReconcile({
+    kind: CatalogKind.FIXTURE_SYMBOL, docEntries: [doc], appEntries: [existing],
+  });
+  assert.deepEqual(plan.proposals, []);
+  assert.deepEqual(plan.adds, [doc]);
+});
+
+test('【失敗系】planIncomingReconcile: kind=fixtureSymbolは未知mechanism/profileのdocエントリをunsupportedへ回し、同一/alias/propose/addの分類対象から外す（isSupportedフック）', () => {
+  const existing = fixtureSymbol();
+  const doc = fixtureSymbol({ key: 'ZZ', mechanism: 'swing' }); // frameOnly以外のmechanismは未知
+  const plan = planIncomingReconcile({
+    kind: CatalogKind.FIXTURE_SYMBOL, docEntries: [doc], appEntries: [existing],
+  });
+  assert.deepEqual(plan.unsupported, [doc]);
+  assert.deepEqual(plan.same, []);
+  assert.deepEqual(plan.aliases, []);
+  assert.deepEqual(plan.proposals, []);
+  assert.deepEqual(plan.adds, []);
+});
+
+test('formatReconcileNotice: kind=fixtureSymbolは名詞が「建具記号」', () => {
+  const plan = { adoptDoc: [], adds: [], aliases: [{ from: 'a', to: 'b' }] };
+  const msg = formatReconcileNotice(plan, { kind: CatalogKind.FIXTURE_SYMBOL });
+  assert.equal(msg, '建具記号キーの読み替えを1件適用しました（保存すると確定します）');
+});
+
+// ---- 結合（10bのopeningSubTypeと同型）: reconcile由来のaliasが文書固有の読み替え表へ入り、
+// applyDocumentCodeNormalizationがopenings[].fixtureTypeを実際に書換えることを確認する。
+test('結合(12d): kind=fixtureSymbolのalias確定後、applyDocumentCodeNormalizationがopenings[].fixtureTypeを書換える', async () => {
+  const existing = fixtureSymbol({ key: 'AW' });
+  const doc = fixtureSymbol({ key: 'MYW' }); // 全matchFields一致・keyだけ違う
+  const plan = planIncomingReconcile({
+    kind: CatalogKind.FIXTURE_SYMBOL, docEntries: [doc], appEntries: [existing],
+  });
+  assert.deepEqual(plan.aliases, [{ from: 'MYW', to: 'AW' }]);
+
+  await applyReconcilePlan(plan, {
+    kind: CatalogKind.FIXTURE_SYMBOL,
+    currentUser: [],
+    commitUserFn: async () => {},
+  });
+
+  const snapshot = { openings: [{ id: 'o1', fixtureType: 'MYW' }] };
+  const normalized = applyDocumentCodeNormalization(snapshot);
+  assert.equal(normalized.openings[0].fixtureType, 'AW', 'alias確定後は文書固有の読み替え表でfixtureTypeが書換わるはず');
+});
+
 // ---- 結合（10bと接続する縦の1本）: reconcile由来のaliasが文書固有の読み替え表へ入り、
 // applyDocumentCodeNormalizationがopenings[].subTypeを実際に書換えることを確認する。
 // 10bはcodeNormalization.test.js側でaddDocumentAliasesを直接呼ぶ形で固定済み——ここでは

@@ -14,9 +14,13 @@
 //
 // 出力（階ごと。id を含まない安定キーで sort。opening 1行 = ':' 区切り）:
 //   category:subType:resolved:mechanism:entry.defaultWidth:entry.defaultHeight:
-//   round(width):round(effectiveHeight):sillHeight:fixtureSymbol:openingTag:elevPrims
-//   （elevPrims = buildOpeningElevation の type別プリミティブ件数を "type=n" で連結。座標は持たない）
+//   round(width):round(effectiveHeight):sillHeight:fixtureSymbol:openingTag:elevPrims:
+//   frameProfile:defaultMaterialGlass
+//   （elevPrims = buildOpeningElevation の type別プリミティブ件数を "type=n" で連結。座標は持たない。
+//   frameProfile = frameProfileFor(fixtureSymbol)・defaultMaterialGlass = defaultMaterialGlassFor
+//   (fixtureSymbol)。ステップ12d: 建具記号（fixtureSymbol）カタログのregistry化を検出する）。
 // 階ごとに unresolvedSubTypeKeys（`${category}:${subType}` で findCatalogEntry が null のもの）・
+// unresolvedFixtureSymbols（fixtureSymbolOf(o) で findFixtureSymbol が null のもの。ステップ12d）・
 // openingCount、全体に perf_ms。
 //
 // 使い方: node --import ./scripts/testSetup.mjs scripts/probe/openingProbe.mjs <入力.stq> [出力.json]
@@ -27,7 +31,7 @@ import {
   collectFloorOpeningGroups, assignOpeningNumbers, applyOpeningTags, openingTagOf,
   effectiveHeight, fixtureSymbolOf,
 } from '../../src/openings/openingNumbering.js';
-import { findCatalogEntry } from '../../src/openings/openingCatalog.js';
+import { findCatalogEntry, findFixtureSymbol, frameProfileFor, defaultMaterialGlassFor } from '../../src/openings/openingCatalog.js';
 import { buildOpeningElevation } from '../../src/openings/openingElevationFigure.js';
 
 const src = process.argv[2];
@@ -41,11 +45,14 @@ const { project } = loadDocument(src);
 
 const round = (v) => Math.round(v);
 
-function dumpPlane(graph, unresolvedAll) {
+function dumpPlane(graph, unresolvedAll, unresolvedFixtureAll) {
   const unresolved = new Set();
+  const unresolvedFixture = new Set();
   const lines = graph.openings.map(o => {
     const entry = findCatalogEntry(o.category, o.subType);
     if (!entry) { const key = `${o.category}:${o.subType}`; unresolved.add(key); unresolvedAll.add(key); }
+    const symbol = fixtureSymbolOf(o);
+    if (symbol != null && !findFixtureSymbol(symbol)) { unresolvedFixture.add(symbol); unresolvedFixtureAll.add(symbol); }
     const tag = openingTagOf(o, project);
     const prims = buildOpeningElevation(o, { tag, entry, includeDims: false });
     const primCounts = new Map();
@@ -55,11 +62,16 @@ function dumpPlane(graph, unresolvedAll) {
       o.category, o.subType, entry != null, entry?.mechanism ?? null,
       entry?.defaultWidth ?? null, entry?.defaultHeight ?? null,
       round(o.width), round(effectiveHeight(o)), o.sillHeight ?? null,
-      fixtureSymbolOf(o), tag ?? null, elevPrims,
+      symbol, tag ?? null, elevPrims,
+      frameProfileFor(symbol), defaultMaterialGlassFor(symbol),
     ].join(':');
   }).sort();
 
-  return { openingCount: lines.length, openings: lines, unresolvedSubTypeKeys: [...unresolved].sort() };
+  return {
+    openingCount: lines.length, openings: lines,
+    unresolvedSubTypeKeys: [...unresolved].sort(),
+    unresolvedFixtureSymbols: [...unresolvedFixture].sort(),
+  };
 }
 
 const t0 = performance.now();
@@ -75,11 +87,12 @@ for (const p of project.planes) {
 runInAction(() => applyOpeningTags(project, assignOpeningNumbers(project)));
 
 const unresolvedAll = new Set();
+const unresolvedFixtureAll = new Set();
 const out = {};
 for (const p of project.planes) {
   const graph = project.graphMap.get(p.id);
   if (!graph) continue;
-  out[p.name] = dumpPlane(graph, unresolvedAll);
+  out[p.name] = dumpPlane(graph, unresolvedAll, unresolvedFixtureAll);
 }
 
 const t1 = performance.now();
@@ -93,7 +106,10 @@ console.log(JSON.stringify({
   perf_ms: result.perf_ms,
   totalOpenings,
   unresolvedSubTypeKeys: [...unresolvedAll].sort(),
+  unresolvedFixtureSymbols: [...unresolvedFixtureAll].sort(),
   summary: Object.entries(out).map(([name, d]) => ({
-    name, openingCount: d.openingCount, unresolvedSubTypeKeys: d.unresolvedSubTypeKeys,
+    name, openingCount: d.openingCount,
+    unresolvedSubTypeKeys: d.unresolvedSubTypeKeys,
+    unresolvedFixtureSymbols: d.unresolvedFixtureSymbols,
   })),
 }, null, 1));

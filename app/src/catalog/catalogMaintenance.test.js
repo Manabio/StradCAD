@@ -27,7 +27,7 @@ function material(overrides) {
 }
 
 // ---- buildKindTabs ----
-test('buildKindTabs: listKinds()から導出し、全種別（material・interiorMaster・boundaryMaster・section・openingSubType）がenabled:true（閲覧のみ。ステップ7d・8h・10f）', () => {
+test('buildKindTabs: listKinds()から導出し、全種別（material・interiorMaster・boundaryMaster・section・openingSubType・fixtureSymbol）がenabled:true（閲覧のみ。ステップ7d・8h・10f・12d）', () => {
   const tabs = buildKindTabs();
   const materialTab = tabs.find(t => t.kind === CatalogKind.MATERIAL);
   assert.equal(materialTab.enabled, true);
@@ -44,6 +44,10 @@ test('buildKindTabs: listKinds()から導出し、全種別（material・interio
   const openingSubTypeTab = tabs.find(t => t.kind === CatalogKind.OPENING_SUB_TYPE);
   assert.equal(openingSubTypeTab.enabled, true);
   assert.equal(openingSubTypeTab.label, '建具種別');
+  const fixtureSymbolTab = tabs.find(t => t.kind === CatalogKind.FIXTURE_SYMBOL);
+  assert.equal(fixtureSymbolTab.enabled, true);
+  assert.equal(fixtureSymbolTab.label, '建具記号');
+  assert.equal(tabs.length, 6, '登録表の全種別ぶん（6種別）タブが出る');
 });
 
 // ---- buildCatalogRows（ステップ7d: buildMaterialRowsの一般化。3種別）----

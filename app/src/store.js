@@ -244,10 +244,10 @@ export async function loadCatalogOverlaysFromIDB({
 /**
  * 起動時の同梱カタログ照合の対象種別（ステップ6-1は material 単独だったが、ステップ7dで
  * 内装マスター・境界マスターへ、ステップ8fで断面（section）へ、ステップ10dで建具種別
- * （openingSubType）へ一般化した——BUNDLED_KINDS（同梱の一般化。ステップ7c→8f→10d）と
- * 同じ5種別）。
+ * （openingSubType）へ、ステップ12dで建具記号（fixtureSymbol）へ一般化した——BUNDLED_KINDS
+ * （同梱の一般化。ステップ7c→8f→10d→12d）と同じ6種別）。
  */
-const RECONCILE_KINDS = [CatalogKind.MATERIAL, CatalogKind.INTERIOR_MASTER, CatalogKind.BOUNDARY_MASTER, CatalogKind.SECTION, CatalogKind.OPENING_SUB_TYPE];
+const RECONCILE_KINDS = [CatalogKind.MATERIAL, CatalogKind.INTERIOR_MASTER, CatalogKind.BOUNDARY_MASTER, CatalogKind.SECTION, CatalogKind.OPENING_SUB_TYPE, CatalogKind.FIXTURE_SYMBOL];
 
 /**
  * 起動時の同梱カタログ照合（ステップ6-1→ステップ7d: 種別ループへ一般化）。loadCatalogOverlaysFromIDB
@@ -606,10 +606,11 @@ export async function switchFloor(nextPlaneId) {
 
 /**
  * 文書同梱する種別の一覧（ステップ7c: 同梱の一般化。それまでは material のみだった。
- * ステップ8fで断面（section）、ステップ10dで建具種別（openingSubType）を追加）。
- * 使用キー収集経路（openingsのsubType）はusedEntries.jsに既にある。
+ * ステップ8fで断面（section）、ステップ10dで建具種別（openingSubType）、
+ * ステップ12dで建具記号（fixtureSymbol）を追加）。
+ * 使用キー収集経路（openingsのsubType・fixtureType）はusedEntries.jsに既にある。
  */
-const BUNDLED_KINDS = [CatalogKind.MATERIAL, CatalogKind.INTERIOR_MASTER, CatalogKind.BOUNDARY_MASTER, CatalogKind.SECTION, CatalogKind.OPENING_SUB_TYPE];
+const BUNDLED_KINDS = [CatalogKind.MATERIAL, CatalogKind.INTERIOR_MASTER, CatalogKind.BOUNDARY_MASTER, CatalogKind.SECTION, CatalogKind.OPENING_SUB_TYPE, CatalogKind.FIXTURE_SYMBOL];
 
 /**
  * 全階のバイト列を decode し、BUNDLED_KINDS の使用キーを種別ごとに集めて返す（4.3・

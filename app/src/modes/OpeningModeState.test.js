@@ -76,8 +76,8 @@ test('init: 全て既知のsubTypeなら行が立たず、他kind（material）�
   // App.jsxのモードロード後マージ（replaceRowsByScenario）と同じ呼び出し形。
   const materialRow = { id: 'unresolved-code:material:111111111211', scenario: 'unresolved-code', kind: 'material' };
   const merged = replaceRowsByScenario([materialRow], catalogResolveRows, ['unresolved-code'], { kinds: s.catalogResolveKinds });
-  assert.ok(merged.includes(materialRow), 'kinds=[openingSubType]のときmaterial行は場面が同じでも残る');
-  assert.deepEqual(s.catalogResolveKinds, [CatalogKind.OPENING_SUB_TYPE]);
+  assert.ok(merged.includes(materialRow), 'kinds=[openingSubType, fixtureSymbol]のときmaterial行は場面が同じでも残る');
+  assert.deepEqual(s.catalogResolveKinds, [CatalogKind.OPENING_SUB_TYPE, CatalogKind.FIXTURE_SYMBOL]);
 });
 
 test('【失敗系】init: overlayにユーザーエントリを追加したsubTypeは未解決にならない（composeCatalog経由の証明）', async () => {
@@ -206,5 +206,59 @@ test('【失敗系・QA指摘Major-3】init: 同じ開口がpeekUnresolvedCodes�
   } finally {
     takeUnresolvedCodes();
     clearDocumentAliases();
+  }
+});
+
+// ---- ステップ12d: 建具記号（fixtureSymbol）の未解決検出（openingSubTypeと同じ境界）----
+test('init: 既知のfixtureType（AW）だけの開口は場面(b)unresolved-codeの行を作らない', async () => {
+  const { project, graph, wall } = makeGraph();
+  graph.addOpening(wall.axisCL, 1, false, wall.clStart, 500, 800, OpeningCategory.WINDOW, 'doubleSliding', { fixtureType: 'AW' });
+
+  const s = new OpeningModeState(graph, project);
+  const { catalogResolveRows } = await s.init();
+  assert.deepEqual(catalogResolveRows, []);
+});
+
+test('init: 未知のfixtureTypeを持つ開口はCatalogKind.FIXTURE_SYMBOLの場面(b)unresolved-code行になる（openingSubTypeの行と共存する）', async () => {
+  const { project, graph, wall } = makeGraph();
+  const o1 = graph.addOpening(wall.axisCL, 1, false, wall.clStart, 500,  800, OpeningCategory.FITTING, 'zzUnknown', { fixtureType: 'ZZ' });
+  const o2 = graph.addOpening(wall.axisCL, 1, false, wall.clStart, 2000, 800, OpeningCategory.FITTING, 'zzUnknown', { fixtureType: 'ZZ' });
+
+  const s = new OpeningModeState(graph, project);
+  const { catalogResolveRows } = await s.init();
+
+  assert.equal(catalogResolveRows.length, 2, 'openingSubType（fitting:zzUnknown）とfixtureSymbol（ZZ）の2行が別々に立つ');
+  const subTypeRow = catalogResolveRows.find(r => r.kind === CatalogKind.OPENING_SUB_TYPE);
+  const fixtureRow = catalogResolveRows.find(r => r.kind === CatalogKind.FIXTURE_SYMBOL);
+  assert.ok(subTypeRow && fixtureRow, '2種別とも行が見つかる');
+  assert.equal(fixtureRow.targetKey, 'ZZ');
+  assert.equal(fixtureRow.usage.length, 2, '同じfixtureTypeの建具が2件あればusageに両方が入る');
+  const openingIds = fixtureRow.usage.map(u => u.openingId).sort();
+  assert.deepEqual(openingIds, [o1.id, o2.id].sort());
+});
+
+test('init: fixtureType未設定（null）の開口はCatalogKind.FIXTURE_SYMBOLの行を作らない（カテゴリ既定へフォールバックする契約のため対象外）', async () => {
+  const { project, graph, wall } = makeGraph();
+  graph.addOpening(wall.axisCL, 1, false, wall.clStart, 500, 800, OpeningCategory.WINDOW, 'doubleSliding', {});
+
+  const s = new OpeningModeState(graph, project);
+  const { catalogResolveRows } = await s.init();
+  assert.deepEqual(catalogResolveRows.filter(r => r.kind === CatalogKind.FIXTURE_SYMBOL), []);
+});
+
+test('【失敗系】init: overlayにユーザーエントリを追加したfixtureSymbolは未解決にならない（composeCatalog経由の証明）', async () => {
+  const { project, graph, wall } = makeGraph();
+  graph.addOpening(wall.axisCL, 1, false, wall.clStart, 500, 800, OpeningCategory.WINDOW, 'doubleSliding', { fixtureType: 'PW' });
+  try {
+    setOverlay(CatalogKind.FIXTURE_SYMBOL, {
+      user: [{ key: 'PW', label: 'PW（樹脂サッシ・独自）', category: 'window' }],
+    });
+
+    const s = new OpeningModeState(graph, project);
+    const { catalogResolveRows } = await s.init();
+
+    assert.deepEqual(catalogResolveRows.filter(r => r.kind === CatalogKind.FIXTURE_SYMBOL), [], 'overlay（ユーザー追加）に載っているfixtureTypeは未解決にならない');
+  } finally {
+    clearOverlays();
   }
 });
