@@ -1,6 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildResolveRows, applyResolveDecisions, candidatesForUnresolved, replaceRowsByScenario } from './resolveQueue.js';
+import {
+  buildResolveRows, applyResolveDecisions, candidatesForUnresolved, replaceRowsByScenario, defaultResolveDecision,
+} from './resolveQueue.js';
 import { CatalogKind } from './catalogKinds.js';
 
 function material(overrides) {
@@ -77,7 +79,9 @@ test('buildResolveRows: proposalsはfrom/candidates/entryをそのまま行へ�
   assert.equal(rows[0].scenario, 'propose');
   assert.equal(rows[0].targetKey, '999999999999');
   assert.deepEqual(rows[0].candidates, [candidate]);
-  assert.deepEqual(rows[0].allowedActions, ['approve', 'pick', 'addToLibrary']);
+  // コーディネーター裁定（2026-09-23）: 'defer'（保留）は全場面で選べる。propose既定decisionが
+  // deferになったことに合わせ、ラジオボタンにも表示されるようallowedActionsへ追加した。
+  assert.deepEqual(rows[0].allowedActions, ['approve', 'pick', 'addToLibrary', 'defer']);
 });
 
 test('buildResolveRows: 同じ入力から再構築すると同じ行（内容・順序）が出る', () => {
@@ -88,6 +92,45 @@ test('buildResolveRows: 同じ入力から再構築すると同じ行（内容�
   const rows1 = buildResolveRows(args);
   const rows2 = buildResolveRows(args);
   assert.deepEqual(rows1, rows2);
+});
+
+// ---- defaultResolveDecision（コーディネーター裁定・2026-09-23）: propose行は候補数に関わらず
+// 既定defer（R10「自動では置きかえない」の徹底）。unresolved-code/library-conflictは現行どおり
+// （候補があれば先頭候補をapprove）。ui/CatalogResolveDialog.jsxのdefaultDecisionはこれを経由する
+// （唯一の定義箇所。変異=propose行をapproveに戻す、で下の1本目が赤くなる）。----
+test('defaultResolveDecision: propose行は候補があっても既定defer（自動承認しない）', () => {
+  const candidate = material({ code: '301000000001' });
+  const rows = buildResolveRows({ proposals: [{ from: '999999999999', candidates: [candidate], entry: material({ code: '999999999999' }) }] });
+  assert.equal(rows[0].scenario, 'propose');
+  assert.deepEqual(defaultResolveDecision(rows[0]), { action: 'defer', pick: null });
+});
+
+test('defaultResolveDecision: 候補ありのunresolved-code行は現行どおり先頭候補をapprove', () => {
+  // 未解決コード '301099999999'（major=30,minor=10）と candidate '301000000001'（同じmajor=30,minor=10）
+  // ——suggestByClass（大分類・中分類が同じ材を候補にする）が候補を拾える組合せにする。
+  const candidate = material({ code: '301000000001' });
+  const rows = buildResolveRows({ unresolved: [{ code: '301099999999', location: 'floor' }], appEntries: [candidate] });
+  assert.equal(rows[0].scenario, 'unresolved-code');
+  assert.ok(rows[0].candidates.length > 0, '前提: candidatesForUnresolved(suggestByClass)で同分類の候補が拾える');
+  assert.deepEqual(defaultResolveDecision(rows[0]), { action: 'approve', pick: '301000000001' });
+});
+
+test('defaultResolveDecision: 候補ありのlibrary-conflict行も現行どおり先頭候補をapprove', () => {
+  const target = material({ code: '301000000001', name: '競合材' });
+  const other = material({ code: '301000000002', name: '競合材' }); // targetと内容一致（matchByContent対象）
+  const rows = buildResolveRows({
+    libraryConflicts: [{ key: '301000000001', diffFields: [] }],
+    userEntries: [target],
+    appEntries: [other],
+  });
+  assert.equal(rows[0].scenario, 'library-conflict');
+  assert.ok(rows[0].candidates.length > 0, '前提: 内容一致するotherが候補に入る');
+  assert.deepEqual(defaultResolveDecision(rows[0]), { action: 'approve', pick: '301000000002' });
+});
+
+test('defaultResolveDecision: 候補が無ければ場面を問わず保留（defer）', () => {
+  const rows = buildResolveRows({ unresolved: [{ code: '999999999999', location: 'floor' }], appEntries: [] });
+  assert.deepEqual(defaultResolveDecision(rows[0]), { action: 'defer', pick: null });
 });
 
 // ---- applyResolveDecisions ----
@@ -346,4 +389,41 @@ test('【D3】replaceRowsByScenario: 置き換え対象外の場面の行・置�
   assert.ok(result.includes(libraryConflictRow), '他場面（library-conflict）の行はそのまま残る');
   assert.ok(result.includes(newUnresolvedRow), '置き換え後の新しい行が入っている');
   assert.ok(!result.includes(oldUnresolvedRow2), '置き換え対象の場面の古い行（再計算で消えたコード）は残らない');
+});
+
+// ---- ステップ8g: kinds スコープ（FinishModeState/StructuralModeStateが同じ場面
+// unresolved-codeで別種別の行を積むため、片方のモード突入がもう片方の行を消さないことを固定する） ----
+test('【8g】replaceRowsByScenario: kinds指定時は場面が一致してもkindsに無い種別の行は残る（material行はsection突入で消えない）', () => {
+  const materialRow = { id: 'unresolved-code:material:111111111211', scenario: 'unresolved-code', kind: 'material' };
+  const oldSectionRow = { id: 'unresolved-code:section:STEEL-OLD', scenario: 'unresolved-code', kind: 'section' };
+  const existingRows = [materialRow, oldSectionRow];
+
+  const newSectionRow = { id: 'unresolved-code:section:STEEL-NEW', scenario: 'unresolved-code', kind: 'section' };
+  const result = replaceRowsByScenario(existingRows, [newSectionRow], ['unresolved-code'], { kinds: ['section'] });
+
+  assert.ok(result.includes(materialRow), 'kinds=[section]のときmaterial行は場面が同じでも残る');
+  assert.ok(result.includes(newSectionRow), '置き換え後のsection行が入っている');
+  assert.ok(!result.includes(oldSectionRow), 'kindsに含まれるsectionの古い行は置き換えられる');
+});
+
+test('【8g】replaceRowsByScenario: 逆方向（kinds=[material,interiorMaster,boundaryMaster]）でもsection行は残る', () => {
+  const sectionRow = { id: 'unresolved-code:section:STEEL-OLD', scenario: 'unresolved-code', kind: 'section' };
+  const oldMaterialRow = { id: 'unresolved-code:material:111111111211', scenario: 'unresolved-code', kind: 'material' };
+  const existingRows = [sectionRow, oldMaterialRow];
+
+  const newMaterialRow = { id: 'unresolved-code:material:111111111212', scenario: 'unresolved-code', kind: 'material' };
+  const result = replaceRowsByScenario(existingRows, [newMaterialRow], ['unresolved-code'], {
+    kinds: ['material', 'interiorMaster', 'boundaryMaster'],
+  });
+
+  assert.ok(result.includes(sectionRow), 'kindsに無いsection行はFinishModeState突入のマージでも残る');
+  assert.ok(result.includes(newMaterialRow));
+  assert.ok(!result.includes(oldMaterialRow));
+});
+
+test('【8g】replaceRowsByScenario: kinds省略時は従来どおりkindを問わず場面だけで置き換える（後方互換）', () => {
+  const materialRow = { id: 'unresolved-code:material:111111111211', scenario: 'unresolved-code', kind: 'material' };
+  const sectionRow = { id: 'unresolved-code:section:STEEL-OLD', scenario: 'unresolved-code', kind: 'section' };
+  const result = replaceRowsByScenario([materialRow, sectionRow], [], ['unresolved-code']);
+  assert.deepEqual(result, [], 'kinds省略時は種別を問わず場面一致の行を全て置き換える');
 });

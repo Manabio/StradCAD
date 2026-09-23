@@ -172,16 +172,16 @@ test('【不変条件・ステップ6-1】store.js: bootReadyがreconcileIncomin
   );
 });
 
-// ステップ7d: reconcileIncomingCatalogsはRECONCILE_KINDS（material・interiorMaster・
-// boundaryMaster）の種別ループに一般化された。種別ごとにdoc・userが両方空なら
+// ステップ7d→8f: reconcileIncomingCatalogsはRECONCILE_KINDS（material・interiorMaster・
+// boundaryMaster・section）の種別ループに一般化された。種別ごとにdoc・userが両方空なら
 // continueでスキップし（不変条件7-1: 本体標準マスタは新規文書の起動では読まない）、
 // builtinはkindDef(kind).loadBuiltin()経由で読む（materialData.js等の直接動的importが
 // reconcileIncomingCatalogs本体から消える）。
-test('【不変条件・ステップ7d】store.js: reconcileIncomingCatalogsはRECONCILE_KINDS = [MATERIAL, INTERIOR_MASTER, BOUNDARY_MASTER]の種別ループで、種別ごとに doc・user両方空ならcontinueし、kindDef(kind).loadBuiltin()経由でbuiltinを読む', () => {
+test('【不変条件・ステップ7d→8f】store.js: reconcileIncomingCatalogsはRECONCILE_KINDS = [MATERIAL, INTERIOR_MASTER, BOUNDARY_MASTER, SECTION]の種別ループで、種別ごとに doc・user両方空ならcontinueし、kindDef(kind).loadBuiltin()経由でbuiltinを読む', () => {
   const src = readSrc('store.js');
   assert.ok(
-    /const RECONCILE_KINDS = \[CatalogKind\.MATERIAL, CatalogKind\.INTERIOR_MASTER, CatalogKind\.BOUNDARY_MASTER\];/.test(src),
-    'store.js に RECONCILE_KINDS = [CatalogKind.MATERIAL, CatalogKind.INTERIOR_MASTER, CatalogKind.BOUNDARY_MASTER] が見つからない',
+    /const RECONCILE_KINDS = \[CatalogKind\.MATERIAL, CatalogKind\.INTERIOR_MASTER, CatalogKind\.BOUNDARY_MASTER, CatalogKind\.SECTION\];/.test(src),
+    'store.js に RECONCILE_KINDS = [CatalogKind.MATERIAL, CatalogKind.INTERIOR_MASTER, CatalogKind.BOUNDARY_MASTER, CatalogKind.SECTION] が見つからない',
   );
   const body = extractBalancedBody(src, 'export async function reconcileIncomingCatalogs() {');
   assert.ok(body, 'store.js に reconcileIncomingCatalogs が見つからない');
@@ -421,14 +421,14 @@ test('【不変条件・ステップ7c・Minor-4/P5】store.js: saveCatalogDocum
   );
 });
 
-// ステップ7c: 同梱の一般化。BUNDLED_KINDS（material・interiorMaster・boundaryMaster）を
-// 定義し、saveCatalogDocumentがそれをbuiltinのloadBuiltin経由の解決・保存の両方で回している
-// ことを固定する（material固定への退行・splitBundleByKind未使用への退行を検知）。
-test('【不変条件・ステップ7c】store.js: BUNDLED_KINDSはmaterial・interiorMaster・boundaryMasterの3種別で、saveCatalogDocumentがkindDef(kind).loadBuiltin()とsplitBundleByKindを使っている', () => {
+// ステップ7c→8f: 同梱の一般化。BUNDLED_KINDS（material・interiorMaster・boundaryMaster・
+// section）を定義し、saveCatalogDocumentがそれをbuiltinのloadBuiltin経由の解決・保存の両方で
+// 回していることを固定する（material固定への退行・splitBundleByKind未使用への退行を検知）。
+test('【不変条件・ステップ7c→8f】store.js: BUNDLED_KINDSはmaterial・interiorMaster・boundaryMaster・sectionの4種別で、saveCatalogDocumentがkindDef(kind).loadBuiltin()とsplitBundleByKindを使っている', () => {
   const src = readSrc('store.js');
   assert.ok(
-    /const BUNDLED_KINDS = \[CatalogKind\.MATERIAL, CatalogKind\.INTERIOR_MASTER, CatalogKind\.BOUNDARY_MASTER\];/.test(src),
-    'store.js に BUNDLED_KINDS = [CatalogKind.MATERIAL, CatalogKind.INTERIOR_MASTER, CatalogKind.BOUNDARY_MASTER] が見つからない',
+    /const BUNDLED_KINDS = \[CatalogKind\.MATERIAL, CatalogKind\.INTERIOR_MASTER, CatalogKind\.BOUNDARY_MASTER, CatalogKind\.SECTION\];/.test(src),
+    'store.js に BUNDLED_KINDS = [CatalogKind.MATERIAL, CatalogKind.INTERIOR_MASTER, CatalogKind.BOUNDARY_MASTER, CatalogKind.SECTION] が見つからない',
   );
   const body = extractBalancedBody(src, 'async function saveCatalogDocument(floorRecords) {');
   assert.ok(body, 'store.js に saveCatalogDocument が見つからない');

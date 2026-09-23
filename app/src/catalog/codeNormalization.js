@@ -268,7 +268,11 @@ function rewriteBoundaryMasterRefs(snapshot, table) {
 // openingSubType は現状も読み取り専用（rewrite:null。ステップ10で参照の書換え先を実装するまでは
 // 書換えの入口を持たない——alias を積もうとしたら例外にする＝黙って効かないaliasを作らない）。
 // ----------------------------------------------------------------
-const SECTION_MEMBER_LISTS = ['columns', 'beams', 'structuralWalls', 'slabs', 'footings'];
+// 断面（sectionDefId）を持つ部材リスト名（唯一の定義箇所。ステップ8g QAで
+// modes/StructuralModeState.js の同名リストと二重定義になっていたためexportして共有する。
+// 保存済み snapshot（本ファイルの enumerate/rewrite）と現在の graph（StructuralModeState.js
+// _missingSectionUsage）の両方で同じ5系統・同じ並びを指す）。
+export const SECTION_MEMBER_LISTS = ['columns', 'beams', 'structuralWalls', 'slabs', 'footings'];
 
 function enumerateSectionRefs(snapshot) {
   if (!snapshot) return [];

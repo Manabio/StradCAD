@@ -453,6 +453,54 @@ test('formatReconcileNotice: kind=boundaryMasterは不一致・追加の文に�
   assert.match(msg, /ライブラリに新しい境界マスターが1件追加されました/);
 });
 
+// ---- ステップ8f: kind=section（断面）の照合。matchFields=['materialType','shape','width',
+// 'height','webThickness','flangeThickness','wallThickness']・minMatchFields=2（catalogKinds.js
+// 登録表）。8bで実装済みのsection.rewrite（SECTION_MEMBER_LISTSを回すcopy-on-write）がaliasを
+// 効かせるため、この段の8fではRECONCILE_KINDS/BUNDLED_KINDSへの追加とplanIncomingReconcile側の
+// 純ロジックの疎通だけを確認する。 ----
+function section(overrides) {
+  return { key: 'WOOD-120x120', materialType: 'WOOD', shape: 'rect', width: 120, height: 120, label: '120×120', ...overrides };
+}
+
+test('planIncomingReconcile: kind=sectionは内容完全一致・別キーならaliasesへ（自動読み替え。8bのrewriteが効く）', () => {
+  const existing = section({ key: 'WOOD-120x120' });
+  const doc = section({ key: 'WOOD-999x999', label: '120×120（同梱）' }); // materialType/shape/width/height完全一致・keyだけ違う
+  const plan = planIncomingReconcile({
+    kind: CatalogKind.SECTION, docEntries: [doc], appEntries: [existing],
+  });
+  assert.deepEqual(plan.aliases, [{ from: 'WOOD-999x999', to: 'WOOD-120x120' }]);
+  assert.deepEqual(plan.proposals, []);
+  assert.deepEqual(plan.adds, []);
+});
+
+test('planIncomingReconcile: kind=sectionは同materialType・shapeで寸法だけ違えばproposalsへ（minMatchFields:2で段を外せる）', () => {
+  const existing = section({ key: 'WOOD-120x120', width: 120, height: 120 });
+  const doc = section({ key: 'WOOD-150x150', width: 150, height: 150, label: '150×150' }); // materialType/shapeだけ一致
+  const plan = planIncomingReconcile({
+    kind: CatalogKind.SECTION, docEntries: [doc], appEntries: [existing],
+  });
+  assert.equal(plan.proposals.length, 1, '寸法違いは完全一致ではないためproposalsへ（builtinに無いユーザー断面の想定経路）');
+  assert.equal(plan.proposals[0].from, 'WOOD-150x150');
+  assert.equal(plan.proposals[0].candidates[0].key, 'WOOD-120x120');
+  assert.deepEqual(plan.adds, []);
+});
+
+test('planIncomingReconcile: kind=sectionはmaterialType/shapeとも一致しなければ（minMatchFields未満）addsへ', () => {
+  const existing = section({ key: 'WOOD-120x120' });
+  const doc = { key: 'STEEL-H100x100', materialType: 'STEEL', shape: 'hSection', width: 100, height: 100, webThickness: 6, flangeThickness: 8, label: 'H-100×100×6×8' };
+  const plan = planIncomingReconcile({
+    kind: CatalogKind.SECTION, docEntries: [doc], appEntries: [existing],
+  });
+  assert.deepEqual(plan.proposals, []);
+  assert.deepEqual(plan.adds, [doc]);
+});
+
+test('formatReconcileNotice: kind=sectionは名詞が「断面」', () => {
+  const plan = { adoptDoc: [], adds: [], aliases: [{ from: 'a', to: 'b' }] };
+  const msg = formatReconcileNotice(plan, { kind: CatalogKind.SECTION });
+  assert.equal(msg, '断面キーの読み替えを1件適用しました（保存すると確定します）');
+});
+
 test('結合: R17で1件skipされた場合、applyReconcilePlanの結果(addedKeys.length/skipped.length)をformatReconcileNoticeへ渡すと追加文＋スキップ文が出る', async () => {
   const dupA = material({ code: '999999999991', name: '同じ内容' });
   const dupB = material({ code: '999999999992', name: '同じ内容' });

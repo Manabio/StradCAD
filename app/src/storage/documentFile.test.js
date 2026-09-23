@@ -94,18 +94,19 @@ test('buildDocumentJson→parseDocumentEnvelope: catalogsがラウンドトリ�
   assert.deepEqual(parsed.catalogs, bundle);
 });
 
-// ステップ7c: 同梱の一般化（material・interiorMaster・boundaryMasterの3種別）。documentFile.js
-// 自体は種別非依存のはず（catalogs はそのままbase64化するだけ）——3種別を含む束でも
-// ラウンドトリップすることを固定する。
-test('buildDocumentJson→parseDocumentEnvelope: material・interiorMaster・boundaryMasterの3種別を含むcatalogsがラウンドトリップする', () => {
+// ステップ7c→8f: 同梱の一般化（material・interiorMaster・boundaryMaster・sectionの4種別）。
+// documentFile.js 自体は種別非依存のはず（catalogs はそのままbase64化するだけ）——4種別を
+// 含む束でもラウンドトリップすることを固定する。
+test('buildDocumentJson→parseDocumentEnvelope: material・interiorMaster・boundaryMaster・sectionの4種別を含むcatalogsがラウンドトリップする', () => {
   const bundle = {
     version: 1,
     catalogs: {
       material: [{ code: '101000000001', name: 'テスト材', spec: '', x: 0, y: 0, thickness: 12.5, category: 'panel' }],
       interiorMaster: [{ key: 'LIVING_ROOM', label: 'LDK', wallMaterial: '301000000001', wallFinish: '302000000001', ceilingHeight: 2400 }],
       boundaryMaster: [{ key: 'EXTERIOR_WALL', label: '外壁', kind: 'layered', layers: [{ role: '外壁材', code: '301600000001' }] }],
+      section: [{ key: 'WOOD-120x390', materialType: 'WOOD', shape: 'rect', width: 120, height: 390, label: '120×390（文書同梱）' }],
     },
-    encodings: { material: 'json', interiorMaster: 'json', boundaryMaster: 'json' },
+    encodings: { material: 'json', interiorMaster: 'json', boundaryMaster: 'json', section: 'json' },
     aliases: {},
   };
   const doc = { floors: [], struct: null, planes: null, site: null, info: null, bootPlaneId: null, catalogs: bundle };
@@ -113,6 +114,7 @@ test('buildDocumentJson→parseDocumentEnvelope: material・interiorMaster・bou
   assert.deepEqual(parsed.catalogs, bundle);
   assert.equal(parsed.catalogs.catalogs.interiorMaster.length, 1);
   assert.equal(parsed.catalogs.catalogs.boundaryMaster.length, 1);
+  assert.equal(parsed.catalogs.catalogs.section.length, 1);
 });
 
 test('buildDocumentJson: version は catalogs 追加後も 1 のまま', () => {

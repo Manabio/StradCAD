@@ -62,6 +62,10 @@ export class FinishModeState {
   // へマージする。モード側からproject.setCatalogResolveRowsを直接呼ばない（materialErrorと同じ
   // 「initの戻り値で運ぶ」型に合わせる）。
   catalogResolveRows = [];
+  // App.jsx のモードロード後マージ（replaceRowsByScenario）に渡す種別スコープ（ステップ8g）。
+  // StructuralModeState（section）と同じ場面（unresolved-code）で行を積むため、種別を絞らないと
+  // 片方のモード突入がもう片方の行を消してしまう（非observable。モード生存中は不変の定数）。
+  catalogResolveKinds = [CatalogKind.MATERIAL, CatalogKind.INTERIOR_MASTER, CatalogKind.BOUNDARY_MASTER];
 
   constructor(graph, project = null) {
     this.graph = graph;

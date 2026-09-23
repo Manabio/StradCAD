@@ -114,6 +114,12 @@ function buildColumnAxisRefs(graph, type) {
   return refs;
 }
 
+// モード切替失敗時のトースト文言用（ui/ModeBar.jsx MODESのlabelと同じ日本語。ModeBarは
+// 'opening'ボタンを持たないため、モード切替のappMode全種別をここで別に持つ）。
+const MODE_LOAD_LABELS = Object.freeze({
+  floorplan: '平面', finish: '仕上げ', structure: '構造', opening: '建具', elevation: '展開', site: '敷地',
+});
+
 const App = observer(() => {
   const project = useStore();
   const [size,        setSize]        = useState({ width: window.innerWidth, height: window.innerHeight });
@@ -324,7 +330,11 @@ const App = observer(() => {
             return s;
           })
         : appMode === 'structure'
-          ? import('./modes/StructuralModeState.js').then(m => new m.StructuralModeState(graph))
+          ? import('./modes/StructuralModeState.js').then(async m => {
+              const s = new m.StructuralModeState(graph);
+              await s.init(); // 断面カタログ（section）の未解決検出（裁定Q-C: 検出は構造モード突入時）
+              return s;
+            })
           : appMode === 'opening'
             ? import('./modes/OpeningModeState.js').then(m => {
                 const s = new m.OpeningModeState(graph, project, openingSelectRef.current);
@@ -349,14 +359,20 @@ const App = observer(() => {
       setMode(s);
       // 仕上げモード突入時に材データの照合エラーがあれば通知
       if (s.materialError) setToast({ msg: s.materialError, key: Date.now() });
-      // 指示UI（ステップ6-3）場面(b)unresolved-code: FinishModeState.init()が組み立てた行を
-      // project.catalogResolveRowsへマージする（自分の場面の行だけを置き換え、store.jsの
-      // 起動時reconcileが積んだ(a)/(c)/proposeの行・保留中の行は残す）。
+      // 指示UI（ステップ6-3→ステップ8g）場面(b)unresolved-code: FinishModeState/
+      // StructuralModeStateのinit()が組み立てた行をproject.catalogResolveRowsへマージする
+      // （自分の場面・自分の種別（s.catalogResolveKinds）の行だけを置き換え、store.jsの
+      // 起動時reconcileが積んだ(a)/(c)/proposeの行・もう片方のモードが積んだ(b)の行・
+      // 保留中の行は残す）。
       if (s.catalogResolveRows) {
         project.setCatalogResolveRows(
-          replaceRowsByScenario(project.catalogResolveRows, s.catalogResolveRows, ['unresolved-code']),
+          replaceRowsByScenario(project.catalogResolveRows, s.catalogResolveRows, ['unresolved-code'], { kinds: s.catalogResolveKinds }),
         );
       }
+    }).catch((e) => {
+      if (cancelled) return; // 切替済み（後出し）は握りつぶす（他の動的importの連打ガードと同じ規約）
+      console.error(`${MODE_LOAD_LABELS[appMode] ?? appMode}モードの読み込みに失敗しました:`, e);
+      setToast({ msg: `${MODE_LOAD_LABELS[appMode] ?? appMode}モードの読み込みに失敗しました`, key: Date.now() });
     });
 
     return () => { cancelled = true; };

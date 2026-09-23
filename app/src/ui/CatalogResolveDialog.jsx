@@ -4,6 +4,7 @@ import { kindDef } from '../catalog/catalogKinds.js';
 import { displayNameOf } from '../catalog/catalogMatch.js';
 import { CATALOG_DIFF_COLOR, CATALOG_DIFF_MARK, diffPairs } from '../catalog/catalogDiffView.js';
 import { buildCatalogRows } from '../catalog/catalogMaintenance.js';
+import { defaultResolveDecision } from '../catalog/resolveQueue.js';
 
 const SCENARIO_LABELS = Object.freeze({
   'library-conflict': '(a) ライブラリ内の衝突',
@@ -23,6 +24,8 @@ function actionLabel(action) {
 }
 
 // ステップ7d QA指摘Minor-5: usage の location（参照箇所の種類）を日本語化する唯一の対応表。
+// ステップ8g: 断面（section）の未解決usageはgraph.columns/beams/structuralWalls/slabs/footings
+// のいずれかをlocationに持つ（modes/StructuralModeState.js _missingSectionUsage参照）。
 const LOCATION_LABELS = Object.freeze({
   floor: '階',
   room: '部屋',
@@ -33,6 +36,11 @@ const LOCATION_LABELS = Object.freeze({
   ceilingBacking: '天井下地',
   floorBacking: '床下地',
   opening: '建具',
+  columns: '柱',
+  beams: '梁',
+  structuralWalls: '構造壁',
+  slabs: 'スラブ',
+  footings: '基礎',
 });
 
 function usageSummary(usage) {
@@ -42,13 +50,11 @@ function usageSummary(usage) {
   return [...byLocation.entries()].map(([loc, n]) => `${LOCATION_LABELS[loc] ?? loc}×${n}`).join('・');
 }
 
-/** 既定の決定: 候補があれば承認、無ければ保留。 */
-function defaultDecision(row) {
-  if (row.candidates.length > 0 && row.allowedActions.includes('approve')) {
-    return { action: 'approve', pick: keyOfCandidate(row, row.candidates[0]) };
-  }
-  return { action: 'defer', pick: null };
-}
+// 既定の決定（候補があれば承認、proposeは既定defer、無ければ保留）は
+// catalog/resolveQueue.js defaultResolveDecision が唯一の定義箇所（コーディネーター指摘・
+// 2026-09-23: 「まとめて承認」で未接触のpropose行まで自動承認してしまわないための裁定を、
+// ここと重複させず1箇所にまとめる）。
+const defaultDecision = defaultResolveDecision;
 
 function keyOfCandidate(row, candidate) {
   if (!candidate) return null;

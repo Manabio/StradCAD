@@ -21,7 +21,11 @@ const ALLOWED_ACTIONS = Object.freeze({
   'library-conflict': Object.freeze(['approve', 'pick', 'markOverride', 'defer']),
   'unresolved-code':  Object.freeze(['approve', 'pick', 'defer']),
   unsupported:        Object.freeze(['approve', 'pick', 'defer']),
-  propose:            Object.freeze(['approve', 'pick', 'addToLibrary']),
+  // 'defer'（保留）は全場面で選べる（コーディネーター裁定・2026-09-23: applyResolveDecisions の
+  // defer 経路は既に場面非依存の汎用処理——action!=='defer' のときだけ allowedActions を検査する
+  // ため、'defer' 自体は元々どの場面でも動作はしていた。propose の既定decisionをdeferにした
+  // 変更に合わせ、ラジオボタンにも「保留」を表示して既定選択が見た目にも一致するようにする）。
+  propose:            Object.freeze(['approve', 'pick', 'addToLibrary', 'defer']),
 });
 
 /**
@@ -166,19 +170,55 @@ export function buildResolveRows({
   return rows;
 }
 
+/** row.kindのkeyOfでcandidateのキーを取り出す（keyOfが例外を投げる壊れたcandidateはnull）。 */
+function keyOfResolveCandidate(row, candidate) {
+  if (!candidate) return null;
+  try {
+    return kindDef(row.kind).keyOf(candidate);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 指示UI（ui/CatalogResolveDialog.jsx）の行の既定の決定（ユーザーが触っていない行に使う）。
+ * 裁定（コーディネーター・2026-09-23）: propose（4.6.1の「類似項目の提案」。同梱データが
+ * ユーザーの意図しない置きかえ候補として現れる場面）は**候補数に関わらず既定defer**——
+ * R10「自動では置きかえない」の徹底で、承認は行ごとの明示操作にする（「まとめて承認」
+ * ボタンで未接触のpropose行まで一括approveされてしまう退行を防ぐ）。unresolved-code・
+ * library-conflictは現行どおり（候補があれば先頭候補をapprove）。
+ * ui/CatalogResolveDialog.jsx はこの関数を経由し、自前で同じ判定を持たない
+ * （唯一の定義箇所。以前はコンポーネント内のローカル関数だったため、コーディネーター指摘で
+ * catalog/resolveQueue.js（buildResolveRowsと同じ行モデルの器）へ抽出した）。
+ * @param {object} row buildResolveRows の1行
+ * @returns {{action:string, pick:string|null}}
+ */
+export function defaultResolveDecision(row) {
+  if (row.scenario !== 'propose' && row.candidates.length > 0 && row.allowedActions.includes('approve')) {
+    return { action: 'approve', pick: keyOfResolveCandidate(row, row.candidates[0]) };
+  }
+  return { action: 'defer', pick: null };
+}
+
 /**
  * 既存の行から scenarios に含まれる場面の行を取り除き、newRows を追加した配列を返す
  * （非破壊。I/O なし）。検出元が複数ある（store.js起動時reconcile＝(a)library-conflict/
  * (c)unsupported/propose・modes/FinishModeState.js init＝(b)unresolved-code）ため、
  * それぞれ「自分が担当する場面の行」だけを最新の内容へ置き換えて project.catalogResolveRows
  * へ書き戻すための合流点（他の検出元が積んだ行・保留中の行を消さない）。
+ * ステップ8g: `kinds` を渡すと「場面が一致し、かつ kind ∈ kinds」の行だけを置き換える
+ * （省略時は kind を問わず場面だけで置き換える＝従来どおりの後方互換）。App.jsx のモード
+ * ロード後マージが FinishModeState（material/interiorMaster/boundaryMaster）と
+ * StructuralModeState（section）の両方から同じ場面（unresolved-code）で呼ばれるように
+ * なったため、種別スコープを絞らないと片方のモード突入がもう片方の行を消してしまう。
  * @param {object[]} existingRows
  * @param {object[]} newRows
  * @param {string[]} scenarios 置き換え対象の場面（例: ['unresolved-code']）
+ * @param {{ kinds?: string[] }} [opts] kinds指定時はその種別の行だけを置き換え対象にする
  * @returns {object[]}
  */
-export function replaceRowsByScenario(existingRows, newRows, scenarios) {
-  const kept = (existingRows ?? []).filter(r => !scenarios.includes(r.scenario));
+export function replaceRowsByScenario(existingRows, newRows, scenarios, { kinds } = {}) {
+  const kept = (existingRows ?? []).filter(r => !(scenarios.includes(r.scenario) && (!kinds || kinds.includes(r.kind))));
   return [...kept, ...newRows];
 }
 

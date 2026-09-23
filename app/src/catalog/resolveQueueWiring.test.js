@@ -220,6 +220,43 @@ test('【不変条件・ステップ6-3】modes/FinishModeState.js: initがbuild
   assert.ok(/catalogResolveRows/.test(initBody), 'init() の戻り値にcatalogResolveRowsが含まれていない');
 });
 
+// ---- modes/FinishModeState.js: catalogResolveKinds（ステップ8g。App.jsxの共通マージが
+// s.catalogResolveKindsを読むため、StructuralModeStateと同じ場面(unresolved-code)で行を
+// 積むFinishModeState側も自分の種別スコープを持たないと、構造モード突入がsection以外の
+// scenarioを消さない代わりに、Finish突入時にsection行まで巻き込んで消してしまう） ----
+test('【不変条件・ステップ8g】modes/FinishModeState.js: catalogResolveKindsがMATERIAL/INTERIOR_MASTER/BOUNDARY_MASTERの3種別', () => {
+  const src = readSrc('modes/FinishModeState.js');
+  assert.ok(
+    /catalogResolveKinds\s*=\s*\[CatalogKind\.MATERIAL,\s*CatalogKind\.INTERIOR_MASTER,\s*CatalogKind\.BOUNDARY_MASTER\];/.test(src),
+    'FinishModeState.js に catalogResolveKinds = [CatalogKind.MATERIAL, CatalogKind.INTERIOR_MASTER, CatalogKind.BOUNDARY_MASTER] が見つからない',
+  );
+});
+
+test('【不変条件・ステップ8g】modes/StructuralModeState.js: catalogResolveKindsが[CatalogKind.SECTION]', () => {
+  const src = readSrc('modes/StructuralModeState.js');
+  assert.ok(
+    /catalogResolveKinds\s*=\s*\[CatalogKind\.SECTION\];/.test(src),
+    'StructuralModeState.js に catalogResolveKinds = [CatalogKind.SECTION] が見つからない',
+  );
+});
+
+// ---- QA指摘（ステップ8g）: modes/*.jsでcatalogResolveRows（場面(b)の行）を持つモードは
+// catalogResolveKinds（App.jsxの共通マージ用の種別スコープ）も必ず持つ（片方だけ追加して
+// もう片方を忘れる退行——App.jsxの共通replaceRowsByScenario呼び出しがkinds:undefinedになり
+// 場面(unresolved-code)の他モード分の行を巻き込んで消してしまう）。 ----
+test('【不変条件・ステップ8g QA指摘】modes/*.js: catalogResolveRowsを宣言するモードは必ずcatalogResolveKindsも宣言する', () => {
+  const dir = path.resolve(appSrc, 'modes');
+  const files = fs.readdirSync(dir).filter(f => f.endsWith('.js') && !f.endsWith('.test.js'));
+  const offenders = [];
+  for (const file of files) {
+    const src = fs.readFileSync(path.join(dir, file), 'utf8');
+    const hasRows = /\bcatalogResolveRows\s*=/.test(src);
+    const hasKinds = /\bcatalogResolveKinds\s*=/.test(src);
+    if (hasRows && !hasKinds) offenders.push(file);
+  }
+  assert.deepEqual(offenders, [], `catalogResolveRowsはあるがcatalogResolveKindsが無いモードがある: ${offenders.join(', ')}`);
+});
+
 // ---- App.jsx: 動的import（連打ガード・lazy不使用）----
 test('【不変条件・ステップ6-3】App.jsx: CatalogResolveDialogを動的import（import().then().catch()）で開き、lazy(は使わない', () => {
   const src = readSrc('App.jsx');
@@ -241,13 +278,111 @@ test('【不変条件・ステップ6-3】App.jsx: applyCatalogResolutions適用
   assert.ok(m, 'モード切替effectの依存配列に catalogReloadKey が含まれていない');
 });
 
-// ---- App.jsx: FinishModeState.init()の(b)行をproject側へマージ ----
-test('【不変条件・ステップ6-3】App.jsx: モードロード後にs.catalogResolveRowsをreplaceRowsByScenario(...,[\'unresolved-code\'])でマージする', () => {
+// ---- App.jsx: FinishModeState/StructuralModeState.init()の(b)行をproject側へマージ ----
+test('【不変条件・ステップ6-3→8g】App.jsx: モードロード後にs.catalogResolveRowsをreplaceRowsByScenario(...,[\'unresolved-code\'], { kinds: s.catalogResolveKinds })でマージする', () => {
   const src = readSrc('App.jsx');
   assert.ok(/from ['"]\.\/catalog\/resolveQueue\.js['"]/.test(src), 'App.jsx が catalog/resolveQueue.js を import していない');
   assert.ok(
-    /replaceRowsByScenario\(\s*project\.catalogResolveRows,\s*s\.catalogResolveRows,\s*\['unresolved-code'\]\s*\)/.test(src),
-    'App.jsx が s.catalogResolveRows を replaceRowsByScenario で場面(unresolved-code)だけ置き換えてマージしていない',
+    /replaceRowsByScenario\(\s*project\.catalogResolveRows,\s*s\.catalogResolveRows,\s*\['unresolved-code'\],\s*\{\s*kinds:\s*s\.catalogResolveKinds\s*\}\s*\)/.test(src),
+    'App.jsx が s.catalogResolveRows を replaceRowsByScenario で場面(unresolved-code)・種別(s.catalogResolveKinds)だけ置き換えてマージしていない（ステップ8g: kindsを渡さないとFinish/Structuralの片方のモード突入がもう片方の行を消す）',
+  );
+});
+
+// ---- QA指摘（ステップ8g）: モード切替loaderの失敗（動的import・init()の例外）を握りつぶさず
+// トースト通知する（他の動的import連打ガード=catalogResolveLoadingRef等と同じ.catch規約） ----
+test('【不変条件・ステップ8g QA指摘】App.jsx: モード切替のloaderに.catchがあり、モードの読み込みに失敗しましたをトースト通知する', () => {
+  const src = readSrc('App.jsx');
+  const loaderThenIdx = src.indexOf('loader.then(');
+  assert.ok(loaderThenIdx >= 0, 'App.jsx に loader.then(...) が見つからない');
+  // loader.then(...) の閉じ括弧直後に .catch(...) が続くことを、波括弧の対応を数えて確認する
+  // （modes/*ModeState.jsのextractBalancedBodyと同型。非貪欲正規表現だと途中のネストした
+  // 波括弧で誤って打ち切る恐れがあるため）。
+  let depth = 0, i = loaderThenIdx + 'loader.then('.length - 1; // 直前の '(' から数える
+  for (; i < src.length; i++) {
+    if (src[i] === '(') depth++;
+    else if (src[i] === ')') { depth--; if (depth === 0) break; }
+  }
+  const afterThen = src.slice(i + 1, i + 20);
+  assert.ok(/^\s*\.catch\(/.test(afterThen), `App.jsx の loader.then(...) に .catch(...) が続いていない（読み込み失敗を握りつぶす退行）: "${afterThen}"`);
+
+  const catchIdx = src.indexOf('.catch(', i);
+  assert.ok(catchIdx >= 0, 'App.jsx に loader.then(...).catch(...) の .catch が見つからない');
+  let cdepth = 0, j = catchIdx + '.catch('.length - 1;
+  for (; j < src.length; j++) {
+    if (src[j] === '(') cdepth++;
+    else if (src[j] === ')') { cdepth--; if (cdepth === 0) break; }
+  }
+  const catchBody = src.slice(catchIdx, j + 1);
+  assert.ok(
+    /モードの読み込みに失敗しました/.test(catchBody),
+    'App.jsx の loader の catch がユーザー向けメッセージ「〇〇モードの読み込みに失敗しました」を出していない',
+  );
+  assert.ok(/setToast\(/.test(catchBody), 'App.jsx の loader の catch が setToast(...) を呼んでいない（握りつぶして無反応にする退行）');
+});
+
+// ---- App.jsx: 構造モード突入で await s.init() する（ステップ8g）----
+test('【不変条件・ステップ8g】App.jsx: 構造モードのローダーがawait s.init()を呼んでいる（断面カタログの未解決検出は構造モード突入時）', () => {
+  const src = readSrc('App.jsx');
+  const m = /appMode === 'structure'\s*\?\s*import\('\.\/modes\/StructuralModeState\.js'\)\.then\(async m => \{([\s\S]*?)\}\)/.exec(src);
+  assert.ok(m, "App.jsx の appMode==='structure' 分岐が async ローダー（.then(async m => {...})）になっていない");
+  assert.ok(/await s\.init\(\)/.test(m[1]), '構造モードのローダーが await s.init() を呼んでいない');
+});
+
+// ---- modes/StructuralModeState.js: 場面(b)の行組み立て（ステップ8g） ----
+test('【不変条件・ステップ8g】modes/StructuralModeState.js: initがkindDef(SECTION).loadBuiltin→composeCatalog→buildResolveRows(kind:SECTION)で行を組み立てる', () => {
+  const src = readSrc('modes/StructuralModeState.js');
+  assert.ok(/from ['"]\.\.\/catalog\/resolveQueue\.js['"]/.test(src), 'StructuralModeState.js が catalog/resolveQueue.js を import していない');
+  assert.ok(/from ['"]\.\.\/catalog\/catalogRegistry\.js['"]/.test(src), 'StructuralModeState.js が catalog/catalogRegistry.js を import していない');
+  const initBody = extractBalancedBody(src, 'async init() {');
+  assert.ok(initBody, 'StructuralModeState.js に init() が見つからない');
+  assert.ok(/kindDef\(\s*CatalogKind\.SECTION\s*\)\.loadBuiltin\(\)/.test(initBody), 'init() が kindDef(CatalogKind.SECTION).loadBuiltin() を呼んでいない（本体標準マスタを直接importする退行）');
+  assert.ok(/composeCatalog\(\s*CatalogKind\.SECTION,/.test(initBody), 'init() が composeCatalog(CatalogKind.SECTION, ...) を呼んでいない');
+  assert.ok(/buildResolveRows\(\s*\{\s*kind:\s*CatalogKind\.SECTION,/.test(initBody), 'init() が buildResolveRows({ kind: CatalogKind.SECTION, ... }) を呼んでいない');
+  assert.ok(/catalogResolveRows/.test(initBody), 'init() の戻り値にcatalogResolveRowsが含まれていない');
+  assert.ok(/from ['"]\.\.\/catalog\/codeNormalization\.js['"]/.test(src), 'StructuralModeState.js が catalog/codeNormalization.js を import していない');
+  assert.ok(/\bpeekUnresolvedCodes\(\)/.test(initBody), 'init() が peekUnresolvedCodes() を呼んでいない（FinishModeState.init と同型で全階累積の未解決をsectionでフィルタして合流する契約）');
+  assert.ok(!/\btakeUnresolvedCodes\(\)/.test(src), 'StructuralModeState.js がtakeUnresolvedCodesを呼んでいる（他の消費者の蓄積を消してしまう退行。peekUnresolvedCodesを使う契約）');
+});
+
+// ---- QA指摘（ステップ8g）: SECTION_MEMBER_LISTSの唯一の定義はcatalog/codeNormalization.js。
+// modes/StructuralModeState.js は自前で再定義せずimportする（片方だけ増やす変異が構造的に
+// 不可能になる。二重定義への退行を検知） ----
+test('【不変条件・ステップ8g QA指摘】modes/StructuralModeState.js: SECTION_MEMBER_LISTSを自前定義せずcatalog/codeNormalization.jsからimportする', () => {
+  const src = readSrc('modes/StructuralModeState.js');
+  assert.ok(
+    /import\s*\{[^}]*\bSECTION_MEMBER_LISTS\b[^}]*\}\s*from\s*['"]\.\.\/catalog\/codeNormalization\.js['"]/.test(src),
+    'StructuralModeState.js が SECTION_MEMBER_LISTS を catalog/codeNormalization.js から import していない',
+  );
+  assert.ok(
+    !/const SECTION_MEMBER_LISTS\s*=/.test(src),
+    'StructuralModeState.js が SECTION_MEMBER_LISTS を自前で再定義している（catalog/codeNormalization.js との二重定義への退行）',
+  );
+});
+
+test('【不変条件・ステップ8g QA指摘】catalog/codeNormalization.js: SECTION_MEMBER_LISTSをexportしている', () => {
+  const src = readSrc('catalog/codeNormalization.js');
+  assert.ok(
+    /export const SECTION_MEMBER_LISTS\s*=/.test(src),
+    'catalog/codeNormalization.js が SECTION_MEMBER_LISTS をexportしていない',
+  );
+});
+
+// ---- QA指摘（コーディネーター裁定・2026-09-23）: 指示UIの既定の決定（propose行は既定defer）は
+// catalog/resolveQueue.js defaultResolveDecideの唯一の定義箇所。ui/CatalogResolveDialog.jsx は
+// 自前でロジックを再実装せずそれをimportする（二重実装への退行を検知） ----
+test('【不変条件・QA指摘】ui/CatalogResolveDialog.jsx: defaultDecisionはcatalog/resolveQueue.jsのdefaultResolveDecisionをimportして使う（自前の再実装を持たない）', () => {
+  const src = readSrc('ui/CatalogResolveDialog.jsx');
+  assert.ok(
+    /from ['"]\.\.\/catalog\/resolveQueue\.js['"]/.test(src),
+    'CatalogResolveDialog.jsx が catalog/resolveQueue.js を import していない',
+  );
+  assert.ok(
+    /\bdefaultResolveDecision\b/.test(src),
+    'CatalogResolveDialog.jsx が defaultResolveDecision を参照していない',
+  );
+  assert.ok(
+    !/function defaultDecision\(row\)/.test(src),
+    'CatalogResolveDialog.jsx に defaultDecision のローカル関数実装が残っている（catalog/resolveQueue.jsとの二重実装への退行）',
   );
 });
 

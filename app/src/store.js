@@ -243,10 +243,10 @@ export async function loadCatalogOverlaysFromIDB({
 
 /**
  * 起動時の同梱カタログ照合の対象種別（ステップ6-1は material 単独だったが、ステップ7dで
- * 内装マスター・境界マスターへ一般化した。section・openingSubType は選択UIが無いためまだ含めない
- * ——BUNDLED_KINDS（同梱の一般化。ステップ7c）と同じ3種別）。
+ * 内装マスター・境界マスターへ、ステップ8fで断面（section）へ一般化した。openingSubType は
+ * 選択UIが無いためまだ含めない——BUNDLED_KINDS（同梱の一般化。ステップ7c→8f）と同じ4種別）。
  */
-const RECONCILE_KINDS = [CatalogKind.MATERIAL, CatalogKind.INTERIOR_MASTER, CatalogKind.BOUNDARY_MASTER];
+const RECONCILE_KINDS = [CatalogKind.MATERIAL, CatalogKind.INTERIOR_MASTER, CatalogKind.BOUNDARY_MASTER, CatalogKind.SECTION];
 
 /**
  * 起動時の同梱カタログ照合（ステップ6-1→ステップ7d: 種別ループへ一般化）。loadCatalogOverlaysFromIDB
@@ -601,12 +601,12 @@ export async function switchFloor(nextPlaneId) {
 }
 
 /**
- * 文書同梱する種別の一覧（ステップ7c: 同梱の一般化。それまでは material のみだった）。
- * section・openingSubType は使用キー収集経路（columns/beams等のsectionDefId・openingsの
+ * 文書同梱する種別の一覧（ステップ7c: 同梱の一般化。それまでは material のみだった。
+ * ステップ8fで断面（section）を追加）。openingSubType は使用キー収集経路（openingsの
  * subType）はusedEntries.jsに既にあるが、選択UI自体が無いためまだここには含めない
- * （ステップ8/10で追加予定）。
+ * （ステップ10で追加予定）。
  */
-const BUNDLED_KINDS = [CatalogKind.MATERIAL, CatalogKind.INTERIOR_MASTER, CatalogKind.BOUNDARY_MASTER];
+const BUNDLED_KINDS = [CatalogKind.MATERIAL, CatalogKind.INTERIOR_MASTER, CatalogKind.BOUNDARY_MASTER, CatalogKind.SECTION];
 
 /**
  * 全階のバイト列を decode し、BUNDLED_KINDS の使用キーを種別ごとに集めて返す（4.3・

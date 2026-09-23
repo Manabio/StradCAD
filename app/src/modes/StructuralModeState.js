@@ -1,6 +1,12 @@
 import { makeObservable, observable, action, runInAction } from 'mobx';
 import { beamAxisMoveRange } from '../structural/beamAxisMove.js';
 import { sameIdSet } from '../structural/memberSelection.js';
+import { CatalogKind, kindDef } from '../catalog/catalogKinds.js';
+import { composeCatalog } from '../catalog/catalogRegistry.js';
+import { buildResolveRows } from '../catalog/resolveQueue.js';
+import {
+  buildCodeTable, currentDocumentAliases, peekUnresolvedCodes, SECTION_MEMBER_LISTS,
+} from '../catalog/codeNormalization.js';
 
 const EMPTY_IDS = Object.freeze(new Set());
 
@@ -19,6 +25,18 @@ export class StructuralModeState {
   // preloadMove は no-op、startMove も同期のまま moveState を立てる。
   moveState        = null;
 
+  // 指示UI（ステップ8g）場面(b)unresolved-codeの行。init()で組み立て、App.jsxが
+  // project.catalogResolveRows（catalog/resolveQueue.js replaceRowsByScenarioで自分の種別だけ
+  // 置換）へマージする。FinishModeState.catalogResolveRowsと同型（materialErrorに相当する
+  // ブロッキングエラーは持たない——未解決でも既定フォールバック（findSectionEntry呼び出し側の
+  // `?? 300`等）で図面・構造再計算は止まらない契約のため）。
+  catalogResolveRows = [];
+  // App.jsx のモードロード後マージ（replaceRowsByScenario）に渡す種別スコープ（ステップ8g）。
+  // FinishModeState（material/interiorMaster/boundaryMaster）と同じ場面（unresolved-code）で
+  // 行を積むため、種別を絞らないと片方のモード突入がもう片方の行を消してしまう
+  // （非observable。モード生存中は不変の定数）。
+  catalogResolveKinds = [CatalogKind.SECTION];
+
   constructor(graph) {
     this.graph = graph;
     makeObservable(this, {
@@ -26,6 +44,7 @@ export class StructuralModeState {
       placementState:   observable.ref,
       axisEditState:    observable.ref,
       moveState:        observable.ref,
+      catalogResolveRows: observable.ref,
       selectMembers:     action,
       clearSelection:    action,
       startAxisEdit:     action,
@@ -36,6 +55,63 @@ export class StructuralModeState {
       commitMove:        action,
       cancelMove:        action,
     });
+  }
+
+  /**
+   * 断面カタログ（構造断面。CatalogKind.SECTION）の起動時未解決検出（ステップ8g・裁定Q-C:
+   * 検出は構造モード突入時）。FinishModeState.init と同型——overlay込みで合成した断面Map
+   * （kindDef(SECTION).loadBuiltin() → composeCatalog。structural/sectionCatalog.js
+   * findSectionEntryと同じ合成結果になる）に graph.columns/beams/structuralWalls/slabs/
+   * footings の sectionDefId が無いものを場面(b)unresolved-codeの行として組み立てる。
+   * 境界マスターの未解決（一過性。モード境界でselectBoundaryMasterが再導出して消える）とは
+   * 違い、断面の未解決は一過性ではない——構造再計算（structuralRecompute.js）は既存部材の
+   * sectionDefId を書き換えない（在来木造の conformWoodSections が導出し直す柱・梁の断面
+   * だけは例外——階の柱寸法へ追従して sectionDefId 自体が変わるため、そちらは自然に解消しうる）。
+   * materialErrorに相当するブロッキングエラーは持たない——未解決でも既定フォールバック
+   * （findSectionEntry呼び出し側の`?? 300`等）で図面・構造再計算は止まらない契約のため、
+   * ok は常に true（例外はApp.jsxのモード切替まで素通しする。materialと同じ扱い）。
+   * @returns {Promise<{ ok: boolean, catalogResolveRows: object[] }>}
+   */
+  async init() {
+    const builtin = await kindDef(CatalogKind.SECTION).loadBuiltin();
+    const sectionMap = composeCatalog(CatalogKind.SECTION, builtin);
+    const missingUsage = this._missingSectionUsage(sectionMap);
+    // FinishModeState._buildUnresolvedCodeRowsと同型: peekUnresolvedCodes()（全階累積・全種別）
+    // をsectionでフィルタし、今のコード表（文書固有の読み替え）で再解決できるものはここで捨てる
+    // （section.rewriteは復元時=decodeFloorSnapshot/restoreGraphで既に自階の未知sectionDefIdを
+    // 解消しているため実質ほぼ空だが、自階以外で蓄積された未解決が残る場合に備えて合流する）。
+    const table = buildCodeTable({ aliases: currentDocumentAliases(CatalogKind.SECTION) });
+    const stillUnresolved = peekUnresolvedCodes().filter(u => u.kind === CatalogKind.SECTION).filter(u => {
+      const mapped = table.has(u.code) ? table.get(u.code) : u.code;
+      return mapped == null || !sectionMap.has(mapped);
+    });
+    const catalogResolveRows = buildResolveRows({
+      kind: CatalogKind.SECTION,
+      unresolved: [...missingUsage, ...stillUnresolved],
+      appEntries: [...sectionMap.values()],
+    });
+    runInAction(() => { this.catalogResolveRows = catalogResolveRows; });
+    return { ok: true, catalogResolveRows };
+  }
+
+  /**
+   * catalog/codeNormalization.js SECTION_MEMBER_LISTS（columns/beams/structuralWalls/slabs/
+   * footings。保存済みsnapshotの走査と唯一共有する定義）が参照する断面キー（sectionDefId）の
+   * うち、合成後カタログ（sectionMap）に無いものを usage 配列（buildResolveRowsのunresolved
+   * 引数の形。{code, location, memberId}）として集める。こちらは保存済みsnapshotではなく
+   * 現在のgraphを直接見る——FinishModeState._missingUsageForKindと同じ
+   * 「モード側は生グラフを見る」設計に合わせる。
+   */
+  _missingSectionUsage(sectionMap) {
+    const usage = [];
+    for (const location of SECTION_MEMBER_LISTS) {
+      for (const member of this.graph[location] ?? []) {
+        if (member?.sectionDefId && !sectionMap.has(member.sectionDefId)) {
+          usage.push({ code: member.sectionDefId, location, memberId: member.id });
+        }
+      }
+    }
+    return usage;
   }
 
   // 選択中の部材id集合を差し替える（同内容なら書き換えない＝observer の無駄な再描画を避ける）。
@@ -94,9 +170,11 @@ export class StructuralModeState {
   get isMoving() { return this.moveState !== null; }
 
   // dispose は clearSelection に加えて cancelMove を呼ぶ（clearSelection 自体には入れない——
-  // 空白タップ等での意図しない移動中断を避けるため）。
+  // 空白タップ等での意図しない移動中断を避けるため）。断面データ（ステップ8g）はFinishModeState
+  // と同じくモード離脱時に破棄する。
   dispose() {
     this.clearSelection();
     this.cancelMove();
+    this.catalogResolveRows = [];
   }
 }
