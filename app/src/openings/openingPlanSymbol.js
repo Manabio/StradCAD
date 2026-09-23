@@ -7,13 +7,19 @@
 // notched（枠内法へ寄せる）経路を共有する（renderer/OpeningsLayer.jsx 旧
 // otherMechanismSymbol内のswingDoubleSymbol/swingChildSymbol/freeSymbol/freeDoubleSymbol/
 // fireDoorSymbol/fireFoldSymbolと同じ判断の移設）。
+// 11c: 引戸系＋上げ下げ窓（SLIDE_DOUBLE・SLIDE_SINGLE・SLIDE_LAYOUT・HUNG）とsashOpen枠を追加移行。
+// SLIDE_DOUBLEはSWINGと同様planSymbolPlanを介さずband直接の専用扱い（旧jsx entry.mechanism===
+// SLIDE_DOUBLE早期return）。SLIDE_SINGLE/SLIDE_LAYOUT/HUNGはSASH_OPEN_MECHANISMS（記号自身が
+// 開口全幅の枠矩形を描く非蝶番系）のうち本ステップで移行する3機構——旧
+// otherMechanismSymbol内のslideSingleSymbol/slideLayoutSymbol/hungSymbol、旧sashFrameOpenSymbol
+// と同じ判断の移設（windowLine群10機構は同じSASH_OPEN_MECHANISMSだが11dで移行）。
 //
 // buildOpeningPlanSymbol(opening, ctx) → PlanPrimitive[] | null。
 // **STANDARD/DETAILで entry があり IMPLEMENTED_MECHANISMS に含まれる機構のうち、まだ移行して
 // いないものは null を返す**（呼び出し側 renderer/OpeningsLayer.jsx は null なら旧経路
-// （otherMechanismSymbol等）をそのまま実行する暫定契約。11c〜11e で残りの機構を移行し、
+// （otherMechanismSymbol等）をそのまま実行する暫定契約。11d〜11e で残りの機構を移行し、
 // 11eでnull経路自体を削除する）。SWING_GROUP_MECHANISMS（11b-1）・HINGE_GROUP2_MECHANISMS
-// （11b-2）は非nullを返す。
+// （11b-2）・SLIDE_DOUBLE・SASH_OPEN_GROUP_MECHANISMS（11c）は非nullを返す。
 //
 // openingPlanSymbolGeometry.js と同じ抽出方針: react-konva/store.js/snap.js/.jsxを静的に
 // 引かないことで node:test から単体 import できるようにする（抽出純モジュールはnode:testから
@@ -26,12 +32,13 @@
 //       'leaf'(=中線。開いた扉本体) | 'arc'(=細線。開き勝手の動作弧)
 // ================================================================
 
-import { LINE_WEIGHT_MM } from '../core.js';
+import { LINE_WEIGHT_MM, OpeningCategory } from '../core.js';
 import { IMPLEMENTED_MECHANISMS, OpeningMechanism } from './openingCatalog.js';
 import {
   planFrameBand, bandPerp, planSymbolPlan, swingOpenPerpDir, innerSpanOpening,
   swingClosedLeafSpan, closedAngleFor, leafOpenAngle, angleVectors,
   swingDoubleLeafSpecs, swingChildLeafSpecs, fireDoorLeafSpecs, fireFoldLeafSpecs,
+  trackOf, trackPerp, resolveSlideLayoutPanels,
   DOOR_OPEN_ANGLE_DEG, FRAME_JAMB_WIDTH_MM, FRAME_KAKARI_WIDTH_MM, DOOR_LEAF_THICKNESS_MM,
 } from './openingPlanSymbolGeometry.js';
 import { LodLevel } from '../viewport.js';
@@ -57,6 +64,22 @@ const HINGE_GROUP2_MECHANISMS = new Set([
   OpeningMechanism.FIRE_DOOR,
   OpeningMechanism.FIRE_FOLD,
 ]);
+
+// 非蝶番sashOpen系（11cで移行）。openingCatalog.js SASH_OPEN_MECHANISMS（記号自身が開口全幅の
+// 枠矩形を描く非蝶番系。方立は内側縦線を持たない3辺=コの字）のうち本ステップで移行する3機構
+// （旧 renderer/OpeningsLayer.jsx otherMechanismSymbol内のslideSingleSymbol/slideLayoutSymbol/
+// hungSymbolと同じ判断の移設）。windowLine群10機構（FIXED/TILT等）は同じSASH_OPEN_MECHANISMSだが
+// 11dで移行するため、あえてSASH_OPEN_MECHANISMSそのものは再利用せずこのステップの対象だけを
+// 独自の集合として持つ（暫定契約のnull判定に必要）。
+const SASH_OPEN_GROUP_MECHANISMS = new Set([
+  OpeningMechanism.SLIDE_SINGLE,
+  OpeningMechanism.SLIDE_LAYOUT,
+  OpeningMechanism.HUNG,
+]);
+
+// 引き違い 詳細LOD用（すべてmm。renderer/OpeningsLayer.jsxから移設。11c）。
+export const SLIDE_TRACK_INSET_MM = 4; // 枠から戸先・召し合わせレールまでの隙間
+export const WEATHERSTRIP_DASH = [6, 4]; // 召し合わせ部・気密材(モヘア)の破線パターン
 
 // 開き戸 詳細LOD専用 枠寸法（すべてmm。旧 renderer/OpeningsLayer.jsxから移設。SWING専用）。
 const DOOR_HINGE_GAP_MM = 5; // 開いた扉と吊元側の方立との隙間
@@ -86,9 +109,9 @@ function toWorld(isVertical, along, perp) {
   return isVertical ? { x: perp, y: along } : { x: along, y: perp };
 }
 
-function linePrim(role, weightMm, p1, p2) {
+function linePrim(role, weightMm, p1, p2, dash) {
   return {
-    type: 'line', x1: p1.x, y1: p1.y, x2: p2.x, y2: p2.y, role, weightMm,
+    type: 'line', x1: p1.x, y1: p1.y, x2: p2.x, y2: p2.y, role, weightMm, dash,
   };
 }
 
@@ -165,6 +188,178 @@ function slideDoubleLeafPrimitives(opening, band, weightMm) {
     linePrim('symbol', weightMm,
       toWorld(isVertical, centerCoord - overlap / 2, leaf2Perp), toWorld(isVertical, coord2, leaf2Perp)),
   ];
+}
+
+// ================================================================
+// SLIDE_DOUBLE（引き違い）のプリミティブ列（旧 renderer/OpeningsLayer.jsx slideDoubleSymbol/
+// slideDoubleDetailSymbolの移設。J10）。SWINGと同様planSymbolPlanを介さない専用扱い
+// （旧jsx entry.mechanism===SLIDE_DOUBLE早期return。frame='sash'扱いにはならず、jambW・
+// 内法へ寄せる処理も行わない＝現状維持）。
+// ================================================================
+
+// STANDARD: 枠矩形(frame)＋leaf線2本(symbol)（旧slideDoubleSymbol）。
+function slideDoubleStandardPrimitives(opening, band, symbolWeight, frameWeight) {
+  const { coord1, coord2, isVertical } = opening;
+  return [
+    rectPrim('frame', frameWeight, isVertical, coord1, coord2, band.lo, band.hi),
+    ...slideDoubleLeafPrimitives(opening, band, symbolWeight),
+  ];
+}
+
+// DETAIL: 枠矩形(frame)＋2トラックのサッシ矩形(symbol)＋気密材の破線(symbol)＋窓のみガラス線
+// (symbol)（旧slideDoubleDetailSymbol）。
+function slideDoubleDetailPrimitives(opening, band, symbolWeight, frameWeight) {
+  const {
+    coord1, coord2, centerCoord, isVertical, category,
+  } = opening;
+  const overlap = Math.max(opening.width * 0.12, 60);
+  const outerLo = band.lo, outerHi = band.hi;
+  const sashDepth = Math.max(0, (outerHi - outerLo - SLIDE_TRACK_INSET_MM * 3) / 2);
+  const track1 = [outerLo + SLIDE_TRACK_INSET_MM, outerLo + SLIDE_TRACK_INSET_MM + sashDepth];
+  const track2 = [outerHi - SLIDE_TRACK_INSET_MM - sashDepth, outerHi - SLIDE_TRACK_INSET_MM];
+  const leaves = [
+    { span: [coord1, centerCoord + overlap / 2], track: track1 },
+    { span: [centerCoord - overlap / 2, coord2], track: track2 },
+  ];
+  const prims = [rectPrim('frame', frameWeight, isVertical, coord1, coord2, outerLo, outerHi)];
+  for (const { span, track } of leaves) {
+    prims.push(rectPrim('symbol', symbolWeight, isVertical, span[0], span[1], track[0], track[1]));
+    if (category === OpeningCategory.WINDOW) {
+      const glassPerp = (track[0] + track[1]) / 2;
+      prims.push(linePrim('symbol', symbolWeight, toWorld(isVertical, span[0], glassPerp), toWorld(isVertical, span[1], glassPerp)));
+    }
+  }
+  prims.push(linePrim('symbol', symbolWeight,
+    toWorld(isVertical, centerCoord, track1[0]), toWorld(isVertical, centerCoord, track2[1]), WEATHERSTRIP_DASH));
+  return prims;
+}
+
+// SLIDE_DOUBLEのディスパッチ（J10）。
+function buildSlideDoublePrimitives(opening, band, detail, symbolWeight, frameWeight) {
+  return detail
+    ? slideDoubleDetailPrimitives(opening, band, symbolWeight, frameWeight)
+    : slideDoubleStandardPrimitives(opening, band, symbolWeight, frameWeight);
+}
+
+// ================================================================
+// 非蝶番sashOpen系（SLIDE_SINGLE・SLIDE_LAYOUT・HUNG）のプリミティブ列（旧 renderer/
+// OpeningsLayer.jsx otherMechanismSymbol内のslideSingleSymbol/slideLayoutSymbol/hungSymbol、
+// 旧sashFrameOpenSymbolの移設。J12）。frame（'sashOpen'の方立コの字）は下のsashFrameOpenPrimitives
+// が別途描くため、ここは各機構固有の枠矩形（自身の全幅Rect）＋leaf線のみを返す
+// （旧slideSingleSymbol/slideLayoutSymbol/hungSymbol自身も自前でRect枠を描いていたのと同じ形）。
+// ================================================================
+
+// SLIDE_SINGLE（引き戸）: 枠矩形(frame)＋内側トラック1本に全長leaf線(symbol)（旧slideSingleSymbol）。
+function slideSinglePrimitives(opening, band, symbolWeight, frameWeight) {
+  const { coord1, coord2, isVertical } = opening;
+  const leafPerp = bandPerp(band, 0.25);
+  return [
+    rectPrim('frame', frameWeight, isVertical, coord1, coord2, band.lo, band.hi),
+    linePrim('symbol', symbolWeight, toWorld(isVertical, coord1, leafPerp), toWorld(isVertical, coord2, leafPerp)),
+  ];
+}
+
+// SLIDE_LAYOUT: 枠矩形(frame)＋パネルごとのleaf線(symbol)。パネル幅=width/panels.length、隣接
+// パネルは引違いと同じoverlapで重ねる。トラック割付・perp位置はopeningPlanSymbolGeometry.jsの
+// trackOf/trackPerp（純関数）に委ねる（旧slideLayoutSymbol）。パネル0枚（entry.slideLayout未設定・
+// panels:[]）は枠だけを返す。
+function slideLayoutPrimitives(opening, band, entry, symbolWeight, frameWeight) {
+  const { coord1, coord2, width, isVertical } = opening;
+  const frame = rectPrim('frame', frameWeight, isVertical, coord1, coord2, band.lo, band.hi);
+  const panels = resolveSlideLayoutPanels(entry);
+  if (panels.length === 0) return [frame];
+
+  const tracks = entry.slideLayout.tracks;
+  const overlap = Math.max(width * 0.12, 60);
+  const panelWidth = width / panels.length;
+  const hasFix = panels.some(p => p.fix);
+  const prims = [frame];
+  panels.forEach((p, i) => {
+    const startBase = coord1 + i * panelWidth;
+    const endBase = startBase + panelWidth;
+    const start = i === 0 ? startBase : startBase - overlap / 2;
+    const end = i === panels.length - 1 ? endBase : endBase + overlap / 2;
+    const track = trackOf(p, i, tracks, hasFix);
+    const perp = trackPerp(band.center, track, tracks, band.depth);
+    prims.push(linePrim('symbol', symbolWeight, toWorld(isVertical, start, perp), toWorld(isVertical, end, perp)));
+  });
+  return prims;
+}
+
+// HUNG（上げ下げ窓）: 枠矩形(frame)＋両トラックに全長線1本ずつ(symbol)（旧hungSymbol）。
+function hungPrimitives(opening, band, symbolWeight, frameWeight) {
+  const { coord1, coord2, isVertical } = opening;
+  const leaf1Perp = bandPerp(band, 0.25);
+  const leaf2Perp = bandPerp(band, 0.75);
+  return [
+    rectPrim('frame', frameWeight, isVertical, coord1, coord2, band.lo, band.hi),
+    linePrim('symbol', symbolWeight, toWorld(isVertical, coord1, leaf1Perp), toWorld(isVertical, coord2, leaf1Perp)),
+    linePrim('symbol', symbolWeight, toWorld(isVertical, coord1, leaf2Perp), toWorld(isVertical, coord2, leaf2Perp)),
+  ];
+}
+
+// SASH_OPEN_GROUP_MECHANISMSの機構ごとの記号プリミティブ（frame='sashOpen'のコの字は含まない）。
+function sashOpenGroupSymbolPrimitives(mechanism, opening, band, entry, symbolWeight, frameWeight) {
+  switch (mechanism) {
+    case OpeningMechanism.SLIDE_SINGLE: return slideSinglePrimitives(opening, band, symbolWeight, frameWeight);
+    case OpeningMechanism.SLIDE_LAYOUT: return slideLayoutPrimitives(opening, band, entry, symbolWeight, frameWeight);
+    case OpeningMechanism.HUNG:         return hungPrimitives(opening, band, symbolWeight, frameWeight);
+    default: return [];
+  }
+}
+
+// 非蝶番系 詳細LOD専用（frame:'sashOpen'）: 記号自身が開口全幅の枠矩形を描く機構
+// （SASH_OPEN_MECHANISMS）専用の方立。内側（開口本体側）の縦線を持たない3辺（コの字）で描く
+// ——閉じた矩形のまま描くと、記号側の枠矩形（sashOpenGroupSymbolPrimitivesがframeInnerSpanの
+// 内法区間に描く矩形）と方立の内側縦線が座標coord1+jambWidth/coord2-jambWidthで完全に一致し、
+// 同じ線を2回描いてしまう（旧sashFrameOpenSymbol。F5の再発防止）。開口を横断する線は描かない
+// （上下の横線は各ジャンブの幅ぶんだけに留める）。closedは意図的に渡さない——旧jsx
+// sashFrameOpenSymbolの<Line points={...} {...fsp} />はclosed・fill="transparent"のどちらも
+// 持たない（swingFrameSymbolのjambOutlinePointsとは異なる。fireFoldPanelPrimitivesと同じ理由で
+// probeのprops比較上、旧経路と食い違わせないためfalseを明示しない）。
+function sashFrameOpenPrimitives(opening, band, jambWidth, frameWeight) {
+  const { coord1, coord2, isVertical } = opening;
+  const jambPoints = (outerAlong, innerAlong) => [
+    [innerAlong, band.lo], [outerAlong, band.lo], [outerAlong, band.hi], [innerAlong, band.hi],
+  ].flatMap(([along, perp]) => {
+    const p = toWorld(isVertical, along, perp);
+    return [p.x, p.y];
+  });
+  return [
+    polylinePrim('frame', frameWeight, jambPoints(coord1, coord1 + jambWidth)),
+    polylinePrim('frame', frameWeight, jambPoints(coord2, coord2 - jambWidth)),
+  ];
+}
+
+// SASH_OPEN_GROUP_MECHANISMSのディスパッチ（J7: jambW・swingOpenPerpDir・planSymbolPlan／
+// J12: sashOpen枠＋内法へ寄せたopeningの移設）。非蝶番系のためswingOpenPerpDirは常に0を返し
+// （HINGED_MECHANISMSに含まれないため）、plan.pivotPerpはaxisValue（詳細LODはband内へ
+// クランプ）のまま——本ステップの3機構は回転しないためpivotPerp自体は使わない。
+function buildSashOpenGroupPrimitives(opening, entry, lodLevel, band, detail, axisValue, faceLo, faceHi, symbolWeight, frameWeight) {
+  const jambW = Math.min(FRAME_JAMB_WIDTH_MM, opening.width / 2);
+  const openPerpDir = swingOpenPerpDir(opening.isVertical, opening.hingeSide, opening.swingSide, entry.mechanism, entry);
+  const plan = planSymbolPlan({
+    mechanism: entry.mechanism, lodLevel, coord1: opening.coord1, coord2: opening.coord2,
+    axisValue, band, jambWidth: jambW, faceLo, faceHi, openPerpDir,
+  });
+
+  if (plan.frame === 'sashOpen') {
+    const spanOpening = innerSpanOpening(opening, plan.innerSpan);
+    const frame = sashFrameOpenPrimitives(opening, band, jambW, frameWeight);
+    const symbol = sashOpenGroupSymbolPrimitives(entry.mechanism, spanOpening, band, entry, symbolWeight, frameWeight);
+    return [...frame, ...symbol];
+  }
+  // ここに到達するのは plan.frame==='none'（STANDARD）のときだけ——SASH_OPEN_GROUP_MECHANISMSの
+  // 3機構は全てopeningCatalog.js SASH_OPEN_MECHANISMSに含まれるため、planSymbolPlanはDETAILで
+  // 必ず'sashOpen'を返し、'sash'（記号が枠矩形を描かない非蝶番系。FOLD/PIVOT等）へは分類されない
+  // （REASONED・防御的。現状のSASH_OPEN_GROUP_MECHANISMSの定義では到達不能で、直接呼ぶテストも
+  // 書けない）。将来この集合にSASH_OPEN_MECHANISMSに属さない機構を誤って足すと、DETAILで
+  // 'sash'が返り黙って方立が消える（sashOpenGroupSymbolPrimitivesは記号自身の枠しか描かない）ため、
+  // ここで早期に気付けるようにする。
+  if (plan.frame !== 'none') {
+    throw new TypeError(`buildSashOpenGroupPrimitives: sashOpenグループの枠種別が想定外: ${plan.frame}`);
+  }
+  return sashOpenGroupSymbolPrimitives(entry.mechanism, opening, band, entry, symbolWeight, frameWeight);
 }
 
 // exteriorDirOfを1回だけ呼ぶ薄いメモ化（見込帯のexteriorDir計算専用。呼び出し元がbandを何度
@@ -424,8 +619,9 @@ function buildHingeGroup2Primitives(opening, entry, lodLevel, band, detail, axis
  *   exteriorDirOf: 開口の外部側方向(±1)を返すthunk（詳細LODかつframeDepth>0のときだけ
  *   呼ぶ。呼ぶたびに再計算しないよう内部で1回だけメモ化して呼ぶ）。
  * @returns {object[]|null} プリミティブ配列。STANDARD/DETAILでentryがありIMPLEMENTED_MECHANISMS
- *   に含まれる機構のうちSWING_GROUP_MECHANISMS・HINGE_GROUP2_MECHANISMS以外は暫定契約として
- *   null（呼び出し側は旧経路を実行する。11c〜11e で残りの機構を移行し尽くした後に削除予定）。
+ *   に含まれる機構のうちSWING_GROUP_MECHANISMS・HINGE_GROUP2_MECHANISMS・SLIDE_DOUBLE・
+ *   SASH_OPEN_GROUP_MECHANISMS以外は暫定契約としてnull（呼び出し側は旧経路を実行する。
+ *   11d〜11e で残りの機構を移行し尽くした後に削除予定）。
  */
 export function buildOpeningPlanSymbol(opening, ctx) {
   const { entry = null, lodLevel, axisValue, faceLo, faceHi, exteriorDirOf } = ctx ?? {};
@@ -443,14 +639,16 @@ export function buildOpeningPlanSymbol(opening, ctx) {
   const detail = lodLevel === LodLevel.DETAIL;
 
   // STANDARD/DETAILでentryが実装済み機構を指す場合、SWING_GROUP_MECHANISMS（11b-1）・
-  // HINGE_GROUP2_MECHANISMS（11b-2。本ステップで移行済み）以外は未移行——旧経路
-  // (OpeningsLayer.jsx側のotherMechanismSymbol等)がそのまま描くため、ここではband計算
-  // （exteriorDirOfの呼び出しを含む）自体を行わない（呼び出し側と二重に計算・二重にthunkを
-  // 呼ばないため）。
+  // HINGE_GROUP2_MECHANISMS（11b-2）・SLIDE_DOUBLE・SASH_OPEN_GROUP_MECHANISMS（11c。
+  // 本ステップで移行済み）以外は未移行——旧経路(OpeningsLayer.jsx側のotherMechanismSymbol等)が
+  // そのまま描くため、ここではband計算（exteriorDirOfの呼び出しを含む）自体を行わない
+  // （呼び出し側と二重に計算・二重にthunkを呼ばないため）。
   const implemented = lodLevel !== LodLevel.SCHEMATIC && entry && IMPLEMENTED_MECHANISMS.has(entry.mechanism);
   const swingGroup = implemented && SWING_GROUP_MECHANISMS.has(entry.mechanism);
   const hingeGroup2 = implemented && HINGE_GROUP2_MECHANISMS.has(entry.mechanism);
-  if (implemented && !swingGroup && !hingeGroup2) {
+  const slideDouble = implemented && entry.mechanism === OpeningMechanism.SLIDE_DOUBLE;
+  const sashOpenGroup = implemented && SASH_OPEN_GROUP_MECHANISMS.has(entry.mechanism);
+  if (implemented && !swingGroup && !hingeGroup2 && !slideDouble && !sashOpenGroup) {
     return null;
   }
 
@@ -483,6 +681,18 @@ export function buildOpeningPlanSymbol(opening, ctx) {
   // STANDARD/DETAILで蝶番系その2（HINGE_GROUP2_MECHANISMS）: 専用ディスパッチへ。
   if (hingeGroup2) {
     return buildHingeGroup2Primitives(opening, entry, lodLevel, band, detail, axisValue, faceLo, faceHi);
+  }
+
+  // STANDARD/DETAILでSLIDE_DOUBLE: 専用ディスパッチへ（SWINGと同じくplanSymbolPlanを介さない）。
+  if (slideDouble) {
+    const frameWeight = planSymbolWeightMm('frame', opening, detail);
+    return buildSlideDoublePrimitives(opening, band, detail, symbolWeight, frameWeight);
+  }
+
+  // STANDARD/DETAILで非蝶番sashOpen系（SASH_OPEN_GROUP_MECHANISMS）: 専用ディスパッチへ。
+  if (sashOpenGroup) {
+    const frameWeight = planSymbolWeightMm('frame', opening, detail);
+    return buildSashOpenGroupPrimitives(opening, entry, lodLevel, band, detail, axisValue, faceLo, faceHi, symbolWeight, frameWeight);
   }
 
   // STANDARD/DETAILでentryが無い・未実装機構: ティックマークのみ。
