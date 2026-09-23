@@ -7,7 +7,7 @@ import {
   clearDocumentAliases,
 } from './codeNormalization.js';
 import { normalizeMaterialCode } from './legacyMaterialCodes.js';
-import { CatalogKind } from './catalogKinds.js';
+import { CatalogKind, kindDef } from './catalogKinds.js';
 
 function baseSnapshot(overrides) {
   return {
@@ -321,19 +321,19 @@ test('【失敗系】addDocumentAliases/setDocumentCodeTable/currentCodeTable: k
   assert.throws(() => currentCodeTable(undefined), /kind|種別/);
 });
 
-// ---- rewrite:null（openingSubType。section はステップ8bで実装済み）に非空aliasesを積むと例外 ----
-test('【失敗系】setDocumentAliases: rewrite:nullの種別（openingSubType）に非空aliasesを積むと例外', () => {
-  assert.throws(() => setDocumentAliases(CatalogKind.OPENING_SUB_TYPE, { S1: 'S2' }), /openingSubType|対応していません/);
+// ---- ステップ10bでopeningSubTypeもrewrite実装済みになった（旧: rewrite:nullで例外を投げていた
+// テストを仕様変更として書き換え。section（8b）と同型の「例外にならない」確認に置き換える）----
+test('setDocumentAliases: openingSubTypeは今後rewriteに対応しているので非空aliasesでも例外にならない（10bの実装確認）', () => {
+  assert.doesNotThrow(() => setDocumentAliases(CatalogKind.OPENING_SUB_TYPE, { 'fitting:S1': 'fitting:S2' }));
+  setDocumentAliases(CatalogKind.OPENING_SUB_TYPE, null); // 後始末
 });
 
-test('【失敗系】addDocumentAliases: rewrite:nullの種別（openingSubType）に非空pairsを積むと例外', () => {
-  assert.throws(
-    () => addDocumentAliases(CatalogKind.OPENING_SUB_TYPE, [{ from: 'fitting:a', to: 'fitting:b' }]),
-    /openingSubType|対応していません/,
-  );
+test('addDocumentAliases: openingSubTypeも例外を投げなくなる（10bの実装確認）', () => {
+  assert.doesNotThrow(() => addDocumentAliases(CatalogKind.OPENING_SUB_TYPE, [{ from: 'fitting:a', to: 'fitting:b' }]));
+  setDocumentAliases(CatalogKind.OPENING_SUB_TYPE, null); // 後始末
 });
 
-test('setDocumentAliases: rewrite:nullの種別でも空/null aliasesは例外にならない（解除操作は許す）', () => {
+test('setDocumentAliases: 空/null aliasesは例外にならない（解除操作は許す）', () => {
   setDocumentAliases(CatalogKind.OPENING_SUB_TYPE, {});
   setDocumentAliases(CatalogKind.OPENING_SUB_TYPE, null);
 });
@@ -485,6 +485,137 @@ test('section: 削除済みsectionDefId(null)は値を据え置き、kind:sectio
   const columnsEntry = taken.find(u => u.location === 'columns');
   assert.deepEqual(columnsEntry, { kind: CatalogKind.SECTION, code: 'WOOD-120x120', location: 'columns', memberId: 'c1' });
   assert.equal(taken.filter(u => u.code === 'WOOD-120x120').length, 4, 'columns/structuralWalls/slabs/footingsの4箇所');
+});
+
+// ---- ステップ10b: openingSubType（openings[]の`${category}:${subType}`）の書換え実装 ----
+function openingsSnapshot(overrides) {
+  return {
+    openings: [
+      { id: 'o1', category: 'fitting', subType: 'oldKey' },
+      { id: 'o2', category: 'window', subType: 'doubleSliding' },
+    ],
+    ...overrides,
+  };
+}
+
+test('SNAPSHOT_REF_WALKERS.openingSubType: openings[]の`category:subType`を列挙する', () => {
+  const refs = SNAPSHOT_REF_WALKERS.openingSubType.enumerate(openingsSnapshot());
+  assert.deepEqual(refs, [
+    { code: 'fitting:oldKey', location: 'opening', openingId: 'o1' },
+    { code: 'window:doubleSliding', location: 'opening', openingId: 'o2' },
+  ]);
+});
+
+// テスト1: rewrite（同カテゴリのalias）でsubTypeが書換わり、categoryは不変。
+test('openingSubType: aliasで同カテゴリのsubTypeが書換わる（categoryは不変）', () => {
+  addDocumentAliases(CatalogKind.OPENING_SUB_TYPE, [{ from: 'fitting:oldKey', to: 'fitting:newKey' }]);
+  const applied = applyDocumentCodeNormalization(openingsSnapshot());
+  assert.equal(applied.openings[0].category, 'fitting');
+  assert.equal(applied.openings[0].subType, 'newKey');
+  assert.equal(applied.openings[1].subType, 'doubleSliding', '対象外の開口は不変');
+});
+
+// テスト2: 冪等。
+test('openingSubType: 書換えは冪等（2回適用で結果が同じ・2回目は変化が無いので同一参照）', () => {
+  addDocumentAliases(CatalogKind.OPENING_SUB_TYPE, [{ from: 'fitting:oldKey', to: 'fitting:newKey' }]);
+  const once = applyDocumentCodeNormalization(openingsSnapshot());
+  const twice = applyDocumentCodeNormalization(once);
+  assert.deepEqual(once, twice);
+  assert.equal(applyDocumentCodeNormalization(once), once);
+});
+
+// テスト3: copy-on-write。該当なしはsnapshot・openings配列とも同一参照。該当ありは新配列・
+// 該当openingだけ新オブジェクト、他は同一参照。
+test('openingSubType: copy-on-write（該当なしは完全に同一参照。該当ありは新配列・該当開口だけ新オブジェクト）', () => {
+  setDocumentAliases(CatalogKind.OPENING_SUB_TYPE, null);
+  const noMatch = openingsSnapshot();
+  assert.equal(applyDocumentCodeNormalization(noMatch), noMatch, '該当なしは完全に同一参照');
+
+  // 表は非空だが、このsnapshotのどのopeningにも該当しない場合もopenings配列は同一参照のまま
+  // （effectiveCodeTableの外側ゲートを介さず、rewriteOpeningSubTypeRefs自体のcopy-on-writeを問う）。
+  addDocumentAliases(CatalogKind.OPENING_SUB_TYPE, [{ from: 'fitting:noSuchKey', to: 'fitting:x' }]);
+  const irrelevantAlias = openingsSnapshot();
+  const appliedIrrelevant = applyDocumentCodeNormalization(irrelevantAlias);
+  assert.equal(appliedIrrelevant, irrelevantAlias, '表が非空でも該当が無ければ完全に同一参照');
+  assert.equal(appliedIrrelevant.openings, irrelevantAlias.openings, 'openings配列も同一参照');
+
+  addDocumentAliases(CatalogKind.OPENING_SUB_TYPE, [{ from: 'fitting:oldKey', to: 'fitting:newKey' }]);
+  const snapshot = openingsSnapshot();
+  const applied = applyDocumentCodeNormalization(snapshot);
+  assert.notEqual(applied, snapshot);
+  assert.notEqual(applied.openings, snapshot.openings, '書換えのあったopeningsは新しい配列');
+  assert.notEqual(applied.openings[0], snapshot.openings[0], '書換わったopeningは新オブジェクト');
+  assert.equal(applied.openings[1], snapshot.openings[1], '対象外のopeningは同一参照');
+});
+
+// テスト4【失敗系】: null（廃止）→据え置き＋unresolvedに積まれる。
+test('【失敗系】openingSubType: 廃止済み(null)のsubTypeは値を据え置き、kind:openingSubTypeでunresolvedに積む', () => {
+  addDocumentAliases(CatalogKind.OPENING_SUB_TYPE, [{ from: 'fitting:oldKey', to: null }]);
+  applyDocumentCodeNormalization(openingsSnapshot());
+  const taken = takeUnresolvedCodes();
+  assert.deepEqual(taken, [{ kind: CatalogKind.OPENING_SUB_TYPE, code: 'fitting:oldKey', location: 'opening', openingId: 'o1' }]);
+});
+
+// テスト5【失敗系】: カテゴリ跨ぎのaliasは適用せず、据え置き＋unresolvedに積まれる。
+test('【失敗系】openingSubType: カテゴリ跨ぎのaliasは適用しない（据え置き＋unresolvedに理由付きで積む）', () => {
+  addDocumentAliases(CatalogKind.OPENING_SUB_TYPE, [{ from: 'fitting:oldKey', to: 'window:newKey' }]);
+  const applied = applyDocumentCodeNormalization(openingsSnapshot());
+  assert.equal(applied.openings[0].category, 'fitting', 'categoryは据え置き');
+  assert.equal(applied.openings[0].subType, 'oldKey', 'subTypeも据え置き');
+  const taken = takeUnresolvedCodes();
+  assert.deepEqual(taken, [{
+    kind: CatalogKind.OPENING_SUB_TYPE, code: 'fitting:oldKey', location: 'opening', openingId: 'o1',
+    reason: 'category-mismatch',
+  }]);
+});
+
+// テスト6: 複合キーの組立/分解が catalogKinds.js kindDef(OPENING_SUB_TYPE).keyOf/parseKey と一致する
+// （codeNormalization.jsはゼロ依存方針のためcatalogKinds.jsをimportせずローカルに同じ組立/分解を
+// 持つ——ここで一致を固定する。category に ':' を含まない前提）。
+test('openingSubType: 複合キーの組立/分解がcatalogKinds.js kindDef(OPENING_SUB_TYPE)のkeyOf/parseKeyと一致する', () => {
+  const def = kindDef(CatalogKind.OPENING_SUB_TYPE);
+  const cases = [
+    { category: 'fitting', key: 'doubleSliding' },
+    { category: 'window', key: 'fixedSash' },
+  ];
+  for (const { category, key } of cases) {
+    const expectedKey = def.keyOf({ category, key });
+    // openings[]を経由してrewriteが同じ複合キーで表を引くことを確認する（enumerateの出力形で照合）。
+    const refs = SNAPSHOT_REF_WALKERS.openingSubType.enumerate({ openings: [{ id: 'x', category, subType: key }] });
+    assert.equal(refs[0].code, expectedKey);
+    assert.deepEqual(def.parseKey(expectedKey), { category, key });
+  }
+  // 不正キーでは意図的に挙動が違う（10b QA Nit-5）: kindDef.parseKey は厳格（例外）、
+  // codeNormalization 側は fail-safe（据え置き＋unresolved。下の失敗系テストで固定）。
+  assert.throws(() => def.parseKey('door:x'));
+  assert.throws(() => def.parseKey('noColon'));
+});
+
+// 10b QA指摘 Missing-1: 壊れた opening（category/subType 欠け・null 要素・openings 非配列）でも落ちず据え置き。
+test('【失敗系】openingSubType: 壊れたopeningでも落ちず据え置き（category/subType欠け・null要素・openings非配列）', () => {
+  addDocumentAliases(CatalogKind.OPENING_SUB_TYPE, [{ from: 'fitting:a', to: 'fitting:b' }]);
+  const broken = [null, {}, { id: 'x', category: 'fitting' }, { id: 'y', subType: 'a' }];
+  const ok = { id: 'o1', category: 'fitting', subType: 'a' };
+  const applied = applyDocumentCodeNormalization({ openings: [...broken, ok] });
+  for (let i = 0; i < broken.length; i++) assert.equal(applied.openings[i], broken[i], `壊れた要素 ${i} は同一参照`);
+  assert.equal(applied.openings[4].subType, 'b');
+  assert.deepEqual(takeUnresolvedCodes(), []);
+  const nul = { openings: null };
+  assert.equal(applyDocumentCodeNormalization(nul), nul, 'openings が非配列ならスナップショットごと同一参照');
+});
+
+// 10b QA指摘 Minor-1/Missing-2: 解決先が `category:key` の形でない表（束の検証・pick の実在検証で本来
+// 到達しない）でも、正規化の失敗を文書の読込み失敗に昇格させない（他4種別と同じく投げない）。
+test('【失敗系】openingSubType: alias先が ":" を含まないときは据え置き＋reason:malformed-target で unresolved（投げない）', () => {
+  setDocumentCodeTable(CatalogKind.OPENING_SUB_TYPE, new Map([['fitting:oldKey', 'newKeyWithoutCategory']]));
+  let applied;
+  assert.doesNotThrow(() => { applied = applyDocumentCodeNormalization(openingsSnapshot()); });
+  assert.equal(applied.openings[0].subType, 'oldKey');
+  assert.deepEqual(takeUnresolvedCodes(), [{
+    kind: CatalogKind.OPENING_SUB_TYPE, code: 'fitting:oldKey', location: 'opening', openingId: 'o1',
+    reason: 'malformed-target',
+  }]);
+  clearDocumentAliases();
 });
 
 // ---- clearDocumentAliases: 全種別解除 ----

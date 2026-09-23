@@ -264,9 +264,8 @@ function rewriteBoundaryMasterRefs(snapshot, table) {
 
 // ----------------------------------------------------------------
 // section: columns/beams/structuralWalls/slabs/footings[].sectionDefId（ステップ8bで書換え実装）・
-// openingSubType: openings[] の `${category}:${subType}`（catalogKinds.js の keyOf と同型）。
-// openingSubType は現状も読み取り専用（rewrite:null。ステップ10で参照の書換え先を実装するまでは
-// 書換えの入口を持たない——alias を積もうとしたら例外にする＝黙って効かないaliasを作らない）。
+// openingSubType: openings[] の `${category}:${subType}`（catalogKinds.js の keyOf と同型。
+// ステップ10bで書換え実装）。
 // ----------------------------------------------------------------
 // 断面（sectionDefId）を持つ部材リスト名（唯一の定義箇所。ステップ8g QAで
 // modes/StructuralModeState.js の同名リストと二重定義になっていたためexportして共有する。
@@ -312,23 +311,83 @@ function rewriteSectionRefs(snapshot, table) {
   return { snapshot: { ...snapshot, ...nextLists }, unresolved };
 }
 
+// 複合キー `${category}:${subType}` の組立/分解（catalogKinds.js CatalogKind.OPENING_SUB_TYPE の
+// keyOf/parseKeyと同型。本ファイルはゼロ依存の葉モジュール方針のためcatalogKinds.jsをimportせず
+// ここでも同じ組立/分解をローカルに持つ——一致は codeNormalization.test.js が固定する）。
+// category に ':' を含まない前提（fitting/window。catalogKinds.jsのvalidateと同じ前提）。
+function buildOpeningSubTypeKey(category, subType) {
+  return `${category}:${subType}`;
+}
+
+// 不正な形は null（投げない）。本モジュールの契約は「解決できないものは据え置き＋unresolved」で、
+// 正規化の失敗を文書の読込み失敗に昇格させない（10b QA指摘Minor-1。他4種別も投げない）。
+function parseOpeningSubTypeKey(key) {
+  const idx = typeof key === 'string' ? key.indexOf(':') : -1;
+  if (idx < 0) return null;
+  return { category: key.slice(0, idx), key: key.slice(idx + 1) };
+}
+
 function enumerateOpeningSubTypeRefs(snapshot) {
   if (!snapshot) return [];
   const refs = [];
   for (const opening of snapshot.openings ?? []) {
     if (opening?.category && opening?.subType) {
-      refs.push({ code: `${opening.category}:${opening.subType}`, location: 'opening', openingId: opening.id });
+      refs.push({ code: buildOpeningSubTypeKey(opening.category, opening.subType), location: 'opening', openingId: opening.id });
     }
   }
   return refs;
 }
 
 /**
+ * openings[] を table で正規化する（copy-on-write。ステップ10b設計 §2）。
+ * ①同じ→据え置き ②null（削除・廃止）→据え置き＋unresolved（既存normalizeCodeの挙動どおり）
+ * ③解決先が `${cat2}:${key2}` で cat2===opening.category → subType を key2 へ書換え
+ * ④cat2!==category（カテゴリ跨ぎ）→据え置き＋unresolved（理由: 照合由来のaliasはmatchFields先頭が
+ * category・minMatchFields:2なので同カテゴリのみ生じる。手動pickのみカテゴリ跨ぎを起こしうる。
+ * categoryを書き換えると採番・記号・wallKindsの意味が変わるため黙って変えない）。
+ */
+function normalizeOpenings(openings, table, unresolved) {
+  if (!Array.isArray(openings)) return openings;
+  let changedAny = false;
+  const next = openings.map(opening => {
+    if (!opening?.category || !opening?.subType) return opening;
+    const code = buildOpeningSubTypeKey(opening.category, opening.subType);
+    const context = { location: 'opening', openingId: opening.id };
+    // 未登録・null（廃止）の扱いは共通ヘルパ normalizeCode に一本化（10b QA指摘Minor-2）。
+    const mapped = normalizeCode(code, table, unresolved, context);
+    if (mapped === code) return opening;
+    const parsed = parseOpeningSubTypeKey(mapped);
+    if (!parsed) {
+      // 解決先が `category:key` の形でない（束の検証・pick の実在検証で本来到達しない）。据え置き＋unresolved。
+      unresolved.push({ code, ...context, reason: 'malformed-target' });
+      return opening;
+    }
+    const { category: cat2, key: key2 } = parsed;
+    if (cat2 !== opening.category) {
+      // カテゴリ跨ぎの読み替えは適用しない（据え置き＋unresolved。理由コメントは上記）。
+      unresolved.push({ code, ...context, reason: 'category-mismatch' });
+      return opening;
+    }
+    changedAny = true;
+    return { ...opening, subType: key2 };
+  });
+  return changedAny ? next : openings;
+}
+
+function rewriteOpeningSubTypeRefs(snapshot, table) {
+  if (!snapshot) return { snapshot, unresolved: [] };
+  const unresolved = [];
+  const openings = normalizeOpenings(snapshot.openings, table, unresolved);
+  if (openings === snapshot.openings) return { snapshot, unresolved };
+  return { snapshot: { ...snapshot, openings }, unresolved };
+}
+
+/**
  * 参照所在の唯一の集約点（kind → {enumerate(snapshot), rewrite(snapshot, table)|null}）。
  * enumerate は catalog/usedEntries.js collectUsedKeys（保存時の使用キー収集）と
  * applyDocumentCodeNormalization の unresolved 検出が共有する。rewrite が null の種別は
- * まだ参照の書換え先を持たない（openingSubType=ステップ10）——
- * setDocumentAliases/addDocumentAliases でその種別に非空のaliasesを積もうとすると例外になる。
+ * まだ参照の書換え先を持たない——setDocumentAliases/addDocumentAliases でその種別に非空の
+ * aliasesを積もうとすると例外になる（ステップ10bで全5種別のrewriteが出揃い、現状該当なし）。
  */
 export const SNAPSHOT_REF_WALKERS = Object.freeze({
   material: Object.freeze({
@@ -349,7 +408,7 @@ export const SNAPSHOT_REF_WALKERS = Object.freeze({
   }),
   openingSubType: Object.freeze({
     enumerate: enumerateOpeningSubTypeRefs,
-    rewrite: null,
+    rewrite: rewriteOpeningSubTypeRefs,
   }),
 });
 
@@ -488,8 +547,8 @@ export function peekUnresolvedCodes() {
 /**
  * 実効中の正規化表を snapshot に適用する（全種別。文書固有の表が無ければ種別ごとの
  * 本体表だけで正規化する。material以外は本体表が空のため、文書固有の読み替えが無ければ
- * 実質no-op）。rewrite:null の種別（openingSubType）はここでは読み飛ばす
- * （書換え先が無いため。enumerateは別途 collectUsedKeys 等が使う）。
+ * 実質no-op）。rewrite:null の種別（現状該当なし。ステップ10bでopeningSubTypeも実装済み）は
+ * ここでは読み飛ばす（enumerateは別途 collectUsedKeys 等が使う）。
  * 未解決コードは kind+code+location（`unresolvedDedupeKey`）で重複排除して蓄積する——同じ
  * snapshot（階）を繰り返し適用しても（undo/redo・再読込み等）蓄積が単調増加しない。
  * 署名は変更しない（呼び出し側=graphSnapshot.js は snapshot だけを渡す）。
