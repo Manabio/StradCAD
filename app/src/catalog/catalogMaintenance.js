@@ -346,6 +346,9 @@ export function planBulkSectionImport(specText, { builtinList, parseSpecList }) 
 
   const toAdd = [];
   const skipped = [];
+  // ステップ9c QA指摘Minor-1: 同じ入力内で同一キー（H形鋼はキーに板厚を含まないため別内容でも同キーになりうる）
+  // になる2行目以降は skipped へ回す。残すと toAdd に同キーが並び、プレビュー（先頭）と登録（upsert で末尾）が食い違う。
+  const seenKeys = new Set();
   for (const entry of entries) {
     try {
       def.validate(entry);
@@ -359,14 +362,22 @@ export function planBulkSectionImport(specText, { builtinList, parseSpecList }) 
       skipped.push({ line: entry.label, reason: `既にあります（${SECTION_IMPORT_ORIGIN_LABELS[origin] ?? origin}）` });
       continue;
     }
-    // QA指摘Minor-B1: キーが違っても内容（matchFields）完全一致なら重複として除外する。
-    const { exact, hits } = matchByContent(CatalogKind.SECTION, entry, mergedEntries);
-    if (exact && hits.length > 0) {
-      const hitKey = def.keyOf(hits[0]);
-      const origin = originOf(CatalogKind.SECTION, hitKey, builtinList) ?? 'builtin';
-      skipped.push({ line: entry.label, reason: `既にあります（${SECTION_IMPORT_ORIGIN_LABELS[origin] ?? origin}）` });
+    if (seenKeys.has(key)) {
+      skipped.push({ line: entry.label, reason: `同じ入力内で重複しています（${key}）` });
       continue;
     }
+    // QA指摘Minor-B1: キーが違っても内容（matchFields）完全一致なら重複として除外する（toAdd 済みの行も相手に含める）。
+    const { exact, hits } = matchByContent(CatalogKind.SECTION, entry, [...mergedEntries, ...toAdd]);
+    if (exact && hits.length > 0) {
+      const hitKey = def.keyOf(hits[0]);
+      const origin = merged.has(hitKey) ? (originOf(CatalogKind.SECTION, hitKey, builtinList) ?? 'builtin') : null;
+      skipped.push({
+        line: entry.label,
+        reason: origin ? `既にあります（${SECTION_IMPORT_ORIGIN_LABELS[origin] ?? origin}）` : `同じ入力内で重複しています（${hitKey}）`,
+      });
+      continue;
+    }
+    seenKeys.add(key);
     toAdd.push(entry);
   }
   return { toAdd, skipped, errors };

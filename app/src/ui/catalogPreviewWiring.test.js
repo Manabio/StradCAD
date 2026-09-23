@@ -65,3 +65,30 @@ test('【不変条件・ステップ9b・D9】ui/CatalogPreview.jsx: buildCatalo
   assert.ok(/\bbuildCatalogPreview\(/.test(tryBody), 'CatalogPreview.jsx の try ブロック内で buildCatalogPreview を呼んでいない');
   assert.ok(/catmnt-preview-error/.test(catchBody), 'CatalogPreview.jsx の catch ブロックが catmnt-preview-error を描いていない');
 });
+
+// ---- ステップ9c: 一括入力（SectionBulkImport）の選択中1件だけ作図プレビューを描く（Q3裁定のガード） ----
+test('【不変条件・ステップ9c】ui/CatalogMaintenancePanel.jsx: SectionBulkImportが選択中の1件（selectedDraft）だけ<CatalogPreview kind={CatalogKind.SECTION}>を描く', () => {
+  const src = readSrc('CatalogMaintenancePanel.jsx');
+  const fnMatch = /function SectionBulkImport\(\{[\s\S]*?\n\}/.exec(src);
+  assert.ok(fnMatch, 'CatalogMaintenancePanel.jsx に SectionBulkImport コンポーネントが見つからない');
+  const body = fnMatch[0];
+  assert.ok(
+    /<CatalogPreview\s+kind=\{CatalogKind\.SECTION\}\s+entry=\{selectedDraft\}/.test(body),
+    'SectionBulkImport が selectedDraft を <CatalogPreview kind={CatalogKind.SECTION}> で描いていない',
+  );
+});
+
+test('【不変条件・ステップ9c・Q3】ui/CatalogMaintenancePanel.jsx: SectionBulkImportのplan.toAdd.map(...)の中では<CatalogPreviewを描かない（一覧全部を同時に描かない）', () => {
+  const src = readSrc('CatalogMaintenancePanel.jsx');
+  const fnMatch = /function SectionBulkImport\(\{[\s\S]*?\n\}/.exec(src);
+  assert.ok(fnMatch, 'CatalogMaintenancePanel.jsx に SectionBulkImport コンポーネントが見つからない');
+  const body = fnMatch[0];
+  // QA指摘Minor-2（9c）: map ブロックの終端 `))}` を取る方式は本体内に `))}` が現れると捕捉が切れて偽の緑になる。
+  // 代わりに SectionBulkImport 本体内の <CatalogPreview の出現数が 1（＝選択中1件の箇所だけ）であることを assert する。
+  const hits = body.match(/<CatalogPreview\b/g) ?? [];
+  assert.equal(
+    hits.length, 1,
+    'SectionBulkImport が <CatalogPreview> を2箇所以上（または0箇所）描いている（Q3裁定: 同時に描くのは選択中1件だけ）',
+  );
+  assert.ok(/plan\.toAdd\.map\(/.test(body), 'SectionBulkImport に plan.toAdd.map( が見つからない');
+});

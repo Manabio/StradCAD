@@ -409,3 +409,8 @@
 .catmnt-bulk-import-result-title--error { color: #dc2626; }
 
 .catmnt-bulk-import-error-list { color: #dc2626; }
+
+/* ステップ9c: 「追加される行」の1件選択（作図プレビュー用）。catmnt-row と同じ配色の流儀。 */
+.catmnt-bulk-import-row { cursor: pointer; }
+.catmnt-bulk-import-row:hover { background: #f8fafc; }
+.catmnt-bulk-import-row--selected { background: #eff6ff; }

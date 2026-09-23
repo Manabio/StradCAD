@@ -3,7 +3,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { CatalogKind, KIND_LABELS, kindDef } from '../catalog/catalogKinds.js';
-import { findSectionEntry } from '../structural/sectionCatalog.js';
+import { findSectionEntry, parseSectionSpec, parseSectionSpecList } from '../structural/sectionCatalog.js';
+import { planBulkSectionImport } from '../catalog/catalogMaintenance.js';
 import { OpeningMechanism } from '../openings/openingCatalog.js';
 import { figureBounds } from '../structural/sectionFigure/sectionGeometry.js';
 import { FIGURE_FRAME_BY_MAP } from '../structural/memberCatalog.js';
@@ -158,4 +159,30 @@ test('buildCatalogPreview(openingSubType): entryがkey/categoryを持たない�
   const result = buildCatalogPreview(CatalogKind.OPENING_SUB_TYPE, { label: 'x' });
   assert.equal(result.ok, false);
   assert.equal(typeof result.reason, 'string');
+});
+
+// ---- 9. ステップ9c: 一括入力（planBulkSectionImport）の解析結果を1件分プレビューへ渡す縦の1本 ----
+test('ステップ9c: planBulkSectionImportのtoAdd[0]をbuildCatalogPreviewへそのまま渡すとhSectionで描け、builtinと衝突する行はtoAddに入らずskippedへ回る', () => {
+  // builtinに既にあるキー相当（'H300×150×6.5×9' → STEEL-H300x150）をbuiltinListへ入れておく。
+  const builtin = [parseSectionSpec('H300×150×6.5×9')];
+  // QA指摘Nit-1（9c）: 実 builtin にも同寸で存在する H400×200×8×13 では注入経路を守れない（findSectionEntry でも同じ図が
+  // 出る）ため、builtin に無い H401×200×8×13 を使う。
+  const plan = planBulkSectionImport('H401×200×8×13 / H300×150×6.5×9', {
+    builtinList: builtin, parseSpecList: parseSectionSpecList,
+  });
+  assert.deepEqual(plan.toAdd.map(e => e.key), ['STEEL-H401x200']);
+  assert.equal(plan.skipped.length, 1);
+  assert.match(plan.skipped[0].reason, /既にあります（標準）/);
+
+  const frame = FIGURE_FRAME_BY_MAP.columnMap;
+  const result = buildCatalogPreview(CatalogKind.SECTION, plan.toAdd[0], { frame });
+  assert.equal(result.ok, true);
+  assertKnownTypes(result.primitives, 'bulk-import-draft');
+  const hSection = result.primitives.find(p => p.type === 'hSection');
+  assert.ok(hSection, 'hSectionのprimitiveが見つからない');
+  assert.deepEqual(
+    { w: hSection.w, h: hSection.h, web: hSection.web, flange: hSection.flange },
+    { w: 200, h: 401, web: 8, flange: 13 },
+  );
+  assert.ok(result.scale >= 1 / 20, `scaleが1/20を下回った（実際: ${result.scale}）`);
 });

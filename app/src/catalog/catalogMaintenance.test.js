@@ -465,6 +465,24 @@ test('【失敗系】planBulkSectionImport: builtinと衝突する行は「既�
   assert.match(result.skipped[0].reason, /既にあります（標準）/);
 });
 
+test('【失敗系】planBulkSectionImport: 同じ入力内で同一キーになる2行は2件目をskippedへ回す（H形鋼はキーに板厚を含まない）', () => {
+  const builtin = [sectionEntry()]; // STEEL-H200x100
+  // 別内容・同キー（板厚違い）と、完全に同じ行の繰り返し
+  const result = planBulkSectionImport('H401×200×8×13 / H401×200×9×14 / H401×200×8×13', { builtinList: builtin, parseSpecList: parseSectionSpecList });
+  assert.deepEqual(result.toAdd.map(e => e.key), ['STEEL-H401x200']);
+  assert.equal(result.toAdd[0].webThickness, 8, '先頭の行が採用される');
+  assert.equal(result.skipped.length, 2);
+  for (const s of result.skipped) assert.match(s.reason, /同じ入力内で重複しています/);
+  assert.deepEqual(result.errors, []);
+});
+
+test('【失敗系】planBulkSectionImport: 同じ入力内でキー違い・内容同一（角形鋼管の板厚表記ゆれ）は2件目をskippedへ回す', () => {
+  const result = planBulkSectionImport('□201×201×9.0 / □201×201×9', { builtinList: [], parseSpecList: parseSectionSpecList });
+  assert.deepEqual(result.toAdd.map(e => e.key), ['STEEL-SQ201x201x9.0']);
+  assert.equal(result.skipped.length, 1);
+  assert.match(result.skipped[0].reason, /同じ入力内で重複しています/);
+});
+
 test('【失敗系】planBulkSectionImport: userライブラリと衝突する行は「既にあります（ライブラリ）」でskippedへ', () => {
   const builtin = [];
   setOverlay(CatalogKind.SECTION, { user: [sectionEntry()] });

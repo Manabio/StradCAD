@@ -778,9 +778,13 @@ function SectionBulkImport({ builtinList, onImported }) {
   const [plan, setPlan] = useState(null); // {toAdd, skipped, errors} | null
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
+  // ステップ9c: 「追加される行」の1件を選んで作図プレビューを出す（Q3裁定: 一覧全部の同時描画はしない）。
+  // planが再解析される（setPlanが呼ばれる）たびにリセットする。
+  const [selectedDraftKey, setSelectedDraftKey] = useState(null);
 
   function handleParse() {
     setError(null);
+    setSelectedDraftKey(null);
     setPlan(planBulkSectionImport(text, { builtinList, parseSpecList: parseSectionSpecList }));
   }
 
@@ -803,8 +807,13 @@ function SectionBulkImport({ builtinList, onImported }) {
     setBusy(false);
     setText('');
     setPlan(null);
+    setSelectedDraftKey(null);
     onImported?.();
   }
+
+  const selectedDraft = (plan && selectedDraftKey)
+    ? plan.toAdd.find(e => e.key === selectedDraftKey) ?? null
+    : null;
 
   return (
     <div className="catmnt-bulk-import">
@@ -820,7 +829,7 @@ function SectionBulkImport({ builtinList, onImported }) {
             className="catmnt-bulk-import-textarea"
             placeholder={'例: H400×200×8×13 / □250×250×9'}
             value={text}
-            onChange={e => { setText(e.target.value); setPlan(null); }}
+            onChange={e => { setText(e.target.value); setPlan(null); setSelectedDraftKey(null); }}
           />
           <div className="catmnt-form-actions">
             <button className="catmnt-btn catmnt-btn--secondary" disabled={!text.trim()} onClick={handleParse}>
@@ -840,7 +849,19 @@ function SectionBulkImport({ builtinList, onImported }) {
               {plan.toAdd.length > 0 && (
                 <div>
                   <div className="catmnt-bulk-import-result-title">追加される行（{plan.toAdd.length}件）</div>
-                  <ul>{plan.toAdd.map(e => <li key={e.key}>{e.label}</li>)}</ul>
+                  <ul>
+                    {plan.toAdd.map(e => (
+                      <li
+                        key={e.key}
+                        className={`catmnt-bulk-import-row${e.key === selectedDraftKey ? ' catmnt-bulk-import-row--selected' : ''}`}
+                        onClick={() => setSelectedDraftKey(e.key)}
+                      >
+                        {e.label}
+                      </li>
+                    ))}
+                  </ul>
+                  {/* ステップ9c: 選択中の1件だけ作図プレビューを出す（一覧全部は同時に描かない）。 */}
+                  {selectedDraft && <CatalogPreview kind={CatalogKind.SECTION} entry={selectedDraft} />}
                 </div>
               )}
               {plan.skipped.length > 0 && (
