@@ -8,6 +8,7 @@ import {
   planRealign, realignTargets, planBulkSectionImport, formatReadonlyValue, formatCategoryLabel,
   rowEditState, lockedFieldsFor, planSaveEntry, planRevertToBuiltin, planRemoveUserEntry, applyCatalogEditPlan,
   materialExtraLockedFields, materialSaveMessage, lockedFieldReason, materialRowDisabledReason, removeMessageFor,
+  backingClassDisplayFor,
 } from './catalogMaintenance.js';
 import { setOverlay, clearOverlays, overlayFor, docDiffMap, composeCatalog } from './catalogRegistry.js';
 import { valuesEqual } from './catalogMatch.js';
@@ -183,11 +184,132 @@ test('nextMaterialCode: 使用が無ければ1番から', () => {
 });
 
 // ---- validateMaterialEntry: 失敗メッセージ・R17・category制限 ----
-test('validateMaterialEntry: panel/finish以外のcategoryは追加不可（日本語メッセージ）', () => {
-  const entry = buildMaterialEntry({ code: '201000000099', name: 'テスト', category: 'backing' });
+test('【失敗系】validateMaterialEntry: 未知のcategoryは追加不可（日本語メッセージ）', () => {
+  const entry = buildMaterialEntry({ code: '201000000099', name: 'テスト', category: 'unknown' });
   const result = validateMaterialEntry(entry, []);
   assert.equal(result.ok, false);
-  assert.match(result.message, /面材・仕上げ材のみ/);
+  assert.match(result.message, /面材・仕上げ材・下地材のみ/);
+});
+
+// ---- buildMaterialEntry: category:backingはx/yをそのまま持たせる。backingClassは値がある時だけ ----
+test('buildMaterialEntry: category:panel/finishはx/y=0固定でbackingClassを持たない', () => {
+  const entry = buildMaterialEntry({ code: '301000000099', name: 'A', category: 'panel', x: 999, y: 999, backingClass: 'wood' });
+  assert.equal(entry.x, 0);
+  assert.equal(entry.y, 0);
+  assert.equal(entry.backingClass, undefined);
+});
+
+test('buildMaterialEntry: category:backingはx/y/backingClassをそのまま持たせる', () => {
+  const entry = buildMaterialEntry({ code: '101400000099', name: '□-105×36', category: 'backing', x: 105, y: 36, backingClass: 'wood' });
+  assert.equal(entry.x, 105);
+  assert.equal(entry.y, 36);
+  assert.equal(entry.backingClass, 'wood');
+});
+
+// ---- ステップ12c QA指摘M1（2026-09-24再報告）: backingClassがnull/undefinedならキー自体を
+// 持たせない（本体の下地材はbackingClassフィールドを持たないため、null固定にするとkindDef.validate
+// が「backingClassが不正です」で拒否し、本体の下地材が一切編集保存できなくなる事故を防ぐ）----
+test('【失敗系・ステップ12c QA指摘M1】buildMaterialEntry: category:backingでbackingClassが未指定（null）ならentryにbackingClassキー自体を持たせない', () => {
+  const entry = buildMaterialEntry({ code: '101400000099', name: '□-105×36', category: 'backing', x: 105, y: 36 });
+  assert.equal(Object.prototype.hasOwnProperty.call(entry, 'backingClass'), false);
+});
+
+test('ステップ12c: UI相当の経路（formFromEntry→buildMaterialEntry→planSaveEntry）で本体RC下地材・間柱・90×90のnote編集がok:true・noop:falseになる（QA指摘M1回帰）', () => {
+  // materialData.js実データと同型（backingClassフィールドを持たない）の3種のbuiltin下地材。
+  const rc = { code: '501000000001', name: 'RC壁 t=150', spec: '鉄筋コンクリート', x: 0, y: 0, thickness: 150, note: '旧', category: 'backing' };
+  const stud = { code: '101400000005', name: '□-90×45', spec: '杉・松等', x: 90, y: 45, thickness: null, note: '旧', category: 'backing' };
+  const square = { code: '101000000001', name: '□-90×90', spec: '杉・桧等', x: 90, y: 90, thickness: null, note: '旧', category: 'backing' };
+  for (const prevEntry of [rc, stud, square]) {
+    // formFromEntry相当: name/spec/thickness/note/category/x/yを引き継ぎ、backingClassは
+    // entry.backingClass ?? '' → '' になる（本体行はbackingClassを持たないため）。
+    const form = {
+      name: prevEntry.name, spec: prevEntry.spec,
+      thickness: prevEntry.thickness == null ? '' : String(prevEntry.thickness),
+      note: '新備考', category: prevEntry.category, x: prevEntry.x, y: prevEntry.y, backingClass: '',
+    };
+    const entry = buildMaterialEntry({
+      code: prevEntry.code, name: form.name, spec: form.spec,
+      thickness: form.thickness === '' ? null : Number(form.thickness), note: form.note, category: form.category,
+      x: Number(form.x), y: Number(form.y), backingClass: form.backingClass || undefined,
+    });
+    const plan = planSaveEntry(CatalogKind.MATERIAL, entry, { builtinList: [prevEntry], rowState: 'builtin', prevEntry });
+    assert.equal(plan.ok, true, `${prevEntry.code}: ${plan.message}`);
+    assert.equal(plan.noop, false, `${prevEntry.code}: noteを変えたのでnoopではないはず`);
+  }
+});
+
+// ---- ステップ12c QA指摘M3（2026-09-24再報告・リード裁定Q-1=案(a)）: 下地材の必須検査は
+// planSaveEntry に一本化——新規追加・既存編集の両方に掛かる。ただし本体の上書き行
+// （builtinKeys.has(key)）では掛からない（RC3件のx=y=0・全builtin下地材のbackingClass欠落対策）----
+test('planSaveEntry: 下地材の新規追加（builtinに同キー無し）はx/y>0・backingClass必須を満たせば通る', () => {
+  const entry = buildMaterialEntry({
+    code: '101400000099', name: '□-105×36', category: 'backing', x: 105, y: 36, backingClass: 'wood',
+  });
+  const plan = planSaveEntry(CatalogKind.MATERIAL, entry, { builtinList: [], rowState: null });
+  assert.equal(plan.ok, true);
+});
+
+test('【失敗系】planSaveEntry: ユーザー下地材の新規追加でbackingClassが\'rc\'は拒否（RCは固定集合判定のみ選択不可）', () => {
+  const entry = buildMaterialEntry({
+    code: '101400000099', name: '□-105×36', category: 'backing', x: 105, y: 36, backingClass: 'rc',
+  });
+  const plan = planSaveEntry(CatalogKind.MATERIAL, entry, { builtinList: [], rowState: null });
+  assert.equal(plan.ok, false);
+  assert.match(plan.message, /木／その他/);
+});
+
+test('【失敗系】planSaveEntry: ユーザー下地材の新規追加でbackingClass未指定は拒否', () => {
+  const entry = buildMaterialEntry({ code: '101400000099', name: '□-105×36', category: 'backing', x: 105, y: 36 });
+  const plan = planSaveEntry(CatalogKind.MATERIAL, entry, { builtinList: [], rowState: null });
+  assert.equal(plan.ok, false);
+  assert.match(plan.message, /木／その他/);
+});
+
+test('【失敗系】planSaveEntry: ユーザー下地材の新規追加でx=0は拒否（Xは0より大きい数値）', () => {
+  const entry = buildMaterialEntry({
+    code: '101400000099', name: '□-105×36', category: 'backing', x: 0, y: 36, backingClass: 'wood',
+  });
+  const plan = planSaveEntry(CatalogKind.MATERIAL, entry, { builtinList: [], rowState: null });
+  assert.equal(plan.ok, false);
+  assert.match(plan.message, /Xは0より大きい数値/);
+});
+
+test('【失敗系】planSaveEntry: ユーザー下地材の新規追加でy=0は拒否（Yは0より大きい数値）', () => {
+  const entry = buildMaterialEntry({
+    code: '101400000099', name: '□-105×36', category: 'backing', x: 105, y: 0, backingClass: 'wood',
+  });
+  const plan = planSaveEntry(CatalogKind.MATERIAL, entry, { builtinList: [], rowState: null });
+  assert.equal(plan.ok, false);
+  assert.match(plan.message, /Yは0より大きい数値/);
+});
+
+test('【失敗系】planSaveEntry: ユーザー下地材（origin:user・builtinに同キー無し）の編集でx<0は拒否', () => {
+  const prevEntry = buildMaterialEntry({
+    code: '101400000099', name: '□-105×36', category: 'backing', x: 105, y: 36, backingClass: 'wood',
+  });
+  const entry = { ...prevEntry, x: -5 };
+  const plan = planSaveEntry(CatalogKind.MATERIAL, entry, { builtinList: [], rowState: 'user', prevEntry });
+  assert.equal(plan.ok, false);
+  assert.match(plan.message, /Xは0より大きい数値/);
+});
+
+test('【失敗系】planSaveEntry: ユーザー下地材の編集でbackingClassを空にすると拒否', () => {
+  const prevEntry = buildMaterialEntry({
+    code: '101400000099', name: '□-105×36', category: 'backing', x: 105, y: 36, backingClass: 'wood',
+  });
+  const entry = { ...prevEntry, backingClass: undefined, note: '変更' };
+  delete entry.backingClass;
+  const plan = planSaveEntry(CatalogKind.MATERIAL, entry, { builtinList: [], rowState: 'user', prevEntry });
+  assert.equal(plan.ok, false);
+  assert.match(plan.message, /木／その他/);
+});
+
+test('ステップ12c: 本体の上書き行（builtinKeys.has(key)）はx=0・backingClass欠落でも下地材の必須検査を素通りする（RC3件対策。一般則）', () => {
+  const prevEntry = { code: '501000000001', name: 'RC壁 t=150', spec: '', x: 0, y: 0, thickness: 150, note: '旧', category: 'backing' };
+  const entry = { ...prevEntry, note: '新' };
+  const plan = planSaveEntry(CatalogKind.MATERIAL, entry, { builtinList: [prevEntry], rowState: 'builtin', prevEntry });
+  assert.equal(plan.ok, true);
+  assert.equal(plan.noop, false);
 });
 
 test('validateMaterialEntry: kindDef.validate失敗（name欠落）は日本語メッセージを返す', () => {
@@ -314,11 +436,12 @@ test('【失敗系】commitUserEntries: saveFnがrejectしたらoverlayはprevUs
 });
 
 // ---- isEditableMaterialCategory ----
-test('isEditableMaterialCategory: panel/finishはtrue、backingはfalse', () => {
+test('isEditableMaterialCategory: panel/finish/backingはtrue（ステップ12c: 下地材も開放）、未知categoryはfalse', () => {
   assert.equal(isEditableMaterialCategory(MATERIAL_CATEGORY.PANEL), true);
   assert.equal(isEditableMaterialCategory(MATERIAL_CATEGORY.FINISH), true);
-  assert.equal(isEditableMaterialCategory(MATERIAL_CATEGORY.BACKING), false);
+  assert.equal(isEditableMaterialCategory(MATERIAL_CATEGORY.BACKING), true);
   assert.equal(isEditableMaterialCategory(undefined), false);
+  assert.equal(isEditableMaterialCategory('unknown'), false);
 });
 
 // ---- canEditMaterialRow はステップ12b でrowEditState（1.1）+isEditableMaterialCategoryへ置換され
@@ -911,6 +1034,18 @@ test('【QA指摘m1】planSaveEntry: 1項目でも変わっていればnoopに�
   assert.equal(result.noop, false);
 });
 
+// ---- ステップ12c QA指摘M2（2026-09-24再報告）: backingClassをcompareFieldsに含めたため、
+// 下地区分だけの変更はnoopにならない ----
+test('【QA指摘M2】planSaveEntry: ユーザー下地材のbackingClass変更（wood→other）だけでもnoopにならない', () => {
+  const prevEntry = buildMaterialEntry({
+    code: '101400000099', name: '□-105×36', category: 'backing', x: 105, y: 36, backingClass: 'wood',
+  });
+  const entry = { ...prevEntry, backingClass: 'other' };
+  const result = planSaveEntry(CatalogKind.MATERIAL, entry, { builtinList: [], rowState: 'user', prevEntry });
+  assert.equal(result.ok, true);
+  assert.equal(result.noop, false);
+});
+
 // ---- QA指摘m4（2026-09-24再報告）: planSaveEntryの戻り値にoverridesBuiltin/thicknessChanged/
 // needsConfirmを含める（.jsx側で再計算しない） ----
 test('【QA指摘m4】planSaveEntry: overridesBuiltinはbuiltinKeys.has(key)をそのまま返す（builtin/override行はtrue）', () => {
@@ -1221,6 +1356,50 @@ test('materialExtraLockedFields: studCodes省略時は常に空配列', () => {
   assert.deepEqual(materialExtraLockedFields('101400000001'), []);
 });
 
+// ---- ステップ12c: 下地材開放により間柱6コードのextraLocked（x/y/thickness）が実効化する
+// （lockedFieldsFor→planSaveEntry の通し。12bまではbacking行が編集不可だったため到達しなかった経路） ----
+test('【失敗系・ステップ12c】planSaveEntry: 間柱コード（studCodes）の下地材行はx/yを変更すると拒否される（materialExtraLockedFields経由）', () => {
+  const studCodes = new Set(['101400000005']); // □-90×45（WOOD_STUD_CODE_BY_SIZE['90x45']）
+  const prevEntry = buildMaterialEntry({
+    code: '101400000005', name: '□-90×45', category: 'backing', x: 90, y: 45, backingClass: 'wood',
+  });
+  const entry = { ...prevEntry, x: 100 }; // xだけ変更
+  const plan = planSaveEntry(CatalogKind.MATERIAL, entry, {
+    builtinList: [prevEntry], rowState: 'builtin', prevEntry,
+    extraLocked: materialExtraLockedFields(prevEntry.code, studCodes),
+  });
+  assert.equal(plan.ok, false);
+  assert.match(plan.message, /Xは変更できません/);
+});
+
+test('【失敗系・ステップ12c】planSaveEntry: 間柱コードの下地材行はthicknessを変更しても拒否される', () => {
+  const studCodes = new Set(['101400000005']);
+  const prevEntry = buildMaterialEntry({
+    code: '101400000005', name: '□-90×45', category: 'backing', x: 90, y: 45, thickness: null, backingClass: 'wood',
+  });
+  const entry = { ...prevEntry, thickness: 30 };
+  const plan = planSaveEntry(CatalogKind.MATERIAL, entry, {
+    builtinList: [prevEntry], rowState: 'builtin', prevEntry,
+    extraLocked: materialExtraLockedFields(prevEntry.code, studCodes),
+  });
+  assert.equal(plan.ok, false);
+  assert.match(plan.message, /厚.*変更できません/);
+});
+
+test('ステップ12c: 間柱コードの下地材行でもnote（固定対象外の項目）は変更でき、保存できる', () => {
+  const studCodes = new Set(['101400000005']);
+  const prevEntry = buildMaterialEntry({
+    code: '101400000005', name: '□-90×45', category: 'backing', x: 90, y: 45, note: '旧備考', backingClass: 'wood',
+  });
+  const entry = { ...prevEntry, note: '新備考' };
+  const plan = planSaveEntry(CatalogKind.MATERIAL, entry, {
+    builtinList: [prevEntry], rowState: 'builtin', prevEntry,
+    extraLocked: materialExtraLockedFields(prevEntry.code, studCodes),
+  });
+  assert.equal(plan.ok, true);
+  assert.equal(plan.noop, false);
+});
+
 // ---- ステップ12b: materialSaveMessage（保存後メッセージの文言選択。Q-C/Q-E確定）----
 test('materialSaveMessage: どちらの注記も不要なら「保存しました」のみ', () => {
   assert.equal(materialSaveMessage({}), '保存しました');
@@ -1247,9 +1426,14 @@ test('materialSaveMessage: 両方trueなら「／」で連結する', () => {
 
 // ---- QA指摘m4（2026-09-24再報告）: materialRowDisabledReason（材料タブのフォーム無効化理由の
 // 唯一の判定式。.jsx側で再実装しない） ----
-test('materialRowDisabledReason: categoryが下地材なら最優先で下地材の理由（origin/editStateに関わらず）', () => {
+test('materialRowDisabledReason: ステップ12c: categoryが下地材でもeditState.canEditがtrueならnull（下地材の編集開放）', () => {
   const reason = materialRowDisabledReason({ isAdding: false, category: MATERIAL_CATEGORY.BACKING, editState: { canEdit: true, reason: null } });
-  assert.match(reason, /下地材はこのパネルでは編集できません/);
+  assert.equal(reason, null);
+});
+
+test('【失敗系】materialRowDisabledReason: 未知のcategoryは最優先で編集不可の理由を返す（origin/editStateに関わらず）', () => {
+  const reason = materialRowDisabledReason({ isAdding: false, category: 'unknown', editState: { canEdit: true, reason: null } });
+  assert.match(reason, /このカテゴリの材料はここでは編集できません/);
 });
 
 test('materialRowDisabledReason: 新規追加（isAdding:true）はcategoryが編集可能ならnull', () => {
@@ -1305,4 +1489,29 @@ test('formatReadonlyValue: openingSubTypeBuiltinList()の全件×READONLY項目�
       assert.ok(!/undefined/.test(text), `${entry.category}:${entry.key} の ${field} にundefinedが出ている: ${text}`);
     }
   }
+});
+
+// ---- ステップ12c QA指摘m2（2026-09-24再報告）: backingClassDisplayFor（下地区分selectの表示値） ----
+test('backingClassDisplayFor: entryがnullなら空文字', () => {
+  assert.equal(backingClassDisplayFor(null, () => 'wood'), '');
+});
+
+test('backingClassDisplayFor: entry.backingClassが\'wood\'|\'other\'ならそのまま返す（backingClassOfFnは呼ばれない）', () => {
+  let called = false;
+  const fn = () => { called = true; return 'other'; };
+  assert.equal(backingClassDisplayFor({ code: 'x', backingClass: 'wood' }, fn), 'wood');
+  assert.equal(called, false, '明示backingClassがあるときはbackingClassOfFnを呼ばないはず');
+});
+
+test('backingClassDisplayFor: entry.backingClassが未設定（本体の下地材）ならbackingClassOfFn(entry.code)の結果を返す（RCも表示できる）', () => {
+  const fn = code => (code === '501000000001' ? 'rc' : 'other');
+  assert.equal(backingClassDisplayFor({ code: '501000000001' }, fn), 'rc');
+});
+
+test('backingClassDisplayFor: entry.backingClassが空文字（未選択）でもbackingClassOfFn経由の値を返す', () => {
+  assert.equal(backingClassDisplayFor({ code: 'x', backingClass: '' }, () => 'wood'), 'wood');
+});
+
+test('backingClassDisplayFor: backingClassOfFn省略時は空文字', () => {
+  assert.equal(backingClassDisplayFor({ code: 'x' }, undefined), '');
 });

@@ -138,6 +138,14 @@ test('boundaryMaster.compareFields/matchFields: kind,layers,derivedFrom,fields�
   assert.equal(def.minMatchFields, 4);
 });
 
+// ---- ステップ12c QA指摘M2（2026-09-24再報告）: material.compareFieldsにbackingClassを含み、
+// silentDiffFields（spec/thickness）には含めない（下地区分の不一致は通知あり） ----
+test('material.compareFields: backingClassを含み、silentDiffFieldsには含めない（下地区分の差は通知あり）', () => {
+  const def = kindDef('material');
+  assert.ok(def.compareFields.includes('backingClass'), 'material.compareFieldsにbackingClassが無い');
+  assert.ok(!def.silentDiffFields.includes('backingClass'), 'material.silentDiffFieldsにbackingClassが含まれている（下地区分の差が無音化してしまう）');
+});
+
 // ---- ステップ12a: keyBoundFields/overrideLockedFields（Q-B確定 2026-09-23）----
 test('keyBoundFields/overrideLockedFields: 登録表の5種別が表どおりの固定項目を持つ', () => {
   assert.deepEqual(kindDef('material').keyBoundFields, ['code']);

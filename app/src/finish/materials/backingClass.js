@@ -3,9 +3,20 @@
 //
 // materialData.js は仕上げモード突入時にのみ動的importされるコード分割対象のため、構造モード側
 // （静的import）からは本体を読み込めない／読み込むべきではない。判定に必要なのは材コード集合だけで
-// 材データ本体（名称・寸法等）は不要なため、このファイル（データのみ・依存ゼロ）を分離し、
+// 材データ本体（名称・寸法等）は不要なため、このファイル（データのみ）を分離し、
 // materialData.js の該当エントリ（category:'backing'）と同じ配列を参照させることで
 // コードの二重管理を防ぐ（配列はこちらが真実のソース）。
+//
+// ステップ12c（2026-09-24）: catalog/catalogRegistry.js（overlay。doc/userライブラリ）・
+// catalog/catalogKinds.js（CatalogKind）を静的importする——ユーザーが「カタログ保守」で追加した
+// 下地材（backingClass:'wood'|'other'。RCは選べない）も backingClassOf で分類できるようにするため
+// （固定集合＝builtin下地材だけを見ていた従来の「依存ゼロ」から変更）。どちらも純モジュール
+// （store.js/snap.js/.jsxを静的importしない）のため、本ファイルを import する側
+// （structural/wallBeamAxes.js・openings/sashDetailCatalog.js 等）の node:test 単体import互換性は
+// 崩れない。
+import { overlayFor, overlayGeneration } from '../../catalog/catalogRegistry.js';
+import { CatalogKind } from '../../catalog/catalogKinds.js';
+
 export const RC_WALL_BACKING_CODES = Object.freeze([
   '501000000001', // RC壁 t=150
   '501000000002', // RC壁 t=180
@@ -71,9 +82,53 @@ export function woodStudCodeFor(widthMm, depthMm) {
 /** 下地材分類（structural/structureRules.js の BACKING_RULES＝壁下地材ごとのルールのキー）。 */
 export const BackingClass = Object.freeze({ WOOD: 'wood', RC: 'rc', OTHER: 'other' });
 
-/** code（下地材コード）の下地材分類。分類の真実はこのファイルの材コード集合。 */
+// --- overlay（ユーザー追加の下地材）経由の判定＋メモ化（ステップ12c・2026-09-24） -----------------
+//
+// ユーザーが「カタログ保守」で追加した下地材（catalog/catalogMaintenance.js。category:'backing'・
+// backingClass:'wood'|'other'必須・'rc'は選べない）は固定集合（WOOD_WALL_BACKING_CODE_SET・
+// RC_WALL_BACKING_CODE_SET）に載らないため、overlay（doc>userの解決順。catalogRegistry.jsの
+// overlayFor）のmaterialエントリからbackingClassフィールドを引く。builtin一覧（materialData.js）は
+// 静的importしない（本ファイルの依存ゼロ方針の対象——builtinの下地材は上のWOOD/RC固定集合で
+// 既に判定済みのため、overlay側でbuiltinを二重に見る必要が無い）。
+//
+// structural/wallBeamAxes.js・openings/sashDetailCatalog.js からホットパスで呼ばれるため、
+// structural/sectionCatalog.js catalogMap() と同型のメモ化（overlayGeneration()をキーにする）を
+// 行う——世代が変わらない間はoverlayFor(material)を読み直さない。
+let _overlayMaterialMap = null;
+let _overlayGen = -1;
+
+// 下地材のcategory値（catalog/catalogMaintenance.js MATERIAL_CATEGORY.BACKINGと同じ文字列）。
+// backingClass.jsは catalog/catalogMaintenance.js を import しない（依存を増やさない——MATERIAL_CATEGORY
+// と同様、値だけをここに複製する既存パターンを踏襲）。
+const BACKING_CATEGORY = 'backing';
+
+function overlayMaterialMap() {
+  const gen = overlayGeneration();
+  if (_overlayMaterialMap === null || _overlayGen !== gen) {
+    const { doc, user } = overlayFor(CatalogKind.MATERIAL);
+    const map = new Map();
+    // ステップ12c QA指摘n1（2026-09-24再報告）: category:'backing'のエントリだけを入れる
+    // （面材・仕上げ材のcodeが偶然この関数に渡された場合に誤判定しない）。
+    // doc>userの解決順（catalogRegistry.js composeCatalogと同じ優先順位）——先にuserを入れ、
+    // docで上書きする。
+    for (const e of user) if (typeof e?.code === 'string' && e.category === BACKING_CATEGORY) map.set(e.code, e);
+    for (const e of doc) if (typeof e?.code === 'string' && e.category === BACKING_CATEGORY) map.set(e.code, e);
+    _overlayMaterialMap = map;
+    _overlayGen = gen;
+  }
+  return _overlayMaterialMap;
+}
+
+/**
+ * code（下地材コード）の下地材分類。固定集合（builtinのWOOD/RC）を最優先——同じcodeでユーザーが
+ * overlayにbackingClass:'other'等を持つエントリを重ねても、固定集合の判定が勝つ（RC壁下地は
+ * 常にRC。「同梱'other'でもRC」——固定集合優先のテストが守る）。固定集合に無ければoverlay
+ * （doc>user）のmaterialエントリを見て、backingClass:'wood'ならWOOD、それ以外（'other'・'rc'
+ * （選べないはずだが防御的にOTHER扱い）・未設定・エントリ無し）はOTHER。
+ */
 export function backingClassOf(code) {
   if (WOOD_WALL_BACKING_CODE_SET.has(code)) return BackingClass.WOOD;
   if (RC_WALL_BACKING_CODE_SET.has(code)) return BackingClass.RC;
-  return BackingClass.OTHER;
+  const entry = overlayMaterialMap().get(code);
+  return entry?.backingClass === BackingClass.WOOD ? BackingClass.WOOD : BackingClass.OTHER;
 }

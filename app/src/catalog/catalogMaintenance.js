@@ -1,8 +1,8 @@
 // ================================================================
 // カタログ保守パネル（ステップ5・ハンバーガー「カタログ保守」）の純ロジック。
 //
-// 第1段の範囲＝材料（material）の面材（panel）・仕上げ材（finish）のみ。
-// 下地材（backing）は一覧に出所バッジ付きで表示してよいが、追加・編集・削除は不可。
+// 材料（material）の面材（panel）・仕上げ材（finish）・下地材（backing）の追加・編集・削除
+// （ステップ12c・2026-09-24: 下地材も開放。クラス（backingClass）は木／その他の2択必須・RC不可）。
 //
 // 純モジュール（葉）。同ディレクトリの兄弟モジュール（catalogKinds.js・catalogRegistry.js・
 // catalogMatch.js・materialCode.js・catalogBundle.js・catalogCodec.js・usedEntries.js）に
@@ -34,12 +34,48 @@ export const MATERIAL_CATEGORY = Object.freeze({
   FINISH:  'finish',
 });
 
-/** このパネルで追加・編集できるカテゴリ（第1段の範囲。下地材は対象外）。 */
-export const EDITABLE_MATERIAL_CATEGORIES = Object.freeze([MATERIAL_CATEGORY.PANEL, MATERIAL_CATEGORY.FINISH]);
+/** このパネルで追加・編集できるカテゴリ（ステップ12c: 下地材も開放）。 */
+export const EDITABLE_MATERIAL_CATEGORIES = Object.freeze([
+  MATERIAL_CATEGORY.PANEL, MATERIAL_CATEGORY.FINISH, MATERIAL_CATEGORY.BACKING,
+]);
 
-/** category が追加・編集可能（面材・仕上げ材）かどうか。 */
+/** category が追加・編集可能（面材・仕上げ材・下地材）かどうか。 */
 export function isEditableMaterialCategory(category) {
   return EDITABLE_MATERIAL_CATEGORIES.includes(category);
+}
+
+/**
+ * ステップ12c（Q-A確定 2026-09-24）: 下地材（backing）のクラス選択肢。'wood'|'other'のみ——
+ * RCは固定集合判定（finish/materials/backingClass.js の RC_WALL_BACKING_CODES）専用で、
+ * ユーザーがここから選ぶことはできない。値は finish/materials/backingClass.js の BackingClass と
+ * 同じだが、catalog/*.js は finish/materials/* を静的importできない（catalogImports.test.js の
+ * 許可リスト）ため、MATERIAL_CATEGORY と同様に値だけをここに複製する（二重管理は
+ * structureRules.test.js 等の実データ突合せで検知——本ファイルの既存パターンを踏襲）。
+ */
+export const BACKING_CLASS_OPTIONS = Object.freeze([
+  { value: 'wood', label: '木' },
+  { value: 'other', label: 'その他' },
+]);
+const BACKING_CLASS_VALUES = Object.freeze(new Set(BACKING_CLASS_OPTIONS.map(o => o.value)));
+
+/**
+ * ステップ12c QA指摘m2（2026-09-24再報告）: 下地区分selectの表示値。本体の下地材
+ * （materialData.jsのRC3件・間柱・正角材）は entry.backingClass フィールド自体を持たない
+ * （M1参照）ため、選択済みの値をそのまま表示すると常に「選択してください」（空）になり、
+ * 実際の分類（RC固定・木質固定）が読み取れない。entry.backingClassが明示的に'wood'|'other'
+ * なら（ユーザーが選んだ値）それをそのまま使い、無ければ backingClassOfFn（finish/materials/
+ * backingClass.js の backingClassOf。catalog/*.js は静的importできないため呼び出し側が注入する
+ * ——DI型はplanBulkSectionImportのparseSpecList等と同じ既存パターン）で導出した固定集合の分類
+ * （'wood'|'rc'|'other'）を返す——表示専用の値で、保存には使わない（呼び出し側がform stateと
+ * 独立に扱うこと）。
+ * @param {{ code?: string, backingClass?: string|null }|null} entry
+ * @param {(code: string|undefined) => string} backingClassOfFn
+ * @returns {string} 'wood'|'rc'|'other'|''（entry省略時）
+ */
+export function backingClassDisplayFor(entry, backingClassOfFn) {
+  if (!entry) return '';
+  if (entry.backingClass === 'wood' || entry.backingClass === 'other') return entry.backingClass;
+  return backingClassOfFn ? backingClassOfFn(entry.code) : '';
 }
 
 /**
@@ -246,21 +282,39 @@ export function nextMaterialCode(major, minor, knownCodes) {
 }
 
 /**
- * フォーム入力から材エントリを組み立てる。x/yは面材・仕上げ材の規約どおり常に0固定
- * （materialData.js「面材・仕上げ材は寸法なし→0,0」と同じ）。
+ * フォーム入力から材エントリを組み立てる。面材・仕上げ材はx/yを常に0固定
+ * （materialData.js「面材・仕上げ材は寸法なし→0,0」と同じ）。下地材（category:'backing'）は
+ * x/yをそのまま持たせる。
  * QA指摘Minor3（再指摘）: name/spec/noteの前後の空白を除く責務をこの関数1箇所に寄せる
- * （呼び出し側でtrimしてから渡す約束にすると、呼び出し側が増えたときにtrimし忘れが起こる）。
+ * （呼び出し側でトリムしてから渡す約束にすると、呼び出し側が増えたときにトリムし忘れが起こる）。
  *
- * ステップ12b QA指摘n1（12c申し送り・2026-09-24再報告）: x/y:0固定は「面材・仕上げ材は寸法なし」
- * という第1段（面材・仕上げ材のみ）専用の割り切り。12cで下地材カテゴリを開放すると、間柱コード
- * （WOOD_STUD_CODE_BY_SIZE）行はmaterialExtraLockedFieldsでx/y/thicknessがロックされるため、
- * この関数のままx/yを0で組み立てると「元のx/yから変えていないのにロック違反で拒否される」
- * 事故になる——12cでは下地材カテゴリのときだけフォームから元entryのx/yを引き継ぐ分岐を追加
- * すること（この関数を下地材向けに複製しない。カテゴリ分岐をこの関数へ足すか、下地材専用の
- * 組み立て関数を別途置くかは12c設計時に判断する）。
+ * ステップ12b QA指摘n1（12c申し送り・2026-09-24再報告）の解消: x/y:0固定は面材・仕上げ材専用の
+ * 割り切りのまま残し、category:'backing'のときだけ呼び出し側（フォーム）から渡された x/y を
+ * そのまま使う——間柱コード（WOOD_STUD_CODE_BY_SIZE）行の materialExtraLockedFields
+ * （x/y/thicknessロック）は、フォーム（ui/CatalogMaintenancePanel.jsx formFromEntry）が編集開始時に
+ * 元entryのx/yを引き継ぐため、変更していなければlockedFieldsForの一致検査を通る。
+ *
+ * ステップ12c QA指摘M1（2026-09-24再報告）: backingClassは値が無ければ（null/undefined）
+ * entryにキー自体を持たせない——本体の下地材（materialData.jsのRC3件・間柱・正角材）は
+ * backingClassフィールドを一切持たないため、フォームの空選択（''）がnullへ変換されてここへ来ても
+ * `entry.backingClass = null` にしてしまうと kindDef.validate が「backingClassが不正です」で
+ * 拒否し、本体の下地材が一切編集保存できなくなる（QA実測: note変更ですら拒否された）。
+ * @param {{ code:string, name:string, spec?:string, thickness?:number|null, note?:string,
+ *           category:string, x?:number, y?:number, backingClass?:string|null }} args
  */
-export function buildMaterialEntry({ code, name, spec = '', thickness = null, note = '', category }) {
-  return { code, name: name.trim(), spec: spec.trim(), x: 0, y: 0, thickness, note: note.trim(), category };
+export function buildMaterialEntry({
+  code, name, spec = '', thickness = null, note = '', category, x = 0, y = 0, backingClass = null,
+}) {
+  const entry = { code, name: name.trim(), spec: spec.trim(), thickness, note: note.trim(), category };
+  if (category === MATERIAL_CATEGORY.BACKING) {
+    entry.x = x;
+    entry.y = y;
+    if (backingClass != null) entry.backingClass = backingClass;
+  } else {
+    entry.x = 0;
+    entry.y = 0;
+  }
+  return entry;
 }
 
 /**
@@ -277,16 +331,21 @@ export function duplicateMaterialEntry(sourceEntry, knownCodes) {
 }
 
 /**
- * 保存前検証: (1) カテゴリが編集可能（panel/finish）であること、(2) kindDef('material').validate、
+ * 保存前検証: (1) カテゴリが編集可能（panel/finish/backing）であること、(2) kindDef('material').validate、
  * (3) assertNoDuplicate（R17。builtinList から合成した全エントリに対して検査）。
  * 失敗は日本語メッセージで返す（例外を投げない——フォーム表示用）。
+ * ステップ12c QA指摘M3（2026-09-24再報告・リード裁定Q-1=案(a)）: 下地材（category:'backing'）の
+ * 必須検査（x/y>0・backingClass必須）はここではなく planSaveEntry 側（新規追加・既存編集の
+ * 両方が通る唯一の経路）に一本化した——本関数は新規追加（isAdding）経路でしか呼ばれず、既存行の
+ * 編集は planSaveEntry のみを通るため、ここに検査を残すと編集経路が検査されない穴になる
+ * （QA指摘M3の症状そのもの）。
  * @returns {{ ok: true } | { ok: false, message: string }}
  */
 export function validateMaterialEntry(entry, builtinList) {
   if (!isEditableMaterialCategory(entry?.category)) {
     return {
       ok: false,
-      message: `このカテゴリの材料はここでは編集できません（面材・仕上げ材のみ）: ${entry?.category}`,
+      message: `このカテゴリの材料はここでは編集できません（面材・仕上げ材・下地材のみ）: ${entry?.category}`,
     };
   }
   const def = kindDef(CatalogKind.MATERIAL);
@@ -620,6 +679,41 @@ export function lockedFieldReason(kind, field) {
 }
 
 /**
+ * ステップ12c QA指摘M3（2026-09-24再報告・リード裁定Q-1=案(a)）: 下地材（material・
+ * category:'backing'）の必須検査（backingClassは'wood'|'other'必須・x/yは0より大きい数値必須）。
+ * planSaveEntry からのみ呼ぶ（新規追加・既存編集の両方が通る唯一の経路に一本化——
+ * validateMaterialEntryのbacking検査は重複のため削除済み）。
+ *
+ * 「本体の上書き行」（builtinKeys.has(key)。origin='builtin'の素のbuiltin行、および同キーを
+ * userライブラリで上書きしたoverride/doc-override行の両方を含む）では検査を丸ごと掛けない——
+ * 一般則（リード裁定Q-1）。理由: materialData.js の builtin 下地材（RC 3件は x=y=0 が仕様。
+ * 間柱・正角材はx/y>0だが backingClass フィールド自体を最初から持たない）は12c以前からある
+ * 既存データで、ユーザーが作った値ではない。overrideLockedFields（catalogKinds.js）が
+ * category/backingClassの値そのものを上書き行では変更不可にしている（lockedFieldsForで
+ * prevEntryと同値であることを別途強制）ため、ここで検査を緩めても不正なbackingClass/x/yが
+ * 新たに混入する経路は無い——検査を掛けると「note等の項目だけを変える編集」まで本体データの
+ * 形（x=0の RC 3件・backingClass未設定の全builtin下地材）を理由に拒否してしまう
+ * （QA指摘M1の症状と同型）。ユーザーが新規追加・自分のuserエントリを編集する行
+ * （builtinKeys.has(key)===false）には常に掛かる。
+ * @param {object} entry
+ * @param {{ builtinOverride: boolean }} args
+ * @returns {{ ok: true } | { ok: false, message: string }}
+ */
+function validateBackingMaterialFields(entry, { builtinOverride }) {
+  if (builtinOverride) return { ok: true };
+  if (!(typeof entry.x === 'number' && entry.x > 0)) {
+    return { ok: false, message: '下地材のXは0より大きい数値を入力してください' };
+  }
+  if (!(typeof entry.y === 'number' && entry.y > 0)) {
+    return { ok: false, message: '下地材のYは0より大きい数値を入力してください' };
+  }
+  if (!BACKING_CLASS_VALUES.has(entry.backingClass)) {
+    return { ok: false, message: '下地材のクラスは木／その他のいずれかです' };
+  }
+  return { ok: true };
+}
+
+/**
  * ステップ12a（1.3 本体編集の保存プラン）: (0) rowStateがEXISTING_ROW_STATES（既存行の編集）
  * なのにprevEntryが省略されていれば拒否（QA指摘Minor-2） (1) 固定項目
  * （lockedFieldsFor。加えてkeyOf自体の一致——QA指摘Nit-2: valuesEqualは文字列をtrimして
@@ -680,6 +774,13 @@ export function planSaveEntry(kind, entry, { builtinList = [], rowState = null, 
     if (diffPairs(kind, prevEntry, entry).length === 0) {
       return { ok: true, noop: true };
     }
+  }
+
+  // ステップ12c QA指摘M3（2026-09-24再報告）: 下地材の必須検査（material専用。他種別には無関係）。
+  // 新規追加・既存編集の両方がplanSaveEntryを通るため、ここが唯一の適用箇所になる。
+  if (kind === CatalogKind.MATERIAL && entry.category === MATERIAL_CATEGORY.BACKING) {
+    const backingResult = validateBackingMaterialFields(entry, { builtinOverride: builtinKeys.has(key) });
+    if (!backingResult.ok) return backingResult;
   }
 
   try {
@@ -829,7 +930,11 @@ export function materialSaveMessage({ overridesBuiltin = false, thicknessChanged
 /**
  * ステップ12b QA指摘m4（2026-09-24再報告・jsxLockedCat/変異jsxThick/jsxOverride/jsxConfirmの
  * 対称形）: 材料タブの行が編集不可な理由（フォームの無効化理由）を1箇所に集約する。
- * category が編集可能（面材・仕上げ材）でなければ最優先で下地材の理由を返す（12cまで一律）。
+ * ステップ12c: 下地材分岐（「下地材はこのパネルでは編集できません」の固定文言）は廃止した——
+ * 下地材も面材・仕上げ材と同じくisEditableMaterialCategoryでtrueになる（EDITABLE_MATERIAL_CATEGORIES
+ * に3カテゴリとも含まれる）。builtin下地材の上書きはoverrideLockedFields（category・backingClass）
+ * で、間柱6件はmaterialExtraLockedFieldsのextraLocked（x/y/thickness）で個別に守る——カテゴリ単位の
+ * 一律拒否はもう不要。categoryが（将来の拡張等で）編集不可の値を持つ場合の汎用フォールバックだけ残す。
  * 新規追加（isAdding）はまだ行を持たないため常に編集可能（null）。既存行はeditState（1.1
  * rowEditStateの戻り値）のcanEdit/reasonに従う。
  * @param {{ isAdding: boolean, category: string, editState?: { canEdit: boolean, reason: string|null } | null }} args
@@ -837,7 +942,7 @@ export function materialSaveMessage({ overridesBuiltin = false, thicknessChanged
  */
 export function materialRowDisabledReason({ isAdding, category, editState = null }) {
   if (!isEditableMaterialCategory(category)) {
-    return '下地材はこのパネルでは編集できません（一覧の表示のみ）';
+    return 'このカテゴリの材料はここでは編集できません';
   }
   if (isAdding) return null;
   if (editState?.canEdit) return null;

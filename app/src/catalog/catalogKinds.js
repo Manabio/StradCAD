@@ -163,7 +163,10 @@ const REGISTRY = Object.assign(Object.create(null), {
     keyBoundFields: ['code'],
     overrideLockedFields: ['category', 'backingClass'],
     // R12: 不一致判定は code を除く全項目。spec/thickness は通知なし例外（4.3）。
-    compareFields: ['name', 'spec', 'x', 'y', 'thickness', 'category', 'note'],
+    // ステップ12c QA指摘M2（2026-09-24再報告）: backingClass（下地区分）を追加——構造モード
+    // 「壁由来の梁芯・小梁自動生成」の判定（structural/wallBeamAxes.js backingClassOf経由）に
+    // 効く項目のため、spec/thicknessと違いsilentDiffFieldsには入れない（通知あり）。
+    compareFields: ['name', 'spec', 'x', 'y', 'thickness', 'category', 'note', 'backingClass'],
     silentDiffFields: ['spec', 'thickness'],
     // R14: 完全一致→下から1つずつ外して類似検索（末尾=thicknessから外す）。
     matchFields: ['name', 'spec', 'x', 'y', 'thickness'],

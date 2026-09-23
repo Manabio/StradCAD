@@ -7,16 +7,16 @@ import { CATALOG_DIFF_COLOR, CATALOG_DIFF_MARK, diffPairs, diffTooltip, fieldLab
 import { saveUserCatalog } from '../storage/db.js';
 import { markDirty } from '../dirtyState.js';
 import { collectCurrentCatalogUsage } from '../store.js';
-import { WOOD_STUD_CODE_BY_SIZE } from '../finish/materials/backingClass.js';
+import { WOOD_STUD_CODE_BY_SIZE, backingClassOf } from '../finish/materials/backingClass.js';
 import {
   buildKindTabs, buildMaterialRows, buildCatalogRows, collectKnownMaterialCodes, nextMaterialCode,
   buildMaterialEntry, duplicateMaterialEntry, validateMaterialEntry,
   upsertUserCatalogEntry, commitUserEntries,
   planRealign, realignTargets, planBulkSectionImport, formatReadonlyValue, formatCategoryLabel,
-  isEditableMaterialCategory, parseThicknessInput, MATERIAL_CATEGORY,
+  isEditableMaterialCategory, parseThicknessInput, MATERIAL_CATEGORY, BACKING_CLASS_OPTIONS,
   rowEditState, lockedFieldsFor, planSaveEntry, planRevertToBuiltin, planRemoveUserEntry,
   applyCatalogEditPlan, materialExtraLockedFields, materialSaveMessage,
-  lockedFieldReason, materialRowDisabledReason, removeMessageFor,
+  lockedFieldReason, materialRowDisabledReason, removeMessageFor, backingClassDisplayFor,
 } from '../catalog/catalogMaintenance.js';
 import { parseSectionSpecList } from '../structural/sectionCatalog.js';
 import { CatalogPreview } from './CatalogPreview.jsx';
@@ -24,7 +24,8 @@ import { CatalogPreview } from './CatalogPreview.jsx';
 // ステップ12b: 間柱6コード（backingClass.js WOOD_STUD_CODE_BY_SIZE の値）は本体編集の
 // extraLockedとして常に注入する（12cで下地材タブを開放するまでは実際にこのコードを持つ行を
 // このタブで選択できないため効果は無いが、12cで背景を開いたときに配線をやり直さずに済むよう
-// 先に配線しておく——設計 12b「間柱6件はextraLockedで注入」）。
+// 先に配線しておく——設計 12b「間柱6件はextraLockedで注入」）。ステップ12c: 下地材タブを開放した
+// ことでこのextraLockedが実効化する（間柱6件だけx/y/thicknessも固定）。
 const STUD_CODE_SET = new Set(Object.values(WOOD_STUD_CODE_BY_SIZE));
 
 // materialData.js（本体マスタ）は仕上げモードと同じ理由でここでも動的 import する
@@ -111,6 +112,13 @@ function computeDerived(list, search, category) {
   return { allRows, visibleRows, knownCodes };
 }
 
+// ステップ12c: 下地材（category:'backing'）はX/Y入力・下地区分（backingClass）選択欄を
+// フォームに出す。判断（どのcategoryで寸法欄を持つか）は純関数側（buildMaterialEntryの
+// category分岐）に置き、ここは表示の要否だけを見る薄い判定。
+function materialFormHasDimensions(category) {
+  return category === MATERIAL_CATEGORY.BACKING;
+}
+
 function formFromEntry(entry) {
   const parsed = parseMaterialCode(entry.code);
   return {
@@ -121,13 +129,22 @@ function formFromEntry(entry) {
     category: entry.category,
     major: parsed?.major ?? firstMajor(),
     minor: parsed?.minor ?? firstMinor(parsed?.major ?? firstMajor()),
+    // ステップ12c QA指摘n1対応: 下地材（category:'backing'）の編集開始時は元entryのx/yを
+    // 引き継ぐ（buildMaterialEntryへそのまま渡す。変更しなければlockedFieldsForの一致検査を
+    // 通る——間柱6件のextraLocked（x/y/thickness）対策）。面材・仕上げ材はどのみち
+    // buildMaterialEntryが0固定にするため、entry.x/yをそのまま持たせても無害。
+    x: entry.x ?? 0,
+    y: entry.y ?? 0,
+    backingClass: entry.backingClass ?? '',
   };
 }
 
 /**
- * ハンバーガー「カタログ保守」から開く全画面パネル。第1段の範囲＝材料の面材・仕上げ材のみ
- * （一覧／追加／複製／編集／削除）。下地材は一覧に出所バッジ付きで表示するが編集不可。
- * builtin（標準材料）の編集も第1段では不可（ステップ12）。
+ * ハンバーガー「カタログ保守」から開く全画面パネル。材料（面材・仕上げ材・下地材の全カテゴリ）の
+ * 一覧／追加／複製／編集／削除（ステップ12c・2026-09-24: 下地材も開放。x/y・下地区分
+ * （backingClass:木/その他）が必須。RCは選べない——固定集合のみ）。
+ * builtin（標準材料）の編集も含む（ステップ12a/12b/12c: 同キーのuserエントリ＋
+ * overridesBuiltin:trueで表す）。
  *
  * 純ロジック（一覧の合成・検索・採番・検証）は catalog/catalogMaintenance.js に持つ
  * （本コンポーネントはそれを呼ぶだけ）。
@@ -213,6 +230,13 @@ export function CatalogMaintenancePanel({ onClose }) {
         builtinKeys, extraLocked: materialExtraLockedFields(selectedRow.entry.code, STUD_CODE_SET),
       })
     : new Set();
+  // ステップ12c QA指摘m2（2026-09-24再報告）: 下地区分selectの表示値。backingClassが
+  // ロック（本体の下地材＝backingClassフィールド自体を持たない）されている行は、選択済み値
+  // （常に空）の代わりに backingClassOf（固定集合＋overlay）由来の分類を表示専用で見せる
+  // （RCも見せられる。保存にはform.backingClassをそのまま使うので影響しない）。
+  const backingClassSelectValue = (selectedRow && lockedFields.has('backingClass'))
+    ? backingClassDisplayFor(selectedRow.entry, backingClassOf)
+    : form?.backingClass ?? '';
 
   // R13: 選択行が doc（文書同梱）起源で本体と不一致のとき、違っている項目だけを
   // フォームでオレンジ表示＋本体値併記する（doc は編集不可＝表示のみ）。
@@ -265,7 +289,10 @@ export function CatalogMaintenancePanel({ onClose }) {
     setDeleteUsage(null);
     setSaveConfirm(null);
     setRevertConfirm(null);
-    setForm({ name: '', spec: '', thickness: '', note: '', category: MATERIAL_CATEGORY.PANEL, major, minor: firstMinor(major) });
+    setForm({
+      name: '', spec: '', thickness: '', note: '', category: MATERIAL_CATEGORY.PANEL, major, minor: firstMinor(major),
+      x: '', y: '', backingClass: '',
+    });
     setFormError(null);
     setFormMessage(null);
   }
@@ -330,12 +357,13 @@ export function CatalogMaintenancePanel({ onClose }) {
     const code = isAdding ? previewCode : selectedCode;
     const entry = buildMaterialEntry({
       code, name: form.name, spec: form.spec, thickness, note: form.note, category: form.category,
+      x: Number(form.x), y: Number(form.y), backingClass: form.backingClass || undefined,
     });
 
     if (isAdding) {
       // QA指摘n2: 新規追加もplanSaveEntry+applyCatalogEditPlan（performSave）へ寄せる。
-      // validateMaterialEntryは引き続き使う——planSaveEntryにはcategoryの編集可否ゲート
-      // （下地材カテゴリの新規追加拒否）が無いため（planSaveEntryは5種別共通の汎用関数で
+      // validateMaterialEntryは引き続き使う——planSaveEntryにはcategoryの編集可否ゲート・
+      // 下地材の必須項目検査（x/y>0・backingClass）が無いため（planSaveEntryは5種別共通の汎用関数で
       // material専用のカテゴリ制約を持たせられない）。def.validate/R17はplanSaveEntry側でも
       // 再検査されるが、この新規追加経路は高々数百件の材一覧に対する1回の合成のため
       // 無視できる規模——二重実装というより「同じ検査を2箇所が独立に通す」保険的な重複であり、
@@ -686,11 +714,8 @@ export function CatalogMaintenancePanel({ onClose }) {
                       >
                         <option value={MATERIAL_CATEGORY.PANEL}>面材</option>
                         <option value={MATERIAL_CATEGORY.FINISH}>仕上げ材</option>
-                        {/* 下地材の行を選択した場合のみ表示用に出す（selectはdisabledReasonで無効化済み。
-                            新規追加時はform.categoryが常にpanel/finishのため出現しない） */}
-                        {form.category === MATERIAL_CATEGORY.BACKING && (
-                          <option value={MATERIAL_CATEGORY.BACKING}>下地材</option>
-                        )}
+                        {/* ステップ12c: 下地材も選択肢として常に出す（追加・編集とも開放）。 */}
+                        <option value={MATERIAL_CATEGORY.BACKING}>下地材</option>
                       </select>
                       {/* R13: doc（文書同梱）が本体と不一致の項目だけ、本体値をオレンジで併記する */}
                       {docDiffByField.has('category') && (
@@ -746,18 +771,71 @@ export function CatalogMaintenancePanel({ onClose }) {
                       )}
                     </div>
 
-                    <div className="catmnt-form-row">
-                      <span className="catmnt-form-label">X / Y</span>
-                      <input value="0" disabled readOnly style={{ maxWidth: 56 }} />
-                      <input value="0" disabled readOnly style={{ maxWidth: 56 }} />
-                      <span style={{ fontSize: 11, color: '#94a3b8', flexShrink: 0 }}>面材・仕上げ材は寸法なし固定</span>
-                    </div>
+                    {materialFormHasDimensions(form.category) ? (
+                      <div className="catmnt-form-row">
+                        <span className="catmnt-form-label">X / Y</span>
+                        <input
+                          type="number"
+                          value={form.x}
+                          disabled={!!disabledReason || lockedFields.has('x')}
+                          title={lockedFields.has('x') ? lockedFieldReason(CatalogKind.MATERIAL, 'x') : undefined}
+                          style={{ maxWidth: 56, ...(docDiffByField.has('x') ? { color: CATALOG_DIFF_COLOR } : {}) }}
+                          onChange={e => setForm(f => ({ ...f, x: e.target.value }))}
+                        />
+                        <input
+                          type="number"
+                          value={form.y}
+                          disabled={!!disabledReason || lockedFields.has('y')}
+                          title={lockedFields.has('y') ? lockedFieldReason(CatalogKind.MATERIAL, 'y') : undefined}
+                          style={{ maxWidth: 56, ...(docDiffByField.has('y') ? { color: CATALOG_DIFF_COLOR } : {}) }}
+                          onChange={e => setForm(f => ({ ...f, y: e.target.value }))}
+                        />
+                        {docDiffByField.has('x') && (
+                          <span className="catmnt-diff-note" style={{ color: CATALOG_DIFF_COLOR, fontSize: 11 }}>
+                            （本体X {fmtDiffValue(docDiffByField.get('x').from)}）
+                          </span>
+                        )}
+                        {docDiffByField.has('y') && (
+                          <span className="catmnt-diff-note" style={{ color: CATALOG_DIFF_COLOR, fontSize: 11 }}>
+                            （本体Y {fmtDiffValue(docDiffByField.get('y').from)}）
+                          </span>
+                        )}
+                      </div>
+                    ) : (
+                      <div className="catmnt-form-row">
+                        <span className="catmnt-form-label">X / Y</span>
+                        <input value="0" disabled readOnly style={{ maxWidth: 56 }} />
+                        <input value="0" disabled readOnly style={{ maxWidth: 56 }} />
+                        <span style={{ fontSize: 11, color: '#94a3b8', flexShrink: 0 }}>面材・仕上げ材は寸法なし固定</span>
+                      </div>
+                    )}
+
+                    {materialFormHasDimensions(form.category) && (
+                      <div className="catmnt-form-row">
+                        <span className="catmnt-form-label">下地区分</span>
+                        <select
+                          value={backingClassSelectValue}
+                          disabled={!!disabledReason || lockedFields.has('backingClass')}
+                          title={lockedFields.has('backingClass') ? lockedFieldReason(CatalogKind.MATERIAL, 'backingClass') : undefined}
+                          onChange={e => setForm(f => ({ ...f, backingClass: e.target.value }))}
+                        >
+                          <option value="">選択してください</option>
+                          {BACKING_CLASS_OPTIONS.map(opt => (
+                            <option key={opt.value} value={opt.value}>{opt.label}</option>
+                          ))}
+                          {/* ステップ12c QA指摘m2: RCは選択肢に無いため、表示専用でこの行のときだけ足す
+                              （選べない——select自体がlockedFields.has('backingClass')でdisabled）。 */}
+                          {backingClassSelectValue === 'rc' && <option value="rc">RC（固定）</option>}
+                        </select>
+                      </div>
+                    )}
 
                     <div className="catmnt-form-row">
                       <span className="catmnt-form-label">厚さ(mm)</span>
                       <input
                         value={form.thickness}
-                        disabled={!!disabledReason}
+                        disabled={!!disabledReason || lockedFields.has('thickness')}
+                        title={lockedFields.has('thickness') ? lockedFieldReason(CatalogKind.MATERIAL, 'thickness') : undefined}
                         style={docDiffByField.has('thickness') ? { color: CATALOG_DIFF_COLOR } : undefined}
                         onChange={e => setForm(f => ({ ...f, thickness: e.target.value }))}
                       />

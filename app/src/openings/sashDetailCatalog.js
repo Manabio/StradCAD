@@ -3,8 +3,9 @@
 //
 // openingCatalog.js と同様、フロアプランモードでも使う可能性がある静的データのため
 // 動的 import にせず静的 import する。finish/materials/materialData.js（仕上げモードのみ
-// 動的import対象）には依存しない（下地材コード→木質判定は backingClass.js のコード集合を
-// 使う。x/y寸法・spec本体を含む materialMap は呼び出し側が動的ロードして渡す）。
+// 動的import対象）には依存しない（下地材コード→木質判定は backingClass.js の backingClassOf
+// （固定集合＋overlayのユーザー追加下地材）を使う。x/y寸法・spec本体を含む materialMap は
+// 呼び出し側が動的ロードして渡す）。
 //
 // isWoodStructure（フィン直付け判定の主条件）は「主要構造」であり下地材とは別概念のため、
 // structural/structuralAutoFill.js が公開する effectiveStructure（階の上書き優先・なければ
@@ -13,7 +14,7 @@
 // 出典: cad-freed-rawingsamples.com（アルミサッシ構造・仕上げ材別収まり詳細図集）
 //       mado-handbook.com（各解説ページ）
 // ================================================================
-import { isWoodWallBacking } from '../finish/materials/backingClass.js';
+import { backingClassOf } from '../finish/materials/backingClass.js';
 import { effectiveStructure } from '../structural/structuralAutoFill.js';
 import { rulesFor, backingRulesFor, BackingClass } from '../structural/structureRules.js';
 
@@ -173,14 +174,15 @@ export function resolveSashDetail({ isWoodStructure = false, backingDepth = 0, f
 
 /**
  * 下地材（{ code, x, y, thickness }）の「木造下地材の断面寸法（見込み方向）」を返す。
- * backingClass.js の材コード集合（WOOD_WALL_BACKING_CODES）で木質下地かどうかを判定し、
- * 木質でなければ 0 を返す（RC・鋼下地が「断面寸法90mm以上」条件を誤って満たさないようにするため。
- * 例: RC壁下地 t=150 は thickness:150 を持つが木質ではないので backingDepth=0）。
+ * backingClass.js の backingClassOf（固定集合＋overlayのユーザー追加下地材。ステップ12c）で
+ * 木質下地かどうかを判定し、木質でなければ 0 を返す（RC・鋼下地が「断面寸法90mm以上」条件を
+ * 誤って満たさないようにするため。例: RC壁下地 t=150 は thickness:150 を持つが木質ではないので
+ * backingDepth=0）。
  * @param {{code?:string, x?:number, y?:number, thickness?:number}|null} backingMaterial
  * @returns {number}
  */
 export function woodBackingDepth(backingMaterial) {
-  if (!backingMaterial || !isWoodWallBacking(backingMaterial.code)) return 0;
+  if (!backingMaterial || backingClassOf(backingMaterial.code) !== BackingClass.WOOD) return 0;
   return backingMaterial.thickness ?? Math.max(backingMaterial.x ?? 0, backingMaterial.y ?? 0);
 }
 

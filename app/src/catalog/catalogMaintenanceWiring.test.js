@@ -524,3 +524,86 @@ test('【不変条件・QA指摘n1・2026-09-24再報告】catalog/catalogMainte
   const before = src.slice(Math.max(0, fnMatch.index - 1200), fnMatch.index);
   assert.ok(/n1/.test(before) && /12c/.test(before), 'buildMaterialEntry の直前に12c申し送り（n1）のコメントが見つからない');
 });
+
+// ---- ステップ12c（2026-09-24）: 下地材（backing）の追加・編集を開放する ----
+test('【不変条件・ステップ12c】ui/CatalogMaintenancePanel.jsx: カテゴリ選択に下地材（MATERIAL_CATEGORY.BACKING）を常に選べる選択肢として持つ（選択済みのときだけ出す条件分岐が無い）', () => {
+  const src = readSrc('ui/CatalogMaintenancePanel.jsx');
+  assert.ok(
+    !/form\.category === MATERIAL_CATEGORY\.BACKING &&/.test(src),
+    'CatalogMaintenancePanel.jsx のカテゴリ選択が「選択済みのときだけ下地材を出す」条件分岐のままになっている',
+  );
+});
+
+test('【不変条件・ステップ12c】ui/CatalogMaintenancePanel.jsx: X/Y・下地区分の表示要否はmaterialFormHasDimensions(category)（純関数）で判定し、jsx側にcategory直書き条件を持たない', () => {
+  const src = readSrc('ui/CatalogMaintenancePanel.jsx');
+  assert.ok(/function materialFormHasDimensions\(category\)/.test(src), 'CatalogMaintenancePanel.jsx に materialFormHasDimensions 関数が見つからない');
+  const callCount = (src.match(/materialFormHasDimensions\(form\.category\)/g) ?? []).length;
+  assert.ok(callCount >= 2, 'materialFormHasDimensions(form.category) がX/Y欄・下地区分欄の両方で呼ばれていない');
+});
+
+test('【不変条件・ステップ12c】ui/CatalogMaintenancePanel.jsx: 下地区分（backingClass）の選択肢はcatalog/catalogMaintenance.jsのBACKING_CLASS_OPTIONS経由（.jsx側にwood/otherの対応表を直書きしない）', () => {
+  const src = readSrc('ui/CatalogMaintenancePanel.jsx');
+  assert.ok(
+    /from ['"]\.\.\/catalog\/catalogMaintenance\.js['"]/.test(src) && /\bBACKING_CLASS_OPTIONS\b/.test(src),
+    'CatalogMaintenancePanel.jsx が catalog/catalogMaintenance.js の BACKING_CLASS_OPTIONS を import・使用していない',
+  );
+  assert.ok(
+    /BACKING_CLASS_OPTIONS\.map\(/.test(src),
+    'CatalogMaintenancePanel.jsx が BACKING_CLASS_OPTIONS.map(...) で選択肢を描いていない',
+  );
+});
+
+test('【不変条件・ステップ12c】ui/CatalogMaintenancePanel.jsx: handleSaveがbuildMaterialEntryへx/y/backingClassを渡している（下地材の追加・編集が純関数側で組み立てられる）', () => {
+  const src = readSrc('ui/CatalogMaintenancePanel.jsx');
+  const body = extractBalancedBody(src, 'async function handleSave() {');
+  assert.ok(body, 'CatalogMaintenancePanel.jsx に handleSave 関数が見つからない');
+  assert.ok(
+    /buildMaterialEntry\(\{[\s\S]*?x:\s*Number\(form\.x\)[\s\S]*?y:\s*Number\(form\.y\)[\s\S]*?backingClass:\s*form\.backingClass/.test(body),
+    'handleSave が buildMaterialEntry へ x/y/backingClass を渡していない',
+  );
+});
+
+test('【不変条件・ステップ12c】catalog/catalogMaintenance.js: EDITABLE_MATERIAL_CATEGORIESに下地材（backing）を含み、isEditableMaterialCategoryがtrueを返す（下地材の編集開放）', () => {
+  const src = readSrc('catalog/catalogMaintenance.js');
+  const m = /export const EDITABLE_MATERIAL_CATEGORIES = Object\.freeze\(\[([\s\S]*?)\]\);/.exec(src);
+  assert.ok(m, 'catalog/catalogMaintenance.js に EDITABLE_MATERIAL_CATEGORIES が見つからない');
+  assert.ok(/MATERIAL_CATEGORY\.BACKING/.test(m[1]), 'EDITABLE_MATERIAL_CATEGORIES に MATERIAL_CATEGORY.BACKING が含まれていない');
+});
+
+// ---- ステップ12c QA指摘m1（2026-09-24再報告）: X/Y/厚さの入力欄がlockedFields.has(...)でも
+// disabledになる（間柱6件の入力不可を実効化） ----
+test('【不変条件・ステップ12c QA指摘m1】ui/CatalogMaintenancePanel.jsx: X/Y/厚さのinputがlockedFields.has(\'x\'|\'y\'|\'thickness\')でもdisabledになり、lockedFieldReasonをtitleに持つ', () => {
+  const src = readSrc('ui/CatalogMaintenancePanel.jsx');
+  for (const field of ['x', 'y', 'thickness']) {
+    assert.ok(
+      new RegExp(`disabled=\\{!!disabledReason \\|\\| lockedFields\\.has\\('${field}'\\)\\}`).test(src),
+      `CatalogMaintenancePanel.jsx の${field}入力がlockedFields.has('${field}')でdisabledになっていない`,
+    );
+    assert.ok(
+      new RegExp(`lockedFields\\.has\\('${field}'\\) \\? lockedFieldReason\\(CatalogKind\\.MATERIAL, '${field}'\\)`).test(src),
+      `CatalogMaintenancePanel.jsx の${field}入力がlockedFieldReasonをtitleに持っていない`,
+    );
+  }
+});
+
+// ---- ステップ12c QA指摘m2（2026-09-24再報告）: 下地区分selectの表示値はbackingClassDisplayFor
+// （純関数。catalog/catalogMaintenance.js）経由で、.jsx側に導出ロジックを直書きしない ----
+test('【不変条件・ステップ12c QA指摘m2】ui/CatalogMaintenancePanel.jsx: 下地区分selectの表示値はbackingClassDisplayFor(entry, backingClassOf)経由で導出し、finish/materials/backingClass.jsのbackingClassOfをimportしている', () => {
+  const src = readSrc('ui/CatalogMaintenancePanel.jsx');
+  assert.ok(
+    /from ['"]\.\.\/catalog\/catalogMaintenance\.js['"]/.test(src) && /\bbackingClassDisplayFor\b/.test(src),
+    'CatalogMaintenancePanel.jsx が catalog/catalogMaintenance.js の backingClassDisplayFor を import していない',
+  );
+  assert.ok(
+    /from ['"]\.\.\/finish\/materials\/backingClass\.js['"]/.test(src) && /\bbackingClassOf\b/.test(src),
+    'CatalogMaintenancePanel.jsx が finish/materials/backingClass.js の backingClassOf を import していない',
+  );
+  assert.ok(
+    /backingClassDisplayFor\(selectedRow\.entry,\s*backingClassOf\)/.test(src),
+    'CatalogMaintenancePanel.jsx が backingClassDisplayFor(selectedRow.entry, backingClassOf) を呼んでいない',
+  );
+  assert.ok(
+    /<select[\s\S]{0,40}value=\{backingClassSelectValue\}/.test(src),
+    '下地区分のselectがbackingClassSelectValue（backingClassDisplayFor由来）をvalueに使っていない',
+  );
+});

@@ -6,6 +6,8 @@ import {
 } from './sashDetailCatalog.js';
 import { isWoodWallBacking, WOOD_WALL_BACKING_CODES } from '../finish/materials/backingClass.js';
 import { MATERIALS, MATERIAL_CATEGORY } from '../finish/materials/materialData.js';
+import { setOverlay, clearOverlays } from '../catalog/catalogRegistry.js';
+import { CatalogKind } from '../catalog/catalogKinds.js';
 
 // edgeComposition.test.js / wallBeamAxes.test.js と同じ方針: 材データは実 materialData.js の
 // コードで引く（ダミー値の捏造はしない）。
@@ -102,6 +104,33 @@ test('woodBackingDepth: 非木質下地（LGSスタッド・RC）は spec に関
 
 test('woodBackingDepth: backingMaterialがnullでも例外にならず0を返す', () => {
   assert.equal(woodBackingDepth(null), 0);
+});
+
+// ---- ステップ12c（2026-09-24）: woodBackingDepthはbackingClassOf（固定集合＋overlay）経由に
+// なったため、ユーザーが「カタログ保守」で追加した木質下地（固定集合には載らない）にも
+// フィン判定が効く ----
+test.afterEach(() => clearOverlays());
+
+test('woodBackingDepth: overlay由来のユーザー追加木質下地（category:backing・backingClass:wood）でも見込み寸法を返す', () => {
+  const code = '999000000001';
+  setOverlay(CatalogKind.MATERIAL, {
+    user: [{
+      code, name: 'ユーザー間柱', spec: '', x: 105, y: 36, thickness: null, note: '',
+      category: 'backing', backingClass: 'wood',
+    }],
+  });
+  assert.equal(woodBackingDepth({ code, x: 105, y: 36, thickness: null }), 105); // Math.max(105,36)
+});
+
+test('【失敗系】woodBackingDepth: overlay由来のユーザー追加下地でもbackingClass:otherなら0（フィン判定は効かない）', () => {
+  const code = '999000000002';
+  setOverlay(CatalogKind.MATERIAL, {
+    user: [{
+      code, name: 'ユーザー下地', spec: '', x: 100, y: 50, thickness: null, note: '',
+      category: 'backing', backingClass: 'other',
+    }],
+  });
+  assert.equal(woodBackingDepth({ code, x: 100, y: 50, thickness: null }), 0);
 });
 
 // ---- 材コード整合テスト: WOOD_WALL_BACKING_CODES と materialData.js の木質下地エントリの二重管理防止 ----
