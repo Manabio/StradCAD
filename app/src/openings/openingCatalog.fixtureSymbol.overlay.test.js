@@ -8,7 +8,9 @@ import { CatalogKind } from '../catalog/catalogKinds.js';
 import { setOverlay, clearOverlays, removeDocEntry } from '../catalog/catalogRegistry.js';
 import {
   fixtureSymbolBuiltinList, findFixtureSymbol, getFixtureSymbols, frameProfileFor, defaultMaterialGlassFor,
+  defaultFixtureSymbolFor, OpeningMechanism,
 } from './openingCatalog.js';
+import { fixtureSymbolOptions, fixtureTypeAfterSubTypeChange } from './openingEdit.js';
 
 test.afterEach(() => clearOverlays());
 
@@ -16,11 +18,16 @@ function userEntry(overrides) {
   return { key: 'PW', label: 'PW（樹脂サッシ・独自）', category: 'window', defaultMaterialGlass: '樹脂（独自）', ...overrides };
 }
 
-test('fixtureSymbolBuiltinList: FIXTURE_SYMBOLSの10件をdefaultMaterialGlass付きで返す（DEFAULT_MATERIALSに無いWWはnullではなく"木製"）', () => {
+// テスト名は2026-09-24 QA指摘（ステップ12d再報告）で実態に合わせて訂正: WWはDEFAULT_MATERIALS
+// にある（'木製'）。10件全てdefaultMaterialGlassがDEFAULT_MATERIALSと一致することをAW・SFの
+// 2件で確認する。
+test('fixtureSymbolBuiltinList: FIXTURE_SYMBOLSの10件をDEFAULT_MATERIALS通りのdefaultMaterialGlass付きで返す', () => {
   const list = fixtureSymbolBuiltinList();
   assert.equal(list.length, 10);
   const aw = list.find(f => f.key === 'AW');
   assert.equal(aw.defaultMaterialGlass, 'アルミ');
+  const sf = list.find(f => f.key === 'SF');
+  assert.equal(sf.defaultMaterialGlass, 'スチール');
 });
 
 test('user overlayで建具記号を立てると、findFixtureSymbol/getFixtureSymbolsに即反映される（メモ化の無効化）', () => {
@@ -77,4 +84,43 @@ test('getFixtureSymbols: FRAME_ONLY指定時はoverlay追加の三方枠専用�
   });
   const keys = getFixtureSymbols('fitting', 'frameOnly').map(f => f.key);
   assert.deepEqual(keys, ['WF', 'SF', 'SSF', 'TF']);
+});
+
+// ---- ステップ12e QA指摘: userのwindow記号はcategory/mechanismが一致するスコープにしか出ない ----
+test('user記号: windowカテゴリのPWはgetFixtureSymbols("fitting")にもgetFixtureSymbols("window","frameOnly")にも出ない', () => {
+  setOverlay(CatalogKind.FIXTURE_SYMBOL, { user: [userEntry()] });
+  assert.ok(!getFixtureSymbols('fitting').some(f => f.key === 'PW'), 'category不一致のfittingスコープに出ている');
+  assert.ok(!getFixtureSymbols('window', 'frameOnly').some(f => f.key === 'PW'), 'mechanism不一致のframeOnlyスコープに出ている');
+  assert.ok(getFixtureSymbols('window').some(f => f.key === 'PW'), '本来のwindowスコープには出るはず');
+});
+
+// ---- ステップ12e: fixtureSymbolOptions（openingEdit.js）はoverlayのuser記号を「既知」として扱う ----
+test('fixtureSymbolOptions: overlayで立てたuser記号は既知扱いで、選択肢に先頭追加なしで含まれる', () => {
+  setOverlay(CatalogKind.FIXTURE_SYMBOL, { user: [userEntry()] });
+  const opts = fixtureSymbolOptions('window', undefined, 'PW');
+  assert.deepEqual(opts, getFixtureSymbols('window', undefined), 'user記号は絞り込みに含まれるはずなので先頭追加は無いはず');
+});
+
+test('fixtureSymbolOptions: clearOverlays後はuser記号が外れ、同じ記号が未知（先頭に「（不明）」追加）扱いに戻る', () => {
+  setOverlay(CatalogKind.FIXTURE_SYMBOL, { user: [userEntry()] });
+  assert.deepEqual(fixtureSymbolOptions('window', undefined, 'PW'), getFixtureSymbols('window', undefined), '立てた直後は既知のはず');
+  clearOverlays();
+  const opts = fixtureSymbolOptions('window', undefined, 'PW');
+  assert.deepEqual(opts[0], { key: 'PW', label: '（不明）PW', unknown: true }, 'clearOverlays後はuser記号が外れ未知扱いに戻るはず');
+});
+
+// ---- 12e QA指摘Minor-1: 未知判定はライブラリ（overlay）込みの findFixtureSymbol で行う。
+// 「builtin にある記号だけを既知とみなす」変異では、user 記号 PW がスコープ外の機構へ種別変更しても
+// 保持されてしまう（既定記号へ差し替わらない）ため、ここで固定する。 ----
+test('fixtureTypeAfterSubTypeChange: overlayのuser記号（PW）は既知扱いで、スコープ外の機構へ種別変更すると既定記号へ差し替わる', () => {
+  setOverlay(CatalogKind.FIXTURE_SYMBOL, { user: [userEntry()] });
+  const expected = defaultFixtureSymbolFor('window', 'exterior', OpeningMechanism.FRAME_ONLY);
+  const result = fixtureTypeAfterSubTypeChange('PW', 'window', 'exterior', OpeningMechanism.FRAME_ONLY);
+  assert.notEqual(result, 'PW', 'user記号は既知なのでスコープ判定に回り、三方枠のスコープ外なら保持されないはず');
+  assert.equal(result, expected);
+  clearOverlays();
+  assert.equal(
+    fixtureTypeAfterSubTypeChange('PW', 'window', 'exterior', OpeningMechanism.FRAME_ONLY), 'PW',
+    'overlayを外すと未知記号になり、種別変更でも保持される（10g QA Minor-3）',
+  );
 });

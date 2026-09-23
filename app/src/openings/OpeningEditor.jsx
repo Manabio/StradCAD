@@ -1,7 +1,7 @@
 import { useRef } from 'react';
 import { observer } from 'mobx-react-lite';
 import { runInAction } from 'mobx';
-import { getFittingOptions, openingSubTypeList, getFixtureSymbols, findCatalogEntry, defaultOpeningHeight, HINGED_MECHANISMS, hingeSideMatters, OpeningMechanism } from './openingCatalog.js';
+import { getFittingOptions, openingSubTypeList, findCatalogEntry, defaultOpeningHeight, HINGED_MECHANISMS, hingeSideMatters, OpeningMechanism } from './openingCatalog.js';
 import { OpeningCategory } from '../core.js';
 import { findHostWall, maxOpeningWidthAt, findOpeningsOnWall, wallFaceRange } from './openingGeometry.js';
 import { frameOnlyPerpRange } from './openingPlanSymbolGeometry.js';
@@ -13,7 +13,7 @@ import { AutoScaledFigure } from '../structural/sectionFigure/AutoScaledFigure.j
 import {
   beginOpeningFieldUndo, endOpeningFieldUndo, withOpeningUndo, resolveRefOffsetEdit, removeOpeningWithUndo,
   materialGlassAfterFixtureChange, noteAfterSubTypeChange, swingSideAfterSubTypeChange,
-  flippedHingeSides, flippedSwingSide, fixtureTypeAfterSubTypeChange,
+  flippedHingeSides, flippedSwingSide, fixtureTypeAfterSubTypeChange, fixtureSymbolOptions,
 } from './openingEdit.js';
 import { openingTagOf, fixtureSymbolOf, effectiveFrameProjection } from './openingNumbering.js';
 
@@ -222,7 +222,7 @@ export const OpeningEditor = observer(function OpeningEditor({ graph, project, o
       <div style={rowStyle}>
         <span style={labelStyle}>記号</span>
         <select style={inputStyle} value={fixtureSymbolOf(opening)} onChange={onFixtureTypeChange}>
-          {getFixtureSymbols(opening.category, entry?.mechanism).map(f => <option key={f.key} value={f.key}>{f.label}</option>)}
+          {fixtureSymbolOptions(opening.category, entry?.mechanism, fixtureSymbolOf(opening)).map(f => <option key={f.key} value={f.key}>{f.label}</option>)}
         </select>
       </div>
 

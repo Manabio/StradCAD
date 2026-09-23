@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import { observable, runInAction, configure, autorun } from 'mobx';
 import { Plane, PlanGraph, CenterLineType, Discipline, OpeningCategory } from '../core.js';
 import { undoManager } from '../undoManager.js';
-import { FITTING_CATALOG, WINDOW_CATALOG, findCatalogEntry, defaultMaterialGlassFor, OpeningMechanism } from './openingCatalog.js';
+import { FITTING_CATALOG, WINDOW_CATALOG, findCatalogEntry, defaultMaterialGlassFor, getFixtureSymbols, OpeningMechanism } from './openingCatalog.js';
 import { ERR_OPENING_OUT_OF_WALL, ERR_OPENING_OVERLAP } from '../error.js';
 import { openingTagOf, renumberOpenings } from './openingNumbering.js';
 import { openingTagAnchor } from './openingTagPlacement.js';
@@ -15,7 +15,7 @@ import {
   placeOpeningWithDefaults, removeOpeningWithUndo, withOpeningUndo, pushOpeningUndo, snapshotOpening,
   materialGlassAfterFixtureChange, validateOpeningEdit, noteAfterSubTypeChange, openDirForMechanism,
   defaultSwingSideFor, swingSideAfterSubTypeChange, flippedHingeSides, flippedSwingSide,
-  fixtureTypeAfterSubTypeChange, resolveRefOffsetEdit,
+  fixtureTypeAfterSubTypeChange, fixtureSymbolOptions, resolveRefOffsetEdit,
 } from './openingEdit.js';
 import { closedAngleFor, leafOpenAngle, angleVectors } from './openingPlanSymbolGeometry.js';
 
@@ -428,6 +428,42 @@ test('fixtureTypeAfterSubTypeChange: AD→三方枠 は wallKind不問で WF へ
 
 test('fixtureTypeAfterSubTypeChange: 片開き戸(SWING)→引き戸(SLIDE_SINGLE) は記号を維持する（どちらもスコープ無し）', () => {
   assert.equal(fixtureTypeAfterSubTypeChange('WD', 'fitting', 'interior', OpeningMechanism.SLIDE_SINGLE), 'WD');
+});
+
+// ---- ステップ12e: ライブラリに無い（未知）記号は種別変更でも黙って差し替えない ----
+test('fixtureTypeAfterSubTypeChange: ライブラリに無い記号（未知。QX）は種別変更でも保持する', () => {
+  assert.equal(fixtureTypeAfterSubTypeChange('QX', 'fitting', 'interior', OpeningMechanism.FRAME_ONLY), 'QX');
+});
+
+test('fixtureTypeAfterSubTypeChange: 未知記号のまま三方枠から通常種別へ戻しても保持する', () => {
+  assert.equal(fixtureTypeAfterSubTypeChange('QX', 'fitting', 'interior', OpeningMechanism.SWING), 'QX');
+});
+
+// ---- ステップ12e: 記号selectの選択肢一覧（fixtureSymbolOptions）----
+test('fixtureSymbolOptions: 現在の記号が絞り込みに含まれていれば追加なしでgetFixtureSymbolsの結果をそのまま返す', () => {
+  const opts = fixtureSymbolOptions('fitting', undefined, 'WD');
+  assert.deepEqual(opts, getFixtureSymbols('fitting', undefined));
+});
+
+test('fixtureSymbolOptions: 現在の記号がライブラリに無い（未知。QX）なら先頭に「（不明）」付きで1件追加する', () => {
+  const scoped = getFixtureSymbols('fitting', undefined);
+  const opts = fixtureSymbolOptions('fitting', undefined, 'QX');
+  assert.equal(opts.length, scoped.length + 1);
+  assert.deepEqual(opts[0], { key: 'QX', label: '（不明）QX', unknown: true });
+  assert.deepEqual(opts.slice(1), scoped);
+});
+
+test('fixtureSymbolOptions: 現在の記号がライブラリにはあるが別スコープ（三方枠専用WFを通常機構で）なら先頭にoutOfScopeで1件追加する', () => {
+  const scoped = getFixtureSymbols('fitting', OpeningMechanism.SWING);
+  const opts = fixtureSymbolOptions('fitting', OpeningMechanism.SWING, 'WF');
+  assert.equal(opts.length, scoped.length + 1);
+  assert.deepEqual(opts[0], { key: 'WF', label: 'WF（木製三方枠）', outOfScope: true });
+  assert.deepEqual(opts.slice(1), scoped);
+});
+
+test('fixtureSymbolOptions: 現在の記号が未設定(null)なら追加なしでgetFixtureSymbolsの結果をそのまま返す', () => {
+  const opts = fixtureSymbolOptions('window', undefined, null);
+  assert.deepEqual(opts, getFixtureSymbols('window', undefined));
 });
 
 // ---- placeOpeningWithDefaults: 建具(fitting)×SWING機構で備考欄に「レバーハンドル」が自動設定される ----

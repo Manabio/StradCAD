@@ -166,6 +166,19 @@ test('buildDocumentBundle: 使用中の建具記号（fixtureSymbol）が同梱�
   assert.deepEqual(bundle.catalogs.fixtureSymbol.map(e => e.key), ['WD']);
 });
 
+// ステップ12e QA残件: ステップ12eの未知記号(fixtureType)は建具モードのUIでは保持されるが、
+// 保存時にresolvedByKind（overlay込みで解決したMap）に実体が無ければ従来どおり同梱せず
+// unresolvedKeysへ積む（他種別と同じ規約。buildDocumentBundleは種別非依存の汎用実装）。
+test('【失敗系】buildDocumentBundle: 解決できないfixtureType（QX）はunresolvedKeys.fixtureSymbolに入り同梱束には入らない', () => {
+  const usedKeysByKind = collectUsedKeysByKind([baseSnapshot({
+    openings: [{ id: 'o1', category: 'fitting', subType: 'singleSwing', fixtureType: 'QX' }],
+  })], [CatalogKind.FIXTURE_SYMBOL]);
+  const resolvedByKind = new Map([[CatalogKind.FIXTURE_SYMBOL, new Map()]]); // QXはライブラリに無い（未解決）
+  const { bundle, unresolvedKeys } = buildDocumentBundle({ usedKeysByKind, resolvedByKind });
+  assert.deepEqual(bundle.catalogs.fixtureSymbol, []);
+  assert.deepEqual(unresolvedKeys.get(CatalogKind.FIXTURE_SYMBOL), new Set(['QX']));
+});
+
 // ---- expandTransitiveMaterials: 内装マスター・境界マスターの推移的展開 ----
 test('expandTransitiveMaterials: 内装マスターのwallMaterial/wallFinishを追加する', () => {
   const expanded = expandTransitiveMaterials(new Set(['101000000001']), {

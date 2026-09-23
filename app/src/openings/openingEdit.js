@@ -19,7 +19,7 @@ import { undoManager } from '../undoManager.js';
 import { OpeningCategory } from '../core.js';
 import {
   getFittingOptions, openingSubTypeList, defaultFixtureSymbolFor, defaultOpeningHeight, defaultMaterialGlassFor, defaultNoteFor,
-  getFixtureSymbols, OpeningMechanism, DEFAULT_FRAME_FACE_MM, DEFAULT_FRAME_PROJECTION_MM,
+  getFixtureSymbols, findFixtureSymbol, OpeningMechanism, DEFAULT_FRAME_FACE_MM, DEFAULT_FRAME_PROJECTION_MM,
 } from './openingCatalog.js';
 import { findHostWall, validateOpeningPlacement, maxOpeningWidthAt, findOpeningsOnWall, swingSideTowardPerp, exteriorSideDir } from './openingGeometry.js';
 import { renumberOpenings } from './openingNumbering.js';
@@ -281,15 +281,46 @@ export function materialGlassAfterFixtureChange(currentValue, oldSymbol, newSymb
 }
 
 /**
- * 種別（機構）を変更したときの建具記号の差し替え規則: 現在の記号が新機構の記号スコープ
- * （getFixtureSymbols(category, newMechanism)）に含まれていればそのまま維持し、含まれて
- * いなければ新機構の既定記号（defaultFixtureSymbolFor）へ差し替える。三方枠(FRAME_ONLY)⇔
- * それ以外の種別変更で記号が自動的に WF/SF/SSF ⇔ WD/AD 等へ切り替わる唯一の判定ロジック。
+ * 種別（機構）を変更したときの建具記号の差し替え規則: 現在の記号がライブラリに無い（未知。
+ * ユーザーがカタログ記号以外を保存しただけの状態。10g）ならそのまま保持し、種別変更で黙って
+ * 既定記号へ差し替えない（10g QA指摘Minor-3・ステップ12e）。現在の記号が既知なら、新機構の
+ * 記号スコープ（getFixtureSymbols(category, newMechanism)）に含まれていればそのまま維持し、
+ * 含まれていなければ新機構の既定記号（defaultFixtureSymbolFor）へ差し替える。三方枠(FRAME_ONLY)
+ * ⇔それ以外の種別変更で記号が自動的に WF/SF/SSF ⇔ WD/AD 等へ切り替わる唯一の判定ロジック。
+ * currentSymbolが未設定(null等)のときはfindFixtureSymbolがnullを返すため未知扱いにはせず、
+ * 従来どおりスコープ判定（該当なし）を経て既定記号へ差し替える。
  */
 export function fixtureTypeAfterSubTypeChange(currentSymbol, category, wallKind, newMechanism) {
+  if (typeof currentSymbol === 'string' && currentSymbol !== '' && !findFixtureSymbol(currentSymbol)) return currentSymbol;
   const scoped = getFixtureSymbols(category, newMechanism);
   if (scoped.some(f => f.key === currentSymbol)) return currentSymbol;
   return defaultFixtureSymbolFor(category, wallKind, newMechanism);
+}
+
+/**
+ * 記号selectの選択肢一覧（唯一の定義箇所。ステップ12e）。OpeningEditor.jsx はこの結果を
+ * そのまま並べるだけにする（getFixtureSymbolsを直接optionに使わない）。
+ * getFixtureSymbols(category, mechanism)の絞り込み結果に、現在の記号(currentSymbol)が
+ * その絞り込みに含まれていなければ先頭に1件足す:
+ *   - ライブラリに無い記号（findFixtureSymbolがnull）→ unknown:true・label:'（不明）'+記号
+ *     （10g QA指摘Minor-3。種別変更で黙って既定値へ差し替えず、editorのselectにも残す）。
+ *   - ライブラリにはあるが別カテゴリ/別機構（スコープ外。例: 三方枠専用記号を通常機構で表示）
+ *     → outOfScope:true・そのエントリのlabel。
+ * currentSymbolが絞り込みに含まれていれば（または未設定）先頭追加は行わず、絞り込み結果を
+ * そのまま返す。
+ * @param {string} category OpeningCategory ('fitting'|'window')
+ * @param {string|undefined} mechanism OpeningMechanism（未指定はスコープ無し記号のみ）
+ * @param {string|null|undefined} currentSymbol 現在保存されている記号
+ * @returns {{key:string, label:string, unknown?:boolean, outOfScope?:boolean}[]}
+ */
+export function fixtureSymbolOptions(category, mechanism, currentSymbol) {
+  const scoped = getFixtureSymbols(category, mechanism);
+  if (!currentSymbol || scoped.some(f => f.key === currentSymbol)) return scoped;
+  const entry = findFixtureSymbol(currentSymbol);
+  const extra = entry
+    ? { key: currentSymbol, label: entry.label, outOfScope: true }
+    : { key: currentSymbol, label: `（不明）${currentSymbol}`, unknown: true };
+  return [extra, ...scoped];
 }
 
 /**
