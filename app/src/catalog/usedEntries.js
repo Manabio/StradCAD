@@ -115,6 +115,28 @@ export function expandTransitiveMaterials(codes, { interiorMasters = [], boundar
 }
 
 /**
+ * ステップ12a: `overridesBuiltin`（4.4/resolveQueue.js markOverrideが付ける「本体の上書き」印）を
+ * 同梱から除去する。この属性はユーザーライブラリ側の状態（このプロジェクトのuserエントリが
+ * builtinを上書きしているかどうか）であって、doc（文書同梱）はそれを持ち運ぶべきではない——
+ * 別環境（overridesBuiltin無しのuserを持つ、または全く持たない環境）でこの.stqを開いたとき、
+ * doc側にoverridesBuiltin:trueが残っていると、そのuserエントリを衝突検出（catalogBundle.js
+ * detectLibraryConflicts）から誤って除外してしまう（「衝突なし」に見えるが実際はuser側にその
+ * 上書きが存在しない）。
+ * QA指摘Minor-1（2026-09-24・12a再報告）: export して catalog/catalogMaintenance.js
+ * （同ディレクトリの兄弟モジュール。catalogImports.test.jsの許可リスト内）からも使う——
+ * planRemoveUserEntryのdocAppend（使用中userを削除するときにdocへ書き写す1件）も同じ理由で
+ * この印を持ち込んではいけない。
+ * @param {object} entry
+ * @returns {object}
+ */
+export function stripOverridesBuiltin(entry) {
+  if (!entry || !Object.prototype.hasOwnProperty.call(entry, 'overridesBuiltin')) return entry;
+  const rest = { ...entry };
+  delete rest.overridesBuiltin;
+  return rest;
+}
+
+/**
  * 使用キー（種別ごと）と解決済みMap（種別ごと。composeCatalogの結果）から、文書同梱束を
  * 組み立てる。解決できないキー（resolvedByKindにエントリが無い）は同梱**せず**、
  * unresolvedKeys（種別ごとのSet）として返す——呼び出し側（store.js）が黙って落とさず、
@@ -137,7 +159,7 @@ export function buildDocumentBundle({ usedKeysByKind, resolvedByKind, aliases = 
     const unresolved = new Set();
     for (const key of keys) {
       const entry = resolved?.get(key);
-      if (entry) entries.push(entry);
+      if (entry) entries.push(stripOverridesBuiltin(entry));
       else unresolved.add(key);
     }
     bundle = withEntries(bundle, kind, entries);
@@ -153,6 +175,9 @@ export function buildDocumentBundle({ usedKeysByKind, resolvedByKind, aliases = 
  * （2026-09-22 QA指摘A）。既存にもエントリが無いキーは stillUnresolvedByKind として返す
  * ——呼び出し側（store.js）はこれを利用者への通知（件数・キー名）に使う。
  * 純関数（IDB非依存）: 既存束はデコード済みの状態で受け取る。
+ * QA指摘Minor-1（2026-09-24・12a再報告）: 回収元（旧保存の同梱束）に`overridesBuiltin`印が
+ * 残っている可能性がある（保存直後の旧バージョンや、12a以前の.stqを開いた場合等）ため、
+ * buildDocumentBundleと同様にstripOverridesBuiltinを通してから追記する。
  * @param {object} bundle buildDocumentBundle の bundle
  * @param {Map<string, Set<string>>} unresolvedKeys buildDocumentBundle の unresolvedKeys
  * @param {Map<string, object|null|undefined>} existingBundlesByKind 種別ごとの既存の束（無ければ省略可）
@@ -171,7 +196,7 @@ export function recoverUnresolvedEntries(bundle, unresolvedKeys, existingBundles
     const stillUnresolved = new Set();
     for (const key of keys) {
       const entry = existingByKey.get(key);
-      if (entry) recovered.push(entry);
+      if (entry) recovered.push(stripOverridesBuiltin(entry));
       else stillUnresolved.add(key);
     }
     if (recovered.length > 0) {

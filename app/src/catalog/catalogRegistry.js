@@ -248,6 +248,22 @@ export function docDiffFields(kind, key, builtinList) {
 }
 
 /**
+ * ステップ12a（4.3 使用中のuserエントリ削除時にdocへ書き写す・planRemoveUserEntry）: kind の
+ * doc（文書同梱）へ1件追記する。setOverlay(kind, {doc:[...doc外し+entry], user}) の薄いラッパ——
+ * user は触らない。doc に同キーが既にあれば上書きする（呼び出し側が重複追記しない前提だが、
+ * 誤って2回呼ばれても壊れないようにする）。
+ */
+export function appendDocEntry(kind, entry) {
+  const def = kindDef(kind);
+  const key = def.keyOf(entry);
+  const { doc, user } = overlayFor(kind);
+  const nextDoc = doc.some(e => def.keyOf(e) === key)
+    ? doc.map(e => (def.keyOf(e) === key ? entry : e))
+    : [...doc, entry];
+  setOverlay(kind, { doc: nextDoc, user });
+}
+
+/**
  * ステップ6b（4.7 合わせ直し）: 文書同梱（doc）から key のエントリを1件外す。
  * setOverlay(kind, { doc: doc.filter(...), user }) の薄いラッパ——user は触らない。
  * 次の保存で（doc が外れた分）builtin/user の内容が同梱し直される（saveCatalogDocument

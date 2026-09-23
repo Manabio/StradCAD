@@ -138,6 +138,46 @@ test('boundaryMaster.compareFields/matchFields: kind,layers,derivedFrom,fields�
   assert.equal(def.minMatchFields, 4);
 });
 
+// ---- ステップ12a: keyBoundFields/overrideLockedFields（Q-B確定 2026-09-23）----
+test('keyBoundFields/overrideLockedFields: 登録表の5種別が表どおりの固定項目を持つ', () => {
+  assert.deepEqual(kindDef('material').keyBoundFields, ['code']);
+  assert.deepEqual(kindDef('material').overrideLockedFields, ['category', 'backingClass']);
+
+  assert.deepEqual(kindDef('section').keyBoundFields, [
+    'key', 'materialType', 'shape', 'width', 'height', 'webThickness', 'flangeThickness', 'wallThickness',
+  ]);
+  assert.deepEqual(kindDef('section').overrideLockedFields, []);
+
+  assert.deepEqual(kindDef('openingSubType').keyBoundFields, ['category', 'key', 'mechanism']);
+  assert.deepEqual(kindDef('openingSubType').overrideLockedFields, []);
+
+  assert.deepEqual(kindDef('interiorMaster').keyBoundFields, ['key']);
+  assert.deepEqual(kindDef('interiorMaster').overrideLockedFields, []);
+
+  assert.deepEqual(kindDef('boundaryMaster').keyBoundFields, ['key']);
+  assert.deepEqual(kindDef('boundaryMaster').overrideLockedFields, []);
+});
+
+test('keyBoundFields/overrideLockedFields: 行・配列まで凍結されている（deepFreezeRegistryの対象）', () => {
+  assert.ok(Object.isFrozen(CATALOG_KINDS.material.keyBoundFields));
+  assert.ok(Object.isFrozen(CATALOG_KINDS.material.overrideLockedFields));
+  assert.ok(Object.isFrozen(CATALOG_KINDS.section.keyBoundFields));
+});
+
+// QA指摘Minor-3（2026-09-24再報告）: 全kind（listKinds()由来）を回して両配列の存在・型・凍結を
+// 確認する——12d等で新しい種別（fixtureSymbol）を登録表に足したとき、keyBoundFields/
+// overrideLockedFieldsの付け忘れをここで検出する（上の2テストは個別種別のリテラル値の固定用で、
+// 新規種別の追加検出はしない）。
+test('【積み残し検出用・QA指摘Minor-3】keyBoundFields/overrideLockedFields: listKinds()の全種別が配列を持ち、凍結されている', () => {
+  for (const kind of listKinds()) {
+    const def = kindDef(kind);
+    assert.ok(Array.isArray(def.keyBoundFields), `${kind}.keyBoundFieldsが配列でない`);
+    assert.ok(Array.isArray(def.overrideLockedFields), `${kind}.overrideLockedFieldsが配列でない`);
+    assert.ok(Object.isFrozen(def.keyBoundFields), `${kind}.keyBoundFieldsが凍結されていない`);
+    assert.ok(Object.isFrozen(def.overrideLockedFields), `${kind}.overrideLockedFieldsが凍結されていない`);
+  }
+});
+
 // ---- classOf（材料分類。R4/R6/R18・Q13確定2026-09-22）----
 test('classOf: 既知の大分類・中分類はラベルを返す', () => {
   assert.deepEqual(classOf(10, 12), { major: 10, majorLabel: '木材', minor: 12, minorLabel: '面材' });

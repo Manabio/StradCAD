@@ -5,8 +5,8 @@
 // 下地材（backing）は一覧に出所バッジ付きで表示してよいが、追加・編集・削除は不可。
 //
 // 純モジュール（葉）。同ディレクトリの兄弟モジュール（catalogKinds.js・catalogRegistry.js・
-// catalogMatch.js・materialCode.js・catalogBundle.js・catalogCodec.js）にのみ依存する。
-// .jsx / store.js を静的 import しない（catalogImports.test.js の許可リストに従う）。
+// catalogMatch.js・materialCode.js・catalogBundle.js・catalogCodec.js・usedEntries.js）に
+// のみ依存する。.jsx / store.js を静的 import しない（catalogImports.test.js の許可リストに従う）。
 // 永続化I/O（storage/db.js の saveUserCatalog）は commitUserEntries の呼び出し側が
 // saveFn として注入する（catalogOverlayLoader.js と同じDI型。本ファイルはstorage/db.jsを
 // 一切importしない）。
@@ -16,12 +16,15 @@
 // ================================================================
 
 import { CatalogKind, kindDef, listKinds, KIND_LABELS } from './catalogKinds.js';
-import { composeCatalog, composeList, docDiffMap, originOf, overlayFor, setOverlay } from './catalogRegistry.js';
-import { assertNoDuplicate, displayNameOf, matchByContent } from './catalogMatch.js';
-import { diffPairs } from './catalogDiffView.js';
+import {
+  appendDocEntry, composeCatalog, composeList, docDiffMap, originOf, overlayFor, removeDocEntry, setOverlay,
+} from './catalogRegistry.js';
+import { assertNoDuplicate, displayNameOf, matchByContent, valuesEqual } from './catalogMatch.js';
+import { diffPairs, fieldLabel } from './catalogDiffView.js';
 import { nextSerial, parseMaterialCode, formatMaterialCode } from './materialCode.js';
 import { emptyBundle, withEntries } from './catalogBundle.js';
 import { encodeCatalogBundle } from './catalogCodec.js';
+import { stripOverridesBuiltin } from './usedEntries.js';
 
 /** 材の役割（カテゴリ）。materialData.js の MATERIAL_CATEGORY と同じ3値
  * （本体マスタは静的 import できないため、ここでは値の集合だけを持つ）。 */
@@ -167,18 +170,28 @@ export function formatCategoryLabel(kind, value) {
  * diffMap（catalogRegistry.js の docDiffMap の戻り値）を渡すと、各行に R13 の差分情報
  * （{baseOrigin, diffFields, baseEntry}）を diff として付ける（省略時は null）。
  * category による絞り込みは material 専用のため持たない（buildMaterialRows 側で行う）。
+ * ステップ12a: 各行に `overridesBuiltin`（userエントリがbuiltin同キーの上書きとして保存されたもの
+ * かどうか。true=バッジ「標準を編集」の対象）・`builtinEntry`（builtinの同キーentryか無ければnull。
+ * フォームで本体の値を併記するのに使う）を付ける。
  * @param {{ kind: string, builtinList: object[], search?: string, diffMap?: Map }} args
- * @returns {Array<{ entry: object, origin: 'doc'|'user'|'builtin'|null, diff: object|null }>}
+ * @returns {Array<{ entry: object, origin: 'doc'|'user'|'builtin'|null, diff: object|null,
+ *                    overridesBuiltin: boolean, builtinEntry: object|null }>}
  */
 export function buildCatalogRows({ kind, builtinList, search = '', diffMap = null }) {
   const def = kindDef(kind);
   const needle = (search ?? '').trim().toLowerCase();
+  const builtinByKey = new Map(builtinList.map(e => [def.keyOf(e), e]));
   return composeList(kind, builtinList)
-    .map(entry => ({
-      entry,
-      origin: originOf(kind, def.keyOf(entry), builtinList),
-      diff: diffMap?.get(def.keyOf(entry)) ?? null,
-    }))
+    .map(entry => {
+      const key = def.keyOf(entry);
+      return {
+        entry,
+        origin: originOf(kind, key, builtinList),
+        diff: diffMap?.get(key) ?? null,
+        overridesBuiltin: Boolean(entry?.overridesBuiltin),
+        builtinEntry: builtinByKey.get(key) ?? null,
+      };
+    })
     .filter(row => (
       !needle
       || displayNameOf(row.entry).toLowerCase().includes(needle)
@@ -467,4 +480,242 @@ export function planRealign(kind, key, { builtinList }) {
     baseOrigin: diff.baseOrigin,
     baseEntry: diff.baseEntry,
   };
+}
+
+// ================================================================
+// ステップ12a（本体編集＝builtinの上書き。5種別共通の純ロジック 1.1〜1.3）。
+// 決定（設計 2026-09-23・裁定済み）: 本体の編集は新しい仕組みを作らず「同キーのuserエントリ＋
+// overridesBuiltin:true」で表す（4.2/4.4。catalogBundle.js detectLibraryConflicts・
+// resolveQueue.js markOverrideは実装済み）。保存済み文書は使用中エントリをdocとして同梱し
+// doc>userで解決されるため、使用中の行はほぼ「出所doc」になる——doc-same（差分なし・相手あり）
+// の編集（確認のうえ同梱を外して即反映）が無いとbuiltin行だけ編集可では実質編集できない。
+// ================================================================
+
+/**
+ * ステップ12a（1.1）: 行（buildCatalogRowsの1行）の編集可否・状態を判定する（Q-B確定
+ * 2026-09-23）。builtin（編集=上書き・複製）／override（userでbuiltin同キー＝標準を編集した状態:
+ * 編集・標準に戻す・複製）／user（編集・削除・複製）／doc-same（文書同梱が相手（userかbuiltin）と
+ * 差分なし: 編集・複製）／doc-diff（文書同梱が相手と不一致: 編集不可・複製のみ）／doc-only（相手
+ * （userもbuiltinも）が無い: 編集不可・複製のみ）の6状態。
+ * doc-same/doc-diff/doc-only の判定は diffMap（catalogRegistry.js docDiffMapの戻り値。省略時は
+ * row.diffで代用）と「相手（userかbuiltin）があるか」で行う——docDiffMapは「相手が無い」場合と
+ * 「相手はあるが内容が同じ」場合をどちらも戻り値（Map）から除外する（比較不能／差分なしを
+ * 戻り値だけからは区別できない）ため、相手の有無は overlayFor(kind).user と builtinKeys で
+ * 別途判定する（planRealignのhasPartner判定と同型。overlayFor読み出しは同ファイル内の既存関数
+ * （planRealign・commitUserEntries等）と同じ許容パターン——モジュールスコープの現在状態を読む
+ * だけで外部I/Oはしない）。
+ * @param {string} kind
+ * @param {{ entry: object, origin: 'doc'|'user'|'builtin'|null, diff: object|null }} row buildCatalogRowsの1行
+ * @param {{ builtinKeys?: Set<string>, diffMap?: Map }} args
+ * @returns {{ state: 'builtin'|'override'|'user'|'doc-same'|'doc-diff'|'doc-only', canEdit: boolean,
+ *             canRevert: boolean, canDelete: boolean, canDuplicate: boolean, reason: string|null }}
+ */
+export function rowEditState(kind, row, { builtinKeys = new Set(), diffMap = null } = {}) {
+  const def = kindDef(kind);
+  const key = def.keyOf(row.entry);
+  const origin = row.origin;
+
+  if (origin === 'builtin') {
+    return { state: 'builtin', canEdit: true, canRevert: false, canDelete: false, canDuplicate: true, reason: null };
+  }
+  if (origin === 'user') {
+    const isOverride = builtinKeys.has(key);
+    return isOverride
+      ? { state: 'override', canEdit: true, canRevert: true, canDelete: false, canDuplicate: true, reason: null }
+      : { state: 'user', canEdit: true, canRevert: false, canDelete: true, canDuplicate: true, reason: null };
+  }
+  if (origin === 'doc') {
+    const diff = diffMap ? (diffMap.get(key) ?? null) : (row.diff ?? null);
+    if (diff) {
+      return {
+        state: 'doc-diff', canEdit: false, canRevert: false, canDelete: false, canDuplicate: true,
+        reason: '文書の内容が本体と異なります。合わせ直すか複製してください',
+      };
+    }
+    const { user } = overlayFor(kind);
+    const hasPartner = builtinKeys.has(key) || user.some(e => def.keyOf(e) === key);
+    return hasPartner
+      ? { state: 'doc-same', canEdit: true, canRevert: false, canDelete: false, canDuplicate: true, reason: null }
+      : {
+        state: 'doc-only', canEdit: false, canRevert: false, canDelete: false, canDuplicate: true,
+        reason: '文書にのみ存在します（複製してください）',
+      };
+  }
+  throw new Error(`行の出所が不正です（kind:${kind}）: ${origin}`);
+}
+
+/**
+ * ステップ12a（1.2 固定項目）: kindDef(kind).keyBoundFields（出所を問わず常に固定）∪
+ * （builtinKeys に key が含まれていれば kindDef(kind).overrideLockedFields も追加＝builtinの
+ * 上書きだけに掛かる固定）∪ extraLocked（間柱6コード等、呼び出し側の文脈でだけ追加固定したい
+ * 項目。例: 間柱の材コードはx/y/thicknessも固定——conformWoodBackingが柱寸からコードを選ぶため）。
+ * @param {string} kind
+ * @param {string} key
+ * @param {{ builtinKeys?: Set<string>, extraLocked?: string[] }} args
+ * @returns {Set<string>}
+ */
+export function lockedFieldsFor(kind, key, { builtinKeys = new Set(), extraLocked = [] } = {}) {
+  const def = kindDef(kind);
+  const locked = new Set(def.keyBoundFields ?? []);
+  if (builtinKeys.has(key)) {
+    for (const f of def.overrideLockedFields ?? []) locked.add(f);
+  }
+  for (const f of extraLocked) locked.add(f);
+  return locked;
+}
+
+/**
+ * ステップ12a（1.3）: rowEditStateの状態のうち「既存行の編集」を表す4つ（doc-same/override/
+ * user/builtin。doc-diff/doc-onlyは編集不可なのでplanSaveEntryに来る想定が無い）。
+ * QA指摘Minor-2（2026-09-24再報告）: この4状態のときはprevEntry必須——省略されると
+ * 固定項目検査（lockedFieldsFor）が丸ごと素通りしてしまう（`if (prevEntry)`が偽になるため）。
+ */
+const EXISTING_ROW_STATES = Object.freeze(['doc-same', 'override', 'user', 'builtin']);
+
+/**
+ * ステップ12a（1.3 本体編集の保存プラン）: (0) rowStateがEXISTING_ROW_STATES（既存行の編集）
+ * なのにprevEntryが省略されていれば拒否（QA指摘Minor-2） (1) 固定項目
+ * （lockedFieldsFor。加えてkeyOf自体の一致——QA指摘Nit-2: valuesEqualは文字列をtrimして
+ * 比較するため前後空白だけの差はここでは素通りしうるが、keyOfの生の文字列比較なら捕まる）が
+ * prevEntryから変わっていれば拒否（日本語メッセージ「〇〇は変更できません（複製してください）」。
+ * prevEntry省略＝新規追加は対象外） (2) kindDef(kind).validate (3) R17（dedupeFieldsを持つ
+ * 種別のみ。現状material）assertNoDuplicate (4) builtin同キーならoverridesBuiltin:trueを付与
+ * （無ければ項目自体を持たせない＝usedEntries.buildDocumentBundleが同梱から除去するのと対の
+ * 規約）→ upsertUserCatalogEntry。rowState==='doc-same'なら removeDocKey=key・
+ * confirmPairs=diffPairs(kind, prevEntry, entry)（Q-C: 使用中の材・記号を編集するとき確認の
+ * うえ同梱を外して即反映。from=doc現在値・to=編集後の値）。
+ * @param {string} kind
+ * @param {object} entry 編集後のエントリ（keyBoundFields込みでフォームから組み立てたもの）
+ * @param {{ builtinList?: object[], rowState?: string|null, prevEntry?: object|null, extraLocked?: string[] }} args
+ * @returns {{ ok: true, nextUser: object[], removeDocKey: string|null, confirmPairs: object[] }
+ *         | { ok: false, message: string }}
+ */
+export function planSaveEntry(kind, entry, { builtinList = [], rowState = null, prevEntry = null, extraLocked = [] } = {}) {
+  const def = kindDef(kind);
+  const key = def.keyOf(entry);
+  const builtinKeys = new Set(builtinList.map(e => def.keyOf(e)));
+
+  if (EXISTING_ROW_STATES.includes(rowState) && !prevEntry) {
+    return { ok: false, message: '編集元の項目が指定されていません' };
+  }
+
+  if (prevEntry) {
+    const locked = lockedFieldsFor(kind, key, { builtinKeys, extraLocked });
+    for (const field of locked) {
+      if (!valuesEqual(prevEntry[field], entry[field])) {
+        return { ok: false, message: `${fieldLabel(kind, field)}は変更できません（複製してください）` };
+      }
+    }
+    // QA指摘Nit-2（2026-09-24再報告）: 上のvaluesEqualは文字列をtrimして比較するため、
+    // keyBoundFieldsの個々の値が前後空白だけ変わったケースは通り抜けうる——最後にkeyOf自体
+    // （生の文字列。trimしない）の一致を確認する保険。個別項目の検査を優先するのは、code等の
+    // 具体的な項目名で理由を伝えるため（このチェックは「他の個別検査は通ったがkeyだけ実は
+    // 違う」ケースのフォールバック）。
+    if (def.keyOf(prevEntry) !== key) {
+      return { ok: false, message: '識別項目（キー）は変更できません（複製してください）' };
+    }
+  }
+
+  try {
+    def.validate(entry);
+  } catch (e) {
+    return { ok: false, message: e.message };
+  }
+
+  if (def.dedupeFields && def.dedupeFields.length > 0) {
+    const merged = composeList(kind, builtinList);
+    try {
+      assertNoDuplicate(kind, entry, merged);
+    } catch (e) {
+      return { ok: false, message: e.message };
+    }
+  }
+
+  let nextEntry = entry;
+  if (builtinKeys.has(key)) {
+    nextEntry = { ...entry, overridesBuiltin: true };
+  } else if (Object.prototype.hasOwnProperty.call(entry, 'overridesBuiltin')) {
+    nextEntry = { ...entry };
+    delete nextEntry.overridesBuiltin;
+  }
+
+  const { user } = overlayFor(kind);
+  const nextUser = upsertUserCatalogEntry(kind, user, nextEntry);
+
+  const removeDocKey = rowState === 'doc-same' ? key : null;
+  const confirmPairs = rowState === 'doc-same' ? diffPairs(kind, prevEntry, entry) : [];
+
+  return { ok: true, nextUser, removeDocKey, confirmPairs };
+}
+
+/**
+ * ステップ12a（1.3 標準に戻す）: userライブラリからkeyを外す（builtin同キーの上書きを解除）。
+ * alsoRealignDoc（既定true。確認ダイアログの「この文書の同梱も標準に合わせる」チェック相当）が
+ * trueかつ文書同梱(doc)にも同キーがあればremoveDocKeyを添える——無ければnull
+ * （removeDocEntryはdocに無いキーを渡すと例外を投げるため、呼び出し前にここで存在を確認する）。
+ * @param {string} kind
+ * @param {string} key
+ * @param {{ alsoRealignDoc?: boolean }} args
+ * @returns {{ nextUser: object[], removeDocKey: string|null }}
+ */
+export function planRevertToBuiltin(kind, key, { alsoRealignDoc = true } = {}) {
+  const def = kindDef(kind);
+  const { doc, user } = overlayFor(kind);
+  const nextUser = user.filter(e => def.keyOf(e) !== key);
+  const docHasKey = doc.some(e => def.keyOf(e) === key);
+  return { nextUser, removeDocKey: (alsoRealignDoc && docHasKey) ? key : null };
+}
+
+/**
+ * ステップ12a（1.3 使用中userの削除。Q9を未保存文書でも守る）: userライブラリからkeyを外す。
+ * 使用中（usedKeysに含む）で文書同梱(doc)に同キーが無ければ、削除前のuserエントリをdocAppendとして
+ * 返す（呼び出し側がapplyCatalogEditPlanでdocへ書き写す＝参照が保存直前に消えないようにする）。
+ * QA指摘Minor-1（2026-09-24再報告）: docAppendはtarget（userエントリ）をそのまま渡さず
+ * stripOverridesBuiltin（usedEntries.js。buildDocumentBundle/recoverUnresolvedEntriesと
+ * 同じ規約）を通す——overridesBuiltinはuserライブラリ側の状態であり、doc（文書同梱）へ
+ * 持ち込むと別環境での衝突検出（catalogBundle.js detectLibraryConflicts）を誤って黙らせる。
+ * overlay上のuser側エントリ（target）自体は変更しない（nextUserは削除だけで印は無関係）。
+ * @param {string} kind
+ * @param {string} key
+ * @param {{ usedKeys?: Set<string> }} args
+ * @returns {{ nextUser: object[], docAppend: object|null }}
+ */
+export function planRemoveUserEntry(kind, key, { usedKeys = new Set() } = {}) {
+  const def = kindDef(kind);
+  const { doc, user } = overlayFor(kind);
+  const target = user.find(e => def.keyOf(e) === key);
+  if (!target) throw new Error(`ユーザーライブラリに無いキーです: ${key}`);
+  const nextUser = user.filter(e => def.keyOf(e) !== key);
+  const docHasKey = doc.some(e => def.keyOf(e) === key);
+  const docAppend = (usedKeys.has(key) && !docHasKey) ? stripOverridesBuiltin(target) : null;
+  return { nextUser, docAppend };
+}
+
+/**
+ * ステップ12a（1.3 プラン適用）: commitUserEntries(kind, plan.nextUser, prevUser, {saveFn}) で
+ * ユーザーライブラリを永続化した後、plan.removeDocKey（本体へ戻す／doc-same編集）または
+ * plan.docAppend（使用中user削除時の書き写し）があればoverlay上のdocを更新し、どちらかが
+ * あったときだけmarkDirty()を呼ぶ（removeDocEntry/appendDocEntryはoverlayのみを書き換える
+ * in-memory操作でありmarkDirtyを呼ばないと利用者が文書の再保存が必要なことに気づかない——
+ * ui/CatalogMaintenancePanel.jsxの既存の合わせ直しフローと同型）。
+ * saveFnが失敗した場合はcommitUserEntries自身がoverlayをprevUserへ戻して再throwする
+ * （doc側の操作はそこへ到達しないため実行されない＝ロールバックの型を複製しない）。
+ * QA指摘Nit-1（2026-09-24再報告）: prevUser省略時は関数に入った時点のoverlayFor(kind).user
+ * を既定値にする（省略を[]扱いにすると、失敗時のロールバック先が空になり既存userを消してしまう
+ * 事故になる）。
+ * @param {string} kind
+ * @param {{ nextUser: object[], removeDocKey?: string|null, docAppend?: object|null }} plan
+ * @param {{ saveFn: (kind: string, bytes: Uint8Array) => Promise<void>, markDirty?: () => void, prevUser?: object[] }} deps
+ * @returns {Promise<void>}
+ */
+export async function applyCatalogEditPlan(kind, plan, { saveFn, markDirty, prevUser } = {}) {
+  const effectivePrevUser = prevUser ?? overlayFor(kind).user;
+  await commitUserEntries(kind, plan.nextUser, effectivePrevUser, { saveFn });
+  if (plan.removeDocKey) {
+    removeDocEntry(kind, plan.removeDocKey);
+    markDirty?.();
+  } else if (plan.docAppend) {
+    appendDocEntry(kind, plan.docAppend);
+    markDirty?.();
+  }
 }

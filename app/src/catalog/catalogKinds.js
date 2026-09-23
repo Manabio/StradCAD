@@ -155,6 +155,13 @@ const REGISTRY = Object.assign(Object.create(null), {
     encoding: 'json',
     knownFields: ['code', 'name', 'spec', 'x', 'y', 'thickness', 'note', 'category', 'backingClass'],
     requiredFields: ['code', 'name'],
+    // ステップ12a（本体編集の固定項目。Q-B確定 2026-09-23）: keyBoundFields は出所を問わず常に
+    // 固定（codeが変わると別エントリになる＝keyOfの前提が崩れる）。overrideLockedFields は
+    // builtin同キーの上書き（override）だけに追加で固定する——category/backingClassは
+    // 材の役割・下地区分の分類そのものであり、本体標準の分類を利用者が書き換えると
+    // isEditableMaterialCategory/backingClassOf等の判定基盤が崩れるため。
+    keyBoundFields: ['code'],
+    overrideLockedFields: ['category', 'backingClass'],
     // R12: 不一致判定は code を除く全項目。spec/thickness は通知なし例外（4.3）。
     compareFields: ['name', 'spec', 'x', 'y', 'thickness', 'category', 'note'],
     silentDiffFields: ['spec', 'thickness'],
@@ -209,6 +216,12 @@ const REGISTRY = Object.assign(Object.create(null), {
     encoding: 'json',
     knownFields: ['key', 'materialType', 'shape', 'width', 'height', 'webThickness', 'flangeThickness', 'wallThickness', 'label'],
     requiredFields: ['key', 'materialType', 'shape', 'width', 'height', 'label'],
+    // ステップ12a（Q-B確定）: keyの他、寸法系すべてを固定——断面のkeyは寸法から組み立てられる
+    // （woodBeamSectionForDepth/woodColumnSectionId）ため、寸法を変えるとkeyの実体と乖離する。
+    // 編集できるのはlabel（呼称）のみ。overrideLockedFieldsは無し（builtinの上書きでも固定項目は
+    // keyBoundFieldsと同じ＝寸法系のみ）。
+    keyBoundFields: ['key', 'materialType', 'shape', 'width', 'height', 'webThickness', 'flangeThickness', 'wallThickness'],
+    overrideLockedFields: [],
     compareFields: ['materialType', 'shape', 'width', 'height', 'webThickness', 'flangeThickness', 'wallThickness', 'label'],
     silentDiffFields: [],
     matchFields: ['materialType', 'shape', 'width', 'height', 'webThickness', 'flangeThickness', 'wallThickness'],
@@ -260,6 +273,10 @@ const REGISTRY = Object.assign(Object.create(null), {
     encoding: 'json',
     knownFields: ['category', 'key', 'label', 'mechanism', 'wallKinds', 'defaultWidth', 'defaultHeight', 'childRatio', 'fireLeaves', 'fireAngle', 'slideLayout'],
     requiredFields: ['category', 'key', 'label', 'mechanism', 'defaultWidth', 'defaultHeight'],
+    // ステップ12a（Q-B確定）: category/keyはkeyOfの複合キーそのもの、mechanismは開閉の仕組み
+    // （断面と同型の理由——OpeningEditor.jsx等の機構別UI分岐がmechanismを前提にしている）ため固定。
+    keyBoundFields: ['category', 'key', 'mechanism'],
+    overrideLockedFields: [],
     compareFields: ['label', 'mechanism', 'wallKinds', 'defaultWidth', 'defaultHeight', 'childRatio', 'fireLeaves', 'fireAngle', 'slideLayout'],
     // Q-B（2026-09-23裁定）: 呼称（label）差は通知しない。全文書が建具を同梱するため、本体の
     // 呼称を1件直すと全旧文書で通知が出てしまう（R12＝材のspec/thicknessと同型の割り切り）。
@@ -331,6 +348,9 @@ const REGISTRY = Object.assign(Object.create(null), {
     encoding: 'json',
     knownFields: ['key', 'label', 'wallMaterial', 'wallFinish', 'ceilingHeight'],
     requiredFields: ['key', 'label', 'wallMaterial', 'wallFinish', 'ceilingHeight'],
+    // ステップ12a（Q-B確定）: keyのみ固定。他は編集可（12gで対応）。
+    keyBoundFields: ['key'],
+    overrideLockedFields: [],
     // E: 内容照合は完全一致のみ（段を外さない）。ラベル以外の全内容。
     compareFields: ['wallMaterial', 'wallFinish', 'ceilingHeight'],
     silentDiffFields: [],
@@ -366,6 +386,10 @@ const REGISTRY = Object.assign(Object.create(null), {
     encoding: 'json',
     knownFields: ['key', 'label', 'kind', 'layers', 'derivedFrom', 'fields'],
     requiredFields: ['key', 'label', 'kind'],
+    // ステップ12a（Q-B確定）: keyのみ固定。境界マスターは範囲外（閲覧のみ）だが登録表は他種別と
+    // 揃えて持たせる（lockedFieldsForがkindDef(kind).keyBoundFieldsを前提なく参照できるように）。
+    keyBoundFields: ['key'],
+    overrideLockedFields: [],
     // E: 内容照合は完全一致のみ。ラベル以外の全内容（QA指摘 B2・2026-09-22: kind/layers/derivedFrom/fieldsの4項目）。
     compareFields: ['kind', 'layers', 'derivedFrom', 'fields'],
     silentDiffFields: [],

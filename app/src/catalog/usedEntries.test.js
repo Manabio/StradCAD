@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   collectUsedMaterialCodes, collectUsedKeys, collectUsedKeysByKind, expandTransitiveMaterials,
-  buildDocumentBundle, recoverUnresolvedEntries, reexpandTransitiveMaterials,
+  buildDocumentBundle, recoverUnresolvedEntries, reexpandTransitiveMaterials, stripOverridesBuiltin,
 } from './usedEntries.js';
 import { emptyBundle, withEntries } from './catalogBundle.js';
 import { CatalogKind } from './catalogKinds.js';
@@ -263,6 +263,35 @@ test('buildDocumentBundle: 使用0件の種別（空Set）を渡すと同梱に�
   assert.equal(unresolvedKeys.size, 0, '使用0件なので未解決キーは無い');
 });
 
+// ---- buildDocumentBundle: overridesBuiltin除去（ステップ12a）----
+test('buildDocumentBundle: 同梱エントリからoverridesBuiltinを除去する（本体上書き印はuserライブラリ側の状態であり同梱すべきでない）', () => {
+  const materialMap = new Map([
+    ['301000000001', { code: '301000000001', name: 'A（編集）', spec: '', x: 0, y: 0, thickness: null, overridesBuiltin: true }],
+  ]);
+  const { bundle } = buildDocumentBundle({
+    usedKeysByKind: new Map([[CatalogKind.MATERIAL, new Set(['301000000001'])]]),
+    resolvedByKind: new Map([[CatalogKind.MATERIAL, materialMap]]),
+  });
+  assert.equal('overridesBuiltin' in bundle.catalogs.material[0], false);
+  assert.deepEqual(bundle.catalogs.material[0], {
+    code: '301000000001', name: 'A（編集）', spec: '', x: 0, y: 0, thickness: null,
+  });
+});
+
+test('buildDocumentBundle: overridesBuiltinを持たないエントリはそのまま同梱される（余計なキーを増やさない）', () => {
+  const materialMap = new Map([
+    ['301000000001', { code: '301000000001', name: 'A', spec: '', x: 0, y: 0, thickness: null }],
+  ]);
+  const { bundle } = buildDocumentBundle({
+    usedKeysByKind: new Map([[CatalogKind.MATERIAL, new Set(['301000000001'])]]),
+    resolvedByKind: new Map([[CatalogKind.MATERIAL, materialMap]]),
+  });
+  assert.deepEqual(
+    Object.keys(bundle.catalogs.material[0]).sort(),
+    ['code', 'name', 'spec', 'thickness', 'x', 'y'].sort(),
+  );
+});
+
 // ---- recoverUnresolvedEntries: 未解決キーを既存の同梱束から回収する（2026-09-22 QA指摘A）----
 test('recoverUnresolvedEntries: 既存の同梱束に実体が残っていれば回収してbundleへ追記する', () => {
   const recoveredEntry = { code: '301000000020', name: 'ユーザー材', spec: '', x: 0, y: 0, thickness: 15 };
@@ -292,6 +321,38 @@ test('recoverUnresolvedEntries: 既存の同梱束にも無いキーはstillUnre
   );
   assert.deepEqual(recovered.catalogs.material, []);
   assert.deepEqual(stillUnresolvedByKind.get(CatalogKind.MATERIAL), new Set(['999999999999']));
+});
+
+// ---- QA指摘Minor-1（2026-09-24再報告）: 回収元（旧保存の同梱束）にoverridesBuiltinが残っていても除去する ----
+test('【QA指摘Minor-1】recoverUnresolvedEntries: 既存の同梱束のエントリにoverridesBuiltinが残っていても、回収時に除去してbundleへ追記する', () => {
+  const taintedEntry = { code: '301000000020', name: 'ユーザー材', spec: '', x: 0, y: 0, thickness: 15, overridesBuiltin: true };
+  const existingBundle = withEntries(emptyBundle(), CatalogKind.MATERIAL, [taintedEntry]);
+
+  const { bundle: draft, unresolvedKeys } = buildDocumentBundle({
+    usedKeysByKind: new Map([[CatalogKind.MATERIAL, new Set(['301000000020'])]]),
+    resolvedByKind: new Map([[CatalogKind.MATERIAL, new Map()]]),
+  });
+
+  const { bundle: recovered } = recoverUnresolvedEntries(
+    draft, unresolvedKeys, new Map([[CatalogKind.MATERIAL, existingBundle]]),
+  );
+  assert.equal('overridesBuiltin' in recovered.catalogs.material[0], false);
+  assert.deepEqual(recovered.catalogs.material, [
+    { code: '301000000020', name: 'ユーザー材', spec: '', x: 0, y: 0, thickness: 15 },
+  ]);
+});
+
+test('stripOverridesBuiltin: overridesBuiltinを持たないエントリは同じ参照をそのまま返す（新しいオブジェクトを作らない）', () => {
+  const entry = { code: '301000000001', name: 'A' };
+  assert.equal(stripOverridesBuiltin(entry), entry);
+});
+
+test('stripOverridesBuiltin: overridesBuiltinを持つエントリは除去した新しいオブジェクトを返す（元のオブジェクトは変更しない）', () => {
+  const entry = { code: '301000000001', name: 'A', overridesBuiltin: true };
+  const stripped = stripOverridesBuiltin(entry);
+  assert.notEqual(stripped, entry);
+  assert.deepEqual(stripped, { code: '301000000001', name: 'A' });
+  assert.equal(entry.overridesBuiltin, true, '元のオブジェクトは書き換えない');
 });
 
 test('recoverUnresolvedEntries: 既存レコード自体が無い（Map未登録）場合もstillUnresolvedByKindへ積む', () => {
