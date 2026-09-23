@@ -181,8 +181,12 @@ function renderPrimitive(p, i, t, interactive, linePts) {
         strokeDasharray={p.dash === 'center' ? AXIS_DASH : p.dash === 'dashed' ? '4 3' : undefined} />;
     }
     case 'polyline':
+      // width/dash は任意（未指定なら従来どおり幅1・実線）。ui/catalogPreview.js
+      // planSymbolToFigurePrimitives（建具平面記号プレビュー。ステップ11f）が渡す
+      // ——'line'型と異なりL字の外角閉じ（figureLineJoin.js）は掛からない。
       return <polyline key={i} points={p.points.map(([x, y]) => `${t.tx(x)},${t.ty(y)}`).join(' ')}
-        fill={p.closed ? (p.fill ?? 'none') : 'none'} stroke={p.stroke ?? COLOR.stroke} strokeWidth={1} />;
+        fill={p.closed ? (p.fill ?? 'none') : 'none'} stroke={p.stroke ?? COLOR.stroke} strokeWidth={p.width ?? 1}
+        strokeDasharray={p.dash === 'dashed' ? '4 3' : undefined} />;
     case 'hSection':
       return renderHSection(p, i, t);
     case 'text':

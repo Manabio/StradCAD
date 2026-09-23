@@ -662,6 +662,7 @@ export function CatalogMaintenancePanel({ onClose }) {
               setSearch={setReadonlySearch}
               selectedKey={readonlySelectedKey}
               setSelectedKey={setReadonlySelectedKey}
+              materialList={builtinList}
             />
           )}
         </div>
@@ -676,7 +677,7 @@ export function CatalogMaintenancePanel({ onClose }) {
  * R13差分（≠＋オレンジ＋diffTooltip）付きの一覧と、選択行の詳細（READONLY_KIND_FIELDS）を表示する
  * だけ——追加・複製・編集・削除・合わせ直しの手段は一切持たない。
  */
-function ReadonlyKindTab({ kind, builtinList, search, setSearch, selectedKey, setSelectedKey }) {
+function ReadonlyKindTab({ kind, builtinList, search, setSearch, selectedKey, setSelectedKey, materialList }) {
   const def = kindDef(kind);
   // ステップ8i: 規格文字列の一括入力（断面タブのみ）でユーザーライブラリへ追加した直後、
   // overlay（catalog/catalogRegistry.jsのモジュール単位の可変状態。Reactが追跡しない）の
@@ -751,8 +752,10 @@ function ReadonlyKindTab({ kind, builtinList, search, setSearch, selectedKey, se
                 </span>
               </div>
             ))}
-            {/* ステップ9b: 作図プレビュー（登録表 ui/catalogPreview.js 経由。断面・建具種別のみ図を持つ）。 */}
-            <CatalogPreview kind={kind} entry={selectedRow.entry} />
+            {/* ステップ9b: 作図プレビュー（登録表 ui/catalogPreview.js 経由。断面・建具種別のみ図を持つ）。
+                ステップ11f: 建具種別は平面記号も並べて描く——materialListは壁厚導出用（QA指摘・
+                2026-09-23裁定Aで境界マスターは廃止・boundaryListは渡さない）。 */}
+            <CatalogPreview kind={kind} entry={selectedRow.entry} materialList={materialList} />
           </>
         )}
       </div>

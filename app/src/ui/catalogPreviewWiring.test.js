@@ -22,6 +22,18 @@ test('【不変条件・ステップ9b】ui/CatalogMaintenancePanel.jsx: ./Catal
   assert.ok(/<CatalogPreview\b/.test(fnMatch[0]), 'ReadonlyKindTab が <CatalogPreview を描いていない');
 });
 
+// ---- ステップ11f: 平面記号の壁厚導出用にmaterialListをCatalogPreviewへ渡す（QA指摘・2026-09-23
+// 裁定Aで境界マスターは廃止したため、boundaryListは渡さない）----
+test('【不変条件・ステップ11f】ui/CatalogMaintenancePanel.jsx: ReadonlyKindTabの<CatalogPreviewにmaterialListを渡し、boundaryListは渡さない', () => {
+  const src = readSrc('CatalogMaintenancePanel.jsx');
+  const fnMatch = /function ReadonlyKindTab\(\{[\s\S]*?\n\}/.exec(src);
+  assert.ok(fnMatch, 'CatalogMaintenancePanel.jsx に ReadonlyKindTab コンポーネントが見つからない');
+  const call = /<CatalogPreview\b[\s\S]*?\/>/.exec(fnMatch[0]);
+  assert.ok(call, 'ReadonlyKindTab の <CatalogPreview ... /> が見つからない');
+  assert.ok(/materialList=\{materialList\}/.test(call[0]), '<CatalogPreview に materialList が渡されていない');
+  assert.ok(!/boundaryList/.test(call[0]), '<CatalogPreview に boundaryList が渡されている（QA指摘・2026-09-23裁定Aで廃止済みのはず）');
+});
+
 test('【不変条件・ステップ9b】ui/CatalogPreview.jsx: memberFigure(・buildOpeningElevation(の直書きが無い（ui/catalogPreview.js経由に一本化）', () => {
   const src = readSrc('CatalogPreview.jsx');
   assert.ok(!/\bmemberFigure\(/.test(src), 'CatalogPreview.jsx が memberFigure を直接呼んでいる（catalogPreview.js経由への一本化への退行）');
@@ -76,6 +88,20 @@ test('【不変条件・ステップ9c】ui/CatalogMaintenancePanel.jsx: Section
     /<CatalogPreview\s+kind=\{CatalogKind\.SECTION\}\s+entry=\{selectedDraft\}/.test(body),
     'SectionBulkImport が selectedDraft を <CatalogPreview kind={CatalogKind.SECTION}> で描いていない',
   );
+});
+
+// ---- ステップ11f: 建具種別（OPENING_SUB_TYPE）は平面記号（view:'plan'）も姿図の下に並べて描く ----
+test('【不変条件・ステップ11f】ui/CatalogPreview.jsx: buildOpeningPlanSymbolを直書きせず、view:\'plan\'をbuildCatalogPreview経由で呼ぶ', () => {
+  const src = readSrc('CatalogPreview.jsx');
+  assert.ok(!/\bbuildOpeningPlanSymbol\(/.test(src), 'CatalogPreview.jsx が buildOpeningPlanSymbol を直接呼んでいる（catalogPreview.js経由への一本化への退行）');
+  assert.ok(/buildCatalogPreview\([^)]*view:\s*['"]plan['"]/.test(src), "CatalogPreview.jsx が buildCatalogPreview(..., view:'plan') を呼んでいない");
+});
+
+test('【不変条件・ステップ11f】ui/CatalogPreview.jsx: <AutoScaledFigure の描画箇所（renderPreviewResult）はonEditDim・studyを渡さない', () => {
+  const src = readSrc('CatalogPreview.jsx');
+  const m = /<AutoScaledFigure\b[\s\S]*?\/>/.exec(src);
+  assert.ok(m, 'CatalogPreview.jsx に <AutoScaledFigure ... /> が見つからない');
+  assert.ok(!/onEditDim/.test(m[0]) && !/\bstudy\b/.test(m[0]), 'renderPreviewResultの<AutoScaledFigureが読み取り専用の契約から外れている');
 });
 
 test('【不変条件・ステップ9c・Q3】ui/CatalogMaintenancePanel.jsx: SectionBulkImportのplan.toAdd.map(...)の中では<CatalogPreviewを描かない（一覧全部を同時に描かない）', () => {

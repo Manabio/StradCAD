@@ -1,3 +1,4 @@
+import { CatalogKind } from '../catalog/catalogKinds.js';
 import { buildCatalogPreview } from './catalogPreview.js';
 import { AutoScaledFigure } from '../structural/sectionFigure/AutoScaledFigure.jsx';
 import { FIGURE_FRAME_BY_MAP } from '../structural/memberCatalog.js';
@@ -9,19 +10,8 @@ import { FIGURE_FRAME_BY_MAP } from '../structural/memberCatalog.js';
 // と同じものを使う——独自の固定枠を二重定義しない。
 const PREVIEW_FRAME = FIGURE_FRAME_BY_MAP.columnMap;
 
-/**
- * カタログ保守（ReadonlyKindTab）の選択行に対する作図プレビュー。描くだけ——
- * プリミティブ生成は ui/catalogPreview.js の登録表（buildCatalogPreview）経由に一本化し、
- * memberFigure/buildOpeningElevation を本コンポーネントで直書きしない。読み取り専用パネルのため
- * AutoScaledFigure へ onEditDim/study は渡さない（EccentricityDialog.jsxと同じ読み取り専用の使い方）。
- */
-export function CatalogPreview({ kind, entry }) {
-  let result;
-  try {
-    result = buildCatalogPreview(kind, entry, { frame: PREVIEW_FRAME });
-  } catch (e) {
-    return <div className="catmnt-preview-error">作図プレビューでエラーが発生しました: {e.message}</div>;
-  }
+// buildCatalogPreview の1件分の結果をSVGへ描くか、理由文だけを描く（姿図・平面記号で共通に使う）。
+function renderPreviewResult(result) {
   if (!result.ok) {
     return <div className="catmnt-preview-empty">{result.reason}</div>;
   }
@@ -34,5 +24,42 @@ export function CatalogPreview({ kind, entry }) {
         scale={result.scale ?? undefined}
       />
     </div>
+  );
+}
+
+/**
+ * カタログ保守（ReadonlyKindTab）の選択行に対する作図プレビュー。描くだけ——
+ * プリミティブ生成は ui/catalogPreview.js の登録表（buildCatalogPreview）経由に一本化し、
+ * memberFigure/buildOpeningElevation/buildOpeningPlanSymbol を本コンポーネントで直書きしない。
+ * 読み取り専用パネルのため AutoScaledFigure へ onEditDim/study は渡さない
+ * （EccentricityDialog.jsxと同じ読み取り専用の使い方）。
+ *
+ * 建具種別（OPENING_SUB_TYPE）は姿図（既定view）に加えて平面記号（view:'plan'）も姿図の下に
+ * 並べて描く（ステップ11f）。壁厚導出に使う materialList は呼び出し側（CatalogMaintenancePanel.jsx）
+ * が動的importで読み込んだ builtin 一覧をそのまま渡す（未指定なら ui/catalogPreview.js 側の既定
+ * 壁厚に落ちる。境界マスターは使わない——QA指摘・2026-09-23裁定Aで廃止）。
+ */
+export function CatalogPreview({ kind, entry, materialList }) {
+  let result;
+  try {
+    result = buildCatalogPreview(kind, entry, { frame: PREVIEW_FRAME });
+  } catch (e) {
+    return <div className="catmnt-preview-error">作図プレビューでエラーが発生しました: {e.message}</div>;
+  }
+
+  let plan = null;
+  if (kind === CatalogKind.OPENING_SUB_TYPE) {
+    try {
+      plan = buildCatalogPreview(kind, entry, { frame: PREVIEW_FRAME, view: 'plan', materialList });
+    } catch (e) {
+      plan = { ok: false, reason: `平面記号プレビューでエラーが発生しました: ${e.message}` };
+    }
+  }
+
+  return (
+    <>
+      {renderPreviewResult(result)}
+      {plan && renderPreviewResult(plan)}
+    </>
   );
 }
