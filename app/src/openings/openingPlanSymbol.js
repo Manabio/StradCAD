@@ -13,13 +13,24 @@
 // 開口全幅の枠矩形を描く非蝶番系）のうち本ステップで移行する3機構——旧
 // otherMechanismSymbol内のslideSingleSymbol/slideLayoutSymbol/hungSymbol、旧sashFrameOpenSymbol
 // と同じ判断の移設（windowLine群10機構は同じSASH_OPEN_MECHANISMSだが11dで移行）。
+// 11d: 窓ほか（FIXED/TILT/TILT_OUT/AWNING/PROJECT_OUT/LOUVER/AWNING_MULTI/GARARI/GLASS_BLOCK/
+// PIVOT_H の10機構＝windowLine群）・FOLD・PIVOT・sash枠（閉じ矩形）を追加移行。windowLine群は
+// openingCatalog.js SASH_OPEN_MECHANISMS（frame='sashOpen'。方立はコの字）と完全一致するため
+// SASH_OPEN_GROUP_MECHANISMSへ追加するだけで11cの経路（buildSashOpenGroupPrimitives）に乗る
+// （旧windowLineSymbolと同じ判断の移設）。FOLD・PIVOTはHINGED_MECHANISMSにもSASH_OPEN_MECHANISMSにも
+// 含まれないためplanSymbolPlanはframe='sash'（詳細LODで方立=閉じた矩形2つ。旧sashFrameSymbol）を
+// 返す——11b/11cのどちらの枠経路とも異なるため専用のSASH_GROUP_MECHANISMS・
+// buildSashGroupPrimitivesを新設する。PIVOTの弧・線は「動作線ではなく記号の姿そのもの」
+// （旧renderer/OpeningsLayer.jsx renderOpeningSymbolのコメント）としてrole='symbol'固定
+// （蝶番系のleaf/arcロールは使わない——PIVOTはHINGED_MECHANISMSに含まれない非蝶番系のため）。
 //
 // buildOpeningPlanSymbol(opening, ctx) → PlanPrimitive[] | null。
 // **STANDARD/DETAILで entry があり IMPLEMENTED_MECHANISMS に含まれる機構のうち、まだ移行して
 // いないものは null を返す**（呼び出し側 renderer/OpeningsLayer.jsx は null なら旧経路
-// （otherMechanismSymbol等）をそのまま実行する暫定契約。11d〜11e で残りの機構を移行し、
-// 11eでnull経路自体を削除する）。SWING_GROUP_MECHANISMS（11b-1）・HINGE_GROUP2_MECHANISMS
-// （11b-2）・SLIDE_DOUBLE・SASH_OPEN_GROUP_MECHANISMS（11c）は非nullを返す。
+// （otherMechanismSymbol等）をそのまま実行する暫定契約。11eで残りの機構(SHUTTER/OVERHEAD/
+// EMERGENCY/FRAME_ONLY)を移行し、11eでnull経路自体を削除する）。SWING_GROUP_MECHANISMS
+// （11b-1）・HINGE_GROUP2_MECHANISMS（11b-2）・SLIDE_DOUBLE・SASH_OPEN_GROUP_MECHANISMS
+// （11c・11dで追加）・SASH_GROUP_MECHANISMS（11d）は非nullを返す。
 //
 // openingPlanSymbolGeometry.js と同じ抽出方針: react-konva/store.js/snap.js/.jsxを静的に
 // 引かないことで node:test から単体 import できるようにする（抽出純モジュールはnode:testから
@@ -38,7 +49,7 @@ import {
   planFrameBand, bandPerp, planSymbolPlan, swingOpenPerpDir, innerSpanOpening,
   swingClosedLeafSpan, closedAngleFor, leafOpenAngle, angleVectors,
   swingDoubleLeafSpecs, swingChildLeafSpecs, fireDoorLeafSpecs, fireFoldLeafSpecs,
-  trackOf, trackPerp, resolveSlideLayoutPanels,
+  trackOf, trackPerp, resolveSlideLayoutPanels, foldZigzagPoints,
   DOOR_OPEN_ANGLE_DEG, FRAME_JAMB_WIDTH_MM, FRAME_KAKARI_WIDTH_MM, DOOR_LEAF_THICKNESS_MM,
 } from './openingPlanSymbolGeometry.js';
 import { LodLevel } from '../viewport.js';
@@ -65,17 +76,41 @@ const HINGE_GROUP2_MECHANISMS = new Set([
   OpeningMechanism.FIRE_FOLD,
 ]);
 
-// 非蝶番sashOpen系（11cで移行）。openingCatalog.js SASH_OPEN_MECHANISMS（記号自身が開口全幅の
-// 枠矩形を描く非蝶番系。方立は内側縦線を持たない3辺=コの字）のうち本ステップで移行する3機構
-// （旧 renderer/OpeningsLayer.jsx otherMechanismSymbol内のslideSingleSymbol/slideLayoutSymbol/
-// hungSymbolと同じ判断の移設）。windowLine群10機構（FIXED/TILT等）は同じSASH_OPEN_MECHANISMSだが
-// 11dで移行するため、あえてSASH_OPEN_MECHANISMSそのものは再利用せずこのステップの対象だけを
-// 独自の集合として持つ（暫定契約のnull判定に必要）。
+// 非蝶番sashOpen系（11c: SLIDE_SINGLE/SLIDE_LAYOUT/HUNG、11d: windowLine群10機構を追加）。
+// openingCatalog.js SASH_OPEN_MECHANISMS（記号自身が開口全幅の枠矩形を描く非蝶番系。方立は
+// 内側縦線を持たない3辺=コの字）と11d時点で完全一致する（旧 renderer/OpeningsLayer.jsx
+// otherMechanismSymbol内のslideSingleSymbol/slideLayoutSymbol/hungSymbol/windowLineSymbolと
+// 同じ判断の移設）。SASH_OPEN_MECHANISMSそのものを再利用せず独自の集合として持つのは、
+// 「SASH_OPEN_MECHANISMSに属する＝このグループで移行済み」という前提がこの先も自明ではない
+// ため（buildSashOpenGroupPrimitivesの防御的throw参照。将来SASH_OPEN_MECHANISMSに機構が
+// 追加されてもこの集合には自動で入らない）。
 const SASH_OPEN_GROUP_MECHANISMS = new Set([
   OpeningMechanism.SLIDE_SINGLE,
   OpeningMechanism.SLIDE_LAYOUT,
   OpeningMechanism.HUNG,
+  OpeningMechanism.FIXED,
+  OpeningMechanism.TILT,
+  OpeningMechanism.TILT_OUT,
+  OpeningMechanism.AWNING,
+  OpeningMechanism.PROJECT_OUT,
+  OpeningMechanism.LOUVER,
+  OpeningMechanism.AWNING_MULTI,
+  OpeningMechanism.GARARI,
+  OpeningMechanism.GLASS_BLOCK,
+  OpeningMechanism.PIVOT_H,
 ]);
+
+// 非蝶番sash系（11dで移行）。HINGED_MECHANISMSにもSASH_OPEN_MECHANISMSにも含まれないため
+// planSymbolPlanはframe='sash'（詳細LODで方立=閉じた矩形2つ。旧sashFrameSymbol）を返す
+// （旧 renderer/OpeningsLayer.jsx otherMechanismSymbol内のfoldSymbol/pivotSymbolと同じ判断の
+// 移設）。IMPLEMENTED_MECHANISMSのうちHINGED/SASH_OPENのどちらでもない機構はこの2件のみ。
+const SASH_GROUP_MECHANISMS = new Set([
+  OpeningMechanism.FOLD,
+  OpeningMechanism.PIVOT,
+]);
+
+// FOLD（折れ戸・折りたたみ窓）ジグザグの振幅（mm。旧 renderer/OpeningsLayer.jsxから移設）。
+export const FOLD_AMPLITUDE_MM = 120;
 
 // 引き違い 詳細LOD用（すべてmm。renderer/OpeningsLayer.jsxから移設。11c）。
 export const SLIDE_TRACK_INSET_MM = 4; // 枠から戸先・召し合わせレールまでの隙間
@@ -298,12 +333,34 @@ function hungPrimitives(opening, band, symbolWeight, frameWeight) {
   ];
 }
 
+// 窓一般線（11d）: 枠矩形(frame)＋壁軸上に全長1本線(symbol)。FIXED/TILT/TILT_OUT/AWNING/
+// PROJECT_OUT/LOUVER/AWNING_MULTI/GARARI/GLASS_BLOCK/PIVOT_Hの10機構が共有する（旧
+// windowLineSymbol。他のsashOpen系記号（slideSingle等）と同じく自前の全幅frame矩形＋symbol線を
+// 返す——外側のコの字方立(sashFrameOpenPrimitives)とは別）。
+function windowLinePrimitives(opening, band, symbolWeight, frameWeight) {
+  const { coord1, coord2, isVertical } = opening;
+  return [
+    rectPrim('frame', frameWeight, isVertical, coord1, coord2, band.lo, band.hi),
+    linePrim('symbol', symbolWeight, toWorld(isVertical, coord1, band.center), toWorld(isVertical, coord2, band.center)),
+  ];
+}
+
 // SASH_OPEN_GROUP_MECHANISMSの機構ごとの記号プリミティブ（frame='sashOpen'のコの字は含まない）。
 function sashOpenGroupSymbolPrimitives(mechanism, opening, band, entry, symbolWeight, frameWeight) {
   switch (mechanism) {
     case OpeningMechanism.SLIDE_SINGLE: return slideSinglePrimitives(opening, band, symbolWeight, frameWeight);
     case OpeningMechanism.SLIDE_LAYOUT: return slideLayoutPrimitives(opening, band, entry, symbolWeight, frameWeight);
     case OpeningMechanism.HUNG:         return hungPrimitives(opening, band, symbolWeight, frameWeight);
+    case OpeningMechanism.FIXED:
+    case OpeningMechanism.TILT:
+    case OpeningMechanism.TILT_OUT:
+    case OpeningMechanism.AWNING:
+    case OpeningMechanism.PROJECT_OUT:
+    case OpeningMechanism.LOUVER:
+    case OpeningMechanism.AWNING_MULTI:
+    case OpeningMechanism.GARARI:
+    case OpeningMechanism.GLASS_BLOCK:
+    case OpeningMechanism.PIVOT_H:       return windowLinePrimitives(opening, band, symbolWeight, frameWeight);
     default: return [];
   }
 }
@@ -334,7 +391,7 @@ function sashFrameOpenPrimitives(opening, band, jambWidth, frameWeight) {
 // SASH_OPEN_GROUP_MECHANISMSのディスパッチ（J7: jambW・swingOpenPerpDir・planSymbolPlan／
 // J12: sashOpen枠＋内法へ寄せたopeningの移設）。非蝶番系のためswingOpenPerpDirは常に0を返し
 // （HINGED_MECHANISMSに含まれないため）、plan.pivotPerpはaxisValue（詳細LODはband内へ
-// クランプ）のまま——本ステップの3機構は回転しないためpivotPerp自体は使わない。
+// クランプ）のまま——このグループの機構は回転しないためpivotPerp自体は使わない。
 function buildSashOpenGroupPrimitives(opening, entry, lodLevel, band, detail, axisValue, faceLo, faceHi, symbolWeight, frameWeight) {
   const jambW = Math.min(FRAME_JAMB_WIDTH_MM, opening.width / 2);
   const openPerpDir = swingOpenPerpDir(opening.isVertical, opening.hingeSide, opening.swingSide, entry.mechanism, entry);
@@ -350,8 +407,8 @@ function buildSashOpenGroupPrimitives(opening, entry, lodLevel, band, detail, ax
     return [...frame, ...symbol];
   }
   // ここに到達するのは plan.frame==='none'（STANDARD）のときだけ——SASH_OPEN_GROUP_MECHANISMSの
-  // 3機構は全てopeningCatalog.js SASH_OPEN_MECHANISMSに含まれるため、planSymbolPlanはDETAILで
-  // 必ず'sashOpen'を返し、'sash'（記号が枠矩形を描かない非蝶番系。FOLD/PIVOT等）へは分類されない
+  // 機構は全てopeningCatalog.js SASH_OPEN_MECHANISMSに含まれるため、planSymbolPlanはDETAILで
+  // 必ず'sashOpen'を返し、'sash'（記号が枠矩形を描かない非蝶番系。FOLD/PIVOT）へは分類されない
   // （REASONED・防御的。現状のSASH_OPEN_GROUP_MECHANISMSの定義では到達不能で、直接呼ぶテストも
   // 書けない）。将来この集合にSASH_OPEN_MECHANISMSに属さない機構を誤って足すと、DETAILで
   // 'sash'が返り黙って方立が消える（sashOpenGroupSymbolPrimitivesは記号自身の枠しか描かない）ため、
@@ -360,6 +417,96 @@ function buildSashOpenGroupPrimitives(opening, entry, lodLevel, band, detail, ax
     throw new TypeError(`buildSashOpenGroupPrimitives: sashOpenグループの枠種別が想定外: ${plan.frame}`);
   }
   return sashOpenGroupSymbolPrimitives(entry.mechanism, opening, band, entry, symbolWeight, frameWeight);
+}
+
+// ================================================================
+// 非蝶番sash系（FOLD・PIVOT）のプリミティブ列（旧 renderer/OpeningsLayer.jsx otherMechanismSymbol
+// 内のfoldSymbol/pivotSymbol、旧sashFrameSymbolの移設。11d）。frame（'sash'の閉じた矩形2つ）は
+// 下のsashFramePrimitivesが別途描くため、ここは各機構固有の記号線・弧のみを返す。
+// ================================================================
+
+// 非蝶番系 詳細LOD専用（frame:'sash'）: 開口両端に方立（縦枠）を単純な閉じた矩形2つで描く
+// （扉が通過しないためswingFramePrimitivesのような欠き込みは無い。旧sashFrameSymbol）。記号本体
+// （sashGroupSymbolPrimitives）が自前で枠矩形を描かない機構（frame='sash'。11d時点では FOLD/PIVOT、
+// 11e で SHUTTER/OVERHEAD/EMERGENCY も同じ枠を使う）向け——記号側が枠矩形を
+// 描く機構はsashFrameOpenPrimitivesを使う（F5、二重描画防止。既存コメントと同じ理由）。
+function sashFramePrimitives(opening, band, jambWidth, frameWeight) {
+  const { coord1, coord2, isVertical } = opening;
+  return [
+    rectPrim('frame', frameWeight, isVertical, coord1, coord1 + jambWidth, band.lo, band.hi),
+    rectPrim('frame', frameWeight, isVertical, coord2 - jambWidth, coord2, band.lo, band.hi),
+  ];
+}
+
+// FOLD（折れ戸・折りたたみ窓）: 開口全長にジグザグ線（W形。role='symbol'固定）。
+// 山数=max(2,round(width/450))（旧foldSymbol）。
+function foldPrimitives(opening, band, symbolWeight) {
+  const { coord1, width, isVertical } = opening;
+  const peaks = Math.max(2, Math.round(width / 450));
+  const points = foldZigzagPoints(coord1, width, peaks, FOLD_AMPLITUDE_MM).flatMap(({ along, perpOffset }) => {
+    const p = toWorld(isVertical, along, band.center + perpOffset);
+    return [p.x, p.y];
+  });
+  // closedは意図的に渡さない——旧jsx foldSymbolの<Line points={pts} {...sp} />はclosedを持たない
+  // （fireFoldPanelPrimitivesと同じ理由でprobeのprops比較上、旧経路と食い違わせない）。
+  return [polylinePrim('symbol', symbolWeight, points)];
+}
+
+// PIVOT（縦軸回転窓）: 開口中央に壁直交方向の障子線（長さ=min(width,600)）＋その両側に90°円弧2つ
+// （回転の軌跡、半径=width/2、中心=開口中心）。role='symbol'固定——旧renderOpeningSymbolのコメント
+// 「PIVOTの菱形の弧も動作線ではなく記号の姿そのものなのでsp」のとおり、蝶番系のarc役割
+// （中心線・弧をopening.lineWeightと切り離す規約）は適用しない（旧pivotSymbol）。
+function pivotPrimitives(opening, band, symbolWeight) {
+  const { centerCoord, width, isVertical } = opening;
+  const leafLen = Math.min(width, 600);
+  const p1 = toWorld(isVertical, centerCoord, band.center - leafLen / 2);
+  const p2 = toWorld(isVertical, centerCoord, band.center + leafLen / 2);
+  const center = toWorld(isVertical, centerCoord, band.center);
+  const r = width / 2;
+  const alongAngle = isVertical ? 90 : 0;
+  const perpAngle = isVertical ? 0 : 90;
+  const sweep = perpAngle - alongAngle;
+  return [
+    linePrim('symbol', symbolWeight, p1, p2),
+    arcPrim('symbol', symbolWeight, center.x, center.y, r, alongAngle, sweep),
+    arcPrim('symbol', symbolWeight, center.x, center.y, r, alongAngle + 180, sweep),
+  ];
+}
+
+// SASH_GROUP_MECHANISMSの機構ごとの記号プリミティブ（frame='sash'の閉じた矩形2つは含まない）。
+function sashGroupSymbolPrimitives(mechanism, opening, band, symbolWeight) {
+  switch (mechanism) {
+    case OpeningMechanism.FOLD:  return foldPrimitives(opening, band, symbolWeight);
+    case OpeningMechanism.PIVOT: return pivotPrimitives(opening, band, symbolWeight);
+    default: return [];
+  }
+}
+
+// SASH_GROUP_MECHANISMSのディスパッチ（J7: jambW・swingOpenPerpDir・planSymbolPlan／J12: sash枠＋
+// 内法へ寄せたopeningの移設）。非蝶番系のためswingOpenPerpDirは常に0を返し、plan.pivotPerpは
+// axisValue（詳細LODはband内へクランプ）のまま——FOLD/PIVOTはband.centerで記号を描くため
+// pivotPerp自体は使わない（buildSashOpenGroupPrimitivesと同じ構造）。
+function buildSashGroupPrimitives(opening, entry, lodLevel, band, detail, axisValue, faceLo, faceHi, symbolWeight, frameWeight) {
+  const jambW = Math.min(FRAME_JAMB_WIDTH_MM, opening.width / 2);
+  const openPerpDir = swingOpenPerpDir(opening.isVertical, opening.hingeSide, opening.swingSide, entry.mechanism, entry);
+  const plan = planSymbolPlan({
+    mechanism: entry.mechanism, lodLevel, coord1: opening.coord1, coord2: opening.coord2,
+    axisValue, band, jambWidth: jambW, faceLo, faceHi, openPerpDir,
+  });
+
+  if (plan.frame === 'sash') {
+    const spanOpening = innerSpanOpening(opening, plan.innerSpan);
+    const frame = sashFramePrimitives(opening, band, jambW, frameWeight);
+    const symbol = sashGroupSymbolPrimitives(entry.mechanism, spanOpening, band, symbolWeight);
+    return [...frame, ...symbol];
+  }
+  // ここに到達するのは plan.frame==='none'（STANDARD）のときだけ——SASH_GROUP_MECHANISMS
+  // （FOLD/PIVOT）はHINGED_MECHANISMSにもSASH_OPEN_MECHANISMSにも属さないため、planSymbolPlanは
+  // DETAILで必ず'sash'を返す（REASONED・防御的。buildSashOpenGroupPrimitivesと対の早期気付き）。
+  if (plan.frame !== 'none') {
+    throw new TypeError(`buildSashGroupPrimitives: sashグループの枠種別が想定外: ${plan.frame}`);
+  }
+  return sashGroupSymbolPrimitives(entry.mechanism, opening, band, symbolWeight);
 }
 
 // exteriorDirOfを1回だけ呼ぶ薄いメモ化（見込帯のexteriorDir計算専用。呼び出し元がbandを何度
@@ -620,8 +767,9 @@ function buildHingeGroup2Primitives(opening, entry, lodLevel, band, detail, axis
  *   呼ぶ。呼ぶたびに再計算しないよう内部で1回だけメモ化して呼ぶ）。
  * @returns {object[]|null} プリミティブ配列。STANDARD/DETAILでentryがありIMPLEMENTED_MECHANISMS
  *   に含まれる機構のうちSWING_GROUP_MECHANISMS・HINGE_GROUP2_MECHANISMS・SLIDE_DOUBLE・
- *   SASH_OPEN_GROUP_MECHANISMS以外は暫定契約としてnull（呼び出し側は旧経路を実行する。
- *   11d〜11e で残りの機構を移行し尽くした後に削除予定）。
+ *   SASH_OPEN_GROUP_MECHANISMS・SASH_GROUP_MECHANISMS以外は暫定契約としてnull（呼び出し側は
+ *   旧経路を実行する。11eで残りの機構(SHUTTER/OVERHEAD/EMERGENCY/FRAME_ONLY)を移行し尽くした
+ *   後に削除予定）。
  */
 export function buildOpeningPlanSymbol(opening, ctx) {
   const { entry = null, lodLevel, axisValue, faceLo, faceHi, exteriorDirOf } = ctx ?? {};
@@ -639,16 +787,17 @@ export function buildOpeningPlanSymbol(opening, ctx) {
   const detail = lodLevel === LodLevel.DETAIL;
 
   // STANDARD/DETAILでentryが実装済み機構を指す場合、SWING_GROUP_MECHANISMS（11b-1）・
-  // HINGE_GROUP2_MECHANISMS（11b-2）・SLIDE_DOUBLE・SASH_OPEN_GROUP_MECHANISMS（11c。
-  // 本ステップで移行済み）以外は未移行——旧経路(OpeningsLayer.jsx側のotherMechanismSymbol等)が
-  // そのまま描くため、ここではband計算（exteriorDirOfの呼び出しを含む）自体を行わない
-  // （呼び出し側と二重に計算・二重にthunkを呼ばないため）。
+  // HINGE_GROUP2_MECHANISMS（11b-2）・SLIDE_DOUBLE・SASH_OPEN_GROUP_MECHANISMS（11c・11d）・
+  // SASH_GROUP_MECHANISMS（11d。本ステップで移行済み）以外は未移行——旧経路(OpeningsLayer.jsx側
+  // のotherMechanismSymbol等)がそのまま描くため、ここではband計算（exteriorDirOfの呼び出しを
+  // 含む）自体を行わない（呼び出し側と二重に計算・二重にthunkを呼ばないため）。
   const implemented = lodLevel !== LodLevel.SCHEMATIC && entry && IMPLEMENTED_MECHANISMS.has(entry.mechanism);
   const swingGroup = implemented && SWING_GROUP_MECHANISMS.has(entry.mechanism);
   const hingeGroup2 = implemented && HINGE_GROUP2_MECHANISMS.has(entry.mechanism);
   const slideDouble = implemented && entry.mechanism === OpeningMechanism.SLIDE_DOUBLE;
   const sashOpenGroup = implemented && SASH_OPEN_GROUP_MECHANISMS.has(entry.mechanism);
-  if (implemented && !swingGroup && !hingeGroup2 && !slideDouble && !sashOpenGroup) {
+  const sashGroup = implemented && SASH_GROUP_MECHANISMS.has(entry.mechanism);
+  if (implemented && !swingGroup && !hingeGroup2 && !slideDouble && !sashOpenGroup && !sashGroup) {
     return null;
   }
 
@@ -693,6 +842,12 @@ export function buildOpeningPlanSymbol(opening, ctx) {
   if (sashOpenGroup) {
     const frameWeight = planSymbolWeightMm('frame', opening, detail);
     return buildSashOpenGroupPrimitives(opening, entry, lodLevel, band, detail, axisValue, faceLo, faceHi, symbolWeight, frameWeight);
+  }
+
+  // STANDARD/DETAILで非蝶番sash系（SASH_GROUP_MECHANISMS＝FOLD・PIVOT）: 専用ディスパッチへ。
+  if (sashGroup) {
+    const frameWeight = planSymbolWeightMm('frame', opening, detail);
+    return buildSashGroupPrimitives(opening, entry, lodLevel, band, detail, axisValue, faceLo, faceHi, symbolWeight, frameWeight);
   }
 
   // STANDARD/DETAILでentryが無い・未実装機構: ティックマークのみ。

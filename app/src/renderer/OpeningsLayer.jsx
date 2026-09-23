@@ -23,7 +23,7 @@ import { wallFinishLineWeight } from '../finish/wallFinishJoin.js';
 import {
   buildOpeningPlanSymbol, tickEndpoints, FRAME_HINGE_INSET_MM, FRAME_LATCH_INSET_MM,
   FIRE_ARC_DASH_MM, FIRE_FOLD_PEAKS, FIRE_FOLD_AMP_MM,
-  SLIDE_TRACK_INSET_MM, WEATHERSTRIP_DASH,
+  SLIDE_TRACK_INSET_MM, WEATHERSTRIP_DASH, FOLD_AMPLITUDE_MM,
 } from '../openings/openingPlanSymbol.js';
 
 // 開き戸 詳細LOD用 枠寸法（FRAME_HINGE_INSET_MM/FRAME_LATCH_INSET_MMはopenings/openingPlanSymbol.js
@@ -39,9 +39,13 @@ import {
 // （唯一の定義箇所。ここではimportするだけ）——この節の下のslideSingleSymbol/slideLayoutSymbol/
 // hungSymbol/slideDoubleSymbol/slideDoubleDetailSymbol/sashFrameOpenSymbol（otherMechanismSymbol
 // 経由・SLIDE_DOUBLE早期return含む）もbuildOpeningPlanSymbolが非nullを返すため11c以降は到達しない。
+// FOLD_AMPLITUDE_MMも同じ理由でステップ11dでopenings/openingPlanSymbol.jsへ移設
+// （唯一の定義箇所）——この節の下のfoldSymbol/pivotSymbol/windowLineSymbol
+// （otherMechanismSymbol経由）もbuildOpeningPlanSymbolが非nullを返すため11d以降は到達しない。
+// ただし sashFrameSymbol は SHUTTER/OVERHEAD/EMERGENCY の DETAIL（planSymbolPlan が frame:'sash' を
+// 返す）で 11e まで引き続き使われる（QA指摘・2026-09-23）。
 
 // 新機構用の記号寸法（すべて mm）
-const FOLD_AMPLITUDE_MM  = 120; // 折れ戸・折りたたみ窓のジグザグ振幅
 const SHUTTER_DASH       = [14, 4, 4, 4]; // シャッターの一点鎖線
 const OVERHEAD_DASH      = [10, 6];       // オーバーヘッドドアの跳ね上げ投影（破線）
 const OVERHEAD_DEPTH_MM  = 200;

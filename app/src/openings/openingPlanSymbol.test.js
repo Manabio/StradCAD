@@ -1,16 +1,19 @@
 // openingPlanSymbol.js（建具モード 平面記号の純関数化）の回帰テスト。
 // ステップ11a（器＋線幅役割＋SCHEMATIC）＋11b-1（蝶番系その1: SWING・SWING_IN・PROJECT_V・DREH_KIPP）
-// ＋11b-2（蝶番系その2: SWING_DOUBLE・SWING_CHILD・FREE・FREE_DOUBLE・FIRE_DOOR・FIRE_FOLD）。
+// ＋11b-2（蝶番系その2: SWING_DOUBLE・SWING_CHILD・FREE・FREE_DOUBLE・FIRE_DOOR・FIRE_FOLD）
+// ＋11c（引戸系＋上げ下げ窓: SLIDE_DOUBLE・SLIDE_SINGLE・SLIDE_LAYOUT・HUNG）
+// ＋11d（窓ほか: windowLine群10機構＝FIXED/TILT/TILT_OUT/AWNING/PROJECT_OUT/LOUVER/AWNING_MULTI/
+// GARARI/GLASS_BLOCK/PIVOT_H・FOLD・PIVOT）。
 //
-// 【ピン留め】(a)/(a')/(a'') は probe（scripts/probe/openingPlanSymbolProbe.mjs）で実データ3文書×
-// （通常＋sweep）の6本が旧 renderer/OpeningsLayer.jsx の出力と完全一致することを確認した後の
-// buildOpeningPlanSymbol自身の出力を primitives.map(p => JSON.stringify(p)) で固定したもの
-// （memberFigures.test.js と同じ形。意図的な出力変更なら期待値を採り直すこと）。
+// 【ピン留め】(a)/(a')/(a'')/(a''')/(a'''') は probe（scripts/probe/openingPlanSymbolProbe.mjs）で
+// 実データ3文書×（通常＋sweep）の6本が旧 renderer/OpeningsLayer.jsx の出力と完全一致することを
+// 確認した後の buildOpeningPlanSymbol自身の出力を primitives.map(p => JSON.stringify(p)) で
+// 固定したもの（memberFigures.test.js と同じ形。意図的な出力変更なら期待値を採り直すこと）。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { buildOpeningPlanSymbol, planSymbolWeightMm } from './openingPlanSymbol.js';
 import { LodLevel } from '../viewport.js';
-import { OpeningMechanism } from './openingCatalog.js';
+import { OpeningMechanism, IMPLEMENTED_MECHANISMS } from './openingCatalog.js';
 import { LINE_WEIGHT_MM, OpeningCategory } from '../core.js';
 
 function makeOpening(overrides = {}) {
@@ -505,6 +508,124 @@ test('ピン留め: SLIDE_LAYOUT・doubleSliding3（3枚建て引違い窓。tra
 });
 
 // ================================================================
+// (a'''') ピン留め: 窓ほか（ステップ11d。windowLine群10機構＝FIXED/TILT/TILT_OUT/AWNING/
+// PROJECT_OUT/LOUVER/AWNING_MULTI/GARARI/GLASS_BLOCK/PIVOT_H＝SASH_OPEN_GROUP_MECHANISMSへ追加）・
+// FOLD・PIVOT（SASH_GROUP_MECHANISMS新設）。probe（openingPlanSymbolProbe.mjs。実データ3文書×
+// 通常＋sweepの6本。sweepはopeningSubTypeBuiltinList()の全builtin subTypeを含む）で旧
+// renderer/OpeningsLayer.jsxの出力と完全一致することを確認した後の出力を固定。windowLine群は
+// FIXED・PIVOT_Hの2機構を代表として固定し、残り8機構（TILT/TILT_OUT/AWNING/PROJECT_OUT/LOUVER/
+// AWNING_MULTI/GARARI/GLASS_BLOCK）は下の不変条件（コの字方立・symbol線1本）でカバーする。
+// ================================================================
+
+test('ピン留め: FIXED・STANDARD → 枠矩形(frame)＋壁軸上に全長1本線(symbol)（frame=none）', () => {
+  const opening = makeOpening();
+  const ctx = makeCtx({ entry: { mechanism: OpeningMechanism.FIXED }, lodLevel: LodLevel.STANDARD, axisValue: 500 });
+  const prims = buildOpeningPlanSymbol(opening, ctx);
+  assert.deepEqual(prims.map(p => JSON.stringify(p)), [
+    '{"type":"rect","x":0,"y":480,"w":1000,"h":40,"role":"frame","weightMm":0.25}',
+    '{"type":"line","x1":0,"y1":500,"x2":1000,"y2":500,"role":"symbol","weightMm":0.35}',
+  ]);
+});
+
+test('ピン留め: FIXED・DETAIL → sashOpen枠（コの字2本）＋内法へ寄せた枠矩形＋壁軸上に1本線', () => {
+  const opening = makeOpening();
+  const ctx = makeCtx({ entry: { mechanism: OpeningMechanism.FIXED }, lodLevel: LodLevel.DETAIL, faceLo: -60, faceHi: 60, axisValue: 0 });
+  const prims = buildOpeningPlanSymbol(opening, ctx);
+  assert.deepEqual(prims.map(p => JSON.stringify(p)), [
+    '{"type":"polyline","points":[30,-72,0,-72,0,72,30,72],"role":"frame","weightMm":0.35}',
+    '{"type":"polyline","points":[970,-72,1000,-72,1000,72,970,72],"role":"frame","weightMm":0.35}',
+    '{"type":"rect","x":30,"y":-72,"w":940,"h":144,"role":"frame","weightMm":0.35}',
+    '{"type":"line","x1":30,"y1":0,"x2":970,"y2":0,"role":"symbol","weightMm":0.35}',
+  ]);
+});
+
+test('ピン留め: PIVOT_H・STANDARD → FIXEDと同形（windowLine群は機構を問わず同じ描画）', () => {
+  const opening = makeOpening();
+  const ctx = makeCtx({ entry: { mechanism: OpeningMechanism.PIVOT_H }, lodLevel: LodLevel.STANDARD, axisValue: 500 });
+  const prims = buildOpeningPlanSymbol(opening, ctx);
+  assert.deepEqual(prims.map(p => JSON.stringify(p)), [
+    '{"type":"rect","x":0,"y":480,"w":1000,"h":40,"role":"frame","weightMm":0.25}',
+    '{"type":"line","x1":0,"y1":500,"x2":1000,"y2":500,"role":"symbol","weightMm":0.35}',
+  ]);
+});
+
+test('ピン留め: PIVOT_H・DETAIL → FIXEDと同形（windowLine群は機構を問わず同じ描画）', () => {
+  const opening = makeOpening();
+  const ctx = makeCtx({ entry: { mechanism: OpeningMechanism.PIVOT_H }, lodLevel: LodLevel.DETAIL, faceLo: -60, faceHi: 60, axisValue: 0 });
+  const prims = buildOpeningPlanSymbol(opening, ctx);
+  assert.deepEqual(prims.map(p => JSON.stringify(p)), [
+    '{"type":"polyline","points":[30,-72,0,-72,0,72,30,72],"role":"frame","weightMm":0.35}',
+    '{"type":"polyline","points":[970,-72,1000,-72,1000,72,970,72],"role":"frame","weightMm":0.35}',
+    '{"type":"rect","x":30,"y":-72,"w":940,"h":144,"role":"frame","weightMm":0.35}',
+    '{"type":"line","x1":30,"y1":0,"x2":970,"y2":0,"role":"symbol","weightMm":0.35}',
+  ]);
+});
+
+test('ピン留め: FOLD・STANDARD・width=1000 → ジグザグpolyline1本（symbol・枠なし。peaks=2）', () => {
+  const opening = makeOpening();
+  const ctx = makeCtx({ entry: { mechanism: OpeningMechanism.FOLD }, lodLevel: LodLevel.STANDARD, axisValue: 500 });
+  const prims = buildOpeningPlanSymbol(opening, ctx);
+  assert.deepEqual(prims.map(p => JSON.stringify(p)), [
+    '{"type":"polyline","points":[0,500,250,380,500,620,750,380,1000,500],"role":"symbol","weightMm":0.35}',
+  ]);
+});
+
+test('ピン留め: FOLD・DETAIL → 方立2本(frame・閉じた矩形)＋内法へ寄せたジグザグpolyline(symbol)', () => {
+  const opening = makeOpening();
+  const ctx = makeCtx({ entry: { mechanism: OpeningMechanism.FOLD }, lodLevel: LodLevel.DETAIL, faceLo: -60, faceHi: 60, axisValue: 0 });
+  const prims = buildOpeningPlanSymbol(opening, ctx);
+  assert.deepEqual(prims.map(p => JSON.stringify(p)), [
+    '{"type":"rect","x":0,"y":-72,"w":30,"h":144,"role":"frame","weightMm":0.35}',
+    '{"type":"rect","x":970,"y":-72,"w":30,"h":144,"role":"frame","weightMm":0.35}',
+    '{"type":"polyline","points":[30,0,265,-120,500,120,735,-120,970,0],"role":"symbol","weightMm":0.35}',
+  ]);
+});
+
+test('ピン留め: FOLD・STANDARD・width=1350 → peaks=3（山数=round(width/450)）', () => {
+  const opening = makeOpening({ coord1: 0, coord2: 1350, centerCoord: 675, width: 1350 });
+  const ctx = makeCtx({ entry: { mechanism: OpeningMechanism.FOLD }, lodLevel: LodLevel.STANDARD, axisValue: 500 });
+  const prims = buildOpeningPlanSymbol(opening, ctx);
+  assert.deepEqual(prims.map(p => JSON.stringify(p)), [
+    '{"type":"polyline","points":[0,500,225,380,450,620,675,380,900,620,1125,380,1350,500],"role":"symbol","weightMm":0.35}',
+  ]);
+});
+
+test('ピン留め: PIVOT・STANDARD → 障子線1本＋弧2本（いずれもrole=symbol。枠なし）', () => {
+  const opening = makeOpening();
+  const ctx = makeCtx({ entry: { mechanism: OpeningMechanism.PIVOT }, lodLevel: LodLevel.STANDARD, axisValue: 500 });
+  const prims = buildOpeningPlanSymbol(opening, ctx);
+  assert.deepEqual(prims.map(p => JSON.stringify(p)), [
+    '{"type":"line","x1":500,"y1":200,"x2":500,"y2":800,"role":"symbol","weightMm":0.35}',
+    '{"type":"arc","cx":500,"cy":500,"r":500,"startDeg":0,"sweepDeg":90,"role":"symbol","weightMm":0.35}',
+    '{"type":"arc","cx":500,"cy":500,"r":500,"startDeg":180,"sweepDeg":90,"role":"symbol","weightMm":0.35}',
+  ]);
+});
+
+test('ピン留め: PIVOT・DETAIL → 方立2本(frame・閉じた矩形)＋内法へ寄せた障子線・弧2本（半径=内法幅/2）', () => {
+  const opening = makeOpening();
+  const ctx = makeCtx({ entry: { mechanism: OpeningMechanism.PIVOT }, lodLevel: LodLevel.DETAIL, faceLo: -60, faceHi: 60, axisValue: 0 });
+  const prims = buildOpeningPlanSymbol(opening, ctx);
+  assert.deepEqual(prims.map(p => JSON.stringify(p)), [
+    '{"type":"rect","x":0,"y":-72,"w":30,"h":144,"role":"frame","weightMm":0.35}',
+    '{"type":"rect","x":970,"y":-72,"w":30,"h":144,"role":"frame","weightMm":0.35}',
+    '{"type":"line","x1":500,"y1":-300,"x2":500,"y2":300,"role":"symbol","weightMm":0.35}',
+    '{"type":"arc","cx":500,"cy":0,"r":470,"startDeg":0,"sweepDeg":90,"role":"symbol","weightMm":0.35}',
+    '{"type":"arc","cx":500,"cy":0,"r":470,"startDeg":180,"sweepDeg":90,"role":"symbol","weightMm":0.35}',
+  ]);
+});
+
+test('ピン留め: PIVOT・isVertical・STANDARD → alongAngle/perpAngleが入れ替わる（縦壁）', () => {
+  const opening = makeOpening({ isVertical: true, coord1: 200, coord2: 1800, centerCoord: 1000, width: 1600 });
+  const ctx = makeCtx({ entry: { mechanism: OpeningMechanism.PIVOT }, lodLevel: LodLevel.STANDARD, axisValue: 200 });
+  const prims = buildOpeningPlanSymbol(opening, ctx);
+  assert.deepEqual(prims.map(p => JSON.stringify(p)), [
+    '{"type":"line","x1":-100,"y1":1000,"x2":500,"y2":1000,"role":"symbol","weightMm":0.35}',
+    '{"type":"arc","cx":200,"cy":1000,"r":800,"startDeg":90,"sweepDeg":-90,"role":"symbol","weightMm":0.35}',
+    '{"type":"arc","cx":200,"cy":1000,"r":800,"startDeg":270,"sweepDeg":-90,"role":"symbol","weightMm":0.35}',
+  ]);
+});
+
+// ================================================================
 // (b) 不変条件
 // ================================================================
 
@@ -748,6 +869,116 @@ test('不変条件: SASH_OPEN_GROUP_MECHANISMS（SLIDE_SINGLE・SLIDE_LAYOUT・H
   }
 });
 
+// ---- 窓ほか（ステップ11d）専用の不変条件 ----
+
+// QA指摘（11c再報告分・windowLine群にも適用）: SASH_OPEN_GROUP_MECHANISMSに機構を足したら、
+// 「sashOpen方立がコの字4点」に加えて「記号側のsymbolプリミティブが1本以上ある」ことも固定する
+// （方立だけ描けて記号本体が消えている退行を検出するため）。windowLine群10機構全件を対象にする
+// （上のSLIDE_SINGLE等3機構のテストとは別に、windowLine群だけを総当りする）。
+test('不変条件: windowLine群10機構のDETAIL方立(frame)はコの字4点・closed無し＋symbolプリミティブ(壁軸上の全長線)が1本以上ある', () => {
+  const mechanisms = [
+    OpeningMechanism.FIXED, OpeningMechanism.TILT, OpeningMechanism.TILT_OUT, OpeningMechanism.AWNING,
+    OpeningMechanism.PROJECT_OUT, OpeningMechanism.LOUVER, OpeningMechanism.AWNING_MULTI,
+    OpeningMechanism.GARARI, OpeningMechanism.GLASS_BLOCK, OpeningMechanism.PIVOT_H,
+  ];
+  for (const mechanism of mechanisms) {
+    const opening = makeOpening();
+    const ctx = makeCtx({ entry: { mechanism }, lodLevel: LodLevel.DETAIL, faceLo: -60, faceHi: 60, axisValue: 0 });
+    const prims = buildOpeningPlanSymbol(opening, ctx);
+    const frame = prims.filter(p => p.type === 'polyline' && p.role === 'frame');
+    assert.equal(frame.length, 2, `${mechanism}: sashOpen方立が2本でない`);
+    assert.ok(frame.every(p => p.points.length === 8), `${mechanism}: sashOpen方立が4点(コの字)でない`);
+    assert.ok(frame.every(p => !p.closed), `${mechanism}: sashOpen方立が閉じている（内側縦線を持ってしまう）`);
+    assert.ok(frame.every(p => p.weightMm === LINE_WEIGHT_MM.thick), `${mechanism}: wallFinishLineWeight(true)固定でない`);
+    const symbol = prims.filter(p => p.role === 'symbol');
+    assert.ok(symbol.length >= 1, `${mechanism}: symbolプリミティブが1本も無い`);
+    assert.ok(symbol.every(p => p.type === 'line'), `${mechanism}: symbolプリミティブがline以外`);
+  }
+});
+
+// windowLine群のSTANDARDは枠矩形(role=frame)を自前で描く（sashOpen系の他機構と同じ形。旧
+// windowLineSymbol）——role=frameのweightMmはwallFinishLineWeight(detail)（STANDARD=medium・
+// DETAIL=thick。planSymbolWeightMm参照）、role=symbolは常にopening.lineWeightのままであることを
+// role別に直接固定する（枠↔記号の取り違え検出。opening.lineWeightをmedium/thickのどちらとも
+// 異なる値0.5にする）。
+test('不変条件: windowLine群10機構は、opening.lineWeightがmedium/thickと異なる値でもrole=frameはwallFinishLineWeight(detail)固定・role=symbolは常にopening.lineWeightのまま（枠↔記号の取り違え検出）', () => {
+  const mechanisms = [
+    OpeningMechanism.FIXED, OpeningMechanism.TILT, OpeningMechanism.TILT_OUT, OpeningMechanism.AWNING,
+    OpeningMechanism.PROJECT_OUT, OpeningMechanism.LOUVER, OpeningMechanism.AWNING_MULTI,
+    OpeningMechanism.GARARI, OpeningMechanism.GLASS_BLOCK, OpeningMechanism.PIVOT_H,
+  ];
+  for (const mechanism of mechanisms) {
+    for (const lodLevel of [LodLevel.STANDARD, LodLevel.DETAIL]) {
+      const detail = lodLevel === LodLevel.DETAIL;
+      const expectedFrame = detail ? LINE_WEIGHT_MM.thick : LINE_WEIGHT_MM.medium;
+      const opening = makeOpening({ lineWeight: 0.5 });
+      const ctx = makeCtx({ entry: { mechanism }, lodLevel, faceLo: -60, faceHi: 60, axisValue: 0 });
+      const prims = buildOpeningPlanSymbol(opening, ctx);
+      assert.ok(prims.length > 0, `${mechanism}/${lodLevel}: プリミティブが空`);
+      for (const p of prims) {
+        if (p.role === 'frame') {
+          assert.equal(p.weightMm, expectedFrame, `${mechanism}/${lodLevel}: role=frameのweightMmがwallFinishLineWeight(${detail})でない`);
+        } else if (p.role === 'symbol') {
+          assert.equal(p.weightMm, 0.5, `${mechanism}/${lodLevel}: role=symbolのweightMmがopening.lineWeightでない`);
+        } else {
+          assert.fail(`${mechanism}/${lodLevel}: 想定外のrole: ${p.role}`);
+        }
+      }
+    }
+  }
+});
+
+// SASH_GROUP_MECHANISMS（FOLD・PIVOT）のDETAIL方立(frame)はsashFramePrimitives（閉じた矩形2つ）
+// ——SASH_OPEN_GROUP_MECHANISMSのコの字（jambOutlinePoints同型）とは異なる（旧sashFrameSymbol）。
+test('不変条件: SASH_GROUP_MECHANISMS（FOLD・PIVOT）のDETAIL方立(frame)は閉じた矩形2つ（rect。コの字ではない）', () => {
+  const mechanisms = [OpeningMechanism.FOLD, OpeningMechanism.PIVOT];
+  for (const mechanism of mechanisms) {
+    const opening = makeOpening({ lineWeight: 0.5 });
+    const ctx = makeCtx({ entry: { mechanism }, lodLevel: LodLevel.DETAIL, faceLo: -60, faceHi: 60, axisValue: 0 });
+    const prims = buildOpeningPlanSymbol(opening, ctx);
+    const frame = prims.filter(p => p.role === 'frame');
+    assert.equal(frame.length, 2, `${mechanism}: 方立が2本でない`);
+    assert.ok(frame.every(p => p.type === 'rect'), `${mechanism}: 方立がrectでない（コの字polylineと取り違えている疑い）`);
+    assert.ok(frame.every(p => p.weightMm === LINE_WEIGHT_MM.thick), `${mechanism}: opening.lineWeight=0.5でも方立(frame)はthick固定のはず`);
+    const symbol = prims.filter(p => p.role === 'symbol');
+    assert.ok(symbol.length >= 1, `${mechanism}: symbolプリミティブが1本も無い`);
+    assert.ok(symbol.every(p => p.weightMm === 0.5), `${mechanism}: role=symbolのweightMmがopening.lineWeightでない`);
+  }
+});
+
+// PIVOTの障子線・動作弧は「動作線ではなく記号の姿そのもの」（旧renderOpeningSymbolのコメント）
+// のためrole='symbol'固定——蝶番系のarc役割(LINE_WEIGHT_MM.thin固定)は適用しない不変条件。
+test("不変条件: PIVOTの線・弧はすべてrole='symbol'固定（蝶番系のleaf/arc役割は使わない）", () => {
+  for (const lodLevel of [LodLevel.STANDARD, LodLevel.DETAIL]) {
+    const opening = makeOpening();
+    const ctx = makeCtx({ entry: { mechanism: OpeningMechanism.PIVOT }, lodLevel, faceLo: -60, faceHi: 60, axisValue: 0 });
+    const prims = buildOpeningPlanSymbol(opening, ctx);
+    const nonFrame = prims.filter(p => p.role !== 'frame');
+    assert.ok(nonFrame.length >= 3, `${lodLevel}: 障子線・弧2本の計3件に満たない`);
+    assert.ok(nonFrame.every(p => p.role === 'symbol'), `${lodLevel}: PIVOTの記号にrole=symbol以外が混入している`);
+    assert.ok(nonFrame.every(p => p.weightMm === opening.lineWeight), `${lodLevel}: PIVOTの記号のweightMmがopening.lineWeightでない`);
+  }
+});
+
+// FOLDの山数=max(2, round(width/450))（旧foldSymbol foldZigzagPoints呼び出し）。polylineの点数は
+// (peaks*2+1)点＝x,y2つずつで(peaks*2+1)*2要素。
+test('不変条件: FOLDの山数はmax(2,round(width/450))（複数widthで固定）', () => {
+  const cases = [
+    { width: 400, peaks: 2 },   // round(0.89)=1 → max(2,1)=2
+    { width: 900, peaks: 2 },   // round(2)=2
+    { width: 1350, peaks: 3 },  // round(3)=3
+    { width: 2700, peaks: 6 },  // round(6)=6
+  ];
+  for (const { width, peaks } of cases) {
+    const opening = makeOpening({ coord1: 0, coord2: width, centerCoord: width / 2, width });
+    const ctx = makeCtx({ entry: { mechanism: OpeningMechanism.FOLD }, lodLevel: LodLevel.STANDARD, axisValue: 500 });
+    const prims = buildOpeningPlanSymbol(opening, ctx);
+    const [line] = prims;
+    assert.equal(line.type, 'polyline');
+    assert.equal(line.points.length, (peaks * 2 + 1) * 2, `width=${width}: 山数がpeaks=${peaks}相当の点数でない`);
+  }
+});
+
 // QA指摘（11c再報告分）: makeOpeningの既定lineWeight(0.35)がDETAILの枠太さ(thick=0.35)と
 // 同値のため、role='frame'であるべきプリミティブにsymbolWeight（またはその逆）を渡す変異が
 // 数値としては一致してしまい検出できない（sashFrameOpenPrimitives・slideDoubleDetailPrimitives
@@ -977,14 +1208,14 @@ test('失敗系: DETAIL・entry無し・frameDepth=0ではexteriorDirOfを呼ば
   assert.equal(calls, 0);
 });
 
-// SWING（本ステップ11b-1で移行済み）ではなく、まだ未移行のFIXED（windowLine群。11dで移行予定）
-// で暫定契約を確認する（移行済み以外は引き続きnull＋band計算ゼロ＝exteriorDirOf未呼び出し。
-// 11cでSLIDE_DOUBLEを移行したため、このテストの主語をFIXEDへ差し替えた）。
-test('失敗系: DETAIL・実装済み機構(FIXED・未移行)・frameDepth=50はnullを返し、exteriorDirOfも呼ばない（暫定契約の副作用ゼロ）', () => {
+// SWING（本ステップ11b-1で移行済み）ではなく、まだ未移行のSHUTTER（11eで移行予定）で暫定契約を
+// 確認する（移行済み以外は引き続きnull＋band計算ゼロ＝exteriorDirOf未呼び出し。11dでFIXED
+// （windowLine群）・FOLD・PIVOTを移行したため、このテストの主語をSHUTTERへ差し替えた）。
+test('失敗系: DETAIL・実装済み機構(SHUTTER・未移行)・frameDepth=50はnullを返し、exteriorDirOfも呼ばない（暫定契約の副作用ゼロ）', () => {
   const opening = makeOpening({ frameDepth: 50 });
   let calls = 0;
   const ctx = makeCtx({
-    entry: { mechanism: OpeningMechanism.FIXED }, lodLevel: LodLevel.DETAIL, faceLo: -60, faceHi: 60, axisValue: 0,
+    entry: { mechanism: OpeningMechanism.SHUTTER }, lodLevel: LodLevel.DETAIL, faceLo: -60, faceHi: 60, axisValue: 0,
     exteriorDirOf: () => { calls += 1; return 1; },
   });
   const prims = buildOpeningPlanSymbol(opening, ctx);
@@ -1199,17 +1430,67 @@ test('失敗系: SASH_OPEN_GROUP_MECHANISMSはhingeSide/swingSideを問わず出
   }
 });
 
+// ---- 窓ほか（ステップ11d）専用の失敗系 ----
+
+test('失敗系: windowLine群・FOLD・PIVOTはwidth<60（開口が狭い）でもNaNが混入しない（STANDARD/DETAILとも）', () => {
+  const narrowOpening = makeOpening({ coord1: 0, coord2: 40, centerCoord: 20, width: 40 });
+  const entries = [
+    { mechanism: OpeningMechanism.FIXED }, { mechanism: OpeningMechanism.PIVOT_H },
+    { mechanism: OpeningMechanism.FOLD }, { mechanism: OpeningMechanism.PIVOT },
+  ];
+  for (const entry of entries) {
+    for (const lodLevel of [LodLevel.STANDARD, LodLevel.DETAIL]) {
+      const ctx = makeCtx({ entry, lodLevel, faceLo: -60, faceHi: 60, axisValue: 0 });
+      const prims = buildOpeningPlanSymbol(narrowOpening, ctx);
+      for (const p of prims) {
+        for (const k of ['x1', 'y1', 'x2', 'y2', 'x', 'y', 'w', 'h', 'cx', 'cy', 'r']) {
+          if (k in p) assert.ok(Number.isFinite(p[k]), `${entry.mechanism}/${lodLevel}: ${k}が有限でない: ${p[k]}`);
+        }
+        if (p.type === 'polyline') {
+          for (const v of p.points) assert.ok(Number.isFinite(v), `${entry.mechanism}/${lodLevel}: polyline座標が有限でない: ${v}`);
+        }
+      }
+    }
+  }
+});
+
+test('失敗系: windowLine群はhingeSide/swingSideを問わず出力が同じ（非蝶番系のため無関係）', () => {
+  const entries = [{ mechanism: OpeningMechanism.FIXED }, { mechanism: OpeningMechanism.PIVOT_H }];
+  for (const entry of entries) {
+    for (const lodLevel of [LodLevel.STANDARD, LodLevel.DETAIL]) {
+      const ctx = makeCtx({ entry, lodLevel, faceLo: -60, faceHi: 60, axisValue: 0 });
+      const base = buildOpeningPlanSymbol(makeOpening({ hingeSide: -1, swingSide: 1 }), ctx);
+      const flipped = buildOpeningPlanSymbol(makeOpening({ hingeSide: 1, swingSide: -1 }), ctx);
+      assert.deepEqual(base.map(p => JSON.stringify(p)), flipped.map(p => JSON.stringify(p)), `${entry.mechanism}/${lodLevel}`);
+    }
+  }
+});
+
+test('失敗系: FOLD・PIVOTはhingeSide/swingSideを問わず出力が同じ（非蝶番系のため無関係）', () => {
+  const entries = [{ mechanism: OpeningMechanism.FOLD }, { mechanism: OpeningMechanism.PIVOT }];
+  for (const entry of entries) {
+    for (const lodLevel of [LodLevel.STANDARD, LodLevel.DETAIL]) {
+      const ctx = makeCtx({ entry, lodLevel, faceLo: -60, faceHi: 60, axisValue: 0 });
+      const base = buildOpeningPlanSymbol(makeOpening({ hingeSide: -1, swingSide: 1 }), ctx);
+      const flipped = buildOpeningPlanSymbol(makeOpening({ hingeSide: 1, swingSide: -1 }), ctx);
+      assert.deepEqual(base.map(p => JSON.stringify(p)), flipped.map(p => JSON.stringify(p)), `${entry.mechanism}/${lodLevel}`);
+    }
+  }
+});
+
 // ================================================================
 // (d) STANDARD/DETAILの実装済み機構はnull（一時契約。SWING_GROUP_MECHANISMS
 // （SWING・SWING_IN・PROJECT_V・DREH_KIPP。11b-1で移行済み）・HINGE_GROUP2_MECHANISMS
 // （SWING_DOUBLE・SWING_CHILD・FREE・FREE_DOUBLE・FIRE_DOOR・FIRE_FOLD。11b-2で移行済み）・
-// SLIDE_DOUBLE・SASH_OPEN_GROUP_MECHANISMS（SLIDE_SINGLE・SLIDE_LAYOUT・HUNG。11cで移行済み）を
-// 除く残りの機構が対象。11d以降で機構ごとに置き換える）
+// SLIDE_DOUBLE・SASH_OPEN_GROUP_MECHANISMS（SLIDE_SINGLE・SLIDE_LAYOUT・HUNG＋windowLine群10機構
+// ＝FIXED/TILT/TILT_OUT/AWNING/PROJECT_OUT/LOUVER/AWNING_MULTI/GARARI/GLASS_BLOCK/PIVOT_H。11c・
+// 11dで移行済み）・SASH_GROUP_MECHANISMS（FOLD・PIVOT。11dで移行済み）を除く残りの機構
+// （SHUTTER/OVERHEAD/EMERGENCY/FRAME_ONLY）が対象。11eで機構ごとに置き換える）
 // ================================================================
 
-test('暫定契約: STANDARD・実装済み機構(FIXED・未移行。windowLine群。11dで移行予定)はnull', () => {
+test('暫定契約: STANDARD・実装済み機構(SHUTTER・未移行。11eで移行予定)はnull', () => {
   const opening = makeOpening();
-  const ctx = makeCtx({ entry: { mechanism: OpeningMechanism.FIXED }, lodLevel: LodLevel.STANDARD });
+  const ctx = makeCtx({ entry: { mechanism: OpeningMechanism.SHUTTER }, lodLevel: LodLevel.STANDARD });
   assert.equal(buildOpeningPlanSymbol(opening, ctx), null);
 });
 
@@ -1238,10 +1519,10 @@ test('暫定契約: HINGE_GROUP2_MECHANISMSはSTANDARD/DETAILともnullになら
   }
 });
 
-test('暫定契約: DETAIL・実装済み機構(FIXED・未移行)はnull', () => {
+test('暫定契約: DETAIL・実装済み機構(SHUTTER・未移行)はnull', () => {
   const opening = makeOpening();
   const ctx = makeCtx({
-    entry: { mechanism: OpeningMechanism.FIXED }, lodLevel: LodLevel.DETAIL, faceLo: -60, faceHi: 60,
+    entry: { mechanism: OpeningMechanism.SHUTTER }, lodLevel: LodLevel.DETAIL, faceLo: -60, faceHi: 60,
   });
   assert.equal(buildOpeningPlanSymbol(opening, ctx), null);
 });
@@ -1265,8 +1546,52 @@ test('暫定契約: SASH_OPEN_GROUP_MECHANISMS（SLIDE_SINGLE・SLIDE_LAYOUT・H
   }
 });
 
+test('暫定契約: SASH_OPEN_GROUP_MECHANISMS拡張分（windowLine群10機構）はSTANDARD/DETAILともnullにならない（11dで移行済み）', () => {
+  const mechanisms = [
+    OpeningMechanism.FIXED, OpeningMechanism.TILT, OpeningMechanism.TILT_OUT, OpeningMechanism.AWNING,
+    OpeningMechanism.PROJECT_OUT, OpeningMechanism.LOUVER, OpeningMechanism.AWNING_MULTI,
+    OpeningMechanism.GARARI, OpeningMechanism.GLASS_BLOCK, OpeningMechanism.PIVOT_H,
+  ];
+  for (const mechanism of mechanisms) {
+    for (const lodLevel of [LodLevel.STANDARD, LodLevel.DETAIL]) {
+      const opening = makeOpening();
+      const ctx = makeCtx({ entry: { mechanism }, lodLevel, faceLo: -60, faceHi: 60, axisValue: 0 });
+      assert.notEqual(buildOpeningPlanSymbol(opening, ctx), null, `${mechanism}/${lodLevel}`);
+    }
+  }
+});
+
+test('暫定契約: SASH_GROUP_MECHANISMS（FOLD・PIVOT）はSTANDARD/DETAILともnullにならない（11dで移行済み）', () => {
+  const mechanisms = [OpeningMechanism.FOLD, OpeningMechanism.PIVOT];
+  for (const mechanism of mechanisms) {
+    for (const lodLevel of [LodLevel.STANDARD, LodLevel.DETAIL]) {
+      const opening = makeOpening();
+      const ctx = makeCtx({ entry: { mechanism }, lodLevel, faceLo: -60, faceHi: 60, axisValue: 0 });
+      assert.notEqual(buildOpeningPlanSymbol(opening, ctx), null, `${mechanism}/${lodLevel}`);
+    }
+  }
+});
+
 test('暫定契約: SCHEMATICは実装済み機構(SWING)でもnullにならない（tickを返す）', () => {
   const opening = makeOpening();
   const ctx = makeCtx({ entry: { mechanism: OpeningMechanism.SWING }, lodLevel: LodLevel.SCHEMATIC });
   assert.notEqual(buildOpeningPlanSymbol(opening, ctx), null);
+});
+
+// 11d QA指摘（2026-09-23）: 全機構を列挙して「null を返すのは未移行の4機構だけ」を固定する。
+// グループ単位の非 null テストだけでは、OVERHEAD 等が誤って非 null になる退行や、IMPLEMENTED_MECHANISMS に
+// 機構を足したときのグループ入れ忘れを検出できない。11e でこの集合が空になる＝移行完了の指標。
+test('暫定契約: IMPLEMENTED_MECHANISMS 全機構のうち STANDARD/DETAIL で null を返すのは SHUTTER/OVERHEAD/EMERGENCY/FRAME_ONLY の4機構だけ', () => {
+  const nullMechanisms = new Set();
+  for (const mechanism of IMPLEMENTED_MECHANISMS) {
+    for (const lodLevel of [LodLevel.STANDARD, LodLevel.DETAIL]) {
+      const opening = makeOpening();
+      const ctx = makeCtx({ entry: { mechanism }, lodLevel, faceLo: -60, faceHi: 60, axisValue: 0 });
+      if (buildOpeningPlanSymbol(opening, ctx) === null) nullMechanisms.add(mechanism);
+    }
+  }
+  assert.deepEqual(
+    [...nullMechanisms].sort(),
+    [OpeningMechanism.SHUTTER, OpeningMechanism.OVERHEAD, OpeningMechanism.EMERGENCY, OpeningMechanism.FRAME_ONLY].sort(),
+  );
 });
