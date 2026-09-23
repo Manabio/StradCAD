@@ -9,6 +9,11 @@
 //   axisOffsetX / axisOffsetY : 柱芯オフセット(mm)。柱・基礎は2軸、梁・壁は axisOffset 1軸。
 //   eccX / eccY / ecc         : 個別偏心量(mm)。
 //   glLabel / flLabel         : 基準レベル線のラベル（'GL' / '2FL' 等）。
+//   resolveSection            : 断面キー→エントリの読み出し口（未保存ドラフトのプレビュー用。
+//                                未指定時は findSectionEntry を使う）。指定時はそれが権威——
+//                                null/undefined を返しても findSectionEntry へは再フォールバックしない。
+//                                担当キー以外は呼び出し側が findSectionEntry へ委譲すること。
+//                                throw は握り潰さず伝播する（resolver は投げない純粋な読み出しが責務）。
 // ================================================================
 
 import { findSectionEntry, SectionShape, diaphragmProjection } from '../sectionCatalog.js';
@@ -33,6 +38,12 @@ function resolveGap(ctx, extent) { return ctx?.scale ? GAP_BASE_PX / ctx.scale :
 // dim プリミティブ生成ヘルパー。
 function dim(dir, from, to, at, label, opts = {}) {
   return { type: 'dim', dir, from, to, at, label, ...opts };
+}
+
+// 断面キー→エントリの読み出し口。ctx.resolveSection が指定されていればそれを使う（権威）。
+// 指定時は再フォールバックしない——null/undefined を返してもここで findSectionEntry へは落ちない。
+function sectionOf(ctx, sectionDefId) {
+  return (ctx?.resolveSection ?? findSectionEntry)(sectionDefId);
 }
 
 // --- 寸法線の書式定義（各部材図から共通で参照する） ---------------------------------
@@ -144,7 +155,7 @@ function axisPrims(axisOffset, { dimY, labelY }) {
 // 2つの変位を両方とも編集可能にする（確定で各CLの columnAxisOffsets を更新→柱が描画エリアで移動）。
 // 断面名はカードの「断面」プルダウンで示す（図中ラベルは置かない）。
 function columnFigure(col, ctx) {
-  const section = findSectionEntry(col.sectionDefId);
+  const section = sectionOf(ctx, col.sectionDefId);
   const offX = ctx.axisOffsetX ?? 0;
   const offY = ctx.axisOffsetY ?? 0;
   const w = section?.width ?? 300;   // X方向の断面寸法
@@ -260,7 +271,7 @@ function beamAxisPrims(axisOffset, cx, { eccDimY, labelY }) {
 // --- 梁（S造=H形鋼／RC=矩形）。FL線付き ---------------------------------------
 function beamFigure(beam, ctx) {
   if (beam.materialType === 'STEEL') {
-    const section = findSectionEntry(beam.sectionDefId);
+    const section = sectionOf(ctx, beam.sectionDefId);
     const axisOffset = ctx.axisOffset ?? 0;
     const cx = axisOffset + (ctx.ecc ?? 0);
     const { prims: sp, w, h } = sectionShapePrims(section, cx, 0);
