@@ -335,6 +335,35 @@
 .catmnt-btn--danger { background: #fef2f2; color: #dc2626; }
 .catmnt-btn--danger:hover { background: #fee2e2; }
 
+/* ---- ステップ9b: 作図プレビュー（ReadonlyKindTab右ペイン。断面・建具種別のみ図を持つ） ---- */
+.catmnt-preview {
+  margin-top: 8px;
+  padding: 8px;
+  border: 1px solid #e2e8f0;
+  border-radius: 4px;
+  background: #f8fafc;
+  display: flex;
+  justify-content: center;
+  /* QA指摘Minor-2・2026-09-23: AutoScaledFigureのキャンバスpx幅/高さは枠(maxWidth/maxHeight)を
+     わずかに超えうるため、右ペイン内でスクロールできるようにする（切れて見えなくなるのを防ぐ）。 */
+  overflow: auto;
+}
+
+.catmnt-preview-empty {
+  margin-top: 8px;
+  font-size: 12px;
+  color: #94a3b8;
+}
+
+.catmnt-preview-error {
+  margin-top: 8px;
+  font-size: 12px;
+  color: #dc2626;
+  background: #fef2f2;
+  border-radius: 4px;
+  padding: 8px 10px;
+}
+
 /* ---- ステップ8i: 断面「規格文字列から追加」（一括入力） ---- */
 .catmnt-bulk-import {
   padding: 8px 12px;

@@ -14,6 +14,7 @@ import {
   canEditMaterialRow, isEditableMaterialCategory, parseThicknessInput, MATERIAL_CATEGORY,
 } from '../catalog/catalogMaintenance.js';
 import { parseSectionSpecList } from '../structural/sectionCatalog.js';
+import { CatalogPreview } from './CatalogPreview.jsx';
 
 // materialData.js（本体マスタ）は仕上げモードと同じ理由でここでも動的 import する
 // （EccentricityDialog.jsxと同型。コード分割維持——materialData.jsは独立チャンクのまま）。
@@ -755,6 +756,8 @@ function ReadonlyKindTab({ kind, builtinList, search, setSearch, selectedKey, se
                 </span>
               </div>
             ))}
+            {/* ステップ9b: 作図プレビュー（登録表 ui/catalogPreview.js 経由。断面・建具種別のみ図を持つ）。 */}
+            <CatalogPreview kind={kind} entry={selectedRow.entry} />
           </>
         )}
       </div>
