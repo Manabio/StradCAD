@@ -10,6 +10,7 @@ import { figureBounds } from '../structural/sectionFigure/sectionGeometry.js';
 import { FIGURE_FRAME_BY_MAP } from '../structural/memberCatalog.js';
 import { buildCatalogPreview, catalogPreviewKinds, catalogPreviewViews } from './catalogPreview.js';
 import { setOverlay, clearOverlays } from '../catalog/catalogRegistry.js';
+import { findFixtureSymbol } from '../openings/openingCatalog.js';
 import { LINE_WEIGHT_MM, DEFAULT_WALL_MATERIAL } from '../core.js';
 import { DEFAULT_WALL_BASE, DEFAULT_WALL_FINISH } from '../finish/wallGeneration.js';
 
@@ -141,8 +142,9 @@ test('buildCatalogPreview: 未知のkindはkindDefの例外がそのまま伝播
 // ---- 6. 型集合はテスト1〜3の中で assertKnownTypes 済み ----
 
 // ---- 7. catalogPreviewKinds ----
-test('catalogPreviewKinds(): section・openingSubTypeの2種のみ（PREVIEW_BUILDERSの定義順）', () => {
-  assert.deepEqual(catalogPreviewKinds(), [CatalogKind.SECTION, CatalogKind.OPENING_SUB_TYPE]);
+// ステップ12f: 建具記号（fixtureSymbol）に平面記号プレビューを追加（3種目）。
+test('catalogPreviewKinds(): section・openingSubType・fixtureSymbolの3種のみ（PREVIEW_BUILDERSの定義順）', () => {
+  assert.deepEqual(catalogPreviewKinds(), [CatalogKind.SECTION, CatalogKind.OPENING_SUB_TYPE, CatalogKind.FIXTURE_SYMBOL]);
 });
 
 // ---- 8. 失敗系: entryがkeyを持たない／null ----
@@ -347,9 +349,10 @@ test("buildCatalogPreview(section, view:plan): 平面記号プレビューを持
 });
 
 // ---- 17. catalogPreviewViews ----
-test('catalogPreviewViews: openingSubTypeは[elevation, plan]、sectionは[elevation]、material/interiorMaster/boundaryMasterは空配列', () => {
+test('catalogPreviewViews: openingSubTypeは[elevation, plan]、sectionは[elevation]、fixtureSymbolは[plan]、material/interiorMaster/boundaryMasterは空配列', () => {
   assert.deepEqual(catalogPreviewViews(CatalogKind.OPENING_SUB_TYPE), ['elevation', 'plan']);
   assert.deepEqual(catalogPreviewViews(CatalogKind.SECTION), ['elevation']);
+  assert.deepEqual(catalogPreviewViews(CatalogKind.FIXTURE_SYMBOL), ['plan']);
   assert.deepEqual(catalogPreviewViews(CatalogKind.MATERIAL), []);
   assert.deepEqual(catalogPreviewViews(CatalogKind.INTERIOR_MASTER), []);
   assert.deepEqual(catalogPreviewViews(CatalogKind.BOUNDARY_MASTER), []);
@@ -395,4 +398,137 @@ test('buildCatalogPreview(openingSubType, view:plan): widthはweightMm/LINE_WEIG
   assert.ok(frameRect, 'frame役割の枠（旧rect）が見つからない');
   assert.equal(frameRect.type, 'polyline', 'rectがpolylineへ変換されていない（AutoScaledFigureのrect型は太さ1px固定のため）');
   assert.equal(frameRect.width, 1, `frame役割のwidthが1(medium/medium)でない（実際: ${frameRect.width}）`);
+});
+
+// ================================================================
+// ステップ12f: 建具記号（FIXTURE_SYMBOL）の平面記号プレビュー。三方枠専用記号（mechanism:frameOnly）は
+// 代表エントリ「三方枠」（frameProfileForのprofileで方立の断面を描き分け）、それ以外の記号は区分
+// （fitting/window）の代表種別（singleSwing/fixed）の平面記号へ委譲する。
+// ================================================================
+
+// ---- 20. builtin全10件がok:trueで描ける ----
+test('buildCatalogPreview(fixtureSymbol, view:plan): builtin全10件がok:true・既知type（polylineのみ）・boundsが有限', async () => {
+  const symbols = await kindDef(CatalogKind.FIXTURE_SYMBOL).loadBuiltin();
+  assert.equal(symbols.length, 10, '前提: builtin建具記号は10件（AW/JW/SW/WW/AD/SD/WD/WF/SF/SSF）');
+  for (const entry of symbols) {
+    const result = buildCatalogPreview(CatalogKind.FIXTURE_SYMBOL, entry, { view: 'plan' });
+    assert.equal(result.ok, true, `${entry.key} がok:falseになった: ${result.ok ? '' : result.reason}`);
+    assert.ok(result.primitives.length > 0, `${entry.key} のprimitivesが空`);
+    assertKnownTypes(result.primitives, entry.key);
+    for (const p of result.primitives) {
+      assert.equal(p.type, 'polyline', `${entry.key}: 未知のprimitive type「${p.type}」（polylineのみの想定）`);
+    }
+    const b = figureBounds(result.primitives);
+    for (const v of [b.minX, b.minY, b.maxX, b.maxY]) {
+      assert.ok(Number.isFinite(v), `${entry.key} のboundsが有限でない（${JSON.stringify(b)}）`);
+    }
+  }
+});
+
+// ---- 21. 三方枠専用記号（builtin）: WF(solid)は閉じた矩形、SF/SSF(bent)は開いたコの字 ----
+test('buildCatalogPreview(fixtureSymbol, view:plan): builtinのWF（solid）は閉じた矩形（closed:true）の方立2本、SF（bent）は開いたコの字（closed:false）の方立2本', () => {
+  const wf = { key: 'WF', label: 'WF（木製三方枠）', category: 'fitting', mechanism: OpeningMechanism.FRAME_ONLY, profile: 'solid' };
+  const rWf = buildCatalogPreview(CatalogKind.FIXTURE_SYMBOL, wf, { view: 'plan' });
+  assert.equal(rWf.ok, true);
+  const wfJambs = rWf.primitives.slice(2); // 先頭2本は壁の切れ端
+  assert.equal(wfJambs.length, 2, 'WFの方立が2本でない');
+  for (const j of wfJambs) assert.equal(j.closed, true, 'WF（solid）は閉じた矩形のはず');
+
+  const sf = { key: 'SF', label: 'SF（鉄製三方枠）', category: 'fitting', mechanism: OpeningMechanism.FRAME_ONLY, profile: 'bent' };
+  const rSf = buildCatalogPreview(CatalogKind.FIXTURE_SYMBOL, sf, { view: 'plan' });
+  assert.equal(rSf.ok, true);
+  const sfJambs = rSf.primitives.slice(2);
+  assert.equal(sfJambs.length, 2, 'SFの方立が2本でない');
+  for (const j of sfJambs) assert.equal(j.closed, false, 'SF（bent）は開いたコの字のはず');
+});
+
+// ---- 22. 三方枠専用記号（overlayのuserエントリ）: frameProfileForのoverlay反映 ----
+test('buildCatalogPreview(fixtureSymbol, view:plan): overlayに追加した三方枠user記号（TF・bent）はfindFixtureSymbol経由でSFと同じ開いたコの字（closed:false）になる', () => {
+  try {
+    assert.equal(findFixtureSymbol('TF'), null, '前提: overlay追加前はTFが存在しない');
+    setOverlay(CatalogKind.FIXTURE_SYMBOL, {
+      user: [{ key: 'TF', label: 'TF（試験用三方枠）', category: 'fitting', mechanism: OpeningMechanism.FRAME_ONLY, profile: 'bent' }],
+    });
+    assert.equal(findFixtureSymbol('TF')?.profile, 'bent', '前提: overlay追加後はTF.profileがbent（frameProfileForの参照先）');
+    const entry = { key: 'TF', label: 'TF（試験用三方枠）', category: 'fitting', mechanism: OpeningMechanism.FRAME_ONLY, profile: 'bent' };
+    const result = buildCatalogPreview(CatalogKind.FIXTURE_SYMBOL, entry, { view: 'plan' });
+    assert.equal(result.ok, true);
+    assertKnownTypes(result.primitives, 'TF');
+    const jambs = result.primitives.slice(2);
+    assert.equal(jambs.length, 2);
+    for (const j of jambs) assert.equal(j.closed, false, 'overlay追加のbent記号は開いたコの字のはず');
+  } finally {
+    clearOverlays();
+  }
+});
+
+// ---- 23. 三方枠でない記号（fitting）は代表種別singleSwing（開き戸）の動作弧を含む平面記号 ----
+test('buildCatalogPreview(fixtureSymbol, view:plan): 三方枠でない建具記号（例: AD）は代表種別singleSwing（片開き戸）の動作弧を含む平面記号で描かれる', () => {
+  const entry = { key: 'AD', label: 'AD（アルミ製ドア）', category: 'fitting' };
+  const result = buildCatalogPreview(CatalogKind.FIXTURE_SYMBOL, entry, { view: 'plan' });
+  assert.equal(result.ok, true);
+  const arcPoly = result.primitives.reduce((a, b) => (b.points && b.points.length > (a?.points.length ?? 0) ? b : a), null);
+  assert.ok(arcPoly, '開き戸の動作弧のプリミティブが見つからない（代表種別がsingleSwingになっていない可能性）');
+  assert.ok(arcPoly.points.length > 4, `動作弧が折れ線に間引かれていない（実際: ${arcPoly.points.length}点）`);
+});
+
+// ---- 24. 窓の記号は代表種別fixed（FIX窓）へ委譲される ----
+test('buildCatalogPreview(fixtureSymbol, view:plan): 窓の建具記号（例: AW）は代表種別fixed（FIX窓）でok:trueに描ける', () => {
+  const entry = { key: 'AW', label: 'AW（アルミ製窓）', category: 'window' };
+  const result = buildCatalogPreview(CatalogKind.FIXTURE_SYMBOL, entry, { view: 'plan' });
+  assert.equal(result.ok, true);
+  assertKnownTypes(result.primitives, 'AW');
+  assert.ok(result.primitives.length > 0);
+});
+
+// ---- 25. 失敗系: entryがkey/categoryを持たない／null ----
+test('buildCatalogPreview(fixtureSymbol, view:plan): entryがkey/categoryを持たない場合は例外でなくok:falseで理由を返す', () => {
+  const result = buildCatalogPreview(CatalogKind.FIXTURE_SYMBOL, { label: 'x' }, { view: 'plan' });
+  assert.equal(result.ok, false);
+  assert.equal(typeof result.reason, 'string');
+});
+
+test('buildCatalogPreview(fixtureSymbol, view:plan): entryがnullの場合は例外でなくok:falseで理由を返す', () => {
+  const result = buildCatalogPreview(CatalogKind.FIXTURE_SYMBOL, null, { view: 'plan' });
+  assert.equal(result.ok, false);
+  assert.equal(typeof result.reason, 'string');
+});
+
+// ---- 26. QA指摘M2（2026-09-24再報告）: フォームのprofileがライブラリ照合より優先される ----
+test('buildCatalogPreview(fixtureSymbol, view:plan): ライブラリに無いkey（保存前ドラフト）でもentry.profile:\'bent\'ならコの字（closed:false）で描かれる', () => {
+  assert.equal(findFixtureSymbol('ZZ'), null, '前提: ZZはbuiltin/overlayどちらにも無い');
+  const draft = { key: 'ZZ', label: '未保存の三方枠', category: 'fitting', mechanism: OpeningMechanism.FRAME_ONLY, profile: 'bent' };
+  const result = buildCatalogPreview(CatalogKind.FIXTURE_SYMBOL, draft, { view: 'plan' });
+  assert.equal(result.ok, true);
+  const jambs = result.primitives.slice(2);
+  assert.equal(jambs.length, 2);
+  for (const j of jambs) {
+    assert.equal(j.closed, false, 'ライブラリ未登録でもentry.profile:\'bent\'なら開いたコの字のはず（fixtureType頼みだとsolidへ落ちる回帰）');
+  }
+});
+
+test('buildCatalogPreview(fixtureSymbol, view:plan): 登録済みWF（本来はsolid）にprofile:\'bent\'を上書きしたエントリはフォームの値（bent）で描かれる', () => {
+  assert.equal(findFixtureSymbol('WF')?.profile, 'solid', '前提: ライブラリのWFはsolid');
+  const overridden = { key: 'WF', label: 'WF（木製三方枠）', category: 'fitting', mechanism: OpeningMechanism.FRAME_ONLY, profile: 'bent' };
+  const result = buildCatalogPreview(CatalogKind.FIXTURE_SYMBOL, overridden, { view: 'plan' });
+  assert.equal(result.ok, true);
+  const jambs = result.primitives.slice(2);
+  assert.equal(jambs.length, 2);
+  for (const j of jambs) {
+    assert.equal(j.closed, false, 'フォームでbentへ変更した未保存の値が描かれるべき（ライブラリのsolidに引きずられてはいけない）');
+  }
+});
+
+// ---- 27. QA指摘n10（2026-09-24再報告）: view省略時はcatalogPreviewViews(kind)の先頭ビューを使う ----
+test('catalogPreviewViews(fixtureSymbol): [\'plan\']のみ（姿図に相当するビューを持たない）', () => {
+  assert.deepEqual(catalogPreviewViews(CatalogKind.FIXTURE_SYMBOL), ['plan']);
+});
+
+test('buildCatalogPreview(fixtureSymbol): view省略時はview:\'plan\'指定時とdeepEqual（materialList込みで表と挙動が揃う）', () => {
+  const entry = { key: 'AD', label: 'AD（アルミ製ドア）', category: 'fitting' };
+  const materialList = [{ code: '109999999999', name: 'テスト', spec: '', x: 0, y: 0, thickness: 9, category: 'panel' }];
+  const omitted = buildCatalogPreview(CatalogKind.FIXTURE_SYMBOL, entry, { materialList });
+  const explicit = buildCatalogPreview(CatalogKind.FIXTURE_SYMBOL, entry, { view: 'plan', materialList });
+  assert.deepEqual(omitted, explicit);
+  assert.equal(omitted.ok, true);
 });

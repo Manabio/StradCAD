@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import './CatalogMaintenancePanel.css';
-import { CatalogKind, kindDef, MATERIAL_CLASSES } from '../catalog/catalogKinds.js';
+import { CatalogKind, kindDef, MATERIAL_CLASSES, FIXTURE_SYMBOL_PROFILES } from '../catalog/catalogKinds.js';
 import { parseMaterialCode } from '../catalog/materialCode.js';
 import { docDiffMap, overlayFor, removeDocEntry } from '../catalog/catalogRegistry.js';
 import { CATALOG_DIFF_COLOR, CATALOG_DIFF_MARK, diffPairs, diffTooltip, fieldLabel } from '../catalog/catalogDiffView.js';
@@ -15,8 +15,11 @@ import {
   planRealign, realignTargets, planBulkSectionImport, formatReadonlyValue, formatCategoryLabel,
   isEditableMaterialCategory, parseThicknessInput, MATERIAL_CATEGORY, BACKING_CLASS_OPTIONS,
   rowEditState, lockedFieldsFor, planSaveEntry, planRevertToBuiltin, planRemoveUserEntry,
-  applyCatalogEditPlan, materialExtraLockedFields, materialSaveMessage,
+  applyCatalogEditPlan, materialExtraLockedFields, materialSaveMessage, catalogSaveMessage,
   lockedFieldReason, materialRowDisabledReason, removeMessageFor, backingClassDisplayFor,
+  buildFixtureSymbolEntry, validateFixtureSymbolForm, fixtureSymbolFormFieldsFor,
+  fixtureSymbolRowDisabledReason, collectKnownCatalogKeys,
+  fixtureSymbolFormFromEntry, fixtureSymbolPreviewEntry, categoryOptionsFor,
 } from '../catalog/catalogMaintenance.js';
 import { parseSectionSpecList } from '../structural/sectionCatalog.js';
 import { CatalogPreview } from './CatalogPreview.jsx';
@@ -56,11 +59,8 @@ const READONLY_KIND_FIELDS = Object.freeze({
     'label', 'category', 'mechanism', 'wallKinds', 'defaultWidth', 'defaultHeight',
     'childRatio', 'fireLeaves', 'fireAngle', 'slideLayout',
   ]),
-  // ステップ12d: 建具記号（fixtureSymbol）も同じ閲覧タブへ。追加・複製・編集・削除・合わせ直し
-  // ボタンはステップ12fまで出さない（VIEWABLE_KINDSのコメント参照）。
-  [CatalogKind.FIXTURE_SYMBOL]: Object.freeze([
-    'key', 'label', 'category', 'mechanism', 'profile', 'defaultMaterialGlass',
-  ]),
+  // ステップ12f: 建具記号（fixtureSymbol）は編集タブ（FixtureSymbolTab）へ移行したため、
+  // ここには含めない（ReadonlyKindTabの対象から外れる）。
 });
 
 /** layers（境界マスター）1件を「役割: コード or src」の1行文字列にする。 */
@@ -986,6 +986,13 @@ export function CatalogMaintenancePanel({ onClose }) {
               materialList={builtinList}
             />
           )}
+
+          {/* ステップ12f: 建具記号（fixtureSymbol）タブ（追加・複製・編集・標準の上書き・
+              標準に戻す・削除）。materialListは平面記号プレビューのダミー壁厚導出用（材料タブが
+              動的importで読み込んだbuiltin一覧をそのまま渡す）。 */}
+          {activeKind === CatalogKind.FIXTURE_SYMBOL && (
+            <FixtureSymbolTab materialList={builtinList} />
+          )}
         </div>
       </div>
     </div>
@@ -1205,5 +1212,613 @@ function SectionBulkImport({ builtinList, onImported }) {
         </div>
       )}
     </div>
+  );
+}
+
+// ステップ12f: 建具記号（fixtureSymbol）タブの新規追加フォーム初期値。
+function emptyFixtureSymbolForm() {
+  return { key: '', label: '', category: 'fitting', frameOnly: false, profile: '', defaultMaterialGlass: '' };
+}
+
+// QA指摘n8（2026-09-24再報告）: 枠断面selectの表示文言。値の集合そのもの（'solid'|'bent'）は
+// catalog/catalogKinds.js の FIXTURE_SYMBOL_PROFILES が唯一の定義箇所——ここは表示文言だけを持つ。
+const FIXTURE_SYMBOL_PROFILE_LABELS = Object.freeze({
+  solid: 'solid（木材の無垢断面）',
+  bent: 'bent（鋼板の曲げ加工）',
+});
+
+// ================================================================
+// QA指摘n9（2026-09-24再報告）: 本体編集タブ（材料タブ・建具記号タブ）が共有しうる非同期アクション
+// （保存・削除・標準に戻す）と、その確認状態・busyガードを1箇所にまとめるフック＋確認ブロック用
+// コンポーネント。
+//
+// 現状の適用範囲（報告事項）: FixtureSymbolTabはこのフック・コンポーネントへ移行済み。材料タブ
+// （CatalogMaintenancePanel本体）は本ラウンドでは未移行——材料タブは同じ確認state群に加えて
+// 「合わせ直す」（realignConfirm）・R13/標準差分のフィールド別オレンジ表示・下地区分selectの
+// 表示値解決など、確認フロー本体だけでは括れない付随ロジックが同じハンドラへ深く絡んでおり、
+// 移行するには材料タブの十数本の既存wiringテスト（performSave/handleDeleteConfirmed/
+// handleRevertConfirmedの関数シグネチャ・busy state宣言・確認ボタンJSXを正規表現で直接検査する
+// もの）を書き直す必要がある。本セッションでは目視確認の手段が無い状態でその一括書き換えを
+// 行うリスクが高いと判断し、材料タブは現状のまま維持し、この報告として明記する
+// （フック・確認ブロック自体は次段（12g/12h）で新設するタブ、および材料タブの将来の移行先として
+// 用意しておく）。
+// ================================================================
+
+/**
+ * 削除確認ブロック（材料タブ・建具記号タブで同一のUI）。busy中は両ボタンdisabled。
+ * @param {{ deleteUsage: {status:string,usedKeys?:Set,message?:string}|null, isUsed: boolean,
+ *           busy: boolean, onConfirm: () => void, onCancel: () => void }} props
+ */
+function DeleteConfirmBlock({ deleteUsage, isUsed, busy, onConfirm, onCancel }) {
+  return (
+    <div className="catmnt-form-row">
+      <span style={{ fontSize: 12, color: '#dc2626' }}>
+        本当に削除しますか？（ユーザーライブラリから外します）
+        {deleteUsage?.status === 'loading' && '（使用状況を確認しています…）'}
+        {deleteUsage?.status === 'error' && `（使用状況の確認に失敗しました: ${deleteUsage.message}）`}
+        {deleteUsage?.status === 'ready' && isUsed && '（使用中のため、この文書には現在の内容を同梱として残します）'}
+      </span>
+      <button
+        className="catmnt-btn catmnt-btn--danger"
+        disabled={!deleteUsage || deleteUsage.status !== 'ready' || busy}
+        onClick={onConfirm}
+      >
+        削除する
+      </button>
+      <button className="catmnt-btn catmnt-btn--secondary" disabled={busy} onClick={onCancel}>
+        キャンセル
+      </button>
+    </div>
+  );
+}
+
+/**
+ * 標準に戻す確認ブロック（材料タブ・建具記号タブで同一のUI）。
+ * @param {{ revertConfirm: { key: string, alsoRealignDoc: boolean },
+ *           setRevertConfirm: Function, busy: boolean, onConfirm: () => void, onCancel: () => void }} props
+ */
+function RevertConfirmBlock({ revertConfirm, setRevertConfirm, busy, onConfirm, onCancel }) {
+  return (
+    <div className="catmnt-realign-confirm">
+      <div className="catmnt-realign-confirm-title">標準に戻しますか？</div>
+      <label style={{ fontSize: 12, color: '#1e293b', display: 'flex', alignItems: 'center', gap: 6 }}>
+        <input
+          type="checkbox"
+          checked={revertConfirm.alsoRealignDoc}
+          onChange={e => setRevertConfirm(c => ({ ...c, alsoRealignDoc: e.target.checked }))}
+        />
+        この文書の同梱も標準に合わせる
+      </label>
+      <div className="catmnt-form-actions">
+        <button className="catmnt-btn catmnt-btn--primary" disabled={busy} onClick={onConfirm}>承認する</button>
+        <button className="catmnt-btn catmnt-btn--secondary" disabled={busy} onClick={onCancel}>
+          キャンセル
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * doc-same/doc-override保存（使用中の同梱を外して保存）の確認ブロック（材料タブ・建具記号タブで
+ * 同一のUI）。
+ * @param {{ saveConfirm: { confirmPairs: object[] }, busy: boolean,
+ *           onConfirm: () => void, onCancel: () => void }} props
+ */
+function SaveConfirmBlock({ saveConfirm, busy, onConfirm, onCancel }) {
+  return (
+    <div className="catmnt-realign-confirm">
+      <div className="catmnt-realign-confirm-title">この文書の同梱を外して保存しますか？</div>
+      <ul className="catmnt-realign-diff-list">
+        {saveConfirm.confirmPairs.map(p => (
+          <li key={p.field}>{p.label} {String(p.from ?? '未設定')} → {String(p.to ?? '未設定')}</li>
+        ))}
+      </ul>
+      <div className="catmnt-realign-confirm-note">
+        保存すると、この文書では同梱を外し編集後の内容が使われます。他の文書は各自で合わせ直してください。
+      </div>
+      <div className="catmnt-form-actions">
+        <button className="catmnt-btn catmnt-btn--primary" disabled={busy} onClick={onConfirm}>承認する</button>
+        <button className="catmnt-btn catmnt-btn--secondary" disabled={busy} onClick={onCancel}>
+          キャンセル
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * QA指摘n9: 本体編集タブが共有する非同期アクション（保存・削除・標準に戻す）の手順そのものを
+ * まとめるフック。フォーム自体の状態（form/formError/formMessage/isAdding/selectedKey等、種別
+ * 固有の検証）は呼び出し側が引き続き持つ——ここで持つのは「確認→busy→applyCatalogEditPlan→
+ * 完了通知」という共通の手順だけ（完了時に何をするかはonSaved/onDeleted/onRevertedへ委ねる。
+ * .jsx側に判断を残さないため、entryKey/planの組み立てはcatalog/catalogMaintenance.js側の
+ * planSaveEntry等が済ませたものをそのまま渡す契約）。
+ * @param {string} kind
+ * @param {{ onSaved?: (entryKey: string, meta: object) => void, onDeleted?: (plan: object) => void,
+ *           onReverted?: () => void, onError?: (message: string) => void }} handlers
+ */
+function useCatalogEditActions(kind, { onSaved, onDeleted, onReverted, onError } = {}) {
+  const [busy, setBusy] = useState(false);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const [deleteUsage, setDeleteUsage] = useState(null);
+  const [saveConfirm, setSaveConfirm] = useState(null);
+  const [revertConfirm, setRevertConfirm] = useState(null);
+
+  async function performSave(plan, entryKey, meta = {}) {
+    if (busy) return;
+    setBusy(true);
+    try {
+      await applyCatalogEditPlan(kind, plan, { saveFn: saveUserCatalog, markDirty });
+    } catch (e) {
+      onError?.(`保存に失敗しました: ${e.message}`);
+      setSaveConfirm(null);
+      return;
+    } finally {
+      setBusy(false);
+    }
+    setSaveConfirm(null);
+    onSaved?.(entryKey, meta);
+  }
+
+  function handleSaveConfirmed() {
+    if (!saveConfirm || busy) return;
+    performSave(saveConfirm.plan, saveConfirm.entryKey, saveConfirm);
+  }
+
+  async function handleDeleteClick() {
+    setConfirmingDelete(true);
+    setDeleteUsage({ status: 'loading' });
+    try {
+      const usedKeysByKind = await collectCurrentCatalogUsage();
+      setDeleteUsage({ status: 'ready', usedKeys: usedKeysByKind.get(kind) ?? new Set() });
+    } catch (e) {
+      setDeleteUsage({ status: 'error', message: e.message });
+    }
+  }
+
+  function cancelDelete() {
+    setConfirmingDelete(false);
+    setDeleteUsage(null);
+  }
+
+  async function handleDeleteConfirmed(entryKey) {
+    if (!entryKey || !deleteUsage || deleteUsage.status !== 'ready' || busy) return;
+    let plan;
+    try {
+      plan = planRemoveUserEntry(kind, entryKey, { usedKeys: deleteUsage.usedKeys });
+    } catch (e) {
+      onError?.(e.message);
+      cancelDelete();
+      return;
+    }
+    setBusy(true);
+    try {
+      await applyCatalogEditPlan(kind, plan, { saveFn: saveUserCatalog, markDirty });
+    } catch (e) {
+      onError?.(`削除に失敗しました: ${e.message}`);
+      cancelDelete();
+      return;
+    } finally {
+      setBusy(false);
+    }
+    cancelDelete();
+    onDeleted?.(plan);
+  }
+
+  function handleRevertClick(key) {
+    setRevertConfirm({ key, alsoRealignDoc: true });
+  }
+
+  async function handleRevertConfirmed() {
+    if (!revertConfirm || busy) return;
+    const plan = planRevertToBuiltin(kind, revertConfirm.key, { alsoRealignDoc: revertConfirm.alsoRealignDoc });
+    setBusy(true);
+    try {
+      await applyCatalogEditPlan(kind, plan, { saveFn: saveUserCatalog, markDirty });
+    } catch (e) {
+      onError?.(`標準に戻す処理に失敗しました: ${e.message}`);
+      setRevertConfirm(null);
+      return;
+    } finally {
+      setBusy(false);
+    }
+    setRevertConfirm(null);
+    onReverted?.();
+  }
+
+  function resetConfirmState() {
+    setConfirmingDelete(false);
+    setDeleteUsage(null);
+    setSaveConfirm(null);
+    setRevertConfirm(null);
+  }
+
+  return {
+    busy, confirmingDelete, deleteUsage, saveConfirm, setSaveConfirm, revertConfirm, setRevertConfirm,
+    performSave, handleSaveConfirmed, handleDeleteClick, handleDeleteConfirmed,
+    handleRevertClick, handleRevertConfirmed, cancelDelete, resetConfirmState,
+  };
+}
+
+/**
+ * ステップ12f: 建具記号（fixtureSymbol）タブ本体。材料タブ（本体上書き込み。ステップ12a〜12c）と
+ * 同じ共通ロジック（rowEditState/lockedFieldsFor/planSaveEntry/planRevertToBuiltin/
+ * planRemoveUserEntry/applyCatalogEditPlan）を使う——追加・複製・編集・標準の上書き・標準に戻す・
+ * 削除。「合わせ直す」（文書同梱をR13差分から本体へ合わせる一括操作）はこのタブの対象外
+ * （設計12fの明示スコープに無い。doc-diff行は複製のみ可能なまま——rowEditStateのreasonどおり）。
+ * @param {{ materialList: object[]|null }} props materialListは平面記号プレビューのダミー壁厚
+ *   導出用（材料タブが動的importで読み込んだbuiltin一覧。未指定なら既定壁厚に落ちる）。
+ */
+function FixtureSymbolTab({ materialList }) {
+  const [builtinList, setBuiltinList] = useState(null);
+  const [loadError, setLoadError] = useState(false);
+  const [search, setSearch] = useState('');
+
+  const [selectedKey, setSelectedKey] = useState(null);
+  const [isAdding, setIsAdding] = useState(false);
+  const [form, setForm] = useState(null);
+  const [formError, setFormError] = useState(null);
+  const [formMessage, setFormMessage] = useState(null);
+
+  // QA指摘n9（2026-09-24再報告）: 保存・削除・標準に戻すの非同期手順・確認state・busyガードは
+  // 共通フックへ委譲する（材料タブとの重複解消。完了時の後始末はonSaved/onDeleted/onRevertedへ）。
+  function onFixtureSymbolSaved(entryKey, meta) {
+    setIsAdding(false);
+    setSelectedKey(entryKey);
+    setFormMessage(catalogSaveMessage(CatalogKind.FIXTURE_SYMBOL, meta));
+  }
+  function onFixtureSymbolDeleted(plan) {
+    setIsAdding(false);
+    setSelectedKey(null);
+    setForm(null);
+    setFormMessage(removeMessageFor(plan));
+  }
+  function onFixtureSymbolReverted() {
+    setIsAdding(false);
+    setSelectedKey(null);
+    setForm(null);
+    setFormMessage('標準に戻しました');
+  }
+  const actions = useCatalogEditActions(CatalogKind.FIXTURE_SYMBOL, {
+    onSaved: onFixtureSymbolSaved,
+    onDeleted: onFixtureSymbolDeleted,
+    onReverted: onFixtureSymbolReverted,
+    onError: setFormError,
+  });
+  const { busy } = actions;
+
+  useEffect(() => {
+    let cancelled = false;
+    kindDef(CatalogKind.FIXTURE_SYMBOL).loadBuiltin().then(list => {
+      if (!cancelled) setBuiltinList(list);
+    }).catch(() => { if (!cancelled) setLoadError(true); });
+    return () => { cancelled = true; };
+  }, []);
+
+  const builtinKeys = useMemo(() => new Set((builtinList ?? []).map(e => e.key)), [builtinList]);
+
+  // overlay（catalog/catalogRegistry.js）はモジュール単位の可変状態のため、毎レンダー取り直す
+  // （computeDerivedと同じ理由。材は高々数十〜百件のため毎回の再合成は軽い）。
+  const diffMap = builtinList ? docDiffMap(CatalogKind.FIXTURE_SYMBOL, builtinList) : new Map();
+  const rows = builtinList ? buildCatalogRows({ kind: CatalogKind.FIXTURE_SYMBOL, builtinList, search, diffMap }) : [];
+
+  const selectedRow = (!isAdding && selectedKey) ? rows.find(r => r.entry.key === selectedKey) ?? null : null;
+  const editState = selectedRow ? rowEditState(CatalogKind.FIXTURE_SYMBOL, selectedRow, { builtinKeys }) : null;
+  const lockedFields = selectedRow
+    ? lockedFieldsFor(CatalogKind.FIXTURE_SYMBOL, selectedRow.entry.key, { builtinKeys })
+    : new Set();
+  const disabledReason = form ? fixtureSymbolRowDisabledReason({ isAdding, editState }) : null;
+  const { showProfile } = fixtureSymbolFormFieldsFor(form);
+
+  // QA指摘m5（2026-09-24再報告）: 材料タブと同じ2種類の併記——R13（doc起源が本体と不一致。
+  // オレンジ）と、標準を編集した行の本体値参考併記（非オレンジ）。
+  const docDiffByField = (selectedRow?.origin === 'doc' && selectedRow?.diff)
+    ? new Map(diffPairs(
+        CatalogKind.FIXTURE_SYMBOL, selectedRow.diff.baseEntry, selectedRow.entry, selectedRow.diff.diffFields,
+      ).map(p => [p.field, p]))
+    : new Map();
+  const builtinDiffByField = (editState?.state === 'override' && selectedRow?.builtinEntry)
+    ? new Map(diffPairs(CatalogKind.FIXTURE_SYMBOL, selectedRow.builtinEntry, selectedRow.entry).map(p => [p.field, p]))
+    : new Map();
+  const fmtDiffValue = v => (v === null || v === undefined || v === '' ? '未設定' : String(v));
+
+  function handleAddNew() {
+    setIsAdding(true);
+    setSelectedKey(null);
+    actions.resetConfirmState();
+    setForm(emptyFixtureSymbolForm());
+    setFormError(null);
+    setFormMessage(null);
+  }
+
+  function handleSelectRow(row) {
+    setIsAdding(false);
+    setSelectedKey(row.entry.key);
+    actions.resetConfirmState();
+    setForm(fixtureSymbolFormFromEntry(row.entry));
+    setFormError(null);
+    setFormMessage(null);
+  }
+
+  function handleDuplicateClick(row) {
+    setIsAdding(true);
+    setSelectedKey(null);
+    actions.resetConfirmState();
+    setForm({ ...fixtureSymbolFormFromEntry(row.entry), key: '' });
+    setFormError('複製しました。記号を変更してから保存してください');
+    setFormMessage(null);
+  }
+
+  async function handleSave() {
+    if (!form || !builtinList) return;
+    setFormError(null);
+    setFormMessage(null);
+    const entry = buildFixtureSymbolEntry(form);
+
+    if (isAdding) {
+      const allKeys = collectKnownCatalogKeys(CatalogKind.FIXTURE_SYMBOL, builtinList);
+      const check = validateFixtureSymbolForm(form, { isAdding: true, allKeys, builtinKeys });
+      if (!check.ok) { setFormError(check.message); return; }
+      const plan = planSaveEntry(CatalogKind.FIXTURE_SYMBOL, entry, { builtinList, rowState: null });
+      if (!plan.ok) { setFormError(plan.message); return; }
+      await actions.performSave(plan, entry.key, { overridesBuiltin: plan.overridesBuiltin });
+      return;
+    }
+
+    const check = validateFixtureSymbolForm(form, { isAdding: false });
+    if (!check.ok) { setFormError(check.message); return; }
+    const prevEntry = selectedRow?.entry ?? null;
+    const plan = planSaveEntry(CatalogKind.FIXTURE_SYMBOL, entry, {
+      builtinList, rowState: editState?.state ?? null, prevEntry,
+    });
+    if (!plan.ok) { setFormError(plan.message); return; }
+    if (plan.noop) { setFormMessage('変更はありません'); return; }
+
+    if (plan.needsConfirm) {
+      actions.setSaveConfirm({ plan, entryKey: entry.key, confirmPairs: plan.confirmPairs, overridesBuiltin: plan.overridesBuiltin });
+      return;
+    }
+    await actions.performSave(plan, entry.key, { overridesBuiltin: plan.overridesBuiltin });
+  }
+
+  function handleDeleteClick() {
+    setFormError(null);
+    actions.handleDeleteClick();
+  }
+
+  function handleRevertClick() {
+    if (!selectedRow) return;
+    actions.handleRevertClick(selectedRow.entry.key);
+  }
+
+  const duplicatable = !!form;
+  const previewEntry = form ? fixtureSymbolPreviewEntry(form) : null;
+
+  return (
+    <>
+      <div className="catmnt-list-col">
+        <div className="catmnt-list-toolbar">
+          <input
+            className="catmnt-search-input"
+            placeholder="記号・呼称で検索"
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+          />
+          <button className="catmnt-add-btn" disabled={!builtinList} onClick={handleAddNew}>
+            + 新規追加
+          </button>
+        </div>
+
+        <div className="catmnt-rows">
+          {!builtinList && !loadError && <div className="catmnt-row-empty">読み込み中…</div>}
+          {loadError && <div className="catmnt-row-empty">建具記号データの読み込みに失敗しました</div>}
+          {builtinList && rows.length === 0 && <div className="catmnt-row-empty">該当する建具記号がありません</div>}
+          {rows.map(row => (
+            <div
+              key={row.entry.key}
+              className={`catmnt-row${(!isAdding && row.entry.key === selectedKey) ? ' catmnt-row--selected' : ''}`}
+              onClick={() => handleSelectRow(row)}
+            >
+              <span className={`catmnt-badge catmnt-badge--${row.origin ?? 'builtin'}`}>
+                {ORIGIN_LABELS[row.origin] ?? '?'}
+              </span>
+              {row.overridesBuiltin && (
+                <span className="catmnt-badge catmnt-badge--override">標準を編集</span>
+              )}
+              <span
+                className="catmnt-row-name"
+                style={row.diff ? { color: CATALOG_DIFF_COLOR } : undefined}
+                title={row.diff ? diffTooltip(CatalogKind.FIXTURE_SYMBOL, row.diff.diffFields, row.entry, row.diff.baseEntry) : undefined}
+              >
+                {row.entry.key}（{row.entry.label}）{row.diff ? ` ${CATALOG_DIFF_MARK}` : ''}
+              </span>
+              <span className="catmnt-cat-badge">{formatCategoryLabel(CatalogKind.FIXTURE_SYMBOL, row.entry.category)}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className="catmnt-form-col">
+        {!form && (
+          <div className="catmnt-form-empty">左の一覧から建具記号を選択するか、「+ 新規追加」してください</div>
+        )}
+        {form && (
+          <>
+            {disabledReason && <div className="catmnt-form-note">{disabledReason}</div>}
+
+            <div className="catmnt-form-row">
+              <span className="catmnt-form-label">記号</span>
+              {isAdding ? (
+                <input
+                  value={form.key}
+                  placeholder="英大文字2〜4文字（例: AW）"
+                  onChange={e => setForm(f => ({ ...f, key: e.target.value }))}
+                />
+              ) : (
+                <span className="catmnt-code-readout">{selectedKey}</span>
+              )}
+            </div>
+
+            <div className="catmnt-form-row">
+              <span className="catmnt-form-label">呼称</span>
+              <input
+                value={form.label}
+                disabled={!!disabledReason}
+                style={docDiffByField.has('label') ? { color: CATALOG_DIFF_COLOR } : undefined}
+                onChange={e => setForm(f => ({ ...f, label: e.target.value }))}
+              />
+              {docDiffByField.has('label') && (
+                <span className="catmnt-diff-note" style={{ color: CATALOG_DIFF_COLOR, fontSize: 11 }}>
+                  （本体 {fmtDiffValue(docDiffByField.get('label').from)}）
+                </span>
+              )}
+              {builtinDiffByField.has('label') && (
+                <span className="catmnt-diff-note" style={{ color: '#64748b', fontSize: 11 }}>
+                  （標準 {fmtDiffValue(builtinDiffByField.get('label').from)}）
+                </span>
+              )}
+            </div>
+
+            <div className="catmnt-form-row">
+              <span className="catmnt-form-label">区分</span>
+              <select
+                value={form.category}
+                disabled={!!disabledReason || lockedFields.has('category')}
+                title={lockedFields.has('category') ? lockedFieldReason(CatalogKind.FIXTURE_SYMBOL, 'category') : undefined}
+                style={docDiffByField.has('category') ? { color: CATALOG_DIFF_COLOR } : undefined}
+                onChange={e => setForm(f => ({ ...f, category: e.target.value }))}
+              >
+                {categoryOptionsFor(CatalogKind.FIXTURE_SYMBOL).map(opt => (
+                  <option key={opt.value} value={opt.value}>{opt.label}</option>
+                ))}
+              </select>
+              {docDiffByField.has('category') && (
+                <span className="catmnt-diff-note" style={{ color: CATALOG_DIFF_COLOR, fontSize: 11 }}>
+                  （本体 {formatCategoryLabel(CatalogKind.FIXTURE_SYMBOL, docDiffByField.get('category').from)}）
+                </span>
+              )}
+            </div>
+
+            <div className="catmnt-form-row">
+              <label style={{ fontSize: 12, color: '#1e293b', display: 'flex', alignItems: 'center', gap: 6 }}>
+                <input
+                  type="checkbox"
+                  checked={form.frameOnly}
+                  disabled={!!disabledReason || lockedFields.has('mechanism')}
+                  title={lockedFields.has('mechanism') ? lockedFieldReason(CatalogKind.FIXTURE_SYMBOL, 'mechanism') : undefined}
+                  onChange={e => setForm(f => ({ ...f, frameOnly: e.target.checked }))}
+                />
+                三方枠専用記号にする
+              </label>
+            </div>
+
+            {showProfile && (
+              <div className="catmnt-form-row">
+                <span className="catmnt-form-label">枠断面</span>
+                <select
+                  value={form.profile}
+                  disabled={!!disabledReason}
+                  style={docDiffByField.has('profile') ? { color: CATALOG_DIFF_COLOR } : undefined}
+                  onChange={e => setForm(f => ({ ...f, profile: e.target.value }))}
+                >
+                  <option value="">未指定（solid扱い）</option>
+                  {FIXTURE_SYMBOL_PROFILES.map(p => (
+                    <option key={p} value={p}>{FIXTURE_SYMBOL_PROFILE_LABELS[p] ?? p}</option>
+                  ))}
+                </select>
+                {docDiffByField.has('profile') && (
+                  <span className="catmnt-diff-note" style={{ color: CATALOG_DIFF_COLOR, fontSize: 11 }}>
+                    （本体 {fmtDiffValue(docDiffByField.get('profile').from)}）
+                  </span>
+                )}
+                {builtinDiffByField.has('profile') && (
+                  <span className="catmnt-diff-note" style={{ color: '#64748b', fontSize: 11 }}>
+                    （標準 {fmtDiffValue(builtinDiffByField.get('profile').from)}）
+                  </span>
+                )}
+              </div>
+            )}
+
+            <div className="catmnt-form-row">
+              <span className="catmnt-form-label">材料・ガラス（既定）</span>
+              <input
+                value={form.defaultMaterialGlass}
+                disabled={!!disabledReason}
+                style={docDiffByField.has('defaultMaterialGlass') ? { color: CATALOG_DIFF_COLOR } : undefined}
+                onChange={e => setForm(f => ({ ...f, defaultMaterialGlass: e.target.value }))}
+              />
+              {docDiffByField.has('defaultMaterialGlass') && (
+                <span className="catmnt-diff-note" style={{ color: CATALOG_DIFF_COLOR, fontSize: 11 }}>
+                  （本体 {fmtDiffValue(docDiffByField.get('defaultMaterialGlass').from)}）
+                </span>
+              )}
+              {builtinDiffByField.has('defaultMaterialGlass') && (
+                <span className="catmnt-diff-note" style={{ color: '#64748b', fontSize: 11 }}>
+                  （標準 {fmtDiffValue(builtinDiffByField.get('defaultMaterialGlass').from)}）
+                </span>
+              )}
+            </div>
+
+            {formError && <div className="catmnt-form-error">{formError}</div>}
+            {formMessage && <div className="catmnt-form-message">{formMessage}</div>}
+
+            {actions.confirmingDelete ? (
+              <DeleteConfirmBlock
+                deleteUsage={actions.deleteUsage}
+                isUsed={actions.deleteUsage?.status === 'ready' && actions.deleteUsage.usedKeys.has(selectedRow?.entry.key)}
+                busy={busy}
+                onConfirm={() => actions.handleDeleteConfirmed(selectedRow?.entry.key)}
+                onCancel={actions.cancelDelete}
+              />
+            ) : actions.revertConfirm ? (
+              <RevertConfirmBlock
+                revertConfirm={actions.revertConfirm}
+                setRevertConfirm={actions.setRevertConfirm}
+                busy={busy}
+                onConfirm={actions.handleRevertConfirmed}
+                onCancel={() => actions.setRevertConfirm(null)}
+              />
+            ) : actions.saveConfirm ? (
+              <SaveConfirmBlock
+                saveConfirm={actions.saveConfirm}
+                busy={busy}
+                onConfirm={actions.handleSaveConfirmed}
+                onCancel={() => actions.setSaveConfirm(null)}
+              />
+            ) : (
+              <div className="catmnt-form-actions">
+                <button className="catmnt-btn catmnt-btn--primary" disabled={!!disabledReason || busy} onClick={handleSave}>
+                  {isAdding ? '追加' : '保存'}
+                </button>
+                {!isAdding && selectedRow && (
+                  <button
+                    className="catmnt-btn catmnt-btn--secondary"
+                    disabled={!duplicatable}
+                    onClick={() => handleDuplicateClick(selectedRow)}
+                  >
+                    複製
+                  </button>
+                )}
+                {!isAdding && editState?.canRevert && (
+                  <button className="catmnt-btn catmnt-btn--secondary" onClick={handleRevertClick}>
+                    標準に戻す
+                  </button>
+                )}
+                {!isAdding && editState?.canDelete && (
+                  <button className="catmnt-btn catmnt-btn--danger" onClick={handleDeleteClick}>
+                    削除
+                  </button>
+                )}
+              </div>
+            )}
+
+            {previewEntry && (
+              <CatalogPreview kind={CatalogKind.FIXTURE_SYMBOL} entry={previewEntry} materialList={materialList} />
+            )}
+          </>
+        )}
+      </div>
+    </>
   );
 }

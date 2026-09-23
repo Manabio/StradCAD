@@ -265,26 +265,87 @@ test('【不変条件・ステップ10f・QA指摘Minor-1で更新】ui/CatalogM
   assert.ok(fnMatch, 'CatalogMaintenancePanel.jsx に ReadonlyKindTab コンポーネントが見つからない');
 });
 
-// ---- ステップ12d: 建具記号（fixtureSymbol）の閲覧タブ（openingSubTypeと同じReadonlyKindTabに
-// 相乗り。プレビューはステップ12fまで持たない） ----
-test('【不変条件・ステップ12d】catalog/catalogMaintenance.js: buildKindTabsでfixtureSymbolがenabled:true（閲覧タブ）', () => {
+// ---- ステップ12d: 建具記号（fixtureSymbol）はenabled:true。ステップ12fで閲覧タブ
+// （ReadonlyKindTab）から専用の編集タブ（FixtureSymbolTab）へ差し替えた ----
+test('【不変条件・ステップ12d】catalog/catalogMaintenance.js: buildKindTabsでfixtureSymbolがenabled:true', () => {
   const src = readSrc('catalog/catalogMaintenance.js');
   const m = /const VIEWABLE_KINDS = Object\.freeze\(\[([\s\S]*?)\]\);/.exec(src);
   assert.ok(m, 'catalogMaintenance.js に VIEWABLE_KINDS が見つからない');
-  assert.ok(/CatalogKind\.FIXTURE_SYMBOL/.test(m[1]), 'VIEWABLE_KINDS に CatalogKind.FIXTURE_SYMBOL が含まれていない（建具記号タブが閲覧できない）');
+  assert.ok(/CatalogKind\.FIXTURE_SYMBOL/.test(m[1]), 'VIEWABLE_KINDS に CatalogKind.FIXTURE_SYMBOL が含まれていない（建具記号タブが表示できない）');
 });
 
-test('【不変条件・ステップ12d】ui/CatalogMaintenancePanel.jsx: READONLY_KIND_FIELDSにCatalogKind.FIXTURE_SYMBOLの表示項目（key/label/category/mechanism/profile/defaultMaterialGlass）をfield名で持ち、ReadonlyKindTab（追加・複製・編集・削除・合わせ直しボタン無し）で扱う', () => {
+// ---- ステップ12f: 建具記号（fixtureSymbol）タブを追加・複製・編集・標準の上書き・標準に戻す・
+// 削除まで開放する（専用コンポーネント FixtureSymbolTab。READONLY_KIND_FIELDSからは外れる） ----
+test('【不変条件・ステップ12f】ui/CatalogMaintenancePanel.jsx: READONLY_KIND_FIELDSにCatalogKind.FIXTURE_SYMBOLが無い（閲覧タブから編集タブへ移行済み）', () => {
   const src = readSrc('ui/CatalogMaintenancePanel.jsx');
-  const m = /\[CatalogKind\.FIXTURE_SYMBOL\]: Object\.freeze\(\[([\s\S]*?)\]\),/.exec(src);
-  assert.ok(m, 'CatalogMaintenancePanel.jsx の READONLY_KIND_FIELDS に [CatalogKind.FIXTURE_SYMBOL] が見つからない');
-  const body = m[1];
-  for (const field of ['key', 'label', 'category', 'mechanism', 'profile', 'defaultMaterialGlass']) {
+  assert.ok(
+    !/\[CatalogKind\.FIXTURE_SYMBOL\]: Object\.freeze\(\[/.test(src),
+    'CatalogMaintenancePanel.jsx の READONLY_KIND_FIELDS に [CatalogKind.FIXTURE_SYMBOL] がまだ残っている',
+  );
+});
+
+test('【不変条件・ステップ12f】ui/CatalogMaintenancePanel.jsx: activeKind===FIXTURE_SYMBOLのときFixtureSymbolTabを描き、12aの共通ロジック（rowEditState/lockedFieldsFor/planSaveEntry）をCatalogKind.FIXTURE_SYMBOL付きで直接呼ぶ', () => {
+  const src = readSrc('ui/CatalogMaintenancePanel.jsx');
+  assert.ok(
+    /activeKind === CatalogKind\.FIXTURE_SYMBOL[\s\S]{0,80}<FixtureSymbolTab/.test(src),
+    'activeKind===CatalogKind.FIXTURE_SYMBOLの条件付きで<FixtureSymbolTabが描かれていない',
+  );
+  const fnMatch = /function FixtureSymbolTab\(\{[\s\S]*?\n\}/.exec(src);
+  assert.ok(fnMatch, 'CatalogMaintenancePanel.jsx に FixtureSymbolTab コンポーネントが見つからない');
+  const body = fnMatch[0];
+  for (const fn of ['rowEditState', 'lockedFieldsFor', 'planSaveEntry']) {
     assert.ok(
-      new RegExp(`'${field}'`).test(body),
-      `READONLY_KIND_FIELDS[CatalogKind.FIXTURE_SYMBOL] に ${field} が無い`,
+      new RegExp(`${fn}\\(CatalogKind\\.FIXTURE_SYMBOL`).test(body),
+      `FixtureSymbolTab が ${fn}(CatalogKind.FIXTURE_SYMBOL, …) を呼んでいない`,
     );
   }
+});
+
+// ---- QA指摘n9（2026-09-24再報告）: 保存・削除・標準に戻すの非同期手順・確認state・busyガードは
+// 材料タブとの重複解消のため共通フックuseCatalogEditActions（kind汎用。CatalogMaintenancePanel.jsx
+// 内）へ委譲する。FixtureSymbolTabはこのフックへkind:CatalogKind.FIXTURE_SYMBOLを渡して使う——
+// planRevertToBuiltin/planRemoveUserEntry/applyCatalogEditPlanの直接呼び出しはフック側へ移った
+// （材料タブは本ラウンド未移行。上のuseCatalogEditActions定義直前のコメントに報告済み）。
+test('【不変条件・QA指摘n9・2026-09-24再報告】ui/CatalogMaintenancePanel.jsx: FixtureSymbolTabはuseCatalogEditActions(CatalogKind.FIXTURE_SYMBOL, …)を呼び、useCatalogEditActions自身がplanRevertToBuiltin/planRemoveUserEntry/applyCatalogEditPlanをkind引数で呼ぶ（材料タブとの重複解消）', () => {
+  const src = readSrc('ui/CatalogMaintenancePanel.jsx');
+  const fnMatch = /function FixtureSymbolTab\(\{[\s\S]*?\n\}/.exec(src);
+  assert.ok(fnMatch, 'CatalogMaintenancePanel.jsx に FixtureSymbolTab コンポーネントが見つからない');
+  assert.ok(
+    /useCatalogEditActions\(CatalogKind\.FIXTURE_SYMBOL,/.test(fnMatch[0]),
+    'FixtureSymbolTab が useCatalogEditActions(CatalogKind.FIXTURE_SYMBOL, …) を呼んでいない',
+  );
+
+  const hookMatch = /function useCatalogEditActions\(kind,[\s\S]*?\n\}/.exec(src);
+  assert.ok(hookMatch, 'CatalogMaintenancePanel.jsx に useCatalogEditActions フックが見つからない');
+  const hookBody = hookMatch[0];
+  for (const fn of ['planRevertToBuiltin', 'planRemoveUserEntry', 'applyCatalogEditPlan']) {
+    assert.ok(
+      new RegExp(`${fn}\\(kind,`).test(hookBody),
+      `useCatalogEditActions が ${fn}(kind, …) を呼んでいない`,
+    );
+  }
+});
+
+test('【不変条件・QA指摘n9・2026-09-24再報告】ui/CatalogMaintenancePanel.jsx: FixtureSymbolTabは削除・標準に戻す・保存の確認ブロックをDeleteConfirmBlock/RevertConfirmBlock/SaveConfirmBlockへ委譲する（材料タブと共有できる形にする）', () => {
+  const src = readSrc('ui/CatalogMaintenancePanel.jsx');
+  const fnMatch = /function FixtureSymbolTab\(\{[\s\S]*?\n\}/.exec(src);
+  assert.ok(fnMatch, 'CatalogMaintenancePanel.jsx に FixtureSymbolTab コンポーネントが見つからない');
+  const body = fnMatch[0];
+  for (const component of ['DeleteConfirmBlock', 'RevertConfirmBlock', 'SaveConfirmBlock']) {
+    assert.ok(new RegExp(`<${component}\\b`).test(body), `FixtureSymbolTab が <${component} を描いていない`);
+  }
+  for (const fn of ['DeleteConfirmBlock', 'RevertConfirmBlock', 'SaveConfirmBlock']) {
+    assert.ok(new RegExp(`function ${fn}\\(`).test(src), `CatalogMaintenancePanel.jsx に ${fn} コンポーネントが見つからない`);
+  }
+});
+
+test('【不変条件・ステップ12f】ui/CatalogMaintenancePanel.jsx: FixtureSymbolTabは追加時だけvalidateFixtureSymbolFormへisAdding:trueを渡し、書式・重複検査（FIXTURE_SYMBOL_KEY_PATTERN）はcatalog/catalogMaintenance.js側にある', () => {
+  const src = readSrc('ui/CatalogMaintenancePanel.jsx');
+  const fnMatch = /function FixtureSymbolTab\(\{[\s\S]*?\n\}/.exec(src);
+  assert.ok(fnMatch, 'CatalogMaintenancePanel.jsx に FixtureSymbolTab コンポーネントが見つからない');
+  const body = fnMatch[0];
+  assert.ok(/validateFixtureSymbolForm\(form, \{ isAdding: true/.test(body), 'FixtureSymbolTab の新規追加経路が validateFixtureSymbolForm(form, { isAdding: true, … }) を呼んでいない');
+  assert.ok(!/\^\[A-Z\]/.test(src), 'CatalogMaintenancePanel.jsx に記号の書式検査（正規表現）が直書きされている（catalog/catalogMaintenance.js の FIXTURE_SYMBOL_KEY_PATTERN 経由への一本化への退行）');
 });
 
 // ---- ステップ10f: READONLY_KIND_FIELDSの値整形は.jsx側に判断を残さず

@@ -585,8 +585,15 @@ function buildSashGroupPrimitives(opening, entry, lodLevel, band, detail, axisVa
 // 含めない）。判断（座標・閉曲線か否か・断面の描き分け）はすべてframeOnlyJambProfiles（純関数）に
 // 一本化されており、ここではtoWorldへ機械的に展開するだけ（旧frameOnlySymbolと同じ役割分担）。
 // ================================================================
+// QA指摘M2（ステップ12f・2026-09-24再報告）: opening.frameProfile（'solid'|'bent'）が明示されて
+// いればそれを使い、無ければ従来どおりframeProfileFor(fixtureSymbolOf(opening))（ライブラリを
+// 記号キーで引く）にフォールバックする。本番のOpeningインスタンス（core.js）はframeProfileを
+// 一切持たないため、この分岐は常にframeProfileFor経由に落ちる＝本番描画経路（renderer/
+// OpeningsLayer.jsx）の挙動は不変（openingPlanSymbolProbe.mjs 通常3本・--sweep 3本で確認済み）。
+// 呼び出し元はui/catalogPreview.js fixtureSymbolPreview——保存前のフォームドラフト（ライブラリに
+// 未登録のkey・未保存の別profile上書き）でも、選んだprofileどおりに方立の断面を描き分けるため。
 function frameOnlyPrimitives(opening, faceLo, faceHi, axisValue, frameWeight) {
-  const profile = frameProfileFor(fixtureSymbolOf(opening));
+  const profile = opening.frameProfile ?? frameProfileFor(fixtureSymbolOf(opening));
   const jambs = frameOnlyJambProfiles({
     coord1: opening.coord1, coord2: opening.coord2, faceLo, faceHi, axisValue,
     faceWidth: effectiveFrameFaceWidth(opening), projection: effectiveFrameProjection(opening), profile,

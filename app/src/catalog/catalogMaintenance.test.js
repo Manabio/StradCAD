@@ -7,14 +7,17 @@ import {
   isEditableMaterialCategory, MATERIAL_CATEGORY, parseThicknessInput,
   planRealign, realignTargets, planBulkSectionImport, formatReadonlyValue, formatCategoryLabel,
   rowEditState, lockedFieldsFor, planSaveEntry, planRevertToBuiltin, planRemoveUserEntry, applyCatalogEditPlan,
-  materialExtraLockedFields, materialSaveMessage, lockedFieldReason, materialRowDisabledReason, removeMessageFor,
-  backingClassDisplayFor,
+  materialExtraLockedFields, materialSaveMessage, catalogSaveMessage, lockedFieldReason,
+  materialRowDisabledReason, removeMessageFor, backingClassDisplayFor,
+  buildFixtureSymbolEntry, validateFixtureSymbolForm, fixtureSymbolFormFieldsFor,
+  fixtureSymbolRowDisabledReason, collectKnownCatalogKeys, FIXTURE_SYMBOL_FRAME_ONLY_MECHANISM,
+  FIXTURE_SYMBOL_KEY_PATTERN, fixtureSymbolFormFromEntry, fixtureSymbolPreviewEntry, categoryOptionsFor,
 } from './catalogMaintenance.js';
 import { setOverlay, clearOverlays, overlayFor, docDiffMap, composeCatalog } from './catalogRegistry.js';
 import { valuesEqual } from './catalogMatch.js';
-import { CatalogKind } from './catalogKinds.js';
+import { CatalogKind, FIXTURE_SYMBOL_PROFILES } from './catalogKinds.js';
 import { parseSectionSpecList } from '../structural/sectionCatalog.js';
-import { openingSubTypeBuiltinList } from '../openings/openingCatalog.js';
+import { openingSubTypeBuiltinList, fixtureSymbolBuiltinList } from '../openings/openingCatalog.js';
 
 test.afterEach(() => clearOverlays());
 
@@ -1518,4 +1521,302 @@ test('backingClassDisplayFor: entry.backingClassが空文字（未選択）で�
 
 test('backingClassDisplayFor: backingClassOfFn省略時は空文字', () => {
   assert.equal(backingClassDisplayFor({ code: 'x' }, undefined), '');
+});
+
+// ================================================================
+// ステップ12f（保守パネル「建具記号」タブ）: 建具記号タブ専用のフォーム純関数。
+// ================================================================
+
+function fixtureSymbol(overrides) {
+  return { key: 'ZZ', label: 'テスト記号', category: 'fitting', ...overrides };
+}
+
+// ---- FIXTURE_SYMBOL_KEY_PATTERN（Q-D確定: 英大文字2〜4文字） ----
+test('FIXTURE_SYMBOL_KEY_PATTERN: 英大文字2〜4文字のみ一致する', () => {
+  for (const ok of ['AW', 'WD', 'SSF', 'WXYZ']) {
+    assert.ok(FIXTURE_SYMBOL_KEY_PATTERN.test(ok), `${ok} は一致するはず`);
+  }
+  for (const ng of ['A', 'ABCDE', 'aw', 'A1', '', 'AW ', ' AW']) {
+    assert.ok(!FIXTURE_SYMBOL_KEY_PATTERN.test(ng), `${JSON.stringify(ng)} は一致しないはず`);
+  }
+});
+
+// ---- buildFixtureSymbolEntry ----
+test('buildFixtureSymbolEntry: 前後の空白をkey/labelから除く', () => {
+  const entry = buildFixtureSymbolEntry({ key: ' AW ', label: ' アルミ製窓 ', category: 'window' });
+  assert.deepEqual(entry, { key: 'AW', label: 'アルミ製窓', category: 'window' });
+});
+
+test('buildFixtureSymbolEntry: frameOnly:falseのときmechanism/profileを持たない（profileを渡しても保存値に持たない）', () => {
+  const entry = buildFixtureSymbolEntry({ key: 'AD', label: 'AD', category: 'fitting', frameOnly: false, profile: 'bent' });
+  assert.equal('mechanism' in entry, false);
+  assert.equal('profile' in entry, false);
+});
+
+test('buildFixtureSymbolEntry: frameOnly:trueかつprofile:bentならmechanism:frameOnly・profile:bentを持つ', () => {
+  const entry = buildFixtureSymbolEntry({ key: 'TF', label: 'TF', category: 'fitting', frameOnly: true, profile: 'bent' });
+  assert.equal(entry.mechanism, FIXTURE_SYMBOL_FRAME_ONLY_MECHANISM);
+  assert.equal(entry.profile, 'bent');
+});
+
+test('buildFixtureSymbolEntry: frameOnly:trueでもprofileが未指定・不正な値ならprofileを持たない', () => {
+  const noProfile = buildFixtureSymbolEntry({ key: 'TF', label: 'TF', category: 'fitting', frameOnly: true });
+  assert.equal('profile' in noProfile, false);
+  const badProfile = buildFixtureSymbolEntry({ key: 'TF', label: 'TF', category: 'fitting', frameOnly: true, profile: 'bogus' });
+  assert.equal('profile' in badProfile, false);
+});
+
+test('buildFixtureSymbolEntry: defaultMaterialGlassは空文字ならキー自体を持たない、値があれば前後の空白を除いて持つ', () => {
+  const empty = buildFixtureSymbolEntry({ key: 'AW', label: 'AW', category: 'window', defaultMaterialGlass: '  ' });
+  assert.equal('defaultMaterialGlass' in empty, false);
+  const withGlass = buildFixtureSymbolEntry({ key: 'AW', label: 'AW', category: 'window', defaultMaterialGlass: ' 樹脂 ' });
+  assert.equal(withGlass.defaultMaterialGlass, '樹脂');
+});
+
+// ---- validateFixtureSymbolForm ----
+test('validateFixtureSymbolForm: 追加時は書式（英大文字2〜4文字）を検査し、\'A\'・\'ABCDE\'・\'aw\'・\'A1\'を拒否する', () => {
+  for (const key of ['A', 'ABCDE', 'aw', 'A1']) {
+    const result = validateFixtureSymbolForm({ key, label: 'x', category: 'fitting' }, { isAdding: true });
+    assert.equal(result.ok, false, `key=${key} は拒否されるはず`);
+    assert.match(result.message, /英大文字2〜4文字/);
+  }
+});
+
+test('validateFixtureSymbolForm: 追加時に書式が正しく、allKeys/builtinKeysと重ならなければok:true', () => {
+  const result = validateFixtureSymbolForm(
+    { key: 'ZZ', label: 'テスト', category: 'fitting' },
+    { isAdding: true, allKeys: new Set(['AW', 'WD']), builtinKeys: new Set(['AW', 'WD']) },
+  );
+  assert.equal(result.ok, true);
+});
+
+test('validateFixtureSymbolForm: 追加時にbuiltinKeysと同じキーは「標準を編集してください」', () => {
+  const result = validateFixtureSymbolForm(
+    { key: 'AW', label: 'x', category: 'window' },
+    { isAdding: true, allKeys: new Set(['AW']), builtinKeys: new Set(['AW']) },
+  );
+  assert.equal(result.ok, false);
+  assert.match(result.message, /標準を編集してください/);
+});
+
+test('validateFixtureSymbolForm: 追加時にallKeysと同じキー（builtinKeysには無い）は重複エラー', () => {
+  const result = validateFixtureSymbolForm(
+    { key: 'PW', label: 'x', category: 'window' },
+    { isAdding: true, allKeys: new Set(['PW']), builtinKeys: new Set() },
+  );
+  assert.equal(result.ok, false);
+  assert.match(result.message, /既に使われている記号です/);
+});
+
+test('validateFixtureSymbolForm: labelが空なら拒否（追加・編集とも）', () => {
+  assert.equal(validateFixtureSymbolForm({ key: 'AW', label: '  ', category: 'window' }, { isAdding: true }).ok, false);
+  assert.equal(validateFixtureSymbolForm({ key: 'AW', label: '  ', category: 'window' }, { isAdding: false }).ok, false);
+});
+
+test('validateFixtureSymbolForm: categoryがfitting/window以外なら拒否', () => {
+  const result = validateFixtureSymbolForm({ key: 'AW', label: 'x', category: 'other' }, { isAdding: true, allKeys: new Set() });
+  assert.equal(result.ok, false);
+  assert.match(result.message, /区分/);
+});
+
+test('validateFixtureSymbolForm: 編集時（isAdding:false）は書式・重複を検査しない（既存キーの小文字化も拒否しない）', () => {
+  const result = validateFixtureSymbolForm({ key: 'aw', label: 'x', category: 'window' }, { isAdding: false });
+  assert.equal(result.ok, true, '編集時はkeyの書式検査対象外（固定項目検査はplanSaveEntry側の責務）');
+});
+
+// ---- fixtureSymbolFormFieldsFor（QA指摘M1・2026-09-24再報告で修正: 引数はパネルのフォームが
+// 実際に持つ形{frameOnly:boolean}——mechanism（エントリの形）ではない） ----
+test('fixtureSymbolFormFieldsFor: パネルのフォーム形{frameOnly:true}のときだけshowProfile:true', () => {
+  assert.equal(fixtureSymbolFormFieldsFor({ frameOnly: true }).showProfile, true);
+  assert.equal(fixtureSymbolFormFieldsFor({ frameOnly: false }).showProfile, false);
+  assert.equal(fixtureSymbolFormFieldsFor({}).showProfile, false);
+  assert.equal(fixtureSymbolFormFieldsFor(null).showProfile, false);
+});
+
+test('【失敗系】fixtureSymbolFormFieldsFor: エントリの形（mechanism:FIXTURE_SYMBOL_FRAME_ONLY_MECHANISM）を渡してもshowProfile:false（フォーム形専用であることの固定）', () => {
+  assert.equal(fixtureSymbolFormFieldsFor({ mechanism: FIXTURE_SYMBOL_FRAME_ONLY_MECHANISM }).showProfile, false);
+});
+
+// ---- catalogSaveMessage（materialSaveMessageの一般化）----
+test('catalogSaveMessage: kind=FIXTURE_SYMBOLはoverridesBuiltin:trueのときだけ注記が付く（thicknessChangedはmaterial専用なので無視される）', () => {
+  assert.equal(catalogSaveMessage(CatalogKind.FIXTURE_SYMBOL, {}), '保存しました');
+  assert.equal(
+    catalogSaveMessage(CatalogKind.FIXTURE_SYMBOL, { overridesBuiltin: true }),
+    '保存しました（他の文書は合わせ直すまで変わりません）',
+  );
+  assert.equal(
+    catalogSaveMessage(CatalogKind.FIXTURE_SYMBOL, { overridesBuiltin: true, thicknessChanged: true }),
+    '保存しました（他の文書は合わせ直すまで変わりません）',
+    'FIXTURE_SYMBOLはthicknessを持たないためthicknessChangedは無視されるはず',
+  );
+});
+
+test('catalogSaveMessage: materialSaveMessageはcatalogSaveMessage(CatalogKind.MATERIAL, …)と同じ結果になる（委譲の確認）', () => {
+  for (const args of [{}, { overridesBuiltin: true }, { thicknessChanged: true }, { overridesBuiltin: true, thicknessChanged: true }]) {
+    assert.equal(materialSaveMessage(args), catalogSaveMessage(CatalogKind.MATERIAL, args));
+  }
+});
+
+// ---- fixtureSymbolRowDisabledReason ----
+test('fixtureSymbolRowDisabledReason: 新規追加（isAdding:true）は常にnull', () => {
+  assert.equal(fixtureSymbolRowDisabledReason({ isAdding: true, editState: { canEdit: false, reason: 'x' } }), null);
+});
+
+test('fixtureSymbolRowDisabledReason: editState.canEdit:trueはnull、falseはeditState.reasonを返す', () => {
+  assert.equal(fixtureSymbolRowDisabledReason({ isAdding: false, editState: { canEdit: true, reason: null } }), null);
+  assert.equal(
+    fixtureSymbolRowDisabledReason({ isAdding: false, editState: { canEdit: false, reason: '文書にのみ存在します（複製してください）' } }),
+    '文書にのみ存在します（複製してください）',
+  );
+});
+
+test('【失敗系】fixtureSymbolRowDisabledReason: editState省略・isAdding:falseはnull', () => {
+  assert.equal(fixtureSymbolRowDisabledReason({ isAdding: false }), null);
+  assert.equal(fixtureSymbolRowDisabledReason(), null);
+});
+
+// ---- collectKnownCatalogKeys ----
+test('collectKnownCatalogKeys: builtin・user・docの全キーを合成して返す（重複は1件に畳む）', () => {
+  const builtin = [fixtureSymbol({ key: 'AW' }), fixtureSymbol({ key: 'WD' })];
+  try {
+    setOverlay(CatalogKind.FIXTURE_SYMBOL, {
+      user: [fixtureSymbol({ key: 'PW' })],
+      doc: [fixtureSymbol({ key: 'QX' }), fixtureSymbol({ key: 'AW' })], // AWはbuiltinと重複
+    });
+    const keys = collectKnownCatalogKeys(CatalogKind.FIXTURE_SYMBOL, builtin);
+    assert.deepEqual([...keys].sort(), ['AW', 'PW', 'QX', 'WD']);
+  } finally {
+    clearOverlays();
+  }
+});
+
+test('collectKnownCatalogKeys: overlayが空ならbuiltinのキーのみ', () => {
+  const builtin = [fixtureSymbol({ key: 'AW' }), fixtureSymbol({ key: 'WD' })];
+  assert.deepEqual([...collectKnownCatalogKeys(CatalogKind.FIXTURE_SYMBOL, builtin)].sort(), ['AW', 'WD']);
+});
+
+// ---- rowEditState(FIXTURE_SYMBOL, …): builtin行は上書き可・user行は削除可（設計「5. 検証」） ----
+test('rowEditState(FIXTURE_SYMBOL): builtin行はcanEdit:true・canRevert:false・canDelete:false（上書きは編集経由）', () => {
+  const builtin = [fixtureSymbol({ key: 'AW' })];
+  const row = { entry: fixtureSymbol({ key: 'AW' }), origin: 'builtin', diff: null };
+  const state = rowEditState(CatalogKind.FIXTURE_SYMBOL, row, { builtinKeys: new Set(builtin.map(e => e.key)) });
+  assert.equal(state.state, 'builtin');
+  assert.equal(state.canEdit, true);
+  assert.equal(state.canRevert, false);
+  assert.equal(state.canDelete, false);
+});
+
+test('rowEditState(FIXTURE_SYMBOL): builtinに無いuser行はcanDelete:true（標準の上書きではない新規追加行）', () => {
+  const row = { entry: fixtureSymbol({ key: 'PW' }), origin: 'user', diff: null };
+  const state = rowEditState(CatalogKind.FIXTURE_SYMBOL, row, { builtinKeys: new Set(['AW', 'WD']) });
+  assert.equal(state.state, 'user');
+  assert.equal(state.canDelete, true);
+  assert.equal(state.canRevert, false);
+});
+
+test('rowEditState(FIXTURE_SYMBOL): builtinと同キーのuser行（標準の上書き）はoverride状態でcanRevert:true・canDelete:false', () => {
+  const row = { entry: fixtureSymbol({ key: 'AW', overridesBuiltin: true }), origin: 'user', diff: null };
+  const state = rowEditState(CatalogKind.FIXTURE_SYMBOL, row, { builtinKeys: new Set(['AW']) });
+  assert.equal(state.state, 'override');
+  assert.equal(state.canRevert, true);
+  assert.equal(state.canDelete, false);
+});
+
+// ---- planSaveEntry(FIXTURE_SYMBOL, …): key/category/mechanismが固定 ----
+test('planSaveEntry(FIXTURE_SYMBOL): 既存行のcategoryを変えると拒否される（固定項目）', () => {
+  const prevEntry = fixtureSymbol({ key: 'AW', category: 'window' });
+  const entry = { ...prevEntry, category: 'fitting' };
+  const result = planSaveEntry(CatalogKind.FIXTURE_SYMBOL, entry, { builtinList: [prevEntry], rowState: 'builtin', prevEntry });
+  assert.equal(result.ok, false);
+  assert.equal(result.message, lockedFieldReason(CatalogKind.FIXTURE_SYMBOL, 'category'));
+});
+
+test('planSaveEntry(FIXTURE_SYMBOL): 既存行のmechanism（三方枠専用の有無）を変えると拒否される（固定項目）', () => {
+  const prevEntry = fixtureSymbol({ key: 'WF', category: 'fitting', mechanism: FIXTURE_SYMBOL_FRAME_ONLY_MECHANISM, profile: 'solid' });
+  const entry = { key: 'WF', label: prevEntry.label, category: 'fitting' }; // mechanismを外す
+  const result = planSaveEntry(CatalogKind.FIXTURE_SYMBOL, entry, { builtinList: [prevEntry], rowState: 'builtin', prevEntry });
+  assert.equal(result.ok, false);
+  assert.equal(result.message, lockedFieldReason(CatalogKind.FIXTURE_SYMBOL, 'mechanism'));
+});
+
+test('planSaveEntry(FIXTURE_SYMBOL): 既存行のkeyを変えると拒否される（複製してください）', () => {
+  const prevEntry = fixtureSymbol({ key: 'AW', category: 'window' });
+  const entry = { ...prevEntry, key: 'BW' };
+  const result = planSaveEntry(CatalogKind.FIXTURE_SYMBOL, entry, { builtinList: [prevEntry], rowState: 'builtin', prevEntry });
+  assert.equal(result.ok, false);
+  assert.match(result.message, /複製してください/);
+});
+
+test('planSaveEntry(FIXTURE_SYMBOL): label・profile・defaultMaterialGlassの変更はbuiltin行でも通り、overridesBuiltin:trueが付く', () => {
+  const prevEntry = fixtureSymbol({ key: 'AW', category: 'window', label: 'AW（アルミ製窓）' });
+  const entry = { ...prevEntry, label: 'AW（変更後）', defaultMaterialGlass: 'アルミ（変更）' };
+  const result = planSaveEntry(CatalogKind.FIXTURE_SYMBOL, entry, { builtinList: [prevEntry], rowState: 'builtin', prevEntry });
+  assert.equal(result.ok, true);
+  assert.equal(result.overridesBuiltin, true);
+  assert.equal(result.nextUser[0].overridesBuiltin, true);
+  assert.equal(result.nextUser[0].label, 'AW（変更後）');
+});
+
+test('planSaveEntry(FIXTURE_SYMBOL): 三方枠でない記号にprofileを付けて保存しても、builtinList照合には影響しない（三方枠でない記号のprofileは意味を持たない）', () => {
+  const prevEntry = fixtureSymbol({ key: 'AD', category: 'fitting', label: 'AD' });
+  const entry = { ...prevEntry, label: 'AD（変更）' };
+  const result = planSaveEntry(CatalogKind.FIXTURE_SYMBOL, entry, { builtinList: [prevEntry], rowState: 'builtin', prevEntry });
+  assert.equal(result.ok, true);
+  assert.equal('profile' in result.nextUser[0], false);
+});
+
+// ---- QA指摘m3（2026-09-24再報告）: fixtureSymbolFormFromEntry ⇄ buildFixtureSymbolEntry往復 ----
+test('fixtureSymbolFormFromEntry ⇄ buildFixtureSymbolEntry: WF・SF・AW（builtin）とuser TFで往復してもエントリが一致する', () => {
+  const builtin = fixtureSymbolBuiltinList();
+  const wf = builtin.find(e => e.key === 'WF');
+  const sf = builtin.find(e => e.key === 'SF');
+  const aw = builtin.find(e => e.key === 'AW');
+  assert.ok(wf && sf && aw, '前提: builtinにWF/SF/AWが存在する');
+  const userTf = {
+    key: 'TF', label: 'TF（試験用三方枠）', category: 'fitting',
+    mechanism: FIXTURE_SYMBOL_FRAME_ONLY_MECHANISM, profile: 'bent',
+  };
+  for (const entry of [wf, sf, aw, userTf]) {
+    const roundTripped = buildFixtureSymbolEntry(fixtureSymbolFormFromEntry(entry));
+    assert.deepEqual(roundTripped, entry, `${entry.key} が往復で元のエントリと一致しない`);
+  }
+});
+
+test('fixtureSymbolFormFromEntry: entryのmechanism/profile/defaultMaterialGlassが未設定ならフォームでは空文字・frameOnly:falseになる', () => {
+  const form = fixtureSymbolFormFromEntry({ key: 'AD', label: 'AD', category: 'fitting' });
+  assert.deepEqual(form, { key: 'AD', label: 'AD', category: 'fitting', frameOnly: false, profile: '', defaultMaterialGlass: '' });
+});
+
+// ---- QA指摘m4（2026-09-24再報告）: fixtureSymbolPreviewEntry ----
+test('fixtureSymbolPreviewEntry: keyが空（追加時未入力）なら\'?\'へ置き換える', () => {
+  const entry = fixtureSymbolPreviewEntry({ key: '  ', label: 'x', category: 'fitting' });
+  assert.equal(entry.key, '?');
+});
+
+test('fixtureSymbolPreviewEntry: keyがあればbuildFixtureSymbolEntryの結果そのまま（\'?\'へ置き換えない）', () => {
+  const entry = fixtureSymbolPreviewEntry({ key: 'ZZ', label: 'x', category: 'fitting', frameOnly: true, profile: 'bent' });
+  assert.deepEqual(entry, { key: 'ZZ', label: 'x', category: 'fitting', mechanism: FIXTURE_SYMBOL_FRAME_ONLY_MECHANISM, profile: 'bent' });
+});
+
+// ---- QA指摘n8（2026-09-24再報告）: categoryOptionsFor・FIXTURE_SYMBOL_PROFILES ----
+test('categoryOptionsFor(FIXTURE_SYMBOL): {value,label}[]でfitting/windowの2件（formatCategoryLabelと同じ表から導出）', () => {
+  const options = categoryOptionsFor(CatalogKind.FIXTURE_SYMBOL);
+  assert.deepEqual(options, [{ value: 'fitting', label: '建具' }, { value: 'window', label: '窓' }]);
+  for (const opt of options) {
+    assert.equal(formatCategoryLabel(CatalogKind.FIXTURE_SYMBOL, opt.value), opt.label, `${opt.value}: formatCategoryLabelと一致しない`);
+  }
+});
+
+test('categoryOptionsFor: 対応表を持たないkind（例: SECTION）は空配列', () => {
+  assert.deepEqual(categoryOptionsFor(CatalogKind.SECTION), []);
+});
+
+test('FIXTURE_SYMBOL_PROFILES: buildFixtureSymbolEntryが受け付けるprofile値と同じ集合（solid・bent）', () => {
+  assert.deepEqual([...FIXTURE_SYMBOL_PROFILES], ['solid', 'bent']);
+  for (const profile of FIXTURE_SYMBOL_PROFILES) {
+    const entry = buildFixtureSymbolEntry({ key: 'ZZ', label: 'x', category: 'fitting', frameOnly: true, profile });
+    assert.equal(entry.profile, profile, `profile=${profile}がbuildFixtureSymbolEntryへ通らない`);
+  }
+  const rejected = buildFixtureSymbolEntry({ key: 'ZZ', label: 'x', category: 'fitting', frameOnly: true, profile: 'bogus' });
+  assert.equal('profile' in rejected, false, 'FIXTURE_SYMBOL_PROFILESに無い値は保存されないはず');
 });

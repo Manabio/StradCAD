@@ -12,6 +12,7 @@ import { collectUsedKeys, collectUsedMaterialCodes, expandTransitiveMaterials, b
 import { MATERIALS } from '../finish/materials/materialData.js';
 import { INTERIOR_MASTERS } from '../finish/materials/interiorMasters.js';
 import { OpeningMechanism, IMPLEMENTED_MECHANISMS } from '../openings/openingCatalog.js';
+import { FIXTURE_SYMBOL_FRAME_ONLY_MECHANISM } from './catalogMaintenance.js';
 
 // ステップ3（2026-09-22）で振り直し済み。旧132件のうち廃止・削除2件（アスファルトプライマー・
 // 吸音テックス用捨て糊。legacyMaterialCodes.js の REMOVED_MATERIALS）を除いた130件。
@@ -108,6 +109,13 @@ test('【失敗系】fixtureSymbol.isSupported: 未知のmechanism/profileはfal
   assert.equal(def.isSupported({ profile: 'hollow' }), false);
   assert.equal(def.isSupported({}), true); // mechanism/profileとも未設定は既知（スコープ無し記号）
   assert.equal(def.isSupported(null), true); // entry?.mechanism/entry?.profileともnullish → 既知扱い
+});
+
+// ---- QA指摘m6（2026-09-24再報告）: catalog/catalogMaintenance.js FIXTURE_SYMBOL_FRAME_ONLY_MECHANISM
+// （openings/*.jsを静的importできないため値だけを複製した定数）が実マスタOpeningMechanism.FRAME_ONLY
+// と一致することを固定する（コメントの「想定」を実測にする）。 ----
+test('FIXTURE_SYMBOL_FRAME_ONLY_MECHANISM: catalog/catalogMaintenance.jsの複製値がOpeningMechanism.FRAME_ONLYと一致する', () => {
+  assert.equal(FIXTURE_SYMBOL_FRAME_ONLY_MECHANISM, OpeningMechanism.FRAME_ONLY);
 });
 
 test('interiorMaster: INTERIOR_MASTERS全件がinteriorMaster.validateを通る', async () => {

@@ -47,6 +47,15 @@ export const KNOWN_OPENING_MECHANISMS = Object.freeze([
 ]);
 const KNOWN_OPENING_MECHANISMS_SET = new Set(KNOWN_OPENING_MECHANISMS);
 
+/**
+ * 建具記号（fixtureSymbol）のprofile（平面記号の断面描き分け。frameOnlyJambProfiles参照）の
+ * 既知値。'solid'=木材の無垢断面（閉じた矩形）、'bent'=鋼板の曲げ加工（開いたコの字＋返し）。
+ * QA指摘n8（2026-09-24再報告）: 唯一の定義箇所——FIXTURE_SYMBOL登録表のisSupported・
+ * catalog/catalogMaintenance.js buildFixtureSymbolEntry・ui/CatalogMaintenancePanel.jsx
+ * （枠断面selectの選択肢）が共有する（'solid'|'bent'の手書き重複をやめる）。
+ */
+export const FIXTURE_SYMBOL_PROFILES = Object.freeze(['solid', 'bent']);
+
 /** entry に fields が全て存在する（undefined でない）ことを検査する。欠落は例外。 */
 function requireFields(entry, fields, label) {
   if (!isPlainObject(entry)) throw new Error(`${label}はオブジェクトである必要があります`);
@@ -354,7 +363,8 @@ const REGISTRY = Object.assign(Object.create(null), {
     requiredFields: ['key', 'label', 'category'],
     // ステップ12d（Q-D確定 2026-09-24）: keyの書式（英大文字2〜4文字）は登録表のvalidateでは
     // 検査しない——未知書式の同梱（他アプリ・将来バージョンの記号等）で読込み全体が例外に
-    // ならないようにするため。書式検査は保守パネルの追加時だけ行う（openingEdit.js側。12f）。
+    // ならないようにするため。書式検査は保守パネルの追加時だけ行う（catalog/catalogMaintenance.js
+    // の validateFixtureSymbolForm・FIXTURE_SYMBOL_KEY_PATTERN。12f）。
     // category/mechanismはWF/SF/SSFのような機構専用記号のスコープそのもの（getFixtureSymbolsの
     // 絞り込みキー）のため固定——openingSubTypeと同じ理由。
     keyBoundFields: ['key', 'category', 'mechanism'],
@@ -391,7 +401,7 @@ const REGISTRY = Object.assign(Object.create(null), {
       const mechanism = entry?.mechanism;
       if (mechanism != null && mechanism !== 'frameOnly') return false;
       const profile = entry?.profile;
-      if (profile != null && profile !== 'solid' && profile !== 'bent') return false;
+      if (profile != null && !FIXTURE_SYMBOL_PROFILES.includes(profile)) return false;
       return true;
     },
     loadBuiltin: () => import('../openings/openingCatalog.js').then(m => m.fixtureSymbolBuiltinList()),

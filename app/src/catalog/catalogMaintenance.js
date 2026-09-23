@@ -15,7 +15,9 @@
 // パネルを開いたときに動的 import で読んで渡す——本ファイルは本体標準マスタを一切読まない。
 // ================================================================
 
-import { CatalogKind, kindDef, listKinds, KIND_LABELS } from './catalogKinds.js';
+import {
+  CatalogKind, kindDef, listKinds, KIND_LABELS, FIXTURE_SYMBOL_PROFILES,
+} from './catalogKinds.js';
 import {
   appendDocEntry, composeCatalog, composeList, docDiffMap, originOf, overlayFor, removeDocEntry, setOverlay,
 } from './catalogRegistry.js';
@@ -96,9 +98,11 @@ export function parseThicknessInput(raw) {
  * ステップ8h: 断面も閲覧のみで enabled:true（規格文字列の一括入力はステップ8iで別途着手）。
  * ステップ10f: 建具種別（openingSubType）も同じ閲覧のみで enabled:true（姿図プレビュー付き。
  * 追加・編集・削除はステップ12）。
- * ステップ12d: 建具記号（fixtureSymbol）もまず閲覧のみで enabled:true（プレビューはステップ12fまで
- * 持たない——ui/catalogPreview.js の PREVIEW_BUILDERS に載せていないため ok:false 理由付きへ
- * 落ちる。追加・編集・削除はステップ12f）。これで登録表の全種別が enabled:true になる。
+ * ステップ12d: 建具記号（fixtureSymbol）もenabled:true。ステップ12dの時点ではReadonlyKindTab
+ * （閲覧のみ）へ乗せていたが、12fで追加・複製・編集・標準の上書き・標準に戻す・削除まで開放した
+ * 専用タブ（ui/CatalogMaintenancePanel.jsx FixtureSymbolTab）へ差し替えた——VIEWABLE_KINDSは
+ * enabled判定だけを持つ表であり、タブの中身（閲覧専用か編集可能か）はここでは決めない。
+ * これで登録表の全種別が enabled:true になる。
  */
 const VIEWABLE_KINDS = Object.freeze([
   CatalogKind.MATERIAL, CatalogKind.INTERIOR_MASTER, CatalogKind.BOUNDARY_MASTER, CatalogKind.SECTION,
@@ -164,6 +168,10 @@ const CATEGORY_LABELS_BY_KIND = Object.freeze({
     [MATERIAL_CATEGORY.BACKING]: '下地材',
   }),
   [CatalogKind.OPENING_SUB_TYPE]: Object.freeze({ fitting: '建具', window: '窓' }),
+  // ステップ12f: 建具記号（fixtureSymbol）のcategoryもopeningSubTypeと同じ2値（fitting/window）
+  // ——別の対応表として持つ（formatCategoryLabelはkindごとに独立した表を引くため、
+  // 値が同じでも共有せず複製する既存の規約に合わせる）。
+  [CatalogKind.FIXTURE_SYMBOL]: Object.freeze({ fitting: '建具', window: '窓' }),
 });
 
 /**
@@ -175,6 +183,18 @@ const CATEGORY_LABELS_BY_KIND = Object.freeze({
  */
 export function formatCategoryLabel(kind, value) {
   return CATEGORY_LABELS_BY_KIND[kind]?.[value] ?? formatReadonlyValue(value);
+}
+
+/**
+ * QA指摘n8（2026-09-24再報告）: kindのcategory選択肢（{value,label}[]）をCATEGORY_LABELS_BY_KIND
+ * から導出する——.jsx側にcategory値の一覧を手書きの選択肢配列として複製させない
+ * （formatCategoryLabelと同じ表を唯一の出所にする）。対応表が無いkindは空配列。
+ * @param {string} kind
+ * @returns {Array<{ value: string, label: string }>}
+ */
+export function categoryOptionsFor(kind) {
+  const labels = CATEGORY_LABELS_BY_KIND[kind];
+  return labels ? Object.entries(labels).map(([value, label]) => ({ value, label })) : [];
 }
 
 /**
@@ -914,20 +934,43 @@ export function materialExtraLockedFields(key, studCodes = new Set()) {
 }
 
 /**
- * ステップ12b（Q-C/Q-E: 保存後メッセージの文言選択）: 該当する注記だけを「保存しました」に
- * 括弧書きで足す（両方該当なら「／」で連結）。
+ * ステップ12f（Q-C/Q-E: 保存後メッセージの文言選択。materialSaveMessageをkind汎用へ一般化）:
+ * 該当する注記だけを「保存しました」に括弧書きで足す（両方該当なら「／」で連結）。
  * - overridesBuiltin: この保存でbuiltin同キーの上書き（builtin/override行の保存）になった
- *   → 「他の文書は合わせ直すまで変わりません」（R3。他文書のdoc同梱はこの場では変わらない）。
+ *   → 「他の文書は合わせ直すまで変わりません」（R3。他文書のdoc同梱はこの場では変わらない。
+ *   種別を問わない）。
  * - thicknessChanged: 厚さが変わった → 「壁は次に仕上げモードを出るまで旧い厚みのままです」
- *   （鮮度キーは材コードのみ・2026-09-15裁定。壁の再生成はこの保存では起きない）。
+ *   （鮮度キーは材コードのみ・2026-09-15裁定。壁の再生成はこの保存では起きない）。厚みを持つのは
+ *   material（面材・仕上げ材・下地材）だけのため、kindがmaterialでなければこの注記は無視する
+ *   （呼び出し側がthicknessChangedを渡さなくても安全）。
+ * @param {string} kind
  * @param {{ overridesBuiltin?: boolean, thicknessChanged?: boolean }} args
  * @returns {string}
  */
-export function materialSaveMessage({ overridesBuiltin = false, thicknessChanged = false } = {}) {
+export function catalogSaveMessage(kind, { overridesBuiltin = false, thicknessChanged = false } = {}) {
   const notes = [];
   if (overridesBuiltin) notes.push('他の文書は合わせ直すまで変わりません');
-  if (thicknessChanged) notes.push('壁は次に仕上げモードを出るまで旧い厚みのままです');
+  if (kind === CatalogKind.MATERIAL && thicknessChanged) notes.push('壁は次に仕上げモードを出るまで旧い厚みのままです');
   return notes.length > 0 ? `保存しました（${notes.join('／')}）` : '保存しました';
+}
+
+/** catalogSaveMessage(CatalogKind.MATERIAL, ...) の薄いラッパ（既存呼び出し・テストを変えない）。 */
+export function materialSaveMessage(args) {
+  return catalogSaveMessage(CatalogKind.MATERIAL, args);
+}
+
+/**
+ * ステップ12f（QA指摘n7で位置・誤字を修正）: 「新規追加（isAdding）は常に編集可・既存行は
+ * editState（1.1 rowEditStateの戻り値）のcanEdit/reasonに従う」という判定を
+ * materialRowDisabledReason・fixtureSymbolRowDisabledReasonで共有する（materialRowDisabledReasonの
+ * categoryによる一律拒否ゲートだけがmaterial専用のため、そこだけ呼び出し側に残す）。
+ * @param {{ isAdding: boolean, editState?: { canEdit: boolean, reason: string|null } | null }} args
+ * @returns {string|null}
+ */
+function editStateDisabledReason({ isAdding, editState }) {
+  if (isAdding) return null;
+  if (editState?.canEdit) return null;
+  return editState?.reason ?? null;
 }
 
 /**
@@ -939,7 +982,7 @@ export function materialSaveMessage({ overridesBuiltin = false, thicknessChanged
  * で、間柱6件はmaterialExtraLockedFieldsのextraLocked（x/y/thickness）で個別に守る——カテゴリ単位の
  * 一律拒否はもう不要。categoryが（将来の拡張等で）編集不可の値を持つ場合の汎用フォールバックだけ残す。
  * 新規追加（isAdding）はまだ行を持たないため常に編集可能（null）。既存行はeditState（1.1
- * rowEditStateの戻り値）のcanEdit/reasonに従う。
+ * rowEditStateの戻り値）のcanEdit/reasonに従う（editStateDisabledReasonへ委譲）。
  * @param {{ isAdding: boolean, category: string, editState?: { canEdit: boolean, reason: string|null } | null }} args
  * @returns {string|null}
  */
@@ -947,9 +990,7 @@ export function materialRowDisabledReason({ isAdding, category, editState = null
   if (!isEditableMaterialCategory(category)) {
     return 'このカテゴリの材料はここでは編集できません';
   }
-  if (isAdding) return null;
-  if (editState?.canEdit) return null;
-  return editState?.reason ?? null;
+  return editStateDisabledReason({ isAdding, editState });
 }
 
 /**
@@ -963,4 +1004,165 @@ export function removeMessageFor(plan) {
   return plan?.docAppend
     ? '削除しました（使用中のため、この文書には同梱として残しました）'
     : '削除しました';
+}
+
+// ================================================================
+// ステップ12f（保守パネル「建具記号」タブへの配線。Q-D確定 2026-09-24）: 建具記号タブ専用の
+// フォーム純関数。追加・複製・編集・標準の上書き・標準に戻す・削除は12aの共通ロジック
+// （rowEditState/lockedFieldsFor/planSaveEntry/planRevertToBuiltin/planRemoveUserEntry/
+// applyCatalogEditPlan）をそのまま使う——ここに持つのは「フォーム値からエントリを組み立てる」
+// 「追加時だけの書式・重複検査」「どの欄を出すか」という、建具記号固有の判断だけ。
+// ================================================================
+
+/**
+ * ステップ12f（Q-D確定 2026-09-24）: 建具記号エントリのmechanismのうち、三方枠専用記号
+ * （WF/SF/SSF等）のスコープを表す値。openings/openingCatalog.js OpeningMechanism.FRAME_ONLY と
+ * 同じ文字列——catalog/*.js は openings/*.js を静的importできない（catalogImports.test.jsの
+ * 許可リスト）ため、catalogKinds.js FIXTURE_SYMBOL登録表のisSupportedと同様に値だけを複製する
+ * （catalogRealMasters.test.jsでOpeningMechanism.FRAME_ONLYと一致することを固定する想定）。
+ */
+export const FIXTURE_SYMBOL_FRAME_ONLY_MECHANISM = 'frameOnly';
+
+/**
+ * ステップ12f（Q-D確定 2026-09-24）: 追加時の記号（key）の書式。英大文字2〜4文字
+ * （タグ`${記号}-${番号}`で数字や記号が混ざると番号と読み違えるため。本体は2〜3文字）。
+ */
+export const FIXTURE_SYMBOL_KEY_PATTERN = /^[A-Z]{2,4}$/;
+
+/**
+ * kind の合成後（builtin・user・doc）の全キー集合。追加時のキー重複検査
+ * （builtin・ユーザーライブラリ・文書同梱のいずれとも重ならないこと）に使う——materialの
+ * collectKnownMaterialCodesと同じ役割の種別汎用版（keyOfがcode以外のkindにも使える形）。
+ * @param {string} kind
+ * @param {object[]} builtinList
+ * @returns {Set<string>}
+ */
+export function collectKnownCatalogKeys(kind, builtinList) {
+  const def = kindDef(kind);
+  return new Set(composeList(kind, builtinList).map(def.keyOf));
+}
+
+/**
+ * ステップ12f（QA指摘M1・再報告で修正）: 建具記号フォームの入力から、どの欄を出すか（現時点では
+ * profileの要否のみ）を判定する（.jsx側にframeOnly直書きの条件分岐を残さない——
+ * materialFormHasDimensionsと同じ役割の薄い判定）。profileは三方枠専用記号のときだけ意味を持つ
+ * （frameProfileFor参照）。
+ * 引数は**パネルのフォームが実際に持つ形**（真偽値`frameOnly`。「三方枠専用記号にする」
+ * チェックボックスの値）を受け取る——buildFixtureSymbolEntryの引数と同じ形。エントリ形
+ * （`mechanism:FIXTURE_SYMBOL_FRAME_ONLY_MECHANISM`）を渡す呼び出しは無い（フォーム側が
+ * entry→formの変換（fixtureSymbolFormFromEntry）を経てからこの関数を呼ぶため）。
+ * @param {{ frameOnly?: boolean }|null} form フォーム値。
+ * @returns {{ showProfile: boolean }}
+ */
+export function fixtureSymbolFormFieldsFor(form) {
+  return { showProfile: form?.frameOnly === true };
+}
+
+/**
+ * ステップ12f: 建具記号フォーム入力からエントリを組み立てる。key/labelは前後の空白を除く
+ * （他種別のbuildMaterialEntry等と同じトリム規約）。keyは大文字化しない——追加時の書式検査
+ * （validateFixtureSymbolForm）が生の入力をそのまま見て「aw」等を拒否できるようにするため
+ * （呼び出し側でこっそり大文字化すると拒否できないケースを黙って通してしまう）。
+ * frameOnly（真偽値。フォームの「三方枠専用記号にする」チェック）がtrueのときだけ
+ * mechanism:FIXTURE_SYMBOL_FRAME_ONLY_MECHANISMを持たせ、profileも(solid|bentのときだけ)
+ * 持たせる——三方枠でない記号にprofileの値が紛れ込まない（設計「三方枠でない記号にprofileを
+ * 入れても保存値に持たない」）。defaultMaterialGlassは空文字ならキー自体を持たせない
+ * （buildMaterialEntryのbackingClassと同じ規約——空値をnullで保存するとkindDef.validateの
+ * 型検査（文字列またはnull/undefined）は通るが、無意味な明示nullを増やさない）。
+ * @param {{ key?: string, label?: string, category?: string, frameOnly?: boolean,
+ *           profile?: string|null, defaultMaterialGlass?: string|null }} form
+ * @returns {{ key: string, label: string, category: string, mechanism?: string,
+ *             profile?: string, defaultMaterialGlass?: string }}
+ */
+export function buildFixtureSymbolEntry({
+  key, label, category, frameOnly = false, profile = null, defaultMaterialGlass = null,
+} = {}) {
+  const entry = { key: (key ?? '').trim(), label: (label ?? '').trim(), category };
+  if (frameOnly) {
+    entry.mechanism = FIXTURE_SYMBOL_FRAME_ONLY_MECHANISM;
+    if (FIXTURE_SYMBOL_PROFILES.includes(profile)) entry.profile = profile;
+  }
+  const glass = (defaultMaterialGlass ?? '').trim();
+  if (glass !== '') entry.defaultMaterialGlass = glass;
+  return entry;
+}
+
+/**
+ * ステップ12f QA指摘m3（2026-09-24再報告）: buildFixtureSymbolEntryの逆変換——保存済み
+ * エントリ（builtin/user/doc）からフォーム値を組み立てる（ui/CatalogMaintenancePanel.jsxに
+ * あった`formFromFixtureSymbolEntry`を純関数として移設。往復テストで固定する）。
+ * mechanismをframeOnly（真偽値）へ、category/profile/defaultMaterialGlassは未設定なら
+ * フォームの既定値（空文字）へ丸める——input/selectはcontrolled componentのためnull/undefinedを
+ * 渡さない契約（他フォーム関数と同じ）。
+ * @param {object} entry
+ * @returns {{ key: string, label: string, category: string, frameOnly: boolean,
+ *             profile: string, defaultMaterialGlass: string }}
+ */
+export function fixtureSymbolFormFromEntry(entry) {
+  return {
+    key: entry?.key ?? '',
+    label: entry?.label ?? '',
+    category: entry?.category === 'window' ? 'window' : 'fitting',
+    frameOnly: entry?.mechanism === FIXTURE_SYMBOL_FRAME_ONLY_MECHANISM,
+    profile: entry?.profile ?? '',
+    defaultMaterialGlass: entry?.defaultMaterialGlass ?? '',
+  };
+}
+
+/**
+ * ステップ12f QA指摘m4（2026-09-24再報告）: 作図プレビュー用のドラフトエントリを組み立てる
+ * （ui/CatalogMaintenancePanel.jsxにあった`{ ...buildFixtureSymbolEntry(form), key: form.key
+ * || '?' }`を純関数として移設）。buildFixtureSymbolEntryが返すkey（前後空白を除いたもの）が
+ * 空文字なら'?'へ置き換える——CatalogPreview（ui/catalogPreview.js fixtureSymbolPreview）の
+ * isNonEmptyString(entry.key)ガードを追加時（記号未入力）のプレビューでも満たすため
+ * （保存はしない。表示専用のプレースホルダ）。
+ * @param {Parameters<typeof buildFixtureSymbolEntry>[0]} form
+ * @returns {ReturnType<typeof buildFixtureSymbolEntry>}
+ */
+export function fixtureSymbolPreviewEntry(form) {
+  const entry = buildFixtureSymbolEntry(form);
+  return { ...entry, key: entry.key || '?' };
+}
+
+/**
+ * ステップ12f（Q-D確定 2026-09-24）: 建具記号フォームの検証。追加時（isAdding）だけ記号の書式
+ * （FIXTURE_SYMBOL_KEY_PATTERN）・重複（builtinKeys/allKeys）を検査する——既存行の編集は
+ * keyBoundFields（key/category/mechanism）がlockedFieldsFor/planSaveEntry側で既に固定して
+ * いるため、ここでの重複検査は不要（keyは変わらない）。label必須・category必須は追加・編集の
+ * 両方で検査する（planSaveEntry側のkindDef.validateでも検査されるが、フォーム表示用の日本語
+ * メッセージをここで先に出す——他種別のvalidateMaterialEntryと同じ役割分担）。
+ * @param {{ key?: string, label?: string, category?: string }} form
+ * @param {{ isAdding: boolean, allKeys?: Set<string>, builtinKeys?: Set<string> }} args
+ * @returns {{ ok: true } | { ok: false, message: string }}
+ */
+export function validateFixtureSymbolForm(form, { isAdding, allKeys = new Set(), builtinKeys = new Set() } = {}) {
+  const label = (form?.label ?? '').trim();
+  const category = form?.category;
+  if (!label) return { ok: false, message: '呼称を入力してください' };
+  if (category !== 'fitting' && category !== 'window') {
+    return { ok: false, message: '区分は建具または窓のいずれかです' };
+  }
+  if (isAdding) {
+    const key = (form?.key ?? '').trim();
+    if (!FIXTURE_SYMBOL_KEY_PATTERN.test(key)) {
+      return { ok: false, message: '記号は英大文字2〜4文字で入力してください（例: AW）' };
+    }
+    if (builtinKeys.has(key)) {
+      return { ok: false, message: '標準を編集してください（同じ記号の標準エントリがあります）' };
+    }
+    if (allKeys.has(key)) {
+      return { ok: false, message: `既に使われている記号です: ${key}` };
+    }
+  }
+  return { ok: true };
+}
+
+/**
+ * ステップ12f: 建具記号タブのフォーム無効化理由（materialRowDisabledReasonの建具記号版。
+ * カテゴリ単位の一律拒否を持たない——建具記号はどのcategory（fitting/window）も編集可能）。
+ * @param {{ isAdding: boolean, editState?: { canEdit: boolean, reason: string|null } | null }} args
+ * @returns {string|null}
+ */
+export function fixtureSymbolRowDisabledReason({ isAdding, editState = null } = {}) {
+  return editStateDisabledReason({ isAdding, editState });
 }

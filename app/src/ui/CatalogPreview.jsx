@@ -28,27 +28,30 @@ function renderPreviewResult(result) {
 }
 
 /**
- * カタログ保守（ReadonlyKindTab）の選択行に対する作図プレビュー。描くだけ——
+ * カタログ保守（ReadonlyKindTab・建具記号タブ）の選択行に対する作図プレビュー。描くだけ——
  * プリミティブ生成は ui/catalogPreview.js の登録表（buildCatalogPreview）経由に一本化し、
  * memberFigure/buildOpeningElevation/buildOpeningPlanSymbol を本コンポーネントで直書きしない。
  * 読み取り専用パネルのため AutoScaledFigure へ onEditDim/study は渡さない
  * （EccentricityDialog.jsxと同じ読み取り専用の使い方）。
  *
  * 建具種別（OPENING_SUB_TYPE）は姿図（既定view）に加えて平面記号（view:'plan'）も姿図の下に
- * 並べて描く（ステップ11f）。壁厚導出に使う materialList は呼び出し側（CatalogMaintenancePanel.jsx）
- * が動的importで読み込んだ builtin 一覧をそのまま渡す（未指定なら ui/catalogPreview.js 側の既定
- * 壁厚に落ちる。境界マスターは使わない——QA指摘・2026-09-23裁定Aで廃止）。
+ * 並べて描く（ステップ11f）。建具記号（FIXTURE_SYMBOL）は平面記号のみ持つ（ステップ12f。姿図に
+ * 相当するビューが無いため既定viewの呼び出しはしない）。壁厚導出に使う materialList は呼び出し側
+ * （CatalogMaintenancePanel.jsx）が動的importで読み込んだ builtin 一覧をそのまま渡す（未指定なら
+ * ui/catalogPreview.js 側の既定壁厚に落ちる。境界マスターは使わない——QA指摘・2026-09-23裁定Aで廃止）。
  */
 export function CatalogPreview({ kind, entry, materialList }) {
-  let result;
-  try {
-    result = buildCatalogPreview(kind, entry, { frame: PREVIEW_FRAME });
-  } catch (e) {
-    return <div className="catmnt-preview-error">作図プレビューでエラーが発生しました: {e.message}</div>;
+  let result = null;
+  if (kind !== CatalogKind.FIXTURE_SYMBOL) {
+    try {
+      result = buildCatalogPreview(kind, entry, { frame: PREVIEW_FRAME });
+    } catch (e) {
+      return <div className="catmnt-preview-error">作図プレビューでエラーが発生しました: {e.message}</div>;
+    }
   }
 
   let plan = null;
-  if (kind === CatalogKind.OPENING_SUB_TYPE) {
+  if (kind === CatalogKind.OPENING_SUB_TYPE || kind === CatalogKind.FIXTURE_SYMBOL) {
     try {
       plan = buildCatalogPreview(kind, entry, { frame: PREVIEW_FRAME, view: 'plan', materialList });
     } catch (e) {
@@ -58,7 +61,7 @@ export function CatalogPreview({ kind, entry, materialList }) {
 
   return (
     <>
-      {renderPreviewResult(result)}
+      {result && renderPreviewResult(result)}
       {plan && renderPreviewResult(plan)}
     </>
   );

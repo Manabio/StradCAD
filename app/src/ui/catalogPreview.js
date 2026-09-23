@@ -21,6 +21,7 @@ import { composeList } from '../catalog/catalogRegistry.js';
 import { memberFigure } from '../structural/sectionFigure/memberFigures.js';
 import { buildOpeningElevation } from '../openings/openingElevationFigure.js';
 import { buildOpeningPlanSymbol } from '../openings/openingPlanSymbol.js';
+import { OpeningMechanism, findCatalogEntry } from '../openings/openingCatalog.js';
 import { LodLevel } from '../viewport.js';
 import {
   LINE_WEIGHT_MM, DEFAULT_EXTERIOR_WALL_BACKING, DEFAULT_INTERIOR_WALL_BACKING, DEFAULT_WALL_MATERIAL,
@@ -60,11 +61,15 @@ function openingSubTypePreview(entry) {
   return { ok: true, primitives, scale: null };
 }
 
-// kind → 生成関数（view省略時＝姿図）。material/interiorMaster/boundaryMasterはここに載らない
+// kind → 生成関数（view省略時＝姿図。ステップ12f: fixtureSymbolは姿図を持たないため、この
+// スロットに割り当てるのは唯一の作図＝平面記号。fixtureSymbolPreview自体は下方で定義（関数宣言は
+// モジュール内で巻き上げられるため、定義順はここより後でも参照できる））。
+// material/interiorMaster/boundaryMasterはここに載らない
 // （buildCatalogPreviewがKIND_LABELSから理由文を組み立てる。黙って空にしない）。
 const PREVIEW_BUILDERS = Object.freeze({
   [CatalogKind.SECTION]:          sectionPreview,
   [CatalogKind.OPENING_SUB_TYPE]: openingSubTypePreview,
+  [CatalogKind.FIXTURE_SYMBOL]:   fixtureSymbolPreview,
 });
 
 /** 作図プレビューを持つカタログ種別の一覧（PREVIEW_BUILDERSから導出）。 */
@@ -81,6 +86,8 @@ export function catalogPreviewKinds() {
 export function catalogPreviewViews(kind) {
   kindDef(kind);
   if (kind === CatalogKind.OPENING_SUB_TYPE) return ['elevation', 'plan'];
+  // ステップ12f: fixtureSymbolは平面記号のみ（姿図に相当するビューを持たない）。
+  if (kind === CatalogKind.FIXTURE_SYMBOL) return ['plan'];
   return PREVIEW_BUILDERS[kind] ? ['elevation'] : [];
 }
 
@@ -235,7 +242,15 @@ function previewWallStubPrimitives(width, thicknessMm) {
 // 室内（下＝y>0）側へ開く（hingeSide:-1, swingSide:+1）・exteriorDirOf:上が屋外（-1）固定
 // （設計裁定Q3）。scaleは常にnull——姿図（openingSubTypePreview）と同じくAutoScaledFigure側の
 // 省略時計算（chooseScale）に委ねる。
-function openingSubTypePlanPreview(entry, { materialList } = {}) {
+// ステップ12f: fixtureType（建具記号タブのプレビューが渡す。省略時undefined＝従来どおり
+// fixtureSymbolOfのカテゴリ既定へフォールバック）を opening.fixtureType に渡す。
+// QA指摘M2（2026-09-24再報告）: profile（'solid'|'bent'。省略可）は opening.frameProfile へ渡す——
+// 三方枠（FRAME_ONLY）の方立断面（openingPlanSymbol.js frameOnlyPrimitives。
+// `opening.frameProfile ?? frameProfileFor(fixtureSymbolOf(opening))`）がこれを最優先で使う。
+// ライブラリ未登録（未保存ドラフト）のfixtureTypeでもフォームで選んだprofileどおりに描ける——
+// fixtureType単体（ライブラリ照合）に頼るとプレビュー時点で未保存のためsolidへ落ちてしまう
+// （QA指摘M2の症状そのもの）。三方枠でない機構ではframeProfileは参照されないため無害。
+function openingSubTypePlanPreview(entry, { materialList, fixtureType, profile } = {}) {
   if (!entry || !isNonEmptyString(entry.key) || !isNonEmptyString(entry.category)) {
     return { ok: false, reason: '建具種別エントリのkey/categoryが不正です（プレビューできません）' };
   }
@@ -244,7 +259,7 @@ function openingSubTypePlanPreview(entry, { materialList } = {}) {
   const opening = {
     coord1: 0, coord2: width, centerCoord: width / 2, width, isVertical: false,
     hingeSide: -1, swingSide: 1, category: entry.category, subType: entry.key,
-    lineWeight: LINE_WEIGHT_MM.medium, frameDepth: 0,
+    lineWeight: LINE_WEIGHT_MM.medium, frameDepth: 0, fixtureType, frameProfile: profile,
   };
   const ctx = {
     entry, lodLevel: LodLevel.STANDARD, axisValue: 0,
@@ -257,6 +272,51 @@ function openingSubTypePlanPreview(entry, { materialList } = {}) {
     ...planSymbolToFigurePrimitives(planPrimitives),
   ];
   return { ok: true, primitives, scale: null };
+}
+
+// ================================================================
+// 建具記号（FIXTURE_SYMBOL）平面記号プレビュー（ステップ12f）。
+//
+// 建具記号自体は「開口の種別（openingSubType）」ではなく「材質×種別の記号」なので、
+// 単独では平面記号を持たない——代表の開口種別（三方枠専用記号は三方枠、それ以外は区分
+// （fitting/window）の代表種別）へ opening.fixtureType としてこの記号を渡し、
+// openingSubTypePlanPreview（既存の唯一の平面記号ジェネレータ配線）へ委譲する。
+// ================================================================
+
+// 三方枠専用記号（mechanism:FIXTURE_SYMBOL_FRAME_ONLY_MECHANISM相当）の代表エントリ。
+// findCatalogEntry('fitting'|'window', 'threeSidedFrame')には window 側の三方枠が
+// builtinに存在しない（openings/openingCatalog.js FITTING_CATALOGのみ）ため、実在のカタログ
+// エントリを引かず、frameOnlyPrimitivesのディスパッチに必要なmechanismだけを持つ最小限の
+// ダミーエントリを直接組み立てる（openingSubTypePlanPreviewはctx.entryを検索せずそのまま使う
+// ——buildOpeningPlanSymbolの引用元コメント「entry: findCatalogEntryの結果」どおりの注入経路）。
+function frameOnlyRepresentativeEntry(category) {
+  return {
+    category, key: 'fixtureSymbolFrameOnlyPreview', label: '三方枠（プレビュー代表）',
+    mechanism: OpeningMechanism.FRAME_ONLY, defaultWidth: 800, defaultHeight: 2000,
+  };
+}
+
+// 区分（fitting/window）の代表subType（設計: fitting=singleSwing・window=fixed）。
+// builtin一覧から実際のエントリを引く——寸法・wallKinds等の既存の値をそのまま使う。
+function fixtureSymbolRepresentativeEntry(category, mechanism) {
+  if (mechanism === OpeningMechanism.FRAME_ONLY) return frameOnlyRepresentativeEntry(category);
+  return category === 'window' ? findCatalogEntry('window', 'fixed') : findCatalogEntry('fitting', 'singleSwing');
+}
+
+// 建具記号（FIXTURE_SYMBOL）: 代表の開口種別へ entry.key を opening.fixtureType として渡し、
+// openingSubTypePlanPreviewへ委譲する（唯一の平面記号ジェネレータ配線への一本化）。
+// QA指摘M2（2026-09-24再報告）: profileは entry.profile（フォームで選んだ値。未保存でもそのまま
+// 使う）をprofileとして明示的に渡す——fixtureType（ライブラリ照合）に委ねると、保存前の
+// ドラフト（key '?'・未保存の別profile上書き）がすべてsolidへ落ちてしまう不具合があった。
+function fixtureSymbolPreview(entry, { materialList } = {}) {
+  if (!entry || !isNonEmptyString(entry.key) || !isNonEmptyString(entry.category)) {
+    return { ok: false, reason: '建具記号エントリのkey/categoryが不正です（プレビューできません）' };
+  }
+  const repEntry = fixtureSymbolRepresentativeEntry(entry.category, entry.mechanism);
+  if (!repEntry) {
+    return { ok: false, reason: `建具記号の区分「${entry.category}」に対応する代表種別が見つかりません` };
+  }
+  return openingSubTypePlanPreview(repEntry, { materialList, fixtureType: entry.key, profile: entry.profile ?? 'solid' });
 }
 
 /**
@@ -276,11 +336,17 @@ export function buildCatalogPreview(kind, entry, { frame, view, materialList } =
   if (view != null && view !== 'elevation' && view !== 'plan') {
     return { ok: false, reason: `未知の作図ビューです: ${view}` };
   }
-  if (view === 'plan') {
-    if (kind !== CatalogKind.OPENING_SUB_TYPE) {
-      return { ok: false, reason: `${KIND_LABELS[kind]}は平面記号プレビューを持ちません` };
-    }
-    return openingSubTypePlanPreview(entry, { materialList });
+  // QA指摘n10（2026-09-24再報告）: view省略時はcatalogPreviewViews(kind)の先頭ビューを使う
+  // （表と挙動を揃える）。openingSubType/sectionは先頭が'elevation'のため既存の後方互換
+  // （view省略時はview:'elevation'指定時とdeepEqual）を維持したまま、fixtureSymbol
+  // （先頭が'plan'のみ）は省略時も'plan'分岐（materialList込み）へ揃って通る——
+  // 省略時だけPREVIEW_BUILDERS経由でmaterialListが渡らない食い違いを解消する。
+  const effectiveView = view ?? catalogPreviewViews(kind)[0] ?? null;
+  if (effectiveView === 'plan') {
+    if (kind === CatalogKind.OPENING_SUB_TYPE) return openingSubTypePlanPreview(entry, { materialList });
+    // ステップ12f: 建具記号（FIXTURE_SYMBOL）も平面記号を持つ（materialListはダミー壁厚導出に使う）。
+    if (kind === CatalogKind.FIXTURE_SYMBOL) return fixtureSymbolPreview(entry, { materialList });
+    return { ok: false, reason: `${KIND_LABELS[kind]}は平面記号プレビューを持ちません` };
   }
   const builder = PREVIEW_BUILDERS[kind];
   if (!builder) {
