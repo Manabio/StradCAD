@@ -21,7 +21,7 @@ function material(overrides) {
 }
 
 // ---- buildKindTabs ----
-test('buildKindTabs: listKinds()から導出し、material・interiorMaster・boundaryMasterはenabled:true（閲覧のみ。ステップ7d）、section/openingSubTypeはenabled:false', () => {
+test('buildKindTabs: listKinds()から導出し、material・interiorMaster・boundaryMaster・sectionはenabled:true（閲覧のみ。ステップ7d・8h）、openingSubTypeはenabled:false', () => {
   const tabs = buildKindTabs();
   const materialTab = tabs.find(t => t.kind === CatalogKind.MATERIAL);
   assert.equal(materialTab.enabled, true);
@@ -32,7 +32,10 @@ test('buildKindTabs: listKinds()から導出し、material・interiorMaster・bo
   const boundaryTab = tabs.find(t => t.kind === CatalogKind.BOUNDARY_MASTER);
   assert.equal(boundaryTab.enabled, true);
   assert.equal(boundaryTab.label, '境界マスター');
-  const notYet = tabs.filter(t => t.kind === CatalogKind.SECTION || t.kind === CatalogKind.OPENING_SUB_TYPE);
+  const sectionTab = tabs.find(t => t.kind === CatalogKind.SECTION);
+  assert.equal(sectionTab.enabled, true);
+  assert.equal(sectionTab.label, '断面');
+  const notYet = tabs.filter(t => t.kind === CatalogKind.OPENING_SUB_TYPE);
   assert.ok(notYet.length > 0);
   assert.ok(notYet.every(t => t.enabled === false));
 });
@@ -53,6 +56,20 @@ test('buildCatalogRows: kind:interiorMasterでも出所・searchが効く', () =
 
   const filtered = buildCatalogRows({ kind: CatalogKind.INTERIOR_MASTER, builtinList: builtin, search: 'リビング' });
   assert.deepEqual(filtered.map(r => r.entry.key), ['LIVING_ROOM']);
+});
+
+// ---- buildCatalogRows: search（ステップ8h・断面のkey検索）----
+test('buildCatalogRows: kind:sectionでsearchはlabel（呼称）にもkey（識別子）にも一致する', () => {
+  const builtin = [
+    { key: 'STEEL-H200x100', materialType: 'STEEL', shape: 'hSection', width: 100, height: 200, webThickness: 5.5, flangeThickness: 8, label: 'H-200×100×5.5×8' },
+    { key: 'STEEL-SQ150x150x6.0', materialType: 'STEEL', shape: 'squarePipe', width: 150, height: 150, wallThickness: 6, label: '□-150×150×6.0' },
+  ];
+  // labelには含まれない語（"H-200"のハイフンを含まない"H200"）でも、keyに含まれていれば当たる。
+  const byKey = buildCatalogRows({ kind: CatalogKind.SECTION, builtinList: builtin, search: 'H200' });
+  assert.deepEqual(byKey.map(r => r.entry.key), ['STEEL-H200x100']);
+
+  const byLabel = buildCatalogRows({ kind: CatalogKind.SECTION, builtinList: builtin, search: '150×150' });
+  assert.deepEqual(byLabel.map(r => r.entry.key), ['STEEL-SQ150x150x6.0']);
 });
 
 test('buildCatalogRows: kind:boundaryMasterでdiffMapを渡すと差分情報が付く', () => {

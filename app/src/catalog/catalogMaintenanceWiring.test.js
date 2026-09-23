@@ -156,3 +156,33 @@ test('【不変条件・ステップ7d】ui/CatalogMaintenancePanel.jsx: buildKi
   );
   assert.ok(/閲覧のみ/.test(body), 'ReadonlyKindTab に閲覧専用である旨の注記が無い');
 });
+
+// ---- ステップ8h: 断面の閲覧タブ（内装マスター・境界マスターと同じReadonlyKindTabに相乗り。
+// 専用の編集UIは追加しない） ----
+test('【不変条件・ステップ8h】catalog/catalogMaintenance.js: buildKindTabsでsectionがenabled:true（閲覧タブ）', () => {
+  const src = readSrc('catalog/catalogMaintenance.js');
+  const m = /const VIEWABLE_KINDS = Object\.freeze\(\[([\s\S]*?)\]\);/.exec(src);
+  assert.ok(m, 'catalogMaintenance.js に VIEWABLE_KINDS が見つからない');
+  assert.ok(/CatalogKind\.SECTION/.test(m[1]), 'VIEWABLE_KINDS に CatalogKind.SECTION が含まれていない（断面タブが閲覧できない）');
+});
+
+test('【不変条件・ステップ8h】ui/CatalogMaintenancePanel.jsx: READONLY_KIND_FIELDSにCatalogKind.SECTIONの表示項目（label/materialType/shape/width/height/webThickness/flangeThickness/wallThickness）を持ち、ReadonlyKindTab（追加・複製・編集・削除・合わせ直しボタン無し）で扱う', () => {
+  const src = readSrc('ui/CatalogMaintenancePanel.jsx');
+  const m = /\[CatalogKind\.SECTION\]: Object\.freeze\(\[([\s\S]*?)\]\),/.exec(src);
+  assert.ok(m, 'CatalogMaintenancePanel.jsx の READONLY_KIND_FIELDS に [CatalogKind.SECTION] が見つからない');
+  const body = m[1];
+  for (const field of [
+    'label', 'materialType', 'shape', 'width', 'height', 'webThickness', 'flangeThickness', 'wallThickness',
+  ]) {
+    assert.ok(
+      new RegExp(`field:\\s*'${field}'`).test(body),
+      `READONLY_KIND_FIELDS[CatalogKind.SECTION] に ${field} が無い`,
+    );
+  }
+  // ReadonlyKindTabはREADONLY_KIND_FIELDSに載る種別（interiorMaster/boundaryMaster/section）を
+  // 汎用に扱う唯一のコンポーネント——上のステップ7dテストが既に「追加・複製・削除・保存・
+  // 合わせ直しの操作系ハンドラを呼んでいない」ことを固定しているため、断面用の専用ボタンを
+  // 別途持たないことはその不変条件がそのまま覆う（同じ関数に相乗りする設計であることの確認）。
+  const fnMatch = /function ReadonlyKindTab\(\{[\s\S]*?\n\}/.exec(src);
+  assert.ok(fnMatch, 'CatalogMaintenancePanel.jsx に ReadonlyKindTab コンポーネントが見つからない');
+});

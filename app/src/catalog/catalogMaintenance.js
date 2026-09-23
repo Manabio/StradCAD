@@ -78,9 +78,12 @@ export function parseThicknessInput(raw) {
 /**
  * 種別タブの器（左タブ）。listKinds() から導出する——登録表に種別が増えたらタブも増える。
  * ステップ7d: 内装マスター・境界マスターは閲覧のみ（追加・複製・編集・削除なし）で enabled:true。
- * section・openingSubType は選択UIが無いためまだ enabled:false（「準備中」表示用）。
+ * ステップ8h: 断面も閲覧のみで enabled:true（規格文字列の一括入力はステップ8iで別途着手）。
+ * openingSubType は選択UIが無いためまだ enabled:false（「準備中」表示用）。
  */
-const VIEWABLE_KINDS = Object.freeze([CatalogKind.MATERIAL, CatalogKind.INTERIOR_MASTER, CatalogKind.BOUNDARY_MASTER]);
+const VIEWABLE_KINDS = Object.freeze([
+  CatalogKind.MATERIAL, CatalogKind.INTERIOR_MASTER, CatalogKind.BOUNDARY_MASTER, CatalogKind.SECTION,
+]);
 
 export function buildKindTabs() {
   return listKinds().map(kind => ({
@@ -92,7 +95,9 @@ export function buildKindTabs() {
 
 /**
  * kind の一覧行（出所付き）。builtin一覧・overlay（catalogRegistry.jsの現在の状態）を
- * composeList/originOf で合成し、search（表示名の部分一致・大小文字区別なし）で絞り込む。
+ * composeList/originOf で合成し、search（表示名またはキーの部分一致・大小文字区別なし）で
+ * 絞り込む（ステップ8h: 断面は label が「H-300×150×6.5×9」、key が「STEEL-H300x150」のように
+ * 呼び方が割れるため両方を対象にする。他種別でも害はないため共通の規則にする）。
  * diffMap（catalogRegistry.js の docDiffMap の戻り値）を渡すと、各行に R13 の差分情報
  * （{baseOrigin, diffFields, baseEntry}）を diff として付ける（省略時は null）。
  * category による絞り込みは material 専用のため持たない（buildMaterialRows 側で行う）。
@@ -108,7 +113,11 @@ export function buildCatalogRows({ kind, builtinList, search = '', diffMap = nul
       origin: originOf(kind, def.keyOf(entry), builtinList),
       diff: diffMap?.get(def.keyOf(entry)) ?? null,
     }))
-    .filter(row => !needle || displayNameOf(row.entry).toLowerCase().includes(needle));
+    .filter(row => (
+      !needle
+      || displayNameOf(row.entry).toLowerCase().includes(needle)
+      || def.keyOf(row.entry).toLowerCase().includes(needle)
+    ));
 }
 
 /**

@@ -24,6 +24,7 @@ const CATEGORY_LABELS = Object.freeze({
 const ORIGIN_LABELS = Object.freeze({ doc: '同梱', user: 'ライブラリ', builtin: '標準' });
 
 // ステップ7d: 内装マスター・境界マスターの閲覧タブ（読み取り専用）に並べる項目。
+// ステップ8h: 断面も同じ閲覧タブ（ReadonlyKindTab）に並べる項目を追加。
 // 追加・複製・編集・削除・合わせ直しボタンは出さない（選ぶ経路が無い・layers/fieldsの編集UIは
 // 複雑・編集はステップ12でまとめて着手する裁定）。
 const READONLY_KIND_FIELDS = Object.freeze({
@@ -39,6 +40,16 @@ const READONLY_KIND_FIELDS = Object.freeze({
     { field: 'layers', label: '層構成' },
     { field: 'derivedFrom', label: '継承元' },
     { field: 'fields', label: '項目' },
+  ]),
+  [CatalogKind.SECTION]: Object.freeze([
+    { field: 'label', label: '呼称' },
+    { field: 'materialType', label: '材種' },
+    { field: 'shape', label: '形状' },
+    { field: 'width', label: '幅' },
+    { field: 'height', label: '成' },
+    { field: 'webThickness', label: 'ウェブ厚' },
+    { field: 'flangeThickness', label: 'フランジ厚' },
+    { field: 'wallThickness', label: '板厚' },
   ]),
 });
 
