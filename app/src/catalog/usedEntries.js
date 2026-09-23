@@ -115,6 +115,40 @@ export function expandTransitiveMaterials(codes, { interiorMasters = [], boundar
 }
 
 /**
+ * ステップ12b QA指摘M1/m3（2026-09-24再報告）: collectUsedKeysByKind の戻り値（kind→使用キーの
+ * Set）のうち CatalogKind.MATERIAL を、使用中の interiorMaster/boundaryMaster が参照する材コード
+ * まで expandTransitiveMaterials で推移展開したものに差し替える（非破壊。新しい Map を返す）。
+ * store.js の saveCatalogDocument・collectCurrentCatalogUsage の両方が同じ式を呼ぶことで、
+ * 「使用キー収集→材の推移展開」という手順そのものを二重実装しない（M1の症状——削除確認が
+ * 未保存の作業中の使用を見落とす——を新設する collectCurrentCatalogUsage で修正するにあたり、
+ * 保存時（saveCatalogDocument）と同じ判定式を使うことを保証する）。
+ * resolvedByKind は kind→Map<key,entry>（catalogRegistry.js composeCatalog の戻り値。呼び出し側が
+ * 解決済みのものを渡すDI型——composeCatalogは本体標準マスタの動的importを伴うI/Oのため、
+ * この関数自身は呼ばない・catalogRegistry.jsも静的importしない。純関数として保つ）。
+ * usedKeysByKind が CatalogKind.MATERIAL を含まない（収集対象に material を含めなかった）場合は
+ * 何もせずそのまま返す。
+ * @param {Map<string, Set<string>>} usedKeysByKind
+ * @param {Map<string, Map<string, object>>} resolvedByKind
+ * @returns {Map<string, Set<string>>}
+ */
+export function expandUsedMaterialsTransitively(usedKeysByKind, resolvedByKind) {
+  if (!usedKeysByKind.has(CatalogKind.MATERIAL)) return usedKeysByKind;
+  const usedInteriorMasters = [...(usedKeysByKind.get(CatalogKind.INTERIOR_MASTER) ?? [])]
+    .map(k => resolvedByKind.get(CatalogKind.INTERIOR_MASTER)?.get(k))
+    .filter(Boolean);
+  const usedBoundaryMasters = [...(usedKeysByKind.get(CatalogKind.BOUNDARY_MASTER) ?? [])]
+    .map(k => resolvedByKind.get(CatalogKind.BOUNDARY_MASTER)?.get(k))
+    .filter(Boolean);
+  const expandedMaterial = expandTransitiveMaterials(usedKeysByKind.get(CatalogKind.MATERIAL), {
+    interiorMasters: usedInteriorMasters,
+    boundaryMasters: usedBoundaryMasters,
+  });
+  const next = new Map(usedKeysByKind);
+  next.set(CatalogKind.MATERIAL, expandedMaterial);
+  return next;
+}
+
+/**
  * ステップ12a: `overridesBuiltin`（4.4/resolveQueue.js markOverrideが付ける「本体の上書き」印）を
  * 同梱から除去する。この属性はユーザーライブラリ側の状態（このプロジェクトのuserエントリが
  * builtinを上書きしているかどうか）であって、doc（文書同梱）はそれを持ち運ぶべきではない——

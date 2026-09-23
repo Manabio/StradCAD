@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   collectUsedMaterialCodes, collectUsedKeys, collectUsedKeysByKind, expandTransitiveMaterials,
   buildDocumentBundle, recoverUnresolvedEntries, reexpandTransitiveMaterials, stripOverridesBuiltin,
+  expandUsedMaterialsTransitively,
 } from './usedEntries.js';
 import { emptyBundle, withEntries } from './catalogBundle.js';
 import { CatalogKind } from './catalogKinds.js';
@@ -173,6 +174,76 @@ test('expandTransitiveMaterials: 引数省略時は元のcodesをそのまま返
   const expanded = expandTransitiveMaterials(original);
   assert.deepEqual([...expanded], ['101000000001']);
   assert.notEqual(expanded, original);
+});
+
+// ---- expandUsedMaterialsTransitively（ステップ12b QA指摘M1/m3）: collectUsedKeysByKindの戻り値
+// に対しexpandTransitiveMaterialsを一括適用する（store.js saveCatalogDocument/
+// collectCurrentCatalogUsageが共有する唯一の判定式） ----
+test('expandUsedMaterialsTransitively: 使用中interiorMasterのwallMaterial/wallFinishをmaterialへ追加する', () => {
+  const usedKeysByKind = new Map([
+    [CatalogKind.MATERIAL, new Set(['101000000001'])],
+    [CatalogKind.INTERIOR_MASTER, new Set(['LIVING_ROOM'])],
+    [CatalogKind.BOUNDARY_MASTER, new Set()],
+  ]);
+  const resolvedByKind = new Map([
+    [CatalogKind.INTERIOR_MASTER, new Map([['LIVING_ROOM', { wallMaterial: '301000000002', wallFinish: '302000000001' }]])],
+    [CatalogKind.BOUNDARY_MASTER, new Map()],
+  ]);
+  const result = expandUsedMaterialsTransitively(usedKeysByKind, resolvedByKind);
+  assert.deepEqual(
+    [...result.get(CatalogKind.MATERIAL)].sort(),
+    ['101000000001', '301000000002', '302000000001'],
+  );
+});
+
+test('expandUsedMaterialsTransitively: 使用中boundaryMasterの固定層codeもmaterialへ追加する', () => {
+  const usedKeysByKind = new Map([
+    [CatalogKind.MATERIAL, new Set()],
+    [CatalogKind.INTERIOR_MASTER, new Set()],
+    [CatalogKind.BOUNDARY_MASTER, new Set(['EXT_WALL'])],
+  ]);
+  const resolvedByKind = new Map([
+    [CatalogKind.INTERIOR_MASTER, new Map()],
+    [CatalogKind.BOUNDARY_MASTER, new Map([['EXT_WALL', { layers: [{ role: '外壁材', code: '301600000001' }] }]])],
+  ]);
+  const result = expandUsedMaterialsTransitively(usedKeysByKind, resolvedByKind);
+  assert.deepEqual([...result.get(CatalogKind.MATERIAL)], ['301600000001']);
+});
+
+test('【QA指摘m3】expandUsedMaterialsTransitively: 未保存階の使用（未解決含む）を表すusedKeysByKindでも、解決できたぶんは正しく展開される', () => {
+  // 「未保存の作業中の使用キー」は本関数の視点では単なる入力Setの一部——collectUsedKeysByKind
+  // が未保存階を含むsnapshots群から集めたSetをそのまま渡す契約（store.js側の責務）。ここでは
+  // resolvedByKindに存在しないキー（=まだoverlayに無いユーザー材等）が混ざっても、
+  // 解決できるキーの展開は正しく行われ、解決できないキーは無視されることを確認する。
+  const usedKeysByKind = new Map([
+    [CatalogKind.MATERIAL, new Set(['101000000001'])],
+    [CatalogKind.INTERIOR_MASTER, new Set(['LIVING_ROOM', 'UNRESOLVED_ROOM'])],
+    [CatalogKind.BOUNDARY_MASTER, new Set()],
+  ]);
+  const resolvedByKind = new Map([
+    [CatalogKind.INTERIOR_MASTER, new Map([['LIVING_ROOM', { wallMaterial: '301000000002' }]])], // UNRESOLVED_ROOMは無い
+    [CatalogKind.BOUNDARY_MASTER, new Map()],
+  ]);
+  const result = expandUsedMaterialsTransitively(usedKeysByKind, resolvedByKind);
+  assert.deepEqual([...result.get(CatalogKind.MATERIAL)].sort(), ['101000000001', '301000000002']);
+});
+
+test('expandUsedMaterialsTransitively: usedKeysByKindがCatalogKind.MATERIALを含まなければ何もせずそのまま返す', () => {
+  const usedKeysByKind = new Map([[CatalogKind.SECTION, new Set(['STEEL-H200x100'])]]);
+  const result = expandUsedMaterialsTransitively(usedKeysByKind, new Map());
+  assert.equal(result, usedKeysByKind);
+});
+
+test('expandUsedMaterialsTransitively: 新しいMapを返す（引数のusedKeysByKindを書き換えない）', () => {
+  const usedKeysByKind = new Map([
+    [CatalogKind.MATERIAL, new Set(['101000000001'])],
+    [CatalogKind.INTERIOR_MASTER, new Set()],
+    [CatalogKind.BOUNDARY_MASTER, new Set()],
+  ]);
+  const originalMaterialSet = usedKeysByKind.get(CatalogKind.MATERIAL);
+  const result = expandUsedMaterialsTransitively(usedKeysByKind, new Map());
+  assert.notEqual(result, usedKeysByKind, '新しいMapを返す');
+  assert.equal(usedKeysByKind.get(CatalogKind.MATERIAL), originalMaterialSet, '引数のMaterial Setは書き換えられていない');
 });
 
 // ---- buildDocumentBundle: 解決済み実体を同梱・参照されなくなったエントリは含めない ----

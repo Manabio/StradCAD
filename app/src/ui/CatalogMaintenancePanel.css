@@ -169,6 +169,8 @@
 .catmnt-badge--doc     { background: #dbeafe; color: #1d4ed8; }
 .catmnt-badge--user    { background: #dcfce7; color: #15803d; }
 .catmnt-badge--builtin { background: #f1f5f9; color: #64748b; }
+/* ステップ12b: userエントリがbuiltin同キーの上書きであることを示す追加バッジ（origin用バッジに併記）。 */
+.catmnt-badge--override { background: #ede9fe; color: #6d28d9; }
 
 .catmnt-cat-badge {
   flex-shrink: 0;

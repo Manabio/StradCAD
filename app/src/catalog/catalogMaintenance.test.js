@@ -4,9 +4,10 @@ import {
   buildKindTabs, buildMaterialRows, buildCatalogRows, collectKnownMaterialCodes, nextMaterialCode,
   buildMaterialEntry, duplicateMaterialEntry, validateMaterialEntry,
   upsertUserMaterialEntry, removeUserMaterialEntry, buildUserMaterialBundle, commitUserEntries,
-  isEditableMaterialCategory, MATERIAL_CATEGORY, canEditMaterialRow, parseThicknessInput,
+  isEditableMaterialCategory, MATERIAL_CATEGORY, parseThicknessInput,
   planRealign, realignTargets, planBulkSectionImport, formatReadonlyValue, formatCategoryLabel,
   rowEditState, lockedFieldsFor, planSaveEntry, planRevertToBuiltin, planRemoveUserEntry, applyCatalogEditPlan,
+  materialExtraLockedFields, materialSaveMessage, lockedFieldReason, materialRowDisabledReason, removeMessageFor,
 } from './catalogMaintenance.js';
 import { setOverlay, clearOverlays, overlayFor, docDiffMap, composeCatalog } from './catalogRegistry.js';
 import { valuesEqual } from './catalogMatch.js';
@@ -320,34 +321,9 @@ test('isEditableMaterialCategory: panel/finishはtrue、backingはfalse', () => 
   assert.equal(isEditableMaterialCategory(undefined), false);
 });
 
-// ---- canEditMaterialRow（QA指摘Major-A）: builtin/doc/backingは不可、userのpanel/finishのみ可 ----
-test('canEditMaterialRow: originがuserでcategoryがpanel/finishならok:true', () => {
-  assert.deepEqual(canEditMaterialRow('user', MATERIAL_CATEGORY.PANEL), { ok: true, reason: null });
-  assert.deepEqual(canEditMaterialRow('user', MATERIAL_CATEGORY.FINISH), { ok: true, reason: null });
-});
-
-test('canEditMaterialRow: 新規追加（originがnull/undefined）はcategoryがpanel/finishならok:true', () => {
-  assert.equal(canEditMaterialRow(null, MATERIAL_CATEGORY.PANEL).ok, true);
-  assert.equal(canEditMaterialRow(undefined, MATERIAL_CATEGORY.FINISH).ok, true);
-});
-
-test('【失敗系】canEditMaterialRow: originがbuiltinなら不可', () => {
-  const result = canEditMaterialRow('builtin', MATERIAL_CATEGORY.PANEL);
-  assert.equal(result.ok, false);
-  assert.match(result.reason, /標準材料の編集は未対応/);
-});
-
-test('【失敗系・QA指摘Major-A】canEditMaterialRow: originがdocなら不可（複製してから編集する）', () => {
-  const result = canEditMaterialRow('doc', MATERIAL_CATEGORY.FINISH);
-  assert.equal(result.ok, false);
-  assert.match(result.reason, /文書同梱の材料の編集は未対応です。複製してから編集してください/);
-});
-
-test('【失敗系】canEditMaterialRow: categoryがbackingならoriginに関わらず不可', () => {
-  assert.equal(canEditMaterialRow('user', MATERIAL_CATEGORY.BACKING).ok, false);
-  assert.equal(canEditMaterialRow('doc', MATERIAL_CATEGORY.BACKING).ok, false);
-  assert.equal(canEditMaterialRow('builtin', MATERIAL_CATEGORY.BACKING).ok, false);
-});
+// ---- canEditMaterialRow はステップ12b でrowEditState（1.1）+isEditableMaterialCategoryへ置換され
+// 削除した（仕様変更。置換後の判定は下のrowEditStateテスト群・isEditableMaterialCategoryテストで
+// 検証済み）。----
 
 // ---- parseThicknessInput（QA指摘Minor1）----
 test('parseThicknessInput: 空文字はnull', () => {
@@ -656,6 +632,28 @@ test('buildCatalogRows: 各行にoverridesBuiltin（userのoverridesBuiltin印�
   assert.equal(byCode.get('301000000099').builtinEntry, null);
 });
 
+// ---- QA指摘M2（2026-09-24再報告）: 標準を上書きしたuserが文書に同梱されるとoverridesBuiltin
+// バッジが消える不具合の修正確認（doc起源の行でも、相手userのoverridesBuiltinを見る） ----
+test('【QA指摘M2】buildCatalogRows: doc起源の行でも、同キーのuserエントリがoverridesBuiltinなら行のoverridesBuiltinはtrue（バッジが消えない）', () => {
+  const builtinEntry = material({ code: '301000000001', name: 'A' });
+  const overrideUserEntry = { ...builtinEntry, name: 'A（編集）', overridesBuiltin: true };
+  const docEntrySameAsUser = { ...overrideUserEntry }; // 文書同梱＝userと同内容（差分なし）
+  setOverlay(CatalogKind.MATERIAL, { user: [overrideUserEntry], doc: [docEntrySameAsUser] });
+  const rows = buildCatalogRows({ kind: CatalogKind.MATERIAL, builtinList: [builtinEntry] });
+  const row = rows.find(r => r.entry.code === '301000000001');
+  assert.equal(row.origin, 'doc');
+  assert.equal(row.overridesBuiltin, true, 'doc起源でも標準を編集した行はバッジtrueのまま');
+});
+
+test('buildCatalogRows: 標準に一致するがuser上書きが無い行（同キーがbuiltinに存在するだけ）はoverridesBuiltin:false', () => {
+  const builtinEntry = material({ code: '301000000001', name: 'A' });
+  const docEntrySameAsBuiltin = { ...builtinEntry }; // userなし・docがbuiltinと同内容
+  setOverlay(CatalogKind.MATERIAL, { doc: [docEntrySameAsBuiltin] });
+  const rows = buildCatalogRows({ kind: CatalogKind.MATERIAL, builtinList: [builtinEntry] });
+  const row = rows.find(r => r.entry.code === '301000000001');
+  assert.equal(row.overridesBuiltin, false, 'userの上書きが無いのでバッジは出さない');
+});
+
 // ---- rowEditState（1.1: 6状態の判定） ----
 test('rowEditState: origin===builtinはstate:builtin（編集=上書き・複製可。削除/戻す不可）', () => {
   const row = { entry: material({ code: '301000000001' }), origin: 'builtin', diff: null };
@@ -704,6 +702,30 @@ test('rowEditState: origin===docで差分無し・user（builtinには無いキ�
   assert.equal(result.state, 'doc-same');
 });
 
+// ---- QA指摘M2（2026-09-24再報告）: doc-override（標準を上書きしたuserが文書にも同梱されている
+// doc-sameの特殊形。編集・標準に戻す・複製を維持する） ----
+test('【QA指摘M2】rowEditState: origin===docで差分無し・相手userがoverridesBuiltin:trueならstate:doc-override（canRevert:true）', () => {
+  const overrideUserEntry = material({ code: '301000000001', name: 'A（編集）', overridesBuiltin: true });
+  setOverlay(CatalogKind.MATERIAL, { user: [overrideUserEntry] });
+  const row = { entry: material({ code: '301000000001', name: 'A（編集）' }), origin: 'doc', diff: null };
+  const result = rowEditState(CatalogKind.MATERIAL, row, { builtinKeys: new Set(['301000000001']) });
+  assert.deepEqual(result, { state: 'doc-override', canEdit: true, canRevert: true, canDelete: false, canDuplicate: true, reason: null });
+});
+
+test('【QA指摘M2】rowEditState: 相手userのoverridesBuiltinフラグが無くてもkeyがbuiltinKeysに含まれればdoc-override（フラグ欠落への耐性）', () => {
+  const userEntryWithoutFlag = material({ code: '301000000001', name: 'A（編集）' }); // overridesBuiltinフラグ無し
+  setOverlay(CatalogKind.MATERIAL, { user: [userEntryWithoutFlag] });
+  const row = { entry: material({ code: '301000000001', name: 'A（編集）' }), origin: 'doc', diff: null };
+  const result = rowEditState(CatalogKind.MATERIAL, row, { builtinKeys: new Set(['301000000001']) });
+  assert.equal(result.state, 'doc-override');
+});
+
+test('rowEditState: origin===docで差分無し・builtinKeysにはあるがuserエントリ自体が無ければdoc-same（上書きの実体が無いのでdoc-overrideにしない）', () => {
+  const row = { entry: material({ code: '301000000001' }), origin: 'doc', diff: null };
+  const result = rowEditState(CatalogKind.MATERIAL, row, { builtinKeys: new Set(['301000000001']) });
+  assert.equal(result.state, 'doc-same', '相手userが無い場合はbuiltinKeys一致だけでdoc-overrideにはしない');
+});
+
 test('【失敗系】rowEditState: origin===docで相手（userもbuiltinも）が無ければstate:doc-only（編集不可・複製のみ）', () => {
   const row = { entry: material({ code: '301000000099' }), origin: 'doc', diff: null };
   const result = rowEditState(CatalogKind.MATERIAL, row, { builtinKeys: new Set() });
@@ -738,6 +760,19 @@ test('lockedFieldsFor: 省略時はkeyBoundFieldsのみ（section）', () => {
   assert.deepEqual([...locked].sort(), [
     'key', 'materialType', 'shape', 'width', 'height', 'webThickness', 'flangeThickness', 'wallThickness',
   ].sort());
+});
+
+// ---- QA指摘m4（2026-09-24再報告・jsxLockedCat）: lockedFieldReason（固定項目の拒否文言の唯一の
+// 定義箇所。planSaveEntryの内部拒否メッセージと.jsx側のツールチップが同じ式を参照する） ----
+test('lockedFieldReason: 「${ラベル}は変更できません（複製してください）」を返す', () => {
+  assert.equal(lockedFieldReason(CatalogKind.MATERIAL, 'category'), '区分は変更できません（複製してください）');
+});
+
+test('lockedFieldReason: planSaveEntryの拒否メッセージと同じ文言になる（文言源が同一であることの確認）', () => {
+  const prevEntry = material({ code: '301000000001', name: 'A', category: 'panel' });
+  const entry = { ...prevEntry, category: 'finish' };
+  const result = planSaveEntry(CatalogKind.MATERIAL, entry, { builtinList: [prevEntry], rowState: 'override', prevEntry });
+  assert.equal(result.message, lockedFieldReason(CatalogKind.MATERIAL, 'category'));
 });
 
 // ---- planSaveEntry（1.3: 本体編集の保存プラン） ----
@@ -833,6 +868,96 @@ test('planSaveEntry: rowStateがdoc-same以外ならremoveDocKey=null・confirmP
   assert.deepEqual(result.confirmPairs, []);
 });
 
+// ---- QA指摘M2（2026-09-24再報告）: rowState===doc-overrideもdoc-sameと同じくremoveDocKey/confirmPairsを返す ----
+test('【QA指摘M2】planSaveEntry: rowState===doc-overrideもdoc-sameと同じくremoveDocKeyとconfirmPairsを返す', () => {
+  const prevEntry = material({ code: '301000000001', name: 'A', thickness: 10 });
+  const entry = { ...prevEntry, thickness: 15 };
+  const result = planSaveEntry(CatalogKind.MATERIAL, entry, {
+    builtinList: [material({ code: '301000000001', name: 'A', thickness: 10 })],
+    rowState: 'doc-override', prevEntry,
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.removeDocKey, '301000000001');
+  assert.deepEqual(result.confirmPairs, [{ field: 'thickness', label: '厚', from: 10, to: 15 }]);
+  assert.equal(result.needsConfirm, true);
+});
+
+// ---- QA指摘m1（2026-09-24再報告）: 変更が無ければno-op（{ok:true, noop:true}のみ返し、以降の
+// 検証・書込みを一切しない） ----
+test('【QA指摘m1】planSaveEntry: builtin行を変更せず保存するとnoop:true（同内容のuser上書きを作らない）', () => {
+  const builtinEntry = material({ code: '301000000001', name: 'A' });
+  const entry = { ...builtinEntry }; // 変更なし
+  const result = planSaveEntry(CatalogKind.MATERIAL, entry, {
+    builtinList: [builtinEntry], rowState: 'builtin', prevEntry: builtinEntry,
+  });
+  assert.deepEqual(result, { ok: true, noop: true });
+});
+
+test('【QA指摘m1】planSaveEntry: doc-same行を変更せず保存するとnoop:true（確認なしに同梱を外さない）', () => {
+  const prevEntry = material({ code: '301000000001', name: 'A', thickness: 10 });
+  const entry = { ...prevEntry }; // 変更なし
+  const result = planSaveEntry(CatalogKind.MATERIAL, entry, {
+    builtinList: [material({ code: '301000000001', name: 'A', thickness: 10 })],
+    rowState: 'doc-same', prevEntry,
+  });
+  assert.deepEqual(result, { ok: true, noop: true });
+});
+
+test('【QA指摘m1】planSaveEntry: 1項目でも変わっていればnoopにならない（ok:true, noop:false）', () => {
+  const prevEntry = material({ code: '301000000099', name: 'A' });
+  const entry = { ...prevEntry, name: 'A（変更）' };
+  const result = planSaveEntry(CatalogKind.MATERIAL, entry, { builtinList: [], rowState: 'user', prevEntry });
+  assert.equal(result.ok, true);
+  assert.equal(result.noop, false);
+});
+
+// ---- QA指摘m4（2026-09-24再報告）: planSaveEntryの戻り値にoverridesBuiltin/thicknessChanged/
+// needsConfirmを含める（.jsx側で再計算しない） ----
+test('【QA指摘m4】planSaveEntry: overridesBuiltinはbuiltinKeys.has(key)をそのまま返す（builtin/override行はtrue）', () => {
+  const builtinEntry = material({ code: '301000000001', name: 'A' });
+  const entry = { ...builtinEntry, name: 'A（編集）' };
+  const result = planSaveEntry(CatalogKind.MATERIAL, entry, {
+    builtinList: [builtinEntry], rowState: 'builtin', prevEntry: builtinEntry,
+  });
+  assert.equal(result.overridesBuiltin, true);
+});
+
+test('【QA指摘m4】planSaveEntry: overridesBuiltinはuser行（builtinに同キー無し）はfalse', () => {
+  const prevEntry = material({ code: '301000000099', name: 'A' });
+  const entry = { ...prevEntry, name: 'A（編集）' };
+  const result = planSaveEntry(CatalogKind.MATERIAL, entry, { builtinList: [], rowState: 'user', prevEntry });
+  assert.equal(result.overridesBuiltin, false);
+});
+
+test('【QA指摘m4】planSaveEntry: thicknessChangedはprevEntry.thicknessとentry.thicknessが違えばtrue', () => {
+  const prevEntry = material({ code: '301000000099', name: 'A', thickness: 10 });
+  const entry = { ...prevEntry, thickness: 15 };
+  const result = planSaveEntry(CatalogKind.MATERIAL, entry, { builtinList: [], rowState: 'user', prevEntry });
+  assert.equal(result.thicknessChanged, true);
+});
+
+test('【QA指摘m4】planSaveEntry: thicknessChangedは厚さが同じならfalse（名称だけ変えた場合）', () => {
+  const prevEntry = material({ code: '301000000099', name: 'A', thickness: 10 });
+  const entry = { ...prevEntry, name: 'A（編集）' };
+  const result = planSaveEntry(CatalogKind.MATERIAL, entry, { builtinList: [], rowState: 'user', prevEntry });
+  assert.equal(result.thicknessChanged, false);
+});
+
+test('【QA指摘m4】planSaveEntry: needsConfirmはdoc-same/doc-overrideかつconfirmPairsが非空のときだけtrue', () => {
+  const prevEntry = material({ code: '301000000099', name: 'A' });
+  const entry = { ...prevEntry, name: 'A（編集）' };
+  const userState = planSaveEntry(CatalogKind.MATERIAL, entry, { builtinList: [], rowState: 'user', prevEntry });
+  assert.equal(userState.needsConfirm, false, 'doc-same/doc-override以外はneedsConfirm:false');
+
+  const docSameEntry = material({ code: '301000000001', name: 'A', thickness: 10 });
+  const docSameEdited = { ...docSameEntry, thickness: 12 };
+  const docSameState = planSaveEntry(CatalogKind.MATERIAL, docSameEdited, {
+    builtinList: [material({ code: '301000000001', name: 'A', thickness: 10 })],
+    rowState: 'doc-same', prevEntry: docSameEntry,
+  });
+  assert.equal(docSameState.needsConfirm, true);
+});
+
 // ---- QA指摘Minor-2（2026-09-24再報告）: rowStateが既存行なのにprevEntry省略は拒否 ----
 test('【失敗系・QA指摘Minor-2】planSaveEntry: rowState===doc-sameなのにprevEntryを省略するとok:false（固定項目検査の素通り防止）', () => {
   const entry = material({ code: '301000000001', name: '編集後' });
@@ -898,6 +1023,31 @@ test('planRevertToBuiltin→applyCatalogEditPlan: 適用後はcomposeCatalogの�
   setOverlay(CatalogKind.MATERIAL, { user: [userEntry] });
   const plan = planRevertToBuiltin(CatalogKind.MATERIAL, '301000000001');
   await applyCatalogEditPlan(CatalogKind.MATERIAL, plan, { saveFn: async () => {}, prevUser: [userEntry] });
+  const resolved = composeCatalog(CatalogKind.MATERIAL, [builtinEntry]);
+  assert.equal(resolved.get('301000000001'), builtinEntry, '解決結果がbuiltinエントリそのもの（===）に戻っている');
+});
+
+// ---- QA指摘M2（2026-09-24再報告）: doc-override行の「標準に戻す」は doc も user も消え、
+// 解決結果が builtin と === 一致する（既存のplanRevertToBuiltinをそのまま使える契約の確認） ----
+test('【QA指摘M2】doc-override行: planRevertToBuiltin(alsoRealignDoc:true)→applyCatalogEditPlanで doc・user が両方消え、解決結果がbuiltinと===一致する', async () => {
+  const builtinEntry = material({ code: '301000000001', name: 'A' });
+  const overrideUserEntry = { ...builtinEntry, name: 'A（編集）', overridesBuiltin: true };
+  const docEntrySameAsUser = { ...overrideUserEntry }; // 文書同梱＝userと同内容（doc-override状態）
+  setOverlay(CatalogKind.MATERIAL, { user: [overrideUserEntry], doc: [docEntrySameAsUser] });
+
+  // 前提: この行が doc-override であること
+  const rows = buildCatalogRows({ kind: CatalogKind.MATERIAL, builtinList: [builtinEntry] });
+  const row = rows.find(r => r.entry.code === '301000000001');
+  const editState = rowEditState(CatalogKind.MATERIAL, row, { builtinKeys: new Set(['301000000001']) });
+  assert.equal(editState.state, 'doc-override', '前提: doc-override状態であること');
+  assert.equal(editState.canRevert, true);
+
+  const plan = planRevertToBuiltin(CatalogKind.MATERIAL, '301000000001', { alsoRealignDoc: true });
+  assert.equal(plan.removeDocKey, '301000000001', 'docにも同キーがあるのでremoveDocKeyが立つ');
+  await applyCatalogEditPlan(CatalogKind.MATERIAL, plan, { saveFn: async () => {}, prevUser: [overrideUserEntry] });
+
+  assert.deepEqual(overlayFor(CatalogKind.MATERIAL).user, [], 'userから消えている');
+  assert.deepEqual(overlayFor(CatalogKind.MATERIAL).doc, [], 'docからも消えている');
   const resolved = composeCatalog(CatalogKind.MATERIAL, [builtinEntry]);
   assert.equal(resolved.get('301000000001'), builtinEntry, '解決結果がbuiltinエントリそのもの（===）に戻っている');
 });
@@ -1054,6 +1204,88 @@ test('【失敗系・QC通し】使用中userの削除（docAppend経路）でsa
   assert.deepEqual(overlayFor(CatalogKind.MATERIAL).user, [userEntry], 'userはprevUserへ復元されている');
   assert.deepEqual(overlayFor(CatalogKind.MATERIAL).doc, [], 'docAppendは実行されていない（saveFn失敗でcommit前に止まる）');
   assert.equal(dirtyCalls, 0, 'markDirtyは呼ばれない');
+});
+
+// ---- ステップ12b: materialExtraLockedFields（間柱6コードはx/y/thicknessも固定。Q-B確定）----
+test('materialExtraLockedFields: keyがstudCodesに含まれればx/y/thicknessを返す', () => {
+  const studCodes = new Set(['101400000001', '101400000002']);
+  assert.deepEqual(materialExtraLockedFields('101400000001', studCodes), ['x', 'y', 'thickness']);
+});
+
+test('materialExtraLockedFields: keyがstudCodesに含まれなければ空配列', () => {
+  const studCodes = new Set(['101400000001']);
+  assert.deepEqual(materialExtraLockedFields('301000000001', studCodes), []);
+});
+
+test('materialExtraLockedFields: studCodes省略時は常に空配列', () => {
+  assert.deepEqual(materialExtraLockedFields('101400000001'), []);
+});
+
+// ---- ステップ12b: materialSaveMessage（保存後メッセージの文言選択。Q-C/Q-E確定）----
+test('materialSaveMessage: どちらの注記も不要なら「保存しました」のみ', () => {
+  assert.equal(materialSaveMessage({}), '保存しました');
+  assert.equal(materialSaveMessage(), '保存しました');
+});
+
+test('materialSaveMessage: overridesBuiltin:trueは「他の文書は合わせ直すまで変わりません」を括弧書きで添える（Q-C/R3）', () => {
+  assert.equal(materialSaveMessage({ overridesBuiltin: true }), '保存しました（他の文書は合わせ直すまで変わりません）');
+});
+
+test('materialSaveMessage: thicknessChanged:trueは「壁は次に仕上げモードを出るまで旧い厚みのままです」を括弧書きで添える（Q-E）', () => {
+  assert.equal(
+    materialSaveMessage({ thicknessChanged: true }),
+    '保存しました（壁は次に仕上げモードを出るまで旧い厚みのままです）',
+  );
+});
+
+test('materialSaveMessage: 両方trueなら「／」で連結する', () => {
+  assert.equal(
+    materialSaveMessage({ overridesBuiltin: true, thicknessChanged: true }),
+    '保存しました（他の文書は合わせ直すまで変わりません／壁は次に仕上げモードを出るまで旧い厚みのままです）',
+  );
+});
+
+// ---- QA指摘m4（2026-09-24再報告）: materialRowDisabledReason（材料タブのフォーム無効化理由の
+// 唯一の判定式。.jsx側で再実装しない） ----
+test('materialRowDisabledReason: categoryが下地材なら最優先で下地材の理由（origin/editStateに関わらず）', () => {
+  const reason = materialRowDisabledReason({ isAdding: false, category: MATERIAL_CATEGORY.BACKING, editState: { canEdit: true, reason: null } });
+  assert.match(reason, /下地材はこのパネルでは編集できません/);
+});
+
+test('materialRowDisabledReason: 新規追加（isAdding:true）はcategoryが編集可能ならnull', () => {
+  assert.equal(materialRowDisabledReason({ isAdding: true, category: MATERIAL_CATEGORY.PANEL, editState: null }), null);
+});
+
+test('materialRowDisabledReason: 既存行はeditState.canEditがtrueならnull', () => {
+  const reason = materialRowDisabledReason({
+    isAdding: false, category: MATERIAL_CATEGORY.FINISH, editState: { canEdit: true, reason: null },
+  });
+  assert.equal(reason, null);
+});
+
+test('materialRowDisabledReason: 既存行はeditState.canEditがfalseならeditState.reasonを返す', () => {
+  const reason = materialRowDisabledReason({
+    isAdding: false, category: MATERIAL_CATEGORY.PANEL,
+    editState: { canEdit: false, reason: '文書にのみ存在します（複製してください）' },
+  });
+  assert.equal(reason, '文書にのみ存在します（複製してください）');
+});
+
+test('【失敗系】materialRowDisabledReason: editState省略・isAdding:falseはnull（新規追加でも編集でもない想定外を編集不可扱いにする）', () => {
+  const reason = materialRowDisabledReason({ isAdding: false, category: MATERIAL_CATEGORY.PANEL });
+  assert.equal(reason, null, 'editState省略時はeditState?.canEditがundefinedでeditState?.reasonもundefined→nullへフォールバック');
+});
+
+// ---- QA指摘m4（2026-09-24再報告）: removeMessageFor（削除完了メッセージの唯一の判定式） ----
+test('removeMessageFor: plan.docAppendがあれば「使用中のため、この文書には同梱として残しました」を含む', () => {
+  const msg = removeMessageFor({ docAppend: material({ code: '301000000099' }) });
+  assert.equal(msg, '削除しました（使用中のため、この文書には同梱として残しました）');
+});
+
+test('removeMessageFor: plan.docAppendが無ければ「削除しました」のみ', () => {
+  assert.equal(removeMessageFor({ docAppend: null }), '削除しました');
+  assert.equal(removeMessageFor({}), '削除しました');
+  assert.equal(removeMessageFor(null), '削除しました');
 });
 
 // ---- ステップ10f QA指摘: builtin全件を汎用整形に通しても壊れない（実データ網羅） ----

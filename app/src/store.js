@@ -6,7 +6,7 @@ import {
 } from '@core';
 import { floorSwapManager } from './storage/FloorSwapManager.js';
 import {
-  deleteFloor as dbDeleteFloor, clearAllStores, loadFloor, savePlanesMeta, loadPlanesMeta,
+  deleteFloor as dbDeleteFloor, clearAllStores, loadFloor, saveFloor, savePlanesMeta, loadPlanesMeta,
   saveSiteData, loadSiteData, saveProject, loadProject, saveProjectInfo, loadProjectInfo,
   seedFloorsFromDocument, commitFloorsToDocument, loadAllSavedFloors, saveSavedFloor,
   saveDocumentCatalog, saveDocumentCatalogs, loadDocumentCatalogs, loadUserCatalogs, saveUserCatalog,
@@ -29,7 +29,7 @@ import { composeCatalog, clearOverlays, overlayFor, removeDocEntry } from './cat
 import { decodeCatalogBundle, encodeCatalogBundle } from './catalog/catalogCodec.js';
 import { mergeBundles, splitBundleByKind, resolveCatalog, resolveOrigins, detectLibraryConflicts } from './catalog/catalogBundle.js';
 import {
-  collectUsedKeysByKind, expandTransitiveMaterials, buildDocumentBundle,
+  collectUsedKeysByKind, expandUsedMaterialsTransitively, buildDocumentBundle,
   recoverUnresolvedEntries, reexpandTransitiveMaterials,
 } from './catalog/usedEntries.js';
 import {
@@ -619,11 +619,56 @@ const BUNDLED_KINDS = [CatalogKind.MATERIAL, CatalogKind.INTERIOR_MASTER, Catalo
  * 場所。収集の純ロジック（使用0件の種別も空Setで必ず持つ・全階を回して埋める）は
  * catalog/usedEntries.js の collectUsedKeysByKind へ抽出済み——store.js は decode してそれに
  * 渡すだけ（単体テストは usedEntries.test.js 側で行う）。
+ * export はテスト・saveCatalogDocument以外からの直接呼び出しのため（floorRecordsは
+ * storage/db.js loadAllSavedFloors() が返す形をそのまま渡す想定）。
+ * QA指摘M1（2026-09-24再報告）: ただし「最後に明示保存した内容」しか見ない——保存前の
+ * 未保存編集を含む現在の使用状況が要る場合（材料タブの削除確認等）は下の
+ * collectCurrentCatalogUsage を使うこと（このままloadAllSavedFloorsに渡すと未保存の使用を
+ * 見落とし、使用中の材の参照が宙に浮く）。
  * @returns {Map<string, Set<string>>} kind → 使用キーのSet
  */
-async function collectCatalogUsageAcrossFloors(floorRecords) {
+export async function collectCatalogUsageAcrossFloors(floorRecords) {
   const snapshots = floorRecords.map(({ bytes }) => decodeFloorSnapshot(bytes));
   return collectUsedKeysByKind(snapshots, BUNDLED_KINDS);
+}
+
+/**
+ * ステップ12b QA指摘M1（2026-09-24再報告）: 未保存の作業中の編集を含む「現在の」使用キーを返す。
+ * collectCatalogUsageAcrossFloors（loadAllSavedFloors由来）は最後に明示保存（saveToIDB）した
+ * 内容しか見ないため、保存前にui/CatalogMaintenancePanel.jsx（材料タブ）で材を削除すると、
+ * 実際には使用中なのに「未使用」と誤判定され、docAppendされず文書同梱への書き写しが行われない
+ * まま削除されて参照が宙に浮く（Q9違反）。
+ * 手順:
+ * (1) floorSwapManager.flushEditablePeek() で構造モードの編集可能peek（1つ下の階を伏図から
+ *     直接編集する経路）の保留中デバウンス保存を確定する（saveToIDBの①と同じ）。
+ * (2) アクティブ階の現在のグラフを floors（作業領域store）へ明示的に書き出す——saveNowが行う
+ *     階部分の保存（saveFloor(plane.id, serializeGraph(graph))）と同じ書込みを、明示保存前に
+ *     前倒しで行うだけ（非アクティブ階は switchFloor のたびに floorSwapManager.deactivate が
+ *     同じstoreへ既に書いているため、ここではアクティブ階だけを追い書きすればよい）。
+ *     savedFloors（文書）・projects等は一切書かない——使用キー収集に不要な副作用を増やさない。
+ * (3) project.planeMap の全階ぶん floors（loadFloor）から decode し、collectUsedKeysByKind→
+ *     expandUsedMaterialsTransitively で内装・境界マスター経由の推移参照までmaterialへ展開する
+ *     （saveCatalogDocumentと同じ判定式を共有——二重実装しない。QA指摘m3もこれで解消: 削除確認の
+ *     使用中判定が推移参照を見落とす穴が無くなる）。
+ * @returns {Promise<Map<string, Set<string>>>} kind → 使用キーのSet（BUNDLED_KINDS）
+ */
+export async function collectCurrentCatalogUsage() {
+  await floorSwapManager.flushEditablePeek();
+
+  const activePlane = project.activePlane;
+  const activeGraph = project.activeGraph;
+  if (activePlane && activeGraph) {
+    await saveFloor(activePlane.id, serializeGraph(activeGraph));
+  }
+
+  const floorBytesList = await Promise.all([...project.planeMap.keys()].map(id => loadFloor(id)));
+  const snapshots = floorBytesList.filter(Boolean).map(bytes => decodeFloorSnapshot(bytes));
+  const rawUsedKeysByKind = collectUsedKeysByKind(snapshots, BUNDLED_KINDS);
+
+  const builtinLists = await Promise.all(BUNDLED_KINDS.map(kind => kindDef(kind).loadBuiltin()));
+  const resolvedByKind = new Map(BUNDLED_KINDS.map((kind, i) => [kind, composeCatalog(kind, builtinLists[i])]));
+
+  return expandUsedMaterialsTransitively(rawUsedKeysByKind, resolvedByKind);
 }
 
 /**
@@ -664,19 +709,16 @@ async function saveCatalogDocument(floorRecords) {
     return;
   }
 
-  const usedKeysByKind = await collectCatalogUsageAcrossFloors(floorRecords);
+  const rawUsedKeysByKind = await collectCatalogUsageAcrossFloors(floorRecords);
 
   const builtinLists = await Promise.all(BUNDLED_KINDS.map(kind => kindDef(kind).loadBuiltin()));
   const resolvedByKind = new Map(BUNDLED_KINDS.map((kind, i) => [kind, composeCatalog(kind, builtinLists[i])]));
 
-  const usedInteriorMasters = [...usedKeysByKind.get(CatalogKind.INTERIOR_MASTER)]
-    .map(k => resolvedByKind.get(CatalogKind.INTERIOR_MASTER).get(k)).filter(Boolean);
-  const usedBoundaryMasters = [...usedKeysByKind.get(CatalogKind.BOUNDARY_MASTER)]
-    .map(k => resolvedByKind.get(CatalogKind.BOUNDARY_MASTER).get(k)).filter(Boolean);
-  usedKeysByKind.set(CatalogKind.MATERIAL, expandTransitiveMaterials(usedKeysByKind.get(CatalogKind.MATERIAL), {
-    interiorMasters: usedInteriorMasters,
-    boundaryMasters: usedBoundaryMasters,
-  }));
+  // ステップ12b QA指摘M1/m3（2026-09-24再報告）: 内装・境界マスター経由の材コードの推移展開は
+  // catalog/usedEntries.js の expandUsedMaterialsTransitively へ集約する——store.js
+  // collectCurrentCatalogUsage（削除確認の「現在の使用キー」収集）と同じ判定式を共有し、
+  // 二重実装しない（片方だけ内装・境界マスター経路を外す退行を1箇所の修正で防ぐ）。
+  const usedKeysByKind = expandUsedMaterialsTransitively(rawUsedKeysByKind, resolvedByKind);
 
   // QA指摘Minor-4: 空の種別を手元でふるい落とさなくても、splitBundleByKindのbundleAliases側が
   // 「非空のときだけ添える」判定を持つため設計上は同値——フィルタの唯一の判定箇所をそちらに寄せる。

@@ -470,17 +470,47 @@ test('【不変条件・ステップ7c・Major-1】store.js: collectCatalogUsage
   );
 });
 
-// ステップ7c: 内装マスター・境界マスターが参照する材コードを推移的にmaterial側へ含める経路
-// （expandTransitiveMaterialsへ両方の使用済みマスターを渡す）を固定する。片方だけ外す退行を検知。
-test('【不変条件・ステップ7c】store.js: saveCatalogDocumentはexpandTransitiveMaterialsにusedInteriorMasters・usedBoundaryMastersの両方を渡している', () => {
+// ステップ7c→12b改訂（QA指摘M1・2026-09-24再報告）: 内装マスター・境界マスターが参照する
+// 材コードを推移的にmaterial側へ含める経路。この展開そのもの（interiorMasters/boundaryMasters
+// を両方expandTransitiveMaterialsへ渡す判定）はcatalog/usedEntries.jsのexpandUsedMaterials
+// Transitivelyへ一本化した——store.js collectCurrentCatalogUsage（削除確認の「現在の使用キー」
+// 収集）も同じ関数を呼ぶことで二重実装しない（usedEntries.test.js側で展開ロジック自体を検証、
+// ここではsaveCatalogDocumentがその共有関数を経由していることだけを固定する）。
+test('【不変条件・ステップ7c→12b改訂】store.js: saveCatalogDocumentはexpandUsedMaterialsTransitively(rawUsedKeysByKind, resolvedByKind)経由でmaterialの推移展開を行う（interiorMasters/boundaryMastersの二重実装への退行を検知）', () => {
   const src = readSrc('store.js');
   const body = extractBalancedBody(src, 'async function saveCatalogDocument(floorRecords) {');
   assert.ok(body, 'store.js に saveCatalogDocument が見つからない');
-  const callMatch = /expandTransitiveMaterials\(([\s\S]*?)\)\)/.exec(body);
-  assert.ok(callMatch, 'saveCatalogDocument が expandTransitiveMaterials を呼んでいない');
-  const args = callMatch[1];
-  assert.ok(/interiorMasters\s*:\s*usedInteriorMasters/.test(args), 'expandTransitiveMaterials に interiorMasters: usedInteriorMasters が渡されていない（内装マスター経路が外れる退行）');
-  assert.ok(/boundaryMasters\s*:\s*usedBoundaryMasters/.test(args), 'expandTransitiveMaterials に boundaryMasters: usedBoundaryMasters が渡されていない（境界マスター経路が外れる退行）');
+  assert.ok(
+    /const usedKeysByKind = expandUsedMaterialsTransitively\(\s*rawUsedKeysByKind,\s*resolvedByKind\s*\);/.test(body),
+    'saveCatalogDocument が expandUsedMaterialsTransitively(rawUsedKeysByKind, resolvedByKind) を呼んでいない',
+  );
+  // 展開ロジック（usedInteriorMasters/usedBoundaryMastersの手組み立て・expandTransitiveMaterials
+  // 直接呼び出し）をsaveCatalogDocument側で再実装していないことを固定する。
+  assert.ok(
+    !/\bexpandTransitiveMaterials\(/.test(body),
+    'saveCatalogDocument が expandTransitiveMaterials を直接呼んでいる（expandUsedMaterialsTransitivelyへの一本化から後退）',
+  );
+});
+
+test('【不変条件・QA指摘M1・2026-09-24再報告】store.js: collectCurrentCatalogUsageが存在し、flushEditablePeek→アクティブ階のsaveFloor→全階のloadFloor→collectUsedKeysByKind→expandUsedMaterialsTransitivelyの手順で「未保存を含む現在の」使用キーを返す', () => {
+  const src = readSrc('store.js');
+  const body = extractBalancedBody(src, 'export async function collectCurrentCatalogUsage() {');
+  assert.ok(body, 'store.js に collectCurrentCatalogUsage が見つからない（exportされていない可能性）');
+  assert.ok(/floorSwapManager\.flushEditablePeek\(\)/.test(body), 'collectCurrentCatalogUsage が floorSwapManager.flushEditablePeek() を呼んでいない');
+  assert.ok(/saveFloor\(\s*activePlane\.id,\s*serializeGraph\(activeGraph\)\s*\)/.test(body), 'collectCurrentCatalogUsage がアクティブ階を saveFloor で作業領域へ書き出していない（未保存編集が漏れる）');
+  assert.ok(/loadFloor\(/.test(body), 'collectCurrentCatalogUsage が loadFloor で全階を読んでいない');
+  assert.ok(/collectUsedKeysByKind\(\s*snapshots,\s*BUNDLED_KINDS\s*\)/.test(body), 'collectCurrentCatalogUsage が collectUsedKeysByKind(snapshots, BUNDLED_KINDS) を呼んでいない');
+  assert.ok(
+    /return expandUsedMaterialsTransitively\(\s*rawUsedKeysByKind,\s*resolvedByKind\s*\);/.test(body),
+    'collectCurrentCatalogUsage が expandUsedMaterialsTransitively(rawUsedKeysByKind, resolvedByKind) を返していない',
+  );
+  // 順序: flushEditablePeek → saveFloor(アクティブ階) → loadFloorループ の順であること
+  // （アクティブ階を書き出す前に読んでしまうと、書出し前の古い内容を読む競合になる）。
+  const flushIdx = body.indexOf('flushEditablePeek(');
+  const saveFloorIdx = body.indexOf('saveFloor(');
+  const loadFloorIdx = body.indexOf('loadFloor(');
+  assert.ok(flushIdx >= 0 && saveFloorIdx > flushIdx, 'flushEditablePeek は saveFloor より前に呼ぶ契約');
+  assert.ok(saveFloorIdx >= 0 && loadFloorIdx > saveFloorIdx, 'アクティブ階の saveFloor は loadFloor ループより前に呼ぶ契約（書込み前に読む競合を防ぐ）');
 });
 
 // ステップ7c→QA指摘Major-1改訂: 使用0件の種別も空配列で必ず書く（4.3「参照されなくなった
