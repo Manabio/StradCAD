@@ -20,8 +20,7 @@ import {
 import { arcPathD } from './ShapesLayer.jsx';
 import { LodLevel, resolveStrokeWidth } from '../viewport.js';
 import { wallFinishLineWeight } from '../finish/wallFinishJoin.js';
-
-const TICK_HALF_MM  = 30;
+import { buildOpeningPlanSymbol, tickEndpoints } from '../openings/openingPlanSymbol.js';
 
 // 引き違い 詳細LOD用（すべて mm）
 const SLIDE_TRACK_INSET_MM = 4;       // 枠から戸先・召し合わせレールまでの隙間
@@ -605,18 +604,15 @@ function slideDoubleDetailSymbol(opening, band, sp, fsp) {
 }
 
 // 記号未実装の機構: 開口端に短いティックマーク2本のみ描き、ギャップの存在を視認できるようにする
+// 端点の生成（TICK_HALF_MM・toWorldの適用）は openings/openingPlanSymbol.js tickEndpoints に
+// 一本化——この関数（旧経路。shutterSymbol・末尾フォールバックが呼ぶ）は座標をKonva Lineの
+// pointsへ機械的に展開するだけ（QA指摘: 定数・生成処理の二重管理防止）。
 function tickSymbol(opening, band, sp) {
-  const { coord1, coord2, isVertical } = opening;
-  const axisValue = band.center;
-  const tick = (along) => {
-    const a = toWorld(isVertical, along, axisValue - TICK_HALF_MM);
-    const b = toWorld(isVertical, along, axisValue + TICK_HALF_MM);
-    return [a.x, a.y, b.x, b.y];
-  };
+  const [[a1, b1], [a2, b2]] = tickEndpoints(opening, band);
   return (
     <>
-      <Line points={tick(coord1)} {...sp} />
-      <Line points={tick(coord2)} {...sp} />
+      <Line points={[a1.x, a1.y, b1.x, b1.y]} {...sp} />
+      <Line points={[a2.x, a2.y, b2.x, b2.y]} {...sp} />
     </>
   );
 }
@@ -696,6 +692,26 @@ export const OpeningsLayer = observer(({ graph, viewport }) => {
   // 流儀（ユーザー指示 2026-09-14）。App.jsx の cursor 算出（nearOpening 等）は壁線近傍しか見ないため、
   // 壁から離れた動作弧などは Konva のホバーで補う。
   const setCursor = (e, cursor) => { e.target.getStage().container().style.cursor = cursor; };
+
+  // openings/openingPlanSymbol.js の PlanPrimitive 1件をKonva要素へ機械的に変換する
+  // （判断は持たない。太さの解決＝weightMm→strokeWidthだけがここの仕事）。移行済みの機構
+  // （現状: SCHEMATICのtick・引き違いleaf。11b〜で機構を追加していく。11eで旧経路を削除する
+  // まで、buildOpeningPlanSymbolがnullを返すケース（STANDARD/DETAILの未移行機構）は
+  // このヘルパを経由せず従来どおり関数コンポーネント（swingSymbol等）が直接描く）。
+  function renderPlanPrimitive(p, i, base) {
+    const sp = {
+      ...base,
+      strokeWidth: resolveStrokeWidth(p.weightMm, Math.min(scaleX, scaleY), viewport.lineWeightsPx, viewport.pxPerMmX),
+    };
+    switch (p.type) {
+      case 'line':     return <Line key={i} points={[p.x1, p.y1, p.x2, p.y2]} dash={p.dash} {...sp} />;
+      case 'polyline': return <Line key={i} points={p.points} closed={p.closed} fill="transparent" {...sp} />;
+      case 'rect':     return <Rect key={i} x={p.x} y={p.y} width={p.w} height={p.h} dash={p.dash} fill="transparent" {...sp} />;
+      case 'arc':      return <Path key={i} data={arcPathD(p.cx, p.cy, p.r, p.startDeg, p.sweepDeg)} dash={p.dash} fill="transparent" {...sp} />;
+      default:         return null;
+    }
+  }
+
   return graph.openings.map((opening) => {
     const el = renderOpeningSymbol(opening);
     return el ? (
@@ -749,6 +765,20 @@ export const OpeningsLayer = observer(({ graph, viewport }) => {
     const [faceLo, faceHi] = faceRangeByHostId
       ? (faceRangeByHostId.get(host.id) ?? wallFaceRange(host, graph))
       : [undefined, undefined];
+
+    // ステップ11「作図P2」: 移行済みの判断は openings/openingPlanSymbol.js（純関数）へ委ねる。
+    // nullは「まだ移行していない機構（STANDARD/DETAILのIMPLEMENTED_MECHANISMS）」の合図——
+    // その場合は以降の旧経路（この関数の残り）をそのまま実行する（11b〜11eで機構ごとに置き換え、
+    // 11eでこのnull分岐自体を削除する）。
+    const prims = buildOpeningPlanSymbol(opening, {
+      entry, lodLevel, axisValue: host.axisValue, faceLo, faceHi,
+      exteriorDirOf: () => openingExteriorDir(host, graph, opening.centerCoord),
+    });
+    if (prims) {
+      const base = { stroke: opening.color, listening: true, hitStrokeWidth, fillEnabled: false };
+      return <Fragment key={opening.id}>{prims.map((p, i) => renderPlanPrimitive(p, i, base))}</Fragment>;
+    }
+
     const band = detail
       ? (() => {
           const exteriorDir = opening.frameDepth > 0 ? openingExteriorDir(host, graph, opening.centerCoord) : undefined;

@@ -73,6 +73,14 @@ const round = (v) => Math.round(v);
 // イベントハンドラ（onXxx）・key・children は除外し、props キーは sort、数値は丸めない。
 // 正規化は「閉じていない Line の fill を無視」の1点のみ（fillEnabled:false で無効化されている
 // ため描画上意味を持たない差異を検出力に含めない）。
+//
+// 注記（QA指摘・ステップ11a再報告分）: ここで収集した props はキー自体を落とさない
+// （`dash: undefined` のような明示的にundefined値を持つキーもオブジェクトには残る）が、
+// before/after の突合せ（openingPlanSymbolDiff.mjs）は JSON.stringify で比較しており、
+// JSON.stringify は値がundefinedのキーを出力から自動的に落とす。そのため「propに
+// `dash`キー自体が存在しない（旧経路）」と「`dash:undefined`というキーがある（新経路。
+// 例: `<Line dash={p.dash} .../>` でp.dashが未定義のとき）」はこのprobeでは区別できない
+// ——検出力の既知の穴（両者は描画上・Konvaの実際のprops解決上も等価なため実害はない）。
 function flattenNode(node, out) {
   if (node == null || node === false || node === true) return;
   if (Array.isArray(node)) { for (const c of node) flattenNode(c, out); return; }
