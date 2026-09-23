@@ -292,7 +292,8 @@ export function defaultOpeningHeight(category, subType) {
 
 /** 建具記号に応じた「材料・ガラス」欄の既定値（DEFAULT_MATERIALS参照）。未知の記号はnull。 */
 export function defaultMaterialGlassFor(symbol) {
-  return DEFAULT_MATERIALS[symbol] ?? null;
+  // plain object の prototype 名（'constructor' 等）がユーザー記号として来ても関数を返さない（QA指摘・2026-09-23）
+  return (typeof symbol === 'string' && Object.hasOwn(DEFAULT_MATERIALS, symbol)) ? DEFAULT_MATERIALS[symbol] : null;
 }
 
 /**

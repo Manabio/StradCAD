@@ -103,8 +103,12 @@ test('Opening.fixtureType: JW も往復する', () => {
   assert.equal(o2.sillHeight, 0, '0mm（掃き出し窓相当）は null と区別されて保持される');
 });
 
-// ---- 失敗系: 未知の fixtureType（想定外値・データ破損等）----
-test('Opening.fixtureType: 未知の値("XX")は encode→decode で例外にならずnullへフォールバックし、他フィールドは無傷', () => {
+// ---- 未知記号（ユーザー追加分。列挙 FIXTURE_TYPE_ENC に無い記号）----
+// ステップ10g（2026-09-23）: Q5裁定によりユーザー追加記号を認めるため、FIXTURE_TYPE_STR（文字列
+// フィールド、Opening末尾に追加）に生の記号を書く。旧仕様（列挙のみ）では null にフォールバック
+// していたが、現仕様では記号そのものが往復する。int8側（OP.FIXTURE_TYPE）は0のまま書かれるため、
+// この文字列フィールドを持たない旧ビルドで読むと未知記号はnull→カテゴリ既定記号に落ちる（片方向非互換）。
+test('Opening.fixtureType: 未知の値("XX")は encode→decode で例外にならず記号そのまま往復し、他フィールドは無傷', () => {
   const { graph, opening } = makeGraphWithWindow({ fixtureType: 'XX', sillHeight: 950 });
 
   const bytes = serializeGraph(graph);
@@ -113,11 +117,50 @@ test('Opening.fixtureType: 未知の値("XX")は encode→decode で例外にな
 
   const o2 = restored.shapeMap.get(opening.id);
   assert.ok(o2);
-  assert.equal(o2.fixtureType, null, '未知のenum値はFIXTURE_TYPE_ENCに無いため0(なし)相当でエンコードされ、復元時null');
-  assert.equal(o2.sillHeight, 950, 'fixtureTypeが無効でも他フィールドは無傷');
+  assert.equal(o2.fixtureType, 'XX', '列挙に無い記号はFIXTURE_TYPE_STRへ書かれ、復元時そのまま返る');
+  assert.equal(o2.sillHeight, 950, 'fixtureTypeが未知でも他フィールドは無傷');
   assert.equal(o2.width, 1690);
   assert.equal(o2.subType, 'doubleSliding');
   assert.equal(o2.category, OpeningCategory.WINDOW);
+});
+
+// ---- 既知記号は文字列フィールドを使わない（新フィールドはユーザー追加記号専用。既存データのバイト数は増えない）----
+test('Opening.fixtureType: 既知記号(AW)はFIXTURE_TYPE_STRへ書かれず、未知記号より書込みバイト数が少ない', () => {
+  const known   = makeGraphWithWindow({ fixtureType: 'AW', sillHeight: 800 });
+  const unknown = makeGraphWithWindow({ fixtureType: 'ZZ', sillHeight: 800 });
+
+  const knownBytes   = serializeGraph(known.graph);
+  const unknownBytes = serializeGraph(unknown.graph);
+
+  assert.ok(
+    unknownBytes.length > knownBytes.length,
+    '既知記号はFIXTURE_TYPE_STRを書かないため、未知記号より短い（新フィールドが既存データを肥大化させない証拠）',
+  );
+  assert.ok(
+    unknownBytes.length < knownBytes.length + 32,
+    '差分は文字列フィールド1個分程度（オフセット4B+vtable2B+文字列本体+パディング）に収まる',
+  );
+
+  const restored = makeGraph();
+  restoreGraph(restored, knownBytes);
+  assert.equal(restored.shapeMap.get(known.opening.id).fixtureType, 'AW');
+});
+
+test('Opening.fixtureType: 既知記号(AW)のバイト長は未設定(null)と完全一致する（既存文書は1バイトも増えない）', () => {
+  const known = makeGraphWithWindow({ fixtureType: 'AW', sillHeight: 800 });
+  const none  = makeGraphWithWindow({ fixtureType: null, sillHeight: 800 });
+  assert.equal(serializeGraph(known.graph).length, serializeGraph(none.graph).length);
+});
+
+// QA指摘Minor-1（10g・2026-09-23）: FIXTURE_TYPE_ENC は plain object なので 'constructor' 等の prototype 名を
+// `=== undefined` で判定すると既知扱いになり、文字列にも int8 にも書かれず往復で null に消えていた。
+test('Opening.fixtureType: prototype名の記号(constructor/toString)も他の未知記号と同じく往復する', () => {
+  for (const sym of ['constructor', 'toString', '__proto__']) {
+    const { graph, opening } = makeGraphWithWindow({ fixtureType: sym, sillHeight: 800 });
+    const restored = makeGraph();
+    restoreGraph(restored, serializeGraph(graph));
+    assert.equal(restored.shapeMap.get(opening.id).fixtureType, sym, `記号 ${sym} が往復しない`);
+  }
 });
 
 // ---- Opening削除→undo相当の復元（App.jsx handleMenuSelect 'opening-del' と同じ操作パターン）----

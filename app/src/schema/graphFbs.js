@@ -184,7 +184,7 @@ const SHS = {
 const SITE_KIND_ENC = { boundary: 0, road: 1, survey: 2, roadWidth: 3, other: 4 };
 const SITE_KIND_DEC = ['boundary', 'road', 'survey', 'roadWidth', 'other'];
 
-// Opening: 27 フィールド（開口 — 建具・窓）
+// Opening: 28 フィールド（開口 — 建具・窓）
 const OP = {
   ID: 0, AXIS_CL: 1, WALL_SIDE: 2, IS_V: 3,
   REF_CL: 4, REF_OFF: 5, WIDTH: 6, CATEGORY: 7, SUB_TYPE: 8,
@@ -199,6 +199,9 @@ const OP = {
   HANDLE_H: 24, // レバーハンドル取付高さ(mm)。0=未設定（heightと同じ規約）
   FRAME_FACE_W: 25, // 三方枠の見付(mm)。0=未設定（heightと同じ規約）
   FRAME_PROJ: 26, // 三方枠の壁面からの出幅(mm)。0=未設定（heightと同じ規約）
+  // 建具記号の文字列（列挙 FIXTURE_TYPE に無いユーザー記号のみ。ステップ10g・2026-09-23）。
+  // 新 .stq を旧ビルドで開くと未知記号は null→カテゴリ既定記号に落ちる片方向非互換（4.4.1 と同型）。
+  FIXTURE_TYPE_STR: 27,
 };
 
 // Opening.category 列挙値エンコード
@@ -449,8 +452,14 @@ function writeOpening(b, o) {
   const bp     = strBase(b, o);
 
   const hasSillH = o.sillHeight != null;
+  // 列挙 FIXTURE_TYPE_ENC に無い記号（ユーザー追加分）のときだけ文字列を書く。既知記号・未設定は省略（フィールドindex27を再利用しない）
+  // 判定は Object.hasOwn（plain object の prototype 名 'constructor'/'toString' 等がユーザー記号として来ても
+  // 黙って消えないように。QA指摘Minor-1・2026-09-23）。文字列以外は記号として扱わない。
+  const fixKnown = typeof o.fixtureType === 'string' && Object.hasOwn(FIXTURE_TYPE_ENC, o.fixtureType);
+  const fixStr = (typeof o.fixtureType === 'string' && o.fixtureType && !fixKnown) ? o.fixtureType : '';
+  const sFixtureTypeStr = fixStr ? b.createString(fixStr) : 0;
 
-  b.startObject(27);
+  b.startObject(28);
   b.addFieldOffset(OP.ID,         sId,   0);
   b.addFieldOffset(OP.AXIS_CL,    sAxis, 0);
   b.addFieldInt8(OP.WALL_SIDE,    o.wallSide < 0 ? -1 : 1, 0);
@@ -466,7 +475,7 @@ function writeOpening(b, o) {
   b.addFieldFloat64(OP.LW,        o.lineWeight ?? 0.25, 0.0);
   b.addFieldOffset(OP.LT,         bp.lt,   0);
   b.addFieldOffset(OP.COL,        bp.col,  0);
-  b.addFieldInt8(OP.FIXTURE_TYPE, FIXTURE_TYPE_ENC[o.fixtureType] ?? 0, 0);
+  b.addFieldInt8(OP.FIXTURE_TYPE, fixKnown ? FIXTURE_TYPE_ENC[o.fixtureType] : 0, 0);
   b.addFieldInt8(OP.HAS_SILL_H,   hasSillH ? 1 : 0, 0);
   b.addFieldFloat64(OP.SILL_H,    hasSillH ? o.sillHeight : 0, 0.0);
   b.addFieldFloat64(OP.HEIGHT,    o.height ?? 0, 0.0);
@@ -478,6 +487,7 @@ function writeOpening(b, o) {
   b.addFieldFloat64(OP.HANDLE_H,      o.handleHeight ?? 0, 0.0);
   b.addFieldFloat64(OP.FRAME_FACE_W,  o.frameFaceWidth ?? 0, 0.0);
   b.addFieldFloat64(OP.FRAME_PROJ,    o.frameProjection ?? 0, 0.0);
+  b.addFieldOffset(OP.FIXTURE_TYPE_STR, sFixtureTypeStr, 0);
   return b.endObject();
 }
 
@@ -1202,7 +1212,8 @@ function readOpening(bb, tablePos) {
     lineWeight:  r.f64(OP.LW)   || 0.25,
     lineType:    r.str(OP.LT)   || 'solid',
     color:       r.str(OP.COL)  || '#000000',
-    fixtureType: FIXTURE_TYPE_DEC[r.i8(OP.FIXTURE_TYPE)] ?? null,
+    // 文字列（ユーザー追加記号）があれば優先。無ければ列挙値、それも無ければ null（旧データ・未設定）
+    fixtureType: r.str(OP.FIXTURE_TYPE_STR) || (FIXTURE_TYPE_DEC[r.i8(OP.FIXTURE_TYPE)] ?? null),
     sillHeight:  r.i8(OP.HAS_SILL_H) !== 0 ? r.f64(OP.SILL_H) : null,
     height:      r.f64(OP.HEIGHT) || null,
     finish:        r.str(OP.FINISH)         || null,

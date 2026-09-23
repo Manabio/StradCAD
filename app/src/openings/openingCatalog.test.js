@@ -39,6 +39,12 @@ test('defaultMaterialGlassFor: 記号ごとの初期値を返す', () => {
   assert.equal(defaultMaterialGlassFor('SD'), 'スチール');
 });
 
+test('【失敗系】defaultMaterialGlassFor: 未知の記号・prototype名・非文字列はnull（関数を返さない）', () => {
+  for (const sym of ['XX', 'constructor', 'toString', 'valueOf', '__proto__', null, undefined, 12]) {
+    assert.equal(defaultMaterialGlassFor(sym), null, `記号 ${String(sym)} で null にならない`);
+  }
+});
+
 test('defaultMaterialGlassFor: 未知の記号はnull', () => {
   assert.equal(defaultMaterialGlassFor('XX'), null);
 });
