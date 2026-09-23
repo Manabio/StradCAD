@@ -48,6 +48,39 @@ export const KNOWN_OPENING_MECHANISMS = Object.freeze([
 const KNOWN_OPENING_MECHANISMS_SET = new Set(KNOWN_OPENING_MECHANISMS);
 
 /**
+ * ステップ12i（開発者向けエクスポート）: KNOWN_OPENING_MECHANISMS と同じ並び順
+ * （openings/openingCatalog.js OpeningMechanism の定義順と一致）で、値 → 定数名
+ * （例: 'swing' → 'SWING'）を引く逆引き表。catalog/catalogMaintenance.js
+ * formatCatalogSourceLine が `mechanism: OpeningMechanism.SWING` のような、本体ソースが
+ * 実際に書いている定数参照の形でエクスポート文字列を組み立てるために使う（生の文字列値
+ * 'swing' をそのまま書き出すと本体ソースの行と一致しない）。対応がずれたら
+ * catalogRealMasters.test.js が OpeningMechanism の全キーとの一致で検出する。
+ */
+const KNOWN_OPENING_MECHANISM_CONST_NAMES = Object.freeze([
+  'SWING', 'SLIDE_DOUBLE', 'SLIDE_SINGLE', 'FOLD', 'FREE', 'FIXED', 'HUNG', 'AWNING', 'TILT',
+  'LOUVER', 'PIVOT', 'SWING_DOUBLE', 'SWING_CHILD', 'SWING_IN', 'FREE_DOUBLE', 'SHUTTER', 'OVERHEAD',
+  'EMERGENCY', 'FIRE_DOOR', 'FIRE_FOLD', 'SLIDE_LAYOUT', 'PROJECT_V', 'PROJECT_OUT', 'TILT_OUT',
+  'PIVOT_H', 'DREH_KIPP', 'AWNING_MULTI', 'GARARI', 'GLASS_BLOCK', 'FRAME_ONLY',
+]);
+export const OPENING_MECHANISM_CONST_NAMES = Object.freeze(
+  Object.fromEntries(KNOWN_OPENING_MECHANISMS.map((value, i) => [value, KNOWN_OPENING_MECHANISM_CONST_NAMES[i]])),
+);
+
+/**
+ * ステップ12i（開発者向けエクスポート）: structural/sectionCatalog.js SectionShape の値 → 定数名
+ * （例: 'squarePipe' → 'SQUARE_PIPE'）の逆引き表。OPENING_MECHANISM_CONST_NAMESと同じ役割・
+ * 同じ複製規約（catalog/*.js は structural/sectionCatalog.js を静的importできないため値だけを
+ * 複製する）。catalogRealMasters.test.js で SectionShape の全キーとの一致を固定する。
+ */
+export const SECTION_SHAPE_CONST_NAMES = Object.freeze({
+  squarePipe: 'SQUARE_PIPE',
+  hSection:   'H_SECTION',
+  roundPipe:  'ROUND_PIPE',
+  rect:       'RECT',
+  round:      'ROUND',
+});
+
+/**
  * 建具記号（fixtureSymbol）のprofile（平面記号の断面描き分け。frameOnlyJambProfiles参照）の
  * 既知値。'solid'=木材の無垢断面（閉じた矩形）、'bent'=鋼板の曲げ加工（開いたコの字＋返し）。
  * QA指摘n8（2026-09-24再報告）: 唯一の定義箇所——FIXTURE_SYMBOL登録表のisSupported・

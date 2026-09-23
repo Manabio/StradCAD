@@ -19,6 +19,7 @@ import {
   openingSubTypeFormFromEntry, buildOpeningSubTypeEntry, validateOpeningSubTypeForm,
   openingSubTypeFormFieldsFor, openingSubTypeRowDisabledReason,
   formatMechanismLabel, OPENING_SUB_TYPE_MECHANISM_LABELS,
+  collectExportableEntries, formatBuiltinSource, formatCatalogSourceLine,
 } from './catalogMaintenance.js';
 import { setOverlay, clearOverlays, overlayFor, docDiffMap, composeCatalog } from './catalogRegistry.js';
 import { valuesEqual } from './catalogMatch.js';
@@ -2619,4 +2620,159 @@ test('planSaveEntry(OPENING_SUB_TYPE): labelの変更はbuiltin行でも通り�
   assert.equal(result.ok, true);
   assert.equal(result.nextUser[0].overridesBuiltin, true);
   assert.equal(result.nextUser[0].label, '新しい呼称');
+});
+
+// ================================================================
+// ステップ12i（開発者向けエクスポート。4.2）: collectExportableEntries・formatBuiltinSource・
+// formatCatalogSourceLine。本体ソースの該当行と一致することの確認はcatalogRealMasters.test.js
+// （実マスタ130件・45件・10件・3件を対象に一致を固定）で行う——ここでは分類・見出し・
+// 失敗系（未知の種別・未知の機構・未知の断面形状）を確認する。
+// ================================================================
+
+// ---- collectExportableEntries ----
+test('collectExportableEntries: overlay.userのうちoverridesBuiltin:trueは上書き分、builtinに無いキーは追加分に分類される', () => {
+  const builtinList = [material({ code: '301000000001' })];
+  setOverlay(CatalogKind.MATERIAL, {
+    doc: [],
+    user: [
+      material({ code: '301000000001', name: '上書き後', overridesBuiltin: true }),
+      material({ code: '301999999999', name: '追加分' }),
+    ],
+  });
+  const { overrides, additions } = collectExportableEntries(CatalogKind.MATERIAL, { builtinList });
+  assert.equal(overrides.length, 1);
+  assert.equal(overrides[0].code, '301000000001');
+  assert.equal(additions.length, 1);
+  assert.equal(additions[0].code, '301999999999');
+});
+
+test('collectExportableEntries: overridesBuiltinフラグが無くてもbuiltin同キーは上書き分に分類される（isBuiltinOverrideの規約）', () => {
+  const builtinList = [material({ code: '301000000001' })];
+  setOverlay(CatalogKind.MATERIAL, { doc: [], user: [material({ code: '301000000001', name: '旧データ' })] });
+  const { overrides, additions } = collectExportableEntries(CatalogKind.MATERIAL, { builtinList });
+  assert.equal(overrides.length, 1);
+  assert.equal(additions.length, 0);
+});
+
+test('【失敗系】collectExportableEntries: userライブラリが空なら上書き分・追加分とも空配列', () => {
+  const { overrides, additions } = collectExportableEntries(CatalogKind.MATERIAL, { builtinList: [] });
+  assert.deepEqual(overrides, []);
+  assert.deepEqual(additions, []);
+});
+
+// QA指摘M2（2026-09-24再報告）: 抽出元はoverlayFor(kind).userのみ——doc（文書同梱）だけに
+// あってuserに無いキーはエクスポート対象外（同梱は「保存済み文書に含まれる」出所であり、
+// 開発者が本体へ反映すべき「userライブラリの内容」ではない）。builtinも空にして、
+// docの1件が上書き・追加のどちらにも紛れ込まないことを確認する。
+test('【失敗系】collectExportableEntries: docのみにあるエントリ（userには無い）は上書き分・追加分のどちらにも入らない', () => {
+  setOverlay(CatalogKind.MATERIAL, {
+    doc: [material({ code: '301888888888', name: '同梱のみ' })],
+    user: [],
+  });
+  const { overrides, additions } = collectExportableEntries(CatalogKind.MATERIAL, { builtinList: [] });
+  assert.deepEqual(overrides, []);
+  assert.deepEqual(additions, []);
+});
+
+// ---- formatBuiltinSource ----
+test('formatBuiltinSource: 上書き分に「// 上書き: <key>（標準を置き換え）」、追加分に「// 追加」の見出しが付く', () => {
+  const builtinKeys = new Set(['301000000001']);
+  const entries = [
+    material({ code: '301000000001', name: '上書き後', overridesBuiltin: true }),
+    material({ code: '301999999999', name: '追加分' }),
+  ];
+  const { overrides, additions } = formatBuiltinSource(CatalogKind.MATERIAL, entries, { builtinKeys });
+  assert.match(overrides, /^\/\/ 上書き: 301000000001（標準を置き換え）/);
+  assert.match(additions, /^\/\/ 追加/);
+  assert.ok(overrides.includes("code: '301000000001'"));
+  assert.ok(additions.includes("code: '301999999999'"));
+});
+
+test('formatBuiltinSource: 見出しに配置先の案内（対象配列）が括弧書きで付く（材のcategory別。下地材→BACKING）', () => {
+  const entries = [material({ code: '201999999999', category: 'backing', x: 100, y: 50, backingClass: 'wood' })];
+  const { additions } = formatBuiltinSource(CatalogKind.MATERIAL, entries, { builtinKeys: new Set() });
+  assert.ok(additions.includes('対象配列: BACKING'), additions);
+});
+
+// QA指摘N1（2026-09-24再報告）: category対応表に無い値（未知category）は「?」へ黙って丸めず、
+// 「不明（category=xxx）」で実際の値を出す。
+test('formatBuiltinSource: 未知のcategoryは見出しに「対象配列: 不明（category=xxx）」を出す（黙って"?"にしない）', () => {
+  const entries = [material({ code: '301777777777', category: 'unknownCategory' })];
+  const { additions } = formatBuiltinSource(CatalogKind.MATERIAL, entries, { builtinKeys: new Set() });
+  assert.ok(additions.includes('対象配列: 不明（category=unknownCategory）'), additions);
+});
+
+// QA指摘M2（2026-09-24再報告）: isBuiltinOverrideの判定式（entry.overridesBuiltin フラグ OR
+// builtinKeys.has(key)）のうち、フラグが無くてもbuiltinKeysに含まれていれば「上書き」扱いになる
+// ことをformatBuiltinSource側でも固定する（collectExportableEntries側の同型テストは既にあるが、
+// formatBuiltinSourceは独立して同じ判定式を持つため別に固定する——どちらかだけ直す退行を防ぐ）。
+test('formatBuiltinSource: overridesBuiltinフラグが無くてもbuiltinKeysに含まれるキーは「// 上書き:」見出しになる', () => {
+  const builtinKeys = new Set(['301000000001']);
+  const entries = [material({ code: '301000000001', name: '旧データ（フラグ無し）' })];
+  const { overrides, additions } = formatBuiltinSource(CatalogKind.MATERIAL, entries, { builtinKeys });
+  assert.match(overrides, /^\/\/ 上書き: 301000000001（標準を置き換え）/);
+  assert.equal(additions, '');
+});
+
+test('【失敗系】formatBuiltinSource: entries省略・空配列は{overrides:"",additions:""}', () => {
+  assert.deepEqual(formatBuiltinSource(CatalogKind.MATERIAL, []), { overrides: '', additions: '' });
+  assert.deepEqual(formatBuiltinSource(CatalogKind.MATERIAL, undefined), { overrides: '', additions: '' });
+});
+
+// ---- formatCatalogSourceLine ----
+test('formatCatalogSourceLine(material): backingClassが有るときだけ末尾に足す', () => {
+  const withClass = formatCatalogSourceLine(
+    CatalogKind.MATERIAL, material({ code: '201000000099', category: 'backing', x: 60, y: 30, backingClass: 'wood' }),
+  );
+  assert.ok(withClass.endsWith("backingClass: 'wood' },"), withClass);
+  const withoutClass = formatCatalogSourceLine(CatalogKind.MATERIAL, material({ code: '301000000099' }));
+  assert.ok(!withoutClass.includes('backingClass'), withoutClass);
+});
+
+// QA指摘N2（2026-09-24再報告）: noteに改行（\n・\r）やU+2028/U+2029（行区切り・段落区切り）が
+// 混入しても、出力は1行の壊れていないJSソース（\n等はエスケープ済みの2文字表記になる。
+// 生の制御文字のまま出すとJS文字列リテラルとしてSyntaxErrorになる）。
+test('formatCatalogSourceLine(material): noteの改行・U+2028/U+2029はエスケープされ、出力に生の制御文字を含まない', () => {
+  // U+2028/U+2029はJSの文字列リテラル中に生では書けない（\n・\rと同じLineTerminatorの一種の
+  // ためSyntaxErrorになる）——String.fromCharCodeで組み立てる。
+  const note = `1行目\n2行目\r3行目${String.fromCharCode(0x2028)}4行目${String.fromCharCode(0x2029)}5行目`;
+  const line = formatCatalogSourceLine(CatalogKind.MATERIAL, material({ code: '301000000098', note }));
+  for (const code of [0x0a, 0x0d, 0x2028, 0x2029]) {
+    assert.ok(![...line].some(ch => ch.codePointAt(0) === code), `line contains raw U+${code.toString(16)}: ${line}`);
+  }
+  assert.ok(line.includes('1行目\\n2行目\\r3行目\\u20284行目\\u20295行目'), line);
+});
+
+test('【失敗系】formatCatalogSourceLine: 未対応の種別（boundaryMaster）は例外（保守パネルに編集経路が無い）', () => {
+  assert.throws(
+    () => formatCatalogSourceLine(CatalogKind.BOUNDARY_MASTER, { key: 'X', label: 'X', kind: 'meta' }),
+    /対象外/,
+  );
+});
+
+test('【失敗系】formatCatalogSourceLine(section): 未知の断面形状は例外（SectionShapeの定数名に変換できない）', () => {
+  assert.throws(
+    () => formatCatalogSourceLine(
+      CatalogKind.SECTION, { key: 'X', materialType: 'STEEL', shape: 'unknownShape', width: 1, height: 1, label: 'X' },
+    ),
+    /未知の断面形状/,
+  );
+});
+
+test('【失敗系】formatCatalogSourceLine(openingSubType): 未知の機構は例外（OpeningMechanismの定数名に変換できない）', () => {
+  assert.throws(
+    () => formatCatalogSourceLine(
+      CatalogKind.OPENING_SUB_TYPE, { key: 'x', label: 'X', mechanism: 'teleport', defaultWidth: 1, defaultHeight: 1 },
+    ),
+    /未知の機構/,
+  );
+});
+
+test('【失敗系】formatCatalogSourceLine(fixtureSymbol): 未知の機構は例外（OpeningMechanismの定数名に変換できない）', () => {
+  assert.throws(
+    () => formatCatalogSourceLine(
+      CatalogKind.FIXTURE_SYMBOL, { key: 'XX', label: 'X', category: 'fitting', mechanism: 'teleport' },
+    ),
+    /未知の機構/,
+  );
 });

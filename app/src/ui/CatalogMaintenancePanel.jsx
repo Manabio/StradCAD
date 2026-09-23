@@ -27,7 +27,7 @@ import {
   sectionFormFromEntry, buildSectionEntry, validateSectionForm, sectionRowDisabledReason,
   nextOpeningSubTypeKey, openingSubTypeFormFromEntry, buildOpeningSubTypeEntry,
   validateOpeningSubTypeForm, openingSubTypeFormFieldsFor, openingSubTypeRowDisabledReason,
-  formatMechanismLabel,
+  formatMechanismLabel, collectExportableEntries, formatBuiltinSource,
 } from '../catalog/catalogMaintenance.js';
 import { parseSectionSpecList } from '../structural/sectionCatalog.js';
 import { CatalogPreview } from './CatalogPreview.jsx';
@@ -187,6 +187,23 @@ export function CatalogMaintenancePanel({ onClose }) {
   const [readonlyBuiltinByKind, setReadonlyBuiltinByKind] = useState({}); // kind -> builtin一覧
   const [readonlySearch, setReadonlySearch] = useState('');
   const [readonlySelectedKey, setReadonlySelectedKey] = useState(null);
+
+  // ステップ12i QA指摘M1（2026-09-24再報告・案(b)）: overlay（catalog/catalogRegistry.js）は
+  // モジュール単位の可変状態でReactが変化を追跡しない。DeveloperExportPanelは各種別タブと別の
+  // コンポーネント（FixtureSymbolTab/InteriorMasterTab/SectionTab/OpeningSubTypeTabはそれぞれ
+  // 自身のstateだけで完結し、保存・削除・標準に戻す後もこの親コンポーネントは再レンダーされない）
+  // のため、開いたまま他タブでuserライブラリを編集してもDeveloperExportPanelの表示が更新
+  // されない（症状そのもの）。userライブラリを実際に変更した操作（保存・削除・標準に戻す・
+  // 断面の一括追加）の完了時にlibraryTickを1つ進め、それをDeveloperExportPanelへpropsで渡す
+  // （keyにはしない——keyでの再マウントはopen/builtinList/loadErrorも失い「開いたまま」の要件と
+  // 矛盾する）。材料タブ（この親コンポーネント自身がstateを持つ）の保存・削除・標準に戻すでも
+  // 同じtickを進める——DeveloperExportPanel側をuseMemo(deps:[...,libraryTick])にするため、
+  // 親の再レンダーだけでは再計算されない（tickを進めない操作を1つでも取りこぼすと、その操作
+  // だけ症状が再発する）。
+  const [libraryTick, setLibraryTick] = useState(0);
+  function handleLibraryChanged() {
+    setLibraryTick(t => t + 1);
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -350,6 +367,7 @@ export function CatalogMaintenancePanel({ onClose }) {
     setSelectedCode(entryCode);
     setFormMessage(materialSaveMessage({ overridesBuiltin, thicknessChanged }));
     setSaveConfirm(null);
+    handleLibraryChanged();
   }
 
   async function handleSave() {
@@ -460,6 +478,7 @@ export function CatalogMaintenancePanel({ onClose }) {
     // ステップ12b QA指摘m4: 完了メッセージの文言選択はcatalog/catalogMaintenance.jsの
     // removeMessageFor(plan)経由（.jsx側でplan.docAppendの有無を再判定しない）。
     setFormMessage(removeMessageFor(plan));
+    handleLibraryChanged();
   }
 
   // ステップ12b（標準に戻す。override/doc-override行）。
@@ -486,6 +505,7 @@ export function CatalogMaintenancePanel({ onClose }) {
     setForm(null);
     setRevertConfirm(null);
     setFormMessage('標準に戻しました');
+    handleLibraryChanged();
   }
 
   // ステップ6b（4.7 合わせ直し）: 承認された対象キーを removeDocEntry（catalog/catalogRegistry.js）で
@@ -531,6 +551,11 @@ export function CatalogMaintenancePanel({ onClose }) {
           <span>カタログ保守</span>
           <button className="catmnt-close-btn" onClick={onClose}>閉じる</button>
         </div>
+
+        {/* ステップ12i: 開発者向けエクスポート（現在選択中のkind）。catmnt-bodyは種別タブ・
+            一覧・詳細の横並びflexのため、その中の1項目にすると縦の列になってしまう——
+            ヘッダー直下・catmnt-bodyの外に横幅いっぱいの帯として置く。 */}
+        <DeveloperExportPanel key={activeKind} kind={activeKind} libraryTick={libraryTick} />
 
         <div className="catmnt-body">
           {/* 左: 種別タブ（材料は追加・編集・削除まで実装。内装マスター・境界マスター・断面・
@@ -994,27 +1019,27 @@ export function CatalogMaintenancePanel({ onClose }) {
               標準に戻す・削除）。materialListは平面記号プレビューのダミー壁厚導出用（材料タブが
               動的importで読み込んだbuiltin一覧をそのまま渡す）。 */}
           {activeKind === CatalogKind.FIXTURE_SYMBOL && (
-            <FixtureSymbolTab materialList={builtinList} />
+            <FixtureSymbolTab materialList={builtinList} onLibraryChanged={handleLibraryChanged} />
           )}
 
           {/* ステップ12g: 内装マスター（interiorMaster）タブ（全操作＋標準の上書き）。
               materialListは壁材・壁仕上げコードの実在検査（QA指摘M1）用——材料タブが動的importで
               読み込んだbuiltin一覧をそのまま渡す（未読込みなら保存ボタンをdisabledにする）。 */}
           {activeKind === CatalogKind.INTERIOR_MASTER && (
-            <InteriorMasterTab materialList={builtinList} />
+            <InteriorMasterTab materialList={builtinList} onLibraryChanged={handleLibraryChanged} />
           )}
 
           {/* ステップ12g: 断面（section）タブ（呼称の編集・標準の上書き・userの削除。
               追加は既存の「規格文字列から追加」＝SectionBulkImportのみ）。 */}
           {activeKind === CatalogKind.SECTION && (
-            <SectionTab />
+            <SectionTab onLibraryChanged={handleLibraryChanged} />
           )}
 
           {/* ステップ12h: 建具種別（openingSubType）タブ（追加・複製・編集・標準の上書き・
               標準に戻す・削除）。materialListは平面記号プレビューのダミー壁厚導出用（材料タブが
               動的importで読み込んだbuiltin一覧をそのまま渡す）。 */}
           {activeKind === CatalogKind.OPENING_SUB_TYPE && (
-            <OpeningSubTypeTab materialList={builtinList} />
+            <OpeningSubTypeTab materialList={builtinList} onLibraryChanged={handleLibraryChanged} />
           )}
         </div>
       </div>
@@ -1225,6 +1250,89 @@ function SectionBulkImport({ builtinList, onImported }) {
                 <div className="catmnt-row-empty">解析できる行がありません</div>
               )}
             </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ステップ12i（開発者向けエクスポート。4.2）: 保守パネルで編集した「標準の上書き分」「userの
+// 追加分」を本体ソースの該当行と同じ書式のJSソース片として読み取り専用textareaに出す
+// （開発者が本体マスタへ手作業で反映するときにそのままコピーして貼れる形）。対象の抽出
+// （collectExportableEntries）・整形（formatBuiltinSource）は純関数（catalog/catalogMaintenance.js）
+// ——本コンポーネントは描くだけ。種別タブの上（activeKindを問わず常に1つ）に置く共通部品
+// （設計12i「各編集タブ（または全種別共通のパネル上部）」の後者を採る——5タブそれぞれに
+// 複製するとbuiltinListの二重読み込み・配線の重複が増えるため）。呼び出し側が
+// `key={activeKind}` を渡してkind切替え時にコンポーネントを丸ごと再マウントさせる
+// （開閉・読み込み結果を前のkindから持ち越さない。setStateをuseEffect本体で直接呼ぶ
+// リセット処理はreact-hooks/set-state-in-effectのlint対象になるため避ける）。
+//
+// QA指摘M1（2026-09-24再報告・案(b)）: overlay（catalog/catalogRegistry.js）はモジュール単位の
+// 可変状態でReactが変化を追跡しないため、開いたまま他タブ（各タブは自身のstateで完結し、
+// 保存・削除・標準に戻す後もこの親は再レンダーされない）でuserライブラリを編集すると表示が
+// 古いまま——親が管理するlibraryTick（userライブラリを実際に変更した操作の完了ごとに進む）を
+// propsで受け取り、useMemoの依存に含めて再計算する（親の再レンダーだけでは再計算されない
+// ようuseMemoでtick駆動にする——builtinList/kindだけに依存すると、tickが進んでも
+// 「同じbuiltinList・同じkind」のまま再計算をスキップしてしまう）。
+const EXPORTABLE_CATALOG_KINDS = Object.freeze([
+  CatalogKind.MATERIAL, CatalogKind.INTERIOR_MASTER, CatalogKind.SECTION,
+  CatalogKind.OPENING_SUB_TYPE, CatalogKind.FIXTURE_SYMBOL,
+]);
+
+function DeveloperExportPanel({ kind, libraryTick }) {
+  const [open, setOpen] = useState(false);
+  const [builtinList, setBuiltinList] = useState(null);
+  const [loadError, setLoadError] = useState(null);
+
+  useEffect(() => {
+    if (!open || builtinList || loadError) return;
+    let cancelled = false;
+    kindDef(kind).loadBuiltin().then(list => {
+      if (!cancelled) setBuiltinList(list);
+    }).catch(e => { if (!cancelled) setLoadError(e.message); });
+    return () => { cancelled = true; };
+  }, [open, kind, builtinList, loadError]);
+
+  // rules-of-hooksのため、種別が対象外（boundaryMaster）のときの早期returnより前にHooksを
+  // すべて呼び終える（useMemoもここで呼ぶ——早期returnの後にHookを置かない）。
+  const computed = useMemo(() => {
+    if (!builtinList) return { overrides: [], additions: [], formatted: { overrides: '', additions: '' }, formatError: null };
+    const def = kindDef(kind);
+    const builtinKeys = new Set(builtinList.map(def.keyOf));
+    const { overrides, additions } = collectExportableEntries(kind, { builtinList });
+    try {
+      return { overrides, additions, formatted: formatBuiltinSource(kind, [...overrides, ...additions], { builtinKeys }), formatError: null };
+    } catch (e) {
+      return { overrides, additions, formatted: { overrides: '', additions: '' }, formatError: e.message };
+    }
+    // libraryTickは値を直接使わない——overlay（catalog/catalogRegistry.js）はモジュール単位の
+    // 可変状態でReactが追跡できないため、依存配列に含めるだけで「userライブラリが変わった」
+    // 再計算のトリガーとして使う意図的な使い方（QA指摘M1・2026-09-24再報告の対処点。除くと
+    // userライブラリ変更後もDeveloperExportPanelが更新されない退行に戻る）。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [kind, builtinList, libraryTick]);
+  const { overrides, additions, formatted, formatError } = computed;
+
+  if (!EXPORTABLE_CATALOG_KINDS.includes(kind)) return null;
+
+  return (
+    <div className="catmnt-bulk-import">
+      <button className="catmnt-btn catmnt-btn--secondary" onClick={() => setOpen(o => !o)}>
+        開発者向けエクスポート{open ? '（閉じる）' : ''}
+      </button>
+      {open && (
+        <div className="catmnt-bulk-import-body">
+          {!builtinList && !loadError && <div className="catmnt-row-empty">読み込み中…</div>}
+          {loadError && <div className="catmnt-form-error">読み込みに失敗しました: {loadError}</div>}
+          {formatError && <div className="catmnt-form-error">整形に失敗しました: {formatError}</div>}
+          {builtinList && !formatError && (
+            <>
+              <div className="catmnt-bulk-import-result-title">標準の上書き分（{overrides.length}件）</div>
+              <textarea className="catmnt-bulk-import-textarea" readOnly value={formatted.overrides} />
+              <div className="catmnt-bulk-import-result-title">userの追加分（{additions.length}件）</div>
+              <textarea className="catmnt-bulk-import-textarea" readOnly value={formatted.additions} />
+            </>
           )}
         </div>
       )}
@@ -1466,7 +1574,7 @@ function useCatalogEditActions(kind, { onSaved, onDeleted, onReverted, onError }
  * @param {{ materialList: object[]|null }} props materialListは平面記号プレビューのダミー壁厚
  *   導出用（材料タブが動的importで読み込んだbuiltin一覧。未指定なら既定壁厚に落ちる）。
  */
-function FixtureSymbolTab({ materialList }) {
+function FixtureSymbolTab({ materialList, onLibraryChanged }) {
   const [builtinList, setBuiltinList] = useState(null);
   const [loadError, setLoadError] = useState(false);
   const [search, setSearch] = useState('');
@@ -1483,18 +1591,21 @@ function FixtureSymbolTab({ materialList }) {
     setIsAdding(false);
     setSelectedKey(entryKey);
     setFormMessage(catalogSaveMessage(CatalogKind.FIXTURE_SYMBOL, meta));
+    onLibraryChanged?.();
   }
   function onFixtureSymbolDeleted(plan) {
     setIsAdding(false);
     setSelectedKey(null);
     setForm(null);
     setFormMessage(removeMessageFor(plan));
+    onLibraryChanged?.();
   }
   function onFixtureSymbolReverted() {
     setIsAdding(false);
     setSelectedKey(null);
     setForm(null);
     setFormMessage('標準に戻しました');
+    onLibraryChanged?.();
   }
   const actions = useCatalogEditActions(CatalogKind.FIXTURE_SYMBOL, {
     onSaved: onFixtureSymbolSaved,
@@ -1860,7 +1971,7 @@ function emptyInteriorMasterForm(key) {
  * disabledにする。
  * @param {{ materialList: object[]|null }} props
  */
-function InteriorMasterTab({ materialList }) {
+function InteriorMasterTab({ materialList, onLibraryChanged }) {
   const [builtinList, setBuiltinList] = useState(null);
   const [loadError, setLoadError] = useState(false);
   const [search, setSearch] = useState('');
@@ -1875,18 +1986,21 @@ function InteriorMasterTab({ materialList }) {
     setIsAdding(false);
     setSelectedKey(entryKey);
     setFormMessage(catalogSaveMessage(CatalogKind.INTERIOR_MASTER, meta));
+    onLibraryChanged?.();
   }
   function onInteriorMasterDeleted(plan) {
     setIsAdding(false);
     setSelectedKey(null);
     setForm(null);
     setFormMessage(removeMessageFor(plan));
+    onLibraryChanged?.();
   }
   function onInteriorMasterReverted() {
     setIsAdding(false);
     setSelectedKey(null);
     setForm(null);
     setFormMessage('標準に戻しました');
+    onLibraryChanged?.();
   }
   const actions = useCatalogEditActions(CatalogKind.INTERIOR_MASTER, {
     onSaved: onInteriorMasterSaved,
@@ -2217,7 +2331,7 @@ function InteriorMasterTab({ materialList }) {
  * （lockedFieldsFor/planSaveEntryが値の変更を拒否する）ため読み取り専用表示のみ、新規追加フォーム・
  * 複製ボタンは持たない（追加は既存の「規格文字列から追加」＝SectionBulkImportのみ）。
  */
-function SectionTab() {
+function SectionTab({ onLibraryChanged }) {
   const [builtinList, setBuiltinList] = useState(null);
   const [loadError, setLoadError] = useState(false);
   const [search, setSearch] = useState('');
@@ -2231,16 +2345,19 @@ function SectionTab() {
   function onSectionSaved(entryKey, meta) {
     setSelectedKey(entryKey);
     setFormMessage(catalogSaveMessage(CatalogKind.SECTION, meta));
+    onLibraryChanged?.();
   }
   function onSectionDeleted(plan) {
     setSelectedKey(null);
     setForm(null);
     setFormMessage(removeMessageFor(plan));
+    onLibraryChanged?.();
   }
   function onSectionReverted() {
     setSelectedKey(null);
     setForm(null);
     setFormMessage('標準に戻しました');
+    onLibraryChanged?.();
   }
   const actions = useCatalogEditActions(CatalogKind.SECTION, {
     onSaved: onSectionSaved,
@@ -2334,7 +2451,10 @@ function SectionTab() {
           />
         </div>
         {builtinList && (
-          <SectionBulkImport builtinList={builtinList} onImported={() => setRefreshTick(t => t + 1)} />
+          <SectionBulkImport
+            builtinList={builtinList}
+            onImported={() => { setRefreshTick(t => t + 1); onLibraryChanged?.(); }}
+          />
         )}
         <div className="catmnt-rows">
           {!builtinList && !loadError && <div className="catmnt-row-empty">読み込み中…</div>}
@@ -2486,7 +2606,7 @@ function emptyOpeningSubTypeForm(category, key) {
  * @param {{ materialList: object[]|null }} props materialListは平面記号プレビューのダミー壁厚
  *   導出用（材料タブが動的importで読み込んだbuiltin一覧。未指定なら既定壁厚に落ちる）。
  */
-function OpeningSubTypeTab({ materialList }) {
+function OpeningSubTypeTab({ materialList, onLibraryChanged }) {
   const def = kindDef(CatalogKind.OPENING_SUB_TYPE);
   const [builtinList, setBuiltinList] = useState(null);
   const [loadError, setLoadError] = useState(false);
@@ -2502,18 +2622,21 @@ function OpeningSubTypeTab({ materialList }) {
     setIsAdding(false);
     setSelectedKey(entryKey);
     setFormMessage(catalogSaveMessage(CatalogKind.OPENING_SUB_TYPE, meta));
+    onLibraryChanged?.();
   }
   function onOpeningSubTypeDeleted(plan) {
     setIsAdding(false);
     setSelectedKey(null);
     setForm(null);
     setFormMessage(removeMessageFor(plan));
+    onLibraryChanged?.();
   }
   function onOpeningSubTypeReverted() {
     setIsAdding(false);
     setSelectedKey(null);
     setForm(null);
     setFormMessage('標準に戻しました');
+    onLibraryChanged?.();
   }
   const actions = useCatalogEditActions(CatalogKind.OPENING_SUB_TYPE, {
     onSaved: onOpeningSubTypeSaved,

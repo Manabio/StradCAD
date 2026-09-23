@@ -206,7 +206,7 @@ test('【不変条件・ステップ12g】ui/CatalogMaintenancePanel.jsx: active
     !/SECTION_FIXED_DISPLAY_FIELDS/.test(src),
     'CatalogMaintenancePanel.jsx に SECTION_FIXED_DISPLAY_FIELDS の手書き表が残っている（lockedFieldsFor経由への一本化への退行）',
   );
-  const tabBody = extractBalancedBody(src, 'function SectionTab() {');
+  const tabBody = extractBalancedBody(src, 'function SectionTab({ onLibraryChanged }) {');
   assert.ok(tabBody, 'CatalogMaintenancePanel.jsx に SectionTab コンポーネントが見つからない');
   assert.ok(
     /lockedFieldsFor\(CatalogKind\.SECTION,/.test(tabBody) && /\.filter\(f => f !== 'key'\)/.test(tabBody),
@@ -245,7 +245,7 @@ test('【不変条件・ステップ8i】ui/CatalogMaintenancePanel.jsx: 断面�
 // （ReadonlyKindTabへ相乗りしていた8i時点の配線から移行）。
 test('【不変条件・ステップ12g】ui/CatalogMaintenancePanel.jsx: SectionBulkImportはSectionTab専用で、ReadonlyKindTabには出ない', () => {
   const src = readSrc('ui/CatalogMaintenancePanel.jsx');
-  const sectionTabBody = extractBalancedBody(src, 'function SectionTab() {');
+  const sectionTabBody = extractBalancedBody(src, 'function SectionTab({ onLibraryChanged }) {');
   assert.ok(sectionTabBody, 'CatalogMaintenancePanel.jsx に SectionTab コンポーネントが見つからない');
   assert.ok(/<SectionBulkImport\b/.test(sectionTabBody), 'SectionTab が <SectionBulkImport を描いていない');
 
@@ -280,7 +280,7 @@ test('【不変条件・ステップ12h】ui/CatalogMaintenancePanel.jsx: active
     /activeKind === CatalogKind\.OPENING_SUB_TYPE[\s\S]{0,120}<OpeningSubTypeTab materialList=\{builtinList\}/.test(src),
     'activeKind===CatalogKind.OPENING_SUB_TYPEの条件付きで<OpeningSubTypeTab materialList={builtinList}が描かれていない',
   );
-  const body = extractBalancedBody(src, 'function OpeningSubTypeTab({ materialList }) {');
+  const body = extractBalancedBody(src, 'function OpeningSubTypeTab({ materialList, onLibraryChanged }) {');
   assert.ok(body, 'CatalogMaintenancePanel.jsx に OpeningSubTypeTab コンポーネントが見つからない');
   for (const fn of ['rowEditState', 'lockedFieldsFor', 'planSaveEntry']) {
     assert.ok(
@@ -292,7 +292,7 @@ test('【不変条件・ステップ12h】ui/CatalogMaintenancePanel.jsx: active
 
 test('【不変条件・ステップ12h】ui/CatalogMaintenancePanel.jsx: OpeningSubTypeTabはuseCatalogEditActions(CatalogKind.OPENING_SUB_TYPE, …)を呼び、削除・標準に戻す・保存の確認ブロックをDeleteConfirmBlock/RevertConfirmBlock/SaveConfirmBlockへ委譲する', () => {
   const src = readSrc('ui/CatalogMaintenancePanel.jsx');
-  const body = extractBalancedBody(src, 'function OpeningSubTypeTab({ materialList }) {');
+  const body = extractBalancedBody(src, 'function OpeningSubTypeTab({ materialList, onLibraryChanged }) {');
   assert.ok(body, 'CatalogMaintenancePanel.jsx に OpeningSubTypeTab コンポーネントが見つからない');
   assert.ok(
     /useCatalogEditActions\(CatalogKind\.OPENING_SUB_TYPE,/.test(body),
@@ -305,7 +305,7 @@ test('【不変条件・ステップ12h】ui/CatalogMaintenancePanel.jsx: Openin
 
 test('【不変条件・ステップ12h】ui/CatalogMaintenancePanel.jsx: OpeningSubTypeTabの追加・複製はnextOpeningSubTypeKeyでキーを採番し、追加時だけvalidateOpeningSubTypeFormへisAdding:trueを渡す（ユーザーがキーを直接入力する欄が無い）', () => {
   const src = readSrc('ui/CatalogMaintenancePanel.jsx');
-  const body = extractBalancedBody(src, 'function OpeningSubTypeTab({ materialList }) {');
+  const body = extractBalancedBody(src, 'function OpeningSubTypeTab({ materialList, onLibraryChanged }) {');
   assert.ok(body, 'CatalogMaintenancePanel.jsx に OpeningSubTypeTab コンポーネントが見つからない');
   assert.ok(/\bnextOpeningSubTypeKey\(/.test(body), 'OpeningSubTypeTab が nextOpeningSubTypeKey を呼んでいない');
   assert.ok(
@@ -322,7 +322,7 @@ test('【不変条件・ステップ12h】ui/CatalogMaintenancePanel.jsx: Openin
 
 test('【不変条件・ステップ12h・QA指摘m3で分離】ui/CatalogMaintenancePanel.jsx: OpeningSubTypeTabは機構別の欄（子扉比率・防火枚数・防火角度・引違い配置）の表示要否をopeningSubTypeFormFieldsFor(form)経由で判定し、mechanism直書きの条件分岐を持たない', () => {
   const src = readSrc('ui/CatalogMaintenancePanel.jsx');
-  const body = extractBalancedBody(src, 'function OpeningSubTypeTab({ materialList }) {');
+  const body = extractBalancedBody(src, 'function OpeningSubTypeTab({ materialList, onLibraryChanged }) {');
   assert.ok(body, 'CatalogMaintenancePanel.jsx に OpeningSubTypeTab コンポーネントが見つからない');
   assert.ok(
     /const \{ showChildRatio, showFireLeaves, showFireAngle, showSlideLayout \} = openingSubTypeFormFieldsFor\(form\);/.test(body),
@@ -347,7 +347,7 @@ test('【不変条件・QA指摘m4・2026-09-24再々報告】ui/CatalogMaintena
     !/OPENING_SUB_TYPE_MECHANISM_LABELS\s*=\s*Object\.freeze/.test(src),
     'CatalogMaintenancePanel.jsx に機構ラベルの対応表が直書きされている（formatMechanismLabel経由への一本化への退行）',
   );
-  const body = extractBalancedBody(src, 'function OpeningSubTypeTab({ materialList }) {');
+  const body = extractBalancedBody(src, 'function OpeningSubTypeTab({ materialList, onLibraryChanged }) {');
   assert.ok(body, 'CatalogMaintenancePanel.jsx に OpeningSubTypeTab コンポーネントが見つからない');
   assert.ok(
     /\{formatMechanismLabel\(m\)\}/.test(body),
@@ -358,7 +358,7 @@ test('【不変条件・QA指摘m4・2026-09-24再々報告】ui/CatalogMaintena
 // ---- QA指摘m1（2026-09-24再々報告・最優先）: wallKinds:[]（どちらにも出ない）の保持 ----
 test('【不変条件・QA指摘m1・2026-09-24再々報告・最優先】ui/CatalogMaintenancePanel.jsx: OpeningSubTypeTabのwallInterior/wallExteriorチェックボックスはwallKindsExplicitEmpty:falseも同時にsetForm し、フォームの明示空フラグをcatalog/catalogMaintenance.jsのbuildOpeningSubTypeEntryへ渡す', () => {
   const src = readSrc('ui/CatalogMaintenancePanel.jsx');
-  const body = extractBalancedBody(src, 'function OpeningSubTypeTab({ materialList }) {');
+  const body = extractBalancedBody(src, 'function OpeningSubTypeTab({ materialList, onLibraryChanged }) {');
   assert.ok(body, 'CatalogMaintenancePanel.jsx に OpeningSubTypeTab コンポーネントが見つからない');
   const wallToggleCount = (body.match(/wallKindsExplicitEmpty:\s*false/g) ?? []).length;
   assert.ok(
@@ -369,7 +369,7 @@ test('【不変条件・QA指摘m1・2026-09-24再々報告・最優先】ui/Cat
 
 test('【不変条件・ステップ12h】ui/CatalogMaintenancePanel.jsx: OpeningSubTypeTabはbuildOpeningSubTypeEntry(form)でエントリを組み立て、slideLayoutの文字列⇄オブジェクト変換をcatalog/catalogMaintenance.jsのparseSlideLayout/formatSlideLayout経由に一本化する（jsx側に区切り文字の分割等を直書きしない）', () => {
   const src = readSrc('ui/CatalogMaintenancePanel.jsx');
-  const body = extractBalancedBody(src, 'function OpeningSubTypeTab({ materialList }) {');
+  const body = extractBalancedBody(src, 'function OpeningSubTypeTab({ materialList, onLibraryChanged }) {');
   assert.ok(body, 'CatalogMaintenancePanel.jsx に OpeningSubTypeTab コンポーネントが見つからない');
   assert.ok(/\bbuildOpeningSubTypeEntry\(form\)/.test(body), 'OpeningSubTypeTab が buildOpeningSubTypeEntry(form) を呼んでいない');
   assert.ok(
@@ -826,7 +826,7 @@ test('【不変条件・ステップ12g】ui/CatalogMaintenancePanel.jsx: active
     /activeKind === CatalogKind\.INTERIOR_MASTER[\s\S]{0,120}<InteriorMasterTab materialList=\{builtinList\}/.test(src),
     'activeKind===CatalogKind.INTERIOR_MASTERの条件付きで<InteriorMasterTab materialList={builtinList}が描かれていない',
   );
-  const body = extractBalancedBody(src, 'function InteriorMasterTab({ materialList }) {');
+  const body = extractBalancedBody(src, 'function InteriorMasterTab({ materialList, onLibraryChanged }) {');
   assert.ok(body, 'CatalogMaintenancePanel.jsx に InteriorMasterTab コンポーネントが見つからない');
   for (const fn of ['rowEditState', 'lockedFieldsFor', 'planSaveEntry']) {
     assert.ok(
@@ -838,7 +838,7 @@ test('【不変条件・ステップ12g】ui/CatalogMaintenancePanel.jsx: active
 
 test('【不変条件・ステップ12g】ui/CatalogMaintenancePanel.jsx: InteriorMasterTabはuseCatalogEditActions(CatalogKind.INTERIOR_MASTER, …)を呼び、削除・標準に戻す・保存の確認ブロックをDeleteConfirmBlock/RevertConfirmBlock/SaveConfirmBlockへ委譲する', () => {
   const src = readSrc('ui/CatalogMaintenancePanel.jsx');
-  const body = extractBalancedBody(src, 'function InteriorMasterTab({ materialList }) {');
+  const body = extractBalancedBody(src, 'function InteriorMasterTab({ materialList, onLibraryChanged }) {');
   assert.ok(body, 'CatalogMaintenancePanel.jsx に InteriorMasterTab コンポーネントが見つからない');
   assert.ok(
     /useCatalogEditActions\(CatalogKind\.INTERIOR_MASTER,/.test(body),
@@ -851,7 +851,7 @@ test('【不変条件・ステップ12g】ui/CatalogMaintenancePanel.jsx: Interi
 
 test('【不変条件・ステップ12g】ui/CatalogMaintenancePanel.jsx: InteriorMasterTabの追加・複製はnextInteriorMasterKeyでキーを採番し、追加時だけvalidateInteriorMasterFormへisAdding:trueを渡す（ユーザーがキーを直接入力する欄が無い）', () => {
   const src = readSrc('ui/CatalogMaintenancePanel.jsx');
-  const body = extractBalancedBody(src, 'function InteriorMasterTab({ materialList }) {');
+  const body = extractBalancedBody(src, 'function InteriorMasterTab({ materialList, onLibraryChanged }) {');
   assert.ok(body, 'CatalogMaintenancePanel.jsx に InteriorMasterTab コンポーネントが見つからない');
   assert.ok(/\bnextInteriorMasterKey\(/.test(body), 'InteriorMasterTab が nextInteriorMasterKey を呼んでいない');
   assert.ok(
@@ -869,7 +869,7 @@ test('【不変条件・ステップ12g】ui/CatalogMaintenancePanel.jsx: Interi
 // ---- QA指摘M1（12g再報告）: 壁材・壁仕上げコードの実在検査（materialKeys）の配線 ----
 test('【不変条件・QA指摘M1・12g再報告】ui/CatalogMaintenancePanel.jsx: InteriorMasterTabはcollectKnownCatalogKeys(CatalogKind.MATERIAL, materialList)でmaterialKeysを組み立て、追加・編集どちらのvalidateInteriorMasterFormにも渡す', () => {
   const src = readSrc('ui/CatalogMaintenancePanel.jsx');
-  const body = extractBalancedBody(src, 'function InteriorMasterTab({ materialList }) {');
+  const body = extractBalancedBody(src, 'function InteriorMasterTab({ materialList, onLibraryChanged }) {');
   assert.ok(body, 'CatalogMaintenancePanel.jsx に InteriorMasterTab コンポーネントが見つからない');
   assert.ok(
     /collectKnownCatalogKeys\(CatalogKind\.MATERIAL, materialList\)/.test(body),
@@ -887,7 +887,7 @@ test('【不変条件・QA指摘M1・12g再報告】ui/CatalogMaintenancePanel.j
 
 test('【不変条件・QA指摘M1・12g再報告】ui/CatalogMaintenancePanel.jsx: InteriorMasterTabはmaterialListLoaded: Boolean(materialList)をinteriorMasterRowDisabledReasonへ渡し、未読込みの間は保存ボタンをdisabledにする', () => {
   const src = readSrc('ui/CatalogMaintenancePanel.jsx');
-  const body = extractBalancedBody(src, 'function InteriorMasterTab({ materialList }) {');
+  const body = extractBalancedBody(src, 'function InteriorMasterTab({ materialList, onLibraryChanged }) {');
   assert.ok(body, 'CatalogMaintenancePanel.jsx に InteriorMasterTab コンポーネントが見つからない');
   assert.ok(
     /interiorMasterRowDisabledReason\(\{ isAdding, editState, materialListLoaded: Boolean\(materialList\) \}\)/.test(body),
@@ -901,7 +901,7 @@ test('【不変条件・ステップ12g】ui/CatalogMaintenancePanel.jsx: active
     /activeKind === CatalogKind\.SECTION[\s\S]{0,80}<SectionTab/.test(src),
     'activeKind===CatalogKind.SECTIONの条件付きで<SectionTabが描かれていない',
   );
-  const body = extractBalancedBody(src, 'function SectionTab() {');
+  const body = extractBalancedBody(src, 'function SectionTab({ onLibraryChanged }) {');
   assert.ok(body, 'CatalogMaintenancePanel.jsx に SectionTab コンポーネントが見つからない');
   for (const fn of ['rowEditState', 'lockedFieldsFor', 'planSaveEntry']) {
     assert.ok(
@@ -913,7 +913,7 @@ test('【不変条件・ステップ12g】ui/CatalogMaintenancePanel.jsx: active
 
 test('【不変条件・ステップ12g】ui/CatalogMaintenancePanel.jsx: SectionTabはuseCatalogEditActions(CatalogKind.SECTION, …)を呼び、削除・標準に戻す・保存の確認ブロックをDeleteConfirmBlock/RevertConfirmBlock/SaveConfirmBlockへ委譲する', () => {
   const src = readSrc('ui/CatalogMaintenancePanel.jsx');
-  const body = extractBalancedBody(src, 'function SectionTab() {');
+  const body = extractBalancedBody(src, 'function SectionTab({ onLibraryChanged }) {');
   assert.ok(body, 'CatalogMaintenancePanel.jsx に SectionTab コンポーネントが見つからない');
   assert.ok(
     /useCatalogEditActions\(CatalogKind\.SECTION,/.test(body),
@@ -928,7 +928,7 @@ test('【不変条件・ステップ12g】ui/CatalogMaintenancePanel.jsx: Sectio
 // （+ 新規追加ボタン・isAdding分岐）を持たない——寸法系を利用者が直接組み立てる経路を増やさない。
 test('【不変条件・ステップ12g】ui/CatalogMaintenancePanel.jsx: SectionTabは「+ 新規追加」ボタン・複製ボタンを持たない（追加は規格文字列の一括入力のみ）', () => {
   const src = readSrc('ui/CatalogMaintenancePanel.jsx');
-  const body = extractBalancedBody(src, 'function SectionTab() {');
+  const body = extractBalancedBody(src, 'function SectionTab({ onLibraryChanged }) {');
   assert.ok(body, 'CatalogMaintenancePanel.jsx に SectionTab コンポーネントが見つからない');
   assert.ok(!/新規追加/.test(body), 'SectionTab に「新規追加」ボタンがある（設計スコープ外）');
   assert.ok(!/複製/.test(body), 'SectionTab に「複製」ボタンがある（設計スコープ外）');
@@ -939,7 +939,7 @@ test('【不変条件・ステップ12g】ui/CatalogMaintenancePanel.jsx: Sectio
 // selectedRow.entryを渡していることを固定する（寸法系を勝手に組み立てさせない歯止め）。
 test('【不変条件・ステップ12g】ui/CatalogMaintenancePanel.jsx: SectionTabのhandleSaveはbuildSectionEntry(selectedRow.entry, form)を呼ぶ（寸法系をprevEntryから引き継ぐ）', () => {
   const src = readSrc('ui/CatalogMaintenancePanel.jsx');
-  const body = extractBalancedBody(src, 'function SectionTab() {');
+  const body = extractBalancedBody(src, 'function SectionTab({ onLibraryChanged }) {');
   assert.ok(body, 'CatalogMaintenancePanel.jsx に SectionTab コンポーネントが見つからない');
   assert.ok(
     /buildSectionEntry\(selectedRow\.entry, form\)/.test(body),
@@ -951,7 +951,7 @@ test('【不変条件・ステップ12g】ui/CatalogMaintenancePanel.jsx: Sectio
 // 描いていること（断面タブでも9b/9cと同じ作図プレビューが見える契約）を固定する。
 test('【不変条件・ステップ12g】ui/CatalogMaintenancePanel.jsx: SectionTabは選択行を<CatalogPreview kind={CatalogKind.SECTION} entry={selectedRow.entry}で描く', () => {
   const src = readSrc('ui/CatalogMaintenancePanel.jsx');
-  const body = extractBalancedBody(src, 'function SectionTab() {');
+  const body = extractBalancedBody(src, 'function SectionTab({ onLibraryChanged }) {');
   assert.ok(body, 'CatalogMaintenancePanel.jsx に SectionTab コンポーネントが見つからない');
   assert.ok(
     /<CatalogPreview kind=\{CatalogKind\.SECTION\} entry=\{selectedRow\.entry\}/.test(body),
@@ -963,10 +963,86 @@ test('【不変条件・ステップ12g】ui/CatalogMaintenancePanel.jsx: Sectio
 // そのままsectionRowDisabledReasonへ渡していること（.state分岐が実際に機能する形で呼ばれている）。
 test('【不変条件・QA指摘M2・12g再報告】ui/CatalogMaintenancePanel.jsx: SectionTabはsectionRowDisabledReason({ isAdding: false, editState })を呼ぶ（editStateはrowEditStateの戻り値そのもの＝.stateを含む）', () => {
   const src = readSrc('ui/CatalogMaintenancePanel.jsx');
-  const body = extractBalancedBody(src, 'function SectionTab() {');
+  const body = extractBalancedBody(src, 'function SectionTab({ onLibraryChanged }) {');
   assert.ok(body, 'CatalogMaintenancePanel.jsx に SectionTab コンポーネントが見つからない');
   assert.ok(
     /sectionRowDisabledReason\(\{ isAdding: false, editState \}\)/.test(body),
     'SectionTab が sectionRowDisabledReason({ isAdding: false, editState }) を呼んでいない',
+  );
+});
+
+// ステップ12i（開発者向けエクスポート）: 保守パネルが<DeveloperExportPanel kind={activeKind} />を
+// 描き、その本体が純ロジック（collectExportableEntries/formatBuiltinSource。抽出・整形はどちらも
+// catalog/catalogMaintenance.jsの純関数）を呼んでいること——.jsx側で分類・整形を再実装していない
+// ことを固定する（描くだけの契約）。
+test('【不変条件・ステップ12i】ui/CatalogMaintenancePanel.jsx: <DeveloperExportPanel key={activeKind} kind={activeKind} libraryTick={libraryTick} />を描いている', () => {
+  const src = readSrc('ui/CatalogMaintenancePanel.jsx');
+  assert.ok(
+    /<DeveloperExportPanel key=\{activeKind\} kind=\{activeKind\} libraryTick=\{libraryTick\} \/>/.test(src),
+    'CatalogMaintenancePanel.jsx が <DeveloperExportPanel key={activeKind} kind={activeKind} libraryTick={libraryTick} /> を描いていない'
+    + '（keyでkind切替え時に再マウント・libraryTickでuserライブラリ変更時に再計算させる契約）',
+  );
+});
+
+test('【不変条件・ステップ12i】ui/CatalogMaintenancePanel.jsx: DeveloperExportPanelはcollectExportableEntries・formatBuiltinSourceを呼ぶ（分類・整形をここで再実装しない）', () => {
+  const src = readSrc('ui/CatalogMaintenancePanel.jsx');
+  const body = extractBalancedBody(src, 'function DeveloperExportPanel({ kind, libraryTick }) {');
+  assert.ok(body, 'CatalogMaintenancePanel.jsx に DeveloperExportPanel コンポーネントが見つからない');
+  assert.ok(/collectExportableEntries\(kind, \{ builtinList \}\)/.test(body), 'collectExportableEntriesを呼んでいない');
+  assert.ok(/formatBuiltinSource\(/.test(body), 'formatBuiltinSourceを呼んでいない');
+});
+
+// QA指摘M1（2026-09-24再報告・案(b)）: overlayはReactが追跡しない可変状態のため、
+// DeveloperExportPanelはuseMemoの依存にlibraryTickを含めて再計算する契約——親の再レンダーだけに
+// 頼ると（builtinList/kindが変わらない限り）再計算されない。
+test('【不変条件・QA指摘M1・ステップ12i】ui/CatalogMaintenancePanel.jsx: DeveloperExportPanelのuseMemoはlibraryTickを依存に含む', () => {
+  const src = readSrc('ui/CatalogMaintenancePanel.jsx');
+  const body = extractBalancedBody(src, 'function DeveloperExportPanel({ kind, libraryTick }) {');
+  assert.ok(body, 'CatalogMaintenancePanel.jsx に DeveloperExportPanel コンポーネントが見つからない');
+  assert.ok(
+    /\}, \[kind, builtinList, libraryTick\]\)/.test(body),
+    'DeveloperExportPanelのuseMemoの依存配列にlibraryTickが含まれていない',
+  );
+});
+
+// QA指摘M1（2026-09-24再報告・案(b)）: 4つの編集タブ（FixtureSymbolTab・InteriorMasterTab・
+// SectionTab・OpeningSubTypeTab）はuseCatalogEditActionsの完了コールバック（onSaved/onDeleted/
+// onReverted）でonLibraryChangedを呼び、親（CatalogMaintenancePanel）はhandleLibraryChangedを
+// props経由で渡していることを固定する——タブが自身のstateだけで完結し親へ知らせない退行を防ぐ。
+// SectionTabだけ4箇所（保存・削除・標準に戻す＋SectionBulkImportのonImported＝規格文字列からの
+// 追加。他3タブに「追加」の別経路は無いため3箇所のまま）。
+for (const { tabName, signature, expectedCount } of [
+  { tabName: 'FixtureSymbolTab', signature: 'function FixtureSymbolTab({ materialList, onLibraryChanged }) {', expectedCount: 3 },
+  { tabName: 'InteriorMasterTab', signature: 'function InteriorMasterTab({ materialList, onLibraryChanged }) {', expectedCount: 3 },
+  { tabName: 'SectionTab', signature: 'function SectionTab({ onLibraryChanged }) {', expectedCount: 4 },
+  { tabName: 'OpeningSubTypeTab', signature: 'function OpeningSubTypeTab({ materialList, onLibraryChanged }) {', expectedCount: 3 },
+]) {
+  test(`【不変条件・QA指摘M1・ステップ12i】ui/CatalogMaintenancePanel.jsx: ${tabName}はonSaved/onDeleted/onRevertedのすべてでonLibraryChanged?.()を呼ぶ`, () => {
+    const src = readSrc('ui/CatalogMaintenancePanel.jsx');
+    const body = extractBalancedBody(src, signature);
+    assert.ok(body, `CatalogMaintenancePanel.jsx に ${tabName}（onLibraryChanged引数付き）が見つからない`);
+    const count = (body.match(/onLibraryChanged\?\.\(\)/g) ?? []).length;
+    assert.equal(count, expectedCount, `${tabName} のonLibraryChanged?.()呼び出しが${expectedCount}箇所ではない（実際: ${count}）`);
+  });
+}
+
+test('【不変条件・QA指摘M1・ステップ12i】ui/CatalogMaintenancePanel.jsx: 親は4タブへonLibraryChanged={handleLibraryChanged}を渡している', () => {
+  const src = readSrc('ui/CatalogMaintenancePanel.jsx');
+  assert.ok(/<FixtureSymbolTab materialList=\{builtinList\} onLibraryChanged=\{handleLibraryChanged\} \/>/.test(src), 'FixtureSymbolTabへの配線が無い');
+  assert.ok(/<InteriorMasterTab materialList=\{builtinList\} onLibraryChanged=\{handleLibraryChanged\} \/>/.test(src), 'InteriorMasterTabへの配線が無い');
+  assert.ok(/<SectionTab onLibraryChanged=\{handleLibraryChanged\} \/>/.test(src), 'SectionTabへの配線が無い');
+  assert.ok(/<OpeningSubTypeTab materialList=\{builtinList\} onLibraryChanged=\{handleLibraryChanged\} \/>/.test(src), 'OpeningSubTypeTabへの配線が無い');
+});
+
+// SectionTabの「規格文字列から追加」（SectionBulkImport）もuserライブラリを変更する唯一の追加
+// 経路——onImportedでonLibraryChangedも呼ぶことを固定する（setRefreshTickだけでは親のtickが
+// 進まずDeveloperExportPanelが更新されない）。
+test('【不変条件・QA指摘M1・ステップ12i】ui/CatalogMaintenancePanel.jsx: SectionTabのSectionBulkImport onImportedはonLibraryChanged?.()も呼ぶ', () => {
+  const src = readSrc('ui/CatalogMaintenancePanel.jsx');
+  const body = extractBalancedBody(src, 'function SectionTab({ onLibraryChanged }) {');
+  assert.ok(body, 'CatalogMaintenancePanel.jsx に SectionTab コンポーネントが見つからない');
+  assert.ok(
+    /onImported=\{\(\) => \{ setRefreshTick\(t => t \+ 1\); onLibraryChanged\?\.\(\); \}\}/.test(body),
+    'SectionBulkImportのonImportedがonLibraryChanged?.()を呼んでいない',
   );
 });

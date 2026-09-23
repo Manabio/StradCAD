@@ -17,6 +17,7 @@
 
 import {
   CatalogKind, kindDef, listKinds, KIND_LABELS, FIXTURE_SYMBOL_PROFILES, KNOWN_OPENING_MECHANISMS,
+  OPENING_MECHANISM_CONST_NAMES, SECTION_SHAPE_CONST_NAMES,
 } from './catalogKinds.js';
 import {
   appendDocEntry, composeCatalog, composeList, docDiffMap, originOf, overlayFor, removeDocEntry, setOverlay,
@@ -1804,4 +1805,303 @@ export function validateOpeningSubTypeForm(form, { isAdding, allKeys = new Set()
  */
 export function openingSubTypeRowDisabledReason({ isAdding, editState = null } = {}) {
   return editStateDisabledReason({ isAdding, editState });
+}
+
+// ================================================================
+// ステップ12i（開発者向けエクスポート。4.2）: 本体（builtin）の編集は「同キーのuserエントリ＋
+// overridesBuiltin:true」（12a）で表し、本体マスタ自体（finish/materials/*・
+// structural/sectionCatalog.js・openings/openingCatalog.js）への反映は開発者が手で行う——その
+// ための書式整形。collectExportableEntries（対象の抽出。overlayFor(kind).userを読む）→
+// formatBuiltinSource（整形。純関数・I/Oしない）の2段に分ける。
+//
+// 対象種別はmaterial・interiorMaster・section・openingSubType・fixtureSymbolの5種別
+// （境界マスターboundaryMasterは保守パネルに編集経路が無い——VIEWABLE_KINDSのReadonlyKindTabの
+// みで追加・編集・標準の上書きのいずれも実装していない範囲外の種別のため、overlay.userへ
+// エントリが積まれることが無い。formatCatalogSourceLineはboundaryMasterを渡されると日本語
+// 例外を投げる）。
+// ================================================================
+
+/**
+ * ステップ12i: kindの一覧行ではなく overlayFor(kind).user（ユーザーライブラリそのもの）を
+ * 対象に、上書き分（isBuiltinOverride）・追加分（builtinに無いキー）へ分類する。
+ * buildCatalogRowsは文書同梱(doc)がuserと同キーを持つとき解決後の1行（origin='doc'）しか
+ * 返さないため使わない——エクスポート対象は「文書に隠れていてもuserライブラリに積まれている
+ * 内容」そのもの（doc側の内容ではない）。
+ * @param {string} kind
+ * @param {{ builtinList?: object[] }} args
+ * @returns {{ overrides: object[], additions: object[] }}
+ */
+export function collectExportableEntries(kind, { builtinList = [] } = {}) {
+  const def = kindDef(kind);
+  const builtinKeys = new Set(builtinList.map(def.keyOf));
+  const { user } = overlayFor(kind);
+  const overrides = [];
+  const additions = [];
+  for (const entry of user) {
+    const key = def.keyOf(entry);
+    if (isBuiltinOverride(entry, builtinKeys.has(key))) {
+      overrides.push(entry);
+    } else if (!builtinKeys.has(key)) {
+      additions.push(entry);
+    }
+    // builtinKeys.has(key)===trueかつisBuiltinOverride===falseは起こらない
+    // （isBuiltinOverrideがkeyIsBuiltinをORで見るため）——到達しない分岐は持たない。
+  }
+  return { overrides, additions };
+}
+
+/**
+ * JS文字列リテラル（本体ソースの規約どおりシングルクォート）。JSON.stringifyはダブルクォートを
+ * 使うため使えない。バックスラッシュ・シングルクォートに加え、改行系（\n・\r）とU+2028/U+2029
+ * （行区切り・段落区切り。JS文字列リテラル中では未エスケープのままだとSyntaxErrorになる——
+ * ソース中に直接現れうる制御文字で、ダブルクォートに変えても解決しない）もエスケープする
+ * （QA指摘N2・2026-09-24再報告: note等の自由入力に混入すると壊れたJSソースを出力してしまう）。
+ * 置換の順序が重要——バックスラッシュを最初にエスケープしないと、後続の置換で生成した
+ * バックスラッシュ自体を二重にエスケープしてしまう。U+2028/U+2029自体は正規表現リテラル
+ * （例: replace対象の正規表現）に生で書けない——行終端文字はJSの正規表現リテラルの中に
+ * 生で書けずSyntaxErrorになるため、String.fromCharCode(...)で組み立てた文字列に対する
+ * split/joinで置換する（正規表現リテラルの外なら行終端文字を値として保持できる）。
+ */
+function quoteJsString(value) {
+  const escaped = String(value ?? '')
+    .replace(/\\/g, '\\\\')
+    .replace(/'/g, "\\'")
+    .replace(/\n/g, '\\n')
+    .replace(/\r/g, '\\r')
+    .split(String.fromCharCode(8232)).join('\\u2028')
+    .split(String.fromCharCode(8233)).join('\\u2029');
+  return `'${escaped}'`;
+}
+
+// material: category → 対象配列（finish/materials/materialData.js の3配列。唯一の対応表）。
+const MATERIAL_SOURCE_ARRAYS = Object.freeze({
+  [MATERIAL_CATEGORY.BACKING]: 'BACKING',
+  [MATERIAL_CATEGORY.PANEL]:   'PANEL',
+  [MATERIAL_CATEGORY.FINISH]:  'FINISH',
+});
+
+/**
+ * material 1件を materialData.js の該当配列要素と同じ書式（1行の単一オブジェクトリテラル）へ
+ * 整形する。category はここでは書かない——本体ソースの3配列（BACKING/PANEL/FINISH）自体は
+ * category を持たず、`MATERIALS = [...BACKING.map(m=>({...m,category:...}))...]` の合成時に
+ * 付与される（catalogSourceTargetHintが配置先をコメントで案内する）。backingClass は値がある
+ * ときだけ末尾に足す（本体の下地材130件は現状どれもbackingClassを持たないため、この項目を
+ * 持つのはユーザーが追加・上書きした下地材のみ——既存のnote等より後ろに置くのが最小差分）。
+ */
+function formatMaterialLine(entry) {
+  const fields = [
+    `code: ${quoteJsString(entry.code)}`,
+    `name: ${quoteJsString(entry.name)}`,
+    `spec: ${quoteJsString(entry.spec)}`,
+    `x: ${entry.x}`,
+    `y: ${entry.y}`,
+    // QA指摘N2（2026-09-24再報告）: entry.thicknessが（想定外に）undefinedでも`thickness: undefined`
+    // という壊れたJSソースを出さない——`?? null`でnull/undefinedともに'null'へ寄せる。
+    `thickness: ${entry.thickness ?? null}`,
+    `note: ${quoteJsString(entry.note ?? '')}`,
+  ];
+  if (entry.backingClass != null) fields.push(`backingClass: ${quoteJsString(entry.backingClass)}`);
+  return `{ ${fields.join(', ')} },`;
+}
+
+/**
+ * interiorMaster 1件を interiorMasters.js の該当ブロックと同じ書式（`KEY: Object.freeze({...}),`）へ
+ * 整形する。本体ソースはコメント（材料名の注記）や桁揃えの空白を持つが、それらはデータではなく
+ * 見た目の整形のため書き出さない（開発者が貼り付け後に自分でコメント・桁揃えを補う前提）。
+ */
+function formatInteriorMasterLine(entry) {
+  return [
+    `${entry.key}: Object.freeze({`,
+    `  label: ${quoteJsString(entry.label)},`,
+    `  wallMaterial: ${quoteJsString(entry.wallMaterial)},`,
+    `  wallFinish: ${quoteJsString(entry.wallFinish)},`,
+    `  ceilingHeight: ${entry.ceilingHeight},`,
+    `}),`,
+  ].join('\n');
+}
+
+/**
+ * 断面(section)エントリの mechanism系と同じ「値→定数名」逆引きが必要な shape を
+ * `SectionShape.XXX`（定数参照。生の文字列値のままでは本体ソースの行と一致しない）へ変換する。
+ * 未知の値（登録表の複製漏れ）は日本語例外——黙って生の文字列を出すとコピー先で
+ * ReferenceError になる壊れた出力を作ってしまうため。
+ */
+function sectionShapeConstRef(shape) {
+  const name = SECTION_SHAPE_CONST_NAMES[shape];
+  if (!name) throw new Error(`未知の断面形状です（SectionShapeの定数名に変換できません）: ${shape}`);
+  return `SectionShape.${name}`;
+}
+
+/**
+ * section 1件を structural/sectionCatalog.js SECTION_CATALOG の該当行と同じ書式（1行の単一
+ * オブジェクトリテラル）へ整形する。断面は保守パネルでは呼称（label）以外すべて固定項目
+ * （catalogKinds.js SECTION登録表 keyBoundFields）のため、上書き分は必ず「本体と全く同じ寸法・
+ * labelだけ違う」形になる——本関数はentryの実際の値をそのまま書き出すだけで、上書きかどうかは
+ * 見ない（呼び出し側のformatBuiltinSourceが分類・見出しを別に付ける）。
+ *
+ * 【断面の出力形についての決定（2026-09-24・ビルダー判断。REASONED）】SECTION_CATALOGの3件
+ * （STEEL-PIPE150・RC-300x300・RC-ROUND350）は本体ソースに実際にこの1行形のリテラルとして
+ * 存在するため、そのまま一致する。一方H形鋼・角形鋼管・木造の断面（buildHSections/
+ * buildSquarePipes/buildWoodRectsが規格文字列表・幅×成の直積から生成）は、本体ソースに
+ * 個別の行が存在しない（生成関数の出力であり、labelを1件だけ変えたくても差し替える行が無い）。
+ * 本関数はこれら生成エントリに対しても同じ1行リテラル形を返す——開発者がSECTION_CATALOG配列へ
+ * 追記する形で貼れる有効なJSであり、寸法系はkeyBoundFieldsで本体と同一であることが保証されて
+ * いるため意味のある出力になる（生成関数側を書き換える設計は本ステップの範囲外——3f/3g等と
+ * 同じく複数ファイルにまたがる変更になるため据え置く）。したがって「builtin全件が本体ソースの
+ * 該当行と一致する」検証は、実際に個別行を持つ3件のみを対象にする（catalogRealMasters.test.js
+ * とは別のcatalogMaintenance.test.jsで明記）。
+ */
+function formatSectionLine(entry) {
+  const fields = [
+    `key: ${quoteJsString(entry.key)}`,
+    `materialType: ${quoteJsString(entry.materialType)}`,
+    `shape: ${sectionShapeConstRef(entry.shape)}`,
+    `width: ${entry.width}`,
+    `height: ${entry.height}`,
+  ];
+  if (entry.webThickness !== undefined) fields.push(`webThickness: ${entry.webThickness}`);
+  if (entry.flangeThickness !== undefined) fields.push(`flangeThickness: ${entry.flangeThickness}`);
+  if (entry.wallThickness !== undefined) fields.push(`wallThickness: ${entry.wallThickness}`);
+  fields.push(`label: ${quoteJsString(entry.label)}`);
+  return `{ ${fields.join(', ')} },`;
+}
+
+// openingSubType: category → 対象配列（openings/openingCatalog.js の2配列）。
+const OPENING_SUB_TYPE_SOURCE_ARRAYS = Object.freeze({ fitting: 'FITTING_CATALOG', window: 'WINDOW_CATALOG' });
+
+/** slideLayoutオブジェクトを本体ソースの該当行が書いているのと同じインライン形へ整形する。 */
+function formatSlideLayoutLiteral(slideLayout) {
+  const panels = slideLayout.panels
+    .map(p => (p.fix ? '{ fix: true }' : `{ arrow: ${quoteJsString(p.arrow)} }`))
+    .join(', ');
+  return `{ tracks: ${slideLayout.tracks}, panels: [${panels}] }`;
+}
+
+/**
+ * openingSubType 1件を openingCatalog.js FITTING_CATALOG/WINDOW_CATALOG の該当行と同じ書式
+ * （1行の単一オブジェクトリテラル）へ整形する。category はここでは書かない——本体ソースの
+ * 2配列自体はcategoryを持たず、openingSubTypeBuiltinList()の合成時に付与される
+ * （formatMaterialLineのcategoryと同じ理由。catalogSourceTargetHintが配置先を案内する）。
+ * mechanismは`OpeningMechanism.SWING`のような定数参照——生の文字列値'swing'のままでは本体
+ * ソースの行と一致しない（sectionShapeConstRefと同じ理由）。
+ */
+function formatOpeningSubTypeLine(entry) {
+  const mechName = OPENING_MECHANISM_CONST_NAMES[entry.mechanism];
+  if (!mechName) throw new Error(`未知の機構です（OpeningMechanismの定数名に変換できません）: ${entry.mechanism}`);
+  const fields = [
+    `key: ${quoteJsString(entry.key)}`,
+    `label: ${quoteJsString(entry.label)}`,
+    `mechanism: OpeningMechanism.${mechName}`,
+  ];
+  if (entry.wallKinds !== undefined) fields.push(`wallKinds: [${entry.wallKinds.map(quoteJsString).join(', ')}]`);
+  fields.push(`defaultWidth: ${entry.defaultWidth}`);
+  fields.push(`defaultHeight: ${entry.defaultHeight}`);
+  if (entry.childRatio !== undefined) fields.push(`childRatio: ${entry.childRatio}`);
+  if (entry.fireLeaves !== undefined) fields.push(`fireLeaves: ${entry.fireLeaves}`);
+  if (entry.fireAngle !== undefined) fields.push(`fireAngle: ${entry.fireAngle}`);
+  if (entry.slideLayout !== undefined) fields.push(`slideLayout: ${formatSlideLayoutLiteral(entry.slideLayout)}`);
+  return `{ ${fields.join(', ')} },`;
+}
+
+/**
+ * fixtureSymbol 1件を openingCatalog.js の該当行と同じ書式へ整形する。本体ソースは
+ * FIXTURE_SYMBOLS配列の要素（key/label/category/mechanism/profile）と、DEFAULT_MATERIALS
+ * オブジェクトの1行（`KEY: '材質',`）の2箇所に分かれて記述されている（fixtureSymbolBuiltinList()
+ * が実行時にこの2つを合成してdefaultMaterialGlassを1項目に見せている——12d参照）ため、
+ * defaultMaterialGlassが設定されているときは2行（改行区切り）を返す。
+ */
+function formatFixtureSymbolLine(entry) {
+  const fields = [
+    `key: ${quoteJsString(entry.key)}`,
+    `label: ${quoteJsString(entry.label)}`,
+    `category: ${quoteJsString(entry.category)}`,
+  ];
+  if (entry.mechanism != null) {
+    const mechName = OPENING_MECHANISM_CONST_NAMES[entry.mechanism];
+    if (!mechName) throw new Error(`未知の機構です（OpeningMechanismの定数名に変換できません）: ${entry.mechanism}`);
+    fields.push(`mechanism: OpeningMechanism.${mechName}`);
+  }
+  if (entry.profile != null) fields.push(`profile: ${quoteJsString(entry.profile)}`);
+  const line = `{ ${fields.join(', ')} },`;
+  if (entry.defaultMaterialGlass != null) {
+    return `${line}\n${entry.key}: ${quoteJsString(entry.defaultMaterialGlass)},`;
+  }
+  return line;
+}
+
+// kind → 行フォーマッタ（登録表。設計「kindごとの行フォーマッタは登録表風に」）。boundaryMasterは
+// 保守パネルに編集経路が無いため登録しない（formatCatalogSourceLineが未登録kindを例外にする）。
+const SOURCE_LINE_FORMATTERS = Object.freeze({
+  [CatalogKind.MATERIAL]:         formatMaterialLine,
+  [CatalogKind.INTERIOR_MASTER]:  formatInteriorMasterLine,
+  [CatalogKind.SECTION]:          formatSectionLine,
+  [CatalogKind.OPENING_SUB_TYPE]: formatOpeningSubTypeLine,
+  [CatalogKind.FIXTURE_SYMBOL]:   formatFixtureSymbolLine,
+});
+
+/**
+ * kindの1エントリを本体ソースの該当行と同じ書式のJSソース断片（見出しコメント無し）へ整形する。
+ * 未対応kind（boundaryMaster等。SOURCE_LINE_FORMATTERSに登録が無い）は日本語例外。
+ * @param {string} kind
+ * @param {object} entry
+ * @returns {string}
+ */
+export function formatCatalogSourceLine(kind, entry) {
+  const formatter = SOURCE_LINE_FORMATTERS[kind];
+  if (!formatter) {
+    throw new Error(`この種別は開発者向けエクスポートの対象外です（本体ソースへの編集経路がありません）: ${kind}`);
+  }
+  return formatter(entry);
+}
+
+/**
+ * kind・エントリから「本体ソースのどの配列/オブジェクトへ足すか」の案内コメント断片。無ければnull。
+ * QA指摘N1（2026-09-24再報告）: category対応表（MATERIAL_SOURCE_ARRAYS/OPENING_SUB_TYPE_SOURCE_ARRAYS）に
+ * 無い値（登録表に無い未知categoryのentry。壊れた同梱データ・複製漏れ等）を「?」へ黙って丸めない
+ * ——「不明（category=xxx）」のように実際の値を出す（例外にはしない。見出しコメントは表示専用で
+ * 開発者が原因を追えれば十分なため、formatCatalogSourceLine本体のように投げるほどではない）。
+ */
+function catalogSourceTargetHint(kind, entry) {
+  if (kind === CatalogKind.MATERIAL) {
+    const target = MATERIAL_SOURCE_ARRAYS[entry.category];
+    return `対象配列: ${target ?? `不明（category=${entry.category}）`}`;
+  }
+  if (kind === CatalogKind.OPENING_SUB_TYPE) {
+    const target = OPENING_SUB_TYPE_SOURCE_ARRAYS[entry.category];
+    return `対象配列: ${target ?? `不明（category=${entry.category}）`}`;
+  }
+  if (kind === CatalogKind.FIXTURE_SYMBOL) {
+    return entry.defaultMaterialGlass != null ? '対象: FIXTURE_SYMBOLS＋DEFAULT_MATERIALS' : '対象配列: FIXTURE_SYMBOLS';
+  }
+  if (kind === CatalogKind.INTERIOR_MASTER) return '対象: INTERIOR_MASTERS';
+  if (kind === CatalogKind.SECTION) return '対象配列: SECTION_CATALOG';
+  return null;
+}
+
+/**
+ * entries（typically overlayFor(kind).user。collectExportableEntriesのoverrides/additionsを
+ * まとめて渡す想定）を、本体ソースへ貼れるJSソース片へ整形する（純関数・I/Oしない）。各entryを
+ * builtinKeys（本体のキー集合）で「上書き」か「追加」かに分類し、それぞれ見出しコメント
+ * （上書き:「// 上書き: <key>（標準を置き換え）」・追加:「// 追加」。どちらも配置先の案内
+ * （catalogSourceTargetHint）があれば括弧で添える）＋formatCatalogSourceLineの1行を1ブロックとし、
+ * ブロック間を空行で連結する。entriesが空・該当ブロックが無ければ空文字列。
+ * @param {string} kind
+ * @param {object[]} entries
+ * @param {{ builtinKeys?: Set<string> }} args
+ * @returns {{ overrides: string, additions: string }}
+ */
+export function formatBuiltinSource(kind, entries, { builtinKeys = new Set() } = {}) {
+  const def = kindDef(kind);
+  const overrideBlocks = [];
+  const additionBlocks = [];
+  for (const entry of entries ?? []) {
+    const key = def.keyOf(entry);
+    const isOverride = isBuiltinOverride(entry, builtinKeys.has(key));
+    const hint = catalogSourceTargetHint(kind, entry);
+    const label = isOverride ? `// 上書き: ${key}（標準を置き換え）` : '// 追加';
+    const header = hint ? `${label}（${hint}）` : label;
+    const block = `${header}\n${formatCatalogSourceLine(kind, entry)}`;
+    (isOverride ? overrideBlocks : additionBlocks).push(block);
+  }
+  return { overrides: overrideBlocks.join('\n\n'), additions: additionBlocks.join('\n\n') };
 }
