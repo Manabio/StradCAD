@@ -321,9 +321,9 @@ test('【失敗系】addDocumentAliases/setDocumentCodeTable/currentCodeTable: k
   assert.throws(() => currentCodeTable(undefined), /kind|種別/);
 });
 
-// ---- rewrite:null（section/openingSubType）に非空aliasesを積むと例外 ----
-test('【失敗系】setDocumentAliases: rewrite:nullの種別（section）に非空aliasesを積むと例外', () => {
-  assert.throws(() => setDocumentAliases(CatalogKind.SECTION, { S1: 'S2' }), /section|対応していません/);
+// ---- rewrite:null（openingSubType。section はステップ8bで実装済み）に非空aliasesを積むと例外 ----
+test('【失敗系】setDocumentAliases: rewrite:nullの種別（openingSubType）に非空aliasesを積むと例外', () => {
+  assert.throws(() => setDocumentAliases(CatalogKind.OPENING_SUB_TYPE, { S1: 'S2' }), /openingSubType|対応していません/);
 });
 
 test('【失敗系】addDocumentAliases: rewrite:nullの種別（openingSubType）に非空pairsを積むと例外', () => {
@@ -334,8 +334,8 @@ test('【失敗系】addDocumentAliases: rewrite:nullの種別（openingSubType�
 });
 
 test('setDocumentAliases: rewrite:nullの種別でも空/null aliasesは例外にならない（解除操作は許す）', () => {
-  setDocumentAliases(CatalogKind.SECTION, {});
-  setDocumentAliases(CatalogKind.SECTION, null);
+  setDocumentAliases(CatalogKind.OPENING_SUB_TYPE, {});
+  setDocumentAliases(CatalogKind.OPENING_SUB_TYPE, null);
 });
 
 // ---- 種別独立: material の alias が templateKey に効かない・逆も ----
@@ -407,6 +407,84 @@ test('unresolved: 重複排除キーはkindを含む（material/interiorMaster�
   assert.deepEqual(byKind.get(CatalogKind.MATERIAL), { kind: CatalogKind.MATERIAL, code: 'DUPCODE', location: 'room', roomId: 'r1', key: 'wallMaterial' });
   assert.deepEqual(byKind.get(CatalogKind.INTERIOR_MASTER), { kind: CatalogKind.INTERIOR_MASTER, code: 'DUPCODE', location: 'room', roomId: 'r1' });
   assert.equal(taken.length, 2, 'kindを落として重複排除すると片方が消えて1件になってしまう退行を検知する');
+});
+
+// ---- ステップ8b: section（columns/beams/structuralWalls/slabs/footings[].sectionDefId）の
+// 書換え実装（interiorMaster/boundaryMasterと同型）----
+function sectionSnapshot(overrides) {
+  return {
+    columns: [{ id: 'c1', sectionDefId: 'WOOD-120x120' }, { id: 'c2', sectionDefId: null }],
+    beams: [{ id: 'b1', sectionDefId: 'STEEL-H300x150' }],
+    structuralWalls: [{ id: 'w1', sectionDefId: 'WOOD-120x120' }],
+    slabs: [{ id: 's1', sectionDefId: 'WOOD-120x120' }],
+    footings: [{ id: 'f1', sectionDefId: 'WOOD-120x120' }],
+    ...overrides,
+  };
+}
+
+test('SNAPSHOT_REF_WALKERS.section: columns/beams/structuralWalls/slabs/footingsのsectionDefIdを列挙する', () => {
+  const refs = SNAPSHOT_REF_WALKERS.section.enumerate(sectionSnapshot());
+  assert.deepEqual(refs, [
+    { code: 'WOOD-120x120', location: 'columns', memberId: 'c1' },
+    { code: 'STEEL-H300x150', location: 'beams', memberId: 'b1' },
+    { code: 'WOOD-120x120', location: 'structuralWalls', memberId: 'w1' },
+    { code: 'WOOD-120x120', location: 'slabs', memberId: 's1' },
+    { code: 'WOOD-120x120', location: 'footings', memberId: 'f1' },
+  ]);
+});
+
+test('setDocumentAliases: sectionは今後rewriteに対応しているので非空aliasesでも例外にならない（8bの実装確認）', () => {
+  assert.doesNotThrow(() => setDocumentAliases(CatalogKind.SECTION, { 'WOOD-120x120': 'WOOD-120x120-V2' }));
+  setDocumentAliases(CatalogKind.SECTION, null); // 後始末
+});
+
+test('addDocumentAliases: sectionも例外を投げなくなる（8bの実装確認）', () => {
+  assert.doesNotThrow(() => addDocumentAliases(CatalogKind.SECTION, [{ from: 'WOOD-120x120', to: 'WOOD-120x120-V2' }]));
+  setDocumentAliases(CatalogKind.SECTION, null); // 後始末
+});
+
+test('SNAPSHOT_REF_WALKERS.section: rewriteは全5系統のsectionDefIdを書換える', () => {
+  addDocumentAliases(CatalogKind.SECTION, [{ from: 'WOOD-120x120', to: 'WOOD-105x105' }]);
+  const applied = applyDocumentCodeNormalization(sectionSnapshot());
+  assert.equal(applied.columns[0].sectionDefId, 'WOOD-105x105');
+  assert.equal(applied.columns[1].sectionDefId, null, 'sectionDefId:nullの部材は触らない');
+  assert.equal(applied.beams[0].sectionDefId, 'STEEL-H300x150', '対象外コードは不変');
+  assert.equal(applied.structuralWalls[0].sectionDefId, 'WOOD-105x105');
+  assert.equal(applied.slabs[0].sectionDefId, 'WOOD-105x105');
+  assert.equal(applied.footings[0].sectionDefId, 'WOOD-105x105');
+});
+
+test('section: 変化が無ければ同一参照（copy-on-write）。変化した系統のリストだけ新しい配列になる', () => {
+  addDocumentAliases(CatalogKind.SECTION, [{ from: 'WOOD-120x120', to: 'WOOD-105x105' }]);
+  const snapshot = sectionSnapshot();
+  const applied = applyDocumentCodeNormalization(snapshot);
+  assert.notEqual(applied, snapshot);
+  assert.notEqual(applied.columns, snapshot.columns, '書換えのあったcolumnsは新しい配列');
+  assert.equal(applied.beams, snapshot.beams, '書換えの無いbeamsは同一参照');
+});
+
+test('section: aliasesが無いsectionDefIdのみのsnapshotは完全に同一参照を返す', () => {
+  setDocumentAliases(CatalogKind.SECTION, null);
+  const snapshot = sectionSnapshot();
+  const result = applyDocumentCodeNormalization(snapshot);
+  assert.equal(result, snapshot);
+});
+
+test('section: 書換えは冪等（2回適用で結果が同じ・2回目は変化が無いので同一参照）', () => {
+  addDocumentAliases(CatalogKind.SECTION, [{ from: 'WOOD-120x120', to: 'WOOD-105x105' }]);
+  const once = applyDocumentCodeNormalization(sectionSnapshot());
+  const twice = applyDocumentCodeNormalization(once);
+  assert.deepEqual(once, twice);
+  assert.equal(applyDocumentCodeNormalization(once), once);
+});
+
+test('section: 削除済みsectionDefId(null)は値を据え置き、kind:sectionでunresolvedに積む', () => {
+  addDocumentAliases(CatalogKind.SECTION, [{ from: 'WOOD-120x120', to: null }]);
+  applyDocumentCodeNormalization(sectionSnapshot());
+  const taken = takeUnresolvedCodes();
+  const columnsEntry = taken.find(u => u.location === 'columns');
+  assert.deepEqual(columnsEntry, { kind: CatalogKind.SECTION, code: 'WOOD-120x120', location: 'columns', memberId: 'c1' });
+  assert.equal(taken.filter(u => u.code === 'WOOD-120x120').length, 4, 'columns/structuralWalls/slabs/footingsの4箇所');
 });
 
 // ---- clearDocumentAliases: 全種別解除 ----

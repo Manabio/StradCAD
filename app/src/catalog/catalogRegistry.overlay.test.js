@@ -6,7 +6,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   setOverlay, clearOverlays, overlayFor, composeCatalog, composeList, originOf,
-  docDiffMap, docDiffFields, removeDocEntry,
+  docDiffMap, docDiffFields, removeDocEntry, overlayGeneration,
 } from './catalogRegistry.js';
 import { ERR_CATALOG_DUPLICATE } from '../error.js';
 import { assertNoDuplicate } from './catalogMatch.js';
@@ -375,4 +375,79 @@ test('clearOverlays後はcomposeCatalogがbuiltinのみを返す（前のテス�
   const map = composeCatalog('material', [builtinEntry]);
   assert.equal(map.size, 1);
   assert.equal(map.get(builtinEntry.code), builtinEntry);
+});
+
+// ================================================================
+// ステップ8c: overlay 世代カウンタ（overlayGeneration）。消費者側（sectionCatalog.js等）が
+// 合成結果をメモ化するための世代キー——内容比較はせず、set/clearのたびに保守的に++する。
+// ================================================================
+test('overlayGeneration: setOverlayで内容が変われば++される', () => {
+  const before = overlayGeneration();
+  setOverlay('material', { doc: [material({ code: '999999999999' })] });
+  assert.equal(overlayGeneration(), before + 1);
+});
+
+test('overlayGeneration: 同内容でsetOverlayを再実行しても++される（内容比較はしない）', () => {
+  const entry = material({ code: '999999999999' });
+  setOverlay('material', { doc: [entry] });
+  const before = overlayGeneration();
+  setOverlay('material', { doc: [entry] }); // 前回と全く同じ内容
+  assert.equal(overlayGeneration(), before + 1, '内容が同一でも保守的に++する');
+});
+
+test('overlayGeneration: doc/userとも空のsetOverlay（overlays.delete分岐）でも++される', () => {
+  setOverlay('material', { doc: [material({ code: '999999999999' })] }); // 前提: overlayを立てておく
+  const before = overlayGeneration();
+  setOverlay('material', {}); // doc/user省略=空 → overlays.delete(kind)の分岐を通る
+  assert.equal(overlayGeneration(), before + 1, 'delete分岐でも++しないと消費者側のキャッシュが腐る');
+});
+
+test('overlayGeneration: clearOverlaysで++される', () => {
+  setOverlay('material', { doc: [material({ code: '999999999999' })] });
+  const before = overlayGeneration();
+  clearOverlays();
+  assert.equal(overlayGeneration(), before + 1);
+});
+
+test('overlayGeneration: composeCatalogを呼んでも変わらない（読み取り専用）', () => {
+  const builtinEntry = material();
+  const before = overlayGeneration();
+  composeCatalog('material', [builtinEntry]);
+  composeCatalog('material', [builtinEntry]);
+  assert.equal(overlayGeneration(), before, 'composeCatalogはoverlayを変更しないので世代は動かない');
+});
+
+// removeDocEntryはsetOverlayの薄いラッパ（overlays直接操作ではない）ので世代も動くはず。
+// removeDocEntryの内部実装がoverlays.set/deleteを直接叩く変異（setOverlayを経由しない変異）に
+// なると、overlayは変わるのに世代が++されない退行になる——それをここで検知する。
+test('overlayGeneration: removeDocEntryで++される（setOverlay経由。overlays直接操作への退行を検知）', () => {
+  const docEntry = material({ code: '999999999999' });
+  setOverlay('material', { doc: [docEntry] });
+  const before = overlayGeneration();
+  removeDocEntry('material', '999999999999');
+  assert.equal(overlayGeneration(), before + 1, 'removeDocEntryがsetOverlayを経由していれば++されるはず');
+});
+
+test('overlayGeneration: composeList/originOf/docDiffMap/overlayForを呼んでも変わらない（いずれも読み取り専用）', () => {
+  const builtinEntry = material();
+  // R17（dedupeFields完全一致禁止）に触れないよう、matchFields（name等）をbuiltinEntryと変える。
+  setOverlay('material', { doc: [material({ code: '999999999999', name: '別材' })] });
+  const before = overlayGeneration();
+  composeList('material', [builtinEntry]);
+  originOf('material', builtinEntry.code, [builtinEntry]);
+  docDiffMap('material', [builtinEntry]);
+  overlayFor('material');
+  assert.equal(overlayGeneration(), before, '読み取り系のAPIはoverlayを変更しないので世代は動かない');
+});
+
+// setOverlayがvalidateで例外を投げた場合、既存overlayは変わらない（既存テストで確認済み）のに
+// 加えて、世代も動いてはいけない——「++をvalidateの前に移す」変異（例外を投げても世代だけ
+// 進んでしまう退行）を検知する。
+test('【失敗系】overlayGeneration: validateで弾かれたsetOverlay（材codeが空文字）は世代もoverlayも変化なし', () => {
+  setOverlay('material', { doc: [material({ code: '999999999999' })] }); // 前提: overlayを立てておく
+  const before = overlayGeneration();
+  const overlayBefore = overlayFor('material');
+  assert.throws(() => setOverlay('material', { doc: [material({ code: '' })] })); // codeが12桁数字でなく例外
+  assert.equal(overlayGeneration(), before, 'validate失敗時は世代を進めてはいけない（++をvalidateより前に置く退行を検知）');
+  assert.equal(overlayFor('material'), overlayBefore, 'validate失敗時はoverlayも変わらない');
 });

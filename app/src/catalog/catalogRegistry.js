@@ -15,6 +15,21 @@ import { diffEntries, formatDuplicateError } from './catalogMatch.js';
 /** kind → { doc, user }（未設定の種別は空）。 */
 const overlays = new Map();
 
+// overlay の世代カウンタ（setOverlay/clearOverlaysのたびに必ず++）。
+let overlayGenerationCounter = 0;
+
+/**
+ * overlay の世代キー（ステップ8c）。setOverlay（内容同一でも・doc/userとも空で
+ * overlays.delete する分岐でも）と clearOverlays を呼ぶたびに必ず ++ する（内容比較は
+ * しない・保守的に増やす）。composeCatalog 自体はメモ化しない——消費者側
+ * （structural/sectionCatalog.js 等）がこの世代キーで合成結果（Map）をメモ化するための
+ * フックとしてのみ存在する。
+ * @returns {number}
+ */
+export function overlayGeneration() {
+  return overlayGenerationCounter;
+}
+
 function isPlainObject(v) {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
 }
@@ -56,9 +71,11 @@ export function setOverlay(kind, options = {}) {
   for (const entry of user) def.validate(entry);
   if (doc.length === 0 && user.length === 0) {
     overlays.delete(kind);
+    overlayGenerationCounter++;
     return;
   }
   overlays.set(kind, { doc, user });
+  overlayGenerationCounter++;
 }
 
 /**
@@ -68,6 +85,7 @@ export function setOverlay(kind, options = {}) {
  */
 export function clearOverlays() {
   overlays.clear();
+  overlayGenerationCounter++;
 }
 
 /** kind の overlay（{doc, user}）。未設定なら空配列の組。 */

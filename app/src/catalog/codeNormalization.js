@@ -263,9 +263,9 @@ function rewriteBoundaryMasterRefs(snapshot, table) {
 }
 
 // ----------------------------------------------------------------
-// section: columns/beams/structuralWalls/slabs/footings[].sectionDefId・
+// section: columns/beams/structuralWalls/slabs/footings[].sectionDefId（ステップ8bで書換え実装）・
 // openingSubType: openings[] の `${category}:${subType}`（catalogKinds.js の keyOf と同型）。
-// どちらも現状は読み取り専用（rewrite:null。ステップ8/10で参照の書換え先を実装するまでは
+// openingSubType は現状も読み取り専用（rewrite:null。ステップ10で参照の書換え先を実装するまでは
 // 書換えの入口を持たない——alias を積もうとしたら例外にする＝黙って効かないaliasを作らない）。
 // ----------------------------------------------------------------
 const SECTION_MEMBER_LISTS = ['columns', 'beams', 'structuralWalls', 'slabs', 'footings'];
@@ -279,6 +279,33 @@ function enumerateSectionRefs(snapshot) {
     }
   }
   return refs;
+}
+
+function normalizeSectionMemberList(members, listName, table, unresolved) {
+  if (!Array.isArray(members)) return members;
+  let changedAny = false;
+  const next = members.map(member => {
+    if (!member?.sectionDefId) return member;
+    const mapped = normalizeCode(member.sectionDefId, table, unresolved, { location: listName, memberId: member.id });
+    if (mapped === member.sectionDefId) return member;
+    changedAny = true;
+    return { ...member, sectionDefId: mapped };
+  });
+  return changedAny ? next : members;
+}
+
+function rewriteSectionRefs(snapshot, table) {
+  if (!snapshot) return { snapshot, unresolved: [] };
+  const unresolved = [];
+  const nextLists = {};
+  let changed = false;
+  for (const listName of SECTION_MEMBER_LISTS) {
+    const next = normalizeSectionMemberList(snapshot[listName], listName, table, unresolved);
+    nextLists[listName] = next;
+    if (next !== snapshot[listName]) changed = true;
+  }
+  if (!changed) return { snapshot, unresolved };
+  return { snapshot: { ...snapshot, ...nextLists }, unresolved };
 }
 
 function enumerateOpeningSubTypeRefs(snapshot) {
@@ -296,7 +323,7 @@ function enumerateOpeningSubTypeRefs(snapshot) {
  * 参照所在の唯一の集約点（kind → {enumerate(snapshot), rewrite(snapshot, table)|null}）。
  * enumerate は catalog/usedEntries.js collectUsedKeys（保存時の使用キー収集）と
  * applyDocumentCodeNormalization の unresolved 検出が共有する。rewrite が null の種別は
- * まだ参照の書換え先を持たない（section=ステップ8・openingSubType=ステップ10）——
+ * まだ参照の書換え先を持たない（openingSubType=ステップ10）——
  * setDocumentAliases/addDocumentAliases でその種別に非空のaliasesを積もうとすると例外になる。
  */
 export const SNAPSHOT_REF_WALKERS = Object.freeze({
@@ -314,7 +341,7 @@ export const SNAPSHOT_REF_WALKERS = Object.freeze({
   }),
   section: Object.freeze({
     enumerate: enumerateSectionRefs,
-    rewrite: null,
+    rewrite: rewriteSectionRefs,
   }),
   openingSubType: Object.freeze({
     enumerate: enumerateOpeningSubTypeRefs,
@@ -457,7 +484,7 @@ export function peekUnresolvedCodes() {
 /**
  * 実効中の正規化表を snapshot に適用する（全種別。文書固有の表が無ければ種別ごとの
  * 本体表だけで正規化する。material以外は本体表が空のため、文書固有の読み替えが無ければ
- * 実質no-op）。rewrite:null の種別（section/openingSubType）はここでは読み飛ばす
+ * 実質no-op）。rewrite:null の種別（openingSubType）はここでは読み飛ばす
  * （書換え先が無いため。enumerateは別途 collectUsedKeys 等が使う）。
  * 未解決コードは kind+code+location（`unresolvedDedupeKey`）で重複排除して蓄積する——同じ
  * snapshot（階）を繰り返し適用しても（undo/redo・再読込み等）蓄積が単調増加しない。
