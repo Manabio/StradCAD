@@ -7,8 +7,10 @@
 // props キー sort、数値は丸めない。正規化は「閉じていない Line の fill を無視」の1点のみ）を
 // 安定キー（plane名:isVertical:round(axisValue):round(coord1):opening id）で束ねてJSONへ出す。
 //
-// 【--sweep】文書ごとに 外壁/内壁 × 縦/横 の実在建具を最大4件選び、IMPLEMENTED_MECHANISMS全機構
-// （FRAME_ONLYはfixtureType WF/SF/SSFの3通りに展開）＋未実装1件（IMPLEMENTED_MECHANISMSから
+// 【--sweep】文書ごとに 外壁/内壁 × 縦/横 の実在建具を最大4件選び、openingSubTypeBuiltinList()の
+// **全builtin subType**（fitting/window とも。同じ機構でもfireLeaves/fireAngle等の設定が
+// 異なるsubType——fireDoorDouble/fireDoorDouble180等——を機構ごとに1件だけに間引かない。
+// FRAME_ONLYはfixtureType WF/SF/SSFの3通りに展開）＋未実装1件（IMPLEMENTED_MECHANISMSから
 // 一時的に1機構を外して代用。製品側のSetを実行中だけ操作し、必ず元へ戻す）＋entry null
 // （カタログに無いsubType）× hingeSide±1 × swingSide±1 × frameDepth{0,50} × LOD3 を
 // runInAction で opening を上書きしながらダンプする（各openingの元の値へ必ず戻す）。
@@ -138,18 +140,6 @@ function dumpPlane(graph, planeName) {
 // --sweep
 // ================================================================
 
-// mechanism → 代表subType（openingSubTypeBuiltinList先頭一致。builtinカタログの並び順を
-// 唯一の情報源にする——探索側で個別に決め直さない）。
-function mechanismSubTypeMap() {
-  const list = openingSubTypeBuiltinList();
-  const map = new Map();
-  for (const m of IMPLEMENTED_MECHANISMS) {
-    const entry = list.find(e => e.mechanism === m);
-    if (entry) map.set(m, { category: entry.category, subType: entry.key });
-  }
-  return map;
-}
-
 // 外壁/内壁 × 縦/横 の組合せを埋める実在建具（最大4件。文書が組合せを持たなければその分だけ減る）。
 function selectSweepOpenings(project) {
   const wanted = [
@@ -201,22 +191,26 @@ const HINGE_SIDES = [-1, 1];
 const SWING_SIDES = [-1, 1];
 const FRAME_DEPTHS = [0, 50];
 
-// 1openingぶんの variant 列（{label, category, subType, fixtureType}）。
-function buildVariants(mechSubType) {
+// 1openingぶんの variant 列（{label, category, subType, fixtureType}）。openingSubTypeBuiltinList()
+// の全件（fitting/window とも）を使う——機構ごとに先頭1件へ間引くと、同じ機構でもfireLeaves/
+// fireAngle等の設定が異なるsubType（fireDoorDouble/fireDoorDouble180等）の差がprobeで検出でき
+// ないため（QA指摘）。
+function buildVariants() {
+  const list = openingSubTypeBuiltinList();
   const variants = [];
-  for (const [mechanism, { category, subType }] of mechSubType) {
-    if (mechanism === OpeningMechanism.FRAME_ONLY) {
+  for (const entry of list) {
+    if (entry.mechanism === OpeningMechanism.FRAME_ONLY) {
       for (const sym of FRAME_ONLY_SYMBOLS) {
-        variants.push({ label: `frameOnly:${sym}`, category, subType, fixtureType: sym });
+        variants.push({ label: `frameOnly:${sym}:${entry.key}`, category: entry.category, subType: entry.key, fixtureType: sym });
       }
       continue;
     }
-    variants.push({ label: mechanism, category, subType, fixtureType: null });
+    variants.push({ label: `${entry.mechanism}:${entry.key}`, category: entry.category, subType: entry.key, fixtureType: null });
   }
-  const unimpl = mechSubType.get(UNIMPLEMENTED_PROXY_MECHANISM);
+  const unimpl = list.find(e => e.mechanism === UNIMPLEMENTED_PROXY_MECHANISM);
   variants.push({
     label: `unimplemented:${UNIMPLEMENTED_PROXY_MECHANISM}`,
-    category: unimpl.category, subType: unimpl.subType, fixtureType: null,
+    category: unimpl.category, subType: unimpl.key, fixtureType: null,
     unimplementedMechanism: UNIMPLEMENTED_PROXY_MECHANISM,
   });
   variants.push({ label: 'entryNull', category: 'fitting', subType: ENTRY_NULL_SUBTYPE, fixtureType: null });
@@ -225,8 +219,7 @@ function buildVariants(mechSubType) {
 
 function runSweep(project) {
   const picked = selectSweepOpenings(project);
-  const mechSubType = mechanismSubTypeMap();
-  const variants = buildVariants(mechSubType);
+  const variants = buildVariants();
   const items = [];
   let combosRun = 0;
 

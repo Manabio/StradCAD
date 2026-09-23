@@ -2,13 +2,18 @@
 // 建具モード 平面記号（renderer/OpeningsLayer.jsx renderOpeningSymbol）の純関数化。
 // ステップ11（作図P2）11a: 器＋線幅役割＋SCHEMATICディスパッチ＋tick/slideDouble leafのみ移行。
 // 11b-1: 蝶番系その1（SWING・SWING_IN・PROJECT_V・DREH_KIPP）を追加移行。
+// 11b-2: 蝶番系その2（SWING_DOUBLE・SWING_CHILD・FREE・FREE_DOUBLE・FIRE_DOOR・FIRE_FOLD）を追加移行。
+// SWINGのような専用inset扱いを持つ機構は無く、全機構が蝶番系その1のSWING_IN等と同じ汎用の
+// notched（枠内法へ寄せる）経路を共有する（renderer/OpeningsLayer.jsx 旧
+// otherMechanismSymbol内のswingDoubleSymbol/swingChildSymbol/freeSymbol/freeDoubleSymbol/
+// fireDoorSymbol/fireFoldSymbolと同じ判断の移設）。
 //
 // buildOpeningPlanSymbol(opening, ctx) → PlanPrimitive[] | null。
 // **STANDARD/DETAILで entry があり IMPLEMENTED_MECHANISMS に含まれる機構のうち、まだ移行して
 // いないものは null を返す**（呼び出し側 renderer/OpeningsLayer.jsx は null なら旧経路
 // （otherMechanismSymbol等）をそのまま実行する暫定契約。11c〜11e で残りの機構を移行し、
-// 11eでnull経路自体を削除する）。SWING_GROUP_MECHANISMS（本ステップで移行した4機構）は
-// 非nullを返す。
+// 11eでnull経路自体を削除する）。SWING_GROUP_MECHANISMS（11b-1）・HINGE_GROUP2_MECHANISMS
+// （11b-2）は非nullを返す。
 //
 // openingPlanSymbolGeometry.js と同じ抽出方針: react-konva/store.js/snap.js/.jsxを静的に
 // 引かないことで node:test から単体 import できるようにする（抽出純モジュールはnode:testから
@@ -26,6 +31,7 @@ import { IMPLEMENTED_MECHANISMS, OpeningMechanism } from './openingCatalog.js';
 import {
   planFrameBand, bandPerp, planSymbolPlan, swingOpenPerpDir, innerSpanOpening,
   swingClosedLeafSpan, closedAngleFor, leafOpenAngle, angleVectors,
+  swingDoubleLeafSpecs, swingChildLeafSpecs, fireDoorLeafSpecs, fireFoldLeafSpecs,
   DOOR_OPEN_ANGLE_DEG, FRAME_JAMB_WIDTH_MM, FRAME_KAKARI_WIDTH_MM, DOOR_LEAF_THICKNESS_MM,
 } from './openingPlanSymbolGeometry.js';
 import { LodLevel } from '../viewport.js';
@@ -41,6 +47,17 @@ const SWING_GROUP_MECHANISMS = new Set([
   OpeningMechanism.DREH_KIPP,
 ]);
 
+// 蝶番系その2（11b-2で移行）。SWINGのような専用inset扱いを持つ機構が無く、全機構が蝶番系その1の
+// SWING_IN等と同じ汎用のnotched経路を共有する（buildHingeGroup2Primitives参照）。
+const HINGE_GROUP2_MECHANISMS = new Set([
+  OpeningMechanism.SWING_DOUBLE,
+  OpeningMechanism.SWING_CHILD,
+  OpeningMechanism.FREE,
+  OpeningMechanism.FREE_DOUBLE,
+  OpeningMechanism.FIRE_DOOR,
+  OpeningMechanism.FIRE_FOLD,
+]);
+
 // 開き戸 詳細LOD専用 枠寸法（すべてmm。旧 renderer/OpeningsLayer.jsxから移設。SWING専用）。
 const DOOR_HINGE_GAP_MM = 5; // 開いた扉と吊元側の方立との隙間
 // 吊元側後退量: 方立の全幅(30) - 吊元と方立の隙間(5)
@@ -52,6 +69,15 @@ export const FRAME_LATCH_INSET_MM = FRAME_JAMB_WIDTH_MM - FRAME_KAKARI_WIDTH_MM;
 // export＝唯一の定義箇所。renderer/OpeningsLayer.jsx側は独自の値を持たず、tickEndpoints
 // （本ファイル）を経由してこの値を使う（QA指摘: 定数の二重管理・ドリフトの防止）。
 export const TICK_HALF_MM = 30;
+
+// FIRE_DOOR/FIRE_FOLD（常時開放式防火戸・防火折戸）専用の破線・振幅定数（mm。renderer/
+// OpeningsLayer.jsxから移設。11b-2）。動作弧は「金物が外れた際に開放される軌跡」を示す
+// 補助線のため、他の蝶番系（実線）と区別して破線にする——FIRE_ARC_DASH_MMが唯一の定義箇所。
+export const FIRE_ARC_DASH_MM = [10, 6];
+// 常時開放式防火折戸: 吊元側に畳んだジグザグの山数・振幅（renderer/OpeningsLayer.jsxの
+// 旧経路（11eまで残置。11b-2以降は到達しない）と定数を二重管理しないよう export する）。
+export const FIRE_FOLD_PEAKS = 2;
+export const FIRE_FOLD_AMP_MM = 60;
 
 const VALID_LOD_LEVELS = new Set(Object.values(LodLevel));
 
@@ -78,8 +104,8 @@ function polylinePrim(role, weightMm, points, closed) {
   return { type: 'polyline', points, closed, role, weightMm };
 }
 
-function arcPrim(role, weightMm, cx, cy, r, startDeg, sweepDeg) {
-  return { type: 'arc', cx, cy, r, startDeg, sweepDeg, role, weightMm };
+function arcPrim(role, weightMm, cx, cy, r, startDeg, sweepDeg, dash) {
+  return { type: 'arc', cx, cy, r, startDeg, sweepDeg, role, weightMm, dash };
 }
 
 /**
@@ -162,15 +188,71 @@ function memoizeThunk(fn) {
 // 開き戸leaf1枚（開いた位置の扉線1本＋開き勝手の動作弧）。吊元位置・leaf長を引数化する
 // （旧swingLeafSymbol）。swingSideの規約はopeningGeometry.js swingSideTowardPerpのperpDir=
 // (isVertical?1:-1)*swingSide*hingeSideと整合（openingPlanSymbolGeometry.js leafOpenAngle参照）。
-function swingLeafPrimitives(isVertical, pivotPerp, hingeAlong, hingeSide, swingSide, leafLength, leafWeight, arcWeight) {
+// angleDeg・arcDash（既定は蝶番系その1と同じ90°・実線）は蝶番系その2（11b-2）のFIRE_DOORが
+// leafSpecGroupPrimitives経由で可変角度・破線弧を指定するための拡張（SWING_DOUBLE/SWING_CHILDは
+// angleDeg=DOOR_OPEN_ANGLE_DEG固定・arcDash省略で呼ぶため実質90°実線のまま）
+// （旧fireLeafSymbolの角度引数・FIRE_ARC_DASHと同じ判断をここへ一本化。呼び出し側を増やさない
+// ため既存の呼び出し元（swingPrimitives）は追加引数を渡さず、既定値で従来どおりの90°実線になる）。
+function swingLeafPrimitives(isVertical, pivotPerp, hingeAlong, hingeSide, swingSide, leafLength, leafWeight, arcWeight, angleDeg = DOOR_OPEN_ANGLE_DEG, arcDash) {
   const hinge = toWorld(isVertical, hingeAlong, pivotPerp);
   const closedAngle = closedAngleFor(isVertical, hingeSide);
-  const openAngle = leafOpenAngle(closedAngle, swingSide, DOOR_OPEN_ANGLE_DEG);
+  const openAngle = leafOpenAngle(closedAngle, swingSide, angleDeg);
   const { dir } = angleVectors(openAngle);
   const far = { x: hinge.x + dir.x * leafLength, y: hinge.y + dir.y * leafLength };
   return [
     linePrim('leaf', leafWeight, hinge, far),
-    arcPrim('arc', arcWeight, hinge.x, hinge.y, leafLength, closedAngle, openAngle - closedAngle),
+    arcPrim('arc', arcWeight, hinge.x, hinge.y, leafLength, closedAngle, openAngle - closedAngle, arcDash),
+  ];
+}
+
+// leaf仕様の配列（{hingeAlong,hingeSide,sense,leafLength}[]。openingPlanSymbolGeometry.js
+// swingDoubleLeafSpecs等）をswingLeafPrimitivesへ機械的に展開する共通ヘルパ（旧
+// renderer/OpeningsLayer.jsx swingLeafSymbols・fireDoorSymbol/fireFoldSymbolのspecs.map、
+// SWING_DOUBLE/SWING_CHILD/FIRE_DOORが共有する）。leaf仕様の決定（対向leafのsense符号反転を
+// 含む）はopeningPlanSymbolGeometry.js側の*LeafSpecs関数に一本化し、ここでは消費するだけにする。
+function leafSpecGroupPrimitives(isVertical, pivotPerp, specs, leafWeight, arcWeight, angleDeg, arcDash) {
+  return specs.flatMap(s => swingLeafPrimitives(isVertical, pivotPerp, s.hingeAlong, s.hingeSide, s.sense, s.leafLength, leafWeight, arcWeight, angleDeg, arcDash));
+}
+
+// 自由開きleaf1枚: 閉じ位置の扉線1本（壁軸上。開いた位置ではない）＋両側（swingSide側とその逆側）
+// に開き角度ぶんの円弧2つ（旧freeLeafSymbol）。両方向の弧を描くため、対向leaf（coord2側）に
+// swingSideを反転して渡しても和集合（描画結果）は変わらない——他の蝶番系と異なり符号反転は不要
+// （旧freeDoubleSymbolのコメント参照）。
+function freeLeafPrimitives(isVertical, pivotPerp, hingeAlong, hingeSide, swingSide, leafLength, leafWeight, arcWeight) {
+  const hinge = toWorld(isVertical, hingeAlong, pivotPerp);
+  const closedAngle = closedAngleFor(isVertical, hingeSide);
+  const towardFar = hingeSide < 0 ? 1 : -1;
+  const far = toWorld(isVertical, hingeAlong + towardFar * leafLength, pivotPerp);
+  return [
+    linePrim('leaf', leafWeight, hinge, far),
+    arcPrim('arc', arcWeight, hinge.x, hinge.y, leafLength, closedAngle, swingSide * DOOR_OPEN_ANGLE_DEG),
+    arcPrim('arc', arcWeight, hinge.x, hinge.y, leafLength, closedAngle, -swingSide * DOOR_OPEN_ANGLE_DEG),
+  ];
+}
+
+// FIRE_FOLD 1袖分: 吊元側に折りたたんだジグザグ（leaf長の1/4程度の幅、2山）＋閉位置までの
+// 破線円弧（旧fireFoldPanel）。swingSideの規約はswingLeafPrimitivesと同じ。ジグザグはpolyline
+// （閉じない・role='leaf'）として1本にまとめる——旧jsxのptsフラット配列と同じ座標列。
+function fireFoldPanelPrimitives(isVertical, pivotPerp, hingeAlong, hingeSide, swingSide, leafLen, angleDeg, leafWeight, arcWeight) {
+  const hinge = toWorld(isVertical, hingeAlong, pivotPerp);
+  const closedAngle = closedAngleFor(isVertical, hingeSide);
+  const openAngle = leafOpenAngle(closedAngle, swingSide, angleDeg);
+  const { dir, perp } = angleVectors(openAngle);
+  const foldLen = leafLen / 4;
+  const segCount = FIRE_FOLD_PEAKS * 2;
+  const pts = [hinge.x, hinge.y];
+  for (let i = 1; i <= segCount; i += 1) {
+    const d = (foldLen * i) / segCount;
+    const amp = i === segCount ? 0 : (i % 2 === 1 ? FIRE_FOLD_AMP_MM : -FIRE_FOLD_AMP_MM);
+    pts.push(hinge.x + dir.x * d + perp.x * amp, hinge.y + dir.y * d + perp.y * amp);
+  }
+  return [
+    // closedは意図的に渡さない（undefined）——旧jsx fireFoldPanelの<Line points={pts} .../>は
+    // closedプロパティ自体を持たず（Konva既定でfalse相当）、renderPlanPrimitiveのcase 'polyline'
+    // は`closed={p.closed}`をそのまま転写するため、ここでfalseを明示するとprobeのprops比較上
+    // （閉じていないLineのclosedキーの有無）で旧経路と食い違う（見た目は同じでも実測で検出）。
+    polylinePrim('leaf', leafWeight, pts),
+    arcPrim('arc', arcWeight, hinge.x, hinge.y, leafLen, closedAngle, openAngle - closedAngle, FIRE_ARC_DASH_MM),
   ];
 }
 
@@ -264,6 +346,73 @@ function buildSwingGroupPrimitives(opening, entry, lodLevel, band, detail, axisV
   return swingPrimitives(opening, plan.pivotPerp, leafWeight, arcWeight, 0, 0, null);
 }
 
+// 蝶番系その2（HINGE_GROUP2_MECHANISMS）の機構ごとのleafプリミティブ（旧 renderer/
+// OpeningsLayer.jsx otherMechanismSymbol内のswingDoubleSymbol/swingChildSymbol/freeSymbol/
+// freeDoubleSymbol/fireDoorSymbol/fireFoldSymbolの移設）。frameは呼び出し側
+// （buildHingeGroup2Primitives）が別途描くため、ここはleaf・arcのみを返す。
+// childRatio/fireLeaves/fireAngleの既定値（0.3/1/90）は旧jsx swingChildSymbol/fireDoorSymbol/
+// fireFoldSymbolのentry?.xxx ?? 既定値と同じ（唯一の定義箇所）。
+function hingeGroup2LeafPrimitives(mechanism, opening, entry, pivotPerp, leafWeight, arcWeight) {
+  const { coord1, coord2, width, hingeSide, swingSide, isVertical } = opening;
+  switch (mechanism) {
+    case OpeningMechanism.SWING_DOUBLE: {
+      const specs = swingDoubleLeafSpecs(coord1, coord2, width, swingSide);
+      return leafSpecGroupPrimitives(isVertical, pivotPerp, specs, leafWeight, arcWeight, DOOR_OPEN_ANGLE_DEG);
+    }
+    case OpeningMechanism.SWING_CHILD: {
+      const childRatio = entry.childRatio ?? 0.3;
+      const specs = swingChildLeafSpecs(coord1, coord2, width, hingeSide, swingSide, childRatio);
+      return leafSpecGroupPrimitives(isVertical, pivotPerp, specs, leafWeight, arcWeight, DOOR_OPEN_ANGLE_DEG);
+    }
+    case OpeningMechanism.FREE: {
+      const hingeAlong = hingeSide < 0 ? coord1 : coord2;
+      return freeLeafPrimitives(isVertical, pivotPerp, hingeAlong, hingeSide, swingSide, width, leafWeight, arcWeight);
+    }
+    case OpeningMechanism.FREE_DOUBLE: {
+      const leafLength = width / 2;
+      return [
+        ...freeLeafPrimitives(isVertical, pivotPerp, coord1, -1, swingSide, leafLength, leafWeight, arcWeight),
+        ...freeLeafPrimitives(isVertical, pivotPerp, coord2, 1, swingSide, leafLength, leafWeight, arcWeight),
+      ];
+    }
+    case OpeningMechanism.FIRE_DOOR: {
+      const fireLeaves = entry.fireLeaves ?? 1;
+      const fireAngle = entry.fireAngle ?? 90;
+      const specs = fireDoorLeafSpecs(coord1, coord2, width, hingeSide, swingSide, fireLeaves);
+      return leafSpecGroupPrimitives(isVertical, pivotPerp, specs, leafWeight, arcWeight, fireAngle, FIRE_ARC_DASH_MM);
+    }
+    case OpeningMechanism.FIRE_FOLD: {
+      const fireAngle = entry.fireAngle ?? 90;
+      const specs = fireFoldLeafSpecs(coord1, coord2, width, hingeSide, swingSide, fireAngle);
+      return specs.flatMap(s => fireFoldPanelPrimitives(isVertical, pivotPerp, s.hingeAlong, s.hingeSide, s.sense, s.leafLength, fireAngle, leafWeight, arcWeight));
+    }
+    default: return [];
+  }
+}
+
+// 蝶番系その2（HINGE_GROUP2_MECHANISMS）のディスパッチ。SWINGのような専用inset扱いを持つ機構が
+// 無いため、蝶番系その1のSWING_IN等と同じnotched/none構造をそのまま使う（J7: jambW・
+// swingOpenPerpDir・planSymbolPlan／J11: notched→swingFrame＋innerSpanの移設）。
+function buildHingeGroup2Primitives(opening, entry, lodLevel, band, detail, axisValue, faceLo, faceHi) {
+  const leafWeight = planSymbolWeightMm('leaf', opening, detail);
+  const arcWeight = planSymbolWeightMm('arc', opening, detail);
+  const frameWeight = planSymbolWeightMm('frame', opening, detail);
+  const jambW = Math.min(FRAME_JAMB_WIDTH_MM, opening.width / 2);
+  const openPerpDir = swingOpenPerpDir(opening.isVertical, opening.hingeSide, opening.swingSide, entry.mechanism, entry);
+  const plan = planSymbolPlan({
+    mechanism: entry.mechanism, lodLevel, coord1: opening.coord1, coord2: opening.coord2,
+    axisValue, band, jambWidth: jambW, faceLo, faceHi, openPerpDir,
+  });
+
+  if (plan.frame === 'notched') {
+    const spanOpening = innerSpanOpening(opening, plan.innerSpan);
+    const frame = swingFramePrimitives(opening, band, plan.pivotPerp, plan.leafOutward, frameWeight);
+    const leaf = hingeGroup2LeafPrimitives(entry.mechanism, spanOpening, entry, plan.pivotPerp, leafWeight, arcWeight);
+    return [...frame, ...leaf];
+  }
+  return hingeGroup2LeafPrimitives(entry.mechanism, opening, entry, plan.pivotPerp, leafWeight, arcWeight);
+}
+
 /**
  * 建具1件の平面記号プリミティブ列を返す純関数。
  * @param {object} opening core.js の Opening 相当（coord1/coord2/centerCoord/isVertical/width/
@@ -275,8 +424,8 @@ function buildSwingGroupPrimitives(opening, entry, lodLevel, band, detail, axisV
  *   exteriorDirOf: 開口の外部側方向(±1)を返すthunk（詳細LODかつframeDepth>0のときだけ
  *   呼ぶ。呼ぶたびに再計算しないよう内部で1回だけメモ化して呼ぶ）。
  * @returns {object[]|null} プリミティブ配列。STANDARD/DETAILでentryがありIMPLEMENTED_MECHANISMS
- *   に含まれる機構のうちSWING_GROUP_MECHANISMS以外は暫定契約としてnull（呼び出し側は旧経路を
- *   実行する。11c〜11e で残りの機構を移行し尽くした後に削除予定）。
+ *   に含まれる機構のうちSWING_GROUP_MECHANISMS・HINGE_GROUP2_MECHANISMS以外は暫定契約として
+ *   null（呼び出し側は旧経路を実行する。11c〜11e で残りの機構を移行し尽くした後に削除予定）。
  */
 export function buildOpeningPlanSymbol(opening, ctx) {
   const { entry = null, lodLevel, axisValue, faceLo, faceHi, exteriorDirOf } = ctx ?? {};
@@ -293,13 +442,15 @@ export function buildOpeningPlanSymbol(opening, ctx) {
 
   const detail = lodLevel === LodLevel.DETAIL;
 
-  // STANDARD/DETAILでentryが実装済み機構を指す場合、SWING_GROUP_MECHANISMS（本ステップで
-  // 移行済み）以外は未移行——旧経路(OpeningsLayer.jsx側のotherMechanismSymbol等)がそのまま
-  // 描くため、ここではband計算（exteriorDirOfの呼び出しを含む）自体を行わない（呼び出し側と
-  // 二重に計算・二重にthunkを呼ばないため）。
+  // STANDARD/DETAILでentryが実装済み機構を指す場合、SWING_GROUP_MECHANISMS（11b-1）・
+  // HINGE_GROUP2_MECHANISMS（11b-2。本ステップで移行済み）以外は未移行——旧経路
+  // (OpeningsLayer.jsx側のotherMechanismSymbol等)がそのまま描くため、ここではband計算
+  // （exteriorDirOfの呼び出しを含む）自体を行わない（呼び出し側と二重に計算・二重にthunkを
+  // 呼ばないため）。
   const implemented = lodLevel !== LodLevel.SCHEMATIC && entry && IMPLEMENTED_MECHANISMS.has(entry.mechanism);
   const swingGroup = implemented && SWING_GROUP_MECHANISMS.has(entry.mechanism);
-  if (implemented && !swingGroup) {
+  const hingeGroup2 = implemented && HINGE_GROUP2_MECHANISMS.has(entry.mechanism);
+  if (implemented && !swingGroup && !hingeGroup2) {
     return null;
   }
 
@@ -327,6 +478,11 @@ export function buildOpeningPlanSymbol(opening, ctx) {
   // STANDARD/DETAILで蝶番系その1（SWING_GROUP_MECHANISMS）: 専用ディスパッチへ。
   if (swingGroup) {
     return buildSwingGroupPrimitives(opening, entry, lodLevel, band, detail, axisValue, faceLo, faceHi);
+  }
+
+  // STANDARD/DETAILで蝶番系その2（HINGE_GROUP2_MECHANISMS）: 専用ディスパッチへ。
+  if (hingeGroup2) {
+    return buildHingeGroup2Primitives(opening, entry, lodLevel, band, detail, axisValue, faceLo, faceHi);
   }
 
   // STANDARD/DETAILでentryが無い・未実装機構: ティックマークのみ。

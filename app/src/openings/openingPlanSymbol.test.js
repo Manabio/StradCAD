@@ -1,7 +1,8 @@
 // openingPlanSymbol.js（建具モード 平面記号の純関数化）の回帰テスト。
-// ステップ11a（器＋線幅役割＋SCHEMATIC）＋11b-1（蝶番系その1: SWING・SWING_IN・PROJECT_V・DREH_KIPP）。
+// ステップ11a（器＋線幅役割＋SCHEMATIC）＋11b-1（蝶番系その1: SWING・SWING_IN・PROJECT_V・DREH_KIPP）
+// ＋11b-2（蝶番系その2: SWING_DOUBLE・SWING_CHILD・FREE・FREE_DOUBLE・FIRE_DOOR・FIRE_FOLD）。
 //
-// 【ピン留め】(a) は probe（scripts/probe/openingPlanSymbolProbe.mjs）で実データ3文書×
+// 【ピン留め】(a)/(a')/(a'') は probe（scripts/probe/openingPlanSymbolProbe.mjs）で実データ3文書×
 // （通常＋sweep）の6本が旧 renderer/OpeningsLayer.jsx の出力と完全一致することを確認した後の
 // buildOpeningPlanSymbol自身の出力を primitives.map(p => JSON.stringify(p)) で固定したもの
 // （memberFigures.test.js と同じ形。意図的な出力変更なら期待値を採り直すこと）。
@@ -157,6 +158,197 @@ test('ピン留め: DREH_KIPP・STANDARD・吊元/開き勝手が逆符号 → �
 });
 
 // ================================================================
+// (a'') ピン留め: 蝶番系その2（ステップ11b-2。SWING_DOUBLE・SWING_CHILD・FREE・FREE_DOUBLE・
+// FIRE_DOOR・FIRE_FOLD）。probe（openingPlanSymbolProbe.mjs。実データ3文書×通常＋sweepの6本）で
+// 旧renderer/OpeningsLayer.jsxの出力と完全一致することを確認した後の出力を固定。
+// ================================================================
+
+test('ピン留め: SWING_DOUBLE・STANDARD → 左右leaf線2本＋弧2本（枠なし。中央で出会う）', () => {
+  const opening = makeOpening();
+  const ctx = makeCtx({ entry: { mechanism: OpeningMechanism.SWING_DOUBLE }, lodLevel: LodLevel.STANDARD, axisValue: 500 });
+  const prims = buildOpeningPlanSymbol(opening, ctx);
+  assert.deepEqual(prims.map(p => JSON.stringify(p)), [
+    '{"type":"line","x1":0,"y1":500,"x2":3.061616997868383e-14,"y2":1000,"role":"leaf","weightMm":0.25}',
+    '{"type":"arc","cx":0,"cy":500,"r":500,"startDeg":0,"sweepDeg":90,"role":"arc","weightMm":0.13}',
+    '{"type":"line","x1":1000,"y1":500,"x2":1000,"y2":1000,"role":"leaf","weightMm":0.25}',
+    '{"type":"arc","cx":1000,"cy":500,"r":500,"startDeg":180,"sweepDeg":-90,"role":"arc","weightMm":0.13}',
+  ]);
+});
+
+test('ピン留め: SWING_DOUBLE・DETAIL → 方立2本(frame)＋内法へ寄せたleaf線2本＋弧2本（notched経路）', () => {
+  const opening = makeOpening();
+  const ctx = makeCtx({ entry: { mechanism: OpeningMechanism.SWING_DOUBLE }, lodLevel: LodLevel.DETAIL, faceLo: -60, faceHi: 60, axisValue: 0 });
+  const prims = buildOpeningPlanSymbol(opening, ctx);
+  assert.deepEqual(prims.map(p => JSON.stringify(p)), [
+    '{"type":"polyline","points":[0,-72,30,-72,30,30,20,30,20,72,0,72],"closed":true,"role":"frame","weightMm":0.35}',
+    '{"type":"polyline","points":[1000,-72,970,-72,970,30,980,30,980,72,1000,72],"closed":true,"role":"frame","weightMm":0.35}',
+    '{"type":"line","x1":30,"y1":60,"x2":30.00000000000003,"y2":530,"role":"leaf","weightMm":0.25}',
+    '{"type":"arc","cx":30,"cy":60,"r":470,"startDeg":0,"sweepDeg":90,"role":"arc","weightMm":0.13}',
+    '{"type":"line","x1":970,"y1":60,"x2":970,"y2":530,"role":"leaf","weightMm":0.25}',
+    '{"type":"arc","cx":970,"cy":60,"r":470,"startDeg":180,"sweepDeg":-90,"role":"arc","weightMm":0.13}',
+  ]);
+});
+
+test('ピン留め: SWING_CHILD・STANDARD・childRatio省略 → 既定0.3で親700/子300に分割', () => {
+  const opening = makeOpening();
+  const ctx = makeCtx({ entry: { mechanism: OpeningMechanism.SWING_CHILD }, lodLevel: LodLevel.STANDARD, axisValue: 500 });
+  const prims = buildOpeningPlanSymbol(opening, ctx);
+  assert.deepEqual(prims.map(p => JSON.stringify(p)), [
+    '{"type":"line","x1":0,"y1":500,"x2":4.2862637970157365e-14,"y2":1200,"role":"leaf","weightMm":0.25}',
+    '{"type":"arc","cx":0,"cy":500,"r":700,"startDeg":0,"sweepDeg":90,"role":"arc","weightMm":0.13}',
+    '{"type":"line","x1":1000,"y1":500,"x2":1000,"y2":800,"role":"leaf","weightMm":0.25}',
+    '{"type":"arc","cx":1000,"cy":500,"r":300,"startDeg":180,"sweepDeg":-90,"role":"arc","weightMm":0.13}',
+  ]);
+});
+
+test('ピン留め: SWING_CHILD・DETAIL・childRatio明示0.3 → 内法へ寄せたうえで同じ比で分割（notched経路）', () => {
+  const opening = makeOpening();
+  const ctx = makeCtx({ entry: { mechanism: OpeningMechanism.SWING_CHILD, childRatio: 0.3 }, lodLevel: LodLevel.DETAIL, faceLo: -60, faceHi: 60, axisValue: 0 });
+  const prims = buildOpeningPlanSymbol(opening, ctx);
+  assert.deepEqual(prims.map(p => JSON.stringify(p)), [
+    '{"type":"polyline","points":[0,-72,30,-72,30,30,20,30,20,72,0,72],"closed":true,"role":"frame","weightMm":0.35}',
+    '{"type":"polyline","points":[1000,-72,970,-72,970,30,980,30,980,72,1000,72],"closed":true,"role":"frame","weightMm":0.35}',
+    '{"type":"line","x1":30,"y1":60,"x2":30.00000000000004,"y2":718,"role":"leaf","weightMm":0.25}',
+    '{"type":"arc","cx":30,"cy":60,"r":658,"startDeg":0,"sweepDeg":90,"role":"arc","weightMm":0.13}',
+    '{"type":"line","x1":970,"y1":60,"x2":970,"y2":342,"role":"leaf","weightMm":0.25}',
+    '{"type":"arc","cx":970,"cy":60,"r":282,"startDeg":180,"sweepDeg":-90,"role":"arc","weightMm":0.13}',
+  ]);
+});
+
+test('ピン留め: FREE・STANDARD → 閉じ位置leaf線1本＋弧2本（両側。枠なし）', () => {
+  const opening = makeOpening();
+  const ctx = makeCtx({ entry: { mechanism: OpeningMechanism.FREE }, lodLevel: LodLevel.STANDARD, axisValue: 500 });
+  const prims = buildOpeningPlanSymbol(opening, ctx);
+  assert.deepEqual(prims.map(p => JSON.stringify(p)), [
+    '{"type":"line","x1":0,"y1":500,"x2":1000,"y2":500,"role":"leaf","weightMm":0.25}',
+    '{"type":"arc","cx":0,"cy":500,"r":1000,"startDeg":0,"sweepDeg":90,"role":"arc","weightMm":0.13}',
+    '{"type":"arc","cx":0,"cy":500,"r":1000,"startDeg":0,"sweepDeg":-90,"role":"arc","weightMm":0.13}',
+  ]);
+});
+
+test('ピン留め: FREE・DETAIL → 方立2本(frame)＋内法へ寄せた閉じ位置leaf線＋弧2本（notched経路）', () => {
+  const opening = makeOpening();
+  const ctx = makeCtx({ entry: { mechanism: OpeningMechanism.FREE }, lodLevel: LodLevel.DETAIL, faceLo: -60, faceHi: 60, axisValue: 0 });
+  const prims = buildOpeningPlanSymbol(opening, ctx);
+  assert.deepEqual(prims.map(p => JSON.stringify(p)), [
+    '{"type":"polyline","points":[0,-72,30,-72,30,30,20,30,20,72,0,72],"closed":true,"role":"frame","weightMm":0.35}',
+    '{"type":"polyline","points":[1000,-72,970,-72,970,30,980,30,980,72,1000,72],"closed":true,"role":"frame","weightMm":0.35}',
+    '{"type":"line","x1":30,"y1":60,"x2":970,"y2":60,"role":"leaf","weightMm":0.25}',
+    '{"type":"arc","cx":30,"cy":60,"r":940,"startDeg":0,"sweepDeg":90,"role":"arc","weightMm":0.13}',
+    '{"type":"arc","cx":30,"cy":60,"r":940,"startDeg":0,"sweepDeg":-90,"role":"arc","weightMm":0.13}',
+  ]);
+});
+
+test('ピン留め: FREE_DOUBLE・STANDARD → 両leaf各1本＋弧2本ずつ（swingSideは反転せず両leaf共通）', () => {
+  const opening = makeOpening();
+  const ctx = makeCtx({ entry: { mechanism: OpeningMechanism.FREE_DOUBLE }, lodLevel: LodLevel.STANDARD, axisValue: 500 });
+  const prims = buildOpeningPlanSymbol(opening, ctx);
+  assert.deepEqual(prims.map(p => JSON.stringify(p)), [
+    '{"type":"line","x1":0,"y1":500,"x2":500,"y2":500,"role":"leaf","weightMm":0.25}',
+    '{"type":"arc","cx":0,"cy":500,"r":500,"startDeg":0,"sweepDeg":90,"role":"arc","weightMm":0.13}',
+    '{"type":"arc","cx":0,"cy":500,"r":500,"startDeg":0,"sweepDeg":-90,"role":"arc","weightMm":0.13}',
+    '{"type":"line","x1":1000,"y1":500,"x2":500,"y2":500,"role":"leaf","weightMm":0.25}',
+    '{"type":"arc","cx":1000,"cy":500,"r":500,"startDeg":180,"sweepDeg":90,"role":"arc","weightMm":0.13}',
+    '{"type":"arc","cx":1000,"cy":500,"r":500,"startDeg":180,"sweepDeg":-90,"role":"arc","weightMm":0.13}',
+  ]);
+});
+
+test('ピン留め: FIRE_DOOR・STANDARD・fireLeaves/fireAngle省略 → 既定(1枚・90°)でhingeSide側1leaf＋破線弧', () => {
+  const opening = makeOpening();
+  const ctx = makeCtx({ entry: { mechanism: OpeningMechanism.FIRE_DOOR }, lodLevel: LodLevel.STANDARD, axisValue: 500 });
+  const prims = buildOpeningPlanSymbol(opening, ctx);
+  assert.deepEqual(prims.map(p => JSON.stringify(p)), [
+    '{"type":"line","x1":0,"y1":500,"x2":6.123233995736766e-14,"y2":1500,"role":"leaf","weightMm":0.25}',
+    '{"type":"arc","cx":0,"cy":500,"r":1000,"startDeg":0,"sweepDeg":90,"role":"arc","weightMm":0.13,"dash":[10,6]}',
+  ]);
+});
+
+test('ピン留め: FIRE_DOOR・STANDARD・fireLeaves:2 → 両枠端から対称に2leaf＋破線弧2本', () => {
+  const opening = makeOpening();
+  const ctx = makeCtx({ entry: { mechanism: OpeningMechanism.FIRE_DOOR, fireLeaves: 2 }, lodLevel: LodLevel.STANDARD, axisValue: 500 });
+  const prims = buildOpeningPlanSymbol(opening, ctx);
+  assert.deepEqual(prims.map(p => JSON.stringify(p)), [
+    '{"type":"line","x1":0,"y1":500,"x2":3.061616997868383e-14,"y2":1000,"role":"leaf","weightMm":0.25}',
+    '{"type":"arc","cx":0,"cy":500,"r":500,"startDeg":0,"sweepDeg":90,"role":"arc","weightMm":0.13,"dash":[10,6]}',
+    '{"type":"line","x1":1000,"y1":500,"x2":1000,"y2":1000,"role":"leaf","weightMm":0.25}',
+    '{"type":"arc","cx":1000,"cy":500,"r":500,"startDeg":180,"sweepDeg":-90,"role":"arc","weightMm":0.13,"dash":[10,6]}',
+  ]);
+});
+
+// QA指摘（11b-2再報告分）: fireAngle:180は既存の宣言テストではfireLeaves:1/2いずれもfireAngle
+// 省略（既定90°）でしかピン留めしておらず、fireAngle自体をDOOR_OPEN_ANGLE_DEG(90)に固定する
+// 変異（entry.fireAngleを読み飛ばす）を検出できなかった。|sweepDeg|=180・dash固定を明示的に固定する。
+test('ピン留め: FIRE_DOOR・STANDARD・fireAngle:180・fireLeaves:1 → 弧|sweepDeg|=180・破線', () => {
+  const opening = makeOpening();
+  const ctx = makeCtx({ entry: { mechanism: OpeningMechanism.FIRE_DOOR, fireAngle: 180, fireLeaves: 1 }, lodLevel: LodLevel.STANDARD, axisValue: 500 });
+  const prims = buildOpeningPlanSymbol(opening, ctx);
+  assert.deepEqual(prims.map(p => JSON.stringify(p)), [
+    '{"type":"line","x1":0,"y1":500,"x2":-1000,"y2":500.0000000000001,"role":"leaf","weightMm":0.25}',
+    '{"type":"arc","cx":0,"cy":500,"r":1000,"startDeg":0,"sweepDeg":180,"role":"arc","weightMm":0.13,"dash":[10,6]}',
+  ]);
+});
+
+test('ピン留め: FIRE_DOOR・STANDARD・fireAngle:180・fireLeaves:2 → 2leafの弧が±180で逆符号（破線）', () => {
+  const opening = makeOpening();
+  const ctx = makeCtx({ entry: { mechanism: OpeningMechanism.FIRE_DOOR, fireAngle: 180, fireLeaves: 2 }, lodLevel: LodLevel.STANDARD, axisValue: 500 });
+  const prims = buildOpeningPlanSymbol(opening, ctx);
+  assert.deepEqual(prims.map(p => JSON.stringify(p)), [
+    '{"type":"line","x1":0,"y1":500,"x2":-500,"y2":500.00000000000006,"role":"leaf","weightMm":0.25}',
+    '{"type":"arc","cx":0,"cy":500,"r":500,"startDeg":0,"sweepDeg":180,"role":"arc","weightMm":0.13,"dash":[10,6]}',
+    '{"type":"line","x1":1000,"y1":500,"x2":1500,"y2":500,"role":"leaf","weightMm":0.25}',
+    '{"type":"arc","cx":1000,"cy":500,"r":500,"startDeg":180,"sweepDeg":-180,"role":"arc","weightMm":0.13,"dash":[10,6]}',
+  ]);
+  const arcSigns = prims.filter(p => p.role === 'arc').map(p => Math.sign(p.sweepDeg));
+  assert.deepEqual(arcSigns, [1, -1], '2leafの弧sweepDegが±180の逆符号でない');
+});
+
+test('ピン留め: FIRE_DOOR・DETAIL → 方立2本(frame)＋内法へ寄せたleaf線＋破線弧（notched経路）', () => {
+  const opening = makeOpening();
+  const ctx = makeCtx({ entry: { mechanism: OpeningMechanism.FIRE_DOOR }, lodLevel: LodLevel.DETAIL, faceLo: -60, faceHi: 60, axisValue: 0 });
+  const prims = buildOpeningPlanSymbol(opening, ctx);
+  assert.deepEqual(prims.map(p => JSON.stringify(p)), [
+    '{"type":"polyline","points":[0,-72,30,-72,30,30,20,30,20,72,0,72],"closed":true,"role":"frame","weightMm":0.35}',
+    '{"type":"polyline","points":[1000,-72,970,-72,970,30,980,30,980,72,1000,72],"closed":true,"role":"frame","weightMm":0.35}',
+    '{"type":"line","x1":30,"y1":60,"x2":30.000000000000057,"y2":1000,"role":"leaf","weightMm":0.25}',
+    '{"type":"arc","cx":30,"cy":60,"r":940,"startDeg":0,"sweepDeg":90,"role":"arc","weightMm":0.13,"dash":[10,6]}',
+  ]);
+});
+
+test('ピン留め: FIRE_FOLD・STANDARD・fireAngle省略 → 既定90°でhingeSide側1袖（ジグザグpolyline）＋破線弧', () => {
+  const opening = makeOpening();
+  const ctx = makeCtx({ entry: { mechanism: OpeningMechanism.FIRE_FOLD }, lodLevel: LodLevel.STANDARD, axisValue: 500 });
+  const prims = buildOpeningPlanSymbol(opening, ctx);
+  assert.deepEqual(prims.map(p => JSON.stringify(p)), [
+    '{"type":"polyline","points":[0,500,-59.99999999999999,562.5,60.00000000000001,625,-59.999999999999986,687.5,1.5308084989341916e-14,750],"role":"leaf","weightMm":0.25}',
+    '{"type":"arc","cx":0,"cy":500,"r":1000,"startDeg":0,"sweepDeg":90,"role":"arc","weightMm":0.13,"dash":[10,6]}',
+  ]);
+});
+
+test('ピン留め: FIRE_FOLD・STANDARD・fireAngle:180 → 両袖（ジグザグpolyline2本）＋破線弧2本（中央で出会う）', () => {
+  const opening = makeOpening();
+  const ctx = makeCtx({ entry: { mechanism: OpeningMechanism.FIRE_FOLD, fireAngle: 180 }, lodLevel: LodLevel.STANDARD, axisValue: 500 });
+  const prims = buildOpeningPlanSymbol(opening, ctx);
+  assert.deepEqual(prims.map(p => JSON.stringify(p)), [
+    '{"type":"polyline","points":[0,500,-31.250000000000007,440,-62.49999999999999,560,-93.75000000000001,440,-125,500],"role":"leaf","weightMm":0.25}',
+    '{"type":"arc","cx":0,"cy":500,"r":500,"startDeg":0,"sweepDeg":180,"role":"arc","weightMm":0.13,"dash":[10,6]}',
+    '{"type":"polyline","points":[1000,500,1031.25,560,1062.5,440,1093.75,560,1125,500],"role":"leaf","weightMm":0.25}',
+    '{"type":"arc","cx":1000,"cy":500,"r":500,"startDeg":180,"sweepDeg":-180,"role":"arc","weightMm":0.13,"dash":[10,6]}',
+  ]);
+});
+
+test('ピン留め: FIRE_FOLD・DETAIL → 方立2本(frame)＋内法へ寄せたジグザグpolyline＋破線弧（notched経路）', () => {
+  const opening = makeOpening();
+  const ctx = makeCtx({ entry: { mechanism: OpeningMechanism.FIRE_FOLD }, lodLevel: LodLevel.DETAIL, faceLo: -60, faceHi: 60, axisValue: 0 });
+  const prims = buildOpeningPlanSymbol(opening, ctx);
+  assert.deepEqual(prims.map(p => JSON.stringify(p)), [
+    '{"type":"polyline","points":[0,-72,30,-72,30,30,20,30,20,72,0,72],"closed":true,"role":"frame","weightMm":0.35}',
+    '{"type":"polyline","points":[1000,-72,970,-72,970,30,980,30,980,72,1000,72],"closed":true,"role":"frame","weightMm":0.35}',
+    '{"type":"polyline","points":[30,60,-29.999999999999996,118.75,90,177.5,-29.99999999999999,236.25,30.000000000000014,295],"role":"leaf","weightMm":0.25}',
+    '{"type":"arc","cx":30,"cy":60,"r":940,"startDeg":0,"sweepDeg":90,"role":"arc","weightMm":0.13,"dash":[10,6]}',
+  ]);
+});
+
+// ================================================================
 // (b) 不変条件
 // ================================================================
 
@@ -262,6 +454,104 @@ test('ピン留め: SWING・DETAIL・openPerpDir=-1（hingeSide:-1,swingSide:-1�
     '{"type":"line","x1":25,"y1":-60,"x2":25.000000000000057,"y2":-1015,"role":"leaf","weightMm":0.25}',
     '{"type":"arc","cx":25,"cy":-60,"r":955,"startDeg":0,"sweepDeg":-90,"role":"arc","weightMm":0.13}',
   ]);
+});
+
+// ---- 蝶番系その2（HINGE_GROUP2_MECHANISMS）専用の不変条件 ----
+
+test('不変条件: 蝶番系その2は扉線がrole=leaf(medium)・動作弧がrole=arc(thin)固定（6機構×STANDARD/DETAILで揺れない）', () => {
+  const mechanisms = [
+    OpeningMechanism.SWING_DOUBLE, OpeningMechanism.SWING_CHILD, OpeningMechanism.FREE,
+    OpeningMechanism.FREE_DOUBLE, OpeningMechanism.FIRE_DOOR, OpeningMechanism.FIRE_FOLD,
+  ];
+  for (const mechanism of mechanisms) {
+    for (const lodLevel of [LodLevel.STANDARD, LodLevel.DETAIL]) {
+      const opening = makeOpening();
+      const ctx = makeCtx({ entry: { mechanism }, lodLevel, faceLo: -60, faceHi: 60, axisValue: 0 });
+      const prims = buildOpeningPlanSymbol(opening, ctx);
+      const leaf = prims.filter(p => p.role === 'leaf');
+      const arc = prims.filter(p => p.role === 'arc');
+      assert.ok(leaf.length >= 1, `${mechanism}/${lodLevel}: leafが無い`);
+      assert.ok(arc.length >= 1, `${mechanism}/${lodLevel}: arcが無い`);
+      assert.ok(leaf.every(p => p.weightMm === LINE_WEIGHT_MM.medium), `${mechanism}/${lodLevel}`);
+      assert.ok(arc.every(p => p.weightMm === LINE_WEIGHT_MM.thin), `${mechanism}/${lodLevel}`);
+    }
+  }
+});
+
+test('不変条件: 蝶番系その2のDETAILの方立(frame)はwallFinishLineWeight(true)固定（SWINGのような専用inset扱いを持たない）', () => {
+  const mechanisms = [
+    OpeningMechanism.SWING_DOUBLE, OpeningMechanism.SWING_CHILD, OpeningMechanism.FREE,
+    OpeningMechanism.FREE_DOUBLE, OpeningMechanism.FIRE_DOOR, OpeningMechanism.FIRE_FOLD,
+  ];
+  for (const mechanism of mechanisms) {
+    const opening = makeOpening();
+    const ctx = makeCtx({ entry: { mechanism }, lodLevel: LodLevel.DETAIL, faceLo: -60, faceHi: 60, axisValue: 0 });
+    const prims = buildOpeningPlanSymbol(opening, ctx);
+    const frame = prims.filter(p => p.role === 'frame');
+    assert.equal(frame.length, 2, `${mechanism}: 方立が2本でない`);
+    assert.ok(frame.every(p => p.type === 'polyline' && p.closed === true));
+    assert.ok(frame.every(p => p.weightMm === LINE_WEIGHT_MM.thick));
+  }
+});
+
+test('不変条件: FREE・FREE_DOUBLEは1leafあたり弧2本（swingSide側とその逆側）を持つ（他の蝶番系は1leafあたり弧1本）', () => {
+  const opening = makeOpening();
+  const freePrims = buildOpeningPlanSymbol(opening, makeCtx({ entry: { mechanism: OpeningMechanism.FREE }, lodLevel: LodLevel.STANDARD }));
+  assert.equal(freePrims.filter(p => p.role === 'leaf').length, 1);
+  assert.equal(freePrims.filter(p => p.role === 'arc').length, 2);
+
+  const freeDoublePrims = buildOpeningPlanSymbol(opening, makeCtx({ entry: { mechanism: OpeningMechanism.FREE_DOUBLE }, lodLevel: LodLevel.STANDARD }));
+  assert.equal(freeDoublePrims.filter(p => p.role === 'leaf').length, 2);
+  assert.equal(freeDoublePrims.filter(p => p.role === 'arc').length, 4);
+
+  const swingDoublePrims = buildOpeningPlanSymbol(opening, makeCtx({ entry: { mechanism: OpeningMechanism.SWING_DOUBLE }, lodLevel: LodLevel.STANDARD }));
+  assert.equal(swingDoublePrims.filter(p => p.role === 'leaf').length, 2);
+  assert.equal(swingDoublePrims.filter(p => p.role === 'arc').length, 2); // 1leafあたり1本
+});
+
+test('不変条件: FIRE_DOOR/FIRE_FOLDの動作弧はdash=[10,6]（FIRE_ARC_DASH_MM）固定——他の蝶番系その2は弧にdashを持たない', () => {
+  const opening = makeOpening();
+  const fireMechanisms = [OpeningMechanism.FIRE_DOOR, OpeningMechanism.FIRE_FOLD];
+  for (const mechanism of fireMechanisms) {
+    for (const lodLevel of [LodLevel.STANDARD, LodLevel.DETAIL]) {
+      const ctx = makeCtx({ entry: { mechanism }, lodLevel, faceLo: -60, faceHi: 60, axisValue: 0 });
+      const prims = buildOpeningPlanSymbol(opening, ctx);
+      const arc = prims.filter(p => p.role === 'arc');
+      assert.ok(arc.length >= 1, `${mechanism}/${lodLevel}: arcが無い`);
+      assert.ok(arc.every(p => Array.isArray(p.dash) && p.dash[0] === 10 && p.dash[1] === 6), `${mechanism}/${lodLevel}: 破線弧でない`);
+    }
+  }
+  const nonFireMechanisms = [OpeningMechanism.SWING_DOUBLE, OpeningMechanism.SWING_CHILD, OpeningMechanism.FREE, OpeningMechanism.FREE_DOUBLE];
+  for (const mechanism of nonFireMechanisms) {
+    const ctx = makeCtx({ entry: { mechanism }, lodLevel: LodLevel.STANDARD });
+    const prims = buildOpeningPlanSymbol(opening, ctx);
+    const arc = prims.filter(p => p.role === 'arc');
+    assert.ok(arc.every(p => p.dash === undefined), `${mechanism}: 弧にdashを持たないはずが持っている`);
+  }
+});
+
+// QA指摘（11b-1）「hingeSideとswingSideを同時反転すると符号の積が不変で検出できない」教訓の再発防止:
+// SWING_DOUBLE/FIRE_DOOR(fireLeaves:2)/FIRE_FOLD(fireAngle:180)の2枚leafは*LeafSpecs
+// （openingPlanSymbolGeometry.js）がcoord2側leafのsenseだけを反転して渡す（同じ物理側=perp側へ
+// 開かせるため）。coord1側(closedAngle=0)とcoord2側(closedAngle=180)は基準角が180°違うため、
+// sweepDeg自体の符号は常に逆（[+1,-1]または[-1,+1]）——これがsenseの符号反転が正しく効いている
+// 証拠（*LeafSpecsのsense反転を外すと両leafが同じ基準角からのsweepDeg符号になり[+1,+1]/[-1,-1]へ
+// 崩れる。leafSpecGroupPrimitives内 s.sense→-s.sense変異はscratchpad probe実測で検出済み。
+// x1/x2やsweepDegが反転する）。swingSideを反転すると2本とも連動して符号が入れ替わることも併せて
+// 固定する。
+test('不変条件: 2枚leaf構成（SWING_DOUBLE等）はcoord1/coord2側leafの弧sweepDegが常に逆符号で、swingSide反転で両方入れ替わる', () => {
+  const openArcSweepSigns = (mechanism, swingSide, extra = {}) => {
+    const opening = makeOpening({ swingSide });
+    const ctx = makeCtx({ entry: { mechanism, ...extra }, lodLevel: LodLevel.STANDARD });
+    const prims = buildOpeningPlanSymbol(opening, ctx);
+    return prims.filter(p => p.role === 'arc').map(p => Math.sign(p.sweepDeg));
+  };
+  assert.deepEqual(openArcSweepSigns(OpeningMechanism.SWING_DOUBLE, 1), [1, -1]);
+  assert.deepEqual(openArcSweepSigns(OpeningMechanism.SWING_DOUBLE, -1), [-1, 1]);
+  assert.deepEqual(openArcSweepSigns(OpeningMechanism.FIRE_DOOR, 1, { fireLeaves: 2 }), [1, -1]);
+  assert.deepEqual(openArcSweepSigns(OpeningMechanism.FIRE_DOOR, -1, { fireLeaves: 2 }), [-1, 1]);
+  assert.deepEqual(openArcSweepSigns(OpeningMechanism.FIRE_FOLD, 1, { fireAngle: 180 }), [1, -1]);
+  assert.deepEqual(openArcSweepSigns(OpeningMechanism.FIRE_FOLD, -1, { fireAngle: 180 }), [-1, 1]);
 });
 
 // ================================================================
@@ -471,10 +761,118 @@ test('失敗系: width<60（開口が狭い）でもNaNが混入しない', () =
   }
 });
 
+// ---- 蝶番系その2（HINGE_GROUP2_MECHANISMS）専用の失敗系 ----
+
+test('失敗系: SWING_CHILD・childRatio省略 → 既定0.3（entry.childRatioが無くても親700/子300、ピン留めテスト参照の比と一致）', () => {
+  const opening = makeOpening();
+  const withoutRatio = buildOpeningPlanSymbol(opening, makeCtx({ entry: { mechanism: OpeningMechanism.SWING_CHILD }, lodLevel: LodLevel.STANDARD }));
+  const withRatio = buildOpeningPlanSymbol(opening, makeCtx({ entry: { mechanism: OpeningMechanism.SWING_CHILD, childRatio: 0.3 }, lodLevel: LodLevel.STANDARD }));
+  assert.deepEqual(withoutRatio.map(p => JSON.stringify(p)), withRatio.map(p => JSON.stringify(p)));
+});
+
+test('失敗系: FIRE_DOOR・fireLeaves/fireAngle省略 → 既定(1枚・90°)。fireLeaves明示1・fireAngle明示90と一致', () => {
+  const opening = makeOpening();
+  const omitted = buildOpeningPlanSymbol(opening, makeCtx({ entry: { mechanism: OpeningMechanism.FIRE_DOOR }, lodLevel: LodLevel.STANDARD }));
+  const explicit = buildOpeningPlanSymbol(opening, makeCtx({ entry: { mechanism: OpeningMechanism.FIRE_DOOR, fireLeaves: 1, fireAngle: 90 }, lodLevel: LodLevel.STANDARD }));
+  assert.deepEqual(omitted.map(p => JSON.stringify(p)), explicit.map(p => JSON.stringify(p)));
+});
+
+test('失敗系: FIRE_FOLD・fireAngle省略 → 既定90°。明示90と一致', () => {
+  const opening = makeOpening();
+  const omitted = buildOpeningPlanSymbol(opening, makeCtx({ entry: { mechanism: OpeningMechanism.FIRE_FOLD }, lodLevel: LodLevel.STANDARD }));
+  const explicit = buildOpeningPlanSymbol(opening, makeCtx({ entry: { mechanism: OpeningMechanism.FIRE_FOLD, fireAngle: 90 }, lodLevel: LodLevel.STANDARD }));
+  assert.deepEqual(omitted.map(p => JSON.stringify(p)), explicit.map(p => JSON.stringify(p)));
+});
+
+test('失敗系: FIRE_DOOR・fireLeaves:2はopening.hingeSideが±どちらでも出力が同じ（hingeSideMatters=falseの機構はhingeSideを問わない）', () => {
+  const ctx = makeCtx({ entry: { mechanism: OpeningMechanism.FIRE_DOOR, fireLeaves: 2 }, lodLevel: LodLevel.STANDARD });
+  const neg = buildOpeningPlanSymbol(makeOpening({ hingeSide: -1 }), ctx);
+  const pos = buildOpeningPlanSymbol(makeOpening({ hingeSide: 1 }), ctx);
+  assert.deepEqual(neg.map(p => JSON.stringify(p)), pos.map(p => JSON.stringify(p)));
+});
+
+// QA指摘（11b-2再報告分）: hingeSideMatters（openingCatalog.js）がtrueを返す機構は、swingSideを
+// 固定してhingeSideだけ変えると吊元（hingeAlong）がcoord1↔coord2へ動くはず。単に「出力全体が
+// 変わるか」だけの検証は弱い——FREEはclosedAngleFor(hingeSide)がhingeAlongと無関係に閉じ角度・
+// 動作方向も反転させるため、「hingeAlongをcoord1固定にする変異」を入れても弧の向き等が変わって
+// 出力全体としては差分が出てしまい検出できなかった（実測: notDeepEqualだけの版は全緑のまま）。
+// 吊元の位置そのもの（先頭プリミティブの長さ方向座標＝水平壁ではx。line=x1／polyline=points[0]）
+// がcoord1(0)/coord2(1000)へ正しく切り替わることを直接固定する。
+function hingeAlongOf(prim) {
+  return prim.type === 'polyline' ? prim.points[0] : prim.x1;
+}
+test('不変条件: hingeSideMatters=trueの機構（SWING_CHILD/FREE/FIRE_DOOR fireLeaves:1/FIRE_FOLD fireAngle:90）はswingSide固定でhingeSideを-1→+1に変えると吊元がcoord1→coord2へ動く', () => {
+  const cases = [
+    { mechanism: OpeningMechanism.SWING_CHILD, extra: {} },
+    { mechanism: OpeningMechanism.FREE, extra: {} },
+    { mechanism: OpeningMechanism.FIRE_DOOR, extra: { fireLeaves: 1 } },
+    { mechanism: OpeningMechanism.FIRE_FOLD, extra: { fireAngle: 90 } },
+  ];
+  for (const { mechanism, extra } of cases) {
+    const ctx = makeCtx({ entry: { mechanism, ...extra }, lodLevel: LodLevel.STANDARD });
+    const neg = buildOpeningPlanSymbol(makeOpening({ hingeSide: -1 }), ctx);
+    const pos = buildOpeningPlanSymbol(makeOpening({ hingeSide: 1 }), ctx);
+    assert.equal(hingeAlongOf(neg[0]), 0, `${mechanism}: hingeSide:-1の吊元がcoord1(0)でない`);
+    assert.equal(hingeAlongOf(pos[0]), 1000, `${mechanism}: hingeSide:+1の吊元がcoord2(1000)でない`);
+  }
+});
+
+// hingeSideMatters=falseの機構（対向leafが両方あるため片方のhingeSideは意味を持たない）は、
+// FIRE_DOOR・fireLeaves:2（上のテスト）に加えて残り3機構（SWING_DOUBLE・FREE_DOUBLE・
+// FIRE_FOLD fireAngle:180）でも同じ不変条件を固定する。
+test('不変条件: hingeSideMatters=falseの機構（SWING_DOUBLE/FREE_DOUBLE/FIRE_FOLD fireAngle:180）はhingeSide±で出力が同一', () => {
+  const cases = [
+    { mechanism: OpeningMechanism.SWING_DOUBLE, extra: {} },
+    { mechanism: OpeningMechanism.FREE_DOUBLE, extra: {} },
+    { mechanism: OpeningMechanism.FIRE_FOLD, extra: { fireAngle: 180 } },
+  ];
+  for (const { mechanism, extra } of cases) {
+    const ctx = makeCtx({ entry: { mechanism, ...extra }, lodLevel: LodLevel.STANDARD });
+    const neg = buildOpeningPlanSymbol(makeOpening({ hingeSide: -1 }), ctx);
+    const pos = buildOpeningPlanSymbol(makeOpening({ hingeSide: 1 }), ctx);
+    assert.deepEqual(neg.map(p => JSON.stringify(p)), pos.map(p => JSON.stringify(p)), `${mechanism}: hingeSideを問わないはずが出力が変わる`);
+  }
+});
+
+test('失敗系: 蝶番系その2はhingeSide/swingSideが0やundefinedでも例外を投げない（旧挙動に合わせる）', () => {
+  const mechanisms = [
+    OpeningMechanism.SWING_DOUBLE, OpeningMechanism.SWING_CHILD, OpeningMechanism.FREE,
+    OpeningMechanism.FREE_DOUBLE, OpeningMechanism.FIRE_DOOR, OpeningMechanism.FIRE_FOLD,
+  ];
+  for (const mechanism of mechanisms) {
+    for (const [hingeSide, swingSide] of [[undefined, undefined], [0, 0]]) {
+      for (const lodLevel of [LodLevel.STANDARD, LodLevel.DETAIL]) {
+        const opening = makeOpening({ hingeSide, swingSide });
+        const ctx = makeCtx({ entry: { mechanism }, lodLevel, faceLo: -60, faceHi: 60, axisValue: 0 });
+        assert.doesNotThrow(() => buildOpeningPlanSymbol(opening, ctx), `${mechanism}/${lodLevel}/${hingeSide}/${swingSide}`);
+      }
+    }
+  }
+});
+
+test('失敗系: 蝶番系その2はwidth<60（開口が狭い）でもNaNが混入しない（SWING_CHILD・FIRE_FOLDで確認）', () => {
+  const narrowOpening = makeOpening({ coord1: 0, coord2: 40, centerCoord: 20, width: 40 });
+  for (const mechanism of [OpeningMechanism.SWING_CHILD, OpeningMechanism.FIRE_FOLD]) {
+    for (const lodLevel of [LodLevel.STANDARD, LodLevel.DETAIL]) {
+      const ctx = makeCtx({ entry: { mechanism }, lodLevel, faceLo: -60, faceHi: 60, axisValue: 0 });
+      const prims = buildOpeningPlanSymbol(narrowOpening, ctx);
+      for (const p of prims) {
+        for (const k of ['x1', 'y1', 'x2', 'y2', 'cx', 'cy', 'r']) {
+          if (k in p) assert.ok(Number.isFinite(p[k]), `${mechanism}/${lodLevel}: ${k}が有限でない: ${p[k]}`);
+        }
+        if (p.type === 'polyline') {
+          for (const v of p.points) assert.ok(Number.isFinite(v), `${mechanism}/${lodLevel}: polyline座標が有限でない: ${v}`);
+        }
+      }
+    }
+  }
+});
+
 // ================================================================
 // (d) STANDARD/DETAILの実装済み機構はnull（一時契約。SWING_GROUP_MECHANISMS
-// （SWING・SWING_IN・PROJECT_V・DREH_KIPP。11b-1で移行済み）を除く残りの機構が対象。
-// 11c以降で機構ごとに置き換える）
+// （SWING・SWING_IN・PROJECT_V・DREH_KIPP。11b-1で移行済み）・HINGE_GROUP2_MECHANISMS
+// （SWING_DOUBLE・SWING_CHILD・FREE・FREE_DOUBLE・FIRE_DOOR・FIRE_FOLD。11b-2で移行済み）を
+// 除く残りの機構が対象。11c以降で機構ごとに置き換える）
 // ================================================================
 
 test('暫定契約: STANDARD・実装済み機構(SLIDE_SINGLE・未移行)はnull', () => {
@@ -485,6 +883,20 @@ test('暫定契約: STANDARD・実装済み機構(SLIDE_SINGLE・未移行)はnu
 
 test('暫定契約: SWING_GROUP_MECHANISMSはSTANDARD/DETAILともnullにならない（11b-1で移行済み）', () => {
   const mechanisms = [OpeningMechanism.SWING, OpeningMechanism.SWING_IN, OpeningMechanism.PROJECT_V, OpeningMechanism.DREH_KIPP];
+  for (const mechanism of mechanisms) {
+    for (const lodLevel of [LodLevel.STANDARD, LodLevel.DETAIL]) {
+      const opening = makeOpening();
+      const ctx = makeCtx({ entry: { mechanism }, lodLevel, faceLo: -60, faceHi: 60, axisValue: 0 });
+      assert.notEqual(buildOpeningPlanSymbol(opening, ctx), null, `${mechanism}/${lodLevel}`);
+    }
+  }
+});
+
+test('暫定契約: HINGE_GROUP2_MECHANISMSはSTANDARD/DETAILともnullにならない（11b-2で移行済み）', () => {
+  const mechanisms = [
+    OpeningMechanism.SWING_DOUBLE, OpeningMechanism.SWING_CHILD, OpeningMechanism.FREE,
+    OpeningMechanism.FREE_DOUBLE, OpeningMechanism.FIRE_DOOR, OpeningMechanism.FIRE_FOLD,
+  ];
   for (const mechanism of mechanisms) {
     for (const lodLevel of [LodLevel.STANDARD, LodLevel.DETAIL]) {
       const opening = makeOpening();

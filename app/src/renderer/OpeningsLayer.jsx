@@ -20,7 +20,10 @@ import {
 import { arcPathD } from './ShapesLayer.jsx';
 import { LodLevel, resolveStrokeWidth } from '../viewport.js';
 import { wallFinishLineWeight } from '../finish/wallFinishJoin.js';
-import { buildOpeningPlanSymbol, tickEndpoints, FRAME_HINGE_INSET_MM, FRAME_LATCH_INSET_MM } from '../openings/openingPlanSymbol.js';
+import {
+  buildOpeningPlanSymbol, tickEndpoints, FRAME_HINGE_INSET_MM, FRAME_LATCH_INSET_MM,
+  FIRE_ARC_DASH_MM, FIRE_FOLD_PEAKS, FIRE_FOLD_AMP_MM,
+} from '../openings/openingPlanSymbol.js';
 
 // 引き違い 詳細LOD用（すべて mm）
 const SLIDE_TRACK_INSET_MM = 4;       // 枠から戸先・召し合わせレールまでの隙間
@@ -29,9 +32,12 @@ const WEATHERSTRIP_DASH    = [6, 4];  // 召し合わせ部・気密材(モヘ�
 // 開き戸 詳細LOD用 枠寸法（FRAME_HINGE_INSET_MM/FRAME_LATCH_INSET_MMはopenings/openingPlanSymbol.js
 // へ移設——ステップ11b-1でSWINGを移行し呼び出し元がswingSymbol経由の旧経路のみになったため、
 // 定数の唯一の定義箇所をそちらに一本化する（TICK_HALF_MMと同じ扱い）。この節の下のswingSymbol等は
-// 11b-1で移行していない他の蝶番系（SWING_DOUBLE/SWING_CHILD/FREE/FREE_DOUBLE/FIRE_DOOR/FIRE_FOLD）が
-// 引き続き使うため残す。SWING分岐（renderOpeningSymbol内、本ファイル816-830行）自体は
-// buildOpeningPlanSymbolが非nullを返すため11b-1以降は到達しない（11eでnull経路ごと削除）。
+// 11b-1で移行していない他の蝶番系が引き続き使うため残す。SWING分岐（renderOpeningSymbol内、
+// 本ファイル816-830行）自体はbuildOpeningPlanSymbolが非nullを返すため11b-1以降は到達しない
+// （11eでnull経路ごと削除）。FIRE_ARC_DASH/FIRE_FOLD_PEAKS/FIRE_FOLD_AMP_MMも同じ理由で
+// ステップ11b-2でopenings/openingPlanSymbol.jsへ移設——この節の下のswingDoubleSymbol/
+// swingChildSymbol/freeSymbol/freeDoubleSymbol/fireDoorSymbol/fireFoldSymbol（otherMechanismSymbol
+// 経由）もbuildOpeningPlanSymbolが非nullを返すため11b-2以降は到達しない。
 
 // 新機構用の記号寸法（すべて mm）
 const FOLD_AMPLITUDE_MM  = 120; // 折れ戸・折りたたみ窓のジグザグ振幅
@@ -39,9 +45,6 @@ const SHUTTER_DASH       = [14, 4, 4, 4]; // シャッターの一点鎖線
 const OVERHEAD_DASH      = [10, 6];       // オーバーヘッドドアの跳ね上げ投影（破線）
 const OVERHEAD_DEPTH_MM  = 200;
 const EMERGENCY_SIDE_MM  = 400; // 非常用進入口の逆三角形の一辺
-const FIRE_ARC_DASH      = [10, 6]; // 常時開放金物の開放位置を示す破線円弧
-const FIRE_FOLD_PEAKS    = 2;       // 常時開放式防火折戸: 吊元側に畳んだジグザグの山数
-const FIRE_FOLD_AMP_MM   = 60;      // 同上の振幅
 
 // 蝶番系の平面記号の線の太さ（作図規約。ユーザー指示2026-09）。3段の対比で「何の線か」を示す:
 //   枠材（方立・見込帯の外形）= 太線（詳細LOD。wallFinishLineWeight。壁の仕上げ材と同じ）
@@ -350,7 +353,7 @@ function fireLeafSymbol(isVertical, pivotPerp, hingeAlong, hingeSide, swingSide,
   return (
     <>
       <Line points={[hinge.x, hinge.y, far.x, far.y]} {...sp} />
-      <Path data={arcPathD(hinge.x, hinge.y, leafLength, closedAngle, openAngle - closedAngle)} dash={FIRE_ARC_DASH} fill="transparent" {...asp} />
+      <Path data={arcPathD(hinge.x, hinge.y, leafLength, closedAngle, openAngle - closedAngle)} dash={FIRE_ARC_DASH_MM} fill="transparent" {...asp} />
     </>
   );
 }
@@ -389,7 +392,7 @@ function fireFoldPanel(isVertical, pivotPerp, hingeAlong, hingeSide, swingSide, 
   return (
     <>
       <Line points={pts} {...sp} />
-      <Path data={arcPathD(hinge.x, hinge.y, leafLen, closedAngle, openAngle - closedAngle)} dash={FIRE_ARC_DASH} fill="transparent" {...asp} />
+      <Path data={arcPathD(hinge.x, hinge.y, leafLen, closedAngle, openAngle - closedAngle)} dash={FIRE_ARC_DASH_MM} fill="transparent" {...asp} />
     </>
   );
 }
