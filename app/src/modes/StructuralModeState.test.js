@@ -134,3 +134,29 @@ test('init: peekUnresolvedCodes()（全階累積・kind=section）で蓄積さ�
     clearDocumentAliases(); // documentAliasesByKind['section']をリセットし、他テストへ漏らさない
   }
 });
+
+// ---- QA指摘Major-3申し送り（ステップ10e。OpeningModeStateと同じ穴が無いかの確認）:
+// _missingSectionUsage（生走査）とpeekUnresolvedCodes（合流）の両方に同じ部材が現れる場合、
+// 二重計上しないことを固定する ----
+test('【失敗系・QA指摘Major-3申し送り】init: 同じ部材がpeekUnresolvedCodesにも載る場合でも、usageは部材の実数と一致する（重複計上しない）', async () => {
+  const { graph, x0, x1, y0 } = makeGraph();
+  const beam = graph.addBeam(StructuralMaterialType.STEEL, 'STEEL-GHOST', y0, false, x0, x1, { role: 'primary' });
+  try {
+    // 文書固有のalias: STEEL-GHOST → null（廃止まで潰れる）。normalizeCodeは値を据え置き、
+    // その箇所をunresolvedへ積む——member.sectionDefIdは今もSTEEL-GHOSTのままなので
+    // _missingSectionUsage（生走査）でも同じ部材が「合成Mapに無い」として拾われる。
+    addDocumentAliases(CatalogKind.SECTION, [{ from: 'STEEL-GHOST', to: null }]);
+    applyDocumentCodeNormalization({ beams: [{ id: beam.id, sectionDefId: 'STEEL-GHOST' }] });
+
+    const s = new StructuralModeState(graph);
+    const { catalogResolveRows } = await s.init();
+
+    assert.equal(catalogResolveRows.length, 1);
+    assert.equal(catalogResolveRows[0].targetKey, 'STEEL-GHOST');
+    assert.equal(catalogResolveRows[0].usage.length, 1, '生走査（_missingSectionUsage）とpeek合流（peekUnresolvedCodes）の両方に同じ部材があっても1件にする');
+    assert.equal(catalogResolveRows[0].usage[0].memberId, beam.id);
+  } finally {
+    takeUnresolvedCodes();
+    clearDocumentAliases();
+  }
+});

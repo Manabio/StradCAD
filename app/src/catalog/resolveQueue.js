@@ -170,6 +170,22 @@ export function buildResolveRows({
   return rows;
 }
 
+/**
+ * openingSubType の複合キー（`${category}:${subType}`）からcategory（fitting/window）を取り出す
+ * （ステップ10e QA指摘Minor-5: resolveQueue.js・CatalogResolveDialog.jsx・OpeningModeState.jsに
+ * 散らばっていた `key.split(':')[0]` を1箇所へ集約する）。catalogKinds.js の
+ * CatalogKind.OPENING_SUB_TYPE.parseKey を使う——不正な形式（コロン無し等）は例外を投げず null。
+ * @param {string} key
+ * @returns {string|null}
+ */
+export function openingCategoryOf(key) {
+  try {
+    return kindDef(CatalogKind.OPENING_SUB_TYPE).parseKey(key).category;
+  } catch {
+    return null;
+  }
+}
+
 /** row.kindのkeyOfでcandidateのキーを取り出す（keyOfが例外を投げる壊れたcandidateはnull）。 */
 function keyOfResolveCandidate(row, candidate) {
   if (!candidate) return null;
@@ -268,6 +284,21 @@ export function applyResolveDecisions(rows, decisions, { validKeysByKind } = {})
     return !validKeys || validKeys.has(key);
   };
 
+  // 10b QA指摘Minor-3申し送り（ステップ10e→QAステップ10e Minor-3で approve 側にも拡張）:
+  // openingSubType行はcategory（fitting/window）が違う代替をapprove/pickされてもaliasに積まない
+  // ——カテゴリを跨ぐと採番・記号・wallKindsの意味が変わるため（codeNormalization.js
+  // normalizeOpeningsのカテゴリ跨ぎ据え置きと同じ理由）。row.targetKeyは常に
+  // `${category}:${subType}`（catalogKinds.js keyOfと同型）。他種別（複合キーでない）は常に
+  // 不一致なし。category抽出は openingCategoryOf（catalogKinds.js parseKey経由）に一本化——
+  // どちらかが不正な形式（parseKey失敗）なら安全側でreject扱いにする。
+  const isOpeningCategoryMismatch = (row, key) => {
+    if (row.kind !== CatalogKind.OPENING_SUB_TYPE) return false;
+    const rowCategory = openingCategoryOf(row.targetKey);
+    const keyCategory = openingCategoryOf(key);
+    if (rowCategory == null || keyCategory == null) return true;
+    return rowCategory !== keyCategory;
+  };
+
   function rejectToDeferred(row, key, reason) {
     deferredRowIds.push(row.id);
     rejected.push({ rowId: row.id, key, reason });
@@ -300,6 +331,10 @@ export function applyResolveDecisions(rows, decisions, { validKeysByKind } = {})
             rejectToDeferred(row, toKey, '候補が現在のライブラリに見つかりません');
             break;
           }
+          if (isOpeningCategoryMismatch(row, toKey)) {
+            rejectToDeferred(row, toKey, '建具種別のカテゴリ（fitting/window）が一致しません');
+            break;
+          }
           aliasPairs.push({ kind: row.kind, from: row.targetKey, to: toKey });
         }
         break;
@@ -312,6 +347,10 @@ export function applyResolveDecisions(rows, decisions, { validKeysByKind } = {})
         }
         if (!keyIsValid(row, pick)) {
           rejectToDeferred(row, pick, '指定した代替が現在のライブラリに見つかりません');
+          break;
+        }
+        if (isOpeningCategoryMismatch(row, pick)) {
+          rejectToDeferred(row, pick, '建具種別のカテゴリ（fitting/window）が一致しません');
           break;
         }
         aliasPairs.push({ kind: row.kind, from: row.targetKey, to: pick });

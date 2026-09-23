@@ -427,3 +427,76 @@ test('【8g】replaceRowsByScenario: kinds省略時は従来どおりkindを問�
   const result = replaceRowsByScenario([materialRow, sectionRow], [], ['unresolved-code']);
   assert.deepEqual(result, [], 'kinds省略時は種別を問わず場面一致の行を全て置き換える');
 });
+
+// ---- ステップ10e申し送り（10b QA指摘Minor-3）: openingSubType行のpickはcategory（fitting/window）
+// が一致しない代替をrejectする（カテゴリを跨ぐと採番・記号・wallKindsの意味が変わるため。
+// codeNormalization.js normalizeOpeningsのカテゴリ跨ぎ据え置きと同じ理由）----
+test('【失敗系・ステップ10e申し送り】applyResolveDecisions: openingSubType行はpickのcategoryがrow.targetKeyと違うとrejected（同カテゴリはaccepted）', () => {
+  const rows = buildResolveRows({
+    kind: CatalogKind.OPENING_SUB_TYPE,
+    unresolved: [{ code: 'fitting:x', location: 'opening', openingId: 'o1' }],
+  });
+  const validKeysByKind = validKeysByKindOf(CatalogKind.OPENING_SUB_TYPE, ['window:fixed', 'fitting:sliding']);
+
+  const crossCategory = applyResolveDecisions(
+    rows, new Map([[rows[0].id, { action: 'pick', pick: 'window:fixed' }]]), { validKeysByKind },
+  );
+  assert.deepEqual(crossCategory.aliasPairs, [], 'カテゴリを跨ぐ代替（window→fitting行）はaliasPairsに積まれない');
+  assert.deepEqual(crossCategory.deferredRowIds, [rows[0].id]);
+  assert.equal(crossCategory.rejected.length, 1);
+  assert.equal(crossCategory.rejected[0].key, 'window:fixed');
+  assert.match(crossCategory.rejected[0].reason, /カテゴリ/);
+
+  const sameCategory = applyResolveDecisions(
+    rows, new Map([[rows[0].id, { action: 'pick', pick: 'fitting:sliding' }]]), { validKeysByKind },
+  );
+  assert.deepEqual(sameCategory.aliasPairs, [{ kind: CatalogKind.OPENING_SUB_TYPE, from: 'fitting:x', to: 'fitting:sliding' }]);
+  assert.deepEqual(sameCategory.deferredRowIds, []);
+  assert.deepEqual(sameCategory.rejected, []);
+});
+
+test('applyResolveDecisions: openingSubType以外の種別はcategoryチェックの対象外（コロンを含まないkeyでも通る）', () => {
+  const rows = buildResolveRows({ unresolved: [{ code: '111111111500', location: 'room' }] }); // kind既定=material
+  const validKeysByKind = validKeysByKindOf(CatalogKind.MATERIAL, ['301000000001']);
+  const { aliasPairs, rejected } = applyResolveDecisions(
+    rows, new Map([[rows[0].id, { action: 'pick', pick: '301000000001' }]]), { validKeysByKind },
+  );
+  assert.deepEqual(aliasPairs, [{ kind: CatalogKind.MATERIAL, from: '111111111500', to: '301000000001' }]);
+  assert.deepEqual(rejected, []);
+});
+
+// ---- QA指摘Minor-3（ステップ10e）: approve（候補先頭を自動採用）でもopeningSubTypeの
+// カテゴリ跨ぎ候補はaliasに積まない（pickだけでなくapproveも同じガードが必要——matchFieldsの
+// フォールバックでcategoryを落とした類似候補がcandidates[0]に来うるため）----
+test('【失敗系・ステップ10e QA指摘Minor-3】applyResolveDecisions: approveでもopeningSubTypeのカテゴリ跨ぎ候補（candidates[0]がwindow側）はaliasに積まない', () => {
+  const crossCategoryCandidate = { category: 'window', key: 'fixed', label: 'FIX窓' };
+  const rows = buildResolveRows({
+    kind: CatalogKind.OPENING_SUB_TYPE,
+    proposals: [{ from: 'fitting:x', candidates: [crossCategoryCandidate], entry: { category: 'fitting', key: 'x', label: '旧ドア' } }],
+  });
+  const validKeysByKind = validKeysByKindOf(CatalogKind.OPENING_SUB_TYPE, ['window:fixed']);
+
+  const { aliasPairs, deferredRowIds, rejected } = applyResolveDecisions(
+    rows, new Map([[rows[0].id, { action: 'approve' }]]), { validKeysByKind },
+  );
+  assert.deepEqual(aliasPairs, [], 'approveの候補先頭がカテゴリ跨ぎならaliasPairsに積まれない');
+  assert.deepEqual(deferredRowIds, [rows[0].id]);
+  assert.equal(rejected.length, 1);
+  assert.equal(rejected[0].key, 'window:fixed');
+  assert.match(rejected[0].reason, /カテゴリ/);
+});
+
+test('applyResolveDecisions: approveでopeningSubTypeの候補先頭が同カテゴリならaliasPairsに積まれる', () => {
+  const sameCategoryCandidate = { category: 'fitting', key: 'sliding', label: '引き戸' };
+  const rows = buildResolveRows({
+    kind: CatalogKind.OPENING_SUB_TYPE,
+    proposals: [{ from: 'fitting:x', candidates: [sameCategoryCandidate], entry: { category: 'fitting', key: 'x', label: '旧ドア' } }],
+  });
+  const validKeysByKind = validKeysByKindOf(CatalogKind.OPENING_SUB_TYPE, ['fitting:sliding']);
+
+  const { aliasPairs, rejected } = applyResolveDecisions(
+    rows, new Map([[rows[0].id, { action: 'approve' }]]), { validKeysByKind },
+  );
+  assert.deepEqual(aliasPairs, [{ kind: CatalogKind.OPENING_SUB_TYPE, from: 'fitting:x', to: 'fitting:sliding' }]);
+  assert.deepEqual(rejected, []);
+});

@@ -1,10 +1,10 @@
 import { useState } from 'react';
 import './CatalogResolveDialog.css';
-import { kindDef } from '../catalog/catalogKinds.js';
+import { CatalogKind, kindDef } from '../catalog/catalogKinds.js';
 import { displayNameOf } from '../catalog/catalogMatch.js';
 import { CATALOG_DIFF_COLOR, CATALOG_DIFF_MARK, diffPairs } from '../catalog/catalogDiffView.js';
 import { buildCatalogRows } from '../catalog/catalogMaintenance.js';
-import { defaultResolveDecision } from '../catalog/resolveQueue.js';
+import { defaultResolveDecision, openingCategoryOf } from '../catalog/resolveQueue.js';
 
 const SCENARIO_LABELS = Object.freeze({
   'library-conflict': '(a) ライブラリ内の衝突',
@@ -69,11 +69,16 @@ function keyOfCandidate(row, candidate) {
  * 代替の汎用ピッカー（ステップ7d QA指摘Major-1: 種別非依存のEntryPicker。旧MaterialPickerを
  * 一般化）。buildCatalogRows({kind, builtinList, search}) で kind の一覧を合成し、候補に無い
  * 項目も検索して選べる。value/optionの値は kindDef(kind).keyOf(entry)、表示名は displayNameOf。
+ * categoryFilter（10b QA指摘Minor-3申し送り・ステップ10e）: openingSubType のときだけ渡され、
+ * 一覧を同カテゴリ（fitting/window）だけに絞る——catalog/resolveQueue.js applyResolveDecisions の
+ * pick/approve検証（カテゴリ跨ぎはrejected）と揃え、選べても弾かれるだけの選択肢を見せない。
+ * category抽出は catalog/resolveQueue.js openingCategoryOf に一本化（QA指摘Minor-5）。
  */
-function EntryPicker({ kind, builtinList, value, onChange }) {
+function EntryPicker({ kind, builtinList, value, onChange, categoryFilter }) {
   const [search, setSearch] = useState('');
   const def = kindDef(kind);
-  const rows = builtinList ? buildCatalogRows({ kind, builtinList, search }) : [];
+  let rows = builtinList ? buildCatalogRows({ kind, builtinList, search }) : [];
+  if (categoryFilter) rows = rows.filter(r => openingCategoryOf(def.keyOf(r.entry)) === categoryFilter);
   return (
     <div className="catresolve-picker">
       <input
@@ -157,6 +162,7 @@ function ResolveRow({ row, decision, onChange, builtinListByKind }) {
           builtinList={builtinListByKind[row.kind]}
           value={decision.pick}
           onChange={pick => onChange({ ...decision, pick })}
+          categoryFilter={row.kind === CatalogKind.OPENING_SUB_TYPE ? openingCategoryOf(row.targetKey) : null}
         />
       )}
     </div>

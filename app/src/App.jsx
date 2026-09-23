@@ -336,9 +336,10 @@ const App = observer(() => {
               return s;
             })
           : appMode === 'opening'
-            ? import('./modes/OpeningModeState.js').then(m => {
+            ? import('./modes/OpeningModeState.js').then(async m => {
                 const s = new m.OpeningModeState(graph, project, openingSelectRef.current);
                 openingSelectRef.current = null;
+                await s.init(); // 建具種別（openingSubType）の未解決検出（裁定Q-A: 検出は建具モード突入時）
                 return s;
               })
             : appMode === 'elevation'

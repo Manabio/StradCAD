@@ -10,6 +10,26 @@ import {
 
 const EMPTY_IDS = Object.freeze(new Set());
 
+/**
+ * unresolved配列（{code, location, memberId}[]）を `${code}::${location}::${memberId}` で
+ * 重複排除する（QA指摘Major-3申し送り・ステップ10e。OpeningModeState.js
+ * dedupeOpeningUsageByOpeningIdと同じ穴——_missingSectionUsage（生走査）とpeekUnresolvedCodes
+ * 合流の両方に同じ部材が現れうる）。最初に現れた要素を残す——呼び出し側がmissingUsage
+ * （生走査。実データを直接見ている）を先に並べ、stillUnresolved（peekUnresolvedCodes経由）を
+ * 後に並べることで、missingUsageを優先させる契約。
+ */
+function dedupeSectionUsageByMemberId(items) {
+  const seen = new Set();
+  const result = [];
+  for (const item of items) {
+    const key = `${item.code}::${item.location}::${item.memberId ?? ''}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push(item);
+  }
+  return result;
+}
+
 export class StructuralModeState {
   // 構造リスト（structural/MemberListTab.jsx）で展開中のカードの部材id集合（同一タグの全部材）。
   // renderer/StructuralLayer.jsx が structural/memberSelection.js でハイライト矩形へ写す
@@ -85,9 +105,11 @@ export class StructuralModeState {
       const mapped = table.has(u.code) ? table.get(u.code) : u.code;
       return mapped == null || !sectionMap.has(mapped);
     });
+    // QA指摘Major-3申し送り（ステップ10e）: missingUsage（生走査）とstillUnresolved（peek合流）の
+    // 両方に同じ部材が現れる場合の二重計上を防ぐ（dedupeSectionUsageByMemberId参照）。
     const catalogResolveRows = buildResolveRows({
       kind: CatalogKind.SECTION,
-      unresolved: [...missingUsage, ...stillUnresolved],
+      unresolved: dedupeSectionUsageByMemberId([...missingUsage, ...stillUnresolved]),
       appEntries: [...sectionMap.values()],
     });
     runInAction(() => { this.catalogResolveRows = catalogResolveRows; });

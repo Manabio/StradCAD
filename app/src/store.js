@@ -387,7 +387,10 @@ export async function applyCatalogResolutions(decisions) {
   const { aliasPairs, userOps, deferredRowIds, rejected } = applyResolveDecisions(rows, decisions, { validKeysByKind });
 
   if (rejected.length > 0) {
-    project.setCatalogError(`指定した代替が見つかりません: ${rejected.map(r => r.key).join(', ')}`);
+    // QA指摘Minor-2（ステップ10e）: rejected[].reason（例:「建具種別のカテゴリが一致しません」）を
+    // 捨てて「見つかりません」に一本化すると、キーが実在するのに弾かれた理由（カテゴリ不一致等）が
+    // 利用者に伝わらない——reasonを併記する。
+    project.setCatalogError(`指定した代替が見つかりません: ${rejected.map(r => `${r.key}（${r.reason}）`).join(', ')}`);
   }
 
   if (userOps.length > 0) {

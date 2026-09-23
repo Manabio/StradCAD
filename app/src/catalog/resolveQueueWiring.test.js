@@ -103,6 +103,23 @@ test('【不変条件・ステップ6-3・QA指摘Major-1】store.js: applyCatal
   );
 });
 
+// ---- QA指摘Minor-2（ステップ10e）: rejectedの通知メッセージはr.reasonも併記する
+// （キーだけでは「見つかりません」に見えるが、実際はカテゴリ不一致等キー自体は実在する
+// rejectedもあるため、理由を捨てると利用者に嘘の説明になる） ----
+test('【不変条件・ステップ10e QA指摘Minor-2】store.js: applyCatalogResolutionsのrejected通知メッセージはr.reasonを併記する', () => {
+  const src = readSrc('store.js');
+  const body = extractBalancedBody(src, 'export async function applyCatalogResolutions(decisions) {');
+  assert.ok(body, 'store.js に applyCatalogResolutions が見つからない');
+  const guardMatch = /if\s*\(\s*rejected\.length\s*>\s*0\s*\)\s*\{/.exec(body);
+  assert.ok(guardMatch, 'applyCatalogResolutions が rejected.length > 0 を分岐していない');
+  const guardBody = extractBalancedBody(body, guardMatch[0]);
+  assert.ok(guardBody, 'if (rejected.length > 0) { ... } の中身を取得できない');
+  assert.ok(
+    /rejected\.map\(\s*r\s*=>\s*`\$\{r\.key\}（\$\{r\.reason\}）`\s*\)/.test(guardBody),
+    'rejectedの通知メッセージがr.reasonを併記していない（キーが実在してもカテゴリ不一致等で弾かれた理由が利用者に伝わらない退行）',
+  );
+});
+
 test('【不変条件・ステップ6-3・QA指摘Minor-2】store.js: applyCatalogResolutionsのアクティブ階往復はaliasPairs.length > 0のときだけ行い、markDirtyはuserOps/aliasPairsそれぞれで独立して立つ', () => {
   const src = readSrc('store.js');
   const body = extractBalancedBody(src, 'export async function applyCatalogResolutions(decisions) {');
@@ -240,6 +257,14 @@ test('【不変条件・ステップ8g】modes/StructuralModeState.js: catalogRe
   );
 });
 
+test('【不変条件・ステップ10e】modes/OpeningModeState.js: catalogResolveKindsが[CatalogKind.OPENING_SUB_TYPE]', () => {
+  const src = readSrc('modes/OpeningModeState.js');
+  assert.ok(
+    /catalogResolveKinds\s*=\s*\[CatalogKind\.OPENING_SUB_TYPE\];/.test(src),
+    'OpeningModeState.js に catalogResolveKinds = [CatalogKind.OPENING_SUB_TYPE] が見つからない',
+  );
+});
+
 // ---- QA指摘（ステップ8g）: modes/*.jsでcatalogResolveRows（場面(b)の行）を持つモードは
 // catalogResolveKinds（App.jsxの共通マージ用の種別スコープ）も必ず持つ（片方だけ追加して
 // もう片方を忘れる退行——App.jsxの共通replaceRowsByScenario呼び出しがkinds:undefinedになり
@@ -328,6 +353,30 @@ test('【不変条件・ステップ8g】App.jsx: 構造モードのローダー
   assert.ok(/await s\.init\(\)/.test(m[1]), '構造モードのローダーが await s.init() を呼んでいない');
 });
 
+// ---- App.jsx: 建具モード突入で await s.init() する（ステップ10e）----
+test('【不変条件・ステップ10e】App.jsx: 建具モードのローダーがawait s.init()を呼んでいる（建具種別カタログの未解決検出は建具モード突入時）', () => {
+  const src = readSrc('App.jsx');
+  const m = /appMode === 'opening'\s*\?\s*import\('\.\/modes\/OpeningModeState\.js'\)\.then\(async m => \{([\s\S]*?)\}\)/.exec(src);
+  assert.ok(m, "App.jsx の appMode==='opening' 分岐が async ローダー（.then(async m => {...})）になっていない");
+  assert.ok(/await s\.init\(\)/.test(m[1]), '建具モードのローダーが await s.init() を呼んでいない');
+});
+
+// ---- modes/OpeningModeState.js: 場面(b)の行組み立て（ステップ10e） ----
+test('【不変条件・ステップ10e】modes/OpeningModeState.js: initがkindDef(OPENING_SUB_TYPE).loadBuiltin→composeCatalog→buildResolveRows(kind:OPENING_SUB_TYPE)で行を組み立てる', () => {
+  const src = readSrc('modes/OpeningModeState.js');
+  assert.ok(/from ['"]\.\.\/catalog\/resolveQueue\.js['"]/.test(src), 'OpeningModeState.js が catalog/resolveQueue.js を import していない');
+  assert.ok(/from ['"]\.\.\/catalog\/catalogRegistry\.js['"]/.test(src), 'OpeningModeState.js が catalog/catalogRegistry.js を import していない');
+  const initBody = extractBalancedBody(src, 'async init() {');
+  assert.ok(initBody, 'OpeningModeState.js に init() が見つからない');
+  assert.ok(/kindDef\(\s*CatalogKind\.OPENING_SUB_TYPE\s*\)\.loadBuiltin\(\)/.test(initBody), 'init() が kindDef(CatalogKind.OPENING_SUB_TYPE).loadBuiltin() を呼んでいない（本体標準マスタを直接importする退行）');
+  assert.ok(/composeCatalog\(\s*CatalogKind\.OPENING_SUB_TYPE,/.test(initBody), 'init() が composeCatalog(CatalogKind.OPENING_SUB_TYPE, ...) を呼んでいない');
+  assert.ok(/buildResolveRows\(\s*\{\s*kind:\s*CatalogKind\.OPENING_SUB_TYPE,/.test(initBody), 'init() が buildResolveRows({ kind: CatalogKind.OPENING_SUB_TYPE, ... }) を呼んでいない');
+  assert.ok(/catalogResolveRows/.test(initBody), 'init() の戻り値にcatalogResolveRowsが含まれていない');
+  assert.ok(/from ['"]\.\.\/catalog\/codeNormalization\.js['"]/.test(src), 'OpeningModeState.js が catalog/codeNormalization.js を import していない');
+  assert.ok(/\bpeekUnresolvedCodes\(\)/.test(initBody), 'init() が peekUnresolvedCodes() を呼んでいない（StructuralModeState.init と同型で全階累積の未解決をopeningSubTypeでフィルタして合流する契約）');
+  assert.ok(!/\btakeUnresolvedCodes\(\)/.test(src), 'OpeningModeState.js がtakeUnresolvedCodesを呼んでいる（他の消費者の蓄積を消してしまう退行。peekUnresolvedCodesを使う契約）');
+});
+
 // ---- modes/StructuralModeState.js: 場面(b)の行組み立て（ステップ8g） ----
 test('【不変条件・ステップ8g】modes/StructuralModeState.js: initがkindDef(SECTION).loadBuiltin→composeCatalog→buildResolveRows(kind:SECTION)で行を組み立てる', () => {
   const src = readSrc('modes/StructuralModeState.js');
@@ -402,6 +451,31 @@ test('【不変条件・ステップ7d QA指摘Major-1】ui/CatalogResolveDialog
     'ResolveRowのピッカー表示条件が row.kind で builtinListByKind を引いていない（material限定条件への退行）',
   );
   assert.ok(/kindDef\(\s*kind\s*\)\.keyOf\(/.test(src), 'EntryPickerがkindDef(kind).keyOf(...)で値を組み立てていない');
+});
+
+// ---- ステップ10e QA指摘Minor-4: EntryPickerがopeningSubTypeのときrow.targetKeyのcategoryで
+// 一覧を絞る（categoryFilterの受け渡しと実装本体をアンカー。コメント文には当たらない形）----
+test('【不変条件・ステップ10e QA指摘Minor-4】ui/CatalogResolveDialog.jsx: EntryPickerはcategoryFilterでrowsを絞り、ResolveRowがopeningCategoryOf(row.targetKey)をopeningSubType行にだけ渡す', () => {
+  const src = readSrc('ui/CatalogResolveDialog.jsx');
+  const pickerBody = extractBalancedBody(src, 'function EntryPicker(');
+  assert.ok(pickerBody, 'ui/CatalogResolveDialog.jsx に EntryPicker が見つからない');
+  assert.ok(
+    /if\s*\(\s*categoryFilter\s*\)\s*rows\s*=\s*rows\.filter\(/.test(pickerBody),
+    'EntryPicker が categoryFilter で rows.filter(...) していない（openingSubTypeのカテゴリ跨ぎ選択肢を絞る契約への退行）',
+  );
+  assert.ok(
+    /categoryFilter\s*=\s*\{\s*row\.kind\s*===\s*CatalogKind\.OPENING_SUB_TYPE\s*\?\s*openingCategoryOf\(\s*row\.targetKey\s*\)\s*:\s*null\s*\}/.test(src),
+    'ResolveRow が categoryFilter={row.kind === CatalogKind.OPENING_SUB_TYPE ? openingCategoryOf(row.targetKey) : null} でEntryPickerへ渡していない',
+  );
+});
+
+test('【不変条件・ステップ10e QA指摘Minor-5】ui/CatalogResolveDialog.jsx: category抽出はcatalog/resolveQueue.jsのopeningCategoryOfを使う（自前のsplit(\':\')実装を持たない）', () => {
+  const src = readSrc('ui/CatalogResolveDialog.jsx');
+  assert.ok(/\bopeningCategoryOf\b/.test(src), 'CatalogResolveDialog.jsx が openingCategoryOf を参照していない');
+  assert.ok(
+    !/split\(\s*['"]:['"]\s*\)/.test(src),
+    'CatalogResolveDialog.jsx に split(\':\') の自前実装が残っている（openingCategoryOfへの一本化への退行）',
+  );
 });
 
 test('【不変条件・ステップ6-3・QA指摘Minor-5】ui/CatalogResolveDialog.jsx: フッターに保存するまで確定しない旨の注記がある', () => {
