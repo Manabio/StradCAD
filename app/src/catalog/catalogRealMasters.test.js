@@ -4,13 +4,14 @@
 // （動的importのthunk）を実際に呼び、node:test から単体で本体マスタへ到達できることも兼ねて確認する。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { kindDef, listKinds, CatalogKind } from './catalogKinds.js';
+import { kindDef, listKinds, CatalogKind, KNOWN_OPENING_MECHANISMS } from './catalogKinds.js';
 import { valuesEqual, matchByContent } from './catalogMatch.js';
 import { withEntries, emptyBundle, validateBundle, resolveCatalog } from './catalogBundle.js';
 import { composeCatalog } from './catalogRegistry.js';
 import { collectUsedKeys, collectUsedMaterialCodes, expandTransitiveMaterials, buildDocumentBundle } from './usedEntries.js';
 import { MATERIALS } from '../finish/materials/materialData.js';
 import { INTERIOR_MASTERS } from '../finish/materials/interiorMasters.js';
+import { OpeningMechanism, IMPLEMENTED_MECHANISMS } from '../openings/openingCatalog.js';
 
 // ステップ3（2026-09-22）で振り直し済み。旧132件のうち廃止・削除2件（アスファルトプライマー・
 // 吸音テックス用捨て糊。legacyMaterialCodes.js の REMOVED_MATERIALS）を除いた130件。
@@ -53,6 +54,41 @@ test('openingSubType: FITTING_CATALOG/WINDOW_CATALOG全件がopeningSubType.vali
   const entries = await def.loadBuiltin();
   assert.ok(entries.length > 0);
   for (const o of entries) assert.doesNotThrow(() => def.validate(o), `category=${o.category} key=${o.key}`);
+});
+
+// ステップ10d: catalogKinds.js は openings/openingCatalog.js を静的importできない
+// （catalogImports.test.js の許可リスト）ため、isSupportedフックが参照する既知mechanismの
+// 凍結配列（KNOWN_OPENING_MECHANISMS）を独自に複製している。本テストは実マスタ
+// （OpeningMechanism）を静的importしてよい立場から、両者の値集合が一致することを固定する
+// ——ずれると新設/削除したmechanismがisSupported判定から漏れる（過検出・過剰弾き）。
+test('KNOWN_OPENING_MECHANISMS: catalogKinds.jsの複製配列がOpeningMechanismの値集合と一致する', () => {
+  assert.deepEqual(new Set(KNOWN_OPENING_MECHANISMS), new Set(Object.values(OpeningMechanism)));
+});
+
+// Minor-2（QA指摘・2026-09-23）: KNOWN_OPENING_MECHANISMSがOpeningMechanism全体とだけ一致していても、
+// IMPLEMENTED_MECHANISMS（平面記号を実装済みの機構。openingCatalog.js）からずれていれば、
+// isSupported=trueなのに描画は未実装のティック（openingElevationFigure.js既定分岐）へ無言で
+// 縮退する退行になる——両者が一致することも合わせて固定する（新設enumをKNOWN側にだけ足す漏れを防ぐ）。
+test('KNOWN_OPENING_MECHANISMS: IMPLEMENTED_MECHANISMS（平面記号実装済み）とも値集合が一致する', () => {
+  assert.deepEqual(new Set(KNOWN_OPENING_MECHANISMS), IMPLEMENTED_MECHANISMS);
+});
+
+// Nit-2: KNOWN_OPENING_MECHANISMSの手書き配列に重複が無いこと（コピペミスの検出）。
+test('KNOWN_OPENING_MECHANISMS: 配列内に重複が無い', () => {
+  assert.equal(KNOWN_OPENING_MECHANISMS.length, new Set(KNOWN_OPENING_MECHANISMS).size);
+});
+
+test('openingSubType: FITTING_CATALOG/WINDOW_CATALOG全件がisSupported（既知mechanism）を通る', async () => {
+  const def = kindDef('openingSubType');
+  const entries = await def.loadBuiltin();
+  for (const o of entries) assert.equal(def.isSupported(o), true, `category=${o.category} key=${o.key} mechanism=${o.mechanism}`);
+});
+
+test('【失敗系】openingSubType.isSupported: 未知のmechanismはfalse', () => {
+  const def = kindDef('openingSubType');
+  assert.equal(def.isSupported({ mechanism: 'teleport' }), false);
+  assert.equal(def.isSupported({}), false);
+  assert.equal(def.isSupported(null), false);
 });
 
 test('interiorMaster: INTERIOR_MASTERS全件がinteriorMaster.validateを通る', async () => {

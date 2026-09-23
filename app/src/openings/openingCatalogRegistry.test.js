@@ -5,6 +5,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { CatalogKind, kindDef } from '../catalog/catalogKinds.js';
 import { setOverlay, clearOverlays } from '../catalog/catalogRegistry.js';
+import { buildDocumentBundle } from '../catalog/usedEntries.js';
 import {
   findCatalogEntry, openingSubTypeList, openingSubTypeBuiltinList, getFittingOptions,
   FITTING_CATALOG, WINDOW_CATALOG, OpeningMechanism,
@@ -61,6 +62,21 @@ test('doc overlay: 同キーのbuiltinをdocが上書きする（doc>user>builti
   });
   const entry = findCatalogEntry('fitting', 'singleSwing');
   assert.equal(entry.label, '片開き戸(doc上書き)');
+});
+
+// Minor-3（QA指摘・2026-09-23）: 未知mechanismのdocエントリでもoverlay解決（findCatalogEntry/
+// openingSubTypeList）自体は止めない——場面(c)unsupported判定はcatalog/incomingReconcile.js
+// planIncomingReconcile側の起動時照合フックであり、catalogRegistry.jsのoverlay解決経路（一覧・
+// 描画・パネルが読む本番経路）とは別物であることを固定する（この挙動が望ましいかは裁定に上げる。
+// 本テストは現状の挙動を固定するだけ）。
+test('doc overlay: 未知mechanismのdocエントリもoverlayからは解決される（場面(c)判定は解決を止めない）', () => {
+  setOverlay(CatalogKind.OPENING_SUB_TYPE, {
+    doc: [{ category: 'fitting', key: 'teleportDoor', mechanism: 'teleport', label: 'テレポートドア', defaultWidth: 800, defaultHeight: 2000 }],
+  });
+  const entry = findCatalogEntry('fitting', 'teleportDoor');
+  assert.ok(entry, '未知mechanismでもfindCatalogEntryはoverlay解決を止めないはず');
+  assert.equal(entry.mechanism, 'teleport');
+  assert.ok(openingSubTypeList('fitting').some(o => o.key === 'teleportDoor'), 'openingSubTypeListにも含まれるはず');
 });
 
 // ---- メモ化の無効化: setOverlay/clearOverlaysの世代キーでキャッシュが切り替わる ----
@@ -128,4 +144,22 @@ test('【失敗系】wallKinds: [] のuserエントリはgetFittingOptionsのど
 test('【失敗系】openingSubTypeList: 未知のcategory・未指定は空配列（例外を出さない）', () => {
   assert.deepEqual(openingSubTypeList('foo'), []);
   assert.deepEqual(openingSubTypeList(undefined), []);
+});
+
+// ---- 文書同梱往復（ステップ10d）: usedEntries.buildDocumentBundleで組んだ建具のdocエントリを
+// setOverlayすると、findCatalogEntryで引ける（保存側と読込み側の純関数を実際につないで確認する）。
+test('文書同梱往復: buildDocumentBundleで組んだuser建具のdocエントリをsetOverlayすると、findCatalogEntryで引ける', () => {
+  const userEntry = userFittingEntry();
+  const resolvedByKind = new Map([[CatalogKind.OPENING_SUB_TYPE, new Map([['fitting:myDoor', userEntry]])]]);
+  const usedKeysByKind = new Map([[CatalogKind.OPENING_SUB_TYPE, new Set(['fitting:myDoor'])]]);
+
+  const { bundle, unresolvedKeys } = buildDocumentBundle({ usedKeysByKind, resolvedByKind });
+  assert.equal(unresolvedKeys.size, 0, '使用キーがresolvedByKindで解決できるはず');
+  assert.equal(bundle.catalogs.openingSubType.length, 1);
+  assert.equal(bundle.catalogs.openingSubType[0].key, 'myDoor');
+
+  setOverlay(CatalogKind.OPENING_SUB_TYPE, { doc: bundle.catalogs.openingSubType });
+  const entry = findCatalogEntry('fitting', 'myDoor');
+  assert.ok(entry, '同梱束から読み込んだdocエントリがfindCatalogEntryで引けない');
+  assert.equal(entry.label, 'ユーザー追加ドア');
 });

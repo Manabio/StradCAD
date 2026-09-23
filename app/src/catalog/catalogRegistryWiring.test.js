@@ -172,16 +172,16 @@ test('【不変条件・ステップ6-1】store.js: bootReadyがreconcileIncomin
   );
 });
 
-// ステップ7d→8f: reconcileIncomingCatalogsはRECONCILE_KINDS（material・interiorMaster・
-// boundaryMaster・section）の種別ループに一般化された。種別ごとにdoc・userが両方空なら
-// continueでスキップし（不変条件7-1: 本体標準マスタは新規文書の起動では読まない）、
+// ステップ7d→8f→10d: reconcileIncomingCatalogsはRECONCILE_KINDS（material・interiorMaster・
+// boundaryMaster・section・openingSubType）の種別ループに一般化された。種別ごとにdoc・userが
+// 両方空ならcontinueでスキップし（不変条件7-1: 本体標準マスタは新規文書の起動では読まない）、
 // builtinはkindDef(kind).loadBuiltin()経由で読む（materialData.js等の直接動的importが
 // reconcileIncomingCatalogs本体から消える）。
-test('【不変条件・ステップ7d→8f】store.js: reconcileIncomingCatalogsはRECONCILE_KINDS = [MATERIAL, INTERIOR_MASTER, BOUNDARY_MASTER, SECTION]の種別ループで、種別ごとに doc・user両方空ならcontinueし、kindDef(kind).loadBuiltin()経由でbuiltinを読む', () => {
+test('【不変条件・ステップ7d→8f→10d】store.js: reconcileIncomingCatalogsはRECONCILE_KINDS = [MATERIAL, INTERIOR_MASTER, BOUNDARY_MASTER, SECTION, OPENING_SUB_TYPE]の種別ループで、種別ごとに doc・user両方空ならcontinueし、kindDef(kind).loadBuiltin()経由でbuiltinを読む', () => {
   const src = readSrc('store.js');
   assert.ok(
-    /const RECONCILE_KINDS = \[CatalogKind\.MATERIAL, CatalogKind\.INTERIOR_MASTER, CatalogKind\.BOUNDARY_MASTER, CatalogKind\.SECTION\];/.test(src),
-    'store.js に RECONCILE_KINDS = [CatalogKind.MATERIAL, CatalogKind.INTERIOR_MASTER, CatalogKind.BOUNDARY_MASTER, CatalogKind.SECTION] が見つからない',
+    /const RECONCILE_KINDS = \[CatalogKind\.MATERIAL, CatalogKind\.INTERIOR_MASTER, CatalogKind\.BOUNDARY_MASTER, CatalogKind\.SECTION, CatalogKind\.OPENING_SUB_TYPE\];/.test(src),
+    'store.js に RECONCILE_KINDS = [CatalogKind.MATERIAL, CatalogKind.INTERIOR_MASTER, CatalogKind.BOUNDARY_MASTER, CatalogKind.SECTION, CatalogKind.OPENING_SUB_TYPE] が見つからない',
   );
   const body = extractBalancedBody(src, 'export async function reconcileIncomingCatalogs() {');
   assert.ok(body, 'store.js に reconcileIncomingCatalogs が見つからない');
@@ -421,14 +421,15 @@ test('【不変条件・ステップ7c・Minor-4/P5】store.js: saveCatalogDocum
   );
 });
 
-// ステップ7c→8f: 同梱の一般化。BUNDLED_KINDS（material・interiorMaster・boundaryMaster・
-// section）を定義し、saveCatalogDocumentがそれをbuiltinのloadBuiltin経由の解決・保存の両方で
-// 回していることを固定する（material固定への退行・splitBundleByKind未使用への退行を検知）。
-test('【不変条件・ステップ7c→8f】store.js: BUNDLED_KINDSはmaterial・interiorMaster・boundaryMaster・sectionの4種別で、saveCatalogDocumentがkindDef(kind).loadBuiltin()とsplitBundleByKindを使っている', () => {
+// ステップ7c→8f→10d: 同梱の一般化。BUNDLED_KINDS（material・interiorMaster・boundaryMaster・
+// section・openingSubType）を定義し、saveCatalogDocumentがそれをbuiltinのloadBuiltin経由の
+// 解決・保存の両方で回していることを固定する（material固定への退行・splitBundleByKind
+// 未使用への退行を検知）。
+test('【不変条件・ステップ7c→8f→10d】store.js: BUNDLED_KINDSはmaterial・interiorMaster・boundaryMaster・section・openingSubTypeの5種別で、saveCatalogDocumentがkindDef(kind).loadBuiltin()とsplitBundleByKindを使っている', () => {
   const src = readSrc('store.js');
   assert.ok(
-    /const BUNDLED_KINDS = \[CatalogKind\.MATERIAL, CatalogKind\.INTERIOR_MASTER, CatalogKind\.BOUNDARY_MASTER, CatalogKind\.SECTION\];/.test(src),
-    'store.js に BUNDLED_KINDS = [CatalogKind.MATERIAL, CatalogKind.INTERIOR_MASTER, CatalogKind.BOUNDARY_MASTER, CatalogKind.SECTION] が見つからない',
+    /const BUNDLED_KINDS = \[CatalogKind\.MATERIAL, CatalogKind\.INTERIOR_MASTER, CatalogKind\.BOUNDARY_MASTER, CatalogKind\.SECTION, CatalogKind\.OPENING_SUB_TYPE\];/.test(src),
+    'store.js に BUNDLED_KINDS = [CatalogKind.MATERIAL, CatalogKind.INTERIOR_MASTER, CatalogKind.BOUNDARY_MASTER, CatalogKind.SECTION, CatalogKind.OPENING_SUB_TYPE] が見つからない',
   );
   const body = extractBalancedBody(src, 'async function saveCatalogDocument(floorRecords) {');
   assert.ok(body, 'store.js に saveCatalogDocument が見つからない');
@@ -449,7 +450,7 @@ test('【不変条件・ステップ7c→8f】store.js: BUNDLED_KINDSはmaterial
 
 // ステップ7c: collectCatalogUsageAcrossFloors（旧collectMaterialUsageAcrossFloors）が
 // floorRecordsをdecodeし、純ロジック（catalog/usedEntries.js collectUsedKeysByKind。
-// BUNDLED_KINDSの3種別ぶんの使用キーを空Setで立ててから埋める）へ委譲していることを固定する
+// BUNDLED_KINDSの各種別ぶんの使用キーを空Setで立ててから埋める）へ委譲していることを固定する
 // （QA指摘Major-1: 収集ロジック自体はusedEntries.test.js側の単体テストで検証する）。
 test('【不変条件・ステップ7c・Major-1】store.js: collectCatalogUsageAcrossFloorsはdecodeFloorSnapshotしてcollectUsedKeysByKind(snapshots, BUNDLED_KINDS)へ委譲し、saveCatalogDocumentから呼ばれている', () => {
   const src = readSrc('store.js');

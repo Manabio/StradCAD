@@ -32,6 +32,21 @@ function isNonEmptyString(v) {
   return typeof v === 'string' && v.length > 0;
 }
 
+/**
+ * 建具種別（openingSubType）の isSupported フックが対象とする既知 mechanism の凍結配列
+ * （2026-09-23 ステップ10d）。openings/openingCatalog.js の OpeningMechanism を
+ * catalogKinds.js から静的 import できない（catalogImports.test.js の許可リスト）ため、
+ * 値の集合だけをここに複製する——catalogRealMasters.test.js で Object.values(OpeningMechanism)
+ * と一致することを固定し、両者がずれたら即座に検出する。
+ */
+export const KNOWN_OPENING_MECHANISMS = Object.freeze([
+  'swing', 'slideDouble', 'slideSingle', 'fold', 'free', 'fixed', 'hung', 'awning', 'tilt',
+  'louver', 'pivot', 'swingDouble', 'swingChild', 'swingIn', 'freeDouble', 'shutter', 'overhead',
+  'emergency', 'fireDoor', 'fireFold', 'slideLayout', 'projectVertical', 'projectOut', 'tiltOut',
+  'pivotHorizontal', 'drehKipp', 'awningMulti', 'garari', 'glassBlock', 'frameOnly',
+]);
+const KNOWN_OPENING_MECHANISMS_SET = new Set(KNOWN_OPENING_MECHANISMS);
+
 /** entry に fields が全て存在する（undefined でない）ことを検査する。欠落は例外。 */
 function requireFields(entry, fields, label) {
   if (!isPlainObject(entry)) throw new Error(`${label}はオブジェクトである必要があります`);
@@ -246,7 +261,17 @@ const REGISTRY = Object.assign(Object.create(null), {
     knownFields: ['category', 'key', 'label', 'mechanism', 'wallKinds', 'defaultWidth', 'defaultHeight', 'childRatio', 'fireLeaves', 'fireAngle', 'slideLayout'],
     requiredFields: ['category', 'key', 'label', 'mechanism', 'defaultWidth', 'defaultHeight'],
     compareFields: ['label', 'mechanism', 'wallKinds', 'defaultWidth', 'defaultHeight', 'childRatio', 'fireLeaves', 'fireAngle', 'slideLayout'],
-    silentDiffFields: [],
+    // Q-B（2026-09-23裁定）: 呼称（label）差は通知しない。全文書が建具を同梱するため、本体の
+    // 呼称を1件直すと全旧文書で通知が出てしまう（R12＝材のspec/thicknessと同型の割り切り）。
+    // defaultWidth/defaultHeight・mechanism等は引き続き通知する（heightが未設定の旧建具が
+    // 既定値へ落ちる実害があるため）。
+    // Minor-1（QA指摘・2026-09-23）: shouldNotifyDiff（catalogMatch.js）は silentDiffFields の
+    // いずれか1つでも diffFields に含まれていれば、他の非silent項目が同時に違っていても通知
+    // しない（R12の既存規約。材のspec/thicknessと同じ仕様——silent側を「無視できる差分」ではなく
+    // 「これが混ざったら黙る」判定として使う）。そのためlabelとdefaultHeightが同時に違う同梱も
+    // 無音になる（defaultHeight単独の差は通知される）。この規約自体を変える（項目ごとに独立で
+    // 判定する等）場合は別途裁定が必要——本ステップでは既存のR12規約をそのまま踏襲する。
+    silentDiffFields: ['label'],
     // R14・QA指摘 M1（2026-09-22）: 末尾から外す順。自動採用（exact＝matchByContentのlevel===0）は
     // 全項目一致のときだけ（他種別と同じ規約。ここで新たにminMatchFieldsを上げているわけではない）。
     matchFields: ['category', 'mechanism', 'childRatio', 'fireLeaves', 'fireAngle', 'slideLayout', 'wallKinds', 'defaultWidth', 'defaultHeight', 'label'],
@@ -279,6 +304,11 @@ const REGISTRY = Object.assign(Object.create(null), {
         throw new Error('建具種別エントリのslideLayoutが不正です（オブジェクトが必要）');
       }
     },
+    // 場面(c)unsupported（2026-09-23 ステップ10d）: validateはmechanismの型（string）しか
+    // 検査しないため、未知のmechanism文字列（旧アプリのプレビルド版など）を持つ同梱エントリを
+    // ここで弾き、incomingReconcile.js planIncomingReconcile が unsupported 行へ振り分ける
+    // （既存の分類（同一/alias/propose/add）の対象から外す）。
+    isSupported: entry => KNOWN_OPENING_MECHANISMS_SET.has(entry?.mechanism),
     // FITTING_CATALOG（fitting）とWINDOW_CATALOG（window）を category 付きで合成する（唯一の
     // 合成式は openingCatalog.js の openingSubTypeBuiltinList。ここでの二重実装はしない）。
     loadBuiltin: () => import('../openings/openingCatalog.js').then(m => m.openingSubTypeBuiltinList()),

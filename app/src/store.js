@@ -243,10 +243,11 @@ export async function loadCatalogOverlaysFromIDB({
 
 /**
  * 起動時の同梱カタログ照合の対象種別（ステップ6-1は material 単独だったが、ステップ7dで
- * 内装マスター・境界マスターへ、ステップ8fで断面（section）へ一般化した。openingSubType は
- * 選択UIが無いためまだ含めない——BUNDLED_KINDS（同梱の一般化。ステップ7c→8f）と同じ4種別）。
+ * 内装マスター・境界マスターへ、ステップ8fで断面（section）へ、ステップ10dで建具種別
+ * （openingSubType）へ一般化した——BUNDLED_KINDS（同梱の一般化。ステップ7c→8f→10d）と
+ * 同じ5種別）。
  */
-const RECONCILE_KINDS = [CatalogKind.MATERIAL, CatalogKind.INTERIOR_MASTER, CatalogKind.BOUNDARY_MASTER, CatalogKind.SECTION];
+const RECONCILE_KINDS = [CatalogKind.MATERIAL, CatalogKind.INTERIOR_MASTER, CatalogKind.BOUNDARY_MASTER, CatalogKind.SECTION, CatalogKind.OPENING_SUB_TYPE];
 
 /**
  * 起動時の同梱カタログ照合（ステップ6-1→ステップ7d: 種別ループへ一般化）。loadCatalogOverlaysFromIDB
@@ -602,11 +603,10 @@ export async function switchFloor(nextPlaneId) {
 
 /**
  * 文書同梱する種別の一覧（ステップ7c: 同梱の一般化。それまでは material のみだった。
- * ステップ8fで断面（section）を追加）。openingSubType は使用キー収集経路（openingsの
- * subType）はusedEntries.jsに既にあるが、選択UI自体が無いためまだここには含めない
- * （ステップ10で追加予定）。
+ * ステップ8fで断面（section）、ステップ10dで建具種別（openingSubType）を追加）。
+ * 使用キー収集経路（openingsのsubType）はusedEntries.jsに既にある。
  */
-const BUNDLED_KINDS = [CatalogKind.MATERIAL, CatalogKind.INTERIOR_MASTER, CatalogKind.BOUNDARY_MASTER, CatalogKind.SECTION];
+const BUNDLED_KINDS = [CatalogKind.MATERIAL, CatalogKind.INTERIOR_MASTER, CatalogKind.BOUNDARY_MASTER, CatalogKind.SECTION, CatalogKind.OPENING_SUB_TYPE];
 
 /**
  * 全階のバイト列を decode し、BUNDLED_KINDS の使用キーを種別ごとに集めて返す（4.3・
@@ -747,7 +747,7 @@ export async function saveToIDB() {
   await commitFloorsToDocument([...project.planeMap.keys()]);
   // ④.5 使用キーを、commitFloorsToDocument で確定した savedFloors から（削除済み階を
   // 含まないため）全階ぶん収集し、文書同梱（BUNDLED_KINDS＝material・interiorMaster・
-  // boundaryMaster）として保存する（4.3・ステップ4→7c）。
+  // boundaryMaster・section・openingSubTypeの5種別）として保存する（4.3・ステップ4→7c→8f→10d）。
   const floorRecords = await loadAllSavedFloors();
   await saveCatalogDocument(floorRecords);
   // ⑤ 次回起動時のブートplane（PLANE_ID_KEY）を最下階の採用planeへ揃える。保存文書の実在planeと

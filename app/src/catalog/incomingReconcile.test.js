@@ -3,8 +3,10 @@ import assert from 'node:assert/strict';
 import { planIncomingReconcile, formatReconcileNotice, applyReconcilePlan } from './incomingReconcile.js';
 import { CatalogKind } from './catalogKinds.js';
 import { setOverlay, clearOverlays, overlayFor, composeCatalog } from './catalogRegistry.js';
+import { applyDocumentCodeNormalization, clearDocumentAliases } from './codeNormalization.js';
+import { buildResolveRows } from './resolveQueue.js';
 
-test.afterEach(() => clearOverlays());
+test.afterEach(() => { clearOverlays(); clearDocumentAliases(); });
 
 function material(overrides) {
   return {
@@ -499,6 +501,146 @@ test('formatReconcileNotice: kind=sectionは名詞が「断面」', () => {
   const plan = { adoptDoc: [], adds: [], aliases: [{ from: 'a', to: 'b' }] };
   const msg = formatReconcileNotice(plan, { kind: CatalogKind.SECTION });
   assert.equal(msg, '断面キーの読み替えを1件適用しました（保存すると確定します）');
+});
+
+// ---- ステップ10d: kind=openingSubType（建具種別）の照合。matchFields=['category','mechanism',
+// 'childRatio','fireLeaves','fireAngle','slideLayout','wallKinds','defaultWidth','defaultHeight',
+// 'label']・minMatchFields=2（catalogKinds.js登録表）。silentDiffFields=['label']（Q-B裁定・
+// 2026-09-23。呼称差は通知しない）。isSupportedフックが未知mechanismを場面(c)unsupportedへ回す。 ----
+function openingSubType(overrides) {
+  return {
+    category: 'fitting', key: 'singleSwing', label: '片開き戸',
+    mechanism: 'swing', defaultWidth: 800, defaultHeight: 2000,
+    ...overrides,
+  };
+}
+
+test('planIncomingReconcile: kind=openingSubTypeは同キー・全内容一致→same', () => {
+  const existing = openingSubType();
+  const plan = planIncomingReconcile({
+    kind: CatalogKind.OPENING_SUB_TYPE, docEntries: [openingSubType()], appEntries: [existing],
+  });
+  assert.deepEqual(plan.same, ['fitting:singleSwing']);
+  assert.deepEqual(plan.adoptDoc, []);
+  assert.deepEqual(plan.unsupported, []);
+});
+
+test('planIncomingReconcile: kind=openingSubTypeは同キー・label違いのみ→adoptDocだがnotify:false（silentDiffFields=label。Q-B裁定）', () => {
+  const existing = openingSubType({ label: '片開き戸(本体)' });
+  const plan = planIncomingReconcile({
+    kind: CatalogKind.OPENING_SUB_TYPE, docEntries: [openingSubType({ label: '片開き戸(同梱)' })], appEntries: [existing],
+  });
+  assert.equal(plan.adoptDoc.length, 1);
+  assert.deepEqual(plan.adoptDoc[0].diffFields, ['label']);
+  assert.equal(plan.adoptDoc[0].notify, false, 'labelだけの差は通知しない契約（Q-B）');
+});
+
+test('planIncomingReconcile: kind=openingSubTypeは同キー・defaultHeight違い→adoptDocでnotify:true（silentDiffFields対象外）', () => {
+  const existing = openingSubType({ defaultHeight: 2000 });
+  const plan = planIncomingReconcile({
+    kind: CatalogKind.OPENING_SUB_TYPE, docEntries: [openingSubType({ defaultHeight: 1800 })], appEntries: [existing],
+  });
+  assert.deepEqual(plan.adoptDoc[0].diffFields, ['defaultHeight']);
+  assert.equal(plan.adoptDoc[0].notify, true, 'defaultHeightの差は通知する契約（未設定の旧建具が既定値へ落ちる実害があるため）');
+});
+
+test('【失敗系】planIncomingReconcile: kind=openingSubTypeはlabel＋defaultHeightが同時に違う同梱もnotify:false（silentが1つでもあれば無音になるR12既存規約。Minor-1）', () => {
+  const existing = openingSubType({ label: '片開き戸(本体)', defaultHeight: 2000 });
+  const doc = openingSubType({ label: '片開き戸(同梱)', defaultHeight: 1800 });
+  const plan = planIncomingReconcile({
+    kind: CatalogKind.OPENING_SUB_TYPE, docEntries: [doc], appEntries: [existing],
+  });
+  assert.deepEqual(plan.adoptDoc[0].diffFields, ['label', 'defaultHeight']);
+  assert.equal(plan.adoptDoc[0].notify, false, 'silentDiffFields(label)が混ざると非silent項目(defaultHeight)の差も一緒に無音化する（R12規約。規約変更は別途裁定）');
+  assert.equal(formatReconcileNotice(plan, { kind: CatalogKind.OPENING_SUB_TYPE }), null, '通知するものが無いのでformatReconcileNoticeはnull');
+});
+
+test('planIncomingReconcile: kind=openingSubTypeは別キー・全内容一致→aliasesへ（自動読み替え）', () => {
+  const existing = openingSubType({ key: 'singleSwing' });
+  const doc = openingSubType({ key: 'myDoor', label: '片開き戸' }); // 全matchFields一致・keyだけ違う
+  const plan = planIncomingReconcile({
+    kind: CatalogKind.OPENING_SUB_TYPE, docEntries: [doc], appEntries: [existing],
+  });
+  assert.deepEqual(plan.aliases, [{ from: 'fitting:myDoor', to: 'fitting:singleSwing' }]);
+  assert.deepEqual(plan.proposals, []);
+  assert.deepEqual(plan.adds, []);
+});
+
+test('planIncomingReconcile: kind=openingSubTypeは寸法だけ違えばproposalsへ（minMatchFields:2で段を外せる。builtinに無いユーザー建具の想定経路）', () => {
+  const existing = openingSubType({ key: 'singleSwing', defaultWidth: 800, defaultHeight: 2000 });
+  const doc = openingSubType({ key: 'wideSwing', defaultWidth: 900, defaultHeight: 2100, label: '広幅片開き戸' });
+  const plan = planIncomingReconcile({
+    kind: CatalogKind.OPENING_SUB_TYPE, docEntries: [doc], appEntries: [existing],
+  });
+  assert.equal(plan.proposals.length, 1, '寸法違いは完全一致ではないためproposalsへ');
+  assert.equal(plan.proposals[0].from, 'fitting:wideSwing');
+  assert.equal(plan.proposals[0].candidates[0].key, 'singleSwing');
+  assert.deepEqual(plan.adds, []);
+});
+
+test('planIncomingReconcile: kind=openingSubTypeはcategory/mechanismとも一致しなければ（minMatchFields未満）addsへ', () => {
+  const existing = openingSubType({ key: 'singleSwing', category: 'fitting', mechanism: 'swing' });
+  const doc = { category: 'window', key: 'myWindow', label: '窓', mechanism: 'fixed', defaultWidth: 600, defaultHeight: 600 };
+  const plan = planIncomingReconcile({
+    kind: CatalogKind.OPENING_SUB_TYPE, docEntries: [doc], appEntries: [existing],
+  });
+  assert.deepEqual(plan.proposals, []);
+  assert.deepEqual(plan.adds, [doc]);
+});
+
+test('【失敗系】planIncomingReconcile: kind=openingSubTypeは未知mechanismのdocエントリをunsupportedへ回し、同一/alias/propose/addの分類対象から外す（isSupportedフック）', () => {
+  const existing = openingSubType();
+  const doc = openingSubType({ key: 'teleportDoor', mechanism: 'teleport' });
+  const plan = planIncomingReconcile({
+    kind: CatalogKind.OPENING_SUB_TYPE, docEntries: [doc], appEntries: [existing],
+  });
+  assert.deepEqual(plan.unsupported, [doc]);
+  assert.deepEqual(plan.same, []);
+  assert.deepEqual(plan.aliases, []);
+  assert.deepEqual(plan.proposals, []);
+  assert.deepEqual(plan.adds, []);
+});
+
+// Minor-3（QA指摘・2026-09-23）: unsupported行が複合キー（`${category}:${key}`）を運ぶことを固定する
+// （catalog/resolveQueue.js buildResolveRows は読むだけ——10eが編集中のresolveQueue.test.js側は触らない）。
+test('buildResolveRows: kind=openingSubTypeのunsupported行はtargetKeyに複合キーを運び、allowedActionsにpick/deferを持つ', () => {
+  const doc = openingSubType({ key: 'teleportDoor', mechanism: 'teleport' });
+  const rows = buildResolveRows({ kind: CatalogKind.OPENING_SUB_TYPE, unsupported: [doc] });
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].scenario, 'unsupported');
+  assert.equal(rows[0].targetKey, 'fitting:teleportDoor');
+  assert.ok(rows[0].allowedActions.includes('pick'), 'unsupported行はpick（代替を指示）を許可するはず');
+  assert.ok(rows[0].allowedActions.includes('defer'), 'unsupported行はdefer（保留）を許可するはず');
+});
+
+test('formatReconcileNotice: kind=openingSubTypeは名詞が「建具種別」', () => {
+  const plan = { adoptDoc: [], adds: [], aliases: [{ from: 'a', to: 'b' }] };
+  const msg = formatReconcileNotice(plan, { kind: CatalogKind.OPENING_SUB_TYPE });
+  assert.equal(msg, '建具種別キーの読み替えを1件適用しました（保存すると確定します）');
+});
+
+// ---- 結合（10bと接続する縦の1本）: reconcile由来のaliasが文書固有の読み替え表へ入り、
+// applyDocumentCodeNormalizationがopenings[].subTypeを実際に書換えることを確認する。
+// 10bはcodeNormalization.test.js側でaddDocumentAliasesを直接呼ぶ形で固定済み——ここでは
+// planIncomingReconcile→applyReconcilePlan（既定のaddAliasesFn=addDocumentAliases）という
+// 本番の呼び出し経路を通しても同じ結果になることを固定する。 ----
+test('結合(10b接続): kind=openingSubTypeのalias確定後、applyDocumentCodeNormalizationがopenings[].subTypeを書換える', async () => {
+  const existing = openingSubType({ key: 'singleSwing' });
+  const doc = openingSubType({ key: 'myDoor' }); // 全matchFields一致・keyだけ違う
+  const plan = planIncomingReconcile({
+    kind: CatalogKind.OPENING_SUB_TYPE, docEntries: [doc], appEntries: [existing],
+  });
+  assert.deepEqual(plan.aliases, [{ from: 'fitting:myDoor', to: 'fitting:singleSwing' }]);
+
+  await applyReconcilePlan(plan, {
+    kind: CatalogKind.OPENING_SUB_TYPE,
+    currentUser: [],
+    commitUserFn: async () => {},
+  });
+
+  const snapshot = { openings: [{ id: 'o1', category: 'fitting', subType: 'myDoor' }] };
+  const normalized = applyDocumentCodeNormalization(snapshot);
+  assert.equal(normalized.openings[0].subType, 'singleSwing', 'alias確定後は文書固有の読み替え表でsubTypeが書換わるはず');
 });
 
 test('結合: R17で1件skipされた場合、applyReconcilePlanの結果(addedKeys.length/skipped.length)をformatReconcileNoticeへ渡すと追加文＋スキップ文が出る', async () => {
