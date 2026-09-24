@@ -2543,6 +2543,12 @@ function InteriorMasterTab({ materialList, onLibraryChanged }) {
  * userの削除」のみ——寸法系（materialType/shape/width/height等）はkeyBoundFieldsで常に固定
  * （lockedFieldsFor/planSaveEntryが値の変更を拒否する）ため読み取り専用表示のみ、新規追加フォーム・
  * 複製ボタンは持たない（追加は既存の「規格文字列から追加」＝SectionBulkImportのみ）。
+ * 「合わせ直す」（文書同梱を差分から本体へ合わせる一括操作）はステップ14-A5で
+ * useRealignActions（kind汎用フック。材料タブ・14-A1、建具記号タブ・14-A2、建具種別タブ・14-A3、
+ * 内装マスタータブ・14-A4と同じ）へ展開した。断面のkeyOfは単純キー（entry.key）のため、行ボタン・
+ * 一括ボタンとも row.entry.key をrealignのkeyとして渡す（建具種別タブのような複合キー変換は
+ * 不要）。断面タブには新規追加・複製が無いため、clearNoticeの呼び出し先は行選択・保存開始・
+ * 保存/削除/戻す完了・一括入力（SectionBulkImport）完了のみ。
  */
 function SectionTab({ onLibraryChanged }) {
   const [builtinList, setBuiltinList] = useState(null);
@@ -2558,18 +2564,21 @@ function SectionTab({ onLibraryChanged }) {
   function onSectionSaved(entryKey, meta) {
     setSelectedKey(entryKey);
     setFormMessage(catalogSaveMessage(CatalogKind.SECTION, meta));
+    realign.clearNotice();
     onLibraryChanged?.();
   }
   function onSectionDeleted(plan) {
     setSelectedKey(null);
     setForm(null);
     setFormMessage(removeMessageFor(plan));
+    realign.clearNotice();
     onLibraryChanged?.();
   }
   function onSectionReverted() {
     setSelectedKey(null);
     setForm(null);
     setFormMessage('標準に戻しました');
+    realign.clearNotice();
     onLibraryChanged?.();
   }
   const actions = useCatalogEditActions(CatalogKind.SECTION, {
@@ -2592,8 +2601,15 @@ function SectionTab({ onLibraryChanged }) {
 
   const diffMap = builtinList ? docDiffMap(CatalogKind.SECTION, builtinList) : new Map();
   const rows = builtinList ? buildCatalogRows({ kind: CatalogKind.SECTION, builtinList, search, diffMap }) : [];
+  // ステップ14-A5（課題A5）: 「合わせ直す」一括対象は検索の影響を受けない全行から取る
+  // （材料タブ・14-A1、建具記号タブ・14-A2、建具種別タブ・14-A3、内装マスタータブ・14-A4と同じ
+  // 規約。realignTargetsはallRows基準で呼ぶ契約）。
+  const allRows = builtinList ? buildCatalogRows({ kind: CatalogKind.SECTION, builtinList, diffMap }) : [];
 
-  const selectedRow = selectedKey ? rows.find(r => r.entry.key === selectedKey) ?? null : null;
+  // 絞り込み後のrowsから選択行を探すと、検索で選択行が一覧から隠れたとき編集状態が消える
+  // （材料タブ・14-A1、建具種別タブ・14-A3、内装マスタータブ・14-A4と同じ理由。allRowsは検索の
+  // 影響を受けない）。
+  const selectedRow = selectedKey ? allRows.find(r => r.entry.key === selectedKey) ?? null : null;
   const editState = selectedRow ? rowEditState(CatalogKind.SECTION, selectedRow, { builtinKeys }) : null;
   const disabledReason = form ? sectionRowDisabledReason({ isAdding: false, editState }) : null;
   // 寸法系の固定表示項目はlockedFieldsFor（catalogKinds.js SECTION登録表のkeyBoundFields）から
@@ -2614,18 +2630,35 @@ function SectionTab({ onLibraryChanged }) {
     : new Map();
   const fmtDiffValue = v => (v === null || v === undefined || v === '' ? '未設定' : String(v));
 
+  // ステップ14-A5（課題A5）: 「合わせ直す」はkind汎用フックuseRealignActionsへ委譲する（材料タブ・
+  // 14-A1、建具記号タブ・14-A2、建具種別タブ・14-A3、内装マスタータブ・14-A4と同じ）。onRealigned:
+  // 選択中の行が対象に含まれていた場合、出所（doc→user/builtin）が変わりformが古い同梱値のまま
+  // になるため選択を外す。
+  function onSectionRealigned(keys) {
+    if (selectedKey && keys.includes(selectedKey)) {
+      setSelectedKey(null);
+      setForm(null);
+      actions.resetConfirmState();
+    }
+  }
+  const realign = useRealignActions(CatalogKind.SECTION, {
+    builtinList, allRows, onRealigned: onSectionRealigned,
+  });
+
   function handleSelectRow(row) {
     setSelectedKey(row.entry.key);
     actions.resetConfirmState();
     setForm(sectionFormFromEntry(row.entry));
     setFormError(null);
     setFormMessage(null);
+    realign.clearNotice();
   }
 
   async function handleSave() {
     if (!form || !selectedRow) return;
     setFormError(null);
     setFormMessage(null);
+    realign.clearNotice();
     const check = validateSectionForm(form);
     if (!check.ok) { setFormError(check.message); return; }
     const entry = buildSectionEntry(selectedRow.entry, form);
@@ -2662,13 +2695,37 @@ function SectionTab({ onLibraryChanged }) {
             value={search}
             onChange={e => setSearch(e.target.value)}
           />
+          {realign.targets.length > 0 && (
+            <button
+              className="catmnt-btn catmnt-btn--secondary"
+              onClick={() => realign.requestRealign(realign.targets.map(r => r.entry.key))}
+            >
+              すべて本体の内容に合わせ直す（{realign.targets.length}件・絞り込みに関わらず全件）
+            </button>
+          )}
         </div>
+
+        {realign.notice && (
+          <div className={realign.notice.kind === 'error' ? 'catmnt-form-error' : 'catmnt-form-message'}>
+            {realign.notice.text}
+          </div>
+        )}
+
+        {realign.realignConfirm && (
+          <RealignConfirmBlock
+            plans={realign.plans}
+            onConfirm={realign.handleRealignConfirmed}
+            onCancel={realign.cancelRealign}
+          />
+        )}
+
         {builtinList && (
           <SectionBulkImport
             builtinList={builtinList}
-            onImported={() => { setRefreshTick(t => t + 1); onLibraryChanged?.(); }}
+            onImported={() => { setRefreshTick(t => t + 1); realign.clearNotice(); onLibraryChanged?.(); }}
           />
         )}
+
         <div className="catmnt-rows">
           {!builtinList && !loadError && <div className="catmnt-row-empty">読み込み中…</div>}
           {loadError && <div className="catmnt-row-empty">断面データの読み込みに失敗しました</div>}
@@ -2692,6 +2749,15 @@ function SectionTab({ onLibraryChanged }) {
               >
                 {row.entry.label}{row.diff ? ` ${CATALOG_DIFF_MARK}` : ''}
               </span>
+              {row.diff && (
+                <button
+                  className="catmnt-realign-btn"
+                  title="本体の内容に合わせ直す"
+                  onClick={e => { e.stopPropagation(); realign.requestRealign([row.entry.key]); }}
+                >
+                  合わせ直す
+                </button>
+              )}
             </div>
           ))}
         </div>

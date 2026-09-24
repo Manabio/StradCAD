@@ -1312,14 +1312,15 @@ test('【不変条件・QA指摘M1・ステップ12i】ui/CatalogMaintenancePane
 
 // SectionTabの「規格文字列から追加」（SectionBulkImport）もuserライブラリを変更する唯一の追加
 // 経路——onImportedでonLibraryChangedも呼ぶことを固定する（setRefreshTickだけでは親のtickが
-// 進まずDeveloperExportPanelが更新されない）。
-test('【不変条件・QA指摘M1・ステップ12i】ui/CatalogMaintenancePanel.jsx: SectionTabのSectionBulkImport onImportedはonLibraryChanged?.()も呼ぶ', () => {
+// 進まずDeveloperExportPanelが更新されない）。ステップ14-A5（課題A5）: 一括入力の完了でも
+// realign.clearNotice()を呼ぶ（合わせ直しの完了通知がSectionBulkImportの完了後まで残らないため）。
+test('【不変条件・QA指摘M1・ステップ12i・ステップ14-A5】ui/CatalogMaintenancePanel.jsx: SectionTabのSectionBulkImport onImportedはrealign.clearNotice()とonLibraryChanged?.()も呼ぶ', () => {
   const src = readSrc('ui/CatalogMaintenancePanel.jsx');
   const body = extractBalancedBody(src, 'function SectionTab({ onLibraryChanged }) {');
   assert.ok(body, 'CatalogMaintenancePanel.jsx に SectionTab コンポーネントが見つからない');
   assert.ok(
-    /onImported=\{\(\) => \{ setRefreshTick\(t => t \+ 1\); onLibraryChanged\?\.\(\); \}\}/.test(body),
-    'SectionBulkImportのonImportedがonLibraryChanged?.()を呼んでいない',
+    /onImported=\{\(\) => \{ setRefreshTick\(t => t \+ 1\); realign\.clearNotice\(\); onLibraryChanged\?\.\(\); \}\}/.test(body),
+    'SectionBulkImportのonImportedがrealign.clearNotice()・onLibraryChanged?.()の両方を呼んでいない',
   );
 });
 
@@ -1429,5 +1430,222 @@ test('【不変条件・ステップ14-A4・A3 QA持ち越し】ui/CatalogMainte
   assert.ok(
     !/selectedRow = \(!isAdding && selectedKey\) \? rows\.find\(/.test(code),
     'FixtureSymbolTab の selectedRow が絞り込み後の rows.find(...) で選択行を探している（検索で選択行が隠れると編集状態が消える退行）',
+  );
+});
+
+// ---- ステップ14-A5（課題A5: 「合わせ直す」を断面タブへ展開）: SectionTab本体をコメント除去のうえ
+// 検査する（14-A2の建具記号タブ・14-A3の建具種別タブ・14-A4の内装マスタータブと同じ検証方法。
+// 断面のkeyOfは単純キー（entry.key）のため複合キー変換は無い。SectionTabは新規追加・複製・isAdding
+// state を持たないタブのため、他タブと違いselectedRowの探索式に!isAddingの分岐が無い）----
+test('【不変条件・ステップ14-A5】ui/CatalogMaintenancePanel.jsx: SectionTab本体はuseRealignActions(CatalogKind.SECTION, …)を呼び、<RealignConfirmBlockを1回だけ描く', () => {
+  const src = readSrc('ui/CatalogMaintenancePanel.jsx');
+  const body = extractBalancedBody(src, 'function SectionTab({ onLibraryChanged }) {');
+  assert.ok(body, 'CatalogMaintenancePanel.jsx に SectionTab コンポーネントが見つからない');
+  const code = stripComments(body);
+  assert.ok(
+    /useRealignActions\(CatalogKind\.SECTION,/.test(code),
+    'SectionTab が useRealignActions(CatalogKind.SECTION, …) を呼んでいない',
+  );
+  const realignBlockCount = (code.match(/<RealignConfirmBlock\b/g) ?? []).length;
+  assert.equal(realignBlockCount, 1, 'SectionTab が <RealignConfirmBlock を1回だけ描いていない');
+});
+
+test('【不変条件・ステップ14-A5】ui/CatalogMaintenancePanel.jsx: SectionTabは行の「合わせ直す」ボタンでrealign.requestRealign([row.entry.key])を呼び、一括ボタンのラベルに「絞り込みに関わらず全件」を明記し、allRows用のbuildCatalogRows呼び出しにsearchを渡さない', () => {
+  const src = readSrc('ui/CatalogMaintenancePanel.jsx');
+  const body = extractBalancedBody(src, 'function SectionTab({ onLibraryChanged }) {');
+  assert.ok(body, 'CatalogMaintenancePanel.jsx に SectionTab コンポーネントが見つからない');
+  const code = stripComments(body);
+  assert.ok(
+    /realign\.requestRealign\(\[row\.entry\.key\]\)/.test(code),
+    'SectionTab の行ボタンが realign.requestRealign([row.entry.key]) を呼んでいない',
+  );
+  assert.ok(/絞り込みに関わらず全件/.test(code), 'SectionTab の一括ボタンラベルに「絞り込みに関わらず全件」の文言が無い');
+  const allRowsMatch = /const allRows = builtinList \? buildCatalogRows\(\{[^}]*\}\)/.exec(code);
+  assert.ok(allRowsMatch, 'SectionTab に allRows = buildCatalogRows(...) の行が見つからない');
+  assert.ok(
+    !/search/.test(allRowsMatch[0]),
+    'SectionTab の allRows 用 buildCatalogRows 呼び出しに search が含まれている（絞り込みの影響を受けない全件という契約への退行）',
+  );
+});
+
+test('【不変条件・ステップ14-A5】ui/CatalogMaintenancePanel.jsx: SectionTabのonSectionRealignedはonLibraryChangedを呼ばない（合わせ直しはユーザーライブラリを変えないため）', () => {
+  const src = readSrc('ui/CatalogMaintenancePanel.jsx');
+  const realignedBody = extractBalancedBody(src, 'function onSectionRealigned(keys) {');
+  assert.ok(realignedBody, 'CatalogMaintenancePanel.jsx に onSectionRealigned が見つからない');
+  const code = stripComments(realignedBody);
+  assert.ok(!/onLibraryChanged/.test(code), 'onSectionRealigned が onLibraryChanged を参照している');
+});
+
+test('【不変条件・ステップ14-A5】ui/CatalogMaintenancePanel.jsx: onSectionRealignedは選択中の行が対象keysに含まれていればsetForm(null)で選択を外しactions.resetConfirmState()を呼ぶ', () => {
+  const src = readSrc('ui/CatalogMaintenancePanel.jsx');
+  const body = extractBalancedBody(src, 'function onSectionRealigned(keys) {');
+  assert.ok(body, 'CatalogMaintenancePanel.jsx に onSectionRealigned が見つからない');
+  const code = stripComments(body);
+  assert.ok(/keys\.includes\(selectedKey\)/.test(code), 'onSectionRealigned が keys.includes(selectedKey) を検査していない');
+  assert.ok(/setForm\(null\)/.test(code), 'onSectionRealigned が setForm(null) で選択を外していない');
+  assert.ok(/actions\.resetConfirmState\(\)/.test(code), 'onSectionRealigned が actions.resetConfirmState() を呼んでいない');
+});
+
+test('【不変条件・ステップ14-A5】ui/CatalogMaintenancePanel.jsx: SectionTab本体は{realign.notice はフォームの外（{form && ( より前）に描かれる（フォームが開いていなくても完了・失敗通知が見える）', () => {
+  const src = readSrc('ui/CatalogMaintenancePanel.jsx');
+  const body = extractBalancedBody(src, 'function SectionTab({ onLibraryChanged }) {');
+  assert.ok(body, 'CatalogMaintenancePanel.jsx に SectionTab コンポーネントが見つからない');
+  const code = stripComments(body);
+  const noticeIdx = code.indexOf('{realign.notice &&');
+  const formIdx = code.indexOf('{form && (');
+  assert.ok(noticeIdx >= 0, 'SectionTab が {realign.notice && を描いていない');
+  assert.ok(formIdx >= 0, 'SectionTab が {form && ( を描いていない');
+  assert.ok(noticeIdx < formIdx, 'realign.notice の表示位置が {form && ( より後ろにある（フォーム内へ後退している）');
+});
+
+test('【不変条件・ステップ14-A5】ui/CatalogMaintenancePanel.jsx: SectionTab内のhandleSave本体はrealign.clearNotice()を呼ぶ', () => {
+  const src = readSrc('ui/CatalogMaintenancePanel.jsx');
+  const tabBody = extractBalancedBody(src, 'function SectionTab({ onLibraryChanged }) {');
+  assert.ok(tabBody, 'CatalogMaintenancePanel.jsx に SectionTab コンポーネントが見つからない');
+  // SectionTab本体に絞り込んでから抽出する——ファイル先頭の材料タブ（CatalogMaintenancePanel）にも
+  // 同じシグネチャ'async function handleSave() {'があり、src全体からだと材料タブ側を拾ってしまう。
+  const handleSaveBody = extractBalancedBody(tabBody, 'async function handleSave() {');
+  assert.ok(handleSaveBody, 'SectionTab に handleSave が見つからない');
+  const code = stripComments(handleSaveBody);
+  assert.ok(/realign\.clearNotice\(\)/.test(code), 'SectionTab の handleSave が realign.clearNotice() を呼んでいない');
+});
+
+test('【不変条件・ステップ14-A5】ui/CatalogMaintenancePanel.jsx: SectionTabのselectedRowはallRows.findで探す（絞り込み後のrows.findでは探さない。isAdding stateを持たないタブのため分岐は無い）', () => {
+  const src = readSrc('ui/CatalogMaintenancePanel.jsx');
+  const body = extractBalancedBody(src, 'function SectionTab({ onLibraryChanged }) {');
+  assert.ok(body, 'CatalogMaintenancePanel.jsx に SectionTab コンポーネントが見つからない');
+  const code = stripComments(body);
+  assert.ok(
+    /const selectedRow = selectedKey \? allRows\.find\(r => r\.entry\.key === selectedKey\) \?\? null : null;/.test(code),
+    'SectionTab の selectedRow が allRows.find(...) で選択行を探していない',
+  );
+  assert.ok(
+    !/selectedRow = selectedKey \? rows\.find\(/.test(code),
+    'SectionTab の selectedRow が絞り込み後の rows.find(...) で選択行を探している（検索で選択行が隠れると編集状態が消える退行）',
+  );
+});
+
+// ---- ステップ14-A5 QA指摘Minor-2（A5再報告）: 通知消去（realign.clearNotice()）の固定を5タブ
+// すべてへ広げる。各タブ本体（材料は親CatalogMaintenancePanel本体）を二段抽出し（タブ全体→個々の
+// 関数）、コメント除去後にrealign.clearNotice()を呼んでいることを検査する。1タブ1テストにまとめ、
+// 失敗時はどの関数が欠けたかを個別のassertメッセージで示す。----
+test('【不変条件・ステップ14-A5・QA指摘Minor-2】材料タブ（CatalogMaintenancePanel）の新規・選択・複製・保存完了・削除完了・戻す完了はそれぞれ realign.clearNotice() を呼ぶ', () => {
+  const src = readSrc('ui/CatalogMaintenancePanel.jsx');
+  const tabBody = extractBalancedBody(src, 'export function CatalogMaintenancePanel({ onClose }) {');
+  assert.ok(tabBody, 'CatalogMaintenancePanel.jsx に CatalogMaintenancePanel コンポーネントが見つからない');
+  const checks = [
+    ['handleAddNew（新規）', 'function handleAddNew() {'],
+    ['handleSelectRow（選択）', 'function handleSelectRow(row) {'],
+    ['handleDuplicateClick（複製）', 'function handleDuplicateClick(row) {'],
+    ['performSave（保存完了）', 'async function performSave(plan, entryCode, { overridesBuiltin, thicknessChanged }) {'],
+    ['handleDeleteConfirmed（削除完了）', 'async function handleDeleteConfirmed() {'],
+    ['handleRevertConfirmed（戻す完了）', 'async function handleRevertConfirmed() {'],
+  ];
+  for (const [name, signature] of checks) {
+    const body = extractBalancedBody(tabBody, signature);
+    assert.ok(body, `CatalogMaintenancePanel に ${name} が見つからない`);
+    const code = stripComments(body);
+    assert.ok(/realign\.clearNotice\(\)/.test(code), `CatalogMaintenancePanel の ${name} が realign.clearNotice() を呼んでいない`);
+  }
+});
+
+test('【不変条件・ステップ14-A5・QA指摘Minor-2】FixtureSymbolTabのonFixtureSymbolSaved/onFixtureSymbolDeleted/onFixtureSymbolReverted・新規・選択・複製はそれぞれ realign.clearNotice() を呼ぶ', () => {
+  const src = readSrc('ui/CatalogMaintenancePanel.jsx');
+  const tabBody = extractBalancedBody(src, 'function FixtureSymbolTab({ materialList, onLibraryChanged }) {');
+  assert.ok(tabBody, 'CatalogMaintenancePanel.jsx に FixtureSymbolTab コンポーネントが見つからない');
+  const checks = [
+    ['onFixtureSymbolSaved（保存完了）', 'function onFixtureSymbolSaved(entryKey, meta) {'],
+    ['onFixtureSymbolDeleted（削除完了）', 'function onFixtureSymbolDeleted(plan) {'],
+    ['onFixtureSymbolReverted（戻す完了）', 'function onFixtureSymbolReverted() {'],
+    ['handleAddNew（新規）', 'function handleAddNew() {'],
+    ['handleSelectRow（選択）', 'function handleSelectRow(row) {'],
+    ['handleDuplicateClick（複製）', 'function handleDuplicateClick(row) {'],
+  ];
+  for (const [name, signature] of checks) {
+    const body = extractBalancedBody(tabBody, signature);
+    assert.ok(body, `FixtureSymbolTab に ${name} が見つからない`);
+    const code = stripComments(body);
+    assert.ok(/realign\.clearNotice\(\)/.test(code), `FixtureSymbolTab の ${name} が realign.clearNotice() を呼んでいない`);
+  }
+});
+
+test('【不変条件・ステップ14-A5・QA指摘Minor-2】InteriorMasterTabのonInteriorMasterSaved/onInteriorMasterDeleted/onInteriorMasterReverted・新規・選択・複製はそれぞれ realign.clearNotice() を呼ぶ', () => {
+  const src = readSrc('ui/CatalogMaintenancePanel.jsx');
+  const tabBody = extractBalancedBody(src, 'function InteriorMasterTab({ materialList, onLibraryChanged }) {');
+  assert.ok(tabBody, 'CatalogMaintenancePanel.jsx に InteriorMasterTab コンポーネントが見つからない');
+  const checks = [
+    ['onInteriorMasterSaved（保存完了）', 'function onInteriorMasterSaved(entryKey, meta) {'],
+    ['onInteriorMasterDeleted（削除完了）', 'function onInteriorMasterDeleted(plan) {'],
+    ['onInteriorMasterReverted（戻す完了）', 'function onInteriorMasterReverted() {'],
+    ['handleAddNew（新規）', 'function handleAddNew() {'],
+    ['handleSelectRow（選択）', 'function handleSelectRow(row) {'],
+    ['handleDuplicateClick（複製）', 'function handleDuplicateClick(row) {'],
+  ];
+  for (const [name, signature] of checks) {
+    const body = extractBalancedBody(tabBody, signature);
+    assert.ok(body, `InteriorMasterTab に ${name} が見つからない`);
+    const code = stripComments(body);
+    assert.ok(/realign\.clearNotice\(\)/.test(code), `InteriorMasterTab の ${name} が realign.clearNotice() を呼んでいない`);
+  }
+});
+
+test('【不変条件・ステップ14-A5・QA指摘Minor-2】OpeningSubTypeTabのonOpeningSubTypeSaved/onOpeningSubTypeDeleted/onOpeningSubTypeReverted・新規・選択・複製はそれぞれ realign.clearNotice() を呼ぶ', () => {
+  const src = readSrc('ui/CatalogMaintenancePanel.jsx');
+  const tabBody = extractBalancedBody(src, 'function OpeningSubTypeTab({ materialList, onLibraryChanged }) {');
+  assert.ok(tabBody, 'CatalogMaintenancePanel.jsx に OpeningSubTypeTab コンポーネントが見つからない');
+  const checks = [
+    ['onOpeningSubTypeSaved（保存完了）', 'function onOpeningSubTypeSaved(entryKey, meta) {'],
+    ['onOpeningSubTypeDeleted（削除完了）', 'function onOpeningSubTypeDeleted(plan) {'],
+    ['onOpeningSubTypeReverted（戻す完了）', 'function onOpeningSubTypeReverted() {'],
+    ['handleAddNew（新規）', 'function handleAddNew() {'],
+    ['handleSelectRow（選択）', 'function handleSelectRow(row) {'],
+    ['handleDuplicateClick（複製）', 'function handleDuplicateClick(row) {'],
+  ];
+  for (const [name, signature] of checks) {
+    const body = extractBalancedBody(tabBody, signature);
+    assert.ok(body, `OpeningSubTypeTab に ${name} が見つからない`);
+    const code = stripComments(body);
+    assert.ok(/realign\.clearNotice\(\)/.test(code), `OpeningSubTypeTab の ${name} が realign.clearNotice() を呼んでいない`);
+  }
+});
+
+test('【不変条件・ステップ14-A5・QA指摘Minor-2】SectionTabのhandleSelectRow・onSectionSaved・onSectionDeleted・onSectionRevertedはそれぞれ realign.clearNotice() を呼ぶ（新規・複製は無い）', () => {
+  const src = readSrc('ui/CatalogMaintenancePanel.jsx');
+  const tabBody = extractBalancedBody(src, 'function SectionTab({ onLibraryChanged }) {');
+  assert.ok(tabBody, 'CatalogMaintenancePanel.jsx に SectionTab コンポーネントが見つからない');
+  const checks = [
+    ['handleSelectRow（選択）', 'function handleSelectRow(row) {'],
+    ['onSectionSaved（保存完了）', 'function onSectionSaved(entryKey, meta) {'],
+    ['onSectionDeleted（削除完了）', 'function onSectionDeleted(plan) {'],
+    ['onSectionReverted（戻す完了）', 'function onSectionReverted() {'],
+  ];
+  for (const [name, signature] of checks) {
+    const body = extractBalancedBody(tabBody, signature);
+    assert.ok(body, `SectionTab に ${name} が見つからない`);
+    const code = stripComments(body);
+    assert.ok(/realign\.clearNotice\(\)/.test(code), `SectionTab の ${name} が realign.clearNotice() を呼んでいない`);
+  }
+});
+
+// ---- ステップ14-A5 QA指摘Minor-2（b・c、A5再報告）----
+test('【不変条件・ステップ14-A5・QA指摘Minor-2b】SectionTabの行の「合わせ直す」ボタン（catmnt-realign-btn）は{row.diff && (の中だけに描かれる', () => {
+  const src = readSrc('ui/CatalogMaintenancePanel.jsx');
+  const body = extractBalancedBody(src, 'function SectionTab({ onLibraryChanged }) {');
+  assert.ok(body, 'CatalogMaintenancePanel.jsx に SectionTab コンポーネントが見つからない');
+  const code = stripComments(body);
+  assert.ok(
+    /\{row\.diff && \(\s*<button\s*\n\s*className="catmnt-realign-btn"/.test(code),
+    'SectionTab の catmnt-realign-btn が {row.diff && ( の直下に無い（row.diffの無い行にもボタンが出る退行）',
+  );
+});
+
+test('【不変条件・ステップ14-A5・QA指摘Minor-2c】SectionTabはuseRealignActions(CatalogKind.SECTION, { builtinList, allRows, …)を呼ぶ（絞り込み後のrowsを渡さない）', () => {
+  const src = readSrc('ui/CatalogMaintenancePanel.jsx');
+  const body = extractBalancedBody(src, 'function SectionTab({ onLibraryChanged }) {');
+  assert.ok(body, 'CatalogMaintenancePanel.jsx に SectionTab コンポーネントが見つからない');
+  const code = stripComments(body);
+  assert.ok(
+    /useRealignActions\(CatalogKind\.SECTION, \{\s*builtinList, allRows, onRealigned: onSectionRealigned,/.test(code),
+    'SectionTab の useRealignActions が builtinList, allRows を渡していない（絞り込み後のrowsを渡す退行の可能性）',
   );
 });

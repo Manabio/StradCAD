@@ -702,6 +702,42 @@ test('realignPlansFor(INTERIOR_MASTER, [\'LIVING_ROOM\']): nameは文書同梱(d
   assert.equal(results[0].plan.ok, true);
 });
 
+// ---- planRealign(SECTION, …)（ステップ14-A5: 課題A5。断面タブへの展開。keyBoundFieldsで
+// 寸法系が固定され、編集できるのがlabel（呼称）だけのkindでもplanRealign/realignPlansForが
+// 同じ契約で動くことの確認。断面のcompareFieldsはlabelを含むため差分は実質labelのみ） ----
+test('planRealign(SECTION): 同梱(doc)のlabelが標準(builtin)と違えばok:true・diffPairsはfrom=doc現在値・to=標準値', () => {
+  const builtinList = [sectionEntry()]; // STEEL-H200x100
+  const builtinEntry = builtinList[0];
+  const docEntry = { ...builtinEntry, label: 'H形鋼（同梱）' };
+  setOverlay(CatalogKind.SECTION, { doc: [docEntry] });
+  const plan = planRealign(CatalogKind.SECTION, 'STEEL-H200x100', { builtinList });
+  assert.equal(plan.ok, true);
+  assert.equal(plan.baseOrigin, 'builtin');
+  assert.equal(plan.baseEntry, builtinEntry);
+  assert.deepEqual(plan.diffPairs, [
+    { field: 'label', label: '呼称', from: 'H形鋼（同梱）', to: builtinEntry.label },
+  ]);
+});
+
+test('【失敗系】planRealign(SECTION): 同梱(doc)が標準(builtin)と同内容ならok:false・reason:\'本体と同じ内容です\'', () => {
+  const builtinList = [sectionEntry()];
+  const builtinEntry = builtinList[0];
+  setOverlay(CatalogKind.SECTION, { doc: [{ ...builtinEntry }] });
+  const plan = planRealign(CatalogKind.SECTION, 'STEEL-H200x100', { builtinList });
+  assert.deepEqual(plan, { ok: false, reason: '本体と同じ内容です' });
+});
+
+test('realignPlansFor(SECTION, [\'STEEL-H200x100\']): nameは文書同梱(doc)エントリのlabel（displayNameOf。断面はname項目を持たずlabelがそのまま表示名になる）', () => {
+  const builtinList = [sectionEntry()];
+  const docEntry = { ...builtinList[0], label: 'H形鋼（同梱）' };
+  setOverlay(CatalogKind.SECTION, { doc: [docEntry] });
+  const results = realignPlansFor(CatalogKind.SECTION, ['STEEL-H200x100'], { builtinList });
+  assert.equal(results.length, 1);
+  assert.equal(results[0].key, 'STEEL-H200x100');
+  assert.equal(results[0].name, 'H形鋼（同梱）');
+  assert.equal(results[0].plan.ok, true);
+});
+
 // ---- realignPlansFor（ステップ14-A1: 課題A1。複数キーぶんのplanRealignをまとめて実行する純関数）----
 test('realignPlansFor: 差分あり2件を渡すと両方ok:true・nameは文書同梱エントリのdisplayNameOf', () => {
   const builtinA = material({ code: '301000000001', name: 'A', thickness: 12.5 });
