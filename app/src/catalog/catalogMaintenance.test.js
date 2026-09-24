@@ -595,6 +595,71 @@ test('realignPlansFor(FIXTURE_SYMBOL, [\'AW\']): nameは文書同梱(doc)エン�
   assert.equal(results[0].plan.ok, true);
 });
 
+// ---- planRealign(OPENING_SUB_TYPE, …)（ステップ14-A3: 課題A3。建具種別タブへの展開。keyOfが
+// `${category}:${key}`の複合キーを返す種別でもplanRealign/realignPlansForが同じ契約で動くこと、
+// wallKinds（配列）・slideLayout（オブジェクト）の差分が生値のまま通ることの確認） ----
+test('planRealign(OPENING_SUB_TYPE): 同梱(doc)のwallKinds・slideLayoutが標準(builtin)と違えばok:true・diffPairsのfromはdoc現在値（配列・オブジェクトとも生値）、toは標準値（wallKindsは未設定のためundefined・slideLayoutは生値）', () => {
+  const builtinList = openingSubTypeBuiltinList();
+  const builtinEntry = builtinList.find(e => e.category === 'window' && e.key === 'singleSliding');
+  const docEntry = {
+    ...builtinEntry,
+    wallKinds: ['interior'],
+    slideLayout: { tracks: 3, panels: [{ arrow: 'neg' }, { arrow: 'pos' }, { fix: true }] },
+  };
+  setOverlay(CatalogKind.OPENING_SUB_TYPE, { doc: [docEntry] });
+  const plan = planRealign(CatalogKind.OPENING_SUB_TYPE, 'window:singleSliding', { builtinList });
+  assert.equal(plan.ok, true);
+  assert.equal(plan.baseOrigin, 'builtin');
+  assert.equal(plan.baseEntry, builtinEntry);
+  assert.deepEqual(plan.diffPairs, [
+    { field: 'wallKinds', label: '対応壁種', from: ['interior'], to: builtinEntry.wallKinds },
+    {
+      field: 'slideLayout', label: '引違い配置',
+      from: { tracks: 3, panels: [{ arrow: 'neg' }, { arrow: 'pos' }, { fix: true }] },
+      to: builtinEntry.slideLayout,
+    },
+  ]);
+});
+
+// QA指摘Minor-2（A3再報告・2026-09-24）: wallKinds:[]（どちらの壁種にも出さない、の意味。
+// 12h「空を保持」裁定）とbuiltinの未設定（undefined＝両方に出せる、の意味）は意味が異なるため
+// 差分として扱われる。合わせ直し経路（planRealign）でもこの区別が保たれることを固定する。
+test('planRealign(OPENING_SUB_TYPE): 同梱(doc)のwallKinds:[]と標準(builtin)の未設定（window:singleSlidingはwallKindsを持たない）は差分として扱われ、diffPairsのfromは[]そのもの・toはundefined', () => {
+  const builtinList = openingSubTypeBuiltinList();
+  const builtinEntry = builtinList.find(e => e.category === 'window' && e.key === 'singleSliding');
+  assert.equal(builtinEntry.wallKinds, undefined, '前提確認: window:singleSlidingはwallKindsを持たない（builtinが未設定であることの検査）');
+  const docEntry = { ...builtinEntry, wallKinds: [] };
+  setOverlay(CatalogKind.OPENING_SUB_TYPE, { doc: [docEntry] });
+  const plan = planRealign(CatalogKind.OPENING_SUB_TYPE, 'window:singleSliding', { builtinList });
+  assert.equal(plan.ok, true);
+  assert.deepEqual(plan.diffPairs, [
+    { field: 'wallKinds', label: '対応壁種', from: [], to: undefined },
+  ]);
+  assert.deepEqual(plan.diffPairs[0].from, []); // fromが[]そのものであることの明示確認
+});
+
+test('【失敗系】planRealign(OPENING_SUB_TYPE): 同梱(doc)が標準(builtin)と同内容ならok:false・reason:\'本体と同じ内容です\'', () => {
+  const builtinList = openingSubTypeBuiltinList();
+  const builtinEntry = builtinList.find(e => e.category === 'window' && e.key === 'singleSliding');
+  setOverlay(CatalogKind.OPENING_SUB_TYPE, { doc: [{ ...builtinEntry }] });
+  const plan = planRealign(CatalogKind.OPENING_SUB_TYPE, 'window:singleSliding', { builtinList });
+  assert.deepEqual(plan, { ok: false, reason: '本体と同じ内容です' });
+});
+
+test('realignPlansFor(OPENING_SUB_TYPE, [\'window:singleSliding\']): nameは文書同梱(doc)エントリのlabel（displayNameOf。builtinのlabelとは別物）', () => {
+  const builtinList = openingSubTypeBuiltinList();
+  const builtinEntry = builtinList.find(e => e.category === 'window' && e.key === 'singleSliding');
+  // labelもwallKindsもbuiltinと変える——doc.labelとbuiltin.labelが同じままだと
+  // 「どちらから取っても緑」になり検査にならない（建具記号タブ・14-A2のQA指摘Minor-2と同型）。
+  const docEntry = { ...builtinEntry, label: '片引き窓（同梱）', wallKinds: ['interior'] };
+  setOverlay(CatalogKind.OPENING_SUB_TYPE, { doc: [docEntry] });
+  const results = realignPlansFor(CatalogKind.OPENING_SUB_TYPE, ['window:singleSliding'], { builtinList });
+  assert.equal(results.length, 1);
+  assert.equal(results[0].key, 'window:singleSliding');
+  assert.equal(results[0].name, '片引き窓（同梱）');
+  assert.equal(results[0].plan.ok, true);
+});
+
 // ---- realignPlansFor（ステップ14-A1: 課題A1。複数キーぶんのplanRealignをまとめて実行する純関数）----
 test('realignPlansFor: 差分あり2件を渡すと両方ok:true・nameは文書同梱エントリのdisplayNameOf', () => {
   const builtinA = material({ code: '301000000001', name: 'A', thickness: 12.5 });

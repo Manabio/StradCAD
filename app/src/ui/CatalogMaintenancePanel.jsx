@@ -2750,6 +2750,12 @@ function emptyOpeningSubTypeForm(category, key) {
  * 既定幅／既定高・機構別の欄（子扉比率・防火枚数／防火角度・引違い配置）のみ。
  * 作図プレビューは姿図＋平面記号の両方を持つ（ui/catalogPreview.js openingSubTypePreview・
  * openingSubTypePlanPreview。CatalogPreview.jsxがkindを見てview:'plan'も自動で並べる）。
+ * 「合わせ直す」（文書同梱を差分から本体へ合わせる一括操作）はステップ14-A3で
+ * useRealignActions（kind汎用フック。材料タブ・14-A1、建具記号タブ・14-A2と同じ）へ展開した。
+ * openingSubTypeのキーはkeyOfが`${category}:${key}`の複合キーを返す（catalogKinds.js
+ * OPENING_SUB_TYPE登録表）ため、行ボタン・一括ボタンとも`def.keyOf(row.entry)`をrealignの
+ * keyとして渡す（removeDocEntry/planRealignの照合キーと一致させる。row.entry.keyそのものは
+ * 複合キーの後半だけで照合に使えない）。
  * @param {{ materialList: object[]|null }} props materialListは平面記号プレビューのダミー壁厚
  *   導出用（材料タブが動的importで読み込んだbuiltin一覧。未指定なら既定壁厚に落ちる）。
  */
@@ -2769,6 +2775,7 @@ function OpeningSubTypeTab({ materialList, onLibraryChanged }) {
     setIsAdding(false);
     setSelectedKey(entryKey);
     setFormMessage(catalogSaveMessage(CatalogKind.OPENING_SUB_TYPE, meta));
+    realign.clearNotice();
     onLibraryChanged?.();
   }
   function onOpeningSubTypeDeleted(plan) {
@@ -2776,6 +2783,7 @@ function OpeningSubTypeTab({ materialList, onLibraryChanged }) {
     setSelectedKey(null);
     setForm(null);
     setFormMessage(removeMessageFor(plan));
+    realign.clearNotice();
     onLibraryChanged?.();
   }
   function onOpeningSubTypeReverted() {
@@ -2783,6 +2791,7 @@ function OpeningSubTypeTab({ materialList, onLibraryChanged }) {
     setSelectedKey(null);
     setForm(null);
     setFormMessage('標準に戻しました');
+    realign.clearNotice();
     onLibraryChanged?.();
   }
   const actions = useCatalogEditActions(CatalogKind.OPENING_SUB_TYPE, {
@@ -2805,8 +2814,14 @@ function OpeningSubTypeTab({ materialList, onLibraryChanged }) {
 
   const diffMap = builtinList ? docDiffMap(CatalogKind.OPENING_SUB_TYPE, builtinList) : new Map();
   const rows = builtinList ? buildCatalogRows({ kind: CatalogKind.OPENING_SUB_TYPE, builtinList, search, diffMap }) : [];
+  // ステップ14-A3（課題A3）: 「合わせ直す」一括対象は検索の影響を受けない全行から取る
+  // （材料タブ・14-A1、建具記号タブ・14-A2と同じ規約。realignTargetsはallRows基準で呼ぶ契約）。
+  const allRows = builtinList ? buildCatalogRows({ kind: CatalogKind.OPENING_SUB_TYPE, builtinList, diffMap }) : [];
 
-  const selectedRow = (!isAdding && selectedKey) ? rows.find(r => def.keyOf(r.entry) === selectedKey) ?? null : null;
+  // QA指摘（A2再報告）: 絞り込み後のrowsから選択行を探すと、検索で選択行が一覧から隠れたとき
+  // 編集状態が消える（材料タブ・14-A1はallRowsから探している）。allRowsは検索の影響を受けない
+  // ためここで揃える。
+  const selectedRow = (!isAdding && selectedKey) ? allRows.find(r => def.keyOf(r.entry) === selectedKey) ?? null : null;
   const editState = selectedRow ? rowEditState(CatalogKind.OPENING_SUB_TYPE, selectedRow, { builtinKeys }) : null;
   const lockedFields = selectedRow
     ? lockedFieldsFor(CatalogKind.OPENING_SUB_TYPE, def.keyOf(selectedRow.entry), { builtinKeys })
@@ -2828,6 +2843,21 @@ function OpeningSubTypeTab({ materialList, onLibraryChanged }) {
     return v === null || v === undefined || v === '' ? '未設定' : String(v);
   };
 
+  // ステップ14-A3（課題A3）: 「合わせ直す」はkind汎用フックuseRealignActionsへ委譲する（材料タブ・
+  // 14-A1、建具記号タブ・14-A2と同じ）。onRealigned: 選択中の行が対象に含まれていた場合、出所
+  // （doc→user/builtin）が変わりformが古い同梱値のままになるため選択を外す。
+  function onOpeningSubTypeRealigned(keys) {
+    if (selectedKey && keys.includes(selectedKey)) {
+      setIsAdding(false);
+      setSelectedKey(null);
+      setForm(null);
+      actions.resetConfirmState();
+    }
+  }
+  const realign = useRealignActions(CatalogKind.OPENING_SUB_TYPE, {
+    builtinList, allRows, onRealigned: onOpeningSubTypeRealigned,
+  });
+
   function handleAddNew() {
     if (!builtinList) return;
     const allKeys = collectKnownCatalogKeys(CatalogKind.OPENING_SUB_TYPE, builtinList);
@@ -2838,6 +2868,7 @@ function OpeningSubTypeTab({ materialList, onLibraryChanged }) {
     setForm(emptyOpeningSubTypeForm(category, nextOpeningSubTypeKey(category, allKeys)));
     setFormError(null);
     setFormMessage(null);
+    realign.clearNotice();
   }
 
   function handleSelectRow(row) {
@@ -2847,6 +2878,7 @@ function OpeningSubTypeTab({ materialList, onLibraryChanged }) {
     setForm(openingSubTypeFormFromEntry(row.entry));
     setFormError(null);
     setFormMessage(null);
+    realign.clearNotice();
   }
 
   function handleDuplicateClick(row) {
@@ -2858,6 +2890,7 @@ function OpeningSubTypeTab({ materialList, onLibraryChanged }) {
     setForm({ ...openingSubTypeFormFromEntry(row.entry), key: nextOpeningSubTypeKey(row.entry.category, allKeys) });
     setFormError('複製しました。内容を確認して保存してください');
     setFormMessage(null);
+    realign.clearNotice();
   }
 
   // 追加中に区分（category）を切り替えたときは、その区分の次の空き番号へキーを採番し直す
@@ -2876,6 +2909,7 @@ function OpeningSubTypeTab({ materialList, onLibraryChanged }) {
     if (!form || !builtinList) return;
     setFormError(null);
     setFormMessage(null);
+    realign.clearNotice();
     const entry = buildOpeningSubTypeEntry(form);
 
     if (isAdding) {
@@ -2930,7 +2964,29 @@ function OpeningSubTypeTab({ materialList, onLibraryChanged }) {
           <button className="catmnt-add-btn" disabled={!builtinList} onClick={handleAddNew}>
             + 新規追加
           </button>
+          {realign.targets.length > 0 && (
+            <button
+              className="catmnt-btn catmnt-btn--secondary"
+              onClick={() => realign.requestRealign(realign.targets.map(r => def.keyOf(r.entry)))}
+            >
+              すべて本体の内容に合わせ直す（{realign.targets.length}件・絞り込みに関わらず全件）
+            </button>
+          )}
         </div>
+
+        {realign.notice && (
+          <div className={realign.notice.kind === 'error' ? 'catmnt-form-error' : 'catmnt-form-message'}>
+            {realign.notice.text}
+          </div>
+        )}
+
+        {realign.realignConfirm && (
+          <RealignConfirmBlock
+            plans={realign.plans}
+            onConfirm={realign.handleRealignConfirmed}
+            onCancel={realign.cancelRealign}
+          />
+        )}
 
         <div className="catmnt-rows">
           {!builtinList && !loadError && <div className="catmnt-row-empty">読み込み中…</div>}
@@ -2958,6 +3014,15 @@ function OpeningSubTypeTab({ materialList, onLibraryChanged }) {
                   {row.entry.label}{row.diff ? ` ${CATALOG_DIFF_MARK}` : ''}
                 </span>
                 <span className="catmnt-cat-badge">{formatCategoryLabel(CatalogKind.OPENING_SUB_TYPE, row.entry.category)}</span>
+                {row.diff && (
+                  <button
+                    className="catmnt-realign-btn"
+                    title="本体の内容に合わせ直す"
+                    onClick={e => { e.stopPropagation(); realign.requestRealign([key]); }}
+                  >
+                    合わせ直す
+                  </button>
+                )}
               </div>
             );
           })}

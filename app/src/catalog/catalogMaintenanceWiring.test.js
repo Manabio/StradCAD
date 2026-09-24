@@ -622,6 +622,121 @@ test('【不変条件・QA指摘Minor-1・ステップ14-A2】ui/CatalogMaintena
   assert.ok(/realign\.clearNotice\(\)/.test(code), 'FixtureSymbolTab の handleSave が realign.clearNotice() を呼んでいない');
 });
 
+// ---- ステップ14-A3（課題A3: 「合わせ直す」を建具種別タブへ展開＋選択行の探索をallRowsへ揃える）:
+// OpeningSubTypeTab本体をコメント除去のうえ検査する（14-A2の建具記号タブと同じ検証方法） ----
+test('【不変条件・ステップ14-A3】ui/CatalogMaintenancePanel.jsx: OpeningSubTypeTab本体はuseRealignActions(CatalogKind.OPENING_SUB_TYPE, …)を呼び、<RealignConfirmBlockを1回だけ描く', () => {
+  const src = readSrc('ui/CatalogMaintenancePanel.jsx');
+  const body = extractBalancedBody(src, 'function OpeningSubTypeTab({ materialList, onLibraryChanged }) {');
+  assert.ok(body, 'CatalogMaintenancePanel.jsx に OpeningSubTypeTab コンポーネントが見つからない');
+  const code = stripComments(body); // コメント文中の言及だけでは緑にならないよう、実装本体だけを見る
+  assert.ok(
+    /useRealignActions\(CatalogKind\.OPENING_SUB_TYPE,/.test(code),
+    'OpeningSubTypeTab が useRealignActions(CatalogKind.OPENING_SUB_TYPE, …) を呼んでいない',
+  );
+  const realignBlockCount = (code.match(/<RealignConfirmBlock\b/g) ?? []).length;
+  assert.equal(realignBlockCount, 1, 'OpeningSubTypeTab が <RealignConfirmBlock を1回だけ描いていない');
+});
+
+test('【不変条件・ステップ14-A3】ui/CatalogMaintenancePanel.jsx: OpeningSubTypeTabは行の「合わせ直す」ボタンでrealign.requestRealign([key])（key=def.keyOf(row.entry)の複合キー）を呼び、一括ボタンのラベルに「絞り込みに関わらず全件」を明記し、allRows用のbuildCatalogRows呼び出しにsearchを渡さない', () => {
+  const src = readSrc('ui/CatalogMaintenancePanel.jsx');
+  const body = extractBalancedBody(src, 'function OpeningSubTypeTab({ materialList, onLibraryChanged }) {');
+  assert.ok(body, 'CatalogMaintenancePanel.jsx に OpeningSubTypeTab コンポーネントが見つからない');
+  const code = stripComments(body);
+  assert.ok(
+    /realign\.requestRealign\(\[key\]\)/.test(code),
+    'OpeningSubTypeTab の行ボタンが realign.requestRealign([key]) を呼んでいない',
+  );
+  assert.ok(/絞り込みに関わらず全件/.test(code), 'OpeningSubTypeTab の一括ボタンラベルに「絞り込みに関わらず全件」の文言が無い');
+  const allRowsMatch = /const allRows = builtinList \? buildCatalogRows\(\{[^}]*\}\)/.exec(code);
+  assert.ok(allRowsMatch, 'OpeningSubTypeTab に allRows = buildCatalogRows(...) の行が見つからない');
+  assert.ok(
+    !/search/.test(allRowsMatch[0]),
+    'OpeningSubTypeTab の allRows 用 buildCatalogRows 呼び出しに search が含まれている（絞り込みの影響を受けない全件という契約への退行）',
+  );
+});
+
+// openingSubTypeのkeyOfは`${category}:${key}`の複合キーを返す（catalogKinds.js OPENING_SUB_TYPE
+// 登録表）。removeDocEntry/planRealignの照合キーもdef.keyOf(e)のため、行ボタン・一括ボタンとも
+// row.entry.keyそのもの（複合キーの後半だけ）を渡すと「文書同梱に無いキーです」で壊れる
+// ——建具記号タブ（14-A2・単純キー）と同じ文面を機械的に流用しないための固定。
+test('【不変条件・ステップ14-A3】ui/CatalogMaintenancePanel.jsx: OpeningSubTypeTabは合わせ直しのキーにdef.keyOf(row.entry)（複合キー）を使い、row.entry.keyそのものは渡さない', () => {
+  const src = readSrc('ui/CatalogMaintenancePanel.jsx');
+  const body = extractBalancedBody(src, 'function OpeningSubTypeTab({ materialList, onLibraryChanged }) {');
+  assert.ok(body, 'CatalogMaintenancePanel.jsx に OpeningSubTypeTab コンポーネントが見つからない');
+  const code = stripComments(body);
+  assert.ok(
+    /const key = def\.keyOf\(row\.entry\);[\s\S]*?realign\.requestRealign\(\[key\]\)/.test(code),
+    'OpeningSubTypeTab の行ボタンが def.keyOf(row.entry) 由来のキーで realign.requestRealign を呼んでいない',
+  );
+  assert.ok(
+    /realign\.requestRealign\(realign\.targets\.map\(r => def\.keyOf\(r\.entry\)\)\)/.test(code),
+    'OpeningSubTypeTab の一括ボタンが realign.targets.map(r => def.keyOf(r.entry)) で複合キーを組み立てていない',
+  );
+  assert.ok(
+    !/requestRealign\(\[row\.entry\.key\]\)/.test(code),
+    'OpeningSubTypeTab の行ボタンが row.entry.key（複合キーの後半だけ）を渡している（removeDocEntry/planRealignの照合キーと不一致になる）',
+  );
+});
+
+test('【不変条件・ステップ14-A3】ui/CatalogMaintenancePanel.jsx: OpeningSubTypeTabのonOpeningSubTypeRealignedはonLibraryChangedを呼ばない（合わせ直しはユーザーライブラリを変えないため）', () => {
+  const src = readSrc('ui/CatalogMaintenancePanel.jsx');
+  const realignedBody = extractBalancedBody(src, 'function onOpeningSubTypeRealigned(keys) {');
+  assert.ok(realignedBody, 'CatalogMaintenancePanel.jsx に onOpeningSubTypeRealigned が見つからない');
+  const code = stripComments(realignedBody);
+  assert.ok(!/onLibraryChanged/.test(code), 'onOpeningSubTypeRealigned が onLibraryChanged を参照している');
+});
+
+test('【不変条件・ステップ14-A3】ui/CatalogMaintenancePanel.jsx: onOpeningSubTypeRealignedは選択中の行が対象keysに含まれていればsetForm(null)で選択を外しactions.resetConfirmState()を呼ぶ', () => {
+  const src = readSrc('ui/CatalogMaintenancePanel.jsx');
+  const body = extractBalancedBody(src, 'function onOpeningSubTypeRealigned(keys) {');
+  assert.ok(body, 'CatalogMaintenancePanel.jsx に onOpeningSubTypeRealigned が見つからない');
+  const code = stripComments(body);
+  assert.ok(/keys\.includes\(selectedKey\)/.test(code), 'onOpeningSubTypeRealigned が keys.includes(selectedKey) を検査していない');
+  assert.ok(/setForm\(null\)/.test(code), 'onOpeningSubTypeRealigned が setForm(null) で選択を外していない');
+  assert.ok(/actions\.resetConfirmState\(\)/.test(code), 'onOpeningSubTypeRealigned が actions.resetConfirmState() を呼んでいない');
+});
+
+test('【不変条件・ステップ14-A3】ui/CatalogMaintenancePanel.jsx: OpeningSubTypeTab本体は{realign.notice はフォームの外（{form && ( より前）に描かれる（フォームが開いていなくても完了・失敗通知が見える）', () => {
+  const src = readSrc('ui/CatalogMaintenancePanel.jsx');
+  const body = extractBalancedBody(src, 'function OpeningSubTypeTab({ materialList, onLibraryChanged }) {');
+  assert.ok(body, 'CatalogMaintenancePanel.jsx に OpeningSubTypeTab コンポーネントが見つからない');
+  const code = stripComments(body);
+  const noticeIdx = code.indexOf('{realign.notice &&');
+  const formIdx = code.indexOf('{form && (');
+  assert.ok(noticeIdx >= 0, 'OpeningSubTypeTab が {realign.notice && を描いていない');
+  assert.ok(formIdx >= 0, 'OpeningSubTypeTab が {form && ( を描いていない');
+  assert.ok(noticeIdx < formIdx, 'realign.notice の表示位置が {form && ( より後ろにある（フォーム内へ後退している）');
+});
+
+test('【不変条件・ステップ14-A3】ui/CatalogMaintenancePanel.jsx: OpeningSubTypeTab内のhandleSave本体はrealign.clearNotice()を呼ぶ', () => {
+  const src = readSrc('ui/CatalogMaintenancePanel.jsx');
+  const tabBody = extractBalancedBody(src, 'function OpeningSubTypeTab({ materialList, onLibraryChanged }) {');
+  assert.ok(tabBody, 'CatalogMaintenancePanel.jsx に OpeningSubTypeTab コンポーネントが見つからない');
+  // OpeningSubTypeTab本体に絞り込んでから抽出する——ファイル先頭の材料タブ（CatalogMaintenancePanel）
+  // にも同じシグネチャ'async function handleSave() {'があり、src全体からだと材料タブ側を拾ってしまう。
+  const handleSaveBody = extractBalancedBody(tabBody, 'async function handleSave() {');
+  assert.ok(handleSaveBody, 'OpeningSubTypeTab に handleSave が見つからない');
+  const code = stripComments(handleSaveBody);
+  assert.ok(/realign\.clearNotice\(\)/.test(code), 'OpeningSubTypeTab の handleSave が realign.clearNotice() を呼んでいない');
+});
+
+// QA指摘（A2再報告）: 絞り込み後のrowsから選択行を探すと、検索で選択行が一覧から隠れたとき
+// 編集状態が消える（材料タブ・14-A1はallRowsから探している）。OpeningSubTypeTabも同じ規約へ揃える。
+test('【不変条件・ステップ14-A3】ui/CatalogMaintenancePanel.jsx: OpeningSubTypeTabのselectedRowはallRows.findで探す（絞り込み後のrows.findでは探さない）', () => {
+  const src = readSrc('ui/CatalogMaintenancePanel.jsx');
+  const body = extractBalancedBody(src, 'function OpeningSubTypeTab({ materialList, onLibraryChanged }) {');
+  assert.ok(body, 'CatalogMaintenancePanel.jsx に OpeningSubTypeTab コンポーネントが見つからない');
+  const code = stripComments(body);
+  assert.ok(
+    /const selectedRow = \(!isAdding && selectedKey\) \? allRows\.find\(r => def\.keyOf\(r\.entry\) === selectedKey\) \?\? null : null;/.test(code),
+    'OpeningSubTypeTab の selectedRow が allRows.find(...) で選択行を探していない',
+  );
+  assert.ok(
+    !/selectedRow = \(!isAdding && selectedKey\) \? rows\.find\(/.test(code),
+    'OpeningSubTypeTab の selectedRow が絞り込み後の rows.find(...) で選択行を探している（検索で選択行が隠れると編集状態が消える退行）',
+  );
+});
+
 // ---- ステップ10f: READONLY_KIND_FIELDSの値整形は.jsx側に判断を残さず
 // catalog/catalogMaintenance.jsのformatReadonlyValue（汎用の配列/plainオブジェクト整形）に委ねる ----
 test('【不変条件・ステップ10f】ui/CatalogMaintenancePanel.jsx: formatReadonlyFieldValueの汎用フォールバックはcatalog/catalogMaintenance.jsのformatReadonlyValue経由（配列/plainオブジェクトの整形を.jsx側で再実装しない）', () => {
