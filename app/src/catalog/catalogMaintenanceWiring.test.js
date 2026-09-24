@@ -545,6 +545,83 @@ test('【不変条件・ステップ12f】ui/CatalogMaintenancePanel.jsx: Fixtur
   assert.ok(!/\^\[A-Z\]/.test(src), 'CatalogMaintenancePanel.jsx に記号の書式検査（正規表現）が直書きされている（catalog/catalogMaintenance.js の FIXTURE_SYMBOL_KEY_PATTERN 経由への一本化への退行）');
 });
 
+// ---- ステップ14-A2（課題A2: 「合わせ直す」を建具記号タブへ展開）: FixtureSymbolTab本体を
+// コメント除去のうえ検査する（14-A1の材料タブと同じ検証方法） ----
+test('【不変条件・ステップ14-A2】ui/CatalogMaintenancePanel.jsx: FixtureSymbolTab本体はuseRealignActions(CatalogKind.FIXTURE_SYMBOL, …)を呼び、<RealignConfirmBlockを1回だけ描く', () => {
+  const src = readSrc('ui/CatalogMaintenancePanel.jsx');
+  const body = extractBalancedBody(src, 'function FixtureSymbolTab({ materialList, onLibraryChanged }) {');
+  assert.ok(body, 'CatalogMaintenancePanel.jsx に FixtureSymbolTab コンポーネントが見つからない');
+  const code = stripComments(body); // コメント文中の言及だけでは緑にならないよう、実装本体だけを見る
+  assert.ok(
+    /useRealignActions\(CatalogKind\.FIXTURE_SYMBOL,/.test(code),
+    'FixtureSymbolTab が useRealignActions(CatalogKind.FIXTURE_SYMBOL, …) を呼んでいない',
+  );
+  const realignBlockCount = (code.match(/<RealignConfirmBlock\b/g) ?? []).length;
+  assert.equal(realignBlockCount, 1, 'FixtureSymbolTab が <RealignConfirmBlock を1回だけ描いていない');
+});
+
+test('【不変条件・ステップ14-A2】ui/CatalogMaintenancePanel.jsx: FixtureSymbolTabは行の「合わせ直す」ボタンでrealign.requestRealign([row.entry.key])を呼び、一括ボタンのラベルに「絞り込みに関わらず全件」を明記し、allRows用のbuildCatalogRows呼び出しにsearchを渡さない', () => {
+  const src = readSrc('ui/CatalogMaintenancePanel.jsx');
+  const body = extractBalancedBody(src, 'function FixtureSymbolTab({ materialList, onLibraryChanged }) {');
+  assert.ok(body, 'CatalogMaintenancePanel.jsx に FixtureSymbolTab コンポーネントが見つからない');
+  const code = stripComments(body);
+  assert.ok(
+    /realign\.requestRealign\(\[row\.entry\.key\]\)/.test(code),
+    'FixtureSymbolTab の行ボタンが realign.requestRealign([row.entry.key]) を呼んでいない',
+  );
+  assert.ok(/絞り込みに関わらず全件/.test(code), 'FixtureSymbolTab の一括ボタンラベルに「絞り込みに関わらず全件」の文言が無い');
+  const allRowsMatch = /const allRows = builtinList \? buildCatalogRows\(\{[^}]*\}\)/.exec(code);
+  assert.ok(allRowsMatch, 'FixtureSymbolTab に allRows = buildCatalogRows(...) の行が見つからない');
+  assert.ok(
+    !/search/.test(allRowsMatch[0]),
+    'FixtureSymbolTab の allRows 用 buildCatalogRows 呼び出しに search が含まれている（絞り込みの影響を受けない全件という契約への退行）',
+  );
+});
+
+test('【不変条件・ステップ14-A2】ui/CatalogMaintenancePanel.jsx: FixtureSymbolTabのonFixtureSymbolRealignedはonLibraryChangedを呼ばない（合わせ直しはユーザーライブラリを変えないため）', () => {
+  const src = readSrc('ui/CatalogMaintenancePanel.jsx');
+  const realignedBody = extractBalancedBody(src, 'function onFixtureSymbolRealigned(keys) {');
+  assert.ok(realignedBody, 'CatalogMaintenancePanel.jsx に onFixtureSymbolRealigned が見つからない');
+  const code = stripComments(realignedBody);
+  assert.ok(!/onLibraryChanged/.test(code), 'onFixtureSymbolRealigned が onLibraryChanged を参照している');
+});
+
+// ---- QA指摘Minor（A2再報告・2026-09-24）: 材料タブ（14-A1・:186・:213・:222）と同型の3テストを
+// 建具記号タブにも足す ----
+test('【不変条件・QA指摘Minor-1・ステップ14-A2】ui/CatalogMaintenancePanel.jsx: onFixtureSymbolRealignedは選択中の行が対象keysに含まれていればsetForm(null)で選択を外しactions.resetConfirmState()を呼ぶ', () => {
+  const src = readSrc('ui/CatalogMaintenancePanel.jsx');
+  const body = extractBalancedBody(src, 'function onFixtureSymbolRealigned(keys) {');
+  assert.ok(body, 'CatalogMaintenancePanel.jsx に onFixtureSymbolRealigned が見つからない');
+  const code = stripComments(body);
+  assert.ok(/keys\.includes\(selectedKey\)/.test(code), 'onFixtureSymbolRealigned が keys.includes(selectedKey) を検査していない');
+  assert.ok(/setForm\(null\)/.test(code), 'onFixtureSymbolRealigned が setForm(null) で選択を外していない');
+  assert.ok(/actions\.resetConfirmState\(\)/.test(code), 'onFixtureSymbolRealigned が actions.resetConfirmState() を呼んでいない');
+});
+
+test('【不変条件・QA指摘Minor-1・ステップ14-A2】ui/CatalogMaintenancePanel.jsx: FixtureSymbolTab本体は{realign.notice はフォームの外（{form && ( より前）に描かれる（フォームが開いていなくても完了・失敗通知が見える）', () => {
+  const src = readSrc('ui/CatalogMaintenancePanel.jsx');
+  const body = extractBalancedBody(src, 'function FixtureSymbolTab({ materialList, onLibraryChanged }) {');
+  assert.ok(body, 'CatalogMaintenancePanel.jsx に FixtureSymbolTab コンポーネントが見つからない');
+  const code = stripComments(body);
+  const noticeIdx = code.indexOf('{realign.notice &&');
+  const formIdx = code.indexOf('{form && (');
+  assert.ok(noticeIdx >= 0, 'FixtureSymbolTab が {realign.notice && を描いていない');
+  assert.ok(formIdx >= 0, 'FixtureSymbolTab が {form && ( を描いていない');
+  assert.ok(noticeIdx < formIdx, 'realign.notice の表示位置が {form && ( より後ろにある（フォーム内へ後退している）');
+});
+
+test('【不変条件・QA指摘Minor-1・ステップ14-A2】ui/CatalogMaintenancePanel.jsx: FixtureSymbolTab内のhandleSave本体（材料タブのhandleSaveとは別物）はrealign.clearNotice()を呼ぶ', () => {
+  const src = readSrc('ui/CatalogMaintenancePanel.jsx');
+  const tabBody = extractBalancedBody(src, 'function FixtureSymbolTab({ materialList, onLibraryChanged }) {');
+  assert.ok(tabBody, 'CatalogMaintenancePanel.jsx に FixtureSymbolTab コンポーネントが見つからない');
+  // FixtureSymbolTab本体に絞り込んでから抽出する——ファイル先頭の材料タブ（CatalogMaintenancePanel）
+  // にも同じシグネチャ'async function handleSave() {'があり、src全体からだと材料タブ側を拾ってしまう。
+  const handleSaveBody = extractBalancedBody(tabBody, 'async function handleSave() {');
+  assert.ok(handleSaveBody, 'FixtureSymbolTab に handleSave が見つからない');
+  const code = stripComments(handleSaveBody);
+  assert.ok(/realign\.clearNotice\(\)/.test(code), 'FixtureSymbolTab の handleSave が realign.clearNotice() を呼んでいない');
+});
+
 // ---- ステップ10f: READONLY_KIND_FIELDSの値整形は.jsx側に判断を残さず
 // catalog/catalogMaintenance.jsのformatReadonlyValue（汎用の配列/plainオブジェクト整形）に委ねる ----
 test('【不変条件・ステップ10f】ui/CatalogMaintenancePanel.jsx: formatReadonlyFieldValueの汎用フォールバックはcatalog/catalogMaintenance.jsのformatReadonlyValue経由（配列/plainオブジェクトの整形を.jsx側で再実装しない）', () => {

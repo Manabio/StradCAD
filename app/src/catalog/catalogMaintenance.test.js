@@ -557,6 +557,44 @@ test('【失敗系】planRealign: 文書同梱(doc)に無いキーは例外', ()
   );
 });
 
+// ---- planRealign(FIXTURE_SYMBOL, …)（ステップ14-A2: 課題A2。建具記号タブへの展開。材料以外の
+// kindでもplanRealignが同じ契約で動くことの確認） ----
+test('planRealign(FIXTURE_SYMBOL): 同梱(doc)のdefaultMaterialGlassが標準(builtin)と違えばok:true・diffPairsはfrom=doc現在値・to=標準値', () => {
+  const builtinList = fixtureSymbolBuiltinList();
+  const builtinAw = builtinList.find(e => e.key === 'AW');
+  const docAw = { ...builtinAw, defaultMaterialGlass: 'アルミ(樹脂複合)' };
+  setOverlay(CatalogKind.FIXTURE_SYMBOL, { doc: [docAw] });
+  const plan = planRealign(CatalogKind.FIXTURE_SYMBOL, 'AW', { builtinList });
+  assert.equal(plan.ok, true);
+  assert.equal(plan.baseOrigin, 'builtin');
+  assert.equal(plan.baseEntry, builtinAw);
+  assert.deepEqual(plan.diffPairs, [
+    { field: 'defaultMaterialGlass', label: '材料・ガラス（既定）', from: 'アルミ(樹脂複合)', to: 'アルミ' },
+  ]);
+});
+
+test('【失敗系】planRealign(FIXTURE_SYMBOL): 同梱(doc)が標準(builtin)と同内容ならok:false・reason:\'本体と同じ内容です\'', () => {
+  const builtinList = fixtureSymbolBuiltinList();
+  const builtinAw = builtinList.find(e => e.key === 'AW');
+  setOverlay(CatalogKind.FIXTURE_SYMBOL, { doc: [{ ...builtinAw }] });
+  const plan = planRealign(CatalogKind.FIXTURE_SYMBOL, 'AW', { builtinList });
+  assert.deepEqual(plan, { ok: false, reason: '本体と同じ内容です' });
+});
+
+test('realignPlansFor(FIXTURE_SYMBOL, [\'AW\']): nameは文書同梱(doc)エントリのlabel（displayNameOf。builtinのlabelとは別物であることをQA指摘Minor-2で明示）', () => {
+  const builtinList = fixtureSymbolBuiltinList();
+  const builtinAw = builtinList.find(e => e.key === 'AW');
+  // labelもdefaultMaterialGlassもbuiltinと変える——doc.labelとbuiltin.labelが同じままだと
+  // 「どちらから取っても緑」になり検査にならない（QA指摘Minor-2・2026-09-24再報告）。
+  const docAw = { ...builtinAw, label: 'AW（同梱）', defaultMaterialGlass: 'アルミ(樹脂複合)' };
+  setOverlay(CatalogKind.FIXTURE_SYMBOL, { doc: [docAw] });
+  const results = realignPlansFor(CatalogKind.FIXTURE_SYMBOL, ['AW'], { builtinList });
+  assert.equal(results.length, 1);
+  assert.equal(results[0].key, 'AW');
+  assert.equal(results[0].name, 'AW（同梱）');
+  assert.equal(results[0].plan.ok, true);
+});
+
 // ---- realignPlansFor（ステップ14-A1: 課題A1。複数キーぶんのplanRealignをまとめて実行する純関数）----
 test('realignPlansFor: 差分あり2件を渡すと両方ok:true・nameは文書同梱エントリのdisplayNameOf', () => {
   const builtinA = material({ code: '301000000001', name: 'A', thickness: 12.5 });

@@ -1660,8 +1660,8 @@ function useRealignActions(kind, { builtinList, allRows, onRealigned, onError } 
  * ステップ12f: 建具記号（fixtureSymbol）タブ本体。材料タブ（本体上書き込み。ステップ12a〜12c）と
  * 同じ共通ロジック（rowEditState/lockedFieldsFor/planSaveEntry/planRevertToBuiltin/
  * planRemoveUserEntry/applyCatalogEditPlan）を使う——追加・複製・編集・標準の上書き・標準に戻す・
- * 削除。「合わせ直す」（文書同梱を差分から本体へ合わせる一括操作）はこのタブの対象外
- * （設計12fの明示スコープに無い。doc-diff行は複製のみ可能なまま——rowEditStateのreasonどおり）。
+ * 削除。「合わせ直す」（文書同梱を差分から本体へ合わせる一括操作）はステップ14-A2で
+ * useRealignActions（kind汎用フック。材料タブ・14-A1と同じ）へ展開した。
  * @param {{ materialList: object[]|null }} props materialListは平面記号プレビューのダミー壁厚
  *   導出用（材料タブが動的importで読み込んだbuiltin一覧。未指定なら既定壁厚に落ちる）。
  */
@@ -1682,6 +1682,7 @@ function FixtureSymbolTab({ materialList, onLibraryChanged }) {
     setIsAdding(false);
     setSelectedKey(entryKey);
     setFormMessage(catalogSaveMessage(CatalogKind.FIXTURE_SYMBOL, meta));
+    realign.clearNotice();
     onLibraryChanged?.();
   }
   function onFixtureSymbolDeleted(plan) {
@@ -1689,6 +1690,7 @@ function FixtureSymbolTab({ materialList, onLibraryChanged }) {
     setSelectedKey(null);
     setForm(null);
     setFormMessage(removeMessageFor(plan));
+    realign.clearNotice();
     onLibraryChanged?.();
   }
   function onFixtureSymbolReverted() {
@@ -1696,6 +1698,7 @@ function FixtureSymbolTab({ materialList, onLibraryChanged }) {
     setSelectedKey(null);
     setForm(null);
     setFormMessage('標準に戻しました');
+    realign.clearNotice();
     onLibraryChanged?.();
   }
   const actions = useCatalogEditActions(CatalogKind.FIXTURE_SYMBOL, {
@@ -1720,6 +1723,9 @@ function FixtureSymbolTab({ materialList, onLibraryChanged }) {
   // （computeDerivedと同じ理由。材は高々数十〜百件のため毎回の再合成は軽い）。
   const diffMap = builtinList ? docDiffMap(CatalogKind.FIXTURE_SYMBOL, builtinList) : new Map();
   const rows = builtinList ? buildCatalogRows({ kind: CatalogKind.FIXTURE_SYMBOL, builtinList, search, diffMap }) : [];
+  // ステップ14-A2（課題A2）: 「合わせ直す」一括対象は検索の影響を受けない全行から取る
+  // （材料タブ・14-A1と同じ規約。realignTargetsはallRows基準で呼ぶ契約）。
+  const allRows = builtinList ? buildCatalogRows({ kind: CatalogKind.FIXTURE_SYMBOL, builtinList, diffMap }) : [];
 
   const selectedRow = (!isAdding && selectedKey) ? rows.find(r => r.entry.key === selectedKey) ?? null : null;
   const editState = selectedRow ? rowEditState(CatalogKind.FIXTURE_SYMBOL, selectedRow, { builtinKeys }) : null;
@@ -1741,6 +1747,21 @@ function FixtureSymbolTab({ materialList, onLibraryChanged }) {
     : new Map();
   const fmtDiffValue = v => (v === null || v === undefined || v === '' ? '未設定' : String(v));
 
+  // ステップ14-A2（課題A2）: 「合わせ直す」はkind汎用フックuseRealignActionsへ委譲する（材料タブ・
+  // 14-A1と同じ）。onRealigned: 選択中の行が対象に含まれていた場合、出所（doc→user/builtin）が
+  // 変わりformが古い同梱値のままになるため選択を外す。
+  function onFixtureSymbolRealigned(keys) {
+    if (selectedKey && keys.includes(selectedKey)) {
+      setIsAdding(false);
+      setSelectedKey(null);
+      setForm(null);
+      actions.resetConfirmState();
+    }
+  }
+  const realign = useRealignActions(CatalogKind.FIXTURE_SYMBOL, {
+    builtinList, allRows, onRealigned: onFixtureSymbolRealigned,
+  });
+
   function handleAddNew() {
     setIsAdding(true);
     setSelectedKey(null);
@@ -1748,6 +1769,7 @@ function FixtureSymbolTab({ materialList, onLibraryChanged }) {
     setForm(emptyFixtureSymbolForm());
     setFormError(null);
     setFormMessage(null);
+    realign.clearNotice();
   }
 
   function handleSelectRow(row) {
@@ -1757,6 +1779,7 @@ function FixtureSymbolTab({ materialList, onLibraryChanged }) {
     setForm(fixtureSymbolFormFromEntry(row.entry));
     setFormError(null);
     setFormMessage(null);
+    realign.clearNotice();
   }
 
   function handleDuplicateClick(row) {
@@ -1766,12 +1789,14 @@ function FixtureSymbolTab({ materialList, onLibraryChanged }) {
     setForm({ ...fixtureSymbolFormFromEntry(row.entry), key: '' });
     setFormError('複製しました。記号を変更してから保存してください');
     setFormMessage(null);
+    realign.clearNotice();
   }
 
   async function handleSave() {
     if (!form || !builtinList) return;
     setFormError(null);
     setFormMessage(null);
+    realign.clearNotice();
     const entry = buildFixtureSymbolEntry(form);
 
     if (isAdding) {
@@ -1826,7 +1851,29 @@ function FixtureSymbolTab({ materialList, onLibraryChanged }) {
           <button className="catmnt-add-btn" disabled={!builtinList} onClick={handleAddNew}>
             + 新規追加
           </button>
+          {realign.targets.length > 0 && (
+            <button
+              className="catmnt-btn catmnt-btn--secondary"
+              onClick={() => realign.requestRealign(realign.targets.map(r => r.entry.key))}
+            >
+              すべて本体の内容に合わせ直す（{realign.targets.length}件・絞り込みに関わらず全件）
+            </button>
+          )}
         </div>
+
+        {realign.notice && (
+          <div className={realign.notice.kind === 'error' ? 'catmnt-form-error' : 'catmnt-form-message'}>
+            {realign.notice.text}
+          </div>
+        )}
+
+        {realign.realignConfirm && (
+          <RealignConfirmBlock
+            plans={realign.plans}
+            onConfirm={realign.handleRealignConfirmed}
+            onCancel={realign.cancelRealign}
+          />
+        )}
 
         <div className="catmnt-rows">
           {!builtinList && !loadError && <div className="catmnt-row-empty">読み込み中…</div>}
@@ -1852,6 +1899,15 @@ function FixtureSymbolTab({ materialList, onLibraryChanged }) {
                 {row.entry.key}（{row.entry.label}）{row.diff ? ` ${CATALOG_DIFF_MARK}` : ''}
               </span>
               <span className="catmnt-cat-badge">{formatCategoryLabel(CatalogKind.FIXTURE_SYMBOL, row.entry.category)}</span>
+              {row.diff && (
+                <button
+                  className="catmnt-realign-btn"
+                  title="本体の内容に合わせ直す"
+                  onClick={e => { e.stopPropagation(); realign.requestRealign([row.entry.key]); }}
+                >
+                  合わせ直す
+                </button>
+              )}
             </div>
           ))}
         </div>
