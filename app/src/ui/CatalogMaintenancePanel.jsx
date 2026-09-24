@@ -169,19 +169,11 @@ export function CatalogMaintenancePanel({ onClose }) {
   const [form, setForm] = useState(null);
   const [formError, setFormError] = useState(null);
   const [formMessage, setFormMessage] = useState(null);
-  const [confirmingDelete, setConfirmingDelete] = useState(false);
-  // ステップ12b（削除確認の使用状況）: null | { status: 'loading'|'ready'|'error', usedKeys?: Set, message?: string }
-  const [deleteUsage, setDeleteUsage] = useState(null);
-  // ステップ6b（合わせ直し）: ステップ14-A1でuseRealignActions（kind汎用フック）へ移設した
-  // （realignConfirm state・realignPlansの毎レンダー再計算・handleRealignConfirmedを含む。
-  // realignPlansはuseMemoでキャッシュしない——承認直前の最新overlay状態を反映するため）。
-  // ステップ12b（Q-C: 使用中のdoc-same行の保存確認）: null | { plan, entryCode, confirmPairs, overridesBuiltin, thicknessChanged }
-  const [saveConfirm, setSaveConfirm] = useState(null);
-  // ステップ12b（標準に戻す確認）: null | { key, alsoRealignDoc }
-  const [revertConfirm, setRevertConfirm] = useState(null);
-  // ステップ12b QA指摘m2（2026-09-24再報告）: 承認系ボタンの二重押し防止。保存・削除・標準に戻す
-  // の非同期処理の実行中だけtrueにする（該当ボタンをdisabledにする唯一の判定）。
-  const [busy, setBusy] = useState(false);
+  // ステップ14-B1（課題B1）: 保存・削除・標準に戻すの確認state（confirmingDelete/deleteUsage/
+  // saveConfirm/revertConfirm）・busyは共通フックuseCatalogEditActions（建具記号タブ等・
+  // ステップ12f以降と同じ）へ移設した（handleLibraryChanged定義の直後でonMaterialSaved等と
+  // 併せて呼ぶ）。「合わせ直す」（realignConfirm等）はステップ14-A1でuseRealignActionsへ
+  // 移設済み（このフックには載せない別の性質——設計 2026-09-24）。
 
   // ステップ7d: 内装マスター・境界マスターの閲覧タブ（読み取り専用）用の状態。material（左記の
   // builtinList/selectedCode等）とは別に持つ——編集フォーム系のstateを閲覧タブへ誤って持ち込まない。
@@ -205,6 +197,41 @@ export function CatalogMaintenancePanel({ onClose }) {
   function handleLibraryChanged() {
     setLibraryTick(t => t + 1);
   }
+
+  // ステップ14-B1（課題B1）: 保存・削除・標準に戻すの共通手順はuseCatalogEditActions
+  // （建具記号タブ等・ステップ12f以降と同じ）へ委譲する。完了時の後始末（材料タブ固有の
+  // 副作用）だけここに残す——旧・performSave/handleDeleteConfirmed/handleRevertConfirmed末尾の
+  // setIsAdding/setSelectedCode/setForm/setFormMessage/realign.clearNotice()/handleLibraryChanged()を
+  // そのまま移した（呼び出し順は変えない）。realign（合わせ直しの通知）はこの下で定義するが、
+  // 呼び出しは各関数が実際に呼ばれる時点（保存・削除・戻す操作の完了時）まで発生しないため、
+  // ここで参照しても問題ない（建具記号タブのonFixtureSymbolSaved等と同じ順序）。
+  function onMaterialSaved(entryCode, meta) {
+    setIsAdding(false);
+    setSelectedCode(entryCode);
+    setFormMessage(materialSaveMessage(meta));
+    realign.clearNotice();
+    handleLibraryChanged();
+  }
+  function onMaterialDeleted(plan) {
+    setIsAdding(false);
+    setSelectedCode(null);
+    setForm(null);
+    setFormMessage(removeMessageFor(plan));
+    realign.clearNotice();
+    handleLibraryChanged();
+  }
+  function onMaterialReverted() {
+    setIsAdding(false);
+    setSelectedCode(null);
+    setForm(null);
+    setFormMessage('標準に戻しました');
+    realign.clearNotice();
+    handleLibraryChanged();
+  }
+  const actions = useCatalogEditActions(CatalogKind.MATERIAL, {
+    onSaved: onMaterialSaved, onDeleted: onMaterialDeleted, onReverted: onMaterialReverted, onError: setFormError,
+  });
+  const { busy } = actions;
 
   useEffect(() => {
     let cancelled = false;
@@ -304,10 +331,7 @@ export function CatalogMaintenancePanel({ onClose }) {
     const major = firstMajor();
     setIsAdding(true);
     setSelectedCode(null);
-    setConfirmingDelete(false);
-    setDeleteUsage(null);
-    setSaveConfirm(null);
-    setRevertConfirm(null);
+    actions.resetConfirmState();
     setForm({
       name: '', spec: '', thickness: '', note: '', category: MATERIAL_CATEGORY.PANEL, major, minor: firstMinor(major),
       x: '', y: '', backingClass: '',
@@ -320,10 +344,7 @@ export function CatalogMaintenancePanel({ onClose }) {
   function handleSelectRow(row) {
     setIsAdding(false);
     setSelectedCode(row.entry.code);
-    setConfirmingDelete(false);
-    setDeleteUsage(null);
-    setSaveConfirm(null);
-    setRevertConfirm(null);
+    actions.resetConfirmState();
     setForm(formFromEntry(row.entry));
     setFormError(null);
     setFormMessage(null);
@@ -334,39 +355,11 @@ export function CatalogMaintenancePanel({ onClose }) {
     const copy = duplicateMaterialEntry(row.entry, knownCodes);
     setIsAdding(true);
     setSelectedCode(null);
-    setConfirmingDelete(false);
-    setDeleteUsage(null);
-    setSaveConfirm(null);
-    setRevertConfirm(null);
+    actions.resetConfirmState();
     setForm(formFromEntry(copy));
     setFormError('複製しました。名称を変更してから保存してください（同内容のままでは保存できません）');
     setFormMessage(null);
     realign.clearNotice();
-  }
-
-  // ステップ12b（本体編集の保存適用。ok:trueのplanを永続化しメッセージを出す。新規追加・
-  // 既存行の直接保存・doc-same/doc-override確認後の保存の3経路が共有する唯一の末尾処理——
-  // QA指摘n2: 新規追加もplanSaveEntry+applyCatalogEditPlanへ寄せ、保存経路を1本にする）。
-  // QA指摘m2: busyで二重押しを防ぐ（呼び出し側のボタンはbusy中disabled。ここでも念のため
-  // 多重実行を防止する）。
-  async function performSave(plan, entryCode, { overridesBuiltin, thicknessChanged }) {
-    if (busy) return;
-    setBusy(true);
-    try {
-      await applyCatalogEditPlan(CatalogKind.MATERIAL, plan, { saveFn: saveUserCatalog, markDirty });
-    } catch (e) {
-      setFormError(`保存に失敗しました: ${e.message}`);
-      setSaveConfirm(null);
-      return;
-    } finally {
-      setBusy(false);
-    }
-    setIsAdding(false);
-    setSelectedCode(entryCode);
-    setFormMessage(materialSaveMessage({ overridesBuiltin, thicknessChanged }));
-    setSaveConfirm(null);
-    realign.clearNotice();
-    handleLibraryChanged();
   }
 
   async function handleSave() {
@@ -386,18 +379,19 @@ export function CatalogMaintenancePanel({ onClose }) {
     });
 
     if (isAdding) {
-      // QA指摘n2: 新規追加もplanSaveEntry+applyCatalogEditPlan（performSave）へ寄せる。
-      // validateMaterialEntryは引き続き使う——planSaveEntryにはcategoryの編集可否ゲート・
-      // 下地材の必須項目検査（x/y>0・backingClass）が無いため（planSaveEntryは5種別共通の汎用関数で
-      // material専用のカテゴリ制約を持たせられない）。def.validate/重複禁止検査はplanSaveEntry側でも
-      // 再検査されるが、この新規追加経路は高々数百件の材一覧に対する1回の合成のため
-      // 無視できる規模——二重実装というより「同じ検査を2箇所が独立に通す」保険的な重複であり、
-      // 永続化手順（nextUser組み立て・overridesBuiltin付与・commit）自体の二重実装は解消する。
+      // QA指摘n2: 新規追加もplanSaveEntry+applyCatalogEditPlan（useCatalogEditActionsのperformSave。
+      // ステップ14-B1で共通フックへ移設）へ寄せる。validateMaterialEntryは引き続き使う——
+      // planSaveEntryにはcategoryの編集可否ゲート・下地材の必須項目検査（x/y>0・backingClass）が
+      // 無いため（planSaveEntryは5種別共通の汎用関数でmaterial専用のカテゴリ制約を持たせられない）。
+      // def.validate/重複禁止検査はplanSaveEntry側でも再検査されるが、この新規追加経路は高々数百件の
+      // 材一覧に対する1回の合成のため無視できる規模——二重実装というより「同じ検査を2箇所が独立に
+      // 通す」保険的な重複であり、永続化手順（nextUser組み立て・overridesBuiltin付与・commit）自体の
+      // 二重実装は解消する。
       const result = validateMaterialEntry(entry, builtinList);
       if (!result.ok) { setFormError(result.message); return; }
       const plan = planSaveEntry(CatalogKind.MATERIAL, entry, { builtinList, rowState: null });
       if (!plan.ok) { setFormError(plan.message); return; }
-      await performSave(plan, entry.code, { overridesBuiltin: plan.overridesBuiltin, thicknessChanged: plan.thicknessChanged });
+      await actions.performSave(plan, entry.code, { overridesBuiltin: plan.overridesBuiltin, thicknessChanged: plan.thicknessChanged });
       return;
     }
 
@@ -418,96 +412,27 @@ export function CatalogMaintenancePanel({ onClose }) {
 
     // Q-C: 使用中のdoc-same/doc-override行は確認のうえ同梱を外して保存する。
     if (plan.needsConfirm) {
-      setSaveConfirm({
-        plan, entryCode: entry.code, confirmPairs: plan.confirmPairs,
+      actions.setSaveConfirm({
+        plan, entryKey: entry.code, confirmPairs: plan.confirmPairs,
         overridesBuiltin: plan.overridesBuiltin, thicknessChanged: plan.thicknessChanged,
       });
       return;
     }
-    await performSave(plan, entry.code, { overridesBuiltin: plan.overridesBuiltin, thicknessChanged: plan.thicknessChanged });
+    await actions.performSave(plan, entry.code, { overridesBuiltin: plan.overridesBuiltin, thicknessChanged: plan.thicknessChanged });
   }
 
-  function handleSaveConfirmed() {
-    if (!saveConfirm || busy) return;
-    performSave(saveConfirm.plan, saveConfirm.entryCode, saveConfirm);
-  }
-
-  // ステップ12b QA指摘M1（2026-09-24再報告）: 削除確認の使用状況は store.js の
-  // collectCurrentCatalogUsage（未保存の作業中の編集を含む「現在の」使用キー）経由で取得する
-  // ——旧実装（loadAllSavedFloors→collectCatalogUsageAcrossFloors）は最後に明示保存した内容
-  // しか見ず、保存前の削除で参照が宙に浮く事故があった（削除はライブラリから外すだけとする原則への違反）。
-  async function handleDeleteClick() {
-    setConfirmingDelete(true);
+  // ステップ14-B1（課題B1）: 削除確認の使用状況取得（collectCurrentCatalogUsage経由。QA指摘M1・
+  // 2026-09-24再報告の旧経路封じは変えない）・削除の実行・標準に戻すの実行はuseCatalogEditActions
+  // （actions）へ委譲する薄いラッパーだけをここに残す。
+  function handleDeleteClick() {
     setFormError(null);
-    setDeleteUsage({ status: 'loading' });
-    try {
-      const usedKeysByKind = await collectCurrentCatalogUsage();
-      setDeleteUsage({ status: 'ready', usedKeys: usedKeysByKind.get(CatalogKind.MATERIAL) ?? new Set() });
-    } catch (e) {
-      setDeleteUsage({ status: 'error', message: e.message });
-    }
-  }
-
-  async function handleDeleteConfirmed() {
-    if (!selectedRow || !deleteUsage || deleteUsage.status !== 'ready' || busy) return;
-    let plan;
-    try {
-      plan = planRemoveUserEntry(CatalogKind.MATERIAL, selectedRow.entry.code, { usedKeys: deleteUsage.usedKeys });
-    } catch (e) {
-      setFormError(e.message);
-      setConfirmingDelete(false);
-      setDeleteUsage(null);
-      return;
-    }
-    setBusy(true);
-    try {
-      await applyCatalogEditPlan(CatalogKind.MATERIAL, plan, { saveFn: saveUserCatalog, markDirty });
-    } catch (e) {
-      setFormError(`削除に失敗しました: ${e.message}`);
-      setConfirmingDelete(false);
-      setDeleteUsage(null);
-      return;
-    } finally {
-      setBusy(false);
-    }
-    setIsAdding(false);
-    setSelectedCode(null);
-    setForm(null);
-    setConfirmingDelete(false);
-    setDeleteUsage(null);
-    // ステップ12b QA指摘m4: 完了メッセージの文言選択はcatalog/catalogMaintenance.jsの
-    // removeMessageFor(plan)経由（.jsx側でplan.docAppendの有無を再判定しない）。
-    setFormMessage(removeMessageFor(plan));
-    realign.clearNotice();
-    handleLibraryChanged();
+    actions.handleDeleteClick();
   }
 
   // ステップ12b（標準に戻す。override/doc-override行）。
   function handleRevertClick() {
     if (!selectedRow) return;
-    setRevertConfirm({ key: selectedRow.entry.code, alsoRealignDoc: true });
-  }
-
-  async function handleRevertConfirmed() {
-    if (!revertConfirm || busy) return;
-    const plan = planRevertToBuiltin(CatalogKind.MATERIAL, revertConfirm.key, { alsoRealignDoc: revertConfirm.alsoRealignDoc });
-    setBusy(true);
-    try {
-      await applyCatalogEditPlan(CatalogKind.MATERIAL, plan, { saveFn: saveUserCatalog, markDirty });
-    } catch (e) {
-      setFormError(`標準に戻す処理に失敗しました: ${e.message}`);
-      setRevertConfirm(null);
-      return;
-    } finally {
-      setBusy(false);
-    }
-    setIsAdding(false);
-    setSelectedCode(null);
-    setForm(null);
-    setRevertConfirm(null);
-    setFormMessage('標準に戻しました');
-    realign.clearNotice();
-    handleLibraryChanged();
+    actions.handleRevertClick(selectedRow.entry.code);
   }
 
   // ステップ14-A1（課題A1）: useRealignActionsのonRealigned。合わせ直し対象キーに選択中の行が
@@ -873,67 +798,29 @@ export function CatalogMaintenancePanel({ onClose }) {
                     {formError && <div className="catmnt-form-error">{formError}</div>}
                     {formMessage && <div className="catmnt-form-message">{formMessage}</div>}
 
-                    {confirmingDelete ? (
-                      <div className="catmnt-form-row">
-                        <span style={{ fontSize: 12, color: '#dc2626' }}>
-                          本当に削除しますか？（ユーザーライブラリから外します）
-                          {deleteUsage?.status === 'loading' && '（使用状況を確認しています…）'}
-                          {deleteUsage?.status === 'error' && `（使用状況の確認に失敗しました: ${deleteUsage.message}）`}
-                          {deleteUsage?.status === 'ready' && deleteUsage.usedKeys.has(selectedRow?.entry.code) && (
-                            '（使用中のため、この文書には現在の内容を同梱として残します）'
-                          )}
-                        </span>
-                        <button
-                          className="catmnt-btn catmnt-btn--danger"
-                          disabled={!deleteUsage || deleteUsage.status !== 'ready' || busy}
-                          onClick={handleDeleteConfirmed}
-                        >
-                          削除する
-                        </button>
-                        <button
-                          className="catmnt-btn catmnt-btn--secondary"
-                          disabled={busy}
-                          onClick={() => { setConfirmingDelete(false); setDeleteUsage(null); }}
-                        >
-                          キャンセル
-                        </button>
-                      </div>
-                    ) : revertConfirm ? (
-                      <div className="catmnt-realign-confirm">
-                        <div className="catmnt-realign-confirm-title">標準に戻しますか？</div>
-                        <label style={{ fontSize: 12, color: '#1e293b', display: 'flex', alignItems: 'center', gap: 6 }}>
-                          <input
-                            type="checkbox"
-                            checked={revertConfirm.alsoRealignDoc}
-                            onChange={e => setRevertConfirm(c => ({ ...c, alsoRealignDoc: e.target.checked }))}
-                          />
-                          この文書の同梱も標準に合わせる
-                        </label>
-                        <div className="catmnt-form-actions">
-                          <button className="catmnt-btn catmnt-btn--primary" disabled={busy} onClick={handleRevertConfirmed}>承認する</button>
-                          <button className="catmnt-btn catmnt-btn--secondary" disabled={busy} onClick={() => setRevertConfirm(null)}>
-                            キャンセル
-                          </button>
-                        </div>
-                      </div>
-                    ) : saveConfirm ? (
-                      <div className="catmnt-realign-confirm">
-                        <div className="catmnt-realign-confirm-title">この文書の同梱を外して保存しますか？</div>
-                        <ul className="catmnt-realign-diff-list">
-                          {saveConfirm.confirmPairs.map(p => (
-                            <li key={p.field}>{p.label} {fmtDiffValue(p.from)} → {fmtDiffValue(p.to)}</li>
-                          ))}
-                        </ul>
-                        <div className="catmnt-realign-confirm-note">
-                          保存すると、この文書では同梱を外し編集後の内容が使われます。他の文書は各自で合わせ直してください。
-                        </div>
-                        <div className="catmnt-form-actions">
-                          <button className="catmnt-btn catmnt-btn--primary" disabled={busy} onClick={handleSaveConfirmed}>承認する</button>
-                          <button className="catmnt-btn catmnt-btn--secondary" disabled={busy} onClick={() => setSaveConfirm(null)}>
-                            キャンセル
-                          </button>
-                        </div>
-                      </div>
+                    {actions.confirmingDelete ? (
+                      <DeleteConfirmBlock
+                        deleteUsage={actions.deleteUsage}
+                        isUsed={actions.deleteUsage?.status === 'ready' && actions.deleteUsage.usedKeys.has(selectedRow?.entry.code)}
+                        busy={busy}
+                        onConfirm={() => actions.handleDeleteConfirmed(selectedRow?.entry.code)}
+                        onCancel={actions.cancelDelete}
+                      />
+                    ) : actions.revertConfirm ? (
+                      <RevertConfirmBlock
+                        revertConfirm={actions.revertConfirm}
+                        setRevertConfirm={actions.setRevertConfirm}
+                        busy={busy}
+                        onConfirm={actions.handleRevertConfirmed}
+                        onCancel={() => actions.setRevertConfirm(null)}
+                      />
+                    ) : actions.saveConfirm ? (
+                      <SaveConfirmBlock
+                        saveConfirm={actions.saveConfirm}
+                        busy={busy}
+                        onConfirm={actions.handleSaveConfirmed}
+                        onCancel={() => actions.setSaveConfirm(null)}
+                      />
                     ) : (
                       <div className="catmnt-form-actions">
                         <button className="catmnt-btn catmnt-btn--primary" disabled={!!disabledReason || busy} onClick={handleSave}>
@@ -1320,22 +1207,16 @@ const FIXTURE_SYMBOL_PROFILE_LABELS = Object.freeze({
 });
 
 // ================================================================
-// QA指摘n9（2026-09-24再報告）: 本体編集タブ（材料タブ・建具記号タブ）が共有しうる非同期アクション
+// QA指摘n9（2026-09-24再報告）: 本体編集タブ（材料タブ・建具記号タブ等）が共有しうる非同期アクション
 // （保存・削除・標準に戻す）と、その確認状態・busyガードを1箇所にまとめるフック＋確認ブロック用
 // コンポーネント。
 //
-// 現状の適用範囲（報告事項）: FixtureSymbolTab（12f）・InteriorMasterTab・SectionTab（12g）は
-// このフック・コンポーネントへ移行済み。材料タブ（CatalogMaintenancePanel本体）は本ラウンドでも
-// 未移行——材料タブは同じ確認state群に加えて、同梱差分/標準差分のフィールド別オレンジ表示・
-// 下地区分selectの表示値解決など、確認フロー本体だけでは括れない付随ロジックが同じハンドラへ
-// 深く絡んでおり、移行するには材料タブの十数本の既存wiringテスト（performSave/
-// handleDeleteConfirmed/handleRevertConfirmedの関数シグネチャ・busy state宣言・確認ボタンJSXを
-// 正規表現で直接検査するもの）を書き直す必要がある。本セッションでは目視確認の手段が無い状態で
-// その一括書き換えを行うリスクが高いと判断し、材料タブは現状のまま維持し、この報告として明記する
-// （材料タブの将来の移行先として引き続き用意しておく）。「合わせ直す」（旧realignConfirm）は
-// ステップ14-A1でuseRealignActions（kind汎用の別フック）へ切り出し、材料タブも移行済み——
-// 対象は上記の「保存・削除・標準に戻す」（useCatalogEditActions）とは別の性質（busy無し・
-// ユーザーライブラリを変えない）のため別フックにした（設計 2026-09-24）。
+// 適用範囲: FixtureSymbolTab（12f）・InteriorMasterTab・SectionTab（12g）・OpeningSubTypeTab（12h）・
+// 材料タブ（CatalogMaintenancePanel本体・ステップ14-B1）の全5タブがこのフック・コンポーネントへ
+// 移行済み。「合わせ直す」（旧realignConfirm）はステップ14-A1でuseRealignActions（kind汎用の
+// 別フック）へ切り出し、こちらも全5タブが移行済み——対象は上記の「保存・削除・標準に戻す」
+// （useCatalogEditActions）とは別の性質（busy無し・ユーザーライブラリを変えない）のため別フックに
+// した（設計 2026-09-24）。
 // ================================================================
 
 /**
@@ -1395,7 +1276,9 @@ function RevertConfirmBlock({ revertConfirm, setRevertConfirm, busy, onConfirm, 
 
 /**
  * doc-same/doc-override保存（使用中の同梱を外して保存）の確認ブロック（材料タブ・建具記号タブで
- * 同一のUI）。
+ * 同一のUI）。値の整形はformatReadonlyValueに統一する（ステップ14-B1・裁定2026-09-24: 旧・
+ * String(p.from ?? '未設定')の「未設定」表記から「（未設定）」表記へ変わる。材料タブを含む
+ * 全編集タブに効く）。
  * @param {{ saveConfirm: { confirmPairs: object[] }, busy: boolean,
  *           onConfirm: () => void, onCancel: () => void }} props
  */
@@ -1405,7 +1288,7 @@ function SaveConfirmBlock({ saveConfirm, busy, onConfirm, onCancel }) {
       <div className="catmnt-realign-confirm-title">この文書の同梱を外して保存しますか？</div>
       <ul className="catmnt-realign-diff-list">
         {saveConfirm.confirmPairs.map(p => (
-          <li key={p.field}>{p.label} {String(p.from ?? '未設定')} → {String(p.to ?? '未設定')}</li>
+          <li key={p.field}>{p.label} {formatReadonlyValue(p.from)} → {formatReadonlyValue(p.to)}</li>
         ))}
       </ul>
       <div className="catmnt-realign-confirm-note">

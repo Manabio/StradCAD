@@ -15,8 +15,8 @@ function readSrc(rel) {
 // catalogRegistryWiring.test.js と同じ趣旨の抽出（ステップ12b QA指摘m4対応で追加。コメント文中の
 // 言及ではなく実装本体だけを見るため、対象関数の{}を波かっこの深さで正確に切り出す）。
 // signatureは末尾が関数本体開始の'{'まで含む完全な文字列で渡すこと（例:
-// 'async function performSave(plan, entryCode, { overridesBuiltin, thicknessChanged }) {'）——
-// 引数の分割代入に'{'を含む関数でも、パラメータ内の'{'を本体開始と誤認しないため。
+// 'async function performSave(plan, entryKey, meta = {}) {'）——
+// 引数の分割代入や既定値に'{'を含む関数でも、パラメータ内の'{'を本体開始と誤認しないため。
 function extractBalancedBody(src, signature) {
   const startIdx = src.indexOf(signature);
   if (startIdx < 0) return null;
@@ -502,7 +502,7 @@ test('【不変条件・ステップ12f】ui/CatalogMaintenancePanel.jsx: active
 // 材料タブとの重複解消のため共通フックuseCatalogEditActions（kind汎用。CatalogMaintenancePanel.jsx
 // 内）へ委譲する。FixtureSymbolTabはこのフックへkind:CatalogKind.FIXTURE_SYMBOLを渡して使う——
 // planRevertToBuiltin/planRemoveUserEntry/applyCatalogEditPlanの直接呼び出しはフック側へ移った
-// （材料タブは本ラウンド未移行。上のuseCatalogEditActions定義直前のコメントに報告済み）。
+// （材料タブもステップ14-B1でこの共通フックへ移行済み。下の【不変条件・ステップ14-B1】各テストで検査）。
 test('【不変条件・QA指摘n9・2026-09-24再報告】ui/CatalogMaintenancePanel.jsx: FixtureSymbolTabはuseCatalogEditActions(CatalogKind.FIXTURE_SYMBOL, …)を呼び、useCatalogEditActions自身がplanRevertToBuiltin/planRemoveUserEntry/applyCatalogEditPlanをkind引数で呼ぶ（材料タブとの重複解消）', () => {
   const src = readSrc('ui/CatalogMaintenancePanel.jsx');
   const fnMatch = /function FixtureSymbolTab\(\{[\s\S]*?\n\}/.exec(src);
@@ -866,14 +866,163 @@ test('【不変条件・QA指摘M1・2026-09-24再報告】store.js: collectCurr
   );
 });
 
-test('【不変条件・ステップ12b】ui/CatalogMaintenancePanel.jsx: 保存後メッセージはcatalog/catalogMaintenance.jsのmaterialSaveMessage経由（.jsx側で「保存しました」を直書きで組み立てない）', () => {
+test('【不変条件・ステップ12b・ステップ14-B1で移設】ui/CatalogMaintenancePanel.jsx: 保存後メッセージはcatalog/catalogMaintenance.jsのmaterialSaveMessage経由（.jsx側で「保存しました」を直書きで組み立てない）', () => {
   const src = readSrc('ui/CatalogMaintenancePanel.jsx');
   assert.ok(/\bmaterialSaveMessage\(/.test(src), 'CatalogMaintenancePanel.jsx が materialSaveMessage を呼んでいない');
-  const fnMatch = /async function performSave\([\s\S]*?\n {2}\}/.exec(src);
-  assert.ok(fnMatch, 'CatalogMaintenancePanel.jsx に performSave 関数が見つからない');
+  // ステップ14-B1: 保存の実行そのものはuseCatalogEditActionsのperformSaveへ委譲したため、
+  // 保存後メッセージの組み立ては材料タブのonSaved（onMaterialSaved）側に残る。
+  const body = extractBalancedBody(src, 'function onMaterialSaved(entryCode, meta) {');
+  assert.ok(body, 'CatalogMaintenancePanel.jsx に onMaterialSaved（材料タブのuseCatalogEditActions onSaved）が見つからない');
   assert.ok(
-    /setFormMessage\(materialSaveMessage\(/.test(fnMatch[0]),
-    'performSave が setFormMessage(materialSaveMessage(...)) を呼んでいない（保存後メッセージの直書きへの退行）',
+    /setFormMessage\(materialSaveMessage\(/.test(body),
+    'onMaterialSaved が setFormMessage(materialSaveMessage(...)) を呼んでいない（保存後メッセージの直書きへの退行）',
+  );
+});
+
+// ---- ステップ14-B1（課題B1）: 材料タブ（親CatalogMaintenancePanel本体）の保存・削除・標準に戻すを
+// 共通フックuseCatalogEditActionsと共通の確認ブロックへ移行する（挙動不変のリファクタ）。
+// 建具記号タブ等・ステップ12f以降と同じ形に揃ったことを固定する ----
+test('【不変条件・ステップ14-B1】ui/CatalogMaintenancePanel.jsx: 材料タブはuseCatalogEditActions(CatalogKind.MATERIAL, …)を呼び、<DeleteConfirmBlock/<RevertConfirmBlock/<SaveConfirmBlockをそれぞれ1回だけ描く（建具記号タブ等と同じ共通フックへ移行）', () => {
+  const src = readSrc('ui/CatalogMaintenancePanel.jsx');
+  const body = extractBalancedBody(src, 'export function CatalogMaintenancePanel({ onClose }) {');
+  assert.ok(body, 'CatalogMaintenancePanel.jsx に CatalogMaintenancePanel コンポーネントが見つからない');
+  const code = stripComments(body);
+  assert.ok(
+    /useCatalogEditActions\(CatalogKind\.MATERIAL,/.test(code),
+    'CatalogMaintenancePanel が useCatalogEditActions(CatalogKind.MATERIAL, …) を呼んでいない',
+  );
+  for (const component of ['DeleteConfirmBlock', 'RevertConfirmBlock', 'SaveConfirmBlock']) {
+    const count = (code.match(new RegExp(`<${component}\\b`, 'g')) ?? []).length;
+    assert.equal(count, 1, `CatalogMaintenancePanel が <${component} を1回だけ描いていない（実際: ${count}回）`);
+  }
+});
+
+// ---- QA指摘Minor-2（B1再報告・2026-09-24）: 共通ブロックへ委譲した書き直しで失われた検出力の
+// 回復。材料タブが<DeleteConfirmBlock/<RevertConfirmBlock/<SaveConfirmBlockへ渡すbusy propと、
+// 保存ボタン自体のdisabledを固定する ----
+test('【不変条件・ステップ14-B1・QA指摘Minor-2再報告】ui/CatalogMaintenancePanel.jsx: 材料タブは<DeleteConfirmBlock/<RevertConfirmBlock/<SaveConfirmBlockの各要素にbusy={busy}を渡し、保存ボタンはdisabled={!!disabledReason || busy}になる', () => {
+  const src = readSrc('ui/CatalogMaintenancePanel.jsx');
+  const body = extractBalancedBody(src, 'export function CatalogMaintenancePanel({ onClose }) {');
+  assert.ok(body, 'CatalogMaintenancePanel.jsx に CatalogMaintenancePanel コンポーネントが見つからない');
+  const code = stripComments(body);
+  for (const component of ['DeleteConfirmBlock', 'RevertConfirmBlock', 'SaveConfirmBlock']) {
+    const elementMatch = new RegExp(`<${component}\\b[\\s\\S]*?/>`).exec(code);
+    assert.ok(elementMatch, `CatalogMaintenancePanel が <${component} を描いていない`);
+    assert.ok(
+      /busy=\{busy\}/.test(elementMatch[0]),
+      `CatalogMaintenancePanel の <${component} が busy={busy} を渡していない`,
+    );
+  }
+  const saveButtonMatch = /<button[^>]*onClick=\{handleSave\}[^>]*>/.exec(code);
+  assert.ok(saveButtonMatch, 'CatalogMaintenancePanel の保存ボタン（onClick={handleSave}）が見つからない');
+  assert.ok(
+    /disabled=\{!!disabledReason \|\| busy\}/.test(saveButtonMatch[0]),
+    'CatalogMaintenancePanel の保存ボタンが disabled={!!disabledReason || busy} になっていない',
+  );
+});
+
+test('【不変条件・ステップ14-B1】ui/CatalogMaintenancePanel.jsx: 材料タブのonMaterialSaved/onMaterialDeleted/onMaterialRevertedはhandleLibraryChanged()を呼び、performSave/handleSaveConfirmed等の材料専用ハンドラは残っていない（useCatalogEditActionsへ一本化）', () => {
+  const src = readSrc('ui/CatalogMaintenancePanel.jsx');
+  const tabBody = extractBalancedBody(src, 'export function CatalogMaintenancePanel({ onClose }) {');
+  assert.ok(tabBody, 'CatalogMaintenancePanel.jsx に CatalogMaintenancePanel コンポーネントが見つからない');
+  for (const signature of [
+    'function onMaterialSaved(entryCode, meta) {',
+    'function onMaterialDeleted(plan) {',
+    'function onMaterialReverted() {',
+  ]) {
+    const body = extractBalancedBody(tabBody, signature);
+    assert.ok(body, `CatalogMaintenancePanel に ${signature} が見つからない`);
+    assert.ok(/handleLibraryChanged\(\)/.test(body), `${signature} が handleLibraryChanged() を呼んでいない`);
+  }
+  const code = stripComments(tabBody);
+  assert.ok(
+    !/async function performSave\(/.test(code),
+    'CatalogMaintenancePanel に材料タブ専用のperformSaveが残っている（useCatalogEditActionsへの一本化から後退）',
+  );
+  assert.ok(
+    !/function handleSaveConfirmed\(\)/.test(code),
+    'CatalogMaintenancePanel に材料タブ専用のhandleSaveConfirmedが残っている（useCatalogEditActionsへの一本化から後退）',
+  );
+  assert.ok(
+    !/async function handleDeleteConfirmed\(\)/.test(code),
+    'CatalogMaintenancePanel に材料タブ専用のhandleDeleteConfirmed（引数無し）が残っている（useCatalogEditActionsへの一本化から後退）',
+  );
+  assert.ok(
+    !/async function handleRevertConfirmed\(\)/.test(code),
+    'CatalogMaintenancePanel の本体スコープに材料タブ専用のhandleRevertConfirmedが残っている（useCatalogEditActionsへの一本化から後退）',
+  );
+});
+
+// ---- QA指摘Minor-3（B1再報告・2026-09-24）: 書き直しで検査から漏れていた配線を固定する ----
+test('【不変条件・ステップ14-B1・QA指摘Minor-3再報告】ui/CatalogMaintenancePanel.jsx: 材料タブはuseCatalogEditActions(CatalogKind.MATERIAL, …)へonError: setFormErrorを渡し、onMaterialSaved/onMaterialDeleted/onMaterialRevertedは各setIsAdding(false)を呼ぶ', () => {
+  const src = readSrc('ui/CatalogMaintenancePanel.jsx');
+  const tabBody = extractBalancedBody(src, 'export function CatalogMaintenancePanel({ onClose }) {');
+  assert.ok(tabBody, 'CatalogMaintenancePanel.jsx に CatalogMaintenancePanel コンポーネントが見つからない');
+  const code = stripComments(tabBody);
+  assert.ok(
+    /useCatalogEditActions\(CatalogKind\.MATERIAL,\s*\{[^}]*onError:\s*setFormError/.test(code),
+    'CatalogMaintenancePanel が useCatalogEditActions(CatalogKind.MATERIAL, …) へ onError: setFormError を渡していない',
+  );
+  for (const signature of [
+    'function onMaterialSaved(entryCode, meta) {',
+    'function onMaterialDeleted(plan) {',
+    'function onMaterialReverted() {',
+  ]) {
+    const body = extractBalancedBody(tabBody, signature);
+    assert.ok(body, `CatalogMaintenancePanel に ${signature} が見つからない`);
+    assert.ok(
+      /setIsAdding\(false\)/.test(stripComments(body)),
+      `${signature} が setIsAdding(false) を呼んでいない`,
+    );
+  }
+});
+
+test('【不変条件・ステップ14-B1・QA指摘Minor-3再報告】ui/CatalogMaintenancePanel.jsx: 材料タブのhandleDeleteClickはsetFormError(null)とactions.handleDeleteClick()を呼び、削除確認のonConfirmはselectedRow?.entry.codeを渡す', () => {
+  const src = readSrc('ui/CatalogMaintenancePanel.jsx');
+  const tabBody = extractBalancedBody(src, 'export function CatalogMaintenancePanel({ onClose }) {');
+  assert.ok(tabBody, 'CatalogMaintenancePanel.jsx に CatalogMaintenancePanel コンポーネントが見つからない');
+  const deleteClickBody = extractBalancedBody(tabBody, 'function handleDeleteClick() {');
+  assert.ok(deleteClickBody, 'CatalogMaintenancePanel に handleDeleteClick が見つからない');
+  const deleteClickCode = stripComments(deleteClickBody);
+  assert.ok(/setFormError\(null\)/.test(deleteClickCode), 'handleDeleteClick が setFormError(null) を呼んでいない');
+  assert.ok(/actions\.handleDeleteClick\(\)/.test(deleteClickCode), 'handleDeleteClick が actions.handleDeleteClick() を呼んでいない');
+
+  const code = stripComments(tabBody);
+  assert.ok(
+    /onConfirm=\{\(\) => actions\.handleDeleteConfirmed\(selectedRow\?\.entry\.code\)\}/.test(code),
+    'CatalogMaintenancePanel の削除確認のonConfirmが selectedRow?.entry.code を渡していない',
+  );
+});
+
+test('【不変条件・ステップ14-B1・QA指摘Minor-3再報告】ui/CatalogMaintenancePanel.jsx: 材料タブのhandleAddNew/handleSelectRow/handleDuplicateClickはそれぞれactions.resetConfirmState()を呼ぶ', () => {
+  const src = readSrc('ui/CatalogMaintenancePanel.jsx');
+  const tabBody = extractBalancedBody(src, 'export function CatalogMaintenancePanel({ onClose }) {');
+  assert.ok(tabBody, 'CatalogMaintenancePanel.jsx に CatalogMaintenancePanel コンポーネントが見つからない');
+  for (const signature of [
+    'function handleAddNew() {',
+    'function handleSelectRow(row) {',
+    'function handleDuplicateClick(row) {',
+  ]) {
+    const body = extractBalancedBody(tabBody, signature);
+    assert.ok(body, `CatalogMaintenancePanel に ${signature} が見つからない`);
+    assert.ok(
+      /actions\.resetConfirmState\(\)/.test(stripComments(body)),
+      `${signature} が actions.resetConfirmState() を呼んでいない`,
+    );
+  }
+});
+
+test('【不変条件・ステップ14-B1】ui/CatalogMaintenancePanel.jsx: SaveConfirmBlockの差分値表示はformatReadonlyValue経由（旧・String(p.from ?? …)の「未設定」表記ではなく「（未設定）」表記に揃える。材料タブ含む全編集タブに効く）', () => {
+  const src = readSrc('ui/CatalogMaintenancePanel.jsx');
+  const body = extractBalancedBody(src, 'function SaveConfirmBlock({ saveConfirm, busy, onConfirm, onCancel }) {');
+  assert.ok(body, 'CatalogMaintenancePanel.jsx に SaveConfirmBlock コンポーネントが見つからない');
+  assert.ok(
+    /formatReadonlyValue\(p\.from\)/.test(body) && /formatReadonlyValue\(p\.to\)/.test(body),
+    'SaveConfirmBlock が formatReadonlyValue(p.from)/formatReadonlyValue(p.to) を使っていない',
+  );
+  assert.ok(
+    !/String\(p\.from/.test(body),
+    'SaveConfirmBlock に旧・String(p.from ?? \'未設定\') の直書きが残っている（formatReadonlyValueへの統一から後退）',
   );
 });
 
@@ -896,13 +1045,16 @@ test('【不変条件・QA指摘m1・2026-09-24再報告】ui/CatalogMaintenance
   assert.ok(!/performSave\(/.test(noopMatch[1]), 'plan.noop分岐がperformSave（applyCatalogEditPlan経由の保存）を呼んでいる（no-opなのに永続化してしまう）');
 });
 
-// ---- QA指摘m2（2026-09-24再報告）: 承認ボタンの二重押し防止（busy state） ----
-test('【不変条件・QA指摘m2・2026-09-24再報告】ui/CatalogMaintenancePanel.jsx: busy stateがあり、performSave・handleDeleteConfirmed・handleRevertConfirmedがsetBusy(true)/setBusy(false)で実行中をガードする', () => {
+// ---- QA指摘m2（2026-09-24再報告・ステップ14-B1で対象を共通フックへ更新）: 承認ボタンの
+// 二重押し防止（busy state）。材料タブもこの共通フックへ移行したため、busy stateとperformSave・
+// handleDeleteConfirmed・handleRevertConfirmedはuseCatalogEditActions本体（kind汎用・全5タブ共有）
+// 側で検査する ----
+test('【不変条件・QA指摘m2・2026-09-24再報告】ui/CatalogMaintenancePanel.jsx: useCatalogEditActions本体にbusy stateがあり、performSave・handleDeleteConfirmed・handleRevertConfirmedがsetBusy(true)/setBusy(false)で実行中をガードする', () => {
   const src = readSrc('ui/CatalogMaintenancePanel.jsx');
   assert.ok(/const \[busy, setBusy\] = useState\(false\);/.test(src), 'CatalogMaintenancePanel.jsx に busy state が見つからない');
   for (const sig of [
-    'async function performSave(plan, entryCode, { overridesBuiltin, thicknessChanged }) {',
-    'async function handleDeleteConfirmed() {',
+    'async function performSave(plan, entryKey, meta = {}) {',
+    'async function handleDeleteConfirmed(entryKey) {',
     'async function handleRevertConfirmed() {',
   ]) {
     const body = extractBalancedBody(src, sig);
@@ -912,12 +1064,18 @@ test('【不変条件・QA指摘m2・2026-09-24再報告】ui/CatalogMaintenance
   }
 });
 
-test('【不変条件・QA指摘m2・2026-09-24再報告】ui/CatalogMaintenancePanel.jsx: 承認する・削除する・標準に戻すの各承認ボタンがbusy中disabledになる', () => {
+test('【不変条件・QA指摘m2・2026-09-24再報告】ui/CatalogMaintenancePanel.jsx: DeleteConfirmBlock/RevertConfirmBlock/SaveConfirmBlockの承認ボタン（onConfirm）がbusy中disabledになる（材料タブ含む全タブが共有する確認ブロック）', () => {
   const src = readSrc('ui/CatalogMaintenancePanel.jsx');
-  const approveButtonBlocks = [...src.matchAll(/<button[^>]*onClick=\{(?:handleSaveConfirmed|handleDeleteConfirmed|handleRevertConfirmed)\}[^>]*>/g)];
-  assert.ok(approveButtonBlocks.length >= 2, '承認系ボタン（handleSaveConfirmed/handleDeleteConfirmed/handleRevertConfirmed）の<button>が見つからない');
-  for (const m of approveButtonBlocks) {
-    assert.ok(/disabled=\{[^}]*busy[^}]*\}/.test(m[0]), `承認ボタンがbusyでdisabledになっていない: ${m[0]}`);
+  for (const sig of [
+    'function DeleteConfirmBlock({ deleteUsage, isUsed, busy, onConfirm, onCancel }) {',
+    'function RevertConfirmBlock({ revertConfirm, setRevertConfirm, busy, onConfirm, onCancel }) {',
+    'function SaveConfirmBlock({ saveConfirm, busy, onConfirm, onCancel }) {',
+  ]) {
+    const body = extractBalancedBody(src, sig);
+    assert.ok(body, `CatalogMaintenancePanel.jsx に ${sig} が見つからない`);
+    const confirmButtonMatch = /<button[^>]*onClick=\{onConfirm\}[^>]*>/.exec(body);
+    assert.ok(confirmButtonMatch, `${sig} の承認ボタン（onClick={onConfirm}）が見つからない`);
+    assert.ok(/disabled=\{[^}]*busy[^}]*\}/.test(confirmButtonMatch[0]), `${sig} の承認ボタンがbusyでdisabledになっていない: ${confirmButtonMatch[0]}`);
   }
 });
 
@@ -953,19 +1111,23 @@ test('【不変条件・QA指摘m4・2026-09-24再報告】ui/CatalogMaintenance
   );
 });
 
-test('【不変条件・QA指摘m4・2026-09-24再報告】ui/CatalogMaintenancePanel.jsx: 削除完了メッセージはremoveMessageFor(plan)経由で、plan.docAppendの有無を.jsx側で再判定しない', () => {
+test('【不変条件・QA指摘m4・2026-09-24再報告・ステップ14-B1で移設】ui/CatalogMaintenancePanel.jsx: 削除完了メッセージはremoveMessageFor(plan)経由で、plan.docAppendの有無を.jsx側で再判定しない', () => {
   const src = readSrc('ui/CatalogMaintenancePanel.jsx');
-  const body = extractBalancedBody(src, 'async function handleDeleteConfirmed() {');
-  assert.ok(body, 'CatalogMaintenancePanel.jsx に handleDeleteConfirmed 関数が見つからない');
-  assert.ok(/setFormMessage\(removeMessageFor\(plan\)\)/.test(body), 'handleDeleteConfirmed が setFormMessage(removeMessageFor(plan)) を呼んでいない');
-  assert.ok(!/plan\.docAppend \?/.test(body), 'handleDeleteConfirmed が plan.docAppend の三項演算子で文言を直書きしている（removeMessageFor経由への一本化から後退）');
+  // ステップ14-B1: 削除の実行そのものはuseCatalogEditActionsのhandleDeleteConfirmedへ委譲したため、
+  // 削除完了メッセージの組み立ては材料タブのonDeleted（onMaterialDeleted）側に残る。
+  const body = extractBalancedBody(src, 'function onMaterialDeleted(plan) {');
+  assert.ok(body, 'CatalogMaintenancePanel.jsx に onMaterialDeleted（材料タブのuseCatalogEditActions onDeleted）が見つからない');
+  assert.ok(/setFormMessage\(removeMessageFor\(plan\)\)/.test(body), 'onMaterialDeleted が setFormMessage(removeMessageFor(plan)) を呼んでいない');
+  assert.ok(!/plan\.docAppend \?/.test(body), 'onMaterialDeleted が plan.docAppend の三項演算子で文言を直書きしている（removeMessageFor経由への一本化から後退）');
 });
 
-// ---- QA指摘M1（2026-09-24再報告）: 使用状況の取得が失敗（reject）したら削除プランを作らない
-// ガード（deleteUsage.status!=='ready'のとき削除できない） ----
-test('【不変条件・QA指摘M1・2026-09-24再報告】ui/CatalogMaintenancePanel.jsx: handleDeleteConfirmedはdeleteUsage.status!=="ready"（使用状況の取得中・失敗）なら早期returnし、planRemoveUserEntryを呼ばない', () => {
+// ---- QA指摘M1（2026-09-24再報告・ステップ14-B1で対象を共通フックへ更新）: 使用状況の取得が
+// 失敗（reject）したら削除プランを作らないガード（deleteUsage.status!=='ready'のとき削除できない）。
+// 材料タブもuseCatalogEditActionsへ移行したため、共通フック本体（kind汎用・全5タブ共有）側で
+// 検査する ----
+test('【不変条件・QA指摘M1・2026-09-24再報告】ui/CatalogMaintenancePanel.jsx: useCatalogEditActions本体のhandleDeleteConfirmedはdeleteUsage.status!=="ready"（使用状況の取得中・失敗）なら早期returnし、planRemoveUserEntryを呼ばない', () => {
   const src = readSrc('ui/CatalogMaintenancePanel.jsx');
-  const body = extractBalancedBody(src, 'async function handleDeleteConfirmed() {');
+  const body = extractBalancedBody(src, 'async function handleDeleteConfirmed(entryKey) {');
   assert.ok(body, 'CatalogMaintenancePanel.jsx に handleDeleteConfirmed 関数が見つからない');
   const guardMatch = /^\s*if \(([^)]*)\) return;/.exec(body.replace(/^\{/, '').trimStart());
   assert.ok(guardMatch, 'handleDeleteConfirmed の先頭に早期returnガードが見つからない');
@@ -1529,17 +1691,20 @@ test('【不変条件・ステップ14-A5】ui/CatalogMaintenancePanel.jsx: Sect
 // すべてへ広げる。各タブ本体（材料は親CatalogMaintenancePanel本体）を二段抽出し（タブ全体→個々の
 // 関数）、コメント除去後にrealign.clearNotice()を呼んでいることを検査する。1タブ1テストにまとめ、
 // 失敗時はどの関数が欠けたかを個別のassertメッセージで示す。----
-test('【不変条件・ステップ14-A5・QA指摘Minor-2】材料タブ（CatalogMaintenancePanel）の新規・選択・複製・保存完了・削除完了・戻す完了はそれぞれ realign.clearNotice() を呼ぶ', () => {
+test('【不変条件・ステップ14-B1（旧ステップ14-A5・QA指摘Minor-2を移設）】材料タブ（CatalogMaintenancePanel）の新規・選択・複製・保存完了・削除完了・戻す完了はそれぞれ realign.clearNotice() を呼ぶ', () => {
   const src = readSrc('ui/CatalogMaintenancePanel.jsx');
   const tabBody = extractBalancedBody(src, 'export function CatalogMaintenancePanel({ onClose }) {');
   assert.ok(tabBody, 'CatalogMaintenancePanel.jsx に CatalogMaintenancePanel コンポーネントが見つからない');
+  // ステップ14-B1: 保存・削除・標準に戻すの実行そのものはuseCatalogEditActionsへ委譲したため、
+  // 完了時の後始末（realign.clearNotice()を含む）は材料タブのonSaved/onDeleted/onReverted
+  // （onMaterialSaved/onMaterialDeleted/onMaterialReverted）側に残る（建具記号タブ等と同型）。
   const checks = [
     ['handleAddNew（新規）', 'function handleAddNew() {'],
     ['handleSelectRow（選択）', 'function handleSelectRow(row) {'],
     ['handleDuplicateClick（複製）', 'function handleDuplicateClick(row) {'],
-    ['performSave（保存完了）', 'async function performSave(plan, entryCode, { overridesBuiltin, thicknessChanged }) {'],
-    ['handleDeleteConfirmed（削除完了）', 'async function handleDeleteConfirmed() {'],
-    ['handleRevertConfirmed（戻す完了）', 'async function handleRevertConfirmed() {'],
+    ['onMaterialSaved（保存完了）', 'function onMaterialSaved(entryCode, meta) {'],
+    ['onMaterialDeleted（削除完了）', 'function onMaterialDeleted(plan) {'],
+    ['onMaterialReverted（戻す完了）', 'function onMaterialReverted() {'],
   ];
   for (const [name, signature] of checks) {
     const body = extractBalancedBody(tabBody, signature);
