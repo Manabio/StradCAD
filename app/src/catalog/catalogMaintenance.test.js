@@ -21,7 +21,7 @@ import {
   formatMechanismLabel, OPENING_SUB_TYPE_MECHANISM_LABELS,
   collectExportableEntries, formatBuiltinSource, formatCatalogSourceLine,
 } from './catalogMaintenance.js';
-import { setOverlay, clearOverlays, overlayFor, docDiffMap, composeCatalog } from './catalogRegistry.js';
+import { setOverlay, clearOverlays, overlayFor, docDiffMap, composeCatalog, markOverlayUntrusted } from './catalogRegistry.js';
 import { valuesEqual } from './catalogMatch.js';
 import { CatalogKind, FIXTURE_SYMBOL_PROFILES, KNOWN_OPENING_MECHANISMS, interiorMasterBuiltinList } from './catalogKinds.js';
 import { parseSectionSpecList } from '../structural/sectionCatalog.js';
@@ -449,6 +449,37 @@ test('【失敗系】commitUserEntries: saveFnがrejectしたらoverlayはprevUs
   await assert.rejects(() => commitUserEntries(CatalogKind.MATERIAL, nextUser, prevUser, { saveFn }), /IDB書込み失敗/);
 
   assert.deepEqual(overlayFor(CatalogKind.MATERIAL).user, prevUser); // ロールバック済み
+});
+
+// ---- ステップ14-S 裁定2: overlayが信頼できない状態（isOverlayUntrusted）では書込みを拒否する ----
+test('【失敗系・ステップ14-S】commitUserEntries: isOverlayUntrustedが立っている間は例外を投げ、saveFnを呼ばない（変異=ガード除去で赤になる）', async () => {
+  const prevUser = [material({ code: '301000000001' })];
+  setOverlay(CatalogKind.MATERIAL, { doc: [], user: prevUser });
+  markOverlayUntrusted(true);
+  const nextUser = [material({ code: '301000000001' }), material({ code: '301000000002', name: '新規' })];
+
+  const calls = [];
+  const saveFn = async (kind, bytes) => { calls.push({ kind, bytes }); };
+  await assert.rejects(
+    () => commitUserEntries(CatalogKind.MATERIAL, nextUser, prevUser, { saveFn }),
+    /カタログの読込みに失敗しているため、ライブラリへの保存を中止しました/,
+  );
+  assert.equal(calls.length, 0, 'isOverlayUntrusted中はsaveFnを呼んではいけない');
+  assert.deepEqual(overlayFor(CatalogKind.MATERIAL).user, prevUser, 'overlayも書き換わっていない');
+});
+
+test('commitUserEntries: isOverlayUntrustedをfalseへ戻せば通常どおり保存できる', async () => {
+  const prevUser = [material({ code: '301000000001' })];
+  setOverlay(CatalogKind.MATERIAL, { doc: [], user: prevUser });
+  markOverlayUntrusted(true);
+  markOverlayUntrusted(false);
+  const nextUser = [material({ code: '301000000001' }), material({ code: '301000000002', name: '新規' })];
+
+  const calls = [];
+  const saveFn = async (kind, bytes) => { calls.push({ kind, bytes }); };
+  await commitUserEntries(CatalogKind.MATERIAL, nextUser, prevUser, { saveFn });
+  assert.equal(calls.length, 1);
+  assert.deepEqual(overlayFor(CatalogKind.MATERIAL).user, nextUser);
 });
 
 // ---- isEditableMaterialCategory ----
@@ -905,6 +936,18 @@ test('【失敗系】planBulkSectionImport: 解析できない行はerrorsへ回
 test('planBulkSectionImport: 空文字は toAdd/skipped/errors すべて空', () => {
   const result = planBulkSectionImport('', { builtinList: [], parseSpecList: parseSectionSpecList });
   assert.deepEqual(result, { toAdd: [], skipped: [], errors: [] });
+});
+
+// ---- ステップ14-S: 'H-…'形式（アプリ自身の呼称そのもの）が正の断面としてtoAddへ載ること ----
+test('planBulkSectionImport: "H-250×125×6×9"形式（呼称そのもの）を貼っても正の寸法でtoAddへ載る（0以下・負の寸法にならない）', () => {
+  const result = planBulkSectionImport('H-250×125×6×9', { builtinList: [], parseSpecList: parseSectionSpecList });
+  assert.deepEqual(result.errors, []);
+  assert.equal(result.toAdd.length, 1);
+  assert.deepEqual(result.toAdd[0], {
+    key: 'STEEL-H250x125', materialType: 'STEEL', shape: 'hSection',
+    width: 125, height: 250, webThickness: 6, flangeThickness: 9,
+    label: 'H-250×125×6×9',
+  });
 });
 
 // ---- ステップ10f: 建具種別（openingSubType）の閲覧タブ ----

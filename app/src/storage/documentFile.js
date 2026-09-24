@@ -12,7 +12,7 @@
 // このファイル（同じく葉）から静的 import してよい。
 
 import { encodeCatalogBundle, decodeCatalogBundle } from '../catalog/catalogCodec.js';
-import { validateBundle } from '../catalog/catalogBundle.js';
+import { validateBundle, migrateBundle, formatMigrationNotice } from '../catalog/catalogBundle.js';
 
 const FORMAT  = 'stq-document';
 const VERSION = 1;
@@ -63,17 +63,33 @@ export function isDocumentEnvelope(data) {
  * （呼び出し側はストア消去より前に必ずこの検証を通すこと——不正ファイルで既存文書を
  * 消さないため）。catalogs があれば decodeCatalogBundle → validateBundle まで通し、
  * 壊れていればその場で例外にする（他のフィールドと同じ「ストア消去より前に弾く」契約に乗る）。
- * 旧 .stq（catalogs 無し）は catalogs: null を返す。
+ * 旧 .stq（catalogs 無し）は catalogs: null・migrated: [] を返す。
+ *
+ * QA指摘Minor-2（ステップ14-S再指摘）: 移行（migrateBundle）が起きた内容を戻り値の
+ * `migrated`（catalogBundle.js migrateBundle の migrated[] そのもの）として呼び出し側
+ * （store.js importDocument）へ渡す——本関数自身はconsole.warn止まりで、利用者に見える通知
+ * （project.setCatalogError等）を出す手段を持たない（純モジュール・DOM/store非依存の方針）ため、
+ * 通知の組み立て・発火は呼び出し側の責務にする（catalogOverlayLoader.jsのonNoticeと同じ役割分担）。
  */
 export function parseDocumentEnvelope(data) {
   if (!isDocumentEnvelope(data)) throw new Error('stq文書ファイルではありません');
   if (data.version !== VERSION) throw new Error(`未対応の文書バージョンです: ${data.version}`);
   if (!Array.isArray(data.floors)) throw new Error('文書のフロアデータが不正です');
   let catalogs = null;
+  let migrated = [];
   if (data.catalogs) {
     if (typeof data.catalogs !== 'string') throw new Error('文書のカタログ同梱データが不正です');
-    catalogs = decodeCatalogBundle(base64ToBytes(data.catalogs));
-    validateBundle(catalogs);
+    const decoded = decodeCatalogBundle(base64ToBytes(data.catalogs));
+    // ステップ14-S（裁定1）: validateBundle の前に migrateBundle を通す——修正前の
+    // parseSectionSpec のバグで作られた不正データ（例: 負の断面）を持つ .stq でも開けるように、
+    // 検証で弾く前に正しい内容へ書き換えて救済する（catalog/catalogOverlayLoader.js と同じ手順）。
+    // 移行後の束をそのまま catalogs として返す——呼び出し側（store.js importDocument）が
+    // 種別ごとに分割してIDBへ書き戻すため、追加の書戻し処理は不要。
+    const migratedResult = migrateBundle(decoded);
+    for (const m of migratedResult.migrated) console.warn(`カタログ移行: ${formatMigrationNotice(m)}`);
+    validateBundle(migratedResult.bundle);
+    catalogs = migratedResult.bundle;
+    migrated = migratedResult.migrated;
   }
   return {
     bootPlaneId: typeof data.bootPlaneId === 'string' ? data.bootPlaneId : null,
@@ -88,5 +104,6 @@ export function parseDocumentEnvelope(data) {
       return { planeId: f.planeId, bytes: base64ToBytes(f.bytes) };
     }),
     catalogs,
+    migrated,
   };
 }

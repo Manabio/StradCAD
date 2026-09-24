@@ -20,7 +20,8 @@ import {
   OPENING_MECHANISM_CONST_NAMES, SECTION_SHAPE_CONST_NAMES,
 } from './catalogKinds.js';
 import {
-  appendDocEntry, composeCatalog, composeList, docDiffMap, originOf, overlayFor, removeDocEntry, setOverlay,
+  appendDocEntry, composeCatalog, composeList, docDiffMap, isOverlayUntrusted, originOf, overlayFor,
+  removeDocEntry, setOverlay,
 } from './catalogRegistry.js';
 import { assertNoDuplicate, displayNameOf, matchByContent, valuesEqual } from './catalogMatch.js';
 import { diffPairs, fieldLabel } from './catalogDiffView.js';
@@ -477,6 +478,12 @@ export function removeUserMaterialEntry(userEntries, code, origin) {
  * （catalogOverlayLoader.js が読む形と同じ: {version, catalogs:{<kind>:[…]}, encodings:{<kind>:'json'}, aliases:{}}）。
  * バイト列化（encodeCatalogBundle）・実際の永続化（storage/db.js saveUserCatalog）は
  * 呼び出し側（commitUserEntries）が行う。
+ *
+ * ステップ14-S QA再指摘Minor-1: aliases は常に空（userEntries だけを束にする）——移行
+ * （catalog/catalogBundle.js migrateBundle）でuser束から生じた alias（旧キー→新キー）は
+ * ここでは保存しない。文書固有の読み替え表は文書同梱（doc）側の束に載って永続化され、次回
+ * 起動時もdoc束の移行で同じaliasが作り直されるため、ユーザーライブラリ側で別途持つ必要が無い
+ * （意図的な非対称。挙動は変えない・保存内容の確認用コメント）。
  */
 export function buildUserCatalogBundle(kind, userEntries) {
   let bundle = withEntries(emptyBundle(), kind, userEntries);
@@ -506,6 +513,14 @@ export function buildUserMaterialBundle(userEntries) {
  *
  * ステップ7d: kind を必須引数にした（省略時material固定をやめる。reconcileIncomingCatalogsが
  * 種別ループでinteriorMaster・boundaryMasterぶんも呼ぶため）。
+ *
+ * ステップ14-S（裁定2）: overlayが信頼できない状態（catalog/catalogRegistry.js
+ * isOverlayUntrusted()。直前の読込みが壊れたデータで丸ごと諦めた状態）では、単一の関門として
+ * ここで書込みを拒否する——全タブの保存・削除・戻す・一括入力（applyCatalogEditPlan・
+ * ui/CatalogMaintenancePanel.jsx直呼び出し・store.js reconcileIncomingCatalogs/
+ * applyCatalogResolutions）が共通してこの commitUserEntries を通る（grep済み。他にユーザー
+ * ライブラリへ書く経路は無い）ため、ここ1箇所のガードで「空のuser＋新規」上書きによる
+ * 見えていない正常な登録の消失を防げる。
  * @param {string} kind
  * @param {object[]} nextUser 保存後のユーザーライブラリ配列
  * @param {object[]} prevUser 失敗時に戻す元のユーザーライブラリ配列
@@ -513,6 +528,9 @@ export function buildUserMaterialBundle(userEntries) {
  * @returns {Promise<void>}
  */
 export async function commitUserEntries(kind, nextUser, prevUser, { saveFn }) {
+  if (isOverlayUntrusted()) {
+    throw new Error('カタログの読込みに失敗しているため、ライブラリへの保存を中止しました（既存の登録を上書きしないため）');
+  }
   const { doc } = overlayFor(kind);
   setOverlay(kind, { doc, user: nextUser });
   try {

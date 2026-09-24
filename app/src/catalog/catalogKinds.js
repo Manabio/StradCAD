@@ -287,12 +287,57 @@ const REGISTRY = Object.assign(Object.create(null), {
       if (!isFiniteNumber(entry.width) || !isFiniteNumber(entry.height)) {
         throw new Error('断面エントリのwidth/heightが不正です');
       }
+      // ステップ14-S: 0以下の寸法は物理的に無意味（材のthicknessと同じ流儀。ただしthicknessと
+      // 異なり0自体も無意味なため0以下で拒否する）。parseSectionSpec側の0以下チェックと二重の
+      // 防波堤——一括入力（parseSectionSpecList）を経由しない直接のsetOverlay/保守パネル経由の
+      // 上書きもここで必ず捕まる。
+      if (entry.width <= 0 || entry.height <= 0) {
+        throw new Error('断面エントリのwidth/heightが不正です（0より大きい数値が必要）');
+      }
       if (typeof entry.label !== 'string') throw new Error('断面エントリのlabelが不正です');
       for (const f of ['webThickness', 'flangeThickness', 'wallThickness']) {
-        if (entry[f] !== undefined && !isFiniteNumber(entry[f])) {
-          throw new Error(`断面エントリの${f}が不正です`);
+        if (entry[f] !== undefined) {
+          if (!isFiniteNumber(entry[f])) throw new Error(`断面エントリの${f}が不正です`);
+          if (entry[f] <= 0) throw new Error(`断面エントリの${f}が不正です（0より大きい数値が必要）`);
         }
       }
+    },
+    /**
+     * ステップ14-S（読込み時の移行。裁定1）: 修正前の structural/sectionCatalog.js
+     * parseSectionSpec（規格接頭辞 H/□ の直後のハイフンを寸法の符号と誤読していた旧実装）で
+     * 作られた負の断面（例: 'H-250×125×6×9' → 誤って key:'STEEL-H-250x125'・height:-250・
+     * label:'H--250×125×6×9'）を、正しい内容へ書き換える（catalog/catalogBundle.js
+     * migrateBundle が validateBundle の前に通す）。このバグ由来の形（key先頭
+     * 'STEEL-H-'/'STEEL-SQ-'・label先頭 'H--'/'□--'）だけを対象にする——それ以外
+     * （本体標準・新規保存分は width/height とも正）は同一参照をそのまま返す（no-op）。
+     * structural/sectionCatalog.js の parseSectionSpec 自体は catalog/*.js から静的import
+     * できない（catalogImports.test.js の許可リスト）ため、ここでは最小限の文字列置換のみで
+     * 書き直す（parseSectionSpecの別実装ではなく、既に壊れた過去データの後始末専用）。
+     * 他の種別は migrate を持たない（対象データが無いため）。
+     * QA指摘Minor-1（ステップ14-S再指摘）: key が 'STEEL-H-'/'STEEL-SQ-' で始まる（＝このバグ
+     * 由来の形）ことも条件に加える——shape・寸法の符号だけで判定すると、無関係の理由で
+     * width/heightが負になった別のkey体系のエントリ（例: 手打ち・将来の別ビルダー由来）まで
+     * 巻き込んで書き換えてしまう。
+     */
+    migrate(entry) {
+      if (!isPlainObject(entry)) return entry;
+      if (entry.shape !== 'hSection' && entry.shape !== 'squarePipe') return entry;
+      if (typeof entry.key !== 'string' || !/^STEEL-(H|SQ)-/.test(entry.key)) return entry;
+      const widthNegative = isFiniteNumber(entry.width) && entry.width < 0;
+      const heightNegative = isFiniteNumber(entry.height) && entry.height < 0;
+      if (!widthNegative && !heightNegative) return entry;
+      const fixed = {
+        ...entry,
+        width: isFiniteNumber(entry.width) ? Math.abs(entry.width) : entry.width,
+        height: isFiniteNumber(entry.height) ? Math.abs(entry.height) : entry.height,
+      };
+      if (typeof fixed.key === 'string') {
+        fixed.key = fixed.key.replace(/^STEEL-H-/, 'STEEL-H').replace(/^STEEL-SQ-/, 'STEEL-SQ');
+      }
+      if (typeof fixed.label === 'string') {
+        fixed.label = fixed.label.replace(/^H--/, 'H-').replace(/^□--/, '□-');
+      }
+      return fixed;
     },
     loadBuiltin: () => import('../structural/sectionCatalog.js').then(m => m.SECTION_CATALOG),
   },

@@ -218,6 +218,17 @@ async function restoreProjectInfoFromIDB() {
  * こちらは保存ガード専用の boolean で、store.js saveCatalogDocument はこれだけを見て
  * 文書同梱の保存をスキップする（catalogError はメッセージ通知専用にし、両者を兼用しない）。
  *
+ * ステップ14-S（裁定2）: catalog/catalogRegistry.js 側にも同じ意味のフラグ
+ * （markOverlayUntrusted/isOverlayUntrusted）を追加した——catalogMaintenance.js
+ * commitUserEntries（ユーザーライブラリへの書込みの単一の関門）は store.js を import できない
+ * 純モジュールのため、project.catalogOverlayUntrusted を直接見られず、catalog層で完結する
+ * 専用のフラグが必要だった。この onError 内の project.setCatalogOverlayUntrusted(true) を
+ * isOverlayUntrusted() を写す形へは変えていない（現状維持）——catalogRegistryWiring.test.js
+ * が「onError は必ず literal な true を立てる」ことを不変条件として固定済みで、これを崩すと
+ * 既存の防御（onError側が確実にtrueを立てる契約）を弱めることになるため。実行順序としては
+ * catalogOverlayLoader.js の失敗catchが onError を呼ぶ前に必ず markOverlayUntrusted(true) を
+ * 呼ぶので、この経路では両フラグの値は実質的に常に一致する。
+ *
  * floorSwapManager.setupStructGraph（の呼び出し）・最初の restoreGraph
  * （floorSwapManager.activate 内）より前に呼ぶこと——composeCatalog は overlay が立って
  * いない状態では builtin のみで解決するため、ここより後に呼ぶと文書同梱・ユーザーライブラリの
@@ -234,6 +245,11 @@ export async function loadCatalogOverlaysFromIDB({
   await applyCatalogOverlays({
     loadDocumentCatalogs: loadDocumentCatalogsFn,
     loadUserCatalogs: loadUserCatalogsFn,
+    // QA指摘Minor-2（ステップ14-S再指摘）: 移行（migrateBundle）があった場合の通知を、
+    // 起動時照合（reconcileIncomingCatalogs）の通知と同じ口（project.setCatalogError）へ流す
+    // ——専用のトースト種別を新設しない。catalogOverlayLoader.js側はoverlayが最終的に立った
+    // （読込み成功）場合しかonNoticeを呼ばないため、onErrorと同時に呼ばれることはない。
+    onNotice: (msg) => project.setCatalogError(msg),
     onError: (msg) => {
       project.setCatalogOverlayUntrusted(true);
       project.setCatalogError(msg);
@@ -844,6 +860,15 @@ export async function exportDocument() {
  * カタログ同梱（doc.catalogs。parseDocumentEnvelope で既に decode・validate 済み）は種別ごとの
  * 束へ分割（splitBundleByKind。mergeBundlesの逆）し、IDB の規約（${projectId}:catalogs:<kind>）
  * どおり種別ごとに saveDocumentCatalog する。
+ *
+ * QA指摘Minor-2（ステップ14-S再々指摘）: doc.migrated（parseDocumentEnvelope が migrateBundle
+ * から素通しした移行一覧）は通知しない——呼び出し側（App.jsx）は本関数の resolve 直後に
+ * location.reload() するため、project.setCatalogError で立てても表示される前にリロードで
+ * 消える（in-memory を持たない importDocument の設計上、通知の受け手が既に居ない）。移行は
+ * 黙って適用される（移行結果は上のsaveDocumentCatalogループで既にIDBへ書かれている。
+ * リロード後は既に正しい束が読まれるため、次回のloadCatalogOverlaysFromIDBでも
+ * migrateBundleは無例外＝no-opになり通知も出ない）。doc.migrated 自体は戻り値として保持して
+ * いる（documentFile.js側。将来リロードをまたいで通知を渡す口が要る場合の入口として残す）。
  */
 export async function importDocument(envelope) {
   const doc = parseDocumentEnvelope(envelope);

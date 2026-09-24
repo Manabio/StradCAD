@@ -94,6 +94,30 @@ test('parseSectionSpec: 全角数字・全角×も許容する（toHalfWidthで�
   assert.deepEqual(parseSectionSpec('Ｈ３００×１５０×６.５×９'), parseSectionSpec('H300×150×6.5×9'));
 });
 
+// ---- ステップ14-S: 接頭辞直後のハイフンは規格接頭辞の区切り（寸法の符号ではない） ----
+test('parseSectionSpec: H直後のハイフン（アプリ自身が呼称に使う"H-…"形式）は区切りとして読み飛ばし、ハイフン無しと同じエントリになる', () => {
+  assert.deepEqual(parseSectionSpec('H-250×125×6×9'), parseSectionSpec('H250×125×6×9'));
+  assert.deepEqual(parseSectionSpec('H-250×125×6×9'), {
+    key: 'STEEL-H250x125', materialType: 'STEEL', shape: 'hSection',
+    width: 125, height: 250, webThickness: 6, flangeThickness: 9,
+    label: 'H-250×125×6×9',
+  });
+});
+
+test('parseSectionSpec: □直後のハイフンも区切りとして読み飛ばし、ハイフン無しと同じエントリになる', () => {
+  assert.deepEqual(parseSectionSpec('□-200×200×9'), parseSectionSpec('□200×200×9'));
+  assert.deepEqual(parseSectionSpec('□-200×200×9'), {
+    key: 'STEEL-SQ200x200x9', materialType: 'STEEL', shape: 'squarePipe',
+    width: 200, height: 200, wallThickness: 9,
+    label: '□-200×200×9',
+  });
+});
+
+test('parseSectionSpec: 全角ハイフン（－）・全角ー（長音記号）も接頭辞直後の区切りとして読み飛ばす', () => {
+  assert.deepEqual(parseSectionSpec('H－250×125×6×9'), parseSectionSpec('H250×125×6×9'));
+  assert.deepEqual(parseSectionSpec('Hー250×125×6×9'), parseSectionSpec('H250×125×6×9'));
+});
+
 // ---- 失敗系 ----
 test('【失敗系】parseSectionSpec: 空文字・空白のみは例外', () => {
   assert.throws(() => parseSectionSpec(''), /空です/);
@@ -114,6 +138,19 @@ test('【失敗系】parseSectionSpec: 数値でない項目は例外', () => {
 
 test('【失敗系】parseSectionSpec: 未知の記号（H/□以外で始まる）は例外', () => {
   assert.throws(() => parseSectionSpec('△100×100×10'), /未対応の断面記号/);
+});
+
+// ---- ステップ14-S: 0以下の寸法は例外（負号は接頭辞直後以外の項目では通常の符号として読む） ----
+test('【失敗系】parseSectionSpec: H形鋼の幅が負（H250×-125×6×9）は例外', () => {
+  assert.throws(() => parseSectionSpec('H250×-125×6×9'), /0以下の寸法があります/);
+});
+
+test('【失敗系】parseSectionSpec: H形鋼の成が0（H0×125×6×9）は例外', () => {
+  assert.throws(() => parseSectionSpec('H0×125×6×9'), /0以下の寸法があります/);
+});
+
+test('【失敗系】parseSectionSpec: 角形鋼管の板厚が0（□200×200×0）は例外', () => {
+  assert.throws(() => parseSectionSpec('□200×200×0'), /0以下の寸法があります/);
 });
 
 test('【失敗系】parseSectionSpec: 文字列以外は例外', () => {

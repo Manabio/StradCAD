@@ -7,6 +7,7 @@ import assert from 'node:assert/strict';
 import {
   setOverlay, clearOverlays, overlayFor, composeCatalog, composeList, originOf,
   docDiffMap, docDiffFields, removeDocEntry, overlayGeneration,
+  markOverlayUntrusted, isOverlayUntrusted,
 } from './catalogRegistry.js';
 import { ERR_CATALOG_DUPLICATE } from '../error.js';
 import { assertNoDuplicate } from './catalogMatch.js';
@@ -450,4 +451,34 @@ test('【失敗系】overlayGeneration: validateで弾かれたsetOverlay（材c
   assert.throws(() => setOverlay('material', { doc: [material({ code: '' })] })); // codeが12桁数字でなく例外
   assert.equal(overlayGeneration(), before, 'validate失敗時は世代を進めてはいけない（++をvalidateより前に置く退行を検知）');
   assert.equal(overlayFor('material'), overlayBefore, 'validate失敗時はoverlayも変わらない');
+});
+
+// ================================================================
+// markOverlayUntrusted / isOverlayUntrusted（ステップ14-S 裁定2: catalogMaintenance.js
+// commitUserEntries の書込みガードが見る単一の関門）
+// ================================================================
+
+test('markOverlayUntrusted/isOverlayUntrusted: 既定はfalse・setで反映される', () => {
+  assert.equal(isOverlayUntrusted(), false); // 前提（前のテストのclearOverlaysで戻っている）
+  markOverlayUntrusted(true);
+  assert.equal(isOverlayUntrusted(), true);
+  markOverlayUntrusted(false);
+  assert.equal(isOverlayUntrusted(), false);
+});
+
+test('markOverlayUntrusted: 真偽値以外（truthy/falsy）も!!で正規化される', () => {
+  markOverlayUntrusted(1);
+  assert.equal(isOverlayUntrusted(), true);
+  markOverlayUntrusted(0);
+  assert.equal(isOverlayUntrusted(), false);
+  markOverlayUntrusted(null);
+  assert.equal(isOverlayUntrusted(), false);
+});
+
+test('clearOverlays: isOverlayUntrusted()もfalseへ戻す（overlay内容の全消去は「疑わしい」状態も一緒に解消する設計）', () => {
+  setOverlay('material', { doc: [material({ code: '999999999999' })] });
+  markOverlayUntrusted(true);
+  assert.equal(isOverlayUntrusted(), true); // 前提
+  clearOverlays();
+  assert.equal(isOverlayUntrusted(), false);
 });

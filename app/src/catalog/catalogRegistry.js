@@ -18,6 +18,24 @@ const overlays = new Map();
 // overlay の世代カウンタ（setOverlay/clearOverlaysのたびに必ず++）。
 let overlayGenerationCounter = 0;
 
+// overlayが信頼できない状態（catalogOverlayLoader.jsが読込みを丸ごと諦めたcatch中）かどうか
+// （裁定2・ステップ14-S）。モジュールスコープの単一フラグ——保守パネルの書込み経路
+// （catalogMaintenance.js commitUserEntries。全タブの保存・削除・戻す・一括入力の共通経路）が
+// これだけを見て書込みを拒否する唯一の関門にする（「空のuser＋新規」で上書きし、見えていない
+// 正常な登録を消してしまう穴を塞ぐ）。
+let overlayUntrusted = false;
+
+/** overlayが信頼できない状態かどうかを設定する（catalogOverlayLoader.jsの全体破棄catchが立て、
+ * 正常に読み込めたら false に戻す）。 */
+export function markOverlayUntrusted(flag) {
+  overlayUntrusted = !!flag;
+}
+
+/** overlayが信頼できない状態かどうか。commitUserEntries（catalogMaintenance.js）の書込みガードが見る。 */
+export function isOverlayUntrusted() {
+  return overlayUntrusted;
+}
+
 /**
  * overlay の世代キー（ステップ8c）。setOverlay（内容同一でも・doc/userとも空で
  * overlays.delete する分岐でも）と clearOverlays を呼ぶたびに必ず ++ する（内容比較は
@@ -86,6 +104,13 @@ export function setOverlay(kind, options = {}) {
 export function clearOverlays() {
   overlays.clear();
   overlayGenerationCounter++;
+  // ステップ14-S: overlay内容を空にする操作は「疑わしいoverlayが残っている」状態も一緒に
+  // 解消する（新規（全消去）resetAll・各テストファイルの既存 test.afterEach(() =>
+  // clearOverlays()) パターンが、このフラグの後始末も自然に面倒を見られるようにするため）。
+  // catalogOverlayLoader.js の全体破棄catchはこの直後（clearOverlaysFn()の後）に明示的に
+  // markOverlayUntrusted(true) を呼ぶので、読込み失敗時に false へ戻ってしまう心配は無い
+  // （呼び出し順序に依存する設計であることに注意）。
+  overlayUntrusted = false;
 }
 
 /** kind の overlay（{doc, user}）。未設定なら空配列の組。 */

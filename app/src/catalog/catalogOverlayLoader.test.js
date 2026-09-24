@@ -5,11 +5,15 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { loadCatalogOverlaysFromIDB } from './catalogOverlayLoader.js';
-import { setOverlay, clearOverlays, overlayFor, composeCatalog } from './catalogRegistry.js';
+import { setOverlay, clearOverlays, overlayFor, composeCatalog, isOverlayUntrusted, markOverlayUntrusted } from './catalogRegistry.js';
 import { encodeCatalogBundle } from './catalogCodec.js';
 import { emptyBundle, withEntries, withAlias } from './catalogBundle.js';
-import { currentCodeTable, clearDocumentAliases, setDocumentAliases } from './codeNormalization.js';
+import { currentCodeTable, clearDocumentAliases, setDocumentAliases, applyDocumentCodeNormalization } from './codeNormalization.js';
 import { CatalogKind } from './catalogKinds.js';
+// ステップ14-S QA指摘Major-1: 移行後のsectionDefId参照がfindSectionEntryで実際に引けることを
+// 確認するため（テストファイルはstructural/sectionCatalog.jsを静的importしてよい——
+// catalogImports.test.jsの許可リストはcatalog/*.js本体のみが対象で、*.test.jsは対象外）。
+import { findSectionEntry } from '../structural/sectionCatalog.js';
 
 function material(overrides) {
   return {
@@ -187,4 +191,211 @@ test('【失敗系・防御】setOverlayが例外を投げたら、他種別の�
   assert.match(calls.errors[0], /強制例外/);
   assert.deepEqual(overlayFor(CatalogKind.MATERIAL), { doc: [], user: [] }, 'materialにoverlayが残っていない');
   assert.deepEqual(overlayFor(CatalogKind.SECTION), { doc: [], user: [] }, '呼び出し前から立っていたsectionのoverlayも消えている（全clearの証跡）');
+});
+
+// ================================================================
+// ステップ14-S 裁定2: isOverlayUntrusted（catalogMaintenance.js commitUserEntries の
+// 書込みガードが見る単一の関門）が loadCatalogOverlaysFromIDB の成否で立つ／降りる。
+// ================================================================
+
+test('正常: 読込みが成功すればisOverlayUntrusted()はfalseに戻る（前回の失敗を引きずらない）', async () => {
+  markOverlayUntrusted(true); // 前回の読込みが失敗していた状態を模す
+  const materialBundle = withEntries(emptyBundle(), CatalogKind.MATERIAL, [material()]);
+  const { deps } = makeDeps({
+    loadDocumentCatalogs: async () => [{ kind: CatalogKind.MATERIAL, bytes: encodeCatalogBundle(materialBundle) }],
+  });
+  await loadCatalogOverlaysFromIDB(deps);
+  assert.equal(isOverlayUntrusted(), false);
+});
+
+test('【失敗系】壊れたレコードでoverlayが丸ごと諦められたら、isOverlayUntrusted()はtrueになる', async () => {
+  assert.equal(isOverlayUntrusted(), false); // 前提
+  const { deps, calls } = makeDeps({
+    loadDocumentCatalogs: async () => [{ kind: CatalogKind.MATERIAL, bytes: new TextEncoder().encode('{not-json') }],
+  });
+  await loadCatalogOverlaysFromIDB(deps);
+  assert.equal(calls.errors.length, 1);
+  assert.equal(isOverlayUntrusted(), true);
+});
+
+// ================================================================
+// ステップ14-S 裁定1: 修正前parseSectionSpecのバグで作られた負の断面（doc/user束とも）を
+// 読込み時に正しい内容へ移行してからoverlayに立てる。
+// ================================================================
+
+function buggyHSection(overrides) {
+  return {
+    key: 'STEEL-H-250x125', materialType: 'STEEL', shape: 'hSection',
+    width: 125, height: -250, webThickness: 6, flangeThickness: 9,
+    label: 'H--250×125×6×9',
+    ...overrides,
+  };
+}
+
+test('移行: 修正前の断面データ（user束）を読ませても例外にならず、overlayのsection.userに正のキー（STEEL-H250x125）で立つ', async () => {
+  const userBundle = withEntries(emptyBundle(), CatalogKind.SECTION, [buggyHSection()]);
+  const { deps, calls } = makeDeps({
+    loadUserCatalogs: async () => [{ kind: CatalogKind.SECTION, bytes: encodeCatalogBundle(userBundle) }],
+  });
+  await loadCatalogOverlaysFromIDB(deps);
+
+  assert.deepEqual(calls.errors, [], '移行後は正のエントリになるためvalidateBundleを通り、onErrorは呼ばれない');
+  const overlay = overlayFor(CatalogKind.SECTION);
+  assert.equal(overlay.user.length, 1);
+  assert.equal(overlay.user[0].key, 'STEEL-H250x125');
+  assert.equal(overlay.user[0].height, 250);
+  assert.equal(isOverlayUntrusted(), false);
+});
+
+function buggySquarePipe(overrides) {
+  return {
+    key: 'STEEL-SQ-200x200x9', materialType: 'STEEL', shape: 'squarePipe',
+    width: -200, height: 200, wallThickness: 9,
+    label: '□--200×200×9',
+    ...overrides,
+  };
+}
+
+test('移行: 修正前の断面データ（doc束）を読ませても同様に正のキーへ移行される', async () => {
+  const docBundle = withEntries(emptyBundle(), CatalogKind.SECTION, [buggySquarePipe()]);
+  const { deps, calls } = makeDeps({
+    loadDocumentCatalogs: async () => [{ kind: CatalogKind.SECTION, bytes: encodeCatalogBundle(docBundle) }],
+  });
+  await loadCatalogOverlaysFromIDB(deps);
+
+  assert.deepEqual(calls.errors, []);
+  const overlay = overlayFor(CatalogKind.SECTION);
+  assert.equal(overlay.doc.length, 1);
+  assert.equal(overlay.doc[0].key, 'STEEL-SQ200x200x9');
+  assert.equal(overlay.doc[0].width, 200);
+});
+
+// ================================================================
+// QA指摘Major-1（ステップ14-S再指摘）: 移行でキーが変わったらaliasが積まれ、
+// codeNormalization.js の rewriteSectionRefs（applyDocumentCodeNormalization経由）で
+// sectionDefId参照が新キーへ書き換わり、findSectionEntryが引けるようになる。
+// ================================================================
+
+test('【QA指摘Major-1】doc束の移行: 読込み後、columns[].sectionDefId（旧キー参照）がapplyDocumentCodeNormalizationで新キーへ書き換わり、findSectionEntryが非nullになる', async () => {
+  const docBundle = withEntries(emptyBundle(), CatalogKind.SECTION, [buggyHSection()]);
+  const { deps, calls } = makeDeps({
+    loadDocumentCatalogs: async () => [{ kind: CatalogKind.SECTION, bytes: encodeCatalogBundle(docBundle) }],
+  });
+  await loadCatalogOverlaysFromIDB(deps);
+  assert.deepEqual(calls.errors, []);
+
+  // 移行前（=修正前parseSectionSpecの出力そのもの）のキーで部材が参照している状況を模す。
+  const snapshot = { columns: [{ id: 'c1', sectionDefId: 'STEEL-H-250x125' }] };
+  const normalized = applyDocumentCodeNormalization(snapshot);
+  assert.equal(normalized.columns[0].sectionDefId, 'STEEL-H250x125', 'sectionDefIdが新キーへ書き換わっていない');
+  assert.notEqual(findSectionEntry('STEEL-H250x125'), null, '新キーでfindSectionEntryが引けない（overlayに正しく載っていない）');
+});
+
+// ================================================================
+// QA指摘Major-2（ステップ14-S再指摘）: 移行後のキーが同じ束に既にある場合、既存の正常な
+// エントリを優先し、移行した方は捨てる（alias は捨てても積む）。
+// ================================================================
+
+function goodHSection(overrides) {
+  return {
+    key: 'STEEL-H250x125', materialType: 'STEEL', shape: 'hSection',
+    width: 125, height: 250, webThickness: 6, flangeThickness: 9,
+    label: 'H-250×125×6×9',
+    ...overrides,
+  };
+}
+
+test('【QA指摘Major-2】user束[bad, good]: onErrorが呼ばれず、untrusted=false・section.userが1件（good）・aliasが積まれる', async () => {
+  const userBundle = withEntries(emptyBundle(), CatalogKind.SECTION, [buggyHSection(), goodHSection()]);
+  const { deps, calls } = makeDeps({
+    loadUserCatalogs: async () => [{ kind: CatalogKind.SECTION, bytes: encodeCatalogBundle(userBundle) }],
+  });
+  await loadCatalogOverlaysFromIDB(deps);
+
+  assert.deepEqual(calls.errors, [], 'onErrorが呼ばれた＝重複キーでvalidateBundleが落ちている（既存優先で回避できていない）');
+  assert.equal(isOverlayUntrusted(), false);
+  const overlay = overlayFor(CatalogKind.SECTION);
+  assert.equal(overlay.user.length, 1, 'section.userが1件になっていない（既存goodを残して重複を解消できていない）');
+  assert.equal(overlay.user[0].key, 'STEEL-H250x125');
+  assert.equal(currentCodeTable(CatalogKind.SECTION)?.get('STEEL-H-250x125'), 'STEEL-H250x125', '捨てた場合もaliasが積まれていない');
+});
+
+test('【QA指摘Major-2】doc束[bad, good]でも同様: onErrorが呼ばれず、section.docが1件（good）・aliasが積まれる', async () => {
+  const docBundle = withEntries(emptyBundle(), CatalogKind.SECTION, [buggyHSection(), goodHSection()]);
+  const { deps, calls } = makeDeps({
+    loadDocumentCatalogs: async () => [{ kind: CatalogKind.SECTION, bytes: encodeCatalogBundle(docBundle) }],
+  });
+  await loadCatalogOverlaysFromIDB(deps);
+
+  assert.deepEqual(calls.errors, []);
+  assert.equal(isOverlayUntrusted(), false);
+  const overlay = overlayFor(CatalogKind.SECTION);
+  assert.equal(overlay.doc.length, 1);
+  assert.equal(overlay.doc[0].key, 'STEEL-H250x125');
+  assert.equal(currentCodeTable(CatalogKind.SECTION)?.get('STEEL-H-250x125'), 'STEEL-H250x125');
+});
+
+// ================================================================
+// QA指摘Minor-2（ステップ14-S再指摘）: 移行があれば利用者向けの通知（onNotice）を1回呼ぶ
+// （console.warnだけでは利用者に見えないため）。
+// ================================================================
+
+test('【QA指摘Minor-2】移行があるとonNoticeが1回呼ばれ、文言に旧キーと新キーを含む', async () => {
+  const docBundle = withEntries(emptyBundle(), CatalogKind.SECTION, [buggyHSection()]);
+  const noticeCalls = [];
+  const { deps, calls } = makeDeps({
+    loadDocumentCatalogs: async () => [{ kind: CatalogKind.SECTION, bytes: encodeCatalogBundle(docBundle) }],
+    onNotice: (msg) => noticeCalls.push(msg),
+  });
+  await loadCatalogOverlaysFromIDB(deps);
+
+  assert.deepEqual(calls.errors, []);
+  assert.equal(noticeCalls.length, 1, 'onNoticeが1回呼ばれていない');
+  assert.match(noticeCalls[0], /STEEL-H-250x125/, '通知文に旧キーが含まれていない');
+  assert.match(noticeCalls[0], /STEEL-H250x125/, '通知文に新キーが含まれていない');
+});
+
+test('【QA指摘Minor-2】移行が無ければonNoticeは呼ばれない', async () => {
+  const materialBundle = withEntries(emptyBundle(), CatalogKind.MATERIAL, [material()]);
+  const noticeCalls = [];
+  const { deps } = makeDeps({
+    loadDocumentCatalogs: async () => [{ kind: CatalogKind.MATERIAL, bytes: encodeCatalogBundle(materialBundle) }],
+    onNotice: (msg) => noticeCalls.push(msg),
+  });
+  await loadCatalogOverlaysFromIDB(deps);
+  assert.deepEqual(noticeCalls, []);
+});
+
+test('【QA指摘Minor-2】読込みが最終的に失敗したらonNoticeは呼ばれない（overlayが結局立たないため）', async () => {
+  const noticeCalls = [];
+  const { deps, calls } = makeDeps({
+    loadDocumentCatalogs: async () => [{ kind: CatalogKind.MATERIAL, bytes: new TextEncoder().encode('{not-json') }],
+    onNotice: (msg) => noticeCalls.push(msg),
+  });
+  await loadCatalogOverlaysFromIDB(deps);
+  assert.equal(calls.errors.length, 1);
+  assert.deepEqual(noticeCalls, []);
+});
+
+// QA再々指摘Minor-4: 移行対象（section）と壊れたレコード（material）を同じ読込みに混ぜても、
+// 移行が「途中まで進んだから」onNoticeが漏れ出さないことを固定する——decodeAndValidateは
+// .map()で全レコードを先に処理するため、section側の移行でmigratedNoticesへ積んだ直後に
+// material側の decodeCatalogBundle が例外を投げると、.map() 自体が例外で中断し外側catchへ
+// 落ちる。この経路でonNoticeが（部分的にでも）呼ばれてはいけない。
+test('【QA指摘Minor-4】loader: 移行対象のsection束と壊れたmaterialレコードを一緒に読ませると、onErrorが1回・onNoticeは0回・untrustedはtrueになる', async () => {
+  const sectionBundle = withEntries(emptyBundle(), CatalogKind.SECTION, [buggyHSection()]);
+  const noticeCalls = [];
+  const { deps, calls } = makeDeps({
+    loadDocumentCatalogs: async () => [
+      { kind: CatalogKind.SECTION, bytes: encodeCatalogBundle(sectionBundle) },
+      { kind: CatalogKind.MATERIAL, bytes: new TextEncoder().encode('{not-json') },
+    ],
+    onNotice: (msg) => noticeCalls.push(msg),
+  });
+  await loadCatalogOverlaysFromIDB(deps);
+
+  assert.equal(calls.errors.length, 1, 'onErrorが1回呼ばれていない');
+  assert.deepEqual(noticeCalls, [], 'onNoticeが呼ばれてはいけない（読込みが最終的に失敗しているため）');
+  assert.equal(isOverlayUntrusted(), true, 'untrustedがtrueになっていない');
+  assert.deepEqual(overlayFor(CatalogKind.SECTION), { doc: [], user: [] }, '正常だったsection側もoverlayに立っていない（部分適用しない契約）');
 });

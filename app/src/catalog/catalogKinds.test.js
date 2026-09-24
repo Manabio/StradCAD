@@ -1,6 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { CatalogKind, CATALOG_KINDS, kindDef, listKinds, MATERIAL_CLASSES, classOf } from './catalogKinds.js';
+// ステップ14-S: section.migrate の期待値を本体の解釈ロジック（parseSectionSpec）から導出するため
+// （catalogKinds.js自体は静的importできないが、テストファイルからは制約されない）。
+import { parseSectionSpec } from '../structural/sectionCatalog.js';
 
 test('listKinds: 登録済み6種別を返す', () => {
   assert.deepEqual(new Set(listKinds()), new Set([
@@ -308,6 +311,92 @@ test('【失敗系・2026-09-23 QA指摘Minor-2】section.validate: keyが空文
   assert.throws(() => kindDef('section').validate({
     key: '', materialType: 'WOOD', shape: 'rect', width: 90, height: 90, label: '90×90',
   }), /keyが不正/);
+});
+
+// ---- ステップ14-S: 0以下の寸法は例外（負・0の断面は登録できない） ----
+test('【失敗系・ステップ14-S】section.validate: widthが負なら例外を投げる', () => {
+  assert.throws(() => kindDef('section').validate({
+    key: 'k', materialType: 'WOOD', shape: 'rect', width: -1, height: 90, label: '90×90',
+  }), /0より大きい数値が必要/);
+});
+
+test('【失敗系・ステップ14-S】section.validate: heightが0なら例外を投げる', () => {
+  assert.throws(() => kindDef('section').validate({
+    key: 'k', materialType: 'WOOD', shape: 'rect', width: 90, height: 0, label: '90×90',
+  }), /0より大きい数値が必要/);
+});
+
+test('【失敗系・ステップ14-S】section.validate: webThicknessが0なら例外を投げる', () => {
+  assert.throws(() => kindDef('section').validate({
+    key: 'k', materialType: 'STEEL', shape: 'hSection', width: 150, height: 300,
+    webThickness: 0, flangeThickness: 9, label: 'H-300×150×0×9',
+  }), /webThicknessが不正.*0より大きい数値が必要/);
+});
+
+// ---- ステップ14-S: SECTION_CATALOG本体115件は全件validateを通る（既存golden 115件を流用） ----
+test('【ステップ14-S】section.validate: SECTION_CATALOG本体115件は全件例外を投げない', async () => {
+  const { SECTION_CATALOG } = await import('../structural/sectionCatalog.js');
+  const def = kindDef('section');
+  assert.equal(SECTION_CATALOG.length, 115);
+  for (const entry of SECTION_CATALOG) {
+    assert.doesNotThrow(() => def.validate(entry), `${entry.key}がvalidateで例外を投げた`);
+  }
+});
+
+// ================================================================
+// section.migrate（ステップ14-S 裁定1: 修正前parseSectionSpecのバグで作られた負の断面を
+// 読込み時に正しい内容へ書き換える）
+// ================================================================
+
+test('【ステップ14-S】section.migrate: H形鋼の修正前データ（成が負）を、parseSectionSpecの正しい結果とdeepEqualになるよう書き換える', () => {
+  // 修正前のparseSectionSpec('H-250×125×6×9')が実際に返していた形を模す
+  // （H直後のハイフンを寸法の符号と誤読し、成(height)だけが負になっていた）。
+  const buggyEntry = {
+    key: 'STEEL-H-250x125', materialType: 'STEEL', shape: 'hSection',
+    width: 125, height: -250, webThickness: 6, flangeThickness: 9,
+    label: 'H--250×125×6×9',
+  };
+  const migrated = kindDef('section').migrate(buggyEntry);
+  assert.deepEqual(migrated, parseSectionSpec('H250×125×6×9'));
+  assert.deepEqual(migrated, parseSectionSpec('H-250×125×6×9'), '修正後は接頭辞ハイフン有無で同じ結果になる');
+});
+
+test('【ステップ14-S】section.migrate: 角形鋼管の修正前データ（幅が負）を、parseSectionSpecの正しい結果とdeepEqualになるよう書き換える', () => {
+  // 修正前のparseSectionSpec('□-200×200×9')が実際に返していた形を模す（幅(width)が負）。
+  const buggyEntry = {
+    key: 'STEEL-SQ-200x200x9', materialType: 'STEEL', shape: 'squarePipe',
+    width: -200, height: 200, wallThickness: 9,
+    label: '□--200×200×9',
+  };
+  const migrated = kindDef('section').migrate(buggyEntry);
+  assert.deepEqual(migrated, parseSectionSpec('□200×200×9'));
+});
+
+test('【ステップ14-S】section.migrate: 寸法が正のエントリ（builtin・新規保存分）は同一オブジェクト（===）を返す（無変更）', () => {
+  const def = kindDef('section');
+  const hOk = { key: 'STEEL-H250x125', materialType: 'STEEL', shape: 'hSection', width: 125, height: 250, webThickness: 6, flangeThickness: 9, label: 'H-250×125×6×9' };
+  assert.equal(def.migrate(hOk), hOk);
+  const sqOk = { key: 'STEEL-SQ200x200x9', materialType: 'STEEL', shape: 'squarePipe', width: 200, height: 200, wallThickness: 9, label: '□-200×200×9' };
+  assert.equal(def.migrate(sqOk), sqOk);
+  const woodEntry = { key: 'WOOD-90x90', materialType: 'WOOD', shape: 'rect', width: 90, height: 90, label: '90×90' };
+  assert.equal(def.migrate(woodEntry), woodEntry, '対象外shape（rect）はno-op');
+});
+
+// ---- QA指摘Minor-1（ステップ14-S再指摘）: keyが 'STEEL-H-'/'STEEL-SQ-' で始まる形だけを対象にする ----
+test('【失敗系・QA指摘Minor-1】section.migrate: shape/寸法の符号だけが条件に合致してもkeyがバグ由来の形（STEEL-H-/STEEL-SQ-始まり）でなければ無変更（===同一参照）', () => {
+  const def = kindDef('section');
+  const otherKeyEntry = {
+    key: 'MY-KEY', materialType: 'STEEL', shape: 'hSection',
+    width: 125, height: -250, webThickness: 6, flangeThickness: 9, label: 'MY-KEY',
+  };
+  assert.equal(def.migrate(otherKeyEntry), otherKeyEntry);
+});
+
+test('【ステップ14-S】section以外の種別はmigrateを持たない', () => {
+  for (const kind of listKinds()) {
+    if (kind === CatalogKind.SECTION) continue;
+    assert.equal(kindDef(kind).migrate, undefined, `${kind}.migrateが定義されている（対象は断面のみのはず）`);
+  }
 });
 
 test('openingSubType.validate: 正常系（category=fitting/window）', () => {

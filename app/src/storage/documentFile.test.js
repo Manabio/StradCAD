@@ -157,6 +157,51 @@ test('【失敗系】parseDocumentEnvelope: catalogsがvalidateBundle失敗（�
   assert.throws(() => parseDocumentEnvelope(data), /キーが重複/);
 });
 
+// ---- ステップ14-S 裁定1: 修正前parseSectionSpecのバグで作られた負の断面を持つ同梱でも開ける ----
+test('修正前の同梱（負の断面。修正前parseSectionSpecのバグ由来）を持つエンベロープが開け、section.catalogsが正のキーへ移行される', () => {
+  const bundle = {
+    version: 1,
+    catalogs: {
+      section: [{
+        key: 'STEEL-H-250x125', materialType: 'STEEL', shape: 'hSection',
+        width: 125, height: -250, webThickness: 6, flangeThickness: 9,
+        label: 'H--250×125×6×9',
+      }],
+    },
+    encodings: { section: 'json' },
+    aliases: {},
+  };
+  const data = JSON.parse(buildDocumentJson({
+    floors: [], struct: null, planes: null, site: null, info: null, bootPlaneId: null, catalogs: bundle,
+  }));
+  const parsed = parseDocumentEnvelope(data); // 例外を投げず開ける
+  assert.equal(parsed.catalogs.catalogs.section.length, 1);
+  assert.equal(parsed.catalogs.catalogs.section[0].key, 'STEEL-H250x125');
+  assert.equal(parsed.catalogs.catalogs.section[0].height, 250);
+  assert.equal(parsed.catalogs.catalogs.section[0].label, 'H-250×125×6×9');
+  // QA指摘Minor-2（ステップ14-S再指摘）: 移行内容を戻り値のmigratedで呼び出し側（store.js
+  // importDocument）へ渡す——本関数自身は通知先(project.setCatalogError)を持たないため。
+  assert.equal(parsed.migrated.length, 1);
+  assert.equal(parsed.migrated[0].kind, 'section');
+  assert.equal(parsed.migrated[0].to.key, 'STEEL-H250x125');
+});
+
+test('移行が無い（正常な同梱のみの）エンベロープはmigratedが空配列になる', () => {
+  const parsed = parseDocumentEnvelope(JSON.parse(buildDocumentJson({
+    floors: [], struct: null, planes: null, site: null, info: null, bootPlaneId: null, catalogs: sampleBundle(),
+  })));
+  assert.deepEqual(parsed.migrated, []);
+});
+
+test('catalogs無し（旧.stq）のエンベロープもmigratedが空配列になる', () => {
+  const legacyEnvelope = JSON.parse(buildDocumentJson({
+    floors: [], struct: null, planes: null, site: null, info: null, bootPlaneId: null,
+  }));
+  delete legacyEnvelope.catalogs;
+  const parsed = parseDocumentEnvelope(legacyEnvelope);
+  assert.deepEqual(parsed.migrated, []);
+});
+
 test('【失敗系】parseDocumentEnvelope: catalogsが文字列でなければ例外を投げる', () => {
   const data = JSON.parse(buildDocumentJson({
     floors: [], struct: null, planes: null, site: null, info: null, bootPlaneId: null,

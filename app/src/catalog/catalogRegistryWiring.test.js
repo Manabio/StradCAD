@@ -329,6 +329,24 @@ test('【不変条件・ステップ4・Major-D】store.js: loadCatalogOverlaysF
   );
 });
 
+// ステップ14-S QA指摘Minor-2再指摘: loadCatalogOverlaysFromIDB（store.jsラッパー）が
+// onNoticeをproject.setCatalogErrorへ配線していることを固定する（起動時照合の通知
+// ＝reconcileIncomingCatalogsのformatReconcileNoticeと同じ口）。
+test('【不変条件・ステップ14-S】store.js: loadCatalogOverlaysFromIDBはonNoticeをproject.setCatalogErrorへ配線している', () => {
+  const src = readSrc('store.js');
+  const body = extractBalancedBody(src, 'export async function loadCatalogOverlaysFromIDB(');
+  assert.ok(body, 'store.js に loadCatalogOverlaysFromIDB が見つからない');
+  const onNoticeMatch = /onNotice:\s*\([^)]*\)\s*=>\s*project\.setCatalogError\(/.exec(body);
+  assert.ok(onNoticeMatch, 'loadCatalogOverlaysFromIDB が onNotice: (msg) => project.setCatalogError(...) を渡していない');
+});
+
+// ステップ14-S QA再々指摘Minor-2: importDocumentはdoc.migratedを通知しない（削除済み）——
+// 直後にApp.jsxがlocation.reload()するため、project.setCatalogErrorで立てても表示前に消える
+// （in-memoryを持たないimportDocumentの設計上、受け手が居ない）。移行は黙って適用される
+// （移行結果はsaveDocumentCatalogでIDBへ既に書かれている）。doc.migrated自体は
+// documentFile.js側の戻り値として残す（将来リロードをまたいで渡す口の入口）ため、
+// この配線を復活させる不変条件テストは持たない（かつて存在した配線テストは削除済み）。
+
 // 2026-09-22 再QA指摘Major-D: App.jsxがproject.catalogError（catalogErrorSeq）をreactionで
 // 観測してトースト表示していることを固定する。旧「起動時1回だけのif文チェック」（二重表示の
 // 原因になっていた）は削除済みであることも合わせて固定する。
