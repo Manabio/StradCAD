@@ -184,6 +184,7 @@ export class PlanGraph {
       resolveExtentWallRefs:  action,
       setCenterLineExtentRef: action,
       removeCenterLine:    action,
+      removeDependentsOfCenterLine: action,
       detachFromCenterLine: action,
       demoteToAuxiliary:   action,
       promoteToGrid:       action,
@@ -1033,6 +1034,25 @@ export class PlanGraph {
 
   // CenterLine 削除・降格に伴う Shape・Intersection の連鎖削除
   _teardownCenterLine(id) {
+    this.removeDependentsOfCenterLine(id);
+    this._removeIntersectionsFor(id);
+  }
+
+  /**
+   * id の CenterLine に依存する部材（Shape・柱・梁・耐力壁・基礎・スリーブ・柱芯オフセット・CL偏芯）を
+   * 撤去する（Intersection は含まない——_teardownCenterLine が続けて _removeIntersectionsFor を呼ぶ）。
+   * _teardownCenterLine の本体から Intersection 撤去を除いたもの（挙動不変のリファクタ）。
+   *
+   * 通り芯削除（transform/centerLineOps.js の deleteCenterLineWithUndo）が
+   * `graph.detachFromCenterLine(cl.id)` の直後、`project.structGraph.removeCenterLine(cl.id)` の前に
+   * 呼ぶ——通り芯の本体（CenterLine実体）は project.structGraph にあり、その removeCenterLine の
+   * teardown は自グラフ（階固有）の shapeMap には届かない。structGraph 側の削除だけでは、この階の
+   * 柱・梁が削除済み通り芯を指したまま dangling 参照で残ってしまう（S造のグリッド柱は生成時の
+   * フィルタしか通らないため、再計算しても自然には消えない——次回再計算で復活する建具の袖柱とは
+   * 事情が異なる）。
+   * @param {string} id  CenterLine の id
+   */
+  removeDependentsOfCenterLine(id) {
     const refs = this._structuralRefsToCL(id);
     refs.shapes.forEach(s => this._removeShape(s.id));
     refs.columns.forEach(c => this.columnMap.delete(c.id));
@@ -1044,7 +1064,6 @@ export class PlanGraph {
     // 貫通孔（梁ホストのみ。スラブホストはcellKeyのみのCL非依存アンカーのため対象外、
     // Room/StructuralSlab と同様にteardown不要という設計）
     refs.sleeves.forEach(s => this.sleeveMap.delete(s.id));
-    this._removeIntersectionsFor(id);
   }
 
   // id の CenterLine が関わる Intersection を削除する（_teardownCenterLine から抽出。

@@ -57,7 +57,7 @@ import { buildExteriorSide } from './structural/wallGate.js';
 import { TRADITIONAL_WOOD_STRUCTURE } from './structural/structureRules.js';
 import { buildStructuralFigureSlots, designationForSlot, firstSlotKeyForPlane } from './structural/structuralFigureSlots.js';
 import { recomputeStructuralComposition, runStructuralModeSetup, reflectStructuralToOtherFloors, reflectStructuralAfterFloorAdd } from './structural/structuralOrchestration.js';
-import { openingStructuralSync } from './structural/openingStructuralSync.js';
+import { structuralSync, OPENING_STRUCTURAL_SYNC } from './structural/structuralSync.js';
 import { refreshWallsAllFloors } from './wallRefresh.js';
 import { figureBindingManager } from './figure/FigureBindingManager.js';
 import { floorSwapManager } from './storage/FloorSwapManager.js';
@@ -75,6 +75,7 @@ import {
   deleteCenterLineWithUndo,
   shouldSuggestWoodStructure, addCenterLineFromDialog,
   promoteCenterToGridWithUndo, demoteGridToCenterWithUndo,
+  setCenterLineStructuralListener,
 } from './transform/centerLineOps.js';
 import { ERR_CL_CONVERT_SYNC_FAILED, ERR_SESSION_LOCKED } from './error.js';
 import { isSessionOwner } from './storage/sessionLock.js';
@@ -493,12 +494,16 @@ const App = observer(() => {
 
   // 建具の確定・undo/redo直後に自階の構造を再計算する依存注入の配線（唯一の登録場所。
   // .claude/undo-redo.md「undo対象外」・.claude/structural-model.md「建具の袖柱」参照）。
-  setOpeningGeometryListener((g, p) => openingStructuralSync.request(g, p));
+  setOpeningGeometryListener((g, p) => structuralSync.request(g, p, OPENING_STRUCTURAL_SYNC));
+  // 通り芯削除の直後・undo/redo直後に構造同期を起動する依存注入の配線（唯一の登録場所。
+  // transform/centerLineOps.js deleteCenterLineWithUndo参照。scopeは種別ポリシーから呼び出し側が
+  // 導いたものをそのまま使う——ここでは在来限定にしない（applies省略＝常に真））。
+  setCenterLineStructuralListener((g, p, scope) => structuralSync.request(g, p, { scope }));
 
   async function switchHistoryContext(ctx) {
     // 実行中の構造再計算がgraphを保存・差し替えしている最中に階/モードを切り替えると競合するため、
     // switchFloor（実体はこの関数の中のswitchFloor呼び出し）より前に完了を待つ。
-    await openingStructuralSync.whenIdle();
+    await structuralSync.whenIdle();
     if (ctx.planeId && ctx.planeId !== project.activePlaneId && project.planeMap.has(ctx.planeId)) {
       await switchFloor(ctx.planeId);
       setActiveFloorId(ctx.planeId);
@@ -690,9 +695,9 @@ const App = observer(() => {
   async function handleModeChange(newMode) {
     if (newMode === appMode) { setMode(null); setAppMode(newMode); return; } // 同一モードは境界処理なし
 
-    // 実行中の建具起因の構造再計算がgraphを保存・差し替えしている最中にモードを切り替えると
-    // 競合するため、switchFloorを伴う処理より前に完了を待つ（openingStructuralSync.js参照）。
-    await openingStructuralSync.whenIdle();
+    // 実行中の構造同期（建具・通り芯削除起因）がgraphを保存・差し替えしている最中にモードを切り替えると
+    // 競合するため、switchFloorを伴う処理より前に完了を待つ（structural/structuralSync.js参照）。
+    await structuralSync.whenIdle();
 
     // 以降のモード固有処理はこの graph を対象とする。R階伏図からの脱出時は降りた先の階で再取得する。
     let graph = project.activeGraph;
@@ -730,8 +735,8 @@ const App = observer(() => {
   // どのモードから呼ばれても現モードの脱出境界を先に確定する（モード境界レジストリ経由＝適用漏れ防止）。
   async function handleFloorSwitch(planeId) {
     if (planeId === project.activePlaneId) return;
-    // 実行中の建具起因の構造再計算の完了を待つ（switchFloorより前。openingStructuralSync.js参照）。
-    await openingStructuralSync.whenIdle();
+    // 実行中の構造同期（建具・通り芯削除起因）の完了を待つ（switchFloorより前。structural/structuralSync.js参照）。
+    await structuralSync.whenIdle();
     await modeBoundaries[appMode]?.exit?.(project.activeGraph, { toMode: 'floorplan', floorSwitch: false });
     await switchFloor(planeId);
     setActiveFloorId(planeId);
@@ -755,8 +760,8 @@ const App = observer(() => {
   // （先に activeFloorId を更新すると、境界処理前のグラフでモード状態が生成されてしまう）。
   async function switchFloorKeepingMode(planeId) {
     if (planeId === project.activePlaneId) return;
-    // 実行中の建具起因の構造再計算の完了を待つ（switchFloorより前。openingStructuralSync.js参照）。
-    await openingStructuralSync.whenIdle();
+    // 実行中の構造同期（建具・通り芯削除起因）の完了を待つ（switchFloorより前。structural/structuralSync.js参照）。
+    await structuralSync.whenIdle();
     const boundary = modeBoundaries[appMode];
     const graph = project.activeGraph; // 切替前階（脱出境界処理の対象）
     await boundary?.exit?.(graph, { toMode: appMode, floorSwitch: true });
@@ -849,10 +854,10 @@ const App = observer(() => {
   // フロア切替・IDB 書き込みは非同期のため undo/redo 内では投げ放しで実行する
   // （完了前に次の undo を重ねると競合しうるが、通常の操作間隔では問題にならない）。
   async function withFloorAddUndo(run) {
-    // 実行中の建具起因の構造再計算がactive graphを保存・差し替えしている最中に階を追加すると、
+    // 実行中の構造同期（建具・通り芯削除起因）がactive graphを保存・差し替えしている最中に階を追加すると、
     // collectFloorBytes（アクティブ階はメモリからserializeGraph）が再計算途中の中途半端な状態を
-    // before/afterのスナップショット・新階コピー元へ焼き込んでしまう（openingStructuralSync.js参照）。
-    await openingStructuralSync.whenIdle();
+    // before/afterのスナップショット・新階コピー元へ焼き込んでしまう（structural/structuralSync.js参照）。
+    await structuralSync.whenIdle();
     const sourcePlaneId = project.activePlaneId;
     const before = await collectFloorBytes();
 
@@ -1290,9 +1295,9 @@ const App = observer(() => {
   // IDB へ明示保存で確定し、同じ内容を .stq 文書ファイルとしてダウンロード書き出しする（「読込み」と対）
   function handleSaveConfirm(fileName) {
     setSaveDialogDefaultName(null);
-    // 実行中の建具起因の構造再計算が完了する前に保存すると、途中状態を書き出したうえで
-    // clearDirty（未保存扱いの解除）してしまう（openingStructuralSync.js参照）。
-    openingStructuralSync.whenIdle()
+    // 実行中の構造同期（建具・通り芯削除起因）が完了する前に保存すると、途中状態を書き出したうえで
+    // clearDirty（未保存扱いの解除）してしまう（structural/structuralSync.js参照）。
+    structuralSync.whenIdle()
       .then(() => exportDocument())
       .then((json) => {
         downloadDocumentFile(json, fileName);
@@ -1385,6 +1390,28 @@ const App = observer(() => {
     undoManager.push(() => apply(oldRaw), () => apply(newVal));
   }
 
+  // ---- 通り芯・CL削除（メニューの cl-del）----
+  // transform/centerLineOps.js deleteCenterLineWithUndo は他階（検討・屋根を含む）への detach 伝播
+  // （centerLineFloorSync.js propagateGridCenterLineDeletion。IDB読み書きを伴う）と構造同期
+  // （structural/structuralSync.js）を伴うため async 化された（案P・2026-09-25）。実行中の構造同期が
+  // 他階IDBを読み書きしている最中に削除を始めると競合するため、先に whenIdle() を待つ
+  // （.claude/undo-redo.md「落とし穴」参照）。
+  async function handleDeleteCenterLine(cl) {
+    await structuralSync.whenIdle();
+    try {
+      const { toast } = await deleteCenterLineWithUndo(graph, project, cl);
+      if (toast) setToast({ msg: toast, key: Date.now() });
+      setFloorSyncTick(t => t + 1); // 連動先（他階）の複製・重複判定を反映させる（cl-to-grid/cl-to-centerと同じ。m-6・QA指摘）
+    } catch (err) {
+      // 階またぎ同期（centerLineFloorSync.js）はIDB書込を含むため失敗しうる——保存済みの階は
+      // 呼び出し元（deleteCenterLineWithUndo）がrollbackFloorRecordsで巻き戻し済み
+      // （自階・structGraph・undoは未変更）。ここでは失敗をトースト表示するだけでよい
+      // （cl-to-grid/cl-to-center等の既存async IIFEと同じ形。ERR_CL_CONVERT_SYNC_FAILEDを再利用する）。
+      console.error(err);
+      setToast({ msg: ERR_CL_CONVERT_SYNC_FAILED, key: Date.now() });
+    }
+  }
+
   // ---- メニュー選択 ----
   function handleMenuSelect(item) {
     if (item.id === 'cl-v' || item.id === 'cl-h') {
@@ -1440,8 +1467,7 @@ const App = observer(() => {
       return;
     }
     if (item.id === 'cl-del')  {
-      const { toast } = deleteCenterLineWithUndo(graph, project, menu.cl);
-      if (toast) setToast({ msg: toast, key: Date.now() });
+      void handleDeleteCenterLine(menu.cl);
       return;
     }
     if (item.id === 'cl-ecc') {
@@ -1451,6 +1477,10 @@ const App = observer(() => {
     if (item.id === 'cl-to-grid' || item.id === 'cl-to-center') {
       const target = menu.cl;
       (async () => {
+        // 入替えも他階IDBを読み書きする（centerLineFloorSync.js）ため、実行中の構造同期が
+        // 他階を保存・差し替えしている最中に始めると競合する（m-5・QA指摘。handleDeleteCenterLineと
+        // 同じ理由で先にwhenIdleを待つ）。
+        await structuralSync.whenIdle();
         const fn = item.id === 'cl-to-grid' ? promoteCenterToGridWithUndo : demoteGridToCenterWithUndo;
         const { toast } = await fn(graph, project, target);
         if (toast) setToast({ msg: toast, key: Date.now() });

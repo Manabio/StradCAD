@@ -337,6 +337,21 @@ sillPackingThicknessMm`）。基礎天端＝土台下端−この値という関
 経路がある（構造モード中の柱寸・主構造変更など。次に挙げる節の「従来経路のままの箇所」）。
 設計意図は`.claude/structural-model.md`「反映処理の間だけ各階のpeek結果を使い回す」節。
 
+## 構造同期（structural/structuralSync.js）
+建具・通り芯削除など、壁位置が確定した直後に構造（柱・梁）を再計算する単一の起動口
+（`createStructuralSync`／`request(graph, project, {scope, applies})`）。`scope`は`'active' <
+'activeAndAbove' < 'all'`（狭い→広い。実行中の要求は合流し広い方へ昇格する）。`applies`は起動条件の
+述語（省略時は常に真）。決定的・冪等なため undo 対象外——要求元側の undo/redo で再実行されれば
+結果的に元へ戻る。設計意図は`.claude/structural-model.md`「起動点」節・`.claude/undo-redo.md`。
+
+## detach伝播（通り芯削除の他階同期）
+通り芯削除の直前に、アクティブ以外の全階（検討・屋根含む）へ「この通り芯を参照する壁・部材の
+切り離し（`detachFromCenterLine`）＋撤去（`removeDependentsOfCenterLine`）」を先に適用すること
+（`transform/centerLineFloorSync.js`の`propagateGridCenterLineDeletion`）。通り芯を
+`project.structGraph`から外す**前**に行う——`graphSnapshot.js`の`resolveCL`が解決できない参照を
+黙って捨てるため、順序を逆にすると他階の壁が消える。detach伝播自体は undo 対象（他階の構造反映は
+対象外という線引きは上記「構造同期」参照）。設計意図は`.claude/undo-redo.md`。
+
 ## 書込み世代（floors）
 `storage/floorWriteGeneration.js`が持つ、階ごとの書込み回数とストア全体の作り直し回数を合わせた
 不透明な値（メモリ上のみ・永続化しない。`===`での比較専用）。解決コンテキストが、保持している階のコピーが他者の書込みで古くなっていないかを

@@ -9,12 +9,14 @@
 // structural/wallBeamAxes.test.js:197-207 を参照していたが、そこにpeekスタブは無い誤記だった）。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Project, PlanGraph, CenterLineType, Discipline } from '../core.js';
+import { Project, PlanGraph, CenterLineType, Discipline, StructuralMaterialType } from '../core.js';
 import { floorSwapManager } from '../storage/FloorSwapManager.js';
 import { undoManager } from '../undoManager.js';
 import { serializeGraph, restoreGraph } from '../graphSnapshot.js';
 import { applyPromoteToGrid } from './centerLineConvert.js';
-import { findFloorsWithCounterpartCL, recallPromotedCenterLineDuplicates } from './centerLineFloorSync.js';
+import {
+  findFloorsWithCounterpartCL, recallPromotedCenterLineDuplicates, propagateGridCenterLineDeletion,
+} from './centerLineFloorSync.js';
 
 function makeProjectWithTwoFloors() {
   const project = new Project('proj', 'test');
@@ -236,4 +238,37 @@ test('recallPromotedCenterLineDuplicates: 途中の階でsaveFloorFnがthrowし�
   undoManager.undo();
   assert.equal(calls.length, callsBeforeUndo + 1, 'undo実行でp2への書き戻しが1回追加される');
   assert.equal(calls[calls.length - 1], p2.plane.id, '書き戻し先はp2のみ（p3は保存されていないため対象外）');
+});
+
+// ---- propagateGridCenterLineDeletion（段階(a)・案P。2026-09-25） ----
+
+test('propagateGridCenterLineDeletion: 他階の通り芯参照の柱・梁・基礎はdetach後に撤去される（保存後バイトを、通り芯がまだ残るstructGraphで復号して確認。m-1・QA指摘）', async () => {
+  const { project, graphs: [p1, p2] } = makeProjectWithFloors(2);
+  const y0 = project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+  const y1 = project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: true, discipline: Discipline.STRUCT });
+  const cl = project.structGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: true, discipline: Discipline.STRUCT });
+
+  const column  = p2.addColumn(StructuralMaterialType.WOOD, 'SEC-COL', cl, y0);
+  const beam    = p2.addBeam(StructuralMaterialType.WOOD, 'SEC-BEAM', cl, true, y0, y1);
+  const footing = p2.addFooting('independent', 'SEC-FTG', cl, y0);
+
+  const store = new Map([[p2.plane.id, serializeGraph(p2)]]);
+  const saveFloorFn = async (planeId, bytes) => { store.set(planeId, bytes); };
+
+  await withPeekOverride(project, store, () => propagateGridCenterLineDeletion(project, p1, cl, { saveFloorFn }));
+
+  // この時点ではまだ cl は project.structGraph に残っている（呼び出し側 centerLineOps.js が
+  // この後で project.structGraph.removeCenterLine を呼ぶ前提のため）。decodeFloor は
+  // project.structGraph（clを含む）で復号する——先にclを取り除いて復号すると、resolveCLが
+  // 解決できない参照を黙って捨てるため「参照が見かけ上0件」になる誤検出になる（m-1のねらい。
+  // .claude/undo-redo.md「落とし穴」参照）。
+  const decoded = decodeFloor(project, p2.plane, store.get(p2.plane.id));
+  assert.equal(decoded.columns.some(c => c.verticalCL.id === cl.id || c.horizontalCL.id === cl.id), false,
+    '削除対象通り芯を参照する柱は撤去されるはず');
+  assert.equal(decoded.beams.some(b => b.axisCL.id === cl.id || b.clStart.id === cl.id || b.clEnd.id === cl.id), false,
+    '削除対象通り芯を参照する梁は撤去されるはず');
+  assert.equal(decoded.footings.some(f => f.verticalCL.id === cl.id || f.horizontalCL.id === cl.id), false,
+    '削除対象通り芯を参照する基礎は撤去されるはず');
+  // 前提: フィクスチャが実際にこれらを生成できていること（column/beam/footing変数の未使用警告回避も兼ねる）。
+  assert.ok(column.id && beam.id && footing.id);
 });

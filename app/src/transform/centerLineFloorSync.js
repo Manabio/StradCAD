@@ -66,18 +66,73 @@ export async function findFloorsWithCounterpartCL(project, activeGraph, cl) {
 // undo/redo時の書き戻しもテスト用の差し替えに乗せられるようにする）。
 // centerLineOps.js の降格（複製フェーズをundoエントリ作成前に行う）からも呼べるよう export する
 // （undoEntry が無いうちは no-op で返るため、そこでの呼び出しは安全）。
+// amendFloorUndoRecords の内部処理（旧 applyBytes）を export として切り出したもの（挙動不変。
+// 2026-09-25）。centerLineOps.js の通り芯削除（deleteCenterLineWithUndo）は、他階への伝播
+// （propagateGridCenterLineDeletion）を自前のundo/redoクロージャの中で順序制御して呼ぶため
+// （amendではなく、structGraph・自階の復元と同じエントリに直接組み込む——amendFloorUndoRecordsは
+// undoManager.amendを内部で呼ぶため、まだエントリが無い段階や順序を自分で組みたい呼び出し元には
+// 使えない）、amendに包まれた形ではなく本関数を直接呼べるようにする。
+export function applyFloorUndoRecords(project, records, which, saveFloorFn = saveFloor) {
+  for (const rec of records) {
+    if (project.activePlane?.id === rec.planeId) {
+      restoreGraph(project.activeGraph, rec[which]); // undo実行時にその階がアクティブなら生きているグラフへ復元
+    } else {
+      saveFloorFn(rec.planeId, rec[which]).catch(console.error); // 非アクティブ階は IDB のみが正
+    }
+  }
+}
+
 export function amendFloorUndoRecords(project, undoEntry, undoRecords, saveFloorFn = saveFloor) {
   if (!undoEntry || undoRecords.length === 0) return;
-  const applyBytes = (which) => {
-    for (const rec of undoRecords) {
-      if (project.activePlane?.id === rec.planeId) {
-        restoreGraph(project.activeGraph, rec[which]); // undo実行時にその階がアクティブなら生きているグラフへ復元
-      } else {
-        saveFloorFn(rec.planeId, rec[which]).catch(console.error); // 非アクティブ階は IDB のみが正
-      }
-    }
-  };
-  undoManager.amend(undoEntry, () => applyBytes('before'), () => applyBytes('after'));
+  undoManager.amend(
+    undoEntry,
+    () => applyFloorUndoRecords(project, undoRecords, 'before', saveFloorFn),
+    () => applyFloorUndoRecords(project, undoRecords, 'after', saveFloorFn),
+  );
+}
+
+/**
+ * 通り芯削除の**移籍前**に、アクティブ以外の全 Plane（検討階・屋根を含む）で、この通り芯を参照する
+ * 壁・部材・extent参照があれば detach＋撤去する（呼び出し側 centerLineOps.js の deleteCenterLineWithUndo
+ * は、この後で `project.structGraph.removeCenterLine(cl.id)` を呼ぶこと——通り芯が project.structGraph に
+ * 残っている間に他階を peek しないと、他階の壁の axisCL/clStart/clEnd が graphSnapshot.js の resolveCL
+ * で解決できず、復元時に黙って捨てられる。端点ルール（detachFromCenterLine）が一切効かないまま壁が
+ * 消える——降格 propagateDemotedCenterLine と同じ「複製（ここでは撤去）→移籍」の型。2026-09-17実測の
+ * 教訓を通り芯削除にも適用する）。
+ *
+ * 参照が1つも無い階（この通り芯と無関係な階）は peek はするが detach・保存は行わずスキップする
+ * （hasExternalCenterLineReferences。無駄な保存・undoレコードを増やさない）。
+ * **既知の限界（m-8・QA指摘・2026-09-25。修正せず記録のみ）**: skip 判定
+ * （`hasExternalCenterLineReferences`）は柱・梁・耐力壁・基礎・スリーブ・一般Shape・他CLの
+ * extentLoRef/HiRef しか見ず、`columnAxisOffsets`・`clEccentricities` のキーや、他CLの `refId` が
+ * この通り芯を指す子CL（extentRefではない参照）は見ない——それらだけを持つ階は誤ってスキップされ、
+ * 削除idを指したままのキー・refIdが残る。実害は小さい（座標のオフセット量・偏芯レコードが孤立キーの
+ * まま残るだけで、壁・部材が消える`resolveCL`欠落とは異なり描画・保存は壊れない）。HEAD（本モジュール
+ * 導入前）にはこの伝播経路自体が無かったため、この限界は退行ではなく新規追加分の既知の未対応。
+ *
+ * undoEntry はまだ無い段階（centerLineOps.js が structGraph 側の削除より前に呼ぶ）で呼ばれるため、
+ * amendFloorUndoRecords は使わない——undoRecords への蓄積のみ行い、呼び出し側がstructGraph・自階の
+ * 復元と同じundoエントリへ`applyFloorUndoRecords`経由で組み込む。例外発生時も、そこまでに
+ * saveFloorFn した階のundoRecordsは呼び出し側に残る（呼び出し側がrollbackFloorRecordsで巻き戻す）。
+ * @param {object} project
+ * @param {PlanGraph} activeGraph  削除を実行する階のグラフ（アクティブ階）
+ * @param {CenterLine} cl          削除前の通り芯（まだ project.structGraph に居る）
+ * @param {{undoRecords?: Array, saveFloorFn?: Function}} [opts]
+ * @returns {Promise<Array>} undoRecords（呼び出し側が渡した配列、省略時は内部で新規作成したもの）
+ */
+export async function propagateGridCenterLineDeletion(project, activeGraph, cl, { undoRecords = [], saveFloorFn = saveFloor } = {}) {
+  for (const plane of otherPlanes(project, activeGraph)) {
+    const temp = await floorSwapManager.peek(plane, project.structGraph);
+    if (!temp.hasExternalCenterLineReferences(cl.id)) continue;
+    const before = serializeGraph(temp);
+    runInAction(() => {
+      temp.detachFromCenterLine(cl.id);
+      temp.removeDependentsOfCenterLine(cl.id);
+    });
+    await saveFloorFn(plane.id, serializeGraph(temp));
+    undoRecords.push({ planeId: plane.id, before, after: serializeGraph(temp) });
+  }
+  return undoRecords;
 }
 
 /**
@@ -123,15 +178,28 @@ export async function propagateDemotedCenterLine(project, activeGraph, cl, { loC
 }
 
 /**
- * demoteGridToCenterWithUndo 専用の失敗時ロールバック: 複製フェーズ（propagateDemotedCenterLine）
- * の途中で例外が起きた場合、または直後の applyDemoteToCenter がエラーを返した場合に、そこまでに
- * saveFloorFn した階を before バイトで書き戻す（best effort）。undoManager には触れない
- * （呼び出し側がまだ undo エントリを積んでいない段階でのみ使う）。
+ * demoteGridToCenterWithUndo・deleteCenterLineWithUndo 専用の失敗時ロールバック: 複製・伝播フェーズ
+ * （propagateDemotedCenterLine・propagateGridCenterLineDeletion）の途中で例外が起きた場合、または
+ * 直後の本体処理（applyDemoteToCenter等）がエラーを返した場合に、そこまでに saveFloorFn した階を
+ * before バイトで書き戻す（best effort）。undoManager には触れない（呼び出し側がまだ undo エントリを
+ * 積んでいない段階でのみ使う）。
+ * **project を渡すと、対象階が現在アクティブならIDBではなく生きているgraphへ`restoreGraph`する**
+ * （`applyFloorUndoRecords`と同じ分岐。n-1・QA指摘・2026-09-25: project省略時（従来どおりIDBのみ）は、
+ * 伝播中に階が切り替わり、切り替え先の階が既に「detach後のバイト」で生きているgraphへ復元・保持
+ * されていると、rollbackがIDBへ書き戻したbeforeバイトが後続の自動保存（auto-save）で上書きされ、
+ * 壁だけがundoも効かずに消える——生きているgraphが保持する状態と、IDBに書く状態を一致させる必要が
+ * ある）。降格側（propagateDemotedCenterLine失敗時）の既存呼び出しはprojectを渡さず据え置く
+ * （挙動不変。将来同種の問題が実測されたら同様に直す）。
  * @param {Array<{planeId, before}>} records
  * @param {Function} [saveFloorFn]
+ * @param {object} [project] - 省略時は従来どおりIDB（saveFloorFn）のみで書き戻す。
  */
-export async function rollbackFloorRecords(records, saveFloorFn = saveFloor) {
+export async function rollbackFloorRecords(records, saveFloorFn = saveFloor, project = undefined) {
   for (const rec of records) {
+    if (project?.activePlane?.id === rec.planeId) {
+      try { restoreGraph(project.activeGraph, rec.before); } catch (err) { console.error(err); }
+      continue;
+    }
     try { await saveFloorFn(rec.planeId, rec.before); } catch (err) { console.error(err); }
   }
 }

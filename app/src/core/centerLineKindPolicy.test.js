@@ -33,6 +33,7 @@ import {
   STRUCTURAL_ANCHOR_KINDS, BEAM_AXIS_KINDS, SUPPORT_SPAN_COLUMN_KINDS,
   structuralAnchorKinds, isStructuralAnchor, structuralAnchorAt, structuralAnchorCandidates,
   beamAxisAt, beamAxisCenterLines, supportSpanColumnCandidates,
+  FLOOR_SHARED_KINDS, structuralSyncScopeOfKind,
 } from './centerLineKindPolicy.js';
 
 // ---- 製品コード（section C）との突き合わせに使う実装 ----
@@ -1591,4 +1592,22 @@ test('【失敗系】beamAxisAt/supportSpanColumnCandidates: centerLineType欠�
   assert.throws(() => beamAxisAt(graph, { centerLineType: CenterLineType.VERTICAL, coord: NaN }), /coord/);
   assert.throws(() => supportSpanColumnCandidates(graph, {}), /centerLineType/);
   assert.throws(() => supportSpanColumnCandidates(graph, { centerLineType: null }), /centerLineType/);
+});
+
+// ---- structuralSyncScopeOfKind（原始事実13。structural/structuralSync.js の起動scope導出。
+// 段階(a)「通り芯削除→構造同期」・2026-09-25）----
+
+test('structuralSyncScopeOfKind: struct→"all"（FLOOR_SHARED_KINDS＝全階共有）、center→"activeAndAbove"、aux→null、beam→null（専用経路のため除外）', () => {
+  assert.equal(structuralSyncScopeOfKind('struct'), 'all');
+  assert.equal(structuralSyncScopeOfKind('center'), 'activeAndAbove');
+  assert.equal(structuralSyncScopeOfKind('aux'), null, '補助線は直接には構造を起動しない（中心線のextent参照経由の間接効果のみ。段階(d)で別途対応）');
+  assert.equal(structuralSyncScopeOfKind('beam'), null, '梁芯は専用経路（wallBeamAxes.js）を持つため対象外（条件10）');
+});
+
+test('FLOOR_SHARED_KINDS は struct のみ（通り芯だけが project.structGraph に置かれ全階共有される）', () => {
+  assert.deepEqual(FLOOR_SHARED_KINDS, ['struct']);
+});
+
+test('【失敗系】structuralSyncScopeOfKind: 未知の種別はthrowする', () => {
+  assert.throws(() => structuralSyncScopeOfKind('wood'), /未知のCL種別: wood/);
 });

@@ -26,7 +26,7 @@ import { findSectionEntry } from './sectionCatalog.js';
 import {
   recomputeStructuralComposition, reflectStructuralAfterFinishExit, reflectStructuralToOtherFloors,
   repeatReflectPassUntilConverged, MAX_REFLECT_PASSES, columnSetSignature, runStructuralModeSetup,
-  recomputeActiveStructural, reflectStructuralAfterFloorAdd,
+  recomputeActiveStructural, reflectStructuralAfterFloorAdd, recomputeForStructuralSync,
 } from './structuralOrchestration.js';
 import { figureBindingManager } from '../figure/FigureBindingManager.js';
 import { createStructuralResolveContext } from './structuralResolveContext.js';
@@ -182,6 +182,135 @@ test('recomputeActiveStructural: 差分なし（同一入力2回目）ならundo
   await recomputeActiveStructural(project);
   assert.equal(graph.columns.length, 4, '2回目は柱本数が変わらない（冪等）');
   assert.equal(undoManager.peekUndo(), afterFirst, '2回目は差分なしのためundoを積まない');
+});
+
+test('recomputeActiveStructural: 戻り値{changed}を返す（構造同期structural/structuralSync.jsのrecomputeForStructuralSyncが"all"の外側ループ収束判定に使う。2026-09-25）', async () => {
+  const { project, graph } = makeSinglePlaneProject();
+  project.structuralInfo.mainStructure = 'S造';
+  project.structGraph.addCenterLine(CenterLineType.VERTICAL,   0,    { labeled: true, discipline: Discipline.STRUCT });
+  project.structGraph.addCenterLine(CenterLineType.VERTICAL,   3000, { labeled: true, discipline: Discipline.STRUCT });
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: true, discipline: Discipline.STRUCT });
+
+  const first = await recomputeActiveStructural(project);
+  assert.deepEqual(first, { changed: true }, '初回（柱0本→4本）はchanged:trueを返すはず');
+  assert.equal(graph.columns.length, 4);
+
+  const second = await recomputeActiveStructural(project);
+  assert.deepEqual(second, { changed: false }, '2回目（差分なし）はchanged:falseを返すはず');
+});
+
+// ---- recomputeForStructuralSync（structural/structuralSync.js recompute実装。段階(a)・2026-09-25）----
+
+// m-3・QA指摘: 単一階フィクスチャは「peekする他階が無いから0回」なだけで検出力が弱いため、
+// 他階が実在する2階建てへ強化する。ただし在来木造（columnPlacement:'wallIntersections'）は
+// 3b（上階柱直下の柱）のため'active'スコープでも1つ上の実体階を都度peekする——これは
+// recomputeStructuralForGraph（structuralRecompute.js）自身の既存の読み取り専用peek（構造同期の
+// scope概念より前からある挙動）で、他階の**保存**はしない。'active'スコープが保証するのは
+// 「他階を書き換えない」ことであり「一切peekしない」ことではない（実測で判明。以前のコメント
+// 「'active'は自階だけの再計算のためpeekを呼ばない」は単一階フィクスチャでしか成立しない過大な
+// 主張だった）。そのため本テストは在来限定にせず、peekが構造的に0回になるS造（gridIntersections・
+// wallBeamAxes:null。上下階を一切見ない）×アクティブ＝最下階（resolveLowestGraphが自階を返し
+// 追加peekしない）の組合せで検証する——'all'スコープなら2階へ反映するため必ず1回以上peekする
+// （すぐ上の【失敗系】テスト・下記【全体反映】テストで対照済み）。
+test('recomputeForStructuralSync("active"): 2階建て(S造)フィクスチャでもfloorSwapManager.peekを一度も呼ばない（"他階を書き換えない"がscope="active"の実体で、"一切peekしない"は保証しない。m-3・QA指摘）', async () => {
+  await withFakeIndexedDB(async () => {
+    const project = new Project('proj-m3', 'test');
+    project.structuralInfo.mainStructure = 'S造';
+    project.structGraph.addCenterLine(CenterLineType.VERTICAL,   0,    { labeled: true, discipline: Discipline.STRUCT });
+    project.structGraph.addCenterLine(CenterLineType.VERTICAL,   3000, { labeled: true, discipline: Discipline.STRUCT });
+    project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+    project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: true, discipline: Discipline.STRUCT });
+    const { graph: g1 } = project.addPlane(0,    '1階', 'p1'); // アクティブ＝最下階（resolveLowestGraphが自階を返す）
+    const { graph: g2 } = project.addPlane(3000, '2階', 'p2'); // 存在するが'active'スコープでは触れられてはいけない他階
+    project.activePlaneId = 'p1';
+    await saveFloor('p1', serializeGraph(g1));
+    await saveFloor('p2', serializeGraph(g2));
+
+    let peekCalls = 0;
+    const originalPeek = floorSwapManager.peek;
+    floorSwapManager.peek = async (...args) => { peekCalls++; return originalPeek.call(floorSwapManager, ...args); };
+    try {
+      await recomputeForStructuralSync(project, 'active');
+      assert.equal(peekCalls, 0, "'active'は自階だけの再計算のため、2階が実在してもpeekを呼ばないはず（S造は上下階を参照しないため真に0回になる）");
+    } finally {
+      floorSwapManager.peek = originalPeek;
+    }
+  });
+});
+
+test('【失敗系】recomputeForStructuralSync("all"): 他階のpeekがthrowしたらrejectする', async () => {
+  // withFakeIndexedDBで包む——自階(graph)の保存はrecomputeForStructuralSyncの手順1で先に走るため
+  // （'all'は自階を先に再計算・保存してから他階へ反映する。saveViaの既定_saveはstorage/db.js
+  // saveFloor＝実IDBを要求する）、これを欠くとopenDB()がindexedDB未定義でReferenceErrorになり、
+  // storage/db.js の _dbPromise キャッシュが恒久的に汚染されて以降の全テスト（withFakeIndexedDB
+  // 利用テストを含む）が壊れる（QA実測。db.jsのonerrorハンドラは同期throwでは発火せず解除されない）。
+  await withFakeIndexedDB(async () => {
+    const { project, graph } = makeSinglePlaneProject();
+    const { graph: g2 } = project.addPlane(3000, '2階', 'p2');
+    project.activePlaneId = graph.plane.id;
+    const originalPeek = floorSwapManager.peek;
+    floorSwapManager.peek = async (plane, structGraph) => {
+      if (plane.id === g2.plane.id) throw new Error('peek boom');
+      return originalPeek.call(floorSwapManager, plane, structGraph);
+    };
+    try {
+      await assert.rejects(() => recomputeForStructuralSync(project, 'all'), /peek boom/);
+    } finally {
+      floorSwapManager.peek = originalPeek;
+    }
+  });
+});
+
+test('recomputeForStructuralSync("all"): 3階建て(在来)+屋根フィクスチャで、外部から1回呼ぶだけで全階が収束し、もう1回呼んでも変化せず他階へのsave回数は0件になる（冪等。m-4・QA指摘: 保存回数を数えて確認する）', async () => {
+  await withFakeIndexedDB(async () => {
+    const { project } = buildB1Fixture();
+    await saveB1InitialFloors(project);
+    const activeId = project.planes[0].id;
+    project.activePlaneId = activeId; // 1階をアクティブにする（自階先行保存の効果を確認しやすい）
+
+    // save呼び出しをplaneId別に数える解決コンテキストを注入する（recomputeForStructuralSync自身は
+    // ctxを明示された場合disposeしないため、呼び出し側で毎回dispose）。
+    function countingCtx(saveCallsByPlane) {
+      return createStructuralResolveContext({
+        save: async (planeId, bytes) => {
+          saveCallsByPlane.set(planeId, (saveCallsByPlane.get(planeId) ?? 0) + 1);
+          await saveFloor(planeId, bytes);
+        },
+      });
+    }
+
+    const saveCalls1 = new Map();
+    const ctx1 = countingCtx(saveCalls1);
+    await recomputeForStructuralSync(project, 'all', ctx1);
+    ctx1.dispose();
+    const dumpAfterOnce = await dumpB1AllFloorsAllFields(project);
+    for (const floorName of ['1階', '2階', '3階']) {
+      assert.ok(dumpAfterOnce[floorName].columns.length > 0, `${floorName}は空であってはならない（save→本番peek往復で部材が失われていないことの構造的な担保）`);
+    }
+    assert.ok((saveCalls1.get(activeId) ?? 0) > 0, '前提: 初回は自階が最低1回保存される');
+
+    const saveCalls2 = new Map();
+    const ctx2 = countingCtx(saveCalls2);
+    await recomputeForStructuralSync(project, 'all', ctx2);
+    ctx2.dispose();
+    const dumpAfterTwice = await dumpB1AllFloorsAllFields(project);
+    assert.deepEqual(dumpAfterTwice, dumpAfterOnce, 'もう1回呼んでも部材ダンプが変わらない（冪等）');
+
+    // 他階（非アクティブ）へのsave回数は2回目は0件のはず——recomputeInactiveStructuralは
+    // changed:trueのときだけsaveViaを呼ぶため、収束済みなら他階は一切保存されない。
+    // 自階（アクティブ階）だけは設計どおりpass1で無条件に1回saveVia（recomputeForStructuralSyncの
+    // 「自階を先に保存してから他階へ反映する」手順そのもの。structural-model.md「起動点」節参照）
+    // ——このテストが確認したいのは「収束後に冗長な保存が起きないか」であり、自階の設計上の
+    // 1回書きはその対象外（REASONED。文字どおり「2回目はsave呼び出し0件」にすると、この
+    // 常に1回書く設計仕様と矛盾して常に失敗するテストになってしまう——m-4のQA指摘に対する
+    // 技術的判断としてこの形にした）。
+    for (const [planeId, count] of saveCalls2) {
+      if (planeId === activeId) continue;
+      assert.equal(count, 0, `2回目は他階(${planeId})への保存は0件のはず`);
+    }
+    assert.ok((saveCalls2.get(activeId) ?? 0) >= 1, '自階は仕組み上パス1で毎回1回保存されるため0にはならない');
+  });
 });
 
 // ---- QA F4: 下階編集経路（主構造変更時等）は直前に立った下階の3b柱を撤去しない ----

@@ -255,6 +255,42 @@ export const BEAM_AXIS_KINDS = Object.freeze(['beam']);
 // belowを本表の後に足したもの）はこの並びから導出される——構造側にこの並びを重複して書かない。
 export const SUPPORT_SPAN_COLUMN_KINDS = Object.freeze(['struct', 'center']);
 
+// ---- 原始事実13: 全階共有種別 ----
+// 通り芯（struct）は project.structGraph に置かれ全階で共有される唯一の種別——中心線・補助線・梁芯は
+// いずれも階固有の実体（PlanGraph.shapeMap）。下記 structuralSyncScopeOfKind（本ファイル）が
+// 「全階へ効くか、自階＋上階に留まるか」を決めるのに使う——起動先の structural/structuralSync.js は
+// この結果をそのまま request(scope) に渡すだけで、種別条件は持たない（m-7・QA指摘: 旧コメントは
+// structuralSyncScopeOfKind が structural/structuralSync.js 側にあるかのように読めた）。
+export const FLOOR_SHARED_KINDS = Object.freeze(['struct']);
+
+/**
+ * kind の変更が構造同期（structural/structuralSync.js）の起動対象かどうか、対象ならどの scope で
+ * 反映すべきかを CL 種別ポリシー表から導出する（2026-09-25。新経路にkind条件を直書きしない——
+ * .claude/data-model.md「CL種別間の関係は単一のポリシーから導出し、走査の入口をガードで閉じる」節
+ * と同じ規律。m-7・QA指摘: 旧コメントは存在しない節見出し・条件番号を指していた）。
+ * - 構造に効きうる集合 = STRUCTURAL_ANCHOR_KINDS.primary ∪ .secondary（柱アンカー）
+ *   ∪ SUPPORT_SPAN_COLUMN_KINDS（支持長超過候補）∪ FINISH_CELL_DIVIDER_KINDS（セル分割線＝壁の軸）。
+ * - そこから BEAM_AXIS_KINDS（梁芯）を引く——梁芯は壁由来の自動生成・追従の専用経路
+ *   （structural/wallBeamAxes.js）を既に持ち、この経路が二重に動かしてはいけない（条件10）。
+ * - 残った集合に含まれない種別（現状は補助線=aux）は null——直接には構造を起動しない。補助線は
+ *   中心線の extentLoRef/HiRef 経由の間接効果のみで、その判定（参照されているか）は graph インスタンス
+ *   が要るためこの純粋な種別レベルAPIでは表現できない（段階(d)で別の graph レベル述語を足す）。
+ * - 残りは FLOOR_SHARED_KINDS（通り芯）なら 'all'、それ以外（中心線）なら 'activeAndAbove'
+ *   （中心線はその階の壁が変わるだけだが、壁は上階の梁・柱の点源にもなるため自階だけでは足りない）。
+ * @param {string} kind
+ * @returns {'all'|'activeAndAbove'|null}
+ */
+export function structuralSyncScopeOfKind(kind) {
+  assertKnownKind(kind);
+  const structurallyRelevant = new Set([
+    ...STRUCTURAL_ANCHOR_KINDS.primary, ...STRUCTURAL_ANCHOR_KINDS.secondary,
+    ...SUPPORT_SPAN_COLUMN_KINDS, ...FINISH_CELL_DIVIDER_KINDS,
+  ]);
+  for (const beamKind of BEAM_AXIS_KINDS) structurallyRelevant.delete(beamKind);
+  if (!structurallyRelevant.has(kind)) return null;
+  return FLOOR_SHARED_KINDS.includes(kind) ? 'all' : 'activeAndAbove';
+}
+
 // ================================================================
 // 種別レベルAPI
 // ================================================================

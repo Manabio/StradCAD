@@ -2,7 +2,9 @@
 // centerLines・structGraph 連携の実挙動を再現できないため、実 core.js（Plane/PlanGraph/Project）を使う。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Plane, PlanGraph, Project, CenterLineType, Discipline, centerLineKind, OpeningCategory } from '../core.js';
+import {
+  Plane, PlanGraph, Project, CenterLineType, Discipline, centerLineKind, OpeningCategory, StructuralMaterialType,
+} from '../core.js';
 import {
   ERR_CL_DUPLICATE, ERR_CL_CENTER_UPGRADED, ERR_CL_STRUCT_EXISTS,
   ERR_CL_CONVERT_ATTACHED, ERR_CL_CONVERT_NO_GRID, ERR_CL_CONVERT_DUP_FLOOR, ERR_CL_CONVERT_DUP_FLOOR_DEMOTE,
@@ -14,7 +16,7 @@ import { serializeGraph, restoreGraph } from '../graphSnapshot.js';
 import { calcStep } from '../renderer/clMoveMath.js';
 import {
   shouldSuggestWoodStructure, commitCLMoveOp, deleteCenterLineWithUndo, addCenterLineFromDialog,
-  promoteCenterToGridWithUndo, demoteGridToCenterWithUndo,
+  promoteCenterToGridWithUndo, demoteGridToCenterWithUndo, setCenterLineStructuralListener,
 } from './centerLineOps.js';
 import { CL_KINDS, coexistenceAt } from '../core/centerLineKindPolicy.js';
 
@@ -107,17 +109,17 @@ test('commitCLMoveOp: 梁芯移動は移動元座標をexcludedWallBeamAxesへ�
 
 // ---- deleteCenterLineWithUndo ----
 
-test('deleteCenterLineWithUndo: 中心線削除はexcludedWallBeamAxesを変えず、梁芯削除だけ記録する', () => {
+test('deleteCenterLineWithUndo: 中心線削除はexcludedWallBeamAxesを変えず、梁芯削除だけ記録する', async () => {
   const graph = makeGraph();
   const centerCL = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false });
   const beamCL   = graph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: false, discipline: Discipline.FUSE });
   const project = {};
 
-  deleteCenterLineWithUndo(graph, project, centerCL);
+  await deleteCenterLineWithUndo(graph, project, centerCL);
   assert.equal(graph.shapeMap.has(centerCL.id), false);
   assert.equal(graph.excludedWallBeamAxes.size, 0, '中心線の削除ではexcludedWallBeamAxesは変化しない');
 
-  deleteCenterLineWithUndo(graph, project, beamCL);
+  await deleteCenterLineWithUndo(graph, project, beamCL);
   assert.equal(graph.shapeMap.has(beamCL.id), false);
   assert.ok(graph.excludedWallBeamAxes.has('Y:3000'), '梁芯の削除は除外集合に記録される');
 
@@ -128,7 +130,7 @@ test('deleteCenterLineWithUndo: 中心線削除はexcludedWallBeamAxesを変え�
 // ---- deleteCenterLineWithUndo: 軸最後の通り芯ガード（ユーザー要望で新設。中心化ガードと同じ
 // isLastGridOnAxis判定を共有する多層防御——UIのグレー化を回避して呼ばれても最終的にここで拒否する）----
 
-test('deleteCenterLineWithUndo: 同軸に他の通り芯があれば（軸最後の1本ではない）通り芯の削除は従来どおり成功しtoast:null', () => {
+test('deleteCenterLineWithUndo: 同軸に他の通り芯があれば（軸最後の1本ではない）通り芯の削除は従来どおり成功しtoast:null', async () => {
   const { project, graph } = makeProjectWithGraph();
   project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
   project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: true, discipline: Discipline.STRUCT });
@@ -136,7 +138,7 @@ test('deleteCenterLineWithUndo: 同軸に他の通り芯があれば（軸最後
   project.structGraph.addCenterLine(CenterLineType.VERTICAL, 5000, { labeled: true, discipline: Discipline.STRUCT }); // 同軸に他の通り芯
   const clId = cl.id;
 
-  const { toast } = deleteCenterLineWithUndo(graph, project, cl);
+  const { toast } = await deleteCenterLineWithUndo(graph, project, cl);
 
   assert.equal(toast, null);
   assert.equal(project.structGraph.shapeMap.has(clId), false, '削除される');
@@ -145,26 +147,26 @@ test('deleteCenterLineWithUndo: 同軸に他の通り芯があれば（軸最後
   assert.ok(project.structGraph.shapeMap.has(clId), 'undoで復元される');
 });
 
-test('deleteCenterLineWithUndo異常系: 軸最後の通り芯はtoast:ERR_CL_DELETE_LAST_GRIDで拒否されグラフ無変更・undoも積まれない', () => {
+test('deleteCenterLineWithUndo異常系: 軸最後の通り芯はtoast:ERR_CL_DELETE_LAST_GRIDで拒否されグラフ無変更・undoも積まれない', async () => {
   const { project, graph } = makeProjectWithGraph();
   project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
   project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: true, discipline: Discipline.STRUCT });
   const cl = project.structGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: true, discipline: Discipline.STRUCT }); // VERTICAL軸唯一の通り芯
   const beforeTop = undoManager.peekUndo();
 
-  const { toast } = deleteCenterLineWithUndo(graph, project, cl);
+  const { toast } = await deleteCenterLineWithUndo(graph, project, cl);
 
   assert.equal(toast, ERR_CL_DELETE_LAST_GRID);
   assert.equal(project.structGraph.shapeMap.has(cl.id), true, '削除されずstructGraphに残る');
   assert.equal(undoManager.peekUndo(), beforeTop, 'undoは積まれない');
 });
 
-test('deleteCenterLineWithUndo: 中心線（非struct）の削除は同軸の通り芯本数に関係なく従来どおり成功する', () => {
+test('deleteCenterLineWithUndo: 中心線（非struct）の削除は同軸の通り芯本数に関係なく従来どおり成功する', async () => {
   const { project, graph } = makeProjectWithGraph();
   // 直交・同軸とも通り芯を1本も用意しない（同軸の通り芯本数=0でも中心線の削除は無関係のはず）。
   const cl = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
 
-  const { toast } = deleteCenterLineWithUndo(graph, project, cl);
+  const { toast } = await deleteCenterLineWithUndo(graph, project, cl);
 
   assert.equal(toast, null, '中心線は軸最後ガードの対象外');
   assert.equal(graph.shapeMap.has(cl.id), false, '削除される');
@@ -177,7 +179,7 @@ test('deleteCenterLineWithUndo: 中心線（非struct）の削除は同軸の通
 // centerLineKind(cl)==='struct'まで見るため、この異常値は通り芯扱いされず（削除は
 // excludedWallBeamAxes記録＋removeCenterLine経由の通常分岐になる）、軸最後の1本ガードの対象にも
 // ならない。
-test('【旧データ限定・種別ベースへ統一】deleteCenterLineWithUndo: {labeled:true, discipline:STRUCT, lineType:dashed}の異常値は通り芯扱いされず、軸最後の1本でも削除できる（移行前はstructGraph側の通り芯として扱いERR_CL_DELETE_LAST_GRIDで拒否していた）', () => {
+test('【旧データ限定・種別ベースへ統一】deleteCenterLineWithUndo: {labeled:true, discipline:STRUCT, lineType:dashed}の異常値は通り芯扱いされず、軸最後の1本でも削除できる（移行前はstructGraph側の通り芯として扱いERR_CL_DELETE_LAST_GRIDで拒否していた）', async () => {
   const { project, graph } = makeProjectWithGraph();
   project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
   project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: true, discipline: Discipline.STRUCT });
@@ -185,10 +187,390 @@ test('【旧データ限定・種別ベースへ統一】deleteCenterLineWithUnd
   const legacy = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: true, discipline: Discipline.STRUCT, lineType: 'dashed' });
   assert.equal(centerLineKind(legacy), 'aux', '前提: lineType=dashedなのでaux種別（labeled:true・discipline:STRUCTの異常値）');
 
-  const { toast } = deleteCenterLineWithUndo(graph, project, legacy);
+  const { toast } = await deleteCenterLineWithUndo(graph, project, legacy);
 
   assert.equal(toast, null, '移行前はisStruct=trueとなり軸最後の1本ガード（ERR_CL_DELETE_LAST_GRID）で拒否していたが、移行後は通常のCL削除経路（軸最後ガードの対象外）になる');
   assert.equal(graph.shapeMap.has(legacy.id), false, '削除される');
+});
+
+// ---- deleteCenterLineWithUndo: 通り芯削除 → 構造同期リスナー（段階(a)・案P） ----
+// setCenterLineStructuralListener はテスト間で必ず finally で null に戻す（他テストへ漏らさない）。
+
+test('deleteCenterLineWithUndo: 通り芯削除は構造同期リスナーを(graph, project, "all")で呼ぶ（確定1回・undo1回・redo1回＝計3回）', async () => {
+  const { project, graph } = makeProjectWithGraph();
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: true, discipline: Discipline.STRUCT });
+  const cl = project.structGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: true, discipline: Discipline.STRUCT });
+  project.structGraph.addCenterLine(CenterLineType.VERTICAL, 5000, { labeled: true, discipline: Discipline.STRUCT }); // isLastGridOnAxis対策
+
+  const calls = [];
+  setCenterLineStructuralListener((g, p, scope) => calls.push({ g, p, scope }));
+  try {
+    const { toast } = await deleteCenterLineWithUndo(graph, project, cl);
+    assert.equal(toast, null);
+    assert.equal(calls.length, 1, '削除確定直後に1回呼ばれるはず');
+    assert.equal(calls[0].g, graph);
+    assert.equal(calls[0].p, project);
+    assert.equal(calls[0].scope, 'all', '通り芯（FLOOR_SHARED_KINDS）はstructuralSyncScopeOfKind経由で常にall');
+
+    undoManager.undo();
+    assert.equal(calls.length, 2, 'undoでも1回呼ばれるはず');
+    assert.equal(calls[1].scope, 'all');
+
+    undoManager.redo();
+    assert.equal(calls.length, 3, 'redoでも1回呼ばれるはず');
+    assert.equal(calls[2].scope, 'all');
+  } finally {
+    setCenterLineStructuralListener(null);
+  }
+});
+
+test('【失敗系】deleteCenterLineWithUndo: 構造同期リスナー未設定（null）でも例外なく通り芯を削除・undoできる', async () => {
+  const { project, graph } = makeProjectWithGraph();
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: true, discipline: Discipline.STRUCT });
+  const cl = project.structGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: true, discipline: Discipline.STRUCT });
+  project.structGraph.addCenterLine(CenterLineType.VERTICAL, 5000, { labeled: true, discipline: Discipline.STRUCT });
+  const clId = cl.id;
+
+  await assert.doesNotReject(() => deleteCenterLineWithUndo(graph, project, cl));
+  assert.equal(project.structGraph.shapeMap.has(clId), false);
+  assert.doesNotThrow(() => undoManager.undo());
+  assert.equal(project.structGraph.shapeMap.has(clId), true);
+});
+
+test('【失敗系】deleteCenterLineWithUndo: 軸最後の通り芯を拒否したときは構造同期リスナーを呼ばない', async () => {
+  const { project, graph } = makeProjectWithGraph();
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: true, discipline: Discipline.STRUCT });
+  const cl = project.structGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: true, discipline: Discipline.STRUCT }); // VERTICAL軸唯一
+
+  let calls = 0;
+  setCenterLineStructuralListener(() => { calls++; });
+  try {
+    const { toast } = await deleteCenterLineWithUndo(graph, project, cl);
+    assert.equal(toast, ERR_CL_DELETE_LAST_GRID);
+    assert.equal(calls, 0);
+  } finally {
+    setCenterLineStructuralListener(null);
+  }
+});
+
+test('deleteCenterLineWithUndo: 非通り芯（中心線・補助線・梁芯）の削除は構造同期リスナーを呼ばない（段階(a)。段階(b)で反転させる仕様のピン留め）', async () => {
+  const graph = makeGraph();
+  const centerCL = graph.addCenterLine(CenterLineType.VERTICAL,   1000, { labeled: false, discipline: Discipline.ARCH });
+  const auxCL    = graph.addCenterLine(CenterLineType.HORIZONTAL, 2000, { labeled: false, lineType: 'dashed' });
+  const beamCL   = graph.addCenterLine(CenterLineType.VERTICAL,   3000, { labeled: false, discipline: Discipline.FUSE });
+  const project = {};
+
+  let calls = 0;
+  setCenterLineStructuralListener(() => { calls++; });
+  try {
+    await deleteCenterLineWithUndo(graph, project, centerCL);
+    await deleteCenterLineWithUndo(graph, project, auxCL);
+    await deleteCenterLineWithUndo(graph, project, beamCL);
+    assert.equal(calls, 0, '段階(a)は通り芯以外で構造同期リスナーを呼ばないはず');
+  } finally {
+    setCenterLineStructuralListener(null);
+  }
+});
+
+test('deleteCenterLineWithUndo: 通り芯を参照する自階の柱・梁・基礎は削除直後に撤去され、undoで復元される（removeDependentsOfCenterLine）', async () => {
+  const { project, graph } = makeProjectWithGraph();
+  const y0 = project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+  const y1 = project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: true, discipline: Discipline.STRUCT });
+  const cl = project.structGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: true, discipline: Discipline.STRUCT });
+  project.structGraph.addCenterLine(CenterLineType.VERTICAL, 5000, { labeled: true, discipline: Discipline.STRUCT }); // isLastGridOnAxis対策
+
+  const column  = graph.addColumn(StructuralMaterialType.WOOD, 'SEC-COL', cl, y0);
+  const beam    = graph.addBeam(StructuralMaterialType.WOOD, 'SEC-BEAM', cl, true, y0, y1);
+  const footing = graph.addFooting('independent', 'SEC-FTG', cl, y0);
+
+  const { toast } = await deleteCenterLineWithUndo(graph, project, cl);
+
+  assert.equal(toast, null);
+  assert.equal(graph.columnMap.has(column.id), false, '通り芯を参照する柱は削除直後に撤去されるはず');
+  assert.equal(graph.beamMap.has(beam.id), false, '通り芯を参照する梁は削除直後に撤去されるはず');
+  assert.equal(graph.footingMap.has(footing.id), false, '通り芯を参照する基礎は削除直後に撤去されるはず');
+
+  undoManager.undo();
+  assert.equal(graph.columnMap.has(column.id), true, 'undoで柱が復元されるはず');
+  assert.equal(graph.beamMap.has(beam.id), true, 'undoで梁が復元されるはず');
+  assert.equal(graph.footingMap.has(footing.id), true, 'undoで基礎が復元されるはず');
+});
+
+// ---- deleteCenterLineWithUndo: 通り芯削除の他階への detach 伝播（案P。複製ではなく撤去を先に伝播する
+// 型は降格 propagateDemotedCenterLine と同じ）。本番同型 peek（下記 withProductionPeek。L1138付近で
+// 定義・関数宣言のためホイストされ、ここから参照できる）を使う。----
+
+test('deleteCenterLineWithUndo: 他階で通り芯を軸に持つ壁は削除され、片端だけ参照する壁は端点ルールで残る（本番同型peek）', async () => {
+  const { project, p1, p2, y0, y3, cl } = makeTwoFloorsWithGridCL();
+  const clId = cl.id;
+  const gridV2 = [...project.structGraph.centerLines].find(c => c.centerLineType === CenterLineType.VERTICAL && c.value === 5000);
+
+  const axisWall = p2.addWall(cl, 0, true, y0, 0, y3, 0, { isExteriorWall: false }); // clを軸に持つ壁（削除される）
+  const axisWallId = axisWall.id;
+  const hAxisCL = p2.addCenterLine(CenterLineType.HORIZONTAL, 1500, { labeled: false, discipline: Discipline.ARCH });
+  const endpointWall = p2.addWall(hAxisCL, 0, false, cl, 0, gridV2, 0, { isExteriorWall: false }); // clを片端(clStart)に持つ壁（端点ルールで残る）
+  const endpointWallId = endpointWall.id;
+
+  const store = new Map([[p2.plane.id, serializeGraph(p2)]]);
+  const saveFloorFn = async (planeId, bytes) => { store.set(planeId, bytes); };
+
+  const { toast } = await withProductionPeek(project, store, () =>
+    deleteCenterLineWithUndo(p1, project, cl, { saveFloorFn })
+  );
+
+  assert.equal(toast, null);
+  const decoded = decodeFloor(project, p2.plane, store.get(p2.plane.id));
+  assert.equal(decoded.walls.length, 1, '軸参照の壁は削除され、片端参照の壁だけ残るはず');
+  assert.equal(decoded.walls[0].id, endpointWallId);
+  assert.equal(decoded.walls.some(w => w.id === axisWallId), false, '通り芯を軸に持つ壁は削除されるはず');
+  assert.notEqual(decoded.walls[0].clStart.id, clId, '端点ルールでclStartは削除された通り芯から繰り上がるはず');
+});
+
+test('deleteCenterLineWithUndo: undoで他階の保存バイトが削除前へ・redoで削除後へ戻る（本番同型peek）', async () => {
+  const { project, p1, p2, y0, y3, cl } = makeTwoFloorsWithGridCL();
+  const clId = cl.id;
+
+  const wall = p2.addWall(cl, 0, true, y0, 0, y3, 0, { isExteriorWall: false });
+  const wallId = wall.id;
+
+  const store = new Map([[p2.plane.id, serializeGraph(p2)]]);
+  const saved = [];
+  const saveFloorFn = async (planeId, bytes) => { saved.push({ planeId, bytes }); store.set(planeId, bytes); };
+
+  await withProductionPeek(project, store, async () => {
+    const { toast } = await deleteCenterLineWithUndo(p1, project, cl, { saveFloorFn });
+    assert.equal(toast, null);
+    assert.equal(saved.length, 1, '削除確定時に1回保存される');
+    assert.equal(decodeFloor(project, p2.plane, saved[0].bytes).walls.some(w => w.id === wallId), false, '削除直後の保存バイトは壁が消えた状態');
+
+    saved.length = 0;
+    undoManager.undo();
+    assert.equal(saved.length, 1, 'undoでp2への書き戻しが記録される');
+    assert.equal(decodeFloor(project, p2.plane, saved[0].bytes).walls.some(w => w.id === wallId), true, 'undoで書き戻すバイトは削除前（壁が残る）状態');
+    assert.equal(project.structGraph.shapeMap.has(clId), true, 'undoでstructGraph側の通り芯も復元される');
+
+    saved.length = 0;
+    undoManager.redo();
+    assert.equal(saved.length, 1, 'redoでp2への書き戻しが記録される');
+    assert.equal(decodeFloor(project, p2.plane, saved[0].bytes).walls.some(w => w.id === wallId), false, 'redoで書き戻すバイトは削除後（壁が消えた）状態');
+  });
+});
+
+test('deleteCenterLineWithUndo: 伝播の2階目でsaveFloorFnがthrowしたら、1階目はbeforeへrollbackされ、自階・structGraphは無変更・undoも積まれず、rejectする', async () => {
+  const project = new Project('proj', 'test');
+  const { graph: p1 } = project.addPlane(0,    '1階', 'p1');
+  const { graph: p2 } = project.addPlane(3000, '2階', 'p2');
+  const { graph: p3 } = project.addPlane(6000, '3階', 'p3');
+  const y0 = project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+  const y3 = project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: true, discipline: Discipline.STRUCT });
+  const cl = project.structGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: true, discipline: Discipline.STRUCT });
+  project.structGraph.addCenterLine(CenterLineType.VERTICAL, 5000, { labeled: true, discipline: Discipline.STRUCT }); // isLastGridOnAxis対策
+  const clId = cl.id;
+
+  p2.addWall(cl, 0, true, y0, 0, y3, 0, { isExteriorWall: false });
+  p3.addWall(cl, 0, true, y0, 0, y3, 0, { isExteriorWall: false });
+
+  const store = new Map([[p2.plane.id, serializeGraph(p2)], [p3.plane.id, serializeGraph(p3)]]);
+  const calls = [];
+  const saveFloorFn = async (planeId, bytes) => {
+    calls.push(planeId);
+    if (planeId === p3.plane.id) throw new Error('p3 save failed');
+    store.set(planeId, bytes);
+  };
+  const beforeTop = undoManager.peekUndo();
+
+  // m-10・QA指摘: 伝播が失敗した経路では構造同期リスナーが1回も呼ばれないことも確認する
+  // （通り芯削除が確定しないまま構造再計算が走るのは誤り）。
+  let listenerCalls = 0;
+  setCenterLineStructuralListener(() => { listenerCalls++; });
+  try {
+    await withProductionPeek(project, store, async () => {
+      await assert.rejects(() => deleteCenterLineWithUndo(p1, project, cl, { saveFloorFn }), /p3 save failed/);
+
+      assert.equal(project.structGraph.shapeMap.has(clId), true, 'structGraph側の通り芯は未変更');
+      assert.equal(p1.shapeMap.has(clId), false, '自階（structGraph参照のためshapeMapには元々無い）は無変更');
+      assert.equal(undoManager.peekUndo(), beforeTop, 'undoは積まれない');
+
+      assert.equal(calls.filter(id => id === p2.plane.id).length, 2, 'p2は伝播→ロールバックの2回saveFloorFnが呼ばれる');
+      assert.equal(calls.filter(id => id === p3.plane.id).length, 1, 'p3は伝播の1回（例外で失敗）だけ');
+      assert.equal(listenerCalls, 0, '伝播が失敗した削除では構造同期リスナーは呼ばれないはず');
+
+      const decodedP2 = decodeFloor(project, p2.plane, store.get(p2.plane.id));
+      assert.equal(decodedP2.walls.some(w => w.axisCL.id === clId), true, 'p2はロールバックされ壁が残ったまま（beforeに書き戻された）');
+    });
+  } finally {
+    setCenterLineStructuralListener(null);
+  }
+});
+
+test('【失敗系】deleteCenterLineWithUndo: 伝播のawait中に同じ通り芯が消えていたらrollbackしてtoast:null・undoは積まれない', async () => {
+  const { project, p1, p2, y0, y3, cl } = makeTwoFloorsWithGridCL();
+  const clId = cl.id;
+  p2.addWall(cl, 0, true, y0, 0, y3, 0, { isExteriorWall: false });
+
+  const store = new Map([[p2.plane.id, serializeGraph(p2)]]);
+  let intruded = false;
+  const saveCalls = [];
+  // IDB待ち（saveFloorFn の await）の間に、この通り芯自体が別経路で先に削除された状況を模擬する。
+  // project.structGraphから実際にclを取り除くため、以降このprojectでcl参照を復号する
+  // （decodeFloor等・restoreGraph往復はapplySnapshotの既定寸法線補完で非バイト同一になる既知の
+  // 性質もあるため）resolveCLが解決できず壁ごと落ちてしまう——本テストは toast・undo・ロールバックの
+  // saveFloorFn呼び出し回数（propagation 1回＋rollback 1回＝計2回）で確認する（デコード・バイト比較に頼らない）。
+  const saveFloorFn = async (planeId, bytes) => {
+    saveCalls.push(planeId);
+    store.set(planeId, bytes);
+    if (!intruded) {
+      intruded = true;
+      project.structGraph.removeCenterLine(clId);
+    }
+  };
+  const beforeTop = undoManager.peekUndo();
+
+  // m-10・QA指摘: rollbackされた削除では構造同期リスナーが呼ばれないことも確認する。
+  let listenerCalls = 0;
+  setCenterLineStructuralListener(() => { listenerCalls++; });
+  try {
+    await withProductionPeek(project, store, async () => {
+      const { toast } = await deleteCenterLineWithUndo(p1, project, cl, { saveFloorFn });
+
+      assert.equal(toast, null);
+      assert.equal(undoManager.peekUndo(), beforeTop, 'undoは積まれない');
+      assert.deepEqual(saveCalls, [p2.plane.id, p2.plane.id], 'p2への保存はpropagation 1回＋rollback 1回の計2回のはず');
+      assert.equal(listenerCalls, 0, 'rollbackされた削除では構造同期リスナーは呼ばれないはず');
+    });
+  } finally {
+    setCenterLineStructuralListener(null);
+  }
+});
+
+test('【失敗系・M-2】deleteCenterLineWithUndo: 伝播のawait中にアクティブ階が切り替わったらrollbackしてtoast:null・undoは積まれず構造同期も呼ばれない', async () => {
+  const { project, p1, p2, y0, y3, cl } = makeTwoFloorsWithGridCL();
+  const clId = cl.id;
+  p2.addWall(cl, 0, true, y0, 0, y3, 0, { isExteriorWall: false });
+
+  const store = new Map([[p2.plane.id, serializeGraph(p2)]]);
+  let switched = false;
+  const saveCalls = [];
+  // IDB待ち（saveFloorFn の await）の間に、historyナビゲーション等でアクティブ階が切り替わった
+  // 状況を模擬する（M-2・QA指摘）——project.activeGraph は project.addPlane の順に決まる
+  // activePlaneId で解決されるため、activePlaneId を直接書き換えて切替を模す。
+  const saveFloorFn = async (planeId, bytes) => {
+    saveCalls.push(planeId);
+    store.set(planeId, bytes);
+    if (!switched) {
+      switched = true;
+      project.activePlaneId = p2.plane.id;
+    }
+  };
+  const beforeTop = undoManager.peekUndo();
+  let listenerCalls = 0;
+  setCenterLineStructuralListener(() => { listenerCalls++; });
+  try {
+    await withProductionPeek(project, store, async () => {
+      const { toast } = await deleteCenterLineWithUndo(p1, project, cl, { saveFloorFn });
+
+      assert.equal(toast, null, '階切替後は削除を確定せずtoast:nullで戻るはず');
+      assert.equal(project.structGraph.shapeMap.has(clId), true, 'structGraph側の通り芯は未変更');
+      assert.equal(p1.shapeMap.has(clId), false, '自階（structGraph参照）は無変更');
+      assert.equal(undoManager.peekUndo(), beforeTop, 'undoは積まれない');
+      // n-1・QA指摘の修正後: rollback時点でp2が既にアクティブなため、rollbackFloorRecordsは
+      // IDB（saveFloorFn）ではなく生きているp2グラフへ直接restoreGraphする——saveFloorFnはpropagation
+      // の1回だけ（rollback分は増えない）。
+      assert.deepEqual(saveCalls, [p2.plane.id], 'p2への保存はpropagationの1回だけのはず（rollbackはp2がアクティブなためrestoreGraph経由になる）');
+      assert.equal(listenerCalls, 0, '階切替で中止された削除では構造同期リスナーは呼ばれないはず');
+    });
+  } finally {
+    setCenterLineStructuralListener(null);
+    project.activePlaneId = p1.plane.id;
+  }
+});
+
+test('【失敗系・n-1】deleteCenterLineWithUndo: 伝播中にp2がアクティブへ切り替わり伝播後バイトが生きているグラフへ既に反映されていても、rollbackはIDBではなく生きているグラフへbeforeを書き戻し壁が残る', async () => {
+  const { project, p1, p2, y0, y3, cl } = makeTwoFloorsWithGridCL();
+  const wall = p2.addWall(cl, 0, true, y0, 0, y3, 0, { isExteriorWall: false });
+  const wallId = wall.id;
+
+  const store = new Map([[p2.plane.id, serializeGraph(p2)]]);
+  let switched = false;
+  const saveCalls = [];
+  // saveFloorFn の await 中に、他の経路（ユーザー操作等）がp2へ切り替え、伝播後（detach後）の
+  // バイトを「生きているp2グラフ」へ既に読み込んだ状況を模す（floorSwapManager.activate相当。
+  // n-1・QA指摘: この状況でrollbackがIDB（saveFloorFn）にしか書き戻さないと、生きているp2の
+  // グラフは detach 後のまま——壁が undo も効かずに消えたままになる）。restoreGraph は
+  // switched フラグで1回だけ行う（rollback呼び出し時に再度書き換わらないようにするため——
+  // 本番のsaveFloorはIDBへ書くだけで生きているグラフには触れないのと同じにする）。
+  const saveFloorFn = async (planeId, bytes) => {
+    saveCalls.push(planeId);
+    store.set(planeId, bytes);
+    if (!switched) {
+      switched = true;
+      restoreGraph(p2, bytes);
+      project.activePlaneId = p2.plane.id;
+    }
+  };
+  const beforeTop = undoManager.peekUndo();
+
+  try {
+    await withProductionPeek(project, store, async () => {
+      const { toast } = await deleteCenterLineWithUndo(p1, project, cl, { saveFloorFn });
+
+      assert.equal(toast, null, '階切替後は削除を確定せずtoast:nullで戻るはず（M-2ガード）');
+      assert.equal(undoManager.peekUndo(), beforeTop, 'undoは積まれない');
+      // n-1の修正により、rollback時点でp2は既にアクティブなためsaveFloorFn（IDB）ではなく
+      // restoreGraph（生きているグラフへ直接）で書き戻る——saveFloorFnは伝播の1回だけ。
+      assert.deepEqual(saveCalls, [p2.plane.id], 'p2への保存は伝播の1回だけのはず（rollbackはrestoreGraph経由でsaveFloorFnを呼ばない）');
+      assert.equal(project.activeGraph, p2, '前提: rollback時点でp2がアクティブのはず');
+      assert.equal(p2.walls.some(w => w.id === wallId), true,
+        'rollback後、生きているp2グラフに壁が残るはず（n-1の修正が無いとIDBにしか書き戻らず、生きているグラフは detach 後のまま＝壁が消えたままになる）');
+    });
+  } finally {
+    project.activePlaneId = p1.plane.id;
+  }
+});
+
+test('【失敗系・m-2】deleteCenterLineWithUndo: 伝播のawait中に軸最後の1本になっていたらrollbackしtoast:ERR_CL_DELETE_LAST_GRIDで戻る', async () => {
+  const project = new Project('proj', 'test');
+  const { graph: p1 } = project.addPlane(0,    '1階', 'p1');
+  const { graph: p2 } = project.addPlane(3000, '2階', 'p2');
+  const y0 = project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+  const y3 = project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: true, discipline: Discipline.STRUCT });
+  const cl = project.structGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: true, discipline: Discipline.STRUCT });
+  // isLastGridOnAxis対策の「同軸もう1本」——これを伝播中の割り込みで消す。
+  const otherAxisCL = project.structGraph.addCenterLine(CenterLineType.VERTICAL, 5000, { labeled: true, discipline: Discipline.STRUCT });
+  const clId = cl.id, otherAxisId = otherAxisCL.id;
+
+  p2.addWall(cl, 0, true, y0, 0, y3, 0, { isExteriorWall: false });
+  const store = new Map([[p2.plane.id, serializeGraph(p2)]]);
+  let intruded = false;
+  const saveCalls = [];
+  const saveFloorFn = async (planeId, bytes) => {
+    saveCalls.push(planeId);
+    store.set(planeId, bytes);
+    if (!intruded) {
+      intruded = true;
+      project.structGraph.removeCenterLine(otherAxisId); // 同軸もう1本を消し、clを軸最後の1本にする
+    }
+  };
+  const beforeTop = undoManager.peekUndo();
+  let listenerCalls = 0;
+  setCenterLineStructuralListener(() => { listenerCalls++; });
+  try {
+    await withProductionPeek(project, store, async () => {
+      const { toast } = await deleteCenterLineWithUndo(p1, project, cl, { saveFloorFn });
+
+      assert.equal(toast, ERR_CL_DELETE_LAST_GRID);
+      assert.equal(project.structGraph.shapeMap.has(clId), true, '削除されずstructGraphに残る');
+      assert.equal(project.structGraph.shapeMap.has(otherAxisId), false, '割り込みで消した方は戻らない（このテストの前提操作）');
+      assert.equal(undoManager.peekUndo(), beforeTop, 'undoは積まれない');
+      assert.deepEqual(saveCalls, [p2.plane.id, p2.plane.id], 'p2への保存はpropagation 1回＋rollback 1回の計2回のはず');
+      assert.equal(listenerCalls, 0, '軸最後で拒否された削除では構造同期リスナーは呼ばれないはず');
+    });
+  } finally {
+    setCenterLineStructuralListener(null);
+  }
 });
 
 // ---- addCenterLineFromDialog ----

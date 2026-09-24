@@ -77,6 +77,50 @@ test('removeCenterLine: CL削除は参照する一般Shape（線・壁）も道�
   assert.equal(graph.shapeMap.has(unrelatedLine.id), true, 'vCLを参照しない垂直線は残るはず');
 });
 
+// ---- removeDependentsOfCenterLine（段階(a)・案P。_teardownCenterLineから抽出した公開action）----
+// 通り芯削除（transform/centerLineOps.js deleteCenterLineWithUndo）が structGraph 側の削除の前に
+// 階グラフ側で呼ぶ（structGraph の teardown は階グラフの部材に届かないため）。
+
+test('removeDependentsOfCenterLine: 参照する構造材・columnAxisOffsets・clEccentricitiesは撤去するが、Intersection・CL本体には触れない（_teardownCenterLineから抽出した本体）', () => {
+  const { graph, vCL, hCL1, column, beam, wall, footing, sleeve, line, archWall } = setupStructuralRefsFixture();
+  graph.setColumnAxisOffset(vCL.id, 15);
+  graph.setCLEccentricity(vCL.id, { mode: 'value', value: 50, side: 1, backing: '' });
+
+  const ixKey = `${vCL.id}:${hCL1.id}`;
+  assert.equal(graph.intersectionMap.has(ixKey), true, '前提: vCL×hCL1のIntersectionが存在する');
+
+  graph.removeDependentsOfCenterLine(vCL.id);
+
+  assert.equal(graph.columnMap.has(column.id), false, '柱は撤去されるはず');
+  assert.equal(graph.beamMap.has(beam.id), false, '梁は撤去されるはず');
+  assert.equal(graph.wallMap.has(wall.id), false, '耐力壁は撤去されるはず');
+  assert.equal(graph.footingMap.has(footing.id), false, '基礎は撤去されるはず');
+  assert.equal(graph.sleeveMap.has(sleeve.id), false, 'CL参照する梁ホストのスリーブは撤去されるはず');
+  assert.equal(graph.shapeMap.has(line.id), false, 'vCLを参照する垂直線は撤去されるはず');
+  assert.equal(graph.shapeMap.has(archWall.id), false, 'vCLを参照する壁は撤去されるはず');
+  assert.equal(graph.columnAxisOffsets.has(vCL.id), false, '柱芯オフセットのキーも撤去されるはず');
+  assert.equal(graph.clEccentricities.has(vCL.id), false, 'CL偏芯のキーも撤去されるはず');
+
+  // Intersectionには触れない（_removeIntersectionsForは呼ばない——_teardownCenterLineが続けて呼ぶ）。
+  assert.equal(graph.intersectionMap.has(ixKey), true, 'removeDependentsOfCenterLineはIntersectionを撤去しないはず');
+  // CL本体（CenterLine実体）もこのメソッドでは削除されない。
+  assert.equal(graph.shapeMap.has(vCL.id), true, 'CL本体はremoveDependentsOfCenterLineでは削除されない');
+});
+
+test('removeCenterLine: removeDependentsOfCenterLine抽出後もCL削除の結果は分割前と同一（Intersection・CL本体も道連れ削除される）', () => {
+  const { graph, vCL, hCL1, hCL2 } = setupStructuralRefsFixture();
+  const ixKey1 = `${vCL.id}:${hCL1.id}`;
+  const ixKey2 = `${vCL.id}:${hCL2.id}`;
+  assert.equal(graph.intersectionMap.has(ixKey1), true);
+  assert.equal(graph.intersectionMap.has(ixKey2), true);
+
+  graph.removeCenterLine(vCL.id);
+
+  assert.equal(graph.intersectionMap.has(ixKey1), false, 'removeCenterLineは従来どおりIntersectionも道連れ削除するはず');
+  assert.equal(graph.intersectionMap.has(ixKey2), false);
+  assert.equal(graph.shapeMap.has(vCL.id), false, 'CL本体も削除される');
+});
+
 test('hasExternalCenterLineReferences: 構造材（柱・梁・耐力壁・基礎・スリーブ）のいずれかがCLを参照していればtrue', () => {
   const { graph, vCL } = setupStructuralRefsFixture();
   assert.equal(graph.hasExternalCenterLineReferences(vCL.id), true);

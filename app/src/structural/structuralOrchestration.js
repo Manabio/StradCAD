@@ -473,6 +473,9 @@ export async function runStructuralModeSetup(targetGraph, project, { onToast, ct
 // アクティブな graph を再計算し、変化があれば undo に積む（通常の auto-save に乗る）。
 // pushUndo=false は階追加フロー用（withFloorAddUndo が全階分を1エントリで巻き戻すため個別には積まない）。
 // ctx（解決コンテキスト）は省略可能——受け取って下へ渡すだけで、この関数自身は生成しない。
+// 戻り値 { changed } は structural/structuralSync.js recomputeForStructuralSync（'all'の外側ループの
+// 収束判定）が読む——既存の呼び出し元（wallRefresh.js・本ファイルの他関数）は戻り値を読まないため
+// 追加は挙動不変（2026-09-25）。
 export async function recomputeActiveStructural(project, pushUndo = true, ctx = undefined) {
   const g = project.activeGraph;
   const mainStructure = g.structureOverride ?? project.structuralInfo.mainStructure;
@@ -484,6 +487,53 @@ export async function recomputeActiveStructural(project, pushUndo = true, ctx = 
       () => restoreGraph(g, after),
     );
   }
+  return { changed };
+}
+
+// ---- 構造同期オーケストレータ（structural/structuralSync.js）の recompute 実装 ----
+// scope（'active' < 'activeAndAbove' < 'all'）に応じて反映範囲を決める唯一の入口。
+// 'active': 建具の確定・undo/redo直後と同じ、自階だけの再計算（ctxなし・recomputeActiveStructuralと
+//   同一呼び出し。建具経路は本関数導入前と挙動不変）。
+// 'activeAndAbove': 段階(b)（中心線の削除・移動）で「自階＋上階だけ」の反映に置き換える予定——
+//   現段階(a)では対応する専用経路がまだ無いため、暫定的に'all'と同じ扱いにする（上位集合なので
+//   正しさは保たれる。取りこぼしは起きないが、他階すべてを触るぶん'activeAndAbove'本来より重い）。
+// 'all': 通り芯削除・追加・移動など全階へ効く変更の反映。手順は仕上げ脱出の反映
+//   （reflectStructuralAfterFinishExit）・構造モード突入（runStructuralModeSetup）と同じ形——
+//   (1) 自階を先に再計算する（壁が確定した自階が他階の点源になるため。他階の反映が自階の最新柱・梁を
+//   読めるよう、自階の計算を最初に済ませる）→ (2) 自階を保存する（reflectStructuralToOtherFloorsは
+//   他階をIDBからpeekするため、保存前だと自階の変化が他階の反映に伝わらない。runStructuralExitBoundary
+//   のQA2026-09-16と同じ理由）→ (3) 他階（＋屋根）へ反映する（reflectStructuralToOtherFloors）。
+//   外側ループ（在来木造のときだけ繰り返す）はrunStructuralModeSetupのB-1節と同じ理由——上階の柱は
+//   下階の梁の点源、下階の柱集合の変化は自階の3b柱・梁分割に1パス遅れて効くため、双方向の依存を
+//   1回のモード境界内で収束させる（非在来は必ず1回で抜ける）。他階同士の収束は
+//   reflectStructuralToOtherFloors内部のrepeatReflectPassUntilConvergedに乗る（ここでは自階と
+//   他階全体の1往復をこの外側ループが担う）。採番はreflectStructuralToOtherFloorsが全階分を
+//   1回だけ確定するため、ここで別途assignNumbers/applyNumbersは呼ばない。
+// 条件6（鍵nullかつ壁0本の未脱出階の保全）: この経路は壁を再生成しない（壁は追従・detachのみで
+//   確定済みの前提。.claude/plan-wall-region.md「壁再生成は要らない」節）ため壁鮮度ガードとは無関係——
+//   構造側の保全はwoodAutoFill.js（「壁が無い階は柱を生成も撤去もしない」2026-09-14裁定）でそのまま
+//   効く（REASONED: builder読了。壁0本の階はrecomputeStructuralForGraph内部のゲート・自動補完が
+//   柱を生成しないため、outer loopが回っても実害はない）。
+export async function recomputeForStructuralSync(project, scope, ctxArg = undefined) {
+  if (scope === 'active') {
+    await recomputeActiveStructural(project, false);
+    return;
+  }
+  // 'activeAndAbove' は段階(a)では専用経路が無いため 'all' と同じにフォールバックする（上記コメント）。
+  await withResolveContext(ctxArg, async (ctx) => {
+    const active = project.activeGraph;
+    const activeIsWallRuns = rulesFor(effectiveStructure(active, project)).beamPlacement === 'wallRuns';
+    for (let pass = 1; pass <= MAX_REFLECT_PASSES; pass++) {
+      const { changed } = await recomputeActiveStructural(project, false, ctx);
+      if (pass > 1 && !changed) break;
+      await saveVia(ctx, active.plane.id, serializeGraph(active), active);
+      await reflectStructuralToOtherFloors(project, ctx);
+      if (!activeIsWallRuns) break;
+      if (pass === MAX_REFLECT_PASSES) {
+        console.warn('[recomputeForStructuralSync] 反映が収束しませんでした（最後の状態のまま打ち切ります）');
+      }
+    }
+  });
 }
 
 // 非アクティブな実体階を peek して再計算し、変化があれば IDB に直接保存する。

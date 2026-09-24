@@ -98,7 +98,7 @@ function restoreOpening(graph, o, snap) {
  * 「建具の袖柱」参照）。coord1/coord2 は centerCoord(=refCL.effectiveValue+refOffset) と width から
  * 導出されるため、refCLId・refOffset・width のいずれかが変われば true。axisCL・isVertical は配置後
  * 不変なので比較しない。EDITABLE と同じファイルに置き、フィールドの増減時に一緒に見直せるようにする
- * （構造側 structural/openingStructuralSync.js は本ファイルを import しない。逆向きの依存も持たず、
+ * （構造側 structural/structuralSync.js は本ファイルを import しない。逆向きの依存も持たず、
  * 起動は geometryListener の依存注入だけで結ぶ）。
  */
 export function openingGeometryChanged(before, after) {

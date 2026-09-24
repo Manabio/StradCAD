@@ -13,7 +13,7 @@ import { findBracketingCLs, overhangMm } from '../snapGeometry.js';
 import { calcStep } from '../renderer/clMoveMath.js';
 import {
   orthoAnchorCandidatesForNew, allowsWallAnchor, extentAnchorStyle, isReferencedByAux,
-  sameCoordCounterparts, coexistenceAt, CL_KINDS,
+  sameCoordCounterparts, coexistenceAt, CL_KINDS, structuralSyncScopeOfKind,
 } from '../core/centerLineKindPolicy.js';
 import { mergeCenterLineChain, composeUndoWithMergeChain } from './centerLineMerge.js';
 import {
@@ -24,6 +24,14 @@ import { resolveSecondaryBeamsForAxis } from '../structural/beamAxisMove.js';
 import { renumberMembers } from '../structural/memberNumbering.js';
 import { autoFillSecondaryBeams, autoFillBeamEccentricity, UNSPECIFIED_STRUCTURE } from '../structural/structuralAutoFill.js';
 import { wallBeamAxisExcludeKey } from '../structural/wallBeamAxes.js';
+
+// 通り芯削除の直後・undo/redo直後に構造同期（structural/structuralSync.js）を起動するための
+// 依存注入フック（App.jsxがsetOpeningGeometryListenerと同じ作法で設定する）。未設定（構造モジュール
+// 未配線のテスト等）では何もしない。centerLineOps.js自身は構造同期モジュールをimportしない——
+// 起動は依存注入だけで結ぶ（openings/openingEdit.jsのsetOpeningGeometryListenerと同じ理由。
+// node:testからの単体import可能性・循環import回避）。
+let structuralSyncListener = null;
+export function setCenterLineStructuralListener(fn) { structuralSyncListener = fn; }
 
 // CL の pendingDelta を実座標に bake する（ref CL / 通常 CL 両対応）
 export function bakeCLValue(cl, newVal) {
@@ -92,10 +100,20 @@ export function commitCLMoveOp(graph, project, cl, originalValue) {
 // ---- CL削除（メニューの cl-del）----
 // 通り芯（isGridCenterLine＝labeled かつ種別struct）は structGraph 経由でスナップショット方式のUndo、
 // それ以外（中心線・補助線・梁芯）は excludedWallBeamAxes 記録（梁芯のみ）＋removeCenterLine。
-// 呼び出し側（App.jsx）はメニューを閉じる等の setState を行う。
+// 呼び出し側（App.jsx handleDeleteCenterLine）はメニューを閉じる等の setState を行う。
 // 戻り値 {toast}: 通り芯側のみ拒否がありうる（軸最後の1本）ため、promoteCenterToGridWithUndo等の
 // 変換系と同じ {toast: string|null} 契約に揃える——呼び出し側は toast があればトースト表示するだけでよい。
-export function deleteCenterLineWithUndo(graph, project, cl) {
+//
+// 通り芯削除は他階（検討・屋根を含む）への detach 伝播（transform/centerLineFloorSync.js
+// propagateGridCenterLineDeletion。IDB読み書きを伴う）と、構造同期（structural/structuralSync.js。
+// setCenterLineStructuralListener経由の依存注入）を伴うため async 化した（案P・2026-09-25裁定。
+// 非通り芯分岐にIDB・構造同期は無いが、関数全体をasyncにする機械的な波及を受ける）。
+// centerLineFloorSync.js は動的 import（IndexedDBに連鎖するため、centerLineOps.js を node:test から
+// 静的 import できる現状を壊さない——昇格・降格（promoteCenterToGridWithUndo/demoteGridToCenterWithUndo）
+// と同じ理由）。
+// @param {object} [opts] - opts.saveFloorFn はテスト用の差し替え（既定値はcenterLineFloorSync.js側のsaveFloor）。
+// @returns {Promise<{ toast: string|null }>}
+export async function deleteCenterLineWithUndo(graph, project, cl, opts = {}) {
   const isStruct = isGridCenterLine(cl);
   if (isStruct) {
     // 軸最後の通り芯は削除できない（ユーザー要望。中心線化ガードERR_CL_CONVERT_LAST_GRIDと同じ
@@ -105,42 +123,96 @@ export function deleteCenterLineWithUndo(graph, project, cl) {
     // 問わず呼ぶため、RADIALの通り芯に対しても呼ばれうるが、実際にはUIから到達不能
     // （centerLineConvert.test.jsの【到達不能経路・軸選択の正常化】参照）。
     if (isLastGridOnAxis(graph, cl)) return { toast: ERR_CL_DELETE_LAST_GRID };
+
+    // 案P（採用）: 他階の detach を削除の前にundo付きで伝播する（降格の「複製→移籍」と同じ型）。
+    // 通り芯が project.structGraph に残っている間に他階を peek しないと、他階の壁の
+    // axisCL/clStart/clEnd が graphSnapshot.js の resolveCL で解決できず、復元時に黙って捨てられる
+    // （propagateGridCenterLineDeletion のJSDoc・2026-09-17実測の教訓）。
+    const { propagateGridCenterLineDeletion, applyFloorUndoRecords, rollbackFloorRecords } =
+      await import('./centerLineFloorSync.js');
+    const floorRecords = [];
+    try {
+      await propagateGridCenterLineDeletion(project, graph, cl, {
+        undoRecords: floorRecords,
+        ...(opts.saveFloorFn ? { saveFloorFn: opts.saveFloorFn } : {}),
+      });
+    } catch (e) {
+      await rollbackFloorRecords(floorRecords, opts.saveFloorFn, project);
+      throw e;
+    }
+
+    // 他階への伝播（IDB書込を伴うawait）の間に、階が切り替わった・この通り芯自体が消えた・
+    // 軸最後の1本になった可能性を再評価する（await前の同期ガードだけでは足りない——N5とは逆に、
+    // ここは非同期処理を挟んだ「後」に再評価する）。階切替（graph!==project.activeGraph）を
+    // チェックするのは、伝播中にユーザー操作やhistoryナビゲーションでアクティブ階が変わりうるため
+    // ——切り替わった後に自階（もう非アクティブになったgraph）を書き換えるのは誤り（M-2・QA指摘）。
+    if (graph !== project.activeGraph || project.structGraph.shapeMap.get(cl.id) !== cl) {
+      await rollbackFloorRecords(floorRecords, opts.saveFloorFn, project);
+      return { toast: null };
+    }
+    if (isLastGridOnAxis(graph, cl)) {
+      await rollbackFloorRecords(floorRecords, opts.saveFloorFn, project);
+      return { toast: ERR_CL_DELETE_LAST_GRID };
+    }
+
     // 通り芯の削除 — structGraph をスナップショット経由で Undo。
     // structGraph の teardown は階グラフの図形に届かないため、アクティブ階グラフ側の
-    // 壁端・extent 参照を先に切り離す（端点ルール）。階グラフも Undo 対象に含める。
+    // 壁端・extent 参照を先に切り離し（端点ルール）、続けて自階の柱・梁・基礎等（この通り芯に
+    // dangling 参照のまま残る部材）も撤去する（removeDependentsOfCenterLine。段階(a)の主目的——
+    // 従来は detachFromCenterLine のみで、袖柱・この通り芯上の部材が孤立していた）。階グラフも
+    // Undo 対象に含める。
     const beforeArch = serializeGraph(graph);
     const before = serializeStructCLs(project.structGraph, project.structuralInfo, project.memberGroupLedger);
-    graph.detachFromCenterLine(cl.id);
-    project.structGraph.removeCenterLine(cl.id);
+    const clId = cl.id; // 削除前に控える——undo/redoクロージャ・notifyはcl自体を参照しない
+    graph.detachFromCenterLine(clId);
+    graph.removeDependentsOfCenterLine(clId);
+    project.structGraph.removeCenterLine(clId);
     const afterArch = serializeGraph(graph);
     const after = serializeStructCLs(project.structGraph, project.structuralInfo, project.memberGroupLedger);
+
+    // 通り芯削除は種別ポリシーから導いたscope（通り芯＝FLOOR_SHARED_KINDSのため常に'all'）で
+    // 構造同期を起動する（structural/structuralSync.js。App.jsxがsetCenterLineStructuralListenerで
+    // 配線する）。建具と違い在来限定にしない（applies省略＝常に真。非在来のグリッド柱にも効くため）。
+    const scope = structuralSyncScopeOfKind(centerLineKind(cl));
+    const notify = () => structuralSyncListener?.(graph, project, scope);
+
+    const saveFloorFn = opts.saveFloorFn;
+    // amendは使わない（他階の復元→自階の復元→構造同期の順序を自分で制御するため）。
     undoManager.push(
       () => {
         restoreStructCLs(project.structGraph, project.structuralInfo, before, project.memberGroupLedger);
         restoreGraph(graph, beforeArch);
+        applyFloorUndoRecords(project, floorRecords, 'before', saveFloorFn);
+        notify();
       },
       () => {
         restoreStructCLs(project.structGraph, project.structuralInfo, after, project.memberGroupLedger);
         restoreGraph(graph, afterArch);
+        applyFloorUndoRecords(project, floorRecords, 'after', saveFloorFn);
+        notify();
       },
     );
-  } else {
-    const before = serializeGraph(graph);
-    // 梁芯CLの削除は「壁由来の梁芯自動生成」に対する明示的な手動削除として扱う——次回のモード境界
-    // 再計算で元の座標に再生成されないよう、座標ベースの除外集合へ記録する（壁の位置自体は削除しない
-    // ため、記録しないと自動生成が復活させてしまう）。キーは structural/wallBeamAxes.js と同じ形式。
-    runInAction(() => {
-      if (centerLineKind(cl) === 'beam') {
-        graph.excludedWallBeamAxes.add(wallBeamAxisExcludeKey(cl.centerLineType === CenterLineType.VERTICAL, cl.effectiveValue));
-      }
-      graph.removeCenterLine(cl.id);
-    });
-    const after = serializeGraph(graph);
-    undoManager.push(
-      () => restoreGraph(graph, before),
-      () => restoreGraph(graph, after),
-    );
+    notify();
+    return { toast: null };
   }
+
+  const before = serializeGraph(graph);
+  // 梁芯CLの削除は「壁由来の梁芯自動生成」に対する明示的な手動削除として扱う——次回のモード境界
+  // 再計算で元の座標に再生成されないよう、座標ベースの除外集合へ記録する（壁の位置自体は削除しない
+  // ため、記録しないと自動生成が復活させてしまう）。キーは structural/wallBeamAxes.js と同じ形式。
+  // 非通り芯（中心線・補助線・梁芯）の削除では構造同期リスナーを呼ばない（段階(a)の対象外。
+  // 段階(b)で中心線の削除を通り芯と同じ扱いにする——.claude/structural-model.md参照）。
+  runInAction(() => {
+    if (centerLineKind(cl) === 'beam') {
+      graph.excludedWallBeamAxes.add(wallBeamAxisExcludeKey(cl.centerLineType === CenterLineType.VERTICAL, cl.effectiveValue));
+    }
+    graph.removeCenterLine(cl.id);
+  });
+  const after = serializeGraph(graph);
+  undoManager.push(
+    () => restoreGraph(graph, before),
+    () => restoreGraph(graph, after),
+  );
   return { toast: null };
 }
 
