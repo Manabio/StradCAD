@@ -523,24 +523,6 @@ export async function commitUserEntries(kind, nextUser, prevUser, { saveFn }) {
   }
 }
 
-/**
- * ステップ6b（合わせ直し）: 文書同梱材を本体（catalogRegistry.js docDiffMap の
- * baseOrigin='user'|'builtin'の内容）に合わせ直す差分プラン（純関数。I/Oしない）。
- * key が文書同梱（doc）に無ければ日本語例外。差分が無ければ ok:false——このとき同キーの
- * user/builtinエントリの有無で理由を分ける（QA指摘Minor-3・2026-09-23）:
- *   - 同キーのuser/builtinが有る（=docDiffMap側で比較済み・内容が一致） → reason:'本体と同じ内容です'
- *   - 同キーのuser/builtinが無い（=新規追加材。docDiffMapは比較相手が無いため最初から対象外）
- *     → reason:'相手なし（合わせ直す先の本体エントリがありません）'
- * 差分があれば { ok: true, diffPairs, baseOrigin, baseEntry }——diffPairs は catalogDiffView.js の
- * diffPairs（[{field,label,from,to}]）で from=doc（現在の同梱内容）・to=baseEntry
- * （合わせ直す先の本体内容）（例:「厚 15 → 12.5」）。
- * 実際に doc から外す（removeDocEntry）・永続化は呼び出し側の責務——本関数はプランのみ返す。
- * @param {string} kind
- * @param {string} key
- * @param {{ builtinList: object[] }} args
- * @returns {{ ok: true, diffPairs: object[], baseOrigin: 'user'|'builtin', baseEntry: object }
- *         | { ok: false, reason: string }}
- */
 /** ステップ8i: 一括入力の衝突行の理由文言に使う出所ラベル（ui/CatalogMaintenancePanel.jsxのORIGIN_LABELSと同じ日本語）。 */
 const SECTION_IMPORT_ORIGIN_LABELS = Object.freeze({ doc: '同梱', user: 'ライブラリ', builtin: '標準' });
 
@@ -613,6 +595,24 @@ export function planBulkSectionImport(specText, { builtinList, parseSpecList }) 
   return { toAdd, skipped, errors };
 }
 
+/**
+ * ステップ6b（合わせ直し）: 文書同梱材を本体（catalogRegistry.js docDiffMap の
+ * baseOrigin='user'|'builtin'の内容）に合わせ直す差分プラン（純関数。I/Oしない）。
+ * key が文書同梱（doc）に無ければ日本語例外。差分が無ければ ok:false——このとき同キーの
+ * user/builtinエントリの有無で理由を分ける（QA指摘Minor-3・2026-09-23）:
+ *   - 同キーのuser/builtinが有る（=docDiffMap側で比較済み・内容が一致） → reason:'本体と同じ内容です'
+ *   - 同キーのuser/builtinが無い（=新規追加材。docDiffMapは比較相手が無いため最初から対象外）
+ *     → reason:'相手なし（合わせ直す先の本体エントリがありません）'
+ * 差分があれば { ok: true, diffPairs, baseOrigin, baseEntry }——diffPairs は catalogDiffView.js の
+ * diffPairs（[{field,label,from,to}]）で from=doc（現在の同梱内容）・to=baseEntry
+ * （合わせ直す先の本体内容）（例:「厚 15 → 12.5」）。
+ * 実際に doc から外す（removeDocEntry）・永続化は呼び出し側の責務——本関数はプランのみ返す。
+ * @param {string} kind
+ * @param {string} key
+ * @param {{ builtinList: object[] }} args
+ * @returns {{ ok: true, diffPairs: object[], baseOrigin: 'user'|'builtin', baseEntry: object }
+ *         | { ok: false, reason: string }}
+ */
 export function planRealign(kind, key, { builtinList }) {
   const def = kindDef(kind);
   const { doc, user } = overlayFor(kind);
@@ -631,6 +631,34 @@ export function planRealign(kind, key, { builtinList }) {
     baseOrigin: diff.baseOrigin,
     baseEntry: diff.baseEntry,
   };
+}
+
+/**
+ * ステップ14-A1（課題A1: 「合わせ直す」をkind汎用フックへ切り出す）: 複数キーぶんの
+ * planRealignをまとめて実行し、確認ダイアログ表示用の{key,name,plan}配列を組み立てる純関数
+ * （I/Oしない）。planRealignが例外を投げる場合（keyが文書同梱に無い等）は呼び出し側へ例外を
+ * 漏らさず { ok:false, reason: e.message } に包む。
+ * name は文書同梱（overlayFor(kind).doc）の同キーエントリを displayNameOf（catalogMatch.js）で
+ * 表示名にしたもの——同梱に該当エントリが無い、または name/label をどちらも持たない場合は
+ * key をそのまま名前として使う（displayNameOfは該当なしで空文字を返すため || key でまとめて拾う）。
+ * @param {string} kind
+ * @param {string[]} keys
+ * @param {{ builtinList: object[] }} args
+ * @returns {Array<{ key: string, name: string, plan: ReturnType<typeof planRealign> }>}
+ */
+export function realignPlansFor(kind, keys, { builtinList }) {
+  const def = kindDef(kind);
+  const { doc } = overlayFor(kind);
+  return keys.map(key => {
+    let plan;
+    try {
+      plan = planRealign(kind, key, { builtinList });
+    } catch (e) {
+      plan = { ok: false, reason: e.message };
+    }
+    const name = displayNameOf(doc.find(e => def.keyOf(e) === key)) || key;
+    return { key, name, plan };
+  });
 }
 
 // ================================================================

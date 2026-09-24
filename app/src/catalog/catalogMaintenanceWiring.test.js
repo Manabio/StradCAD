@@ -29,6 +29,39 @@ function extractBalancedBody(src, signature) {
   return src.slice(braceStart, i + 1);
 }
 
+// ステップ14-A1: structural/woodFraming.test.js 等と同じ趣旨のコメント除去（コメント文中の
+// 言及だけで「本体が呼んでいる」と誤検知しないよう、文字列リテラルは保持しつつ // と /* */ の
+// コメントだけを取り除く）。
+function stripComments(src) {
+  let out = '';
+  for (let i = 0; i < src.length;) {
+    const two = src.slice(i, i + 2);
+    if (two === '//') {
+      const nl = src.indexOf('\n', i);
+      i = nl === -1 ? src.length : nl;
+      continue;
+    }
+    if (two === '/*') {
+      const end = src.indexOf('*/', i + 2);
+      i = end === -1 ? src.length : end + 2;
+      continue;
+    }
+    const ch = src[i];
+    if (ch === '\'' || ch === '"' || ch === '`') {
+      let j = i + 1;
+      while (j < src.length && src[j] !== ch) {
+        j += src[j] === '\\' ? 2 : 1;
+      }
+      out += src.slice(i, Math.min(j + 1, src.length));
+      i = j + 1;
+      continue;
+    }
+    out += ch;
+    i += 1;
+  }
+  return out;
+}
+
 test('【不変条件・ステップ5】ui/HamburgerMenu.jsx: 「カタログ保守」項目（id: catalog-maintenance）を持つ', () => {
   const src = readSrc('ui/HamburgerMenu.jsx');
   assert.ok(
@@ -105,42 +138,93 @@ test('【不変条件・ステップ5】ui/CatalogMaintenancePanel.jsx: 純ロ�
   assert.ok(!/\bassertNoDuplicate\(/.test(src), 'CatalogMaintenancePanel.jsx が assertNoDuplicate を直接呼んでいる（catalogMaintenance.js経由に一本化する契約への退行）');
 });
 
-// ---- ステップ6b（合わせ直し）: 「本体の内容に合わせ直す」はcatalogMaintenance.js/catalogRegistry.js
-// 経由（.jsx側で差分判定・overlay操作を再実装しない）----
-test('【不変条件・ステップ6b】ui/CatalogMaintenancePanel.jsx: 「本体の内容に合わせ直す」はcatalog/catalogMaintenance.jsのplanRealignとcatalog/catalogRegistry.jsのremoveDocEntry経由', () => {
+// ---- ステップ14-A1（課題A1: 「合わせ直す」をkind汎用のuseRealignActionsフックへ切り出し、
+// 材料タブはそれに載せ替える）: フック本体・材料タブ本体（CatalogMaintenancePanel）をそれぞれ
+// 検査する（ファイル全体のwhole-source検査から絞り込む——コメント文中の言及だけで緑になる
+// 誤検知を防ぐ。旧・ステップ6b/QA指摘Minor-1/Minor-2の3テストを差し替え） ----
+test('【不変条件・ステップ14-A1】ui/CatalogMaintenancePanel.jsx: useRealignActionsフック本体はcatalog/catalogMaintenance.jsのrealignTargets/realignPlansForとcatalog/catalogRegistry.jsのremoveDocEntry(kind, …)・dirtyState.jsのmarkDirty()を呼ぶ', () => {
   const src = readSrc('ui/CatalogMaintenancePanel.jsx');
   assert.ok(/from ['"]\.\.\/catalog\/catalogMaintenance\.js['"]/.test(src), 'CatalogMaintenancePanel.jsx が catalog/catalogMaintenance.js を import していない');
-  assert.ok(/\bplanRealign\(/.test(src), 'CatalogMaintenancePanel.jsx が planRealign を呼んでいない');
   assert.ok(/from ['"]\.\.\/catalog\/catalogRegistry\.js['"]/.test(src), 'CatalogMaintenancePanel.jsx が catalog/catalogRegistry.js を import していない');
-  assert.ok(/\bremoveDocEntry\(/.test(src), 'CatalogMaintenancePanel.jsx が removeDocEntry を呼んでいない');
+  assert.ok(/from ['"]\.\.\/dirtyState\.js['"]/.test(src), 'CatalogMaintenancePanel.jsx が ../dirtyState.js を import していない');
+
+  const hookBody = extractBalancedBody(src, 'function useRealignActions(kind, { builtinList, allRows, onRealigned, onError } = {}) {');
+  assert.ok(hookBody, 'CatalogMaintenancePanel.jsx に useRealignActions フックが見つからない');
+  const hookCode = stripComments(hookBody); // コメント文中の言及だけでは緑にならないよう、実装本体だけを見る
+  assert.ok(/\brealignTargets\(/.test(hookCode), 'useRealignActions が realignTargets を呼んでいない');
+  assert.ok(/\brealignPlansFor\(/.test(hookCode), 'useRealignActions が realignPlansFor を呼んでいない');
+  assert.ok(/\bremoveDocEntry\(kind,/.test(hookCode), 'useRealignActions が removeDocEntry(kind, …) を呼んでいない');
+  assert.ok(/\bmarkDirty\(\)/.test(hookCode), 'useRealignActions が markDirty() を呼んでいない');
+
   // 差分判定（diffEntries/valuesEqual）はcatalogMatch.jsの責務——.jsxが直接importして再実装しない
-  // （docDiffMap/diffPairs/planRealignの間接経由に一本化する契約）。
+  // （docDiffMap/diffPairs/planRealign/realignPlansForの間接経由に一本化する契約）。
   assert.ok(
     !/from ['"]\.\.\/catalog\/catalogMatch\.js['"]/.test(src),
     'CatalogMaintenancePanel.jsx が catalog/catalogMatch.js を直接importしている（差分判定の直書きへの退行）',
   );
 });
 
-test('【不変条件・ステップ6b】ui/CatalogMaintenancePanel.jsx: 合わせ直し承認でdirtyState.jsのmarkDirtyを呼ぶ（removeDocEntryはoverlayのみ変えるI/O無し操作のため明示的にdirty化する）', () => {
+test('【不変条件・ステップ14-A1】ui/CatalogMaintenancePanel.jsx: 材料タブ本体（CatalogMaintenancePanel）はuseRealignActions(CatalogKind.MATERIAL, …)を呼び、<RealignConfirmBlockを1回だけ描く（一括ボタンのラベルに絞り込み無関係の旨を明記し、r.diffのfilterを直書きしない）', () => {
   const src = readSrc('ui/CatalogMaintenancePanel.jsx');
-  assert.ok(/from ['"]\.\.\/dirtyState\.js['"]/.test(src), 'CatalogMaintenancePanel.jsx が ../dirtyState.js を import していない');
-  assert.ok(/\bmarkDirty\(\)/.test(src), 'CatalogMaintenancePanel.jsx が markDirty() を呼んでいない');
-});
-
-// ---- QA指摘Minor（2026-09-23）: 一括対象の絞り込みはcatalogMaintenance.jsのrealignTargets経由 ----
-test('【不変条件・QA指摘Minor-1・2026-09-23】ui/CatalogMaintenancePanel.jsx: 一括「合わせ直す」対象はcatalog/catalogMaintenance.jsのrealignTargets経由（.jsx側でr.diffのfilterを直書きしない）', () => {
-  const src = readSrc('ui/CatalogMaintenancePanel.jsx');
-  assert.ok(/\brealignTargets\(/.test(src), 'CatalogMaintenancePanel.jsx が realignTargets を呼んでいない');
+  const body = extractBalancedBody(src, 'export function CatalogMaintenancePanel({ onClose }) {');
+  assert.ok(body, 'CatalogMaintenancePanel.jsx に CatalogMaintenancePanel コンポーネントが見つからない');
+  const code = stripComments(body); // コメント文中の言及だけでは緑にならないよう、実装本体だけを見る（QA指摘Major-1）
   assert.ok(
-    !/\.filter\(\s*r\s*=>\s*r\.diff\s*\)/.test(src),
-    'CatalogMaintenancePanel.jsx が r.diff の filter を直書きしている（realignTargets経由への一本化への退行）',
+    /useRealignActions\(CatalogKind\.MATERIAL,/.test(code),
+    'CatalogMaintenancePanel が useRealignActions(CatalogKind.MATERIAL, …) を呼んでいない',
   );
+  const realignBlockCount = (code.match(/<RealignConfirmBlock\b/g) ?? []).length;
+  assert.equal(realignBlockCount, 1, 'CatalogMaintenancePanel が <RealignConfirmBlock を1回だけ描いていない');
+  assert.ok(
+    !/\.filter\(\s*r\s*=>\s*r\.diff\s*\)/.test(code),
+    'CatalogMaintenancePanel が r.diff の filter を直書きしている（realignTargets経由への一本化への退行）',
+  );
+  assert.ok(/絞り込みに関わらず全件/.test(code), '一括ボタンのラベルに「絞り込みに関わらず全件」の文言が無い');
 });
 
-// ---- QA指摘Minor-2（2026-09-23）: 一括ボタンのラベルに絞り込み無関係の旨を明記 ----
-test('【不変条件・QA指摘Minor-2・2026-09-23】ui/CatalogMaintenancePanel.jsx: 一括「合わせ直す」ボタンのラベルに「絞り込みに関わらず全件」を明記する', () => {
+// ---- QA指摘Minor-2/Minor-3（2026-09-24再報告・ステップ14-A1）: 通知位置・onError不使用の固定 ----
+test('【不変条件・QA指摘Minor-3・ステップ14-A1】ui/CatalogMaintenancePanel.jsx: {realign.notice はフォームの外（{form && ( より前）に描かれる（フォームが開いていなくても完了・失敗通知が見える）', () => {
   const src = readSrc('ui/CatalogMaintenancePanel.jsx');
-  assert.ok(/絞り込みに関わらず全件/.test(src), 'CatalogMaintenancePanel.jsx の一括ボタンラベルに「絞り込みに関わらず全件」の文言が無い');
+  const body = extractBalancedBody(src, 'export function CatalogMaintenancePanel({ onClose }) {');
+  assert.ok(body, 'CatalogMaintenancePanel.jsx に CatalogMaintenancePanel コンポーネントが見つからない');
+  const code = stripComments(body);
+  const noticeIdx = code.indexOf('{realign.notice &&');
+  const formIdx = code.indexOf('{form && (');
+  assert.ok(noticeIdx >= 0, 'CatalogMaintenancePanel が {realign.notice && を描いていない');
+  assert.ok(formIdx >= 0, 'CatalogMaintenancePanel が {form && ( を描いていない');
+  assert.ok(noticeIdx < formIdx, 'realign.notice の表示位置が {form && ( より後ろにある（フォーム内へ後退している）');
+});
+
+test('【不変条件・QA指摘Minor-3・ステップ14-A1】ui/CatalogMaintenancePanel.jsx: useRealignActionsフック本体・handleMaterialRealigned本体はonLibraryChanged/handleLibraryChanged(を呼ばない（合わせ直しはユーザーライブラリを変えないため）', () => {
+  const src = readSrc('ui/CatalogMaintenancePanel.jsx');
+  const hookBody = extractBalancedBody(src, 'function useRealignActions(kind, { builtinList, allRows, onRealigned, onError } = {}) {');
+  assert.ok(hookBody, 'CatalogMaintenancePanel.jsx に useRealignActions フックが見つからない');
+  const hookCode = stripComments(hookBody);
+  assert.ok(!/onLibraryChanged/.test(hookCode), 'useRealignActions が onLibraryChanged を参照している（ユーザーライブラリを変えない操作のため渡さない契約への退行）');
+  assert.ok(!/handleLibraryChanged\(/.test(hookCode), 'useRealignActions が handleLibraryChanged( を呼んでいる');
+
+  const realignedBody = extractBalancedBody(src, 'function handleMaterialRealigned(keys) {');
+  assert.ok(realignedBody, 'CatalogMaintenancePanel.jsx に handleMaterialRealigned が見つからない');
+  const realignedCode = stripComments(realignedBody);
+  assert.ok(!/onLibraryChanged/.test(realignedCode), 'handleMaterialRealigned が onLibraryChanged を参照している');
+  assert.ok(!/handleLibraryChanged\(/.test(realignedCode), 'handleMaterialRealigned が handleLibraryChanged( を呼んでいる');
+});
+
+test('【不変条件・ステップ14-A1】ui/CatalogMaintenancePanel.jsx: handleMaterialRealignedは選択中の行が対象keysに含まれていればsetForm(null)で選択を外す', () => {
+  const src = readSrc('ui/CatalogMaintenancePanel.jsx');
+  const body = extractBalancedBody(src, 'function handleMaterialRealigned(keys) {');
+  assert.ok(body, 'CatalogMaintenancePanel.jsx に handleMaterialRealigned が見つからない');
+  const code = stripComments(body);
+  assert.ok(/keys\.includes\(selectedCode\)/.test(code), 'handleMaterialRealigned が keys.includes(selectedCode) を検査していない');
+  assert.ok(/setForm\(null\)/.test(code), 'handleMaterialRealigned が setForm(null) で選択を外していない');
+});
+
+test('【不変条件・QA指摘Minor-2・ステップ14-A1】ui/CatalogMaintenancePanel.jsx: handleSave本体はrealign.clearNotice()を呼ぶ（保存開始時に前回の合わせ直し完了通知を消す）', () => {
+  const src = readSrc('ui/CatalogMaintenancePanel.jsx');
+  const body = extractBalancedBody(src, 'async function handleSave() {');
+  assert.ok(body, 'CatalogMaintenancePanel.jsx に handleSave が見つからない');
+  const code = stripComments(body);
+  assert.ok(/realign\.clearNotice\(\)/.test(code), 'handleSave が realign.clearNotice() を呼んでいない');
 });
 
 test('【不変条件・ステップ5】materialData.js: CatalogMaintenancePanel.jsxからも動的importのみ（静的import禁止。独立チャンク維持）', () => {

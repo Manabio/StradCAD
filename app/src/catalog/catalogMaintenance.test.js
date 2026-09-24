@@ -5,7 +5,7 @@ import {
   buildMaterialEntry, duplicateMaterialEntry, validateMaterialEntry,
   upsertUserMaterialEntry, removeUserMaterialEntry, buildUserMaterialBundle, commitUserEntries,
   isEditableMaterialCategory, MATERIAL_CATEGORY, parseThicknessInput,
-  planRealign, realignTargets, planBulkSectionImport, formatReadonlyValue, formatCategoryLabel,
+  planRealign, realignPlansFor, realignTargets, planBulkSectionImport, formatReadonlyValue, formatCategoryLabel,
   rowEditState, lockedFieldsFor, planSaveEntry, planRevertToBuiltin, planRemoveUserEntry, applyCatalogEditPlan,
   materialExtraLockedFields, materialSaveMessage, catalogSaveMessage, lockedFieldReason,
   materialRowDisabledReason, removeMessageFor, backingClassDisplayFor,
@@ -555,6 +555,46 @@ test('【失敗系】planRealign: 文書同梱(doc)に無いキーは例外', ()
     () => planRealign(CatalogKind.MATERIAL, '999999999999', { builtinList: [] }),
     /文書同梱に無いキーです/,
   );
+});
+
+// ---- realignPlansFor（ステップ14-A1: 課題A1。複数キーぶんのplanRealignをまとめて実行する純関数）----
+test('realignPlansFor: 差分あり2件を渡すと両方ok:true・nameは文書同梱エントリのdisplayNameOf', () => {
+  const builtinA = material({ code: '301000000001', name: 'A', thickness: 12.5 });
+  const docA = material({ code: '301000000001', name: 'A', thickness: 15 });
+  const builtinB = material({ code: '301000000002', name: 'B', note: 'builtin' });
+  const docB = material({ code: '301000000002', name: 'B(doc)', note: 'doc' });
+  setOverlay(CatalogKind.MATERIAL, { doc: [docA, docB] });
+  const results = realignPlansFor(CatalogKind.MATERIAL, ['301000000001', '301000000002'], {
+    builtinList: [builtinA, builtinB],
+  });
+  assert.equal(results.length, 2);
+  assert.equal(results[0].key, '301000000001');
+  assert.equal(results[0].name, 'A');
+  assert.equal(results[0].plan.ok, true);
+  assert.deepEqual(results[0].plan.diffPairs, [{ field: 'thickness', label: '厚', from: 15, to: 12.5 }]);
+  assert.equal(results[1].key, '301000000002');
+  assert.equal(results[1].name, 'B(doc)');
+  assert.equal(results[1].plan.ok, true);
+});
+
+test('【失敗系・例外が外へ漏れない】realignPlansFor: 文書同梱(doc)に無いキーはok:falseでreasonが例外文言', () => {
+  setOverlay(CatalogKind.MATERIAL, { doc: [material({ code: '301000000001' })] });
+  const results = realignPlansFor(CatalogKind.MATERIAL, ['999999999999'], { builtinList: [] });
+  assert.equal(results.length, 1);
+  assert.deepEqual(results[0].plan, { ok: false, reason: '文書同梱に無いキーです: 999999999999' });
+  // 文書同梱に該当エントリが無いキーのnameは、doc.find(...)がundefinedになりdisplayNameOfが
+  // 空文字を返すため、keyそのものへフォールバックする（realignPlansForのname既定の経路）。
+  assert.equal(results[0].name, '999999999999');
+});
+
+test('realignPlansFor: nameの既定は文書同梱エントリのname/labelがどちらも空（displayNameOfが空文字）ならkeyそのもの', () => {
+  // material（catalogKinds.js）はnameを非空文字列に強制するためこのケースを作れない——
+  // fixtureSymbol（建具記号）はlabel:''がvalidateを通る（typeof検査のみ）ため、こちらで確認する。
+  const builtinEntry = { key: 'AW', label: '', category: 'fitting' };
+  const docEntry = { key: 'AW', label: '', category: 'fitting', mechanism: 'swing' };
+  setOverlay(CatalogKind.FIXTURE_SYMBOL, { doc: [docEntry] });
+  const results = realignPlansFor(CatalogKind.FIXTURE_SYMBOL, ['AW'], { builtinList: [builtinEntry] });
+  assert.equal(results[0].name, 'AW');
 });
 
 // ---- planBulkSectionImport（ステップ8i: 断面の規格文字列一括入力）----

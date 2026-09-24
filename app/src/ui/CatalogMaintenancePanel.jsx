@@ -14,7 +14,7 @@ import {
   buildKindTabs, buildMaterialRows, buildCatalogRows, collectKnownMaterialCodes, nextMaterialCode,
   buildMaterialEntry, duplicateMaterialEntry, validateMaterialEntry,
   upsertUserCatalogEntry, commitUserEntries,
-  planRealign, realignTargets, planBulkSectionImport, formatReadonlyValue, formatCategoryLabel,
+  realignPlansFor, realignTargets, planBulkSectionImport, formatReadonlyValue, formatCategoryLabel,
   isEditableMaterialCategory, parseThicknessInput, MATERIAL_CATEGORY, BACKING_CLASS_OPTIONS,
   rowEditState, lockedFieldsFor, planSaveEntry, planRevertToBuiltin, planRemoveUserEntry,
   applyCatalogEditPlan, materialExtraLockedFields, materialSaveMessage, catalogSaveMessage,
@@ -172,8 +172,9 @@ export function CatalogMaintenancePanel({ onClose }) {
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   // ステップ12b（削除確認の使用状況）: null | { status: 'loading'|'ready'|'error', usedKeys?: Set, message?: string }
   const [deleteUsage, setDeleteUsage] = useState(null);
-  // ステップ6b（合わせ直し）: null | { keys: string[] }（単一行=1件、「すべて合わせ直す」=複数件）
-  const [realignConfirm, setRealignConfirm] = useState(null);
+  // ステップ6b（合わせ直し）: ステップ14-A1でuseRealignActions（kind汎用フック）へ移設した
+  // （realignConfirm state・realignPlansの毎レンダー再計算・handleRealignConfirmedを含む。
+  // realignPlansはuseMemoでキャッシュしない——承認直前の最新overlay状態を反映するため）。
   // ステップ12b（Q-C: 使用中のdoc-same行の保存確認）: null | { plan, entryCode, confirmPairs, overridesBuiltin, thicknessChanged }
   const [saveConfirm, setSaveConfirm] = useState(null);
   // ステップ12b（標準に戻す確認）: null | { key, alsoRealignDoc }
@@ -278,24 +279,18 @@ export function CatalogMaintenancePanel({ onClose }) {
     : new Map();
   const fmtDiffValue = v => (v === null || v === undefined || v === '' ? '未設定' : String(v));
 
-  // ステップ6b（合わせ直し）: 出所「同梱」で差分ありの行（realignTargets。allRows基準——
-  // 検索・カテゴリ絞り込みの影響を受けない＝一覧全体が対象。ボタンのラベルにもその旨を明記する
-  // QA指摘Minor-2・2026-09-23）。realignConfirm が立っているあいだは、対象キーごとに
-  // planRealign（catalogMaintenance.js）でプラン（diffPairs/reason）を取り直す
-  // （承認直前の最新overlay状態を反映するため、useMemoでキャッシュしない）。
-  const diffRows = realignTargets(allRows);
-  const realignPlans = (realignConfirm && builtinList)
-    ? realignConfirm.keys.map(key => {
-        let plan;
-        try {
-          plan = planRealign(CatalogKind.MATERIAL, key, { builtinList });
-        } catch (e) {
-          plan = { ok: false, reason: e.message };
-        }
-        const row = allRows.find(r => r.entry.code === key);
-        return { key, plan, name: row?.entry?.name ?? key };
-      })
-    : [];
+  // ステップ14-A1（課題A1）: 「合わせ直す」はkind汎用フックuseRealignActionsへ委譲する
+  // （targets=realignTargets(allRows)・plansの組み立て・確定処理・完了通知は全てフック内）。
+  // onRealigned: 選択中の行が対象に含まれていた場合、出所（doc→user/builtin）が変わりformが
+  // 古い同梱値のままになるため選択を外す（旧・材料タブ直書きのhandleRealignConfirmedと同じ扱い）。
+  // onError: QA指摘Minor-3（2026-09-24再報告）で渡さない方針にした——formErrorはフォームが開いて
+  // いないと見えない穴があり、フックのnotice（ツールバー直下・常に見える）と二重表示になるだけで
+  // 意味が無い。エラー表示はフックのnoticeだけに一本化する（materialTab以外のonError利用は
+  // フック側に任意のまま残す）。合わせ直しはユーザーライブラリを変えないためonLibraryChangedは
+  // 渡さない。
+  const realign = useRealignActions(CatalogKind.MATERIAL, {
+    builtinList, allRows, onRealigned: handleMaterialRealigned,
+  });
 
   // ステップ12b QA指摘m4（2026-09-24再報告）: フォーム無効化理由はcatalog/catalogMaintenance.jsの
   // materialRowDisabledReasonで一本化する（.jsx側で三項演算子チェーンを再実装しない）。
@@ -319,6 +314,7 @@ export function CatalogMaintenancePanel({ onClose }) {
     });
     setFormError(null);
     setFormMessage(null);
+    realign.clearNotice();
   }
 
   function handleSelectRow(row) {
@@ -331,6 +327,7 @@ export function CatalogMaintenancePanel({ onClose }) {
     setForm(formFromEntry(row.entry));
     setFormError(null);
     setFormMessage(null);
+    realign.clearNotice();
   }
 
   function handleDuplicateClick(row) {
@@ -344,6 +341,7 @@ export function CatalogMaintenancePanel({ onClose }) {
     setForm(formFromEntry(copy));
     setFormError('複製しました。名称を変更してから保存してください（同内容のままでは保存できません）');
     setFormMessage(null);
+    realign.clearNotice();
   }
 
   // ステップ12b（本体編集の保存適用。ok:trueのplanを永続化しメッセージを出す。新規追加・
@@ -367,6 +365,7 @@ export function CatalogMaintenancePanel({ onClose }) {
     setSelectedCode(entryCode);
     setFormMessage(materialSaveMessage({ overridesBuiltin, thicknessChanged }));
     setSaveConfirm(null);
+    realign.clearNotice();
     handleLibraryChanged();
   }
 
@@ -374,6 +373,7 @@ export function CatalogMaintenancePanel({ onClose }) {
     if (!form) return;
     setFormError(null);
     setFormMessage(null);
+    realign.clearNotice();
     const thickness = parseThicknessInput(form.thickness);
     if (form.thickness.trim() !== '' && Number.isNaN(thickness)) {
       setFormError('厚さは数値で入力してください');
@@ -478,6 +478,7 @@ export function CatalogMaintenancePanel({ onClose }) {
     // ステップ12b QA指摘m4: 完了メッセージの文言選択はcatalog/catalogMaintenance.jsの
     // removeMessageFor(plan)経由（.jsx側でplan.docAppendの有無を再判定しない）。
     setFormMessage(removeMessageFor(plan));
+    realign.clearNotice();
     handleLibraryChanged();
   }
 
@@ -505,35 +506,19 @@ export function CatalogMaintenancePanel({ onClose }) {
     setForm(null);
     setRevertConfirm(null);
     setFormMessage('標準に戻しました');
+    realign.clearNotice();
     handleLibraryChanged();
   }
 
-  // ステップ6b（合わせ直し）: 承認された対象キーを removeDocEntry（catalog/catalogRegistry.js）で
-  // 文書同梱（doc）から外す。永続化I/Oはしない——次の保存で同梱がbuiltin/user内容で書き直される
-  // （saveCatalogDocument が overlay 合成結果から束を作るため）。dirtyState.js の markDirty で
-  // 保存を促す（他の overlay 変更＝commitUserEntries経由はcommitUserEntries内で永続化まで行うのに対し、
-  // removeDocEntryはoverlayのみ変えるIn-memory操作のため、ここで明示的にmarkDirtyする）。
-  function handleRealignConfirmed() {
-    if (!realignConfirm) return;
-    try {
-      for (const key of realignConfirm.keys) {
-        removeDocEntry(CatalogKind.MATERIAL, key);
-      }
-    } catch (e) {
-      setFormError(e.message);
-      setRealignConfirm(null);
-      return;
-    }
-    markDirty();
-    // 選択中の行が合わせ直し対象に含まれていた場合、出所（doc→user/builtin）が変わり
-    // formが古い同梱値のままになるため、選択を外して再選択を促す（削除確認と同じ扱い）。
-    if (selectedCode && realignConfirm.keys.includes(selectedCode)) {
+  // ステップ14-A1（課題A1）: useRealignActionsのonRealigned。合わせ直し対象キーに選択中の行が
+  // 含まれていた場合、出所（doc→user/builtin）が変わりformが古い同梱値のままになるため、
+  // 選択を外して再選択を促す（旧・材料タブ直書きのhandleRealignConfirmedと同じ扱い）。
+  function handleMaterialRealigned(keys) {
+    if (selectedCode && keys.includes(selectedCode)) {
       setIsAdding(false);
       setSelectedCode(null);
       setForm(null);
     }
-    setRealignConfirm(null);
-    setFormMessage('本体の内容に合わせ直しました（保存すると同梱が本体の内容で更新され、通知が止まります）');
   }
 
   function handleKeyDown(e) {
@@ -604,50 +589,32 @@ export function CatalogMaintenancePanel({ onClose }) {
                   <button className="catmnt-add-btn" disabled={!builtinList} onClick={handleAddNew}>
                     + 新規追加
                   </button>
-                  {diffRows.length > 0 && (
+                  {realign.targets.length > 0 && (
                     <button
                       className="catmnt-btn catmnt-btn--secondary"
-                      onClick={() => setRealignConfirm({ keys: diffRows.map(r => r.entry.code) })}
+                      onClick={() => realign.requestRealign(realign.targets.map(r => r.entry.code))}
                     >
-                      すべて本体の内容に合わせ直す（{diffRows.length}件・絞り込みに関わらず全件）
+                      すべて本体の内容に合わせ直す（{realign.targets.length}件・絞り込みに関わらず全件）
                     </button>
                   )}
                 </div>
 
-                {/* ステップ6b: 合わせ直しの確認（単一行・一括のどちらも同じ型。削除確認と同様インライン） */}
-                {realignConfirm && (
-                  <div className="catmnt-realign-confirm">
-                    <div className="catmnt-realign-confirm-title">
-                      本体の内容に合わせ直しますか？（{realignConfirm.keys.length}件）
-                    </div>
-                    {realignPlans.map(({ key, plan, name }) => (
-                      <div key={key} className="catmnt-realign-item">
-                        <div className="catmnt-realign-item-name">{name}</div>
-                        {plan.ok ? (
-                          <ul className="catmnt-realign-diff-list">
-                            {plan.diffPairs.map(p => (
-                              <li key={p.field} style={{ color: CATALOG_DIFF_COLOR }}>
-                                {p.label} {fmtDiffValue(p.from)} → {fmtDiffValue(p.to)}
-                              </li>
-                            ))}
-                          </ul>
-                        ) : (
-                          <div className="catmnt-realign-diff-none">{plan.reason}</div>
-                        )}
-                      </div>
-                    ))}
-                    <div className="catmnt-realign-confirm-note">
-                      保存すると同梱が本体の内容で更新され、通知が止まります。
-                    </div>
-                    <div className="catmnt-form-actions">
-                      <button className="catmnt-btn catmnt-btn--primary" onClick={handleRealignConfirmed}>
-                        承認する
-                      </button>
-                      <button className="catmnt-btn catmnt-btn--secondary" onClick={() => setRealignConfirm(null)}>
-                        キャンセル
-                      </button>
-                    </div>
+                {/* ステップ14-A1: 完了通知・失敗通知はuseRealignActionsのnotice経由でツールバー直下に
+                    出す（旧実装はformMessage/formErrorへ書いていたため{form && …}の中でしか
+                    見えなかった穴を塞ぐ。案(a)・2026-09-24裁定）。 */}
+                {realign.notice && (
+                  <div className={realign.notice.kind === 'error' ? 'catmnt-form-error' : 'catmnt-form-message'}>
+                    {realign.notice.text}
                   </div>
+                )}
+
+                {/* ステップ6b/14-A1: 合わせ直しの確認（単一行・一括のどちらも同じ型。削除確認と同様インライン） */}
+                {realign.realignConfirm && (
+                  <RealignConfirmBlock
+                    plans={realign.plans}
+                    onConfirm={realign.handleRealignConfirmed}
+                    onCancel={realign.cancelRealign}
+                  />
                 )}
 
                 <div className="catmnt-rows">
@@ -681,7 +648,7 @@ export function CatalogMaintenancePanel({ onClose }) {
                         <button
                           className="catmnt-realign-btn"
                           title="本体の内容に合わせ直す"
-                          onClick={e => { e.stopPropagation(); setRealignConfirm({ keys: [row.entry.code] }); }}
+                          onClick={e => { e.stopPropagation(); realign.requestRealign([row.entry.code]); }}
                         >
                           合わせ直す
                         </button>
@@ -1359,13 +1326,16 @@ const FIXTURE_SYMBOL_PROFILE_LABELS = Object.freeze({
 //
 // 現状の適用範囲（報告事項）: FixtureSymbolTab（12f）・InteriorMasterTab・SectionTab（12g）は
 // このフック・コンポーネントへ移行済み。材料タブ（CatalogMaintenancePanel本体）は本ラウンドでも
-// 未移行——材料タブは同じ確認state群に加えて「合わせ直す」（realignConfirm）・同梱差分/標準差分の
-// フィールド別オレンジ表示・下地区分selectの表示値解決など、確認フロー本体だけでは括れない
-// 付随ロジックが同じハンドラへ深く絡んでおり、移行するには材料タブの十数本の既存wiringテスト
-// （performSave/handleDeleteConfirmed/handleRevertConfirmedの関数シグネチャ・busy state宣言・
-// 確認ボタンJSXを正規表現で直接検査するもの）を書き直す必要がある。本セッションでは目視確認の
-// 手段が無い状態でその一括書き換えを行うリスクが高いと判断し、材料タブは現状のまま維持し、この
-// 報告として明記する（材料タブの将来の移行先として引き続き用意しておく）。
+// 未移行——材料タブは同じ確認state群に加えて、同梱差分/標準差分のフィールド別オレンジ表示・
+// 下地区分selectの表示値解決など、確認フロー本体だけでは括れない付随ロジックが同じハンドラへ
+// 深く絡んでおり、移行するには材料タブの十数本の既存wiringテスト（performSave/
+// handleDeleteConfirmed/handleRevertConfirmedの関数シグネチャ・busy state宣言・確認ボタンJSXを
+// 正規表現で直接検査するもの）を書き直す必要がある。本セッションでは目視確認の手段が無い状態で
+// その一括書き換えを行うリスクが高いと判断し、材料タブは現状のまま維持し、この報告として明記する
+// （材料タブの将来の移行先として引き続き用意しておく）。「合わせ直す」（旧realignConfirm）は
+// ステップ14-A1でuseRealignActions（kind汎用の別フック）へ切り出し、材料タブも移行済み——
+// 対象は上記の「保存・削除・標準に戻す」（useCatalogEditActions）とは別の性質（busy無し・
+// ユーザーライブラリを変えない）のため別フックにした（設計 2026-09-24）。
 // ================================================================
 
 /**
@@ -1444,6 +1414,51 @@ function SaveConfirmBlock({ saveConfirm, busy, onConfirm, onCancel }) {
       <div className="catmnt-form-actions">
         <button className="catmnt-btn catmnt-btn--primary" disabled={busy} onClick={onConfirm}>承認する</button>
         <button className="catmnt-btn catmnt-btn--secondary" disabled={busy} onClick={onCancel}>
+          キャンセル
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * ステップ14-A1（課題A1: 「合わせ直す」をkind汎用へ切り出す）: 「本体の内容に合わせ直す」確認
+ * ブロック（旧・材料タブ専用インラインJSXから移設。他kindでも使えるよう plans/onConfirm/onCancel
+ * だけを受け取る薄い表示コンポーネントにする）。差分値の整形は formatReadonlyValue に統一する
+ * （旧実装の「未設定」から「（未設定）」表記へ変わる——設計裁定2026-09-24で受け入れ済み）。
+ * @param {{ plans: Array<{ key: string, name: string, plan: object }>,
+ *           onConfirm: () => void, onCancel: () => void }} props
+ */
+function RealignConfirmBlock({ plans, onConfirm, onCancel }) {
+  return (
+    <div className="catmnt-realign-confirm">
+      <div className="catmnt-realign-confirm-title">
+        本体の内容に合わせ直しますか？（{plans.length}件）
+      </div>
+      {plans.map(({ key, plan, name }) => (
+        <div key={key} className="catmnt-realign-item">
+          <div className="catmnt-realign-item-name">{name}</div>
+          {plan.ok ? (
+            <ul className="catmnt-realign-diff-list">
+              {plan.diffPairs.map(p => (
+                <li key={p.field} style={{ color: CATALOG_DIFF_COLOR }}>
+                  {p.label} {formatReadonlyValue(p.from)} → {formatReadonlyValue(p.to)}
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <div className="catmnt-realign-diff-none">{plan.reason}</div>
+          )}
+        </div>
+      ))}
+      <div className="catmnt-realign-confirm-note">
+        保存すると同梱が本体の内容で更新され、通知が止まります。
+      </div>
+      <div className="catmnt-form-actions">
+        <button className="catmnt-btn catmnt-btn--primary" onClick={onConfirm}>
+          承認する
+        </button>
+        <button className="catmnt-btn catmnt-btn--secondary" onClick={onCancel}>
           キャンセル
         </button>
       </div>
@@ -1562,6 +1577,82 @@ function useCatalogEditActions(kind, { onSaved, onDeleted, onReverted, onError }
     busy, confirmingDelete, deleteUsage, saveConfirm, setSaveConfirm, revertConfirm, setRevertConfirm,
     performSave, handleSaveConfirmed, handleDeleteClick, handleDeleteConfirmed,
     handleRevertClick, handleRevertConfirmed, cancelDelete, resetConfirmState,
+  };
+}
+
+/**
+ * ステップ14-A1（課題A1・裁定2026-09-24）: 完了通知の唯一の文言定義
+ * （useRealignActionsのhandleRealignConfirmed成功時にnoticeへセットする。旧・材料タブの
+ * setFormMessageに直書きされていた文言をそのまま定数化した）。
+ */
+const REALIGN_DONE_MESSAGE = '本体の内容に合わせ直しました（保存すると同梱が本体の内容で更新され、通知が止まります）';
+
+/**
+ * ステップ14-A1（課題A1: 「合わせ直す」をkind汎用のフックへ切り出す。旧・材料タブに直書きされて
+ * いたrealignConfirm state・realignPlansの毎レンダー再計算（承認直前の最新overlay状態を
+ * 反映するためuseMemoでキャッシュしない）・handleRealignConfirmedを移設）。
+ * useCatalogEditActionsには載せない——busy無し・同期処理・ユーザーライブラリ（overlay.user）を
+ * 変えない（overlay.docを外すだけの操作）という別の性質のため（設計 2026-09-24）。
+ * 確定操作は各keyへ removeDocEntry(kind, key) を呼び、成功すれば markDirty() してから
+ * onRealigned(keys) を呼ぶ（選択中の行が対象に含まれていた場合の選択解除は呼び出し側の責務——
+ * 出所（doc→user/builtin）が変わりformが古い同梱値のままになるため）。合わせ直しは
+ * ユーザーライブラリを変えないため、完了時に onLibraryChanged は呼ばない（呼び出し側も渡さない）。
+ * 失敗（removeDocEntryの例外）は onError(e.message) を呼び（渡す・渡さないは呼び出し側の任意）、
+ * かつ notice にも同じ文言をkind:'error'で持たせる——旧実装は確認・通知がフォーム外（一覧欄）で
+ * 起きるのに完了メッセージ・エラーだけフォーム内（{form && …}）にしか出ない穴があったため
+ * （通知位置の裁定2026-09-24・案(a)）、noticeを一覧側の唯一の表示先にする。QA指摘Minor-3
+ * （2026-09-24再報告）: 材料タブはonErrorを渡さない——formErrorへ二重表示すると同じ文言が
+ * フォーム内・一覧欄の両方に出る（フォームが開いているとき）ため、noticeだけに一本化する。
+ * @param {string} kind
+ * @param {{ builtinList: object[]|null, allRows: object[], onRealigned?: (keys: string[]) => void,
+ *           onError?: (message: string) => void }} args
+ * @returns {{ realignConfirm: {keys:string[]}|null, targets: object[], plans: object[],
+ *             notice: {kind:'ok'|'error', text:string}|null, clearNotice: () => void,
+ *             requestRealign: (keys: string[]) => void, cancelRealign: () => void,
+ *             handleRealignConfirmed: () => void }}
+ */
+function useRealignActions(kind, { builtinList, allRows, onRealigned, onError } = {}) {
+  const [realignConfirm, setRealignConfirm] = useState(null);
+  const [notice, setNotice] = useState(null);
+
+  const targets = realignTargets(allRows);
+  const plans = (realignConfirm && builtinList)
+    ? realignPlansFor(kind, realignConfirm.keys, { builtinList })
+    : [];
+
+  function requestRealign(keys) {
+    setNotice(null);
+    setRealignConfirm({ keys });
+  }
+
+  function cancelRealign() {
+    setRealignConfirm(null);
+  }
+
+  function handleRealignConfirmed() {
+    if (!realignConfirm) return;
+    try {
+      for (const key of realignConfirm.keys) {
+        removeDocEntry(kind, key);
+      }
+    } catch (e) {
+      onError?.(e.message);
+      setNotice({ kind: 'error', text: e.message });
+      setRealignConfirm(null);
+      return;
+    }
+    markDirty();
+    setRealignConfirm(null);
+    setNotice({ kind: 'ok', text: REALIGN_DONE_MESSAGE });
+    onRealigned?.(realignConfirm.keys);
+  }
+
+  function clearNotice() {
+    setNotice(null);
+  }
+
+  return {
+    realignConfirm, targets, plans, notice, clearNotice, requestRealign, cancelRealign, handleRealignConfirmed,
   };
 }
 
