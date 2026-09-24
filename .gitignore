@@ -3,4 +3,4 @@ dist/
 .env
 *.local
 問題.md
-debug.log
+debug.log.claude/settings.local.json
