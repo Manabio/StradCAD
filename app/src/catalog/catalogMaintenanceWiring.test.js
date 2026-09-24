@@ -1322,3 +1322,112 @@ test('【不変条件・QA指摘M1・ステップ12i】ui/CatalogMaintenancePane
     'SectionBulkImportのonImportedがonLibraryChanged?.()を呼んでいない',
   );
 });
+
+// ---- ステップ14-A4（課題A4: 「合わせ直す」を内装マスタータブへ展開＋建具記号タブの選択行探索を
+// 全行に揃える）: InteriorMasterTab本体をコメント除去のうえ検査する（14-A2の建具記号タブ・14-A3の
+// 建具種別タブと同じ検証方法。内装マスターのkeyOfは単純キー（entry.key）のため複合キー変換は無い）----
+test('【不変条件・ステップ14-A4】ui/CatalogMaintenancePanel.jsx: InteriorMasterTab本体はuseRealignActions(CatalogKind.INTERIOR_MASTER, …)を呼び、<RealignConfirmBlockを1回だけ描く', () => {
+  const src = readSrc('ui/CatalogMaintenancePanel.jsx');
+  const body = extractBalancedBody(src, 'function InteriorMasterTab({ materialList, onLibraryChanged }) {');
+  assert.ok(body, 'CatalogMaintenancePanel.jsx に InteriorMasterTab コンポーネントが見つからない');
+  const code = stripComments(body); // コメント文中の言及だけでは緑にならないよう、実装本体だけを見る
+  assert.ok(
+    /useRealignActions\(CatalogKind\.INTERIOR_MASTER,/.test(code),
+    'InteriorMasterTab が useRealignActions(CatalogKind.INTERIOR_MASTER, …) を呼んでいない',
+  );
+  const realignBlockCount = (code.match(/<RealignConfirmBlock\b/g) ?? []).length;
+  assert.equal(realignBlockCount, 1, 'InteriorMasterTab が <RealignConfirmBlock を1回だけ描いていない');
+});
+
+test('【不変条件・ステップ14-A4】ui/CatalogMaintenancePanel.jsx: InteriorMasterTabは行の「合わせ直す」ボタンでrealign.requestRealign([row.entry.key])を呼び、一括ボタンのラベルに「絞り込みに関わらず全件」を明記し、allRows用のbuildCatalogRows呼び出しにsearchを渡さない', () => {
+  const src = readSrc('ui/CatalogMaintenancePanel.jsx');
+  const body = extractBalancedBody(src, 'function InteriorMasterTab({ materialList, onLibraryChanged }) {');
+  assert.ok(body, 'CatalogMaintenancePanel.jsx に InteriorMasterTab コンポーネントが見つからない');
+  const code = stripComments(body);
+  assert.ok(
+    /realign\.requestRealign\(\[row\.entry\.key\]\)/.test(code),
+    'InteriorMasterTab の行ボタンが realign.requestRealign([row.entry.key]) を呼んでいない',
+  );
+  assert.ok(/絞り込みに関わらず全件/.test(code), 'InteriorMasterTab の一括ボタンラベルに「絞り込みに関わらず全件」の文言が無い');
+  const allRowsMatch = /const allRows = builtinList \? buildCatalogRows\(\{[^}]*\}\)/.exec(code);
+  assert.ok(allRowsMatch, 'InteriorMasterTab に allRows = buildCatalogRows(...) の行が見つからない');
+  assert.ok(
+    !/search/.test(allRowsMatch[0]),
+    'InteriorMasterTab の allRows 用 buildCatalogRows 呼び出しに search が含まれている（絞り込みの影響を受けない全件という契約への退行）',
+  );
+});
+
+test('【不変条件・ステップ14-A4】ui/CatalogMaintenancePanel.jsx: InteriorMasterTabのonInteriorMasterRealignedはonLibraryChangedを呼ばない（合わせ直しはユーザーライブラリを変えないため）', () => {
+  const src = readSrc('ui/CatalogMaintenancePanel.jsx');
+  const realignedBody = extractBalancedBody(src, 'function onInteriorMasterRealigned(keys) {');
+  assert.ok(realignedBody, 'CatalogMaintenancePanel.jsx に onInteriorMasterRealigned が見つからない');
+  const code = stripComments(realignedBody);
+  assert.ok(!/onLibraryChanged/.test(code), 'onInteriorMasterRealigned が onLibraryChanged を参照している');
+});
+
+test('【不変条件・ステップ14-A4】ui/CatalogMaintenancePanel.jsx: onInteriorMasterRealignedは選択中の行が対象keysに含まれていればsetForm(null)で選択を外しactions.resetConfirmState()を呼ぶ', () => {
+  const src = readSrc('ui/CatalogMaintenancePanel.jsx');
+  const body = extractBalancedBody(src, 'function onInteriorMasterRealigned(keys) {');
+  assert.ok(body, 'CatalogMaintenancePanel.jsx に onInteriorMasterRealigned が見つからない');
+  const code = stripComments(body);
+  assert.ok(/keys\.includes\(selectedKey\)/.test(code), 'onInteriorMasterRealigned が keys.includes(selectedKey) を検査していない');
+  assert.ok(/setForm\(null\)/.test(code), 'onInteriorMasterRealigned が setForm(null) で選択を外していない');
+  assert.ok(/actions\.resetConfirmState\(\)/.test(code), 'onInteriorMasterRealigned が actions.resetConfirmState() を呼んでいない');
+});
+
+test('【不変条件・ステップ14-A4】ui/CatalogMaintenancePanel.jsx: InteriorMasterTab本体は{realign.notice はフォームの外（{form && ( より前）に描かれる（フォームが開いていなくても完了・失敗通知が見える）', () => {
+  const src = readSrc('ui/CatalogMaintenancePanel.jsx');
+  const body = extractBalancedBody(src, 'function InteriorMasterTab({ materialList, onLibraryChanged }) {');
+  assert.ok(body, 'CatalogMaintenancePanel.jsx に InteriorMasterTab コンポーネントが見つからない');
+  const code = stripComments(body);
+  const noticeIdx = code.indexOf('{realign.notice &&');
+  const formIdx = code.indexOf('{form && (');
+  assert.ok(noticeIdx >= 0, 'InteriorMasterTab が {realign.notice && を描いていない');
+  assert.ok(formIdx >= 0, 'InteriorMasterTab が {form && ( を描いていない');
+  assert.ok(noticeIdx < formIdx, 'realign.notice の表示位置が {form && ( より後ろにある（フォーム内へ後退している）');
+});
+
+test('【不変条件・ステップ14-A4】ui/CatalogMaintenancePanel.jsx: InteriorMasterTab内のhandleSave本体はrealign.clearNotice()を呼ぶ', () => {
+  const src = readSrc('ui/CatalogMaintenancePanel.jsx');
+  const tabBody = extractBalancedBody(src, 'function InteriorMasterTab({ materialList, onLibraryChanged }) {');
+  assert.ok(tabBody, 'CatalogMaintenancePanel.jsx に InteriorMasterTab コンポーネントが見つからない');
+  // InteriorMasterTab本体に絞り込んでから抽出する——ファイル先頭の材料タブ（CatalogMaintenancePanel）
+  // にも同じシグネチャ'async function handleSave() {'があり、src全体からだと材料タブ側を拾ってしまう。
+  const handleSaveBody = extractBalancedBody(tabBody, 'async function handleSave() {');
+  assert.ok(handleSaveBody, 'InteriorMasterTab に handleSave が見つからない');
+  const code = stripComments(handleSaveBody);
+  assert.ok(/realign\.clearNotice\(\)/.test(code), 'InteriorMasterTab の handleSave が realign.clearNotice() を呼んでいない');
+});
+
+test('【不変条件・ステップ14-A4】ui/CatalogMaintenancePanel.jsx: InteriorMasterTabのselectedRowはallRows.findで探す（絞り込み後のrows.findでは探さない）', () => {
+  const src = readSrc('ui/CatalogMaintenancePanel.jsx');
+  const body = extractBalancedBody(src, 'function InteriorMasterTab({ materialList, onLibraryChanged }) {');
+  assert.ok(body, 'CatalogMaintenancePanel.jsx に InteriorMasterTab コンポーネントが見つからない');
+  const code = stripComments(body);
+  assert.ok(
+    /const selectedRow = \(!isAdding && selectedKey\) \? allRows\.find\(r => r\.entry\.key === selectedKey\) \?\? null : null;/.test(code),
+    'InteriorMasterTab の selectedRow が allRows.find(...) で選択行を探していない',
+  );
+  assert.ok(
+    !/selectedRow = \(!isAdding && selectedKey\) \? rows\.find\(/.test(code),
+    'InteriorMasterTab の selectedRow が絞り込み後の rows.find(...) で選択行を探している（検索で選択行が隠れると編集状態が消える退行）',
+  );
+});
+
+// A3再報告（QA指摘）: FixtureSymbolTab（14-A2）は選択行探索がrows.findのまま据え置かれていた
+// （検索で選択行が隠れると編集状態が消える退行）。材料タブ・建具種別タブ・内装マスタータブと
+// 同じallRows.findへ14-A4で揃える。
+test('【不変条件・ステップ14-A4・A3 QA持ち越し】ui/CatalogMaintenancePanel.jsx: FixtureSymbolTabのselectedRowはallRows.findで探す（絞り込み後のrows.findでは探さない）', () => {
+  const src = readSrc('ui/CatalogMaintenancePanel.jsx');
+  const body = extractBalancedBody(src, 'function FixtureSymbolTab({ materialList, onLibraryChanged }) {');
+  assert.ok(body, 'CatalogMaintenancePanel.jsx に FixtureSymbolTab コンポーネントが見つからない');
+  const code = stripComments(body);
+  assert.ok(
+    /const selectedRow = \(!isAdding && selectedKey\) \? allRows\.find\(r => r\.entry\.key === selectedKey\) \?\? null : null;/.test(code),
+    'FixtureSymbolTab の selectedRow が allRows.find(...) で選択行を探していない',
+  );
+  assert.ok(
+    !/selectedRow = \(!isAdding && selectedKey\) \? rows\.find\(/.test(code),
+    'FixtureSymbolTab の selectedRow が絞り込み後の rows.find(...) で選択行を探している（検索で選択行が隠れると編集状態が消える退行）',
+  );
+});

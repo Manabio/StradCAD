@@ -1727,7 +1727,10 @@ function FixtureSymbolTab({ materialList, onLibraryChanged }) {
   // （材料タブ・14-A1と同じ規約。realignTargetsはallRows基準で呼ぶ契約）。
   const allRows = builtinList ? buildCatalogRows({ kind: CatalogKind.FIXTURE_SYMBOL, builtinList, diffMap }) : [];
 
-  const selectedRow = (!isAdding && selectedKey) ? rows.find(r => r.entry.key === selectedKey) ?? null : null;
+  // ステップ14-A4（課題A4・A3 QA持ち越し）: 絞り込み後のrowsから選択行を探すと、検索で選択行が
+  // 一覧から隠れたとき編集状態が消える（材料タブ・14-A1、建具種別タブ・14-A3はallRowsから探して
+  // いる）。allRowsは検索の影響を受けないためここで揃える。
+  const selectedRow = (!isAdding && selectedKey) ? allRows.find(r => r.entry.key === selectedKey) ?? null : null;
   const editState = selectedRow ? rowEditState(CatalogKind.FIXTURE_SYMBOL, selectedRow, { builtinKeys }) : null;
   const lockedFields = selectedRow
     ? lockedFieldsFor(CatalogKind.FIXTURE_SYMBOL, selectedRow.entry.key, { builtinKeys })
@@ -2116,6 +2119,10 @@ function emptyInteriorMasterForm(key) {
  * 実在するかをvalidateInteriorMasterFormへmaterialKeys（collectKnownCatalogKeys(MATERIAL,…)）として
  * 注入する。未読込みの間はinteriorMasterRowDisabledReasonがmaterialListLoaded:falseで保存ボタンを
  * disabledにする。
+ * 「合わせ直す」（文書同梱を差分から本体へ合わせる一括操作）はステップ14-A4で
+ * useRealignActions（kind汎用フック。材料タブ・14-A1、建具記号タブ・14-A2、建具種別タブ・14-A3と
+ * 同じ）へ展開した。内装マスターのkeyOfは単純キー（entry.key）のため、行ボタン・一括ボタンとも
+ * row.entry.keyをrealignのkeyとして渡す（建具種別タブのような複合キー変換は不要）。
  * @param {{ materialList: object[]|null }} props
  */
 function InteriorMasterTab({ materialList, onLibraryChanged }) {
@@ -2133,6 +2140,7 @@ function InteriorMasterTab({ materialList, onLibraryChanged }) {
     setIsAdding(false);
     setSelectedKey(entryKey);
     setFormMessage(catalogSaveMessage(CatalogKind.INTERIOR_MASTER, meta));
+    realign.clearNotice();
     onLibraryChanged?.();
   }
   function onInteriorMasterDeleted(plan) {
@@ -2140,6 +2148,7 @@ function InteriorMasterTab({ materialList, onLibraryChanged }) {
     setSelectedKey(null);
     setForm(null);
     setFormMessage(removeMessageFor(plan));
+    realign.clearNotice();
     onLibraryChanged?.();
   }
   function onInteriorMasterReverted() {
@@ -2147,6 +2156,7 @@ function InteriorMasterTab({ materialList, onLibraryChanged }) {
     setSelectedKey(null);
     setForm(null);
     setFormMessage('標準に戻しました');
+    realign.clearNotice();
     onLibraryChanged?.();
   }
   const actions = useCatalogEditActions(CatalogKind.INTERIOR_MASTER, {
@@ -2176,8 +2186,14 @@ function InteriorMasterTab({ materialList, onLibraryChanged }) {
 
   const diffMap = builtinList ? docDiffMap(CatalogKind.INTERIOR_MASTER, builtinList) : new Map();
   const rows = builtinList ? buildCatalogRows({ kind: CatalogKind.INTERIOR_MASTER, builtinList, search, diffMap }) : [];
+  // ステップ14-A4（課題A4）: 「合わせ直す」一括対象は検索の影響を受けない全行から取る
+  // （材料タブ・14-A1、建具記号タブ・14-A2、建具種別タブ・14-A3と同じ規約。realignTargetsは
+  // allRows基準で呼ぶ契約）。
+  const allRows = builtinList ? buildCatalogRows({ kind: CatalogKind.INTERIOR_MASTER, builtinList, diffMap }) : [];
 
-  const selectedRow = (!isAdding && selectedKey) ? rows.find(r => r.entry.key === selectedKey) ?? null : null;
+  // 絞り込み後のrowsから選択行を探すと、検索で選択行が一覧から隠れたとき編集状態が消える
+  // （材料タブ・14-A1、建具種別タブ・14-A3と同じ理由。allRowsは検索の影響を受けない）。
+  const selectedRow = (!isAdding && selectedKey) ? allRows.find(r => r.entry.key === selectedKey) ?? null : null;
   const editState = selectedRow ? rowEditState(CatalogKind.INTERIOR_MASTER, selectedRow, { builtinKeys }) : null;
   const disabledReason = form
     ? interiorMasterRowDisabledReason({ isAdding, editState, materialListLoaded: Boolean(materialList) })
@@ -2197,6 +2213,21 @@ function InteriorMasterTab({ materialList, onLibraryChanged }) {
     : new Map();
   const fmtDiffValue = v => (v === null || v === undefined || v === '' ? '未設定' : String(v));
 
+  // ステップ14-A4（課題A4）: 「合わせ直す」はkind汎用フックuseRealignActionsへ委譲する（材料タブ・
+  // 14-A1、建具記号タブ・14-A2、建具種別タブ・14-A3と同じ）。onRealigned: 選択中の行が対象に
+  // 含まれていた場合、出所（doc→user/builtin）が変わりformが古い同梱値のままになるため選択を外す。
+  function onInteriorMasterRealigned(keys) {
+    if (selectedKey && keys.includes(selectedKey)) {
+      setIsAdding(false);
+      setSelectedKey(null);
+      setForm(null);
+      actions.resetConfirmState();
+    }
+  }
+  const realign = useRealignActions(CatalogKind.INTERIOR_MASTER, {
+    builtinList, allRows, onRealigned: onInteriorMasterRealigned,
+  });
+
   function handleAddNew() {
     const allKeys = collectKnownCatalogKeys(CatalogKind.INTERIOR_MASTER, builtinList);
     setIsAdding(true);
@@ -2205,6 +2236,7 @@ function InteriorMasterTab({ materialList, onLibraryChanged }) {
     setForm(emptyInteriorMasterForm(nextInteriorMasterKey(allKeys)));
     setFormError(null);
     setFormMessage(null);
+    realign.clearNotice();
   }
 
   function handleSelectRow(row) {
@@ -2214,6 +2246,7 @@ function InteriorMasterTab({ materialList, onLibraryChanged }) {
     setForm(interiorMasterFormFromEntry(row.entry));
     setFormError(null);
     setFormMessage(null);
+    realign.clearNotice();
   }
 
   function handleDuplicateClick(row) {
@@ -2224,12 +2257,14 @@ function InteriorMasterTab({ materialList, onLibraryChanged }) {
     setForm({ ...interiorMasterFormFromEntry(row.entry), key: nextInteriorMasterKey(allKeys) });
     setFormError('複製しました。内容を確認して保存してください');
     setFormMessage(null);
+    realign.clearNotice();
   }
 
   async function handleSave() {
     if (!form || !builtinList) return;
     setFormError(null);
     setFormMessage(null);
+    realign.clearNotice();
     const entry = buildInteriorMasterEntry(form);
 
     if (isAdding) {
@@ -2283,7 +2318,29 @@ function InteriorMasterTab({ materialList, onLibraryChanged }) {
           <button className="catmnt-add-btn" disabled={!builtinList} onClick={handleAddNew}>
             + 新規追加
           </button>
+          {realign.targets.length > 0 && (
+            <button
+              className="catmnt-btn catmnt-btn--secondary"
+              onClick={() => realign.requestRealign(realign.targets.map(r => r.entry.key))}
+            >
+              すべて本体の内容に合わせ直す（{realign.targets.length}件・絞り込みに関わらず全件）
+            </button>
+          )}
         </div>
+
+        {realign.notice && (
+          <div className={realign.notice.kind === 'error' ? 'catmnt-form-error' : 'catmnt-form-message'}>
+            {realign.notice.text}
+          </div>
+        )}
+
+        {realign.realignConfirm && (
+          <RealignConfirmBlock
+            plans={realign.plans}
+            onConfirm={realign.handleRealignConfirmed}
+            onCancel={realign.cancelRealign}
+          />
+        )}
 
         <div className="catmnt-rows">
           {!builtinList && !loadError && <div className="catmnt-row-empty">読み込み中…</div>}
@@ -2308,6 +2365,15 @@ function InteriorMasterTab({ materialList, onLibraryChanged }) {
               >
                 {row.entry.label}{row.diff ? ` ${CATALOG_DIFF_MARK}` : ''}
               </span>
+              {row.diff && (
+                <button
+                  className="catmnt-realign-btn"
+                  title="本体の内容に合わせ直す"
+                  onClick={e => { e.stopPropagation(); realign.requestRealign([row.entry.key]); }}
+                >
+                  合わせ直す
+                </button>
+              )}
             </div>
           ))}
         </div>

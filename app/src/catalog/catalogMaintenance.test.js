@@ -660,6 +660,48 @@ test('realignPlansFor(OPENING_SUB_TYPE, [\'window:singleSliding\']): nameは文�
   assert.equal(results[0].plan.ok, true);
 });
 
+// ---- planRealign(INTERIOR_MASTER, …)（ステップ14-A4: 課題A4。内装マスタータブへの展開。
+// compareFieldsが['wallMaterial','wallFinish','ceilingHeight']のみ（label非含有）のkindでも
+// planRealign/realignPlansForが同じ契約で動くことの確認） ----
+test('planRealign(INTERIOR_MASTER): 同梱(doc)のceilingHeightが標準(builtin)と違えばok:true・diffPairsはfrom=doc現在値・to=標準値', () => {
+  const builtinList = interiorMasterBuiltinList({ INTERIOR_MASTERS });
+  const builtinEntry = builtinList.find(e => e.key === 'LIVING_ROOM');
+  const docEntry = { ...builtinEntry, ceilingHeight: 2500 };
+  setOverlay(CatalogKind.INTERIOR_MASTER, { doc: [docEntry] });
+  const plan = planRealign(CatalogKind.INTERIOR_MASTER, 'LIVING_ROOM', { builtinList });
+  assert.equal(plan.ok, true);
+  assert.equal(plan.baseOrigin, 'builtin');
+  assert.equal(plan.baseEntry, builtinEntry);
+  assert.deepEqual(plan.diffPairs, [
+    { field: 'ceilingHeight', label: '天井高', from: 2500, to: builtinEntry.ceilingHeight },
+  ]);
+});
+
+// 内装マスター固有の失敗系: compareFields（catalogKinds.js INTERIOR_MASTER登録表）は
+// wallMaterial/wallFinish/ceilingHeightのみでlabel（呼称）を含まない——呼称だけ違う同梱材は
+// docDiffMap上では差分なし（合わせ直しの対象外）として扱われることを固定する。
+test('【失敗系・内装固有】planRealign(INTERIOR_MASTER): 同梱(doc)が呼称（label）だけ標準(builtin)と違う場合はcompareFields対象外のためok:false・reason:\'本体と同じ内容です\'', () => {
+  const builtinList = interiorMasterBuiltinList({ INTERIOR_MASTERS });
+  const builtinEntry = builtinList.find(e => e.key === 'LIVING_ROOM');
+  setOverlay(CatalogKind.INTERIOR_MASTER, { doc: [{ ...builtinEntry, label: '居室（同梱）' }] });
+  const plan = planRealign(CatalogKind.INTERIOR_MASTER, 'LIVING_ROOM', { builtinList });
+  assert.deepEqual(plan, { ok: false, reason: '本体と同じ内容です' });
+});
+
+test('realignPlansFor(INTERIOR_MASTER, [\'LIVING_ROOM\']): nameは文書同梱(doc)エントリのlabel（displayNameOf。builtinのlabelとは別物）', () => {
+  const builtinList = interiorMasterBuiltinList({ INTERIOR_MASTERS });
+  const builtinEntry = builtinList.find(e => e.key === 'LIVING_ROOM');
+  // labelもceilingHeightもbuiltinと変える——doc.labelとbuiltin.labelが同じままだと
+  // 「どちらから取っても緑」になり検査にならない（建具記号タブ・14-A2のQA指摘Minor-2と同型）。
+  const docEntry = { ...builtinEntry, label: '居室（同梱）', ceilingHeight: 2500 };
+  setOverlay(CatalogKind.INTERIOR_MASTER, { doc: [docEntry] });
+  const results = realignPlansFor(CatalogKind.INTERIOR_MASTER, ['LIVING_ROOM'], { builtinList });
+  assert.equal(results.length, 1);
+  assert.equal(results[0].key, 'LIVING_ROOM');
+  assert.equal(results[0].name, '居室（同梱）');
+  assert.equal(results[0].plan.ok, true);
+});
+
 // ---- realignPlansFor（ステップ14-A1: 課題A1。複数キーぶんのplanRealignをまとめて実行する純関数）----
 test('realignPlansFor: 差分あり2件を渡すと両方ok:true・nameは文書同梱エントリのdisplayNameOf', () => {
   const builtinA = material({ code: '301000000001', name: 'A', thickness: 12.5 });
