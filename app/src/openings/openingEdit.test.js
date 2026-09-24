@@ -15,7 +15,8 @@ import {
   placeOpeningWithDefaults, removeOpeningWithUndo, withOpeningUndo, pushOpeningUndo, snapshotOpening,
   materialGlassAfterFixtureChange, validateOpeningEdit, noteAfterSubTypeChange, openDirForMechanism,
   defaultSwingSideFor, swingSideAfterSubTypeChange, flippedHingeSides, flippedSwingSide,
-  fixtureTypeAfterSubTypeChange, fixtureSymbolOptions, resolveRefOffsetEdit,
+  fixtureTypeAfterSubTypeChange, fixtureSymbolOptions, resolveRefOffsetEdit, setOpeningGeometryListener,
+  beginOpeningFieldUndo, endOpeningFieldUndo,
 } from './openingEdit.js';
 import { closedAngleFor, leafOpenAngle, angleVectors } from './openingPlanSymbolGeometry.js';
 
@@ -825,6 +826,185 @@ test('回帰: hingeSideだけを反転すると開く面が裏返る（修正前
     '前提: hingeSideのみの反転は開く面を裏返す（これが不具合）',
   );
   assert.notEqual(flippedHingeSides(before).swingSide, naive.swingSide, 'flippedHingeSidesはswingSideも反転して面を保つはず');
+});
+
+// ================================================================
+// geometryListener（setOpeningGeometryListener）: 建具の確定・undo/redo直後に自階の構造を
+// 再計算する依存注入フック（openingStructuralSync.js）の呼び出し回数を検証する。
+// ここでは構造モジュールを一切importせず、スパイ関数だけを注入する（openingEdit.jsは
+// 構造モジュールのrecompute判定・起動を行わない——呼ばれるかどうかだけがこのファイルの関心）。
+// ================================================================
+
+test('setOpeningGeometryListener: placeOpeningWithDefaults→undo→redoで各1回、計3回呼ばれる', () => {
+  const { graph, wall } = makeWallGraph(3000);
+  const project = makeProject();
+  const calls = [];
+  setOpeningGeometryListener((g, p) => calls.push([g, p]));
+  try {
+    const { opening, error } = placeOpeningWithDefaults(graph, project, wall, { x: 1500, y: 0 }, OpeningCategory.WINDOW);
+    assert.equal(error, null);
+    assert.equal(calls.length, 1, '配置確定直後に1回');
+
+    undoManager.undo();
+    assert.equal(calls.length, 2, 'undoで1回追加');
+
+    undoManager.redo();
+    assert.equal(calls.length, 3, 'redoで1回追加');
+    assert.ok(calls.every(([g, p]) => g === graph && p === project), '常に(graph, project)で呼ばれる');
+    void opening;
+  } finally {
+    setOpeningGeometryListener(null);
+  }
+});
+
+test('setOpeningGeometryListener: removeOpeningWithUndo→undo→redoで各1回、計3回呼ばれる', () => {
+  const { graph, wall } = makeWallGraph(3000);
+  const project = makeProject();
+  const opening = graph.addOpening(wall.axisCL, 1, false, wall.clStart, 1000, 800, OpeningCategory.FITTING, 'singleSwing', {});
+  let calls = 0;
+  setOpeningGeometryListener(() => { calls++; });
+  try {
+    removeOpeningWithUndo(graph, project, opening);
+    assert.equal(calls, 1, '削除確定直後に1回');
+
+    undoManager.undo();
+    assert.equal(calls, 2, 'undo（復元）で1回追加');
+
+    undoManager.redo();
+    assert.equal(calls, 3, 'redo（再削除）で1回追加');
+  } finally {
+    setOpeningGeometryListener(null);
+  }
+});
+
+test('setOpeningGeometryListener: widthの変更（withOpeningUndo）は確定・undo・redoで各1回、計3回呼ばれる', () => {
+  const { graph, wall } = makeWallGraph(3000);
+  const project = makeProject();
+  const opening = graph.addOpening(wall.axisCL, 1, false, wall.clStart, 1000, 800, OpeningCategory.FITTING, 'singleSwing', {});
+  let calls = 0;
+  setOpeningGeometryListener(() => { calls++; });
+  try {
+    withOpeningUndo(graph, project, opening, () => { runInAction(() => { opening.width = 1200; }); });
+    assert.equal(calls, 1, '幅変更の確定直後に1回');
+
+    undoManager.undo();
+    assert.equal(calls, 2);
+
+    undoManager.redo();
+    assert.equal(calls, 3);
+  } finally {
+    setOpeningGeometryListener(null);
+  }
+});
+
+test('【失敗系】setOpeningGeometryListener: noteだけの変更は構造に無関係のため確定・undo・redoとも0回', () => {
+  const { graph, wall } = makeWallGraph(3000);
+  const project = makeProject();
+  const opening = graph.addOpening(wall.axisCL, 1, false, wall.clStart, 1000, 800, OpeningCategory.FITTING, 'singleSwing', {});
+  let calls = 0;
+  setOpeningGeometryListener(() => { calls++; });
+  try {
+    withOpeningUndo(graph, project, opening, () => { runInAction(() => { opening.note = '網戸付き'; }); });
+    assert.equal(calls, 0, 'note変更の確定直後は呼ばれない');
+
+    undoManager.undo();
+    assert.equal(calls, 0, 'undoでも呼ばれない（openingGeometryChangedの判定は積むとき1回で確定・以後固定）');
+
+    undoManager.redo();
+    assert.equal(calls, 0, 'redoでも呼ばれない');
+  } finally {
+    setOpeningGeometryListener(null);
+  }
+});
+
+test('【失敗系】setOpeningGeometryListener: listener未設定（null）でも例外を投げずに動作する', () => {
+  const { graph, wall } = makeWallGraph(3000);
+  const project = makeProject();
+  setOpeningGeometryListener(null);
+  assert.doesNotThrow(() => {
+    const { opening } = placeOpeningWithDefaults(graph, project, wall, { x: 1500, y: 0 }, OpeningCategory.WINDOW);
+    withOpeningUndo(graph, project, opening, () => { runInAction(() => { opening.width = 900; }); });
+    removeOpeningWithUndo(graph, project, opening);
+    undoManager.undo();
+  });
+});
+
+test('setOpeningGeometryListener: refOffsetの移動（pushOpeningUndo経路）は確定・undo・redoで各1回、計3回呼ばれる', () => {
+  const { graph, wall } = makeWallGraph(3000);
+  const project = makeProject();
+  const opening = graph.addOpening(wall.axisCL, 1, false, wall.clStart, 1000, 800, OpeningCategory.FITTING, 'singleSwing', {});
+  let calls = 0;
+  setOpeningGeometryListener(() => { calls++; });
+  try {
+    const before = snapshotOpening(opening);
+    runInAction(() => { opening.refOffset = 1500; });
+    const cmd = pushOpeningUndo(graph, project, opening, before);
+    assert.ok(cmd, '差分があるので積まれるはず');
+    assert.equal(calls, 1, 'refOffset移動の確定直後に1回');
+
+    undoManager.undo();
+    assert.equal(calls, 2);
+
+    undoManager.redo();
+    assert.equal(calls, 3);
+  } finally {
+    setOpeningGeometryListener(null);
+  }
+});
+
+test('【失敗系】setOpeningGeometryListener: placeOpeningWithDefaultsが検証エラー（既存開口との重なり）を返したらlistenerは0回', () => {
+  const { graph, wall } = makeWallGraph(3000);
+  const project = makeProject();
+  // 壁3000mm全体を占有する既存開口（placeOpeningWithDefaultsのERR_OPENING_OVERLAP回帰テストと同じ配置）。
+  graph.addOpening(wall.axisCL, 1, false, wall.clStart, 1500, 3000, OpeningCategory.WINDOW, 'doubleSliding', {});
+  let calls = 0;
+  setOpeningGeometryListener(() => { calls++; });
+  try {
+    const { opening, error } = placeOpeningWithDefaults(graph, project, wall, { x: 1500, y: 0 }, OpeningCategory.WINDOW);
+    assert.equal(opening, null);
+    assert.equal(error, ERR_OPENING_OVERLAP);
+    assert.equal(calls, 0, '配置に失敗（opening:null）した場合はlistenerを呼ばないはず');
+  } finally {
+    setOpeningGeometryListener(null);
+  }
+});
+
+test('【失敗系】setOpeningGeometryListener: pushOpeningUndoが差分なし（before===after）を検知した場合はlistenerを呼ばない', () => {
+  const { graph, wall } = makeWallGraph(3000);
+  const project = makeProject();
+  const opening = graph.addOpening(wall.axisCL, 1, false, wall.clStart, 1000, 800, OpeningCategory.FITTING, 'singleSwing', {});
+  let calls = 0;
+  setOpeningGeometryListener(() => { calls++; });
+  try {
+    const before = snapshotOpening(opening);
+    // 何も変更しないまま積む（JSON比較で差分なし＝pushOpeningUndoがnullを返す早期returnパス）。
+    const cmd = pushOpeningUndo(graph, project, opening, before);
+    assert.equal(cmd, null, '差分が無いので積まれないはず');
+    assert.equal(calls, 0, '差分なしのためlistenerは呼ばれないはず');
+  } finally {
+    setOpeningGeometryListener(null);
+  }
+});
+
+test('setOpeningGeometryListener: beginOpeningFieldUndo/endOpeningFieldUndoはrefOffset変更で1回、height変更のみでは0回', () => {
+  const { graph, wall } = makeWallGraph(3000);
+  const project = makeProject();
+  const opening = graph.addOpening(wall.axisCL, 1, false, wall.clStart, 1000, 800, OpeningCategory.FITTING, 'singleSwing', {});
+  let calls = 0;
+  setOpeningGeometryListener(() => { calls++; });
+  try {
+    beginOpeningFieldUndo(graph, project, opening);
+    runInAction(() => { opening.refOffset = 1300; });
+    endOpeningFieldUndo(graph, project, opening);
+    assert.equal(calls, 1, 'refOffset変更（構造に影響しうる）は1回呼ばれるはず');
+
+    beginOpeningFieldUndo(graph, project, opening);
+    runInAction(() => { opening.height = 1800; });
+    endOpeningFieldUndo(graph, project, opening);
+    assert.equal(calls, 1, 'height変更のみ（構造に無関係）は増えないはず');
+  } finally {
+    setOpeningGeometryListener(null);
+  }
 });
 
 test('flippedSwingSide: 開く面だけを裏返し、吊元（hingeSide）には触れない', () => {

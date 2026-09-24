@@ -18,7 +18,7 @@ import {
   SNAP_THRESHOLD_PX,
 } from './snap.js';
 import { OpeningPanel } from './openings/OpeningPanel.jsx';
-import { placeOpeningWithDefaults, removeOpeningWithUndo } from './openings/openingEdit.js';
+import { placeOpeningWithDefaults, removeOpeningWithUndo, setOpeningGeometryListener } from './openings/openingEdit.js';
 import { collectFloorOpeningGroups, assignOpeningNumbers, applyOpeningTags, renumberOpenings, openingSignature } from './openings/openingNumbering.js';
 import { usePointerInteraction } from './interaction/usePointerInteraction.js';
 import { RoomNameInput }   from './finish/RoomNameInput.jsx';
@@ -57,6 +57,7 @@ import { buildExteriorSide } from './structural/wallGate.js';
 import { TRADITIONAL_WOOD_STRUCTURE } from './structural/structureRules.js';
 import { buildStructuralFigureSlots, designationForSlot, firstSlotKeyForPlane } from './structural/structuralFigureSlots.js';
 import { recomputeStructuralComposition, runStructuralModeSetup, reflectStructuralToOtherFloors, reflectStructuralAfterFloorAdd } from './structural/structuralOrchestration.js';
+import { openingStructuralSync } from './structural/openingStructuralSync.js';
 import { refreshWallsAllFloors } from './wallRefresh.js';
 import { figureBindingManager } from './figure/FigureBindingManager.js';
 import { floorSwapManager } from './storage/FloorSwapManager.js';
@@ -490,7 +491,14 @@ const App = observer(() => {
   // graph 参照は切替後も有効になる（＝フロアまたぎ undo もこれで成立する）。
   undoManager.contextProvider = () => ({ mode: appMode, planeId: project.activePlaneId });
 
+  // 建具の確定・undo/redo直後に自階の構造を再計算する依存注入の配線（唯一の登録場所。
+  // .claude/undo-redo.md「undo対象外」・.claude/structural-model.md「建具の袖柱」参照）。
+  setOpeningGeometryListener((g, p) => openingStructuralSync.request(g, p));
+
   async function switchHistoryContext(ctx) {
+    // 実行中の構造再計算がgraphを保存・差し替えしている最中に階/モードを切り替えると競合するため、
+    // switchFloor（実体はこの関数の中のswitchFloor呼び出し）より前に完了を待つ。
+    await openingStructuralSync.whenIdle();
     if (ctx.planeId && ctx.planeId !== project.activePlaneId && project.planeMap.has(ctx.planeId)) {
       await switchFloor(ctx.planeId);
       setActiveFloorId(ctx.planeId);
@@ -682,6 +690,10 @@ const App = observer(() => {
   async function handleModeChange(newMode) {
     if (newMode === appMode) { setMode(null); setAppMode(newMode); return; } // 同一モードは境界処理なし
 
+    // 実行中の建具起因の構造再計算がgraphを保存・差し替えしている最中にモードを切り替えると
+    // 競合するため、switchFloorを伴う処理より前に完了を待つ（openingStructuralSync.js参照）。
+    await openingStructuralSync.whenIdle();
+
     // 以降のモード固有処理はこの graph を対象とする。R階伏図からの脱出時は降りた先の階で再取得する。
     let graph = project.activeGraph;
 
@@ -718,6 +730,8 @@ const App = observer(() => {
   // どのモードから呼ばれても現モードの脱出境界を先に確定する（モード境界レジストリ経由＝適用漏れ防止）。
   async function handleFloorSwitch(planeId) {
     if (planeId === project.activePlaneId) return;
+    // 実行中の建具起因の構造再計算の完了を待つ（switchFloorより前。openingStructuralSync.js参照）。
+    await openingStructuralSync.whenIdle();
     await modeBoundaries[appMode]?.exit?.(project.activeGraph, { toMode: 'floorplan', floorSwitch: false });
     await switchFloor(planeId);
     setActiveFloorId(planeId);
@@ -741,6 +755,8 @@ const App = observer(() => {
   // （先に activeFloorId を更新すると、境界処理前のグラフでモード状態が生成されてしまう）。
   async function switchFloorKeepingMode(planeId) {
     if (planeId === project.activePlaneId) return;
+    // 実行中の建具起因の構造再計算の完了を待つ（switchFloorより前。openingStructuralSync.js参照）。
+    await openingStructuralSync.whenIdle();
     const boundary = modeBoundaries[appMode];
     const graph = project.activeGraph; // 切替前階（脱出境界処理の対象）
     await boundary?.exit?.(graph, { toMode: appMode, floorSwitch: true });
@@ -833,6 +849,10 @@ const App = observer(() => {
   // フロア切替・IDB 書き込みは非同期のため undo/redo 内では投げ放しで実行する
   // （完了前に次の undo を重ねると競合しうるが、通常の操作間隔では問題にならない）。
   async function withFloorAddUndo(run) {
+    // 実行中の建具起因の構造再計算がactive graphを保存・差し替えしている最中に階を追加すると、
+    // collectFloorBytes（アクティブ階はメモリからserializeGraph）が再計算途中の中途半端な状態を
+    // before/afterのスナップショット・新階コピー元へ焼き込んでしまう（openingStructuralSync.js参照）。
+    await openingStructuralSync.whenIdle();
     const sourcePlaneId = project.activePlaneId;
     const before = await collectFloorBytes();
 
@@ -1270,7 +1290,10 @@ const App = observer(() => {
   // IDB へ明示保存で確定し、同じ内容を .stq 文書ファイルとしてダウンロード書き出しする（「読込み」と対）
   function handleSaveConfirm(fileName) {
     setSaveDialogDefaultName(null);
-    exportDocument()
+    // 実行中の建具起因の構造再計算が完了する前に保存すると、途中状態を書き出したうえで
+    // clearDirty（未保存扱いの解除）してしまう（openingStructuralSync.js参照）。
+    openingStructuralSync.whenIdle()
+      .then(() => exportDocument())
       .then((json) => {
         downloadDocumentFile(json, fileName);
         setToast({ msg: '保存しました', key: Date.now() });

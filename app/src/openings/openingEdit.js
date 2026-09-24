@@ -92,6 +92,27 @@ function restoreOpening(graph, o, snap) {
   for (const k of EDITABLE) o[k] = snap[k];
 }
 
+/**
+ * 建具の変更が構造（柱の自動生成・袖柱）に影響しうるか。snapshotOpening の結果同士を比較する。
+ * 袖柱・重なり判定が読むのは開口の coord1/coord2・axisCL・isVertical のみ（.claude/structural-model.md
+ * 「建具の袖柱」参照）。coord1/coord2 は centerCoord(=refCL.effectiveValue+refOffset) と width から
+ * 導出されるため、refCLId・refOffset・width のいずれかが変われば true。axisCL・isVertical は配置後
+ * 不変なので比較しない。EDITABLE と同じファイルに置き、フィールドの増減時に一緒に見直せるようにする
+ * （構造側 structural/openingStructuralSync.js は本ファイルを import しない。逆向きの依存も持たず、
+ * 起動は geometryListener の依存注入だけで結ぶ）。
+ */
+export function openingGeometryChanged(before, after) {
+  return before.refCLId !== after.refCLId
+    || before.refOffset !== after.refOffset
+    || before.width !== after.width;
+}
+
+// 建具の確定・undo/redo直後に自階の構造を再計算するための依存注入フック（App.jsxが
+// undoManager.contextProviderと同じ作法で設定する）。未設定（構造モジュール未配線のテスト等）
+// では何もしない。
+let geometryListener = null;
+export function setOpeningGeometryListener(fn) { geometryListener = fn; }
+
 function addOpeningFromSnapshot(graph, o) {
   return graph.addOpening(o.axisCL, o.wallSide, o.isVertical, o.refCL, o.refOffset, o.width, o.category, o.subType,
     {
@@ -114,9 +135,19 @@ export function pushOpeningUndo(graph, project, o, before) {
   // OpeningPanel（observer）が能動的に観測している状態で runInAction の外から呼ぶと
   // MobX強制モード違反の警告が出る（構造側 memberGroups.test.js:218-224 で踏んだ同型欠陥）。
   runInAction(() => renumberOpenings(graph, project));
+  // 構造（袖柱・自動柱）に影響しうる変更かどうかは積むとき1回だけ判定し、undo/redo両クロージャで
+  // 使い回す（毎回同じboolになるはずだが、判定を1箇所に固定して再計算のたびに揺れないようにする）。
+  const geometryChanged = openingGeometryChanged(before, after);
+  if (geometryChanged) geometryListener?.(graph, project);
   return undoManager.push(
-    () => runInAction(() => { restoreOpening(graph, o, before); renumberOpenings(graph, project); }),
-    () => runInAction(() => { restoreOpening(graph, o, after); renumberOpenings(graph, project); }),
+    () => {
+      runInAction(() => { restoreOpening(graph, o, before); renumberOpenings(graph, project); });
+      if (geometryChanged) geometryListener?.(graph, project);
+    },
+    () => {
+      runInAction(() => { restoreOpening(graph, o, after); renumberOpenings(graph, project); });
+      if (geometryChanged) geometryListener?.(graph, project);
+    },
   );
 }
 
@@ -219,10 +250,19 @@ export function placeOpeningWithDefaults(graph, project, wall, worldPos, categor
   const opening = graph.addOpening(wall.axisCL, wallSide, wall.isVertical, refCL, refOffset, width, category, resolvedSubType,
     { hingeSide, swingSide, fixtureType, sillHeight, height, materialGlass, note, frameFaceWidth, frameProjection });
   undoManager.push(
-    () => runInAction(() => { graph.removeShape(opening.id); renumberOpenings(graph, project); }),
-    () => runInAction(() => { addOpeningFromSnapshot(graph, opening); renumberOpenings(graph, project); }),
+    () => {
+      runInAction(() => { graph.removeShape(opening.id); renumberOpenings(graph, project); });
+      geometryListener?.(graph, project);
+    },
+    () => {
+      runInAction(() => { addOpeningFromSnapshot(graph, opening); renumberOpenings(graph, project); });
+      geometryListener?.(graph, project);
+    },
   );
   runInAction(() => renumberOpenings(graph, project));
+  // 新規配置は常に構造へ影響しうる（幅0はすでに弾いている＝必ず何らかの範囲を占める）ため、
+  // pushOpeningUndoのopeningGeometryChanged判定を経ずに常に通知する。
+  geometryListener?.(graph, project);
   return { opening, error: null };
 }
 
@@ -230,10 +270,18 @@ export function placeOpeningWithDefaults(graph, project, wall, worldPos, categor
 export function removeOpeningWithUndo(graph, project, o) {
   graph.removeShape(o.id);
   undoManager.push(
-    () => runInAction(() => { addOpeningFromSnapshot(graph, o); renumberOpenings(graph, project); }),
-    () => runInAction(() => { graph.removeShape(o.id); renumberOpenings(graph, project); }),
+    () => {
+      runInAction(() => { addOpeningFromSnapshot(graph, o); renumberOpenings(graph, project); });
+      geometryListener?.(graph, project);
+    },
+    () => {
+      runInAction(() => { graph.removeShape(o.id); renumberOpenings(graph, project); });
+      geometryListener?.(graph, project);
+    },
   );
   runInAction(() => renumberOpenings(graph, project));
+  // 削除も配置と同じく常に構造へ影響しうる（占めていた範囲が空くため）ため無条件で通知する。
+  geometryListener?.(graph, project);
 }
 
 /**

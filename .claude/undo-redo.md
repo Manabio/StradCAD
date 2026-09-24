@@ -29,7 +29,9 @@ plane作成・新階同期・切替・全階の構造再計算が複数階へ波
 - 読込み時の壁再生成（`wallRefresh.js`の`refreshWallsAllFloors`。壁の再生成をFinishModeStateから独立させる計画のステップ5）: `store.js`の`bootReady`が文書読込み直後に鍵不一致の階だけ壁を作り直す自動修復。undo対象外だが、変更があれば`markDirty()`してdirtyにする（保存すれば鍵も保存され次回は走らない。鍵一致で何も変わらなければdirtyにしない）
 - カタログの変換先指示UIの適用（`store.js`の`applyCatalogResolutions`。アクティブ階の往復のみ）: `markDirty()`のみでundoエントリは積まない
 - カタログ保守パネルの編集・戻す・削除（ライブラリはアプリ単位で履歴の外。同梱を外す／写すときはmarkDirtyのみ）
+- 建具の確定・undo/redo直後の自階構造再計算（`structural/openingStructuralSync.js`。決定的・冪等なため、建具側のundo/redoで再実行されれば結果的に元へ戻る。ここで別途undoエントリを積むと、その復元手段（restoreGraph）がgraph上のOpeningインスタンスを丸ごと差し替え、開口側のundo/redoクロージャが握る参照が古くなる）
 
 ## 落とし穴
 - undo/redo内のフロア切替・IDB書き込みは非同期の投げ放し。連打は`historyNavRef`で弾き、切替中に履歴が動いた場合はpeek再照合で実行を中止する。
 - 自由入力フィールドはキーストロークではなくフォーカス〜ブラーで1エントリ（`beginFieldUndo`/`endFieldUndo`）。onChange単位でpushを足さないこと。
+- 建具起因の構造再計算（`openingStructuralSync`）はfire-and-forget。active graphを丸ごと読む・差し替える処理（階切替・モード境界・履歴コンテキスト切替・階追加・保存）は先に`openingStructuralSync.whenIdle()`を待つこと。
