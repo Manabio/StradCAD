@@ -4,6 +4,11 @@ This project uses the **generalist** team: a stack-agnostic team for end-to-end 
 
 ## Orchestration rules
 
+- **Search / lookup / call-site collection** — delegate to **scout** (Haiku). Any
+  "where is X", "who calls Y", "list files touching Z" goes here first; hand its
+  `file:line` list to architect/builder/qa-reviewer so they read narrowly. The built-in
+  Explore / general-purpose agents inherit the lead's model — do not use them for search
+  without `model: haiku`.
 - **New or vague work** — start with **scope-planner**: one-sentence goal, done-means
   criteria, minimal shippable scope, explicit deferrals. Skip if the task is already
   well-defined.
@@ -21,10 +26,11 @@ This project uses the **generalist** team: a stack-agnostic team for end-to-end 
 
 ## Flow (adapt as needed)
 ```
-scope-planner → architect → builder → qa-reviewer → shipper
+scout → scope-planner → architect → builder → qa-reviewer → shipper
 ```
 Trivial work (clear task, obvious pattern, single file) may skip scope-planner and
-architect and go directly to builder → qa-reviewer → shipper.
+architect and go directly to builder → qa-reviewer → shipper. scout is optional when the
+lead already knows the exact file.
 
 ## Stack defaults
 - None assumed. Every agent detects the project's language, framework, and conventions
