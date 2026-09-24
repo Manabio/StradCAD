@@ -1,5 +1,5 @@
 // ================================================================
-// カタログ束のバイト表現（JSON。R11・storage/projectInfo.js と同型）。
+// カタログ束のバイト表現（JSON。storage/projectInfo.js と同型）。
 //
 // 純モジュール（葉。他のsrcをimportしない）。node:test から単体 import 可能。
 // 未知の種別・未知の項目は往復で保持する（JSON.parse/stringifyの素通しで自然に満たす）。

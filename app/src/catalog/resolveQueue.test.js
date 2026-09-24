@@ -95,7 +95,7 @@ test('buildResolveRows: 同じ入力から再構築すると同じ行（内容�
 });
 
 // ---- defaultResolveDecision（コーディネーター裁定・2026-09-23）: propose行は候補数に関わらず
-// 既定defer（R10「自動では置きかえない」の徹底）。unresolved-code/library-conflictは現行どおり
+// 既定defer（「自動では置きかえない」の徹底）。unresolved-code/library-conflictは現行どおり
 // （候補があれば先頭候補をapprove）。ui/CatalogResolveDialog.jsxのdefaultDecisionはこれを経由する
 // （唯一の定義箇所。変異=propose行をapproveに戻す、で下の1本目が赤くなる）。----
 test('defaultResolveDecision: propose行は候補があっても既定defer（自動承認しない）', () => {

@@ -277,8 +277,8 @@ function isBuiltinOverride(userEntry, keyIsBuiltin) {
  * composeList/originOf で合成し、search（表示名またはキーの部分一致・大小文字区別なし）で
  * 絞り込む（ステップ8h: 断面は label が「H-300×150×6.5×9」、key が「STEEL-H300x150」のように
  * 呼び方が割れるため両方を対象にする。他種別でも害はないため共通の規則にする）。
- * diffMap（catalogRegistry.js の docDiffMap の戻り値）を渡すと、各行に R13 の差分情報
- * （{baseOrigin, diffFields, baseEntry}）を diff として付ける（省略時は null）。
+ * diffMap（catalogRegistry.js の docDiffMap の戻り値）を渡すと、各行に文書同梱材が本体と
+ * 不一致のときの差分情報（{baseOrigin, diffFields, baseEntry}）を diff として付ける（省略時は null）。
  * category による絞り込みは material 専用のため持たない（buildMaterialRows 側で行う）。
  * ステップ12a: 各行に `overridesBuiltin`（userエントリがbuiltin同キーの上書きとして保存されたもの
  * かどうか。true=バッジ「標準を編集」の対象）・`builtinEntry`（builtinの同キーentryか無ければnull。
@@ -330,7 +330,7 @@ export function buildMaterialRows({ builtinList, search = '', category = null, d
 }
 
 /**
- * buildMaterialRows の戻り値から、R13の差分（diff）が付いている行だけを絞り込む
+ * buildMaterialRows の戻り値から、差分（diff）が付いている行だけを絞り込む
  * （ステップ6b「合わせ直す」一括対象の唯一の判定箇所。QA指摘Minor-1・2026-09-23:
  * CatalogMaintenancePanel.jsx に直書きされていた allRows.filter(r => r.diff) をこちらへ切り出し、
  * 単体テストできるようにする——一括ボタンは検索・カテゴリ絞り込みの影響を受けない
@@ -401,7 +401,7 @@ export function buildMaterialEntry({
 /**
  * 複製元エントリと同内容・新コードのエントリを組み立てる（複製）。
  * dedupeFields（name/spec/x/y/thickness）が複製元と一致するため、名称を変えるまでは
- * validateMaterialEntry がR17で拒否する（意図した挙動。呼び出し側は保存前に必ず
+ * validateMaterialEntry が重複禁止（dedupeFields完全一致）で拒否する（意図した挙動。呼び出し側は保存前に必ず
  * validateMaterialEntry を通すこと）。
  */
 export function duplicateMaterialEntry(sourceEntry, knownCodes) {
@@ -413,7 +413,7 @@ export function duplicateMaterialEntry(sourceEntry, knownCodes) {
 
 /**
  * 保存前検証: (1) カテゴリが編集可能（panel/finish/backing）であること、(2) kindDef('material').validate、
- * (3) assertNoDuplicate（R17。builtinList から合成した全エントリに対して検査）。
+ * (3) assertNoDuplicate（重複禁止。builtinList から合成した全エントリに対して検査）。
  * 失敗は日本語メッセージで返す（例外を投げない——フォーム表示用）。
  * ステップ12c QA指摘M3（2026-09-24再報告・リード裁定Q-1=案(a)）: 下地材（category:'backing'）の
  * 必須検査（x/y>0・backingClass必須）はここではなく planSaveEntry 側（新規追加・既存編集の
@@ -524,7 +524,7 @@ export async function commitUserEntries(kind, nextUser, prevUser, { saveFn }) {
 }
 
 /**
- * ステップ6b（4.7 合わせ直し）: 文書同梱材を本体（catalogRegistry.js docDiffMap の
+ * ステップ6b（合わせ直し）: 文書同梱材を本体（catalogRegistry.js docDiffMap の
  * baseOrigin='user'|'builtin'の内容）に合わせ直す差分プラン（純関数。I/Oしない）。
  * key が文書同梱（doc）に無ければ日本語例外。差分が無ければ ok:false——このとき同キーの
  * user/builtinエントリの有無で理由を分ける（QA指摘Minor-3・2026-09-23）:
@@ -559,8 +559,9 @@ const SECTION_IMPORT_ORIGIN_LABELS = Object.freeze({ doc: '同梱', user: 'ラ�
  * ステップ12。上書きしない） (4) キーが違っても内容（matchFields）完全一致なら同じく
  * 「既にあります（出所）」でskippedへ（QA指摘Minor-B1・2026-09-23: 角形鋼管はキーに板厚の文字列
  * 表現をそのまま使うため、'□250×250×9' と builtin の 'STEEL-SQ250x250x9.0' のように内容が
- * 同一でもキーが別になりうる——catalogMatch.jsのmatchByContent（既存のR14照合ロジック。
- * 二重実装しない）で exact 判定できた行は、一致先エントリの出所を理由に添えて除外する）。
+ * 同一でもキーが別になりうる——catalogMatch.jsのmatchByContent（既存の内容一致照合ロジック
+ * ＝照合項目を末尾から1つずつ外して探索。二重実装しない）で exact 判定できた行は、
+ * 一致先エントリの出所を理由に添えて除外する）。
  * (5) 残りをtoAddへ。
  * @param {string} specText
  * @param {{ builtinList: object[], parseSpecList: (specText: string) => { entries: object[], errors: Array<{line:string, reason:string}> } }} args
@@ -635,7 +636,7 @@ export function planRealign(kind, key, { builtinList }) {
 // ================================================================
 // ステップ12a（本体編集＝builtinの上書き。5種別共通の純ロジック 1.1〜1.3）。
 // 決定（設計 2026-09-23・裁定済み）: 本体の編集は新しい仕組みを作らず「同キーのuserエントリ＋
-// overridesBuiltin:true」で表す（4.2/4.4。catalogBundle.js detectLibraryConflicts・
+// overridesBuiltin:true」で表す（本体編集の規約・ライブラリ衝突検出。catalogBundle.js detectLibraryConflicts・
 // resolveQueue.js markOverrideは実装済み）。保存済み文書は使用中エントリをdocとして同梱し
 // doc>userで解決されるため、使用中の行はほぼ「出所doc」になる——doc-same（差分なし・相手あり）
 // の編集（確認のうえ同梱を外して即反映）が無いとbuiltin行だけ編集可では実質編集できない。
@@ -805,7 +806,7 @@ function validateBackingMaterialFields(entry, { builtinOverride }) {
  * { ok: true, noop: true } だけを返す——builtin行の「変更せず保存」が無意味な同内容user上書きを
  * 作る事故、doc-same/doc-override行の「変更せず保存」が確認なしに同梱を外してしまう事故を防ぐ
  * （.jsx側はnoop:trueのとき「変更はありません」を出し、applyCatalogEditPlanを呼ばない）。
- * (2) kindDef(kind).validate (3) R17（dedupeFieldsを持つ種別のみ。現状material）
+ * (2) kindDef(kind).validate (3) 重複禁止検査（dedupeFieldsを持つ種別のみ。現状material）
  * assertNoDuplicate (4) builtin同キーならoverridesBuiltin:trueを付与（無ければ項目自体を持たせ
  * ない＝usedEntries.buildDocumentBundleが同梱から除去するのと対の規約）→
  * upsertUserCatalogEntry。rowStateがneedsDocStrip（doc-same/doc-override）なら
@@ -920,7 +921,8 @@ export function planRevertToBuiltin(kind, key, { alsoRealignDoc = true } = {}) {
 }
 
 /**
- * ステップ12a（1.3 使用中userの削除。Q9を未保存文書でも守る）: userライブラリからkeyを外す。
+ * ステップ12a（1.3 使用中userの削除。「使用中の参照を宙に浮かせない」原則を未保存文書でも
+ * 守る）: userライブラリからkeyを外す。
  * 使用中（usedKeysに含む）で文書同梱(doc)に同キーが無ければ、削除前のuserエントリをdocAppendとして
  * 返す（呼び出し側がapplyCatalogEditPlanでdocへ書き写す＝参照が保存直前に消えないようにする）。
  * QA指摘Minor-1（2026-09-24再報告）: docAppendはtarget（userエントリ）をそのまま渡さず
@@ -995,7 +997,7 @@ export function materialExtraLockedFields(key, studCodes = new Set()) {
  * ステップ12f（Q-C/Q-E: 保存後メッセージの文言選択。materialSaveMessageをkind汎用へ一般化）:
  * 該当する注記だけを「保存しました」に括弧書きで足す（両方該当なら「／」で連結）。
  * - overridesBuiltin: この保存でbuiltin同キーの上書き（builtin/override行の保存）になった
- *   → 「他の文書は合わせ直すまで変わりません」（R3。他文書のdoc同梱はこの場では変わらない。
+ *   → 「他の文書は合わせ直すまで変わりません」（他文書のdoc同梱はこの場では変わらない。
  *   種別を問わない）。
  * - thicknessChanged: 厚さが変わった → 「壁は次に仕上げモードを出るまで旧い厚みのままです」
  *   （鮮度キーは材コードのみ・2026-09-15裁定。壁の再生成はこの保存では起きない）。厚みを持つのは
@@ -1808,7 +1810,7 @@ export function openingSubTypeRowDisabledReason({ isAdding, editState = null } =
 }
 
 // ================================================================
-// ステップ12i（開発者向けエクスポート。4.2）: 本体（builtin）の編集は「同キーのuserエントリ＋
+// ステップ12i（開発者向けエクスポート）: 本体（builtin）の編集は「同キーのuserエントリ＋
 // overridesBuiltin:true」（12a）で表し、本体マスタ自体（finish/materials/*・
 // structural/sectionCatalog.js・openings/openingCatalog.js）への反映は開発者が手で行う——その
 // ための書式整形。collectExportableEntries（対象の抽出。overlayFor(kind).userを読む）→

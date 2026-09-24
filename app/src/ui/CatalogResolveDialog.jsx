@@ -170,7 +170,7 @@ function ResolveRow({ row, decision, onChange, builtinListByKind }) {
 }
 
 /**
- * 指示UI（ステップ6-3・R10）。project.catalogResolveRows が非空のときApp.jsxが動的importして開く。
+ * 指示UI（ステップ6-3・自動では置き換えない原則）。project.catalogResolveRows が非空のときApp.jsxが動的importして開く。
  * 描くだけ（純ロジックはcatalog/resolveQueue.js）。1画面に全行、行ごとに
  * 対象→差分→候補→操作、フッタに「まとめて承認」「すべて保留（閉じる）」。
  * 保留は記録しない——「すべて保留」はdecisionsを送らずonCloseするだけで、行はproject側に

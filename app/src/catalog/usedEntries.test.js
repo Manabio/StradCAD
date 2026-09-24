@@ -344,7 +344,7 @@ test('buildDocumentBundle: 束のversionは1（catalogBundle.jsのemptyBundleと
 });
 
 // ステップ7c: 使用0件の種別も usedKeysByKind に空Setとして渡せば bundle.catalogs[kind] = [] と
-// して必ず現れる（4.3「参照されなくなったエントリは次回保存時に外す」の一般化。呼び出し側
+// して必ず現れる（「参照されなくなったエントリは次回保存時に外す」の一般化。呼び出し側
 // （store.js collectCatalogUsageAcrossFloors）が使用0件の種別を Map から省略すると、この種別は
 // bundle.catalogs に一切現れず、splitBundleByKind で保存対象から漏れて前回レコードが残ってしまう
 // ——そのため呼び出し側は必ず空Setで渡す契約になっている。ここではbuildDocumentBundle自身の

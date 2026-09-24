@@ -195,9 +195,9 @@ export const SECTION_CATALOG = [
 // であり、境界処理の呼び出しツリーに乗らないため同じ規律を適用できない——世代カウンタに
 // よる自己無効化に留める（overlayが変わらない限り安全に共有できる）。
 //
-// composeCatalogはR17（登録表のdedupeFields完全一致による重複検出。未知kindなら
+// composeCatalogは重複禁止検査（登録表のdedupeFields完全一致による重複検出。未知kindなら
 // kindDefが例外）を毎回検査するため例外を投げうる経路を持つが、section の
-// dedupeFields は null（catalogKinds.js registry参照）でR17はno-op、かつ本キャッシュ
+// dedupeFields は null（catalogKinds.js registry参照）で重複禁止検査はno-op、かつ本キャッシュ
 // によりcomposeCatalogが実際に呼ばれるのはoverlayが変化した直後の1回だけ（以降は
 // 世代一致でMapを再利用）——描画・計算のたびに例外パスを通ることはない。
 let _map = null;

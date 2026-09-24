@@ -105,7 +105,7 @@ test('【不変条件・ステップ5】ui/CatalogMaintenancePanel.jsx: 純ロ�
   assert.ok(!/\bassertNoDuplicate\(/.test(src), 'CatalogMaintenancePanel.jsx が assertNoDuplicate を直接呼んでいる（catalogMaintenance.js経由に一本化する契約への退行）');
 });
 
-// ---- ステップ6b（4.7 合わせ直し）: 「本体の内容に合わせ直す」はcatalogMaintenance.js/catalogRegistry.js
+// ---- ステップ6b（合わせ直し）: 「本体の内容に合わせ直す」はcatalogMaintenance.js/catalogRegistry.js
 // 経由（.jsx側で差分判定・overlay操作を再実装しない）----
 test('【不変条件・ステップ6b】ui/CatalogMaintenancePanel.jsx: 「本体の内容に合わせ直す」はcatalog/catalogMaintenance.jsのplanRealignとcatalog/catalogRegistry.jsのremoveDocEntry経由', () => {
   const src = readSrc('ui/CatalogMaintenancePanel.jsx');

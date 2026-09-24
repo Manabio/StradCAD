@@ -109,7 +109,7 @@ function firstMinor(major) {
  */
 function computeDerived(list, search, category) {
   if (!list) return { allRows: [], visibleRows: [], knownCodes: new Set() };
-  // R13: doc（文書同梱）起源の材が本体と不一致な分だけを集める（毎レンダー取り直し。
+  // doc（文書同梱）起源の材が本体と不一致な分だけを集める（毎レンダー取り直し。
   // overlayFor と同じくモジュール単位の可変状態のため useMemo でキャッシュしない）。
   const diffMap = docDiffMap(CatalogKind.MATERIAL, list);
   const allRows = buildMaterialRows({ builtinList: list, diffMap });
@@ -172,7 +172,7 @@ export function CatalogMaintenancePanel({ onClose }) {
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   // ステップ12b（削除確認の使用状況）: null | { status: 'loading'|'ready'|'error', usedKeys?: Set, message?: string }
   const [deleteUsage, setDeleteUsage] = useState(null);
-  // ステップ6b（4.7 合わせ直し）: null | { keys: string[] }（単一行=1件、「すべて合わせ直す」=複数件）
+  // ステップ6b（合わせ直し）: null | { keys: string[] }（単一行=1件、「すべて合わせ直す」=複数件）
   const [realignConfirm, setRealignConfirm] = useState(null);
   // ステップ12b（Q-C: 使用中のdoc-same行の保存確認）: null | { plan, entryCode, confirmPairs, overridesBuiltin, thicknessChanged }
   const [saveConfirm, setSaveConfirm] = useState(null);
@@ -262,7 +262,7 @@ export function CatalogMaintenancePanel({ onClose }) {
     ? backingClassDisplayFor(selectedRow.entry, backingClassOf)
     : form?.backingClass ?? '';
 
-  // R13: 選択行が doc（文書同梱）起源で本体と不一致のとき、違っている項目だけを
+  // 選択行が doc（文書同梱）起源で本体と不一致のとき、違っている項目だけを
   // フォームでオレンジ表示＋本体値併記する（doc は編集不可＝表示のみ）。
   // diffPairs(kind, from=本体, to=doc, diffFields) — diffFields は row.diff（docDiffMap）が
   // 既に持つものをそのまま渡し、等価判定を再計算しない。
@@ -271,14 +271,14 @@ export function CatalogMaintenancePanel({ onClose }) {
         CatalogKind.MATERIAL, selectedRow.diff.baseEntry, selectedRow.entry, selectedRow.diff.diffFields,
       ).map(p => [p.field, p]))
     : new Map();
-  // ステップ12b（1章: 標準の上書き行はbuiltinEntryと違う項目に本体値を併記。R13のオレンジとは
+  // ステップ12b（1章: 標準の上書き行はbuiltinEntryと違う項目に本体値を併記。差分表示のオレンジとは
   // 別の意味（不一致の通知ではなく「標準からの差分」の参考表示）のため色は変えない）。
   const builtinDiffByField = (editState?.state === 'override' && selectedRow?.builtinEntry)
     ? new Map(diffPairs(CatalogKind.MATERIAL, selectedRow.builtinEntry, selectedRow.entry).map(p => [p.field, p]))
     : new Map();
   const fmtDiffValue = v => (v === null || v === undefined || v === '' ? '未設定' : String(v));
 
-  // ステップ6b（4.7 合わせ直し）: 出所「同梱」で差分ありの行（realignTargets。allRows基準——
+  // ステップ6b（合わせ直し）: 出所「同梱」で差分ありの行（realignTargets。allRows基準——
   // 検索・カテゴリ絞り込みの影響を受けない＝一覧全体が対象。ボタンのラベルにもその旨を明記する
   // QA指摘Minor-2・2026-09-23）。realignConfirm が立っているあいだは、対象キーごとに
   // planRealign（catalogMaintenance.js）でプラン（diffPairs/reason）を取り直す
@@ -389,7 +389,7 @@ export function CatalogMaintenancePanel({ onClose }) {
       // QA指摘n2: 新規追加もplanSaveEntry+applyCatalogEditPlan（performSave）へ寄せる。
       // validateMaterialEntryは引き続き使う——planSaveEntryにはcategoryの編集可否ゲート・
       // 下地材の必須項目検査（x/y>0・backingClass）が無いため（planSaveEntryは5種別共通の汎用関数で
-      // material専用のカテゴリ制約を持たせられない）。def.validate/R17はplanSaveEntry側でも
+      // material専用のカテゴリ制約を持たせられない）。def.validate/重複禁止検査はplanSaveEntry側でも
       // 再検査されるが、この新規追加経路は高々数百件の材一覧に対する1回の合成のため
       // 無視できる規模——二重実装というより「同じ検査を2箇所が独立に通す」保険的な重複であり、
       // 永続化手順（nextUser組み立て・overridesBuiltin付与・commit）自体の二重実装は解消する。
@@ -402,7 +402,7 @@ export function CatalogMaintenancePanel({ onClose }) {
     }
 
     // ステップ12b（本体編集）: builtin/override/user/doc-same/doc-override行の編集は
-    // planSaveEntry経由（固定項目検査・R17・overridesBuiltin付与・doc-same/doc-overrideの
+    // planSaveEntry経由（固定項目検査・重複禁止検査・overridesBuiltin付与・doc-same/doc-overrideの
     // confirmPairsをここに集約）。QA指摘m4: overridesBuiltin/thicknessChanged/needsConfirmは
     // planの戻り値をそのまま使う（.jsx側で再計算しない）。QA指摘m1: noop:trueなら
     // 何もせず「変更はありません」を出す。
@@ -435,7 +435,7 @@ export function CatalogMaintenancePanel({ onClose }) {
   // ステップ12b QA指摘M1（2026-09-24再報告）: 削除確認の使用状況は store.js の
   // collectCurrentCatalogUsage（未保存の作業中の編集を含む「現在の」使用キー）経由で取得する
   // ——旧実装（loadAllSavedFloors→collectCatalogUsageAcrossFloors）は最後に明示保存した内容
-  // しか見ず、保存前の削除で参照が宙に浮く事故があった（Q9違反）。
+  // しか見ず、保存前の削除で参照が宙に浮く事故があった（削除はライブラリから外すだけとする原則への違反）。
   async function handleDeleteClick() {
     setConfirmingDelete(true);
     setFormError(null);
@@ -508,7 +508,7 @@ export function CatalogMaintenancePanel({ onClose }) {
     handleLibraryChanged();
   }
 
-  // ステップ6b（4.7 合わせ直し）: 承認された対象キーを removeDocEntry（catalog/catalogRegistry.js）で
+  // ステップ6b（合わせ直し）: 承認された対象キーを removeDocEntry（catalog/catalogRegistry.js）で
   // 文書同梱（doc）から外す。永続化I/Oはしない——次の保存で同梱がbuiltin/user内容で書き直される
   // （saveCatalogDocument が overlay 合成結果から束を作るため）。dirtyState.js の markDirty で
   // 保存を促す（他の overlay 変更＝commitUserEntries経由はcommitUserEntries内で永続化まで行うのに対し、
@@ -749,7 +749,7 @@ export function CatalogMaintenancePanel({ onClose }) {
                         {/* ステップ12c: 下地材も選択肢として常に出す（追加・編集とも開放）。 */}
                         <option value={MATERIAL_CATEGORY.BACKING}>下地材</option>
                       </select>
-                      {/* R13: doc（文書同梱）が本体と不一致の項目だけ、本体値をオレンジで併記する */}
+                      {/* doc（文書同梱）が本体と不一致の項目だけ、本体値をオレンジで併記する */}
                       {docDiffByField.has('category') && (
                         <span className="catmnt-diff-note" style={{ color: CATALOG_DIFF_COLOR, fontSize: 11 }}>
                           （本体 {formatCategoryLabel(CatalogKind.MATERIAL, docDiffByField.get('category').from)}）
@@ -1051,7 +1051,7 @@ export function CatalogMaintenancePanel({ onClose }) {
  * ステップ7d: 境界マスターの閲覧タブ本体（読み取り専用。ステップ12h時点で
  * READONLY_KIND_FIELDSに残るのはこの1種別のみ——内装マスター・断面・建具記号・建具種別は
  * 12f/12g/12hで専用の編集タブへ移行した）。builtin一覧・overlay（catalog/catalogRegistry.js）を
- * buildCatalogRows で合成し、出所バッジ・R13差分（≠＋オレンジ＋diffTooltip）付きの一覧と、
+ * buildCatalogRows で合成し、出所バッジ・差分表示（≠＋オレンジ＋diffTooltip）付きの一覧と、
  * 選択行の詳細（READONLY_KIND_FIELDS）を表示するだけ——追加・複製・編集・削除・合わせ直しの
  * 手段は一切持たない。
  */
@@ -1257,7 +1257,7 @@ function SectionBulkImport({ builtinList, onImported }) {
   );
 }
 
-// ステップ12i（開発者向けエクスポート。4.2）: 保守パネルで編集した「標準の上書き分」「userの
+// ステップ12i（開発者向けエクスポート）: 保守パネルで編集した「標準の上書き分」「userの
 // 追加分」を本体ソースの該当行と同じ書式のJSソース片として読み取り専用textareaに出す
 // （開発者が本体マスタへ手作業で反映するときにそのままコピーして貼れる形）。対象の抽出
 // （collectExportableEntries）・整形（formatBuiltinSource）は純関数（catalog/catalogMaintenance.js）
@@ -1359,7 +1359,7 @@ const FIXTURE_SYMBOL_PROFILE_LABELS = Object.freeze({
 //
 // 現状の適用範囲（報告事項）: FixtureSymbolTab（12f）・InteriorMasterTab・SectionTab（12g）は
 // このフック・コンポーネントへ移行済み。材料タブ（CatalogMaintenancePanel本体）は本ラウンドでも
-// 未移行——材料タブは同じ確認state群に加えて「合わせ直す」（realignConfirm）・R13/標準差分の
+// 未移行——材料タブは同じ確認state群に加えて「合わせ直す」（realignConfirm）・同梱差分/標準差分の
 // フィールド別オレンジ表示・下地区分selectの表示値解決など、確認フロー本体だけでは括れない
 // 付随ロジックが同じハンドラへ深く絡んでおり、移行するには材料タブの十数本の既存wiringテスト
 // （performSave/handleDeleteConfirmed/handleRevertConfirmedの関数シグネチャ・busy state宣言・
@@ -1569,7 +1569,7 @@ function useCatalogEditActions(kind, { onSaved, onDeleted, onReverted, onError }
  * ステップ12f: 建具記号（fixtureSymbol）タブ本体。材料タブ（本体上書き込み。ステップ12a〜12c）と
  * 同じ共通ロジック（rowEditState/lockedFieldsFor/planSaveEntry/planRevertToBuiltin/
  * planRemoveUserEntry/applyCatalogEditPlan）を使う——追加・複製・編集・標準の上書き・標準に戻す・
- * 削除。「合わせ直す」（文書同梱をR13差分から本体へ合わせる一括操作）はこのタブの対象外
+ * 削除。「合わせ直す」（文書同梱を差分から本体へ合わせる一括操作）はこのタブの対象外
  * （設計12fの明示スコープに無い。doc-diff行は複製のみ可能なまま——rowEditStateのreasonどおり）。
  * @param {{ materialList: object[]|null }} props materialListは平面記号プレビューのダミー壁厚
  *   導出用（材料タブが動的importで読み込んだbuiltin一覧。未指定なら既定壁厚に落ちる）。
@@ -1638,7 +1638,7 @@ function FixtureSymbolTab({ materialList, onLibraryChanged }) {
   const disabledReason = form ? fixtureSymbolRowDisabledReason({ isAdding, editState }) : null;
   const { showProfile } = fixtureSymbolFormFieldsFor(form);
 
-  // QA指摘m5（2026-09-24再報告）: 材料タブと同じ2種類の併記——R13（doc起源が本体と不一致。
+  // QA指摘m5（2026-09-24再報告）: 材料タブと同じ2種類の併記——同梱差分（doc起源が本体と不一致。
   // オレンジ）と、標準を編集した行の本体値参考併記（非オレンジ）。
   const docDiffByField = (selectedRow?.origin === 'doc' && selectedRow?.diff)
     ? new Map(diffPairs(

@@ -66,7 +66,7 @@ test('valuesEqual: 配列・オブジェクトは項目ごとの深い比較（�
   assert.equal(valuesEqual([{ a: 1 }, { a: 2 }], [{ a: 1 }, { a: 2 }]), true);
 });
 
-// ---- R12: 不一致検出・通知条件 ----
+// ---- 不一致検出・通知条件 ----
 test('diffEntries: codeを除く全項目を比較する', () => {
   const a = material();
   const b = material({ note: '違う備考' });
@@ -132,7 +132,7 @@ test('shouldNotifyDiff: silentDiffFieldsを持たない種別（section）は常
   assert.equal(shouldNotifyDiff('section', ['width']), true);
 });
 
-// ---- R14: 内容照合の各段 ----
+// ---- 内容照合の各段 ----
 test('matchByContent: 完全一致（段0=exact）を返す', () => {
   const target = material({ code: '999999999999' });
   const result = matchByContent('material', target, [material()]);
@@ -251,7 +251,7 @@ test('classifyIncoming: idが一致し内容も一致 → same', () => {
   assert.equal(result.action, 'same');
 });
 
-test('classifyIncoming: idが一致し内容が違う → adopt-doc（notifyはR12に従う）', () => {
+test('classifyIncoming: idが一致し内容が違う → adopt-doc（notifyは不一致通知の判定規約に従う）', () => {
   const appEntries = [material()];
   const docEntry = material({ note: '別の備考' });
   const result = classifyIncoming('material', docEntry, appEntries, new Map());
@@ -325,14 +325,14 @@ test('classifyIncoming(openingSubType): fitting/windowで同じkeyでも複合�
   assert.equal(result.action, 'same'); // fittingの同名キーと誤って同一視しない
 });
 
-// ---- R17: 重複登録の禁止 ----
+// ---- 重複登録の禁止 ----
 test('assertNoDuplicate: 5項目一致（categoryが違っても）は例外を投げる', () => {
   const entries = [material({ code: '301000000001', category: 'panel' })];
   const incoming = material({ code: '999999999999', category: 'backing' });
   assert.throws(() => assertNoDuplicate('material', incoming, entries), /既に登録されています/);
 });
 
-// ---- 2026-09-22 QA指摘B/C: R17例外の.codeと文言（両方のキー＋名称） ----
+// ---- 2026-09-22 QA指摘B/C: 重複禁止例外の.codeと文言（両方のキー＋名称） ----
 test('【失敗系・2026-09-22 QA指摘B】assertNoDuplicate: 投げるErrorは.code=ERR_CATALOG_DUPLICATEを持つ（wallRefresh.jsが握りつぶさず再throwする判別に使う）', () => {
   const entries = [material({ code: '301000000001' })];
   const incoming = material({ code: '999999999999' });
@@ -414,7 +414,7 @@ test('assertNoDuplicate: dedupeFieldsを持たない種別（section）は常に
   assert.doesNotThrow(() => assertNoDuplicate('section', incoming, entries));
 });
 
-// ---- 4.6.1(b): 変換先候補の選定（大分類・中分類が同じ材）----
+// ---- 変換先候補の選定（大分類・中分類が同じ材）----
 test('suggestByClass: 大分類・中分類が同じ材を候補にする', () => {
   const entries = [
     material({ code: '102000000001', name: 'A' }),

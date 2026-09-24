@@ -1,9 +1,9 @@
 // ================================================================
-// 本体材コードの振り直し表（旧コード → 新コード。R7・4.4.1）。
+// 本体材コードの振り直し表（旧コード → 新コード）。
 //
 // 対応表: scratchpad/code-remap.md（2026-09-22 ユーザー承認済み・ステップ3a）。
 // 新コード＝大分類2桁＋中分類2桁＋材料id8桁。材料id は分類ごとに00000001から
-// 対応表の行順（materialData.jsの記載順ではない）で連番。値 null は削除・廃止（R18）。
+// 対応表の行順（materialData.jsの記載順ではない）で連番。値 null は削除・廃止。
 //
 // openings/openingCatalog.js の LEGACY_SUBTYPE_ALIASES / normalizeSubType と同型。
 // ゼロ依存の葉モジュール（他のsrcをimportしない）。
@@ -176,7 +176,7 @@ export const LEGACY_MATERIAL_CODE_ALIASES = Object.freeze({
   '111111111212': null, // 吸音テックス用捨て糊（削除）
 });
 
-/** 削除・廃止された材の記録（旧コード・旧内容）。4.4.1の対応表。 */
+/** 削除・廃止された材の記録（旧コード・旧内容）。振り直し表の対応表。 */
 export const REMOVED_MATERIALS = Object.freeze([
   Object.freeze({
     code: '111111111211', name: 'アスファルトプライマー',

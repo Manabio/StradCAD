@@ -83,7 +83,7 @@ test('【失敗系】parseDocumentEnvelope: floorsが配列でない・要素が
   assert.throws(() => parseDocumentEnvelope(badItem), /フロアデータが不正/);
 });
 
-// ---- catalogs（カタログ束の同梱。4.5）----
+// ---- catalogs（カタログ束の同梱）----
 
 test('buildDocumentJson→parseDocumentEnvelope: catalogsがラウンドトリップする', () => {
   const bundle = sampleBundle();

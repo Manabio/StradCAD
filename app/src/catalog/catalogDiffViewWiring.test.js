@@ -1,4 +1,4 @@
-// R13（ステップ6-2）の配線を固定する不変条件テスト（catalogMaintenanceWiring.test.js と同型
+// 差分表示規則（ステップ6-2）の配線を固定する不変条件テスト（catalogMaintenanceWiring.test.js と同型
 // ——ソーステキストの正規表現検査）。FinishTable.jsx・EccentricityDialog.jsx・
 // CatalogMaintenancePanel.jsx が catalog/catalogDiffView.js の CATALOG_DIFF_COLOR/diffTooltip
 // を経由して差分表示することを固定し、色('#f97316')の直書き（定数の再発明）への退行を検知する。
@@ -46,10 +46,10 @@ test('【不変条件・ステップ6-2】modes/FinishModeState.js: catalog/cata
   assert.ok(/\bdocDiffMap\(/.test(src), 'FinishModeState.js が docDiffMap(...) を呼んでいない');
 });
 
-// Q11裁定: renderer/・figure/（図面・印刷・出力する仕上げ表）にはオレンジ表示を付けない。
+// オレンジ表示は画面UIのみ: renderer/・figure/（図面・印刷・出力する仕上げ表）には付けない。
 // サブディレクトリも対象にする（2026-09-22 QA指摘Minor-3。将来renderer/figure配下に
 // サブディレクトリが増えても検知漏れしないよう再帰走査する）。
-test('【不変条件・Q11・ステップ6-2】renderer/・figure/ 配下（サブディレクトリ含む）は catalog/catalogDiffView.js を import しない', () => {
+test('【不変条件・ステップ6-2】renderer/・figure/ 配下（サブディレクトリ含む）は catalog/catalogDiffView.js を import しない', () => {
   const offenders = [];
   for (const dir of ['renderer', 'figure']) {
     const abs = path.join(appSrc, dir);

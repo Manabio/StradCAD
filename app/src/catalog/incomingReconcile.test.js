@@ -88,7 +88,7 @@ test('planIncomingReconcile: 複数docEntriesを種類ごとに振り分ける',
   assert.deepEqual(plan.adds, [addDoc]);
 });
 
-// ---- formatReconcileNotice: R12 通知文の4ケース ----
+// ---- formatReconcileNotice: 不一致通知文の4ケース ----
 test('formatReconcileNotice: 不一致のみ（adds無し）→ 件数を含む1文', () => {
   const plan = { adoptDoc: [{ key: 'k', diffFields: ['name'], notify: true, label: 'A材' }], adds: [] };
   const msg = formatReconcileNotice(plan, { kind: CatalogKind.MATERIAL });
@@ -105,7 +105,7 @@ test('formatReconcileNotice: 追加のみ（不一致無し）→ addedCountで�
 
 test('formatReconcileNotice: addedCountを渡さなければ（既定0）plan.adds非空でも「追加」文は出ない', () => {
   const plan = { adoptDoc: [], adds: [material({ code: '999999999999', name: 'B材' })] };
-  assert.equal(formatReconcileNotice(plan, { kind: CatalogKind.MATERIAL }), null, 'addedCount省略時は0扱い（R17で全て弾かれた場合に「追加されました」と誤報しないため）');
+  assert.equal(formatReconcileNotice(plan, { kind: CatalogKind.MATERIAL }), null, 'addedCount省略時は0扱い（重複禁止で全て弾かれた場合に「追加されました」と誤報しないため）');
 });
 
 test('formatReconcileNotice: 不一致＋追加の両方 → 2文をまとめて1本にする', () => {
@@ -248,7 +248,7 @@ test('2回読込みで adds=[] かつ commitUserFn 0回（1回目の結果を反
   assert.deepEqual(result2.addedKeys, []);
 });
 
-test('【失敗系】applyReconcilePlan: R17（同一内容の重複登録禁止）に弾かれた追加はskippedへ積みcommitUserFnには渡らない', async () => {
+test('【失敗系】applyReconcilePlan: 重複禁止（同一内容の重複登録禁止）に弾かれた追加はskippedへ積みcommitUserFnには渡らない', async () => {
   const dupA = material({ code: '999999999991', name: '同じ内容' });
   const dupB = material({ code: '999999999992', name: '同じ内容' }); // dedupeFields(name/spec/x/y/thickness)完全一致
   const plan = makePlan({ adds: [dupA, dupB] });
@@ -262,7 +262,7 @@ test('【失敗系】applyReconcilePlan: R17（同一内容の重複登録禁止
     onSkipped: (entry, err) => skippedCalls.push({ entry, err }),
   });
   assert.deepEqual(result.addedKeys, ['999999999991'], '先勝ちの1件だけ追加される');
-  assert.equal(result.skipped.length, 1, '2件目はR17で弾かれてskippedへ積まれる');
+  assert.equal(result.skipped.length, 1, '2件目は重複禁止で弾かれてskippedへ積まれる');
   assert.equal(result.skipped[0].entry, dupB);
   assert.match(result.skipped[0].reason, /既に登録されています/);
   assert.equal(skippedCalls.length, 1, 'onSkippedが1回呼ばれる');
@@ -314,7 +314,7 @@ test('applyReconcilePlan: aliases/adds両方空ならaddAliasesFn・commitUserFn
 
 // ---- QA指摘Major-1（2026-09-23）: alias確定したdocエントリはoverlayから外す ----
 // 根本原因: 6-1の自動alias（内容完全一致・別コード）は参照だけ読み替えてdocエントリを
-// overlayに残していたため、composeCatalogのR17合成後検査が「同内容がbuiltinとdocに併存」で
+// overlayに残していたため、composeCatalogの重複禁止合成後検査が「同内容がbuiltinとdocに併存」で
 // 例外になり、仕上げモードinit・壁再生成・保存が止まっていた（step6-1-test.stqを本番起動経路
 // で読むと再現。修正後は再現しないことをrepro-major1.mjs相当の手順で実測——報告参照）。
 
@@ -376,7 +376,7 @@ test('結合【QA指摘Major-1の再現ケース】: 内容完全一致・別コ
   assert.deepEqual(overlayFor(CatalogKind.MATERIAL).doc, [], 'aliasを確定したdocエントリがoverlayから外れている');
   assert.doesNotThrow(
     () => composeCatalog(CatalogKind.MATERIAL, [builtinEntry]),
-    'reconcile後はR17（合成後の重複禁止検査）に引っかからず composeCatalog が通る（QA指摘Major-1）',
+    'reconcile後は合成後の重複禁止検査に引っかからず composeCatalog が通る（QA指摘Major-1）',
   );
 });
 
@@ -544,14 +544,14 @@ test('planIncomingReconcile: kind=openingSubTypeは同キー・defaultHeight違�
   assert.equal(plan.adoptDoc[0].notify, true, 'defaultHeightの差は通知する契約（未設定の旧建具が既定値へ落ちる実害があるため）');
 });
 
-test('【失敗系】planIncomingReconcile: kind=openingSubTypeはlabel＋defaultHeightが同時に違う同梱もnotify:false（silentが1つでもあれば無音になるR12既存規約。Minor-1）', () => {
+test('【失敗系】planIncomingReconcile: kind=openingSubTypeはlabel＋defaultHeightが同時に違う同梱もnotify:false（silentが1つでもあれば無音になる既存規約。Minor-1）', () => {
   const existing = openingSubType({ label: '片開き戸(本体)', defaultHeight: 2000 });
   const doc = openingSubType({ label: '片開き戸(同梱)', defaultHeight: 1800 });
   const plan = planIncomingReconcile({
     kind: CatalogKind.OPENING_SUB_TYPE, docEntries: [doc], appEntries: [existing],
   });
   assert.deepEqual(plan.adoptDoc[0].diffFields, ['label', 'defaultHeight']);
-  assert.equal(plan.adoptDoc[0].notify, false, 'silentDiffFields(label)が混ざると非silent項目(defaultHeight)の差も一緒に無音化する（R12規約。規約変更は別途裁定）');
+  assert.equal(plan.adoptDoc[0].notify, false, 'silentDiffFields(label)が混ざると非silent項目(defaultHeight)の差も一緒に無音化する（既存規約。規約変更は別途裁定）');
   assert.equal(formatReconcileNotice(plan, { kind: CatalogKind.OPENING_SUB_TYPE }), null, '通知するものが無いのでformatReconcileNoticeはnull');
 });
 
@@ -752,7 +752,7 @@ test('結合(10b接続): kind=openingSubTypeのalias確定後、applyDocumentCod
   assert.equal(normalized.openings[0].subType, 'singleSwing', 'alias確定後は文書固有の読み替え表でsubTypeが書換わるはず');
 });
 
-test('結合: R17で1件skipされた場合、applyReconcilePlanの結果(addedKeys.length/skipped.length)をformatReconcileNoticeへ渡すと追加文＋スキップ文が出る', async () => {
+test('結合: 重複禁止で1件skipされた場合、applyReconcilePlanの結果(addedKeys.length/skipped.length)をformatReconcileNoticeへ渡すと追加文＋スキップ文が出る', async () => {
   const dupA = material({ code: '999999999991', name: '同じ内容' });
   const dupB = material({ code: '999999999992', name: '同じ内容' });
   const plan = makePlan({ adds: [dupA, dupB] });

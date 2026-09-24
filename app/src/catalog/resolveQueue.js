@@ -1,5 +1,6 @@
 // ================================================================
-// 指示UI（ステップ6-3・R10・4.6.1の場面(a)(b)(c)＋propose）— 行モデルの組み立て・候補選定・
+// 指示UI（ステップ6-3・自動では置き換えない原則・読込み時の変換先指示の場面(a)(b)(c)＋propose）
+// — 行モデルの組み立て・候補選定・
 // 決定の適用。
 //
 // 純モジュール（葉。I/O なし）。同ディレクトリの兄弟モジュール（catalogKinds.js・catalogMatch.js・
@@ -29,7 +30,7 @@ const ALLOWED_ACTIONS = Object.freeze({
 });
 
 /**
- * 4.6.1場面(b): 実体が無くコードしか無いとき、旧内容（removedEntry。REMOVED_MATERIALS参照）が
+ * 場面(b): 実体が無くコードしか無いとき、旧内容（removedEntry。REMOVED_MATERIALS参照）が
  * あれば内容一致検索（matchByContent→rankCandidates）、無ければ大分類・中分類が同じ材
  * （suggestByClass）を候補にする。候補が無ければ空配列（「候補なし」）。
  * 旧1111コード（旧体系＝未分類）は major/minor が MATERIAL_CLASSES に存在しないため、
@@ -62,7 +63,7 @@ function nextFreeCodeInSameClass(code, appEntries) {
 }
 
 /**
- * 場面(a): 4.4 の overridesBuiltin 無し衝突（catalogBundle.js detectLibraryConflicts の1件）
+ * 場面(a): ライブラリ衝突検出の overridesBuiltin 無し衝突（catalogBundle.js detectLibraryConflicts の1件）
  * から行を組み立てる。対象（targetEntry）は userEntries から key で引く。候補は appEntries
  * （同key除く）に対する内容一致検索——衝突しているユーザー材を「別の既存材の参照」に
  * 差し替える（代替材を指示＝pick）ための候補。
@@ -198,9 +199,9 @@ function keyOfResolveCandidate(row, candidate) {
 
 /**
  * 指示UI（ui/CatalogResolveDialog.jsx）の行の既定の決定（ユーザーが触っていない行に使う）。
- * 裁定（コーディネーター・2026-09-23）: propose（4.6.1の「類似項目の提案」。同梱データが
+ * 裁定（コーディネーター・2026-09-23）: propose（「類似項目の提案」。同梱データが
  * ユーザーの意図しない置きかえ候補として現れる場面）は**候補数に関わらず既定defer**——
- * R10「自動では置きかえない」の徹底で、承認は行ごとの明示操作にする（「まとめて承認」
+ * 「自動では置きかえない」の徹底で、承認は行ごとの明示操作にする（「まとめて承認」
  * ボタンで未接触のpropose行まで一括approveされてしまう退行を防ぐ）。unresolved-code・
  * library-conflictは現行どおり（候補があれば先頭候補をapprove）。
  * ui/CatalogResolveDialog.jsx はこの関数を経由し、自前で同じ判定を持たない

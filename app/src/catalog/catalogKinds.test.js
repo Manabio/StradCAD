@@ -189,7 +189,7 @@ test('【積み残し検出用・QA指摘Minor-3】keyBoundFields/overrideLocked
   }
 });
 
-// ---- classOf（材料分類。R4/R6/R18・Q13確定2026-09-22）----
+// ---- classOf（材料分類。分類表確定裁定2026-09-22）----
 test('classOf: 既知の大分類・中分類はラベルを返す', () => {
   assert.deepEqual(classOf(10, 12), { major: 10, majorLabel: '木材', minor: 12, minorLabel: '面材' });
   assert.deepEqual(classOf(30, 24), { major: 30, majorLabel: 'その他建材', minor: 24, minorLabel: '左官' });
@@ -207,7 +207,7 @@ test('classOf: 50コンクリート/10RC壁（暫定分類・ステップ3追加
   assert.deepEqual(classOf(50, 10), { major: 50, majorLabel: 'コンクリート', minor: 10, minorLabel: 'RC壁' });
 });
 
-test('MATERIAL_CLASSES: 中分類は全大分類で10始まりの2刻み・11欠番（R6の分類表そのまま）', () => {
+test('MATERIAL_CLASSES: 中分類は全大分類で10始まりの2刻み・11欠番（分類表そのまま）', () => {
   assert.equal(MATERIAL_CLASSES[11], undefined);
   assert.equal(Object.keys(MATERIAL_CLASSES).length, 5);
 });
@@ -254,12 +254,12 @@ test('【失敗系】material.validate: 型違い（xが文字列）は例外を
   assert.throws(() => kindDef('material').validate(fullMaterial({ x: '10' })), /xが不正/);
 });
 
-// QA指摘・Minor（4.5-2）: 未設定はnull・省略は不可。spec/x/y/thicknessの省略を弾く。
+// QA指摘・Minor: 未設定はnull・省略は不可。spec/x/y/thicknessの省略を弾く。
 function fullMaterial(overrides) {
   return { code: '301000000001', name: 'x', spec: 'JIS A 6901', x: 0, y: 0, thickness: 9.5, ...overrides };
 }
 
-test('【失敗系】material.validate: spec省略（undefined）は例外を投げる（nullは許容しない＝4.5-2はthicknessのみnull許容）', () => {
+test('【失敗系】material.validate: spec省略（undefined）は例外を投げる（nullは許容しない＝thicknessのみnull許容）', () => {
   const e = fullMaterial(); delete e.spec;
   assert.throws(() => kindDef('material').validate(e), /必須項目が欠落.*spec/);
 });

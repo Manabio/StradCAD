@@ -47,7 +47,7 @@ test('originOf: 未知のキーはnull', () => {
   assert.equal(originOf('material', 'no-such-key', builtin), null);
 });
 
-// ---- R17 合成後の強制（裁定A）: overlay空でもbuiltin自身が重複していれば検出する ----
+// ---- 重複禁止の合成後の強制（裁定A）: overlay空でもbuiltin自身が重複していれば検出する ----
 test('【失敗系】composeCatalog: builtin同士がdedupeFields完全一致（category違いも含む）なら例外', () => {
   const a = material({ code: '301000000001', category: 'panel' });
   const b = material({ code: '301000000002', category: 'backing' }); // 5項目一致・categoryだけ違う
@@ -67,8 +67,8 @@ test('composeCatalog/composeList: dedupeFieldsを持たない種別（section）
   assert.doesNotThrow(() => composeList('section', [a, b]));
 });
 
-// ---- 2026-09-22 QA指摘B/C: R17例外の.codeと文言（出所つき） ----
-test('【失敗系・2026-09-22 QA指摘B】composeCatalog: R17例外は.code=ERR_CATALOG_DUPLICATEを持つ', () => {
+// ---- 2026-09-22 QA指摘B/C: 重複禁止例外の.codeと文言（出所つき） ----
+test('【失敗系・2026-09-22 QA指摘B】composeCatalog: 重複禁止例外は.code=ERR_CATALOG_DUPLICATEを持つ', () => {
   const a = material({ code: '301000000001', category: 'panel' });
   const b = material({ code: '301000000002', category: 'backing' });
   try {
@@ -79,7 +79,7 @@ test('【失敗系・2026-09-22 QA指摘B】composeCatalog: R17例外は.code=ER
   }
 });
 
-test('【2026-09-22 QA指摘C】composeCatalog: R17例外メッセージは両方のキー＋名称＋出所(builtin)を含む', () => {
+test('【2026-09-22 QA指摘C】composeCatalog: 重複禁止例外メッセージは両方のキー＋名称＋出所(builtin)を含む', () => {
   const a = material({ code: '102000000003', name: 'せっこうボード t=12.5', category: 'panel' });
   const b = material({ code: '302000000001', name: 'せっこうボード t=12.5', category: 'backing' });
   assert.throws(
@@ -88,14 +88,14 @@ test('【2026-09-22 QA指摘C】composeCatalog: R17例外メッセージは両�
   );
 });
 
-// ---- 2026-09-22 QA指摘・Minor: originOfもR17検査を掛けて挙動を揃える ----
+// ---- 2026-09-22 QA指摘・Minor: originOfも重複禁止検査を掛けて挙動を揃える ----
 test('【失敗系・2026-09-22 QA指摘・Minor】originOf: builtin同士がdedupeFields完全一致なら例外（composeCatalog/composeListと挙動を揃える）', () => {
   const a = material({ code: '301000000001', category: 'panel' });
   const b = material({ code: '301000000002', category: 'backing' });
   assert.throws(() => originOf('material', a.code, [a, b]), /既に登録されています/);
 });
 
-// ---- 2026-09-22 QA指摘D・T6: dedupeFieldsに配列・オブジェクトが来たら4.5-3(文字列化比較禁止)
+// ---- 2026-09-22 QA指摘D・T6: dedupeFieldsに配列・オブジェクトが来たら文字列化比較禁止の規約
 // によりJSON.stringifyでの比較をせず、日本語例外にする。ダミー行（rankCandidatesWithと同じ
 // 方式）で凍結された本番登録表を書き換えずに確認する ----
 test('【失敗系・2026-09-22 QA指摘D・T6】assertNoDuplicatesInMergedWith: dedupeFieldsに配列値が来たら「未対応」の例外（JSON.stringify比較はしない）', () => {

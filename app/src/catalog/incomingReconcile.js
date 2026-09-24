@@ -87,7 +87,7 @@ function namesLine(names) {
  * 省略し、全セクションが0件ならnull。名称は最大2件＋「ほかN件」。
  * - 不一致: adoptDocのうちnotify:trueのものの件数。
  * - 追加: addedCount（呼び出し側が applyReconcilePlan の結果=result.addedKeys.length を渡す。
- *   plan.adds.length ではなく実際に追加された件数——R17で弾かれたものを「追加されました」と
+ *   plan.adds.length ではなく実際に追加された件数——重複禁止で弾かれたものを「追加されました」と
  *   誤って報告しないため）。skippedCount が非空なら追加のスキップ件数を1文足す
  *   （呼び出し側が result.skipped.length を渡す）。
  * - 読み替え: plan.aliases の件数（alias適用は保存until確定なので「保存すると確定します」を添える）。
@@ -133,11 +133,11 @@ export function formatReconcileNotice(plan, { kind, addedCount = 0, skippedCount
  *   続けて、alias確定した doc エントリ（from＝そのdocEntry自身のキー）を removeDocEntryFn(kind, from)
  *   で overlay の doc から外す（QA指摘Major-1・2026-09-23: 読み替えは「参照をどのキーへ向けるか」を
  *   決めるだけで、docエントリ自体を overlay に残すと、内容完全一致のまま別キーで builtin/user と
- *   併存することになり、R17（合成後の重複禁止検査）が「同内容が複数キーで存在する」として例外を
+ *   併存することになり、合成後の重複禁止検査が「同内容が複数キーで存在する」として例外を
  *   投げる——仕上げモードinit・壁再生成・保存が軒並み止まり、利用者に直す手段が無くなる。
  *   次の保存では overlay 合成結果から束を作るため、doc を外した分は自然に消える）。
  *   from が（既に外れている等で）doc に無い場合は何もしない（無いキーの例外を投げさせない）。
- * - adds: R17（assertNoDuplicate。dedupeFields完全一致）に弾かれた追加は例外を投げず skipped へ積み、
+ * - adds: 重複禁止（assertNoDuplicate。dedupeFields完全一致）に弾かれた追加は例外を投げず skipped へ積み、
  *   onSkipped(entry, error) を呼ぶ（複数のdocEntryが互いに同一内容を持つ場合の保険。planning時点の
  *   appEntriesには無かったため'add'判定されたが、adds同士が重複することはあり得るため）。
  *   弾かれなかった追加は currentUser へ積み上げ、1件以上あれば commitUserFn(nextUser) を1回呼ぶ

@@ -1,5 +1,5 @@
 // ================================================================
-// R13: 文書同梱材が本体（user/builtin）と不一致のときの表示規則（色・記号・ツールチップ文言）。
+// 文書同梱材が本体（user/builtin）と不一致のときの差分表示規則（色・記号・ツールチップ文言）。
 //
 // 純モジュール（葉）。catalogKinds.js（登録表。compareFields/knownFieldsの参照）と
 // catalogMatch.js（valuesEqual/diffEntries。同ディレクトリの兄弟＝許可リスト内）に依存する。
@@ -8,14 +8,14 @@
 //
 // 色は JS 定数のみで持つ（CSSクラスにしない）。.jsx 側は style={{ color: CATALOG_DIFF_COLOR }}
 // で使う。renderer/・figure/（図面・印刷・出力）はこのモジュールを import しない
-// （Q11裁定: 図面・印刷・出力する仕上げ表にはオレンジ表示を付けない）。
+// （オレンジ表示は画面UIのみ。図面・印刷・出力する仕上げ表には付けない）。
 // ================================================================
 
 import { kindDef } from './catalogKinds.js';
 import { diffEntries } from './catalogMatch.js';
 
 /**
- * R13 差分表示色。renderer/SiteLinesLayer.jsx の隣地境界線と同じ値(#f97316)だが、
+ * 差分表示色。renderer/SiteLinesLayer.jsx の隣地境界線と同じ値(#f97316)だが、
  * 意味が別（敷地図の線色 vs カタログの不一致表示）のため定数は共有しない。
  */
 export const CATALOG_DIFF_COLOR = '#f97316';

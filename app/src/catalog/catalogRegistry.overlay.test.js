@@ -156,7 +156,7 @@ test('composeList: builtinに無いuser/docの追加分は末尾に置かれる'
 // ---- originOf ----
 test('originOf: 設定したoverlayに応じてdoc/user/builtinを返す', () => {
   const builtinEntry = material({ code: '301000000001' });
-  // dedupeFields（name等）まで同じにするとR17の合成後検査（本テスト追加時に揃えた挙動）に
+  // dedupeFields（name等）まで同じにすると重複禁止の合成後検査（本テスト追加時に揃えた挙動）に
   // 引っかかってしまうため、docEntryはnameを変えて別内容にする（2026-09-22 QA指摘・Minor対応）。
   const docEntry = material({ code: '301000000002', name: '別材(doc)' });
   setOverlay('material', { doc: [docEntry] });
@@ -164,7 +164,7 @@ test('originOf: 設定したoverlayに応じてdoc/user/builtinを返す', () =>
   assert.equal(originOf('material', docEntry.code, [builtinEntry]), 'doc');
 });
 
-// ---- R17 合成後の強制（裁定A）----
+// ---- 重複禁止の合成後の強制（裁定A）----
 test('【失敗系】composeCatalog: builtinと5項目一致・categoryだけ違うuserエントリは合成後に例外（裁定A）', () => {
   const builtinEntry = material({ code: '301000000001', category: 'panel' });
   const conflictingUser = material({ code: '301200000002', category: 'backing' }); // 5項目一致・categoryだけ違う
@@ -179,7 +179,7 @@ test('【失敗系】composeList: builtinと5項目一致・categoryだけ違う
   assert.throws(() => composeList('material', [builtinEntry]), /既に登録されています/);
 });
 
-// ---- 2026-09-22 QA指摘B/C: R17例外の.codeと文言（doc/builtinの出所を併記） ----
+// ---- 2026-09-22 QA指摘B/C: 重複禁止例外の.codeと文言（doc/builtinの出所を併記） ----
 test('【失敗系・2026-09-22 QA指摘B/C】composeCatalog: builtin⇔docの重複例外は.code=ERR_CATALOG_DUPLICATEを持ち、出所(builtin/doc)を併記する', () => {
   const builtinEntry = material({ code: '102000000003', name: 'せっこうボード t=12.5', category: 'panel' });
   const docEntry = material({ code: '302000000001', name: 'せっこうボード t=12.5', category: 'backing' });
@@ -243,7 +243,7 @@ test('【2026-09-22 QA指摘E・T3】registryのO(n)正規化: null と 0 は別
   assert.doesNotThrow(() => composeCatalog('material', [builtinEntry]));
 });
 
-// ---- R13: docDiffMap/docDiffFields（ステップ6-2）----
+// ---- 差分情報: docDiffMap/docDiffFields（ステップ6-2）----
 // 判定はcatalogMatch.jsのdiffEntries一本（このファイルでは「doc起源のキーだけが対象」
 // 「本体（user優先・無ければbuiltin）との比較」という配線側の規約を確認する）。
 
@@ -326,7 +326,7 @@ test('docDiffMap: baseOriginはuserがあればuser、無ければbuiltin（両�
   assert.equal(entryB.baseEntry, builtinB);
 });
 
-// ---- removeDocEntry（ステップ6b: 4.7 文書同梱から1件外す。次の保存でbuiltin/user内容が同梱し直される）----
+// ---- removeDocEntry（ステップ6b: 合わせ直し。文書同梱から1件外す。次の保存でbuiltin/user内容が同梱し直される）----
 
 test('removeDocEntry: 指定キーがdocから外れる（userは不変。変異=userも消すと赤）', () => {
   const docA = material({ code: '301000000001', note: 'doc-A' });
@@ -430,7 +430,7 @@ test('overlayGeneration: removeDocEntryで++される（setOverlay経由。overl
 
 test('overlayGeneration: composeList/originOf/docDiffMap/overlayForを呼んでも変わらない（いずれも読み取り専用）', () => {
   const builtinEntry = material();
-  // R17（dedupeFields完全一致禁止）に触れないよう、matchFields（name等）をbuiltinEntryと変える。
+  // 重複禁止（dedupeFields完全一致禁止）に触れないよう、matchFields（name等）をbuiltinEntryと変える。
   setOverlay('material', { doc: [material({ code: '999999999999', name: '別材' })] });
   const before = overlayGeneration();
   composeList('material', [builtinEntry]);

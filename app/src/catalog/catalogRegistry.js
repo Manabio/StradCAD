@@ -98,7 +98,7 @@ export function overlayFor(kind) {
  * dedupeFields の1値を正規化文字列にする。トップレベル同値規則（catalogMatch.js valuesEqual:
  * 文字列はtrim・null≡undefined、null/0は区別）と一致させる。
  * 2026-09-22 QA指摘D: 文字列・数値・null(≡undefined)以外の値（配列・オブジェクト・boolean等）は
- * 4.5-3（文字列化比較の禁止）によりJSON.stringifyでの比較を許さない——現状の登録表では
+ * 文字列化比較の禁止によりJSON.stringifyでの比較を許さない——現状の登録表では
  * dedupeFieldsに文字列・数値・nullableな数値以外を持つ種別が無いため（materialの
  * name/spec/x/y/thicknessのみ、全てスカラー）、来たら「未対応」の日本語例外にする
  * （2026-09-22 QA指摘・Minor: 文言を型名一般で言えるように一般化——配列・オブジェクトに限らず
@@ -150,7 +150,7 @@ export function assertNoDuplicatesInMergedWith(kind, def, mergedEntries, origins
 }
 
 /**
- * R17 を合成後にも強制する（裁定A）: setOverlay 時点では builtin を知らないため、
+ * 重複禁止（dedupeFields完全一致）を合成後にも強制する（裁定A）: setOverlay 時点では builtin を知らないため、
  * 合成結果（builtin+user+doc）に対して dedupeFields 完全一致を検出したら例外を投げる。
  * O(n)（2026-09-22 QA指摘・Minor: dedupeFieldsの正規化タプルをキーにしたMapで検出し、
  * 全件×全件のO(n^2)にしない）。本番経路（kindは種別文字列専用。kindDef(kind)で登録表を引く）。
@@ -159,7 +159,7 @@ function assertNoDuplicatesInMerged(kind, mergedEntries, origins) {
   return assertNoDuplicatesInMergedWith(kind, kindDef(kind), mergedEntries, origins);
 }
 
-/** builtinList と overlay(doc/user) を解決し、合成Map・出所Mapを作ってR17を検査する。 */
+/** builtinList と overlay(doc/user) を解決し、合成Map・出所Mapを作って重複禁止を検査する。 */
 function resolveMergedAndOrigins(kind, builtinList) {
   const { doc, user } = overlayFor(kind);
   const map = resolveCatalog(kind, { doc, user, builtin: builtinList });
@@ -202,7 +202,7 @@ export function composeList(kind, builtinList) {
 
 /**
  * resolveCatalog/composeCatalog と同じ解決順で、キー → 出所('doc'|'user'|'builtin'|null)。
- * composeCatalog/composeList と同じR17検査を掛ける（2026-09-22 QA指摘・Minor: 挙動を揃える。
+ * composeCatalog/composeList と同じ重複禁止検査を掛ける（2026-09-22 QA指摘・Minor: 挙動を揃える。
  * 重複があるカタログについて出所だけ黙って返さない）。
  */
 export function originOf(kind, key, builtinList) {
@@ -211,7 +211,7 @@ export function originOf(kind, key, builtinList) {
 }
 
 /**
- * R13: doc（文書同梱）起源のキーのうち、本体（user優先・無ければbuiltin）と内容が異なる
+ * doc（文書同梱）起源のキーのうち、本体（user優先・無ければbuiltin）と内容が異なる
  * ものだけを集めた Map（doc>user>builtinの解決順ではdocが常に勝つため、docが存在する
  * キーの合成結果は必ずdoc——ここでいう「本体」はdocを除いた場合に採用されていたはずの
  * エントリを指す）。判定は diffEntries のみ（唯一の判定箇所）。
@@ -248,7 +248,7 @@ export function docDiffFields(kind, key, builtinList) {
 }
 
 /**
- * ステップ12a（4.3 使用中のuserエントリ削除時にdocへ書き写す・planRemoveUserEntry）: kind の
+ * ステップ12a（使用中のuserエントリ削除時にdocへ書き写す・planRemoveUserEntry）: kind の
  * doc（文書同梱）へ1件追記する。setOverlay(kind, {doc:[...doc外し+entry], user}) の薄いラッパ——
  * user は触らない。doc に同キーが既にあれば上書きする（呼び出し側が重複追記しない前提だが、
  * 誤って2回呼ばれても壊れないようにする）。
@@ -264,7 +264,7 @@ export function appendDocEntry(kind, entry) {
 }
 
 /**
- * ステップ6b（4.7 合わせ直し）: 文書同梱（doc）から key のエントリを1件外す。
+ * ステップ6b（合わせ直し）: 文書同梱（doc）から key のエントリを1件外す。
  * setOverlay(kind, { doc: doc.filter(...), user }) の薄いラッパ——user は触らない。
  * 次の保存で（doc が外れた分）builtin/user の内容が同梱し直される（saveCatalogDocument
  * は overlay 合成結果から束を作るため自然にそうなる）。

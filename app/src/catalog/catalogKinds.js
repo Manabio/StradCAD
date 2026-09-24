@@ -1,8 +1,8 @@
 // ================================================================
 // カタログ種別の登録表（唯一の定義箇所）＋ 材料分類表（MATERIAL_CLASSES）。
 //
-// カタログ束（.stq 同梱／ユーザーライブラリ）を構成する5種別
-// （材料・内装マスター・境界マスター・構造断面・建具種別）を1本の表に持つ。
+// カタログ束（.stq 同梱／ユーザーライブラリ）を構成する6種別
+// （材料・内装マスター・境界マスター・構造断面・建具種別・建具記号）を1本の表に持つ。
 // 種別の追加はこの表に1行足すだけでよい。
 //
 // 純モジュール（葉）。store.js / snap.js / .jsx を静的 import しない。
@@ -15,8 +15,9 @@
 // ならない。ここでの動的 import は「コード分割」目的ではなく node:test から本ファイルを
 // 静的import しても何も読み込まれない純モジュールを維持するための thunk（catalogImports.test.js
 // が固定）。**materialData.js がこの警告に現れたら不変条件7-1（materialDataの独立チャンク
-// 維持）の退行——materialData.js は他のどこからも静的importされていないため、警告3件から
-// 増えていないかを都度確認すること。
+// 維持）の退行——materialData.js は catalog/*.js からは静的 import しない
+// （catalogImports.test.js が固定）。独立チャンクが保たれているかは、build の警告3件から
+// 増えていないかで都度確認すること。
 // ================================================================
 
 function isPlainObject(v) {
@@ -121,7 +122,8 @@ export const KIND_LABELS = Object.freeze({
 });
 
 // ----------------------------------------------------------------
-// 材料コード分類表（R4・R6・R18・Q13確定 2026-09-22）。数値割当・名称の唯一の定義箇所。
+// 材料コード分類表（12桁コードの大分類・中分類。中分類は10始まり2刻み。2026-09-22 確定）。
+// 数値割当・名称の唯一の定義箇所。
 // 中分類は全大分類で「10始まりの2刻み」（`11`は旧体系＝未分類として欠番）。
 // ----------------------------------------------------------------
 export const MATERIAL_CLASSES = Object.freeze({
@@ -144,7 +146,7 @@ export const MATERIAL_CLASSES = Object.freeze({
     label: '塗装',
     minors: Object.freeze({ 10: '塗料', 12: '防水' }),
   }),
-  // 暫定分類（2026-09-22 ステップ3・R6追補）。後日RC造図面で構造材へ昇格予定——
+  // 暫定分類（2026-09-22 ステップ3・材料分類表への追補）。後日RC造図面で構造材へ昇格予定——
   // 現状は仕上げモードの下地材（材データのcategory:'backing'）としてのみ扱う。
   50: Object.freeze({
     label: 'コンクリート',
@@ -206,19 +208,19 @@ const REGISTRY = Object.assign(Object.create(null), {
     // isEditableMaterialCategory/backingClassOf等の判定基盤が崩れるため。
     keyBoundFields: ['code'],
     overrideLockedFields: ['category', 'backingClass'],
-    // R12: 不一致判定は code を除く全項目。spec/thickness は通知なし例外（4.3）。
+    // 不一致判定は code を除く全項目。spec/thickness は通知なし例外。
     // ステップ12c QA指摘M2（2026-09-24再報告）: backingClass（下地区分）を追加——構造モード
     // 「壁由来の梁芯・小梁自動生成」の判定（structural/wallBeamAxes.js backingClassOf経由）に
     // 効く項目のため、spec/thicknessと違いsilentDiffFieldsには入れない（通知あり）。
     compareFields: ['name', 'spec', 'x', 'y', 'thickness', 'category', 'note', 'backingClass'],
     silentDiffFields: ['spec', 'thickness'],
-    // R14: 完全一致→下から1つずつ外して類似検索（末尾=thicknessから外す）。
+    // 完全一致→下から1つずつ外して類似検索（末尾=thicknessから外す）。
     matchFields: ['name', 'spec', 'x', 'y', 'thickness'],
     minMatchFields: 1,
-    // R17: category が違っても5項目一致は重複禁止。
+    // category が違っても5項目一致は重複禁止。
     dedupeFields: ['name', 'spec', 'x', 'y', 'thickness'],
     validate(entry) {
-      // 4.5-2（QA指摘・Minor）: 未設定はnull・省略は不可。spec/x/y/thicknessは必ず存在すること
+      // QA指摘・Minor: 未設定はnull・省略は不可。spec/x/y/thicknessは必ず存在すること
       // （thicknessだけnull許容）。materialData.jsの実データ132件は全件この形＝省略なし。
       requireFields(entry, ['code', 'name', 'spec', 'x', 'y', 'thickness'], '材エントリ');
       if (!isNonEmptyString(entry.code) || !/^\d{12}$/.test(entry.code)) {
@@ -326,17 +328,17 @@ const REGISTRY = Object.assign(Object.create(null), {
     overrideLockedFields: [],
     compareFields: ['label', 'mechanism', 'wallKinds', 'defaultWidth', 'defaultHeight', 'childRatio', 'fireLeaves', 'fireAngle', 'slideLayout'],
     // Q-B（2026-09-23裁定）: 呼称（label）差は通知しない。全文書が建具を同梱するため、本体の
-    // 呼称を1件直すと全旧文書で通知が出てしまう（R12＝材のspec/thicknessと同型の割り切り）。
+    // 呼称を1件直すと全旧文書で通知が出てしまう（材のspec/thicknessと同型の割り切り）。
     // defaultWidth/defaultHeight・mechanism等は引き続き通知する（heightが未設定の旧建具が
     // 既定値へ落ちる実害があるため）。
     // Minor-1（QA指摘・2026-09-23）: shouldNotifyDiff（catalogMatch.js）は silentDiffFields の
     // いずれか1つでも diffFields に含まれていれば、他の非silent項目が同時に違っていても通知
-    // しない（R12の既存規約。材のspec/thicknessと同じ仕様——silent側を「無視できる差分」ではなく
+    // しない（既存規約。材のspec/thicknessと同じ仕様——silent側を「無視できる差分」ではなく
     // 「これが混ざったら黙る」判定として使う）。そのためlabelとdefaultHeightが同時に違う同梱も
     // 無音になる（defaultHeight単独の差は通知される）。この規約自体を変える（項目ごとに独立で
-    // 判定する等）場合は別途裁定が必要——本ステップでは既存のR12規約をそのまま踏襲する。
+    // 判定する等）場合は別途裁定が必要——本ステップでは既存の規約をそのまま踏襲する。
     silentDiffFields: ['label'],
-    // R14・QA指摘 M1（2026-09-22）: 末尾から外す順。自動採用（exact＝matchByContentのlevel===0）は
+    // QA指摘 M1（2026-09-22）: 末尾から外す順。自動採用（exact＝matchByContentのlevel===0）は
     // 全項目一致のときだけ（他種別と同じ規約。ここで新たにminMatchFieldsを上げているわけではない）。
     matchFields: ['category', 'mechanism', 'childRatio', 'fireLeaves', 'fireAngle', 'slideLayout', 'wallKinds', 'defaultWidth', 'defaultHeight', 'label'],
     minMatchFields: 2,

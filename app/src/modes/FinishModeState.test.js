@@ -220,7 +220,7 @@ test('FinishModeState.init: interiorMastersはcomposeCatalog(INTERIOR_MASTER)の
   assert.equal(state.getInteriorMaster('NOT_A_REAL_KEY'), null, '未登録キーはnull');
 });
 
-// ---- R13: 材照合の材データロード（init）でmaterialDiffs（docDiffMap）も張る ----
+// ---- 材照合の材データロード（init）でmaterialDiffs（docDiffMap）も張る ----
 test.afterEach(() => clearOverlays());
 
 test('FinishModeState.init: 文書同梱材が本体と不一致なら materialDiff(code) が差分情報を返す', async () => {

@@ -1,4 +1,4 @@
-// 指示UI（ステップ6-3・R10）の配線を固定する不変条件テスト（catalogMaintenanceWiring.test.js・
+// 指示UI（ステップ6-3・自動では置き換えない原則）の配線を固定する不変条件テスト（catalogMaintenanceWiring.test.js・
 // catalogDiffViewWiring.test.js と同型——ソーステキストの正規表現検査）。
 // 純ロジック（行の組み立て・候補選定・決定の適用）自体は resolveQueue.test.js が検証する。
 import { test } from 'node:test';
@@ -496,7 +496,7 @@ test('【不変条件・ステップ6-3・QA指摘Minor-5】ui/CatalogResolveDia
   );
 });
 
-test('【不変条件・ステップ6-3】ui/CatalogResolveDialog.jsx: R13差分表示はcatalog/catalogDiffView.jsのCATALOG_DIFF_COLOR/diffPairsを使う', () => {
+test('【不変条件・ステップ6-3】ui/CatalogResolveDialog.jsx: 差分表示はcatalog/catalogDiffView.jsのCATALOG_DIFF_COLOR/diffPairsを使う', () => {
   const src = readSrc('ui/CatalogResolveDialog.jsx');
   assert.ok(/from ['"]\.\.\/catalog\/catalogDiffView\.js['"]/.test(src), 'CatalogResolveDialog.jsx が catalog/catalogDiffView.js を import していない');
   assert.ok(/\bdiffPairs\(/.test(src), 'CatalogResolveDialog.jsx が diffPairs を呼んでいない');

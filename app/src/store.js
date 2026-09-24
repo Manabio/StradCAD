@@ -303,7 +303,7 @@ export async function reconcileIncomingCatalogs() {
           kind,
           currentUser: user,
           commitUserFn: (nextUser) => commitUserEntries(kind, nextUser, user, { saveFn: saveUserCatalog }),
-          onSkipped: (entry, e) => console.warn(`カタログ照合: 追加候補がR17で弾かれたためスキップしました: ${entry?.code ?? entry}`, e),
+          onSkipped: (entry, e) => console.warn(`カタログ照合: 追加候補が重複禁止（内容の完全一致）で弾かれたためスキップしました: ${entry?.code ?? entry}`, e),
         });
         if (result.aliasPairs.length > 0) markDirty();
         if (result.addedKeys.length > 0) currentUser = overlayFor(kind).user; // commitUserFn後のuserを引き直す
@@ -362,7 +362,7 @@ export async function reconcileIncomingCatalogs() {
  * (3) aliasPairsがあれば p.kind でグループ化し、種別ごとに addDocumentAliases(kind, pairs) で
  *     文書固有の読み替え表へ追記し、続けて各 from が overlay の doc に実在すれば
  *     removeDocEntry(kind, from) で外す（QA指摘Major-1・2026-09-23: alias確定したdocエントリを
- *     残すと、内容完全一致のまま別キーでbuiltin/userと併存し、R17（合成後の重複禁止検査）が
+ *     残すと、内容完全一致のまま別キーでbuiltin/userと併存し、合成後の重複禁止検査が
  *     例外を投げる。場面(b)=unresolved-code由来のaliasはfromがグラフ参照の旧コードでdocに
  *     無いため、無いキーの例外を投げさせず何もしない）。
  *     その後アクティブ階だけ restoreGraph(activeGraph, serializeGraph(activeGraph)) で往復させて
@@ -492,7 +492,7 @@ export const bootReady = (async () => {
     const { changedPlaneIds } = await refreshWallsAllFloors(project, { pushUndo: false, pushActiveStructuralUndo: false });
     if (changedPlaneIds.length > 0) markDirty();
   } catch (e) {
-    // R17（カタログ重複登録禁止）の合成後例外は握りつぶさず利用者に伝える（2026-09-22 QA指摘B
+    // カタログ重複登録禁止の合成後例外は握りつぶさず利用者に伝える（2026-09-22 QA指摘B
     // 残存）——bootReady自体は失敗させない設計のまま、project.catalogError（観測可能な
     // フィールド。App.jsxがmaterialErrorと同じトースト経路で表示する）に載せる。
     // それ以外（IDB読込失敗等）は従来どおりconsole.errorのみ（catalogErrorは立てない）。
@@ -613,8 +613,8 @@ export async function switchFloor(nextPlaneId) {
 const BUNDLED_KINDS = [CatalogKind.MATERIAL, CatalogKind.INTERIOR_MASTER, CatalogKind.BOUNDARY_MASTER, CatalogKind.SECTION, CatalogKind.OPENING_SUB_TYPE, CatalogKind.FIXTURE_SYMBOL];
 
 /**
- * 全階のバイト列を decode し、BUNDLED_KINDS の使用キーを種別ごとに集めて返す（4.3・
- * ステップ7c QA指摘Major-1）。floorRecords は commitFloorsToDocument で確定した savedFloors
+ * 全階のバイト列を decode し、BUNDLED_KINDS の使用キーを種別ごとに集めて返す
+ * （ステップ7c QA指摘Major-1）。floorRecords は commitFloorsToDocument で確定した savedFloors
  * から読む（loadAllSavedFloors。削除済みの階は commitFloorsToDocument が savedFloors からも
  * 消しているため含まれない）——非アクティブ階を含む全階バイト列を1箇所で decode する唯一の
  * 場所。収集の純ロジック（使用0件の種別も空Setで必ず持つ・全階を回して埋める）は
@@ -638,7 +638,7 @@ export async function collectCatalogUsageAcrossFloors(floorRecords) {
  * collectCatalogUsageAcrossFloors（loadAllSavedFloors由来）は最後に明示保存（saveToIDB）した
  * 内容しか見ないため、保存前にui/CatalogMaintenancePanel.jsx（材料タブ）で材を削除すると、
  * 実際には使用中なのに「未使用」と誤判定され、docAppendされず文書同梱への書き写しが行われない
- * まま削除されて参照が宙に浮く（Q9違反）。
+ * まま削除されて参照が宙に浮く（削除はライブラリから外すだけとする原則への違反）。
  * 手順:
  * (1) floorSwapManager.flushEditablePeek() で構造モードの編集可能peek（1つ下の階を伏図から
  *     直接編集する経路）の保留中デバウンス保存を確定する（saveToIDBの①と同じ）。
@@ -674,7 +674,8 @@ export async function collectCurrentCatalogUsage() {
 
 /**
  * 使用キーをBUNDLED_KINDSの各種別ぶん全階から収集し、解決済み実体を文書同梱として保存する
- * （4.3・ステップ4→7c: material のみだった同梱を interiorMaster・boundaryMaster にも一般化）。
+ * （同梱は使用中エントリのみとする規約・ステップ4→7c: material のみだった同梱を
+ * interiorMaster・boundaryMaster にも一般化）。
  * 内装マスター・境界マスターが内部で参照する材コードも推移的に material 側へ含める。
  * builtin の取得は kindDef(kind).loadBuiltin()（動的import thunk）に寄せる——store.js が
  * 本体標準マスタ（materialData.js/interiorMasters.js/boundaryMasters.js）を直接importしない。
@@ -793,7 +794,7 @@ export async function saveToIDB() {
   await commitFloorsToDocument([...project.planeMap.keys()]);
   // ④.5 使用キーを、commitFloorsToDocument で確定した savedFloors から（削除済み階を
   // 含まないため）全階ぶん収集し、文書同梱（BUNDLED_KINDS＝material・interiorMaster・
-  // boundaryMaster・section・openingSubTypeの5種別）として保存する（4.3・ステップ4→7c→8f→10d）。
+  // boundaryMaster・section・openingSubType・fixtureSymbolの6種別）として保存する（ステップ4→7c→8f→10d→12d）。
   const floorRecords = await loadAllSavedFloors();
   await saveCatalogDocument(floorRecords);
   // ⑤ 次回起動時のブートplane（PLANE_ID_KEY）を最下階の採用planeへ揃える。保存文書の実在planeと

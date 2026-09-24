@@ -111,5 +111,5 @@ test('fieldLabel: 未知の項目・種別はfield名をそのまま返す（投
   assert.equal(fieldLabel('no-such-kind', 'name'), 'name');
 });
 
-// Q11裁定（renderer/・figure/ がこのモジュールをimportしないこと）は
+// オレンジ表示は画面UIのみという裁定（renderer/・figure/ がこのモジュールをimportしないこと）は
 // catalogDiffViewWiring.test.js で確認する（重複させない）。

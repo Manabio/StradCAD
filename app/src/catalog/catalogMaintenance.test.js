@@ -141,7 +141,7 @@ test('buildMaterialRows: categoryで絞り込む（backingは表示のみ・除�
   assert.equal(all.length, 3); // backingも一覧には出る（編集不可なだけ）
 });
 
-// ---- buildMaterialRows: R13 diffMap（ステップ6-2） ----
+// ---- buildMaterialRows: 差分表示のdiffMap（ステップ6-2） ----
 test('buildMaterialRows: diffMapを渡すと各行に差分情報(diff)が付く。無ければnull', () => {
   const builtin = [
     material({ code: '301000000001', name: 'A' }),
@@ -199,7 +199,7 @@ test('nextMaterialCode: 使用が無ければ1番から', () => {
   assert.equal(nextMaterialCode(30, 10, known), '301000000001');
 });
 
-// ---- validateMaterialEntry: 失敗メッセージ・R17・category制限 ----
+// ---- validateMaterialEntry: 失敗メッセージ・重複禁止・category制限 ----
 test('【失敗系】validateMaterialEntry: 未知のcategoryは追加不可（日本語メッセージ）', () => {
   const entry = buildMaterialEntry({ code: '201000000099', name: 'テスト', category: 'unknown' });
   const result = validateMaterialEntry(entry, []);
@@ -335,7 +335,7 @@ test('validateMaterialEntry: kindDef.validate失敗（name欠落）は日本語�
   assert.match(result.message, /nameが不正/);
 });
 
-test('【失敗系】validateMaterialEntry: R17（dedupeFields完全一致）の重複は拒否する', () => {
+test('【失敗系】validateMaterialEntry: 重複禁止（dedupeFields完全一致）の重複は拒否する', () => {
   const builtin = [material({ code: '301000000001', name: '同名材', spec: 'S', thickness: 10 })];
   const dup = buildMaterialEntry({ code: '301000000002', name: '同名材', spec: 'S', thickness: 10, category: 'panel' });
   const result = validateMaterialEntry(dup, builtin);
@@ -350,7 +350,7 @@ test('validateMaterialEntry: 内容が違えば重複にならず通る', () => 
   assert.deepEqual(result, { ok: true });
 });
 
-// ---- duplicateMaterialEntry: 新コードで同内容→保存前はR17に引っかかる ----
+// ---- duplicateMaterialEntry: 新コードで同内容→保存前は重複禁止に引っかかる ----
 test('duplicateMaterialEntry: 複製元と同じ大分類・中分類の新コードで、内容は同一', () => {
   const source = material({ code: '301000000001', name: '元材' });
   const known = collectKnownMaterialCodes({ builtinList: [source] });
@@ -362,7 +362,7 @@ test('duplicateMaterialEntry: 複製元と同じ大分類・中分類の新コ�
   assert.equal(copy.thickness, source.thickness);
 });
 
-test('【失敗系】duplicateMaterialEntry: 複製直後は名称等が同一のためvalidateMaterialEntryがR17で拒否する（名称を変えるまで保存不可）', () => {
+test('【失敗系】duplicateMaterialEntry: 複製直後は名称等が同一のためvalidateMaterialEntryが重複禁止で拒否する（名称を変えるまで保存不可）', () => {
   const source = material({ code: '301000000001', name: '元材' });
   const known = collectKnownMaterialCodes({ builtinList: [source] });
   const copy = duplicateMaterialEntry(source, known);
@@ -493,7 +493,7 @@ test('buildMaterialEntry: name/spec/noteの前後の空白を除く', () => {
   assert.equal(entry.note, '備考');
 });
 
-// ---- planRealign（ステップ6b: 4.7 文書同梱を本体の内容に合わせ直す差分プラン）----
+// ---- planRealign（ステップ6b: 合わせ直し。文書同梱を本体の内容に合わせ直す差分プラン）----
 test('planRealign: 差分があればok:true・diffPairs（from=doc現在値, to=本体値）・baseOrigin・baseEntryを返す', () => {
   const builtinEntry = material({ code: '301000000001', name: 'A', thickness: 12.5 });
   const docEntry = material({ code: '301000000001', name: 'A', thickness: 15 });
@@ -951,7 +951,7 @@ test('【失敗系】planSaveEntry: kindDef.validate失敗（name欠落）はメ
   assert.match(result.message, /nameが不正/);
 });
 
-test('【失敗系】planSaveEntry: R17（dedupeFields完全一致）の重複は拒否する', () => {
+test('【失敗系】planSaveEntry: 重複禁止（dedupeFields完全一致）の重複は拒否する', () => {
   const builtin = [material({ code: '301000000001', name: '同名材', spec: 'S', thickness: 10 })];
   const entry = buildMaterialEntry({ code: '301000000002', name: '同名材', spec: 'S', thickness: 10, category: 'panel' });
   const result = planSaveEntry(CatalogKind.MATERIAL, entry, { builtinList: builtin });
@@ -959,7 +959,7 @@ test('【失敗系】planSaveEntry: R17（dedupeFields完全一致）の重複�
   assert.match(result.message, /既に登録されています/);
 });
 
-test('planSaveEntry: dedupeFieldsを持たない種別（interiorMaster）はR17検査をしない（内容重複でも通る）', () => {
+test('planSaveEntry: dedupeFieldsを持たない種別（interiorMaster）は重複禁止検査をしない（内容重複でも通る）', () => {
   const builtin = [{ key: 'LIVING_ROOM', label: 'リビング', wallMaterial: 'クロス', wallFinish: 'AEP', ceilingHeight: 2400 }];
   const entry = { key: 'BEDROOM', label: '寝室', wallMaterial: 'クロス', wallFinish: 'AEP', ceilingHeight: 2400 };
   const result = planSaveEntry(CatalogKind.INTERIOR_MASTER, entry, { builtinList: builtin });
@@ -1203,7 +1203,8 @@ test('【QA指摘M2】doc-override行: planRevertToBuiltin(alsoRealignDoc:true)�
   assert.equal(resolved.get('301000000001'), builtinEntry, '解決結果がbuiltinエントリそのもの（===）に戻っている');
 });
 
-// ---- planRemoveUserEntry（1.3: 使用中userの削除。Q9を未保存文書でも守る） ----
+// ---- planRemoveUserEntry（1.3: 使用中userの削除。「使用中の参照を宙に浮かせない」原則を
+// 未保存文書でも守る） ----
 test('planRemoveUserEntry: 使用中でdocに無ければdocAppendにuserエントリを添える', () => {
   const userEntry = material({ code: '301000000099', name: 'ユーザー材' });
   setOverlay(CatalogKind.MATERIAL, { user: [userEntry] });
@@ -1422,7 +1423,7 @@ test('materialSaveMessage: どちらの注記も不要なら「保存しまし�
   assert.equal(materialSaveMessage(), '保存しました');
 });
 
-test('materialSaveMessage: overridesBuiltin:trueは「他の文書は合わせ直すまで変わりません」を括弧書きで添える（Q-C/R3）', () => {
+test('materialSaveMessage: overridesBuiltin:trueは「他の文書は合わせ直すまで変わりません」を括弧書きで添える（Q-C）', () => {
   assert.equal(materialSaveMessage({ overridesBuiltin: true }), '保存しました（他の文書は合わせ直すまで変わりません）');
 });
 
@@ -2623,7 +2624,7 @@ test('planSaveEntry(OPENING_SUB_TYPE): labelの変更はbuiltin行でも通り�
 });
 
 // ================================================================
-// ステップ12i（開発者向けエクスポート。4.2）: collectExportableEntries・formatBuiltinSource・
+// ステップ12i（開発者向けエクスポート）: collectExportableEntries・formatBuiltinSource・
 // formatCatalogSourceLine。本体ソースの該当行と一致することの確認はcatalogRealMasters.test.js
 // （実マスタ130件・45件・10件・3件を対象に一致を固定）で行う——ここでは分類・見出し・
 // 失敗系（未知の種別・未知の機構・未知の断面形状）を確認する。

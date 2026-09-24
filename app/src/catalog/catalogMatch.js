@@ -1,5 +1,6 @@
 // ================================================================
-// カタログの照合・不一致検出・候補選定（R8/R12/R14/R17）。
+// カタログの照合・不一致検出・候補選定（同梱とアプリ側カタログの照合・不一致通知の判定・
+// 内容一致の段階的探索・重複登録の禁止）。
 //
 // 純モジュール（葉）。catalogKinds.js（登録表）・materialCode.js（コードのパース）・
 // error.js（ERR_CATALOG_DUPLICATE。葉モジュールで .claude/ の不変条件に反しない）に依存する。
@@ -39,7 +40,7 @@ function deepValuesEqualStrict(a, b) {
 }
 
 /**
- * 値の等価判定（4.5-3・4.6の規約。エントリ直下の項目＝compareFields/matchFields/dedupeFields
+ * 値の等価判定の規約（エントリ直下の項目＝compareFields/matchFields/dedupeFields
  * で名指しされる値に使う）:
  *   文字列は前後の空白を除いて完全一致／数値は null と 0 を区別／
  *   null と undefined（省略）は同値（2026-09-22裁定。本体マスタは触らない。「未設定はnull」は
@@ -70,7 +71,7 @@ export function diffEntries(kind, a, b) {
 }
 
 /**
- * R12: 不一致を通知するか。silentDiffFields（材の spec/thickness）のいずれかが
+ * 不一致を通知するか。silentDiffFields（材の spec/thickness）のいずれかが
  * diffFields に含まれていれば、他の項目が同時に違っていても通知しない。
  */
 export function shouldNotifyDiff(kind, diffFields) {
@@ -82,7 +83,7 @@ export function shouldNotifyDiff(kind, diffFields) {
 }
 
 /**
- * R14: matchFields を末尾から1つずつ外しながら target と内容一致する entries を探す。
+ * matchFields を末尾から1つずつ外しながら target と内容一致する entries を探す。
  * 戻り値: { level, exact, hits }
  *   level: 何項目外した段で見つかったか（0=完全一致）
  *   exact: 完全一致（段0）で見つかったか
@@ -146,7 +147,7 @@ export function rankCandidates(kind, target, hits, origins) {
 }
 
 /**
- * R8: 同梱エントリ(docEntry)をアプリ側カタログ(appEntries=builtin+userの合成一覧)と照合する。
+ * 同梱エントリ(docEntry)をアプリ側カタログ(appEntries=builtin+userの合成一覧)と照合する。
  *   同一キーが存在 → 内容一致なら {action:'same'}、不一致なら {action:'adopt-doc', diffFields, notify}
  *   キー不一致 → 内容照合（matchByContent）。完全一致 → {action:'alias'}（自動）。
  *              部分一致（類似） → {action:'propose', candidates}（承認UIへ）。
@@ -177,7 +178,7 @@ export function displayNameOf(entry) {
 }
 
 /**
- * R17重複エラーを組み立てる（2026-09-22 QA指摘C）。両エントリのキー＋名称を含める。
+ * 重複禁止（dedupeFields完全一致）エラーを組み立てる（2026-09-22 QA指摘C）。両エントリのキー＋名称を含める。
  * origins（Map<key,'doc'|'user'|'builtin'>）を渡せば出所も併記する（registry の合成後検査用。
  * assertNoDuplicate 単体からは出所を持たないため省略）。code は ERR_CATALOG_DUPLICATE
  * （wallRefresh.js 等の呼び出し側が「握りつぶさず再throwすべきエラー」と識別するのに使う）。
@@ -198,7 +199,7 @@ export function formatDuplicateError(kind, def, a, b, origins) {
 }
 
 /**
- * R17: 同じ内容（dedupeFields完全一致）の重複登録を弾く（category違いも不可）。
+ * 同じ内容（dedupeFields完全一致）の重複登録を弾く（category違いも不可）。
  * dedupeFields を持たない種別は常に許容（no-op）。
  */
 export function assertNoDuplicate(kind, entry, entries) {
@@ -214,7 +215,7 @@ export function assertNoDuplicate(kind, entry, entries) {
 }
 
 /**
- * 4.6.1 場面(b): 実体が無くコードしか無いとき、大分類・中分類が同じ材を候補にする。
+ * 場面(b): 実体が無くコードしか無いとき、大分類・中分類が同じ材を候補にする。
  * 候補が無ければ空配列。材料コード以外のkeyには使わない（コードが12桁体系の材専用）。
  */
 export function suggestByClass(code, entries) {

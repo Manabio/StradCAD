@@ -1,5 +1,5 @@
 // ================================================================
-// 保存時の使用エントリ収集（4.3・4.5-3・ステップ4）。
+// 保存時の使用エントリ収集（同梱は使用中エントリのみとする規約・値の等価判定・ステップ4）。
 //
 // codeNormalization.js の走査器（enumerateMaterialCodeRefs）を共有する——材コードの
 // 「どのフィールドが対象か」を二重実装しない（走査器を壊すと codeNormalization.test.js と
@@ -59,7 +59,7 @@ export function collectUsedKeys(snapshot) {
 
 /**
  * snapshot群（複数階分。decode済み）から、指定した種別（kinds）ぶんの使用キーを集めて返す
- * （4.3・ステップ7c QA指摘Major-1）。kinds に渡した種別は、使用0件でも戻り値の Map に必ず
+ * （ステップ7c QA指摘Major-1）。kinds に渡した種別は、使用0件でも戻り値の Map に必ず
  * 空Setとして持つ——呼び出し側（store.js collectCatalogUsageAcrossFloors）が「全種別を空Setで
  * 立ててから全階を回して埋める」という手順を個別に実装していたところを純関数として抽出した
  * もの（store.js は decode してこれに渡すだけにする）。material の直接参照（4フィールド）は
@@ -92,7 +92,7 @@ export function collectUsedKeysByKind(snapshots, kinds) {
 
 /**
  * 使用材コードの集合に、内装マスター・境界マスターが内部で参照する材コードを推移的に追加する
- * （4.3）。LAYER_SOURCE の層（実行時解決）は辿らない——固定コード（layer.code）だけを見る
+ * （同梱は使用中エントリのみとする規約）。LAYER_SOURCE の層（実行時解決）は辿らない——固定コード（layer.code）だけを見る
  * （ステップ7b）。理由: LAYER_SOURCE.FLOOR_EXTERIOR_BACKING/FLOOR_INTERIOR_BACKING の実体は
  * graph.exteriorWallBacking/interiorWallBacking（codeNormalization.js BACKING_FIELDS 経由で
  * collectUsedMaterialCodes が既に収集済み）、ROOM_WALL_MATERIAL/ROOM_FINISH の実体は
@@ -153,7 +153,7 @@ export function expandUsedMaterialsTransitively(usedKeysByKind, resolvedByKind) 
 }
 
 /**
- * ステップ12a: `overridesBuiltin`（4.4/resolveQueue.js markOverrideが付ける「本体の上書き」印）を
+ * ステップ12a: `overridesBuiltin`（resolveQueue.js markOverrideが付ける「本体の上書き」印）を
  * 同梱から除去する。この属性はユーザーライブラリ側の状態（このプロジェクトのuserエントリが
  * builtinを上書きしているかどうか）であって、doc（文書同梱）はそれを持ち運ぶべきではない——
  * 別環境（overridesBuiltin無しのuserを持つ、または全く持たない環境）でこの.stqを開いたとき、

@@ -175,7 +175,7 @@ export function splitBundleByKind(bundle) {
 }
 
 /**
- * 4.4: overridesBuiltin の印が無いのに builtin と同キー・内容不一致の user エントリを検出する。
+ * ライブラリ衝突検出: overridesBuiltin の印が無いのに builtin と同キー・内容不一致の user エントリを検出する。
  * 印がある（本体材の編集として作った）ものは衝突にしない。
  */
 export function detectLibraryConflicts(kind, { user = [], builtin = [] } = {}) {

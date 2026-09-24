@@ -55,7 +55,7 @@ export class FinishModeState {
   materialError   = null;        // 照合エラーメッセージ | null
   materials       = null;        // 材マスタ配列（読み取り専用）
   materialMap     = null;        // Map<code, material>
-  materialDiffs   = null;        // R13: docDiffMap(material)。Map<code, {baseOrigin, diffFields, baseEntry}>
+  materialDiffs   = null;        // docDiffMap(material)。Map<code, {baseOrigin, diffFields, baseEntry}>
   interiorMasters = null;        // composeCatalog(INTERIOR_MASTER)の結果。Map<key, 定義>（ステップ7b）
   // 指示UI（ステップ6-3）場面(b)unresolved-codeの行。init()で組み立て、App.jsxが
   // project.catalogResolveRows（catalog/resolveQueue.js replaceRowsByScenarioで自分の場面だけ置換）
@@ -129,7 +129,7 @@ export class FinishModeState {
    * 材データ・内装マスターを動的 import でロードし、永続化データと照合する。
    * 材コードの不一致（自階が参照する材コードがマスタに無い）は this.materialError に
    * ERR_MATERIAL_MISMATCH を設定するだけで throw しない。一方 composeCatalog（material・
-   * interiorMasterの両方）は catalog/catalogRegistry.js の R17（builtin/user/doc合成後の
+   * interiorMasterの両方）は catalog/catalogRegistry.js の重複禁止検査（builtin/user/doc合成後の
    * 内容重複）等で例外を投げることがあり、これは呼び出し元（App.jsx のモード切替）まで
    * 素通しする——material は元からこの扱いで、ステップ7bで interiorMaster も同じ扱いに
    * 揃えた（2026-09-23 QA指摘Minor-4: 旧コメントの「throw はしない」は誤解を招くため訂正）。
@@ -153,7 +153,7 @@ export class FinishModeState {
 
     const materials = composeList(CatalogKind.MATERIAL, matMod.MATERIALS);
     const materialMap = composeCatalog(CatalogKind.MATERIAL, matMod.MATERIALS);
-    const materialDiffs = docDiffMap(CatalogKind.MATERIAL, matMod.MATERIALS); // R13: 同梱材の本体との不一致
+    const materialDiffs = docDiffMap(CatalogKind.MATERIAL, matMod.MATERIALS); // 同梱材の本体との不一致
     // ステップ7b: 内装マスターもregistry合成（doc/userの読み替え・同梱を反映）。
     const interiorMasters = composeCatalog(CatalogKind.INTERIOR_MASTER, interiorMasterBuiltinList(masterMod));
     // ステップ7d: 境界マスターは場面(b)unresolved-code検出専用（読者は無し。selectBoundaryMaster
@@ -437,7 +437,7 @@ export class FinishModeState {
   /** 材コードから材を取得（未ロード・未登録なら null）。 */
   getMaterial(code) { return this.materialMap?.get(code) ?? null; }
 
-  /** R13: 材コードの docDiffMap エントリ（{baseOrigin, diffFields, baseEntry}）。差分なし・未ロードは null。 */
+  /** 材コードの docDiffMap エントリ（{baseOrigin, diffFields, baseEntry}）。差分なし・未ロードは null。 */
   materialDiff(code) { return this.materialDiffs?.get(code) ?? null; }
 
   /** カテゴリ（'backing' / 'panel' / 'finish'）で材選択肢をフィルタ。 */

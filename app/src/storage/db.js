@@ -317,7 +317,7 @@ export async function loadProjectInfo(projectId) {
 // カタログ文書同梱（.stq 同梱）— projects ストアの別レコード（種別ごとに1レコード）。
 // 内部キーは projectId とは衝突しない `${projectId}:catalogs:<kind>` を使う（同一ストア・別レコード）。
 // 範囲取得（IDBKeyRange.bound）で全種別を1回で読む——listKinds() でループしない。未知の種別
-// （このビルドの登録表に無い kind）で保存されたレコードも取りこぼさないため（4.5-5）。
+// （このビルドの登録表に無い kind）で保存されたレコードも取りこぼさないため。
 // ----------------------------------------------------------------
 
 // prefix範囲取得の上限境界（UTF-16の最大コード単位）。documentCatalogPrefix(projectId) で

@@ -6,7 +6,7 @@
 // JSON / FlatBuffers を判別する）を変えずに、旧形式（単一グラフ FlatBuffers・旧JSONスナップ
 // ショット）と共存させるため。旧JSONスナップショットとは format キーの有無で区別する。
 //
-// catalogs（カタログ束の同梱。4.5）は optional。version は 1 のまま——旧 .stq
+// catalogs（カタログ束の同梱）は optional。version は 1 のまま——旧 .stq
 // （catalogs 無し）はそのまま開け、新 .stq を旧ビルドで開いても catalogs は未知キーとして
 // 無視される（片方向の後方互換）。catalog/catalogCodec.js・catalogBundle.js は葉モジュールのため
 // このファイル（同じく葉）から静的 import してよい。

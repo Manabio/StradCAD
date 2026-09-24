@@ -50,7 +50,7 @@ test('【失敗系】validateBundle: キー重複は例外', () => {
   assert.throws(() => validateBundle(bundle), /キーが重複/);
 });
 
-test('【失敗系】validateBundle: dedupeFields重複（R17・category違いも不可）は例外', () => {
+test('【失敗系】validateBundle: dedupeFields重複（重複禁止・category違いも不可）は例外', () => {
   const a = material({ code: '301000000001', category: 'panel' });
   const b = material({ code: '301000000002', category: 'backing' }); // 5項目同一・categoryだけ違う
   const bundle = withEntries(emptyBundle(), 'material', [a, b]);
@@ -162,7 +162,7 @@ test('resolveCatalog: openingSubTypeはcategoryが違えば同じkeyでも両方
   assert.equal(map.get('window:doubleSliding'), window_);
 });
 
-// ---- ライブラリ衝突検出（4.4・印の有無）----
+// ---- ライブラリ衝突検出（overridesBuiltin印の有無）----
 test('detectLibraryConflicts: overridesBuiltinの印が無いuserエントリとbuiltinの内容不一致を検出する', () => {
   const builtinEntry = material();
   const userEntry = material({ note: '内容が違う' });

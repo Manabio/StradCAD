@@ -21,7 +21,7 @@ import { setDocumentAliases, clearDocumentAliases } from './codeNormalization.js
  * 既定は codeNormalization.js 側で保たれる）。
  *
  * - 未知の種別（このビルドの登録表 listKinds() に無い kind）のレコードは触らない
- *   （4.5-5: IDB には残したまま、overlay 適用の対象外にする。kindDef(未知kind) が例外を
+ *   （IDB には残したまま、overlay 適用の対象外にする。kindDef(未知kind) が例外を
  *   投げて全体が失敗するのを避けるため、decode/validate の前に既知種別だけへ絞り込む）。
  * - 壊れたレコード（decodeCatalogBundle/validateBundle が例外）・setOverlay が投げた場合
  *   （通常は起きないが、防御として）のどちらでも、外側の catch で clearOverlaysFn() ＋

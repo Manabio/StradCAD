@@ -256,7 +256,7 @@ test('【不変条件・ステップ7d Minor-3】store.js: reconcileIncomingCata
 
 // コーディネーターQA指摘2（ステップ6-1）: formatReconcileNoticeへ渡すaddedCount/skippedCountは
 // plan.adds.lengthではなくapplyReconcilePlanの実際の結果（result.addedKeys.length/
-// result.skipped.length）を使う契約を固定する（R17で弾かれた追加を「追加されました」と
+// result.skipped.length）を使う契約を固定する（重複禁止で弾かれた追加を「追加されました」と
 // 誤って報告しないため）。
 test('【不変条件・ステップ6-1・QA指摘2】store.js: reconcileIncomingCatalogsはformatReconcileNoticeにresult.addedKeys.length/result.skipped.lengthを渡している', () => {
   const src = readSrc('store.js');
@@ -513,7 +513,7 @@ test('【不変条件・QA指摘M1・2026-09-24再報告】store.js: collectCurr
   assert.ok(saveFloorIdx >= 0 && loadFloorIdx > saveFloorIdx, 'アクティブ階の saveFloor は loadFloor ループより前に呼ぶ契約（書込み前に読む競合を防ぐ）');
 });
 
-// ステップ7c→QA指摘Major-1改訂: 使用0件の種別も空配列で必ず書く（4.3「参照されなくなった
+// ステップ7c→QA指摘Major-1改訂: 使用0件の種別も空配列で必ず書く（「参照されなくなった
 // エントリは次回保存時に外す」の一般化）——splitBundleByKindの結果を無条件に（配列長で
 // フィルタせず）全種別ぶん bytesByKind へ写し、単一の saveDocumentCatalogs 呼び出しに渡す
 // ことを固定する（0件をスキップする退行・種別ごとにsaveDocumentCatalogをループして部分保存の
