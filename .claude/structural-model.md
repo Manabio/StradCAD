@@ -32,6 +32,7 @@ Wall/Openingと同じ「CL+オフセット」系アンカーで座標を導出�
 
 ## トポロジー自動補完は「除外集合」で手動削除を尊重する
 構造モード突入毎の自動補完が、ユーザーが明示削除したスロットを復活させないよう`excludedColumnSlots`等にキーを記録してスキップする。`addColumn`/`addBeam`で再追加されたら除外解除。
+手動削除の入口は構造リスト（`MemberListTab`→`memberCatalog.js`の`REMOVE_FN_BY_MAP`の各remove関数（柱・梁・基礎・スラブ・耐力壁））のみ——平面の交点長押しメニュー`'del'`（App.jsx）は`graph.getShapesAtNode`が返す「ngraphの交点にリンクされた一般図形」（`_registerShape`を呼ぶ`addVerticalLine`/`addHorizontalLine`/`addDiagonalLine`/`addArc`/`addCircle`の5種）だけを消し、壁・建具・柱・梁・基礎・耐力壁・スラブ・スリーブはngraphにリンクされないため対象外（案A・2026-09-26裁定。構造・壁生成はこれらの一般図形を読まないため`'del'`に構造同期は配線しない）。壁の削除尊重は「手動壁は今後実装」に含めて先送り。**不変条件**：`getShapesAtNode`が壁・柱・梁等まで返すようになったら（＝ngraphへリンクする変更が入ったら）、この節の前提が崩れるため段階(f)を再検討すること（`core/planGraph.test.js`にピン留めテストあり）。
 
 ## 柱は「自階の柱を自階graphに持つ」。伏図慣習は図面合成（FigureDef）で実現する（生成と図面選定の分離）
 柱はどの実体平面でも自階分を自階の実効主構造で生成・格納する（基礎伏図=最下階も自階の柱を生成する。屋根専用平面は柱の立つ階でないため生成しない）。「基礎伏図に柱を描かない」「2階伏図には1階の柱を描く」等の伏図慣習は**描画層のハードコードではなく宣言的な `FigureDef`（`structuralFigure.js`）**が持つ——構造伏図＝「自階の床下材＋1つ下の階の柱」の合成レイヤとして定義し、`StructuralLayer.jsx`/`MemberTagLayer.jsx` は各カテゴリの供給グラフを `composition.graphForCategory` に委ねるだけ（柱＝下階・床下材＝自階の帰属判定をレンダラは持たない）。基礎伏図は1つ下の供給階が無い＝柱レイヤのバインディングが無いため柱なし。アーキテクチャ全体は `.claude/figure.md`。

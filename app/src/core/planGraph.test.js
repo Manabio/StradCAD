@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import { PlanGraph } from './planGraph.js';
 import { Plane } from './plane.js';
 import { Project } from './project.js';
-import { CenterLineType, Discipline, StructuralMaterialType } from './constants.js';
+import { CenterLineType, Discipline, StructuralMaterialType, OpeningCategory } from './constants.js';
 
 function makeGraph() {
   const plane = new Plane('p1', 0, '1階', 1, 1);
@@ -322,4 +322,42 @@ test('centerLines/gridXs: _structGraphがあれば[...struct, ...own]順でマ�
   assert.equal(project.structGraph._structGraph, null);
   assert.deepEqual(project.structGraph.centerLines.map(cl => cl.id), [structCL.id]);
   assert.deepEqual(project.structGraph.gridXs.map(cl => cl.value), [3000]);
+});
+
+// ---- 段階(f)・案A（2026-09-26裁定）: 平面の交点長押しメニュー'del'はngraphにリンクされた
+// 一般図形しか消せない（構造・壁・建具は対象外）という事実のピン留め ----
+
+// 交点に壁・建具・柱・梁が「同じ座標で」乗っていても、getShapesAtNodeはngraphのリンク（_registerShape
+// を呼ぶaddVerticalLine/addHorizontalLine/addDiagonalLine/addArc/addCircleの5種）だけを辿るため、
+// それらは一切返らず、その交点を端点に持つ斜線・垂直線・水平線だけが返る。
+// これがApp.jsxの'del'ハンドラ（graph.getShapesAtNode(menu.snap).forEach(s => graph.removeShape(s.id))）
+// の「一般図形しか消えない」の直接の根拠——壁・建具・柱・梁・基礎・耐力壁・スラブ・スリーブは
+// _registerShapeを呼ばない（addWall/addOpening/addColumn/addBeam/addFooting/addBearingWall/addSlab/
+// addSleeveはshapeMap・各専用Mapへ格納するだけでngraphには一切触れない）ため、そもそもngraphの
+// 交点からたどり着けない。
+// 【不変条件・将来の変更検知】もし将来getShapesAtNodeが壁・柱・梁等まで返すよう変更されたら、
+// このテストが落ちることで段階(f)（`.claude/structural-model.md`「トポロジー自動補完は『除外集合』で
+// 手動削除を尊重する」節）の前提が崩れたと分かり、'del'に構造同期を配線するかどうかの再検討が要る。
+test('【不変条件・段階(f)・案A】getShapesAtNode: 交点に壁・建具・柱・梁が同座標で乗っていてもそれらは返らず、斜線だけが返る', () => {
+  const graph = makeGraph();
+  const vCL  = graph.addCenterLine(CenterLineType.VERTICAL,   0,    { labeled: true, discipline: Discipline.STRUCT });
+  const vCL2 = graph.addCenterLine(CenterLineType.VERTICAL,   3000, { labeled: true, discipline: Discipline.STRUCT });
+  const hCL1 = graph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+  const hCL2 = graph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: true, discipline: Discipline.STRUCT });
+
+  // 交点（vCL, hCL1）に、壁・建具・柱・梁を同座標で配置する（一般図形とは別経路のMap／shapeMapへ
+  // 格納されるだけで、ngraphのノード・リンクは一切作らない）。
+  graph.addWall(vCL, 0, true, hCL1, 0, hCL2, 0, {});
+  graph.addOpening(vCL, 1, true, hCL1, 500, 800, OpeningCategory.FITTING, 'singleSwing', {});
+  graph.addColumn(StructuralMaterialType.WOOD, 'SEC-COL', vCL, hCL1);
+  graph.addBeam(StructuralMaterialType.WOOD, 'SEC-BEAM', vCL, true, hCL1, hCL2);
+
+  // 同じ交点を端点に持つ斜線（ngraphにリンクされる一般図形）を1本だけ配置する。
+  const nodeAtVclHcl1 = graph.getOrCreateIntersection(vCL, hCL1);
+  const nodeAtVcl2Hcl1 = graph.getOrCreateIntersection(vCL2, hCL1);
+  const diagonal = graph.addDiagonalLine(nodeAtVclHcl1, nodeAtVcl2Hcl1, {});
+
+  const shapes = graph.getShapesAtNode(nodeAtVclHcl1);
+  assert.deepEqual(shapes.map(s => s.id), [diagonal.id],
+    '壁・建具・柱・梁は返らず、ngraphにリンクされた斜線だけが返るはず');
 });
