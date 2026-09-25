@@ -321,6 +321,10 @@ const G2_ALLOWLIST = {
   'transform/centerLineMerge.js': { count: 1, category: 'not-partner-selection',
     reason: 'absorbCenterLine内のloserSnapshot（undo用にloserの状態をそのまま保存するため）。種別判定では' +
       'ない。' },
+  'structural/wallBeamAxisFollow.js': { count: 1, category: 'not-partner-selection',
+    reason: 'snapshotForRestore内（案B・2026-09-26。追従先に既存の梁芯・通り芯があり保護されない旧梁芯を' +
+      '吸収撤去する前に、undo用にそのCLの状態をそのまま保存するため——centerLineMerge.jsの' +
+      'absorbCenterLine loserSnapshotと同じ手法・同じ理由。種別判定ではない。' },
   'transform/centerLineOps.js': { count: 2, category: 'not-partner-selection',
     reason: 'commitCLMoveOp（!cl.labeledで結合対象=通り芯以外かを判定。呼び出し元が保証する前提は' +
       'centerLineKindPolicy.js冒頭コメント参照）・COEXISTENCE=promote分岐のdeletedProps（既存CLの状態を' +

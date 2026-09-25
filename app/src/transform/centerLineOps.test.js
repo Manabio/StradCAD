@@ -447,7 +447,7 @@ test('commitCLMoveOp: 壁由来梁芯が下地帯中心の移動分だけ追従�
   assert.equal(graph.excludedWallBeamAxes.has('Y:2300'), false);
 });
 
-test('commitCLMoveOp: 移動先に通り芯があれば壁由来梁芯の追従は重複ガードでスキップされるが、移動自体はtoast:nullで成功する（T9）', () => {
+test('【案B】commitCLMoveOp: 移動先に通り芯があれば、保護されない壁由来梁芯は吸収されて撤去され、移動自体はtoast:nullで成功する。undoで同idで戻る（T9・旧: スキップして残す→2026-09-26吸収に反転）', () => {
   const graph = makeGraph();
   const x0 = graph.addCenterLine(CenterLineType.VERTICAL, 0,    { labeled: false, discipline: Discipline.ARCH });
   const x1 = graph.addCenterLine(CenterLineType.VERTICAL, 4000, { labeled: false, discipline: Discipline.ARCH });
@@ -455,15 +455,26 @@ test('commitCLMoveOp: 移動先に通り芯があれば壁由来梁芯の追従�
   graph.addWall(centerCL, 0, false, x0, 0, x1, 0, { isExteriorWall: false, backingOffset: 0, backingDepth: 120, wallFinish: 12.5 });
   const beamAxis = graph.addCenterLine(CenterLineType.HORIZONTAL, 2000, { labeled: false, discipline: Discipline.FUSE, refId: null });
   const beamAxisId = beamAxis.id;
-  graph.addCenterLine(CenterLineType.HORIZONTAL, 2300, { labeled: true, discipline: Discipline.STRUCT }); // 移動先に既存の通り芯
+  const gridCL = graph.addCenterLine(CenterLineType.HORIZONTAL, 2300, { labeled: true, discipline: Discipline.STRUCT }); // 移動先に既存の通り芯
+  const gridCLId = gridCL.id;
   const project = {};
   centerCL.pendingDelta = 300; // 2000→2300
 
   const { toast } = commitCLMoveOp(graph, project, centerCL, 2000);
   assert.equal(toast, null, '移動自体は成功するはず');
   assert.equal(centerCL.value, 2300);
-  const ax = graph.shapeMap.get(beamAxisId);
-  assert.equal(ax.value, 2000, '移動先に通り芯があるため梁芯の追従は重複ガードでスキップされ、旧位置のまま');
+  assert.equal(graph.shapeMap.has(beamAxisId), false, '保護されない壁由来梁芯は吸収されて撤去される（案B）');
+  assert.equal(graph.shapeMap.get(gridCLId)?.value, 2300, '移動先の通り芯（相手）はそのまま残る');
+
+  undoManager.undo();
+  assert.equal(centerCL.value, 2000, 'undoで中心線が戻る');
+  const beamRestored = graph.shapeMap.get(beamAxisId);
+  assert.ok(beamRestored, 'undoで吸収された梁芯が同じidで復元される');
+  assert.equal(beamRestored.value, 2000, 'undoで復元された梁芯の値も旧位置のまま');
+
+  undoManager.redo();
+  assert.equal(centerCL.value, 2300, 'redoで中心線が再度動く');
+  assert.equal(graph.shapeMap.has(beamAxisId), false, 'redoで再び吸収され撤去される');
 });
 
 // QA指摘n-1（2026-09-25）: pendingDeltaを一時的に0へ戻してwallBackingCenters(移動前スナップショット)を

@@ -186,8 +186,9 @@ test('runFinishExitBoundary【ステップ2統合】: 下地材コード変更�
   assert.equal(beamRedone.value, centerAfter, 'redoで梁芯の値が新中心へ再度追従する');
 });
 
-// ---- ステップ2 failure path: toに既に別の壁由来梁芯があれば追従をスキップする ----
-test('【失敗系・ステップ2】runFinishExitBoundary: 新中心の位置に既に別の壁由来梁芯があれば追従をスキップし、元の梁芯は旧座標に残る', async () => {
+// ---- ステップ2: toに既に別の壁由来梁芯があれば、保護されない旧梁芯は吸収されて撤去される
+// （案B・ユーザー裁定・2026-09-26。旧: 追従をスキップし旧梁芯を残していた）----
+test('【案B】runFinishExitBoundary: 新中心の位置に既に別の壁由来梁芯があれば、保護されない元の梁芯は吸収されて撤去され、undoで同idで戻る', async () => {
   const { project, graph, ym, fmode } = await makeEccentricWallFixture();
 
   await runFinishExitBoundary(graph, project, fmode, { goingToStructure: false });
@@ -203,6 +204,7 @@ test('【失敗系・ステップ2】runFinishExitBoundary: 新中心の位置�
   const conflictingCL = graph.addCenterLine(CenterLineType.HORIZONTAL, conflictingCenter, {
     labeled: false, discipline: Discipline.FUSE,
   });
+  const conflictingCLId = conflictingCL.id;
 
   graph.setInteriorWallBacking('101400000001');
   await runFinishExitBoundary(graph, project, fmode, { goingToStructure: false });
@@ -211,10 +213,26 @@ test('【失敗系・ステップ2】runFinishExitBoundary: 新中心の位置�
   const centerAfter = backingCenterOf(ownerAfter);
   assert.equal(centerAfter, conflictingCenter, '前提: 壁自体の下地帯中心は想定どおり動いている');
 
-  const beamStillAtOld = graph.centerLines.find(cl => cl.id === beamId);
-  assert.ok(beamStillAtOld, '元の梁芯CLは撤去されない');
-  assert.equal(beamStillAtOld.value, centerBefore, '追従はスキップされ、元の梁芯は旧座標に残る');
-  assert.equal(graph.centerLines.find(cl => cl.id === conflictingCL.id)?.value, conflictingCenter, '競合していた梁芯も変更されない');
+  assert.equal(graph.centerLines.some(cl => cl.id === beamId), false, '保護されない元の梁芯CLは吸収されて撤去される（案B）');
+  assert.equal(graph.centerLines.find(cl => cl.id === conflictingCLId)?.value, conflictingCenter, '競合していた梁芯（相手）はそのまま残り値も変わらない');
+
+  // undoで吸収された梁芯（同id）が戻ることを確認（壁の下地帯中心自体の巻き戻しは
+  // 「ステップ2統合」テストで別途確認済みのため、ここでは案B固有の吸収undoに絞る）。
+  // このフィクスチャはgoingToStructure:falseのためrunFinishExitBoundary内部の
+  // reflectStructuralAfterFinishExitがrecomputeActiveStructural(pushUndo既定true)を呼び、
+  // 構造変化があれば「案B吸収を含むメイン1エントリ」の**後に**別エントリを積む（実測で確認——
+  // 「ステップ2統合」フィクスチャでは構造変化が無くこの追加エントリが立たないため1回のundoで
+  // 足りるが、本フィクスチャでは2回必要）。undoManager.undoを2回呼ぶ。
+  undoManager.undo(); // 構造再計算分（案Bとは無関係）
+  undoManager.undo(); // メインエントリ（案Bの吸収を含む）
+  const beamUndone = graph.centerLines.find(cl => cl.id === beamId);
+  assert.ok(beamUndone, 'undoで吸収された梁芯が同じidで復元される');
+  assert.equal(beamUndone.value, centerBefore, 'undoで復元された梁芯の値も旧中心のまま');
+
+  // redoで再度吸収される
+  undoManager.redo();
+  undoManager.redo();
+  assert.equal(graph.centerLines.some(cl => cl.id === beamId), false, 'redoで再び吸収され撤去される');
 });
 
 // ---- ステップ3統合: 2a壁で初めてステップ2の追従が効く（下地材コード変更→2a壁backingDepth変化→追従） ----
