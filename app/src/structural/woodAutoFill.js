@@ -731,7 +731,96 @@ export function autoFillWoodColumns(graph, project, wallGate = null, aboveColumn
     graph.columnMap.delete(column.id);
     removed.push(column.id);
   }
+  // ユーザー承認済み一般則（案(a)・2026-09-25）: 撤去段の直後に「同じAXIS位置に複数の柱が残っていたら
+  // 1本だけ残す」後始末を行う（dedupeColumnsByAxis）。上記の撤去ループはcolumnAnchorKeyの「存在」しか
+  // 見ないため、複数の柱が偶然同じキー（例: off:x:y。実位置基準）を共有すると各柱が個別に
+  // slots.has(key)===trueを満たして共倒れで両方生き残る「撤去段の穴」があった
+  // （centerMoveStructuralSyncProbe.mjs M7で実測・qa-reviewer 2026-09-25特定）。
+  removed.push(...dedupeColumnsByAxis(graph, slots));
   return { created, removed, jambSkipped, iiPicks };
+}
+
+// dedupeColumnsByAxis専用: 柱が「オフセットを介さない素直なCLペア」で立っているか——
+// 柱自身のverticalCL/horizontalCL（axisX/axisYという実位置の値ではなく、柱が実際に参照している
+// CLオブジェクト）が、それぞれの座標で「通り芯／梁芯→壁のある意匠中心線」の2段アンカー
+// （resolveWoodColumnAnchorCL）としてそのまま解決できるかを見る。同じ重複グループ内の柱は
+// 実位置(axisX/axisY)が全員同じ（グループ分けの定義そのもの）なので、実位置基準の判定はグループ内で
+// 常に同着になり優先順として機能しない——柱自身が「どちらのアンカー方式で立っているか」という
+// 由来の性質で判定する必要がある。woodAxisOffset非nullの柱はここでは常にfalse
+// （オフセット柱は次の段（オフセット柱）で拾う——CLペア段と二重に該当させない）。
+function hasCleanCLPairAnchor(graph, column) {
+  if (column.woodAxisOffset != null) return false;
+  return resolveWoodColumnAnchorCL(graph, CenterLineType.VERTICAL, column.verticalCL.effectiveValue) === column.verticalCL &&
+    resolveWoodColumnAnchorCL(graph, CenterLineType.HORIZONTAL, column.horizontalCL.effectiveValue) === column.horizontalCL;
+}
+
+// 同じAXIS座標の候補グループ（2本以上）から生き残る1本を選ぶ（dedupeColumnsByAxis専用）。
+// 優先順（ユーザー承認済み・2026-09-25）: (1) 今回の候補キー（slots）に入っている柱
+// →(2) CLペアの柱（hasCleanCLPairAnchor）→(3) オフセット柱（woodAxisOffset非null）→(4) id昇順。
+// 各段は「該当が1本以上あればその集合に絞り込み、無ければ前段の集合のまま次段へ進む」カスケード
+// フィルタ——最終段（id昇順）は必ず1本に絞れる（idは重複しないため）決定的な終端。
+// QA指摘n-5（2026-09-25）: 第1段（候補キー）は、dedupeColumnsByAxisが撤去ループの**後**に呼ばれる
+// 現状の配置では、この時点で残っている全auto柱が既に撤去ループ自身の`slots.has(key)`チェックを
+// 通過済み（でなければとっくに撤去されている）——つまり現状はグループの全メンバーが必ずtrueになり
+// 絞り込みとして常に効かない（no-op）。それでも消さずに残す: dedupeColumnsByAxisを撤去ループの
+// **中**（各柱の判定と同時）に統合するなど、将来撤去条件が変わったときの保険として意味を持ちうる段
+// だからである（純関数として`slots`を引数に取る設計自体がこの再配置を想定している）。
+function pickSurvivor(graph, slots, columns) {
+  const narrow = (list, pred) => {
+    const filtered = list.filter(pred);
+    return filtered.length > 0 ? filtered : list;
+  };
+  let pool = columns;
+  pool = narrow(pool, c => slots.has(columnAnchorKey(c)));
+  pool = narrow(pool, c => hasCleanCLPairAnchor(graph, c));
+  pool = narrow(pool, c => c.woodAxisOffset != null);
+  return [...pool].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))[0];
+}
+
+/**
+ * 撤去段（autoFillWoodColumnsの撤去ループ）の直後に呼ぶ後始末: 同じAXIS座標（CL_OVERLAP_TOL_MM）に
+ * 複数の柱が残っていたら1本だけ残す（ユーザー承認済み一般則・2026-09-25。案(a)）。
+ * 対象は基礎（role:'foundation'）・袖柱（woodJambRef非null）を除いた全柱——基礎は独立した構造要素、
+ * 袖柱は建具ごとに一意（openingId:side）のため対象外。
+ *   - Q1裁定: グループに手動・locked・calculated（dimensionStatus!=='auto'）の柱が1本でもあれば、
+ *     寸法の異同を問わずそのグループのauto柱を全撤去する（ユーザー確定値を優先。「AXISで一致・
+ *     ACTUALで止める」規律と同じ——ACTUAL寸法が違っても同じAXIS位置なら重複とみなす。Q2裁定）。
+ *   - auto柱だけのグループはpickSurvivorの優先順で1本を残し、残りを撤去する。
+ * 決定的・冪等（同じ入力なら常に同じ1本が残る——2回目のパスは変化なし。id昇順の最終段が
+ * 一意に定まるため）。既存の撤去（`graph.columnMap.delete`）と同じ手段を使う——`removeColumn`
+ * （`PlanGraph`の公開メソッド）は`excludedColumnSlots`へ記録するため使わない（このグループの
+ * もう一方の柱は今後も同じ理由で正しく再生成されるべきスロットであり、除外集合に汚してはいけない）。
+ * @param {object} graph
+ * @param {Map<string, {verticalCL, horizontalCL, woodJambRef, woodAxisOffset}>} slots - 今回の候補キー集合
+ * @returns {string[]} 撤去した柱id配列
+ */
+export function dedupeColumnsByAxis(graph, slots) {
+  const candidates = graph.columns.filter(c => c.role !== 'foundation' && !c.woodJambRef);
+  const groups = [];
+  for (const c of candidates) {
+    let group = groups.find(g => Math.abs(g.axisX - c.axisX) < CL_OVERLAP_TOL_MM && Math.abs(g.axisY - c.axisY) < CL_OVERLAP_TOL_MM);
+    if (!group) { group = { axisX: c.axisX, axisY: c.axisY, columns: [] }; groups.push(group); }
+    group.columns.push(c);
+  }
+
+  const removed = [];
+  for (const group of groups) {
+    if (group.columns.length < 2) continue;
+    const nonAuto = group.columns.filter(c => c.dimensionStatus !== 'auto');
+    const autoCols = group.columns.filter(c => c.dimensionStatus === 'auto');
+    if (nonAuto.length > 0) {
+      for (const c of autoCols) { graph.columnMap.delete(c.id); removed.push(c.id); }
+      continue;
+    }
+    if (autoCols.length < 2) continue;
+    const survivor = pickSurvivor(graph, slots, autoCols);
+    for (const c of autoCols) {
+      if (c === survivor) continue;
+      graph.columnMap.delete(c.id);
+      removed.push(c.id);
+    }
+  }
+  return removed;
 }
 
 // wallSegments（自階＋1つ下の階の壁区間）を「線」（isVertical, coord）ごとにまとめる。同一線判定は

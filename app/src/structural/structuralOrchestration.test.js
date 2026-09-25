@@ -4,6 +4,7 @@
 // 経由の indexedDB アクセス）を要しないシナリオだけをここでは検証する（fixture方針は下記コメント参照）。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 import { runInAction } from 'mobx';
 import {
   Project, PlanGraph, Plane, CenterLineType, Discipline, StructuralMaterialType, OpeningCategory,
@@ -2828,3 +2829,58 @@ test('【不変条件・B-6】在来木造・3階建て＋屋根のフィクス�
 // openDB()を成功させると_dbPromiseキャッシュ越しに干渉が一度も発火しない空振りになる
 // （storage/db.js openDB()参照。node --testはファイル単位でプロセスが分離されるため、専用ファイルへ
 // 切り出すことで確実に発火する新品のfakeDbを使える）。移設先を参照。
+
+// ---- QA最小再現（qa-reviewer 2026-09-25特定・ユーザー裁定(a)承認済み・2026-09-25対応）----
+// 原因（qa-reviewer特定）: 既存ソルバーが「同座標だがアンカーCLが違う」auto柱を重複排除しない。
+// 対応: woodAutoFill.js dedupeColumnsByAxis（撤去段の直後に同じAXIS位置の自動柱を1本へ正規化する
+// 一般則。案(a)・2026-09-25ユーザー裁定）で解決済み。
+// QA指摘M-1（2026-09-25）: npm testにリポジトリ外の絶対パス（D:/tatsuya/Download/...）への依存を
+// 入れないこと——この不具合を実データに依存せず再現・固定する主たる回帰テストは
+// woodAutoFill.test.js「autoFillWoodColumns: 既存auto柱と同じAXIS・同じアンカーCLペアのauto柱が
+// 重複していたら1本に正規化される」に移した（そちらが変異でnpm test全体を赤にすることを確認済み）。
+// 本テストは実データでの追加確認としてのみ残し、ファイルが無い環境（CI・他の開発者のPC等）では
+// 検証データが手元にあるという前提が崩れるためskipする。
+test('収束済みtategu-test3.stqで、既存auto柱と同座標・別アンカーCLのauto柱をaddColumnしても重複排除される（qa-reviewer 2026-09-25最小再現・案(a)対応）', async (t) => {
+  const STQ_PATH = 'D:/tatsuya/Download/tategu-test3.stq';
+  if (!fs.existsSync(STQ_PATH)) {
+    t.skip(`実データ(${STQ_PATH})が無い環境のためskip（開発者の手元にだけある検証用.stq。` +
+      '主たる回帰テストはwoodAutoFill.test.jsの実データ非依存版を参照）');
+    return;
+  }
+  // tategu-test3.stqは屋根専用平面を持ち、recomputeStructuralForGraphがpeekRoofGraphAbove経由で
+  // floorSwapManager.peekを呼ぶ（実IndexedDBが無いNode上ではReferenceErrorになる。上記【失敗系】
+  // recomputeForStructuralSync("all")テストと同じ理由）——withFakeIndexedDBで包む。
+  await withFakeIndexedDB(async () => {
+    const { loadDocument } = await import('../../scripts/probe/loadDoc.mjs');
+    const { project } = loadDocument(STQ_PATH);
+    const graph = project.activeGraph;
+
+    // recomputeStructuralForGraph（単一graphの1パス）ではなくrecomputeForStructuralSync（'all'。
+    // 外側ループで自階・他階・屋根を収束させるオーケストレータ）を使う——このprobe/testの基準は
+    // 「収束済み」の状態でなければならない（centerDeleteStructuralSyncProbe.mjs/
+    // centerMoveStructuralSyncProbe.mjs と同じpreConvergeの理由）。
+    await recomputeForStructuralSync(project, 'all');
+
+    // 既存auto柱: 通り芯X=7280(verticalCL)・Y=-3640(horizontalCL)・woodAxisOffset{isVertical:false,
+    // offset:1820} → axisX=7280, axisY=-3640+1820=-1820（実データで確認済み）。
+    const gridX7280 = graph.gridXs.find(cl => Math.round(cl.effectiveValue) === 7280);
+    const gridY0 = graph.gridYs.find(cl => Math.round(cl.effectiveValue) === 0);
+    const before = graph.columns.filter(c => Math.round(c.axisX) === 7280 && Math.round(c.axisY) === -1820);
+    assert.equal(before.length, 1, '前提: 収束済みtategu-test3.stqには(7280,-1820)に既存auto柱が1本だけあるはず');
+
+    // 同じ(7280,-1820)へ、別のアンカーCL（horizontalCL=Y=0側からのwoodAxisOffset）で到達する
+    // auto柱を追加する——アンカーCLの組合せ（verticalCL/horizontalCL/woodAxisOffset）は既存柱と
+    // 異なるが、実位置(axisX,axisY)は完全に一致する。
+    runInAction(() => {
+      graph.addColumn(StructuralMaterialType.WOOD, before[0].sectionDefId, gridX7280, gridY0, {
+        woodAxisOffset: { isVertical: false, offset: -1820 }, dimensionStatus: 'auto',
+      });
+    });
+
+    await recomputeForStructuralSync(project, 'all');
+    await recomputeForStructuralSync(project, 'all');
+
+    const after = graph.columns.filter(c => Math.round(c.axisX) === 7280 && Math.round(c.axisY) === -1820);
+    assert.equal(after.length, 1, '重複排除後は(7280,-1820)に1本だけ残るはず（dedupeColumnsByAxisで解決済み）');
+  });
+});

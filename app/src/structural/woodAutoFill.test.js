@@ -6,7 +6,7 @@ import { Plane, PlanGraph, Project, CenterLineType, Discipline, StructuralMateri
 import {
   wallIntersectionPoints, autoFillWoodColumns, conformWoodSections, conformWoodBacking, WALL_JUNCTION_TOL_MM,
   autoFillWoodBeamDepths, autoFillWoodWallBeams, autoFillWoodFloorBeams, conformWoodColumnEccentricity,
-  autoFillWoodSillBeams, nearestAnchorCL,
+  autoFillWoodSillBeams, nearestAnchorCL, dedupeColumnsByAxis,
 } from './woodAutoFill.js';
 import { wallRunFreeEnds } from './woodFraming.js';
 import { WOOD_STUD_CODE_BY_SIZE } from '../finish/materials/backingClass.js';
@@ -5408,4 +5408,172 @@ test('【Minor・QA2026-09-19】autoFillWoodColumns（3i）: 別軸・別runの3
   assert.deepEqual(spanCols.filter(c => c.axisX === 0).map(c => c.axisY), [1820], 'x=0側は中央1本のまま');
   assert.deepEqual(spanCols.filter(c => c.axisX === 90).map(c => c.axisY).sort((a, b) => a - b), [910, 2730],
     'x=90側は(0,1820)と重なるため中央を避け910・2730へ分割される');
+});
+
+// ---- dedupeColumnsByAxis（ユーザー承認済み一般則・案(a)・2026-09-25。「AXISで一致・ACTUALで止める」
+// 規律の撤去版——撤去段の直後に同じAXIS位置に残った複数の自動柱を1本へ正規化する）----
+
+test('dedupeColumnsByAxis: オフセット柱とCLペア柱が同じAXIS位置に重複していれば、CLペア柱（候補側）が残る', () => {
+  const { graph, x1, y1, y2 } = makeGridGraph();
+  // A: 素直なCLペア柱（x1,y1の交点＝(0,0)）。
+  const clPair = graph.addColumn(StructuralMaterialType.WOOD, 'SEC-COL', x1, y1, {});
+  // B: 別のCLペア(x1,y2)からのオフセットで同じ(0,0)へ到達するオフセット柱。
+  const offsetCol = graph.addColumn(StructuralMaterialType.WOOD, 'SEC-COL', x1, y2, {
+    woodAxisOffset: { isVertical: false, offset: -4000 },
+  });
+  assert.equal(clPair.axisX, 0); assert.equal(clPair.axisY, 0);
+  assert.equal(offsetCol.axisX, 0); assert.equal(offsetCol.axisY, 0);
+
+  const removed = dedupeColumnsByAxis(graph, new Map());
+
+  assert.deepEqual(removed, [offsetCol.id], 'オフセット柱が撤去されるはず');
+  assert.equal(graph.columnMap.has(clPair.id), true, 'CLペア柱（候補側）は残るはず');
+  assert.equal(graph.columnMap.has(offsetCol.id), false);
+});
+
+test('dedupeColumnsByAxis: locked柱と自動柱が同じAXIS位置にあれば自動柱が消える（Q1裁定・寸法の異同は問わない）', () => {
+  const { graph, x1, y1, y2 } = makeGridGraph();
+  const locked = graph.addColumn(StructuralMaterialType.WOOD, 'SEC-COL-A', x1, y1, { dimensionStatus: 'locked' });
+  const auto = graph.addColumn(StructuralMaterialType.WOOD, 'SEC-COL-B', x1, y2, {
+    woodAxisOffset: { isVertical: false, offset: -4000 },
+  });
+  assert.notEqual(locked.sectionDefId, auto.sectionDefId, '前提: 断面（寸法相当）が異なる柱同士でも重複とみなす（Q2裁定）');
+
+  const removed = dedupeColumnsByAxis(graph, new Map());
+
+  assert.deepEqual(removed, [auto.id], '自動柱だけが撤去されるはず');
+  assert.equal(graph.columnMap.has(locked.id), true, 'locked柱は手を付けられずに残るはず');
+});
+
+test('dedupeColumnsByAxis: 袖柱（woodJambRef）は重複判定の対象外——同じAXIS位置の自動柱があっても両方残る', () => {
+  const { graph, x1, y1, y2 } = makeGridGraph();
+  const jamb = graph.addColumn(StructuralMaterialType.WOOD, 'SEC-COL', x1, y1, {
+    woodJambRef: { openingId: 'op1', side: 1 },
+  });
+  const auto = graph.addColumn(StructuralMaterialType.WOOD, 'SEC-COL', x1, y2, {
+    woodAxisOffset: { isVertical: false, offset: -4000 }, // (0,0)へ到達＝jambと同じAXIS位置
+  });
+  assert.equal(jamb.axisX, auto.axisX); assert.equal(jamb.axisY, auto.axisY);
+
+  const removed = dedupeColumnsByAxis(graph, new Map());
+
+  assert.deepEqual(removed, [], '袖柱は対象外のためグループ化されず、両方残るはず');
+  assert.equal(graph.columnMap.has(jamb.id), true);
+  assert.equal(graph.columnMap.has(auto.id), true);
+});
+
+test('dedupeColumnsByAxis: 基礎（role:"foundation"）は重複判定の対象外——同じAXIS位置の自動柱があっても両方残る', () => {
+  const { graph, x1, y1, y2 } = makeGridGraph();
+  const foundation = graph.addColumn(StructuralMaterialType.WOOD, 'SEC-COL', x1, y1, { role: 'foundation' });
+  const auto = graph.addColumn(StructuralMaterialType.WOOD, 'SEC-COL', x1, y2, {
+    woodAxisOffset: { isVertical: false, offset: -4000 },
+  });
+  assert.equal(foundation.axisX, auto.axisX); assert.equal(foundation.axisY, auto.axisY);
+
+  const removed = dedupeColumnsByAxis(graph, new Map());
+
+  assert.deepEqual(removed, [], '基礎は対象外のためグループ化されず、両方残るはず');
+  assert.equal(graph.columnMap.has(foundation.id), true);
+  assert.equal(graph.columnMap.has(auto.id), true);
+});
+
+test('dedupeColumnsByAxis: 2回目のパスでは変化0（冪等）', () => {
+  const { graph, x1, y1, y2 } = makeGridGraph();
+  const clPair = graph.addColumn(StructuralMaterialType.WOOD, 'SEC-COL', x1, y1, {});
+  graph.addColumn(StructuralMaterialType.WOOD, 'SEC-COL', x1, y2, {
+    woodAxisOffset: { isVertical: false, offset: -4000 },
+  });
+
+  const firstPass = dedupeColumnsByAxis(graph, new Map());
+  assert.equal(firstPass.length, 1, '1回目は重複の1本が撤去される');
+
+  const secondPass = dedupeColumnsByAxis(graph, new Map());
+  assert.deepEqual(secondPass, [], '2回目は撤去する重複が無いため変化0');
+  assert.equal(graph.columnMap.has(clPair.id), true);
+});
+
+test('【失敗系】dedupeColumnsByAxis: 位置がCL_OVERLAP_TOL_MM以上ずれていれば別グループ扱いになり両方残る', () => {
+  const { graph, x1, x2, y1 } = makeGridGraph();
+  const a = graph.addColumn(StructuralMaterialType.WOOD, 'SEC-COL', x1, y1, {});
+  // x2(4000)から-3999のオフセット→axisX=1（x1の0からCL_OVERLAP_TOL_MM(0.5mm)以上ずれる）。
+  const b = graph.addColumn(StructuralMaterialType.WOOD, 'SEC-COL', x2, y1, {
+    woodAxisOffset: { isVertical: true, offset: -3999 },
+  });
+  assert.equal(a.axisY, b.axisY);
+  assert.notEqual(a.axisX, b.axisX);
+  assert.ok(Math.abs(a.axisX - b.axisX) >= 0.5, '前提: 許容誤差(0.5mm)以上ずれている');
+
+  const removed = dedupeColumnsByAxis(graph, new Map());
+
+  assert.deepEqual(removed, [], '許容誤差以上ずれているため別グループ扱いになり、両方残るはず');
+  assert.equal(graph.columnMap.has(a.id), true);
+  assert.equal(graph.columnMap.has(b.id), true);
+});
+
+test('dedupeColumnsByAxis: どの優先順でも同着なら最終段でid昇順の1本が残る', () => {
+  const { graph, x1, y2 } = makeGridGraph();
+  // 両方ともオフセット柱（CLペア段は両方falseで同着、オフセット段は両方trueで同着）——
+  // idだけを明示的に制御し、最終段（id昇順）で決着することを固定する。
+  const first = graph.addColumn(StructuralMaterialType.WOOD, 'SEC-COL', x1, y2, {
+    woodAxisOffset: { isVertical: false, offset: -4000 },
+  }, 'aaa-first-by-id');
+  const second = graph.addColumn(StructuralMaterialType.WOOD, 'SEC-COL', x1, y2, {
+    woodAxisOffset: { isVertical: false, offset: -4000 },
+  }, 'zzz-second-by-id');
+
+  const removed = dedupeColumnsByAxis(graph, new Map());
+
+  assert.deepEqual(removed, [second.id], 'id昇順で先頭になる方（aaa-）が残り、後ろ（zzz-）が撤去されるはず');
+  assert.equal(graph.columnMap.has(first.id), true);
+});
+
+// QA指摘M-1（2026-09-25）: dedupeColumnsByAxisが実際にautoFillWoodColumnsの撤去段から呼ばれている
+// ことを、実データ（.stq）に依存しない配線テストとして固定する（既存の在来木造フィクスチャ＝閉じた
+// 部屋の4隅3a柱を使う）。
+// 重複の作り方: 既存の3a柱と**同じverticalCL/horizontalCL**（columnAnchorKeyが完全一致）のauto柱を
+// 手動で追加する——columnAnchorKeyが一致する重複でなければ、撤去段の既存ループ（「今回の候補集合
+// slotsに自分のキーが無ければ撤去する」）が毎回再生成される3a候補キー以外（例: woodAxisOffset付きの
+// off:キー）を独立に撤去してしまい、dedupeColumnsByAxisを経由せずに1本へ戻ってしまう（実測で確認・
+// 別アンカーCLの重複を作ったときにこの空振りに気づいた——検証時にwoodAxisOffset付きの重複で試した
+// 版は撤去段の既存ループだけで1本に戻り、dedupeColumnsByAxis自体の配線を確認できていなかった）。
+// 実際のバグ（centerMoveStructuralSyncProbe.mjs M7で実測）は`同じcolumnAnchorKeyを共有する2本の柱`が
+// 撤去段の既存ループの存在チェックだけでは共倒れで両方残ってしまう現象だったため、本テストの
+// 「同じキーの重複」という形は実際の不具合の型と一致する。
+// 変異D1（autoFillWoodColumns内のdedupeColumnsByAxis呼び出しを外す）でnpm test全体が赤になることを
+// 確認済み（builder報告。下記参照）。
+test('autoFillWoodColumns: 既存auto柱と同じAXIS・同じアンカーCLペアのauto柱が重複していたら1本に正規化される（dedupeColumnsByAxis配線確認）', () => {
+  const graph = new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
+  graph.structureOverride = TRADITIONAL_WOOD_STRUCTURE;
+  // 3640×1820の閉じた部屋（4隅がすべて3a交点。壁の自由端が無いため付随する柱が出ない単純な形）。
+  const gx0 = graph.addCenterLine(CenterLineType.VERTICAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+  const gx1 = graph.addCenterLine(CenterLineType.VERTICAL, 3640, { labeled: true, discipline: Discipline.STRUCT });
+  const gy0 = graph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+  const gy1 = graph.addCenterLine(CenterLineType.HORIZONTAL, 1820, { labeled: true, discipline: Discipline.STRUCT });
+  const room = graph.addRoom(new Set([`${gx0.id}:${gy0.id}:${gx1.id}:${gy1.id}`]), 'A');
+  generateRoomWallsFromOutline(graph, room);
+
+  // 1回目の生成: 4隅にauto柱が立つ（(0,0)を含む）。
+  fillWoodColumns(graph);
+  const before = graph.columns.filter(c => c.axisX === 0 && c.axisY === 0);
+  assert.equal(before.length, 1, '前提: 1回目の生成で(0,0)に既存auto柱が1本だけ立つはず');
+
+  // 同じ(gx0,gy0)ペアへ、もう1本auto柱を手動で追加する——columnAnchorKeyが既存柱と完全に一致するため、
+  // 撤去段の既存ループ（キーの存在だけを見る）では両方とも「候補キーに入っている」と判定され共倒れで
+  // 生き残る（実際の不具合と同じ型）。
+  const duplicate = graph.addColumn(StructuralMaterialType.WOOD, before[0].sectionDefId, gx0, gy0, {
+    dimensionStatus: 'auto',
+  });
+  assert.equal(graph.columns.filter(c => c.axisX === 0 && c.axisY === 0).length, 2, '前提: 手を加えた直後は(0,0)に2本あるはず');
+
+  // autoFillWoodColumnsを再実行——撤去段の直後のdedupeColumnsByAxisが重複を1本へ正規化するはず。
+  const { removed } = fillWoodColumns(graph);
+
+  const after = graph.columns.filter(c => c.axisX === 0 && c.axisY === 0);
+  assert.equal(after.length, 1, '再実行後は(0,0)に1本だけ残るはず（dedupeColumnsByAxisで解決済み）');
+  // 両方とも同じ優先順（候補キー・CLペアとも同着）のため、最終段（id昇順）でどちらが残るかは
+  // 決定的だが実行時のUUID次第——「1件だけ撤去され、それが既存柱かduplicateのどちらか」まで確認する
+  // （dedupeColumnsByAxis自体の決定性はwoodAutoFill.test.jsの専用ユニットテストで別途固定済み）。
+  assert.equal(removed.length, 1, 'removedには1件だけ含まれるはず');
+  assert.ok([before[0].id, duplicate.id].includes(removed[0]),
+    `removedは既存柱(${before[0].id})かduplicate(${duplicate.id})のどちらかのはず（実際: ${removed[0]}）`);
 });
