@@ -165,9 +165,9 @@ export async function propagateGridCenterLineDeletion(project, activeGraph, cl, 
  * extent は昇格前と同じ最外郭通り芯2本への ref（loCL/hiCL）にする。複製が読む
  * cl.centerLineType/_value/trim/refId/refOffset は applyDemoteToCenter が変更しないフィールド
  * なので、移籍前に読んでも複製内容は移籍後に読むのと同一。
- * undoEntry を渡すと、変更した各階の before/after を undoManager.amend で合成する
- * （eccentricityFloorSync.js の propagateCLEccentricities と同じパターン）。undoEntry が無い
- * 呼び出し（centerLineOps.js の降格はまだ undo エントリを作っていない段階でこれを呼ぶ）でも
+ * undoEntry を渡すと、変更した各階の before/after を undoManager.amend で合成する。undoEntry が無い
+ * 呼び出し（centerLineOps.js の降格はまだ undo エントリを作っていない段階でこれを呼ぶ。CL偏芯の
+ * applyCLEccentricityWithUndo も同じ理由でundoRecords配列だけを渡しamendは使わない）でも
  * before/after は常に undoRecords へ記録する——呼び出し側が opts.undoRecords に配列を渡せば、
  * 例外発生時も途中まで積んだ記録を参照できる（ロールバックに使う）。
  * @param {object} project

@@ -17,6 +17,7 @@ import { calcStep } from '../renderer/clMoveMath.js';
 import {
   shouldSuggestWoodStructure, commitCLMoveOp, deleteCenterLineWithUndo, addCenterLineFromDialog,
   promoteCenterToGridWithUndo, demoteGridToCenterWithUndo, setCenterLineStructuralListener,
+  applyCLEccentricityWithUndo,
 } from './centerLineOps.js';
 import { CL_KINDS, coexistenceAt } from '../core/centerLineKindPolicy.js';
 
@@ -3384,5 +3385,368 @@ test('ERR_CL_CONVERT_DUP_FLOOR/_DEMOTEはcenter/aux/beamすべてでthrowせず�
   for (const kind of ['center', 'aux', 'beam']) {
     assert.doesNotThrow(() => ERR_CL_CONVERT_DUP_FLOOR([{ name: '2階', kind }]));
     assert.doesNotThrow(() => ERR_CL_CONVERT_DUP_FLOOR_DEMOTE([{ name: '2階', kind }]));
+  }
+});
+
+// ================================================================
+// ---- CL偏芯（applyCLEccentricityWithUndo。段階(e)・2026-09-26）----
+// fixtureはT8の型（graph.addWall直書き。Room/edge一式は組まない）。applyFnの偽物は
+// graph.clEccentricities.get(id)?.value ?? 0 を対象壁のbackingOffsetへ直接書く
+// （実際のfinish/clEccentricity.js applyCLEccentricityと同じ「backingOffsetが変わる」効果だけを
+// 軽量に再現する）。propagateFnの偽物は既定で no-op（他階連動なし）にし、連動が必要なテストだけ
+// 個別に差し替える。listenerはfinallyでnullに戻す。
+// ================================================================
+
+// x0-x1間、y=2000のHORIZONTAL中心線に対称壁（backingDepth:120）を1本張る最小fixture。
+// project.activeGraphを持つ本物のProjectを使う（applyCLEccentricityWithUndoはpropagateFnを常に
+// awaitするため、8.の「await中に階が切り替わったか」ガード（graph !== project.activeGraph）が
+// 毎回評価される——project:{}のような偽物だとproject.activeGraphがundefinedになり常に「切り替わった」
+// 扱いになってしまう。deleteCenterLineWithUndo等の従来テストがproject:{}を使えていたのは、それらの
+// M-2ガードがawaitを伴う経路でしか評価されないため）。
+function makeEccGraph() {
+  const { project, graph } = makeProjectWithGraph();
+  const x0 = graph.addCenterLine(CenterLineType.VERTICAL, 0,    { labeled: false, discipline: Discipline.ARCH });
+  const x1 = graph.addCenterLine(CenterLineType.VERTICAL, 4000, { labeled: false, discipline: Discipline.ARCH });
+  const centerCL = graph.addCenterLine(CenterLineType.HORIZONTAL, 2000, { labeled: false, discipline: Discipline.ARCH });
+  graph.addWall(centerCL, 0, false, x0, 0, x1, 0, { isExteriorWall: false, backingOffset: 0, backingDepth: 120, wallFinish: 12.5 });
+  return { project, graph, centerCL };
+}
+
+// 実際のfinish/clEccentricity.js applyCLEccentricityの代わりに使う軽量スタブ。
+function stubApplyFn(graph, clId) {
+  const value = graph.clEccentricities.get(clId)?.value ?? 0;
+  for (const w of graph.walls) if (w.axisCL.id === clId) w.backingOffset = value;
+  return [];
+}
+
+const noopPropagateFn = async () => {};
+
+test('applyCLEccentricityWithUndo: 中心線の偏芯確定は構造同期リスナーを(graph, project, "activeAndAbove")で呼ぶ（確定1回・undo1回・redo1回＝計3回。ECC-1）', async () => {
+  const { project, graph, centerCL } = makeEccGraph();
+  const centerCLId = centerCL.id;
+  const rec = { mode: 'value', value: 300 };
+
+  const calls = [];
+  setCenterLineStructuralListener((g, p, scope) => calls.push({ g, p, scope }));
+  try {
+    const { toast } = await applyCLEccentricityWithUndo(graph, project, centerCL, { rec, applyFn: stubApplyFn, propagateFn: noopPropagateFn });
+    assert.equal(toast, null);
+    assert.equal(calls.length, 1, '確定直後に1回呼ばれるはず');
+    assert.equal(calls[0].g, graph);
+    assert.equal(calls[0].p, project);
+    assert.equal(calls[0].scope, 'activeAndAbove');
+    assert.equal(graph.clEccentricities.get(centerCLId).value, 300);
+    assert.equal(graph.walls.find(w => w.axisCL.id === centerCLId).backingOffset, 300);
+
+    undoManager.undo();
+    assert.equal(calls.length, 2, 'undoでも1回呼ばれるはず');
+    assert.equal(graph.clEccentricities.has(centerCLId), false, 'undoでレコードが消える');
+    assert.equal(graph.walls.find(w => w.axisCL.id === centerCLId).backingOffset, 0);
+
+    undoManager.redo();
+    assert.equal(calls.length, 3, 'redoでも1回呼ばれるはず');
+    assert.equal(graph.clEccentricities.get(centerCLId).value, 300);
+    assert.equal(graph.walls.find(w => w.axisCL.id === centerCLId).backingOffset, 300);
+  } finally {
+    setCenterLineStructuralListener(null);
+  }
+});
+
+test('applyCLEccentricityWithUndo: 通り芯の偏芯確定は構造同期リスナーを(graph, project, "all")で呼ぶ（ECC-1b）', async () => {
+  const { project, graph } = makeProjectWithGraph();
+  const x0 = graph.addCenterLine(CenterLineType.VERTICAL, 0,    { labeled: false, discipline: Discipline.ARCH });
+  const x1 = graph.addCenterLine(CenterLineType.VERTICAL, 4000, { labeled: false, discipline: Discipline.ARCH });
+  const structCL = graph.addCenterLine(CenterLineType.HORIZONTAL, 2000, { labeled: true, discipline: Discipline.STRUCT });
+  graph.addWall(structCL, 0, false, x0, 0, x1, 0, { isExteriorWall: false, backingOffset: 0, backingDepth: 120, wallFinish: 12.5 });
+  const rec = { mode: 'value', value: 300 };
+
+  const calls = [];
+  setCenterLineStructuralListener((g, p, scope) => calls.push({ g, p, scope }));
+  try {
+    const { toast } = await applyCLEccentricityWithUndo(graph, project, structCL, { rec, applyFn: stubApplyFn, propagateFn: noopPropagateFn });
+    assert.equal(toast, null);
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].scope, 'all');
+  } finally {
+    setCenterLineStructuralListener(null);
+  }
+});
+
+test('applyCLEccentricityWithUndo: propagateFnが他階へ記録を1件積めば、中心線でもscopeが"all"へ引き上がる（確定・undo・redo。記録0件のときは"activeAndAbove"のまま。QA指摘m-1）', async () => {
+  const project = new Project('proj', 'test');
+  const { graph: p1 } = project.addPlane(0, '1階', 'p1');
+  const { graph: p2 } = project.addPlane(3000, '2階', 'p2');
+  const x0 = p1.addCenterLine(CenterLineType.VERTICAL, 0,    { labeled: false, discipline: Discipline.ARCH });
+  const x1 = p1.addCenterLine(CenterLineType.VERTICAL, 4000, { labeled: false, discipline: Discipline.ARCH });
+  const centerCL = p1.addCenterLine(CenterLineType.HORIZONTAL, 2000, { labeled: false, discipline: Discipline.ARCH });
+  p1.addWall(centerCL, 0, false, x0, 0, x1, 0, { isExteriorWall: false, backingOffset: 0, backingDepth: 120, wallFinish: 12.5 });
+  const rec = { mode: 'value', value: 300 };
+
+  // 記録0件（他階連動なし）: scopeはcenterの種別ポリシーどおり"activeAndAbove"のまま。
+  const scopesNoRecord = [];
+  setCenterLineStructuralListener((g, p, scope) => scopesNoRecord.push(scope));
+  try {
+    const { toast } = await applyCLEccentricityWithUndo(p1, project, centerCL, { rec, applyFn: stubApplyFn, propagateFn: noopPropagateFn });
+    assert.equal(toast, null);
+    assert.deepEqual(scopesNoRecord, ['activeAndAbove'], '記録0件では引き上げない');
+    undoManager.undo();
+  } finally {
+    setCenterLineStructuralListener(null);
+  }
+
+  // 記録1件（他階連動あり）: scopeが"all"へ引き上がる（確定・undo・redoの3回とも）。
+  const beforeP2 = serializeGraph(p2);
+  const saveFloorFn = async (planeId, bytes) => { if (planeId === p2.plane.id) restoreGraph(p2, bytes); };
+  const propagateFn = async (proj, g, clIds, { undoRecords, saveFloorFn: sf }) => {
+    const after = serializeGraph(p2); // 他階で何か変更が起きたことにする最低限のスタブ
+    await sf(p2.plane.id, after);
+    if (undoRecords) undoRecords.push({ planeId: p2.plane.id, before: beforeP2, after });
+  };
+  const scopesWithRecord = [];
+  setCenterLineStructuralListener((g, p, scope) => scopesWithRecord.push(scope));
+  try {
+    const { toast } = await applyCLEccentricityWithUndo(p1, project, centerCL, { rec, applyFn: stubApplyFn, propagateFn, saveFloorFn });
+    assert.equal(toast, null);
+    assert.deepEqual(scopesWithRecord, ['all'], '確定: 記録1件で"all"へ引き上がる');
+
+    undoManager.undo();
+    assert.deepEqual(scopesWithRecord, ['all', 'all'], 'undo: 引き続き"all"');
+
+    undoManager.redo();
+    assert.deepEqual(scopesWithRecord, ['all', 'all', 'all'], 'redo: 引き続き"all"');
+  } finally {
+    setCenterLineStructuralListener(null);
+  }
+});
+
+test('applyCLEccentricityWithUndo: 壁由来梁芯が下地帯中心の移動分だけ同idで追従し除外キーも張り替わる。undoで値・キー・レコードが戻る（ECC-2）', async () => {
+  const { project, graph, centerCL } = makeEccGraph();
+  const centerCLId = centerCL.id;
+  const beamAxis = graph.addCenterLine(CenterLineType.HORIZONTAL, 2000, { labeled: false, discipline: Discipline.FUSE, refId: null });
+  const beamAxisId = beamAxis.id;
+  graph.excludedWallBeamAxes.add('Y:2000');
+  const rec = { mode: 'value', value: 300 };
+
+  const { toast } = await applyCLEccentricityWithUndo(graph, project, centerCL, { rec, applyFn: stubApplyFn, propagateFn: noopPropagateFn });
+  assert.equal(toast, null);
+  const axAfter = graph.shapeMap.get(beamAxisId);
+  assert.equal(axAfter.value, 2300, '壁の下地帯中心の移動分だけ梁芯も追従するはず');
+  assert.equal(graph.excludedWallBeamAxes.has('Y:2000'), false, '旧キーは張り替えで消える');
+  assert.equal(graph.excludedWallBeamAxes.has('Y:2300'), true, '新キーへ張り替わる');
+  assert.equal(graph.clEccentricities.get(centerCLId).value, 300);
+
+  undoManager.undo();
+  const axRestored = graph.shapeMap.get(beamAxisId);
+  assert.equal(axRestored.value, 2000, 'undoで梁芯も戻る');
+  assert.equal(graph.excludedWallBeamAxes.has('Y:2000'), true, 'undoで除外キーも戻る');
+  assert.equal(graph.excludedWallBeamAxes.has('Y:2300'), false);
+  assert.equal(graph.clEccentricities.has(centerCLId), false, 'undoでレコードも消える');
+});
+
+test('applyCLEccentricityWithUndo: 解除（rec:null）でレコードが消え、undoで戻る（ECC-3）', async () => {
+  const { project, graph, centerCL } = makeEccGraph();
+  const centerCLId = centerCL.id;
+  graph.setCLEccentricity(centerCLId, { mode: 'value', value: 300 });
+  graph.walls.find(w => w.axisCL.id === centerCLId).backingOffset = 300; // stubApplyFn適用結果を模した前提状態
+
+  const { toast } = await applyCLEccentricityWithUndo(graph, project, centerCL, { rec: null, applyFn: stubApplyFn, propagateFn: noopPropagateFn });
+  assert.equal(toast, null);
+  assert.equal(graph.clEccentricities.has(centerCLId), false, '解除でレコードが消える');
+  assert.equal(graph.walls.find(w => w.axisCL.id === centerCLId).backingOffset, 0, 'stubApplyFnがvalue未設定(0)で書き戻す');
+
+  undoManager.undo();
+  assert.equal(graph.clEccentricities.get(centerCLId).value, 300, 'undoでレコードが戻る');
+  assert.equal(graph.walls.find(w => w.axisCL.id === centerCLId).backingOffset, 300);
+});
+
+test('【案B】applyCLEccentricityWithUndo: 通り芯上での偏芯解除は壁由来梁芯の追従先に相手がいても保護されなければ吸収して撤去し、例外なく完了する（相手の通り芯は残る）', async () => {
+  const { project, graph, centerCL } = makeEccGraph();
+  const centerCLId = centerCL.id;
+  graph.setCLEccentricity(centerCLId, { mode: 'value', value: 300 });
+  graph.walls.find(w => w.axisCL.id === centerCLId).backingOffset = 300; // 偏芯適用済み（下地帯中心=2300）を模す
+  const beamAxis = graph.addCenterLine(CenterLineType.HORIZONTAL, 2300, { labeled: false, discipline: Discipline.FUSE, refId: null });
+  const beamAxisId = beamAxis.id;
+  const gridCLId = graph.addCenterLine(CenterLineType.HORIZONTAL, 2000, { labeled: true, discipline: Discipline.STRUCT }).id; // 解除後の戻り先(2000)に既存の通り芯
+
+  const { toast } = await applyCLEccentricityWithUndo(graph, project, centerCL, { rec: null, applyFn: stubApplyFn, propagateFn: noopPropagateFn });
+  assert.equal(toast, null, '吸収されても例外は起きず、解除自体は成功する');
+  assert.equal(graph.clEccentricities.has(centerCLId), false);
+  assert.equal(graph.shapeMap.has(beamAxisId), false, '保護されない梁芯は吸収されて撤去される（案B。裁定1は解消）');
+  assert.equal(graph.shapeMap.get(gridCLId)?.value, 2000, '移動先の通り芯（相手）はそのまま残る');
+});
+
+test('【案B】applyCLEccentricityWithUndo: 適用→（下階に同座標の壁がありその間に梁芯が作り直された状態を模す）→解除の往復で孤児0本になる（裁定1・案Aで残っていた限界の解消）', async () => {
+  const { project, graph, centerCL } = makeEccGraph();
+  const originalBeamAxis = graph.addCenterLine(CenterLineType.HORIZONTAL, 2000, { labeled: false, discipline: Discipline.FUSE, refId: null });
+  const originalBeamAxisId = originalBeamAxis.id;
+
+  // 適用: 下地帯中心が2000→2300へ動き、既存の梁芯（originalBeamAxis）が同idで追従する。
+  const { toast: applyToast } = await applyCLEccentricityWithUndo(
+    graph, project, centerCL, { rec: { mode: 'value', value: 300 }, applyFn: stubApplyFn, propagateFn: noopPropagateFn });
+  assert.equal(applyToast, null);
+  assert.equal(graph.shapeMap.get(originalBeamAxisId)?.value, 2300, '前提: 追従で新座標へ移った');
+
+  // 下階スタブ: 「下階に同座標(2000)の壁があり、その間の構造同期が旧座標に壁由来梁芯を作り直した」
+  // 状態を模す（実運用ではwallBeamAxes.jsのselfAndBelow経由で自動生成される。ここでは直接1本置く）。
+  const recreatedStubId = graph.addCenterLine(CenterLineType.HORIZONTAL, 2000, { labeled: false, discipline: Discipline.FUSE, refId: null }).id;
+
+  // 解除: 下地帯中心が2300→2000へ戻る。追従元（2300。originalBeamAxis）から見て、追従先(2000)には
+  // 既にスタブ（相手）がいる——移動する側（originalBeamAxis）は保護されないため吸収されて撤去され、
+  // 相手（recreatedStub。既にその座標の壁の根拠を持つ）はそのまま残る（判定の仕様どおり）。
+  // 結果として梁芯は1本だけ（孤児0本）——案Aでは「追従が重複ガードでskipされ、originalBeamAxisが
+  // 2300に孤児として残る」限界があったが、案Bではその限界が解消される。
+  const { toast: undoToast } = await applyCLEccentricityWithUndo(
+    graph, project, centerCL, { rec: null, applyFn: stubApplyFn, propagateFn: noopPropagateFn });
+  assert.equal(undoToast, null);
+
+  const remainingBeamAxes = graph.centerLines.filter(cl => cl.discipline === Discipline.FUSE);
+  assert.equal(remainingBeamAxes.length, 1, '梁芯は1本だけ残る（孤児0本）');
+  assert.equal(remainingBeamAxes[0].id, recreatedStubId, '生き残るのは相手（下階スタブ由来の作り直し梁芯。その座標の根拠を既に持つ）');
+  assert.equal(remainingBeamAxes[0].value, 2000, '値は旧座標(2000)のまま');
+  assert.equal(graph.shapeMap.has(originalBeamAxisId), false, '追従元（元の梁芯）は保護されないため吸収されて消える');
+});
+
+test('【順序が最重要】applyCLEccentricityWithUndo: 他階への連動（save）が構造同期（sync）より必ず先に実行される（確定・undo・redo。ECC-順序）', async () => {
+  const project = new Project('proj', 'test');
+  const { graph: p1 } = project.addPlane(0, '1階', 'p1');
+  const { graph: p2 } = project.addPlane(3000, '2階', 'p2');
+  const x0 = p1.addCenterLine(CenterLineType.VERTICAL, 0,    { labeled: false, discipline: Discipline.ARCH });
+  const x1 = p1.addCenterLine(CenterLineType.VERTICAL, 4000, { labeled: false, discipline: Discipline.ARCH });
+  const centerCL = p1.addCenterLine(CenterLineType.HORIZONTAL, 2000, { labeled: false, discipline: Discipline.ARCH });
+  p1.addWall(centerCL, 0, false, x0, 0, x1, 0, { isExteriorWall: false, backingOffset: 0, backingDepth: 120, wallFinish: 12.5 });
+  const rec = { mode: 'value', value: 300 };
+
+  const log = [];
+  const beforeP2 = serializeGraph(p2);
+  const saveFloorFn = async (planeId, bytes) => { log.push(`save:${planeId}`); if (planeId === p2.plane.id) restoreGraph(p2, bytes); };
+  const propagateFn = async (proj, g, clIds, { undoRecords, saveFloorFn: sf }) => {
+    const after = serializeGraph(p2); // 何らかの変更を他階へ保存したことにする最低限のスタブ
+    await sf(p2.plane.id, after);
+    if (undoRecords) undoRecords.push({ planeId: p2.plane.id, before: beforeP2, after });
+  };
+  setCenterLineStructuralListener(() => { log.push('sync'); });
+  try {
+    const { toast } = await applyCLEccentricityWithUndo(p1, project, centerCL, { rec, applyFn: stubApplyFn, propagateFn, saveFloorFn });
+    assert.equal(toast, null);
+    assert.deepEqual(log, [`save:${p2.plane.id}`, 'sync'], '確定: saveがsyncより先');
+
+    log.length = 0;
+    undoManager.undo();
+    assert.deepEqual(log, [`save:${p2.plane.id}`, 'sync'], 'undo: saveがsyncより先');
+
+    log.length = 0;
+    undoManager.redo();
+    assert.deepEqual(log, [`save:${p2.plane.id}`, 'sync'], 'redo: saveがsyncより先');
+  } finally {
+    setCenterLineStructuralListener(null);
+  }
+});
+
+test('【失敗系1】applyCLEccentricityWithUndo: propagateFnが1階保存後にthrowしたらreject・その階にbeforeが書き戻され自階もbeforeと一致・undo未増加・listener0回', async () => {
+  const project = new Project('proj', 'test');
+  const { graph: p1 } = project.addPlane(0, '1階', 'p1');
+  const { graph: p2 } = project.addPlane(3000, '2階', 'p2');
+  const x0 = p1.addCenterLine(CenterLineType.VERTICAL, 0,    { labeled: false, discipline: Discipline.ARCH });
+  const x1 = p1.addCenterLine(CenterLineType.VERTICAL, 4000, { labeled: false, discipline: Discipline.ARCH });
+  const centerCL = p1.addCenterLine(CenterLineType.HORIZONTAL, 2000, { labeled: false, discipline: Discipline.ARCH });
+  const wall = p1.addWall(centerCL, 0, false, x0, 0, x1, 0, { isExteriorWall: false, backingOffset: 0, backingDepth: 120, wallFinish: 12.5 });
+  const centerCLId = centerCL.id;
+  const wallId = wall.id;
+  const rec = { mode: 'value', value: 300 };
+
+  const beforeP2 = serializeGraph(p2);
+  const saveFloorFn = async (planeId, bytes) => { if (planeId === p2.plane.id) restoreGraph(p2, bytes); };
+  const propagateFn = async (proj, g, clIds, { undoRecords, saveFloorFn: sf }) => {
+    const after = serializeGraph(p2);
+    await sf(p2.plane.id, after);
+    if (undoRecords) undoRecords.push({ planeId: p2.plane.id, before: beforeP2, after });
+    throw new Error('propagate boom');
+  };
+
+  const beforeTop = undoManager.peekUndo();
+  let listenerCalls = 0;
+  setCenterLineStructuralListener(() => { listenerCalls++; });
+  try {
+    await assert.rejects(
+      () => applyCLEccentricityWithUndo(p1, project, centerCL, { rec, applyFn: stubApplyFn, propagateFn, saveFloorFn }),
+      /propagate boom/,
+    );
+    assert.equal(undoManager.peekUndo(), beforeTop, 'undoは積まれない');
+    assert.equal(listenerCalls, 0, '構造同期リスナーは呼ばれない');
+    assert.equal(p1.clEccentricities.has(centerCLId), false, '自階のレコードも巻き戻る');
+    assert.equal(p1.shapeMap.get(wallId).backingOffset, 0, '自階の壁backingOffsetも巻き戻る');
+  } finally {
+    setCenterLineStructuralListener(null);
+  }
+});
+
+test('【失敗系2】applyCLEccentricityWithUndo: 構造同期リスナー未設定（null）でも例外なく確定・undoできる', async () => {
+  const { project, graph, centerCL } = makeEccGraph();
+  const rec = { mode: 'value', value: 300 };
+  await assert.doesNotReject(() => applyCLEccentricityWithUndo(graph, project, centerCL, { rec, applyFn: stubApplyFn, propagateFn: noopPropagateFn }));
+  assert.doesNotThrow(() => undoManager.undo());
+});
+
+test('【失敗系3】applyCLEccentricityWithUndo: propagateFn内でactivePlaneIdが切り替わったらundo未積み・notify0・自階はsaveFloorFnでbeforeが書き戻される', async () => {
+  const project = new Project('proj', 'test');
+  const { graph: p1 } = project.addPlane(0, '1階', 'p1');
+  const { graph: p2 } = project.addPlane(3000, '2階', 'p2');
+  const x0 = p1.addCenterLine(CenterLineType.VERTICAL, 0,    { labeled: false, discipline: Discipline.ARCH });
+  const x1 = p1.addCenterLine(CenterLineType.VERTICAL, 4000, { labeled: false, discipline: Discipline.ARCH });
+  const centerCL = p1.addCenterLine(CenterLineType.HORIZONTAL, 2000, { labeled: false, discipline: Discipline.ARCH });
+  p1.addWall(centerCL, 0, false, x0, 0, x1, 0, { isExteriorWall: false, backingOffset: 0, backingDepth: 120, wallFinish: 12.5 });
+  const rec = { mode: 'value', value: 300 };
+
+  const saveCalls = [];
+  const saveFloorFn = async (planeId) => { saveCalls.push(planeId); };
+  const propagateFn = async (proj) => {
+    proj.activePlaneId = p2.plane.id; // awaitの後にアクティブ階が切り替わった状況を模す（M-2と同型）
+  };
+
+  const beforeTop = undoManager.peekUndo();
+  let listenerCalls = 0;
+  setCenterLineStructuralListener(() => { listenerCalls++; });
+  try {
+    const { toast } = await applyCLEccentricityWithUndo(p1, project, centerCL, { rec, applyFn: stubApplyFn, propagateFn, saveFloorFn });
+    assert.equal(toast, null);
+    assert.equal(undoManager.peekUndo(), beforeTop, 'undoは積まれない');
+    assert.equal(listenerCalls, 0, '構造同期リスナーは呼ばれない');
+    assert.ok(saveCalls.includes(p1.plane.id), '自階はsaveFloorFnでbeforeが書き戻されるはず（もうアクティブでないため）');
+  } finally {
+    setCenterLineStructuralListener(null);
+    project.activePlaneId = p1.plane.id;
+  }
+});
+
+test('【失敗系4】applyCLEccentricityWithUndo: 呼び出し時点で既にgraphがproject.activeGraphでなければ、何も書き換えずtoast:nullで即戻る（whenIdle待ちの間に階が切り替わった場合。QA指摘m-2）', async () => {
+  const project = new Project('proj', 'test');
+  const { graph: p1 } = project.addPlane(0, '1階', 'p1');
+  const { graph: p2 } = project.addPlane(3000, '2階', 'p2');
+  const x0 = p1.addCenterLine(CenterLineType.VERTICAL, 0,    { labeled: false, discipline: Discipline.ARCH });
+  const x1 = p1.addCenterLine(CenterLineType.VERTICAL, 4000, { labeled: false, discipline: Discipline.ARCH });
+  const centerCL = p1.addCenterLine(CenterLineType.HORIZONTAL, 2000, { labeled: false, discipline: Discipline.ARCH });
+  const wall = p1.addWall(centerCL, 0, false, x0, 0, x1, 0, { isExteriorWall: false, backingOffset: 0, backingDepth: 120, wallFinish: 12.5 });
+  const centerCLId = centerCL.id;
+  const wallId = wall.id;
+  const rec = { mode: 'value', value: 300 };
+
+  project.activePlaneId = p2.plane.id; // 呼び出し前（App.jsxのwhenIdle待ちの間）に既に切り替わっていた状況を模す
+  let propagateFnCalled = false;
+  const propagateFn = async () => { propagateFnCalled = true; };
+
+  const beforeTop = undoManager.peekUndo();
+  let listenerCalls = 0;
+  setCenterLineStructuralListener(() => { listenerCalls++; });
+  try {
+    const { toast } = await applyCLEccentricityWithUndo(p1, project, centerCL, { rec, applyFn: stubApplyFn, propagateFn });
+    assert.equal(toast, null);
+    assert.equal(propagateFnCalled, false, 'propagateFnにすら到達せず即戻るはず（手順3より前のガードのため）');
+    assert.equal(undoManager.peekUndo(), beforeTop, 'undoは積まれない');
+    assert.equal(listenerCalls, 0, '構造同期リスナーは呼ばれない');
+    assert.equal(p1.clEccentricities.has(centerCLId), false, '偏芯レコードは一切書き換わらない');
+    assert.equal(p1.shapeMap.get(wallId).backingOffset, 0, '壁のbackingOffsetも一切書き換わらない');
+  } finally {
+    setCenterLineStructuralListener(null);
+    project.activePlaneId = p1.plane.id;
   }
 });

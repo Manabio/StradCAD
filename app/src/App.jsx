@@ -75,7 +75,7 @@ import {
   deleteCenterLineWithUndo,
   shouldSuggestWoodStructure, addCenterLineFromDialog,
   promoteCenterToGridWithUndo, demoteGridToCenterWithUndo,
-  setCenterLineStructuralListener,
+  setCenterLineStructuralListener, applyCLEccentricityWithUndo,
 } from './transform/centerLineOps.js';
 import { ERR_CL_CONVERT_SYNC_FAILED, ERR_SESSION_LOCKED } from './error.js';
 import { isSessionOwner } from './storage/sessionLock.js';
@@ -1545,23 +1545,26 @@ const App = observer(() => {
   }
 
   // ---- CL偏芯 ----
+  // 処理本体は transform/centerLineOps.js の applyCLEccentricityWithUndo（段階(e)・2026-09-26）——
+  // 偏芯の適用・自階の壁由来梁芯の追従・他階連動（階段・吹抜け）を1つのundoエントリにまとめ、
+  // 構造同期を起動する。ここは削除・入替え（handleDeleteCenterLine・cl-to-grid/cl-to-center）と
+  // 同型で、実行中の構造同期が他階IDBを読み書きしている最中に始めると競合するため先にwhenIdle()を
+  // 待つ（.claude/undo-redo.md「落とし穴」参照）。scopeの判定のためにはcenterLineKindPolicyを
+  // importしない（判定はapplyCLEccentricityWithUndo側に閉じる。既存のisHitTestTargetのimportは
+  // 別用途——findNearbyCenterLinesのヒット可能種別絞り込み）。
   async function handleEccConfirm(rec, materialMap) {
     if (!eccDialog) return;
     const cl = eccDialog.cl;
-    const { applyCLEccentricity } = await import('./finish/clEccentricity.js');
-    const before = serializeGraph(graph);
-    runInAction(() => {
-      if (rec) graph.setCLEccentricity(cl.id, rec);
-      else     graph.removeCLEccentricity(cl.id);
-      applyCLEccentricity(graph, cl.id, { materialMap });
-    });
-    const after = serializeGraph(graph);
-    const entry = undoManager.push(() => restoreGraph(graph, before), () => restoreGraph(graph, after));
     setEccDialog(null);
-    // 階段・吹抜けに面する壁の偏芯は、設置階〜最上階／直下階と連動する（同一エントリで undo）
-    const { propagateCLEccentricity } = await import('./finish/eccentricityFloorSync.js');
-    await propagateCLEccentricity(project, graph, cl.id, { materialMap, undoEntry: entry });
-    setFloorSyncTick(t => t + 1); // 連動先の壁面位置が変わりうるため、上階peek系のstateを再計算させる
+    await structuralSync.whenIdle();
+    try {
+      await applyCLEccentricityWithUndo(graph, project, cl, { rec, materialMap });
+    } catch (err) {
+      console.error(err);
+      setToast({ msg: ERR_CL_CONVERT_SYNC_FAILED, key: Date.now() });
+    } finally {
+      setFloorSyncTick(t => t + 1); // 連動先の壁面位置が変わりうるため、上階peek系のstateを再計算させる
+    }
   }
 
   // ---- 腰壁・垂れ壁 ----

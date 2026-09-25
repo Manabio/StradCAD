@@ -12,8 +12,8 @@
  * （階段・吹抜けの Room feature を辿って）導出する。
  *
  * push（propagateCLEccentricities）とpull（pullCLEccentricities）の2方向がある:
- *   push … 自階で偏芯を指定・変更した直後、連動先の他階へ複製する（handleEccConfirm・
- *          モード境界の再伝播）。
+ *   push … 自階で偏芯を指定・変更した直後、連動先の他階へ複製する
+ *          （transform/centerLineOps.js の applyCLEccentricityWithUndo・モード境界の再伝播）。
  *   pull … 仕上げモード突入時、自階にまだレコードが無いCLについて、連動先（他階）に既存の
  *          指定があれば取り込む。push だけでは、連動先がまだ仕上げモードに入っていない・
  *          内壁指定（部屋名）がまだ無い等でグラフ上のリンクが見えず伝播できない期間が
@@ -22,9 +22,8 @@
  */
 import { runInAction } from 'mobx';
 import { floorSwapManager } from '../storage/FloorSwapManager.js';
-import { serializeGraph, restoreGraph } from '../graphSnapshot.js';
+import { serializeGraph } from '../graphSnapshot.js';
 import { saveFloor } from '../storage/db.js';
-import { undoManager } from '../undoManager.js';
 import { translateCLId } from './floorCLMap.js';
 import { buildCellToRoom, roomsAdjacentToCL } from './edgeClassify.js';
 import { applyCLEccentricity } from './clEccentricity.js';
@@ -90,18 +89,20 @@ function linkedGroupFor(clId, activeGraph, structGraph, peeks, activeIdx) {
  * F5: 階ごとに peek 1回・buildCellToRoom 1回・（変更があれば）saveFloor 1回に畳む
  * （clId ごとの繰り返し呼び出しで階数×CL数回 peek していた旧実装を解消）。
  *
- * undo: opts.undoEntry（handleEccConfirm が push した undo エントリ）を渡すと、変更した
- * 各階の before/after をシリアライズ済みバイト列で記録し、そのエントリへ合成
- * （undoManager.amend）する——stairFloorSync.js の syncUpperFloors と同じパターン。
- * undoEntry を渡さない呼び出し（モード境界での自動再伝播）は従来どおり undo 対象外。
+ * undo: opts.undoRecords に配列を渡すと、変更した各階ごとに { planeId, before, after }
+ * （シリアライズ済みバイト列）を、saveFloorFn 成功後に push する——transform/centerLineFloorSync.js
+ * の propagateDemotedCenterLine と同じ位置・同じ形（段階(e)・2026-09-26。amend は使わない——
+ * 呼び出し側 transform/centerLineOps.js の applyCLEccentricityWithUndo が自階の変更と同じ
+ * undo/redo クロージャの中で順序を自分で制御するため）。undoRecords を渡さない呼び出し
+ * （モード境界での自動再伝播。finish/finishBoundary.js）は従来どおり undo 対象外。
  *
  * @param {object} project
  * @param {object} activeGraph - 偏芯を指定・変更した階（アクティブ）のグラフ
  * @param {string[]} clIds - 呼び出し側でスナップショット済みの配列であること（observable map の
  *   keys() を await をまたいで直接 iterate しない。F9）
- * @param {{materialMap: Map, undoEntry?: object|null}} opts
+ * @param {{materialMap: Map, undoRecords?: Array|null, saveFloorFn?: Function}} opts
  */
-export async function propagateCLEccentricities(project, activeGraph, clIds, { materialMap, undoEntry = null } = {}) {
+export async function propagateCLEccentricities(project, activeGraph, clIds, { materialMap, undoRecords = null, saveFloorFn = saveFloor } = {}) {
   if (clIds.length === 0) return;
   const planes = project.planes;
   const active = activeGraph?.plane;
@@ -119,10 +120,9 @@ export async function propagateCLEccentricities(project, activeGraph, clIds, { m
   for (const { group } of perClId) for (const i of group) targetFloorIdx.add(i);
   if (targetFloorIdx.size === 0) return; // 連動対象なし（自階のみ）→ no-op
 
-  const undoRecords = []; // { planeId, before, after }（undoEntry がある場合のみ収集）
   for (const i of targetFloorIdx) {
     const { plane, graph: temp } = peeks[i];
-    const before = undoEntry ? serializeGraph(temp) : null;
+    const before = undoRecords ? serializeGraph(temp) : null;
     let changed = false;
     for (const { group, localIds, spec } of perClId) {
       if (!group.has(i)) continue;
@@ -134,27 +134,10 @@ export async function propagateCLEccentricities(project, activeGraph, clIds, { m
       changed = true;
     }
     if (!changed) continue;
-    await saveFloor(plane.id, serializeGraph(temp));
-    if (undoEntry) undoRecords.push({ planeId: plane.id, before, after: serializeGraph(temp) });
+    const after = serializeGraph(temp);
+    await saveFloorFn(plane.id, after);
+    if (undoRecords) undoRecords.push({ planeId: plane.id, before, after });
   }
-
-  if (undoEntry && undoRecords.length > 0) {
-    const applyBytes = (which) => {
-      for (const rec of undoRecords) {
-        if (project.activePlane?.id === rec.planeId) {
-          restoreGraph(project.activeGraph, rec[which]); // undo 時にその階がアクティブなら生きているグラフへ復元
-        } else {
-          saveFloor(rec.planeId, rec[which]).catch(console.error); // 非アクティブ階は IDB のみが正
-        }
-      }
-    };
-    undoManager.amend(undoEntry, () => applyBytes('before'), () => applyBytes('after'));
-  }
-}
-
-/** propagateCLEccentricities の単一CL版（handleEccConfirm 用の薄いラッパ）。 */
-export async function propagateCLEccentricity(project, activeGraph, clId, opts = {}) {
-  return propagateCLEccentricities(project, activeGraph, [clId], opts);
 }
 
 /**

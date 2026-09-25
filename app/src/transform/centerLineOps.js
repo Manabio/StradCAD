@@ -164,6 +164,109 @@ export function commitCLMoveOp(graph, project, cl, originalValue) {
   return { toast: null };
 }
 
+// ---- CL偏芯の確定（EccentricityDialog onConfirm。段階(e)・2026-09-26）----
+// 偏芯の適用（finish/clEccentricity.js applyCLEccentricity）・自階の壁由来梁芯の追従
+// （structural/wallBeamAxisFollow.js followWallBeamAxes。commitCLMoveOpと同じ手順）・他階連動
+// （finish/eccentricityFloorSync.js propagateCLEccentricities。階段・吹抜けの連動先へレコードを
+// 複製）を1つのundoエントリにまとめ、最後に構造同期（structural/structuralSync.js）を起動する。
+// amendは使わない——自階を先に変更してから他階連動をawaitする構造のため、失敗時は自階を含めて
+// 巻き戻す必要があり、deleteCenterLineWithUndo（通り芯分岐）と同じ「自前でundo/redoクロージャを
+// 組む」型にする（undoManager.amendは既に積まれたエントリへの合成しかできないため、自階側の
+// 巻き戻しまでは面倒を見られない）。
+// applyFn／propagateFn はテスト用の差し替え口（既定は動的importの実体）。centerLineFloorSync.jsと
+// 同じ理由（IndexedDBに連鎖するfinish/eccentricityFloorSync.jsを、centerLineOps.jsの
+// node:testからの単体importを壊さないよう動的importにする）。
+// @param {object} [opts]
+// @param {object|null} [opts.rec] - 偏芯レコード（null/undefined＝解除）
+// @param {Map} [opts.materialMap]
+// @param {Function} [opts.saveFloorFn] - テスト用の差し替え（既定はcenterLineFloorSync.js側のsaveFloor）
+// @param {Function} [opts.applyFn] - テスト用の差し替え（既定はfinish/clEccentricity.js applyCLEccentricity）
+// @param {Function} [opts.propagateFn] - テスト用の差し替え（既定はfinish/eccentricityFloorSync.js propagateCLEccentricities）
+// @returns {Promise<{ toast: null }>}
+export async function applyCLEccentricityWithUndo(graph, project, cl, opts = {}) {
+  const { rec, materialMap, saveFloorFn } = opts;
+
+  // 1. 動的importをすべて先に済ませる（centerLineFloorSync.jsのapplyFloorUndoRecords／
+  // rollbackFloorRecordsも。この関数の途中でawaitを挟むたびに動的importを跨ぐと、テスト用の
+  // 差し替え（applyFn/propagateFn）と実体のimportタイミングが混ざって読みにくくなるため）。
+  const { applyCLEccentricity } = await import('../finish/clEccentricity.js');
+  const { propagateCLEccentricities } = await import('../finish/eccentricityFloorSync.js');
+  const { applyFloorUndoRecords, rollbackFloorRecords } = await import('./centerLineFloorSync.js');
+  const applyFn = opts.applyFn ?? applyCLEccentricity;
+  const propagateFn = opts.propagateFn ?? propagateCLEccentricities;
+
+  // 2. scopeはstructuralSyncScopeForCenterLine（段階(d)）——通り芯='all'、中心線='activeAndAbove'。
+  // 偏芯は内壁指定CL（isFinishCellDivider）にしか付かないため、実務上は補助線・梁芯には来ない
+  // （UIからは到達不能。スコープ判定自体はCL種別を問わず同じ表を使う——「操作×種別」の専用表は作らない）。
+  const scope = structuralSyncScopeForCenterLine(graph, cl);
+
+  // 早期ガード（QA指摘m-2・2026-09-26）: 呼び出し側（App.jsx handleEccConfirm）はwhenIdle()を
+  // 待ってからこの関数を呼ぶが、そのawaitの間にhistoryナビゲーション等でアクティブ階が切り替わって
+  // いる可能性がある——他のCL操作（deleteCenterLineWithUndo等）のM-2ガードと同じ理由。何も書き換える
+  // 前（手順3のserializeGraphより前）に検出すれば、rollbackFloorRecordsを呼ぶまでもなく即toast:null
+  // で戻れる。
+  if (graph !== project.activeGraph) return { toast: null };
+
+  // 3. beforeは偏芯適用前のスナップショット。backingBeforeは壁由来梁芯の追従用（wallBackingCenters
+  // はwall.axisOffset/backingOffset等の確定値を読むため、CL移動時のようなpendingDeltaの退避は不要）。
+  const before = serializeGraph(graph);
+  const backingBefore = scope ? wallBackingCenters(graph) : null;
+
+  // 4. 偏芯レコードの更新→フル再計算の適用（毎回冪等。finish/clEccentricity.js参照）。
+  runInAction(() => {
+    if (rec) graph.setCLEccentricity(cl.id, rec);
+    else     graph.removeCLEccentricity(cl.id);
+    applyFn(graph, cl.id, { materialMap });
+  });
+
+  // 5. 壁由来梁芯の追従はapplyFnの**後**に行う（backingOffset確定後の帯中心で比較するため）。
+  if (scope) followWallBeamAxes(graph, mapBackingCenterMoves(backingBefore, wallBackingCenters(graph)));
+
+  // 6. after。追従した梁芯の値・excludedWallBeamAxesの張り替えはどちらもserializeGraphに含まれる
+  // （graphSnapshot.js参照）ため、followWallBeamAxesの戻り値（undoFns/redoFns）は使わない——
+  // 全体をbefore/afterのフルスナップショットで往復させる（commitCLMoveOpの個別合成とは違う型）。
+  const after = serializeGraph(graph);
+
+  // 7. 他階連動（階段・吹抜け）。失敗時は保存済みの階＋自階（before）を巻き戻して再throwする
+  // （自階は既に4.でrunInAction変更済みのため、floorRecordsに含まれない自階分も明示的に足す）。
+  const floorRecords = [];
+  try {
+    await propagateFn(project, graph, [cl.id], { materialMap, undoRecords: floorRecords, saveFloorFn });
+  } catch (e) {
+    await rollbackFloorRecords([...floorRecords, { planeId: graph.plane.id, before }], saveFloorFn, project);
+    throw e;
+  }
+
+  // 8. await（IDB書込を伴う他階連動）の間に階が切り替わった可能性を再評価する（他のCL操作の
+  // M-2ガードと同型）。切り替わっていれば自階を含めて巻き戻し、undoは積まずnotifyもしない。
+  if (graph !== project.activeGraph) {
+    await rollbackFloorRecords([...floorRecords, { planeId: graph.plane.id, before }], saveFloorFn, project);
+    return { toast: null };
+  }
+
+  // 9. 他階へ連動した（吹抜け直下階の壁も変わりうる）場合はsyncScopeを'all'へ引き上げる。
+  // scopeがnull（補助線。UIからは到達しない防御的分岐）ならfloorRecordsの有無に関わらずnullのまま
+  // （notifyしない）——'all'への引き上げは「scopeがそもそも構造同期対象のとき」だけ意味を持つ。
+  const syncScope = (scope && floorRecords.length > 0) ? 'all' : scope;
+  const notify = () => { if (syncScope) structuralSyncListener?.(graph, project, syncScope); };
+
+  // 10-11. amendは使わない（自階の復元→他階レコード適用→notifyの順序を自分で制御するため）。
+  undoManager.push(
+    () => {
+      restoreGraph(graph, before);
+      applyFloorUndoRecords(project, floorRecords, 'before', saveFloorFn);
+      notify();
+    },
+    () => {
+      restoreGraph(graph, after);
+      applyFloorUndoRecords(project, floorRecords, 'after', saveFloorFn);
+      notify();
+    },
+  );
+  notify();
+  return { toast: null };
+}
+
 // ---- CL削除（メニューの cl-del）----
 // 通り芯（isGridCenterLine＝labeled かつ種別struct）は structGraph 経由でスナップショット方式のUndo、
 // それ以外（中心線・補助線・梁芯）は excludedWallBeamAxes 記録（梁芯のみ）＋removeCenterLine。
