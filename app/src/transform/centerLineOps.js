@@ -13,7 +13,7 @@ import { findBracketingCLs, overhangMm } from '../snapGeometry.js';
 import { calcStep } from '../renderer/clMoveMath.js';
 import {
   orthoAnchorCandidatesForNew, allowsWallAnchor, extentAnchorStyle, isReferencedByAux,
-  sameCoordCounterparts, coexistenceAt, CL_KINDS, structuralSyncScopeOfKind,
+  sameCoordCounterparts, coexistenceAt, CL_KINDS, structuralSyncScopeOfKind, isFinishCellDivider,
 } from '../core/centerLineKindPolicy.js';
 import { mergeCenterLineChain, composeUndoWithMergeChain } from './centerLineMerge.js';
 import {
@@ -23,7 +23,10 @@ import {
 import { resolveSecondaryBeamsForAxis } from '../structural/beamAxisMove.js';
 import { renumberMembers } from '../structural/memberNumbering.js';
 import { autoFillSecondaryBeams, autoFillBeamEccentricity, UNSPECIFIED_STRUCTURE } from '../structural/structuralAutoFill.js';
-import { wallBeamAxisExcludeKey } from '../structural/wallBeamAxes.js';
+import {
+  wallBeamAxisExcludeKey, peekBelowGraph, wallBeamSourcesFor, orphanedWallBeamAxes,
+} from '../structural/wallBeamAxes.js';
+import { rulesFor, effectiveStructure } from '../structural/structureRules.js';
 
 // 通り芯削除の直後・undo/redo直後に構造同期（structural/structuralSync.js）を起動するための
 // 依存注入フック（App.jsxがsetOpeningGeometryListenerと同じ作法で設定する）。未設定（構造モジュール
@@ -205,11 +208,35 @@ export async function deleteCenterLineWithUndo(graph, project, cl, opts = {}) {
   // 従来どおりlistenerを呼ばない。
   const scope = structuralSyncScopeOfKind(centerLineKind(cl));
   const notify = () => structuralSyncListener?.(graph, project, scope);
+  // 壁の軸になれる種別（セル分割線。isFinishCellDivider——このブランチには通り芯は来ないため
+  // 実質center種別のみが真になる）の削除だけが壁ソースを変えうる——補助線・梁芯自身の削除は
+  // 壁の軸にならないため対象外。
+  const canCarryWalls = isFinishCellDivider(cl);
+
+  // ユーザー承認済み例外（2026-09-25）: 明示的な中心線削除に限り、その削除で失われる壁だけを
+  // 根拠にしていた壁由来梁芯（discipline:fuse。structural/wallBeamAxes.js autoFillWallBeamAxes）を
+  // 同じundoエントリで道連れにする——一般に孤児梁芯を撤去する規律は作らない
+  // （.claude/structural-model.md「孤児梁芯を撤去する規律は作らない」節。今回は「同じ操作の中で
+  // 壁ソースが消えた事実」が出自の代わりになる、明示的な中心線削除だけの特例）。
+  // 在来木造（wallBeamAxes:'selfAndBelow'）は自階＋1つ下の階の壁を根拠にするため、道連れ判定にも
+  // 下階の壁区間が要る——中心線削除のときだけ、その主構造ルールのときだけ下階をpeekする
+  // （RC造・非生成主構造でIDBを無駄に読まない。opts.peekBelowはテスト用の差し替え）。
+  const needsBelowPeek = canCarryWalls && rulesFor(effectiveStructure(graph, project)).wallBeamAxes === 'selfAndBelow';
+  const belowGraph = needsBelowPeek ? await (opts.peekBelow ?? peekBelowGraph)(graph, project) : null;
+
+  // 下階peekの await 中に階が切り替わった・この中心線自体が消えた可能性を再評価する
+  // （通り芯削除のM-2ガードと同型。peekしていない経路（aux・beam・selfAndBelow以外の中心線）は
+  // awaitを挟まないため再評価は不要）。
+  if (needsBelowPeek && (graph !== project.activeGraph || graph.shapeMap.get(cl.id) !== cl)) {
+    return { toast: null };
+  }
 
   const before = serializeGraph(graph);
   // 梁芯CLの削除は「壁由来の梁芯自動生成」に対する明示的な手動削除として扱う——次回のモード境界
   // 再計算で元の座標に再生成されないよう、座標ベースの除外集合へ記録する（壁の位置自体は削除しない
   // ため、記録しないと自動生成が復活させてしまう）。キーは structural/wallBeamAxes.js と同じ形式。
+  // 中心線の道連れ削除（下記）は excludedWallBeamAxes に触れない——壁が戻れば（undo）再生成される
+  // ため、手動削除・移動の記録と同列に扱わない。
   runInAction(() => {
     if (centerLineKind(cl) === 'beam') {
       graph.excludedWallBeamAxes.add(wallBeamAxisExcludeKey(cl.centerLineType === CenterLineType.VERTICAL, cl.effectiveValue));
@@ -221,7 +248,14 @@ export async function deleteCenterLineWithUndo(graph, project, cl, opts = {}) {
     // 中心線は階固有の実体で他階からは参照されない（昇格・降格の同一id複製は別オブジェクト
     // ——transform/centerLineFloorSync.js propagateDemotedCenterLine/recallPromotedCenterLineDuplicates
     // 参照）ため、通り芯削除と違い他階への伝播（propagate*）は不要。
+    const sourcesBefore = canCarryWalls ? wallBeamSourcesFor(graph, project, belowGraph) : null;
     graph.removeCenterLine(cl.id);
+    if (canCarryWalls) {
+      const sourcesAfter = wallBeamSourcesFor(graph, project, belowGraph);
+      for (const ax of orphanedWallBeamAxes(graph, sourcesBefore, sourcesAfter)) {
+        graph.removeCenterLine(ax.id);
+      }
+    }
   });
   const after = serializeGraph(graph);
   undoManager.push(

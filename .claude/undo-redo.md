@@ -30,6 +30,7 @@ plane作成・新階同期・切替・全階の構造再計算が複数階へ波
 - カタログの変換先指示UIの適用（`store.js`の`applyCatalogResolutions`。アクティブ階の往復のみ）: `markDirty()`のみでundoエントリは積まない
 - カタログ保守パネルの編集・戻す・削除（ライブラリはアプリ単位で履歴の外。同梱を外す／写すときはmarkDirtyのみ）
 - 構造同期（`structural/structuralSync.js`。建具の確定・undo/redo直後の自階再計算に加え、通り芯削除の直後・undo/redo直後の反映も同じ経路。2026-09-25一般化）: 決定的・冪等なため、要求元側のundo/redoで再実行されれば結果的に元へ戻る。ここで別途undoエントリを積むと、その復元手段（restoreGraph）がgraph上のインスタンス（建具のOpening等）を丸ごと差し替え、要求元側のundo/redoクロージャが握る参照が古くなる。通り芯削除では、他階への**detach伝播**（`transform/centerLineFloorSync.js` `propagateGridCenterLineDeletion`）はundo対象だが、他階の**構造反映**自体はこの規律どおりundo対象外——「壁位置の確定」と「そこから導く構造」を別の扱いにする線引き。
+- 中心線削除の**壁由来梁芯の道連れ削除**（`transform/centerLineOps.js`。ユーザー承認済み例外・2026-09-25。`.claude/structural-model.md`「壁由来梁芯の道連れ削除」参照）は上記の構造同期とは別物——別ライフサイクルの後追い処理ではなく、中心線削除本体と同じ`runInAction`内でグラフを直接変更し、同じ`before`/`after`スナップショット（`serializeGraph`）に写り込む。そのため専用のundo登録は不要で、中心線削除エントリ自体のundo/redoでそのまま一緒に戻る。
 
 ## 落とし穴
 - undo/redo内のフロア切替・IDB書き込みは非同期の投げ放し。連打は`historyNavRef`で弾き、切替中に履歴が動いた場合はpeek再照合で実行を中止する。

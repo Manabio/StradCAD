@@ -121,6 +121,37 @@ test('removeCenterLine: removeDependentsOfCenterLine抽出後もCL削除の結�
   assert.equal(graph.shapeMap.has(vCL.id), false, 'CL本体も削除される');
 });
 
+// ---- isReferencedByOtherCL（QA指摘m-3: isReferencedByCLをcore/centerLineKindPolicy.jsから移設・
+// hasExternalCenterLineReferencesのextentRef判定と統合。2026-09-25） ----
+
+test('isReferencedByOtherCL: 他CLのextentLoRef/extentHiRefがこのCLを指していればtrue', () => {
+  const graph = makeGraph();
+  const vCL = graph.addCenterLine(CenterLineType.VERTICAL,   0, { labeled: true, discipline: Discipline.STRUCT });
+  const hCL = graph.addCenterLine(CenterLineType.HORIZONTAL, 0, { labeled: true, discipline: Discipline.STRUCT });
+  graph.setCenterLineExtentRef(hCL, 'lo', { clId: vCL.id });
+  assert.equal(graph.isReferencedByOtherCL(vCL.id), true);
+});
+
+test('isReferencedByOtherCL: 既定（includeRefId省略）では他CLのrefIdがこのCLを指していればtrue', () => {
+  const graph = makeGraph();
+  const parent = graph.addCenterLine(CenterLineType.HORIZONTAL, 1000, { labeled: false, discipline: Discipline.ARCH });
+  graph.addCenterLine(CenterLineType.HORIZONTAL, 1100, { labeled: false, discipline: Discipline.ARCH, refId: parent.id, refOffset: 100 });
+  assert.equal(graph.isReferencedByOtherCL(parent.id), true);
+});
+
+test('【失敗系】isReferencedByOtherCL: includeRefId:falseなら他CLのrefIdだけの参照はfalse扱いになる（hasExternalCenterLineReferencesが使う形）', () => {
+  const graph = makeGraph();
+  const parent = graph.addCenterLine(CenterLineType.HORIZONTAL, 1000, { labeled: false, discipline: Discipline.ARCH });
+  graph.addCenterLine(CenterLineType.HORIZONTAL, 1100, { labeled: false, discipline: Discipline.ARCH, refId: parent.id, refOffset: 100 });
+  assert.equal(graph.isReferencedByOtherCL(parent.id, { includeRefId: false }), false);
+});
+
+test('【失敗系】isReferencedByOtherCL: どのCLからも参照されていなければfalse', () => {
+  const graph = makeGraph();
+  const freeCL = graph.addCenterLine(CenterLineType.VERTICAL, 5000, { labeled: true, discipline: Discipline.STRUCT });
+  assert.equal(graph.isReferencedByOtherCL(freeCL.id), false);
+});
+
 test('hasExternalCenterLineReferences: 構造材（柱・梁・耐力壁・基礎・スリーブ）のいずれかがCLを参照していればtrue', () => {
   const { graph, vCL } = setupStructuralRefsFixture();
   assert.equal(graph.hasExternalCenterLineReferences(vCL.id), true);
@@ -141,6 +172,16 @@ test('hasExternalCenterLineReferences: 他CLのextentRefが指しているCLはt
   graph.setCenterLineExtentRef(hCL, 'lo', { clId: vCL.id });
 
   assert.equal(graph.hasExternalCenterLineReferences(vCL.id), true);
+});
+
+// m-3統合後の回帰固定: isReferencedByOtherCL(id, {includeRefId:false})経由になっても、
+// refId単体の参照はhasExternalCenterLineReferencesでは「壊れる外部参照」に数えない
+// （_reparentChildCenterLinesで繰り上がるため安全。コメントどおりの既存挙動）。
+test('【失敗系】hasExternalCenterLineReferences: 他CLのrefId単体の参照はfalse（_reparentChildCenterLinesで繰り上がるため対象外）', () => {
+  const graph = makeGraph();
+  const parent = graph.addCenterLine(CenterLineType.HORIZONTAL, 1000, { labeled: false, discipline: Discipline.ARCH });
+  graph.addCenterLine(CenterLineType.HORIZONTAL, 1100, { labeled: false, discipline: Discipline.ARCH, refId: parent.id, refOffset: 100 });
+  assert.equal(graph.hasExternalCenterLineReferences(parent.id), false);
 });
 
 // ---- 外部仕上げ行の削除3経路 ----

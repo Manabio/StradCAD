@@ -8,6 +8,7 @@ import {
   wallBackingCenters, mapBackingCenterMoves, findWallBeamAxisCL, wallBeamAxisExcludeKey, peekBelowGraph,
   selfWallSegments, columnSeedBeamSegments, stairOpeningRuns, wallRunSegments,
   peekRoofBelowGraph, peekRoofGraphAbove, createWallSourceCache,
+  wallBeamSourcesFor, orphanedWallBeamAxes, wallBackingCenterCoord,
 } from './wallBeamAxes.js';
 import { RC_WALL_BACKING_CODES } from '../finish/materials/backingClass.js';
 import { MATERIALS } from '../finish/materials/materialData.js';
@@ -926,4 +927,199 @@ test('createWallSourceCache: requireBeamAxisBacking（true/false）は別キー�
 
   // false側を再度引いても、true側の呼び出しに壊されていない（同じcacheを共有していても別キー）。
   assert.equal(selfWallSegments(graph, cache).length, 1, 'false側はtrue側の呼び出し後も1件のまま');
+});
+
+// ================================================================
+// 壁由来梁芯の削除道連れ（明示的な中心線削除に限る例外・ユーザー承認済み・2026-09-25）
+// wallBeamSourcesFor / orphanedWallBeamAxes
+// ================================================================
+
+// isVertical=false（HORIZONTAL）の梁芯CLをdiscipline:FUSEで1本追加する試験用ヘルパー。
+// autoFillWallBeamAxesが生成する梁芯と同じ形（refId:null・labeled:false）を模す。
+function addWallBeamAxisCL(graph, isVertical, value, props = {}) {
+  return graph.addCenterLine(
+    isVertical ? CenterLineType.VERTICAL : CenterLineType.HORIZONTAL,
+    value,
+    { labeled: false, discipline: Discipline.FUSE, refId: null, ...props },
+  );
+}
+
+test('wallBeamSourcesFor: belowGraphを渡した同期呼び出しはcollectWallBeamSources（非同期・自動peek）と同じ結果を返す', async () => {
+  const { graph: selfGraph } = makeGridGraph('p2', 3000);
+  const { graph: belowGraph, x1: belowX1, x3: belowX3 } = makeGridGraph('p1', 0);
+  addBackingWall(belowGraph, { axisValue: 1800, clStart: belowX1, clEnd: belowX3, isVertical: false });
+  selfGraph.structureOverride = '木造（在来）';
+  const project = { planes: [belowGraph.plane, selfGraph.plane], structuralInfo: { mainStructure: '未定' } };
+
+  const asyncResult = await collectWallBeamSources(selfGraph, project, belowGraph);
+  const syncResult = wallBeamSourcesFor(selfGraph, project, belowGraph);
+  assert.deepEqual(syncResult, asyncResult, 'belowGraphを解決済みで渡す限り、同期版と非同期版は同じ結果のはず');
+});
+
+test('orphanedWallBeamAxes: beforeにあってafterに無いソースだけを、対応する梁芯CLに解決して返す（正常系）', () => {
+  const graph = makeGraph();
+  const ax = addWallBeamAxisCL(graph, false, 2000);
+  const before = [{ isVertical: false, coord: 2000, lo: 0, hi: 4000 }];
+  const after = [];
+  const result = orphanedWallBeamAxes(graph, before, after);
+  assert.equal(result.length, 1);
+  assert.equal(result[0].id, ax.id);
+});
+
+test('【失敗系】orphanedWallBeamAxes: afterにも同座標のソースが残っていれば撤去しない（下階・別中心線の壁がまだ支えている場合と同型）', () => {
+  const graph = makeGraph();
+  addWallBeamAxisCL(graph, false, 2000);
+  const before = [{ isVertical: false, coord: 2000, lo: 0, hi: 4000 }];
+  const after = [{ isVertical: false, coord: 2000, lo: 0, hi: 4000 }]; // 下階・別中心線等、別ソースからまだ供給されている
+  const result = orphanedWallBeamAxes(graph, before, after);
+  assert.equal(result.length, 0);
+});
+
+test('【失敗系】orphanedWallBeamAxes: refIdを持つ梁芯（手動追加された可能性がある）は撤去しない', () => {
+  const graph = makeGraph();
+  const parent = graph.addCenterLine(CenterLineType.HORIZONTAL, 1900, { labeled: false, discipline: Discipline.ARCH });
+  const ax = addWallBeamAxisCL(graph, false, 2000, { refId: parent.id, refOffset: 100 });
+  const before = [{ isVertical: false, coord: 2000, lo: 0, hi: 4000 }];
+  const result = orphanedWallBeamAxes(graph, before, []);
+  assert.equal(result.length, 0);
+  assert.equal(graph.shapeMap.has(ax.id), true, '判定対象から除外されるだけで、この関数自身は削除しない');
+});
+
+test('【失敗系】orphanedWallBeamAxes: dimensionStatus!==autoの柱・梁・基礎が乗っていれば撤去しない（locked=ユーザー確定値）', () => {
+  for (const kind of ['column', 'beam', 'footing']) {
+    const graph = makeGraph();
+    const ax = addWallBeamAxisCL(graph, false, 2000);
+    const otherCL = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
+    if (kind === 'column') {
+      graph.addColumn(StructuralMaterialType.WOOD, 'SEC', otherCL, ax, { dimensionStatus: 'locked' });
+    } else if (kind === 'beam') {
+      graph.addBeam(StructuralMaterialType.WOOD, 'SEC', ax, false, otherCL, otherCL, { dimensionStatus: 'locked' });
+    } else {
+      graph.addFooting('independent', 'SEC', otherCL, ax, { dimensionStatus: 'locked' });
+    }
+    const before = [{ isVertical: false, coord: 2000, lo: 0, hi: 4000 }];
+    const result = orphanedWallBeamAxes(graph, before, []);
+    assert.equal(result.length, 0, `${kind} がlockedなら撤去しないはず`);
+  }
+});
+
+test('orphanedWallBeamAxes: dimensionStatus===auto（既定）の柱が乗っているだけなら撤去する（自動生成物は道連れ対象）', () => {
+  const graph = makeGraph();
+  const ax = addWallBeamAxisCL(graph, false, 2000);
+  const otherCL = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
+  graph.addColumn(StructuralMaterialType.WOOD, 'SEC', otherCL, ax); // dimensionStatus省略→既定'auto'
+  const before = [{ isVertical: false, coord: 2000, lo: 0, hi: 4000 }];
+  const result = orphanedWallBeamAxes(graph, before, []);
+  assert.equal(result.length, 1);
+});
+
+// QA指摘m-1（2026-09-25）: 梁芯に乗るユーザー作成データ（耐力壁・梁ホストのスリーブ・
+// 柱芯オフセット・CL偏芯の個別設定）は、dimensionStatusを問わず道連れにしない。
+
+test('【失敗系・m-1】orphanedWallBeamAxes: 耐力壁（graph.structuralWalls）が乗っていれば撤去しない（自動生成の出自が無いためdimensionStatusを見ない）', () => {
+  const graph = makeGraph();
+  const ax = addWallBeamAxisCL(graph, false, 2000);
+  const otherCL = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
+  graph.addBearingWall(StructuralMaterialType.RC, 'SEC', ax, false, otherCL, otherCL, {});
+  const before = [{ isVertical: false, coord: 2000, lo: 0, hi: 4000 }];
+  const result = orphanedWallBeamAxes(graph, before, []);
+  assert.equal(result.length, 0);
+});
+
+test('【失敗系・m-1】orphanedWallBeamAxes: 梁ホストのスリーブ（graph.sleeves）が乗る梁の梁芯は、梁自体がauto（既定）でも撤去しない', () => {
+  const graph = makeGraph();
+  const ax = addWallBeamAxisCL(graph, false, 2000);
+  const otherCL = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
+  graph.addBeam(StructuralMaterialType.WOOD, 'SEC', ax, false, otherCL, otherCL); // dimensionStatus省略→既定'auto'
+  graph.addSleeve('beam', { hostAxisCL: ax, hostClStart: otherCL, hostClEnd: otherCL });
+  const before = [{ isVertical: false, coord: 2000, lo: 0, hi: 4000 }];
+  const result = orphanedWallBeamAxes(graph, before, []);
+  assert.equal(result.length, 0);
+});
+
+test('orphanedWallBeamAxes: hostType:slabのスリーブ（梁ホストでない）は保護対象外——梁芯とは無関係なので撤去する', () => {
+  const graph = makeGraph();
+  const ax = addWallBeamAxisCL(graph, false, 2000);
+  graph.addSleeve('slab', { hostSlabId: 'dummy-slab', hostCellKey: 'k' });
+  const before = [{ isVertical: false, coord: 2000, lo: 0, hi: 4000 }];
+  const result = orphanedWallBeamAxes(graph, before, []);
+  assert.equal(result.length, 1);
+  assert.equal(result[0].id, ax.id);
+});
+
+test('【失敗系・m-1】orphanedWallBeamAxes: graph.columnAxisOffsetsにこの梁芯のキーがあれば撤去しない（柱芯オフセットの個別設定を黙って失わない）', () => {
+  const graph = makeGraph();
+  const ax = addWallBeamAxisCL(graph, false, 2000);
+  graph.setColumnAxisOffset(ax.id, 30);
+  const before = [{ isVertical: false, coord: 2000, lo: 0, hi: 4000 }];
+  const result = orphanedWallBeamAxes(graph, before, []);
+  assert.equal(result.length, 0);
+});
+
+test('【失敗系・m-1】orphanedWallBeamAxes: graph.clEccentricitiesにこの梁芯のキーがあれば撤去しない（CL偏芯の個別設定を黙って失わない）', () => {
+  const graph = makeGraph();
+  const ax = addWallBeamAxisCL(graph, false, 2000);
+  graph.setCLEccentricity(ax.id, { side: 1, amount: 50 });
+  const before = [{ isVertical: false, coord: 2000, lo: 0, hi: 4000 }];
+  const result = orphanedWallBeamAxes(graph, before, []);
+  assert.equal(result.length, 0);
+});
+
+test('【失敗系】orphanedWallBeamAxes: 他CLのextentLoRef/extentHiRefがこの梁芯を指していれば撤去しない', () => {
+  const graph = makeGraph();
+  const ax = addWallBeamAxisCL(graph, false, 2000);
+  graph.addCenterLine(CenterLineType.VERTICAL, 1000, {
+    labeled: false, discipline: Discipline.ARCH, extentLoRef: { clId: ax.id, offset: 0 },
+  });
+  const before = [{ isVertical: false, coord: 2000, lo: 0, hi: 4000 }];
+  const result = orphanedWallBeamAxes(graph, before, []);
+  assert.equal(result.length, 0);
+});
+
+test('【失敗系】orphanedWallBeamAxes: 他CL（子CL）のrefIdがこの梁芯を指していれば撤去しない', () => {
+  const graph = makeGraph();
+  const ax = addWallBeamAxisCL(graph, false, 2000);
+  graph.addCenterLine(CenterLineType.VERTICAL, 1000, {
+    labeled: false, discipline: Discipline.ARCH, refId: ax.id, refOffset: 50,
+  });
+  const before = [{ isVertical: false, coord: 2000, lo: 0, hi: 4000 }];
+  const result = orphanedWallBeamAxes(graph, before, []);
+  assert.equal(result.length, 0);
+});
+
+test('orphanedWallBeamAxes: 座標に一致する梁芯CLが見つからなければ何もしない（既に別経路で消えている等）', () => {
+  const graph = makeGraph();
+  const before = [{ isVertical: false, coord: 2000, lo: 0, hi: 4000 }];
+  const result = orphanedWallBeamAxes(graph, before, []);
+  assert.equal(result.length, 0);
+});
+
+test('orphanedWallBeamAxes: 同じ梁芯へ解決される複数ソースが消えても重複せず1件だけ返す', () => {
+  const graph = makeGraph();
+  const ax = addWallBeamAxisCL(graph, false, 2000);
+  const before = [
+    { isVertical: false, coord: 2000, lo: 0, hi: 2000 },
+    { isVertical: false, coord: 2000, lo: 2000, hi: 4000 }, // マージ前の別ソース。同じ梁芯に解決される
+  ];
+  const result = orphanedWallBeamAxes(graph, before, []);
+  assert.equal(result.length, 1);
+  assert.equal(result[0].id, ax.id);
+});
+
+test('orphanedWallBeamAxes: 偏芯壁（梁芯の座標が中心線自身の値とずれる）でも座標一致で正しく解決し撤去する', () => {
+  const { graph, x1, x3 } = makeGridGraph('p1', 0);
+  graph.structureOverride = '木造（在来）';
+  const wall = addBackingWall(graph, { axisValue: 2000, clStart: x1, clEnd: x3, isVertical: false, backingOffset: 50 });
+  const beamAxisCoord = wallBackingCenterCoord(wall);
+  assert.notEqual(beamAxisCoord, 2000, '前提: 偏芯壁は下地帯中心が軸CL自身の値(2000)とずれる（2000+50=2050のはず）');
+  const ax = addWallBeamAxisCL(graph, false, beamAxisCoord);
+  const project = { planes: [graph.plane], structuralInfo: { mainStructure: '未定' } };
+
+  const sourcesBefore = wallBeamSourcesFor(graph, project, null);
+  graph.removeShape(wall.id);
+  const sourcesAfter = wallBeamSourcesFor(graph, project, null);
+
+  const result = orphanedWallBeamAxes(graph, sourcesBefore, sourcesAfter);
+  assert.equal(result.length, 1, '中心線自身の値(2000)ではなく壁の下地帯中心(2050)で解決できているはず');
+  assert.equal(result[0].id, ax.id);
 });

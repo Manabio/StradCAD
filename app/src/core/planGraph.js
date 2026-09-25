@@ -778,6 +778,21 @@ export class PlanGraph {
     else                   { wall.clEnd   = otherCL; wall.endOffset   = newOffset; }
   }
 
+  // id の CenterLine を他のCenterLineがextentLoRef/extentHiRef（延長端点参照）またはrefId
+  // （はね出し追従の親子参照）で参照しているか（_structuralRefsToCL の走査対象外。
+  // CenterLine同士の参照であり「構造材」ではないため共有ヘルパには含めない）。
+  // includeRefId: false にすると refId 単体の参照を無視する——hasExternalCenterLineReferences
+  // （結合による削除の安全ガード）は refId 単体の参照を「壊れる外部参照」に数えない
+  // （_reparentChildCenterLinesで繰り上がるため安全）が、structural/wallBeamAxes.js
+  // orphanedWallBeamAxes（明示的な中心線削除に限る壁由来梁芯の道連れ削除）は繰り上げの有無に
+  // かかわらず「他から参照されている構造」を道連れにしない側へ倒すため既定(true)のまま使う。
+  isReferencedByOtherCL(id, { includeRefId = true } = {}) {
+    return this.centerLines.some(other =>
+      other.id !== id &&
+      (other.extentLoRef?.clId === id || other.extentHiRef?.clId === id || (includeRefId && other.refId === id))
+    );
+  }
+
   // id の CenterLine を削除すると壊れる外部参照があるか（結合による削除の安全ガード用）
   // refId 単体の参照は _reparentChildCenterLines で繰り上がるため対象外。
   hasExternalCenterLineReferences(id) {
@@ -785,11 +800,7 @@ export class PlanGraph {
     const usesStruct = refs.shapes.length > 0 || refs.columns.length > 0 || refs.beams.length > 0
       || refs.walls.length > 0 || refs.footings.length > 0 || refs.sleeves.length > 0;
     if (usesStruct) return true;
-    // 他CLの extentLoRef/extentHiRef がこのCLを指しているか（_structuralRefsToCL の走査対象外。
-    // CenterLine同士の参照であり「構造材」ではないため共有ヘルパには含めない）。
-    return this.centerLines.some(other =>
-      other.id !== id && (other.extentLoRef?.clId === id || other.extentHiRef?.clId === id)
-    );
+    return this.isReferencedByOtherCL(id, { includeRefId: false });
   }
 
   // 削除される CL を直接参照している子 CL の参照を繰り上げる

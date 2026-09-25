@@ -237,6 +237,11 @@ export function selfWallSegments(graph, cache = undefined) {
 // それにアンカーされた壁交点柱・除外集合が生きたまま新しい位置に移る。
 // 対応先の壁が無くなった孤児梁芯は撤去しない（2026-09-15裁定。現状に撤去規律が無く、
 // 自動/手動の出自フラグも無いため）。
+// **例外（ユーザー承認済み・2026-09-25）**: 一般の孤児梁芯撤去規律は作らないが、
+// transform/centerLineOps.js の明示的な中心線削除に限り、その削除自体で壁ソースが消えた
+// （＝出自を「同じ操作の中で確認できた」）梁芯だけを同じundoエントリで道連れにする
+// （orphanedWallBeamAxes参照）。壁再生成（追従。上記）や他の操作からは呼ばれない——
+// 「壁を消したのが誰か」を確実に握れる呼び出し元だけの特例。
 // ================================================================
 
 /**
@@ -333,6 +338,60 @@ export function findWallBeamAxisCL(graph, isVertical, coord) {
   return beamAxisAt(graph, { centerLineType, coord });
 }
 
+/**
+ * 明示的な中心線削除に限る例外（上記コメント参照）: sourcesBefore にはあった壁ソースが
+ * sourcesAfter で無くなった（同方向・座標差がCL_OVERLAP_TOL_MM以上で「対応する後継が無い」）
+ * 座標について、その位置の壁由来梁芯CL（discipline:fuse）を求め、次のいずれにも該当しない
+ * ものだけを「撤去してよい」候補として返す（重複を除く）。
+ *   - `cl.refId` が非null（絶対座標の自動生成梁芯はrefIdを持たない——手動追加の可能性がある線は
+ *     道連れにしない。autoFillWallBeamAxesの生成規約と対）
+ *   - この梁芯を参照する柱・梁・基礎（verticalCL/horizontalCL・axisCL/clStart/clEndが一致）の
+ *     いずれかが`dimensionStatus !== 'auto'`（手動固定・算出済み）——ロックされた部材を道連れに
+ *     削除しない
+ *   - この梁芯に乗るユーザー作成データ: 耐力壁（`graph.structuralWalls`。構造モードで手動配置され
+ *     自動生成の出自を持たないため`dimensionStatus`を見ず存在だけで保護）・梁ホストのスリーブ
+ *     （`graph.sleeves`。`hostType==='beam'`かつ`hostAxisCL`/`hostClStart`/`hostClEnd`が一致——
+ *     梁自体が`dimensionStatus:'auto'`でも、ユーザーが個別配置したスリーブが乗っていれば保護）・
+ *     `graph.columnAxisOffsets`／`graph.clEccentricities`のキー（柱芯オフセット・CL偏芯の個別設定。
+ *     どちらもCL単位のMapで、CL削除時に無条件でdeleteされる——設定があるのに道連れにすると
+ *     ユーザー設定を黙って失う）
+ *   - `graph.isReferencedByOtherCL`（他CLの`extentLoRef`/`extentHiRef`/`refId`がこの梁芯を指す）
+ * 呼び出し側（transform/centerLineOps.js）が削除の前後で本関数へ渡す sourcesBefore/sourcesAfter は
+ * 同じ`wallBeamSourcesFor`の戻り値（プレーン配列）であること——CL参照を含まないため、この関数自身が
+ * `findWallBeamAxisCL`で改めてCLへ解決する。
+ * @param {object} graph
+ * @param {Array<{isVertical:boolean, coord:number}>} sourcesBefore
+ * @param {Array<{isVertical:boolean, coord:number}>} sourcesAfter
+ * @returns {import('../core.js').CenterLine[]} 撤去してよい梁芯CLの配列（重複なし）
+ */
+export function orphanedWallBeamAxes(graph, sourcesBefore, sourcesAfter) {
+  const stillPresent = (src) => sourcesAfter.some(a =>
+    a.isVertical === src.isVertical && Math.abs(a.coord - src.coord) < CL_OVERLAP_TOL_MM);
+  const missing = sourcesBefore.filter(src => !stillPresent(src));
+
+  const result = [];
+  const seen = new Set();
+  for (const src of missing) {
+    const cl = findWallBeamAxisCL(graph, src.isVertical, src.coord);
+    if (!cl || seen.has(cl.id)) continue;
+    seen.add(cl.id);
+    if (cl.refId != null) continue;
+    const hasProtectedUserData =
+      graph.columns.some(c => (c.verticalCL.id === cl.id || c.horizontalCL.id === cl.id) && c.dimensionStatus !== 'auto') ||
+      graph.beams.some(b => (b.axisCL.id === cl.id || b.clStart.id === cl.id || b.clEnd.id === cl.id) && b.dimensionStatus !== 'auto') ||
+      graph.footings.some(f => (f.verticalCL.id === cl.id || f.horizontalCL.id === cl.id) && f.dimensionStatus !== 'auto') ||
+      graph.structuralWalls.some(w => w.axisCL.id === cl.id || w.clStart.id === cl.id || w.clEnd.id === cl.id) ||
+      graph.sleeves.some(s => s.hostType === 'beam' &&
+        (s.hostAxisCL?.id === cl.id || s.hostClStart?.id === cl.id || s.hostClEnd?.id === cl.id)) ||
+      graph.columnAxisOffsets.has(cl.id) ||
+      graph.clEccentricities.has(cl.id);
+    if (hasProtectedUserData) continue;
+    if (graph.isReferencedByOtherCL(cl.id)) continue;
+    result.push(cl);
+  }
+  return result;
+}
+
 /** coord に一致（CL_OVERLAP_TOL_MM以内）する通り芯または梁芯（柱アンカー第1候補。
  *  core/centerLineKindPolicy.js structuralAnchorAt(tier:'primary')）を返す。意匠中心線・補助線は
  *  対象にしない。梁芯の重複ガード（autoFillWallBeamAxes）と壁交点柱のアンカー解決（woodAutoFill.js）が
@@ -359,12 +418,41 @@ function mergeWallBeamSources(sources) {
 }
 
 /**
- * graph（自階）から、壁由来の梁芯生成対象（プレーン配列）を収集する（async・下階peekを含む）。
+ * graph（自階）から、壁由来の梁芯生成対象（プレーン配列）を収集する（同期部分。collectWallBeamSources
+ * から下階peekを除いたもの——belowGraphは呼び出し側が解決済みで渡すこと。undefinedはpeekしていない
+ * 意味にはならず「下階なし」として扱われる点がcollectWallBeamSourcesの`belowGraph`引数と異なる
+ * （こちらは同期関数のためpeekできない。呼び出し側が事前にpeekBelowGraph等で解決するか、
+ * 明示的にnullを渡すこと）。
  * 生成条件（設計書 §2.2、主構造は自階の実効値）:
  *   (a) RC造（'RC造(ラーメン)'|'RC造(壁式)'）        → 自階の下地オーナー壁のうち下地材がRC下地のもの
  *   (b) 木造（在来）                                  → 自階の下地オーナー壁（下地材の種別は問わない）
  *   (c) 木造（在来）                                  → 1つ下の実体階の下地オーナー壁（同上）
  * RC造は自階のみ（上下階で壁が連続し自立するため下階壁の頭に梁は不要という設計判断）。
+ * transform/centerLineOps.js の中心線削除（明示的な削除に限る壁由来梁芯の道連れ判定。2026-09-25）が
+ * 削除前後の壁ソースを比較するために同期で呼べる版として抽出した（挙動不変）。
+ * @param {object} graph
+ * @param {object} project
+ * @param {object|null} belowGraph - 1つ下の実体階のgraph（無ければnull）。
+ * @param {ReturnType<typeof createWallSourceCache>} [cache] - 省略時は毎回全走査（従来どおり）。
+ * @returns {Array<{isVertical:boolean, coord:number, lo:number, hi:number}>}
+ */
+export function wallBeamSourcesFor(graph, project, belowGraph, cache = undefined) {
+  const structure = effectiveStructure(graph, project);
+  // 生成源の選択は主構造ルール（structureRules.js wallBeamAxes: 'rcBacking' | 'selfAndBelow' | null）。
+  const mode = rulesFor(structure).wallBeamAxes;
+  let sources = [];
+  if (mode === 'rcBacking') {
+    sources = wallBeamSourcesFromGraph(graph, true, cache);
+  } else if (mode === 'selfAndBelow') {
+    sources = wallRunSegments(graph, belowGraph, structure, cache);
+  }
+  return mergeWallBeamSources(sources);
+}
+
+/**
+ * graph（自階）から、壁由来の梁芯生成対象（プレーン配列）を収集する（async・下階peekを含む）。
+ * 同期部分は wallBeamSourcesFor に委譲する（二重実装しない）——本関数は「belowGraph省略時に
+ * 自前でpeekする」窓口の役目だけを持つ。
  * 呼び出し側（structuralRecompute.js）が wallGate と同じパターンで await し、結果を
  * autoFillStructuralGrid（同期）へプレーン配列として渡す。
  * @param {object} graph
@@ -376,17 +464,11 @@ function mergeWallBeamSources(sources) {
  * @param {object} [ctx] - 解決コンテキスト（自前peekするときだけ使う。peekBelowGraphと同じ・省略可）。
  */
 export async function collectWallBeamSources(graph, project, belowGraph = undefined, cache = undefined, ctx = undefined) {
-  const structure = effectiveStructure(graph, project);
-  // 生成源の選択は主構造ルール（structureRules.js wallBeamAxes: 'rcBacking' | 'selfAndBelow' | null）。
-  const mode = rulesFor(structure).wallBeamAxes;
-  let sources = [];
-  if (mode === 'rcBacking') {
-    sources = wallBeamSourcesFromGraph(graph, true, cache);
-  } else if (mode === 'selfAndBelow') {
-    const below = belowGraph === undefined ? await peekBelowGraph(graph, project, ctx) : belowGraph;
-    sources = wallRunSegments(graph, below, structure, cache);
-  }
-  return mergeWallBeamSources(sources);
+  const mode = rulesFor(effectiveStructure(graph, project)).wallBeamAxes;
+  const resolvedBelow = mode === 'selfAndBelow' && belowGraph === undefined
+    ? await peekBelowGraph(graph, project, ctx)
+    : belowGraph;
+  return wallBeamSourcesFor(graph, project, resolvedBelow, cache);
 }
 
 /**

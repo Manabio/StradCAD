@@ -347,6 +347,208 @@ test('deleteCenterLineWithUndo: 中心線を参照する自階の柱は削除直
   }
 });
 
+// ---- deleteCenterLineWithUndo: 中心線削除で失われる壁だけが根拠の壁由来梁芯の道連れ
+// （ユーザー承認済み例外・2026-09-25。.claude/structural-model.md「孤児梁芯を撤去する規律は
+// 作らない」節の例外。structural/wallBeamAxes.js wallBeamSourcesFor/orphanedWallBeamAxes参照）----
+
+test('deleteCenterLineWithUndo: 自階の壁1本だけが根拠の壁由来梁芯は中心線と一緒に消え、undoで同じidのまま戻り、redoで再び消える（auto柱も道連れ）', async () => {
+  // 通り芯（discipline:STRUCT）は本来project.structGraph側に属する実体——serializeGraph/restoreGraph
+  // は階固有CL（isStructCLでないもの）だけをフロアのスナップショットに含める（graphSnapshot.js
+  // buildSnapshot「通り芯は除外、階固有CLのみ」）。柱の直交CLは通り芯である必要が無いため
+  // discipline:ARCHにする（STRUCTをgraphへ直接addすると、undo復元時にfloorCLsから漏れて
+  // 柱が re-resolve できなくなる——本テストの前提と無関係な落とし穴）。
+  const graph = makeGraph();
+  graph.structureOverride = '木造（在来）';
+  const project = { activeGraph: graph };
+  const x0 = graph.addCenterLine(CenterLineType.VERTICAL, 0,    { labeled: false, discipline: Discipline.ARCH });
+  const x1 = graph.addCenterLine(CenterLineType.VERTICAL, 4000, { labeled: false, discipline: Discipline.ARCH });
+  const centerCL = graph.addCenterLine(CenterLineType.HORIZONTAL, 2000, { labeled: false, discipline: Discipline.ARCH });
+  graph.addWall(centerCL, 0, false, x0, 0, x1, 0, { isExteriorWall: false, backingOffset: 0, backingDepth: 120, wallFinish: 12.5 });
+  // 実運用では直前の構造再計算（autoFillWallBeamAxes）がこの壁から生成した梁芯。ここでは
+  // wallBeamSourcesFor/orphanedWallBeamAxesの入力を単純にするため直接同じ座標へ手で置く。
+  const beamAxis = graph.addCenterLine(CenterLineType.HORIZONTAL, 2000, { labeled: false, discipline: Discipline.FUSE, refId: null });
+  const beamAxisId = beamAxis.id;
+  const column = graph.addColumn(StructuralMaterialType.WOOD, 'SEC-COL', x0, beamAxis); // dimensionStatus省略→既定'auto'
+  const columnId = column.id;
+
+  let calls = 0;
+  setCenterLineStructuralListener(() => { calls++; });
+  try {
+    const { toast } = await deleteCenterLineWithUndo(graph, project, centerCL, { peekBelow: async () => null });
+    assert.equal(toast, null);
+    assert.equal(graph.shapeMap.has(beamAxisId), false, '壁を失った梁芯も同じ削除で道連れに消えるはず');
+    assert.equal(graph.columnMap.has(columnId), false, '梁芯に乗っていたauto柱も道連れで消えるはず');
+    assert.equal(graph.excludedWallBeamAxes.size, 0, '道連れ削除はexcludedWallBeamAxesに触れない（壁が戻れば再生成されるべきため）');
+    assert.equal(calls, 1);
+
+    undoManager.undo();
+    assert.equal(graph.shapeMap.get(beamAxisId)?.id, beamAxisId, 'undoで同じidの梁芯が戻るはず');
+    assert.equal(graph.columnMap.has(columnId), true, 'undoで柱も戻るはず');
+    assert.equal(graph.excludedWallBeamAxes.size, 0);
+    assert.equal(calls, 2);
+
+    undoManager.redo();
+    assert.equal(graph.shapeMap.has(beamAxisId), false, 'redoで再び消えるはず');
+    assert.equal(graph.columnMap.has(columnId), false);
+    assert.equal(calls, 3);
+  } finally {
+    setCenterLineStructuralListener(null);
+  }
+});
+
+test('【失敗系・保持】deleteCenterLineWithUndo: locked（dimensionStatus!==auto）の柱が乗る壁由来梁芯は中心線削除に道連れにしない', async () => {
+  const graph = makeGraph();
+  graph.structureOverride = '木造（在来）';
+  const project = { activeGraph: graph };
+  const x0 = graph.addCenterLine(CenterLineType.VERTICAL, 0,    { labeled: false, discipline: Discipline.ARCH });
+  const x1 = graph.addCenterLine(CenterLineType.VERTICAL, 4000, { labeled: false, discipline: Discipline.ARCH });
+  const centerCL = graph.addCenterLine(CenterLineType.HORIZONTAL, 2000, { labeled: false, discipline: Discipline.ARCH });
+  graph.addWall(centerCL, 0, false, x0, 0, x1, 0, { isExteriorWall: false, backingOffset: 0, backingDepth: 120, wallFinish: 12.5 });
+  const beamAxis = graph.addCenterLine(CenterLineType.HORIZONTAL, 2000, { labeled: false, discipline: Discipline.FUSE, refId: null });
+  const beamAxisId = beamAxis.id;
+  graph.addColumn(StructuralMaterialType.WOOD, 'SEC-COL', x0, beamAxis, { dimensionStatus: 'locked' });
+
+  const { toast } = await deleteCenterLineWithUndo(graph, project, centerCL, { peekBelow: async () => null });
+  assert.equal(toast, null);
+  assert.equal(graph.shapeMap.has(centerCL.id), false, '中心線自体は削除されるはず');
+  assert.equal(graph.shapeMap.has(beamAxisId), true, 'lockedの柱が乗る梁芯は道連れにしないはず（ユーザー確定値の保護）');
+});
+
+// QA指摘M-1（2026-09-25）: 在来木造（wallBeamAxes:'selfAndBelow'）で「自階の壁は消えたが直下階の
+// 同座標に壁がある」梁芯は、下階peekの結果をsourcesAfterへ正しく反映して道連れにしない。
+// 変異W4（sourcesAfterをbelowGraphなし＝nullで算出）はこのテストが無いと緑のまま通ってしまう
+// （既存テストは全てpeekBelow:null固定か下階peek非対象のケースのため、下階ソースで護られる
+// 経路を一度も通っていなかった）。
+test('【M-1】deleteCenterLineWithUndo: 直下階の同座標に壁がある壁由来梁芯は、自階の壁が消えても道連れにしない（下階peekの保護）', async () => {
+  const graph = makeGraph('p2');
+  graph.structureOverride = '木造（在来）';
+  const project = { activeGraph: graph };
+  const x0 = graph.addCenterLine(CenterLineType.VERTICAL, 0,    { labeled: false, discipline: Discipline.ARCH });
+  const x1 = graph.addCenterLine(CenterLineType.VERTICAL, 4000, { labeled: false, discipline: Discipline.ARCH });
+  const centerCL = graph.addCenterLine(CenterLineType.HORIZONTAL, 2000, { labeled: false, discipline: Discipline.ARCH });
+  graph.addWall(centerCL, 0, false, x0, 0, x1, 0, { isExteriorWall: false, backingOffset: 0, backingDepth: 120, wallFinish: 12.5 });
+  const beamAxis = graph.addCenterLine(CenterLineType.HORIZONTAL, 2000, { labeled: false, discipline: Discipline.FUSE, refId: null });
+  const beamAxisId = beamAxis.id;
+
+  // 下階: 同座標(y=2000)に壁がある別グラフ。
+  const belowGraph = makeGraph('p1');
+  const bx0 = belowGraph.addCenterLine(CenterLineType.VERTICAL, 0,    { labeled: false, discipline: Discipline.ARCH });
+  const bx1 = belowGraph.addCenterLine(CenterLineType.VERTICAL, 4000, { labeled: false, discipline: Discipline.ARCH });
+  const belowAxisCL = belowGraph.addCenterLine(CenterLineType.HORIZONTAL, 2000, { labeled: false, discipline: Discipline.ARCH });
+  belowGraph.addWall(belowAxisCL, 0, false, bx0, 0, bx1, 0, { isExteriorWall: false, backingOffset: 0, backingDepth: 120, wallFinish: 12.5 });
+
+  let peekCalls = 0;
+  const { toast } = await deleteCenterLineWithUndo(graph, project, centerCL, {
+    peekBelow: async () => { peekCalls++; return belowGraph; },
+  });
+  assert.equal(toast, null);
+  assert.equal(peekCalls, 1, 'peekBelowは1回呼ばれるはず');
+  assert.equal(graph.shapeMap.has(centerCL.id), false, '中心線自体は削除されるはず');
+  assert.equal(graph.shapeMap.has(beamAxisId), true, '直下階の同座標の壁がまだ根拠になるため梁芯は残るはず');
+});
+
+// 対照（M-1）: 下階スタブに同座標の壁が無ければ、自階の壁が消えた時点で正しく道連れに消える。
+test('【M-1対照】deleteCenterLineWithUndo: 下階に同座標の壁が無ければ壁由来梁芯は道連れに消える', async () => {
+  const graph = makeGraph('p2');
+  graph.structureOverride = '木造（在来）';
+  const project = { activeGraph: graph };
+  const x0 = graph.addCenterLine(CenterLineType.VERTICAL, 0,    { labeled: false, discipline: Discipline.ARCH });
+  const x1 = graph.addCenterLine(CenterLineType.VERTICAL, 4000, { labeled: false, discipline: Discipline.ARCH });
+  const centerCL = graph.addCenterLine(CenterLineType.HORIZONTAL, 2000, { labeled: false, discipline: Discipline.ARCH });
+  graph.addWall(centerCL, 0, false, x0, 0, x1, 0, { isExteriorWall: false, backingOffset: 0, backingDepth: 120, wallFinish: 12.5 });
+  const beamAxis = graph.addCenterLine(CenterLineType.HORIZONTAL, 2000, { labeled: false, discipline: Discipline.FUSE, refId: null });
+  const beamAxisId = beamAxis.id;
+
+  const belowGraph = makeGraph('p1'); // 壁なし（下階スタブに保護材料が無い）
+
+  const { toast } = await deleteCenterLineWithUndo(graph, project, centerCL, {
+    peekBelow: async () => belowGraph,
+  });
+  assert.equal(toast, null);
+  assert.equal(graph.shapeMap.has(beamAxisId), false, '下階に保護材料が無いため梁芯は道連れに消えるはず');
+});
+
+// QA指摘m-2（2026-09-25）: opts.peekBelowがthrowしたときの失敗系。
+test('【失敗系・m-2】deleteCenterLineWithUndo: opts.peekBelowがthrowしたらrejectし、中心線は残り、undoは積まれず、listenerは呼ばれない', async () => {
+  const graph = makeGraph();
+  graph.structureOverride = '木造（在来）';
+  const project = { activeGraph: graph };
+  const centerCL = graph.addCenterLine(CenterLineType.HORIZONTAL, 2000, { labeled: false, discipline: Discipline.ARCH });
+  const centerCLId = centerCL.id;
+  const beforeTop = undoManager.peekUndo();
+
+  let calls = 0;
+  setCenterLineStructuralListener(() => { calls++; });
+  try {
+    await assert.rejects(
+      () => deleteCenterLineWithUndo(graph, project, centerCL, {
+        peekBelow: async () => { throw new Error('下階の読み取りに失敗'); },
+      }),
+      /下階の読み取りに失敗/,
+    );
+    assert.equal(graph.shapeMap.has(centerCLId), true, '中心線は削除されずに残るはず');
+    assert.equal(undoManager.peekUndo(), beforeTop, 'undoは積まれないはず');
+    assert.equal(calls, 0, '構造同期リスナーは呼ばないはず');
+  } finally {
+    setCenterLineStructuralListener(null);
+  }
+});
+
+// 段階(a)のM-2ガード（通り芯削除の伝播await中の階切替）と同型: 下階peekのawait中に
+// アクティブ階が切り替わった・削除対象の中心線自体が消えた場合、道連れ判定もスキップし
+// 何も変更せず{toast:null}で戻る（listenerも呼ばない）。
+test('【失敗系・await中の階切替】deleteCenterLineWithUndo: 下階peekのawait中にアクティブ階が切り替わったら道連れ判定もせず{toast:null}で戻る（listener 0回）', async () => {
+  const { project, graph } = makeProjectWithGraph();
+  const { graph: other } = project.addPlane(3000, '2階', 'p2');
+  graph.structureOverride = '木造（在来）';
+  const centerCL = graph.addCenterLine(CenterLineType.HORIZONTAL, 2000, { labeled: false, discipline: Discipline.ARCH });
+  const centerCLId = centerCL.id;
+
+  let calls = 0;
+  setCenterLineStructuralListener(() => { calls++; });
+  try {
+    const { toast } = await deleteCenterLineWithUndo(graph, project, centerCL, {
+      peekBelow: async () => { project.activePlaneId = other.plane.id; return null; },
+    });
+    assert.equal(toast, null, 'await中に階が切り替わったら削除を確定せずtoast:nullで戻るはず');
+    assert.equal(graph.shapeMap.has(centerCLId), true, '削除は行われていないはず');
+    assert.equal(calls, 0, '構造同期リスナーは呼ばないはず');
+  } finally {
+    setCenterLineStructuralListener(null);
+  }
+});
+
+test('【失敗系・await中にCL自体が消える】deleteCenterLineWithUndo: 下階peekのawait中に削除対象の中心線自体が別経路で消えていたら道連れ判定もせず{toast:null}で戻る（listener 0回）', async () => {
+  const { project, graph } = makeProjectWithGraph();
+  graph.structureOverride = '木造（在来）';
+  const centerCL = graph.addCenterLine(CenterLineType.HORIZONTAL, 2000, { labeled: false, discipline: Discipline.ARCH });
+  const centerCLId = centerCL.id;
+
+  let calls = 0;
+  setCenterLineStructuralListener(() => { calls++; });
+  try {
+    const { toast } = await deleteCenterLineWithUndo(graph, project, centerCL, {
+      peekBelow: async () => { graph.removeShape(centerCLId); return null; },
+    });
+    assert.equal(toast, null, 'await中に対象CL自体が消えたら{toast:null}で戻るはず');
+    assert.equal(calls, 0, '構造同期リスナーは呼ばないはず');
+  } finally {
+    setCenterLineStructuralListener(null);
+  }
+});
+
+test('deleteCenterLineWithUndo: 主構造が在来木造でない中心線削除は下階peekを一切呼ばない（RC造・未定でIDBを無駄に読まない）', async () => {
+  const { project, graph } = makeProjectWithGraph();
+  graph.structureOverride = 'RC造(ラーメン)';
+  const centerCL = graph.addCenterLine(CenterLineType.HORIZONTAL, 2000, { labeled: false, discipline: Discipline.ARCH });
+
+  const { toast } = await deleteCenterLineWithUndo(graph, project, centerCL, {
+    peekBelow: async () => { throw new Error('RC造では下階peekを呼んではいけない'); },
+  });
+  assert.equal(toast, null);
+  assert.equal(graph.shapeMap.has(centerCL.id), false);
+});
+
 test('deleteCenterLineWithUndo: 通り芯を参照する自階の柱・梁・基礎は削除直後に撤去され、undoで復元される（removeDependentsOfCenterLine）', async () => {
   const { project, graph } = makeProjectWithGraph();
   const y0 = project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: true, discipline: Discipline.STRUCT });

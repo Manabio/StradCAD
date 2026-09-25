@@ -14,7 +14,7 @@
 //
 // 使い方: node --import ./scripts/testSetup.mjs scripts/probe/centerDeleteStructuralSyncProbe.mjs [入力.stq] [中心線ラベル省略可]
 import { loadDocument } from './loadDoc.mjs';
-import { PlanGraph, centerLineKind } from '../../src/core.js';
+import { PlanGraph, centerLineKind, Discipline } from '../../src/core.js';
 import { floorSwapManager } from '../../src/storage/FloorSwapManager.js';
 import { serializeGraph, restoreGraph } from '../../src/graphSnapshot.js';
 import { undoManager } from '../../src/undoManager.js';
@@ -183,6 +183,12 @@ const columnsOnClBefore = h.project.activeGraph.columns
   .filter(c => c.verticalCL.id === chosenId || c.horizontalCL.id === chosenId)
   .map(c => c.id);
 
+// (6)用: 削除前の壁由来梁芯（discipline:fuse）id一式とexcludedWallBeamAxesの件数を控えておく
+// （ユーザー承認済み例外・2026-09-25。明示的な中心線削除で失われる壁だけが根拠の梁芯を道連れにする）。
+const beamAxisIdsBefore = new Set(
+  h.project.activeGraph.centerLines.filter(cl => cl.discipline === Discipline.FUSE).map(cl => cl.id));
+const excludedSizeBefore = h.project.activeGraph.excludedWallBeamAxes.size;
+
 const { toast: mainToast } = await deleteCenterLineWithUndo(h.project.activeGraph, h.project, clMain);
 await h.probeSync.whenIdle();
 ok(mainToast === null, `deleteCenterLineWithUndo(中心線)はtoast:nullで成功する（実際: ${mainToast}）`);
@@ -199,6 +205,17 @@ if (stillThere.length > 0) console.log('  残っている柱id:', stillThere.map
 const stillReferencing = Object.entries(afterDeleteDump).filter(([, d]) => d.clRefs.includes(chosenId));
 ok(stillReferencing.length === 0, '(2) 全階で削除id参照の柱・梁・基礎が0本');
 if (stillReferencing.length > 0) console.log('  参照が残る階:', stillReferencing.map(([name]) => name));
+
+// (6) 削除で失われる壁だけが根拠だった壁由来梁芯（discipline:fuse）が削除直後に消え、
+// excludedWallBeamAxesは変わらない（一般の梁芯削除記録＝手動削除・移動と混同しない）。
+const beamAxisIdsAfterDelete = new Set(
+  h.project.activeGraph.centerLines.filter(cl => cl.discipline === Discipline.FUSE).map(cl => cl.id));
+const draggedAlongIds = [...beamAxisIdsBefore].filter(id => !beamAxisIdsAfterDelete.has(id));
+ok(draggedAlongIds.length > 0,
+  `(6) 中心線削除で失われる壁だけが根拠だった壁由来梁芯が削除直後に道連れで消える（${draggedAlongIds.length}本）`);
+if (draggedAlongIds.length === 0) console.log('  NG詳細: 道連れで消えた壁由来梁芯が0本（例外の起動を検出できない）');
+ok(h.project.activeGraph.excludedWallBeamAxes.size === excludedSizeBefore,
+  '(6) 道連れ削除はexcludedWallBeamAxesの件数を変えない（一般の梁芯削除記録と混同しない）');
 
 // (3) もう1回同期しても全階ダンプ差分ゼロ（冪等）。
 h.probeSync.request(h.project.activeGraph, h.project, { scope: 'activeAndAbove' });
@@ -218,6 +235,15 @@ const undoDiffs = diffDumps(baselineDump, afterUndoDump, { ignoreFields: STRUCT_
 const undoColumnsBack = columnsOnClBefore.every(id => h.project.activeGraph.columnMap.has(id));
 ok(undoDiffs.length === 0 && undoColumnsBack, '(4a) undo後は柱が戻り、基準（構造フィールド）と一致する');
 if (undoDiffs.length > 0) printDiffs(undoDiffs);
+
+// (6続き) undoで道連れ削除された壁由来梁芯が同じidのまま戻り、excludedWallBeamAxesも変わらない。
+const beamAxisIdsAfterUndo = new Set(
+  h.project.activeGraph.centerLines.filter(cl => cl.discipline === Discipline.FUSE).map(cl => cl.id));
+const draggedAlongRestored = draggedAlongIds.every(id => beamAxisIdsAfterUndo.has(id));
+ok(draggedAlongIds.length > 0 && draggedAlongRestored,
+  '(6) undoで道連れ削除された壁由来梁芯が同じidのまま戻る');
+ok(h.project.activeGraph.excludedWallBeamAxes.size === excludedSizeBefore,
+  '(6) undo後もexcludedWallBeamAxesの件数は変わらない');
 const undoWallDiffs = diffWallFieldsOnly(baselineDump, afterUndoDump);
 if (undoWallDiffs.length > 0) {
   console.log(`注意: (4a)の壁幾何(wallGeom/wallCount)に${undoWallDiffs.length}階分差分あり（${undoWallDiffs.join(', ')}）——` +
