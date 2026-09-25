@@ -13,7 +13,8 @@ import { findBracketingCLs, overhangMm } from '../snapGeometry.js';
 import { calcStep } from '../renderer/clMoveMath.js';
 import {
   orthoAnchorCandidatesForNew, allowsWallAnchor, extentAnchorStyle, isReferencedByAux,
-  sameCoordCounterparts, coexistenceAt, CL_KINDS, structuralSyncScopeOfKind, isFinishCellDivider,
+  sameCoordCounterparts, coexistenceAt, CL_KINDS, structuralSyncScopeOfKind, structuralSyncScopeOnMove,
+  isFinishCellDivider,
 } from '../core/centerLineKindPolicy.js';
 import { mergeCenterLineChain, composeUndoWithMergeChain } from './centerLineMerge.js';
 import {
@@ -25,10 +26,12 @@ import { renumberMembers } from '../structural/memberNumbering.js';
 import { autoFillSecondaryBeams, autoFillBeamEccentricity, UNSPECIFIED_STRUCTURE } from '../structural/structuralAutoFill.js';
 import {
   wallBeamAxisExcludeKey, peekBelowGraph, wallBeamSourcesFor, orphanedWallBeamAxes,
+  wallBackingCenters, mapBackingCenterMoves,
 } from '../structural/wallBeamAxes.js';
+import { followWallBeamAxes } from '../structural/wallBeamAxisFollow.js';
 import { rulesFor, effectiveStructure } from '../structural/structureRules.js';
 
-// 通り芯削除の直後・undo/redo直後に構造同期（structural/structuralSync.js）を起動するための
+// CL削除・中心線移動の直後・undo/redo直後に構造同期（structural/structuralSync.js）を起動するための
 // 依存注入フック（App.jsxがsetOpeningGeometryListenerと同じ作法で設定する）。未設定（構造モジュール
 // 未配線のテスト等）では何もしない。centerLineOps.js自身は構造同期モジュールをimportしない——
 // 起動は依存注入だけで結ぶ（openings/openingEdit.jsのsetOpeningGeometryListenerと同じ理由。
@@ -65,18 +68,59 @@ export function commitCLMoveOp(graph, project, cl, originalValue) {
   }
 
   if (centerLineKind(cl) !== 'beam') {
+    // 段階(b)・2026-09-25: 中心線の移動でも構造同期を起動する（種別ポリシーのstructuralSyncScopeOnMove
+    // 経由。通り芯・補助線は現状null＝起動しない——通り芯移動は段階(c)、補助線は段階(d)）。同じ
+    // undoエントリで壁由来梁芯（discipline:fuse）を移動分だけ追従させる（followWallBeamAxes。
+    // 仕上げモード脱出時の壁再生成＝wallRefresh.js と同じ手順で、専用の再計算経路を持たない
+    // 「軽い」移動確定にも同じ追従を効かせる）。
+    const scope = structuralSyncScopeOnMove(centerLineKind(cl));
+    const notify = () => structuralSyncListener?.(graph, project, scope);
+    // wallBackingCenters（wallBackingCenterCoord経由）はaxisCL.effectiveValue（=value+pendingDelta）を
+    // 読むため、bakeCLValueで未確定のまま素直に呼ぶと「まだ確定していないドラッグ後の壁位置」を
+    // 返してしまう（ドラッグ中プレビューがeffectiveValueを見る設計と同じ理由。実装時に実測で確認した
+    // 食い違い——設計書の記述はbake前のCLがまだ旧位置にある前提だった）。pendingDeltaだけを一時的に0へ
+    // 戻し「確定済みの旧座標（=value=originalValue）」を読ませてから元に戻す（_valueは触らない。
+    // runInAction 1本にまとめ、MobXへ中間状態を観測させない）。
+    let backingBefore = null;
+    if (scope) {
+      runInAction(() => {
+        const savedDelta = cl.pendingDelta;
+        cl.pendingDelta = 0;
+        try {
+          backingBefore = wallBackingCenters(graph);
+        } finally {
+          cl.pendingDelta = savedDelta;
+        }
+      });
+    }
+
     let chainResult = { merged: false };
     runInAction(() => {
       bakeCLValue(cl, newValue);
       // 通り芯(labeled:true)は結合対象外。編集確定のたびに隣接する中心線との結合を確認する
       if (!cl.labeled) chainResult = mergeCenterLineChain(graph, cl, { kind: centerLineKind(cl) });
     });
+
+    // 壁由来梁芯の追従はbake・結合の**後**に行う（結合で壁の軸CLが変わりうるため、追従前後の
+    // wallBackingCentersは常に確定済みの壁位置から採る）。
+    const axis = scope ? followWallBeamAxes(graph, mapBackingCenterMoves(backingBefore, wallBackingCenters(graph))) : null;
+
     const [undoFn, redoFn] = composeUndoWithMergeChain(
       () => bakeCLValue(cl, originalValue),
       () => bakeCLValue(cl, newValue),
       chainResult,
     );
-    undoManager.push(() => runInAction(undoFn), () => runInAction(redoFn));
+    undoManager.push(
+      () => {
+        runInAction(() => { [...(axis?.undoFns ?? [])].reverse().forEach(f => f()); undoFn(); });
+        if (scope) notify();
+      },
+      () => {
+        runInAction(() => { redoFn(); axis?.redoFns.forEach(f => f()); });
+        if (scope) notify();
+      },
+    );
+    if (scope) notify();
     return { toast: null };
   }
 
@@ -200,10 +244,11 @@ export async function deleteCenterLineWithUndo(graph, project, cl, opts = {}) {
   }
 
   // 非通り芯（中心線・補助線・梁芯）は種別ポリシーから導いたscopeで構造同期を起動する
-  // （段階(b)・実機報告2026-09-25: tategu-test3.stqで中心線を削除すると壁交点柱が残ったまま
-  // だったバグの修正——.claude/structural-model.md「起動点」節参照）。中心線は
-  // structuralSyncScopeOfKind('center')==='activeAndAbove'（現状は'all'と同じ内部実装。段階(b)で
-  // 自階＋上階だけの反映に絞る予定）。補助線・梁芯はnull（補助線は段階(d)、梁芯は専用経路
+  // （実機報告2026-09-25: tategu-test3.stqで中心線を削除すると壁交点柱が残ったままだったバグの
+  // 修正——.claude/structural-model.md「起動点」節参照）。中心線は
+  // structuralSyncScopeOfKind('center')==='activeAndAbove'（'all'と同じ処理のまま恒久化。在来木造の
+  // 3b/3h-2による下方向依存があるため自階＋上階だけでは足りない——structuralOrchestration.js
+  // recomputeForStructuralSync のコメント参照）。補助線・梁芯はnull（補助線は段階(d)、梁芯は専用経路
   // structural/wallBeamAxes.js。条件10で二重に動かさない）——それ以外の非通り芯削除では
   // 従来どおりlistenerを呼ばない。
   const scope = structuralSyncScopeOfKind(centerLineKind(cl));

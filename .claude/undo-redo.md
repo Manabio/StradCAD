@@ -16,6 +16,9 @@ undoは「`undoManager.push`されたものだけ」戻せる。**graphを変え
 ## 確定が非同期な付随変更はamendで同一エントリへ合成する
 階段変換→上階自動設置のように操作の後から非同期で確定する変更は、新規エントリにせず`undoManager.amend`で元エントリへ合成する（Ctrl+Z 1回で揃って戻る）。
 
+## 中心線移動は「bake＋結合連鎖＋梁芯追従」を1エントリにまとめる（段階(b)・2026-09-25）
+`transform/centerLineOps.js`の`commitCLMoveOp`は、CL値の確定（`bakeCLValue`）・隣接CLとの結合（`mergeCenterLineChain`）・壁由来梁芯の追従（`followWallBeamAxes`）を、同期処理のまま1つの`undoManager.push`エントリにまとめる（`composeUndoWithMergeChain`が結合分を合成し、`followWallBeamAxes`が返す`undoFns`/`redoFns`をさらに合わせて実行する——undo時は「梁芯追従を先に戻す→CL値・結合を戻す」、redo時は逆順）。構造同期リスナー（`structuralSync.js`起動）へのnotifyは、確定・undo・redoそれぞれのクロージャの**最後**で呼ぶ——CL値・壁位置が確定してから構造再計算を起動する順序を守るため。
+
 ## 「作成→ダイアログ確定」は1エントリ、キャンセルはエントリなし
 仕上げモードの新規部屋はcommitDrag（作成）時点ではpushを保留し（`_pendingDialogUndo`）、applyNaming（確定）で作成＋命名を1エントリにする。キャンセル・ダイアログからの即削除は作成と相殺して差分ゼロ＝積まない。部屋統合（判定2）だけはキャンセルしても残る仕様のため即時push。
 

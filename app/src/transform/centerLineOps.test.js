@@ -107,6 +107,225 @@ test('commitCLMoveOp: 梁芯移動は移動元座標をexcludedWallBeamAxesへ�
   assert.equal(graph.excludedWallBeamAxes.has('X:2000'), false, 'undoで除外集合の記録も取り消される');
 });
 
+// ---- commitCLMoveOp: 中心線移動 → 構造同期リスナー＋壁由来梁芯の追従（段階(b)・2026-09-25） ----
+// setCenterLineStructuralListener はテスト間で必ず finally で null に戻す（他テストへ漏らさない）。
+
+test('commitCLMoveOp: 中心線の移動は構造同期リスナーを(graph, project, "activeAndAbove")で呼ぶ（確定1回・undo1回・redo1回＝計3回。T1）', () => {
+  const graph = makeGraph();
+  const cl = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
+  const project = {};
+  cl.pendingDelta = 500; // 1000→1500へドラッグ確定
+
+  const calls = [];
+  setCenterLineStructuralListener((g, p, scope) => calls.push({ g, p, scope }));
+  try {
+    const { toast } = commitCLMoveOp(graph, project, cl, 1000);
+    assert.equal(toast, null);
+    assert.equal(calls.length, 1, '確定直後に1回呼ばれるはず');
+    assert.equal(calls[0].g, graph);
+    assert.equal(calls[0].p, project);
+    assert.equal(calls[0].scope, 'activeAndAbove');
+
+    undoManager.undo();
+    assert.equal(calls.length, 2, 'undoでも1回呼ばれるはず');
+    assert.equal(cl.value, 1000);
+
+    undoManager.redo();
+    assert.equal(calls.length, 3, 'redoでも1回呼ばれるはず');
+    assert.equal(cl.value, 1500);
+  } finally {
+    setCenterLineStructuralListener(null);
+  }
+});
+
+test('commitCLMoveOp: 補助線の移動は構造同期リスナーを呼ばない（T2）', () => {
+  const graph = makeGraph();
+  const cl = graph.addCenterLine(CenterLineType.HORIZONTAL, 2000, { labeled: false, lineType: 'dashed' });
+  const project = {};
+  cl.pendingDelta = 300;
+
+  let calls = 0;
+  setCenterLineStructuralListener(() => { calls++; });
+  try {
+    commitCLMoveOp(graph, project, cl, 2000);
+    assert.equal(calls, 0);
+  } finally {
+    setCenterLineStructuralListener(null);
+  }
+});
+
+test('【段階(c)で反転予定のピン留め】commitCLMoveOp: 通り芯の移動は現状構造同期リスナーを呼ばない（structuralSyncScopeOnMoveがFLOOR_SHARED_KINDSを早期nullにするため。T3）', () => {
+  const graph = makeGraph();
+  const cl = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: true, discipline: Discipline.STRUCT });
+  graph.addCenterLine(CenterLineType.VERTICAL, 5000, { labeled: true, discipline: Discipline.STRUCT }); // 結合回避用に離しておく
+  const project = {};
+  cl.pendingDelta = 500;
+
+  let calls = 0;
+  setCenterLineStructuralListener(() => { calls++; });
+  try {
+    const { toast } = commitCLMoveOp(graph, project, cl, 1000);
+    assert.equal(toast, null);
+    assert.equal(calls, 0);
+  } finally {
+    setCenterLineStructuralListener(null);
+  }
+});
+
+test('commitCLMoveOp: 梁芯の移動は構造同期リスナーを呼ばない（専用の追従経路wallBeamAxisFollow.jsと二重に動かさないため・条件10。T4）', () => {
+  const graph = makeGraph();
+  const cl = graph.addCenterLine(CenterLineType.VERTICAL, 2000, {
+    labeled: false, discipline: Discipline.FUSE, extentLo: 0, extentHi: 8000,
+  });
+  const project = {
+    structuralInfo: { mainStructure: 'S造' }, memberGroupLedger: new Map(), memberNumberIndex: new Map(), planes: [],
+  };
+  cl.pendingDelta = 500;
+
+  let calls = 0;
+  setCenterLineStructuralListener(() => { calls++; });
+  try {
+    commitCLMoveOp(graph, project, cl, 2000);
+    assert.equal(calls, 0);
+  } finally {
+    setCenterLineStructuralListener(null);
+  }
+});
+
+test('commitCLMoveOp: 移動量ゼロ（中心線）は構造同期リスナーを呼ばずundoも積まない（T5）', () => {
+  const graph = makeGraph();
+  const cl = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
+  const project = {};
+  const beforeTop = undoManager.peekUndo();
+
+  let calls = 0;
+  setCenterLineStructuralListener(() => { calls++; });
+  try {
+    const { toast } = commitCLMoveOp(graph, project, cl, cl.value);
+    assert.equal(toast, null);
+    assert.equal(calls, 0);
+    assert.equal(undoManager.peekUndo(), beforeTop, 'undoは積まれないはず');
+  } finally {
+    setCenterLineStructuralListener(null);
+  }
+});
+
+test('commitCLMoveOp: 結合が起きる移動でも構造同期リスナーは1回、undoで吸収側CLが同idで戻りリスナーも呼ばれる（T6）', () => {
+  const graph = makeGraph();
+  const subject = graph.addCenterLine(CenterLineType.VERTICAL, 500, {
+    labeled: false, discipline: Discipline.ARCH, extentLo: 0, extentHi: 1000,
+  });
+  const neighbor = graph.addCenterLine(CenterLineType.VERTICAL, 1000, {
+    labeled: false, discipline: Discipline.ARCH, extentLo: 1000, extentHi: 2000,
+  });
+  const neighborId = neighbor.id;
+  const project = {};
+  subject.pendingDelta = 500; // 500→1000（neighborと同座標に達し結合するはず）
+
+  const calls = [];
+  setCenterLineStructuralListener((g, p, scope) => calls.push(scope));
+  try {
+    const { toast } = commitCLMoveOp(graph, project, subject, 500);
+    assert.equal(toast, null);
+    assert.equal(calls.length, 1, '結合が起きても構造同期リスナーは1回のはず');
+    assert.equal(calls[0], 'activeAndAbove');
+    assert.equal(graph.shapeMap.has(neighborId), false, '結合で吸収された側は削除される');
+    assert.equal(subject.extentHi, 2000, 'survivorのextentが延伸される');
+
+    undoManager.undo();
+    assert.equal(calls.length, 2, 'undoでもリスナーが呼ばれるはず');
+    assert.equal(graph.shapeMap.has(neighborId), true, 'undoで吸収側CLが同idで戻る');
+    assert.equal(subject.value, 500, 'undoで移動も戻る');
+  } finally {
+    setCenterLineStructuralListener(null);
+  }
+});
+
+test('【失敗系】commitCLMoveOp: 構造同期リスナー未設定（null）でも中心線の移動・undoが例外なく行える（T7）', () => {
+  const graph = makeGraph();
+  const cl = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
+  const project = {};
+  cl.pendingDelta = 500;
+
+  assert.doesNotThrow(() => commitCLMoveOp(graph, project, cl, 1000));
+  assert.equal(cl.value, 1500);
+  assert.doesNotThrow(() => undoManager.undo());
+  assert.equal(cl.value, 1000);
+});
+
+test('commitCLMoveOp: 壁由来梁芯が下地帯中心の移動分だけ追従し、undoで値と除外キーが戻る（T8）', () => {
+  const graph = makeGraph();
+  const x0 = graph.addCenterLine(CenterLineType.VERTICAL, 0,    { labeled: false, discipline: Discipline.ARCH });
+  const x1 = graph.addCenterLine(CenterLineType.VERTICAL, 4000, { labeled: false, discipline: Discipline.ARCH });
+  const centerCL = graph.addCenterLine(CenterLineType.HORIZONTAL, 2000, { labeled: false, discipline: Discipline.ARCH });
+  graph.addWall(centerCL, 0, false, x0, 0, x1, 0, { isExteriorWall: false, backingOffset: 0, backingDepth: 120, wallFinish: 12.5 });
+  const beamAxis = graph.addCenterLine(CenterLineType.HORIZONTAL, 2000, { labeled: false, discipline: Discipline.FUSE, refId: null });
+  const beamAxisId = beamAxis.id;
+  graph.excludedWallBeamAxes.add('Y:2000'); // 手動でこの座標を除外していた想定（張り替えの確認用）
+  const project = {};
+  centerCL.pendingDelta = 300; // 2000→2300
+
+  const { toast } = commitCLMoveOp(graph, project, centerCL, 2000);
+  assert.equal(toast, null);
+  assert.equal(centerCL.value, 2300);
+  const axAfter = graph.shapeMap.get(beamAxisId);
+  assert.equal(axAfter.value, 2300, '壁の下地帯中心の移動分だけ梁芯も追従するはず');
+  assert.equal(graph.excludedWallBeamAxes.has('Y:2000'), false, '旧キーは張り替えで消える');
+  assert.equal(graph.excludedWallBeamAxes.has('Y:2300'), true, '新キーへ張り替わる');
+
+  undoManager.undo();
+  const axRestored = graph.shapeMap.get(beamAxisId);
+  assert.equal(centerCL.value, 2000, 'undoで中心線が戻る');
+  assert.equal(axRestored.value, 2000, 'undoで梁芯も戻る');
+  assert.equal(graph.excludedWallBeamAxes.has('Y:2000'), true, 'undoで除外キーも戻る');
+  assert.equal(graph.excludedWallBeamAxes.has('Y:2300'), false);
+});
+
+test('commitCLMoveOp: 移動先に通り芯があれば壁由来梁芯の追従は重複ガードでスキップされるが、移動自体はtoast:nullで成功する（T9）', () => {
+  const graph = makeGraph();
+  const x0 = graph.addCenterLine(CenterLineType.VERTICAL, 0,    { labeled: false, discipline: Discipline.ARCH });
+  const x1 = graph.addCenterLine(CenterLineType.VERTICAL, 4000, { labeled: false, discipline: Discipline.ARCH });
+  const centerCL = graph.addCenterLine(CenterLineType.HORIZONTAL, 2000, { labeled: false, discipline: Discipline.ARCH });
+  graph.addWall(centerCL, 0, false, x0, 0, x1, 0, { isExteriorWall: false, backingOffset: 0, backingDepth: 120, wallFinish: 12.5 });
+  const beamAxis = graph.addCenterLine(CenterLineType.HORIZONTAL, 2000, { labeled: false, discipline: Discipline.FUSE, refId: null });
+  const beamAxisId = beamAxis.id;
+  graph.addCenterLine(CenterLineType.HORIZONTAL, 2300, { labeled: true, discipline: Discipline.STRUCT }); // 移動先に既存の通り芯
+  const project = {};
+  centerCL.pendingDelta = 300; // 2000→2300
+
+  const { toast } = commitCLMoveOp(graph, project, centerCL, 2000);
+  assert.equal(toast, null, '移動自体は成功するはず');
+  assert.equal(centerCL.value, 2300);
+  const ax = graph.shapeMap.get(beamAxisId);
+  assert.equal(ax.value, 2000, '移動先に通り芯があるため梁芯の追従は重複ガードでスキップされ、旧位置のまま');
+});
+
+// QA指摘n-1（2026-09-25）: pendingDeltaを一時的に0へ戻してwallBackingCenters(移動前スナップショット)を
+// 読む処理は、例外が起きてもtry/finallyで必ず元の値へ復元されること（復元漏れがあると、この後に
+// 例外を握りつぶす呼び出し元がいた場合、CLのドラッグ中表示位置が0のまま固まってしまう）。
+test('【失敗系・n-1】commitCLMoveOp: 移動前スナップショット中にwallBackingCentersが例外を投げてもpendingDeltaは必ず元の値へ復元される（try/finally）', () => {
+  const graph = makeGraph();
+  const x0 = graph.addCenterLine(CenterLineType.VERTICAL, 0,    { labeled: false, discipline: Discipline.ARCH });
+  const x1 = graph.addCenterLine(CenterLineType.VERTICAL, 4000, { labeled: false, discipline: Discipline.ARCH });
+  const cl = graph.addCenterLine(CenterLineType.HORIZONTAL, 2000, { labeled: false, discipline: Discipline.ARCH });
+  const wall = graph.addWall(cl, 0, false, x0, 0, x1, 0, { isExteriorWall: false, backingOffset: 0, backingDepth: 120, wallFinish: 12.5 });
+  const project = {};
+  cl.pendingDelta = 300; // 2000→2300
+
+  // graph.walls はMobXのcomputedのため、graph.shapeMap自体を差し替えても再評価が保証されない
+  // （委譲先のObservableMapの中身を変えていないため）。wallBackingCenterCoord（wallBackingCenters内部）
+  // が読む wall.axisCL.effectiveValue を直接投げるようにして、wallBackingCenters自体を確実に
+  // 例外送出させる。
+  const originalAxisCL = wall.axisCL;
+  wall.axisCL = { get effectiveValue() { throw new Error('wallBackingCenters boom'); } };
+  try {
+    assert.throws(() => commitCLMoveOp(graph, project, cl, 2000), /wallBackingCenters boom/);
+  } finally {
+    wall.axisCL = originalAxisCL;
+  }
+  assert.equal(cl.pendingDelta, 300, '例外が起きてもpendingDeltaは元の値(300)に復元されるはず');
+});
+
 // ---- deleteCenterLineWithUndo ----
 
 test('deleteCenterLineWithUndo: 中心線削除はexcludedWallBeamAxesを変えず、梁芯削除だけ記録する', async () => {

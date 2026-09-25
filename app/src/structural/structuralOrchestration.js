@@ -494,9 +494,14 @@ export async function recomputeActiveStructural(project, pushUndo = true, ctx = 
 // scope（'active' < 'activeAndAbove' < 'all'）に応じて反映範囲を決める唯一の入口。
 // 'active': 建具の確定・undo/redo直後と同じ、自階だけの再計算（ctxなし・recomputeActiveStructuralと
 //   同一呼び出し。建具経路は本関数導入前と挙動不変）。
-// 'activeAndAbove': 段階(b)（中心線の削除・移動）で「自階＋上階だけ」の反映に置き換える予定——
-//   現段階(a)では対応する専用経路がまだ無いため、暫定的に'all'と同じ扱いにする（上位集合なので
-//   正しさは保たれる。取りこぼしは起きないが、他階すべてを触るぶん'activeAndAbove'本来より重い）。
+// 'activeAndAbove': 中心線（削除・移動）が起動するscope。'all'と同じ処理のまま恒久化する
+//   （段階(b)・R1裁定・案B。「いつか専用経路に絞る」の暫定ではない）——在来木造の3b（上階柱直下の柱）・
+//   3h-2（壁とみなす梁の下階への波及）は自階の柱・梁の変化が下階の柱を経由して最下階まで連鎖しうる
+//   下方向依存を持つため、中心線の変更でも「自階＋上階」だけでは足りず全階の収束計算（'all'と同じ
+//   反映ループ）が要る。非在来（在来以外の主構造）は下階の再計算がchanged:falseになり保存されない
+//   ため、'all'と同じ処理にしても無駄はpeekと再計算だけ（実害の上限が小さい）。scope名は種別レベルの
+//   意図（点源は自階と上階）を表す識別子として残す——実際の反映範囲（オーケストレータ側の分担）とは
+//   独立して意味を持つ。
 // 'all': 通り芯削除・追加・移動など全階へ効く変更の反映。手順は仕上げ脱出の反映
 //   （reflectStructuralAfterFinishExit）・構造モード突入（runStructuralModeSetup）と同じ形——
 //   (1) 自階を先に再計算する（壁が確定した自階が他階の点源になるため。他階の反映が自階の最新柱・梁を
@@ -519,7 +524,7 @@ export async function recomputeForStructuralSync(project, scope, ctxArg = undefi
     await recomputeActiveStructural(project, false);
     return;
   }
-  // 'activeAndAbove' は段階(a)では専用経路が無いため 'all' と同じにフォールバックする（上記コメント）。
+  // 'activeAndAbove' は 'all' と同じ処理のまま恒久化している（上記コメント。段階(b)・R1裁定）。
   await withResolveContext(ctxArg, async (ctx) => {
     const active = project.activeGraph;
     const activeIsWallRuns = rulesFor(effectiveStructure(active, project)).beamPlacement === 'wallRuns';

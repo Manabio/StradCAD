@@ -277,6 +277,9 @@ export const FLOOR_SHARED_KINDS = Object.freeze(['struct']);
  *   が要るためこの純粋な種別レベルAPIでは表現できない（段階(d)で別の graph レベル述語を足す）。
  * - 残りは FLOOR_SHARED_KINDS（通り芯）なら 'all'、それ以外（中心線）なら 'activeAndAbove'
  *   （中心線はその階の壁が変わるだけだが、壁は上階の梁・柱の点源にもなるため自階だけでは足りない）。
+ *   'activeAndAbove' という名前は種別レベルの意図（点源は自階と上階）を表すだけで、実際の反映範囲は
+ *   structural/structuralOrchestration.js recomputeForStructuralSync が決める（'all'と同じ処理のまま
+ *   恒久化済み。在来木造の下方向依存のため。段階(b)・R1裁定）——このAPI自体は反映範囲を決めない。
  * @param {string} kind
  * @returns {'all'|'activeAndAbove'|null}
  */
@@ -289,6 +292,23 @@ export function structuralSyncScopeOfKind(kind) {
   for (const beamKind of BEAM_AXIS_KINDS) structurallyRelevant.delete(beamKind);
   if (!structurallyRelevant.has(kind)) return null;
   return FLOOR_SHARED_KINDS.includes(kind) ? 'all' : 'activeAndAbove';
+}
+
+/**
+ * kind の**移動**が構造同期の起動対象かどうか、対象ならどの scope で反映すべきかを導出する
+ * （段階(b)・2026-09-25）。structuralSyncScopeOfKind（削除向け）とほぼ同じ表を使うが、通り芯
+ * （FLOOR_SHARED_KINDS）だけは無条件でnull——通り芯の移動は全階のグリッドが動く別種の同期
+ * （段階(c)で扱う予定。ここでは分岐を用意するだけで、段階(c)実装時にこの早期returnを消す）。
+ * それ以外（center/aux/beam）はstructuralSyncScopeOfKindと同じ結果——center→'activeAndAbove'、
+ * aux/beam→null。transform/centerLineOps.js commitCLMoveOpが使う（種別名の直書きをそちらに
+ * 置かないため。G3ガード）。
+ * @param {string} kind
+ * @returns {'activeAndAbove'|null}
+ */
+export function structuralSyncScopeOnMove(kind) {
+  assertKnownKind(kind);
+  if (FLOOR_SHARED_KINDS.includes(kind)) return null;
+  return structuralSyncScopeOfKind(kind);
 }
 
 // ================================================================

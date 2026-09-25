@@ -314,6 +314,75 @@ test('recomputeForStructuralSync("all"): 3階建て(在来)+屋根フィクス�
   });
 });
 
+// ---- 'activeAndAbove' の恒久化（段階(b)・R1裁定・案B: 'all'と同じ処理のまま恒久化する。
+// 「いつか自階＋上階だけに絞る」の暫定ではない） ----
+
+test('recomputeForStructuralSync("activeAndAbove"): アクティブ2階の3階建て(在来)+屋根フィクスチャで1階もpeek・再計算する（"all"と同じ処理であることの確認）', async () => {
+  await withFakeIndexedDB(async () => {
+    const { project } = buildB1Fixture();
+    await saveB1InitialFloors(project);
+    const activeId = project.planes[1].id; // 2階をアクティブにする
+    project.activePlaneId = activeId;
+
+    let peekedPlaneIds = [];
+    const originalPeek = floorSwapManager.peek;
+    floorSwapManager.peek = async (plane, structGraph) => {
+      peekedPlaneIds.push(plane.id);
+      return originalPeek.call(floorSwapManager, plane, structGraph);
+    };
+    try {
+      await recomputeForStructuralSync(project, 'activeAndAbove');
+    } finally {
+      floorSwapManager.peek = originalPeek;
+    }
+
+    const floor1Id = project.planes[0].id;
+    assert.ok(peekedPlaneIds.includes(floor1Id),
+      `'activeAndAbove'（アクティブ=2階）でも1階がpeekされるはず（'all'と同じ処理のため。実際のpeek対象: ${peekedPlaneIds.length}件）`);
+
+    const dump = await dumpB1AllFloorsAllFields(project);
+    for (const floorName of ['1階', '2階', '3階']) {
+      assert.ok(dump[floorName].columns.length > 0, `${floorName}は空であってはならない（1階を含む全階が再計算されている担保）`);
+    }
+  });
+});
+
+test('recomputeForStructuralSync: "activeAndAbove"と"all"を別フィクスチャ（同一構成）で実行すると全階のダンプが一致する（同じ処理であることの確認）', async () => {
+  await withFakeIndexedDB(async () => {
+    const { project: projectA } = buildB1Fixture();
+    await saveB1InitialFloors(projectA);
+    projectA.activePlaneId = projectA.planes[0].id;
+    await recomputeForStructuralSync(projectA, 'activeAndAbove');
+    const dumpA = await dumpB1AllFloorsAllFields(projectA);
+
+    const { project: projectB } = buildB1Fixture();
+    await saveB1InitialFloors(projectB);
+    projectB.activePlaneId = projectB.planes[0].id;
+    await recomputeForStructuralSync(projectB, 'all');
+    const dumpB = await dumpB1AllFloorsAllFields(projectB);
+
+    assert.deepEqual(dumpA, dumpB, '"activeAndAbove"と"all"は同一処理のはずなので、同一構成のフィクスチャに対する結果は完全に一致するはず');
+  });
+});
+
+test('【失敗系】recomputeForStructuralSync("activeAndAbove"): 他階のpeekがthrowしたらrejectする（"all"と同じ失敗系）', async () => {
+  await withFakeIndexedDB(async () => {
+    const { project, graph } = makeSinglePlaneProject();
+    const { graph: g2 } = project.addPlane(3000, '2階', 'p2');
+    project.activePlaneId = graph.plane.id;
+    const originalPeek = floorSwapManager.peek;
+    floorSwapManager.peek = async (plane, structGraph) => {
+      if (plane.id === g2.plane.id) throw new Error('peek boom (activeAndAbove)');
+      return originalPeek.call(floorSwapManager, plane, structGraph);
+    };
+    try {
+      await assert.rejects(() => recomputeForStructuralSync(project, 'activeAndAbove'), /peek boom \(activeAndAbove\)/);
+    } finally {
+      floorSwapManager.peek = originalPeek;
+    }
+  });
+});
+
 // ---- QA F4: 下階編集経路（主構造変更時等）は直前に立った下階の3b柱を撤去しない ----
 test('recomputeStructuralComposition: 下階編集経路は直前に立った下階の3b柱を撤去しない（QA F4）', async () => {
   const project = new Project('proj-f4', 'test');
