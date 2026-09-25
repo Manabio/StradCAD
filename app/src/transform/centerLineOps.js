@@ -14,7 +14,7 @@ import { calcStep } from '../renderer/clMoveMath.js';
 import {
   orthoAnchorCandidatesForNew, allowsWallAnchor, extentAnchorStyle, isReferencedByAux,
   sameCoordCounterparts, coexistenceAt, CL_KINDS, structuralSyncScopeOfKind, structuralSyncScopeOfConversion,
-  isFinishCellDivider,
+  structuralSyncScopeForCenterLine, isFinishCellDivider,
 } from '../core/centerLineKindPolicy.js';
 import { mergeCenterLineChain, composeUndoWithMergeChain } from './centerLineMerge.js';
 import {
@@ -89,7 +89,11 @@ export function commitCLMoveOp(graph, project, cl, originalValue) {
     // 生成されないため、実際に追従するのは偏芯壁（backingOffset≠0）の梁芯と、この通り芯をrefId参照
     // する子中心線が乗る壁の梁芯だけ。他階の梁芯・自階で「下階の壁が根拠」の梁芯は追従しない——
     // 削除と同じ「他階・下階由来の孤児梁芯は段階(g)まで許容」の裁定の範囲（R1）。
-    const scope = structuralSyncScopeOfKind(centerLineKind(cl));
+    // scopeはstructuralSyncScopeForCenterLine（段階(d)・2026-09-25）——cl自身の種別ポリシーに加え、
+    // clをextentLoRef/extentHiRef・refIdで参照している他CLの種別のscopeも合成する。補助線（aux）は
+    // 自身のscopeはnullだが、それを参照する中心線があれば'activeAndAbove'になる——参照先を動かすと
+    // 参照元中心線のextentが追従するため（bake前＝現在の参照関係で算出する）。
+    const scope = structuralSyncScopeForCenterLine(graph, cl);
     const notify = () => structuralSyncListener?.(graph, project, scope);
     // wallBackingCenters（wallBackingCenterCoord経由）はaxisCL.effectiveValue（=value+pendingDelta）を
     // 読むため、bakeCLValueで未確定のまま素直に呼ぶと「まだ確定していないドラッグ後の壁位置」を
@@ -264,10 +268,13 @@ export async function deleteCenterLineWithUndo(graph, project, cl, opts = {}) {
   // 修正——.claude/structural-model.md「起動点」節参照）。中心線は
   // structuralSyncScopeOfKind('center')==='activeAndAbove'（'all'と同じ処理のまま恒久化。在来木造の
   // 3b/3h-2による下方向依存があるため自階＋上階だけでは足りない——structuralOrchestration.js
-  // recomputeForStructuralSync のコメント参照）。補助線・梁芯はnull（補助線は段階(d)、梁芯は専用経路
-  // structural/wallBeamAxes.js。条件10で二重に動かさない）——それ以外の非通り芯削除では
-  // 従来どおりlistenerを呼ばない。
-  const scope = structuralSyncScopeOfKind(centerLineKind(cl));
+  // recomputeForStructuralSync のコメント参照）。補助線・梁芯自身はnullが基本だが、scopeは
+  // structuralSyncScopeForCenterLine（段階(d)・2026-09-25）で算出する——削除される補助線を
+  // extentLoRef/extentHiRef・refIdで参照している中心線があれば、その中心線のscope
+  // （'activeAndAbove'）を合成する（削除で参照は端点ルールにより静的化されるため、必ず
+  // **削除前（detach前）**に算出する）。梁芯はnull（専用経路structural/wallBeamAxes.js。
+  // 条件10で二重に動かさない）——それ以外の非通り芯削除では従来どおりlistenerを呼ばない。
+  const scope = structuralSyncScopeForCenterLine(graph, cl);
   const notify = () => structuralSyncListener?.(graph, project, scope);
   // 壁の軸になれる種別（セル分割線。isFinishCellDivider——このブランチには通り芯は来ないため
   // 実質center種別のみが真になる）の削除だけが壁ソースを変えうる——補助線・梁芯自身の削除は

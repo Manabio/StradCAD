@@ -9,6 +9,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import { runInAction } from 'mobx';
 import { CenterLineType, Discipline, CL_OVERLAP_TOL_MM } from './constants.js';
 import { centerLineKind } from './centerLine.js';
 import { Plane } from './plane.js';
@@ -34,6 +35,7 @@ import {
   structuralAnchorKinds, isStructuralAnchor, structuralAnchorAt, structuralAnchorCandidates,
   beamAxisAt, beamAxisCenterLines, supportSpanColumnCandidates,
   FLOOR_SHARED_KINDS, structuralSyncScopeOfKind, structuralSyncScopeOfConversion,
+  structuralSyncScopeForCenterLine,
 } from './centerLineKindPolicy.js';
 
 // ---- 製品コード（section C）との突き合わせに使う実装 ----
@@ -1629,4 +1631,84 @@ test('structuralSyncScopeOfConversion: 両方nullならnull', () => {
 
 test('【失敗系】structuralSyncScopeOfConversion: 未知の種別はthrowする', () => {
   assert.throws(() => structuralSyncScopeOfConversion('wood', 'struct'), /未知のCL種別: wood/);
+});
+
+// ---- structuralSyncScopeForCenterLine（段階(d)「補助線→構造同期」・2026-09-25）----
+// 補助線（aux）自身のscopeは常にnullだが、それをextentLoRef/extentHiRef・refIdで参照している
+// 他CLがあれば、その参照元の種別のscopeを合成する（合成規則はstructuralSyncScopeOfConversionと
+// 同じ「'all'優先・それ以外はa??b」をcombineSyncScopesで共有）。
+
+test('structuralSyncScopeForCenterLine: 参照する中心線が無い補助線はnull', () => {
+  const graph = makeGraph();
+  const aux = graph.addCenterLine(CenterLineType.HORIZONTAL, 0, { labeled: false, lineType: 'dashed' });
+  assert.equal(structuralSyncScopeForCenterLine(graph, aux), null);
+});
+
+test('structuralSyncScopeForCenterLine: 補助線をextentLoRefで参照する中心線があれば"activeAndAbove"', () => {
+  const graph = makeGraph();
+  const aux = graph.addCenterLine(CenterLineType.HORIZONTAL, 0, { labeled: false, lineType: 'dashed' });
+  graph.addCenterLine(CenterLineType.VERTICAL, 1000, {
+    labeled: false, discipline: Discipline.ARCH, extentLoRef: { clId: aux.id, offset: 0 },
+  });
+  assert.equal(structuralSyncScopeForCenterLine(graph, aux), 'activeAndAbove');
+});
+
+test('structuralSyncScopeForCenterLine: 補助線をrefIdで参照する通り芯があれば"all"（種別のscopeの最大を合成）', () => {
+  const graph = makeGraph();
+  const aux = graph.addCenterLine(CenterLineType.HORIZONTAL, 0, { labeled: false, lineType: 'dashed' });
+  // struct（通り芯）のextentAnchorStyleは'none'のためextentLoRef/HiRefは通常起きないが、
+  // refId（はね出し追従の親子参照）は種別を問わず付きうる——ここではrefId参照で"all"合成を確認する。
+  graph.addCenterLine(CenterLineType.VERTICAL, 1000, {
+    labeled: true, discipline: Discipline.STRUCT, refId: aux.id,
+  });
+  assert.equal(structuralSyncScopeForCenterLine(graph, aux), 'all');
+});
+
+test('structuralSyncScopeForCenterLine: 梁芯は参照する中心線があっても専用経路のためnullのまま（段階(d)裁定「beamは参照があってもnull」）', () => {
+  const graph = makeGraph();
+  const beam = graph.addCenterLine(CenterLineType.HORIZONTAL, 0, { labeled: false, discipline: Discipline.FUSE });
+  graph.addCenterLine(CenterLineType.VERTICAL, 1000, {
+    labeled: false, discipline: Discipline.ARCH, extentLoRef: { clId: beam.id, offset: 0 },
+  });
+  assert.equal(
+    structuralSyncScopeForCenterLine(graph, beam),
+    null,
+    '梁芯はauxと違い、参照元があっても合成しない——梁芯は専用経路（structural/wallBeamAxes.js）を持つため',
+  );
+});
+
+test('structuralSyncScopeForCenterLine: 通り芯・中心線はkind由来のscopeのまま（参照が無くても変わらない）', () => {
+  const { project, graph } = makeProjectWithGraph();
+  const struct = project.structGraph.addCenterLine(CenterLineType.VERTICAL, 0, { labeled: true, discipline: Discipline.STRUCT });
+  const center = graph.addCenterLine(CenterLineType.VERTICAL, 500, { labeled: false, discipline: Discipline.ARCH });
+  assert.equal(structuralSyncScopeForCenterLine(project.structGraph, struct), 'all');
+  assert.equal(structuralSyncScopeForCenterLine(graph, center), 'activeAndAbove');
+});
+
+test('structuralSyncScopeForCenterLine: 参照は推移的に辿る——補助線A←補助線B（refId）←中心線C（extentLoRef）のときAの移動は"activeAndAbove"（QA指摘m-1・2026-09-26）', () => {
+  const graph = makeGraph();
+  const auxA = graph.addCenterLine(CenterLineType.HORIZONTAL, 0, { labeled: false, lineType: 'dashed' });
+  const auxB = graph.addCenterLine(CenterLineType.HORIZONTAL, 100, {
+    labeled: false, lineType: 'dashed', refId: auxA.id, refOffset: 100,
+  });
+  graph.addCenterLine(CenterLineType.VERTICAL, 1000, {
+    labeled: false, discipline: Discipline.ARCH, extentLoRef: { clId: auxB.id, offset: 0 },
+  });
+  // Aの直接の参照元はBだけ（auxなのでscope自体はnull）——Bをさらに参照するCまで辿らないと見落とす。
+  assert.equal(structuralSyncScopeForCenterLine(graph, auxA), 'activeAndAbove');
+});
+
+test('【失敗系】structuralSyncScopeForCenterLine: 循環参照（A⇄B）でも無限ループせず停止し、center/structが無ければnull（QA指摘m-1・2026-09-26）', () => {
+  const graph = makeGraph();
+  const auxA = graph.addCenterLine(CenterLineType.HORIZONTAL, 0, { labeled: false, lineType: 'dashed' });
+  const auxB = graph.addCenterLine(CenterLineType.HORIZONTAL, 100, {
+    labeled: false, lineType: 'dashed', refId: auxA.id, refOffset: 100,
+  });
+  runInAction(() => {
+    auxA.refId = auxB.id; // A→B→A の循環（refIdは値の参照としては壊れているが、graph走査の停止性だけを見るテスト）
+    auxA.refOffset = -100;
+  });
+  const start = Date.now();
+  assert.equal(structuralSyncScopeForCenterLine(graph, auxA), null);
+  assert.ok(Date.now() - start < 1000, '循環参照があっても即座に停止するはず（無限ループしない）');
 });

@@ -138,7 +138,7 @@ test('commitCLMoveOp: 中心線の移動は構造同期リスナーを(graph, pr
   }
 });
 
-test('commitCLMoveOp: 補助線の移動は構造同期リスナーを呼ばない（T2）', () => {
+test('commitCLMoveOp: 参照する中心線が無い補助線の移動は構造同期リスナーを呼ばない（T2。段階(d)で「参照なし」に読み替え）', () => {
   const graph = makeGraph();
   const cl = graph.addCenterLine(CenterLineType.HORIZONTAL, 2000, { labeled: false, lineType: 'dashed' });
   const project = {};
@@ -149,6 +149,73 @@ test('commitCLMoveOp: 補助線の移動は構造同期リスナーを呼ばな�
   try {
     commitCLMoveOp(graph, project, cl, 2000);
     assert.equal(calls, 0);
+  } finally {
+    setCenterLineStructuralListener(null);
+  }
+});
+
+test('commitCLMoveOp: 中心線がextentLoRefで参照する補助線の移動は構造同期リスナーを(graph, project, "activeAndAbove")で呼ぶ（確定1回・undo1回・redo1回＝計3回。段階(d)・2026-09-25）', () => {
+  const graph = makeGraph();
+  const aux = graph.addCenterLine(CenterLineType.HORIZONTAL, 2000, { labeled: false, lineType: 'dashed' });
+  graph.addCenterLine(CenterLineType.VERTICAL, 1000, {
+    labeled: false, discipline: Discipline.ARCH, extentLoRef: { clId: aux.id, offset: 0 },
+  });
+  const project = {};
+  aux.pendingDelta = 300; // 2000→2300へドラッグ確定
+
+  const calls = [];
+  setCenterLineStructuralListener((g, p, scope) => calls.push({ g, p, scope }));
+  try {
+    const { toast } = commitCLMoveOp(graph, project, aux, 2000);
+    assert.equal(toast, null);
+    assert.equal(calls.length, 1, '確定直後に1回呼ばれるはず');
+    assert.equal(calls[0].scope, 'activeAndAbove', '補助線自身のscopeはnullだが、参照する中心線のscopeが合成される');
+
+    undoManager.undo();
+    assert.equal(calls.length, 2, 'undoでも1回呼ばれるはず');
+    assert.equal(aux.value, 2000);
+
+    undoManager.redo();
+    assert.equal(calls.length, 3, 'redoでも1回呼ばれるはず');
+    assert.equal(aux.value, 2300);
+  } finally {
+    setCenterLineStructuralListener(null);
+  }
+});
+
+test('commitCLMoveOp: 補助線をrefIdで参照する中心線の壁は補助線の移動で動き、壁由来梁芯も追従する（段階(d)・2026-09-25）', () => {
+  const graph = makeGraph();
+  const x0 = graph.addCenterLine(CenterLineType.VERTICAL, 0,    { labeled: false, discipline: Discipline.ARCH });
+  const x1 = graph.addCenterLine(CenterLineType.VERTICAL, 4000, { labeled: false, discipline: Discipline.ARCH });
+  const aux = graph.addCenterLine(CenterLineType.HORIZONTAL, 2000, { labeled: false, lineType: 'dashed' });
+  // はね出し追従の親子参照（refId）——centerCLの座標はauxのeffectiveValue + refOffsetから導出される
+  // （core/centerLine.js get value/effectiveValue）。壁はこのcenterCLを軸に持つ。
+  const centerCL = graph.addCenterLine(CenterLineType.HORIZONTAL, 2000, {
+    labeled: false, discipline: Discipline.ARCH, refId: aux.id, refOffset: 0,
+  });
+  graph.addWall(centerCL, 0, false, x0, 0, x1, 0, { isExteriorWall: false, backingOffset: 0, backingDepth: 120, wallFinish: 12.5 });
+  const beamAxis = graph.addCenterLine(CenterLineType.HORIZONTAL, 2000, { labeled: false, discipline: Discipline.FUSE, refId: null });
+  const beamAxisId = beamAxis.id;
+  const project = {};
+  aux.pendingDelta = 300; // 2000→2300へドラッグ確定（centerCLはrefId経由で追従する）
+
+  const calls = [];
+  setCenterLineStructuralListener((g, p, scope) => calls.push({ g, p, scope }));
+  try {
+    const { toast } = commitCLMoveOp(graph, project, aux, 2000);
+    assert.equal(toast, null);
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].scope, 'activeAndAbove', '補助線を参照するcenterCLのscopeが合成される');
+    assert.equal(centerCL.value, 2300, 'refId子のcenterCLは補助線の移動へ自動で追従する');
+    const axAfter = graph.shapeMap.get(beamAxisId);
+    assert.equal(axAfter.value, 2300, '壁の下地帯中心の移動分だけ壁由来梁芯も追従するはず');
+
+    undoManager.undo();
+    assert.equal(calls.length, 2);
+    assert.equal(aux.value, 2000);
+    assert.equal(centerCL.value, 2000);
+    const axRestored = graph.shapeMap.get(beamAxisId);
+    assert.equal(axRestored.value, 2000, 'undoで梁芯も戻る');
   } finally {
     setCenterLineStructuralListener(null);
   }
@@ -335,6 +402,21 @@ test('【失敗系】commitCLMoveOp: 構造同期リスナー未設定（null）
   assert.equal(cl.value, 1500);
   assert.doesNotThrow(() => undoManager.undo());
   assert.equal(cl.value, 1000);
+});
+
+test('【失敗系】commitCLMoveOp: 中心線が参照する補助線の移動は構造同期リスナー未設定（null）でも例外なく行える（段階(d)・2026-09-25）', () => {
+  const graph = makeGraph();
+  const aux = graph.addCenterLine(CenterLineType.HORIZONTAL, 2000, { labeled: false, lineType: 'dashed' });
+  graph.addCenterLine(CenterLineType.VERTICAL, 1000, {
+    labeled: false, discipline: Discipline.ARCH, extentLoRef: { clId: aux.id, offset: 0 },
+  });
+  const project = {};
+  aux.pendingDelta = 300;
+
+  assert.doesNotThrow(() => commitCLMoveOp(graph, project, aux, 2000));
+  assert.equal(aux.value, 2300);
+  assert.doesNotThrow(() => undoManager.undo());
+  assert.equal(aux.value, 2000);
 });
 
 test('commitCLMoveOp: 壁由来梁芯が下地帯中心の移動分だけ追従し、undoで値と除外キーが戻る（T8）', () => {
@@ -591,7 +673,7 @@ test('deleteCenterLineWithUndo: 中心線の削除は構造同期リスナーを
   }
 });
 
-test('deleteCenterLineWithUndo: 補助線・梁芯の削除は構造同期リスナーを呼ばない（段階(a)のピン留め継続。補助線はstructuralSyncScopeOfKindがnull=段階(d)、梁芯は専用経路のため対象外）', async () => {
+test('deleteCenterLineWithUndo: 参照する中心線が無い補助線・梁芯の削除は構造同期リスナーを呼ばない（段階(a)のピン留め継続。段階(d)で「参照なし」に読み替え。梁芯は専用経路のため対象外）', async () => {
   const graph = makeGraph();
   const auxCL    = graph.addCenterLine(CenterLineType.HORIZONTAL, 2000, { labeled: false, lineType: 'dashed' });
   const beamCL   = graph.addCenterLine(CenterLineType.VERTICAL,   3000, { labeled: false, discipline: Discipline.FUSE });
@@ -602,10 +684,74 @@ test('deleteCenterLineWithUndo: 補助線・梁芯の削除は構造同期リス
   try {
     await deleteCenterLineWithUndo(graph, project, auxCL);
     await deleteCenterLineWithUndo(graph, project, beamCL);
-    assert.equal(calls, 0, '補助線・梁芯の削除では構造同期リスナーを呼ばないはず');
+    assert.equal(calls, 0, '参照が無い補助線・梁芯の削除では構造同期リスナーを呼ばないはず');
   } finally {
     setCenterLineStructuralListener(null);
   }
+});
+
+test('deleteCenterLineWithUndo: 中心線がextentLoRefで参照する補助線の削除は構造同期リスナーを(graph, project, "activeAndAbove")で呼ぶ（確定1回・undo1回・redo1回＝計3回。段階(d)・2026-09-25）', async () => {
+  const graph = makeGraph();
+  const auxCL = graph.addCenterLine(CenterLineType.HORIZONTAL, 2000, { labeled: false, lineType: 'dashed' });
+  const auxCLId = auxCL.id;
+  graph.addCenterLine(CenterLineType.VERTICAL, 1000, {
+    labeled: false, discipline: Discipline.ARCH, extentLoRef: { clId: auxCLId, offset: 0 },
+  });
+  const project = {};
+
+  const calls = [];
+  setCenterLineStructuralListener((g, p, scope) => calls.push({ g, p, scope }));
+  try {
+    const { toast } = await deleteCenterLineWithUndo(graph, project, auxCL);
+    assert.equal(toast, null);
+    assert.equal(calls.length, 1, '削除直後に1回呼ばれるはず（scopeは削除前・detach前の参照関係から算出）');
+    assert.equal(calls[0].scope, 'activeAndAbove');
+    assert.equal(graph.shapeMap.has(auxCLId), false);
+
+    undoManager.undo();
+    assert.equal(calls.length, 2, 'undoでも1回呼ばれるはず');
+    assert.equal(graph.shapeMap.has(auxCLId), true);
+
+    undoManager.redo();
+    assert.equal(calls.length, 3, 'redoでも1回呼ばれるはず');
+    assert.equal(graph.shapeMap.has(auxCLId), false);
+  } finally {
+    setCenterLineStructuralListener(null);
+  }
+});
+
+test('deleteCenterLineWithUndo: 中心線がextentLoRefで参照する梁芯の削除は構造同期リスナーを呼ばない（段階(d)裁定「beamは参照があってもnull」。auxとの非対称性の回帰固定）', async () => {
+  const graph = makeGraph();
+  const beamCL = graph.addCenterLine(CenterLineType.HORIZONTAL, 2000, { labeled: false, discipline: Discipline.FUSE });
+  graph.addCenterLine(CenterLineType.VERTICAL, 1000, {
+    labeled: false, discipline: Discipline.ARCH, extentLoRef: { clId: beamCL.id, offset: 0 },
+  });
+  const project = {};
+
+  let calls = 0;
+  setCenterLineStructuralListener(() => { calls++; });
+  try {
+    const { toast } = await deleteCenterLineWithUndo(graph, project, beamCL);
+    assert.equal(toast, null);
+    assert.equal(calls, 0, '梁芯を参照する中心線があっても、梁芯自身の削除は構造同期リスナーを呼ばないはず');
+  } finally {
+    setCenterLineStructuralListener(null);
+  }
+});
+
+test('【失敗系】deleteCenterLineWithUndo: 中心線が参照する補助線の削除は構造同期リスナー未設定（null）でも例外なく削除・undoできる（段階(d)・2026-09-25）', async () => {
+  const graph = makeGraph();
+  const auxCL = graph.addCenterLine(CenterLineType.HORIZONTAL, 2000, { labeled: false, lineType: 'dashed' });
+  const auxCLId = auxCL.id;
+  graph.addCenterLine(CenterLineType.VERTICAL, 1000, {
+    labeled: false, discipline: Discipline.ARCH, extentLoRef: { clId: auxCLId, offset: 0 },
+  });
+  const project = {};
+
+  await assert.doesNotReject(() => deleteCenterLineWithUndo(graph, project, auxCL));
+  assert.equal(graph.shapeMap.has(auxCLId), false);
+  assert.doesNotThrow(() => undoManager.undo());
+  assert.equal(graph.shapeMap.has(auxCLId), true);
 });
 
 test('【失敗系】deleteCenterLineWithUndo: 中心線削除で構造同期リスナー未設定（null）でも例外なく削除・undo・redoできる', async () => {

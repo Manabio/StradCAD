@@ -152,6 +152,34 @@ test('【失敗系】isReferencedByOtherCL: どのCLからも参照されてい�
   assert.equal(graph.isReferencedByOtherCL(freeCL.id), false);
 });
 
+// ---- referencingCenterLines（段階(d)・2026-09-25。isReferencedByOtherCLの真偽値版が使う「参照して
+// いるCLの一覧」を公開し、core/centerLineKindPolicy.jsのstructuralSyncScopeForCenterLineが
+// 参照元の種別を辿るのに使う） ----
+
+test('referencingCenterLines: extentLoRef/extentHiRef・refIdで参照している他CLをすべて返す（自分自身は含まない）', () => {
+  const graph = makeGraph();
+  const target = graph.addCenterLine(CenterLineType.VERTICAL, 0, { labeled: true, discipline: Discipline.STRUCT });
+  const hCL = graph.addCenterLine(CenterLineType.HORIZONTAL, 0, { labeled: true, discipline: Discipline.STRUCT });
+  graph.setCenterLineExtentRef(hCL, 'lo', { clId: target.id });
+  const child = graph.addCenterLine(CenterLineType.HORIZONTAL, 100, { labeled: false, discipline: Discipline.ARCH, refId: target.id, refOffset: 100 });
+
+  const refs = graph.referencingCenterLines(target.id);
+  assert.deepEqual(refs.map(r => r.id).sort(), [hCL.id, child.id].sort());
+});
+
+test('referencingCenterLines: includeRefId:falseならrefId単体の参照は含まない', () => {
+  const graph = makeGraph();
+  const parent = graph.addCenterLine(CenterLineType.HORIZONTAL, 1000, { labeled: false, discipline: Discipline.ARCH });
+  graph.addCenterLine(CenterLineType.HORIZONTAL, 1100, { labeled: false, discipline: Discipline.ARCH, refId: parent.id, refOffset: 100 });
+  assert.deepEqual(graph.referencingCenterLines(parent.id, { includeRefId: false }), []);
+});
+
+test('【失敗系】referencingCenterLines: どのCLからも参照されていなければ空配列', () => {
+  const graph = makeGraph();
+  const freeCL = graph.addCenterLine(CenterLineType.VERTICAL, 5000, { labeled: true, discipline: Discipline.STRUCT });
+  assert.deepEqual(graph.referencingCenterLines(freeCL.id), []);
+});
+
 test('hasExternalCenterLineReferences: 構造材（柱・梁・耐力壁・基礎・スリーブ）のいずれかがCLを参照していればtrue', () => {
   const { graph, vCL } = setupStructuralRefsFixture();
   assert.equal(graph.hasExternalCenterLineReferences(vCL.id), true);

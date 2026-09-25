@@ -295,6 +295,20 @@ export function structuralSyncScopeOfKind(kind) {
 }
 
 /**
+ * 構造同期scopeの合成規則（'all' > 'activeAndAbove' > null の順序）を単一の実装に集約する:
+ * どちらかが'all'なら全体で'all'、それ以外は非nullの方を使う。structuralSyncScopeOfConversion
+ * （kindの変換向け）とstructuralSyncScopeForCenterLine（段階(d)。CLの参照向け）が共有する——
+ * scopeの順序自体をあちこちに複製しない。
+ * @param {'all'|'activeAndAbove'|null} a
+ * @param {'all'|'activeAndAbove'|null} b
+ * @returns {'all'|'activeAndAbove'|null}
+ */
+function combineSyncScopes(a, b) {
+  if (a === 'all' || b === 'all') return 'all';
+  return a ?? b;
+}
+
+/**
  * kindの変換（昇格・降格。fromKind→toKind）が構造同期の起動対象かどうか、対象ならどのscopeで
  * 反映すべきかを導出する（段階(c)・2026-09-25）。変換前後どちらかの種別が全階へ効く（'all'）なら
  * 変換全体を'all'で反映する——通り芯化（昇格）は他階の壁参照が変わりうるし、通り芯からの降格も
@@ -308,10 +322,55 @@ export function structuralSyncScopeOfKind(kind) {
  * @returns {'all'|'activeAndAbove'|null}
  */
 export function structuralSyncScopeOfConversion(fromKind, toKind) {
-  const a = structuralSyncScopeOfKind(fromKind);
-  const b = structuralSyncScopeOfKind(toKind);
-  if (a === 'all' || b === 'all') return 'all';
-  return a ?? b;
+  return combineSyncScopes(structuralSyncScopeOfKind(fromKind), structuralSyncScopeOfKind(toKind));
+}
+
+/**
+ * CL（cl）の移動・削除が構造同期の起動対象かどうか、対象ならどのscopeで反映すべきかを、cl自身の
+ * 種別ポリシー由来のscope（structuralSyncScopeOfKind）と、clをextentLoRef/extentHiRef・refIdで
+ * 参照している他CLの種別のscopeとの合成で導出する（段階(d)・2026-09-25）。
+ * 補助線（aux）はstructuralSyncScopeOfKind('aux')が常にnull（柱アンカー・支持長候補・セル分割線
+ * のいずれでもない＝構造に直接読まれない）だが、中心線の端部参照先になれる
+ * （orthoAnchorKinds('center')にauxを含む。EXTENT_ANCHOR_STYLE.center='ref'）——補助線を動かす・
+ * 削除すると、それを参照する中心線のextentLo/Hiが追従し、壁のクリップ範囲・柱の走行範囲
+ * （在来木造woodAutoFill.jsのextent読み）が変わりうる。起動は「参照している中心線があるときだけ」、
+ * scopeは参照元と同じ（'activeAndAbove'）——合成規則自体（'all'>'activeAndAbove'>null）は
+ * combineSyncScopesを再利用し、ここへ複製しない。
+ * 参照は推移的に辿る（段階(d)差戻し・2026-09-26。QA指摘m-1）: 補助線A←補助線B（refId）←中心線C
+ * （extentLoRef）のように、参照が数珠つなぎになっているとき、Aの移動はCの参照（'activeAndAbove'）
+ * まで辿って合成する必要がある——直接の参照元（B。aux自身はnull）だけを見ると見落とす。
+ * graph.referencingCenterLinesをBFSで辿り、訪問済みidを記録して循環参照（A⇄B等）でも必ず停止する。
+ * 通り芯（struct）は元々'all'のため合成しても変わらない。梁芯（beam）は参照元があっても合成しない
+ * （常にnullのまま）——梁芯は専用経路（structural/wallBeamAxes.js・wallBeamAxisFollow.js）を持ち、
+ * commitCLMoveOpも梁芯移動を別分岐（centerLineKind(cl)==='beam'）で扱ってこの述語自体を呼ばない
+ * （clそのものが梁芯なら参照走査すらせず即nullを返す）。deleteCenterLineWithUndoの非通り芯分岐は
+ * 梁芯もこの述語を通るため、ここで明示的に除外する（BEAM_AXIS_KINDS判定。段階(d)裁定
+ * 「beamは参照があってもnull」）。梁芯が経路の途中（参照元の参照元…）に現れた場合も、梁芯自身の
+ * scopeは合成に加えない——ただし梁芯もCLである以上さらにその先から参照されうるため、探索自体は
+ * 梁芯を経由してもそこで打ち切らず継続する（合成しないのは梁芯の「自分の寄与分」だけ）。
+ * @param {PlanGraph} graph
+ * @param {CenterLine} cl
+ * @returns {'all'|'activeAndAbove'|null}
+ */
+export function structuralSyncScopeForCenterLine(graph, cl) {
+  const rootKind = centerLineKind(cl);
+  if (BEAM_AXIS_KINDS.includes(rootKind)) return structuralSyncScopeOfKind(rootKind);
+  let scope = structuralSyncScopeOfKind(rootKind);
+  const visited = new Set([cl.id]);
+  const queue = [cl];
+  while (queue.length > 0) {
+    const current = queue.shift();
+    for (const other of graph.referencingCenterLines(current.id)) {
+      if (visited.has(other.id)) continue; // 循環参照でも必ず停止する
+      visited.add(other.id);
+      const otherKind = centerLineKind(other);
+      if (!BEAM_AXIS_KINDS.includes(otherKind)) {
+        scope = combineSyncScopes(scope, structuralSyncScopeOfKind(otherKind));
+      }
+      queue.push(other); // 梁芯自身のscopeは合成しないが、その先の参照元を辿るため探索は続ける
+    }
+  }
+  return scope;
 }
 
 // ================================================================

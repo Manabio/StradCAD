@@ -787,7 +787,14 @@ export class PlanGraph {
   // orphanedWallBeamAxes（明示的な中心線削除に限る壁由来梁芯の道連れ削除）は繰り上げの有無に
   // かかわらず「他から参照されている構造」を道連れにしない側へ倒すため既定(true)のまま使う。
   isReferencedByOtherCL(id, { includeRefId = true } = {}) {
-    return this.centerLines.some(other =>
+    return this.referencingCenterLines(id, { includeRefId }).length > 0;
+  }
+
+  // id の CenterLine をextentLoRef/extentHiRef・refIdで参照している他のCenterLineの一覧
+  // （段階(d)・2026-09-25。core/centerLineKindPolicy.jsのstructuralSyncScopeForCenterLineが
+  // 「参照元の種別のscopeを合成する」ために使う）。isReferencedByOtherCLはこれの真偽値版。
+  referencingCenterLines(id, { includeRefId = true } = {}) {
+    return this.centerLines.filter(other =>
       other.id !== id &&
       (other.extentLoRef?.clId === id || other.extentHiRef?.clId === id || (includeRefId && other.refId === id))
     );
