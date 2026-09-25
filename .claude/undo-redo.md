@@ -16,6 +16,9 @@ undoは「`undoManager.push`されたものだけ」戻せる。**graphを変え
 ## 確定が非同期な付随変更はamendで同一エントリへ合成する
 階段変換→上階自動設置のように操作の後から非同期で確定する変更は、新規エントリにせず`undoManager.amend`で元エントリへ合成する（Ctrl+Z 1回で揃って戻る）。
 
+## amendの落とし穴: notifyを伴うエントリはamendを使わない（段階(c)・2026-09-25）
+`undoManager.amend`はredo=「元の操作→追加分」・undo=「追加分→元の操作」の順で合成するため、構造同期（`structuralSync.js`）へのnotifyのような「他の状態がすべて確定してから最後に呼びたい」処理を追加分・元側のどちらに置いても順序が崩れる——notifyを元側（先発エントリ）に入れるとredo時に他階save（追加分）より先に同期が走り、追加分（amendされた側）に入れるとundo時にstructGraph・自階の復元（元側）より先に走る。`transform/centerLineOps.js`の`promoteCenterToGridWithUndo`/`demoteGridToCenterWithUndo`（通り芯⇔中心線の変換）は、この理由で`amendFloorUndoRecords`（内部で`undoManager.amend`を呼ぶ）を使わず、他階レコードの適用（`applyFloorUndoRecords`）を`structGraph`・自階の復元と**同じundo/redoクロージャの中**に、notifyの**直前**として組み込むinline方式にする（順序: struct復元→自階復元→他階レコード適用→notify）。昇格（`recallPromotedCenterLineDuplicates`）は「push→await回収」の構造を保つため、`undoEntry`（amend用）の代わりに`undoRecords`（配列参照。クロージャ実行時点の中身を読む）を渡す——`propagateDemotedCenterLine`と同形の「beforeを常に採ってpush」規約にする。**ASSUMED**: IDBトランザクション順序（save呼び出しが同じクロージャ内でnotifyより前にあることに依存。readwriteの後に作られたreadonlyは完了を待つIDB仕様に依存）は実機のIndexedDBでは未確認（node:testの`storage/db.js`スタブでのみ検証済み）。
+
 ## 中心線移動は「bake＋結合連鎖＋梁芯追従」を1エントリにまとめる（段階(b)・2026-09-25）
 `transform/centerLineOps.js`の`commitCLMoveOp`は、CL値の確定（`bakeCLValue`）・隣接CLとの結合（`mergeCenterLineChain`）・壁由来梁芯の追従（`followWallBeamAxes`）を、同期処理のまま1つの`undoManager.push`エントリにまとめる（`composeUndoWithMergeChain`が結合分を合成し、`followWallBeamAxes`が返す`undoFns`/`redoFns`をさらに合わせて実行する——undo時は「梁芯追従を先に戻す→CL値・結合を戻す」、redo時は逆順）。構造同期リスナー（`structuralSync.js`起動）へのnotifyは、確定・undo・redoそれぞれのクロージャの**最後**で呼ぶ——CL値・壁位置が確定してから構造再計算を起動する順序を守るため。
 

@@ -8,7 +8,7 @@ import {
 import {
   ERR_CL_DUPLICATE, ERR_CL_CENTER_UPGRADED, ERR_CL_STRUCT_EXISTS,
   ERR_CL_CONVERT_ATTACHED, ERR_CL_CONVERT_NO_GRID, ERR_CL_CONVERT_DUP_FLOOR, ERR_CL_CONVERT_DUP_FLOOR_DEMOTE,
-  ERR_CL_CONVERT_DUP_DEMOTE, ERR_CL_DELETE_LAST_GRID,
+  ERR_CL_CONVERT_DUP_DEMOTE, ERR_CL_DELETE_LAST_GRID, ERR_CL_CONVERT_DUP,
 } from '../error.js';
 import { undoManager } from '../undoManager.js';
 import { floorSwapManager } from '../storage/FloorSwapManager.js';
@@ -154,19 +154,103 @@ test('commitCLMoveOp: 補助線の移動は構造同期リスナーを呼ばな�
   }
 });
 
-test('【段階(c)で反転予定のピン留め】commitCLMoveOp: 通り芯の移動は現状構造同期リスナーを呼ばない（structuralSyncScopeOnMoveがFLOOR_SHARED_KINDSを早期nullにするため。T3）', () => {
+test('commitCLMoveOp: 通り芯の移動は構造同期リスナーを(graph, project, "all")で呼ぶ（確定1回・undo1回・redo1回＝計3回。段階(c)でT3を反転。2026-09-25）', () => {
   const graph = makeGraph();
   const cl = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: true, discipline: Discipline.STRUCT });
   graph.addCenterLine(CenterLineType.VERTICAL, 5000, { labeled: true, discipline: Discipline.STRUCT }); // 結合回避用に離しておく
   const project = {};
   cl.pendingDelta = 500;
 
-  let calls = 0;
-  setCenterLineStructuralListener(() => { calls++; });
+  const calls = [];
+  setCenterLineStructuralListener((g, p, scope) => calls.push({ g, p, scope }));
   try {
     const { toast } = commitCLMoveOp(graph, project, cl, 1000);
     assert.equal(toast, null);
+    assert.equal(calls.length, 1, '確定直後に1回呼ばれるはず');
+    assert.equal(calls[0].g, graph);
+    assert.equal(calls[0].p, project);
+    assert.equal(calls[0].scope, 'all');
+
+    undoManager.undo();
+    assert.equal(calls.length, 2, 'undoでも1回呼ばれるはず');
+    assert.equal(cl.value, 1000);
+
+    undoManager.redo();
+    assert.equal(calls.length, 3, 'redoでも1回呼ばれるはず');
+    assert.equal(cl.value, 1500);
+  } finally {
+    setCenterLineStructuralListener(null);
+  }
+});
+
+test('commitCLMoveOp: 偏芯壁の下地帯中心に乗る壁由来梁芯は通り芯の移動分だけ同idで追従し、undoで戻る（段階(c)追加①・2026-09-25）', () => {
+  const graph = makeGraph();
+  const x0 = graph.addCenterLine(CenterLineType.VERTICAL, 0,    { labeled: false, discipline: Discipline.ARCH });
+  const x1 = graph.addCenterLine(CenterLineType.VERTICAL, 4000, { labeled: false, discipline: Discipline.ARCH });
+  const axisCL = graph.addCenterLine(CenterLineType.HORIZONTAL, 2000, { labeled: true, discipline: Discipline.STRUCT });
+  // backingOffsetを与えて下地帯中心を通り芯からずらす（偏芯壁）
+  graph.addWall(axisCL, 0, false, x0, 0, x1, 0, { isExteriorWall: false, backingOffset: 40, backingDepth: 120, wallFinish: 12.5 });
+  const backingCenterY = 2000 + 40; // wallBackingCenterCoordの下地帯中心
+  const beamAxis = graph.addCenterLine(CenterLineType.HORIZONTAL, backingCenterY, { labeled: false, discipline: Discipline.FUSE, refId: null });
+  const beamAxisId = beamAxis.id;
+  const project = {};
+  axisCL.pendingDelta = 300; // 2000→2300
+
+  const { toast } = commitCLMoveOp(graph, project, axisCL, 2000);
+  assert.equal(toast, null);
+  assert.equal(axisCL.value, 2300);
+  const axAfter = graph.shapeMap.get(beamAxisId);
+  assert.equal(axAfter.id, beamAxisId, '同idのまま追従するはず');
+  assert.equal(axAfter.value, backingCenterY + 300, '通り芯の移動量ぶんだけ梁芯も動くはず');
+
+  undoManager.undo();
+  const axRestored = graph.shapeMap.get(beamAxisId);
+  assert.equal(axisCL.value, 2000, 'undoで通り芯が戻る');
+  assert.equal(axRestored.value, backingCenterY, 'undoで梁芯も戻る');
+});
+
+test('commitCLMoveOp: 対称壁（backingOffset===0）だけが乗る通り芯の移動では梁芯の本数・値は変わらない（段階(c)追加②・2026-09-25）', () => {
+  const graph = makeGraph();
+  const x0 = graph.addCenterLine(CenterLineType.VERTICAL, 0,    { labeled: false, discipline: Discipline.ARCH });
+  const x1 = graph.addCenterLine(CenterLineType.VERTICAL, 4000, { labeled: false, discipline: Discipline.ARCH });
+  const axisCL = graph.addCenterLine(CenterLineType.HORIZONTAL, 2000, { labeled: true, discipline: Discipline.STRUCT });
+  graph.addWall(axisCL, 0, false, x0, 0, x1, 0, { isExteriorWall: false, backingOffset: 0, backingDepth: 120, wallFinish: 12.5 });
+  const project = {};
+  const beamCountBefore = graph.centerLines.filter((c) => centerLineKind(c) === 'beam').length;
+  axisCL.pendingDelta = 300;
+
+  const { toast } = commitCLMoveOp(graph, project, axisCL, 2000);
+  assert.equal(toast, null);
+  assert.equal(axisCL.value, 2300);
+  const beamCountAfter = graph.centerLines.filter((c) => centerLineKind(c) === 'beam').length;
+  assert.equal(beamCountAfter, beamCountBefore, '対称壁だけなら梁芯は生成・変化しないはず');
+});
+
+test('【失敗系】commitCLMoveOp: 通り芯の移動は構造同期リスナー未設定（null）でも例外なく行える（段階(c)・2026-09-25）', () => {
+  const graph = makeGraph();
+  const cl = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: true, discipline: Discipline.STRUCT });
+  const project = {};
+  cl.pendingDelta = 500;
+
+  assert.doesNotThrow(() => commitCLMoveOp(graph, project, cl, 1000));
+  assert.equal(cl.value, 1500);
+  assert.doesNotThrow(() => undoManager.undo());
+  assert.equal(cl.value, 1000);
+});
+
+test('【失敗系】commitCLMoveOp: 通り芯の移動量ゼロは構造同期リスナーを呼ばずundoも積まない（段階(c)・2026-09-25）', () => {
+  const graph = makeGraph();
+  const cl = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: true, discipline: Discipline.STRUCT });
+  const project = {};
+  const beforeTop = undoManager.peekUndo();
+
+  let calls = 0;
+  setCenterLineStructuralListener(() => { calls++; });
+  try {
+    const { toast } = commitCLMoveOp(graph, project, cl, cl.value);
+    assert.equal(toast, null);
     assert.equal(calls, 0);
+    assert.equal(undoManager.peekUndo(), beforeTop, 'undoは積まれないはず');
   } finally {
     setCenterLineStructuralListener(null);
   }
@@ -1323,6 +1407,381 @@ test('addCenterLineFromDialog: 既存中心線位置への通り芯追加は中�
   assert.equal(project.structGraph.centerLines.some(cl => cl.value === 1000), false, 'undoで通り芯は消える');
 });
 
+// ---- addCenterLineFromDialog: 構造同期リスナー（段階(c)・pushUndoWithStructuralSync・2026-09-25） ----
+// setCenterLineStructuralListener はテスト間で必ず finally で null に戻す（他テストへ漏らさない）。
+
+test('addCenterLineFromDialog: スパン配列バッチモード（通り芯）は構造同期リスナーを(graph, project, "all")で呼ぶ（確定1回・undo1回・redo1回＝計3回）', () => {
+  const { project, graph } = makeProjectWithGraph();
+  project.structGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: true, discipline: Discipline.STRUCT });
+
+  const calls = [];
+  setCenterLineStructuralListener((g, p, scope) => calls.push({ g, p, scope }));
+  try {
+    const result = addCenterLineFromDialog(
+      graph, project,
+      { clDialog: { type: 'vertical' }, value: [1000, 2000, 3000], kind: 'struct', refId: null, refOffset: 0 },
+      null,
+    );
+    assert.equal(result.done, true);
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].g, graph);
+    assert.equal(calls[0].p, project);
+    assert.equal(calls[0].scope, 'all');
+
+    undoManager.undo();
+    assert.equal(calls.length, 2);
+    undoManager.redo();
+    assert.equal(calls.length, 3);
+  } finally {
+    setCenterLineStructuralListener(null);
+  }
+});
+
+test('addCenterLineFromDialog: 単体の通り芯追加は構造同期リスナーを(graph, project, "all")で呼ぶ（確定1回・undo1回・redo1回＝計3回）', () => {
+  const { project, graph } = makeProjectWithGraph();
+
+  const calls = [];
+  setCenterLineStructuralListener((g, p, scope) => calls.push({ g, p, scope }));
+  try {
+    const result = addCenterLineFromDialog(
+      graph, project,
+      { clDialog: { type: 'vertical', worldCoord: 1000, perpCoord: 0 }, value: 1000, kind: 'struct', refId: null, refOffset: 0 },
+      null,
+    );
+    assert.equal(result.done, true);
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].scope, 'all');
+
+    undoManager.undo();
+    assert.equal(calls.length, 2);
+    undoManager.redo();
+    assert.equal(calls.length, 3);
+  } finally {
+    setCenterLineStructuralListener(null);
+  }
+});
+
+test('addCenterLineFromDialog: 既存中心線位置への通り芯追加（昇格経路）は構造同期リスナーを(graph, project, "all")で呼ぶ（確定1回・undo1回・redo1回＝計3回）', () => {
+  const { project, graph } = makeProjectWithGraph();
+  graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false });
+
+  const calls = [];
+  setCenterLineStructuralListener((g, p, scope) => calls.push({ g, p, scope }));
+  try {
+    const result = addCenterLineFromDialog(
+      graph, project,
+      { clDialog: { type: 'vertical', worldCoord: 1000, perpCoord: 0 }, value: 1000, kind: 'struct', refId: null, refOffset: 0 },
+      null,
+    );
+    assert.equal(result.done, true);
+    assert.equal(result.toast, ERR_CL_CENTER_UPGRADED);
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].scope, 'all');
+
+    undoManager.undo();
+    assert.equal(calls.length, 2);
+    undoManager.redo();
+    assert.equal(calls.length, 3);
+  } finally {
+    setCenterLineStructuralListener(null);
+  }
+});
+
+test('addCenterLineFromDialog: 単体の中心線追加は構造同期リスナーを(graph, project, "activeAndAbove")で呼ぶ（確定1回・undo1回・redo1回＝計3回）', () => {
+  const { project, graph } = makeProjectWithGraph();
+
+  const calls = [];
+  setCenterLineStructuralListener((g, p, scope) => calls.push({ g, p, scope }));
+  try {
+    const result = addCenterLineFromDialog(
+      graph, project,
+      { clDialog: { type: 'vertical', worldCoord: 1000, perpCoord: 0 }, value: 1000, kind: 'center', refId: null, refOffset: 0 },
+      null,
+    );
+    assert.equal(result.done, true);
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].scope, 'activeAndAbove');
+
+    undoManager.undo();
+    assert.equal(calls.length, 2);
+    undoManager.redo();
+    assert.equal(calls.length, 3);
+  } finally {
+    setCenterLineStructuralListener(null);
+  }
+});
+
+test('addCenterLineFromDialog: 同種別（中心線）の結合連鎖でも構造同期リスナーは(graph, project, "activeAndAbove")で1回・undo1回・redo1回＝計3回', () => {
+  const { project, graph } = makeProjectWithGraph();
+  // 直交する通り芯Y=1000・Y=2000でperpCoord=1500をブラケットし、新規中心線のextentを[1000,2000]にする
+  // （orthoAnchorCandidatesForNewの候補になれるようdiscipline:STRUCT・labeled:trueにする）。
+  graph.addCenterLine(CenterLineType.HORIZONTAL, 1000, { labeled: true, discipline: Discipline.STRUCT });
+  graph.addCenterLine(CenterLineType.HORIZONTAL, 2000, { labeled: true, discipline: Discipline.STRUCT });
+  // 既存の中心線: 同じX=1000でextent[0,1000]（新規の[1000,2000]と端点で接するだけ＝結合対象）
+  const existing = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, extentLo: 0, extentHi: 1000 });
+  const existingId = existing.id;
+
+  const calls = [];
+  setCenterLineStructuralListener((g, p, scope) => calls.push({ g, p, scope }));
+  try {
+    const result = addCenterLineFromDialog(
+      graph, project,
+      { clDialog: { type: 'vertical', worldCoord: 1000, perpCoord: 1500 }, value: 1000, kind: 'center', refId: null, refOffset: 0 },
+      null,
+    );
+    assert.equal(result.done, true, JSON.stringify(result));
+    assert.equal(graph.shapeMap.has(existingId), true, '既存CLがsurvivorとして残り延伸される（新規側は別オブジェクトを作らない）');
+    assert.equal(existing.extentHi, 2000, 'extentが新規分だけ延伸される');
+    assert.equal(calls.length, 1, '結合が起きても構造同期リスナーは1回のはず');
+    assert.equal(calls[0].scope, 'activeAndAbove');
+
+    undoManager.undo();
+    assert.equal(calls.length, 2);
+    assert.equal(existing.extentHi, 1000, 'undoでextentが元に戻る');
+    undoManager.redo();
+    assert.equal(calls.length, 3);
+  } finally {
+    setCenterLineStructuralListener(null);
+  }
+});
+
+test('addCenterLineFromDialog: 補助線の単体追加・結合連鎖、梁芯の追加は構造同期リスナーを呼ばない（structuralSyncScopeOfKindがaux/beamでnullのため）', () => {
+  // ---- 補助線・単体 ----
+  {
+    const { project, graph } = makeProjectWithGraph();
+    let calls = 0;
+    setCenterLineStructuralListener(() => { calls++; });
+    try {
+      const result = addCenterLineFromDialog(
+        graph, project,
+        { clDialog: { type: 'vertical', worldCoord: 1000, perpCoord: 0 }, value: 1000, kind: 'aux', refId: null, refOffset: 0 },
+        { scaleDenominator: 100 },
+      );
+      assert.equal(result.done, true, '補助線・単体');
+      assert.equal(calls, 0, '補助線・単体は呼ばれないはず');
+    } finally {
+      setCenterLineStructuralListener(null);
+    }
+  }
+
+  // ---- 補助線・結合連鎖（壁で挟まれた区間を直接指定し、overhang計算を避けて厳密に端点を接させる） ----
+  {
+    const { project, graph } = makeProjectWithGraph();
+    const y1000 = graph.addCenterLine(CenterLineType.HORIZONTAL, 1000, { labeled: false });
+    const y2000 = graph.addCenterLine(CenterLineType.HORIZONTAL, 2000, { labeled: false });
+    const x0 = graph.addCenterLine(CenterLineType.VERTICAL, 0, { labeled: false });
+    const x1 = graph.addCenterLine(CenterLineType.VERTICAL, 2000, { labeled: false });
+    graph.addWall(y1000, 0, false, x0, 0, x1, 0, { isExteriorWall: false, backingOffset: 0, backingDepth: 120, wallFinish: 12.5 });
+    graph.addWall(y2000, 0, false, x0, 0, x1, 0, { isExteriorWall: false, backingOffset: 0, backingDepth: 120, wallFinish: 12.5 });
+    const existing = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, lineType: 'dashed', extentLo: 0, extentHi: 1000 });
+    const existingId = existing.id;
+
+    let calls = 0;
+    setCenterLineStructuralListener(() => { calls++; });
+    try {
+      const result = addCenterLineFromDialog(
+        graph, project,
+        { clDialog: { type: 'vertical', worldCoord: 1000, perpCoord: 1500 }, value: 1000, kind: 'aux', refId: null, refOffset: 0 },
+        { scaleDenominator: 100 },
+      );
+      assert.equal(result.done, true, JSON.stringify(result));
+      assert.equal(graph.shapeMap.has(existingId), true, '既存CLがsurvivorとして残る（結合自体は起きる前提の確認）');
+      assert.equal(existing.extentHi, 2000, 'extentが新規分だけ延伸される（結合が起きた確認）');
+      assert.equal(calls, 0, '補助線の結合は呼ばれないはず');
+    } finally {
+      setCenterLineStructuralListener(null);
+    }
+  }
+
+  // ---- 梁芯・単体追加 ----
+  {
+    const { project, graph } = makeProjectWithGraph();
+    let calls = 0;
+    setCenterLineStructuralListener(() => { calls++; });
+    try {
+      const result = addCenterLineFromDialog(
+        graph, project,
+        { clDialog: { type: 'vertical', worldCoord: 1000, perpCoord: 0 }, value: 1000, kind: 'beam', refId: null, refOffset: 0 },
+        null,
+      );
+      assert.equal(result.done, true, '梁芯・単体');
+      assert.equal(calls, 0, '梁芯は専用経路のため呼ばれないはず');
+    } finally {
+      setCenterLineStructuralListener(null);
+    }
+  }
+});
+
+test('【失敗系】addCenterLineFromDialog: 拒否・全件重複の経路は構造同期リスナーを呼ばない（ERR_CL_DUPLICATE/ERR_CL_STRUCT_EXISTS/バッチ全件重複/梁芯の重複拒否）', () => {
+  // ---- struct×struct 同座標 ----
+  {
+    const { project, graph } = makeProjectWithGraph();
+    project.structGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: true, discipline: Discipline.STRUCT });
+    let calls = 0;
+    setCenterLineStructuralListener(() => { calls++; });
+    try {
+      const result = addCenterLineFromDialog(
+        graph, project,
+        { clDialog: { type: 'vertical', worldCoord: 1000, perpCoord: 0 }, value: 1000, kind: 'struct', refId: null, refOffset: 0 },
+        null,
+      );
+      assert.equal(result.done, false);
+      assert.equal(result.toast, ERR_CL_DUPLICATE('struct'));
+      assert.equal(calls, 0);
+    } finally {
+      setCenterLineStructuralListener(null);
+    }
+  }
+
+  // ---- 既存通り芯位置への中心線追加（ERR_CL_STRUCT_EXISTS） ----
+  {
+    const { project, graph } = makeProjectWithGraph();
+    project.structGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: true, discipline: Discipline.STRUCT });
+    let calls = 0;
+    setCenterLineStructuralListener(() => { calls++; });
+    try {
+      const result = addCenterLineFromDialog(
+        graph, project,
+        { clDialog: { type: 'vertical', worldCoord: 1000, perpCoord: 0 }, value: 1000, kind: 'center', refId: null, refOffset: 0 },
+        null,
+      );
+      assert.equal(result.done, false);
+      assert.equal(result.toast, ERR_CL_STRUCT_EXISTS);
+      assert.equal(calls, 0);
+    } finally {
+      setCenterLineStructuralListener(null);
+    }
+  }
+
+  // ---- バッチ全件重複 ----
+  {
+    const { project, graph } = makeProjectWithGraph();
+    project.structGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: true, discipline: Discipline.STRUCT });
+    project.structGraph.addCenterLine(CenterLineType.VERTICAL, 2000, { labeled: true, discipline: Discipline.STRUCT });
+    let calls = 0;
+    setCenterLineStructuralListener(() => { calls++; });
+    try {
+      const result = addCenterLineFromDialog(
+        graph, project,
+        { clDialog: { type: 'vertical' }, value: [1000, 2000], kind: 'struct', refId: null, refOffset: 0 },
+        null,
+      );
+      assert.equal(result.done, true);
+      assert.equal(result.toast, ERR_CL_DUPLICATE('struct'));
+      assert.equal(calls, 0);
+    } finally {
+      setCenterLineStructuralListener(null);
+    }
+  }
+
+  // ---- 梁芯の重複拒否（既存=梁芯、新規=通り芯） ----
+  {
+    const { project, graph } = makeProjectWithGraph();
+    graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.FUSE });
+    let calls = 0;
+    setCenterLineStructuralListener(() => { calls++; });
+    try {
+      const result = addCenterLineFromDialog(
+        graph, project,
+        { clDialog: { type: 'vertical', worldCoord: 1000, perpCoord: 0 }, value: 1000, kind: 'struct', refId: null, refOffset: 0 },
+        null,
+      );
+      assert.equal(result.done, false);
+      assert.equal(result.toast, ERR_CL_DUPLICATE('beam'));
+      assert.equal(calls, 0);
+    } finally {
+      setCenterLineStructuralListener(null);
+    }
+  }
+});
+
+test('【失敗系】addCenterLineFromDialog: 構造同期リスナー未設定（null）でも通り芯の追加・undoが例外なく行える', () => {
+  const { project, graph } = makeProjectWithGraph();
+  assert.doesNotThrow(() => addCenterLineFromDialog(
+    graph, project,
+    { clDialog: { type: 'vertical', worldCoord: 1000, perpCoord: 0 }, value: 1000, kind: 'struct', refId: null, refOffset: 0 },
+    null,
+  ));
+  assert.doesNotThrow(() => undoManager.undo());
+});
+
+// ---- 裁定(a)・2026-09-25: 通り芯追加のundo（単体追加・昇格経路・バッチ）は実質的な通り芯削除のため、
+// deleteCenterLineWithUndoのstruct分岐と同じ順序（graph.detachFromCenterLine→
+// graph.removeDependentsOfCenterLine→structGraph側の削除）で自階の格子柱等を撤去する。
+// S造の格子柱は生成時のフィルタしか通らないため再計算しても自然には消えない
+// （core/planGraph.js removeDependentsOfCenterLineのJSDoc参照）——gridAddStructuralSyncProbe.mjsの
+// A4（実データ・13.stq）で発見。
+
+test('addCenterLineFromDialog: 単体の通り芯追加のundoは、その通り芯を参照する自階の柱を撤去し、redoでCLが戻る（裁定(a)）', () => {
+  const { project, graph } = makeProjectWithGraph();
+  const y0 = project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0, { labeled: true, discipline: Discipline.STRUCT });
+
+  const result = addCenterLineFromDialog(
+    graph, project,
+    { clDialog: { type: 'vertical', worldCoord: 1000, perpCoord: 0 }, value: 1000, kind: 'struct', refId: null, refOffset: 0 },
+    null,
+  );
+  assert.equal(result.done, true);
+  const newCl = project.structGraph.centerLines.find(cl => cl.centerLineType === CenterLineType.VERTICAL && cl.value === 1000);
+  const newClId = newCl.id;
+  // 実運用では構造同期（recompute）がこの通り芯×y0の交点に格子柱を生成する——ここではその結果を
+  // 模して直接addColumnする（自グラフのcolumnMapに、新規通り芯をverticalCLとする柱を1本置く）。
+  const column = graph.addColumn(StructuralMaterialType.WOOD, 'SEC-COL', newCl, y0);
+
+  undoManager.undo();
+  assert.equal(project.structGraph.shapeMap.has(newClId), false, 'undoで通り芯自体は消える');
+  assert.equal(graph.columnMap.has(column.id), false, 'undoでその通り芯を参照する自階の柱も撤去されるはず（裁定(a)）');
+
+  undoManager.redo();
+  assert.equal(project.structGraph.shapeMap.has(newClId), true, 'redoで通り芯が同idで戻る（以後の同期で柱も再生成されうる）');
+});
+
+test('addCenterLineFromDialog: 昇格経路（既存中心線位置への通り芯追加）のundoは、通り芯化後に生成された自階の柱を撤去する（裁定(a)）', () => {
+  const { project, graph } = makeProjectWithGraph();
+  const y0 = project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0, { labeled: true, discipline: Discipline.STRUCT });
+  graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false }); // 昇格対象の中心線
+
+  const result = addCenterLineFromDialog(
+    graph, project,
+    { clDialog: { type: 'vertical', worldCoord: 1000, perpCoord: 0 }, value: 1000, kind: 'struct', refId: null, refOffset: 0 },
+    null,
+  );
+  assert.equal(result.done, true);
+  assert.equal(result.toast, ERR_CL_CENTER_UPGRADED);
+  const structCl = project.structGraph.centerLines.find(cl => cl.centerLineType === CenterLineType.VERTICAL && cl.value === 1000);
+  const structId = structCl.id;
+  const column = graph.addColumn(StructuralMaterialType.WOOD, 'SEC-COL', structCl, y0);
+
+  undoManager.undo();
+  assert.equal(project.structGraph.shapeMap.has(structId), false, 'undoで通り芯は消え中心線に戻る');
+  assert.equal(graph.columnMap.has(column.id), false, 'undoで通り芯化後に生成された柱も撤去されるはず（裁定(a)）');
+  assert.ok(graph.centerLines.some(cl => cl.centerLineType === CenterLineType.VERTICAL && cl.value === 1000 && centerLineKind(cl) === 'center'), 'undoで中心線が復元される');
+});
+
+test('addCenterLineFromDialog: スパン配列バッチモードのundoは、追加された各通り芯を参照する自階の柱をすべて撤去する（裁定(a)）', () => {
+  const { project, graph } = makeProjectWithGraph();
+  const y0 = project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0, { labeled: true, discipline: Discipline.STRUCT });
+
+  const result = addCenterLineFromDialog(
+    graph, project,
+    { clDialog: { type: 'vertical' }, value: [1000, 2000], kind: 'struct', refId: null, refOffset: 0 },
+    null,
+  );
+  assert.equal(result.done, true);
+  const cl1000 = project.structGraph.centerLines.find(cl => cl.centerLineType === CenterLineType.VERTICAL && cl.value === 1000);
+  const cl2000 = project.structGraph.centerLines.find(cl => cl.centerLineType === CenterLineType.VERTICAL && cl.value === 2000);
+  const column1 = graph.addColumn(StructuralMaterialType.WOOD, 'SEC-COL', cl1000, y0);
+  const column2 = graph.addColumn(StructuralMaterialType.WOOD, 'SEC-COL', cl2000, y0);
+
+  undoManager.undo();
+  assert.equal(project.structGraph.centerLines.some(cl => cl.value === 1000 || cl.value === 2000), false, 'undoで追加した2本の通り芯は両方消える');
+  assert.equal(graph.columnMap.has(column1.id), false, 'undoで1000側の柱も撤去されるはず（裁定(a)）');
+  assert.equal(graph.columnMap.has(column2.id), false, 'undoで2000側の柱も撤去されるはず（裁定(a)）');
+
+  undoManager.redo();
+  assert.equal(project.structGraph.centerLines.filter(cl => cl.value === 1000 || cl.value === 2000).length, 2, 'redoで2本とも同idで戻る');
+});
+
 // ---- ステップ3: addCenterLineFromDialog の直交端部走査を orthoAnchorCandidates（core/centerLineKindPolicy.js）
 // 経由へ移行したことの回帰確認（centerLineKindPolicy.test.js の特性テストと対をなす、centerLineOps.js
 // 側からの直接確認）。
@@ -1592,6 +2051,83 @@ test('promoteCenterToGridWithUndo: 直交通り芯があれば通り芯化しund
   assert.equal(project.structGraph.shapeMap.has(clId), true, 'redoで通り芯に戻る');
 });
 
+// ---- 発見②（S造の降格ではなく在来木造の昇格ブロック）の解消: 昇格時に同座標の保護されない
+// 壁由来梁芯を吸収して撤去する（ユーザー裁定・案A・2026-09-25）。保護判定は
+// structural/wallBeamAxes.jsのisProtectedWallBeamAxis（orphanedWallBeamAxesと共有する単一の述語）。
+
+test('promoteCenterToGridWithUndo: 保護されない壁由来梁芯が同座標にあっても昇格が成功し梁芯が消え、undoで同idのまま戻る', async () => {
+  const { project, graph } = makeProjectWithGraph();
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: true, discipline: Discipline.STRUCT });
+  const cl = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
+  const beamAxis = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.FUSE, refId: null });
+  const beamAxisId = beamAxis.id;
+
+  const { toast } = await promoteCenterToGridWithUndo(graph, project, cl);
+  assert.equal(toast, null, '梁芯があっても拒否されない（吸収して撤去する）');
+  assert.equal(project.structGraph.shapeMap.get(cl.id), cl, '通り芯化される');
+  assert.equal(graph.shapeMap.has(beamAxisId), false, '保護されない梁芯は吸収されて消える');
+
+  undoManager.undo();
+  assert.equal(graph.shapeMap.has(cl.id), true, 'undoで中心線に戻る');
+  assert.equal(graph.shapeMap.has(beamAxisId), true, 'undoで梁芯も同idのまま戻る');
+
+  undoManager.redo();
+  assert.equal(project.structGraph.shapeMap.has(cl.id), true, 'redoで通り芯に戻る');
+  assert.equal(graph.shapeMap.has(beamAxisId), false, 'redoで梁芯も再び消える');
+});
+
+test('promoteCenterToGridWithUndo: lockedの柱が乗る壁由来梁芯は保護され、昇格はERR_CL_CONVERT_DUPで拒否される', async () => {
+  const { project, graph } = makeProjectWithGraph();
+  const cl = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
+  const beamAxis = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.FUSE, refId: null });
+  const y0 = graph.addCenterLine(CenterLineType.HORIZONTAL, 0, { labeled: false, discipline: Discipline.ARCH });
+  graph.addColumn(StructuralMaterialType.WOOD, 'SEC-COL', beamAxis, y0, { dimensionStatus: 'locked' }); // 手動固定
+
+  const beforeTop = undoManager.peekUndo();
+  const { toast } = await promoteCenterToGridWithUndo(graph, project, cl);
+  assert.equal(toast, ERR_CL_CONVERT_DUP('beam'));
+  assert.equal(graph.shapeMap.has(cl.id), true, '拒否時は昇格されない');
+  assert.equal(graph.shapeMap.has(beamAxis.id), true, '保護された梁芯は残る');
+  assert.equal(undoManager.peekUndo(), beforeTop, 'undoは積まれない');
+});
+
+test('promoteCenterToGridWithUndo: refIdを持つ壁由来梁芯（手動追加の可能性）は保護され、昇格は拒否される', async () => {
+  const { project, graph } = makeProjectWithGraph();
+  const cl = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
+  const refTarget = graph.addCenterLine(CenterLineType.HORIZONTAL, 0, { labeled: false, discipline: Discipline.ARCH });
+  const beamAxis = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.FUSE, refId: refTarget.id, refOffset: 1000 });
+
+  const { toast } = await promoteCenterToGridWithUndo(graph, project, cl);
+  assert.equal(toast, ERR_CL_CONVERT_DUP('beam'));
+  assert.equal(graph.shapeMap.has(beamAxis.id), true, 'refIdを持つ梁芯は残る（保護される）');
+});
+
+test('promoteCenterToGridWithUndo: 他CLから参照される壁由来梁芯は保護され、昇格は拒否される', async () => {
+  const { project, graph } = makeProjectWithGraph();
+  const cl = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
+  const beamAxis = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.FUSE, refId: null });
+  // 他の中心線（aux）がbeamAxisをextentLoRefで参照する。
+  graph.addCenterLine(CenterLineType.HORIZONTAL, 500, {
+    labeled: false, lineType: 'dashed', extentLoRef: { clId: beamAxis.id, offset: 0 }, extentHi: 2000,
+  });
+
+  const { toast } = await promoteCenterToGridWithUndo(graph, project, cl);
+  assert.equal(toast, ERR_CL_CONVERT_DUP('beam'));
+  assert.equal(graph.shapeMap.has(beamAxis.id), true, '他CLから参照される梁芯は残る（保護される）');
+});
+
+test('promoteCenterToGridWithUndo: 保護されない壁由来梁芯の吸収撤去はexcludedWallBeamAxesを変えない', async () => {
+  const { project, graph } = makeProjectWithGraph();
+  const cl = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
+  graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.FUSE, refId: null });
+  const beforeSize = graph.excludedWallBeamAxes.size;
+
+  const { toast } = await promoteCenterToGridWithUndo(graph, project, cl);
+  assert.equal(toast, null);
+  assert.equal(graph.excludedWallBeamAxes.size, beforeSize, '手動削除の記録ではないためexcludedWallBeamAxesは変わらない');
+});
+
 test('promoteCenterToGridWithUndo: 斜線が取り付いた中心線はtoast:ERR_CL_CONVERT_ATTACHEDでundoを積まない', async () => {
   const { project, graph } = makeProjectWithGraph();
   // 昇格は直交通り芯の本数を問わないため必須ではないが、実運用に近い状態（直交通り芯あり）でも
@@ -1757,24 +2293,165 @@ test('promoteCenterToGridWithUndo: 他階に同座標の中心線があればフ
   }
 });
 
-test('promoteCenterToGridWithUndo: 他階の相手が梁芯のみのときはトースト文言に「梁芯」と表示される', async () => {
+test('promoteCenterToGridWithUndo: 他階の相手が保護されない梁芯のみのときは拒否されず吸収される（発見④・ユーザー裁定・案A・2026-09-25）', async () => {
   const project = new Project('proj', 'test');
   const { graph: activeGraph } = project.addPlane(0, '1階', 'p1');
   const { graph: otherGraph }  = project.addPlane(3000, '2階', 'p2');
-  otherGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.FUSE }); // 梁芯のみ
+  const otherBeamAxis = otherGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.FUSE }); // 保護されない梁芯のみ
   project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
   project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: true, discipline: Discipline.STRUCT });
   const cl = activeGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
 
   const originalPeek = floorSwapManager.peek;
   floorSwapManager.peek = async (plane) => (plane.id === otherGraph.plane.id ? otherGraph : null);
+  const saveFloorFn = async () => {}; // 生きたグラフをそのまま返すスタブのため実IDBを経由させない
   try {
-    const { toast } = await promoteCenterToGridWithUndo(activeGraph, project, cl);
-    assert.equal(toast, ERR_CL_CONVERT_DUP_FLOOR([{ name: '2階', kind: 'beam' }]));
-    assert.equal(toast, '2階 の同じ位置に梁芯があるため通り芯にできません。', 'リテラル文字列で固定（QA指摘m-1）');
+    const { toast } = await promoteCenterToGridWithUndo(activeGraph, project, cl, { saveFloorFn });
+    assert.equal(toast, null, '保護されない梁芯のみでは拒否されない（吸収して撤去する）');
+    assert.equal(otherGraph.shapeMap.has(otherBeamAxis.id), false, '他階の梁芯も吸収されて消える');
   } finally {
     floorSwapManager.peek = originalPeek;
   }
+});
+
+test('promoteCenterToGridWithUndo: 2階建てで他階の壁由来梁芯が昇格時に吸収され保存バイトから消える。undoで同idのまま戻りredoで再び消える（発見④・案A）', async () => {
+  const project = new Project('proj', 'test');
+  const { graph: p1 } = project.addPlane(0, '1階', 'p1');
+  const { graph: p2 } = project.addPlane(3000, '2階', 'p2');
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: true, discipline: Discipline.STRUCT });
+  const cl = p1.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
+  const otherBeamAxis = p2.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.FUSE, refId: null });
+  const otherBeamAxisId = otherBeamAxis.id;
+
+  const store = new Map([[p2.plane.id, serializeGraph(p2)]]);
+  const saveFloorFn = async (planeId, bytes) => { store.set(planeId, bytes); };
+
+  await withProductionPeek(project, store, async () => {
+    const { toast } = await promoteCenterToGridWithUndo(p1, project, cl, { saveFloorFn });
+    assert.equal(toast, null);
+    assert.equal(project.structGraph.shapeMap.has(cl.id), true, '通り芯化される');
+    let decoded = decodeFloor(project, p2.plane, store.get(p2.plane.id));
+    assert.equal(decoded.shapeMap.has(otherBeamAxisId), false, '他階の保存バイトから梁芯が消える');
+
+    undoManager.undo();
+    decoded = decodeFloor(project, p2.plane, store.get(p2.plane.id));
+    assert.equal(decoded.shapeMap.has(otherBeamAxisId), true, 'undoで他階の梁芯が同idのまま戻る');
+
+    undoManager.redo();
+    decoded = decodeFloor(project, p2.plane, store.get(p2.plane.id));
+    assert.equal(decoded.shapeMap.has(otherBeamAxisId), false, 'redoで他階の梁芯が再び消える');
+  });
+});
+
+test('promoteCenterToGridWithUndo: 他階の壁由来梁芯にlockedの柱が乗っていれば拒否される（ERR_CL_CONVERT_DUP_FLOOR）。自階無変更・undo未積み・listenerは呼ばれない（発見④・案A）', async () => {
+  const project = new Project('proj', 'test');
+  const { graph: p1 } = project.addPlane(0, '1階', 'p1');
+  const { graph: p2 } = project.addPlane(3000, '2階', 'p2');
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: true, discipline: Discipline.STRUCT });
+  const cl = p1.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
+  const otherBeamAxis = p2.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.FUSE, refId: null });
+  const y0 = p2.addCenterLine(CenterLineType.HORIZONTAL, 0, { labeled: false, discipline: Discipline.ARCH });
+  p2.addColumn(StructuralMaterialType.WOOD, 'SEC-COL', otherBeamAxis, y0, { dimensionStatus: 'locked' });
+
+  const store = new Map([[p2.plane.id, serializeGraph(p2)]]);
+  const saveFloorFn = async (planeId, bytes) => { store.set(planeId, bytes); };
+  const beforeTop = undoManager.peekUndo();
+  let calls = 0;
+  setCenterLineStructuralListener(() => { calls++; });
+  try {
+    await withProductionPeek(project, store, async () => {
+      const { toast } = await promoteCenterToGridWithUndo(p1, project, cl, { saveFloorFn });
+      assert.equal(toast, ERR_CL_CONVERT_DUP_FLOOR([{ name: '2階', kind: 'beam' }]));
+      assert.equal(p1.shapeMap.has(cl.id), true, '自階は無変更（中心線のまま）');
+      assert.equal(project.structGraph.shapeMap.has(cl.id), false);
+    });
+  } finally {
+    setCenterLineStructuralListener(null);
+  }
+  assert.equal(undoManager.peekUndo(), beforeTop, 'undoは積まれない');
+  assert.equal(calls, 0, 'listenerは呼ばれない');
+});
+
+test('promoteCenterToGridWithUndo: 他階の壁由来梁芯がrefIdを持つ（手動追加の可能性）なら拒否される（発見④・案A）', async () => {
+  const project = new Project('proj', 'test');
+  const { graph: p1 } = project.addPlane(0, '1階', 'p1');
+  const { graph: p2 } = project.addPlane(3000, '2階', 'p2');
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: true, discipline: Discipline.STRUCT });
+  const cl = p1.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
+  const refTarget = p2.addCenterLine(CenterLineType.HORIZONTAL, 0, { labeled: false, discipline: Discipline.ARCH });
+  const otherBeamAxis = p2.addCenterLine(CenterLineType.VERTICAL, 1000, {
+    labeled: false, discipline: Discipline.FUSE, refId: refTarget.id, refOffset: 1000,
+  });
+
+  const store = new Map([[p2.plane.id, serializeGraph(p2)]]);
+  const saveFloorFn = async (planeId, bytes) => { store.set(planeId, bytes); };
+  await withProductionPeek(project, store, async () => {
+    const { toast } = await promoteCenterToGridWithUndo(p1, project, cl, { saveFloorFn });
+    assert.equal(toast, ERR_CL_CONVERT_DUP_FLOOR([{ name: '2階', kind: 'beam' }]));
+    const decoded = decodeFloor(project, p2.plane, store.get(p2.plane.id));
+    assert.equal(decoded.shapeMap.has(otherBeamAxis.id), true, 'refIdを持つ梁芯は残る（保護される）');
+  });
+});
+
+test('【失敗系】promoteCenterToGridWithUndo: 他階の梁芯吸収でsaveFloorFnがthrowしたらrollbackし、自階・undoは無変更・listenerは呼ばれない（発見④・案A）', async () => {
+  const project = new Project('proj', 'test');
+  const { graph: p1 } = project.addPlane(0, '1階', 'p1');
+  const { graph: p2 } = project.addPlane(3000, '2階', 'p2');
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: true, discipline: Discipline.STRUCT });
+  const cl = p1.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
+  p2.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.FUSE, refId: null });
+
+  const store = new Map([[p2.plane.id, serializeGraph(p2)]]);
+  const saveFloorFn = async () => { throw new Error('save failed'); };
+  const beforeTop = undoManager.peekUndo();
+  let calls = 0;
+  setCenterLineStructuralListener(() => { calls++; });
+  try {
+    await withProductionPeek(project, store, async () => {
+      await assert.rejects(() => promoteCenterToGridWithUndo(p1, project, cl, { saveFloorFn }), /save failed/);
+    });
+  } finally {
+    setCenterLineStructuralListener(null);
+  }
+  assert.equal(project.structGraph.shapeMap.has(cl.id), false, '自階は無変更（中心線のまま）');
+  assert.equal(p1.shapeMap.has(cl.id), true);
+  assert.equal(undoManager.peekUndo(), beforeTop, 'undoは積まれない');
+  assert.equal(calls, 0, 'listenerは呼ばれない');
+});
+
+test('promoteCenterToGridWithUndo: 同じ他階に「梁芯吸収」と「複製回収」の記録が両方あってもundoで両方とも正しく復元される（発見④・案A。applyFloorUndoRecordsの逆順適用の裏取り）', async () => {
+  const project = new Project('proj', 'test');
+  const { graph: p1 } = project.addPlane(0, '1階', 'p1');
+  const { graph: p2 } = project.addPlane(3000, '2階', 'p2');
+  const cl = p1.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
+  p2.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH }, cl.id); // 降格複製を模す（同一id）
+  const otherBeamAxis = p2.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.FUSE, refId: null });
+  const otherBeamAxisId = otherBeamAxis.id;
+
+  const store = new Map([[p2.plane.id, serializeGraph(p2)]]);
+  const saveFloorFn = async (planeId, bytes) => { store.set(planeId, bytes); };
+
+  await withProductionPeek(project, store, async () => {
+    const { toast } = await promoteCenterToGridWithUndo(p1, project, cl, { saveFloorFn });
+    assert.equal(toast, null);
+    let decoded = decodeFloor(project, p2.plane, store.get(p2.plane.id));
+    assert.equal(decoded.shapeMap.has(cl.id), false, '複製は回収される');
+    assert.equal(decoded.shapeMap.has(otherBeamAxisId), false, '梁芯は吸収される');
+
+    undoManager.undo();
+    decoded = decodeFloor(project, p2.plane, store.get(p2.plane.id));
+    assert.equal(decoded.shapeMap.has(cl.id), true, 'undoで複製が同idのまま戻る');
+    assert.equal(decoded.shapeMap.has(otherBeamAxisId), true, 'undoで梁芯も同idのまま戻る');
+
+    undoManager.redo();
+    decoded = decodeFloor(project, p2.plane, store.get(p2.plane.id));
+    assert.equal(decoded.shapeMap.has(cl.id), false, 'redoで複製が再び回収される');
+    assert.equal(decoded.shapeMap.has(otherBeamAxisId), false, 'redoで梁芯も再び吸収される');
+  });
 });
 
 test('promoteCenterToGridWithUndo: 同じ他階に中心線と梁芯の両方があれば中心線を優先して表示する（優先順: 中心線＞補助線＞梁芯）', async () => {
@@ -1805,8 +2482,14 @@ test('promoteCenterToGridWithUndo: 複数階・種別混在のトーストは種
   const { graph: g3 } = project.addPlane(6000, '3階', 'p3');
   const { graph: g4 } = project.addPlane(9000, '4階', 'p4');
   g4.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH }); // 4階=中心線
-  g2.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.FUSE });  // 2階=梁芯
-  g3.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.FUSE });  // 3階=梁芯
+  // 2階・3階=梁芯（発見④・案Aで保護されない梁芯は他階重複の相手から除外されるため、lockedの柱を
+  // 乗せて保護し、引き続き他階重複の相手として残ることを確認する）。
+  const beam2 = g2.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.FUSE });
+  const beam3 = g3.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.FUSE });
+  const y0g2 = g2.addCenterLine(CenterLineType.HORIZONTAL, 0, { labeled: false, discipline: Discipline.ARCH });
+  const y0g3 = g3.addCenterLine(CenterLineType.HORIZONTAL, 0, { labeled: false, discipline: Discipline.ARCH });
+  g2.addColumn(StructuralMaterialType.WOOD, 'SEC-COL', beam2, y0g2, { dimensionStatus: 'locked' });
+  g3.addColumn(StructuralMaterialType.WOOD, 'SEC-COL', beam3, y0g3, { dimensionStatus: 'locked' });
   project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
   project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: true, discipline: Discipline.STRUCT });
   const cl = activeGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
@@ -2222,6 +2905,307 @@ test('demoteGridToCenterWithUndo: ロールバックの書き戻しも失敗し�
     assert.equal(p1.shapeMap.has(clId), false, '自階は未変更');
     assert.equal(undoManager.peekUndo(), beforeTop, 'undoは積まれない');
   });
+});
+
+// ---- 段階(c)・2026-09-25: promoteCenterToGridWithUndo / demoteGridToCenterWithUndo → 構造同期
+// リスナー（amendは使わないinline方式。他階レコードの適用はnotifyの直前に同じundo/redoクロージャで
+// 行う——順序は「struct→自階→他階→notify」）。setCenterLineStructuralListener は必ずfinallyでnullに
+// 戻す（他テストへ漏らさない）。
+
+test('promoteCenterToGridWithUndo: 通り芯化は構造同期リスナーを(graph, project, "all")で呼ぶ（確定1回・undo1回・redo1回＝計3回。単一階）', async () => {
+  const { project, graph } = makeProjectWithGraph();
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: true, discipline: Discipline.STRUCT });
+  const cl = graph.addCenterLine(CenterLineType.VERTICAL, 1000, {
+    labeled: false, discipline: Discipline.ARCH, extentLo: -500, extentHi: 3500,
+  });
+
+  const calls = [];
+  setCenterLineStructuralListener((g, p, scope) => calls.push({ g, p, scope }));
+  try {
+    const { toast } = await promoteCenterToGridWithUndo(graph, project, cl);
+    assert.equal(toast, null);
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].g, graph);
+    assert.equal(calls[0].p, project);
+    assert.equal(calls[0].scope, 'all');
+
+    undoManager.undo();
+    assert.equal(calls.length, 2);
+    undoManager.redo();
+    assert.equal(calls.length, 3);
+  } finally {
+    setCenterLineStructuralListener(null);
+  }
+});
+
+test('demoteGridToCenterWithUndo: 中心線化は構造同期リスナーを(graph, project, "all")で呼ぶ（確定1回・undo1回・redo1回＝計3回。単一階）', async () => {
+  const { project, graph } = makeProjectWithGraph();
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: true, discipline: Discipline.STRUCT });
+  const cl = project.structGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: true, discipline: Discipline.STRUCT });
+  project.structGraph.addCenterLine(CenterLineType.VERTICAL, 5000, { labeled: true, discipline: Discipline.STRUCT }); // isLastGridOnAxis対策
+
+  const calls = [];
+  setCenterLineStructuralListener((g, p, scope) => calls.push({ g, p, scope }));
+  try {
+    const { toast } = await demoteGridToCenterWithUndo(graph, project, cl);
+    assert.equal(toast, null, JSON.stringify(toast));
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].scope, 'all');
+
+    undoManager.undo();
+    assert.equal(calls.length, 2);
+    undoManager.redo();
+    assert.equal(calls.length, 3);
+  } finally {
+    setCenterLineStructuralListener(null);
+  }
+});
+
+// ---- 順序テスト（最重要）: saveFloorFn（他階書込）がstructuralSyncListener（sync）より必ず先に
+// 実行される（確定・undo・redoのいずれも）。共通配列logに save:${planeId} と sync を積んで確認する。
+
+test('【順序が最重要】promoteCenterToGridWithUndo: 他階の梁芯吸収・複製回収（save）が構造同期（sync）より必ず先に実行される（確定・undo・redo。発見④分のsaveを含む）', async () => {
+  const project = new Project('proj', 'test');
+  const { graph } = project.addPlane(0, '1階', 'p1');
+  const { graph: otherGraph } = project.addPlane(3000, '2階', 'p2');
+  const otherPlane = otherGraph.plane;
+  const cl = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
+  otherGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH }, cl.id); // 降格複製を模す（同一id）
+  otherGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.FUSE, refId: null }); // 発見④: 保護されない壁由来梁芯（同座標）
+
+  const log = [];
+  const saveFloorFn = async (planeId) => { log.push(`save:${planeId}`); };
+  setCenterLineStructuralListener(() => { log.push('sync'); });
+  const originalPeek = floorSwapManager.peek;
+  floorSwapManager.peek = async (plane) => (plane.id === otherPlane.id ? otherGraph : null);
+  try {
+    const { toast } = await promoteCenterToGridWithUndo(graph, project, cl, { saveFloorFn });
+    assert.equal(toast, null);
+    assert.deepEqual(log, [`save:${otherPlane.id}`, `save:${otherPlane.id}`, 'sync'], '確定: 吸収・回収のsaveがともにsyncより先');
+
+    log.length = 0;
+    undoManager.undo();
+    assert.deepEqual(log, [`save:${otherPlane.id}`, `save:${otherPlane.id}`, 'sync'], 'undo: saveがsyncより先');
+
+    log.length = 0;
+    undoManager.redo();
+    assert.deepEqual(log, [`save:${otherPlane.id}`, `save:${otherPlane.id}`, 'sync'], 'redo: saveがsyncより先');
+  } finally {
+    floorSwapManager.peek = originalPeek;
+    setCenterLineStructuralListener(null);
+  }
+});
+
+test('【順序が最重要】demoteGridToCenterWithUndo: 他階への複製（save）が構造同期（sync）より必ず先に実行される（確定・undo・redo）', async () => {
+  const { project, p1, p2, cl } = makeTwoFloorsWithGridCL();
+
+  const store = new Map([[p2.plane.id, serializeGraph(p2)]]);
+  const log = [];
+  const saveFloorFn = async (planeId, bytes) => { log.push(`save:${planeId}`); store.set(planeId, bytes); };
+  setCenterLineStructuralListener(() => { log.push('sync'); });
+
+  await withProductionPeek(project, store, async () => {
+    const { toast } = await demoteGridToCenterWithUndo(p1, project, cl, { saveFloorFn });
+    assert.equal(toast, null, JSON.stringify(toast));
+    assert.deepEqual(log, [`save:${p2.plane.id}`, 'sync'], '確定: saveがsyncより先');
+
+    log.length = 0;
+    undoManager.undo();
+    assert.deepEqual(log, [`save:${p2.plane.id}`, 'sync'], 'undo: saveがsyncより先');
+
+    log.length = 0;
+    undoManager.redo();
+    assert.deepEqual(log, [`save:${p2.plane.id}`, 'sync'], 'redo: saveがsyncより先');
+  });
+  setCenterLineStructuralListener(null);
+});
+
+// ---- 失敗系: 構造同期リスナーは0回（ガードtoast・他階重複toast・apply系エラー・複製/伝播失敗） ----
+
+test('【失敗系】promoteCenterToGridWithUndo: ガードtoast（ERR_CL_CONVERT_ATTACHED）は構造同期リスナーを呼ばない', async () => {
+  const { project, graph } = makeProjectWithGraph();
+  const cl = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
+  const hOther = graph.addCenterLine(CenterLineType.HORIZONTAL, 500, { labeled: false, discipline: Discipline.ARCH });
+  const ix = graph.getOrCreateIntersection(cl, hOther);
+  graph.addDiagonalLine(ix, graph.addPoint(2000, 2000));
+
+  let calls = 0;
+  setCenterLineStructuralListener(() => { calls++; });
+  try {
+    const { toast } = await promoteCenterToGridWithUndo(graph, project, cl);
+    assert.equal(toast, ERR_CL_CONVERT_ATTACHED);
+    assert.equal(calls, 0);
+  } finally {
+    setCenterLineStructuralListener(null);
+  }
+});
+
+test('【失敗系】promoteCenterToGridWithUndo: 他階重複トースト（ERR_CL_CONVERT_DUP_FLOOR）は構造同期リスナーを呼ばない', async () => {
+  const project = new Project('proj', 'test');
+  const { graph } = project.addPlane(0, '1階', 'p1');
+  const { graph: otherGraph } = project.addPlane(3000, '2階', 'p2');
+  const cl = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
+  otherGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH }); // 別id・同座標＝重複相手
+
+  let calls = 0;
+  setCenterLineStructuralListener(() => { calls++; });
+  const originalPeek = floorSwapManager.peek;
+  floorSwapManager.peek = async (plane) => (plane.id === otherGraph.plane.id ? otherGraph : null);
+  try {
+    const { toast } = await promoteCenterToGridWithUndo(graph, project, cl);
+    assert.equal(toast, ERR_CL_CONVERT_DUP_FLOOR([{ name: otherGraph.plane.name, kind: 'center' }]));
+    assert.equal(calls, 0);
+  } finally {
+    floorSwapManager.peek = originalPeek;
+    setCenterLineStructuralListener(null);
+  }
+});
+
+test('【失敗系】promoteCenterToGridWithUndo: 回収（recallPromotedCenterLineDuplicates）がthrowしたらnotifyせず再throwする（R2）', async () => {
+  const project = new Project('proj', 'test');
+  const { graph } = project.addPlane(0, '1階', 'p1');
+  const { graph: otherGraph } = project.addPlane(3000, '2階', 'p2');
+  const cl = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
+  otherGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH }, cl.id); // 回収対象の複製
+
+  const beforeTop = undoManager.peekUndo();
+  let calls = 0;
+  setCenterLineStructuralListener(() => { calls++; });
+  const originalPeek = floorSwapManager.peek;
+  floorSwapManager.peek = async (plane) => (plane.id === otherGraph.plane.id ? otherGraph : null);
+  const saveFloorFn = async () => { throw new Error('recall save failed'); };
+  try {
+    await assert.rejects(() => promoteCenterToGridWithUndo(graph, project, cl, { saveFloorFn }), /recall save failed/);
+    assert.equal(calls, 0, '回収が失敗したらnotifyしないはず');
+    assert.notEqual(undoManager.peekUndo(), beforeTop, '昇格自体のundoエントリは既に積まれたまま残る（R2の対象は回収失敗時のnotifyのみ）');
+  } finally {
+    floorSwapManager.peek = originalPeek;
+    setCenterLineStructuralListener(null);
+    undoManager.undo(); // 後続テストへ影響しないよう積まれたエントリを戻す
+  }
+});
+
+test('【失敗系】demoteGridToCenterWithUndo: ガードtoast（ERR_CL_CONVERT_NO_GRID）は構造同期リスナーを呼ばない', async () => {
+  const { project, graph } = makeProjectWithGraph();
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0, { labeled: true, discipline: Discipline.STRUCT }); // 1本のみ
+  const cl = project.structGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: true, discipline: Discipline.STRUCT });
+
+  let calls = 0;
+  setCenterLineStructuralListener(() => { calls++; });
+  try {
+    const { toast } = await demoteGridToCenterWithUndo(graph, project, cl);
+    assert.equal(toast, ERR_CL_CONVERT_NO_GRID);
+    assert.equal(calls, 0);
+  } finally {
+    setCenterLineStructuralListener(null);
+  }
+});
+
+test('【失敗系】demoteGridToCenterWithUndo: 他階重複トースト（ERR_CL_CONVERT_DUP_FLOOR_DEMOTE）は構造同期リスナーを呼ばない', async () => {
+  const project = new Project('proj', 'test');
+  const { graph: p1 } = project.addPlane(0, '1階', 'p1');
+  const { graph: p2 } = project.addPlane(3000, '2階', 'p2');
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: true, discipline: Discipline.STRUCT });
+  const cl = project.structGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: true, discipline: Discipline.STRUCT });
+  project.structGraph.addCenterLine(CenterLineType.VERTICAL, 5000, { labeled: true, discipline: Discipline.STRUCT }); // isLastGridOnAxis対策
+  p2.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH }); // 重複相手
+
+  let calls = 0;
+  setCenterLineStructuralListener(() => { calls++; });
+  const originalPeek = floorSwapManager.peek;
+  floorSwapManager.peek = async (plane) => (plane.id === p2.plane.id ? p2 : null);
+  try {
+    const { toast } = await demoteGridToCenterWithUndo(p1, project, cl);
+    assert.equal(toast, ERR_CL_CONVERT_DUP_FLOOR_DEMOTE([{ name: p2.plane.name, kind: 'center' }]));
+    assert.equal(calls, 0);
+  } finally {
+    floorSwapManager.peek = originalPeek;
+    setCenterLineStructuralListener(null);
+  }
+});
+
+test('【失敗系】demoteGridToCenterWithUndo: 複製フェーズの2階目でsaveFloorFnがthrowしたら構造同期リスナーを呼ばない', async () => {
+  const project = new Project('proj', 'test');
+  const { graph: p1 } = project.addPlane(0,    '1階', 'p1');
+  const { graph: p2 } = project.addPlane(3000, '2階', 'p2');
+  const { graph: p3 } = project.addPlane(6000, '3階', 'p3');
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: true, discipline: Discipline.STRUCT });
+  const cl = project.structGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: true, discipline: Discipline.STRUCT });
+  project.structGraph.addCenterLine(CenterLineType.VERTICAL, 5000, { labeled: true, discipline: Discipline.STRUCT }); // isLastGridOnAxis対策
+
+  const store = new Map([[p2.plane.id, serializeGraph(p2)], [p3.plane.id, serializeGraph(p3)]]);
+  const saveFloorFn = async (planeId, bytes) => {
+    if (planeId === p3.plane.id) throw new Error('p3 save failed');
+    store.set(planeId, bytes);
+  };
+  let calls = 0;
+  setCenterLineStructuralListener(() => { calls++; });
+  try {
+    await withProductionPeek(project, store, async () => {
+      await assert.rejects(() => demoteGridToCenterWithUndo(p1, project, cl, { saveFloorFn }), /p3 save failed/);
+      assert.equal(calls, 0);
+    });
+  } finally {
+    setCenterLineStructuralListener(null);
+  }
+});
+
+test('【失敗系】demoteGridToCenterWithUndo: 複製後にapplyDemoteToCenterがエラーを返す（ロールバック）経路は構造同期リスナーを呼ばない', async () => {
+  const project = new Project('proj', 'test');
+  const { graph: p1 } = project.addPlane(0,    '1階', 'p1');
+  const { graph: p2 } = project.addPlane(3000, '2階', 'p2');
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: true, discipline: Discipline.STRUCT });
+  const cl = project.structGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: true, discipline: Discipline.STRUCT });
+  project.structGraph.addCenterLine(CenterLineType.VERTICAL, 5000, { labeled: true, discipline: Discipline.STRUCT }); // isLastGridOnAxis対策
+
+  const store = new Map([[p2.plane.id, serializeGraph(p2)]]);
+  let intruded = false;
+  const saveFloorFn = async (planeId, bytes) => {
+    store.set(planeId, bytes);
+    if (!intruded) {
+      intruded = true;
+      p1.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH, lineType: 'center' });
+    }
+  };
+  let calls = 0;
+  setCenterLineStructuralListener(() => { calls++; });
+  try {
+    await withProductionPeek(project, store, async () => {
+      const { toast } = await demoteGridToCenterWithUndo(p1, project, cl, { saveFloorFn });
+      assert.equal(toast, ERR_CL_CONVERT_DUP_DEMOTE('center'));
+      assert.equal(calls, 0);
+    });
+  } finally {
+    setCenterLineStructuralListener(null);
+  }
+});
+
+test('【失敗系】promoteCenterToGridWithUndo: 構造同期リスナー未設定（null）でも例外なく通り芯化・undoできる', async () => {
+  const { project, graph } = makeProjectWithGraph();
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: true, discipline: Discipline.STRUCT });
+  const cl = graph.addCenterLine(CenterLineType.VERTICAL, 1000, {
+    labeled: false, discipline: Discipline.ARCH, extentLo: -500, extentHi: 3500,
+  });
+
+  await assert.doesNotReject(() => promoteCenterToGridWithUndo(graph, project, cl));
+  assert.doesNotThrow(() => undoManager.undo());
+});
+
+test('【失敗系】demoteGridToCenterWithUndo: 構造同期リスナー未設定（null）でも例外なく中心線化・undoできる', async () => {
+  const { project, graph } = makeProjectWithGraph();
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: true, discipline: Discipline.STRUCT });
+  const cl = project.structGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: true, discipline: Discipline.STRUCT });
+  project.structGraph.addCenterLine(CenterLineType.VERTICAL, 5000, { labeled: true, discipline: Discipline.STRUCT }); // isLastGridOnAxis対策
+
+  await assert.doesNotReject(() => demoteGridToCenterWithUndo(graph, project, cl));
+  assert.doesNotThrow(() => undoManager.undo());
 });
 
 // ---- 【失敗系】QA指摘m-3: ERR_CL_CONVERT_DUP_FLOOR/_DEMOTE は未知種別でthrowする ----

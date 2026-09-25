@@ -295,20 +295,23 @@ export function structuralSyncScopeOfKind(kind) {
 }
 
 /**
- * kind の**移動**が構造同期の起動対象かどうか、対象ならどの scope で反映すべきかを導出する
- * （段階(b)・2026-09-25）。structuralSyncScopeOfKind（削除向け）とほぼ同じ表を使うが、通り芯
- * （FLOOR_SHARED_KINDS）だけは無条件でnull——通り芯の移動は全階のグリッドが動く別種の同期
- * （段階(c)で扱う予定。ここでは分岐を用意するだけで、段階(c)実装時にこの早期returnを消す）。
- * それ以外（center/aux/beam）はstructuralSyncScopeOfKindと同じ結果——center→'activeAndAbove'、
- * aux/beam→null。transform/centerLineOps.js commitCLMoveOpが使う（種別名の直書きをそちらに
- * 置かないため。G3ガード）。
- * @param {string} kind
- * @returns {'activeAndAbove'|null}
+ * kindの変換（昇格・降格。fromKind→toKind）が構造同期の起動対象かどうか、対象ならどのscopeで
+ * 反映すべきかを導出する（段階(c)・2026-09-25）。変換前後どちらかの種別が全階へ効く（'all'）なら
+ * 変換全体を'all'で反映する——通り芯化（昇格）は他階の壁参照が変わりうるし、通り芯からの降格も
+ * 同様（他階への複製・回収を伴う）。どちらも'all'でなければ非nullの方（'activeAndAbove'）を使う——
+ * 実務上は片方が必ずFLOOR_SHARED_KINDS（通り芯。'all'）になる組合せ（昇格=center→struct、
+ * 降格=struct→center）のため、昇格・降格は常に'all'になる。両方nullなら（aux⇄aux等）null。
+ * 種別ごとの「操作×種別」の専用表は作らない——移動・追加・削除・変換のいずれもstructuralSyncScopeOfKind
+ * 由来の同じ値になる（暫定分岐structuralSyncScopeOnMoveは段階(c)で削除・一本化）。
+ * @param {string} fromKind
+ * @param {string} toKind
+ * @returns {'all'|'activeAndAbove'|null}
  */
-export function structuralSyncScopeOnMove(kind) {
-  assertKnownKind(kind);
-  if (FLOOR_SHARED_KINDS.includes(kind)) return null;
-  return structuralSyncScopeOfKind(kind);
+export function structuralSyncScopeOfConversion(fromKind, toKind) {
+  const a = structuralSyncScopeOfKind(fromKind);
+  const b = structuralSyncScopeOfKind(toKind);
+  if (a === 'all' || b === 'all') return 'all';
+  return a ?? b;
 }
 
 // ================================================================

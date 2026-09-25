@@ -24,7 +24,7 @@
 import { runInAction } from 'mobx';
 import { CenterLine, CenterLineType, Discipline, centerLineKind } from '@core';
 import { ERR_CL_CONVERT_NO_GRID, ERR_CL_CONVERT_LAST_GRID, ERR_CL_CONVERT_ATTACHED, ERR_CL_CONVERT_DUP, ERR_CL_CONVERT_DUP_DEMOTE } from '../error.js';
-import { sameCoordCounterparts, convertBlockingKinds, isConvertSubject, gridCenterLinesOnAxis } from '../core/centerLineKindPolicy.js';
+import { sameCoordCounterparts, convertBlockingKinds, isConvertSubject, gridCenterLinesOnAxis, BEAM_AXIS_KINDS } from '../core/centerLineKindPolicy.js';
 
 // UIからは到達しない想定の防御的ガード（instanceof/kind/type 不一致）専用。menu が canToGrid/canToCenter
 // で事前に絞り込むため実運用では表示されないが、ガード契約（上記コメント）を満たすため文言を持つ。
@@ -72,7 +72,8 @@ export function attachedShapeExists(ixGraph, shapeGraph, clId) {
  * 昇格（中心線→通り芯）の同期ガード判定のみ（グラフは変更しない）。
  * @returns {string|null} 拒否理由（エラー文言）。問題なければ null。
  */
-export function checkPromoteToGridGuards(graph, structGraph, cl) {
+export function checkPromoteToGridGuards(graph, structGraph, cl, opts = {}) {
+  const excludeBeamAxisIds = opts.excludeBeamAxisIds ?? [];
   if (!(cl instanceof CenterLine)) return ERR_CL_CONVERT_INVALID;
   if (!isConvertSubject(cl, 'promote')) return ERR_CL_CONVERT_INVALID;
   // 直交通り芯の本数は昇格の技術的前提ではない（ユーザー判断で撤去。.claude/data-model.md参照）。
@@ -94,10 +95,14 @@ export function checkPromoteToGridGuards(graph, structGraph, cl) {
   // 全階共有オブジェクト（project.structGraph）、梁芯は階ローカルの実体のため、走査元のグラフが
   // 種別ごとに異なる（走査自体は sameCoordCounterparts 経由に一本化——素の .some 走査を個別に書かない）。
   // 順序（struct優先）は convertBlockingKinds('promote') の並び順どおり。
+  // 発見②・ユーザー裁定・案A・2026-09-25: 同座標の梁芯のうち`opts.excludeBeamAxisIds`に含まれる
+  // id（保護されない壁由来梁芯。呼び出し側centerLineOps.jsが`structural/wallBeamAxes.js`の
+  // `isProtectedWallBeamAxis`で判定済み）は障害物にしない——本ファイルはimport-free規約
+  // （ファイル冒頭コメント）のためwallBeamAxes.jsを直接importせず、判定済みidの配列だけを受け取る。
   for (const blockedKind of convertBlockingKinds('promote')) {
     const scanGraph = blockedKind === 'struct' ? structGraph : graph;
     const dup = sameCoordCounterparts(scanGraph, { centerLineType: cl.centerLineType, value: cl.value, exclude: cl })
-      .find(c => centerLineKind(c) === blockedKind);
+      .find(c => centerLineKind(c) === blockedKind && !(BEAM_AXIS_KINDS.includes(blockedKind) && excludeBeamAxisIds.includes(c.id)));
     if (dup) return ERR_CL_CONVERT_DUP(blockedKind);
   }
   return null;
@@ -108,11 +113,13 @@ export function checkPromoteToGridGuards(graph, structGraph, cl) {
  * @param {PlanGraph} graph        中心線が現在属する階グラフ（アクティブ階）
  * @param {PlanGraph} structGraph  project.structGraph
  * @param {CenterLine} cl
+ * @param {{excludeBeamAxisIds?: string[]}} [opts] - checkPromoteToGridGuardsへそのまま渡す
+ *   （発見②・ユーザー裁定・案A・2026-09-25。保護されない壁由来梁芯のidを渡すと障害物にしない）。
  * @returns {{error: string}|{}}
  */
-export function applyPromoteToGrid(graph, structGraph, cl) {
+export function applyPromoteToGrid(graph, structGraph, cl, opts = {}) {
   return runInAction(() => {
-    const guardError = checkPromoteToGridGuards(graph, structGraph, cl);
+    const guardError = checkPromoteToGridGuards(graph, structGraph, cl, opts);
     if (guardError) return { error: guardError };
 
     // extent参照は通り芯化で無意味になる（通り芯は常にガター～ガターの全幅表示）ため全null化する。

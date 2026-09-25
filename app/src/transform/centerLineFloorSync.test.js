@@ -16,6 +16,7 @@ import { serializeGraph, restoreGraph } from '../graphSnapshot.js';
 import { applyPromoteToGrid } from './centerLineConvert.js';
 import {
   findFloorsWithCounterpartCL, recallPromotedCenterLineDuplicates, propagateGridCenterLineDeletion,
+  absorbWallBeamAxesOnPromote,
 } from './centerLineFloorSync.js';
 
 function makeProjectWithTwoFloors() {
@@ -137,6 +138,94 @@ test('findFloorsWithCounterpartCL: 同一idのCLは重複として報告しな�
   const result = await withPeekOverride(project, store, () => findFloorsWithCounterpartCL(project, activeGraph, cl));
 
   assert.equal(result.length, 0);
+});
+
+// ---- 発見④・ユーザー裁定・案A・2026-09-25: findFloorsWithCounterpartCLのexcludeAbsorbableBeam ----
+
+test('findFloorsWithCounterpartCL: excludeAbsorbableBeam:trueは保護されない壁由来梁芯を相手から除外する', async () => {
+  const { project, activeGraph, otherGraph } = makeProjectWithTwoFloors();
+  otherGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.FUSE, refId: null }); // 保護されない梁芯
+  const cl = activeGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
+  const store = new Map([[otherGraph.plane.id, serializeGraph(otherGraph)]]);
+
+  const withoutExclude = await withPeekOverride(project, store, () => findFloorsWithCounterpartCL(project, activeGraph, cl));
+  assert.equal(withoutExclude.length, 1, '従来どおり（excludeAbsorbableBeam省略）は相手として報告される');
+
+  const withExclude = await withPeekOverride(project, store, () => findFloorsWithCounterpartCL(project, activeGraph, cl, { excludeAbsorbableBeam: true }));
+  assert.equal(withExclude.length, 0, '保護されない梁芯は除外される');
+});
+
+test('findFloorsWithCounterpartCL: excludeAbsorbableBeam:trueでもlockedの部材が乗る梁芯は相手として残る', async () => {
+  const { project, activeGraph, otherGraph } = makeProjectWithTwoFloors();
+  const beamAxis = otherGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.FUSE, refId: null });
+  const y0 = otherGraph.addCenterLine(CenterLineType.HORIZONTAL, 0, { labeled: false, discipline: Discipline.ARCH });
+  otherGraph.addColumn(StructuralMaterialType.WOOD, 'SEC-COL', beamAxis, y0, { dimensionStatus: 'locked' });
+  const cl = activeGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
+  const store = new Map([[otherGraph.plane.id, serializeGraph(otherGraph)]]);
+
+  const result = await withPeekOverride(project, store, () => findFloorsWithCounterpartCL(project, activeGraph, cl, { excludeAbsorbableBeam: true }));
+  assert.equal(result.length, 1, '保護される梁芯は除外されない');
+  assert.equal(result[0].kind, 'beam');
+});
+
+// ---- 発見④・ユーザー裁定・案A・2026-09-25: absorbWallBeamAxesOnPromote ----
+
+test('absorbWallBeamAxesOnPromote: 他階の保護されない壁由来梁芯を吸収撤去しsaveFloorFn・undoRecordsへ記録する', async () => {
+  const { project, activeGraph, otherGraph } = makeProjectWithTwoFloors();
+  const cl = activeGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
+  const beamAxis = otherGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.FUSE, refId: null });
+  const beamAxisId = beamAxis.id;
+  const store = new Map([[otherGraph.plane.id, serializeGraph(otherGraph)]]);
+  const saved = [];
+  const saveFloorFn = async (planeId, bytes) => { saved.push(planeId); store.set(planeId, bytes); };
+
+  const { blockedPlanes } = await withPeekOverride(project, store, () =>
+    absorbWallBeamAxesOnPromote(project, activeGraph, cl, { saveFloorFn })
+  );
+
+  assert.deepEqual(blockedPlanes, []);
+  assert.deepEqual(saved, [otherGraph.plane.id]);
+  const decoded = decodeFloor(project, otherGraph.plane, store.get(otherGraph.plane.id));
+  assert.equal(decoded.shapeMap.has(beamAxisId), false, '保護されない梁芯は撤去される');
+});
+
+test('absorbWallBeamAxesOnPromote: 保護される梁芯がある階を1つでも見つけたら何も変更せずblockedPlanesを返す', async () => {
+  const { project, activeGraph, otherGraph } = makeProjectWithTwoFloors();
+  const cl = activeGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
+  const beamAxis = otherGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.FUSE, refId: null });
+  const y0 = otherGraph.addCenterLine(CenterLineType.HORIZONTAL, 0, { labeled: false, discipline: Discipline.ARCH });
+  otherGraph.addColumn(StructuralMaterialType.WOOD, 'SEC-COL', beamAxis, y0, { dimensionStatus: 'locked' });
+  const store = new Map([[otherGraph.plane.id, serializeGraph(otherGraph)]]);
+  const saved = [];
+  const saveFloorFn = async (planeId, bytes) => { saved.push(planeId); store.set(planeId, bytes); };
+
+  const { blockedPlanes } = await withPeekOverride(project, store, () =>
+    absorbWallBeamAxesOnPromote(project, activeGraph, cl, { saveFloorFn })
+  );
+
+  assert.equal(blockedPlanes.length, 1);
+  assert.equal(blockedPlanes[0].id, otherGraph.plane.id);
+  assert.deepEqual(saved, [], '保護される階が1つでもあれば何も保存しない');
+  const decoded = decodeFloor(project, otherGraph.plane, store.get(otherGraph.plane.id));
+  assert.equal(decoded.shapeMap.has(beamAxis.id), true, '梁芯は無変更');
+});
+
+test('absorbWallBeamAxesOnPromote: 梁芯が無い階・座標が違う階はundoRecordsに積まれない', async () => {
+  const { project, activeGraph, otherGraph } = makeProjectWithTwoFloors();
+  const cl = activeGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
+  otherGraph.addCenterLine(CenterLineType.VERTICAL, 2000, { labeled: false, discipline: Discipline.FUSE, refId: null }); // 別座標
+  const store = new Map([[otherGraph.plane.id, serializeGraph(otherGraph)]]);
+  const saved = [];
+  const saveFloorFn = async (planeId) => { saved.push(planeId); };
+
+  const undoRecords = [];
+  const { blockedPlanes } = await withPeekOverride(project, store, () =>
+    absorbWallBeamAxesOnPromote(project, activeGraph, cl, { undoRecords, saveFloorFn })
+  );
+
+  assert.deepEqual(blockedPlanes, []);
+  assert.deepEqual(saved, []);
+  assert.deepEqual(undoRecords, []);
 });
 
 // ---- recallPromotedCenterLineDuplicates ----

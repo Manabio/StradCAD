@@ -12,12 +12,13 @@
 // **降格の移籍前に複製する**（通り芯が project.structGraph に残っている間に peek しないと、
 // 他階の壁が graphSnapshot.js の resolveCL で解決できず復元時に捨てられる。2026-09-17実測）。
 import { runInAction } from 'mobx';
-import { Discipline, centerLineKind } from '@core';
+import { Discipline, CenterLineType, centerLineKind } from '@core';
 import { sameCoordCounterparts, CROSS_FLOOR_COUNTERPART_KINDS } from '../core/centerLineKindPolicy.js';
 import { floorSwapManager } from '../storage/FloorSwapManager.js';
 import { serializeGraph, restoreGraph } from '../graphSnapshot.js';
 import { saveFloor } from '../storage/db.js';
 import { undoManager } from '../undoManager.js';
+import { findWallBeamAxisCL, isProtectedWallBeamAxis } from '../structural/wallBeamAxes.js';
 
 // アクティブ以外の全 Plane（project.planeMap。検討・屋根 Plane 含む）を返す。
 function otherPlanes(project, activeGraph) {
@@ -43,14 +44,26 @@ function otherPlanes(project, activeGraph) {
  * （centerLineKindPolicy.js「原始事実6」参照）。
  * 1つの階に複数種別が同座標にあるときは、CROSS_FLOOR_COUNTERPART_KINDS の並び順（中心線＞補助線＞
  * 梁芯。centerLineOps.js addCenterLineFromDialog の優先順と同じ規約）で1つ選んで報告する。
+ * 発見④・ユーザー裁定・案A・2026-09-25: `excludeAbsorbableBeam:true`（昇格専用。降格は既存どおり
+ * falseのまま）を渡すと、保護されない壁由来梁芯（`isProtectedWallBeamAxis`がfalse）は相手から除外する
+ * ——`absorbWallBeamAxesOnPromote`が同じ階を吸収撤去するため、ここで重複扱いにする必要が無い。
+ * 相手の識別は`centerLineKind(other)==='beam'`のインライン比較ではなく`findWallBeamAxisCL`が返す
+ * オブジェクトとの同一性比較で行う（G3ガード対策。呼び出し側centerLineOps.jsに種別名を直書きしない
+ * のと同じ理由でこちらも避ける）。
+ * @param {{excludeAbsorbableBeam?: boolean}} [opts]
  * @returns {Promise<Array<{plane: Plane, kind: string}>>} 見つかった Plane と相手種別（0件なら変換して問題ない）
  */
-export async function findFloorsWithCounterpartCL(project, activeGraph, cl) {
+export async function findFloorsWithCounterpartCL(project, activeGraph, cl, { excludeAbsorbableBeam = false } = {}) {
   const result = [];
+  const isVertical = cl.centerLineType === CenterLineType.VERTICAL;
   for (const plane of otherPlanes(project, activeGraph)) {
     const temp = await floorSwapManager.peek(plane, project.structGraph);
+    const absorbableBeamAxis = excludeAbsorbableBeam ? findWallBeamAxisCL(temp, isVertical, cl.value) : null;
+    const isExcludedAbsorbable = (other) =>
+      absorbableBeamAxis != null && other === absorbableBeamAxis && !isProtectedWallBeamAxis(temp, absorbableBeamAxis);
     const counterparts = sameCoordCounterparts(temp, { centerLineType: cl.centerLineType, value: cl.value })
-      .filter(other => other.id !== cl.id && CROSS_FLOOR_COUNTERPART_KINDS.includes(centerLineKind(other)));
+      .filter(other => other.id !== cl.id && CROSS_FLOOR_COUNTERPART_KINDS.includes(centerLineKind(other)))
+      .filter(other => !isExcludedAbsorbable(other));
     if (counterparts.length === 0) continue;
     const kind = CROSS_FLOOR_COUNTERPART_KINDS.find(k => counterparts.some(c => centerLineKind(c) === k));
     result.push({ plane, kind });
@@ -72,8 +85,17 @@ export async function findFloorsWithCounterpartCL(project, activeGraph, cl) {
 // （amendではなく、structGraph・自階の復元と同じエントリに直接組み込む——amendFloorUndoRecordsは
 // undoManager.amendを内部で呼ぶため、まだエントリが無い段階や順序を自分で組みたい呼び出し元には
 // 使えない）、amendに包まれた形ではなく本関数を直接呼べるようにする。
+// 発見④・ユーザー裁定・案A・2026-09-25: 同じ階（planeId）が records に複数回現れうる
+// （promoteCenterToGridWithUndoが「他階の梁芯吸収（absorbWallBeamAxesOnPromote）」と「他階の複製回収
+// （recallPromotedCenterLineDuplicates）」の両方の記録を同じ配列へ積む——ユーザー裁定「同じ配列に
+// 積んでよい」）。redo（'after'）は記録された順（＝実際に変更が起きた順）に適用すれば最後の要素が
+// 最終状態を表すため配列順のままでよいが、undo（'before'）は逆順に適用しないと「後で起きた変更の
+// before（＝先に起きた変更の後の状態）」が「先に起きた変更のbefore（＝真の元の状態）」を上書きして
+// しまい、真の元の状態へ戻らない。単一階が1回しか現れない既存の呼び出し（削除・降格）では順序は
+// 結果に影響しない（各要素が異なる階を指すため）ため、挙動不変のまま安全に適用できる。
 export function applyFloorUndoRecords(project, records, which, saveFloorFn = saveFloor) {
-  for (const rec of records) {
+  const ordered = which === 'before' ? [...records].reverse() : records;
+  for (const rec of ordered) {
     if (project.activePlane?.id === rec.planeId) {
       restoreGraph(project.activeGraph, rec[which]); // undo実行時にその階がアクティブなら生きているグラフへ復元
     } else {
@@ -178,8 +200,61 @@ export async function propagateDemotedCenterLine(project, activeGraph, cl, { loC
 }
 
 /**
- * demoteGridToCenterWithUndo・deleteCenterLineWithUndo 専用の失敗時ロールバック: 複製・伝播フェーズ
- * （propagateDemotedCenterLine・propagateGridCenterLineDeletion）の途中で例外が起きた場合、または
+ * 昇格（中心線→通り芯）の**移籍前**に、アクティブ以外の全Plane（検討・屋根含む）で、この位置の
+ * 壁由来梁芯（discipline:fuse）のうち保護されない（`isProtectedWallBeamAxis`がfalse）ものを吸収撤去する
+ * （発見④・ユーザー裁定・案A・2026-09-25）。自階の吸収撤去（`transform/centerLineOps.js`の
+ * `promoteCenterToGridWithUndo`。段階(c)発見②）と同じ考え方・同じ保護述語を他階へ広げたもの——
+ * 通り芯は全階共通のため、他階にも独立して生成された壁由来梁芯が同座標に残りうる。
+ *
+ * **移籍前に呼ぶこと**（`propagateDemotedCenterLine`と同じ規律）: 他階の壁は`cl.id`を参照するため、
+ * 通り芯化で`cl`を`project.structGraph`へ移した後に他階をpeekすると、その階の壁の
+ * `axisCL`/`clStart`/`clEnd`が`graphSnapshot.js`の`resolveCL`で解決できず復元時に黙って捨てられる。
+ *
+ * 2段階で処理する（保護される階が1つでもあれば無変更のまま拒否理由を返す。N5と同じ「先に判定・
+ * 失敗するなら書き込まない」規律）:
+ *   1. 全階をpeekして梁芯の有無・保護の要否を確認するだけ（変更しない）。
+ *   2. 1つも保護されなければ、実際に撤去してsaveFloorFn・undoRecordsへ記録する。
+ * 撤去は`graph.removeCenterLine`（乗っていたauto柱・梁・基礎は`removeDependentsOfCenterLine`で
+ * 道連れになり、以後の構造同期で作り直される）。`excludedWallBeamAxes`には触れない——手動削除の
+ * 記録ではなく、通り芯化に伴う自然な後始末のため。
+ * 呼び出し側（`promoteCenterToGridWithUndo`）がawaitし、途中（フェーズ2のsaveFloorFn）で例外が
+ * 起きた場合は自前でrollbackFloorRecordsして再throwすること（このファイル自身は例外を握りつぶさない）。
+ * @param {object} project
+ * @param {PlanGraph} activeGraph  昇格を実行する階のグラフ（アクティブ階）
+ * @param {CenterLine} cl          昇格前の中心線（まだ活性階に居る）
+ * @param {{undoRecords?: Array, saveFloorFn?: Function}} [opts]
+ * @returns {Promise<{blockedPlanes: Plane[]}>} 保護される梁芯があった階の一覧（空なら吸収は成功・実施済み）
+ */
+export async function absorbWallBeamAxesOnPromote(project, activeGraph, cl, { undoRecords = [], saveFloorFn = saveFloor } = {}) {
+  const isVertical = cl.centerLineType === CenterLineType.VERTICAL;
+  const targets = [];
+  const blockedPlanes = [];
+  for (const plane of otherPlanes(project, activeGraph)) {
+    const temp = await floorSwapManager.peek(plane, project.structGraph);
+    const beamAxis = findWallBeamAxisCL(temp, isVertical, cl.value);
+    if (!beamAxis) continue;
+    if (isProtectedWallBeamAxis(temp, beamAxis)) {
+      blockedPlanes.push(plane);
+    } else {
+      targets.push({ plane, temp, beamAxis });
+    }
+  }
+  if (blockedPlanes.length > 0) return { blockedPlanes };
+
+  for (const { plane, temp, beamAxis } of targets) {
+    const before = serializeGraph(temp);
+    runInAction(() => { temp.removeCenterLine(beamAxis.id); });
+    const after = serializeGraph(temp);
+    await saveFloorFn(plane.id, after);
+    undoRecords.push({ planeId: plane.id, before, after });
+  }
+  return { blockedPlanes: [] };
+}
+
+/**
+ * demoteGridToCenterWithUndo・deleteCenterLineWithUndo・promoteCenterToGridWithUndo 専用の失敗時
+ * ロールバック: 複製・伝播フェーズ（propagateDemotedCenterLine・propagateGridCenterLineDeletion・
+ * absorbWallBeamAxesOnPromote）の途中で例外が起きた場合、または
  * 直後の本体処理（applyDemoteToCenter等）がエラーを返した場合に、そこまでに saveFloorFn した階を
  * before バイトで書き戻す（best effort）。undoManager には触れない（呼び出し側がまだ undo エントリを
  * 積んでいない段階でのみ使う）。
@@ -220,23 +295,29 @@ export async function rollbackFloorRecords(records, saveFloorFn = saveFloor, pro
  * 捨てられる）。
  * clEccentricities / columnAxisOffsets は触らない（降格時の複製がそもそも設定しないため）。
  *
+ * 段階(c)・2026-09-25: `undoRecords`オプションを追加（`propagateDemotedCenterLine`と同形。
+ * before/afterはundoEntryの有無に関係なく常にundoRecordsへ積む——`undoEntry`が渡されたとき（既存の
+ * 昇格ボタン経路）だけ従来どおり`amendFloorUndoRecords`でamendする。呼び出し側が`undoEntry`を渡さず
+ * `undoRecords`に自前の配列を渡せば、amendを使わないinline方式（本体のundo/redoクロージャの中で
+ * `applyFloorUndoRecords`経由で組み込む）にも対応できる——降格側`propagateDemotedCenterLine`と対称。
  * @param {object} project
  * @param {PlanGraph} activeGraph  昇格を実行した階のグラフ（アクティブ階）
  * @param {CenterLine} cl          昇格後の通り芯（project.structGraph.adoptCenterLine 済み）
- * @param {{undoEntry?: object|null, saveFloorFn?: Function}} [opts]
+ * @param {{undoEntry?: object|null, saveFloorFn?: Function, undoRecords?: Array}} [opts]
+ * @returns {Promise<Array>} undoRecords（呼び出し側が渡した配列、省略時は内部で新規作成したもの）
  */
-export async function recallPromotedCenterLineDuplicates(project, activeGraph, cl, { undoEntry = null, saveFloorFn = saveFloor } = {}) {
-  const undoRecords = [];
+export async function recallPromotedCenterLineDuplicates(project, activeGraph, cl, { undoEntry = null, saveFloorFn = saveFloor, undoRecords = [] } = {}) {
   try {
     for (const plane of otherPlanes(project, activeGraph)) {
       const temp = await floorSwapManager.peek(plane, project.structGraph);
-      const before = undoEntry ? serializeGraph(temp) : null;
+      const before = serializeGraph(temp);
       const released = runInAction(() => temp.releaseCenterLine(cl.id));
       if (!released) continue; // この階に同一id複製が無い → saveFloorせずスキップ
       await saveFloorFn(plane.id, serializeGraph(temp));
-      if (undoEntry) undoRecords.push({ planeId: plane.id, before, after: serializeGraph(temp) });
+      undoRecords.push({ planeId: plane.id, before, after: serializeGraph(temp) });
     }
   } finally {
     amendFloorUndoRecords(project, undoEntry, undoRecords, saveFloorFn);
   }
+  return undoRecords;
 }

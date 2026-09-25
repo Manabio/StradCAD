@@ -375,21 +375,42 @@ export function orphanedWallBeamAxes(graph, sourcesBefore, sourcesAfter) {
     const cl = findWallBeamAxisCL(graph, src.isVertical, src.coord);
     if (!cl || seen.has(cl.id)) continue;
     seen.add(cl.id);
-    if (cl.refId != null) continue;
-    const hasProtectedUserData =
-      graph.columns.some(c => (c.verticalCL.id === cl.id || c.horizontalCL.id === cl.id) && c.dimensionStatus !== 'auto') ||
-      graph.beams.some(b => (b.axisCL.id === cl.id || b.clStart.id === cl.id || b.clEnd.id === cl.id) && b.dimensionStatus !== 'auto') ||
-      graph.footings.some(f => (f.verticalCL.id === cl.id || f.horizontalCL.id === cl.id) && f.dimensionStatus !== 'auto') ||
-      graph.structuralWalls.some(w => w.axisCL.id === cl.id || w.clStart.id === cl.id || w.clEnd.id === cl.id) ||
-      graph.sleeves.some(s => s.hostType === 'beam' &&
-        (s.hostAxisCL?.id === cl.id || s.hostClStart?.id === cl.id || s.hostClEnd?.id === cl.id)) ||
-      graph.columnAxisOffsets.has(cl.id) ||
-      graph.clEccentricities.has(cl.id);
-    if (hasProtectedUserData) continue;
-    if (graph.isReferencedByOtherCL(cl.id)) continue;
+    if (isProtectedWallBeamAxis(graph, cl)) continue;
     result.push(cl);
   }
   return result;
+}
+
+/**
+ * 壁由来梁芯CLが「ユーザーが個別に手を加えた可能性がある」ため保護すべきか（=道連れ削除・吸収の
+ * 対象にしない）を判定する述語。`orphanedWallBeamAxes`（明示的な中心線削除の道連れ撤去）の
+ * 判定本体をそのまま抽出したもの——`transform/centerLineOps.js`の`promoteCenterToGridWithUndo`
+ * （昇格時の同座標梁芯の吸収撤去。段階(c)発見②・ユーザー裁定・案A・2026-09-25）も同じ述語を
+ * 共有する（重複実装しない）。
+ * 保護される条件（いずれか1つでも該当すれば保護＝true）:
+ *   - `cl.refId`が非null（絶対座標の自動生成梁芯はrefIdを持たない）
+ *   - 乗る柱・梁・基礎のいずれかが`dimensionStatus!=='auto'`（手動固定・算出済み）
+ *   - 耐力壁（`graph.structuralWalls`）が乗っている
+ *   - 梁ホストのスリーブ（`graph.sleeves`）が乗っている
+ *   - 柱芯オフセット・CL偏芯の個別設定（`columnAxisOffsets`/`clEccentricities`）がある
+ *   - 他CLの`extentLoRef`/`extentHiRef`/`refId`がこの梁芯を指す（`graph.isReferencedByOtherCL`）
+ * @param {object} graph
+ * @param {import('../core.js').CenterLine} cl 壁由来梁芯CL（呼び出し側で discipline:fuse を確認済みのこと）
+ * @returns {boolean}
+ */
+export function isProtectedWallBeamAxis(graph, cl) {
+  if (cl.refId != null) return true;
+  const hasProtectedUserData =
+    graph.columns.some(c => (c.verticalCL.id === cl.id || c.horizontalCL.id === cl.id) && c.dimensionStatus !== 'auto') ||
+    graph.beams.some(b => (b.axisCL.id === cl.id || b.clStart.id === cl.id || b.clEnd.id === cl.id) && b.dimensionStatus !== 'auto') ||
+    graph.footings.some(f => (f.verticalCL.id === cl.id || f.horizontalCL.id === cl.id) && f.dimensionStatus !== 'auto') ||
+    graph.structuralWalls.some(w => w.axisCL.id === cl.id || w.clStart.id === cl.id || w.clEnd.id === cl.id) ||
+    graph.sleeves.some(s => s.hostType === 'beam' &&
+      (s.hostAxisCL?.id === cl.id || s.hostClStart?.id === cl.id || s.hostClEnd?.id === cl.id)) ||
+    graph.columnAxisOffsets.has(cl.id) ||
+    graph.clEccentricities.has(cl.id);
+  if (hasProtectedUserData) return true;
+  return graph.isReferencedByOtherCL(cl.id);
 }
 
 /** coord に一致（CL_OVERLAP_TOL_MM以内）する通り芯または梁芯（柱アンカー第1候補。

@@ -33,7 +33,7 @@ import {
   STRUCTURAL_ANCHOR_KINDS, BEAM_AXIS_KINDS, SUPPORT_SPAN_COLUMN_KINDS,
   structuralAnchorKinds, isStructuralAnchor, structuralAnchorAt, structuralAnchorCandidates,
   beamAxisAt, beamAxisCenterLines, supportSpanColumnCandidates,
-  FLOOR_SHARED_KINDS, structuralSyncScopeOfKind, structuralSyncScopeOnMove,
+  FLOOR_SHARED_KINDS, structuralSyncScopeOfKind, structuralSyncScopeOfConversion,
 } from './centerLineKindPolicy.js';
 
 // ---- 製品コード（section C）との突き合わせに使う実装 ----
@@ -1612,15 +1612,21 @@ test('【失敗系】structuralSyncScopeOfKind: 未知の種別はthrowする', 
   assert.throws(() => structuralSyncScopeOfKind('wood'), /未知のCL種別: wood/);
 });
 
-// ---- structuralSyncScopeOnMove（段階(b)「中心線移動→構造同期」・2026-09-25） ----
+// ---- structuralSyncScopeOfConversion（段階(c)「昇格・降格→構造同期」・2026-09-25） ----
 
-test('structuralSyncScopeOnMove: center→"activeAndAbove"（structuralSyncScopeOfKindと同じ）、struct→null（通り芯移動は段階(c)で扱う。現状は起動しない）、aux→null、beam→null', () => {
-  assert.equal(structuralSyncScopeOnMove('center'), 'activeAndAbove');
-  assert.equal(structuralSyncScopeOnMove('struct'), null, '通り芯の移動は段階(c)——現状はFLOOR_SHARED_KINDSを早期nullにして起動しない');
-  assert.equal(structuralSyncScopeOnMove('aux'), null);
-  assert.equal(structuralSyncScopeOnMove('beam'), null, '梁芯は専用の追従経路（wallBeamAxisFollow.js）を持つため対象外');
+test('structuralSyncScopeOfConversion: どちらかが"all"なら全体で"all"（昇格center→struct、降格struct→center）', () => {
+  assert.equal(structuralSyncScopeOfConversion('center', 'struct'), 'all', '昇格（中心線→通り芯）');
+  assert.equal(structuralSyncScopeOfConversion('struct', 'center'), 'all', '降格（通り芯→中心線）');
 });
 
-test('【失敗系】structuralSyncScopeOnMove: 未知の種別はthrowする', () => {
-  assert.throws(() => structuralSyncScopeOnMove('wood'), /未知のCL種別: wood/);
+test('structuralSyncScopeOfConversion: どちらも"all"でなければ非nullの方（"activeAndAbove"）を使う', () => {
+  assert.equal(structuralSyncScopeOfConversion('center', 'center'), 'activeAndAbove');
+});
+
+test('structuralSyncScopeOfConversion: 両方nullならnull', () => {
+  assert.equal(structuralSyncScopeOfConversion('aux', 'aux'), null);
+});
+
+test('【失敗系】structuralSyncScopeOfConversion: 未知の種別はthrowする', () => {
+  assert.throws(() => structuralSyncScopeOfConversion('wood', 'struct'), /未知のCL種別: wood/);
 });

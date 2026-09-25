@@ -88,6 +88,34 @@ test('applyPromoteToGrid異常系: 階グラフの同座標・同軸に梁芯（
   assert.equal(graph.shapeMap.has(beam.id), true, '梁芯は無傷');
 });
 
+test('applyPromoteToGrid: opts.excludeBeamAxisIdsに含まれる梁芯は障害物にしない（発見②・ユーザー裁定・案A・2026-09-25。保護判定isProtectedWallBeamAxisはcenterLineOps.js側の責務——本ファイルはimport-free規約のため持ち込まない）', () => {
+  const { project, graph } = makeProjectWithGraph();
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: true, discipline: Discipline.STRUCT });
+  const cl   = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
+  const beam = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.FUSE });
+
+  const blocked = applyPromoteToGrid(graph, project.structGraph, cl);
+  assert.equal(blocked.error, ERR_CL_CONVERT_DUP('beam'), '除外を渡さなければ従来どおり拒否される');
+  assert.equal(graph.shapeMap.has(cl.id), true, '拒否時は無変更');
+
+  const result = applyPromoteToGrid(graph, project.structGraph, cl, { excludeBeamAxisIds: [beam.id] });
+  assert.deepEqual(result, {}, '除外指定した梁芯は障害物にならず昇格が成功する');
+  assert.equal(project.structGraph.shapeMap.get(cl.id), cl, 'structGraphへ同一idで移籍する');
+  assert.equal(graph.shapeMap.has(beam.id), true, 'applyPromoteToGrid自体は梁芯を撤去しない（撤去は呼び出し側centerLineOps.jsの責務）');
+});
+
+test('checkPromoteToGridGuards: opts.excludeBeamAxisIdsに無い梁芯（同座標の別の梁芯）は従来どおり障害物のまま', () => {
+  const { project, graph } = makeProjectWithGraph();
+  const cl = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
+  const beam = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.FUSE });
+  const otherBeamId = 'not-this-beam-id';
+
+  const result = checkPromoteToGridGuards(graph, project.structGraph, cl, { excludeBeamAxisIds: [otherBeamId] });
+  assert.equal(result, ERR_CL_CONVERT_DUP('beam'));
+  assert.ok(graph.shapeMap.has(beam.id));
+});
+
 test('applyPromoteToGrid異常系: structGraphに同座標・同軸の通り芯が既にあればERR_CL_DUPLICATEでグラフ無変更（F2）', () => {
   const { project, graph } = makeProjectWithGraph();
   project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
