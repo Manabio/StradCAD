@@ -196,23 +196,39 @@ export async function deleteCenterLineWithUndo(graph, project, cl, opts = {}) {
     return { toast: null };
   }
 
+  // 非通り芯（中心線・補助線・梁芯）は種別ポリシーから導いたscopeで構造同期を起動する
+  // （段階(b)・実機報告2026-09-25: tategu-test3.stqで中心線を削除すると壁交点柱が残ったまま
+  // だったバグの修正——.claude/structural-model.md「起動点」節参照）。中心線は
+  // structuralSyncScopeOfKind('center')==='activeAndAbove'（現状は'all'と同じ内部実装。段階(b)で
+  // 自階＋上階だけの反映に絞る予定）。補助線・梁芯はnull（補助線は段階(d)、梁芯は専用経路
+  // structural/wallBeamAxes.js。条件10で二重に動かさない）——それ以外の非通り芯削除では
+  // 従来どおりlistenerを呼ばない。
+  const scope = structuralSyncScopeOfKind(centerLineKind(cl));
+  const notify = () => structuralSyncListener?.(graph, project, scope);
+
   const before = serializeGraph(graph);
   // 梁芯CLの削除は「壁由来の梁芯自動生成」に対する明示的な手動削除として扱う——次回のモード境界
   // 再計算で元の座標に再生成されないよう、座標ベースの除外集合へ記録する（壁の位置自体は削除しない
   // ため、記録しないと自動生成が復活させてしまう）。キーは structural/wallBeamAxes.js と同じ形式。
-  // 非通り芯（中心線・補助線・梁芯）の削除では構造同期リスナーを呼ばない（段階(a)の対象外。
-  // 段階(b)で中心線の削除を通り芯と同じ扱いにする——.claude/structural-model.md参照）。
   runInAction(() => {
     if (centerLineKind(cl) === 'beam') {
       graph.excludedWallBeamAxes.add(wallBeamAxisExcludeKey(cl.centerLineType === CenterLineType.VERTICAL, cl.effectiveValue));
     }
+    // graph.removeCenterLine は内部で detachFromCenterLine（壁端・extent参照の切り離し）→
+    // _teardownCenterLine（removeDependentsOfCenterLineで柱・梁・耐力壁・基礎・スリーブを撤去
+    // →Intersection撤去）を行うため、通り芯削除のように別途removeDependentsOfCenterLineを
+    // 呼ぶ必要はない——この1行の時点で壁位置は既に確定済み（構造同期の前提を満たす）。
+    // 中心線は階固有の実体で他階からは参照されない（昇格・降格の同一id複製は別オブジェクト
+    // ——transform/centerLineFloorSync.js propagateDemotedCenterLine/recallPromotedCenterLineDuplicates
+    // 参照）ため、通り芯削除と違い他階への伝播（propagate*）は不要。
     graph.removeCenterLine(cl.id);
   });
   const after = serializeGraph(graph);
   undoManager.push(
-    () => restoreGraph(graph, before),
-    () => restoreGraph(graph, after),
+    () => { restoreGraph(graph, before); if (scope) notify(); },
+    () => { restoreGraph(graph, after); if (scope) notify(); },
   );
+  if (scope) notify();
   return { toast: null };
 }
 

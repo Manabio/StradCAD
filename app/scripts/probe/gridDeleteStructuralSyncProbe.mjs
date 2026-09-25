@@ -206,7 +206,7 @@ for (const cand of candidates) {
   if (diffs.length > 0) {
     chosenId = cand.id;
     chosenLabel = cand.label;
-    console.log(`対象通り芯: ${chosenLabel}（配線あり／なしで${diffs.length}階に差分。検出力あり）`);
+    console.log(`対象通り芯: ${chosenLabel}（配線あり／なしで${diffs.length}平面に差分。検出力あり）`);
     break;
   }
 }

@@ -256,9 +256,40 @@ test('【失敗系】deleteCenterLineWithUndo: 軸最後の通り芯を拒否し
   }
 });
 
-test('deleteCenterLineWithUndo: 非通り芯（中心線・補助線・梁芯）の削除は構造同期リスナーを呼ばない（段階(a)。段階(b)で反転させる仕様のピン留め）', async () => {
+// 段階(b)・実機報告2026-09-25（tategu-test3.stqで中心線削除後に壁交点柱が残る）の修正:
+// 「非通り芯の削除はlistener 0回」というピン留めを中心線だけ反転する（補助線・梁芯は0回のまま）。
+test('deleteCenterLineWithUndo: 中心線の削除は構造同期リスナーを(graph, project, "activeAndAbove")で呼ぶ（確定1回・undo1回・redo1回＝計3回。実機報告2026-09-25の修正）', async () => {
   const graph = makeGraph();
-  const centerCL = graph.addCenterLine(CenterLineType.VERTICAL,   1000, { labeled: false, discipline: Discipline.ARCH });
+  const centerCL = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
+  const centerCLId = centerCL.id;
+  const project = {};
+
+  const calls = [];
+  setCenterLineStructuralListener((g, p, scope) => calls.push({ g, p, scope }));
+  try {
+    const { toast } = await deleteCenterLineWithUndo(graph, project, centerCL);
+    assert.equal(toast, null);
+    assert.equal(calls.length, 1, '削除確定直後に1回呼ばれるはず');
+    assert.equal(calls[0].g, graph);
+    assert.equal(calls[0].p, project);
+    assert.equal(calls[0].scope, 'activeAndAbove', 'structuralSyncScopeOfKind("center")の結果がそのまま渡るはず');
+
+    undoManager.undo();
+    assert.equal(calls.length, 2, 'undoでも1回呼ばれるはず');
+    assert.equal(calls[1].scope, 'activeAndAbove');
+    assert.equal(graph.shapeMap.has(centerCLId), true, 'undoで中心線が復元される');
+
+    undoManager.redo();
+    assert.equal(calls.length, 3, 'redoでも1回呼ばれるはず');
+    assert.equal(calls[2].scope, 'activeAndAbove');
+    assert.equal(graph.shapeMap.has(centerCLId), false, 'redoで再び削除される');
+  } finally {
+    setCenterLineStructuralListener(null);
+  }
+});
+
+test('deleteCenterLineWithUndo: 補助線・梁芯の削除は構造同期リスナーを呼ばない（段階(a)のピン留め継続。補助線はstructuralSyncScopeOfKindがnull=段階(d)、梁芯は専用経路のため対象外）', async () => {
+  const graph = makeGraph();
   const auxCL    = graph.addCenterLine(CenterLineType.HORIZONTAL, 2000, { labeled: false, lineType: 'dashed' });
   const beamCL   = graph.addCenterLine(CenterLineType.VERTICAL,   3000, { labeled: false, discipline: Discipline.FUSE });
   const project = {};
@@ -266,10 +297,51 @@ test('deleteCenterLineWithUndo: 非通り芯（中心線・補助線・梁芯）
   let calls = 0;
   setCenterLineStructuralListener(() => { calls++; });
   try {
-    await deleteCenterLineWithUndo(graph, project, centerCL);
     await deleteCenterLineWithUndo(graph, project, auxCL);
     await deleteCenterLineWithUndo(graph, project, beamCL);
-    assert.equal(calls, 0, '段階(a)は通り芯以外で構造同期リスナーを呼ばないはず');
+    assert.equal(calls, 0, '補助線・梁芯の削除では構造同期リスナーを呼ばないはず');
+  } finally {
+    setCenterLineStructuralListener(null);
+  }
+});
+
+test('【失敗系】deleteCenterLineWithUndo: 中心線削除で構造同期リスナー未設定（null）でも例外なく削除・undo・redoできる', async () => {
+  const graph = makeGraph();
+  const centerCL = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
+  const centerCLId = centerCL.id;
+  const project = {};
+
+  await assert.doesNotReject(() => deleteCenterLineWithUndo(graph, project, centerCL));
+  assert.equal(graph.shapeMap.has(centerCLId), false);
+  assert.doesNotThrow(() => undoManager.undo());
+  assert.equal(graph.shapeMap.has(centerCLId), true);
+  assert.doesNotThrow(() => undoManager.redo());
+  assert.equal(graph.shapeMap.has(centerCLId), false);
+});
+
+test('deleteCenterLineWithUndo: 中心線を参照する自階の柱は削除直後に撤去され、構造同期リスナーも1回呼ばれる（実機の症状＝参照しない壁交点柱が残る件の再現はprobeが担保）', async () => {
+  // graph.removeCenterLine は内部で detachFromCenterLine→_teardownCenterLine
+  // （removeDependentsOfCenterLine）を行うため、この柱は「構造同期を待たずとも」削除直後に
+  // 撤去される（読んで確認済み。通り芯削除のように別途removeDependentsOfCenterLineを呼ぶ必要は
+  // 無い）——実機で「柱が残る」ように見えたのは、構造同期（recompute/reflect）自体が
+  // 一切起動しておらず、削除に伴う他の副作用（隣接候補の再評価等）が反映されなかったため
+  // （notify()が呼ばれていなかった。今回の修正対象）。
+  const graph = makeGraph();
+  const y0 = graph.addCenterLine(CenterLineType.HORIZONTAL, 0, { labeled: false, discipline: Discipline.ARCH });
+  const centerCL = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
+  const column = graph.addColumn(StructuralMaterialType.WOOD, 'SEC-COL', centerCL, y0);
+  const project = {};
+
+  let calls = 0;
+  setCenterLineStructuralListener(() => { calls++; });
+  try {
+    const { toast } = await deleteCenterLineWithUndo(graph, project, centerCL);
+    assert.equal(toast, null);
+    assert.equal(graph.columnMap.has(column.id), false, '中心線を参照する柱は削除直後に撤去されるはず');
+    assert.equal(calls, 1, '構造同期リスナーが1回呼ばれるはず');
+
+    undoManager.undo();
+    assert.equal(graph.columnMap.has(column.id), true, 'undoで柱が復元されるはず');
   } finally {
     setCenterLineStructuralListener(null);
   }
