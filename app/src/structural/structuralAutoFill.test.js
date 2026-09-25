@@ -3,9 +3,13 @@
 // makeSwitchbackFixtureと同一構成（コメントも参照。sections:[6,1,6]→n1=6・totalSteps=12）。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { runInAction } from 'mobx';
 import { Plane, PlanGraph, Project, CenterLineType, Discipline, StairType, StructuralMaterialType } from '../core.js';
 import { generateRoomWallsFromOutline } from '../finish/wallGeneration.js';
-import { autoFillStairLandingBeams, autoFillBeamsForStructure, autoFillStructuralGrid, beamAxisCenterLines } from './structuralAutoFill.js';
+import {
+  autoFillStairLandingBeams, autoFillBeamsForStructure, autoFillStructuralGrid, beamAxisCenterLines,
+  autoFillColumns, autoFillBeams, autoFillFootings, autoFillRoofBeams,
+} from './structuralAutoFill.js';
 import { TRADITIONAL_WOOD_STRUCTURE } from './structureRules.js';
 import { selfWallSegments } from './wallBeamAxes.js';
 
@@ -41,6 +45,113 @@ test('beamAxisCenterLines: core/centerLineKindPolicy.jsへの委譲後もcenterL
   const beamH = graph.addCenterLine(CenterLineType.HORIZONTAL, 2000, { labeled: false, discipline: Discipline.FUSE });
   graph.addCenterLine(CenterLineType.VERTICAL, 3000, { labeled: false, discipline: Discipline.ARCH }); // 中心線は含まない
   assert.deepEqual(beamAxisCenterLines(graph), [beamV, beamH]);
+});
+
+// ---- 撤去段（一般則。ユーザー裁定・案A・2026-09-25）: autoFillColumns/autoFillBeams/autoFillFootings
+// （S造/RC造のgridIntersections方式）はADD-ONLYのため、通り芯が降格・削除されて候補キー集合から
+// 外れても、そのキーに紐づくauto柱・梁・基礎はそれまで自然には消えなかった（gridAddStructuralSyncProbe.mjs
+// のA4で発見）。在来木造のwoodAutoFill.jsの撤去ループと同型の対称撤去を足す。----
+
+test('autoFillColumns: 通り芯を降格すると、その位置のauto柱は撤去されlocked柱は保護される', () => {
+  const { graph, x2, y1, y2 } = makeGridGraph('S造');
+  const first = autoFillColumns(graph, GRID_PROJECT, null);
+  assert.equal(first.created.length, 4, '4交点に柱が立つ');
+  assert.deepEqual(first.removed, []);
+
+  const colAtX2Y1 = graph.columns.find(c => c.verticalCL === x2 && c.horizontalCL === y1);
+  const colAtX2Y2 = graph.columns.find(c => c.verticalCL === x2 && c.horizontalCL === y2);
+  runInAction(() => {
+    colAtX2Y1.dimensionStatus = 'locked'; // ユーザーが手動固定した想定
+    x2.discipline = Discipline.ARCH; x2.labeled = false; // 通り芯→中心線への降格を模す（gridXsから外れる）
+  });
+
+  const second = autoFillColumns(graph, GRID_PROJECT, null);
+  assert.equal(second.created.length, 0, '新規交点は無い');
+  assert.deepEqual(second.removed, [colAtX2Y2.id], 'lockedでない側だけ撤去される');
+  assert.equal(graph.columnMap.has(colAtX2Y1.id), true, 'locked柱は残る');
+  assert.equal(graph.columnMap.has(colAtX2Y2.id), false, 'auto柱は撤去される');
+
+  const third = autoFillColumns(graph, GRID_PROJECT, null);
+  assert.deepEqual(third, { created: [], removed: [] }, '2回目の撤去後はもう一度呼んでも変化が無い（冪等）');
+});
+
+test('【失敗系】autoFillColumns: 候補キー集合にある柱（現存する通り芯交点）は撤去されない', () => {
+  const { graph } = makeGridGraph('S造');
+  const first = autoFillColumns(graph, GRID_PROJECT, null);
+  assert.equal(first.created.length, 4);
+  const second = autoFillColumns(graph, GRID_PROJECT, null);
+  assert.deepEqual(second, { created: [], removed: [] }, '通り芯を何も変えていなければ撤去は起きない');
+});
+
+test('autoFillBeams: 通り芯を降格すると、その辺のauto梁（同role）は撤去されるがlocked梁・別roleの梁は残る', () => {
+  const { graph, x1, x2, y1 } = makeGridGraph('S造');
+  const firstPrimary = autoFillBeams(graph, GRID_PROJECT, 'primary', null);
+  assert.equal(firstPrimary.created.length, 4);
+
+  // 別role（foundation）の梁を直接1本置く（primary側と同じ辺。role跨ぎで巻き込まないことの確認用。
+  // 実運用では基礎伏図と通常階は別グラフのため同居しないが、role分離ロジック自体を単体で検証する）。
+  const foundationBeam = graph.addBeam(StructuralMaterialType.RC, 'SEC-FBEAM', y1, false, x1, x2, { role: 'foundation' });
+
+  // x2に接続するprimary梁（axisCL===x2 の縦梁1本・clEnd===x2 の横梁2本＝計3本）のうち1本だけをlocked化。
+  const primaryAtX2 = graph.beams.filter(b => b.role === 'primary' && (b.axisCL === x2 || b.clStart === x2 || b.clEnd === x2));
+  assert.equal(primaryAtX2.length, 3, 'x2に接続するprimary梁は縦1本・横2本の計3本のはず');
+  const [lockedBeam, ...toBeRemoved] = primaryAtX2;
+  runInAction(() => {
+    lockedBeam.dimensionStatus = 'locked'; // ユーザーが手動固定した想定
+    x2.discipline = Discipline.ARCH; x2.labeled = false; // 通り芯→中心線への降格を模す
+  });
+
+  const secondPrimary = autoFillBeams(graph, GRID_PROJECT, 'primary', null);
+  assert.deepEqual(secondPrimary.created, [], '新規辺は無い');
+  assert.deepEqual(secondPrimary.removed.sort(), toBeRemoved.map(b => b.id).sort(), 'lockedの1本を除く2本が撤去される');
+  assert.equal(graph.beamMap.has(lockedBeam.id), true, 'locked梁は残る');
+  assert.equal(graph.beamMap.has(foundationBeam.id), true, 'primaryの撤去はfoundation梁（別role）を巻き込まない');
+
+  const thirdPrimary = autoFillBeams(graph, GRID_PROJECT, 'primary', null);
+  assert.deepEqual(thirdPrimary, { created: [], removed: [] }, '2回目以降は変化が無い（冪等）');
+});
+
+test('autoFillFootings: 通り芯を降格すると、その交点のauto独立フーチングは撤去されlocked基礎は保護される', () => {
+  const { graph, x2, y1, y2 } = makeGridGraph('S造');
+  const first = autoFillFootings(graph, null);
+  assert.equal(first.created.length, 4);
+
+  const footingAtX2Y1 = graph.footings.find(f => f.verticalCL === x2 && f.horizontalCL === y1);
+  const footingAtX2Y2 = graph.footings.find(f => f.verticalCL === x2 && f.horizontalCL === y2);
+  runInAction(() => {
+    footingAtX2Y1.dimensionStatus = 'locked';
+    x2.discipline = Discipline.ARCH; x2.labeled = false; // 降格
+  });
+
+  const second = autoFillFootings(graph, null);
+  assert.equal(second.created.length, 0);
+  assert.deepEqual(second.removed, [footingAtX2Y2.id]);
+  assert.equal(graph.footingMap.has(footingAtX2Y1.id), true, 'locked基礎は残る');
+  assert.equal(graph.footingMap.has(footingAtX2Y2.id), false, 'auto基礎は撤去される');
+});
+
+test('autoFillRoofBeams: 通り芯を降格すると、その辺のauto軒桁（role:eaves）は撤去されるがlocked軒桁は残る（撤去段。ユーザー裁定・案A・2026-09-25。QA指摘m-1）', () => {
+  const { graph, x2 } = makeGridGraph('S造');
+  const first = autoFillRoofBeams(graph, GRID_PROJECT, 'S造', null);
+  assert.equal(first.created.length, 4, '4辺に軒桁が立つ');
+  assert.deepEqual(first.removed, []);
+
+  // x2に接続する軒桁（axisCL===x2 の縦1本・clStart/clEnd===x2 の横2本＝計3本）のうち1本だけをlocked化。
+  const eavesAtX2 = graph.beams.filter(b => b.role === 'eaves' && (b.axisCL === x2 || b.clStart === x2 || b.clEnd === x2));
+  assert.equal(eavesAtX2.length, 3, 'x2に接続する軒桁は縦1本・横2本の計3本のはず');
+  const [lockedBeam, ...toBeRemoved] = eavesAtX2;
+  runInAction(() => {
+    lockedBeam.dimensionStatus = 'locked'; // ユーザーが手動固定した想定
+    x2.discipline = Discipline.ARCH; x2.labeled = false; // 通り芯→中心線への降格を模す
+  });
+
+  const second = autoFillRoofBeams(graph, GRID_PROJECT, 'S造', null);
+  assert.deepEqual(second.created, [], '新規辺は無い');
+  assert.deepEqual(second.removed.sort(), toBeRemoved.map(b => b.id).sort(), 'lockedの1本を除く2本が撤去される');
+  assert.equal(graph.beamMap.has(lockedBeam.id), true, 'locked軒桁は残る');
+
+  const third = autoFillRoofBeams(graph, GRID_PROJECT, 'S造', null);
+  assert.deepEqual(third, { created: [], removed: [] }, '2回目以降は変化が無い（冪等）');
 });
 
 test('autoFillBeamsForStructure: role!=="primary"（基礎梁等）は在来木造でも通り芯グリッド方式のまま（wallSegmentsは使われない）', () => {

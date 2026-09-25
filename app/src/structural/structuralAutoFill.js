@@ -1,4 +1,4 @@
-import { StructuralMaterialType, CenterLineType, columnSlotKey, spanKey, findHostPrimaryBeam } from '../core.js';
+import { StructuralMaterialType, CenterLineType, columnSlotKey, spanKey, findHostPrimaryBeam, IndependentFooting } from '../core.js';
 import { beamAxisCenterLines as policyBeamAxisCenterLines } from '../core/centerLineKindPolicy.js';
 import { DEFAULT_SECTION_BY_MATERIAL, DEFAULT_BEAM_SECTION_BY_MATERIAL } from './memberCatalog.js';
 import { findSectionEntry } from './sectionCatalog.js';
@@ -103,18 +103,35 @@ export function computeGridSpans(graph) {
  *  柱は物理的に立つ自階のgraphに格納するため、材料も自階基準（resolveDefaultMaterialType）で導出する。
  *  基礎伏図でも呼ぶ（最下階の柱も自階分として生成する）。屋根専用平面では呼ばない。 */
 export function autoFillColumns(graph, project, wallGate = null) {
-  if (!isStructureSpecified(graph, project)) return []; // 主構造未確定の間は生成しない
+  if (!isStructureSpecified(graph, project)) return { created: [], removed: [] }; // 主構造未確定の間は生成しない
   const rules = rulesFor(effectiveStructure(graph, project));
   const materialType = rules.baseMaterial;
+  const intersections = computeGridIntersections(graph);
+  const validKeys = new Set(intersections.map(i => i.key));
   const existing = new Set(graph.columns.map(c => columnSlotKey(c.verticalCL, c.horizontalCL)));
   const created = [];
-  for (const { verticalCL, horizontalCL, key } of computeGridIntersections(graph)) {
+  for (const { verticalCL, horizontalCL, key } of intersections) {
     if (existing.has(key) || graph.excludedColumnSlots.has(key)) continue;
     // 建物フットプリント外の交点には柱を作らない（外壁線で有無を取捨。wallGate.js 参照）。
     if (wallGate && !wallGate.intersectionInBuilding(verticalCL, horizontalCL)) continue;
     created.push(graph.addColumn(materialType, rules.defaultSections.column, verticalCL, horizontalCL, {}));
   }
-  return created;
+  // 撤去段（一般則。ユーザー裁定・案A・2026-09-25）: 通り芯グリッド交点方式（gridIntersections。
+  // 在来木造の壁交点方式=autoFillWoodColumnsは別に撤去ループを持つ）の柱は、生成が「候補キーに無ければ
+  // 作る」ADD-ONLYのため、通り芯が消えて候補キー集合が変わっても古いキーに紐づくauto柱は自然には
+  // 消えない（`removeDependentsOfCenterLine`のJSDoc参照。実測: gridAddStructuralSyncProbe.mjsのA4）。
+  // locked／手動固定（dimensionStatus!=='auto'）は保護。excludedColumnSlotsには触れない——手動削除の
+  // 記録ではなく、通り芯の消滅に追従する自然な後始末のため。
+  const removed = [];
+  for (const column of graph.columns) {
+    // 杭（role:'foundation'）は自動生成の対象外（本関数は作らない）なので撤去対象からも外す
+    // （woodAutoFill.js:729の撤去ループと同じ保護。手動配置された杭を誤って巻き込まない）。
+    if (column.role === 'foundation' || column.dimensionStatus !== 'auto') continue;
+    if (validKeys.has(columnSlotKey(column.verticalCL, column.horizontalCL))) continue;
+    graph.columnMap.delete(column.id);
+    removed.push(column.id);
+  }
+  return { created, removed };
 }
 
 /** 柱の自動生成を主構造ルールの選択子（columnPlacement）で振り分ける単一の入口。
@@ -131,7 +148,7 @@ export function autoFillColumnsForStructure(graph, project, wallGate = null, abo
   if (!isStructureSpecified(graph, project)) return { created: [], removed: [] };
   const rules = rulesFor(effectiveStructure(graph, project));
   if (rules.columnPlacement === 'wallIntersections') return autoFillWoodColumns(graph, project, wallGate, aboveColumns, wallSegments, aboveBeamSegments, belowColumns, wallSourceCache);
-  return { created: autoFillColumns(graph, project, wallGate), removed: [] };
+  return autoFillColumns(graph, project, wallGate);
 }
 
 /** 柱が存在しない交点を検出し、独立フーチングをデフォルト材料・断面で自動生成する（除外集合のスロットはスキップ）。
@@ -139,15 +156,29 @@ export function autoFillColumnsForStructure(graph, project, wallGate = null, abo
  *  独立フーチングは主構造（S造/木造等）に関わらず常にRC造（地中の基礎はRC造という建築の慣習に合わせたもの）。 */
 export function autoFillFootings(graph, wallGate = null) {
   const materialType = StructuralMaterialType.RC;
+  const intersections = computeGridIntersections(graph);
+  const validKeys = new Set(intersections.map(i => i.key));
   const existing = new Set(graph.footings.map(f => columnSlotKey(f.verticalCL, f.horizontalCL)));
   const created = [];
-  for (const { verticalCL, horizontalCL, key } of computeGridIntersections(graph)) {
+  for (const { verticalCL, horizontalCL, key } of intersections) {
     if (existing.has(key) || graph.excludedFootingSlots.has(key)) continue;
     // 建物フットプリント外の交点には独立フーチングを作らない（柱と同じゲート。wallGate.js 参照）。
     if (wallGate && !wallGate.intersectionInBuilding(verticalCL, horizontalCL)) continue;
     created.push(graph.addFooting('independent', DEFAULT_SECTION_BY_MATERIAL[materialType], verticalCL, horizontalCL, { materialType }));
   }
-  return created;
+  // 撤去段（一般則。ユーザー裁定・案A・2026-09-25）: autoFillColumnsと同じADD-ONLYの穴を塞ぐ。
+  // 対象は本関数が作る独立フーチング（IndependentFooting）のみ——柱脚（ColumnBase）は本関数が
+  // 生成しない別種の実体のため触らない。locked／手動固定（dimensionStatus!=='auto'）は保護。
+  // excludedFootingSlotsには触れない。
+  const removed = [];
+  for (const footing of graph.footings) {
+    if (!(footing instanceof IndependentFooting)) continue;
+    if (footing.dimensionStatus !== 'auto') continue;
+    if (validKeys.has(columnSlotKey(footing.verticalCL, footing.horizontalCL))) continue;
+    graph.footingMap.delete(footing.id);
+    removed.push(footing.id);
+  }
+  return { created, removed };
 }
 
 // べた基礎マットスラブの既定厚(mm)は主構造ルール（structureRules.js foundation.sectionDefaults.matThickness＝
@@ -196,15 +227,28 @@ export function autoFillBeams(graph, project, role = 'primary', wallGate = null)
   const rules = rulesFor(effectiveStructure(graph, project));
   const materialType = role === 'foundation' ? StructuralMaterialType.RC : rules.baseMaterial;
   const section = role === 'foundation' ? DEFAULT_BEAM_SECTION_BY_MATERIAL[materialType] : rules.defaultSections.beam;
+  const spans = computeGridSpans(graph);
+  const validKeys = new Set(spans.map(s => s.key));
   const existing = new Set(graph.beams.map(b => spanKey(b.axisCL, b.clStart, b.clEnd)));
   const created = [];
-  for (const { axisCL, isVertical, clStart, clEnd, key } of computeGridSpans(graph)) {
+  for (const { axisCL, isVertical, clStart, clEnd, key } of spans) {
     if (existing.has(key) || graph.excludedBeamSlots.has(key)) continue;
     // 建物フットプリント外の辺（どの対象階の屋内にも接しない辺）には梁を作らない（外壁線で有無を取捨。wallGate.js 参照）。
     if (wallGate && !wallGate.spanInBuilding(axisCL, isVertical, clStart, clEnd)) continue;
     created.push(graph.addBeam(materialType, section, axisCL, isVertical, clStart, clEnd, { role }));
   }
-  return created;
+  // 撤去段（一般則。ユーザー裁定・案A・2026-09-25）: autoFillColumnsと同じADD-ONLYの穴を塞ぐ。
+  // 対象は呼び出し時のroleと一致するauto梁だけ（beamMapは'primary'/'foundation'/'eaves'/'secondary'等
+  // 複数roleを共有するため、他roleの梁を誤って巻き込まないようroleで絞る）。locked／手動固定
+  // （dimensionStatus!=='auto'）は保護。excludedBeamSlotsには触れない。
+  const removed = [];
+  for (const beam of graph.beams) {
+    if (beam.role !== role || beam.dimensionStatus !== 'auto') continue;
+    if (validKeys.has(spanKey(beam.axisCL, beam.clStart, beam.clEnd))) continue;
+    graph.beamMap.delete(beam.id);
+    removed.push(beam.id);
+  }
+  return { created, removed };
 }
 
 /** 梁(role:'primary')の自動生成を主構造ルールの選択子（beamPlacement）で振り分ける単一の入口。
@@ -227,7 +271,7 @@ export function autoFillBeamsForStructure(graph, project, role, wallGate = null,
   if (role === 'primary' && rulesFor(effectiveStructure(graph, project)).beamPlacement === 'wallRuns') {
     return autoFillWoodWallBeams(graph, project, wallSegments, wallGate, belowColumns, selfGate, freeEndGraph ?? graph, wallSourceCache);
   }
-  return { created: autoFillBeams(graph, project, role, wallGate), removed: [] };
+  return autoFillBeams(graph, project, role, wallGate);
 }
 
 // 梁芯CL（direct discipline:'fuse'、labeled:false）の追加座標許容誤差(mm)。
@@ -292,15 +336,27 @@ export function autoFillSecondaryBeams(graph, project) {
 export function autoFillRoofBeams(graph, project, belowMainStructure, wallGate = null) {
   const rules = rulesFor(belowMainStructure);
   const materialType = rules.baseMaterial;
+  const spans = computeGridSpans(graph);
+  const validKeys = new Set(spans.map(s => s.key));
   const existing = new Set(graph.beams.map(b => spanKey(b.axisCL, b.clStart, b.clEnd)));
   const created = [];
-  for (const { axisCL, isVertical, clStart, clEnd, key } of computeGridSpans(graph)) {
+  for (const { axisCL, isVertical, clStart, clEnd, key } of spans) {
     if (existing.has(key) || graph.excludedBeamSlots.has(key)) continue;
     // 軒桁も直下階のフットプリント（外壁線）でゲートする（wallGate は直下の最上階基準。wallGate.js 参照）。
     if (wallGate && !wallGate.spanInBuilding(axisCL, isVertical, clStart, clEnd)) continue;
     created.push(graph.addBeam(materialType, rules.defaultSections.beam, axisCL, isVertical, clStart, clEnd, { role: 'eaves' }));
   }
-  return created;
+  // 撤去段（一般則。ユーザー裁定・案A・2026-09-25。autoFillColumns/autoFillBeams/autoFillFootingsと
+  // 同じADD-ONLYの穴——role:'eaves'の軒桁も通り芯グリッド辺方式のため同型の症状が出る。
+  // gridConvertStructuralSyncProbe.mjsのC5（13.stqの屋根平面）で発見）。
+  const removed = [];
+  for (const beam of graph.beams) {
+    if (beam.role !== 'eaves' || beam.dimensionStatus !== 'auto') continue;
+    if (validKeys.has(spanKey(beam.axisCL, beam.clStart, beam.clEnd))) continue;
+    graph.beamMap.delete(beam.id);
+    removed.push(beam.id);
+  }
+  return { created, removed };
 }
 
 /** 軒桁を含む横架材(role:'eaves')の梁幅b・梁成Dを、自グラフ（屋上伏図）の最長スパンから再算定する。
@@ -444,8 +500,10 @@ export function autoFillStructuralGrid(graph, project, belowMainStructure, wallG
   const newColumns = columnsResult.created;
   const removedColumns = columnsResult.removed;
   // ベース（独立フーチング）は分類（表A）に加え、基礎種別でもゲートする（木造べた基礎時はベースなし）。
-  const newFootings = (foundation && ownSpecified && structureHasMemberKind(MEMBER_KIND.INDEPENDENT_FOOTING, structure)
-    && foundationGeneratesBase(structure, foundationType)) ? autoFillFootings(graph, wallGate) : [];
+  const footingsResult = (foundation && ownSpecified && structureHasMemberKind(MEMBER_KIND.INDEPENDENT_FOOTING, structure)
+    && foundationGeneratesBase(structure, foundationType)) ? autoFillFootings(graph, wallGate) : { created: [], removed: [] };
+  const newFootings = footingsResult.created;
+  const removedFootings = footingsResult.removed;
   const beamKind = foundation ? MEMBER_KIND.FOUNDATION_BEAM : MEMBER_KIND.BEAM;
   const beamsResult = (!isRoof && ownSpecified && structureHasMemberKind(beamKind, structure))
     ? autoFillBeamsForStructure(graph, project, foundation ? 'foundation' : 'primary', wallGate, wallSegments, belowColumns, selfGate, freeEndGraph, wallSourceCache)
@@ -480,7 +538,7 @@ export function autoFillStructuralGrid(graph, project, belowMainStructure, wallG
   const roofBeamsResult = (isRoof && belowMainStructure !== UNSPECIFIED_STRUCTURE)
     ? (rulesFor(structure).roofBeamPlacement === 'wallRuns'
         ? autoFillWoodWallBeams(graph, project, wallSegments, wallGate, belowColumns, selfGate, freeEndGraph ?? graph, wallSourceCache)
-        : { created: autoFillRoofBeams(graph, project, belowMainStructure, wallGate), removed: [] })
+        : autoFillRoofBeams(graph, project, belowMainStructure, wallGate))
     : { created: [], removed: [] };
   const newRoofBeams = roofBeamsResult.created;
   const removedRoofBeams = roofBeamsResult.removed;
@@ -494,7 +552,7 @@ export function autoFillStructuralGrid(graph, project, belowMainStructure, wallG
   // 二重の判定軸を持たないよう明示的にスキップする（ステップ3c-2）。
   const newSecondaryBeams = rulesFor(structure).beamPlacement === 'wallRuns' ? [] : autoFillSecondaryBeams(graph, project);
   return {
-    newColumns, removedColumns, newFootings,
+    newColumns, removedColumns, newFootings, removedFootings,
     newBeams: [...newBeams, ...newRoofBeams, ...newWallBeamAxes, ...newLandingBeams, ...newSecondaryBeams, ...sillBeamsResult.created, ...floorBeamsResult.created],
     removedBeams: [...removedBeams, ...removedRoofBeams, ...sillBeamsResult.removed, ...floorBeamsResult.removed],
   };

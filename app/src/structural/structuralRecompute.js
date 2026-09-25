@@ -166,7 +166,7 @@ export async function recomputeStructuralForGraph(targetGraph, project, mainStru
 
   // 構造体トポロジーから未定義の柱・梁・基礎（基礎伏図のみ）を検出し、自動補完する。
   // ユーザーが明示削除した箇所は除外集合（excludedColumnSlots 等）により復活しない。
-  const { newColumns, removedColumns, newFootings, newBeams, removedBeams } = runInAction(() => autoFillStructuralGrid(targetGraph, project, mainStructure, wallGate, wallSources, wallSegments, aboveColumns, belowGraph?.columns ?? [], aboveBeamSegments, selfGate, freeEndGraph, wallSourceCache));
+  const { newColumns, removedColumns, newFootings, removedFootings, newBeams, removedBeams } = runInAction(() => autoFillStructuralGrid(targetGraph, project, mainStructure, wallGate, wallSources, wallSegments, aboveColumns, belowGraph?.columns ?? [], aboveBeamSegments, selfGate, freeEndGraph, wallSourceCache));
   // べた基礎（木造）のマットスラブを基礎伏図に生成・撤去する（基礎種別で取捨）。基礎伏図以外では no-op。
   const matFoundation = runInAction(() => autoFillMatFoundation(targetGraph, project));
   // 外周モデル（side ビュー）を1回構築し、柱芯オフセットと梁偏芯の両方に渡す——柱・梁で外側方向（内外定義）を一致させる。
@@ -215,7 +215,7 @@ export async function recomputeStructuralForGraph(targetGraph, project, mainStru
     collectFloorGroups(targetGraph, project);
   });
 
-  const changed = newColumns.length > 0 || removedColumns.length > 0 || newFootings.length > 0 || newBeams.length > 0
+  const changed = newColumns.length > 0 || removedColumns.length > 0 || newFootings.length > 0 || removedFootings.length > 0 || newBeams.length > 0
     || removedBeams.length > 0
     || matFoundation.created.length > 0 || matFoundation.removed.length > 0
     || convertedColumns.length > 0 || convertedBeams.length > 0 || convertedFootings.length > 0 || conformedSections.length > 0
