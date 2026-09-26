@@ -200,10 +200,13 @@ const WOOD_RULES = Object.freeze({
   // （同長はX方向）。structural/beamJunction.js の resolveBeamJunctionSpans が唯一の解決先——実体スパン
   // （spanForColumns）は書き換えず、renderer/StructuralLayer.jsx が描画専用に上書きする。ユーザー裁定
   // 2026-09-17・B-3）。
+  // planColumnOriginMark＝平面図（詳細LOD）で柱の由来を示す×を描くか（'none'＝既定／'cross'＝在来木造。
+  // renderer/originColorKey.js columnOriginMarkKey が唯一の解決先。柱の由来別色分け ステップ3）。
   drawing: Object.freeze({
     columnFinishWrap: true, planColumnColor: 'material', planColumnLineWeight: 'thick',
     framingPlanColor: 'material', framingColumnSymbol: 'section', framingColumnLineWeight: 'fixed',
     memberTags: 'show', beamDepthMark: 'none', beamEndColumnMatch: 'clId', beamJunction: 'columnFace',
+    planColumnOriginMark: 'none',
   }),
   // 壁由来の梁芯生成源（(3)）: 自階＋1つ下の実体階の下地オーナー壁（下地材の種別は問わない）。在来のみ。
   wallBeamAxes: null,
@@ -253,6 +256,7 @@ const RC_RULES = Object.freeze({
     columnFinishWrap: true, planColumnColor: 'material', planColumnLineWeight: 'thick',
     framingPlanColor: 'material', framingColumnSymbol: 'section', framingColumnLineWeight: 'fixed',
     memberTags: 'show', beamDepthMark: 'none', beamEndColumnMatch: 'clId', beamJunction: 'columnFace',
+    planColumnOriginMark: 'none',
   }),
   // 自階の下地オーナー壁のうち下地材がRC下地の壁のみ（上下階で壁が連続し自立するため下階は見ない）。
   wallBeamAxes: 'rcBacking',
@@ -317,6 +321,8 @@ export const STRUCTURE_RULES = Object.freeze({
         columnFinishWrap: false, planColumnColor: 'wall', planColumnLineWeight: 'ultraThick',
         framingPlanColor: 'mono', framingColumnSymbol: 'crossBox', framingColumnLineWeight: 'byLod',
         memberTags: 'hide', beamDepthMark: 'offsetLine', beamEndColumnMatch: 'coordinate', beamJunction: 'throughWins',
+        // 平面詳細LODで柱の由来×を描く（在来木造のみ。柱の由来別色分け ステップ3）。
+        planColumnOriginMark: 'cross',
       }) },
     { column: TRADITIONAL_WOOD_FRAMING.columnSection, beam: TRADITIONAL_WOOD_FRAMING.columnSection }), // 梁の既定＝柱同寸の正角
   '木造（2"×4"）': withProfile('木造（2"×4"）', WOOD_RULES), // 壁自体が構造体＝壁下に梁を入れない（wallBeamAxes:null）

@@ -20,7 +20,7 @@ import { DrawPreview } from './DrawPreview.jsx';
 import { CLAddPreview } from './CLAddPreview.jsx';
 import { WallRefIndicator } from './WallRefIndicator.jsx';
 import { SiteLinesLayer, SiteDrawPreview } from './SiteLinesLayer.jsx';
-import { shouldShowPlanFigure, shouldShowStairStepNumbers, shouldShowIntersectionMarkers } from './planFigureVisibility.js';
+import { shouldShowPlanFigure, shouldShowStairStepNumbers, shouldShowIntersectionMarkers, shouldShowColumnOriginMarks } from './planFigureVisibility.js';
 import { ElevationLayer } from './ElevationLayer.jsx';
 
 // ================================================================
@@ -120,7 +120,7 @@ export const SceneLayers = observer(({
                 厚みは展開図の柱型と同じ finish/columnWrap.js から取る）。 */}
             {showPlanFigure && <ShapesLayer graph={graph} viewport={viewport} stairUnderClips={stairUnderClips} />}
             {showPlanFigure && <OpeningsLayer graph={graph} viewport={viewport} />}
-            {showPlanFigure && <ColumnsLayer graph={graph} viewport={viewport} finishWrap />}
+            {showPlanFigure && <ColumnsLayer graph={graph} viewport={viewport} finishWrap originMarks={shouldShowColumnOriginMarks(appMode)} />}
             {appMode === 'structure' && (
               <StructuralLayer
                 composition={structComposition}

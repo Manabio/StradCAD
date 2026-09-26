@@ -339,11 +339,59 @@ test('autoFillWoodColumns（B-3・3b・5）: 走行方向にCLが無い（0.5mm�
   assert.equal(graph.centerLines.length, clCountBefore, 'CLは新設しない');
 });
 
+test('autoFillWoodColumns（由来集合・7）: オフセットアンカー柱は元候補（pendingOffsetCandidates）の由来（above）を引き継ぐ', () => {
+  const { graph, wallSegments } = makeWoodLineWithRunGraph();
+  const above = [{ x: 2500, y: 2000, axisX: 2500, axisY: 2000, role: 'standard' }]; // x=2500は近傍の通り芯・梁芯から500mm以上離れている
+  autoFillWoodColumns(graph, PROJECT, null, above, wallSegments);
+  const col = graph.columns.find(c => c.x === 2500 && c.y === 2000);
+  assert.ok(col?.woodAxisOffset, '前提: オフセット柱が(2500,2000)に立つ');
+  assert.equal(col.woodColumnOrigins, 'above', 'オフセット確定後も元候補の由来(above)が引き継がれる（空にならない）');
+});
+
 test('autoFillWoodColumns（3b・6）: 3aの交点と同スロットなら重複生成しない（created 0）', () => {
   const { graph, wallSegments } = makeWoodLineWithRunGraph();
   const above = [{ x: 1000, y: 2000, axisX: 1000, axisY: 2000, role: 'standard' }]; // 既に3aの交点そのもの
   const { created } = autoFillWoodColumns(graph, PROJECT, null, above, wallSegments);
   assert.equal(splitFreeEndColumns(graph, created, WOOD_LINE_3A_TARGET).length, 2, '3aの2本のみ（3b分の追加は無い）');
+});
+
+// ---- 由来集合（woodColumnOrigins。structural/columnOrigins.js。柱の由来別色分け ステップ3）----
+test('autoFillWoodColumns（由来集合・1）: 3aと3bが同位置に合流すると woodColumnOrigins は "above,wall"（和集合・ソート済み）になる', () => {
+  const { graph, wallSegments } = makeWoodLineWithRunGraph();
+  const above = [{ x: 1000, y: 2000, axisX: 1000, axisY: 2000, role: 'standard' }]; // 既に3aの交点そのもの（3b・6と同じ位置）
+  autoFillWoodColumns(graph, PROJECT, null, above, wallSegments);
+  const col = graph.columns.find(c => c.x === 1000 && c.y === 2000);
+  assert.ok(col, '3aの交点柱が生成されている');
+  assert.equal(col.woodColumnOrigins, 'above,wall', '3a(wall)と3b(above)が同スロットへ合流し由来集合が和集合になる');
+});
+
+test('autoFillWoodColumns（由来集合・2）: 既存柱の由来集合は毎パス再計算して書き戻され、値が変わらない限り冪等', () => {
+  const { graph, wallSegments } = makeWoodLineWithRunGraph();
+  autoFillWoodColumns(graph, PROJECT, null, [], wallSegments);
+  const col = graph.columns.find(c => c.x === 1000 && c.y === 2000);
+  assert.equal(col.woodColumnOrigins, 'wall', '前提: 3aのみ＝壁交点由来');
+  const second = autoFillWoodColumns(graph, PROJECT, null, [], wallSegments);
+  assert.deepEqual([second.created.length, second.removed.length], [0, 0], '冪等（2回目は created/removed とも空）');
+  assert.equal(graph.columnMap.get(col.id).woodColumnOrigins, 'wall', '2回目も同じ由来のまま');
+});
+
+test('autoFillWoodColumns（由来集合・3）: 既存柱に古い由来集合が残っていても、現在のslotsに基づく値へ書き戻される', () => {
+  const { graph, wallSegments } = makeWoodLineWithRunGraph();
+  autoFillWoodColumns(graph, PROJECT, null, [], wallSegments);
+  const col = graph.columns.find(c => c.x === 1000 && c.y === 2000);
+  col.setField('woodColumnOrigins', 'supportSpan'); // 旧データ相当の誤った値を仕込む
+  autoFillWoodColumns(graph, PROJECT, null, [], wallSegments);
+  assert.equal(graph.columnMap.get(col.id).woodColumnOrigins, 'wall', '現在の候補（3a=wall）に基づいて書き戻される');
+});
+
+test('【失敗系】autoFillWoodColumns（由来集合・4）: 手動固定（dimensionStatus!=="auto"）の柱は由来集合を書き戻さない', () => {
+  const { graph, wallSegments } = makeWoodLineWithRunGraph();
+  autoFillWoodColumns(graph, PROJECT, null, [], wallSegments);
+  const col = graph.columns.find(c => c.x === 1000 && c.y === 2000);
+  col.setDimensionStatus('locked');
+  col.setField('woodColumnOrigins', 'above'); // 手動固定後に別の値を仕込む
+  autoFillWoodColumns(graph, PROJECT, null, [], wallSegments);
+  assert.equal(graph.columnMap.get(col.id).woodColumnOrigins, 'above', 'locked柱は書き戻し対象外（値は変わらない）');
 });
 
 test('autoFillWoodColumns（3b・7）: excludedColumnSlotsに記録された位置は復活しない', () => {
@@ -540,6 +588,28 @@ test('autoFillWoodColumns（3h-2・10）: 3bのaboveColumnsと同じslotへ合�
   const aboveTieBeams = [{ isVertical: true, coord: 2000, lo: 1000, hi: 3000 }]; // 同じ(2000,2000)
   const { created } = autoFillWoodColumns(graph, PROJECT, null, above, wallSegments, aboveTieBeams);
   assert.equal(splitFreeEndColumns(graph, created, [...WOOD_LINE_3A_TARGET, [2000, 2000]]).length, 3, '3aの2本＋(2000,2000)は3b・3h-2が同じslotへ合流して1本のみ');
+});
+
+test('autoFillWoodColumns（由来集合・6）: 3b点とF-1自由端が同じ点に合流すると由来は"above,freeEnd"になる', () => {
+  const { graph, wallSegments } = makeWoodLineWithRunGraph();
+  // (0,2000)はy=2000壁の物理端（F-1の自由端そのもの。JSDoc「F-1の自由端5本」参照）。
+  // 同じ座標に上階柱があれば3b候補としても拾われ、bestByPointの同一キーへ合流する。
+  const above = [{ x: 0, y: 2000, axisX: 0, axisY: 2000, role: 'standard' }];
+  autoFillWoodColumns(graph, PROJECT, null, above, wallSegments);
+  const col = graph.columns.find(c => c.x === 0 && c.y === 2000);
+  assert.ok(col, '3b・F-1が合流した柱が(0,2000)に立つ');
+  assert.equal(col.woodColumnOrigins, 'above,freeEnd', '3b(above)とF-1(freeEnd)の由来が両方残る（片方だけに落ちない）');
+});
+
+test('autoFillWoodColumns（由来集合・5）: 3bと3h-2が同じ点でdist/inRunが同着（3h-2側がconsiderPointsのelse分岐＝負けて位置は譲る）でも、由来はaboveのまま残る', () => {
+  const { graph, wallSegments } = makeWoodLineWithRunGraph();
+  graph.addCenterLine(CenterLineType.VERTICAL, 2000, { labeled: true, discipline: Discipline.STRUCT });
+  const above = [{ x: 2000, y: 2000, axisX: 2000, axisY: 2000, role: 'standard' }]; // 3b候補（先に確定＝bestByPointのcur）
+  const aboveTieBeams = [{ isVertical: true, coord: 2000, lo: 1000, hi: 3000 }]; // 3h-2候補（同着・else分岐で位置を譲る）
+  autoFillWoodColumns(graph, PROJECT, null, above, wallSegments, aboveTieBeams);
+  const col = graph.columns.find(c => c.x === 2000 && c.y === 2000);
+  assert.ok(col, '3b・3h-2が合流した柱が(2000,2000)に立つ');
+  assert.equal(col.woodColumnOrigins, 'above', '位置を譲る側（else分岐）でも由来集合が失われない（above のまま）');
 });
 
 // ================================================================
@@ -2697,6 +2767,28 @@ test('【失敗系】serializeGraph/restoreGraph: 個別柱寸を設定してい
   restoreGraph(restored, bytes);
   const c2 = restored.columnMap.get(column.id);
   assert.equal(c2.woodColumnWidthMm, null);
+});
+
+// ---- 由来集合（woodColumnOrigins。structural/columnOrigins.js）の永続化（graphSnapshot.js往復）----
+test('serializeGraph/restoreGraph: 柱の由来集合（woodColumnOrigins）が往復で保持される（extras漏れ検出。packExtraFieldsからwoodColumnOriginsを削ると失敗する）', () => {
+  const { graph, x1, y1 } = makeArchCLGraph();
+  const column = graph.addColumn(StructuralMaterialType.WOOD, 'WOOD-120x120', x1, y1, { woodColumnOrigins: 'above,wall' });
+  const bytes = serializeGraph(graph);
+  const restored = new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
+  restoreGraph(restored, bytes);
+  const c2 = restored.columnMap.get(column.id);
+  assert.ok(c2, '復元後に同一IDの柱が存在する');
+  assert.equal(c2.woodColumnOrigins, 'above,wall', '由来集合の文字列が復元後も保持される');
+});
+
+test('【失敗系】serializeGraph/restoreGraph: 由来集合を設定していない柱（既存データ・由来不明）はnullのまま往復する', () => {
+  const { graph, x1, y1 } = makeArchCLGraph();
+  const column = graph.addColumn(StructuralMaterialType.WOOD, 'WOOD-120x120', x1, y1, {});
+  const bytes = serializeGraph(graph);
+  const restored = new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
+  restoreGraph(restored, bytes);
+  const c2 = restored.columnMap.get(column.id);
+  assert.equal(c2.woodColumnOrigins, null);
 });
 
 // ---- autoFillWoodColumns: 個別柱寸を持つ柱は撤去ループの対象判定に影響されない（dimensionStatusと独立） ----
@@ -5050,6 +5142,7 @@ test('autoFillWoodColumns（3i・1）: 梁の支持長が1820を超え、下階�
   assert.equal(iiPicks.length, 1, 'iiPicks（診断用の由来内訳）にも1件積まれる');
   assert.equal(iiPicks[0].kind, 'grid', 'kindはgrid（走行方向に厳密一致するCLが無いため）');
   assert.deepEqual([iiPicks[0].x, iiPicks[0].y], [1820, 2000]);
+  assert.equal(col.woodColumnOrigins, 'supportSpan', '由来集合（3i単独）は"supportSpan"（柱の由来別色分け ステップ3）');
 });
 
 test('autoFillWoodColumns（3i・2）: 走行方向に厳密一致する通り芯があればそれを使う（オフセットにしない）', () => {

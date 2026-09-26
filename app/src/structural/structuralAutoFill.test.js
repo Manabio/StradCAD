@@ -72,7 +72,7 @@ test('autoFillColumns: 通り芯を降格すると、その位置のauto柱は�
   assert.equal(graph.columnMap.has(colAtX2Y2.id), false, 'auto柱は撤去される');
 
   const third = autoFillColumns(graph, GRID_PROJECT, null);
-  assert.deepEqual(third, { created: [], removed: [] }, '2回目の撤去後はもう一度呼んでも変化が無い（冪等）');
+  assert.deepEqual(third, { created: [], removed: [], originsUpdated: [] }, '2回目の撤去後はもう一度呼んでも変化が無い（冪等）');
 });
 
 test('【失敗系】autoFillColumns: 候補キー集合にある柱（現存する通り芯交点）は撤去されない', () => {
@@ -80,7 +80,7 @@ test('【失敗系】autoFillColumns: 候補キー集合にある柱（現存す
   const first = autoFillColumns(graph, GRID_PROJECT, null);
   assert.equal(first.created.length, 4);
   const second = autoFillColumns(graph, GRID_PROJECT, null);
-  assert.deepEqual(second, { created: [], removed: [] }, '通り芯を何も変えていなければ撤去は起きない');
+  assert.deepEqual(second, { created: [], removed: [], originsUpdated: [] }, '通り芯を何も変えていなければ撤去は起きない');
 });
 
 test('autoFillBeams: 通り芯を降格すると、その辺のauto梁（同role）は撤去されるがlocked梁・別roleの梁は残る', () => {

@@ -14,6 +14,8 @@ import { columnWrapRenderProps, columnWrapStrokeWidth } from '../structural/colu
 import { graphComputed } from './graphDerived.js';
 import { LodLevel, resolveStrokeWidth } from '../viewport.js';
 import { ColumnSymbol, ColumnCrossMark } from './ColumnSymbol.jsx';
+import { columnOriginMarkKey } from './originColorKey.js';
+import { originColor } from './canvasStyle.js';
 import { groupPropsForStyle, dashForStyle } from '../figure/figureStyle.js';
 import { DIMENSION_LINE_WEIGHT, NUM_FONT_PX, TEXT_GAP_PX } from './dimensionStyle.js';
 import { memberSelectionRects, MEMBER_SELECTION_COLOR, MEMBER_SELECTION_FILL, MEMBER_SELECTION_STROKE_PX } from '../structural/memberSelection.js';
@@ -217,9 +219,14 @@ function columnDiaphragmSize(column) {
 // 線幅が割れる回帰。色・記号・輪郭と同じく、主題階（自階）の figureRules から
 // StructuralLayer.jsx が framingColumnLineWeight(figureRules.drawing, lod) を解決して渡す）。
 // 既定null＝'medium'（非伏図・平面図経路は渡さないため完全不変）。
+// originMarks（既定false。平面図の柱の由来×。renderer/planFigureVisibility.js
+// shouldShowColumnOriginMarks が唯一の呼び出しゲート）: 真のときだけ、柱ごとに
+// columnOriginMarkKey(column, drawing, viewport.lodLevel, originMarks) を判定し、非nullなら
+// ColumnCrossMark（overhangRatio=1＝断面の四隅ちょうど）を由来色で重ねる。伏図（renderColumnGroup
+// 経由の呼び出し）は本 prop を渡さない＝常に false のまま完全不変（柱の生成結果・伏図の×は変えない）。
 export const ColumnsLayer = observer(({
   graph, viewport, diaphragm = false, finishWrap = false, framingSymbol = null, colorOverride = null,
-  outline: outlineProp = false, outlineWeight = null, pick = false,
+  outline: outlineProp = false, outlineWeight = null, pick = false, originMarks = false,
 }) => {
   if (!graph) return null;
   const scale   = Math.min(viewport.scaleX, viewport.scaleY);
@@ -315,6 +322,22 @@ export const ColumnsLayer = observer(({
           column={column}
           color={color}
           strokeWidth={outlineStrokeWidth}
+        />
+      );
+    }
+    // 平面図（詳細LOD）の柱の由来×（originMarks=true。renderer/planFigureVisibility.js
+    // shouldShowColumnOriginMarks が唯一のゲート）。伏図（renderColumnGroup。originMarks未指定＝既定false）
+    // には現れない——柱の生成結果・伏図の×（全黒）は変えない。断面の四隅ちょうど（overhangRatio=1）まで
+    // 届く細線を由来色（originColor）で重ねる。
+    const originMarkKey = originMarks ? columnOriginMarkKey(column, drawing, viewport.lodLevel, originMarks) : null;
+    if (originMarkKey) {
+      els.push(
+        <ColumnCrossMark
+          key={`origin:${column.id}`}
+          column={column}
+          color={originColor(originMarkKey)}
+          strokeWidth={diaStrokeWidth}
+          overhangRatio={1}
         />
       );
     }

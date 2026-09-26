@@ -1,9 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { centerLineOriginColorKey } from './originColorKey.js';
+import { centerLineOriginColorKey, columnOriginColorKey, columnOriginMarkKey } from './originColorKey.js';
 import { originColor, ORIGIN_LIGHTNESS, ORIGIN_LIGHT_LIFT, ORIGIN_NONE_COLOR } from './canvasStyle.js';
 import { CenterLine, BeamAxisOrigin } from '../core/centerLine.js';
-import { CenterLineType, Discipline } from '../core/constants.js';
+import { CenterLineType, Discipline, StructuralMaterialType } from '../core/constants.js';
+import { Plane } from '../core/plane.js';
+import { PlanGraph } from '../core/planGraph.js';
+import { TRADITIONAL_WOOD_STRUCTURE, rulesFor } from '../structural/structureRules.js';
 
 // centerLineKind の4種別（app/src/core/centerLine.js centerLineKind）を実物のCenterLineで再現し、
 // 由来キーへの写像を確認する（app/src/core/beamJoint.test.js の CenterLine 生成方法に合わせる）。
@@ -83,4 +86,124 @@ test('originColor: \'none\'・未知キー・null はいずれも黒(ORIGIN_NONE
   assert.equal(originColor('none'), ORIGIN_NONE_COLOR);
   assert.equal(originColor('unknown-key'), ORIGIN_NONE_COLOR);
   assert.equal(originColor(null), ORIGIN_NONE_COLOR);
+});
+
+// ---- columnOriginColorKey / columnOriginMarkKey（柱の由来別色分け ステップ3）----
+// 入力は PlanGraph で作った実オブジェクト（structural/woodAutoFill.test.js の柱の作り方に合わせる）。
+function makeColumnGraph() {
+  const graph = new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
+  graph.structureOverride = TRADITIONAL_WOOD_STRUCTURE;
+  return graph;
+}
+const STRUCT_PROPS = { labeled: true, discipline: Discipline.STRUCT };
+const CENTER_PROPS = { labeled: false, discipline: Discipline.ARCH };
+const WOOD_DRAWING = rulesFor(TRADITIONAL_WOOD_STRUCTURE).drawing;
+
+test('columnOriginColorKey: 手動固定（dimensionStatus!=="auto"）は none（黒）', () => {
+  const graph = makeColumnGraph();
+  const v = graph.addCenterLine(CenterLineType.VERTICAL, 0, STRUCT_PROPS);
+  const h = graph.addCenterLine(CenterLineType.HORIZONTAL, 0, STRUCT_PROPS);
+  const column = graph.addColumn(StructuralMaterialType.WOOD, 'WOOD-120x120', v, h,
+    { dimensionStatus: 'locked', woodColumnOrigins: 'wall' });
+  assert.equal(columnOriginColorKey(column), 'none', '両アンカーが通り芯でも手動固定が最優先でnone');
+});
+
+test('columnOriginColorKey: 建具の袖柱（woodJambRef非null）は aux（濃いグレー）', () => {
+  const graph = makeColumnGraph();
+  const v = graph.addCenterLine(CenterLineType.VERTICAL, 0, CENTER_PROPS);
+  const h = graph.addCenterLine(CenterLineType.HORIZONTAL, 0, CENTER_PROPS);
+  const column = graph.addColumn(StructuralMaterialType.WOOD, 'WOOD-120x120', v, h,
+    { woodJambRef: { openingId: 'o1', side: -1, isVertical: true } });
+  assert.equal(columnOriginColorKey(column), 'aux');
+});
+
+test('columnOriginColorKey: 両アンカーが通り芯（struct）でwoodAxisOffsetがnullなら grid（濃い赤）', () => {
+  const graph = makeColumnGraph();
+  const v = graph.addCenterLine(CenterLineType.VERTICAL, 0, STRUCT_PROPS);
+  const h = graph.addCenterLine(CenterLineType.HORIZONTAL, 0, STRUCT_PROPS);
+  const column = graph.addColumn(StructuralMaterialType.WOOD, 'WOOD-120x120', v, h, {});
+  assert.equal(columnOriginColorKey(column), 'grid');
+});
+
+test('columnOriginColorKey: オフセット柱（woodAxisOffset非null）は仮置きアンカーが通り芯でもgridにならない', () => {
+  const graph = makeColumnGraph();
+  const v = graph.addCenterLine(CenterLineType.VERTICAL, 0, STRUCT_PROPS);
+  const h = graph.addCenterLine(CenterLineType.HORIZONTAL, 0, STRUCT_PROPS);
+  const column = graph.addColumn(StructuralMaterialType.WOOD, 'WOOD-120x120', v, h,
+    { woodAxisOffset: { isVertical: true, offset: 910 }, woodColumnOrigins: 'supportSpan' });
+  assert.equal(columnOriginColorKey(column), 'supportSpan', 'gridではなく由来集合（supportSpan）で判定される');
+});
+
+test('columnOriginColorKey: above と wall が同居すれば above が勝つ', () => {
+  const graph = makeColumnGraph();
+  const v = graph.addCenterLine(CenterLineType.VERTICAL, 0, CENTER_PROPS);
+  const h = graph.addCenterLine(CenterLineType.HORIZONTAL, 0, CENTER_PROPS);
+  const column = graph.addColumn(StructuralMaterialType.WOOD, 'WOOD-120x120', v, h, { woodColumnOrigins: 'above,wall' });
+  assert.equal(columnOriginColorKey(column), 'above');
+});
+
+test('columnOriginColorKey: above と supportSpan が同居すれば above が勝つ', () => {
+  const graph = makeColumnGraph();
+  const v = graph.addCenterLine(CenterLineType.VERTICAL, 0, CENTER_PROPS);
+  const h = graph.addCenterLine(CenterLineType.HORIZONTAL, 0, CENTER_PROPS);
+  const column = graph.addColumn(StructuralMaterialType.WOOD, 'WOOD-120x120', v, h, { woodColumnOrigins: 'above,supportSpan' });
+  assert.equal(columnOriginColorKey(column), 'above');
+});
+
+test('columnOriginColorKey: supportSpan と wall が同居すれば supportSpan が勝つ', () => {
+  const graph = makeColumnGraph();
+  const v = graph.addCenterLine(CenterLineType.VERTICAL, 0, CENTER_PROPS);
+  const h = graph.addCenterLine(CenterLineType.HORIZONTAL, 0, CENTER_PROPS);
+  const column = graph.addColumn(StructuralMaterialType.WOOD, 'WOOD-120x120', v, h, { woodColumnOrigins: 'supportSpan,wall' });
+  assert.equal(columnOriginColorKey(column), 'supportSpan');
+});
+
+test('columnOriginColorKey: wallのみ（アンカーに梁芯を含む）は center（濃い水色）', () => {
+  const graph = makeColumnGraph();
+  const v = graph.addCenterLine(CenterLineType.VERTICAL, 0, CENTER_PROPS);
+  const h = graph.addCenterLine(CenterLineType.HORIZONTAL, 0, CENTER_PROPS);
+  const column = graph.addColumn(StructuralMaterialType.WOOD, 'WOOD-120x120', v, h, { woodColumnOrigins: 'wall' });
+  assert.equal(columnOriginColorKey(column), 'center');
+});
+
+test('columnOriginColorKey: freeEndのみ（アンカーに中心線を含む）は center（濃い水色）', () => {
+  const graph = makeColumnGraph();
+  const v = graph.addCenterLine(CenterLineType.VERTICAL, 0, CENTER_PROPS);
+  const h = graph.addCenterLine(CenterLineType.HORIZONTAL, 0, CENTER_PROPS);
+  const column = graph.addColumn(StructuralMaterialType.WOOD, 'WOOD-120x120', v, h, { woodColumnOrigins: 'freeEnd' });
+  assert.equal(columnOriginColorKey(column), 'center');
+});
+
+test('columnOriginColorKey: 由来集合が空（既存データ・由来不明）は none（黒）', () => {
+  const graph = makeColumnGraph();
+  const v = graph.addCenterLine(CenterLineType.VERTICAL, 0, CENTER_PROPS);
+  const h = graph.addCenterLine(CenterLineType.HORIZONTAL, 0, CENTER_PROPS);
+  const column = graph.addColumn(StructuralMaterialType.WOOD, 'WOOD-120x120', v, h, {});
+  assert.equal(columnOriginColorKey(column), 'none');
+});
+
+function makeWoodColumnWithOrigins(graph, origins) {
+  const v = graph.addCenterLine(CenterLineType.VERTICAL, 0, CENTER_PROPS);
+  const h = graph.addCenterLine(CenterLineType.HORIZONTAL, 0, CENTER_PROPS);
+  return graph.addColumn(StructuralMaterialType.WOOD, 'WOOD-120x120', v, h, { woodColumnOrigins: origins });
+}
+
+test('columnOriginMarkKey: LOD・drawing・enabledのいずれかが欠けるとnull（それ以外は由来色キーを返す）', () => {
+  const graph = makeColumnGraph();
+  const column = makeWoodColumnWithOrigins(graph, 'wall');
+  assert.equal(columnOriginMarkKey(column, WOOD_DRAWING, 'detail', true), 'center', '全て揃えば由来色キーを返す');
+  assert.equal(columnOriginMarkKey(column, WOOD_DRAWING, 'standard', true), null, 'LODが詳細でなければnull');
+  assert.equal(columnOriginMarkKey(column, WOOD_DRAWING, 'detail', false), null, 'enabledが偽（平面モードでない）ならnull');
+  assert.equal(columnOriginMarkKey(column, { planColumnOriginMark: 'none' }, 'detail', true), null,
+    'drawing.planColumnOriginMarkが"cross"でなければnull（非在来）');
+});
+
+test('【失敗系】columnOriginMarkKey: RC柱・杭はnull（在来木造の柱だけが対象）', () => {
+  const graph = makeColumnGraph();
+  const v = graph.addCenterLine(CenterLineType.VERTICAL, 0, CENTER_PROPS);
+  const h = graph.addCenterLine(CenterLineType.HORIZONTAL, 0, CENTER_PROPS);
+  const rcColumn = graph.addColumn(StructuralMaterialType.RC, 'RC-300x300', v, h, {});
+  assert.equal(columnOriginMarkKey(rcColumn, WOOD_DRAWING, 'detail', true), null, 'RC柱は対象外');
+  const pile = graph.addColumn(StructuralMaterialType.WOOD, 'WOOD-120x120', v, h, { role: 'foundation' });
+  assert.equal(columnOriginMarkKey(pile, WOOD_DRAWING, 'detail', true), null, '杭は対象外');
 });

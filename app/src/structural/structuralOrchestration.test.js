@@ -2406,6 +2406,87 @@ test('【B-5・収束】reflectStructuralToOtherFloors: ctx省略（既定経路
   });
 });
 
+// ---- 4d-2. 由来集合（woodColumnOrigins）の保存漏れ（QA裁定Major-1・2026-09-27）----
+// changed（本数等の変化）は柱の生成結果に限られ、既存柱の由来集合（structural/columnOrigins.js）
+// だけが変わったケースを拾わないため、structural/structuralOrchestration.js
+// recomputeInactiveStructural/reflectRoofPlaneの保存条件を`changed || originsChanged`にした
+// （structuralRecompute.jsのoriginsChanged新設）。由来だけの変化は収束ループの継続判定・undoの
+// 積み方には影響させない（changedの意味自体は変えない）。
+function woodColumnOriginsDump(g) {
+  return g.columns.filter(c => c.role !== 'foundation')
+    .map(c => `${c.id}:${c.woodColumnOrigins ?? '(null)'}`).sort();
+}
+
+test('【Major-1・QA再差し戻し2026-09-27】runStructuralModeSetup: アクティブ=3階からの突入後、各非アクティブ階（1階・2階）をpeekしたtempへ直接recomputeStructuralForGraphを呼んでも、woodColumnOriginsが変わらずoriginsChangedもfalseになる（保存済みの由来が既に最終形）', async () => {
+  await withFakeIndexedDB(async () => {
+    const { project } = buildB1Fixture();
+    await saveB1InitialFloors(project);
+    project.activePlaneId = project.planes.find(p => p.name === '3階').id;
+    // ctx: null（従来経路）を明示する——ctx省略（自前生成）だと、採番適用フェーズ
+    // （applyMemberNumbersToFloor）が由来の書き戻し先と同一インスタンスをpeekVia経由で読み、
+    // 保存漏れがあっても採番側のsaveViaが副次的に由来まで保存してしまい検出できない（実測で確認。
+    // 旧データ移行テストの同種コメント参照）。
+    await runStructuralModeSetup(project.activeGraph, project, { ctx: null });
+
+    // 【QA再差し戻し】期待値をreflectStructuralToOtherFloors自身で作ると、保存漏れがあっても
+    // 期待値・実測値の両方が同じようにスキップされ緑のまま揺れない（変異MA/MB/MDが赤にならないと
+    // QAが実測）。各非アクティブ階をpeekしたtempへ直接recomputeStructuralForGraphを呼び、呼ぶ前後の
+    // woodColumnOriginsを比較し、戻り値のoriginsChanged自体もfalseであることをassertする
+    // ——保存経路（saveVia・structuralOrchestration.js）を経由しない直接比較のため、保存条件の
+    // 変異（|| originsChangedを外す等）の影響を受けずに「由来は既に最終形か」だけを見る。
+    for (const plane of project.planes) {
+      if (plane.id === project.activePlaneId) continue; // 3階（アクティブ）は対象外
+      const temp = await floorSwapManager.peek(plane, project.structGraph);
+      const before = woodColumnOriginsDump(temp);
+      const mainStructure = temp.structureOverride ?? project.structuralInfo.mainStructure;
+      const { originsChanged } = await recomputeStructuralForGraph(temp, project, mainStructure, undefined, { ctx: null });
+      const after = woodColumnOriginsDump(temp);
+      assert.equal(originsChanged, false,
+        `${plane.name}: 保存済みのwoodColumnOriginsは既に最終形のはず（直接recomputeでoriginsChanged=falseにならない＝保存漏れ）`);
+      assert.deepEqual(after, before,
+        `${plane.name}: 直接recomputeしてもwoodColumnOriginsが変わってはならない（保存漏れがあれば変化する）`);
+    }
+  });
+});
+
+test('【Major-1・QA裁定2026-09-27・旧データ移行】runStructuralModeSetup: 保存済み全柱のwoodColumnOriginsをnullにしてから別階で突入すると、非アクティブ階の保存値が埋まる', async () => {
+  await withFakeIndexedDB(async () => {
+    const { project } = buildB1Fixture();
+    await saveB1InitialFloors(project);
+    project.activePlaneId = project.planes.find(p => p.name === '3階').id;
+    await runStructuralModeSetup(project.activeGraph, project, {}); // 1回目の突入で全階の由来を確定させる
+
+    // 旧データ相当: 全階（屋根含む）の保存済み柱のwoodColumnOriginsをnullに戻して保存し直す。
+    const roofPlane = project.roofPlane;
+    for (const p of [...project.planes, roofPlane].filter(Boolean)) {
+      const g = p.id === project.activePlaneId ? project.activeGraph : await floorSwapManager.peek(p, project.structGraph);
+      runInAction(() => { for (const c of g.columns) c.setField('woodColumnOrigins', null); });
+      await saveFloor(p.id, serializeGraph(g));
+    }
+
+    // 別の階（1階）をアクティブにして再突入する——1階以外（2階・3階・屋根）は非アクティブ階として
+    // peek→再計算されるはずで、案(b)適用前は「由来だけの変化」が保存対象から漏れ、nullのまま
+    // 永続化され続けていた（QA実測: moku4で全柱null→再突入しても訪れていない階はnullのまま）。
+    // ctx: null（従来経路。peekVia毎回フレッシュ読み直し）を明示する——ctx省略（自前生成・キャッシュ
+    // 共有）だと、由来の書き戻し先（recomputeInactiveStructural内のtemp）が採番適用フェーズ
+    // （applyMemberNumbersToFloor）のpeekVia呼び出しと同一インスタンスを指し、保存漏れがあっても
+    // 採番側のsaveViaが副次的に由来まで一緒に保存してしまい検出できない（実測で確認）。
+    project.activePlaneId = project.planes.find(p => p.name === '1階').id;
+    await runStructuralModeSetup(project.activeGraph, project, { ctx: null });
+
+    let nullCount = 0;
+    for (const p of [...project.planes, roofPlane].filter(Boolean)) {
+      if (p.id === project.activePlaneId) continue; // アクティブ階（1階）はメモリ上で確定済み・対象外
+      const g = await floorSwapManager.peek(p, project.structGraph);
+      for (const c of g.columns) {
+        if (c.role === 'foundation') continue;
+        if (c.woodColumnOrigins == null) nullCount++;
+      }
+    }
+    assert.equal(nullCount, 0, `非アクティブ階の保存値が埋まっているはず（null件数=${nullCount}）`);
+  });
+});
+
 // ---- 4e. 非在来（S造）のctx経路での再計算回数（コーディネーター差し戻し・Minor 4・2026-09-21）----
 // 既存の【統合】非在来1パス固定テストは【B-5是正】でctx:null固定にした（floorSwapManager.peekの
 // 実回数を手動導出して固定する既存の検証手段が、ctx経由だとキャッシュヒットで発火しなくなり

@@ -80,9 +80,12 @@ import { conformToLedger } from './memberGroups.js';
  *   ——本関数は受け取って下へ渡すだけで、自分では生成しない。ctxがあり、options.wallSourceCache・
  *   options.footprintCacheをどちらも省略した場合は、上記のとおりctxのキャッシュも併せて使う
  *   （ステップB-6）。
- * @returns {Promise<{changed: boolean, before: Uint8Array|null, after: Uint8Array|null}>}
+ * @returns {Promise<{changed: boolean, originsChanged: boolean, before: Uint8Array|null, after: Uint8Array|null}>}
  *   before/after はcaptureSnapshots:true時のみ非null（undo用スナップショット）。changed=false かつ
  *   captureSnapshots:trueのとき after===before（再シリアライズしない）。
+ *   originsChanged（QA裁定Major-1・2026-09-27）: 既存柱の由来集合（woodColumnOrigins）だけが
+ *   変わったか。changedとは独立——収束ループ・undoの判定には使わず、呼び出し側の保存要否判定
+ *   （changed || originsChanged）にだけ使うこと。
  */
 export async function recomputeStructuralForGraph(targetGraph, project, mainStructure, precomputedBelowGraph = undefined, options = {}) {
   const { captureSnapshots = false, wallSourceCache: wallSourceCacheOpt, footprintCache: footprintCacheOpt, ctx = undefined } = options;
@@ -166,7 +169,7 @@ export async function recomputeStructuralForGraph(targetGraph, project, mainStru
 
   // 構造体トポロジーから未定義の柱・梁・基礎（基礎伏図のみ）を検出し、自動補完する。
   // ユーザーが明示削除した箇所は除外集合（excludedColumnSlots 等）により復活しない。
-  const { newColumns, removedColumns, newFootings, removedFootings, newBeams, removedBeams } = runInAction(() => autoFillStructuralGrid(targetGraph, project, mainStructure, wallGate, wallSources, wallSegments, aboveColumns, belowGraph?.columns ?? [], aboveBeamSegments, selfGate, freeEndGraph, wallSourceCache));
+  const { newColumns, removedColumns, newFootings, removedFootings, newBeams, removedBeams, originsUpdatedColumns } = runInAction(() => autoFillStructuralGrid(targetGraph, project, mainStructure, wallGate, wallSources, wallSegments, aboveColumns, belowGraph?.columns ?? [], aboveBeamSegments, selfGate, freeEndGraph, wallSourceCache));
   // べた基礎（木造）のマットスラブを基礎伏図に生成・撤去する（基礎種別で取捨）。基礎伏図以外では no-op。
   const matFoundation = runInAction(() => autoFillMatFoundation(targetGraph, project));
   // 外周モデル（side ビュー）を1回構築し、柱芯オフセットと梁偏芯の両方に渡す——柱・梁で外側方向（内外定義）を一致させる。
@@ -223,6 +226,13 @@ export async function recomputeStructuralForGraph(targetGraph, project, mainStru
     || updatedColumnSizes.length > 0 || updatedFootingSizes.length > 0 || updatedBeamSizes.length > 0
     || updatedRoofBeamSizes.length > 0 || updatedBeamEcc.length > 0 || updatedBeamDepths.length > 0
     || updatedColumnEcc.length > 0;
+  // QA裁定（Major-1・2026-09-27）: 柱の由来集合（structural/columnOrigins.js）だけが変わった場合は
+  // changed に含めない——changed は収束ループ（repeatReflectPassUntilConverged）の継続判定・undo登録に
+  // 使われており、由来だけの変化でパスを1回増やしたり由来だけのundoエントリを積んだりしないため
+  // （案(a)不採用の理由）。代わりに別枠の originsChanged を返し、呼び出し側
+  // （structuralOrchestration.js recomputeInactiveStructural/reflectRoofPlane）が保存要否の判定
+  // （changed || originsChanged）だけに使う。
+  const originsChanged = originsUpdatedColumns.length > 0;
   const after = captureSnapshots ? (changed ? serializeGraph(targetGraph) : before) : null;
-  return { changed, before, after };
+  return { changed, originsChanged, before, after };
 }

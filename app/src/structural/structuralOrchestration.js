@@ -576,8 +576,13 @@ async function recomputeInactiveStructural(plane, project, ctx = undefined) {
   const temp = await peekVia(ctx, plane, project.structGraph);
   const mainStructure = temp.structureOverride ?? project.structuralInfo.mainStructure;
   const isWallRuns = rulesFor(effectiveStructure(temp, project)).beamPlacement === 'wallRuns';
-  const { changed } = await recomputeStructuralForGraph(temp, project, mainStructure, undefined, { ctx });
-  if (changed) await saveVia(ctx, plane.id, serializeGraph(temp), temp);
+  const { changed, originsChanged } = await recomputeStructuralForGraph(temp, project, mainStructure, undefined, { ctx });
+  // QA裁定（Major-1・2026-09-27）: 由来だけが変わった（changed=false・originsChanged=true）非アクティブ階も
+  // 保存する——由来は毎パス再計算して書き戻す設計（woodAutoFill.js）のため、訪れていない階の由来だけが
+  // 更新されて保存されない穴があった。戻り値のchanged自体・収束ループの継続判定（呼び出し側の
+  // anyChanged）・undoの積み方は変えない（案(a)=changedに含める、は不採用。structuralRecompute.jsの
+  // originsChangedのJSDoc参照）。
+  if (changed || originsChanged) await saveVia(ctx, plane.id, serializeGraph(temp), temp);
   return { temp, changed, isWallRuns };
 }
 
@@ -671,8 +676,11 @@ async function reflectRoofPlane(project, ctx = undefined) {
     ? (topPlane.id === project.activePlaneId ? project.activeGraph : await peekVia(ctx, topPlane, project.structGraph))
     : null;
   const mainStructure = topGraph ? (topGraph.structureOverride ?? project.structuralInfo.mainStructure) : project.structuralInfo.mainStructure;
-  const { changed } = await recomputeStructuralForGraph(temp, project, mainStructure, undefined, { ctx });
-  if (changed) await saveVia(ctx, roofPlane.id, serializeGraph(temp), temp);
+  const { changed, originsChanged } = await recomputeStructuralForGraph(temp, project, mainStructure, undefined, { ctx });
+  // QA裁定（Major-1・2026-09-27）: recomputeInactiveStructuralと同じ保存条件の拡張（由来だけの変化も保存）。
+  // 屋根はautoFillStructuralGridの!isRoofガードで柱を生成しないためoriginsChangedは常にfalse——
+  // 対称性のために残す（将来屋根に柱を立てるときのため。QA再差し戻し2026-09-27）。
+  if (changed || originsChanged) await saveVia(ctx, roofPlane.id, serializeGraph(temp), temp);
   return { changed, isWallRuns: roofRules.beamPlacement === 'wallRuns', beamColumnWidthMm: temp.beamColumnWidthMm };
 }
 

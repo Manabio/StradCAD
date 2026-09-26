@@ -29,3 +29,10 @@ export function shouldShowStairStepNumbers(appMode) {
 export function shouldShowIntersectionMarkers(appMode) {
   return appMode !== 'site' && appMode !== 'structure';
 }
+
+// 柱の由来×（renderer/originColorKey.js columnOriginMarkKey・renderer/StructuralLayer.jsx
+// ColumnsLayer の originMarks prop）を描くモードか。平面モード限定——伏図（構造モード）の×は
+// 由来色ではなく全黒のまま（renderColumnGroup経路。柱の由来別色分け ステップ3）。
+export function shouldShowColumnOriginMarks(appMode) {
+  return appMode === 'floorplan';
+}

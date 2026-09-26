@@ -234,9 +234,16 @@ export class WoodColumn extends StructuralColumn {
     // woodJambRefと同じ「AXISが実位置そのもの」規律。真実はこちら——他所から直接setFieldしない。
     // 唯一の書き手はwoodAutoFill.js autoFillWoodColumns。.claude/structural-model.md「3h-2」節参照）。
     this.woodAxisOffset = props.woodAxisOffset ?? null;
+    // 柱の由来集合（structural/columnOrigins.js formatColumnOrigins の文字列。'wall,above' のように
+    // ','連結・ソート済み）。null＝集合が空（由来不明の既存データ、または袖柱）。'grid'（通り芯交点）・
+    // 'jamb'（woodJambRef）・'manual'（dimensionStatus）はここに含めない——それぞれ既存フィールドから
+    // 描画時に導出するため（renderer/originColorKey.js columnOriginColorKey）。毎パス再計算して
+    // 既存柱にも書き戻す（手動柱=dimensionStatus!=='auto'は再計算対象外）。唯一の書き手は
+    // woodAutoFill.js autoFillWoodColumns（.claude/structural-model.md「由来集合」節参照）。
+    this.woodColumnOrigins = props.woodColumnOrigins ?? null;
     makeObservable(this, {
       columnType: observable, woodSpecies: observable, woodColumnWidthMm: observable, woodOffsetSide: observable,
-      woodJambRef: observable, woodAxisOffset: observable,
+      woodJambRef: observable, woodAxisOffset: observable, woodColumnOrigins: observable,
     });
   }
 }

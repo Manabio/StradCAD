@@ -454,12 +454,14 @@ test('structureRules: 描画ルール（柱包み・平面の柱線色・線幅�
     columnFinishWrap: false, planColumnColor: 'wall', planColumnLineWeight: 'ultraThick',
     framingPlanColor: 'mono', framingColumnSymbol: 'crossBox', framingColumnLineWeight: 'byLod',
     memberTags: 'hide', beamDepthMark: 'offsetLine', beamEndColumnMatch: 'coordinate', beamJunction: 'throughWins',
+    planColumnOriginMark: 'cross',
   });
   for (const key of ['木造（2"×4"）', 'S造', 'SRC造', 'RC造(ラーメン)', 'RC造(壁式)', UNSPECIFIED_STRUCTURE]) {
     assert.deepEqual({ ...rulesFor(key).drawing }, {
       columnFinishWrap: true, planColumnColor: 'material', planColumnLineWeight: 'thick',
       framingPlanColor: 'material', framingColumnSymbol: 'section', framingColumnLineWeight: 'fixed',
       memberTags: 'show', beamDepthMark: 'none', beamEndColumnMatch: 'clId', beamJunction: 'columnFace',
+      planColumnOriginMark: 'none',
     }, key);
   }
 });

@@ -239,3 +239,44 @@ test('【不変条件・QA指摘1・ステップ4】StructuralLayer.jsx: 柱の�
   assert.ok(constMatch, `非pick時のhitPropsが{ listening: false }のモジュール定数（例:COLUMN_HIT_PROPS_NONE）を参照していない（変数=${elseVar}）`);
   assert.ok(/<ColumnSymbol[\s\S]{0,300}?hitProps=\{hitProps\}/.test(src), '<ColumnSymbol>へhitProps={hitProps}が渡されていない');
 });
+
+// ---- 柱の由来別色分け ステップ3（平面図の柱の由来×。renderer/originColorKey.js columnOriginMarkKey）----
+test('【不変条件・柱の由来別色分けステップ3】StructuralLayer.jsx: columnOriginMarkKey( はColumnsLayer本体でちょうど1回呼ばれる', () => {
+  const src = readSource();
+  const hits = codeLines(src).filter(l => /columnOriginMarkKey\(/.test(l));
+  assert.equal(hits.length, 1, `columnOriginMarkKey( の呼び出しが1箇所以外になっている:\n${hits.join('\n')}`);
+});
+
+test('【不変条件・柱の由来別色分けステップ3・QA指摘Minor4】StructuralLayer.jsx: 平面図の柱の由来×（<ColumnCrossMark key={`origin:...`}）はoverhangRatio={1}（断面の四隅ちょうど）を渡す', () => {
+  const src = readSource();
+  const originMarkMatch = /<ColumnCrossMark\s+key=\{`origin:\$\{column\.id\}`\}[\s\S]*?\/>/.exec(src);
+  assert.ok(originMarkMatch, '柱の由来×（key={`origin:${column.id}`}）のColumnCrossMarkが見つからない');
+  assert.ok(/overhangRatio=\{1\}/.test(originMarkMatch[0]),
+    `柱の由来×にoverhangRatio={1}が渡されていない（見つかった要素: ${originMarkMatch[0]}）`);
+});
+
+test('【不変条件・柱の由来別色分けステップ3・QA指摘Major-2】StructuralLayer.jsx: columnOriginMarkKey( の呼び出しは originMarks ? の条件の内側にある（平面限定ゲートの多重化。M17で赤）', () => {
+  const src = readSource();
+  const line = codeLines(src).find(l => /columnOriginMarkKey\(/.test(l));
+  assert.ok(line, 'columnOriginMarkKey( の呼び出し行が見つからない');
+  assert.ok(/originMarks\s*\?\s*columnOriginMarkKey\(/.test(line),
+    `columnOriginMarkKey( の呼び出しが originMarks ? の条件の内側にない（行: ${line.trim()}）`);
+});
+
+test('【不変条件・柱の由来別色分けステップ3】StructuralLayer.jsx: 伏図の柱グループ描画（renderColumnGroup本体）は originMarks を渡さず、由来色（originColor(）も使わない（伏図の×は全黒のまま）', () => {
+  const src = readSource();
+  const renderMatch = /const renderColumnGroup = \w+ => \{[\s\S]*?\n {2}\};/.exec(src);
+  assert.ok(renderMatch, 'renderColumnGroup(g) の関数本体が見つからない');
+  const body = codeLines(renderMatch[0]).join('\n');
+  assert.ok(!/originMarks/.test(body), 'renderColumnGroup（伏図経路）がoriginMarksを<ColumnsLayer>へ渡している（伏図の×が由来色化する回帰）');
+  assert.ok(!/originColor\(/.test(body), 'renderColumnGroup（伏図経路）の本体にoriginColor(の参照がある（伏図の×は全黒のまま・由来色を使わない）');
+});
+
+test('【不変条件・柱の由来別色分けステップ3】StructuralLayer.jsx: 伏図の下階柱×（framingSymbol===\'cross\'分岐のColumnCrossMark）は色をcolor（呼び出し側が解決したframingColor）で描き、由来色（originColor(）を使わない', () => {
+  const src = readSource();
+  const crossMatch = /if \(framingSymbol === 'cross'\) \{[\s\S]*?\n {4}\}/.exec(src);
+  assert.ok(crossMatch, "if (framingSymbol === 'cross') { ... } の分岐が見つからない（伏図の下階柱×の描画）");
+  const body = codeLines(crossMatch[0]).join('\n');
+  assert.ok(/color=\{color\}/.test(body), '伏図の下階柱×がcolor={color}（呼び出し側framingColor）を描いていない');
+  assert.ok(!/originColor\(/.test(body), '伏図の下階柱×がoriginColor(を使っている（全黒のはずが由来色化する回帰）');
+});

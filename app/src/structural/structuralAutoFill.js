@@ -103,7 +103,7 @@ export function computeGridSpans(graph) {
  *  柱は物理的に立つ自階のgraphに格納するため、材料も自階基準（resolveDefaultMaterialType）で導出する。
  *  基礎伏図でも呼ぶ（最下階の柱も自階分として生成する）。屋根専用平面では呼ばない。 */
 export function autoFillColumns(graph, project, wallGate = null) {
-  if (!isStructureSpecified(graph, project)) return { created: [], removed: [] }; // 主構造未確定の間は生成しない
+  if (!isStructureSpecified(graph, project)) return { created: [], removed: [], originsUpdated: [] }; // 主構造未確定の間は生成しない
   const rules = rulesFor(effectiveStructure(graph, project));
   const materialType = rules.baseMaterial;
   const intersections = computeGridIntersections(graph);
@@ -131,7 +131,7 @@ export function autoFillColumns(graph, project, wallGate = null) {
     graph.columnMap.delete(column.id);
     removed.push(column.id);
   }
-  return { created, removed };
+  return { created, removed, originsUpdated: [] };
 }
 
 /** 柱の自動生成を主構造ルールの選択子（columnPlacement）で振り分ける単一の入口。
@@ -143,9 +143,12 @@ export function autoFillColumns(graph, project, wallGate = null) {
  *  構造モード突入時の再計算（autoFillStructuralGrid）と、下階グラフへの反映（structuralOrchestration.js）が共有する。
  *  wallSourceCache: 1回の再計算内で壁区間（wallBeamAxes.js wallBeamSourcesFromGraph）をmemoする
  *  キャッシュ（wallBeamAxes.js createWallSourceCache。ステップC）。省略時は従来どおり自前で全走査する。
- *  @returns {{created: object[], removed: string[]}} */
+ *  originsUpdated（QA裁定Major-1・2026-09-27）: 在来木造（wallIntersections）のときだけ非空になりうる
+ *  ——既存柱の由来集合（structural/columnOrigins.js）だけが変わった柱id（autoFillWoodColumns参照）。
+ *  非在来は常に[]。
+ *  @returns {{created: object[], removed: string[], originsUpdated: string[]}} */
 export function autoFillColumnsForStructure(graph, project, wallGate = null, aboveColumns = [], wallSegments = [], aboveBeamSegments = [], belowColumns = [], wallSourceCache = undefined) {
-  if (!isStructureSpecified(graph, project)) return { created: [], removed: [] };
+  if (!isStructureSpecified(graph, project)) return { created: [], removed: [], originsUpdated: [] };
   const rules = rulesFor(effectiveStructure(graph, project));
   if (rules.columnPlacement === 'wallIntersections') return autoFillWoodColumns(graph, project, wallGate, aboveColumns, wallSegments, aboveBeamSegments, belowColumns, wallSourceCache);
   return autoFillColumns(graph, project, wallGate);
@@ -480,7 +483,10 @@ export function autoFillStairLandingBeams(graph, project, wallGate = null) {
  *  ステップC）。省略時（undefined）は従来どおり呼び出しのたびに壁区間を全走査する——本関数自身は
  *  wallSources/wallSegments（呼び出し側が既に導出済みの結果）を直接使うだけで消費しないが、内部で
  *  さらに壁区間を導出し直す autoFillColumnsForStructure（在来木造の壁交点柱）・autoFillWoodWallBeams
- *  （在来木造の壁線上の通し梁・屋根の軒桁）へそのまま素通しする。 */
+ *  （在来木造の壁線上の通し梁・屋根の軒桁）へそのまま素通しする。
+ *  戻り値の originsUpdatedColumns（QA裁定Major-1・2026-09-27）: autoFillColumnsForStructure の
+ *  originsUpdated をそのまま返す——既存柱の由来集合だけが変わった柱id（changed判定には現れない）。
+ *  非在来・柱を生成しない階（屋根等）は常に[]。structuralRecompute.js が別枠の originsChanged として使う。 */
 export function autoFillStructuralGrid(graph, project, belowMainStructure, wallGate = null, wallSources = [], wallSegments = [], aboveColumns = [], belowColumns = [], aboveBeamSegments = [], selfGate = undefined, freeEndGraph = undefined, wallSourceCache = undefined) {
   const foundation = isFoundationPlane(graph.plane, project);
   const isRoof = graph.plane.isRoofPlane;
@@ -496,9 +502,10 @@ export function autoFillStructuralGrid(graph, project, belowMainStructure, wallG
   const newWallBeamAxes = autoFillWallBeamAxes(graph, wallSources);
   // 柱は主構造ルールの配置源（通り芯交点／壁交点）で振り分ける。壁交点方式は候補に無い自動柱の撤去も返す。
   const columnsResult = (!isRoof && ownSpecified && structureHasMemberKind(MEMBER_KIND.COLUMN, structure))
-    ? autoFillColumnsForStructure(graph, project, wallGate, aboveColumns, wallSegments, aboveBeamSegments, belowColumns, wallSourceCache) : { created: [], removed: [] };
+    ? autoFillColumnsForStructure(graph, project, wallGate, aboveColumns, wallSegments, aboveBeamSegments, belowColumns, wallSourceCache) : { created: [], removed: [], originsUpdated: [] };
   const newColumns = columnsResult.created;
   const removedColumns = columnsResult.removed;
+  const originsUpdatedColumns = columnsResult.originsUpdated;
   // ベース（独立フーチング）は分類（表A）に加え、基礎種別でもゲートする（木造べた基礎時はベースなし）。
   const footingsResult = (foundation && ownSpecified && structureHasMemberKind(MEMBER_KIND.INDEPENDENT_FOOTING, structure)
     && foundationGeneratesBase(structure, foundationType)) ? autoFillFootings(graph, wallGate) : { created: [], removed: [] };
@@ -552,7 +559,7 @@ export function autoFillStructuralGrid(graph, project, belowMainStructure, wallG
   // 二重の判定軸を持たないよう明示的にスキップする（ステップ3c-2）。
   const newSecondaryBeams = rulesFor(structure).beamPlacement === 'wallRuns' ? [] : autoFillSecondaryBeams(graph, project);
   return {
-    newColumns, removedColumns, newFootings, removedFootings,
+    newColumns, removedColumns, newFootings, removedFootings, originsUpdatedColumns,
     newBeams: [...newBeams, ...newRoofBeams, ...newWallBeamAxes, ...newLandingBeams, ...newSecondaryBeams, ...sillBeamsResult.created, ...floorBeamsResult.created],
     removedBeams: [...removedBeams, ...removedRoofBeams, ...sillBeamsResult.removed, ...floorBeamsResult.removed],
   };

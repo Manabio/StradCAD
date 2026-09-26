@@ -98,16 +98,21 @@ export const ColumnSymbol = observer(function ColumnSymbol({ column, color, outl
   );
 });
 
-// 下階柱の伏図記号「×」（断面□に乗せる対角線2本。在来木造の framingColumnSymbol:'crossBox' 専用）。
+// 下階柱の伏図記号「×」（断面□に乗せる対角線2本。在来木造の framingColumnSymbol:'crossBox' 専用）
+// と、平面図（詳細LOD）の柱の由来×（renderer/originColorKey.js columnOriginMarkKey。柱の由来別
+// 色分け ステップ3）の共用コンポーネント。
 // 断面外形は columnSectionSize（カタログ未登録は120角フォールバック）、対角線座標は columnCrossPointsLocal
 // （structural/framingDrawing.js。純関数側に幾何を集約し、ここは Konva 要素へ写すだけ）。
+// overhangRatio（省略時は columnCrossPointsLocal の既定＝COLUMN_CROSS_OVERHANG_RATIO=1.5）は
+// ×の端点が断面□の四隅から何倍はみ出すか——伏図の下階柱×は従来どおり1.5（挙動不変）、平面図の
+// 由来×は overhangRatio={1}（断面の四隅ちょうどまで）を呼び出し側が明示する。
 // observer にする理由は ColumnSymbol と同じ（通り芯スナップ移動中の column.x/y は computed。
 // 座標の読み取りは子で起こす）。
-export const ColumnCrossMark = observer(function ColumnCrossMark({ column, color, strokeWidth }) {
+export const ColumnCrossMark = observer(function ColumnCrossMark({ column, color, strokeWidth, overhangRatio }) {
   const { width, height } = columnSectionSize(column);
   return (
     <Group x={column.x} y={column.y} rotation={column.rotation}>
-      {columnCrossPointsLocal(width, height).map((points, i) => (
+      {columnCrossPointsLocal(width, height, overhangRatio).map((points, i) => (
         <Line key={i} points={points} stroke={color} strokeWidth={strokeWidth} listening={false} />
       ))}
     </Group>
