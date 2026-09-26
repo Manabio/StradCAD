@@ -4,6 +4,8 @@ import { CenterLineType, DimensionSide, centerLineKind } from '@core';
 import { nonLabeledClExtent } from '../snap.js';
 import { gutterEdgeCoord } from './gutterPrimitives.jsx';
 import { isRenderTarget } from '../core/centerLineKindPolicy.js';
+import { originColor } from './canvasStyle.js';
+import { centerLineOriginColorKey } from './originColorKey.js';
 
 // ビューポートのワールド座標範囲 (フォールバック用)
 function viewportBounds(viewport, width, height) {
@@ -47,8 +49,9 @@ export function clExtent(cl, graph, viewport, width, height) {
 // 位置を使う（core.js参照）——ここではその基準線を可視化するだけで、新規CL/Shapeは作らない。
 // appMode: 梁芯CL（discipline:'fuse'）は構造モード（appMode==='structure'）以外では描画しない
 // （データ（CenterLine実体・shapeMap上）は残したまま、描画のみスキップする——他モードから見えず
-// 操作できなくなるが、構造モード専用の線という仕様どおり）。線のスタイルは柱芯線（下のaxisLines）と
-// 同一にする（青#3b82f6・一点鎖線[12,4,2,4]・opacity1・通常CLと同じstrokeWidth）。
+// 操作できなくなるが、構造モード専用の線という仕様どおり）。線種（一点鎖線[12,4,2,4]・opacity1）は
+// 柱芯線（下のaxisLines）と同一にするが、strokeは由来色（originColor経由。柱芯線axisLinesは今回
+// 対象外のため引き続き固定色#3b82f6のまま）。
 export const CenterLinesLayer = observer(({ graph, viewport, width, height, columnAxisMode = false, axisLineCoords = null, appMode }) => {
   if (!graph) return null;
   const b = viewportBounds(viewport, width, height);
@@ -72,7 +75,7 @@ export const CenterLinesLayer = observer(({ graph, viewport, width, height, colu
     // なる（「描かれていた→描かれない」への変化。floorplan/finish/opening は旧コードも labeled を
     // 見ておらず種別ベースと同値だったため変化なし。centerLineKindPolicy.test.js にピン留めテストあり）。
     if (!isRenderTarget(cl, appMode)) return null;
-    // 描画スタイル判定用（stroke/opacityを柱芯線と同格にする。フィルタとは別の用途で残す）。
+    // 描画スタイル判定用（opacityを柱芯線と同格にする。strokeは由来色。フィルタとは別の用途で残す）。
     const isBeamAxis = centerLineKind(cl) === 'beam';
 
     const ext = clExtent(cl, graph, viewport, width, height);
@@ -88,7 +91,7 @@ export const CenterLinesLayer = observer(({ graph, viewport, width, height, colu
       <Line
         key={cl.id}
         points={points}
-        stroke={cl.labeled || isBeamAxis ? '#3b82f6' : '#64748b'}
+        stroke={originColor(centerLineOriginColorKey(cl))}
         strokeWidth={viewport.lineWeightsPx.thin}
         dash={isAux ? undefined : [12, 4, 2, 4]}
         strokeScaleEnabled={false}
