@@ -25,6 +25,15 @@ undoは「`undoManager.push`されたものだけ」戻せる。**graphを変え
 ## 中心線移動は「bake＋結合連鎖＋梁芯追従」を1エントリにまとめる（段階(b)・2026-09-25）
 `transform/centerLineOps.js`の`commitCLMoveOp`は、CL値の確定（`bakeCLValue`）・隣接CLとの結合（`mergeCenterLineChain`）・壁由来梁芯の追従（`followWallBeamAxes`）を、同期処理のまま1つの`undoManager.push`エントリにまとめる（`composeUndoWithMergeChain`が結合分を合成し、`followWallBeamAxes`が返す`undoFns`/`redoFns`をさらに合わせて実行する——undo時は「梁芯追従を先に戻す→CL値・結合を戻す」、redo時は逆順）。構造同期リスナー（`structuralSync.js`起動）へのnotifyは、確定・undo・redoそれぞれのクロージャの**最後**で呼ぶ——CL値・壁位置が確定してから構造再計算を起動する順序を守るため。
 
+## 構造同期の他階書込みは起動元エントリの箱へ（段階(g)・2026-09-26）
+CL操作（`transform/centerLineOps.js`の`addCenterLineFromDialog`・`commitCLMoveOp`・`deleteCenterLineWithUndo`・`promoteCenterToGridWithUndo`・`demoteGridToCenterWithUndo`・`applyCLEccentricityWithUndo`。計7か所のnotify呼び出し）が起動した構造同期（scope='all'/'activeAndAbove'）が非アクティブ階・屋根へ書いたIDBバイトを、起動元CL操作自身のundoエントリで1回のCtrl+Z/Ctrl+Yごとに戻す・やり直す仕組み。
+
+**「箱」方式**: 起動元エントリが持つ`floorRecords`配列（既にfloorRecordsを持つ4か所は流用、持たない3か所は新設）をそのまま記録先にする。コミット直後のnotify呼び出しだけがこの配列を第4引数（`undoRecords`）としてリスナー（`structuralSync.request`）へ渡す——undo/redoクロージャ内のnotifyは省略し、記録なしで再同期する（下記「undo時の扱い」参照）。同期の実行中に他階へ保存されたバイトのbefore/afterは、実行の終わりに`structural/syncFloorRecorder.js`の`createSyncFloorRecorder`が配列へ追記する（`wrapSave`が下位のsaveを同期区間でそのまま呼ぶ——`structuralResolveContext.js`の`saveAndNote`がsaveの直後・await前に世代を読む契約に依存）。undo/redoは既存の`applyFloorUndoRecords`（`transform/centerLineFloorSync.js`。beforeは配列を逆順・afterは正順に適用。同じplaneIdが複数回出てもよい——発見④の規約をそのまま流用）が、各notifyの直前に適用する。amendは使わない。
+
+**undo時の扱い**: undoで他階をbeforeに戻した後のnotify再同期は、入力が前回収束した不動点そのものなので変化ゼロ（決定的ソルバー）。undo/redo由来の再同期はundoRecordsを渡さない（省略）ため記録しない——redoは箱のafterで上書きするので、undo/redo自身の再同期がさらに記録を追加する必要はない。箱のplaneIdは起動時のアクティブ階を除くため、undo時は非アクティブ＝`saveFloorFn`分岐（万一アクティブでも`restoreGraph`分岐で正しい）。
+
+**受容している限界**（後続段階の候補）: 操作直後に他階へ残る孤児梁芯（例: 通り芯移動で他階の壁由来梁芯が追従しないまま残る）は解消しない——「他階の梁芯追従」という別機能の範囲。undo後に他階へ残る分（本節が解決する対象）とは別物。
+
 ## 「作成→ダイアログ確定」は1エントリ、キャンセルはエントリなし
 仕上げモードの新規部屋はcommitDrag（作成）時点ではpushを保留し（`_pendingDialogUndo`）、applyNaming（確定）で作成＋命名を1エントリにする。キャンセル・ダイアログからの即削除は作成と相殺して差分ゼロ＝積まない。部屋統合（判定2）だけはキャンセルしても残る仕様のため即時push。
 
@@ -38,7 +47,7 @@ plane作成・新階同期・切替・全階の構造再計算が複数階へ波
 - 読込み時の壁再生成（`wallRefresh.js`の`refreshWallsAllFloors`。壁の再生成をFinishModeStateから独立させる計画のステップ5）: `store.js`の`bootReady`が文書読込み直後に鍵不一致の階だけ壁を作り直す自動修復。undo対象外だが、変更があれば`markDirty()`してdirtyにする（保存すれば鍵も保存され次回は走らない。鍵一致で何も変わらなければdirtyにしない）
 - カタログの変換先指示UIの適用（`store.js`の`applyCatalogResolutions`。アクティブ階の往復のみ）: `markDirty()`のみでundoエントリは積まない
 - カタログ保守パネルの編集・戻す・削除（ライブラリはアプリ単位で履歴の外。同梱を外す／写すときはmarkDirtyのみ）
-- 構造同期（`structural/structuralSync.js`。建具の確定・undo/redo直後の自階再計算に加え、通り芯削除の直後・undo/redo直後の反映も同じ経路。2026-09-25一般化）: 決定的・冪等なため、要求元側のundo/redoで再実行されれば結果的に元へ戻る。ここで別途undoエントリを積むと、その復元手段（restoreGraph）がgraph上のインスタンス（建具のOpening等）を丸ごと差し替え、要求元側のundo/redoクロージャが握る参照が古くなる。通り芯削除では、他階への**detach伝播**（`transform/centerLineFloorSync.js` `propagateGridCenterLineDeletion`）はundo対象だが、他階の**構造反映**自体はこの規律どおりundo対象外——「壁位置の確定」と「そこから導く構造」を別の扱いにする線引き。
+- 構造同期（`structural/structuralSync.js`。建具の確定・undo/redo直後の自階再計算に加え、通り芯削除の直後・undo/redo直後の反映も同じ経路。2026-09-25一般化）: 決定的・冪等なため、要求元側のundo/redoで再実行されれば結果的に元へ戻る。ここで別途undoエントリを積むと、その復元手段（restoreGraph）がgraph上のインスタンス（建具のOpening等）を丸ごと差し替え、要求元側のundo/redoクロージャが握る参照が古くなる——**この「エントリを積まない」規律自体は段階(g)でも不変**。ただし非アクティブ階・屋根へのIDB書込み（saveFloor）は別軸で、CL操作（追加・移動・削除・偏芯・昇格・降格）が起動した構造同期に限り、起動元CL操作のundoエントリが持つ`floorRecords`配列（「箱」。下記節参照）へ追記され、そのエントリのundo/redoで一緒に戻る・やり直せる（段階(g)・2026-09-26）。自階のメモリ上の構造変化（`recomputeActiveStructural`によるgraphインスタンスの差し替え）はここでも記録しない——上記の「参照が古くなる」問題は自階について変わらず存在するため。モード境界（仕上げ脱出・構造脱出・構造突入・履歴復帰の他階反映）経由の構造反映は引き続き完全にundo対象外（裁定1・別ステップ）——階追加（`withFloorAddUndo`。下記「階追加は～」節参照）は元々全採用フロアのbefore/afterバイト列比較で1エントリに記録済みのため対象外に含まれない（QA指摘m-1・2026-09-26。誤記を訂正）。通り芯削除では、他階への**detach伝播**（`transform/centerLineFloorSync.js` `propagateGridCenterLineDeletion`）はundo対象だが、他階の**構造反映**自体はこの規律どおりundo対象外——「壁位置の確定」と「そこから導く構造」を別の扱いにする線引き（段階(g)でこの構造反映も箱に記録されるようになったため、実質的には「エントリは積まないが書込みは起動元へ記録される」に統合された）。
 - 中心線削除の**壁由来梁芯の道連れ削除**（`transform/centerLineOps.js`。ユーザー承認済み例外・2026-09-25。`.claude/structural-model.md`「壁由来梁芯の道連れ削除」参照）は上記の構造同期とは別物——別ライフサイクルの後追い処理ではなく、中心線削除本体と同じ`runInAction`内でグラフを直接変更し、同じ`before`/`after`スナップショット（`serializeGraph`）に写り込む。そのため専用のundo登録は不要で、中心線削除エントリ自体のundo/redoでそのまま一緒に戻る。
 
 ## 落とし穴
@@ -47,3 +56,4 @@ plane作成・新階同期・切替・全階の構造再計算が複数階へ波
 - 構造同期（`structuralSync`）はfire-and-forget。active graphを丸ごと読む・差し替える処理（階切替・モード境界・履歴コンテキスト切替・階追加・保存・通り芯削除）は先に`structuralSync.whenIdle()`を待つこと。
 - 他階のIDBを読み書きするCL操作（通り芯削除・中心⇔通り芯の入替え）も、開始前に`structuralSync.whenIdle()`を待つこと（実行中の反映が他階のfloorsを読み書きしている最中に競合する）。
 - 通り芯を他階からpeekして参照を切り離す処理は、`project.structGraph`からその通り芯を除く**前**に行うこと——`graphSnapshot.js`の`resolveCL`は解決できない参照を黙って捨てるため、先に除いてしまうと他階の壁がpeek→復元の往復で消える（`propagateGridCenterLineDeletion`のJSDoc参照）。
+- undo/redoは`structuralSync.whenIdle()`の**後**（段階(g)・2026-09-26）: `performUndo`/`performRedo`は`undoManager.undo(`/`redo(`を呼ぶ前に必ず`structuralSync.whenIdle()`を待つ（`cmd.context`の有無に関わらず無条件）——実行中の構造同期が起動元エントリの`floorRecords`へ追記し終える前にundoすると、その追記が「undo後」に紛れ込む（箱の内容が中途半端なまま`applyFloorUndoRecords`が走る）。
