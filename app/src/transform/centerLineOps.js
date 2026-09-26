@@ -30,6 +30,17 @@ import {
 } from '../structural/wallBeamAxes.js';
 import { followWallBeamAxes } from '../structural/wallBeamAxisFollow.js';
 import { rulesFor, effectiveStructure } from '../structural/structureRules.js';
+// centerLineFloorSync.js は静的importする（段階(g)・QA指摘m-3・2026-09-26。旧コメント「IndexedDBに
+// 連鎖するためnode:testからの単体importを壊さないよう動的importにする」は、centerLineOps.jsが既に
+// wallBeamAxes.js→structuralPeek.js経由でFloorSwapManager.js・storage/db.jsを静的に引いている
+// （＝centerLineFloorSync.js自身が使うsaveFloorの既定値と同じ依存）ため成り立たない——
+// commitCLMoveOp（非梁芯分岐）の静的importが単体import・フルスイート・buildいずれも無問題だった
+// （段階(g)で実測済み）ことから、他の呼び出し元（旧・動的import）も静的に統一できる）。
+import {
+  applyFloorUndoRecords, rollbackFloorRecords, propagateGridCenterLineDeletion,
+  findFloorsWithCounterpartCL, absorbWallBeamAxesOnPromote, recallPromotedCenterLineDuplicates,
+  propagateDemotedCenterLine,
+} from './centerLineFloorSync.js';
 
 // CL削除・中心線移動の直後・undo/redo直後に構造同期（structural/structuralSync.js）を起動するための
 // 依存注入フック（App.jsxがsetOpeningGeometryListenerと同じ作法で設定する）。未設定（構造モジュール
@@ -42,10 +53,18 @@ export function setCenterLineStructuralListener(fn) { structuralSyncListener = f
 // 段階(c)・2026-09-25: addCenterLineFromDialogの4箇所のundoManager.pushを寄せる非公開ヘルパー。
 // scopeがnull（補助線・専用経路の梁芯）ならnotifyは何もしない。確定直後・undo・redoのそれぞれで
 // 1回ずつnotifyする（commitCLMoveOpと同じ「確定・undo・redoの3点で呼ぶ」規約）。
-function pushUndoWithStructuralSync(graph, project, scope, undoFn, redoFn) {
-  const notify = () => { if (scope) structuralSyncListener?.(graph, project, scope); };
-  const entry = undoManager.push(() => { undoFn(); notify(); }, () => { redoFn(); notify(); });
-  notify();
+// 段階(g)・2026-09-26: floorRecords（この関数内で新設。「配列を持たない3か所」の1つ）を確定時の
+// notifyだけに渡し、構造同期が非アクティブ階・屋根へ書いたバイトの前後を受け取れるようにする。
+// undo/redoクロージャは、その配列をapplyFloorUndoRecordsで戻してからnotify（undoRecords省略＝
+// 再同期はするが記録はしない）。
+function pushUndoWithStructuralSync(graph, project, scope, undoFn, redoFn, saveFloorFn) {
+  const floorRecords = [];
+  const notify = (records) => { if (scope) structuralSyncListener?.(graph, project, scope, records); };
+  const entry = undoManager.push(
+    () => { undoFn(); applyFloorUndoRecords(project, floorRecords, 'before', saveFloorFn); notify(); },
+    () => { redoFn(); applyFloorUndoRecords(project, floorRecords, 'after', saveFloorFn); notify(); },
+  );
+  notify(floorRecords);
   return entry;
 }
 
@@ -69,8 +88,10 @@ export function bakeCLValue(cl, newVal) {
 // 他の梁芯と同一座標に到達できないため共線判定が成立せず、到達不能な分岐を残さないため）。
 // 呼び出し側（App.jsx）は戻り値の toast を setToast へ反映し、常に modeRef.current?.commitMove() を
 // 最後に呼ぶこと（全経路で commitMove が最後に呼ばれる構造を維持する）。
+// @param {object} [opts] - opts.saveFloorFn はテスト用の差し替え（既定はcenterLineFloorSync.js側の
+//   saveFloor。段階(g)・2026-09-26。非梁芯分岐でのみ使う——梁芯分岐は他階を書かないため無関係）。
 // @returns {{ toast: string|null }}
-export function commitCLMoveOp(graph, project, cl, originalValue) {
+export function commitCLMoveOp(graph, project, cl, originalValue, opts = {}) {
   const newValue = cl.effectiveValue;
   if (newValue === originalValue) {
     runInAction(() => { cl.pendingDelta = 0; });
@@ -94,7 +115,10 @@ export function commitCLMoveOp(graph, project, cl, originalValue) {
     // 自身のscopeはnullだが、それを参照する中心線があれば'activeAndAbove'になる——参照先を動かすと
     // 参照元中心線のextentが追従するため（bake前＝現在の参照関係で算出する）。
     const scope = structuralSyncScopeForCenterLine(graph, cl);
-    const notify = () => structuralSyncListener?.(graph, project, scope);
+    // 段階(g)・2026-09-26: floorRecords（この関数内で新設。「配列を持たない3か所」の1つ）を確定時の
+    // notifyだけに渡す（undo/redoクロージャはapplyFloorUndoRecordsで戻してから記録なしで再同期する）。
+    const floorRecords = [];
+    const notify = (records) => structuralSyncListener?.(graph, project, scope, records);
     // wallBackingCenters（wallBackingCenterCoord経由）はaxisCL.effectiveValue（=value+pendingDelta）を
     // 読むため、bakeCLValueで未確定のまま素直に呼ぶと「まだ確定していないドラッグ後の壁位置」を
     // 返してしまう（ドラッグ中プレビューがeffectiveValueを見る設計と同じ理由。実装時に実測で確認した
@@ -133,14 +157,14 @@ export function commitCLMoveOp(graph, project, cl, originalValue) {
     undoManager.push(
       () => {
         runInAction(() => { [...(axis?.undoFns ?? [])].reverse().forEach(f => f()); undoFn(); });
-        if (scope) notify();
+        if (scope) { applyFloorUndoRecords(project, floorRecords, 'before', opts.saveFloorFn); notify(); }
       },
       () => {
         runInAction(() => { redoFn(); axis?.redoFns.forEach(f => f()); });
-        if (scope) notify();
+        if (scope) { applyFloorUndoRecords(project, floorRecords, 'after', opts.saveFloorFn); notify(); }
       },
     );
-    if (scope) notify();
+    if (scope) notify(floorRecords);
     return { toast: null };
   }
 
@@ -173,9 +197,10 @@ export function commitCLMoveOp(graph, project, cl, originalValue) {
 // 巻き戻す必要があり、deleteCenterLineWithUndo（通り芯分岐）と同じ「自前でundo/redoクロージャを
 // 組む」型にする（undoManager.amendは既に積まれたエントリへの合成しかできないため、自階側の
 // 巻き戻しまでは面倒を見られない）。
-// applyFn／propagateFn はテスト用の差し替え口（既定は動的importの実体）。centerLineFloorSync.jsと
-// 同じ理由（IndexedDBに連鎖するfinish/eccentricityFloorSync.jsを、centerLineOps.jsの
-// node:testからの単体importを壊さないよう動的importにする）。
+// applyFn／propagateFn はテスト用の差し替え口（既定は動的importの実体）。finish/clEccentricity.js・
+// finish/eccentricityFloorSync.js は依然として動的import——centerLineFloorSync.jsと違い、
+// centerLineOps.jsが既に静的に引いている依存（wallBeamAxes.js経由のFloorSwapManager.js・
+// storage/db.js）とは別系統のため、静的importで安全か未検証（QA指摘m-3の範囲外。段階(g)・2026-09-26）。
 // @param {object} [opts]
 // @param {object|null} [opts.rec] - 偏芯レコード（null/undefined＝解除）
 // @param {Map} [opts.materialMap]
@@ -186,12 +211,13 @@ export function commitCLMoveOp(graph, project, cl, originalValue) {
 export async function applyCLEccentricityWithUndo(graph, project, cl, opts = {}) {
   const { rec, materialMap, saveFloorFn } = opts;
 
-  // 1. 動的importをすべて先に済ませる（centerLineFloorSync.jsのapplyFloorUndoRecords／
-  // rollbackFloorRecordsも。この関数の途中でawaitを挟むたびに動的importを跨ぐと、テスト用の
-  // 差し替え（applyFn/propagateFn）と実体のimportタイミングが混ざって読みにくくなるため）。
+  // 1. 動的importをすべて先に済ませる（finish/clEccentricity.js・finish/eccentricityFloorSync.jsの
+  // 実体。centerLineFloorSync.jsのapplyFloorUndoRecords／rollbackFloorRecordsは段階(g)・QA指摘m-3で
+  // 静的importへ統一済み——ファイル冒頭のimportを参照）。この関数の途中でawaitを挟むたびに動的import
+  // を跨ぐと、テスト用の差し替え（applyFn/propagateFn）と実体のimportタイミングが混ざって読みにくく
+  // なるため、残る2つも先に済ませる。
   const { applyCLEccentricity } = await import('../finish/clEccentricity.js');
   const { propagateCLEccentricities } = await import('../finish/eccentricityFloorSync.js');
-  const { applyFloorUndoRecords, rollbackFloorRecords } = await import('./centerLineFloorSync.js');
   const applyFn = opts.applyFn ?? applyCLEccentricity;
   const propagateFn = opts.propagateFn ?? propagateCLEccentricities;
 
@@ -248,7 +274,7 @@ export async function applyCLEccentricityWithUndo(graph, project, cl, opts = {})
   // scopeがnull（補助線。UIからは到達しない防御的分岐）ならfloorRecordsの有無に関わらずnullのまま
   // （notifyしない）——'all'への引き上げは「scopeがそもそも構造同期対象のとき」だけ意味を持つ。
   const syncScope = (scope && floorRecords.length > 0) ? 'all' : scope;
-  const notify = () => { if (syncScope) structuralSyncListener?.(graph, project, syncScope); };
+  const notify = (records) => { if (syncScope) structuralSyncListener?.(graph, project, syncScope, records); };
 
   // 10-11. amendは使わない（自階の復元→他階レコード適用→notifyの順序を自分で制御するため）。
   undoManager.push(
@@ -263,7 +289,7 @@ export async function applyCLEccentricityWithUndo(graph, project, cl, opts = {})
       notify();
     },
   );
-  notify();
+  notify(floorRecords);
   return { toast: null };
 }
 
@@ -278,9 +304,8 @@ export async function applyCLEccentricityWithUndo(graph, project, cl, opts = {})
 // propagateGridCenterLineDeletion。IDB読み書きを伴う）と、構造同期（structural/structuralSync.js。
 // setCenterLineStructuralListener経由の依存注入）を伴うため async 化した（案P・2026-09-25裁定。
 // 非通り芯分岐にIDB・構造同期は無いが、関数全体をasyncにする機械的な波及を受ける）。
-// centerLineFloorSync.js は動的 import（IndexedDBに連鎖するため、centerLineOps.js を node:test から
-// 静的 import できる現状を壊さない——昇格・降格（promoteCenterToGridWithUndo/demoteGridToCenterWithUndo）
-// と同じ理由）。
+// centerLineFloorSync.jsは静的import（段階(g)・QA指摘m-3。ファイル冒頭のimport参照——旧「動的import
+// でnode:testからの単体import可能性を保つ」は既に成り立たない）。
 // @param {object} [opts] - opts.saveFloorFn はテスト用の差し替え（既定値はcenterLineFloorSync.js側のsaveFloor）。
 // @returns {Promise<{ toast: string|null }>}
 export async function deleteCenterLineWithUndo(graph, project, cl, opts = {}) {
@@ -298,8 +323,6 @@ export async function deleteCenterLineWithUndo(graph, project, cl, opts = {}) {
     // 通り芯が project.structGraph に残っている間に他階を peek しないと、他階の壁の
     // axisCL/clStart/clEnd が graphSnapshot.js の resolveCL で解決できず、復元時に黙って捨てられる
     // （propagateGridCenterLineDeletion のJSDoc・2026-09-17実測の教訓）。
-    const { propagateGridCenterLineDeletion, applyFloorUndoRecords, rollbackFloorRecords } =
-      await import('./centerLineFloorSync.js');
     const floorRecords = [];
     try {
       await propagateGridCenterLineDeletion(project, graph, cl, {
@@ -344,7 +367,7 @@ export async function deleteCenterLineWithUndo(graph, project, cl, opts = {}) {
     // 構造同期を起動する（structural/structuralSync.js。App.jsxがsetCenterLineStructuralListenerで
     // 配線する）。建具と違い在来限定にしない（applies省略＝常に真。非在来のグリッド柱にも効くため）。
     const scope = structuralSyncScopeOfKind(centerLineKind(cl));
-    const notify = () => structuralSyncListener?.(graph, project, scope);
+    const notify = (records) => structuralSyncListener?.(graph, project, scope, records);
 
     const saveFloorFn = opts.saveFloorFn;
     // amendは使わない（他階の復元→自階の復元→構造同期の順序を自分で制御するため）。
@@ -362,7 +385,7 @@ export async function deleteCenterLineWithUndo(graph, project, cl, opts = {}) {
         notify();
       },
     );
-    notify();
+    notify(floorRecords);
     return { toast: null };
   }
 
@@ -378,7 +401,10 @@ export async function deleteCenterLineWithUndo(graph, project, cl, opts = {}) {
   // **削除前（detach前）**に算出する）。梁芯はnull（専用経路structural/wallBeamAxes.js。
   // 条件10で二重に動かさない）——それ以外の非通り芯削除では従来どおりlistenerを呼ばない。
   const scope = structuralSyncScopeForCenterLine(graph, cl);
-  const notify = () => structuralSyncListener?.(graph, project, scope);
+  // 段階(g)・2026-09-26: floorRecords（この関数内で新設。「配列を持たない3か所」の1つ）を確定時の
+  // notifyだけに渡す。
+  const floorRecords = [];
+  const notify = (records) => structuralSyncListener?.(graph, project, scope, records);
   // 壁の軸になれる種別（セル分割線。isFinishCellDivider——このブランチには通り芯は来ないため
   // 実質center種別のみが真になる）の削除だけが壁ソースを変えうる——補助線・梁芯自身の削除は
   // 壁の軸にならないため対象外。
@@ -430,17 +456,16 @@ export async function deleteCenterLineWithUndo(graph, project, cl, opts = {}) {
   });
   const after = serializeGraph(graph);
   undoManager.push(
-    () => { restoreGraph(graph, before); if (scope) notify(); },
-    () => { restoreGraph(graph, after); if (scope) notify(); },
+    () => { restoreGraph(graph, before); if (scope) { applyFloorUndoRecords(project, floorRecords, 'before', opts.saveFloorFn); notify(); } },
+    () => { restoreGraph(graph, after); if (scope) { applyFloorUndoRecords(project, floorRecords, 'after', opts.saveFloorFn); notify(); } },
   );
-  if (scope) notify();
+  if (scope) notify(floorRecords);
   return { toast: null };
 }
 
 // ---- 中心⇔通り芯の入替え（平面モード限定・メニューの cl-to-grid / cl-to-center）----
 // グラフ変更本体（純粋部分）は transform/centerLineConvert.js。ここは undo 登録・階またぎ同期の
-// 呼び出しを担う（centerLineFloorSync.js は動的 import——IndexedDB(storage/db.js) に連鎖するため、
-// centerLineOps.js を node:test から静的 import できる現状を壊さないよう静的 import を避ける）。
+// 呼び出しを担う（centerLineFloorSync.js は静的import——段階(g)・QA指摘m-3。ファイル冒頭のimport参照）。
 // 通り芯削除（deleteCenterLineWithUndo の isStruct 分岐）と同じ二重スナップショット方式のUndo。
 // 復元順序厳守: struct を先に戻してから階グラフを戻す（階グラフの CL 参照解決が structGraph を
 // 引くため——階グラフ側を先に戻すと一時的に参照先を失った状態を経由してしまう）。
@@ -469,8 +494,6 @@ export async function promoteCenterToGridWithUndo(graph, project, cl, opts = {})
   const guardError = checkPromoteToGridGuards(graph, project.structGraph, cl, { excludeBeamAxisIds: absorbableBeamAxisIds });
   if (guardError) return { toast: guardError };
 
-  const { findFloorsWithCounterpartCL, absorbWallBeamAxesOnPromote, applyFloorUndoRecords, rollbackFloorRecords } =
-    await import('./centerLineFloorSync.js');
   // 発見④・ユーザー裁定・案A・2026-09-25: 他階の保護されない壁由来梁芯は重複相手から除外する
   // （absorbWallBeamAxesOnPromoteが同じ階を後で吸収撤去するため）。
   const dupFloors = await findFloorsWithCounterpartCL(project, graph, cl, { excludeAbsorbableBeam: true });
@@ -522,7 +545,7 @@ export async function promoteCenterToGridWithUndo(graph, project, cl, opts = {})
   // 段階(c)・2026-09-25: structuralSyncScopeOfConversion('center','struct')は常に'all'
   // （どちらかが'all'なら全体で'all'。centerLineKindPolicy.js参照）。
   const scope = structuralSyncScopeOfConversion(fromKind, centerLineKind(cl));
-  const notify = () => { if (scope) structuralSyncListener?.(graph, project, scope); };
+  const notify = (records) => { if (scope) structuralSyncListener?.(graph, project, scope, records); };
   const afterArch   = serializeGraph(graph);
   const afterStruct = serializeStructCLs(project.structGraph, project.structuralInfo, project.memberGroupLedger);
   // amendは使わない（design-c.md §3）——他階の複製回収（recallPromotedCenterLineDuplicates）・他階の
@@ -544,14 +567,13 @@ export async function promoteCenterToGridWithUndo(graph, project, cl, opts = {})
     },
   );
 
-  const { recallPromotedCenterLineDuplicates } = await import('./centerLineFloorSync.js');
   // R2裁定: 回収（他階の同一id複製の回収）が例外なら、undoエントリ自体は既に積まれたまま残すが
   // notifyはせずそのまま再throwする（呼び出し側App.jsxのcatchがERR_CL_CONVERT_SYNC_FAILEDトーストを出す）。
   await recallPromotedCenterLineDuplicates(project, graph, cl, {
     undoRecords: floorRecords,
     ...(opts.saveFloorFn ? { saveFloorFn: opts.saveFloorFn } : {}),
   });
-  notify();
+  notify(floorRecords);
   return { toast: null };
 }
 
@@ -577,8 +599,6 @@ export async function demoteGridToCenterWithUndo(graph, project, cl, opts = {}) 
   const guardError = checkDemoteToCenterGuards(graph, project.structGraph, cl);
   if (guardError) return { toast: guardError };
 
-  const { findFloorsWithCounterpartCL, propagateDemotedCenterLine, applyFloorUndoRecords, rollbackFloorRecords } =
-    await import('./centerLineFloorSync.js');
   const dupFloors = await findFloorsWithCounterpartCL(project, graph, cl);
   if (dupFloors.length > 0) {
     // 降格（通り芯→中心）専用の文言。ERR_CL_CONVERT_DUP_FLOOR（昇格用「…通り芯にできません」）を
@@ -616,7 +636,7 @@ export async function demoteGridToCenterWithUndo(graph, project, cl, opts = {}) 
   // 段階(c)・2026-09-25: structuralSyncScopeOfConversion('struct','center')は常に'all'
   // （どちらかが'all'なら全体で'all'。centerLineKindPolicy.js参照）。
   const scope = structuralSyncScopeOfConversion(fromKind, centerLineKind(cl));
-  const notify = () => { if (scope) structuralSyncListener?.(graph, project, scope); };
+  const notify = (records) => { if (scope) structuralSyncListener?.(graph, project, scope, records); };
   const afterArch   = serializeGraph(graph);
   const afterStruct = serializeStructCLs(project.structGraph, project.structuralInfo, project.memberGroupLedger);
   // amendは使わない（design-c.md §3）——他階の複製（propagationRecords）の適用は、structCLs・自階の
@@ -635,7 +655,7 @@ export async function demoteGridToCenterWithUndo(graph, project, cl, opts = {}) 
       notify();
     },
   );
-  notify();
+  notify(propagationRecords);
 
   return { toast: null };
 }
@@ -662,8 +682,11 @@ export function shouldSuggestWoodStructure(graph, project, appMode, clType, newV
 // extent解決・重複判定（ERR_CL_DUPLICATE等）・結合連鎖（mergeCenterLineChain/composeUndoWithMergeChain）・
 // undo登録を行う。ダイアログを閉じる setState・木造提案 ConfirmDialog の表示は呼び出し側（App.jsx）。
 // @param {object} payload { clDialog, value, kind, refId, refOffset }
+// @param {object} [opts] - opts.saveFloorFn はテスト用の差し替え（既定はcenterLineFloorSync.js側のsaveFloor。
+//   段階(g)・2026-09-26。構造同期が非アクティブ階へ書く際のsave差し替えに使う——probeで実IDBへの
+//   誤書込みを防ぐため必須）。
 // @returns {{ done: boolean, toast: string|null, suggestWood: {clType, newValues}|null }}
-export function addCenterLineFromDialog(graph, project, payload, viewport) {
+export function addCenterLineFromDialog(graph, project, payload, viewport, opts = {}) {
   const { clDialog, value, kind, refId, refOffset } = payload;
   const clType = clDialog.type === 'vertical' ? CenterLineType.VERTICAL : CenterLineType.HORIZONTAL;
   // 段階(c)・2026-09-25: 「操作×種別」の専用表は作らず、削除・移動と同じstructuralSyncScopeOfKindを
@@ -710,6 +733,7 @@ export function addCenterLineFromDialog(graph, project, payload, viewport) {
         restoreStructCLs(project.structGraph, project.structuralInfo, before, project.memberGroupLedger);
       },
       () => restoreStructCLs(project.structGraph, project.structuralInfo, after, project.memberGroupLedger),
+      opts.saveFloorFn,
     );
     return { done: true, toast: null, suggestWood: { clType, newValues } };
   }
@@ -877,6 +901,7 @@ export function addCenterLineFromDialog(graph, project, payload, viewport) {
           graph, project, syncScope,
           () => runInAction(chainResult.undo),
           () => runInAction(chainResult.redo),
+          opts.saveFloorFn,
         );
         return { done: true, toast: null, suggestWood: null };
       }
@@ -939,6 +964,7 @@ export function addCenterLineFromDialog(graph, project, payload, viewport) {
           graph.removeCenterLine(deletedId);
           project.structGraph.addCenterLine(clType, value, structProps, structId);
         },
+        opts.saveFloorFn,
       );
       return { done: true, toast: ERR_CL_CENTER_UPGRADED, suggestWood: { clType, newValues: [value] } };
     }
@@ -1001,6 +1027,7 @@ export function addCenterLineFromDialog(graph, project, payload, viewport) {
       targetGraph.removeCenterLine(clId);
     },
     () => targetGraph.addCenterLine(clType, value, props, clId),
+    opts.saveFloorFn,
   );
   return { done: true, toast: null, suggestWood: kind === 'struct' ? { clType, newValues: [value] } : null };
 }

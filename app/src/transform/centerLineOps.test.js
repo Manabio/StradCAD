@@ -251,6 +251,91 @@ test('commitCLMoveOp: 通り芯の移動は構造同期リスナーを(graph, pr
   }
 });
 
+test('commitCLMoveOp: 通り芯の移動はコミット時のnotifyだけ第4引数(undoRecords)に配列を渡し、undo/redo時のnotifyはundefined（段階(g)・2026-09-26）', () => {
+  const graph = makeGraph();
+  const cl = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: true, discipline: Discipline.STRUCT });
+  graph.addCenterLine(CenterLineType.VERTICAL, 5000, { labeled: true, discipline: Discipline.STRUCT });
+  const project = {};
+  cl.pendingDelta = 500;
+
+  const received = [];
+  setCenterLineStructuralListener((g, p, scope, undoRecords) => received.push(undoRecords));
+  try {
+    const { toast } = commitCLMoveOp(graph, project, cl, 1000);
+    assert.equal(toast, null);
+    assert.ok(Array.isArray(received[0]), 'コミット時notifyの第4引数は配列のはず');
+
+    undoManager.undo();
+    assert.equal(received[1], undefined, 'undo時notifyの第4引数はundefinedのはず');
+
+    undoManager.redo();
+    assert.equal(received[2], undefined, 'redo時notifyの第4引数はundefinedのはず');
+  } finally {
+    setCenterLineStructuralListener(null);
+  }
+});
+
+test('commitCLMoveOp: undoでは箱(floorRecords)のbefore保存がnotifyより前に実行される（順序スパイ・段階(g)・2026-09-26）', () => {
+  const graph = makeGraph();
+  const cl = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: true, discipline: Discipline.STRUCT });
+  graph.addCenterLine(CenterLineType.VERTICAL, 5000, { labeled: true, discipline: Discipline.STRUCT });
+  const project = {}; // activePlane未設定＝applyFloorUndoRecordsは常にsaveFloorFn分岐
+  cl.pendingDelta = 500;
+
+  const order = [];
+  const saveFloorFn = async (planeId, bytes) => { order.push(`save:${planeId}:${bytes}`); };
+  setCenterLineStructuralListener((g, p, scope, undoRecords) => {
+    // 構造同期（実体はstructuralSync.js）が他階f1へ書いたことを模す（配列があるのはコミット時のみ）。
+    if (undoRecords) undoRecords.push({ planeId: 'f1', before: 'b0', after: 'a1' });
+    order.push('notify');
+  });
+  try {
+    const { toast } = commitCLMoveOp(graph, project, cl, 1000, { saveFloorFn });
+    assert.equal(toast, null);
+    assert.deepEqual(order, ['notify'], 'コミット時は記録するだけで保存はしない');
+
+    order.length = 0;
+    undoManager.undo();
+    assert.deepEqual(order, ['save:f1:b0', 'notify'], 'undoではbefore保存がnotifyより前のはず');
+  } finally {
+    setCenterLineStructuralListener(null);
+  }
+});
+
+test('commitCLMoveOp: 同じ階(f1)への連鎖書込み(f0→f1→f2)がある箱で、undoの最後の保存はf0・redoの最後の保存はf2（発見④と同じ「同一planeIdが複数回出てよい」順序。段階(g)・2026-09-26）', () => {
+  const graph = makeGraph();
+  const cl = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: true, discipline: Discipline.STRUCT });
+  graph.addCenterLine(CenterLineType.VERTICAL, 5000, { labeled: true, discipline: Discipline.STRUCT });
+  const project = {};
+  cl.pendingDelta = 500;
+
+  const saves = [];
+  const saveFloorFn = async (planeId, bytes) => { saves.push({ planeId, bytes }); };
+  setCenterLineStructuralListener((g, p, scope, undoRecords) => {
+    if (undoRecords) {
+      // 同じ階へ2回書いた構造同期の実行を模す（例: 絶対吸収＋複製回収のように同一配列へ2件積む）。
+      undoRecords.push({ planeId: 'f1', before: 'f0', after: 'f1' });
+      undoRecords.push({ planeId: 'f1', before: 'f1', after: 'f2' });
+    }
+  });
+  try {
+    const { toast } = commitCLMoveOp(graph, project, cl, 1000, { saveFloorFn });
+    assert.equal(toast, null);
+
+    saves.length = 0;
+    undoManager.undo();
+    const f1Saves = saves.filter(s => s.planeId === 'f1');
+    assert.equal(f1Saves.at(-1).bytes, 'f0', 'undoの最後の保存はf0（真の元の状態）のはず');
+
+    saves.length = 0;
+    undoManager.redo();
+    const f1SavesRedo = saves.filter(s => s.planeId === 'f1');
+    assert.equal(f1SavesRedo.at(-1).bytes, 'f2', 'redoの最後の保存はf2（最終状態）のはず');
+  } finally {
+    setCenterLineStructuralListener(null);
+  }
+});
+
 test('commitCLMoveOp: 偏芯壁の下地帯中心に乗る壁由来梁芯は通り芯の移動分だけ同idで追従し、undoで戻る（段階(c)追加①・2026-09-25）', () => {
   const graph = makeGraph();
   const x0 = graph.addCenterLine(CenterLineType.VERTICAL, 0,    { labeled: false, discipline: Discipline.ARCH });
@@ -622,6 +707,55 @@ test('deleteCenterLineWithUndo: 通り芯削除は構造同期リスナーを(gr
   }
 });
 
+test('deleteCenterLineWithUndo: 通り芯削除はコミット時のnotifyだけ第4引数(undoRecords)に配列を渡し、undo/redo時のnotifyはundefined（段階(g)・QA指摘M-1・2026-09-26）', async () => {
+  const { project, graph } = makeProjectWithGraph();
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: true, discipline: Discipline.STRUCT });
+  const cl = project.structGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: true, discipline: Discipline.STRUCT });
+  project.structGraph.addCenterLine(CenterLineType.VERTICAL, 5000, { labeled: true, discipline: Discipline.STRUCT });
+
+  const received = [];
+  setCenterLineStructuralListener((g, p, scope, undoRecords) => received.push(undoRecords));
+  try {
+    const { toast } = await deleteCenterLineWithUndo(graph, project, cl);
+    assert.equal(toast, null);
+    assert.ok(Array.isArray(received[0]), 'コミット時notifyの第4引数は配列のはず');
+
+    undoManager.undo();
+    assert.equal(received[1], undefined, 'undo時notifyの第4引数はundefinedのはず');
+    undoManager.redo();
+    assert.equal(received[2], undefined, 'redo時notifyの第4引数はundefinedのはず');
+  } finally {
+    setCenterLineStructuralListener(null);
+  }
+});
+
+test('deleteCenterLineWithUndo: 通り芯削除のundoでは箱(floorRecords)のbefore保存がnotifyより前に実行される（順序スパイ・段階(g)・QA指摘M-1・2026-09-26）', async () => {
+  const { project, graph } = makeProjectWithGraph();
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: true, discipline: Discipline.STRUCT });
+  const cl = project.structGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: true, discipline: Discipline.STRUCT });
+  project.structGraph.addCenterLine(CenterLineType.VERTICAL, 5000, { labeled: true, discipline: Discipline.STRUCT });
+
+  const order = [];
+  const saveFloorFn = async (planeId, bytes) => { order.push(`save:${planeId}:${bytes}`); };
+  setCenterLineStructuralListener((g, p, scope, undoRecords) => {
+    if (undoRecords) undoRecords.push({ planeId: 'f1', before: 'b0', after: 'a1' });
+    order.push('notify');
+  });
+  try {
+    const { toast } = await deleteCenterLineWithUndo(graph, project, cl, { saveFloorFn });
+    assert.equal(toast, null);
+    assert.deepEqual(order, ['notify'], 'コミット時は記録するだけで保存はしない');
+
+    order.length = 0;
+    undoManager.undo();
+    assert.deepEqual(order, ['save:f1:b0', 'notify'], 'undoではbefore保存がnotifyより前のはず');
+  } finally {
+    setCenterLineStructuralListener(null);
+  }
+});
+
 test('【失敗系】deleteCenterLineWithUndo: 構造同期リスナー未設定（null）でも例外なく通り芯を削除・undoできる', async () => {
   const { project, graph } = makeProjectWithGraph();
   project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
@@ -680,6 +814,51 @@ test('deleteCenterLineWithUndo: 中心線の削除は構造同期リスナーを
     assert.equal(calls.length, 3, 'redoでも1回呼ばれるはず');
     assert.equal(calls[2].scope, 'activeAndAbove');
     assert.equal(graph.shapeMap.has(centerCLId), false, 'redoで再び削除される');
+  } finally {
+    setCenterLineStructuralListener(null);
+  }
+});
+
+test('deleteCenterLineWithUndo: 中心線削除（非通り芯）はコミット時のnotifyだけ第4引数(undoRecords)に配列を渡し、undo/redo時のnotifyはundefined（段階(g)・QA指摘M-1・2026-09-26）', async () => {
+  const graph = makeGraph();
+  const centerCL = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
+  const project = {};
+
+  const received = [];
+  setCenterLineStructuralListener((g, p, scope, undoRecords) => received.push(undoRecords));
+  try {
+    const { toast } = await deleteCenterLineWithUndo(graph, project, centerCL);
+    assert.equal(toast, null);
+    assert.ok(Array.isArray(received[0]), 'コミット時notifyの第4引数は配列のはず');
+
+    undoManager.undo();
+    assert.equal(received[1], undefined, 'undo時notifyの第4引数はundefinedのはず');
+    undoManager.redo();
+    assert.equal(received[2], undefined, 'redo時notifyの第4引数はundefinedのはず');
+  } finally {
+    setCenterLineStructuralListener(null);
+  }
+});
+
+test('deleteCenterLineWithUndo: 中心線削除（非通り芯）のundoでは箱(floorRecords)のbefore保存がnotifyより前に実行される（順序スパイ・段階(g)・QA指摘M-1・2026-09-26）', async () => {
+  const graph = makeGraph();
+  const centerCL = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
+  const project = {};
+
+  const order = [];
+  const saveFloorFn = async (planeId, bytes) => { order.push(`save:${planeId}:${bytes}`); };
+  setCenterLineStructuralListener((g, p, scope, undoRecords) => {
+    if (undoRecords) undoRecords.push({ planeId: 'f1', before: 'b0', after: 'a1' });
+    order.push('notify');
+  });
+  try {
+    const { toast } = await deleteCenterLineWithUndo(graph, project, centerCL, { saveFloorFn });
+    assert.equal(toast, null);
+    assert.deepEqual(order, ['notify'], 'コミット時は記録するだけで保存はしない');
+
+    order.length = 0;
+    undoManager.undo();
+    assert.deepEqual(order, ['save:f1:b0', 'notify'], 'undoではbefore保存がnotifyより前のはず');
   } finally {
     setCenterLineStructuralListener(null);
   }
@@ -1614,6 +1793,57 @@ test('addCenterLineFromDialog: 単体の通り芯追加は構造同期リスナ�
     assert.equal(calls.length, 2);
     undoManager.redo();
     assert.equal(calls.length, 3);
+  } finally {
+    setCenterLineStructuralListener(null);
+  }
+});
+
+test('addCenterLineFromDialog: 単体の通り芯追加はコミット時のnotifyだけ第4引数(undoRecords)に配列を渡し、undo/redo時のnotifyはundefined（段階(g)・QA指摘M-1・2026-09-26）', () => {
+  const { project, graph } = makeProjectWithGraph();
+
+  const received = [];
+  setCenterLineStructuralListener((g, p, scope, undoRecords) => received.push(undoRecords));
+  try {
+    const result = addCenterLineFromDialog(
+      graph, project,
+      { clDialog: { type: 'vertical', worldCoord: 1000, perpCoord: 0 }, value: 1000, kind: 'struct', refId: null, refOffset: 0 },
+      null,
+    );
+    assert.equal(result.done, true);
+    assert.ok(Array.isArray(received[0]), 'コミット時notifyの第4引数は配列のはず');
+
+    undoManager.undo();
+    assert.equal(received[1], undefined, 'undo時notifyの第4引数はundefinedのはず');
+    undoManager.redo();
+    assert.equal(received[2], undefined, 'redo時notifyの第4引数はundefinedのはず');
+  } finally {
+    setCenterLineStructuralListener(null);
+  }
+});
+
+test('addCenterLineFromDialog: undoでは箱(floorRecords)のbefore保存がnotifyより前に実行される（順序スパイ・段階(g)・QA指摘M-1・2026-09-26）', () => {
+  const { project, graph } = makeProjectWithGraph();
+
+  const order = [];
+  const saveFloorFn = async (planeId, bytes) => { order.push(`save:${planeId}:${bytes}`); };
+  setCenterLineStructuralListener((g, p, scope, undoRecords) => {
+    // 構造同期（実体はstructuralSync.js）が他階f1へ書いたことを模す（配列があるのはコミット時のみ）。
+    if (undoRecords) undoRecords.push({ planeId: 'f1', before: 'b0', after: 'a1' });
+    order.push('notify');
+  });
+  try {
+    const result = addCenterLineFromDialog(
+      graph, project,
+      { clDialog: { type: 'vertical', worldCoord: 1000, perpCoord: 0 }, value: 1000, kind: 'struct', refId: null, refOffset: 0 },
+      null,
+      { saveFloorFn },
+    );
+    assert.equal(result.done, true);
+    assert.deepEqual(order, ['notify'], 'コミット時は記録するだけで保存はしない');
+
+    order.length = 0;
+    undoManager.undo();
+    assert.deepEqual(order, ['save:f1:b0', 'notify'], 'undoではbefore保存がnotifyより前のはず');
   } finally {
     setCenterLineStructuralListener(null);
   }
@@ -3097,6 +3327,30 @@ test('promoteCenterToGridWithUndo: 通り芯化は構造同期リスナーを(gr
   }
 });
 
+test('promoteCenterToGridWithUndo: 通り芯化はコミット時のnotifyだけ第4引数(undoRecords)に配列を渡し、undo/redo時のnotifyはundefined（段階(g)・QA指摘M-1・2026-09-26）', async () => {
+  const { project, graph } = makeProjectWithGraph();
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: true, discipline: Discipline.STRUCT });
+  const cl = graph.addCenterLine(CenterLineType.VERTICAL, 1000, {
+    labeled: false, discipline: Discipline.ARCH, extentLo: -500, extentHi: 3500,
+  });
+
+  const received = [];
+  setCenterLineStructuralListener((g, p, scope, undoRecords) => received.push(undoRecords));
+  try {
+    const { toast } = await promoteCenterToGridWithUndo(graph, project, cl);
+    assert.equal(toast, null);
+    assert.ok(Array.isArray(received[0]), 'コミット時notifyの第4引数は配列のはず');
+
+    undoManager.undo();
+    assert.equal(received[1], undefined, 'undo時notifyの第4引数はundefinedのはず');
+    undoManager.redo();
+    assert.equal(received[2], undefined, 'redo時notifyの第4引数はundefinedのはず');
+  } finally {
+    setCenterLineStructuralListener(null);
+  }
+});
+
 test('demoteGridToCenterWithUndo: 中心線化は構造同期リスナーを(graph, project, "all")で呼ぶ（確定1回・undo1回・redo1回＝計3回。単一階）', async () => {
   const { project, graph } = makeProjectWithGraph();
   project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
@@ -3116,6 +3370,29 @@ test('demoteGridToCenterWithUndo: 中心線化は構造同期リスナーを(gra
     assert.equal(calls.length, 2);
     undoManager.redo();
     assert.equal(calls.length, 3);
+  } finally {
+    setCenterLineStructuralListener(null);
+  }
+});
+
+test('demoteGridToCenterWithUndo: 中心線化はコミット時のnotifyだけ第4引数(undoRecords)に配列を渡し、undo/redo時のnotifyはundefined（段階(g)・QA指摘M-1・2026-09-26）', async () => {
+  const { project, graph } = makeProjectWithGraph();
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: true, discipline: Discipline.STRUCT });
+  const cl = project.structGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: true, discipline: Discipline.STRUCT });
+  project.structGraph.addCenterLine(CenterLineType.VERTICAL, 5000, { labeled: true, discipline: Discipline.STRUCT });
+
+  const received = [];
+  setCenterLineStructuralListener((g, p, scope, undoRecords) => received.push(undoRecords));
+  try {
+    const { toast } = await demoteGridToCenterWithUndo(graph, project, cl);
+    assert.equal(toast, null, JSON.stringify(toast));
+    assert.ok(Array.isArray(received[0]), 'コミット時notifyの第4引数は配列のはず');
+
+    undoManager.undo();
+    assert.equal(received[1], undefined, 'undo時notifyの第4引数はundefinedのはず');
+    undoManager.redo();
+    assert.equal(received[2], undefined, 'redo時notifyの第4引数はundefinedのはず');
   } finally {
     setCenterLineStructuralListener(null);
   }
@@ -3447,6 +3724,49 @@ test('applyCLEccentricityWithUndo: 中心線の偏芯確定は構造同期リス
     assert.equal(calls.length, 3, 'redoでも1回呼ばれるはず');
     assert.equal(graph.clEccentricities.get(centerCLId).value, 300);
     assert.equal(graph.walls.find(w => w.axisCL.id === centerCLId).backingOffset, 300);
+  } finally {
+    setCenterLineStructuralListener(null);
+  }
+});
+
+test('applyCLEccentricityWithUndo: 中心線の偏芯確定はコミット時のnotifyだけ第4引数(undoRecords)に配列を渡し、undo/redo時のnotifyはundefined（段階(g)・QA指摘M-1・2026-09-26）', async () => {
+  const { project, graph, centerCL } = makeEccGraph();
+  const rec = { mode: 'value', value: 300 };
+
+  const received = [];
+  setCenterLineStructuralListener((g, p, scope, undoRecords) => received.push(undoRecords));
+  try {
+    const { toast } = await applyCLEccentricityWithUndo(graph, project, centerCL, { rec, applyFn: stubApplyFn, propagateFn: noopPropagateFn });
+    assert.equal(toast, null);
+    assert.ok(Array.isArray(received[0]), 'コミット時notifyの第4引数は配列のはず');
+
+    undoManager.undo();
+    assert.equal(received[1], undefined, 'undo時notifyの第4引数はundefinedのはず');
+    undoManager.redo();
+    assert.equal(received[2], undefined, 'redo時notifyの第4引数はundefinedのはず');
+  } finally {
+    setCenterLineStructuralListener(null);
+  }
+});
+
+test('applyCLEccentricityWithUndo: undoでは箱(floorRecords)のbefore保存がnotifyより前に実行される（順序スパイ・段階(g)・QA指摘M-1・2026-09-26）', async () => {
+  const { project, graph, centerCL } = makeEccGraph();
+  const rec = { mode: 'value', value: 300 };
+
+  const order = [];
+  const saveFloorFn = async (planeId, bytes) => { order.push(`save:${planeId}:${bytes}`); };
+  setCenterLineStructuralListener((g, p, scope, undoRecords) => {
+    if (undoRecords) undoRecords.push({ planeId: 'f1', before: 'b0', after: 'a1' });
+    order.push('notify');
+  });
+  try {
+    const { toast } = await applyCLEccentricityWithUndo(graph, project, centerCL, { rec, materialMap: undefined, saveFloorFn, applyFn: stubApplyFn, propagateFn: noopPropagateFn });
+    assert.equal(toast, null);
+    assert.deepEqual(order, ['notify'], 'コミット時は記録するだけで保存はしない');
+
+    order.length = 0;
+    undoManager.undo();
+    assert.deepEqual(order, ['save:f1:b0', 'notify'], 'undoではbefore保存がnotifyより前のはず');
   } finally {
     setCenterLineStructuralListener(null);
   }
