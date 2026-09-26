@@ -8,7 +8,7 @@
  * ステップ1（本ファイル）は CenterLine 用の centerLineOriginColorKey のみ。将来ステップ3で
  * 柱の由来キーを返す columnOriginColorKey をここへ同居させる予定（柱の×表も同じ由来色を使うため）。
  */
-import { centerLineKind } from '../core/centerLine.js';
+import { centerLineKind, BeamAxisOrigin } from '../core/centerLine.js';
 
 /**
  * CenterLine の由来色キー（canvasStyle.js の ORIGIN_HUES のキー）を返す。
@@ -16,14 +16,25 @@ import { centerLineKind } from '../core/centerLine.js';
  *   'struct' → 'grid'（通り芯由来）
  *   'center' → 'center'（中心線由来）
  *   'aux'    → 'aux'（補助・手動）
- *   'beam'   → 'generated'（壁・床梁割付けからの自動生成。ステップ2で梁芯の由来フィールドにより
- *              'above'（上階荷重）・'supportSpan'（支持長）等へ分岐する予定——現時点では一律 'generated'）
+ *   'beam'   → cl.beamAxisOrigin（ステップ2で新設した由来フィールド）で分岐する:
+ *              wall/floorBeam（壁・床梁割付けからの自動生成）→ 'generated'
+ *              center（中心線由来。S造向け・未実装。色キーのみ予約）→ 'center'
+ *              user（AddCLDialogから追加）→ 'aux'
+ *              null（既存データ・不明）→ 'none'
  * @param {import('../core/centerLine.js').CenterLine} cl
- * @returns {'grid'|'center'|'aux'|'generated'}
+ * @returns {'grid'|'center'|'aux'|'generated'|'none'}
  */
 export function centerLineOriginColorKey(cl) {
   const kind = centerLineKind(cl);
   if (kind === 'struct') return 'grid';
-  if (kind === 'beam') return 'generated';
+  if (kind === 'beam') {
+    switch (cl.beamAxisOrigin) {
+      case BeamAxisOrigin.WALL:
+      case BeamAxisOrigin.FLOOR_BEAM: return 'generated';
+      case BeamAxisOrigin.CENTER:     return 'center';
+      case BeamAxisOrigin.USER:       return 'aux';
+      default:                        return 'none';
+    }
+  }
   return kind; // 'center' | 'aux'
 }

@@ -3,6 +3,7 @@
 // 抽出したもの（挙動は元コードのまま。呼び出し側の setState・modeRef 操作だけを App.jsx に残す）。
 import { runInAction } from 'mobx';
 import { CenterLineType, Discipline, centerLineKind, isGridCenterLine } from '@core';
+import { BeamAxisOrigin } from '../core/centerLine.js';
 import { undoManager } from '../undoManager.js';
 import { serializeGraph, restoreGraph, serializeStructCLs, restoreStructCLs } from '../graphSnapshot.js';
 import {
@@ -988,7 +989,7 @@ export function addCenterLineFromDialog(graph, project, payload, viewport, opts 
     ...extentProps,
     ...(kind === 'struct' ? { discipline: Discipline.STRUCT } : {}),
     ...(kind === 'aux'    ? { labeled: false, lineType: 'dashed' } : {}),
-    ...(kind === 'beam'   ? { discipline: Discipline.FUSE, labeled: false } : {}),
+    ...(kind === 'beam'   ? { discipline: Discipline.FUSE, labeled: false, beamAxisOrigin: BeamAxisOrigin.USER } : {}),
     ...(isRefResolvable ? { refId, refOffset: refOffset ?? 0 } : {}),
   };
 

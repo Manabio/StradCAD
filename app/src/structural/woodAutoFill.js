@@ -12,6 +12,7 @@
 // extent の短い梁芯CLが永続化され、後の重複ガードで固定される）。
 import { CenterLineType, Discipline, centerLineKind, columnSlotKey, columnAnchorKey, spanKey, beamExclusionKey, findHostPrimaryBeam } from '../core.js';
 import { CL_OVERLAP_TOL_MM } from '../core/constants.js';
+import { BeamAxisOrigin, fillBeamAxisOriginIfUnknown } from '../core/centerLine.js';
 import { structuralAnchorAt, structuralAnchorCandidates, supportSpanColumnCandidates, spansEntireAxis } from '../core/centerLineKindPolicy.js';
 import { findSectionEntry, woodRectSectionKey } from './sectionCatalog.js';
 import {
@@ -1537,11 +1538,16 @@ export function autoFillWoodFloorBeams(graph, project) {
     for (let i = 1; i < n; i++) {
       const coord = longLo + i * pitch;
       let axisCL = findBeamAnchorCL(graph, axisType, coord);
+      // 由来は「その座標が床梁の候補になった」時点の意味であり、この後の除外集合・スパン重複判定
+      // （下のexcludedBeamSlots/existingFloorKeys等）より前に書き戻す。そのため実際には床梁を
+      // 生成しない座標の既存梁芯にもfloorBeamが付きうる（色分けはwall由来と同じgeneratedのため実害なし）。
+      if (axisCL) fillBeamAxisOriginIfUnknown(axisCL, BeamAxisOrigin.FLOOR_BEAM);
       if (!axisCL) {
         const excludeKey = wallBeamAxisExcludeKey(isVertical, coord);
         if (graph.excludedWallBeamAxes.has(excludeKey)) continue; // 手動削除の尊重
         axisCL = graph.addCenterLine(axisType, coord, {
           labeled: false, discipline: Discipline.FUSE, extentLo: shortLo, extentHi: shortHi,
+          beamAxisOrigin: BeamAxisOrigin.FLOOR_BEAM,
         });
       }
 

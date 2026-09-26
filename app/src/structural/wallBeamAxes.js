@@ -3,6 +3,7 @@
 // 小梁の生成・端部トリム・除外集合・採番はすべて既存経路）。設計意図は .claude/structural-model.md 参照。
 import { CenterLineType, Discipline } from '../core.js';
 import { CL_OVERLAP_TOL_MM } from '../core/constants.js';
+import { BeamAxisOrigin, fillBeamAxisOriginIfUnknown } from '../core/centerLine.js';
 import { structuralAnchorAt, beamAxisAt } from '../core/centerLineKindPolicy.js';
 import { backingClassOf } from '../finish/materials/backingClass.js';
 import { roomBounds } from '../finish/gridCells.js';
@@ -242,8 +243,9 @@ export function selfWallSegments(graph, cache = undefined) {
 // 保護されていればskip（旧を残す。従来どおり）。実装は wallBeamAxisFollow.js の
 // followWallBeamAxes（本ファイルの findWallBeamAxisCL/findBeamAnchorCL/isProtectedWallBeamAxis
 // を使う側）参照。
-// 対応先の壁が無くなった孤児梁芯は撤去しない（2026-09-15裁定。現状に撤去規律が無く、
-// 自動/手動の出自フラグも無いため）——上記の重複吸収とは別物（重複吸収は「追従先に既に相手がいる」
+// 対応先の壁が無くなった孤児梁芯は撤去しない（2026-09-15裁定。現状に撤去規律が無いため。
+// 由来（beamAxisOrigin）は色分け用であり、旧データはnullで出自を保証できないため、
+// 孤児撤去の判定には使わない）——上記の重複吸収とは別物（重複吸収は「追従先に既に相手がいる」
 // ときだけの一般則、孤児放置は「追従先が無い（対応する壁が消えた）」ときの既定）。
 // **例外（ユーザー承認済み・2026-09-25）**: 一般の孤児梁芯撤去規律は作らないが、
 // transform/centerLineOps.js の明示的な中心線削除に限り、その削除自体で壁ソースが消えた
@@ -630,7 +632,14 @@ export function autoFillWallBeamAxes(graph, wallSources) {
     // 済みのため、その位置に梁芯が立つのは「中心線の代わりに梁芯が見える」という設計どおりの状態）。
     // beamAxisMoveRange の障害物集合（通り芯・他の梁芯のみ）と同じ規約に揃える。判定は
     // findBeamAnchorCL（壁交点柱のアンカー解決と同一の述語＝二重管理しない）。
-    if (findBeamAnchorCL(graph, centerLineType, src.coord)) continue;
+    const anchor = findBeamAnchorCL(graph, centerLineType, src.coord);
+    if (anchor) {
+      // 既存の梁芯を再利用する場合、由来が未設定（旧データ）なら壁由来として書き戻す
+      // （centerLineKindPolicy.js structuralAnchorAt が通り芯を返すこともあるが、
+      // fillBeamAxisOriginIfUnknown は梁芯以外には何もしない）。
+      fillBeamAxisOriginIfUnknown(anchor, BeamAxisOrigin.WALL);
+      continue;
+    }
 
     const gridCLs = src.isVertical ? graph.gridYs : graph.gridXs; // 直交通り芯（value昇順）
     const { loCL, hiCL } = bracketExtent(gridCLs, src.lo, src.hi);
@@ -642,6 +651,7 @@ export function autoFillWallBeamAxes(graph, wallSources) {
       extentHiRef: hiCL ? { clId: hiCL.id, offset: 0 } : null,
       extentLo: loCL ? null : src.lo,
       extentHi: hiCL ? null : src.hi,
+      beamAxisOrigin: BeamAxisOrigin.WALL,
     }));
   }
   return created;

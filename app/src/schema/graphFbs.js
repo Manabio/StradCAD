@@ -12,6 +12,14 @@
 import { Builder, ByteBuffer } from 'flatbuffers';
 import { normalizeSubType } from '../openings/openingCatalog.js';
 import { UNSPECIFIED_STRUCTURE, MAT_FOUNDATION } from '../structural/structureRules.js';
+import { BeamAxisOrigin } from '../core/centerLine.js';
+
+// CenterLine.beamAxisOrigin の許容値集合（BeamAxisOriginの値のみ。未知の文字列はnullへ正規化する
+// ——破損データ・将来削除された由来値がそのままUIへ漏れて未知の色分岐に落ちるのを防ぐ）。
+const BEAM_ORIGIN_VALUES = new Set(Object.values(BeamAxisOrigin));
+function decodeBeamAxisOrigin(v) {
+  return v && BEAM_ORIGIN_VALUES.has(v) ? v : null;
+}
 
 // ================================================================
 // 列挙値エンコード
@@ -126,7 +134,7 @@ const EXT_LEVEL_REF_DEC = ['room', 'gl'];
 const ROOM_FEATURE_ENC = { stair: 1, void: 2, stairVoid: 3, undefined: 4 };
 const ROOM_FEATURE_DEC = [null, 'stair', 'void', 'stairVoid', 'undefined'];
 
-// CenterLine: 17 フィールド (0–16)
+// CenterLine: 18 フィールド (0–17)
 const CL = {
   ID: 0, TYPE: 1, VALUE: 2, LABELED: 3, TRIM: 4,
   REF_ID: 5, REF_OFF: 6,
@@ -134,6 +142,7 @@ const CL = {
   HAS_LO: 9, LO: 10,
   HAS_HI: 11, HI: 12,
   DISC: 13, LW: 14, LT: 15, COL: 16,
+  BEAM_ORIGIN: 17, // 梁芯の由来（BeamAxisOrigin）。null のときはフィールド自体を書かない（末尾追加）
 };
 
 // ExtentRef: 3 フィールド (clId | wallId + offset)
@@ -370,8 +379,11 @@ function writeCL(b, cl) {
   const sId    = b.createString(cl.id);
   const sRefId = b.createString(cl.refId ?? '');
   const bp     = strBase(b, { discipline: cl.discipline, lineType: cl.lineType, color: cl.color });
+  // 由来が非null のときだけ文字列を作る（既存CLのバイト列を不変に保つ。OP.FIXTURE_TYPEの
+  // 未知記号文字列と同じパターン）。
+  const sBeamOrigin = cl.beamAxisOrigin ? b.createString(cl.beamAxisOrigin) : 0;
 
-  b.startObject(17);
+  b.startObject(18);
   b.addFieldOffset(CL.ID,     sId,    0);
   b.addFieldInt8(CL.TYPE,     CL_TYPE_ENC[cl.centerLineType] ?? 0, 0);
   b.addFieldFloat64(CL.VALUE, cl.value, 0.0);
@@ -389,6 +401,7 @@ function writeCL(b, cl) {
   b.addFieldFloat64(CL.LW,    cl.lineWeight ?? 0.15, 0.0);
   b.addFieldOffset(CL.LT,     bp.lt,   0);
   b.addFieldOffset(CL.COL,    bp.col,  0);
+  b.addFieldOffset(CL.BEAM_ORIGIN, sBeamOrigin, 0);
   return b.endObject();
 }
 
@@ -1157,6 +1170,7 @@ function readCL(bb, tablePos) {
     lineWeight:     r.f64(CL.LW)    || 0.15,
     lineType:       r.str(CL.LT)    || 'center',
     color:          r.str(CL.COL)   || '#000000',
+    beamAxisOrigin: decodeBeamAxisOrigin(r.str(CL.BEAM_ORIGIN)),
   };
 }
 

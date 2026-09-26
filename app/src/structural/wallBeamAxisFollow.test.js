@@ -8,6 +8,7 @@ import assert from 'node:assert/strict';
 import { Plane, PlanGraph, CenterLineType, Discipline, StructuralMaterialType } from '../core.js';
 import { findBeamAnchorCL, wallBeamAxisExcludeKey } from './wallBeamAxes.js';
 import { followWallBeamAxes } from './wallBeamAxisFollow.js';
+import { BeamAxisOrigin } from '../core/centerLine.js';
 
 function makeGraph(planeId = 'p1', elevation = 0) {
   const plane = new Plane(planeId, elevation, `${planeId}階`, 1, 1);
@@ -61,6 +62,24 @@ test('【案B】followWallBeamAxes: toに既に別の壁由来梁芯があり旧
 
   redoFns.forEach(fn => fn());
   assert.equal(graph.shapeMap.has(beamCLId), false, 'redoで再び撤去されるはず');
+});
+
+// 由来フィールド（BeamAxisOrigin。ステップ2・2026-09-26）: 吸収→undoのスナップショット
+// （snapshotForRestore）が beamAxisOrigin も再現すること。
+test('【案B・由来】followWallBeamAxes: 吸収されたfuse梁芯のbeamAxisOriginはundoで同idの再追加後も保たれる', () => {
+  const graph = makeGraph();
+  const beamCL = addFuseCL(graph, 2045);
+  beamCL.beamAxisOrigin = BeamAxisOrigin.WALL;
+  const beamCLId = beamCL.id;
+  addFuseCL(graph, 2060); // 新座標に既に別の梁芯（相手）
+
+  const { absorbed, undoFns } = followWallBeamAxes(graph, [{ axisCLId: 'ax1', isVertical: false, from: 2045, to: 2060 }]);
+  assert.equal(absorbed.length, 1);
+  assert.equal(graph.shapeMap.has(beamCLId), false);
+
+  undoFns.forEach(fn => fn());
+  const restored = graph.shapeMap.get(beamCLId);
+  assert.equal(restored.beamAxisOrigin, BeamAxisOrigin.WALL, 'undoで再追加された旧梁芯のbeamAxisOriginが保たれる');
 });
 
 test('【案B】followWallBeamAxes: toに通り芯があり旧が保護されなければ、旧を吸収して撤去する。undoで同idで戻る（相手の通り芯はそのまま残る）', () => {

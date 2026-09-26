@@ -112,6 +112,7 @@ export function absorbCenterLine(graph, survivor, loser, touch) {
       ...(loser.extentHiRef != null ? { extentHiRef: loser.extentHiRef } : {}),
       ...(loser._extentLo != null ? { extentLo: loser._extentLo } : {}),
       ...(loser._extentHi != null ? { extentHi: loser._extentHi } : {}),
+      ...(loser.beamAxisOrigin != null ? { beamAxisOrigin: loser.beamAxisOrigin } : {}),
     },
   };
 

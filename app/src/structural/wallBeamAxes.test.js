@@ -10,6 +10,7 @@ import {
   peekRoofBelowGraph, peekRoofGraphAbove, createWallSourceCache,
   wallBeamSourcesFor, orphanedWallBeamAxes, wallBackingCenterCoord,
 } from './wallBeamAxes.js';
+import { BeamAxisOrigin } from '../core/centerLine.js';
 import { RC_WALL_BACKING_CODES } from '../finish/materials/backingClass.js';
 import { MATERIALS } from '../finish/materials/materialData.js';
 import { materialThickness } from '../finish/edgeComposition.js';
@@ -122,6 +123,42 @@ test('autoFillWallBeamAxes: 同方向の既存梁芯（fuse）とCL_OVERLAP_TOL_
   const wallSources = [{ isVertical: false, coord: 2000, lo: 0, hi: 8000 }];
   const created = autoFillWallBeamAxes(graph, wallSources);
   assert.equal(created.length, 0);
+});
+
+// 由来フィールド（BeamAxisOrigin。ステップ2・2026-09-26）
+test('autoFillWallBeamAxes: 新規生成した梁芯にはbeamAxisOrigin:wallが入る', () => {
+  const { graph } = makeGridGraph('p1', 0);
+  const wallSources = [{ isVertical: false, coord: 2000, lo: 0, hi: 8000 }];
+  const created = autoFillWallBeamAxes(graph, wallSources);
+  assert.equal(created[0].beamAxisOrigin, BeamAxisOrigin.WALL);
+});
+
+test('autoFillWallBeamAxes: 由来未設定(null)の既存梁芯を再利用するとき由来をwallへ書き戻す（旧データの初回再計算）', () => {
+  const { graph } = makeGridGraph('p1', 0);
+  const existing = graph.addCenterLine(CenterLineType.HORIZONTAL, 2000, { labeled: false, discipline: Discipline.FUSE });
+  assert.equal(existing.beamAxisOrigin, null);
+  const wallSources = [{ isVertical: false, coord: 2000, lo: 0, hi: 8000 }];
+  autoFillWallBeamAxes(graph, wallSources);
+  assert.equal(existing.beamAxisOrigin, BeamAxisOrigin.WALL);
+});
+
+test('autoFillWallBeamAxes: anchorが通り芯（struct）のときは由来を書き戻さない（beamAxisOriginは通り芯には無い属性のためnullのまま）', () => {
+  const { graph, y1 } = makeGridGraph('p1', 0);
+  assert.equal(y1.beamAxisOrigin, null, '前提: 通り芯にbeamAxisOriginという概念は無い（既定null）');
+  const wallSources = [{ isVertical: false, coord: 0, lo: 0, hi: 8000 }]; // y1(Y=0)と同座標
+  const created = autoFillWallBeamAxes(graph, wallSources);
+  assert.equal(created.length, 0, '通り芯をそのままアンカーに使い新規梁芯は作らない');
+  assert.equal(y1.beamAxisOrigin, null, '通り芯はcenterLineKind!==\'beam\'のためfillBeamAxisOriginIfUnknownはno-op');
+});
+
+test('autoFillWallBeamAxes: 既存梁芯のbeamAxisOrigin:userは書き戻しで上書きされない', () => {
+  const { graph } = makeGridGraph('p1', 0);
+  const existing = graph.addCenterLine(CenterLineType.HORIZONTAL, 2000, {
+    labeled: false, discipline: Discipline.FUSE, beamAxisOrigin: BeamAxisOrigin.USER,
+  });
+  const wallSources = [{ isVertical: false, coord: 2000, lo: 0, hi: 8000 }];
+  autoFillWallBeamAxes(graph, wallSources);
+  assert.equal(existing.beamAxisOrigin, BeamAxisOrigin.USER);
 });
 
 test('autoFillWallBeamAxes: 既存梁芯の位置に後から意匠中心線が追加されていても梁芯を重複生成しない', () => {

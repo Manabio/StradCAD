@@ -31,6 +31,7 @@ function snapshotForRestore(cl) {
       ...(cl.extentHiRef != null ? { extentHiRef: cl.extentHiRef } : {}),
       ...(cl._extentLo != null ? { extentLo: cl._extentLo } : {}),
       ...(cl._extentHi != null ? { extentHi: cl._extentHi } : {}),
+      ...(cl.beamAxisOrigin != null ? { beamAxisOrigin: cl.beamAxisOrigin } : {}),
     },
   };
 }

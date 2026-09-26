@@ -21,6 +21,7 @@ import { recomputeStructuralForGraph } from './structuralRecompute.js';
 import { SECONDARY_BEAM_CLEARANCE_MM } from '../core/structuralEntities.js';
 import { findSectionEntry } from './sectionCatalog.js';
 import { serializeGraph, restoreGraph } from '../graphSnapshot.js';
+import { BeamAxisOrigin } from '../core/centerLine.js';
 
 function makeGridGraph(structure = TRADITIONAL_WOOD_STRUCTURE) {
   const graph = new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
@@ -4134,6 +4135,13 @@ test('autoFillWoodFloorBeams: 2730×5460のセル（短辺2730）に床梁2本�
   assert.deepEqual([again.created.length, again.removed.length], [0, 0]);
 });
 
+// 由来フィールド（BeamAxisOrigin。ステップ2・2026-09-26）
+test('autoFillWoodFloorBeams: 新規生成した床梁の軸CLにはbeamAxisOrigin:floorBeamが入る', () => {
+  const { graph } = buildClosedCellGraph(TRADITIONAL_WOOD_STRUCTURE);
+  const { created } = autoFillWoodFloorBeams(graph, PROJECT);
+  for (const b of created) assert.equal(b.axisCL.beamAxisOrigin, BeamAxisOrigin.FLOOR_BEAM);
+});
+
 test('【失敗系】autoFillWoodFloorBeams: 短辺がちょうど1820（floorBeamMaxPitchMm）以下のセルは床梁なし', () => {
   const { graph } = buildClosedCellGraph(TRADITIONAL_WOOD_STRUCTURE, { width: 1820 });
   const { created, removed } = autoFillWoodFloorBeams(graph, PROJECT);
@@ -4186,6 +4194,25 @@ test('autoFillWoodFloorBeams（F1・D1再ブラケット）: 位置に既存の�
   autoFillWoodFloorBeams(graph, PROJECT);
   assert.deepEqual(pre.extentLoRef, { clId: x0.id, offset: 0 });
   assert.deepEqual(pre.extentHiRef, { clId: x1.id, offset: 0 });
+});
+
+test('autoFillWoodFloorBeams: 由来未設定(null)の既存梁芯CLを再利用するとき由来をfloorBeamへ書き戻す（旧データの初回再計算）', () => {
+  const { graph } = buildClosedCellGraph(TRADITIONAL_WOOD_STRUCTURE);
+  const pre = graph.addCenterLine(CenterLineType.HORIZONTAL, 1820, {
+    labeled: false, discipline: Discipline.FUSE, extentLo: 500, extentHi: 800,
+  });
+  assert.equal(pre.beamAxisOrigin, null);
+  autoFillWoodFloorBeams(graph, PROJECT);
+  assert.equal(pre.beamAxisOrigin, BeamAxisOrigin.FLOOR_BEAM);
+});
+
+test('autoFillWoodFloorBeams: 既存梁芯CLのbeamAxisOrigin:userは書き戻しで上書きされない', () => {
+  const { graph } = buildClosedCellGraph(TRADITIONAL_WOOD_STRUCTURE);
+  const pre = graph.addCenterLine(CenterLineType.HORIZONTAL, 1820, {
+    labeled: false, discipline: Discipline.FUSE, extentLo: 500, extentHi: 800, beamAxisOrigin: BeamAxisOrigin.USER,
+  });
+  autoFillWoodFloorBeams(graph, PROJECT);
+  assert.equal(pre.beamAxisOrigin, BeamAxisOrigin.USER);
 });
 
 test('【旧データ限定・種別ベースへ統一】autoFillWoodFloorBeams: 既存の梁芯CL（fuse）が{labeled:true}（種別beam。通り芯として作図されない旧データ）でも再ブラケットする——移行前はaxisCL.labeled===falseを要求しスキップしていた', () => {

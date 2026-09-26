@@ -7,6 +7,7 @@ import {
 } from './graphSnapshot.js';
 import { editSiteLineLength } from './transform/siteEdit.js';
 import { decode } from './schema/graphFbs.js';
+import { BeamAxisOrigin } from './core/centerLine.js';
 
 // wallBeamAxes.test.js と同じ方針: ダックタイピングでは effectiveValue 等の実挙動を
 // 再現できないため、実 core.js（Plane/PlanGraph）を使う。
@@ -76,6 +77,57 @@ test('【失敗系】Wall.bandOffset 未設定（null。旧データ相当）は
   const w2 = restored.shapeMap.get(wall.id);
   assert.ok(w2);
   assert.equal(w2.bandOffset, null);
+});
+
+// ---- CenterLine.beamAxisOrigin（梁芯の由来。core/centerLine.js BeamAxisOrigin。
+// schema/graphFbs.js CL.BEAM_ORIGINを末尾追加。ステップ2・2026-09-26） ----
+test('CenterLine.beamAxisOrigin は FlatBuffers encode→decode で値ありのまま往復する', () => {
+  const graph = makeGraph();
+  const cl = graph.addCenterLine(CenterLineType.VERTICAL, 1000, {
+    labeled: false, discipline: Discipline.FUSE, beamAxisOrigin: BeamAxisOrigin.WALL,
+  });
+
+  const bytes = serializeGraph(graph);
+  const restored = makeGraph();
+  restoreGraph(restored, bytes);
+
+  const cl2 = restored.shapeMap.get(cl.id);
+  assert.ok(cl2, '復元後に同一IDの中心線が存在する');
+  assert.equal(cl2.beamAxisOrigin, BeamAxisOrigin.WALL);
+});
+
+test('【失敗系】CenterLine.beamAxisOrigin 未設定（null。旧データ相当）は encode→decode 後も null のまま（既定値に化けない・field 17なしで復元）', () => {
+  const graph = makeGraph();
+  // beamAxisOrigin は未設定のまま（旧データのフィールド欠落と同値の状態）
+  const cl = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.FUSE });
+  assert.equal(cl.beamAxisOrigin, null, '前提');
+
+  const bytes = serializeGraph(graph);
+  const restored = makeGraph();
+  restoreGraph(restored, bytes);
+
+  const cl2 = restored.shapeMap.get(cl.id);
+  assert.ok(cl2);
+  assert.equal(cl2.beamAxisOrigin, null);
+});
+
+// QA対応（ステップ2・2026-09-26）: schema/graphFbs.js readCLはBeamAxisOriginの既知の値以外を
+// nullへ正規化する（破損データ・将来削除された由来値が未知の色分岐に漏れるのを防ぐ）。
+test('【失敗系】CenterLine.beamAxisOrigin が既知の値以外（未知の文字列）で書かれていた場合、decode後はnullに正規化される', () => {
+  const graph = makeGraph();
+  // BeamAxisOriginに存在しない値を直接持たせる（writeCL側は値の妥当性を検証せずそのまま文字列化するため、
+  // 破損データ・将来のenum縮小を模せる）。
+  const cl = graph.addCenterLine(CenterLineType.VERTICAL, 1000, {
+    labeled: false, discipline: Discipline.FUSE, beamAxisOrigin: 'bogus-origin',
+  });
+
+  const bytes = serializeGraph(graph);
+  const restored = makeGraph();
+  restoreGraph(restored, bytes);
+
+  const cl2 = restored.shapeMap.get(cl.id);
+  assert.ok(cl2);
+  assert.equal(cl2.beamAxisOrigin, null, '未知の由来文字列はnullへ落ちる（既知の由来色分岐に漏らさない）');
 });
 
 test('Opening.fixtureType/sillHeight 未設定（null）は encode→decode 後も null のまま（既定値に化けない）', () => {

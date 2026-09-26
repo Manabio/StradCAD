@@ -8,6 +8,7 @@ import { Plane, PlanGraph, CenterLineType, Discipline } from '../core.js';
 import {
   getCenterLineSegment, segmentsCollinearTouching, findCenterLineMergeMatch, mergeCenterLineChain,
 } from './centerLineMerge.js';
+import { BeamAxisOrigin } from '../core/centerLine.js';
 
 function makeGraph(planeId = 'p1') {
   const plane = new Plane(planeId, 0, `${planeId}階`, 1, 1);
@@ -64,6 +65,30 @@ test('mergeCenterLineChain: 隣接するaux同士は1本に結合される（sur
   assert.equal(result.survivorId, subject.id);
   assert.equal(subject.extentHi, 2000, 'survivorのextentHiがloser側まで延伸される');
   assert.equal(graph.shapeMap.has(neighbor.id), false, 'loserは削除される');
+});
+
+// 由来フィールド（BeamAxisOrigin。ステップ2 QA対応・2026-09-26）: absorbCenterLineのloserSnapshotが
+// beamAxisOriginも保持し、undoで同idの旧CLが復活したときに由来が戻ることを確認する。
+test('mergeCenterLineChain: 実CL同士の梁芯の吸収→undoで、吸収されたloser(beamAxisOrigin:wall)が同idでbeamAxisOrigin込みに復活する', () => {
+  const graph = makeGraph();
+  const subject = graph.addCenterLine(CenterLineType.VERTICAL, 1000, {
+    labeled: false, discipline: Discipline.FUSE, extentLo: 0, extentHi: 1000,
+  });
+  const loser = graph.addCenterLine(CenterLineType.VERTICAL, 1000, {
+    labeled: false, discipline: Discipline.FUSE, extentLo: 1000, extentHi: 2000,
+    beamAxisOrigin: BeamAxisOrigin.WALL,
+  });
+  const loserId = loser.id;
+
+  const result = mergeCenterLineChain(graph, subject, { kind: 'beam' });
+  assert.equal(result.merged, true);
+  assert.equal(result.survivorId, subject.id);
+  assert.equal(graph.shapeMap.has(loserId), false, 'loserは吸収されて削除される');
+
+  result.undo();
+  const restored = graph.shapeMap.get(loserId);
+  assert.ok(restored, 'undoで同idのloserが復活する');
+  assert.equal(restored.beamAxisOrigin, BeamAxisOrigin.WALL, '復活したloserのbeamAxisOriginが保たれる');
 });
 
 // ---- 仮想候補（centerLineOps.js virtualCandidate と同型: discipline/lineTypeを持たない）----

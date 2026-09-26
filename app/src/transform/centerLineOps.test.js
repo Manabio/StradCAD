@@ -20,6 +20,7 @@ import {
   applyCLEccentricityWithUndo,
 } from './centerLineOps.js';
 import { CL_KINDS, coexistenceAt } from '../core/centerLineKindPolicy.js';
+import { BeamAxisOrigin } from '../core/centerLine.js';
 
 function makeGraph(planeId = 'p1') {
   const plane = new Plane(planeId, 0, `${planeId}階`, 1, 1);
@@ -1694,6 +1695,58 @@ test('addCenterLineFromDialog: 梁芯と共存する中心線・補助線があ�
   assert.equal(r4.toast, ERR_CL_DUPLICATE('beam'));
   assert.equal(graph.centerLines.filter(cl => cl.centerLineType === CenterLineType.VERTICAL && cl.value === 5000).length, 2, '中心線は削除されず通り芯も増えない');
   assert.equal(undoManager.peekUndo(), beforeTop2, 'undoは積まれない');
+});
+
+// 由来フィールド（BeamAxisOrigin。ステップ2・2026-09-26）
+test('addCenterLineFromDialog: 梁芯の手動追加はbeamAxisOrigin:userになり、undo/redoを経ても保たれる', () => {
+  const { project, graph } = makeProjectWithGraph();
+  const r = addCenterLineFromDialog(
+    graph, project,
+    { clDialog: { type: 'horizontal', worldCoord: 2000, perpCoord: 0 }, value: 2000, kind: 'beam', refId: null, refOffset: 0 },
+    null,
+  );
+  assert.equal(r.done, true);
+  const beam = graph.centerLines.find(cl => centerLineKind(cl) === 'beam' && cl.value === 2000);
+  const beamId = beam.id;
+  assert.equal(beam.beamAxisOrigin, BeamAxisOrigin.USER);
+
+  // 梁芯追加はグラフスナップショット方式のUndo（graph.clear()→再構築）のため、undo/redo後は
+  // 同一idの新しいCenterLineインスタンスに置き換わる（他の梁芯テストと同じ確認手順）。
+  undoManager.undo();
+  assert.equal(graph.shapeMap.has(beamId), false, 'undoで削除される');
+  undoManager.redo();
+  const restored = graph.shapeMap.get(beamId);
+  assert.equal(restored.beamAxisOrigin, BeamAxisOrigin.USER, 'redo後もbeamAxisOriginが保たれる（graphSnapshot往復）');
+});
+
+test('addCenterLineFromDialog: 通り芯・中心線・補助線の追加ではbeamAxisOriginは付かない（null のまま）', () => {
+  const { project, graph } = makeProjectWithGraph();
+  const rStruct = addCenterLineFromDialog(
+    graph, project,
+    { clDialog: { type: 'vertical', worldCoord: 1000, perpCoord: 0 }, value: 1000, kind: 'struct', refId: null, refOffset: 0 },
+    null,
+  );
+  assert.equal(rStruct.done, true);
+  const struct = project.structGraph.centerLines.find(cl => cl.value === 1000);
+  assert.equal(struct.beamAxisOrigin, null);
+
+  const rCenter = addCenterLineFromDialog(
+    graph, project,
+    { clDialog: { type: 'vertical', worldCoord: 3000, perpCoord: 0 }, value: 3000, kind: 'center', refId: null, refOffset: 0 },
+    null,
+  );
+  assert.equal(rCenter.done, true);
+  const center = graph.centerLines.find(cl => centerLineKind(cl) === 'center' && cl.value === 3000);
+  assert.equal(center.beamAxisOrigin, null);
+
+  const rAux = addCenterLineFromDialog(
+    graph, project,
+    { clDialog: { type: 'vertical', worldCoord: 5000, perpCoord: 0 }, value: 5000, kind: 'aux', refId: null, refOffset: 0 },
+    { scaleDenominator: 100 },
+  );
+  assert.equal(rAux.done, true);
+  const aux = graph.centerLines.find(cl => centerLineKind(cl) === 'aux' && cl.value === 5000);
+  assert.equal(aux.beamAxisOrigin, null);
 });
 
 test('addCenterLineFromDialog: 梁芯の手動追加は既存の中心線・通り芯と同位置に共存できず、通り芯追加も既存の梁芯を拒否する', () => {

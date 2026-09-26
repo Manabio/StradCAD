@@ -15,6 +15,14 @@ import { makeObservable, observable, computed } from 'mobx';
 import { Discipline, ShapeKind } from './constants.js';
 import { Shape } from './shapeBase.js';
 
+// 梁芯（centerLineKind(cl)==='beam'）の由来。既存データ・未設定は null（由来色は'none'＝黒）。
+export const BeamAxisOrigin = Object.freeze({
+  WALL:       'wall',      // 壁由来の自動生成（structural/wallBeamAxes.js）
+  FLOOR_BEAM: 'floorBeam', // 床梁割付け由来の自動生成（structural/woodAutoFill.js）
+  CENTER:     'center',    // 中心線由来（S造向け。未実装・色キーのみ予約）
+  USER:       'user',      // ユーザーが AddCLDialog から追加
+});
+
 export class CenterLine extends Shape {
   /**
    * @param {string} id
@@ -45,12 +53,14 @@ export class CenterLine extends Shape {
     this._extentHiWall  = null; // 解決済み参照 Wall（PlanGraph が設定）
     this.label          = '';
     this._referencedCL  = null; // 参照先 CL の参照を保持（PlanGraph が設定）
+    this.beamAxisOrigin = props.beamAxisOrigin ?? null; // 梁芯の由来（BeamAxisOrigin）。梁芯以外は常にnull
     makeObservable(this, {
       _value:         observable,
       pendingDelta:   observable,
       refId:          observable,
       refOffset:      observable,
       _referencedCL:  observable,
+      beamAxisOrigin: observable,
       value:          computed,
       effectiveValue: computed,
       labeled:        observable,
@@ -129,4 +139,19 @@ export function centerLineKind(cl) {
  */
 export function isGridCenterLine(cl) {
   return !!cl.labeled && centerLineKind(cl) === 'struct';
+}
+
+/**
+ * 梁芯CLの由来が未設定（null＝旧データ・不明）のときだけ origin を書き込む（書き戻し用）。
+ * 梁芯以外（centerLineKind(cl)!=='beam'）・既に由来がある場合（'user'含む）は何もしない
+ * ——ユーザー追加('user')の梁芯を自動生成の書き戻しで上書きしないため。
+ * @param {import('./centerLine.js').CenterLine} cl
+ * @param {string} origin BeamAxisOrigin の値
+ * @returns {boolean} 実際に書き込んだら true
+ */
+export function fillBeamAxisOriginIfUnknown(cl, origin) {
+  if (centerLineKind(cl) !== 'beam') return false;
+  if (cl.beamAxisOrigin != null) return false;
+  cl.beamAxisOrigin = origin;
+  return true;
 }

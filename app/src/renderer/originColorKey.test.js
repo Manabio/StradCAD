@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { centerLineOriginColorKey } from './originColorKey.js';
 import { originColor, ORIGIN_LIGHTNESS, ORIGIN_LIGHT_LIFT, ORIGIN_NONE_COLOR } from './canvasStyle.js';
-import { CenterLine } from '../core/centerLine.js';
+import { CenterLine, BeamAxisOrigin } from '../core/centerLine.js';
 import { CenterLineType, Discipline } from '../core/constants.js';
 
 // centerLineKind の4種別（app/src/core/centerLine.js centerLineKind）を実物のCenterLineで再現し、
@@ -26,9 +26,26 @@ test('centerLineOriginColorKey: 補助線(lineType:dashed)は aux', () => {
   assert.equal(centerLineOriginColorKey(cl), 'aux');
 });
 
-test('centerLineOriginColorKey: 梁芯(discipline:fuse)は generated', () => {
+// ステップ2（2026-09-26）: 梁芯(discipline:fuse)の由来色は一律 'generated' ではなく
+// beamAxisOrigin で分岐する。既存データ・未設定（null）は 'none'（黒）。
+test('centerLineOriginColorKey: 梁芯(discipline:fuse)でbeamAxisOrigin未設定(null)は none', () => {
   const cl = makeCL({ discipline: Discipline.FUSE });
-  assert.equal(centerLineOriginColorKey(cl), 'generated');
+  assert.equal(centerLineOriginColorKey(cl), 'none');
+});
+
+test('centerLineOriginColorKey: 梁芯でbeamAxisOrigin:wall/floorBeamはどちらも generated', () => {
+  assert.equal(centerLineOriginColorKey(makeCL({ discipline: Discipline.FUSE, beamAxisOrigin: BeamAxisOrigin.WALL })), 'generated');
+  assert.equal(centerLineOriginColorKey(makeCL({ discipline: Discipline.FUSE, beamAxisOrigin: BeamAxisOrigin.FLOOR_BEAM })), 'generated');
+});
+
+test('centerLineOriginColorKey: 梁芯でbeamAxisOrigin:centerは center（S造向け・未実装の色キー予約）', () => {
+  const cl = makeCL({ discipline: Discipline.FUSE, beamAxisOrigin: BeamAxisOrigin.CENTER });
+  assert.equal(centerLineOriginColorKey(cl), 'center');
+});
+
+test('centerLineOriginColorKey: 梁芯でbeamAxisOrigin:userは aux', () => {
+  const cl = makeCL({ discipline: Discipline.FUSE, beamAxisOrigin: BeamAxisOrigin.USER });
+  assert.equal(centerLineOriginColorKey(cl), 'aux');
 });
 
 // 2026-09-26 裁定: 旧データ {labeled:false, discipline:STRUCT}（本来labeled:trueのはずの通り芯が

@@ -47,6 +47,7 @@ function buildSnapshot(graph) {
       refId: cl.refId ?? null, refOffset: cl.refOffset ?? 0,
       extentLoRef: cl.extentLoRef ?? null, extentHiRef: cl.extentHiRef ?? null,
       extentLo: cl._extentLo ?? null, extentHi: cl._extentHi ?? null,
+      beamAxisOrigin: cl.beamAxisOrigin ?? null,
       ...baseProps(cl),
     })),
     points: graph.points.map(p => ({ id: p.id, x: p.x, y: p.y })),
@@ -560,7 +561,7 @@ function applySnapshot(graph, snapshot) {
   runInAction(() => {
     graph.clear();
 
-    // 1. 階固有の中心線（center / aux）
+    // 1. 階固有の中心線（center / aux / beam）
     for (const d of snapshot.centerLines) {
       graph.addCenterLine(d.centerLineType, d.value, {
         labeled: d.labeled, trim: d.trim ?? false, discipline: d.discipline,
@@ -568,6 +569,7 @@ function applySnapshot(graph, snapshot) {
         extentLoRef: d.extentLoRef ?? null, extentHiRef: d.extentHiRef ?? null,
         extentLo: d.extentLo ?? null, extentHi: d.extentHi ?? null,
         refId: d.refId ?? null, refOffset: d.refOffset ?? 0,
+        beamAxisOrigin: d.beamAxisOrigin ?? null,
       }, d.id);
     }
     graph.resolveCenterLineRefs();
