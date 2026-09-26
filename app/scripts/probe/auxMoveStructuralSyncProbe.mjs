@@ -28,6 +28,8 @@ import { commitCLMoveOp, deleteCenterLineWithUndo, setCenterLineStructuralListen
 import { createStructuralSync } from '../../src/structural/structuralSync.js';
 import { recomputeForStructuralSync } from '../../src/structural/structuralOrchestration.js';
 import { createStructuralResolveContext } from '../../src/structural/structuralResolveContext.js';
+import { floorBytesEqual } from '../../src/floorOps.js';
+import { rulesFor, effectiveStructure } from '../../src/structural/structureRules.js';
 
 const src = process.argv[2] ?? 'D:/tatsuya/Download/tategu-test3.stq';
 
@@ -55,11 +57,13 @@ function buildHarness(docSrc) {
   const storeSave = async (planeId, bytes) => { store.set(planeId, bytes); };
   const activate = () => { floorSwapManager.peek = bytePeek; };
 
+  // 段階(g)・2026-09-26: recの有無でsaveを差し替える（design-g.md「ハーネス」の型どおり）。
   const probeSync = createStructuralSync({
-    recompute: (p, s) => {
-      const ctx = createStructuralResolveContext({ peek: bytePeek, save: storeSave });
+    recompute: (p, s, rec) => {
+      const ctx = createStructuralResolveContext({ peek: bytePeek, save: rec ? rec.wrapSave(storeSave) : storeSave });
       return recomputeForStructuralSync(p, s, ctx).finally(() => ctx.dispose());
     },
+    loadFloorBytes: (id) => store.get(id) ?? null,
   });
 
   return { project, store, bytePeek, storeSave, probeSync, activate };
@@ -109,6 +113,17 @@ console.log(`=== ${src} ===`);
 const hProbe = buildHarness(src);
 hProbe.activate();
 console.log(`主構造: ${hProbe.project.structuralInfo.mainStructure} plane: ${hProbe.project.activeGraph.plane.name}`);
+
+// QA指摘m-2（2026-09-26）: 中心線・補助線に反応しない主構造（S造。columnPlacement:'gridIntersections'
+// のため、refId retrofitで壁の軸CLをauxへ追従させても壁交点柱は生まれない——centerMove/clEcc
+// StructuralSyncProbe.mjsと同じ判定）は「対象外」表示でexit 0にする——検出力ゼロの状態でcheck(2)を
+// NG扱いにしていた誤りを修正する（S造データでは原理的に検出できない。実データの性質であり不具合ではない）。
+const activeRulesForGuard = rulesFor(effectiveStructure(hProbe.project.activeGraph, hProbe.project));
+if (activeRulesForGuard.wallBeamAxes == null && activeRulesForGuard.columnPlacement !== 'wallIntersections') {
+  console.log(`対象外（中心線・補助線に反応しない主構造: ${hProbe.project.structuralInfo.mainStructure}。` +
+    `wallBeamAxes=${activeRulesForGuard.wallBeamAxes} columnPlacement=${activeRulesForGuard.columnPlacement}）`);
+  process.exit(0);
+}
 
 // ---- 合成セットアップ（前提を出力に明記。ヘッダコメント参照）----
 function farFreeCoord(graph, type) {
@@ -206,9 +221,9 @@ const moveAmount = 300;
   const extentVictim = hA.project.activeGraph.shapeMap.get(idsA.extentVictimId);
   const extentLoBefore = extentVictim.extentLo;
   const originalValue = aux.value;
-  setCenterLineStructuralListener((g, p, scope) => hA.probeSync.request(g, p, { scope }));
+  setCenterLineStructuralListener((g, p, scope, undoRecords) => hA.probeSync.request(g, p, { scope, undoRecords }));
   runInAction(() => { aux.pendingDelta = moveAmount; });
-  const { toast } = commitCLMoveOp(hA.project.activeGraph, hA.project, aux, originalValue);
+  const { toast } = commitCLMoveOp(hA.project.activeGraph, hA.project, aux, originalValue, { saveFloorFn: hA.storeSave });
   await hA.probeSync.whenIdle();
   ok(toast === null, `check(1)前提: commitCLMoveOp(aux移動)はtoast:nullで成功する（実際: ${toast}）`);
   const extentLoAfter = extentVictim.extentLo;
@@ -229,14 +244,19 @@ const idsWired = applySynthesis(hWired);
 const idsUnwired = applySynthesis(hUnwired);
 const dumpBaselineWired = await dumpAll(hWired); // 移動前（合成セットアップ直後）。check(4)のundo基準に使う
 
-function moveAux(h, auxId, amount, wired) {
-  if (wired) setCenterLineStructuralListener((g, p, scope) => h.probeSync.request(g, p, { scope }));
-  else setCenterLineStructuralListener(null);
+// captureBox（段階(g)）: コミット時のnotifyだけに渡る第4引数(undoRecords＝箱)を呼び出し元へ渡す。
+function moveAux(h, auxId, amount, wired, { captureBox } = {}) {
+  if (wired) {
+    setCenterLineStructuralListener((g, p, scope, undoRecords) => {
+      if (captureBox) captureBox(undoRecords);
+      h.probeSync.request(g, p, { scope, undoRecords });
+    });
+  } else setCenterLineStructuralListener(null);
   h.activate();
   const aux = h.project.activeGraph.shapeMap.get(auxId);
   const originalValue = aux.value;
   runInAction(() => { aux.pendingDelta = amount; });
-  const { toast } = commitCLMoveOp(h.project.activeGraph, h.project, aux, originalValue);
+  const { toast } = commitCLMoveOp(h.project.activeGraph, h.project, aux, originalValue, { saveFloorFn: h.storeSave });
   setCenterLineStructuralListener(null);
   return { toast, originalValue };
 }
@@ -282,39 +302,89 @@ const hUndo = buildHarness(src);
 await preConverge(hUndo);
 const idsUndo = applySynthesis(hUndo);
 const dumpBaselineUndo = await dumpAll(hUndo);
-setCenterLineStructuralListener((g, p, scope) => hUndo.probeSync.request(g, p, { scope }));
+let boxAfterAuxMove = null;
+setCenterLineStructuralListener((g, p, scope, undoRecords) => {
+  boxAfterAuxMove = undoRecords ?? boxAfterAuxMove;
+  hUndo.probeSync.request(g, p, { scope, undoRecords });
+});
+const storeBeforeAuxMove = new Map(hUndo.store);
 {
   hUndo.activate();
   const aux = hUndo.project.activeGraph.shapeMap.get(idsUndo.auxId);
   const originalValue = aux.value;
   runInAction(() => { aux.pendingDelta = moveAmount; });
-  const { toast } = commitCLMoveOp(hUndo.project.activeGraph, hUndo.project, aux, originalValue);
+  const { toast } = commitCLMoveOp(hUndo.project.activeGraph, hUndo.project, aux, originalValue, { saveFloorFn: hUndo.storeSave });
   await hUndo.probeSync.whenIdle();
   ok(toast === null, `check(4)前提: commitCLMoveOp(aux移動)はtoast:nullで成功する（実際: ${toast}）`);
 }
 const dumpAfterMoveUndo = await dumpAll(hUndo);
+
+// ---- G1/G2（段階(g)）: 箱は実際にIDBへ保存された他平面だけを指し、各planeIdの最後のレコードの
+// afterがstoreの現在値と一致する ----
+const changedOtherPlaneIds = new Set(
+  [...hUndo.project.planeMap.values()]
+    .filter(p => p.id !== hUndo.project.activePlaneId)
+    .map(p => p.id)
+    .filter(id => !floorBytesEqual(storeBeforeAuxMove.get(id), hUndo.store.get(id))),
+);
+const boxPlaneIds = new Set((boxAfterAuxMove ?? []).map(r => r.planeId));
+ok(Array.isArray(boxAfterAuxMove), 'G1: コミット時notifyの第4引数(箱)は配列のはず');
+ok([...boxPlaneIds].every(id => changedOtherPlaneIds.has(id)), 'G1: 箱に含まれるplaneIdはすべて実際にIDBへ保存された他平面のはず');
+ok([...changedOtherPlaneIds].every(id => boxPlaneIds.has(id)), 'G1: 実際にIDBへ保存された他平面はすべて箱に含まれる（取りこぼしが無い）');
+const lastRecByPlane = new Map();
+for (const rec of boxAfterAuxMove ?? []) lastRecByPlane.set(rec.planeId, rec);
+let g2ok = true;
+for (const [planeId, rec] of lastRecByPlane) {
+  const current = hUndo.store.get(planeId);
+  if (!floorBytesEqual(rec.after, current)) { g2ok = false; console.log(`  NG詳細: 箱[${planeId.slice(0, 8)}]の最後のafterがstoreの現在値と不一致`); }
+}
+ok(g2ok, 'G2: 箱の各planeIdについて最後のレコードのafterがstoreの現在値と一致する');
+const retainedBytesAuxMove = (boxAfterAuxMove ?? []).reduce((sum, rec) => sum + (rec.before?.length ?? 0) + (rec.after?.length ?? 0), 0);
+console.log(`保持バイト数: 箱の総容量=${retainedBytesAuxMove}バイト（${boxAfterAuxMove?.length ?? 0}件）`);
+
 undoManager.undo();
 await hUndo.probeSync.whenIdle();
 const dumpAfterUndo = await dumpAll(hUndo);
+// 段階(g)でcheck(4)は全平面厳密判定へ昇格した（commitCLMoveOpの箱がapplyFloorUndoRecordsで他平面の
+// IDBバイトを移動前へ戻すため。旧「他平面は非NG」扱いは廃止）。
 const undoDiffsAll = diffDumps(dumpBaselineUndo, dumpAfterUndo);
-const activePlaneKey = hUndo.project.activeGraph.plane.name;
-const undoDiffsActive = undoDiffsAll.filter(d => d.floor === activePlaneKey);
-const undoDiffsOther = undoDiffsAll.filter(d => d.floor !== activePlaneKey);
-ok(undoDiffsActive.length === 0, 'check(4): undo後のダンプ（自階＝アクティブ平面）が合成セットアップ直後の基準と一致する');
-if (undoDiffsActive.length > 0) printDiffs(undoDiffsActive);
-if (undoDiffsOther.length > 0) {
-  console.log(`check(4)(情報・他平面は非NG): 他平面のundo後ダンプと基準の差分 ${undoDiffsOther.length}件` +
-    '（centerMoveStructuralSyncProbe.mjsのM7と同じ規律。他階の孤児は段階(g)まで許容）');
-} else {
-  console.log('check(4)(情報): 他平面のundo後ダンプは基準と差分0件');
-}
+ok(undoDiffsAll.length === 0, 'check(4)/G3: undo後のダンプ（全平面）が合成セットアップ直後の基準と一致する（全平面厳密。段階(g)）');
+if (undoDiffsAll.length > 0) printDiffs(undoDiffsAll);
 
 undoManager.redo();
 await hUndo.probeSync.whenIdle();
 const dumpAfterRedo = await dumpAll(hUndo);
 const redoDiffs = diffDumps(dumpAfterMoveUndo, dumpAfterRedo);
-ok(redoDiffs.length === 0, 'check(4)続き: redo後のダンプが移動直後と一致する');
+ok(redoDiffs.length === 0, 'check(4)続き/G4: redo後のダンプ（全平面）が移動直後と一致する');
 if (redoDiffs.length > 0) printDiffs(redoDiffs);
+setCenterLineStructuralListener(null);
+
+// ---- G5（段階(g)）: 検出力の対照。undoRecordsを一切forwardしない箱無効ハーネスで同じ移動→undoを
+// 行い、他平面に差分が残ることを確認する（0件なら検出力なしと明記してNGにしない）----
+const hNoBox = buildHarness(src);
+await preConverge(hNoBox);
+const idsNoBox = applySynthesis(hNoBox);
+const baselineDumpNoBox = await dumpAll(hNoBox);
+setCenterLineStructuralListener((g, p, scope) => hNoBox.probeSync.request(g, p, { scope })); // undoRecords無し
+hNoBox.activate();
+const auxG5 = hNoBox.project.activeGraph.shapeMap.get(idsNoBox.auxId);
+const origG5 = auxG5.value;
+runInAction(() => { auxG5.pendingDelta = moveAmount; });
+const { toast: g5Toast } = commitCLMoveOp(hNoBox.project.activeGraph, hNoBox.project, auxG5, origG5, { saveFloorFn: hNoBox.storeSave });
+await hNoBox.probeSync.whenIdle();
+if (g5Toast !== null) {
+  console.log(`G5: 検出力の対照をスキップ（移動拒否。実際のtoast=${g5Toast}）`);
+} else {
+  undoManager.undo();
+  await hNoBox.probeSync.whenIdle();
+  const afterUndoDumpNoBox = await dumpAll(hNoBox);
+  const g5Diffs = diffDumps(baselineDumpNoBox, afterUndoDumpNoBox);
+  if (g5Diffs.length === 0) {
+    console.log('G5: 検出力なし（このデータ・この操作では記録を無効にしても他平面に差分が出ない）');
+  } else {
+    console.log(`G5: 検出力あり（記録を無効にすると他平面を含め${g5Diffs.length}件の差分が残る＝箱方式の必要性を実証）`);
+  }
+}
 setCenterLineStructuralListener(null);
 
 // ================================================================
@@ -344,10 +414,10 @@ setCenterLineStructuralListener(null);
   const idsDelRef = applySynthesis(hDelRef);
   const dumpBeforeDelete = await dumpAll(hDelRef);
   const scopes = [];
-  setCenterLineStructuralListener((g, p, scope) => { scopes.push(scope); hDelRef.probeSync.request(g, p, { scope }); });
+  setCenterLineStructuralListener((g, p, scope, undoRecords) => { scopes.push(scope); hDelRef.probeSync.request(g, p, { scope, undoRecords }); });
   hDelRef.activate();
   const auxToDelete = hDelRef.project.activeGraph.shapeMap.get(idsDelRef.auxId);
-  const { toast: delToast } = await deleteCenterLineWithUndo(hDelRef.project.activeGraph, hDelRef.project, auxToDelete);
+  const { toast: delToast } = await deleteCenterLineWithUndo(hDelRef.project.activeGraph, hDelRef.project, auxToDelete, { saveFloorFn: hDelRef.storeSave });
   await hDelRef.probeSync.whenIdle();
   ok(delToast === null, `check(6)前提: 参照ありの補助線の削除はtoast:nullで成功する（実際: ${delToast}）`);
   ok(scopes.length === 1 && scopes[0] === 'activeAndAbove',
@@ -355,10 +425,10 @@ setCenterLineStructuralListener(null);
   undoManager.undo();
   await hDelRef.probeSync.whenIdle();
   const dumpAfterDeleteUndo = await dumpAll(hDelRef);
+  // 段階(g)で全平面厳密判定へ昇格（deleteCenterLineWithUndoの箱が他平面のIDBバイトを削除前へ戻すため）。
   const delUndoDiffsAll = diffDumps(dumpBeforeDelete, dumpAfterDeleteUndo);
-  const delUndoDiffsActive = delUndoDiffsAll.filter(d => d.floor === activePlaneKey);
-  ok(delUndoDiffsActive.length === 0, 'check(6)続き: 削除undo後のダンプ（自階）が削除前の基準と一致する');
-  if (delUndoDiffsActive.length > 0) printDiffs(delUndoDiffsActive);
+  ok(delUndoDiffsAll.length === 0, 'check(6)続き/G3: 削除undo後のダンプ（全平面）が削除前の基準と一致する（全平面厳密。段階(g)）');
+  if (delUndoDiffsAll.length > 0) printDiffs(delUndoDiffsAll);
   setCenterLineStructuralListener(null);
 
   const hDelNoRef = buildHarness(src);

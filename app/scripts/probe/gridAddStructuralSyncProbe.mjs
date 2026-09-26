@@ -16,6 +16,7 @@ import { addCenterLineFromDialog, setCenterLineStructuralListener } from '../../
 import { createStructuralSync } from '../../src/structural/structuralSync.js';
 import { recomputeForStructuralSync } from '../../src/structural/structuralOrchestration.js';
 import { createStructuralResolveContext } from '../../src/structural/structuralResolveContext.js';
+import { floorBytesEqual } from '../../src/floorOps.js';
 
 const src = process.argv[2] ?? 'D:/tatsuya/Download/13.stq';
 
@@ -42,11 +43,13 @@ function buildHarness(docSrc) {
   const storeSave = async (planeId, bytes) => { store.set(planeId, bytes); };
   const activate = () => { floorSwapManager.peek = bytePeek; };
 
+  // 段階(g)・2026-09-26: recの有無でsaveを差し替える（design-g.md「ハーネス」の型どおり）。
   const probeSync = createStructuralSync({
-    recompute: (p, s) => {
-      const ctx = createStructuralResolveContext({ peek: bytePeek, save: storeSave });
+    recompute: (p, s, rec) => {
+      const ctx = createStructuralResolveContext({ peek: bytePeek, save: rec ? rec.wrapSave(storeSave) : storeSave });
       return recomputeForStructuralSync(p, s, ctx).finally(() => ctx.dispose());
     },
+    loadFloorBytes: (id) => store.get(id) ?? null,
   });
 
   return { project, store, bytePeek, storeSave, probeSync, activate };
@@ -167,11 +170,11 @@ for (const cand of allCandidates) {
   const hUnwiredProbe = buildHarness(src);
   await preConverge(hWiredProbe);
   await preConverge(hUnwiredProbe);
-  setCenterLineStructuralListener((g, p, scope) => hWiredProbe.probeSync.request(g, p, { scope }));
-  addCenterLineFromDialog(hWiredProbe.project.activeGraph, hWiredProbe.project, makePayload(cand), null);
+  setCenterLineStructuralListener((g, p, scope, undoRecords) => hWiredProbe.probeSync.request(g, p, { scope, undoRecords }));
+  addCenterLineFromDialog(hWiredProbe.project.activeGraph, hWiredProbe.project, makePayload(cand), null, { saveFloorFn: hWiredProbe.storeSave });
   setCenterLineStructuralListener(null);
   await hWiredProbe.probeSync.whenIdle();
-  addCenterLineFromDialog(hUnwiredProbe.project.activeGraph, hUnwiredProbe.project, makePayload(cand), null);
+  addCenterLineFromDialog(hUnwiredProbe.project.activeGraph, hUnwiredProbe.project, makePayload(cand), null, { saveFloorFn: hUnwiredProbe.storeSave });
 
   const newClIdWiredProbe = hWiredProbe.project.structGraph.centerLines.find(cl => cl.centerLineType === cand.type && Math.abs(cl.value - cand.value) < 1)?.id;
   const wc = newClIdWiredProbe ? await countIntersectionColumns(hWiredProbe, newClIdWiredProbe, cand.type === CenterLineType.VERTICAL) : 0;
@@ -194,17 +197,45 @@ ok(wiredCount > unwiredCount, `A2: whenIdle後に新交点へ格子柱が立つ�
 // 使い捨てハーネスのpushと混ざらないよう独立させる）----
 const h = buildHarness(src);
 await preConverge(h);
-setCenterLineStructuralListener((g, p, scope) => h.probeSync.request(g, p, { scope }));
+let boxAfterAdd = null;
+setCenterLineStructuralListener((g, p, scope, undoRecords) => {
+  boxAfterAdd = undoRecords ?? boxAfterAdd;
+  h.probeSync.request(g, p, { scope, undoRecords });
+});
 
 const beforeUndoTop = undoManager.peekUndo();
 const baselineDump = await dumpAll(h);
-const addResult = addCenterLineFromDialog(h.project.activeGraph, h.project, makePayload(candidate), null);
+const storeBeforeAdd = new Map(h.store);
+const addResult = addCenterLineFromDialog(h.project.activeGraph, h.project, makePayload(candidate), null, { saveFloorFn: h.storeSave });
 await h.probeSync.whenIdle();
 
 ok(addResult.done === true, `A1: addCenterLineFromDialog(通り芯追加)はdone:trueで成功する（実際: ${JSON.stringify(addResult)}）`);
 ok(undoManager.peekUndo() !== beforeUndoTop, 'A1: 確定でundoエントリが1件増える');
 const newClId = h.project.structGraph.centerLines.find(cl => cl.centerLineType === candidate.type && Math.abs(cl.value - candidate.value) < 1)?.id;
 ok(!!newClId, 'A1: 追加された通り芯をstructGraphから引ける');
+
+// ---- G1/G2（段階(g)）: 箱は実際にIDBへ保存された他平面だけを指し、各planeIdの最後のレコードの
+// afterがstoreの現在値と一致する ----
+const changedOtherPlaneIds = new Set(
+  [...h.project.planeMap.values()]
+    .filter(p => p.id !== h.project.activePlaneId)
+    .map(p => p.id)
+    .filter(id => !floorBytesEqual(storeBeforeAdd.get(id), h.store.get(id))),
+);
+const boxPlaneIds = new Set((boxAfterAdd ?? []).map(r => r.planeId));
+ok(Array.isArray(boxAfterAdd), 'G1: コミット時notifyの第4引数(箱)は配列のはず');
+ok([...boxPlaneIds].every(id => changedOtherPlaneIds.has(id)), 'G1: 箱に含まれるplaneIdはすべて実際にIDBへ保存された他平面のはず');
+ok([...changedOtherPlaneIds].every(id => boxPlaneIds.has(id)), 'G1: 実際にIDBへ保存された他平面はすべて箱に含まれる（取りこぼしが無い）');
+const lastRecByPlane = new Map();
+for (const rec of boxAfterAdd ?? []) lastRecByPlane.set(rec.planeId, rec);
+let g2ok = true;
+for (const [planeId, rec] of lastRecByPlane) {
+  const current = h.store.get(planeId);
+  if (!floorBytesEqual(rec.after, current)) { g2ok = false; console.log(`  NG詳細: 箱[${planeId.slice(0, 8)}]の最後のafterがstoreの現在値と不一致`); }
+}
+ok(g2ok, 'G2: 箱の各planeIdについて最後のレコードのafterがstoreの現在値と一致する');
+const retainedBytesAdd = (boxAfterAdd ?? []).reduce((sum, rec) => sum + (rec.before?.length ?? 0) + (rec.after?.length ?? 0), 0);
+console.log(`保持バイト数: 箱の総容量=${retainedBytesAdd}バイト（${boxAfterAdd?.length ?? 0}件）`);
 
 // ---- A3: 冪等（もう一度'all'で同期しても差分ゼロ）----
 const dumpAfterAdd = await dumpAll(h);
@@ -215,29 +246,47 @@ const idempotentDiffs = diffDumps(dumpAfterAdd, dumpSecond);
 ok(idempotentDiffs.length === 0, 'A3: 追加後もう1回同期しても全階ダンプ差分ゼロ（冪等）');
 if (idempotentDiffs.length > 0) printDiffs(idempotentDiffs);
 
-// ---- A4: undo→whenIdleで全階が基準に戻る（在来木造は他階の孤児梁芯を段階(g)まで許容し情報表示、
-// それ以外の主構造は厳密判定）----
-const isTraditionalWood = h.project.structuralInfo.mainStructure === '木造（在来）';
+// ---- A4/G3: undo→whenIdleで全階が基準に戻る。段階(g)で在来木造の他階孤児梁芯許容（情報表示）は
+// 廃止し、全主構造で厳密判定へ昇格した（addCenterLineFromDialogの箱がapplyFloorUndoRecordsで
+// 他平面のIDBバイトを追加前へ戻すため）----
 undoManager.undo();
 await h.probeSync.whenIdle();
 const dumpAfterUndo = await dumpAll(h);
 const undoDiffs = diffDumps(baselineDump, dumpAfterUndo);
-if (isTraditionalWood) {
-  console.log(`A4(情報・在来木造は他階孤児梁芯を許容): undo後の全階差分 ${undoDiffs.length}件`);
-  if (undoDiffs.length > 0) printDiffs(undoDiffs);
-} else {
-  ok(undoDiffs.length === 0, `A4: undo→whenIdleで全階が基準に戻る（実際: 差分${undoDiffs.length}件）`);
-  if (undoDiffs.length > 0) printDiffs(undoDiffs);
-}
+ok(undoDiffs.length === 0, `A4/G3: undo→whenIdleで全階が基準に戻る（全平面厳密。実際: 差分${undoDiffs.length}件）`);
+if (undoDiffs.length > 0) printDiffs(undoDiffs);
 
-// ---- A5: redoで追加直後と一致 ----
+// ---- A5/G4: redoで追加直後と一致（全平面厳密）----
 undoManager.redo();
 await h.probeSync.whenIdle();
 const dumpAfterRedo = await dumpAll(h);
 const redoDiffs = diffDumps(dumpAfterAdd, dumpAfterRedo);
-ok(redoDiffs.length === 0, `A5: redoで追加直後の状態と一致する（実際: 差分${redoDiffs.length}件）`);
+ok(redoDiffs.length === 0, `A5/G4: redoで追加直後の状態と一致する（実際: 差分${redoDiffs.length}件）`);
 if (redoDiffs.length > 0) printDiffs(redoDiffs);
 
+setCenterLineStructuralListener(null);
+
+// ---- G5（段階(g)）: 検出力の対照。undoRecordsを一切forwardしない箱無効ハーネスで同じ追加→undoを
+// 行い、他平面に差分が残ることを確認する（0件なら検出力なしと明記してNGにしない）----
+const hNoBox = buildHarness(src);
+await preConverge(hNoBox);
+setCenterLineStructuralListener((g, p, scope) => hNoBox.probeSync.request(g, p, { scope })); // undoRecords無し
+const baselineDumpNoBox = await dumpAll(hNoBox);
+const addResultG5 = addCenterLineFromDialog(hNoBox.project.activeGraph, hNoBox.project, makePayload(candidate), null, { saveFloorFn: hNoBox.storeSave });
+await hNoBox.probeSync.whenIdle();
+if (addResultG5.done !== true) {
+  console.log(`G5: 検出力の対照をスキップ（追加拒否。実際: ${JSON.stringify(addResultG5)}）`);
+} else {
+  undoManager.undo();
+  await hNoBox.probeSync.whenIdle();
+  const afterUndoDumpNoBox = await dumpAll(hNoBox);
+  const g5Diffs = diffDumps(baselineDumpNoBox, afterUndoDumpNoBox);
+  if (g5Diffs.length === 0) {
+    console.log('G5: 検出力なし（このデータ・この操作では記録を無効にしても他平面に差分が出ない）');
+  } else {
+    console.log(`G5: 検出力あり（記録を無効にすると他平面を含め${g5Diffs.length}件の差分が残る＝箱方式の必要性を実証）`);
+  }
+}
 setCenterLineStructuralListener(null);
 
 // ---- 計時 ----
@@ -245,9 +294,9 @@ const commitMs = [], syncMs = [];
 for (let i = 0; i < 3; i++) {
   const hp = buildHarness(src);
   await preConverge(hp);
-  setCenterLineStructuralListener((g, p, s) => hp.probeSync.request(g, p, { scope: s }));
+  setCenterLineStructuralListener((g, p, s, undoRecords) => hp.probeSync.request(g, p, { scope: s, undoRecords }));
   const t0 = performance.now();
-  addCenterLineFromDialog(hp.project.activeGraph, hp.project, makePayload(candidate), null);
+  addCenterLineFromDialog(hp.project.activeGraph, hp.project, makePayload(candidate), null, { saveFloorFn: hp.storeSave });
   const t1 = performance.now();
   await hp.probeSync.whenIdle();
   const t2 = performance.now();

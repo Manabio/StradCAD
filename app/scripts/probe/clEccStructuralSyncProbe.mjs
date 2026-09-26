@@ -23,6 +23,7 @@ import { recomputeForStructuralSync } from '../../src/structural/structuralOrche
 import { createStructuralResolveContext } from '../../src/structural/structuralResolveContext.js';
 import { loadMaterialMap } from '../../src/finish/wallRegeneration.js';
 import { rulesFor, effectiveStructure } from '../../src/structural/structureRules.js';
+import { floorBytesEqual } from '../../src/floorOps.js';
 
 const src = process.argv[2] ?? 'D:/tatsuya/Download/tategu-test3.stq';
 
@@ -50,11 +51,13 @@ function buildHarness(docSrc) {
   const storeSave = async (planeId, bytes) => { store.set(planeId, bytes); };
   const activate = () => { floorSwapManager.peek = bytePeek; };
 
+  // 段階(g)・2026-09-26: recの有無でsaveを差し替える（design-g.md「ハーネス」の型どおり）。
   const probeSync = createStructuralSync({
-    recompute: (p, s) => {
-      const ctx = createStructuralResolveContext({ peek: bytePeek, save: storeSave });
+    recompute: (p, s, rec) => {
+      const ctx = createStructuralResolveContext({ peek: bytePeek, save: rec ? rec.wrapSave(storeSave) : storeSave });
       return recomputeForStructuralSync(p, s, ctx).finally(() => ctx.dispose());
     },
+    loadFloorBytes: (id) => store.get(id) ?? null,
   });
 
   return { project, store, bytePeek, storeSave, probeSync, activate };
@@ -139,9 +142,14 @@ if (candidates.length === 0) {
   process.exit(1);
 }
 
-function tryApplyOn(harness, clId, spec, wired) {
-  if (wired) setCenterLineStructuralListener((g, p, scope) => harness.probeSync.request(g, p, { scope }));
-  else setCenterLineStructuralListener(null);
+// captureBox（段階(g)）: コミット時のnotifyだけに渡る第4引数(undoRecords＝箱)を呼び出し元へ渡す。
+function tryApplyOn(harness, clId, spec, wired, { captureBox } = {}) {
+  if (wired) {
+    setCenterLineStructuralListener((g, p, scope, undoRecords) => {
+      if (captureBox) captureBox(undoRecords);
+      harness.probeSync.request(g, p, { scope, undoRecords });
+    });
+  } else setCenterLineStructuralListener(null);
   harness.activate();
   const cl = harness.project.activeGraph.shapeMap.get(clId);
   return applyCLEccentricityWithUndo(harness.project.activeGraph, harness.project, cl, { rec: spec, materialMap, saveFloorFn: harness.storeSave })
@@ -206,9 +214,11 @@ for (const b of backingBeforeMain) {
   if (ax) oldAxisIdsByCoordKey.set(key, ax.id);
 }
 const beforeUndoTop = undoManager.peekUndo();
+const storeBeforeApply = new Map(h.store);
 
+let boxAfterApply = null;
 const tApplyStart = performance.now();
-const { toast: mainToast } = await tryApplyOn(h, chosen.clId, chosen.spec, true);
+const { toast: mainToast } = await tryApplyOn(h, chosen.clId, chosen.spec, true, { captureBox: (rec) => { boxAfterApply = rec; } });
 const tApplyEnd = performance.now();
 await h.probeSync.whenIdle();
 const tSyncEnd = performance.now();
@@ -216,6 +226,29 @@ ok(mainToast === null, `E1: applyCLEccentricityWithUndo(偏芯確定)はtoast:nu
 ok(undoManager.peekUndo() !== beforeUndoTop, 'E1: 確定でundoエントリが1件増える');
 
 const afterApplyDump = await dumpAll(h);
+
+// ---- G1/G2（段階(g)）: 箱は実際にIDBへ保存された他平面だけを指し、各planeIdの最後のレコードの
+// afterがstoreの現在値と一致する ----
+const changedOtherPlaneIds = new Set(
+  [...h.project.planeMap.values()]
+    .filter(p => p.id !== h.project.activePlaneId)
+    .map(p => p.id)
+    .filter(id => !floorBytesEqual(storeBeforeApply.get(id), h.store.get(id))),
+);
+const boxPlaneIds = new Set((boxAfterApply ?? []).map(r => r.planeId));
+ok(Array.isArray(boxAfterApply), 'G1: コミット時notifyの第4引数(箱)は配列のはず');
+ok([...boxPlaneIds].every(id => changedOtherPlaneIds.has(id)), 'G1: 箱に含まれるplaneIdはすべて実際にIDBへ保存された他平面のはず');
+ok([...changedOtherPlaneIds].every(id => boxPlaneIds.has(id)), 'G1: 実際にIDBへ保存された他平面はすべて箱に含まれる（取りこぼしが無い）');
+const lastRecByPlane = new Map();
+for (const rec of boxAfterApply ?? []) lastRecByPlane.set(rec.planeId, rec);
+let g2ok = true;
+for (const [planeId, rec] of lastRecByPlane) {
+  const current = h.store.get(planeId);
+  if (!floorBytesEqual(rec.after, current)) { g2ok = false; console.log(`  NG詳細: 箱[${planeId.slice(0, 8)}]の最後のafterがstoreの現在値と不一致`); }
+}
+ok(g2ok, 'G2: 箱の各planeIdについて最後のレコードのafterがstoreの現在値と一致する');
+const retainedBytesApply = (boxAfterApply ?? []).reduce((sum, rec) => sum + (rec.before?.length ?? 0) + (rec.after?.length ?? 0), 0);
+console.log(`保持バイト数: 箱の総容量=${retainedBytesApply}バイト（${boxAfterApply?.length ?? 0}件）`);
 const backingAfterMain = wallBackingCenters(h.project.activeGraph);
 
 // ---- E2: 移動元の壁由来梁芯が同idで移動先へ（通り芯は「対象なし」表示。実際はisFinishCellDividerが
@@ -339,20 +372,13 @@ await h.probeSync.whenIdle();
 undoManager.undo(); // E1の確定ぶんを戻す（ここでベースラインに一致するはず）
 await h.probeSync.whenIdle();
 const dumpAfterUndo = await dumpAll(h);
-const activePlaneKey = h.project.activeGraph.plane.name;
+// 段階(g)でE5は全平面厳密判定へ昇格した（applyCLEccentricityWithUndoの箱がapplyFloorUndoRecordsで
+// 他平面のIDBバイトを適用前へ戻すため。E4bの再適用ぶん・E1の確定ぶん、それぞれ別のundoエントリの
+// 箱が2回にわたってapplyFloorUndoRecordsを呼ぶ——同じ理由で「他平面は非NG」だった旧扱いは廃止）。
 const undoDiffsAll = diffDumps(baselineDump, dumpAfterUndo);
-const undoDiffsActive = undoDiffsAll.filter(d => d.floor === activePlaneKey);
-const undoDiffsOther = undoDiffsAll.filter(d => d.floor !== activePlaneKey);
-ok(undoDiffsActive.length === 0, 'E5: undo後のダンプ（自階＝アクティブ平面）が基準と一致する');
+ok(undoDiffsAll.length === 0, 'E5/G3: undo後のダンプ（全平面）が基準と一致する（全平面厳密。段階(g)）');
 ok(h.project.activeGraph.clEccentricities.has(chosen.clId) === false, 'E5: undoで偏芯レコードが基準（未保持）へ戻る');
-if (undoDiffsActive.length > 0) printDiffs(undoDiffsActive);
-if (undoDiffsOther.length > 0) {
-  console.log(`E5(情報・他平面は非NG): 他平面のundo後ダンプと基準の差分 ${undoDiffsOther.length}件` +
-    '（他階の孤児梁芯は段階(g)まで許容。既存裁定の範囲）');
-  printDiffs(undoDiffsOther);
-} else {
-  console.log('E5(情報): 他平面のundo後ダンプは基準と差分0件');
-}
+if (undoDiffsAll.length > 0) printDiffs(undoDiffsAll);
 
 // ---- E8（Q1裁定・dedupeColumnsByAxis対応と同型）: undo＋同期後、全階で同じAXISに柱が2本以上ある箇所が0 ----
 async function countDuplicateAxisSpots(harness) {
@@ -383,9 +409,33 @@ undoManager.redo(); // E4bの再適用ぶんを戻す
 await h.probeSync.whenIdle();
 const dumpAfterRedo = await dumpAll(h);
 const redoDiffs = diffDumps(afterApplyDump, dumpAfterRedo);
-ok(redoDiffs.length === 0, 'E6: redo後のダンプ（全平面）が適用直後と一致する');
+ok(redoDiffs.length === 0, 'E6/G4: redo後のダンプ（全平面）が適用直後と一致する');
 if (redoDiffs.length > 0) printDiffs(redoDiffs);
 
+setCenterLineStructuralListener(null);
+
+// ---- G5（段階(g)）: 検出力の対照。undoRecordsを一切forwardしない箱無効ハーネスで同じ適用→undoを
+// 行い、他平面に差分が残ることを確認する（0件なら検出力なしと明記してNGにしない）----
+const hNoBox = buildHarness(src);
+await preConverge(hNoBox);
+const baselineDumpNoBox = await dumpAll(hNoBox);
+setCenterLineStructuralListener((g, p, scope) => hNoBox.probeSync.request(g, p, { scope })); // undoRecords無し
+const clG5 = hNoBox.project.activeGraph.shapeMap.get(chosen.clId);
+const { toast: g5Toast } = await applyCLEccentricityWithUndo(hNoBox.project.activeGraph, hNoBox.project, clG5, { rec: chosen.spec, materialMap, saveFloorFn: hNoBox.storeSave });
+await hNoBox.probeSync.whenIdle();
+if (g5Toast !== null) {
+  console.log(`G5: 検出力の対照をスキップ（適用拒否。実際のtoast=${g5Toast}）`);
+} else {
+  undoManager.undo();
+  await hNoBox.probeSync.whenIdle();
+  const afterUndoDumpNoBox = await dumpAll(hNoBox);
+  const g5Diffs = diffDumps(baselineDumpNoBox, afterUndoDumpNoBox);
+  if (g5Diffs.length === 0) {
+    console.log('G5: 検出力なし（このデータ・この操作では記録を無効にしても他平面に差分が出ない）');
+  } else {
+    console.log(`G5: 検出力あり（記録を無効にすると他平面を含め${g5Diffs.length}件の差分が残る＝箱方式の必要性を実証）`);
+  }
+}
 setCenterLineStructuralListener(null);
 
 // ---- E3(B): A(本番=afterApplyDump)とB(listener null)の比較。hの確定・undo・redo一式が

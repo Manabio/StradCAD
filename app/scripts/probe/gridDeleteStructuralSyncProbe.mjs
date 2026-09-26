@@ -28,6 +28,7 @@ import { isLastGridOnAxis } from '../../src/transform/centerLineConvert.js';
 import { createStructuralSync } from '../../src/structural/structuralSync.js';
 import { recomputeForStructuralSync } from '../../src/structural/structuralOrchestration.js';
 import { createStructuralResolveContext } from '../../src/structural/structuralResolveContext.js';
+import { floorBytesEqual } from '../../src/floorOps.js';
 
 const src = process.argv[2] ?? 'D:/tatsuya/Download/moku4.stq';
 const labelArg = process.argv[3] ?? null;
@@ -60,11 +61,13 @@ function buildHarness(docSrc) {
   // 差し替える（下記の各フェーズで都度 harness.activate() を呼ぶ）。
   const activate = () => { floorSwapManager.peek = bytePeek; };
 
+  // 段階(g)・2026-09-26: recの有無でsaveを差し替える（design-g.md「ハーネス」の型どおり）。
   const probeSync = createStructuralSync({
-    recompute: (p, s) => {
-      const ctx = createStructuralResolveContext({ peek: bytePeek, save: storeSave });
+    recompute: (p, s, rec) => {
+      const ctx = createStructuralResolveContext({ peek: bytePeek, save: rec ? rec.wrapSave(storeSave) : storeSave });
       return recomputeForStructuralSync(p, s, ctx).finally(() => ctx.dispose());
     },
+    loadFloorBytes: (id) => store.get(id) ?? null,
   });
 
   return { project, store, bytePeek, storeSave, probeSync, activate };
@@ -180,9 +183,14 @@ async function preConverge(harness) {
   await harness.probeSync.whenIdle();
 }
 
-async function tryDeleteOn(harness, clId, wired) {
-  if (wired) setCenterLineStructuralListener((g, p, s) => harness.probeSync.request(g, p, { scope: s }));
-  else setCenterLineStructuralListener(null);
+// captureBox（段階(g)）: コミット時のnotifyだけに渡る第4引数(undoRecords＝箱)を呼び出し元へ渡す。
+async function tryDeleteOn(harness, clId, wired, { captureBox } = {}) {
+  if (wired) {
+    setCenterLineStructuralListener((g, p, s, undoRecords) => {
+      if (captureBox) captureBox(undoRecords);
+      harness.probeSync.request(g, p, { scope: s, undoRecords });
+    });
+  } else setCenterLineStructuralListener(null);
   harness.activate();
   const cl = harness.project.structGraph.shapeMap.get(clId);
   const { toast } = await deleteCenterLineWithUndo(harness.project.activeGraph, harness.project, cl, { saveFloorFn: harness.storeSave });
@@ -218,9 +226,13 @@ if (!chosenId) {
 // ---- (3) 検証（配線あり）本編。フレッシュなハーネスで再実行する ----
 const h = buildHarness(src);
 await preConverge(h);
-setCenterLineStructuralListener((g, p, s) => h.probeSync.request(g, p, { scope: s }));
+setCenterLineStructuralListener((g, p, s, undoRecords) => h.probeSync.request(g, p, { scope: s, undoRecords }));
 
 const baselineDump = await dumpAll(h);
+// 段階(g)・G1用: 「実際にIDBへ保存された他平面」はstoreの前後バイト比較で判定する
+// （centerMove/gridMoveと同じ理由。project.structGraph共有インスタンスの値のため、dumpAllの
+// decoded比較は使わない）。
+const storeBeforeBytes = new Map(h.store);
 // I5用: 削除前に他階（非アクティブ）で対象CLを片端(clStart/clEndのどちらか一方)だけ参照する壁を探す
 // （軸参照(axisCL===id)は削除対象、両端参照は完全削除——端点ルールの対象は「片端だけ」の壁）。
 async function findSingleEndWalls(harness, clId) {
@@ -238,8 +250,13 @@ async function findSingleEndWalls(harness, clId) {
 }
 const singleEndWallsBefore = await findSingleEndWalls(h, chosenId);
 
+let boxAfterDelete = null;
 const clMain = h.project.structGraph.shapeMap.get(chosenId);
 const tDeleteStart = performance.now();
+setCenterLineStructuralListener((g, p, s, undoRecords) => {
+  boxAfterDelete = undoRecords ?? boxAfterDelete;
+  h.probeSync.request(g, p, { scope: s, undoRecords });
+});
 const { toast: mainToast } = await deleteCenterLineWithUndo(h.project.activeGraph, h.project, clMain, { saveFloorFn: h.storeSave });
 const tDeleteEnd = performance.now();
 await h.probeSync.whenIdle();
@@ -247,6 +264,31 @@ const tSyncEnd = performance.now();
 ok(mainToast === null, `deleteCenterLineWithUndo(${chosenLabel})はtoast:nullで成功する（実際: ${mainToast}）`);
 
 const afterDeleteDump = await dumpAll(h);
+
+// ---- G1/G2（段階(g)）: 箱は実際にIDBへ保存された他平面だけを指し、afterはstoreの現在値と一致する ----
+const changedOtherPlaneIds = new Set(
+  [...h.project.planeMap.values()]
+    .filter(p => p.id !== h.project.activePlaneId)
+    .map(p => p.id)
+    .filter(id => !floorBytesEqual(storeBeforeBytes.get(id), h.store.get(id))),
+);
+const boxPlaneIds = new Set((boxAfterDelete ?? []).map(r => r.planeId));
+ok(Array.isArray(boxAfterDelete), 'G1: コミット時notifyの第4引数(箱)は配列のはず');
+ok([...boxPlaneIds].every(id => changedOtherPlaneIds.has(id)), 'G1: 箱に含まれるplaneIdはすべて実際にIDBへ保存された他平面のはず');
+ok([...changedOtherPlaneIds].every(id => boxPlaneIds.has(id)), 'G1: 実際にIDBへ保存された他平面はすべて箱に含まれる（取りこぼしが無い）');
+// G2: 同じplaneIdが複数回出うる（発見④と同じ規約。例: 削除の他階detach伝播→続く構造同期の
+// 保存の2段）ため、各planeIdの**最後**のレコードのafterだけがstoreの現在値と一致するはず
+// （途中のレコードのafterは中間状態でよい——それ自体は不一致であっても正しい）。
+const lastRecByPlane = new Map();
+for (const rec of boxAfterDelete ?? []) lastRecByPlane.set(rec.planeId, rec);
+let g2ok = true;
+for (const [planeId, rec] of lastRecByPlane) {
+  const current = h.store.get(planeId);
+  if (!floorBytesEqual(rec.after, current)) { g2ok = false; console.log(`  NG詳細: 箱[${planeId.slice(0, 8)}]の最後のafterがstoreの現在値と不一致`); }
+}
+ok(g2ok, 'G2: 箱の各planeIdについて最後のレコードのafterがstoreの現在値と一致する');
+const retainedBytesDelete = (boxAfterDelete ?? []).reduce((sum, rec) => sum + (rec.before?.length ?? 0) + (rec.after?.length ?? 0), 0);
+console.log(`保持バイト数: 箱の総容量=${retainedBytesDelete}バイト（${boxAfterDelete?.length ?? 0}件）`);
 
 // I1: 全階でwoodJambRef.openingIdが存在しない袖柱（ORPHAN）が0本。
 const orphanFloors = Object.entries(afterDeleteDump).filter(([, d]) => d.columns.some(c => c.includes(':jamb:ORPHAN:')));
@@ -275,7 +317,7 @@ undoManager.undo();
 await h.probeSync.whenIdle();
 const afterUndoDump = await dumpAll(h);
 const undoDiffs = diffDumps(baselineDump, afterUndoDump, { ignoreFields: STRUCT_ONLY_IGNORE });
-ok(undoDiffs.length === 0, 'I4a: undo後のダンプ（構造フィールド：柱・梁・基礎）が削除前の基準と一致する');
+ok(undoDiffs.length === 0, 'I4a/G3: undo後のダンプ（構造フィールド：柱・梁・基礎）が削除前の基準と一致する（既に全平面厳密判定）');
 if (undoDiffs.length > 0) printDiffs(undoDiffs);
 const undoWallDiffs = diffWallFieldsOnly(baselineDump, afterUndoDump);
 if (undoWallDiffs.length > 0) {
@@ -287,13 +329,37 @@ undoManager.redo();
 await h.probeSync.whenIdle();
 const afterRedoDump = await dumpAll(h);
 const redoDiffs = diffDumps(afterDeleteDump, afterRedoDump, { ignoreFields: STRUCT_ONLY_IGNORE });
-ok(redoDiffs.length === 0, 'I4b: redo後のダンプ（構造フィールド：柱・梁・基礎）が削除直後と一致する');
+ok(redoDiffs.length === 0, 'I4b/G4: redo後のダンプ（構造フィールド：柱・梁・基礎）が削除直後と一致する（全平面厳密）');
 if (redoDiffs.length > 0) printDiffs(redoDiffs);
 const redoWallDiffs = diffWallFieldsOnly(afterDeleteDump, afterRedoDump);
 if (redoWallDiffs.length > 0) {
   console.log(`注意: I4bの壁幾何(wallGeom/wallCount)に${redoWallDiffs.length}階分差分あり（${redoWallDiffs.join(', ')}）——` +
     'B-1・既知の不具合（HEAD 3055191でも再現。案Pとは無関係。NGにしない）');
 }
+
+// ---- G5（段階(g)）: 検出力の対照。undoRecordsを一切forwardしない箱無効ハーネスで同じ削除→undoを
+// 行い、他平面に差分が残ることを確認する（0件なら検出力なしと明記してNGにしない）----
+const hNoBox = buildHarness(src);
+await preConverge(hNoBox);
+setCenterLineStructuralListener((g, p, s) => hNoBox.probeSync.request(g, p, { scope: s })); // undoRecords無し
+const baselineDumpNoBox = await dumpAll(hNoBox);
+const clG5 = hNoBox.project.structGraph.shapeMap.get(chosenId);
+const { toast: g5Toast } = await deleteCenterLineWithUndo(hNoBox.project.activeGraph, hNoBox.project, clG5, { saveFloorFn: hNoBox.storeSave });
+await hNoBox.probeSync.whenIdle();
+if (g5Toast !== null) {
+  console.log(`G5: 検出力の対照をスキップ（削除拒否。実際のtoast=${g5Toast}）`);
+} else {
+  undoManager.undo();
+  await hNoBox.probeSync.whenIdle();
+  const afterUndoDumpNoBox = await dumpAll(hNoBox);
+  const g5Diffs = diffDumps(baselineDumpNoBox, afterUndoDumpNoBox, { ignoreFields: STRUCT_ONLY_IGNORE });
+  if (g5Diffs.length === 0) {
+    console.log('G5: 検出力なし（このデータ・この操作では記録を無効にしても他平面に差分が出ない）');
+  } else {
+    console.log(`G5: 検出力あり（記録を無効にすると他平面を含め${g5Diffs.length}件の差分が残る＝箱方式の必要性を実証）`);
+  }
+}
+setCenterLineStructuralListener(null);
 
 // I5: 他階で片端だけ参照していた壁が削除後も残る（端点ルール）。
 if (singleEndWallsBefore.length === 0) {

@@ -20,6 +20,7 @@ import { checkDemoteToCenterGuards } from '../../src/transform/centerLineConvert
 import { createStructuralSync } from '../../src/structural/structuralSync.js';
 import { recomputeForStructuralSync } from '../../src/structural/structuralOrchestration.js';
 import { createStructuralResolveContext } from '../../src/structural/structuralResolveContext.js';
+import { floorBytesEqual } from '../../src/floorOps.js';
 
 const src = process.argv[2] ?? 'D:/tatsuya/Download/13.stq';
 
@@ -46,11 +47,13 @@ function buildHarness(docSrc) {
   const storeSave = async (planeId, bytes) => { store.set(planeId, bytes); };
   const activate = () => { floorSwapManager.peek = bytePeek; };
 
+  // 段階(g)・2026-09-26: recの有無でsaveを差し替える（design-g.md「ハーネス」の型どおり）。
   const probeSync = createStructuralSync({
-    recompute: (p, s) => {
-      const ctx = createStructuralResolveContext({ peek: bytePeek, save: storeSave });
+    recompute: (p, s, rec) => {
+      const ctx = createStructuralResolveContext({ peek: bytePeek, save: rec ? rec.wrapSave(storeSave) : storeSave });
       return recomputeForStructuralSync(p, s, ctx).finally(() => ctx.dispose());
     },
+    loadFloorBytes: (id) => store.get(id) ?? null,
   });
 
   return { project, store, bytePeek, storeSave, probeSync, activate };
@@ -80,6 +83,31 @@ function diffDumps(a, b) {
   }
   return diffs;
 }
+// G1/G2（段階(g)）: 箱は実際にIDBへ保存された他平面だけを指し、各planeIdの最後のレコードのafterが
+// storeの現在値と一致する（他probeと同じ理由・同じ規約）。
+function checkBox(h, box, storeBeforeBytes, label) {
+  const changedOtherPlaneIds = new Set(
+    [...h.project.planeMap.values()]
+      .filter(p => p.id !== h.project.activePlaneId)
+      .map(p => p.id)
+      .filter(id => !floorBytesEqual(storeBeforeBytes.get(id), h.store.get(id))),
+  );
+  const boxPlaneIds = new Set((box ?? []).map(r => r.planeId));
+  ok(Array.isArray(box), `G1(${label}): コミット時notifyの第4引数(箱)は配列のはず`);
+  ok([...boxPlaneIds].every(id => changedOtherPlaneIds.has(id)), `G1(${label}): 箱に含まれるplaneIdはすべて実際にIDBへ保存された他平面のはず`);
+  ok([...changedOtherPlaneIds].every(id => boxPlaneIds.has(id)), `G1(${label}): 実際にIDBへ保存された他平面はすべて箱に含まれる（取りこぼしが無い）`);
+  const lastRecByPlane = new Map();
+  for (const rec of box ?? []) lastRecByPlane.set(rec.planeId, rec);
+  let g2ok = true;
+  for (const [planeId, rec] of lastRecByPlane) {
+    const current = h.store.get(planeId);
+    if (!floorBytesEqual(rec.after, current)) { g2ok = false; console.log(`  NG詳細: 箱[${planeId.slice(0, 8)}]の最後のafterがstoreの現在値と不一致`); }
+  }
+  ok(g2ok, `G2(${label}): 箱の各planeIdについて最後のレコードのafterがstoreの現在値と一致する`);
+  const retainedBytes = (box ?? []).reduce((sum, rec) => sum + (rec.before?.length ?? 0) + (rec.after?.length ?? 0), 0);
+  console.log(`保持バイト数(${label}): 箱の総容量=${retainedBytes}バイト（${box?.length ?? 0}件）`);
+}
+
 function printDiffs(diffs, limit = 5) {
   for (const d of diffs.slice(0, limit)) {
     console.log(`  差分[${d.floor}]:`);
@@ -165,19 +193,25 @@ console.log(`対象: id=${candidateId.slice(0, 8)} type=${candMeta.type} value=$
 // ---- 本編: フレッシュなハーネス（undoManagerの汚染を避けるためC3の後に構築する）----
 const h = buildHarness(src);
 await preConverge(h);
-setCenterLineStructuralListener((g, p, scope) => h.probeSync.request(g, p, { scope }));
+let boxDemote = null, boxPromote = null;
+setCenterLineStructuralListener((g, p, scope, undoRecords) => {
+  if (undoRecords) { if (!boxDemote) boxDemote = undoRecords; else if (!boxPromote) boxPromote = undoRecords; }
+  h.probeSync.request(g, p, { scope, undoRecords });
+});
 
 const baselineDump = await dumpAll(h);
 let cl = h.project.structGraph.shapeMap.get(candidateId);
 
 // ---- C1: 降格 ----
 const beforeUndoTop1 = undoManager.peekUndo();
+const storeBeforeDemote = new Map(h.store);
 const { toast: c1Toast } = await demoteGridToCenterWithUndo(h.project.activeGraph, h.project, cl, { saveFloorFn: h.storeSave });
 await h.probeSync.whenIdle();
 ok(c1Toast === null, `C1: demoteGridToCenterWithUndo(降格)はtoast:nullで成功する（実際: ${c1Toast}）`);
 ok(undoManager.peekUndo() !== beforeUndoTop1, 'C1: 確定でundoエントリが1件増える');
 cl = h.project.activeGraph.shapeMap.get(candidateId);
 ok(cl != null && centerLineKind(cl) === 'center', 'C1: 降格後は自階に中心線として存在する');
+checkBox(h, boxDemote, storeBeforeDemote, '降格');
 
 const dumpAfterDemote = await dumpAll(h);
 
@@ -191,11 +225,13 @@ if (c2Diffs.length > 0) printDiffs(c2Diffs);
 
 // ---- C4: 同idで昇格。発見①②④はいずれも案Aで解消済みのため厳密判定に戻す（2026-09-25） ----
 const beforeUndoTop4 = undoManager.peekUndo();
+const storeBeforePromote = new Map(h.store);
 const { toast: c4Toast } = await promoteCenterToGridWithUndo(h.project.activeGraph, h.project, cl, { saveFloorFn: h.storeSave });
 await h.probeSync.whenIdle();
 ok(c4Toast === null, `C4: promoteCenterToGridWithUndo(昇格)はtoast:nullで成功する（実際: ${c4Toast}）`);
 ok(undoManager.peekUndo() !== beforeUndoTop4, 'C4: 確定でundoエントリが1件増える');
 ok(h.project.structGraph.shapeMap.has(candidateId), 'C4: 昇格後は同idでstructGraphに存在する');
+checkBox(h, boxPromote, storeBeforePromote, '昇格');
 
 const dumpAfterPromote = await dumpAll(h);
 
@@ -232,6 +268,30 @@ const c6RedoDiffs = diffDumps(dumpAfterPromote, dumpAfterRedo2);
 ok(c6RedoDiffs.length === 0, `C6: redo×2で全階ダンプが昇格後の状態と一致する（実際: 差分${c6RedoDiffs.length}件）`);
 if (c6RedoDiffs.length > 0) printDiffs(c6RedoDiffs);
 
+setCenterLineStructuralListener(null);
+
+// ---- G5（段階(g)）: 検出力の対照。undoRecordsを一切forwardしない箱無効ハーネスで同じ降格→undoを
+// 行い、他平面に差分が残ることを確認する（0件なら検出力なしと明記してNGにしない）----
+const hNoBox = buildHarness(src);
+await preConverge(hNoBox);
+setCenterLineStructuralListener((g, p, scope) => hNoBox.probeSync.request(g, p, { scope })); // undoRecords無し
+const baselineDumpNoBox = await dumpAll(hNoBox);
+const clG5 = hNoBox.project.structGraph.shapeMap.get(candidateId);
+const { toast: g5Toast } = await demoteGridToCenterWithUndo(hNoBox.project.activeGraph, hNoBox.project, clG5, { saveFloorFn: hNoBox.storeSave });
+await hNoBox.probeSync.whenIdle();
+if (g5Toast !== null) {
+  console.log(`G5: 検出力の対照をスキップ（降格拒否。実際のtoast=${g5Toast}）`);
+} else {
+  undoManager.undo();
+  await hNoBox.probeSync.whenIdle();
+  const afterUndoDumpNoBox = await dumpAll(hNoBox);
+  const g5Diffs = diffDumps(baselineDumpNoBox, afterUndoDumpNoBox);
+  if (g5Diffs.length === 0) {
+    console.log('G5: 検出力なし（このデータ・この操作では記録を無効にしても他平面に差分が出ない）');
+  } else {
+    console.log(`G5: 検出力あり（記録を無効にすると他平面を含め${g5Diffs.length}件の差分が残る＝箱方式の必要性を実証）`);
+  }
+}
 setCenterLineStructuralListener(null);
 
 // ---- 計時 ----

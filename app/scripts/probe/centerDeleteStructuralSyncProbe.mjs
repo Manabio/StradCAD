@@ -29,6 +29,8 @@ import { deleteCenterLineWithUndo, setCenterLineStructuralListener } from '../..
 import { createStructuralSync } from '../../src/structural/structuralSync.js';
 import { recomputeForStructuralSync } from '../../src/structural/structuralOrchestration.js';
 import { createStructuralResolveContext } from '../../src/structural/structuralResolveContext.js';
+import { floorBytesEqual } from '../../src/floorOps.js';
+import { rulesFor, effectiveStructure } from '../../src/structural/structureRules.js';
 
 const src = process.argv[2] ?? 'D:/tatsuya/Download/tategu-test3.stq';
 const labelArg = process.argv[3] ?? null;
@@ -57,11 +59,13 @@ function buildHarness(docSrc) {
   const storeSave = async (planeId, bytes) => { store.set(planeId, bytes); };
   const activate = () => { floorSwapManager.peek = bytePeek; };
 
+  // 段階(g)・2026-09-26: recの有無でsaveを差し替える（design-g.md「ハーネス」の型どおり）。
   const probeSync = createStructuralSync({
-    recompute: (p, s) => {
-      const ctx = createStructuralResolveContext({ peek: bytePeek, save: storeSave });
+    recompute: (p, s, rec) => {
+      const ctx = createStructuralResolveContext({ peek: bytePeek, save: rec ? rec.wrapSave(storeSave) : storeSave });
       return recomputeForStructuralSync(p, s, ctx).finally(() => ctx.dispose());
     },
+    loadFloorBytes: (id) => store.get(id) ?? null,
   });
 
   return { project, store, bytePeek, storeSave, probeSync, activate };
@@ -165,6 +169,18 @@ async function preConverge(harness) {
 // 広げる変更は本指摘の範囲を超えるため行っていない。
 const hCand = buildHarness(src);
 await preConverge(hCand);
+
+// QA指摘m-2（2026-09-26）: 中心線に反応しない主構造（S造等。centerMoveStructuralSyncProbe.mjs・
+// clEccStructuralSyncProbe.mjsと同じ判定）は「対象外」表示でexit 0にする——候補選定の失敗
+// （NG・exit 1）と区別する。中心線削除は壁交点柱（wallIntersections）・壁由来梁芯（wallBeamAxes）の
+// いずれにも反応しない主構造では原理的に検出力を持たない。
+const activeRulesForGuard = rulesFor(effectiveStructure(hCand.project.activeGraph, hCand.project));
+if (activeRulesForGuard.wallBeamAxes == null && activeRulesForGuard.columnPlacement !== 'wallIntersections') {
+  console.log(`対象外（中心線に反応しない主構造: ${hCand.project.structuralInfo.mainStructure}。` +
+    `wallBeamAxes=${activeRulesForGuard.wallBeamAxes} columnPlacement=${activeRulesForGuard.columnPlacement}）`);
+  process.exit(0);
+}
+
 const activeForCandidates = hCand.project.activeGraph;
 let candidates = activeForCandidates.centerLines.filter(cl => centerLineKind(cl) === 'center');
 if (labelArg) candidates = candidates.filter(cl => cl.label === labelArg);
@@ -177,12 +193,19 @@ if (candidates.length === 0) {
 const hasOwnWall = cl => activeForCandidates.walls.some(w => w.axisCL.id === cl.id);
 candidates = [...candidates.filter(hasOwnWall), ...candidates.filter(cl => !hasOwnWall(cl))];
 
-async function tryDeleteOn(harness, clId, wired) {
-  if (wired) setCenterLineStructuralListener((g, p, scope) => harness.probeSync.request(g, p, { scope }));
-  else setCenterLineStructuralListener(null);
+// captureBox（段階(g)）: コミット時のnotifyだけに渡る第4引数(undoRecords＝箱)を呼び出し元へ渡す。
+// saveFloorFn: 省略すると既定のsaveFloor（実IDB）が使われ、undo/redoで実データを書き換える偽NGを
+// 起こす（design-g.md item6）——undo/redoを伴う呼び出しは必ずharness.storeSaveを渡すこと。
+async function tryDeleteOn(harness, clId, wired, { captureBox } = {}) {
+  if (wired) {
+    setCenterLineStructuralListener((g, p, scope, undoRecords) => {
+      if (captureBox) captureBox(undoRecords);
+      harness.probeSync.request(g, p, { scope, undoRecords });
+    });
+  } else setCenterLineStructuralListener(null);
   harness.activate();
   const cl = harness.project.activeGraph.centerLines.find(c => c.id === clId);
-  const { toast } = await deleteCenterLineWithUndo(harness.project.activeGraph, harness.project, cl);
+  const { toast } = await deleteCenterLineWithUndo(harness.project.activeGraph, harness.project, cl, { saveFloorFn: harness.storeSave });
   await harness.probeSync.whenIdle();
   setCenterLineStructuralListener(null);
   return toast;
@@ -214,9 +237,11 @@ if (!chosenId) {
 // ---- 検証（配線あり）本編。フレッシュなハーネスで再実行する ----
 const h = buildHarness(src);
 await preConverge(h);
-setCenterLineStructuralListener((g, p, scope) => h.probeSync.request(g, p, { scope }));
+setCenterLineStructuralListener((g, p, scope, undoRecords) => h.probeSync.request(g, p, { scope, undoRecords }));
 
 const baselineDump = await dumpAll(h);
+// 段階(g)・G1用: 「実際にIDBへ保存された他平面」はstoreの前後バイト比較で判定する（他probeと同じ理由）。
+const storeBeforeBytes = new Map(h.store);
 const clMain = h.project.activeGraph.centerLines.find(c => c.id === chosenId);
 // (6)がこの候補に適用可能か（自身に壁が乗っているか。上記「候補選定」コメント参照——
 // 候補条件は「柱参照あり」だけなので、壁を持たない候補が選ばれることがある）。
@@ -232,11 +257,39 @@ const beamAxisIdsBefore = new Set(
   h.project.activeGraph.centerLines.filter(cl => cl.discipline === Discipline.FUSE).map(cl => cl.id));
 const excludedSizeBefore = h.project.activeGraph.excludedWallBeamAxes.size;
 
-const { toast: mainToast } = await deleteCenterLineWithUndo(h.project.activeGraph, h.project, clMain);
+let boxAfterDelete = null;
+setCenterLineStructuralListener((g, p, scope, undoRecords) => {
+  boxAfterDelete = undoRecords ?? boxAfterDelete;
+  h.probeSync.request(g, p, { scope, undoRecords });
+});
+const { toast: mainToast } = await deleteCenterLineWithUndo(h.project.activeGraph, h.project, clMain, { saveFloorFn: h.storeSave });
 await h.probeSync.whenIdle();
 ok(mainToast === null, `deleteCenterLineWithUndo(中心線)はtoast:nullで成功する（実際: ${mainToast}）`);
 
 const afterDeleteDump = await dumpAll(h);
+
+// ---- G1/G2（段階(g)）: 箱は実際にIDBへ保存された他平面だけを指し、各planeIdの最後のレコードの
+// afterがstoreの現在値と一致する ----
+const changedOtherPlaneIds = new Set(
+  [...h.project.planeMap.values()]
+    .filter(p => p.id !== h.project.activePlaneId)
+    .map(p => p.id)
+    .filter(id => !floorBytesEqual(storeBeforeBytes.get(id), h.store.get(id))),
+);
+const boxPlaneIds = new Set((boxAfterDelete ?? []).map(r => r.planeId));
+ok(Array.isArray(boxAfterDelete), 'G1: コミット時notifyの第4引数(箱)は配列のはず');
+ok([...boxPlaneIds].every(id => changedOtherPlaneIds.has(id)), 'G1: 箱に含まれるplaneIdはすべて実際にIDBへ保存された他平面のはず');
+ok([...changedOtherPlaneIds].every(id => boxPlaneIds.has(id)), 'G1: 実際にIDBへ保存された他平面はすべて箱に含まれる（取りこぼしが無い）');
+const lastRecByPlane = new Map();
+for (const rec of boxAfterDelete ?? []) lastRecByPlane.set(rec.planeId, rec);
+let g2ok = true;
+for (const [planeId, rec] of lastRecByPlane) {
+  const current = h.store.get(planeId);
+  if (!floorBytesEqual(rec.after, current)) { g2ok = false; console.log(`  NG詳細: 箱[${planeId.slice(0, 8)}]の最後のafterがstoreの現在値と不一致`); }
+}
+ok(g2ok, 'G2: 箱の各planeIdについて最後のレコードのafterがstoreの現在値と一致する');
+const retainedBytesDelete = (boxAfterDelete ?? []).reduce((sum, rec) => sum + (rec.before?.length ?? 0) + (rec.after?.length ?? 0), 0);
+console.log(`保持バイト数: 箱の総容量=${retainedBytesDelete}バイト（${boxAfterDelete?.length ?? 0}件）`);
 
 // (1) その中心線上に立っていた柱（壁交点柱）が消える。
 const stillThere = columnsOnClBefore.filter(id => h.project.activeGraph.columnMap.has(id));
@@ -283,7 +336,7 @@ await h.probeSync.whenIdle();
 const afterUndoDump = await dumpAll(h);
 const undoDiffs = diffDumps(baselineDump, afterUndoDump, { ignoreFields: STRUCT_ONLY_IGNORE });
 const undoColumnsBack = columnsOnClBefore.every(id => h.project.activeGraph.columnMap.has(id));
-ok(undoDiffs.length === 0 && undoColumnsBack, '(4a) undo後は柱が戻り、基準（構造フィールド）と一致する');
+ok(undoDiffs.length === 0 && undoColumnsBack, '(4a)/G3: undo後は柱が戻り、基準（構造フィールド）と一致する（全平面厳密）');
 if (undoDiffs.length > 0) printDiffs(undoDiffs);
 
 // (6続き) undoで道連れ削除された壁由来梁芯が同じidのまま戻り、excludedWallBeamAxesも変わらない
@@ -307,7 +360,7 @@ undoManager.redo();
 await h.probeSync.whenIdle();
 const afterRedoDump = await dumpAll(h);
 const redoDiffs = diffDumps(afterDeleteDump, afterRedoDump, { ignoreFields: STRUCT_ONLY_IGNORE });
-ok(redoDiffs.length === 0, '(4b) redo後のダンプ（構造フィールド）が削除直後と一致する');
+ok(redoDiffs.length === 0, '(4b)/G4: redo後のダンプ（構造フィールド）が削除直後と一致する（全平面厳密）');
 if (redoDiffs.length > 0) printDiffs(redoDiffs);
 const redoWallDiffs = diffWallFieldsOnly(afterDeleteDump, afterRedoDump);
 if (redoWallDiffs.length > 0) {
@@ -317,13 +370,37 @@ if (redoWallDiffs.length > 0) {
 
 setCenterLineStructuralListener(null);
 
+// ---- G5（段階(g)）: 検出力の対照。undoRecordsを一切forwardしない箱無効ハーネスで同じ削除→undoを
+// 行い、他平面に差分が残ることを確認する（0件なら検出力なしと明記してNGにしない）----
+const hNoBox = buildHarness(src);
+await preConverge(hNoBox);
+setCenterLineStructuralListener((g, p, scope) => hNoBox.probeSync.request(g, p, { scope })); // undoRecords無し
+const baselineDumpNoBox = await dumpAll(hNoBox);
+const clG5 = hNoBox.project.activeGraph.centerLines.find(c => c.id === chosenId);
+const { toast: g5Toast } = await deleteCenterLineWithUndo(hNoBox.project.activeGraph, hNoBox.project, clG5, { saveFloorFn: hNoBox.storeSave });
+await hNoBox.probeSync.whenIdle();
+if (g5Toast !== null) {
+  console.log(`G5: 検出力の対照をスキップ（削除拒否。実際のtoast=${g5Toast}）`);
+} else {
+  undoManager.undo();
+  await hNoBox.probeSync.whenIdle();
+  const afterUndoDumpNoBox = await dumpAll(hNoBox);
+  const g5Diffs = diffDumps(baselineDumpNoBox, afterUndoDumpNoBox, { ignoreFields: STRUCT_ONLY_IGNORE });
+  if (g5Diffs.length === 0) {
+    console.log('G5: 検出力なし（このデータ・この操作では記録を無効にしても他平面に差分が出ない）');
+  } else {
+    console.log(`G5: 検出力あり（記録を無効にすると他平面を含め${g5Diffs.length}件の差分が残る＝箱方式の必要性を実証）`);
+  }
+}
+setCenterLineStructuralListener(null);
+
 // (5) 配線なしでは柱が残る（検出力）。フレッシュなハーネスで同じ削除を配線なしで行う
 // （afterDeleteDumpと公平に比較するため、こちらも本編のhと同じくpreConvergeしてから削除する）。
 const hNoWire = buildHarness(src);
 await preConverge(hNoWire);
 const clNoWire = hNoWire.project.activeGraph.centerLines.find(c => c.id === chosenId);
 setCenterLineStructuralListener(null);
-const { toast: noWireToast } = await deleteCenterLineWithUndo(hNoWire.project.activeGraph, hNoWire.project, clNoWire);
+const { toast: noWireToast } = await deleteCenterLineWithUndo(hNoWire.project.activeGraph, hNoWire.project, clNoWire, { saveFloorFn: hNoWire.storeSave });
 await hNoWire.probeSync.whenIdle(); // 配線なしなので即座に解決するはずだが、配線ありと同じだけ待つ
 ok(noWireToast === null, '(5) 検出力確認: 配線なしでも削除自体はtoast:nullで成功する');
 const noWireDump = await dumpAll(hNoWire);
