@@ -81,6 +81,9 @@ appModeごとにCL種別が**描画対象**になるかだけを持つ表（`cor
 ## interiorMaster（内装マスター）
 部屋種別ごとの壁材・壁仕上げ・天井高さの既定値セット。`Room.templateKey`で参照、`customOverrides`で個別上書き。
 
+## 由来（origin。由来別色分け）
+CL・梁芯・柱を「誰が・何のために作ったか」で表す語彙（wall/floorBeam/center/user/freeEnd/above/supportSpan等）。同じ由来語彙は3表で同じ色（`renderer/canvasStyle.js`）。持ち方は表ごとに違う——CLは種別自体が由来、梁芯CLは`beamAxisOrigin`（既定null）、柱（在来木造のみ）は`woodColumnOrigins`（複数由来の和集合）、通り芯交点由来・袖柱由来・手動由来は保存せず描画時にアンカー種別等から導出する。色キーへの解決は`renderer/originColorKey.js`に一本化。**由来は色分け専用で撤去・存在判定には使わない**。設計意図は`.claude/structural-model.md`「由来集合と由来別色分け」節。
+
 ## 柱芯（ColumnAxis）／偏芯量
 **柱芯**＝柱の中心。**偏芯量**＝通り芯と柱芯の距離。ラーメン系構造（S造/SRC造/RC造(ラーメン)）でのみ非0になり、`columnAxisOffsets: Map<clId, number>`（per-floor）に通り芯からの偏芯量だけを持つ。設計意図は`.claude/structural-model.md`。
 
