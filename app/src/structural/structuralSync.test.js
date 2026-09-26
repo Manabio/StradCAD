@@ -52,6 +52,15 @@ function makeFakeProject(graph) {
   return { activeGraph: graph, structuralInfo: { mainStructure: TRADITIONAL_WOOD_STRUCTURE } };
 }
 
+// 段階(g)・2026-09-26: undoRecords/recorder関連のテスト用。activePlaneId・planeMap（非アクティブ階の
+// id列挙にstructuralSync.js nonActivePlaneIdsが使う）を持つ軽量ダックタイピングprojectを作る。
+function makeFakeProjectWithPlanes(graph, otherPlaneIds = []) {
+  const activePlaneId = 'active';
+  const planeMap = new Map([[activePlaneId, { id: activePlaneId }], ...otherPlaneIds.map(id => [id, { id }])]);
+  return { activeGraph: graph, activePlaneId, planeMap, structuralInfo: { mainStructure: TRADITIONAL_WOOD_STRUCTURE } };
+}
+const enc = (s) => new TextEncoder().encode(s);
+
 test('request: recomputeにscopeがそのまま渡る', async () => {
   const graph = makeFakeGraph();
   const project = makeFakeProject(graph);
@@ -240,6 +249,154 @@ test('【失敗系】request: scope="all"のrecomputeがthrowしてもonErrorを
   await sync.whenIdle();
   assert.equal(calls, 2, 'エラー後もbusyが解けて次のrequestが実行されるはず');
   assert.equal(errors.length, 2);
+});
+
+// ================================================================
+// undoRecords / recorder（段階(g)・2026-09-26）
+// ================================================================
+
+test('request: undoRecordsに配列を渡すと、"all"実行中に他階へ保存された内容がwhenIdle後に記録される', async () => {
+  const graph = makeFakeGraph();
+  const project = makeFakeProjectWithPlanes(graph, ['p2']);
+  const store = new Map([['p2', enc('old')]]);
+  const loadFloorBytes = async (id) => store.get(id) ?? null;
+  const recompute = async (p, s, recorder) => {
+    const rawSave = async (id, bytes) => { store.set(id, bytes); };
+    const save = recorder ? recorder.wrapSave(rawSave) : rawSave;
+    await save('p2', enc('new'));
+  };
+  const sync = createStructuralSync({ recompute, loadFloorBytes });
+  const undoRecords = [];
+  sync.request(graph, project, { scope: 'all', undoRecords });
+  await sync.whenIdle();
+
+  assert.equal(undoRecords.length, 1);
+  assert.equal(undoRecords[0].planeId, 'p2');
+  assert.deepEqual([...undoRecords[0].before], [...enc('old')]);
+  assert.deepEqual([...undoRecords[0].after], [...enc('new')]);
+});
+
+test('request: scope="active"はundoRecordsを渡してもrecorderを作らない（recomputeへrecorder===nullで渡る。不変）', async () => {
+  const graph = makeFakeGraph();
+  const project = makeFakeProjectWithPlanes(graph, ['p2']);
+  let seenRecorder = 'unset';
+  const recompute = async (p, s, recorder) => { seenRecorder = recorder; };
+  const sync = createStructuralSync({ recompute, loadFloorBytes: async () => null });
+  sync.request(graph, project, { scope: 'active', undoRecords: [] });
+  await sync.whenIdle();
+  assert.equal(seenRecorder, null);
+});
+
+test('request: undoRecords省略（配列なし。undo/redoのreplay相当）は"all"でもrecorderを作らない', async () => {
+  const graph = makeFakeGraph();
+  const project = makeFakeProjectWithPlanes(graph, ['p2']);
+  let seenRecorder = 'unset';
+  const recompute = async (p, s, recorder) => { seenRecorder = recorder; };
+  const sync = createStructuralSync({ recompute, loadFloorBytes: async () => null });
+  sync.request(graph, project, { scope: 'all' }); // undoRecords省略
+  await sync.whenIdle();
+  assert.equal(seenRecorder, null);
+});
+
+test('coalesce: busy中にundoRecords付きの要求が2件合流したら、最後の配列だけが記録先になる', async () => {
+  const graph = makeFakeGraph();
+  const project = makeFakeProjectWithPlanes(graph, ['p2']);
+  const store = new Map([['p2', enc('v0')]]);
+  const loadFloorBytes = async (id) => store.get(id) ?? null;
+  let resolveFirst;
+  const first = new Promise(r => { resolveFirst = r; });
+  let calls = 0;
+  const recompute = async (p, s, recorder) => {
+    calls++;
+    if (calls === 1) { await first; return; } // 1回目は何も保存せず長引かせる
+    const save = recorder.wrapSave(async (id, bytes) => { store.set(id, bytes); });
+    await save('p2', enc(`v${calls}`));
+  };
+  const sync = createStructuralSync({ recompute, loadFloorBytes });
+  const recordsA = [];
+  const recordsB = [];
+  sync.request(graph, project, { scope: 'all' });                      // 1回目（実行開始。undoRecordsなし）
+  sync.request(graph, project, { scope: 'all', undoRecords: recordsA }); // コアレス
+  sync.request(graph, project, { scope: 'all', undoRecords: recordsB }); // コアレス（最後。記録先はこちら）
+
+  resolveFirst();
+  await sync.whenIdle();
+
+  assert.equal(calls, 2);
+  assert.deepEqual(recordsA, [], '最後でない方の配列には記録されない');
+  assert.equal(recordsB.length, 1, '最後の要求の配列だけが記録先になるはず');
+  assert.equal(recordsB[0].planeId, 'p2');
+});
+
+test('【失敗系】request: graph!==project.activeGraphでskipされる要求はloadFloorBytesを呼ばない（before読込みも記録もしない）', async () => {
+  const graph = makeFakeGraph();
+  const otherGraph = makeFakeGraph();
+  const project = makeFakeProjectWithPlanes(otherGraph, ['p2']); // activeGraphは別インスタンス
+  let loadCalls = 0;
+  const loadFloorBytes = async () => { loadCalls++; return null; };
+  const sync = createStructuralSync({ recompute: async () => {}, loadFloorBytes });
+  sync.request(graph, project, { scope: 'all', undoRecords: [] });
+  await sync.whenIdle();
+  assert.equal(loadCalls, 0);
+});
+
+test('【失敗系】request: recompute途中でthrowしても、それまでに保存した分は記録に追記されonErrorも呼ばれる', async () => {
+  const graph = makeFakeGraph();
+  const project = makeFakeProjectWithPlanes(graph, ['p2']);
+  const store = new Map([['p2', enc('old')]]);
+  const loadFloorBytes = async (id) => store.get(id) ?? null;
+  const recompute = async (p, s, recorder) => {
+    const save = recorder.wrapSave(async (id, bytes) => { store.set(id, bytes); });
+    await save('p2', enc('new'));
+    throw new Error('recompute boom');
+  };
+  const errors = [];
+  const sync = createStructuralSync({ recompute, loadFloorBytes, onError: (e) => errors.push(e) });
+  const undoRecords = [];
+  sync.request(graph, project, { scope: 'all', undoRecords });
+  await sync.whenIdle();
+
+  assert.equal(errors.length, 1);
+  assert.equal(errors[0].message, 'recompute boom');
+  assert.equal(undoRecords.length, 1, '例外前に保存した分は記録に残るはず');
+  assert.equal(undoRecords[0].planeId, 'p2');
+});
+
+test('【失敗系】request: captureBefore（loadFloorBytes）がthrowしたらonErrorを呼び、記録なし（recorder===null）でrecomputeは実行される', async () => {
+  const graph = makeFakeGraph();
+  const project = makeFakeProjectWithPlanes(graph, ['p2']);
+  const loadFloorBytes = async () => { throw new Error('load boom'); };
+  let recomputeCalls = 0;
+  let seenRecorder = 'unset';
+  const recompute = async (p, s, recorder) => { recomputeCalls++; seenRecorder = recorder; };
+  const errors = [];
+  const sync = createStructuralSync({ recompute, loadFloorBytes, onError: (e) => errors.push(e) });
+  const undoRecords = [];
+  sync.request(graph, project, { scope: 'all', undoRecords });
+  await sync.whenIdle();
+
+  assert.equal(recomputeCalls, 1, 'captureBefore失敗でもrecomputeは実行されるはず（記録なしで続行）');
+  assert.equal(seenRecorder, null, '記録なしで続行するのでrecorderはnullで渡るはず');
+  assert.equal(errors.length, 1);
+  assert.equal(errors[0].message, 'load boom');
+  assert.deepEqual(undoRecords, []);
+});
+
+test('request: whenIdleが解決した時点（.thenコールバック内）で、既にundoRecords配列に記録が埋まっている', async () => {
+  const graph = makeFakeGraph();
+  const project = makeFakeProjectWithPlanes(graph, ['p2']);
+  const store = new Map([['p2', enc('old')]]);
+  const loadFloorBytes = async (id) => store.get(id) ?? null;
+  const recompute = async (p, s, recorder) => {
+    const save = recorder.wrapSave(async (id, bytes) => { store.set(id, bytes); });
+    await save('p2', enc('new'));
+  };
+  const sync = createStructuralSync({ recompute, loadFloorBytes });
+  const undoRecords = [];
+  let lengthAtIdleResolve = null;
+  sync.request(graph, project, { scope: 'all', undoRecords });
+  await sync.whenIdle().then(() => { lengthAtIdleResolve = undoRecords.length; });
+  assert.equal(lengthAtIdleResolve, 1, 'whenIdleのthenコールバック時点で既に記録が埋まっているはず');
 });
 
 test('whenIdle: 実行中でなければ即座にresolveする', async () => {
@@ -534,4 +691,26 @@ test('【不変条件】App.jsx: setOpeningGeometryListener と setCenterLineStr
   assert.ok(clIdx >= 0, 'setCenterLineStructuralListener( が見つからない');
   const clLine = code.slice(clIdx, code.indexOf(';', clIdx));
   assert.ok(clLine.includes('structuralSync.request'), `setCenterLineStructuralListenerの配線はstructuralSync.requestを呼ぶはず（実際: ${clLine}）`);
+});
+
+test('【不変条件・段階(g)】App.jsx: setCenterLineStructuralListener の配線は undoRecords をそのまま structuralSync.request へ渡す', () => {
+  const appSrc = fs.readFileSync(path.resolve(import.meta.dirname, '../App.jsx'), 'utf8');
+  const code = stripCommentLines(appSrc);
+
+  const clIdx = code.indexOf('setCenterLineStructuralListener(');
+  assert.ok(clIdx >= 0, 'setCenterLineStructuralListener( が見つからない');
+  const clLine = code.slice(clIdx, code.indexOf(';', clIdx));
+  assert.ok(clLine.includes('undoRecords'), `setCenterLineStructuralListenerの配線はundoRecordsを引き回すはず（実際: ${clLine}）`);
+});
+
+test('【不変条件・段階(g)】App.jsx: performUndo は undoManager.undo( より前に structuralSync.whenIdle() を待つ', () => {
+  const appSrc = fs.readFileSync(path.resolve(import.meta.dirname, '../App.jsx'), 'utf8');
+  const body = extractFunctionBody(appSrc, 'async function performUndo');
+  assertWhenIdleBefore(body, 'undoManager.undo(', 'performUndo');
+});
+
+test('【不変条件・段階(g)】App.jsx: performRedo は undoManager.redo( より前に structuralSync.whenIdle() を待つ', () => {
+  const appSrc = fs.readFileSync(path.resolve(import.meta.dirname, '../App.jsx'), 'utf8');
+  const body = extractFunctionBody(appSrc, 'async function performRedo');
+  assertWhenIdleBefore(body, 'undoManager.redo(', 'performRedo');
 });

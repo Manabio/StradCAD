@@ -240,6 +240,26 @@ test('recomputeForStructuralSync("active"): 2階建て(S造)フィクスチャ�
   });
 });
 
+// 段階(g)・2026-09-26: recomputeForStructuralSyncの第4引数{save}は、ctxArg省略（owned生成）のときだけ
+// withResolveContextの第3引数（ctxOpts）へ渡り、createStructuralResolveContextのsaveを差し替える
+// （structural/structuralSync.jsのrunLoopがsyncFloorRecorder.wrapSaveで包んだsaveを注入する経路）。
+test('recomputeForStructuralSync("all", ctxArg省略, {save}): ownedで生成したctxがその{save}を使う（スパイ）', async () => {
+  const project = new Project('proj-g', 'test');
+  project.structuralInfo.mainStructure = 'S造';
+  project.structGraph.addCenterLine(CenterLineType.VERTICAL,   0,    { labeled: true, discipline: Discipline.STRUCT });
+  project.structGraph.addCenterLine(CenterLineType.VERTICAL,   3000, { labeled: true, discipline: Discipline.STRUCT });
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: true, discipline: Discipline.STRUCT });
+  const { graph } = project.addPlane(0, '1階', 'p1'); // 単一階（アクティブ＝最下階）。他階が無いためpeek不要でsaveだけ確認できる
+  project.activePlaneId = 'p1';
+
+  const spyCalls = [];
+  const spySave = async (planeId) => { spyCalls.push(planeId); };
+  await recomputeForStructuralSync(project, 'all', undefined, { save: spySave });
+
+  assert.ok(spyCalls.includes(graph.plane.id), '自階の保存（saveVia経由）が注入したsaveを通るはず');
+});
+
 test('【失敗系】recomputeForStructuralSync("all"): 他階のpeekがthrowしたらrejectする', async () => {
   // withFakeIndexedDBで包む——自階(graph)の保存はrecomputeForStructuralSyncの手順1で先に走るため
   // （'all'は自階を先に再計算・保存してから他階へ反映する。saveViaの既定_saveはstorage/db.js

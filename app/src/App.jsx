@@ -498,7 +498,10 @@ const App = observer(() => {
   // 通り芯削除の直後・undo/redo直後に構造同期を起動する依存注入の配線（唯一の登録場所。
   // transform/centerLineOps.js deleteCenterLineWithUndo参照。scopeは種別ポリシーから呼び出し側が
   // 導いたものをそのまま使う——ここでは在来限定にしない（applies省略＝常に真））。
-  setCenterLineStructuralListener((g, p, scope) => structuralSync.request(g, p, { scope }));
+  // undoRecords（段階(g)）: コミット時のnotifyだけがcenterLineOps.js側の`floorRecords`配列を渡す
+  // （undo/redoクロージャ内のnotifyは省略して渡す）。ここでは素通しするだけで、記録先の有無・
+  // 使い方はstructuralSync.js側の責務（structural/structuralSync.js request参照）。
+  setCenterLineStructuralListener((g, p, scope, undoRecords) => structuralSync.request(g, p, { scope, undoRecords }));
 
   async function switchHistoryContext(ctx) {
     // 実行中の構造再計算がgraphを保存・差し替えしている最中に階/モードを切り替えると競合するため、
@@ -544,6 +547,10 @@ const App = observer(() => {
     if (!cmd) return;
     historyNavRef.current = true;
     try {
+      // 実行中の構造同期が起動元エントリのfloorRecordsへ追記し終える前にundoすると、その追記が
+      // undo後に紛れ込む（段階(g)）。cmd.contextの有無に関わらず必ず待つ——switchHistoryContext内の
+      // whenIdleはcontextがある場合のみのため、ここで明示する（cmd.contextなしでも起動され得る）。
+      await structuralSync.whenIdle();
       if (cmd.context) await switchHistoryContext(cmd.context);
       if (undoManager.peekUndo() === cmd) undoManager.undo();
     } finally {
@@ -556,6 +563,8 @@ const App = observer(() => {
     if (!cmd) return;
     historyNavRef.current = true;
     try {
+      // performUndoと同じ理由（段階(g)）。
+      await structuralSync.whenIdle();
       if (cmd.context) await switchHistoryContext(cmd.context);
       if (undoManager.peekRedo() === cmd) undoManager.redo();
     } finally {

@@ -351,9 +351,13 @@ function resyncTouchedMemberGroups(subjectGraph, belowGraph, belowBelowGraph, pr
 // 渡された場合はowned=falseとなり、生成せずにそのままbodyへ渡す——nullの場合はpeekVia/saveViaが
 // nullish（null・undefined問わず）なら従来経路へフォールバックするため、bodyがctxArgをそのまま使って
 // よい。渡された既存のコンテキストは借り物としてdisposeしない（所有者は呼び出し側のまま）。
-async function withResolveContext(ctxArg, body) {
+// ctxOpts（第3引数・段階(g)・2026-09-26）: owned生成のときだけcreateStructuralResolveContextへ渡す
+// 追加オプション（recomputeForStructuralSyncの{save}＝syncFloorRecorder.wrapSaveで包んだsave）。
+// ctxArgが明示的に渡された（borrowed）場合はここで注入しない——呼び出し側が自分のctxに
+// 既にwrapSave済みのsaveを仕込んでいる前提（probe等）。
+async function withResolveContext(ctxArg, body, ctxOpts = undefined) {
   const owned = ctxArg === undefined;
-  const ctx = owned ? createStructuralResolveContext() : ctxArg;
+  const ctx = owned ? createStructuralResolveContext(ctxOpts) : ctxArg;
   try {
     return await body(ctx);
   } finally {
@@ -519,7 +523,11 @@ export async function recomputeActiveStructural(project, pushUndo = true, ctx = 
 //   構造側の保全はwoodAutoFill.js（「壁が無い階は柱を生成も撤去もしない」2026-09-14裁定）でそのまま
 //   効く（REASONED: builder読了。壁0本の階はrecomputeStructuralForGraph内部のゲート・自動補完が
 //   柱を生成しないため、outer loopが回っても実害はない）。
-export async function recomputeForStructuralSync(project, scope, ctxArg = undefined) {
+// opts.save（段階(g)・2026-09-26）: structural/structuralSync.js のrunLoopがsyncFloorRecorder.wrapSave
+// で包んだsaveを渡す——ctxArgが省略（owned生成）のときだけwithResolveContextの第3引数（ctxOpts）へ
+// 渡り、createStructuralResolveContextのsaveを差し替える。ctxArg明示（probe等が自分のctxに
+// 既にwrapSave済みのsaveを仕込む経路）のときは無視される（呼び出し側の責任）。
+export async function recomputeForStructuralSync(project, scope, ctxArg = undefined, { save } = {}) {
   if (scope === 'active') {
     await recomputeActiveStructural(project, false);
     return;
@@ -538,12 +546,17 @@ export async function recomputeForStructuralSync(project, scope, ctxArg = undefi
         console.warn('[recomputeForStructuralSync] 反映が収束しませんでした（最後の状態のまま打ち切ります）');
       }
     }
-  });
+  }, save ? { save } : undefined);
 }
 
 // 非アクティブな実体階を peek して再計算し、変化があれば IDB に直接保存する。
 // syncRoofPlane と同格の「建物形状が変わった時点でやり直すインフラ」として undo 対象外で割り切る
 // （跨ぎフロア undo は単一アクティブ graph モデルでは扱えないため。削除の取消はベースライン保持で担保する）。
+// **段階(g)・2026-09-26**: この関数自体はundo/redoを意識しない（ctxが差し替えられたsaveを呼ぶだけ）。
+// CL操作起因の構造同期（`recomputeForStructuralSync`経由。`structural/structuralSync.js`）のときは、
+// ここでの保存が`structural/syncFloorRecorder.js`でラップされ、起動元CL操作のundoエントリ
+// （`floorRecords`）へ記録される——「undo対象外」なのはモード境界（仕上げ脱出・構造脱出・構造突入・
+// 履歴復帰の他階反映。裁定1・別ステップ）経由で呼ばれたときだけ。
 // 採番は収集（conformToLedger + collectFloorGroups。structuralRecompute.js）のみ行い、番号の確定は
 // 呼び出し側（reflectStructuralToOtherFloors 等）が全階の収集後に1回だけ行う。
 // 戻り値の peek 済み graph（temp）はこの関数の呼び出し元だけが直後に使い、beamColumnWidthMm
@@ -588,6 +601,10 @@ async function applyMemberNumbersToFloor(plane, tags, project, beamColumnWidthMm
 }
 
 // アクティブ階以外の全実体階の構造部材を peek+再計算+保存で反映する（undo 対象外の決定的インフラ）。
+// **段階(g)・2026-09-26**: 「undo対象外」なのはモード境界（突入・脱出）・階追加フロー経由のとき
+// （裁定1・別ステップ）。CL操作起因の構造同期（`recomputeForStructuralSync`）経由のときは、ここでの
+// 保存（`saveVia`）が起動元CL操作のundoエントリ（`floorRecords`）へ記録される
+// （`structural/syncFloorRecorder.js`。上記`recomputeInactiveStructural`のコメント参照）。
 // 構造モードの境界（突入・脱出）と階追加フローが共有する「他階への構造反映」の単一実装——
 // これが無いと、構造モードで生成・編集した部材が「訪れた伏図の階」にしか入らず、
 // 他モード・他階へ移動したときに他の伏図・平面図へ構造部材が現れない。
