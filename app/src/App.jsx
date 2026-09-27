@@ -176,7 +176,6 @@ const App = observer(() => {
 
   const fileInputRef  = useRef(null);
   const openingSelectRef  = useRef(null); // 建具モードへの遷移直後に選択する開口ID（モードロード時に読み取って消費）
-  const catalogMaintenanceLoadingRef = useRef(false); // カタログ保守パネルの動的import中フラグ（二重クリック無視・後出し防止用）
   const catalogResolveLoadingRef = useRef(false); // 指示UIダイアログの動的import中フラグ（連打ガード）
 
   // アクティブなモード状態 (FloorplanModeState | FinishModeState | null)
@@ -1342,6 +1341,24 @@ const App = observer(() => {
     cycleSiteLineKind(project.site, lineId);
   }
 
+  // カタログ保守パネルは使うときだけ動的importする（モードと同じ考え方。.claude/mode-system.md）。
+  // React.lazy+SuspenseはErrorBoundary無しではチャンク読込み失敗時にroot全体が白画面になるため
+  // 不採用——EccentricityDialog.jsx等と同じ「import().then().catch()」型ではなくasync/awaitで揃える。
+  // 「後出しを捨てる」ためのロード中フラグ（ref）は関門化により不要——関門が2回目のクリックを
+  // 入口（guardUi→isUiBusy()）で落とすため、連打で複数の読込みが並走することはない。
+  async function openCatalogMaintenancePanel() {
+    beginUiTransition();
+    await runBusy('カタログ保守', async () => {
+      try {
+        const m = await import('./ui/CatalogMaintenancePanel.jsx');
+        setCatalogMaintenancePanelComp(() => m.CatalogMaintenancePanel);
+      } catch (e) {
+        console.error(e);
+        setToast({ msg: 'カタログ保守パネルの読み込みに失敗しました', key: Date.now() });
+      }
+    });
+  }
+
   // ---- ハンバーガーメニュー ----
   function handleHamburgerSelect(id) {
     if (id === 'new') {
@@ -1368,25 +1385,7 @@ const App = observer(() => {
     if (id === 'site-info')      { setShowSiteDialog(true);       return; }
     if (id === 'building-info')  { setShowBuildingInfoDialog(true); return; }
     if (id === 'catalog-maintenance') {
-      // 全画面パネルは使うときだけ動的importする（モードと同じ考え方。.claude/mode-system.md）。
-      // React.lazy+SuspenseはErrorBoundary無しではチャンク読込み失敗時にroot全体が白画面になるため
-      // 不採用——EccentricityDialog.jsx等と同じ「import().then().catch()」型に揃える（QA指摘Major-B）。
-      // ロード中フラグ（ref）: 連打で複数の読込みが並走するのを防ぎ、フラグが降りた後（読込み完了・
-      // 失敗のどちらかを既に処理した後）に来た後出しの解決は捨てる（QA指摘Minor・再指摘）。
-      if (catalogMaintenanceLoadingRef.current) return;
-      catalogMaintenanceLoadingRef.current = true;
-      import('./ui/CatalogMaintenancePanel.jsx')
-        .then(m => {
-          if (!catalogMaintenanceLoadingRef.current) return; // 後出し（既に処理済み）は捨てる
-          catalogMaintenanceLoadingRef.current = false;
-          setCatalogMaintenancePanelComp(() => m.CatalogMaintenancePanel);
-        })
-        .catch(() => {
-          if (!catalogMaintenanceLoadingRef.current) return;
-          catalogMaintenanceLoadingRef.current = false;
-          setToast({ msg: 'カタログ保守パネルの読み込みに失敗しました', key: Date.now() });
-        });
-      return;
+      return openCatalogMaintenancePanel();
     }
     if (id === 'open') {
       fileInputRef.current?.click();
@@ -1404,28 +1403,62 @@ const App = observer(() => {
 
   // 保存ファイル名ダイアログの確定。文書全体（全階・plane一覧・通り芯/構造情報・敷地・調査/計画情報）を
   // IDB へ明示保存で確定し、同じ内容を .stq 文書ファイルとしてダウンロード書き出しする（「読込み」と対）
-  function handleSaveConfirm(fileName) {
+  async function handleSaveConfirm(fileName) {
     setSaveDialogDefaultName(null);
-    // 実行中の構造同期（建具・通り芯削除起因）が完了する前に保存すると、途中状態を書き出したうえで
-    // clearDirty（未保存扱いの解除）してしまう（structural/structuralSync.js参照）。
-    structuralSync.whenIdle()
-      .then(() => exportDocument())
-      .then((json) => {
+    beginUiTransition();
+    await runBusy('保存', async () => {
+      try {
+        // 実行中の構造同期（建具・通り芯削除起因）が完了する前に保存すると、途中状態を書き出したうえで
+        // clearDirty（未保存扱いの解除）してしまう（structural/structuralSync.js参照）。関門の中で待つ
+        // （不変条件3。関門の外で待つと待ち時間中の入力が塞がれない）。
+        await structuralSync.whenIdle();
+        const json = await exportDocument();
         downloadDocumentFile(json, fileName);
         setToast({ msg: '保存しました', key: Date.now() });
-      })
-      .catch((e) => {
+      } catch (e) {
+        // 固有文言を保つため自前でcatchする（performUndoと同じ前例。内部呼び出し元は無い）
         console.error('[保存] exportDocument failed:', e);
         setToast({ msg: '保存に失敗しました', key: Date.now() });
-      });
+      }
+    });
   }
 
+  // 文書ファイル読込みの確定実行（handleFileOpenの確認ダイアログonSelectから呼ぶ）。
+  // reloadでページ自体を作り直すため、関門はreloadまで閉じる必要がない。
+  async function runDocumentImport(parsed) {
+    beginUiTransition();
+    await runBusy('読込み', async () => {
+      try {
+        await importDocument(parsed);
+        window.location.reload();
+      } catch (e) {
+        console.error(e);
+        setToast({ msg: 'ファイルの読み込みに失敗しました', key: Date.now() });
+      }
+    });
+  }
+
+  // ファイル選択inputのonChangeは（guardUiではなく）ここで自前でisUiBusy()を見る——guardUiで
+  // busy中に丸ごと落とすと、直前に済ませたe.target.value=''が走らずに終わり、同じファイルの
+  // 再選択でonChangeが発火しなくなる（QA指摘・入力規制ステップ5再報告）。そのためvalueのリセットを
+  // 最初に行い、busy判定はその後で行う。
   function handleFileOpen(e) {
     const file = e.target.files?.[0];
-    if (!file) return;
     e.target.value = '';
+    if (!file) return;
+    if (isUiBusy()) {
+      setToast({ msg: '処理中のため読み込めませんでした', key: Date.now() });
+      return;
+    }
     const reader = new FileReader();
     reader.onload = (ev) => {
+      // FileReaderの読み込みは非同期のため、ここ（onload）までの間にundo/階切替等で関門が開く
+      // 隙間がある——旧形式分岐のrestoreGraphは関門の外から同期でgraphへ書くため、onload冒頭でも
+      // 改めてisUiBusy()を見る（QA指摘・入力規制ステップ5再報告）。
+      if (isUiBusy()) {
+        setToast({ msg: '処理中のため読み込めませんでした', key: Date.now() });
+        return;
+      }
       let parsed;
       try {
         parsed = parseOpenedFileBytes(new Uint8Array(ev.target.result));
@@ -1445,14 +1478,15 @@ const App = observer(() => {
           onSelect: (v) => {
             setFloorConfirm(null);
             if (v !== 'ok') return;
-            importDocument(parsed)
-              .then(() => window.location.reload())
-              .catch(() => setToast({ msg: 'ファイルの読み込みに失敗しました', key: Date.now() }));
+            // onSelectはConfirmDialogのコールバックでguardUiを経由しないが、runDocumentImport自身が
+            // 自前でcatch済みのためrejectしない。
+            void runDocumentImport(parsed);
           },
         });
         return;
       }
-      // 旧形式（単一グラフ FlatBuffers / 旧JSONスナップショット）: アクティブ階へ復元
+      // 旧形式（単一グラフ FlatBuffers / 旧JSONスナップショット）: アクティブ階へ復元。onload冒頭の
+      // isUiBusy()ガードで関門中の同期書込みを防いでいるため、ここでの追加の関門は不要。
       try {
         restoreGraph(graph, parsed);
         setToast({ msg: 'ファイルを読み込みました', key: Date.now() });
@@ -1827,7 +1861,7 @@ const App = observer(() => {
         position: 'fixed', top: 0, right: 6,
         height: TOP_BAR, display: 'flex', alignItems: 'center', zIndex: 210,
       }}>
-        <HamburgerMenu onSelect={handleHamburgerSelect} />
+        <HamburgerMenu onSelect={guardUi(handleHamburgerSelect)} />
       </div>
 
       {/* モード切替バー — 横長=上部中央 / 縦長=下部中央（常時表示） */}
@@ -2176,7 +2210,7 @@ const App = observer(() => {
       {saveDialogDefaultName != null && (
         <SaveFileDialog
           defaultName={saveDialogDefaultName}
-          onConfirm={handleSaveConfirm}
+          onConfirm={guardUi(handleSaveConfirm)}
           onCancel={() => setSaveDialogDefaultName(null)}
         />
       )}

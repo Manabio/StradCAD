@@ -31,6 +31,10 @@ import {
 } from '../catalog/catalogMaintenance.js';
 import { parseSectionSpecList } from '../structural/sectionCatalog.js';
 import { CatalogPreview } from './CatalogPreview.jsx';
+// カタログ適用（IDB書込みを伴う本体）を関門で包む（入力規制ステップ5・G9）。パネル自体は全画面で
+// 独自のbusy/disabled制御を持つため、それはそのまま残す（関門は二重防御＋分類の一貫性のため）。
+// beginUiTransitionはApp.jsxの関数でありパネルからは呼ばない——パネル表示中は作図操作が無いため不要。
+import { runBusy } from '../uiBusy.js';
 
 // ステップ12b: 間柱6コード（backingClass.js WOOD_STUD_CODE_BY_SIZE の値）は本体編集の
 // extraLockedとして常に注入する（12cで下地材タブを開放するまでは実際にこのコードを持つ行を
@@ -1020,7 +1024,7 @@ function SectionBulkImport({ builtinList, onImported }) {
       nextUser = upsertUserCatalogEntry(CatalogKind.SECTION, nextUser, entry);
     }
     try {
-      await commitUserEntries(CatalogKind.SECTION, nextUser, user, { saveFn: saveUserCatalog });
+      await runBusy('カタログ適用', () => commitUserEntries(CatalogKind.SECTION, nextUser, user, { saveFn: saveUserCatalog }));
     } catch (e) {
       setBusy(false);
       setError(`保存に失敗しました: ${e.message}`);
@@ -1371,7 +1375,7 @@ function useCatalogEditActions(kind, { onSaved, onDeleted, onReverted, onError }
     if (busy) return;
     setBusy(true);
     try {
-      await applyCatalogEditPlan(kind, plan, { saveFn: saveUserCatalog, markDirty });
+      await runBusy('カタログ適用', () => applyCatalogEditPlan(kind, plan, { saveFn: saveUserCatalog, markDirty }));
     } catch (e) {
       onError?.(`保存に失敗しました: ${e.message}`);
       setSaveConfirm(null);
@@ -1416,7 +1420,7 @@ function useCatalogEditActions(kind, { onSaved, onDeleted, onReverted, onError }
     }
     setBusy(true);
     try {
-      await applyCatalogEditPlan(kind, plan, { saveFn: saveUserCatalog, markDirty });
+      await runBusy('カタログ適用', () => applyCatalogEditPlan(kind, plan, { saveFn: saveUserCatalog, markDirty }));
     } catch (e) {
       onError?.(`削除に失敗しました: ${e.message}`);
       cancelDelete();
@@ -1437,7 +1441,7 @@ function useCatalogEditActions(kind, { onSaved, onDeleted, onReverted, onError }
     const plan = planRevertToBuiltin(kind, revertConfirm.key, { alsoRealignDoc: revertConfirm.alsoRealignDoc });
     setBusy(true);
     try {
-      await applyCatalogEditPlan(kind, plan, { saveFn: saveUserCatalog, markDirty });
+      await runBusy('カタログ適用', () => applyCatalogEditPlan(kind, plan, { saveFn: saveUserCatalog, markDirty }));
     } catch (e) {
       onError?.(`標準に戻す処理に失敗しました: ${e.message}`);
       setRevertConfirm(null);
@@ -1475,7 +1479,9 @@ const REALIGN_DONE_MESSAGE = '本体の内容に合わせ直しました（保�
  * いたrealignConfirm state・realignPlansの毎レンダー再計算（承認直前の最新overlay状態を
  * 反映するためuseMemoでキャッシュしない）・handleRealignConfirmedを移設）。
  * useCatalogEditActionsには載せない——busy無し・同期処理・ユーザーライブラリ（overlay.user）を
- * 変えない（overlay.docを外すだけの操作）という別の性質のため（設計 2026-09-24）。
+ * 変えない（overlay.docを外すだけの操作）という別の性質のため（設計 2026-09-24）。IDB（saveUserCatalog）
+ * を書かないため入力規制ステップ5（G9）の関門化対象外（removeDocEntryはoverlay上のメモリ操作のみ。
+ * 本体書込みはこの後のユーザーの明示保存＝handleSaveConfirmで行われ、その保存自体は既に関門化済み）。
  * 確定操作は各keyへ removeDocEntry(kind, key) を呼び、成功すれば markDirty() してから
  * onRealigned(keys) を呼ぶ（選択中の行が対象に含まれていた場合の選択解除は呼び出し側の責務——
  * 出所（doc→user/builtin）が変わりformが古い同梱値のままになるため）。合わせ直しは

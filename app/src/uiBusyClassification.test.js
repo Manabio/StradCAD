@@ -26,6 +26,7 @@ import {
 const GATED = [
   'performUndo', 'performRedo', 'handleModeChange', 'handleFloorSwitch', 'switchFloorKeepingMode',
   'handleDeleteCenterLine', 'handleConvertCenterLine', 'handleEccConfirm', 'commitAxisEdit',
+  'handleSaveConfirm', 'runDocumentImport', 'openCatalogMaintenancePanel',
 ];
 
 // ---- EXEMPT（対象外。理由付き）----
@@ -119,9 +120,11 @@ const PENDING_COUNT = 4;
 // ステップ3で cl-move・cl-to-grid/cl-to-center のIIFE2件を名前付き関数（startCenterLineMove・
 // handleConvertCenterLine）へ切り出したため6→4。一方、runBusy(に渡す`async () => {...}`
 // コールバック（handleDeleteCenterLine・handleConvertCenterLine・handleEccConfirm・
-// commitAxisEditの4件）が新たに加わったため15→19。
+// commitAxisEditの4件）が新たに加わったため15→19。ステップ5で保存・読込み・カタログ保守を開くの
+// runBusy(コールバック3件（handleSaveConfirm・runDocumentImport・openCatalogMaintenancePanel）が
+// 加わったため19→22。
 const ANON_IIFE_COUNT = 4;
-const ANON_CALLBACK_COUNT = 19;
+const ANON_CALLBACK_COUNT = 22;
 const ANON_TOTAL_COUNT = ANON_IIFE_COUNT + ANON_CALLBACK_COUNT;
 
 function findNamedAsyncFunctions(code) {

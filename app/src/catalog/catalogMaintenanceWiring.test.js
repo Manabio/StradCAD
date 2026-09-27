@@ -81,9 +81,11 @@ test('【不変条件・ステップ5】App.jsx: handleHamburgerSelectがid===\'
 });
 
 // QA指摘Major-B（2026-09-22）: React.lazy+SuspenseはErrorBoundaryが無いとチャンク読込み失敗時に
-// root全体が白画面になるため不採用——EccentricityDialog.jsx等と同じ「import().then().catch()」型
-// （失敗はtoast通知）に揃える。lazy(が全く現れないことも固定する（Suspense方式への再退行を検知）。
-test('【不変条件・ステップ5・QA指摘Major-B】App.jsx: CatalogMaintenancePanelを動的import（import().then().catch()）で開き、失敗時はトースト通知する', () => {
+// root全体が白画面になるため不採用——lazy(が全く現れないことを固定する（Suspense方式への再退行を
+// 検知）。入力規制ステップ5でカタログ保守を開く処理はopenCatalogMaintenancePanel（関門runBusy)の
+// 中でtry/catch+await importへ改めた（handleDeleteCenterLine等の他のGATED入口と同じ形。失敗時は
+// 従来どおりtoast通知）——handleHamburgerSelectのcatalog-maintenance分岐はそれを呼ぶだけになった。
+test('【不変条件・ステップ5・QA指摘Major-B】App.jsx: openCatalogMaintenancePanelはCatalogMaintenancePanel.jsxを動的import（await import().catch同等のtry/catch）し、失敗時はトースト通知する', () => {
   const src = readSrc('App.jsx');
   assert.ok(
     !/\blazy\(/.test(src),
@@ -93,18 +95,23 @@ test('【不変条件・ステップ5・QA指摘Major-B】App.jsx: CatalogMainte
     !/^\s*import\s+\{[^}]*CatalogMaintenancePanel[^}]*\}\s+from\s+['"]\.\/ui\/CatalogMaintenancePanel\.jsx['"]/m.test(src),
     'App.jsx が CatalogMaintenancePanel.jsx を静的importしている（全画面パネルは動的importする契約への退行）',
   );
-  const m = /if \(id === 'catalog-maintenance'\) \{([\s\S]*?)\n {4}\}/.exec(src);
-  assert.ok(m, 'App.jsx の handleHamburgerSelect に catalog-maintenance 分岐本体が見つからない');
-  const body = m[1];
+  const m = /function handleHamburgerSelect\(id\) \{([\s\S]*?)\n {2}\}/.exec(src);
+  assert.ok(m, 'App.jsx に handleHamburgerSelect 関数が見つからない');
   assert.ok(
-    /import\(['"]\.\/ui\/CatalogMaintenancePanel\.jsx['"]\)/.test(body),
-    'catalog-maintenance 分岐が CatalogMaintenancePanel.jsx を動的importしていない',
+    /return openCatalogMaintenancePanel\(\);/.test(m[1]),
+    'handleHamburgerSelect の catalog-maintenance 分岐が openCatalogMaintenancePanel() を呼んでいない',
   );
-  assert.ok(/\.then\(/.test(body), 'catalog-maintenance 分岐に .then(...) が無い');
-  assert.ok(/\.catch\(/.test(body), 'catalog-maintenance 分岐に .catch(...)（読込み失敗の処理）が無い');
+
+  const body = extractBalancedBody(src, 'async function openCatalogMaintenancePanel() {');
+  assert.ok(body, 'App.jsx に openCatalogMaintenancePanel 関数が見つからない');
+  assert.ok(
+    /await import\(['"]\.\/ui\/CatalogMaintenancePanel\.jsx['"]\)/.test(body),
+    'openCatalogMaintenancePanel が CatalogMaintenancePanel.jsx を動的importしていない',
+  );
+  assert.ok(/\btry\s*\{/.test(body) && /\bcatch\s*\(/.test(body), 'openCatalogMaintenancePanel に try/catch（読込み失敗の処理）が無い');
   assert.ok(
     /setToast\(\{\s*msg:\s*'[^']*読み込みに失敗/.test(body),
-    'catalog-maintenance 分岐の .catch が setToast で読込み失敗をトースト通知していない',
+    'openCatalogMaintenancePanel の catch が setToast で読込み失敗をトースト通知していない',
   );
 });
 
@@ -1813,4 +1820,34 @@ test('【不変条件・ステップ14-A5・QA指摘Minor-2c】SectionTabはuseR
     /useRealignActions\(CatalogKind\.SECTION, \{\s*builtinList, allRows, onRealigned: onSectionRealigned,/.test(code),
     'SectionTab の useRealignActions が builtinList, allRows を渡していない（絞り込み後のrowsを渡す退行の可能性）',
   );
+});
+
+// ---- 入力規制ステップ5（G9）: カタログ適用（IDB書込みを伴う本体）はrunBusy('カタログ適用', …)で
+// 包む——パネル自体は全画面で自前のbusy/disabled制御を持つため、それはそのまま残す（関門は
+// 二重防御＋分類の一貫性のため）。realign.handleRealignConfirmedはremoveDocEntry（overlay上の
+// メモリ操作のみ・IDBを書かない）ため対象外——この一覧に含めない ----
+// QA指摘（再報告）: 位置比較（runBusy(のindexOf < callee呼び出しのindexOf）だけでは
+// `await runBusy('カタログ適用', () => null); await applyCatalogEditPlan(...)`のような
+// 変異（runBusyを素通りさせ、書込み自体は関門の外で別行のawaitとして残す）を検出できない。
+// runBusyの直接の引数として書込み関数を呼んでいることを正規表現で固定する。
+test('【不変条件・入力規制ステップ5】ui/CatalogMaintenancePanel.jsx: applyCatalogEditPlan(/commitUserEntries(はrunBusy(の直接の引数として呼ばれている', () => {
+  const src = readSrc('ui/CatalogMaintenancePanel.jsx');
+  assert.ok(/from ['"]\.\.\/uiBusy\.js['"]/.test(src), 'CatalogMaintenancePanel.jsx が ../uiBusy.js を import していない');
+
+  const targets = [
+    { signature: 'async function performSave(plan, entryKey, meta = {}) {', callee: 'applyCatalogEditPlan' },
+    { signature: 'async function handleDeleteConfirmed(entryKey) {', callee: 'applyCatalogEditPlan' },
+    { signature: 'async function handleRevertConfirmed() {', callee: 'applyCatalogEditPlan' },
+    { signature: 'async function handleCommit() {', callee: 'commitUserEntries' },
+  ];
+  for (const { signature, callee } of targets) {
+    const body = extractBalancedBody(src, signature);
+    assert.ok(body, `CatalogMaintenancePanel.jsx に ${signature} が見つからない`);
+    const code = stripComments(body);
+    const re = new RegExp(`runBusy\\('カタログ適用',\\s*\\(\\)\\s*=>\\s*${callee}\\(`);
+    assert.ok(
+      re.test(code),
+      `${signature} で ${callee}( がrunBusy('カタログ適用', () => ${callee}(...)の直接の引数として呼ばれていない`,
+    );
+  }
 });

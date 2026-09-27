@@ -7,8 +7,10 @@
  * switchFloorKeepingMode/handleModeChange/performUndo/performRedo）に加え、CL削除・入替え・
  * 偏芯・出幅編集（App.jsxのhandleDeleteCenterLine/handleConvertCenterLine/handleEccConfirm/
  * commitAxisEdit）・移動準備（modes/FloorplanModeState.jsのstartMove内。App.jsx側は
- * beginUiTransitionを呼ばない）も同じ関門に入る（入力規制ステップ3・2026-09-28）。以後保存・
- * 読込み・階操作も同じ関門に入る予定。各経路が本モジュールの runBusy() で自分の処理本体を包み、
+ * beginUiTransitionを呼ばない）（入力規制ステップ3・2026-09-28）、保存・読込み・カタログ保守
+ * （開く／適用。App.jsxのhandleSaveConfirm/runDocumentImport/openCatalogMaintenancePanel・
+ * ui/CatalogMaintenancePanel.jsxのperformSave等）（入力規制ステップ5・2026-09-28）も同じ関門に
+ * 入る。以後階操作も同じ関門に入る予定。各経路が本モジュールの runBusy() で自分の処理本体を包み、
  * isUiBusy() が真の間だけポインタ・キーボードを塞ぐ（App.jsx側の責務）。ここでは「今、関門の中か」
  * を深さで数えるだけで、排他制御（mutex）は持たない——入れ子が多く（例: performUndo内の
  * switchHistoryContextが内部でswitchFloorを呼ぶ）mutexにすると容易にデッドロックするため、
@@ -61,8 +63,8 @@ export async function runBusy(label, fn) {
 
 /**
  * depth が 0 になるまで待つ Promise（既に 0 なら即resolve）。テストと将来のステップ
- * （保存・読込み・階操作を関門に組み込む際の待ち合わせ）用。CL削除・入替え・偏芯・出幅編集は
- * 入力規制ステップ3で対応済み（whenUiIdle自体は使わず、各入口が自身のrunBusy呼び出しの中で
+ * （階操作を関門に組み込む際の待ち合わせ）用。CL削除・入替え・偏芯・出幅編集・保存は
+ * 入力規制ステップ3/5で対応済み（whenUiIdle自体は使わず、各入口が自身のrunBusy呼び出しの中で
  * structuralSync.whenIdle()を待つ）。UIからは使わない。
  * @returns {Promise<void>}
  */

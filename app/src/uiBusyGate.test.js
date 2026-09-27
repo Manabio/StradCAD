@@ -87,14 +87,15 @@ test('【不変条件・入力規制ステップ3】App.jsx: RadialMenuのonSele
     'AxisFaceInputのonConfirmがguardUi()で包まれていない');
 });
 
-// structuralSync.whenIdle()を待つCL操作の入口（handleDeleteCenterLine・handleConvertCenterLine・
-// handleEccConfirm）はいずれも関門の中でwhenIdleを待つ必要がある（.claude/undo-redo.md
-// 「落とし穴」参照）——本体のテキスト上でrunBusy(より後（＝runBusyのコールバックの中）に
-// whenIdleが現れることを固定する（関門の外にwhenIdleが漏れ出す変異を検知）。
-test('【不変条件・入力規制ステップ3】App.jsx: whenIdle()を使うCL操作の入口はいずれもGATED（関門の中で待つ）', () => {
+// structuralSync.whenIdle()を待つ入口（handleDeleteCenterLine・handleConvertCenterLine・
+// handleEccConfirm・ステップ5で加わったhandleSaveConfirm）はいずれも関門の中でwhenIdleを待つ
+// 必要がある（.claude/undo-redo.md「落とし穴」参照）——本体のテキスト上でrunBusy(より後
+// （＝runBusyのコールバックの中）にwhenIdleが現れることを固定する（関門の外にwhenIdleが
+// 漏れ出す変異を検知）。
+test('【不変条件・入力規制ステップ3/5】App.jsx: whenIdle()を使う入口はいずれもGATED（関門の中で待つ）', () => {
   const appSrc = fs.readFileSync(appSrcPath, 'utf8');
 
-  const GATED_WITH_WHEN_IDLE = ['handleDeleteCenterLine', 'handleConvertCenterLine', 'handleEccConfirm'];
+  const GATED_WITH_WHEN_IDLE = ['handleDeleteCenterLine', 'handleConvertCenterLine', 'handleEccConfirm', 'handleSaveConfirm'];
   for (const name of GATED_WITH_WHEN_IDLE) {
     const body = extractFunctionBody(appSrc, `async function ${name}`);
     const idleIdx = body.indexOf('structuralSync.whenIdle()');
@@ -164,6 +165,35 @@ test('【不変条件・F1】App.jsx: 階削除（delete）はtrySwitchFloor→b
   assert.ok(removeIdx >= 0, 'removeFloorの呼び出しが見つからない');
   assert.ok(trySwitchIdx < secondBlocksIdx && secondBlocksIdx < removeIdx,
     'trySwitchFloor→blocksFloorRemoval再判定→removeFloorの順である必要がある');
+});
+
+// ================================================================
+// 入力規制ステップ5: 保存（G4）・読込み（G5）・カタログ保守を開く（G8）の入口を関門へ移すのに伴い、
+// SaveFileDialogのonConfirm・HamburgerMenuのonSelectはguardUi()で包む。ファイル選択inputの
+// onChangeはguardUiでは包まない——busy中に丸ごと落とすと直前のe.target.value=''も走らず、
+// 同じファイルの再選択でonChangeが発火しなくなる（QA指摘・再報告）ため、handleFileOpen自身の
+// 冒頭でisUiBusy()を見る（valueのリセットの後）。
+// ================================================================
+
+test('【不変条件・入力規制ステップ5】App.jsx: SaveFileDialogのonConfirm・HamburgerMenuのonSelectはguardUi()で包まれている', () => {
+  const appSrc = fs.readFileSync(appSrcPath, 'utf8');
+  const code = stripCommentLines(appSrc);
+
+  assert.match(code, /<SaveFileDialog[\s\S]{0,200}onConfirm=\{guardUi\(handleSaveConfirm\)\}/,
+    'SaveFileDialogのonConfirmがguardUi()で包まれていない');
+  assert.match(code, /<HamburgerMenu\s+onSelect=\{guardUi\(handleHamburgerSelect\)\}/,
+    'HamburgerMenuのonSelectがguardUi()で包まれていない');
+});
+
+test('【不変条件・入力規制ステップ5・QA指摘再報告】App.jsx: ファイル選択inputのonChangeはguardUiではなくhandleFileOpen内のisUiBusy()ガードで守られている', () => {
+  const appSrc = fs.readFileSync(appSrcPath, 'utf8');
+  const code = stripCommentLines(appSrc);
+
+  assert.match(code, /type="file"[\s\S]{0,150}onChange=\{handleFileOpen\}/,
+    'ファイル選択inputのonChangeがhandleFileOpenそのものでない（guardUiで包むと再選択が効かなくなる退行）');
+
+  const body = extractFunctionBody(appSrc, 'function handleFileOpen(e)');
+  assert.ok(body.includes('isUiBusy()'), 'handleFileOpenの本体にisUiBusy()ガードが無い');
 });
 
 test('【不変条件・F1】App.jsx: 検討案削除（delete-alt）はtrySwitchFloor→activePlaneId再判定→removeFloorの順で、切替失敗時にアクティブ階を削除しない', () => {
