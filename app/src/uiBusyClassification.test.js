@@ -240,3 +240,28 @@ test('【分類・§5-4】usePointerInteraction.js: handlePointerDown/handleTouc
   const tsBody = extractArrowFunctionBody(src, 'const handleTouchStart = (e) => {');
   assertFirstStatementIs(tsBody, 'if (isUiBusy()) return;', 'handleTouchStart');
 });
+
+// ---- §5-4後半（入力規制ステップ4）: resetGestureRefsが長押しタイマーをabortすることの走査 ----
+// 関門に入る直前（App.jsx beginUiTransition→interruptCurrentAction）に押し始めた長押し
+// （gutterLongPress／axisLabelLongPress／longPress）のsetTimeoutが生きたまま残ると、関門の中で
+// 500ms後にonFireしてメニュー表示やstartMoveを起こす（§1.3の穴）。3つのabort()呼び出しを
+// 個別にassertする（1つでも欠けたら該当assertだけが赤になるよう、まとめて1個のincludes判定にはしない）。
+test('【分類・§5-4後半】usePointerInteraction.js: resetGestureRefs はgutterLongPress/axisLabelLongPress/longPressをabortする', () => {
+  const src = fs.readFileSync(path.resolve(import.meta.dirname, 'interaction/usePointerInteraction.js'), 'utf8');
+  const body = extractFunctionBody(src, 'function resetGestureRefs');
+  assert.ok(body.includes('gutterLongPress.abort()'), 'resetGestureRefsの本体にgutterLongPress.abort()が無い');
+  assert.ok(body.includes('axisLabelLongPress.abort()'), 'resetGestureRefsの本体にaxisLabelLongPress.abort()が無い');
+  assert.ok(body.includes('longPress.abort()'), 'resetGestureRefsの本体にlongPress.abort()が無い');
+});
+
+// ---- §5-4後半・QA差し戻し（2026-09-28）: interruptCurrentActionが仕上げモードのドラッグをcancelする ----
+// resetGestureRefsはfinishDragDownRefをnullに戻すだけで、対になるFinishModeState.dragStateは
+// 消さない。仕上げモードでドラッグ中にESC／関門突入すると、dragStateが残ったままプレビュー・
+// crosshairが消えず、pointermove/pointerupの`finishDragDownRef.current && dragState`条件で
+// commitDragも飛ばされる（QA指摘）。interruptCurrentActionの本体にcancelDragの呼び出しがある
+// ことを固定する（cancelDragを持つのはFinishModeStateのみ。他モードはno-op）。
+test('【分類・QA指摘】App.jsx: interruptCurrentAction はmodeRef.current?.cancelDrag?.()を呼ぶ', () => {
+  const appSrc = readAppSrc();
+  const body = extractFunctionBody(appSrc, 'function interruptCurrentAction');
+  assert.ok(body.includes('cancelDrag'), 'interruptCurrentActionの本体にcancelDragの呼び出しが無い');
+});

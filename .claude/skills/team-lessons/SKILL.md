@@ -402,3 +402,22 @@ project, contribute it upstream to the team's playbook in the ccteams repo.
 - **正しい動き**: 例外を握るのは UI のコールバック層（`guardUi` の層）だけにする。内部から呼ばれる遷移関数は
   成功・失敗を返すか rethrow し、呼び出し元は切替後の状態（`activePlaneId`）を確かめてから破壊的な処理に進む。
   関門を足すときは、その関数の内部呼び出し元を grep して「失敗時に続けてよいか」を1件ずつ見る。
+
+### 長押しタイマーは関門の開始で止まらなかった（2026-09-28 入力規制ステップ4）
+
+- **症状**: 関門に入る直前の中断処理（`resetGestureRefs`。App.jsx の `beginUiTransition()` →
+  `interruptCurrentAction()` から呼ばれる）は `siteDrawDownRef` と建具ドラッグの巻き戻ししか
+  戻しておらず、`gutterLongPress`／`axisLabelLongPress`／`longPress`（`useLongPress` の3インスタンス）の
+  `setTimeout` は生きたままだった。関門が開く直前に押し始めた長押しは、関門の中で 500ms 後に `onFire`
+  し、メニュー表示や `startMove` を起こしてしまう。
+- **誤った直感**: 「中断処理は ref を戻せば足りる」——setTimeout で後から発火する経路（長押し・
+  デバウンス）は ref を戻すだけでは止まらないことを見落としていた。
+- **正しい動き**: 中断処理を書くときは「時間差で発火するものの一覧」を先に作り、それぞれの
+  abort／cancel を明示的に呼ぶ。ソース走査テスト（`uiBusyClassification.test.js` §5-4後半。
+  `uiBusySourceScan.js` の `extractFunctionBody`＋`stripCommentLines`）で `.abort()` の呼び出しが
+  本体（コメントではなく）に存在することを個別に固定し、1つでも外れたら赤になるようにする。
+  ref を戻すときは、その ref をガード条件にしているモード側の状態（`FinishModeState.dragState` 等）
+  も一緒に cancel する——ref だけ null にしてもモード側の状態が残ればガード条件が食い違い、
+  プレビュー等が消えないまま残る（2026-09-28 QA指摘・仕上げモードのドラッグ中断漏れ）。逆に、
+  データを変えないジェスチャー（パン・ピンチ）は戻すと直後の pointerup の判定（パン継続/終了か
+  タップか）が変わってしまうので、中断処理では触らない（2026-09-28 QA指摘）。

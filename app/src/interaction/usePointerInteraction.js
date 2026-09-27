@@ -847,11 +847,36 @@ export function usePointerInteraction({
     }
   };
 
-  // ESC（App.jsx のキーボードハンドラ effect）からの呼び出し用: ドラッグ中意図の記録refをクリアする。
-  // 元は App.jsx が siteDrawDownRef.current = null; を直接行っていたが、
-  // このrefがこのフックへ移動したため、同じ行をアクセサとして公開する（挙動は変えない）。
+  // ESC・関門突入直前（App.jsx beginUiTransition→interruptCurrentAction）の両方から呼ばれる、
+  // ジェスチャー中断の一括処理。元は siteDrawDownRef.current = null; と建具ドラッグの巻き戻しのみ
+  // だったが、関門が開く直前に押し始めた長押し（gutterLongPress／axisLabelLongPress／longPress）の
+  // setTimeoutが生きたまま残り、関門の中で500ms後にonFireしてメニュー表示やstartMoveを起こす穴が
+  // あった（入力規制 ステップ4・§1.3）。abort()はpending中かつ未成立のときだけonCancel
+  // （setPressPos(null)）を呼ぶため、既に成立済み・未開始のケースを二重に戻すことはない。
+  // 各種押下記録ref（gutterCLRef／axisLabelRef／drawDownRef／moveDownRef／elevationDragRef）も
+  // 合わせて戻す——いずれも参照側に既存のnullガード（if (x.current) ...）があるため、途中で戻しても
+  // 後続処理は壊れない。finishDragDownRef だけは例外——このref自体にはガードがあるが、対になる
+  // FinishModeState.dragState を interruptCurrentAction の modeRef.current?.cancelDrag?.() が
+  // 先に消す前提（QA指摘・2026-09-28）。cancelDragを呼ばずにこのrefだけ戻すと、dragStateが
+  // 残ったままプレビュー・crosshairが消えない。
+  //
+  // パン・ピンチ（drag／pinch）と isPanning はここでは戻さない——viewportだけを動かしデータを
+  // 変えないジェスチャーで、途中で止める必要が無い。むしろ戻すと直後のpointerupが「パン継続→
+  // パン終了」ではなく「タップ」（panned=false・longPressFired=false）扱いになり、構造モードの
+  // 部材選択・建具モードの選択変更が誤発火する（QA指摘・2026-09-28）。touchTapRef だけはタップ
+  // 抑止（マルチ指タップの誤発火防止）のためここで戻す——データも表示も変えないため安全。
   function resetGestureRefs() {
+    drawDownRef.current = null;
+    longPress.abort();
+    gutterLongPress.abort();
+    gutterCLRef.current = null;
+    axisLabelLongPress.abort();
+    axisLabelRef.current = null;
+    moveDownRef.current = null;
+    finishDragDownRef.current = null;
     siteDrawDownRef.current = null;
+    elevationDragRef.current = null;
+    touchTapRef.current = null;
     // 建具ドラッグ中の ESC は開始前へ戻す（CL移動の cancelMove と同じ扱い）
     if (openingDragRef.current) cancelOpeningDrag();
     openingDownRef.current = null;

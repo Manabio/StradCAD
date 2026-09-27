@@ -548,6 +548,7 @@ const App = observer(() => {
     modeRef.current?.cancelMove?.();
     modeRef.current?.cancelAxisEdit?.();
     modeRef.current?.cancelSiteDraw?.();
+    modeRef.current?.cancelDrag?.(); // 仕上げモードのドラッグ中断（cancelDragを持つのはFinishModeStateのみ。他モードはno-op）
     resetGestureRefs();
   }
 
