@@ -1134,9 +1134,13 @@ export class PlanGraph {
     return cl;
   }
 
-  /** _reparentChildCenterLines の薄い公開ラッパ（中心⇔通り芯の入替え専用）。id で対象 CL を指定する。 */
+  /** _reparentChildCenterLines の薄い公開ラッパ。id で対象 CL を指定する（中心⇔通り芯の入替え、
+   *  および通り芯削除の他階後始末——`transform/centerLineFloorSync.js`
+   *  `detachOtherFloorsFromGridCenterLine`——の双方から使う）。通り芯は他階自身の shapeMap には
+   *  無く `_structGraph` 側にあるため、まずこのグラフの shapeMap を見て、無ければ `_structGraph` を
+   *  見る（`finish/roomReinterpret.js` getCLById と同じ解決順）。 */
   reparentChildCenterLines(id) {
-    const cl = this.shapeMap.get(id);
+    const cl = this.shapeMap.get(id) ?? this._structGraph?.shapeMap.get(id) ?? null;
     if (cl instanceof CenterLine) this._reparentChildCenterLines(cl);
   }
 

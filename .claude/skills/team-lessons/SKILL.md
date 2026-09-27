@@ -378,6 +378,21 @@ project, contribute it upstream to the team's playbook in the ccteams repo.
   階切替を許さない」（`whenCenterLineOpsIdle()` のような待ち合わせを `switchFloor` 側に置く）で、検知ガードは
   安全網へ例外を渡すだけにする。
 
+### 前後の差分を取る安全網を共通関数へ移したら「前」を取るタイミングが破壊操作の後にずれた（2026-09-27 CL削除＝境界ステップ4・他階後始末で発生）
+
+- **症状**: 自階専用だった「削除前後の復元不能セル差分」安全網（`collectUnresolvableCells`の前後比較）を
+  他階でも使う共通関数（`applyCenterLineRemovalAftermath`）へ抽出したところ、共通関数が自分の内部先頭で
+  `beforeUnresolvable`を採るようになった。呼び出し側は既にdetach・`removeCenterLine`を済ませてから
+  この関数を呼んでいたため、「前」が実質「削除後」になり、削除前後どちらで採っても同じという旧コメントの
+  前提（detachはRoom/Slab.cellsを直接変更しない）は成り立つのに、CLの**存在そのもの**が
+  `cellInteriorPoint`の結果を変えるという別の依存を見落として差分が常に空になった。
+- **誤った直感**: 「detachはcellsを変えないからどこで取っても同じ」（cellsの中身は変わらなくても、
+  cellsが参照するCLの**存在**が判定関数の入力であることを見落とした）。
+- **正しい動き**: 差分の基準（before/after）を取る安全網を共通化するときは、「前」を関数の内部で
+  自動的に採らせず、**呼び出し側に採らせて引数で渡す**（省略時はthrowして無言のバグを防ぐ）。
+  共通化前に「beforeを採る時点でその判定関数の入力（今回はCLの存在）が変わっていないか」を1行で
+  確認してから抽出する。
+
 ### 関門を入れた遷移関数が失敗をトーストで握った結果、成功を前提に続ける内部呼び出し元（階削除）が壊れた（2026-09-27 階切替の関門で発生）
 
 - **症状**: `handleFloorSwitch` を関門（`runFloorTransition`）で包み、catch でトースト表示して正常 return させたところ、

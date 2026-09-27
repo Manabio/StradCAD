@@ -1501,8 +1501,9 @@ const App = observer(() => {
   }
 
   // ---- 通り芯・CL削除（メニューの cl-del）----
-  // transform/centerLineOps.js deleteCenterLineWithUndo は他階（検討・屋根を含む）への detach 伝播
-  // （centerLineFloorSync.js propagateGridCenterLineDeletion。IDB読み書きを伴う）と構造同期
+  // transform/centerLineOps.js deleteCenterLineWithUndo は他階（検討・屋根を含む）への detach 伝播・
+  // 後始末（centerLineFloorSync.js detachOtherFloorsFromGridCenterLine・
+  // applyOtherFloorsGridCenterLineAftermath。IDB読み書きを伴う）と構造同期
   // （structural/structuralSync.js）を伴うため async 化された（案P・2026-09-25）。実行中の構造同期が
   // 他階IDBを読み書きしている最中に削除を始めると競合するため、先に whenIdle() を待つ
   // （.claude/undo-redo.md「落とし穴」参照）。

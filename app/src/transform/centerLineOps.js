@@ -11,11 +11,7 @@ import {
   ERR_CL_CONVERT_DUP_FLOOR, ERR_CL_CONVERT_DUP_FLOOR_DEMOTE, ERR_CL_DELETE_LAST_GRID, ERR_CL_CONVERT_NO_GRID,
   ERR_CL_DELETE_FOOTPRINT, ERR_CL_DELETE_UNRESOLVABLE, ERR_CL_DELETE_WALLS_UNAVAILABLE, ERR_CATALOG_DUPLICATE,
 } from '../error.js';
-import {
-  findUnresolvableCells, reinterpretRoomsOnEntry, normalizePartialDominance, reinterpretSlabsAfterCLRemoval,
-  collectUnresolvableCells,
-} from '../finish/roomReinterpret.js';
-import { syncEdgesFromTopology } from '../finish/edgeClassify.js';
+import { findUnresolvableCells, collectUnresolvableCells } from '../finish/roomReinterpret.js';
 import { findBracketingCLs, overhangMm } from '../snapGeometry.js';
 import { calcStep } from '../renderer/clMoveMath.js';
 import {
@@ -32,7 +28,7 @@ import { resolveSecondaryBeamsForAxis } from '../structural/beamAxisMove.js';
 import { renumberMembers } from '../structural/memberNumbering.js';
 import { autoFillSecondaryBeams, autoFillBeamEccentricity, UNSPECIFIED_STRUCTURE } from '../structural/structuralAutoFill.js';
 import {
-  wallBeamAxisExcludeKey, peekBelowGraph, wallBeamSourcesFor, orphanedWallBeamAxes,
+  wallBeamAxisExcludeKey, peekBelowGraph, wallBeamSourcesFor, removeOrphanedWallBeamAxesFor, belowPlaneOf,
   wallBackingCenters, mapBackingCenterMoves, isProtectedWallBeamAxis, findWallBeamAxisCL,
 } from '../structural/wallBeamAxes.js';
 import { followWallBeamAxes } from '../structural/wallBeamAxisFollow.js';
@@ -42,7 +38,7 @@ import { peekVia } from '../structural/structuralPeek.js';
 // wallBeamAxes.js→structuralPeek.js経由でFloorSwapManager.js・storage/db.jsを静的に引いている
 // （centerLineFloorSync.jsの静的import化と同じ理由。冒頭コメント参照）ため、wallRefresh.jsが
 // 同じ依存（FloorSwapManager.js・storage/db.js）を静的に引いても単体importは壊れない。
-import { refreshWallsForGraph, hasNeverBuiltWalls } from '../wallRefresh.js';
+import { hasNeverBuiltWalls } from '../wallRefresh.js';
 import { loadMaterialMap, preloadWallRegenerationModules } from '../finish/wallRegeneration.js';
 // centerLineFloorSync.js は静的importする（段階(g)・QA指摘m-3・2026-09-26。旧コメント「IndexedDBに
 // 連鎖するためnode:testからの単体importを壊さないよう動的importにする」は、centerLineOps.jsが既に
@@ -51,9 +47,11 @@ import { loadMaterialMap, preloadWallRegenerationModules } from '../finish/wallR
 // commitCLMoveOp（非梁芯分岐）の静的importが単体import・フルスイート・buildいずれも無問題だった
 // （段階(g)で実測済み）ことから、他の呼び出し元（旧・動的import）も静的に統一できる）。
 import {
-  applyFloorUndoRecords, rollbackFloorRecords, propagateGridCenterLineDeletion,
+  applyFloorUndoRecords, rollbackFloorRecords,
+  detachOtherFloorsFromGridCenterLine, applyOtherFloorsGridCenterLineAftermath,
+  saveOtherFloorsAfterGridCenterLineAftermath,
   findFloorsWithCounterpartCL, absorbWallBeamAxesOnPromote, recallPromotedCenterLineDuplicates,
-  propagateDemotedCenterLine, findFloorsWhereFootprintBoundary,
+  propagateDemotedCenterLine, findFloorsBlockingGridDeletion, applyCenterLineRemovalAftermath,
 } from './centerLineFloorSync.js';
 
 // CL削除・中心線移動の直後・undo/redo直後に構造同期（structural/structuralSync.js）を起動するための
@@ -80,19 +78,6 @@ function pushUndoWithStructuralSync(graph, project, scope, undoFn, redoFn, saveF
   );
   notify(floorRecords);
   return entry;
-}
-
-// CL削除ステップ2: 削除するCLを参照する腰壁・垂れ壁レコード（graph.kneeDropWalls）を掃除する。
-// key=edgeKey(axisCLId,startCLId,endCLId)（core/room.js edgeKey）——軸・端点いずれかが削除したCLを
-// 指すレコードは、削除の時点で先に消しておく（残すと finish/kneeDropWall.js の走査対象に亡霊
-// レコードとして残り続け、平面モードの間ずっと削除済みidを持ち歩くことになる）。仕上げ脱出時
-// （finishBoundary.js）の幾何ベースの掃除（kneeDropWallGeometryがnullを返すキーを削除）でも
-// 結果的に同じキーは拾われる——ここでの掃除はそれを待たず、CL削除と同じ操作の中で即座に行う
-// （新ルール1「CL削除は境界」の後始末の一部）。
-function removeKneeDropWallsReferencing(graph, clId) {
-  for (const key of [...graph.kneeDropWalls.keys()]) {
-    if (key.split(':').includes(clId)) graph.removeKneeDropWall(key);
-  }
 }
 
 // CL の pendingDelta を実座標に bake する（ref CL / 通常 CL 両対応）
@@ -327,8 +312,9 @@ export async function applyCLEccentricityWithUndo(graph, project, cl, opts = {})
 // 戻り値 {toast}: 通り芯側のみ拒否がありうる（軸最後の1本）ため、promoteCenterToGridWithUndo等の
 // 変換系と同じ {toast: string|null} 契約に揃える——呼び出し側は toast があればトースト表示するだけでよい。
 //
-// 通り芯削除は他階（検討・屋根を含む）への detach 伝播（transform/centerLineFloorSync.js
-// propagateGridCenterLineDeletion。IDB読み書きを伴う）と、構造同期（structural/structuralSync.js。
+// 通り芯削除は他階（検討・屋根を含む）への detach 伝播・後始末（transform/centerLineFloorSync.js
+// detachOtherFloorsFromGridCenterLine・applyOtherFloorsGridCenterLineAftermath。IDB読み書きを
+// 伴う）と、構造同期（structural/structuralSync.js。
 // setCenterLineStructuralListener経由の依存注入）を伴うため async 化した（案P・2026-09-25裁定。
 // 非通り芯分岐にIDB・構造同期は無いが、関数全体をasyncにする機械的な波及を受ける）。
 // centerLineFloorSync.jsは静的import（段階(g)・QA指摘m-3。ファイル冒頭のimport参照——旧「動的import
@@ -343,20 +329,9 @@ export async function applyCLEccentricityWithUndo(graph, project, cl, opts = {})
 //   opts.preloadWallRegenerationModulesFn は finish/wallRegeneration.js の
 //   preloadWallRegenerationModules のテスト差し替え（モジュール事前読込みの失敗を再現する。QA指摘M1'）。
 // resolveStairContext（finish/stair/stairUnderRooms.js :102-106）が必要とする「1つ下の実体階」を、
-// project.planes（elevation順・採用フロアのみ）から求める。structural/wallBeamAxes.js の私有
-// belowPlaneOf と同じ算出（idxが無い/0番目ならnull）——peekBelowGraph経由でimportできないため
-// （private・非export）ここで同じ3行を再実装する（QA指摘H1/H2/M1是正。壁再生成に必要な下階peekを
-// 変更前に前倒しするための算出だけに使う——実際のpeek自体はcachedPeek経由で行う）。
-// project.planes が無い簡略化されたテスト用project（{activeGraph}だけを持つ最小fixture）では
-// null を返す——そのようなfixtureはcanCarryWalls=trueでも削除後に壁が0本になり
-// refreshWallsForGraphの hasNeverBuiltWalls ガードで早期returnするため、この関数の戻り値
-// （常にnull）が実際に使われることはない。
-function belowPlaneOfProject(plane, project) {
-  const planes = project.planes;
-  if (!planes) return null;
-  const idx = planes.findIndex(p => p.id === plane.id);
-  return idx > 0 ? planes[idx - 1] : null;
-}
+// structural/wallBeamAxes.js の belowPlaneOf（QA指摘9是正・2026-09-27でexport済み）で求める
+// （壁再生成に必要な下階peekを変更前に前倒しするための算出だけに使う——実際のpeek自体はcachedPeek
+// 経由で行う）。旧belowPlaneOfProject（同じ3行の重複実装）はここから削除し、belowPlaneOfへ一本化。
 
 // ---- in-flight 追跡（QA指摘M・2026-09-27）----
 // deleteCenterLineWithUndo の実行中、store.js switchFloor が floorSwapManager.swap
@@ -455,7 +430,7 @@ async function runDeleteCenterLineWithUndo(graph, project, cl, opts = {}) {
     // （centerLineConvert.test.jsの【到達不能経路・軸選択の正常化】参照）。
     if (isLastGridOnAxis(graph, cl)) return { toast: ERR_CL_DELETE_LAST_GRID };
     // フットプリント境界削除ガード（第1段階）: 自階でこの通り芯が外壁線を担っていれば即拒否
-    // （detach・propagateGridCenterLineDeletionより前。centerLineConvert.js isFootprintBoundaryCL参照）。
+    // （detach・detachOtherFloorsFromGridCenterLineより前。centerLineConvert.js isFootprintBoundaryCL参照）。
     if (isFootprintBoundaryCL(graph, cl)) return { toast: ERR_CL_DELETE_FOOTPRINT };
     // 復元不能セルガード（ステップ2）: 自階の部屋セル・スラブセルのうち、この通り芯を失うと
     // 対辺2本同時喪失になるもの、または再解釈除外部屋（階段・階段吹抜け・未定義）のセル辺が
@@ -463,32 +438,43 @@ async function runDeleteCenterLineWithUndo(graph, project, cl, opts = {}) {
     // findUnresolvableCells。フットプリント境界ガードと同格——detach・他階伝播より前に判定する）。
     if (findUnresolvableCells(graph, cl.id).length > 0) return { toast: ERR_CL_DELETE_UNRESOLVABLE };
 
-    // 他階（検討・屋根含む）でもフットプリント境界になっていないか確認する（副作用の無い読み取り
-    // のみ。centerLineFloorSync.js findFloorsWhereFootprintBoundary）。実際の伝播
-    // （propagateGridCenterLineDeletion）より前に行う——N5と同じ「先に判定・失敗するなら書き込まない」規律。
-    // 壁由来梁芯の道連れ削除（1パス化。下記）が在来木造（selfAndBelow）の下階壁も根拠に含めるため、
-    // 上のfindFloorsWhereFootprintBoundaryと同じawaitにまとめて1つ下の実体階をpeekする
-    // （非struct分岐のneedsBelowPeekと同じ理由・同じopts.peekBelow差し替え口）。
-    // QA指摘H1/H2/M1/M1'是正: struct分岐は壁を持つ限り常に壁再生成の対象（canCarryWalls相当が
-    // 常にtrue）のため、壁を一度も持っていない階（hasNeverBuiltWalls）でなければ、materialMap
-    // 取得・モジュール事前読込み（makeWallRegenPrereqTask）・resolveStairContext用の下階peek
-    // （cachedPeekのウォームアップ）も同じawaitゾーンにまとめる。
-    const willRegenerateWalls = !hasNeverBuiltWalls(graph);
-    const belowPlaneForStairs = willRegenerateWalls ? belowPlaneOfProject(graph.plane, project) : null;
-    const needsBelowPeekStruct = rulesFor(effectiveStructure(graph, project)).wallBeamAxes === 'selfAndBelow';
-    const [boundaryFloors, belowGraph, , wallRegenPrereq] = await Promise.all([
-      findFloorsWhereFootprintBoundary(project, graph, cl),
-      needsBelowPeekStruct ? (opts.peekBelow ?? peekBelowGraph)(graph, project) : Promise.resolve(null),
-      belowPlaneForStairs ? peek(belowPlaneForStairs, project.structGraph) : Promise.resolve(null),
-      makeWallRegenPrereqTask(willRegenerateWalls),
-    ]);
+    // 他階（検討・屋根含む）でもフットプリント境界・復元不能セルになっていないか確認する（副作用の
+    // 無い読み取りのみ。centerLineFloorSync.js findFloorsBlockingGridDeletion。ステップ4・ルール2:
+    // 復元不能セル判定（他階版findUnresolvableCells）も同じpeekへ統合——別関数にすると他階を2回
+    // peekすることになる）。実際の伝播（detachOtherFloorsFromGridCenterLine）より前に行う——N5と同じ
+    // 「先に判定・失敗するなら書き込まない」規律。
+    const blockingFloors = await findFloorsBlockingGridDeletion(project, graph, cl);
     // 他階peekのawait中に階が切り替わった・この通り芯自体が消えた可能性を再評価する
     // （非struct分岐のneedsBelowPeekガードと同型。副作用が無い読み取りのためrollbackFloorRecordsは
     // 不要——floorRecordsはまだ何も積んでいない）。
     if (graph !== project.activeGraph || project.structGraph.shapeMap.get(cl.id) !== cl) {
       return { toast: null };
     }
-    if (boundaryFloors.length > 0) return { toast: ERR_CL_DELETE_FOOTPRINT };
+    if (blockingFloors.footprintPlanes.length > 0) return { toast: ERR_CL_DELETE_FOOTPRINT };
+    if (blockingFloors.unresolvablePlanes.length > 0) return { toast: ERR_CL_DELETE_UNRESOLVABLE };
+
+    // resolveStairContext用の1つ下の実体階をpeekする（非struct分岐のbelowPlaneForStairsと同じ理由）。
+    // QA指摘H1/H2/M1/M1'是正: struct分岐は壁を持つ限り常に壁再生成の対象（canCarryWalls相当が
+    // 常にtrue）のため、壁を一度も持っていない階（hasNeverBuiltWalls）でなければ、materialMap
+    // 取得・モジュール事前読込み（makeWallRegenPrereqTask）・resolveStairContext用の下階peek
+    // （cachedPeekのウォームアップ）も同じawaitゾーンにまとめる。ステップ4・ルール2是正: 他階にも
+    // 壁再生成が要る階がある（blockingFloors.anyOtherFloorNeedsWallRegen）場合もここでmaterialMapを
+    // 要求する——他階の後始末（applyOtherFloorsGridCenterLineAftermath内。変更後の区間）が新規に
+    // materialMapを読みに行かないようにするため（team-lessons「変更確定後に挟んだ非同期処理」参照）。
+    // 自階のwallBeamSourcesFor用「1つ下の実体階」のpeek（QA指摘5是正・2026-09-27）はここでは行わない
+    // ——detachOtherFloorsFromGridCenterLineが他階と同じpeekキャッシュから解決する（下階が他階の1つと
+    // 重なっていても、どの階もdetachしていない一貫した値になるようにするため）。opts.peekBelowは
+    // 同関数へそのまま渡す（従来どおりのテスト差し替え契約を維持）。
+    const willRegenerateWalls = !hasNeverBuiltWalls(graph) || blockingFloors.anyOtherFloorNeedsWallRegen;
+    const belowPlaneForStairs = !hasNeverBuiltWalls(graph) ? belowPlaneOf(graph.plane, project) : null;
+    const [, wallRegenPrereq] = await Promise.all([
+      belowPlaneForStairs ? peek(belowPlaneForStairs, project.structGraph) : Promise.resolve(null),
+      makeWallRegenPrereqTask(willRegenerateWalls),
+    ]);
+    // 下階peek・materialMap取得のawaitを新たに挟んだため、同じ再評価をもう一度行う。
+    if (graph !== project.activeGraph || project.structGraph.shapeMap.get(cl.id) !== cl) {
+      return { toast: null };
+    }
     // materialMap取得・モジュール事前読込みの失敗（QA指摘H2・M1'）: ERR_CATALOG_DUPLICATEは
     // 合成後例外のため握りつぶさず再throw（wallRefresh.js既存の扱いと同じ）。それ以外
     // （IDB読込失敗・チャンク取得失敗等）は、まだ何も変更していない段階で拒否する——壁を作り
@@ -499,46 +485,34 @@ async function runDeleteCenterLineWithUndo(graph, project, cl, opts = {}) {
     }
     const materialMap = wallRegenPrereq.materialMap;
 
-    // 案P（採用）: 他階の detach を削除の前にundo付きで伝播する（降格の「複製→移籍」と同じ型）。
-    // 通り芯が project.structGraph に残っている間に他階を peek しないと、他階の壁の
-    // axisCL/clStart/clEnd が graphSnapshot.js の resolveCL で解決できず、復元時に黙って捨てられる
-    // （propagateGridCenterLineDeletion のJSDoc・2026-09-17実測の教訓）。
-    const floorRecords = [];
-    try {
-      await propagateGridCenterLineDeletion(project, graph, cl, {
-        undoRecords: floorRecords,
-        ...(opts.saveFloorFn ? { saveFloorFn: opts.saveFloorFn } : {}),
-      });
-    } catch (e) {
-      await rollbackFloorRecords(floorRecords, opts.saveFloorFn, project);
-      throw e;
-    }
+    // 案P（採用）: 他階の detach を削除の前に行う（降格の「複製→移籍」と同じ型）。通り芯が
+    // project.structGraph に残っている間に他階を peek しないと、他階の壁の axisCL/clStart/clEnd が
+    // graphSnapshot.js の resolveCL で解決できず、復元時に黙って捨てられる
+    // （detachOtherFloorsFromGridCenterLine のJSDoc・2026-09-17実測の教訓）。まだ何も保存していない
+    // 段階（フェーズ1）のため、例外はそのまま素通しでよい（N5と同じ「先に判定・失敗するなら
+    // 書き込まない」規律）。selfのbelowGraph/sourcesBeforeも同じフェーズ1の返り値から受け取る
+    // （QA指摘5是正——他階と同じpeekキャッシュ・同じdetach前タイミングで採る）。
+    const { contexts: otherFloorContexts, orphanOnly: orphanOnlyContexts, self: selfWallBeamInfo } = await detachOtherFloorsFromGridCenterLine(
+      project, graph, cl, { peekBelow: opts.peekBelow },
+    );
+    const { belowGraph: selfBelowGraph, sourcesBefore: selfSourcesBefore } = selfWallBeamInfo;
 
-    // 他階への伝播（IDB書込を伴うawait）の間に、階が切り替わった・この通り芯自体が消えた・
+    // 他階peek・detach（IDB読み込みを伴うawait）の間に、階が切り替わった・この通り芯自体が消えた・
     // 軸最後の1本になった可能性を再評価する（await前の同期ガードだけでは足りない——N5とは逆に、
     // ここは非同期処理を挟んだ「後」に再評価する）。階切替（graph!==project.activeGraph）を
-    // チェックするのは、伝播中にユーザー操作やhistoryナビゲーションでアクティブ階が変わりうるため
+    // チェックするのは、この間にユーザー操作やhistoryナビゲーションでアクティブ階が変わりうるため
     // ——切り替わった後に自階（もう非アクティブになったgraph）を書き換えるのは誤り（M-2・QA指摘）。
+    // まだ何も保存していないため rollbackFloorRecords は不要。
     if (graph !== project.activeGraph || project.structGraph.shapeMap.get(cl.id) !== cl) {
-      await rollbackFloorRecords(floorRecords, opts.saveFloorFn, project);
       return { toast: null };
     }
-    if (isLastGridOnAxis(graph, cl)) {
-      await rollbackFloorRecords(floorRecords, opts.saveFloorFn, project);
-      return { toast: ERR_CL_DELETE_LAST_GRID };
-    }
-    // F5（QA指摘）: 他階への伝播（detach。IDB書込を伴うawait）の間に自階のフットプリント・
-    // セル構成が変わりうるため（並行編集・他の非同期処理の割り込み）、フットプリント境界ガード・
-    // 復元不能セルガードも同じ場所で再評価する——isLastGridOnAxisの再評価と同型（await前の
-    // 同期ガードだけでは足りない。「判定不能の持ち越しは認めない」方針）。
-    if (isFootprintBoundaryCL(graph, cl)) {
-      await rollbackFloorRecords(floorRecords, opts.saveFloorFn, project);
-      return { toast: ERR_CL_DELETE_FOOTPRINT };
-    }
-    if (findUnresolvableCells(graph, cl.id).length > 0) {
-      await rollbackFloorRecords(floorRecords, opts.saveFloorFn, project);
-      return { toast: ERR_CL_DELETE_UNRESOLVABLE };
-    }
+    if (isLastGridOnAxis(graph, cl)) return { toast: ERR_CL_DELETE_LAST_GRID };
+    // F5（QA指摘）: 他階のdetach（IDB書込を伴うawait）の間に自階のフットプリント・セル構成が
+    // 変わりうるため（並行編集・他の非同期処理の割り込み）、フットプリント境界ガード・復元不能セル
+    // ガードも同じ場所で再評価する——isLastGridOnAxisの再評価と同型（await前の同期ガードだけでは
+    // 足りない。「判定不能の持ち越しは認めない」方針）。
+    if (isFootprintBoundaryCL(graph, cl)) return { toast: ERR_CL_DELETE_FOOTPRINT };
+    if (findUnresolvableCells(graph, cl.id).length > 0) return { toast: ERR_CL_DELETE_UNRESOLVABLE };
 
     // 通り芯の削除 — structGraph をスナップショット経由で Undo。
     // structGraph の teardown は階グラフの図形に届かないため、アクティブ階グラフ側の
@@ -549,50 +523,65 @@ async function runDeleteCenterLineWithUndo(graph, project, cl, opts = {}) {
     const beforeArch = serializeGraph(graph);
     const before = serializeStructCLs(project.structGraph, project.structuralInfo, project.memberGroupLedger);
     const clId = cl.id; // 削除前に控える——undo/redoクロージャ・notifyはcl自体を参照しない
-    // M2是正（QA指摘・2026-09-27）: 安全網は「今回の削除で新たに生じた復元不能セル」だけを見る
-    // べきだが、key に clId を含むかどうかで絞るのは不十分——削除で領域が clId の向こう側へ延び、
-    // clId を含まないキーのセルが新たに復元不能になるケースを取りこぼす。ここでは削除前の
-    // 「今のgraphで実際に復元不能なセル集合」を採取しておき、後始末後の集合との差分（新規分）
-    // だけを見る（collectUnresolvableCells。finish/roomReinterpret.js）。detachFromCenterLine・
-    // removeDependentsOfCenterLineはRoom/StructuralSlab.cellsを直接変更しないため、ここで採っても
-    // 削除直前の状態と同じ。
+    // 安全網（QA指摘1是正・2026-09-27）: 削除前後の復元不能セル差分は「CLがgraphに存在する」削除前の
+    // 状態と比較しないと意味を持たない——detach・structGraph.removeCenterLineより前に採る。
     const beforeUnresolvable = collectUnresolvableCells(graph);
-    // 壁由来梁芯の道連れ削除（1パス化。下記）用の「削除前」スナップショット。壁はまだ何も
-    // 変わっていないこの時点で採る（sourcesAfterは壁再生成の後で採り、1回の評価にまとめる）。
-    const sourcesBefore = wallBeamSourcesFor(graph, project, belowGraph);
-    graph.detachFromCenterLine(clId);
-    graph.removeDependentsOfCenterLine(clId);
-    project.structGraph.removeCenterLine(clId);
 
-    // QA指摘H1是正（2026-09-27）: 後始末（部屋再解釈等）→壁再生成→道連れ削除→after採取の区間を
-    // tryで囲む。materialMapは変更前に取得済み（上記）で、resolveStairContext用のpeekも同じく
-    // 変更前に温めたキャッシュを使うため、この区間のawaitは実I/Oを伴わないマイクロタスクのみの
-    // はずだが、regenerateWalls自体が想定外の理由で例外を投げた場合に備え、安全網と同じ巻き戻し
-    // （restoreStructCLs→restoreGraph→rollbackFloorRecords）をしてから再throwする——削除・detach・
-    // 後始末が反映済みのままundoも無く放置される事故を防ぐ。
+    // 新ルール1（境界での後始末）〜壁再生成は centerLineFloorSync.js applyCenterLineRemovalAftermath
+    // へ集約（ステップ4・自階分）。detach・removeDependentsOfCenterLine・structGraph.removeCenterLine
+    // （自階の実削除）はopts.deleteFnとして渡し、後始末と同じrunInAction 1本の中で先頭に実行される
+    // （QA指摘7是正——削除と後始末を2つのactionに分けない）。他階分（他階のフェーズ2。
+    // applyOtherFloorsGridCenterLineAftermath）も同じtry/catchの中で行い、自階・他階どちらかが
+    // 失敗しても同じ安全網（restoreStructCLs→restoreGraph→rollbackFloorRecords）で巻き戻す
+    // ——他階のフェーズ2はまだundoが積まれていないこの時点でのみ呼べるため、自階のundo push
+    // より前に完了させる必要がある。materialMap・resolveStairContext用peekは変更前に取得済み
+    // （上記）——この区間のawaitは実I/Oを伴わないマイクロタスクのみのはずだが、regenerateWalls
+    // 自体が想定外の理由で例外を投げた場合に備え、安全網と同じ巻き戻しをしてから再throwする——
+    // 削除・detach・後始末が反映済みのままundoも無く放置される事故を防ぐ。
+    const floorRecords = [];
     let afterArch, after;
     try {
-      // 新ルール1（境界での後始末）: 通り芯削除も部屋セル・境界エッジへ影響するため、自階分を
-      // ここで afterArch を採る前に片付ける（finishBoundary.js runFinishEntryBoundary と同じ順序
-      // ＝部屋再解釈→部分指定の正規化→エッジ再同期）。beforeArch/afterArch の全体スナップショット
-      // 方式のundoにそのまま乗るため、専用のundo/redoは別途要らない（restoreGraphがrooms/edges/
-      // kneeDropWallsを復元することは graphSnapshot.js buildSnapshot/applySnapshot で確認済み）。
-      // 他階への適用は別ステップ。
-      const afterUnresolvable = runInAction(() => {
-        reinterpretRoomsOnEntry(graph);
-        normalizePartialDominance(graph);
-        reinterpretSlabsAfterCLRemoval(graph);
-        syncEdgesFromTopology(graph);
-        removeKneeDropWallsReferencing(graph, clId);
-        return collectUnresolvableCells(graph);
+      const { newlyUnresolved } = await applyCenterLineRemovalAftermath(graph, project, clId, {
+        materialMap, peek, willRegenerateWalls, beforeUnresolvable,
+        deleteFn: () => {
+          // core/planGraph.js removeCenterLineと同じ順序（reparent→detach→teardown）。自階の
+          // 子CL（refIdでこの通り芯を参照するaux/center）のrefIdを繰り上げてから壁端・extent参照の
+          // 切り離しへ進む——reparentChildCenterLinesは通り芯がgraph自身のshapeMapに無くても
+          // _structGraph側から解決する（2026-09-27是正）。
+          graph.reparentChildCenterLines(clId);
+          graph.detachFromCenterLine(clId);
+          graph.removeDependentsOfCenterLine(clId);
+          // ステップ4・ルール2是正: 通り芯を structGraph から外すのは自階・他階すべてのdetachが
+          // 終わった直後の、ここ1箇所だけ（自階分）。detachOtherFloorsFromGridCenterLine のJSDoc
+          // 「2フェーズに分けた理由」参照——後始末（部屋再解釈）はCLがgraphに実在しないことを
+          // 「辺の喪失」の判定に使うため、自階・他階どちらの後始末も、この行の**後**でなければ
+          // 正しく動かない（実測: 先に呼ぶと「辺を1つも失っていない」と判定され部屋が併合されない）。
+          project.structGraph.removeCenterLine(clId);
+        },
+        ...(opts.regenerateWallsFn ? { regenerateWallsFn: opts.regenerateWallsFn } : {}),
+        // QA指摘M是正（2026-09-27・M1'是正(b)を裁定変更）: 実I/Oの有無に頼らない防御。前倒し
+        // （上記）で変更後のawaitから実I/Oを無くしても「絶対に無い」とは言い切れないため、
+        // 壁再生成await後にもう一度階切替・通り芯の消失（例: 別経路でundoが実行され通り芯が
+        // structGraphへ復元された等）を検知する。**到達しない前提**: store.js switchFloor が
+        // 冒頭で whenCenterLineOpsIdle() を await するため、この関数の実行中に
+        // floorSwapManager.swap（対象階のIDB保存＋clearFloorData）を伴う階切替は起きない
+        // （QA指摘M・裁定(1)）。検知した場合は独自に巻き戻さず例外を投げ、下のcatch（安全網。
+        // restoreStructCLs→restoreGraph→rollbackFloorRecords→再throw）へ委ねる——ここで
+        // {toast:null}を返すと、switchFloorが実際にswapしてしまった後（本来届かない
+        // はずのケース）にbefore/beforeArchが既にクリア済みの非アクティブgraphへの復元になり、
+        // 復元が効かないままundoも無く終わる事故になりうるため（QA実測）。
+        assertStillValid: () => {
+          if (graph !== project.activeGraph || project.structGraph.shapeMap.get(clId) !== undefined) {
+            throw new Error('deleteCenterLineWithUndo: 壁再生成の待機中に階切替・通り芯の消失を検知しました（到達しない想定の防御）');
+          }
+        },
       });
       // ルール4の安全網（S1・2026-09-27。M2で前後差分方式へ一般化）: findUnresolvableCells の
       // 先読みが正しければここには到達しない——先読みの漏れ（未知の退化パターン）があっても
       // 削除済みidを残さないよう、削除前後の「復元不能セル集合」の差分（新規に増えた分）を見て
-      // 非空なら通り芯削除自体を取り消す。他階への伝播（propagateGridCenterLineDeletion）は
-      // ここより前に完了しているため、既存のrollbackFloorRecords（F5と同じ型）で巻き戻し、
-      // undoは積まない（tryの内側だが例外ではなくreturnのため、この関数はここで終了する）。
-      const newlyUnresolved = [...afterUnresolvable].filter(key => !beforeUnresolvable.has(key));
+      // 非空なら通り芯削除自体を取り消す（tryの内側だが例外ではなくreturnのため、この関数は
+      // ここで終了する。まだ他階フェーズ2は未実行＝floorRecordsは空のため
+      // rollbackFloorRecordsは実質no-opだが、形を揃えるため呼ぶ）。
       if (newlyUnresolved.length > 0) {
         restoreStructCLs(project.structGraph, project.structuralInfo, before, project.memberGroupLedger);
         restoreGraph(graph, beforeArch);
@@ -600,40 +589,55 @@ async function runDeleteCenterLineWithUndo(graph, project, cl, opts = {}) {
         return { toast: ERR_CL_DELETE_UNRESOLVABLE };
       }
 
-      // 壁再生成（新ルール1「壁再生成」。wallRefresh.js JSDoc参照）。wallFreshnessKeyはCL位相
-      // （部屋の分割/併合）を含まないため通常の鍵一致では起動しない——force:trueで明示的に起動
-      // する。materialMap・peekは変更前に取得済み（上記）——ここから先は実I/Oを伴わない想定
-      // （このtryの目的コメント参照）。pushUndo:false——壁・鍵・下地材コードの変更はこの後の
-      // afterArch（serializeGraph）に含まれるため、専用のundoエントリは不要
-      // （graphSnapshot.js buildSnapshot/applySnapshotで確認済み）。
-      await refreshWallsForGraph(graph, project, () => materialMap, {
-        peek, pushUndo: false, force: true,
+      // 他階のフェーズ2（後始末→壁再生成のみ。保存・道連れ削除はまだ行わない——QA指摘5是正）。
+      // 自階分の直後・undo push より前に行う——他階が復元不能で拒否されたら自階分も含めて巻き戻す
+      // 必要があるため。
+      const { rejectedPlane, processed } = await applyOtherFloorsGridCenterLineAftermath(otherFloorContexts, project, clId, {
+        materialMap,
         ...(opts.regenerateWallsFn ? { regenerateWallsFn: opts.regenerateWallsFn } : {}),
       });
-
-      // QA指摘M是正（2026-09-27・M1'是正(b)を裁定変更）: 実I/Oの有無に頼らない防御。前倒し
-      // （上記）で変更後のawaitから実I/Oを無くしても「絶対に無い」とは言い切れないため、
-      // await後にもう一度階切替・通り芯の消失（例: 別経路でundoが実行され通り芯が
-      // structGraphへ復元された等）を検知する。**到達しない前提**: store.js switchFloor が
-      // 冒頭で whenCenterLineOpsIdle() を await するため、この関数の実行中に
-      // floorSwapManager.swap（対象階のIDB保存＋clearFloorData）を伴う階切替は起きない
-      // （QA指摘M・裁定(1)）。検知した場合は独自に巻き戻さず例外を投げ、下のcatch（安全網。
-      // restoreStructCLs→restoreGraph→rollbackFloorRecords→再throw）へ委ねる——ここで
-      // {toast:null}を返すと、switchFloorが実際にswapしてしまった後（本来届かない
-      // はずのケース）にbefore/beforeArchが既にクリア済みの非アクティブgraphへの復元になり、
-      // 復元が効かないままundoも無く終わる事故になりうるため（QA実測）。
-      if (willRegenerateWalls && (graph !== project.activeGraph || project.structGraph.shapeMap.get(clId) !== undefined)) {
-        throw new Error('deleteCenterLineWithUndo: 壁再生成の待機中に階切替・通り芯の消失を検知しました（到達しない想定の防御）');
+      if (rejectedPlane) {
+        restoreStructCLs(project.structGraph, project.structuralInfo, before, project.memberGroupLedger);
+        restoreGraph(graph, beforeArch);
+        await rollbackFloorRecords(floorRecords, opts.saveFloorFn, project);
+        return { toast: ERR_CL_DELETE_UNRESOLVABLE };
       }
 
-      // 壁由来梁芯の道連れ削除（1パス化）: 削除前のsourcesBefore（上で採取済み）と、壁再生成が
-      // 終わった後のsourcesAfterを比較し、削除自体による壁ソースの喪失と再生成による喪失の両方を
-      // 1回の評価でまとめて処理する（従来この道連れ削除は非通り芯削除だけの特例だったが、壁再生成の
-      // 導入で通り芯削除でも自階の壁が消えうるようになったため同じ扱いを加える）。
-      const sourcesAfterStruct = wallBeamSourcesFor(graph, project, belowGraph);
-      const orphanedStruct = orphanedWallBeamAxes(graph, sourcesBefore, sourcesAfterStruct);
-      if (orphanedStruct.length > 0) {
-        runInAction(() => { for (const ax of orphanedStruct) graph.removeCenterLine(ax.id); });
+      // 壁由来梁芯の道連れ削除（QA指摘5是正・2026-09-27。案i・2026-09-27で対象を全非屋根他階へ拡大）:
+      // 自階・全非屋根他階（processed＝この通り芯を参照していた階、orphanOnlyContexts＝参照して
+      // いなかった階）の壁再生成が終わった後に1パスで評価する——selfAndBelow規則は「1つ下の実体階」の
+      // 壁も根拠にするため、参照を持たない階でもその下階（自階または他階）の壁が今回の削除の後始末で
+      // 変わると壁由来梁芯が孤児になりうる（structural/wallBeamAxes.js removeOrphanedWallBeamAxesFor）。
+      removeOrphanedWallBeamAxesFor(graph, project, selfBelowGraph, selfSourcesBefore);
+      for (const ctx of processed) {
+        if (!ctx.isRoof) removeOrphanedWallBeamAxesFor(ctx.temp, project, ctx.belowGraph, ctx.sourcesBefore);
+      }
+
+      // 他階の保存（道連れ削除後の最終状態）。他階フェーズ2は階ごとにIDB書込（saveFloorFn）を伴う
+      // awaitを挟むため、自階のQA指摘M是正と同型の防御をこの後に置く（到達しない前提は
+      // assertStillValidと同じ——whenCenterLineOpsIdle()により本関数の実行中は
+      // floorSwapManager.swap を伴う階切替が起きない）。検知した場合は例外を投げ、下のcatch
+      // （安全網）へ委ねる——floorRecordsには既に保存済みの他階分（rollback対象）が含まれている。
+      await saveOtherFloorsAfterGridCenterLineAftermath(processed, {
+        undoRecords: floorRecords,
+        ...(opts.saveFloorFn ? { saveFloorFn: opts.saveFloorFn } : {}),
+      });
+      // 参照を持たなかった他階（orphanOnlyContexts）は、道連れ削除で実際に梁芯が消えた階だけを
+      // 保存・floorRecordsへ記録する（無変更の階はIDBを一切書かない）。removeOrphanedWallBeamAxesFor
+      // の呼び出し元をcenterLineOps.js側に一本化する（structural/wallBeamAxes.jsのJSDoc参照）。
+      // saveOtherFloorsAfterGridCenterLineAftermathへ「実際に消えた階だけ」絞り込んで渡すことで、
+      // 保存・undoRecords記録のロジックを重複実装しない。
+      const changedOrphanFloors = [];
+      for (const ctx of orphanOnlyContexts) {
+        const orphaned = removeOrphanedWallBeamAxesFor(ctx.temp, project, ctx.belowGraph, ctx.sourcesBefore);
+        if (orphaned.length > 0) changedOrphanFloors.push(ctx);
+      }
+      await saveOtherFloorsAfterGridCenterLineAftermath(changedOrphanFloors, {
+        undoRecords: floorRecords,
+        ...(opts.saveFloorFn ? { saveFloorFn: opts.saveFloorFn } : {}),
+      });
+      if (graph !== project.activeGraph || project.structGraph.shapeMap.get(clId) !== undefined) {
+        throw new Error('deleteCenterLineWithUndo: 他階の後始末の待機中に階切替・通り芯の消失を検知しました（到達しない想定の防御）');
       }
 
       afterArch = serializeGraph(graph);
@@ -715,7 +719,7 @@ async function runDeleteCenterLineWithUndo(graph, project, cl, opts = {}) {
   // この下階peek（needsBelowPeek）と同じawaitゾーンにまとめて変更前に済ませる（struct分岐と
   // 同じ設計。詳細は関数冒頭のコメント参照）。
   const willRegenerateWalls = canCarryWalls && !hasNeverBuiltWalls(graph);
-  const belowPlaneForStairs = willRegenerateWalls ? belowPlaneOfProject(graph.plane, project) : null;
+  const belowPlaneForStairs = willRegenerateWalls ? belowPlaneOf(graph.plane, project) : null;
   const [belowGraph, , wallRegenPrereq] = await Promise.all([
     needsBelowPeek ? (opts.peekBelow ?? peekBelowGraph)(graph, project) : Promise.resolve(null),
     belowPlaneForStairs ? peek(belowPlaneForStairs, project.structGraph) : Promise.resolve(null),
@@ -749,78 +753,49 @@ async function runDeleteCenterLineWithUndo(graph, project, cl, opts = {}) {
   const materialMap = wallRegenPrereq.materialMap;
 
   const before = serializeGraph(graph);
-  // M2是正（QA指摘・2026-09-27）: struct分岐と同じ理由で、削除前の「今のgraphで実際に復元不能な
-  // セル集合」を採っておく（collectUnresolvableCells）。canCarryWallsがfalseの経路はセルに
-  // 影響しないため差分は常に空になるが、判定を分岐で作り分けない（対称性・単純さのため）。
+  // 安全網（QA指摘1是正・2026-09-27）: struct分岐と同じ理由で、削除前（graph.removeCenterLineより
+  // 前）の「今のgraphで実際に復元不能なセル集合」を採っておく（collectUnresolvableCells）。
   const beforeUnresolvable = collectUnresolvableCells(graph);
-  // 壁由来梁芯の道連れ削除（1パス化。下記）用の「削除前」スナップショット。壁はまだ何も
-  // 変わっていないこの時点で採る（sourcesAfterは壁再生成の後で採り、1回の評価にまとめる。
-  // canCarryWallsがfalseの経路（補助線・梁芯自身）は壁の軸にならないためnull）。
+  // 壁由来梁芯の道連れ削除（structural/wallBeamAxes.js removeOrphanedWallBeamAxesFor）用の「削除前」
+  // スナップショット。壁はまだ何も変わっていないこの時点で採る（sourcesAfterは壁再生成の後で採り、
+  // 1回の評価にまとめる。canCarryWallsがfalseの経路（補助線・梁芯自身）は壁の軸にならないためnull）。
   const sourcesBefore = canCarryWalls ? wallBeamSourcesFor(graph, project, belowGraph) : null;
-  const clId = cl.id; // removeCenterLine後もkneeDropWalls掃除・部屋再解釈のキー参照に使う
-  // 梁芯CLの削除は「壁由来の梁芯自動生成」に対する明示的な手動削除として扱う——次回のモード境界
-  // 再計算で元の座標に再生成されないよう、座標ベースの除外集合へ記録する（壁の位置自体は削除しない
-  // ため、記録しないと自動生成が復活させてしまう）。キーは structural/wallBeamAxes.js と同じ形式。
-  // 中心線の道連れ削除（下記）は excludedWallBeamAxes に触れない——壁が戻れば（undo）再生成される
-  // ため、手動削除・移動の記録と同列に扱わない。
-  // QA指摘H1是正（2026-09-27）: 後始末（部屋再解釈等）→壁再生成→道連れ削除→after採取の区間を
-  // tryで囲む。materialMapは変更前に取得済み（上記）で、resolveStairContext用のpeekも同じく
-  // 変更前に温めたキャッシュを使うため、この区間のawaitは実I/Oを伴わないマイクロタスクのみの
-  // はずだが、regenerateWalls自体が想定外の理由で例外を投げた場合に備え、安全網と同じ巻き戻し
-  // （restoreGraph）をしてから再throwする——削除・後始末が反映済みのままundoも無く放置される
-  // 事故を防ぐ（非struct分岐は他階伝播が無いためrestoreGraphのみでよい）。
+  const clId = cl.id; // removeCenterLine後もkneeDropWalls掃除・部屋再解釈のキー参照に使う（applyCenterLineRemovalAftermath内）
+  // 新ルール1（境界での後始末）〜壁再生成は centerLineFloorSync.js applyCenterLineRemovalAftermath
+  // へ集約（ステップ4・struct分岐と共有。canCarryWalls===falseなら内部で後始末・壁再生成そのものを
+  // スキップする）。graph.removeCenterLine自体もopts.deleteFnとして渡し、後始末と同じrunInAction
+  // 1本の中で先頭に実行される（QA指摘7是正——削除と後始末を2つのactionに分けない。旧実装は
+  // 1つのrunInActionだった）。materialMapは変更前に取得済み（上記）で、resolveStairContext用の
+  // peekも同じく変更前に温めたキャッシュを使うため、この区間のawaitは実I/Oを伴わないマイクロタスク
+  // のみのはずだが、regenerateWalls自体が想定外の理由で例外を投げた場合に備え、安全網と同じ
+  // 巻き戻し（restoreGraph）をしてから再throwする——削除・後始末が反映済みのままundoも無く放置
+  // される事故を防ぐ（非struct分岐は他階伝播が無いためrestoreGraphのみでよい）。
   let after;
   try {
-    const afterUnresolvable = runInAction(() => {
-      if (centerLineKind(cl) === 'beam') {
-        graph.excludedWallBeamAxes.add(wallBeamAxisExcludeKey(cl.centerLineType === CenterLineType.VERTICAL, cl.effectiveValue));
-      }
-      // graph.removeCenterLine は内部で detachFromCenterLine（壁端・extent参照の切り離し）→
-      // _teardownCenterLine（removeDependentsOfCenterLineで柱・梁・耐力壁・基礎・スリーブを撤去
-      // →Intersection撤去）を行うため、通り芯削除のように別途removeDependentsOfCenterLineを
-      // 呼ぶ必要はない——この1行の時点で壁位置は既に確定済み（構造同期の前提を満たす）。
-      // 中心線は階固有の実体で他階からは参照されない（昇格・降格の同一id複製は別オブジェクト
-      // ——transform/centerLineFloorSync.js propagateDemotedCenterLine/recallPromotedCenterLineDuplicates
-      // 参照）ため、通り芯削除と違い他階への伝播（propagate*）は不要。
-      graph.removeCenterLine(cl.id);
-      if (canCarryWalls) {
-        // 新ルール1（境界での後始末）: セル分割に参加する種別の削除だけが部屋セル・境界エッジに
-        // 影響するため、この分岐でのみ「部屋再解釈→部分指定の正規化→スラブ再解釈→エッジ再同期→
-        // 腰壁/垂れ壁の掃除」を行う（finishBoundary.js runFinishEntryBoundaryと同じ順序）。
-        // struct分岐と同じくbefore/afterのserializeGraph全体スナップショットに乗るため専用undoは不要。
-        reinterpretRoomsOnEntry(graph);
-        normalizePartialDominance(graph);
-        reinterpretSlabsAfterCLRemoval(graph);
-        syncEdgesFromTopology(graph);
-        removeKneeDropWallsReferencing(graph, clId);
-      }
-      return collectUnresolvableCells(graph);
-    });
-    // ルール4の安全網（S1・2026-09-27。M2で前後差分方式へ一般化）: findUnresolvableCells の
-    // 先読みが正しければここには到達しない——先読みの漏れ（未知の退化パターン）があっても
-    // 削除済みidを残さないよう、削除前後の「復元不能セル集合」の差分（新規に増えた分）を見て
-    // 非空なら削除自体を取り消す（他階への伝播はこの分岐には無いためrestoreGraphのみ。
-    // undoは積まない。tryの内側だが例外ではなくreturnのため、この関数はここで終了する）。
-    const newlyUnresolved = [...afterUnresolvable].filter(key => !beforeUnresolvable.has(key));
-    if (newlyUnresolved.length > 0) {
-      restoreGraph(graph, before);
-      return { toast: ERR_CL_DELETE_UNRESOLVABLE };
-    }
-
-    // 壁再生成（canCarryWallsのときだけ。新ルール1「壁再生成」。wallRefresh.js JSDoc参照）。
-    // 補助線・梁芯自身の削除は壁の軸にならないため対象外。materialMap・peekは変更前に取得済み
-    // （上記）——ここから先は実I/Oを伴わない想定（このtryの目的コメント参照）。pushUndo:false
-    // ——壁・鍵・下地材コードの変更はこの後のafterで確定させるserializeGraphに含まれるため
-    // 専用のundoエントリは不要（graphSnapshot.js buildSnapshot/applySnapshotで確認済み）。
-    if (canCarryWalls) {
-      await refreshWallsForGraph(graph, project, () => materialMap, {
-        peek, pushUndo: false, force: true,
-        ...(opts.regenerateWallsFn ? { regenerateWallsFn: opts.regenerateWallsFn } : {}),
-      });
-
-      // QA指摘M是正（2026-09-27・M1'是正(b)を裁定変更）: 実I/Oの有無に頼らない防御。前倒し
-      // （上記）で変更後のawaitから実I/Oを無くしても「絶対に無い」とは言い切れないため、
-      // await後にもう一度階切替・この中心線の消失（graph.shapeMap.has(clId)。struct分岐の
+    const { newlyUnresolved } = await applyCenterLineRemovalAftermath(graph, project, clId, {
+      materialMap, peek, canCarryWalls, willRegenerateWalls, beforeUnresolvable,
+      deleteFn: () => {
+        // 梁芯CLの削除は「壁由来の梁芯自動生成」に対する明示的な手動削除として扱う——次回のモード
+        // 境界再計算で元の座標に再生成されないよう、座標ベースの除外集合へ記録する（壁の位置自体は
+        // 削除しないため、記録しないと自動生成が復活させてしまう）。キーは structural/wallBeamAxes.js
+        // と同じ形式。中心線の道連れ削除（removeOrphanedWallBeamAxesFor）は excludedWallBeamAxes
+        // に触れない——壁が戻れば（undo）再生成されるため、手動削除・移動の記録と同列に扱わない。
+        if (centerLineKind(cl) === 'beam') {
+          graph.excludedWallBeamAxes.add(wallBeamAxisExcludeKey(cl.centerLineType === CenterLineType.VERTICAL, cl.effectiveValue));
+        }
+        // graph.removeCenterLine は内部で detachFromCenterLine（壁端・extent参照の切り離し）→
+        // _teardownCenterLine（removeDependentsOfCenterLineで柱・梁・耐力壁・基礎・スリーブを撤去
+        // →Intersection撤去）を行うため、通り芯削除のように別途removeDependentsOfCenterLineを
+        // 呼ぶ必要はない——この1行の時点で壁位置は既に確定済み（構造同期の前提を満たす）。
+        // 中心線は階固有の実体で他階からは参照されない（昇格・降格の同一id複製は別オブジェクト
+        // ——transform/centerLineFloorSync.js propagateDemotedCenterLine/recallPromotedCenterLineDuplicates
+        // 参照）ため、通り芯削除と違い他階への伝播（propagate*）は不要。
+        graph.removeCenterLine(cl.id);
+      },
+      ...(opts.regenerateWallsFn ? { regenerateWallsFn: opts.regenerateWallsFn } : {}),
+      // QA指摘M是正（2026-09-27・M1'是正(b)を裁定変更）: 実I/Oの有無に頼らない防御。前倒し（上記）で
+      // 変更後のawaitから実I/Oを無くしても「絶対に無い」とは言い切れないため、壁再生成await後に
+      // もう一度階切替・この中心線の消失（graph.shapeMap.has(clId)。struct分岐の
       // project.structGraph.shapeMap.get(clId)!==undefinedと対称——別経路でundoが実行され
       // この中心線が復活した等）を検知する。**到達しない前提**: store.js switchFloor が冒頭で
       // whenCenterLineOpsIdle() を await するため、この関数の実行中に floorSwapManager.swap
@@ -829,21 +804,27 @@ async function runDeleteCenterLineWithUndo(graph, project, cl, opts = {}) {
       // ——ここで{toast:null}を返すと、switchFloorが実際にswapしてしまった後（本来届かない
       // はずのケース）にbeforeが既にクリア済みの非アクティブgraphへの復元になり、復元が効かない
       // ままundoも無く終わる事故になりうるため（QA実測）。
-      if (willRegenerateWalls && (graph !== project.activeGraph || graph.shapeMap.has(clId))) {
-        throw new Error('deleteCenterLineWithUndo: 壁再生成の待機中に階切替・中心線の復活を検知しました（到達しない想定の防御）');
-      }
-
-      // 壁由来梁芯の道連れ削除（1パス化）: 削除前のsourcesBefore（上で採取済み）と、壁再生成が
-      // 終わった後のsourcesAfterを比較し、削除自体による壁ソースの喪失と再生成による喪失の両方を
-      // 1回の評価でまとめて処理する（旧実装はremoveCenterLine直後の壁レイアウトだけで評価しており、
-      // 壁再生成の導入後にそのまま残すと再生成後の壁ソースと食い違う二重評価になる——ここで壁再生成
-      // の後の1回だけに一本化する）。
-      const sourcesAfter = wallBeamSourcesFor(graph, project, belowGraph);
-      const orphaned = orphanedWallBeamAxes(graph, sourcesBefore, sourcesAfter);
-      if (orphaned.length > 0) {
-        runInAction(() => { for (const ax of orphaned) graph.removeCenterLine(ax.id); });
-      }
+      assertStillValid: () => {
+        if (graph !== project.activeGraph || graph.shapeMap.has(clId)) {
+          throw new Error('deleteCenterLineWithUndo: 壁再生成の待機中に階切替・中心線の復活を検知しました（到達しない想定の防御）');
+        }
+      },
+    });
+    // ルール4の安全網（S1・2026-09-27。M2で前後差分方式へ一般化）: findUnresolvableCells の
+    // 先読みが正しければここには到達しない——先読みの漏れ（未知の退化パターン）があっても
+    // 削除済みidを残さないよう、削除前後の「復元不能セル集合」の差分（新規に増えた分）を見て
+    // 非空なら削除自体を取り消す（他階への伝播はこの分岐には無いためrestoreGraphのみ。
+    // undoは積まない。tryの内側だが例外ではなくreturnのため、この関数はここで終了する）。
+    if (newlyUnresolved.length > 0) {
+      restoreGraph(graph, before);
+      return { toast: ERR_CL_DELETE_UNRESOLVABLE };
     }
+
+    // 壁由来梁芯の道連れ削除（1パス化）: canCarryWallsのときだけ（壁の軸になれる種別の削除のみ壁
+    // ソースを変えうる）。struct分岐と違い他階の壁再生成が絡まないため、自階の壁再生成が終わった
+    // 直後に評価してよい（QA指摘5は他階を持つstruct分岐特有の問題——非struct分岐は階固有の実体で
+    // 他階へ伝播しないため対象外）。
+    if (canCarryWalls) removeOrphanedWallBeamAxesFor(graph, project, belowGraph, sourcesBefore);
 
     after = serializeGraph(graph);
   } catch (e) {

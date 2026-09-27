@@ -10,7 +10,8 @@
 // undo/redoクロージャが握る参照（例: openings/openingEdit.jsのOpening）が古いインスタンスを
 // 指したままになる（.claude/undo-redo.md「undo対象外」参照）。
 // 通り芯削除側（transform/centerLineOps.js）は undo/redo クロージャの最後で listener を呼ぶ——
-// 他階への detach 伝播は undo 対象（transform/centerLineFloorSync.js propagateGridCenterLineDeletion）
+// 他階への detach 伝播・後始末は undo 対象（transform/centerLineFloorSync.js
+// detachOtherFloorsFromGridCenterLine・applyOtherFloorsGridCenterLineAftermath）
 // だが、構造反映自体はこの規律どおり undo 対象外のまま。
 //
 // **段階(g)・2026-09-26**: 上記「undo対象外」は自階のメモリ上の構造変化（graphインスタンスの

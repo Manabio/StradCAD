@@ -1,6 +1,7 @@
 // 壁（仕上げモードの下地オーナー壁）から梁芯CL（discipline:'fuse'）を自動生成する。
 // 生成された梁芯CLは既存の autoFillSecondaryBeams がそのまま拾う（梁芯の出自を見ない実装のため、
 // 小梁の生成・端部トリム・除外集合・採番はすべて既存経路）。設計意図は .claude/structural-model.md 参照。
+import { runInAction } from 'mobx';
 import { CenterLineType, Discipline } from '../core.js';
 import { CL_OVERLAP_TOL_MM } from '../core/constants.js';
 import { BeamAxisOrigin, fillBeamAxisOriginIfUnknown } from '../core/centerLine.js';
@@ -18,9 +19,18 @@ const BRACKET_EPS_MM = 0.5;
 export { isTraditionalWoodStructure };
 
 /** plane の「1つ下の実体階」を返す（project.planes、elevation昇順・採用フロアのみ）。
- *  最下階・屋根専用平面（project.planesに含まれない）・該当なしは null。 */
-function belowPlaneOf(plane, project) {
+ *  最下階・屋根専用平面（project.planesに含まれない）・該当なしは null。
+ *  transform/centerLineFloorSync.js が通り芯削除の他階後始末（ステップ4・ルール2・QA指摘8）で、
+ *  transform/centerLineOps.js が resolveStairContext 用の下階peek算出（旧belowPlaneOfProjectとの
+ *  重複解消）で、それぞれ同じ算出を必要とするためexportする
+ *  （centerLineFloorSync.jsは既に本ファイルをimport済みのため循環importにはならない）。
+ *  project.planes が無い簡略化されたテスト用project（{activeGraph}だけを持つ最小fixture）では
+ *  null を返す——旧belowPlaneOfProjectと同じ防御（該当するfixtureはcanCarryWalls=trueでも
+ *  削除後に壁が0本になりrefreshWallsForGraphのhasNeverBuiltWallsガードで早期returnするため、
+ *  この関数の戻り値が実際に使われることはない）。 */
+export function belowPlaneOf(plane, project) {
   const planes = project.planes;
+  if (!planes) return null;
   const idx = planes.findIndex(p => p.id === plane.id);
   if (idx <= 0) return null;
   return planes[idx - 1];
@@ -389,6 +399,32 @@ export function orphanedWallBeamAxes(graph, sourcesBefore, sourcesAfter) {
     result.push(cl);
   }
   return result;
+}
+
+/**
+ * 壁由来梁芯の道連れ削除（1階分）: `wallBeamSourcesFor(graph, project, belowGraph)` で現在の
+ * ソース（sourcesAfter）を求め、`sourcesBefore` との差分から孤立した梁芯（`orphanedWallBeamAxes`）を
+ * 撤去する。呼び出し元は`transform/centerLineOps.js`のみ（自階・processed＝この通り芯を参照していた
+ * 他階・orphanOnly＝参照していなかった他階、いずれもここへ一本化する。重複実装しない）。
+ * 通り芯削除ステップ4・ルール2（2026-09-27）: 自階・全非屋根他階すべての壁再生成が
+ * 終わった後に1パスで呼ぶ——`belowGraph`は呼び出し側が全階共有のpeekキャッシュ
+ * （`transform/centerLineFloorSync.js`の`detachOtherFloorsFromGridCenterLine`が作る）から解決した
+ * 「今の」参照を渡すこと。壁再生成は`belowGraph`が指すgraphインスタンスを直接書き換えるため、
+ * キャッシュ経由の同一参照であれば、この関数を呼ぶ時点で他階の壁再生成が終わっていれば自然に反映済み
+ * の状態を読める——再peekは不要）。
+ * @param {object} graph
+ * @param {object} project
+ * @param {object|null} belowGraph
+ * @param {Array<{isVertical:boolean, coord:number, lo:number, hi:number}>} sourcesBefore
+ * @returns {import('../core.js').CenterLine[]} 実際に撤去したCLの配列（重複なし）
+ */
+export function removeOrphanedWallBeamAxesFor(graph, project, belowGraph, sourcesBefore) {
+  const sourcesAfter = wallBeamSourcesFor(graph, project, belowGraph);
+  const orphaned = orphanedWallBeamAxes(graph, sourcesBefore, sourcesAfter);
+  if (orphaned.length > 0) {
+    runInAction(() => { for (const ax of orphaned) graph.removeCenterLine(ax.id); });
+  }
+  return orphaned;
 }
 
 /**

@@ -350,10 +350,12 @@ sillPackingThicknessMm`）。基礎天端＝土台下端−この値という関
 ## detach伝播（通り芯削除の他階同期）
 通り芯削除の直前に、アクティブ以外の全階（検討・屋根含む）へ「この通り芯を参照する壁・部材の
 切り離し（`detachFromCenterLine`）＋撤去（`removeDependentsOfCenterLine`）」を先に適用すること
-（`transform/centerLineFloorSync.js`の`propagateGridCenterLineDeletion`）。通り芯を
+（`transform/centerLineFloorSync.js`の`detachOtherFloorsFromGridCenterLine`）。通り芯を
 `project.structGraph`から外す**前**に行う——`graphSnapshot.js`の`resolveCL`が解決できない参照を
 黙って捨てるため、順序を逆にすると他階の壁が消える。detach伝播自体は undo 対象（他階の構造反映は
-対象外という線引きは上記「構造同期」参照）。設計意図は`.claude/undo-redo.md`。
+対象外という線引きは上記「構造同期」参照）。他階の後始末（部屋再解釈・壁再生成）は
+`applyOtherFloorsGridCenterLineAftermath`が`project.structGraph`から外した**後**に行う
+（`.claude/structural-model.md`「起動点」節のルール2参照）。設計意図は`.claude/undo-redo.md`。
 
 ## 書込み世代（floors）
 `storage/floorWriteGeneration.js`が持つ、階ごとの書込み回数とストア全体の作り直し回数を合わせた
