@@ -19,6 +19,7 @@ import { serializeGraph, restoreGraph } from '../graphSnapshot.js';
 import { saveFloor } from '../storage/db.js';
 import { undoManager } from '../undoManager.js';
 import { findWallBeamAxisCL, isProtectedWallBeamAxis } from '../structural/wallBeamAxes.js';
+import { isFootprintBoundaryCL } from './centerLineConvert.js';
 
 // アクティブ以外の全 Plane（project.planeMap。検討・屋根 Plane 含む）を返す。
 function otherPlanes(project, activeGraph) {
@@ -67,6 +68,29 @@ export async function findFloorsWithCounterpartCL(project, activeGraph, cl, { ex
     if (counterparts.length === 0) continue;
     const kind = CROSS_FLOOR_COUNTERPART_KINDS.find(k => counterparts.some(c => centerLineKind(c) === k));
     result.push({ plane, kind });
+  }
+  return result;
+}
+
+/**
+ * 通り芯削除の事前ガード: cl（通り芯。project.structGraph の共有オブジェクト）が、アクティブ以外の
+ * いずれかの Plane（検討・屋根含む）でフットプリント境界CL（transform/centerLineConvert.js
+ * isFootprintBoundaryCL）になっているかを調べる。通り芯は全階共通のオブジェクトのため、
+ * findFloorsWithCounterpartCL のような座標一致による対応物探し（他階では別オブジェクトになる
+ * 中心線・補助線・梁芯向けの仕組み）は不要——同じ cl をそのまま各階の temp グラフへ渡せばよい
+ * （判定は cl の向き・value・有効区間とその階のフットプリント輪郭線分との幾何照合）。
+ * 部屋を持たない階（屋根専用平面等）は footprintCellKeys が空となり isFootprintBoundaryCL が
+ * 自然に偽を返す（呼び出し側は無視してよい）。
+ * @param {object} project
+ * @param {PlanGraph} activeGraph  削除を実行しようとしている階のグラフ（自階。自階判定は呼び出し側が別途行う）
+ * @param {CenterLine} cl          通り芯（まだ project.structGraph に居る）
+ * @returns {Promise<Array<object>>} フットプリント境界になっている Plane の配列（空なら他階に影響なし）
+ */
+export async function findFloorsWhereFootprintBoundary(project, activeGraph, cl) {
+  const result = [];
+  for (const plane of otherPlanes(project, activeGraph)) {
+    const temp = await floorSwapManager.peek(plane, project.structGraph);
+    if (isFootprintBoundaryCL(temp, cl)) result.push(plane);
   }
   return result;
 }

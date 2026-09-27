@@ -176,3 +176,54 @@ test('buildMenuState: 中心線（isLastGridOnAxis未算出=undefined）は「�
   assert.ok(item);
   assert.equal(item.disabled, false);
 });
+
+// ---- 削除（cl-del）のグレー化（フットプリント境界削除ガードの多層防御。isFootprintBoundary） ----
+// 判定式は transform/centerLineConvert.js の isFootprintBoundaryCL を呼び出し側
+// （interaction/clMenuGating.js）が算出して渡す共有ロジック——ここでは buildMenuState/getMenuItems が
+// isFootprintBoundary の値をそのまま disabled へ渡すことだけを検証する。
+
+test('buildMenuState: isFootprintBoundary=true（外壁線を担うCL）なら「削除」もdisabledになる（canMove=trueの通常メニュー）', () => {
+  const cl = { id: 'cl1', centerLineType: 'X' };
+  const state = buildMenuState('floorplan', {
+    snap: null, cl, clEndpoint: null, opening: null, wall: null,
+    canMove: true, isFootprintBoundary: true,
+  });
+  const item = state.items.find(i => i.id === 'cl-del');
+  assert.ok(item, '外壁線を担うCLでも削除項目自体は非表示にしない（グレー化のみ）');
+  assert.equal(item.disabled, true);
+});
+
+test('buildMenuState: isFootprintBoundary=true（外壁線を担うCL）なら「削除」もdisabledになる（canMove=falseの削除のみメニュー）', () => {
+  const cl = { id: 'cl1', centerLineType: 'X' };
+  const state = buildMenuState('floorplan', {
+    snap: null, cl, clEndpoint: null, opening: null, wall: null,
+    canMove: false, isFootprintBoundary: true,
+  });
+  const item = state.items.find(i => i.id === 'cl-del');
+  assert.ok(item);
+  assert.equal(item.disabled, true);
+});
+
+test('buildMenuState: isFootprintBoundary=false（外壁線ではない）なら「削除」は通常どおり押せる', () => {
+  const cl = { id: 'cl1', centerLineType: 'X' };
+  const state = buildMenuState('floorplan', {
+    snap: null, cl, clEndpoint: null, opening: null, wall: null,
+    canMove: true, isFootprintBoundary: false,
+  });
+  const item = state.items.find(i => i.id === 'cl-del');
+  assert.ok(item);
+  assert.equal(item.disabled, false);
+});
+
+// 【回帰点】補助線・梁芯（呼び出し側clMenuGating.jsがisFinishCellDivider(cl)===falseのとき
+// isFootprintBoundaryをundefinedのまま渡す契約）は「削除」がdisabledにならないことを固定する。
+test('buildMenuState: isFootprintBoundary未算出=undefined（補助線・梁芯）は「削除」がdisabledにならない', () => {
+  const cl = { id: 'cl1', centerLineType: 'X' };
+  const state = buildMenuState('floorplan', {
+    snap: null, cl, clEndpoint: null, opening: null, wall: null,
+    canMove: true, isFootprintBoundary: undefined,
+  });
+  const item = state.items.find(i => i.id === 'cl-del');
+  assert.ok(item);
+  assert.equal(item.disabled, false);
+});

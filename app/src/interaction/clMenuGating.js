@@ -8,12 +8,13 @@
 // メニュー文脈（appMode／menuContext）はUI固有の表示条件のためここに残し、isConvertSubjectへは
 // 持ち込まない（処理側ガードは文脈を持たないため）。
 //
-// import ゼロを維持する（node:test から安全に import できるようにするため）: CONTEXT は import ゼロの
-// menuItems.js から、isConvertSubject は import-free な centerLineKindPolicy.js から、
-// isLastGridOnAxis は import-free な centerLineConvert.js から取る。
+// react-konva/store.js/snap.js/.jsx を引かない構成を維持する（node:test から安全に import
+// できるようにするため）: CONTEXT は同じ規律の menuItems.js から、isConvertSubject/
+// isFinishCellDivider は同じ規律の centerLineKindPolicy.js から、isLastGridOnAxis/
+// isFootprintBoundaryCL は同じ規律の centerLineConvert.js から取る（centerLineConvert.js冒頭コメント参照）。
 import { CONTEXT } from './menuItems.js';
-import { isConvertSubject } from '../core/centerLineKindPolicy.js';
-import { isLastGridOnAxis as isLastGridOnAxisOnGraph } from '../transform/centerLineConvert.js';
+import { isConvertSubject, isFinishCellDivider } from '../core/centerLineKindPolicy.js';
+import { isLastGridOnAxis as isLastGridOnAxisOnGraph, isFootprintBoundaryCL } from '../transform/centerLineConvert.js';
 
 /**
  * 長押しメニューの canToGrid／canToCenter／isLastGridOnAxis を算出する
@@ -33,5 +34,12 @@ export function convertMenuFlags(graph, { appMode, menuContext, cl, clEndpoint }
   const isDemoteSubject = menuContext === CONTEXT.CENTER_LINE && isConvertSubject(cl, 'demote');
   const canToCenter = appMode === 'floorplan' && isDemoteSubject;
   const isLastGridOnAxis = isDemoteSubject ? isLastGridOnAxisOnGraph(graph, cl) : undefined;
-  return { canToGrid, canToCenter, isLastGridOnAxis };
+  // cl-del（削除）のグレー化: isLastGridOnAxisと同じ多層防御（transform/centerLineOps.js
+  // deleteCenterLineWithUndoのERR_CL_DELETE_FOOTPRINTガードと同じ判定式）。セル分割に参加する
+  // 種別（通り芯・中心線。isFinishCellDivider）のみ判定する（補助線・梁芯は対象外）。
+  // 他階peekは行わない（自階判定のみ。他階分は処理側ガードのみが拒否する）。
+  const isFootprintBoundary = menuContext === CONTEXT.CENTER_LINE && isFinishCellDivider(cl)
+    ? isFootprintBoundaryCL(graph, cl)
+    : undefined;
+  return { canToGrid, canToCenter, isLastGridOnAxis, isFootprintBoundary };
 }

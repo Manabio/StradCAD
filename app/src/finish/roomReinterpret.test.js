@@ -6,7 +6,35 @@ import assert from 'node:assert/strict';
 import { Plane, PlanGraph, CenterLineType, Discipline, RoomKind, ExteriorLevelRef } from '@core';
 import { normalizePartialDominance, reinterpretRoomsOnEntry, snapshotRoomsState, restoreRoomsState } from './roomReinterpret.js';
 import { roomNameAnchor } from './roomLabel.js';
-import { worldToCell } from './gridCells.js';
+import { worldToCell, lostSides, cellInteriorPoint, regionCellsAt } from './gridCells.js';
+
+// ---- 作業0（前提確認）: 最外郭CL（外壁線）を失ったセルは再解釈できるか ----
+// フットプリント境界CL削除ガード（centerLineConvert.js isFootprintBoundaryCL）着手前の実測。
+// 対辺(right)が生きているため cellInteriorPoint は代表点を返す（対辺2本同時喪失の退化ケースではない）
+// が、その代表点は「削除された左端CLより外側（格子の外）」に来るため worldToCell 自体が
+// 格子外としてnullを返し、regionCellsAt は空配列になる——reinterpretRoomsOnEntry（regionCellsAtが
+// 空なら該当セルをスキップ＝現状維持）では救済されない。
+test('作業0(実測・VERIFIED): 最外郭の縦CL（外壁線）を削除すると、そのセルの regionCellsAt は空になり再解釈不能', () => {
+  const graph = new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
+  const opts = { labeled: false, discipline: Discipline.ARCH };
+  const vs = [0, 4000, 8000].map(x => graph.addCenterLine(CenterLineType.VERTICAL, x, opts));
+  [0, 4000, 8000].forEach(y => graph.addCenterLine(CenterLineType.HORIZONTAL, y, opts));
+  const cellKey = worldToCell(2000, 2000, graph).key; // 左上セル（左端CLが外壁線）
+  graph.addRoom(new Set([cellKey]), '部屋');
+
+  graph.removeCenterLine(vs[0].id); // 最外郭（外壁線）の縦CLを削除
+
+  const lost = lostSides(cellKey, graph);
+  assert.deepEqual(lost, ['left'], '前提: 削除した左端だけが喪失（右端・上下は健在）');
+
+  const pt = cellInteriorPoint(cellKey, graph);
+  assert.ok(pt, '前提: 対辺(right)が健在のため内部代表点は復元できる（退化ケースではない）');
+
+  const region = regionCellsAt(pt.x, pt.y, graph);
+  assert.equal(region.length, 0,
+    'VERIFIED: 復元した代表点は削除済み外壁線の外側に来るため worldToCell が格子外としてnullを返し、' +
+    'regionCellsAtは空配列になる（reinterpretRoomsOnEntryのregionCellsAt空スキップでは救済不能）');
+});
 
 // 2セルグリッド: 左セルA(0..4000 × 0..3000 = 12M mm²) / 右セルB(4000..7000 × 0..3000 = 9M mm²)
 function makeTwoCellGraph() {

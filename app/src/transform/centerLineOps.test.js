@@ -8,8 +8,9 @@ import {
 import {
   ERR_CL_DUPLICATE, ERR_CL_CENTER_UPGRADED, ERR_CL_STRUCT_EXISTS,
   ERR_CL_CONVERT_ATTACHED, ERR_CL_CONVERT_NO_GRID, ERR_CL_CONVERT_DUP_FLOOR, ERR_CL_CONVERT_DUP_FLOOR_DEMOTE,
-  ERR_CL_CONVERT_DUP_DEMOTE, ERR_CL_DELETE_LAST_GRID, ERR_CL_CONVERT_DUP,
+  ERR_CL_CONVERT_DUP_DEMOTE, ERR_CL_DELETE_LAST_GRID, ERR_CL_CONVERT_DUP, ERR_CL_DELETE_FOOTPRINT,
 } from '../error.js';
+import { worldToCell } from '../finish/gridCells.js';
 import { undoManager } from '../undoManager.js';
 import { floorSwapManager } from '../storage/FloorSwapManager.js';
 import { serializeGraph, restoreGraph } from '../graphSnapshot.js';
@@ -674,6 +675,161 @@ test('【旧データ限定・種別ベースへ統一】deleteCenterLineWithUnd
 
   assert.equal(toast, null, '移行前はisStruct=trueとなり軸最後の1本ガード（ERR_CL_DELETE_LAST_GRID）で拒否していたが、移行後は通常のCL削除経路（軸最後ガードの対象外）になる');
   assert.equal(graph.shapeMap.has(legacy.id), false, '削除される');
+});
+
+// ---- deleteCenterLineWithUndo: フットプリント境界削除ガード（外壁線を担うCLの削除拒否・第1段階）----
+// transform/centerLineConvert.js isFootprintBoundaryCL・centerLineFloorSync.js
+// findFloorsWhereFootprintBoundary の単体テストは centerLineConvert.test.js / centerLineFloorSync.test.js
+// 側にある。ここでは deleteCenterLineWithUndo が両者を正しい順序・タイミングで呼ぶことだけを見る。
+
+test('deleteCenterLineWithUndo異常系: 外壁線を担う中心線（非通り芯）の削除はERR_CL_DELETE_FOOTPRINTで拒否されグラフ無変更', async () => {
+  const { project, graph } = makeProjectWithGraph();
+  const opts = { labeled: false, discipline: Discipline.ARCH };
+  const left = graph.addCenterLine(CenterLineType.VERTICAL, 0, opts);
+  graph.addCenterLine(CenterLineType.VERTICAL, 4000, opts);
+  graph.addCenterLine(CenterLineType.HORIZONTAL, 0, opts);
+  graph.addCenterLine(CenterLineType.HORIZONTAL, 4000, opts);
+  const cellKey = worldToCell(2000, 2000, graph).key;
+  graph.addRoom(new Set([cellKey]), '部屋');
+  const beforeTop = undoManager.peekUndo();
+
+  const { toast } = await deleteCenterLineWithUndo(graph, project, left);
+
+  assert.equal(toast, ERR_CL_DELETE_FOOTPRINT);
+  assert.equal(graph.shapeMap.has(left.id), true, '外壁線を担う中心線は削除されない');
+  assert.equal(undoManager.peekUndo(), beforeTop, 'undoは積まれない');
+});
+
+test('deleteCenterLineWithUndo異常系: 通り芯は自階では境界でなくても他階でフットプリント境界なら拒否されグラフ無変更（本番同型peek）', async () => {
+  const { project, p1, p2, cl } = makeTwoFloorsWithGridCL(); // cl = V@1000（p1に部屋なし）
+  const cellKey = worldToCell(3000, 1500, p2).key; // (1000..5000)×(0..3000)。clが左端の外壁線
+  p2.addRoom(new Set([cellKey]), '部屋');
+  const store = new Map([[p2.plane.id, serializeGraph(p2)]]);
+  const beforeTop = undoManager.peekUndo();
+
+  await withProductionPeek(project, store, async () => {
+    const { toast } = await deleteCenterLineWithUndo(p1, project, cl);
+    assert.equal(toast, ERR_CL_DELETE_FOOTPRINT);
+  });
+
+  assert.equal(project.structGraph.shapeMap.has(cl.id), true, '通り芯は削除されない（他階の外壁線を担うため）');
+  assert.equal(undoManager.peekUndo(), beforeTop, 'undoは積まれない');
+});
+
+test('deleteCenterLineWithUndo異常系: 自階で外壁線を担う通り芯はERR_CL_DELETE_FOOTPRINTで拒否され、他階peek（floorSwapManager.peek）は呼ばれない（自階で即拒否・T1）', async () => {
+  const { project, graph } = makeProjectWithGraph();
+  const v0 = project.structGraph.addCenterLine(CenterLineType.VERTICAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+  project.structGraph.addCenterLine(CenterLineType.VERTICAL, 4000, { labeled: true, discipline: Discipline.STRUCT });
+  project.structGraph.addCenterLine(CenterLineType.VERTICAL, 8000, { labeled: true, discipline: Discipline.STRUCT });
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 4000, { labeled: true, discipline: Discipline.STRUCT });
+  const cellKey = worldToCell(2000, 2000, graph).key; // (0..4000)×(0..4000)。v0が左端の外壁線
+  graph.addRoom(new Set([cellKey]), '部屋');
+  const beforeTop = undoManager.peekUndo();
+
+  const originalPeek = floorSwapManager.peek;
+  let peekCalled = false;
+  floorSwapManager.peek = async (...args) => { peekCalled = true; return originalPeek(...args); };
+  let toast;
+  try {
+    ({ toast } = await deleteCenterLineWithUndo(graph, project, v0));
+  } finally {
+    floorSwapManager.peek = originalPeek;
+  }
+
+  assert.equal(toast, ERR_CL_DELETE_FOOTPRINT);
+  assert.equal(peekCalled, false, '自階で境界と判定できれば他階peek（IDB読み込み）は呼ばれない');
+  assert.equal(project.structGraph.shapeMap.has(v0.id), true, '通り芯は削除されない');
+  assert.equal(undoManager.peekUndo(), beforeTop, 'undoは積まれない');
+});
+
+test('deleteCenterLineWithUndo: フットプリント境界の他階peek中にアクティブ階が切り替わったらtoast:nullで無変更（T2）', async () => {
+  const { project, p1, p2, cl } = makeTwoFloorsWithGridCL(); // cl = V@1000（p1に部屋なし）
+  const cellKey = worldToCell(3000, 1500, p2).key; // (1000..5000)×(0..3000)。切替が無ければclがp2の外壁線でFOOTPRINT拒否されるはずの構成
+  p2.addRoom(new Set([cellKey]), '部屋');
+  const p2Bytes = serializeGraph(p2);
+  const beforeTop = undoManager.peekUndo();
+
+  const originalPeek = floorSwapManager.peek;
+  let switched = false;
+  floorSwapManager.peek = async (plane) => {
+    if (!switched) { switched = true; project.activePlaneId = p2.plane.id; }
+    const g = new PlanGraph(plane);
+    g._structGraph = project.structGraph;
+    if (plane.id === p2.plane.id) restoreGraph(g, p2Bytes);
+    return g;
+  };
+
+  let toast;
+  try {
+    ({ toast } = await deleteCenterLineWithUndo(p1, project, cl));
+  } finally {
+    floorSwapManager.peek = originalPeek;
+  }
+
+  assert.equal(toast, null, '階切替後は境界判定を確定せずtoast:nullで戻るはず（切替が無ければERR_CL_DELETE_FOOTPRINTで拒否される構成）');
+  assert.equal(project.structGraph.shapeMap.has(cl.id), true, '通り芯は削除されない（判定自体を打ち切るため）');
+  assert.equal(undoManager.peekUndo(), beforeTop, 'undoは積まれない');
+});
+
+test('deleteCenterLineWithUndo: 内部間仕切りの中心線（両側とも屋内）は削除できる（T4）', async () => {
+  const { project, graph } = makeProjectWithGraph();
+  const opts = { labeled: false, discipline: Discipline.ARCH };
+  graph.addCenterLine(CenterLineType.VERTICAL, 0, opts);
+  const mid = graph.addCenterLine(CenterLineType.VERTICAL, 4000, opts);
+  graph.addCenterLine(CenterLineType.VERTICAL, 8000, opts);
+  graph.addCenterLine(CenterLineType.HORIZONTAL, 0, opts);
+  graph.addCenterLine(CenterLineType.HORIZONTAL, 4000, opts);
+  const cellA = worldToCell(2000, 2000, graph).key;
+  const cellB = worldToCell(6000, 2000, graph).key;
+  graph.addRoom(new Set([cellA, cellB]), '部屋');
+
+  const { toast } = await deleteCenterLineWithUndo(graph, project, mid);
+
+  assert.equal(toast, null);
+  assert.equal(graph.shapeMap.has(mid.id), false, '内部間仕切りは削除できる（両側ともフットプリントのため境界ではない）');
+});
+
+test('deleteCenterLineWithUndo: 補助線は外壁線と同じ座標にあっても削除を拒否されない（セル分割に参加しないため判定対象外・T5）', async () => {
+  const { project, graph } = makeProjectWithGraph();
+  const opts = { labeled: false, discipline: Discipline.ARCH };
+  graph.addCenterLine(CenterLineType.VERTICAL, 0, opts); // 外壁線本体（このCL自体は削除しない）
+  graph.addCenterLine(CenterLineType.VERTICAL, 4000, opts);
+  graph.addCenterLine(CenterLineType.HORIZONTAL, 0, opts);
+  graph.addCenterLine(CenterLineType.HORIZONTAL, 4000, opts);
+  const cellKey = worldToCell(2000, 2000, graph).key;
+  graph.addRoom(new Set([cellKey]), '部屋');
+  const aux = graph.addCenterLine(CenterLineType.VERTICAL, 0, { labeled: false, lineType: 'dashed' }); // 外壁線と同座標の補助線
+
+  const { toast } = await deleteCenterLineWithUndo(graph, project, aux);
+
+  assert.equal(toast, null);
+  assert.equal(graph.shapeMap.has(aux.id), false, '補助線は削除される（フットプリント境界ガードの対象外＝isFinishCellDividerがfalse）');
+});
+
+test('deleteCenterLineWithUndo: 部屋の無い階（自階・他階とも）の通り芯削除はフットプリント境界ガードに拒否されない', async () => {
+  const { project, p1, p2, cl } = makeTwoFloorsWithGridCL(); // p1・p2とも部屋なし
+  const store = new Map([[p2.plane.id, serializeGraph(p2)]]);
+
+  const { toast } = await withProductionPeek(project, store, () => deleteCenterLineWithUndo(p1, project, cl));
+
+  assert.equal(toast, null);
+  assert.equal(project.structGraph.shapeMap.has(cl.id), false, '通り芯は通常どおり削除される');
+});
+
+test('【失敗系】deleteCenterLineWithUndo: フットプリント境界の他階チェック中にpeekがthrowしたらrejectしグラフ無変更・undoも積まれない', async () => {
+  const { project, p1, cl } = makeTwoFloorsWithGridCL();
+  const beforeTop = undoManager.peekUndo();
+  const originalPeek = floorSwapManager.peek;
+  floorSwapManager.peek = async () => { throw new Error('IDB read failed'); };
+
+  try {
+    await assert.rejects(() => deleteCenterLineWithUndo(p1, project, cl), /IDB read failed/);
+    assert.equal(project.structGraph.shapeMap.has(cl.id), true, '通り芯は削除されない');
+    assert.equal(undoManager.peekUndo(), beforeTop, 'undoは積まれない');
+  } finally {
+    floorSwapManager.peek = originalPeek;
+  }
 });
 
 // ---- deleteCenterLineWithUndo: 通り芯削除 → 構造同期リスナー（段階(a)・案P） ----

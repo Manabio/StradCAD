@@ -15,9 +15,10 @@ import { undoManager } from '../undoManager.js';
 import { serializeGraph, restoreGraph } from '../graphSnapshot.js';
 import { applyPromoteToGrid } from './centerLineConvert.js';
 import {
-  findFloorsWithCounterpartCL, recallPromotedCenterLineDuplicates, propagateGridCenterLineDeletion,
-  absorbWallBeamAxesOnPromote,
+  findFloorsWithCounterpartCL, findFloorsWhereFootprintBoundary, recallPromotedCenterLineDuplicates,
+  propagateGridCenterLineDeletion, absorbWallBeamAxesOnPromote,
 } from './centerLineFloorSync.js';
+import { worldToCell } from '../finish/gridCells.js';
 
 function makeProjectWithTwoFloors() {
   const project = new Project('proj', 'test');
@@ -166,6 +167,50 @@ test('findFloorsWithCounterpartCL: excludeAbsorbableBeam:trueでもlockedの部�
   const result = await withPeekOverride(project, store, () => findFloorsWithCounterpartCL(project, activeGraph, cl, { excludeAbsorbableBeam: true }));
   assert.equal(result.length, 1, '保護される梁芯は除外されない');
   assert.equal(result[0].kind, 'beam');
+});
+
+// ---- findFloorsWhereFootprintBoundary ----
+// 通り芯削除ガード（centerLineOps.js deleteCenterLineWithUndo）の階またぎ判定。
+// isFootprintBoundaryCL（centerLineConvert.js）の階またぎ版——通り芯は全階共通のオブジェクトのため、
+// findFloorsWithCounterpartCLと異なり座標一致の対応物探しは不要（同じclをそのままisFootprintBoundaryCLへ渡す）。
+
+test('findFloorsWhereFootprintBoundary: 他階でこの通り芯が外壁線を担っていればそのPlaneを返す', async () => {
+  const { project, activeGraph, otherGraph } = makeProjectWithTwoFloors();
+  const left = project.structGraph.addCenterLine(CenterLineType.VERTICAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+  project.structGraph.addCenterLine(CenterLineType.VERTICAL, 4000, { labeled: true, discipline: Discipline.STRUCT });
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 4000, { labeled: true, discipline: Discipline.STRUCT });
+  const cellKey = worldToCell(2000, 2000, otherGraph).key;
+  otherGraph.addRoom(new Set([cellKey]), '部屋');
+  const store = new Map([[otherGraph.plane.id, serializeGraph(otherGraph)]]);
+
+  const result = await withPeekOverride(project, store, () => findFloorsWhereFootprintBoundary(project, activeGraph, left));
+
+  assert.equal(result.length, 1);
+  assert.equal(result[0].id, otherGraph.plane.id);
+});
+
+test('findFloorsWhereFootprintBoundary: 他階に部屋が無ければ空配列', async () => {
+  const { project, activeGraph, otherGraph } = makeProjectWithTwoFloors();
+  const left = project.structGraph.addCenterLine(CenterLineType.VERTICAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+  project.structGraph.addCenterLine(CenterLineType.VERTICAL, 4000, { labeled: true, discipline: Discipline.STRUCT });
+  const store = new Map([[otherGraph.plane.id, serializeGraph(otherGraph)]]);
+
+  const result = await withPeekOverride(project, store, () => findFloorsWhereFootprintBoundary(project, activeGraph, left));
+
+  assert.deepEqual(result, []);
+});
+
+test('【失敗系】findFloorsWhereFootprintBoundary: peekがthrowしたらrejectする', async () => {
+  const { project, activeGraph } = makeProjectWithTwoFloors();
+  const left = project.structGraph.addCenterLine(CenterLineType.VERTICAL, 0, { labeled: true, discipline: Discipline.STRUCT });
+  const originalPeek = floorSwapManager.peek;
+  floorSwapManager.peek = async () => { throw new Error('IDB read failed'); };
+  try {
+    await assert.rejects(() => findFloorsWhereFootprintBoundary(project, activeGraph, left), /IDB read failed/);
+  } finally {
+    floorSwapManager.peek = originalPeek;
+  }
 });
 
 // ---- 発見④・ユーザー裁定・案A・2026-09-25: absorbWallBeamAxesOnPromote ----

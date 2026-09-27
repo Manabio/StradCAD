@@ -9,6 +9,7 @@ import { serializeGraph, restoreGraph, serializeStructCLs, restoreStructCLs } fr
 import {
   ERR_CL_DUPLICATE, ERR_CL_CENTER_UPGRADED, ERR_CL_STRUCT_EXISTS,
   ERR_CL_CONVERT_DUP_FLOOR, ERR_CL_CONVERT_DUP_FLOOR_DEMOTE, ERR_CL_DELETE_LAST_GRID, ERR_CL_CONVERT_NO_GRID,
+  ERR_CL_DELETE_FOOTPRINT,
 } from '../error.js';
 import { findBracketingCLs, overhangMm } from '../snapGeometry.js';
 import { calcStep } from '../renderer/clMoveMath.js';
@@ -20,7 +21,7 @@ import {
 import { mergeCenterLineChain, composeUndoWithMergeChain } from './centerLineMerge.js';
 import {
   applyPromoteToGrid, applyDemoteToCenter, checkPromoteToGridGuards, checkDemoteToCenterGuards,
-  isLastGridOnAxis, outermostGridExtentRefs,
+  isLastGridOnAxis, outermostGridExtentRefs, isFootprintBoundaryCL,
 } from './centerLineConvert.js';
 import { resolveSecondaryBeamsForAxis } from '../structural/beamAxisMove.js';
 import { renumberMembers } from '../structural/memberNumbering.js';
@@ -40,7 +41,7 @@ import { rulesFor, effectiveStructure } from '../structural/structureRules.js';
 import {
   applyFloorUndoRecords, rollbackFloorRecords, propagateGridCenterLineDeletion,
   findFloorsWithCounterpartCL, absorbWallBeamAxesOnPromote, recallPromotedCenterLineDuplicates,
-  propagateDemotedCenterLine,
+  propagateDemotedCenterLine, findFloorsWhereFootprintBoundary,
 } from './centerLineFloorSync.js';
 
 // CL削除・中心線移動の直後・undo/redo直後に構造同期（structural/structuralSync.js）を起動するための
@@ -319,6 +320,21 @@ export async function deleteCenterLineWithUndo(graph, project, cl, opts = {}) {
     // 問わず呼ぶため、RADIALの通り芯に対しても呼ばれうるが、実際にはUIから到達不能
     // （centerLineConvert.test.jsの【到達不能経路・軸選択の正常化】参照）。
     if (isLastGridOnAxis(graph, cl)) return { toast: ERR_CL_DELETE_LAST_GRID };
+    // フットプリント境界削除ガード（第1段階）: 自階でこの通り芯が外壁線を担っていれば即拒否
+    // （detach・propagateGridCenterLineDeletionより前。centerLineConvert.js isFootprintBoundaryCL参照）。
+    if (isFootprintBoundaryCL(graph, cl)) return { toast: ERR_CL_DELETE_FOOTPRINT };
+
+    // 他階（検討・屋根含む）でもフットプリント境界になっていないか確認する（副作用の無い読み取り
+    // のみ。centerLineFloorSync.js findFloorsWhereFootprintBoundary）。実際の伝播
+    // （propagateGridCenterLineDeletion）より前に行う——N5と同じ「先に判定・失敗するなら書き込まない」規律。
+    const boundaryFloors = await findFloorsWhereFootprintBoundary(project, graph, cl);
+    // 他階peekのawait中に階が切り替わった・この通り芯自体が消えた可能性を再評価する
+    // （非struct分岐のneedsBelowPeekガードと同型。副作用が無い読み取りのためrollbackFloorRecordsは
+    // 不要——floorRecordsはまだ何も積んでいない）。
+    if (graph !== project.activeGraph || project.structGraph.shapeMap.get(cl.id) !== cl) {
+      return { toast: null };
+    }
+    if (boundaryFloors.length > 0) return { toast: ERR_CL_DELETE_FOOTPRINT };
 
     // 案P（採用）: 他階の detach を削除の前にundo付きで伝播する（降格の「複製→移籍」と同じ型）。
     // 通り芯が project.structGraph に残っている間に他階を peek しないと、他階の壁の
@@ -410,6 +426,11 @@ export async function deleteCenterLineWithUndo(graph, project, cl, opts = {}) {
   // 実質center種別のみが真になる）の削除だけが壁ソースを変えうる——補助線・梁芯自身の削除は
   // 壁の軸にならないため対象外。
   const canCarryWalls = isFinishCellDivider(cl);
+  // フットプリント境界削除ガード（自階判定のみ。中心線・補助線・梁芯のうちセル分割に参加する
+  // 種別＝canCarryWalls===isFinishCellDivider(cl)。centerLineConvert.js isFootprintBoundaryCL参照。
+  // 補助線・梁芯はセル分割に参加しないため対象外）。struct分岐と異なり中心線は階固有の実体で
+  // 他階から参照されないため、他階peekは行わない（centerLineConvert.jsコメント・findFloorsWhereFootprintBoundaryのJSDoc参照）。
+  if (canCarryWalls && isFootprintBoundaryCL(graph, cl)) return { toast: ERR_CL_DELETE_FOOTPRINT };
 
   // ユーザー承認済み例外（2026-09-25）: 明示的な中心線削除に限り、その削除で失われる壁だけを
   // 根拠にしていた壁由来梁芯（discipline:fuse。structural/wallBeamAxes.js autoFillWallBeamAxes）を

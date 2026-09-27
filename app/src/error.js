@@ -98,6 +98,16 @@ export const ERR_CL_CONVERT_SYNC_FAILED = '他階への反映に失敗しまし�
 // 「削除できません」と方向が違うため文言は分ける。
 export const ERR_CL_DELETE_LAST_GRID = 'この軸の最後の通り芯のため削除できません。';
 
+// CL削除（transform/centerLineOps.js deleteCenterLineWithUndo）専用: 削除しようとしているCLが
+// フットプリント（仕上げモードの部屋領域が定義する外壁線）を担っている場合（自階・他階いずれか。
+// transform/centerLineConvert.js isFootprintBoundaryCL・centerLineFloorSync.js
+// findFloorsWhereFootprintBoundary 参照）。部屋セル・境界エッジが削除済みCL idを指したまま残るのを
+// 未然に防ぐ第一段階のガード。
+export const ERR_CL_DELETE_FOOTPRINT = '外壁を担うため削除できません。先に仕上げモードで部屋を作り替えるか、CLを移動してください。';
+
+// 定義のみ（本ステップでは未使用）。将来、削除後に部屋の区切りを復元できないと判定した場合に使う。
+export const ERR_CL_DELETE_UNRESOLVABLE = '部屋の区切りを復元できないため削除できません。';
+
 // セッション排他ロック（storage/sessionLock.js）: 別タブが編集セッションを保持している場合、
 // storage/db.js の openDB() がこの文言で reject する。App.jsx は同じ文言を全画面案内に表示する。
 export const ERR_SESSION_LOCKED = 'このアプリは別のタブで開いています。編集できるのは1つのタブだけです。';

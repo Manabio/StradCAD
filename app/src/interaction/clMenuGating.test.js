@@ -9,6 +9,7 @@ import path from 'node:path';
 import { Plane, PlanGraph, CenterLineType, Discipline } from '../core.js';
 import { CONTEXT } from './menuItems.js';
 import { convertMenuFlags } from './clMenuGating.js';
+import { worldToCell } from '../finish/gridCells.js';
 
 function makeGraph() {
   const plane = new Plane('p1', 0, '1階', 1, 1);
@@ -168,6 +169,51 @@ test('【不変条件】usePointerInteraction.js: CL移動中pointermoveの梁�
     'usePointerInteraction.js が centerLineKindPolicy.js から usesBeamAxisMoveSnap を import していない');
   assert.ok(/usesBeamAxisMoveSnap\(cl,\s*appMode\)\s*\n?\s*\?\s*findBeamAxisMoveSnap/.test(src),
     'CL移動中pointermoveの梁芯専用スナップ呼び分けが usesBeamAxisMoveSnap(cl, appMode) を使っていない');
+});
+
+// ---- isFootprintBoundary（cl-delのグレー化に使う共有値。フットプリント境界削除ガードの多層防御）----
+
+test('convertMenuFlags: menuContext=CENTER_LINEかつ外壁線を担うCLならisFootprintBoundary=true', () => {
+  const graph = makeGraph();
+  const opts = { labeled: false, discipline: Discipline.ARCH };
+  const left = graph.addCenterLine(CenterLineType.VERTICAL, 0, opts);
+  graph.addCenterLine(CenterLineType.VERTICAL, 4000, opts);
+  graph.addCenterLine(CenterLineType.HORIZONTAL, 0, opts);
+  graph.addCenterLine(CenterLineType.HORIZONTAL, 4000, opts);
+  const cellKey = worldToCell(2000, 2000, graph).key;
+  graph.addRoom(new Set([cellKey]), '部屋');
+
+  const { isFootprintBoundary } = convertMenuFlags(graph, { appMode: 'floorplan', menuContext: CONTEXT.CENTER_LINE, cl: left, clEndpoint: null });
+  assert.equal(isFootprintBoundary, true);
+});
+
+test('convertMenuFlags: 両側とも部屋がある内部間仕切りはisFootprintBoundary=false', () => {
+  const graph = makeGraph();
+  const opts = { labeled: false, discipline: Discipline.ARCH };
+  graph.addCenterLine(CenterLineType.VERTICAL, 0, opts);
+  const mid = graph.addCenterLine(CenterLineType.VERTICAL, 4000, opts);
+  graph.addCenterLine(CenterLineType.VERTICAL, 8000, opts);
+  graph.addCenterLine(CenterLineType.HORIZONTAL, 0, opts);
+  graph.addCenterLine(CenterLineType.HORIZONTAL, 4000, opts);
+  const cellA = worldToCell(2000, 2000, graph).key;
+  const cellB = worldToCell(6000, 2000, graph).key;
+  graph.addRoom(new Set([cellA, cellB]), '部屋');
+
+  const { isFootprintBoundary } = convertMenuFlags(graph, { appMode: 'floorplan', menuContext: CONTEXT.CENTER_LINE, cl: mid, clEndpoint: null });
+  assert.equal(isFootprintBoundary, false);
+});
+
+test('convertMenuFlags: menuContextがCENTER_LINEでなければisFootprintBoundaryはundefined（clがnullでも短絡評価で例外にならない）', () => {
+  const graph = makeGraph();
+  const { isFootprintBoundary } = convertMenuFlags(graph, { appMode: 'floorplan', menuContext: CONTEXT.WALL, cl: null, clEndpoint: null });
+  assert.equal(isFootprintBoundary, undefined);
+});
+
+test('convertMenuFlags: 梁芯（セル分割に参加しない種別。isFinishCellDivider=false）はisFootprintBoundaryがundefined', () => {
+  const graph = makeGraph();
+  const beam = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.FUSE });
+  const { isFootprintBoundary } = convertMenuFlags(graph, { appMode: 'floorplan', menuContext: CONTEXT.CENTER_LINE, cl: beam, clEndpoint: null });
+  assert.equal(isFootprintBoundary, undefined);
 });
 
 test('【不変条件】transform/centerLineConvert.js: 昇格・降格ガードの両方がisConvertSubject(cl, direction)を呼ぶ', () => {

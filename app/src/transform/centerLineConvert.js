@@ -5,8 +5,15 @@
 // 保持している（core/wall.js 参照）ため、id・オブジェクト identity を保てば既存参照は無傷のまま保たれる。
 // _teardownCenterLine は絶対に呼ばない（core/clQuery.js 経由で Wall 等が道連れ削除されるため）。
 //
-// import ゼロに近い規約（extractedModuleImportInvariant）: mobx / @core / import-free な ../error.js
-// のみ import する。node:test から本体（applyPromoteToGrid/applyDemoteToCenter）を単体 import 可能に保つ。
+// import ゼロに近い規約（extractedModuleImportInvariant）: mobx / @core / import-free な ../error.js・
+// core/centerLineKindPolicy.js のみ import する（react-konva/store.js/snap.js/.jsx を静的に引かない構成）。
+// node:test から本体（applyPromoteToGrid/applyDemoteToCenter）を単体 import 可能に保つ。
+// isFootprintBoundaryCL（フットプリント境界削除ガード）は同じ規律の範囲内で structural/wallGate.js の
+// footprintCellKeys・finish/gridCells.js の cellBoundsList/outlineSegments/isActiveAcrossRange を
+// import する——いずれも react-konva/store.js/snap.js/.jsx を引かない純関数（wallGate.js→
+// structuralPeek.js→storage/db.js・FloorSwapManager.js は IndexedDB を扱うが、ブラウザAPI
+// （indexedDB等）は関数本体の中でのみ使うためモジュール読み込み自体は壊れない。circular import
+// なし——wallGate.js の依存先は transform/ を一切引かない）。
 //
 // ガード契約: 以下の2関数は「実際にグラフを変更した場合のみ error を持たない成功オブジェクトを返す」。
 // ガード（instanceof/kind/type の defensive チェックを含む）は必ず { error } を返し、`{}`（error無し）を
@@ -25,6 +32,8 @@ import { runInAction } from 'mobx';
 import { CenterLine, CenterLineType, Discipline, centerLineKind } from '@core';
 import { ERR_CL_CONVERT_NO_GRID, ERR_CL_CONVERT_LAST_GRID, ERR_CL_CONVERT_ATTACHED, ERR_CL_CONVERT_DUP, ERR_CL_CONVERT_DUP_DEMOTE } from '../error.js';
 import { sameCoordCounterparts, convertBlockingKinds, isConvertSubject, gridCenterLinesOnAxis, BEAM_AXIS_KINDS } from '../core/centerLineKindPolicy.js';
+import { footprintCellKeys } from '../structural/wallGate.js';
+import { cellBoundsList, outlineSegments, isActiveAcrossRange } from '../finish/gridCells.js';
 
 // UIからは到達しない想定の防御的ガード（instanceof/kind/type 不一致）専用。menu が canToGrid/canToCenter
 // で事前に絞り込むため実運用では表示されないが、ガード契約（上記コメント）を満たすため文言を持つ。
@@ -47,6 +56,59 @@ export function outermostGridExtentRefs(graph, cl) {
 // （二重実装によるズレを防ぐ）。
 export function isLastGridOnAxis(graph, cl) {
   return gridCenterLinesOnAxis(graph, cl.centerLineType).length <= 1;
+}
+
+// 値の同一視・区間重なりの許容差(mm)。finish/floorCLMap.js EPS と同じ流儀——実務上の許容差
+// ではなく浮動小数の丸め誤差だけを吸収する目的のため、意図的に小さい値にする。
+const VALUE_EPS = 1e-6;
+
+/**
+ * cl（自階のCL）がフットプリント（仕上げモードの部屋領域が定義する外壁線）を担う軸線か
+ * （自階判定のみ。他階への波及は centerLineFloorSync.js の findFloorsWhereFootprintBoundary が担う）。
+ *
+ * footprintCellKeys(graph)（structural/wallGate.js。屋内 kind===INTERIOR の部屋セルキー集合。
+ * 部屋が一つも無い階では空集合）から輪郭線分（gridCells.js の outlineSegments。奇数被覆区間＝
+ * 内部で打ち消し合わない露出辺）を1回だけ求め、cl と同じ向き・同じ座標（value）の輪郭線分のうち、
+ * その線分の区間 [lo,hi] で cl が分割線として実際に効いているか（gridCells.js の
+ * isActiveAcrossRange。通り芯は常に真・それ以外は extentLo/extentHi との重なりで判定）を見て、
+ * 1つでも真なら true とする——幾何（value・有効区間）だけで判定し、セルキー（"left:top:right:bottom"
+ * の4 CL id）の id 照合はしない。
+ *
+ * 【QA指摘N1・再発防止】id 照合方式（旧実装）は、結合セル（直交CLが一部区間しか分割せず、
+ * 複数セルがまたがって1つの大きなセルになっている場合）の辺が、同一直線上にある複数のCLに
+ * またがるケースを見逃す——セルキーの各辺は1つのCL idしか持てないため（worldToCell 内部の
+ * findBoundaryCL がキー生成時に辺ごと1本だけを選ぶ）、キーに現れなかった側のCLが実際には
+ * その辺の一部を分割しているのに拾えなかった。value・有効区間だけで見る幾何判定はセルキーを
+ * 経由しないため、この見逃しが起きない——同じ輪郭線分に対して複数のCLが同時に true になりうる
+ * （同座標で区間が重なる重複CLは両方 true。拒否寄り＝安全側でよい）。
+ *
+ * 中点1点だけを覗くサンプリング方式（さらに旧い実装）は、T字（1本のCLの一部区間だけが直交CLで
+ * 区切られ、残りの区間は分割されず1つの大きなセルのまま連結している形）で見逃す——大セルの
+ * 中点がたまたま反対側の分割済みセル（屋内）に当たり、その先（分割されていない側）が屋外に
+ * 接していても拾えない。輪郭線分は該当辺の全区間を対象にするため、区間の一部だけが露出している
+ * ケースも正しく拾える。L字の再入隅側（同じ座標の軸線でも、区間によって内部間仕切りだったり
+ * 外壁線だったりする）も、輪郭線分自体が区間ごとに分かれるため正しく拾える。
+ * 部屋が一つも無い階（footprintCellKeys が空）は常に偽。
+ *
+ * isLastGridOnAxis と同じく、削除ガード（transform/centerLineOps.js deleteCenterLineWithUndo）・
+ * メニューのグレー化判定（interaction/clMenuGating.js）が共有する（二重実装によるズレを防ぐ）。
+ * 降格ガード（checkDemoteToCenterGuards）では使わない（降格はCLを削除しないためスコープ外）。
+ * 呼び出し側は isFinishCellDivider(cl) で対象（通り芯・中心線）を絞ってから呼ぶため、
+ * ここでは種別を問わない——補助線・梁芯はそもそも呼び出されない前提。
+ * @param {PlanGraph} graph
+ * @param {CenterLine} cl
+ * @returns {boolean}
+ */
+export function isFootprintBoundaryCL(graph, cl) {
+  if (cl.centerLineType !== CenterLineType.VERTICAL && cl.centerLineType !== CenterLineType.HORIZONTAL) return false;
+  const cellKeys = footprintCellKeys(graph);
+  if (cellKeys.size === 0) return false;
+  const contour = outlineSegments(cellBoundsList(cellKeys, graph));
+  const isVertical = cl.centerLineType === CenterLineType.VERTICAL;
+  return contour.some(seg =>
+    seg.isVertical === isVertical
+    && Math.abs(seg.value - cl.value) < VALUE_EPS
+    && isActiveAcrossRange(cl, seg.lo, seg.hi));
 }
 
 // clId が関わる Intersection のいずれかに Shape（斜線・円弧等）が取り付いているか。

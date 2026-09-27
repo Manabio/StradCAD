@@ -2,7 +2,7 @@
 // 実挙動を再現できないため、実 core.js（Plane/PlanGraph/Project）を使う。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Project, CenterLineType, Discipline, centerLineKind } from '../core.js';
+import { Project, Plane, PlanGraph, CenterLineType, Discipline, RoomKind, centerLineKind } from '../core.js';
 import { serializeGraph, restoreGraph, serializeStructCLs, restoreStructCLs } from '../graphSnapshot.js';
 import {
   ERR_CL_CONVERT_NO_GRID, ERR_CL_CONVERT_LAST_GRID, ERR_CL_CONVERT_ATTACHED,
@@ -10,8 +10,9 @@ import {
 } from '../error.js';
 import {
   outermostGridExtentRefs, isLastGridOnAxis, attachedShapeExists, applyPromoteToGrid, applyDemoteToCenter,
-  checkPromoteToGridGuards, checkDemoteToCenterGuards,
+  checkPromoteToGridGuards, checkDemoteToCenterGuards, isFootprintBoundaryCL,
 } from './centerLineConvert.js';
+import { worldToCell } from '../finish/gridCells.js';
 
 // project.structGraph・graph._structGraph の連携が必要なテスト用。
 function makeProjectWithGraph() {
@@ -265,6 +266,183 @@ test('isLastGridOnAxis: 非structのCL（中心線）に対して呼ぶと同軸
   const centerCl = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
 
   assert.equal(isLastGridOnAxis(graph, centerCl), true, '中心線に対して呼ぶと誤ってtrueになりうる（要struct限定ガード）');
+});
+
+// ---- isFootprintBoundaryCL（フットプリント境界削除ガード。外壁を担うCLの削除拒否・第1段階）----
+// footprintCellKeys(graph)（structural/wallGate.js。屋内 kind===INTERIOR の部屋セルキー集合）から
+// 輪郭線分（gridCells.js outlineSegments）を求め、各セル×4辺の区間が輪郭線分と正の長さで重なるかで
+// 「外壁線」と判定する。project不要（graphのみ）の純関数のため、gridCells.test.jsのmakeGraphと
+// 同型の素のPlanGraphで検証する。
+
+function makeFootprintGraph() {
+  return new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
+}
+
+test('isFootprintBoundaryCL: 建物部屋（単一セル）の最外郭4辺はすべて真', () => {
+  const graph = makeFootprintGraph();
+  const opts = { labeled: false, discipline: Discipline.ARCH };
+  const left  = graph.addCenterLine(CenterLineType.VERTICAL, 0, opts);
+  const right = graph.addCenterLine(CenterLineType.VERTICAL, 4000, opts);
+  const top   = graph.addCenterLine(CenterLineType.HORIZONTAL, 0, opts);
+  const bottom = graph.addCenterLine(CenterLineType.HORIZONTAL, 4000, opts);
+  const cellKey = worldToCell(2000, 2000, graph).key;
+  graph.addRoom(new Set([cellKey]), '部屋');
+
+  for (const cl of [left, right, top, bottom]) {
+    assert.equal(isFootprintBoundaryCL(graph, cl), true, `${cl.centerLineType}@${cl.value} は外壁線のはず`);
+  }
+});
+
+test('isFootprintBoundaryCL: L字（2×2のうち1セルを部屋にしない）の再入隅側CLも真', () => {
+  const graph = makeFootprintGraph();
+  const opts = { labeled: false, discipline: Discipline.ARCH };
+  const [x0, x1] = [0, 4000, 8000].map(v => graph.addCenterLine(CenterLineType.VERTICAL, v, opts));
+  const [y0, y1] = [0, 4000, 8000].map(v => graph.addCenterLine(CenterLineType.HORIZONTAL, v, opts));
+  // 3セル（x:0-4000×y:0-4000／x:0-4000×y:4000-8000／x:4000-8000×y:0-4000）を部屋にし、
+  // 4隅目（x:4000-8000×y:4000-8000）だけ部屋にしない（L字の欠け＝再入隅）。
+  const cell1 = worldToCell(2000, 2000, graph).key; // x0..x1 × y0..y1
+  const cell2 = worldToCell(2000, 6000, graph).key; // x0..x1 × y1..(8000)
+  const cell3 = worldToCell(6000, 2000, graph).key; // x1..(8000) × y0..y1
+  graph.addRoom(new Set([cell1, cell2, cell3]), 'L字部屋');
+
+  // 再入隅で向き合う2本（cell2の右辺=x1。向こう側の欠けセルと接する／cell3の下辺=y1。同様）は、
+  // 内部間仕切りに見える区間を持ちつつも、欠けセルと接する区間があるため真になる。
+  assert.equal(isFootprintBoundaryCL(graph, x1), true, '再入隅の縦方向CL(x1)は真（欠けセルとの境界を含む）');
+  assert.equal(isFootprintBoundaryCL(graph, y1), true, '再入隅の横方向CL(y1)は真（欠けセルとの境界を含む）');
+  // 最外郭（x0・y0）も引き続き真のまま。
+  assert.equal(isFootprintBoundaryCL(graph, x0), true);
+  assert.equal(isFootprintBoundaryCL(graph, y0), true);
+});
+
+test('isFootprintBoundaryCL: 内部間仕切り（両側とも部屋）は偽', () => {
+  const graph = makeFootprintGraph();
+  const opts = { labeled: false, discipline: Discipline.ARCH };
+  graph.addCenterLine(CenterLineType.VERTICAL, 0, opts);
+  const mid = graph.addCenterLine(CenterLineType.VERTICAL, 4000, opts);
+  graph.addCenterLine(CenterLineType.VERTICAL, 8000, opts);
+  graph.addCenterLine(CenterLineType.HORIZONTAL, 0, opts);
+  graph.addCenterLine(CenterLineType.HORIZONTAL, 4000, opts);
+  const cellA = worldToCell(2000, 2000, graph).key;
+  const cellB = worldToCell(6000, 2000, graph).key;
+  graph.addRoom(new Set([cellA, cellB]), '部屋');
+
+  assert.equal(isFootprintBoundaryCL(graph, mid), false);
+});
+
+test('isFootprintBoundaryCL: 部屋が一つも無い階は常に偽（通り芯・中心線とも）', () => {
+  const graph = makeFootprintGraph();
+  const opts = { labeled: false, discipline: Discipline.ARCH };
+  const left = graph.addCenterLine(CenterLineType.VERTICAL, 0, opts);
+  graph.addCenterLine(CenterLineType.VERTICAL, 4000, opts);
+  graph.addCenterLine(CenterLineType.HORIZONTAL, 0, opts);
+  graph.addCenterLine(CenterLineType.HORIZONTAL, 4000, opts);
+  const structLeft = graph.addCenterLine(CenterLineType.VERTICAL, -4000, { labeled: true, discipline: Discipline.STRUCT });
+
+  assert.equal(isFootprintBoundaryCL(graph, left), false, '部屋が無いためfootprintCellKeysが空');
+  assert.equal(isFootprintBoundaryCL(graph, structLeft), false, '通り芯でも同様');
+});
+
+// 【QA指摘F1・再発防止】中点1点サンプリング方式（旧実装）は、1本のCLの一部区間だけが直交CLで
+// 区切られ、残りの区間は分割されず1つの大きなセルのまま連結しているT字構成で見逃す——大セルの
+// 中点がたまたま反対側の分割済み屋内セルに当たり、その先（分割されていない側）が屋外に接していても
+// 拾えない。輪郭線分（outlineSegments）方式はセルの辺の全区間を対象にするため正しく拾える。
+test('【QA指摘F1・再発防止】isFootprintBoundaryCL: T字構成（縦線0/4000/8000・横線0/8000は全長、横線4000はx4000〜8000だけ有効）で、y:4000..8000側だけ外部に接するCLも真', () => {
+  const graph = makeFootprintGraph();
+  const opts = { labeled: false, discipline: Discipline.ARCH };
+  graph.addCenterLine(CenterLineType.VERTICAL, 0, opts);
+  const x4000 = graph.addCenterLine(CenterLineType.VERTICAL, 4000, opts);
+  graph.addCenterLine(CenterLineType.VERTICAL, 8000, opts);
+  graph.addCenterLine(CenterLineType.HORIZONTAL, 0, opts); // 全長（extent制限なし）
+  graph.addCenterLine(CenterLineType.HORIZONTAL, 8000, opts); // 全長（extent制限なし）
+  const y4000 = graph.addCenterLine(CenterLineType.HORIZONTAL, 4000, opts);
+  y4000.setProps({ _extentLo: 4000, _extentHi: 8000 }); // x:4000〜8000の区間だけ有効（x:0..4000側は分割しない）
+
+  // 左の大セル（x:0..4000 × y:0..8000。y4000がこの範囲では非アクティブなため分割されず1セットのまま）
+  const bigCell = worldToCell(2000, 2000, graph).key;
+  // 右側・y:0..4000のセル（x:4000..8000 × y:0..4000）だけ部屋にする。
+  // 右側・y:4000..8000（x:4000..8000 × y:4000..8000）は部屋にしない（y軸下向き正のため、
+  // こちらが画面上は下側に来る領域。以前のコメントは「右下/右上」という画面方向の言葉で
+  // 逆に書いていたため、以後は y の数値範囲だけで表記する）。
+  const cellRight_y0to4000 = worldToCell(6000, 2000, graph).key;
+  graph.addRoom(new Set([bigCell, cellRight_y0to4000]), '部屋');
+
+  assert.equal(isFootprintBoundaryCL(graph, x4000), true,
+    '大セルの右辺(x=4000)はy:4000..8000側が非フットプリント領域（部屋にしなかった右側セル）に' +
+    '接するため真（中点(4010,4000)方式の旧実装は右側・y:0..4000の屋内セルに当たり見逃していた）');
+});
+
+test('isFootprintBoundaryCL: 屋外部屋（RoomKind.EXTERIOR）に接する辺は真（現行挙動の固定。屋外部屋のセルはfootprintCellKeysに含まれない）', () => {
+  const graph = makeFootprintGraph();
+  const opts = { labeled: false, discipline: Discipline.ARCH };
+  graph.addCenterLine(CenterLineType.VERTICAL, 0, opts);
+  const mid = graph.addCenterLine(CenterLineType.VERTICAL, 4000, opts);
+  graph.addCenterLine(CenterLineType.VERTICAL, 8000, opts);
+  graph.addCenterLine(CenterLineType.HORIZONTAL, 0, opts);
+  graph.addCenterLine(CenterLineType.HORIZONTAL, 4000, opts);
+  const cellA = worldToCell(2000, 2000, graph).key;
+  const cellB = worldToCell(6000, 2000, graph).key;
+  graph.addRoom(new Set([cellA]), '部屋');
+  const exteriorRoom = graph.addRoom(new Set([cellB]), 'バルコニー');
+  exteriorRoom.setKind(RoomKind.EXTERIOR);
+
+  assert.equal(isFootprintBoundaryCL(graph, mid), true,
+    '屋外部屋（RoomKind.EXTERIOR）はisBuildingRoomがfalseのためfootprintCellKeysに含まれず、' +
+    '隣接する屋内セルの辺は外壁線として扱われる');
+});
+
+// 【QA指摘N1・再発防止】セルキー（"left:top:right:bottom"の4 CL id）のid照合方式（前回修正時の実装）は、
+// 結合セル（直交CLが一部区間しか分割せず、複数セルがまたがって1つの大きなセルになっている場合）の
+// 辺が同一直線上の複数CLにまたがるケースを見逃す——worldToCell（内部のfindBoundaryCL）がキー生成時に
+// 辺ごと1つのCLしか選ばないため、キーに選ばれなかった側のCLが実際にはその辺の一部を分割しているのに
+// 拾えなかった。value・有効区間（isActiveAcrossRange）だけで見る幾何判定はセルキーを経由しないため、
+// この見逃しが起きない。
+test('【QA指摘N1・再発防止】isFootprintBoundaryCL: 結合セルの下辺が同一直線上の2本のCL(h1,h2)にまたがるとき、セルキーに現れない側(h2)も真', () => {
+  const graph = makeFootprintGraph();
+  const opts = { labeled: false, discipline: Discipline.ARCH };
+  graph.addCenterLine(CenterLineType.VERTICAL, 0, opts); // 全長
+  const x4000 = graph.addCenterLine(CenterLineType.VERTICAL, 4000, opts);
+  x4000.setProps({ _extentLo: 0, _extentHi: 4000 }); // y:0..4000だけ有効（y:4000..8000側は分割しない）
+  graph.addCenterLine(CenterLineType.VERTICAL, 8000, opts); // 全長
+  graph.addCenterLine(CenterLineType.HORIZONTAL, 0, opts); // 全長
+  graph.addCenterLine(CenterLineType.HORIZONTAL, 4000, opts); // 全長
+  const h1 = graph.addCenterLine(CenterLineType.HORIZONTAL, 8000, opts);
+  h1.setProps({ _extentLo: 0, _extentHi: 4000 }); // x:0..4000だけ有効
+  const h2 = graph.addCenterLine(CenterLineType.HORIZONTAL, 8000, opts);
+  h2.setProps({ _extentLo: 4000, _extentHi: 8000 }); // x:4000..8000だけ有効（h1と同一直線上の別CL）
+
+  const cellTL     = worldToCell(2000, 2000, graph).key; // x:0..4000 × y:0..4000
+  const cellTR     = worldToCell(6000, 2000, graph).key; // x:4000..8000 × y:0..4000
+  const cellBottom = worldToCell(2000, 6000, graph).key; // x:0..8000 × y:4000..8000（結合セル）
+  graph.addRoom(new Set([cellTL, cellTR, cellBottom]), '部屋');
+
+  assert.equal(isFootprintBoundaryCL(graph, h1), true, 'h1（結合セルの下辺のキーに実際に選ばれる側）は真');
+  assert.equal(isFootprintBoundaryCL(graph, h2), true,
+    'h2（結合セルの下辺のキーには現れない側。id照合方式はここを見逃していた）も真');
+});
+
+test('【QA指摘N1・再発防止】isFootprintBoundaryCL: 同じ座標で区間の異なる2本のCL(c1,c2)のうち、端点で接するだけの側(c1)は偽・実際にその区間を分割する側(c2)は真', () => {
+  const graph = makeFootprintGraph();
+  const opts = { labeled: false, discipline: Discipline.ARCH };
+  graph.addCenterLine(CenterLineType.VERTICAL, 0, opts); // 全長
+  const c1 = graph.addCenterLine(CenterLineType.VERTICAL, 4000, opts);
+  c1.setProps({ _extentLo: 0, _extentHi: 4000 }); // y:0..4000だけ有効
+  const c2 = graph.addCenterLine(CenterLineType.VERTICAL, 4000, opts);
+  c2.setProps({ _extentLo: 4000, _extentHi: 8000 }); // y:4000..8000だけ有効（c1と同一直線上の別CL）
+  graph.addCenterLine(CenterLineType.VERTICAL, 8000, opts); // 全長
+  graph.addCenterLine(CenterLineType.HORIZONTAL, 0, opts);
+  graph.addCenterLine(CenterLineType.HORIZONTAL, 4000, opts);
+  graph.addCenterLine(CenterLineType.HORIZONTAL, 8000, opts);
+
+  const cellTL = worldToCell(2000, 2000, graph).key; // x:0..4000 × y:0..4000
+  const cellTR = worldToCell(6000, 2000, graph).key; // x:4000..8000 × y:0..4000
+  const cellBL = worldToCell(2000, 6000, graph).key; // x:0..4000 × y:4000..8000
+  // 右下（x:4000..8000 × y:4000..8000。y軸下向き正のため画面上も右下）は部屋にしない。
+  graph.addRoom(new Set([cellTL, cellTR, cellBL]), '部屋');
+
+  assert.equal(isFootprintBoundaryCL(graph, c1), false,
+    'c1(y:0..4000)は露出区間(y:4000..8000)と端点(y=4000)で接するだけで正の長さの重なりが無いため偽');
+  assert.equal(isFootprintBoundaryCL(graph, c2), true,
+    'c2(y:4000..8000)は露出区間(y:4000..8000)とちょうど重なるため真');
 });
 
 test('applyDemoteToCenter異常系: 直交軸には2本以上あっても同軸(VERTICAL)がclだけ（軸最後の1本）ならERR_CL_CONVERT_LAST_GRIDでグラフ無変更', () => {
