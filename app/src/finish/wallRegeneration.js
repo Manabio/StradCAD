@@ -32,6 +32,63 @@ import { composeCatalog } from '../catalog/catalogRegistry.js';
 // clEccentricity.js と同じ理由——静的 import すると finishBoundary.js → App.jsx 経由で
 // メインバンドルに材マスタが常時同梱されてしまう）。
 
+// edgeComposition.js・clEccentricity.js は本番ビルドで別チャンク（dist/assets/配下）に分かれる
+// ため、初回の動的 import はネットワーク取得を伴うマクロタスクになりうる（QA指摘M1'・
+// 2026-09-27）。モジュール内でメモ化し、regenerateWalls 自身の呼び出しと
+// preloadWallRegenerationModules（下記）が同じ Promise を再利用する——温め済みなら
+// regenerateWalls 側の await はモジュールキャッシュから同期的に解決される。
+// 失敗（reject）したPromiseはメモに残さない——一時的なネットワーク断・チャンク取得失敗で
+// 永久に「失敗したPromise」を返し続けると、以後の削除・壁再生成が全部同じ理由で拒否され続けて
+// しまう（QA指摘L・2026-09-27）。reject時はメモをnullへ戻し、次回呼び出しで再度importを試みる。
+let edgeCompositionPromise = null;
+let clEccentricityModulePromise = null;
+// importFn省略時は実の動的import（regenerateWalls自身の呼び出し・本番のpreloadWallRegenerationModules
+// 呼び出しはどちらもこの既定を使う）。preloadWallRegenerationModulesのopts経由でのみ差し替え可能
+// （テストで「1回目reject→メモが消え2回目は再試行される」を検証するための注入口。QA指摘L）。
+function loadEdgeComposition(importFn = () => import('./edgeComposition.js')) {
+  if (!edgeCompositionPromise) {
+    edgeCompositionPromise = importFn().catch(e => { edgeCompositionPromise = null; throw e; });
+  }
+  return edgeCompositionPromise;
+}
+function loadClEccentricityModule(importFn = () => import('./clEccentricity.js')) {
+  if (!clEccentricityModulePromise) {
+    clEccentricityModulePromise = importFn().catch(e => { clEccentricityModulePromise = null; throw e; });
+  }
+  return clEccentricityModulePromise;
+}
+
+/**
+ * regenerateWalls が動的 import する2モジュール（edgeComposition.js・clEccentricity.js）を
+ * 前もって解決しておく（コード分割チャンクのネットワーク取得を先に済ませる）。
+ * transform/centerLineOps.js deleteCenterLineWithUndo がCL削除の「変更前のawaitゾーン」
+ * （まだ何も変更していない段階）から呼ぶ——変更後の区間（後始末→壁再生成→道連れ削除→after採取）
+ * でネットワーク取得（マクロタスク）が発生し、その間に階切替などの割り込みが入る余地を無くすため
+ * （QA指摘M1'是正・2026-09-27）。結果はモジュール内でメモ化されるため、この呼び出し自体は
+ * 何度呼んでも実質1回の動的importにしかならない。
+ * @param {object} [opts] - テスト用の差し替え（本番では省略——既定は実の動的import）
+ * @param {() => Promise<unknown>} [opts.importEdgeComposition]
+ * @param {() => Promise<unknown>} [opts.importClEccentricity]
+ * @returns {Promise<void>}
+ */
+export async function preloadWallRegenerationModules({ importEdgeComposition, importClEccentricity } = {}) {
+  await Promise.all([
+    loadEdgeComposition(importEdgeComposition),
+    loadClEccentricityModule(importClEccentricity),
+  ]);
+}
+
+/**
+ * テスト専用: モジュールキャッシュ（edgeCompositionPromise・clEccentricityModulePromise）を
+ * リセットする。本番コードからは呼ばない——wallRegeneration.test.js のメモ化テストだけが、
+ * 他のテスト（regenerateWalls経由で既定のimportFnを呼びキャッシュを温めてしまう）と隔離するために使う
+ * （先頭のアンダースコアはcore/clQuery.jsの_isLabeledCL等と同じ「公開APIではない」慣例）。
+ */
+export function _resetWallRegenerationModuleCacheForTest() {
+  edgeCompositionPromise = null;
+  clEccentricityModulePromise = null;
+}
+
 /**
  * 材データを動的 import し、材コード→材の Map を作る（finish/clEccentricity.js と同じ理由で
  * コード分割維持のため動的 import。旧 runFinishEntryBoundary の pullMaterialMap 構築をここへ寄せた）。
@@ -78,7 +135,7 @@ export async function regenerateWalls(graph, { materialMap, project = null, stai
   // 既存壁を破壊するだけの再生成に意味はなく、壁を一切触らない方が安全側のため。
   if (!materialMap) return { regenerated: false, undoFns, redoFns };
 
-  const { roomWallDims, exteriorWallDims } = await import('./edgeComposition.js');
+  const { roomWallDims, exteriorWallDims } = await loadEdgeComposition();
 
   // 柱寸法が基準（120）より細い階の外壁下地帯シフト量（ステップ1。structural/structureRules.js
   // woodBaseColumnWidthMm 参照）。外壁の外面（下地帯の遠い側）を通り芯±60に固定したまま、
@@ -256,7 +313,7 @@ export async function regenerateWalls(graph, { materialMap, project = null, stai
   // materialMap が無ければ丸ごとスキップする（applyCLEccentricity 自体も materialMap
   // 無しでは何もしないが、無駄な動的importとループを避ける。QA finding 2）。
   if (graph.clEccentricities.size > 0 && materialMap) {
-    const { applyCLEccentricity } = await import('./clEccentricity.js');
+    const { applyCLEccentricity } = await loadClEccentricityModule();
     const eccTouched = new Map(); // wallId -> 変更前スナップショット（初回遭遇時点）
     runInAction(() => {
       for (const clId of graph.clEccentricities.keys()) {

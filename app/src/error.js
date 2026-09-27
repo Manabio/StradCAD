@@ -105,8 +105,23 @@ export const ERR_CL_DELETE_LAST_GRID = 'この軸の最後の通り芯のため�
 // 未然に防ぐ第一段階のガード。
 export const ERR_CL_DELETE_FOOTPRINT = '外壁を担うため削除できません。先に仕上げモードで部屋を作り替えるか、CLを移動してください。';
 
-// 定義のみ（本ステップでは未使用）。将来、削除後に部屋の区切りを復元できないと判定した場合に使う。
+// CL削除（transform/centerLineOps.js deleteCenterLineWithUndo）専用: 削除しようとしているCLを
+// 失うと自階の部屋セル・スラブセルのいずれかが対辺2本同時喪失になる、または再解釈除外部屋
+// （階段・階段吹抜け・未定義）のセル辺がこのCLを持つ場合（finish/roomReinterpret.js
+// findUnresolvableCells。先読みガードとして削除前に判定するほか、削除後の安全網
+// （collectUnresolvableCellsの前後差分）でも同じ文言を返す）。長押しメニューの削除項目の
+// グレー化（interaction/usePointerInteraction.js・menuItems.js）もこの判定を共有する。
 export const ERR_CL_DELETE_UNRESOLVABLE = '部屋の区切りを復元できないため削除できません。';
+
+// CL削除ステップ3（transform/centerLineOps.js deleteCenterLineWithUndo。壁再生成）専用: 削除に
+// 先立って壁を作り直すために必要なデータの取得——materialMap取得（finish/wallRegeneration.js
+// loadMaterialMap）または壁再生成が動的importする2モジュール（edgeComposition.js・
+// clEccentricity.js）の事前読込み（preloadWallRegenerationModules）——のいずれかが
+// ERR_CATALOG_DUPLICATE以外の理由（IDB読込失敗・チャンク取得失敗等）で失敗した場合。何も
+// 変更していない時点（detach・後始末より前）で判定し拒否する——壁を作り直せないまま削除だけ
+// 通すと、壁がdetachで切られたまま再生成されず、wallFreshnessKeyがCL位相を含まないため次の
+// 境界でも修復されない事故になる（QA指摘H2・M1'・2026-09-27）。
+export const ERR_CL_DELETE_WALLS_UNAVAILABLE = '壁を作り直せないため削除できません。必要なデータの読込みに失敗しました。';
 
 // セッション排他ロック（storage/sessionLock.js）: 別タブが編集セッションを保持している場合、
 // storage/db.js の openDB() がこの文言で reject する。App.jsx は同じ文言を全画面案内に表示する。

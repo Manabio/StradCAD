@@ -1412,10 +1412,13 @@ const App = observer(() => {
       if (toast) setToast({ msg: toast, key: Date.now() });
       setFloorSyncTick(t => t + 1); // 連動先（他階）の複製・重複判定を反映させる（cl-to-grid/cl-to-centerと同じ。m-6・QA指摘）
     } catch (err) {
-      // 階またぎ同期（centerLineFloorSync.js）はIDB書込を含むため失敗しうる——保存済みの階は
-      // 呼び出し元（deleteCenterLineWithUndo）がrollbackFloorRecordsで巻き戻し済み
-      // （自階・structGraph・undoは未変更）。ここでは失敗をトースト表示するだけでよい
-      // （cl-to-grid/cl-to-center等の既存async IIFEと同じ形。ERR_CL_CONVERT_SYNC_FAILEDを再利用する）。
+      // 階またぎ同期（centerLineFloorSync.js）のIDB書込、および壁再生成（wallRefresh.js
+      // refreshWallsForGraph経由。CL削除ステップ3）の想定外の例外（QA指摘H1・2026-09-27）は
+      // いずれも失敗しうる——保存済みの階・自階の後始末・壁再生成は呼び出し元
+      // （deleteCenterLineWithUndo）が安全網（rollbackFloorRecords／restoreGraph／
+      // restoreStructCLs）で巻き戻し済み（自階・structGraph・他階・undoは未変更）。
+      // ここでは失敗をトースト表示するだけでよい（cl-to-grid/cl-to-center等の既存async IIFEと
+      // 同じ形。ERR_CL_CONVERT_SYNC_FAILEDを再利用する）。
       console.error(err);
       setToast({ msg: ERR_CL_CONVERT_SYNC_FAILED, key: Date.now() });
     }

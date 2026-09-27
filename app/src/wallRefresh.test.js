@@ -17,7 +17,7 @@ import { runInAction } from 'mobx';
 import { Project, CenterLineType, Discipline, StructuralMaterialType, centerLineKind } from './core.js';
 import { undoManager } from './undoManager.js';
 import { floorSwapManager } from './storage/FloorSwapManager.js';
-import { refreshWallsAllFloors } from './wallRefresh.js';
+import { refreshWallsAllFloors, refreshWallsForGraph } from './wallRefresh.js';
 import { regenerateWalls, loadMaterialMap } from './finish/wallRegeneration.js';
 import { wallFreshnessKey, WALL_KEY_VERSION } from './finish/wallFreshnessKey.js';
 import { recomputeStructuralForGraph } from './structural/structuralRecompute.js';
@@ -293,6 +293,39 @@ test('refreshWallsAllFloors: 鍵一致（保存キー===現在キー）なら何
   assert.equal(graph.walls.length, 0, '壁は一切生成されない（鍵一致でregenerateWalls自体を呼ばない）');
   assert.equal(undoManager.peekUndo(), undoBefore, 'undoエントリは増えない');
   assert.equal(saveCalled, false, 'saveFloorは呼ばれない');
+});
+
+// ---- CL削除ステップ3（transform/centerLineOps.js deleteCenterLineWithUndo）用: force:true ----
+test('refreshWallsForGraph: force:trueなら鍵一致でも壁を作り直す（壁idが総入れ替えになる）', async () => {
+  const { project, graph } = makeSinglePlaneProject();
+  addRectRoom(graph);
+  await seedInitialWalls(graph, project); // 一度は仕上げモードを通って壁を持った階にする
+  const wallIdsBefore = new Set(graph.walls.map(w => w.id));
+  assert.ok(wallIdsBefore.size > 0, '前提: 初期壁が生成されている');
+  assert.equal(wallFreshnessKey(graph, project), graph.wallFreshnessKey, '前提: 鍵は一致している（forceが無ければ何もしないはず）');
+
+  const materialMap = await loadMaterialMap();
+  const changed = await refreshWallsForGraph(graph, project, () => Promise.resolve(materialMap), {
+    peek: async () => null, pushUndo: false, force: true,
+  });
+
+  assert.equal(changed, true, '鍵一致でもforce:trueなら再生成が走る');
+  const wallIdsAfter = new Set(graph.walls.map(w => w.id));
+  assert.ok(wallIdsAfter.size > 0, '再生成後も壁は存在するはず');
+  assert.ok([...wallIdsBefore].every(id => !wallIdsAfter.has(id)),
+    '壁は全削除→再生成されるため、force再生成後は旧壁idが1つも残らないはず');
+});
+
+test('refreshWallsForGraph: forceでも壁を一度も持ったことのない階（鍵null・壁0本）は対象外のまま', async () => {
+  const { project, graph } = makeSinglePlaneProject();
+  addRectRoom(graph); // regenerateWallsを一度も通していない→wallFreshnessKey=null・walls.length=0
+  let loadCalls = 0;
+  const changed = await refreshWallsForGraph(graph, project, () => { loadCalls++; return loadMaterialMap(); }, {
+    peek: async () => null, pushUndo: false, force: true,
+  });
+  assert.equal(changed, false, '未脱出階はforceでも対象外のまま（裁定案Aを崩さない）');
+  assert.equal(graph.walls.length, 0);
+  assert.equal(loadCalls, 0, 'materialMapのロードすら行われないはず（鍵比較より前の壁0本ガードで早期returnする）');
 });
 
 // ---- 2. 主構造を変える→自階の壁が再生成され鍵が更新・undoで壁と鍵が戻る ----
@@ -975,4 +1008,40 @@ test('【不変条件・2026-09-22 QA指摘B残存・T7】store.js: bootReadyの
     'ERR_CATALOG_DUPLICATE時にproject.setCatalogErrorを呼んでいない');
   assert.match(catchBody, /console\.error\(e\)/,
     'それ以外のエラー用のconsole.error(e)が残っていない（従来挙動が失われている）');
+});
+
+// ---- 不変条件・QA指摘M（2026-09-27。テスト(ii)）: store.js の switchFloor が
+// floorSwapManager.deactivate（対象階のIDB保存＋graph.clearFloorData()）より前に
+// whenCenterLineOpsIdle() をawaitしている。CL削除（transform/centerLineOps.js
+// deleteCenterLineWithUndo）の実行中にdeactivateが割り込むと、削除処理が握っている
+// before/beforeArchスナップショットの復元先（クリア済みの非アクティブgraph）を失う事故になる
+// ため（QA実測）。store.js自体はlocalStorage/indexedDBに依存するモジュール初期化がありnode:test
+// から実行できないため、上のbootReadyのテストと同じ型（ソーステキストを正規表現で検査する
+// 不変条件テスト）で固定する ----
+test('【不変条件・QA指摘M】store.js: switchFloor本体がfloorSwapManager.deactivateより前にwhenCenterLineOpsIdle()をawaitしている', () => {
+  const src = fs.readFileSync(path.resolve(import.meta.dirname, 'store.js'), 'utf8');
+
+  assert.match(src, /import\s*\{\s*whenCenterLineOpsIdle\s*\}\s*from\s*'\.\/transform\/centerLineOps\.js';/,
+    'whenCenterLineOpsIdle が transform/centerLineOps.js からimportされていない');
+
+  const startIdx = src.indexOf('export async function switchFloor');
+  assert.ok(startIdx >= 0, 'switchFloor が見つからない');
+  const braceStart = src.indexOf('{', src.indexOf(')', startIdx));
+  let depth = 0, i = braceStart;
+  for (; i < src.length; i++) {
+    if (src[i] === '{') depth++;
+    else if (src[i] === '}') { depth--; if (depth === 0) break; }
+  }
+  const body = src.slice(braceStart, i + 1);
+  const codeOnly = body.split(/\r?\n/).filter(line => !line.trim().startsWith('//')).join('\n');
+
+  const idleIdx = codeOnly.indexOf('whenCenterLineOpsIdle()');
+  assert.ok(idleIdx >= 0, 'switchFloor の本体に whenCenterLineOpsIdle() の呼び出しが無い');
+  assert.match(codeOnly.slice(Math.max(0, idleIdx - 10), idleIdx + 30), /await\s+whenCenterLineOpsIdle\(\)/,
+    'whenCenterLineOpsIdle() はawaitされている必要がある');
+
+  const deactivateIdx = codeOnly.indexOf('floorSwapManager.deactivate(');
+  assert.ok(deactivateIdx >= 0, 'switchFloor の本体に floorSwapManager.deactivate の呼び出しが無い');
+  assert.ok(idleIdx < deactivateIdx,
+    'whenCenterLineOpsIdle() は floorSwapManager.deactivate より前に呼ぶ必要がある');
 });

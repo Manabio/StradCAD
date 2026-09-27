@@ -341,3 +341,38 @@ project, contribute it upstream to the team's playbook in the ccteams repo.
   有効区間（`isActiveAcrossRange`）の幾何**で判定する。cellKey は辺ごとに1本しか表せない（`worldToCell`
   内部の `findBoundaryCL` が選ぶ）ため id 照合に使わない。テストには T字・結合セル・端点で接するだけの
   CL（偽であるべき）の3構成を必ず含める。
+
+### 変更確定後に挟んだ非同期処理（壁再生成）が例外を投げても巻き戻らない／失敗時に「何もしない」が自己修復にならない（2026-09-27 CL削除直後の壁再生成で発生）
+
+- **症状**: CL削除→部屋再解釈を確定した後に `await refreshWallsForGraph(...)` を挟んだところ、材料カタログ重複の
+  再スローや下階 peek 失敗で例外が出ると、削除・detach・他階伝播は反映済みのまま undo も巻き戻しも無かった。
+  また材料カタログの通常ロード失敗時は既存の「鍵を書かず次の境界で再試行」に従ったが、CL削除では鍵の入力
+  （材コード・部屋構成）が変わらないため次の境界でも一致したままで、古い壁が永久に固定された。
+- **誤った直感**: 「その関数の既存の例外の扱い（再スロー／何もしない）に従えばよい」「鍵不一致の自己修復が効く」。
+- **正しい動き**: 変更確定後に非同期処理を挟むときは、(1) 必要な実 I/O（materialMap・階 peek・遅延チャンク）を
+  **変更前の await ゾーン**で済ませて失敗なら無変更で拒否し、(2) それでも変更後の区間は try で囲み、同じ関数の
+  安全網と同じ巻き戻し（restoreGraph／restoreStructCLs／rollbackFloorRecords）をしてから再スローする。
+  「失敗して何もしない」経路は、呼び出し元の鍵や再試行の仕組みが本当に自己修復するかを実測してから採用する。
+
+### 「変更後の区間に実 I/O は無い」をソース読解で結論したが、動的 import が本番ビルドでは遅延チャンクだった（2026-09-27 同上）
+
+- **症状**: `regenerateWalls` 内の `await import('./edgeComposition.js')` 等を「初回以降はモジュールキャッシュから同期解決」
+  と読み、変更後の await はマイクロタスクのみと結論した。実際は `dist/assets/edgeComposition-*.js` として別チャンクに
+  なっており、読込み後に一度も壁再生成していない状態での最初の削除ではネットワーク取得（マクロタスク）が走り、
+  階切替が割り込める。
+- **誤った直感**: node:test ではモジュールが既にロード済みなので、本番でも同期と同じ。
+- **正しい動き**: 動的 import が残る経路は `npm run build` 後の `dist/assets` にそのチャンクがあるかを確認する。
+  あるなら変更前に温める（preload 関数を export して同じ await ゾーンへ）か、await の後に
+  `graph !== project.activeGraph` を検知して巻き戻すガードを置く（両方が望ましい）。
+
+### 「階切替」を `activePlaneId` の代入だけで模したテストが、巻き戻し先の漏れ（IDB）を検出できない（2026-09-27 同上）
+
+- **症状**: await 後に `graph !== project.activeGraph` を検知して巻き戻すガードを、`activePlaneId` を代入するだけの
+  テストで緑にした。本番の `switchFloor` は `floorSwapManager.deactivate`（`saveFloor(serializeGraph(graph))` →
+  `graph.clearFloorData()`）の後で `activePlaneId` を変えるため、検知時点で IDB には途中状態が保存済みで、
+  メモリ上の graph を戻しても戻った階では変更が残り undo も無い。
+- **誤った直感**: `activePlaneId` の代入＝階切替の再現。
+- **正しい動き**: 階切替を模すテストは `deactivate` と同じ順（ストアへ保存→`clearFloorData()`→`activePlaneId` 変更）で
+  再現し、巻き戻し先に永続化された側（IDB／ストア）が含まれるかまで assert する。原則は「非同期の隙間で
+  階切替を許さない」（`whenCenterLineOpsIdle()` のような待ち合わせを `switchFloor` 側に置く）で、検知ガードは
+  安全網へ例外を渡すだけにする。

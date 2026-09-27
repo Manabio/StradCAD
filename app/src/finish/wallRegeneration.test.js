@@ -5,7 +5,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Plane, PlanGraph, CenterLineType, Discipline } from '@core';
-import { regenerateWalls, loadMaterialMap } from './wallRegeneration.js';
+import {
+  regenerateWalls, loadMaterialMap, preloadWallRegenerationModules, _resetWallRegenerationModuleCacheForTest,
+} from './wallRegeneration.js';
 import { TRADITIONAL_WOOD_STRUCTURE } from '../structural/structureRules.js';
 
 function makeGraph() {
@@ -151,4 +153,35 @@ test('【QA F8 test5】regenerateWalls: 柱寸105（L字部屋の混在コーナ
     assert.ok(len > 0, `壁(${w.id})のスパンが逆転・退化している（coord1=${w.coord1}, coord2=${w.coord2}）`);
     assert.ok(Math.abs(len) >= 1, `壁(${w.id})が長さ<1mmまで縮退している（length=${len}）`);
   }
+});
+
+// ---- QA指摘L（2026-09-27）: 動的importのメモ化がrejectも保持してしまうと、一時的なチャンク
+// 取得失敗（ネットワーク断等）で以後の削除・壁再生成が永久に同じ理由で拒否され続ける。
+// reject時はメモをクリアし、次回呼び出しで再度importを試みることを確認する。
+test('preloadWallRegenerationModules: 1回目のimportがrejectしたらメモを保持せず、2回目は再試行される', async () => {
+  // このファイルの他のテスト（regenerateWalls経由）が既定のimportFnでモジュールキャッシュを
+  // 温めてしまっているため、このテスト専用にリセットしてから始める（隔離）。
+  _resetWallRegenerationModuleCacheForTest();
+  let edgeCalls = 0;
+  const importEdgeComposition = async () => {
+    edgeCalls++;
+    if (edgeCalls === 1) throw new Error('chunk load failed (1回目)');
+    return import('./edgeComposition.js');
+  };
+  let eccCalls = 0;
+  const importClEccentricity = async () => {
+    eccCalls++;
+    return import('./clEccentricity.js'); // こちらは毎回成功させ、edge側の失敗だけに注目する
+  };
+
+  await assert.rejects(
+    () => preloadWallRegenerationModules({ importEdgeComposition, importClEccentricity }),
+    /chunk load failed \(1回目\)/,
+  );
+  assert.equal(edgeCalls, 1, '1回目は失敗するimportFnが1回呼ばれるはず');
+  assert.equal(eccCalls, 1, '対照: clEccentricity側は1回目で成功しているはず');
+
+  await preloadWallRegenerationModules({ importEdgeComposition, importClEccentricity });
+  assert.equal(edgeCalls, 2, '1回目のreject後、メモが残っていれば2回目は呼ばれないはず——実際に呼ばれた（再試行された）ことを確認する');
+  assert.equal(eccCalls, 1, '対照: clEccentricity側は1回目で成功し既にメモ化済みのため、2回目は再importされないはず');
 });

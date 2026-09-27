@@ -10,7 +10,7 @@ import {
   ERR_CL_DUPLICATE, ERR_CL_CENTER_UPGRADED, ERR_CL_STRUCT_EXISTS,
   ERR_CL_CONVERT_ATTACHED, ERR_CL_CONVERT_NO_GRID, ERR_CL_CONVERT_DUP_FLOOR, ERR_CL_CONVERT_DUP_FLOOR_DEMOTE,
   ERR_CL_CONVERT_DUP_DEMOTE, ERR_CL_DELETE_LAST_GRID, ERR_CL_CONVERT_DUP, ERR_CL_DELETE_FOOTPRINT,
-  ERR_CL_DELETE_UNRESOLVABLE,
+  ERR_CL_DELETE_UNRESOLVABLE, ERR_CL_DELETE_WALLS_UNAVAILABLE, ERR_CATALOG_DUPLICATE,
 } from '../error.js';
 import { worldToCell } from '../finish/gridCells.js';
 import { syncEdgesFromTopology, snapshotEdges } from '../finish/edgeClassify.js';
@@ -21,10 +21,15 @@ import { calcStep } from '../renderer/clMoveMath.js';
 import {
   shouldSuggestWoodStructure, commitCLMoveOp, deleteCenterLineWithUndo, addCenterLineFromDialog,
   promoteCenterToGridWithUndo, demoteGridToCenterWithUndo, setCenterLineStructuralListener,
-  applyCLEccentricityWithUndo,
+  applyCLEccentricityWithUndo, whenCenterLineOpsIdle,
 } from './centerLineOps.js';
 import { CL_KINDS, coexistenceAt } from '../core/centerLineKindPolicy.js';
 import { BeamAxisOrigin } from '../core/centerLine.js';
+import { regenerateWalls, loadMaterialMap } from '../finish/wallRegeneration.js';
+import { wallFreshnessKey } from '../finish/wallFreshnessKey.js';
+import { recomputeStructuralForGraph } from '../structural/structuralRecompute.js';
+import { TRADITIONAL_WOOD_STRUCTURE } from '../structural/structureRules.js';
+import { findWallBeamAxisCL, wallBeamSourcesFor } from '../structural/wallBeamAxes.js';
 
 function makeGraph(planeId = 'p1') {
   const plane = new Plane(planeId, 0, `${planeId}階`, 1, 1);
@@ -2119,6 +2124,703 @@ test('deleteCenterLineWithUndo: 主構造が在来木造でない中心線削除
   });
   assert.equal(toast, null);
   assert.equal(graph.shapeMap.has(centerCL.id), false);
+});
+
+// ---- CL削除ステップ3: 自階の壁を削除直後に明示的に再生成する（新ルール1「壁再生成」） ----
+// wallFreshnessKeyはCL位相（部屋の分割/併合）を入力に含まないため、通常の鍵一致では
+// wallRefresh.jsの再生成は起動しない——deleteCenterLineWithUndoはforce:trueで明示的に起動する
+// （wallRefresh.js refreshWallsForGraph参照）。
+
+// 2部屋(洋室A[0,4000]x[0,4000]・洋室B[4000,8000]x[0,4000])が x=4000 の中心線で隣接する構成
+// （既存の「内部間仕切りの中心線を削除すると2部屋が部分指定で併合され」テストと同じ幾何）に、
+// 実materialMapで壁を1度生成してから削除する。
+function addAdjacentRoomsWithWalls(graph) {
+  const opts = { labeled: false, discipline: Discipline.ARCH };
+  const x0 = graph.addCenterLine(CenterLineType.VERTICAL, 0,    opts);
+  const xm = graph.addCenterLine(CenterLineType.VERTICAL, 4000, opts);
+  const x1 = graph.addCenterLine(CenterLineType.VERTICAL, 8000, opts);
+  const y0 = graph.addCenterLine(CenterLineType.HORIZONTAL, 0,    opts);
+  const y1 = graph.addCenterLine(CenterLineType.HORIZONTAL, 4000, opts);
+  const cellA = worldToCell(2000, 2000, graph).key;
+  const cellB = worldToCell(6000, 2000, graph).key;
+  graph.addRoom(new Set([cellA]), '洋室A');
+  graph.addRoom(new Set([cellB]), '洋室B');
+  return { x0, xm, x1, y0, y1 };
+}
+
+test('deleteCenterLineWithUndo（非struct分岐）: 内部間仕切りの中心線削除で自階の壁が明示的に再生成される。undo/redoで壁id集合が往復する', async () => {
+  const { project, graph } = makeProjectWithGraph();
+  const { xm } = addAdjacentRoomsWithWalls(graph);
+
+  const materialMap = await loadMaterialMap();
+  await regenerateWalls(graph, { materialMap, project });
+  graph.setWallFreshnessKey(wallFreshnessKey(graph, project)); // 一度は仕上げモードを通った階にする（seedInitialWallsと同じ手順）
+  const keyBefore = graph.wallFreshnessKey;
+  const wallIdsBefore = new Set(graph.walls.map(w => w.id));
+  assert.ok(wallIdsBefore.size > 0, '前提: 削除前に壁が生成されている');
+  assert.ok(graph.walls.some(w => w.isVertical && Math.abs(w.axisValue - 4000) < 200),
+    '前提: 洋室A・洋室Bの間（x=4000）に間仕切り壁が存在する');
+
+  const { toast } = await deleteCenterLineWithUndo(graph, project, xm);
+
+  assert.equal(toast, null);
+  assert.equal(graph.shapeMap.has(xm.id), false, '中心線は削除される');
+  assert.equal(graph.walls.some(w => w.isVertical && Math.abs(w.axisValue - 4000) < 200), false,
+    '併合後はx=4000の間仕切り壁が無いはず');
+  const wallIdsAfter = new Set(graph.walls.map(w => w.id));
+  assert.ok(wallIdsAfter.size > 0, '併合後も外壁は生成されているはず');
+  assert.ok([...wallIdsBefore].every(id => !wallIdsAfter.has(id)),
+    '壁は全削除→再生成されるため、削除直後の再生成後は旧壁idが1つも残らないはず');
+  // wallFreshnessKeyの入力（下地材コード・実効主構造・柱断面・部屋一覧のkind/feature/壁材/壁仕上げ）は
+  // 部屋の併合（部分指定化。部屋id自体は残る）では変わらない——forceが無ければ壁は再生成されない
+  // ことをここで裏付ける（force:trueが必要な理由の実測）。
+  assert.equal(graph.wallFreshnessKey, keyBefore,
+    '鍵の入力自体は部屋の併合前後で変わらないはず（wallFreshnessKeyはCL位相を含まないため）');
+
+  undoManager.undo();
+  assert.equal(graph.shapeMap.has(xm.id), true, 'undoでxmが復元される');
+  assert.deepEqual(new Set(graph.walls.map(w => w.id)), wallIdsBefore, 'undoで壁id集合が削除前に戻るはず');
+  assert.equal(graph.wallFreshnessKey, keyBefore);
+
+  undoManager.redo();
+  assert.equal(graph.shapeMap.has(xm.id), false, 'redoで再びxmが削除される');
+  assert.deepEqual(new Set(graph.walls.map(w => w.id)), wallIdsAfter, 'redoで壁id集合が削除後に戻るはず');
+});
+
+test('deleteCenterLineWithUndo: 通り芯（struct分岐）でも内部間仕切りの削除で自階の壁が明示的に再生成される', async () => {
+  const { project, graph } = makeProjectWithGraph();
+  const struct = { labeled: true, discipline: Discipline.STRUCT };
+  project.structGraph.addCenterLine(CenterLineType.VERTICAL, 0, struct);
+  const mid = project.structGraph.addCenterLine(CenterLineType.VERTICAL, 4000, struct);
+  project.structGraph.addCenterLine(CenterLineType.VERTICAL, 8000, struct);
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0, struct);
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 4000, struct);
+  const cellA = worldToCell(2000, 2000, graph).key;
+  const cellB = worldToCell(6000, 2000, graph).key;
+  graph.addRoom(new Set([cellA]), '洋室A');
+  graph.addRoom(new Set([cellB]), '洋室B');
+
+  const materialMap = await loadMaterialMap();
+  await regenerateWalls(graph, { materialMap, project });
+  graph.setWallFreshnessKey(wallFreshnessKey(graph, project)); // 一度は仕上げモードを通った階にする（鍵一致でもforceで作り直ることを裏取る）
+  const wallIdsBefore = new Set(graph.walls.map(w => w.id));
+  assert.ok(wallIdsBefore.size > 0, '前提: 削除前に壁が生成されている');
+  assert.ok(graph.walls.some(w => w.isVertical && Math.abs(w.axisValue - 4000) < 200),
+    '前提: 洋室A・洋室Bの間（x=4000）に間仕切り壁が存在する');
+
+  const { toast } = await deleteCenterLineWithUndo(graph, project, mid);
+
+  assert.equal(toast, null);
+  assert.equal(project.structGraph.shapeMap.has(mid.id), false, '通り芯は削除される');
+  assert.equal(graph.walls.some(w => w.isVertical && Math.abs(w.axisValue - 4000) < 200), false,
+    '併合後はx=4000の間仕切り壁が無いはず');
+  const wallIdsAfter = new Set(graph.walls.map(w => w.id));
+  assert.ok(wallIdsAfter.size > 0, '併合後も外壁は生成されているはず');
+  assert.ok([...wallIdsBefore].every(id => !wallIdsAfter.has(id)),
+    '壁は全削除→再生成されるため、削除直後の再生成後は旧壁idが1つも残らないはず');
+});
+
+test('deleteCenterLineWithUndo: 壁を一度も持ったことのない階（wallFreshnessKey未設定・壁0本）では壁再生成が走らない（materialMapもロードされない）', async () => {
+  const { project, graph } = makeProjectWithGraph();
+  const { xm } = addAdjacentRoomsWithWalls(graph); // regenerateWallsを一度も通していない
+
+  let loadCalls = 0;
+  const { toast } = await deleteCenterLineWithUndo(graph, project, xm, {
+    loadMaterialMapFn: () => { loadCalls++; return loadMaterialMap(); },
+  });
+
+  assert.equal(toast, null);
+  assert.equal(graph.shapeMap.has(xm.id), false);
+  assert.equal(graph.walls.length, 0, '壁は生成されない');
+  assert.equal(loadCalls, 0, '未脱出階はforce再生成の対象外のため、materialMapのロード自体が起きないはず');
+});
+
+test('deleteCenterLineWithUndo: 補助線の削除では壁再生成が走らない（materialMapもロードされない）', async () => {
+  const { project, graph } = makeProjectWithGraph();
+  addAdjacentRoomsWithWalls(graph);
+  const materialMap = await loadMaterialMap();
+  await regenerateWalls(graph, { materialMap, project }); // 前提: 壁を持つ階にする
+  assert.ok(graph.walls.length > 0, '前提: 壁が生成されている');
+
+  const aux = graph.addCenterLine(CenterLineType.VERTICAL, 10000, { labeled: false, lineType: 'dashed' });
+  let loadCalls = 0;
+  const { toast } = await deleteCenterLineWithUndo(graph, project, aux, {
+    loadMaterialMapFn: () => { loadCalls++; return loadMaterialMap(); },
+  });
+
+  assert.equal(toast, null);
+  assert.equal(graph.shapeMap.has(aux.id), false, '補助線自体は削除される');
+  assert.equal(loadCalls, 0, '補助線は壁の軸にならないため、壁再生成（materialMapのロード）は起きないはず');
+});
+
+test('deleteCenterLineWithUndo（非struct分岐・在来木造）: 壁由来梁芯の道連れ削除は削除で失われた1本だけを消し、他の壁由来梁芯は同じidのまま残る（壁再生成後の1パス評価）', async () => {
+  const { project, graph } = makeProjectWithGraph();
+  graph.structureOverride = TRADITIONAL_WOOD_STRUCTURE;
+  const { xm } = addAdjacentRoomsWithWalls(graph);
+
+  const materialMap = await loadMaterialMap();
+  await regenerateWalls(graph, { materialMap, project });
+  await recomputeStructuralForGraph(graph, project, graph.structureOverride);
+
+  const midAxisBefore = findWallBeamAxisCL(graph, true, 4000);
+  assert.ok(midAxisBefore, '前提: 内部間仕切り(x=4000)を根拠にした壁由来梁芯が生成されている');
+  const perimeter = {
+    xLeft:   findWallBeamAxisCL(graph, true, 0),
+    xRight:  findWallBeamAxisCL(graph, true, 8000),
+    yTop:    findWallBeamAxisCL(graph, false, 0),
+    yBottom: findWallBeamAxisCL(graph, false, 4000),
+  };
+  for (const [k, cl] of Object.entries(perimeter)) assert.ok(cl, `前提: 外周(${k})の壁由来梁芯が生成されている`);
+  const perimeterIdsBefore = Object.fromEntries(Object.entries(perimeter).map(([k, cl]) => [k, cl.id]));
+  const beamAxisCountBefore = graph.centerLines.filter(cl => centerLineKind(cl) === 'beam').length;
+
+  const { toast } = await deleteCenterLineWithUndo(graph, project, xm, { peekBelow: async () => null });
+
+  assert.equal(toast, null);
+  assert.equal(findWallBeamAxisCL(graph, true, 4000), null,
+    '間仕切りが消えたx=4000の壁由来梁芯は道連れに消えるはず');
+  for (const [k, args] of [['xLeft', [true, 0]], ['xRight', [true, 8000]], ['yTop', [false, 0]], ['yBottom', [false, 4000]]]) {
+    const cl = findWallBeamAxisCL(graph, ...args);
+    assert.ok(cl, `外周(${k})の壁由来梁芯は残っているはず`);
+    assert.equal(cl.id, perimeterIdsBefore[k], `外周(${k})の壁由来梁芯は同じidのまま残るはず（二重削除・二重生成なし）`);
+  }
+  assert.equal(
+    graph.centerLines.filter(cl => centerLineKind(cl) === 'beam').length,
+    beamAxisCountBefore - 1,
+    '梁芯の総数は道連れ削除の1本分だけ減るはず（壁再生成後の1パス評価で二重削除・二重生成が起きない）'
+  );
+});
+
+// ---- QA指摘H1/H2/M1是正の再検証（2026-09-27）----
+// H1: 変更後の区間（後始末→壁再生成→道連れ削除→after採取）で例外が起きたら安全網と同じ巻き戻しをして
+// 再スローする。H2: materialMapの通常ロード失敗は「まだ何も変更していない」段階で拒否する
+// （ERR_CL_DELETE_WALLS_UNAVAILABLE）。M1: resolveStairContext用のpeek・materialMap取得を
+// 変更前のawaitゾーンへ前倒しする。
+
+test('【QA-H1】deleteCenterLineWithUndo（非struct分岐）: materialMapロードがERR_CATALOG_DUPLICATEを投げたら再スローし、CLは残り壁id集合は不変・undoも積まれない', async () => {
+  const { project, graph } = makeProjectWithGraph();
+  const { xm } = addAdjacentRoomsWithWalls(graph);
+  const materialMap = await loadMaterialMap();
+  await regenerateWalls(graph, { materialMap, project });
+  const wallIdsBefore = new Set(graph.walls.map(w => w.id));
+  const undoBefore = undoManager.peekUndo();
+
+  const dupError = Object.assign(new Error('duplicate'), { code: ERR_CATALOG_DUPLICATE });
+  await assert.rejects(
+    () => deleteCenterLineWithUndo(graph, project, xm, {
+      loadMaterialMapFn: async () => { throw dupError; },
+    }),
+    (e) => e === dupError,
+  );
+
+  assert.equal(graph.shapeMap.has(xm.id), true, 'CLは削除されずに残るはず（何も変更していない段階で拒否）');
+  assert.deepEqual(new Set(graph.walls.map(w => w.id)), wallIdsBefore, '壁id集合は変更前と同じはず');
+  assert.equal(undoManager.peekUndo(), undoBefore, 'undoは積まれないはず');
+});
+
+test('【QA-H1】deleteCenterLineWithUndo（struct分岐）: materialMapロードがERR_CATALOG_DUPLICATEを投げたら再スローし、他階への伝播（propagateGridCenterLineDeletion）はまだ実行されずsaveFloorFnも呼ばれない・structGraphの通り芯も残る', async () => {
+  const { project, p1, p2, y0, y3, cl } = makeTwoFloorsWithGridCL();
+  p1.addWall(cl, 0, true, y0, 0, y3, 0, { isExteriorWall: false }); // p1にclを軸にする壁（willRegenerateWalls:true化）
+
+  const store = new Map([[p2.plane.id, serializeGraph(p2)]]);
+  let saveCalls = 0;
+  const saveFloorFn = async (planeId, bytes) => { saveCalls++; store.set(planeId, bytes); };
+  const undoBefore = undoManager.peekUndo();
+
+  const dupError = Object.assign(new Error('duplicate'), { code: ERR_CATALOG_DUPLICATE });
+  await withProductionPeek(project, store, () =>
+    assert.rejects(
+      () => deleteCenterLineWithUndo(p1, project, cl, {
+        loadMaterialMapFn: async () => { throw dupError; },
+        saveFloorFn,
+      }),
+      (e) => e === dupError,
+    )
+  );
+
+  assert.equal(project.structGraph.shapeMap.has(cl.id), true, '通り芯はstructGraphに残るはず（何も変更していない段階で拒否）');
+  assert.equal(saveCalls, 0, '他階への伝播より前に拒否されるためsaveFloorFnは呼ばれないはず');
+  assert.equal(undoManager.peekUndo(), undoBefore, 'undoは積まれないはず');
+});
+
+test('【QA-M1】deleteCenterLineWithUndo（非struct分岐）: resolveStairContext用のopts.peekがthrowしたらreject・CLは残り壁id集合は不変・undoも積まれない（2階構成）', async () => {
+  const project = new Project('proj', 'test');
+  project.addPlane(0, '1階', 'p1'); // 下階（elevation順で「1つ下の実体階」になる）
+  const { graph } = project.addPlane(3000, '2階', 'p2');
+  const { xm } = addAdjacentRoomsWithWalls(graph);
+  const materialMap = await loadMaterialMap();
+  await regenerateWalls(graph, { materialMap, project });
+  const wallIdsBefore = new Set(graph.walls.map(w => w.id));
+  const undoBefore = undoManager.peekUndo();
+
+  await assert.rejects(
+    () => deleteCenterLineWithUndo(graph, project, xm, {
+      peek: async () => { throw new Error('下階peek失敗'); },
+    }),
+    /下階peek失敗/,
+  );
+
+  assert.equal(graph.shapeMap.has(xm.id), true, 'CLは削除されずに残るはず');
+  assert.deepEqual(new Set(graph.walls.map(w => w.id)), wallIdsBefore, '壁id集合は変更前と同じはず');
+  assert.equal(undoManager.peekUndo(), undoBefore, 'undoは積まれないはず');
+});
+
+test('【QA-H2】deleteCenterLineWithUndo（非struct分岐）: materialMapの通常ロード失敗はERR_CL_DELETE_WALLS_UNAVAILABLEで拒否され無変更', async () => {
+  const { project, graph } = makeProjectWithGraph();
+  const { xm } = addAdjacentRoomsWithWalls(graph);
+  const materialMap = await loadMaterialMap();
+  await regenerateWalls(graph, { materialMap, project });
+  const wallIdsBefore = new Set(graph.walls.map(w => w.id));
+  const undoBefore = undoManager.peekUndo();
+
+  const { toast } = await deleteCenterLineWithUndo(graph, project, xm, {
+    loadMaterialMapFn: async () => { throw new Error('idb'); },
+  });
+
+  assert.equal(toast, ERR_CL_DELETE_WALLS_UNAVAILABLE);
+  assert.equal(graph.shapeMap.has(xm.id), true, 'CLは削除されずに残るはず');
+  assert.deepEqual(new Set(graph.walls.map(w => w.id)), wallIdsBefore, '壁id集合は変更前と同じはず');
+  assert.equal(undoManager.peekUndo(), undoBefore, 'undoは積まれないはず');
+});
+
+test('【QA-M1\'】deleteCenterLineWithUndo（非struct分岐）: 壁再生成が動的importするモジュールの事前読込み（preloadWallRegenerationModules）が失敗したらERR_CL_DELETE_WALLS_UNAVAILABLEで拒否され無変更', async () => {
+  const { project, graph } = makeProjectWithGraph();
+  const { xm } = addAdjacentRoomsWithWalls(graph);
+  const materialMap = await loadMaterialMap();
+  await regenerateWalls(graph, { materialMap, project });
+  const wallIdsBefore = new Set(graph.walls.map(w => w.id));
+  const undoBefore = undoManager.peekUndo();
+
+  const { toast } = await deleteCenterLineWithUndo(graph, project, xm, {
+    preloadWallRegenerationModulesFn: async () => { throw new Error('chunk load failed'); },
+  });
+
+  assert.equal(toast, ERR_CL_DELETE_WALLS_UNAVAILABLE);
+  assert.equal(graph.shapeMap.has(xm.id), true, 'CLは削除されずに残るはず');
+  assert.deepEqual(new Set(graph.walls.map(w => w.id)), wallIdsBefore, '壁id集合は変更前と同じはず');
+  assert.equal(undoManager.peekUndo(), undoBefore, 'undoは積まれないはず');
+});
+
+test('【QA-5】deleteCenterLineWithUndo: 通り芯（struct分岐）の壁再生成はundo/redoで壁id集合とwallFreshnessKeyが往復する', async () => {
+  const { project, graph } = makeProjectWithGraph();
+  const struct = { labeled: true, discipline: Discipline.STRUCT };
+  project.structGraph.addCenterLine(CenterLineType.VERTICAL, 0, struct);
+  const mid = project.structGraph.addCenterLine(CenterLineType.VERTICAL, 4000, struct);
+  project.structGraph.addCenterLine(CenterLineType.VERTICAL, 8000, struct);
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0, struct);
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 4000, struct);
+  const cellA = worldToCell(2000, 2000, graph).key;
+  const cellB = worldToCell(6000, 2000, graph).key;
+  graph.addRoom(new Set([cellA]), '洋室A');
+  graph.addRoom(new Set([cellB]), '洋室B');
+
+  const materialMap = await loadMaterialMap();
+  await regenerateWalls(graph, { materialMap, project });
+  graph.setWallFreshnessKey(wallFreshnessKey(graph, project)); // 一度は仕上げモードを通った階にする
+  const keyBefore = graph.wallFreshnessKey;
+  const wallIdsBefore = new Set(graph.walls.map(w => w.id));
+
+  const { toast } = await deleteCenterLineWithUndo(graph, project, mid);
+  assert.equal(toast, null);
+  const wallIdsAfter = new Set(graph.walls.map(w => w.id));
+  assert.ok(wallIdsAfter.size > 0, '削除後も外壁は生成されているはず');
+  assert.notDeepEqual([...wallIdsAfter].sort(), [...wallIdsBefore].sort(), '壁は全削除→再生成されるため旧壁idは残らないはず');
+
+  undoManager.undo();
+  assert.deepEqual(new Set(graph.walls.map(w => w.id)), wallIdsBefore, 'undoで壁id集合が削除前に戻るはず');
+  assert.equal(graph.wallFreshnessKey, keyBefore, 'undoで鍵も削除前に戻るはず');
+
+  undoManager.redo();
+  assert.deepEqual(new Set(graph.walls.map(w => w.id)), wallIdsAfter, 'redoで壁id集合が削除後に戻るはず');
+  assert.equal(graph.wallFreshnessKey, keyBefore, '鍵の入力自体は部屋の併合前後で変わらないため、redo後もkeyBeforeと同じ値のはず');
+});
+
+test('【QA-6】deleteCenterLineWithUndo（struct分岐・在来木造）: 通り芯削除で間仕切り由来の梁芯が道連れに消え、外周の梁芯は同じidで残る', async () => {
+  const { project, graph } = makeProjectWithGraph();
+  graph.structureOverride = TRADITIONAL_WOOD_STRUCTURE;
+  const struct = { labeled: true, discipline: Discipline.STRUCT };
+  project.structGraph.addCenterLine(CenterLineType.VERTICAL, 0, struct);
+  const mid = project.structGraph.addCenterLine(CenterLineType.VERTICAL, 4000, struct);
+  project.structGraph.addCenterLine(CenterLineType.VERTICAL, 8000, struct);
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0, struct);
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 4000, struct);
+  const cellA = worldToCell(2000, 2000, graph).key;
+  const cellB = worldToCell(6000, 2000, graph).key;
+  graph.addRoom(new Set([cellA]), '洋室A');
+  graph.addRoom(new Set([cellB]), '洋室B');
+
+  const materialMap = await loadMaterialMap();
+  await regenerateWalls(graph, { materialMap, project });
+  // このfixtureはx=0,4000,8000・y=0,4000の全境界が通り芯（struct）——autoFillWallBeamAxesの
+  // 重複ガード（findBeamAnchorCL。通り芯自身がアンカーになるため同座標にFUSE梁芯を作らない）に
+  // より、recomputeStructuralForGraphを呼んでも実際にはどの座標にもFUSE梁芯は生成されない
+  // （壁の軸が通り芯と完全に同座標のため、通り芯自身がアンカーとして扱われる）。ここでは
+  // 「既に何らかの経緯でFUSE梁芯が存在していた」状態を手で再現し（QA-7と同じ技法）、
+  // 壁由来梁芯の道連れ削除（1パス）そのものの正しさ（削除で失われた座標だけを消し、
+  // 壁が残る座標は同じidのまま残す）を検証する。
+  const mid_ = graph.addCenterLine(CenterLineType.VERTICAL, 4000, { labeled: false, discipline: Discipline.FUSE, refId: null });
+  const perimeterAxes = {
+    xLeft:   graph.addCenterLine(CenterLineType.VERTICAL,   0,    { labeled: false, discipline: Discipline.FUSE, refId: null }),
+    xRight:  graph.addCenterLine(CenterLineType.VERTICAL,   8000, { labeled: false, discipline: Discipline.FUSE, refId: null }),
+    yTop:    graph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: false, discipline: Discipline.FUSE, refId: null }),
+    yBottom: graph.addCenterLine(CenterLineType.HORIZONTAL, 4000, { labeled: false, discipline: Discipline.FUSE, refId: null }),
+  };
+  const midAxisId = mid_.id;
+  const perimeterIdsBefore = Object.fromEntries(Object.entries(perimeterAxes).map(([k, cl]) => [k, cl.id]));
+
+  const { toast } = await deleteCenterLineWithUndo(graph, project, mid, { peekBelow: async () => null });
+
+  assert.equal(toast, null);
+  assert.equal(graph.shapeMap.has(midAxisId), false, '間仕切り(x=4000)の壁が消えたため、その座標の梁芯は道連れに消えるはず');
+  for (const [k, args] of [['xLeft', [true, 0]], ['xRight', [true, 8000]], ['yTop', [false, 0]], ['yBottom', [false, 4000]]]) {
+    const cl = findWallBeamAxisCL(graph, ...args);
+    assert.ok(cl, `外周(${k})は壁がまだ存在するため梁芯も残っているはず`);
+    assert.equal(cl.id, perimeterIdsBefore[k], `外周(${k})の壁由来梁芯は同じidのまま残るはず（二重削除・二重生成なし）`);
+  }
+});
+
+test('【QA-7】deleteCenterLineWithUndo（非struct分岐・壁再生成後の1パス）: 保護された壁由来梁芯（lockedの柱が乗る）は道連れに消えない', async () => {
+  const { project, graph } = makeProjectWithGraph();
+  graph.structureOverride = TRADITIONAL_WOOD_STRUCTURE; // wallBeamSourcesForがsourcesBeforeを拾えるように
+  const { xm, y0 } = addAdjacentRoomsWithWalls(graph);
+  const materialMap = await loadMaterialMap();
+  await regenerateWalls(graph, { materialMap, project });
+
+  // 前提: 内部間仕切り(x=4000)の壁がwallBeamSourcesForのsourcesBeforeに含まれる（QA指摘L1'）
+  // ——この座標が実際に「削除で喪失しうるソース」として評価されることを、道連れ削除の結果を見る
+  // 前に直接確認しておく（sourcesBefore自体はdeleteCenterLineWithUndo内部でしか計算しないため
+  // ここで同じ関数を呼んで裏取りする）。
+  const sourcesBefore = wallBeamSourcesFor(graph, project, null);
+  assert.ok(sourcesBefore.some(s => s.isVertical && Math.abs(s.coord - 4000) < 1),
+    '前提: 内部間仕切り(x=4000)の壁がwallBeamSourcesForのソースに含まれているはず');
+
+  // 内部間仕切り(x=4000)の壁を根拠に、既に構造再計算で生成済みだったと想定する壁由来梁芯を
+  // 手で置く（sourcesBefore/sourcesAfterの比較でこの座標が「喪失」と判定される対象）。
+  // lockedの柱を乗せて保護する（isProtectedWallBeamAxis===true）。
+  const beamAxis = graph.addCenterLine(CenterLineType.VERTICAL, 4000, { labeled: false, discipline: Discipline.FUSE, refId: null });
+  const beamAxisId = beamAxis.id;
+  graph.addColumn(StructuralMaterialType.WOOD, 'SEC-COL', beamAxis, y0, { dimensionStatus: 'locked' });
+
+  const { toast } = await deleteCenterLineWithUndo(graph, project, xm, { peekBelow: async () => null });
+
+  assert.equal(toast, null);
+  assert.equal(graph.shapeMap.has(beamAxisId), true, 'lockedの柱が乗る壁由来梁芯は道連れに消えないはず（保護）');
+});
+
+test('【QA-L1\'対照】deleteCenterLineWithUndo（非struct分岐・壁再生成後の1パス）: 保護されない壁由来梁芯（柱を乗せない）は道連れに消える', async () => {
+  const { project, graph } = makeProjectWithGraph();
+  graph.structureOverride = TRADITIONAL_WOOD_STRUCTURE;
+  const { xm } = addAdjacentRoomsWithWalls(graph);
+  const materialMap = await loadMaterialMap();
+  await regenerateWalls(graph, { materialMap, project });
+
+  const sourcesBefore = wallBeamSourcesFor(graph, project, null);
+  assert.ok(sourcesBefore.some(s => Math.abs(s.coord - 4000) < 1),
+    '前提: 内部間仕切り(x=4000)の壁がwallBeamSourcesForのソースに含まれているはず');
+
+  // QA-7と同じ座標に壁由来梁芯を手で置くが、柱は乗せない（保護なし）。
+  const beamAxis = graph.addCenterLine(CenterLineType.VERTICAL, 4000, { labeled: false, discipline: Discipline.FUSE, refId: null });
+  const beamAxisId = beamAxis.id;
+
+  const { toast } = await deleteCenterLineWithUndo(graph, project, xm, { peekBelow: async () => null });
+
+  assert.equal(toast, null);
+  assert.equal(graph.shapeMap.has(beamAxisId), false, '柱が乗らない（保護なし）壁由来梁芯は道連れに消えるはず');
+});
+
+test('【QA-8】deleteCenterLineWithUndo（struct分岐・在来木造）: opts.peekBelowがthrowしたらreject・structGraph／他階（p2）は不変・undoも積まれない', async () => {
+  const { project, p1, p2, y0, y3, cl } = makeTwoFloorsWithGridCL();
+  p1.structureOverride = TRADITIONAL_WOOD_STRUCTURE;
+  p1.addWall(cl, 0, true, y0, 0, y3, 0, { isExteriorWall: false }); // willRegenerateWalls:true化
+
+  const store = new Map([[p2.plane.id, serializeGraph(p2)]]);
+  const p2BytesBefore = store.get(p2.plane.id);
+  let saveCalls = 0;
+  const saveFloorFn = async (planeId, bytes) => { saveCalls++; store.set(planeId, bytes); };
+  const undoBefore = undoManager.peekUndo();
+
+  await withProductionPeek(project, store, () =>
+    assert.rejects(
+      () => deleteCenterLineWithUndo(p1, project, cl, {
+        peekBelow: async () => { throw new Error('下階peek失敗'); },
+        saveFloorFn,
+      }),
+      /下階peek失敗/,
+    )
+  );
+
+  assert.equal(project.structGraph.shapeMap.has(cl.id), true, '通り芯はstructGraphに残るはず');
+  assert.equal(saveCalls, 0, '他階への伝播はまだ実行されないはず');
+  assert.equal(store.get(p2.plane.id), p2BytesBefore, '他階(p2)のバイト列は不変のはず');
+  assert.equal(undoManager.peekUndo(), undoBefore, 'undoは積まれないはず');
+});
+
+test('【QA-9・H1】deleteCenterLineWithUndo（非struct分岐）: 変更後の区間（壁再生成）で例外が起きたら後始末（部屋併合）を含めて巻き戻して再スローする', async () => {
+  const { project, graph } = makeProjectWithGraph();
+  const { xm } = addAdjacentRoomsWithWalls(graph);
+  const materialMap = await loadMaterialMap();
+  await regenerateWalls(graph, { materialMap, project });
+  const wallIdsBefore = new Set(graph.walls.map(w => w.id));
+  const roomsBefore = graph.rooms.length;
+  const undoBefore = undoManager.peekUndo();
+
+  const boom = new Error('regenerateWalls boom');
+  await assert.rejects(
+    () => deleteCenterLineWithUndo(graph, project, xm, {
+      regenerateWallsFn: async () => { throw boom; },
+    }),
+    (e) => e === boom,
+  );
+
+  assert.equal(graph.shapeMap.has(xm.id), true, '中心線は巻き戻されて残るはず');
+  assert.deepEqual(new Set(graph.walls.map(w => w.id)), wallIdsBefore, '壁id集合も削除前へ巻き戻るはず');
+  assert.equal(graph.rooms.length, roomsBefore, '部屋の併合（後始末）も巻き戻るはず');
+  assert.equal(undoManager.peekUndo(), undoBefore, 'undoは積まれないはず');
+});
+
+test('【QA-9・H1】deleteCenterLineWithUndo（struct分岐）: 変更後の区間（壁再生成）で例外が起きたら通り芯・後始末を含めて巻き戻して再スローする', async () => {
+  const { project, graph } = makeProjectWithGraph();
+  const struct = { labeled: true, discipline: Discipline.STRUCT };
+  project.structGraph.addCenterLine(CenterLineType.VERTICAL, 0, struct);
+  const mid = project.structGraph.addCenterLine(CenterLineType.VERTICAL, 4000, struct);
+  project.structGraph.addCenterLine(CenterLineType.VERTICAL, 8000, struct);
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0, struct);
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 4000, struct);
+  const cellA = worldToCell(2000, 2000, graph).key;
+  const cellB = worldToCell(6000, 2000, graph).key;
+  graph.addRoom(new Set([cellA]), '洋室A');
+  graph.addRoom(new Set([cellB]), '洋室B');
+  const materialMap = await loadMaterialMap();
+  await regenerateWalls(graph, { materialMap, project });
+  const wallIdsBefore = new Set(graph.walls.map(w => w.id));
+  const midId = mid.id;
+  const undoBefore = undoManager.peekUndo();
+
+  const boom = new Error('regenerateWalls boom');
+  await assert.rejects(
+    () => deleteCenterLineWithUndo(graph, project, mid, {
+      regenerateWallsFn: async () => { throw boom; },
+    }),
+    (e) => e === boom,
+  );
+
+  assert.equal(project.structGraph.shapeMap.has(midId), true, '通り芯はstructGraphへ巻き戻されるはず');
+  assert.deepEqual(new Set(graph.walls.map(w => w.id)), wallIdsBefore, '壁id集合も削除前へ巻き戻るはず');
+  assert.equal(undoManager.peekUndo(), undoBefore, 'undoは積まれないはず');
+});
+
+test('【QA-M】deleteCenterLineWithUndo（非struct分岐）: refreshWallsForGraphのawait後に階が切り替わっていたら例外を投げて安全網（restoreGraph）へ渡し、巻き戻して再スローする・undoも積まれない（実I/Oの有無に頼らない防御。裁定変更）', async () => {
+  const { project, graph } = makeProjectWithGraph();
+  const { xm } = addAdjacentRoomsWithWalls(graph);
+  const materialMap = await loadMaterialMap();
+  await regenerateWalls(graph, { materialMap, project });
+  const wallIdsBefore = new Set(graph.walls.map(w => w.id));
+  const undoBefore = undoManager.peekUndo();
+  project.addPlane(3000, '2階', 'p2');
+
+  await assert.rejects(
+    () => deleteCenterLineWithUndo(graph, project, xm, {
+      regenerateWallsFn: async (g, regenOpts) => {
+        project.activePlaneId = 'p2'; // await中に階が切り替わったことを模す（実I/Oは無いまま）
+        return regenerateWalls(g, regenOpts);
+      },
+    }),
+    /階切替・中心線の復活を検知しました/,
+  );
+
+  assert.equal(graph.shapeMap.has(xm.id), true, 'CLは巻き戻されて残るはず');
+  assert.deepEqual(new Set(graph.walls.map(w => w.id)), wallIdsBefore, '壁id集合も削除前へ巻き戻るはず');
+  assert.equal(undoManager.peekUndo(), undoBefore, 'undoは積まれないはず');
+});
+
+test('【QA-M】deleteCenterLineWithUndo（struct分岐）: refreshWallsForGraphのawait後に階が切り替わっていたら例外を投げて安全網（restoreStructCLs→restoreGraph→rollbackFloorRecords）へ渡し、巻き戻して再スローする・undoも積まれない（実I/Oの有無に頼らない防御。裁定変更）', async () => {
+  const { project, graph } = makeProjectWithGraph();
+  const struct = { labeled: true, discipline: Discipline.STRUCT };
+  project.structGraph.addCenterLine(CenterLineType.VERTICAL, 0, struct);
+  const mid = project.structGraph.addCenterLine(CenterLineType.VERTICAL, 4000, struct);
+  project.structGraph.addCenterLine(CenterLineType.VERTICAL, 8000, struct);
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0, struct);
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 4000, struct);
+  const cellA = worldToCell(2000, 2000, graph).key;
+  const cellB = worldToCell(6000, 2000, graph).key;
+  graph.addRoom(new Set([cellA]), '洋室A');
+  graph.addRoom(new Set([cellB]), '洋室B');
+  const materialMap = await loadMaterialMap();
+  await regenerateWalls(graph, { materialMap, project });
+  const wallIdsBefore = new Set(graph.walls.map(w => w.id));
+  const midId = mid.id;
+  const undoBefore = undoManager.peekUndo();
+  const { graph: p2 } = project.addPlane(3000, '2階', 'p2');
+  const store = new Map([[p2.plane.id, serializeGraph(p2)]]);
+
+  await withProductionPeek(project, store, () =>
+    assert.rejects(
+      () => deleteCenterLineWithUndo(graph, project, mid, {
+        regenerateWallsFn: async (g, regenOpts) => {
+          project.activePlaneId = 'p2';
+          return regenerateWalls(g, regenOpts);
+        },
+      }),
+      /階切替・通り芯の消失を検知しました/,
+    )
+  );
+
+  assert.equal(project.structGraph.shapeMap.has(midId), true, '通り芯はstructGraphへ巻き戻されるはず');
+  assert.deepEqual(new Set(graph.walls.map(w => w.id)), wallIdsBefore, '壁id集合も削除前へ巻き戻るはず');
+  assert.equal(undoManager.peekUndo(), undoBefore, 'undoは積まれないはず');
+});
+
+// ---- whenCenterLineOpsIdle（QA指摘M・2026-09-27。テスト(i)）----
+
+test('whenCenterLineOpsIdle: deleteCenterLineWithUndo実行中は未解決、完了後に解決する', async () => {
+  const { project, graph } = makeProjectWithGraph();
+  const { xm } = addAdjacentRoomsWithWalls(graph);
+  const materialMap = await loadMaterialMap();
+  await regenerateWalls(graph, { materialMap, project });
+
+  let releaseGate;
+  const gate = new Promise(resolve => { releaseGate = resolve; });
+  const deletePromise = deleteCenterLineWithUndo(graph, project, xm, {
+    regenerateWallsFn: async (g, regenOpts) => {
+      await gate; // deleteCenterLineWithUndoの実行中であることを保証するため待たせる
+      return regenerateWalls(g, regenOpts);
+    },
+  });
+
+  let idleResolved = false;
+  const idlePromise = whenCenterLineOpsIdle().then(() => { idleResolved = true; });
+  await Promise.resolve();
+  await Promise.resolve();
+  assert.equal(idleResolved, false, '実行中はwhenCenterLineOpsIdleが未解決のはず');
+
+  releaseGate();
+  await deletePromise;
+  await idlePromise;
+  assert.equal(idleResolved, true, '完了後はwhenCenterLineOpsIdleが解決するはず');
+});
+
+test('whenCenterLineOpsIdle: deleteCenterLineWithUndoが例外を投げても解決する（finallyで必ず解除）', async () => {
+  const { project, graph } = makeProjectWithGraph();
+  const { xm } = addAdjacentRoomsWithWalls(graph);
+  const materialMap = await loadMaterialMap();
+  await regenerateWalls(graph, { materialMap, project });
+
+  const boom = new Error('regenerateWalls boom');
+  await assert.rejects(
+    () => deleteCenterLineWithUndo(graph, project, xm, {
+      regenerateWallsFn: async () => { throw boom; },
+    }),
+    (e) => e === boom,
+  );
+
+  let idleResolved = false;
+  await whenCenterLineOpsIdle().then(() => { idleResolved = true; });
+  assert.equal(idleResolved, true, '例外後もwhenCenterLineOpsIdleは解決するはず（永久に待たせない）');
+});
+
+// ---- floorSwapManager.deactivate相当（保存→clearFloorData→階切替）の再現（QA指摘M・テスト(iii)）----
+// QA実測 qa-switch.test.mjs と同型: (b)の防御が本番のswitchFloorの手順そのものを検知したとき、
+// 独自に{toast:null}を返さず例外を投げて安全網へ渡し、正しく巻き戻して再スローすることを確認する。
+
+test('【QA-M-iii】deleteCenterLineWithUndo（非struct分岐）: regenerateWallsFn内でfloorSwapManager.deactivate相当の手順（保存→clearFloorData→activePlaneId変更）を再現すると、例外が安全網へ渡り巻き戻して再スローする・undoは積まれない', async () => {
+  const { project, graph } = makeProjectWithGraph();
+  const { xm } = addAdjacentRoomsWithWalls(graph);
+  const materialMap = await loadMaterialMap();
+  await regenerateWalls(graph, { materialMap, project });
+  const wallIdsBefore = new Set(graph.walls.map(w => w.id));
+  const undoBefore = undoManager.peekUndo();
+  project.addPlane(3000, '2階', 'p2');
+  const idbStore = new Map();
+
+  await assert.rejects(
+    () => deleteCenterLineWithUndo(graph, project, xm, {
+      // 本番のfloorSwapManager.deactivate（storage/FloorSwapManager.js:72-76）と同じ手順:
+      // saveFloor相当（Mapストアへ保存）→graph.clearFloorData()→activePlaneId変更。
+      regenerateWallsFn: async () => {
+        idbStore.set(graph.plane.id, serializeGraph(graph));
+        graph.clearFloorData();
+        project.activePlaneId = 'p2';
+        return { regenerated: false, undoFns: [], redoFns: [] };
+      },
+    }),
+    /階切替・中心線の復活を検知しました/,
+  );
+
+  assert.equal(graph.shapeMap.has(xm.id), true, 'CLはclearFloorData後でも安全網の巻き戻しで復元されるはず');
+  assert.deepEqual(new Set(graph.walls.map(w => w.id)), wallIdsBefore, '壁id集合も削除前へ巻き戻るはず');
+  assert.equal(undoManager.peekUndo(), undoBefore, 'undoは積まれないはず');
+});
+
+test('【QA-M-iii】deleteCenterLineWithUndo（struct分岐）: regenerateWallsFn内でfloorSwapManager.deactivate相当の手順を再現すると、例外が安全網へ渡り通り芯・後始末を含めて巻き戻して再スローする・undoは積まれない', async () => {
+  const { project, graph } = makeProjectWithGraph();
+  const struct = { labeled: true, discipline: Discipline.STRUCT };
+  project.structGraph.addCenterLine(CenterLineType.VERTICAL, 0, struct);
+  const mid = project.structGraph.addCenterLine(CenterLineType.VERTICAL, 4000, struct);
+  project.structGraph.addCenterLine(CenterLineType.VERTICAL, 8000, struct);
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0, struct);
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 4000, struct);
+  const cellA = worldToCell(2000, 2000, graph).key;
+  const cellB = worldToCell(6000, 2000, graph).key;
+  graph.addRoom(new Set([cellA]), '洋室A');
+  graph.addRoom(new Set([cellB]), '洋室B');
+  const materialMap = await loadMaterialMap();
+  await regenerateWalls(graph, { materialMap, project });
+  const wallIdsBefore = new Set(graph.walls.map(w => w.id));
+  const midId = mid.id;
+  const undoBefore = undoManager.peekUndo();
+  const { graph: p2 } = project.addPlane(3000, '2階', 'p2');
+  const store = new Map([[p2.plane.id, serializeGraph(p2)]]);
+  const idbStore = new Map();
+
+  await withProductionPeek(project, store, () =>
+    assert.rejects(
+      () => deleteCenterLineWithUndo(graph, project, mid, {
+        regenerateWallsFn: async () => {
+          idbStore.set(graph.plane.id, serializeGraph(graph));
+          graph.clearFloorData();
+          project.activePlaneId = 'p2';
+          return { regenerated: false, undoFns: [], redoFns: [] };
+        },
+      }),
+      /階切替・通り芯の消失を検知しました/,
+    )
+  );
+
+  assert.equal(project.structGraph.shapeMap.has(midId), true, '通り芯はstructGraphへ巻き戻されるはず');
+  assert.deepEqual(new Set(graph.walls.map(w => w.id)), wallIdsBefore, '壁id集合も削除前へ巻き戻るはず');
+  assert.equal(undoManager.peekUndo(), undoBefore, 'undoは積まれないはず');
+});
+
+test('【QA-M1\'追加】deleteCenterLineWithUndo（struct分岐・2階構成）: 変更後の区間で例外が起きたら他階(p2)もrollbackFloorRecordsで伝播前の壁構成に戻り、saveFloorFnは伝播＋巻き戻しの計2回呼ばれ、undoは積まれない', async () => {
+  const { project, p1, p2, y0, y3, cl } = makeTwoFloorsWithGridCL();
+  // p1: clとは無関係な壁を1本持たせる（cl削除後もp1.walls.length>0を保ち、
+  // refreshWallsForGraph自身のhasNeverBuiltWalls早期returnでregenerateWallsFnが
+  // 呼ばれずに終わってしまわないようにする）。
+  const p1x2 = p1.addCenterLine(CenterLineType.VERTICAL, 2000, { labeled: false, discipline: Discipline.ARCH });
+  p1.addWall(p1x2, 0, true, y0, 0, y3, 0, { isExteriorWall: false });
+  const p2Wall = p2.addWall(cl, 0, true, y0, 0, y3, 0, { isExteriorWall: false }); // p2: clを軸に持つ壁（伝播でdetachされる）
+  const p2WallId = p2Wall.id;
+
+  const store = new Map([[p2.plane.id, serializeGraph(p2)]]);
+  let saveCalls = 0;
+  const saveFloorFn = async (planeId, bytes) => { saveCalls++; store.set(planeId, bytes); };
+  const undoBefore = undoManager.peekUndo();
+
+  const boom = new Error('regenerateWalls boom');
+  await withProductionPeek(project, store, () =>
+    assert.rejects(
+      () => deleteCenterLineWithUndo(p1, project, cl, {
+        saveFloorFn,
+        regenerateWallsFn: async () => { throw boom; },
+      }),
+      (e) => e === boom,
+    )
+  );
+
+  assert.equal(saveCalls, 2, 'saveFloorFnは伝播1回＋巻き戻し1回の計2回呼ばれるはず');
+  const p2After = decodeFloor(project, p2.plane, store.get(p2.plane.id));
+  assert.equal(p2After.walls.some(w => w.id === p2WallId), true, '他階(p2)の壁は伝播前の構成へ巻き戻るはず');
+  assert.equal(undoManager.peekUndo(), undoBefore, 'undoは積まれないはず');
 });
 
 test('deleteCenterLineWithUndo: 通り芯を参照する自階の柱・梁・基礎は削除直後に撤去され、undoで復元される（removeDependentsOfCenterLine）', async () => {

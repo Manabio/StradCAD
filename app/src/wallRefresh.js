@@ -23,6 +23,19 @@ import { recomputeActiveStructural, reflectStructuralToOtherFloors } from './str
 import { ERR_CATALOG_DUPLICATE } from './error.js';
 
 /**
+ * 壁を一度も持ったことのない階か（wallFreshnessKey未設定かつ壁0本＝仕上げモード未着手）。
+ * refreshWallsForGraph 自身の sweep 対象外ガード（裁定案A）と、
+ * transform/centerLineOps.js deleteCenterLineWithUndo が壁再生成に必要な実I/O
+ * （materialMapロード・resolveStairContext用の下階peek）を変更前に前倒しする際、この階を
+ * 早期に除外して無駄なI/Oを避けるために共有する単一の判定（QA指摘H1/H2/M1是正・2026-09-27）。
+ * @param {object} graph
+ * @returns {boolean}
+ */
+export function hasNeverBuiltWalls(graph) {
+  return graph.wallFreshnessKey == null && graph.walls.length === 0;
+}
+
+/**
  * graph 1件分の「鍵不一致なら壁を作り直す」処理本体。ステップ1〜3で finishBoundary.js の
  * runFinishExitBoundary が積んでいるのと同じ形の undo/redo を返す（呼び出し側が pushUndo なら
  * 1エントリとして undoManager.push する。他階は使い捨て graph のため pushUndo=false で呼ぶ）。
@@ -30,16 +43,27 @@ import { ERR_CATALOG_DUPLICATE } from './error.js';
  *   materialMap の取得関数（呼び出し元 refreshWallsAllFloors が1個だけ生成し全階で共有する）。
  *   鍵比較まで materialMap は不要なため、鍵一致の階しか無ければ一度も呼ばれない
  *   （読込み時の起動クリティカルパス対策。ステップ5）。
+ * @param {object} opts
+ * @param {boolean} [opts.force=false] - true なら鍵一致でも作り直す（CL削除直後の明示再生成に使う。
+ *   wallFreshnessKey は下地材コード・実効主構造・部屋の壁材/壁仕上げだけを入力にしており CL位相
+ *   （部屋の分割・併合）を含まないため、CL削除で壁の形が変わっても鍵が一致したままになりうる——
+ *   transform/centerLineOps.js deleteCenterLineWithUndo が削除直後の壁再生成でこれを force:true
+ *   で呼ぶ。hasNeverBuiltWalls の「壁を一度も持ったことのない階」ガードは force でも対象外のまま）。
+ * @param {typeof regenerateWalls} [opts.regenerateWallsFn=regenerateWalls] - テスト用の差し替え
+ *   （既定は finish/wallRegeneration.js の regenerateWalls。変更後の区間で例外が起きた場合の
+ *   呼び出し元の巻き戻しを検証するための注入口——QA指摘H1のテスト9）。
  * @returns {Promise<boolean>} この graph の壁を実際に作り直したか
  */
-async function refreshWallsForGraph(graph, project, getMaterialMap, { peek, pushUndo }) {
-  // 壁を一度も持ったことのない階（wallFreshnessKey未設定かつ壁0本＝仕上げモード未着手）は
-  // sweep の対象外にする（裁定案A）。conformWoodBacking も走らせず鍵も書かない——仕上げモードに
-  // 入って脱出したときに初めて壁を持つ、という現状の挙動を変えない。壁0本のまま
-  // regenerateWalls を走らせて壁を新規生成すると、woodAutoFill.js の autoFillWoodColumns が
-  // 「壁が交点方式に切り替わった」とみなし、壁の無い階の通り芯交点auto柱を保全する裁定
-  // （2026-09-14「壁が無い階は生成も撤去もしない（既存の柱を保全）」）が外れて無通知に撤去される。
-  if (graph.wallFreshnessKey == null && graph.walls.length === 0) return false;
+export async function refreshWallsForGraph(
+  graph, project, getMaterialMap, { peek, pushUndo, force = false, regenerateWallsFn = regenerateWalls },
+) {
+  // 壁を一度も持ったことのない階は sweep の対象外にする（裁定案A。hasNeverBuiltWalls参照）。
+  // conformWoodBacking も走らせず鍵も書かない——仕上げモードに入って脱出したときに初めて壁を
+  // 持つ、という現状の挙動を変えない。壁0本のまま regenerateWalls を走らせて壁を新規生成すると、
+  // woodAutoFill.js の autoFillWoodColumns が「壁が交点方式に切り替わった」とみなし、壁の無い階の
+  // 通り芯交点auto柱を保全する裁定（2026-09-14「壁が無い階は生成も撤去もしない（既存の柱を保全）」）
+  // が外れて無通知に撤去される。
+  if (hasNeverBuiltWalls(graph)) return false;
 
   // 在来木造: 共通仕様の壁下地材を柱同寸×30へ自動選択する（従来 runFinishEntryBoundary と同じ
   // 呼び出し。下地コードは wallFreshnessKey の入力のため、これを鍵比較より前に行わないと
@@ -49,7 +73,10 @@ async function refreshWallsForGraph(graph, project, getMaterialMap, { peek, push
 
   const keyBefore = graph.wallFreshnessKey;
   const keyNow = wallFreshnessKey(graph, project);
-  if (keyNow === keyBefore) return false; // 鍵一致: 何もしない（saveFloorもしない・materialMapも要求しない）
+  // 鍵一致: 何もしない（saveFloorもしない・materialMapも要求しない）。force指定時は鍵一致でも
+  // 素通りさせない——CL削除直後は鍵の入力（下地材・主構造・柱断面・部屋の壁材/壁仕上げ）が
+  // 変わらないまま部屋の分割/併合だけが起きうるため。
+  if (!force && keyNow === keyBefore) return false;
 
   // 鍵不一致の階が実際に見つかった時点で初めて materialMap を要求する（getMaterialMap が
   // 呼び出し元で1個にメモ化されているため、複数階が不一致でもロードは1回だけになる）。
@@ -70,7 +97,7 @@ async function refreshWallsForGraph(graph, project, getMaterialMap, { peek, push
 
   const { stairUnderEntries, extraStairOpenings } = await resolveStairContext(graph, project, peek);
   const backingCentersBefore = wallBackingCenters(graph);
-  const { regenerated, undoFns, redoFns } = await regenerateWalls(graph, {
+  const { regenerated, undoFns, redoFns } = await regenerateWallsFn(graph, {
     materialMap, project, stairUnderEntries, extraStairOpenings,
   });
   // 現状 materialMap はこの時点で必ず truthy（直前の getMaterialMap() が失敗していれば既に

@@ -16,6 +16,7 @@ import { encodeProjectInfo, decodeProjectInfo } from './storage/projectInfo.js';
 import { clearDirty, markDirty } from './dirtyState.js';
 import { acquireSessionLock } from './storage/sessionLock.js';
 import { SpatialIndex } from './transform/SpatialIndex.js';
+import { whenCenterLineOpsIdle } from './transform/centerLineOps.js';
 import {
   serializePlanes, decodePlanes, serializeSite, decodeSite, restoreSite, decodeFloorSnapshot,
   serializeGraph, restoreGraph,
@@ -601,6 +602,13 @@ export async function removeFloor(planeId) {
  * @param {string} nextPlaneId  切り替え先の plane.id
  */
 export async function switchFloor(nextPlaneId) {
+  // CL削除（transform/centerLineOps.js deleteCenterLineWithUndo）の実行中に
+  // floorSwapManager.deactivate（対象階のIDB保存＋graph.clearFloorData()）が割り込むと、
+  // 削除処理が握っているbefore/beforeArchスナップショットの復元先（クリア済みの非アクティブ
+  // graph）が失われ、undoも無いまま壊れる（QA指摘M・2026-09-27）。deactivateの前に
+  // 削除中のCL操作が無いことを待ち合わせる。
+  await whenCenterLineOpsIdle();
+
   const currentPlane = project.activePlane;
   const currentGraph = project.activeGraph;
   if (!currentPlane || !currentGraph) return;
