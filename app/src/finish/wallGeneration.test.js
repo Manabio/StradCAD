@@ -107,6 +107,34 @@ test('generateExteriorWalls: 屋内室[0,4000]・屋外室[4000,8000]が隣接�
     '屋外室の外側辺(x=8000)には壁が出ないはず');
 });
 
+// ---- 部分指定の部屋が親と同一セルを持つ退化ケースでの重複生成 ----
+// finish/roomReinterpret.js normalizePartialDominance/reinterpretRoomsOnEntryは、1辺喪失で
+// 部分指定化した子部屋のcellsに併合後の全セルを追加する（子の同一性・仕上げ情報を維持するため）。
+// 1セルの部屋同士が併合される最小構成では子のcellsが親と完全一致する退化ケースになり、外壁
+// ループ抽出（computeExternalEdgeParams）が親・子の両方から同一エッジを拾ってしまう。
+// computeExteriorWallSegments（描画用。FinishModeLayer.jsx）には同一エッジをsegId方式で
+// 重複排除する既存ロジックがあるが、実際の壁を生成するgenerateExteriorWallsには無かった
+// （mergeSegmentsは同一始終点のセグメントを結合できないため、そのまま2本の壁になる）。
+test('generateExteriorWalls: 部分指定の子部屋が親と同一セルを持つ退化ケースでも外壁は重複生成されない（各辺1本のまま）', () => {
+  const graph = makeGraph();
+  const ARCH = { labeled: false, discipline: Discipline.ARCH };
+  const x0 = graph.addCenterLine(CenterLineType.VERTICAL,   0,    ARCH);
+  const x1 = graph.addCenterLine(CenterLineType.VERTICAL,   8000, ARCH);
+  const y0 = graph.addCenterLine(CenterLineType.HORIZONTAL, 0,    ARCH);
+  const y1 = graph.addCenterLine(CenterLineType.HORIZONTAL, 6000, ARCH);
+  const cellKey = `${x0.id}:${y0.id}:${x1.id}:${y1.id}`;
+
+  const parent = graph.addRoom(new Set([cellKey]), '親');
+  const child = graph.addRoom(new Set([cellKey]), '子', undefined, new Set([parent.id]));
+  assert.deepEqual([...child.cells], [...parent.cells], '前提: 子は親と同一セルを持つ退化ケース');
+
+  const walls = generateExteriorWalls(graph);
+  assert.equal(walls.length, 4, `外壁は各辺1本＝4本のはず（実際:${walls.length}本）`);
+  const positions = walls.map(w =>
+    `${w.isVertical ? 'V' : 'H'}${w.axisCL.id}:${w.clStart.id}:${w.clEnd.id}`);
+  assert.equal(new Set(positions).size, positions.length, `同一エッジの重複生成が無いはず（実際:${JSON.stringify(positions)}）`);
+});
+
 test('generateExteriorWalls: 屋外部屋のみ（屋内部屋が無い）場合は壁を生成しない', () => {
   const graph = makeGraph();
   const ARCH = { labeled: false, discipline: Discipline.ARCH };

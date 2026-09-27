@@ -17,11 +17,27 @@
 // chamferWalls reaction（core/planGraph.js）の組合せが完全な冪等性を持たないという、本タスク
 // （構造同期・案P）とは無関係な既存の性質——修正は別タスクとしてリードがユーザーへ報告する
 // （このprobeでは検出だけ行い、「注意」として表示するに留める。NGにはしない）。
+//
+// I5（2026-09-28是正）: 壁参照（片端含む。hasExternalCenterLineReferencesの
+// _structuralRefsToCL.walls が axisCL/clStart/clEnd のいずれも見る）・柱/梁/基礎等の部材参照・
+// セル参照（referencesClInCellsOrRecords）のいずれか1つでも持つ階は再生成対象（detach→force
+// 再生成で壁は全入れ替えになり旧idは残らない）。いずれも持たない階（orphanOnly）だけ、detachも
+// 再生成も行われない（centerLineOps.test.js の orphanOnly 系テストが固定）。
+// 検出力の注意（QA指摘・2026-09-28是正）: h.bytePeek（restoreGraph経由）で復元した壁は
+// graphSnapshot.js の resolveCL が structGraph に無いCL参照（axisCL/clStart/clEndのいずれか）を
+// 持つ壁を復元時に黙って捨てるため、「復元済みgraphに削除id参照の壁が無い」だけを見ると、他階
+// 伝播が全く配線されていなくても（=そもそも他階を保存すらしていなくても）常にOKになってしまう
+// （store の生バイト列自体は削除前のまま＝axisCLId/clStartId/clEndIdに削除idを生で含んでいるが、
+// bytePeekの復元時にそのCLがstructGraphから消えているため、resolveCL失敗で壁ごと消えて見えなく
+// なるだけ）。以下は decodeFloorSnapshot（bytesを直接decodeするだけでrestoreGraphのCL解決を
+// 経由しない）の生の axisCLId/clStartId/clEndId を見て判定し、あわせて「その階が実際に保存された
+// か」（storeBeforeBytesとのバイト差分）も条件に含める——伝播が配線されていない場合はどちらの
+// 条件でも検出できる。
 import { performance } from 'node:perf_hooks';
 import { loadDocument } from './loadDoc.mjs';
 import { PlanGraph } from '../../src/core.js';
 import { floorSwapManager } from '../../src/storage/FloorSwapManager.js';
-import { serializeGraph, restoreGraph } from '../../src/graphSnapshot.js';
+import { serializeGraph, restoreGraph, decodeFloorSnapshot } from '../../src/graphSnapshot.js';
 import { undoManager } from '../../src/undoManager.js';
 import { deleteCenterLineWithUndo, setCenterLineStructuralListener } from '../../src/transform/centerLineOps.js';
 import { isLastGridOnAxis } from '../../src/transform/centerLineConvert.js';
@@ -361,22 +377,35 @@ if (g5Toast !== null) {
 }
 setCenterLineStructuralListener(null);
 
-// I5: 他階で片端だけ参照していた壁が削除後も残る（端点ルール）。
+// I5: 他階で片端だけ参照していた壁を持つ階は、(1) 実際に保存され（storeBeforeBytesとの差分あり）、
+// (2) 保存された生スナップショット（decodeFloorSnapshot。restoreGraphのresolveCLを経由しない）の
+// axisCLId/clStartId/clEndIdのいずれにも削除idが残っていない——の両方を満たす（上記コメント参照。
+// bytePeek経由の復元済みgraphだけを見ると伝播が無くても常にOKになる検出力ゼロの穴を塞ぐ）。
 if (singleEndWallsBefore.length === 0) {
   console.log('I5: 対象データに他階の片端参照壁が無いためスキップ（NGにしない）');
 } else {
   let i5ok = true;
+  const checkedPlaneIds = new Set();
   for (const { planeId, wallId } of singleEndWallsBefore) {
+    if (checkedPlaneIds.has(planeId)) continue; // 同じ階は1回だけ確認すればよい
+    checkedPlaneIds.add(planeId);
     const plane = [...h.project.planeMap.values()].find(p => p.id === planeId);
-    const decoded = await h.bytePeek(plane, h.project.structGraph);
-    const wall = decoded.walls.find(w => w.id === wallId);
-    if (!wall) { console.log(`  NG詳細: ${plane.name}の壁${wallId.slice(0, 8)}が消えている（端点ルールで残るはず）`); i5ok = false; continue; }
-    if (wall.clStart.id === chosenId || wall.clEnd.id === chosenId) {
-      console.log(`  NG詳細: ${plane.name}の壁${wallId.slice(0, 8)}が依然として削除idを参照している`);
+    const bytesAfter = h.store.get(planeId);
+    const saved = !floorBytesEqual(storeBeforeBytes.get(planeId), bytesAfter);
+    if (!saved) {
+      console.log(`  NG詳細: ${plane.name}は削除前後でstoreのバイト列が変化していない（他階伝播が保存まで届いていない）`);
+      i5ok = false;
+      continue;
+    }
+    const rawSnapshot = decodeFloorSnapshot(bytesAfter);
+    const stillReferencing = (rawSnapshot.walls ?? []).filter(w =>
+      w.axisCLId === chosenId || w.clStartId === chosenId || w.clEndId === chosenId);
+    if (stillReferencing.length > 0) {
+      console.log(`  NG詳細: ${plane.name}の生スナップショットに削除id参照の壁が${stillReferencing.length}本残っている（元の壁id=${wallId.slice(0, 8)}）`);
       i5ok = false;
     }
   }
-  ok(i5ok, `I5: 他階の片端参照壁(${singleEndWallsBefore.length}本)は端点ルールで残り、削除id参照は無い`);
+  ok(i5ok, `I5: 他階の片端参照壁があった階（${checkedPlaneIds.size}階分）で、実際に保存され・生スナップショットにも削除id参照の壁が0本になっている`);
 }
 
 // ---- (4) 性能: 独立に3回読み込み、削除呼び出し〜whenIdleの中央値を伝播部分・同期部分に分けて出す ----

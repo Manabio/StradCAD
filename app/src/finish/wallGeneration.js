@@ -586,11 +586,24 @@ export function generateExteriorWalls(graph, { wallBase = DEFAULT_WALL_BASE, wal
 
   // loopType ごとに符号付きオフセット済みエッジを集約（生成対象＝courtyardの開口辺は除く。従来どおり）。
   const byLoopType = new Map(); // loopType → rawParams[]
+  // 部分指定の部屋は親と同じ外周エッジを重複して上げる（親のセルをそのまま引き継いで部分指定化する
+  // 退化ケース＝子のcellsが親と同一集合になる場合を含む。finish/roomReinterpret.js
+  // normalizePartialDominance/reinterpretRoomsOnEntry参照）ため、同一エッジを2度生成しないよう
+  // computeExteriorWallSegments と同じ segId 方式で重複排除する（実測: CL削除で部分指定になった
+  // 部屋が親と同一セルを持ち、外壁が同位置に2重生成されていた）。重複排除は
+  // axisCLId/loopType/startCLId/endCLId/axisOffsetが完全一致するエッジだけが対象——子のcellsが親の真部分集合で
+  // 区間の区切りが親と異なる場合はsegIdが一致せず重なりが残る（描画側のcomputeExteriorWallSegments
+  // も同じ判定のため挙動は揃っている）。
+  const seen = new Set();
   for (const room of graph.rooms) {
     for (const p of computeExternalEdgeParams(room, offset, graph)) {
       const loopType = classifyExteriorEdge(room, p, graph, cellToRoom);
       if (!loopType) continue;
       if (loopType === 'courtyard' && onStairOpening(p, graph, stairOpenings)) continue;
+
+      const segId = `${p.axisCLId}:${loopType}:${p.startCLId}:${p.endCLId}:${p.axisOffset}`;
+      if (seen.has(segId)) continue;
+      seen.add(segId);
 
       // 外壁は常に「室外側（室内方向の逆）」に生成する
       // （p.axisOffset は常に室内方向を指すため、outer/courtyard とも反転する）

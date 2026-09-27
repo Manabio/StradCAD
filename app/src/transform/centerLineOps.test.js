@@ -2189,6 +2189,39 @@ test('deleteCenterLineWithUndo（非struct分岐）: 内部間仕切りの中心
   assert.deepEqual(new Set(graph.walls.map(w => w.id)), wallIdsAfter, 'redoで壁id集合が削除後に戻るはず');
 });
 
+// ---- 外壁重複バグの回帰（finish/wallGeneration.js generateExteriorWalls）----
+// 部分指定化した子部屋（referenceRoomIds）が親と同一セルを持つ退化ケース（1セルの部屋同士が
+// CL削除で1セルに併合される最小構成では必ずこうなる）で、外壁ループ抽出が親・子の両方から
+// 同一エッジを重複して拾い、mergeSegmentsが同一始終点のセグメントを結合できず外壁が2重生成
+// されていた（実測: 矩形1棟で4本→8本）。
+test('deleteCenterLineWithUndo（非struct分岐）: 内部間仕切り削除で部分指定になった子部屋が親と同一セルを持っても、外壁が同位置に重複生成されない', async () => {
+  const { project, graph } = makeProjectWithGraph();
+  const { xm } = addAdjacentRoomsWithWalls(graph);
+
+  const materialMap = await loadMaterialMap();
+  await regenerateWalls(graph, { materialMap, project });
+  graph.setWallFreshnessKey(wallFreshnessKey(graph, project));
+  const extWallCountBefore = graph.walls.filter(w => w.isExteriorWall).length;
+  assert.equal(extWallCountBefore, 4, '前提: 矩形1棟の外壁は各辺1本＝4本のはず');
+
+  const { toast } = await deleteCenterLineWithUndo(graph, project, xm);
+
+  assert.equal(toast, null);
+  const child = graph.rooms.find(r => r.referenceRoomIds.size > 0);
+  const parent = graph.rooms.find(r => r.referenceRoomIds.size === 0);
+  assert.deepEqual([...child.cells], [...parent.cells], '前提: 子部屋は親と同一セルを持つ退化ケースになっているはず');
+
+  const extWalls = graph.walls.filter(w => w.isExteriorWall);
+  assert.equal(extWalls.length, 4, `併合後も外壁は各辺1本のままのはず（実際:${extWalls.length}本）`);
+  const positions = extWalls.map(w =>
+    `${w.isVertical ? 'V' : 'H'}${Math.round(w.axisCL.effectiveValue)}:${Math.round(Math.min(w.coord1, w.coord2))}..${Math.round(Math.max(w.coord1, w.coord2))}`);
+  assert.equal(new Set(positions).size, positions.length, `同位置の外壁重複が無いはず（実際:${JSON.stringify(positions)}）`);
+
+  // force再生成をもう一度走らせても外壁本数が変わらない（固定点）。
+  await regenerateWalls(graph, { materialMap, project });
+  assert.equal(graph.walls.filter(w => w.isExteriorWall).length, 4, 'もう一度regenerateWallsしても外壁は4本のままのはず');
+});
+
 test('deleteCenterLineWithUndo: 通り芯（struct分岐）でも内部間仕切りの削除で自階の壁が明示的に再生成される', async () => {
   const { project, graph } = makeProjectWithGraph();
   const struct = { labeled: true, discipline: Discipline.STRUCT };
@@ -2220,6 +2253,38 @@ test('deleteCenterLineWithUndo: 通り芯（struct分岐）でも内部間仕切
   assert.ok(wallIdsAfter.size > 0, '併合後も外壁は生成されているはず');
   assert.ok([...wallIdsBefore].every(id => !wallIdsAfter.has(id)),
     '壁は全削除→再生成されるため、削除直後の再生成後は旧壁idが1つも残らないはず');
+});
+
+test('deleteCenterLineWithUndo: 通り芯（struct分岐）でも部分指定になった子部屋が親と同一セルを持つ退化ケースで外壁が重複生成されない', async () => {
+  const { project, graph } = makeProjectWithGraph();
+  const struct = { labeled: true, discipline: Discipline.STRUCT };
+  project.structGraph.addCenterLine(CenterLineType.VERTICAL, 0, struct);
+  const mid = project.structGraph.addCenterLine(CenterLineType.VERTICAL, 4000, struct);
+  project.structGraph.addCenterLine(CenterLineType.VERTICAL, 8000, struct);
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0, struct);
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 4000, struct);
+  const cellA = worldToCell(2000, 2000, graph).key;
+  const cellB = worldToCell(6000, 2000, graph).key;
+  graph.addRoom(new Set([cellA]), '洋室A');
+  graph.addRoom(new Set([cellB]), '洋室B');
+
+  const materialMap = await loadMaterialMap();
+  await regenerateWalls(graph, { materialMap, project });
+  graph.setWallFreshnessKey(wallFreshnessKey(graph, project));
+  assert.equal(graph.walls.filter(w => w.isExteriorWall).length, 4, '前提: 矩形1棟の外壁は各辺1本＝4本のはず');
+
+  const { toast } = await deleteCenterLineWithUndo(graph, project, mid);
+
+  assert.equal(toast, null);
+  const child = graph.rooms.find(r => r.referenceRoomIds.size > 0);
+  const parent = graph.rooms.find(r => r.referenceRoomIds.size === 0);
+  assert.deepEqual([...child.cells], [...parent.cells], '前提: 子部屋は親と同一セルを持つ退化ケースになっているはず');
+
+  const extWalls = graph.walls.filter(w => w.isExteriorWall);
+  assert.equal(extWalls.length, 4, `併合後も外壁は各辺1本のままのはず（実際:${extWalls.length}本）`);
+  const positions = extWalls.map(w =>
+    `${w.isVertical ? 'V' : 'H'}${Math.round(w.axisCL.effectiveValue)}:${Math.round(Math.min(w.coord1, w.coord2))}..${Math.round(Math.max(w.coord1, w.coord2))}`);
+  assert.equal(new Set(positions).size, positions.length, `同位置の外壁重複が無いはず（実際:${JSON.stringify(positions)}）`);
 });
 
 test('deleteCenterLineWithUndo: 壁を一度も持ったことのない階（wallFreshnessKey未設定・壁0本）では壁再生成が走らない（materialMapもロードされない）', async () => {
@@ -3965,6 +4030,72 @@ test('deleteCenterLineWithUndo（struct分岐・在来木造・3階構成）: �
 
   const p3After = decodeFloor(project, p3.plane, store.get(p3.plane.id));
   assert.equal(p3After.shapeMap.has(p3AxisId), true, 'p3の梁芯（削除と無関係な壁が根拠）は道連れに消えず残るはず');
+});
+
+// ---- 通り芯を参照しない階（部屋セルにも壁の片端参照にも
+// 該当しない階＝orphanOnly）が、自前の（削除と無関係な）finish生成壁を持つ場合でも、
+// detachもforce再生成も一切走らず壁idが完全に不変であることを固定する（上の2テストはp3が
+// 部屋も壁も持たない＝もともと変えようがない構成だったため、この観点では検証力が無かった）。----
+test('deleteCenterLineWithUndo（struct分岐・在来木造・3階構成）: 通り芯を一切参照しない他階(p3・orphanOnly)が自前のfinish生成壁を持っていても、detach・force再生成いずれも走らず壁id集合・鍵とも完全に不変で保存もされない', async () => {
+  const project = new Project('proj', 'test');
+  const { graph: p1 } = project.addPlane(0,    '1階', 'p1');
+  const { graph: p2 } = project.addPlane(3000, '2階', 'p2');
+  const { graph: p3 } = project.addPlane(6000, '3階', 'p3');
+  p1.structureOverride = TRADITIONAL_WOOD_STRUCTURE;
+  p2.structureOverride = TRADITIONAL_WOOD_STRUCTURE;
+  p3.structureOverride = TRADITIONAL_WOOD_STRUCTURE;
+
+  const struct = { labeled: true, discipline: Discipline.STRUCT };
+  project.structGraph.addCenterLine(CenterLineType.VERTICAL, 0, struct);
+  const mid = project.structGraph.addCenterLine(CenterLineType.VERTICAL, 4000, struct);
+  project.structGraph.addCenterLine(CenterLineType.VERTICAL, 8000, struct);
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0, struct);
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 4000, struct);
+
+  // p2: 洋室A・洋室Bをmid（x=4000）で分割する内部間仕切り（削除で参照ありhasRefs=true・force再生成対象）。
+  const cellA = worldToCell(2000, 2000, p2).key;
+  const cellB = worldToCell(6000, 2000, p2).key;
+  p2.addRoom(new Set([cellA]), '洋室A');
+  p2.addRoom(new Set([cellB]), '洋室B');
+  const materialMap = await loadMaterialMap();
+  await regenerateWalls(p2, { materialMap, project });
+  p2.setWallFreshnessKey(wallFreshnessKey(p2, project));
+
+  // p3: mid・project.structGraphの共有グリッドとは無関係な、p3ローカルの中心線・部屋・壁を持つ
+  // （referencesClInCellsOrRecords・hasExternalCenterLineReferencesとも偽——セルキー・壁の
+  // axisCL/clStart/clEndのいずれもmidのidを含まない）。
+  const localOpts = { labeled: false, discipline: Discipline.ARCH };
+  const lx0 = p3.addCenterLine(CenterLineType.VERTICAL,   10000, localOpts);
+  const lx1 = p3.addCenterLine(CenterLineType.VERTICAL,   14000, localOpts);
+  const ly0 = p3.addCenterLine(CenterLineType.HORIZONTAL, 10000, localOpts);
+  const ly1 = p3.addCenterLine(CenterLineType.HORIZONTAL, 13000, localOpts);
+  p3.addRoom(new Set([`${lx0.id}:${ly0.id}:${lx1.id}:${ly1.id}`]), '洋室C');
+  await regenerateWalls(p3, { materialMap, project });
+  p3.setWallFreshnessKey(wallFreshnessKey(p3, project));
+  assert.ok(p3.walls.length > 0, '前提: p3自身のfinish生成壁がある');
+  assert.equal(p3.hasExternalCenterLineReferences(mid.id), false, '前提: p3はこの通り芯を構造材で一切参照していない');
+  assert.equal(p3.rooms.every(r => ![...r.cells].some(k => k.split(':').includes(mid.id))), true,
+    '前提: p3の部屋セルもmidのidを含まない（referencesClInCellsOrRecordsも偽）');
+
+  const p3WallIdsBefore = new Set(p3.walls.map(w => w.id));
+  const p3KeyBefore = p3.wallFreshnessKey;
+  const store = new Map([[p2.plane.id, serializeGraph(p2)], [p3.plane.id, serializeGraph(p3)]]);
+  const p3BytesBefore = store.get(p3.plane.id);
+  const saveCalls = [];
+  const saveFloorFn = async (planeId, bytes) => { saveCalls.push(planeId); store.set(planeId, bytes); };
+
+  const { toast } = await withProductionPeek(project, store, () =>
+    deleteCenterLineWithUndo(p1, project, mid, { saveFloorFn })
+  );
+
+  assert.equal(toast, null);
+  assert.equal(saveCalls.includes(p3.plane.id), false, 'orphanOnlyのp3は一切保存されないはず');
+  assert.deepEqual(store.get(p3.plane.id), p3BytesBefore, 'store側のp3は一度も書き換わらず元のバイト列のまま');
+
+  const p3After = decodeFloor(project, p3.plane, store.get(p3.plane.id));
+  assert.deepEqual(new Set(p3After.walls.map(w => w.id)), p3WallIdsBefore,
+    'p3の壁id集合はdetachも再生成も走らず完全に不変のはず');
+  assert.equal(p3After.wallFreshnessKey, p3KeyBefore, 'p3のwallFreshnessKeyも不変のはず（force再生成が走っていない証拠）');
 });
 
 // ---- deleteCenterLineWithUndo経由のrejectedPlane経路（restoreStructCLs→restoreGraph→
