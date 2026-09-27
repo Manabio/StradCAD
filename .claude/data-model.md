@@ -234,6 +234,9 @@ CL4種別（通り芯・中心線・補助線・梁芯）の相手選択（直�
 
 同モジュールは「相手選択」だけでなく「起動対象かどうかの導出」も一本化する: `structuralSyncScopeOfKind`（削除・移動・追加が共有する単一の表）・`structuralSyncScopeOfConversion(fromKind, toKind)`（昇格・降格向け。段階(c)・2026-09-25。どちらかが`'all'`なら全体で`'all'`、それ以外は非nullの方）・`structuralSyncScopeForCenterLine(graph, cl)`（段階(d)・2026-09-25。CL自身のscopeと、そのCLを`extentLoRef`/`extentHiRef`・`refId`で参照している他CLの種別のscopeを同じ合成規則で結ぶ——補助線が中心線の端部参照先になる経路をここで拾う。梁芯は参照元があっても合成しない例外）は、種別ごとに構造同期（`structural/structuralSync.js`）を起動するか・どのscopeで反映するかを同じCL種別ポリシー表から導く——`transform/centerLineOps.js`側に種別名を直書きしない（G3ガードの対象）。「操作×種別」の専用表は作らない（暫定分岐`structuralSyncScopeOnMove`は段階(c)で削除し`structuralSyncScopeOfKind`へ一本化した）。詳細（scopeの意味・恒久化の根拠・移動時の壁由来梁芯追従・昇格降格のamendを使わない順序）は`.claude/structural-model.md`「起動点」節を参照。
 
+## CL削除は仕上げ境界と同格（CL削除＝境界。2026-09-27）
+通り芯・中心線の削除は仕上げモード境界（突入/脱出）と同格の「境界」として扱い、削除と同じundoエントリ内で部屋再解釈→エッジ同期→壁再生成（force）までを行う（`transform/centerLineFloorSync.js`の`applyCenterLineRemovalAftermath`。他階への伝播は`.claude/structural-model.md`「起動点」節ルール2、採らなかった設計・既知の限界の裁定は`.claude/cl-conversion-limits.md`参照）。壁参照・部材参照・セル参照のいずれかを持つ階の壁はこの再生成で丸ごと置き換わるため、削除起因の端点では下記「端点ルール」の壁側適用（端繰り上げ）が表面化することはない——表面化するのは移動・短縮で交点を失った場合のみ。
+
 ## CL端点の「端点ルール」（交点を失った端は固定・はねだし）
 中心線の端は通常、直交CLとの交点上に乗る（延長・短縮も交点間で動く）。線分編集で交点が失われた端（参照先CL削除・直交CLの短縮）は「端点」となり、(1)座標をその場に固定（削除時は`detachFromCenterLine`がextent参照を静的化）、(2)延長・短縮の対象外（`isEndpointAt`で導出判定。保存フラグは持たない——直交CLの短縮による端点化は参照が生きたまま起きるため、状態保存では追従できない）、(3)壁は端点ノードに壁があったと想定した分（下地偏芯量＋仕上げ厚＝`|axisOffset|`）だけはね出して止める。壁側の適用は3経路：CL削除時の既存壁の端繰り上げ（core/planGraph.js）、壁生成時の軸CL線分範囲クリップ（wallGeneration.js。交点消失後もセル分割は列全体を割り続けるため、生成セグメントが線分範囲を越え得る）、詳細LODの木口2重線（ShapesLayer.jsx）。補助線は静的端点（オーバーハング付き）が正規状態のため端点ルールの対象外。
 `isEndpointAt`の判定は種別を問わず**参照先優先**——端の参照先CLが生きて自身の座標に届いていれば端点ではない。既に非表示の梁芯まで延長済みの既存データが「端点」に固定されず、次の延長で可視の線へ移る自己修復になる（読込み時のデータ正規化はしない）。この判定は壁の端部描画（`renderer/wallDrawPlan.js`の仕上げ回り込み）でも使うため、端が梁芯としか交差しない中心線（参照なし）は端点扱いになり描画に効く。
