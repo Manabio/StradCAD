@@ -670,12 +670,10 @@ test('【不変条件】App.jsx: handleDeleteCenterLine は deleteCenterLineWith
   assertWhenIdleBefore(body, 'deleteCenterLineWithUndo(', 'handleDeleteCenterLine');
 });
 
-test('【不変条件・m-5】App.jsx: cl-to-grid/cl-to-center（中心⇔通り芯の入替え）は promoteCenterToGridWithUndo/demoteGridToCenterWithUndo より前に structuralSync.whenIdle() を待つ（入替えも他階IDBを読み書きするため）', () => {
+test('【不変条件・m-5】App.jsx: handleConvertCenterLine（中心⇔通り芯の入替え）は promoteCenterToGridWithUndo/demoteGridToCenterWithUndo より前に structuralSync.whenIdle() を待つ（入替えも他階IDBを読み書きするため。入力規制ステップ3でcl-to-grid/cl-to-centerのIIFEから名前付き関数へ切り出し）', () => {
   const appSrc = fs.readFileSync(path.resolve(import.meta.dirname, '../App.jsx'), 'utf8');
-  // if (item.id === 'cl-to-grid' || item.id === 'cl-to-center') { の "...) {" 部分が
-  // extractFunctionBody の関数シグネチャ抽出（") {"探索）とそのまま一致するため流用できる。
-  const body = extractFunctionBody(appSrc, "item.id === 'cl-to-grid'");
-  assertWhenIdleBefore(body, 'const fn = ', 'cl-to-grid/cl-to-center');
+  const body = extractFunctionBody(appSrc, 'async function handleConvertCenterLine');
+  assertWhenIdleBefore(body, 'const fn = ', 'handleConvertCenterLine');
 });
 
 test('【不変条件】App.jsx: setOpeningGeometryListener と setCenterLineStructuralListener はどちらも structuralSync.request へ配線している（コメント行を除いた行で判定。team-lessons 2026-09-23）', () => {

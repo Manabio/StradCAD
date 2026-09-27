@@ -9,6 +9,7 @@ import { useRef, useState } from 'react';
 import { runInAction } from 'mobx';
 import { viewport } from '../appViewport.js';
 import { undoManager } from '../undoManager.js';
+import { isUiBusy } from '../uiBusy.js';
 import {
   findCLMoveSnap,
   findBeamAxisMoveSnap,
@@ -178,6 +179,7 @@ export function usePointerInteraction({
 
   // ---- ポインタ Down ----
   const handlePointerDown = (e) => {
+    if (isUiBusy()) return; // 関門が開いている間は入力を無視する（遮断点A・入力規制ステップ3）
     const { clientX, clientY } = e.evt;
     if (e.evt.touches) return;
     if (menu) return;
@@ -802,6 +804,7 @@ export function usePointerInteraction({
 
   // ---- タッチ: マルチ指タップ検出 ----
   const handleTouchStart = (e) => {
+    if (isUiBusy()) return; // 関門が開いている間は入力を無視する（遮断点A・入力規制ステップ3）
     const count = e.evt.touches.length;
     if (count === 2 || count === 3) {
       touchTapRef.current = { count, time: Date.now() };

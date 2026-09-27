@@ -65,3 +65,30 @@ export function assertBeginUiTransitionBeforeRunBusy(body, label) {
   assert.ok(rtIdx >= 0, `${label} の本体に runBusy( の呼び出しが無い`);
   assert.ok(beginIdx < rtIdx, `${label} では beginUiTransition() が runBusy( より前である必要がある`);
 }
+
+/** `functionStartNeedle`（末尾が`{`で終わる。例: 'const handlePointerDown = (e) => {'）で始まる
+ * アロー関数の本体を、波括弧の対応数で抽出し、行コメントを落として返す。extractFunctionBodyは
+ * `") {"`探索（`async function <name>(...) {`型）を前提にするため、`") => {"`型のアロー関数
+ * には使えない——ニードル自体が末尾`{`で終わるようにし、その位置から直接波括弧の対応数で
+ * 本体を抽出する（入力規制ステップ3・§5-4）。 */
+export function extractArrowFunctionBody(src, functionStartNeedle) {
+  const startIdx = src.indexOf(functionStartNeedle);
+  assert.ok(startIdx >= 0, `${functionStartNeedle} が見つからない`);
+  const braceStart = startIdx + functionStartNeedle.length - 1;
+  let depth = 0, i = braceStart;
+  for (; i < src.length; i++) {
+    if (src[i] === '{') depth++;
+    else if (src[i] === '}') { depth--; if (depth === 0) break; }
+  }
+  return stripCommentLines(src.slice(braceStart, i + 1));
+}
+
+/** 本体（`{`から始まる）の最初の文（先頭の空白・改行を除いた直後）が、ちょうど
+ * `expectedStatement`で始まることを確認する——本体の途中・末尾にあるだけでは緑にしない
+ * （§5-4「本体のどこかにあるだけでは緑にしない」QA指摘・2026-09-28）。同一行の末尾コメントは
+ * 許容する（startsWithで判定するため）。 */
+export function assertFirstStatementIs(body, expectedStatement, label) {
+  const inner = body.slice(1).replace(/^\s+/, '');
+  assert.ok(inner.startsWith(expectedStatement),
+    `${label} の本体の最初の文が \`${expectedStatement}\` ではない（実際の先頭: ${inner.slice(0, 60)}...）`);
+}

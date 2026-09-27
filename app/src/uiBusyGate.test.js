@@ -70,6 +70,41 @@ test('【不変条件】App.jsx: FloorDrum/AltChipのonSwitch・ModeBarのonSele
   assert.match(code, /<AltChip[\s\S]{0,400}onSwitch=\{guardUi\(/, 'AltChipのonSwitchがguardUi()で包まれていない');
 });
 
+// ================================================================
+// 入力規制ステップ3: CL操作の入口（削除・入替え・偏芯確定・出幅編集確定）を関門へ移すのに伴い、
+// 遮断点C（メニュー・ダイアログのonSelect/onConfirm）もguardUi()で包む。
+// ================================================================
+
+test('【不変条件・入力規制ステップ3】App.jsx: RadialMenuのonSelect・CL偏芯ダイアログ/出幅編集のonConfirmはguardUi()で包まれている', () => {
+  const appSrc = fs.readFileSync(appSrcPath, 'utf8');
+  const code = stripCommentLines(appSrc);
+
+  assert.match(code, /<RadialMenu[\s\S]{0,200}onSelect=\{guardUi\(handleMenuSelect\)\}/,
+    'RadialMenuのonSelectがguardUi()で包まれていない');
+  assert.match(code, /<EccentricityDialog[\s\S]{0,200}onConfirm=\{guardUi\(handleEccConfirm\)\}/,
+    'EccentricityDialogのonConfirmがguardUi()で包まれていない');
+  assert.match(code, /<AxisFaceInput[\s\S]{0,300}onConfirm=\{guardUi\(/,
+    'AxisFaceInputのonConfirmがguardUi()で包まれていない');
+});
+
+// structuralSync.whenIdle()を待つCL操作の入口（handleDeleteCenterLine・handleConvertCenterLine・
+// handleEccConfirm）はいずれも関門の中でwhenIdleを待つ必要がある（.claude/undo-redo.md
+// 「落とし穴」参照）——本体のテキスト上でrunBusy(より後（＝runBusyのコールバックの中）に
+// whenIdleが現れることを固定する（関門の外にwhenIdleが漏れ出す変異を検知）。
+test('【不変条件・入力規制ステップ3】App.jsx: whenIdle()を使うCL操作の入口はいずれもGATED（関門の中で待つ）', () => {
+  const appSrc = fs.readFileSync(appSrcPath, 'utf8');
+
+  const GATED_WITH_WHEN_IDLE = ['handleDeleteCenterLine', 'handleConvertCenterLine', 'handleEccConfirm'];
+  for (const name of GATED_WITH_WHEN_IDLE) {
+    const body = extractFunctionBody(appSrc, `async function ${name}`);
+    const idleIdx = body.indexOf('structuralSync.whenIdle()');
+    assert.ok(idleIdx >= 0, `${name} の本体に structuralSync.whenIdle() が無い`);
+    const runBusyIdx = body.indexOf('runBusy(');
+    assert.ok(runBusyIdx >= 0 && runBusyIdx < idleIdx,
+      `${name} では structuralSync.whenIdle() が runBusy( より後（関門の中）で呼ばれる必要がある`);
+  }
+});
+
 // assertBeginUiTransitionBeforeRunBusy はuiBusySourceScan.jsから共用（beginUiTransition()は
 // runBusy(より前（同期）に呼ぶ必要がある——入力中フィールドのblur・ESC相当の中断を、関門に入る
 // （isUiBusy()が真になる）前ではなく必ず前に済ませておくため。任意項目・QAコメント2026-09-27）。

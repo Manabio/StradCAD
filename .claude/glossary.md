@@ -378,4 +378,6 @@ sillPackingThicknessMm`）。基礎天端＝土台下端−この値という関
 ## 関門（uiBusy）
 `uiBusy.js`が持つ、awaitをまたいでgraph／IDBを書くUI入口が同期で入る深さカウンタ。`isUiBusy()`の間は
 ポインタ・キーボード・UIコールバックを塞ぐ。mutexではない（入れ子が多くデッドロックするため）。現在の
-利用者は階切替・モード切替・undo/redo（App.jsxの5経路）で、以後CL削除・保存・階操作も同じ関門に入る予定。
+利用者は階切替・モード切替・undo/redo（App.jsxの5経路）に加え、CL削除・入替え・偏芯・出幅編集・
+移動準備（`FloorplanModeState.startMove`内）も同じ関門に入る（入力規制ステップ3・2026-09-28）。
+以後保存・階操作も同じ関門に入る予定。

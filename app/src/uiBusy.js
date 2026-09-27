@@ -4,7 +4,10 @@
  * 対象外——それらは自前のwhenIdle()を持つ。
  *
  * 現在の利用者は階切替・モード切替・undo/redo（App.jsxの5経路: handleFloorSwitch/
- * switchFloorKeepingMode/handleModeChange/performUndo/performRedo）で、以後CL削除・保存・
+ * switchFloorKeepingMode/handleModeChange/performUndo/performRedo）に加え、CL削除・入替え・
+ * 偏芯・出幅編集（App.jsxのhandleDeleteCenterLine/handleConvertCenterLine/handleEccConfirm/
+ * commitAxisEdit）・移動準備（modes/FloorplanModeState.jsのstartMove内。App.jsx側は
+ * beginUiTransitionを呼ばない）も同じ関門に入る（入力規制ステップ3・2026-09-28）。以後保存・
  * 読込み・階操作も同じ関門に入る予定。各経路が本モジュールの runBusy() で自分の処理本体を包み、
  * isUiBusy() が真の間だけポインタ・キーボードを塞ぐ（App.jsx側の責務）。ここでは「今、関門の中か」
  * を深さで数えるだけで、排他制御（mutex）は持たない——入れ子が多く（例: performUndo内の
@@ -58,7 +61,9 @@ export async function runBusy(label, fn) {
 
 /**
  * depth が 0 になるまで待つ Promise（既に 0 なら即resolve）。テストと将来のステップ
- * （CL削除・保存・読込み・階操作を関門に組み込む際の待ち合わせ）用。UIからは使わない。
+ * （保存・読込み・階操作を関門に組み込む際の待ち合わせ）用。CL削除・入替え・偏芯・出幅編集は
+ * 入力規制ステップ3で対応済み（whenUiIdle自体は使わず、各入口が自身のrunBusy呼び出しの中で
+ * structuralSync.whenIdle()を待つ）。UIからは使わない。
  * @returns {Promise<void>}
  */
 export function whenUiIdle() {

@@ -7,6 +7,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { Plane, PlanGraph } from '@core';
 import { FloorplanModeState } from './FloorplanModeState.js';
+import { isUiBusy } from '../uiBusy.js';
+import { ERR_CL_MOVE_LOAD_FAILED } from '../error.js';
 
 function makeGraph() {
   const plane = new Plane('p1', 0, '1階', 1, 1);
@@ -33,6 +35,49 @@ test('FloorplanModeState.dispose: 描画途中でも例外を投げず、moveSta
 
   assert.doesNotThrow(() => state.dispose());
   assert.equal(state.drawState, null);
+  assert.equal(state.moveState, null);
+});
+
+// 入力規制ステップ3: startMoveは関門（uiBusy.js runBusy）を自身の内部で開く（App.jsx側は
+// beginUiTransitionを呼ばない——interruptCurrentActionのcancelMoveが準備中の移動を壊すため）。
+// _pendingPreloadへ直接差し込み、resolveMoveRange（他フロアIDB読み込みを含む）自体はスタブせずに
+// 済ませる。
+test('FloorplanModeState.startMove: 準備の待ち時間中はisUiBusy()が真、解決後は偽に戻る', async () => {
+  const graph = makeGraph();
+  const state = new FloorplanModeState(graph, null);
+  const cl = { id: 'cl-move-test', value: 0 };
+  let resolvePending;
+  const pending = new Promise((resolve) => { resolvePending = resolve; });
+  state._pendingPreload = { clId: cl.id, promise: pending };
+
+  const startPromise = state.startMove(cl);
+  assert.equal(isUiBusy(), true, '準備中はisUiBusy()が真であるはず');
+
+  resolvePending({ range: { min: -100, max: 100 } });
+  const err = await startPromise;
+
+  assert.equal(err, null);
+  assert.equal(isUiBusy(), false, '解決後はisUiBusy()が偽に戻るはず');
+  assert.deepEqual(state.moveState, { cl, originalValue: 0, range: { min: -100, max: 100 } });
+});
+
+// 【失敗系】準備のpromiseがrejectしても、関門（isUiBusy）は必ず戻り、moveStateは立たない。
+test('【失敗系】FloorplanModeState.startMove: 準備のpromiseがrejectしてもisUiBusy()は戻り、ERR_CL_MOVE_LOAD_FAILEDを返す', async () => {
+  const graph = makeGraph();
+  const state = new FloorplanModeState(graph, null);
+  const cl = { id: 'cl-move-fail', value: 0 };
+  let rejectPending;
+  const pending = new Promise((_resolve, reject) => { rejectPending = reject; });
+  state._pendingPreload = { clId: cl.id, promise: pending };
+
+  const startPromise = state.startMove(cl);
+  assert.equal(isUiBusy(), true, '準備中はisUiBusy()が真であるはず');
+
+  rejectPending(new Error('IDB読込失敗'));
+  const err = await startPromise;
+
+  assert.equal(err, ERR_CL_MOVE_LOAD_FAILED);
+  assert.equal(isUiBusy(), false, '失敗後もisUiBusy()が偽に戻るはず');
   assert.equal(state.moveState, null);
 });
 

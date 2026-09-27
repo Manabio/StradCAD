@@ -944,7 +944,9 @@ export async function promoteCenterToGridWithUndo(graph, project, cl, opts = {})
   );
 
   // R2裁定: 回収（他階の同一id複製の回収）が例外なら、undoエントリ自体は既に積まれたまま残すが
-  // notifyはせずそのまま再throwする（呼び出し側App.jsxのcatchがERR_CL_CONVERT_SYNC_FAILEDトーストを出す）。
+  // notifyはせずそのまま再throwする（呼び出し側App.jsxのhandleConvertCenterLineがtagCLOpFailureで
+  // codeを付けguardUi層（floorTransitionErrorMessage）がERR_CL_CONVERT_SYNC_FAILEDトーストを出す。
+  // 入力規制ステップ3で関門化）。
   await recallPromotedCenterLineDuplicates(project, graph, cl, {
     undoRecords: floorRecords,
     ...(opts.saveFloorFn ? { saveFloorFn: opts.saveFloorFn } : {}),
@@ -966,8 +968,9 @@ export async function promoteCenterToGridWithUndo(graph, project, cl, opts = {})
 // 複製フェーズが途中で失敗（例外）した場合、またはその直後の applyDemoteToCenter がエラーを
 // 返した場合は、そこまでに保存できた階を rollbackFloorRecords で before に書き戻す
 // （best effort）。前者は自階・structGraphとも未変更のため undo エントリを積まず例外を再スロー
-// （呼び出し側 App.jsx の catch が ERR_CL_CONVERT_SYNC_FAILED を出す）。後者は従来どおり
-// { toast: error } を返す。
+// （呼び出し側 App.jsx の handleConvertCenterLine が tagCLOpFailure で code を付け、guardUi層
+// （floorTransitionErrorMessage）が ERR_CL_CONVERT_SYNC_FAILED を出す。入力規制ステップ3で関門化）。
+// 後者は従来どおり { toast: error } を返す。
 // @param {{saveFloorFn?: Function}} [opts] - saveFloorFn はテスト用の差し替え（既定値は
 //   centerLineFloorSync.js 側の saveFloor。呼び出し側（App.jsx）は無改造でよい）。
 // @returns {Promise<{ toast: string|null }>}

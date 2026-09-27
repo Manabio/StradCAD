@@ -7,18 +7,26 @@
 // App.jsxの実際の列挙結果と完全一致することを固定する。無名の非同期入口（IIFE・asyncアロー）は
 // 個数の上限をベースライン定数で固定する（増減どちらも検知）。
 //
-// §5-4（usePointerInteraction.jsのisUiBusy()/.abort()の走査）はステップ3・4で追加する。
+// §5-4（usePointerInteraction.jsのisUiBusy()の走査）はステップ3で追加した（.abort()はステップ4）。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
 import {
   readAppSrc,
   stripCommentLines,
   extractFunctionBody,
+  extractArrowFunctionBody,
   assertRunBusyIsFirstAwait,
+  assertBeginUiTransitionBeforeRunBusy,
+  assertFirstStatementIs,
 } from './uiBusySourceScan.js';
 
 // ---- GATED（関門内。runBusy(が最初のawait）----
-const GATED = ['performUndo', 'performRedo', 'handleModeChange', 'handleFloorSwitch', 'switchFloorKeepingMode'];
+const GATED = [
+  'performUndo', 'performRedo', 'handleModeChange', 'handleFloorSwitch', 'switchFloorKeepingMode',
+  'handleDeleteCenterLine', 'handleConvertCenterLine', 'handleEccConfirm', 'commitAxisEdit',
+];
 
 // ---- EXEMPT（対象外。理由付き）----
 // 各reasonはソースを読んで判定した根拠（file:lineではなく関数名で示す。App.jsx内の1ファイルのため）。
@@ -95,32 +103,25 @@ const EXEMPT = [
       + '関門化予定の呼び出し元から呼ばれる内部関数のため、呼び出し元がステップ6で関門化されれば合わせて解消する。対象外。',
   },
   {
-    name: 'commitAxisEdit',
-    reason: '未対応（分類ステップで発見。ステップ5または6で扱う）。唯一のawait（resolveLowestGraph）から戻った後にapply(newVal)'
-      + '（si.columnFaceProjections.set/deleteとautoFillColumnAxisOffsets/autoFillBeamEccentricityでgraphを書く）を行うため、'
-      + '判定基準（最初のawait後にgraph/IDBを書くか）に該当する層2の入口。カタログ以外で発見したため報告で目立たせる。',
-  },
-  {
-    name: 'handleDeleteCenterLine',
-    reason: '未対応（ステップ3で関門へ）。structuralSync.whenIdle()の後にdeleteCenterLineWithUndo（graph書込・他階IDB読み書きを伴う）'
-      + 'を行う層2の入口だが、まだrunBusyに入っていない。',
-  },
-  {
-    name: 'handleEccConfirm',
-    reason: '未対応（分類ステップで発見。ステップ5または6で扱う）。handleDeleteCenterLineと同型（structuralSync.whenIdle()の後に'
-      + 'applyCLEccentricityWithUndoでgraph・他階IDBを書く）で層2の入口だが、まだrunBusyに入っていない。CL関連のためステップ3以降で'
-      + '扱う候補として報告で目立たせる。',
+    name: 'startCenterLineMove',
+    reason: 'App.jsxの本体はmodeRef.current?.startMove(cl)をawaitしtoastを出すだけで、関門（runBusy）は'
+      + 'FloorplanModeState.startMoveの内部で開く（beginUiTransitionをここで呼ぶとinterruptCurrentActionが'
+      + 'cancelMoveを呼び準備中の移動を壊すため、意図的にApp.jsx側では関門に入らない）。恒久的に対象外（ステップ3）。',
   },
 ];
 
 // EXEMPT reasonに「未対応」を含む件数（ステップ3〜6で減らし、ステップ7で0をassertする）。
-const PENDING_COUNT = 7;
+const PENDING_COUNT = 4;
 
 // ---- 無名の非同期入口（IIFE・asyncアロー）の個数上限 ----
 // IIFE: `(async (...) => { ... })(...)`。asyncアロー（コールバック）: それ以外の
 // `async (...) => `／`async <ident> =>`（関数呼び出しの引数・オブジェクトのプロパティ値等）。
-const ANON_IIFE_COUNT = 6;
-const ANON_CALLBACK_COUNT = 15;
+// ステップ3で cl-move・cl-to-grid/cl-to-center のIIFE2件を名前付き関数（startCenterLineMove・
+// handleConvertCenterLine）へ切り出したため6→4。一方、runBusy(に渡す`async () => {...}`
+// コールバック（handleDeleteCenterLine・handleConvertCenterLine・handleEccConfirm・
+// commitAxisEditの4件）が新たに加わったため15→19。
+const ANON_IIFE_COUNT = 4;
+const ANON_CALLBACK_COUNT = 19;
 const ANON_TOTAL_COUNT = ANON_IIFE_COUNT + ANON_CALLBACK_COUNT;
 
 function findNamedAsyncFunctions(code) {
@@ -187,7 +188,28 @@ for (const name of GATED) {
     const body = extractFunctionBody(appSrc, `async function ${name}`);
     assertRunBusyIsFirstAwait(body, name);
   });
+  test(`【分類・GATED】App.jsx: ${name} はbeginUiTransition()をrunBusy(より前で呼ぶ`, () => {
+    const appSrc = readAppSrc();
+    const body = extractFunctionBody(appSrc, `async function ${name}`);
+    assertBeginUiTransitionBeforeRunBusy(body, name);
+  });
 }
+
+// commitAxisEditは、beginUiTransition()（内部でinterruptCurrentAction→cancelAxisEditを呼び
+// axisEditStateを消す）より前に、axisEditStateの読み出し・key/oldRawの採取を同期で済ませて
+// おく必要がある（「落とし穴」・入力規制ステップ3のQA指摘）。
+test('【分類・GATED】App.jsx: commitAxisEdit はaxisEditStateの読み出し・oldRawの採取がbeginUiTransition()より前', () => {
+  const appSrc = readAppSrc();
+  const body = extractFunctionBody(appSrc, 'async function commitAxisEdit');
+  const beginIdx = body.indexOf('beginUiTransition()');
+  assert.ok(beginIdx >= 0, 'commitAxisEditの本体にbeginUiTransition()の呼び出しが無い');
+  const esIdx = body.indexOf('axisEditState');
+  assert.ok(esIdx >= 0 && esIdx < beginIdx,
+    'commitAxisEditではaxisEditStateの読み出しがbeginUiTransition()より前である必要がある');
+  const oldRawIdx = body.indexOf('oldRaw = ');
+  assert.ok(oldRawIdx >= 0 && oldRawIdx < beginIdx,
+    'commitAxisEditではoldRawの採取がbeginUiTransition()より前である必要がある');
+});
 
 test('【分類】EXEMPTのreasonに「未対応」を含む件数はPENDING_COUNTと一致する（ステップ3〜6で減らし、ステップ7で0にする）', () => {
   const pending = EXEMPT.filter(e => e.reason.includes('未対応'));
@@ -204,4 +226,17 @@ test('【分類】App.jsx: 無名の非同期入口（IIFE・asyncアロー）�
   assert.equal(callback.length, ANON_CALLBACK_COUNT,
     `無名asyncアロー（コールバック）の数が想定と異なる（実際: ${callback.length}件）。増減どちらもGATED/EXEMPT分類の見直しが必要`);
   assert.equal(iife.length + callback.length, ANON_TOTAL_COUNT);
+});
+
+// ---- §5-4（遮断点A）: usePointerInteraction.jsのisUiBusy()走査（.abort()の走査はステップ4）----
+// handlePointerDown/handleTouchStartはアロー関数（`const <name> = (e) => {`）なので、
+// extractFunctionBody（"async function <name>"／") {"探索）は使えない。ニードル自体が末尾`{`で
+// 終わるようにし、その位置から波括弧の対応数で本体を抽出する（extractArrowFunctionBodyは
+// uiBusySourceScan.jsで共用。ステップ4の.abort()走査でも使う）。
+test('【分類・§5-4】usePointerInteraction.js: handlePointerDown/handleTouchStart は本体の最初の文がisUiBusy()ガードである（途中・末尾にあるだけでは緑にしない）', () => {
+  const src = fs.readFileSync(path.resolve(import.meta.dirname, 'interaction/usePointerInteraction.js'), 'utf8');
+  const pdBody = extractArrowFunctionBody(src, 'const handlePointerDown = (e) => {');
+  assertFirstStatementIs(pdBody, 'if (isUiBusy()) return;', 'handlePointerDown');
+  const tsBody = extractArrowFunctionBody(src, 'const handleTouchStart = (e) => {');
+  assertFirstStatementIs(tsBody, 'if (isUiBusy()) return;', 'handleTouchStart');
 });

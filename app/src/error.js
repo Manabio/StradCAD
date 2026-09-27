@@ -146,6 +146,25 @@ export const ERR_SESSION_LOCKED = 'このアプリは別のタブで開いてい
 // （黙って壁を古いまま残さない）、それ以外は従来どおり materialMap 無しとして扱う。
 export const ERR_CATALOG_DUPLICATE = 'ERR_CATALOG_DUPLICATE';
 
+// CL操作の入口（削除・入替え・偏芯確定。App.jsxのrunBusy経由の関門）専用のエラーコード
+// （入力規制ステップ3・2026-09-28）。従来は各入口が自前でtry/catchしconsole.error＋
+// ERR_CL_CONVERT_SYNC_FAILEDトーストを出していたが、関門化に伴い例外はguardUi層（App.jsx）
+// 一本に集約する——各入口は.catch(err => { throw tagCLOpFailure(err); })で投げ直すだけにし、
+// floorTransitionErrorMessageがこのcodeを見て同じ文言を返す。
+export const ERR_CL_OP_FAILED = 'ERR_CL_OP_FAILED';
+
+// tagCLOpFailure: 既知のcodeは「文字列のcode」に限定する（QA指摘・2026-09-28）——
+// storage/db.jsはDOMExceptionで reject することがあり（QuotaExceededError等）、その.codeは
+// 数値かつ getter のみで再代入すると例外を投げる（`Cannot set property code of ... which has
+// only a getter`）。errがErrorインスタンスでtypeof err.code==='string'（ERR_CATALOG_DUPLICATE等、
+// 既に組み立て済みmessageを持つ既知エラー）ならそのまま返す（上書きしない）。それ以外
+// （codeが無い・数値codeのDOMException・非Error）はnew Errorで包み、元の例外をcauseに残しつつ
+// 必ず文字列codeを持たせる。
+export function tagCLOpFailure(err) {
+  if (err instanceof Error && typeof err.code === 'string') return err;
+  return Object.assign(new Error(err?.message ?? String(err), { cause: err }), { code: ERR_CL_OP_FAILED });
+}
+
 // 階/モード切替の関門（App.jsxのrunBusy経由の5経路）が捕まえた例外を、どの文言で
 // ユーザーへ見せるか決める純関数。関門のコールバック本体はmodeBoundaries.exit/enter（仕上げ脱出の
 // 壁再生成等）を経由するため、swap自身のERR_FLOOR_SWITCH_UNSTABLE以外にも、.codeに識別用コードを
@@ -157,6 +176,9 @@ const KNOWN_TRANSITION_ERROR_CODES = [ERR_CATALOG_DUPLICATE];
 
 export function floorTransitionErrorMessage(err) {
   if (err instanceof Error && err.message === ERR_FLOOR_SWITCH_UNSTABLE) return err.message;
+  // CL操作の入口（tagCLOpFailure）が付けたcode。既知のcode一覧（KNOWN_TRANSITION_ERROR_CODES）と
+  // 違い、messageは技術的な生の例外のままなので固定文言に丸める（入力規制ステップ3）。
+  if (err?.code === ERR_CL_OP_FAILED) return ERR_CL_CONVERT_SYNC_FAILED;
   if (err?.code != null && KNOWN_TRANSITION_ERROR_CODES.includes(err.code)) return err.message;
   return ERR_FLOOR_SWITCH_FAILED;
 }

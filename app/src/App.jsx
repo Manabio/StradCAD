@@ -77,7 +77,7 @@ import {
   promoteCenterToGridWithUndo, demoteGridToCenterWithUndo,
   setCenterLineStructuralListener, applyCLEccentricityWithUndo,
 } from './transform/centerLineOps.js';
-import { ERR_CL_CONVERT_SYNC_FAILED, ERR_SESSION_LOCKED, floorTransitionErrorMessage } from './error.js';
+import { ERR_SESSION_LOCKED, floorTransitionErrorMessage, tagCLOpFailure } from './error.js';
 import { isUiBusy, runBusy } from './uiBusy.js';
 import { isSessionOwner } from './storage/sessionLock.js';
 import { HamburgerMenu }       from './ui/HamburgerMenu.jsx';
@@ -1466,6 +1466,9 @@ const App = observer(() => {
   // axisEditState の出幅を 1構造×1通り芯キーへ書込み、構造伏図に映る全グラフで柱芯オフセットを
   // 再構築する（MobX連鎖で柱・梁・柱芯ラベル・寸法が即再描画）。同一構造の階は同じキーを共有するので
   // 自動で揃う（非アクティブ階は構造モード突入時再計算で反映＝既存 faceProjection 編集と同じ割り切り）。
+  // axisEditStateの読み出し・key/oldRawの採取は beginUiTransition より前（同期）で済ませる
+  // ——beginUiTransitionはinterruptCurrentAction経由でcancelAxisEditを呼びaxisEditStateを
+  // 消してしまうため（入力規制ステップ3の落とし穴）。
   async function commitAxisEdit() {
     const es = modeRef.current?.axisEditState;
     if (!es) return;
@@ -1474,30 +1477,34 @@ const App = observer(() => {
     const key = si.faceProjectionKey(structure, cl);
     const oldRaw = si.columnFaceProjections.get(key); // undefined=未登録（移行既定にフォールバック中）
 
-    // 符号権威＝最下階フットプリント（resolveLowestGraph）。R階伏図など部屋の無い主題階を権威にすると
-    // buildExteriorSide が部材CL外接矩形へ縮退し、L字ノッチ中通り（X2/Y2）の偏芯が0へ崩れる
-    // （再計算 structuralRecompute と同じ単一権威に揃える）。
-    const lowest = await resolveLowestGraph(project, graph);
-    // 外周軸は出幅＝通り芯からの距離＝正（向きはフットプリント）。内部軸は外側方向が無いので、
-    // 入力符号を移動の向きとして保持する（autoFillColumnAxisOffsets が X:+右/−左、Y:+上/−下 で解釈）。
-    const isVertical = cl.centerLineType === CenterLineType.VERTICAL;
-    const isExterior = axisExteriorSign(buildExteriorSide(lowest), lowest, cl, isVertical) !== 0;
-    const newVal = isExterior ? Math.abs(projection ?? 0) : (projection ?? 0);
-    if (newVal === si.getColumnFaceProjection(structure, cl)) return; // 実効値に変化なし
-    const refill = () => {
-      const graphs = structComposition?.bindings?.map(b => b.graph) ?? [graph];
-      for (const gg of graphs) {
-        autoFillColumnAxisOffsets(gg, project, lowest);
-        autoFillBeamEccentricity(gg, project); // 柱芯オフセット変更に梁の柱外面合わせを追従させる
-      }
-    };
-    const apply = (raw) => runInAction(() => {
-      if (raw === undefined) si.columnFaceProjections.delete(key);
-      else                   si.columnFaceProjections.set(key, raw);
-      refill();
+    beginUiTransition();
+    await runBusy('出幅編集', async () => {
+      // 符号権威＝最下階フットプリント（resolveLowestGraph）。R階伏図など部屋の無い主題階を権威にすると
+      // buildExteriorSide が部材CL外接矩形へ縮退し、L字ノッチ中通り（X2/Y2）の偏芯が0へ崩れる
+      // （再計算 structuralRecompute と同じ単一権威に揃える）。他階peekのIDB読込失敗も
+      // CL操作と同じ「他階への反映に失敗しました。」で見せる（リード裁定・QA指摘2）。
+      const lowest = await resolveLowestGraph(project, graph).catch(err => { throw tagCLOpFailure(err); });
+      // 外周軸は出幅＝通り芯からの距離＝正（向きはフットプリント）。内部軸は外側方向が無いので、
+      // 入力符号を移動の向きとして保持する（autoFillColumnAxisOffsets が X:+右/−左、Y:+上/−下 で解釈）。
+      const isVertical = cl.centerLineType === CenterLineType.VERTICAL;
+      const isExterior = axisExteriorSign(buildExteriorSide(lowest), lowest, cl, isVertical) !== 0;
+      const newVal = isExterior ? Math.abs(projection ?? 0) : (projection ?? 0);
+      if (newVal === si.getColumnFaceProjection(structure, cl)) return; // 実効値に変化なし
+      const refill = () => {
+        const graphs = structComposition?.bindings?.map(b => b.graph) ?? [graph];
+        for (const gg of graphs) {
+          autoFillColumnAxisOffsets(gg, project, lowest);
+          autoFillBeamEccentricity(gg, project); // 柱芯オフセット変更に梁の柱外面合わせを追従させる
+        }
+      };
+      const apply = (raw) => runInAction(() => {
+        if (raw === undefined) si.columnFaceProjections.delete(key);
+        else                   si.columnFaceProjections.set(key, raw);
+        refill();
+      });
+      apply(newVal);
+      undoManager.push(() => apply(oldRaw), () => apply(newVal));
     });
-    apply(newVal);
-    undoManager.push(() => apply(oldRaw), () => apply(newVal));
   }
 
   // ---- 通り芯・CL削除（メニューの cl-del）----
@@ -1505,25 +1512,42 @@ const App = observer(() => {
   // 後始末（centerLineFloorSync.js detachOtherFloorsFromGridCenterLine・
   // applyOtherFloorsGridCenterLineAftermath。IDB読み書きを伴う）と構造同期
   // （structural/structuralSync.js）を伴うため async 化された（案P・2026-09-25）。実行中の構造同期が
-  // 他階IDBを読み書きしている最中に削除を始めると競合するため、先に whenIdle() を待つ
-  // （.claude/undo-redo.md「落とし穴」参照）。
+  // 他階IDBを読み書きしている最中に削除を始めると競合するため、先に whenIdle() を待つ（関門の中で
+  // 待つ。.claude/undo-redo.md「落とし穴」参照）。入力規制ステップ3で uiBusy.js の関門へ移した——
+  // 階またぎ同期・壁再生成の失敗（保存済みの階・自階の後始末は呼び出し元 deleteCenterLineWithUndo が
+  // 安全網で巻き戻し済み）はtagCLOpFailureでcodeを付けてguardUi層（App.jsx）へ委ねる。
   async function handleDeleteCenterLine(cl) {
-    await structuralSync.whenIdle();
-    try {
-      const { toast } = await deleteCenterLineWithUndo(graph, project, cl);
+    beginUiTransition();
+    await runBusy('CL削除', async () => {
+      await structuralSync.whenIdle();
+      const { toast } = await deleteCenterLineWithUndo(graph, project, cl).catch(err => { throw tagCLOpFailure(err); });
       if (toast) setToast({ msg: toast, key: Date.now() });
-      setFloorSyncTick(t => t + 1); // 連動先（他階）の複製・重複判定を反映させる（cl-to-grid/cl-to-centerと同じ。m-6・QA指摘）
-    } catch (err) {
-      // 階またぎ同期（centerLineFloorSync.js）のIDB書込、および壁再生成（wallRefresh.js
-      // refreshWallsForGraph経由。CL削除ステップ3）の想定外の例外（QA指摘H1・2026-09-27）は
-      // いずれも失敗しうる——保存済みの階・自階の後始末・壁再生成は呼び出し元
-      // （deleteCenterLineWithUndo）が安全網（rollbackFloorRecords／restoreGraph／
-      // restoreStructCLs）で巻き戻し済み（自階・structGraph・他階・undoは未変更）。
-      // ここでは失敗をトースト表示するだけでよい（cl-to-grid/cl-to-center等の既存async IIFEと
-      // 同じ形。ERR_CL_CONVERT_SYNC_FAILEDを再利用する）。
-      console.error(err);
-      setToast({ msg: ERR_CL_CONVERT_SYNC_FAILED, key: Date.now() });
-    }
+      setFloorSyncTick(t => t + 1); // 連動先（他階）の複製・重複判定を反映させる（handleConvertCenterLineと同じ。m-6・QA指摘）
+    });
+  }
+
+  // ---- 中心⇔通り芯の入替え（メニューの cl-to-grid/cl-to-center）----
+  // 入替えも他階IDBを読み書きする（centerLineFloorSync.js）ため、実行中の構造同期が他階を
+  // 保存・差し替えしている最中に始めると競合する（handleDeleteCenterLineと同じ理由でwhenIdleを
+  // 関門の中で待つ。入力規制ステップ3）。
+  async function handleConvertCenterLine(itemId, cl) {
+    beginUiTransition();
+    await runBusy(itemId === 'cl-to-grid' ? '通り芯化' : '中心線化', async () => {
+      await structuralSync.whenIdle();
+      const fn = itemId === 'cl-to-grid' ? promoteCenterToGridWithUndo : demoteGridToCenterWithUndo;
+      const { toast } = await fn(graph, project, cl).catch(err => { throw tagCLOpFailure(err); });
+      if (toast) setToast({ msg: toast, key: Date.now() });
+      setFloorSyncTick(t => t + 1); // 連動先（他階）の複製・重複判定を反映させる（handleEccConfirmと同じ）
+    });
+  }
+
+  // ---- 通り芯移動の準備（メニューの cl-move。ガター長押しのonFireも同じstartMoveを呼ぶ）----
+  // 関門（runBusy）本体はFloorplanModeState.startMove内で開く——beginUiTransitionはここでは
+  // 呼ばない（interruptCurrentActionがcancelMoveを呼び、いま準備している移動そのものを壊すため。
+  // ガター長押しのonFireはポインタ押下中に発火するのでblur/中断も不要。入力規制ステップ3）。
+  async function startCenterLineMove(cl) {
+    const err = await modeRef.current?.startMove(cl);
+    if (err) setToast({ msg: err, key: Date.now() });
   }
 
   // ---- メニュー選択 ----
@@ -1555,11 +1579,7 @@ const App = observer(() => {
     }
     if (item.id === 'cl-move') {
       // スナップ移動突入 — ガター長押しと同じ中心線移動処理（moveState）を使う
-      (async () => {
-        const err = await modeRef.current?.startMove(menu.cl);
-        if (err) setToast({ msg: err, key: Date.now() });
-      })();
-      return;
+      return startCenterLineMove(menu.cl);
     }
     if (item.id === 'cl-extend') {
       const cl = menu.cl, side = menu.clEndpointSide;
@@ -1581,33 +1601,14 @@ const App = observer(() => {
       return;
     }
     if (item.id === 'cl-del')  {
-      void handleDeleteCenterLine(menu.cl);
-      return;
+      return handleDeleteCenterLine(menu.cl);
     }
     if (item.id === 'cl-ecc') {
       setEccDialog({ cl: menu.cl });
       return;
     }
     if (item.id === 'cl-to-grid' || item.id === 'cl-to-center') {
-      const target = menu.cl;
-      (async () => {
-        // 入替えも他階IDBを読み書きする（centerLineFloorSync.js）ため、実行中の構造同期が
-        // 他階を保存・差し替えしている最中に始めると競合する（m-5・QA指摘。handleDeleteCenterLineと
-        // 同じ理由で先にwhenIdleを待つ）。
-        await structuralSync.whenIdle();
-        const fn = item.id === 'cl-to-grid' ? promoteCenterToGridWithUndo : demoteGridToCenterWithUndo;
-        const { toast } = await fn(graph, project, target);
-        if (toast) setToast({ msg: toast, key: Date.now() });
-        setFloorSyncTick(t => t + 1); // 連動先（他階）の複製・重複判定を反映させる（handleEccConfirmと同じ）
-      })().catch(err => {
-        // 階またぎ同期（centerLineFloorSync.js）はIDB書込を含むため失敗しうる——昇格の回収は
-        // 確定後の失敗で、途中まで保存できた分は finally で既にundoエントリへ合成済み。降格の複製は
-        // 確定前の失敗で、保存済みの階は rollbackFloorRecords で巻き戻し済み（自階・undoは未変更）。
-        // どちらもここでは失敗をトースト表示するだけでよい（cl-move等の既存async IIFEと同じ形）。
-        console.error(err);
-        setToast({ msg: ERR_CL_CONVERT_SYNC_FAILED, key: Date.now() });
-      });
-      return;
+      return handleConvertCenterLine(item.id, menu.cl);
     }
     if (item.id === 'del') {
       if (menu.snap) {
@@ -1661,21 +1662,23 @@ const App = observer(() => {
   // ---- CL偏芯 ----
   // 処理本体は transform/centerLineOps.js の applyCLEccentricityWithUndo（段階(e)・2026-09-26）——
   // 偏芯の適用・自階の壁由来梁芯の追従・他階連動（階段・吹抜け）を1つのundoエントリにまとめ、
-  // 構造同期を起動する。ここは削除・入替え（handleDeleteCenterLine・cl-to-grid/cl-to-center）と
+  // 構造同期を起動する。ここは削除・入替え（handleDeleteCenterLine・handleConvertCenterLine）と
   // 同型で、実行中の構造同期が他階IDBを読み書きしている最中に始めると競合するため先にwhenIdle()を
-  // 待つ（.claude/undo-redo.md「落とし穴」参照）。scopeの判定のためにはcenterLineKindPolicyを
+  // 関門の中で待つ（.claude/undo-redo.md「落とし穴」参照）。scopeの判定のためにはcenterLineKindPolicyを
   // importしない（判定はapplyCLEccentricityWithUndo側に閉じる。既存のisHitTestTargetのimportは
-  // 別用途——findNearbyCenterLinesのヒット可能種別絞り込み）。
+  // 別用途——findNearbyCenterLinesのヒット可能種別絞り込み）。失敗しても連動先の壁面位置が
+  // 変わりうる（部分適用の可能性）ため、setFloorSyncTickは関門の外のfinallyで必ず回す。
   async function handleEccConfirm(rec, materialMap) {
     if (!eccDialog) return;
     const cl = eccDialog.cl;
     setEccDialog(null);
-    await structuralSync.whenIdle();
+    beginUiTransition();
     try {
-      await applyCLEccentricityWithUndo(graph, project, cl, { rec, materialMap });
-    } catch (err) {
-      console.error(err);
-      setToast({ msg: ERR_CL_CONVERT_SYNC_FAILED, key: Date.now() });
+      await runBusy('CL偏芯', async () => {
+        await structuralSync.whenIdle();
+        await applyCLEccentricityWithUndo(graph, project, cl, { rec, materialMap })
+          .catch(err => { throw tagCLOpFailure(err); });
+      });
     } finally {
       setFloorSyncTick(t => t + 1); // 連動先の壁面位置が変わりうるため、上階peek系のstateを再計算させる
     }
@@ -1902,7 +1905,7 @@ const App = observer(() => {
       <RadialMenu
         pos={menu?.pos ?? null}
         items={menu?.items ?? []}
-        onSelect={handleMenuSelect}
+        onSelect={guardUi(handleMenuSelect)}
         onClose={closeMenu}
       />
 
@@ -1934,7 +1937,7 @@ const App = observer(() => {
         <EccentricityDialog
           graph={graph}
           cl={eccDialog.cl}
-          onConfirm={handleEccConfirm}
+          onConfirm={guardUi(handleEccConfirm)}
           onCancel={() => setEccDialog(null)}
         />
       )}
@@ -1997,7 +2000,11 @@ const App = observer(() => {
       <AxisFaceInput
         editState={mode?.axisEditState ?? null}
         onChange={v => modeRef.current?.updateAxisEdit?.(v)}
-        onConfirm={() => { commitAxisEdit(); modeRef.current?.cancelAxisEdit?.(); }}
+        onConfirm={guardUi(() => {
+          const p = commitAxisEdit();
+          modeRef.current?.cancelAxisEdit?.();
+          return p;
+        })}
         onCancel={() => modeRef.current?.cancelAxisEdit?.()}
       />
 
