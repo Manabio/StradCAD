@@ -374,3 +374,8 @@ sillPackingThicknessMm`）。基礎天端＝土台下端−この値という関
 （自階の後始末＋壁再生成の明示化）・ルール2（他階への同じ後始末の伝播）・ルール3（フットプリント境界＝
 外壁線を担うCLは削除拒否）・ルール4（復元不能セルの検出拒否＋安全網）の4本。設計意図は
 `.claude/structural-model.md`「起動点」節、採らなかった設計は`.claude/cl-conversion-limits.md`参照。
+
+## 関門（uiBusy）
+`uiBusy.js`が持つ、awaitをまたいでgraph／IDBを書くUI入口が同期で入る深さカウンタ。`isUiBusy()`の間は
+ポインタ・キーボード・UIコールバックを塞ぐ。mutexではない（入れ子が多くデッドロックするため）。現在の
+利用者は階切替・モード切替・undo/redo（App.jsxの5経路）で、以後CL削除・保存・階操作も同じ関門に入る予定。

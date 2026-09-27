@@ -57,4 +57,4 @@ plane作成・新階同期・切替・全階の構造再計算が複数階へ波
 - 他階のIDBを読み書きするCL操作（通り芯削除・中心⇔通り芯の入替え）も、開始前に`structuralSync.whenIdle()`を待つこと（実行中の反映が他階のfloorsを読み書きしている最中に競合する）。
 - 通り芯を他階からpeekして参照を切り離す処理は、`project.structGraph`からその通り芯を除く**前**に行うこと——`graphSnapshot.js`の`resolveCL`は解決できない参照を黙って捨てるため、先に除いてしまうと他階の壁がpeek→復元の往復で消える（`detachOtherFloorsFromGridCenterLine`のJSDoc参照）。
 - undo/redoは`structuralSync.whenIdle()`の**後**（段階(g)・2026-09-26）: `performUndo`/`performRedo`は`undoManager.undo(`/`redo(`を呼ぶ前に必ず`structuralSync.whenIdle()`を待つ（`cmd.context`の有無に関わらず無条件）——実行中の構造同期が起動元エントリの`floorRecords`へ追記し終える前にundoすると、その追記が「undo後」に紛れ込む（箱の内容が中途半端なまま`applyFloorUndoRecords`が走る）。
-- `performUndo`/`performRedo`は`floorTransition.js`の`runFloorTransition`（階/モード切替の関門。`.claude/floor-design.md`「切替の関門と先読み＋同期確定」参照）で本体を包む——undo/redoも`switchHistoryContext`経由で`switchFloor`を呼びうるため、他の切替経路と同じ関門（連打ガード・UI入力の遮断）を共有する。
+- `performUndo`/`performRedo`は`uiBusy.js`の`runBusy`（入力の関門。`.claude/floor-design.md`「切替の関門と先読み＋同期確定」参照）で本体を包む——undo/redoも`switchHistoryContext`経由で`switchFloor`を呼びうるため、他の切替経路と同じ関門（連打ガード・UI入力の遮断）を共有する。

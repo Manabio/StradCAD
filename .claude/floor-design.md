@@ -21,7 +21,7 @@ Planeのフィールド一覧・floorNumber.jsの関数シグネチャは`core/p
 別枠のタイトル表示は持たない。`computeStructuralDesignation`の判定木は自階基準（タブ番号と図面呼称の番号を一致させるため）。最下階は視点に関わらず常に基礎伏図。
 
 ## 切替の関門と先読み＋同期確定（2026-09-27）
-階切替・モード切替・undo/redo（App.jsxの5経路）は`floorTransition.js`の`runFloorTransition`という共通の関門を必ず通る——各経路の本体を丸ごと包み、`isFloorTransitioning()`が真の間はポインタ・キー入力を塞いで同フレーム連打を防ぐ。関門自体は排他制御（mutex）を持たない薄い深さカウンタで、入れ子（undo内の`switchHistoryContext`が`switchFloor`を呼ぶ等）は深さで自然に処理する。
+これは入力の関門（`uiBusy.js`）の1利用例——階切替・モード切替・undo/redo（App.jsxの5経路）が現在の利用者で、以後CL削除・保存・階操作も同じ関門に入る予定。各経路は`uiBusy.js`の`runBusy`という共通の関門を必ず通る——本体を丸ごと包み、`isUiBusy()`が真の間はポインタ・キー入力を塞いで同フレーム連打を防ぐ。関門自体は排他制御（mutex）を持たない薄い深さカウンタで、入れ子（undo内の`switchHistoryContext`が`switchFloor`を呼ぶ等）は深さで自然に処理する。
 
 `store.js`の`switchFloor`は関門の中で`FloorSwapManager.swap`を呼ぶ。`swap`の不変条件は3つ:
 - **中間状態を観測者に見せない**——次階の復元・現階のクリア・アクティブ切替を1つの`runInAction`で同期確定する。「アクティブ階だけ切り替わって中身がまだ空」「中身は復元済みだがアクティブ階が古いまま」のどちらも一度も観測されてはならない（崩れると`renderer/gutterLabelHits.js`のようにフロア切替中の一瞬だけ空データを描画する箇所が事故る）。

@@ -17,7 +17,7 @@ import { clearDirty, markDirty } from './dirtyState.js';
 import { acquireSessionLock } from './storage/sessionLock.js';
 import { SpatialIndex } from './transform/SpatialIndex.js';
 import { whenCenterLineOpsIdle } from './transform/centerLineOps.js';
-import { runFloorTransition } from './floorTransition.js';
+import { runBusy } from './uiBusy.js';
 import {
   serializePlanes, decodePlanes, serializeSite, decodeSite, restoreSite, decodeFloorSnapshot,
   serializeGraph, restoreGraph,
@@ -610,10 +610,10 @@ export async function switchFloor(nextPlaneId) {
   // 削除中のCL操作が無いことを待ち合わせる。
   await whenCenterLineOpsIdle();
 
-  // 以降は階切替の関門（App.jsxの5経路が共有する。floorTransition.js）に入る——保存await中の
+  // 以降は階切替の関門（App.jsxの5経路が共有する。uiBusy.js）に入る——保存await中の
   // 同期編集（隙間A）・読込みawait中の空graphへの上書き（隙間B）を防ぐswap本体を、UIの再入力が
   // 塞がれた状態で実行する。
-  return runFloorTransition(async () => {
+  return runBusy('階切替', async () => {
     const currentPlane = project.activePlane;
     const currentGraph = project.activeGraph;
     if (!currentPlane || !currentGraph) return;

@@ -395,7 +395,7 @@ project, contribute it upstream to the team's playbook in the ccteams repo.
 
 ### 関門を入れた遷移関数が失敗をトーストで握った結果、成功を前提に続ける内部呼び出し元（階削除）が壊れた（2026-09-27 階切替の関門で発生）
 
-- **症状**: `handleFloorSwitch` を関門（`runFloorTransition`）で包み、catch でトースト表示して正常 return させたところ、
+- **症状**: `handleFloorSwitch` を関門（`runFloorTransition`。現 `uiBusy.js` の `runBusy`）で包み、catch でトースト表示して正常 return させたところ、
   「切替えてから階を削除する」フロー（`if (fallback) await handleFloorSwitch(fallback.id); await removeFloor(planeId)`）が
   切替失敗後もアクティブ階そのものを `removeFloor` するようになった。HEAD では例外が上へ抜けて削除には届かなかった。
 - **誤った直感**: 「UI の入口で catch すれば安全」。

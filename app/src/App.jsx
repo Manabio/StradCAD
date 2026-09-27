@@ -78,7 +78,7 @@ import {
   setCenterLineStructuralListener, applyCLEccentricityWithUndo,
 } from './transform/centerLineOps.js';
 import { ERR_CL_CONVERT_SYNC_FAILED, ERR_SESSION_LOCKED, floorTransitionErrorMessage } from './error.js';
-import { isFloorTransitioning, runFloorTransition } from './floorTransition.js';
+import { isUiBusy, runBusy } from './uiBusy.js';
 import { isSessionOwner } from './storage/sessionLock.js';
 import { HamburgerMenu }       from './ui/HamburgerMenu.jsx';
 import { ModeBar }             from './ui/ModeBar.jsx';
@@ -551,7 +551,7 @@ const App = observer(() => {
     resetGestureRefs();
   }
 
-  // 階/モード切替の関門（runFloorTransition）へ入る直前（同期）に呼ぶ: 入力中フィールドの
+  // 階/モード切替の関門（runBusy）へ入る直前（同期）に呼ぶ: 入力中フィールドの
   // endFieldUndoを保存前に確定させ（blur）、ESCと同じ中断で描画中の操作を止める。
   function beginUiTransition() {
     document.activeElement?.blur?.();
@@ -566,7 +566,7 @@ const App = observer(() => {
     setToast({ msg: floorTransitionErrorMessage(err), key: Date.now() });
   }
 
-  // 遷移中（isFloorTransitioning()）はUIからの再入力を無視する薄いラッパー。FloorDrum/AltChipの
+  // 遷移中（isUiBusy()）はUIからの再入力を無視する薄いラッパー。FloorDrum/AltChipの
   // onSwitch・ModeBarのonSelect・HistoryButtonsのonUndo/onRedoに被せる（同フレーム連打対策）。
   // 例外を握るのはこの層だけにする（F1・2026-09-27）——handleFloorSwitch/switchFloorKeepingMode
   // 自体は内部から直接呼ぶ経路（階削除・階追加・検討コピー等）が成否を判定できるよう、もはや
@@ -575,7 +575,7 @@ const App = observer(() => {
   // 二重に表示されない＝catch済みのfnはresolveするだけ）。
   function guardUi(fn) {
     return (...args) => {
-      if (isFloorTransitioning()) return;
+      if (isUiBusy()) return;
       Promise.resolve(fn(...args)).catch(reportFloorTransitionError);
     };
   }
@@ -604,7 +604,7 @@ const App = observer(() => {
     historyNavRef.current = true;
     beginUiTransition();
     try {
-      await runFloorTransition(async () => {
+      await runBusy('undo', async () => {
         // 実行中の構造同期が起動元エントリのfloorRecordsへ追記し終える前にundoすると、その追記が
         // undo後に紛れ込む（段階(g)）。cmd.contextの有無に関わらず必ず待つ——switchHistoryContext内の
         // whenIdleはcontextがある場合のみのため、ここで明示する（cmd.contextなしでも起動され得る）。
@@ -625,7 +625,7 @@ const App = observer(() => {
     historyNavRef.current = true;
     beginUiTransition();
     try {
-      await runFloorTransition(async () => {
+      await runBusy('redo', async () => {
         // performUndoと同じ理由（段階(g)）。
         await structuralSync.whenIdle();
         if (cmd.context) await switchHistoryContext(cmd.context);
@@ -657,11 +657,11 @@ const App = observer(() => {
     return () => window.removeEventListener('keydown', onKey);
   }, []);
 
-  // 階/モード切替の関門（runFloorTransition）が開いている間は、キー入力を全て捕捉して
+  // 階/モード切替の関門（runBusy）が開いている間は、キー入力を全て捕捉して
   // 後段（上のESC/Ctrl+Z/Ctrl+Y、モード側のキー処理）へ渡さない（capture登録・連打対策）。
   useEffect(() => {
     const guard = (e) => {
-      if (!isFloorTransitioning()) return;
+      if (!isUiBusy()) return;
       e.stopImmediatePropagation();
       e.preventDefault();
     };
@@ -779,7 +779,7 @@ const App = observer(() => {
 
     beginUiTransition();
     try {
-      await runFloorTransition(async () => {
+      await runBusy('モード切替', async () => {
         // 実行中の構造同期（建具・通り芯削除起因）がgraphを保存・差し替えしている最中にモードを切り替えると
         // 競合するため、switchFloorを伴う処理より前に完了を待つ（structural/structuralSync.js参照）。
         await structuralSync.whenIdle();
@@ -828,7 +828,7 @@ const App = observer(() => {
   async function handleFloorSwitch(planeId) {
     if (planeId === project.activePlaneId) return;
     beginUiTransition();
-    await runFloorTransition(async () => {
+    await runBusy('階切替', async () => {
       // 実行中の構造同期（建具・通り芯削除起因）の完了を待つ（switchFloorより前。structural/structuralSync.js参照）。
       await structuralSync.whenIdle();
       await modeBoundaries[appMode]?.exit?.(project.activeGraph, { toMode: 'floorplan', floorSwitch: false });
@@ -857,7 +857,7 @@ const App = observer(() => {
   async function switchFloorKeepingMode(planeId) {
     if (planeId === project.activePlaneId) return;
     beginUiTransition();
-    await runFloorTransition(async () => {
+    await runBusy('階切替', async () => {
       // 実行中の構造同期（建具・通り芯削除起因）の完了を待つ（switchFloorより前。structural/structuralSync.js参照）。
       await structuralSync.whenIdle();
       const boundary = modeBoundaries[appMode];
@@ -1808,10 +1808,10 @@ const App = observer(() => {
 
   return (
     <>
-      {/* 階/モード切替の関門（runFloorTransition）が開いている間、画面全体の入力を塞ぐ
+      {/* 階/モード切替の関門（runBusy）が開いている間、画面全体の入力を塞ぐ
           （現状の最大zIndexはMemberLayoutStudyの4000のためそれより上に置く）。observer配下なので
-          isFloorTransitioning()の変化に追随して自動的に再描画される。 */}
-      {isFloorTransitioning() && (
+          isUiBusy()の変化に追随して自動的に再描画される。 */}
+      {isUiBusy() && (
         <div style={{ position: 'fixed', inset: 0, zIndex: 5000, cursor: 'progress' }} />
       )}
 

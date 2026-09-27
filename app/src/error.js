@@ -146,7 +146,7 @@ export const ERR_SESSION_LOCKED = 'このアプリは別のタブで開いてい
 // （黙って壁を古いまま残さない）、それ以外は従来どおり materialMap 無しとして扱う。
 export const ERR_CATALOG_DUPLICATE = 'ERR_CATALOG_DUPLICATE';
 
-// 階/モード切替の関門（App.jsxのrunFloorTransition経由の5経路）が捕まえた例外を、どの文言で
+// 階/モード切替の関門（App.jsxのrunBusy経由の5経路）が捕まえた例外を、どの文言で
 // ユーザーへ見せるか決める純関数。関門のコールバック本体はmodeBoundaries.exit/enter（仕上げ脱出の
 // 壁再生成等）を経由するため、swap自身のERR_FLOOR_SWITCH_UNSTABLE以外にも、.codeに識別用コードを
 // 持つ既知のエラー（例: カタログ重複検出のERR_CATALOG_DUPLICATE）が飛んでくることがある——
