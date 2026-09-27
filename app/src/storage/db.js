@@ -91,9 +91,9 @@ function openDB() {
       // migration: savedFloors を今回のアップグレードで新設した場合（バージョン1〜3からの
       // アップグレード、およびストア欠損のままバージョンだけ4になっていた修復対象DB）、
       // その時点の floors の内容を savedFloors へコピーする。空の savedFloors のまま起動すると
-      // seedFloorsFromDocument が floors を白紙化しデータロスになるため。v3 でも deactivate
-      // （階切替のスワップアウト）は複数階を無条件に floors へ書いていたため「常に1階分のみ」
-      // ではない——参照されなくなった孤児レコードもここでは区別せず一旦コピーされるが、
+      // seedFloorsFromDocument が floors を白紙化しデータロスになるため。v3 でも階切替のスワップアウト
+      // （現floorSwapManager.swap。当時の実装名はdeactivate）は複数階を無条件に floors へ書いていた
+      // ため「常に1階分のみ」ではない——参照されなくなった孤児レコードもここでは区別せず一旦コピーされるが、
       // 初回の明示保存（commitFloorsToDocument が project.planeMap に無い分を削除する）で掃除される。
       if (savedFloorsCreated && e.oldVersion >= 1) {
         const tx = e.target.transaction;
@@ -446,7 +446,7 @@ export async function loadUserCatalogs() {
 // ----------------------------------------------------------------
 // savedFloors ストア — 明示保存された floors のスナップショット（保存ドキュメント本体）
 //
-// floors は「セッション作業領域」——階切替のスワップアウト（deactivate）が明示保存の
+// floors は「セッション作業領域」——階切替のスワップアウト（floorSwapManager.swap）が明示保存の
 // 有無に関わらず無条件に書き込む。savedFloors は「保存ドキュメント」——明示保存
 // （saveToIDB）でのみ更新される。起動時は必ず savedFloors から floors を作り直すため、
 // 未保存の編集が階切替を経由して次回起動に持ち越されることがない

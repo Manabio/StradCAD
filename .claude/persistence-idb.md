@@ -9,7 +9,7 @@
 `clear()`はshapeMapごと完全初期化（restoreGraphの前処理用）。`clearFloorData()`はフロア切替専用で、`structGraph`経由の通り芯を消さない。
 
 ## auto-saveはdirtyフラグを立てるだけ、savedFloors/projects（保存ドキュメント）への確定書き込みはsaveToIDBと importDocument の2経路のみ
-`_startAutoSave`/`_startStructAutoSave`のautorunは`markDirty`を呼ぶだけで何も書き込まない。`floors`（作業領域）へは`deactivate`等が無条件に書くが、`savedFloors`/`projects`（保存ドキュメント）への確定コピー・書き込みは、ハンバーガーメニュー「保存」が呼ぶ`saveToIDB`（内部で`saveNow`＋`commitFloorsToDocument`）と、文書ファイルの読み込み（`importDocument`＝全ストア消去後の丸ごと置換）の2経路のみ。敷地（`project.site`）も同様——`startSiteDirtyTracking`のautorunは`markDirty`するだけで、`projects`ストアへの確定書き込みは`saveToIDB`（`saveSiteData`）経由のみ。
+`_startAutoSave`/`_startStructAutoSave`のautorunは`markDirty`を呼ぶだけで何も書き込まない。`floors`（作業領域）へは`FloorSwapManager.swap`等が無条件に書くが、`savedFloors`/`projects`（保存ドキュメント）への確定コピー・書き込みは、ハンバーガーメニュー「保存」が呼ぶ`saveToIDB`（内部で`saveNow`＋`commitFloorsToDocument`）と、文書ファイルの読み込み（`importDocument`＝全ストア消去後の丸ごと置換）の2経路のみ。敷地（`project.site`）も同様——`startSiteDirtyTracking`のautorunは`markDirty`するだけで、`projects`ストアへの確定書き込みは`saveToIDB`（`saveSiteData`）経由のみ。
 
 ## 通り芯・構造情報・タグ台帳はprojectレベルの別チャネルで永続化する
 フロアと独立した建物全体データのため`floors`ストアとは別の`projects`ストアに保存する。フロア切替・スワップアウトの影響を受けない。
@@ -21,10 +21,10 @@
 - ユーザーカタログライブラリ（アプリ単位・プロジェクトをまたぐ）だけは上記の規約に乗せず、専用ストア`catalogs`（keyPath:'key'、キー`user:<kind>`）に持つ。`clearAllStores`の対象外（「新規（全消去）」でも消えない）。
 
 ## floorsは「セッション作業領域」、savedFloors+projectsは「保存ドキュメント」
-`deactivate`（階切替のスワップアウト）は明示保存の有無に関わらず`floors`へ無条件で書く——`floors`単独では「未保存の編集」と「保存済みの編集」を区別できない。区別を担うのは`savedFloors`（`commitFloorsToDocument`が明示保存時のみ確定コピー）で、起動のたびに`seedFloorsFromDocument`が`savedFloors`の内容で`floors`を必ず作り直す。これにより「前回セッションで階切替を経ただけの未保存編集」は起動時に消え、「明示保存した内容だけが次回起動で復元される」という一貫した意味論になる。
+`FloorSwapManager.swap`（階切替）は明示保存の有無に関わらず`floors`へ無条件で書く——`floors`単独では「未保存の編集」と「保存済みの編集」を区別できない。区別を担うのは`savedFloors`（`commitFloorsToDocument`が明示保存時のみ確定コピー）で、起動のたびに`seedFloorsFromDocument`が`savedFloors`の内容で`floors`を必ず作り直す。これにより「前回セッションで階切替を経ただけの未保存編集」は起動時に消え、「明示保存した内容だけが次回起動で復元される」という一貫した意味論になる。
 
 ## floorsストアを書く関数は「書込み世代」を進める
-`db.js`でfloorsストアへ書く関数（`saveFloor`・`deleteFloor`・`clearAllStores`・`seedFloorsFromDocument`）は、書込みの前（最初のawaitより前）に`floorWriteGeneration.js`の世代を進める。構造の解決コンテキスト（`.claude/structural-model.md`「反映処理の間だけ各階のpeek結果を使い回す」節）が、保持している階のコピーの鮮度をこの世代で判定するため——非アクティブ階を書く経路は多く（階段同期・偏芯同期・またぎundo・編集可能peek・`deactivate`）、経路の列挙ではなくストアへの書込み1点で検知する。floorsを書く関数を足すとき・`db.js`を通さずfloorsへ書く経路を作るときは、世代を進めないと「他者の書込み後に古いコピーを使う」静かな不整合になる。
+`db.js`でfloorsストアへ書く関数（`saveFloor`・`deleteFloor`・`clearAllStores`・`seedFloorsFromDocument`）は、書込みの前（最初のawaitより前）に`floorWriteGeneration.js`の世代を進める。構造の解決コンテキスト（`.claude/structural-model.md`「反映処理の間だけ各階のpeek結果を使い回す」節）が、保持している階のコピーの鮮度をこの世代で判定するため——非アクティブ階を書く経路は多く（階段同期・偏芯同期・またぎundo・編集可能peek・`FloorSwapManager.swap`）、経路の列挙ではなくストアへの書込み1点で検知する。floorsを書く関数を足すとき・`db.js`を通さずfloorsへ書く経路を作るときは、世代を進めないと「他者の書込み後に古いコピーを使う」静かな不整合になる。
 
 ## 文書ファイル（.stq）＝保存ドキュメントの読み戻しを包んだもの
 カタログ同梱（`catalogs`・省略可・版番号据え置き）の設計意図は`.claude/catalog-model.md`参照。

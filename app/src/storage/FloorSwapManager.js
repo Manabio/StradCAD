@@ -5,8 +5,12 @@
  * 通り芯（全階共通、project.structGraph）+ 構造情報（建物全体既定値、project.structuralInfo）の永続化も担う。
  *
  * ── フロア操作 ──
- *   activate(plane, graph)           — IDB から復元 + auto-save 開始
- *   deactivate(plane, graph)         — IDB に保存 + clearFloorData()
+ *   activate(plane, graph)           — 起動時専用。IDB から復元 + auto-save 開始
+ *   swap(fromPlane, fromGraph, toPlane, toGraph, commitActive)
+ *                                    — 階切替本体。次階の先読み→現階のauto-save停止→
+ *                                      保存＋安定確認ループ→同期確定（復元・clearFloorData・
+ *                                      commitActive を1つのrunInActionで）→次階のauto-save開始。
+ *                                      失敗時は現階のauto-saveを再開してrethrowする（詳細は本体コメント）。
  *   peek(plane, structGraph)         — IDB から読み取り専用の一時グラフへ復元（非アクティブ化）
  *   disposeAll()                     — 全 auto-save 停止
  *
@@ -31,6 +35,14 @@ import { serializeGraph, restoreGraph, serializeStructCLs, restoreStructCLs } fr
 import { closeConvexCorners } from '../finish/wallGeneration.js';
 import { saveFloor, loadFloor, saveProject, loadProject } from './db.js';
 import { markDirty } from '../dirtyState.js';
+import { floorWriteGeneration } from './floorWriteGeneration.js';
+import { floorBytesEqual } from '../floorOps.js';
+import { ERR_FLOOR_SWITCH_UNSTABLE } from '../error.js';
+
+// swap() の保存＋安定確認ループの最大試行回数（.claude/floor-design.md「切替の関門と先読み＋
+// 同期確定」参照）: 保存の間（await saveFloor）に同期編集が割り込み続ける限り再試行し、
+// 3回でも安定しなければユーザーへ再試行を促す（無限リトライで固まらせない）。
+export const MAX_SWAP_SAVE_ATTEMPTS = 3;
 
 export class FloorSwapManager {
   _cleanups    = new Map(); // planeId → cleanup fn
@@ -69,10 +81,87 @@ export class FloorSwapManager {
     this._startAutoSave(plane, graph);
   }
 
-  async deactivate(plane, graph) {
-    this._stopAutoSave(plane.id);
-    await saveFloor(plane.id, serializeGraph(graph));
-    graph.clearFloorData();
+  /**
+   * 階切替本体（store.js switchFloor から呼ばれる）。fromPlane/fromGraph をスワップアウトしつつ
+   * toPlane/toGraph へスワップインする。隙間A（保存await中の同期編集の消失）・隙間B（読込みawait中の
+   * 空graphへの編集の上書き）を防ぐため、(1)まずfromGraphに触れず次階を先読みし、(2)現階のauto-saveを
+   * 止めてから保存し、(3)保存の前後でfromGraphが変化していないか・次階が保存中に横から書き換えられて
+   * いないか（floorWriteGeneration）を確認して安定するまで再試行し、(4)復元・現階クリア・アクティブ
+   * 切替を1つのrunInActionで同期的に確定してから、(5)次階のauto-saveを開始する。
+   * 失敗時はいずれも fromGraph が元の内容のまま（commitActive自体が失敗した場合は一度clearされた
+   * 内容を直前の保存バイト列で復元し直す）・アクティブも変えず、現階の auto-save を再開してから
+   * rethrow する（loadFloor自体の失敗はauto-save停止前のためrethrowのみでよい）。
+   * @param {object}   fromPlane
+   * @param {PlanGraph} fromGraph
+   * @param {object}   toPlane
+   * @param {PlanGraph} toGraph
+   * @param {() => void} commitActive  アクティブplaneの切替（呼び出し側のrunInAction相当の1文。
+   *   ここで渡された関数自体は本体側の1つのrunInAction内で呼ぶため、呼び出し側で別途runInActionする必要はない）
+   */
+  async swap(fromPlane, fromGraph, toPlane, toGraph, commitActive) {
+    // (1) 先読み: fromGraph に一切触れる前に次階を読む（ここで失敗してもfromGraphは無傷のまま）。
+    let gen = floorWriteGeneration(toPlane.id);
+    let nextBytes = await loadFloor(toPlane.id);
+
+    // (2) 現階の auto-save を止める（保存中に auto-save の markDirty が割り込む余地を無くす）。
+    this._stopAutoSave(fromPlane.id);
+
+    // (3) 保存＋安定確認ループ。保存の前後でfromGraphの内容が変わっていれば（隙間A＝保存await中の
+    //     同期編集）再試行し、次階が保存中に横から書き換えられていれば（floorWriteGeneration不一致）
+    //     nextBytesを読み直す。安定条件は「fromGraphが変化していない」かつ「読み直した内容が今も
+    //     最新（floorWriteGeneration(to)===gen）」の両方——読み直す直前の世代を控えてから読むことで、
+    //     読込みawait中にさらに書き込まれても次のチェックで確実に不一致として検知できる
+    //     （QA指摘F2: 読む前ではなく読んだ後に世代を控えると、読込み中に始まった書込みを
+    //     取りこぼす・2026-09-27）。
+    let stable = false;
+    let lastSavedBytes = null;
+    for (let attempt = 0; attempt < MAX_SWAP_SAVE_ATTEMPTS && !stable; attempt++) {
+      const bytes = serializeGraph(fromGraph);
+      try {
+        await saveFloor(fromPlane.id, bytes);
+      } catch (e) {
+        this._startAutoSave(fromPlane, fromGraph);
+        throw e;
+      }
+      lastSavedBytes = bytes;
+      if (floorWriteGeneration(toPlane.id) !== gen) {
+        const genBeforeRead = floorWriteGeneration(toPlane.id);
+        nextBytes = await loadFloor(toPlane.id);
+        gen = genBeforeRead;
+      }
+      stable = floorBytesEqual(bytes, serializeGraph(fromGraph)) && floorWriteGeneration(toPlane.id) === gen;
+    }
+    if (!stable) {
+      this._startAutoSave(fromPlane, fromGraph);
+      throw new Error(ERR_FLOOR_SWITCH_UNSTABLE);
+    }
+
+    // (4) 同期で確定: 次階の復元→現階のクリア→アクティブ切替を1つのrunInActionにまとめ、
+    //     観測者（observer）に中間状態を見せない。restoreGraphが壊れたバイト列で失敗した場合は
+    //     fromGraph.clearFloorData()・commitActiveより前で止まるため fromGraph は無傷のまま。
+    //     commitActive自体が失敗した場合はclearFloorData()が既に走った後のため、直前に保存できた
+    //     内容（lastSavedBytes）でfromGraphを復元してから再スローする——空のまま残すと、次の
+    //     swap-outで空をfromPlaneへ上書きしてしまう（QA指摘F4・2026-09-27）。
+    let fromCleared = false;
+    try {
+      runInAction(() => {
+        if (nextBytes) {
+          restoreGraph(toGraph, nextBytes);
+          this._healDerivedGeometry(toGraph);
+        }
+        fromGraph.clearFloorData();
+        fromCleared = true;
+        commitActive();
+      });
+    } catch (e) {
+      toGraph.clearFloorData(); // restoreGraph失敗時の残骸を消す（fromCleared===falseのケースでも無害）
+      if (fromCleared) restoreGraph(fromGraph, lastSavedBytes);
+      this._startAutoSave(fromPlane, fromGraph);
+      throw e;
+    }
+
+    // (5) 次階の auto-save を開始する。
+    this._startAutoSave(toPlane, toGraph);
   }
 
   /**

@@ -359,8 +359,8 @@ function belowPlaneOfProject(plane, project) {
 }
 
 // ---- in-flight 追跡（QA指摘M・2026-09-27）----
-// deleteCenterLineWithUndo の実行中、store.js switchFloor が floorSwapManager.deactivate
-// （対象階の graph を IDB へ保存してから graph.clearFloorData() で空にする）を挟むと、
+// deleteCenterLineWithUndo の実行中、store.js switchFloor が floorSwapManager.swap
+// （対象階の graph を IDB へ保存してから graph.clearFloorData() で空にする処理を含む）を挟むと、
 // 削除処理が「後で書き戻すために握っていたbefore/beforeArchスナップショット」の復元先を
 // 失う（クリア済みの非アクティブ graph に書くだけになり、戻った階ではCLが消えたままundoも無い。
 // QA実測）。structuralSync.whenIdle()と同じ形（busyカウント＋idleResolvers配列）で追跡し、
@@ -616,10 +616,10 @@ async function runDeleteCenterLineWithUndo(graph, project, cl, opts = {}) {
       // await後にもう一度階切替・通り芯の消失（例: 別経路でundoが実行され通り芯が
       // structGraphへ復元された等）を検知する。**到達しない前提**: store.js switchFloor が
       // 冒頭で whenCenterLineOpsIdle() を await するため、この関数の実行中に
-      // floorSwapManager.deactivate（対象階のIDB保存＋clearFloorData）を伴う階切替は起きない
+      // floorSwapManager.swap（対象階のIDB保存＋clearFloorData）を伴う階切替は起きない
       // （QA指摘M・裁定(1)）。検知した場合は独自に巻き戻さず例外を投げ、下のcatch（安全網。
       // restoreStructCLs→restoreGraph→rollbackFloorRecords→再throw）へ委ねる——ここで
-      // {toast:null}を返すと、switchFloorが実際にdeactivateしてしまった後（本来届かない
+      // {toast:null}を返すと、switchFloorが実際にswapしてしまった後（本来届かない
       // はずのケース）にbefore/beforeArchが既にクリア済みの非アクティブgraphへの復元になり、
       // 復元が効かないままundoも無く終わる事故になりうるため（QA実測）。
       if (willRegenerateWalls && (graph !== project.activeGraph || project.structGraph.shapeMap.get(clId) !== undefined)) {
@@ -823,10 +823,10 @@ async function runDeleteCenterLineWithUndo(graph, project, cl, opts = {}) {
       // await後にもう一度階切替・この中心線の消失（graph.shapeMap.has(clId)。struct分岐の
       // project.structGraph.shapeMap.get(clId)!==undefinedと対称——別経路でundoが実行され
       // この中心線が復活した等）を検知する。**到達しない前提**: store.js switchFloor が冒頭で
-      // whenCenterLineOpsIdle() を await するため、この関数の実行中に floorSwapManager.deactivate
+      // whenCenterLineOpsIdle() を await するため、この関数の実行中に floorSwapManager.swap
       // （対象階のIDB保存＋clearFloorData）を伴う階切替は起きない（QA指摘M・裁定(1)）。検知した
       // 場合は独自に巻き戻さず例外を投げ、下のcatch（安全網。restoreGraph→再throw）へ委ねる
-      // ——ここで{toast:null}を返すと、switchFloorが実際にdeactivateしてしまった後（本来届かない
+      // ——ここで{toast:null}を返すと、switchFloorが実際にswapしてしまった後（本来届かない
       // はずのケース）にbeforeが既にクリア済みの非アクティブgraphへの復元になり、復元が効かない
       // ままundoも無く終わる事故になりうるため（QA実測）。
       if (willRegenerateWalls && (graph !== project.activeGraph || graph.shapeMap.has(clId))) {

@@ -29,6 +29,14 @@ export function isActiveAnAltOf(project, planeId) {
   return active?.isAlternative && active.referenceId === planeId;
 }
 
+// planeId を削除してよいか（false なら削除を中断すべき）。アクティブ階本体、またはその検討案が
+// アクティブなままでは削除できない——削除前に必ず switchFloor で切り替えること（store.js
+// removeFloor のJSDoc参照）。階削除・検討案削除の「切替えてから削除する」フローが、切替失敗時に
+// アクティブ階を削除してしまう事故を防ぐガード（QA指摘F1・2026-09-27）。
+export function blocksFloorRemoval(project, planeId) {
+  return project.activePlaneId === planeId || isActiveAnAltOf(project, planeId);
+}
+
 // ---- フロアタブのドラッグ割り込み（計算部）----
 // project.planes（elevation昇順）を fromId→toZone の並びへ並び替え、
 // 並替後の startFloor/elevation/name を再採番する。no-op（適用不可）なら null。

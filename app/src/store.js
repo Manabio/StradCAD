@@ -17,6 +17,7 @@ import { clearDirty, markDirty } from './dirtyState.js';
 import { acquireSessionLock } from './storage/sessionLock.js';
 import { SpatialIndex } from './transform/SpatialIndex.js';
 import { whenCenterLineOpsIdle } from './transform/centerLineOps.js';
+import { runFloorTransition } from './floorTransition.js';
 import {
   serializePlanes, decodePlanes, serializeSite, decodeSite, restoreSite, decodeFloorSnapshot,
   serializeGraph, restoreGraph,
@@ -124,7 +125,7 @@ reaction(
 // ----------------------------------------------------------------
 // IndexedDB 起動時初期化 + auto-save 開始
 //
-// floors ストアは「セッション作業領域」——階切替のスワップアウト（deactivate）が
+// floors ストアは「セッション作業領域」——階切替のスワップアウト（floorSwapManager.swap）が
 // 明示保存の有無に関わらず無条件に書き込む。起動のたびに、明示保存済みプロジェクトなら
 // 保存ドキュメント（savedFloors）の内容で floors を必ず作り直す（seedFloorsFromDocument）。
 // 前回セッションの「未保存のままスワップアウトされた編集」はここで消える——
@@ -603,29 +604,29 @@ export async function removeFloor(planeId) {
  */
 export async function switchFloor(nextPlaneId) {
   // CL削除（transform/centerLineOps.js deleteCenterLineWithUndo）の実行中に
-  // floorSwapManager.deactivate（対象階のIDB保存＋graph.clearFloorData()）が割り込むと、
+  // floorSwapManager.swap（対象階のIDB保存＋graph.clearFloorData()を含む）が割り込むと、
   // 削除処理が握っているbefore/beforeArchスナップショットの復元先（クリア済みの非アクティブ
-  // graph）が失われ、undoも無いまま壊れる（QA指摘M・2026-09-27）。deactivateの前に
+  // graph）が失われ、undoも無いまま壊れる（QA指摘M・2026-09-27）。swapの前に
   // 削除中のCL操作が無いことを待ち合わせる。
   await whenCenterLineOpsIdle();
 
-  const currentPlane = project.activePlane;
-  const currentGraph = project.activeGraph;
-  if (!currentPlane || !currentGraph) return;
-  if (currentPlane.id === nextPlaneId) return;
+  // 以降は階切替の関門（App.jsxの5経路が共有する。floorTransition.js）に入る——保存await中の
+  // 同期編集（隙間A）・読込みawait中の空graphへの上書き（隙間B）を防ぐswap本体を、UIの再入力が
+  // 塞がれた状態で実行する。
+  return runFloorTransition(async () => {
+    const currentPlane = project.activePlane;
+    const currentGraph = project.activeGraph;
+    if (!currentPlane || !currentGraph) return;
+    if (currentPlane.id === nextPlaneId) return;
 
-  const nextGraph = project.graphMap.get(nextPlaneId);
-  const nextPlane = project.planeMap.get(nextPlaneId);
-  if (!nextGraph || !nextPlane) return;
+    const nextGraph = project.graphMap.get(nextPlaneId);
+    const nextPlane = project.planeMap.get(nextPlaneId);
+    if (!nextGraph || !nextPlane) return;
 
-  // 現フロアをスワップアウト
-  await floorSwapManager.deactivate(currentPlane, currentGraph);
-
-  // アクティブ切替
-  runInAction(() => { project.activePlaneId = nextPlaneId; });
-
-  // 次フロアをスワップイン
-  await floorSwapManager.activate(nextPlane, nextGraph);
+    await floorSwapManager.swap(currentPlane, currentGraph, nextPlane, nextGraph, () => {
+      project.activePlaneId = nextPlaneId;
+    });
+  });
 }
 
 /**
@@ -668,7 +669,7 @@ export async function collectCatalogUsageAcrossFloors(floorRecords) {
  *     直接編集する経路）の保留中デバウンス保存を確定する（saveToIDBの①と同じ）。
  * (2) アクティブ階の現在のグラフを floors（作業領域store）へ明示的に書き出す——saveNowが行う
  *     階部分の保存（saveFloor(plane.id, serializeGraph(graph))）と同じ書込みを、明示保存前に
- *     前倒しで行うだけ（非アクティブ階は switchFloor のたびに floorSwapManager.deactivate が
+ *     前倒しで行うだけ（非アクティブ階は switchFloor のたびに floorSwapManager.swap が
  *     同じstoreへ既に書いているため、ここではアクティブ階だけを追い書きすればよい）。
  *     savedFloors（文書）・projects等は一切書かない——使用キー収集に不要な副作用を増やさない。
  * (3) project.planeMap の全階ぶん floors（loadFloor）から decode し、collectUsedKeysByKind→
@@ -794,7 +795,7 @@ async function saveCatalogDocument(floorRecords) {
 
 /**
  * アクティブなフロアと通り芯を IndexedDB に明示的に保存し、dirty をリセットする。
- * 非アクティブ階はスワップアウト時（deactivate）に明示保存の有無に関わらず floors
+ * 非アクティブ階はスワップアウト時（floorSwapManager.swap）に明示保存の有無に関わらず floors
  * （セッション作業領域）へ無条件保存されるため、floors 上はこれで全階が揃う。
  * それを保存ドキュメント（savedFloors）へ確定コピーし（commitFloorsToDocument）、
  * 明示保存フラグを立てて、次回起動時の白紙化をスキップして復元対象にする。

@@ -36,7 +36,7 @@ import { CenterLineType, OpeningCategory } from '@core';
 import { isHitTestTarget } from './core/centerLineKindPolicy.js';
 import { addSkipZero, subtractSkipZero, makeFloorName, renameFloor } from './floorNumber.js';
 import {
-  floorBytesEqual, applyFloorBytes, isActiveAnAltOf,
+  floorBytesEqual, applyFloorBytes, blocksFloorRemoval,
   computeFloorReorder, computeAltReorder, resolveChipReorderTarget, computeFloorChangeReorder,
 } from './floorOps.js';
 import { AddFloorDialog } from './ui/AddFloorDialog.jsx';
@@ -77,7 +77,8 @@ import {
   promoteCenterToGridWithUndo, demoteGridToCenterWithUndo,
   setCenterLineStructuralListener, applyCLEccentricityWithUndo,
 } from './transform/centerLineOps.js';
-import { ERR_CL_CONVERT_SYNC_FAILED, ERR_SESSION_LOCKED } from './error.js';
+import { ERR_CL_CONVERT_SYNC_FAILED, ERR_SESSION_LOCKED, floorTransitionErrorMessage } from './error.js';
+import { isFloorTransitioning, runFloorTransition } from './floorTransition.js';
 import { isSessionOwner } from './storage/sessionLock.js';
 import { HamburgerMenu }       from './ui/HamburgerMenu.jsx';
 import { ModeBar }             from './ui/ModeBar.jsx';
@@ -538,6 +539,61 @@ const App = observer(() => {
     }
   }
 
+  // ESCキー相当の中断処理（描画中の作図・移動・軸編集・敷地作図・メニュー・ジェスチャーを止める）。
+  // ESCハンドラ本体とbeginUiTransition（階/モード切替の関門に入る直前の中断）の両方から呼ぶ
+  // 唯一の実体にする（二重実装によるズレを防ぐ）。
+  function interruptCurrentAction() {
+    setMenu(null);
+    modeRef.current?.cancelDraw?.();
+    modeRef.current?.cancelMove?.();
+    modeRef.current?.cancelAxisEdit?.();
+    modeRef.current?.cancelSiteDraw?.();
+    resetGestureRefs();
+  }
+
+  // 階/モード切替の関門（runFloorTransition）へ入る直前（同期）に呼ぶ: 入力中フィールドの
+  // endFieldUndoを保存前に確定させ（blur）、ESCと同じ中断で描画中の操作を止める。
+  function beginUiTransition() {
+    document.activeElement?.blur?.();
+    interruptCurrentAction();
+  }
+
+  // 階/モード切替（swap失敗・モード境界の例外）の共通トースト表示。文言の決定はfloorTransitionErrorMessage
+  // （error.js）に委ねる——生の技術的なエラーだけをERR_FLOOR_SWITCH_FAILEDに丸め、ERR_CATALOG_DUPLICATE等
+  // 既知のエラーはmessageをそのまま見せる（QA指摘F3・2026-09-27。詳細はconsole.errorへ）。
+  function reportFloorTransitionError(err) {
+    console.error(err);
+    setToast({ msg: floorTransitionErrorMessage(err), key: Date.now() });
+  }
+
+  // 遷移中（isFloorTransitioning()）はUIからの再入力を無視する薄いラッパー。FloorDrum/AltChipの
+  // onSwitch・ModeBarのonSelect・HistoryButtonsのonUndo/onRedoに被せる（同フレーム連打対策）。
+  // 例外を握るのはこの層だけにする（F1・2026-09-27）——handleFloorSwitch/switchFloorKeepingMode
+  // 自体は内部から直接呼ぶ経路（階削除・階追加・検討コピー等）が成否を判定できるよう、もはや
+  // 内部でtry/catchせず素通しする。UIコールバックとして渡されたときの失敗表示はここで拾う
+  // （performUndo/performRedo/handleModeChangeは従来どおり自前でcatchするため、ここでは
+  // 二重に表示されない＝catch済みのfnはresolveするだけ）。
+  function guardUi(fn) {
+    return (...args) => {
+      if (isFloorTransitioning()) return;
+      Promise.resolve(fn(...args)).catch(reportFloorTransitionError);
+    };
+  }
+
+  // 内部（非UI）呼び出し用: handleFloorSwitch/switchFloorKeepingModeの失敗をここで捕捉して
+  // トースト表示し、呼び出し元が後続処理（removeFloor・restoreGraph・reflectStructuralAfterFloorAdd等）
+  // を進めてよいかを真偽値で返す。guardUi（UIコールバック層）を経由しない直接呼び出し専用
+  // （F1: 切替失敗時にもアクティブ階を削除してしまう事故の是正・2026-09-27）。
+  async function trySwitchFloor(run) {
+    try {
+      await run();
+      return true;
+    } catch (err) {
+      reportFloorTransitionError(err);
+      return false;
+    }
+  }
+
   // Ctrl+Z / Ctrl+Y の実体。コンテキスト切替は非同期のため、進行中の多重実行は弾く。
   // 切替中に履歴が動いた（別の push/undo が割り込んだ）場合は実行を中止する。
   const historyNavRef = useRef(false);
@@ -546,13 +602,18 @@ const App = observer(() => {
     const cmd = undoManager.peekUndo();
     if (!cmd) return;
     historyNavRef.current = true;
+    beginUiTransition();
     try {
-      // 実行中の構造同期が起動元エントリのfloorRecordsへ追記し終える前にundoすると、その追記が
-      // undo後に紛れ込む（段階(g)）。cmd.contextの有無に関わらず必ず待つ——switchHistoryContext内の
-      // whenIdleはcontextがある場合のみのため、ここで明示する（cmd.contextなしでも起動され得る）。
-      await structuralSync.whenIdle();
-      if (cmd.context) await switchHistoryContext(cmd.context);
-      if (undoManager.peekUndo() === cmd) undoManager.undo();
+      await runFloorTransition(async () => {
+        // 実行中の構造同期が起動元エントリのfloorRecordsへ追記し終える前にundoすると、その追記が
+        // undo後に紛れ込む（段階(g)）。cmd.contextの有無に関わらず必ず待つ——switchHistoryContext内の
+        // whenIdleはcontextがある場合のみのため、ここで明示する（cmd.contextなしでも起動され得る）。
+        await structuralSync.whenIdle();
+        if (cmd.context) await switchHistoryContext(cmd.context);
+        if (undoManager.peekUndo() === cmd) undoManager.undo();
+      });
+    } catch (err) {
+      reportFloorTransitionError(err);
     } finally {
       historyNavRef.current = false;
     }
@@ -562,11 +623,16 @@ const App = observer(() => {
     const cmd = undoManager.peekRedo();
     if (!cmd) return;
     historyNavRef.current = true;
+    beginUiTransition();
     try {
-      // performUndoと同じ理由（段階(g)）。
-      await structuralSync.whenIdle();
-      if (cmd.context) await switchHistoryContext(cmd.context);
-      if (undoManager.peekRedo() === cmd) undoManager.redo();
+      await runFloorTransition(async () => {
+        // performUndoと同じ理由（段階(g)）。
+        await structuralSync.whenIdle();
+        if (cmd.context) await switchHistoryContext(cmd.context);
+        if (undoManager.peekRedo() === cmd) undoManager.redo();
+      });
+    } catch (err) {
+      reportFloorTransitionError(err);
     } finally {
       historyNavRef.current = false;
     }
@@ -574,10 +640,10 @@ const App = observer(() => {
   // keydown リスナは初回マウント時のみ登録されるため、最新レンダーのクロージャを ref 経由で呼ぶ
   const performUndoRef = useRef(null);
   const performRedoRef = useRef(null);
-  const resetGestureRefsRef = useRef(null);
+  const interruptCurrentActionRef = useRef(null);
   performUndoRef.current = performUndo;
   performRedoRef.current = performRedo;
-  resetGestureRefsRef.current = resetGestureRefs;
+  interruptCurrentActionRef.current = interruptCurrentAction;
 
   // ESC / Ctrl+Z / Ctrl+Y
   useEffect(() => {
@@ -585,15 +651,22 @@ const App = observer(() => {
       if ((e.ctrlKey || e.metaKey) && e.key === 'z') { e.preventDefault(); performUndoRef.current?.(); return; }
       if ((e.ctrlKey || e.metaKey) && e.key === 'y') { e.preventDefault(); performRedoRef.current?.(); return; }
       if (e.key !== 'Escape') return;
-      setMenu(null);
-      modeRef.current?.cancelDraw?.();
-      modeRef.current?.cancelMove?.();
-      modeRef.current?.cancelAxisEdit?.();
-      modeRef.current?.cancelSiteDraw?.();
-      resetGestureRefsRef.current?.();
+      interruptCurrentActionRef.current?.();
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
+  // 階/モード切替の関門（runFloorTransition）が開いている間は、キー入力を全て捕捉して
+  // 後段（上のESC/Ctrl+Z/Ctrl+Y、モード側のキー処理）へ渡さない（capture登録・連打対策）。
+  useEffect(() => {
+    const guard = (e) => {
+      if (!isFloorTransitioning()) return;
+      e.stopImmediatePropagation();
+      e.preventDefault();
+    };
+    window.addEventListener('keydown', guard, true);
+    return () => window.removeEventListener('keydown', guard, true);
   }, []);
 
   // ---- モード境界: 建具モード突入（記号別採番を全階から収集して確定する）----
@@ -634,10 +707,10 @@ const App = observer(() => {
     if (closeInfoDialog) setShowStructuralInfoDialog(false);
     if (reflectOtherFloors) {
       // アクティブ階の現状（メモリ）を先に floors ストアへ書く——reflect は隣接階を floorSwapManager.peek
-      // （毎回IDBから読む）で参照する一方、アクティブ階の auto-save は dirty 印だけ（保存は deactivate/
-      // saveNow）のため、構造モード内の自階編集（各階柱寸法など。上の階の梁幅・個別採番がこれを読む）を
-      // 反映せずに古い値で他階を確定・保存してしまう（QA指摘2026-09-16）。deactivate と同じ
-      // serializeGraph→saveFloor で、未保存文書（dirty）の意味は変えない。
+      // （毎回IDBから読む）で参照する一方、アクティブ階の auto-save は dirty 印だけ（保存は
+      // floorSwapManager.swap/saveNow）のため、構造モード内の自階編集（各階柱寸法など。上の階の梁幅・
+      // 個別採番がこれを読む）を反映せずに古い値で他階を確定・保存してしまう（QA指摘2026-09-16）。
+      // swap（現階クリア前の保存）と同じ serializeGraph→saveFloor で、未保存文書（dirty）の意味は変えない。
       if (project.activeGraph && project.activePlane) {
         await saveFloor(project.activePlane.id, serializeGraph(project.activeGraph));
       }
@@ -704,60 +777,73 @@ const App = observer(() => {
   async function handleModeChange(newMode) {
     if (newMode === appMode) { setMode(null); setAppMode(newMode); return; } // 同一モードは境界処理なし
 
-    // 実行中の構造同期（建具・通り芯削除起因）がgraphを保存・差し替えしている最中にモードを切り替えると
-    // 競合するため、switchFloorを伴う処理より前に完了を待つ（structural/structuralSync.js参照）。
-    await structuralSync.whenIdle();
+    beginUiTransition();
+    try {
+      await runFloorTransition(async () => {
+        // 実行中の構造同期（建具・通り芯削除起因）がgraphを保存・差し替えしている最中にモードを切り替えると
+        // 競合するため、switchFloorを伴う処理より前に完了を待つ（structural/structuralSync.js参照）。
+        await structuralSync.whenIdle();
 
-    // 以降のモード固有処理はこの graph を対象とする。R階伏図からの脱出時は降りた先の階で再取得する。
-    let graph = project.activeGraph;
+        // 以降のモード固有処理はこの graph を対象とする。R階伏図からの脱出時は降りた先の階で再取得する。
+        let graph = project.activeGraph;
 
-    // 旧モードの脱出境界を確定してから切り替える（graph 変更を伴う境界処理は完了を待つ）。
-    await modeBoundaries[appMode]?.exit?.(graph, { toMode: newMode, floorSwitch: false });
+        // 旧モードの脱出境界を確定してから切り替える（graph 変更を伴う境界処理は完了を待つ）。
+        await modeBoundaries[appMode]?.exit?.(graph, { toMode: newMode, floorSwitch: false });
 
-    // R階伏図（屋根専用平面）は構造モード専用の合成平面で他モードには存在しない。
-    // 他モードへ移る場合は直下の実体階（最上階）へ降りてから切り替える。
-    if (project.activePlane?.isRoofPlane) {
-      const belowId = project.activePlane.roofForPlaneId;
-      if (belowId != null && project.planeMap.has(belowId)) {
-        await switchFloor(belowId);
-        setActiveFloorId(belowId);
-        graph = project.activeGraph; // 降りた先のフロアを以降の処理対象にする
-      }
+        // R階伏図（屋根専用平面）は構造モード専用の合成平面で他モードには存在しない。
+        // 他モードへ移る場合は直下の実体階（最上階）へ降りてから切り替える。
+        if (project.activePlane?.isRoofPlane) {
+          const belowId = project.activePlane.roofForPlaneId;
+          if (belowId != null && project.planeMap.has(belowId)) {
+            await switchFloor(belowId);
+            setActiveFloorId(belowId);
+            graph = project.activeGraph; // 降りた先のフロアを以降の処理対象にする
+          }
+        }
+
+        // 新モードの突入境界（構造は deferEnterOnModeChange＝完了を待たずに切替を先行させる）。
+        const next = modeBoundaries[newMode];
+        if (next?.enter) {
+          const entered = next.enter(graph, { fromMode: appMode, floorSwitch: false });
+          if (next.deferEnterOnModeChange) entered.catch(console.error);
+          else await entered;
+        }
+
+        // 旧モードを同期的にクリア。setMode(null) は effect 内（描画後）に走るため、
+        // ここでクリアしないと appMode 変更直後の1レンダリングで旧モードのまま
+        // モード固有パネルが描画されてしまう（型不一致でクラッシュする）。
+        setMode(null);
+        setAppMode(newMode);
+      });
+    } catch (err) {
+      reportFloorTransitionError(err);
     }
-
-    // 新モードの突入境界（構造は deferEnterOnModeChange＝完了を待たずに切替を先行させる）。
-    const next = modeBoundaries[newMode];
-    if (next?.enter) {
-      const entered = next.enter(graph, { fromMode: appMode, floorSwitch: false });
-      if (next.deferEnterOnModeChange) entered.catch(console.error);
-      else await entered;
-    }
-
-    // 旧モードを同期的にクリア。setMode(null) は effect 内（描画後）に走るため、
-    // ここでクリアしないと appMode 変更直後の1レンダリングで旧モードのまま
-    // モード固有パネルが描画されてしまう（型不一致でクラッシュする）。
-    setMode(null);
-    setAppMode(newMode);
   }
 
   // ---- フロア切替（平面モードへ移動する切替。階追加・削除・階段フロー等の共通経路）----
   // どのモードから呼ばれても現モードの脱出境界を先に確定する（モード境界レジストリ経由＝適用漏れ防止）。
+  // 失敗時は例外をそのまま投げる（ここでは握らない）——UIコールバック（onSwitch等）に渡すときは
+  // guardUiが例外を捕捉してトースト表示する。階削除・階追加・検討コピー等の内部から直接呼ぶ経路は
+  // trySwitchFloor経由で成否を判定してから後続処理を進めるかどうかを決める（F1・2026-09-27）。
   async function handleFloorSwitch(planeId) {
     if (planeId === project.activePlaneId) return;
-    // 実行中の構造同期（建具・通り芯削除起因）の完了を待つ（switchFloorより前。structural/structuralSync.js参照）。
-    await structuralSync.whenIdle();
-    await modeBoundaries[appMode]?.exit?.(project.activeGraph, { toMode: 'floorplan', floorSwitch: false });
-    await switchFloor(planeId);
-    setActiveFloorId(planeId);
-    setMode(null);
-    setAppMode('floorplan');
-    setSnapPoint(null);
-    setNearCL(null);
-    setNearWall(null);
-    setNearOpening(null);
-    setCursorWorld(null);
-    setMenu(null);
-    setClDialog(null);
+    beginUiTransition();
+    await runFloorTransition(async () => {
+      // 実行中の構造同期（建具・通り芯削除起因）の完了を待つ（switchFloorより前。structural/structuralSync.js参照）。
+      await structuralSync.whenIdle();
+      await modeBoundaries[appMode]?.exit?.(project.activeGraph, { toMode: 'floorplan', floorSwitch: false });
+      await switchFloor(planeId);
+      setActiveFloorId(planeId);
+      setMode(null);
+      setAppMode('floorplan');
+      setSnapPoint(null);
+      setNearCL(null);
+      setNearWall(null);
+      setNearOpening(null);
+      setCursorWorld(null);
+      setMenu(null);
+      setClDialog(null);
+    });
   }
 
   // ---- フロア切替（モード維持）：現モードを抜けずに別階の同種図面へ移動する ----
@@ -767,23 +853,27 @@ const App = observer(() => {
   // 突入境界処理は switchFloor 後の graph（project.activeGraph を読み直したもの。.claude/floor-design.md）
   // に対して行い、それが終わってから setActiveFloorId でモード再ロード effect を走らせる
   // （先に activeFloorId を更新すると、境界処理前のグラフでモード状態が生成されてしまう）。
+  // 失敗時は例外をそのまま投げる（handleFloorSwitchと同じ規律。F1・2026-09-27）。
   async function switchFloorKeepingMode(planeId) {
     if (planeId === project.activePlaneId) return;
-    // 実行中の構造同期（建具・通り芯削除起因）の完了を待つ（switchFloorより前。structural/structuralSync.js参照）。
-    await structuralSync.whenIdle();
-    const boundary = modeBoundaries[appMode];
-    const graph = project.activeGraph; // 切替前階（脱出境界処理の対象）
-    await boundary?.exit?.(graph, { toMode: appMode, floorSwitch: true });
-    await switchFloor(planeId);
-    await boundary?.enter?.(project.activeGraph, { floorSwitch: true }); // 切替後は読み直す
-    setActiveFloorId(planeId);
-    boundary?.afterFloorSwitch?.(planeId);
-    setSnapPoint(null);
-    setNearCL(null);
-    setNearWall(null);
-    setNearOpening(null);
-    setCursorWorld(null);
-    setMenu(null);
+    beginUiTransition();
+    await runFloorTransition(async () => {
+      // 実行中の構造同期（建具・通り芯削除起因）の完了を待つ（switchFloorより前。structural/structuralSync.js参照）。
+      await structuralSync.whenIdle();
+      const boundary = modeBoundaries[appMode];
+      const graph = project.activeGraph; // 切替前階（脱出境界処理の対象）
+      await boundary?.exit?.(graph, { toMode: appMode, floorSwitch: true });
+      await switchFloor(planeId);
+      await boundary?.enter?.(project.activeGraph, { floorSwitch: true }); // 切替後は読み直す
+      setActiveFloorId(planeId);
+      boundary?.afterFloorSwitch?.(planeId);
+      setSnapPoint(null);
+      setNearCL(null);
+      setNearWall(null);
+      setNearOpening(null);
+      setCursorWorld(null);
+      setMenu(null);
+    });
   }
 
   // ---- フロア切替（構造モード中・planeId 経路：検討チップ）。移動先平面の先頭スロットを選択状態にする。
@@ -898,7 +988,10 @@ const App = observer(() => {
               ? sourcePlaneId
               : project.planes.find(p => !addedPlanes.some(pl => pl.id === p.id))?.id;
             if (!backId) return; // 戻り先なし（起こらない想定）
-            await handleFloorSwitch(backId);
+            await trySwitchFloor(() => handleFloorSwitch(backId));
+            // 切替に失敗し追加階のいずれかがアクティブのまま→削除するとアクティブ階を消してしまうため中断
+            // （F1・2026-09-27）。
+            if (addedPlanes.some(pl => pl.id === project.activePlaneId)) return;
           }
           for (const pl of addedPlanes) await removeFloor(pl.id);
           for (const rec of changedSiblings) applyFloorBytes(project, rec.planeId, rec.before);
@@ -927,7 +1020,8 @@ const App = observer(() => {
       const nextElevation = currentPlane.elevation + 3000 * currentPlane.stories;
       const { plane } = addFloor(nextElevation, newName, newStartFloor, 1);
       await syncNewFloorFromSource(project.activeGraph, plane, newStartFloor);
-      await handleFloorSwitch(plane.id);
+      // 切替に失敗したら以降（構造反映）を進めない（F1・2026-09-27）。
+      if (!(await trySwitchFloor(() => handleFloorSwitch(plane.id)))) return;
       await reflectStructuralAfterFloorAdd(project);
     });
   }
@@ -957,8 +1051,8 @@ const App = observer(() => {
           lastPlane = result.plane;
           prevFloor = sf;
         }
-        // 作成した最も下の階に切り替え
-        if (lastPlane) await handleFloorSwitch(lastPlane.id);
+        // 作成した最も下の階に切り替え。切替に失敗したら以降（構造反映）を進めない（F1・2026-09-27）。
+        if (lastPlane && !(await trySwitchFloor(() => handleFloorSwitch(lastPlane.id)))) return;
         await reflectStructuralAfterFloorAdd(project);
       });
       return;
@@ -973,7 +1067,8 @@ const App = observer(() => {
         const nextElevation = currentPlane.elevation + 3000 * currentPlane.stories;
         const { plane } = addFloor(nextElevation, newName, newStartFloor, n);
         await syncNewFloorFromSource(project.activeGraph, plane, newStartFloor);
-        await handleFloorSwitch(plane.id);
+        // 切替に失敗したら以降（構造反映）を進めない（F1・2026-09-27）。
+        if (!(await trySwitchFloor(() => handleFloorSwitch(plane.id)))) return;
         await reflectStructuralAfterFloorAdd(project);
       });
     }
@@ -1045,7 +1140,8 @@ const App = observer(() => {
           const altName  = (refPlane?.name ?? '') + '#' + letter;
           const result   = addAlternativeFloor(refId, altName);
           if (!result) return;
-          await handleFloorSwitch(result.plane.id);
+          // 切替に失敗したら以降（複製元の書き戻し）を進めない（F1・2026-09-27）。
+          if (!(await trySwitchFloor(() => handleFloorSwitch(result.plane.id)))) return;
           if (v === 'yes') {
             restoreGraph(project.activeGraph, serializeGraph(graph));
           }
@@ -1085,8 +1181,10 @@ const App = observer(() => {
           const idx     = adopted.findIndex(p => p.id === planeId);
           const fallback = adopted[idx + 1] ?? adopted[idx - 1];
           const below    = adopted[idx - 1] ?? null; // 直下の採用階（階段が接続していた階）
-          if (project.activePlaneId === planeId || isActiveAnAltOf(project, planeId)) {
-            if (fallback) await handleFloorSwitch(fallback.id);
+          if (blocksFloorRemoval(project, planeId)) {
+            if (fallback) await trySwitchFloor(() => handleFloorSwitch(fallback.id));
+            // 切替できていない（失敗・fallback無し）→アクティブ階を削除してしまうため中断（F1・2026-09-27）。
+            if (blocksFloorRemoval(project, planeId)) return;
           }
           await removeFloor(planeId);
           // 消えた上階(n)に接続していた直下階(n-1)の階段を削除する。採用・検討案の両方。
@@ -1131,7 +1229,9 @@ const App = observer(() => {
           if (v !== 'ok') return;
           if (project.activePlaneId === planeId) {
             const fallback = project.planeMap.get(plane.referenceId);
-            if (fallback) await handleFloorSwitch(fallback.id);
+            if (fallback) await trySwitchFloor(() => handleFloorSwitch(fallback.id));
+            // 切替できていない→アクティブ階を削除してしまうため中断（F1・2026-09-27）。
+            if (project.activePlaneId === planeId) return;
           }
           await removeFloor(planeId);
         },
@@ -1180,7 +1280,8 @@ const App = observer(() => {
       const bytes = project.activePlaneId === planeId
         ? serializeGraph(graph)
         : null;
-      await handleFloorSwitch(result.plane.id);
+      // 切替に失敗したら複製元の書き戻しを進めない（F1・2026-09-27）。
+      if (!(await trySwitchFloor(() => handleFloorSwitch(result.plane.id)))) return;
       if (bytes) restoreGraph(project.activeGraph, bytes);
       return;
     }
@@ -1706,8 +1807,15 @@ const App = observer(() => {
 
   return (
     <>
+      {/* 階/モード切替の関門（runFloorTransition）が開いている間、画面全体の入力を塞ぐ
+          （現状の最大zIndexはMemberLayoutStudyの4000のためそれより上に置く）。observer配下なので
+          isFloorTransitioning()の変化に追随して自動的に再描画される。 */}
+      {isFloorTransitioning() && (
+        <div style={{ position: 'fixed', inset: 0, zIndex: 5000, cursor: 'progress' }} />
+      )}
+
       {/* Undo/Redo ボタン — 左上 */}
-      <HistoryButtons onUndo={performUndo} onRedo={performRedo} />
+      <HistoryButtons onUndo={guardUi(performUndo)} onRedo={guardUi(performRedo)} />
 
       {/* ハンバーガーメニュー — 右上 */}
       <div style={{
@@ -1720,7 +1828,7 @@ const App = observer(() => {
       {/* モード切替バー — 横長=上部中央 / 縦長=下部中央（常時表示） */}
       <ModeBar
         appMode={appMode}
-        onSelect={handleModeChange}
+        onSelect={guardUi(handleModeChange)}
         isLandscape={isLandscape}
       />
 
@@ -1729,11 +1837,11 @@ const App = observer(() => {
       <FloorDrum
         floors={drumFloors}
         activeFloorId={appMode === 'structure' ? activeStructSlot : activeFloorId}
-        onSwitch={
+        onSwitch={guardUi(
           appMode === 'structure' ? handleStructuralSlotSwitch  // スロット単位（slotType:planeId）で移動
           : appMode === 'floorplan' ? handleFloorSwitch          // 平面はモード再設定を伴う従来経路
           : switchFloorKeepingMode                               // その他はモード維持の共通経路（境界レジストリ適用）
-        }
+        )}
         isLandscape={isLandscape}
       />
 
@@ -1760,7 +1868,7 @@ const App = observer(() => {
             chipText={chipText}
             variants={chipVariants}
             managementItems={chipManagementItems}
-            onSwitch={appMode === 'structure' ? handleStructuralFloorSwitch : handleFloorSwitch}
+            onSwitch={guardUi(appMode === 'structure' ? handleStructuralFloorSwitch : handleFloorSwitch)}
             onTapAdd={() => handleFloorMenuAction('add-alt', project.activePlaneId)}
             onManage={id => handleFloorMenuAction(id, project.activePlaneId)}
           />

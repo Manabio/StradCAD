@@ -1010,15 +1010,16 @@ test('【不変条件・2026-09-22 QA指摘B残存・T7】store.js: bootReadyの
     'それ以外のエラー用のconsole.error(e)が残っていない（従来挙動が失われている）');
 });
 
-// ---- 不変条件・QA指摘M（2026-09-27。テスト(ii)）: store.js の switchFloor が
-// floorSwapManager.deactivate（対象階のIDB保存＋graph.clearFloorData()）より前に
+// ---- 不変条件・QA指摘M（2026-09-27。テスト(ii)。階切替の関門ステップ2026-09-27で
+// floorSwapManager.deactivateをswapへ統合した後もそのまま維持）: store.js の switchFloor が
+// floorSwapManager.swap（対象階のIDB保存＋graph.clearFloorData()を含む）より前に
 // whenCenterLineOpsIdle() をawaitしている。CL削除（transform/centerLineOps.js
-// deleteCenterLineWithUndo）の実行中にdeactivateが割り込むと、削除処理が握っている
+// deleteCenterLineWithUndo）の実行中にswapが割り込むと、削除処理が握っている
 // before/beforeArchスナップショットの復元先（クリア済みの非アクティブgraph）を失う事故になる
 // ため（QA実測）。store.js自体はlocalStorage/indexedDBに依存するモジュール初期化がありnode:test
 // から実行できないため、上のbootReadyのテストと同じ型（ソーステキストを正規表現で検査する
 // 不変条件テスト）で固定する ----
-test('【不変条件・QA指摘M】store.js: switchFloor本体がfloorSwapManager.deactivateより前にwhenCenterLineOpsIdle()をawaitしている', () => {
+test('【不変条件・QA指摘M】store.js: switchFloor本体がfloorSwapManager.swapより前にwhenCenterLineOpsIdle()をawaitしている', () => {
   const src = fs.readFileSync(path.resolve(import.meta.dirname, 'store.js'), 'utf8');
 
   assert.match(src, /import\s*\{\s*whenCenterLineOpsIdle\s*\}\s*from\s*'\.\/transform\/centerLineOps\.js';/,
@@ -1040,8 +1041,8 @@ test('【不変条件・QA指摘M】store.js: switchFloor本体がfloorSwapManag
   assert.match(codeOnly.slice(Math.max(0, idleIdx - 10), idleIdx + 30), /await\s+whenCenterLineOpsIdle\(\)/,
     'whenCenterLineOpsIdle() はawaitされている必要がある');
 
-  const deactivateIdx = codeOnly.indexOf('floorSwapManager.deactivate(');
-  assert.ok(deactivateIdx >= 0, 'switchFloor の本体に floorSwapManager.deactivate の呼び出しが無い');
-  assert.ok(idleIdx < deactivateIdx,
-    'whenCenterLineOpsIdle() は floorSwapManager.deactivate より前に呼ぶ必要がある');
+  const swapIdx = codeOnly.indexOf('floorSwapManager.swap(');
+  assert.ok(swapIdx >= 0, 'switchFloor の本体に floorSwapManager.swap の呼び出しが無い');
+  assert.ok(idleIdx < swapIdx,
+    'whenCenterLineOpsIdle() は floorSwapManager.swap より前に呼ぶ必要がある');
 });

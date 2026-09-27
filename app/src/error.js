@@ -123,6 +123,17 @@ export const ERR_CL_DELETE_UNRESOLVABLE = '部屋の区切りを復元できな�
 // 境界でも修復されない事故になる（QA指摘H2・M1'・2026-09-27）。
 export const ERR_CL_DELETE_WALLS_UNAVAILABLE = '壁を作り直せないため削除できません。必要なデータの読込みに失敗しました。';
 
+// 階切替の関門（storage/FloorSwapManager.js swap）専用: 保存＋安定確認ループ
+// （MAX_SWAP_SAVE_ATTEMPTS回）を試みても、保存の前後でfromGraphの内容が変わり続け安定しない
+// 場合（保存awaitの間、編集が絶えず割り込む）。現階のauto-saveは再開されるため、もう一度
+// 切替を試せば通常は成功する。
+export const ERR_FLOOR_SWITCH_UNSTABLE = '編集が続いているため階を切り替えられませんでした。もう一度お試しください。';
+
+// 階切替の関門（storage/FloorSwapManager.js swap）専用: 次階の読込み（loadFloor）または
+// 現階の保存（saveFloor）そのものがIDBエラーで失敗した場合、あるいは次階の復元
+// （restoreGraph）が壊れたバイト列で失敗した場合。
+export const ERR_FLOOR_SWITCH_FAILED = '階の保存または読込みに失敗したため切り替えられませんでした。';
+
 // セッション排他ロック（storage/sessionLock.js）: 別タブが編集セッションを保持している場合、
 // storage/db.js の openDB() がこの文言で reject する。App.jsx は同じ文言を全画面案内に表示する。
 export const ERR_SESSION_LOCKED = 'このアプリは別のタブで開いています。編集できるのは1つのタブだけです。';
@@ -134,3 +145,18 @@ export const ERR_SESSION_LOCKED = 'このアプリは別のタブで開いてい
 // wallRefresh.js の getMaterialMap 呼び出しの catch は、このコードのときだけ再throwし
 // （黙って壁を古いまま残さない）、それ以外は従来どおり materialMap 無しとして扱う。
 export const ERR_CATALOG_DUPLICATE = 'ERR_CATALOG_DUPLICATE';
+
+// 階/モード切替の関門（App.jsxのrunFloorTransition経由の5経路）が捕まえた例外を、どの文言で
+// ユーザーへ見せるか決める純関数。関門のコールバック本体はmodeBoundaries.exit/enter（仕上げ脱出の
+// 壁再生成等）を経由するため、swap自身のERR_FLOOR_SWITCH_UNSTABLE以外にも、.codeに識別用コードを
+// 持つ既知のエラー（例: カタログ重複検出のERR_CATALOG_DUPLICATE）が飛んでくることがある——
+// これらは message が呼び出し元で意味のある内容に組み立てられているため、生の技術的な例外
+// （IDBエラー等）だけをERR_FLOOR_SWITCH_FAILEDに丸め、既知のものはmessageをそのまま見せる
+// （QA指摘F3・2026-09-27）。
+const KNOWN_TRANSITION_ERROR_CODES = [ERR_CATALOG_DUPLICATE];
+
+export function floorTransitionErrorMessage(err) {
+  if (err instanceof Error && err.message === ERR_FLOOR_SWITCH_UNSTABLE) return err.message;
+  if (err?.code != null && KNOWN_TRANSITION_ERROR_CODES.includes(err.code)) return err.message;
+  return ERR_FLOOR_SWITCH_FAILED;
+}

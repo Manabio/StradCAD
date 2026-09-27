@@ -224,9 +224,9 @@ export function rowDotIds(anchors, suppressKeys) {
 // この行の基準線（lineCoord）が描画エリアの外に出る場合は、外書き自体を諦めて
 // 中心線を部屋内書きフォールバックに回すため、アンカーを空にする。
 export function buildCenterRowAnchors(d, graph, viewport, areaBounds, appMode) {
-  // floorSwapManager.deactivate() がフロアを IDB にスワップアウトする際、
-  // activePlaneId 切替前の一瞬だけ graph.clearFloorData() 後の状態（CENTER 寸法行が0件）を
-  // 観測してしまうことがある（正規のスワップアウト動作）。d が無い場合は単に何も描かない。
+  // floorSwapManager.swap() は次階の復元・現階のクリア・アクティブ切替を1つの runInAction で
+  // 同期的に確定するため、activePlaneId 切替前後で clearFloorData() 後の空状態（CENTER 寸法行が
+  // 0件）を観測することは通常は無い。d が無い場合の防御として残す（何も描かない）。
   if (!d) return { boundary: null, lineCoord: null, anchors: [] };
   const boundary = d.centerBoundary;
   if (boundary == null) return { boundary: null, lineCoord: null, anchors: [] };

@@ -2718,11 +2718,11 @@ test('whenCenterLineOpsIdle: deleteCenterLineWithUndoが例外を投げても解
   assert.equal(idleResolved, true, '例外後もwhenCenterLineOpsIdleは解決するはず（永久に待たせない）');
 });
 
-// ---- floorSwapManager.deactivate相当（保存→clearFloorData→階切替）の再現（QA指摘M・テスト(iii)）----
+// ---- floorSwapManager.swap相当（保存→clearFloorData→階切替）の再現（QA指摘M・テスト(iii)）----
 // QA実測 qa-switch.test.mjs と同型: (b)の防御が本番のswitchFloorの手順そのものを検知したとき、
 // 独自に{toast:null}を返さず例外を投げて安全網へ渡し、正しく巻き戻して再スローすることを確認する。
 
-test('【QA-M-iii】deleteCenterLineWithUndo（非struct分岐）: regenerateWallsFn内でfloorSwapManager.deactivate相当の手順（保存→clearFloorData→activePlaneId変更）を再現すると、例外が安全網へ渡り巻き戻して再スローする・undoは積まれない', async () => {
+test('【QA-M-iii】deleteCenterLineWithUndo（非struct分岐）: regenerateWallsFn内でfloorSwapManager.swap相当の手順（保存→clearFloorData→activePlaneId変更）を再現すると、例外が安全網へ渡り巻き戻して再スローする・undoは積まれない', async () => {
   const { project, graph } = makeProjectWithGraph();
   const { xm } = addAdjacentRoomsWithWalls(graph);
   const materialMap = await loadMaterialMap();
@@ -2734,7 +2734,7 @@ test('【QA-M-iii】deleteCenterLineWithUndo（非struct分岐）: regenerateWal
 
   await assert.rejects(
     () => deleteCenterLineWithUndo(graph, project, xm, {
-      // 本番のfloorSwapManager.deactivate（storage/FloorSwapManager.js:72-76）と同じ手順:
+      // 本番のfloorSwapManager.swap（storage/FloorSwapManager.js。同期確定＝(4)の部分）と同じ手順:
       // saveFloor相当（Mapストアへ保存）→graph.clearFloorData()→activePlaneId変更。
       regenerateWallsFn: async () => {
         idbStore.set(graph.plane.id, serializeGraph(graph));
@@ -2751,7 +2751,7 @@ test('【QA-M-iii】deleteCenterLineWithUndo（非struct分岐）: regenerateWal
   assert.equal(undoManager.peekUndo(), undoBefore, 'undoは積まれないはず');
 });
 
-test('【QA-M-iii】deleteCenterLineWithUndo（struct分岐）: regenerateWallsFn内でfloorSwapManager.deactivate相当の手順を再現すると、例外が安全網へ渡り通り芯・後始末を含めて巻き戻して再スローする・undoは積まれない', async () => {
+test('【QA-M-iii】deleteCenterLineWithUndo（struct分岐）: regenerateWallsFn内でfloorSwapManager.swap相当の手順を再現すると、例外が安全網へ渡り通り芯・後始末を含めて巻き戻して再スローする・undoは積まれない', async () => {
   const { project, graph } = makeProjectWithGraph();
   const struct = { labeled: true, discipline: Discipline.STRUCT };
   project.structGraph.addCenterLine(CenterLineType.VERTICAL, 0, struct);

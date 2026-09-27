@@ -372,7 +372,18 @@ project, contribute it upstream to the team's playbook in the ccteams repo.
   `graph.clearFloorData()`）の後で `activePlaneId` を変えるため、検知時点で IDB には途中状態が保存済みで、
   メモリ上の graph を戻しても戻った階では変更が残り undo も無い。
 - **誤った直感**: `activePlaneId` の代入＝階切替の再現。
-- **正しい動き**: 階切替を模すテストは `deactivate` と同じ順（ストアへ保存→`clearFloorData()`→`activePlaneId` 変更）で
+- **正しい動き**: 階切替を模すテストは当時の `deactivate`（現 `FloorSwapManager.swap`。保存→`clearFloorData()`→`activePlaneId` 変更は
+  1つの runInAction で確定）と同じ順（ストアへ保存→`clearFloorData()`→`activePlaneId` 変更）で
   再現し、巻き戻し先に永続化された側（IDB／ストア）が含まれるかまで assert する。原則は「非同期の隙間で
   階切替を許さない」（`whenCenterLineOpsIdle()` のような待ち合わせを `switchFloor` 側に置く）で、検知ガードは
   安全網へ例外を渡すだけにする。
+
+### 関門を入れた遷移関数が失敗をトーストで握った結果、成功を前提に続ける内部呼び出し元（階削除）が壊れた（2026-09-27 階切替の関門で発生）
+
+- **症状**: `handleFloorSwitch` を関門（`runFloorTransition`）で包み、catch でトースト表示して正常 return させたところ、
+  「切替えてから階を削除する」フロー（`if (fallback) await handleFloorSwitch(fallback.id); await removeFloor(planeId)`）が
+  切替失敗後もアクティブ階そのものを `removeFloor` するようになった。HEAD では例外が上へ抜けて削除には届かなかった。
+- **誤った直感**: 「UI の入口で catch すれば安全」。
+- **正しい動き**: 例外を握るのは UI のコールバック層（`guardUi` の層）だけにする。内部から呼ばれる遷移関数は
+  成功・失敗を返すか rethrow し、呼び出し元は切替後の状態（`activePlaneId`）を確かめてから破壊的な処理に進む。
+  関門を足すときは、その関数の内部呼び出し元を grep して「失敗時に続けてよいか」を1件ずつ見る。

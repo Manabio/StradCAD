@@ -181,9 +181,9 @@ export async function syncUpperFloors(project, activeGraph, { undoEntry = null }
     const plane = planes[i];
     const hasFloorAbove = i + 1 < planes.length; // このフロアの、さらに上に採用フロアがあるか
     // 起点探索付き同期（syncUpperFloorsAuto）ではアクティブ階が同期対象に含まれうる。
-    // アクティブ階を peek→saveFloor で書き換えると、後のモード切替保存（deactivate が
+    // アクティブ階を peek→saveFloor で書き換えると、後のモード切替保存（floorSwapManager.swap が
     // メモリ上のグラフを保存する）で上書き消失するため、メモリ上のグラフを直接更新する
-    // （永続化は auto-save / deactivate に任せ、saveFloor はスキップする）。
+    // （永続化は auto-save / floorSwapManager.swap に任せ、saveFloor はスキップする）。
     const isActive = plane.id === project.activePlane?.id;
     const temp = isActive
       ? project.activeGraph

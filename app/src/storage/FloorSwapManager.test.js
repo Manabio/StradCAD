@@ -1,8 +1,9 @@
 // structuralOrchestration.test.js と同じ方針: FloorSwapManager は mobx（autorun）+
-// graphSnapshot.js + db.js（indexedDB アクセス）から成る。activate/deactivate/peek/saveNow/
-// setupStructGraph は indexedDB.open に到達するため node:test 環境（indexedDB 未定義。
-// 事前検証で ReferenceError: indexedDB is not defined を確認済み。fake-indexeddb 等の新規
-// 依存追加は本タスクの範囲外）ではテスト不能。
+// graphSnapshot.js + db.js（indexedDB アクセス）から成る。activate/peek/saveNow/
+// setupStructGraph は indexedDB.open に到達するため、このファイル（indexedDB 未定義。
+// 事前検証で ReferenceError: indexedDB is not defined を確認済み）ではテスト不能。
+// swap は同じ理由でここではテストできないが、自前の fake indexedDB シムを用意した
+// ./FloorSwapManager.swap.test.js（fake-indexeddb 等の新規npm依存は追加しない）で別途検証する。
 //
 // startEditablePeek/flushEditablePeek/stopEditablePeek の「デバウンスタイマーの張り／解除」
 // 自体は autorun の同期的な副作用であり indexedDB を経由しないため、ここでは

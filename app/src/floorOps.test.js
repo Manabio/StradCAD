@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   floorBytesEqual, computeFloorReorder, computeFloorChangeReorder, computeAltReorder, resolveChipReorderTarget,
-  reconcilePlanes,
+  reconcilePlanes, blocksFloorRemoval,
 } from './floorOps.js';
 
 // ---- floorBytesEqual ----
@@ -257,4 +257,30 @@ test('reconcilePlanes: activePlaneIdが孤児検討階を指す場合も最下�
 test('reconcilePlanes: metas.planesがundefined（想定外の入力）はnullを返し例外を投げない', () => {
   assert.doesNotThrow(() => reconcilePlanes({ activePlaneId: 'a' }, ['a'], 'a'));
   assert.equal(reconcilePlanes({ activePlaneId: 'a' }, ['a'], 'a'), null);
+});
+
+// ---- blocksFloorRemoval（削除して良いかの判定。QA指摘F1・2026-09-27）----
+test('blocksFloorRemoval: アクティブ階本体が対象なら削除を止める（true）', () => {
+  const project = { activePlaneId: 'p1', activePlane: { id: 'p1', isAlternative: false } };
+  assert.equal(blocksFloorRemoval(project, 'p1'), true);
+});
+
+test('blocksFloorRemoval: アクティブ階の検討案（referenceId=対象）がアクティブでも削除を止める（true）', () => {
+  const project = {
+    activePlaneId: 'p1-alt',
+    activePlane: { id: 'p1-alt', isAlternative: true, referenceId: 'p1' },
+  };
+  assert.equal(blocksFloorRemoval(project, 'p1'), true);
+});
+
+test('【失敗系】blocksFloorRemoval: 無関係な階がアクティブなら削除してよい（false）', () => {
+  const project = { activePlaneId: 'p2', activePlane: { id: 'p2', isAlternative: false } };
+  assert.equal(blocksFloorRemoval(project, 'p1'), false);
+});
+
+test('【失敗系】blocksFloorRemoval: アクティブ階が対象の検討案（逆方向。対象=検討・アクティブ=採用元）なら削除してよい（false）', () => {
+  // 対象planeId自体が検討案で、アクティブは別の採用階のケース——isActiveAnAltOfはreferenceId一致のみ見るため
+  // false（対象と無関係な採用階がアクティブなだけ）。
+  const project = { activePlaneId: 'p1', activePlane: { id: 'p1', isAlternative: false, referenceId: null } };
+  assert.equal(blocksFloorRemoval(project, 'p1-alt'), false);
 });
