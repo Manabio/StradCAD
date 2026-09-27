@@ -785,13 +785,23 @@ export class PenetrationSleeve {
       hostClEnd:   observable.ref,
       localPos:      observable,
       heightOffset:  observable,
+      hostSlabId:    observable,
       hostCellKey:   observable,
       localX:        observable,
       localY:        observable,
       diameter:         observable,
       hasReinforcement: observable,
+      setHostSlabId:  action,
+      setHostCellKey: action,
     });
   }
+  /** スラブホストのスリーブを別のスラブへ移籍する（finish/roomReinterpret.js
+   *  reinterpretSlabsAfterCLRemoval専用。S2・2026-09-27: 隣接スラブの併合でセルの領有先が
+   *  変わった場合、削除せず領有先スラブへ付け替える）。 */
+  setHostSlabId(id) { this.hostSlabId = id; }
+  /** スラブホストのスリーブを新しいセルキーへ付け替える（finish/roomReinterpret.js
+   *  reinterpretSlabsAfterCLRemoval専用。CL削除でホストスラブのセルキーが変わった追従。 */
+  setHostCellKey(key) { this.hostCellKey = key; }
 }
 
 // materialType（StructuralMaterialType）→ サブクラスの解決表（PlanGraph.addBearingWall/addSlab 用）

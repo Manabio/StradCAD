@@ -1082,6 +1082,19 @@ export class PlanGraph {
     // 貫通孔（梁ホストのみ。スラブホストはcellKeyのみのCL非依存アンカーのため対象外、
     // Room/StructuralSlab と同様にteardown不要という設計）
     refs.sleeves.forEach(s => this.sleeveMap.delete(s.id));
+    // トポロジー自動補完の除外集合（excludedColumnSlots/excludedBeamSlots/excludedFootingSlots）に
+    // このCL idを含むキーが残っていると、削除済みidを永久に持ち歩く（H3・2026-09-27）。キー形式は
+    // columnSlotKey `${vCL.id}:${hCL.id}` / beamExclusionKey（spanKey、sillは`sill:`前置）——いずれも
+    // `:`区切りに素のCL idを含むためsplit(':').includes(id)で判定できる。columnAnchorKeyの
+    // jamb:${openingId}:${side}・off:${axisX}:${axisY}形式はCL idを含まないため誤って掃除されない
+    // （openingId・座標値がこのCLのuuidと一致することは実質無い）。excludedWallBeamAxes
+    // （`${'X'|'Y'}:${coord}`）はCL idを含まない座標ベースのキーのため対象外
+    // （structural/wallBeamAxes.js wallBeamAxisExcludeKey参照）。
+    for (const set of [this.excludedColumnSlots, this.excludedBeamSlots, this.excludedFootingSlots]) {
+      for (const key of [...set]) {
+        if (key.split(':').includes(id)) set.delete(key);
+      }
+    }
   }
 
   // id の CenterLine が関わる Intersection を削除する（_teardownCenterLine から抽出。

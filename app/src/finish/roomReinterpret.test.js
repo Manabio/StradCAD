@@ -3,8 +3,11 @@
 // なると両者のラベルが同一セルに落ちて重なって表示される（問題: 「3」と「3'」の重なり）。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Plane, PlanGraph, CenterLineType, Discipline, RoomKind, ExteriorLevelRef } from '@core';
-import { normalizePartialDominance, reinterpretRoomsOnEntry, snapshotRoomsState, restoreRoomsState } from './roomReinterpret.js';
+import { Plane, PlanGraph, CenterLineType, Discipline, RoomKind, RoomFeature, ExteriorLevelRef, StructuralMaterialType } from '@core';
+import {
+  normalizePartialDominance, reinterpretRoomsOnEntry, snapshotRoomsState, restoreRoomsState,
+  findUnresolvableCells, reinterpretSlabsAfterCLRemoval,
+} from './roomReinterpret.js';
 import { roomNameAnchor } from './roomLabel.js';
 import { worldToCell, lostSides, cellInteriorPoint, regionCellsAt } from './gridCells.js';
 
@@ -14,7 +17,7 @@ import { worldToCell, lostSides, cellInteriorPoint, regionCellsAt } from './grid
 // が、その代表点は「削除された左端CLより外側（格子の外）」に来るため worldToCell 自体が
 // 格子外としてnullを返し、regionCellsAt は空配列になる——reinterpretRoomsOnEntry（regionCellsAtが
 // 空なら該当セルをスキップ＝現状維持）では救済されない。
-test('作業0(実測・VERIFIED): 最外郭の縦CL（外壁線）を削除すると、そのセルの regionCellsAt は空になり再解釈不能', () => {
+test('作業0: 最外郭の縦CL（外壁線）を削除すると、そのセルの regionCellsAt は空になり再解釈不能', () => {
   const graph = new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
   const opts = { labeled: false, discipline: Discipline.ARCH };
   const vs = [0, 4000, 8000].map(x => graph.addCenterLine(CenterLineType.VERTICAL, x, opts));
@@ -32,7 +35,7 @@ test('作業0(実測・VERIFIED): 最外郭の縦CL（外壁線）を削除す�
 
   const region = regionCellsAt(pt.x, pt.y, graph);
   assert.equal(region.length, 0,
-    'VERIFIED: 復元した代表点は削除済み外壁線の外側に来るため worldToCell が格子外としてnullを返し、' +
+    '復元した代表点は削除済み外壁線の外側に来るため worldToCell が格子外としてnullを返し、' +
     'regionCellsAtは空配列になる（reinterpretRoomsOnEntryのregionCellsAt空スキップでは救済不能）');
 });
 
@@ -316,4 +319,336 @@ test('snapshotRoomsState→restoreRoomsState: 未設定の部屋はnull/"room"/n
   assert.equal(restored.exteriorSlope, null);
   assert.equal(restored.exteriorLevelRef, ExteriorLevelRef.ROOM);
   assert.equal(restored.exteriorLevel, null);
+});
+
+// ================================================================
+// findUnresolvableCells（CL削除ステップ2: 削除前の先読み判定）
+// ================================================================
+// 現在すでに失われている辺（lostSides）に、これから削除するclId自身の辺を加えた集合で
+// 「対辺2本同時喪失」（cellInteriorPointがnullを返す条件と同じ）を判定する。
+// 実際のCL削除を経ずに、fabricatedなセルキー（本番でも部分指定・旧データ由来で起こりうる
+// 「一部の辺が既に解決不能」なキー）で直接テストする。
+
+test('findUnresolvableCells: 既に片辺（left）が失われたセルで、対辺（right）のCLを削除すると復元不能として返す', () => {
+  const graph = new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
+  const opts = { labeled: false, discipline: Discipline.ARCH };
+  const top    = graph.addCenterLine(CenterLineType.HORIZONTAL, 0,    opts);
+  const bottom = graph.addCenterLine(CenterLineType.HORIZONTAL, 3000, opts);
+  const right  = graph.addCenterLine(CenterLineType.VERTICAL,   4000, opts);
+  // left側は既に削除済みのCL id（ダングリング参照。lostSidesがgetCL()=null→'left'を喪失と判定する）。
+  const key = `gone-left:${top.id}:${right.id}:${bottom.id}`;
+  graph.addRoom(new Set([key]), '部屋');
+
+  const result = findUnresolvableCells(graph, right.id);
+
+  assert.deepEqual(result, [key], 'right削除でleft・right両方喪失=対辺2本同時喪失として返すはず');
+});
+
+test('findUnresolvableCells: 片辺しか失われないなら復元不能ではない（空配列）', () => {
+  const graph = new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
+  const opts = { labeled: false, discipline: Discipline.ARCH };
+  const left   = graph.addCenterLine(CenterLineType.VERTICAL,   0,    opts);
+  const top    = graph.addCenterLine(CenterLineType.HORIZONTAL, 0,    opts);
+  const bottom = graph.addCenterLine(CenterLineType.HORIZONTAL, 3000, opts);
+  const right  = graph.addCenterLine(CenterLineType.VERTICAL,   4000, opts);
+  // rightのさらに外側（S1・2026-09-27: これが無いとrightを失った代表点がbracketできず
+  // 復元不能になる——hasDividerBeyondのテストは別途下に用意する）。
+  graph.addCenterLine(CenterLineType.VERTICAL, 8000, opts);
+  const key = `${left.id}:${top.id}:${right.id}:${bottom.id}`;
+  graph.addRoom(new Set([key]), '部屋');
+
+  const result = findUnresolvableCells(graph, right.id);
+
+  assert.deepEqual(result, [], 'left健在・rightのさらに外側にも分割CLがあるためrightを失うだけでは復元不能にならない');
+});
+
+test('findUnresolvableCells: clIdを辺に持たないセルは無視する', () => {
+  const graph = new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
+  const opts = { labeled: false, discipline: Discipline.ARCH };
+  const left   = graph.addCenterLine(CenterLineType.VERTICAL,   0,    opts);
+  const top    = graph.addCenterLine(CenterLineType.HORIZONTAL, 0,    opts);
+  const bottom = graph.addCenterLine(CenterLineType.HORIZONTAL, 3000, opts);
+  const right  = graph.addCenterLine(CenterLineType.VERTICAL,   4000, opts);
+  const other  = graph.addCenterLine(CenterLineType.VERTICAL,   9000, opts); // このセルの辺には無い
+  const key = `${left.id}:${top.id}:${right.id}:${bottom.id}`;
+  graph.addRoom(new Set([key]), '部屋');
+
+  assert.deepEqual(findUnresolvableCells(graph, other.id), []);
+});
+
+// ================================================================
+// S1（2026-09-27 QA指摘）: 対辺2本喪失に至らなくても、失った辺の外側（セルの外方向）に
+// 有効な同軸の分割CLが1本も無ければ復元不能——部屋の無い外周スラブ・屋外部屋（isBuildingRoom
+// が偽）の外周セルで、対辺2本喪失の判定だけでは検出できなかった退化を一般判定で拾う。
+// ================================================================
+
+test('findUnresolvableCells: 部屋の無い外周スラブのセル辺を担うCLの削除は復元不能として返す（S1実測再現）', () => {
+  const graph = new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
+  const opts = { labeled: false, discipline: Discipline.ARCH };
+  const v0 = graph.addCenterLine(CenterLineType.VERTICAL, 0,    opts);
+  graph.addCenterLine(CenterLineType.VERTICAL, 4000, opts);
+  graph.addCenterLine(CenterLineType.VERTICAL, 8000, opts);
+  graph.addCenterLine(CenterLineType.HORIZONTAL, 0,    opts);
+  graph.addCenterLine(CenterLineType.HORIZONTAL, 4000, opts);
+  const leftCell = worldToCell(2000, 2000, graph).key;
+  graph.addSlab(StructuralMaterialType.RC, 'SEC-SLAB', new Set([leftCell]));
+
+  const result = findUnresolvableCells(graph, v0.id);
+
+  assert.deepEqual(result, [leftCell],
+    'V0はグリッド最外郭の左辺のため、削除すると左セルの代表点がbracketできず復元不能になるはず');
+});
+
+test('findUnresolvableCells: 屋外部屋（RoomKind.EXTERIOR。isBuildingRoomが偽）の外周セル辺を担うCLの削除も同様に復元不能として返す', () => {
+  const graph = new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
+  const opts = { labeled: false, discipline: Discipline.ARCH };
+  const v0 = graph.addCenterLine(CenterLineType.VERTICAL, 0,    opts);
+  graph.addCenterLine(CenterLineType.VERTICAL, 4000, opts);
+  graph.addCenterLine(CenterLineType.VERTICAL, 8000, opts);
+  graph.addCenterLine(CenterLineType.HORIZONTAL, 0,    opts);
+  graph.addCenterLine(CenterLineType.HORIZONTAL, 4000, opts);
+  const leftCell = worldToCell(2000, 2000, graph).key;
+  // feature未設定（isReinterpretExemptの対象外）——STAIR等の除外部屋ではなく、通常Roomと
+  // 同じ「対辺2本喪失／外側にbracket先が無い」判定を通ることを確認する。
+  const room = graph.addRoom(new Set([leftCell]), '屋外');
+  room.setKind(RoomKind.EXTERIOR);
+
+  const result = findUnresolvableCells(graph, v0.id);
+
+  assert.deepEqual(result, [leftCell],
+    '屋外部屋（isBuildingRoomが偽）はisFootprintBoundaryCLのフットプリント判定からは外れるが、' +
+    'findUnresolvableCellsの一般判定はfeature（再解釈除外）の有無に関わらず同じ関数で当たるはず');
+});
+
+test('findUnresolvableCells: グリッド最外郭（上辺）を失う場合もx軸と対称にy軸方向で復元不能を検出する', () => {
+  const graph = new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
+  const opts = { labeled: false, discipline: Discipline.ARCH };
+  graph.addCenterLine(CenterLineType.VERTICAL, 0,    opts);
+  graph.addCenterLine(CenterLineType.VERTICAL, 4000, opts);
+  const h0 = graph.addCenterLine(CenterLineType.HORIZONTAL, 0,    opts);
+  graph.addCenterLine(CenterLineType.HORIZONTAL, 4000, opts);
+  graph.addCenterLine(CenterLineType.HORIZONTAL, 8000, opts);
+  const topCell = worldToCell(2000, 2000, graph).key;
+  graph.addSlab(StructuralMaterialType.RC, 'SEC-SLAB', new Set([topCell]));
+
+  const result = findUnresolvableCells(graph, h0.id);
+
+  assert.deepEqual(result, [topCell], 'H0（y軸最外郭）の削除もx軸と対称に検出されるはず');
+});
+
+// ---- 裁定変更（ユーザー裁定）: 再解釈除外部屋（STAIR/STAIR_VOID/UNDEFINED）は救済経路自体が
+// 無いため、対辺2本同時喪失を待たず、辺を1つでも参照していれば復元不能として返す（通常Roomは
+// 対辺2本同時喪失のときだけ——上の「片辺しか失われないなら復元不能ではない」テストと対照）。----
+
+test('findUnresolvableCells: 階段Room（feature===STAIR）は再解釈対象外のため、通常なら復元可能な片辺の参照だけでも復元不能として返す', () => {
+  const { graph, cellA } = makeTwoCellGraph();
+  const room = graph.addRoom(new Set([cellA]), '階段');
+  room.setFeature(RoomFeature.STAIR);
+  const [leftId] = cellA.split(':');
+
+  assert.deepEqual(findUnresolvableCells(graph, leftId), [cellA],
+    '階段Roomは再解釈で永久に救済されないため、片辺の参照だけで復元不能扱いになるはず（裁定変更点）');
+});
+
+test('findUnresolvableCells: STAIR_VOID部屋（階段吹抜け）も同様に片辺の参照だけで復元不能として返す', () => {
+  const { graph, cellA } = makeTwoCellGraph();
+  const room = graph.addRoom(new Set([cellA]), '吹抜け');
+  room.setFeature(RoomFeature.STAIR_VOID);
+  const [leftId] = cellA.split(':');
+
+  assert.deepEqual(findUnresolvableCells(graph, leftId), [cellA]);
+});
+
+test('findUnresolvableCells: UNDEFINED部屋（未定義）も同様に片辺の参照だけで復元不能として返す', () => {
+  const { graph, cellA } = makeTwoCellGraph();
+  const room = graph.addRoom(new Set([cellA]), '');
+  room.setFeature(RoomFeature.UNDEFINED);
+  const [leftId] = cellA.split(':');
+
+  assert.deepEqual(findUnresolvableCells(graph, leftId), [cellA]);
+});
+
+// ================================================================
+// reinterpretRoomsOnEntry: 戻り値 { unresolved } の検証
+// ================================================================
+
+test('reinterpretRoomsOnEntry: 部屋が無ければ{unresolved:[]}を返す', () => {
+  const graph = new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
+  assert.deepEqual(reinterpretRoomsOnEntry(graph), { unresolved: [] });
+});
+
+test('reinterpretRoomsOnEntry: 復元不能（regionCellsAtが空）のセルはunresolvedに入り現状維持される', () => {
+  // 作業0と同じ構成（最外郭CL削除→regionCellsAtが空）。
+  const graph = new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
+  const opts = { labeled: false, discipline: Discipline.ARCH };
+  const vs = [0, 4000, 8000].map(x => graph.addCenterLine(CenterLineType.VERTICAL, x, opts));
+  [0, 4000, 8000].forEach(y => graph.addCenterLine(CenterLineType.HORIZONTAL, y, opts));
+  const cellKey = worldToCell(2000, 2000, graph).key;
+  const room = graph.addRoom(new Set([cellKey]), '部屋');
+
+  graph.removeCenterLine(vs[0].id);
+
+  const result = reinterpretRoomsOnEntry(graph);
+
+  assert.deepEqual(result.unresolved, [cellKey]);
+  assert.ok(room.cells.has(cellKey), '復元不能なので現状維持（セルキーは変わらない）');
+});
+
+test('reinterpretRoomsOnEntry: 通常に解決できるケースはunresolvedが空のまま', () => {
+  const { graph, left, mid, right } = makeRowWithShortenedMiddleDividers();
+  graph.addRoom(new Set([left, right]), 'LDK');
+  const small = graph.addRoom(new Set([mid]), 'テラス');
+  small.setKind(RoomKind.EXTERIOR);
+
+  const result = reinterpretRoomsOnEntry(graph);
+
+  assert.deepEqual(result.unresolved, [], '完全吸収（2辺喪失だが復元可能）はunresolvedに入らないはず');
+});
+
+// ================================================================
+// findUnresolvableCells（スラブ拡張。H2・2026-09-27）
+// ================================================================
+
+test('findUnresolvableCells: スラブ（StructuralSlab.cells）でも対辺2本同時喪失を検出する', () => {
+  const graph = new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
+  const opts = { labeled: false, discipline: Discipline.ARCH };
+  const top    = graph.addCenterLine(CenterLineType.HORIZONTAL, 0,    opts);
+  const bottom = graph.addCenterLine(CenterLineType.HORIZONTAL, 3000, opts);
+  const right  = graph.addCenterLine(CenterLineType.VERTICAL,   4000, opts);
+  // left側は既に削除済みのCL id（ダングリング参照）。
+  const key = `gone-left:${top.id}:${right.id}:${bottom.id}`;
+  graph.addSlab(StructuralMaterialType.RC, 'SEC-SLAB', new Set([key]));
+
+  const result = findUnresolvableCells(graph, right.id);
+
+  assert.deepEqual(result, [key], 'スラブのセルでもright削除でleft・right両方喪失=対辺2本同時喪失として返すはず');
+});
+
+test('findUnresolvableCells: スラブが片辺しか失わないなら復元不能ではない（空配列）', () => {
+  const { graph, cellA } = makeTwoCellGraph();
+  graph.addSlab(StructuralMaterialType.RC, 'SEC-SLAB', new Set([cellA]));
+  // cellAのright（cellBとの内部境界）を削除対象にする。leftは健在で、rightのさらに外側にも
+  // cellBの右端（x=7000）の分割CLがあるため復元不能ではない（S1・2026-09-27: cellAのleftは
+  // グリッド最外郭のため、もしleftを削除対象にすると外側に何も無く復元不能になる——
+  // 別テストで固定する）。
+  const [, , rightId] = cellA.split(':');
+
+  assert.deepEqual(findUnresolvableCells(graph, rightId), []);
+});
+
+// ---- 階段（Stair.cells）: ペアRoom（feature===STAIR）を一時的に
+// 失った旧データ（core/stair.js「上階自動設置分」・ensureStairRooms参照）でも、Room判定に
+// 頼らずStair.cells自体を直接判定する ----
+
+test('findUnresolvableCells: ペアRoomを持たない階段（Stair.roomId===null）でも、Stair.cellsの片辺の参照だけで復元不能として返す', () => {
+  const { graph, cellA } = makeTwoCellGraph();
+  graph.addStair({ cells: new Set([cellA]), roomId: null }); // 旧データ・上階自動設置分の再現
+  const [leftId] = cellA.split(':');
+
+  assert.deepEqual(findUnresolvableCells(graph, leftId), [cellA],
+    'ペアRoomが無くてもStair.cells自体が判定対象になるはず（裁定変更点）');
+});
+
+test('findUnresolvableCells: ペアRoomがある通常経路の階段は、Room側・Stair側の二重判定でも重複なく1件だけ返す', () => {
+  const { graph, cellA } = makeTwoCellGraph();
+  const room = graph.addRoom(new Set([cellA]), '階段');
+  room.setFeature(RoomFeature.STAIR);
+  graph.addStair({ cells: new Set([cellA]), roomId: room.id });
+  const [leftId] = cellA.split(':');
+
+  assert.deepEqual(findUnresolvableCells(graph, leftId), [cellA],
+    'Room側・Stair側どちらも同じキーを検出するが、Setで重複排除され1件のはず');
+});
+
+// ================================================================
+// reinterpretSlabsAfterCLRemoval（H2・2026-09-27。reinterpretRoomsOnEntryのスラブ版）
+// ================================================================
+
+test('reinterpretSlabsAfterCLRemoval: スラブが無ければ{unresolved:[]}を返す', () => {
+  const graph = new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
+  assert.deepEqual(reinterpretSlabsAfterCLRemoval(graph), { unresolved: [] });
+});
+
+test('reinterpretSlabsAfterCLRemoval: 内部の仕切りCLが非アクティブ化されると、同一スラブの3セルが1つの併合セルへ置き換わり削除済みidが残らない（同一スラブ内union）', () => {
+  const { graph, left, mid, right } = makeRowWithShortenedMiddleDividers();
+  const slab = graph.addSlab(StructuralMaterialType.RC, 'SEC-SLAB', new Set([left, mid, right]));
+
+  const result = reinterpretSlabsAfterCLRemoval(graph);
+
+  assert.deepEqual(result.unresolved, []);
+  assert.equal(slab.cells.size, 1, '3セルは1つの併合セルへ統合されるはず（同一スラブ内union）');
+  const [mergedKey] = [...slab.cells];
+  for (const oldKey of [left, mid, right]) {
+    assert.notEqual(mergedKey, oldKey, '併合セルは行全体を覆う新キーで、旧キーのいずれとも異なるはず');
+  }
+});
+
+test('reinterpretSlabsAfterCLRemoval: 2つのスラブが同じ領域へ吸収される場合、先に登録されたスラブ（graph.slabs順）が併合セルを領有し、後発スラブは完全吸収されてgraphから削除される（S2・2026-09-27裁定）', () => {
+  const { graph, left, mid, right } = makeRowWithShortenedMiddleDividers();
+  const slabA = graph.addSlab(StructuralMaterialType.RC, 'SEC-SLAB-A', new Set([left]));
+  const slabB = graph.addSlab(StructuralMaterialType.RC, 'SEC-SLAB-B', new Set([mid, right]));
+  const slabBId = slabB.id;
+
+  const result = reinterpretSlabsAfterCLRemoval(graph);
+
+  assert.deepEqual(result.unresolved, []);
+  assert.equal(slabA.cells.size, 1, '先に登録されたスラブAが併合セルを領有するはず');
+  assert.equal(graph.slabMap.has(slabBId), false,
+    '後発のスラブBは併合により完全吸収され、Roomの完全吸収と同じくgraphから削除されるはず（0セルのまま残さない）');
+});
+
+// ---- 貫通孔（PenetrationSleeve。hostType==='slab'）の付け替え（H2追補・2026-09-27） ----
+
+test('reinterpretSlabsAfterCLRemoval: スラブのセルが併合セルへ置き換わると、そのセルをホストするスリーブのhostCellKeyも併合セルのキーへ付け替わる（削除されない）', () => {
+  const { graph, left, mid, right } = makeRowWithShortenedMiddleDividers();
+  const slab = graph.addSlab(StructuralMaterialType.RC, 'SEC-SLAB', new Set([left, mid, right]));
+  const sleeve = graph.addSleeve('slab', { hostSlabId: slab.id, hostCellKey: mid, localX: 10, localY: 20 });
+
+  const result = reinterpretSlabsAfterCLRemoval(graph);
+
+  assert.deepEqual(result.unresolved, []);
+  assert.equal(graph.sleeveMap.has(sleeve.id), true, 'ホストスラブの領域内に留まるスリーブは削除されないはず');
+  assert.equal(slab.cells.size, 1, '前提: 3セルは1つの併合セルへ統合される');
+  const [mergedKey] = [...slab.cells];
+  assert.equal(sleeve.hostCellKey, mergedKey, 'スリーブのhostCellKeyは併合セルのキーへ付け替わるはず');
+  assert.equal(sleeve.localX, 10, 'localX/localYはこのアプリのどこからも読まれないため現状維持（付け替え対象はhostCellKeyのみ）');
+  assert.equal(sleeve.localY, 20);
+});
+
+test('reinterpretSlabsAfterCLRemoval: セルが別スラブに吸収されたスリーブは削除されず、領有先スラブへ移籍する（S2・2026-09-27裁定）', () => {
+  const { graph, left, mid, right } = makeRowWithShortenedMiddleDividers();
+  const slabA = graph.addSlab(StructuralMaterialType.RC, 'SEC-SLAB-A', new Set([left]));
+  const slabB = graph.addSlab(StructuralMaterialType.RC, 'SEC-SLAB-B', new Set([mid, right]));
+  const slabAId = slabA.id, slabBId = slabB.id;
+  const sleeve = graph.addSleeve('slab', { hostSlabId: slabB.id, hostCellKey: mid });
+  const sleeveId = sleeve.id;
+
+  const result = reinterpretSlabsAfterCLRemoval(graph);
+
+  assert.deepEqual(result.unresolved, []);
+  assert.equal(slabA.cells.size, 1, '前提: 先に登録されたスラブAが併合セルを領有する');
+  assert.equal(graph.slabMap.has(slabBId), false, '前提: 後発のスラブBは完全吸収されgraphから削除される');
+  assert.equal(graph.sleeveMap.has(sleeveId), true,
+    'スリーブ自体は削除されず、Bの完全吸収先であるAへ移籍するはず（Room併合と同じ考え方）');
+  const migrated = graph.sleeveMap.get(sleeveId);
+  assert.equal(migrated.hostSlabId, slabAId, 'hostSlabIdは併合セルの領有先（A）へ張り替わるはず');
+  const [mergedKey] = [...slabA.cells];
+  assert.equal(migrated.hostCellKey, mergedKey, 'hostCellKeyも併合セルのキーへ付け替わるはず');
+});
+
+test('reinterpretSlabsAfterCLRemoval: 対辺2本同時喪失（regionCellsAtが空）のセルはunresolvedに入り現状維持される', () => {
+  // roomReinterpret.test.jsの作業0・reinterpretRoomsOnEntry版と同じ構成（最外郭CL削除→regionCellsAtが空）。
+  const graph = new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
+  const opts = { labeled: false, discipline: Discipline.ARCH };
+  const vs = [0, 4000, 8000].map(x => graph.addCenterLine(CenterLineType.VERTICAL, x, opts));
+  [0, 4000, 8000].forEach(y => graph.addCenterLine(CenterLineType.HORIZONTAL, y, opts));
+  const cellKey = worldToCell(2000, 2000, graph).key;
+  const slab = graph.addSlab(StructuralMaterialType.RC, 'SEC-SLAB', new Set([cellKey]));
+
+  graph.removeCenterLine(vs[0].id);
+
+  const result = reinterpretSlabsAfterCLRemoval(graph);
+
+  assert.deepEqual(result.unresolved, [cellKey]);
+  assert.ok(slab.cells.has(cellKey), '復元不能なので現状維持（セルキーは変わらない）');
 });

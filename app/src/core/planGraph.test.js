@@ -6,7 +6,8 @@ import assert from 'node:assert/strict';
 import { PlanGraph } from './planGraph.js';
 import { Plane } from './plane.js';
 import { Project } from './project.js';
-import { CenterLineType, Discipline, StructuralMaterialType, OpeningCategory } from './constants.js';
+import { CenterLineType, Discipline, StructuralMaterialType, OpeningCategory, DimensionKind, DimensionSide } from './constants.js';
+import { HDimensionLine } from './dimension.js';
 
 function makeGraph() {
   const plane = new Plane('p1', 0, '1階', 1, 1);
@@ -105,6 +106,65 @@ test('removeDependentsOfCenterLine: 参照する構造材・columnAxisOffsets・
   assert.equal(graph.intersectionMap.has(ixKey), true, 'removeDependentsOfCenterLineはIntersectionを撤去しないはず');
   // CL本体（CenterLine実体）もこのメソッドでは削除されない。
   assert.equal(graph.shapeMap.has(vCL.id), true, 'CL本体はremoveDependentsOfCenterLineでは削除されない');
+});
+
+test('removeDependentsOfCenterLine: 除外集合（excludedColumnSlots/excludedBeamSlots/excludedFootingSlots）に残ったこのCL idを含むキーも掃除する（H3・2026-09-27）', () => {
+  const graph = makeGraph();
+  const vCL  = graph.addCenterLine(CenterLineType.VERTICAL,   0,    { labeled: true, discipline: Discipline.STRUCT });
+  const vCL2 = graph.addCenterLine(CenterLineType.VERTICAL,   8000, { labeled: true, discipline: Discipline.STRUCT }); // vCLを参照しない対照群
+  const hCL1 = graph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+  const hCL2 = graph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: true, discipline: Discipline.STRUCT });
+
+  // 一度追加→削除して「自動補完で出た部材をユーザーが個別に消した」状態を再現し、除外集合へ
+  // このCL絡みのキーを記録させる（addColumn/addBeam/addFootingは追加直後に除外解除するため、
+  // removeを経由しないとキーが残らない）。
+  const column = graph.addColumn(StructuralMaterialType.WOOD, 'SEC-COL', vCL, hCL1);
+  graph.removeColumn(column.id);
+  const beam = graph.addBeam(StructuralMaterialType.WOOD, 'SEC-BEAM', vCL, true, hCL1, hCL2);
+  graph.removeBeam(beam.id);
+  const footing = graph.addFooting('independent', 'SEC-FTG', vCL, hCL1);
+  graph.removeFooting(footing.id);
+  // 対照群: vCLを参照しない除外キー（vCL2絡み）は掃除対象外のはず。
+  const column2 = graph.addColumn(StructuralMaterialType.WOOD, 'SEC-COL', vCL2, hCL1);
+  graph.removeColumn(column2.id);
+
+  const hasCLKey = (set, id) => [...set].some(k => k.split(':').includes(id));
+  assert.equal(hasCLKey(graph.excludedColumnSlots, vCL.id), true, '前提: vCL絡みの除外キーがある');
+  assert.equal(hasCLKey(graph.excludedBeamSlots, vCL.id), true, '前提: vCL絡みの除外キーがある');
+  assert.equal(hasCLKey(graph.excludedFootingSlots, vCL.id), true, '前提: vCL絡みの除外キーがある');
+
+  graph.removeDependentsOfCenterLine(vCL.id);
+
+  assert.equal(hasCLKey(graph.excludedColumnSlots, vCL.id), false, 'vCLを含む除外キーは掃除されるはず');
+  assert.equal(hasCLKey(graph.excludedBeamSlots, vCL.id), false, 'vCLを含む除外キーは掃除されるはず');
+  assert.equal(hasCLKey(graph.excludedFootingSlots, vCL.id), false, 'vCLを含む除外キーは掃除されるはず');
+  assert.equal(hasCLKey(graph.excludedColumnSlots, vCL2.id), true, 'vCLを含まない除外キー（vCL2絡み）は残るはず');
+});
+
+// ---- 寸法線のアンカー: _shapeUsesCenterLineのswitchにDIMENSIONの
+// caseが無い（default:falseで一律不一致）ため、DimensionLine自体はCL削除で撤去されない。
+// 実運用で使われるGRID種別（本テスト）はthis.anchorsを使わずgridXs/gridYs（shapeMap由来の
+// 都度computed）からeffectiveAnchorsを毎回組み立てるため、削除されたCLは自然に候補から
+// 外れる（＝ダングリング参照を持たない自己修復）。CENTER種別もrenderer/GutterLayer.jsxが
+// 都度centerBoundary経由で組み立てるため同様。DimensionKind.CONTROL（明示anchors保持。
+// this.anchors に生CL参照を持つ）は本コードベースのどこからも生成されておらず未配線
+// （grep実測: addDimensionLine呼び出し元にCONTROL指定は無い）——ダングリング参照が実際に
+// 生じる経路は現状存在しない。
+test('removeCenterLine: GRID寸法線はCL削除で撤去されず（_shapeUsesCenterLineがDIMENSIONを扱わないため）、削除済みCLはeffectiveAnchorsから自然に外れる', () => {
+  const graph = makeGraph();
+  const struct = { labeled: true, discipline: Discipline.STRUCT };
+  const x0 = graph.addCenterLine(CenterLineType.VERTICAL, 0,    struct);
+  const x1 = graph.addCenterLine(CenterLineType.VERTICAL, 4000, struct);
+  const x2 = graph.addCenterLine(CenterLineType.VERTICAL, 8000, struct);
+  const dim = graph.addDimensionLine(HDimensionLine, { dimensionKind: DimensionKind.GRID, side: DimensionSide.TOP });
+
+  assert.deepEqual(dim.effectiveAnchors.map(a => a.cl.id), [x0.id, x1.id, x2.id], '前提: 3本のCLがアンカーに並ぶ');
+
+  graph.removeCenterLine(x1.id);
+
+  assert.equal(graph.shapeMap.has(dim.id), true, 'DimensionLine自体は撤去されないはず（_shapeUsesCenterLineの対象外）');
+  assert.deepEqual(dim.effectiveAnchors.map(a => a.cl.id), [x0.id, x2.id],
+    '削除済みCLはgridXs（shapeMap由来のcomputed）から自然に消えるため、ダングリング参照は残らないはず');
 });
 
 test('removeCenterLine: removeDependentsOfCenterLine抽出後もCL削除の結果は分割前と同一（Intersection・CL本体も道連れ削除される）', () => {

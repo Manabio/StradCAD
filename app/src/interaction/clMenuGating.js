@@ -15,6 +15,7 @@
 import { CONTEXT } from './menuItems.js';
 import { isConvertSubject, isFinishCellDivider } from '../core/centerLineKindPolicy.js';
 import { isLastGridOnAxis as isLastGridOnAxisOnGraph, isFootprintBoundaryCL } from '../transform/centerLineConvert.js';
+import { findUnresolvableCells } from '../finish/roomReinterpret.js';
 
 /**
  * 長押しメニューの canToGrid／canToCenter／isLastGridOnAxis を算出する
@@ -41,5 +42,11 @@ export function convertMenuFlags(graph, { appMode, menuContext, cl, clEndpoint }
   const isFootprintBoundary = menuContext === CONTEXT.CENTER_LINE && isFinishCellDivider(cl)
     ? isFootprintBoundaryCL(graph, cl)
     : undefined;
-  return { canToGrid, canToCenter, isLastGridOnAxis, isFootprintBoundary };
+  // 復元不能セルガード（transform/centerLineOps.js deleteCenterLineWithUndoのERR_CL_DELETE_UNRESOLVABLE
+  // と同じ判定式=finish/roomReinterpret.js findUnresolvableCells。二重実装によるズレを防ぐ）。
+  // isFootprintBoundaryと同じ条件（セル分割に参加する種別・自階判定のみ）でのみ算出する。
+  const isUnresolvable = menuContext === CONTEXT.CENTER_LINE && isFinishCellDivider(cl)
+    ? findUnresolvableCells(graph, cl.id).length > 0
+    : undefined;
+  return { canToGrid, canToCenter, isLastGridOnAxis, isFootprintBoundary, isUnresolvable };
 }

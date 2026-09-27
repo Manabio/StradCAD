@@ -9,8 +9,13 @@ import { serializeGraph, restoreGraph, serializeStructCLs, restoreStructCLs } fr
 import {
   ERR_CL_DUPLICATE, ERR_CL_CENTER_UPGRADED, ERR_CL_STRUCT_EXISTS,
   ERR_CL_CONVERT_DUP_FLOOR, ERR_CL_CONVERT_DUP_FLOOR_DEMOTE, ERR_CL_DELETE_LAST_GRID, ERR_CL_CONVERT_NO_GRID,
-  ERR_CL_DELETE_FOOTPRINT,
+  ERR_CL_DELETE_FOOTPRINT, ERR_CL_DELETE_UNRESOLVABLE,
 } from '../error.js';
+import {
+  findUnresolvableCells, reinterpretRoomsOnEntry, normalizePartialDominance, reinterpretSlabsAfterCLRemoval,
+  collectUnresolvableCells,
+} from '../finish/roomReinterpret.js';
+import { syncEdgesFromTopology } from '../finish/edgeClassify.js';
 import { findBracketingCLs, overhangMm } from '../snapGeometry.js';
 import { calcStep } from '../renderer/clMoveMath.js';
 import {
@@ -68,6 +73,19 @@ function pushUndoWithStructuralSync(graph, project, scope, undoFn, redoFn, saveF
   );
   notify(floorRecords);
   return entry;
+}
+
+// CL削除ステップ2: 削除するCLを参照する腰壁・垂れ壁レコード（graph.kneeDropWalls）を掃除する。
+// key=edgeKey(axisCLId,startCLId,endCLId)（core/room.js edgeKey）——軸・端点いずれかが削除したCLを
+// 指すレコードは、削除の時点で先に消しておく（残すと finish/kneeDropWall.js の走査対象に亡霊
+// レコードとして残り続け、平面モードの間ずっと削除済みidを持ち歩くことになる）。仕上げ脱出時
+// （finishBoundary.js）の幾何ベースの掃除（kneeDropWallGeometryがnullを返すキーを削除）でも
+// 結果的に同じキーは拾われる——ここでの掃除はそれを待たず、CL削除と同じ操作の中で即座に行う
+// （新ルール1「CL削除は境界」の後始末の一部）。
+function removeKneeDropWallsReferencing(graph, clId) {
+  for (const key of [...graph.kneeDropWalls.keys()]) {
+    if (key.split(':').includes(clId)) graph.removeKneeDropWall(key);
+  }
 }
 
 // CL の pendingDelta を実座標に bake する（ref CL / 通常 CL 両対応）
@@ -323,6 +341,11 @@ export async function deleteCenterLineWithUndo(graph, project, cl, opts = {}) {
     // フットプリント境界削除ガード（第1段階）: 自階でこの通り芯が外壁線を担っていれば即拒否
     // （detach・propagateGridCenterLineDeletionより前。centerLineConvert.js isFootprintBoundaryCL参照）。
     if (isFootprintBoundaryCL(graph, cl)) return { toast: ERR_CL_DELETE_FOOTPRINT };
+    // 復元不能セルガード（ステップ2）: 自階の部屋セル・スラブセルのうち、この通り芯を失うと
+    // 対辺2本同時喪失になるもの、または再解釈除外部屋（階段・階段吹抜け・未定義）のセル辺が
+    // この通り芯を持つものが1つでもあれば拒否する（finish/roomReinterpret.js
+    // findUnresolvableCells。フットプリント境界ガードと同格——detach・他階伝播より前に判定する）。
+    if (findUnresolvableCells(graph, cl.id).length > 0) return { toast: ERR_CL_DELETE_UNRESOLVABLE };
 
     // 他階（検討・屋根含む）でもフットプリント境界になっていないか確認する（副作用の無い読み取り
     // のみ。centerLineFloorSync.js findFloorsWhereFootprintBoundary）。実際の伝播
@@ -364,6 +387,18 @@ export async function deleteCenterLineWithUndo(graph, project, cl, opts = {}) {
       await rollbackFloorRecords(floorRecords, opts.saveFloorFn, project);
       return { toast: ERR_CL_DELETE_LAST_GRID };
     }
+    // F5（QA指摘）: 他階への伝播（detach。IDB書込を伴うawait）の間に自階のフットプリント・
+    // セル構成が変わりうるため（並行編集・他の非同期処理の割り込み）、フットプリント境界ガード・
+    // 復元不能セルガードも同じ場所で再評価する——isLastGridOnAxisの再評価と同型（await前の
+    // 同期ガードだけでは足りない。「判定不能の持ち越しは認めない」方針）。
+    if (isFootprintBoundaryCL(graph, cl)) {
+      await rollbackFloorRecords(floorRecords, opts.saveFloorFn, project);
+      return { toast: ERR_CL_DELETE_FOOTPRINT };
+    }
+    if (findUnresolvableCells(graph, cl.id).length > 0) {
+      await rollbackFloorRecords(floorRecords, opts.saveFloorFn, project);
+      return { toast: ERR_CL_DELETE_UNRESOLVABLE };
+    }
 
     // 通り芯の削除 — structGraph をスナップショット経由で Undo。
     // structGraph の teardown は階グラフの図形に届かないため、アクティブ階グラフ側の
@@ -374,9 +409,43 @@ export async function deleteCenterLineWithUndo(graph, project, cl, opts = {}) {
     const beforeArch = serializeGraph(graph);
     const before = serializeStructCLs(project.structGraph, project.structuralInfo, project.memberGroupLedger);
     const clId = cl.id; // 削除前に控える——undo/redoクロージャ・notifyはcl自体を参照しない
+    // M2是正（QA指摘・2026-09-27）: 安全網は「今回の削除で新たに生じた復元不能セル」だけを見る
+    // べきだが、key に clId を含むかどうかで絞るのは不十分——削除で領域が clId の向こう側へ延び、
+    // clId を含まないキーのセルが新たに復元不能になるケースを取りこぼす。ここでは削除前の
+    // 「今のgraphで実際に復元不能なセル集合」を採取しておき、後始末後の集合との差分（新規分）
+    // だけを見る（collectUnresolvableCells。finish/roomReinterpret.js）。detachFromCenterLine・
+    // removeDependentsOfCenterLineはRoom/StructuralSlab.cellsを直接変更しないため、ここで採っても
+    // 削除直前の状態と同じ。
+    const beforeUnresolvable = collectUnresolvableCells(graph);
     graph.detachFromCenterLine(clId);
     graph.removeDependentsOfCenterLine(clId);
     project.structGraph.removeCenterLine(clId);
+    // 新ルール1（境界での後始末）: 通り芯削除も部屋セル・境界エッジへ影響するため、自階分を
+    // ここで afterArch を採る前に片付ける（finishBoundary.js runFinishEntryBoundary と同じ順序
+    // ＝部屋再解釈→部分指定の正規化→エッジ再同期）。beforeArch/afterArch の全体スナップショット方式の
+    // undoにそのまま乗るため、専用のundo/redoは別途要らない（restoreGraphがrooms/edges/kneeDropWallsを
+    // 復元することは graphSnapshot.js buildSnapshot/applySnapshot で確認済み）。他階への適用は別ステップ。
+    const afterUnresolvable = runInAction(() => {
+      reinterpretRoomsOnEntry(graph);
+      normalizePartialDominance(graph);
+      reinterpretSlabsAfterCLRemoval(graph);
+      syncEdgesFromTopology(graph);
+      removeKneeDropWallsReferencing(graph, clId);
+      return collectUnresolvableCells(graph);
+    });
+    // ルール4の安全網（S1・2026-09-27。M2で前後差分方式へ一般化）: findUnresolvableCells の
+    // 先読みが正しければここには到達しない——先読みの漏れ（未知の退化パターン）があっても
+    // 削除済みidを残さないよう、削除前後の「復元不能セル集合」の差分（新規に増えた分）を見て
+    // 非空なら通り芯削除自体を取り消す。他階への伝播（propagateGridCenterLineDeletion）は
+    // ここより前に完了しているため、既存のrollbackFloorRecords（F5と同じ型）で巻き戻し、
+    // undoは積まない。
+    const newlyUnresolved = [...afterUnresolvable].filter(key => !beforeUnresolvable.has(key));
+    if (newlyUnresolved.length > 0) {
+      restoreStructCLs(project.structGraph, project.structuralInfo, before, project.memberGroupLedger);
+      restoreGraph(graph, beforeArch);
+      await rollbackFloorRecords(floorRecords, opts.saveFloorFn, project);
+      return { toast: ERR_CL_DELETE_UNRESOLVABLE };
+    }
     const afterArch = serializeGraph(graph);
     const after = serializeStructCLs(project.structGraph, project.structuralInfo, project.memberGroupLedger);
 
@@ -431,6 +500,9 @@ export async function deleteCenterLineWithUndo(graph, project, cl, opts = {}) {
   // 補助線・梁芯はセル分割に参加しないため対象外）。struct分岐と異なり中心線は階固有の実体で
   // 他階から参照されないため、他階peekは行わない（centerLineConvert.jsコメント・findFloorsWhereFootprintBoundaryのJSDoc参照）。
   if (canCarryWalls && isFootprintBoundaryCL(graph, cl)) return { toast: ERR_CL_DELETE_FOOTPRINT };
+  // 復元不能セルガード（ステップ2。struct分岐と同じfindUnresolvableCells）。セル分割に参加する
+  // 種別（canCarryWalls）のときだけ判定する——補助線・梁芯の削除はセルに影響しないため対象外。
+  if (canCarryWalls && findUnresolvableCells(graph, cl.id).length > 0) return { toast: ERR_CL_DELETE_UNRESOLVABLE };
 
   // ユーザー承認済み例外（2026-09-25）: 明示的な中心線削除に限り、その削除で失われる壁だけを
   // 根拠にしていた壁由来梁芯（discipline:fuse。structural/wallBeamAxes.js autoFillWallBeamAxes）を
@@ -446,17 +518,30 @@ export async function deleteCenterLineWithUndo(graph, project, cl, opts = {}) {
   // 下階peekの await 中に階が切り替わった・この中心線自体が消えた可能性を再評価する
   // （通り芯削除のM-2ガードと同型。peekしていない経路（aux・beam・selfAndBelow以外の中心線）は
   // awaitを挟まないため再評価は不要）。
-  if (needsBelowPeek && (graph !== project.activeGraph || graph.shapeMap.get(cl.id) !== cl)) {
-    return { toast: null };
+  if (needsBelowPeek) {
+    if (graph !== project.activeGraph || graph.shapeMap.get(cl.id) !== cl) {
+      return { toast: null };
+    }
+    // struct分岐のF5（QA指摘）と同型: 下階peek（awaitを挟む）の間に自階のフットプリント・
+    // セル構成が変わりうる（並行編集・他の非同期処理の割り込み）ため、フットプリント境界ガード・
+    // 復元不能セルガードも同じ場所で再評価する（「判定不能の持ち越しは認めない」方針）。
+    // この分岐へ入る条件はneedsBelowPeek===trueで、その定義がcanCarryWallsを含むため、ここでは
+    // canCarryWalls===trueが保証されている（非canCarryWallsの経路はそもそもここへ来ない）。
+    if (isFootprintBoundaryCL(graph, cl)) return { toast: ERR_CL_DELETE_FOOTPRINT };
+    if (findUnresolvableCells(graph, cl.id).length > 0) return { toast: ERR_CL_DELETE_UNRESOLVABLE };
   }
 
   const before = serializeGraph(graph);
+  // M2是正（QA指摘・2026-09-27）: struct分岐と同じ理由で、削除前の「今のgraphで実際に復元不能な
+  // セル集合」を採っておく（collectUnresolvableCells）。canCarryWallsがfalseの経路はセルに
+  // 影響しないため差分は常に空になるが、判定を分岐で作り分けない（対称性・単純さのため）。
+  const beforeUnresolvable = collectUnresolvableCells(graph);
   // 梁芯CLの削除は「壁由来の梁芯自動生成」に対する明示的な手動削除として扱う——次回のモード境界
   // 再計算で元の座標に再生成されないよう、座標ベースの除外集合へ記録する（壁の位置自体は削除しない
   // ため、記録しないと自動生成が復活させてしまう）。キーは structural/wallBeamAxes.js と同じ形式。
   // 中心線の道連れ削除（下記）は excludedWallBeamAxes に触れない——壁が戻れば（undo）再生成される
   // ため、手動削除・移動の記録と同列に扱わない。
-  runInAction(() => {
+  const afterUnresolvable = runInAction(() => {
     if (centerLineKind(cl) === 'beam') {
       graph.excludedWallBeamAxes.add(wallBeamAxisExcludeKey(cl.centerLineType === CenterLineType.VERTICAL, cl.effectiveValue));
     }
@@ -468,14 +553,35 @@ export async function deleteCenterLineWithUndo(graph, project, cl, opts = {}) {
     // ——transform/centerLineFloorSync.js propagateDemotedCenterLine/recallPromotedCenterLineDuplicates
     // 参照）ため、通り芯削除と違い他階への伝播（propagate*）は不要。
     const sourcesBefore = canCarryWalls ? wallBeamSourcesFor(graph, project, belowGraph) : null;
+    const clId = cl.id; // removeCenterLine後もkneeDropWalls掃除・部屋再解釈のキー参照に使う
     graph.removeCenterLine(cl.id);
     if (canCarryWalls) {
       const sourcesAfter = wallBeamSourcesFor(graph, project, belowGraph);
       for (const ax of orphanedWallBeamAxes(graph, sourcesBefore, sourcesAfter)) {
         graph.removeCenterLine(ax.id);
       }
+      // 新ルール1（境界での後始末）: セル分割に参加する種別の削除だけが部屋セル・境界エッジに
+      // 影響するため、この分岐でのみ「部屋再解釈→部分指定の正規化→スラブ再解釈→エッジ再同期→
+      // 腰壁/垂れ壁の掃除」を行う（finishBoundary.js runFinishEntryBoundaryと同じ順序）。
+      // struct分岐と同じくbefore/afterのserializeGraph全体スナップショットに乗るため専用undoは不要。
+      reinterpretRoomsOnEntry(graph);
+      normalizePartialDominance(graph);
+      reinterpretSlabsAfterCLRemoval(graph);
+      syncEdgesFromTopology(graph);
+      removeKneeDropWallsReferencing(graph, clId);
     }
+    return collectUnresolvableCells(graph);
   });
+  // ルール4の安全網（S1・2026-09-27。M2で前後差分方式へ一般化）: findUnresolvableCells の
+  // 先読みが正しければここには到達しない——先読みの漏れ（未知の退化パターン）があっても
+  // 削除済みidを残さないよう、削除前後の「復元不能セル集合」の差分（新規に増えた分）を見て
+  // 非空なら削除自体を取り消す（他階への伝播はこの分岐には無いためrestoreGraphのみ。
+  // undoは積まない）。
+  const newlyUnresolved = [...afterUnresolvable].filter(key => !beforeUnresolvable.has(key));
+  if (newlyUnresolved.length > 0) {
+    restoreGraph(graph, before);
+    return { toast: ERR_CL_DELETE_UNRESOLVABLE };
+  }
   const after = serializeGraph(graph);
   undoManager.push(
     () => { restoreGraph(graph, before); if (scope) { applyFloorUndoRecords(project, floorRecords, 'before', opts.saveFloorFn); notify(); } },

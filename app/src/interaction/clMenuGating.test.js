@@ -216,6 +216,53 @@ test('convertMenuFlags: 梁芯（セル分割に参加しない種別。isFinish
   assert.equal(isFootprintBoundary, undefined);
 });
 
+// ---- isUnresolvable（D・QA指摘。cl-delのグレー化に使う共有値。復元不能セル削除ガード
+// ERR_CL_DELETE_UNRESOLVABLEの多層防御。isFootprintBoundaryと同条件でのみ算出する）----
+
+test('convertMenuFlags: menuContext=CENTER_LINEかつ削除すると対辺2本同時喪失になるCLならisUnresolvable=true', () => {
+  const graph = makeGraph();
+  const opts = { labeled: false, discipline: Discipline.ARCH };
+  const top    = graph.addCenterLine(CenterLineType.HORIZONTAL, 0,    opts);
+  const bottom = graph.addCenterLine(CenterLineType.HORIZONTAL, 3000, opts);
+  const right  = graph.addCenterLine(CenterLineType.VERTICAL,   4000, opts);
+  // left側は既に削除済みのCL id（ダングリング参照。lostSidesがgetCL()=null→'left'を喪失と判定する）。
+  const key = `gone-left:${top.id}:${right.id}:${bottom.id}`;
+  graph.addRoom(new Set([key]), '部屋');
+
+  const { isUnresolvable } = convertMenuFlags(graph, { appMode: 'floorplan', menuContext: CONTEXT.CENTER_LINE, cl: right, clEndpoint: null });
+  assert.equal(isUnresolvable, true);
+});
+
+test('convertMenuFlags: 対辺が健在なCLの削除はisUnresolvable=false', () => {
+  const graph = makeGraph();
+  const opts = { labeled: false, discipline: Discipline.ARCH };
+  const left   = graph.addCenterLine(CenterLineType.VERTICAL,   0,    opts);
+  const top    = graph.addCenterLine(CenterLineType.HORIZONTAL, 0,    opts);
+  const bottom = graph.addCenterLine(CenterLineType.HORIZONTAL, 3000, opts);
+  const right  = graph.addCenterLine(CenterLineType.VERTICAL,   4000, opts);
+  // rightのさらに外側（S1・2026-09-27: これが無いとrightを失った代表点がbracketできず
+  // 復元不能になる。roomReinterpret.js findUnresolvableCells の hasDividerBeyond 参照）。
+  graph.addCenterLine(CenterLineType.VERTICAL, 8000, opts);
+  const key = `${left.id}:${top.id}:${right.id}:${bottom.id}`;
+  graph.addRoom(new Set([key]), '部屋');
+
+  const { isUnresolvable } = convertMenuFlags(graph, { appMode: 'floorplan', menuContext: CONTEXT.CENTER_LINE, cl: right, clEndpoint: null });
+  assert.equal(isUnresolvable, false);
+});
+
+test('convertMenuFlags: menuContextがCENTER_LINEでなければisUnresolvableはundefined（clがnullでも短絡評価で例外にならない）', () => {
+  const graph = makeGraph();
+  const { isUnresolvable } = convertMenuFlags(graph, { appMode: 'floorplan', menuContext: CONTEXT.WALL, cl: null, clEndpoint: null });
+  assert.equal(isUnresolvable, undefined);
+});
+
+test('convertMenuFlags: 梁芯（セル分割に参加しない種別。isFinishCellDivider=false）はisUnresolvableがundefined', () => {
+  const graph = makeGraph();
+  const beam = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.FUSE });
+  const { isUnresolvable } = convertMenuFlags(graph, { appMode: 'floorplan', menuContext: CONTEXT.CENTER_LINE, cl: beam, clEndpoint: null });
+  assert.equal(isUnresolvable, undefined);
+});
+
 test('【不変条件】transform/centerLineConvert.js: 昇格・降格ガードの両方がisConvertSubject(cl, direction)を呼ぶ', () => {
   const src = readSrc('../transform/centerLineConvert.js');
   assert.ok(/isConvertSubject\(cl,\s*'promote'\)/.test(src), 'checkPromoteToGridGuards が isConvertSubject(cl, \'promote\') を呼んでいない');

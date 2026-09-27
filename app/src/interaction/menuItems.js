@@ -63,14 +63,16 @@ export function getMenuItems(context, endpointState, clState, wallState) {
       // 生成されたINTERIOR_WALLエッジ分類は脱出後も保持されるため、移動可能なモード側の
       // 長押しメニューで扱う）。移動アイコンはスナップ移動の方向（線と直交）を指す両矢印。
       // 移動をサポートしないモード（clState.canMove が偽）では従来どおり削除のみ。
-      const { canMove, isVertical, hasInteriorWall, canToCenter, isLastGridOnAxis, isFootprintBoundary } = clState ?? {};
+      const { canMove, isVertical, hasInteriorWall, canToCenter, isLastGridOnAxis, isFootprintBoundary, isUnresolvable } = clState ?? {};
       // 軸最後の通り芯（isLastGridOnAxis）・フットプリント境界（isFootprintBoundary。外壁線を担う
-      // 通り芯・中心線）は削除もグレー化する（中心化と同じ多層防御。transform/centerLineOps.js
-      // deleteCenterLineWithUndoのERR_CL_DELETE_LAST_GRID/ERR_CL_DELETE_FOOTPRINTと対）。
+      // 通り芯・中心線）・復元不能セル（isUnresolvable。削除すると部屋セルが再解釈で救えなくなる）は
+      // 削除もグレー化する（中心化と同じ多層防御。transform/centerLineOps.js deleteCenterLineWithUndoの
+      // ERR_CL_DELETE_LAST_GRID/ERR_CL_DELETE_FOOTPRINT/ERR_CL_DELETE_UNRESOLVABLEと対）。
       // isLastGridOnAxisは呼び出し側でcenterLineKind(cl)==='struct'のときのみ算出される
-      // （非structのCLではundefined→!!undefined=falseで従来どおり削除可能）。isFootprintBoundaryは
-      // セル分割に参加する種別（通り芯・中心線）のときのみ算出される（補助線・梁芯はundefined）。
-      const delDisabled = !!isLastGridOnAxis || !!isFootprintBoundary;
+      // （非structのCLではundefined→!!undefined=falseで従来どおり削除可能）。isFootprintBoundary・
+      // isUnresolvableはセル分割に参加する種別（通り芯・中心線）のときのみ算出される
+      // （補助線・梁芯はundefined）。
+      const delDisabled = !!isLastGridOnAxis || !!isFootprintBoundary || !!isUnresolvable;
       if (!canMove) return [{ id: 'cl-del', label: '削除', icon: '✕', disabled: delDisabled }];
       const items = [
         { id: 'cl-move', label: '移動', icon: '⇄', iconRotate: isVertical ? 0 : 90, angle: -90 },
@@ -123,14 +125,16 @@ export function getMenuItems(context, endpointState, clState, wallState) {
  * wallEligible（腰壁・垂れ壁の適格性）・canToGrid/canToCenter（中心⇔通り芯の入替え可否。平面モード限定）・
  * isLastGridOnAxis（canToCenter=true時のみ意味を持つ。cl-to-center項目のグレー化判定）・
  * isFootprintBoundary（セル分割に参加する種別のCENTER_LINE文脈でのみ意味を持つ。cl-del項目の
- * グレー化判定。外壁線を担うCLの削除を拒否するガードの多層防御）は
+ * グレー化判定。外壁線を担うCLの削除を拒否するガードの多層防御）・
+ * isUnresolvable（isFootprintBoundaryと同条件。削除すると部屋セルが再解釈で救えなくなるCLの
+ * 削除を拒否するガードの多層防御。cl-del項目のグレー化判定）は
  * graph 依存のため呼び出し側（interaction/usePointerInteraction.js）が算出して渡す
  * （このモジュールを import ゼロに保つため。ファイル冒頭コメント参照）。
  * @returns {{context, items, endpointState, clState, wallState}|null}
  */
 export function buildMenuState(appMode, {
   snap, cl, clEndpoint, opening, wall, canMove, canExtend, canShorten, hasInteriorWall, wallEligible,
-  canToGrid, canToCenter, isLastGridOnAxis, isFootprintBoundary,
+  canToGrid, canToCenter, isLastGridOnAxis, isFootprintBoundary, isUnresolvable,
 }) {
   const context = detectContext(snap, cl, opening, wall, clEndpoint);
   if (appMode === 'opening' && context !== CONTEXT.WALL && context !== CONTEXT.OPENING) return null;
@@ -152,6 +156,7 @@ export function buildMenuState(appMode, {
     canToCenter,
     isLastGridOnAxis,
     isFootprintBoundary,
+    isUnresolvable,
   } : null;
   // 壁上メニュー: 腰壁・垂れ壁の適格性（2a壁は対象外）を渡す。
   const wallState = context === CONTEXT.WALL ? { eligible: wallEligible } : null;
