@@ -907,8 +907,7 @@ const App = observer(() => {
 
     // ケース2: 最下階でない、かつ地下階（開始階 < 0）→ 上階を即時実行
     if (!isLowest && currentPlane.startFloor < 0) {
-      executeAddUpper(currentPlane);
-      return;
+      return executeAddUpper(currentPlane); // Promiseをreturnし、guardUi(handleAddFloor)が例外を拾えるようにする
     }
 
     // ケース1（最下階）/ ケース3（その他）→ ボタン直下にダイアログを開く
@@ -953,34 +952,40 @@ const App = observer(() => {
   // フロア切替・IDB 書き込みは非同期のため undo/redo 内では投げ放しで実行する
   // （完了前に次の undo を重ねると競合しうるが、通常の操作間隔では問題にならない）。
   async function withFloorAddUndo(run) {
-    // 実行中の構造同期（建具・通り芯削除起因）がactive graphを保存・差し替えしている最中に階を追加すると、
-    // collectFloorBytes（アクティブ階はメモリからserializeGraph）が再計算途中の中途半端な状態を
-    // before/afterのスナップショット・新階コピー元へ焼き込んでしまう（structural/structuralSync.js参照）。
-    await structuralSync.whenIdle();
-    const sourcePlaneId = project.activePlaneId;
-    const before = await collectFloorBytes();
+    beginUiTransition();
+    await runBusy('階追加', async () => {
+      // 実行中の構造同期（建具・通り芯削除起因）がactive graphを保存・差し替えしている最中に階を追加すると、
+      // collectFloorBytes（アクティブ階はメモリからserializeGraph）が再計算途中の中途半端な状態を
+      // before/afterのスナップショット・新階コピー元へ焼き込んでしまう（structural/structuralSync.js参照）。
+      await structuralSync.whenIdle();
+      const sourcePlaneId = project.activePlaneId;
+      const before = await collectFloorBytes();
 
-    await run();
+      await run();
 
-    const addedPlanes = project.planes
-      .filter(p => !before.has(p.id))
-      .map(p => ({ id: p.id, elevation: p.elevation, name: p.name, startFloor: p.startFloor, stories: p.stories }));
-    if (addedPlanes.length === 0) return;
+      const addedPlanes = project.planes
+        .filter(p => !before.has(p.id))
+        .map(p => ({ id: p.id, elevation: p.elevation, name: p.name, startFloor: p.startFloor, stories: p.stories }));
+      if (addedPlanes.length === 0) return;
 
-    const activeAfterId = project.activePlaneId;
-    const after = await collectFloorBytes();
-    const addedBytes = new Map(addedPlanes.map(pl => [pl.id, after.get(pl.id) ?? null]));
-    const changedSiblings = [];
-    for (const [planeId, beforeBytes] of before) {
-      const afterBytes = after.get(planeId);
-      if (after.has(planeId) && !floorBytesEqual(beforeBytes, afterBytes)) {
-        changedSiblings.push({ planeId, before: beforeBytes, after: afterBytes });
+      const activeAfterId = project.activePlaneId;
+      const after = await collectFloorBytes();
+      const addedBytes = new Map(addedPlanes.map(pl => [pl.id, after.get(pl.id) ?? null]));
+      const changedSiblings = [];
+      for (const [planeId, beforeBytes] of before) {
+        const afterBytes = after.get(planeId);
+        if (after.has(planeId) && !floorBytesEqual(beforeBytes, afterBytes)) {
+          changedSiblings.push({ planeId, before: beforeBytes, after: afterBytes });
+        }
       }
-    }
 
-    undoManager.push(
-      () => {
-        (async () => {
+      // undo/redoはfire-and-forget（undoManager.pushへ渡す関数は同期に呼ばれるだけで完了を
+      // 待たない）ため、performUndo/performRedoのrunBusy(の関門を抜けた後もこの中身は走り続ける
+      // ——それぞれ自前のrunBusyを持ち、同期でdepth++するので抜け目なく関門が続く（入力規制
+      // ステップ6）。beginUiTransition()はperformUndo/performRedoが既に済ませているためここでは
+      // 呼ばない（呼ぶとinterruptCurrentActionが今の操作を中断してしまう）。
+      async function undoFloorAdd() {
+        await runBusy('階追加のundo', async () => {
           // アクティブ階は削除できないため、追加階に居る場合は先に元の階へ戻る
           // （元の階が消えている防御ケースでは追加階以外の最初の採用フロアへ）
           if (addedPlanes.some(pl => pl.id === project.activePlaneId)) {
@@ -995,10 +1000,10 @@ const App = observer(() => {
           }
           for (const pl of addedPlanes) await removeFloor(pl.id);
           for (const rec of changedSiblings) applyFloorBytes(project, rec.planeId, rec.before);
-        })().catch(console.error);
-      },
-      () => {
-        (async () => {
+        });
+      }
+      async function redoFloorAdd() {
+        await runBusy('階追加のredo', async () => {
           for (const pl of addedPlanes) {
             addFloor(pl.elevation, pl.name, pl.startFloor, pl.stories, pl.id);
             const bytes = addedBytes.get(pl.id);
@@ -1006,9 +1011,14 @@ const App = observer(() => {
           }
           for (const rec of changedSiblings) applyFloorBytes(project, rec.planeId, rec.after);
           await handleFloorSwitch(activeAfterId); // activate() が保存済み bytes を読み込む
-        })().catch(console.error);
-      },
-    );
+        });
+      }
+
+      undoManager.push(
+        () => { undoFloorAdd().catch(console.error); },
+        () => { redoFloorAdd().catch(console.error); },
+      );
+    });
   }
 
   // 上階を追加して切り替える
@@ -1107,7 +1117,11 @@ const App = observer(() => {
   }
 
   // ---- フロアメニュー選択 ----
-  async function handleFloorMenuAction(action, planeId) {
+  // 本体は同期のまま（awaitを持たない）。graph/IDBを書く分岐は名前付き関数（runXxx）へ切り出し、
+  // 各自 beginUiTransition→runBusy('階操作', ...) で関門に入る——このハンドラ自身はPromiseを
+  // returnするだけにして、guardUi(handleFloorMenuAction相当のラッパー)が例外を拾えるようにする
+  // （入力規制ステップ6）。
+  function handleFloorMenuAction(action, planeId) {
     const plane = project.planeMap.get(planeId);
     if (!plane) return;
 
@@ -1134,17 +1148,7 @@ const App = observer(() => {
         onSelect: async (v) => {
           setFloorConfirm(null);
           if (v === 'cancel') return;
-          const altCount = [...project.planeMap.values()]
-            .filter(p => p.isAlternative && p.referenceId === refId).length;
-          const letter   = String.fromCharCode('a'.charCodeAt(0) + altCount);
-          const altName  = (refPlane?.name ?? '') + '#' + letter;
-          const result   = addAlternativeFloor(refId, altName);
-          if (!result) return;
-          // 切替に失敗したら以降（複製元の書き戻し）を進めない（F1・2026-09-27）。
-          if (!(await trySwitchFloor(() => handleFloorSwitch(result.plane.id)))) return;
-          if (v === 'yes') {
-            restoreGraph(project.activeGraph, serializeGraph(graph));
-          }
+          await runAddAlternative(v, refId, refPlane).catch(reportFloorTransitionError); // guardUi層と同じ握り方（未捕捉rejection化を防ぐ）
         },
       });
       return;
@@ -1177,41 +1181,7 @@ const App = observer(() => {
         onSelect: async (v) => {
           setFloorConfirm(null);
           if (v !== 'ok') return;
-          const adopted = project.planes;
-          const idx     = adopted.findIndex(p => p.id === planeId);
-          const fallback = adopted[idx + 1] ?? adopted[idx - 1];
-          const below    = adopted[idx - 1] ?? null; // 直下の採用階（階段が接続していた階）
-          if (blocksFloorRemoval(project, planeId)) {
-            if (fallback) await trySwitchFloor(() => handleFloorSwitch(fallback.id));
-            // 切替できていない（失敗・fallback無し）→アクティブ階を削除してしまうため中断（F1・2026-09-27）。
-            if (blocksFloorRemoval(project, planeId)) return;
-          }
-          await removeFloor(planeId);
-          // 消えた上階(n)に接続していた直下階(n-1)の階段を削除する。採用・検討案の両方。
-          if (below) {
-            await removeStairsOnFloor(below);
-            const belowAlts = [...project.planeMap.values()]
-              .filter(p => p.isAlternative && p.referenceId === below.id);
-            for (const alt of belowAlts) await removeStairsOnFloor(alt);
-          }
-          // 右側の採用の startFloor / elevation を再計算
-          const newAdopted = project.planes;
-          if (idx < newAdopted.length) {
-            runInAction(() => {
-              const anchor = newAdopted[idx - 1] ?? newAdopted[0];
-              let prevSF = anchor.startFloor, prevSto = anchor.stories, prevElev = anchor.elevation;
-              const start = anchor === newAdopted[idx - 1] ? idx : idx + 1;
-              for (let i = start; i < newAdopted.length; i++) {
-                const p = newAdopted[i];
-                const sf   = addSkipZero(prevSF + prevSto - 1, 1);
-                const elev = prevElev + prevSto * 3000;
-                p.name       = p.stories > 1 ? makeFloorName(sf, p.stories) : renameFloor(p.name, sf);
-                p.startFloor = sf;
-                p.elevation  = elev;
-                prevSF = sf; prevSto = p.stories; prevElev = elev;
-              }
-            });
-          }
+          await runDeleteFloor(planeId).catch(reportFloorTransitionError); // guardUi層と同じ握り方（未捕捉rejection化を防ぐ）
         },
       });
       return;
@@ -1227,13 +1197,7 @@ const App = observer(() => {
         onSelect: async (v) => {
           setFloorConfirm(null);
           if (v !== 'ok') return;
-          if (project.activePlaneId === planeId) {
-            const fallback = project.planeMap.get(plane.referenceId);
-            if (fallback) await trySwitchFloor(() => handleFloorSwitch(fallback.id));
-            // 切替できていない→アクティブ階を削除してしまうため中断（F1・2026-09-27）。
-            if (project.activePlaneId === planeId) return;
-          }
-          await removeFloor(planeId);
+          await runDeleteAlternative(planeId, plane).catch(reportFloorTransitionError); // guardUi層と同じ握り方（未捕捉rejection化を防ぐ）
         },
       });
       return;
@@ -1273,6 +1237,91 @@ const App = observer(() => {
     }
 
     if (action === 'copy-alt') {
+      return runCopyAlternative(plane, planeId); // Promiseをreturnし、guardUi経由で例外を拾えるようにする
+    }
+  }
+
+  // ---- フロアメニューの各アクション本体（graph/IDBを書く分岐。関門はここで開く）----
+  // graph参照はこれらの定義元と同じレンダー内のhandleFloorMenuActionから同期に呼ばれるクロージャの
+  // 中で使う（'add-alt'/'copy-alt'のrestoreGraph(project.activeGraph, serializeGraph(graph))は
+  // switchFloor前のgraph＝複製元の内容を指す。App.jsx冒頭のconst graph = project.activeGraphは
+  // レンダーごとに束縛され直すため、switchFloor後もこの関数が捕まえたままの値を参照する——階切替後の
+  // フロア参照はproject.activeGraphを読み直すのが原則だが、ここは意図的にswitchFloor前の値を使う）。
+
+  async function runAddAlternative(v, refId, refPlane) {
+    beginUiTransition();
+    await runBusy('階操作', async () => {
+      const altCount = [...project.planeMap.values()]
+        .filter(p => p.isAlternative && p.referenceId === refId).length;
+      const letter   = String.fromCharCode('a'.charCodeAt(0) + altCount);
+      const altName  = (refPlane?.name ?? '') + '#' + letter;
+      const result   = addAlternativeFloor(refId, altName);
+      if (!result) return;
+      // 切替に失敗したら以降（複製元の書き戻し）を進めない（F1・2026-09-27）。
+      if (!(await trySwitchFloor(() => handleFloorSwitch(result.plane.id)))) return;
+      if (v === 'yes') {
+        restoreGraph(project.activeGraph, serializeGraph(graph));
+      }
+    });
+  }
+
+  async function runDeleteFloor(planeId) {
+    beginUiTransition();
+    await runBusy('階操作', async () => {
+      const adopted = project.planes;
+      const idx     = adopted.findIndex(p => p.id === planeId);
+      const fallback = adopted[idx + 1] ?? adopted[idx - 1];
+      const below    = adopted[idx - 1] ?? null; // 直下の採用階（階段が接続していた階）
+      if (blocksFloorRemoval(project, planeId)) {
+        if (fallback) await trySwitchFloor(() => handleFloorSwitch(fallback.id));
+        // 切替できていない（失敗・fallback無し）→アクティブ階を削除してしまうため中断（F1・2026-09-27）。
+        if (blocksFloorRemoval(project, planeId)) return;
+      }
+      await removeFloor(planeId);
+      // 消えた上階(n)に接続していた直下階(n-1)の階段を削除する。採用・検討案の両方。
+      if (below) {
+        await removeStairsOnFloor(below);
+        const belowAlts = [...project.planeMap.values()]
+          .filter(p => p.isAlternative && p.referenceId === below.id);
+        for (const alt of belowAlts) await removeStairsOnFloor(alt);
+      }
+      // 右側の採用の startFloor / elevation を再計算
+      const newAdopted = project.planes;
+      if (idx < newAdopted.length) {
+        runInAction(() => {
+          const anchor = newAdopted[idx - 1] ?? newAdopted[0];
+          let prevSF = anchor.startFloor, prevSto = anchor.stories, prevElev = anchor.elevation;
+          const start = anchor === newAdopted[idx - 1] ? idx : idx + 1;
+          for (let i = start; i < newAdopted.length; i++) {
+            const p = newAdopted[i];
+            const sf   = addSkipZero(prevSF + prevSto - 1, 1);
+            const elev = prevElev + prevSto * 3000;
+            p.name       = p.stories > 1 ? makeFloorName(sf, p.stories) : renameFloor(p.name, sf);
+            p.startFloor = sf;
+            p.elevation  = elev;
+            prevSF = sf; prevSto = p.stories; prevElev = elev;
+          }
+        });
+      }
+    });
+  }
+
+  async function runDeleteAlternative(planeId, plane) {
+    beginUiTransition();
+    await runBusy('階操作', async () => {
+      if (project.activePlaneId === planeId) {
+        const fallback = project.planeMap.get(plane.referenceId);
+        if (fallback) await trySwitchFloor(() => handleFloorSwitch(fallback.id));
+        // 切替できていない→アクティブ階を削除してしまうため中断（F1・2026-09-27）。
+        if (project.activePlaneId === planeId) return;
+      }
+      await removeFloor(planeId);
+    });
+  }
+
+  async function runCopyAlternative(plane, planeId) {
+    beginUiTransition();
+    await runBusy('階操作', async () => {
       const refId   = plane.isAlternative ? plane.referenceId : planeId;
       const newName = plane.name + "'";
       const result  = addAlternativeFloor(refId, newName);
@@ -1283,8 +1332,7 @@ const App = observer(() => {
       // 切替に失敗したら複製元の書き戻しを進めない（F1・2026-09-27）。
       if (!(await trySwitchFloor(() => handleFloorSwitch(result.plane.id)))) return;
       if (bytes) restoreGraph(project.activeGraph, bytes);
-      return;
-    }
+    });
   }
 
   // 指定階の階段をすべて削除する。アクティブ階はライブグラフ、非アクティブ階は peek して保存。
@@ -1908,8 +1956,8 @@ const App = observer(() => {
             variants={chipVariants}
             managementItems={chipManagementItems}
             onSwitch={guardUi(appMode === 'structure' ? handleStructuralFloorSwitch : handleFloorSwitch)}
-            onTapAdd={() => handleFloorMenuAction('add-alt', project.activePlaneId)}
-            onManage={id => handleFloorMenuAction(id, project.activePlaneId)}
+            onTapAdd={guardUi(() => handleFloorMenuAction('add-alt', project.activePlaneId))}
+            onManage={guardUi(id => handleFloorMenuAction(id, project.activePlaneId))}
           />
         )}
 
@@ -1918,7 +1966,7 @@ const App = observer(() => {
           const canAddFloor = !(project.activePlane?.isAlternative);
           return (
             <button
-              onClick={canAddFloor ? handleAddFloor : undefined}
+              onClick={canAddFloor ? guardUi(handleAddFloor) : undefined}
               title={canAddFloor ? '階を追加' : '採用フロアを表示中のときに追加できます'}
               style={{
                 width: 24, height: 24, borderRadius: 6,
@@ -1993,7 +2041,7 @@ const App = observer(() => {
         <AddFloorDialog
           isLowest={floorDialog.isLowest}
           anchor={floorDialog.anchor}
-          onConfirm={handleAddFloorConfirm}
+          onConfirm={guardUi(handleAddFloorConfirm)}
           onCancel={() => setFloorDialog(null)}
         />
       )}

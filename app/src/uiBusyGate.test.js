@@ -95,7 +95,7 @@ test('【不変条件・入力規制ステップ3】App.jsx: RadialMenuのonSele
 test('【不変条件・入力規制ステップ3/5】App.jsx: whenIdle()を使う入口はいずれもGATED（関門の中で待つ）', () => {
   const appSrc = fs.readFileSync(appSrcPath, 'utf8');
 
-  const GATED_WITH_WHEN_IDLE = ['handleDeleteCenterLine', 'handleConvertCenterLine', 'handleEccConfirm', 'handleSaveConfirm'];
+  const GATED_WITH_WHEN_IDLE = ['handleDeleteCenterLine', 'handleConvertCenterLine', 'handleEccConfirm', 'handleSaveConfirm', 'withFloorAddUndo'];
   for (const name of GATED_WITH_WHEN_IDLE) {
     const body = extractFunctionBody(appSrc, `async function ${name}`);
     const idleIdx = body.indexOf('structuralSync.whenIdle()');
@@ -147,21 +147,17 @@ test('【不変条件・任意】App.jsx: performRedo はbeginUiTransition()をr
 // （removeFloor）を中断しなければならない。この順序をソース走査で固定する。
 // ================================================================
 
-test('【不変条件・F1】App.jsx: 階削除（delete）はtrySwitchFloor→blocksFloorRemoval再判定→removeFloorの順で、切替失敗時にアクティブ階を削除しない', () => {
+test('【不変条件・F1】App.jsx: runDeleteFloor（階削除の本体）はtrySwitchFloor→blocksFloorRemoval再判定→removeFloorの順で、切替失敗時にアクティブ階を削除しない', () => {
   const appSrc = fs.readFileSync(appSrcPath, 'utf8');
-  const code = stripCommentLines(appSrc);
-  const startIdx = code.indexOf("if (action === 'delete') {");
-  const endIdx = code.indexOf("if (action === 'delete-alt') {", startIdx);
-  assert.ok(startIdx >= 0 && endIdx > startIdx, "action === 'delete' ブロックが見つからない");
-  const block = code.slice(startIdx, endIdx);
+  const body = extractFunctionBody(appSrc, 'async function runDeleteFloor');
 
-  const trySwitchIdx = block.indexOf('trySwitchFloor(');
+  const trySwitchIdx = body.indexOf('trySwitchFloor(');
   assert.ok(trySwitchIdx >= 0, 'trySwitchFloor経由でhandleFloorSwitchを呼んでいない');
-  const firstBlocksIdx = block.indexOf('blocksFloorRemoval(');
+  const firstBlocksIdx = body.indexOf('blocksFloorRemoval(');
   assert.ok(firstBlocksIdx >= 0, 'blocksFloorRemovalによる事前判定が無い');
-  const secondBlocksIdx = block.indexOf('blocksFloorRemoval(', firstBlocksIdx + 1);
+  const secondBlocksIdx = body.indexOf('blocksFloorRemoval(', firstBlocksIdx + 1);
   assert.ok(secondBlocksIdx >= 0, '切替後にblocksFloorRemovalを再判定していない（切替失敗を検知できない）');
-  const removeIdx = block.indexOf('await removeFloor(planeId)');
+  const removeIdx = body.indexOf('await removeFloor(planeId)');
   assert.ok(removeIdx >= 0, 'removeFloorの呼び出しが見つからない');
   assert.ok(trySwitchIdx < secondBlocksIdx && secondBlocksIdx < removeIdx,
     'trySwitchFloor→blocksFloorRemoval再判定→removeFloorの順である必要がある');
@@ -196,21 +192,57 @@ test('【不変条件・入力規制ステップ5・QA指摘再報告】App.jsx:
   assert.ok(body.includes('isUiBusy()'), 'handleFileOpenの本体にisUiBusy()ガードが無い');
 });
 
-test('【不変条件・F1】App.jsx: 検討案削除（delete-alt）はtrySwitchFloor→activePlaneId再判定→removeFloorの順で、切替失敗時にアクティブ階を削除しない', () => {
+// ================================================================
+// 入力規制ステップ6: 階操作（階追加・複製・検討案コピー・削除・検討案削除）の入口を関門へ移すのに伴い、
+// AltChipのonTapAdd/onManage・AddFloorDialogのonConfirm・[+]ボタンのonClick（executeAddUpperの
+// 直接呼び出し経路）をguardUi()で包む。
+// ================================================================
+
+test('【不変条件・入力規制ステップ6】App.jsx: AltChipのonTapAdd/onManage・AddFloorDialogのonConfirmはguardUi()で包まれている', () => {
   const appSrc = fs.readFileSync(appSrcPath, 'utf8');
   const code = stripCommentLines(appSrc);
-  const startIdx = code.indexOf("if (action === 'delete-alt') {");
-  const endIdx = code.indexOf("if (action === 'promote') {", startIdx);
-  assert.ok(startIdx >= 0 && endIdx > startIdx, "action === 'delete-alt' ブロックが見つからない");
-  const block = code.slice(startIdx, endIdx);
 
-  const trySwitchIdx = block.indexOf('trySwitchFloor(');
+  assert.match(code, /<AltChip[\s\S]{0,400}onTapAdd=\{guardUi\(/, 'AltChipのonTapAddがguardUi()で包まれていない');
+  assert.match(code, /<AltChip[\s\S]{0,400}onManage=\{guardUi\(/, 'AltChipのonManageがguardUi()で包まれていない');
+  assert.match(code, /<AddFloorDialog[\s\S]{0,200}onConfirm=\{guardUi\(handleAddFloorConfirm\)\}/,
+    'AddFloorDialogのonConfirmがguardUi()で包まれていない');
+});
+
+test('【不変条件・入力規制ステップ6】App.jsx: [+]ボタンのonClick（executeAddUpperの直接呼び出し経路）はguardUi()で包まれている', () => {
+  const appSrc = fs.readFileSync(appSrcPath, 'utf8');
+  const code = stripCommentLines(appSrc);
+
+  assert.match(code, /onClick=\{canAddFloor \? guardUi\(handleAddFloor\) : undefined\}/,
+    '[+]ボタンのonClickがguardUi()で包まれていない');
+});
+
+// handleFloorMenuAction自体は非asyncのままgraph/IDBを直接書かず、GATEDなrunXxxへ委譲することを固定する
+// （変異: delete分岐へremoveFloor(を直接書き戻す→このテストのみ赤）。
+test('【不変条件・入力規制ステップ6】App.jsx: handleFloorMenuAction の各分岐はrunXxx（GATED）へ委譲し、自らgraph/IDBを書かない', () => {
+  const appSrc = fs.readFileSync(appSrcPath, 'utf8');
+  assert.ok(!appSrc.includes('async function handleFloorMenuAction'),
+    'handleFloorMenuActionはasync functionであってはいけない（関門はrunXxx側で開く）');
+  const body = extractFunctionBody(appSrc, 'function handleFloorMenuAction');
+
+  assert.ok(body.includes('await runDeleteFloor(planeId)'), 'delete分岐がrunDeleteFloorへ委譲していない');
+  assert.ok(body.includes('await runDeleteAlternative(planeId, plane)'), 'delete-alt分岐がrunDeleteAlternativeへ委譲していない');
+  assert.ok(body.includes('await runAddAlternative('), 'add-alt分岐がrunAddAlternativeへ委譲していない');
+  assert.ok(body.includes('return runCopyAlternative('), 'copy-alt分岐がrunCopyAlternativeへ委譲していない');
+  assert.ok(!body.includes('removeFloor('), 'handleFloorMenuActionの本体が直接removeFloorを呼んではいけない（runXxxへ委譲する）');
+  assert.ok(!body.includes('restoreGraph('), 'handleFloorMenuActionの本体が直接restoreGraphを呼んではいけない（runXxxへ委譲する）');
+});
+
+test('【不変条件・F1】App.jsx: runDeleteAlternative（検討案削除の本体）はtrySwitchFloor→activePlaneId再判定→removeFloorの順で、切替失敗時にアクティブ階を削除しない', () => {
+  const appSrc = fs.readFileSync(appSrcPath, 'utf8');
+  const body = extractFunctionBody(appSrc, 'async function runDeleteAlternative');
+
+  const trySwitchIdx = body.indexOf('trySwitchFloor(');
   assert.ok(trySwitchIdx >= 0, 'trySwitchFloor経由でhandleFloorSwitchを呼んでいない');
-  const firstActiveIdx = block.indexOf('project.activePlaneId === planeId');
+  const firstActiveIdx = body.indexOf('project.activePlaneId === planeId');
   assert.ok(firstActiveIdx >= 0, 'project.activePlaneId === planeId による事前判定が無い');
-  const secondActiveIdx = block.indexOf('project.activePlaneId === planeId', firstActiveIdx + 1);
+  const secondActiveIdx = body.indexOf('project.activePlaneId === planeId', firstActiveIdx + 1);
   assert.ok(secondActiveIdx >= 0, '切替後にproject.activePlaneId === planeIdを再判定していない（切替失敗を検知できない）');
-  const removeIdx = block.indexOf('await removeFloor(planeId)');
+  const removeIdx = body.indexOf('await removeFloor(planeId)');
   assert.ok(removeIdx >= 0, 'removeFloorの呼び出しが見つからない');
   assert.ok(trySwitchIdx < secondActiveIdx && secondActiveIdx < removeIdx,
     'trySwitchFloor→activePlaneId再判定→removeFloorの順である必要がある');

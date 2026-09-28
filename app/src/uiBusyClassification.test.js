@@ -23,11 +23,38 @@ import {
 } from './uiBusySourceScan.js';
 
 // ---- GATED（関門内。runBusy(が最初のawait）----
+// 文字列の他に { name, noBeginUiTransition: true, reason } も許す——undoFloorAdd/redoFloorAddは
+// performUndo/performRedoの関門を抜けた後もfire-and-forgetで走り続けるため自前でrunBusyを持つが、
+// beginUiTransition()（interruptCurrentActionが今の操作を中断してしまう）はperformUndo/performRedo
+// が既に済ませているためここでは呼ばない（入力規制ステップ6）。
 const GATED = [
   'performUndo', 'performRedo', 'handleModeChange', 'handleFloorSwitch', 'switchFloorKeepingMode',
   'handleDeleteCenterLine', 'handleConvertCenterLine', 'handleEccConfirm', 'commitAxisEdit',
   'handleSaveConfirm', 'runDocumentImport', 'openCatalogMaintenancePanel',
+  'withFloorAddUndo',
+  {
+    name: 'undoFloorAdd', noBeginUiTransition: true,
+    reason: 'performUndoのrunBusy(の関門を抜けた後もfire-and-forgetで走り続けるため自前のrunBusyを持つ。'
+      + 'beginUiTransition()はperformUndoが既に済ませており、ここで呼ぶと今の操作を中断してしまうため呼ばない。',
+  },
+  {
+    name: 'redoFloorAdd', noBeginUiTransition: true,
+    reason: '同上（performRedo側）。',
+  },
+  'runAddAlternative', 'runDeleteFloor', 'runDeleteAlternative', 'runCopyAlternative',
 ];
+
+function gatedName(entry) {
+  return typeof entry === 'string' ? entry : entry.name;
+}
+
+test('【分類】GATEDのオブジェクトエントリ（noBeginUiTransition等）は全て空でないreasonを持つ', () => {
+  for (const entry of GATED) {
+    if (typeof entry === 'string') continue;
+    assert.ok(typeof entry.reason === 'string' && entry.reason.trim().length > 0,
+      `GATEDの \`${entry.name}\` にreasonが無い（例外扱いの根拠を書く）`);
+  }
+});
 
 // ---- EXEMPT（対象外。理由付き）----
 // 各reasonはソースを読んで判定した根拠（file:lineではなく関数名で示す。App.jsx内の1ファイルのため）。
@@ -71,37 +98,29 @@ const EXEMPT = [
   },
   {
     name: 'syncNewFloorFromSource',
-    reason: '呼び出し元はexecuteAddUpper/handleAddFloorConfirmのみ（いずれもステップ6で関門化予定のEXEMPT）。'
-      + '関門化予定の呼び出し元から呼ばれる内部関数のため、呼び出し元がステップ6で関門化されれば合わせて解消する。対象外。',
+    reason: '呼び出し元はexecuteAddUpper/handleAddFloorConfirm（いずれもwithFloorAddUndo経由でGATEDのEXEMPT）のみ。'
+      + '関門化済みの呼び出し元（runBusyの中）から呼ばれる内部関数のため対象外（入力規制ステップ6）。',
   },
   {
     name: 'collectFloorBytes',
-    reason: '呼び出し元はwithFloorAddUndoのみ（ステップ6で関門化予定のEXEMPT）。関門化予定の呼び出し元から呼ばれる'
-      + '内部関数のため、呼び出し元がステップ6で関門化されれば合わせて解消する。対象外。',
-  },
-  {
-    name: 'withFloorAddUndo',
-    reason: '未対応（ステップ6で関門へ）。runより前にcollectFloorBytes（IDB読込含む）、run実行後にもcollectFloorBytes・'
-      + 'undoManager.push（IIFE内でremoveFloor/applyFloorBytes等のgraph/IDB書込）を行う層2の入口だが、まだrunBusyに入っていない。',
+    reason: '呼び出し元はwithFloorAddUndo（GATED）のみ。関門化済みの呼び出し元（runBusyの中）から呼ばれる'
+      + '内部関数のため対象外（入力規制ステップ6）。',
   },
   {
     name: 'executeAddUpper',
-    reason: '未対応（ステップ6で関門へ）。withFloorAddUndo経由でaddFloor・syncNewFloorFromSource（graph/IDB書込）を行う層2の'
-      + '入口だが、まだrunBusyに入っていない。',
+    reason: '呼び出し元はhandleAddFloor（[+]ボタン。onClickがguardUiで包装済み）とhandleAddFloorConfirmのみ。'
+      + '本体はwithFloorAddUndo（既に関門内で自走）をawaitするだけで、awaitの前後で自らgraph/IDBを書かない'
+      + '（判定基準はtrySwitchFloorと同じ）。恒久的に対象外（入力規制ステップ6）。',
   },
   {
     name: 'handleAddFloorConfirm',
-    reason: '未対応（ステップ6で関門へ）。withFloorAddUndo経由でaddFloor等（graph/IDB書込）を行う層2の入口だが、まだrunBusyに入っていない。',
-  },
-  {
-    name: 'handleFloorMenuAction',
-    reason: '未対応（ステップ6で関門へ）。delete/delete-alt/add-alt/copy-alt等の分岐でremoveFloor・restoreGraph・runInAction'
-      + '（graph/IDB書込）を行う層2の入口だが、まだrunBusyに入っていない。',
+    reason: '呼び出し元はAddFloorDialogのonConfirm（guardUiで包装済み）のみ。本体はexecuteAddUpper/withFloorAddUndo'
+      + '（既に関門内で自走）をawaitするだけで、awaitの前後で自らgraph/IDBを書かない。恒久的に対象外（入力規制ステップ6）。',
   },
   {
     name: 'removeStairsOnFloor',
-    reason: '呼び出し元はhandleFloorMenuActionの action===\'delete\' 分岐のみ（ステップ6で関門化予定のEXEMPT）。'
-      + '関門化予定の呼び出し元から呼ばれる内部関数のため、呼び出し元がステップ6で関門化されれば合わせて解消する。対象外。',
+    reason: '呼び出し元はrunDeleteFloor（GATED）のみ。関門化済みの呼び出し元（runBusyの中）から呼ばれる'
+      + '内部関数のため対象外（入力規制ステップ6）。',
   },
   {
     name: 'startCenterLineMove',
@@ -111,8 +130,8 @@ const EXEMPT = [
   },
 ];
 
-// EXEMPT reasonに「未対応」を含む件数（ステップ3〜6で減らし、ステップ7で0をassertする）。
-const PENDING_COUNT = 4;
+// EXEMPT reasonに「未対応」を含む件数（ステップ3〜6で減らす。ステップ6で対象が尽きたため0にする）。
+const PENDING_COUNT = 0;
 
 // ---- 無名の非同期入口（IIFE・asyncアロー）の個数上限 ----
 // IIFE: `(async (...) => { ... })(...)`。asyncアロー（コールバック）: それ以外の
@@ -122,9 +141,12 @@ const PENDING_COUNT = 4;
 // コールバック（handleDeleteCenterLine・handleConvertCenterLine・handleEccConfirm・
 // commitAxisEditの4件）が新たに加わったため15→19。ステップ5で保存・読込み・カタログ保守を開くの
 // runBusy(コールバック3件（handleSaveConfirm・runDocumentImport・openCatalogMaintenancePanel）が
-// 加わったため19→22。
-const ANON_IIFE_COUNT = 4;
-const ANON_CALLBACK_COUNT = 22;
+// 加わったため19→22。ステップ6でwithFloorAddUndoのundo/redoクロージャ内のIIFE2件を名前付き関数
+// （undoFloorAdd・redoFloorAdd）へ切り出したため4→2（残るのは412/435の上階peek useEffectのみ）。
+// 一方runBusy(コールバック7件（withFloorAddUndo・undoFloorAdd・redoFloorAdd・runAddAlternative・
+// runDeleteFloor・runDeleteAlternative・runCopyAlternative）が新たに加わったため22→29。
+const ANON_IIFE_COUNT = 2;
+const ANON_CALLBACK_COUNT = 29;
 const ANON_TOTAL_COUNT = ANON_IIFE_COUNT + ANON_CALLBACK_COUNT;
 
 function findNamedAsyncFunctions(code) {
@@ -169,8 +191,9 @@ test('【分類】App.jsx: 名前付き非同期入口はGATED/EXEMPTのいず�
   const code = stripCommentLines(appSrc);
   const actualNames = new Set(findNamedAsyncFunctions(code));
 
+  const gatedNames  = GATED.map(gatedName);
   const exemptNames = EXEMPT.map(e => e.name);
-  const classifiedNames = new Set([...GATED, ...exemptNames]);
+  const classifiedNames = new Set([...gatedNames, ...exemptNames]);
 
   // 分類表にあるがApp.jsxに存在しない名前
   for (const name of classifiedNames) {
@@ -181,21 +204,30 @@ test('【分類】App.jsx: 名前付き非同期入口はGATED/EXEMPTのいず�
     assert.ok(classifiedNames.has(name), `新しい非同期入口 \`${name}\` が分類されていません（GATEDかEXEMPTに追加し理由を書く）`);
   }
   // 重複登録が無いこと
-  assert.equal(classifiedNames.size, GATED.length + exemptNames.length,
+  assert.equal(classifiedNames.size, gatedNames.length + exemptNames.length,
     'GATED/EXEMPTに同じ名前が重複して登録されています');
 });
 
-for (const name of GATED) {
+for (const entry of GATED) {
+  const name = gatedName(entry);
   test(`【分類・GATED】App.jsx: ${name} はrunBusy(が最初のawait`, () => {
     const appSrc = readAppSrc();
     const body = extractFunctionBody(appSrc, `async function ${name}`);
     assertRunBusyIsFirstAwait(body, name);
   });
-  test(`【分類・GATED】App.jsx: ${name} はbeginUiTransition()をrunBusy(より前で呼ぶ`, () => {
-    const appSrc = readAppSrc();
-    const body = extractFunctionBody(appSrc, `async function ${name}`);
-    assertBeginUiTransitionBeforeRunBusy(body, name);
-  });
+  if (typeof entry === 'string' || !entry.noBeginUiTransition) {
+    test(`【分類・GATED】App.jsx: ${name} はbeginUiTransition()をrunBusy(より前で呼ぶ`, () => {
+      const appSrc = readAppSrc();
+      const body = extractFunctionBody(appSrc, `async function ${name}`);
+      assertBeginUiTransitionBeforeRunBusy(body, name);
+    });
+  } else {
+    test(`【分類・GATED・例外】App.jsx: ${name} はbeginUiTransition()を呼ばない（${entry.reason}）`, () => {
+      const appSrc = readAppSrc();
+      const body = extractFunctionBody(appSrc, `async function ${name}`);
+      assert.ok(!body.includes('beginUiTransition()'), `${name} の本体にbeginUiTransition()があってはいけない`);
+    });
+  }
 }
 
 // commitAxisEditは、beginUiTransition()（内部でinterruptCurrentAction→cancelAxisEditを呼び
@@ -214,7 +246,7 @@ test('【分類・GATED】App.jsx: commitAxisEdit はaxisEditStateの読み出�
     'commitAxisEditではoldRawの採取がbeginUiTransition()より前である必要がある');
 });
 
-test('【分類】EXEMPTのreasonに「未対応」を含む件数はPENDING_COUNTと一致する（ステップ3〜6で減らし、ステップ7で0にする）', () => {
+test('【分類】EXEMPTのreasonに「未対応」を含む件数はPENDING_COUNTと一致する（ステップ3〜6で0まで減らした）', () => {
   const pending = EXEMPT.filter(e => e.reason.includes('未対応'));
   assert.equal(pending.length, PENDING_COUNT,
     `未対応件数が想定と異なる（実際: ${pending.map(e => e.name).join(', ')}）`);
