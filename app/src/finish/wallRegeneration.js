@@ -270,8 +270,9 @@ export async function regenerateWalls(graph, { materialMap, project = null, stai
   // wallGeneration.js）をこの直後に行い、＋側の壁を下地オーナーに、−側の壁を仕上げ薄壁
   // （backingDepth=0）に確定する（部分重なりは壁を分割する）。
   // 部分指定（referenceRoomIds あり）は通常、親が外周壁を担うため対象外——ただし
-  // feature=STAIR（部屋の部分指定から階段変換した階段）は例外で対象に含める。旧版にあった
-  // 親隣接面だけの抑止（parentAdjacentEdges）は不要——新モデルでは所有権解決
+  // feature=STAIR（部屋の部分指定から階段変換した階段）・昇降路（isShaftFeature。EV等。
+  // 2026-09-29追加）は例外で対象に含める。旧版にあった親隣接面だけの抑止
+  // （parentAdjacentEdges）は不要——新モデルでは所有権解決
   // （resolveBackingOwnership）が親側の壁との重なりを検出して自動的に薄壁化するため。
   // 対象判定は isInteriorWallTarget（wallGeneration.js）に抽出済み（単体テスト対象）。
   const wallIdToRoom = new Map(); // wallId -> 生成元Room（所有権解決の分割で generatedWallIds を張り替えるため）

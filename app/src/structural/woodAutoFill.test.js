@@ -2,7 +2,7 @@
 // wallBeamAxes.test.js と同じく実 core.js（Plane/PlanGraph/Wall）を使う。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Plane, PlanGraph, Project, CenterLineType, Discipline, StructuralMaterialType, OpeningCategory, columnSlotKey, columnAnchorKey, spanKey, beamExclusionKey, centerLineKind as centerLineKindOf, edgeKey } from '../core.js';
+import { Plane, PlanGraph, Project, CenterLineType, Discipline, StructuralMaterialType, OpeningCategory, RoomFeature, SHAFT_FEATURES, columnSlotKey, columnAnchorKey, spanKey, beamExclusionKey, centerLineKind as centerLineKindOf, edgeKey } from '../core.js';
 import {
   wallIntersectionPoints, autoFillWoodColumns, conformWoodSections, conformWoodBacking, WALL_JUNCTION_TOL_MM,
   autoFillWoodBeamDepths, autoFillWoodWallBeams, autoFillWoodFloorBeams, conformWoodColumnEccentricity,
@@ -16,6 +16,7 @@ import { selfWallSegments, autoFillWallBeamAxes, wallBeamAxisExcludeKey, createW
 import { createFootprintCache } from './wallGate.js';
 import { createStructuralResolveContext } from './structuralResolveContext.js';
 import { generateRoomWallsFromOutline } from '../finish/wallGeneration.js';
+import { regenerateWalls, loadMaterialMap } from '../finish/wallRegeneration.js';
 import { floorSwapManager } from '../storage/FloorSwapManager.js';
 import { recomputeStructuralForGraph } from './structuralRecompute.js';
 import { SECONDARY_BEAM_CLEARANCE_MM } from '../core/structuralEntities.js';
@@ -118,6 +119,133 @@ test('autoFillWoodColumns: 自階の壁の交点・T字に柱（120角）が立�
   // 冪等: もう一度呼んでも増減しない（F-1の自由端分も含め、初回で確定済み）。
   const again = fillWoodColumns(graph);
   assert.deepEqual([again.created.length, again.removed.length], [0, 0]);
+});
+
+// ---- 木造EVの4隅柱（実装指示書ステップ8・2026-09-29）----
+// 事実確認（riskiest assumption）: 在来木造の壁は generateRoomWallsFromOutline が部屋の外形から
+// 機械的に生成し、room.feature（isShaftFeature）を一切参照しない——ただし対象を選ぶ
+// finish/wallGeneration.js isInteriorWallTarget は「独立した部屋（referenceRoomIds空）」は無条件で
+// 対象だが、「部分指定（親部屋の中に描いた昇降路。referenceRoomIds非空）」は元々STAIRしか例外に
+// 含めておらず、昇降路は対象外だった（QA実測2026-09-29: 部分指定EVは壁8・柱4本でEV自身の内部境界
+// 2隅が無い）。isInteriorWallTargetへ昇降路もSTAIRと同型の例外として追加した（本ファイル末尾の
+// 「木造EVの4隅柱（部分指定）」節）ことで、独立・部分指定どちらでも4辺に壁が生成され、4隅が
+// 3a（壁交点）の候補になる——専用の候補源（floorOpeningEdges の source==='shaft' 由来の隅を足す等）
+// は不要と判断した（実装しない）。以下は独立部屋（referenceRoomIds空）のケースの回帰ガード。
+// 本テストはこの前提が崩れたとき（将来isShaftFeatureの部屋だけ壁生成を特別扱いする変更が入ったとき）に
+// 赤くなる回帰ガード。
+const SHAFT_FEATURES_FOR_COLUMN_TEST = [RoomFeature.EV, RoomFeature.DW, RoomFeature.FREIGHT_EV, RoomFeature.VEHICLE_EV];
+for (const feature of SHAFT_FEATURES_FOR_COLUMN_TEST) {
+  test(`autoFillWoodColumns（木造EVの4隅柱）: 昇降路（feature=${feature}）の部屋も壁交点方式で4隅に柱が立つ（専用の候補源は不要）`, () => {
+    assert.ok(SHAFT_FEATURES.has(feature), `${feature} はSHAFT_FEATURESの要素であるはず（テストの前提）`);
+    const { graph, x1, x2, y1, y2 } = makeGridGraph();
+    const room = graph.addRoom(new Set([`${x1.id}:${y1.id}:${x2.id}:${y2.id}`]), 'EV');
+    room.setFeature(feature);
+    generateRoomWallsFromOutline(graph, room);
+
+    const { created, removed } = fillWoodColumns(graph);
+    assert.deepEqual(created.map(c => `${c.x},${c.y}`).sort(),
+      ['0,0', '0,4000', '4000,0', '4000,4000'], '4隅すべてに柱が立つ');
+    assert.deepEqual(removed, []);
+
+    // 冪等: もう一度呼んでも増減しない。
+    const again = fillWoodColumns(graph);
+    assert.deepEqual([again.created.length, again.removed.length], [0, 0]);
+  });
+}
+
+test('autoFillWoodColumns（木造EVの4隅柱）: 除外集合に記録した隅は復活しない（他の壁交点柱と同じ規律）', () => {
+  const { graph, x1, x2, y1, y2 } = makeGridGraph();
+  const room = graph.addRoom(new Set([`${x1.id}:${y1.id}:${x2.id}:${y2.id}`]), 'EV');
+  room.setFeature(RoomFeature.EV);
+  generateRoomWallsFromOutline(graph, room);
+
+  const first = fillWoodColumns(graph);
+  const corner = first.created.find(c => c.x === 0 && c.y === 0);
+  assert.ok(corner, '前提: (0,0)に柱が立つ');
+  graph.removeColumn(corner.id);
+  assert.ok(graph.excludedColumnSlots.has(columnAnchorKey(corner)), '前提: removeColumnで除外集合に記録される');
+
+  const again = fillWoodColumns(graph);
+  assert.equal(again.created.some(c => c.x === 0 && c.y === 0), false, '除外集合に記録された隅は復活しない');
+});
+
+// QA是正（F4・2026-09-29）: isInteriorWallTargetはVOID（吹抜け）も除外しない——region方式の壁生成は
+// featureを問わないため、EVと対称にVOIDも自分の壁を持ち4隅が3a候補になる（「壁が無ければ候補に
+// ならない」という消極的な確認ではなく、「VOIDにも通常部屋と同じ壁交点方式がそのまま効く」ことを
+// 積極的に確認する——専用の候補源が無くても足りるという結論の裏付け）。
+test('autoFillWoodColumns（木造EVの4隅柱・対照）: 吹抜け（VOID）の部屋も通常部屋・EVと同じく4隅に柱が立つ（VOID専用の候補源は無い）', () => {
+  const { graph, x1, x2, y1, y2 } = makeGridGraph();
+  const room = graph.addRoom(new Set([`${x1.id}:${y1.id}:${x2.id}:${y2.id}`]), '吹抜け');
+  room.setFeature(RoomFeature.VOID);
+  generateRoomWallsFromOutline(graph, room);
+
+  const { created, removed } = fillWoodColumns(graph);
+  assert.deepEqual(created.map(c => `${c.x},${c.y}`).sort(),
+    ['0,0', '0,4000', '4000,0', '4000,4000'], 'VOIDも4隅すべてに柱が立つ（EVと対称）');
+  assert.deepEqual(removed, []);
+});
+
+// QA是正（F5・2026-09-29）: 「壁を生成しても同じ4隅」では壁交点方式(3a)経由である可能性を排除
+// できない。壁を一切作らずに同じ4隅が立つことを示し、S造の柱配置がwallIntersections（壁の有無）
+// に依存しない別経路（gridIntersections＝通り芯交点そのもの）であることを積極的に確認する。
+test('autoFillWoodColumns（木造EVの4隅柱・対照）: 非在来（S造）は壁が無くても通り芯交点に4隅の柱が立つ（columnPlacement=gridIntersections。壁交点方式=wallIntersectionsは使わない）', () => {
+  const { graph, x1, x2, y1, y2 } = makeGridGraph('S造');
+  const room = graph.addRoom(new Set([`${x1.id}:${y1.id}:${x2.id}:${y2.id}`]), 'EV');
+  room.setFeature(RoomFeature.EV);
+  // 意図的に壁を生成しない——壁交点方式(3a)なら候補ゼロになるはずの状態で確認する。
+
+  const { created } = autoFillColumnsForStructure(graph, PROJECT);
+  assert.equal(graph.walls.length, 0, '前提: 壁は1本も無い');
+  assert.deepEqual(created.map(c => `${c.x},${c.y}`).sort(),
+    ['0,0', '0,4000', '4000,0', '4000,4000'],
+    '壁が無くても通り芯交点方式（gridIntersections）で4隅に柱が立つ——wallIntersectionsとは独立の経路');
+});
+
+// ---- 木造EVの4隅柱（部分指定・QA是正2026-09-29）----
+// 部分指定（親部屋の中に描いた昇降路。FinishModeState.js「その他セル — 新規部分指定」経路）は
+// finish/wallGeneration.js isInteriorWallTarget が STAIR と同型の例外に昇降路を加えるまで対象外
+// だった——親（ホール等）の room.cells は子（EV）のセルを含んだまま単一の外形として壁生成される
+// ため、親領域の内部に埋まったEVの境界（親と共有しないEV固有の辺）には壁が一切生成されず、
+// woodAutoFill.js 3aの柱候補（wallIntersectionPoints）も存在しなかった。本番の壁再生成
+// （finish/wallRegeneration.js regenerateWalls）経由で確認する（isInteriorWallTargetは
+// wallRegeneration.jsからしか呼ばれないため、generateRoomWallsFromOutlineを部屋ごとに直接呼ぶ
+// 経路ではこのバグを検出できない）。
+test('autoFillWoodColumns（木造EVの4隅柱・部分指定）: 親部屋（ホール）の中に描いた部分指定EVも自分の4隅に柱が立つ（regenerateWalls本番経路）', async () => {
+  const { graph, x1, x2, y1, y2 } = makeGridGraph(); // x1=0, x2=4000, y1=0, y2=4000
+  const x3 = graph.addCenterLine(CenterLineType.VERTICAL, 8000, { labeled: true, discipline: Discipline.STRUCT });
+  const cHall = `${x1.id}:${y1.id}:${x2.id}:${y2.id}`; // 0..4000
+  const cEv   = `${x2.id}:${y1.id}:${x3.id}:${y2.id}`; // 4000..8000
+  const hall = graph.addRoom(new Set([cHall, cEv]), 'ホール');
+  const ev = graph.addRoom(new Set([cEv]), 'EV', crypto.randomUUID(), new Set([hall.id]));
+  ev.setFeature(RoomFeature.EV);
+
+  const materialMap = await loadMaterialMap();
+  const { regenerated } = await regenerateWalls(graph, { materialMap });
+  assert.equal(regenerated, true);
+  assert.equal(graph.walls.length, 12, 'ホール単独の外周8本＋EV自身の内部境界2本ぶんの壁（下地オーナー＋薄壁）で12本');
+
+  const { created, removed } = fillWoodColumns(graph);
+  assert.deepEqual(created.map(c => `${c.x},${c.y}`).sort(),
+    ['0,0', '0,4000', '4000,0', '4000,4000', '8000,0', '8000,4000'],
+    'ホールの4隅（0,0）(0,4000)(8000,0)(8000,4000)に加え、EV自身の内部境界の2隅(4000,0)(4000,4000)にも柱が立つ');
+  assert.deepEqual(removed, []);
+});
+
+test('autoFillWoodColumns（木造EVの4隅柱・部分指定・対照）: 通常の部分指定（feature未設定）は親の外周だけで、境界2隅には柱が立たない', async () => {
+  const { graph, x1, x2, y1, y2 } = makeGridGraph();
+  const x3 = graph.addCenterLine(CenterLineType.VERTICAL, 8000, { labeled: true, discipline: Discipline.STRUCT });
+  const cHall = `${x1.id}:${y1.id}:${x2.id}:${y2.id}`;
+  const cChild = `${x2.id}:${y1.id}:${x3.id}:${y2.id}`;
+  const hall = graph.addRoom(new Set([cHall, cChild]), 'ホール');
+  graph.addRoom(new Set([cChild]), '子', crypto.randomUUID(), new Set([hall.id])); // feature未設定（通常の部分指定）
+
+  const materialMap = await loadMaterialMap();
+  await regenerateWalls(graph, { materialMap });
+  assert.equal(graph.walls.length, 8, '親の外周だけ（子自身の境界は生成されない）');
+
+  const { created } = fillWoodColumns(graph);
+  assert.deepEqual(created.map(c => `${c.x},${c.y}`).sort(),
+    ['0,0', '0,4000', '8000,0', '8000,4000'], '親の外周4隅のみ。境界(4000,0)(4000,4000)には立たない');
 });
 
 // ---- F-1（2026-09-19裁定）: 壁の自由端（直交する下地オーナー壁が無い端）にも柱を立てる ----
