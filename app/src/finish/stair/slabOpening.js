@@ -11,8 +11,8 @@
  *
  * store.js / snap.js / .jsx に依存しない（node:test から単体 import 可）。
  */
-import { RoomFeature, isShaftFeature } from '@core';
-import { cellBoundsList, refreshCells, roomBounds, getCellsInRect } from '../gridCells.js';
+import { RoomFeature, isShaftFeature, isGridCenterLine } from '@core';
+import { cellBoundsList, refreshCells, roomBounds, getCellsInRect, gridIndexOf, outlineSegments, cellBoundsFromKey, isActiveAcrossRange } from '../gridCells.js';
 import { faceRect } from '../wallFaces.js';
 import { cellsBeyondBreak, subtractIntervals } from './stairGeometry.js';
 
@@ -22,11 +22,13 @@ const WALL_AXIS_CL_EPS = 0.5;
 
 // 開口を成すセル集合を列挙する。`kind` は縁を誰が描くかの区別
 // （'void'＝renderer/VoidLayer.jsx が「上部吹抜け」として外形を描く / 'stair'＝階段側が描く）。
-// - 吹抜け（VOID）Room … 占有セル全体が開口。kind='void'
-// - 昇降路（isShaftFeature。EV等）Room … 占有セル全体が開口。VOIDと同様 kind='void'
+// `source` は floorOpeningEdges（層A・実装指示書ステップ3）が使う細分（梁芯生成側の区別。
+// kindはVoidLayerの描画分担、sourceは開口の由来そのもの——別の関係のため両方持つ）。
+// - 吹抜け（VOID）Room … 占有セル全体が開口。kind='void'・source='void'
+// - 昇降路（isShaftFeature。EV等）Room … 占有セル全体が開口。VOIDと同様 kind='void'・source='shaft'
 //   （床なし＝上階スラブ開口）
-// - 階段吹抜け（STAIR_VOID）Room … 占有セル全体が開口。VoidLayer は描画対象外のため kind='stair'
-// - 上階の階段 … 破れ線より先のセルが開口（破れ手前＝階段とりつき部はスラブが残る）。kind='stair'
+// - 階段吹抜け（STAIR_VOID）Room … 占有セル全体が開口。VoidLayer は描画対象外のため kind='stair'・source='stairVoid'
+// - 上階の階段 … 破れ線より先のセルが開口（破れ手前＝階段とりつき部はスラブが残る）。kind='stair'・source='stairBeyond'
 function openingCellSets(upperGraph, riserOf) {
   const sets = [];
   for (const room of upperGraph.rooms) {
@@ -35,12 +37,14 @@ function openingCellSets(upperGraph, riserOf) {
     const cells = refreshCells(room.cells, upperGraph);
     if (cells.size > 0) {
       const kind = room.feature === RoomFeature.STAIR_VOID ? 'stair' : 'void';
-      sets.push({ cells, kind });
+      const source = room.feature === RoomFeature.STAIR_VOID ? 'stairVoid'
+        : isShaftFeature(room.feature) ? 'shaft' : 'void';
+      sets.push({ cells, kind, source, feature: room.feature });
     }
   }
   for (const stair of upperGraph.stairs) {
     const beyond = cellsBeyondBreak(stair, upperGraph, riserOf(stair));
-    if (beyond.size > 0) sets.push({ cells: beyond, kind: 'stair' });
+    if (beyond.size > 0) sets.push({ cells: beyond, kind: 'stair', source: 'stairBeyond' });
   }
   return sets;
 }
@@ -174,5 +178,267 @@ export function trimOpeningEdgesAgainstStair(edges, stairSegs, beyondBounds) {
         : { x1: a, y1: value, x2: b, y2: value });
     }
   }
+  return out;
+}
+
+// CL値の一致判定の許容差(mm)。WALL_AXIS_CL_EPSと同一規約（軸位置はCL.valueをそのまま読むため
+// 通常ほぼ0。丸め・端数対策の余裕）。
+const AXIS_MATCH_EPS_MM = WALL_AXIS_CL_EPS;
+
+// gridIndexOf(graph) の分割CL索引（verticals/horizontals）から value（許容差内）に一致する
+// 候補すべてを返す（gridCells.js worldToCell の境界CL解決は厳密一致のみのため、こちらは
+// floorOpeningEdges専用に許容差付きの候補集めを別途用意する）。
+function candidatesNear(list, value, tolMm) {
+  return list.filter(cl => Math.abs(cl.value - value) < tolMm);
+}
+
+// ピースpieceLo〜pieceHiに対するclの実効重なり長（extent null＝全長扱い＝piece全体を覆うとみなす）。
+function overlapLength(cl, pieceLo, pieceHi) {
+  const lo = cl.extentLo ?? -Infinity, hi = cl.extentHi ?? Infinity;
+  return Math.min(hi, pieceHi) - Math.max(lo, pieceLo);
+}
+
+// 区間単位でCL候補を決める優先順位（QA再裁定2026-09-28 P4/P5/P6・F9）:
+// (1) value差最小 → (2) 通り芯優先 → (3) 区間との実効重なり長が長い → (4) id昇順。
+// axisCL（resolveAxisPieces）・clStart/clEnd（resolveCandidateForRange）の両方で共有する——
+// QA裁定2026-09-28 F9「clStart/clEndもaxisCLと同じ優先順位で決める」。
+// 同じセル辺を共有する2本の短いCL（P4）でも、重なり長が同点ならid昇順で決定的に1本が勝ち、
+// 辺が消えない。
+function comparePiecePreference(value, rangeLo, rangeHi) {
+  return (a, b) =>
+    (Math.abs(a.value - value) - Math.abs(b.value - value))
+    || (Number(isGridCenterLine(b)) - Number(isGridCenterLine(a)))
+    || (overlapLength(b, rangeLo, rangeHi) - overlapLength(a, rangeLo, rangeHi))
+    || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+}
+
+/**
+ * 分割CL候補群から、valueに一致し区間[rangeLo,rangeHi]で有効なCLを1つ選ぶ
+ * （axisCL・clStart/clEnd共通。優先順位はcomparePiecePreference）。
+ * 有効な候補が無ければ null（安全側で捨てる。フォールバックしない——gridCells.js
+ * findBoundaryCLの「非アクティブへのフォールバック」規約はfloorOpeningEdgesには適用しない）。
+ * @param {Array} list gridIndex.verticals/horizontals
+ * @param {number} value
+ * @param {number} rangeLo
+ * @param {number} rangeHi
+ * @param {number} tolMm value一致の許容差(mm)
+ * @returns {object|null}
+ */
+function resolveCandidateForRange(list, value, rangeLo, rangeHi, tolMm) {
+  const candidates = candidatesNear(list, value, tolMm);
+  // 有効区間フィルタ（QA裁定2026-09-28 F12）: comparePiecePreferenceは①value差を③重なり長より
+  // 先に見るため、これが無いと「valueがちょうど一致するが区間[rangeLo,rangeHi]では非アクティブな
+  // CL」が「valueが僅かにずれるが区間内で本当にアクティブなCL」より先に勝ってしまう。
+  // 前者は現実に起こりうる——gridCells.js findBoundaryCLのフォールバック（L字結合セルの内部
+  // 分割位置で、その区間では非アクティブなCLをセル境界の識別子として使う規約）により、セルの
+  // 境界（cellBoundsFromKeyのx1/x2/y1/y2）がそのような非アクティブCLのvalueになっている場合が
+  // あるため。このフィルタは「重なり長>0の候補が無ければ捨てる」という不変条件違反の安全網
+  // ではなく、value一致だけでは区別できない上記の取り違えを防ぐ現役の防御である。
+  const active = candidates.filter(cl => isActiveAcrossRange(cl, rangeLo, rangeHi));
+  if (active.length === 0) return null;
+  return [...active].sort(comparePiecePreference(value, rangeLo, rangeHi))[0];
+}
+
+/**
+ * 辺（isVertical・座標value・直交区間[lo,hi]）を、**CLのextentではなくresolveEdgeSideが返す
+ * touching（辺の内側に接する開口セル）の区間**でピースに分割し、各ピースの代表CL
+ * （axisCL候補）を選ぶ（QA再裁定2026-09-28。P4/P5/P6の3件で発覚した不良の修正）。結合は
+ * 呼び出し側（mergeAdjacentPieces）が担う——outlineSegmentsは同一直線上で隣接するが重ならない
+ * 区間を1本に結合しない仕様のため（既存仕様。gridCells.test.js参照）、セルが分割されている
+ * 構成では複数の辺（segs）に分かれて渡ってくる。1回の呼び出し内だけで結合しても、別のsegs
+ * 呼び出しに分かれたピース同士は結合できない。
+ *
+ * 旧実装（CLのextentで線分そのものを分割する方式）には3つの不良があった:
+ * - P4: 1つのセル辺を2本の短いCL（有効区間が過不足なく接する）が分担する構成で、
+ *   分割点ちょうどに直交CLが無いと clStart/clEnd が解決できず両区間とも丸ごと消える。
+ * - P5: 全長CL＋短いCLが同じ位置にある構成で、中央のみ短いCLがid順で勝つと結合されず、
+ *   UUID次第で辺の本数・形が変わる非決定的な結果になる。
+ * - P6: セルを実際に区切っている短いCL1本だけがある構成で、CLのextentがセルの区間より
+ *   わずかに短いと、その差分（残余区間）に有効なCLが無く辺が丸ごと消える（旧実装以前より後退）。
+ *
+ * セル辺はセル生成時に isActiveAcrossRange（重なり判定）でCLに帰属しているため、ピースを
+ * セルの区間そのものにすれば同じ判定で必ず1本以上ヒットする（セルはお互いに重ならないため
+ * ピースも重ならない）。CLのextentは「そのピースの代表として最もふさわしいCLはどれか」を
+ * 選ぶ優先順位（comparePiecePreference）にのみ使う——ピースの長さ自体を切り詰めない。
+ * P4型（2本の短いCLが1つのセル辺を共有）はどちらか1本が実効重なり長→id昇順で決定的に勝つ。
+ * @param {Array} axisList gridIndex.verticals/horizontals（辺と同じ向きの分割CL索引）
+ * @param {number} value 辺の座標
+ * @param {boolean} isVertical
+ * @param {{touching: Array<{b:object, sources:string[]}>}} side resolveEdgeSideの返り値
+ * @param {number} lo 辺の直交区間の下端
+ * @param {number} hi 辺の直交区間の上端
+ * @param {number} tolMm value一致の許容差(mm)
+ * @returns {Array<{axis:object, lo:number, hi:number, sources:string[]}>} 未結合のピース列
+ */
+function resolveAxisPieces(axisList, value, isVertical, side, lo, hi, tolMm) {
+  const rawPieces = [];
+  for (const r of side.touching) {
+    const [oLo, oHi] = isVertical ? [r.b.y1, r.b.y2] : [r.b.x1, r.b.x2];
+    const pieceLo = Math.max(lo, oLo), pieceHi = Math.min(hi, oHi);
+    if (pieceHi - pieceLo > EPS) rawPieces.push({ pieceLo, pieceHi, sources: r.sources });
+  }
+  rawPieces.sort((a, b) => a.pieceLo - b.pieceLo);
+
+  const resolved = [];
+  for (const p of rawPieces) {
+    const axis = resolveCandidateForRange(axisList, value, p.pieceLo, p.pieceHi, tolMm);
+    if (!axis) continue; // 区間内で有効な候補が無ければ安全側で捨てる（resolveCandidateForRange参照）
+    resolved.push({ axis, lo: p.pieceLo, hi: p.pieceHi, sources: [...p.sources] });
+  }
+  return resolved;
+}
+
+// 同じ(isVertical,coord,outwardSign)グループ内で、lo昇順に隣接し代表CL(axis)が同じピースを
+// 1本の辺へ結合する（sourcesは和集合）。resolveAxisPiecesはoutlineSegments1本ぶんの範囲
+// でしか結合できないため、複数のoutlineSegmentsにまたがる結合（QA再裁定2026-09-28 P5）は
+// ここで行う。piecesは呼び出し前にlo昇順でソート済みであること。
+function mergeAdjacentPieces(pieces) {
+  const merged = [];
+  for (const p of pieces) {
+    const last = merged[merged.length - 1];
+    if (last && last.axis === p.axis && Math.abs(last.hi - p.lo) < EPS) {
+      last.hi = p.hi;
+      for (const s of p.sources) if (!last.sources.includes(s)) last.sources.push(s);
+    } else {
+      merged.push({ ...p, sources: [...p.sources] });
+    }
+  }
+  return merged;
+}
+
+/**
+ * 辺の端点(endpointCoord)にあるclStart/clEnd候補の直交区間を、cellRecords全体から探す
+ * （QA再裁定2026-09-28 F9）。端点は結合・輪郭のクリップで生じるため、軸ピース自身の接セル
+ * （resolveAxisPiecesのtouching）とは限らない——例: L字の切り欠きでは、notch水平辺の端点
+ * (x=1000)はtopKey（軸ピースの接セル。x:[0,2000]）の角ではなく、隣のblKey
+ * （x:[0,1000],y:[1000,2000]）の角（x2=1000,y1=1000）にあたる。
+ * cellRecords全体から「辺のvalueと同じ方向でその値に接し、かつendpointCoordで走行方向の
+ * 境界を持つ」セルを探し、そのセルの**候補CL自身が延びる方向**（valueと同じ方向）の区間を返す
+ * ——該当が複数あれば外接（和）を返す（isActiveAcrossRangeは重なり判定のため、広い方が安全側）。
+ * 該当セルが無ければ null（安全側で捨てる）。
+ * @param {Array<{b:object}>} cellRecords
+ * @param {boolean} isVertical 元の辺の向き
+ * @param {number} value 元の辺の座標
+ * @param {number} endpointCoord 辺の端点（走行方向の座標）
+ * @returns {[number,number]|null}
+ */
+function cornerCrossRange(cellRecords, isVertical, value, endpointCoord) {
+  let lo = null, hi = null;
+  for (const r of cellRecords) {
+    const [vLo, vHi] = isVertical ? [r.b.x1, r.b.x2] : [r.b.y1, r.b.y2]; // valueと同じ方向
+    const [eLo, eHi] = isVertical ? [r.b.y1, r.b.y2] : [r.b.x1, r.b.x2]; // 走行(端点)方向
+    const touchesValue = Math.abs(vLo - value) < EPS || Math.abs(vHi - value) < EPS;
+    const touchesEndpoint = Math.abs(eLo - endpointCoord) < EPS || Math.abs(eHi - endpointCoord) < EPS;
+    if (!touchesValue || !touchesEndpoint) continue;
+    lo = lo == null ? vLo : Math.min(lo, vLo);
+    hi = hi == null ? vHi : Math.max(hi, vHi);
+  }
+  return lo == null ? null : [lo, hi];
+}
+
+// 辺（isVertical・座標value・直交区間[lo,hi]）に対して、和集合のセルのうちどちら側
+// （lo側=b.x1/b.y1、hi側=b.x2/b.y2）が接しているかを求め、外側法線符号と接しているセル
+// レコードを返す。1点サンプリングではなく辺区間全体と重なる接セルで判定する（team-lessons
+// 「セル辺の帰属を1点サンプリングで判定して見逃した」参照）。
+// 両側に接するセルがある／どちらにも無い場合はnull（outlineSegmentsが共有辺を消しているため
+// 本来起きないはずの不変条件違反。安全側でその辺を捨てる）。
+function resolveEdgeSide(isVertical, value, lo, hi, cellRecords) {
+  const loSide = [], hiSide = [];
+  for (const r of cellRecords) {
+    const [near, far] = isVertical ? [r.b.x1, r.b.x2] : [r.b.y1, r.b.y2];
+    const [oLo, oHi]  = isVertical ? [r.b.y1, r.b.y2] : [r.b.x1, r.b.x2];
+    if (!(oLo < hi - EPS && oHi > lo + EPS)) continue; // 辺区間と直交方向で重ならなければ無関係
+    if (Math.abs(near - value) < EPS) loSide.push(r);
+    if (Math.abs(far  - value) < EPS) hiSide.push(r);
+  }
+  const hasLo = loSide.length > 0, hasHi = hiSide.length > 0;
+  if (hasLo === hasHi) return null; // 両側 or どちらも無し → 不変条件違反として捨てる
+  return hasLo ? { outwardSign: -1, touching: loSide } : { outwardSign: 1, touching: hiSide };
+}
+
+/**
+ * 自階の床開口（吹抜け・昇降路・階段吹抜け・階段の破れ先）を「セル境界CL上の辺」として列挙する
+ * （層A・実装指示書ステップ3。純関数）。梁芯生成（ステップ4）が受け梁の位置を求める入力になる。
+ *
+ * `slabOpeningRects`/`slabOpeningFrames`（upperGraphを渡す＝上階の開口をワールド矩形で返す）とは
+ * 異なり、**自階のgraph**を渡す——「自階の床の開口」を求める点に注意。開口セルの情報源は
+ * `openingCellSets`（本ファイル内・唯一の情報源）で、複数の開口セット（吹抜け・昇降路・階段吹抜け・
+ * 階段の破れ先）は和集合にしてから輪郭（`outlineSegments`）を取る——隣接する開口どうしの共有辺を
+ * 消すことで、開口の内部（＝もう1つの開口）に梁芯を立てないため。
+ *
+ * 各辺の境界CL（axisCL・clStart・clEnd）は `gridIndexOf(graph)` の分割CL索引（`isFinishCellDivider`
+ * を満たすCLのみ）から解決し、見つからなければその区間を安全側で落とす（例外にしない）。
+ * axisCL は `resolveAxisPieces` が **辺に接する開口セル自身の区間**（CLのextentではない）を
+ * ピースにして選ぶ——1本のセル辺を複数のCLが分担する場合でも、セル辺そのものが単位なので
+ * 必ずどこかのCLが選ばれる（QA再裁定2026-09-28。CLのextentで線分を分割する旧方式は、分割点に
+ * 有効なCLが無い残余区間が生じて辺が丸ごと消える不良があった）。候補が複数のときの優先順位は
+ * `comparePiecePreference`（value差最小→通り芯優先→ピースとの実効重なり長→id昇順。通り芯上の
+ * 辺は大梁の領分なので、通り芯があれば `onGrid:true` が安全側。QA裁定2026-09-28 F2）。
+ * `landingEdgeCLs`（stairLanding.js）と同じフィールド名規約（axisCL/clStart/clEndはCL id）。
+ *
+ * @param {object|null} graph 自階（対象の平面）のグラフ
+ * @param {{riserOf?: (stair:object)=>number|null}} [opts] 自階の階段の蹴上（破れ位置の決定に使う）
+ * @returns {Array<{isVertical:boolean, axisCL:string, clStart:string, clEnd:string, coord:number,
+ *   lo:number, hi:number, outwardSign:1|-1, onGrid:boolean, source:string, sources:string[]}>}
+ *   並びは isVertical→coord→lo 昇順（決定的）。
+ */
+export function floorOpeningEdges(graph, { riserOf = () => null } = {}) {
+  if (!graph) return [];
+  const sets = openingCellSets(graph, riserOf);
+  if (sets.length === 0) return [];
+
+  // セルキー→sources（初出順）。複数セットに同じキーが現れても bounds は Map で自然に重複しない。
+  const sourcesByKey = new Map();
+  for (const { cells, source } of sets) {
+    for (const key of cells) {
+      if (!sourcesByKey.has(key)) sourcesByKey.set(key, []);
+      const arr = sourcesByKey.get(key);
+      if (!arr.includes(source)) arr.push(source);
+    }
+  }
+
+  const cellRecords = [];
+  for (const [key, sources] of sourcesByKey) {
+    const b = cellBoundsFromKey(key, graph); // 削除済みCLを指すキーはnull→安全側で除外
+    if (b) cellRecords.push({ b, sources });
+  }
+  if (cellRecords.length === 0) return [];
+
+  const segs = outlineSegments(cellRecords.map(r => r.b));
+  const gridIndex = gridIndexOf(graph);
+
+  // 全outlineSegmentsぶんの未結合ピースを(isVertical,coord,outwardSign)でグルーピングしてから
+  // 結合する（QA再裁定2026-09-28 P5——outlineSegments自体が同一直線上の隣接区間を1本に
+  // まとめない仕様のため、セルが分割されている構成では複数segsに分かれて渡ってくる）。
+  const groups = new Map();
+  for (const { isVertical, value, lo, hi } of segs) {
+    const side = resolveEdgeSide(isVertical, value, lo, hi, cellRecords);
+    if (!side) continue;
+    const axisList = isVertical ? gridIndex.verticals : gridIndex.horizontals;
+    const groupKey = `${isVertical}:${value}:${side.outwardSign}`;
+    if (!groups.has(groupKey)) groups.set(groupKey, { isVertical, value, outwardSign: side.outwardSign, pieces: [] });
+    groups.get(groupKey).pieces.push(...resolveAxisPieces(axisList, value, isVertical, side, lo, hi, AXIS_MATCH_EPS_MM));
+  }
+
+  const out = [];
+  for (const { isVertical, value, outwardSign, pieces } of groups.values()) {
+    pieces.sort((a, b) => a.lo - b.lo);
+    const orthoList = isVertical ? gridIndex.horizontals : gridIndex.verticals;
+    for (const { axis, lo: a, hi: b, sources } of mergeAdjacentPieces(pieces)) {
+      const startCross = cornerCrossRange(cellRecords, isVertical, value, a);
+      const endCross = cornerCrossRange(cellRecords, isVertical, value, b);
+      const start = startCross && resolveCandidateForRange(orthoList, a, startCross[0], startCross[1], AXIS_MATCH_EPS_MM);
+      const end = endCross && resolveCandidateForRange(orthoList, b, endCross[0], endCross[1], AXIS_MATCH_EPS_MM);
+      if (!start || !end) continue; // 端点に角を持つセルが無い、または有効な直交CLが無ければ安全側で捨てる
+      if (sources.length === 0) continue; // 安全側（到達しないはず）
+
+      out.push({
+        isVertical, axisCL: axis.id, clStart: start.id, clEnd: end.id,
+        coord: value, lo: a, hi: b, outwardSign, onGrid: isGridCenterLine(axis),
+        source: sources[0], sources,
+      });
+    }
+  }
+  out.sort((a, b) => (Number(a.isVertical) - Number(b.isVertical)) || (a.coord - b.coord) || (a.lo - b.lo));
   return out;
 }
