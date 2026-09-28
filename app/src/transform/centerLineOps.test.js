@@ -31,6 +31,8 @@ import { wallFreshnessKey } from '../finish/wallFreshnessKey.js';
 import { recomputeStructuralForGraph } from '../structural/structuralRecompute.js';
 import { TRADITIONAL_WOOD_STRUCTURE } from '../structural/structureRules.js';
 import { findWallBeamAxisCL, wallBeamSourcesFor } from '../structural/wallBeamAxes.js';
+import { openingBeamSourcesFor, autoFillOpeningBeamAxes } from '../structural/openingBeamAxes.js';
+import { getAllCells } from '../finish/gridCells.js';
 import { findFloorsBlockingGridDeletion } from './centerLineFloorSync.js';
 
 function makeGraph(planeId = 'p1') {
@@ -6887,3 +6889,147 @@ test('【失敗系4】applyCLEccentricityWithUndo: 呼び出し時点で既にgr
     project.activePlaneId = p1.plane.id;
   }
 });
+
+// ---- commitCLMoveOp: 開口由来梁芯（ステップ6・規則O）の追従・由来切替 ----
+// フィクスチャはstructural/openingBeamAxes.test.jsのmakeRectOpeningGraphと同じ構成
+// （通り芯X:0,8000/Y:0,6000、中心線X:2000,5000/Y:1000,3000で囲むVOID開口。width>heightのため
+// 通しは水平辺）——openingBeamSourcesFor/autoFillOpeningBeamAxesを直接呼んで先に梁芯を生成する
+// （recomputeStructuralForGraph経由の全体再計算はここでは不要な範囲を持ち込むため使わない）。
+function makeRcVoidGraphForFollow() {
+  const graph = makeGraph();
+  graph.structureOverride = 'RC造(ラーメン)';
+  const GRID = { labeled: true, discipline: Discipline.STRUCT };
+  const ARCH = { labeled: false, discipline: Discipline.ARCH };
+  const x0 = graph.addCenterLine(CenterLineType.VERTICAL, 0, GRID);
+  const xa = graph.addCenterLine(CenterLineType.VERTICAL, 2000, ARCH);
+  const xb = graph.addCenterLine(CenterLineType.VERTICAL, 5000, ARCH);
+  const x1 = graph.addCenterLine(CenterLineType.VERTICAL, 8000, GRID);
+  const y0 = graph.addCenterLine(CenterLineType.HORIZONTAL, 0, GRID);
+  const ya = graph.addCenterLine(CenterLineType.HORIZONTAL, 1000, ARCH);
+  const yb = graph.addCenterLine(CenterLineType.HORIZONTAL, 3000, ARCH);
+  const y1 = graph.addCenterLine(CenterLineType.HORIZONTAL, 6000, GRID);
+  const cells = getAllCells(graph);
+  const centerKey = cells.find(c => c.x1 === 2000 && c.x2 === 5000 && c.y1 === 1000 && c.y2 === 3000).key;
+  const room = graph.addRoom(new Set([centerKey]));
+  room.setFeature(RoomFeature.VOID);
+  return { graph, x0, xa, xb, x1, y0, ya, yb, y1 };
+}
+
+test('commitCLMoveOp: 開口の辺が乗る中心線を動かすと、追従先に重複が無ければ開口由来梁芯が同idで新座標へ追従し、undoで戻る', () => {
+  const { graph, ya } = makeRcVoidGraphForFollow();
+  const project = {};
+  const sources = openingBeamSourcesFor(graph, project);
+  const created = autoFillOpeningBeamAxes(graph, sources);
+  const throughTop = created.find(cl => cl.centerLineType === CenterLineType.HORIZONTAL && cl.value === 1000);
+  assert.ok(throughTop, '前提: y=1000の通し梁芯（由来opening）が生成されている');
+  const throughTopId = throughTop.id;
+
+  ya.pendingDelta = 100; // 1000 → 1100 へドラッグ確定
+  const { toast } = commitCLMoveOp(graph, project, ya, 1000);
+  assert.equal(toast, null);
+
+  const moved = graph.shapeMap.get(throughTopId);
+  assert.ok(moved, '開口由来梁芯は同idのまま残る');
+  assert.equal(moved.value, 1100, '辺の移動分だけ追従する');
+  assert.equal(moved.beamAxisOrigin, BeamAxisOrigin.OPENING, '追従しても由来はopeningのまま');
+
+  undoManager.undo();
+  assert.equal(graph.shapeMap.get(throughTopId).value, 1000, 'undoで元の座標へ戻る');
+  assert.equal(ya.value, 1000, '中心線自体もundoで戻る');
+});
+
+test('【T3・m-4是正】commitCLMoveOp: 下地オーナー壁の乗る開口辺の中心線を移動すると、壁面を逃げた開口由来梁芯が移動量どおり追従する（pendingDelta=0区間の内側で開口源を採る必要がある）', () => {
+  const { graph, xa, ya, yb } = makeRcVoidGraphForFollow();
+  // 左辺(x=2000)のCL(xa)上に下地オーナー壁を1本張る（backingDepth=120→半幅60、偏芯なし）。
+  // RC造の既定梁断面（RC-300x300→梁幅300→半幅150）・clearance既定0のため、
+  // 開口由来梁芯はxaを1790（=2000-60-150）だけ逃げた位置に生成される
+  // （openingBeamAxes.test.jsの「下地オーナー壁がある辺は...」と同じ計算。前提として実測する）。
+  graph.addWall(xa, 0, true, ya, 0, yb, 0, { backingDepth: 120, wallFinish: 12.5 });
+  const project = {};
+
+  const sources = openingBeamSourcesFor(graph, project);
+  const leftSrc = sources.find(s => s.isVertical && s.through === false);
+  assert.equal(leftSrc.coord, 1790, '前提: 壁面を逃げた座標(1790)に開口由来梁芯の生成源がある');
+  const created = autoFillOpeningBeamAxes(graph, sources);
+  const shortLeft = created.find(cl => cl.centerLineType === CenterLineType.VERTICAL && Math.abs(cl.value - 1790) < 1);
+  assert.ok(shortLeft, '前提: 壁を逃げた位置(1790)に開口由来梁芯が生成されている');
+  const shortLeftId = shortLeft.id;
+
+  // xa（壁の軸CL・開口辺そのもの）を+40だけ移動する——壁面の絶対座標も+40動くため、
+  // 開口由来梁芯(shortLeft)も1790+40=1830へ追従するはず。openingBeamSourcesForが読む
+  // 壁のcoord1/coord2/axisCL.effectiveValueはpendingDelta（ドラッグ中の未確定変位）を反映するため、
+  // 確定前の「開口源のbefore」をpendingDelta=0区間の**外**で採ると、壁が既に新位置にあるのに
+  // 開口の辺座標(edge.coord。cellBoundsFromKeyは.value基準で未確定のまま)はまだ旧位置という
+  // 食い違いが生じ、isRcBackedEdge等の判定・offset計算が狂う（m-4是正の対象）。
+  xa.pendingDelta = 40; // 2000 → 2040 へドラッグ確定
+  const { toast } = commitCLMoveOp(graph, project, xa, 2000);
+  assert.equal(toast, null);
+
+  const moved = graph.shapeMap.get(shortLeftId);
+  assert.ok(moved, '開口由来梁芯は同idのまま残る');
+  assert.equal(moved.value, 1830, '壁面を逃げた開口由来梁芯が移動量(+40)どおり追従する');
+
+  undoManager.undo();
+  assert.equal(graph.shapeMap.get(shortLeftId).value, 1790, 'undoで元の座標へ戻る');
+});
+
+test('commitCLMoveOp: 開口由来（centerLineKind===beam）の梁芯を手動移動すると由来がUSERになり、undoでOPENINGに戻る', () => {
+  const { graph } = makeRcVoidGraphForFollow();
+  const project = { structuralInfo: { mainStructure: 'RC造(ラーメン)' }, memberGroupLedger: new Map(), memberNumberIndex: new Map(), planes: [] };
+  const sources = openingBeamSourcesFor(graph, project);
+  const created = autoFillOpeningBeamAxes(graph, sources);
+  const throughTop = created.find(cl => cl.centerLineType === CenterLineType.HORIZONTAL && cl.value === 1000);
+  const throughTopId = throughTop.id;
+  assert.equal(throughTop.beamAxisOrigin, BeamAxisOrigin.OPENING);
+
+  throughTop.pendingDelta = 200; // 1000 → 1200 へ手動ドラッグ確定
+  commitCLMoveOp(graph, project, throughTop, 1000);
+
+  const moved = graph.shapeMap.get(throughTopId);
+  assert.equal(moved.value, 1200, '手動移動どおりの座標になる');
+  assert.equal(moved.beamAxisOrigin, BeamAxisOrigin.USER, '手動移動で由来がUSERへ切り替わる');
+
+  undoManager.undo();
+  const restored = graph.shapeMap.get(throughTopId);
+  assert.equal(restored.value, 1000, 'undoで座標が戻る');
+  assert.equal(restored.beamAxisOrigin, BeamAxisOrigin.OPENING, 'undoで由来もopeningへ戻る（グラフスナップショット方式）');
+});
+
+test('【T6】commitCLMoveOp: 通し辺を通り芯へ重ねる移動→吸収→短辺の参照が通り芯へ張り替わる→undo/redo往復（統合経路。m-4是正のフォールバック対応があって初めて成立する）', () => {
+  const { graph, ya, y0 } = makeRcVoidGraphForFollow();
+  const project = {};
+  const sources = openingBeamSourcesFor(graph, project);
+  const created = autoFillOpeningBeamAxes(graph, sources);
+  const throughTop = created.find(cl => cl.centerLineType === CenterLineType.HORIZONTAL && cl.value === 1000);
+  const shortLeft = created.find(cl => cl.centerLineType === CenterLineType.VERTICAL && cl.value === 2000);
+  const shortRight = created.find(cl => cl.centerLineType === CenterLineType.VERTICAL && cl.value === 5000);
+  assert.equal(shortLeft.extentLoRef?.clId, throughTop.id, '前提: 短辺が通し辺(y=1000)をextentLoRefで参照している');
+  assert.equal(shortRight.extentLoRef?.clId, throughTop.id, '前提: もう片方の短辺も同じ通し辺を参照している');
+  const throughTopId = throughTop.id;
+  const y0Id = y0.id;
+
+  // ya（通し辺=throughTopの下敷きの中心線。y=1000）をy=0（通り芯y0）へ重ねる。
+  // floorOpeningEdgesはこの移動で辺のaxisCLを ya→y0 へ動的に差し替えるため、
+  // mapOpeningSourceMovesのフォールバック対応（m-4是正）が無いと追従moveが検出できず、
+  // 通し辺は吸収されずに孤立して残ってしまう。
+  ya.pendingDelta = -1000; // 1000 → 0
+  const { toast } = commitCLMoveOp(graph, project, ya, 1000);
+  assert.equal(toast, null);
+
+  assert.equal(graph.shapeMap.has(throughTopId), false, '通し辺(旧梁芯)は吸収されて撤去される');
+  assert.equal(shortLeft.extentLoRef?.clId, y0Id, '短辺のextentLoRefが吸収先の通り芯(y0)idへ張り替わる');
+  assert.equal(shortRight.extentLoRef?.clId, y0Id, 'もう片方の短辺も同様に張り替わる');
+
+  undoManager.undo();
+  assert.equal(ya.value, 1000, 'undoで中心線の座標が戻る');
+  assert.equal(graph.shapeMap.has(throughTopId), true, 'undoで撤去された通し辺(旧梁芯)が同idで復元する');
+  assert.equal(shortLeft.extentLoRef?.clId, throughTopId, 'undoで短辺のextentLoRefが元の通し辺idへ戻る');
+  assert.equal(shortRight.extentLoRef?.clId, throughTopId, 'undoでもう片方の短辺も元へ戻る');
+
+  undoManager.redo();
+  assert.equal(ya.value, 0, 'redoで中心線の座標が再び動く');
+  assert.equal(graph.shapeMap.has(throughTopId), false, 'redoで通し辺が再び吸収される');
+  assert.equal(shortLeft.extentLoRef?.clId, y0Id, 'redoで短辺のextentLoRefが再び通り芯へ張り替わる');
+  assert.equal(shortRight.extentLoRef?.clId, y0Id, 'redoでもう片方の短辺も再び張り替わる');
+});
+

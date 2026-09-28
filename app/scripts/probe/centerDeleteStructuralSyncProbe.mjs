@@ -175,11 +175,15 @@ await preConverge(hCand);
 // （NG・exit 1）と区別する。中心線削除は壁交点柱（wallIntersections）・壁由来梁芯（wallBeamAxes）の
 // いずれにも反応しない主構造では原理的に検出力を持たない。
 const activeRulesForGuard = rulesFor(effectiveStructure(hCand.project.activeGraph, hCand.project));
-if (activeRulesForGuard.wallBeamAxes == null && activeRulesForGuard.columnPlacement !== 'wallIntersections') {
-  console.log(`対象外（中心線に反応しない主構造: ${hCand.project.structuralInfo.mainStructure}。` +
-    `wallBeamAxes=${activeRulesForGuard.wallBeamAxes} columnPlacement=${activeRulesForGuard.columnPlacement}）`);
-  process.exit(0);
-}
+// ステップ6（開口由来梁芯）追加: このガードは「壁交点柱・壁由来梁芯」経路の検出力の話であり、
+// 開口由来梁芯（openingBeamAxes:'slabOpenings'）は独立した反応経路のため、メイン中心線シナリオを
+// skipしても下部の「シナリオ追加」ブロックは常に実行する（exit(0)にはしない）。
+const noCenterLineReaction = activeRulesForGuard.wallBeamAxes == null && activeRulesForGuard.columnPlacement !== 'wallIntersections';
+if (noCenterLineReaction) {
+  console.log(`対象外（メイン中心線シナリオ・中心線に反応しない主構造: ${hCand.project.structuralInfo.mainStructure}。` +
+    `wallBeamAxes=${activeRulesForGuard.wallBeamAxes} columnPlacement=${activeRulesForGuard.columnPlacement}。` +
+    '開口由来梁芯シナリオ（下記）は別途実行する）');
+} else {
 
 const activeForCandidates = hCand.project.activeGraph;
 let candidates = activeForCandidates.centerLines.filter(cl => centerLineKind(cl) === 'center');
@@ -407,6 +411,103 @@ const noWireDump = await dumpAll(hNoWire);
 const noWireDiffs = diffDumps(afterDeleteDump, noWireDump);
 ok(noWireDiffs.length > 0, '(5) 配線なしでは配線ありの削除直後ダンプと食い違う（柱・梁が残る＝検出力あり）');
 if (noWireDiffs.length === 0) console.log('  NG詳細: 配線なしでも配線ありと同じ結果になった（検出力なし）');
+
+} // end: if (!noCenterLineReaction)
+
+// ---- シナリオ追加（ステップ6・開口由来梁芯の追従・回収）: アクティブ階のVOID開口の辺（水平・
+// HORIZONTAL）が乗る中心線を削除すると、開口由来の梁芯（beamAxisOrigin===OPENING）が
+// reconcileOpeningBeamAxesで回収され、undoで戻り、redoで再び消えることを確認する。
+// 13.stq（2階のVOID [-3000,0]×[-2000,0]。辺y=-2000）を主対象に想定しているが、対象データ固有の
+// 座標をハードコードせず「VOID開口の辺が乗る中心線のうち、削除前に由来openingの梁芯が存在する
+// 座標に対応するもの」を汎用的に選ぶ——他データ（14.stq・moku4.stq等）で該当が無ければ対象外として
+// スキップする（NGにしない）。
+{
+  const { RoomFeature, CenterLineType: CLType } = await import('../../src/core.js');
+  const { openingBeamSourcesFor } = await import('../../src/structural/openingBeamAxes.js');
+  const { BeamAxisOrigin } = await import('../../src/core/centerLine.js');
+
+  // VOID開口はアクティブ階（既定=最初に追加された階）にあるとは限らない——全階から探し、
+  // 見つかった階をアクティブ階へ切り替えてから収束させる（他階はpeek越しにしか最新状態が
+  // 読めない=dumpAllと同じ理由。deleteCenterLineWithUndoはproject.activeGraph＝直接ミューテート
+  // できる階に対して呼ぶのが本番の使い方のため、対象階を先にアクティブへ切り替える）。
+  // VOID自体はユーザーデータ（部屋属性）のため、収束前の生データからでも判定できる。
+  function findVoidPlaneId(harness) {
+    return [...harness.project.graphMap.entries()]
+      .find(([, g]) => g.rooms.some(r => r.feature === RoomFeature.VOID))?.[0] ?? null;
+  }
+
+  const hProbe = buildHarness(src);
+  const voidPlaneId = findVoidPlaneId(hProbe);
+  if (voidPlaneId) hProbe.project.activePlaneId = voidPlaneId;
+  await preConverge(hProbe);
+  const openingAxisCLsProbe = hProbe.project.activeGraph.centerLines.filter(cl => cl.beamAxisOrigin === BeamAxisOrigin.OPENING);
+  const sourcesProbe = voidPlaneId ? openingBeamSourcesFor(hProbe.project.activeGraph, hProbe.project) : [];
+  // 候補: 由来openingの梁芯が現に存在する座標に一致する開口ソースのaxisCLId（辺が乗る中心線）。
+  // 複数ありうる（矩形の辺4本）ため、実際に削除可能（toast:null。部屋区切りの再解釈が破綻しない）な
+  // ものを先頭から順に試す——既存の「candidates」候補選定ループと同じ考え方。
+  const openingCandidates = sourcesProbe
+    .filter(s => openingAxisCLsProbe.some(ax =>
+      ax.centerLineType === (s.isVertical ? CLType.VERTICAL : CLType.HORIZONTAL) && Math.abs(ax.effectiveValue - s.coord) < 5))
+    .map(s => ({ source: s, cl: hProbe.project.activeGraph.centerLines.find(cl => cl.id === s.axisCLId) }))
+    .filter(({ cl }) => cl && centerLineKind(cl) === 'center');
+
+  let chosenOpening = null;
+  for (const cand of openingCandidates) {
+    const hTry = buildHarness(src);
+    hTry.project.activePlaneId = voidPlaneId;
+    await preConverge(hTry);
+    const clTry = hTry.project.activeGraph.centerLines.find(c => c.id === cand.cl.id);
+    setCenterLineStructuralListener(null);
+    const { toast: tryToast } = await deleteCenterLineWithUndo(hTry.project.activeGraph, hTry.project, clTry, { saveFloorFn: hTry.storeSave });
+    await hTry.probeSync.whenIdle();
+    if (tryToast === null) { chosenOpening = cand; break; }
+  }
+
+  if (!voidPlaneId || openingCandidates.length === 0 || !chosenOpening) {
+    console.log(`対象外（ステップ6シナリオ）: VOID開口の辺が乗る中心線（削除可能なもの）が見つからない（${src}）`);
+  } else {
+    // ---- 本編: フレッシュなハーネスで再実行する ----
+    const hOpen = buildHarness(src);
+    hOpen.project.activePlaneId = voidPlaneId;
+    await preConverge(hOpen);
+    const gOpen = hOpen.project.activeGraph;
+    const targetSource = chosenOpening.source;
+    const targetCL = gOpen.centerLines.find(cl => cl.id === targetSource.axisCLId);
+    const openingAxisCLs = gOpen.centerLines.filter(cl => cl.beamAxisOrigin === BeamAxisOrigin.OPENING);
+    const openingAxisBefore = openingAxisCLs.find(ax =>
+      ax.centerLineType === (targetSource.isVertical ? CLType.VERTICAL : CLType.HORIZONTAL)
+      && Math.abs(ax.effectiveValue - targetSource.coord) < 5);
+    console.log(`対象中心線(ステップ6): id=${targetCL.id.slice(0, 8)} type=${targetCL.centerLineType} ` +
+      `value=${Math.round(targetCL.effectiveValue)} / 開口由来梁芯: id=${openingAxisBefore.id.slice(0, 8)} value=${Math.round(openingAxisBefore.effectiveValue)}`);
+
+    setCenterLineStructuralListener((g, p, scope, undoRecords) => hOpen.probeSync.request(g, p, { scope, undoRecords }));
+    const { toast: openToast } = await deleteCenterLineWithUndo(gOpen, hOpen.project, targetCL, { saveFloorFn: hOpen.storeSave });
+    await hOpen.probeSync.whenIdle();
+    ok(openToast === null, `(7) ステップ6: 開口の辺の中心線削除はtoast:nullで成功する（実際: ${openToast}）`);
+
+    const findOpeningAxisNear = (coord, isVertical) => gOpen.centerLines.find(cl =>
+      cl.beamAxisOrigin === BeamAxisOrigin.OPENING
+      && cl.centerLineType === (isVertical ? CLType.VERTICAL : CLType.HORIZONTAL)
+      && Math.abs(cl.effectiveValue - coord) < 5);
+
+    const afterDeleteAxis = findOpeningAxisNear(targetSource.coord, targetSource.isVertical);
+    ok(!afterDeleteAxis, `(7a) ステップ6: 開口が消えたので由来openingの梁芯(旧id=${openingAxisBefore.id.slice(0, 8)})が回収される`);
+    if (afterDeleteAxis) console.log(`  NG詳細: 削除後もopening由来の梁芯が残っている(id=${afterDeleteAxis.id.slice(0, 8)})`);
+
+    undoManager.undo();
+    await hOpen.probeSync.whenIdle();
+    const afterUndoAxis = findOpeningAxisNear(targetSource.coord, targetSource.isVertical);
+    ok(!!afterUndoAxis, '(7b) ステップ6: undoで開口が戻り、由来openingの梁芯も復元する（id/座標は再生成のため変わりうる）');
+    if (afterUndoAxis) console.log(`  復元後id=${afterUndoAxis.id.slice(0, 8)} value=${Math.round(afterUndoAxis.effectiveValue)}`);
+
+    undoManager.redo();
+    await hOpen.probeSync.whenIdle();
+    const afterRedoAxis = findOpeningAxisNear(targetSource.coord, targetSource.isVertical);
+    ok(!afterRedoAxis, '(7c) ステップ6: redoで開口が再び消え、由来openingの梁芯も再び回収される');
+
+    setCenterLineStructuralListener(null);
+  }
+}
 
 if (ngCount === 0) {
   console.log(`OK: centerDeleteStructuralSyncProbe 全項目パス（${src}）`);

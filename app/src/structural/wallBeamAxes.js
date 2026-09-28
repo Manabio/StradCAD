@@ -442,9 +442,18 @@ export function removeOrphanedWallBeamAxesFor(graph, project, belowGraph, source
  *   - 他CLの`extentLoRef`/`extentHiRef`/`refId`がこの梁芯を指す（`graph.isReferencedByOtherCL`）
  * @param {object} graph
  * @param {import('../core.js').CenterLine} cl 壁由来梁芯CL（呼び出し側で discipline:fuse を確認済みのこと）
+ * @param {{ignoreRefsFrom?: Set<string>}} [opts] - ignoreRefsFrom: これらのidを持つCLからの
+ *   **extentLoRef/extentHiRef参照だけ**を保護理由に数えない（開口由来梁芯の再計算照合
+ *   reconcileOpeningBeamAxes専用。同じ床開口の矩形内で短辺が通し辺をextent参照する構成では、
+ *   素の判定だと通し辺が常に「参照されている」ため保護され、開口が消えても残ってしまう——
+ *   その矩形内の他の孤児候補からの参照だけを無視する。省略時（既定空集合）は従来どおり全参照を見る）。
+ *   【n-7是正・QA指摘】refId参照（はね出し追従の親子参照）はignoreRefsFromの対象にしない——
+ *   ignoreRefsFromに含まれるCLがrefIdでclを参照していても、その参照は常に保護理由として数える
+ *   （extent参照＝「延長端点をここに合わせる」という弱い依存と、refId参照＝「自分の位置そのものを
+ *   ここから借りている」という強い依存は性質が違うため、孤児回収の都合でrefId参照まで無視してはいけない）。
  * @returns {boolean}
  */
-export function isProtectedWallBeamAxis(graph, cl) {
+export function isProtectedWallBeamAxis(graph, cl, { ignoreRefsFrom = new Set() } = {}) {
   if (cl.refId != null) return true;
   const hasProtectedUserData =
     graph.columns.some(c => (c.verticalCL.id === cl.id || c.horizontalCL.id === cl.id) && c.dimensionStatus !== 'auto') ||
@@ -456,7 +465,13 @@ export function isProtectedWallBeamAxis(graph, cl) {
     graph.columnAxisOffsets.has(cl.id) ||
     graph.clEccentricities.has(cl.id);
   if (hasProtectedUserData) return true;
-  return graph.isReferencedByOtherCL(cl.id);
+  if (ignoreRefsFrom.size === 0) return graph.isReferencedByOtherCL(cl.id);
+  // n-7是正: refId参照が1件でもあれば無条件で保護（ignoreRefsFromでは無視しない）。
+  const hasRefIdReferrer = graph.referencingCenterLines(cl.id, { includeRefId: true })
+    .some(other => other.refId === cl.id);
+  if (hasRefIdReferrer) return true;
+  // extentLoRef/extentHiRef参照だけをignoreRefsFromでフィルタする。
+  return graph.referencingCenterLines(cl.id, { includeRefId: false }).some(other => !ignoreRefsFrom.has(other.id));
 }
 
 /** coord に一致（CL_OVERLAP_TOL_MM以内）する通り芯または梁芯（柱アンカー第1候補。

@@ -8,7 +8,7 @@ import {
   wallBackingCenters, mapBackingCenterMoves, findWallBeamAxisCL, wallBeamAxisExcludeKey, peekBelowGraph,
   selfWallSegments, columnSeedBeamSegments, stairOpeningRuns, wallRunSegments,
   peekRoofBelowGraph, peekRoofGraphAbove, createWallSourceCache,
-  wallBeamSourcesFor, orphanedWallBeamAxes, wallBackingCenterCoord,
+  wallBeamSourcesFor, orphanedWallBeamAxes, wallBackingCenterCoord, isProtectedWallBeamAxis,
 } from './wallBeamAxes.js';
 import { BeamAxisOrigin } from '../core/centerLine.js';
 import { RC_WALL_BACKING_CODES } from '../finish/materials/backingClass.js';
@@ -1122,6 +1122,29 @@ test('【失敗系】orphanedWallBeamAxes: 他CL（子CL）のrefIdがこの梁�
   const before = [{ isVertical: false, coord: 2000, lo: 0, hi: 4000 }];
   const result = orphanedWallBeamAxes(graph, before, []);
   assert.equal(result.length, 0);
+});
+
+// ---- n-7是正・QA指摘: ignoreRefsFromはextent参照だけを無視する（refId参照は常に保護） ----
+test('【n-7是正】isProtectedWallBeamAxis: ignoreRefsFromに含まれるCLからのrefId参照は無視されず、常に保護される', () => {
+  const graph = makeGraph();
+  const ax = addWallBeamAxisCL(graph, false, 2000);
+  const child = graph.addCenterLine(CenterLineType.VERTICAL, 1000, {
+    labeled: false, discipline: Discipline.ARCH, refId: ax.id, refOffset: 50,
+  });
+  // ignoreRefsFromにchild.idを含めても、refId参照は無視しない（extent参照だけが対象）。
+  assert.equal(isProtectedWallBeamAxis(graph, ax, { ignoreRefsFrom: new Set([child.id]) }), true);
+});
+
+test('【n-7是正・対照】isProtectedWallBeamAxis: ignoreRefsFromに含まれるCLからのextentLoRef/HiRef参照だけなら無視される', () => {
+  const graph = makeGraph();
+  const ax = addWallBeamAxisCL(graph, false, 2000);
+  const child = graph.addCenterLine(CenterLineType.VERTICAL, 1000, {
+    labeled: false, discipline: Discipline.ARCH, extentLoRef: { clId: ax.id, offset: 0 },
+  });
+  assert.equal(isProtectedWallBeamAxis(graph, ax, { ignoreRefsFrom: new Set([child.id]) }), false,
+    'extent参照だけならignoreRefsFromで無視され、保護されない');
+  assert.equal(isProtectedWallBeamAxis(graph, ax, { ignoreRefsFrom: new Set() }), true,
+    '対照: ignoreRefsFrom省略（空集合）なら従来どおり参照ありで保護される');
 });
 
 test('orphanedWallBeamAxes: 座標に一致する梁芯CLが見つからなければ何もしない（既に別経路で消えている等）', () => {

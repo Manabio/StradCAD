@@ -10,7 +10,7 @@ import { rulesFor, defaultMaterialFor, UNSPECIFIED_STRUCTURE, effectiveStructure
 import { autoFillWoodColumns, autoFillWoodWallBeams, autoFillWoodFloorBeams, autoFillWoodSillBeams } from './woodAutoFill.js';
 import { buildExteriorSide, footprintCellKeys } from './wallGate.js';
 import { autoFillWallBeamAxes } from './wallBeamAxes.js';
-import { autoFillOpeningBeamAxes } from './openingBeamAxes.js';
+import { autoFillOpeningBeamAxes, reconcileOpeningBeamAxes, retargetOpeningBeamAxisShortExtents } from './openingBeamAxes.js';
 import { landingEdgeCLs, landingZ } from '../finish/stair/stairLanding.js';
 import { floorHeightAbove } from '../finish/stair/stairDimensions.js';
 
@@ -533,9 +533,21 @@ export function autoFillStructuralGrid(graph, project, belowMainStructure, wallG
   // 壁由来の梁芯CL自動生成は柱より前に行う（在来木造の壁交点柱が梁芯CLをアンカーに使うため。
   // 通り芯グリッドの部材とは独立の生成源なので、他の主構造でも順序は結果に影響しない）。
   const newWallBeamAxes = autoFillWallBeamAxes(graph, wallSources);
+  // 開口由来梁芯の再計算照合（ステップ6・規則O）: 中心線の移動・削除、部屋属性の変更、壁の偏芯変化
+  // いずれも専用処理を持たず、ここでの現況照合だけが孤児（開口が動いた・消えた）を追従・回収する。
+  // 壁由来梁芯の生成（直前）・開口由来梁芯の生成（直後）に挟む——WALLへ再ラベルした孤児を
+  // autoFillWallBeamAxesの重複ガードではなくautoFillOpeningBeamAxesの重複ガード対象に含めるため。
+  const { removed: removedOpeningBeamAxes, relabeled: relabeledOpeningBeamAxes, retargeted: retargetedOpeningBeamAxes } =
+    reconcileOpeningBeamAxes(graph, openingSources, wallSources);
   // 床開口（吹抜け・昇降路・階段吹抜け・階段の破れ先）由来の梁芯CL自動生成（規則O）。
   // 壁由来梁芯の直後・柱より前——重複ガード（findBeamAnchorCL）が壁由来梁芯も対象に含むため。
   const newOpeningBeamAxes = autoFillOpeningBeamAxes(graph, openingSources);
+  // M-1'是正・QA指摘: 短辺のextent張り直し2段目（autoFillOpeningBeamAxesの直後）。開口の形状変化で
+  // 新たに必要になった通し辺は上のautoFillOpeningBeamAxesで今しがた生成されたばかりのため、
+  // reconcileOpeningBeamAxes内（生成前）の1段目では短辺の期待extentが解決できず静的値に
+  // フォールバックしていた——ここでもう一度、短辺だけ対象に張り直すことで同じ再計算1回の中で
+  // 収束させる（呼ばないと次の再計算までchanged=trueが続く。1パス打ち切りの構造同期で問題化）。
+  const retargetedOpeningBeamAxesShort = retargetOpeningBeamAxisShortExtents(graph, openingSources);
   // 柱は主構造ルールの配置源（通り芯交点／壁交点）で振り分ける。壁交点方式は候補に無い自動柱の撤去も返す。
   const columnsResult = (!isRoof && ownSpecified && structureHasMemberKind(MEMBER_KIND.COLUMN, structure))
     ? autoFillColumnsForStructure(graph, project, wallGate, aboveColumns, wallSegments, aboveBeamSegments, belowColumns, wallSourceCache) : { created: [], removed: [], originsUpdated: [] };
@@ -596,8 +608,12 @@ export function autoFillStructuralGrid(graph, project, belowMainStructure, wallG
   const newSecondaryBeams = rulesFor(structure).beamPlacement === 'wallRuns' ? [] : autoFillSecondaryBeams(graph, project);
   return {
     newColumns, removedColumns, newFootings, removedFootings, originsUpdatedColumns,
+    // m-5是正・QA指摘: 開口由来梁芯の再ラベル（→WALL）・extent張り直し（reconcileOpeningBeamAxes）は
+    // 「新規/撤去した梁」ではないため newBeams/removedBeams には混ぜず、別枠で返す
+    // （structuralRecompute.js の changed 判定はこの配列の長さも見る）。
+    changedOpeningBeamAxes: [...relabeledOpeningBeamAxes, ...retargetedOpeningBeamAxes, ...retargetedOpeningBeamAxesShort],
     newBeams: [...newBeams, ...newRoofBeams, ...newWallBeamAxes, ...newOpeningBeamAxes, ...newLandingBeams, ...newSecondaryBeams, ...sillBeamsResult.created, ...floorBeamsResult.created],
-    removedBeams: [...removedBeams, ...removedRoofBeams, ...sillBeamsResult.removed, ...floorBeamsResult.removed],
+    removedBeams: [...removedBeams, ...removedRoofBeams, ...sillBeamsResult.removed, ...floorBeamsResult.removed, ...removedOpeningBeamAxes],
   };
 }
 

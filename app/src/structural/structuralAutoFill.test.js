@@ -372,13 +372,21 @@ test('【不変条件】structuralAutoFill.js: autoFillStructuralGrid はautoFil
   const url = await import('node:url');
   const here = path.dirname(url.fileURLToPath(import.meta.url));
   const src = fs.readFileSync(path.join(here, 'structuralAutoFill.js'), 'utf8');
-  assert.ok(/import \{ autoFillOpeningBeamAxes \} from '\.\/openingBeamAxes\.js';/.test(src),
-    'openingBeamAxes.jsのautoFillOpeningBeamAxesをimportしていない');
+  assert.ok(/import \{ autoFillOpeningBeamAxes, reconcileOpeningBeamAxes, retargetOpeningBeamAxisShortExtents \} from '\.\/openingBeamAxes\.js';/.test(src),
+    'openingBeamAxes.jsのautoFillOpeningBeamAxes/reconcileOpeningBeamAxes/retargetOpeningBeamAxisShortExtentsをimportしていない');
   const wallIdx = src.indexOf('autoFillWallBeamAxes(graph, wallSources)');
+  const reconcileIdx = src.indexOf('reconcileOpeningBeamAxes(graph, openingSources, wallSources)');
   const openingIdx = src.indexOf('autoFillOpeningBeamAxes(graph, openingSources)');
-  assert.ok(wallIdx >= 0 && openingIdx >= 0 && openingIdx > wallIdx,
-    'autoFillOpeningBeamAxesはautoFillWallBeamAxesの直後に呼ぶ');
+  const retargetShortIdx = src.indexOf('retargetOpeningBeamAxisShortExtents(graph, openingSources)');
+  assert.ok(wallIdx >= 0 && reconcileIdx >= 0 && openingIdx >= 0 && retargetShortIdx >= 0
+    && reconcileIdx > wallIdx && openingIdx > reconcileIdx && retargetShortIdx > openingIdx,
+    'reconcileOpeningBeamAxesはautoFillWallBeamAxesの直後・autoFillOpeningBeamAxesの直前に呼び、' +
+    'retargetOpeningBeamAxisShortExtentsはautoFillOpeningBeamAxesの直後に呼ぶ（ステップ6・M-1\'是正）');
   assert.ok(/newBeams: \[.*newOpeningBeamAxes.*\]/.test(src), 'newOpeningBeamAxesをnewBeamsへ含めていない');
+  assert.ok(/removedBeams: \[.*removedOpeningBeamAxes.*\]/.test(src),
+    'removedOpeningBeamAxesをremovedBeamsへ含めていない（ステップ6の撤去がchanged判定に乗る必要がある）');
+  assert.ok(/changedOpeningBeamAxes: \[.*retargetedOpeningBeamAxesShort.*\]/.test(src),
+    'retargetedOpeningBeamAxesShortをchangedOpeningBeamAxesへ含めていない（M-1\'是正・changed判定に乗る必要がある）');
 });
 
 test('【不変条件】structuralRecompute.js: openingBeamSourcesForを呼び、autoFillStructuralGridの末尾引数へ渡す', async () => {

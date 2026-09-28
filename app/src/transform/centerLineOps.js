@@ -32,6 +32,8 @@ import {
   wallBackingCenters, mapBackingCenterMoves, isProtectedWallBeamAxis, findWallBeamAxisCL,
 } from '../structural/wallBeamAxes.js';
 import { followWallBeamAxes } from '../structural/wallBeamAxisFollow.js';
+import { openingBeamSourcesFor, mapOpeningSourceMoves } from '../structural/openingBeamAxes.js';
+import { stairRiserOf } from '../finish/stair/stairDimensions.js';
 import { rulesFor, effectiveStructure } from '../structural/structureRules.js';
 import { peekVia } from '../structural/structuralPeek.js';
 // wallRefresh.js・finish/wallRegeneration.js は静的import——centerLineOps.jsは既に
@@ -102,6 +104,10 @@ export function bakeCLValue(cl, newVal) {
 // 最後に呼ぶこと（全経路で commitMove が最後に呼ばれる構造を維持する）。
 // @param {object} [opts] - opts.saveFloorFn はテスト用の差し替え（既定はcenterLineFloorSync.js側の
 //   saveFloor。段階(g)・2026-09-26。非梁芯分岐でのみ使う——梁芯分岐は他階を書かないため無関係）。
+//   opts.belowGraph（ステップ6）は開口由来梁芯の追従（規則O）が「下階に到達元の階段があるか」の
+//   判定に使う1つ下の実体階のgraph——省略時はnull扱い（同期関数のためここではpeekしない。
+//   階段由来の開口はこの経路では追従されず、次のモード境界再計算のreconcileOpeningBeamAxesが
+//   撤去→再生成する。受容する限界）。非梁芯分岐でのみ使う。
 // @returns {{ toast: string|null }}
 export function commitCLMoveOp(graph, project, cl, originalValue, opts = {}) {
   const newValue = cl.effectiveValue;
@@ -137,13 +143,26 @@ export function commitCLMoveOp(graph, project, cl, originalValue, opts = {}) {
     // 食い違い——設計書の記述はbake前のCLがまだ旧位置にある前提だった）。pendingDeltaだけを一時的に0へ
     // 戻し「確定済みの旧座標（=value=originalValue）」を読ませてから元に戻す（_valueは触らない。
     // runInAction 1本にまとめ、MobXへ中間状態を観測させない）。
+    // 開口由来梁芯の追従（ステップ6の3）: 主構造が規則O対象（openingBeamAxes:'slabOpenings'）の
+    // ときだけ、壁由来と同じ手順（bake前後のopeningBeamSourcesForを突き合わせ、followWallBeamAxesへ
+    // 1本化して渡す）で追従させる。belowGraphはopts.belowGraph（省略時null）——commitCLMoveOpは
+    // 同期関数のためここでpeekできない。belowGraphが無いと「下階に到達元の階段があるか」
+    // （stairFilterFor）が常にfalseになり、階段由来の開口はここでの追従対象から外れる——
+    // その梁芯は次のモード境界再計算のreconcileOpeningBeamAxesが「撤去→再生成」する（idは変わる。
+    // 受容する限界（ステップ9で.claude/cl-conversion-limits.mdに追記予定・m-6是正）。
+    const openingRules = scope ? rulesFor(effectiveStructure(graph, project)) : null;
+    const collectOpeningMoves = !!openingRules && openingRules.openingBeamAxes === 'slabOpenings';
+    const openingSourcesOpts = { riserOf: (s) => stairRiserOf(s, project, graph.plane), belowGraph: opts.belowGraph ?? null };
+
     let backingBefore = null;
+    let openingBefore = null;
     if (scope) {
       runInAction(() => {
         const savedDelta = cl.pendingDelta;
         cl.pendingDelta = 0;
         try {
           backingBefore = wallBackingCenters(graph);
+          if (collectOpeningMoves) openingBefore = openingBeamSourcesFor(graph, project, openingSourcesOpts);
         } finally {
           cl.pendingDelta = savedDelta;
         }
@@ -157,9 +176,17 @@ export function commitCLMoveOp(graph, project, cl, originalValue, opts = {}) {
       if (!cl.labeled) chainResult = mergeCenterLineChain(graph, cl, { kind: centerLineKind(cl) });
     });
 
-    // 壁由来梁芯の追従はbake・結合の**後**に行う（結合で壁の軸CLが変わりうるため、追従前後の
-    // wallBackingCentersは常に確定済みの壁位置から採る）。
-    const axis = scope ? followWallBeamAxes(graph, mapBackingCenterMoves(backingBefore, wallBackingCenters(graph))) : null;
+    // 壁由来梁芯・開口由来梁芯の追従はbake・結合の**後**に行う（結合で軸CLが変わりうるため、
+    // 追従前後のスナップショットは常に確定済みの位置から採る）。両者の move を1本化して
+    // followWallBeamAxes（由来を問わず座標一致だけで梁芯を探す）へ渡す——追従先の重複吸収（案B）も
+    // 由来を問わず共通に効く。
+    const backingMoves = scope ? mapBackingCenterMoves(backingBefore, wallBackingCenters(graph)) : [];
+    const openingMoves = collectOpeningMoves
+      ? mapOpeningSourceMoves(openingBefore, openingBeamSourcesFor(graph, project, openingSourcesOpts)) : [];
+    // repointRefsFrom:true（ステップ6・設計§3後段）——この呼び出しだけが開口由来梁芯の追従moves
+    // （openingMoves）を持ちうるため、吸収時に短辺のextentLoRef/HiRefを吸収先へ張り替える。
+    // 壁のみの追従（finishBoundary.js・wallRefresh.js・偏芯分岐）は既定のfalseのまま。
+    const axis = scope ? followWallBeamAxes(graph, [...backingMoves, ...openingMoves], { repointRefsFrom: true }) : null;
 
     const [undoFn, redoFn] = composeUndoWithMergeChain(
       () => bakeCLValue(cl, originalValue),
@@ -188,6 +215,11 @@ export function commitCLMoveOp(graph, project, cl, originalValue, opts = {}) {
     // 復活しないよう、移動前の座標を除外集合へ記録する（cl-del分岐の記録と同じ意味・同じキー形式。
     // 手動追加の梁芯を動かした場合も無害——その座標に壁が無ければ単に使われないキーが残るだけ）。
     graph.excludedWallBeamAxes.add(wallBeamAxisExcludeKey(cl.centerLineType === CenterLineType.VERTICAL, originalValue));
+    // 開口由来（規則O）の梁芯を手動で動かしたら由来をUSERへ切り替える（ステップ6・設計§2）——
+    // 再計算時の照合（reconcileOpeningBeamAxes）は「開口の位置に無い開口由来梁芯」を孤児とみなすため、
+    // 手動移動を区別する印が要る。壁由来（WALL）はソース差分方式（wallBeamAxisFollow.js）が手動移動を
+    // 誤認しないため、由来は変えない。before/afterのグラフスナップショット方式でundo/redoに乗る。
+    if (cl.beamAxisOrigin === BeamAxisOrigin.OPENING) cl.beamAxisOrigin = BeamAxisOrigin.USER;
     bakeCLValue(cl, newValue);
     counts = resolveSecondaryBeamsForAxis(graph, cl, project);
     renumberMembers(graph, project, 'beamMap');

@@ -2,11 +2,15 @@
 // フィクスチャはwallBeamAxes.test.js（実core.js流儀）・slabOpening.test.js（開口セル構成）を踏襲する。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Plane, PlanGraph, Project, CenterLineType, Discipline, RoomFeature, StairType } from '../core.js';
+import { Plane, PlanGraph, Project, CenterLineType, Discipline, RoomFeature, StairType, StructuralMaterialType } from '../core.js';
 import { getAllCells } from '../finish/gridCells.js';
-import { openingBeamSourcesFor, openingBeamSourcesDiagnostics, autoFillOpeningBeamAxes } from './openingBeamAxes.js';
+import {
+  openingBeamSourcesFor, openingBeamSourcesDiagnostics, autoFillOpeningBeamAxes, reconcileOpeningBeamAxes,
+  mapOpeningSourceMoves,
+} from './openingBeamAxes.js';
 import { autoFillWallBeamAxes, wallBeamSourcesFor } from './wallBeamAxes.js';
 import { recomputeStructuralForGraph } from './structuralRecompute.js';
+import { autoFillStructuralGrid } from './structuralAutoFill.js';
 import { floorSwapManager } from '../storage/FloorSwapManager.js';
 import { BeamAxisOrigin } from '../core/centerLine.js';
 import { RC_WALL_BACKING_CODES } from '../finish/materials/backingClass.js';
@@ -579,4 +583,505 @@ test('【Minor-QA追加・T8】recomputeStructuralForGraph: 2階にVOID1部屋�
   const openingCL = g2.centerLines.find(cl => cl.beamAxisOrigin === BeamAxisOrigin.OPENING);
   assert.ok(openingCL, 'VOID開口からは下階peek無し（belowGraph=null）でも由来openingの梁芯が生成される');
   void x0; void xa; void xb; void x1; void y0; void ya; void yb; void y1;
+});
+
+// ---- reconcileOpeningBeamAxes（ステップ6・開口由来梁芯の再計算照合） ----
+
+test('reconcileOpeningBeamAxes: 現況と一致すれば何も変わらない（冪等）', () => {
+  const { graph } = makeRectOpeningGraph();
+  graph.structureOverride = 'RC造(ラーメン)';
+  const sources = openingBeamSourcesFor(graph, {});
+  autoFillOpeningBeamAxes(graph, sources);
+  const idsBefore = graph.centerLines.filter(cl => cl.beamAxisOrigin === BeamAxisOrigin.OPENING).map(cl => cl.id).sort();
+
+  const { removed } = reconcileOpeningBeamAxes(graph, sources, []);
+
+  assert.deepEqual(removed, [], '現況と一致する開口由来梁芯は撤去しない');
+  const idsAfter = graph.centerLines.filter(cl => cl.beamAxisOrigin === BeamAxisOrigin.OPENING).map(cl => cl.id).sort();
+  assert.deepEqual(idsAfter, idsBefore, 'idも変わらない');
+});
+
+test('reconcileOpeningBeamAxes: 吹抜けを通常部屋に戻す（開口が消える）と開口由来梁芯は全部撤去される（通し辺を短辺が参照していても両方消える）', () => {
+  const { graph } = makeRectOpeningGraph();
+  graph.structureOverride = 'RC造(ラーメン)';
+  const sources = openingBeamSourcesFor(graph, {});
+  const created = autoFillOpeningBeamAxes(graph, sources);
+  assert.equal(created.length, 4);
+
+  // 部屋をVOIDから戻す＝開口が無くなる（openingBeamSourcesForは[]を返す）。
+  const { removed } = reconcileOpeningBeamAxes(graph, [], []);
+
+  assert.equal(removed.length, 4, '通し辺2本・短辺2本の計4本が撤去される（相互参照があっても両方消える）');
+  assert.equal(graph.centerLines.filter(cl => cl.beamAxisOrigin === BeamAxisOrigin.OPENING).length, 0);
+});
+
+test('【失敗系】reconcileOpeningBeamAxes: 短辺に非autoの小梁が乗っていれば短辺は保護され、それを参照する通し辺も残る。無関係の短辺は撤去される', () => {
+  const { graph } = makeRectOpeningGraph();
+  graph.structureOverride = 'RC造(ラーメン)';
+  const sources = openingBeamSourcesFor(graph, {});
+  const created = autoFillOpeningBeamAxes(graph, sources);
+  const shortLeft = created.find(cl => cl.centerLineType === CenterLineType.VERTICAL && cl.value === 2000);
+  const shortRight = created.find(cl => cl.centerLineType === CenterLineType.VERTICAL && cl.value === 5000);
+  const throughTop = created.find(cl => cl.centerLineType === CenterLineType.HORIZONTAL && cl.value === 1000);
+  const throughBottom = created.find(cl => cl.centerLineType === CenterLineType.HORIZONTAL && cl.value === 3000);
+  // 短辺(shortLeft)に手動固定（dimensionStatus!=='auto'）の小梁を乗せる。
+  graph.addBeam(StructuralMaterialType.RC, 'RC-BEAM-TEST', shortLeft, true, throughTop, throughBottom,
+    { role: 'secondary', dimensionStatus: 'fixed' });
+
+  const { removed } = reconcileOpeningBeamAxes(graph, [], []);
+  const removedIds = new Set(removed.map(cl => cl.id));
+
+  assert.ok(!removedIds.has(shortLeft.id), '非autoの小梁が乗る短辺は保護され残る');
+  assert.ok(removedIds.has(shortRight.id), '保護理由の無い短辺は撤去される');
+  assert.ok(!removedIds.has(throughTop.id) && !removedIds.has(throughBottom.id),
+    '生存する短辺(shortLeft)から参照される通し辺2本も、その参照によって保護され残る');
+});
+
+test('reconcileOpeningBeamAxes: 開口が消えた座標に壁ソースがあれば由来がWALLへ変わり撤去されない', () => {
+  const { graph } = makeRectOpeningGraph();
+  graph.structureOverride = 'RC造(ラーメン)';
+  const sources = openingBeamSourcesFor(graph, {});
+  const created = autoFillOpeningBeamAxes(graph, sources);
+  const shortLeft = created.find(cl => cl.centerLineType === CenterLineType.VERTICAL && cl.value === 2000);
+
+  const wallSources = [{ isVertical: true, coord: 2000, lo: 1000, hi: 3000 }];
+  const { removed } = reconcileOpeningBeamAxes(graph, [], wallSources);
+
+  assert.ok(!removed.some(cl => cl.id === shortLeft.id), '壁ソースに一致する梁芯は撤去されない');
+  assert.equal(shortLeft.beamAxisOrigin, BeamAxisOrigin.WALL, '由来がWALLへ書き替わる');
+});
+
+test('reconcileOpeningBeamAxes: 由来がUSER（手動移動済み）の梁芯は照合の対象外', () => {
+  const { graph } = makeRectOpeningGraph();
+  graph.structureOverride = 'RC造(ラーメン)';
+  const sources = openingBeamSourcesFor(graph, {});
+  const created = autoFillOpeningBeamAxes(graph, sources);
+  const shortLeft = created.find(cl => cl.centerLineType === CenterLineType.VERTICAL && cl.value === 2000);
+  shortLeft.beamAxisOrigin = BeamAxisOrigin.USER; // 手動移動を模す（commitCLMoveOpの分岐と同じ切替）
+
+  const { removed } = reconcileOpeningBeamAxes(graph, [], []);
+
+  assert.ok(!removed.some(cl => cl.id === shortLeft.id), 'USER由来は開口が消えても対象外——撤去されない');
+  assert.equal(shortLeft.beamAxisOrigin, BeamAxisOrigin.USER, '由来も変わらない');
+});
+
+test('【T1・M-2是正】reconcileOpeningBeamAxes: 短辺をgraph.setCLEccentricityだけで保護すると、固定点反復で通し辺2本とその短辺が残り、無関係の短辺は撤去される', () => {
+  const { graph } = makeRectOpeningGraph();
+  graph.structureOverride = 'RC造(ラーメン)';
+  const sources = openingBeamSourcesFor(graph, {});
+  const created = autoFillOpeningBeamAxes(graph, sources);
+  const shortLeft = created.find(cl => cl.centerLineType === CenterLineType.VERTICAL && cl.value === 2000);
+  const shortRight = created.find(cl => cl.centerLineType === CenterLineType.VERTICAL && cl.value === 5000);
+  const throughTop = created.find(cl => cl.centerLineType === CenterLineType.HORIZONTAL && cl.value === 1000);
+  const throughBottom = created.find(cl => cl.centerLineType === CenterLineType.HORIZONTAL && cl.value === 3000);
+  // shortLeftをCL偏芯（clEccentricities）だけで保護する——小梁等の部材を一切乗せない。
+  graph.setCLEccentricity(shortLeft.id, { side: 1, amount: 30 });
+
+  // 開口を消す（全4本が座標非一致の孤児候補になる）。
+  const { removed } = reconcileOpeningBeamAxes(graph, [], []);
+  const removedIds = new Set(removed.map(cl => cl.id));
+
+  assert.ok(!removedIds.has(shortLeft.id), 'clEccentricitiesで保護されたshortLeftは残る');
+  assert.ok(!removedIds.has(throughTop.id) && !removedIds.has(throughBottom.id),
+    '生き残ったshortLeftから参照される通し辺2本も、固定点反復でignoreRefsFromから外れ保護され残る');
+  assert.ok(removedIds.has(shortRight.id), '保護理由の無いshortRightは撤去される');
+});
+
+// ---- M-1是正・QA指摘: reconcileは座標だけでなくextent（役割）も見る ----
+// 「白紙から新規生成した結果と一致する」ことを、正規化（座標・extentの実効値・isVertical・由来。
+// idは含めない）した記述の配列で比較する共通ヘルパ。
+function normalizedOpeningAxes(graph) {
+  return graph.centerLines
+    .filter(cl => cl.beamAxisOrigin === BeamAxisOrigin.OPENING || cl.beamAxisOrigin === BeamAxisOrigin.WALL)
+    .map(cl => ({
+      isVertical: cl.centerLineType === CenterLineType.VERTICAL,
+      value: cl.value,
+      extentLo: cl.extentLo, extentHi: cl.extentHi,
+      origin: cl.beamAxisOrigin,
+    }))
+    .sort((a, b) => (Number(a.isVertical) - Number(b.isVertical)) || (a.value - b.value));
+}
+
+// graph.planeを最下階（index 0）扱いにしない最小のproject stub——isFoundationPlaneは
+// project.planesでのindex一致だけを見るため、ダミーの1階分だけ前に挟めば基礎伏図分岐
+// （footings・mat基礎等の余計な複雑さ）を踏まずに済む。foundationTypeはproject.structuralInfo.
+// foundationTypeを直読みする箇所（autoFillStructuralGrid）があるため最小限で用意する。
+function fakeNonFoundationProjectFor(graph) {
+  return { planes: [{ id: '__below_dummy__' }, graph.plane], structuralInfo: { foundationType: 'independent' } };
+}
+
+// 【QA最終指摘・配線変異への感度是正】以前はreconcileOpeningBeamAxes→autoFillOpeningBeamAxes→
+// retargetOpeningBeamAxisShortExtentsを自前で順に呼んでいたが、これは本番の呼び出し順
+// （structuralAutoFill.js autoFillStructuralGrid）を複製しただけで、autoFillStructuralGrid内の
+// 配線（2段目の呼び出しを外す等）が変わってもこのテストのヘルパ自体は追随せず赤にならない
+// ——本番の配線そのもの（autoFillStructuralGrid）を直接呼ぶことで、配線変異にも感度を持たせる。
+// 何か変わったかは、autoFillStructuralGridの返り値（changed判定と同じ構成要素）で判定する。
+function applyOneOpeningReconcilePass(graph, project) {
+  const sources = openingBeamSourcesFor(graph, project);
+  const result = autoFillStructuralGrid(
+    graph, project, graph.structureOverride, null, [], [], [], [], [], undefined, undefined, undefined, sources);
+  return result.newColumns.length > 0 || result.removedColumns.length > 0
+    || result.newFootings.length > 0 || result.removedFootings.length > 0
+    || result.newBeams.length > 0 || result.removedBeams.length > 0
+    || result.changedOpeningBeamAxes.length > 0;
+}
+
+test('【T4・M-1是正】reconcileOpeningBeamAxes: 開口が短辺方向へ広がると、旧通し辺は座標一致無しで孤児になり（短辺の参照が張り直し済みのため保護されない）、収束後は白紙生成と一致する', () => {
+  const { graph, yb } = makeRectOpeningGraph(); // 初期: width=3000(x:2000-5000), height=2000(y:1000-3000)
+  graph.structureOverride = 'RC造(ラーメン)';
+  const project = fakeNonFoundationProjectFor(graph);
+  const sourcesInitial = openingBeamSourcesFor(graph, project);
+  const created = autoFillOpeningBeamAxes(graph, sourcesInitial);
+  const shortLeft = created.find(cl => cl.centerLineType === CenterLineType.VERTICAL && cl.value === 2000);
+  const shortRight = created.find(cl => cl.centerLineType === CenterLineType.VERTICAL && cl.value === 5000);
+  const throughTopId = created.find(cl => cl.centerLineType === CenterLineType.HORIZONTAL && cl.value === 1000).id;
+  const throughBottomId = created.find(cl => cl.centerLineType === CenterLineType.HORIZONTAL && cl.value === 3000).id;
+  const shortLeftId = shortLeft.id, shortRightId = shortRight.id;
+
+  // 開口を短辺方向（高さ）へ広げる: yb(下辺)を3000→3900へ（height 2000→2900、widthの3000は超えない
+  // ためthrough/shortの役割は入れ替わらない）。
+  yb.value = 3900;
+
+  const changed1 = applyOneOpeningReconcilePass(graph, project);
+  assert.ok(changed1, '1回目の適用で変更が検出される');
+  const changed2 = applyOneOpeningReconcilePass(graph, project);
+  assert.equal(changed2, false, 'M-1\'是正: 1回の適用（reconcile→生成→短辺の張り直し2段目）だけで収束する（2回目は変更なし）');
+
+  assert.equal(graph.shapeMap.get(throughTopId)?.id, throughTopId, '動いていない側の通し辺(y=1000)は座標一致のまま同idで残る');
+  assert.equal(graph.shapeMap.has(throughBottomId), false, '動いた側の旧通し辺(旧y=3000)は座標一致が崩れ孤児として撤去される');
+  assert.equal(graph.shapeMap.get(shortLeftId)?.id, shortLeftId, '短辺(shortLeft)は同idのまま残る（座標は変わらないため）');
+  assert.equal(graph.shapeMap.get(shortRightId)?.id, shortRightId, '短辺(shortRight)も同idのまま残る');
+  assert.equal(shortLeft.extentHi, 3900, '短辺のextentHiが新しい通し辺の座標(3900)を指すよう張り直っている');
+  assert.equal(shortLeft.extentLo, 1000, '短辺のextentLoは変わらず通し辺(y=1000)を指す');
+
+  // 白紙から同じ最終形状を生成した結果と、座標・extent・由来（idを除く）が一致する。
+  const { graph: freshGraph } = makeRectOpeningGraph(3900);
+  freshGraph.structureOverride = 'RC造(ラーメン)';
+  const freshSources = openingBeamSourcesFor(freshGraph, project);
+  autoFillOpeningBeamAxes(freshGraph, freshSources);
+
+  assert.deepEqual(normalizedOpeningAxes(graph), normalizedOpeningAxes(freshGraph),
+    '収束後の梁芯集合（座標・extent実効値・由来）が白紙から新規生成した結果と一致する');
+});
+
+test('【T5・M-1是正】reconcileOpeningBeamAxes: 中心線移動で通し/短辺の役割が入れ替わると、両方向のextentが張り直される', () => {
+  // width=3000(x:2000-5000)・height=2000(y:1000-3000) → width<height=2000(x:2000-5000固定のまま
+  // widthは動かせないため、xb側を大きく動かしてwidthを縮め、height(2000)より小さくすることで
+  // through/shortの役割を反転させる（through: height>width→trueでverticalが通しになる）。
+  const { graph, xb } = makeRectOpeningGraph(); // height=2000固定
+  graph.structureOverride = 'RC造(ラーメン)';
+  const project = fakeNonFoundationProjectFor(graph);
+  const sourcesInitial = openingBeamSourcesFor(graph, project);
+  const created = autoFillOpeningBeamAxes(graph, sourcesInitial);
+  // 初期: width(3000)>height(2000) → 通しは水平辺(y=1000,3000)、短辺は垂直辺(x=2000,5000)。
+  const throughTopId = created.find(cl => cl.centerLineType === CenterLineType.HORIZONTAL && cl.value === 1000).id;
+  const throughBottomId = created.find(cl => cl.centerLineType === CenterLineType.HORIZONTAL && cl.value === 3000).id;
+  const oldShortLeftId = created.find(cl => cl.centerLineType === CenterLineType.VERTICAL && cl.value === 2000).id;
+  const oldShortRightId = created.find(cl => cl.centerLineType === CenterLineType.VERTICAL && cl.value === 5000).id;
+
+  // xb(右辺)を5000→3500へ動かし、width=1500<height=2000にする——through/shortが反転する
+  // （通しは垂直辺x=2000,3500、短辺は水平辺y=1000,3000になる）。
+  xb.value = 3500;
+
+  const changed1 = applyOneOpeningReconcilePass(graph, project);
+  assert.ok(changed1, '1回目の適用で変更が検出される');
+  const changed2 = applyOneOpeningReconcilePass(graph, project);
+  assert.equal(changed2, false, 'M-1\'是正: 1回の適用だけで収束する（2回目は変更なし）');
+
+  // 反転後は垂直辺(x=2000,3500)が通し・水平辺(y=1000,3000)が短辺になる。
+  // 座標が変わらないx=2000の垂直辺(旧shortLeft)は「同一の梁芯CL」が役割だけ通しへ変わる
+  // （座標一致のため孤児化せず、reconcileのextent照合だけが効く）。
+  const flippedThroughLeft = graph.shapeMap.get(oldShortLeftId);
+  assert.ok(flippedThroughLeft, '座標が変わらないCL(旧shortLeft, x=2000)は同idのまま残り、役割が短辺→通しへ変わる');
+  const gridYs = graph.gridYs; // 通り芯Y: 0, 6000
+  assert.equal(flippedThroughLeft.extentLo, 0, '通しへ変わった旧shortLeftのextentLoは直交通り芯(y=0)を参照する');
+  assert.equal(flippedThroughLeft.extentHi, 6000, '同extentHiは直交通り芯(y=6000)を参照する');
+
+  // 旧通し辺(水平辺y=1000,3000)は、座標は変わらないが役割が通し→短辺へ変わる——extentが
+  // 直交通り芯参照から短辺方式（spanRefs＝新しい通し辺の座標）へ張り直る。
+  const flippedShortTop = graph.shapeMap.get(throughTopId);
+  assert.ok(flippedShortTop, '座標が変わらない旧通し辺(y=1000)も同idのまま残り、役割が通し→短辺へ変わる');
+  assert.equal(flippedShortTop.extentLo, 2000, '短辺へ変わった旧通し辺(y=1000)のextentLoは新しい通しの座標(x=2000)を指す');
+  assert.equal(flippedShortTop.extentHi, 3500, '同extentHiは新しい通しの座標(x=3500)を指す');
+  void gridYs; void throughBottomId; void oldShortRightId;
+
+  // 白紙から同じ最終形状を生成した結果と一致する。
+  const { graph: freshGraph } = makeRectOpeningGraph();
+  freshGraph.structureOverride = 'RC造(ラーメン)';
+  const freshXb = freshGraph.centerLines.find(cl => cl.centerLineType === CenterLineType.VERTICAL && cl.value === 5000);
+  freshXb.value = 3500;
+  const freshSources = openingBeamSourcesFor(freshGraph, project);
+  autoFillOpeningBeamAxes(freshGraph, freshSources);
+
+  assert.deepEqual(normalizedOpeningAxes(graph), normalizedOpeningAxes(freshGraph),
+    '役割が入れ替わった後の梁芯集合（座標・extent実効値・由来）が白紙から新規生成した結果と一致する');
+});
+
+// ---- mapOpeningSourceMoves ----
+
+test('mapOpeningSourceMoves: 同一axisCLId・isVertical・outwardSignで区間の重なりが最大の辺を対応づけ、coordが変われば move を返す', () => {
+  const before = [{ isVertical: true, coord: 2000, lo: 1000, hi: 3000, outwardSign: -1, axisCLId: 'cl-a' }];
+  const after  = [{ isVertical: true, coord: 2100, lo: 1000, hi: 3000, outwardSign: -1, axisCLId: 'cl-a' }];
+  assert.deepEqual(mapOpeningSourceMoves(before, after), [{ isVertical: true, from: 2000, to: 2100 }]);
+});
+
+test('【失敗系】mapOpeningSourceMoves: 対応する後継が無い（axisCLId不一致・区間の重なりも無い）辺は無視する', () => {
+  const before = [{ isVertical: true, coord: 2000, lo: 1000, hi: 3000, outwardSign: -1, axisCLId: 'cl-a' }];
+  const after  = [{ isVertical: true, coord: 2100, lo: 5000, hi: 7000, outwardSign: -1, axisCLId: 'cl-b' }]; // 区間が重ならない
+  assert.deepEqual(mapOpeningSourceMoves(before, after), []);
+});
+
+test('mapOpeningSourceMoves: coordが変わらなければ move を返さない', () => {
+  const before = [{ isVertical: false, coord: 1000, lo: 2000, hi: 5000, outwardSign: 1, axisCLId: 'cl-a' }];
+  const after  = [{ isVertical: false, coord: 1000, lo: 2000, hi: 5000, outwardSign: 1, axisCLId: 'cl-a' }];
+  assert.deepEqual(mapOpeningSourceMoves(before, after), []);
+});
+
+// ---- m-4是正・QA指摘: 移動先が既存CLの座標へ厳密一致すると、floorOpeningEdgesがその辺のaxisCLを
+// 動的に差し替える（移動元CLの物理的な位置は同じでもaxisCLIdが変わる）ため、1段階目（axisCLId一致）で
+// 対応が付かない場合に2段階目（isVertical・outwardSign・区間重なりのみ）でフォールバック対応する。 ----
+test('【T2・M-3/m-4是正】mapOpeningSourceMoves: axisCLIdが変わっても、isVertical・outwardSign・区間重なりでフォールバック対応する', () => {
+  const before = [{ isVertical: false, coord: 1000, lo: 2000, hi: 5000, outwardSign: -1, axisCLId: 'ya' }];
+  const after  = [{ isVertical: false, coord: 0, lo: 2000, hi: 5000, outwardSign: -1, axisCLId: 'y0' }]; // 着地先の既存CLへaxisCLIdが差し替わる
+  assert.deepEqual(mapOpeningSourceMoves(before, after), [{ isVertical: false, from: 1000, to: 0 }]);
+});
+
+test('【T2・M-3是正・失敗系】mapOpeningSourceMoves: 同じaxisCLIdでもoutwardSignが逆（両側の辺）なら別々に対応づけ、取り違えない', () => {
+  // L字型の1本の中心線(axisCLId:'ax1')が、外側(+1)と内側(-1)の2辺の軸になっている構成。
+  // 外側の辺は+30、内側の辺は-10だけ動く——outwardSignを見ずに重なりだけで対応づけると
+  // 先勝ちで取り違える恐れがある。
+  const before = [
+    { isVertical: true, coord: 1000, lo: 0, hi: 4000, outwardSign: 1, axisCLId: 'ax1' },
+    { isVertical: true, coord: 1000, lo: 0, hi: 4000, outwardSign: -1, axisCLId: 'ax1' },
+  ];
+  const after = [
+    { isVertical: true, coord: 1030, lo: 0, hi: 4000, outwardSign: 1, axisCLId: 'ax1' },
+    { isVertical: true, coord: 990, lo: 0, hi: 4000, outwardSign: -1, axisCLId: 'ax1' },
+  ];
+  const moves = mapOpeningSourceMoves(before, after);
+  assert.equal(moves.length, 2);
+  assert.ok(moves.some(m => m.from === 1000 && m.to === 1030), '外側(+1)の辺は+30だけ動く対応がある');
+  assert.ok(moves.some(m => m.from === 1000 && m.to === 990), '内側(-1)の辺は-10だけ動く対応がある（取り違えない）');
+});
+
+test('【m-2是正・QA指定入力】mapOpeningSourceMoves: 同じaxisCLId・区間で複数辺のoutwardSignが入れ替わっても取り違えない', () => {
+  // before[0](outwardSign+1,coord3000)とbefore[1](outwardSign-1,coord3200)。
+  // after[0](outwardSign-1,coord3200)とafter[1](outwardSign+1,coord3100)——
+  // after配列の並び順が「-1側が先」になっていても、outwardSignで絞り込むため
+  // before[0](+1)はafter[1](+1,coord3100)にだけ対応し、before[1](-1)はafter[0]
+  // (-1,coord3200。座標not変化)に対応してmoveを生まない。
+  const before = [
+    { isVertical: false, coord: 3000, lo: 0, hi: 4000, outwardSign: 1, axisCLId: 'ax1' },
+    { isVertical: false, coord: 3200, lo: 0, hi: 4000, outwardSign: -1, axisCLId: 'ax1' },
+  ];
+  const after = [
+    { isVertical: false, coord: 3200, lo: 0, hi: 4000, outwardSign: -1, axisCLId: 'ax1' },
+    { isVertical: false, coord: 3100, lo: 0, hi: 4000, outwardSign: 1, axisCLId: 'ax1' },
+  ];
+  assert.deepEqual(mapOpeningSourceMoves(before, after), [{ isVertical: false, from: 3000, to: 3100 }]);
+});
+
+test('recomputeStructuralForGraph: captureSnapshots時、reconcileの撤去より前にbeforeスナップショットが採られる（undoで開口由来梁芯が復元する）', async () => {
+  const project = new Project('proj-reconcile-undo', 'test');
+  const { graph } = project.addPlane(0, '1階', 'p1');
+  graph.structureOverride = 'RC造(ラーメン)';
+  const x0 = graph.addCenterLine(CenterLineType.VERTICAL, 0, GRID);
+  const xa = graph.addCenterLine(CenterLineType.VERTICAL, 2000, ARCH);
+  const xb = graph.addCenterLine(CenterLineType.VERTICAL, 5000, ARCH);
+  const x1 = graph.addCenterLine(CenterLineType.VERTICAL, 8000, GRID);
+  const y0 = graph.addCenterLine(CenterLineType.HORIZONTAL, 0, GRID);
+  const ya = graph.addCenterLine(CenterLineType.HORIZONTAL, 1000, ARCH);
+  const yb = graph.addCenterLine(CenterLineType.HORIZONTAL, 3000, ARCH);
+  const y1 = graph.addCenterLine(CenterLineType.HORIZONTAL, 6000, GRID);
+  const cells = getAllCells(graph);
+  const centerKey = cells.find(c => c.x1 === 2000 && c.x2 === 5000 && c.y1 === 1000 && c.y2 === 3000).key;
+  const room = graph.addRoom(new Set([centerKey]));
+  room.setFeature(RoomFeature.VOID);
+
+  const originalPeek = floorSwapManager.peek;
+  floorSwapManager.peek = async (plane) => project.graphMap.get(plane.id) ?? null;
+  let after1;
+  try {
+    after1 = await recomputeStructuralForGraph(graph, project, 'RC造(ラーメン)', null, { captureSnapshots: true });
+  } finally {
+    floorSwapManager.peek = originalPeek;
+  }
+  assert.ok(graph.centerLines.some(cl => cl.beamAxisOrigin === BeamAxisOrigin.OPENING), '前提: 開口由来の梁芯が生成されている');
+
+  // 部屋をVOIDから戻す（開口が消える）
+  room.setFeature(null);
+
+  let result2;
+  floorSwapManager.peek = async (plane) => project.graphMap.get(plane.id) ?? null;
+  try {
+    result2 = await recomputeStructuralForGraph(graph, project, 'RC造(ラーメン)', null, { captureSnapshots: true });
+  } finally {
+    floorSwapManager.peek = originalPeek;
+  }
+  assert.equal(graph.centerLines.filter(cl => cl.beamAxisOrigin === BeamAxisOrigin.OPENING).length, 0,
+    '開口が消えたので開口由来梁芯はreconcileで撤去される');
+  assert.ok(result2.changed, '撤去はremovedBeamsに現れてchangedになる');
+  assert.ok(result2.before, 'captureSnapshots:trueならbeforeが採られる（reconcileの撤去より前＝開口が残っている状態）');
+
+  const { restoreGraph } = await import('../graphSnapshot.js');
+  restoreGraph(graph, result2.before);
+  assert.ok(graph.centerLines.some(cl => cl.beamAxisOrigin === BeamAxisOrigin.OPENING),
+    'undo（beforeへ復元）で開口由来梁芯が戻る＝beforeはreconcileの撤去より前に採られている');
+  void x0; void xa; void xb; void x1; void y0; void ya; void yb; void y1; void after1;
+});
+
+// ---- M-1'是正・QA再指摘: 1回の再計算で収束する（開口拡大の翌回でchanged=trueが続かない） ----
+// 【QA最終指摘】旧T7はVOID以外に部屋が無く、建物フットプリント（wallGate）がVOIDの外接矩形だけに
+// 縮んで梁が1本も生成されなかった（「梁が0本」）——2階建て・VOIDの周囲に通常の部屋がある構成
+// （QAのidem3と同型）にし、実際に生成される短辺小梁・大梁（通し辺の小梁）で検証する。
+test('【T7・M-1\'是正】recomputeStructuralForGraph: 2階建て・RC造(ラーメン)・VOIDの周囲に部屋がある構成で、開口が短辺方向へ広がると1回の再計算で短辺小梁の区間・参照が新しい通し辺へ張り直り収束する（2回目はchanged:false）', async () => {
+  const project = new Project('proj-t7', 'test');
+  const { graph: g1 } = project.addPlane(0, '1階', 'p1');
+  const { graph: g2 } = project.addPlane(3000, '2階', 'p2');
+  g1.structureOverride = 'RC造(ラーメン)';
+  g2.structureOverride = 'RC造(ラーメン)';
+
+  const x0 = g2.addCenterLine(CenterLineType.VERTICAL, 0, GRID);
+  const xa = g2.addCenterLine(CenterLineType.VERTICAL, 2000, ARCH);
+  const xb = g2.addCenterLine(CenterLineType.VERTICAL, 5000, ARCH);
+  const x1 = g2.addCenterLine(CenterLineType.VERTICAL, 8000, GRID);
+  const y0 = g2.addCenterLine(CenterLineType.HORIZONTAL, 0, GRID);
+  const ya = g2.addCenterLine(CenterLineType.HORIZONTAL, 1000, ARCH);
+  const yb = g2.addCenterLine(CenterLineType.HORIZONTAL, 3000, ARCH);
+  const yc = g2.addCenterLine(CenterLineType.HORIZONTAL, 3500, ARCH); // 追加セルの下辺
+  const y1 = g2.addCenterLine(CenterLineType.HORIZONTAL, 6000, GRID);
+  const cells = getAllCells(g2);
+  const voidKey = cells.find(c => c.x1 === 2000 && c.x2 === 5000 && c.y1 === 1000 && c.y2 === 3000).key;
+  const extraKey = cells.find(c => c.x1 === 2000 && c.x2 === 5000 && c.y1 === 3000 && c.y2 === 3500).key;
+  const otherKeys = cells.filter(c => c.key !== voidKey && c.key !== extraKey).map(c => c.key);
+  const voidRoom = g2.addRoom(new Set([voidKey]));
+  voidRoom.setFeature(RoomFeature.VOID);
+  // VOIDの周囲（拡張先のextraKeyを含む）を通常の部屋（INTERIOR）で埋める——建物フットプリント
+  // （wallGate）が全グリッドを覆うようにし、梁が実際に生成される構成にする。
+  const outerRoom = g2.addRoom(new Set([extraKey, ...otherKeys]));
+
+  const originalPeek = floorSwapManager.peek;
+  floorSwapManager.peek = async (plane) => project.graphMap.get(plane.id) ?? null;
+  try {
+    await recomputeStructuralForGraph(g2, project, 'RC造(ラーメン)', g1);
+    const shortLeftBefore = g2.centerLines.find(cl =>
+      cl.beamAxisOrigin === BeamAxisOrigin.OPENING && cl.centerLineType === CenterLineType.VERTICAL && cl.value === 2000);
+    assert.ok(shortLeftBefore, '前提: 初期状態で短辺(x=2000)の開口由来梁芯が生成されている');
+    assert.equal(shortLeftBefore.extentHi, 3000, '前提: 初期状態のextentHiは元の通し辺(y=3000)を指す');
+    const shortLeftId = shortLeftBefore.id;
+    const primaryBeamIdsBefore = new Set(g2.beams.filter(b => b.role === 'primary').map(b => b.id));
+    assert.ok(primaryBeamIdsBefore.size > 0, '前提: 部屋を周囲に置いたことで大梁(role:primary)が実際に生成されている');
+
+    // VOIDをy:[3000,3500]のセルまで広げる（短辺方向＝高さ方向への拡大。extraKeyをouterRoomから
+    // voidRoomへ移す）。
+    outerRoom.cells.delete(extraKey);
+    voidRoom.cells.add(extraKey);
+
+    const result1 = await recomputeStructuralForGraph(g2, project, 'RC造(ラーメン)', g1, { captureSnapshots: true });
+    assert.ok(result1.changed, '1回目の再計算で変更が検出される');
+    const shortLeftAfter1 = g2.shapeMap.get(shortLeftId);
+    assert.ok(shortLeftAfter1, '短辺(x=2000)は同idのまま残る（座標は変わらないため）');
+    const newThroughBottom = g2.centerLines.find(cl =>
+      cl.beamAxisOrigin === BeamAxisOrigin.OPENING && cl.centerLineType === CenterLineType.HORIZONTAL && cl.value === 3500);
+    assert.ok(newThroughBottom, '新しい通し辺(y=3500)が生成されている');
+    assert.equal(shortLeftAfter1.extentHiRef?.clId, newThroughBottom.id,
+      '1回目の後、短辺のextentHiRef.clIdが新しい通し辺(H@3500)のidになっている（M-1\'是正・1パスで収束）');
+
+    // 短辺小梁（shortLeft自身をaxisCLに持つrole:secondaryの梁）の区間が[1000,3500]になっており、
+    // clEnd.idが新しい通し辺(H@3500)のidであることを確認する。
+    const shortLeftBeam = g2.beams.find(b => b.axisCL.id === shortLeftId && b.role === 'secondary');
+    assert.ok(shortLeftBeam, '短辺(shortLeft)に乗る小梁が生成されている');
+    const shortLeftBeamLo = Math.min(shortLeftBeam.clStart.effectiveValue, shortLeftBeam.clEnd.effectiveValue);
+    const shortLeftBeamHi = Math.max(shortLeftBeam.clStart.effectiveValue, shortLeftBeam.clEnd.effectiveValue);
+    assert.equal(shortLeftBeamLo, 1000, '短辺小梁の区間の下端は1000のまま');
+    assert.equal(shortLeftBeamHi, 3500, '短辺小梁の区間の上端は張り直り後の3500になる');
+    const shortLeftBeamHiEnd = shortLeftBeam.clStart.effectiveValue > shortLeftBeam.clEnd.effectiveValue
+      ? shortLeftBeam.clStart : shortLeftBeam.clEnd;
+    assert.equal(shortLeftBeamHiEnd.id, newThroughBottom.id, '短辺小梁のclEnd.idが新しい通し辺(H@3500)のidになっている');
+
+    // 大梁(role:primary)のidは変わらない（通し辺の張り直しはprimary梁に影響しない）。
+    const primaryBeamIdsAfter1 = new Set(g2.beams.filter(b => b.role === 'primary').map(b => b.id));
+    assert.deepEqual(primaryBeamIdsAfter1, primaryBeamIdsBefore, '大梁(role:primary)のidは1回目の再計算後も不変');
+
+    const result2 = await recomputeStructuralForGraph(g2, project, 'RC造(ラーメン)', g1, { captureSnapshots: true });
+    assert.equal(result2.changed, false, '2回目はchanged:falseになる（すでに収束している。利用者の操作なしに再計算が繰り返されない）');
+  } finally {
+    floorSwapManager.peek = originalPeek;
+  }
+  void x0; void xa; void xb; void x1; void y0; void ya; void yb; void yc; void y1;
+});
+
+// ---- m-1・QA再指摘: 張り直しだけが起きた再計算でもchanged:trueになる（changedOpeningBeamAxes配線） ----
+test('【T8・m-1是正】recomputeStructuralForGraph: 通し辺のextentの張り直しだけが起きた再計算でもchanged:trueになる（新規生成・撤去は無し）', async () => {
+  const project = new Project('proj-t8-m1', 'test');
+  const { graph } = project.addPlane(0, '1階', 'p1');
+  graph.structureOverride = 'RC造(ラーメン)';
+  const x0 = graph.addCenterLine(CenterLineType.VERTICAL, 0, GRID);
+  const xa = graph.addCenterLine(CenterLineType.VERTICAL, 2000, ARCH);
+  const xb = graph.addCenterLine(CenterLineType.VERTICAL, 5000, ARCH);
+  const x1 = graph.addCenterLine(CenterLineType.VERTICAL, 8000, GRID);
+  const y0 = graph.addCenterLine(CenterLineType.HORIZONTAL, 0, GRID);
+  const ya = graph.addCenterLine(CenterLineType.HORIZONTAL, 1000, ARCH);
+  const yb = graph.addCenterLine(CenterLineType.HORIZONTAL, 3000, ARCH);
+  const y1 = graph.addCenterLine(CenterLineType.HORIZONTAL, 6000, GRID);
+  const cells = getAllCells(graph);
+  const centerKey = cells.find(c => c.x1 === 2000 && c.x2 === 5000 && c.y1 === 1000 && c.y2 === 3000).key;
+  graph.addRoom(new Set([centerKey])).setFeature(RoomFeature.VOID);
+
+  const originalPeek = floorSwapManager.peek;
+  floorSwapManager.peek = async (plane) => project.graphMap.get(plane.id) ?? null;
+  try {
+    await recomputeStructuralForGraph(graph, project, 'RC造(ラーメン)');
+    const throughTop = graph.centerLines.find(cl =>
+      cl.beamAxisOrigin === BeamAxisOrigin.OPENING && cl.centerLineType === CenterLineType.HORIZONTAL && cl.value === 1000);
+    assert.equal(throughTop.extentHiRef?.clId, x1.id, '前提: 通し辺(y=1000)のextentHiRefは元の通り芯(x=8000)を指す');
+    const throughTopId = throughTop.id;
+
+    // 通り芯を追加してbracketExtentの範囲を締める（x=6500）——4辺の座標・本数は一切変わらない
+    // （新規生成・撤去なし）が、通し辺のextentHiRefだけが張り直る（retargetのみが起きるケース）。
+    const x2 = graph.addCenterLine(CenterLineType.VERTICAL, 6500, GRID);
+
+    const result = await recomputeStructuralForGraph(graph, project, 'RC造(ラーメン)', null, { captureSnapshots: true });
+    const throughTopAfter = graph.shapeMap.get(throughTopId);
+    assert.equal(throughTopAfter.extentHiRef?.clId, x2.id, '前提: 通し辺のextentHiRefが新しい通り芯(x=6500)へ張り直っている（retargetのみ）');
+    assert.ok(result.changed, 'm-1是正: 張り直しだけが起きた再計算でもchanged:trueになる（changedOpeningBeamAxesがchangedに乗っている）');
+  } finally {
+    floorSwapManager.peek = originalPeek;
+  }
+  void x0; void xa; void xb; void y0; void ya; void yb; void y1;
+});
+
+// ---- m-3是正・QA再指摘: 張り直した梁芯に乗るauto小梁の撤去（子スリーブを先に消す） ----
+test('【T9・m-3是正】reconcileOpeningBeamAxes: 張り直した梁芯に乗るauto小梁（子スリーブ付き）は撤去され、非auto（dimensionStatus:fixed）は残る。excludedBeamSlotsは変わらない', () => {
+  const { graph, x1 } = makeRectOpeningGraph();
+  graph.structureOverride = 'RC造(ラーメン)';
+  const sources = openingBeamSourcesFor(graph, {});
+  const created = autoFillOpeningBeamAxes(graph, sources);
+  const throughTop = created.find(cl => cl.centerLineType === CenterLineType.HORIZONTAL && cl.value === 1000);
+  assert.equal(throughTop.extentHiRef?.clId, x1.id, '前提: 通し辺(y=1000)のextentHiRefは元の通り芯(x=8000)を指す');
+
+  // throughTopに乗るauto小梁（子スリーブ付き）と非auto小梁を1本ずつ手で置く。
+  const autoBeam = graph.addBeam(StructuralMaterialType.RC, 'RC-BEAM-TEST', throughTop, false,
+    graph.centerLines.find(cl => cl.centerLineType === CenterLineType.VERTICAL && cl.value === 2000),
+    graph.centerLines.find(cl => cl.centerLineType === CenterLineType.VERTICAL && cl.value === 5000),
+    { role: 'secondary' }); // dimensionStatus省略→既定'auto'
+  const sleeve = graph.addSleeve('beam', { hostBeamId: autoBeam.id, hostAxisCL: throughTop });
+  const fixedBeam = graph.addBeam(StructuralMaterialType.RC, 'RC-BEAM-TEST', throughTop, false,
+    graph.centerLines.find(cl => cl.centerLineType === CenterLineType.VERTICAL && cl.value === 2000),
+    graph.centerLines.find(cl => cl.centerLineType === CenterLineType.VERTICAL && cl.value === 5000),
+    { role: 'secondary', dimensionStatus: 'fixed' });
+  const excludedBeamSlotsSizeBefore = graph.excludedBeamSlots.size;
+
+  // 通り芯を追加してbracketExtentの範囲を締める（throughTopのextentHiRefが張り直る）。
+  const x2 = graph.addCenterLine(CenterLineType.VERTICAL, 6500, GRID);
+  const sourcesAfter = openingBeamSourcesFor(graph, {});
+  const { retargeted } = reconcileOpeningBeamAxes(graph, sourcesAfter, []);
+
+  assert.ok(retargeted.some(cl => cl.id === throughTop.id), '前提: throughTopが張り直された');
+  assert.equal(graph.beamMap.has(autoBeam.id), false, 'auto小梁は撤去される');
+  assert.equal(graph.sleeveMap.has(sleeve.id), false, 'm-3(c)是正: auto小梁を撤去する前に子スリーブが先に消える');
+  assert.equal(graph.beamMap.has(fixedBeam.id), true, '非auto（dimensionStatus:fixed）の小梁は残る');
+  assert.equal(graph.excludedBeamSlots.size, excludedBeamSlotsSizeBefore,
+    '撤去はexcludedBeamSlotsへ記録しない（graph.removeBeamは使わない。直接beamMap.deleteする規約）');
+  void x2;
 });

@@ -222,3 +222,75 @@ test('followWallBeamAxes: 複数moveのうち一部が吸収（案B）されて�
   assert.equal(graph.shapeMap.has(beamAId), false, '吸収された方は撤去される');
   assert.equal(beamB.value, 3100, '吸収されなかった方は追従する');
 });
+
+// ---- ステップ6（開口由来梁芯の追従・回収）設計§3後段: 吸収時の参照張り替え（repointRefsFrom） ----
+// 開口由来の短辺がextentLoRef/HiRefで通し辺（吸収対象）を参照している構成。repointRefsFrom:trueなら、
+// 参照元が全て由来OPENINGのときだけ保護理由から除外し、吸収先へ参照を張り替えてから撤去する。
+
+test('【ステップ6】followWallBeamAxes: repointRefsFrom:trueで、由来OPENINGの短辺だけが参照する通し辺は保護されず、吸収先へ参照が張り替わる。undoで元のidに戻る', () => {
+  const graph = makeGraph();
+  const throughCL = addFuseCL(graph, 2045);
+  throughCL.beamAxisOrigin = BeamAxisOrigin.OPENING;
+  const throughCLId = throughCL.id;
+  const anchorCL = graph.addCenterLine(CenterLineType.HORIZONTAL, 2060, { labeled: true, discipline: Discipline.STRUCT }); // 通り芯（吸収先）
+  const shortCL = graph.addCenterLine(CenterLineType.VERTICAL, 2000, {
+    labeled: false, discipline: Discipline.FUSE, beamAxisOrigin: BeamAxisOrigin.OPENING,
+    extentLoRef: { clId: throughCLId, offset: 0 },
+  });
+
+  const { absorbed, undoFns, redoFns } = followWallBeamAxes(
+    graph, [{ axisCLId: 'ax1', isVertical: false, from: 2045, to: 2060 }], { repointRefsFrom: true });
+
+  assert.equal(absorbed.length, 1, '保護理由が無いため吸収される（repointRefsFrom無しなら参照されているだけで保護されていた）');
+  assert.equal(graph.shapeMap.has(throughCLId), false, '通し辺(旧梁芯)は撤去される');
+  assert.equal(shortCL.extentLoRef?.clId, anchorCL.id, '短辺のextentLoRefが吸収先(通り芯)のidへ張り替わる');
+  assert.equal(shortCL.extentLo, 2060, '張り替え後のextentLoは吸収先の座標を指す');
+
+  undoFns.forEach(fn => fn());
+  assert.equal(graph.shapeMap.get(throughCLId)?.id, throughCLId, 'undoで通し辺が同idで復元する');
+  assert.equal(shortCL.extentLoRef?.clId, throughCLId, 'undoで短辺のextentLoRefが元の通し辺idへ戻る');
+
+  redoFns.forEach(fn => fn());
+  assert.equal(graph.shapeMap.has(throughCLId), false, 'redoで再び撤去される');
+  assert.equal(shortCL.extentLoRef?.clId, anchorCL.id, 'redoで短辺のextentLoRefが再び吸収先へ張り替わる');
+});
+
+test('【ステップ6・失敗系】followWallBeamAxes: repointRefsFrom:false（既定）では、由来OPENINGの短辺からの参照だけでも通し辺は保護されてskipする（張り替えは起きない）', () => {
+  const graph = makeGraph();
+  const throughCL = addFuseCL(graph, 2045);
+  throughCL.beamAxisOrigin = BeamAxisOrigin.OPENING;
+  const throughCLId = throughCL.id;
+  graph.addCenterLine(CenterLineType.HORIZONTAL, 2060, { labeled: true, discipline: Discipline.STRUCT }); // 通り芯（相手）
+  const shortCL = graph.addCenterLine(CenterLineType.VERTICAL, 2000, {
+    labeled: false, discipline: Discipline.FUSE, beamAxisOrigin: BeamAxisOrigin.OPENING,
+    extentLoRef: { clId: throughCLId, offset: 0 },
+  });
+
+  const { absorbed, skipped } = followWallBeamAxes(graph, [{ axisCLId: 'ax1', isVertical: false, from: 2045, to: 2060 }]);
+
+  assert.deepEqual(absorbed, []);
+  assert.equal(skipped.length, 1, '既定(false)では参照されているだけで保護されskipする');
+  assert.equal(graph.shapeMap.has(throughCLId), true, '通し辺は撤去されない');
+  assert.equal(shortCL.extentLoRef?.clId, throughCLId, '参照も変わらない');
+});
+
+test('【ステップ6・失敗系】followWallBeamAxes: repointRefsFrom:trueでも、由来OPENING以外のCLから参照されていれば保護されskipする（張り替えない）', () => {
+  const graph = makeGraph();
+  const throughCL = addFuseCL(graph, 2045);
+  throughCL.beamAxisOrigin = BeamAxisOrigin.OPENING;
+  const throughCLId = throughCL.id;
+  graph.addCenterLine(CenterLineType.HORIZONTAL, 2060, { labeled: true, discipline: Discipline.STRUCT }); // 通り芯（相手）
+  // 参照元の由来がOPENINGではない（例: 由来未設定=null）——「参照元が全て由来OPENING」の前提が崩れる。
+  const otherCL = graph.addCenterLine(CenterLineType.VERTICAL, 2000, {
+    labeled: false, discipline: Discipline.FUSE,
+    extentLoRef: { clId: throughCLId, offset: 0 },
+  });
+
+  const { absorbed, skipped } = followWallBeamAxes(
+    graph, [{ axisCLId: 'ax1', isVertical: false, from: 2045, to: 2060 }], { repointRefsFrom: true });
+
+  assert.deepEqual(absorbed, []);
+  assert.equal(skipped.length, 1, '由来OPENING以外からの参照があれば保護されskipする');
+  assert.equal(graph.shapeMap.has(throughCLId), true, '通し辺は撤去されない');
+  assert.equal(otherCL.extentLoRef?.clId, throughCLId, '参照も変わらない');
+});

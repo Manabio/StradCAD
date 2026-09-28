@@ -4,6 +4,7 @@
 // 収集側を純関数のまま保つ。
 import { runInAction } from 'mobx';
 import { CenterLineType } from '../core.js';
+import { BeamAxisOrigin } from '../core/centerLine.js';
 import { bakeCLValue } from '../transform/centerLineOps.js';
 import { findWallBeamAxisCL, findBeamAnchorCL, isProtectedWallBeamAxis, wallBeamAxisExcludeKey } from './wallBeamAxes.js';
 
@@ -16,6 +17,24 @@ import { findWallBeamAxisCL, findBeamAnchorCL, isProtectedWallBeamAxis, wallBeam
 // （次の構造同期・モード境界再計算が「同期で作り直し」の原則どおり再生成する。呼び出し元
 // （commitCLMoveOp・wallRefresh.js・finishBoundary.js）はいずれもこの直後・次のモード境界で
 // 構造再計算を伴う経路にだけ乗る）。
+// cl（吸収対象の旧梁芯）をextentLoRef/extentHiRefで参照している由来OPENINGのCLと、その参照側
+// （'lo'|'hi'）を列挙する（ステップ6・吸収時の参照張り替え。設計§3後段）。壁由来梁芯は
+// 他CLのextentRefから参照されない（extentLoRef/HiRefで梁芯を参照する生成源はopeningBeamAxes.jsの
+// 短辺→通し辺の参照だけ——wallBeamAxes.js/woodAutoFill.jsのextentRefは通り芯（gridCLs）を指す）
+// ため、壁のみの追従（他3呼び出し元）では常に空配列になり挙動は変わらない（REASONED）。
+// @param {object} graph
+// @param {import('../core.js').CenterLine} cl
+// @returns {Array<{referrer: import('../core.js').CenterLine, side: 'lo'|'hi', oldRef: {clId:string, offset:number}}>}
+function openingReferrersOf(graph, cl) {
+  const out = [];
+  for (const referrer of graph.referencingCenterLines(cl.id)) {
+    if (referrer.beamAxisOrigin !== BeamAxisOrigin.OPENING) continue;
+    if (referrer.extentLoRef?.clId === cl.id) out.push({ referrer, side: 'lo', oldRef: referrer.extentLoRef });
+    if (referrer.extentHiRef?.clId === cl.id) out.push({ referrer, side: 'hi', oldRef: referrer.extentHiRef });
+  }
+  return out;
+}
+
 function snapshotForRestore(cl) {
   return {
     id: cl.id,
@@ -55,12 +74,21 @@ function snapshotForRestore(cl) {
  * 対応先の壁が無くなった孤児梁芯を撤去しない裁定と対称——ここで触れない梁芯には一切手を出さない）。
  * @param {object} graph
  * @param {Array<{axisCLId:string, isVertical:boolean, from:number, to:number}>} moves
+ * @param {{repointRefsFrom?: boolean}} [opts] - repointRefsFrom（既定false。ステップ6・設計§3後段）:
+ *   trueのとき、吸収対象の旧梁芯を`extentLoRef`/`extentHiRef`で参照しているCLのうち由来OPENINGの
+ *   ものだけを保護理由から除外し（isProtectedWallBeamAxisのignoreRefsFrom）、参照元が全て由来OPENING
+ *   （＝他に保護理由が無い）なら、それらの参照を吸収先アンカーのidへ張り替えてから吸収する
+ *   （張り替えないとgraph.removeCenterLineのdetachFromCenterLineが参照を現在座標で静的化してしまい、
+ *   短辺の追従が「参照」ではなく「固定値」に落ちる）。falseなら従来どおり（何であれ参照されていれば
+ *   保護してskip）——壁由来のみの追従（finishBoundary.js・wallRefresh.js・commitCLMoveOpの偏芯分岐）は
+ *   既定のまま呼ぶ。
  * @returns {{ moved: Array<{clId:string, isVertical:boolean, from:number, to:number}>,
  *   skipped: Array<{isVertical:boolean, from:number, to:number, reason:string}>,
  *   absorbed: Array<{clId:string, isVertical:boolean, from:number, to:number}>,
  *   undoFns: Function[], redoFns: Function[] }}
  */
-export function followWallBeamAxes(graph, moves) {
+export function followWallBeamAxes(graph, moves, opts = {}) {
+  const { repointRefsFrom = false } = opts;
   const moved = [];
   const skipped = [];
   const absorbed = [];
@@ -72,19 +100,37 @@ export function followWallBeamAxes(graph, moves) {
     if (!cl) continue; // この階に壁由来の梁芯が無い（主構造が生成しない等）— 何もしない
 
     const toType = isVertical ? CenterLineType.VERTICAL : CenterLineType.HORIZONTAL;
-    if (findBeamAnchorCL(graph, toType, to)) {
-      if (isProtectedWallBeamAxis(graph, cl)) {
+    const anchor = findBeamAnchorCL(graph, toType, to);
+    if (anchor) {
+      const repointTargets = repointRefsFrom ? openingReferrersOf(graph, cl) : [];
+      const ignoreRefsFrom = new Set(repointTargets.map(r => r.referrer.id));
+      if (isProtectedWallBeamAxis(graph, cl, { ignoreRefsFrom })) {
         skipped.push({ isVertical, from, to, reason: 'duplicate' });
         continue;
       }
       // 案B: 保護されない旧梁芯は吸収して撤去する（相手はそのまま残す）。
+      // 張り替えは撤去の**前**に行う——removeCenterLineのdetachFromCenterLineは「まだcl.idを
+      // 参照しているCL」の参照を現在座標へ静的化するため、先に参照先を付け替えておく。
       const snapshot = snapshotForRestore(cl);
-      runInAction(() => { graph.removeCenterLine(cl.id); });
+      runInAction(() => {
+        for (const { referrer, side, oldRef } of repointTargets) {
+          graph.setCenterLineExtentRef(referrer, side, { clId: anchor.id, offset: oldRef.offset ?? 0 });
+        }
+        graph.removeCenterLine(cl.id);
+      });
       absorbed.push({ clId: cl.id, isVertical, from, to });
       undoFns.push(() => runInAction(() => {
         graph.addCenterLine(snapshot.centerLineType, snapshot.value, snapshot.props, snapshot.id);
+        // cl自身を先に復元してから参照を戻す（setCenterLineExtentRefの解決対象がshapeMapに
+        // 無ければ_extentLoCL/HiCLが未解決のまま残るため）。
+        for (const { referrer, side, oldRef } of repointTargets) {
+          graph.setCenterLineExtentRef(referrer, side, oldRef);
+        }
       }));
       redoFns.push(() => runInAction(() => {
+        for (const { referrer, side, oldRef } of repointTargets) {
+          graph.setCenterLineExtentRef(referrer, side, { clId: anchor.id, offset: oldRef.offset ?? 0 });
+        }
         graph.removeCenterLine(snapshot.id);
       }));
       continue;

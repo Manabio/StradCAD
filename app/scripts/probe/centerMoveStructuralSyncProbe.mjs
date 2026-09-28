@@ -159,11 +159,15 @@ if (baseDiffs.length > 0) printDiffs(baseDiffs);
 // （このprobe自体が壊れていないかの確認）として使えるよう、検出力が無いこと自体をNGにせず
 // 「対象外」として exit 0 で終える。
 const activeRules = rulesFor(effectiveStructure(hBase.project.activeGraph, hBase.project));
-if (activeRules.wallBeamAxes == null && activeRules.columnPlacement !== 'wallIntersections') {
-  console.log(`対象外（中心線に反応しない主構造: ${hBase.project.structuralInfo.mainStructure}。` +
-    `wallBeamAxes=${activeRules.wallBeamAxes} columnPlacement=${activeRules.columnPlacement}）`);
-  process.exit(0);
-}
+// ステップ6（開口由来梁芯）追加: このガードは「壁交点柱・壁由来梁芯」経路の検出力の話であり、
+// 開口由来梁芯（openingBeamAxes:'slabOpenings'）は独立した反応経路のため、メイン中心線シナリオを
+// skipしても下部の「シナリオ追加」ブロックは常に実行する（exit(0)にはしない）。
+const noCenterLineReaction = activeRules.wallBeamAxes == null && activeRules.columnPlacement !== 'wallIntersections';
+if (noCenterLineReaction) {
+  console.log(`対象外（メイン中心線シナリオ・中心線に反応しない主構造: ${hBase.project.structuralInfo.mainStructure}。` +
+    `wallBeamAxes=${activeRules.wallBeamAxes} columnPlacement=${activeRules.columnPlacement}。` +
+    '開口由来梁芯シナリオ（下記）は別途実行する）');
+} else {
 
 // ---- 候補選定: 「壁の軸CLになっているcenter CL」×「平行な最寄りCLまでの半分(5mm丸め)の移動量が
 // 0でない」を軽く絞り込んだ上で、配線あり／なしで結果が変わる最初の1本を選ぶ（M3・検出力）。
@@ -500,6 +504,88 @@ console.log(`性能: 確定部分(commitCLMoveOp呼び出し)中央値=${median(
   `[${commitMs.map(v => v.toFixed(1)).join(', ')}] / 同期部分(whenIdle)中央値=${median(syncMs).toFixed(1)}ms ` +
   `[${syncMs.map(v => v.toFixed(1)).join(', ')}]`);
 console.log(`性能(参考): 移動確定の実測(本編) = ${(tMoveEnd - tMoveStart).toFixed(1)}ms / 同期 = ${(tSyncEnd - tMoveEnd).toFixed(1)}ms`);
+
+} // end: if (!noCenterLineReaction)
+
+// ---- シナリオ追加（ステップ6・開口由来梁芯の追従・回収）: アクティブ階のVOID開口の辺が乗る
+// 中心線を移動すると、開口由来の梁芯（beamAxisOrigin===OPENING）が同idで追従し、undoで戻り、
+// redoで再び追従することを確認する。13.stq/14.stq（2階のVOID [-3000,0]×[-2000,0]。辺y=-2000）を
+// 主対象に想定しているが、座標をハードコードせず汎用的に選ぶ——他データで該当が無ければ対象外として
+// スキップする（NGにしない）。
+{
+  const { RoomFeature, CenterLineType: CLType } = await import('../../src/core.js');
+  const { openingBeamSourcesFor } = await import('../../src/structural/openingBeamAxes.js');
+  const { BeamAxisOrigin } = await import('../../src/core/centerLine.js');
+
+  function findVoidPlaneIdMove(harness) {
+    return [...harness.project.graphMap.entries()]
+      .find(([, g]) => g.rooms.some(r => r.feature === RoomFeature.VOID))?.[0] ?? null;
+  }
+
+  const hOMProbe = buildHarness(src);
+  const voidPlaneIdMove = findVoidPlaneIdMove(hOMProbe);
+  if (voidPlaneIdMove) hOMProbe.project.activePlaneId = voidPlaneIdMove;
+  await preConverge(hOMProbe);
+  const openingAxesProbe = hOMProbe.project.activeGraph.centerLines.filter(cl => cl.beamAxisOrigin === BeamAxisOrigin.OPENING);
+  const sourcesOM = voidPlaneIdMove ? openingBeamSourcesFor(hOMProbe.project.activeGraph, hOMProbe.project) : [];
+  // 候補: 由来openingの梁芯が現に存在する座標に一致する開口ソースのaxisCLId（辺が乗る中心線）。
+  // 移動量は「辺自身の座標と直交しない側で0でない値」——ここでは単純に+50mm固定（辺の中心線を
+  // わずかに動かすだけで十分。結合・吸収の分岐まで踏み込む検証はwallBeamAxisFollow.test.js /
+  // centerLineOps.test.jsの単体テストが担う——本probeは実データでの追従自体の検出が目的）。
+  const openingMoveCandidates = sourcesOM
+    .filter(s => openingAxesProbe.some(ax =>
+      ax.centerLineType === (s.isVertical ? CLType.VERTICAL : CLType.HORIZONTAL) && Math.abs(ax.effectiveValue - s.coord) < 5))
+    .map(s => ({ source: s, cl: hOMProbe.project.activeGraph.centerLines.find(cl => cl.id === s.axisCLId) }))
+    .filter(({ cl }) => cl && centerLineKind(cl) === 'center');
+
+  if (!voidPlaneIdMove || openingMoveCandidates.length === 0) {
+    console.log(`対象外（ステップ6シナリオ）: VOID開口の辺が乗る中心線が見つからない（${src}）`);
+  } else {
+    const { source: targetSourceMove, cl: targetClCandidate } = openingMoveCandidates[0];
+    const MOVE_AMOUNT = 50;
+
+    const hOM = buildHarness(src);
+    hOM.project.activePlaneId = voidPlaneIdMove;
+    await preConverge(hOM);
+    const gOM = hOM.project.activeGraph;
+    const targetCLMove = gOM.centerLines.find(cl => cl.id === targetClCandidate.id);
+    const openingAxisBeforeMove = gOM.centerLines.find(cl =>
+      cl.beamAxisOrigin === BeamAxisOrigin.OPENING
+      && cl.centerLineType === (targetSourceMove.isVertical ? CLType.VERTICAL : CLType.HORIZONTAL)
+      && Math.abs(cl.effectiveValue - targetSourceMove.coord) < 5);
+    const openingAxisIdBeforeMove = openingAxisBeforeMove.id;
+    const openingAxisValueBeforeMove = openingAxisBeforeMove.effectiveValue;
+    console.log(`対象中心線(ステップ6・移動): id=${targetCLMove.id.slice(0, 8)} type=${targetCLMove.centerLineType} ` +
+      `value=${Math.round(targetCLMove.effectiveValue)} / 開口由来梁芯: id=${openingAxisIdBeforeMove.slice(0, 8)} value=${Math.round(openingAxisValueBeforeMove)}`);
+
+    const originalValueMove = targetCLMove.value;
+    setCenterLineStructuralListener((g, p, scope, undoRecords) => hOM.probeSync.request(g, p, { scope, undoRecords }));
+    runInAction(() => { targetCLMove.pendingDelta = MOVE_AMOUNT; });
+    const { toast: moveToast } = commitCLMoveOp(gOM, hOM.project, targetCLMove, originalValueMove, { saveFloorFn: hOM.storeSave });
+    await hOM.probeSync.whenIdle();
+    ok(moveToast === null, `(8) ステップ6: 開口の辺の中心線移動はtoast:nullで成功する（実際: ${moveToast}）`);
+
+    const axisAfterMove = gOM.shapeMap.get(openingAxisIdBeforeMove);
+    ok(!!axisAfterMove, '(8a) ステップ6: 開口由来梁芯は同idのまま残る（撤去・作り直しではなく追従）');
+    ok(axisAfterMove && axisAfterMove.value !== openingAxisValueBeforeMove,
+      `(8b) ステップ6: 開口由来梁芯が辺の移動分だけ追従する（前=${Math.round(openingAxisValueBeforeMove)} 後=${axisAfterMove ? Math.round(axisAfterMove.value) : 'なし'}）`);
+
+    undoManager.undo();
+    await hOM.probeSync.whenIdle();
+    const axisAfterUndoMove = gOM.shapeMap.get(openingAxisIdBeforeMove);
+    ok(!!axisAfterUndoMove && Math.abs(axisAfterUndoMove.value - openingAxisValueBeforeMove) < 1,
+      `(8c) ステップ6: undoで開口由来梁芯が同idのまま元の座標へ戻る（実際: ${axisAfterUndoMove?.value}）`);
+    ok(targetCLMove.value === originalValueMove, '(8c) ステップ6: undoで中心線自体の座標も戻る');
+
+    undoManager.redo();
+    await hOM.probeSync.whenIdle();
+    const axisAfterRedoMove = gOM.shapeMap.get(openingAxisIdBeforeMove);
+    ok(!!axisAfterRedoMove && axisAfterRedoMove.value !== openingAxisValueBeforeMove,
+      '(8d) ステップ6: redoで開口由来梁芯が再び追従する（同id）');
+
+    setCenterLineStructuralListener(null);
+  }
+}
 
 if (ngCount === 0) {
   console.log(`OK: centerMoveStructuralSyncProbe 全項目パス（${src}）`);
